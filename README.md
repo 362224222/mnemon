@@ -153,6 +153,16 @@ WorkBuddy deploys the mnemon skill, prompt files, and native hooks to
 `.workbuddy/` or `~/.workbuddy/`. The integration registers `SessionStart`,
 `UserPromptSubmit`, and `Stop` hooks in `settings.json`.
 
+### [Kimi Code](https://github.com/MoonshotAI/kimi-code)
+
+```bash
+mnemon setup --target kimi --yes
+```
+
+Kimi Code deploys the mnemon skill, prompt files, and native lifecycle hooks to
+`~/.kimi-code/` or `$KIMI_CODE_HOME/`. The integration registers
+`SessionStart`, `UserPromptSubmit`, and `Stop` hooks in `config.toml`.
+
 ### [OpenClaw](https://github.com/openclaw/openclaw)
 
 ```bash
@@ -253,7 +263,7 @@ memory is useful.
 
 - **Zero user-side operation** — install once; supported runtimes can use hooks, minimal runtimes can use persistent rules
 - **LLM-supervised** — the host LLM decides what to remember, update, and forget; no embedded LLM, no API keys
-- **Multi-framework support** — Claude Code, Codex, Cursor, TRAE/TRAE Work, Qoder/QoderWork, CodeBuddy, WorkBuddy, and Hermes Agent (hooks), OpenClaw (plugins), Pi (extensions), Nanobot (skills), and more
+- **Multi-framework support** — Claude Code, Codex, Cursor, TRAE/TRAE Work, Qoder/QoderWork, CodeBuddy, WorkBuddy, Kimi Code, and Hermes Agent (hooks), OpenClaw (plugins), Pi (extensions), Nanobot (skills), and more
 - **Markdown-installable harness** — `SKILL.md`, `INSTALL.md`, `GUIDELINE.md`, and four lifecycle reminders
 - **Four-graph architecture** — temporal, entity, causal, and semantic edges, not just vector similarity
 - **Intent-native protocol** — three primitives (`remember`, `link`, `recall`) map to the LLM's cognitive vocabulary, not database syntax; structured JSON output with signal transparency
@@ -286,6 +296,8 @@ All your local agentic AIs — across sessions and frameworks — sharing one po
                 │
   WorkBuddy ────┤
                 │
+  Kimi Code ────┤
+                │
   Hermes Agent ─┤
                 │
   OpenClaw ─────┤
@@ -303,7 +315,7 @@ All your local agentic AIs — across sessions and frameworks — sharing one po
 
 The foundation is in place: a single `~/.mnemon` database that any agent can
 read and write. Claude Code, Codex, Cursor, TRAE/TRAE Work, Qoder/QoderWork,
-CodeBuddy, WorkBuddy, and Hermes Agent setup automate hook installation;
+CodeBuddy, WorkBuddy, Kimi Code, and Hermes Agent setup automate hook installation;
 OpenClaw can use plugin hooks; Pi integrates via native skills and TypeScript
 lifecycle extensions; Nanobot integrates via skill files; NanoClaw integrates
 via container skills and volume mounts. The same harness can be installed in any

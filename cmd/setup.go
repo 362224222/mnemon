@@ -24,9 +24,9 @@ var setupCmd = &cobra.Command{
 
 By default, installs to project-local config (.claude/, .codex/, .cursor/, .trae/, .qoder/, .codebuddy/, .workbuddy/, .openclaw/, .nanobot/, .pi/).
 Use --global to install to user-wide config (~/.claude/, ~/.codex/, ~/.cursor/, ~/.trae/, ~/.qoder/, ~/.codebuddy/, ~/.workbuddy/, ~/.openclaw/, ~/.nanobot/workspace/, ~/.pi/agent/).
-Hermes Agent and QoderWork use their native user config at ~/.hermes/ and ~/.qoderwork/.
+Hermes Agent, QoderWork, and Kimi Code use native user config at ~/.hermes/, ~/.qoderwork/, and ~/.kimi-code/.
 
-Supported environments: Claude Code, Codex, Cursor, Trae, Qoder, QoderWork, CodeBuddy, WorkBuddy, OpenClaw, Nanobot, Pi, Hermes Agent.
+Supported environments: Claude Code, Codex, Cursor, Trae, Qoder, QoderWork, CodeBuddy, WorkBuddy, Kimi Code, OpenClaw, Nanobot, Pi, Hermes Agent.
 
 Examples:
   mnemon setup                              # Interactive: project-local install
@@ -38,6 +38,7 @@ Examples:
   mnemon setup --target qoderwork           # Non-interactive: QoderWork skill and hooks
   mnemon setup --target codebuddy           # Non-interactive: CodeBuddy skill and hooks
   mnemon setup --target workbuddy           # Non-interactive: WorkBuddy skill and hooks
+  mnemon setup --target kimi                # Non-interactive: Kimi Code skill and hooks
   mnemon setup --target hermes              # Non-interactive: Hermes Agent only
   mnemon setup --eject                      # Interactive: remove integrations
   mnemon setup --eject --target claude-code # Non-interactive: remove Claude Code only
@@ -46,7 +47,7 @@ Examples:
 }
 
 func init() {
-	setupCmd.Flags().StringVar(&setupTarget, "target", "", "target environment (claude-code, codex, cursor, trae, qoder, qoderwork, codebuddy, workbuddy, openclaw, nanobot, pi, hermes)")
+	setupCmd.Flags().StringVar(&setupTarget, "target", "", "target environment (claude-code, codex, cursor, trae, qoder, qoderwork, codebuddy, workbuddy, kimi, openclaw, nanobot, pi, hermes)")
 	setupCmd.Flags().BoolVar(&setupEject, "eject", false, "remove mnemon integrations")
 	setupCmd.Flags().BoolVar(&setupYes, "yes", false, "auto-confirm all prompts (CI-friendly)")
 	setupCmd.Flags().BoolVar(&setupGlobal, "global", false, "install to user-wide config instead of project-local config")
@@ -54,8 +55,8 @@ func init() {
 }
 
 func runSetup(cmd *cobra.Command, args []string) error {
-	if setupTarget != "" && setupTarget != "claude-code" && setupTarget != "codex" && setupTarget != "cursor" && setupTarget != "trae" && setupTarget != "qoder" && setupTarget != "qoderwork" && setupTarget != "codebuddy" && setupTarget != "workbuddy" && setupTarget != "openclaw" && setupTarget != "nanobot" && setupTarget != "pi" && setupTarget != "hermes" {
-		return fmt.Errorf("invalid target %q (must be claude-code, codex, cursor, trae, qoder, qoderwork, codebuddy, workbuddy, openclaw, nanobot, pi, or hermes)", setupTarget)
+	if setupTarget != "" && setupTarget != "claude-code" && setupTarget != "codex" && setupTarget != "cursor" && setupTarget != "trae" && setupTarget != "qoder" && setupTarget != "qoderwork" && setupTarget != "codebuddy" && setupTarget != "workbuddy" && setupTarget != "kimi" && setupTarget != "openclaw" && setupTarget != "nanobot" && setupTarget != "pi" && setupTarget != "hermes" {
+		return fmt.Errorf("invalid target %q (must be claude-code, codex, cursor, trae, qoder, qoderwork, codebuddy, workbuddy, kimi, openclaw, nanobot, pi, or hermes)", setupTarget)
 	}
 
 	envs := setup.DetectEnvironments(setupGlobal)
@@ -91,7 +92,7 @@ func runInstallFlow(envs []setup.Environment) error {
 
 	if len(detected) == 0 {
 		fmt.Println("\nNo supported LLM CLI environments detected.")
-		fmt.Println("Install Claude Code, Codex, Cursor, Trae, Qoder, QoderWork, CodeBuddy, WorkBuddy, OpenClaw, Nanobot, Pi, or Hermes Agent, then run 'mnemon setup' again.")
+		fmt.Println("Install Claude Code, Codex, Cursor, Trae, Qoder, QoderWork, CodeBuddy, WorkBuddy, Kimi Code, OpenClaw, Nanobot, Pi, or Hermes Agent, then run 'mnemon setup' again.")
 		return nil
 	}
 
@@ -147,6 +148,8 @@ func installEnv(env *setup.Environment) error {
 		err = installCodeBuddy(env)
 	case "workbuddy":
 		err = installWorkBuddy(env)
+	case "kimi":
+		err = installKimi(env)
 	case "openclaw":
 		err = installOpenClaw(env)
 	case "nanobot":
@@ -838,6 +841,67 @@ func installWorkBuddy(env *setup.Environment) error {
 	return nil
 }
 
+// ─── Kimi Code ──────────────────────────────────────────────────────
+
+func installKimi(env *setup.Environment) error {
+	configDir := env.ConfigDir
+
+	fmt.Printf("\nSetting up Kimi Code (%s)...\n", configDir)
+
+	fmt.Println("\n[1/3] Skill")
+	if path, err := setup.KimiWriteSkill(configDir); err != nil {
+		setup.StatusError(0, 0, "Skill", err)
+		return err
+	} else {
+		setup.StatusOK(0, 0, "Skill", path)
+	}
+
+	fmt.Println("\n[2/3] Prompts")
+	var promptPath string
+	if path, err := setup.WritePromptFiles(); err != nil {
+		setup.StatusError(0, 0, "Prompts", err)
+		return err
+	} else {
+		setup.StatusOK(0, 0, "Prompts", path)
+		promptPath = path
+	}
+
+	fmt.Println("\n[3/3] Hooks")
+	for _, hook := range []struct {
+		label    string
+		filename string
+		content  []byte
+	}{
+		{"Hook: prime", "prime.sh", assets.KimiPrimeHook},
+		{"Hook: remind", "user_prompt.sh", assets.KimiUserPromptHook},
+		{"Hook: nudge", "stop.sh", assets.KimiStopHook},
+	} {
+		if path, err := setup.KimiWriteHook(configDir, hook.filename, hook.content); err != nil {
+			setup.StatusError(0, 0, hook.label, err)
+			return err
+		} else {
+			setup.StatusOK(0, 0, hook.label, path)
+		}
+	}
+	if path, err := setup.KimiRegisterHooks(configDir); err != nil {
+		setup.StatusError(0, 0, "Config", err)
+		return err
+	} else {
+		setup.StatusUpdated(0, 0, "Config", path)
+	}
+
+	fmt.Println()
+	fmt.Println("Setup complete!")
+	fmt.Printf("  Skill    %s/skills/mnemon/SKILL.md\n", configDir)
+	fmt.Printf("  Hooks    %s/config.toml (SessionStart, UserPromptSubmit, Stop)\n", configDir)
+	fmt.Printf("  Prompts  %s/ (guide.md, skill.md)\n", promptPath)
+	fmt.Println()
+	fmt.Println("Restart Kimi Code to activate the mnemon skill and hooks.")
+	fmt.Println("Run 'mnemon setup --eject --target kimi' to remove.")
+
+	return nil
+}
+
 // ─── OpenClaw ───────────────────────────────────────────────────────
 
 func installOpenClaw(env *setup.Environment) error {
@@ -1302,6 +1366,13 @@ func ejectEnv(env *setup.Environment) error {
 
 	case "workbuddy":
 		errs := setup.WorkBuddyEject(env.ConfigDir)
+		ejectMarkdown("AGENTS.md", "Remove memory guidance from ./AGENTS.md?")
+		if len(errs) > 0 {
+			return errs[0]
+		}
+
+	case "kimi":
+		errs := setup.KimiEject(env.ConfigDir)
 		ejectMarkdown("AGENTS.md", "Remove memory guidance from ./AGENTS.md?")
 		if len(errs) > 0 {
 			return errs[0]

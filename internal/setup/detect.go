@@ -9,8 +9,8 @@ import (
 
 // Environment describes a detected LLM CLI environment.
 type Environment struct {
-	Name      string // "claude-code", "codex", "cursor", "trae", "qoder", "qoderwork", "codebuddy", "workbuddy", "openclaw", "nanobot", "pi", "hermes"
-	Display   string // "Claude Code", "Codex", "Cursor", "Trae", "Qoder", "QoderWork", "CodeBuddy", "WorkBuddy", "OpenClaw", "Nanobot", "Pi", "Hermes Agent"
+	Name      string // "claude-code", "codex", "cursor", "trae", "qoder", "qoderwork", "codebuddy", "workbuddy", "kimi", "openclaw", "nanobot", "pi", "hermes"
+	Display   string // "Claude Code", "Codex", "Cursor", "Trae", "Qoder", "QoderWork", "CodeBuddy", "WorkBuddy", "Kimi Code", "OpenClaw", "Nanobot", "Pi", "Hermes Agent"
 	Detected  bool   // CLI binary or global config dir found
 	BinPath   string // exec.LookPath result
 	Installed bool   // mnemon integration present at ConfigDir
@@ -37,6 +37,7 @@ func DetectEnvironments(global bool) []Environment {
 		detectQoderWork(),
 		detectCodeBuddy(global),
 		detectWorkBuddy(global),
+		detectKimi(),
 		detectOpenClaw(global),
 		detectNanobot(global),
 		detectPi(global),
@@ -349,6 +350,44 @@ func detectWorkBuddy(global bool) Environment {
 	if _, err := os.Stat(skillPath); err == nil {
 		env.Installed = true
 	} else if data, err := ReadJSONFile(settingsPath); err == nil && containsMnemon(data) {
+		env.Installed = true
+	}
+
+	if env.BinPath != "" {
+		if out, err := exec.Command(env.BinPath, "--version").Output(); err == nil {
+			env.Version = cleanVersion(strings.TrimSpace(string(out)))
+		}
+	}
+
+	return env
+}
+
+func detectKimi() Environment {
+	home := HomeDir()
+	configDir := filepath.Join(home, ".kimi-code")
+	if envHome := strings.TrimSpace(os.Getenv("KIMI_CODE_HOME")); envHome != "" {
+		configDir = envHome
+	}
+
+	env := Environment{
+		Name:      "kimi",
+		Display:   "Kimi Code",
+		ConfigDir: configDir,
+	}
+
+	if binPath, err := exec.LookPath("kimi"); err == nil {
+		env.Detected = true
+		env.BinPath = binPath
+	}
+	if _, err := os.Stat(configDir); err == nil {
+		env.Detected = true
+	}
+
+	skillPath := filepath.Join(configDir, "skills", "mnemon", "SKILL.md")
+	configPath := filepath.Join(configDir, "config.toml")
+	if _, err := os.Stat(skillPath); err == nil {
+		env.Installed = true
+	} else if data, err := os.ReadFile(configPath); err == nil && strings.Contains(string(data), "mnemon") {
 		env.Installed = true
 	}
 
