@@ -8,6 +8,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -23,6 +24,7 @@ import (
 type AppServer struct {
 	command       string
 	cwd           string
+	env           []string
 	proc          *exec.Cmd
 	stdin         io.WriteCloser
 	messages      chan map[string]any
@@ -43,10 +45,39 @@ func New(command, cwd string) *AppServer {
 	}
 }
 
+// SetEnv sets the exact process environment used when Start launches the app-server.
+// When unset, the child inherits the current process environment.
+func (s *AppServer) SetEnv(env []string) {
+	s.env = append([]string(nil), env...)
+}
+
 // Start launches the app-server subprocess and begins reading its stdio.
 func (s *AppServer) Start() error {
-	cmd := exec.Command(s.command, "app-server", "--listen", "stdio://")
+	parts := commandParts(s.command)
+	args := append(append([]string(nil), parts[1:]...), "app-server", "--listen", "stdio://")
+	if err := s.startProcess(exec.Command(parts[0], args...)); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		cmdline := shellJoin(append(parts, "app-server", "--listen", "stdio://")...)
+		return s.startProcess(exec.Command("sh", "-lc", cmdline))
+	}
+	return nil
+}
+
+func commandParts(command string) []string {
+	parts := strings.Fields(command)
+	if len(parts) == 0 {
+		return []string{"codex"}
+	}
+	return parts
+}
+
+func (s *AppServer) startProcess(cmd *exec.Cmd) error {
 	cmd.Dir = s.cwd
+	if len(s.env) > 0 {
+		cmd.Env = append([]string(nil), s.env...)
+	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return err
@@ -67,6 +98,21 @@ func (s *AppServer) Start() error {
 	go s.readStdout(stdout)
 	go func() { _, _ = io.Copy(&s.stderr, stderr) }()
 	return nil
+}
+
+func shellJoin(args ...string) string {
+	quoted := make([]string, 0, len(args))
+	for _, arg := range args {
+		quoted = append(quoted, shellQuote(arg))
+	}
+	return strings.Join(quoted, " ")
+}
+
+func shellQuote(s string) string {
+	if s == "" {
+		return "''"
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // Close interrupts (then kills) the app-server subprocess.

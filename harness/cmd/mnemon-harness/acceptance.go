@@ -1,0 +1,939 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/mnemon-dev/mnemon/harness/internal/app"
+	"github.com/mnemon-dev/mnemon/harness/internal/channel"
+	"github.com/mnemon-dev/mnemon/harness/internal/codexapp"
+	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	"github.com/mnemon-dev/mnemon/harness/internal/render"
+	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
+	"github.com/spf13/cobra"
+)
+
+var (
+	acceptanceRunRoot     string
+	acceptanceCommand     string
+	acceptanceCodexHome   string
+	acceptanceAgents      int
+	acceptanceAgentTurns  bool
+	acceptanceTurnTimeout time.Duration
+)
+
+var acceptanceCmd = &cobra.Command{
+	Use:    "acceptance",
+	Short:  "Run hidden acceptance gates",
+	Hidden: true,
+}
+
+var acceptanceR1CodexCmd = &cobra.Command{
+	Use:   "r1-codex",
+	Short: "Run the R1 real Codex appserver acceptance gate",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		report, err := runR1CodexAcceptance(cmd.Context(), r1CodexAcceptanceOptions{
+			RunRoot:     acceptanceRunRoot,
+			Command:     acceptanceCommand,
+			CodexHome:   acceptanceCodexHome,
+			Agents:      acceptanceAgents,
+			AgentTurns:  acceptanceAgentTurns,
+			TurnTimeout: acceptanceTurnTimeout,
+			Stdout:      cmd.OutOrStdout(),
+			Stderr:      cmd.ErrOrStderr(),
+		})
+		if report.ReportPath != "" {
+			fmt.Fprintf(cmd.OutOrStdout(), "acceptance report: %s\n", report.ReportPath)
+		}
+		if err != nil {
+			return err
+		}
+		if report.Status != "ok" {
+			return fmt.Errorf("R1 Codex acceptance status: %s", report.Status)
+		}
+		return nil
+	},
+}
+
+func init() {
+	acceptanceR1CodexCmd.Flags().StringVar(&acceptanceRunRoot, "run-root", "", "acceptance run directory")
+	acceptanceR1CodexCmd.Flags().StringVar(&acceptanceCommand, "command", "codex --dangerously-bypass-hook-trust", "Codex CLI command")
+	acceptanceR1CodexCmd.Flags().StringVar(&acceptanceCodexHome, "codex-home-source", "", "source CODEX_HOME to copy auth/config from")
+	acceptanceR1CodexCmd.Flags().IntVar(&acceptanceAgents, "agents", 5, "number of Codex appservers")
+	acceptanceR1CodexCmd.Flags().BoolVar(&acceptanceAgentTurns, "agent-turns", false, "run real model turns that write governed R1 events")
+	acceptanceR1CodexCmd.Flags().DurationVar(&acceptanceTurnTimeout, "turn-timeout", 5*time.Minute, "timeout per real agent turn")
+	acceptanceCmd.AddCommand(acceptanceR1CodexCmd)
+	rootCmd.AddCommand(acceptanceCmd)
+}
+
+type r1CodexAcceptanceOptions struct {
+	RunRoot     string
+	Command     string
+	CodexHome   string
+	Agents      int
+	AgentTurns  bool
+	TurnTimeout time.Duration
+	Stdout      io.Writer
+	Stderr      io.Writer
+}
+
+type r1CodexAcceptanceReport struct {
+	SchemaVersion int                        `json:"schema_version"`
+	Status        string                     `json:"status"`
+	StartedAt     string                     `json:"started_at"`
+	FinishedAt    string                     `json:"finished_at"`
+	RunRoot       string                     `json:"run_root"`
+	ReportPath    string                     `json:"report_path"`
+	LocalAddr     string                     `json:"local_addr"`
+	AgentTurns    bool                       `json:"agent_turns"`
+	Starter       string                     `json:"starter,omitempty"`
+	Assignee      string                     `json:"assignee,omitempty"`
+	Agents        []r1CodexAgentReport       `json:"agents"`
+	LedgerCounts  map[string]int             `json:"ledger_counts,omitempty"`
+	CueAudit      map[string]int             `json:"cue_audit,omitempty"`
+	Assertions    []r1AcceptanceAssertion    `json:"assertions"`
+	Errors        []string                   `json:"errors,omitempty"`
+	Artifacts     map[string]string          `json:"artifacts,omitempty"`
+	Raw           map[string]json.RawMessage `json:"raw,omitempty"`
+}
+
+type r1CodexAgentReport struct {
+	Principal          string   `json:"principal"`
+	Workspace          string   `json:"workspace"`
+	CodexHome          string   `json:"codex_home"`
+	ThreadID           string   `json:"thread_id,omitempty"`
+	HookCount          int      `json:"hook_count"`
+	HookTrustStatuses  []string `json:"hook_trust_statuses,omitempty"`
+	ManualHookRendered bool     `json:"manual_hook_rendered"`
+	FinalAnswers       []string `json:"final_answers,omitempty"`
+}
+
+type r1AcceptanceAssertion struct {
+	Name   string `json:"name"`
+	Passed bool   `json:"passed"`
+	Detail string `json:"detail,omitempty"`
+}
+
+type r1CodexAgent struct {
+	principal string
+	workspace string
+	codexHome string
+	token     string
+	env       []string
+	server    *codexapp.AppServer
+	threadID  string
+}
+
+func runR1CodexAcceptance(ctx context.Context, opts r1CodexAcceptanceOptions) (r1CodexAcceptanceReport, error) {
+	if opts.Stdout == nil {
+		opts.Stdout = io.Discard
+	}
+	if opts.Stderr == nil {
+		opts.Stderr = io.Discard
+	}
+	if opts.Command == "" {
+		opts.Command = "codex"
+	}
+	if opts.Agents <= 0 {
+		opts.Agents = 5
+	}
+	if opts.TurnTimeout <= 0 {
+		opts.TurnTimeout = 5 * time.Minute
+	}
+	started := time.Now().UTC().Truncate(time.Second)
+	runRoot := opts.RunRoot
+	if runRoot == "" {
+		runRoot = filepath.Join(".testdata", "r1-codex-acceptance", started.Format("20060102T150405Z"))
+	}
+	runRoot, err := filepath.Abs(runRoot)
+	if err != nil {
+		return r1CodexAcceptanceReport{}, err
+	}
+	report := r1CodexAcceptanceReport{
+		SchemaVersion: 1,
+		Status:        "running",
+		StartedAt:     started.Format(time.RFC3339),
+		RunRoot:       runRoot,
+		AgentTurns:    opts.AgentTurns,
+		LedgerCounts:  map[string]int{},
+		CueAudit:      map[string]int{},
+		Artifacts:     map[string]string{},
+		Raw:           map[string]json.RawMessage{},
+	}
+	reportPath := filepath.Join(runRoot, "report.json")
+	report.ReportPath = reportPath
+	defer func() {
+		report.FinishedAt = time.Now().UTC().Truncate(time.Second).Format(time.RFC3339)
+		_ = os.MkdirAll(filepath.Dir(reportPath), 0o755)
+		data, _ := json.MarshalIndent(report, "", "  ")
+		_ = os.WriteFile(reportPath, append(data, '\n'), 0o644)
+	}()
+
+	if err := os.MkdirAll(runRoot, 0o755); err != nil {
+		return report, err
+	}
+	binDir, err := installAcceptanceHarnessBinary(runRoot)
+	if err != nil {
+		addR1Error(&report, err)
+		report.Status = "blocked"
+		return report, err
+	}
+	localAddr, err := freeLoopbackAddr()
+	if err != nil {
+		addR1Error(&report, err)
+		report.Status = "blocked"
+		return report, err
+	}
+	report.LocalAddr = "http://" + localAddr
+	localWorkspace := filepath.Join(runRoot, "local-workspace")
+	if err := os.MkdirAll(localWorkspace, 0o755); err != nil {
+		addR1Error(&report, err)
+		report.Status = "blocked"
+		return report, err
+	}
+	sourceCodexHome := resolveSourceCodexHome(opts.CodexHome)
+	report.Artifacts["codex_home_source"] = sourceCodexHome
+	agents, loaded, err := setupR1CodexAgents(runRoot, binDir, report.LocalAddr, opts.Agents, sourceCodexHome)
+	if err != nil {
+		addR1Error(&report, err)
+		report.Status = "blocked"
+		return report, err
+	}
+	report.Artifacts["local_workspace"] = localWorkspace
+	report.Artifacts["render_audit"] = filepath.Join(localWorkspace, ".mnemon", "harness", "local", "render-audit.jsonl")
+
+	serverCtx, cancelServer := context.WithCancel(ctx)
+	defer cancelServer()
+	serverErr := make(chan error, 1)
+	go func() {
+		serverErr <- app.RunLocalHTTPServerWithBindings(serverCtx, localAddr, filepath.Join(localWorkspace, runtime.DefaultStorePath), loaded, app.ServeOptions{
+			ProjectRoot: localWorkspace,
+		}, io.Discard)
+	}()
+	defer func() {
+		cancelServer()
+		select {
+		case err := <-serverErr:
+			if err != nil && !errors.Is(err, context.Canceled) {
+				addR1Error(&report, fmt.Errorf("local server shutdown: %w", err))
+			}
+		case <-time.After(5 * time.Second):
+			addR1Error(&report, fmt.Errorf("local server did not stop cleanly"))
+		}
+	}()
+	if err := waitR1LocalReady(ctx, agents[0], report.LocalAddr, 10*time.Second); err != nil {
+		addR1Error(&report, err)
+		report.Status = "blocked"
+		return report, err
+	}
+
+	for i := range agents {
+		if err := startR1CodexAppserver(&agents[i], opts.Command); err != nil {
+			addR1Error(&report, err)
+			report.Status = "blocked"
+			return report, err
+		}
+		defer agents[i].server.Close()
+		agentReport, raw, err := initializeR1CodexAgent(&agents[i], opts.TurnTimeout)
+		if err != nil {
+			addR1Error(&report, err)
+			report.Status = "blocked"
+			return report, err
+		}
+		report.Agents = append(report.Agents, agentReport)
+		if raw != nil {
+			report.Raw[agents[i].principal+":hooks"] = raw
+		}
+	}
+	addR1Assertion(&report, "A1 5/5 appservers start/init", len(report.Agents) == opts.Agents, fmt.Sprintf("started=%d requested=%d", len(report.Agents), opts.Agents))
+	allHooks := true
+	allTrusted := true
+	for _, ar := range report.Agents {
+		if ar.HookCount < 4 || !ar.ManualHookRendered {
+			allHooks = false
+		}
+		for _, st := range ar.HookTrustStatuses {
+			if st != "trusted" && st != "managed" {
+				allTrusted = false
+			}
+		}
+	}
+	addR1Assertion(&report, "preflight hooks discovered and render", allHooks, "each appserver lists R1 hooks and manual shim render succeeds")
+	hookTrustApproved := allTrusted || strings.Contains(opts.Command, "--dangerously-bypass-hook-trust")
+	hookTrustDetail := "trust status must be trusted or managed for hook-driven cue proof"
+	if !allTrusted && hookTrustApproved {
+		hookTrustDetail = "project hooks list as untrusted, but this appserver invocation used --dangerously-bypass-hook-trust as explicit operator approval"
+	}
+	addR1Assertion(&report, "preflight project hooks approved", hookTrustApproved, hookTrustDetail)
+
+	if opts.AgentTurns {
+		if err := runR1CodexLocalScenario(ctx, opts, agents, &report); err != nil {
+			addR1Error(&report, err)
+		}
+	} else {
+		addR1Assertion(&report, "agent turns requested", false, "rerun with --agent-turns to spend real model turns")
+	}
+	report.LedgerCounts = countR1Ledger(report.LocalAddr, agents[0])
+	report.CueAudit = countR1CueAudit(report.Artifacts["render_audit"])
+	addR1Assertion(&report, "A11 no assignment_status/assignment_expired", report.LedgerCounts["assignment_status"] == 0 && report.LedgerCounts["assignment_expired"] == 0, fmt.Sprintf("assignment_status=%d assignment_expired=%d", report.LedgerCounts["assignment_status"], report.LedgerCounts["assignment_expired"]))
+	addR1Assertion(&report, "A12 render audit has provenance", report.CueAudit["with_provenance"] > 0 && report.CueAudit["with_body_digest"] > 0 && report.CueAudit["with_audit_id"] > 0, fmt.Sprintf("%+v", report.CueAudit))
+	if allR1AssertionsPassed(report.Assertions) {
+		report.Status = "ok"
+		return report, nil
+	}
+	report.Status = "failed"
+	return report, fmt.Errorf("R1 Codex acceptance failed")
+}
+
+func installAcceptanceHarnessBinary(runRoot string) (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	binDir := filepath.Join(runRoot, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		return "", err
+	}
+	target := filepath.Join(binDir, "mnemon-harness")
+	in, err := os.Open(exe)
+	if err != nil {
+		return "", err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o755)
+	if err != nil {
+		return "", err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		return "", err
+	}
+	if err := out.Close(); err != nil {
+		return "", err
+	}
+	return binDir, nil
+}
+
+func setupR1CodexAgents(runRoot, binDir, controlURL string, count int, sourceCodexHome string) ([]r1CodexAgent, channel.LoadedBindings, error) {
+	var agents []r1CodexAgent
+	var loaded channel.LoadedBindings
+	loaded.Tokens = map[string]contract.ActorID{}
+	for i := 1; i <= count; i++ {
+		principal := fmt.Sprintf("codex-%02d@project", i)
+		workspace := filepath.Join(runRoot, "workspaces", fmt.Sprintf("codex-%02d", i))
+		codexHome := filepath.Join(runRoot, "codex-home", fmt.Sprintf("codex-%02d", i))
+		if err := os.MkdirAll(workspace, 0o755); err != nil {
+			return nil, channel.LoadedBindings{}, err
+		}
+		if err := os.WriteFile(filepath.Join(workspace, "README.md"), []byte("# R1 Codex acceptance workspace\n"), 0o644); err != nil {
+			return nil, channel.LoadedBindings{}, err
+		}
+		if err := prepareAcceptanceCodexHome(codexHome, workspace, sourceCodexHome); err != nil {
+			return nil, channel.LoadedBindings{}, err
+		}
+		if _, err := app.New(workspace).Setup(context.Background(), io.Discard, io.Discard, app.SetupOptions{
+			Host:        "codex",
+			ControlURL:  controlURL,
+			Principal:   principal,
+			ProjectRoot: workspace,
+			UseToken:    true,
+		}); err != nil {
+			return nil, channel.LoadedBindings{}, err
+		}
+		one, err := channel.LoadBindingFile(workspace, filepath.Join(workspace, channel.DefaultBindingFile))
+		if err != nil {
+			return nil, channel.LoadedBindings{}, err
+		}
+		loaded.Bindings = append(loaded.Bindings, one.Bindings...)
+		for tok, actor := range one.Tokens {
+			loaded.Tokens[tok] = actor
+		}
+		token, err := acceptanceTokenForPrincipal(one.Tokens, contract.ActorID(principal))
+		if err != nil {
+			return nil, channel.LoadedBindings{}, err
+		}
+		agents = append(agents, r1CodexAgent{
+			principal: principal,
+			workspace: workspace,
+			codexHome: codexHome,
+			token:     token,
+			env:       acceptanceEnv(binDir, codexHome),
+		})
+	}
+	return agents, loaded, nil
+}
+
+func resolveSourceCodexHome(explicit string) string {
+	if explicit != "" {
+		return explicit
+	}
+	if env := os.Getenv("CODEX_HOME"); env != "" {
+		return env
+	}
+	if home := os.Getenv("HOME"); home != "" {
+		return filepath.Join(home, ".codex")
+	}
+	return ""
+}
+
+func prepareAcceptanceCodexHome(codexHome, workspace, sourceCodexHome string) error {
+	if err := os.MkdirAll(codexHome, 0o700); err != nil {
+		return err
+	}
+	if sourceCodexHome != "" {
+		for _, name := range []string{"auth.json", "config.toml", "models_cache.json", "version.json"} {
+			src := filepath.Join(sourceCodexHome, name)
+			if _, err := os.Stat(src); err == nil {
+				if err := copyRegularFile(src, filepath.Join(codexHome, name), 0o600); err != nil {
+					return fmt.Errorf("copy Codex %s: %w", name, err)
+				}
+			}
+		}
+	}
+	workspace, err := filepath.Abs(workspace)
+	if err != nil {
+		return err
+	}
+	quoted := strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(workspace)
+	body := fmt.Sprintf("\n[projects.%q]\ntrust_level = \"trusted\"\n", quoted)
+	f, err := os.OpenFile(filepath.Join(codexHome, "config.toml"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.WriteString(body); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
+}
+
+func copyRegularFile(src, dst string, mode os.FileMode) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		return err
+	}
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		return err
+	}
+	return out.Close()
+}
+
+func acceptanceEnv(binDir, codexHome string) []string {
+	env := os.Environ()
+	env = setEnv(env, "CODEX_HOME", codexHome)
+	env = setEnv(env, "PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return env
+}
+
+func setEnv(env []string, key, value string) []string {
+	prefix := key + "="
+	out := env[:0]
+	for _, item := range env {
+		if !strings.HasPrefix(item, prefix) {
+			out = append(out, item)
+		}
+	}
+	return append(out, prefix+value)
+}
+
+func acceptanceTokenForPrincipal(tokens map[string]contract.ActorID, principal contract.ActorID) (string, error) {
+	for tok, actor := range tokens {
+		if actor == principal {
+			return tok, nil
+		}
+	}
+	return "", fmt.Errorf("no token for principal %s", principal)
+}
+
+func freeLoopbackAddr() (string, error) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return "", err
+	}
+	defer ln.Close()
+	return ln.Addr().String(), nil
+}
+
+func waitR1LocalReady(ctx context.Context, agent r1CodexAgent, controlURL string, timeout time.Duration) error {
+	client := channel.NewClientWithToken(controlURL, agent.token)
+	deadline := time.Now().Add(timeout)
+	for {
+		if _, err := client.Status(""); err == nil {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("local server did not become ready")
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
+func startR1CodexAppserver(agent *r1CodexAgent, command string) error {
+	server := codexapp.New(command, agent.workspace)
+	server.SetEnv(agent.env)
+	if err := server.Start(); err != nil {
+		return fmt.Errorf("%s: start codex appserver: %w", agent.principal, err)
+	}
+	agent.server = server
+	return nil
+}
+
+func initializeR1CodexAgent(agent *r1CodexAgent, turnTimeout time.Duration) (r1CodexAgentReport, json.RawMessage, error) {
+	initResp, err := agent.server.Request("initialize", map[string]any{
+		"clientInfo": map[string]any{"name": "mnemon-r1-codex-acceptance", "version": version},
+	}, 30*time.Second)
+	if err != nil {
+		return r1CodexAgentReport{}, nil, fmt.Errorf("%s: initialize: %w", agent.principal, err)
+	}
+	_ = initResp
+	hooksResp, err := agent.server.Request("hooks/list", map[string]any{"cwds": []string{agent.workspace}}, 30*time.Second)
+	if err != nil {
+		return r1CodexAgentReport{}, nil, fmt.Errorf("%s: hooks/list: %w", agent.principal, err)
+	}
+	hooksRaw, _ := json.Marshal(hooksResp)
+	hooks := collectHookMetadata(hooksResp)
+	thread, err := agent.server.Request("thread/start", map[string]any{
+		"cwd":                   agent.workspace,
+		"approvalPolicy":        "never",
+		"sandbox":               "danger-full-access",
+		"ephemeral":             true,
+		"developerInstructions": r1AcceptanceDeveloperInstructions(agent.principal),
+	}, 30*time.Second)
+	if err != nil {
+		return r1CodexAgentReport{}, hooksRaw, fmt.Errorf("%s: thread/start: %w", agent.principal, err)
+	}
+	agent.threadID = codexapp.ThreadID(thread)
+	if agent.threadID == "" {
+		return r1CodexAgentReport{}, hooksRaw, fmt.Errorf("%s: thread/start returned no thread id", agent.principal)
+	}
+	rendered, err := runManualR1Hook(agent)
+	if err != nil {
+		return r1CodexAgentReport{}, hooksRaw, err
+	}
+	report := r1CodexAgentReport{
+		Principal:          agent.principal,
+		Workspace:          agent.workspace,
+		CodexHome:          agent.codexHome,
+		ThreadID:           agent.threadID,
+		HookCount:          len(hooks),
+		HookTrustStatuses:  hookTrustStatuses(hooks),
+		ManualHookRendered: strings.Contains(rendered, "mnemon:profile") || strings.Contains(rendered, "systemMessage"),
+	}
+	_ = turnTimeout
+	return report, hooksRaw, nil
+}
+
+func r1AcceptanceDeveloperInstructions(principal string) string {
+	return fmt.Sprintf(`You are %s in a Mnemon R1 real Codex cluster acceptance run.
+When a Mnemon cue asks you to update profile, signal, assignment, or feedback, write governed events through Local Mnemon from the shell.
+Use this pattern from the workspace root:
+  . .mnemon/harness/local/env.sh
+  mnemon-harness control observe --addr "$MNEMON_CONTROL_ADDR" --principal "$MNEMON_CONTROL_PRINCIPAL" --token-file "$MNEMON_CONTROL_TOKEN_FILE" --type <event-type> --external-id <id> --payload '<json>'
+Do not edit files under .mnemon directly. Do not invent assignment_status or assignment_expired. Keep final answers brief and name the governed event you wrote.`, principal)
+}
+
+func runManualR1Hook(agent *r1CodexAgent) (string, error) {
+	hook := filepath.Join(agent.workspace, ".codex", "hooks", "mnemon-r1", "remind.sh")
+	cmd := exec.Command("bash", hook)
+	cmd.Dir = agent.workspace
+	cmd.Env = agent.env
+	cmd.Stdin = strings.NewReader(`{"prompt":"manual acceptance hook render"}`)
+	var out bytes.Buffer
+	var errb bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &errb
+	if err := cmd.Run(); err != nil {
+		return out.String(), fmt.Errorf("%s: manual hook render: %w: %s", agent.principal, err, errb.String())
+	}
+	return out.String(), nil
+}
+
+type hookMetadata struct {
+	EventName   string
+	Command     string
+	TrustStatus string
+}
+
+func collectHookMetadata(value any) []hookMetadata {
+	var out []hookMetadata
+	var walk func(any)
+	walk = func(v any) {
+		switch x := v.(type) {
+		case map[string]any:
+			if event, ok := x["eventName"].(string); ok {
+				h := hookMetadata{EventName: event}
+				if cmd, ok := x["command"].(string); ok {
+					h.Command = cmd
+				}
+				if st, ok := x["trustStatus"].(string); ok {
+					h.TrustStatus = st
+				}
+				out = append(out, h)
+			}
+			for _, child := range x {
+				walk(child)
+			}
+		case []any:
+			for _, child := range x {
+				walk(child)
+			}
+		}
+	}
+	walk(value)
+	return out
+}
+
+func hookTrustStatuses(hooks []hookMetadata) []string {
+	seen := map[string]bool{}
+	for _, h := range hooks {
+		if h.TrustStatus != "" {
+			seen[h.TrustStatus] = true
+		}
+	}
+	var out []string
+	for st := range seen {
+		out = append(out, st)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func runR1CodexLocalScenario(ctx context.Context, opts r1CodexAcceptanceOptions, agents []r1CodexAgent, report *r1CodexAcceptanceReport) error {
+	if len(agents) < 5 {
+		addR1Assertion(report, "A1 5/5 appservers start/init", false, fmt.Sprintf("need 5 agents, got %d", len(agents)))
+		return fmt.Errorf("need at least 5 agents")
+	}
+	runID := strings.ToLower(time.Now().UTC().Format("150405"))
+	for i := range agents {
+		prompt := fmt.Sprintf(`Act on the Mnemon profile cue for %s.
+Run a shell command that emits one agent_profile.write_candidate.observed event with external id profile-%02d-%s and payload fields:
+actor=%q, focus="R1 real Codex cluster acceptance", context_advantages=["real Codex appserver %02d","workspace-local R1 shim"], availability="available", ttl="30m", summary="Agent %02d is available for the R1 teamwork acceptance run".
+After the command succeeds, answer "profile done".`, agents[i].principal, i+1, runID, agents[i].principal, i+1, i+1)
+		answer, err := runR1Turn(&agents[i], prompt, opts.TurnTimeout)
+		appendAgentAnswer(report, agents[i].principal, answer)
+		if err != nil {
+			addR1Assertion(report, "A2 5/5 accepted agent_profile", false, fmt.Sprintf("%s: %v", agents[i].principal, err))
+			return err
+		}
+	}
+	waitForLedgerCount(report.LocalAddr, agents[0], "agent_profile", 5, 10*time.Second)
+	counts := countR1Ledger(report.LocalAddr, agents[0])
+	addR1Assertion(report, "A2 5/5 accepted agent_profile", counts["agent_profile"] >= 5, fmt.Sprintf("agent_profile=%d", counts["agent_profile"]))
+
+	starterIndex := int(time.Now().UnixNano() % int64(len(agents)))
+	starter := agents[starterIndex]
+	report.Starter = starter.principal
+	addR1Assertion(report, "A3 configurable/random starter", true, "starter="+starter.principal)
+	addR1Assertion(report, "A4 one human entrypoint", true, "runner starts one scenario; agents coordinate through Mnemon cues")
+
+	signalID := "sig-r1-" + runID
+	assignID := "asg-r1-" + runID
+	prompt := fmt.Sprintf(`You are the starter for the R1 teamwork acceptance.
+First render your current Mnemon cue with:
+  . .mnemon/harness/local/env.sh
+  mnemon-harness control render --addr "$MNEMON_CONTROL_ADDR" --principal "$MNEMON_CONTROL_PRINCIPAL" --token-file "$MNEMON_CONTROL_TOKEN_FILE" --intent teamwork.cue --lifecycle remind --surface hook
+Then emit a teamwork_signal.write_candidate.observed event with external id signal-%s and payload:
+{"signal_id":%q,"scope":"r1/real-codex-cluster/local","statement":"Need another real Codex appserver to complete an R1 acceptance work item.","why_teamwork":"five fresh agent profiles are available; delegation verifies the R1 cue loop","ttl":"30m","evidence":"real-codex-cluster acceptance"}
+Then choose one teammate other than yourself and emit assignment.write_candidate.observed with external id assignment-%s, assignment_id %q, signal_ref %q, assignee set to that teammate principal, scope "r1/real-codex-cluster/local", expected_work "Inspect the R1 cue loop and report whether the real appserver can act on the assignment.", expected_feedback "progress_digest with assignment_ref and evidence", ttl "20m", evidence "signal %s".
+After both commands succeed, answer with the assignee principal only.`, runID, signalID, runID, assignID, signalID, signalID)
+	answer, err := runR1Turn(&starter, prompt, opts.TurnTimeout)
+	appendAgentAnswer(report, starter.principal, answer)
+	if err != nil {
+		addR1Assertion(report, "A5 teamwork_signal accepted", false, err.Error())
+		return err
+	}
+	waitForLedgerCount(report.LocalAddr, starter, "assignment", 1, 10*time.Second)
+	counts = countR1Ledger(report.LocalAddr, starter)
+	addR1Assertion(report, "A5 teamwork_signal accepted", counts["teamwork_signal"] >= 1, fmt.Sprintf("teamwork_signal=%d", counts["teamwork_signal"]))
+	addR1Assertion(report, "A6 assignment with TTL accepted", counts["assignment"] >= 1, fmt.Sprintf("assignment=%d", counts["assignment"]))
+	assignee := findAssignmentAssignee(report.LocalAddr, starter, assignID)
+	if assignee == "" {
+		assignee = parsePrincipal(answer)
+	}
+	report.Assignee = assignee
+	assigneeAgent, ok := findAgent(agents, assignee)
+	if !ok {
+		addR1Assertion(report, "A6 assignment assignee is a real appserver", false, "assignee="+assignee)
+		return fmt.Errorf("assignment assignee %q is not one of the appservers", assignee)
+	}
+	workCue, err := renderR1Cue(report.LocalAddr, assigneeAgent.token)
+	if err != nil {
+		addR1Assertion(report, "A7 assignee gets work cue by scoped render", false, err.Error())
+		return err
+	}
+	addR1Assertion(report, "A7 assignee gets work cue by scoped render", strings.Contains(workCue.Body, "[mnemon:work]") && strings.Contains(workCue.Body, assignID), workCue.Body)
+
+	prompt = fmt.Sprintf(`Act on your Mnemon work and feedback cue.
+Render the cue, do the assigned inspection in this workspace, then emit progress_digest.write_candidate.observed with external id progress-%s and payload:
+{"assignment_ref":%q,"scope":"r1/real-codex-cluster/local","summary":"Real Codex appserver acted on the R1 assignment and confirmed the rendered work cue was usable.","evidence":"rendered work cue plus real appserver turn","changed_context":"assignee completed the delegated acceptance work","suggested_next":"starter should integrate the result"}
+After the command succeeds, answer "progress_digest done".`, runID, assignID)
+	answer, err = runR1Turn(&assigneeAgent, prompt, opts.TurnTimeout)
+	appendAgentAnswer(report, assigneeAgent.principal, answer)
+	if err != nil {
+		addR1Assertion(report, "A8 assignee emits progress_digest", false, err.Error())
+		return err
+	}
+	waitForLedgerCount(report.LocalAddr, starter, "progress_digest", 1, 10*time.Second)
+	counts = countR1Ledger(report.LocalAddr, starter)
+	addR1Assertion(report, "A8 assignee emits progress_digest", counts["progress_digest"] >= 1, fmt.Sprintf("progress_digest=%d", counts["progress_digest"]))
+	integrateCue, err := renderR1Cue(report.LocalAddr, starter.token)
+	if err != nil {
+		addR1Assertion(report, "A9 starter gets integrate cue", false, err.Error())
+		return err
+	}
+	addR1Assertion(report, "A9 starter gets integrate cue", strings.Contains(integrateCue.Body, "[mnemon:integrate]") && strings.Contains(integrateCue.Body, assignID), integrateCue.Body)
+
+	expID := "asg-exp-" + runID
+	expAssignee := agents[(starterIndex+1)%len(agents)].principal
+	prompt = fmt.Sprintf(`Emit one assignment.write_candidate.observed event that intentionally expires quickly.
+Use external id assignment-expired-%s and payload:
+{"assignment_id":%q,"assignee":%q,"scope":"r1/real-codex-cluster/ttl-expired","expected_work":"This assignment is intentionally left without progress to verify the render-derived expired cue.","expected_feedback":"progress_digest if completed","ttl":"1s","evidence":"TTL branch acceptance"}
+Do not emit progress_digest for this assignment. Answer "expired assignment written".`, runID, expID, expAssignee)
+	answer, err = runR1Turn(&starter, prompt, opts.TurnTimeout)
+	appendAgentAnswer(report, starter.principal, answer)
+	if err != nil {
+		addR1Assertion(report, "A10 TTL expired cue and new starter act", false, err.Error())
+		return err
+	}
+	time.Sleep(2 * time.Second)
+	expiredCue, err := renderR1Cue(report.LocalAddr, starter.token)
+	if err != nil {
+		addR1Assertion(report, "A10 TTL expired cue and new starter act", false, err.Error())
+		return err
+	}
+	addR1Assertion(report, "A10 TTL expired cue and new starter act", strings.Contains(expiredCue.Body, "[mnemon:expired]") && strings.Contains(expiredCue.Body, expID), expiredCue.Body)
+	return ctx.Err()
+}
+
+func runR1Turn(agent *r1CodexAgent, prompt string, timeout time.Duration) (string, error) {
+	before := agent.server.NotificationCount()
+	if _, err := agent.server.Request("turn/start", map[string]any{
+		"threadId":       agent.threadID,
+		"input":          []map[string]any{{"type": "text", "text": prompt}},
+		"cwd":            agent.workspace,
+		"approvalPolicy": "never",
+		"sandboxPolicy":  map[string]any{"type": "dangerFullAccess"},
+	}, 30*time.Second); err != nil {
+		return "", fmt.Errorf("%s: turn/start: %w", agent.principal, err)
+	}
+	if _, err := agent.server.WaitNotification("turn/completed", timeout, before); err != nil {
+		text := codexapp.CombinedText(agent.server.NotificationsSince(before))
+		return text, fmt.Errorf("%s: wait turn/completed: %w", agent.principal, err)
+	}
+	notifications := agent.server.NotificationsSince(before)
+	answer := codexapp.FinalAnswer(notifications)
+	if answer == "" {
+		answer = codexapp.CombinedText(notifications)
+	}
+	return answer, nil
+}
+
+func appendAgentAnswer(report *r1CodexAcceptanceReport, principal, answer string) {
+	for i := range report.Agents {
+		if report.Agents[i].Principal == principal {
+			if strings.TrimSpace(answer) != "" {
+				report.Agents[i].FinalAnswers = append(report.Agents[i].FinalAnswers, strings.TrimSpace(answer))
+			}
+			return
+		}
+	}
+}
+
+func waitForLedgerCount(controlURL string, agent r1CodexAgent, kind string, want int, timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if countR1Ledger(controlURL, agent)[kind] >= want {
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+func countR1Ledger(controlURL string, agent r1CodexAgent) map[string]int {
+	out := map[string]int{
+		"agent_profile":      0,
+		"teamwork_signal":    0,
+		"assignment":         0,
+		"progress_digest":    0,
+		"assignment_status":  0,
+		"assignment_expired": 0,
+	}
+	client := channel.NewClientWithToken(controlURL, agent.token)
+	proj, err := client.PullProjection("", contract.Subscription{Actor: contract.ActorID(agent.principal)})
+	if err != nil {
+		return out
+	}
+	for _, content := range proj.Content {
+		kind := string(content.Ref.Kind)
+		if items, ok := content.Fields["items"].([]any); ok {
+			out[kind] += len(items)
+			continue
+		}
+		out[kind]++
+	}
+	return out
+}
+
+func findAssignmentAssignee(controlURL string, agent r1CodexAgent, assignmentID string) string {
+	client := channel.NewClientWithToken(controlURL, agent.token)
+	proj, err := client.PullProjection("", contract.Subscription{Actor: contract.ActorID(agent.principal)})
+	if err != nil {
+		return ""
+	}
+	for _, content := range proj.Content {
+		if content.Ref.Kind != "assignment" {
+			continue
+		}
+		items, _ := content.Fields["items"].([]any)
+		for _, raw := range items {
+			item, _ := raw.(map[string]any)
+			if id, _ := item["assignment_id"].(string); id == assignmentID {
+				assignee, _ := item["assignee"].(string)
+				return assignee
+			}
+		}
+	}
+	return ""
+}
+
+func renderR1Cue(controlURL, token string) (render.Response, error) {
+	body, _ := json.Marshal(render.Request{RenderIntent: render.IntentTeamworkCue, Lifecycle: "remind", Surface: "hook"})
+	req, err := http.NewRequest(http.MethodPost, strings.TrimRight(controlURL, "/")+"/render", bytes.NewReader(body))
+	if err != nil {
+		return render.Response{}, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return render.Response{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		data, _ := io.ReadAll(resp.Body)
+		return render.Response{}, fmt.Errorf("render failed: %s: %s", resp.Status, string(data))
+	}
+	var out render.Response
+	return out, json.NewDecoder(resp.Body).Decode(&out)
+}
+
+func parsePrincipal(text string) string {
+	fields := strings.Fields(strings.TrimSpace(text))
+	for _, f := range fields {
+		f = strings.Trim(f, ".,;:()[]{}\"'")
+		if strings.HasPrefix(f, "codex-") && strings.Contains(f, "@project") {
+			return f
+		}
+	}
+	return ""
+}
+
+func findAgent(agents []r1CodexAgent, principal string) (r1CodexAgent, bool) {
+	for _, agent := range agents {
+		if agent.principal == principal {
+			return agent, true
+		}
+	}
+	return r1CodexAgent{}, false
+}
+
+func countR1CueAudit(path string) map[string]int {
+	out := map[string]int{
+		"entries":          0,
+		"with_provenance":  0,
+		"with_body_digest": 0,
+		"with_audit_id":    0,
+		"profile":          0,
+		"work":             0,
+		"integrate":        0,
+		"expired":          0,
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return out
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		out["entries"]++
+		var obj map[string]any
+		if json.Unmarshal([]byte(line), &obj) != nil {
+			continue
+		}
+		if obj["provenance"] != nil || obj["ProjectionDigest"] != nil || obj["CatalogDigest"] != nil {
+			out["with_provenance"]++
+		}
+		if obj["body_digest"] != nil || obj["BodyDigest"] != nil {
+			out["with_body_digest"]++
+		}
+		if obj["audit_id"] != nil || obj["AuditID"] != nil {
+			out["with_audit_id"]++
+		}
+		body, _ := obj["body"].(string)
+		if counts, ok := obj["CueCounts"].(map[string]any); ok {
+			for _, key := range []string{"profile", "work", "integrate", "expired"} {
+				if n, ok := counts[key].(float64); ok && n > 0 {
+					out[key]++
+				}
+			}
+		}
+		for _, key := range []string{"profile", "work", "integrate", "expired"} {
+			if strings.Contains(body, "[mnemon:"+key+"]") {
+				out[key]++
+			}
+		}
+	}
+	return out
+}
+
+func addR1Assertion(report *r1CodexAcceptanceReport, name string, passed bool, detail string) {
+	if len(detail) > 1000 {
+		detail = detail[:1000] + "...(truncated)"
+	}
+	report.Assertions = append(report.Assertions, r1AcceptanceAssertion{Name: name, Passed: passed, Detail: detail})
+}
+
+func addR1Error(report *r1CodexAcceptanceReport, err error) {
+	if err != nil {
+		report.Errors = append(report.Errors, err.Error())
+	}
+}
+
+func allR1AssertionsPassed(assertions []r1AcceptanceAssertion) bool {
+	if len(assertions) == 0 {
+		return false
+	}
+	for _, a := range assertions {
+		if !a.Passed {
+			return false
+		}
+	}
+	return true
+}
