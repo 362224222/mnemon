@@ -37,6 +37,7 @@ mnemon setup --target qoderwork
 mnemon setup --target codebuddy
 mnemon setup --target workbuddy
 mnemon setup --target kimi
+mnemon setup --target opencode
 mnemon setup --target openclaw
 mnemon setup --target pi
 mnemon setup --target nanobot --global
@@ -52,8 +53,8 @@ mnemon setup --eject --target claude-code
 
 | Flag | Default | Description |
 |---|---|---|
-| `--global` | `false` | Install to user-wide config instead of project-local (recommended for Nanobot: installs to `~/.nanobot/workspace/`; Pi installs to `~/.pi/agent/`; Hermes installs to `~/.hermes/`; QoderWork installs to `~/.qoderwork/`; Kimi Code installs to `~/.kimi-code/` or `$KIMI_CODE_HOME/`) |
-| `--target <name>` | (auto-detect) | Target environment: `claude-code`, `codex`, `cursor`, `trae`, `qoder`, `qoderwork`, `codebuddy`, `workbuddy`, `kimi`, `openclaw`, `nanobot`, `pi`, or `hermes` |
+| `--global` | `false` | Install to user-wide config instead of project-local (recommended for Nanobot: installs to `~/.nanobot/workspace/`; Pi installs to `~/.pi/agent/`; Hermes installs to `~/.hermes/`; QoderWork installs to `~/.qoderwork/`; Kimi Code installs to `~/.kimi-code/` or `$KIMI_CODE_HOME/`; OpenCode installs to `~/.config/opencode/`) |
+| `--target <name>` | (auto-detect) | Target environment: `claude-code`, `codex`, `cursor`, `trae`, `qoder`, `qoderwork`, `codebuddy`, `workbuddy`, `kimi`, `opencode`, `openclaw`, `nanobot`, `pi`, or `hermes` |
 | `--eject` | `false` | Remove mnemon integrations |
 | `--yes` | `false` | Auto-confirm all prompts |
 
