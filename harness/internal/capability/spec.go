@@ -240,13 +240,6 @@ func FromSpec(spec CapabilitySpec) (Capability, error) {
 	if !riskTiers[risk] {
 		return Capability{}, fmt.Errorf("capability spec %q: risk %q not in the closed set (low|mid|high)", spec.Name, spec.Risk)
 	}
-	// S4/G2: the loopdef kind (the D-loop's event-model-evolution kind) is permanently high-risk — a
-	// loopdef spec (first-party, or one that arrives synced/materialized) may not declare a lower tier
-	// and so dodge the operator gate.
-	if spec.ResourceKind == "loopdef" && risk != "high" {
-		return Capability{}, fmt.Errorf("capability spec %q: a loopdef kind must be risk:high (G2, non-overridable)", spec.Name)
-	}
-
 	return Capability{
 		Name:           spec.Name,
 		ObservedType:   spec.ObservedType,

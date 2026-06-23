@@ -161,11 +161,10 @@ func daemonDown(args []string, out, errw io.Writer) error {
 	return nil
 }
 
-// daemonReload restarts the daemon so it RE-ASSEMBLES the catalog — picking up any loop definitions
-// materialized under .mnemon/loops since it started (the D-loop activation, G1). It is a single verb
-// (stop the recorded pid, wait, then `up` with the same flags), NOT a watch and NOT two shelled
-// commands: materialization writes to disk, and ONLY this explicit reload activates it. Pre-flighting
-// the boot (via daemonUp) keeps a misconfigured project from leaving the daemon down.
+// daemonReload restarts the daemon so it RE-ASSEMBLES the catalog, including any external
+// capability packages under .mnemon/loops. It is a single verb (stop the recorded pid, wait, then
+// `up` with the same flags), NOT a watch and NOT two shelled commands. Pre-flighting the boot (via
+// daemonUp) keeps a misconfigured project from leaving the daemon down.
 func daemonReload(args []string, out, errw io.Writer) error {
 	cfg, err := parseServe(args, errw)
 	if err != nil {
@@ -188,8 +187,7 @@ func daemonReload(args []string, out, errw io.Writer) error {
 		_ = os.Remove(pidPath)
 		fmt.Fprintf(out, "mnemond: stopped (pid %d) for reload\n", pid)
 	}
-	// up re-reads the catalog (incl. freshly-materialized loopdef packages) and records the G4
-	// activation ledger at boot.
+	// up re-reads the catalog before serving again.
 	return daemonUp(args, out, errw)
 }
 

@@ -397,16 +397,7 @@ func minimalAcceptPayload(id string) map[string]any {
 		}
 	case "progress_digest":
 		return map[string]any{"summary": "projection 80% done"}
-	case "loopdef":
-		return map[string]any{"spec": loopdefDraftJSON}
 	default:
 		return map[string]any{"text": "x"}
 	}
 }
-
-// loopdefDraftJSON is a minimal VALID capability spec draft (the loopdef payload form): it parses,
-// FromSpec-compiles, and passes the untrusted-text scan + recursion guard.
-const loopdefDraftJSON = `{"schema_version":1,"name":"widget2","observed_type":"widget2.write_candidate.observed",` +
-	`"proposed_type":"widget2.write.proposed","resource_kind":"widget2","items_field":"items",` +
-	`"fields":[{"name":"text","validators":[{"id":"required","params":{"missing_style":"empty"}}]}],` +
-	`"render":{"content":{"member":"bullet-list","params":{"title":"# W2","field":"text"}}}}`

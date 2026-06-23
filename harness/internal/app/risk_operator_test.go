@@ -17,10 +17,9 @@ const approvalHighRiskSpec = `{"schema_version":1,"name":"approval","observed_ty
 "render":{"content":{"member":"bullet-list","params":{"title":"# Approvals","field":"text"}}},
 "risk":"high"}`
 
-// P3e-1: a high-risk kind's candidate from an AGENT (host-agent) is DENIED — the operator-only gate
+// A high-risk kind's candidate from an AGENT (host-agent) is DENIED — the operator-only gate
 // (the deny outranks the admission propose) — while the same candidate from an OPERATOR
-// (control-agent) is ADMITTED. This is the governance the D-loop's loopdef will rely on, proven here
-// with a high-risk test kind (no loopdef yet).
+// (control-agent) is ADMITTED. This proves the generic high-risk path with a static capability.
 func TestHighRiskOperatorGate(t *testing.T) {
 	root := t.TempDir()
 	writeExternalGoalPackage(t, root, "approval", approvalHighRiskSpec)

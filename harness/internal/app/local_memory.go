@@ -156,8 +156,8 @@ func withDefaultEnabledGrants(bindings []channel.ChannelBinding, catalog map[str
 	}
 	out := make([]channel.ChannelBinding, len(bindings))
 	for i, b := range bindings {
-		// host-agents AND control-agents (operators) both govern the default-enabled kinds — an operator
-		// proposes loopdefs and approves high-risk candidates, so it needs the same default grant (P3e).
+		// host-agents AND control-agents (operators) both govern the default-enabled kinds; high-risk
+		// static capabilities still need a control-agent path for operator approval.
 		if b.ActorKind == contract.KindHostAgent || b.ActorKind == contract.KindControlAgent {
 			// An EMPTY AllowedObservedTypes already means allow-all (AllowsObservedType returns true),
 			// so coordination is permitted without listing it — and appending here would flip the
@@ -258,11 +258,6 @@ func RunLocalHTTPServerWithBindings(ctx context.Context, addr, storePath string,
 	rt, err := OpenLocalRuntime(storePath, loaded, disableIgnoredLoops(opts.Loops, ignored, os.Stderr), catalog)
 	if err != nil {
 		return err
-	}
-	// Record the G4 activation ledger for any materialized loopdef packages this boot is governing —
-	// once, at boot (the reload that re-assembled them is the activation), never on a Tick watch (G1).
-	if err := emitLoopdefActivations(rt, opts.ProjectRoot); err != nil {
-		fmt.Fprintf(os.Stderr, "mnemon-harness: loopdef activation ledger: %v\n", err)
 	}
 	// Shutdown ordering (MED-5): the background driver and sync worker write through rt's open store
 	// on their own goroutines. rt.Close() must not race a mid-flight worker store write, so JOIN both
@@ -399,14 +394,6 @@ func serveReproject(rt *runtime.Runtime, loaded channel.LoadedBindings, hosts ma
 				Loops:       hosts[host],
 			}, refs); err != nil {
 				return fmt.Errorf("re-project %s: %w", host, err)
-			}
-		}
-		// D-loop materialize (Δ2/G5): an admitted loopdef draft writes its managed package to
-		// .mnemon/loops/ — the driver bridge, not the runtime. Writes only; activation is a separate
-		// explicit reload (G1/G3).
-		if refsTouchKind(refs, "loopdef") {
-			if err := materializeLoopdefs(rt, projectRoot); err != nil {
-				return fmt.Errorf("materialize loopdefs: %w", err)
 			}
 		}
 		if mirrorMode == "manual" || !refsTouchKind(refs, "memory") {

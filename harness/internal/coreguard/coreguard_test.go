@@ -39,7 +39,7 @@ var forbiddenImports = []string{
 // it is registered governance, not active control-plane logic; kept for now, revisit if it proves to
 // be pure app vocabulary.) User kinds are injected at assembly time, never hardcoded in the core.
 var businessKinds = []string{
-	"memory", "skill", "codex", "claude", "tower", "loopdef",
+	"memory", "skill", "codex", "claude", "tower",
 	"agent_profile", "teamwork_signal", "assignment", "progress_digest", "project_intent",
 	"assignment_status", "assignment_expired",
 	"poc_claim", "poc_decision", "poc_role", "ic_role", "goal", "approval",
@@ -156,7 +156,7 @@ func TestOuterRingImportBoundaries(t *testing.T) {
 }
 
 // TestCoreHasNoBusinessKindLiterals enforces that no core package hardcodes an application kind as a
-// string literal — business vocabulary (memory/skill/codex/loopdef/…) is injected at assembly, never
+// string literal — business vocabulary (memory/skill/codex/…) is injected at assembly, never
 // baked into the kernel. Comments are not literals, so a doc that mentions a kind is fine; only real
 // string literals are checked (so the sqlite ":memory:" DSN, for example, never trips this).
 func TestCoreHasNoBusinessKindLiterals(t *testing.T) {

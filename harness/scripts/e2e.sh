@@ -789,84 +789,12 @@ run_coordination() {
 		# the status FIELD section (P3d, tower seed) reports the coordination entry counts: each
 		# admitted kind has one entry (the evidence-less assignment was denied, so assignment=1 not 2).
 		out="$("$MH" control status --addr "http://$addr" --principal codex@project --token-file "$tok")"
-		case "$out" in *"Field: agent profile=0, assignment=1, loopdef=0, progress digest=1, project intent=1, teamwork signal=0"*) ;; *) echo "status FIELD wrong: $out"; exit 1 ;; esac
+		case "$out" in *"Field: agent profile=0, assignment=1, progress digest=1, project intent=1, teamwork signal=0"*) ;; *) echo "status FIELD wrong: $out"; exit 1 ;; esac
 		{ kill "$runpid" 2>/dev/null; wait "$runpid"; } 2>/dev/null || true
 		rm -f "$PIDFILE"
 	) || fail "coordination flow failed (see $WORK/run-coord.log)"
 	sleep 0.3
 	echo "    coordination kinds default-enabled OK"
-}
-
-# run_dloop proves the D-loop end to end (P3e): an OPERATOR (control-agent) proposes a loopdef that
-# defines a NEW event kind (widget2) → it admits (high-risk, operator only) → the driver materializes
-# it under .mnemon/loops → it is NOT governable yet (materialize != activate, G3) → `mnemond reload`
-# re-assembles the catalog (G1) → the new kind is now governed. The host-agent carries memory so the
-# background driver runs (its materialize branch fires on the loopdef accept).
-run_dloop() {
-	CUR_HOST="dloop"
-	local proj="$WORK/proj-dloop" addr="127.0.0.1:8791"
-	mkdir -p "$proj"
-	echo "=== E2E D-loop: governed event-model evolution ==="
-	go build -o "$WORK/mnemond" ./harness/cmd/mnemond
-	(
-		cd "$proj"
-		local htok=".mnemon/harness/channel/credentials/codex-project.token"
-		local otok=".mnemon/harness/channel/credentials/human-owner.token"
-		"$MH" setup --host codex --loop memory --principal codex@project --control-url "http://$addr" >/dev/null
-		"$MH" setup --host codex --actor-kind control-agent --principal human@owner --control-url "http://$addr" >/dev/null
-		"$WORK/mnemond" up --root . --addr "$addr" >"$WORK/dloop-up.log" 2>&1 \
-			|| { echo "up failed"; cat "$WORK/dloop-up.log"; exit 1; }
-		cp .mnemon/harness/local/mnemond.pid "$WORK/dloop.pid" 2>/dev/null || true
-		local up=0 i
-		for i in $(seq 1 60); do
-			"$MH" control status --addr "http://$addr" --principal codex@project --token-file "$htok" >/dev/null 2>&1 && { up=1; break; }
-			sleep 0.1
-		done
-		[ "$up" = 1 ] || { cat "$WORK/dloop-up.log"; exit 1; }
-
-		# the operator proposes a loopdef defining the new kind widget2 (the draft is carried as a
-		# JSON STRING; escape the inner quotes).
-		local draft='{"schema_version":1,"name":"widget2","observed_type":"widget2.write_candidate.observed","proposed_type":"widget2.write.proposed","resource_kind":"widget2","items_field":"items","fields":[{"name":"text","validators":[{"id":"required","params":{"missing_style":"empty"}}]}],"render":{"content":{"member":"bullet-list","params":{"title":"# W2","field":"text"}}}}'
-		local payload
-		payload="{\"spec\":\"$(printf '%s' "$draft" | sed 's/"/\\"/g')\"}"
-		out="$("$MH" control observe --addr "http://$addr" --principal human@owner --token-file "$otok" \
-			--type loopdef.write_candidate.observed --external-id dl1 --payload "$payload")"
-		case "$out" in *ticked=true*) ;; *) echo "operator loopdef propose: $out"; exit 1 ;; esac
-
-		# the driver materializes the draft (async, ~1s driver tick).
-		local mat=0
-		for i in $(seq 1 100); do
-			[ -f .mnemon/loops/widget2/capability.json ] && { mat=1; break; }
-			sleep 0.1
-		done
-		[ "$mat" = 1 ] || { echo "loopdef did not materialize widget2"; tail -5 "$WORK/dloop-up.log"; exit 1; }
-		grep -q default_enabled .mnemon/loops/widget2/capability.json || { echo "materialized widget2 not default_enabled"; exit 1; }
-
-		# G3: BEFORE reload the new kind is materialized but NOT governable.
-		out="$("$MH" control observe --addr "http://$addr" --principal codex@project --token-file "$htok" \
-			--type widget2.write_candidate.observed --external-id w0 --payload '{"text":"too early"}' 2>&1)"
-		case "$out" in *"may not observe"*) ;; *) echo "widget2 must NOT be governable before reload (G3): $out"; exit 1 ;; esac
-
-		# reload re-assembles the catalog (G1) → the new kind is now governed.
-		"$WORK/mnemond" reload --root . --addr "$addr" >"$WORK/dloop-reload.log" 2>&1 \
-			|| { echo "reload failed"; cat "$WORK/dloop-reload.log"; exit 1; }
-		cp .mnemon/harness/local/mnemond.pid "$WORK/dloop.pid" 2>/dev/null || true
-		up=0
-		for i in $(seq 1 60); do
-			"$MH" control status --addr "http://$addr" --principal codex@project --token-file "$htok" >/dev/null 2>&1 && { up=1; break; }
-			sleep 0.1
-		done
-		[ "$up" = 1 ] || { cat "$WORK/dloop-reload.log"; exit 1; }
-
-		# AFTER reload: a widget2 candidate is admitted — the new event model is live.
-		out="$("$MH" control observe --addr "http://$addr" --principal codex@project --token-file "$htok" \
-			--type widget2.write_candidate.observed --external-id w1 --payload '{"text":"the new kind works"}')"
-		case "$out" in *ticked=true*) ;; *) echo "widget2 must be governed after reload: $out"; exit 1 ;; esac
-
-		"$WORK/mnemond" down --root . >/dev/null 2>&1
-		rm -f "$WORK/dloop.pid"
-	) || fail "D-loop failed (see $WORK/dloop-up.log / $WORK/dloop-reload.log)"
-	echo "    D-loop governed event-model evolution OK"
 }
 
 # run_subscription proves the P4 context-budget acceptance ("packet 大小受预算约束"): a host endpoint
@@ -982,8 +910,7 @@ run_foo_external
 run_sync_pair
 run_daemon
 run_coordination
-run_dloop
 run_subscription
 run_tower
 
-echo "E2E PASS (codex + claude-code; memory + skill + note-external-package + external-goal + foo-projection + sync-pair[memory+journal+assignment] + daemon + coordination + dloop + subscription + tower)"
+echo "E2E PASS (codex + claude-code; memory + skill + note-external-package + external-goal + foo-projection + sync-pair[memory+journal+assignment] + daemon + coordination + subscription + tower)"

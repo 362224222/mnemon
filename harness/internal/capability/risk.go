@@ -15,9 +15,9 @@ import (
 // propose, so the write is refused — no new kernel verdict or held state (M1 review correction). It
 // gates on the cap's principal (a foreign principal's event passes through) and emits no proposal.
 //
-// High-risk (operator-only) gating is deferred to P3e, where its consumer (the high-risk loopdef
-// kind) and its principal model (the human@owner operator binding, G9) are designed together — a
-// high-risk gate without an operator principal to exempt would make a kind ungovernable.
+// High-risk (operator-only) gating is assembled only when a static capability selects the high tier
+// and the local bindings include a control-agent path; a high-risk gate without an operator
+// principal to exempt would make a kind ungovernable.
 func RiskEvidenceGate(cap Capability, principal contract.ActorID) rule.Rule {
 	return rule.NewNativeRule("risk-evidence:"+cap.Name+":"+string(principal), principal, "", []string{cap.ObservedType},
 		func(in rule.RuleInput) (contract.RuleDecision, error) {
@@ -32,7 +32,7 @@ func RiskEvidenceGate(cap Capability, principal contract.ActorID) rule.Rule {
 		})
 }
 
-// RiskOperatorGate is the high-risk governance gate (P3e): it DENIES the gated principal's candidate
+// RiskOperatorGate is the high-risk governance gate: it DENIES the gated principal's candidate
 // with a durable diagnostic — the agent's high-risk proposal lands in the Inbox, and a human/operator
 // (a control-agent principal) re-submits the same candidate through the normal admission path. The
 // assembler builds this gate ONLY for NON-operator (host-agent) principals, so the operator's own

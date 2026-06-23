@@ -35,11 +35,6 @@ var validatorCatalog = map[string]paramSchema{
 	"safety:unsafe":         {},
 	"list:strings":          {},
 	"list:strings-required": {},
-	// validate:capability-spec-draft validates the field value as a SERIALIZED capability spec (the
-	// D-loop's loopdef payload, P3e): parse + FromSpec(validate-only) + the external untrusted-text
-	// scan + the single-layer recursion guard. The draft is carried as a JSON STRING (compileDecode
-	// reads string fields), never a nested object.
-	"validate:capability-spec-draft": {},
 }
 
 // compileDecode builds the Capability.Decode closure from the field specs. See the FromSpec doc
@@ -98,10 +93,6 @@ func compileDecode(spec CapabilitySpec) func(payload map[string]any) (Item, erro
 				case "safety:unsafe":
 					if containsSecretLikeContent(raw) || containsPromptInjectionShape(raw) {
 						return nil, fmt.Errorf("%s candidate denied: unsafe content", name)
-					}
-				case "validate:capability-spec-draft":
-					if err := validateSpecDraft(raw); err != nil {
-						return nil, fmt.Errorf("%s candidate denied: %v", name, err)
 					}
 				}
 			}

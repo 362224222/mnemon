@@ -54,7 +54,7 @@ type InboxPage struct {
 
 // InboxRow is one escalation (a durable diagnostic) awaiting operator attention.
 type InboxRow struct {
-	Domain   string // the kind domain (e.g. "loopdef", "assignment")
+	Domain   string // the kind domain (e.g. "approval", "assignment")
 	Actor    contract.ActorID
 	Stage    string
 	Reason   string

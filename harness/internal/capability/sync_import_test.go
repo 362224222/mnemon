@@ -54,10 +54,6 @@ func TestEmbeddedImportableKindsAreDescriptorDerived(t *testing.T) {
 			t.Fatalf("%s merge = %q, want %q", kind, cat[string(kind)].Sync.Merge, merge)
 		}
 	}
-	// loopdef must NOT be importable in P3 (single-machine D-loop; sync is P4).
-	if cat["loopdef"].Sync.Importable {
-		t.Fatal("loopdef must not be syncable in P3")
-	}
 	if got := cat["memory"].RemoteCommitObserved(); got != "memory.remote_commit.observed" {
 		t.Fatalf("remote-commit observation must be the system-derived form, got %q", got)
 	}
