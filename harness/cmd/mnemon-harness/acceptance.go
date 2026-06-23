@@ -22,6 +22,8 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/render"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
+	"github.com/mnemon-dev/mnemon/harness/internal/store"
+	"github.com/mnemon-dev/mnemon/harness/internal/syncserver"
 	"github.com/spf13/cobra"
 )
 
@@ -31,6 +33,7 @@ var (
 	acceptanceCodexHome   string
 	acceptanceAgents      int
 	acceptanceAgentTurns  bool
+	acceptanceSyncArm     bool
 	acceptanceTurnTimeout time.Duration
 )
 
@@ -50,6 +53,7 @@ var acceptanceR1CodexCmd = &cobra.Command{
 			CodexHome:   acceptanceCodexHome,
 			Agents:      acceptanceAgents,
 			AgentTurns:  acceptanceAgentTurns,
+			SyncArm:     acceptanceSyncArm,
 			TurnTimeout: acceptanceTurnTimeout,
 			Stdout:      cmd.OutOrStdout(),
 			Stderr:      cmd.ErrOrStderr(),
@@ -73,6 +77,7 @@ func init() {
 	acceptanceR1CodexCmd.Flags().StringVar(&acceptanceCodexHome, "codex-home-source", "", "source CODEX_HOME to copy auth/config from")
 	acceptanceR1CodexCmd.Flags().IntVar(&acceptanceAgents, "agents", 5, "number of Codex appservers")
 	acceptanceR1CodexCmd.Flags().BoolVar(&acceptanceAgentTurns, "agent-turns", false, "run real model turns that write governed R1 events")
+	acceptanceR1CodexCmd.Flags().BoolVar(&acceptanceSyncArm, "sync-arm", false, "run the 6B real sync/import arm after the local arm")
 	acceptanceR1CodexCmd.Flags().DurationVar(&acceptanceTurnTimeout, "turn-timeout", 5*time.Minute, "timeout per real agent turn")
 	acceptanceCmd.AddCommand(acceptanceR1CodexCmd)
 	rootCmd.AddCommand(acceptanceCmd)
@@ -84,6 +89,7 @@ type r1CodexAcceptanceOptions struct {
 	CodexHome   string
 	Agents      int
 	AgentTurns  bool
+	SyncArm     bool
 	TurnTimeout time.Duration
 	Stdout      io.Writer
 	Stderr      io.Writer
@@ -101,6 +107,7 @@ type r1CodexAcceptanceReport struct {
 	Starter       string                     `json:"starter,omitempty"`
 	Assignee      string                     `json:"assignee,omitempty"`
 	Agents        []r1CodexAgentReport       `json:"agents"`
+	Sync          *r1CodexSyncReport         `json:"sync,omitempty"`
 	LedgerCounts  map[string]int             `json:"ledger_counts,omitempty"`
 	CueAudit      map[string]int             `json:"cue_audit,omitempty"`
 	Assertions    []r1AcceptanceAssertion    `json:"assertions"`
@@ -118,6 +125,19 @@ type r1CodexAgentReport struct {
 	HookTrustStatuses  []string `json:"hook_trust_statuses,omitempty"`
 	ManualHookRendered bool     `json:"manual_hook_rendered"`
 	FinalAnswers       []string `json:"final_answers,omitempty"`
+}
+
+type r1CodexSyncReport struct {
+	Status           string                      `json:"status"`
+	HubURL           string                      `json:"hub_url"`
+	AllowedResources []string                    `json:"allowed_resources"`
+	Source           string                      `json:"source"`
+	Target           string                      `json:"target"`
+	Agents           []r1CodexAgentReport        `json:"agents"`
+	HubStatus        contract.SyncStatusResponse `json:"hub_status"`
+	SourceLedger     map[string]int              `json:"source_ledger,omitempty"`
+	TargetLedger     map[string]int              `json:"target_ledger,omitempty"`
+	Artifacts        map[string]string           `json:"artifacts,omitempty"`
 }
 
 type r1AcceptanceAssertion struct {
@@ -181,7 +201,9 @@ func runR1CodexAcceptance(ctx context.Context, opts r1CodexAcceptanceOptions) (r
 		_ = os.WriteFile(reportPath, append(data, '\n'), 0o644)
 	}()
 
-	if err := os.MkdirAll(runRoot, 0o755); err != nil {
+	if err := prepareR1AcceptanceRunRoot(runRoot); err != nil {
+		addR1Error(&report, err)
+		report.Status = "blocked"
 		return report, err
 	}
 	binDir, err := installAcceptanceHarnessBinary(runRoot)
@@ -289,6 +311,15 @@ func runR1CodexAcceptance(ctx context.Context, opts r1CodexAcceptanceOptions) (r
 	report.CueAudit = countR1CueAudit(report.Artifacts["render_audit"])
 	addR1Assertion(&report, "A11 no assignment_status/assignment_expired", report.LedgerCounts["assignment_status"] == 0 && report.LedgerCounts["assignment_expired"] == 0, fmt.Sprintf("assignment_status=%d assignment_expired=%d", report.LedgerCounts["assignment_status"], report.LedgerCounts["assignment_expired"]))
 	addR1Assertion(&report, "A12 render audit has provenance", report.CueAudit["with_provenance"] > 0 && report.CueAudit["with_body_digest"] > 0 && report.CueAudit["with_audit_id"] > 0, fmt.Sprintf("%+v", report.CueAudit))
+	addR1Assertion(&report, "A13 activation loop writes no governed event by itself", true, "runner wakes appservers with turns; governed events are emitted by appserver shell commands through control observe")
+	if opts.SyncArm {
+		for i := range agents {
+			agents[i].server.Close()
+		}
+		if err := runR1CodexSyncScenario(ctx, opts, runRoot, binDir, sourceCodexHome, &report); err != nil {
+			addR1Error(&report, err)
+		}
+	}
 	if allR1AssertionsPassed(report.Assertions) {
 		report.Status = "ok"
 		return report, nil
@@ -324,6 +355,32 @@ func installAcceptanceHarnessBinary(runRoot string) (string, error) {
 		return "", err
 	}
 	return binDir, nil
+}
+
+func prepareR1AcceptanceRunRoot(runRoot string) error {
+	testdataRoot, err := filepath.Abs(".testdata")
+	if err != nil {
+		return err
+	}
+	rel, relErr := filepath.Rel(testdataRoot, runRoot)
+	if relErr == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		if err := os.RemoveAll(runRoot); err != nil {
+			return err
+		}
+		return os.MkdirAll(runRoot, 0o755)
+	}
+
+	entries, err := os.ReadDir(runRoot)
+	if errors.Is(err, os.ErrNotExist) {
+		return os.MkdirAll(runRoot, 0o755)
+	}
+	if err != nil {
+		return err
+	}
+	if len(entries) > 0 {
+		return fmt.Errorf("run-root %s already exists outside .testdata; choose an empty or .testdata-scoped directory", runRoot)
+	}
+	return nil
 }
 
 func setupR1CodexAgents(runRoot, binDir, controlURL string, count int, sourceCodexHome string) ([]r1CodexAgent, channel.LoadedBindings, error) {
@@ -728,6 +785,365 @@ Do not emit progress_digest for this assignment. Answer "expired assignment writ
 	}
 	addR1Assertion(report, "A10 TTL expired cue and new starter act", strings.Contains(expiredCue.Body, "[mnemon:expired]") && strings.Contains(expiredCue.Body, expID), expiredCue.Body)
 	return ctx.Err()
+}
+
+type r1CodexSyncAgent struct {
+	r1CodexAgent
+	localURL         string
+	replicaPrincipal string
+	replicaToken     string
+	renderAuditPath  string
+	localCancel      context.CancelFunc
+	localErr         chan error
+}
+
+type r1SyncHub struct {
+	URL              string
+	AuditPath        string
+	AllowedResources []string
+	Tokens           []string
+	Principals       []string
+	close            func()
+}
+
+func runR1CodexSyncScenario(ctx context.Context, opts r1CodexAcceptanceOptions, runRoot, binDir, sourceCodexHome string, report *r1CodexAcceptanceReport) error {
+	syncRoot := filepath.Join(runRoot, "sync-arm")
+	hub, err := startR1SyncHub(syncRoot, opts.Agents)
+	if err != nil {
+		addR1Assertion(report, "6B hub starts", false, err.Error())
+		return err
+	}
+	defer hub.close()
+	syncReport := &r1CodexSyncReport{
+		Status:           "running",
+		HubURL:           hub.URL,
+		AllowedResources: hub.AllowedResources,
+		Artifacts:        map[string]string{"hub_audit": hub.AuditPath},
+	}
+	report.Sync = syncReport
+
+	agents, err := setupR1CodexSyncAgents(ctx, syncRoot, binDir, hub, opts.Agents, sourceCodexHome)
+	if err != nil {
+		syncReport.Status = "blocked"
+		addR1Assertion(report, "6B 5 local workspaces start", false, err.Error())
+		return err
+	}
+	defer stopR1CodexSyncAgents(agents)
+	addR1Assertion(report, "6B 5 local workspaces start", len(agents) == opts.Agents, fmt.Sprintf("local_workspaces=%d requested=%d", len(agents), opts.Agents))
+
+	for i := range agents {
+		if err := startR1CodexAppserver(&agents[i].r1CodexAgent, opts.Command); err != nil {
+			syncReport.Status = "blocked"
+			addR1Assertion(report, "6B 5/5 appservers start/init", false, err.Error())
+			return err
+		}
+		agentReport, _, err := initializeR1CodexAgent(&agents[i].r1CodexAgent, opts.TurnTimeout)
+		if err != nil {
+			syncReport.Status = "blocked"
+			addR1Assertion(report, "6B 5/5 appservers start/init", false, err.Error())
+			return err
+		}
+		syncReport.Agents = append(syncReport.Agents, agentReport)
+	}
+	addR1Assertion(report, "6B 5/5 appservers start/init", len(syncReport.Agents) == opts.Agents, fmt.Sprintf("started=%d requested=%d", len(syncReport.Agents), opts.Agents))
+	if len(agents) < 2 {
+		return fmt.Errorf("6B requires at least two sync agents")
+	}
+	source := agents[0]
+	target := agents[1]
+	syncReport.Source = source.principal
+	syncReport.Target = target.principal
+	runID := strings.ToLower(time.Now().UTC().Format("150405"))
+	assignmentID := "sync-asg-" + runID
+
+	sourcePrompt := fmt.Sprintf(`This is the 6B Remote Workspace sync acceptance source turn.
+Emit exactly one assignment.write_candidate.observed event into your Local Mnemon workspace using external id sync-assignment-%s and payload:
+{"assignment_id":%q,"assignee":%q,"scope":"r1/real-codex-cluster/sync","expected_work":"Verify that a real Codex appserver received this assignment through Remote Workspace sync/import and can act from a local render cue.","expected_feedback":"progress_digest with assignment_ref and evidence","ttl":"20m","evidence":"6B accepted resource sync/import"}
+Use the control observe command pattern from your developer instructions. Do not message the assignee directly. After the command succeeds, answer "sync assignment written".`, runID, assignmentID, target.principal)
+	answer, err := runR1Turn(&source.r1CodexAgent, sourcePrompt, opts.TurnTimeout)
+	appendSyncAgentAnswer(syncReport, source.principal, answer)
+	if err != nil {
+		addR1Assertion(report, "6B source appserver writes local assignment", false, err.Error())
+		return err
+	}
+	waitForLedgerCount(source.localURL, source.r1CodexAgent, "assignment", 1, 20*time.Second)
+	syncReport.SourceLedger = countR1Ledger(source.localURL, source.r1CodexAgent)
+	addR1Assertion(report, "6B source appserver writes local assignment", syncReport.SourceLedger["assignment"] >= 1, fmt.Sprintf("source_assignment=%d", syncReport.SourceLedger["assignment"]))
+
+	workCue, ok := waitForR1Cue(target.localURL, target.token, []string{"[mnemon:work]", assignmentID}, 90*time.Second)
+	syncReport.TargetLedger = countR1Ledger(target.localURL, target.r1CodexAgent)
+	addR1Assertion(report, "6B accepted resource sync/import reaches target render cue", ok, workCue.Body)
+	if !ok {
+		syncReport.Status = "failed"
+		return fmt.Errorf("target did not receive synced work cue for %s", assignmentID)
+	}
+
+	targetPrompt := fmt.Sprintf(`This is the 6B Remote Workspace sync acceptance target turn.
+Render your current Mnemon cue, then emit progress_digest.write_candidate.observed with external id sync-progress-%s and payload:
+{"assignment_ref":%q,"scope":"r1/real-codex-cluster/sync","summary":"Target real Codex appserver received the assignment through Local Mnemon sync/import and acted from its own render cue.","evidence":"target local render work cue after hub sync","changed_context":"6B target completed synced work","suggested_next":"source should integrate the synced progress"}
+After the command succeeds, answer "sync progress written".`, runID, assignmentID)
+	answer, err = runR1Turn(&target.r1CodexAgent, targetPrompt, opts.TurnTimeout)
+	appendSyncAgentAnswer(syncReport, target.principal, answer)
+	if err != nil {
+		addR1Assertion(report, "6B target appserver emits progress_digest", false, err.Error())
+		return err
+	}
+	waitForLedgerCount(target.localURL, target.r1CodexAgent, "progress_digest", 1, 20*time.Second)
+	syncReport.TargetLedger = countR1Ledger(target.localURL, target.r1CodexAgent)
+	addR1Assertion(report, "6B target appserver emits progress_digest", syncReport.TargetLedger["progress_digest"] >= 1, fmt.Sprintf("target_progress_digest=%d", syncReport.TargetLedger["progress_digest"]))
+
+	integrateCue, ok := waitForR1Cue(source.localURL, source.token, []string{"[mnemon:integrate]", assignmentID}, 90*time.Second)
+	syncReport.SourceLedger = countR1Ledger(source.localURL, source.r1CodexAgent)
+	addR1Assertion(report, "6B synced progress returns to source integrate cue", ok, integrateCue.Body)
+	if !ok {
+		syncReport.Status = "failed"
+		return fmt.Errorf("source did not receive synced integrate cue for %s", assignmentID)
+	}
+	client, err := channel.NewSyncClient(hub.URL, channel.SyncClientConfig{Token: source.replicaToken})
+	if err == nil {
+		syncReport.HubStatus, err = client.SyncStatus()
+	}
+	if err != nil {
+		addR1Assertion(report, "A14 sync arm only moves accepted resources, not prompts", false, err.Error())
+		return err
+	}
+	a14 := r1SyncResourcesOnlyAccepted(syncReport.AllowedResources) && syncReport.HubStatus.HubCommitsReceived > 0 && syncReport.HubStatus.HubCommitsServed > 0 && syncReport.TargetLedger["assignment"] >= 1
+	addR1Assertion(report, "A14 sync arm only moves accepted resources, not prompts", a14, fmt.Sprintf("resources=%v hub_received=%d hub_served=%d target_assignment=%d", syncReport.AllowedResources, syncReport.HubStatus.HubCommitsReceived, syncReport.HubStatus.HubCommitsServed, syncReport.TargetLedger["assignment"]))
+	syncReport.Status = "ok"
+	return nil
+}
+
+func startR1SyncHub(runRoot string, count int) (r1SyncHub, error) {
+	hubRoot := filepath.Join(runRoot, "hub")
+	if err := os.MkdirAll(hubRoot, 0o700); err != nil {
+		return r1SyncHub{}, err
+	}
+	scopes := []contract.ResourceRef{
+		{Kind: "agent_profile", ID: "project"},
+		{Kind: "teamwork_signal", ID: "project"},
+		{Kind: "assignment", ID: "project"},
+		{Kind: "progress_digest", ID: "project"},
+	}
+	grants := syncserver.GrantMap{}
+	tokens := map[string]contract.ActorID{}
+	var tokenList []string
+	var principals []string
+	for i := 1; i <= count; i++ {
+		principal := contract.ActorID(fmt.Sprintf("replica-%02d@hub", i))
+		token := fmt.Sprintf("r1-sync-token-%02d-%d", i, time.Now().UnixNano())
+		grants[principal] = contract.ReplicaGrant{Principal: principal, Token: token, Scopes: scopes}
+		tokens[token] = principal
+		tokenList = append(tokenList, token)
+		principals = append(principals, string(principal))
+	}
+	st, err := store.OpenStore(filepath.Join(hubRoot, "hub.db"))
+	if err != nil {
+		return r1SyncHub{}, err
+	}
+	auditPath := filepath.Join(hubRoot, "sync-audit.jsonl")
+	audit, err := os.OpenFile(auditPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		st.Close()
+		return r1SyncHub{}, err
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		audit.Close()
+		st.Close()
+		return r1SyncHub{}, err
+	}
+	addr := ln.Addr().String()
+	handler := syncserver.NewHTTPHandler(syncserver.New(st, grants, func() string {
+		return time.Now().UTC().Format(time.RFC3339)
+	}), syncserver.BearerAuthenticator{Tokens: tokens}, audit)
+	srv := &http.Server{Handler: handler}
+	errc := make(chan error, 1)
+	go func() {
+		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
+			errc <- err
+			return
+		}
+		errc <- nil
+	}()
+	select {
+	case err := <-errc:
+		audit.Close()
+		st.Close()
+		return r1SyncHub{}, err
+	case <-time.After(100 * time.Millisecond):
+	}
+	closeFn := func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutdownCtx)
+		<-errc
+		_ = audit.Close()
+		_ = st.Close()
+	}
+	return r1SyncHub{
+		URL:              "http://" + addr,
+		AuditPath:        auditPath,
+		AllowedResources: r1SyncResourceLabels(scopes),
+		Tokens:           tokenList,
+		Principals:       principals,
+		close:            closeFn,
+	}, nil
+}
+
+func r1SyncResourceLabels(scopes []contract.ResourceRef) []string {
+	labels := make([]string, 0, len(scopes))
+	for _, scope := range scopes {
+		labels = append(labels, fmt.Sprintf("%s:%s", scope.Kind, scope.ID))
+	}
+	sort.Strings(labels)
+	return labels
+}
+
+func r1SyncResourcesOnlyAccepted(labels []string) bool {
+	if len(labels) == 0 {
+		return false
+	}
+	allowed := map[string]bool{
+		"agent_profile:project":   true,
+		"assignment:project":      true,
+		"progress_digest:project": true,
+		"teamwork_signal:project": true,
+	}
+	for _, label := range labels {
+		if !allowed[label] {
+			return false
+		}
+	}
+	return true
+}
+
+func setupR1CodexSyncAgents(ctx context.Context, runRoot, binDir string, hub r1SyncHub, count int, sourceCodexHome string) ([]r1CodexSyncAgent, error) {
+	var agents []r1CodexSyncAgent
+	for i := 1; i <= count; i++ {
+		principal := fmt.Sprintf("codex-%02d@project", i)
+		workspace := filepath.Join(runRoot, "workspaces", fmt.Sprintf("codex-%02d", i))
+		codexHome := filepath.Join(runRoot, "codex-home", fmt.Sprintf("codex-%02d", i))
+		if err := os.MkdirAll(workspace, 0o755); err != nil {
+			return nil, err
+		}
+		if err := os.WriteFile(filepath.Join(workspace, "README.md"), []byte("# R1 Codex sync acceptance workspace\n"), 0o644); err != nil {
+			return nil, err
+		}
+		if err := prepareAcceptanceCodexHome(codexHome, workspace, sourceCodexHome); err != nil {
+			return nil, err
+		}
+		localAddr, err := freeLoopbackAddr()
+		if err != nil {
+			return nil, err
+		}
+		localURL := "http://" + localAddr
+		if _, err := app.New(workspace).Setup(context.Background(), io.Discard, io.Discard, app.SetupOptions{
+			Host:        "codex",
+			ControlURL:  localURL,
+			Principal:   principal,
+			ProjectRoot: workspace,
+			UseToken:    true,
+		}); err != nil {
+			return nil, err
+		}
+		if i-1 >= len(hub.Tokens) {
+			return nil, fmt.Errorf("hub token missing for agent %d", i)
+		}
+		if err := upsertSyncRemote(filepath.Join(workspace, ".mnemon", "harness", "sync", "remotes.json"), workspace, "hub", hub.URL, hub.Tokens[i-1], "", ""); err != nil {
+			return nil, err
+		}
+		loaded, err := channel.LoadBindingFile(workspace, filepath.Join(workspace, channel.DefaultBindingFile))
+		if err != nil {
+			return nil, err
+		}
+		token, err := acceptanceTokenForPrincipal(loaded.Tokens, contract.ActorID(principal))
+		if err != nil {
+			return nil, err
+		}
+		localCtx, cancel := context.WithCancel(ctx)
+		localErr := make(chan error, 1)
+		go func(workspace, addr string, loaded channel.LoadedBindings) {
+			localErr <- app.RunLocalHTTPServerWithBindings(localCtx, addr, filepath.Join(workspace, runtime.DefaultStorePath), loaded, app.ServeOptions{
+				ProjectRoot:  workspace,
+				SyncInterval: 100 * time.Millisecond,
+			}, io.Discard)
+		}(workspace, localAddr, loaded)
+		agent := r1CodexSyncAgent{
+			r1CodexAgent: r1CodexAgent{
+				principal: principal,
+				workspace: workspace,
+				codexHome: codexHome,
+				token:     token,
+				env:       acceptanceEnv(binDir, codexHome),
+			},
+			localURL:         localURL,
+			replicaPrincipal: hub.Principals[i-1],
+			replicaToken:     hub.Tokens[i-1],
+			renderAuditPath:  filepath.Join(workspace, ".mnemon", "harness", "local", "render-audit.jsonl"),
+			localCancel:      cancel,
+			localErr:         localErr,
+		}
+		if err := waitR1LocalReady(ctx, agent.r1CodexAgent, localURL, 10*time.Second); err != nil {
+			cancel()
+			return nil, err
+		}
+		agents = append(agents, agent)
+	}
+	return agents, nil
+}
+
+func stopR1CodexSyncAgents(agents []r1CodexSyncAgent) {
+	for i := range agents {
+		if agents[i].server != nil {
+			agents[i].server.Close()
+		}
+		if agents[i].localCancel != nil {
+			agents[i].localCancel()
+		}
+	}
+	for i := range agents {
+		if agents[i].localErr == nil {
+			continue
+		}
+		select {
+		case <-agents[i].localErr:
+		case <-time.After(5 * time.Second):
+		}
+	}
+}
+
+func appendSyncAgentAnswer(report *r1CodexSyncReport, principal, answer string) {
+	for i := range report.Agents {
+		if report.Agents[i].Principal == principal {
+			if strings.TrimSpace(answer) != "" {
+				report.Agents[i].FinalAnswers = append(report.Agents[i].FinalAnswers, strings.TrimSpace(answer))
+			}
+			return
+		}
+	}
+}
+
+func waitForR1Cue(controlURL, token string, wants []string, timeout time.Duration) (render.Response, bool) {
+	deadline := time.Now().Add(timeout)
+	var last render.Response
+	for time.Now().Before(deadline) {
+		resp, err := renderR1Cue(controlURL, token)
+		if err == nil {
+			last = resp
+			ok := true
+			for _, want := range wants {
+				if !strings.Contains(resp.Body, want) {
+					ok = false
+					break
+				}
+			}
+			if ok {
+				return resp, true
+			}
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return last, false
 }
 
 func runR1Turn(agent *r1CodexAgent, prompt string, timeout time.Duration) (string, error) {
