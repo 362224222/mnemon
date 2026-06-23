@@ -9,8 +9,8 @@ import (
 
 // Environment describes a detected LLM CLI environment.
 type Environment struct {
-	Name      string // "claude-code", "codex", "cursor", "trae", "qoder", "qoderwork", "codebuddy", "workbuddy", "kimi", "openclaw", "nanobot", "pi", "hermes"
-	Display   string // "Claude Code", "Codex", "Cursor", "Trae", "Qoder", "QoderWork", "CodeBuddy", "WorkBuddy", "Kimi Code", "OpenClaw", "Nanobot", "Pi", "Hermes Agent"
+	Name      string // "claude-code", "codex", "cursor", "trae", "qoder", "qoderwork", "codebuddy", "workbuddy", "kimi", "opencode", "openclaw", "nanobot", "pi", "hermes"
+	Display   string // "Claude Code", "Codex", "Cursor", "Trae", "Qoder", "QoderWork", "CodeBuddy", "WorkBuddy", "Kimi Code", "OpenCode", "OpenClaw", "Nanobot", "Pi", "Hermes Agent"
 	Detected  bool   // CLI binary or global config dir found
 	BinPath   string // exec.LookPath result
 	Installed bool   // mnemon integration present at ConfigDir
@@ -38,6 +38,7 @@ func DetectEnvironments(global bool) []Environment {
 		detectCodeBuddy(global),
 		detectWorkBuddy(global),
 		detectKimi(),
+		detectOpenCode(global),
 		detectOpenClaw(global),
 		detectNanobot(global),
 		detectPi(global),
@@ -388,6 +389,53 @@ func detectKimi() Environment {
 	if _, err := os.Stat(skillPath); err == nil {
 		env.Installed = true
 	} else if data, err := os.ReadFile(configPath); err == nil && strings.Contains(string(data), "mnemon") {
+		env.Installed = true
+	}
+
+	if env.BinPath != "" {
+		if out, err := exec.Command(env.BinPath, "--version").Output(); err == nil {
+			env.Version = cleanVersion(strings.TrimSpace(string(out)))
+		}
+	}
+
+	return env
+}
+
+func detectOpenCode(global bool) Environment {
+	home := HomeDir()
+	globalDir := filepath.Join(home, ".config", "opencode")
+	localDir := ".opencode"
+
+	configDir := localDir
+	if global {
+		configDir = globalDir
+	}
+	if envDir := strings.TrimSpace(os.Getenv("OPENCODE_CONFIG_DIR")); envDir != "" && global {
+		configDir = envDir
+	}
+
+	env := Environment{
+		Name:      "opencode",
+		Display:   "OpenCode",
+		ConfigDir: configDir,
+	}
+
+	if binPath, err := exec.LookPath("opencode"); err == nil {
+		env.Detected = true
+		env.BinPath = binPath
+	}
+	if _, err := os.Stat(globalDir); err == nil {
+		env.Detected = true
+	}
+
+	skillPath := filepath.Join(configDir, "skills", "mnemon", "SKILL.md")
+	pluginPath := filepath.Join(configDir, "plugins", "mnemon.js")
+	configPath := OpenCodeConfigPath(configDir)
+	if _, err := os.Stat(skillPath); err == nil {
+		env.Installed = true
+	} else if _, err := os.Stat(pluginPath); err == nil {
+		env.Installed = true
+	} else if data, err := ReadJSONFile(configPath); err == nil && containsMnemon(data) {
 		env.Installed = true
 	}
 
