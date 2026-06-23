@@ -8,11 +8,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/app"
 	"github.com/mnemon-dev/mnemon/harness/internal/capability"
 	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	"github.com/mnemon-dev/mnemon/harness/internal/render"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
@@ -218,6 +220,88 @@ func TestControlPullMirrorWritesNonAuthoritativeMemoryFile(t *testing.T) {
 	}
 }
 
+func TestControlRenderPrintsCueBody(t *testing.T) {
+	ref := contract.ResourceRef{Kind: "assignment", ID: "project"}
+	a := channel.HostAgentBinding("codex-a@project", "http://x", []contract.ResourceRef{ref})
+	a.AllowedObservedTypes = []string{"assignment.write_candidate.observed"}
+	b := channel.HostAgentBinding("codex-b@project", "http://x", []contract.ResourceRef{ref})
+	loaded := channel.LoadedBindings{
+		Bindings: []channel.ChannelBinding{a, b},
+		Tokens: map[string]contract.ActorID{
+			"tok-a": "codex-a@project",
+			"tok-b": "codex-b@project",
+		},
+	}
+	rc, err := app.LocalRuntimeConfigFromBindings(loaded.Bindings, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rc.Now = func() string { return "2026-06-24T10:00:00Z" }
+	rt, err := runtime.OpenRuntime(filepath.Join(t.TempDir(), "render.db"), rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rt.Close()
+	bindings, err := channel.NewBindingSet(loaded.Bindings...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(app.NewLocalHTTPHandler(rt, channel.TokenAuthenticator{Tokens: loaded.Tokens}, bindings, render.Renderer{
+		Now: func() time.Time { return mustCmdTime(t, "2026-06-24T10:05:00Z") },
+	}))
+	defer srv.Close()
+	clientA := channel.NewClientWithToken(srv.URL, "tok-a")
+	if rec, err := clientA.IngestObserve("", contract.ObservationEnvelope{
+		ExternalID: "control-render-assignment",
+		Event: contract.Event{Type: "assignment.write_candidate.observed", Payload: map[string]any{
+			"scope": "review control render", "ttl": "30m", "assignee": "codex-b@project",
+			"expected_work": "review control render", "expected_feedback": "short result",
+			"evidence": "control render test",
+		}},
+	}); err != nil || !rec.Ticked {
+		t.Fatalf("seed assignment: rec=%+v err=%v", rec, err)
+	}
+
+	oldAddr := controlAddr
+	oldPrincipal := controlPrincipal
+	oldToken := controlToken
+	oldTokenFile := controlTokenFile
+	oldIntent := controlRenderIntent
+	oldLifecycle := controlRenderLifecycle
+	oldSurface := controlRenderSurface
+	oldMaxChars := controlRenderMaxChars
+	oldJSON := controlRenderJSON
+	t.Cleanup(func() {
+		controlAddr = oldAddr
+		controlPrincipal = oldPrincipal
+		controlToken = oldToken
+		controlTokenFile = oldTokenFile
+		controlRenderIntent = oldIntent
+		controlRenderLifecycle = oldLifecycle
+		controlRenderSurface = oldSurface
+		controlRenderMaxChars = oldMaxChars
+		controlRenderJSON = oldJSON
+	})
+	controlAddr = srv.URL
+	controlPrincipal = "codex-b@project"
+	controlToken = "tok-b"
+	controlTokenFile = ""
+	controlRenderIntent = render.IntentTeamworkCue
+	controlRenderLifecycle = "remind"
+	controlRenderSurface = "hook"
+	controlRenderMaxChars = 6000
+	controlRenderJSON = false
+
+	var buf bytes.Buffer
+	controlRenderCmd.SetOut(&buf)
+	if err := controlRenderCmd.RunE(controlRenderCmd, nil); err != nil {
+		t.Fatalf("control render: %v", err)
+	}
+	if !strings.Contains(buf.String(), "[mnemon:work]") || strings.Contains(buf.String(), `"body"`) {
+		t.Fatalf("control render must print cue body only, got:\n%s", buf.String())
+	}
+}
+
 func mustReadCmd(t *testing.T, path string) []byte {
 	t.Helper()
 	data, err := os.ReadFile(path)
@@ -225,4 +309,13 @@ func mustReadCmd(t *testing.T, path string) []byte {
 		t.Fatalf("read %s: %v", path, err)
 	}
 	return data
+}
+
+func mustCmdTime(t *testing.T, s string) time.Time {
+	t.Helper()
+	out, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
 }

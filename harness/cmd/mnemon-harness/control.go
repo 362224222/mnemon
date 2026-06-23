@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"sort"
 	"strings"
@@ -11,6 +14,7 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/hostsurface"
+	"github.com/mnemon-dev/mnemon/harness/internal/render"
 	"github.com/spf13/cobra"
 )
 
@@ -20,17 +24,22 @@ import (
 // same channel a HostAgent and a ControlAgent both speak, differing only by binding/credential.
 
 var (
-	controlAddr       string
-	controlPrincipal  string
-	controlToken      string
-	controlType       string
-	controlPayload    string
-	controlExtID      string
-	controlActor      string
-	controlTokenFile  string
-	controlPullJSON   bool
-	controlMirrorPath string
-	controlStatusJSON bool
+	controlAddr            string
+	controlPrincipal       string
+	controlToken           string
+	controlType            string
+	controlPayload         string
+	controlExtID           string
+	controlActor           string
+	controlTokenFile       string
+	controlPullJSON        bool
+	controlMirrorPath      string
+	controlStatusJSON      bool
+	controlRenderIntent    string
+	controlRenderLifecycle string
+	controlRenderSurface   string
+	controlRenderMaxChars  int
+	controlRenderJSON      bool
 )
 
 // controlClient builds the channel client from the resolved credential: a bearer token (from
@@ -161,6 +170,79 @@ var controlStatusCmd = &cobra.Command{
 	},
 }
 
+var controlRenderCmd = &cobra.Command{
+	Use:   "render",
+	Short: "Render read-only cue content for the authenticated principal",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		resp, err := controlRender(render.Request{
+			RenderIntent: controlRenderIntent,
+			Lifecycle:    controlRenderLifecycle,
+			Surface:      controlRenderSurface,
+			Budget:       render.Budget{MaxChars: controlRenderMaxChars},
+		})
+		if err != nil {
+			return err
+		}
+		if controlRenderJSON {
+			enc := json.NewEncoder(cmd.OutOrStdout())
+			enc.SetIndent("", "  ")
+			return enc.Encode(resp)
+		}
+		switch resp.Status {
+		case render.StatusOK, render.StatusFallback:
+			if strings.TrimSpace(resp.Body) != "" {
+				fmt.Fprintln(cmd.OutOrStdout(), resp.Body)
+			}
+		case render.StatusEmpty:
+			return nil
+		case render.StatusDenied:
+			return fmt.Errorf("render denied for %s", controlPrincipal)
+		default:
+			return fmt.Errorf("render returned status %q", resp.Status)
+		}
+		return nil
+	},
+}
+
+func controlRender(reqBody render.Request) (render.Response, error) {
+	token := controlToken
+	if controlTokenFile != "" {
+		data, err := os.ReadFile(controlTokenFile)
+		if err != nil {
+			return render.Response{}, fmt.Errorf("read --token-file: %w", err)
+		}
+		token = strings.TrimSpace(string(data))
+	}
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return render.Response{}, err
+	}
+	req, err := http.NewRequest(http.MethodPost, strings.TrimRight(controlAddr, "/")+"/render", bytes.NewReader(body))
+	if err != nil {
+		return render.Response{}, err
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	} else {
+		req.Header.Set(channel.PrincipalHeader, controlPrincipal)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return render.Response{}, fmt.Errorf("channel render failed (service unreachable): %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return render.Response{}, fmt.Errorf("channel render failed: %s: %s", resp.Status, string(b))
+	}
+	var out render.Response
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return render.Response{}, err
+	}
+	return out, nil
+}
+
 // coordinationFieldLine renders "Field: <kind>=<n>, …" over the default-enabled coordination kinds,
 // counting each kind's entries in the principal's pulled projection.
 func coordinationFieldLine(client *channel.Client, principal contract.ActorID) string {
@@ -191,7 +273,7 @@ func coordinationFieldLine(client *channel.Client, principal contract.ActorID) s
 }
 
 func init() {
-	for _, c := range []*cobra.Command{controlObserveCmd, controlPullCmd, controlStatusCmd} {
+	for _, c := range []*cobra.Command{controlObserveCmd, controlPullCmd, controlStatusCmd, controlRenderCmd} {
 		c.Flags().StringVar(&controlAddr, "addr", "http://127.0.0.1:8787", "server base URL")
 		c.Flags().StringVar(&controlPrincipal, "principal", "", "authenticated principal (trusted-header transport)")
 		c.Flags().StringVar(&controlToken, "token", "", "bearer token (TokenAuthenticator transport)")
@@ -204,7 +286,12 @@ func init() {
 	controlPullCmd.Flags().BoolVar(&controlPullJSON, "json", false, "emit scoped projection as JSON")
 	controlPullCmd.Flags().StringVar(&controlMirrorPath, "mirror", "", "write MEMORY.md mirror from scoped memory content")
 	controlStatusCmd.Flags().BoolVar(&controlStatusJSON, "json", false, "emit channel status as JSON")
-	controlCmd.AddCommand(controlObserveCmd, controlPullCmd, controlStatusCmd)
+	controlRenderCmd.Flags().StringVar(&controlRenderIntent, "intent", render.IntentTeamworkCue, "render intent")
+	controlRenderCmd.Flags().StringVar(&controlRenderLifecycle, "lifecycle", "remind", "host lifecycle")
+	controlRenderCmd.Flags().StringVar(&controlRenderSurface, "surface", "hook", "host surface")
+	controlRenderCmd.Flags().IntVar(&controlRenderMaxChars, "max-chars", 6000, "maximum rendered body chars")
+	controlRenderCmd.Flags().BoolVar(&controlRenderJSON, "json", false, "emit full render response as JSON")
+	controlCmd.AddCommand(controlObserveCmd, controlPullCmd, controlStatusCmd, controlRenderCmd)
 	controlCmd.GroupID = groupSpine
 	rootCmd.AddCommand(controlCmd)
 }

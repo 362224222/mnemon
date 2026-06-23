@@ -14,7 +14,9 @@ import (
 
 // principalHeader carries the AUTHENTICATED edge identity. The server trusts THIS, never the request body
 // (D7/S9). In production an auth layer (mTLS/OIDC) sets it; httptest sets it from the edge's bound credential.
-const principalHeader = "X-Mnemon-Principal"
+const PrincipalHeader = "X-Mnemon-Principal"
+
+const principalHeader = PrincipalHeader
 
 // MaxIngestBytes caps an observation request body, so an oversize payload is rejected at the edge
 // rather than buffered into memory. interim Phase-1 default; superseded by Phase-2 per-capability
