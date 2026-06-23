@@ -34,6 +34,7 @@ type codexHostOptions struct {
 	dryRun            bool
 	purgeMemory       bool
 	purgeLibrary      bool
+	thinRenderShim    bool
 }
 
 type codexProjector struct {
@@ -167,6 +168,7 @@ func newCodexProjector(action string, opts CodexOptions) (codexProjector, []stri
 			purgeMemory:       hostOptions.purgeMemory,
 			purgeLibrary:      hostOptions.purgeLibrary,
 			dryRun:            hostOptions.dryRun,
+			thinRenderShim:    hostOptions.thinRenderShim,
 		},
 		hostOptions: hostOptions,
 	}, loops, nil
@@ -200,6 +202,8 @@ func parseCodexHostOptions(args []string) (codexHostOptions, error) {
 			i++
 		case "--dry-run":
 			parsed.dryRun = true
+		case "--thin-render-shim":
+			parsed.thinRenderShim = true
 		case "--purge-memory":
 			parsed.purgeMemory = true
 		case "--purge-library":

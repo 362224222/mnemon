@@ -8,15 +8,16 @@ import (
 )
 
 var (
-	setupRoot        string
-	setupProjectRoot string
-	setupHost        string
-	setupLoops       []string
-	setupPrincipal   string
-	setupControlURL  string
-	setupActorKind   string
-	setupUseToken    bool
-	setupDryRun      bool
+	setupRoot           string
+	setupProjectRoot    string
+	setupHost           string
+	setupLoops          []string
+	setupPrincipal      string
+	setupControlURL     string
+	setupActorKind      string
+	setupUseToken       bool
+	setupDryRun         bool
+	setupThinRenderShim bool
 )
 
 // setup is the everyday install front door: it projects a loop's assets and wires
@@ -28,15 +29,16 @@ var setupCmd = &cobra.Command{
 	Short: "Install Agent Integration for one or more loops",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		_, err := app.New(setupRoot).Setup(cmd.Context(), cmd.OutOrStdout(), cmd.ErrOrStderr(), app.SetupOptions{
-			Host:          setupHost,
-			Loops:         selectedSetupLoops(),
-			ControlURL:    setupControlURL,
-			Principal:     setupPrincipal,
-			ActorKind:     setupActorKind,
-			UseToken:      setupUseToken,
-			TokenExplicit: cmd.Flags().Changed("token"),
-			ProjectRoot:   setupProjectRoot,
-			DryRun:        setupDryRun,
+			Host:           setupHost,
+			Loops:          selectedSetupLoops(),
+			ControlURL:     setupControlURL,
+			Principal:      setupPrincipal,
+			ActorKind:      setupActorKind,
+			UseToken:       setupUseToken,
+			TokenExplicit:  cmd.Flags().Changed("token"),
+			ProjectRoot:    setupProjectRoot,
+			DryRun:         setupDryRun,
+			ThinRenderShim: setupThinRenderShim,
 		})
 		return err
 	},
@@ -82,6 +84,8 @@ func init() {
 	_ = setupCmd.Flags().MarkHidden("actor-kind")
 	setupCmd.Flags().BoolVar(&setupUseToken, "token", true, "generate a local access token")
 	setupCmd.Flags().BoolVar(&setupDryRun, "dry-run", false, "print changes without writing")
+	setupCmd.Flags().BoolVar(&setupThinRenderShim, "thin-render-shim", false, "install experimental static render hooks")
+	_ = setupCmd.Flags().MarkHidden("thin-render-shim")
 
 	setupCmd.AddCommand(setupStatusCmd, setupUninstallCmd)
 	setupCmd.GroupID = groupSpine

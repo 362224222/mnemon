@@ -36,6 +36,7 @@ type claudeHostOptions struct {
 	purgeMemory       bool
 	purgeLibrary      bool
 	dryRun            bool
+	thinRenderShim    bool
 }
 
 type claudeProjector struct {
@@ -87,6 +88,7 @@ func newClaudeProjector(opts ClaudeOptions) (claudeProjector, []string, error) {
 			purgeMemory:       hostOptions.purgeMemory,
 			purgeLibrary:      hostOptions.purgeLibrary,
 			dryRun:            hostOptions.dryRun,
+			thinRenderShim:    hostOptions.thinRenderShim,
 		},
 		hostOptions: hostOptions,
 	}, loops, nil
@@ -184,6 +186,8 @@ func parseClaudeHostOptions(args []string) (claudeHostOptions, error) {
 			parsed.purgeLibrary = true
 		case "--dry-run":
 			parsed.dryRun = true
+		case "--thin-render-shim":
+			parsed.thinRenderShim = true
 		default:
 			return parsed, fmt.Errorf("unsupported Claude Code host option: %s", arg)
 		}

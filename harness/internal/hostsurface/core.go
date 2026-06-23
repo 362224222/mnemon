@@ -38,6 +38,7 @@ type projectorCore struct {
 	purgeMemory       bool   // --purge-memory
 	purgeLibrary      bool   // --purge-library
 	dryRun            bool   // --dry-run: report would-write/would-preserve, write nothing
+	thinRenderShim    bool   // --thin-render-shim: install static render hook mechanics
 	stdout            io.Writer
 	stderr            io.Writer
 	managed           *managedState // no-clobber projection state for managed definition files
@@ -467,7 +468,7 @@ func (p projectorCore) projectHooks(loop manifest.LoopManifest, binding manifest
 		return fmt.Errorf("loop %s declares hook intents but renders zero hook timings: refusing to install zero hooks", loop.Name)
 	}
 	for _, phase := range timings {
-		content, err := RenderHook(p.assets(), loop.Name, p.host, phase)
+		content, err := p.renderHook(loop.Name, phase)
 		if err != nil {
 			return fmt.Errorf("render hook %s/%s for %s: %w", loop.Name, phase, p.host, err)
 		}
@@ -477,6 +478,13 @@ func (p projectorCore) projectHooks(loop manifest.LoopManifest, binding manifest
 		}
 	}
 	return nil
+}
+
+func (p projectorCore) renderHook(loopName, phase string) (string, error) {
+	if p.thinRenderShim {
+		return RenderStandardThinHook(p.host, phase)
+	}
+	return RenderHook(p.assets(), loopName, p.host, phase)
 }
 
 func (p projectorCore) removeCanonicalState(loop manifest.LoopManifest) error {

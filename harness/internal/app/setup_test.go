@@ -217,6 +217,30 @@ func TestSetupInstallsRealCodexMemoryLocalAssets(t *testing.T) {
 	}
 }
 
+func TestSetupCanProjectThinRenderShimHooks(t *testing.T) {
+	projectRoot := t.TempDir()
+	h := New(repoRoot(t))
+	var out, errw bytes.Buffer
+	_, err := h.Setup(context.Background(), &out, &errw, SetupOptions{
+		Host: "codex", Loops: []string{"memory"}, ControlURL: "http://127.0.0.1:8787",
+		Principal: "codex@project", UseToken: true, ProjectRoot: projectRoot, ThinRenderShim: true,
+	})
+	if err != nil {
+		t.Fatalf("setup thin render shim: %v\nstderr=%s", err, errw.String())
+	}
+	primeHook := string(mustRead(t, filepath.Join(projectRoot, ".codex", "hooks", "mnemon-memory", "prime.sh")))
+	for _, want := range []string{"control render", `--intent "teamwork.cue"`, "continue only with local context"} {
+		if !strings.Contains(primeHook, want) {
+			t.Fatalf("thin hook missing %q:\n%s", want, primeHook)
+		}
+	}
+	for _, blocked := range []string{"--mirror", "GUIDE.md", "MEMORY.md", "control observe", "control pull"} {
+		if strings.Contains(primeHook, blocked) {
+			t.Fatalf("thin hook should not contain legacy dynamic projection content %q:\n%s", blocked, primeHook)
+		}
+	}
+}
+
 // TestSetupDryRunWritesNothing is the P4 gate dry-run check: --dry-run prints changes without
 // writing channel artifacts.
 func TestSetupDryRunWritesNothing(t *testing.T) {

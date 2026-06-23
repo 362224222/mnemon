@@ -25,15 +25,16 @@ import (
 // AND wire the channel (binding entry + optional token + runtime env), so a host agent reaches the
 // governed control plane through one channel.
 type SetupOptions struct {
-	Host          string   // host runtime id, e.g. "codex"
-	Loops         []string // loops to project, e.g. ["memory"]
-	ControlURL    string   // channel endpoint, e.g. "http://127.0.0.1:8787"
-	Principal     string   // authenticated principal, e.g. "codex@project"
-	ActorKind     string   // "host-agent" (default) or "control-agent"
-	UseToken      bool     // generate + reference a bearer token file (vs trusted-header auth)
-	TokenExplicit bool     // true when the caller explicitly set UseToken
-	ProjectRoot   string   // host projection working dir (defaults to the facade root)
-	DryRun        bool     // print all projection + channel changes without writing
+	Host           string   // host runtime id, e.g. "codex"
+	Loops          []string // loops to project, e.g. ["memory"]
+	ControlURL     string   // channel endpoint, e.g. "http://127.0.0.1:8787"
+	Principal      string   // authenticated principal, e.g. "codex@project"
+	ActorKind      string   // "host-agent" (default) or "control-agent"
+	UseToken       bool     // generate + reference a bearer token file (vs trusted-header auth)
+	TokenExplicit  bool     // true when the caller explicitly set UseToken
+	ProjectRoot    string   // host projection working dir (defaults to the facade root)
+	DryRun         bool     // print all projection + channel changes without writing
+	ThinRenderShim bool     // opt into R1 static render hooks; legacy fat hooks remain the default
 }
 
 // SetupResult records the channel artifact paths setup wrote (or would write, on dry-run).
@@ -139,6 +140,9 @@ func (h *Harness) Setup(ctx context.Context, out, errw io.Writer, opts SetupOpti
 		action, hostArgs := "install", []string(nil)
 		if opts.DryRun {
 			hostArgs = []string{"--dry-run"}
+		}
+		if opts.ThinRenderShim {
+			hostArgs = append(hostArgs, "--thin-render-shim")
 		}
 		var projectorOut bytes.Buffer
 		if err := h.LoopProject(ctx, &projectorOut, errw, action, projectRoot, opts.Host, opts.Loops, hostArgs); err != nil {
