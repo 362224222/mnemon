@@ -1,21 +1,13 @@
 {
   "schema_version": 1,
-  "name": "assignment",
-  "observed_type": "assignment.write_candidate.observed",
-  "proposed_type": "assignment.write.proposed",
-  "resource_kind": "assignment",
+  "name": "teamwork_signal",
+  "observed_type": "teamwork_signal.write_candidate.observed",
+  "proposed_type": "teamwork_signal.write.proposed",
+  "resource_kind": "teamwork_signal",
   "items_field": "items",
   "fields": [
     {
-      "name": "assignment_id",
-      "validators": [
-        {
-          "id": "safety:unsafe"
-        }
-      ]
-    },
-    {
-      "name": "signal_ref",
+      "name": "signal_id",
       "validators": [
         {
           "id": "safety:unsafe"
@@ -37,29 +29,7 @@
       ]
     },
     {
-      "name": "ttl",
-      "validators": [
-        {
-          "id": "required",
-          "params": {
-            "missing_style": "missing"
-          }
-        }
-      ]
-    },
-    {
-      "name": "assignee",
-      "validators": [
-        {
-          "id": "required",
-          "params": {
-            "missing_style": "missing"
-          }
-        }
-      ]
-    },
-    {
-      "name": "expected_work",
+      "name": "statement",
       "validators": [
         {
           "id": "required",
@@ -73,7 +43,7 @@
       ]
     },
     {
-      "name": "expected_feedback",
+      "name": "why_teamwork",
       "validators": [
         {
           "id": "required",
@@ -87,7 +57,7 @@
       ]
     },
     {
-      "name": "report_on",
+      "name": "needed_context",
       "validators": [
         {
           "id": "list:strings"
@@ -95,10 +65,14 @@
       ]
     },
     {
-      "name": "rationale",
+      "name": "urgency",
       "validators": [
         {
-          "id": "safety:unsafe"
+          "id": "enum",
+          "params": {
+            "values": "|low|normal|high",
+            "message": "invalid urgency"
+          }
         }
       ]
     },
@@ -117,14 +91,25 @@
           "id": "safety:unsafe"
         }
       ]
+    },
+    {
+      "name": "ttl",
+      "validators": [
+        {
+          "id": "required",
+          "params": {
+            "missing_style": "missing"
+          }
+        }
+      ]
     }
   ],
   "render": {
     "content": {
       "member": "bullet-list",
       "params": {
-        "title": "# Assignments",
-        "field": "scope"
+        "title": "# Teamwork Signals",
+        "field": "statement"
       }
     }
   },

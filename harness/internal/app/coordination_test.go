@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -36,6 +37,7 @@ func TestCoordinationAssignmentGoverns(t *testing.T) {
 		ExternalID: "a1",
 		Event: contract.Event{Type: "assignment.write_candidate.observed", Payload: map[string]any{
 			"scope": "fix projection", "ttl": "2h", "assignee": "codex@impl", "evidence": "ticket-123",
+			"expected_work": "fix the projection path", "expected_feedback": "summary and blockers",
 		}},
 	}); err != nil {
 		t.Fatalf("ingest assignment: %v", err)
@@ -57,6 +59,7 @@ func TestCoordinationAssignmentGoverns(t *testing.T) {
 		ExternalID: "a2",
 		Event: contract.Event{Type: "assignment.write_candidate.observed", Payload: map[string]any{
 			"ttl": "1h", "assignee": "codex@impl", "evidence": "ticket-123",
+			"expected_work": "fix the projection path", "expected_feedback": "summary and blockers",
 		}},
 	}); err != nil {
 		t.Fatalf("ingest scopeless assignment: %v", err)
@@ -86,11 +89,12 @@ func TestCoordinationMidRiskRequiresEvidence(t *testing.T) {
 	}
 	defer rt.Close()
 
-	// complete assignment (scope/ttl/assignee) but NO evidence → mid-risk gate denies.
+	// complete assignment but NO evidence → mid-risk gate denies.
 	if _, _, err := rt.API().Ingest("codex@project", contract.ObservationEnvelope{
 		ExternalID: "r1",
 		Event: contract.Event{Type: "assignment.write_candidate.observed", Payload: map[string]any{
 			"scope": "evidence-less work", "ttl": "2h", "assignee": "codex@impl",
+			"expected_work": "review evidence-less path", "expected_feedback": "short result",
 		}},
 	}); err != nil {
 		t.Fatalf("ingest: %v", err)
@@ -107,6 +111,7 @@ func TestCoordinationMidRiskRequiresEvidence(t *testing.T) {
 		ExternalID: "r2",
 		Event: contract.Event{Type: "assignment.write_candidate.observed", Payload: map[string]any{
 			"scope": "evidence-backed work", "ttl": "2h", "assignee": "codex@impl", "evidence": "PR-42",
+			"expected_work": "review evidence-backed path", "expected_feedback": "short result",
 		}},
 	}); err != nil {
 		t.Fatalf("ingest: %v", err)
@@ -145,6 +150,7 @@ func TestCoordinationDefaultEnabled(t *testing.T) {
 		ExternalID: "de1",
 		Event: contract.Event{Type: "assignment.write_candidate.observed", Payload: map[string]any{
 			"scope": "default-enabled work", "ttl": "2h", "assignee": "codex@impl", "evidence": "ticket-9",
+			"expected_work": "handle default-enabled assignment", "expected_feedback": "short result",
 		}},
 	}); err != nil {
 		t.Fatalf("default-enabled assignment observe must be authorized: %v", err)
@@ -200,5 +206,59 @@ func TestCoordinationProjectIntentGoverns(t *testing.T) {
 	}
 	if content, _ := fields["content"].(string); !strings.Contains(content, "ship the AgentTeam beta") {
 		t.Fatalf("project_intent content missing the statement: %q", content)
+	}
+}
+
+// R1 Event-Cue schema: agent_profile and teamwork_signal are first-party governed resources too,
+// not role packages or hostsurface-only hints.
+func TestCoordinationProfileAndTeamworkSignalGovern(t *testing.T) {
+	profileRef := contract.ResourceRef{Kind: "agent_profile", ID: "project"}
+	signalRef := contract.ResourceRef{Kind: "teamwork_signal", ID: "project"}
+	binding := channel.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{profileRef, signalRef})
+	binding.AllowedObservedTypes = []string{"agent_profile.write_candidate.observed", "teamwork_signal.write_candidate.observed"}
+
+	rc, err := LocalRuntimeConfigFromBindings([]channel.ChannelBinding{binding}, nil)
+	if err != nil {
+		t.Fatalf("boot config: %v", err)
+	}
+	rt, err := runtime.OpenRuntime(filepath.Join(t.TempDir(), "r1-teamwork.db"), rc)
+	if err != nil {
+		t.Fatalf("open runtime: %v", err)
+	}
+	defer rt.Close()
+
+	if _, _, err := rt.API().Ingest("codex@project", contract.ObservationEnvelope{
+		ExternalID: "profile-1",
+		Event: contract.Event{Type: "agent_profile.write_candidate.observed", Payload: map[string]any{
+			"actor": "codex@project", "focus": "harness R1 schema",
+			"context_advantages": []any{"read Event-Cue plan", "knows capability package"},
+			"availability":       "available", "ttl": "30m", "summary": "Working on schema phase.",
+		}},
+	}); err != nil {
+		t.Fatalf("ingest profile: %v", err)
+	}
+	decisions, err := rt.Tick()
+	if err != nil {
+		t.Fatalf("tick profile: %v", err)
+	}
+	if v, fields, err := rt.Resource(profileRef); err != nil || v == 0 || !strings.Contains(fmt.Sprint(fields["content"]), "Working on schema phase.") {
+		t.Fatalf("agent_profile must admit and render summary (v=%d err=%v fields=%+v decisions=%+v)", v, err, fields, decisions)
+	}
+
+	if _, _, err := rt.API().Ingest("codex@project", contract.ObservationEnvelope{
+		ExternalID: "signal-1",
+		Event: contract.Event{Type: "teamwork_signal.write_candidate.observed", Payload: map[string]any{
+			"scope": "harness/r1", "statement": "Need a second review of render/cue schema.",
+			"why_teamwork": "another agent has fresher render context", "ttl": "1h", "evidence": "profile roster",
+		}},
+	}); err != nil {
+		t.Fatalf("ingest teamwork signal: %v", err)
+	}
+	decisions, err = rt.Tick()
+	if err != nil {
+		t.Fatalf("tick teamwork signal: %v", err)
+	}
+	if v, fields, err := rt.Resource(signalRef); err != nil || v == 0 || !strings.Contains(fmt.Sprint(fields["content"]), "Need a second review") {
+		t.Fatalf("teamwork_signal must admit and render statement (v=%d err=%v fields=%+v decisions=%+v)", v, err, fields, decisions)
 	}
 }

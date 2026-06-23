@@ -22,16 +22,19 @@ import (
 //	safety:unsafe                            either of the above → "unsafe content" (combined form)
 //	list:strings                             stringSliceField semantics; key omitted when empty;
 //	                                         must be the field's only validator
+//	list:strings-required                    same list semantics, but empty list denies as "empty <field>";
+//	                                         must be the field's only validator
 var validatorCatalog = map[string]paramSchema{
-	"required":         {required: []string{"missing_style"}},
-	"format:skill-id":  {},
-	"enum":             {required: []string{"values", "message"}},
-	"default":          {required: []string{"value"}},
-	"default-from":     {required: []string{"field"}},
-	"safety:secret":    {},
-	"safety:injection": {},
-	"safety:unsafe":    {},
-	"list:strings":     {},
+	"required":              {required: []string{"missing_style"}},
+	"format:skill-id":       {},
+	"enum":                  {required: []string{"values", "message"}},
+	"default":               {required: []string{"value"}},
+	"default-from":          {required: []string{"field"}},
+	"safety:secret":         {},
+	"safety:injection":      {},
+	"safety:unsafe":         {},
+	"list:strings":          {},
+	"list:strings-required": {},
 	// validate:capability-spec-draft validates the field value as a SERIALIZED capability spec (the
 	// D-loop's loopdef payload, P3e): parse + FromSpec(validate-only) + the external untrusted-text
 	// scan + the single-layer recursion guard. The draft is carried as a JSON STRING (compileDecode
@@ -47,9 +50,13 @@ func compileDecode(spec CapabilitySpec) func(payload map[string]any) (Item, erro
 	return func(payload map[string]any) (Item, error) {
 		item := Item{}
 		for _, f := range fields {
-			if len(f.Validators) == 1 && f.Validators[0].ID == "list:strings" {
-				if vals := stringSliceField(payload, f.Name); len(vals) > 0 {
+			if len(f.Validators) == 1 && isListValidator(f.Validators[0].ID) {
+				vals := stringSliceField(payload, f.Name)
+				if len(vals) > 0 {
 					item[f.Name] = vals
+				}
+				if f.Validators[0].ID == "list:strings-required" && len(vals) == 0 {
+					return nil, fmt.Errorf("%s candidate denied: empty %s", name, f.Name)
 				}
 				continue
 			}
@@ -102,6 +109,10 @@ func compileDecode(spec CapabilitySpec) func(payload map[string]any) (Item, erro
 		}
 		return item, nil
 	}
+}
+
+func isListValidator(id string) bool {
+	return id == "list:strings" || id == "list:strings-required"
 }
 
 func enumContains(pipeSeparated, value string) bool {

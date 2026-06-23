@@ -383,8 +383,18 @@ func minimalAcceptPayload(id string) map[string]any {
 		return map[string]any{"skill_id": "x-skill", "source": "s", "confidence": "high"}
 	case "project_intent":
 		return map[string]any{"statement": "ship the thing"}
+	case "agent_profile":
+		return map[string]any{
+			"actor": "codex@impl", "focus": "projection", "context_advantages": []any{"read projection code"},
+			"availability": "available", "ttl": "30m", "summary": "projection context",
+		}
+	case "teamwork_signal":
+		return map[string]any{"scope": "projection", "statement": "needs review", "why_teamwork": "another agent has context", "ttl": "2h", "evidence": "profile roster"}
 	case "assignment":
-		return map[string]any{"scope": "projection", "ttl": "2h", "assignee": "codex@impl"}
+		return map[string]any{
+			"scope": "projection", "ttl": "2h", "assignee": "codex@impl",
+			"expected_work": "review projection", "expected_feedback": "short result", "evidence": "profile roster",
+		}
 	case "progress_digest":
 		return map[string]any{"summary": "projection 80% done"}
 	case "loopdef":

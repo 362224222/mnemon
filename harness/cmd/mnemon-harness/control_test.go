@@ -65,8 +65,10 @@ func TestControlTokenFileAuth(t *testing.T) {
 	}
 	// P3d: the FIELD section (Control Tower seed) reports the coordination counts; with nothing
 	// observed yet they are all zero, but the line is present and names the default-enabled kinds.
-	if !strings.Contains(buf.String(), "Field: assignment=0") {
-		t.Fatalf("status must include the coordination FIELD section; got %q", buf.String())
+	for _, want := range []string{"Field:", "assignment=0", "agent profile=0", "teamwork signal=0"} {
+		if !strings.Contains(buf.String(), want) {
+			t.Fatalf("status must include coordination FIELD count %q; got %q", want, buf.String())
+		}
 	}
 	// Channel status has no Remote Workspace data source (no --root, ServerAPI only):
 	// it must not assert a connection state it cannot know.

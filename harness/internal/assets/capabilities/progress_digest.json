@@ -7,6 +7,22 @@
   "items_field": "items",
   "fields": [
     {
+      "name": "assignment_ref",
+      "validators": [
+        {
+          "id": "safety:unsafe"
+        }
+      ]
+    },
+    {
+      "name": "scope",
+      "validators": [
+        {
+          "id": "safety:unsafe"
+        }
+      ]
+    },
+    {
       "name": "summary",
       "validators": [
         {
@@ -15,6 +31,38 @@
             "missing_style": "empty"
           }
         },
+        {
+          "id": "safety:unsafe"
+        }
+      ]
+    },
+    {
+      "name": "evidence_refs",
+      "validators": [
+        {
+          "id": "list:strings"
+        }
+      ]
+    },
+    {
+      "name": "evidence",
+      "validators": [
+        {
+          "id": "safety:unsafe"
+        }
+      ]
+    },
+    {
+      "name": "changed_context",
+      "validators": [
+        {
+          "id": "list:strings"
+        }
+      ]
+    },
+    {
+      "name": "suggested_next",
+      "validators": [
         {
           "id": "safety:unsafe"
         }

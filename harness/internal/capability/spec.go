@@ -95,9 +95,9 @@ type ContentRender struct {
 //     name)); validators run in declared order against the processed value, first error rejects;
 //     the processed (trimmed/defaulted) value is what lands in the Item — and EVERY declared
 //     string field emits its key (possibly ""), matching the handwritten decoders.
-//   - list:strings is the one exception: it uses stringSliceField's full semantics ([]string /
-//     []any dropping non-strings / comma-separated string; trimmed, empties compacted) and OMITS
-//     the key when the list is empty.
+//   - list validators are the exception: they use stringSliceField's full semantics ([]string /
+//     []any dropping non-strings / comma-separated string; trimmed, empties compacted) and OMIT
+//     the key when the list is empty, except list:strings-required rejects an empty list.
 //   - Deny messages are protocol surface: "<name> candidate denied: <member message>".
 func FromSpec(spec CapabilitySpec) (Capability, error) {
 	if spec.SchemaVersion != 1 {
@@ -174,12 +174,12 @@ func FromSpec(spec CapabilitySpec) (Capability, error) {
 				if !declared[v.Params["field"]] {
 					return Capability{}, fmt.Errorf("capability spec %q field %q: default-from %q must reference a previously declared field", spec.Name, f.Name, v.Params["field"])
 				}
-			case "list:strings":
+			case "list:strings", "list:strings-required":
 				isList = true
 			}
 		}
 		if isList && len(f.Validators) != 1 {
-			return Capability{}, fmt.Errorf("capability spec %q field %q: list:strings must be the field's only validator", spec.Name, f.Name)
+			return Capability{}, fmt.Errorf("capability spec %q field %q: list validators must be the field's only validator", spec.Name, f.Name)
 		}
 		declared[f.Name] = true
 	}

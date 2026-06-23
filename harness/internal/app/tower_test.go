@@ -85,7 +85,8 @@ func TestBuildTowerViewFieldAndInbox(t *testing.T) {
 	if _, _, err := rt.API().Ingest("codex@project", contract.ObservationEnvelope{
 		ExternalID: "asg1",
 		Event: contract.Event{Type: "assignment.write_candidate.observed", Payload: map[string]any{
-			"scope": "fix projection", "ttl": "2h", "assignee": "codex@impl", "evidence": "ticket-1"}},
+			"scope": "fix projection", "ttl": "2h", "assignee": "codex@impl", "evidence": "ticket-1",
+			"expected_work": "fix projection", "expected_feedback": "summary and blockers"}},
 	}); err != nil {
 		t.Fatalf("ingest valid assignment: %v", err)
 	}
@@ -96,7 +97,8 @@ func TestBuildTowerViewFieldAndInbox(t *testing.T) {
 	if _, _, err := rt.API().Ingest("codex@project", contract.ObservationEnvelope{
 		ExternalID: "asg2",
 		Event: contract.Event{Type: "assignment.write_candidate.observed", Payload: map[string]any{
-			"ttl": "1h", "assignee": "codex@impl", "evidence": "ticket-2"}},
+			"ttl": "1h", "assignee": "codex@impl", "evidence": "ticket-2",
+			"expected_work": "fix projection", "expected_feedback": "summary and blockers"}},
 	}); err != nil {
 		t.Fatalf("ingest invalid assignment: %v", err)
 	}

@@ -28,7 +28,8 @@ func TestItemDedupImportPreservesAllFields(t *testing.T) {
 		Fields: map[string]any{
 			"items": []any{map[string]any{
 				"id": "remote/remote-a/dec-1", "scope": "fix the projector", "ttl": "2h",
-				"assignee": "codex@impl", "evidence": "PR-42", "actor": "codex@remote", "ingest_seq": float64(5),
+				"assignee": "codex@impl", "expected_work": "fix the projector",
+				"expected_feedback": "summary and blockers", "evidence": "PR-42", "actor": "codex@remote", "ingest_seq": float64(5),
 			}},
 			"content":    "# Assignments\n- fix the projector",
 			"updated_by": "codex@remote",
@@ -56,7 +57,10 @@ func TestItemDedupImportPreservesAllFields(t *testing.T) {
 		t.Fatalf("import must write one assignment item, got %+v", fields)
 	}
 	item, _ := items[0].(map[string]any)
-	for k, want := range map[string]string{"scope": "fix the projector", "ttl": "2h", "assignee": "codex@impl", "evidence": "PR-42"} {
+	for k, want := range map[string]string{
+		"scope": "fix the projector", "ttl": "2h", "assignee": "codex@impl",
+		"expected_work": "fix the projector", "expected_feedback": "summary and blockers", "evidence": "PR-42",
+	} {
 		if got, _ := item[k].(string); got != want {
 			t.Fatalf("item-dedup must preserve %q: got %q, want %q (item: %+v)", k, got, want, item)
 		}

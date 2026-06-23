@@ -89,7 +89,9 @@ func (b *realCodexBrain) Act(pkt autopilot.TurnPacket) []contract.ObservationEnv
 				continue
 			}
 			out = append(out, autopilot.Observe("assignment.write_candidate.observed", "real-route-"+w.id,
-				map[string]any{"scope": scope, "ttl": "30m", "assignee": assignee, "evidence": "real Codex POC routed from " + w.id}))
+				map[string]any{"scope": scope, "ttl": "30m", "assignee": assignee,
+					"expected_work": scope, "expected_feedback": "progress_digest with result or blocker",
+					"evidence": "real Codex POC routed from " + w.id}))
 		} else {
 			summary := parseRealReport(finalText)
 			out = append(out, autopilot.Observe("progress_digest.write_candidate.observed", "real-"+b.role+"-"+w.id,

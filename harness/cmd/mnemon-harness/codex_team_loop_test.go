@@ -53,7 +53,8 @@ func newLoopTestHarness(t *testing.T, withPOC bool) (*codexTeamRuntimeHandle, *a
 			id := autopilot.ItemStr(item, "id")
 			out = append(out, autopilot.Observe("assignment.write_candidate.observed", "route-"+id,
 				map[string]any{"scope": "review: " + autopilot.ItemStr(item, "summary"), "ttl": "30m",
-					"assignee": string(loopReviewer), "evidence": "routed by poc from " + id}))
+					"assignee": string(loopReviewer), "expected_work": "review: " + autopilot.ItemStr(item, "summary"),
+					"expected_feedback": "progress_digest with review result", "evidence": "routed by poc from " + id}))
 		}
 		return out
 	})

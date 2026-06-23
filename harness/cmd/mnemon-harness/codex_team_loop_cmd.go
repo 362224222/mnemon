@@ -211,10 +211,12 @@ func routeProgress(pkt autopilot.TurnPacket, wantPrefix, scopePrefix string, ass
 		id := autopilot.ItemStr(item, "id")
 		out = append(out, autopilot.Observe("assignment.write_candidate.observed", idPrefix+id,
 			map[string]any{
-				"scope":    scopePrefix + summary,
-				"ttl":      "30m",
-				"assignee": string(assignee),
-				"evidence": "routed by POC from progress " + id,
+				"scope":             scopePrefix + summary,
+				"ttl":               "30m",
+				"assignee":          string(assignee),
+				"expected_work":     scopePrefix + summary,
+				"expected_feedback": "progress_digest with result or blocker",
+				"evidence":          "routed by POC from progress " + id,
 			}))
 	}
 	return out

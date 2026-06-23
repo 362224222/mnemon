@@ -33,15 +33,16 @@ func TestSyncImportSkippedRuleDeniesNamingKind(t *testing.T) {
 }
 
 // The first-party importable set is descriptor-derived (PD6, replacing the former hardcoded
-// contract.SyncableResourceKinds): the embedded catalog opts exactly memory + skill into Remote
-// Workspace import, each under its declared closed-set merge strategy. This is the pin the deleted
+// contract.SyncableResourceKinds): the embedded catalog opts each syncable kind into Remote
+// Workspace import under its declared closed-set merge strategy. This is the pin the deleted
 // contract.clamp_test invariant moved to — its home is now the catalog that declares it.
-func TestEmbeddedImportableKindsAreMemoryAndSkill(t *testing.T) {
-	// memory/skill plus the three coordination kinds are importable; each selects its declared
+func TestEmbeddedImportableKindsAreDescriptorDerived(t *testing.T) {
+	// memory/skill plus the R1 teamwork kinds are importable; each selects its declared
 	// closed-set merge strategy (the descriptor-derived sync set — no hardcoded list).
 	cat := EmbeddedCatalog()
 	wantMerge := map[contract.ResourceKind]string{
 		"memory": "entry-dedup", "skill": "declaration-dedup",
+		"agent_profile": "item-dedup", "teamwork_signal": "item-dedup",
 		"project_intent": "item-dedup", "assignment": "item-dedup", "progress_digest": "item-dedup",
 	}
 	kinds := ImportableKinds(cat)
