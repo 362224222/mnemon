@@ -159,67 +159,6 @@ func TestControlPullJSONIncludesScopedContent(t *testing.T) {
 	}
 }
 
-func TestControlPullMirrorWritesNonAuthoritativeMemoryFile(t *testing.T) {
-	ref := contract.ResourceRef{Kind: "memory", ID: "project"}
-	binding := channel.HostAgentBinding("codex@project", "http://x", []contract.ResourceRef{ref})
-	binding.AllowedObservedTypes = []string{capability.MemoryWriteCandidateObserved}
-	rt, err := app.OpenLocalRuntime(filepath.Join(t.TempDir(), "governed.db"), channel.LoadedBindings{Bindings: []channel.ChannelBinding{binding}}, nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rt.Close()
-	srv := httptest.NewServer(runtime.NewRuntimeHandler(rt, channel.HeaderAuthenticator{}))
-	defer srv.Close()
-	client := channel.NewClient(srv.URL, "codex@project")
-	if rec, err := client.IngestObserve("codex@project", contract.ObservationEnvelope{
-		ExternalID: "memory-mirror",
-		Event: contract.Event{Type: capability.MemoryWriteCandidateObserved, Payload: map[string]any{
-			"content": "Mirror content comes from Local Mnemon.",
-			"source":  "user", "confidence": "high",
-		}},
-	}); err != nil || !rec.Ticked {
-		t.Fatalf("seed local memory: rec=%+v err=%v", rec, err)
-	}
-
-	oldAddr := controlAddr
-	oldPrincipal := controlPrincipal
-	oldToken := controlToken
-	oldTokenFile := controlTokenFile
-	oldActor := controlActor
-	oldPullJSON := controlPullJSON
-	oldMirror := controlMirrorPath
-	t.Cleanup(func() {
-		controlAddr = oldAddr
-		controlPrincipal = oldPrincipal
-		controlToken = oldToken
-		controlTokenFile = oldTokenFile
-		controlActor = oldActor
-		controlPullJSON = oldPullJSON
-		controlMirrorPath = oldMirror
-	})
-	mirrorPath := filepath.Join(t.TempDir(), "MEMORY.md")
-	controlAddr = srv.URL
-	controlPrincipal = "codex@project"
-	controlToken = ""
-	controlTokenFile = ""
-	controlActor = ""
-	controlPullJSON = false
-	controlMirrorPath = mirrorPath
-
-	var buf bytes.Buffer
-	controlPullCmd.SetOut(&buf)
-	if err := controlPullCmd.RunE(controlPullCmd, nil); err != nil {
-		t.Fatalf("control pull --mirror: %v", err)
-	}
-	mirror := string(mustReadCmd(t, mirrorPath))
-	if !strings.Contains(mirror, "Non-authoritative mirror") || !strings.Contains(mirror, "Mirror content comes from Local Mnemon") {
-		t.Fatalf("mirror did not render scoped memory:\n%s", mirror)
-	}
-	if !strings.Contains(buf.String(), "wrote memory mirror") {
-		t.Fatalf("control pull should report mirror refresh, got %q", buf.String())
-	}
-}
-
 func TestControlRenderPrintsCueBody(t *testing.T) {
 	ref := contract.ResourceRef{Kind: "assignment", ID: "project"}
 	a := channel.HostAgentBinding("codex-a@project", "http://x", []contract.ResourceRef{ref})

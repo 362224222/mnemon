@@ -9,7 +9,7 @@ import (
 // classifyManaged is the no-clobber decision for a managed definition file: write when the file is
 // absent or still matches what we last wrote (ours); preserve (conflict) when the on-disk content
 // differs and we have no record that we wrote it, or it diverges from what we last wrote — on install
-// AND refresh alike. We never overwrite a file we did not write.
+// and reinstall alike. We never overwrite a file we did not write.
 func TestClassifyManaged(t *testing.T) {
 	dir := t.TempDir()
 	desired := []byte("desired content\n")
@@ -44,7 +44,7 @@ func TestClassifyManaged(t *testing.T) {
 		}
 	})
 
-	t.Run("pre-existing unknown differing file is preserved (install AND refresh)", func(t *testing.T) {
+	t.Run("pre-existing unknown differing file is preserved on install", func(t *testing.T) {
 		dst := filepath.Join(dir, "preexisting")
 		mustWrite(t, dst, []byte("pre-existing unmanaged content"))
 		if got := classifyManaged(dst, desired, ""); got != classConflict {

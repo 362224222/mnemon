@@ -236,9 +236,9 @@ func TestSetupAcceptsExternalCapabilityLoop(t *testing.T) {
 	}
 }
 
-// Uninstall and refresh are zero-impact on external packages: no error, no file changes — the
-// package is channel/boot surface, not host projection surface.
-func TestUninstallAndRefreshLeaveExternalPackagesUntouched(t *testing.T) {
+// Uninstall is zero-impact on external packages: the package is channel/boot surface, not host
+// projection surface.
+func TestUninstallLeavesExternalPackagesUntouched(t *testing.T) {
 	root := t.TempDir()
 	h := New(root)
 	var out bytes.Buffer
@@ -250,13 +250,6 @@ func TestUninstallAndRefreshLeaveExternalPackagesUntouched(t *testing.T) {
 	before, err := os.ReadFile(pkgFile)
 	if err != nil {
 		t.Fatal(err)
-	}
-
-	if _, err := h.Refresh(context.Background(), &out, &out, root, "codex", []string{"memory"}, nil); err != nil {
-		t.Fatalf("refresh with an external package present must succeed: %v", err)
-	}
-	if after, err := os.ReadFile(pkgFile); err != nil || !bytes.Equal(after, before) {
-		t.Fatalf("refresh must not touch the external package (err=%v)", err)
 	}
 
 	if err := h.SetupUninstall(context.Background(), &out, &out, opts); err != nil {

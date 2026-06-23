@@ -20,13 +20,13 @@ var (
 
 var loopCmd = &cobra.Command{
 	Use:    "loop",
-	Short:  "Validate harness declarations",
+	Short:  "Inspect and validate harness capabilities",
 	Hidden: true,
 }
 
 var loopValidateCmd = &cobra.Command{
 	Use:   "validate",
-	Short: "Validate harness loop, host, and binding declarations",
+	Short: "Validate embedded and external capability packages",
 	RunE:  runLoopValidate,
 }
 

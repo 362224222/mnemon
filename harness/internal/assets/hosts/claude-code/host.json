@@ -1,21 +1,15 @@
 {
   "schema_version": 2,
   "name": "claude-code",
-  "description": "Projects Mnemon harness loops into Claude Code skills, hooks, agents, and settings.json.",
+  "description": "Registers Mnemon R1 static render hooks in Claude Code.",
   "surfaces": {
     "projection": [
-      ".claude/skills",
-      ".claude/hooks",
-      ".claude/agents",
-      ".claude/settings.json",
-      ".claude/mnemon-memory",
-      ".claude/mnemon-skill"
+      ".claude/hooks/mnemon-r1",
+      ".claude/settings.json"
     ],
     "observation": [
       ".mnemon/hosts/claude-code/manifest.json",
-      ".mnemon/harness/*/status.json",
-      "hook output",
-      "skill usage evidence"
+      ".mnemon/harness/local/render-audit.jsonl"
     ]
   },
   "lifecycle_mapping": {
@@ -27,40 +21,11 @@
   },
   "mechanics": {
     "stdin_read": {
-      "default": "strict",
-      "overrides": {
-        "memory": {
-          "prime": "tolerant"
-        },
-        "skill": {
-          "nudge": "grep-direct",
-          "prime": "tolerant"
-        }
-      }
+      "default": "strict"
     },
     "dialect": {
-      "default": "plain",
-      "overrides": {
-        "memory": {
-          "compact": "claude-decision"
-        }
-      }
+      "default": "plain"
     },
-    "json_escape": true,
-    "wording_overrides": {
-      "memory": {
-        "remind": {
-          "text": "[mnemon-memory] Remind: apply GUIDE.md; if prior memory could change this task, load memory-get and run a focused Mnemon recall."
-        },
-        "nudge": {
-          "over": "[mnemon-memory] MEMORY.md is long (${NON_EMPTY_LINES} lines); consolidate durable content into Mnemon with memory-set and trim MEMORY.md.",
-          "under": "[mnemon-memory] Consider: does this exchange warrant memory-set?"
-        },
-        "compact": {
-          "over": "[mnemon-memory] Compact: MEMORY.md has ${NON_EMPTY_LINES} non-empty lines. Before compaction, write durable content to Mnemon with memory-set and compact MEMORY.md, then retry compaction.",
-          "under": "[mnemon-memory] Compact: MNEMON_MEMORY_LOOP_DIR=${MEMORY_DIR:-unset}. Before compaction, preserve critical continuity with memory-set when needed. If this boundary should consolidate working memory, do it with memory-set, then retry compaction."
-        }
-      }
-    }
+    "json_escape": true
   }
 }

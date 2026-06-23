@@ -104,9 +104,9 @@ func newStandardCore(opts StandardHostOptions) (projectorCore, error) {
 	var paths corePaths
 	switch opts.Host {
 	case "codex":
-		paths = codexProjectorPaths(codexHostOptions{configDir: ".codex"})
+		paths = corePaths{configDir: ".codex", mnemonDir: ".mnemon"}
 	case "claude-code":
-		paths = claudeProjectorPaths(claudeHostOptions{configDir: ".claude"})
+		paths = corePaths{configDir: ".claude", mnemonDir: ".mnemon"}
 	default:
 		return projectorCore{}, fmt.Errorf("unsupported host %q", opts.Host)
 	}

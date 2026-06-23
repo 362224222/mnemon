@@ -13,7 +13,6 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/capability"
 	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/hostsurface"
 	"github.com/mnemon-dev/mnemon/harness/internal/render"
 	"github.com/spf13/cobra"
 )
@@ -33,7 +32,6 @@ var (
 	controlActor           string
 	controlTokenFile       string
 	controlPullJSON        bool
-	controlMirrorPath      string
 	controlStatusJSON      bool
 	controlRenderIntent    string
 	controlRenderLifecycle string
@@ -110,14 +108,6 @@ var controlPullCmd = &cobra.Command{
 		proj, err := client.PullProjection(contract.ActorID(controlPrincipal), contract.Subscription{Actor: contract.ActorID(actor)})
 		if err != nil {
 			return fmt.Errorf("channel pull failed (service unreachable or unauthorized): %w", err)
-		}
-		if controlMirrorPath != "" {
-			if err := hostsurface.WriteMemoryMirror(controlMirrorPath, proj); err != nil {
-				return fmt.Errorf("write memory mirror: %w", err)
-			}
-			if !controlPullJSON {
-				fmt.Fprintf(cmd.OutOrStdout(), "wrote memory mirror %s\n", controlMirrorPath)
-			}
 		}
 		if controlPullJSON {
 			enc := json.NewEncoder(cmd.OutOrStdout())
@@ -284,7 +274,6 @@ func init() {
 	controlObserveCmd.Flags().StringVar(&controlExtID, "external-id", "", "idempotency external id")
 	controlPullCmd.Flags().StringVar(&controlActor, "actor", "", "subscription actor (defaults to principal)")
 	controlPullCmd.Flags().BoolVar(&controlPullJSON, "json", false, "emit scoped projection as JSON")
-	controlPullCmd.Flags().StringVar(&controlMirrorPath, "mirror", "", "write MEMORY.md mirror from scoped memory content")
 	controlStatusCmd.Flags().BoolVar(&controlStatusJSON, "json", false, "emit channel status as JSON")
 	controlRenderCmd.Flags().StringVar(&controlRenderIntent, "intent", render.IntentTeamworkCue, "render intent")
 	controlRenderCmd.Flags().StringVar(&controlRenderLifecycle, "lifecycle", "remind", "host lifecycle")

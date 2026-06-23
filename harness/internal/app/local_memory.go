@@ -239,8 +239,7 @@ type ServeOptions struct {
 }
 
 // RunLocalHTTPServerWithBindings serves Local Mnemon from a binding manifest. Runtime hot content is
-// read through pull/render; host workspace re-projection is an explicit refresh operation, not a
-// background write path.
+// read through pull/render; serving never writes host workspace content in the background.
 func RunLocalHTTPServerWithBindings(ctx context.Context, addr, storePath string, loaded channel.LoadedBindings, opts ServeOptions, out io.Writer) error {
 	catalog, ignored, err := resolveBootCatalog(opts.ProjectRoot, opts.IgnoreExternal, os.Stderr)
 	if err != nil {
