@@ -46,7 +46,7 @@ type ChannelBinding struct {
 	AllowedObservedTypes []string               // observed event types this principal may Ingest ("" or "*" = any)
 	SubscriptionScope    []contract.ResourceRef // the refs this principal may pull
 	IdempotencyNamespace string                 // prefix isolating this principal's ExternalIDs (cross-principal dedup isolation)
-	Budget               contract.BudgetTier    // context-budget tier for this endpoint's derived mirror (P4); empty = hot (full)
+	Budget               contract.BudgetTier    // context-budget tier for this endpoint's render/pull context (P4); empty = hot (full)
 }
 
 // Validate checks the binding is well-formed: a principal, a known kind, at least one verb.

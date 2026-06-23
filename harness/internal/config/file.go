@@ -35,10 +35,7 @@ type CapabilityConfig struct {
 	Enabled         bool   `json:"enabled"`
 	ResourceRef     string `json:"resource_ref,omitempty"`
 	MaxPayloadBytes int    `json:"max_payload_bytes,omitempty"`
-	// MirrorMode is staged for the `control pull --mirror` regenerate cadence (plan reconciliation
-	// ii): validated here, read when the mirror cadence lands. "manual" | "prime-refresh".
-	MirrorMode string `json:"mirror_mode,omitempty"`
-	RuleRef    string `json:"rule_ref,omitempty"` // "native:<id>"
+	RuleRef         string `json:"rule_ref,omitempty"` // "native:<id>"
 }
 
 type BackgroundConfig struct {
@@ -47,8 +44,7 @@ type BackgroundConfig struct {
 }
 
 // Load reads and validates a config File. It is fail-closed: an unknown field anywhere in the document
-// is rejected (DisallowUnknownFields), and an enabled capability must carry a native rule_ref and a
-// known mirror_mode.
+// is rejected (DisallowUnknownFields), and an enabled capability must carry a native rule_ref.
 func Load(path string) (File, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -73,11 +69,6 @@ func (f File) validate() error {
 		}
 		if !strings.HasPrefix(c.RuleRef, "native:") {
 			return fmt.Errorf("capability %q: rule_ref must be \"native:<id>\", got %q", name, c.RuleRef)
-		}
-		switch c.MirrorMode {
-		case "", "manual", "prime-refresh":
-		default:
-			return fmt.Errorf("capability %q: unknown mirror_mode %q", name, c.MirrorMode)
 		}
 	}
 	switch f.Background.Sync {

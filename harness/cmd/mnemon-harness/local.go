@@ -47,9 +47,7 @@ var localRunCmd = &cobra.Command{
 		fmt.Fprintln(cmd.OutOrStdout(), "Remote Workspace: "+app.RemoteWorkspaceStatus(projectRoot()))
 		return app.RunLocalHTTPServerWithBindings(cmd.Context(), addr, boot.StorePath, boot.Loaded, app.ServeOptions{
 			Loops:               boot.Config.Loops,
-			Hosts:               boot.Config.Hosts,
 			ProjectRoot:         projectRoot(),
-			MirrorMode:          boot.Config.MirrorMode,
 			IgnoreExternal:      localIgnoreExternal,
 			AllowInsecureRemote: localAllowInsecureRemote,
 			SyncInterval:        localSyncInterval,

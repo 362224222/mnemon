@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/mnemon-dev/mnemon/harness/internal/capability"
 	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/render"
@@ -31,6 +32,8 @@ func NewLocalHTTPHandler(rt *runtime.Runtime, auth channel.Authenticator, bindin
 			http.Error(w, err.Error(), http.StatusUnauthorized)
 			return
 		}
+		var binding channel.ChannelBinding
+		haveBinding := false
 		if bindings != nil {
 			b, ok := bindings.Binding(principal)
 			if !ok {
@@ -41,6 +44,8 @@ func NewLocalHTTPHandler(rt *runtime.Runtime, auth channel.Authenticator, bindin
 				http.Error(w, fmt.Sprintf("principal %q is not bound to render", principal), http.StatusForbidden)
 				return
 			}
+			binding = b
+			haveBinding = true
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 		var req render.Request
@@ -53,6 +58,12 @@ func NewLocalHTTPHandler(rt *runtime.Runtime, auth channel.Authenticator, bindin
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusForbidden)
 			return
+		}
+		if haveBinding {
+			proj = budgetShapeProjection(proj, capability.EmbeddedCatalog(), binding.Budget)
+			if req.Budget.ProjectionTier == "" {
+				req.Budget.ProjectionTier = binding.Budget
+			}
 		}
 		resp, err := renderer.RenderCue(r.Context(), req, proj)
 		if err != nil {

@@ -192,8 +192,9 @@ func (c projectorCore) removeManagedTree(dirDisplay string) error {
 	return nil
 }
 
-// ProjectContext is the minimal context the background driver passes to ReProject: which host + loops
-// to re-project, rooted at a project. The no-clobber policy applies (a pre-existing/edited file is preserved).
+// ProjectContext is the minimal context for explicitly refreshing projected host files: which host +
+// loops to re-project, rooted at a project. The no-clobber policy applies (a pre-existing/edited file
+// is preserved).
 type ProjectContext struct {
 	Host        string
 	ProjectRoot string
@@ -207,9 +208,9 @@ type Report struct {
 }
 
 // ReProject re-projects the managed definition files for ctx under the no-clobber policy.
-// It is the entrypoint the co-hosted background driver uses on an invalidation drain (Phase 3); refs
-// names the resources whose projections may need refreshing (definition files do not depend on
-// resource content, so they are always re-evaluated under the no-clobber policy).
+// It is the entrypoint explicit refresh uses; refs names the resources whose projections may need
+// refreshing (definition files do not depend on resource content, so they are always re-evaluated
+// under the no-clobber policy).
 func ReProject(ctx ProjectContext, refs []contract.ResourceRef) (Report, error) {
 	_ = refs
 	switch ctx.Host {

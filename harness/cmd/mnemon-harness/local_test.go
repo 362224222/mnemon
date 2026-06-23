@@ -131,34 +131,6 @@ func TestListenAddrFromEndpoint(t *testing.T) {
 	}
 }
 
-// mirror_mode 驱动 driver 的镜像再生:缺省 prime-refresh(写入即见);
-// manual 退回仅 prime 再生;unknown 值 fail-closed。
-func TestReadLocalConfigMirrorMode(t *testing.T) {
-	root := t.TempDir()
-	write := func(body string) {
-		p := filepath.Join(root, ".mnemon", "harness", "local")
-		if err := os.MkdirAll(p, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(p, "config.json"), []byte(body), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	write(`{"schema_version":1,"mode":"local"}`) // 旧安装:缺省
-	cfg, err := app.ReadLocalConfig(root)
-	if err != nil || cfg.MirrorMode != "prime-refresh" {
-		t.Fatalf("absent mirror_mode must default to prime-refresh; got %q err=%v", cfg.MirrorMode, err)
-	}
-	write(`{"schema_version":1,"mode":"local","mirror_mode":"manual"}`)
-	if cfg, err = app.ReadLocalConfig(root); err != nil || cfg.MirrorMode != "manual" {
-		t.Fatalf("manual must round-trip; got %q err=%v", cfg.MirrorMode, err)
-	}
-	write(`{"schema_version":1,"mode":"local","mirror_mode":"bogus"}`)
-	if _, err = app.ReadLocalConfig(root); err == nil {
-		t.Fatal("unknown mirror_mode must fail closed")
-	}
-}
-
 // T1 回环地板:非回环监听地址 fail-closed,--allow-nonloopback 显式越权。
 func TestValidateListenAddrLoopbackOnly(t *testing.T) {
 	for _, ok := range []string{"127.0.0.1:8787", "localhost:8787", "[::1]:8787"} {

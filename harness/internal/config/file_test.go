@@ -20,7 +20,7 @@ func TestLoadConfigRoundTrips(t *testing.T) {
   "local": {"store_path": ".mnemon/harness/local/governed.db", "endpoint": "http://127.0.0.1:8787"},
   "channel": {"binding_file": ".mnemon/harness/channel/bindings.json"},
   "capabilities": {
-    "memory": {"enabled": true, "resource_ref": "memory/project", "rule_ref": "native:memory", "mirror_mode": "prime-refresh"}
+    "memory": {"enabled": true, "resource_ref": "memory/project", "rule_ref": "native:memory"}
   },
   "background": {"sync": "disabled", "projection_refresh": "manual"}
 }`))
@@ -43,11 +43,11 @@ func TestLoadConfigFailsClosedOnUnknownKey(t *testing.T) {
 	}
 }
 
-func TestLoadConfigRejectsBadRuleRefAndMirror(t *testing.T) {
+func TestLoadConfigRejectsBadRuleRefAndRetiredMirrorMode(t *testing.T) {
 	if _, err := Load(writeConfig(t, `{"capabilities": {"x": {"enabled": true, "rule_ref": "memory"}}}`)); err == nil {
 		t.Fatal("a non-native rule_ref must be rejected")
 	}
 	if _, err := Load(writeConfig(t, `{"capabilities": {"x": {"enabled": true, "rule_ref": "native:memory", "mirror_mode": "weird"}}}`)); err == nil {
-		t.Fatal("an unknown mirror_mode must be rejected")
+		t.Fatal("retired mirror_mode must be rejected as an unknown capability field")
 	}
 }

@@ -125,9 +125,7 @@ func serveForeground(ctx context.Context, cfg serveConfig, out io.Writer) error 
 	fmt.Fprintln(out, "Remote Workspace: "+app.RemoteWorkspaceStatus(cfg.projectRoot))
 	return app.RunLocalHTTPServerWithBindings(ctx, cfg.listenAddr, cfg.boot.StorePath, cfg.boot.Loaded, app.ServeOptions{
 		Loops:               cfg.boot.Config.Loops,
-		Hosts:               cfg.boot.Config.Hosts,
 		ProjectRoot:         cfg.projectRoot,
-		MirrorMode:          cfg.boot.Config.MirrorMode,
 		IgnoreExternal:      cfg.ignoreExternal,
 		AllowInsecureRemote: cfg.allowInsecureRemote,
 		SyncInterval:        cfg.syncInterval,

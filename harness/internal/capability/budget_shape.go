@@ -3,7 +3,7 @@ package capability
 import "github.com/mnemon-dev/mnemon/harness/internal/contract"
 
 // Budget item caps per tier (P4b). REDUCER-FREE by construction: a tier bounds the COUNT of items the
-// local mirror renders (most-recent-first), never a model summary (which would be a reducer — out of
+// local render/pull context presents (most-recent-first), never a model summary (which would be a reducer — out of
 // scope / B1, the no-remote-reducer entry decision). "digest-only" is therefore the minimal
 // recent-context tier (the single latest item), "warm" a bounded recent window, "hot" the full set. A
 // true semantic-summary digest is a sync-abi-v2 / reducer concern, deliberately deferred.
@@ -14,8 +14,8 @@ const (
 
 // ShapeByBudget returns the resource fields shaped for a context-budget tier: it keeps only the
 // most-recent K items (K per tier; hot = all) and RE-RENDERS the capability's header over the kept
-// subset, so a content-rendered surface — e.g. the memory mirror, which reads the rendered `content`
-// field, not the raw item list — actually shrinks. "Most-recent" = the tail of the item list, whose
+// subset, so a content-rendered surface that reads the rendered `content` field, not the raw item list,
+// actually shrinks. "Most-recent" = the tail of the item list, whose
 // order is the local append/import sequence (replica-deterministic, so an offline replay reshapes
 // identically — B6). Non-item kinds, an unknown tier, and an already-within-budget set are returned
 // UNCHANGED (exact passthrough preserves updated_by and any header the writer set; unknown fails open

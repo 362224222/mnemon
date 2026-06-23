@@ -146,6 +146,12 @@ func TestRenderIntentsAreBounded(t *testing.T) {
 			"id": "profile-a", "actor": "codex-a@project", "freshness": "stale", "summary": "A stale profile",
 		}}),
 		content("teamwork_signal", "project", []any{map[string]any{"id": "sig1", "statement": "Need a teammate"}}),
+		contentWithFields("memory", "project", map[string]any{"entries": []any{map[string]any{
+			"id": "mem1", "content": "render memory note", "source": "user", "confidence": "high",
+		}}}),
+		contentWithFields("skill", "project", map[string]any{"declarations": []any{map[string]any{
+			"skill_id": "review-helper", "name": "review helper", "status": "active",
+		}}}),
 	}}
 	r := Renderer{Now: func() time.Time { return now }}
 
@@ -161,7 +167,10 @@ func TestRenderIntentsAreBounded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(packet.Body, "[mnemon:context]") || !strings.Contains(packet.Body, "teamwork_signal/sig1") {
+	if !strings.Contains(packet.Body, "[mnemon:context]") ||
+		!strings.Contains(packet.Body, "teamwork_signal/sig1") ||
+		!strings.Contains(packet.Body, "render memory note") ||
+		!strings.Contains(packet.Body, "review helper") {
 		t.Fatalf("context.packet must summarize scoped projection:\n%s", packet.Body)
 	}
 
@@ -187,10 +196,14 @@ func bytesTrimSpace(in []byte) []byte {
 }
 
 func content(kind, id string, items []any) projection.ResourceContent {
+	return contentWithFields(kind, id, map[string]any{"items": items})
+}
+
+func contentWithFields(kind, id string, fields map[string]any) projection.ResourceContent {
 	return projection.ResourceContent{
 		Ref:     contract.ResourceRef{Kind: contract.ResourceKind(kind), ID: contract.ResourceID(id)},
 		Version: 1,
-		Fields:  map[string]any{"items": items},
+		Fields:  fields,
 	}
 }
 

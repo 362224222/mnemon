@@ -81,19 +81,12 @@ run_host() {
 		out="$("$MH" control pull --addr "$addr" --principal "$principal" --token-file "$tok")"
 		case "$out" in *resources=1*) ;; *) echo "negative pull leaked: $out"; exit 1 ;; esac
 
-		# 阶段一:写入即见 —— 不跑任何 prime,driver 在 invalidation 后自动再生镜像。
+		# R1: write is immediately visible through render context; no background workspace mirror.
 		"$MH" control observe --addr "$addr" --principal "$principal" --token-file "$tok" \
 			--type memory.write_candidate.observed --external-id m2 \
-			--payload '{"content":"E2E driver mirror '"$host"'","source":"user","confidence":"high"}' >/dev/null
-		local mirror="$configdir/mnemon-memory/MEMORY.md" seen=0
-		for i in $(seq 1 100); do
-			if grep -q "E2E driver mirror $host" "$mirror" 2>/dev/null; then
-				seen=1
-				break
-			fi
-			sleep 0.1
-		done
-		[ "$seen" = 1 ] || { echo "driver did not regenerate the mirror within 10s"; exit 1; }
+			--payload '{"content":"E2E render context '"$host"'","source":"user","confidence":"high"}' >/dev/null
+		out="$("$MH" control render --addr "$addr" --principal "$principal" --token-file "$tok" --intent context.packet)"
+		case "$out" in *"E2E render context $host"*) ;; *) echo "render context missing memory: $out"; exit 1 ;; esac
 
 		# refresh no-clobber: hand-edit a projected GUIDE, refresh, assert the edit is preserved + reported
 		local guide="$configdir/mnemon-memory/GUIDE.md"
@@ -798,10 +791,10 @@ run_coordination() {
 }
 
 # run_subscription proves the P4 context-budget acceptance ("packet 大小受预算约束"): a host endpoint
-# DECLARES budget=digest-only in its binding; after several memory writes its DERIVED MIRROR
-# (MEMORY.md) carries only the most-recent entry — the older entries are dropped by the LOCAL budget
-# transform (never a hub-side reduction). The authoritative pull still reports the resource present:
-# budget bounds PRESENTATION, not AUTHORITY (A4). The closed-set guard lives at the binding boundary.
+# DECLARES budget=digest-only in its binding; after several memory writes its render context packet
+# carries only the most-recent entry — older entries are dropped by the LOCAL budget transform
+# (never a hub-side reduction). The authoritative pull still reports the resource present: budget
+# bounds PRESENTATION, not AUTHORITY (A4). The closed-set guard lives at the binding boundary.
 run_subscription() {
 	CUR_HOST="subscription"
 	local proj="$WORK/proj-sub" addr="127.0.0.1:8791"
@@ -836,17 +829,12 @@ run_subscription() {
 				--payload '{"content":"budget entry '"$n"'","source":"user","confidence":"high"}')"
 			case "$out" in *ticked=true*) ;; *) echo "sub observe $n: $out"; exit 1 ;; esac
 		done
-		# the DERIVED MIRROR is budgeted to digest-only: the newest entry present, older ones dropped.
-		local mirror=".codex/mnemon-memory/MEMORY.md" seen=0
-		for i in $(seq 1 100); do
-			if grep -q "budget entry 3" "$mirror" 2>/dev/null && ! grep -q "budget entry 1" "$mirror" 2>/dev/null; then
-				seen=1; break
-			fi
-			sleep 0.1
-		done
-		[ "$seen" = 1 ] || { echo "digest-only mirror did not shrink to the newest entry:"; cat "$mirror" 2>/dev/null; exit 1; }
+		# the context packet is budgeted to digest-only: the newest entry present, older ones dropped.
+		out="$("$MH" control render --addr "http://$addr" --principal codex@project --token-file "$tok" --intent context.packet)"
+		case "$out" in *"budget entry 3"*) ;; *) echo "digest-only context missing newest entry: $out"; exit 1 ;; esac
+		case "$out" in *"budget entry 1"*|*"budget entry 2"*) echo "digest-only context leaked older entries: $out"; exit 1 ;; esac
 		# AUTHORITY preserved (A4): the un-budgeted pull still reports the memory resource present —
-		# budget shrank the mirror, never what was admitted/stored.
+		# budget shrank the context packet, never what was admitted/stored.
 		out="$("$MH" control pull --addr "http://$addr" --principal codex@project --token-file "$tok")"
 		case "$out" in *resources=1*) ;; *) echo "authority pull (want resources=1): $out"; exit 1 ;; esac
 		{ kill "$runpid" 2>/dev/null; wait "$runpid"; } 2>/dev/null || true

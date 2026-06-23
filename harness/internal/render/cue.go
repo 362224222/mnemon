@@ -86,13 +86,20 @@ func BuildProfileCue(req Request, proj projection.Projection) string {
 }
 
 func BuildContextPacket(_ Request, proj projection.Projection) string {
-	items := projectionItems(proj)
 	var lines []string
 	lines = append(lines, "[mnemon:context]", fmt.Sprintf("Projection %s digest %s", proj.Ref, proj.Digest))
-	for _, kind := range []string{"agent_profile", "teamwork_signal", "assignment", "progress_digest"} {
-		for _, item := range items[kind] {
+	for _, content := range proj.Content {
+		kind := string(content.Ref.Kind)
+		items := resourceItems(content)
+		if len(items) == 0 {
+			if summary := resourceSummary(content.Fields); summary != "" {
+				lines = append(lines, fmt.Sprintf("- %s/%s: %s", kind, content.Ref.ID, summary))
+			}
+			continue
+		}
+		for _, item := range items {
 			summary := firstNonEmpty(item,
-				"summary", "statement", "scope", "expected_work", "focus")
+				"content", "name", "summary", "statement", "scope", "expected_work", "focus", "skill_id", "status")
 			if summary == "" {
 				summary = itemID(item)
 			}
@@ -131,11 +138,7 @@ func section(kind, body string) string {
 func projectionItems(proj projection.Projection) map[string][]map[string]any {
 	out := map[string][]map[string]any{}
 	for _, c := range proj.Content {
-		raw, ok := c.Fields["items"]
-		if !ok {
-			continue
-		}
-		for _, item := range anyItems(raw) {
+		for _, item := range resourceItems(c) {
 			out[string(c.Ref.Kind)] = append(out[string(c.Ref.Kind)], item)
 		}
 	}
@@ -143,6 +146,15 @@ func projectionItems(proj projection.Projection) map[string][]map[string]any {
 		sort.SliceStable(out[k], func(i, j int) bool { return itemID(out[k][i]) < itemID(out[k][j]) })
 	}
 	return out
+}
+
+func resourceItems(content projection.ResourceContent) []map[string]any {
+	for _, field := range []string{"items", "entries", "declarations"} {
+		if raw, ok := content.Fields[field]; ok {
+			return anyItems(raw)
+		}
+	}
+	return nil
 }
 
 func anyItems(raw any) []map[string]any {
@@ -193,7 +205,7 @@ func summarizeProgress(items []map[string]any) string {
 }
 
 func itemID(item map[string]any) string {
-	for _, key := range []string{"assignment_id", "id"} {
+	for _, key := range []string{"assignment_id", "id", "skill_id"} {
 		if s := itemString(item, key); s != "" {
 			return s
 		}
@@ -212,6 +224,15 @@ func firstNonEmpty(item map[string]any, keys ...string) string {
 	for _, key := range keys {
 		if s := itemString(item, key); s != "" {
 			return s
+		}
+	}
+	return ""
+}
+
+func resourceSummary(fields map[string]any) string {
+	for _, key := range []string{"content", "name", "summary"} {
+		if s, ok := fields[key].(string); ok && strings.TrimSpace(s) != "" {
+			return strings.TrimSpace(s)
 		}
 	}
 	return ""

@@ -308,59 +308,13 @@ func existingConfigLoops(path string) []string {
 	return existing.Loops
 }
 
-// existingConfigHosts returns the per-host installed-loops map from an existing local config (nil
-// if absent), so a rerun — possibly for another host — merges rather than clobbers.
-func existingConfigHosts(path string) map[string][]string {
-	prev, err := os.ReadFile(path)
-	if err != nil {
-		return nil
-	}
-	var existing struct {
-		Hosts map[string][]string `json:"hosts"`
-	}
-	if json.Unmarshal(prev, &existing) != nil {
-		return nil
-	}
-	return existing.Hosts
-}
-
-// existingConfigMirrorMode preserves a user-chosen mirror_mode across setup reruns (setup has no
-// flag for it; clobbering a hand-edited "manual" back to the default would be a silent override).
-func existingConfigMirrorMode(path string) string {
-	prev, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	var existing struct {
-		MirrorMode string `json:"mirror_mode"`
-	}
-	if json.Unmarshal(prev, &existing) != nil {
-		return ""
-	}
-	return existing.MirrorMode
-}
-
 func writeLocalConfig(path string, opts SetupOptions, loops []string) error {
-	// hosts records which loops are PROJECTED per host — the background driver's re-projection
-	// authority (loops alone cannot say which host surfaces exist). Old installs without the key
-	// simply get no background re-projection until the next setup run records it.
-	hosts := existingConfigHosts(path)
-	if hosts == nil {
-		hosts = map[string][]string{}
-	}
-	hosts[opts.Host] = unionLoops(hosts[opts.Host], opts.Loops)
-	mirrorMode := existingConfigMirrorMode(path)
-	if mirrorMode == "" {
-		mirrorMode = "prime-refresh"
-	}
 	doc := map[string]any{
 		"schema_version": 1,
 		"mode":           "local",
 		"endpoint":       opts.ControlURL,
 		"principal":      opts.Principal,
 		"loops":          loops,
-		"hosts":          hosts,
-		"mirror_mode":    mirrorMode,
 		"binding_file":   filepath.ToSlash(filepath.Join(".mnemon", "harness", "channel", "bindings.json")),
 		"store_path":     filepath.ToSlash(runtime.DefaultStorePath),
 	}

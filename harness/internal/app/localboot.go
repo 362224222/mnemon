@@ -36,15 +36,13 @@ type LocalBoot struct {
 
 // LocalConfig mirrors the setup-written .mnemon/harness/local/config.json document.
 type LocalConfig struct {
-	SchemaVersion int                 `json:"schema_version"`
-	Mode          string              `json:"mode"`
-	Endpoint      string              `json:"endpoint"`
-	Principal     string              `json:"principal"`
-	Loops         []string            `json:"loops"`
-	Hosts         map[string][]string `json:"hosts"`       // per-host projected loops; absent on old installs (no background re-projection)
-	MirrorMode    string              `json:"mirror_mode"` // "manual" | "prime-refresh"; absent defaults to prime-refresh
-	BindingFile   string              `json:"binding_file"`
-	StorePath     string              `json:"store_path"`
+	SchemaVersion int      `json:"schema_version"`
+	Mode          string   `json:"mode"`
+	Endpoint      string   `json:"endpoint"`
+	Principal     string   `json:"principal"`
+	Loops         []string `json:"loops"`
+	BindingFile   string   `json:"binding_file"`
+	StorePath     string   `json:"store_path"`
 }
 
 // ResolveLocalBoot resolves the boot state from the cleaned project root plus the two operator
@@ -97,13 +95,6 @@ func ReadLocalConfig(root string) (LocalConfig, error) {
 	}
 	if cfg.SchemaVersion != 1 {
 		return LocalConfig{}, fmt.Errorf("Local Mnemon config schema_version %d unsupported (want 1)", cfg.SchemaVersion)
-	}
-	switch cfg.MirrorMode {
-	case "":
-		cfg.MirrorMode = "prime-refresh"
-	case "manual", "prime-refresh":
-	default:
-		return LocalConfig{}, fmt.Errorf("Local Mnemon config mirror_mode %q unsupported (manual|prime-refresh)", cfg.MirrorMode)
 	}
 	return cfg, nil
 }
