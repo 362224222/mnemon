@@ -84,7 +84,7 @@ func init() {
 	_ = setupCmd.Flags().MarkHidden("actor-kind")
 	setupCmd.Flags().BoolVar(&setupUseToken, "token", true, "generate a local access token")
 	setupCmd.Flags().BoolVar(&setupDryRun, "dry-run", false, "print changes without writing")
-	setupCmd.Flags().BoolVar(&setupThinRenderShim, "thin-render-shim", false, "install experimental static render hooks")
+	setupCmd.Flags().BoolVar(&setupThinRenderShim, "thin-render-shim", true, "install R1 static render hooks")
 	_ = setupCmd.Flags().MarkHidden("thin-render-shim")
 
 	setupCmd.AddCommand(setupStatusCmd, setupUninstallCmd)

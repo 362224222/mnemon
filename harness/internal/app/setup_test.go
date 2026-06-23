@@ -165,8 +165,15 @@ func TestSetupInstallsRealCodexMemoryLocalAssets(t *testing.T) {
 		t.Fatalf("memory-set must observe local memory candidates:\n%s", memorySet)
 	}
 	primeHook := string(mustRead(t, filepath.Join(projectRoot, ".codex", "hooks", "mnemon-memory", "prime.sh")))
-	if !strings.Contains(primeHook, ".mnemon/harness/local/env.sh") || !strings.Contains(primeHook, "--mirror") {
-		t.Fatalf("prime hook must use Local Mnemon env and refresh the mirror:\n%s", primeHook)
+	for _, want := range []string{".mnemon/harness/local/env.sh", "control render", `--intent "teamwork.cue"`} {
+		if !strings.Contains(primeHook, want) {
+			t.Fatalf("prime hook must use the R1 render shim and Local Mnemon env; missing %q:\n%s", want, primeHook)
+		}
+	}
+	for _, blocked := range []string{"--mirror", "GUIDE.md", "MEMORY.md", "control observe", "control pull"} {
+		if strings.Contains(primeHook, blocked) {
+			t.Fatalf("prime hook must not contain legacy dynamic projection content %q:\n%s", blocked, primeHook)
+		}
 	}
 	mirror := string(mustRead(t, filepath.Join(projectRoot, ".codex", "mnemon-memory", "MEMORY.md")))
 	if !strings.Contains(mirror, "Non-authoritative mirror") {
@@ -223,7 +230,7 @@ func TestSetupCanProjectThinRenderShimHooks(t *testing.T) {
 	var out, errw bytes.Buffer
 	_, err := h.Setup(context.Background(), &out, &errw, SetupOptions{
 		Host: "codex", Loops: []string{"memory"}, ControlURL: "http://127.0.0.1:8787",
-		Principal: "codex@project", UseToken: true, ProjectRoot: projectRoot, ThinRenderShim: true,
+		Principal: "codex@project", UseToken: true, ProjectRoot: projectRoot,
 	})
 	if err != nil {
 		t.Fatalf("setup thin render shim: %v\nstderr=%s", err, errw.String())

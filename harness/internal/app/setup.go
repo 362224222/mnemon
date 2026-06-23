@@ -34,7 +34,7 @@ type SetupOptions struct {
 	TokenExplicit  bool     // true when the caller explicitly set UseToken
 	ProjectRoot    string   // host projection working dir (defaults to the facade root)
 	DryRun         bool     // print all projection + channel changes without writing
-	ThinRenderShim bool     // opt into R1 static render hooks; legacy fat hooks remain the default
+	ThinRenderShim bool     // install R1 static render hooks on the setup path
 }
 
 // SetupResult records the channel artifact paths setup wrote (or would write, on dry-run).
@@ -223,6 +223,7 @@ func (h *Harness) defaultSetupOptions(opts SetupOptions) SetupOptions {
 	if opts.ActorKind == "" {
 		opts.ActorKind = string(contract.KindHostAgent)
 	}
+	opts.ThinRenderShim = true
 	if !opts.TokenExplicit {
 		opts.UseToken = true
 	}
