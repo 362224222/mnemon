@@ -248,6 +248,32 @@ func TestSetupCanProjectThinRenderShimHooks(t *testing.T) {
 	}
 }
 
+func TestSetupInstallsStaticShimWithoutLoop(t *testing.T) {
+	projectRoot := t.TempDir()
+	h := New(repoRoot(t))
+	var out, errw bytes.Buffer
+	res, err := h.Setup(context.Background(), &out, &errw, SetupOptions{
+		Host: "codex", ControlURL: "http://127.0.0.1:8787",
+		Principal: "codex@project", UseToken: true, ProjectRoot: projectRoot,
+	})
+	if err != nil {
+		t.Fatalf("setup static shim: %v\nstderr=%s", err, errw.String())
+	}
+	assertPublicSetupOutput(t, out.String())
+	primeHook := string(mustRead(t, filepath.Join(projectRoot, ".codex", "hooks", "mnemon-r1", "prime.sh")))
+	if !strings.Contains(primeHook, "control render") || strings.Contains(primeHook, "MEMORY.md") || strings.Contains(primeHook, "GUIDE.md") {
+		t.Fatalf("static setup hook must be render-only:\n%s", primeHook)
+	}
+	hooksJSON := string(mustRead(t, filepath.Join(projectRoot, ".codex", "hooks.json")))
+	if !strings.Contains(hooksJSON, "mnemon-r1") {
+		t.Fatalf("setup must register standard hook:\n%s", hooksJSON)
+	}
+	configJSON := string(mustRead(t, res.ConfigFile))
+	if strings.Contains(configJSON, `"hosts"`) || strings.Contains(configJSON, `"mirror_mode"`) {
+		t.Fatalf("static setup config must not record projection state:\n%s", configJSON)
+	}
+}
+
 // TestSetupDryRunWritesNothing is the P4 gate dry-run check: --dry-run prints changes without
 // writing channel artifacts.
 func TestSetupDryRunWritesNothing(t *testing.T) {

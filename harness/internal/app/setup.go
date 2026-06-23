@@ -17,6 +17,7 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/capability"
 	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	"github.com/mnemon-dev/mnemon/harness/internal/hostsurface"
 	"github.com/mnemon-dev/mnemon/harness/internal/manifest"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
@@ -131,6 +132,16 @@ func (h *Harness) Setup(ctx context.Context, out, errw io.Writer, opts SetupOpti
 		return SetupResult{}, err
 	}
 	projectRoot := opts.ProjectRoot
+
+	if _, err := hostsurface.InstallStandardHost(ctx, hostsurface.StandardHostOptions{
+		Host:        opts.Host,
+		ProjectRoot: projectRoot,
+		DryRun:      opts.DryRun,
+		Stdout:      io.Discard,
+		Stderr:      errw,
+	}); err != nil {
+		return SetupResult{}, fmt.Errorf("setup: install static host shim: %w", err)
+	}
 
 	// 1. Project loop assets. Dry-run lowers to the projector's own --dry-run so projection changes
 	//    print without writing. Skipped when no --loop is named (P3): the default-enabled coordination
@@ -407,8 +418,18 @@ func (h *Harness) SetupUninstall(ctx context.Context, out, errw io.Writer, opts 
 	if projectRoot == "" {
 		projectRoot = h.root
 	}
-	if err := h.LoopProject(ctx, out, errw, "uninstall", projectRoot, opts.Host, opts.Loops, nil); err != nil {
-		return fmt.Errorf("setup uninstall: remove projected loop assets: %w", err)
+	if len(opts.Loops) > 0 {
+		if err := h.LoopProject(ctx, out, errw, "uninstall", projectRoot, opts.Host, opts.Loops, nil); err != nil {
+			return fmt.Errorf("setup uninstall: remove projected loop assets: %w", err)
+		}
+	}
+	if _, err := hostsurface.UninstallStandardHost(ctx, hostsurface.StandardHostOptions{
+		Host:        opts.Host,
+		ProjectRoot: projectRoot,
+		Stdout:      io.Discard,
+		Stderr:      errw,
+	}); err != nil {
+		return fmt.Errorf("setup uninstall: remove static host shim: %w", err)
 	}
 	base := channelBase(projectRoot)
 	if opts.Principal != "" {
