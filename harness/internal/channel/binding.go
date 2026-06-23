@@ -16,14 +16,15 @@ const (
 	TransportMTLS  Transport = "mtls"  // mutual-TLS authenticated
 )
 
-// Verb is a channel operation. The Agent Integration channel exposes observe (Ingest) + pull
-// (PullProjection) + status. Replica sync gets separate verbs so a sync credential does not inherit
-// Agent Integration access.
+// Verb is a channel operation. The Agent Integration channel exposes observe (Ingest), pull
+// (PullProjection), render (read-only cue/content), and status. Replica sync gets separate verbs so
+// a sync credential does not inherit Agent Integration access.
 type Verb string
 
 const (
 	VerbObserve Verb = "observe"
 	VerbPull    Verb = "pull"
+	VerbRender  Verb = "render"
 	VerbStatus  Verb = "status"
 	// The sync verb STRINGS are ABI surface owned by contract (sync-abi-v1 §1); these aliases keep
 	// the channel's Verb space complete without channel becoming the wire-name authority.
@@ -94,7 +95,7 @@ func (b ChannelBinding) AllowsObservedType(eventType string) bool {
 func HostAgentBinding(principal contract.ActorID, endpoint string, scope []contract.ResourceRef) ChannelBinding {
 	return ChannelBinding{
 		Principal: principal, ActorKind: contract.KindHostAgent, Transport: TransportHTTP, Endpoint: endpoint,
-		AllowedVerbs: []Verb{VerbObserve, VerbPull, VerbStatus}, SubscriptionScope: scope,
+		AllowedVerbs: []Verb{VerbObserve, VerbPull, VerbRender, VerbStatus}, SubscriptionScope: scope,
 		IdempotencyNamespace: "host:" + string(principal),
 	}
 }
@@ -102,7 +103,7 @@ func HostAgentBinding(principal contract.ActorID, endpoint string, scope []contr
 func ControlAgentBinding(principal contract.ActorID, endpoint string, scope []contract.ResourceRef) ChannelBinding {
 	return ChannelBinding{
 		Principal: principal, ActorKind: contract.KindControlAgent, Transport: TransportHTTP, Endpoint: endpoint,
-		AllowedVerbs: []Verb{VerbObserve, VerbPull, VerbStatus}, SubscriptionScope: scope,
+		AllowedVerbs: []Verb{VerbObserve, VerbPull, VerbRender, VerbStatus}, SubscriptionScope: scope,
 		IdempotencyNamespace: "control:" + string(principal),
 	}
 }

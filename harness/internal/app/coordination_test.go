@@ -124,6 +124,51 @@ func TestCoordinationMidRiskRequiresEvidence(t *testing.T) {
 	}
 }
 
+func TestAssignmentItemsCarryCreatedAtFromEventTimestamp(t *testing.T) {
+	ref := contract.ResourceRef{Kind: "assignment", ID: "project"}
+	binding := channel.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
+	binding.AllowedObservedTypes = []string{"assignment.write_candidate.observed"}
+	rc, err := LocalRuntimeConfigFromBindings([]channel.ChannelBinding{binding}, nil)
+	if err != nil {
+		t.Fatalf("boot config: %v", err)
+	}
+	const ts = "2026-06-24T09:45:00Z"
+	rc.Now = func() string { return ts }
+	rt, err := runtime.OpenRuntime(filepath.Join(t.TempDir(), "assignment-created-at.db"), rc)
+	if err != nil {
+		t.Fatalf("open runtime: %v", err)
+	}
+	defer rt.Close()
+
+	if _, _, err := rt.API().Ingest("codex@project", contract.ObservationEnvelope{
+		ExternalID: "created-at-1",
+		Event: contract.Event{TS: "client-forged", Type: "assignment.write_candidate.observed", Payload: map[string]any{
+			"scope": "timestamped work", "ttl": "30m", "assignee": "codex@impl", "evidence": "ticket-10",
+			"expected_work": "check timestamp propagation", "expected_feedback": "short result",
+		}},
+	}); err != nil {
+		t.Fatalf("ingest timestamped assignment: %v", err)
+	}
+	if _, err := rt.Tick(); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	v, fields, err := rt.Resource(ref)
+	if err != nil || v == 0 {
+		t.Fatalf("assignment must admit (v=%d err=%v)", v, err)
+	}
+	items, ok := fields["items"].([]any)
+	if !ok || len(items) != 1 {
+		t.Fatalf("assignment items must be stored in canonical []any shape, got %#v", fields["items"])
+	}
+	item, ok := items[0].(map[string]any)
+	if !ok {
+		t.Fatalf("assignment item must be a map, got %#v", items[0])
+	}
+	if got, _ := item["created_at"].(string); got != ts {
+		t.Fatalf("created_at = %q, want server-stamped event timestamp %q (item=%#v)", got, ts, item)
+	}
+}
+
 // P3b default-enablement: a host whose binding enables ONLY memory (explicit allow-list + scope, as
 // setup writes) STILL governs the coordination kinds — the boot grants them to every host-agent
 // principal without an explicit --loop. This pins the "coordination package is on out of the box".

@@ -264,7 +264,7 @@ func (h *Harness) channelBinding(opts SetupOptions) channel.ChannelBinding {
 		ActorKind:            kind,
 		Transport:            channel.TransportHTTP,
 		Endpoint:             opts.ControlURL,
-		AllowedVerbs:         []channel.Verb{channel.VerbObserve, channel.VerbPull, channel.VerbStatus},
+		AllowedVerbs:         []channel.Verb{channel.VerbObserve, channel.VerbPull, channel.VerbRender, channel.VerbStatus},
 		AllowedObservedTypes: observed,
 		SubscriptionScope:    scope,
 		IdempotencyNamespace: "host:" + opts.Principal,

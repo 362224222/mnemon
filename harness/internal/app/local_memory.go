@@ -295,7 +295,7 @@ func RunLocalHTTPServerWithBindings(ctx context.Context, addr, storePath string,
 			Catalog:             catalog,
 		}, os.Stderr)
 	}()
-	return runtime.ServeRuntime(ctx, addr, rt, channel.NewBindingAuthenticator(loaded), out)
+	return ServeLocalHTTP(ctx, addr, rt, channel.NewBindingAuthenticator(loaded), loaded, opts.ProjectRoot, out)
 }
 
 // resolveBootCatalog resolves the capability catalog ONCE at boot. Default: embedded Builtins +

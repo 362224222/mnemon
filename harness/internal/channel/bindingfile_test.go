@@ -28,7 +28,7 @@ func TestLoadBindingFile(t *testing.T) {
 	    "actor_kind": "host-agent",
 	    "transport": "http",
 	    "endpoint": "http://127.0.0.1:8787",
-	    "allowed_verbs": ["observe","pull","status"],
+	    "allowed_verbs": ["observe","pull","render","status"],
 	    "allowed_observed_types": ["session.observed","memory.write_candidate.observed"],
 	    "subscription_scope": [{"kind":"memory","id":"project"}],
 	    "idempotency_namespace": "host:codex@project",
@@ -60,7 +60,7 @@ func TestLoadBindingFile(t *testing.T) {
 	if b.Principal != "codex@project" || b.ActorKind != contract.KindHostAgent || b.Transport != TransportHTTP {
 		t.Fatalf("mapped binding wrong: %+v", b)
 	}
-	if !b.Allows(VerbObserve) || !b.Allows(VerbPull) || !b.Allows(VerbStatus) {
+	if !b.Allows(VerbObserve) || !b.Allows(VerbPull) || !b.Allows(VerbRender) || !b.Allows(VerbStatus) {
 		t.Fatalf("verbs not mapped: %+v", b.AllowedVerbs)
 	}
 	if !b.AllowsObservedType("session.observed") || b.AllowsObservedType("memory.observed") {

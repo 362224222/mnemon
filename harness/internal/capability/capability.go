@@ -94,6 +94,9 @@ func appendItemRule(c Capability, principal contract.ActorID, ref contract.Resou
 			item["id"] = itemID(in.Event.Actor, in.Event.IngestSeq)
 			item["actor"] = string(in.Event.Actor)
 			item["ingest_seq"] = in.Event.IngestSeq
+			if in.Event.TS != "" {
+				item["created_at"] = in.Event.TS
+			}
 			version, fields := resourceFromProjection(in.View, ref)
 			items := append(itemsFromFields(fields, c.ItemsField), item)
 			newFields := map[string]any{c.ItemsField: items, "updated_by": string(in.Event.Actor)}

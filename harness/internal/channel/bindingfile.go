@@ -173,6 +173,8 @@ func parseVerb(s string) (Verb, error) {
 		return VerbObserve, nil
 	case VerbPull:
 		return VerbPull, nil
+	case VerbRender:
+		return VerbRender, nil
 	case VerbStatus:
 		return VerbStatus, nil
 	case VerbSyncPush:
