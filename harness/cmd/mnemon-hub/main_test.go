@@ -25,6 +25,9 @@ func writeReplicas(t *testing.T, dir, content string, mode os.FileMode) string {
 	if err := os.WriteFile(path, []byte(content), mode); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Chmod(path, mode); err != nil {
+		t.Fatal(err)
+	}
 	return path
 }
 
@@ -93,6 +96,9 @@ func TestLoadReplicasFailClosed(t *testing.T) {
 	// is refused even when replicas.json itself is correctly 0600.
 	credDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(credDir, "a.token"), []byte("tok-a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(credDir, "a.token"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(credDir, "b.token"), []byte("tok-b\n"), 0o600); err != nil {
