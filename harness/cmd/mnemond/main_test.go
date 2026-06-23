@@ -18,7 +18,7 @@ func TestRunWithoutSetupReportsNotSetUp(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Local Mnemon is not set up.",
-		"mnemon-harness setup --host codex --loop memory --loop skill",
+		"mnemon-harness setup --host codex",
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("missing remediation %q in error:\n%v", want, err)

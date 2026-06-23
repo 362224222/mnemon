@@ -1,7 +1,6 @@
 package app
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -13,12 +12,10 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/assets"
 	"github.com/mnemon-dev/mnemon/harness/internal/capability"
 	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/hostsurface"
-	"github.com/mnemon-dev/mnemon/harness/internal/manifest"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
@@ -59,25 +56,15 @@ func sanitizePrincipal(p string) string {
 	return strings.NewReplacer("@", "-", "/", "-", ":", "-").Replace(p)
 }
 
-// validateProductLoops fail-closes setup to loops that are BOTH a built-in capability
-// (capability.EmbeddedCatalog()) AND carry projectable assets for the host (manifest.LoopsForHost over the
-// embedded FS) — derived, not hardcoded, so a future loop whose assets land is admitted without
-// editing a literal. Today the intersection is exactly {memory, skill} (the whole builtin set
-// since the P1 note/decision demotion to external-package fixtures).
-// A requested loop that is instead an EXTERNAL capability package under projectRoot gets the
-// pinned admission-vs-projection diagnosis: external packages carry no host assets in v1.
+// validateProductLoops fail-closes setup to known capability packages. R1 setup always installs a
+// standard host shim; loops only widen the channel/config capability scope and no longer imply host
+// asset projection.
 func validateProductLoops(host string, loops []string, projectRoot string) error {
-	hostLoops, err := manifest.LoopsForHost(assets.FS, host)
-	if err != nil {
-		return fmt.Errorf("setup: discover %s loops: %w", host, err)
-	}
 	available := map[string]bool{}
 	var names []string
-	for _, loop := range hostLoops {
-		if _, ok := capability.EmbeddedCatalog()[loop]; ok && !available[loop] {
-			available[loop] = true
-			names = append(names, loop)
-		}
+	for loop := range capability.EmbeddedCatalog() {
+		available[loop] = true
+		names = append(names, loop)
 	}
 	sort.Strings(names)
 	for _, loop := range loops {
@@ -87,13 +74,7 @@ func validateProductLoops(host string, loops []string, projectRoot string) error
 		}
 		if !available[loop] {
 			if isExternalPackage(projectRoot, loop) {
-				// loop-package-v2 (PD4): an external package that ships a loop.json declares host
-				// assets and projects through the same machinery as a builtin; one carrying only a
-				// capability.json (admission-equal, no host assets) is still refused.
-				if hasExternalLoopManifest(projectRoot, loop) {
-					continue
-				}
-				return fmt.Errorf("loop %q: external package declares no host assets (no loop.json); enable via config.loops + binding", loop)
+				continue
 			}
 			return fmt.Errorf("unsupported product loop %q for host %s; available: %s", loop, host, strings.Join(names, ", "))
 		}
@@ -101,19 +82,10 @@ func validateProductLoops(host string, loops []string, projectRoot string) error
 	return nil
 }
 
-// isExternalPackage reports whether loop names an external capability package under the project
-// root. Presence check only: setup never LOADS external packages — they carry no host assets, so
-// there is nothing for setup to project.
+// isExternalPackage reports whether loop names an external capability package under the project root.
+// Presence check only; boot later loads and validates the package.
 func isExternalPackage(projectRoot, loop string) bool {
 	fi, err := os.Stat(filepath.Join(projectRoot, ".mnemon", "loops", loop, "capability.json"))
-	return err == nil && fi.Mode().IsRegular()
-}
-
-// hasExternalLoopManifest reports whether an external package ships a loop.json — the signal that it
-// carries host projection assets (loop-package-v2). Presence check only; the projector validates the
-// manifest at load.
-func hasExternalLoopManifest(projectRoot, loop string) bool {
-	fi, err := os.Stat(filepath.Join(projectRoot, ".mnemon", "loops", loop, "loop.json"))
 	return err == nil && fi.Mode().IsRegular()
 }
 
@@ -143,25 +115,7 @@ func (h *Harness) Setup(ctx context.Context, out, errw io.Writer, opts SetupOpti
 		return SetupResult{}, fmt.Errorf("setup: install static host shim: %w", err)
 	}
 
-	// 1. Project loop assets. Dry-run lowers to the projector's own --dry-run so projection changes
-	//    print without writing. Skipped when no --loop is named (P3): the default-enabled coordination
-	//    package is governance-only — there are no host assets to project — and step 2 still wires the
-	//    channel so the host can govern the coordination kinds.
-	if len(opts.Loops) > 0 {
-		action, hostArgs := "install", []string(nil)
-		if opts.DryRun {
-			hostArgs = []string{"--dry-run"}
-		}
-		if opts.ThinRenderShim {
-			hostArgs = append(hostArgs, "--thin-render-shim")
-		}
-		var projectorOut bytes.Buffer
-		if err := h.LoopProject(ctx, &projectorOut, errw, action, projectRoot, opts.Host, opts.Loops, hostArgs); err != nil {
-			return SetupResult{}, fmt.Errorf("setup: project loop assets: %w", err)
-		}
-	}
-
-	// 2. Channel artifacts.
+	// 1. Channel artifacts.
 	base := channelBase(projectRoot)
 	defer tightenHarnessDirs(projectRoot) // 重跑校正:即使目录先以宽权限存在(如 local run 先行)
 	bindingFile := filepath.Join(base, "bindings.json")
@@ -411,29 +365,17 @@ func (h *Harness) SetupStatus(projectRoot, principal string) ([]string, error) {
 	}, nil
 }
 
-// SetupUninstall reverses setup: it removes projected loop assets and the
-// principal's channel binding + token file while preserving sibling bindings.
+// SetupUninstall reverses setup: it removes the standard host shim and the principal's channel
+// binding + token file while preserving sibling bindings.
 func (h *Harness) SetupUninstall(ctx context.Context, out, errw io.Writer, opts SetupOptions) error {
 	projectRoot := opts.ProjectRoot
 	if projectRoot == "" {
 		projectRoot = h.root
 	}
-	if len(opts.Loops) > 0 {
-		if err := h.LoopProject(ctx, out, errw, "uninstall", projectRoot, opts.Host, opts.Loops, nil); err != nil {
-			return fmt.Errorf("setup uninstall: remove projected loop assets: %w", err)
-		}
-	}
-	if _, err := hostsurface.UninstallStandardHost(ctx, hostsurface.StandardHostOptions{
-		Host:        opts.Host,
-		ProjectRoot: projectRoot,
-		Stdout:      io.Discard,
-		Stderr:      errw,
-	}); err != nil {
-		return fmt.Errorf("setup uninstall: remove static host shim: %w", err)
-	}
 	base := channelBase(projectRoot)
+	bindingFile := filepath.Join(base, "bindings.json")
 	if opts.Principal != "" {
-		removed, err := channel.RemoveBinding(filepath.Join(base, "bindings.json"), contract.ActorID(opts.Principal))
+		removed, err := channel.RemoveBinding(bindingFile, contract.ActorID(opts.Principal))
 		if err != nil {
 			return fmt.Errorf("setup uninstall: remove binding: %w", err)
 		}
@@ -447,7 +389,22 @@ func (h *Harness) SetupUninstall(ctx context.Context, out, errw io.Writer, opts 
 			}
 		}
 	}
+	if !hasAnyBinding(projectRoot, bindingFile) {
+		if _, err := hostsurface.UninstallStandardHost(ctx, hostsurface.StandardHostOptions{
+			Host:        opts.Host,
+			ProjectRoot: projectRoot,
+			Stdout:      io.Discard,
+			Stderr:      errw,
+		}); err != nil {
+			return fmt.Errorf("setup uninstall: remove static host shim: %w", err)
+		}
+	}
 	return nil
+}
+
+func hasAnyBinding(projectRoot, bindingFile string) bool {
+	loaded, err := channel.LoadBindingFile(projectRoot, bindingFile)
+	return err == nil && len(loaded.Bindings) > 0
 }
 
 // tightenHarnessDirs enforces the T1 permission floor on the PRIVATE harness state tree:

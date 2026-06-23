@@ -21,7 +21,7 @@ import (
 )
 
 // LocalNotSetupMessage is the product remediation for a boot without setup artifacts.
-const LocalNotSetupMessage = "Local Mnemon is not set up.\nRun: mnemon-harness setup --host codex --loop memory --loop skill"
+const LocalNotSetupMessage = "Local Mnemon is not set up.\nRun: mnemon-harness setup --host codex"
 
 // ErrLocalNotSetup is returned when no Local Mnemon config exists under the project root.
 var ErrLocalNotSetup = errors.New(LocalNotSetupMessage)

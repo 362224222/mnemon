@@ -20,6 +20,9 @@ func TestRefreshPreservesUserEditedGuideAndLeavesChannel(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
+	if _, err := h.Refresh(context.Background(), &out, &out, root, "codex", []string{"memory"}, nil); err != nil {
+		t.Fatalf("initial refresh: %v", err)
+	}
 
 	guide := filepath.Join(root, ".codex", "mnemon-memory", "GUIDE.md")
 	orig, err := os.ReadFile(guide)

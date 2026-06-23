@@ -88,12 +88,11 @@ run_host() {
 		out="$("$MH" control render --addr "$addr" --principal "$principal" --token-file "$tok" --intent context.packet)"
 		case "$out" in *"E2E render context $host"*) ;; *) echo "render context missing memory: $out"; exit 1 ;; esac
 
-		# refresh no-clobber: hand-edit a projected GUIDE, refresh, assert the edit is preserved + reported
-		local guide="$configdir/mnemon-memory/GUIDE.md"
-		printf '# E2E USER EDIT\n\n%s' "$(cat "$guide")" >"$guide.tmp" && mv "$guide.tmp" "$guide"
-		out="$("$MH" refresh --host "$host" --loop memory)"
-		case "$out" in *GUIDE.md*) ;; *) echo "refresh did not report GUIDE: $out"; exit 1 ;; esac
-		grep -q "E2E USER EDIT" "$guide" || { echo "refresh clobbered GUIDE"; exit 1; }
+		# setup no-clobber: hand-edit the static render hook, rerun setup, assert the edit is preserved.
+		local hook="$configdir/hooks/mnemon-r1/prime.sh"
+		printf '# E2E USER EDIT\n\n%s' "$(cat "$hook")" >"$hook.tmp" && mv "$hook.tmp" "$hook"
+		"$MH" setup --host "$host" --loop memory --principal "$principal" --control-url "$addr" >/dev/null
+		grep -q "E2E USER EDIT" "$hook" || { echo "setup clobbered standard hook"; exit 1; }
 
 		# stop Local Mnemon and reap it quietly (releases the port + the store lock before the next host)
 		{ kill "$runpid" 2>/dev/null; wait "$runpid"; } 2>/dev/null || true
@@ -417,18 +416,16 @@ run_external_goal() {
 	echo "    external goal package OK"
 }
 
-# run_foo_external proves loop-package-v2 (PD4): an EXTERNAL package that ships host assets
-# (loop.json + GUIDE + a skill) projects to BOTH hosts through the same machinery as a builtin —
-# no embedded loop, no embedded binding (the binding is derived host-side).
+# run_foo_external proves an external package added via `loop add` can be enabled on the R1 setup
+# path as capability scope without projecting host assets.
 run_foo_external() {
 	CUR_HOST="foo-external"
 	local proj="$WORK/proj-foo"
 	mkdir -p "$proj"
-	echo "=== E2E external loop-package projection (foo) ==="
+	echo "=== E2E external package setup scope (foo) ==="
 	(
 		cd "$proj"
 		"$MH" setup --host codex --loop memory --principal codex@project --control-url http://127.0.0.1:8787 >/dev/null
-		"$MH" setup --host claude-code --loop memory --principal claude@project --control-url http://127.0.0.1:8899 >/dev/null
 
 		# Author writes a package DIRECTORY, then registers it via the product front door
 		# (`loop add`) — the minimal-onboarding path (P2): copy under the canonical name + validate
@@ -452,17 +449,14 @@ run_foo_external() {
 		[ -f .mnemon/loops/foo/capability.json ] || { echo "loop add did not place foo under .mnemon/loops"; exit 1; }
 		[ -f .mnemon/loops/foo/skills/foo-set/SKILL.md ] || { echo "loop add did not copy the package subtree"; exit 1; }
 
-		# Project foo to BOTH hosts.
+		# Enable foo for the host. R1 setup grants capability scope and keeps host assets static.
 		"$MH" setup --host codex --loop foo --principal codex@project --control-url http://127.0.0.1:8787 >"$WORK/foo-codex.log" 2>&1 \
 			|| { echo "setup --loop foo (codex) failed"; cat "$WORK/foo-codex.log"; exit 1; }
-		"$MH" setup --host claude-code --loop foo --principal claude@project --control-url http://127.0.0.1:8899 >"$WORK/foo-claude.log" 2>&1 \
-			|| { echo "setup --loop foo (claude) failed"; cat "$WORK/foo-claude.log"; exit 1; }
 
-		[ -f .codex/mnemon-foo/GUIDE.md ] || { echo "foo GUIDE not projected to codex runtime surface"; exit 1; }
-		[ -f .codex/skills/foo-set/SKILL.md ] || { echo "foo skill not projected to codex"; exit 1; }
-		[ -f .claude/mnemon-foo/GUIDE.md ] || { echo "foo GUIDE not projected to claude runtime surface"; exit 1; }
-		[ -f .claude/skills/foo-set/SKILL.md ] || { echo "foo skill not projected to claude"; exit 1; }
-		grep -q "declarative external loop package" .codex/mnemon-foo/GUIDE.md || { echo "foo GUIDE content wrong"; exit 1; }
+		[ ! -e .codex/mnemon-foo/GUIDE.md ] || { echo "foo GUIDE must not be projected to codex runtime surface"; exit 1; }
+		[ ! -e .codex/skills/foo-set/SKILL.md ] || { echo "foo skill must not be projected to codex"; exit 1; }
+		grep -q "foo.write_candidate.observed" .mnemon/harness/channel/bindings.json \
+			|| { echo "foo grant missing from binding"; exit 1; }
 
 		# Discoverability (PD7): the generic mnemon-observe skill is generated from the live catalog,
 		# so a freshly-added external kind appears in its mechanism section without any per-kind code.
@@ -470,29 +464,26 @@ run_foo_external() {
 			|| { echo "observe-skill did not reflect the external foo kind"; exit 1; }
 		"$MH" loop capabilities | grep -q "^foo " || { echo "loop capabilities missing foo"; exit 1; }
 
-		# NEGATIVE (loop-package-v2 external-trust): an external package whose hook intents declare an
-		# `include` section (the fragment code face) must REFUSE projection, naming the violation.
-		mkdir -p .mnemon/loops/badfoo/hooks
-		cat >.mnemon/loops/badfoo/capability.json <<-'JSONEOF'
-		{"schema_version":1,"name":"badfoo","observed_type":"badfoo.write_candidate.observed",
-		"proposed_type":"badfoo.write.proposed","resource_kind":"badfoo","items_field":"items",
-		"fields":[{"name":"text","validators":[{"id":"required","params":{"missing_style":"empty"}}]}],
-		"render":{"content":{"member":"bullet-list","params":{"title":"# Badfoo","field":"text"}}}}
-		JSONEOF
-		cat >.mnemon/loops/badfoo/loop.json <<-'JSONEOF'
-		{"schema_version":2,"name":"badfoo","surfaces":{"projection":[],"observation":[]},
-		"assets":{"guide":"GUIDE.md","env":"env.sh","skills":[],"subagents":[]}}
-		JSONEOF
-		printf '# Badfoo\n' >.mnemon/loops/badfoo/GUIDE.md
-		printf '#!/usr/bin/env bash\n' >.mnemon/loops/badfoo/env.sh
-		printf '{"schema_version":1,"hooks":{"prime":{"sections":[{"type":"include","fragment":"sync.sh"}]}}}\n' >.mnemon/loops/badfoo/hooks/intents.json
-		if "$MH" setup --host codex --loop badfoo --principal codex@project --control-url http://127.0.0.1:8787 >"$WORK/badfoo.log" 2>&1; then
-			echo "setup --loop badfoo must fail (an external include intent is the fragment code face)"; exit 1
-		fi
-		grep -q "include" "$WORK/badfoo.log" || { echo "badfoo refusal must name the include violation"; cat "$WORK/badfoo.log"; exit 1; }
-	) || fail "foo external projection failed"
+		"$MH" local run >"$WORK/run-foo.log" 2>&1 &
+		local runpid=$!
+		echo "$runpid" >"$PIDFILE"
+		local tok=".mnemon/harness/channel/credentials/codex-project.token"
+		local up=0 i out
+		for i in $(seq 1 60); do
+			"$MH" control status --addr http://127.0.0.1:8787 --principal codex@project --token-file "$tok" >/dev/null 2>&1 && { up=1; break; }
+			sleep 0.1
+		done
+		[ "$up" = 1 ] || { cat "$WORK/run-foo.log"; exit 1; }
+		out="$("$MH" control observe --addr http://127.0.0.1:8787 --principal codex@project --token-file "$tok" \
+			--type foo.write_candidate.observed --external-id foo1 --payload '{"text":"foo governed by external package"}')"
+		case "$out" in *ticked=true*) ;; *) echo "foo observe: $out"; exit 1 ;; esac
+		out="$("$MH" control pull --addr http://127.0.0.1:8787 --principal codex@project --token-file "$tok")"
+		case "$out" in *resources=1*) ;; *) echo "foo pull: $out"; exit 1 ;; esac
+		{ kill "$runpid" 2>/dev/null; wait "$runpid"; } 2>/dev/null || true
+		rm -f "$PIDFILE"
+	) || fail "foo external setup failed"
 	sleep 0.3
-	echo "    external loop-package projection (foo) OK"
+	echo "    external package setup scope (foo) OK"
 }
 
 # Both hosts run sequentially (the server is stopped between them). codex stays on the default
@@ -901,4 +892,4 @@ run_coordination
 run_subscription
 run_tower
 
-echo "E2E PASS (codex + claude-code; memory + skill + note-external-package + external-goal + foo-projection + sync-pair[memory+journal+assignment] + daemon + coordination + subscription + tower)"
+echo "E2E PASS (codex + claude-code; memory + skill + note-external-package + external-goal + foo-scope + sync-pair[memory+journal+assignment] + daemon + coordination + subscription + tower)"

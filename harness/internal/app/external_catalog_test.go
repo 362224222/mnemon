@@ -209,17 +209,22 @@ func TestExternalGoalCapabilityAdmitsThroughResolvedCatalog(t *testing.T) {
 	}
 }
 
-// setup --loop <external> errors with the pinned message: external packages are admission-equal,
-// not projection-equal — there are no host assets to install.
-func TestSetupRejectsExternalLoopWithPinnedMessage(t *testing.T) {
+func TestSetupAcceptsExternalCapabilityLoop(t *testing.T) {
 	root := t.TempDir()
 	writeExternalGoalPackage(t, root, "goal", goalPackageSpec)
 	var out, errw bytes.Buffer
-	_, err := New(root).Setup(context.Background(), &out, &errw, SetupOptions{
+	res, err := New(root).Setup(context.Background(), &out, &errw, SetupOptions{
 		Host: "codex", Loops: []string{"goal"}, Principal: "codex@project", ProjectRoot: root,
 	})
-	if err == nil || !strings.Contains(err.Error(), "external package declares no host assets (no loop.json)") {
-		t.Fatalf("setup --loop goal (capability-only, no loop.json) must fail with the no-host-assets message, got %v", err)
+	if err != nil {
+		t.Fatalf("setup --loop goal must enable an external capability package: %v\nstderr=%s", err, errw.String())
+	}
+	if config := string(mustRead(t, res.ConfigFile)); !strings.Contains(config, `"goal"`) {
+		t.Fatalf("setup config must record the external loop:\n%s", config)
+	}
+	binding := string(mustRead(t, res.BindingFile))
+	if !strings.Contains(binding, "goal.write_candidate.observed") || !strings.Contains(binding, `"kind": "goal"`) {
+		t.Fatalf("binding must grant the external capability scope:\n%s", binding)
 	}
 
 	// A loop that is neither embedded nor an external package keeps the original diagnosis.
