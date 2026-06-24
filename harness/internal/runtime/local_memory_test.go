@@ -80,7 +80,7 @@ func TestLocalMemoryCandidateAppendsToScopedProjectMemory(t *testing.T) {
 		t.Fatalf("entries need stable distinct ids, got %+v", entries)
 	}
 
-	proj, err := c.PullProjection("codex@project", contract.Subscription{Actor: "codex@project"})
+	proj, err := c.PullEventView("codex@project", contract.Subscription{Actor: "codex@project"})
 	if err != nil {
 		t.Fatalf("pull scoped memory: %v", err)
 	}
@@ -124,7 +124,7 @@ func TestLocalMemoryPullContentIsClampedToBindingScope(t *testing.T) {
 		t.Fatalf("seed secret memory: %s", d.Reason)
 	}
 
-	proj, err := c.PullProjection("codex@project", contract.Subscription{Actor: "codex@project"})
+	proj, err := c.PullEventView("codex@project", contract.Subscription{Actor: "codex@project"})
 	if err != nil {
 		t.Fatalf("default pull: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestLocalMemoryPullContentIsClampedToBindingScope(t *testing.T) {
 			t.Fatalf("default scoped pull leaked out-of-scope content: %+v", proj.Content)
 		}
 	}
-	if _, err := c.PullProjection("codex@project", contract.Subscription{Actor: "codex@project", Refs: []contract.ResourceRef{secret}}); err == nil {
+	if _, err := c.PullEventView("codex@project", contract.Subscription{Actor: "codex@project", Refs: []contract.ResourceRef{secret}}); err == nil {
 		t.Fatal("explicit out-of-scope content pull must be rejected")
 	}
 }

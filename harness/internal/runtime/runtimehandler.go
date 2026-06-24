@@ -6,6 +6,7 @@ import (
 
 	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
 )
 
 // NewRuntimeHandler is the Local Mnemon HTTP channel endpoint over a Runtime.
@@ -21,6 +22,33 @@ import (
 // Auth resolves the principal; the request body never names identity (D7/S9).
 func NewRuntimeHandler(rt *Runtime, auth channel.Authenticator) http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/events/observed", func(w http.ResponseWriter, r *http.Request) {
+		principal, err := auth.Authenticate(r)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusUnauthorized)
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, channel.MaxIngestBytes)
+		var env eventmodel.EventEnvelope
+		if err := json.NewDecoder(r.Body).Decode(&env); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		seq, dup, err := rt.IngestObservedEnvelope(principal, env)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		rec := channel.IngestReceipt{Seq: seq, Dup: dup}
+		if !dup {
+			rec.Ticked = true
+			if _, terr := rt.Tick(); terr != nil {
+				rec.ProcessingError = terr.Error()
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(rec)
+	})
 	mux.HandleFunc("/ingest", func(w http.ResponseWriter, r *http.Request) {
 		principal, err := auth.Authenticate(r)
 		if err != nil {
@@ -50,7 +78,7 @@ func NewRuntimeHandler(rt *Runtime, auth channel.Authenticator) http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(rec)
 	})
-	mux.HandleFunc("/projection", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/event-view", func(w http.ResponseWriter, r *http.Request) {
 		principal, err := auth.Authenticate(r)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusUnauthorized)
@@ -61,7 +89,7 @@ func NewRuntimeHandler(rt *Runtime, auth channel.Authenticator) http.Handler {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		proj, err := rt.API().PullProjection(principal, sub)
+		proj, err := rt.API().PullEventView(principal, sub)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusForbidden)
 			return

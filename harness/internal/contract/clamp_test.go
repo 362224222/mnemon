@@ -3,7 +3,7 @@ package contract
 import "testing"
 
 // contract.ClampRefs is THE one scope-clamp implementation (sync-abi-v1 §2): channel bindings and
-// the syncserver hub both delegate here. Pin its semantics at the source: empty requested defaults
+// the mnemonhub hub both delegate here. Pin its semantics at the source: empty requested defaults
 // to the full scope; narrowing passes; an out-of-scope explicit ref errors; an empty scope denies
 // every explicit ref (fail closed) while empty+empty clamps to nothing.
 func TestContractClampRefsSemantics(t *testing.T) {

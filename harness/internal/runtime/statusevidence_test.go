@@ -44,7 +44,7 @@ func TestChannelStatusEvidence(t *testing.T) {
 		t.Fatal("status must carry the server mode")
 	}
 	// consistent with the scoped pull digest.
-	proj, err := c.PullProjection("codex", contract.Subscription{Actor: "codex"})
+	proj, err := c.PullEventView("codex", contract.Subscription{Actor: "codex"})
 	if err != nil {
 		t.Fatalf("pull: %v", err)
 	}

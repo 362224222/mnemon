@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/projection"
+	"github.com/mnemon-dev/mnemon/harness/internal/eventview"
 )
 
 // BindingSet indexes the channel bindings by principal. It is the in-memory authorizer source for
@@ -86,13 +86,13 @@ func (a *authorizedAPI) Ingest(principal contract.ActorID, env contract.Observat
 	return a.inner.Ingest(principal, env)
 }
 
-func (a *authorizedAPI) PullProjection(principal contract.ActorID, sub contract.Subscription) (projection.Projection, error) {
+func (a *authorizedAPI) PullEventView(principal contract.ActorID, sub contract.Subscription) (eventview.EventView, error) {
 	b, ok := a.bindings.Binding(principal)
 	if !ok {
-		return projection.Projection{}, fmt.Errorf("no channel binding for principal %q", principal)
+		return eventview.EventView{}, fmt.Errorf("no channel binding for principal %q", principal)
 	}
 	if !b.Allows(VerbPull) {
-		return projection.Projection{}, fmt.Errorf("principal %q is not bound to pull", principal)
+		return eventview.EventView{}, fmt.Errorf("principal %q is not bound to pull", principal)
 	}
 	// Clamp to the binding's SubscriptionScope (ClampRefs — the one scope clamp): an empty request
 	// defaults to the whole scope — the auditable narrowing ceiling, not the broader engine
@@ -100,10 +100,10 @@ func (a *authorizedAPI) PullProjection(principal contract.ActorID, sub contract.
 	// server-side subs, so the effective scope is subs ∩ binding.
 	refs, err := b.ClampRefs(sub.Refs)
 	if err != nil {
-		return projection.Projection{}, err
+		return eventview.EventView{}, err
 	}
 	sub.Refs = refs
-	return a.inner.PullProjection(principal, sub)
+	return a.inner.PullEventView(principal, sub)
 }
 
 var _ ServerAPI = (*authorizedAPI)(nil)

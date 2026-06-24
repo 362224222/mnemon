@@ -17,7 +17,7 @@ func agentSubs() map[contract.ActorID]contract.Subscription {
 }
 
 func p0Modes() contract.Modes {
-	return contract.Modes{Conflict: contract.ConflictRebase, Isolation: contract.IsolationProjectionReadSet, Authz: contract.AuthzStrict}
+	return contract.Modes{Conflict: contract.ConflictRebase, Isolation: contract.IsolationEventViewReadSet, Authz: contract.AuthzStrict}
 }
 
 // proposeRule updates the single in-scope memory resource based_on the version it saw.

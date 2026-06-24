@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/projection"
+	"github.com/mnemon-dev/mnemon/harness/internal/eventview"
 )
 
 // ResolvedBinding carries the trusted write identity (Actor) and authorized emit type for a
@@ -29,12 +29,12 @@ func NewBridge(newID, now func() string) *Bridge { return &Bridge{newID: newID, 
 
 // Stamp turns intent into a trusted *.proposed event, OR returns an error if any proposed write targets a
 // ref outside the actor's DISPATCHED SCOPE (write-scope, R11 — the kernel's authz is actor/kind only).
-// Trusted fields come from the binding (write identity), the dispatched projection (read-set + provenance),
+// Trusted fields come from the binding (write identity), the dispatched event view (read-set + provenance),
 // and the trigger (correlation + lineage) — NEVER from the intent payload, even if a hostile callback stuffs
 // "actor"/"based_on" into it (R1/R2). Only Payload (the write set) rides through proposer-controlled; the
 // kernel validates it. An empty/undecodable write set PASSES the bridge (the kernel rejects it as a
 // malformed/empty op, preserving the audit trail); only a DECODED, out-of-scope write is blocked here.
-func (br *Bridge) Stamp(b ResolvedBinding, dispatchedOn projection.Projection, trigger contract.Event, intent contract.ProposedEvent) (contract.Event, error) {
+func (br *Bridge) Stamp(b ResolvedBinding, dispatchedOn eventview.EventView, trigger contract.Event, intent contract.ProposedEvent) (contract.Event, error) {
 	scope := make(map[contract.ResourceRef]bool, len(dispatchedOn.Resources))
 	refs := make([]contract.ResourceRef, 0, len(dispatchedOn.Resources))
 	for _, rv := range dispatchedOn.Resources {
@@ -58,7 +58,7 @@ func (br *Bridge) Stamp(b ResolvedBinding, dispatchedOn projection.Projection, t
 		Actor:         b.Actor, // TRUSTED write identity
 		ResourceRefs:  refs,
 		BasedOn:       dispatchedOn.Resources, // TRUSTED read-set
-		ProjectionRef: dispatchedOn.Ref,       // provenance
+		EventViewRef:  dispatchedOn.Ref,       // provenance
 		ContextDigest: dispatchedOn.Digest,    // provenance
 		CorrelationID: corr,                   // TRUSTED: inherited or minted
 		CausedBy:      trigger.ID,             // lineage

@@ -17,7 +17,7 @@ const (
 )
 
 // Verb is a channel operation. The Agent Integration channel exposes observe (Ingest), pull
-// (PullProjection), render (read-only cue/content), and status. Replica sync gets separate verbs so
+// (PullEventView), render (read-only presentation/content), and status. Replica sync gets separate verbs so
 // a sync credential does not inherit Agent Integration access.
 type Verb string
 
@@ -128,7 +128,7 @@ func (b ChannelBinding) scopeSet() map[contract.ResourceRef]bool {
 // ClampRefs clamps a requested ref set to the binding's SubscriptionScope — the team-scale
 // authorization ceiling, implemented ONCE for pull / sync / status (hand-rolled copies had already
 // diverged on empty-scope handling). The one implementation is contract.ClampRefs — shared with the
-// standalone hub (syncserver), which cannot import channel — and this method DELEGATES to it: empty
+// standalone hub (mnemonhub), which cannot import channel — and this method DELEGATES to it: empty
 // requested defaults to the full scope; any explicit ref outside the scope is an error; an EMPTY
 // scope denies every explicit ref (fail closed). The ingest path keeps its documented exception (an
 // observation naming no refs is unconstrained) at its own call site.

@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
 	"github.com/mnemon-dev/mnemon/harness/internal/rule"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
@@ -54,10 +55,10 @@ type RuntimeConfig struct {
 	// zero (nil) leaves the API unbound — correct for a trusted in-process owner (embedded coreengine).
 	Bindings []channel.ChannelBinding
 
-	// SyncableKinds names the resource kinds this replica PRODUCES Remote Workspace sync commits for —
+	// SyncableKinds names the resource kinds this replica PRODUCES Remote Workspace synced events for —
 	// the produce surface (sync-abi-v2 §4). The assembler injects the catalog's importable kinds
 	// (capability.ImportableKinds), so the produce set is descriptor-derived, never a hardcoded
-	// constant (PD6 replaced contract.SyncableResourceKinds). The zero (nil) produces no sync commits
+	// constant (PD6 replaced contract.SyncableResourceKinds). The zero (nil) produces no synced events
 	// — correct for a runtime with no Remote Workspace. The runtime stays capability-free: this is a
 	// plain contract.ResourceKind slice the app layer fills.
 	SyncableKinds []contract.ResourceKind
@@ -122,10 +123,18 @@ func OpenRuntime(storePath string, cfg RuntimeConfig) (*Runtime, error) {
 	return rt, nil
 }
 
-// API returns the channel boundary (channel.ServerAPI: observe via Ingest, pull via PullProjection) every
+// API returns the channel boundary (channel.ServerAPI: observe via Ingest, pull via PullEventView) every
 // surface speaks to: the bare ControlServer, or — when bindings are configured — a channel.BindingSet
 // authorizer wrapping it (P2.1). The Tick driver and read helpers stay on the unwrapped runtime.
 func (r *Runtime) API() channel.ServerAPI { return r.api }
+
+func (r *Runtime) IngestObservedEnvelope(principal contract.ActorID, env eventmodel.EventEnvelope) (int64, bool, error) {
+	obs, err := observationFromObservedEnvelope(env)
+	if err != nil {
+		return 0, false, err
+	}
+	return r.api.Ingest(principal, obs)
+}
 
 // StorePath is the canonical store path this runtime owns (status/diagnostic evidence).
 func (r *Runtime) StorePath() string { return r.storePath }
@@ -149,7 +158,7 @@ func (r *Runtime) PendingEvents(afterSeq int64) ([]contract.Event, error) {
 // DecisionLedger returns the full decision log in append order — the operator-wide, cross-actor
 // decision history that backs the Control Tower's LEDGER (accepted) and INBOX (rejected escalations)
 // pages (P6). It is READ-ONLY (wraps Store.DecisionsAfter); it opens NO write path. This is the one
-// operator-scoped read the channel's per-actor PullProjection cannot serve, so the Tower facade —
+// operator-scoped read the channel's per-actor PullEventView cannot serve, so the Tower facade —
 // which holds the *Runtime — reads it here rather than over the channel. The caller filters by status
 // (Accepted -> LEDGER, Rejected -> INBOX); the ui package never touches this directly (ui↛store).
 func (r *Runtime) DecisionLedger() ([]contract.Decision, error) {
@@ -188,11 +197,11 @@ func (r *Runtime) Status(principal contract.ActorID) (contract.ChannelStatus, er
 		}
 		sub.Refs = refs
 	}
-	proj, err := r.cs.PullProjection(principal, sub)
+	proj, err := r.cs.PullEventView(principal, sub)
 	if err != nil {
 		return contract.ChannelStatus{}, err
 	}
-	syncCounts, err := r.store.SyncCommitCounts()
+	syncCounts, err := r.store.SyncEventCounts()
 	if err != nil {
 		return contract.ChannelStatus{}, err
 	}

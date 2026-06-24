@@ -14,9 +14,9 @@ import (
 // re-drain finds nothing.
 func TestDrainOutboxClaimsInvalidations(t *testing.T) {
 	rt, err := OpenRuntime(filepath.Join(t.TempDir(), "s.db"), RuntimeConfig{
-		Rules:     rule.NewRuleSet(createOnObserve()),
-		Authority: kernel.AuthorityRules{Allow: map[contract.ActorID][]contract.ResourceKind{"agent": {"memory"}}},
-		Subs:      map[contract.ActorID]contract.Subscription{"agent": {Actor: "agent", Refs: []contract.ResourceRef{{Kind: "memory", ID: "m1"}}}},
+		Rules:       rule.NewRuleSet(createOnObserve()),
+		Authority:   kernel.AuthorityRules{Allow: map[contract.ActorID][]contract.ResourceKind{"agent": {"memory"}}},
+		Subs:        map[contract.ActorID]contract.Subscription{"agent": {Actor: "agent", Refs: []contract.ResourceRef{{Kind: "memory", ID: "m1"}}}},
 		SchemaGuard: kernel.SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}}),
 	})
 	if err != nil {
@@ -52,9 +52,9 @@ func TestDrainOutboxClaimsInvalidations(t *testing.T) {
 // one dead row per accepted decision for the life of the project.
 func TestDrainOutboxPrunesAckedRows(t *testing.T) {
 	rt, err := OpenRuntime(filepath.Join(t.TempDir(), "s.db"), RuntimeConfig{
-		Rules:     rule.NewRuleSet(createOnObserve()),
-		Authority: kernel.AuthorityRules{Allow: map[contract.ActorID][]contract.ResourceKind{"agent": {"memory"}}},
-		Subs:      map[contract.ActorID]contract.Subscription{"agent": {Actor: "agent", Refs: []contract.ResourceRef{{Kind: "memory", ID: "m1"}}}},
+		Rules:       rule.NewRuleSet(createOnObserve()),
+		Authority:   kernel.AuthorityRules{Allow: map[contract.ActorID][]contract.ResourceKind{"agent": {"memory"}}},
+		Subs:        map[contract.ActorID]contract.Subscription{"agent": {Actor: "agent", Refs: []contract.ResourceRef{{Kind: "memory", ID: "m1"}}}},
 		SchemaGuard: kernel.SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}}),
 	})
 	if err != nil {

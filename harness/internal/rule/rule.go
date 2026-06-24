@@ -7,14 +7,14 @@ import (
 	"fmt"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/projection"
+	"github.com/mnemon-dev/mnemon/harness/internal/eventview"
 )
 
-// RuleInput is the typed, read-only input to a rule: the triggering event and the scoped projection it was
-// dispatched on. (Held by rule, not contract, so the projection.Projection dependency lives off the wire — D11.)
+// RuleInput is the typed, read-only input to a rule: the triggering event and the scoped event view it was
+// dispatched on. (Held by rule, not contract, so the eventview.EventView dependency lives off the wire — D11.)
 type RuleInput struct {
 	Event contract.Event
-	View  projection.Projection
+	View  eventview.EventView
 }
 
 // Rule is one admission rule. Actor()/Emits() let the server synthesize a trusted ResolvedBinding for the

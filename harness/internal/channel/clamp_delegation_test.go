@@ -8,7 +8,7 @@ import (
 )
 
 // ChannelBinding.ClampRefs must DELEGATE to contract.ClampRefs — the ONE clamp implementation the
-// standalone hub (syncserver) shares. Pin the delegation by equivalence over the full semantic
+// standalone hub (mnemonhub) shares. Pin the delegation by equivalence over the full semantic
 // matrix (results AND error texts), so a re-grown hand-rolled copy in channel cannot silently
 // diverge from the hub's clamp again.
 func TestChannelClampRefsDelegatesToContractClamp(t *testing.T) {

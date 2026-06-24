@@ -28,6 +28,7 @@ func DefaultSchemaGuard() SchemaGuard {
 		"coordination": {"operation"},
 	}}
 }
+
 // SchemaGuardWith returns the governance DefaultSchemaGuard extended with the given user-kind
 // required fields. The live runtime gets these from the assembler (each enabled capability's
 // declared required header); SchemaGuardWith is for callers that build a kernel WITHOUT assembling a

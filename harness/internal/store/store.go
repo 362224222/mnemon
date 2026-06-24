@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
 	_ "modernc.org/sqlite"
 )
 
@@ -48,10 +49,17 @@ func OpenStore(path string) (*Store, error) {
 		`CREATE TABLE IF NOT EXISTS decisions (decision_id TEXT PRIMARY KEY, op_id TEXT, ingest_seq INTEGER, actor TEXT, correlation_id TEXT, next_action TEXT, status TEXT, payload TEXT NOT NULL);`,
 		`CREATE TABLE IF NOT EXISTS cursors (name TEXT PRIMARY KEY, seq INTEGER NOT NULL);`,
 		`CREATE TABLE IF NOT EXISTS inbox_dedupe (source TEXT, external_id TEXT, event_seq INTEGER NOT NULL, PRIMARY KEY(source,external_id));`,
+		`CREATE TABLE IF NOT EXISTS event_envelopes (seq INTEGER PRIMARY KEY AUTOINCREMENT, schema_version INTEGER NOT NULL, phase TEXT NOT NULL, event_id TEXT NOT NULL, event_type TEXT NOT NULL, subject TEXT NOT NULL, actor TEXT NOT NULL, audience TEXT NOT NULL DEFAULT '', correlation_id TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT '', decision_id TEXT NOT NULL DEFAULT '', envelope TEXT NOT NULL);`,
+		`CREATE INDEX IF NOT EXISTS event_envelopes_phase_idx ON event_envelopes(phase, seq);`,
+		`CREATE INDEX IF NOT EXISTS event_envelopes_type_idx ON event_envelopes(event_type, seq);`,
+		`CREATE INDEX IF NOT EXISTS event_envelopes_subject_idx ON event_envelopes(subject, seq);`,
+		`CREATE INDEX IF NOT EXISTS event_envelopes_actor_idx ON event_envelopes(actor, seq);`,
+		`CREATE INDEX IF NOT EXISTS event_envelopes_audience_idx ON event_envelopes(audience, seq);`,
+		`CREATE INDEX IF NOT EXISTS event_envelopes_correlation_idx ON event_envelopes(correlation_id, seq);`,
 		`CREATE TABLE IF NOT EXISTS outbox (id TEXT PRIMARY KEY, kind TEXT NOT NULL, event_seq INTEGER NOT NULL DEFAULT 0, target TEXT NOT NULL DEFAULT '', payload TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending', idempotency_key TEXT UNIQUE, attempts INTEGER NOT NULL DEFAULT 0, lease_owner TEXT NOT NULL DEFAULT '', lease_until INTEGER NOT NULL DEFAULT 0);`,
 		`CREATE TABLE IF NOT EXISTS sync_replica (id INTEGER PRIMARY KEY CHECK (id=1), replica_id TEXT NOT NULL, created_at TEXT NOT NULL);`,
-		`CREATE TABLE IF NOT EXISTS sync_commits (origin_replica_id TEXT NOT NULL, local_decision_id TEXT NOT NULL, local_ingest_seq INTEGER NOT NULL, actor TEXT NOT NULL, correlation_id TEXT NOT NULL DEFAULT '', resource_kind TEXT NOT NULL, resource_id TEXT NOT NULL, resource_version INTEGER NOT NULL, fields_digest TEXT NOT NULL, fields TEXT NOT NULL, decided_at TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending', remote_peer_id TEXT NOT NULL DEFAULT '', acked_at TEXT NOT NULL DEFAULT '', diagnostic TEXT NOT NULL DEFAULT '', PRIMARY KEY(origin_replica_id, local_decision_id, resource_kind, resource_id));`,
-		`CREATE TABLE IF NOT EXISTS sync_remote_commits (remote_seq INTEGER PRIMARY KEY AUTOINCREMENT, remote_peer_id TEXT NOT NULL, origin_replica_id TEXT NOT NULL, local_decision_id TEXT NOT NULL, local_ingest_seq INTEGER NOT NULL, actor TEXT NOT NULL, correlation_id TEXT NOT NULL DEFAULT '', resource_kind TEXT NOT NULL, resource_id TEXT NOT NULL, resource_version INTEGER NOT NULL, fields_digest TEXT NOT NULL, fields TEXT NOT NULL, decided_at TEXT NOT NULL DEFAULT '', received_at TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'accepted', diagnostic TEXT NOT NULL DEFAULT '', UNIQUE(remote_peer_id, origin_replica_id, local_decision_id));`,
+		`CREATE TABLE IF NOT EXISTS sync_events (origin_replica_id TEXT NOT NULL, local_decision_id TEXT NOT NULL, local_ingest_seq INTEGER NOT NULL, actor TEXT NOT NULL, correlation_id TEXT NOT NULL DEFAULT '', resource_kind TEXT NOT NULL, resource_id TEXT NOT NULL, resource_version INTEGER NOT NULL, fields_digest TEXT NOT NULL, fields TEXT NOT NULL, decided_at TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending', remote_peer_id TEXT NOT NULL DEFAULT '', acked_at TEXT NOT NULL DEFAULT '', diagnostic TEXT NOT NULL DEFAULT '', PRIMARY KEY(origin_replica_id, local_decision_id, resource_kind, resource_id));`,
+		`CREATE TABLE IF NOT EXISTS sync_remote_events (remote_seq INTEGER PRIMARY KEY AUTOINCREMENT, remote_peer_id TEXT NOT NULL, origin_replica_id TEXT NOT NULL, local_decision_id TEXT NOT NULL, local_ingest_seq INTEGER NOT NULL, actor TEXT NOT NULL, correlation_id TEXT NOT NULL DEFAULT '', resource_kind TEXT NOT NULL, resource_id TEXT NOT NULL, resource_version INTEGER NOT NULL, fields_digest TEXT NOT NULL, fields TEXT NOT NULL, decided_at TEXT NOT NULL DEFAULT '', received_at TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'accepted', diagnostic TEXT NOT NULL DEFAULT '', UNIQUE(remote_peer_id, origin_replica_id, local_decision_id));`,
 	} {
 		if _, err := db.Exec(s); err != nil {
 			db.Close()
@@ -68,6 +76,18 @@ func OpenStore(path string) (*Store, error) {
 			_ = release()
 			return nil, err
 		}
+	}
+	for _, col := range []string{"decision_id TEXT NOT NULL DEFAULT ''"} {
+		if _, err := db.Exec(`ALTER TABLE event_envelopes ADD COLUMN ` + col); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+			db.Close()
+			_ = release()
+			return nil, err
+		}
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS event_envelopes_decision_idx ON event_envelopes(decision_id, seq);`); err != nil {
+		db.Close()
+		_ = release()
+		return nil, err
 	}
 	return &Store{db: db, release: release}, nil
 }
@@ -262,6 +282,120 @@ func (t *Tx) insertDedupe(source contract.ActorID, externalID string, seq int64)
 	return err
 }
 
+type EventEnvelopeRecord struct {
+	Seq      int64
+	Envelope eventmodel.EventEnvelope
+}
+
+type EventEnvelopeQuery struct {
+	AfterSeq      int64
+	Phase         eventmodel.EventPhase
+	Type          string
+	Subject       eventmodel.EventSubject
+	Actor         string
+	Audience      string
+	CorrelationID string
+	Limit         int
+}
+
+func (s *Store) AppendEventEnvelope(env eventmodel.EventEnvelope) (int64, error) {
+	var seq int64
+	err := s.WithTx(func(tx *Tx) error {
+		var err error
+		seq, err = tx.AppendEventEnvelopeReturningSeq(env)
+		return err
+	})
+	return seq, err
+}
+
+func (t *Tx) AppendEventEnvelopeReturningSeq(env eventmodel.EventEnvelope) (int64, error) {
+	if err := env.Validate(); err != nil {
+		return 0, err
+	}
+	b, err := json.Marshal(env)
+	if err != nil {
+		return 0, err
+	}
+	res, err := t.tx.Exec(`
+INSERT INTO event_envelopes
+  (schema_version, phase, event_id, event_type, subject, actor, audience, correlation_id, created_at, decision_id, envelope)
+VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		env.SchemaVersion, string(env.Phase), env.Event.ID, env.Event.Type, string(env.Event.Subject),
+		env.Event.Actor, env.Event.Audience, env.Event.CorrelationID, env.Event.CreatedAt, envelopeDecisionID(env), string(b))
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+func (s *Store) EventEnvelopes(q EventEnvelopeQuery) ([]EventEnvelopeRecord, error) {
+	where := []string{"seq>?"}
+	args := []any{q.AfterSeq}
+	if q.Phase != "" {
+		where = append(where, "phase=?")
+		args = append(args, string(q.Phase))
+	}
+	if q.Type != "" {
+		where = append(where, "event_type=?")
+		args = append(args, q.Type)
+	}
+	if q.Subject != "" {
+		where = append(where, "subject=?")
+		args = append(args, string(q.Subject))
+	}
+	if q.Actor != "" {
+		where = append(where, "actor=?")
+		args = append(args, q.Actor)
+	}
+	if q.Audience != "" {
+		where = append(where, "audience=?")
+		args = append(args, q.Audience)
+	}
+	if q.CorrelationID != "" {
+		where = append(where, "correlation_id=?")
+		args = append(args, q.CorrelationID)
+	}
+	limit := q.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	args = append(args, limit)
+	rows, err := s.db.Query(`
+SELECT seq, envelope
+FROM event_envelopes
+WHERE `+strings.Join(where, " AND ")+`
+ORDER BY seq
+LIMIT ?`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []EventEnvelopeRecord
+	for rows.Next() {
+		var rec EventEnvelopeRecord
+		var payload string
+		if err := rows.Scan(&rec.Seq, &payload); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal([]byte(payload), &rec.Envelope); err != nil {
+			return nil, err
+		}
+		if err := rec.Envelope.Validate(); err != nil {
+			return nil, err
+		}
+		out = append(out, rec)
+	}
+	return out, rows.Err()
+}
+
+func envelopeDecisionID(env eventmodel.EventEnvelope) string {
+	if env.Phase != eventmodel.PhaseAccepted {
+		return ""
+	}
+	decisionID, _ := env.Meta["decision_id"].(string)
+	return strings.TrimSpace(decisionID)
+}
+
 // OutboxRow is one pending external effect (a projection invalidation, a job to run). The outbox is the
 // transactional-outbox substrate (S2: an invalidation is produced from the durable decision log under a sink
 // cursor, so it survives a crash between the decision commit and its side-effect — RECOVERABLE, not lost;
@@ -383,6 +517,54 @@ func (t *Tx) AppendDecisionTx(d contract.Decision) error {
 	_, err := t.tx.Exec(`INSERT INTO decisions (decision_id,op_id,ingest_seq,actor,correlation_id,next_action,status,payload) VALUES (?,?,?,?,?,?,?,?)`,
 		d.DecisionID, d.OpID, d.IngestSeq, string(d.Actor), d.CorrelationID, d.NextAction, string(d.Status), string(b))
 	return err
+}
+
+func (t *Tx) RecordAcceptedEventEnvelopesTx(d contract.Decision) error {
+	if d.Status != contract.Accepted {
+		return nil
+	}
+	if d.IngestSeq <= 0 {
+		return nil
+	}
+	acceptedBy, err := t.ensureReplicaID()
+	if err != nil {
+		return err
+	}
+	snapshots := d.NewResources
+	if len(snapshots) == 0 {
+		snapshots = make([]contract.ResourceSnapshot, 0, len(d.NewVersions))
+		for _, rv := range d.NewVersions {
+			_, fields, err := t.ReadResource(rv.Ref)
+			if err != nil {
+				return err
+			}
+			snapshots = append(snapshots, contract.ResourceSnapshot{Ref: rv.Ref, Version: rv.Version, Fields: fields})
+		}
+	}
+	for _, snap := range snapshots {
+		fields := snap.Fields
+		if fields == nil {
+			fields = map[string]any{}
+		}
+		ev := eventmodel.Event{
+			SchemaVersion: eventmodel.SchemaVersion,
+			ID:            fmt.Sprintf("%s:%s/%s", d.DecisionID, snap.Ref.Kind, snap.Ref.ID),
+			Type:          string(snap.Ref.Kind) + ".accepted",
+			Subject:       eventmodel.Subject(string(snap.Ref.Kind), string(snap.Ref.ID)),
+			Actor:         string(d.Actor),
+			Payload: map[string]any{
+				"resource_version": int64(snap.Version),
+				"fields":           fields,
+			},
+			CorrelationID: d.CorrelationID,
+			CreatedAt:     d.AppliedAt,
+		}
+		env := eventmodel.AcceptedEnvelope(ev, d.DecisionID, d.IngestSeq, d.AppliedAt, acceptedBy)
+		if _, err := t.AppendEventEnvelopeReturningSeq(env); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Tx-scoped variants for the atomic dispatch transaction.
@@ -553,45 +735,37 @@ func (s *Store) DecisionsForActor(actor contract.ActorID) ([]contract.Decision, 
 	return out, rows.Err()
 }
 
-func (t *Tx) RecordSyncCommitsTx(d contract.Decision, syncable map[contract.ResourceKind]bool) error {
+func (t *Tx) RecordSyncEventsTx(d contract.Decision, syncable map[contract.ResourceKind]bool) error {
 	if d.Status != contract.Accepted {
 		return nil
 	}
-	replicaID, err := t.ensureReplicaID()
+	envelopes, err := t.acceptedEventEnvelopesForDecision(d.DecisionID)
 	if err != nil {
 		return err
 	}
-	snapshots := d.NewResources
-	if len(snapshots) == 0 {
-		snapshots = make([]contract.ResourceSnapshot, 0, len(d.NewVersions))
-		for _, rv := range d.NewVersions {
-			_, fields, err := t.ReadResource(rv.Ref)
-			if err != nil {
-				return err
-			}
-			snapshots = append(snapshots, contract.ResourceSnapshot{Ref: rv.Ref, Version: rv.Version, Fields: fields})
-		}
+	if len(envelopes) == 0 {
+		return fmt.Errorf("accepted decision %q has no accepted event envelopes", d.DecisionID)
 	}
-	for _, snap := range snapshots {
-		if !syncable[snap.Ref.Kind] {
-			continue
-		}
-		fields := snap.Fields
-		if fields == nil {
-			fields = map[string]any{}
-		}
-		fieldsJSON, err := json.Marshal(fields)
+	for _, env := range envelopes {
+		material, err := syncMaterialFromAcceptedEnvelope(env)
 		if err != nil {
 			return err
 		}
-		digest := digestFields(fields)
+		if !syncable[material.Ref.Kind] {
+			continue
+		}
+		fieldsJSON, err := json.Marshal(material.Fields)
+		if err != nil {
+			return err
+		}
+		digest := digestFields(material.Fields)
 		_, err = t.tx.Exec(`
-INSERT OR IGNORE INTO sync_commits
+INSERT OR IGNORE INTO sync_events
   (origin_replica_id, local_decision_id, local_ingest_seq, actor, correlation_id,
    resource_kind, resource_id, resource_version, fields_digest, fields, decided_at, status)
 VALUES (?,?,?,?,?,?,?,?,?,?,?,'pending')`,
-			replicaID, d.DecisionID, d.IngestSeq, string(d.Actor), d.CorrelationID,
-			string(snap.Ref.Kind), string(snap.Ref.ID), int64(snap.Version), digest, string(fieldsJSON), d.AppliedAt)
+			material.OriginReplicaID, material.DecisionID, material.IngestSeq, material.Actor, material.CorrelationID,
+			string(material.Ref.Kind), string(material.Ref.ID), int64(material.Version), digest, string(fieldsJSON), material.AcceptedAt)
 		if err != nil {
 			return err
 		}
@@ -599,43 +773,180 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?,'pending')`,
 	return nil
 }
 
-func (s *Store) PendingSyncCommits() ([]contract.LocalCommit, error) {
-	return s.syncCommitsByStatus("pending")
+type acceptedSyncMaterial struct {
+	OriginReplicaID string
+	DecisionID      string
+	IngestSeq       int64
+	Actor           string
+	CorrelationID   string
+	Ref             contract.ResourceRef
+	Version         contract.Version
+	Fields          map[string]any
+	AcceptedAt      string
 }
 
-type SyncCommitCounts struct {
+func (t *Tx) acceptedEventEnvelopesForDecision(decisionID string) ([]eventmodel.EventEnvelope, error) {
+	rows, err := t.tx.Query(`
+SELECT envelope
+FROM event_envelopes
+WHERE phase=? AND decision_id=?
+ORDER BY seq`, string(eventmodel.PhaseAccepted), decisionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []eventmodel.EventEnvelope
+	for rows.Next() {
+		var payload string
+		if err := rows.Scan(&payload); err != nil {
+			return nil, err
+		}
+		var env eventmodel.EventEnvelope
+		if err := json.Unmarshal([]byte(payload), &env); err != nil {
+			return nil, err
+		}
+		if err := env.Validate(); err != nil {
+			return nil, err
+		}
+		out = append(out, env)
+	}
+	return out, rows.Err()
+}
+
+func syncMaterialFromAcceptedEnvelope(env eventmodel.EventEnvelope) (acceptedSyncMaterial, error) {
+	if env.Phase != eventmodel.PhaseAccepted {
+		return acceptedSyncMaterial{}, fmt.Errorf("sync material requires accepted envelope, got %q", env.Phase)
+	}
+	ref, err := refFromSubject(env.Event.Subject)
+	if err != nil {
+		return acceptedSyncMaterial{}, err
+	}
+	version, err := int64FromAny(env.Event.Payload["resource_version"])
+	if err != nil {
+		return acceptedSyncMaterial{}, fmt.Errorf("accepted envelope %q has invalid resource_version: %w", env.Event.ID, err)
+	}
+	fields, ok := env.Event.Payload["fields"].(map[string]any)
+	if !ok {
+		return acceptedSyncMaterial{}, fmt.Errorf("accepted envelope %q payload.fields must be an object", env.Event.ID)
+	}
+	decisionID, _ := env.Meta["decision_id"].(string)
+	acceptedBy, _ := env.Meta["accepted_by"].(string)
+	ingestSeq, err := int64FromAny(env.Meta["ingest_seq"])
+	if err != nil {
+		return acceptedSyncMaterial{}, fmt.Errorf("accepted envelope %q has invalid ingest_seq: %w", env.Event.ID, err)
+	}
+	acceptedAt, _ := env.Meta["accepted_at"].(string)
+	return acceptedSyncMaterial{
+		OriginReplicaID: acceptedBy,
+		DecisionID:      decisionID,
+		IngestSeq:       ingestSeq,
+		Actor:           env.Event.Actor,
+		CorrelationID:   env.Event.CorrelationID,
+		Ref:             ref,
+		Version:         contract.Version(version),
+		Fields:          fields,
+		AcceptedAt:      acceptedAt,
+	}, nil
+}
+
+func refFromSubject(subject eventmodel.EventSubject) (contract.ResourceRef, error) {
+	parts := strings.SplitN(string(subject), "/", 2)
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+		return contract.ResourceRef{}, fmt.Errorf("event subject %q is not kind/id", subject)
+	}
+	return contract.ResourceRef{Kind: contract.ResourceKind(parts[0]), ID: contract.ResourceID(parts[1])}, nil
+}
+
+func int64FromAny(value any) (int64, error) {
+	switch v := value.(type) {
+	case int:
+		return int64(v), nil
+	case int8:
+		return int64(v), nil
+	case int16:
+		return int64(v), nil
+	case int32:
+		return int64(v), nil
+	case int64:
+		return v, nil
+	case uint:
+		return int64(v), nil
+	case uint8:
+		return int64(v), nil
+	case uint16:
+		return int64(v), nil
+	case uint32:
+		return int64(v), nil
+	case uint64:
+		if v > uint64(^uint64(0)>>1) {
+			return 0, fmt.Errorf("integer overflows int64")
+		}
+		return int64(v), nil
+	case float64:
+		i := int64(v)
+		if v != float64(i) {
+			return 0, fmt.Errorf("not an integer")
+		}
+		return i, nil
+	default:
+		return 0, fmt.Errorf("unsupported numeric type %T", value)
+	}
+}
+
+func (s *Store) PendingSyncedEvents() ([]eventmodel.EventEnvelope, error) {
+	materials, err := s.syncEventMaterialsByStatus("pending")
+	if err != nil {
+		return nil, err
+	}
+	out := make([]eventmodel.EventEnvelope, 0, len(materials))
+	for _, material := range materials {
+		env, err := contract.SyncedEventEnvelopeFromMaterial(material)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, env)
+	}
+	return out, nil
+}
+
+type SyncEventCounts struct {
 	Pending   int
 	Synced    int
 	Conflicts int
 }
 
-func (s *Store) MarkSyncCommitStatus(originReplicaID, localDecisionID string, ref contract.ResourceRef, status, remotePeerID, at, diagnostic string) error {
+func (s *Store) MarkSyncedEventStatus(originMnemond, eventID string, subject eventmodel.EventSubject, status, remotePeerID, at, diagnostic string) error {
+	localDecisionID := contract.DecisionIDFromEventID(eventID)
+	ref, err := contract.ResourceRefFromEventSubject(subject)
+	if err != nil {
+		return err
+	}
 	res, err := s.db.Exec(`
-UPDATE sync_commits
+UPDATE sync_events
 SET status=?, remote_peer_id=?, acked_at=?, diagnostic=?
 WHERE origin_replica_id=? AND local_decision_id=? AND resource_kind=? AND resource_id=?`,
-		status, remotePeerID, at, diagnostic, originReplicaID, localDecisionID, string(ref.Kind), string(ref.ID))
+		status, remotePeerID, at, diagnostic, originMnemond, localDecisionID, string(ref.Kind), string(ref.ID))
 	if err != nil {
 		return err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		return fmt.Errorf("sync commit %s/%s %s/%s not found", originReplicaID, localDecisionID, ref.Kind, ref.ID)
+		return fmt.Errorf("synced event %s/%s %s/%s not found", originMnemond, eventID, ref.Kind, ref.ID)
 	}
 	return nil
 }
 
-func (s *Store) SyncCommitCounts() (SyncCommitCounts, error) {
-	rows, err := s.db.Query(`SELECT status, COUNT(*) FROM sync_commits GROUP BY status`)
+func (s *Store) SyncEventCounts() (SyncEventCounts, error) {
+	rows, err := s.db.Query(`SELECT status, COUNT(*) FROM sync_events GROUP BY status`)
 	if err != nil {
-		return SyncCommitCounts{}, err
+		return SyncEventCounts{}, err
 	}
 	defer rows.Close()
-	var counts SyncCommitCounts
+	var counts SyncEventCounts
 	for rows.Next() {
 		var status string
 		var n int
 		if err := rows.Scan(&status, &n); err != nil {
-			return SyncCommitCounts{}, err
+			return SyncEventCounts{}, err
 		}
 		switch status {
 		case "pending":
@@ -649,35 +960,55 @@ func (s *Store) SyncCommitCounts() (SyncCommitCounts, error) {
 	return counts, rows.Err()
 }
 
-type RemoteSyncCommitRecord struct {
+type remoteSyncedEventMaterialRecord struct {
 	RemoteSeq  int64
 	RemotePeer string
-	Commit     contract.LocalCommit
+	Material   contract.SyncedEventMaterial
 	Status     string
 	Diagnostic string
 }
 
-func (s *Store) RecordRemoteSyncCommit(remotePeerID string, commit contract.LocalCommit, receivedAt string) (RemoteSyncCommitRecord, error) {
-	var out RemoteSyncCommitRecord
+type RemoteSyncedEventRecord struct {
+	RemoteSeq  int64
+	RemotePeer string
+	Envelope   eventmodel.EventEnvelope
+	Status     string
+	Diagnostic string
+}
+
+func (s *Store) RecordRemoteSyncedEvent(remotePeerID string, env eventmodel.EventEnvelope, receivedAt string) (RemoteSyncedEventRecord, error) {
+	material, err := contract.SyncedEventMaterialFromEnvelope(env)
+	if err != nil {
+		return RemoteSyncedEventRecord{}, err
+	}
+	rec, err := s.recordRemoteSyncedEventMaterial(remotePeerID, material, receivedAt)
+	if err != nil {
+		return RemoteSyncedEventRecord{}, err
+	}
+	return remoteSyncedEventRecordFromMaterial(rec)
+}
+
+func (s *Store) recordRemoteSyncedEventMaterial(remotePeerID string, material contract.SyncedEventMaterial, receivedAt string) (remoteSyncedEventMaterialRecord, error) {
+	var out remoteSyncedEventMaterialRecord
 	err := s.WithTx(func(tx *Tx) error {
-		existing, found, err := tx.readRemoteSyncCommit(remotePeerID, commit.OriginReplicaID, commit.LocalDecisionID)
+		existing, found, err := tx.readRemoteSyncedEventMaterial(remotePeerID, material.OriginReplicaID, material.LocalDecisionID)
 		if err != nil {
 			return err
 		}
 		if found {
-			if sameRemoteSyncCommit(existing.Commit, commit) {
+			if sameSyncedEventMaterial(existing.Material, material) {
 				out = existing
 				return nil
 			}
-			out = RemoteSyncCommitRecord{
+			out = remoteSyncedEventMaterialRecord{
 				RemotePeer: remotePeerID,
-				Commit:     commit,
+				Material:   material,
 				Status:     "conflict",
-				Diagnostic: "sync idempotency key reused with different commit",
+				Diagnostic: "sync idempotency key reused with different event",
 			}
 			return nil
 		}
-		fields := commit.Fields
+		fields := material.Fields
 		if fields == nil {
 			fields = map[string]any{}
 		}
@@ -686,12 +1017,12 @@ func (s *Store) RecordRemoteSyncCommit(remotePeerID string, commit contract.Loca
 			return err
 		}
 		res, err := tx.tx.Exec(`
-INSERT INTO sync_remote_commits
+INSERT INTO sync_remote_events
   (remote_peer_id, origin_replica_id, local_decision_id, local_ingest_seq, actor, correlation_id,
    resource_kind, resource_id, resource_version, fields_digest, fields, decided_at, received_at, status)
 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'accepted')`,
-			remotePeerID, commit.OriginReplicaID, commit.LocalDecisionID, commit.LocalIngestSeq, string(commit.Actor), commit.CorrelationID,
-			string(commit.ResourceRef.Kind), string(commit.ResourceRef.ID), int64(commit.ResourceVersion), commit.FieldsDigest, string(fieldsJSON), commit.DecidedAt, receivedAt)
+			remotePeerID, material.OriginReplicaID, material.LocalDecisionID, material.LocalIngestSeq, string(material.Actor), material.CorrelationID,
+			string(material.ResourceRef.Kind), string(material.ResourceRef.ID), int64(material.ResourceVersion), material.FieldsDigest, string(fieldsJSON), material.DecidedAt, receivedAt)
 		if err != nil {
 			return err
 		}
@@ -699,32 +1030,49 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'accepted')`,
 		if err != nil {
 			return err
 		}
-		commit.Fields = fields
-		commit.Status = "accepted"
-		out = RemoteSyncCommitRecord{RemoteSeq: seq, RemotePeer: remotePeerID, Commit: commit, Status: "accepted"}
+		material.Fields = fields
+		material.Status = "accepted"
+		out = remoteSyncedEventMaterialRecord{RemoteSeq: seq, RemotePeer: remotePeerID, Material: material, Status: "accepted"}
 		return nil
 	})
 	return out, err
 }
 
-func (t *Tx) readRemoteSyncCommit(remotePeerID, originReplicaID, localDecisionID string) (RemoteSyncCommitRecord, bool, error) {
+func remoteSyncedEventRecordFromMaterial(rec remoteSyncedEventMaterialRecord) (RemoteSyncedEventRecord, error) {
+	env, err := contract.SyncedEventEnvelopeFromMaterial(rec.Material)
+	if err != nil {
+		return RemoteSyncedEventRecord{}, err
+	}
+	if rec.RemoteSeq > 0 {
+		env.Meta["cursor"] = fmt.Sprintf("%d", rec.RemoteSeq)
+	}
+	return RemoteSyncedEventRecord{
+		RemoteSeq:  rec.RemoteSeq,
+		RemotePeer: rec.RemotePeer,
+		Envelope:   env,
+		Status:     rec.Status,
+		Diagnostic: rec.Diagnostic,
+	}, nil
+}
+
+func (t *Tx) readRemoteSyncedEventMaterial(remotePeerID, originReplicaID, localDecisionID string) (remoteSyncedEventMaterialRecord, bool, error) {
 	row := t.tx.QueryRow(`
 SELECT remote_seq, remote_peer_id, origin_replica_id, local_decision_id, local_ingest_seq, actor, correlation_id,
        resource_kind, resource_id, resource_version, fields_digest, fields, decided_at, status, diagnostic
-FROM sync_remote_commits
+FROM sync_remote_events
 WHERE remote_peer_id=? AND origin_replica_id=? AND local_decision_id=?`,
 		remotePeerID, originReplicaID, localDecisionID)
-	rec, err := scanRemoteSyncCommit(row)
+	rec, err := scanRemoteSyncedEventMaterial(row)
 	if err == sql.ErrNoRows {
-		return RemoteSyncCommitRecord{}, false, nil
+		return remoteSyncedEventMaterialRecord{}, false, nil
 	}
 	if err != nil {
-		return RemoteSyncCommitRecord{}, false, err
+		return remoteSyncedEventMaterialRecord{}, false, err
 	}
 	return rec, true, nil
 }
 
-func (s *Store) RemoteSyncCommitsAfter(afterSeq int64, excludeOriginReplicaID string, scopes []contract.ResourceRef, limit int) ([]RemoteSyncCommitRecord, int64, error) {
+func (s *Store) remoteSyncedEventMaterialsAfter(afterSeq int64, excludeOriginReplicaID string, scopes []contract.ResourceRef, limit int) ([]remoteSyncedEventMaterialRecord, int64, error) {
 	if limit <= 0 {
 		limit = 100
 	}
@@ -746,7 +1094,7 @@ func (s *Store) RemoteSyncCommitsAfter(afterSeq int64, excludeOriginReplicaID st
 	rows, err := s.db.Query(`
 SELECT remote_seq, remote_peer_id, origin_replica_id, local_decision_id, local_ingest_seq, actor, correlation_id,
        resource_kind, resource_id, resource_version, fields_digest, fields, decided_at, status, diagnostic
-FROM sync_remote_commits
+FROM sync_remote_events
 WHERE `+where+`
 ORDER BY remote_seq
 LIMIT ?`, args...)
@@ -754,10 +1102,10 @@ LIMIT ?`, args...)
 		return nil, 0, err
 	}
 	defer rows.Close()
-	var out []RemoteSyncCommitRecord
+	var out []remoteSyncedEventMaterialRecord
 	var next int64 = afterSeq
 	for rows.Next() {
-		rec, err := scanRemoteSyncCommit(rows)
+		rec, err := scanRemoteSyncedEventMaterial(rows)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -769,11 +1117,27 @@ LIMIT ?`, args...)
 	return out, next, rows.Err()
 }
 
-// RemoteSyncCommitCount is the hub's "commits received" counter: the total commits accepted into the
-// append-only sync_remote_commits log (rejected/conflicted commits are never inserted).
-func (s *Store) RemoteSyncCommitCount() (int64, error) {
+func (s *Store) RemoteSyncedEventsAfter(afterSeq int64, excludeOriginMnemond string, scopes []contract.ResourceRef, limit int) ([]RemoteSyncedEventRecord, int64, error) {
+	materials, next, err := s.remoteSyncedEventMaterialsAfter(afterSeq, excludeOriginMnemond, scopes, limit)
+	if err != nil {
+		return nil, 0, err
+	}
+	out := make([]RemoteSyncedEventRecord, 0, len(materials))
+	for _, material := range materials {
+		rec, err := remoteSyncedEventRecordFromMaterial(material)
+		if err != nil {
+			return nil, 0, err
+		}
+		out = append(out, rec)
+	}
+	return out, next, nil
+}
+
+// RemoteSyncedEventCount is the hub's "events received" counter: the total synced events accepted
+// into the remote event ledger (rejected/conflicted events are never inserted).
+func (s *Store) RemoteSyncedEventCount() (int64, error) {
 	var n int64
-	err := s.db.QueryRow(`SELECT COUNT(*) FROM sync_remote_commits`).Scan(&n)
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM sync_remote_events`).Scan(&n)
 	return n, err
 }
 
@@ -799,26 +1163,26 @@ func (s *Store) CursorsByPrefix(prefix string) (map[string]int64, error) {
 	return out, rows.Err()
 }
 
-func scanRemoteSyncCommit(row rowScanner) (RemoteSyncCommitRecord, error) {
-	var rec RemoteSyncCommitRecord
+func scanRemoteSyncedEventMaterial(row rowScanner) (remoteSyncedEventMaterialRecord, error) {
+	var rec remoteSyncedEventMaterialRecord
 	var actor, kind, id, fieldsJSON string
 	var version int64
-	err := row.Scan(&rec.RemoteSeq, &rec.RemotePeer, &rec.Commit.OriginReplicaID, &rec.Commit.LocalDecisionID, &rec.Commit.LocalIngestSeq, &actor, &rec.Commit.CorrelationID,
-		&kind, &id, &version, &rec.Commit.FieldsDigest, &fieldsJSON, &rec.Commit.DecidedAt, &rec.Status, &rec.Diagnostic)
+	err := row.Scan(&rec.RemoteSeq, &rec.RemotePeer, &rec.Material.OriginReplicaID, &rec.Material.LocalDecisionID, &rec.Material.LocalIngestSeq, &actor, &rec.Material.CorrelationID,
+		&kind, &id, &version, &rec.Material.FieldsDigest, &fieldsJSON, &rec.Material.DecidedAt, &rec.Status, &rec.Diagnostic)
 	if err != nil {
-		return RemoteSyncCommitRecord{}, err
+		return remoteSyncedEventMaterialRecord{}, err
 	}
-	rec.Commit.Actor = contract.ActorID(actor)
-	rec.Commit.ResourceRef = contract.ResourceRef{Kind: contract.ResourceKind(kind), ID: contract.ResourceID(id)}
-	rec.Commit.ResourceVersion = contract.Version(version)
-	rec.Commit.Status = rec.Status
-	if err := json.Unmarshal([]byte(fieldsJSON), &rec.Commit.Fields); err != nil {
-		return RemoteSyncCommitRecord{}, err
+	rec.Material.Actor = contract.ActorID(actor)
+	rec.Material.ResourceRef = contract.ResourceRef{Kind: contract.ResourceKind(kind), ID: contract.ResourceID(id)}
+	rec.Material.ResourceVersion = contract.Version(version)
+	rec.Material.Status = rec.Status
+	if err := json.Unmarshal([]byte(fieldsJSON), &rec.Material.Fields); err != nil {
+		return remoteSyncedEventMaterialRecord{}, err
 	}
 	return rec, nil
 }
 
-func sameRemoteSyncCommit(a, b contract.LocalCommit) bool {
+func sameSyncedEventMaterial(a, b contract.SyncedEventMaterial) bool {
 	return a.LocalIngestSeq == b.LocalIngestSeq &&
 		a.Actor == b.Actor &&
 		a.CorrelationID == b.CorrelationID &&
@@ -827,18 +1191,18 @@ func sameRemoteSyncCommit(a, b contract.LocalCommit) bool {
 		a.FieldsDigest == b.FieldsDigest
 }
 
-func (s *Store) syncCommitsByStatus(status string) ([]contract.LocalCommit, error) {
+func (s *Store) syncEventMaterialsByStatus(status string) ([]contract.SyncedEventMaterial, error) {
 	rows, err := s.db.Query(`
 SELECT origin_replica_id, local_decision_id, local_ingest_seq, actor, correlation_id,
        resource_kind, resource_id, resource_version, fields_digest, fields, decided_at, status
-FROM sync_commits WHERE status=? ORDER BY local_ingest_seq, local_decision_id, resource_kind, resource_id`, status)
+FROM sync_events WHERE status=? ORDER BY local_ingest_seq, local_decision_id, resource_kind, resource_id`, status)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []contract.LocalCommit
+	var out []contract.SyncedEventMaterial
 	for rows.Next() {
-		var c contract.LocalCommit
+		var c contract.SyncedEventMaterial
 		var actor, kind, id, fieldsJSON string
 		var version int64
 		if err := rows.Scan(&c.OriginReplicaID, &c.LocalDecisionID, &c.LocalIngestSeq, &actor, &c.CorrelationID,

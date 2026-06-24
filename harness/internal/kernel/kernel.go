@@ -59,7 +59,7 @@ func (k *Kernel) Apply(op contract.KernelOp, m contract.Modes) contract.Decision
 	}
 
 	err := k.store.WithTx(func(tx *store.Tx) error {
-		if m.Isolation == contract.IsolationProjectionReadSet { // read-set validation (Invariant #6)
+		if m.Isolation == contract.IsolationEventViewReadSet { // read-set validation (Invariant #6)
 			for _, rv := range op.ReadSet {
 				cur, e := tx.ReadVersion(rv.Ref)
 				if e != nil {
@@ -109,7 +109,10 @@ func (k *Kernel) Apply(op contract.KernelOp, m contract.Modes) contract.Decision
 		d.AppliedAt = time.Now().UTC().Format(time.RFC3339)
 		d.NewVersions = newVers
 		d.NewResources = newResources
-		return tx.AppendDecisionTx(d)
+		if err := tx.AppendDecisionTx(d); err != nil {
+			return err
+		}
+		return tx.RecordAcceptedEventEnvelopesTx(d)
 	})
 	if err == nil {
 		return d

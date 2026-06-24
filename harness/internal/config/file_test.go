@@ -22,7 +22,7 @@ func TestLoadConfigRoundTrips(t *testing.T) {
   "capabilities": {
     "memory": {"enabled": true, "resource_ref": "memory/project", "rule_ref": "native:memory"}
   },
-  "background": {"sync": "disabled", "projection_refresh": "manual"}
+  "background": {"sync": "disabled", "event_view_refresh": "manual"}
 }`))
 	if err != nil {
 		t.Fatalf("load valid config: %v", err)

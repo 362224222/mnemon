@@ -28,7 +28,7 @@ func TestEmptyRefPullClampedToBindingScope(t *testing.T) {
 	}
 	defer rt.Close()
 
-	proj, err := rt.API().PullProjection("codex", contract.Subscription{Actor: "codex"})
+	proj, err := rt.API().PullEventView("codex", contract.Subscription{Actor: "codex"})
 	if err != nil {
 		t.Fatalf("pull: %v", err)
 	}

@@ -70,11 +70,11 @@ func TestBindingFileChannelTokenAuth(t *testing.T) {
 	if st.Principal != "codex@project" || st.ActorKind != contract.KindHostAgent {
 		t.Fatalf("token must resolve to the bound principal/kind; got %+v", st)
 	}
-	if _, err := good.PullProjection("", contract.Subscription{Actor: "codex@project", Refs: []contract.ResourceRef{{Kind: "memory", ID: "m1"}}}); err != nil {
+	if _, err := good.PullEventView("", contract.Subscription{Actor: "codex@project", Refs: []contract.ResourceRef{{Kind: "memory", ID: "m1"}}}); err != nil {
 		t.Fatalf("in-scope pull: %v", err)
 	}
 	// cross-scope pull refused.
-	if _, err := good.PullProjection("", contract.Subscription{Actor: "codex@project", Refs: []contract.ResourceRef{{Kind: "memory", ID: "secret"}}}); err == nil {
+	if _, err := good.PullEventView("", contract.Subscription{Actor: "codex@project", Refs: []contract.ResourceRef{{Kind: "memory", ID: "secret"}}}); err == nil {
 		t.Fatal("cross-scope pull must be refused")
 	}
 	// unknown token rejected.

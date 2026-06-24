@@ -89,7 +89,7 @@ func TestSyncClientTLSRoundTripWithCAFile(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(contract.SyncStatusResponse{Principal: "replica-a@team", RemoteWorkspace: "connected", HubCommitsReceived: 7})
+		_ = json.NewEncoder(w).Encode(contract.SyncStatusResponse{Principal: "replica-a@team", RemoteWorkspace: "connected", HubEventsReceived: 7})
 	}))
 	defer srv.Close()
 
@@ -106,7 +106,7 @@ func TestSyncClientTLSRoundTripWithCAFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("status over pinned TLS: %v", err)
 	}
-	if st.HubCommitsReceived != 7 || st.Principal != "replica-a@team" {
+	if st.HubEventsReceived != 7 || st.Principal != "replica-a@team" {
 		t.Fatalf("unexpected status payload: %+v", st)
 	}
 

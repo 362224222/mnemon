@@ -11,15 +11,15 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
 
-// #9: PullProjection must serve only the actor's CONFIGURED scope; client-named out-of-scope refs are denied.
-func TestPullProjectionEnforcesConfiguredScope(t *testing.T) {
+// #9: PullEventView must serve only the actor's CONFIGURED scope; client-named out-of-scope refs are denied.
+func TestPullEventViewEnforcesConfiguredScope(t *testing.T) {
 	_, k, cs := newServerWith(t, rule.NewRuleSet(proposeRule()))
 	// a resource the agent is NOT configured to see (agentSubs scope = {m1}).
 	if d := k.Apply(contract.KernelOp{OpID: "secret", Actor: "agent", Writes: []contract.ResourceWrite{
 		{Ref: contract.ResourceRef{Kind: "memory", ID: "secret"}, Kind: contract.OpCreate, Fields: map[string]any{"content": "top"}}}}, p0Modes()); d.Status != contract.Accepted {
 		t.Fatalf("seed secret: %s", d.Reason)
 	}
-	proj, err := cs.PullProjection("agent", contract.Subscription{Actor: "agent", Refs: []contract.ResourceRef{{Kind: "memory", ID: "secret"}}})
+	proj, err := cs.PullEventView("agent", contract.Subscription{Actor: "agent", Refs: []contract.ResourceRef{{Kind: "memory", ID: "secret"}}})
 	if err != nil {
 		t.Fatalf("pull: %v", err)
 	}

@@ -37,7 +37,7 @@ func TestLocalSkillCandidateCreatesSyncPendingDeclaration(t *testing.T) {
 		t.Fatalf("observe skill candidate: %v", err)
 	}
 
-	proj, err := client.PullProjection("codex@project", contract.Subscription{Actor: "codex@project"})
+	proj, err := client.PullEventView("codex@project", contract.Subscription{Actor: "codex@project"})
 	if err != nil {
 		t.Fatalf("pull skill projection: %v", err)
 	}
@@ -56,12 +56,12 @@ func TestLocalSkillCandidateCreatesSyncPendingDeclaration(t *testing.T) {
 	if !ok || decl["skill_id"] != "release-checklist" || decl["status"] != "active" {
 		t.Fatalf("unexpected declaration: %+v", decls[0])
 	}
-	pending, err := rt.store.PendingSyncCommits()
+	pending, err := rt.store.PendingSyncedEvents()
 	if err != nil {
-		t.Fatalf("pending sync commits: %v", err)
+		t.Fatalf("pending synced events: %v", err)
 	}
-	if len(pending) != 1 || pending[0].ResourceRef.Kind != "skill" || pending[0].ResourceRef.ID != "project" {
-		t.Fatalf("skill declaration must become pending sync commit, got %+v", pending)
+	if len(pending) != 1 || pending[0].Event.Subject != "skill/project" {
+		t.Fatalf("skill declaration must become pending synced event, got %+v", pending)
 	}
 }
 
@@ -101,7 +101,7 @@ func TestLocalSkillLifecycleChangesAppendDeclarations(t *testing.T) {
 		}
 	}
 
-	proj, err := client.PullProjection("codex@project", contract.Subscription{Actor: "codex@project"})
+	proj, err := client.PullEventView("codex@project", contract.Subscription{Actor: "codex@project"})
 	if err != nil {
 		t.Fatalf("pull skill projection: %v", err)
 	}

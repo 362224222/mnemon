@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/projection"
+	"github.com/mnemon-dev/mnemon/harness/internal/eventview"
 )
 
 // principalHeader carries the AUTHENTICATED edge identity. The server trusts THIS, never the request body
@@ -141,7 +141,7 @@ func NewHTTPHandlerWithAuth(api ServerAPI, auth Authenticator) http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(IngestReceipt{Seq: seq, Dup: dup})
 	})
-	mux.HandleFunc("/projection", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/event-view", func(w http.ResponseWriter, r *http.Request) {
 		principal, err := auth.Authenticate(r)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusUnauthorized)
@@ -152,7 +152,7 @@ func NewHTTPHandlerWithAuth(api ServerAPI, auth Authenticator) http.Handler {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		proj, err := api.PullProjection(principal, sub)
+		proj, err := api.PullEventView(principal, sub)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusForbidden) // identity/scope violation
 			return
@@ -256,32 +256,32 @@ func (c *Client) Status(_ contract.ActorID) (contract.ChannelStatus, error) {
 	return st, nil
 }
 
-// PullProjection fetches the actor's scoped view from the server. The principal argument is ignored: the
+// PullEventView fetches the actor's scoped view from the server. The principal argument is ignored: the
 // subscription's actor is sent in the body and the server cross-checks it against the bound credential header,
 // so an edge cannot pull another actor's scope (D7/S9).
-func (c *Client) PullProjection(_ contract.ActorID, sub contract.Subscription) (projection.Projection, error) {
+func (c *Client) PullEventView(_ contract.ActorID, sub contract.Subscription) (eventview.EventView, error) {
 	body, err := json.Marshal(sub)
 	if err != nil {
-		return projection.Projection{}, err
+		return eventview.EventView{}, err
 	}
-	req, err := http.NewRequest(http.MethodPost, c.baseURL+"/projection", bytes.NewReader(body))
+	req, err := http.NewRequest(http.MethodPost, c.baseURL+"/event-view", bytes.NewReader(body))
 	if err != nil {
-		return projection.Projection{}, err
+		return eventview.EventView{}, err
 	}
 	c.setAuth(req)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return projection.Projection{}, err
+		return eventview.EventView{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
-		return projection.Projection{}, fmt.Errorf("pull failed: %s: %s", resp.Status, string(b))
+		return eventview.EventView{}, fmt.Errorf("pull failed: %s: %s", resp.Status, string(b))
 	}
-	var proj projection.Projection
+	var proj eventview.EventView
 	if err := json.NewDecoder(resp.Body).Decode(&proj); err != nil {
-		return projection.Projection{}, err
+		return eventview.EventView{}, err
 	}
 	return proj, nil
 }

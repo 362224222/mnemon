@@ -98,7 +98,7 @@ type Event struct {
 	Actor         ActorID           `json:"actor"`
 	ResourceRefs  []ResourceRef     `json:"resource_refs"`
 	BasedOn       []ResourceVersion `json:"based_on"`       // read-set (Invariant #6)
-	ProjectionRef string            `json:"projection_ref"` // provenance of the projection acted on
+	EventViewRef  string            `json:"event_view_ref"` // provenance of the event view acted on
 	ContextDigest string            `json:"context_digest"` // provenance; P1 may promote to a validation anchor
 	CorrelationID string            `json:"correlation_id"`
 	CausedBy      string            `json:"caused_by,omitempty"`
@@ -155,7 +155,7 @@ type Diagnostic struct {
 
 // Subscription is a scope descriptor: which refs an actor may see, at what privacy tier. It lives in contract
 // (not server) to avoid a projection<->server cycle (D11/blocker #3). The server builds an actor's scoped
-// projection from its Subscription, and the projection identity (forActor) is the authenticated principal — a
+// projection from its Subscription, and the event view identity (forActor) is the authenticated principal — a
 // client never names its own scope on the wire (S9).
 type Subscription struct {
 	Actor       ActorID
@@ -200,10 +200,10 @@ func ResolveBudgetTier(t BudgetTier) (BudgetTier, error) {
 	return t, nil
 }
 
-// LocalCommit is the append-only local sync unit materialized from an accepted local decision.
+// SyncedEventMaterial is the append-only local sync unit materialized from an accepted local decision.
 // It is durable local state; push/pull transports may serialize it, but Agent Integration never
 // handles it directly.
-type LocalCommit struct {
+type SyncedEventMaterial struct {
 	OriginReplicaID string
 	LocalDecisionID string
 	LocalIngestSeq  int64
@@ -226,9 +226,9 @@ const (
 	ConflictAutoMergeDisjoint = "auto_merge_disjoint"
 	ConflictDeferToHuman      = "defer_to_human"
 
-	IsolationWriteCAS          = "write_cas"
-	IsolationProjectionReadSet = "projection_read_set"
-	// "serializable" intentionally ABSENT until P1 evidence shows it differs from projection_read_set (§10).
+	IsolationWriteCAS         = "write_cas"
+	IsolationEventViewReadSet = "event_view_read_set"
+	// "serializable" intentionally ABSENT until P1 evidence shows it differs from event_view_read_set (§10).
 
 	AuthzStrict = "strict" // enforce rules; violation -> Rejected. The only IMPLEMENTED authz mode.
 	// Reserved — NOT in AuthzCatalog until implemented with real, distinct teeth (mirrors `serializable`).
@@ -244,7 +244,7 @@ const (
 // Catalog membership — the define≠select guard (Invariant #12) checks against these.
 var (
 	ConflictCatalog  = map[string]bool{ConflictReject: true, ConflictRebase: true, ConflictAutoMergeDisjoint: true, ConflictDeferToHuman: true}
-	IsolationCatalog = map[string]bool{IsolationWriteCAS: true, IsolationProjectionReadSet: true}
+	IsolationCatalog = map[string]bool{IsolationWriteCAS: true, IsolationEventViewReadSet: true}
 	AuthzCatalog     = map[string]bool{AuthzStrict: true} // only strict is implemented; the rest are reserved (see consts above)
 )
 
@@ -267,7 +267,7 @@ var (
 // THIS — a divergence between the two silently breaks I6 (replay under different conflict
 // semantics can accept what live rejected; exactly the historical replay-rebase defect).
 func DefaultModes() Modes {
-	return Modes{Conflict: ConflictReject, Isolation: IsolationProjectionReadSet, Authz: AuthzStrict}
+	return Modes{Conflict: ConflictReject, Isolation: IsolationEventViewReadSet, Authz: AuthzStrict}
 }
 
 var KindCatalog = map[ResourceKind]bool{"lease": true, "budget": true, "receipt": true, "coordination": true}

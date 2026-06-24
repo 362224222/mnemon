@@ -42,7 +42,7 @@ func fixtureCatalog(t *testing.T, names ...string) map[string]capability.Capabil
 // A 3rd capability (note) stands up end-to-end through config + the generic kind alone — no new rule
 // code: Assemble selects the note rule from the provided catalog (note is a fixture/external-package
 // capability since the P1 demotion, not a builtin) and admits a note candidate through the
-// channel -> tick -> kernel -> projection.
+// channel -> tick -> kernel -> eventview.
 func TestAssembleAdmitsConfiguredNoteCapabilityEndToEnd(t *testing.T) {
 	ref := contract.ResourceRef{Kind: "note", ID: "project"}
 	binding := channel.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})

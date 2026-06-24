@@ -13,8 +13,9 @@ import (
 
 	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
+	"github.com/mnemon-dev/mnemon/harness/internal/eventview"
 	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
-	"github.com/mnemon-dev/mnemon/harness/internal/projection"
 	"github.com/mnemon-dev/mnemon/harness/internal/reconcile"
 	"github.com/mnemon-dev/mnemon/harness/internal/rule"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
@@ -39,9 +40,9 @@ type ControlServer struct {
 	modes      contract.Modes
 	newID      func() string
 	now        func() string
-	// syncableKinds is the produce surface: the resource kinds a host decision becomes a pending sync
-	// commit for (sync-abi-v2 §4). Descriptor-derived and injected by OpenRuntime from
-	// RuntimeConfig.SyncableKinds; nil = produce no sync commits.
+	// syncableKinds is the produce surface: the resource kinds a host decision becomes a pending synced
+	// event for (sync-abi-v2 §4). Descriptor-derived and injected by OpenRuntime from
+	// RuntimeConfig.SyncableKinds; nil = produce no synced events.
 	syncableKinds map[contract.ResourceKind]bool
 }
 
@@ -92,9 +93,81 @@ func (cs *ControlServer) Ingest(principal contract.ActorID, env contract.Observa
 	return cs.store.IngestObservation(env)
 }
 
+func (cs *ControlServer) IngestObservedEnvelope(principal contract.ActorID, env eventmodel.EventEnvelope) (int64, bool, error) {
+	obs, err := observationFromObservedEnvelope(env)
+	if err != nil {
+		return 0, false, err
+	}
+	return cs.Ingest(principal, obs)
+}
+
+func observationFromObservedEnvelope(env eventmodel.EventEnvelope) (contract.ObservationEnvelope, error) {
+	if env.Phase != eventmodel.PhaseObserved {
+		return contract.ObservationEnvelope{}, fmt.Errorf("ingest envelope: phase must be %q, got %q", eventmodel.PhaseObserved, env.Phase)
+	}
+	if err := env.Validate(); err != nil {
+		return contract.ObservationEnvelope{}, err
+	}
+	externalID, _ := env.Meta["external_id"].(string)
+	externalID = strings.TrimSpace(externalID)
+	if externalID == "" {
+		return contract.ObservationEnvelope{}, fmt.Errorf("ingest envelope: observed meta external_id is required")
+	}
+	refs, err := resourceRefsFromEventSubject(env.Event.Subject)
+	if err != nil {
+		return contract.ObservationEnvelope{}, err
+	}
+	payload := copyEventPayload(env.Event.Payload)
+	if env.Event.TTL != "" {
+		if _, ok := payload["ttl"]; !ok {
+			payload["ttl"] = env.Event.TTL
+		}
+	}
+	return contract.ObservationEnvelope{
+		ExternalID: externalID,
+		Event: contract.Event{
+			SchemaVersion: env.Event.SchemaVersion,
+			ID:            env.Event.ID,
+			TS:            env.Event.CreatedAt,
+			Type:          env.Event.Type,
+			Actor:         contract.ActorID(env.Event.Actor),
+			ResourceRefs:  refs,
+			CorrelationID: env.Event.CorrelationID,
+			CausedBy:      firstCause(env.Event.CausedBy),
+			Payload:       payload,
+		},
+	}, nil
+}
+
+func resourceRefsFromEventSubject(subject eventmodel.EventSubject) ([]contract.ResourceRef, error) {
+	parts := strings.SplitN(string(subject), "/", 2)
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+		return nil, fmt.Errorf("ingest envelope: event subject %q must be kind/id", subject)
+	}
+	return []contract.ResourceRef{{Kind: contract.ResourceKind(parts[0]), ID: contract.ResourceID(parts[1])}}, nil
+}
+
+func copyEventPayload(payload map[string]any) map[string]any {
+	if payload == nil {
+		return map[string]any{}
+	}
+	out := make(map[string]any, len(payload))
+	for key, value := range payload {
+		out[key] = value
+	}
+	return out
+}
+
+func firstCause(causes []string) string {
+	if len(causes) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(causes[0])
+}
+
 // normalizeObservedEvent turns a client EventDraft into a server-stamped observed Event (the Event
 // Intake duty): it STAMPS the server-authoritative fields from the AUTHENTICATED principal (id, ts,
-// schema version, actor) and ZEROES the client-forgeable provenance (read-set, projection ref, ingest
+// schema version, actor) and ZEROES the client-forgeable provenance (read-set, event-view ref, ingest
 // seq). The payload, resource refs, correlation/lineage, and context digest are preserved — a client
 // can never forge identity or a read-set on the wire (D7/S9).
 func (cs *ControlServer) normalizeObservedEvent(principal contract.ActorID, ev *contract.Event) error {
@@ -102,7 +175,7 @@ func (cs *ControlServer) normalizeObservedEvent(principal contract.ActorID, ev *
 		return err
 	}
 	ev.SchemaVersion, ev.ID, ev.TS, ev.Actor = 1, cs.newID(), cs.now(), principal // STAMP
-	ev.BasedOn, ev.ProjectionRef, ev.IngestSeq = nil, "", 0                       // ZERO forgeable
+	ev.BasedOn, ev.EventViewRef, ev.IngestSeq = nil, "", 0                        // ZERO forgeable
 	return nil
 }
 
@@ -127,11 +200,11 @@ func validateObservedType(t string) error {
 	return nil
 }
 
-// PullProjection serves an actor's scoped, server-built view. The subscription's actor MUST equal the
+// PullEventView serves an actor's scoped, server-built view. The subscription's actor MUST equal the
 // authenticated principal (S9/D7): a client can never name another actor's scope on the wire.
-func (cs *ControlServer) PullProjection(principal contract.ActorID, sub contract.Subscription) (projection.Projection, error) {
+func (cs *ControlServer) PullEventView(principal contract.ActorID, sub contract.Subscription) (eventview.EventView, error) {
 	if sub.Actor != principal {
-		return projection.Projection{}, fmt.Errorf("subscription actor %q does not match authenticated principal %q", sub.Actor, principal)
+		return eventview.EventView{}, fmt.Errorf("subscription actor %q does not match authenticated principal %q", sub.Actor, principal)
 	}
 	// S9: serve ONLY the actor's server-CONFIGURED scope. The client may NARROW (request a subset) but never
 	// widen — requested refs are intersected with the configured scope, so a client-named out-of-scope ref is
@@ -151,7 +224,7 @@ func (cs *ControlServer) PullProjection(principal contract.ActorID, sub contract
 			refs = append(refs, r)
 		}
 	}
-	return projection.ScopedView(cs.store, contract.Subscription{Actor: principal, Refs: refs, PrivacyTier: configured.PrivacyTier}), nil
+	return eventview.ScopedView(cs.store, contract.Subscription{Actor: principal, Refs: refs, PrivacyTier: configured.PrivacyTier}), nil
 }
 
 // Tick runs one governed cycle:
@@ -265,10 +338,10 @@ func (cs *ControlServer) dispatchOne(ev contract.Event) ([]contract.Event, error
 	return stamped, nil
 }
 
-// scopedView builds the actor's scoped projection. (P2 strengthens the scoping + digest behind this seam;
+// scopedView builds the actor's scoped eventview. (P2 strengthens the scoping + digest behind this seam;
 // the call site stays stable.)
-func (cs *ControlServer) scopedView(actor contract.ActorID) projection.Projection {
-	return projection.ScopedView(cs.store, cs.subs[actor])
+func (cs *ControlServer) scopedView(actor contract.ActorID) eventview.EventView {
+	return eventview.ScopedView(cs.store, cs.subs[actor])
 }
 
 // diagnosticEvent builds a durable "*.diagnostic" event in the trigger's domain (S7). Domain = the prefix of
@@ -316,11 +389,11 @@ func (cs *ControlServer) processDecisionSideEffects() error {
 					}
 					// cs.syncableKinds is the produce surface, descriptor-derived from the replica's
 					// capability catalog (sync-abi-v2 §4): a host decision on a syncable kind becomes a
-					// pending sync commit. The hub's accept surface is its per-replica grant scope; the
-					// two align by configuration (a mismatch surfaces as a per-commit rejection, never a
+					// pending synced event. The hub's accept surface is its per-replica grant scope; the
+					// two align by configuration (a mismatch surfaces as a per-event rejection, never a
 					// silent drop). The sync-import principal is excluded — imported writes never re-emit.
 					if d.Actor != contract.SyncImportActor {
-						if err := tx.RecordSyncCommitsTx(d, cs.syncableKinds); err != nil {
+						if err := tx.RecordSyncEventsTx(d, cs.syncableKinds); err != nil {
 							return err
 						}
 					}

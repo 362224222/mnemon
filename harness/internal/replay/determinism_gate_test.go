@@ -19,9 +19,9 @@ func gateRuntime(t *testing.T) *runtime.Runtime {
 	t.Helper()
 	ref := contract.ResourceRef{Kind: "memory", ID: "project"}
 	rt, err := runtime.OpenRuntime(filepath.Join(t.TempDir(), "g.db"), runtime.RuntimeConfig{
-		Rules:     rule.NewRuleSet(capability.EmbeddedCatalog()["memory"].Rule(gateActor, ref, capability.Limits{})),
-		Authority: kernel.AuthorityRules{Allow: map[contract.ActorID][]contract.ResourceKind{gateActor: {"memory"}}},
-		Subs:      map[contract.ActorID]contract.Subscription{gateActor: {Actor: gateActor, Refs: []contract.ResourceRef{ref}}},
+		Rules:       rule.NewRuleSet(capability.EmbeddedCatalog()["memory"].Rule(gateActor, ref, capability.Limits{})),
+		Authority:   kernel.AuthorityRules{Allow: map[contract.ActorID][]contract.ResourceKind{gateActor: {"memory"}}},
+		Subs:        map[contract.ActorID]contract.Subscription{gateActor: {Actor: gateActor, Refs: []contract.ResourceRef{ref}}},
 		SchemaGuard: kernel.SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}, "goal": {"statement"}}),
 	})
 	if err != nil {

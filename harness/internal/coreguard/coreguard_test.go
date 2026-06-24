@@ -13,7 +13,7 @@ import (
 // corePackages are the collaboration-channel core: the generic governed-event mechanism. The
 // human-readable invariant is "the core only contains channel-related content, and stays generic."
 var corePackages = []string{
-	"contract", "channel", "kernel", "store", "projection", "rule", "reconcile", "runtime",
+	"contract", "channel", "kernel", "store", "eventview", "rule", "reconcile", "runtime",
 }
 
 // forbiddenImports are the outer rings the core must never depend on: application vocabulary
