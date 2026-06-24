@@ -4,14 +4,14 @@
 assets and connecting them to a local Mnemon service.
 
 Stable Mnemon remains the memory CLI. The harness is source-build only, has no
-compatibility guarantee, and is currently scoped to memory and skill
-integration.
+compatibility guarantee, and is currently scoped to Agent Integration, Local
+Mnemon, standard event packages, and Remote Workspace sync.
 
 ## 1. Product Surface
 
 The user-facing command surface is intentionally small:
 
-- `setup`: install memory and skill Agent Integration assets.
+- `setup`: install Agent Integration shim assets.
 - `local`: run or inspect Local Mnemon.
 - `status`: show Agent Integration, Local Mnemon, and Remote Workspace state.
 - `sync`: connect Local Mnemon to a Remote Workspace.
@@ -21,9 +21,9 @@ contract.
 
 ## 2. Current Scope
 
-The beta supports Codex and Claude Code projections for the memory and skill
-loops. Projected host directories such as `.codex/` and `.claude/` are generated
-surfaces. Local state lives under `.mnemon/harness/`.
+The beta supports Codex and Claude Code projections. Projected host directories
+such as `.codex/` and `.claude/` are generated surfaces. Local state lives under
+`.mnemon/harness/`.
 
 The current beta does not promise production readiness, automatic apply,
 multi-agent governance, broad organization scope, or a general evaluation
@@ -45,10 +45,10 @@ go build -o mnemon .
 go build -o mnemon-harness ./harness/cmd/mnemon-harness
 ```
 
-Install memory and skill integration for a project:
+Install Agent Integration for a project:
 
 ```sh
-./mnemon-harness setup --host codex --loop memory --loop skill --project-root .
+./mnemon-harness setup --host codex --project-root .
 ./mnemon-harness local run
 ./mnemon-harness status
 ```

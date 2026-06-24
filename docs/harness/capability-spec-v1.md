@@ -1,7 +1,7 @@
 # Capability Spec v1 (frozen)
 
 > Superseded by `capability-spec-v2.md` (P2, 2026-06-12). v2 formalizes the type grammar as a
-> closed table (reserving the system-derived `<kind>.remote_commit.observed` form), defines how a
+> closed table (reserving the system-derived `<kind>.remote_synced_event.observed` form), defines how a
 > declared kind's required fields derive, and — per the R1 no-forward-compat revision channel —
 > moves the KindCatalog membership check to the assembly-time declared set. This document remains
 > the v1 record; the live compile path follows v2.
@@ -55,7 +55,7 @@ directory ≡ name ≡ kind as well, so the package directory IS the event famil
 | member | params | deny message |
 |---|---|---|
 | `required` | `missing_style: empty\|missing` | `empty <field>` / `missing <field>` |
-| `format:skill-id` | — | `invalid <field>` (lowercase a-z0-9 dash) |
+| `format:identifier` | — | `invalid <field>` (lowercase a-z0-9 dash) |
 | `enum` | `values: a\|b\|c`, `message` | `<message>` |
 | `default` | `value` | — (fills trimmed-empty) |
 | `default-from` | `field` (declared EARLIER) | — (fills from processed field) |
@@ -68,7 +68,7 @@ directory ≡ name ≡ kind as well, so the package directory IS the event famil
 
 | member | params | output |
 |---|---|---|
-| `memory-entry-list` | — | `content` = the memory entry-list markdown |
+| `entry-list` | — | `content` = the generic entry-list markdown |
 | `bullet-list` | `title`, `field` (declared) | `content` = title + `"- "+item[field]` lines |
 
 `static` is a literal field map. A member that evaluates user content as a template is FORBIDDEN
@@ -77,7 +77,7 @@ vocabulary — item values are joined, never executed. Render-produced keys must
 
 ## FromSpec fail-closed checks
 
-schema_version == 1 · non-empty core fields · resource_kind ∈ KindCatalog · no duplicate fields ·
+schema_version == 1 · non-empty core fields · resource_kind not reserved · no duplicate fields ·
 member existence · exact param key sets (missing/unknown params rejected) · `default-from` only
 backward references · `list:strings` exclusivity · render collision guards. Cross-spec (loader):
 duplicate capability names / observed types / proposed types rejected.
@@ -94,8 +94,8 @@ package path) refuses Local Mnemon boot. Two deliberate differences from embedde
 messages, `default` validator values — free prose that lands verbatim in items when the host
 omits the field — render `static` values, and the bullet-list `title`) are scanned by the
 secret/prompt-injection scanners; IDENTIFIERS (field names, `items_field`, render `static` keys)
-are pattern-locked to `^[a-z][a-z0-9_-]*$` (underscore allowed — the builtin `skill_id` and
-`items_field` shapes carry it); the spec `name` is pattern-locked via directory == name (== kind)
+are pattern-locked to `^[a-z][a-z0-9_-]*$` (underscore allowed for descriptor field names such as
+`items_field`); the spec `name` is pattern-locked via directory == name (== kind)
 — because embedded spec text is reviewed code pinned by golden parity (TestSpecGoldens) while
 external spec text is untrusted input; (b) the merge rejects shadowing on FOUR axes (name,
 observed type, proposed type, resource kind) — an external spec can never displace or impersonate
