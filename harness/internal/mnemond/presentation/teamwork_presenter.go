@@ -2,6 +2,7 @@ package presentation
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -18,13 +19,31 @@ const (
 	DerivedEventAssignmentFeedbackNeeded = "assignment.feedback_needed"
 )
 
+type teamworkEventsPresenter struct{}
+
+func (teamworkEventsPresenter) Intent() string { return IntentTeamworkEvents }
+
+func (teamworkEventsPresenter) Present(req Request, proj view.View, now time.Time) (PresentationBody, error) {
+	events := DeriveEventEnvelopes(req, proj, now)
+	return PresentationBody{Body: PresentEventEnvelopes(events), Events: events}, nil
+}
+
+type profileEventsPresenter struct{}
+
+func (profileEventsPresenter) Intent() string { return IntentProfileEvents }
+
+func (profileEventsPresenter) Present(req Request, proj view.View, _ time.Time) (PresentationBody, error) {
+	events := DeriveProfileEventEnvelopes(req, proj)
+	return PresentationBody{Body: PresentEventEnvelopes(events), Events: events}, nil
+}
+
 func DeriveEventEnvelopes(req Request, proj view.View, now time.Time) []eventmodel.EventEnvelope {
 	principal := string(req.Principal)
 	if principal == "" {
 		return nil
 	}
 	derivedAt, expiresAt := derivedTimes(now)
-	items := eventViewItems(proj)
+	items := teamworkItems(proj)
 	var events []eventmodel.EventEnvelope
 	appendDerived := func(eventType, subject string, causedBy []string, body string, suggested []string) {
 		model := eventmodel.Event{
@@ -56,7 +75,7 @@ func DeriveEventEnvelopes(req Request, proj view.View, now time.Time) []eventmod
 		if statement == "" {
 			continue
 		}
-		id := itemID(signal)
+		id := teamworkItemID(signal)
 		subject := "teamwork_signal/" + id
 		appendDerived(
 			DerivedEventTeamworkSignalOpen,
@@ -75,7 +94,7 @@ func DeriveEventEnvelopes(req Request, proj view.View, now time.Time) []eventmod
 	}
 
 	for _, assignment := range items["assignment"] {
-		id := itemID(assignment)
+		id := teamworkItemID(assignment)
 		assignee := itemString(assignment, "assignee")
 		owner := itemString(assignment, "actor")
 		scope := itemString(assignment, "scope")
@@ -153,10 +172,55 @@ func eventEnvelopeCounts(events []eventmodel.EventEnvelope) map[string]int {
 	return counts
 }
 
+func teamworkItems(proj view.View) map[string][]map[string]any {
+	out := map[string][]map[string]any{}
+	for _, c := range proj.Content {
+		for _, item := range resourceItems(c) {
+			out[string(c.Ref.Kind)] = append(out[string(c.Ref.Kind)], item)
+		}
+	}
+	for k := range out {
+		sort.SliceStable(out[k], func(i, j int) bool { return teamworkItemID(out[k][i]) < teamworkItemID(out[k][j]) })
+	}
+	return out
+}
+
+func profileStaleOrMissing(profiles []map[string]any, principal string) bool {
+	for _, p := range profiles {
+		if itemString(p, "actor") != principal {
+			continue
+		}
+		return itemString(p, "freshness") == "stale"
+	}
+	return true
+}
+
+func assignmentExpired(item map[string]any, now time.Time) bool {
+	created, err := time.Parse(time.RFC3339, itemString(item, "created_at"))
+	if err != nil {
+		return false
+	}
+	ttl, err := time.ParseDuration(itemString(item, "ttl"))
+	if err != nil || ttl <= 0 {
+		return false
+	}
+	return now.After(created.Add(ttl))
+}
+
+func summarizeProgress(items []map[string]any) string {
+	var out []string
+	for _, item := range items {
+		if s := itemString(item, "summary"); s != "" {
+			out = append(out, s)
+		}
+	}
+	return strings.Join(out, "; ")
+}
+
 func progressRefs(items []map[string]any) []string {
 	var refs []string
 	for _, item := range items {
-		id := itemID(item)
+		id := teamworkItemID(item)
 		if id != "" && id != "unknown" {
 			refs = append(refs, "progress_digest/"+id)
 		}
@@ -208,4 +272,13 @@ func derivedBody(env eventmodel.EventEnvelope) string {
 func derivedPresentationHint(env eventmodel.EventEnvelope) string {
 	hint, _ := env.Meta["presentation_hint"].(string)
 	return hint
+}
+
+func teamworkItemID(item map[string]any) string {
+	for _, key := range []string{"assignment_id", "id", "skill_id"} {
+		if s := itemString(item, key); s != "" {
+			return s
+		}
+	}
+	return "unknown"
 }
