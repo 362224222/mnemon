@@ -1,7 +1,7 @@
 // mnemon-hub is the standalone Remote Workspace hub: the mnemonhub wire (sync.push / sync.pull /
 // sync.status) over its own store, authenticated by bearer tokens from an operator-supplied
 // replicas.json. It is a SEPARATE trust domain from the local runtime: it imports contract/store/
-// mnemonhub only — never channel / runtime / app / hostsurface (pinned by the mnemonhub boundary
+// mnemonhub only — never channel / runtime / app / hostagent (pinned by the mnemonhub boundary
 // test). One mnemon-hub per hub store (the store's single-writer flock enforces it).
 package main
 

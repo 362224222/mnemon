@@ -1,4 +1,4 @@
-package hostsurface
+package hostagent
 
 import (
 	"context"

@@ -255,7 +255,7 @@ func TestCoordinationProjectIntentGoverns(t *testing.T) {
 }
 
 // R1 Event presentation schema: agent_profile and teamwork_signal are first-party governed resources too,
-// not role packages or hostsurface-only hints.
+// not role packages or hostagent-only hints.
 func TestCoordinationProfileAndTeamworkSignalGovern(t *testing.T) {
 	profileRef := contract.ResourceRef{Kind: "agent_profile", ID: "project"}
 	signalRef := contract.ResourceRef{Kind: "teamwork_signal", ID: "project"}

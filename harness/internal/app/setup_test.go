@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/hostsurface"
+	"github.com/mnemon-dev/mnemon/harness/internal/hostagent"
 )
 
 func TestSetupWiresChannelAndStaticShim(t *testing.T) {
@@ -156,7 +156,7 @@ func TestSetupRejectsUnsupportedProductLoop(t *testing.T) {
 func TestAgentIntegrationHooksDoNotReferenceRemoteWorkspace(t *testing.T) {
 	for _, host := range []string{"codex", "claude-code"} {
 		for _, timing := range []string{"prime", "remind", "nudge", "compact"} {
-			content, err := hostsurface.RenderStandardThinHook(host, timing)
+			content, err := hostagent.RenderStandardThinHook(host, timing)
 			if err != nil {
 				t.Fatalf("render %s/%s: %v", host, timing, err)
 			}

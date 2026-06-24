@@ -27,28 +27,28 @@ type packageMainAxis struct {
 // not claim the current package names are final; it prevents new top-level implementation concepts
 // from appearing without an explicit owner under hostagent, mnemond, mnemonhub, or event.
 var packageMainAxisInventory = map[string]packageMainAxis{
-	"app":         {owner: ownerMnemond, role: "daemon wiring and local mnemond boot", target: "mnemond"},
-	"assembler":   {owner: ownerMnemond, role: "mnemond policy/runtime assembly", target: "mnemond"},
-	"assets":      {owner: ownerHostAgent, role: "hostagent integration and event-policy assets", target: "hostagent/assets"},
-	"capability":  {owner: ownerMnemond, role: "event type schema and admission policy", target: "mnemond/policy"},
-	"channel":     {owner: ownerMnemond, role: "hostagent to mnemond access layer", target: "mnemond/access"},
-	"codexapp":    {owner: ownerHostAgent, role: "Codex hostagent appserver adapter", target: "hostagent/codexapp"},
-	"config":      {owner: ownerMnemond, role: "mnemond local configuration", target: "mnemond/config"},
-	"contract":    {owner: ownerEvent, role: "event and mnemond boundary DTOs", target: "event/contract"},
-	"coreguard":   {owner: ownerGuard, role: "architecture guard tests", target: "coreguard"},
-	"driver":      {owner: ownerMnemond, role: "mnemond tick driver", target: "mnemond/daemon"},
-	"event":       {owner: ownerEvent, role: "canonical event and envelope model", target: "event"},
-	"eventstore":  {owner: ownerEvent, role: "event envelope append/read facade", target: "event/store"},
-	"eventview":   {owner: ownerMnemond, role: "hostagent-facing derived event read model", target: "mnemond/presentation"},
-	"hostsurface": {owner: ownerHostAgent, role: "hostagent setup and thin shims", target: "hostagent"},
-	"kernel":      {owner: ownerMnemond, role: "materialized event state applier", target: "mnemond/state"},
-	"mnemonhub":   {owner: ownerMnemonhub, role: "remote accepted event exchange server and exchange mechanics", target: "mnemonhub"},
-	"reconcile":   {owner: ownerMnemond, role: "event admission/materialization driver", target: "mnemond/admission"},
-	"replay":      {owner: ownerMnemond, role: "mnemond determinism verification", target: "mnemond/replay"},
-	"rule":        {owner: ownerMnemond, role: "event admission policy primitive", target: "mnemond/admission"},
-	"runtime":     {owner: ownerMnemond, role: "local mnemond event runtime", target: "mnemond"},
-	"store":       {owner: ownerMnemond, role: "local mnemond event/state store", target: "mnemond/state"},
-	"ui":          {owner: ownerMnemond, role: "read-only mnemond operator observability", target: "mnemond/observe"},
+	"app":        {owner: ownerMnemond, role: "daemon wiring and local mnemond boot", target: "mnemond"},
+	"assembler":  {owner: ownerMnemond, role: "mnemond policy/runtime assembly", target: "mnemond"},
+	"assets":     {owner: ownerHostAgent, role: "hostagent integration and event-policy assets", target: "hostagent/assets"},
+	"capability": {owner: ownerMnemond, role: "event type schema and admission policy", target: "mnemond/policy"},
+	"channel":    {owner: ownerMnemond, role: "hostagent to mnemond access layer", target: "mnemond/access"},
+	"codexapp":   {owner: ownerHostAgent, role: "Codex hostagent appserver adapter", target: "hostagent/codexapp"},
+	"config":     {owner: ownerMnemond, role: "mnemond local configuration", target: "mnemond/config"},
+	"contract":   {owner: ownerEvent, role: "event and mnemond boundary DTOs", target: "event/contract"},
+	"coreguard":  {owner: ownerGuard, role: "architecture guard tests", target: "coreguard"},
+	"driver":     {owner: ownerMnemond, role: "mnemond tick driver", target: "mnemond/daemon"},
+	"event":      {owner: ownerEvent, role: "canonical event and envelope model", target: "event"},
+	"eventstore": {owner: ownerEvent, role: "event envelope append/read facade", target: "event/store"},
+	"eventview":  {owner: ownerMnemond, role: "hostagent-facing derived event read model", target: "mnemond/presentation"},
+	"hostagent":  {owner: ownerHostAgent, role: "hostagent setup and thin shims", target: "hostagent"},
+	"kernel":     {owner: ownerMnemond, role: "materialized event state applier", target: "mnemond/state"},
+	"mnemonhub":  {owner: ownerMnemonhub, role: "remote accepted event exchange server and exchange mechanics", target: "mnemonhub"},
+	"reconcile":  {owner: ownerMnemond, role: "event admission/materialization driver", target: "mnemond/admission"},
+	"replay":     {owner: ownerMnemond, role: "mnemond determinism verification", target: "mnemond/replay"},
+	"rule":       {owner: ownerMnemond, role: "event admission policy primitive", target: "mnemond/admission"},
+	"runtime":    {owner: ownerMnemond, role: "local mnemond event runtime", target: "mnemond"},
+	"store":      {owner: ownerMnemond, role: "local mnemond event/state store", target: "mnemond/state"},
+	"ui":         {owner: ownerMnemond, role: "read-only mnemond operator observability", target: "mnemond/observe"},
 }
 
 var demotedMainAxisPackages = map[string]bool{
@@ -67,6 +67,7 @@ var nestedMainAxisInventory = map[string]packageMainAxis{
 }
 
 var retiredTopLevelImplementationPackages = []string{
+	"hostsurface",
 	"render",
 	"remotesync",
 }

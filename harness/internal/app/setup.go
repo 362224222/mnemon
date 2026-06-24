@@ -15,7 +15,7 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/capability"
 	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/hostsurface"
+	"github.com/mnemon-dev/mnemon/harness/internal/hostagent"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
@@ -105,7 +105,7 @@ func (h *Harness) Setup(ctx context.Context, out, errw io.Writer, opts SetupOpti
 	}
 	projectRoot := opts.ProjectRoot
 
-	if _, err := hostsurface.InstallStandardHost(ctx, hostsurface.StandardHostOptions{
+	if _, err := hostagent.InstallStandardHost(ctx, hostagent.StandardHostOptions{
 		Host:        opts.Host,
 		ProjectRoot: projectRoot,
 		DryRun:      opts.DryRun,
@@ -390,7 +390,7 @@ func (h *Harness) SetupUninstall(ctx context.Context, out, errw io.Writer, opts 
 		}
 	}
 	if !hasAnyBinding(projectRoot, bindingFile) {
-		if _, err := hostsurface.UninstallStandardHost(ctx, hostsurface.StandardHostOptions{
+		if _, err := hostagent.UninstallStandardHost(ctx, hostagent.StandardHostOptions{
 			Host:        opts.Host,
 			ProjectRoot: projectRoot,
 			Stdout:      io.Discard,

@@ -1,4 +1,4 @@
-package hostsurface
+package hostagent
 
 // knownLegacyManagedHashes are the sha256 fingerprints of managed-file content we shipped BEFORE
 // the corresponding surface became generated (the 16 handwritten hook shells retired by the

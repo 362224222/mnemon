@@ -45,7 +45,7 @@ func TestR1TeamworkCapabilitySchema(t *testing.T) {
 			requiredMiss: "empty context_advantages",
 			valid: map[string]any{
 				"actor": "codex@project", "focus": "render presentation implementation",
-				"context_advantages": []any{"read r1 docs", "inspected hostsurface"},
+				"context_advantages": []any{"read r1 docs", "inspected hostagent setup"},
 				"availability":       "available", "ttl": "30m", "summary": "Working on R1 render/presentation.",
 			},
 			invalid: map[string]any{

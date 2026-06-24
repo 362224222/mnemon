@@ -10,7 +10,7 @@ import (
 
 // The trust-domain import boundary (goal-stage6 adjudication #1): the standalone hub packages —
 // mnemonhub and the mnemon-hub binary — may import contract/store-level shared leaves only, NEVER
-// channel / runtime / app / hostsurface. Local and remote are separate trust domains that share
+// channel / runtime / app / hostagent. Local and remote are separate trust domains that share
 // only the contract; this test walks the real dependency graph so a casual import cannot slip in.
 // (The mnemond name now belongs to the LOCAL governance daemon, which lives outside this boundary
 // and MAY import app — only the hub trust domain is pinned here.)
@@ -23,10 +23,10 @@ func TestHubImportBoundaryExcludesLocalTrustDomain(t *testing.T) {
 		t.Fatalf("go list -deps: %v\n%s", err, out)
 	}
 	forbidden := map[string]bool{
-		"github.com/mnemon-dev/mnemon/harness/internal/channel":     true,
-		"github.com/mnemon-dev/mnemon/harness/internal/runtime":     true,
-		"github.com/mnemon-dev/mnemon/harness/internal/app":         true,
-		"github.com/mnemon-dev/mnemon/harness/internal/hostsurface": true,
+		"github.com/mnemon-dev/mnemon/harness/internal/channel":   true,
+		"github.com/mnemon-dev/mnemon/harness/internal/runtime":   true,
+		"github.com/mnemon-dev/mnemon/harness/internal/app":       true,
+		"github.com/mnemon-dev/mnemon/harness/internal/hostagent": true,
 	}
 	for _, dep := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		if forbidden[strings.TrimSpace(dep)] {

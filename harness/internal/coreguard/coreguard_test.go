@@ -17,12 +17,12 @@ var corePackages = []string{
 }
 
 // forbiddenImports are the outer rings the core must never depend on: application vocabulary
-// (capability), host integration (hostsurface), mnemond presentation,
+// (capability), hostagent integration, mnemond presentation,
 // wiring/consumers (app, assembler, driver, ui), the codex adapter, and the cmd binaries.
 // Dependencies flow inward only.
 var forbiddenImports = []string{
 	"harness/internal/capability",
-	"harness/internal/hostsurface",
+	"harness/internal/hostagent",
 	"harness/internal/mnemond/presentation",
 	"harness/internal/app",
 	"harness/internal/assembler",
@@ -53,17 +53,17 @@ type importBoundaryRule struct {
 var outerRingImportBoundaries = []importBoundaryRule{
 	{
 		pkg:       "capability",
-		forbids:   []string{"harness/internal/hostsurface"},
+		forbids:   []string{"harness/internal/hostagent"},
 		rationale: "capability semantics must not know host hook/settings mechanics",
 	},
 	{
-		pkg:       "hostsurface",
+		pkg:       "hostagent",
 		forbids:   []string{"harness/internal/kernel", "harness/internal/store", "harness/internal/runtime"},
-		rationale: "hostsurface is static integration and must not reach into governed state owners",
+		rationale: "hostagent integration is static setup/thin-shim code and must not reach into governed state owners",
 	},
 	{
 		pkg:       "mnemond/presentation",
-		forbids:   []string{"harness/internal/hostsurface"},
+		forbids:   []string{"harness/internal/hostagent"},
 		rationale: "mnemond presentation produces hot content and must not depend on host settings writers",
 	},
 }

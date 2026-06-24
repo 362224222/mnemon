@@ -2,7 +2,7 @@
 // the replica grant scope: push adjudicates synced envelopes, pull serves accepted synced envelopes
 // with the same scope clamp, and status reports event counters. It is extracted from the runtime so
 // the standalone hub binary (mnemon-hub) can host the same wire without the runtime: it imports ONLY
-// contract + store (+stdlib) — never channel / runtime / app / hostsurface (the trust-domain import
+// contract + store (+stdlib) — never channel / runtime / app / hostagent (the trust-domain import
 // boundary, pinned by a test). Replica authorization enters through the Grants seam; the co-hosted
 // runtime adapts its channel bindings to grants, mnemon-hub builds grants from replicas.json — same
 // fields, same semantics (dual-form rule).

@@ -200,7 +200,7 @@ func scanExternalSpecText(spec CapabilitySpec) error {
 // The deeper STRUCTURAL checks — the `include` intent, a template `external_id_recipe`, and that a
 // control-observe action's event_type equals the package's own observed_type — run in the projector
 // loader where the schema-aware parsers live (loop-package-v2 enforcement map); a capability leaf
-// must not duplicate the hostsurface intents/template schema.
+// must not duplicate the hostagent intents/template schema.
 func scanExternalPackageAssets(fsys fs.FS, name, pkg string) error {
 	if _, err := fs.Stat(fsys, path.Join(name, "hooks", "fragments")); err == nil {
 		return fmt.Errorf("external package %s: hooks/fragments/ is forbidden (shell fragments are embedded-only; fail-closed)", pkg)
