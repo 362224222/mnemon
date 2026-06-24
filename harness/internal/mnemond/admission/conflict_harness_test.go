@@ -141,11 +141,11 @@ func TestArmB_ReadStaleVsWriteCAS(t *testing.T) {
 		return updateProposal("eb", "codex", "cb", M, 2, map[string]any{"content": "m2"}, []contract.ResourceVersion{{Ref: G, Version: 5}})
 	}
 
-	// (1) event_view_read_set: read-set [G@5] is stale (G is @6) -> Deferred{ReadStale on G}; M not written (still @2)
+	// (1) presentation_read_set: read-set [G@5] is stale (G is @6) -> Deferred{ReadStale on G}; M not written (still @2)
 	{
 		s, k := build(t)
 		appendProposal(t, s, prop())
-		ds := NewReconciler(s, k).RunOnce(contract.Modes{Conflict: contract.ConflictRebase, Isolation: contract.IsolationEventViewReadSet, Authz: contract.AuthzStrict})
+		ds := NewReconciler(s, k).RunOnce(contract.Modes{Conflict: contract.ConflictRebase, Isolation: contract.IsolationPresentationReadSet, Authz: contract.AuthzStrict})
 		if len(ds) != 1 || ds[0].Status != contract.Deferred {
 			t.Fatalf("read_set: want 1 Deferred, got %+v", ds)
 		}
@@ -196,7 +196,7 @@ func TestArmE_ReadSetGranularityPerResource(t *testing.T) {
 
 	// proposal: OpUpdate M based_on 1, ReadSet=[G@5] (per-resource; H deliberately omitted)
 	appendProposal(t, s, updateProposal("ee", "codex", "ce", M, 1, map[string]any{"content": "m1"}, []contract.ResourceVersion{{Ref: G, Version: 5}}))
-	ds := NewReconciler(s, k).RunOnce(contract.Modes{Conflict: contract.ConflictRebase, Isolation: contract.IsolationEventViewReadSet, Authz: contract.AuthzStrict})
+	ds := NewReconciler(s, k).RunOnce(contract.Modes{Conflict: contract.ConflictRebase, Isolation: contract.IsolationPresentationReadSet, Authz: contract.AuthzStrict})
 	if len(ds) != 1 || ds[0].Status != contract.Accepted {
 		t.Fatalf("per-resource read-set: G unchanged so proposal must be Accepted despite H changing; got %+v", ds)
 	}

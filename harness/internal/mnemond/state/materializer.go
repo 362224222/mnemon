@@ -58,7 +58,7 @@ func (k *Materializer) Apply(op contract.StateOp, m contract.Modes) contract.Dec
 	}
 
 	err := k.store.WithTx(func(tx *Tx) error {
-		if m.Isolation == contract.IsolationEventViewReadSet { // read-set validation (Invariant #6)
+		if m.Isolation == contract.IsolationPresentationReadSet { // read-set validation (Invariant #6)
 			for _, rv := range op.ReadSet {
 				cur, e := tx.ReadVersion(rv.Ref)
 				if e != nil {

@@ -65,7 +65,7 @@ func (c Capability) RemoteSyncedEventObserved() string {
 // without changing the compiled kind.
 //
 // Deviation from the locked Phase-2 signature Rule(..., cfg config.CapabilityConfig)
-// (plan-control-plane.md:241): the same plan locks capability as a rule/event-view/contract-only
+// (plan-control-plane.md:241): the same plan locks capability as a rule/presentation-view/contract-only
 // leaf (:51,:61); the leaf wins, and the assembler maps config.CapabilityConfig -> Limits.
 func (c Capability) Rule(principal contract.ActorID, ref contract.ResourceRef, limits Limits) admission.Rule {
 	return appendItemRule(c, principal, ref, limits)
@@ -97,7 +97,7 @@ func appendItemRule(c Capability, principal contract.ActorID, ref contract.Resou
 			if in.Event.TS != "" {
 				item["created_at"] = in.Event.TS
 			}
-			version, fields := resourceFromEventView(in.View, ref)
+			version, fields := resourceFromPresentationView(in.View, ref)
 			items := append(itemsFromFields(fields, c.ItemsField), item)
 			newFields := map[string]any{c.ItemsField: items, "updated_by": string(in.Event.Actor)}
 			for k, v := range c.Header(items) {

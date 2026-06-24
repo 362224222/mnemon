@@ -37,7 +37,7 @@ func TestLocalSkillCandidateCreatesSyncPendingDeclaration(t *testing.T) {
 		t.Fatalf("observe skill candidate: %v", err)
 	}
 
-	proj, err := client.PullEventView("codex@project", contract.Subscription{Actor: "codex@project"})
+	proj, err := client.PullPresentationView("codex@project", contract.Subscription{Actor: "codex@project"})
 	if err != nil {
 		t.Fatalf("pull skill projection: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestLocalSkillLifecycleChangesAppendDeclarations(t *testing.T) {
 		}
 	}
 
-	proj, err := client.PullEventView("codex@project", contract.Subscription{Actor: "codex@project"})
+	proj, err := client.PullPresentationView("codex@project", contract.Subscription{Actor: "codex@project"})
 	if err != nil {
 		t.Fatalf("pull skill projection: %v", err)
 	}

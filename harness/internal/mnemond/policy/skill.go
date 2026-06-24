@@ -38,7 +38,7 @@ func declarationDedupImport(cap Capability, in admission.RuleInput) (contract.Ru
 			return contract.RuleDecision{Verdict: contract.VerdictDeny, Reasons: []string{reason}}, nil
 		}
 	}
-	version, fields := skillResourceFromEventView(in.View, material.ResourceRef)
+	version, fields := skillResourceFromPresentationView(in.View, material.ResourceRef)
 	existing := skillDeclarationsFromFields(fields)
 	byID := make(map[string]skillDeclaration, len(existing))
 	for _, decl := range existing {
@@ -132,8 +132,8 @@ func validSkillID(s string) bool {
 	return true
 }
 
-func skillResourceFromEventView(view view.View, ref contract.ResourceRef) (contract.Version, map[string]any) {
-	return resourceFromEventView(view, ref)
+func skillResourceFromPresentationView(view view.View, ref contract.ResourceRef) (contract.Version, map[string]any) {
+	return resourceFromPresentationView(view, ref)
 }
 
 func skillDeclarationsFromFields(fields map[string]any) []skillDeclaration {

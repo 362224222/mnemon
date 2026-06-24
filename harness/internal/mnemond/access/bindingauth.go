@@ -86,7 +86,7 @@ func (a *authorizedAPI) Ingest(principal contract.ActorID, env contract.Observat
 	return a.inner.Ingest(principal, env)
 }
 
-func (a *authorizedAPI) PullEventView(principal contract.ActorID, sub contract.Subscription) (view.View, error) {
+func (a *authorizedAPI) PullPresentationView(principal contract.ActorID, sub contract.Subscription) (view.View, error) {
 	b, ok := a.bindings.Binding(principal)
 	if !ok {
 		return view.View{}, fmt.Errorf("no channel binding for principal %q", principal)
@@ -103,7 +103,7 @@ func (a *authorizedAPI) PullEventView(principal contract.ActorID, sub contract.S
 		return view.View{}, err
 	}
 	sub.Refs = refs
-	return a.inner.PullEventView(principal, sub)
+	return a.inner.PullPresentationView(principal, sub)
 }
 
 var _ ServerAPI = (*authorizedAPI)(nil)

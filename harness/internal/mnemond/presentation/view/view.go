@@ -59,7 +59,7 @@ func Build(s *state.Store, refs []contract.ResourceRef, forActor contract.ActorI
 	return View{Ref: "proj_" + dig[:12], Digest: dig, Resources: rv, Content: content, Feedback: fb}
 }
 
-// ScopedView builds the server-enforced, scoped event view for a subscription (S9): ONLY sub.Refs are
+// ScopedView builds the server-enforced, scoped presentation view for a subscription (S9): ONLY sub.Refs are
 // materialized, so an out-of-scope resource can never cross the wire. Identity (forActor) is the
 // subscription's actor — the server passes the AUTHENTICATED principal here, never a client-named scope.
 // (PrivacyTier is reserved for a future per-resource tier filter; today the ref set IS the scope.)

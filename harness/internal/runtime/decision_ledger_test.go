@@ -10,7 +10,7 @@ import (
 )
 
 // P6a-1: DecisionLedger is the operator-wide, READ-ONLY decision-log read that backs the Control
-// Tower's LEDGER (accepted) page — the cross-actor history the per-actor PullEventView cannot serve.
+// Tower's LEDGER (accepted) page — the cross-actor history the per-actor PullPresentationView cannot serve.
 // An accepted memory write lands as one Accepted decision attributed to the proposing principal; the
 // ledger surfaces it. Reading is idempotent (no write path).
 func TestDecisionLedgerSurfacesAcceptedDecisions(t *testing.T) {

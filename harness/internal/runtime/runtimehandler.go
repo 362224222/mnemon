@@ -78,7 +78,7 @@ func NewRuntimeHandler(rt *Runtime, auth access.Authenticator) http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(rec)
 	})
-	mux.HandleFunc("/event-view", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/presentation-view", func(w http.ResponseWriter, r *http.Request) {
 		principal, err := auth.Authenticate(r)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusUnauthorized)
@@ -89,7 +89,7 @@ func NewRuntimeHandler(rt *Runtime, auth access.Authenticator) http.Handler {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		proj, err := rt.API().PullEventView(principal, sub)
+		proj, err := rt.API().PullPresentationView(principal, sub)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusForbidden)
 			return

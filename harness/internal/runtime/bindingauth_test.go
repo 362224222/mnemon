@@ -58,10 +58,10 @@ func TestChannelBindingAuthorizer(t *testing.T) {
 		t.Fatalf("an allowed observed type must ingest: %v", err)
 	}
 	// in-scope pull => OK; out-of-scope ref => rejected by the binding authorizer.
-	if _, err := api.PullEventView("codex", contract.Subscription{Actor: "codex", Refs: []contract.ResourceRef{ref}}); err != nil {
+	if _, err := api.PullPresentationView("codex", contract.Subscription{Actor: "codex", Refs: []contract.ResourceRef{ref}}); err != nil {
 		t.Fatalf("in-scope pull must succeed: %v", err)
 	}
-	if _, err := api.PullEventView("codex", contract.Subscription{Actor: "codex", Refs: []contract.ResourceRef{other}}); err == nil {
+	if _, err := api.PullPresentationView("codex", contract.Subscription{Actor: "codex", Refs: []contract.ResourceRef{other}}); err == nil {
 		t.Fatal("a pull ref outside the binding scope must be rejected")
 	}
 	// internal-only suffix still fails INSIDE ControlServer.Ingest even when the binding allows any

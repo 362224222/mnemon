@@ -43,8 +43,8 @@ type Request struct {
 }
 
 type Budget struct {
-	MaxChars      int
-	EventViewTier contract.BudgetTier
+	MaxChars             int
+	PresentationViewTier contract.BudgetTier
 }
 
 type ClientInfo struct {
@@ -53,15 +53,15 @@ type ClientInfo struct {
 }
 
 type Response struct {
-	SchemaVersion   int
-	Status          Status
-	Body            string
-	BodyFormat      string
-	BodyDigest      string
-	EventViewDigest string
-	Provenance      Provenance
-	AuditID         string
-	TTLSeconds      int
+	SchemaVersion          int
+	Status                 Status
+	Body                   string
+	BodyFormat             string
+	BodyDigest             string
+	PresentationViewDigest string
+	Provenance             Provenance
+	AuditID                string
+	TTLSeconds             int
 }
 
 type Provenance struct {
@@ -82,19 +82,19 @@ func (r Renderer) RenderPresentation(ctx context.Context, req Request, proj view
 		now = r.Now().UTC()
 	}
 	if req.Principal == "" {
-		return Response{SchemaVersion: 1, Status: StatusDenied, EventViewDigest: proj.Digest}, nil
+		return Response{SchemaVersion: 1, Status: StatusDenied, PresentationViewDigest: proj.Digest}, nil
 	}
 	body, events := BuildBodyAndEventEnvelopes(req, proj, now)
 	if req.Budget.MaxChars > 0 && len(body) > req.Budget.MaxChars {
 		body = body[:req.Budget.MaxChars]
 	}
 	resp := Response{
-		SchemaVersion:   1,
-		Status:          StatusOK,
-		Body:            body,
-		BodyFormat:      "plain_text",
-		BodyDigest:      digest(body),
-		EventViewDigest: proj.Digest,
+		SchemaVersion:          1,
+		Status:                 StatusOK,
+		Body:                   body,
+		BodyFormat:             "plain_text",
+		BodyDigest:             digest(body),
+		PresentationViewDigest: proj.Digest,
 		Provenance: Provenance{
 			Source:        "local-mnemon",
 			CatalogDigest: digest("render-intents:v1"),
@@ -123,6 +123,6 @@ func digest(body string) string {
 }
 
 func auditID(req Request, resp Response) string {
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%s|%s|%s|%s", req.Principal, req.Lifecycle, req.RenderIntent, resp.EventViewDigest, resp.BodyDigest)))
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%s|%s|%s|%s", req.Principal, req.Lifecycle, req.RenderIntent, resp.PresentationViewDigest, resp.BodyDigest)))
 	return "render_" + hex.EncodeToString(sum[:8])
 }

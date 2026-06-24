@@ -11,7 +11,7 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation/view"
 )
 
-// RuleInput is the typed, read-only input to a rule: the triggering event and the scoped event view it was
+// RuleInput is the typed, read-only input to a rule: the triggering event and the scoped presentation view it was
 // dispatched on. (Held by rule, not contract, so the view.View dependency lives off the wire — D11.)
 type RuleInput struct {
 	Event contract.Event

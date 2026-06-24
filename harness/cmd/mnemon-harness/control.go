@@ -18,7 +18,7 @@ import (
 )
 
 // The control verbs are the host/control agent's view of the channel (D6): observe pushes an
-// observation IN, pull reads the scoped event view OUT, status checks reachability. They reach
+// observation IN, pull reads the scoped presentation view OUT, status checks reachability. They reach
 // the engine ONLY through access.ServerAPI (the channel client), never kernel/reconcile — the
 // same channel a HostAgent and a ControlAgent both speak, differing only by binding/credential.
 
@@ -95,7 +95,7 @@ var controlObserveCmd = &cobra.Command{
 
 var controlPullCmd = &cobra.Command{
 	Use:   "pull",
-	Short: "Pull the principal's scoped event view (ServerAPI.PullEventView)",
+	Short: "Pull the principal's scoped presentation view (ServerAPI.PullPresentationView)",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		actor := controlActor
 		if actor == "" {
@@ -105,7 +105,7 @@ var controlPullCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		proj, err := client.PullEventView(contract.ActorID(controlPrincipal), contract.Subscription{Actor: contract.ActorID(actor)})
+		proj, err := client.PullPresentationView(contract.ActorID(controlPrincipal), contract.Subscription{Actor: contract.ActorID(actor)})
 		if err != nil {
 			return fmt.Errorf("channel pull failed (service unreachable or unauthorized): %w", err)
 		}
@@ -123,7 +123,7 @@ var controlPullCmd = &cobra.Command{
 				written++
 			}
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "event-view ref=%s digest=%s event_subjects=%d\n", proj.Ref, proj.Digest, written)
+		fmt.Fprintf(cmd.OutOrStdout(), "presentation-view ref=%s digest=%s event_subjects=%d\n", proj.Ref, proj.Digest, written)
 		return nil
 	},
 }
@@ -236,7 +236,7 @@ func controlRender(reqBody presentation.Request) (presentation.Response, error) 
 // coordinationFieldLine renders "Field: <kind>=<n>, …" over the default-enabled coordination kinds,
 // counting each kind's entries in the principal's pulled view.
 func coordinationFieldLine(client *access.Client, principal contract.ActorID) string {
-	proj, err := client.PullEventView(principal, contract.Subscription{Actor: principal})
+	proj, err := client.PullPresentationView(principal, contract.Subscription{Actor: principal})
 	if err != nil {
 		return "Field: (unavailable)"
 	}
@@ -273,7 +273,7 @@ func init() {
 	controlObserveCmd.Flags().StringVar(&controlPayload, "payload", "", "observation payload as JSON")
 	controlObserveCmd.Flags().StringVar(&controlExtID, "external-id", "", "idempotency external id")
 	controlPullCmd.Flags().StringVar(&controlActor, "actor", "", "subscription actor (defaults to principal)")
-	controlPullCmd.Flags().BoolVar(&controlPullJSON, "json", false, "emit scoped event view as JSON")
+	controlPullCmd.Flags().BoolVar(&controlPullJSON, "json", false, "emit scoped presentation view as JSON")
 	controlStatusCmd.Flags().BoolVar(&controlStatusJSON, "json", false, "emit channel status as JSON")
 	controlRenderCmd.Flags().StringVar(&controlRenderIntent, "intent", presentation.IntentTeamworkEvents, "render intent")
 	controlRenderCmd.Flags().StringVar(&controlRenderLifecycle, "lifecycle", "remind", "host lifecycle")

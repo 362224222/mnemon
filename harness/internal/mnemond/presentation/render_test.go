@@ -38,8 +38,8 @@ func TestRenderPresentationDeterministicDigestAndAudit(t *testing.T) {
 	if !strings.Contains(resp1.Body, "[mnemon:signal]") || strings.Contains(resp1.Body, "[mnemon:profile]") {
 		t.Fatalf("expected signal presentation and no fresh-profile presentation:\n%s", resp1.Body)
 	}
-	if len(sink.Records) != 2 || sink.Records[0].BodyDigest != resp1.BodyDigest || sink.Records[0].EventViewDigest != "proj_digest" {
-		t.Fatalf("audit records must mirror response digest/event-view: %+v", sink.Records)
+	if len(sink.Records) != 2 || sink.Records[0].BodyDigest != resp1.BodyDigest || sink.Records[0].PresentationViewDigest != "proj_digest" {
+		t.Fatalf("audit records must mirror response digest/presentation-view: %+v", sink.Records)
 	}
 	if sink.Records[0].EventCounts[DerivedEventTeamworkSignalOpen] != 1 || sink.Records[0].PresentationCounts["signal"] != 1 {
 		t.Fatalf("audit must record derived-event and presentation counts: %+v", sink.Records[0])
@@ -163,14 +163,14 @@ func TestJSONLAuditSinkWritesRecords(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit", "presentation.jsonl")
 	sink := &JSONLAuditSink{Path: path}
 	rec := AuditRecord{
-		SchemaVersion:   1,
-		AuditID:         "render_abc",
-		Principal:       "codex@project",
-		RenderIntent:    IntentTeamworkEvents,
-		EventViewDigest: "proj_digest",
-		BodyDigest:      "body_digest",
-		Status:          StatusOK,
-		CreatedAt:       "2026-06-24T10:00:00Z",
+		SchemaVersion:          1,
+		AuditID:                "render_abc",
+		Principal:              "codex@project",
+		RenderIntent:           IntentTeamworkEvents,
+		PresentationViewDigest: "proj_digest",
+		BodyDigest:             "body_digest",
+		Status:                 StatusOK,
+		CreatedAt:              "2026-06-24T10:00:00Z",
 	}
 	if err := sink.WriteRenderAudit(context.Background(), rec); err != nil {
 		t.Fatalf("write audit: %v", err)
@@ -220,7 +220,7 @@ func TestRenderIntentsAreBounded(t *testing.T) {
 		!strings.Contains(packet.Body, "teamwork_signal/sig1") ||
 		!strings.Contains(packet.Body, "render memory note") ||
 		!strings.Contains(packet.Body, "review helper") {
-		t.Fatalf("context.packet must summarize scoped event view:\n%s", packet.Body)
+		t.Fatalf("context.packet must summarize scoped presentation view:\n%s", packet.Body)
 	}
 
 	contract, err := r.RenderPresentation(context.Background(), Request{Principal: "codex-a@project", RenderIntent: IntentPayloadContract}, proj)

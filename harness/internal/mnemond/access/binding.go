@@ -17,7 +17,7 @@ const (
 )
 
 // Verb is a mnemond access operation. Agent Integration exposes observe (Ingest), pull
-// (PullEventView), render (read-only presentation/content), and status. Replica sync gets separate verbs so
+// (PullPresentationView), render (read-only presentation/content), and status. Replica sync gets separate verbs so
 // a sync credential does not inherit Agent Integration access.
 type Verb string
 

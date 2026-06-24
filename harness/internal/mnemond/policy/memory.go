@@ -50,7 +50,7 @@ func entryDedupImport(cap Capability, in admission.RuleInput) (contract.RuleDeci
 	if len(incoming) == 0 {
 		return contract.RuleDecision{Verdict: contract.VerdictDeny, Reasons: []string{"remote import denied: no entries"}}, nil
 	}
-	version, fields := resourceFromEventView(in.View, material.ResourceRef)
+	version, fields := resourceFromPresentationView(in.View, material.ResourceRef)
 	existing := memoryEntriesFromFields(fields)
 	byID := make(map[string]memoryEntry, len(existing))
 	for _, entry := range existing {
@@ -185,7 +185,7 @@ func containsPromptInjectionShape(content string) bool {
 	return false
 }
 
-func resourceFromEventView(view view.View, ref contract.ResourceRef) (contract.Version, map[string]any) {
+func resourceFromPresentationView(view view.View, ref contract.ResourceRef) (contract.Version, map[string]any) {
 	var version contract.Version
 	for _, rv := range view.Resources {
 		if rv.Ref == ref {

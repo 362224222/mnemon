@@ -55,7 +55,7 @@ func TestP2ChannelEndToEnd(t *testing.T) {
 	if err != nil || !rec.Ticked {
 		t.Fatalf("observe must ingest + auto-tick; rec=%+v err=%v", rec, err)
 	}
-	proj, err := c.PullEventView("codex", contract.Subscription{Actor: "codex"})
+	proj, err := c.PullPresentationView("codex", contract.Subscription{Actor: "codex"})
 	if err != nil {
 		t.Fatalf("pull: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestP2ChannelNegatives(t *testing.T) {
 		t.Fatal("disallowed observed type must be rejected")
 	}
 	// cross-scope pull (ref outside the binding scope).
-	if _, err := codex.PullEventView("codex", contract.Subscription{Actor: "codex", Refs: []contract.ResourceRef{other}}); err == nil {
+	if _, err := codex.PullPresentationView("codex", contract.Subscription{Actor: "codex", Refs: []contract.ResourceRef{other}}); err == nil {
 		t.Fatal("out-of-scope pull must be rejected")
 	}
 	// forged *.proposed.

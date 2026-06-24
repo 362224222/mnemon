@@ -122,7 +122,7 @@ func OpenRuntime(storePath string, cfg RuntimeConfig) (*Runtime, error) {
 	return rt, nil
 }
 
-// API returns the access boundary (access.ServerAPI: observe via Ingest, pull via PullEventView) every
+// API returns the access boundary (access.ServerAPI: observe via Ingest, pull via PullPresentationView) every
 // surface speaks to: the bare ControlServer, or — when bindings are configured — an access.BindingSet
 // authorizer wrapping it (P2.1). The Tick driver and read helpers stay on the unwrapped runtime.
 func (r *Runtime) API() access.ServerAPI { return r.api }
@@ -157,7 +157,7 @@ func (r *Runtime) PendingEvents(afterSeq int64) ([]contract.Event, error) {
 // DecisionLedger returns the full decision log in append order — the operator-wide, cross-actor
 // decision history that backs the Control Tower's LEDGER (accepted) and INBOX (rejected escalations)
 // pages (P6). It is READ-ONLY (wraps Store.DecisionsAfter); it opens NO write path. This is the one
-// operator-scoped read the channel's per-actor PullEventView cannot serve, so the Tower facade —
+// operator-scoped read the channel's per-actor PullPresentationView cannot serve, so the Tower facade —
 // which holds the *Runtime — reads it here rather than over the access. The caller filters by status
 // (Accepted -> LEDGER, Rejected -> INBOX); the ui package never touches this directly (ui↛store).
 func (r *Runtime) DecisionLedger() ([]contract.Decision, error) {
@@ -196,7 +196,7 @@ func (r *Runtime) Status(principal contract.ActorID) (contract.ChannelStatus, er
 		}
 		sub.Refs = refs
 	}
-	proj, err := r.cs.PullEventView(principal, sub)
+	proj, err := r.cs.PullPresentationView(principal, sub)
 	if err != nil {
 		return contract.ChannelStatus{}, err
 	}

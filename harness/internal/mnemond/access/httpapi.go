@@ -141,7 +141,7 @@ func NewHTTPHandlerWithAuth(api ServerAPI, auth Authenticator) http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(IngestReceipt{Seq: seq, Dup: dup})
 	})
-	mux.HandleFunc("/event-view", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/presentation-view", func(w http.ResponseWriter, r *http.Request) {
 		principal, err := auth.Authenticate(r)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusUnauthorized)
@@ -152,7 +152,7 @@ func NewHTTPHandlerWithAuth(api ServerAPI, auth Authenticator) http.Handler {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		proj, err := api.PullEventView(principal, sub)
+		proj, err := api.PullPresentationView(principal, sub)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusForbidden) // identity/scope violation
 			return
@@ -256,15 +256,15 @@ func (c *Client) Status(_ contract.ActorID) (contract.ChannelStatus, error) {
 	return st, nil
 }
 
-// PullEventView fetches the actor's scoped view from the server. The principal argument is ignored: the
+// PullPresentationView fetches the actor's scoped view from the server. The principal argument is ignored: the
 // subscription's actor is sent in the body and the server cross-checks it against the bound credential header,
 // so an edge cannot pull another actor's scope (D7/S9).
-func (c *Client) PullEventView(_ contract.ActorID, sub contract.Subscription) (view.View, error) {
+func (c *Client) PullPresentationView(_ contract.ActorID, sub contract.Subscription) (view.View, error) {
 	body, err := json.Marshal(sub)
 	if err != nil {
 		return view.View{}, err
 	}
-	req, err := http.NewRequest(http.MethodPost, c.baseURL+"/event-view", bytes.NewReader(body))
+	req, err := http.NewRequest(http.MethodPost, c.baseURL+"/presentation-view", bytes.NewReader(body))
 	if err != nil {
 		return view.View{}, err
 	}

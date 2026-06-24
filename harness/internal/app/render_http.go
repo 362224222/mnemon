@@ -54,15 +54,15 @@ func NewLocalHTTPHandler(rt *runtime.Runtime, auth access.Authenticator, binding
 			return
 		}
 		req.Principal = principal
-		proj, err := rt.API().PullEventView(principal, contract.Subscription{Actor: principal})
+		proj, err := rt.API().PullPresentationView(principal, contract.Subscription{Actor: principal})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusForbidden)
 			return
 		}
 		if haveBinding {
-			proj = budgetShapeEventView(proj, policy.EmbeddedCatalog(), binding.Budget)
-			if req.Budget.EventViewTier == "" {
-				req.Budget.EventViewTier = binding.Budget
+			proj = budgetShapePresentationView(proj, policy.EmbeddedCatalog(), binding.Budget)
+			if req.Budget.PresentationViewTier == "" {
+				req.Budget.PresentationViewTier = binding.Budget
 			}
 		}
 		resp, err := renderer.RenderPresentation(r.Context(), req, proj)

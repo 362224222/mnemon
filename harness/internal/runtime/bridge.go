@@ -29,7 +29,7 @@ func NewBridge(newID, now func() string) *Bridge { return &Bridge{newID: newID, 
 
 // Stamp turns intent into a trusted *.proposed event, OR returns an error if any proposed write targets a
 // ref outside the actor's DISPATCHED SCOPE (write-scope, R11 — the kernel's authz is actor/kind only).
-// Trusted fields come from the binding (write identity), the dispatched event view (read-set + provenance),
+// Trusted fields come from the binding (write identity), the dispatched presentation view (read-set + provenance),
 // and the trigger (correlation + lineage) — NEVER from the intent payload, even if a hostile callback stuffs
 // "actor"/"based_on" into it (R1/R2). Only Payload (the write set) rides through proposer-controlled; the
 // kernel validates it. An empty/undecodable write set PASSES the bridge (the kernel rejects it as a
@@ -51,18 +51,18 @@ func (br *Bridge) Stamp(b ResolvedBinding, dispatchedOn view.View, trigger contr
 		corr = br.newID() // escalation requires a non-empty correlation (R3)
 	}
 	return contract.Event{
-		SchemaVersion: 1,
-		ID:            br.newID(),
-		TS:            br.now(),
-		Type:          b.Emits, // authorized type from the binding, not the intent's claim
-		Actor:         b.Actor, // TRUSTED write identity
-		ResourceRefs:  refs,
-		BasedOn:       dispatchedOn.Resources, // TRUSTED read-set
-		EventViewRef:  dispatchedOn.Ref,       // provenance
-		ContextDigest: dispatchedOn.Digest,    // provenance
-		CorrelationID: corr,                   // TRUSTED: inherited or minted
-		CausedBy:      trigger.ID,             // lineage
-		Payload:       intent.Payload,         // proposer-controlled write set (kernel-validated)
+		SchemaVersion:       1,
+		ID:                  br.newID(),
+		TS:                  br.now(),
+		Type:                b.Emits, // authorized type from the binding, not the intent's claim
+		Actor:               b.Actor, // TRUSTED write identity
+		ResourceRefs:        refs,
+		BasedOn:             dispatchedOn.Resources, // TRUSTED read-set
+		PresentationViewRef: dispatchedOn.Ref,       // provenance
+		ContextDigest:       dispatchedOn.Digest,    // provenance
+		CorrelationID:       corr,                   // TRUSTED: inherited or minted
+		CausedBy:            trigger.ID,             // lineage
+		Payload:             intent.Payload,         // proposer-controlled write set (kernel-validated)
 	}, nil
 }
 

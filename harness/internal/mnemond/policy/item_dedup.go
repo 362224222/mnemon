@@ -31,7 +31,7 @@ func itemDedupImport(cap Capability, in admission.RuleInput) (contract.RuleDecis
 	if len(incoming) == 0 {
 		return contract.RuleDecision{Verdict: contract.VerdictDeny, Reasons: []string{"remote import denied: no items"}}, nil
 	}
-	version, fields := resourceFromEventView(in.View, material.ResourceRef)
+	version, fields := resourceFromPresentationView(in.View, material.ResourceRef)
 	existing := itemsFromFields(fields, cap.ItemsField)
 	byID := make(map[string]Item, len(existing))
 	for _, it := range existing {

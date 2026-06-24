@@ -15,7 +15,7 @@ func (s *stubAPI) Ingest(contract.ActorID, contract.ObservationEnvelope) (int64,
 	s.ingested++
 	return 1, false, nil
 }
-func (s *stubAPI) PullEventView(contract.ActorID, contract.Subscription) (view.View, error) {
+func (s *stubAPI) PullPresentationView(contract.ActorID, contract.Subscription) (view.View, error) {
 	return view.View{}, nil
 }
 

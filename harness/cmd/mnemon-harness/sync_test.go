@@ -164,7 +164,7 @@ func TestSyncPullOnceImportsRemoteMemoryThroughLocalMnemon(t *testing.T) {
 	}
 	content := localMemoryContentForTest(t, storePath, ref)
 	if !strings.Contains(content, "Remote synced memory appears locally") {
-		t.Fatalf("pulled memory not visible through local event view:\n%s", content)
+		t.Fatalf("pulled memory not visible through local presentation view:\n%s", content)
 	}
 	st, err := syncStatusForTest(storePath)
 	if err != nil {
@@ -247,7 +247,7 @@ func TestSyncPullOnceImportsRemoteSkillThroughLocalMnemon(t *testing.T) {
 	}
 	decls := localSkillDeclarationsForTest(t, storePath, ref)
 	if len(decls) != 1 || decls[0]["skill_id"] != "release-checklist" || decls[0]["status"] != "active" {
-		t.Fatalf("pulled skill declaration not visible through local event view: %+v", decls)
+		t.Fatalf("pulled skill declaration not visible through local presentation view: %+v", decls)
 	}
 	st, err := syncStatusForTest(storePath)
 	if err != nil {
@@ -399,9 +399,9 @@ func localMemoryContentForTest(t *testing.T, storePath string, ref contract.Reso
 		t.Fatalf("open local runtime for projection: %v", err)
 	}
 	defer rt.Close()
-	proj, err := rt.API().PullEventView("codex@project", contract.Subscription{Actor: "codex@project"})
+	proj, err := rt.API().PullPresentationView("codex@project", contract.Subscription{Actor: "codex@project"})
 	if err != nil {
-		t.Fatalf("pull local event view: %v", err)
+		t.Fatalf("pull local presentation view: %v", err)
 	}
 	for _, item := range proj.Content {
 		if item.Ref == ref {
@@ -421,7 +421,7 @@ func localSkillDeclarationsForTest(t *testing.T, storePath string, ref contract.
 		t.Fatalf("open local runtime for skill projection: %v", err)
 	}
 	defer rt.Close()
-	proj, err := rt.API().PullEventView("codex@project", contract.Subscription{Actor: "codex@project"})
+	proj, err := rt.API().PullPresentationView("codex@project", contract.Subscription{Actor: "codex@project"})
 	if err != nil {
 		t.Fatalf("pull local skill projection: %v", err)
 	}

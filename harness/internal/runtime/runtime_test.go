@@ -49,7 +49,7 @@ func TestServiceModeUnreachableErrors(t *testing.T) {
 	if _, _, err := c.Ingest("agent", contract.ObservationEnvelope{ExternalID: "x", Event: contract.Event{Type: "memory.observed"}}); err == nil {
 		t.Fatal("observe against an unreachable service must error explicitly")
 	}
-	if _, err := c.PullEventView("agent", contract.Subscription{Actor: "agent"}); err == nil {
+	if _, err := c.PullPresentationView("agent", contract.Subscription{Actor: "agent"}); err == nil {
 		t.Fatal("pull against an unreachable service must error explicitly")
 	}
 }

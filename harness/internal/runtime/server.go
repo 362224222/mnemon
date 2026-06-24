@@ -165,7 +165,7 @@ func firstCause(causes []string) string {
 
 // normalizeObservedEvent turns a client EventDraft into a server-stamped observed Event (the Event
 // Intake duty): it STAMPS the server-authoritative fields from the AUTHENTICATED principal (id, ts,
-// schema version, actor) and ZEROES the client-forgeable provenance (read-set, event-view ref, ingest
+// schema version, actor) and ZEROES the client-forgeable provenance (read-set, presentation-view ref, ingest
 // seq). The payload, resource refs, correlation/lineage, and context digest are preserved — a client
 // can never forge identity or a read-set on the wire (D7/S9).
 func (cs *ControlServer) normalizeObservedEvent(principal contract.ActorID, ev *contract.Event) error {
@@ -173,7 +173,7 @@ func (cs *ControlServer) normalizeObservedEvent(principal contract.ActorID, ev *
 		return err
 	}
 	ev.SchemaVersion, ev.ID, ev.TS, ev.Actor = 1, cs.newID(), cs.now(), principal // STAMP
-	ev.BasedOn, ev.EventViewRef, ev.IngestSeq = nil, "", 0                        // ZERO forgeable
+	ev.BasedOn, ev.PresentationViewRef, ev.IngestSeq = nil, "", 0                 // ZERO forgeable
 	return nil
 }
 
@@ -198,9 +198,9 @@ func validateObservedType(t string) error {
 	return nil
 }
 
-// PullEventView serves an actor's scoped, server-built view. The subscription's actor MUST equal the
+// PullPresentationView serves an actor's scoped, server-built view. The subscription's actor MUST equal the
 // authenticated principal (S9/D7): a client can never name another actor's scope on the wire.
-func (cs *ControlServer) PullEventView(principal contract.ActorID, sub contract.Subscription) (view.View, error) {
+func (cs *ControlServer) PullPresentationView(principal contract.ActorID, sub contract.Subscription) (view.View, error) {
 	if sub.Actor != principal {
 		return view.View{}, fmt.Errorf("subscription actor %q does not match authenticated principal %q", sub.Actor, principal)
 	}

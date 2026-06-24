@@ -165,9 +165,9 @@ func TestRenderEndpointAppliesBindingBudgetWithoutReducingAuthority(t *testing.T
 		}
 	}
 
-	proj, err := client.PullEventView("", contract.Subscription{Actor: "codex@project"})
+	proj, err := client.PullPresentationView("", contract.Subscription{Actor: "codex@project"})
 	if err != nil {
-		t.Fatalf("pull authoritative event view: %v", err)
+		t.Fatalf("pull authoritative presentation view: %v", err)
 	}
 	if n := memoryEntryCount(proj.Content); n != 3 {
 		t.Fatalf("budget must not reduce authority: stored memory has %d entries, want 3", n)

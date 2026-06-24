@@ -1212,7 +1212,7 @@ func countR1Ledger(controlURL string, agent r1CodexAgent) map[string]int {
 		"assignment_expired": 0,
 	}
 	client := access.NewClientWithToken(controlURL, agent.token)
-	proj, err := client.PullEventView("", contract.Subscription{Actor: contract.ActorID(agent.principal)})
+	proj, err := client.PullPresentationView("", contract.Subscription{Actor: contract.ActorID(agent.principal)})
 	if err != nil {
 		return out
 	}
@@ -1229,7 +1229,7 @@ func countR1Ledger(controlURL string, agent r1CodexAgent) map[string]int {
 
 func findAssignmentAssignee(controlURL string, agent r1CodexAgent, assignmentID string) string {
 	client := access.NewClientWithToken(controlURL, agent.token)
-	proj, err := client.PullEventView("", contract.Subscription{Actor: contract.ActorID(agent.principal)})
+	proj, err := client.PullPresentationView("", contract.Subscription{Actor: contract.ActorID(agent.principal)})
 	if err != nil {
 		return ""
 	}
@@ -1315,7 +1315,7 @@ func countR1DerivedEventAudit(path string) map[string]int {
 		if json.Unmarshal([]byte(line), &obj) != nil {
 			continue
 		}
-		if obj["provenance"] != nil || obj["EventViewDigest"] != nil || obj["CatalogDigest"] != nil {
+		if obj["provenance"] != nil || obj["PresentationViewDigest"] != nil || obj["CatalogDigest"] != nil {
 			out["with_provenance"]++
 		}
 		if obj["body_digest"] != nil || obj["BodyDigest"] != nil {

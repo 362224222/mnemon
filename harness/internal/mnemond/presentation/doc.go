@@ -1,4 +1,4 @@
-// Package presentation builds read-only hostagent presentations from scoped event views.
+// Package presentation builds read-only hostagent presentations from scoped presentation views.
 //
 // The package is the hot-content side of mnemond: it derives EventEnvelope values
 // for a principal, then presents them as the current hook/skill text format.

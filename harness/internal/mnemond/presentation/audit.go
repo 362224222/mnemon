@@ -14,40 +14,40 @@ type AuditSink interface {
 }
 
 type AuditRecord struct {
-	SchemaVersion      int
-	AuditID            string
-	Principal          string
-	Host               string
-	Lifecycle          string
-	RenderIntent       string
-	EventViewDigest    string
-	BodyDigest         string
-	CatalogDigest      string
-	DecisionHead       string
-	Status             Status
-	BodyChars          int
-	PresentationCounts map[string]int
-	EventCounts        map[string]int
-	CreatedAt          string
+	SchemaVersion          int
+	AuditID                string
+	Principal              string
+	Host                   string
+	Lifecycle              string
+	RenderIntent           string
+	PresentationViewDigest string
+	BodyDigest             string
+	CatalogDigest          string
+	DecisionHead           string
+	Status                 Status
+	BodyChars              int
+	PresentationCounts     map[string]int
+	EventCounts            map[string]int
+	CreatedAt              string
 }
 
 func AuditRecordFrom(req Request, resp Response, presentationSectionCounts map[string]int, eventCounts map[string]int) AuditRecord {
 	return AuditRecord{
-		SchemaVersion:      1,
-		AuditID:            resp.AuditID,
-		Principal:          string(req.Principal),
-		Host:               req.Host,
-		Lifecycle:          req.Lifecycle,
-		RenderIntent:       req.RenderIntent,
-		EventViewDigest:    resp.EventViewDigest,
-		BodyDigest:         resp.BodyDigest,
-		CatalogDigest:      resp.Provenance.CatalogDigest,
-		DecisionHead:       resp.Provenance.DecisionHead,
-		Status:             resp.Status,
-		BodyChars:          len(resp.Body),
-		PresentationCounts: presentationSectionCounts,
-		EventCounts:        eventCounts,
-		CreatedAt:          resp.Provenance.RenderedAt,
+		SchemaVersion:          1,
+		AuditID:                resp.AuditID,
+		Principal:              string(req.Principal),
+		Host:                   req.Host,
+		Lifecycle:              req.Lifecycle,
+		RenderIntent:           req.RenderIntent,
+		PresentationViewDigest: resp.PresentationViewDigest,
+		BodyDigest:             resp.BodyDigest,
+		CatalogDigest:          resp.Provenance.CatalogDigest,
+		DecisionHead:           resp.Provenance.DecisionHead,
+		Status:                 resp.Status,
+		BodyChars:              len(resp.Body),
+		PresentationCounts:     presentationSectionCounts,
+		EventCounts:            eventCounts,
+		CreatedAt:              resp.Provenance.RenderedAt,
 	}
 }
 

@@ -34,10 +34,10 @@ func TestStampUsesTrustedSourcesNotPayload(t *testing.T) {
 		t.Fatalf("Actor must come from binding, not payload; got %q", ev.Actor)
 	}
 	if len(ev.BasedOn) != 1 || ev.BasedOn[0].Version != 3 {
-		t.Fatalf("BasedOn must be the dispatched event view's read-set; got %+v", ev.BasedOn)
+		t.Fatalf("BasedOn must be the dispatched presentation view's read-set; got %+v", ev.BasedOn)
 	}
-	if ev.EventViewRef != "proj_abc" || ev.ContextDigest != "abc" {
-		t.Fatalf("provenance must come from the event view; got ref=%q digest=%q", ev.EventViewRef, ev.ContextDigest)
+	if ev.PresentationViewRef != "proj_abc" || ev.ContextDigest != "abc" {
+		t.Fatalf("provenance must come from the presentation view; got ref=%q digest=%q", ev.PresentationViewRef, ev.ContextDigest)
 	}
 	if ev.CorrelationID != "corr-1" || ev.CausedBy != "ev-trigger" {
 		t.Fatalf("correlation/lineage must come from the trigger; got corr=%q causedBy=%q", ev.CorrelationID, ev.CausedBy)

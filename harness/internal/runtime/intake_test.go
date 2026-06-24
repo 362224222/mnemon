@@ -25,17 +25,17 @@ func mustEventAtSeq(t *testing.T, cs *ControlServer, seq int64) contract.Event {
 
 // Intake must stamp the server-authoritative fields from the AUTHENTICATED principal and zero the
 // client-forgeable provenance, never trusting the payload claim (D7/S9). A client cannot forge the
-// actor, id, ts, schema version, read-set, or event-view ref.
+// actor, id, ts, schema version, read-set, or presentation-view ref.
 func TestIngestStampsServerFields(t *testing.T) {
 	_, _, cs := newServerWith(t, admission.NewRuleSet())
 	seq, _, err := cs.Ingest("codex@project", contract.ObservationEnvelope{
 		ExternalID: "x1",
 		Event: contract.Event{
 			Type: "memory.write_candidate.observed", Actor: "ATTACKER", ID: "forged", TS: "forged",
-			BasedOn:       []contract.ResourceVersion{{Ref: contract.ResourceRef{Kind: "memory", ID: "p"}, Version: 9}},
-			EventViewRef:  "forged-ref",
-			CorrelationID: "corr-keep",
-			Payload:       map[string]any{"content": "x", "source": "s", "confidence": "high"},
+			BasedOn:             []contract.ResourceVersion{{Ref: contract.ResourceRef{Kind: "memory", ID: "p"}, Version: 9}},
+			PresentationViewRef: "forged-ref",
+			CorrelationID:       "corr-keep",
+			Payload:             map[string]any{"content": "x", "source": "s", "confidence": "high"},
 		},
 	})
 	if err != nil {
@@ -54,8 +54,8 @@ func TestIngestStampsServerFields(t *testing.T) {
 	if ev.SchemaVersion != 1 {
 		t.Fatalf("schema_version must be stamped to 1; got %d", ev.SchemaVersion)
 	}
-	if len(ev.BasedOn) != 0 || ev.EventViewRef != "" {
-		t.Fatalf("forgeable read-set/event-view ref must be zeroed; got based_on=%+v event_view_ref=%q", ev.BasedOn, ev.EventViewRef)
+	if len(ev.BasedOn) != 0 || ev.PresentationViewRef != "" {
+		t.Fatalf("forgeable read-set/presentation-view ref must be zeroed; got based_on=%+v presentation_view_ref=%q", ev.BasedOn, ev.PresentationViewRef)
 	}
 	if ev.CorrelationID != "corr-keep" {
 		t.Fatalf("correlation id must be preserved; got %q", ev.CorrelationID)

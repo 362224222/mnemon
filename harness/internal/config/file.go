@@ -39,8 +39,8 @@ type CapabilityConfig struct {
 }
 
 type BackgroundConfig struct {
-	Sync             string `json:"sync,omitempty"`               // "disabled" | "manual"
-	EventViewRefresh string `json:"event_view_refresh,omitempty"` // "manual"
+	Sync                    string `json:"sync,omitempty"`                      // "disabled" | "manual"
+	PresentationViewRefresh string `json:"presentation_view_refresh,omitempty"` // "manual"
 }
 
 // Load reads and validates a config File. It is fail-closed: an unknown field anywhere in the document
