@@ -8,13 +8,13 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/capability"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
-	"github.com/mnemon-dev/mnemon/harness/internal/remotesync"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemonhub/exchange"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
 // ImportLocalSyncPull re-enters pulled synced events through Event Intake (the import runtime), then
 // advances the durable pull cursor. It drives Ingest/Tick, so it stays on the app side of the boundary
-// (above remotesync's pure store helpers) — never bypassing the kernel. It is the OFFLINE path: it
+// (above mnemonhub exchange's pure store helpers) — never bypassing the kernel. It is the OFFLINE path: it
 // boots its own import runtime by path, so it must never run inside a serving process (the in-process
 // worker drives importPulledEvents over the LIVE runtime instead — flock, v1.1 #2).
 func ImportLocalSyncPull(storePath, remoteID, nextCursor string, events []eventmodel.EventEnvelope, catalog map[string]capability.Capability) error {
@@ -35,7 +35,7 @@ func ImportLocalSyncPull(storePath, remoteID, nextCursor string, events []eventm
 			return err
 		}
 	}
-	return remotesync.SetSyncPullCursor(storePath, remoteID, nextCursor)
+	return exchange.SetSyncPullCursor(storePath, remoteID, nextCursor)
 }
 
 // importPulledEvents is the ONE pull-import loop both paths share (offline ImportLocalSyncPull and

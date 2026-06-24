@@ -1,14 +1,14 @@
-// Package remotesync holds the pure store-side helpers for Remote Workspace sync: reading the pending
+// Package exchange holds the local mnemond side of mnemonhub event exchange: reading the pending
 // synced-event push batch, applying a push response's per-event status, reading pull state/counts,
 // and advancing the pull cursor. It imports store + contract only. The ingest-driving pull import
-// (which re-enters Event Intake via a runtime) lives in app, not here, so remotesync never depends
-// upward.
+// (which re-enters Event Intake via a runtime) lives in app, not here, so exchange never depends
+// upward into mnemond runtime wiring.
 //
 // Each helper exists in two forms: a LiveStore form over an ALREADY-OPEN handle (the in-process sync
 // worker drives these through the live runtime — opening the store by path from inside the serving
 // process would self-collide on the single-writer flock, v1.1 #2) and the original path-based form
 // that opens/closes per call, kept for the OFFLINE CLI verbs (`sync push|pull --once`, background).
-package remotesync
+package exchange
 
 import (
 	"crypto/sha256"
@@ -26,7 +26,7 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
 
-// LiveStore is the open-handle surface the sync passes drive: satisfied by *store.Store (the offline
+// LiveStore is the open-handle surface the exchange passes drive: satisfied by *store.Store (the offline
 // opener) and by *runtime.Runtime's passthroughs (the in-process worker). Cursor access is included
 // because the pull cursor is durable sync state; callers must stay on the sync cursor names.
 type LiveStore interface {

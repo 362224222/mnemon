@@ -1,4 +1,4 @@
-package remotesync
+package exchange
 
 import (
 	"encoding/json"

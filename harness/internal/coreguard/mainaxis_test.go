@@ -42,9 +42,8 @@ var packageMainAxisInventory = map[string]packageMainAxis{
 	"eventview":   {owner: ownerMnemond, role: "hostagent-facing derived event read model", target: "mnemond/presentation"},
 	"hostsurface": {owner: ownerHostAgent, role: "hostagent setup and thin shims", target: "hostagent"},
 	"kernel":      {owner: ownerMnemond, role: "materialized event state applier", target: "mnemond/state"},
-	"mnemonhub":   {owner: ownerMnemonhub, role: "remote accepted event exchange server", target: "mnemonhub"},
+	"mnemonhub":   {owner: ownerMnemonhub, role: "remote accepted event exchange server and exchange mechanics", target: "mnemonhub"},
 	"reconcile":   {owner: ownerMnemond, role: "event admission/materialization driver", target: "mnemond/admission"},
-	"remotesync":  {owner: ownerMnemonhub, role: "mnemonhub exchange client and config", target: "mnemonhub/exchange"},
 	"render":      {owner: ownerMnemond, role: "derived event presentation for hostagents", target: "mnemond/presentation"},
 	"replay":      {owner: ownerMnemond, role: "mnemond determinism verification", target: "mnemond/replay"},
 	"rule":        {owner: ownerMnemond, role: "event admission policy primitive", target: "mnemond/admission"},
@@ -59,10 +58,17 @@ var demotedMainAxisPackages = map[string]bool{
 	"eventview":  true,
 	"kernel":     true,
 	"reconcile":  true,
-	"remotesync": true,
 	"render":     true,
 	"rule":       true,
 	"store":      true,
+}
+
+var nestedMainAxisInventory = map[string]packageMainAxis{
+	"mnemonhub/exchange": {owner: ownerMnemonhub, role: "mnemonhub event exchange client, cursors, and local ledger acknowledgements", target: "mnemonhub/exchange"},
+}
+
+var retiredTopLevelImplementationPackages = []string{
+	"remotesync",
 }
 
 func TestInternalPackagesHaveMainAxisOwner(t *testing.T) {
@@ -94,6 +100,25 @@ func TestDemotedPackagesDoNotRemainUnownedConcepts(t *testing.T) {
 		}
 		if inv.target == pkg || !strings.Contains(inv.target, "/") {
 			t.Fatalf("demoted package %q target %q must name its owning axis/subsystem", pkg, inv.target)
+		}
+	}
+}
+
+func TestNestedPackagesHaveMainAxisOwner(t *testing.T) {
+	for pkg, inv := range nestedMainAxisInventory {
+		if inv.owner == "" || strings.TrimSpace(inv.role) == "" || strings.TrimSpace(inv.target) == "" {
+			t.Errorf("harness/internal/%s has incomplete nested main-axis inventory: %+v", pkg, inv)
+		}
+		if !hasNonTestGoFiles(filepath.Join("..", filepath.FromSlash(pkg))) {
+			t.Errorf("nested main-axis inventory names missing/non-source package %q", pkg)
+		}
+	}
+}
+
+func TestRetiredTopLevelImplementationPackagesStayRetired(t *testing.T) {
+	for _, pkg := range retiredTopLevelImplementationPackages {
+		if hasNonTestGoFiles(filepath.Join("..", pkg)) {
+			t.Errorf("harness/internal/%s still has non-test source; keep it under its main-axis owner instead of reviving a top-level concept", pkg)
 		}
 	}
 }

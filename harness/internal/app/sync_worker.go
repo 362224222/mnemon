@@ -12,15 +12,15 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/capability"
 	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/remotesync"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemonhub/exchange"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
 // The driver sync worker (v1.1 #2): inside the SERVING process, sync operates the already-open
 // runtime/store handle — push reads pending synced events and applies the hub's verdicts through the
 // live handle; pull re-enters Event Intake via the runtime's trusted intake + Tick. It never opens
-// the store by path (the single-writer flock would self-collide); the path-based remotesync helpers
-// remain the OFFLINE CLI verbs' tools, and ProbeAvailable keeps the two mutually exclusive.
+// the store by path (the single-writer flock would self-collide); the path-based mnemonhub exchange
+// helpers remain the OFFLINE CLI verbs' tools, and ProbeAvailable keeps the two mutually exclusive.
 
 // SyncWorkerOptions configures the worker. The zero value is safe: default cadence and transport
 // timeout, fail-closed transport security.
@@ -69,7 +69,7 @@ func syncWorkerPass(rt *runtime.Runtime, opts SyncWorkerOptions) error {
 		}
 		return fmt.Errorf("stat Remote Workspace config: %w", err)
 	}
-	entry, err := remotesync.LoadRemoteEntry(remotesPath, "default")
+	entry, err := exchange.LoadRemoteEntry(remotesPath, "default")
 	if err != nil {
 		return err
 	}
@@ -86,7 +86,7 @@ func syncWorkerPass(rt *runtime.Runtime, opts SyncWorkerOptions) error {
 // syncWorkerClient builds the bounded sync client from the remote entry: credential_ref + ca_file
 // resolve relative to the project root (the same resolution `sync connect` wrote them under), and
 // the endpoint passes the T2 downgrade gate unless explicitly overridden.
-func syncWorkerClient(entry remotesync.RemoteEntry, opts SyncWorkerOptions) (*channel.Client, error) {
+func syncWorkerClient(entry exchange.RemoteEntry, opts SyncWorkerOptions) (*channel.Client, error) {
 	if strings.TrimSpace(entry.CredentialRef) == "" {
 		return nil, fmt.Errorf("Remote Workspace %q has no credential_ref", entry.ID)
 	}
@@ -117,7 +117,7 @@ func syncWorkerClient(entry remotesync.RemoteEntry, opts SyncWorkerOptions) (*ch
 // syncWorkerPush pushes the pending batch (if any) and mirrors the hub's per-event verdicts into
 // the local ledger — both through the live handle.
 func syncWorkerPush(rt *runtime.Runtime, client *channel.Client, remoteID string) error {
-	batch, err := remotesync.ReadPushBatch(rt)
+	batch, err := exchange.ReadPushBatch(rt)
 	if err != nil {
 		return err
 	}
@@ -126,20 +126,20 @@ func syncWorkerPush(rt *runtime.Runtime, client *channel.Client, remoteID string
 	}
 	resp, err := client.SyncPush(contract.SyncPushRequest{
 		ReplicaID: batch.ReplicaID,
-		BatchID:   remotesync.PushBatchID(batch.ReplicaID, batch.Events),
+		BatchID:   exchange.PushBatchID(batch.ReplicaID, batch.Events),
 		Events:    batch.Events,
 	})
 	if err != nil {
 		return fmt.Errorf("sync push failed: %w", err)
 	}
-	return remotesync.ApplyPushResponse(rt, remoteID, resp)
+	return exchange.ApplyPushResponse(rt, remoteID, resp)
 }
 
 // syncWorkerPull pulls after the durable cursor, re-enters each event through the live runtime's
 // trusted intake (importPulledEvents — the same loop the offline path uses), then advances the
 // cursor.
 func syncWorkerPull(rt *runtime.Runtime, client *channel.Client, remoteID string, catalog map[string]capability.Capability) error {
-	state, err := remotesync.ReadPullState(rt, remoteID)
+	state, err := exchange.ReadPullState(rt, remoteID)
 	if err != nil {
 		return err
 	}
@@ -153,5 +153,5 @@ func syncWorkerPull(rt *runtime.Runtime, client *channel.Client, remoteID string
 	if err := importPulledEvents(rt, remoteID, resp.Events, catalog); err != nil {
 		return err
 	}
-	return remotesync.SetPullCursor(rt, remoteID, resp.NextCursor)
+	return exchange.SetPullCursor(rt, remoteID, resp.NextCursor)
 }

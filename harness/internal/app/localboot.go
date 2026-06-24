@@ -16,7 +16,7 @@ import (
 	"strings"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/channel"
-	"github.com/mnemon-dev/mnemon/harness/internal/remotesync"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemonhub/exchange"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
@@ -165,7 +165,7 @@ func currentRemoteWorkspace(projectRoot string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	var doc remotesync.RemotesDoc
+	var doc exchange.RemotesDoc
 	if err := json.Unmarshal(raw, &doc); err != nil || doc.SchemaVersion != 1 {
 		return "", false
 	}

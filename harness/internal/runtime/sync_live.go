@@ -7,7 +7,7 @@ import (
 
 // Live-store sync passthroughs (v1.1 #2): the in-process sync worker operates the ALREADY-OPEN
 // runtime store through these — never a second OpenStore/OpenRuntime by path, which would
-// self-collide on the single-writer flock. Together they satisfy remotesync.LiveStore, so the
+// self-collide on the single-writer flock. Together they satisfy exchange.LiveStore, so the
 // worker reuses the exact helpers the offline CLI verbs use, just over the live handle.
 
 // ReplicaID is this store's durable replica identity (minted on first read).
@@ -25,7 +25,7 @@ func (r *Runtime) MarkSyncedEventStatus(originMnemond, eventID string, subject e
 
 // GetCursor / SetCursor expose the durable cursor surface for the SYNC cursor names only
 // ("sync_pull:<remote>"). The dispatch/sink cursors belong to the ControlServer — driving them from
-// outside would corrupt the governed loop; remotesync's helpers are the intended callers.
+// outside would corrupt the governed loop; mnemonhub exchange helpers are the intended callers.
 func (r *Runtime) GetCursor(name string) int64            { return r.store.GetCursor(name) }
 func (r *Runtime) SetCursor(name string, seq int64) error { return r.store.SetCursor(name, seq) }
 
