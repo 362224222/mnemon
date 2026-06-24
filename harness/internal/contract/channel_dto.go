@@ -6,10 +6,10 @@ import (
 	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
 )
 
-// Channel-facing DTOs shared across the channel/runtime/app layers. They live in contract (zero
-// deps) so the channel port and the runtime that satisfies it can both name them without a back-edge.
+// Access-facing DTOs shared across the mnemond access/runtime/app layers. They live in contract
+// (zero deps) so the access port and the runtime that satisfies it can both name them without a back-edge.
 
-// ActorKind classifies a channel principal by role. It is NOT a privilege path: the channel is
+// ActorKind classifies a mnemond access principal by role. It is NOT a privilege path: access is
 // the same for every principal; the role differs by binding, never by a privileged code path
 // (D6). HostAgent pushes host observations; ControlAgent is an operator/control client;
 // ReplicaAgent is the background Remote Workspace sync actor.
@@ -27,8 +27,8 @@ const (
 const SyncImportActor = ActorID("sync@local")
 
 // The three Remote Workspace sync wire verbs (sync-abi-v1 §1). They live in contract because the ABI
-// names them: the channel binding layer and the standalone hub (mnemonhub/mnemon-hub) must agree on the
-// strings without either importing the other. Deliberately untyped so channel can alias them into its
+// names them: the mnemond access binding layer and the standalone hub (mnemonhub/mnemon-hub) must agree on the
+// strings without either importing the other. Deliberately untyped so access can alias them into its
 // Verb space unchanged.
 const (
 	SyncVerbPush   = "sync.push"
@@ -49,7 +49,7 @@ type ReplicaGrant struct {
 
 // ClampRefs clamps a requested ref set to a principal's granted scope — the team-scale authorization
 // ceiling, implemented ONCE for pull / sync / status (hand-rolled copies had already diverged on
-// empty-scope handling). channel.ChannelBinding.ClampRefs and the mnemonhub hub both delegate here.
+// empty-scope handling). access.ChannelBinding.ClampRefs and the mnemonhub hub both delegate here.
 // Empty requested defaults to the full scope; any explicit ref outside the scope is an error; an
 // EMPTY scope denies every explicit ref (fail closed). The ingest path keeps its documented exception
 // (an observation naming no refs is unconstrained) at its own call site.

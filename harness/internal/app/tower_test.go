@@ -4,8 +4,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
@@ -14,9 +14,9 @@ import (
 // goal statement on GOAL, the accepted decision (attributed to the proposer) on LEDGER.
 func TestBuildTowerViewGoalAndLedger(t *testing.T) {
 	piRef := contract.ResourceRef{Kind: "project_intent", ID: "project"}
-	binding := channel.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{piRef})
+	binding := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{piRef})
 	binding.AllowedObservedTypes = []string{"project_intent.write_candidate.observed"}
-	rc, err := LocalRuntimeConfigFromBindings([]channel.ChannelBinding{binding}, nil)
+	rc, err := LocalRuntimeConfigFromBindings([]access.ChannelBinding{binding}, nil)
 	if err != nil {
 		t.Fatalf("boot config: %v", err)
 	}
@@ -37,7 +37,7 @@ func TestBuildTowerViewGoalAndLedger(t *testing.T) {
 		t.Fatalf("tick: %v", err)
 	}
 
-	v, err := BuildTowerView(rt, []channel.ChannelBinding{binding})
+	v, err := BuildTowerView(rt, []access.ChannelBinding{binding})
 	if err != nil {
 		t.Fatalf("build tower view: %v", err)
 	}
@@ -69,9 +69,9 @@ func TestBuildTowerViewGoalAndLedger(t *testing.T) {
 // FIELD; a denied one (missing the required scope) surfaces as an INBOX escalation, never silently lost.
 func TestBuildTowerViewFieldAndInbox(t *testing.T) {
 	asgRef := contract.ResourceRef{Kind: "assignment", ID: "project"}
-	binding := channel.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{asgRef})
+	binding := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{asgRef})
 	binding.AllowedObservedTypes = []string{"assignment.write_candidate.observed"}
-	rc, err := LocalRuntimeConfigFromBindings([]channel.ChannelBinding{binding}, nil)
+	rc, err := LocalRuntimeConfigFromBindings([]access.ChannelBinding{binding}, nil)
 	if err != nil {
 		t.Fatalf("boot config: %v", err)
 	}
@@ -106,7 +106,7 @@ func TestBuildTowerViewFieldAndInbox(t *testing.T) {
 		t.Fatalf("tick: %v", err)
 	}
 
-	v, err := BuildTowerView(rt, []channel.ChannelBinding{binding})
+	v, err := BuildTowerView(rt, []access.ChannelBinding{binding})
 	if err != nil {
 		t.Fatalf("build tower view: %v", err)
 	}
@@ -136,10 +136,10 @@ func TestBuildTowerViewFieldAndInbox(t *testing.T) {
 
 // An empty runtime yields empty pages (no panic, no fabricated data).
 func TestBuildTowerViewEmpty(t *testing.T) {
-	binding := channel.HostAgentBinding("codex@project", "http://127.0.0.1:8787",
+	binding := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787",
 		[]contract.ResourceRef{{Kind: "memory", ID: "project"}})
 	binding.AllowedObservedTypes = []string{"memory.write_candidate.observed"}
-	rc, err := LocalRuntimeConfigFromBindings([]channel.ChannelBinding{binding}, nil)
+	rc, err := LocalRuntimeConfigFromBindings([]access.ChannelBinding{binding}, nil)
 	if err != nil {
 		t.Fatalf("boot config: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestBuildTowerViewEmpty(t *testing.T) {
 	}
 	defer rt.Close()
 
-	v, err := BuildTowerView(rt, []channel.ChannelBinding{binding})
+	v, err := BuildTowerView(rt, []access.ChannelBinding{binding})
 	if err != nil {
 		t.Fatalf("build tower view: %v", err)
 	}

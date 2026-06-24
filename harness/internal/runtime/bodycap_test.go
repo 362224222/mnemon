@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 )
 
 // An oversize ingest body must be rejected at the edge (a 400), not buffered into memory and decoded.
@@ -17,7 +17,7 @@ func TestIngestBodyCapRejectsOversize(t *testing.T) {
 		t.Fatalf("open runtime: %v", err)
 	}
 	t.Cleanup(func() { _ = rt.Close() })
-	srv := httptest.NewServer(NewRuntimeHandler(rt, channel.HeaderAuthenticator{}))
+	srv := httptest.NewServer(NewRuntimeHandler(rt, access.HeaderAuthenticator{}))
 	t.Cleanup(srv.Close)
 
 	body := `{"event":{"type":"memory.observed","payload":{"x":"` + strings.Repeat("a", 2<<20) + `"}}}`

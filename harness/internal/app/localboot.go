@@ -15,7 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemonhub/exchange"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
@@ -30,7 +30,7 @@ var ErrLocalNotSetup = errors.New(LocalNotSetupMessage)
 type LocalBoot struct {
 	Configured bool
 	StorePath  string
-	Loaded     channel.LoadedBindings
+	Loaded     access.LoadedBindings
 	Config     LocalConfig
 }
 
@@ -50,7 +50,7 @@ type LocalConfig struct {
 // hidden --bindings flag; "" = setup-config-driven discovery).
 func ResolveLocalBoot(root, storePath, bindingsPath string) (LocalBoot, error) {
 	if bindingsPath != "" {
-		loaded, err := channel.LoadBindingFile(root, ResolveProjectPath(root, bindingsPath))
+		loaded, err := access.LoadBindingFile(root, ResolveProjectPath(root, bindingsPath))
 		if err != nil {
 			return LocalBoot{}, err
 		}
@@ -65,9 +65,9 @@ func ResolveLocalBoot(root, storePath, bindingsPath string) (LocalBoot, error) {
 	}
 	bindingPath := cfg.BindingFile
 	if bindingPath == "" {
-		bindingPath = channel.DefaultBindingFile
+		bindingPath = access.DefaultBindingFile
 	}
-	loaded, err := channel.LoadBindingFile(root, ResolveProjectPath(root, bindingPath))
+	loaded, err := access.LoadBindingFile(root, ResolveProjectPath(root, bindingPath))
 	if err != nil {
 		return LocalBoot{}, err
 	}

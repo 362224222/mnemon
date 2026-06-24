@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/app"
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
@@ -175,7 +175,7 @@ func TestRotateTokenInvalidatesOldValue(t *testing.T) {
 	if st, _ := os.Stat(tokPath); st.Mode().Perm() != 0o600 {
 		t.Fatalf("rotated token mode %o, want 0600", st.Mode().Perm())
 	}
-	loaded, err := channel.LoadBindingFile(root, filepath.Join(root, ".mnemon", "harness", "channel", "bindings.json"))
+	loaded, err := access.LoadBindingFile(root, filepath.Join(root, ".mnemon", "harness", "channel", "bindings.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemonhub/exchange"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
@@ -27,7 +27,7 @@ import (
 type SyncWorkerOptions struct {
 	ProjectRoot         string
 	Interval            time.Duration // <= 0 defaults to defaultSyncWorkerInterval
-	Timeout             time.Duration // per-call transport bound; <= 0 defaults to channel.DefaultSyncTimeout
+	Timeout             time.Duration // per-call transport bound; <= 0 defaults to access.DefaultSyncTimeout
 	AllowInsecureRemote bool          // explicit T2 downgrade override (v1.1 #3)
 	// Catalog is the boot-resolved capability catalog the pull import derives its kind→observation
 	// mapping from (descriptor-derived, PD6). nil falls back to the embedded first-party catalog.
@@ -86,7 +86,7 @@ func syncWorkerPass(rt *runtime.Runtime, opts SyncWorkerOptions) error {
 // syncWorkerClient builds the bounded sync client from the remote entry: credential_ref + ca_file
 // resolve relative to the project root (the same resolution `sync connect` wrote them under), and
 // the endpoint passes the T2 downgrade gate unless explicitly overridden.
-func syncWorkerClient(entry exchange.RemoteEntry, opts SyncWorkerOptions) (*channel.Client, error) {
+func syncWorkerClient(entry exchange.RemoteEntry, opts SyncWorkerOptions) (*access.Client, error) {
 	if strings.TrimSpace(entry.CredentialRef) == "" {
 		return nil, fmt.Errorf("Remote Workspace %q has no credential_ref", entry.ID)
 	}
@@ -106,7 +106,7 @@ func syncWorkerClient(entry exchange.RemoteEntry, opts SyncWorkerOptions) (*chan
 	if caFile != "" && !filepath.IsAbs(caFile) {
 		caFile = filepath.Join(opts.ProjectRoot, caFile)
 	}
-	return channel.NewSyncClient(entry.Endpoint, channel.SyncClientConfig{
+	return access.NewSyncClient(entry.Endpoint, access.SyncClientConfig{
 		Token:         token,
 		Timeout:       opts.Timeout,
 		CAFile:        caFile,
@@ -116,7 +116,7 @@ func syncWorkerClient(entry exchange.RemoteEntry, opts SyncWorkerOptions) (*chan
 
 // syncWorkerPush pushes the pending batch (if any) and mirrors the hub's per-event verdicts into
 // the local ledger — both through the live handle.
-func syncWorkerPush(rt *runtime.Runtime, client *channel.Client, remoteID string) error {
+func syncWorkerPush(rt *runtime.Runtime, client *access.Client, remoteID string) error {
 	batch, err := exchange.ReadPushBatch(rt)
 	if err != nil {
 		return err
@@ -138,7 +138,7 @@ func syncWorkerPush(rt *runtime.Runtime, client *channel.Client, remoteID string
 // syncWorkerPull pulls after the durable cursor, re-enters each event through the live runtime's
 // trusted intake (importPulledEvents — the same loop the offline path uses), then advances the
 // cursor.
-func syncWorkerPull(rt *runtime.Runtime, client *channel.Client, remoteID string, catalog map[string]policy.Capability) error {
+func syncWorkerPull(rt *runtime.Runtime, client *access.Client, remoteID string, catalog map[string]policy.Capability) error {
 	state, err := exchange.ReadPullState(rt, remoteID)
 	if err != nil {
 		return err

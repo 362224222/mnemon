@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 )
 
 // TestRuntimeIsSingleStoreOwner pins the P1.3 ownership invariant (S11): while one runtime owns the
@@ -41,11 +41,11 @@ func TestServiceModeUnreachableErrors(t *testing.T) {
 		t.Fatalf("open runtime: %v", err)
 	}
 	defer rt.Close()
-	srv := httptest.NewServer(channel.NewHTTPHandler(rt.API()))
+	srv := httptest.NewServer(access.NewHTTPHandler(rt.API()))
 	url := srv.URL
 	srv.Close() // the configured service is now unreachable
 
-	c := channel.NewClient(url, "agent")
+	c := access.NewClient(url, "agent")
 	if _, _, err := c.Ingest("agent", contract.ObservationEnvelope{ExternalID: "x", Event: contract.Event{Type: "memory.observed"}}); err == nil {
 		t.Fatal("observe against an unreachable service must error explicitly")
 	}

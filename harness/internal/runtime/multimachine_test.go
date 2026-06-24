@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/rule"
 )
 
@@ -14,10 +14,10 @@ import (
 // canonical writer; a cross-edge CAS conflict resolves deterministically (one accept, one defer).
 func TestTwoEdgesConflictOverHTTP(t *testing.T) {
 	s, _, cs := newServerWith(t, rule.NewRuleSet(proposeRule()))
-	srv := httptest.NewServer(channel.NewHTTPHandler(cs))
+	srv := httptest.NewServer(access.NewHTTPHandler(cs))
 	defer srv.Close()
-	edgeA := channel.NewClient(srv.URL, "agent")
-	edgeB := channel.NewClient(srv.URL, "agent")
+	edgeA := access.NewClient(srv.URL, "agent")
+	edgeB := access.NewClient(srv.URL, "agent")
 	if _, _, err := edgeA.Ingest("agent", contract.ObservationEnvelope{ExternalID: "edgeA-1", Event: contract.Event{Type: "memory.observed", CorrelationID: "cA"}}); err != nil {
 		t.Fatalf("edgeA ingest: %v", err)
 	}
@@ -59,9 +59,9 @@ func TestTwoEdgesConflictOverHTTP(t *testing.T) {
 
 func TestHTTPIngestTakesPrincipalFromHeaderNotBody(t *testing.T) {
 	s, _, cs := newServerWith(t, rule.NewRuleSet(proposeRule()))
-	srv := httptest.NewServer(channel.NewHTTPHandler(cs))
+	srv := httptest.NewServer(access.NewHTTPHandler(cs))
 	defer srv.Close()
-	edge := channel.NewClient(srv.URL, "agent")
+	edge := access.NewClient(srv.URL, "agent")
 	seq, _, err := edge.Ingest("agent", contract.ObservationEnvelope{ExternalID: "x", Event: contract.Event{Type: "memory.observed", Actor: "admin"}})
 	if err != nil {
 		t.Fatalf("ingest: %v", err)

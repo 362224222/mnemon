@@ -11,20 +11,20 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/eventview"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
 func TestRenderEndpointUsesAuthenticatedScopedProjection(t *testing.T) {
 	ref := contract.ResourceRef{Kind: "assignment", ID: "project"}
-	a := channel.HostAgentBinding("codex-a@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
+	a := access.HostAgentBinding("codex-a@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
 	a.AllowedObservedTypes = []string{"assignment.write_candidate.observed"}
-	b := channel.HostAgentBinding("codex-b@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
-	loaded := channel.LoadedBindings{
-		Bindings: []channel.ChannelBinding{a, b},
+	b := access.HostAgentBinding("codex-b@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
+	loaded := access.LoadedBindings{
+		Bindings: []access.ChannelBinding{a, b},
 		Tokens: map[string]contract.ActorID{
 			"tok-a": "codex-a@project",
 			"tok-b": "codex-b@project",
@@ -40,19 +40,19 @@ func TestRenderEndpointUsesAuthenticatedScopedProjection(t *testing.T) {
 		t.Fatalf("open runtime: %v", err)
 	}
 	defer rt.Close()
-	bindings, err := channel.NewBindingSet(loaded.Bindings...)
+	bindings, err := access.NewBindingSet(loaded.Bindings...)
 	if err != nil {
 		t.Fatalf("binding set: %v", err)
 	}
 	audit := &presentation.MemoryAuditSink{}
-	handler := NewLocalHTTPHandler(rt, channel.TokenAuthenticator{Tokens: loaded.Tokens}, bindings, presentation.Renderer{
+	handler := NewLocalHTTPHandler(rt, access.TokenAuthenticator{Tokens: loaded.Tokens}, bindings, presentation.Renderer{
 		Now:       func() time.Time { return mustRenderHTTPTime(t, "2026-06-24T10:05:00Z") },
 		AuditSink: audit,
 	})
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
 
-	clientA := channel.NewClientWithToken(srv.URL, "tok-a")
+	clientA := access.NewClientWithToken(srv.URL, "tok-a")
 	rec, err := clientA.IngestObserve("", contract.ObservationEnvelope{
 		ExternalID: "assignment-render-endpoint",
 		Event: contract.Event{Type: "assignment.write_candidate.observed", Payload: map[string]any{
@@ -79,9 +79,9 @@ func TestRenderEndpointUsesAuthenticatedScopedProjection(t *testing.T) {
 
 func TestRenderEndpointRequiresRenderVerb(t *testing.T) {
 	ref := contract.ResourceRef{Kind: "assignment", ID: "project"}
-	b := channel.HostAgentBinding("codex-b@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
-	b.AllowedVerbs = []channel.Verb{channel.VerbPull}
-	loaded := channel.LoadedBindings{Bindings: []channel.ChannelBinding{b}, Tokens: map[string]contract.ActorID{"tok-b": "codex-b@project"}}
+	b := access.HostAgentBinding("codex-b@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
+	b.AllowedVerbs = []access.Verb{access.VerbPull}
+	loaded := access.LoadedBindings{Bindings: []access.ChannelBinding{b}, Tokens: map[string]contract.ActorID{"tok-b": "codex-b@project"}}
 	rc, err := LocalRuntimeConfigFromBindings(loaded.Bindings, nil)
 	if err != nil {
 		t.Fatalf("runtime config: %v", err)
@@ -91,11 +91,11 @@ func TestRenderEndpointRequiresRenderVerb(t *testing.T) {
 		t.Fatalf("open runtime: %v", err)
 	}
 	defer rt.Close()
-	bindings, err := channel.NewBindingSet(loaded.Bindings...)
+	bindings, err := access.NewBindingSet(loaded.Bindings...)
 	if err != nil {
 		t.Fatalf("binding set: %v", err)
 	}
-	srv := httptest.NewServer(NewLocalHTTPHandler(rt, channel.TokenAuthenticator{Tokens: loaded.Tokens}, bindings, presentation.Renderer{}))
+	srv := httptest.NewServer(NewLocalHTTPHandler(rt, access.TokenAuthenticator{Tokens: loaded.Tokens}, bindings, presentation.Renderer{}))
 	defer srv.Close()
 
 	body, _ := json.Marshal(presentation.Request{RenderIntent: presentation.IntentTeamworkEvents})
@@ -117,11 +117,11 @@ func TestRenderEndpointRequiresRenderVerb(t *testing.T) {
 
 func TestRenderEndpointAppliesBindingBudgetWithoutReducingAuthority(t *testing.T) {
 	ref := contract.ResourceRef{Kind: "memory", ID: "project"}
-	b := channel.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
+	b := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
 	b.AllowedObservedTypes = []string{"memory.write_candidate.observed"}
 	b.Budget = contract.BudgetDigestOnly
-	loaded := channel.LoadedBindings{
-		Bindings: []channel.ChannelBinding{b},
+	loaded := access.LoadedBindings{
+		Bindings: []access.ChannelBinding{b},
 		Tokens:   map[string]contract.ActorID{"tok": "codex@project"},
 	}
 	rc, err := LocalRuntimeConfigFromBindings(loaded.Bindings, nil)
@@ -133,16 +133,16 @@ func TestRenderEndpointAppliesBindingBudgetWithoutReducingAuthority(t *testing.T
 		t.Fatalf("open runtime: %v", err)
 	}
 	defer rt.Close()
-	bindings, err := channel.NewBindingSet(loaded.Bindings...)
+	bindings, err := access.NewBindingSet(loaded.Bindings...)
 	if err != nil {
 		t.Fatalf("binding set: %v", err)
 	}
-	srv := httptest.NewServer(NewLocalHTTPHandler(rt, channel.TokenAuthenticator{Tokens: loaded.Tokens}, bindings, presentation.Renderer{
+	srv := httptest.NewServer(NewLocalHTTPHandler(rt, access.TokenAuthenticator{Tokens: loaded.Tokens}, bindings, presentation.Renderer{
 		Now: func() time.Time { return mustRenderHTTPTime(t, "2026-06-24T10:05:00Z") },
 	}))
 	defer srv.Close()
 
-	client := channel.NewClientWithToken(srv.URL, "tok")
+	client := access.NewClientWithToken(srv.URL, "tok")
 	for i := 1; i <= 3; i++ {
 		rec, err := client.IngestObserve("", contract.ObservationEnvelope{
 			ExternalID: fmt.Sprintf("memory-budget-%d", i),

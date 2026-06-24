@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/app"
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemonhub/exchange"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 	"github.com/spf13/cobra"
@@ -98,7 +98,7 @@ func runSyncConnect(cmd *cobra.Command, args []string) error {
 	// T2 downgrade gate at WRITE time (v1.1 #3): a plaintext non-loopback endpoint never enters
 	// remotes.json unless explicitly overridden — the worker and the manual verbs then re-validate
 	// at client construction.
-	if err := channel.ValidateSyncEndpoint(endpoint, syncAllowInsecure); err != nil {
+	if err := access.ValidateSyncEndpoint(endpoint, syncAllowInsecure); err != nil {
 		return err
 	}
 	if strings.TrimSpace(syncRemoteToken) == "" && strings.TrimSpace(syncRemoteTokenFile) == "" {
@@ -259,8 +259,8 @@ type syncRemoteConfig struct {
 
 // syncClientFor builds the bounded sync client for one resolved remote: bearer token, optional
 // pinned TLS root, and the T2 downgrade gate (--allow-insecure-remote is the only override).
-func syncClientFor(remote syncRemoteConfig) (*channel.Client, error) {
-	return channel.NewSyncClient(remote.Endpoint, channel.SyncClientConfig{
+func syncClientFor(remote syncRemoteConfig) (*access.Client, error) {
+	return access.NewSyncClient(remote.Endpoint, access.SyncClientConfig{
 		Token:         remote.Token,
 		CAFile:        remote.CAFile,
 		AllowInsecure: syncAllowInsecure,

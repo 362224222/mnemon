@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemonhub"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
@@ -26,8 +26,8 @@ import (
 func openServingRuntime(t *testing.T, root string) *runtime.Runtime {
 	t.Helper()
 	refs := []contract.ResourceRef{{Kind: "memory", ID: "project"}, {Kind: "skill", ID: "project"}}
-	b := channel.HostAgentBinding("codex@project", "http://127.0.0.1:8787", refs)
-	rt, err := OpenLocalRuntime(filepath.Join(root, runtime.DefaultStorePath), channel.LoadedBindings{Bindings: []channel.ChannelBinding{b}}, nil, nil)
+	b := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", refs)
+	rt, err := OpenLocalRuntime(filepath.Join(root, runtime.DefaultStorePath), access.LoadedBindings{Bindings: []access.ChannelBinding{b}}, nil, nil)
 	if err != nil {
 		t.Fatalf("open serving runtime: %v", err)
 	}

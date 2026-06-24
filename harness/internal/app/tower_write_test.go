@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
@@ -25,11 +25,11 @@ func TestReobserveCandidateAdmitsViaOperator(t *testing.T) {
 		t.Fatalf("resolve catalog: %v", err)
 	}
 	ref := contract.ResourceRef{Kind: "approval", ID: "project"}
-	host := channel.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
+	host := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
 	host.AllowedObservedTypes = []string{"approval.write_candidate.observed"}
-	operator := channel.ControlAgentBinding("human@owner", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
+	operator := access.ControlAgentBinding("human@owner", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
 	operator.AllowedObservedTypes = []string{"approval.write_candidate.observed"}
-	bindings := []channel.ChannelBinding{host, operator}
+	bindings := []access.ChannelBinding{host, operator}
 	rc, err := LocalRuntimeConfigFromBindings(bindings, catalog)
 	if err != nil {
 		t.Fatalf("boot config: %v", err)

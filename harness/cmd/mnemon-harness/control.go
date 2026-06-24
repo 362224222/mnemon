@@ -10,8 +10,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation"
 	"github.com/spf13/cobra"
@@ -19,7 +19,7 @@ import (
 
 // The control verbs are the host/control agent's view of the channel (D6): observe pushes an
 // observation IN, pull reads the scoped event view OUT, status checks reachability. They reach
-// the engine ONLY through channel.ServerAPI (the channel client), never kernel/reconcile — the
+// the engine ONLY through access.ServerAPI (the channel client), never kernel/reconcile — the
 // same channel a HostAgent and a ControlAgent both speak, differing only by binding/credential.
 
 var (
@@ -43,7 +43,7 @@ var (
 // controlClient builds the channel client from the resolved credential: a bearer token (from
 // --token or, preferring it, --token-file so projected hooks keep the token out of prompt-visible
 // command lines), else the trusted principal header.
-func controlClient() (*channel.Client, error) {
+func controlClient() (*access.Client, error) {
 	token := controlToken
 	if controlTokenFile != "" {
 		data, err := os.ReadFile(controlTokenFile)
@@ -53,9 +53,9 @@ func controlClient() (*channel.Client, error) {
 		token = strings.TrimSpace(string(data))
 	}
 	if token != "" {
-		return channel.NewClientWithToken(controlAddr, token), nil
+		return access.NewClientWithToken(controlAddr, token), nil
 	}
-	return channel.NewClient(controlAddr, contract.ActorID(controlPrincipal)), nil
+	return access.NewClient(controlAddr, contract.ActorID(controlPrincipal)), nil
 }
 
 var controlCmd = &cobra.Command{
@@ -214,7 +214,7 @@ func controlRender(reqBody presentation.Request) (presentation.Response, error) 
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	} else {
-		req.Header.Set(channel.PrincipalHeader, controlPrincipal)
+		req.Header.Set(access.PrincipalHeader, controlPrincipal)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
@@ -235,7 +235,7 @@ func controlRender(reqBody presentation.Request) (presentation.Response, error) 
 
 // coordinationFieldLine renders "Field: <kind>=<n>, …" over the default-enabled coordination kinds,
 // counting each kind's entries in the principal's pulled eventview.
-func coordinationFieldLine(client *channel.Client, principal contract.ActorID) string {
+func coordinationFieldLine(client *access.Client, principal contract.ActorID) string {
 	proj, err := client.PullEventView(principal, contract.Subscription{Actor: principal})
 	if err != nil {
 		return "Field: (unavailable)"

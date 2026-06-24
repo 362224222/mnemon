@@ -30,7 +30,6 @@ var packageMainAxisInventory = map[string]packageMainAxis{
 	"app":        {owner: ownerMnemond, role: "daemon wiring and local mnemond boot", target: "mnemond"},
 	"assembler":  {owner: ownerMnemond, role: "mnemond policy/runtime assembly", target: "mnemond"},
 	"assets":     {owner: ownerHostAgent, role: "hostagent integration and event-policy assets", target: "hostagent/assets"},
-	"channel":    {owner: ownerMnemond, role: "hostagent to mnemond access layer", target: "mnemond/access"},
 	"codexapp":   {owner: ownerHostAgent, role: "Codex hostagent appserver adapter", target: "hostagent/codexapp"},
 	"config":     {owner: ownerMnemond, role: "mnemond local configuration", target: "mnemond/config"},
 	"contract":   {owner: ownerEvent, role: "event and mnemond boundary DTOs", target: "event/contract"},
@@ -51,7 +50,6 @@ var packageMainAxisInventory = map[string]packageMainAxis{
 }
 
 var demotedMainAxisPackages = map[string]bool{
-	"channel":   true,
 	"eventview": true,
 	"kernel":    true,
 	"reconcile": true,
@@ -60,6 +58,7 @@ var demotedMainAxisPackages = map[string]bool{
 }
 
 var nestedMainAxisInventory = map[string]packageMainAxis{
+	"mnemond/access":       {owner: ownerMnemond, role: "hostagent, replica, and control access to mnemond", target: "mnemond/access"},
 	"mnemond/policy":       {owner: ownerMnemond, role: "event type schema, admission policy, risk, and default enablement", target: "mnemond/policy"},
 	"mnemond/presentation": {owner: ownerMnemond, role: "derived event presentation for hostagents", target: "mnemond/presentation"},
 	"mnemonhub/exchange":   {owner: ownerMnemonhub, role: "mnemonhub event exchange client, cursors, and local ledger acknowledgements", target: "mnemonhub/exchange"},
@@ -67,6 +66,7 @@ var nestedMainAxisInventory = map[string]packageMainAxis{
 
 var retiredTopLevelImplementationPackages = []string{
 	"capability",
+	"channel",
 	"hostsurface",
 	"render",
 	"remotesync",

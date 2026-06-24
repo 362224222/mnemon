@@ -1,9 +1,9 @@
 package runtime
 
 import (
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 	"github.com/mnemon-dev/mnemon/harness/internal/rule"
 )
@@ -12,16 +12,16 @@ import (
 // tests, which exercise the capability rules end-to-end through the runtime (and assert on runtime
 // internals). The production derivation lives in app; this keeps the test in package runtime without
 // importing app (which would cycle).
-func localRuntimeConfigT(bindings []channel.ChannelBinding) RuntimeConfig {
+func localRuntimeConfigT(bindings []access.ChannelBinding) RuntimeConfig {
 	var rules []rule.Rule
 	allow := map[contract.ActorID][]contract.ResourceKind{}
 	for _, b := range bindings {
-		if b.Allows(channel.VerbObserve) && b.AllowsObservedType(policy.MemoryWriteCandidateObserved) {
+		if b.Allows(access.VerbObserve) && b.AllowsObservedType(policy.MemoryWriteCandidateObserved) {
 			if ref, ok := scopeRefT(b, "memory"); ok {
 				rules = append(rules, policy.EmbeddedCatalog()["memory"].Rule(b.Principal, ref, policy.Limits{}))
 			}
 		}
-		if b.Allows(channel.VerbObserve) && b.AllowsObservedType(policy.SkillWriteCandidateObserved) {
+		if b.Allows(access.VerbObserve) && b.AllowsObservedType(policy.SkillWriteCandidateObserved) {
 			if ref, ok := scopeRefT(b, "skill"); ok {
 				rules = append(rules, policy.EmbeddedCatalog()["skill"].Rule(b.Principal, ref, policy.Limits{}))
 			}
@@ -41,7 +41,7 @@ func localRuntimeConfigT(bindings []channel.ChannelBinding) RuntimeConfig {
 	}
 	return RuntimeConfig{
 		Bindings:      bindings,
-		Subs:          channel.SubsFromBindings(bindings),
+		Subs:          access.SubsFromBindings(bindings),
 		Rules:         rule.NewRuleSet(rules...),
 		Authority:     kernel.AuthorityRules{Allow: allow},
 		SchemaGuard:   kernel.SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}}),
@@ -49,7 +49,7 @@ func localRuntimeConfigT(bindings []channel.ChannelBinding) RuntimeConfig {
 	}
 }
 
-func scopeRefT(b channel.ChannelBinding, kind contract.ResourceKind) (contract.ResourceRef, bool) {
+func scopeRefT(b access.ChannelBinding, kind contract.ResourceKind) (contract.ResourceRef, bool) {
 	for _, ref := range b.SubscriptionScope {
 		if ref.Kind == kind {
 			return ref, true

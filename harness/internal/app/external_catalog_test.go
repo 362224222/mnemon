@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
@@ -83,12 +83,12 @@ func TestResolveBootCatalogIgnoreExternalNamesIgnoredPackages(t *testing.T) {
 func TestRunLocalServerRefusesToStartOnBadExternalPackage(t *testing.T) {
 	root := t.TempDir()
 	writeExternalGoalPackage(t, root, "bad", `{nope`)
-	binding := channel.HostAgentBinding("codex@project", "http://127.0.0.1:8787",
+	binding := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787",
 		[]contract.ResourceRef{{Kind: "memory", ID: "project"}})
 	binding.AllowedObservedTypes = []string{"memory.write_candidate.observed"}
 	err := RunLocalHTTPServerWithBindings(context.Background(), "127.0.0.1:0",
 		filepath.Join(t.TempDir(), "governed.db"),
-		channel.LoadedBindings{Bindings: []channel.ChannelBinding{binding}},
+		access.LoadedBindings{Bindings: []access.ChannelBinding{binding}},
 		ServeOptions{Loops: []string{"memory"}, ProjectRoot: root}, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), ".mnemon/loops/bad") {
 		t.Fatalf("local serve must refuse to start on a bad external package, got %v", err)
@@ -114,7 +114,7 @@ func (n *firstWriteNotifier) Write(p []byte) (int, error) {
 func TestRunLocalServerIgnoreExternalDisablesEnabledExternalLoop(t *testing.T) {
 	root := t.TempDir()
 	writeExternalGoalPackage(t, root, "goal", `{nope`)
-	binding := channel.HostAgentBinding("codex@project", "http://127.0.0.1:8787",
+	binding := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787",
 		[]contract.ResourceRef{{Kind: "memory", ID: "project"}})
 	binding.AllowedObservedTypes = []string{"memory.write_candidate.observed"}
 
@@ -135,7 +135,7 @@ func TestRunLocalServerIgnoreExternalDisablesEnabledExternalLoop(t *testing.T) {
 	go func() {
 		errc <- RunLocalHTTPServerWithBindings(ctx, "127.0.0.1:0",
 			filepath.Join(t.TempDir(), "governed.db"),
-			channel.LoadedBindings{Bindings: []channel.ChannelBinding{binding}},
+			access.LoadedBindings{Bindings: []access.ChannelBinding{binding}},
 			ServeOptions{Loops: []string{"memory", "goal"}, ProjectRoot: root, IgnoreExternal: true},
 			&firstWriteNotifier{ready: ready})
 	}()
@@ -179,10 +179,10 @@ func TestExternalGoalCapabilityAdmitsThroughResolvedCatalog(t *testing.T) {
 		t.Fatalf("resolve catalog: %v", err)
 	}
 	ref := contract.ResourceRef{Kind: "goal", ID: "project"}
-	binding := channel.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
+	binding := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
 	binding.AllowedObservedTypes = []string{"goal.write_candidate.observed"}
 
-	rc, err := LocalRuntimeConfigFromBindings([]channel.ChannelBinding{binding}, catalog)
+	rc, err := LocalRuntimeConfigFromBindings([]access.ChannelBinding{binding}, catalog)
 	if err != nil {
 		t.Fatalf("boot config with external catalog: %v", err)
 	}

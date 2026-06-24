@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
@@ -26,12 +26,12 @@ func TestMinimalTeamworkLoopThroughRenderPresentations(t *testing.T) {
 		"assignment.write_candidate.observed",
 		"progress_digest.write_candidate.observed",
 	}
-	a := channel.HostAgentBinding("codex-a@project", "http://127.0.0.1:8787", refs)
+	a := access.HostAgentBinding("codex-a@project", "http://127.0.0.1:8787", refs)
 	a.AllowedObservedTypes = observed
-	b := channel.HostAgentBinding("codex-b@project", "http://127.0.0.1:8787", refs)
+	b := access.HostAgentBinding("codex-b@project", "http://127.0.0.1:8787", refs)
 	b.AllowedObservedTypes = observed
-	loaded := channel.LoadedBindings{
-		Bindings: []channel.ChannelBinding{a, b},
+	loaded := access.LoadedBindings{
+		Bindings: []access.ChannelBinding{a, b},
 		Tokens: map[string]contract.ActorID{
 			"tok-a": "codex-a@project",
 			"tok-b": "codex-b@project",
@@ -48,18 +48,18 @@ func TestMinimalTeamworkLoopThroughRenderPresentations(t *testing.T) {
 		t.Fatalf("open runtime: %v", err)
 	}
 	defer rt.Close()
-	bindings, err := channel.NewBindingSet(loaded.Bindings...)
+	bindings, err := access.NewBindingSet(loaded.Bindings...)
 	if err != nil {
 		t.Fatalf("binding set: %v", err)
 	}
 	renderNow := mustRenderHTTPTime(t, "2026-06-24T10:05:00Z")
-	srv := httptest.NewServer(NewLocalHTTPHandler(rt, channel.TokenAuthenticator{Tokens: loaded.Tokens}, bindings, presentation.Renderer{
+	srv := httptest.NewServer(NewLocalHTTPHandler(rt, access.TokenAuthenticator{Tokens: loaded.Tokens}, bindings, presentation.Renderer{
 		Now: func() time.Time { return renderNow },
 	}))
 	defer srv.Close()
-	clientA := channel.NewClientWithToken(srv.URL, "tok-a")
-	clientB := channel.NewClientWithToken(srv.URL, "tok-b")
-	observe := func(client *channel.Client, extID, typ string, payload map[string]any) {
+	clientA := access.NewClientWithToken(srv.URL, "tok-a")
+	clientB := access.NewClientWithToken(srv.URL, "tok-b")
+	observe := func(client *access.Client, extID, typ string, payload map[string]any) {
 		t.Helper()
 		rec, err := client.IngestObserve("", contract.ObservationEnvelope{
 			ExternalID: extID,

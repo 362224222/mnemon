@@ -6,10 +6,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/config"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
@@ -45,13 +45,13 @@ func fixtureCatalog(t *testing.T, names ...string) map[string]policy.Capability 
 // channel -> tick -> kernel -> eventview.
 func TestAssembleAdmitsConfiguredNoteCapabilityEndToEnd(t *testing.T) {
 	ref := contract.ResourceRef{Kind: "note", ID: "project"}
-	binding := channel.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
+	binding := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
 	binding.AllowedObservedTypes = []string{"note.write_candidate.observed"}
 
 	cfg := config.File{Capabilities: map[string]config.CapabilityConfig{
 		"note": {Enabled: true, ResourceRef: "note/project", RuleRef: "native:note"},
 	}}
-	rc, err := Assemble(cfg, []channel.ChannelBinding{binding}, fixtureCatalog(t, "note"))
+	rc, err := Assemble(cfg, []access.ChannelBinding{binding}, fixtureCatalog(t, "note"))
 	if err != nil {
 		t.Fatalf("assemble: %v", err)
 	}
@@ -106,12 +106,12 @@ func TestAssembleRegistersDeclaredKindNotInDefaultGuard(t *testing.T) {
 		t.Fatalf("a declared (non-reserved) kind must compile: %v", err)
 	}
 	ref := contract.ResourceRef{Kind: "widget", ID: "project"}
-	binding := channel.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
+	binding := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
 	binding.AllowedObservedTypes = []string{"widget.write_candidate.observed"}
 	cfg := config.File{Capabilities: map[string]config.CapabilityConfig{
 		"widget": {Enabled: true, ResourceRef: "widget/project", RuleRef: "native:widget"},
 	}}
-	rc, err := Assemble(cfg, []channel.ChannelBinding{binding}, map[string]policy.Capability{"widget": widgetCap})
+	rc, err := Assemble(cfg, []access.ChannelBinding{binding}, map[string]policy.Capability{"widget": widgetCap})
 	if err != nil {
 		t.Fatalf("assemble: %v", err)
 	}
@@ -163,16 +163,16 @@ func TestAssembleResolvesFromProvidedCatalog(t *testing.T) {
 	}
 
 	ref := contract.ResourceRef{Kind: "goal", ID: "project"}
-	binding := channel.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
+	binding := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
 	binding.AllowedObservedTypes = []string{"goal.write_candidate.observed"}
 	cfg := config.File{Capabilities: map[string]config.CapabilityConfig{
 		"goal": {Enabled: true, ResourceRef: "goal/project", RuleRef: "native:goal"},
 	}}
 
-	if _, err := Assemble(cfg, []channel.ChannelBinding{binding}, nil); err == nil {
+	if _, err := Assemble(cfg, []access.ChannelBinding{binding}, nil); err == nil {
 		t.Fatal("native:goal must fail closed against the nil (EmbeddedCatalog()) catalog")
 	}
-	rc, err := Assemble(cfg, []channel.ChannelBinding{binding}, catalog)
+	rc, err := Assemble(cfg, []access.ChannelBinding{binding}, catalog)
 	if err != nil {
 		t.Fatalf("assemble with external-merged catalog: %v", err)
 	}
@@ -229,13 +229,13 @@ func TestAssembleFailsClosedOnNoteWithoutExternalPackage(t *testing.T) {
 // (parity with the production memoryRefForBinding fallback), not the config-pinned default.
 func TestAssembleDerivesRefFromBindingScope(t *testing.T) {
 	teamRef := contract.ResourceRef{Kind: "memory", ID: "team"}
-	binding := channel.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{teamRef})
+	binding := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{teamRef})
 	binding.AllowedObservedTypes = []string{"memory.write_candidate.observed"}
 
 	cfg := config.File{Capabilities: map[string]config.CapabilityConfig{
 		"memory": {Enabled: true, ResourceRef: "memory/project", RuleRef: "native:memory"},
 	}}
-	rc, err := Assemble(cfg, []channel.ChannelBinding{binding}, nil)
+	rc, err := Assemble(cfg, []access.ChannelBinding{binding}, nil)
 	if err != nil {
 		t.Fatalf("assemble: %v", err)
 	}
@@ -267,13 +267,13 @@ func TestAssembleDerivesRefFromBindingScope(t *testing.T) {
 // and no kernel authority (parity with the app builders' skip; an unscoped binding could never pull
 // what it writes).
 func TestAssembleSkipsUnscopedBinding(t *testing.T) {
-	binding := channel.HostAgentBinding("codex@project", "http://127.0.0.1:8787", nil)
+	binding := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", nil)
 	binding.AllowedObservedTypes = []string{"memory.write_candidate.observed"}
 
 	cfg := config.File{Capabilities: map[string]config.CapabilityConfig{
 		"memory": {Enabled: true, ResourceRef: "memory/project", RuleRef: "native:memory"},
 	}}
-	rc, err := Assemble(cfg, []channel.ChannelBinding{binding}, nil)
+	rc, err := Assemble(cfg, []access.ChannelBinding{binding}, nil)
 	if err != nil {
 		t.Fatalf("assemble: %v", err)
 	}
@@ -316,13 +316,13 @@ func TestAssembleRejectsBareRuleRef(t *testing.T) {
 // fixture/外部包供给——曾内嵌于 assets)。端到端与 note 同构。
 func TestAssembleAdmitsDecisionCapabilityEndToEnd(t *testing.T) {
 	ref := contract.ResourceRef{Kind: "decision", ID: "project"}
-	binding := channel.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
+	binding := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
 	binding.AllowedObservedTypes = []string{"decision.write_candidate.observed"}
 
 	cfg := config.File{Capabilities: map[string]config.CapabilityConfig{
 		"decision": {Enabled: true, ResourceRef: "decision/project", RuleRef: "native:decision"},
 	}}
-	rc, err := Assemble(cfg, []channel.ChannelBinding{binding}, fixtureCatalog(t, "decision"))
+	rc, err := Assemble(cfg, []access.ChannelBinding{binding}, fixtureCatalog(t, "decision"))
 	if err != nil {
 		t.Fatalf("assemble: %v", err)
 	}

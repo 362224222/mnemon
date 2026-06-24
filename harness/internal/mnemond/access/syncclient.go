@@ -1,4 +1,4 @@
-package channel
+package access
 
 import (
 	"crypto/tls"

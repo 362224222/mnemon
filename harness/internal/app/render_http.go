@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
@@ -20,7 +20,7 @@ const renderAuditRelPath = ".mnemon/harness/local/render-audit.jsonl"
 
 // NewLocalHTTPHandler adds the R1 read-only render endpoint at the app wiring layer. Runtime/channel
 // still own observe/pull/status/sync; render reads only the authenticated actor's scoped eventview.
-func NewLocalHTTPHandler(rt *runtime.Runtime, auth channel.Authenticator, bindings *channel.BindingSet, renderer presentation.Renderer) http.Handler {
+func NewLocalHTTPHandler(rt *runtime.Runtime, auth access.Authenticator, bindings *access.BindingSet, renderer presentation.Renderer) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/render", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -32,7 +32,7 @@ func NewLocalHTTPHandler(rt *runtime.Runtime, auth channel.Authenticator, bindin
 			http.Error(w, err.Error(), http.StatusUnauthorized)
 			return
 		}
-		var binding channel.ChannelBinding
+		var binding access.ChannelBinding
 		haveBinding := false
 		if bindings != nil {
 			b, ok := bindings.Binding(principal)
@@ -40,7 +40,7 @@ func NewLocalHTTPHandler(rt *runtime.Runtime, auth channel.Authenticator, bindin
 				http.Error(w, fmt.Sprintf("no channel binding for principal %q", principal), http.StatusForbidden)
 				return
 			}
-			if !b.Allows(channel.VerbRender) {
+			if !b.Allows(access.VerbRender) {
 				http.Error(w, fmt.Sprintf("principal %q is not bound to render", principal), http.StatusForbidden)
 				return
 			}
@@ -77,8 +77,8 @@ func NewLocalHTTPHandler(rt *runtime.Runtime, auth channel.Authenticator, bindin
 	return mux
 }
 
-func ServeLocalHTTP(ctx context.Context, addr string, rt *runtime.Runtime, auth channel.Authenticator, loaded channel.LoadedBindings, projectRoot string, out io.Writer) error {
-	bindings, err := channel.NewBindingSet(loaded.Bindings...)
+func ServeLocalHTTP(ctx context.Context, addr string, rt *runtime.Runtime, auth access.Authenticator, loaded access.LoadedBindings, projectRoot string, out io.Writer) error {
+	bindings, err := access.NewBindingSet(loaded.Bindings...)
 	if err != nil {
 		return err
 	}

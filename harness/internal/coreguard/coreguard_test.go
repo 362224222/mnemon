@@ -10,10 +10,11 @@ import (
 	"testing"
 )
 
-// corePackages are the collaboration-channel core: the generic governed-event mechanism. The
-// human-readable invariant is "the core only contains channel-related content, and stays generic."
+// corePackages are the governed-event core: the generic mnemond access/admission/state mechanism.
+// The human-readable invariant is "the core contains generic mnemond event mechanics, not
+// hostagent- or product-specific behavior."
 var corePackages = []string{
-	"contract", "channel", "kernel", "store", "eventview", "rule", "reconcile", "runtime",
+	"contract", "mnemond/access", "kernel", "store", "eventview", "rule", "reconcile", "runtime",
 }
 
 // forbiddenImports are the outer rings the core must never depend on: mnemond policy,
@@ -127,7 +128,7 @@ func TestCoreImportsNoOuterRing(t *testing.T) {
 				path := strings.Trim(imp.Path.Value, `"`)
 				for _, forbidden := range forbiddenImports {
 					if strings.Contains(path, forbidden) {
-						t.Errorf("core package %q imports outer ring %q — the collaboration-channel core must stay generic (deps flow inward only)", pkg, path)
+						t.Errorf("core package %q imports outer ring %q — the mnemond core must stay generic (deps flow inward only)", pkg, path)
 					}
 				}
 			}
@@ -173,7 +174,7 @@ func TestCoreHasNoBusinessKindLiterals(t *testing.T) {
 				}
 				val := strings.Trim(lit.Value, "`\"")
 				if forbidden[val] {
-					t.Errorf("core package %q hardcodes business kind %q at %s — keep the core generic; user kinds are injected at assembly, not baked into the channel core",
+					t.Errorf("core package %q hardcodes business kind %q at %s — keep the core generic; user kinds are injected at assembly, not baked into the mnemond core",
 						pkg, val, fset.Position(lit.Pos()))
 				}
 				return true

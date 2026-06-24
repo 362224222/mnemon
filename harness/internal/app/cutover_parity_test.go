@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/assembler"
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
@@ -19,8 +19,8 @@ func TestAssembledBootMatchesBindingDerivedBoot(t *testing.T) {
 	memRef := contract.ResourceRef{Kind: "memory", ID: "project"}
 	skillRef := contract.ResourceRef{Kind: "skill", ID: "project"}
 
-	mkBinding := func() channel.ChannelBinding {
-		b := channel.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{memRef, skillRef})
+	mkBinding := func() access.ChannelBinding {
+		b := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{memRef, skillRef})
 		b.AllowedObservedTypes = []string{
 			"memory.write_candidate.observed",
 			"skill.write_candidate.observed",
@@ -56,7 +56,7 @@ func TestAssembledBootMatchesBindingDerivedBoot(t *testing.T) {
 		}
 	}
 
-	bootRC, err := LocalRuntimeConfigFromBindings([]channel.ChannelBinding{mkBinding()}, nil)
+	bootRC, err := LocalRuntimeConfigFromBindings([]access.ChannelBinding{mkBinding()}, nil)
 	if err != nil {
 		t.Fatalf("boot config: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestAssembledBootMatchesBindingDerivedBoot(t *testing.T) {
 	}
 	defer bootRT.Close()
 
-	asmRC, err := assembler.Assemble(capabilityFileFromLoops([]string{"memory", "skill"}), []channel.ChannelBinding{mkBinding()}, nil)
+	asmRC, err := assembler.Assemble(capabilityFileFromLoops([]string{"memory", "skill"}), []access.ChannelBinding{mkBinding()}, nil)
 	if err != nil {
 		t.Fatalf("assemble: %v", err)
 	}
@@ -107,10 +107,10 @@ func TestAssembledBootMatchesBindingDerivedBoot(t *testing.T) {
 // The hidden `local run --bindings` boot path has no localConfig: capability enablement is derived
 // from the binding scope kinds ∩ EmbeddedCatalog(), so a memory/skill-scoped binding still boots both rules.
 func TestLoopsFromBindingsDerivesEnablement(t *testing.T) {
-	b := channel.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{
+	b := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{
 		{Kind: "memory", ID: "project"}, {Kind: "skill", ID: "project"},
 	})
-	got := loopsFromBindings([]channel.ChannelBinding{b}, nil)
+	got := loopsFromBindings([]access.ChannelBinding{b}, nil)
 	want := []string{"memory", "skill"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("loopsFromBindings = %v, want %v", got, want)

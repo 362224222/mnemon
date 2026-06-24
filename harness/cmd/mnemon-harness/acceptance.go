@@ -17,9 +17,9 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/app"
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/codexapp"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemonhub"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
@@ -395,22 +395,22 @@ func prepareR1AcceptanceRunRoot(runRoot string) error {
 	return nil
 }
 
-func setupR1CodexAgents(runRoot, binDir, controlURL string, count int, sourceCodexHome string) ([]r1CodexAgent, channel.LoadedBindings, error) {
+func setupR1CodexAgents(runRoot, binDir, controlURL string, count int, sourceCodexHome string) ([]r1CodexAgent, access.LoadedBindings, error) {
 	var agents []r1CodexAgent
-	var loaded channel.LoadedBindings
+	var loaded access.LoadedBindings
 	loaded.Tokens = map[string]contract.ActorID{}
 	for i := 1; i <= count; i++ {
 		principal := fmt.Sprintf("codex-%02d@project", i)
 		workspace := filepath.Join(runRoot, "workspaces", fmt.Sprintf("codex-%02d", i))
 		codexHome := filepath.Join(runRoot, "codex-home", fmt.Sprintf("codex-%02d", i))
 		if err := os.MkdirAll(workspace, 0o755); err != nil {
-			return nil, channel.LoadedBindings{}, err
+			return nil, access.LoadedBindings{}, err
 		}
 		if err := os.WriteFile(filepath.Join(workspace, "README.md"), []byte("# R1 Codex acceptance workspace\n"), 0o644); err != nil {
-			return nil, channel.LoadedBindings{}, err
+			return nil, access.LoadedBindings{}, err
 		}
 		if err := prepareAcceptanceCodexHome(codexHome, workspace, sourceCodexHome); err != nil {
-			return nil, channel.LoadedBindings{}, err
+			return nil, access.LoadedBindings{}, err
 		}
 		if _, err := app.New(workspace).Setup(context.Background(), io.Discard, io.Discard, app.SetupOptions{
 			Host:        "codex",
@@ -419,11 +419,11 @@ func setupR1CodexAgents(runRoot, binDir, controlURL string, count int, sourceCod
 			ProjectRoot: workspace,
 			UseToken:    true,
 		}); err != nil {
-			return nil, channel.LoadedBindings{}, err
+			return nil, access.LoadedBindings{}, err
 		}
-		one, err := channel.LoadBindingFile(workspace, filepath.Join(workspace, channel.DefaultBindingFile))
+		one, err := access.LoadBindingFile(workspace, filepath.Join(workspace, access.DefaultBindingFile))
 		if err != nil {
-			return nil, channel.LoadedBindings{}, err
+			return nil, access.LoadedBindings{}, err
 		}
 		loaded.Bindings = append(loaded.Bindings, one.Bindings...)
 		for tok, actor := range one.Tokens {
@@ -431,7 +431,7 @@ func setupR1CodexAgents(runRoot, binDir, controlURL string, count int, sourceCod
 		}
 		token, err := acceptanceTokenForPrincipal(one.Tokens, contract.ActorID(principal))
 		if err != nil {
-			return nil, channel.LoadedBindings{}, err
+			return nil, access.LoadedBindings{}, err
 		}
 		agents = append(agents, r1CodexAgent{
 			principal: principal,
@@ -545,7 +545,7 @@ func freeLoopbackAddr() (string, error) {
 }
 
 func waitR1LocalReady(ctx context.Context, agent r1CodexAgent, controlURL string, timeout time.Duration) error {
-	client := channel.NewClientWithToken(controlURL, agent.token)
+	client := access.NewClientWithToken(controlURL, agent.token)
 	deadline := time.Now().Add(timeout)
 	for {
 		if _, err := client.Status(""); err == nil {
@@ -911,7 +911,7 @@ After the command succeeds, answer "sync progress written".`, runID, assignmentI
 		syncReport.Status = "failed"
 		return fmt.Errorf("source did not receive synced integrate derived event for %s", assignmentID)
 	}
-	client, err := channel.NewSyncClient(hub.URL, channel.SyncClientConfig{Token: source.replicaToken})
+	client, err := access.NewSyncClient(hub.URL, access.SyncClientConfig{Token: source.replicaToken})
 	if err == nil {
 		syncReport.HubStatus, err = client.SyncStatus()
 	}
@@ -1064,7 +1064,7 @@ func setupR1CodexSyncAgents(ctx context.Context, runRoot, binDir string, hub r1S
 		if err := upsertSyncRemote(filepath.Join(workspace, ".mnemon", "harness", "sync", "remotes.json"), workspace, "hub", hub.URL, hub.Tokens[i-1], "", ""); err != nil {
 			return nil, err
 		}
-		loaded, err := channel.LoadBindingFile(workspace, filepath.Join(workspace, channel.DefaultBindingFile))
+		loaded, err := access.LoadBindingFile(workspace, filepath.Join(workspace, access.DefaultBindingFile))
 		if err != nil {
 			return nil, err
 		}
@@ -1074,7 +1074,7 @@ func setupR1CodexSyncAgents(ctx context.Context, runRoot, binDir string, hub r1S
 		}
 		localCtx, cancel := context.WithCancel(ctx)
 		localErr := make(chan error, 1)
-		go func(workspace, addr string, loaded channel.LoadedBindings) {
+		go func(workspace, addr string, loaded access.LoadedBindings) {
 			localErr <- app.RunLocalHTTPServerWithBindings(localCtx, addr, filepath.Join(workspace, runtime.DefaultStorePath), loaded, app.ServeOptions{
 				ProjectRoot:  workspace,
 				SyncInterval: 100 * time.Millisecond,
@@ -1211,7 +1211,7 @@ func countR1Ledger(controlURL string, agent r1CodexAgent) map[string]int {
 		"assignment_status":  0,
 		"assignment_expired": 0,
 	}
-	client := channel.NewClientWithToken(controlURL, agent.token)
+	client := access.NewClientWithToken(controlURL, agent.token)
 	proj, err := client.PullEventView("", contract.Subscription{Actor: contract.ActorID(agent.principal)})
 	if err != nil {
 		return out
@@ -1228,7 +1228,7 @@ func countR1Ledger(controlURL string, agent r1CodexAgent) map[string]int {
 }
 
 func findAssignmentAssignee(controlURL string, agent r1CodexAgent, assignmentID string) string {
-	client := channel.NewClientWithToken(controlURL, agent.token)
+	client := access.NewClientWithToken(controlURL, agent.token)
 	proj, err := client.PullEventView("", contract.Subscription{Actor: contract.ActorID(agent.principal)})
 	if err != nil {
 		return ""

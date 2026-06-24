@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 )
 
 // Installing skill after memory for the same principal must be ADDITIVE: the binding keeps the memory
@@ -35,11 +35,11 @@ func TestSetupIsAdditiveAndTokenIdempotent(t *testing.T) {
 		t.Fatalf("setup skill: %v", err)
 	}
 
-	loaded, err := channel.LoadBindingFile(root, r1.BindingFile)
+	loaded, err := access.LoadBindingFile(root, r1.BindingFile)
 	if err != nil {
 		t.Fatalf("load bindings: %v", err)
 	}
-	var b channel.ChannelBinding
+	var b access.ChannelBinding
 	for _, x := range loaded.Bindings {
 		if x.Principal == "codex@project" {
 			b = x

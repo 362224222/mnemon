@@ -10,19 +10,19 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 )
 
 func TestRemoteSyncPushIsIdempotentAndAuthenticated(t *testing.T) {
 	ref := contract.ResourceRef{Kind: "memory", ID: "project"}
-	host := channel.HostAgentBinding("codex@project", "http://localhost:8787", []contract.ResourceRef{ref})
-	replica := channel.ReplicaAgentBinding("replica@project", "http://localhost:8787", []contract.ResourceRef{ref})
+	host := access.HostAgentBinding("codex@project", "http://localhost:8787", []contract.ResourceRef{ref})
+	replica := access.ReplicaAgentBinding("replica@project", "http://localhost:8787", []contract.ResourceRef{ref})
 	rt, err := OpenRuntime(filepath.Join(t.TempDir(), "remote.db"), RuntimeConfig{
-		Bindings: []channel.ChannelBinding{host, replica},
-		Subs:     channel.SubsFromBindings([]channel.ChannelBinding{host, replica}),
+		Bindings: []access.ChannelBinding{host, replica},
+		Subs:     access.SubsFromBindings([]access.ChannelBinding{host, replica}),
 	})
 	if err != nil {
 		t.Fatalf("open remote runtime: %v", err)
@@ -35,7 +35,7 @@ func TestRemoteSyncPushIsIdempotentAndAuthenticated(t *testing.T) {
 	defer srv.Close()
 
 	material := syncAPITestMaterial("local-a", "dec-1", ref, map[string]any{"content": "remote accepted memory"})
-	replicaClient := channel.NewClientWithToken(srv.URL, "replica-token")
+	replicaClient := access.NewClientWithToken(srv.URL, "replica-token")
 	first, err := replicaClient.SyncPush(contract.SyncPushRequest{
 		ReplicaID: "local-a",
 		BatchID:   "batch-1",
@@ -81,7 +81,7 @@ func TestRemoteSyncPushIsIdempotentAndAuthenticated(t *testing.T) {
 		t.Fatalf("forged request replica_id must be rejected instead of trusted")
 	}
 
-	hostClient := channel.NewClientWithToken(srv.URL, "host-token")
+	hostClient := access.NewClientWithToken(srv.URL, "host-token")
 	if _, err := hostClient.SyncPush(contract.SyncPushRequest{
 		ReplicaID: "local-a",
 		BatchID:   "host-batch",
@@ -106,10 +106,10 @@ func TestRemoteSyncPushIsIdempotentAndAuthenticated(t *testing.T) {
 
 func TestRemoteSyncPushRejectsBadCommitsWithDiagnostics(t *testing.T) {
 	ref := contract.ResourceRef{Kind: "memory", ID: "project"}
-	replica := channel.ReplicaAgentBinding("replica@project", "http://localhost:8787", []contract.ResourceRef{ref})
+	replica := access.ReplicaAgentBinding("replica@project", "http://localhost:8787", []contract.ResourceRef{ref})
 	rt, err := OpenRuntime(filepath.Join(t.TempDir(), "remote.db"), RuntimeConfig{
-		Bindings: []channel.ChannelBinding{replica},
-		Subs:     channel.SubsFromBindings([]channel.ChannelBinding{replica}),
+		Bindings: []access.ChannelBinding{replica},
+		Subs:     access.SubsFromBindings([]access.ChannelBinding{replica}),
 	})
 	if err != nil {
 		t.Fatalf("open remote runtime: %v", err)
@@ -120,7 +120,7 @@ func TestRemoteSyncPushRejectsBadCommitsWithDiagnostics(t *testing.T) {
 
 	bad := syncAPITestMaterial("local-a", "dec-bad", ref, map[string]any{"content": "bad digest"})
 	bad.FieldsDigest = "wrong"
-	resp, err := channel.NewClientWithToken(srv.URL, "replica-token").SyncPush(contract.SyncPushRequest{
+	resp, err := access.NewClientWithToken(srv.URL, "replica-token").SyncPush(contract.SyncPushRequest{
 		ReplicaID: "local-a",
 		BatchID:   "batch-bad",
 		Events:    syncAPITestEvents(t, bad),
@@ -135,7 +135,7 @@ func TestRemoteSyncPushRejectsBadCommitsWithDiagnostics(t *testing.T) {
 
 func newTokenRuntimeServer(t *testing.T, rt *Runtime, tokens map[string]contract.ActorID) *httptest.Server {
 	t.Helper()
-	return httptest.NewServer(NewRuntimeHandler(rt, channel.TokenAuthenticator{Tokens: tokens}))
+	return httptest.NewServer(NewRuntimeHandler(rt, access.TokenAuthenticator{Tokens: tokens}))
 }
 
 func syncAPITestMaterial(replicaID, decisionID string, ref contract.ResourceRef, fields map[string]any) contract.SyncedEventMaterial {
@@ -179,7 +179,7 @@ func syncAPITestEvents(t *testing.T, materials ...contract.SyncedEventMaterial) 
 func TestClampSyncScopesEnforcesBindingScope(t *testing.T) {
 	mem := contract.ResourceRef{Kind: "memory", ID: "project"}
 	skill := contract.ResourceRef{Kind: "skill", ID: "project"}
-	b := channel.ReplicaAgentBinding("replica@peer", "http://x", []contract.ResourceRef{mem, skill})
+	b := access.ReplicaAgentBinding("replica@peer", "http://x", []contract.ResourceRef{mem, skill})
 
 	if got, err := clampSyncScopes(b, []contract.ResourceRef{mem}); err != nil || len(got) != 1 || got[0] != mem {
 		t.Fatalf("in-scope narrowing must pass: %v err=%v", got, err)
@@ -190,7 +190,7 @@ func TestClampSyncScopesEnforcesBindingScope(t *testing.T) {
 	if got, err := clampSyncScopes(b, nil); err != nil || len(got) != 2 {
 		t.Fatalf("empty requested must default to the binding scope: %v err=%v", got, err)
 	}
-	unscoped := channel.ReplicaAgentBinding("replica@peer", "http://x", nil)
+	unscoped := access.ReplicaAgentBinding("replica@peer", "http://x", nil)
 	if _, err := clampSyncScopes(unscoped, []contract.ResourceRef{mem}); err == nil {
 		t.Fatal("an empty-scope replica binding must deny explicit refs (fail closed)")
 	}
@@ -205,11 +205,11 @@ func TestClampSyncScopesEnforcesBindingScope(t *testing.T) {
 func TestEmptyScopeReplicaBindingFailsClosed(t *testing.T) {
 	mem := contract.ResourceRef{Kind: "memory", ID: "project"}
 
-	scoped := channel.ReplicaAgentBinding("scoped@peer", "http://x", []contract.ResourceRef{mem})
-	empty := channel.ReplicaAgentBinding("empty@peer", "http://x", nil)
+	scoped := access.ReplicaAgentBinding("scoped@peer", "http://x", []contract.ResourceRef{mem})
+	empty := access.ReplicaAgentBinding("empty@peer", "http://x", nil)
 	rt, err := OpenRuntime(filepath.Join(t.TempDir(), "remote.db"), RuntimeConfig{
-		Bindings: []channel.ChannelBinding{scoped, empty},
-		Subs:     channel.SubsFromBindings([]channel.ChannelBinding{scoped, empty}),
+		Bindings: []access.ChannelBinding{scoped, empty},
+		Subs:     access.SubsFromBindings([]access.ChannelBinding{scoped, empty}),
 	})
 	if err != nil {
 		t.Fatalf("open remote runtime: %v", err)

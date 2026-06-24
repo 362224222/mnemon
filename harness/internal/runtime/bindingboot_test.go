@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 )
 
 // writeProjectBindings writes a one-binding manifest + token file under a fresh project root and
@@ -40,29 +40,29 @@ func writeProjectBindings(t *testing.T) (string, string) {
 	return root, bindingPath
 }
 
-// TestBindingFileChannelTokenAuth proves the P3 path end to end at the channel boundary: a loaded
-// binding file drives the runtime's bindings + scope + a channel.TokenAuthenticator, so a bearer token
+// TestBindingFileChannelTokenAuth proves the P3 path end to end at the mnemond access boundary: a loaded
+// binding file drives the runtime's bindings + scope + a access.TokenAuthenticator, so a bearer token
 // resolves the principal, an in-scope pull/status succeeds, an unknown token is rejected, and a
 // cross-scope pull is refused — all without the trusted principal header.
 func TestBindingFileChannelTokenAuth(t *testing.T) {
 	root, bindingPath := writeProjectBindings(t)
-	loaded, err := channel.LoadBindingFile(root, bindingPath)
+	loaded, err := access.LoadBindingFile(root, bindingPath)
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
 	rt, err := OpenRuntime(filepath.Join(root, DefaultStorePath), RuntimeConfig{
 		Bindings: loaded.Bindings,
-		Subs:     channel.SubsFromBindings(loaded.Bindings),
+		Subs:     access.SubsFromBindings(loaded.Bindings),
 	})
 	if err != nil {
 		t.Fatalf("open runtime: %v", err)
 	}
 	defer rt.Close()
-	srv := httptest.NewServer(NewRuntimeHandler(rt, channel.TokenAuthenticator{Tokens: loaded.Tokens}))
+	srv := httptest.NewServer(NewRuntimeHandler(rt, access.TokenAuthenticator{Tokens: loaded.Tokens}))
 	defer srv.Close()
 
 	// valid token resolves the principal from the bearer credential (no X-Mnemon-Principal header).
-	good := channel.NewClientWithToken(srv.URL, "tok-codex")
+	good := access.NewClientWithToken(srv.URL, "tok-codex")
 	st, err := good.Status("")
 	if err != nil {
 		t.Fatalf("token-authed status: %v", err)
@@ -78,7 +78,7 @@ func TestBindingFileChannelTokenAuth(t *testing.T) {
 		t.Fatal("cross-scope pull must be refused")
 	}
 	// unknown token rejected.
-	if _, err := channel.NewClientWithToken(srv.URL, "nope").Status(""); err == nil {
+	if _, err := access.NewClientWithToken(srv.URL, "nope").Status(""); err == nil {
 		t.Fatal("unknown bearer token must be rejected")
 	}
 }
@@ -87,7 +87,7 @@ func TestBindingFileChannelTokenAuth(t *testing.T) {
 // boots on a real port, a token client round-trips status, and ctx cancel shuts it down.
 func TestRunHTTPServerWithBindingsBoots(t *testing.T) {
 	root, bindingPath := writeProjectBindings(t)
-	loaded, err := channel.LoadBindingFile(root, bindingPath)
+	loaded, err := access.LoadBindingFile(root, bindingPath)
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestRunHTTPServerWithBindingsBoots(t *testing.T) {
 		done <- RunHTTPServerWithBindings(ctx, addr, filepath.Join(root, DefaultStorePath), loaded, io.Discard)
 	}()
 
-	c := channel.NewClientWithToken("http://"+addr, "tok-codex")
+	c := access.NewClientWithToken("http://"+addr, "tok-codex")
 	var st contract.ChannelStatus
 	deadline := time.Now().Add(3 * time.Second)
 	for {

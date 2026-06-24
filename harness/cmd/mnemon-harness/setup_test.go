@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 )
 
 func TestSetupProductFlagsSelectLoops(t *testing.T) {
@@ -58,7 +58,7 @@ func TestSetupCommandUsesProductDefaults(t *testing.T) {
 		}
 	}
 
-	bindingJSON := string(mustReadCmd(t, filepath.Join(projectRoot, channel.DefaultBindingFile)))
+	bindingJSON := string(mustReadCmd(t, filepath.Join(projectRoot, access.DefaultBindingFile)))
 	for _, want := range []string{
 		`"principal": "codex@project"`,
 		`"endpoint": "http://127.0.0.1:8787"`,

@@ -9,10 +9,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/config"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 	"github.com/mnemon-dev/mnemon/harness/internal/rule"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
@@ -32,7 +32,7 @@ import (
 // channel bindings (principals/scope), which the loop manifests do not carry; bindings are the second
 // argument. This is the production boot path: app.OpenLocalRuntime derives the config.File from the
 // setup-written loops list and assembles here.
-func Assemble(cfg config.File, bindings []channel.ChannelBinding, catalog map[string]policy.Capability) (runtime.RuntimeConfig, error) {
+func Assemble(cfg config.File, bindings []access.ChannelBinding, catalog map[string]policy.Capability) (runtime.RuntimeConfig, error) {
 	if catalog == nil {
 		catalog = policy.EmbeddedCatalog()
 	}
@@ -70,7 +70,7 @@ func Assemble(cfg config.File, bindings []channel.ChannelBinding, catalog map[st
 			if b.ActorKind != contract.KindHostAgent && b.ActorKind != contract.KindControlAgent {
 				continue
 			}
-			if !b.Allows(channel.VerbObserve) || !b.AllowsObservedType(cap.ObservedType) {
+			if !b.Allows(access.VerbObserve) || !b.AllowsObservedType(cap.ObservedType) {
 				continue
 			}
 			ref, ok := refForBinding(b, cap.ResourceKind, defRef)
@@ -94,7 +94,7 @@ func Assemble(cfg config.File, bindings []channel.ChannelBinding, catalog map[st
 	}
 	return runtime.RuntimeConfig{
 		Bindings:    bindings,
-		Subs:        channel.SubsFromBindings(bindings),
+		Subs:        access.SubsFromBindings(bindings),
 		Rules:       rule.NewRuleSet(rules...),
 		Authority:   kernel.AuthorityRules{Allow: allow},
 		SchemaGuard: guard,
@@ -104,7 +104,7 @@ func Assemble(cfg config.File, bindings []channel.ChannelBinding, catalog map[st
 // refForBinding picks the binding's admission target for one capability kind: the config-pinned
 // default if the binding's scope contains it, else the binding's first ref of that kind, else none
 // (an unscoped binding gets no rule — it could never pull what it writes).
-func refForBinding(b channel.ChannelBinding, kind contract.ResourceKind, def contract.ResourceRef) (contract.ResourceRef, bool) {
+func refForBinding(b access.ChannelBinding, kind contract.ResourceKind, def contract.ResourceRef) (contract.ResourceRef, bool) {
 	for _, ref := range b.SubscriptionScope {
 		if ref == def {
 			return ref, true

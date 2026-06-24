@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/assembler"
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/config"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
@@ -28,7 +28,7 @@ import (
 // (nil = policy.EmbeddedCatalog()); the serve path passes the boot-resolved external-merged catalog.
 // The assembled policy is then merged with the sync-import half (withSyncImport), so the SERVING
 // runtime can import pulled commits in-process (v1.1 #2) without a second runtime boot.
-func OpenLocalRuntime(storePath string, loaded channel.LoadedBindings, loops []string, catalog map[string]policy.Capability) (*runtime.Runtime, error) {
+func OpenLocalRuntime(storePath string, loaded access.LoadedBindings, loops []string, catalog map[string]policy.Capability) (*runtime.Runtime, error) {
 	cat := resolveSyncCatalog(catalog)
 	if len(loops) == 0 {
 		loops = loopsFromBindings(loaded.Bindings, cat)
@@ -50,7 +50,7 @@ func OpenLocalRuntime(storePath string, loaded channel.LoadedBindings, loops []s
 // sync.* observation types AND gate on the sync principal, so host-agent events never match them and
 // host rules never see the import events — pinned by a test. catalog selects the importable universe
 // (nil = embedded first-party).
-func withSyncImport(rc runtime.RuntimeConfig, bindings []channel.ChannelBinding, catalog map[string]policy.Capability) runtime.RuntimeConfig {
+func withSyncImport(rc runtime.RuntimeConfig, bindings []access.ChannelBinding, catalog map[string]policy.Capability) runtime.RuntimeConfig {
 	catalog = resolveSyncCatalog(catalog)
 	rules := append([]rule.Rule(nil), rc.Rules.Rules()...)
 	rules = append(rules, policy.RemoteImportRules(catalog, contract.SyncImportActor)...)
@@ -83,7 +83,7 @@ func resolveSyncCatalog(catalog map[string]policy.Capability) map[string]policy.
 // syncableScopeRefs collects the deduped binding-scope refs of importable kinds — the resources a
 // pulled commit may target on this replica (the same canonical refs the host loops govern). The
 // importable-kind set is descriptor-derived from the catalog (PD6), not a hardcoded constant.
-func syncableScopeRefs(bindings []channel.ChannelBinding, catalog map[string]policy.Capability) []contract.ResourceRef {
+func syncableScopeRefs(bindings []access.ChannelBinding, catalog map[string]policy.Capability) []contract.ResourceRef {
 	syncable := map[contract.ResourceKind]bool{}
 	for _, k := range policy.ImportableKinds(catalog) {
 		syncable[k] = true
@@ -110,7 +110,7 @@ func syncableScopeRefs(bindings []channel.ChannelBinding, catalog map[string]pol
 // LocalRuntimeConfigFromBindings derives Local Mnemon's policy from the installed Agent Integration
 // bindings alone (enablement = binding scope kinds ∩ catalog; nil = Builtins). It is the
 // bindings-only convenience over the same select-only assembly OpenLocalRuntime uses.
-func LocalRuntimeConfigFromBindings(bindings []channel.ChannelBinding, catalog map[string]policy.Capability) (runtime.RuntimeConfig, error) {
+func LocalRuntimeConfigFromBindings(bindings []access.ChannelBinding, catalog map[string]policy.Capability) (runtime.RuntimeConfig, error) {
 	cat := resolveSyncCatalog(catalog)
 	loops := withDefaultEnabledLoops(loopsFromBindings(bindings, cat), cat)
 	return assembler.Assemble(capabilityFileFromLoops(loops), withDefaultEnabledGrants(bindings, cat), cat)
@@ -145,12 +145,12 @@ func withDefaultEnabledLoops(loops []string, catalog map[string]policy.Capabilit
 // grant that sits beside the binding's EXPLICIT --loop grants, so a default-enabled kind is
 // governable + pullable from setup alone (P3). The assembler and the channel authorizer both read
 // this same augmented list, so rules, authority, and authz stay consistent.
-func withDefaultEnabledGrants(bindings []channel.ChannelBinding, catalog map[string]policy.Capability) []channel.ChannelBinding {
+func withDefaultEnabledGrants(bindings []access.ChannelBinding, catalog map[string]policy.Capability) []access.ChannelBinding {
 	defaults := defaultEnabledCaps(catalog)
 	if len(defaults) == 0 {
 		return bindings
 	}
-	out := make([]channel.ChannelBinding, len(bindings))
+	out := make([]access.ChannelBinding, len(bindings))
 	for i, b := range bindings {
 		// host-agents AND control-agents (operators) both govern the default-enabled kinds; high-risk
 		// static capabilities still need a control-agent path for operator approval.
@@ -207,7 +207,7 @@ func capabilityFileFromLoops(loops []string) config.File {
 // loopsFromBindings derives capability enablement from binding scope kinds ∩ catalog (nil =
 // Builtins). config.loops stays the product-path authority — this derivation only runs when the
 // loops list is empty (the hidden bindings-only path).
-func loopsFromBindings(bindings []channel.ChannelBinding, catalog map[string]policy.Capability) []string {
+func loopsFromBindings(bindings []access.ChannelBinding, catalog map[string]policy.Capability) []string {
 	if catalog == nil {
 		catalog = policy.EmbeddedCatalog()
 	}
@@ -240,7 +240,7 @@ type ServeOptions struct {
 
 // RunLocalHTTPServerWithBindings serves Local Mnemon from a binding manifest. Runtime hot content is
 // read through pull/render; serving never writes host workspace content in the background.
-func RunLocalHTTPServerWithBindings(ctx context.Context, addr, storePath string, loaded channel.LoadedBindings, opts ServeOptions, out io.Writer) error {
+func RunLocalHTTPServerWithBindings(ctx context.Context, addr, storePath string, loaded access.LoadedBindings, opts ServeOptions, out io.Writer) error {
 	catalog, ignored, err := resolveBootCatalog(opts.ProjectRoot, opts.IgnoreExternal, os.Stderr)
 	if err != nil {
 		return err
@@ -268,7 +268,7 @@ func RunLocalHTTPServerWithBindings(ctx context.Context, addr, storePath string,
 			Catalog:             catalog,
 		}, os.Stderr)
 	}()
-	return ServeLocalHTTP(ctx, addr, rt, channel.NewBindingAuthenticator(loaded), loaded, opts.ProjectRoot, out)
+	return ServeLocalHTTP(ctx, addr, rt, access.NewBindingAuthenticator(loaded), loaded, opts.ProjectRoot, out)
 }
 
 // resolveBootCatalog resolves the capability catalog ONCE at boot. Default: embedded Builtins +

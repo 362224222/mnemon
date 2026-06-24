@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/app"
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
@@ -26,13 +26,13 @@ func TestControlTokenFileAuth(t *testing.T) {
 	ref := contract.ResourceRef{Kind: "memory", ID: "m1"}
 	rt, err := runtime.OpenRuntime(filepath.Join(root, runtime.DefaultStorePath), runtime.RuntimeConfig{
 		Subs:     map[contract.ActorID]contract.Subscription{"codex@project": {Actor: "codex@project", Refs: []contract.ResourceRef{ref}}},
-		Bindings: []channel.ChannelBinding{channel.HostAgentBinding("codex@project", "http://x", []contract.ResourceRef{ref})},
+		Bindings: []access.ChannelBinding{access.HostAgentBinding("codex@project", "http://x", []contract.ResourceRef{ref})},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer rt.Close()
-	srv := httptest.NewServer(runtime.NewRuntimeHandler(rt, channel.TokenAuthenticator{Tokens: map[string]contract.ActorID{"tok-codex": "codex@project"}}))
+	srv := httptest.NewServer(runtime.NewRuntimeHandler(rt, access.TokenAuthenticator{Tokens: map[string]contract.ActorID{"tok-codex": "codex@project"}}))
 	defer srv.Close()
 
 	tokFile := filepath.Join(t.TempDir(), "codex.token")
@@ -97,16 +97,16 @@ func TestControlTokenFileAuth(t *testing.T) {
 
 func TestControlPullJSONIncludesScopedContent(t *testing.T) {
 	ref := contract.ResourceRef{Kind: "memory", ID: "project"}
-	binding := channel.HostAgentBinding("codex@project", "http://x", []contract.ResourceRef{ref})
+	binding := access.HostAgentBinding("codex@project", "http://x", []contract.ResourceRef{ref})
 	binding.AllowedObservedTypes = []string{policy.MemoryWriteCandidateObserved}
-	rt, err := app.OpenLocalRuntime(filepath.Join(t.TempDir(), "governed.db"), channel.LoadedBindings{Bindings: []channel.ChannelBinding{binding}}, nil, nil)
+	rt, err := app.OpenLocalRuntime(filepath.Join(t.TempDir(), "governed.db"), access.LoadedBindings{Bindings: []access.ChannelBinding{binding}}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer rt.Close()
-	srv := httptest.NewServer(runtime.NewRuntimeHandler(rt, channel.HeaderAuthenticator{}))
+	srv := httptest.NewServer(runtime.NewRuntimeHandler(rt, access.HeaderAuthenticator{}))
 	defer srv.Close()
-	client := channel.NewClient(srv.URL, "codex@project")
+	client := access.NewClient(srv.URL, "codex@project")
 	if rec, err := client.IngestObserve("codex@project", contract.ObservationEnvelope{
 		ExternalID: "memory-json",
 		Event: contract.Event{Type: policy.MemoryWriteCandidateObserved, Payload: map[string]any{
@@ -161,11 +161,11 @@ func TestControlPullJSONIncludesScopedContent(t *testing.T) {
 
 func TestControlRenderPrintsDerivedEventPresentationBody(t *testing.T) {
 	ref := contract.ResourceRef{Kind: "assignment", ID: "project"}
-	a := channel.HostAgentBinding("codex-a@project", "http://x", []contract.ResourceRef{ref})
+	a := access.HostAgentBinding("codex-a@project", "http://x", []contract.ResourceRef{ref})
 	a.AllowedObservedTypes = []string{"assignment.write_candidate.observed"}
-	b := channel.HostAgentBinding("codex-b@project", "http://x", []contract.ResourceRef{ref})
-	loaded := channel.LoadedBindings{
-		Bindings: []channel.ChannelBinding{a, b},
+	b := access.HostAgentBinding("codex-b@project", "http://x", []contract.ResourceRef{ref})
+	loaded := access.LoadedBindings{
+		Bindings: []access.ChannelBinding{a, b},
 		Tokens: map[string]contract.ActorID{
 			"tok-a": "codex-a@project",
 			"tok-b": "codex-b@project",
@@ -181,15 +181,15 @@ func TestControlRenderPrintsDerivedEventPresentationBody(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer rt.Close()
-	bindings, err := channel.NewBindingSet(loaded.Bindings...)
+	bindings, err := access.NewBindingSet(loaded.Bindings...)
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(app.NewLocalHTTPHandler(rt, channel.TokenAuthenticator{Tokens: loaded.Tokens}, bindings, presentation.Renderer{
+	srv := httptest.NewServer(app.NewLocalHTTPHandler(rt, access.TokenAuthenticator{Tokens: loaded.Tokens}, bindings, presentation.Renderer{
 		Now: func() time.Time { return mustCmdTime(t, "2026-06-24T10:05:00Z") },
 	}))
 	defer srv.Close()
-	clientA := channel.NewClientWithToken(srv.URL, "tok-a")
+	clientA := access.NewClientWithToken(srv.URL, "tok-a")
 	if rec, err := clientA.IngestObserve("", contract.ObservationEnvelope{
 		ExternalID: "control-render-assignment",
 		Event: contract.Event{Type: "assignment.write_candidate.observed", Payload: map[string]any{

@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
@@ -89,7 +89,7 @@ const towerScopeID = contract.ResourceID("project")
 // performs only resource reads, the read-only DecisionLedger, and an event-log scan — never a write or
 // a Tick (G10/T5). The bindings supply the FIELD "who's on the field" enumeration (the only existing
 // source); the ui package renders the result and never touches the store (ui↛store).
-func BuildTowerView(rt *runtime.Runtime, bindings []channel.ChannelBinding) (TowerView, error) {
+func BuildTowerView(rt *runtime.Runtime, bindings []access.ChannelBinding) (TowerView, error) {
 	var v TowerView
 	// GOAL: project_intent statements + progress_digest summaries (read-only resource reads; an
 	// absent resource — version 0 — simply yields no entries).

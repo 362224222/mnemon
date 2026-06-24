@@ -8,16 +8,16 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/rule"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
 
 // Runtime is the server-owned governed runtime: it owns the canonical kernel
-// store, the kernel, the ControlServer channel boundary, the single Tick driver,
+// store, the kernel, the ControlServer access boundary, the single Tick driver,
 // and shutdown. Host surfaces reach the engine through this runtime over
 // server.Client, rather than opening the store directly.
 //
@@ -27,9 +27,9 @@ import (
 type Runtime struct {
 	store     *store.Store
 	cs        *ControlServer
-	api       channel.ServerAPI // cs, or an authorizedAPI wrapping cs when Bindings are configured
+	api       access.ServerAPI // cs, or an authorizedAPI wrapping cs when Bindings are configured
 	storePath string
-	bindings  *channel.BindingSet // nil when unbound (embedded/trusted owner)
+	bindings  *access.BindingSet // nil when unbound (embedded/trusted owner)
 }
 
 // RuntimeConfig selects the runtime's policy: the rule pre-gate set, the kernel authority, the
@@ -50,10 +50,10 @@ type RuntimeConfig struct {
 	// back to kernel.DefaultSchemaGuard for callers that do not assemble a catalog.
 	SchemaGuard kernel.SchemaGuard
 
-	// Bindings, when non-empty, gates the runtime's channel API with a channel.BindingSet authorizer (P2.1):
+	// Bindings, when non-empty, gates the runtime's channel API with a access.BindingSet authorizer (P2.1):
 	// every principal must have a binding granting the verb / observed type / pull scope it uses. The
 	// zero (nil) leaves the API unbound — correct for a trusted in-process owner (embedded coreengine).
-	Bindings []channel.ChannelBinding
+	Bindings []access.ChannelBinding
 
 	// SyncableKinds names the resource kinds this replica PRODUCES Remote Workspace synced events for —
 	// the produce surface (sync-abi-v2 §4). The assembler injects the catalog's importable kinds
@@ -112,21 +112,21 @@ func OpenRuntime(storePath string, cfg RuntimeConfig) (*Runtime, error) {
 	cs.syncableKinds = kindSet(cfg.SyncableKinds)
 	rt := &Runtime{store: store, cs: cs, api: cs, storePath: storePath}
 	if len(cfg.Bindings) > 0 {
-		bindings, err := channel.NewBindingSet(cfg.Bindings...)
+		bindings, err := access.NewBindingSet(cfg.Bindings...)
 		if err != nil {
 			_ = store.Close()
 			return nil, fmt.Errorf("channel bindings: %w", err)
 		}
 		rt.bindings = bindings
-		rt.api = channel.NewAuthorizedAPI(cs, bindings)
+		rt.api = access.NewAuthorizedAPI(cs, bindings)
 	}
 	return rt, nil
 }
 
-// API returns the channel boundary (channel.ServerAPI: observe via Ingest, pull via PullEventView) every
-// surface speaks to: the bare ControlServer, or — when bindings are configured — a channel.BindingSet
+// API returns the access boundary (access.ServerAPI: observe via Ingest, pull via PullEventView) every
+// surface speaks to: the bare ControlServer, or — when bindings are configured — an access.BindingSet
 // authorizer wrapping it (P2.1). The Tick driver and read helpers stay on the unwrapped runtime.
-func (r *Runtime) API() channel.ServerAPI { return r.api }
+func (r *Runtime) API() access.ServerAPI { return r.api }
 
 func (r *Runtime) IngestObservedEnvelope(principal contract.ActorID, env eventmodel.EventEnvelope) (int64, bool, error) {
 	obs, err := observationFromObservedEnvelope(env)
@@ -159,7 +159,7 @@ func (r *Runtime) PendingEvents(afterSeq int64) ([]contract.Event, error) {
 // decision history that backs the Control Tower's LEDGER (accepted) and INBOX (rejected escalations)
 // pages (P6). It is READ-ONLY (wraps Store.DecisionsAfter); it opens NO write path. This is the one
 // operator-scoped read the channel's per-actor PullEventView cannot serve, so the Tower facade —
-// which holds the *Runtime — reads it here rather than over the channel. The caller filters by status
+// which holds the *Runtime — reads it here rather than over the access. The caller filters by status
 // (Accepted -> LEDGER, Rejected -> INBOX); the ui package never touches this directly (ui↛store).
 func (r *Runtime) DecisionLedger() ([]contract.Decision, error) {
 	rows, err := r.store.DecisionsAfter(0)
@@ -174,7 +174,7 @@ func (r *Runtime) DecisionLedger() ([]contract.Decision, error) {
 }
 
 // Status builds the principal's channel status. When bindings are configured it is gated on the
-// binding's channel.VerbStatus (a grant distinct from pull). The digest is the principal's server-configured
+// binding's access.VerbStatus (a grant distinct from pull). The digest is the principal's server-configured
 // scope, read through the kernel store directly (the server owns the runtime), so status does not
 // require the pull verb.
 func (r *Runtime) Status(principal contract.ActorID) (contract.ChannelStatus, error) {
@@ -185,7 +185,7 @@ func (r *Runtime) Status(principal contract.ActorID) (contract.ChannelStatus, er
 		if !ok {
 			return contract.ChannelStatus{}, fmt.Errorf("no channel binding for principal %q", principal)
 		}
-		if !b.Allows(channel.VerbStatus) {
+		if !b.Allows(access.VerbStatus) {
 			return contract.ChannelStatus{}, fmt.Errorf("principal %q is not bound to status", principal)
 		}
 		kind = b.ActorKind

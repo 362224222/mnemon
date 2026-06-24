@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 )
 
 func writeReplicas(t *testing.T, dir, content string, mode os.FileMode) string {
@@ -179,11 +179,11 @@ func TestMnemonHubServesSyncOverTLS(t *testing.T) {
 		}
 	}()
 
-	clientA, err := channel.NewSyncClient(endpoint, channel.SyncClientConfig{Token: "tok-a", CAFile: certPath})
+	clientA, err := access.NewSyncClient(endpoint, access.SyncClientConfig{Token: "tok-a", CAFile: certPath})
 	if err != nil {
 		t.Fatal(err)
 	}
-	clientB, err := channel.NewSyncClient(endpoint, channel.SyncClientConfig{Token: "tok-b", CAFile: certPath})
+	clientB, err := access.NewSyncClient(endpoint, access.SyncClientConfig{Token: "tok-b", CAFile: certPath})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +221,7 @@ func TestMnemonHubServesSyncOverTLS(t *testing.T) {
 	}
 
 	// An unknown token is 401 (the wire security floor under TLS).
-	badClient, err := channel.NewSyncClient(endpoint, channel.SyncClientConfig{Token: "wrong", CAFile: certPath})
+	badClient, err := access.NewSyncClient(endpoint, access.SyncClientConfig{Token: "wrong", CAFile: certPath})
 	if err != nil {
 		t.Fatal(err)
 	}

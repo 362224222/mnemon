@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
@@ -18,11 +18,11 @@ import (
 // is rejected, never written.
 func TestCoordinationAssignmentGoverns(t *testing.T) {
 	ref := contract.ResourceRef{Kind: "assignment", ID: "project"}
-	binding := channel.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
+	binding := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
 	binding.AllowedObservedTypes = []string{"assignment.write_candidate.observed"}
 
 	// nil catalog → EmbeddedCatalog, which now carries the three coordination kinds (P3a).
-	rc, err := LocalRuntimeConfigFromBindings([]channel.ChannelBinding{binding}, nil)
+	rc, err := LocalRuntimeConfigFromBindings([]access.ChannelBinding{binding}, nil)
 	if err != nil {
 		t.Fatalf("boot config: %v", err)
 	}
@@ -77,9 +77,9 @@ func TestCoordinationAssignmentGoverns(t *testing.T) {
 // the risk gate (the gate's deny outranks the admission propose), never written.
 func TestCoordinationMidRiskRequiresEvidence(t *testing.T) {
 	ref := contract.ResourceRef{Kind: "assignment", ID: "project"}
-	binding := channel.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
+	binding := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
 	binding.AllowedObservedTypes = []string{"assignment.write_candidate.observed"}
-	rc, err := LocalRuntimeConfigFromBindings([]channel.ChannelBinding{binding}, nil)
+	rc, err := LocalRuntimeConfigFromBindings([]access.ChannelBinding{binding}, nil)
 	if err != nil {
 		t.Fatalf("boot config: %v", err)
 	}
@@ -126,9 +126,9 @@ func TestCoordinationMidRiskRequiresEvidence(t *testing.T) {
 
 func TestAssignmentItemsCarryCreatedAtFromEventTimestamp(t *testing.T) {
 	ref := contract.ResourceRef{Kind: "assignment", ID: "project"}
-	binding := channel.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
+	binding := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
 	binding.AllowedObservedTypes = []string{"assignment.write_candidate.observed"}
-	rc, err := LocalRuntimeConfigFromBindings([]channel.ChannelBinding{binding}, nil)
+	rc, err := LocalRuntimeConfigFromBindings([]access.ChannelBinding{binding}, nil)
 	if err != nil {
 		t.Fatalf("boot config: %v", err)
 	}
@@ -174,11 +174,11 @@ func TestAssignmentItemsCarryCreatedAtFromEventTimestamp(t *testing.T) {
 // principal without an explicit --loop. This pins the "coordination package is on out of the box".
 func TestCoordinationDefaultEnabled(t *testing.T) {
 	memRef := contract.ResourceRef{Kind: "memory", ID: "project"}
-	binding := channel.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{memRef})
+	binding := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{memRef})
 	// explicit allow-list (like setup): memory only — coordination is NOT named here.
 	binding.AllowedObservedTypes = []string{"session.observed", "memory.write_candidate.observed"}
 
-	rc, err := LocalRuntimeConfigFromBindings([]channel.ChannelBinding{binding}, nil)
+	rc, err := LocalRuntimeConfigFromBindings([]access.ChannelBinding{binding}, nil)
 	if err != nil {
 		t.Fatalf("boot config: %v", err)
 	}
@@ -222,10 +222,10 @@ func TestCoordinationDefaultEnabled(t *testing.T) {
 // are exercised (assignment above carries the required-field negative).
 func TestCoordinationProjectIntentGoverns(t *testing.T) {
 	ref := contract.ResourceRef{Kind: "project_intent", ID: "project"}
-	binding := channel.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
+	binding := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
 	binding.AllowedObservedTypes = []string{"project_intent.write_candidate.observed"}
 
-	rc, err := LocalRuntimeConfigFromBindings([]channel.ChannelBinding{binding}, nil)
+	rc, err := LocalRuntimeConfigFromBindings([]access.ChannelBinding{binding}, nil)
 	if err != nil {
 		t.Fatalf("boot config: %v", err)
 	}
@@ -259,10 +259,10 @@ func TestCoordinationProjectIntentGoverns(t *testing.T) {
 func TestCoordinationProfileAndTeamworkSignalGovern(t *testing.T) {
 	profileRef := contract.ResourceRef{Kind: "agent_profile", ID: "project"}
 	signalRef := contract.ResourceRef{Kind: "teamwork_signal", ID: "project"}
-	binding := channel.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{profileRef, signalRef})
+	binding := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{profileRef, signalRef})
 	binding.AllowedObservedTypes = []string{"agent_profile.write_candidate.observed", "teamwork_signal.write_candidate.observed"}
 
-	rc, err := LocalRuntimeConfigFromBindings([]channel.ChannelBinding{binding}, nil)
+	rc, err := LocalRuntimeConfigFromBindings([]access.ChannelBinding{binding}, nil)
 	if err != nil {
 		t.Fatalf("boot config: %v", err)
 	}

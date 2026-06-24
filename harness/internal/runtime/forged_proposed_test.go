@@ -9,7 +9,7 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
 
-// The wire boundary (channel.ServerAPI.Ingest) admits ONLY observations. A *.proposed / *.diagnostic is an INTERNAL
+// The wire boundary (access.ServerAPI.Ingest) admits ONLY observations. A *.proposed / *.diagnostic is an INTERNAL
 // event class: a *.proposed is minted exclusively by the bridge AFTER the rule pre-gate + write-scope check
 // (R11), a *.diagnostic only by the server (S7). The reconciler trusts every *.proposed in the log, so a
 // client-supplied one would skip the rule pre-gate, the bridge write-scope, AND readback (S10) and be

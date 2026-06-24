@@ -1,7 +1,7 @@
 // Package runtime is the governed control loop: a ControlServer ingests observations exactly-once, runs
 // them through the rule pre-gate, bridges proposals into trusted *.proposed events, reconciles them
 // through the single-writer kernel, and emits outbox invalidations + durable diagnostics. The Runtime
-// owns the store + the single Tick driver; hosts reach it over the channel.ServerAPI port (D5). The
+// owns the store + the single Tick driver; hosts reach it over the access.ServerAPI port (D5). The
 // kernel stays minimal; the rich admission semantics live here (D4).
 package runtime
 
@@ -11,11 +11,11 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/eventview"
 	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/reconcile"
 	"github.com/mnemon-dev/mnemon/harness/internal/rule"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
@@ -26,7 +26,7 @@ const (
 	decisionSinkCursor   = "decision_sink" // tracks decisions whose S2/S7 side-effects are produced (recoverable)
 )
 
-var _ channel.ServerAPI = (*ControlServer)(nil)
+var _ access.ServerAPI = (*ControlServer)(nil)
 
 // ControlServer is the one single-writer governed loop. Tick is its deterministic, restart-safe driver.
 type ControlServer struct {

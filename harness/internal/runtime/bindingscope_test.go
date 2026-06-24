@@ -4,8 +4,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 )
 
 // TestEmptyRefPullClampedToBindingScope closes the P2 adversarial finding: when the engine
@@ -18,9 +18,9 @@ func TestEmptyRefPullClampedToBindingScope(t *testing.T) {
 	rt, err := OpenRuntime(filepath.Join(t.TempDir(), "s.db"), RuntimeConfig{
 		// engine scope is BROADER than the binding scope.
 		Subs: map[contract.ActorID]contract.Subscription{"codex": {Actor: "codex", Refs: []contract.ResourceRef{m1, secret}}},
-		Bindings: []channel.ChannelBinding{{
+		Bindings: []access.ChannelBinding{{
 			Principal: "codex", ActorKind: contract.KindHostAgent,
-			AllowedVerbs: []channel.Verb{channel.VerbPull, channel.VerbStatus}, SubscriptionScope: []contract.ResourceRef{m1},
+			AllowedVerbs: []access.Verb{access.VerbPull, access.VerbStatus}, SubscriptionScope: []contract.ResourceRef{m1},
 		}},
 	})
 	if err != nil {

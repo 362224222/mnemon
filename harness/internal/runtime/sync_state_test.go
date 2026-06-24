@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
@@ -16,14 +16,14 @@ import (
 func TestAcceptedLocalMemoryCreatesPendingSyncEvent(t *testing.T) {
 	storePath := filepath.Join(t.TempDir(), "governed.db")
 	ref := contract.ResourceRef{Kind: "memory", ID: "project"}
-	binding := channel.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
+	binding := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
 	binding.AllowedObservedTypes = []string{policy.MemoryWriteCandidateObserved}
-	rt, err := OpenRuntime(storePath, localRuntimeConfigT([]channel.ChannelBinding{binding}))
+	rt, err := OpenRuntime(storePath, localRuntimeConfigT([]access.ChannelBinding{binding}))
 	if err != nil {
 		t.Fatalf("open local runtime: %v", err)
 	}
-	srv := httptest.NewServer(NewRuntimeHandler(rt, channel.HeaderAuthenticator{}))
-	client := channel.NewClient(srv.URL, "codex@project")
+	srv := httptest.NewServer(NewRuntimeHandler(rt, access.HeaderAuthenticator{}))
+	client := access.NewClient(srv.URL, "codex@project")
 	if rec, err := client.IngestObserve("codex@project", contract.ObservationEnvelope{
 		ExternalID: "sync-memory-1",
 		Event: contract.Event{Type: policy.MemoryWriteCandidateObserved, Payload: map[string]any{
@@ -90,7 +90,7 @@ func TestAcceptedLocalMemoryCreatesPendingSyncEvent(t *testing.T) {
 	if err := rt.Close(); err != nil {
 		t.Fatalf("close runtime: %v", err)
 	}
-	rt2, err := OpenRuntime(storePath, localRuntimeConfigT([]channel.ChannelBinding{binding}))
+	rt2, err := OpenRuntime(storePath, localRuntimeConfigT([]access.ChannelBinding{binding}))
 	if err != nil {
 		t.Fatalf("reopen local runtime: %v", err)
 	}

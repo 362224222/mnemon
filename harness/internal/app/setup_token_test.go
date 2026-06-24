@@ -5,7 +5,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 )
 
 // Rerunning setup with --token=false must CLEAR the binding's token credential, not keep the old one.
@@ -23,7 +23,7 @@ func TestSetupTokenFalseClearsBindingCredential(t *testing.T) {
 	if err != nil {
 		t.Fatalf("setup (token on): %v", err)
 	}
-	loaded, err := channel.LoadBindingFile(root, r1.BindingFile)
+	loaded, err := access.LoadBindingFile(root, r1.BindingFile)
 	if err != nil {
 		t.Fatalf("load bindings: %v", err)
 	}
@@ -37,7 +37,7 @@ func TestSetupTokenFalseClearsBindingCredential(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("setup (--token=false): %v", err)
 	}
-	loaded, err = channel.LoadBindingFile(root, r1.BindingFile)
+	loaded, err = access.LoadBindingFile(root, r1.BindingFile)
 	if err != nil {
 		t.Fatalf("load bindings after --token=false: %v", err)
 	}

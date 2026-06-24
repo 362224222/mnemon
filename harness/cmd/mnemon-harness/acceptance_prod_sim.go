@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 	"github.com/spf13/cobra"
 )
@@ -203,7 +203,7 @@ func runR1ProdSimAcceptance(ctx context.Context, opts r1ProdSimAcceptanceOptions
 		addR1Error(&report, err)
 	}
 
-	client, err := channel.NewSyncClient(hub.URL, channel.SyncClientConfig{Token: hub.Tokens[0]})
+	client, err := access.NewSyncClient(hub.URL, access.SyncClientConfig{Token: hub.Tokens[0]})
 	if err == nil {
 		syncReport.HubStatus, err = client.SyncStatus()
 	}

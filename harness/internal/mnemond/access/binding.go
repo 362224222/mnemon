@@ -1,4 +1,4 @@
-package channel
+package access
 
 import (
 	"fmt"
@@ -16,7 +16,7 @@ const (
 	TransportMTLS  Transport = "mtls"  // mutual-TLS authenticated
 )
 
-// Verb is a channel operation. The Agent Integration channel exposes observe (Ingest), pull
+// Verb is a mnemond access operation. Agent Integration exposes observe (Ingest), pull
 // (PullEventView), render (read-only presentation/content), and status. Replica sync gets separate verbs so
 // a sync credential does not inherit Agent Integration access.
 type Verb string
@@ -27,14 +27,14 @@ const (
 	VerbRender  Verb = "render"
 	VerbStatus  Verb = "status"
 	// The sync verb STRINGS are ABI surface owned by contract (sync-abi-v1 §1); these aliases keep
-	// the channel's Verb space complete without channel becoming the wire-name authority.
+	// the access Verb space complete without access becoming the wire-name authority.
 	VerbSyncPush   Verb = contract.SyncVerbPush
 	VerbSyncPull   Verb = contract.SyncVerbPull
 	VerbSyncStatus Verb = contract.SyncVerbStatus
 )
 
-// ChannelBinding is the manifest that scopes ONE principal's access to the channel (D6). The
-// channel is the same for every binding; the binding — never a privileged code path — is what
+// ChannelBinding is the manifest that scopes ONE principal's access to mnemond (D6). The
+// access path is the same for every binding; the binding — never a privileged code path — is what
 // differs a HostAgent from a ControlAgent. The server still enforces the scope at runtime (S9);
 // the binding makes the grant explicit and auditable.
 type ChannelBinding struct {

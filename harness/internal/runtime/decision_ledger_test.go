@@ -4,8 +4,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 )
 
@@ -16,9 +16,9 @@ import (
 func TestDecisionLedgerSurfacesAcceptedDecisions(t *testing.T) {
 	storePath := filepath.Join(t.TempDir(), "governed.db")
 	ref := contract.ResourceRef{Kind: "memory", ID: "project"}
-	binding := channel.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
+	binding := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
 	binding.AllowedObservedTypes = []string{policy.MemoryWriteCandidateObserved}
-	rt, err := OpenRuntime(storePath, localRuntimeConfigT([]channel.ChannelBinding{binding}))
+	rt, err := OpenRuntime(storePath, localRuntimeConfigT([]access.ChannelBinding{binding}))
 	if err != nil {
 		t.Fatalf("open runtime: %v", err)
 	}

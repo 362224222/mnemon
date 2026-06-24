@@ -7,26 +7,26 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 )
 
-func openLocalMemoryRuntime(t *testing.T) (*Runtime, *channel.Client) {
+func openLocalMemoryRuntime(t *testing.T) (*Runtime, *access.Client) {
 	t.Helper()
 	ref := contract.ResourceRef{Kind: "memory", ID: "project"}
-	binding := channel.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
+	binding := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
 	binding.AllowedObservedTypes = []string{"session.observed", "memory.write_candidate.observed"}
-	rt, err := OpenRuntime(filepath.Join(t.TempDir(), "governed.db"), localRuntimeConfigT([]channel.ChannelBinding{binding}))
+	rt, err := OpenRuntime(filepath.Join(t.TempDir(), "governed.db"), localRuntimeConfigT([]access.ChannelBinding{binding}))
 	if err != nil {
 		t.Fatalf("open local runtime: %v", err)
 	}
 	t.Cleanup(func() { _ = rt.Close() })
-	srv := httptest.NewServer(NewRuntimeHandler(rt, channel.HeaderAuthenticator{}))
+	srv := httptest.NewServer(NewRuntimeHandler(rt, access.HeaderAuthenticator{}))
 	t.Cleanup(srv.Close)
-	return rt, channel.NewClient(srv.URL, "codex@project")
+	return rt, access.NewClient(srv.URL, "codex@project")
 }
 
-func observeMemoryCandidate(t *testing.T, c *channel.Client, ext, content string) {
+func observeMemoryCandidate(t *testing.T, c *access.Client, ext, content string) {
 	t.Helper()
 	rec, err := c.IngestObserve("codex@project", contract.ObservationEnvelope{
 		ExternalID: ext,
