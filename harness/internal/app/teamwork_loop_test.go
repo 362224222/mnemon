@@ -13,7 +13,7 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
-func TestMinimalTeamworkLoopThroughRenderCues(t *testing.T) {
+func TestMinimalTeamworkLoopThroughRenderPresentations(t *testing.T) {
 	refs := []contract.ResourceRef{
 		{Kind: "agent_profile", ID: "project"},
 		{Kind: "teamwork_signal", ID: "project"},
@@ -72,7 +72,7 @@ func TestMinimalTeamworkLoopThroughRenderCues(t *testing.T) {
 
 	observe(clientA, "profile-a", "agent_profile.write_candidate.observed", map[string]any{
 		"actor": "codex-a@project", "focus": "coordinate R1 render loop",
-		"context_advantages": []any{"read R1 event-cue plan"},
+		"context_advantages": []any{"read R1 event-presentation plan"},
 		"availability":       "available", "freshness": "fresh", "ttl": "30m",
 		"summary": "A can originate and integrate render assignments.",
 	})
@@ -93,22 +93,22 @@ func TestMinimalTeamworkLoopThroughRenderCues(t *testing.T) {
 		"expected_feedback": "progress_digest with result or blocker", "ttl": "30m", "evidence": "signal sig-r1",
 	})
 
-	work := postRender(t, srv.URL, "tok-b", render.Request{RenderIntent: render.IntentTeamworkCue})
+	work := postRender(t, srv.URL, "tok-b", render.Request{RenderIntent: render.IntentTeamworkEvents})
 	if !strings.Contains(work.Body, "[mnemon:work]") || !strings.Contains(work.Body, "asg-r1") || !strings.Contains(work.Body, "[mnemon:feedback]") {
-		t.Fatalf("B must see work + feedback cue for assignment:\n%s", work.Body)
+		t.Fatalf("B must see work + feedback presentation for assignment:\n%s", work.Body)
 	}
 
 	observe(clientB, "progress-r1", "progress_digest.write_candidate.observed", map[string]any{
 		"assignment_ref": "asg-r1", "scope": "harness/r1/render",
 		"summary": "review complete; render endpoint is usable", "evidence": "render endpoint test",
 	})
-	integrate := postRender(t, srv.URL, "tok-a", render.Request{RenderIntent: render.IntentTeamworkCue})
+	integrate := postRender(t, srv.URL, "tok-a", render.Request{RenderIntent: render.IntentTeamworkEvents})
 	if !strings.Contains(integrate.Body, "[mnemon:integrate]") || !strings.Contains(integrate.Body, "review complete") {
-		t.Fatalf("A must see integration cue after B feedback:\n%s", integrate.Body)
+		t.Fatalf("A must see integration presentation after B feedback:\n%s", integrate.Body)
 	}
-	afterFeedback := postRender(t, srv.URL, "tok-b", render.Request{RenderIntent: render.IntentTeamworkCue})
+	afterFeedback := postRender(t, srv.URL, "tok-b", render.Request{RenderIntent: render.IntentTeamworkEvents})
 	if strings.Contains(afterFeedback.Body, "Assignment asg-r1 is yours") {
-		t.Fatalf("linked progress must remove B work cue:\n%s", afterFeedback.Body)
+		t.Fatalf("linked progress must remove B work presentation:\n%s", afterFeedback.Body)
 	}
 
 	now = "2026-06-24T10:10:00Z"
@@ -118,12 +118,12 @@ func TestMinimalTeamworkLoopThroughRenderCues(t *testing.T) {
 		"expected_feedback": "progress_digest with result or blocker", "ttl": "5m", "evidence": "TTL branch",
 	})
 	renderNow = mustRenderHTTPTime(t, "2026-06-24T10:20:00Z")
-	expired := postRender(t, srv.URL, "tok-a", render.Request{RenderIntent: render.IntentTeamworkCue})
+	expired := postRender(t, srv.URL, "tok-a", render.Request{RenderIntent: render.IntentTeamworkEvents})
 	if !strings.Contains(expired.Body, "[mnemon:expired]") || !strings.Contains(expired.Body, "asg-exp") {
-		t.Fatalf("A must see expired cue for unreported assignment:\n%s", expired.Body)
+		t.Fatalf("A must see expired presentation for unreported assignment:\n%s", expired.Body)
 	}
-	assigneeExpired := postRender(t, srv.URL, "tok-b", render.Request{RenderIntent: render.IntentTeamworkCue})
+	assigneeExpired := postRender(t, srv.URL, "tok-b", render.Request{RenderIntent: render.IntentTeamworkEvents})
 	if strings.Contains(assigneeExpired.Body, "[mnemon:expired]") {
-		t.Fatalf("B must not see originator expired cue:\n%s", assigneeExpired.Body)
+		t.Fatalf("B must not see originator expired presentation:\n%s", assigneeExpired.Body)
 	}
 }

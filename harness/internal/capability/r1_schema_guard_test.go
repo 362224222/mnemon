@@ -25,7 +25,7 @@ func TestR1DeferredCapabilityAssetsRemainDeferred(t *testing.T) {
 
 	for _, name := range []string{"assignment_status", "assignment_expired", "poc_role", "ic_role"} {
 		if present[name] {
-			t.Fatalf("%s must remain deferred in R1; model it as a render cue or later capability, not a built-in asset", name)
+			t.Fatalf("%s must remain deferred in R1; model it as a render presentation or later capability, not a built-in asset", name)
 		}
 	}
 }
@@ -44,12 +44,12 @@ func TestR1TeamworkCapabilitySchema(t *testing.T) {
 			risk:         "low",
 			requiredMiss: "empty context_advantages",
 			valid: map[string]any{
-				"actor": "codex@project", "focus": "render cue implementation",
+				"actor": "codex@project", "focus": "render presentation implementation",
 				"context_advantages": []any{"read r1 docs", "inspected hostsurface"},
-				"availability":       "available", "ttl": "30m", "summary": "Working on R1 render/cue.",
+				"availability":       "available", "ttl": "30m", "summary": "Working on R1 render/presentation.",
 			},
 			invalid: map[string]any{
-				"actor": "codex@project", "focus": "render cue implementation",
+				"actor": "codex@project", "focus": "render presentation implementation",
 				"availability": "available", "ttl": "30m", "summary": "Missing advantages.",
 			},
 		},
@@ -82,7 +82,7 @@ func TestR1TeamworkCapabilitySchema(t *testing.T) {
 			name:         "progress_digest",
 			risk:         "low",
 			requiredMiss: "empty summary",
-			valid:        map[string]any{"summary": "Rendered work cue and tests pass.", "assignment_ref": "asg-1"},
+			valid:        map[string]any{"summary": "Rendered work presentation and tests pass.", "assignment_ref": "asg-1"},
 			invalid:      map[string]any{"assignment_ref": "asg-1"},
 		},
 	}

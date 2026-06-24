@@ -22,7 +22,7 @@ import (
 
 	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/projection"
+	"github.com/mnemon-dev/mnemon/harness/internal/eventview"
 )
 
 // Runtime is the autopilot's only seam to the governed channel: pull a participant's scoped
@@ -30,7 +30,7 @@ import (
 // The in-process runtime handle satisfies it; autopilot never imports the runtime package, and
 // the channel core never imports autopilot — so the autopilot stays a deletable optional ring.
 type Runtime interface {
-	PullProjection(principal contract.ActorID, sub contract.Subscription) (projection.Projection, error)
+	PullEventView(principal contract.ActorID, sub contract.Subscription) (eventview.EventView, error)
 	Submit(principal contract.ActorID, env contract.ObservationEnvelope) (seq int64, dup bool, decisions []contract.Decision, err error)
 	DecisionLedger() ([]contract.Decision, error)
 }
@@ -38,9 +38,9 @@ type Runtime interface {
 // TurnPacket is what a nudged participant receives: its scoped projection and why it was woken.
 // Reason is always "scope-changed" — the only nudge cause (content-blind).
 type TurnPacket struct {
-	Principal  contract.ActorID
-	Reason     string
-	Projection projection.Projection
+	Principal contract.ActorID
+	Reason    string
+	EventView eventview.EventView
 }
 
 // Agent is a participant the autopilot drives. When nudged it returns the observations it
@@ -162,7 +162,7 @@ func (l *Loop) step(step int) (int, error) {
 	accepted := 0
 	for _, agent := range l.agents {
 		p := agent.Principal()
-		proj, err := l.rt.PullProjection(p, l.subs[p])
+		proj, err := l.rt.PullEventView(p, l.subs[p])
 		if err != nil {
 			return accepted, fmt.Errorf("pull projection for %s: %w", p, err)
 		}
@@ -171,7 +171,7 @@ func (l *Loop) step(step int) (int, error) {
 		}
 		l.setDigest(p, proj.Digest)
 
-		emitted := agent.Act(TurnPacket{Principal: p, Reason: "scope-changed", Projection: proj})
+		emitted := agent.Act(TurnPacket{Principal: p, Reason: "scope-changed", EventView: proj})
 		nudgeAccepted := 0
 		for _, env := range emitted {
 			_, dup, decisions, serr := l.rt.Submit(p, env)
@@ -229,8 +229,8 @@ func Observe(eventType, externalID string, payload map[string]any) contract.Obse
 	}
 }
 
-// ProjectionHasKind reports whether a resource of kind is present (materialized) in the view.
-func ProjectionHasKind(proj projection.Projection, kind contract.ResourceKind) bool {
+// EventViewHasKind reports whether a resource of kind is present (materialized) in the view.
+func EventViewHasKind(proj eventview.EventView, kind contract.ResourceKind) bool {
 	for _, c := range proj.Content {
 		if c.Ref.Kind == kind {
 			return true
@@ -239,9 +239,9 @@ func ProjectionHasKind(proj projection.Projection, kind contract.ResourceKind) b
 	return false
 }
 
-// ProjectionItems returns the item list of the first resource of kind in the view. Coordination
+// EventViewItems returns the item list of the first resource of kind in the view. Coordination
 // kinds (assignment, progress_digest, project_intent) carry their records under the "items" field.
-func ProjectionItems(proj projection.Projection, kind contract.ResourceKind) []map[string]any {
+func EventViewItems(proj eventview.EventView, kind contract.ResourceKind) []map[string]any {
 	for _, c := range proj.Content {
 		if c.Ref.Kind != kind {
 			continue

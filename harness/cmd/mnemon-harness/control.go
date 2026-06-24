@@ -18,7 +18,7 @@ import (
 )
 
 // The control verbs are the host/control agent's view of the channel (D6): observe pushes an
-// observation IN, pull reads the scoped projection OUT, status checks reachability. They reach
+// observation IN, pull reads the scoped event view OUT, status checks reachability. They reach
 // the engine ONLY through channel.ServerAPI (the channel client), never kernel/reconcile — the
 // same channel a HostAgent and a ControlAgent both speak, differing only by binding/credential.
 
@@ -95,7 +95,7 @@ var controlObserveCmd = &cobra.Command{
 
 var controlPullCmd = &cobra.Command{
 	Use:   "pull",
-	Short: "Pull the principal's scoped projection (ServerAPI.PullProjection)",
+	Short: "Pull the principal's scoped event view (ServerAPI.PullEventView)",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		actor := controlActor
 		if actor == "" {
@@ -105,7 +105,7 @@ var controlPullCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		proj, err := client.PullProjection(contract.ActorID(controlPrincipal), contract.Subscription{Actor: contract.ActorID(actor)})
+		proj, err := client.PullEventView(contract.ActorID(controlPrincipal), contract.Subscription{Actor: contract.ActorID(actor)})
 		if err != nil {
 			return fmt.Errorf("channel pull failed (service unreachable or unauthorized): %w", err)
 		}
@@ -114,16 +114,16 @@ var controlPullCmd = &cobra.Command{
 			enc.SetIndent("", "  ")
 			return enc.Encode(proj)
 		}
-		// Count WRITTEN resources (version > 0), not every scoped ref: a host's scope now includes the
+		// Count WRITTEN event subjects (version > 0), not every scoped ref: a host's scope now includes the
 		// default-enabled coordination kinds (P3b), so an unwritten coordination ref must not inflate
-		// "you have N resources". proj.Resources lists the full scope; the written ones carry a version.
+		// the status line. proj.Resources lists the full scope; the written ones carry a version.
 		written := 0
 		for _, r := range proj.Resources {
 			if r.Version > 0 {
 				written++
 			}
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "projection ref=%s digest=%s resources=%d\n", proj.Ref, proj.Digest, written)
+		fmt.Fprintf(cmd.OutOrStdout(), "event-view ref=%s digest=%s event_subjects=%d\n", proj.Ref, proj.Digest, written)
 		return nil
 	},
 }
@@ -148,7 +148,7 @@ var controlStatusCmd = &cobra.Command{
 		// No Remote Workspace line here: channel status has no remote data source (no --root,
 		// ServerAPI only) — `mnemon-harness status` owns that report.
 		fmt.Fprintf(cmd.OutOrStdout(), "Agent Integration: %s\n", st.Principal)
-		fmt.Fprintf(cmd.OutOrStdout(), "Local Mnemon: ready (resources=%d, digest=%s)\n", st.Resources, st.Digest)
+		fmt.Fprintf(cmd.OutOrStdout(), "Local Mnemon: ready (governed_rows=%d, digest=%s)\n", st.Resources, st.Digest)
 		fmt.Fprintf(cmd.OutOrStdout(), "Sync: %d pending, %d synced, %d conflicts (local accepted, remote pending)\n", st.SyncPending, st.SyncSynced, st.SyncConflicts)
 		// FIELD section (P3d, the minimal Control Tower seed): the coordination entry counts derived
 		// client-side from a pull. The runtime stays capability-free, so kind-aware counts live here,
@@ -162,7 +162,7 @@ var controlStatusCmd = &cobra.Command{
 
 var controlRenderCmd = &cobra.Command{
 	Use:   "render",
-	Short: "Render read-only cue content for the authenticated principal",
+	Short: "Render read-only derived-event presentation for the authenticated principal",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		resp, err := controlRender(render.Request{
 			RenderIntent: controlRenderIntent,
@@ -234,9 +234,9 @@ func controlRender(reqBody render.Request) (render.Response, error) {
 }
 
 // coordinationFieldLine renders "Field: <kind>=<n>, …" over the default-enabled coordination kinds,
-// counting each kind's entries in the principal's pulled projection.
+// counting each kind's entries in the principal's pulled eventview.
 func coordinationFieldLine(client *channel.Client, principal contract.ActorID) string {
-	proj, err := client.PullProjection(principal, contract.Subscription{Actor: principal})
+	proj, err := client.PullEventView(principal, contract.Subscription{Actor: principal})
 	if err != nil {
 		return "Field: (unavailable)"
 	}
@@ -273,9 +273,9 @@ func init() {
 	controlObserveCmd.Flags().StringVar(&controlPayload, "payload", "", "observation payload as JSON")
 	controlObserveCmd.Flags().StringVar(&controlExtID, "external-id", "", "idempotency external id")
 	controlPullCmd.Flags().StringVar(&controlActor, "actor", "", "subscription actor (defaults to principal)")
-	controlPullCmd.Flags().BoolVar(&controlPullJSON, "json", false, "emit scoped projection as JSON")
+	controlPullCmd.Flags().BoolVar(&controlPullJSON, "json", false, "emit scoped event view as JSON")
 	controlStatusCmd.Flags().BoolVar(&controlStatusJSON, "json", false, "emit channel status as JSON")
-	controlRenderCmd.Flags().StringVar(&controlRenderIntent, "intent", render.IntentTeamworkCue, "render intent")
+	controlRenderCmd.Flags().StringVar(&controlRenderIntent, "intent", render.IntentTeamworkEvents, "render intent")
 	controlRenderCmd.Flags().StringVar(&controlRenderLifecycle, "lifecycle", "remind", "host lifecycle")
 	controlRenderCmd.Flags().StringVar(&controlRenderSurface, "surface", "hook", "host surface")
 	controlRenderCmd.Flags().IntVar(&controlRenderMaxChars, "max-chars", 6000, "maximum rendered body chars")

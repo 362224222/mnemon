@@ -9,7 +9,7 @@ import (
 
 	"github.com/mnemon-dev/mnemon/harness/internal/assets"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/projection"
+	"github.com/mnemon-dev/mnemon/harness/internal/eventview"
 	"github.com/mnemon-dev/mnemon/harness/internal/rule"
 )
 
@@ -167,7 +167,7 @@ func parityCases() []parityCase {
 
 // 三种派发时视图:空(OpCreate)、Resources+Content(OpUpdate 合并,含无 id map 与非 map 项的
 // 过滤)、仅 Resources(fields nil → OpUpdate 仅新条目)。
-func parityViews(cap Capability) map[string]projection.Projection {
+func parityViews(cap Capability) map[string]eventview.EventView {
 	ref := contract.ResourceRef{Kind: cap.ResourceKind, ID: "project"}
 	existing := map[string]any{
 		"id": "local/codex-project/1", "actor": "codex@project", "ingest_seq": float64(1),
@@ -181,11 +181,11 @@ func parityViews(cap Capability) map[string]projection.Projection {
 	case "note":
 		existing["text"] = "old note"
 	}
-	return map[string]projection.Projection{
+	return map[string]eventview.EventView{
 		"empty": {},
 		"v1-full": {
 			Resources: []contract.ResourceVersion{{Ref: ref, Version: 1}},
-			Content: []projection.ResourceContent{{Ref: ref, Version: 1, Fields: map[string]any{
+			Content: []eventview.ResourceContent{{Ref: ref, Version: 1, Fields: map[string]any{
 				cap.ItemsField: []any{existing, map[string]any{"orphan": true}, "not-a-map"},
 			}}},
 		},

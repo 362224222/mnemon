@@ -159,7 +159,7 @@ func TestControlPullJSONIncludesScopedContent(t *testing.T) {
 	}
 }
 
-func TestControlRenderPrintsCueBody(t *testing.T) {
+func TestControlRenderPrintsDerivedEventPresentationBody(t *testing.T) {
 	ref := contract.ResourceRef{Kind: "assignment", ID: "project"}
 	a := channel.HostAgentBinding("codex-a@project", "http://x", []contract.ResourceRef{ref})
 	a.AllowedObservedTypes = []string{"assignment.write_candidate.observed"}
@@ -225,7 +225,7 @@ func TestControlRenderPrintsCueBody(t *testing.T) {
 	controlPrincipal = "codex-b@project"
 	controlToken = "tok-b"
 	controlTokenFile = ""
-	controlRenderIntent = render.IntentTeamworkCue
+	controlRenderIntent = render.IntentTeamworkEvents
 	controlRenderLifecycle = "remind"
 	controlRenderSurface = "hook"
 	controlRenderMaxChars = 6000
@@ -237,7 +237,7 @@ func TestControlRenderPrintsCueBody(t *testing.T) {
 		t.Fatalf("control render: %v", err)
 	}
 	if !strings.Contains(buf.String(), "[mnemon:work]") || strings.Contains(buf.String(), `"body"`) {
-		t.Fatalf("control render must print cue body only, got:\n%s", buf.String())
+		t.Fatalf("control render must print presentation body only, got:\n%s", buf.String())
 	}
 }
 

@@ -46,7 +46,7 @@ func OpenLocalRuntime(storePath string, loaded channel.LoadedBindings, loops []s
 // gets one import rule per importable capability (descriptor-derived, PD6) + the skipped-kind deny
 // rule, kernel authority for the importable kinds, and a subscription covering the binding scope's
 // syncable refs (the import rules read the current resource through this view to merge against).
-// Co-existence is by construction: the added rules Handle only the <kind>.remote_commit.observed /
+// Co-existence is by construction: the added rules Handle only the <kind>.remote_synced_event.observed /
 // sync.* observation types AND gate on the sync principal, so host-agent events never match them and
 // host rules never see the import events — pinned by a test. catalog selects the importable universe
 // (nil = embedded first-party).
@@ -64,7 +64,7 @@ func withSyncImport(rc runtime.RuntimeConfig, bindings []channel.ChannelBinding,
 		rc.Authority.Allow = map[contract.ActorID][]contract.ResourceKind{}
 	}
 	rc.Authority.Allow[contract.SyncImportActor] = capability.ImportableKinds(catalog)
-	// Inject the produce surface: this replica emits sync commits for exactly the kinds its catalog
+	// Inject the produce surface: this replica emits synced events for exactly the kinds its catalog
 	// imports (sync-abi-v2 §4). The runtime stays capability-free — the app fills the kind slice.
 	rc.SyncableKinds = capability.ImportableKinds(catalog)
 	return rc

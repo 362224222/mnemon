@@ -139,12 +139,12 @@ func RenderThinHook(fsys fs.FS, opts ThinHookOptions) (string, error) {
 }
 
 func RenderStandardThinHook(host, timing string) (string, error) {
-	return RenderThinHook(assets.FS, ThinHookOptions{Host: host, Timing: timing, RenderIntent: render.IntentTeamworkCue})
+	return RenderThinHook(assets.FS, ThinHookOptions{Host: host, Timing: timing, RenderIntent: render.IntentTeamworkEvents})
 }
 
 func isRenderIntent(intent string) bool {
 	switch intent {
-	case render.IntentSkillBootstrap, render.IntentContextPacket, render.IntentProfileCue, render.IntentTeamworkCue, render.IntentPayloadContract:
+	case render.IntentSkillBootstrap, render.IntentContextPacket, render.IntentProfileEvents, render.IntentTeamworkEvents, render.IntentPayloadContract:
 		return true
 	default:
 		return false

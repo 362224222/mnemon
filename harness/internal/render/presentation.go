@@ -7,22 +7,23 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/projection"
+	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
+	"github.com/mnemon-dev/mnemon/harness/internal/eventview"
 )
 
-func BuildBody(req Request, proj projection.Projection, now time.Time) string {
-	body, _ := BuildBodyAndAgentEvents(req, proj, now)
+func BuildBody(req Request, proj eventview.EventView, now time.Time) string {
+	body, _ := BuildBodyAndEventEnvelopes(req, proj, now)
 	return body
 }
 
-func BuildBodyAndAgentEvents(req Request, proj projection.Projection, now time.Time) (string, []AgentEvent) {
+func BuildBodyAndEventEnvelopes(req Request, proj eventview.EventView, now time.Time) (string, []eventmodel.EventEnvelope) {
 	switch req.RenderIntent {
-	case IntentTeamworkCue:
-		events := BuildAgentEvents(req, proj, now)
-		return PresentAgentEvents(events), events
-	case IntentProfileCue:
-		events := BuildProfileEvents(req, proj)
-		return PresentAgentEvents(events), events
+	case IntentTeamworkEvents:
+		events := DeriveEventEnvelopes(req, proj, now)
+		return PresentEventEnvelopes(events), events
+	case IntentProfileEvents:
+		events := DeriveProfileEventEnvelopes(req, proj)
+		return PresentEventEnvelopes(events), events
 	case IntentContextPacket:
 		return BuildContextPacket(req, proj), nil
 	case IntentPayloadContract:
@@ -34,17 +35,17 @@ func BuildBodyAndAgentEvents(req Request, proj projection.Projection, now time.T
 	}
 }
 
-func BuildCue(req Request, proj projection.Projection, now time.Time) string {
-	return PresentAgentEvents(BuildAgentEvents(req, proj, now))
+func BuildPresentation(req Request, proj eventview.EventView, now time.Time) string {
+	return PresentEventEnvelopes(DeriveEventEnvelopes(req, proj, now))
 }
 
-func BuildProfileCue(req Request, proj projection.Projection) string {
-	return PresentAgentEvents(BuildProfileEvents(req, proj))
+func BuildProfilePresentation(req Request, proj eventview.EventView) string {
+	return PresentEventEnvelopes(DeriveProfileEventEnvelopes(req, proj))
 }
 
-func BuildContextPacket(_ Request, proj projection.Projection) string {
+func BuildContextPacket(_ Request, proj eventview.EventView) string {
 	var lines []string
-	lines = append(lines, "[mnemon:context]", fmt.Sprintf("Projection %s digest %s", proj.Ref, proj.Digest))
+	lines = append(lines, "[mnemon:context]", fmt.Sprintf("EventView %s digest %s", proj.Ref, proj.Digest))
 	for _, content := range proj.Content {
 		kind := string(content.Ref.Kind)
 		items := resourceItems(content)
@@ -84,7 +85,7 @@ func BuildSkillBootstrap() string {
 	return strings.Join([]string{
 		"[mnemon:skill-bootstrap]",
 		"Use mnemon observe for durable profile, teamwork signal, assignment, and progress_digest events.",
-		"Read current work through context.packet or teamwork.cue before emitting a governed event.",
+		"Read current work through context.packet or teamwork.events before emitting a governed event.",
 	}, "\n")
 }
 
@@ -92,7 +93,7 @@ func section(kind, body string) string {
 	return fmt.Sprintf("[mnemon:%s]\n%s", kind, body)
 }
 
-func projectionItems(proj projection.Projection) map[string][]map[string]any {
+func eventViewItems(proj eventview.EventView) map[string][]map[string]any {
 	out := map[string][]map[string]any{}
 	for _, c := range proj.Content {
 		for _, item := range resourceItems(c) {
@@ -105,7 +106,7 @@ func projectionItems(proj projection.Projection) map[string][]map[string]any {
 	return out
 }
 
-func resourceItems(content projection.ResourceContent) []map[string]any {
+func resourceItems(content eventview.ResourceContent) []map[string]any {
 	for _, field := range []string{"items", "entries", "declarations"} {
 		if raw, ok := content.Fields[field]; ok {
 			return anyItems(raw)

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # End-to-end system acceptance: the full hot path (setup -> local run -> observe(EventDraft) ->
-# channel -> intake -> synchronous tick -> rule -> kernel -> projection -> pull/status), plus the
+# channel -> intake -> synchronous tick -> rule -> kernel -> event view -> pull/status), plus the
 # negative diagnostic case and the refresh no-clobber, for BOTH hosts (codex + claude-code).
 set -euo pipefail
 
@@ -66,20 +66,20 @@ run_host() {
 			--payload '{"content":"E2E memory works for '"$host"'","source":"user","confidence":"high"}')"
 		case "$out" in *ticked=true*) ;; *) echo "observe: $out"; exit 1 ;; esac
 
-		# pull returns the memory (one resource)
+		# pull returns the memory (one event subject)
 		out="$("$MH" control pull --addr "$addr" --principal "$principal" --token-file "$tok")"
-		case "$out" in *resources=1*) ;; *) echo "pull: $out"; exit 1 ;; esac
+		case "$out" in *event_subjects=1*) ;; *) echo "pull: $out"; exit 1 ;; esac
 
 		# status digest non-empty
 		out="$("$MH" control status --addr "$addr" --principal "$principal" --token-file "$tok")"
 		case "$out" in *digest=[0-9a-f]*) ;; *) echo "status: $out"; exit 1 ;; esac
 
-		# negative: a secret-like candidate is denied; pull still shows exactly one resource
+		# negative: a secret-like candidate is denied; pull still shows exactly one event subject
 		"$MH" control observe --addr "$addr" --principal "$principal" --token-file "$tok" \
 			--type memory.write_candidate.observed --external-id bad1 \
 			--payload '{"content":"api_key=sk-abcdefABCDEF123456","source":"user","confidence":"high"}' >/dev/null
 		out="$("$MH" control pull --addr "$addr" --principal "$principal" --token-file "$tok")"
-		case "$out" in *resources=1*) ;; *) echo "negative pull leaked: $out"; exit 1 ;; esac
+		case "$out" in *event_subjects=1*) ;; *) echo "negative pull leaked: $out"; exit 1 ;; esac
 
 		# R1: write is immediately visible through render context; no background workspace mirror.
 		"$MH" control observe --addr "$addr" --principal "$principal" --token-file "$tok" \
@@ -133,7 +133,7 @@ run_skill() {
 			--payload '{"skill_id":"e2e-skill","name":"E2E Skill","status":"active","source":"user","confidence":"high"}')"
 		case "$out" in *ticked=true*) ;; *) echo "skill observe: $out"; exit 1 ;; esac
 		out="$("$MH" control pull --addr "$addr" --principal "$principal" --token-file "$tok")"
-		case "$out" in *resources=1*) ;; *) echo "skill pull: $out"; exit 1 ;; esac
+		case "$out" in *event_subjects=1*) ;; *) echo "skill pull: $out"; exit 1 ;; esac
 
 		{ kill "$runpid" 2>/dev/null; wait "$runpid"; } 2>/dev/null || true
 		rm -f "$PIDFILE"
@@ -239,7 +239,7 @@ run_note() {
 		done
 		[ "$up" = 1 ] || { cat "$WORK/run-note.log"; exit 1; }
 
-		# `resources=N` counts SCOPED refs (version-0 included), so it cannot prove existence.
+		# `event_subjects=N` counts written event subjects, so digest checks remain the stricter proof here.
 		# The content digest folds Kind:ID:Version+fields per scoped ref: an admitted note write
 		# necessarily changes it. ticked=true + digest delta = the note landed (admitted through
 		# the EXTERNAL note rule — note is no longer embedded, so no builtin could fake this).
@@ -356,7 +356,7 @@ run_external_goal() {
 		[ -n "$pre" ] && [ -n "$post" ] && [ "$pre" != "$post" ] || { echo "goal write did not change the scoped digest (pre=$pre post=$post)"; exit 1; }
 
 		# Governed pull CONTENT leg: the goal statement itself arrives via the pull verb
-		# (control pull --json emits the scoped projection's resources + fields).
+		# (control pull --json emits the scoped event view subjects + fields).
 		"$MH" control pull --json --addr "$addr" --principal "$principal" --token-file "$tok" \
 			| grep -q "ship stage five" || { echo "goal content did not arrive via the governed pull verb"; exit 1; }
 
@@ -478,7 +478,7 @@ run_foo_external() {
 			--type foo.write_candidate.observed --external-id foo1 --payload '{"text":"foo governed by external package"}')"
 		case "$out" in *ticked=true*) ;; *) echo "foo observe: $out"; exit 1 ;; esac
 		out="$("$MH" control pull --addr http://127.0.0.1:8787 --principal codex@project --token-file "$tok")"
-		case "$out" in *resources=1*) ;; *) echo "foo pull: $out"; exit 1 ;; esac
+		case "$out" in *event_subjects=1*) ;; *) echo "foo pull: $out"; exit 1 ;; esac
 		{ kill "$runpid" 2>/dev/null; wait "$runpid"; } 2>/dev/null || true
 		rm -f "$PIDFILE"
 	) || fail "foo external setup failed"
@@ -525,7 +525,7 @@ write_journal_pkg() {
 # literal anywhere on the produce/accept/import surfaces).
 # Offline leg pins I13 (hub down = local fully functional); the bad-token leg pins authn on the
 # wire. Conflict adjudication (hub idempotency + B-side import conflict) is pinned at the Go
-# integration layer (syncserver_test.go, sync_import_test.go) per the v1.1 redefinition.
+# integration layer (mnemonhub tests, sync_import_test.go) per the v1.1 redefinition.
 run_sync_pair() {
 	CUR_HOST="sync-pair"
 	echo "=== E2E sync pair via mnemon-hub (TLS) ==="
@@ -583,7 +583,7 @@ run_sync_pair() {
 		"$MH" control observe --addr http://127.0.0.1:8787 --principal codex@project --token-file "$tok" \
 			--type memory.write_candidate.observed --external-id sp1 \
 			--payload '{"content":"sync pair payload from replica A","source":"user","confidence":"high"}' >/dev/null
-		# journal (external declared kind): the PD6 kind-agnostic produce surface emits a sync commit
+		# journal (external declared kind): the PD6 kind-agnostic produce surface emits a synced event
 		# for it exactly because its descriptor declares sync.importable — no kind literal in code.
 		"$MH" control observe --addr http://127.0.0.1:8787 --principal codex@project --token-file "$tok" \
 			--type journal.write_candidate.observed --external-id jp1 \
@@ -632,18 +632,18 @@ run_sync_pair() {
 			-H "Authorization: Bearer $(tr -d '\n' <"$hubdir/replica-a.token")" \
 			https://127.0.0.1:9787/sync/status 2>/dev/null)"
 		case "$hubstatus" in
-			*'"hub_commits_received":0'*|'') echo "hub never received A's push (status: ${hubstatus:-<empty>})"; tail -5 "$WORK/run-sync-b.log"; exit 1 ;;
-			*'"hub_commits_received":'*) ;;
+			*'"hub_events_received":0'*|'') echo "hub never received A's push (status: ${hubstatus:-<empty>})"; tail -5 "$WORK/run-sync-b.log"; exit 1 ;;
+			*'"hub_events_received":'*) ;;
 			*) echo "unexpected hub status: $hubstatus"; exit 1 ;;
 		esac
-		[ "$seen" = 1 ] || { echo "B never saw A's memory commit within 20s (hub received the push: $hubstatus -> pull side failed)"; tail -5 "$WORK/run-sync-b.log"; exit 1; }
-		[ "$jseen" = 1 ] || { echo "B never saw A's external journal commit within 20s (descriptor-derived sync path failed for a declared kind)"; tail -5 "$WORK/run-sync-b.log"; exit 1; }
-		[ "$aseen" = 1 ] || { echo "B never saw A's assignment commit within 20s (item-dedup coordination sync failed)"; tail -5 "$WORK/run-sync-b.log"; exit 1; }
+		[ "$seen" = 1 ] || { echo "B never saw A's memory event within 20s (hub received the push: $hubstatus -> pull side failed)"; tail -5 "$WORK/run-sync-b.log"; exit 1; }
+		[ "$jseen" = 1 ] || { echo "B never saw A's external journal event within 20s (descriptor-derived sync path failed for a declared kind)"; tail -5 "$WORK/run-sync-b.log"; exit 1; }
+		[ "$aseen" = 1 ] || { echo "B never saw A's assignment event within 20s (item-dedup coordination sync failed)"; tail -5 "$WORK/run-sync-b.log"; exit 1; }
 		# attribution: the import preserves A's entries VERBATIM (faithful provenance) and the
 		# write itself is attributed to the sync importer; the full origin chain (replica id,
 		# decision id) lives in B's event log + decisions, pinned by sync_import Go tests.
 		"$MH" control pull --json --addr http://127.0.0.1:8899 --principal codex@project --token-file "$tok" | grep -q '"sync@local"' \
-			|| { echo "imported resource lacks sync@local attribution"; exit 1; }
+			|| { echo "imported event subject lacks sync@local attribution"; exit 1; }
 	) || fail "replica B flow failed (see $WORK/run-sync-b.log / $WORK/mnemon-hub.log)"
 	bpid="$(cat "$WORK/sync-b.pid")"
 
@@ -759,17 +759,17 @@ run_coordination() {
 			--type project_intent.write_candidate.observed --external-id ci1 --payload '{"statement":"ship the AgentTeam beta","evidence":"roadmap-q3"}')"
 		case "$out" in *ticked=true*) ;; *) echo "project_intent observe: $out"; exit 1 ;; esac
 		out="$("$MH" control observe --addr "http://$addr" --principal codex@project --token-file "$tok" \
-			--type assignment.write_candidate.observed --external-id ci2 --payload '{"scope":"fix projection","ttl":"2h","assignee":"codex@impl","expected_work":"fix projection","expected_feedback":"progress_digest with result or blocker","evidence":"ticket-123"}')"
+			--type assignment.write_candidate.observed --external-id ci2 --payload '{"scope":"fix event view","ttl":"2h","assignee":"codex@impl","expected_work":"fix event view","expected_feedback":"progress_digest with result or blocker","evidence":"ticket-123"}')"
 		case "$out" in *ticked=true*) ;; *) echo "assignment observe: $out"; exit 1 ;; esac
-		# mid-risk gate: an assignment WITHOUT evidence is denied (resource count stays at the 2 above).
+		# mid-risk gate: an assignment WITHOUT evidence is denied (event subject count stays at the 2 above).
 		"$MH" control observe --addr "http://$addr" --principal codex@project --token-file "$tok" \
 			--type assignment.write_candidate.observed --external-id ci2b --payload '{"scope":"no evidence","ttl":"1h","assignee":"codex@impl","expected_work":"attempt no-evidence work","expected_feedback":"progress_digest with result or blocker"}' >/dev/null
 		out="$("$MH" control observe --addr "http://$addr" --principal codex@project --token-file "$tok" \
-			--type progress_digest.write_candidate.observed --external-id ci3 --payload '{"summary":"projection 80 percent done"}')"
+			--type progress_digest.write_candidate.observed --external-id ci3 --payload '{"summary":"event view 80 percent done"}')"
 		case "$out" in *ticked=true*) ;; *) echo "progress_digest observe: $out"; exit 1 ;; esac
-		# all three governed resources are pullable in the default coordination scope
+		# all three governed event subjects are pullable in the default coordination scope
 		out="$("$MH" control pull --addr "http://$addr" --principal codex@project --token-file "$tok")"
-		case "$out" in *resources=3*) ;; *) echo "coordination pull (want resources=3): $out"; exit 1 ;; esac
+		case "$out" in *event_subjects=3*) ;; *) echo "coordination pull (want event_subjects=3): $out"; exit 1 ;; esac
 		# the status FIELD section (P3d, tower seed) reports the coordination entry counts: each
 		# admitted kind has one entry (the evidence-less assignment was denied, so assignment=1 not 2).
 		out="$("$MH" control status --addr "http://$addr" --principal codex@project --token-file "$tok")"
@@ -784,7 +784,7 @@ run_coordination() {
 # run_subscription proves the P4 context-budget acceptance ("packet 大小受预算约束"): a host endpoint
 # DECLARES budget=digest-only in its binding; after several memory writes its render context packet
 # carries only the most-recent entry — older entries are dropped by the LOCAL budget transform
-# (never a hub-side reduction). The authoritative pull still reports the resource present: budget
+# (never a hub-side reduction). The authoritative pull still reports the event subject present: budget
 # bounds PRESENTATION, not AUTHORITY (A4). The closed-set guard lives at the binding boundary.
 run_subscription() {
 	CUR_HOST="subscription"
@@ -824,10 +824,10 @@ run_subscription() {
 		out="$("$MH" control render --addr "http://$addr" --principal codex@project --token-file "$tok" --intent context.packet)"
 		case "$out" in *"budget entry 3"*) ;; *) echo "digest-only context missing newest entry: $out"; exit 1 ;; esac
 		case "$out" in *"budget entry 1"*|*"budget entry 2"*) echo "digest-only context leaked older entries: $out"; exit 1 ;; esac
-		# AUTHORITY preserved (A4): the un-budgeted pull still reports the memory resource present —
+		# AUTHORITY preserved (A4): the un-budgeted pull still reports the memory event subject present —
 		# budget shrank the context packet, never what was admitted/stored.
 		out="$("$MH" control pull --addr "http://$addr" --principal codex@project --token-file "$tok")"
-		case "$out" in *resources=1*) ;; *) echo "authority pull (want resources=1): $out"; exit 1 ;; esac
+		case "$out" in *event_subjects=1*) ;; *) echo "authority pull (want event_subjects=1): $out"; exit 1 ;; esac
 		{ kill "$runpid" 2>/dev/null; wait "$runpid"; } 2>/dev/null || true
 		rm -f "$PIDFILE"
 	) || fail "subscription flow failed (see $WORK/run-sub.log)"
@@ -861,7 +861,7 @@ run_tower() {
 		"$MH" control observe --addr "http://$addr" --principal codex@project --token-file "$tok" \
 			--type project_intent.write_candidate.observed --external-id ti1 --payload '{"statement":"ship the AgentTeam beta","evidence":"roadmap"}' >/dev/null
 		"$MH" control observe --addr "http://$addr" --principal codex@project --token-file "$tok" \
-			--type assignment.write_candidate.observed --external-id ta1 --payload '{"scope":"fix projection","ttl":"2h","assignee":"codex@impl","expected_work":"fix projection","expected_feedback":"progress_digest with result or blocker","evidence":"ticket"}' >/dev/null
+			--type assignment.write_candidate.observed --external-id ta1 --payload '{"scope":"fix event view","ttl":"2h","assignee":"codex@impl","expected_work":"fix event view","expected_feedback":"progress_digest with result or blocker","evidence":"ticket"}' >/dev/null
 		# stop the daemon so the Tower can open the store (single-writer, S11)
 		{ kill "$runpid" 2>/dev/null; wait "$runpid"; } 2>/dev/null || true
 		rm -f "$PIDFILE"
@@ -872,7 +872,7 @@ run_tower() {
 			case "$out" in *"$title"*) ;; *) echo "tower missing page $title:"; echo "$out"; exit 1 ;; esac
 		done
 		case "$out" in *"ship the AgentTeam beta"*) ;; *) echo "tower GOAL missing the project intent:"; echo "$out"; exit 1 ;; esac
-		case "$out" in *"fix projection"*) ;; *) echo "tower FIELD missing the assignment:"; echo "$out"; exit 1 ;; esac
+		case "$out" in *"fix event view"*) ;; *) echo "tower FIELD missing the assignment:"; echo "$out"; exit 1 ;; esac
 		case "$out" in *"codex@project"*) ;; *) echo "tower FIELD missing the agent:"; echo "$out"; exit 1 ;; esac
 	) || fail "tower flow failed (see $WORK/run-tower.log)"
 	sleep 0.3

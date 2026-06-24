@@ -18,7 +18,7 @@ func TestInstallStandardHostWritesStaticShim(t *testing.T) {
 		t.Fatalf("fresh install must not report conflicts: %+v", report)
 	}
 	hook := string(mustReadHostSurface(t, filepath.Join(root, ".codex", "hooks", "mnemon-r1", "prime.sh")))
-	for _, want := range []string{"control render", `--intent "teamwork.cue"`, "continue only with local context"} {
+	for _, want := range []string{"control render", `--intent "teamwork.events"`, "continue only with local context"} {
 		if !strings.Contains(hook, want) {
 			t.Fatalf("standard hook missing %q:\n%s", want, hook)
 		}

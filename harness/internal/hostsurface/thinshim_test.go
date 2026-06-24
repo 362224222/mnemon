@@ -12,14 +12,14 @@ func TestRenderThinHookIsStaticRenderShim(t *testing.T) {
 	body, err := RenderThinHook(assets.FS, ThinHookOptions{
 		Host:         "codex",
 		Timing:       "remind",
-		RenderIntent: render.IntentTeamworkCue,
+		RenderIntent: render.IntentTeamworkEvents,
 	})
 	if err != nil {
 		t.Fatalf("render thin hook: %v", err)
 	}
 	for _, want := range []string{
 		"control render",
-		`--intent "teamwork.cue"`,
+		`--intent "teamwork.events"`,
 		`--lifecycle "remind"`,
 		`LOCAL_ENV="${PROJECT_ROOT}/.mnemon/harness/local/env.sh"`,
 		`TOKEN_ARGS=(--token-file "${TOKEN_PATH}")`,
@@ -63,9 +63,9 @@ func TestRenderThinHookHostDialect(t *testing.T) {
 
 func TestRenderThinHookRejectsUnknownInputs(t *testing.T) {
 	for _, tc := range []ThinHookOptions{
-		{Host: "../codex", Timing: "remind", RenderIntent: render.IntentTeamworkCue},
-		{Host: "codex", Timing: "boot", RenderIntent: render.IntentTeamworkCue},
-		{Host: "codex", Timing: "remind", RenderIntent: "memory.cue"},
+		{Host: "../codex", Timing: "remind", RenderIntent: render.IntentTeamworkEvents},
+		{Host: "codex", Timing: "boot", RenderIntent: render.IntentTeamworkEvents},
+		{Host: "codex", Timing: "remind", RenderIntent: "memory.events"},
 	} {
 		if _, err := RenderThinHook(assets.FS, tc); err == nil {
 			t.Fatalf("RenderThinHook(%+v) must fail closed", tc)

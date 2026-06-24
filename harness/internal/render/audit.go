@@ -14,40 +14,40 @@ type AuditSink interface {
 }
 
 type AuditRecord struct {
-	SchemaVersion    int
-	AuditID          string
-	Principal        string
-	Host             string
-	Lifecycle        string
-	RenderIntent     string
-	ProjectionDigest string
-	BodyDigest       string
-	CatalogDigest    string
-	DecisionHead     string
-	Status           Status
-	BodyChars        int
-	CueCounts        map[string]int
-	EventCounts      map[string]int
-	CreatedAt        string
+	SchemaVersion      int
+	AuditID            string
+	Principal          string
+	Host               string
+	Lifecycle          string
+	RenderIntent       string
+	EventViewDigest    string
+	BodyDigest         string
+	CatalogDigest      string
+	DecisionHead       string
+	Status             Status
+	BodyChars          int
+	PresentationCounts map[string]int
+	EventCounts        map[string]int
+	CreatedAt          string
 }
 
-func AuditRecordFrom(req Request, resp Response, cueCounts map[string]int, eventCounts map[string]int) AuditRecord {
+func AuditRecordFrom(req Request, resp Response, presentationSectionCounts map[string]int, eventCounts map[string]int) AuditRecord {
 	return AuditRecord{
-		SchemaVersion:    1,
-		AuditID:          resp.AuditID,
-		Principal:        string(req.Principal),
-		Host:             req.Host,
-		Lifecycle:        req.Lifecycle,
-		RenderIntent:     req.RenderIntent,
-		ProjectionDigest: resp.ProjectionDigest,
-		BodyDigest:       resp.BodyDigest,
-		CatalogDigest:    resp.Provenance.CatalogDigest,
-		DecisionHead:     resp.Provenance.DecisionHead,
-		Status:           resp.Status,
-		BodyChars:        len(resp.Body),
-		CueCounts:        cueCounts,
-		EventCounts:      eventCounts,
-		CreatedAt:        resp.Provenance.RenderedAt,
+		SchemaVersion:      1,
+		AuditID:            resp.AuditID,
+		Principal:          string(req.Principal),
+		Host:               req.Host,
+		Lifecycle:          req.Lifecycle,
+		RenderIntent:       req.RenderIntent,
+		EventViewDigest:    resp.EventViewDigest,
+		BodyDigest:         resp.BodyDigest,
+		CatalogDigest:      resp.Provenance.CatalogDigest,
+		DecisionHead:       resp.Provenance.DecisionHead,
+		Status:             resp.Status,
+		BodyChars:          len(resp.Body),
+		PresentationCounts: presentationSectionCounts,
+		EventCounts:        eventCounts,
+		CreatedAt:          resp.Provenance.RenderedAt,
 	}
 }
 
@@ -85,7 +85,7 @@ func (s *JSONLAuditSink) WriteRenderAudit(_ context.Context, r AuditRecord) erro
 	return nil
 }
 
-func cueCounts(body string) map[string]int {
+func presentationSectionCounts(body string) map[string]int {
 	counts := map[string]int{}
 	for _, kind := range []string{"profile", "signal", "work", "feedback", "integrate", "expired"} {
 		counts[kind] = strings.Count(body, "[mnemon:"+kind+"]")

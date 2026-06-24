@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/projection"
+	"github.com/mnemon-dev/mnemon/harness/internal/eventview"
 )
 
 type Status string
@@ -24,8 +24,8 @@ const (
 const (
 	IntentSkillBootstrap  = "skill.bootstrap"
 	IntentContextPacket   = "context.packet"
-	IntentProfileCue      = "profile.cue"
-	IntentTeamworkCue     = "teamwork.cue"
+	IntentProfileEvents   = "profile.events"
+	IntentTeamworkEvents  = "teamwork.events"
 	IntentPayloadContract = "payload.contract"
 )
 
@@ -43,8 +43,8 @@ type Request struct {
 }
 
 type Budget struct {
-	MaxChars       int
-	ProjectionTier contract.BudgetTier
+	MaxChars      int
+	EventViewTier contract.BudgetTier
 }
 
 type ClientInfo struct {
@@ -53,15 +53,15 @@ type ClientInfo struct {
 }
 
 type Response struct {
-	SchemaVersion    int
-	Status           Status
-	Body             string
-	BodyFormat       string
-	BodyDigest       string
-	ProjectionDigest string
-	Provenance       Provenance
-	AuditID          string
-	TTLSeconds       int
+	SchemaVersion   int
+	Status          Status
+	Body            string
+	BodyFormat      string
+	BodyDigest      string
+	EventViewDigest string
+	Provenance      Provenance
+	AuditID         string
+	TTLSeconds      int
 }
 
 type Provenance struct {
@@ -76,25 +76,25 @@ type Renderer struct {
 	AuditSink AuditSink
 }
 
-func (r Renderer) RenderCue(ctx context.Context, req Request, proj projection.Projection) (Response, error) {
+func (r Renderer) RenderPresentation(ctx context.Context, req Request, proj eventview.EventView) (Response, error) {
 	now := time.Now().UTC()
 	if r.Now != nil {
 		now = r.Now().UTC()
 	}
 	if req.Principal == "" {
-		return Response{SchemaVersion: 1, Status: StatusDenied, ProjectionDigest: proj.Digest}, nil
+		return Response{SchemaVersion: 1, Status: StatusDenied, EventViewDigest: proj.Digest}, nil
 	}
-	body, events := BuildBodyAndAgentEvents(req, proj, now)
+	body, events := BuildBodyAndEventEnvelopes(req, proj, now)
 	if req.Budget.MaxChars > 0 && len(body) > req.Budget.MaxChars {
 		body = body[:req.Budget.MaxChars]
 	}
 	resp := Response{
-		SchemaVersion:    1,
-		Status:           StatusOK,
-		Body:             body,
-		BodyFormat:       "plain_text",
-		BodyDigest:       digest(body),
-		ProjectionDigest: proj.Digest,
+		SchemaVersion:   1,
+		Status:          StatusOK,
+		Body:            body,
+		BodyFormat:      "plain_text",
+		BodyDigest:      digest(body),
+		EventViewDigest: proj.Digest,
 		Provenance: Provenance{
 			Source:        "local-mnemon",
 			CatalogDigest: digest("render-intents:v1"),
@@ -110,7 +110,7 @@ func (r Renderer) RenderCue(ctx context.Context, req Request, proj projection.Pr
 	}
 	resp.AuditID = auditID(req, resp)
 	if r.AuditSink != nil {
-		if err := r.AuditSink.WriteRenderAudit(ctx, AuditRecordFrom(req, resp, cueCounts(body), agentEventCounts(events))); err != nil {
+		if err := r.AuditSink.WriteRenderAudit(ctx, AuditRecordFrom(req, resp, presentationSectionCounts(body), eventEnvelopeCounts(events))); err != nil {
 			return Response{}, err
 		}
 	}
@@ -123,6 +123,6 @@ func digest(body string) string {
 }
 
 func auditID(req Request, resp Response) string {
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%s|%s|%s|%s", req.Principal, req.Lifecycle, req.RenderIntent, resp.ProjectionDigest, resp.BodyDigest)))
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%s|%s|%s|%s", req.Principal, req.Lifecycle, req.RenderIntent, resp.EventViewDigest, resp.BodyDigest)))
 	return "render_" + hex.EncodeToString(sum[:8])
 }

@@ -1,5 +1,5 @@
-// Package capability holds the built-in admission rules (the pure leaf): given an Event + Projection
-// it returns a RuleDecision, never writing. It imports rule/projection/contract only — binding->rule
+// Package capability holds the built-in admission rules (the pure leaf): given an Event + EventView
+// it returns a RuleDecision, never writing. It imports rule/eventview/contract only — binding->rule
 // translation and runtime wiring live in app. Memory + skill are the two P0 capabilities.
 package capability
 
@@ -11,7 +11,7 @@ import (
 	"strings"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/projection"
+	"github.com/mnemon-dev/mnemon/harness/internal/eventview"
 	"github.com/mnemon-dev/mnemon/harness/internal/rule"
 )
 
@@ -21,36 +21,36 @@ const (
 )
 
 // entryDedupImport is the "entry-dedup" remote-import strategy (capability-spec v2 §Sync, the
-// closed-set merge a kind selects): merge non-conflicting ENTRIES from a remote commit into the
-// resource's entry list, synthesizing one entry from a bare `content` field when the commit carries
+// closed-set merge a kind selects): merge non-conflicting ENTRIES from a remote material into the
+// resource's entry list, synthesizing one entry from a bare `content` field when the material carries
 // none, and rejecting a same-id-different-content conflict (I15 — receiving-side admission is not
 // relaxed). Parameterized by cap (kind/proposed type), so it carries no kind literal; memory selects
 // it.
 func entryDedupImport(cap Capability, in rule.RuleInput) (contract.RuleDecision, error) {
-	commit, err := decodeRemoteMemoryCommit(in.Event.Payload)
+	material, err := decodeRemoteMemorySyncedEventMaterial(in.Event.Payload)
 	if err != nil {
 		return contract.RuleDecision{Verdict: contract.VerdictDeny, Reasons: []string{err.Error()}}, nil
 	}
-	if commit.ResourceRef.Kind != cap.ResourceKind {
+	if material.ResourceRef.Kind != cap.ResourceKind {
 		return contract.RuleDecision{Verdict: contract.VerdictDeny, Reasons: []string{"remote import denied: resource kind does not match the importing capability"}}, nil
 	}
-	incoming := memoryEntriesFromFields(commit.Fields)
+	incoming := memoryEntriesFromFields(material.Fields)
 	if len(incoming) == 0 {
-		if content := strings.TrimSpace(stringField(commit.Fields, "content")); content != "" {
+		if content := strings.TrimSpace(stringField(material.Fields, "content")); content != "" {
 			incoming = []memoryEntry{{
-				ID:         remoteMemoryEntryID(commit),
+				ID:         remoteMemoryEntryID(material),
 				Content:    content,
 				Source:     "remote",
 				Confidence: "remote",
-				Actor:      string(commit.Actor),
-				IngestSeq:  commit.LocalIngestSeq,
+				Actor:      string(material.Actor),
+				IngestSeq:  material.LocalIngestSeq,
 			}}
 		}
 	}
 	if len(incoming) == 0 {
 		return contract.RuleDecision{Verdict: contract.VerdictDeny, Reasons: []string{"remote import denied: no entries"}}, nil
 	}
-	version, fields := resourceFromProjection(in.View, commit.ResourceRef)
+	version, fields := resourceFromEventView(in.View, material.ResourceRef)
 	existing := memoryEntriesFromFields(fields)
 	byID := make(map[string]memoryEntry, len(existing))
 	for _, entry := range existing {
@@ -75,7 +75,7 @@ func entryDedupImport(cap Capability, in rule.RuleInput) (contract.RuleDecision,
 		"entries":    entries,
 		"updated_by": string(in.Event.Actor),
 	}
-	write := contract.ResourceWrite{Ref: commit.ResourceRef, Kind: contract.OpCreate, Fields: newFields}
+	write := contract.ResourceWrite{Ref: material.ResourceRef, Kind: contract.OpCreate, Fields: newFields}
 	if version > 0 {
 		write.Kind = contract.OpUpdate
 		write.BasedOn = version
@@ -86,27 +86,27 @@ func entryDedupImport(cap Capability, in rule.RuleInput) (contract.RuleDecision,
 	}}, nil
 }
 
-func decodeRemoteMemoryCommit(payload map[string]any) (contract.LocalCommit, error) {
-	raw, ok := payload["commit"]
+func decodeRemoteMemorySyncedEventMaterial(payload map[string]any) (contract.SyncedEventMaterial, error) {
+	raw, ok := payload["material"]
 	if !ok {
-		return contract.LocalCommit{}, fmt.Errorf("remote memory import denied: missing commit")
+		return contract.SyncedEventMaterial{}, fmt.Errorf("remote memory import denied: missing material")
 	}
 	data, err := json.Marshal(raw)
 	if err != nil {
-		return contract.LocalCommit{}, fmt.Errorf("remote memory import denied: encode commit: %w", err)
+		return contract.SyncedEventMaterial{}, fmt.Errorf("remote memory import denied: encode material: %w", err)
 	}
-	var commit contract.LocalCommit
-	if err := json.Unmarshal(data, &commit); err != nil {
-		return contract.LocalCommit{}, fmt.Errorf("remote memory import denied: decode commit: %w", err)
+	var material contract.SyncedEventMaterial
+	if err := json.Unmarshal(data, &material); err != nil {
+		return contract.SyncedEventMaterial{}, fmt.Errorf("remote memory import denied: decode material: %w", err)
 	}
-	if strings.TrimSpace(commit.OriginReplicaID) == "" || strings.TrimSpace(commit.LocalDecisionID) == "" {
-		return contract.LocalCommit{}, fmt.Errorf("remote memory import denied: missing provenance")
+	if strings.TrimSpace(material.OriginReplicaID) == "" || strings.TrimSpace(material.LocalDecisionID) == "" {
+		return contract.SyncedEventMaterial{}, fmt.Errorf("remote memory import denied: missing provenance")
 	}
-	return commit, nil
+	return material, nil
 }
 
-func remoteMemoryEntryID(commit contract.LocalCommit) string {
-	return "remote/" + sanitizeEntryIDPart(commit.OriginReplicaID) + "/" + sanitizeEntryIDPart(commit.LocalDecisionID)
+func remoteMemoryEntryID(material contract.SyncedEventMaterial) string {
+	return "remote/" + sanitizeEntryIDPart(material.OriginReplicaID) + "/" + sanitizeEntryIDPart(material.LocalDecisionID)
 }
 
 type memoryEntry struct {
@@ -185,7 +185,7 @@ func containsPromptInjectionShape(content string) bool {
 	return false
 }
 
-func resourceFromProjection(view projection.Projection, ref contract.ResourceRef) (contract.Version, map[string]any) {
+func resourceFromEventView(view eventview.EventView, ref contract.ResourceRef) (contract.Version, map[string]any) {
 	var version contract.Version
 	for _, rv := range view.Resources {
 		if rv.Ref == ref {

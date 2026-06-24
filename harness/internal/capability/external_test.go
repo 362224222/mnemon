@@ -20,7 +20,7 @@ const goalSpecJSON = `{"schema_version":1,"name":"goal","observed_type":"goal.wr
 "render":{"content":{"member":"bullet-list","params":{"title":"# Goals","field":"statement"}},"static":{"statement":"project"}}}`
 
 func testRequiredFields() map[contract.ResourceKind][]string {
-	// Literal on purpose: capability is a contract/rule/projection-only leaf, so even its tests do
+	// Literal on purpose: capability is a contract/rule/event-view-only leaf, so even its tests do
 	// not import kernel; production passes kernel.DefaultSchemaGuard().Required from app.
 	return map[contract.ResourceKind][]string{
 		"goal": {"statement"}, "note": {"content"}, "memory": {"content"}, "skill": {"name"},

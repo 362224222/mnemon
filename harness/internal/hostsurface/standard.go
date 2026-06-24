@@ -192,7 +192,7 @@ func writeStandardHostManifest(core projectorCore, ownership projectionOwnership
 			"surfaces": []string{"static render hooks"},
 		},
 		Reality: map[string]any{
-			"surfaces": []string{"render cue"},
+			"surfaces": []string{"render presentation"},
 		},
 		Reconcile: map[string]any{
 			"actions": []string{"install", "uninstall"},

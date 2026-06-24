@@ -11,7 +11,7 @@ import (
 )
 
 // itemDedupImport is the "item-dedup" remote-import strategy (capability-spec v2 §Sync): the GENERIC
-// append-merge for a directory-of-items kind (§577). It merges a remote commit's items into the
+// append-merge for a directory-of-items kind (§577). It merges a remote material's items into the
 // resource's item list BY ID, preserving EVERY item field — unlike entry-dedup (shaped for memory's
 // `content`) and declaration-dedup (shaped for skill's `declarations`), it makes no assumption about
 // the item's domain fields, so an arbitrary declared kind (the coordination kinds) syncs without
@@ -20,18 +20,18 @@ import (
 // same-id/different-content divergence is rejected (I15, defensive). The merged resource header is
 // re-derived from the capability's OWN render, never hardcoded.
 func itemDedupImport(cap Capability, in rule.RuleInput) (contract.RuleDecision, error) {
-	commit, err := decodeRemoteCommit(in.Event.Payload)
+	material, err := decodeRemoteSyncedEventMaterial(in.Event.Payload)
 	if err != nil {
 		return contract.RuleDecision{Verdict: contract.VerdictDeny, Reasons: []string{err.Error()}}, nil
 	}
-	if commit.ResourceRef.Kind != cap.ResourceKind {
+	if material.ResourceRef.Kind != cap.ResourceKind {
 		return contract.RuleDecision{Verdict: contract.VerdictDeny, Reasons: []string{"remote import denied: resource kind does not match the importing capability"}}, nil
 	}
-	incoming := itemsFromFields(commit.Fields, cap.ItemsField)
+	incoming := itemsFromFields(material.Fields, cap.ItemsField)
 	if len(incoming) == 0 {
 		return contract.RuleDecision{Verdict: contract.VerdictDeny, Reasons: []string{"remote import denied: no items"}}, nil
 	}
-	version, fields := resourceFromProjection(in.View, commit.ResourceRef)
+	version, fields := resourceFromEventView(in.View, material.ResourceRef)
 	existing := itemsFromFields(fields, cap.ItemsField)
 	byID := make(map[string]Item, len(existing))
 	for _, it := range existing {
@@ -56,7 +56,7 @@ func itemDedupImport(cap Capability, in rule.RuleInput) (contract.RuleDecision, 
 	for k, v := range cap.Header(items) {
 		newFields[k] = v
 	}
-	write := contract.ResourceWrite{Ref: commit.ResourceRef, Kind: contract.OpCreate, Fields: newFields}
+	write := contract.ResourceWrite{Ref: material.ResourceRef, Kind: contract.OpCreate, Fields: newFields}
 	if version > 0 {
 		write.Kind = contract.OpUpdate
 		write.BasedOn = version
@@ -67,23 +67,23 @@ func itemDedupImport(cap Capability, in rule.RuleInput) (contract.RuleDecision, 
 	}}, nil
 }
 
-// decodeRemoteCommit decodes a remote LocalCommit from an import event payload (the kind-agnostic
-// form of decodeRemoteMemoryCommit/decodeRemoteSkillCommit, used by the generic item-dedup strategy).
-func decodeRemoteCommit(payload map[string]any) (contract.LocalCommit, error) {
-	raw, ok := payload["commit"]
+// decodeRemoteSyncedEventMaterial decodes a remote SyncedEventMaterial from an import event payload (the kind-agnostic
+// form of decodeRemoteMemorySyncedEventMaterial/decodeRemoteSkillSyncedEventMaterial, used by the generic item-dedup strategy).
+func decodeRemoteSyncedEventMaterial(payload map[string]any) (contract.SyncedEventMaterial, error) {
+	raw, ok := payload["material"]
 	if !ok {
-		return contract.LocalCommit{}, fmt.Errorf("remote import denied: missing commit")
+		return contract.SyncedEventMaterial{}, fmt.Errorf("remote import denied: missing material")
 	}
 	data, err := json.Marshal(raw)
 	if err != nil {
-		return contract.LocalCommit{}, fmt.Errorf("remote import denied: encode commit: %w", err)
+		return contract.SyncedEventMaterial{}, fmt.Errorf("remote import denied: encode material: %w", err)
 	}
-	var commit contract.LocalCommit
-	if err := json.Unmarshal(data, &commit); err != nil {
-		return contract.LocalCommit{}, fmt.Errorf("remote import denied: decode commit: %w", err)
+	var material contract.SyncedEventMaterial
+	if err := json.Unmarshal(data, &material); err != nil {
+		return contract.SyncedEventMaterial{}, fmt.Errorf("remote import denied: decode material: %w", err)
 	}
-	if strings.TrimSpace(commit.OriginReplicaID) == "" || strings.TrimSpace(commit.LocalDecisionID) == "" {
-		return contract.LocalCommit{}, fmt.Errorf("remote import denied: missing provenance")
+	if strings.TrimSpace(material.OriginReplicaID) == "" || strings.TrimSpace(material.LocalDecisionID) == "" {
+		return contract.SyncedEventMaterial{}, fmt.Errorf("remote import denied: missing provenance")
 	}
-	return commit, nil
+	return material, nil
 }

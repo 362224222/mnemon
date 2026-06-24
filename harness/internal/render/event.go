@@ -5,49 +5,50 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/projection"
+	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
+	"github.com/mnemon-dev/mnemon/harness/internal/eventview"
 )
 
 const (
-	AgentEventProfileUpdateRequested   = "profile.update_requested"
-	AgentEventTeamworkSignalOpen       = "teamwork.signal_open"
-	AgentEventAssignmentExpired        = "assignment.expired"
-	AgentEventAssignmentProgressReady  = "assignment.progress_ready"
-	AgentEventAssignmentWorkAvailable  = "assignment.work_available"
-	AgentEventAssignmentFeedbackNeeded = "assignment.feedback_needed"
+	DerivedEventProfileUpdateRequested   = "profile.update_requested"
+	DerivedEventTeamworkSignalOpen       = "teamwork.signal_open"
+	DerivedEventAssignmentExpired        = "assignment.expired"
+	DerivedEventAssignmentProgressReady  = "assignment.progress_ready"
+	DerivedEventAssignmentWorkAvailable  = "assignment.work_available"
+	DerivedEventAssignmentFeedbackNeeded = "assignment.feedback_needed"
 )
 
-// AgentEvent is the event-shaped read unit mnemond gives to a hostagent.
-//
-// It keeps the public mental model narrow: hostagents consume events and emit
-// events. Text labels such as [mnemon:work] are presentation produced from this
-// model, not durable protocol concepts.
-type AgentEvent struct {
-	Type                    string           `json:"type"`
-	Audience                contract.ActorID `json:"audience"`
-	Subject                 string           `json:"subject,omitempty"`
-	CausedBy                []string         `json:"caused_by,omitempty"`
-	Body                    string           `json:"body"`
-	SuggestedObservedEvents []string         `json:"suggested_observed_events,omitempty"`
-}
-
-func BuildAgentEvents(req Request, proj projection.Projection, now time.Time) []AgentEvent {
+func DeriveEventEnvelopes(req Request, proj eventview.EventView, now time.Time) []eventmodel.EventEnvelope {
 	principal := string(req.Principal)
 	if principal == "" {
 		return nil
 	}
-	items := projectionItems(proj)
-	var events []AgentEvent
+	derivedAt, expiresAt := derivedTimes(now)
+	items := eventViewItems(proj)
+	var events []eventmodel.EventEnvelope
+	appendDerived := func(eventType, subject string, causedBy []string, body string, suggested []string) {
+		model := eventmodel.Event{
+			SchemaVersion: eventmodel.SchemaVersion,
+			ID:            derivedEventID(eventType, subject, principal),
+			Type:          eventType,
+			Subject:       eventmodel.EventSubject(subject),
+			Actor:         "mnemond@local",
+			Audience:      principal,
+			Payload:       map[string]any{"body": body},
+			CausedBy:      append([]string(nil), causedBy...),
+			CreatedAt:     derivedAt,
+		}
+		events = append(events, eventmodel.DerivedEnvelope(model, derivedAt, expiresAt, presentationHintForDerivedEventType(eventType), suggested))
+	}
 
 	if profileStaleOrMissing(items["agent_profile"], principal) {
-		events = append(events, AgentEvent{
-			Type:                    AgentEventProfileUpdateRequested,
-			Audience:                req.Principal,
-			Subject:                 "agent_profile/project",
-			Body:                    "Update your agent_profile if your focus, availability, or context advantages changed.",
-			SuggestedObservedEvents: []string{"agent_profile.write_candidate.observed"},
-		})
+		appendDerived(
+			DerivedEventProfileUpdateRequested,
+			"agent_profile/project",
+			nil,
+			"Update your agent_profile if your focus, availability, or context advantages changed.",
+			[]string{"agent_profile.write_candidate.observed"},
+		)
 	}
 
 	for _, signal := range items["teamwork_signal"] {
@@ -56,14 +57,14 @@ func BuildAgentEvents(req Request, proj projection.Projection, now time.Time) []
 			continue
 		}
 		id := itemID(signal)
-		events = append(events, AgentEvent{
-			Type:                    AgentEventTeamworkSignalOpen,
-			Audience:                req.Principal,
-			Subject:                 "teamwork_signal/" + id,
-			CausedBy:                []string{"teamwork_signal/" + id},
-			Body:                    fmt.Sprintf("Teamwork signal is open: %s. Decide whether to self-assign or assign a suited teammate.", statement),
-			SuggestedObservedEvents: []string{"assignment.write_candidate.observed"},
-		})
+		subject := "teamwork_signal/" + id
+		appendDerived(
+			DerivedEventTeamworkSignalOpen,
+			subject,
+			[]string{subject},
+			fmt.Sprintf("Teamwork signal is open: %s. Decide whether to self-assign or assign a suited teammate.", statement),
+			[]string{"assignment.write_candidate.observed"},
+		)
 	}
 
 	progressByAssignment := map[string][]map[string]any{}
@@ -84,72 +85,70 @@ func BuildAgentEvents(req Request, proj projection.Projection, now time.Time) []
 
 		switch {
 		case owner == principal && expired:
-			events = append(events, AgentEvent{
-				Type:                    AgentEventAssignmentExpired,
-				Audience:                req.Principal,
-				Subject:                 subject,
-				CausedBy:                []string{subject},
-				Body:                    fmt.Sprintf("Assignment %s expired without progress: %s. Start a new act: renew, reassign, split, close, or escalate.", id, scope),
-				SuggestedObservedEvents: []string{"assignment.write_candidate.observed", "teamwork_signal.write_candidate.observed"},
-			})
+			appendDerived(
+				DerivedEventAssignmentExpired,
+				subject,
+				[]string{subject},
+				fmt.Sprintf("Assignment %s expired without progress: %s. Start a new act: renew, reassign, split, close, or escalate.", id, scope),
+				[]string{"assignment.write_candidate.observed", "teamwork_signal.write_candidate.observed"},
+			)
 		case owner == principal && len(linked) > 0:
-			events = append(events, AgentEvent{
-				Type:                    AgentEventAssignmentProgressReady,
-				Audience:                req.Principal,
-				Subject:                 subject,
-				CausedBy:                append([]string{subject}, progressRefs(linked)...),
-				Body:                    fmt.Sprintf("Assignment %s has feedback: %s", id, summarizeProgress(linked)),
-				SuggestedObservedEvents: []string{"assignment.write_candidate.observed", "teamwork_signal.write_candidate.observed"},
-			})
+			appendDerived(
+				DerivedEventAssignmentProgressReady,
+				subject,
+				append([]string{subject}, progressRefs(linked)...),
+				fmt.Sprintf("Assignment %s has feedback: %s", id, summarizeProgress(linked)),
+				[]string{"assignment.write_candidate.observed", "teamwork_signal.write_candidate.observed"},
+			)
 		case assignee == principal && !expired && len(linked) == 0:
-			events = append(events, AgentEvent{
-				Type:     AgentEventAssignmentWorkAvailable,
-				Audience: req.Principal,
-				Subject:  subject,
-				CausedBy: []string{subject},
-				Body:     fmt.Sprintf("Assignment %s is yours: %s. Expected work: %s", id, scope, itemString(assignment, "expected_work")),
-			})
-			events = append(events, AgentEvent{
-				Type:                    AgentEventAssignmentFeedbackNeeded,
-				Audience:                req.Principal,
-				Subject:                 subject,
-				CausedBy:                []string{subject},
-				Body:                    fmt.Sprintf("When you have progress or a blocker for assignment %s, emit progress_digest with assignment_ref=%s.", id, id),
-				SuggestedObservedEvents: []string{"progress_digest.write_candidate.observed"},
-			})
+			appendDerived(
+				DerivedEventAssignmentWorkAvailable,
+				subject,
+				[]string{subject},
+				fmt.Sprintf("Assignment %s is yours: %s. Expected work: %s", id, scope, itemString(assignment, "expected_work")),
+				nil,
+			)
+			appendDerived(
+				DerivedEventAssignmentFeedbackNeeded,
+				subject,
+				[]string{subject},
+				fmt.Sprintf("When you have progress or a blocker for assignment %s, emit progress_digest with assignment_ref=%s.", id, id),
+				[]string{"progress_digest.write_candidate.observed"},
+			)
 		}
 	}
 
 	return events
 }
 
-func BuildProfileEvents(req Request, proj projection.Projection) []AgentEvent {
-	events := BuildAgentEvents(req, proj, time.Time{})
-	var profile []AgentEvent
+func DeriveProfileEventEnvelopes(req Request, proj eventview.EventView) []eventmodel.EventEnvelope {
+	events := DeriveEventEnvelopes(req, proj, time.Time{})
+	var profile []eventmodel.EventEnvelope
 	for _, event := range events {
-		if event.Type == AgentEventProfileUpdateRequested {
+		if event.Event.Type == DerivedEventProfileUpdateRequested {
 			profile = append(profile, event)
 		}
 	}
 	return profile
 }
 
-func PresentAgentEvents(events []AgentEvent) string {
+func PresentEventEnvelopes(events []eventmodel.EventEnvelope) string {
 	var sections []string
 	for _, event := range events {
-		label := agentEventLabel(event.Type)
-		if label == "" || strings.TrimSpace(event.Body) == "" {
+		label := derivedPresentationHint(event)
+		body := derivedBody(event)
+		if label == "" || strings.TrimSpace(body) == "" {
 			continue
 		}
-		sections = append(sections, section(label, event.Body))
+		sections = append(sections, section(label, body))
 	}
 	return strings.Join(sections, "\n\n")
 }
 
-func agentEventCounts(events []AgentEvent) map[string]int {
+func eventEnvelopeCounts(events []eventmodel.EventEnvelope) map[string]int {
 	counts := map[string]int{}
 	for _, event := range events {
-		counts[event.Type]++
+		counts[event.Event.Type]++
 	}
 	return counts
 }
@@ -165,21 +164,48 @@ func progressRefs(items []map[string]any) []string {
 	return refs
 }
 
-func agentEventLabel(eventType string) string {
+func presentationHintForDerivedEventType(eventType string) string {
 	switch eventType {
-	case AgentEventProfileUpdateRequested:
+	case DerivedEventProfileUpdateRequested:
 		return "profile"
-	case AgentEventTeamworkSignalOpen:
+	case DerivedEventTeamworkSignalOpen:
 		return "signal"
-	case AgentEventAssignmentExpired:
+	case DerivedEventAssignmentExpired:
 		return "expired"
-	case AgentEventAssignmentProgressReady:
+	case DerivedEventAssignmentProgressReady:
 		return "integrate"
-	case AgentEventAssignmentWorkAvailable:
+	case DerivedEventAssignmentWorkAvailable:
 		return "work"
-	case AgentEventAssignmentFeedbackNeeded:
+	case DerivedEventAssignmentFeedbackNeeded:
 		return "feedback"
 	default:
 		return ""
 	}
+}
+
+func derivedEventID(eventType, subject, audience string) string {
+	id := eventType + ":" + subject + ":" + audience
+	id = strings.ReplaceAll(id, " ", "_")
+	if id == "::" {
+		return "derived:event"
+	}
+	return "derived:" + id
+}
+
+func derivedTimes(now time.Time) (string, string) {
+	if now.IsZero() {
+		now = time.Unix(0, 0).UTC()
+	}
+	derivedAt := now.UTC().Format(time.RFC3339)
+	return derivedAt, now.UTC().Add(5 * time.Minute).Format(time.RFC3339)
+}
+
+func derivedBody(env eventmodel.EventEnvelope) string {
+	body, _ := env.Event.Payload["body"].(string)
+	return body
+}
+
+func derivedPresentationHint(env eventmodel.EventEnvelope) string {
+	hint, _ := env.Meta["presentation_hint"].(string)
+	return hint
 }

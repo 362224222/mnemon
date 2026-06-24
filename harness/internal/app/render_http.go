@@ -19,7 +19,7 @@ import (
 const renderAuditRelPath = ".mnemon/harness/local/render-audit.jsonl"
 
 // NewLocalHTTPHandler adds the R1 read-only render endpoint at the app wiring layer. Runtime/channel
-// still own observe/pull/status/sync; render reads only the authenticated actor's scoped projection.
+// still own observe/pull/status/sync; render reads only the authenticated actor's scoped eventview.
 func NewLocalHTTPHandler(rt *runtime.Runtime, auth channel.Authenticator, bindings *channel.BindingSet, renderer render.Renderer) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/render", func(w http.ResponseWriter, r *http.Request) {
@@ -54,18 +54,18 @@ func NewLocalHTTPHandler(rt *runtime.Runtime, auth channel.Authenticator, bindin
 			return
 		}
 		req.Principal = principal
-		proj, err := rt.API().PullProjection(principal, contract.Subscription{Actor: principal})
+		proj, err := rt.API().PullEventView(principal, contract.Subscription{Actor: principal})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusForbidden)
 			return
 		}
 		if haveBinding {
-			proj = budgetShapeProjection(proj, capability.EmbeddedCatalog(), binding.Budget)
-			if req.Budget.ProjectionTier == "" {
-				req.Budget.ProjectionTier = binding.Budget
+			proj = budgetShapeEventView(proj, capability.EmbeddedCatalog(), binding.Budget)
+			if req.Budget.EventViewTier == "" {
+				req.Budget.EventViewTier = binding.Budget
 			}
 		}
-		resp, err := renderer.RenderCue(r.Context(), req, proj)
+		resp, err := renderer.RenderPresentation(r.Context(), req, proj)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return

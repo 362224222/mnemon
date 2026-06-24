@@ -123,7 +123,7 @@ func FromSpec(spec CapabilitySpec) (Capability, error) {
 	if !specNamePattern.MatchString(spec.Name) {
 		return Capability{}, fmt.Errorf("capability spec %q: name must match %s (it is the event-family segment)", spec.Name, specNamePattern.String())
 	}
-	// Reservation: the system-derived forms (e.g. <kind>.remote_commit.observed, the sync-import
+	// Reservation: the system-derived forms (e.g. <kind>.remote_synced_event.observed, the sync-import
 	// observation the platform mints) are NEVER spec-declarable — reject them before the equality
 	// check so the error names the real reason, not a generic grammar miss.
 	for _, decl := range []struct{ role, val string }{{"observed_type", spec.ObservedType}, {"proposed_type", spec.ProposedType}} {
@@ -318,7 +318,7 @@ func decodeSpec(raw []byte) (CapabilitySpec, error) {
 var specNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
 // reservedKindFamilies are first-party event families whose `<family>.diagnostic` / `<family>.*`
-// events the platform mints (sync-import skip, host session, remote commit). A declared kind here
+// events the platform mints (sync-import skip, host session, remote material). A declared kind here
 // would let an untrusted package emit events the runtime routes by first-segment domain (G8).
 var reservedKindFamilies = map[string]bool{"sync": true, "session": true, "remote": true}
 
@@ -351,7 +351,7 @@ type eventTypeForm struct {
 var eventTypeGrammar = []eventTypeForm{
 	{suffix: eventTypeObservedSuffix, declarable: true},
 	{suffix: eventTypeProposedSuffix, declarable: true},
-	{suffix: ".remote_commit.observed", declarable: false}, // sync-import observation (system-derived; PD6)
+	{suffix: ".remote_synced_event.observed", declarable: false}, // sync-import observation (system-derived; PD6)
 }
 
 const (

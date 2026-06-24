@@ -13,7 +13,7 @@ import (
 
 	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/projection"
+	"github.com/mnemon-dev/mnemon/harness/internal/eventview"
 	"github.com/mnemon-dev/mnemon/harness/internal/render"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
@@ -65,9 +65,9 @@ func TestRenderEndpointUsesAuthenticatedScopedProjection(t *testing.T) {
 		t.Fatalf("seed assignment: rec=%+v err=%v", rec, err)
 	}
 
-	resp := postRender(t, srv.URL, "tok-b", render.Request{RenderIntent: render.IntentTeamworkCue})
+	resp := postRender(t, srv.URL, "tok-b", render.Request{RenderIntent: render.IntentTeamworkEvents})
 	if resp.Status != render.StatusOK || !strings.Contains(resp.Body, "[mnemon:work]") {
-		t.Fatalf("render endpoint should return assignee work cue: %#v", resp)
+		t.Fatalf("render endpoint should return assignee work presentation: %#v", resp)
 	}
 	if strings.Contains(resp.Body, "codex-a private") {
 		t.Fatalf("render endpoint leaked out-of-scope content:\n%s", resp.Body)
@@ -98,7 +98,7 @@ func TestRenderEndpointRequiresRenderVerb(t *testing.T) {
 	srv := httptest.NewServer(NewLocalHTTPHandler(rt, channel.TokenAuthenticator{Tokens: loaded.Tokens}, bindings, render.Renderer{}))
 	defer srv.Close()
 
-	body, _ := json.Marshal(render.Request{RenderIntent: render.IntentTeamworkCue})
+	body, _ := json.Marshal(render.Request{RenderIntent: render.IntentTeamworkEvents})
 	req, err := http.NewRequest(http.MethodPost, srv.URL+"/render", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
@@ -165,9 +165,9 @@ func TestRenderEndpointAppliesBindingBudgetWithoutReducingAuthority(t *testing.T
 		}
 	}
 
-	proj, err := client.PullProjection("", contract.Subscription{Actor: "codex@project"})
+	proj, err := client.PullEventView("", contract.Subscription{Actor: "codex@project"})
 	if err != nil {
-		t.Fatalf("pull authoritative projection: %v", err)
+		t.Fatalf("pull authoritative event view: %v", err)
 	}
 	if n := memoryEntryCount(proj.Content); n != 3 {
 		t.Fatalf("budget must not reduce authority: stored memory has %d entries, want 3", n)
@@ -201,7 +201,7 @@ func postRender(t *testing.T, baseURL, token string, reqBody render.Request) ren
 	return out
 }
 
-func memoryEntryCount(content []projection.ResourceContent) int {
+func memoryEntryCount(content []eventview.ResourceContent) int {
 	for _, rc := range content {
 		if rc.Ref.Kind != "memory" {
 			continue

@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/projection"
+	"github.com/mnemon-dev/mnemon/harness/internal/eventview"
 	"github.com/mnemon-dev/mnemon/harness/internal/rule"
 )
 
@@ -16,21 +16,20 @@ const (
 	SkillWriteProposed          = "skill.write.proposed"
 )
 
-
 // declarationDedupImport is the "declaration-dedup" remote-import strategy (capability-spec v2
-// §Sync): merge non-conflicting DECLARATIONS from a remote commit into the resource's declaration
+// §Sync): merge non-conflicting DECLARATIONS from a remote material into the resource's declaration
 // list, VALIDATING each imported declaration (id format, status enum, secret/injection scan — I15,
 // receiving-side admission is not relaxed) and rejecting a same-id-different-content conflict.
 // Parameterized by cap (kind/proposed type); skill selects it.
 func declarationDedupImport(cap Capability, in rule.RuleInput) (contract.RuleDecision, error) {
-	commit, err := decodeRemoteSkillCommit(in.Event.Payload)
+	material, err := decodeRemoteSkillSyncedEventMaterial(in.Event.Payload)
 	if err != nil {
 		return contract.RuleDecision{Verdict: contract.VerdictDeny, Reasons: []string{err.Error()}}, nil
 	}
-	if commit.ResourceRef.Kind != cap.ResourceKind {
+	if material.ResourceRef.Kind != cap.ResourceKind {
 		return contract.RuleDecision{Verdict: contract.VerdictDeny, Reasons: []string{"remote import denied: resource kind does not match the importing capability"}}, nil
 	}
-	incoming := skillDeclarationsFromFields(commit.Fields)
+	incoming := skillDeclarationsFromFields(material.Fields)
 	if len(incoming) == 0 {
 		return contract.RuleDecision{Verdict: contract.VerdictDeny, Reasons: []string{"remote import denied: no declarations"}}, nil
 	}
@@ -39,7 +38,7 @@ func declarationDedupImport(cap Capability, in rule.RuleInput) (contract.RuleDec
 			return contract.RuleDecision{Verdict: contract.VerdictDeny, Reasons: []string{reason}}, nil
 		}
 	}
-	version, fields := skillResourceFromProjection(in.View, commit.ResourceRef)
+	version, fields := skillResourceFromEventView(in.View, material.ResourceRef)
 	existing := skillDeclarationsFromFields(fields)
 	byID := make(map[string]skillDeclaration, len(existing))
 	for _, decl := range existing {
@@ -64,7 +63,7 @@ func declarationDedupImport(cap Capability, in rule.RuleInput) (contract.RuleDec
 		"declarations": declarations,
 		"updated_by":   string(in.Event.Actor),
 	}
-	write := contract.ResourceWrite{Ref: commit.ResourceRef, Kind: contract.OpCreate, Fields: newFields}
+	write := contract.ResourceWrite{Ref: material.ResourceRef, Kind: contract.OpCreate, Fields: newFields}
 	if version > 0 {
 		write.Kind = contract.OpUpdate
 		write.BasedOn = version
@@ -87,23 +86,23 @@ type skillDeclaration struct {
 	IngestSeq  int64  `json:"ingest_seq"`
 }
 
-func decodeRemoteSkillCommit(payload map[string]any) (contract.LocalCommit, error) {
-	raw, ok := payload["commit"]
+func decodeRemoteSkillSyncedEventMaterial(payload map[string]any) (contract.SyncedEventMaterial, error) {
+	raw, ok := payload["material"]
 	if !ok {
-		return contract.LocalCommit{}, fmt.Errorf("remote skill import denied: missing commit")
+		return contract.SyncedEventMaterial{}, fmt.Errorf("remote skill import denied: missing material")
 	}
 	data, err := json.Marshal(raw)
 	if err != nil {
-		return contract.LocalCommit{}, fmt.Errorf("remote skill import denied: encode commit: %w", err)
+		return contract.SyncedEventMaterial{}, fmt.Errorf("remote skill import denied: encode material: %w", err)
 	}
-	var commit contract.LocalCommit
-	if err := json.Unmarshal(data, &commit); err != nil {
-		return contract.LocalCommit{}, fmt.Errorf("remote skill import denied: decode commit: %w", err)
+	var material contract.SyncedEventMaterial
+	if err := json.Unmarshal(data, &material); err != nil {
+		return contract.SyncedEventMaterial{}, fmt.Errorf("remote skill import denied: decode material: %w", err)
 	}
-	if strings.TrimSpace(commit.OriginReplicaID) == "" || strings.TrimSpace(commit.LocalDecisionID) == "" {
-		return contract.LocalCommit{}, fmt.Errorf("remote skill import denied: missing provenance")
+	if strings.TrimSpace(material.OriginReplicaID) == "" || strings.TrimSpace(material.LocalDecisionID) == "" {
+		return contract.SyncedEventMaterial{}, fmt.Errorf("remote skill import denied: missing provenance")
 	}
-	return commit, nil
+	return material, nil
 }
 
 func validateRemoteSkillDeclaration(decl skillDeclaration) string {
@@ -133,8 +132,8 @@ func validSkillID(s string) bool {
 	return true
 }
 
-func skillResourceFromProjection(view projection.Projection, ref contract.ResourceRef) (contract.Version, map[string]any) {
-	return resourceFromProjection(view, ref)
+func skillResourceFromEventView(view eventview.EventView, ref contract.ResourceRef) (contract.Version, map[string]any) {
+	return resourceFromEventView(view, ref)
 }
 
 func skillDeclarationsFromFields(fields map[string]any) []skillDeclaration {

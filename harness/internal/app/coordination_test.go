@@ -254,7 +254,7 @@ func TestCoordinationProjectIntentGoverns(t *testing.T) {
 	}
 }
 
-// R1 Event-Cue schema: agent_profile and teamwork_signal are first-party governed resources too,
+// R1 Event presentation schema: agent_profile and teamwork_signal are first-party governed resources too,
 // not role packages or hostsurface-only hints.
 func TestCoordinationProfileAndTeamworkSignalGovern(t *testing.T) {
 	profileRef := contract.ResourceRef{Kind: "agent_profile", ID: "project"}
@@ -276,7 +276,7 @@ func TestCoordinationProfileAndTeamworkSignalGovern(t *testing.T) {
 		ExternalID: "profile-1",
 		Event: contract.Event{Type: "agent_profile.write_candidate.observed", Payload: map[string]any{
 			"actor": "codex@project", "focus": "harness R1 schema",
-			"context_advantages": []any{"read Event-Cue plan", "knows capability package"},
+			"context_advantages": []any{"read Event presentation plan", "knows capability package"},
 			"availability":       "available", "ttl": "30m", "summary": "Working on schema phase.",
 		}},
 	}); err != nil {
@@ -293,7 +293,7 @@ func TestCoordinationProfileAndTeamworkSignalGovern(t *testing.T) {
 	if _, _, err := rt.API().Ingest("codex@project", contract.ObservationEnvelope{
 		ExternalID: "signal-1",
 		Event: contract.Event{Type: "teamwork_signal.write_candidate.observed", Payload: map[string]any{
-			"scope": "harness/r1", "statement": "Need a second review of render/cue schema.",
+			"scope": "harness/r1", "statement": "Need a second review of render/presentation schema.",
 			"why_teamwork": "another agent has fresher render context", "ttl": "1h", "evidence": "profile roster",
 		}},
 	}); err != nil {

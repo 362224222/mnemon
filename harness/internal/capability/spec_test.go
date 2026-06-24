@@ -80,12 +80,12 @@ func TestFromSpecFailsClosed(t *testing.T) {
 		s.ObservedType = "bar.write_candidate.observed"
 	}, "frozen type grammar")
 	// System-derived forms (capability-spec v2 grammar table): the platform mints
-	// <kind>.remote_commit.observed (the sync-import observation); a spec may NEVER declare it.
+	// <kind>.remote_synced_event.observed (the sync-import observation); a spec may NEVER declare it.
 	mutate("system-derived observed form", func(s *CapabilitySpec) {
-		s.ObservedType = "note.remote_commit.observed"
+		s.ObservedType = "note.remote_synced_event.observed"
 	}, "system-derived")
 	mutate("system-derived proposed form", func(s *CapabilitySpec) {
-		s.ProposedType = "note.remote_commit.observed"
+		s.ProposedType = "note.remote_synced_event.observed"
 	}, "system-derived")
 	mutate("free-form proposed type", func(s *CapabilitySpec) {
 		s.ProposedType = "note.write.done"
