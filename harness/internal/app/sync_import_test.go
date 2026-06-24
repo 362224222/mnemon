@@ -18,7 +18,7 @@ func TestRemoteProgressImportConflictDiagnosesWithoutOverwrite(t *testing.T) {
 	}
 	defer rt.Close()
 
-	if err := ingestRemoteMaterialForTest(rt, "first", policy.EmbeddedCatalog()["progress_digest"], remoteProgressMaterialForTest(ref, "shared-entry", "remote content v1")); err != nil {
+	if err := ingestRemoteMaterialForTest(rt, "first", policy.StandardRegistry()["progress_digest"], remoteProgressMaterialForTest(ref, "shared-entry", "remote content v1")); err != nil {
 		t.Fatalf("first import: %v", err)
 	}
 	if _, err := rt.Tick(); err != nil {
@@ -32,7 +32,7 @@ func TestRemoteProgressImportConflictDiagnosesWithoutOverwrite(t *testing.T) {
 		t.Fatalf("first import did not write progress: %+v", fields)
 	}
 
-	if err := ingestRemoteMaterialForTest(rt, "conflict", policy.EmbeddedCatalog()["progress_digest"], remoteProgressMaterialForTest(ref, "shared-entry", "remote content v2")); err != nil {
+	if err := ingestRemoteMaterialForTest(rt, "conflict", policy.StandardRegistry()["progress_digest"], remoteProgressMaterialForTest(ref, "shared-entry", "remote content v2")); err != nil {
 		t.Fatalf("conflict import: %v", err)
 	}
 	if _, err := rt.Tick(); err != nil {
@@ -79,7 +79,7 @@ func TestRemoteProgressImportConflictDiagnosesWithoutOverwrite(t *testing.T) {
 	if !ok {
 		t.Fatalf("diagnostic CausedBy %q must resolve to a durable event", diag.CausedBy)
 	}
-	if trigger.Type != policy.EmbeddedCatalog()["progress_digest"].RemoteSyncedEventObserved() {
+	if trigger.Type != policy.StandardRegistry()["progress_digest"].RemoteSyncedEventObserved() {
 		t.Fatalf("diagnostic must be caused by the remote material observation, got type %q", trigger.Type)
 	}
 	material, ok := trigger.Payload["material"].(map[string]any)
@@ -103,7 +103,7 @@ func TestRemoteAssignmentImportAppendsItemsThroughLocalMnemon(t *testing.T) {
 	}
 	defer rt.Close()
 
-	if err := ingestRemoteMaterialForTest(rt, "remote-assignment", policy.EmbeddedCatalog()["assignment"], remoteAssignmentMaterialForTest(ref, "release-review", "active")); err != nil {
+	if err := ingestRemoteMaterialForTest(rt, "remote-assignment", policy.StandardRegistry()["assignment"], remoteAssignmentMaterialForTest(ref, "release-review", "active")); err != nil {
 		t.Fatalf("remote assignment import: %v", err)
 	}
 	if _, err := rt.Tick(); err != nil {
@@ -123,7 +123,7 @@ func TestRemoteAssignmentImportAppendsItemsThroughLocalMnemon(t *testing.T) {
 	}
 }
 
-func ingestRemoteMaterialForTest(rt *runtime.Runtime, externalID string, cap policy.Capability, material contract.SyncedEventMaterial) error {
+func ingestRemoteMaterialForTest(rt *runtime.Runtime, externalID string, cap policy.EventPackage, material contract.SyncedEventMaterial) error {
 	_, _, err := rt.API().Ingest(contract.SyncImportActor, contract.ObservationEnvelope{
 		ExternalID: externalID,
 		Event: contract.Event{

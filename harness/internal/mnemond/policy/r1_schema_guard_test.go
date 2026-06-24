@@ -1,37 +1,24 @@
 package policy
 
 import (
-	"io/fs"
 	"strings"
 	"testing"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/assets"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
 )
 
-func TestR1DeferredCapabilityAssetsRemainDeferred(t *testing.T) {
-	entries, err := fs.ReadDir(assets.FS, "capabilities")
-	if err != nil {
-		t.Fatalf("read embedded capabilities: %v", err)
-	}
-	present := map[string]bool{}
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
-			continue
-		}
-		present[strings.TrimSuffix(entry.Name(), ".json")] = true
-	}
-
+func TestR1DeferredEventPackagesRemainDeferred(t *testing.T) {
+	present := StandardRegistry()
 	for _, name := range []string{"assignment_status", "assignment_expired", "poc_role", "ic_role"} {
-		if present[name] {
-			t.Fatalf("%s must remain deferred in R1; model it as a render presentation or later capability, not a built-in asset", name)
+		if _, ok := present[name]; ok {
+			t.Fatalf("%s must remain deferred in R1; model it as presentation or a later event package, not a standard package", name)
 		}
 	}
 }
 
-func TestR1TeamworkCapabilitySchema(t *testing.T) {
-	catalog := EmbeddedCatalog()
+func TestR1TeamworkEventPackageSchema(t *testing.T) {
+	catalog := StandardRegistry()
 	cases := []struct {
 		name         string
 		risk         string
@@ -102,17 +89,17 @@ func TestR1TeamworkCapabilitySchema(t *testing.T) {
 			t.Fatalf("%s risk = %q, want %q", tc.name, cap.Risk, tc.risk)
 		}
 
-		if dec := evaluateR1Capability(t, cap, tc.valid); dec.Verdict != contract.VerdictPropose {
+		if dec := evaluateR1EventPackage(t, cap, tc.valid); dec.Verdict != contract.VerdictPropose {
 			t.Fatalf("%s valid payload verdict = %+v, want propose", tc.name, dec)
 		}
-		dec := evaluateR1Capability(t, cap, tc.invalid)
+		dec := evaluateR1EventPackage(t, cap, tc.invalid)
 		if dec.Verdict != contract.VerdictDeny || len(dec.Reasons) == 0 || !strings.Contains(dec.Reasons[0], tc.requiredMiss) {
 			t.Fatalf("%s invalid payload verdict = %+v, want deny containing %q", tc.name, dec, tc.requiredMiss)
 		}
 	}
 }
 
-func evaluateR1Capability(t *testing.T, cap Capability, payload map[string]any) contract.RuleDecision {
+func evaluateR1EventPackage(t *testing.T, cap EventPackage, payload map[string]any) contract.RuleDecision {
 	t.Helper()
 	ref := contract.ResourceRef{Kind: cap.ResourceKind, ID: "project"}
 	dec, err := cap.Rule("codex@project", ref, Limits{}).Evaluate(admission.RuleInput{Event: contract.Event{

@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// validatorCatalog is the CLOSED field-validator vocabulary of capability spec v1. Each member is a
+// validatorCatalog is the CLOSED field-validator vocabulary of external spec v1. Each member is a
 // compiled behavior the execution switch in compileDecode implements; a spec can only select members
 // by id (define≠select). Adding a member is a pure-additive code change to this catalog + the switch.
 //
@@ -37,11 +37,10 @@ var validatorCatalog = map[string]paramSchema{
 	"list:strings-required": {},
 }
 
-// compileDecode builds the Capability.Decode closure from the field specs. See the FromSpec doc
+// compileDecode builds the EventPackage.Decode closure from typed field policy.
 // comment for the frozen decode contract.
-func compileDecode(spec CapabilitySpec) func(payload map[string]any) (Item, error) {
-	fields := append([]FieldSpec(nil), spec.Fields...)
-	name := spec.Name
+func compileDecode(name string, fieldPolicies []FieldSpec) func(payload map[string]any) (Item, error) {
+	fields := append([]FieldSpec(nil), fieldPolicies...)
 	return func(payload map[string]any) (Item, error) {
 		item := Item{}
 		for _, f := range fields {

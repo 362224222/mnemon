@@ -11,7 +11,7 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 )
 
-// goalSpecJSON is the canonical well-formed external package spec: the goal capability, never
+// goalSpecJSON is the canonical well-formed external package spec: the goal event package, never
 // embedded, satisfying SchemaGuard goal:{statement} via the static render field (skill.json is
 // the static-render precedent).
 const goalSpecJSON = `{"schema_version":1,"name":"goal","observed_type":"goal.write_candidate.observed",
@@ -20,7 +20,7 @@ const goalSpecJSON = `{"schema_version":1,"name":"goal","observed_type":"goal.wr
 "render":{"content":{"member":"bullet-list","params":{"title":"# Goals","field":"statement"}},"static":{"statement":"project"}}}`
 
 func testRequiredFields() map[contract.ResourceKind][]string {
-	// Literal on purpose: capability is a contract/rule/presentation-view-only leaf, so even its tests do
+	// Literal on purpose: an event package is a contract/rule/presentation-view-only leaf, so even its tests do
 	// not import kernel; production passes kernel.DefaultSchemaGuard().Required from app.
 	return map[contract.ResourceKind][]string{
 		"goal": {"statement"}, "note": {"content"},
@@ -36,7 +36,7 @@ func extSpec(name, family, kind string) string {
 
 // The fail-closed classes of the external loader, each error naming the package path
 // (.mnemon/loops/<name>, the one external root of v1). Class ⑩ (symlinks) needs a real OS path
-// and is tested against ResolveCatalog below.
+// and is tested against ResolveRegistry below.
 func TestLoadExternalFailClosedClasses(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -156,7 +156,7 @@ func TestLoadExternalAbsentRootIsEmptyNotError(t *testing.T) {
 	}
 }
 
-// A well-formed goal package (a capability that was NEVER embedded) compiles end to end; sibling
+// A well-formed goal package (an event package that was never standard) compiles end to end; sibling
 // docs (GUIDE.md) are inert and allowed.
 func TestLoadExternalWellFormedGoalPackage(t *testing.T) {
 	m := fstest.MapFS{
@@ -169,10 +169,10 @@ func TestLoadExternalWellFormedGoalPackage(t *testing.T) {
 	}
 	goal, ok := ext["goal"]
 	if !ok || goal.Decode == nil || goal.Header == nil {
-		t.Fatalf("goal capability must be compiled (decode/header); got %+v", goal)
+		t.Fatalf("goal event package must be compiled (decode/header); got %+v", goal)
 	}
 	if goal.ObservedType != "goal.write_candidate.observed" || goal.ResourceKind != "goal" {
-		t.Fatalf("goal capability carries wrong identity: %+v", goal)
+		t.Fatalf("goal event package carries wrong identity: %+v", goal)
 	}
 	item, err := goal.Decode(map[string]any{"statement": "ship stage five"})
 	if err != nil {
@@ -203,7 +203,7 @@ func TestLoadExternalWithSafeHostAssetsLoads(t *testing.T) {
 		t.Fatalf("a package carrying safe host assets must load (loop-package-v2): %v", err)
 	}
 	if _, ok := ext["goal"]; !ok {
-		t.Fatalf("goal capability must compile with host assets present: %v", ext)
+		t.Fatalf("goal event package must compile with host assets present: %v", ext)
 	}
 }
 
@@ -220,35 +220,35 @@ func writeExternalPackage(t *testing.T, projectRoot, name, spec string) string {
 	return file
 }
 
-func TestResolveCatalogMergesBuiltinsAndExternal(t *testing.T) {
+func TestResolveRegistryMergesBuiltinsAndExternal(t *testing.T) {
 	root := t.TempDir()
 	writeExternalPackage(t, root, "goal", goalSpecJSON)
-	merged, err := ResolveCatalog(root, testRequiredFields())
+	merged, err := ResolveRegistry(root, testRequiredFields())
 	if err != nil {
 		t.Fatalf("resolve catalog: %v", err)
 	}
 	if _, ok := merged["goal"]; !ok {
-		t.Fatal("merged catalog must carry the external goal capability")
+		t.Fatal("merged catalog must carry the external goal event package")
 	}
-	for id := range EmbeddedCatalog() {
+	for id := range StandardRegistry() {
 		if _, ok := merged[id]; !ok {
 			t.Fatalf("merged catalog must keep embedded %q", id)
 		}
 	}
-	if len(merged) != len(EmbeddedCatalog())+1 {
-		t.Fatalf("merged catalog size = %d, want builtins+1 = %d", len(merged), len(EmbeddedCatalog())+1)
+	if len(merged) != len(StandardRegistry())+1 {
+		t.Fatalf("merged catalog size = %d, want builtins+1 = %d", len(merged), len(StandardRegistry())+1)
 	}
 }
 
-func TestResolveCatalogAbsentExternalRootIsBuiltinsOnly(t *testing.T) {
-	merged, err := ResolveCatalog(t.TempDir(), testRequiredFields())
+func TestResolveRegistryAbsentExternalRootIsBuiltinsOnly(t *testing.T) {
+	merged, err := ResolveRegistry(t.TempDir(), testRequiredFields())
 	if err != nil {
 		t.Fatalf("resolve catalog without .mnemon/loops: %v", err)
 	}
-	if len(merged) != len(EmbeddedCatalog()) {
-		t.Fatalf("catalog without externals must equal EmbeddedCatalog() (%d), got %d", len(EmbeddedCatalog()), len(merged))
+	if len(merged) != len(StandardRegistry()) {
+		t.Fatalf("catalog without externals must equal StandardRegistry() (%d), got %d", len(StandardRegistry()), len(merged))
 	}
-	for id := range EmbeddedCatalog() {
+	for id := range StandardRegistry() {
 		if _, ok := merged[id]; !ok {
 			t.Fatalf("catalog must keep embedded %q", id)
 		}
@@ -259,8 +259,8 @@ func TestResolveCatalogAbsentExternalRootIsBuiltinsOnly(t *testing.T) {
 // (external may not claim what embedded claims) — whole-package error, never silent priority.
 // The fourth axis (resource kind) is unreachable through the filesystem path since the
 // directory == name == kind pin landed (a kind clash now implies a name clash, caught earlier);
-// it is pinned directly against mergeExternal below.
-func TestResolveCatalogRejectsShadowingOnEachAxis(t *testing.T) {
+// it is pinned directly against mergeExternalPackages below.
+func TestResolveRegistryRejectsShadowingOnEachAxis(t *testing.T) {
 	cases := []struct {
 		axis    string
 		pkg     string
@@ -270,14 +270,14 @@ func TestResolveCatalogRejectsShadowingOnEachAxis(t *testing.T) {
 		// Only the name axis is constructible through the loader: the frozen type grammar
 		// derives both event types from the name, so observed/proposed collisions imply a name
 		// collision (those axes are pinned directly on the merge below, as defense in depth).
-		{"name", "assignment", extSpec("assignment", "assignment", "assignment"), "duplicate capability name"},
+		{"name", "assignment", extSpec("assignment", "assignment", "assignment"), "duplicate event package name"},
 	}
 	for _, c := range cases {
 		root := t.TempDir()
 		writeExternalPackage(t, root, c.pkg, c.spec)
-		_, err := ResolveCatalog(root, testRequiredFields())
+		_, err := ResolveRegistry(root, testRequiredFields())
 		if err == nil {
-			t.Fatalf("axis %s: shadowing an embedded capability must fail closed", c.axis)
+			t.Fatalf("axis %s: shadowing a standard event package must fail closed", c.axis)
 		}
 		for _, want := range []string{c.wantErr, ".mnemon/loops/" + c.pkg} {
 			if !strings.Contains(err.Error(), want) {
@@ -289,19 +289,19 @@ func TestResolveCatalogRejectsShadowingOnEachAxis(t *testing.T) {
 
 // The merge's type axes, pinned directly (defense in depth): the frozen type grammar makes pure
 // observed/proposed collisions unreachable through LoadExternal, but the merge invariant must
-// hold on its own against hand-built capabilities.
+// hold on its own against hand-built event packages.
 func TestMergeExternalRejectsTypeCollisions(t *testing.T) {
-	ext := func(name, family string) Capability {
-		return Capability{Name: name, ObservedType: family + ".write_candidate.observed",
+	ext := func(name, family string) EventPackage {
+		return EventPackage{Name: name, ObservedType: family + ".write_candidate.observed",
 			ProposedType: name + ".write.proposed", ResourceKind: "goal"}
 	}
-	if _, err := mergeExternal(EmbeddedCatalog(), map[string]Capability{"alt": ext("alt", "assignment")}); err == nil ||
+	if _, err := mergeExternalPackages(StandardRegistry(), Registry{"alt": ext("alt", "assignment")}); err == nil ||
 		!strings.Contains(err.Error(), "already claimed") {
 		t.Fatalf("observed-type collision must fail the merge, got %v", err)
 	}
-	prop := Capability{Name: "alt2", ObservedType: "alt2.write_candidate.observed",
+	prop := EventPackage{Name: "alt2", ObservedType: "alt2.write_candidate.observed",
 		ProposedType: "assignment.write.proposed", ResourceKind: "goal"}
-	if _, err := mergeExternal(EmbeddedCatalog(), map[string]Capability{"alt2": prop}); err == nil ||
+	if _, err := mergeExternalPackages(StandardRegistry(), Registry{"alt2": prop}); err == nil ||
 		!strings.Contains(err.Error(), "already claimed") {
 		t.Fatalf("proposed-type collision must fail the merge, got %v", err)
 	}
@@ -311,16 +311,16 @@ func TestMergeExternalRejectsTypeCollisions(t *testing.T) {
 // makes a PURE kind collision unreachable through LoadExternal, but the merge invariant must hold
 // on its own — external-vs-embedded and external-vs-external kind clashes both fail closed.
 func TestMergeExternalRejectsKindCollisions(t *testing.T) {
-	ext := func(name, family, kind string) Capability {
-		return Capability{Name: name, ObservedType: family + ".write_candidate.observed",
+	ext := func(name, family, kind string) EventPackage {
+		return EventPackage{Name: name, ObservedType: family + ".write_candidate.observed",
 			ProposedType: family + ".write.proposed", ResourceKind: contract.ResourceKind(kind)}
 	}
-	_, err := mergeExternal(EmbeddedCatalog(), map[string]Capability{"alt-assignment": ext("alt-assignment", "altassignment", "assignment")})
+	_, err := mergeExternalPackages(StandardRegistry(), Registry{"alt-assignment": ext("alt-assignment", "altassignment", "assignment")})
 	if err == nil || !strings.Contains(err.Error(), `resource_kind "assignment" already claimed`) ||
 		!strings.Contains(err.Error(), ".mnemon/loops/alt-assignment") {
 		t.Fatalf("external claiming an embedded kind must fail the merge with the package path, got %v", err)
 	}
-	_, err = mergeExternal(EmbeddedCatalog(), map[string]Capability{
+	_, err = mergeExternalPackages(StandardRegistry(), Registry{
 		"goal-a": ext("goal-a", "goala", "goal"),
 		"goal-b": ext("goal-b", "goalb", "goal"),
 	})
@@ -344,7 +344,7 @@ func TestLoadExternalNamesLexicographicallyFirstBadPackage(t *testing.T) {
 
 // Class ⑩: a symlinked package directory is rejected on the REAL path before any fsys is built
 // (os.DirFS would silently skip it — a symlink is not IsDir to ReadDir; silent is forbidden).
-func TestResolveCatalogRejectsSymlinkedPackageDir(t *testing.T) {
+func TestResolveRegistryRejectsSymlinkedPackageDir(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(t.TempDir(), "elsewhere", "goal")
 	if err := os.MkdirAll(target, 0o755); err != nil {
@@ -360,7 +360,7 @@ func TestResolveCatalogRejectsSymlinkedPackageDir(t *testing.T) {
 	if err := os.Symlink(target, filepath.Join(loops, "goal")); err != nil {
 		t.Skipf("platform without symlink support: %v", err)
 	}
-	_, err := ResolveCatalog(root, testRequiredFields())
+	_, err := ResolveRegistry(root, testRequiredFields())
 	if err == nil || !strings.Contains(err.Error(), "symlink") || !strings.Contains(err.Error(), ".mnemon/loops/goal") {
 		t.Fatalf("symlinked package dir must be rejected with the package path, got %v", err)
 	}
@@ -368,7 +368,7 @@ func TestResolveCatalogRejectsSymlinkedPackageDir(t *testing.T) {
 
 // Class ⑩ (file form): a symlinked capability.json inside a real package dir is rejected —
 // os.DirFS would silently FOLLOW it.
-func TestResolveCatalogRejectsSymlinkedCapabilityJSON(t *testing.T) {
+func TestResolveRegistryRejectsSymlinkedEventPackageJSON(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(t.TempDir(), "real-capability.json")
 	if err := os.WriteFile(target, []byte(goalSpecJSON), 0o644); err != nil {
@@ -381,7 +381,7 @@ func TestResolveCatalogRejectsSymlinkedCapabilityJSON(t *testing.T) {
 	if err := os.Symlink(target, filepath.Join(dir, "capability.json")); err != nil {
 		t.Skipf("platform without symlink support: %v", err)
 	}
-	_, err := ResolveCatalog(root, testRequiredFields())
+	_, err := ResolveRegistry(root, testRequiredFields())
 	if err == nil || !strings.Contains(err.Error(), "symlink") || !strings.Contains(err.Error(), ".mnemon/loops/goal") {
 		t.Fatalf("symlinked capability.json must be rejected with the package path, got %v", err)
 	}
@@ -390,7 +390,7 @@ func TestResolveCatalogRejectsSymlinkedCapabilityJSON(t *testing.T) {
 // Class ⑩ (root form): .mnemon/loops ITSELF arriving via symlink is rejected — without the root
 // lstat, os.DirFS would silently traverse wherever the link points and load packages from a tree
 // the project root never carried.
-func TestResolveCatalogRejectsSymlinkedExternalRoot(t *testing.T) {
+func TestResolveRegistryRejectsSymlinkedExternalRoot(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(t.TempDir(), "elsewhere-loops")
 	if err := os.MkdirAll(filepath.Join(target, "goal"), 0o755); err != nil {
@@ -405,18 +405,18 @@ func TestResolveCatalogRejectsSymlinkedExternalRoot(t *testing.T) {
 	if err := os.Symlink(target, filepath.Join(root, ".mnemon", "loops")); err != nil {
 		t.Skipf("platform without symlink support: %v", err)
 	}
-	_, err := ResolveCatalog(root, testRequiredFields())
+	_, err := ResolveRegistry(root, testRequiredFields())
 	if err == nil || !strings.Contains(err.Error(), "symlink") || !strings.Contains(err.Error(), ".mnemon/loops") {
 		t.Fatalf("symlinked external root must be rejected with the root path, got %v", err)
 	}
 }
 
-// 边界两侧一个文法:下划线名通过目录文法并作为声明式 kind 成功加载(capability-spec v2:
-// kind 不再需预注册于 KindCatalog);dash 名在目录文法即拒(不会穿门后死在 FromSpec)。
+// 边界两侧一个文法:下划线名通过目录文法并作为声明式 kind 成功加载(external event package spec:
+// kind 不再需预注册于 KindCatalog);dash 名在目录文法即拒(不会穿门后死在 CompileExternalSpec)。
 func TestExternalDirectoryGrammarMatchesSpecNameGrammar(t *testing.T) {
 	root := t.TempDir()
 	writeExternalPackage(t, root, "my_loop", extSpec("my_loop", "my_loop", "my_loop"))
-	catalog, err := ResolveCatalog(root, testRequiredFields())
+	catalog, err := ResolveRegistry(root, testRequiredFields())
 	if err != nil {
 		t.Fatalf("underscore name passes the directory door and loads as a declared kind, got %v", err)
 	}
@@ -426,7 +426,7 @@ func TestExternalDirectoryGrammarMatchesSpecNameGrammar(t *testing.T) {
 
 	root2 := t.TempDir()
 	writeExternalPackage(t, root2, "my-loop", extSpec("my-loop", "my-loop", "my-loop"))
-	_, err = ResolveCatalog(root2, testRequiredFields())
+	_, err = ResolveRegistry(root2, testRequiredFields())
 	if err == nil || !strings.Contains(err.Error(), "directory name must match") {
 		t.Fatalf("dashed name must be rejected at the directory grammar, got %v", err)
 	}

@@ -11,11 +11,11 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation/view"
 )
 
-// testSpecs decodes test-only fixture specs that pin the generic FromSpec compile path without
-// treating any fixture as an embedded product capability.
-func testSpecs(t *testing.T) map[string]CapabilitySpec {
+// testSpecs decodes test-only fixture specs that pin the generic CompileExternalSpec compile path without
+// treating any fixture as a standard product event package.
+func testSpecs(t *testing.T) map[string]ExternalSpec {
 	t.Helper()
-	out := map[string]CapabilitySpec{}
+	out := map[string]ExternalSpec{}
 	for _, id := range []string{"fixture_record", "fixture_declaration", "note"} {
 		spec, err := LoadSpec(os.DirFS("testdata"), id)
 		if err != nil {
@@ -150,7 +150,7 @@ func parityCases() []parityCase {
 
 // 三种派发时视图:空(OpCreate)、Resources+Content(OpUpdate 合并,含无 id map 与非 map 项的
 // 过滤)、仅 Resources(fields nil → OpUpdate 仅新条目)。
-func parityViews(cap Capability) map[string]view.View {
+func parityViews(cap EventPackage) map[string]view.View {
 	ref := contract.ResourceRef{Kind: cap.ResourceKind, ID: "project"}
 	existing := map[string]any{
 		"id": "local/codex-project/1", "actor": "codex@project", "ingest_seq": float64(1),
@@ -184,9 +184,9 @@ func parityViews(cap Capability) map[string]view.View {
 func TestSpecGoldens(t *testing.T) {
 	specs := testSpecs(t)
 	for id, spec := range specs {
-		compiled, err := FromSpec(spec)
+		compiled, err := CompileExternalSpec(spec)
 		if err != nil {
-			t.Fatalf("%s: FromSpec: %v", id, err)
+			t.Fatalf("%s: CompileExternalSpec: %v", id, err)
 		}
 		for _, c := range parityCases() {
 			if c.cap != id {
@@ -209,7 +209,7 @@ func TestSpecGoldens(t *testing.T) {
 	}
 }
 
-func assertGolden(t *testing.T, label string, cap Capability, c parityCase, viewName string, d contract.RuleDecision) {
+func assertGolden(t *testing.T, label string, cap EventPackage, c parityCase, viewName string, d contract.RuleDecision) {
 	t.Helper()
 	if d.Verdict != c.wantVerdict {
 		t.Fatalf("%s: verdict = %v, want %v (reasons %v)", label, d.Verdict, c.wantVerdict, d.Reasons)

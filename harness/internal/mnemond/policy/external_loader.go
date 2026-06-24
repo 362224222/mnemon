@@ -13,7 +13,7 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 )
 
-// externalRootRel is the ONE external capability root of v1: <project root>/.mnemon/loops.
+// externalRootRel is the ONE external event package root of v1: <project root>/.mnemon/loops.
 // LoadExternal takes an fs.FS for testability, but by frozen v1 contract that fsys is always
 // rooted here, so every loader error names the real package path under this prefix.
 const externalRootRel = ".mnemon/loops"
@@ -28,9 +28,9 @@ var externalIdentifierPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
 
 func externalPkgPath(name string) string { return externalRootRel + "/" + name }
 
-// LoadExternal compiles every external capability package under fsys. Each TOP-LEVEL directory is
-// one package — `<name>/capability.json` in capability-spec-v1 form, strict-decoded through the
-// same decodeSpec + FromSpec machinery the embedded loader uses — loaded in lexicographic package
+// LoadExternal compiles every external event package under fsys. Each TOP-LEVEL directory is
+// one package — `<name>/capability.json` in external spec v1 form, strict-decoded through the
+// same decodeSpec + CompileExternalSpec machinery the embedded loader uses — loaded in lexicographic package
 // order (deterministic). Non-directory top-level entries (stray files, .DS_Store) are not
 // packages and are ignored.
 //
@@ -39,22 +39,22 @@ func externalPkgPath(name string) string { return externalRootRel + "/" + name }
 //
 // Everything else fails closed with the package path in the message: ① bad JSON / trailing
 // garbage / unknown JSON keys (decodeSpec); ② unknown spec vocabulary and ③ a resource kind
-// outside contract.KindCatalog (FromSpec); ⑥ any hooks/ or skills/ presence (no host projection
+// outside contract.KindCatalog (CompileExternalSpec); ⑥ any hooks/ or skills/ presence (no host projection
 // assets in v1 — deliberately WIDER than loop-package-v1's minimum obligation); ⑦ statically
 // derived header keys that cannot satisfy requiredFields (the kernel SchemaGuard lockstep, at
 // LOAD time); ⑧ unsafe spec surfaces, external only, in two halves — VALUES are scanned
 // (scanExternalSpecText), IDENTIFIERS are pattern-locked (checkExternalSpecIdentifiers);
 // ⑨ directory ≠ name ≠ kind or an off-pattern directory name; ⑪ a kernel-internal reserved kind
 // (externalReservedKinds). Classes ④⑤ (shadowing/dups beyond one package) are enforced by the
-// shared specRegistry here and the four-axis merge in ResolveCatalog; class ⑩ (symlinks) needs
-// the real OS path — fs.FS has no lstat — and lives in ResolveCatalog's screening.
-func LoadExternal(fsys fs.FS, requiredFields map[contract.ResourceKind][]string) (map[string]Capability, error) {
+// shared specRegistry here and the four-axis merge in ResolveRegistry; class ⑩ (symlinks) needs
+// the real OS path — fs.FS has no lstat — and lives in ResolveRegistry's screening.
+func LoadExternal(fsys fs.FS, requiredFields map[contract.ResourceKind][]string) (Registry, error) {
 	entries, err := fs.ReadDir(fsys, ".")
 	if errors.Is(err, fs.ErrNotExist) {
-		return map[string]Capability{}, nil
+		return Registry{}, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("read external capability root %s: %w", externalRootRel, err)
+		return nil, fmt.Errorf("read external event package root %s: %w", externalRootRel, err)
 	}
 	var names []string
 	for _, e := range entries {
@@ -63,8 +63,8 @@ func LoadExternal(fsys fs.FS, requiredFields map[contract.ResourceKind][]string)
 		}
 	}
 	sort.Strings(names)
-	out := map[string]Capability{}
-	reg := newSpecRegistry()
+	out := Registry{}
+	reg := newRegistryClaims()
 	for _, name := range names {
 		cap, err := loadExternalPackage(fsys, name, requiredFields)
 		if err != nil {
@@ -78,53 +78,53 @@ func LoadExternal(fsys fs.FS, requiredFields map[contract.ResourceKind][]string)
 	return out, nil
 }
 
-func loadExternalPackage(fsys fs.FS, name string, requiredFields map[contract.ResourceKind][]string) (Capability, error) {
+func loadExternalPackage(fsys fs.FS, name string, requiredFields map[contract.ResourceKind][]string) (EventPackage, error) {
 	pkg := externalPkgPath(name)
-	// class ⑨ (pattern first): the directory IS the capability name, which IS the event-family
+	// class ⑨ (pattern first): the directory IS the event package name, which IS the event-family
 	// segment — ONE grammar (specNamePattern, no dash) on both sides of the boundary, so a name
-	// can never pass the directory door and then die in FromSpec (or vice versa). Also kills
+	// can never pass the directory door and then die in CompileExternalSpec (or vice versa). Also kills
 	// case aliasing ("Goal" vs "goal") and path-meaningful names.
 	if !specNamePattern.MatchString(name) {
-		return Capability{}, fmt.Errorf("external package %s: directory name must match %s (fail-closed)", pkg, specNamePattern)
+		return EventPackage{}, fmt.Errorf("external package %s: directory name must match %s (fail-closed)", pkg, specNamePattern)
 	}
 	// Class ⑥ (loop-package-v2): an external package MAY carry host assets, but the hook-fragment
 	// CODE face stays embedded-only and every projected prose asset is injection-scanned.
 	if err := scanExternalPackageAssets(fsys, name, pkg); err != nil {
-		return Capability{}, err
+		return EventPackage{}, err
 	}
 	raw, err := fs.ReadFile(fsys, path.Join(name, "capability.json"))
 	if err != nil {
-		return Capability{}, fmt.Errorf("external package %s: read capability.json: %w", pkg, err)
+		return EventPackage{}, fmt.Errorf("external package %s: read capability.json: %w", pkg, err)
 	}
 	spec, err := decodeSpec(raw) // class ①
 	if err != nil {
-		return Capability{}, fmt.Errorf("external package %s: parse capability.json: %w", pkg, err)
+		return EventPackage{}, fmt.Errorf("external package %s: parse capability.json: %w", pkg, err)
 	}
 	// Class ⑨ (name second), directory-as-declaration: the directory IS the name claim.
 	if spec.Name != name {
-		return Capability{}, fmt.Errorf("external package %s: directory name %q must equal spec name %q (directory-as-declaration)", pkg, name, spec.Name)
+		return EventPackage{}, fmt.Errorf("external package %s: directory name %q must equal spec name %q (directory-as-declaration)", pkg, name, spec.Name)
 	}
-	// classes ②③ + every FromSpec fail-closed check, INCLUDING the G8 kind reservation (class ⑪):
-	// FromSpec rejects a governance/mnemon/reserved-family kind for embedded and external specs
+	// classes ②③ + every CompileExternalSpec fail-closed check, INCLUDING the G8 kind reservation (class ⑪):
+	// CompileExternalSpec rejects a governance/mnemon/reserved-family kind for embedded and external specs
 	// alike, so the external loader no longer needs its own deny-list.
-	cap, err := FromSpec(spec)
+	cap, err := CompileExternalSpec(spec)
 	if err != nil {
-		return Capability{}, fmt.Errorf("external package %s: %w", pkg, err)
+		return EventPackage{}, fmt.Errorf("external package %s: %w", pkg, err)
 	}
 	// Class ⑨ (kind third): directory == name == kind in v1. Enablement derives the catalog entry
 	// from the binding scope KIND — a name/kind divergence would make the package unreachable (or
 	// reachable under a name the operator never wrote).
 	if spec.ResourceKind != spec.Name {
-		return Capability{}, fmt.Errorf("external package %s: spec name %q must equal resource_kind %q (directory == name == kind in v1; enablement derives the catalog entry from the binding scope kind)", pkg, spec.Name, spec.ResourceKind)
+		return EventPackage{}, fmt.Errorf("external package %s: spec name %q must equal resource_kind %q (directory == name == kind in v1; enablement derives the catalog entry from the binding scope kind)", pkg, spec.Name, spec.ResourceKind)
 	}
 	if err := checkExternalSpecIdentifiers(spec); err != nil { // class ⑧ (identifier half)
-		return Capability{}, fmt.Errorf("external package %s: %w", pkg, err)
+		return EventPackage{}, fmt.Errorf("external package %s: %w", pkg, err)
 	}
 	if err := scanExternalSpecText(spec); err != nil { // class ⑧ (value half)
-		return Capability{}, fmt.Errorf("external package %s: %w", pkg, err)
+		return EventPackage{}, fmt.Errorf("external package %s: %w", pkg, err)
 	}
 	if err := headerCoversRequired(spec, requiredFields); err != nil { // class ⑦
-		return Capability{}, fmt.Errorf("external package %s: %w", pkg, err)
+		return EventPackage{}, fmt.Errorf("external package %s: %w", pkg, err)
 	}
 	return cap, nil
 }
@@ -136,8 +136,8 @@ func loadExternalPackage(fsys fs.FS, name string, requiredFields map[contract.Re
 // they are pattern-locked, fail-closed, naming the offending identifier (the caller prefixes the
 // package path). The spec name needs no entry here: it is pattern-locked via directory == name
 // (class ⑨). Validator field REFERENCES (default-from, bullet-list) resolve to declared fields
-// in FromSpec, so they are transitively covered.
-func checkExternalSpecIdentifiers(spec CapabilitySpec) error {
+// in CompileExternalSpec, so they are transitively covered.
+func checkExternalSpecIdentifiers(spec ExternalSpec) error {
 	if !externalIdentifierPattern.MatchString(spec.ItemsField) {
 		return fmt.Errorf("spec identifier items_field %q must match %s (fail-closed)", spec.ItemsField, externalIdentifierPattern)
 	}
@@ -161,7 +161,7 @@ func checkExternalSpecIdentifiers(spec CapabilitySpec) error {
 // deny messages, governed items, and rendered governed content; embedded spec text is reviewed
 // code (pinned by the golden tests), external spec text is untrusted input — scanned at load
 // time, fail-closed. External path only by design.
-func scanExternalSpecText(spec CapabilitySpec) error {
+func scanExternalSpecText(spec ExternalSpec) error {
 	type surface struct{ where, text string }
 	surfaces := []surface{{"name", spec.Name}}
 	for _, f := range spec.Fields {
@@ -188,7 +188,7 @@ func scanExternalSpecText(spec CapabilitySpec) error {
 	return nil
 }
 
-// scanExternalPackageAssets is the loop-package-v2 host-asset safety gate at the capability-loader
+// scanExternalPackageAssets is the loop-package-v2 host-asset safety gate at the external loader
 // level (class ⑥, no longer a blanket reject): an external package MAY carry host assets, but
 //   - the hook-fragment CODE face stays embedded-only: hooks/fragments/ presence fails closed (the
 //     renderer never reads an external fragment, but its presence must fail LOUD, not silently
@@ -199,7 +199,7 @@ func scanExternalSpecText(spec CapabilitySpec) error {
 //
 // The deeper STRUCTURAL checks — the `include` intent, a template `external_id_recipe`, and that a
 // control-observe action's event_type equals the package's own observed_type — run in the projector
-// loader where the schema-aware parsers live (loop-package-v2 enforcement map); a capability leaf
+// loader where the schema-aware parsers live (loop-package-v2 enforcement map); an event package leaf
 // must not duplicate the hostagent intents/template schema.
 func scanExternalPackageAssets(fsys fs.FS, name, pkg string) error {
 	if _, err := fs.Stat(fsys, path.Join(name, "hooks", "fragments")); err == nil {
@@ -257,12 +257,12 @@ func sortedStaticKeys(static map[string]string) []string {
 	return keys
 }
 
-// headerCoversRequired is the load-time kernel-schema lockstep (class ⑦): the keys a capability's
+// headerCoversRequired is the load-time kernel-schema lockstep (class ⑦): the keys an event package's
 // write STATICALLY produces — render static keys, "content" when a content member is selected,
 // the items field, and the stamped "updated_by" — must cover every field requiredFields demands
 // for the kind. Derived from the spec alone (no payload synthesis), so a package that could only
 // ever produce kernel-rejected writes fails at load, not at runtime.
-func headerCoversRequired(spec CapabilitySpec, requiredFields map[contract.ResourceKind][]string) error {
+func headerCoversRequired(spec ExternalSpec, requiredFields map[contract.ResourceKind][]string) error {
 	produced := map[string]bool{spec.ItemsField: true, "updated_by": true}
 	for k := range spec.Render.Static {
 		produced[k] = true
@@ -278,13 +278,13 @@ func headerCoversRequired(spec CapabilitySpec, requiredFields map[contract.Resou
 	return nil
 }
 
-// ResolveCatalog builds the boot capability catalog: the embedded Builtins plus every external
-// capability package under <projectRoot>/.mnemon/loops — the ONLY external root in v1. It is the
+// ResolveRegistry builds the boot event package registry: the standard registry plus every external
+// event package under <projectRoot>/.mnemon/loops — the ONLY external root in v1. It is the
 // one production entry point: symlink screening on the real path (class ⑩), LoadExternal over
 // os.DirFS, then a merge with FOUR-axis shadowing rejection (name, observed type, proposed type,
-// resource kind) — an external package may never shadow an embedded capability, and two externals
-// may not share a kind. A missing .mnemon/loops resolves to the embedded catalog.
-func ResolveCatalog(projectRoot string, requiredFields map[contract.ResourceKind][]string) (map[string]Capability, error) {
+// resource kind) — an external package may never shadow a standard event package, and two externals
+// may not share a kind. A missing .mnemon/loops resolves to the standard registry.
+func ResolveRegistry(projectRoot string, requiredFields map[contract.ResourceKind][]string) (Registry, error) {
 	rootDir := filepath.Join(projectRoot, filepath.FromSlash(externalRootRel))
 	if err := screenExternalSymlinks(rootDir); err != nil {
 		return nil, err
@@ -293,7 +293,7 @@ func ResolveCatalog(projectRoot string, requiredFields map[contract.ResourceKind
 	if err != nil {
 		return nil, err
 	}
-	return mergeExternal(embeddedCatalog, external)
+	return mergeExternalPackages(standardRegistry, external)
 }
 
 // screenExternalSymlinks is fault class ⑩, on the REAL path because fs.FS has no lstat: the
@@ -305,17 +305,17 @@ func ResolveCatalog(projectRoot string, requiredFields map[contract.ResourceKind
 func screenExternalSymlinks(rootDir string) error {
 	if fi, err := os.Lstat(rootDir); err == nil {
 		if fi.Mode()&fs.ModeSymlink != 0 {
-			return fmt.Errorf("external capability root %s: symlinked root directory rejected (fail-closed)", externalRootRel)
+			return fmt.Errorf("external event package root %s: symlinked root directory rejected (fail-closed)", externalRootRel)
 		}
 	} else if !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("lstat external capability root %s: %w", externalRootRel, err)
+		return fmt.Errorf("lstat external event package root %s: %w", externalRootRel, err)
 	}
 	entries, err := os.ReadDir(rootDir)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("read external capability root %s: %w", externalRootRel, err)
+		return fmt.Errorf("read external event package root %s: %w", externalRootRel, err)
 	}
 	for _, e := range entries {
 		pkg := externalPkgPath(e.Name())
@@ -332,18 +332,18 @@ func screenExternalSymlinks(rootDir string) error {
 	return nil
 }
 
-// mergeExternal merges the external catalog into a FRESH copy of the embedded one with four-axis
-// shadowing rejection. The first three axes reuse the shared specRegistry; the resource-kind axis
-// is merge-time only: external may not claim a kind an embedded capability claims, and two
+// mergeExternalPackages merges the external catalog into a FRESH copy of the standard registry with
+// four-axis shadowing rejection. The first three axes reuse the shared registry claims; the resource-kind axis
+// is merge-time only: external may not claim a kind a standard event package claims, and two
 // externals may not share a kind (each external package owns its event family AND its kind).
 // Deterministic order (sorted names) keeps the first error stable.
-func mergeExternal(embedded, external map[string]Capability) (map[string]Capability, error) {
-	merged := make(map[string]Capability, len(embedded)+len(external))
-	reg := newSpecRegistry()
+func mergeExternalPackages(embedded, external Registry) (Registry, error) {
+	merged := make(Registry, len(embedded)+len(external))
+	reg := newRegistryClaims()
 	kinds := map[contract.ResourceKind]string{}
 	for _, n := range sortedKeys(embedded) {
 		c := embedded[n]
-		if err := reg.claim("embedded capability "+n, c); err != nil {
+		if err := reg.claim("standard event package "+n, c); err != nil {
 			return nil, err
 		}
 		kinds[c.ResourceKind] = c.Name
@@ -356,7 +356,7 @@ func mergeExternal(embedded, external map[string]Capability) (map[string]Capabil
 			return nil, err
 		}
 		if prev, dup := kinds[c.ResourceKind]; dup {
-			return nil, fmt.Errorf("%s: resource_kind %q already claimed by capability %q (external packages may not shadow)", src, c.ResourceKind, prev)
+			return nil, fmt.Errorf("%s: resource_kind %q already claimed by event package %q (external packages may not shadow)", src, c.ResourceKind, prev)
 		}
 		kinds[c.ResourceKind] = c.Name
 		merged[n] = c
@@ -364,7 +364,7 @@ func mergeExternal(embedded, external map[string]Capability) (map[string]Capabil
 	return merged, nil
 }
 
-func sortedKeys(m map[string]Capability) []string {
+func sortedKeys(m Registry) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)

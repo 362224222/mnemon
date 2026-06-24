@@ -21,7 +21,7 @@ var (
 )
 
 // setup is the everyday install front door: it installs the static R1 host shim and wires the Local
-// Mnemon channel artifacts a host agent uses. --loop enables optional capability scope; it does not
+// Mnemon channel artifacts a host agent uses. --loop enables optional event package scope; it does not
 // project host assets on the R1 path.
 var setupCmd = &cobra.Command{
 	Use:   "setup --host HOST [--loop LOOP ...]",

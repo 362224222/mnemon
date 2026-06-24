@@ -14,14 +14,14 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
-// fixtureCatalog is EmbeddedCatalog() plus the DEMOTED note/decision policies, compiled from their
+// fixtureCatalog is StandardRegistry() plus the DEMOTED note/decision policies, compiled from their
 // canonical fixture specs (mnemond/policy/testdata/capabilities/*.json — formerly embedded, now
 // supplied the way an external package would supply them). Mirrors the shape the boot path gets
-// from policy.ResolveCatalog when the operator lays the packages under .mnemon/loops.
-func fixtureCatalog(t *testing.T, names ...string) map[string]policy.Capability {
+// from policy.ResolveRegistry when the operator lays the packages under .mnemon/loops.
+func fixtureCatalog(t *testing.T, names ...string) policy.Registry {
 	t.Helper()
-	catalog := map[string]policy.Capability{}
-	for id, c := range policy.EmbeddedCatalog() {
+	catalog := policy.Registry{}
+	for id, c := range policy.StandardRegistry() {
 		catalog[id] = c
 	}
 	fixtures := os.DirFS(filepath.Join("..", "mnemond", "policy", "testdata"))
@@ -30,7 +30,7 @@ func fixtureCatalog(t *testing.T, names ...string) map[string]policy.Capability 
 		if err != nil {
 			t.Fatalf("load fixture spec %s: %v", name, err)
 		}
-		cap, err := policy.FromSpec(spec)
+		cap, err := policy.CompileExternalSpec(spec)
 		if err != nil {
 			t.Fatalf("compile fixture spec %s: %v", name, err)
 		}
@@ -39,16 +39,16 @@ func fixtureCatalog(t *testing.T, names ...string) map[string]policy.Capability 
 	return catalog
 }
 
-// A 3rd capability (note) stands up end-to-end through config + the generic kind alone — no new rule
+// A 3rd event package (note) stands up end-to-end through config + the generic kind alone — no new rule
 // code: Assemble selects the note rule from the provided catalog (note is a fixture/external-package
-// capability since the P1 demotion, not a builtin) and admits a note candidate through the
+// event package since the P1 demotion, not a standard package) and admits a note candidate through the
 // channel -> tick -> kernel -> view.
-func TestAssembleAdmitsConfiguredNoteCapabilityEndToEnd(t *testing.T) {
+func TestAssembleAdmitsConfiguredNoteEventPackageEndToEnd(t *testing.T) {
 	ref := contract.ResourceRef{Kind: "note", ID: "project"}
 	binding := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
 	binding.AllowedObservedTypes = []string{"note.write_candidate.observed"}
 
-	cfg := config.File{Capabilities: map[string]config.CapabilityConfig{
+	cfg := config.File{EventPackages: map[string]config.EventPackageConfig{
 		"note": {Enabled: true, ResourceRef: "note/project", RuleRef: "native:note"},
 	}}
 	rc, err := Assemble(cfg, []access.ChannelBinding{binding}, fixtureCatalog(t, "note"))
@@ -76,14 +76,14 @@ func TestAssembleAdmitsConfiguredNoteCapabilityEndToEnd(t *testing.T) {
 		t.Fatalf("read note: %v", err)
 	}
 	if v == 0 {
-		t.Fatal("the configured note capability must admit a candidate (resource not created)")
+		t.Fatal("the configured note event package must admit a candidate (resource not created)")
 	}
 	if content, _ := fields["content"].(string); !strings.Contains(content, "remember the assembler") {
 		t.Fatalf("note content missing the candidate: %q", content)
 	}
 }
 
-// PD2 declared kinds: a capability whose resource kind is NOT in the compiled
+// PD2 declared kinds: an event package whose resource kind is NOT in the compiled
 // state.DefaultSchemaGuard (a genuinely declared user kind) boots end-to-end — Assemble registers
 // its required header in the RuntimeConfig.SchemaGuard, and the live kernel admits its candidate.
 // This is the assembly-time declared kind set: the live known-kind set is governance ∪ enabled caps.
@@ -91,7 +91,7 @@ func TestAssembleRegistersDeclaredKindNotInDefaultGuard(t *testing.T) {
 	if _, compiled := state.DefaultSchemaGuard().Required["widget"]; compiled {
 		t.Fatal("precondition: widget must NOT be a compiled kind for this test to prove declared-kind registration")
 	}
-	widgetSpec := policy.CapabilitySpec{
+	widgetSpec := policy.ExternalSpec{
 		SchemaVersion: 1, Name: "widget",
 		ObservedType: "widget.write_candidate.observed", ProposedType: "widget.write.proposed",
 		ResourceKind: "widget", ItemsField: "items",
@@ -101,22 +101,22 @@ func TestAssembleRegistersDeclaredKindNotInDefaultGuard(t *testing.T) {
 		Render: policy.RenderSpec{Content: &policy.ContentRender{
 			Member: "bullet-list", Params: map[string]string{"title": "# Widgets", "field": "text"}}},
 	}
-	widgetCap, err := policy.FromSpec(widgetSpec)
+	widgetCap, err := policy.CompileExternalSpec(widgetSpec)
 	if err != nil {
 		t.Fatalf("a declared (non-reserved) kind must compile: %v", err)
 	}
 	ref := contract.ResourceRef{Kind: "widget", ID: "project"}
 	binding := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
 	binding.AllowedObservedTypes = []string{"widget.write_candidate.observed"}
-	cfg := config.File{Capabilities: map[string]config.CapabilityConfig{
+	cfg := config.File{EventPackages: map[string]config.EventPackageConfig{
 		"widget": {Enabled: true, ResourceRef: "widget/project", RuleRef: "native:widget"},
 	}}
-	rc, err := Assemble(cfg, []access.ChannelBinding{binding}, map[string]policy.Capability{"widget": widgetCap})
+	rc, err := Assemble(cfg, []access.ChannelBinding{binding}, policy.Registry{"widget": widgetCap})
 	if err != nil {
 		t.Fatalf("assemble: %v", err)
 	}
 	if _, known := rc.SchemaGuard.Required["widget"]; !known {
-		t.Fatal("Assemble must register the declared kind's schema guard entry from the capability")
+		t.Fatal("Assemble must register the declared kind's schema guard entry from the event package")
 	}
 	rt, err := runtime.OpenRuntime(filepath.Join(t.TempDir(), "g.db"), rc)
 	if err != nil {
@@ -137,11 +137,11 @@ func TestAssembleRegistersDeclaredKindNotInDefaultGuard(t *testing.T) {
 	}
 }
 
-// Stage-5: Assemble selects from the PROVIDED catalog — a capability that exists only in an
+// Stage-5: Assemble selects from the PROVIDED catalog — an event package that exists only in an
 // external package (goal) resolves when the resolved catalog is passed, and fails closed when the
-// caller passes nil (nil = policy.EmbeddedCatalog(), the backward-compatible seam).
+// caller passes nil (nil = policy.StandardRegistry(), the backward-compatible seam).
 func TestAssembleResolvesFromProvidedCatalog(t *testing.T) {
-	goalSpec := policy.CapabilitySpec{
+	goalSpec := policy.ExternalSpec{
 		SchemaVersion: 1, Name: "goal",
 		ObservedType: "goal.write_candidate.observed", ProposedType: "goal.write.proposed",
 		ResourceKind: "goal", ItemsField: "items",
@@ -153,24 +153,24 @@ func TestAssembleResolvesFromProvidedCatalog(t *testing.T) {
 			Static:  map[string]string{"statement": "project"},
 		},
 	}
-	goalCap, err := policy.FromSpec(goalSpec)
+	goalCap, err := policy.CompileExternalSpec(goalSpec)
 	if err != nil {
 		t.Fatalf("compile goal spec: %v", err)
 	}
-	catalog := map[string]policy.Capability{"goal": goalCap}
-	for id, c := range policy.EmbeddedCatalog() {
+	catalog := policy.Registry{"goal": goalCap}
+	for id, c := range policy.StandardRegistry() {
 		catalog[id] = c
 	}
 
 	ref := contract.ResourceRef{Kind: "goal", ID: "project"}
 	binding := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
 	binding.AllowedObservedTypes = []string{"goal.write_candidate.observed"}
-	cfg := config.File{Capabilities: map[string]config.CapabilityConfig{
+	cfg := config.File{EventPackages: map[string]config.EventPackageConfig{
 		"goal": {Enabled: true, ResourceRef: "goal/project", RuleRef: "native:goal"},
 	}}
 
 	if _, err := Assemble(cfg, []access.ChannelBinding{binding}, nil); err == nil {
-		t.Fatal("native:goal must fail closed against the nil (EmbeddedCatalog()) catalog")
+		t.Fatal("native:goal must fail closed against the nil (StandardRegistry()) catalog")
 	}
 	rc, err := Assemble(cfg, []access.ChannelBinding{binding}, catalog)
 	if err != nil {
@@ -193,46 +193,46 @@ func TestAssembleResolvesFromProvidedCatalog(t *testing.T) {
 	}
 	v, fields, err := rt.Resource(ref)
 	if err != nil || v == 0 {
-		t.Fatalf("the catalog-selected goal capability must admit (v=%d err=%v)", v, err)
+		t.Fatalf("the catalog-selected goal event package must admit (v=%d err=%v)", v, err)
 	}
 	if content, _ := fields["content"].(string); !strings.Contains(content, "ship stage five") {
 		t.Fatalf("goal content missing the candidate: %q", content)
 	}
 }
 
-func TestAssembleFailsClosedOnUnknownCapability(t *testing.T) {
-	cfg := config.File{Capabilities: map[string]config.CapabilityConfig{
+func TestAssembleFailsClosedOnUnknownEventPackage(t *testing.T) {
+	cfg := config.File{EventPackages: map[string]config.EventPackageConfig{
 		"bogus": {Enabled: true, ResourceRef: "bogus/project", RuleRef: "native:bogus"},
 	}}
 	if _, err := Assemble(cfg, nil, nil); err == nil {
-		t.Fatal("an unknown capability rule_ref must fail closed")
+		t.Fatal("an unknown event package rule_ref must fail closed")
 	}
 }
 
 // The demotion nail: config enables note but NO external package supplies its spec (nil
-// catalog = EmbeddedCatalog()) — Assemble must land on the
+// catalog = StandardRegistry()) — Assemble must land on the
 // 'unknown rule_ref' fail-closed path, never a silent no-op or a builtin fallback.
 func TestAssembleFailsClosedOnNoteWithoutExternalPackage(t *testing.T) {
-	cfg := config.File{Capabilities: map[string]config.CapabilityConfig{
+	cfg := config.File{EventPackages: map[string]config.EventPackageConfig{
 		"note": {Enabled: true, ResourceRef: "note/project", RuleRef: "native:note"},
 	}}
 	_, err := Assemble(cfg, nil, nil)
 	if err == nil {
-		t.Fatal("native:note without an external package must fail closed against the EmbeddedCatalog() catalog")
+		t.Fatal("native:note without an external package must fail closed against the StandardRegistry() catalog")
 	}
 	if !strings.Contains(err.Error(), `unknown rule_ref "native:note"`) {
 		t.Fatalf("want the 'unknown rule_ref' fail-closed diagnostic, got %v", err)
 	}
 }
 
-// A binding scoped to a non-default ref of the capability's kind must get a rule targeting ITS ref
+// A binding scoped to a non-default ref of the event package's kind must get a rule targeting ITS ref
 // (parity with the production binding-scope fallback), not the config-pinned default.
 func TestAssembleDerivesRefFromBindingScope(t *testing.T) {
 	teamRef := contract.ResourceRef{Kind: "progress_digest", ID: "team"}
 	binding := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{teamRef})
 	binding.AllowedObservedTypes = []string{"progress_digest.write_candidate.observed"}
 
-	cfg := config.File{Capabilities: map[string]config.CapabilityConfig{
+	cfg := config.File{EventPackages: map[string]config.EventPackageConfig{
 		"progress_digest": {Enabled: true, ResourceRef: "progress_digest/project", RuleRef: "native:progress_digest"},
 	}}
 	rc, err := Assemble(cfg, []access.ChannelBinding{binding}, nil)
@@ -270,7 +270,7 @@ func TestAssembleSkipsUnscopedBinding(t *testing.T) {
 	binding := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", nil)
 	binding.AllowedObservedTypes = []string{"progress_digest.write_candidate.observed"}
 
-	cfg := config.File{Capabilities: map[string]config.CapabilityConfig{
+	cfg := config.File{EventPackages: map[string]config.EventPackageConfig{
 		"progress_digest": {Enabled: true, ResourceRef: "progress_digest/project", RuleRef: "native:progress_digest"},
 	}}
 	rc, err := Assemble(cfg, []access.ChannelBinding{binding}, nil)
@@ -303,7 +303,7 @@ func TestAssembleSkipsUnscopedBinding(t *testing.T) {
 // rule_ref 必须携带命名空间前缀:裸 id 在 Assemble 这道生产 seam
 // 上 fail-closed —— 为未来的 wasm: 等命名空间立规,与 config.Load 的校验双门一致。
 func TestAssembleRejectsBareRuleRef(t *testing.T) {
-	cfg := config.File{Capabilities: map[string]config.CapabilityConfig{
+	cfg := config.File{EventPackages: map[string]config.EventPackageConfig{
 		"progress_digest": {Enabled: true, ResourceRef: "progress_digest/project", RuleRef: "progress_digest"}, // 缺 native: 前缀
 	}}
 	if _, err := Assemble(cfg, nil, nil); err == nil {
@@ -314,12 +314,12 @@ func TestAssembleRejectsBareRuleRef(t *testing.T) {
 // 阶段二验收(P1 降级后):第四能力 decision 的全部 Go 足迹 = KindCatalog/SchemaGuard 各一行;
 // 行为完全来自 spec 文件(mnemond/policy/testdata/capabilities/decision.json,经 P1 降级为
 // fixture/外部包供给——曾内嵌于 assets)。端到端与 note 同构。
-func TestAssembleAdmitsDecisionCapabilityEndToEnd(t *testing.T) {
+func TestAssembleAdmitsDecisionEventPackageEndToEnd(t *testing.T) {
 	ref := contract.ResourceRef{Kind: "decision", ID: "project"}
 	binding := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
 	binding.AllowedObservedTypes = []string{"decision.write_candidate.observed"}
 
-	cfg := config.File{Capabilities: map[string]config.CapabilityConfig{
+	cfg := config.File{EventPackages: map[string]config.EventPackageConfig{
 		"decision": {Enabled: true, ResourceRef: "decision/project", RuleRef: "native:decision"},
 	}}
 	rc, err := Assemble(cfg, []access.ChannelBinding{binding}, fixtureCatalog(t, "decision"))
@@ -342,7 +342,7 @@ func TestAssembleAdmitsDecisionCapabilityEndToEnd(t *testing.T) {
 	}
 	v, fields, err := rt.Resource(ref)
 	if err != nil || v == 0 {
-		t.Fatalf("decision capability must admit (v=%d err=%v)", v, err)
+		t.Fatalf("decision event package must admit (v=%d err=%v)", v, err)
 	}
 	if content, _ := fields["content"].(string); !strings.Contains(content, "adopt the spec catalogs") {
 		t.Fatalf("decision content missing the candidate: %q", content)
@@ -352,15 +352,15 @@ func TestAssembleAdmitsDecisionCapabilityEndToEnd(t *testing.T) {
 // Header⊇SchemaGuard 锁步:每个内置能力的渲染产物必须覆盖其 kind 的全部必填字段——
 // 否则 spec 文件能声明一个 kernel 永远拒绝的能力(装配期可发现的缺陷不留到运行期)。
 func TestBuiltinHeadersSatisfySchemaGuard(t *testing.T) {
-	// Post-graduation, a kind's required header IS the capability's RequiredHeader (the assembler
+	// Post-graduation, a kind's required header IS the event package's RequiredHeader (the assembler
 	// registers it). Build the guard from the caps and assert each cap's rendered fields satisfy its
 	// own kind's required — the render⊇required lockstep, now derived from the spec.
 	extra := map[contract.ResourceKind][]string{}
-	for _, cap := range policy.EmbeddedCatalog() {
+	for _, cap := range policy.StandardRegistry() {
 		extra[cap.ResourceKind] = cap.RequiredHeader
 	}
 	guard := state.SchemaGuardWith(extra)
-	for id, cap := range policy.EmbeddedCatalog() {
+	for id, cap := range policy.StandardRegistry() {
 		item, err := cap.Decode(minimalAcceptPayload(id))
 		if err != nil {
 			t.Fatalf("%s: decode minimal accept: %v", id, err)

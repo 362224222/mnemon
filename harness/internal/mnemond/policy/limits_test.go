@@ -9,7 +9,7 @@ import (
 )
 
 func TestAppendItemRuleEnforcesMaxPayloadBytes(t *testing.T) {
-	cap := EmbeddedCatalog()["progress_digest"]
+	cap := StandardRegistry()["progress_digest"]
 	r := cap.Rule("codex@project", contract.ResourceRef{Kind: cap.ResourceKind, ID: "project"},
 		Limits{MaxPayloadBytes: 64})
 	dec, err := r.Evaluate(admission.RuleInput{Event: contract.Event{
@@ -31,7 +31,7 @@ func TestAppendItemRuleEnforcesMaxPayloadBytes(t *testing.T) {
 }
 
 func TestAppendItemRuleZeroLimitMeansUnbounded(t *testing.T) {
-	cap := EmbeddedCatalog()["progress_digest"]
+	cap := StandardRegistry()["progress_digest"]
 	r := cap.Rule("codex@project", contract.ResourceRef{Kind: cap.ResourceKind, ID: "project"}, Limits{})
 	dec, err := r.Evaluate(admission.RuleInput{Event: contract.Event{
 		Type:  cap.ObservedType,

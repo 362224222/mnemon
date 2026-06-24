@@ -13,14 +13,14 @@ import (
 // entryDedupImport is the "entry-dedup" remote-import strategy. It merges non-conflicting
 // entries from a remote material into the resource's entry list, synthesizes one entry from a bare
 // content field when needed, and rejects same-id/different-content conflicts. The strategy is
-// parameterized by the capability descriptor, so it carries no product-kind literal.
-func entryDedupImport(cap Capability, in admission.RuleInput) (contract.RuleDecision, error) {
+// parameterized by the event package descriptor, so it carries no product-kind literal.
+func entryDedupImport(cap EventPackage, in admission.RuleInput) (contract.RuleDecision, error) {
 	material, err := decodeRemoteSyncedEventMaterial(in.Event.Payload)
 	if err != nil {
 		return contract.RuleDecision{Verdict: contract.VerdictDeny, Reasons: []string{err.Error()}}, nil
 	}
 	if material.ResourceRef.Kind != cap.ResourceKind {
-		return contract.RuleDecision{Verdict: contract.VerdictDeny, Reasons: []string{"remote import denied: resource kind does not match the importing capability"}}, nil
+		return contract.RuleDecision{Verdict: contract.VerdictDeny, Reasons: []string{"remote import denied: resource kind does not match the importing event package"}}, nil
 	}
 	incoming := entryItemsFromFields(material.Fields)
 	if len(incoming) == 0 {

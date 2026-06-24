@@ -18,7 +18,7 @@ const gateActor = contract.ActorID("codex@project")
 func gateRuntime(t *testing.T) *runtime.Runtime {
 	t.Helper()
 	ref := contract.ResourceRef{Kind: "progress_digest", ID: "project"}
-	cap := policy.EmbeddedCatalog()["progress_digest"]
+	cap := policy.StandardRegistry()["progress_digest"]
 	rt, err := runtime.OpenRuntime(filepath.Join(t.TempDir(), "g.db"), runtime.RuntimeConfig{
 		Rules:       admission.NewRuleSet(cap.Rule(gateActor, ref, policy.Limits{})),
 		Authority:   state.AuthorityRules{Allow: map[contract.ActorID][]contract.ResourceKind{gateActor: {"progress_digest"}}},
@@ -186,7 +186,7 @@ func TestReplayAndShadowHonorIngestSeqOverSliceOrder(t *testing.T) {
 	subs := map[contract.ActorID]contract.Subscription{
 		gateActor: {Actor: gateActor, Refs: []contract.ResourceRef{{Kind: "progress_digest", ID: "project"}}},
 	}
-	live := admission.NewRuleSet(policy.EmbeddedCatalog()["progress_digest"].Rule(gateActor, contract.ResourceRef{Kind: "progress_digest", ID: "project"}, policy.Limits{}))
+	live := admission.NewRuleSet(policy.StandardRegistry()["progress_digest"].Rule(gateActor, contract.ResourceRef{Kind: "progress_digest", ID: "project"}, policy.Limits{}))
 	a := Shadow(events, subs, live, live)
 	b := Shadow(reversed, subs, live, live)
 	if a != b {

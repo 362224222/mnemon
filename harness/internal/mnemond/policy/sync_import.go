@@ -8,11 +8,11 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
 )
 
-// RemoteImportRule builds the remote-import admission rule for one importable capability and the sync
-// import principal: it observes the capability's system-derived <kind>.remote_synced_event.observed event
-// and dispatches to the capability's declared (closed-set) merge strategy. Returns ok=false when the
-// capability is not importable (the caller skips it).
-func RemoteImportRule(cap Capability, principal contract.ActorID) (admission.Rule, bool) {
+// RemoteImportRule builds the remote-import admission rule for one importable event package and the
+// sync import principal: it observes the package's system-derived <kind>.remote_synced_event.observed
+// event and dispatches to the package's declared merge strategy. Returns ok=false when the package is
+// not importable.
+func RemoteImportRule(cap EventPackage, principal contract.ActorID) (admission.Rule, bool) {
 	if !cap.Sync.Importable {
 		return nil, false
 	}
@@ -29,8 +29,8 @@ func RemoteImportRule(cap Capability, principal contract.ActorID) (admission.Rul
 		}), true
 }
 
-// importStrategy maps a (FromSpec-validated) merge-strategy name to its closed-set implementation.
-func importStrategy(merge string) func(Capability, admission.RuleInput) (contract.RuleDecision, error) {
+// importStrategy maps a (CompileExternalSpec-validated) merge-strategy name to its closed-set implementation.
+func importStrategy(merge string) func(EventPackage, admission.RuleInput) (contract.RuleDecision, error) {
 	switch merge {
 	case "entry-dedup":
 		return entryDedupImport
@@ -43,9 +43,9 @@ func importStrategy(merge string) func(Capability, admission.RuleInput) (contrac
 	}
 }
 
-// RemoteImportRules builds the remote-import rules for every importable capability in the catalog,
+// RemoteImportRules builds the remote-import rules for every importable event package in the catalog,
 // sorted by kind for determinism.
-func RemoteImportRules(catalog map[string]Capability, principal contract.ActorID) []admission.Rule {
+func RemoteImportRules(catalog Registry, principal contract.ActorID) []admission.Rule {
 	var rules []admission.Rule
 	for _, cap := range sortedImportable(catalog) {
 		if r, ok := RemoteImportRule(cap, principal); ok {
@@ -57,7 +57,7 @@ func RemoteImportRules(catalog map[string]Capability, principal contract.ActorID
 
 // ImportableKinds returns the resource kinds the catalog imports from Remote Workspace pulls, sorted
 // — the descriptor-derived syncable-kind set (PD6).
-func ImportableKinds(catalog map[string]Capability) []contract.ResourceKind {
+func ImportableKinds(catalog Registry) []contract.ResourceKind {
 	var kinds []contract.ResourceKind
 	for _, cap := range sortedImportable(catalog) {
 		kinds = append(kinds, cap.ResourceKind)
@@ -67,7 +67,7 @@ func ImportableKinds(catalog map[string]Capability) []contract.ResourceKind {
 
 // RemoteSyncedEventType returns the import observation event type for a pulled material kind when the
 // catalog imports that kind — the descriptor-derived replacement for the hardcoded kind→type switch.
-func RemoteSyncedEventType(catalog map[string]Capability, kind contract.ResourceKind) (string, bool) {
+func RemoteSyncedEventType(catalog Registry, kind contract.ResourceKind) (string, bool) {
 	for _, cap := range catalog {
 		if cap.Sync.Importable && cap.ResourceKind == kind {
 			return cap.RemoteSyncedEventObserved(), true
@@ -76,8 +76,8 @@ func RemoteSyncedEventType(catalog map[string]Capability, kind contract.Resource
 	return "", false
 }
 
-func sortedImportable(catalog map[string]Capability) []Capability {
-	var caps []Capability
+func sortedImportable(catalog Registry) []EventPackage {
+	var caps []EventPackage
 	for _, cap := range catalog {
 		if cap.Sync.Importable {
 			caps = append(caps, cap)

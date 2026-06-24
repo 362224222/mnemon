@@ -17,13 +17,11 @@ type Limits struct {
 	MaxPayloadBytes int
 }
 
-// Capability is the descriptor that turns config selection into one compiled rule kind.
-// Capabilities admit a candidate through the SAME generic append-item-to-resource rule
-// (appendItemRule); they differ only by DATA — the observed/proposed types, the resource kind, the
-// item-list field, how a payload decodes to an Item, and the resource "header" fields a write carries
-// (for example rendered content or a static name). A new capability is a new descriptor + config,
-// not new rule code.
-type Capability struct {
+// EventPackage is the internal mnemond descriptor that turns one event family into a compiled
+// governance policy. Event packages admit a candidate through the SAME generic
+// append-item-to-resource rule; they differ only by typed policy data: event types, resource kind,
+// item-list field, payload decoding, rendered/header fields, sync import, and risk/default flags.
+type EventPackage struct {
 	Name         string
 	ObservedType string
 	ProposedType string
@@ -48,33 +46,31 @@ type Capability struct {
 	Limits Limits
 }
 
+// Registry is mnemond's compiled event package universe for one boot.
+type Registry map[string]EventPackage
+
 type SyncOptions struct {
 	Importable bool
 	Merge      string
 }
 
 // RemoteSyncedEventObserved is the event type the platform mints for a pulled remote material of this kind
-// (the system-derived sync-import observation form, capability-spec v2 grammar). The import rule
+// (the system-derived sync-import observation form). The import rule
 // observes it; the puller emits it.
-func (c Capability) RemoteSyncedEventObserved() string {
+func (c EventPackage) RemoteSyncedEventObserved() string {
 	return string(c.ResourceKind) + ".remote_synced_event.observed"
 }
 
-// Rule builds the capability's admission rule for one principal + resource ref. limits bounds the
-// capability (MaxPayloadBytes; 0 = unbounded — the 1 MiB channel body cap still applies upstream)
-// without changing the compiled kind.
-//
-// Deviation from the locked Phase-2 signature Rule(..., cfg config.CapabilityConfig)
-// (plan-control-plane.md:241): the same plan locks capability as a rule/presentation-view/contract-only
-// leaf (:51,:61); the leaf wins, and the assembler maps config.CapabilityConfig -> Limits.
-func (c Capability) Rule(principal contract.ActorID, ref contract.ResourceRef, limits Limits) admission.Rule {
+// Rule builds the event package's admission rule for one principal + resource ref. limits bounds the
+// payload size without changing the compiled kind.
+func (c EventPackage) Rule(principal contract.ActorID, ref contract.ResourceRef, limits Limits) admission.Rule {
 	return appendItemRule(c, principal, ref, limits)
 }
 
 // appendItemRule is the ONE generic kind: decode the candidate to an Item, stamp trusted id/actor/seq,
-// append it to the resource's item list, and propose a write carrying the item list + the capability's
+// append it to the resource's item list, and propose a write carrying the item list + the package's
 // header fields + updated_by. It only acts on events from its own principal.
-func appendItemRule(c Capability, principal contract.ActorID, ref contract.ResourceRef, limits Limits) admission.Rule {
+func appendItemRule(c EventPackage, principal contract.ActorID, ref contract.ResourceRef, limits Limits) admission.Rule {
 	return admission.NewNativeRule("local-"+c.Name+"-admission:"+string(principal), principal, c.ProposedType, []string{c.ObservedType},
 		func(in admission.RuleInput) (contract.RuleDecision, error) {
 			if in.Event.Actor != principal {

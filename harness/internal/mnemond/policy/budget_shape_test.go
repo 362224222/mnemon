@@ -20,7 +20,7 @@ func makeBudgetItems(n int) []any {
 // P4b: ShapeByBudget caps the item COUNT per tier and RE-RENDERS the header over the kept tail, so a
 // content-rendered surface actually shrinks. hot = full; warm = recent 8; digest-only = recent 1.
 func TestShapeByBudgetCapsItemsAndRerenders(t *testing.T) {
-	cap := EmbeddedCatalog()["progress_digest"] // items_field=items, content render = bullet-list of summary
+	cap := StandardRegistry()["progress_digest"] // items_field=items, content render = bullet-list of summary
 	if cap.ItemsField != "items" {
 		t.Fatalf("fixture: progress_digest must have items_field=items, got %q", cap.ItemsField)
 	}
@@ -64,7 +64,7 @@ func TestShapeByBudgetCapsItemsAndRerenders(t *testing.T) {
 
 // hot is an exact passthrough — the SAME map, so an unbudgeted surface is byte-identical to today.
 func TestShapeByBudgetHotIsIdentity(t *testing.T) {
-	cap := EmbeddedCatalog()["assignment"]
+	cap := StandardRegistry()["assignment"]
 	fields := map[string]any{"items": makeBudgetItems(20), "updated_by": "x"}
 	if got := ShapeByBudget(cap, fields, contract.BudgetHot); len(itemsFromFields(got, "items")) != 20 {
 		t.Fatalf("hot must keep all 20 items, got %d", len(itemsFromFields(got, "items")))
@@ -77,7 +77,7 @@ func TestShapeByBudgetHotIsIdentity(t *testing.T) {
 
 // Already-within-budget and unknown-tier are exact passthroughs (no reshape, no data loss).
 func TestShapeByBudgetWithinBudgetAndUnknownPassthrough(t *testing.T) {
-	cap := EmbeddedCatalog()["assignment"]
+	cap := StandardRegistry()["assignment"]
 	small := map[string]any{"items": makeBudgetItems(3)} // 3 <= warm cap 8
 	if got := ShapeByBudget(cap, small, contract.BudgetWarm); len(itemsFromFields(got, "items")) != 3 {
 		t.Fatalf("within-budget warm must keep all 3, got %d", len(itemsFromFields(got, "items")))

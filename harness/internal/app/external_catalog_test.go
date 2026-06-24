@@ -59,10 +59,10 @@ func TestResolveBootCatalogIgnoreExternalNamesIgnoredPackages(t *testing.T) {
 		t.Fatalf("--ignore-external must boot embedded-only even with a bad package present: %v", err)
 	}
 	if _, ok := catalog["goal"]; ok {
-		t.Fatal("--ignore-external must NOT load the external goal capability")
+		t.Fatal("--ignore-external must NOT load the external goal event package")
 	}
-	if len(catalog) != len(policy.EmbeddedCatalog()) {
-		t.Fatalf("--ignore-external catalog must be embedded-only (%d), got %d", len(policy.EmbeddedCatalog()), len(catalog))
+	if len(catalog) != len(policy.StandardRegistry()) {
+		t.Fatalf("--ignore-external catalog must be embedded-only (%d), got %d", len(policy.StandardRegistry()), len(catalog))
 	}
 	if len(ignored) != 2 || ignored[0] != "bad" || ignored[1] != "goal" {
 		t.Fatalf("ignored names must carry both packages [bad goal], got %v", ignored)
@@ -171,10 +171,10 @@ func TestRunLocalServerIgnoreExternalDisablesEnabledExternalLoop(t *testing.T) {
 
 // Equal admission rights: the resolved catalog threads through the SAME select-only assembly the
 // embedded loops use — an external goal package admits a candidate end to end.
-func TestExternalGoalCapabilityAdmitsThroughResolvedCatalog(t *testing.T) {
+func TestExternalGoalEventPackageAdmitsThroughResolvedCatalog(t *testing.T) {
 	root := t.TempDir()
 	writeExternalGoalPackage(t, root, "goal", goalPackageSpec)
-	catalog, err := policy.ResolveCatalog(root, state.DefaultSchemaGuard().Required)
+	catalog, err := policy.ResolveRegistry(root, state.DefaultSchemaGuard().Required)
 	if err != nil {
 		t.Fatalf("resolve catalog: %v", err)
 	}
@@ -202,14 +202,14 @@ func TestExternalGoalCapabilityAdmitsThroughResolvedCatalog(t *testing.T) {
 	}
 	v, fields, err := rt.Resource(ref)
 	if err != nil || v == 0 {
-		t.Fatalf("external goal capability must admit (v=%d err=%v)", v, err)
+		t.Fatalf("external goal event package must admit (v=%d err=%v)", v, err)
 	}
 	if content, _ := fields["content"].(string); !strings.Contains(content, "ship stage five") {
 		t.Fatalf("goal content missing the candidate: %q", content)
 	}
 }
 
-func TestSetupAcceptsExternalCapabilityLoop(t *testing.T) {
+func TestSetupAcceptsExternalEventPackageLoop(t *testing.T) {
 	root := t.TempDir()
 	writeExternalGoalPackage(t, root, "goal", goalPackageSpec)
 	var out, errw bytes.Buffer
@@ -217,14 +217,14 @@ func TestSetupAcceptsExternalCapabilityLoop(t *testing.T) {
 		Host: "codex", Loops: []string{"goal"}, Principal: "codex@project", ProjectRoot: root,
 	})
 	if err != nil {
-		t.Fatalf("setup --loop goal must enable an external capability package: %v\nstderr=%s", err, errw.String())
+		t.Fatalf("setup --loop goal must enable an external event package: %v\nstderr=%s", err, errw.String())
 	}
 	if config := string(mustRead(t, res.ConfigFile)); !strings.Contains(config, `"goal"`) {
 		t.Fatalf("setup config must record the external loop:\n%s", config)
 	}
 	binding := string(mustRead(t, res.BindingFile))
 	if !strings.Contains(binding, "goal.write_candidate.observed") || !strings.Contains(binding, `"kind": "goal"`) {
-		t.Fatalf("binding must grant the external capability scope:\n%s", binding)
+		t.Fatalf("binding must grant the external event package scope:\n%s", binding)
 	}
 
 	// A loop that is neither embedded nor an external package keeps the original diagnosis.
@@ -260,9 +260,9 @@ func TestUninstallLeavesExternalPackagesUntouched(t *testing.T) {
 	}
 }
 
-// loop validate reports each external capability package with a source-labelled OK line and goes
+// loop validate reports each external event package with a source-labelled OK line and goes
 // red on any loader failure — the same fail-closed resolution boot uses.
-func TestLoopValidateReportsExternalCapabilityPackages(t *testing.T) {
+func TestLoopValidateReportsExternalEventPackages(t *testing.T) {
 	root := t.TempDir()
 	writeExternalGoalPackage(t, root, "goal", goalPackageSpec)
 	lines, err := New(root).LoopValidate()
@@ -271,12 +271,12 @@ func TestLoopValidateReportsExternalCapabilityPackages(t *testing.T) {
 	}
 	found := false
 	for _, l := range lines {
-		if l == "external capability goal: OK" {
+		if l == "external event package goal: OK" {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("loop validate must report `external capability goal: OK`; got %v", lines)
+		t.Fatalf("loop validate must report `external event package goal: OK`; got %v", lines)
 	}
 
 	badRoot := t.TempDir()

@@ -17,7 +17,7 @@ import (
 // (above mnemonhub exchange's pure store helpers) — never bypassing the kernel. It is the OFFLINE path: it
 // boots its own import runtime by path, so it must never run inside a serving process (the in-process
 // worker drives importPulledEvents over the LIVE runtime instead — flock, v1.1 #2).
-func ImportLocalSyncPull(storePath, remoteID, nextCursor string, events []eventmodel.EventEnvelope, catalog map[string]policy.Capability) error {
+func ImportLocalSyncPull(storePath, remoteID, nextCursor string, events []eventmodel.EventEnvelope, catalog policy.Registry) error {
 	if len(events) > 0 {
 		refs, err := refsFromSyncedEvents(events)
 		if err != nil {
@@ -45,7 +45,7 @@ func ImportLocalSyncPull(storePath, remoteID, nextCursor string, events []eventm
 // sync.import_skipped.observed (ExternalID = six-part key + ":skipped") carrying the attribution
 // payload, and the sync-import deny rule turns it into a durable sync.diagnostic. The pull cursor
 // still advances either way — a skip is visible, never wedging.
-func importPulledEvents(rt *runtime.Runtime, remoteID string, events []eventmodel.EventEnvelope, catalog map[string]policy.Capability) error {
+func importPulledEvents(rt *runtime.Runtime, remoteID string, events []eventmodel.EventEnvelope, catalog policy.Registry) error {
 	catalog = resolveSyncCatalog(catalog)
 	pulledAt := time.Now().UTC().Format(time.RFC3339)
 	for _, event := range events {

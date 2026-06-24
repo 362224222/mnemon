@@ -13,7 +13,7 @@ const (
 )
 
 // ShapeByBudget returns the resource fields shaped for a context-budget tier: it keeps only the
-// most-recent K items (K per tier; hot = all) and RE-RENDERS the capability's header over the kept
+// most-recent K items (K per tier; hot = all) and RE-RENDERS the event package's header over the kept
 // subset, so a content-rendered surface that reads the rendered `content` field, not the raw item list,
 // actually shrinks. "Most-recent" = the tail of the item list, whose
 // order is the local append/import sequence (replica-deterministic, so an offline replay reshapes
@@ -23,7 +23,7 @@ const (
 //
 // This is a pure LOCAL presentation transform: it never reduces on the hub and never alters authority
 // (the grant scope is the security boundary — budget bounds CONTEXT only; B2 remote settles, local decides).
-func ShapeByBudget(cap Capability, fields map[string]any, tier contract.BudgetTier) map[string]any {
+func ShapeByBudget(cap EventPackage, fields map[string]any, tier contract.BudgetTier) map[string]any {
 	resolved, err := contract.ResolveBudgetTier(tier)
 	if err != nil || resolved == contract.BudgetHot {
 		return fields

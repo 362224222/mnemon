@@ -10,21 +10,21 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
 )
 
-// itemDedupImport is the "item-dedup" remote-import strategy (capability-spec v2 §Sync): the GENERIC
+// itemDedupImport is the "item-dedup" remote-import strategy: the GENERIC
 // append-merge for a directory-of-items kind (§577). It merges a remote material's items into the
 // resource's item list BY ID, preserving EVERY item field. It makes no assumption about
 // the item's domain fields, so an arbitrary declared kind syncs without losing fields such as
 // assignment scope/ttl/assignee. Item ids are replica-specific
 // (actor+ingest_seq stamped at admission), so cross-replica items never collide; a
 // same-id/different-content divergence is rejected (I15, defensive). The merged resource header is
-// re-derived from the capability's OWN render, never hardcoded.
-func itemDedupImport(cap Capability, in admission.RuleInput) (contract.RuleDecision, error) {
+// re-derived from the event package's OWN render, never hardcoded.
+func itemDedupImport(cap EventPackage, in admission.RuleInput) (contract.RuleDecision, error) {
 	material, err := decodeRemoteSyncedEventMaterial(in.Event.Payload)
 	if err != nil {
 		return contract.RuleDecision{Verdict: contract.VerdictDeny, Reasons: []string{err.Error()}}, nil
 	}
 	if material.ResourceRef.Kind != cap.ResourceKind {
-		return contract.RuleDecision{Verdict: contract.VerdictDeny, Reasons: []string{"remote import denied: resource kind does not match the importing capability"}}, nil
+		return contract.RuleDecision{Verdict: contract.VerdictDeny, Reasons: []string{"remote import denied: resource kind does not match the importing event package"}}, nil
 	}
 	incoming := itemsFromFields(material.Fields, cap.ItemsField)
 	if len(incoming) == 0 {

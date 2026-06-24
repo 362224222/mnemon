@@ -37,7 +37,7 @@ func TestLoopAddRegistersAndValidates(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, ".mnemon", "loops", "widget", "capability.json")); err != nil {
 		t.Fatalf("package not placed under .mnemon/loops/widget: %v", err)
 	}
-	catalog, err := policy.ResolveCatalog(root, state.DefaultSchemaGuard().Required)
+	catalog, err := policy.ResolveRegistry(root, state.DefaultSchemaGuard().Required)
 	if err != nil {
 		t.Fatalf("resolve after add: %v", err)
 	}
@@ -54,7 +54,7 @@ func TestLoopAddRejectsAndRollsBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	// resource_kind "assignment" is an embedded kind an external package may not claim (shadowing) —
-	// ResolveCatalog refuses it, so loop add must too.
+	// ResolveRegistry refuses it, so loop add must too.
 	bad := `{"schema_version":1,"name":"broken","observed_type":"broken.write_candidate.observed",
 "proposed_type":"broken.write.proposed","resource_kind":"assignment","items_field":"items",
 "fields":[{"name":"text","validators":[{"id":"required","params":{"missing_style":"empty"}}]}],
@@ -88,22 +88,22 @@ func TestLoopAddRefusesExistingTarget(t *testing.T) {
 	}
 }
 
-// loop capabilities resolves embedded + external kinds; loop schema returns one kind and errors on
+// loop packages resolves standard + external kinds; loop schema returns one kind and errors on
 // an unknown one.
-func TestLoopCapabilitiesAndSchema(t *testing.T) {
+func TestLoopEventPackagesAndSchema(t *testing.T) {
 	root := t.TempDir()
 	writeExternalGoalPackage(t, root, "widget", widgetPackageSpec)
 
-	infos, err := New(root).LoopCapabilities()
+	infos, err := New(root).LoopEventPackages()
 	if err != nil {
-		t.Fatalf("loop capabilities: %v", err)
+		t.Fatalf("loop packages: %v", err)
 	}
-	byKind := map[string]CapabilityInfo{}
+	byKind := map[string]EventPackageInfo{}
 	for _, info := range infos {
 		byKind[info.Kind] = info
 	}
-	if byKind["assignment"].Source != "embedded" || !byKind["assignment"].Importable || byKind["assignment"].Merge != "item-dedup" {
-		t.Fatalf("assignment must be embedded + importable item-dedup: %+v", byKind["assignment"])
+	if byKind["assignment"].Source != "standard" || !byKind["assignment"].Importable || byKind["assignment"].Merge != "item-dedup" {
+		t.Fatalf("assignment must be standard + importable item-dedup: %+v", byKind["assignment"])
 	}
 	if w, ok := byKind["widget"]; !ok || w.Source != "external" || w.ObservedType != "widget.write_candidate.observed" {
 		t.Fatalf("external widget must appear with its descriptor: %+v", w)

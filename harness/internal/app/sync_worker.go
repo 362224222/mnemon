@@ -29,9 +29,9 @@ type SyncWorkerOptions struct {
 	Interval            time.Duration // <= 0 defaults to defaultSyncWorkerInterval
 	Timeout             time.Duration // per-call transport bound; <= 0 defaults to access.DefaultSyncTimeout
 	AllowInsecureRemote bool          // explicit T2 downgrade override (v1.1 #3)
-	// Catalog is the boot-resolved capability catalog the pull import derives its kind→observation
+	// Catalog is the boot-resolved event package registry the pull import derives its kind→observation
 	// mapping from (descriptor-derived, PD6). nil falls back to the embedded catalog.
-	Catalog map[string]policy.Capability
+	Catalog policy.Registry
 }
 
 const defaultSyncWorkerInterval = 30 * time.Second
@@ -138,7 +138,7 @@ func syncWorkerPush(rt *runtime.Runtime, client *access.Client, remoteID string)
 // syncWorkerPull pulls after the durable cursor, re-enters each event through the live runtime's
 // trusted intake (importPulledEvents — the same loop the offline path uses), then advances the
 // cursor.
-func syncWorkerPull(rt *runtime.Runtime, client *access.Client, remoteID string, catalog map[string]policy.Capability) error {
+func syncWorkerPull(rt *runtime.Runtime, client *access.Client, remoteID string, catalog policy.Registry) error {
 	state, err := exchange.ReadPullState(rt, remoteID)
 	if err != nil {
 		return err

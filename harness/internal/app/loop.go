@@ -13,15 +13,15 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/state"
 )
 
-// LoopValidate validates the resolved capability catalog through the same fail-closed resolution boot
+// LoopValidate validates the resolved event package registry through the same fail-closed resolution boot
 // uses. R1 host setup no longer projects per-loop assets, so validate reports event packages only:
-// embedded descriptors plus external packages under .mnemon/loops.
+// standard descriptors plus external packages under .mnemon/loops.
 func (h *Harness) LoopValidate() ([]string, error) {
-	merged, err := policy.ResolveCatalog(h.root, state.DefaultSchemaGuard().Required)
+	merged, err := policy.ResolveRegistry(h.root, state.DefaultSchemaGuard().Required)
 	if err != nil {
 		return nil, err
 	}
-	embedded := policy.EmbeddedCatalog()
+	standard := policy.StandardRegistry()
 	names := make([]string, 0, len(merged))
 	for name := range merged {
 		names = append(names, name)
@@ -30,20 +30,19 @@ func (h *Harness) LoopValidate() ([]string, error) {
 	lines := make([]string, 0, len(names))
 	for _, name := range names {
 		source := "external"
-		if _, ok := embedded[name]; ok {
-			source = "embedded"
+		if _, ok := standard[name]; ok {
+			source = "standard"
 		}
-		lines = append(lines, fmt.Sprintf("%s capability %s: OK", source, name))
+		lines = append(lines, fmt.Sprintf("%s event package %s: OK", source, name))
 	}
 	return lines, nil
 }
 
-// CapabilityInfo is the read-only view of a resolved capability — the discoverability answer to "what
+// EventPackageInfo is the read-only view of a resolved event package — the discoverability answer to "what
 // kinds can the agents work with and what does each expect" (P2). It is a projection of the descriptor
-// (policy.Capability), never the runtime's internal rule state: the runtime is capability-free by
-// design (PD6c), so this query resolves the project catalog from disk rather than coupling the kernel
-// to capability shapes.
-type CapabilityInfo struct {
+// (policy.EventPackage), never the runtime's internal rule state, so this query resolves the project
+// registry from disk rather than coupling the kernel to package shapes.
+type EventPackageInfo struct {
 	Name         string   `json:"name"`
 	Kind         string   `json:"kind"`
 	ObservedType string   `json:"observed_type"`
@@ -52,25 +51,25 @@ type CapabilityInfo struct {
 	Required     []string `json:"required"`
 	Importable   bool     `json:"importable"`
 	Merge        string   `json:"merge,omitempty"`
-	Source       string   `json:"source"` // "embedded" | "external" (.mnemon/loops package)
+	Source       string   `json:"source"` // "standard" | "external" (.mnemon/loops package)
 }
 
-// LoopCapabilities resolves the project catalog (embedded descriptors + every external package under
-// .mnemon/loops, via the SAME fail-closed boot resolution) and returns one CapabilityInfo per kind,
-// sorted by kind. It is a LOCAL read — no running server is contacted; the catalog is a disk fact.
-func (h *Harness) LoopCapabilities() ([]CapabilityInfo, error) {
-	catalog, err := policy.ResolveCatalog(h.root, state.DefaultSchemaGuard().Required)
+// LoopEventPackages resolves the project registry (standard descriptors + every external package under
+// .mnemon/loops, via the SAME fail-closed boot resolution) and returns one EventPackageInfo per kind,
+// sorted by kind. It is a LOCAL read — no running server is contacted; the registry is a disk fact.
+func (h *Harness) LoopEventPackages() ([]EventPackageInfo, error) {
+	catalog, err := policy.ResolveRegistry(h.root, state.DefaultSchemaGuard().Required)
 	if err != nil {
 		return nil, err
 	}
-	embedded := policy.EmbeddedCatalog()
-	infos := make([]CapabilityInfo, 0, len(catalog))
+	standard := policy.StandardRegistry()
+	infos := make([]EventPackageInfo, 0, len(catalog))
 	for _, cap := range catalog {
 		source := "external"
-		if _, ok := embedded[cap.Name]; ok {
-			source = "embedded"
+		if _, ok := standard[cap.Name]; ok {
+			source = "standard"
 		}
-		infos = append(infos, CapabilityInfo{
+		infos = append(infos, EventPackageInfo{
 			Name:         cap.Name,
 			Kind:         string(cap.ResourceKind),
 			ObservedType: cap.ObservedType,
@@ -86,20 +85,20 @@ func (h *Harness) LoopCapabilities() ([]CapabilityInfo, error) {
 	return infos, nil
 }
 
-// LoopSchema returns the CapabilityInfo for one resource kind (the `control schema --type T` answer),
+// LoopSchema returns the EventPackageInfo for one resource kind (the `control schema --type T` answer),
 // resolved from the same project catalog. An unknown kind is an error (fail-closed — never an empty
 // success that reads as "no required fields").
-func (h *Harness) LoopSchema(kind string) (CapabilityInfo, error) {
-	infos, err := h.LoopCapabilities()
+func (h *Harness) LoopSchema(kind string) (EventPackageInfo, error) {
+	infos, err := h.LoopEventPackages()
 	if err != nil {
-		return CapabilityInfo{}, err
+		return EventPackageInfo{}, err
 	}
 	for _, info := range infos {
 		if info.Kind == kind {
 			return info, nil
 		}
 	}
-	return CapabilityInfo{}, fmt.Errorf("unknown capability kind %q (run `mnemon-harness loop capabilities` to list)", kind)
+	return EventPackageInfo{}, fmt.Errorf("unknown event package kind %q (run `mnemon-harness loop packages` to list)", kind)
 }
 
 // observeSkillJudgment is the HAND-WRITTEN half of the mnemon-observe skill (decision F): the
@@ -131,18 +130,18 @@ const observeSkillSubmit = `## How to submit
 
 The exact payload fields for a kind are discoverable — never guess:
 
-    mnemon-harness loop capabilities          # list every kind you can record
+    mnemon-harness loop packages             # list every kind you can record
     mnemon-harness loop schema --type <kind>  # one kind's required fields + sync
 `
 
 // RenderObserveSkill generates the mnemon-observe skill (decision F: a directory-level generated
 // skill). The judgment half is hand-written (observeSkillJudgment); the mechanism half — which kinds
 // this project enables and the event type to observe for each — is RENDERED from the resolved
-// catalog, so the skill never drifts from the live capability set and never hardcodes per-kind fields
+// registry, so the skill never drifts from the live event package set and never hardcodes per-kind fields
 // (it points the agent at `loop schema` for those). It is the generic counterpart to per-loop skills:
 // one skill teaches recording an observation for ANY kind.
 func (h *Harness) RenderObserveSkill() (string, error) {
-	infos, err := h.LoopCapabilities()
+	infos, err := h.LoopEventPackages()
 	if err != nil {
 		return "", err
 	}
@@ -159,10 +158,10 @@ func (h *Harness) RenderObserveSkill() (string, error) {
 	return b.String(), nil
 }
 
-// LoopAdd registers an external capability package from srcDir into the project's external loop root
+// LoopAdd registers an external event package from srcDir into the project's external loop root
 // (<root>/.mnemon/loops/<name>). It is the "write a directory -> register it" front door (P2 minimal
 // onboarding): the author writes a package dir, `loop add` places it under the canonical name and
-// validates it through the SAME fail-closed boot resolution `local run` uses (policy.ResolveCatalog
+// validates it through the SAME fail-closed boot resolution `local run` uses (policy.ResolveRegistry
 // — symlink screen + LoadExternal + four-axis shadowing merge). A package that would refuse boot is
 // rejected here and the copy is rolled back, so a half-added package never lingers. The canonical name
 // is the spec's `name` (the external loader requires the directory name to equal it); an existing
@@ -199,7 +198,7 @@ func (h *Harness) LoopAdd(srcDir string) (string, error) {
 	}
 	// Validate through the exact boot resolution; roll the copy back on any refusal so a rejected
 	// package never lingers as a half-added, boot-sinking directory.
-	if _, err := policy.ResolveCatalog(h.root, state.DefaultSchemaGuard().Required); err != nil {
+	if _, err := policy.ResolveRegistry(h.root, state.DefaultSchemaGuard().Required); err != nil {
 		_ = os.RemoveAll(target)
 		return "", fmt.Errorf("loop %q rejected (fail-closed): %w", spec.Name, err)
 	}

@@ -23,7 +23,7 @@ const approvalHighRiskSpec = `{"schema_version":1,"name":"approval","observed_ty
 func TestHighRiskOperatorGate(t *testing.T) {
 	root := t.TempDir()
 	writeExternalGoalPackage(t, root, "approval", approvalHighRiskSpec)
-	catalog, err := policy.ResolveCatalog(root, state.DefaultSchemaGuard().Required)
+	catalog, err := policy.ResolveRegistry(root, state.DefaultSchemaGuard().Required)
 	if err != nil {
 		t.Fatalf("resolve catalog: %v", err)
 	}

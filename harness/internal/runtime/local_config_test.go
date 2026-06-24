@@ -13,7 +13,7 @@ import (
 // internals). The production derivation lives in app; this keeps the test in package runtime without
 // importing app (which would cycle).
 func localRuntimeConfigT(bindings []access.ChannelBinding) RuntimeConfig {
-	catalog := policy.EmbeddedCatalog()
+	catalog := policy.StandardRegistry()
 	var rules []admission.Rule
 	allow := map[contract.ActorID][]contract.ResourceKind{}
 	for _, b := range bindings {
@@ -49,7 +49,7 @@ func localRuntimeConfigT(bindings []access.ChannelBinding) RuntimeConfig {
 	}
 }
 
-func requiredHeadersT(catalog map[string]policy.Capability) map[contract.ResourceKind][]string {
+func requiredHeadersT(catalog policy.Registry) map[contract.ResourceKind][]string {
 	out := map[contract.ResourceKind][]string{}
 	for _, cap := range catalog {
 		out[cap.ResourceKind] = cap.RequiredHeader

@@ -21,7 +21,7 @@ func projItems(n int) []any {
 // digest-only/warm shrink the rendered packet; hot is exact passthrough; the input is never mutated;
 // the integrity Digest is left attesting the full authoritative scope (budget bounds context, not authority).
 func TestBudgetShapeProjection(t *testing.T) {
-	catalog := policy.EmbeddedCatalog()
+	catalog := policy.StandardRegistry()
 	ref := contract.ResourceRef{Kind: "assignment", ID: "project"}
 	proj := view.View{
 		Digest: "full-scope-digest",
@@ -60,7 +60,7 @@ func TestBudgetShapeProjectionUnknownKindPassthrough(t *testing.T) {
 	proj := view.View{Content: []view.ResourceContent{
 		{Ref: ref, Version: 1, Fields: map[string]any{"items": projItems(20)}},
 	}}
-	out := budgetShapePresentationView(proj, policy.EmbeddedCatalog(), contract.BudgetDigestOnly)
+	out := budgetShapePresentationView(proj, policy.StandardRegistry(), contract.BudgetDigestOnly)
 	if n := len(out.Content[0].Fields["items"].([]any)); n != 20 {
 		t.Fatalf("uncatalogued kind must pass through unshaped, got %d items", n)
 	}

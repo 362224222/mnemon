@@ -60,7 +60,7 @@ func NewLocalHTTPHandler(rt *runtime.Runtime, auth access.Authenticator, binding
 			return
 		}
 		if haveBinding {
-			proj = budgetShapePresentationView(proj, policy.EmbeddedCatalog(), binding.Budget)
+			proj = budgetShapePresentationView(proj, policy.StandardRegistry(), binding.Budget)
 			if req.Budget.PresentationViewTier == "" {
 				req.Budget.PresentationViewTier = binding.Budget
 			}

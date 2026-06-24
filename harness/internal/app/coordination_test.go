@@ -13,7 +13,7 @@ import (
 
 // P3a: the AgentTeam coordination kinds (project_intent/assignment/progress_digest) are ordinary
 // declared event kinds — they govern through the SAME assembler/appendItemRule path as every other
-// capability descriptor, with no per-kind code. This pins one (assignment, which carries the
+// event package descriptor, with no per-kind code. This pins one (assignment, which carries the
 // required `scope`) through observe → admit → resource read, plus the negative: a candidate missing
 // the required scope is rejected, never written.
 func TestCoordinationAssignmentGoverns(t *testing.T) {
@@ -21,7 +21,7 @@ func TestCoordinationAssignmentGoverns(t *testing.T) {
 	binding := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
 	binding.AllowedObservedTypes = []string{"assignment.write_candidate.observed"}
 
-	// nil catalog → EmbeddedCatalog, which now carries the three coordination kinds (P3a).
+	// nil catalog → StandardRegistry, which now carries the three coordination kinds (P3a).
 	rc, err := LocalRuntimeConfigFromBindings([]access.ChannelBinding{binding}, nil)
 	if err != nil {
 		t.Fatalf("boot config: %v", err)
@@ -276,7 +276,7 @@ func TestCoordinationProfileAndTeamworkSignalGovern(t *testing.T) {
 		ExternalID: "profile-1",
 		Event: contract.Event{Type: "agent_profile.write_candidate.observed", Payload: map[string]any{
 			"actor": "codex@project", "focus": "harness R1 schema",
-			"context_advantages": []any{"read Event presentation plan", "knows capability package"},
+			"context_advantages": []any{"read Event presentation plan", "knows event package"},
 			"availability":       "available", "ttl": "30m", "summary": "Working on schema phase.",
 		}},
 	}); err != nil {

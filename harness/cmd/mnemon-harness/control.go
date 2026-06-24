@@ -151,7 +151,7 @@ var controlStatusCmd = &cobra.Command{
 		fmt.Fprintf(cmd.OutOrStdout(), "Local Mnemon: ready (governed_rows=%d, digest=%s)\n", st.Resources, st.Digest)
 		fmt.Fprintf(cmd.OutOrStdout(), "Sync: %d pending, %d synced, %d conflicts (local accepted, remote pending)\n", st.SyncPending, st.SyncSynced, st.SyncConflicts)
 		// FIELD section (P3d, the minimal Control Tower seed): the coordination entry counts derived
-		// client-side from a pull. The runtime stays capability-free, so kind-aware counts live here,
+		// client-side from a pull. The runtime stays package-agnostic, so kind-aware counts live here,
 		// over the default-enabled coordination kinds. Best-effort: a principal not bound to pull just
 		// omits the line rather than failing the status report. (agents / pending / diagnostics =
 		// server-side aggregation, deferred to the P6 Control Tower.)
@@ -240,8 +240,8 @@ func coordinationFieldLine(client *access.Client, principal contract.ActorID) st
 	if err != nil {
 		return "Field: (unavailable)"
 	}
-	var caps []policy.Capability
-	for _, c := range policy.EmbeddedCatalog() {
+	var caps []policy.EventPackage
+	for _, c := range policy.StandardRegistry() {
 		if c.DefaultEnabled {
 			caps = append(caps, c)
 		}

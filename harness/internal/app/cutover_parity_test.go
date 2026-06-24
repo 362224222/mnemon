@@ -66,7 +66,7 @@ func TestAssembledBootMatchesBindingDerivedBoot(t *testing.T) {
 	}
 	defer bootRT.Close()
 
-	asmRC, err := assembler.Assemble(capabilityFileFromLoops([]string{"assignment", "progress_digest"}), []access.ChannelBinding{mkBinding()}, nil)
+	asmRC, err := assembler.Assemble(eventPackageFileFromLoops([]string{"assignment", "progress_digest"}), []access.ChannelBinding{mkBinding()}, nil)
 	if err != nil {
 		t.Fatalf("assemble: %v", err)
 	}
@@ -104,8 +104,8 @@ func TestAssembledBootMatchesBindingDerivedBoot(t *testing.T) {
 	}
 }
 
-// The hidden `local run --bindings` boot path has no localConfig: capability enablement is derived
-// from the binding scope kinds ∩ EmbeddedCatalog().
+// The hidden `local run --bindings` boot path has no localConfig: event package enablement is derived
+// from the binding scope kinds ∩ StandardRegistry().
 func TestLoopsFromBindingsDerivesEnablement(t *testing.T) {
 	b := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{
 		{Kind: "assignment", ID: "project"}, {Kind: "progress_digest", ID: "project"},

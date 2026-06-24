@@ -62,7 +62,7 @@ func sanitizePrincipal(p string) string {
 func validateProductLoops(host string, loops []string, projectRoot string) error {
 	available := map[string]bool{}
 	var names []string
-	for loop := range policy.EmbeddedCatalog() {
+	for loop := range policy.StandardRegistry() {
 		available[loop] = true
 		names = append(names, loop)
 	}
@@ -82,7 +82,7 @@ func validateProductLoops(host string, loops []string, projectRoot string) error
 	return nil
 }
 
-// isExternalPackage reports whether loop names an external capability package under the project root.
+// isExternalPackage reports whether loop names an external event package under the project root.
 // Presence check only; boot later loads and validates the package.
 func isExternalPackage(projectRoot, loop string) bool {
 	fi, err := os.Stat(filepath.Join(projectRoot, ".mnemon", "loops", loop, "capability.json"))

@@ -50,7 +50,7 @@ unit: ## Run Go unit tests
 vet: ## Run go vet static analysis
 	go vet ./...
 
-harness-validate: ## Validate harness capability packages
+harness-validate: ## Validate harness event packages
 	bash scripts/validate_harness_loops.sh
 
 harness-docs-check: ## Check bilingual harness doc heading sync

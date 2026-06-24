@@ -10,8 +10,8 @@ import (
 
 // Test-only declaration spec: only the enum message differs, so Shadow can detect a minimal
 // rule-behavior change without relying on a product capability name.
-func declarationSpecWithMessage(message string) policy.CapabilitySpec {
-	return policy.CapabilitySpec{
+func declarationSpecWithMessage(message string) policy.ExternalSpec {
+	return policy.ExternalSpec{
 		SchemaVersion: 1, Name: "fixture_declaration",
 		ObservedType: "fixture_declaration.write_candidate.observed", ProposedType: "fixture_declaration.write.proposed",
 		ResourceKind: "fixture_declaration", ItemsField: "declarations",
@@ -35,9 +35,9 @@ func declarationSpecWithMessage(message string) policy.CapabilitySpec {
 
 func declarationRules(t *testing.T, message string) admission.RuleSet {
 	t.Helper()
-	cap, err := policy.FromSpec(declarationSpecWithMessage(message))
+	cap, err := policy.CompileExternalSpec(declarationSpecWithMessage(message))
 	if err != nil {
-		t.Fatalf("FromSpec: %v", err)
+		t.Fatalf("CompileExternalSpec: %v", err)
 	}
 	ref := contract.ResourceRef{Kind: "fixture_declaration", ID: "project"}
 	return admission.NewRuleSet(cap.Rule(gateActor, ref, policy.Limits{}))

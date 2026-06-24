@@ -37,7 +37,7 @@ func TestSyncImportSkippedRuleDeniesNamingKind(t *testing.T) {
 // Workspace import under its declared closed-set merge strategy. This is the pin the deleted
 // contract.clamp_test invariant moved to — its home is now the catalog that declares it.
 func TestEmbeddedImportableKindsAreDescriptorDerived(t *testing.T) {
-	cat := EmbeddedCatalog()
+	cat := StandardRegistry()
 	wantMerge := map[contract.ResourceKind]string{
 		"agent_profile": "item-dedup", "teamwork_signal": "item-dedup",
 		"project_intent": "item-dedup", "assignment": "item-dedup", "progress_digest": "item-dedup",
@@ -55,7 +55,7 @@ func TestEmbeddedImportableKindsAreDescriptorDerived(t *testing.T) {
 		t.Fatalf("remote-material observation must be the system-derived form, got %q", got)
 	}
 	if _, ok := RemoteImportRule(cat["assignment"], contract.SyncImportActor); !ok {
-		t.Fatal("an importable capability must yield a remote-import rule")
+		t.Fatal("an importable event package must yield a remote-import rule")
 	}
 	if r, ok := RemoteImportRule(cat["assignment"], contract.SyncImportActor); !ok || !r.Handles("assignment.remote_synced_event.observed") {
 		t.Fatalf("the import rule must handle its derived observation type, ok=%v", ok)

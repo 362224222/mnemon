@@ -22,20 +22,20 @@ import (
 )
 
 // OpenLocalRuntime boots Local Mnemon over the select-only assembler: loops (from the setup-written
-// localConfig) enable capabilities; bindings stay the source of truth for observe/pull/status scope.
+// localConfig) enable event packages; bindings stay the source of truth for observe/pull/status scope.
 // An empty loops list (the hidden `local run --bindings` path, which has no localConfig) derives
-// enablement from the binding scope kinds ∩ catalog. catalog selects the capability universe
-// (nil = policy.EmbeddedCatalog()); the serve path passes the boot-resolved external-merged catalog.
+// enablement from the binding scope kinds ∩ registry. catalog selects the package universe
+// (nil = policy.StandardRegistry()); the serve path passes the boot-resolved external-merged registry.
 // The assembled policy is then merged with the sync-import half (withSyncImport), so the SERVING
 // runtime can import pulled commits in-process (v1.1 #2) without a second runtime boot.
-func OpenLocalRuntime(storePath string, loaded access.LoadedBindings, loops []string, catalog map[string]policy.Capability) (*runtime.Runtime, error) {
+func OpenLocalRuntime(storePath string, loaded access.LoadedBindings, loops []string, catalog policy.Registry) (*runtime.Runtime, error) {
 	cat := resolveSyncCatalog(catalog)
 	if len(loops) == 0 {
 		loops = loopsFromBindings(loaded.Bindings, cat)
 	}
 	loops = withDefaultEnabledLoops(loops, cat)
 	bindings := withDefaultEnabledGrants(loaded.Bindings, cat)
-	rc, err := assembler.Assemble(capabilityFileFromLoops(loops), bindings, cat)
+	rc, err := assembler.Assemble(eventPackageFileFromLoops(loops), bindings, cat)
 	if err != nil {
 		return nil, err
 	}
@@ -43,14 +43,14 @@ func OpenLocalRuntime(storePath string, loaded access.LoadedBindings, loops []st
 }
 
 // withSyncImport merges the sync-import half into an assembled runtime policy (v1.1 #2): sync@local
-// gets one import rule per importable capability (descriptor-derived, PD6) + the skipped-kind deny
+// gets one import rule per importable event package + the skipped-kind deny
 // rule, kernel authority for the importable kinds, and a subscription covering the binding scope's
 // syncable refs (the import rules read the current resource through this view to merge against).
 // Co-existence is by construction: the added rules Handle only the <kind>.remote_synced_event.observed /
 // sync.* observation types AND gate on the sync principal, so host-agent events never match them and
 // host rules never see the import events — pinned by a test. catalog selects the importable universe
 // (nil = embedded catalog).
-func withSyncImport(rc runtime.RuntimeConfig, bindings []access.ChannelBinding, catalog map[string]policy.Capability) runtime.RuntimeConfig {
+func withSyncImport(rc runtime.RuntimeConfig, bindings []access.ChannelBinding, catalog policy.Registry) runtime.RuntimeConfig {
 	catalog = resolveSyncCatalog(catalog)
 	rules := append([]admission.Rule(nil), rc.Rules.Rules()...)
 	rules = append(rules, policy.RemoteImportRules(catalog, contract.SyncImportActor)...)
@@ -65,17 +65,17 @@ func withSyncImport(rc runtime.RuntimeConfig, bindings []access.ChannelBinding, 
 	}
 	rc.Authority.Allow[contract.SyncImportActor] = policy.ImportableKinds(catalog)
 	// Inject the produce surface: this replica emits synced events for exactly the kinds its catalog
-	// imports (sync-abi-v2 §4). The runtime stays capability-free — the app fills the kind slice.
+	// imports (sync-abi-v2 §4). The app fills the kind slice from the event package registry.
 	rc.SyncableKinds = policy.ImportableKinds(catalog)
 	return rc
 }
 
-// resolveSyncCatalog resolves the catalog the sync-import path derives its rules/authority/guard
-// from: nil falls back to the embedded catalog, so callers without a boot-resolved catalog still get
+// resolveSyncCatalog resolves the registry the sync-import path derives its rules/authority/guard
+// from: nil falls back to the standard registry, so callers without a boot-resolved catalog still get
 // the standard importable kinds.
-func resolveSyncCatalog(catalog map[string]policy.Capability) map[string]policy.Capability {
+func resolveSyncCatalog(catalog policy.Registry) policy.Registry {
 	if catalog == nil {
-		return policy.EmbeddedCatalog()
+		return policy.StandardRegistry()
 	}
 	return catalog
 }
@@ -83,7 +83,7 @@ func resolveSyncCatalog(catalog map[string]policy.Capability) map[string]policy.
 // syncableScopeRefs collects the deduped binding-scope refs of importable kinds — the resources a
 // pulled commit may target on this replica (the same canonical refs the host loops govern). The
 // importable-kind set is descriptor-derived from the catalog (PD6), not a hardcoded constant.
-func syncableScopeRefs(bindings []access.ChannelBinding, catalog map[string]policy.Capability) []contract.ResourceRef {
+func syncableScopeRefs(bindings []access.ChannelBinding, catalog policy.Registry) []contract.ResourceRef {
 	syncable := map[contract.ResourceKind]bool{}
 	for _, k := range policy.ImportableKinds(catalog) {
 		syncable[k] = true
@@ -108,31 +108,31 @@ func syncableScopeRefs(bindings []access.ChannelBinding, catalog map[string]poli
 }
 
 // LocalRuntimeConfigFromBindings derives Local Mnemon's policy from the installed Agent Integration
-// bindings alone (enablement = binding scope kinds ∩ catalog; nil = Builtins). It is the
+// bindings alone (enablement = binding scope kinds ∩ catalog; nil = standard registry). It is the
 // bindings-only convenience over the same select-only assembly OpenLocalRuntime uses.
-func LocalRuntimeConfigFromBindings(bindings []access.ChannelBinding, catalog map[string]policy.Capability) (runtime.RuntimeConfig, error) {
+func LocalRuntimeConfigFromBindings(bindings []access.ChannelBinding, catalog policy.Registry) (runtime.RuntimeConfig, error) {
 	cat := resolveSyncCatalog(catalog)
 	loops := withDefaultEnabledLoops(loopsFromBindings(bindings, cat), cat)
-	return assembler.Assemble(capabilityFileFromLoops(loops), withDefaultEnabledGrants(bindings, cat), cat)
+	return assembler.Assemble(eventPackageFileFromLoops(loops), withDefaultEnabledGrants(bindings, cat), cat)
 }
 
-// defaultEnabledCaps returns the catalog's default-enabled capabilities (the coordination package),
+// defaultEnabledPackages returns the catalog's default-enabled event packages,
 // sorted by kind for determinism — the kinds the local boot governs without an explicit --loop (P3).
-func defaultEnabledCaps(catalog map[string]policy.Capability) []policy.Capability {
-	var caps []policy.Capability
+func defaultEnabledPackages(catalog policy.Registry) []policy.EventPackage {
+	var packages []policy.EventPackage
 	for _, c := range catalog {
 		if c.DefaultEnabled {
-			caps = append(caps, c)
+			packages = append(packages, c)
 		}
 	}
-	sort.Slice(caps, func(i, j int) bool { return caps[i].ResourceKind < caps[j].ResourceKind })
-	return caps
+	sort.Slice(packages, func(i, j int) bool { return packages[i].ResourceKind < packages[j].ResourceKind })
+	return packages
 }
 
 // withDefaultEnabledLoops unions the catalog's default-enabled kinds into the enabled-loops list, so
 // the assembler builds their rules even when no --loop named them.
-func withDefaultEnabledLoops(loops []string, catalog map[string]policy.Capability) []string {
-	for _, c := range defaultEnabledCaps(catalog) {
+func withDefaultEnabledLoops(loops []string, catalog policy.Registry) []string {
+	for _, c := range defaultEnabledPackages(catalog) {
 		if !containsLoop(loops, c.Name) {
 			loops = append(loops, c.Name)
 		}
@@ -145,15 +145,15 @@ func withDefaultEnabledLoops(loops []string, catalog map[string]policy.Capabilit
 // grant that sits beside the binding's EXPLICIT --loop grants, so a default-enabled kind is
 // governable + pullable from setup alone (P3). The assembler and the channel authorizer both read
 // this same augmented list, so rules, authority, and authz stay consistent.
-func withDefaultEnabledGrants(bindings []access.ChannelBinding, catalog map[string]policy.Capability) []access.ChannelBinding {
-	defaults := defaultEnabledCaps(catalog)
+func withDefaultEnabledGrants(bindings []access.ChannelBinding, catalog policy.Registry) []access.ChannelBinding {
+	defaults := defaultEnabledPackages(catalog)
 	if len(defaults) == 0 {
 		return bindings
 	}
 	out := make([]access.ChannelBinding, len(bindings))
 	for i, b := range bindings {
 		// host-agents AND control-agents (operators) both govern the default-enabled kinds; high-risk
-		// static capabilities still need a control-agent path for operator approval.
+		// static event packages still need a control-agent path for operator approval.
 		if b.ActorKind == contract.KindHostAgent || b.ActorKind == contract.KindControlAgent {
 			// An EMPTY AllowedObservedTypes already means allow-all (AllowsObservedType returns true),
 			// so coordination is permitted without listing it — and appending here would flip the
@@ -192,24 +192,24 @@ func appendUniqueRef(s []contract.ResourceRef, v contract.ResourceRef) []contrac
 	return append(append([]contract.ResourceRef(nil), s...), v)
 }
 
-// capabilityFileFromLoops constructs the in-memory config.File for the enabled loops. The on-disk
+// eventPackageFileFromLoops constructs the in-memory config.File for the enabled loops. The on-disk
 // localConfig (schema_version 1) stays the enablement authority; config.Load parses the FUTURE
-// on-disk form and is not yet the boot reader (do not migrate until a capability needs a knob the
+// on-disk form and is not yet the boot reader (do not migrate until an event package needs a knob the
 // loops list cannot express).
-func capabilityFileFromLoops(loops []string) config.File {
-	caps := make(map[string]config.CapabilityConfig, len(loops))
+func eventPackageFileFromLoops(loops []string) config.File {
+	packages := make(map[string]config.EventPackageConfig, len(loops))
 	for _, loop := range loops {
-		caps[loop] = config.CapabilityConfig{Enabled: true, ResourceRef: loop + "/project", RuleRef: "native:" + loop}
+		packages[loop] = config.EventPackageConfig{Enabled: true, ResourceRef: loop + "/project", RuleRef: "native:" + loop}
 	}
-	return config.File{Capabilities: caps}
+	return config.File{EventPackages: packages}
 }
 
-// loopsFromBindings derives capability enablement from binding scope kinds ∩ catalog (nil =
-// Builtins). config.loops stays the product-path authority — this derivation only runs when the
+// loopsFromBindings derives event package enablement from binding scope kinds ∩ catalog (nil =
+// standard registry). config.loops stays the product-path authority — this derivation only runs when the
 // loops list is empty (the hidden bindings-only path).
-func loopsFromBindings(bindings []access.ChannelBinding, catalog map[string]policy.Capability) []string {
+func loopsFromBindings(bindings []access.ChannelBinding, catalog policy.Registry) []string {
 	if catalog == nil {
-		catalog = policy.EmbeddedCatalog()
+		catalog = policy.StandardRegistry()
 	}
 	seen := map[string]bool{}
 	var loops []string
@@ -226,12 +226,12 @@ func loopsFromBindings(bindings []access.ChannelBinding, catalog map[string]poli
 	return loops
 }
 
-// ServeOptions carries the boot-config state the serve path needs beyond bindings: capability
+// ServeOptions carries the boot-config state the serve path needs beyond bindings: event package
 // enablement (Loops), project root, and sync/runtime controls.
 type ServeOptions struct {
 	Loops          []string
 	ProjectRoot    string
-	IgnoreExternal bool // boot the embedded-only catalog, naming each ignored external package on stderr
+	IgnoreExternal bool // boot the standard-only registry, naming each ignored external package on stderr
 	// AllowInsecureRemote is the sync worker's T2 downgrade override (v1.1 #3): permit a plaintext
 	// non-loopback remote endpoint. Default false — fail closed.
 	AllowInsecureRemote bool
@@ -271,24 +271,24 @@ func RunLocalHTTPServerWithBindings(ctx context.Context, addr, storePath string,
 	return ServeLocalHTTP(ctx, addr, rt, access.NewBindingAuthenticator(loaded), loaded, opts.ProjectRoot, out)
 }
 
-// resolveBootCatalog resolves the capability catalog ONCE at boot. Default: embedded Builtins +
-// every external package under <projectRoot>/.mnemon/loops via policy.ResolveCatalog
-// (requiredFields = state.DefaultSchemaGuard().Required — app owns the kernel import; capability
-// stays a contract-level leaf), fail-closed: a bad external package REFUSES to start Local Mnemon
+// resolveBootCatalog resolves the event package registry ONCE at boot. Default: standard registry +
+// every external package under <projectRoot>/.mnemon/loops via policy.ResolveRegistry
+// (requiredFields = state.DefaultSchemaGuard().Required — app owns the kernel import), fail-closed:
+// a bad external package REFUSES to start Local Mnemon
 // — the directory's presence is a contract, not a hint. ignoreExternal is the operator escape
-// hatch (`local run --ignore-external`): boot the embedded-only catalog and name each ignored
+// hatch (`local run --ignore-external`): boot the standard-only registry and name each ignored
 // package on errw, one line per package, so what is offline is visible, never silent. The second
 // return is those ignored package names — the serve path must drop them from the enabled loops
 // too (disableIgnoredLoops), or an enabled-then-corrupted package would still sink the boot on
 // `unknown rule_ref`.
-func resolveBootCatalog(projectRoot string, ignoreExternal bool, errw io.Writer) (map[string]policy.Capability, []string, error) {
+func resolveBootCatalog(projectRoot string, ignoreExternal bool, errw io.Writer) (policy.Registry, []string, error) {
 	if !ignoreExternal {
-		catalog, err := policy.ResolveCatalog(projectRoot, state.DefaultSchemaGuard().Required)
+		catalog, err := policy.ResolveRegistry(projectRoot, state.DefaultSchemaGuard().Required)
 		return catalog, nil, err
 	}
 	entries, err := os.ReadDir(filepath.Join(projectRoot, ".mnemon", "loops"))
 	if err != nil {
-		return policy.EmbeddedCatalog(), nil, nil // absent (or unreadable) external root: nothing to ignore
+		return policy.StandardRegistry(), nil, nil // absent (or unreadable) external root: nothing to ignore
 	}
 	var ignored []string
 	for _, e := range entries {
@@ -297,20 +297,20 @@ func resolveBootCatalog(projectRoot string, ignoreExternal bool, errw io.Writer)
 			fmt.Fprintf(errw, "mnemon-harness: --ignore-external: ignoring external package .mnemon/loops/%s\n", e.Name())
 		}
 	}
-	return policy.EmbeddedCatalog(), ignored, nil
+	return policy.StandardRegistry(), ignored, nil
 }
 
-// SyncImportCatalog resolves the capability catalog the OFFLINE `sync pull` verb derives its import
-// rules from (descriptor-derived, PD6): the embedded catalog plus every external package
+// SyncImportCatalog resolves the event package registry the OFFLINE `sync pull` verb derives its import
+// rules from: the standard registry plus every external package
 // under <projectRoot>/.mnemon/loops, so a remote commit of an external importable kind imports the
 // same way the in-process worker imports it. Unlike serve boot, the manual pull verb degrades to the
-// embedded catalog (with a stderr warning) when an external package is unreadable — a corrupt loop
+// standard registry (with a stderr warning) when an external package is unreadable — a corrupt loop
 // must not block importing standard event commits.
-func SyncImportCatalog(projectRoot string, errw io.Writer) map[string]policy.Capability {
-	catalog, err := policy.ResolveCatalog(projectRoot, state.DefaultSchemaGuard().Required)
+func SyncImportCatalog(projectRoot string, errw io.Writer) policy.Registry {
+	catalog, err := policy.ResolveRegistry(projectRoot, state.DefaultSchemaGuard().Required)
 	if err != nil {
-		fmt.Fprintf(errw, "mnemon-harness: sync import: external package unreadable, importing embedded kinds only: %v\n", err)
-		return policy.EmbeddedCatalog()
+		fmt.Fprintf(errw, "mnemon-harness: sync import: external package unreadable, importing standard kinds only: %v\n", err)
+		return policy.StandardRegistry()
 	}
 	return catalog
 }
@@ -349,18 +349,18 @@ func containsLoop(loops []string, name string) bool {
 	return false
 }
 
-func OpenSyncImportRuntime(storePath string, refs []contract.ResourceRef, catalog map[string]policy.Capability) (*runtime.Runtime, error) {
+func OpenSyncImportRuntime(storePath string, refs []contract.ResourceRef, catalog policy.Registry) (*runtime.Runtime, error) {
 	return runtime.OpenRuntime(storePath, SyncImportRuntimeConfig(refs, catalog))
 }
 
 // SyncImportRuntimeConfig is the sync-import policy, fully descriptor-derived (PD6): one import rule
-// per importable capability (each selecting its declared closed-set merge strategy), kernel authority
+// per importable event package (each selecting its declared closed-set merge strategy), kernel authority
 // for exactly the importable kinds, and a guard registering each importable kind's required header
 // onto the governance base. The skipped-kind deny rule (v1.1 #4) keeps any OTHER pulled kind a
 // durable diagnostic instead of a silent drop — the same rule set withSyncImport merges into the
 // serving runtime, so the offline and in-process import paths share one policy. catalog selects the
-// importable universe (nil = embedded catalog).
-func SyncImportRuntimeConfig(refs []contract.ResourceRef, catalog map[string]policy.Capability) runtime.RuntimeConfig {
+// importable universe (nil = standard registry).
+func SyncImportRuntimeConfig(refs []contract.ResourceRef, catalog policy.Registry) runtime.RuntimeConfig {
 	catalog = resolveSyncCatalog(catalog)
 	extra := map[contract.ResourceKind][]string{}
 	for _, cap := range catalog {

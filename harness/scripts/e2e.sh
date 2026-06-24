@@ -103,7 +103,7 @@ run_host() {
 }
 
 # run_observe_skill exercises the host skill integration entry point: generate the generic
-# mnemon-observe SKILL.md from the live catalog. This is an access surface, not a harness capability.
+# mnemon-observe SKILL.md from the live registry. This is an access surface, not a harness event package.
 run_observe_skill() {
 	local host="$1" principal="$2" addr="http://127.0.0.1:8787"
 	CUR_HOST="$host-observe-skill"
@@ -122,9 +122,8 @@ run_observe_skill() {
 	echo "    observe skill generation ($host) OK"
 }
 
-# run_note proves the platform claim on the PRODUCT path (note AND the 4th capability decision)
-# via the EXTERNAL-PACKAGE route: since the P1 demotion neither capability is embedded — only
-# their KindCatalog/SchemaGuard kind registrations remain in code — so each stands up from a
+# run_note proves the platform claim on the PRODUCT path (note and decision fixtures)
+# via the EXTERNAL-PACKAGE route: neither is a standard event package, so each stands up from a
 # .mnemon/loops/<name>/capability.json package directory plus the SAME config.loops +
 # bindings.json edit (the run_external_goal mechanism; supply path changed, admission semantics
 # unchanged). setup still fail-closes `--loop note` (external packages carry no host assets), so
@@ -135,15 +134,14 @@ run_note() {
 	CUR_HOST="note-external-package"
 	local proj="$WORK/proj-note"
 	mkdir -p "$proj"
-	echo "=== E2E note+decision external capability packages ==="
+	echo "=== E2E note+decision external event packages ==="
 	(
 		cd "$proj"
 		local tok=".mnemon/harness/channel/credentials/codex-project.token"
 		"$MH" setup --host codex --principal "$principal" --control-url "$addr" >/dev/null
 
-		# The external packages: directory presence = capability declaration (loop-package-v1).
-		# capability.json carries the spec formerly embedded as assets/capabilities/note.json /
-		# decision.json (now canonical at harness/internal/capability/testdata/capabilities/).
+		# The external packages: directory presence = event package declaration.
+		# capability.json remains the external adapter filename for compatibility.
 		mkdir -p .mnemon/loops/note .mnemon/loops/decision
 		cat >.mnemon/loops/note/capability.json <<-'JSONEOF'
 		{
@@ -251,7 +249,7 @@ run_note() {
 	echo "    note+decision external packages OK"
 }
 
-# run_external_goal proves stage 5 on the product path: a capability that NEVER had a kind
+# run_external_goal proves stage 5 on the product path: an event package that never had a standard kind
 # registration in code (goal) stands up from a pure external package directory
 # (.mnemon/loops/goal/capability.json) + the SAME config.loops/binding edit the note/decision
 # external packages use — admission-equal rights. Includes the governed pull CONTENT leg (the
@@ -262,14 +260,13 @@ run_external_goal() {
 	CUR_HOST="external-goal"
 	local proj="$WORK/proj-external-goal"
 	mkdir -p "$proj"
-	echo "=== E2E external goal capability package ==="
+	echo "=== E2E external goal event package ==="
 	(
 		cd "$proj"
 		local tok=".mnemon/harness/channel/credentials/codex-project.token"
 		"$MH" setup --host codex --principal "$principal" --control-url "$addr" >/dev/null
 
-		# The external package: directory presence = capability declaration (loop-package-v1,
-		# "External capability packages").
+		# The external package: directory presence = event package declaration.
 		mkdir -p .mnemon/loops/goal
 		cat >.mnemon/loops/goal/capability.json <<-'JSONEOF'
 		{
@@ -397,7 +394,7 @@ run_external_goal() {
 }
 
 # run_foo_external proves an external package added via `loop add` can be enabled on the R1 setup
-# path as capability scope without projecting host assets.
+# path as event package scope without projecting host assets.
 run_foo_external() {
 	CUR_HOST="foo-external"
 	local proj="$WORK/proj-foo"
@@ -429,7 +426,7 @@ run_foo_external() {
 		[ -f .mnemon/loops/foo/capability.json ] || { echo "loop add did not place foo under .mnemon/loops"; exit 1; }
 		[ -f .mnemon/loops/foo/skills/foo-set/SKILL.md ] || { echo "loop add did not copy the package subtree"; exit 1; }
 
-		# Enable foo for the host. R1 setup grants capability scope and keeps host assets static.
+		# Enable foo for the host. R1 setup grants event package scope and keeps host assets static.
 		"$MH" setup --host codex --loop foo --principal codex@project --control-url http://127.0.0.1:8787 >"$WORK/foo-codex.log" 2>&1 \
 			|| { echo "setup --loop foo (codex) failed"; cat "$WORK/foo-codex.log"; exit 1; }
 
@@ -442,7 +439,7 @@ run_foo_external() {
 		# so a freshly-added external kind appears in its mechanism section without any per-kind code.
 		"$MH" loop observe-skill | grep -q "foo.write_candidate.observed" \
 			|| { echo "observe-skill did not reflect the external foo kind"; exit 1; }
-		"$MH" loop capabilities | grep -q "^foo " || { echo "loop capabilities missing foo"; exit 1; }
+		"$MH" loop packages | grep -q "^foo " || { echo "loop packages missing foo"; exit 1; }
 
 		"$MH" local run >"$WORK/run-foo.log" 2>&1 &
 		local runpid=$!
@@ -470,7 +467,7 @@ run_foo_external() {
 # port (covering the bare default path); claude-code deliberately runs on a NON-default port to
 # pin the stage-0 promise that a bare `local run` listens where setup's --control-url pointed.
 
-# write_journal_pkg installs an EXTERNAL, declared-kind capability package ("journal") into a
+# write_journal_pkg installs an EXTERNAL, declared-kind event package ("journal") into a
 # project's .mnemon/loops. journal uses the generic entry list shape (items_field "entries",
 # entry-list render) and opts into Remote Workspace import via the closed-set entry-dedup strategy
 # — a kind whose name appears NOWHERE in the platform code. It is the PD6 proof object: that a novel kind
