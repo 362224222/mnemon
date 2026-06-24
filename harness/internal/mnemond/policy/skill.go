@@ -7,8 +7,8 @@ import (
 	"strings"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation/view"
-	"github.com/mnemon-dev/mnemon/harness/internal/rule"
 )
 
 const (
@@ -21,7 +21,7 @@ const (
 // list, VALIDATING each imported declaration (id format, status enum, secret/injection scan — I15,
 // receiving-side admission is not relaxed) and rejecting a same-id-different-content conflict.
 // Parameterized by cap (kind/proposed type); skill selects it.
-func declarationDedupImport(cap Capability, in rule.RuleInput) (contract.RuleDecision, error) {
+func declarationDedupImport(cap Capability, in admission.RuleInput) (contract.RuleDecision, error) {
 	material, err := decodeRemoteSkillSyncedEventMaterial(in.Event.Payload)
 	if err != nil {
 		return contract.RuleDecision{Verdict: contract.VerdictDeny, Reasons: []string{err.Error()}}, nil

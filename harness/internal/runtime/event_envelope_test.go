@@ -6,11 +6,11 @@ import (
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
-	"github.com/mnemon-dev/mnemon/harness/internal/rule"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
 )
 
 func TestIngestObservedEventEnvelopeUsesGovernedObservationPath(t *testing.T) {
-	_, _, cs := newServerWith(t, rule.NewRuleSet(proposeRule()))
+	_, _, cs := newServerWith(t, admission.NewRuleSet(proposeRule()))
 	env := eventmodel.ObservedEnvelope(eventmodel.Event{
 		SchemaVersion: eventmodel.SchemaVersion,
 		ID:            "client-id-must-not-survive",
@@ -54,7 +54,7 @@ func TestIngestObservedEventEnvelopeUsesGovernedObservationPath(t *testing.T) {
 }
 
 func TestIngestObservedEventEnvelopeRejectsWrongPhase(t *testing.T) {
-	_, _, cs := newServerWith(t, rule.NewRuleSet())
+	_, _, cs := newServerWith(t, admission.NewRuleSet())
 	ev := eventmodel.Event{
 		SchemaVersion: eventmodel.SchemaVersion,
 		ID:            "event-1",

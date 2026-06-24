@@ -9,8 +9,8 @@ import (
 
 	"github.com/mnemon-dev/mnemon/harness/internal/assets"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation/view"
-	"github.com/mnemon-dev/mnemon/harness/internal/rule"
 )
 
 // testSpecs decodes the EMBEDDED assets/capabilities/*.json for memory/skill (single source with
@@ -216,7 +216,7 @@ func TestSpecGoldens(t *testing.T) {
 			for viewName, view := range parityViews(compiled) {
 				ev := contract.Event{Type: compiled.ObservedType, Actor: actor, IngestSeq: 7, Payload: c.payload}
 				ref := contract.ResourceRef{Kind: compiled.ResourceKind, ID: "project"}
-				dSpec, errS := compiled.Rule(parityActor, ref, Limits{}).Evaluate(rule.RuleInput{Event: ev, View: view})
+				dSpec, errS := compiled.Rule(parityActor, ref, Limits{}).Evaluate(admission.RuleInput{Event: ev, View: view})
 				if errS != nil {
 					t.Fatalf("%s/%s/%s: evaluate: %v", id, c.name, viewName, errS)
 				}

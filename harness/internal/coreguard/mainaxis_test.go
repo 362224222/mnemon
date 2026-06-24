@@ -40,22 +40,19 @@ var packageMainAxisInventory = map[string]packageMainAxis{
 	"hostagent":  {owner: ownerHostAgent, role: "hostagent setup and thin shims", target: "hostagent"},
 	"kernel":     {owner: ownerMnemond, role: "materialized event state applier", target: "mnemond/state"},
 	"mnemonhub":  {owner: ownerMnemonhub, role: "remote accepted event exchange server and exchange mechanics", target: "mnemonhub"},
-	"reconcile":  {owner: ownerMnemond, role: "event admission/materialization driver", target: "mnemond/admission"},
 	"replay":     {owner: ownerMnemond, role: "mnemond determinism verification", target: "mnemond/replay"},
-	"rule":       {owner: ownerMnemond, role: "event admission policy primitive", target: "mnemond/admission"},
 	"runtime":    {owner: ownerMnemond, role: "local mnemond event runtime", target: "mnemond"},
 	"store":      {owner: ownerMnemond, role: "local mnemond event/state store", target: "mnemond/state"},
 	"ui":         {owner: ownerMnemond, role: "read-only mnemond operator observability", target: "mnemond/observe"},
 }
 
 var demotedMainAxisPackages = map[string]bool{
-	"kernel":    true,
-	"reconcile": true,
-	"rule":      true,
-	"store":     true,
+	"kernel": true,
+	"store":  true,
 }
 
 var nestedMainAxisInventory = map[string]packageMainAxis{
+	"mnemond/admission":    {owner: ownerMnemond, role: "event admission rules and materialization driver", target: "mnemond/admission"},
 	"mnemond/access":       {owner: ownerMnemond, role: "hostagent, replica, and control access to mnemond", target: "mnemond/access"},
 	"mnemond/policy":       {owner: ownerMnemond, role: "event type schema, admission policy, risk, and default enablement", target: "mnemond/policy"},
 	"mnemond/presentation": {owner: ownerMnemond, role: "derived event presentation for hostagents", target: "mnemond/presentation"},
@@ -72,8 +69,10 @@ var retiredTopLevelImplementationPackages = []string{
 	"channel",
 	"eventview",
 	"hostsurface",
+	"reconcile",
 	"render",
 	"remotesync",
+	"rule",
 }
 
 func TestInternalPackagesHaveMainAxisOwner(t *testing.T) {

@@ -15,9 +15,8 @@ import (
 	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation/view"
-	"github.com/mnemon-dev/mnemon/harness/internal/reconcile"
-	"github.com/mnemon-dev/mnemon/harness/internal/rule"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
 
@@ -33,9 +32,9 @@ type ControlServer struct {
 	tickMu     sync.Mutex // serializes Tick: closes the GetCursor->dispatch TOCTOU + the reconciler-cursor race
 	store      *store.Store
 	kernel     *kernel.Kernel
-	reconciler *reconcile.Reconciler
+	reconciler *admission.Reconciler
 	bridge     *Bridge
-	rules      rule.RuleSet
+	rules      admission.RuleSet
 	subs       map[contract.ActorID]contract.Subscription
 	modes      contract.Modes
 	newID      func() string
@@ -58,11 +57,11 @@ func kindSet(kinds []contract.ResourceKind) map[contract.ResourceKind]bool {
 	return set
 }
 
-func New(s *store.Store, k *kernel.Kernel, rules rule.RuleSet, subs map[contract.ActorID]contract.Subscription, modes contract.Modes, newID, now func() string) *ControlServer {
+func New(s *store.Store, k *kernel.Kernel, rules admission.RuleSet, subs map[contract.ActorID]contract.Subscription, modes contract.Modes, newID, now func() string) *ControlServer {
 	return &ControlServer{
 		store:      s,
 		kernel:     k,
-		reconciler: reconcile.NewReconciler(s, k),
+		reconciler: admission.NewReconciler(s, k),
 		bridge:     NewBridge(newID, now),
 		rules:      rules,
 		subs:       subs,
@@ -289,7 +288,7 @@ func (cs *ControlServer) dispatchOne(ev contract.Event) ([]contract.Event, error
 		return []contract.Event{cs.diagnosticEvent(ev, contract.Diagnostic{
 			Stage: "readback", Reason: fmt.Sprintf("echoed digest %q != current %q", ev.ContextDigest, view.Digest), Ref: string(ev.Actor)})}, nil
 	}
-	dec, diags := cs.rules.Evaluate(rule.RuleInput{Event: ev, View: view})
+	dec, diags := cs.rules.Evaluate(admission.RuleInput{Event: ev, View: view})
 	var stamped []contract.Event
 	for _, dg := range diags { // S7: every rule error is a durable diagnostic.
 		stamped = append(stamped, cs.diagnosticEvent(ev, dg))

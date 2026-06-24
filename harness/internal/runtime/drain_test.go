@@ -6,7 +6,7 @@ import (
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
-	"github.com/mnemon-dev/mnemon/harness/internal/rule"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
 )
 
 // DrainOutbox is the driver's out-of-band claim of projection invalidations: an accepted apply
@@ -14,7 +14,7 @@ import (
 // re-drain finds nothing.
 func TestDrainOutboxClaimsInvalidations(t *testing.T) {
 	rt, err := OpenRuntime(filepath.Join(t.TempDir(), "s.db"), RuntimeConfig{
-		Rules:       rule.NewRuleSet(createOnObserve()),
+		Rules:       admission.NewRuleSet(createOnObserve()),
 		Authority:   kernel.AuthorityRules{Allow: map[contract.ActorID][]contract.ResourceKind{"agent": {"memory"}}},
 		Subs:        map[contract.ActorID]contract.Subscription{"agent": {Actor: "agent", Refs: []contract.ResourceRef{{Kind: "memory", ID: "m1"}}}},
 		SchemaGuard: kernel.SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}}),
@@ -52,7 +52,7 @@ func TestDrainOutboxClaimsInvalidations(t *testing.T) {
 // one dead row per accepted decision for the life of the project.
 func TestDrainOutboxPrunesAckedRows(t *testing.T) {
 	rt, err := OpenRuntime(filepath.Join(t.TempDir(), "s.db"), RuntimeConfig{
-		Rules:       rule.NewRuleSet(createOnObserve()),
+		Rules:       admission.NewRuleSet(createOnObserve()),
 		Authority:   kernel.AuthorityRules{Allow: map[contract.ActorID][]contract.ResourceKind{"agent": {"memory"}}},
 		Subs:        map[contract.ActorID]contract.Subscription{"agent": {Actor: "agent", Refs: []contract.ResourceRef{{Kind: "memory", ID: "m1"}}}},
 		SchemaGuard: kernel.SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}}),

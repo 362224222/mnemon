@@ -6,7 +6,7 @@ import (
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
-	"github.com/mnemon-dev/mnemon/harness/internal/rule"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
 )
 
 func TestChannelBindingValidate(t *testing.T) {
@@ -60,7 +60,7 @@ func TestChannelBindingAllowsObservedType(t *testing.T) {
 // non-header authenticator resolves the principal from a bearer token (and rejects an unknown
 // one), without the trusted X-Mnemon-Principal header.
 func TestTokenAuthenticatorSeam(t *testing.T) {
-	_, _, cs := newServerWith(t, rule.NewRuleSet())
+	_, _, cs := newServerWith(t, admission.NewRuleSet())
 	auth := access.TokenAuthenticator{Tokens: map[string]contract.ActorID{"tok-agent": "agent"}}
 	srv := httptest.NewServer(access.NewHTTPHandlerWithAuth(cs, auth))
 	defer srv.Close()

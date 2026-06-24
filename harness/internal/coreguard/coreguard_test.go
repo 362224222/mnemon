@@ -14,7 +14,7 @@ import (
 // The human-readable invariant is "the core contains generic mnemond event mechanics, not
 // hostagent- or product-specific behavior."
 var corePackages = []string{
-	"contract", "mnemond/access", "kernel", "store", "mnemond/presentation/view", "rule", "reconcile", "runtime",
+	"contract", "mnemond/access", "mnemond/admission", "kernel", "store", "mnemond/presentation/view", "runtime",
 }
 
 // forbiddenImports are the outer rings the core must never depend on: mnemond policy,
@@ -153,14 +153,14 @@ func forbiddenImportPath(path, forbidden string) bool {
 // These packages are outside the core, but their dependency direction still matters: host integration,
 // hot cue rendering, and capability semantics must remain independently replaceable.
 func TestOuterRingImportBoundaries(t *testing.T) {
-	for _, rule := range outerRingImportBoundaries {
-		_, files := packageFiles(t, rule.pkg)
+	for _, boundary := range outerRingImportBoundaries {
+		_, files := packageFiles(t, boundary.pkg)
 		for _, f := range files {
 			for _, imp := range f.Imports {
 				path := strings.Trim(imp.Path.Value, `"`)
-				for _, forbidden := range rule.forbids {
+				for _, forbidden := range boundary.forbids {
 					if strings.Contains(path, forbidden) {
-						t.Errorf("package %q imports forbidden package %q — %s", rule.pkg, path, rule.rationale)
+						t.Errorf("package %q imports forbidden package %q — %s", boundary.pkg, path, boundary.rationale)
 					}
 				}
 			}

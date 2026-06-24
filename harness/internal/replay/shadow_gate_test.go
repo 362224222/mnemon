@@ -4,8 +4,8 @@ import (
 	"testing"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
-	"github.com/mnemon-dev/mnemon/harness/internal/rule"
 )
 
 // 与嵌入 skill.json 同形的 spec,仅 enum message 异(冻结词汇内的最小演化)。
@@ -32,14 +32,14 @@ func skillSpecWithMessage(message string) policy.CapabilitySpec {
 	}
 }
 
-func skillRules(t *testing.T, message string) rule.RuleSet {
+func skillRules(t *testing.T, message string) admission.RuleSet {
 	t.Helper()
 	cap, err := policy.FromSpec(skillSpecWithMessage(message))
 	if err != nil {
 		t.Fatalf("FromSpec: %v", err)
 	}
 	ref := contract.ResourceRef{Kind: "skill", ID: "project"}
-	return rule.NewRuleSet(cap.Rule(gateActor, ref, policy.Limits{}))
+	return admission.NewRuleSet(cap.Rule(gateActor, ref, policy.Limits{}))
 }
 
 // I6 制度化(规则半边):同一规则集 Shadow 必 Clean;改动一个 capability spec 的 enum

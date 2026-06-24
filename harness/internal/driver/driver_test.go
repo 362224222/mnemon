@@ -8,14 +8,14 @@ import (
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
-	"github.com/mnemon-dev/mnemon/harness/internal/rule"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
-func createRule() rule.Rule {
+func createRule() admission.Rule {
 	ref := contract.ResourceRef{Kind: "memory", ID: "m1"}
-	return rule.NewNativeRule("creator", "agent", "memory.write.proposed", []string{"memory.observed"},
-		func(in rule.RuleInput) (contract.RuleDecision, error) {
+	return admission.NewNativeRule("creator", "agent", "memory.write.proposed", []string{"memory.observed"},
+		func(in admission.RuleInput) (contract.RuleDecision, error) {
 			for _, rv := range in.View.Resources {
 				if rv.Ref == ref && rv.Version > 0 {
 					return contract.RuleDecision{Verdict: contract.VerdictAllow}, nil
@@ -31,7 +31,7 @@ func createRule() rule.Rule {
 func bootRuntime(t *testing.T) *runtime.Runtime {
 	t.Helper()
 	rt, err := runtime.OpenRuntime(filepath.Join(t.TempDir(), "s.db"), runtime.RuntimeConfig{
-		Rules:       rule.NewRuleSet(createRule()),
+		Rules:       admission.NewRuleSet(createRule()),
 		Authority:   kernel.AuthorityRules{Allow: map[contract.ActorID][]contract.ResourceKind{"agent": {"memory"}}},
 		Subs:        map[contract.ActorID]contract.Subscription{"agent": {Actor: "agent", Refs: []contract.ResourceRef{{Kind: "memory", ID: "m1"}}}},
 		SchemaGuard: kernel.SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}, "goal": {"statement"}}),

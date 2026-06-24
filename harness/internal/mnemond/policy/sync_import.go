@@ -5,14 +5,14 @@ import (
 	"sort"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/rule"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
 )
 
 // RemoteImportRule builds the remote-import admission rule for one importable capability and the sync
 // import principal: it observes the capability's system-derived <kind>.remote_synced_event.observed event
 // and dispatches to the capability's declared (closed-set) merge strategy. Returns ok=false when the
 // capability is not importable (the caller skips it).
-func RemoteImportRule(cap Capability, principal contract.ActorID) (rule.Rule, bool) {
+func RemoteImportRule(cap Capability, principal contract.ActorID) (admission.Rule, bool) {
 	if !cap.Sync.Importable {
 		return nil, false
 	}
@@ -20,8 +20,8 @@ func RemoteImportRule(cap Capability, principal contract.ActorID) (rule.Rule, bo
 	if strategy == nil {
 		return nil, false
 	}
-	return rule.NewNativeRule("remote-import:"+cap.Name+":"+string(principal), principal, cap.ProposedType, []string{cap.RemoteSyncedEventObserved()},
-		func(in rule.RuleInput) (contract.RuleDecision, error) {
+	return admission.NewNativeRule("remote-import:"+cap.Name+":"+string(principal), principal, cap.ProposedType, []string{cap.RemoteSyncedEventObserved()},
+		func(in admission.RuleInput) (contract.RuleDecision, error) {
 			if in.Event.Actor != principal {
 				return contract.RuleDecision{Verdict: contract.VerdictAllow}, nil
 			}
@@ -30,7 +30,7 @@ func RemoteImportRule(cap Capability, principal contract.ActorID) (rule.Rule, bo
 }
 
 // importStrategy maps a (FromSpec-validated) merge-strategy name to its closed-set implementation.
-func importStrategy(merge string) func(Capability, rule.RuleInput) (contract.RuleDecision, error) {
+func importStrategy(merge string) func(Capability, admission.RuleInput) (contract.RuleDecision, error) {
 	switch merge {
 	case "entry-dedup":
 		return entryDedupImport
@@ -46,8 +46,8 @@ func importStrategy(merge string) func(Capability, rule.RuleInput) (contract.Rul
 // RemoteImportRules builds the remote-import rules for every importable capability in the catalog,
 // sorted by kind for determinism — the descriptor-derived replacement for the hardcoded
 // memory/skill import-rule list (PD6).
-func RemoteImportRules(catalog map[string]Capability, principal contract.ActorID) []rule.Rule {
-	var rules []rule.Rule
+func RemoteImportRules(catalog map[string]Capability, principal contract.ActorID) []admission.Rule {
+	var rules []admission.Rule
 	for _, cap := range sortedImportable(catalog) {
 		if r, ok := RemoteImportRule(cap, principal); ok {
 			rules = append(rules, r)
@@ -99,9 +99,9 @@ const SyncImportSkippedObserved = "sync.import_skipped.observed"
 // skipped observation, gates on the sync import principal (foreign events pass through), and always
 // denies with a reason naming the kind — the deny is what produces the durable *.diagnostic (S7);
 // no write, no proposal.
-func SyncImportSkippedRule(principal contract.ActorID) rule.Rule {
-	return rule.NewNativeRule("sync-import-skipped:"+string(principal), principal, "", []string{SyncImportSkippedObserved},
-		func(in rule.RuleInput) (contract.RuleDecision, error) {
+func SyncImportSkippedRule(principal contract.ActorID) admission.Rule {
+	return admission.NewNativeRule("sync-import-skipped:"+string(principal), principal, "", []string{SyncImportSkippedObserved},
+		func(in admission.RuleInput) (contract.RuleDecision, error) {
 			if in.Event.Actor != principal {
 				return contract.RuleDecision{Verdict: contract.VerdictAllow}, nil
 			}

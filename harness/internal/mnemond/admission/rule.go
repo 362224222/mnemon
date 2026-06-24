@@ -1,7 +1,8 @@
-// Package rule is the server-side admission-controller pre-gate (D4). A rule observes a typed input (the
-// triggering event + the projection it was dispatched on) and returns a rich RuleDecision — it PROPOSES or
-// ENQUEUES, but never writes (S12: a rule holds no Store/Kernel). The kernel stays the only canonical writer.
-package rule
+// Package admission owns mnemond's event admission pipeline. Admission rules evaluate a typed
+// input (the triggering event + the scoped view it was dispatched on) and return a rich
+// RuleDecision: they may propose or deny, but they never write canonical state. The kernel remains
+// the only materialized-state writer.
+package admission
 
 import (
 	"fmt"
@@ -62,9 +63,9 @@ func (r NativeRule) Evaluate(in RuleInput) (contract.RuleDecision, error) {
 	return d, nil
 }
 
-// ShadowReport is the diff of a candidate policy vs the live policy over the same event log (S8). It is owned
-// HERE (not replay) so replay->rule stays one-way (D11/blocker #4): replay imports rule.ShadowReport, while
-// rule never imports replay. It reports diffs, never pass/fail.
+// ShadowReport is the diff of a candidate policy vs the live policy over the same event log (S8).
+// It is owned here so replay imports admission.ShadowReport, while admission never imports replay.
+// It reports diffs, never pass/fail.
 type ShadowReport struct {
 	Clean bool
 	Diffs int

@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/rule"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
 )
 
 // S7 fail-closed (new with the job-lane removal): a rule that returns an UNKNOWN verdict string —
@@ -13,11 +13,11 @@ import (
 // diagnostic event, never be silently swallowed (neither by the rule-set reduction's zero rank nor
 // by dispatchOne's switch falling through).
 func TestUnknownVerdictEmitsDiagnosticNotSilent(t *testing.T) {
-	stale := rule.NewNativeRule("stale", "agent", "memory.write.proposed", []string{"memory.observed"},
-		func(rule.RuleInput) (contract.RuleDecision, error) {
+	stale := admission.NewNativeRule("stale", "agent", "memory.write.proposed", []string{"memory.observed"},
+		func(admission.RuleInput) (contract.RuleDecision, error) {
 			return contract.RuleDecision{Verdict: contract.RuleVerdict("enqueue_job")}, nil // retired => unknown
 		})
-	s, _, cs := newServerWith(t, rule.NewRuleSet(stale))
+	s, _, cs := newServerWith(t, admission.NewRuleSet(stale))
 	if _, _, err := cs.Ingest("agent", contract.ObservationEnvelope{ExternalID: "e1", Event: contract.Event{Type: "memory.observed", CorrelationID: "c1"}}); err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
@@ -42,11 +42,11 @@ func TestUnknownVerdictEmitsDiagnosticNotSilent(t *testing.T) {
 // here after the job-lane test file that originally held this pin was deleted; the production
 // branch in dispatchOne is alive and unrelated to the lane.)
 func TestProposeNilProposalEmitsDiagnostic(t *testing.T) {
-	nilProposer := rule.NewNativeRule("nil-proposer", "agent", "memory.write.proposed", []string{"memory.observed"},
-		func(rule.RuleInput) (contract.RuleDecision, error) {
+	nilProposer := admission.NewNativeRule("nil-proposer", "agent", "memory.write.proposed", []string{"memory.observed"},
+		func(admission.RuleInput) (contract.RuleDecision, error) {
 			return contract.RuleDecision{Verdict: contract.VerdictPropose}, nil // propose with no proposal
 		})
-	s, _, cs := newServerWith(t, rule.NewRuleSet(nilProposer))
+	s, _, cs := newServerWith(t, admission.NewRuleSet(nilProposer))
 	if _, _, err := cs.Ingest("agent", contract.ObservationEnvelope{ExternalID: "e1", Event: contract.Event{Type: "memory.observed", CorrelationID: "c1"}}); err != nil {
 		t.Fatalf("ingest: %v", err)
 	}

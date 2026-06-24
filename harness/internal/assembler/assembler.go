@@ -13,8 +13,8 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
-	"github.com/mnemon-dev/mnemon/harness/internal/rule"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
@@ -36,7 +36,7 @@ func Assemble(cfg config.File, bindings []access.ChannelBinding, catalog map[str
 	if catalog == nil {
 		catalog = policy.EmbeddedCatalog()
 	}
-	var rules []rule.Rule
+	var rules []admission.Rule
 	allow := map[contract.ActorID][]contract.ResourceKind{}
 	// The live kernel's schema guard is the governance core (kernel.DefaultSchemaGuard) PLUS each
 	// enabled capability's declared required header — so a declared user kind has ONE source, its
@@ -79,7 +79,7 @@ func Assemble(cfg config.File, bindings []access.ChannelBinding, catalog map[str
 			}
 			rules = append(rules, cap.Rule(b.Principal, ref, policy.Limits{MaxPayloadBytes: cc.MaxPayloadBytes}))
 			// Risk gate alongside the admission rule (P3): the gate's deny outranks the admission propose
-			// (rule.Evaluate is deny-priority). mid → evidence required; high → the operator-only gate,
+			// (admission.Evaluate is deny-priority). mid → evidence required; high → the operator-only gate,
 			// built ONLY for non-operator (host-agent) principals so an operator (control-agent) is exempt.
 			switch cap.Risk {
 			case "mid":
@@ -95,7 +95,7 @@ func Assemble(cfg config.File, bindings []access.ChannelBinding, catalog map[str
 	return runtime.RuntimeConfig{
 		Bindings:    bindings,
 		Subs:        access.SubsFromBindings(bindings),
-		Rules:       rule.NewRuleSet(rules...),
+		Rules:       admission.NewRuleSet(rules...),
 		Authority:   kernel.AuthorityRules{Allow: allow},
 		SchemaGuard: guard,
 	}, nil

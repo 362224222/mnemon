@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/rule"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
 )
 
 // mustEventAtSeq reads the stored event at ingest seq via the durable log (re-stamped from rowid).
@@ -27,7 +27,7 @@ func mustEventAtSeq(t *testing.T, cs *ControlServer, seq int64) contract.Event {
 // client-forgeable provenance, never trusting the payload claim (D7/S9). A client cannot forge the
 // actor, id, ts, schema version, read-set, or event-view ref.
 func TestIngestStampsServerFields(t *testing.T) {
-	_, _, cs := newServerWith(t, rule.NewRuleSet())
+	_, _, cs := newServerWith(t, admission.NewRuleSet())
 	seq, _, err := cs.Ingest("codex@project", contract.ObservationEnvelope{
 		ExternalID: "x1",
 		Event: contract.Event{

@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/rule"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
 )
 
 // itemDedupImport is the "item-dedup" remote-import strategy (capability-spec v2 §Sync): the GENERIC
@@ -19,7 +19,7 @@ import (
 // (actor+ingest_seq stamped at admission), so cross-replica items never collide; a
 // same-id/different-content divergence is rejected (I15, defensive). The merged resource header is
 // re-derived from the capability's OWN render, never hardcoded.
-func itemDedupImport(cap Capability, in rule.RuleInput) (contract.RuleDecision, error) {
+func itemDedupImport(cap Capability, in admission.RuleInput) (contract.RuleDecision, error) {
 	material, err := decodeRemoteSyncedEventMaterial(in.Event.Payload)
 	if err != nil {
 		return contract.RuleDecision{Verdict: contract.VerdictDeny, Reasons: []string{err.Error()}}, nil

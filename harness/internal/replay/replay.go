@@ -12,9 +12,8 @@ import (
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation/view"
-	"github.com/mnemon-dev/mnemon/harness/internal/reconcile"
-	"github.com/mnemon-dev/mnemon/harness/internal/rule"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
 
@@ -42,7 +41,7 @@ func ordered(events []contract.Event) []contract.Event {
 // live accepted writes for; sourcing them from the log (not a compiled catalog) keeps replay
 // deterministic however the LIVE run's user kinds are sourced — a graduated memory/skill or an
 // external declared kind replays identically (I6, D3/PD5). The write extraction mirrors
-// reconcile.opFromEvent's JSON round-trip (Payload["writes"] decodes to []any after AppendEvent).
+// admission.opFromEvent's JSON round-trip (Payload["writes"] decodes to []any after AppendEvent).
 func logWriteKinds(events []contract.Event) []contract.ResourceKind {
 	seen := map[contract.ResourceKind]bool{}
 	var kinds []contract.ResourceKind
@@ -97,7 +96,7 @@ func permissiveAuthority(events []contract.Event) kernel.AuthorityRules {
 // kernel. It is a pure function of the events (no live store), reproducing the live decisions up to the
 // masked dynamic fields. The candidate ruleset is retained for signature symmetry with Shadow — pure replay
 // needs no policy because the logged proposals are authoritative (event-sourcing).
-func Replay(events []contract.Event, candidate rule.RuleSet) []contract.Decision {
+func Replay(events []contract.Event, candidate admission.RuleSet) []contract.Decision {
 	return drive(ordered(events))
 }
 
@@ -108,7 +107,7 @@ func Replay(events []contract.Event, candidate rule.RuleSet) []contract.Decision
 // change lives in observed->decision, NOT in re-reconciling the already-minted *.proposed events (the prior
 // model never ran the candidate's rules at all, so every real rule change passed Clean).
 //
-// View TIMING matches the server, which evaluates rules at DISPATCH time — BEFORE that tick's reconcile. Shadow
+// View TIMING matches the server, which evaluates rules at DISPATCH time — BEFORE that tick's admission. Shadow
 // walks the log in IngestSeq order on a throwaway kernel: a logged *.proposed event is applied (reconciled) to
 // evolve canonical state; an OBSERVED event is evaluated against the state BUILT FROM THE PROPOSALS THAT PRECEDE
 // IT in the log — i.e. the dispatch-time state, not the final state (evaluating against final state yields a
@@ -121,14 +120,14 @@ func Replay(events []contract.Event, candidate rule.RuleSet) []contract.Decision
 // reason) IS a behavior change. Diagnostics likewise are durable: a candidate that errors or returns a
 // borrowed-emit proposal reduces to Verdict allow but emits one. It reports diffs, never pass/fail (the
 // operator gates promotion on Clean).
-func Shadow(events []contract.Event, subs map[contract.ActorID]contract.Subscription, live, candidate rule.RuleSet) rule.ShadowReport {
+func Shadow(events []contract.Event, subs map[contract.ActorID]contract.Subscription, live, candidate admission.RuleSet) admission.ShadowReport {
 	s, err := store.OpenStore(":memory:")
 	if err != nil {
-		return rule.ShadowReport{}
+		return admission.ShadowReport{}
 	}
 	defer s.Close()
 	k := kernel.NewKernel(s, logSchemaGuard(events), permissiveAuthority(events))
-	r := reconcile.NewReconciler(s, k)
+	r := admission.NewReconciler(s, k)
 
 	diffs := 0
 	for _, ev := range ordered(events) {
@@ -145,14 +144,14 @@ func Shadow(events []contract.Event, subs map[contract.ActorID]contract.Subscrip
 		}
 		// OBSERVED event: evaluate BOTH policies against the current (dispatch-time) scoped view.
 		view := view.ScopedView(s, subs[ev.Actor])
-		in := rule.RuleInput{Event: ev, View: view}
+		in := admission.RuleInput{Event: ev, View: view}
 		ld, ldiag := live.Evaluate(in)
 		cd, cdiag := candidate.Evaluate(in)
 		if canonicalRuleResult(ld, ldiag) != canonicalRuleResult(cd, cdiag) {
 			diffs++
 		}
 	}
-	return rule.ShadowReport{Clean: diffs == 0, Diffs: diffs}
+	return admission.ShadowReport{Clean: diffs == 0, Diffs: diffs}
 }
 
 // canonicalRuleResult serializes the behaviorally-meaningful output of a rule evaluation — the decision
@@ -201,7 +200,7 @@ func drive(events []contract.Event) []contract.Decision {
 	}
 	defer s.Close()
 	k := kernel.NewKernel(s, logSchemaGuard(events), permissiveAuthority(events))
-	r := reconcile.NewReconciler(s, k)
+	r := admission.NewReconciler(s, k)
 	for _, ev := range events {
 		if _, err := s.AppendEvent(ev); err != nil {
 			continue

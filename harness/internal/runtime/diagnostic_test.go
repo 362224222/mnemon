@@ -5,14 +5,14 @@ import (
 	"testing"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/rule"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
 
 // ruleProposing always proposes the given writes for memory.observed (used to exercise each reject class).
-func ruleProposing(id string, writes []contract.ResourceWrite) rule.Rule {
-	return rule.NewNativeRule(id, "agent", "memory.write.proposed", []string{"memory.observed"},
-		func(rule.RuleInput) (contract.RuleDecision, error) {
+func ruleProposing(id string, writes []contract.ResourceWrite) admission.Rule {
+	return admission.NewNativeRule(id, "agent", "memory.write.proposed", []string{"memory.observed"},
+		func(admission.RuleInput) (contract.RuleDecision, error) {
 			return contract.RuleDecision{Verdict: contract.VerdictPropose, Proposal: &contract.ProposedEvent{
 				Type: "memory.write.proposed", Payload: map[string]any{"writes": writes}}}, nil
 		})
@@ -40,7 +40,7 @@ func observe(t *testing.T, cs *ControlServer) {
 func TestOutOfScopeProposalEmitsBridgeDiagnostic(t *testing.T) {
 	r := ruleProposing("evil", []contract.ResourceWrite{
 		{Ref: contract.ResourceRef{Kind: "memory", ID: "m2"}, Kind: contract.OpUpdate, BasedOn: 0, Fields: map[string]any{"content": "x"}}})
-	s, _, cs := newServerWith(t, rule.NewRuleSet(r))
+	s, _, cs := newServerWith(t, admission.NewRuleSet(r))
 	observe(t, cs)
 	ds, err := cs.Tick()
 	if err != nil {
@@ -61,7 +61,7 @@ func TestOutOfScopeProposalEmitsBridgeDiagnostic(t *testing.T) {
 func TestSchemaRejectEmitsDiagnostic(t *testing.T) {
 	r := ruleProposing("schemabad", []contract.ResourceWrite{
 		{Ref: contract.ResourceRef{Kind: "memory", ID: "m1"}, Kind: contract.OpUpdate, BasedOn: 1, Fields: map[string]any{}}})
-	s, _, cs := newServerWith(t, rule.NewRuleSet(r))
+	s, _, cs := newServerWith(t, admission.NewRuleSet(r))
 	observe(t, cs)
 	ds, _ := cs.Tick()
 	if len(ds) != 1 || ds[0].Status != contract.Rejected {
@@ -80,7 +80,7 @@ func TestSchemaRejectEmitsDiagnostic(t *testing.T) {
 func TestCASConflictEmitsDiagnosticNamingVersion(t *testing.T) {
 	r := ruleProposing("stale", []contract.ResourceWrite{
 		{Ref: contract.ResourceRef{Kind: "memory", ID: "m1"}, Kind: contract.OpUpdate, BasedOn: 99, Fields: map[string]any{"content": "x"}}})
-	s, _, cs := newServerWith(t, rule.NewRuleSet(r))
+	s, _, cs := newServerWith(t, admission.NewRuleSet(r))
 	observe(t, cs)
 	ds, _ := cs.Tick()
 	if len(ds) != 1 || ds[0].Status == contract.Accepted {

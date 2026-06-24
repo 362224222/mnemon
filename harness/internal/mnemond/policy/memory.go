@@ -11,8 +11,8 @@ import (
 	"strings"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation/view"
-	"github.com/mnemon-dev/mnemon/harness/internal/rule"
 )
 
 const (
@@ -26,7 +26,7 @@ const (
 // none, and rejecting a same-id-different-content conflict (I15 — receiving-side admission is not
 // relaxed). Parameterized by cap (kind/proposed type), so it carries no kind literal; memory selects
 // it.
-func entryDedupImport(cap Capability, in rule.RuleInput) (contract.RuleDecision, error) {
+func entryDedupImport(cap Capability, in admission.RuleInput) (contract.RuleDecision, error) {
 	material, err := decodeRemoteMemorySyncedEventMaterial(in.Event.Payload)
 	if err != nil {
 		return contract.RuleDecision{Verdict: contract.VerdictDeny, Reasons: []string{err.Error()}}, nil

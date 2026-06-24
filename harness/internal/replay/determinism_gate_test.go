@@ -8,8 +8,8 @@ import (
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
-	"github.com/mnemon-dev/mnemon/harness/internal/rule"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
@@ -19,7 +19,7 @@ func gateRuntime(t *testing.T) *runtime.Runtime {
 	t.Helper()
 	ref := contract.ResourceRef{Kind: "memory", ID: "project"}
 	rt, err := runtime.OpenRuntime(filepath.Join(t.TempDir(), "g.db"), runtime.RuntimeConfig{
-		Rules:       rule.NewRuleSet(policy.EmbeddedCatalog()["memory"].Rule(gateActor, ref, policy.Limits{})),
+		Rules:       admission.NewRuleSet(policy.EmbeddedCatalog()["memory"].Rule(gateActor, ref, policy.Limits{})),
 		Authority:   kernel.AuthorityRules{Allow: map[contract.ActorID][]contract.ResourceKind{gateActor: {"memory"}}},
 		Subs:        map[contract.ActorID]contract.Subscription{gateActor: {Actor: gateActor, Refs: []contract.ResourceRef{ref}}},
 		SchemaGuard: kernel.SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}, "goal": {"statement"}}),
@@ -103,7 +103,7 @@ func TestReplayReproducesLiveDecisions(t *testing.T) {
 		t.Fatal("the deny step must leave a durable *.diagnostic in the log")
 	}
 
-	replayed := Replay(events, rule.RuleSet{})
+	replayed := Replay(events, admission.RuleSet{})
 	if len(replayed) != len(live) {
 		t.Fatalf("decision count: live=%d replay=%d", len(live), len(replayed))
 	}
@@ -171,8 +171,8 @@ func TestReplayAndShadowHonorIngestSeqOverSliceOrder(t *testing.T) {
 		reversed[len(events)-1-i] = ev
 	}
 
-	want := Replay(events, rule.RuleSet{})
-	got := Replay(reversed, rule.RuleSet{})
+	want := Replay(events, admission.RuleSet{})
+	got := Replay(reversed, admission.RuleSet{})
 	if len(got) != len(want) {
 		t.Fatalf("reversed-input replay count %d != %d", len(got), len(want))
 	}
@@ -185,7 +185,7 @@ func TestReplayAndShadowHonorIngestSeqOverSliceOrder(t *testing.T) {
 	subs := map[contract.ActorID]contract.Subscription{
 		gateActor: {Actor: gateActor, Refs: []contract.ResourceRef{{Kind: "memory", ID: "project"}}},
 	}
-	live := rule.NewRuleSet(policy.EmbeddedCatalog()["memory"].Rule(gateActor, contract.ResourceRef{Kind: "memory", ID: "project"}, policy.Limits{}))
+	live := admission.NewRuleSet(policy.EmbeddedCatalog()["memory"].Rule(gateActor, contract.ResourceRef{Kind: "memory", ID: "project"}, policy.Limits{}))
 	a := Shadow(events, subs, live, live)
 	b := Shadow(reversed, subs, live, live)
 	if a != b {

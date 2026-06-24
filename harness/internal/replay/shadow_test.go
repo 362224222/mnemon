@@ -6,21 +6,21 @@ import (
 	"testing"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/rule"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
 )
 
-func alwaysAllow(id string, actor contract.ActorID) rule.Rule {
-	return rule.NewNativeRule(id, actor, "memory.write.proposed", []string{"memory.observed"},
-		func(rule.RuleInput) (contract.RuleDecision, error) {
+func alwaysAllow(id string, actor contract.ActorID) admission.Rule {
+	return admission.NewNativeRule(id, actor, "memory.write.proposed", []string{"memory.observed"},
+		func(admission.RuleInput) (contract.RuleDecision, error) {
 			return contract.RuleDecision{Verdict: contract.VerdictAllow}, nil
 		})
 }
 
 // proposeAtVersion proposes only when the scoped resource is at wantVer, else allows — a version-sensitive
 // policy used to expose Shadow's view TIMING.
-func proposeAtVersion(id string, actor contract.ActorID, wantVer contract.Version) rule.Rule {
-	return rule.NewNativeRule(id, actor, "memory.write.proposed", []string{"memory.observed"},
-		func(in rule.RuleInput) (contract.RuleDecision, error) {
+func proposeAtVersion(id string, actor contract.ActorID, wantVer contract.Version) admission.Rule {
+	return admission.NewNativeRule(id, actor, "memory.write.proposed", []string{"memory.observed"},
+		func(in admission.RuleInput) (contract.RuleDecision, error) {
 			rv := in.View.Resources[0]
 			if rv.Version != wantVer {
 				return contract.RuleDecision{Verdict: contract.VerdictAllow}, nil
@@ -45,18 +45,18 @@ func observedLog() ([]contract.Event, map[contract.ActorID]contract.Subscription
 	return events, subs
 }
 
-func proposeOnObserved(id string, actor contract.ActorID, content string) rule.Rule {
-	return rule.NewNativeRule(id, actor, "memory.write.proposed", []string{"memory.observed"},
-		func(in rule.RuleInput) (contract.RuleDecision, error) {
+func proposeOnObserved(id string, actor contract.ActorID, content string) admission.Rule {
+	return admission.NewNativeRule(id, actor, "memory.write.proposed", []string{"memory.observed"},
+		func(in admission.RuleInput) (contract.RuleDecision, error) {
 			rv := in.View.Resources[0]
 			return contract.RuleDecision{Verdict: contract.VerdictPropose, Proposal: &contract.ProposedEvent{Type: "memory.write.proposed",
 				Payload: map[string]any{"writes": []contract.ResourceWrite{{Ref: rv.Ref, Kind: contract.OpUpdate, BasedOn: rv.Version, Fields: map[string]any{"content": content}}}}}}, nil
 		})
 }
 
-func denyOnObserved(id string, actor contract.ActorID) rule.Rule {
-	return rule.NewNativeRule(id, actor, "memory.write.proposed", []string{"memory.observed"},
-		func(rule.RuleInput) (contract.RuleDecision, error) {
+func denyOnObserved(id string, actor contract.ActorID) admission.Rule {
+	return admission.NewNativeRule(id, actor, "memory.write.proposed", []string{"memory.observed"},
+		func(admission.RuleInput) (contract.RuleDecision, error) {
 			return contract.RuleDecision{Verdict: contract.VerdictDeny}, nil
 		})
 }
@@ -67,8 +67,8 @@ func denyOnObserved(id string, actor contract.ActorID) rule.Rule {
 // an identical policy is clean; Shadow never mutates a live store.
 func TestShadowExercisesCandidateOverObservedEvents(t *testing.T) {
 	events, subs := observedLog()
-	live := rule.NewRuleSet(proposeOnObserved("p", "agent", "x"))
-	candidate := rule.NewRuleSet(denyOnObserved("d", "agent"))
+	live := admission.NewRuleSet(proposeOnObserved("p", "agent", "x"))
+	candidate := admission.NewRuleSet(denyOnObserved("d", "agent"))
 
 	liveStore, _ := liveDecisions(t, events)
 	before := liveStore.DecisionCount()
@@ -89,7 +89,7 @@ func TestShadowExercisesCandidateOverObservedEvents(t *testing.T) {
 // different content diverge (the old kernel-diff false-clean class cannot recur: full payload is compared).
 func TestShadowCatchesProposalContentDifference(t *testing.T) {
 	events, subs := observedLog()
-	rep := Shadow(events, subs, rule.NewRuleSet(proposeOnObserved("p", "agent", "alpha")), rule.NewRuleSet(proposeOnObserved("p", "agent", "beta")))
+	rep := Shadow(events, subs, admission.NewRuleSet(proposeOnObserved("p", "agent", "alpha")), admission.NewRuleSet(proposeOnObserved("p", "agent", "beta")))
 	if rep.Clean || rep.Diffs == 0 {
 		t.Fatalf("a candidate proposing different CONTENT must be non-clean; got %+v", rep)
 	}
@@ -99,7 +99,7 @@ func TestShadowCatchesProposalContentDifference(t *testing.T) {
 // identity) diverges — the origin is part of the behavior (and the R2 misattribution fix carries it).
 func TestShadowCatchesOriginActorDifference(t *testing.T) {
 	events, subs := observedLog()
-	rep := Shadow(events, subs, rule.NewRuleSet(proposeOnObserved("p", "agent", "x")), rule.NewRuleSet(proposeOnObserved("p", "other", "x")))
+	rep := Shadow(events, subs, admission.NewRuleSet(proposeOnObserved("p", "agent", "x")), admission.NewRuleSet(proposeOnObserved("p", "other", "x")))
 	if rep.Clean || rep.Diffs == 0 {
 		t.Fatalf("a candidate stamping a different origin actor must be non-clean; got %+v", rep)
 	}
@@ -117,8 +117,8 @@ func TestShadowUsesDispatchTimeStateNotFinalState(t *testing.T) {
 		proposeWrite("bump", contract.ResourceWrite{Ref: mref("m1"), Kind: contract.OpUpdate, BasedOn: 1, Fields: map[string]any{"content": "bumped"}}),
 	}
 	subs := map[contract.ActorID]contract.Subscription{"agent": {Actor: "agent", Refs: []contract.ResourceRef{mref("m1")}}}
-	live := rule.NewRuleSet(proposeAtVersion("v1", "agent", 1)) // proposes at m1@1, allows otherwise
-	candidate := rule.NewRuleSet(alwaysAllow("a", "agent"))     // always allows
+	live := admission.NewRuleSet(proposeAtVersion("v1", "agent", 1)) // proposes at m1@1, allows otherwise
+	candidate := admission.NewRuleSet(alwaysAllow("a", "agent"))     // always allows
 	rep := Shadow(events, subs, live, candidate)
 	if rep.Clean {
 		t.Fatalf("a divergence at the DISPATCH-time state (m1@1) must be caught even though the FINAL state (m1@2) matches; got %+v", rep)
@@ -130,9 +130,9 @@ func TestShadowUsesDispatchTimeStateNotFinalState(t *testing.T) {
 // diagnostics only after promotion. Shadow compares the decision AND the diagnostic slice.
 func TestShadowComparesDiagnostics(t *testing.T) {
 	events, subs := observedLog()
-	live := rule.NewRuleSet(alwaysAllow("a", "agent"))
-	candidate := rule.NewRuleSet(rule.NewNativeRule("err", "agent", "memory.write.proposed", []string{"memory.observed"},
-		func(rule.RuleInput) (contract.RuleDecision, error) {
+	live := admission.NewRuleSet(alwaysAllow("a", "agent"))
+	candidate := admission.NewRuleSet(admission.NewNativeRule("err", "agent", "memory.write.proposed", []string{"memory.observed"},
+		func(admission.RuleInput) (contract.RuleDecision, error) {
 			return contract.RuleDecision{}, errors.New("boom")
 		}))
 	rep := Shadow(events, subs, live, candidate)
@@ -146,18 +146,18 @@ func TestShadowComparesDiagnostics(t *testing.T) {
 // rewrites the auditable trail — a behavior change the Clean gate must catch, not certify.
 func TestShadowComparesDenyReasons(t *testing.T) {
 	events, subs := observedLog()
-	denyWithReason := func(reason string) rule.Rule {
-		return rule.NewNativeRule("d", "agent", "memory.write.proposed", []string{"memory.observed"},
-			func(rule.RuleInput) (contract.RuleDecision, error) {
+	denyWithReason := func(reason string) admission.Rule {
+		return admission.NewNativeRule("d", "agent", "memory.write.proposed", []string{"memory.observed"},
+			func(admission.RuleInput) (contract.RuleDecision, error) {
 				return contract.RuleDecision{Verdict: contract.VerdictDeny, Reasons: []string{reason}}, nil
 			})
 	}
-	rep := Shadow(events, subs, rule.NewRuleSet(denyWithReason("SECURITY: cross-tenant leak blocked")), rule.NewRuleSet(denyWithReason("ok")))
+	rep := Shadow(events, subs, admission.NewRuleSet(denyWithReason("SECURITY: cross-tenant leak blocked")), admission.NewRuleSet(denyWithReason("ok")))
 	if rep.Clean {
 		t.Fatalf("a candidate that rewrites the durable deny reason must NOT be clean (S7 audit trail); got %+v", rep)
 	}
 	// identical reasons -> still clean (no false positive).
-	if c := Shadow(events, subs, rule.NewRuleSet(denyWithReason("same")), rule.NewRuleSet(denyWithReason("same"))); !c.Clean {
+	if c := Shadow(events, subs, admission.NewRuleSet(denyWithReason("same")), admission.NewRuleSet(denyWithReason("same"))); !c.Clean {
 		t.Fatalf("identical reasons must stay clean; got %+v", c)
 	}
 }
@@ -168,21 +168,21 @@ func TestShadowComparesDenyReasons(t *testing.T) {
 // reason/verdict change. The comparison must still distinguish the other fields.
 func TestShadowComparesEvenWithNonFinitePayload(t *testing.T) {
 	events, subs := observedLog()
-	proposeWithReason := func(reason string, cost float64) rule.Rule {
-		return rule.NewNativeRule("j", "agent", "memory.write.proposed", []string{"memory.observed"},
-			func(rule.RuleInput) (contract.RuleDecision, error) {
+	proposeWithReason := func(reason string, cost float64) admission.Rule {
+		return admission.NewNativeRule("j", "agent", "memory.write.proposed", []string{"memory.observed"},
+			func(admission.RuleInput) (contract.RuleDecision, error) {
 				return contract.RuleDecision{Verdict: contract.VerdictPropose, Reasons: []string{reason},
 					Proposal: &contract.ProposedEvent{Type: "memory.write.proposed",
 						Payload: map[string]any{"est_cost_usd": cost}}}, nil
 			})
 	}
 	nan := math.NaN()
-	rep := Shadow(events, subs, rule.NewRuleSet(proposeWithReason("SECURITY: exfil blocked", nan)), rule.NewRuleSet(proposeWithReason("routine", nan)))
+	rep := Shadow(events, subs, admission.NewRuleSet(proposeWithReason("SECURITY: exfil blocked", nan)), admission.NewRuleSet(proposeWithReason("routine", nan)))
 	if rep.Clean {
 		t.Fatalf("a NaN payload value must not collapse divergent reasons to clean; got %+v", rep)
 	}
 	// identical policies (even with a NaN payload) stay clean (no false positive).
-	if c := Shadow(events, subs, rule.NewRuleSet(proposeWithReason("same", nan)), rule.NewRuleSet(proposeWithReason("same", nan))); !c.Clean {
+	if c := Shadow(events, subs, admission.NewRuleSet(proposeWithReason("same", nan)), admission.NewRuleSet(proposeWithReason("same", nan))); !c.Clean {
 		t.Fatalf("identical policies must stay clean even with a NaN payload; got %+v", c)
 	}
 }

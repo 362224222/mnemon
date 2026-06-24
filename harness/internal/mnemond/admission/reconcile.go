@@ -1,4 +1,4 @@
-package reconcile
+package admission
 
 import (
 	"encoding/json"
@@ -32,7 +32,7 @@ func NewReconciler(s *store.Store, k *kernel.Kernel) *Reconciler {
 }
 
 // opFromEvent builds the KernelOp from a TRUSTED event. Actor and read-set come from the event envelope
-// which the reconciler/registry stamped from trusted sources (registry binding + the dispatched projection),
+// which the admission path stamped from trusted sources (registry binding + the dispatched scoped view),
 // NEVER from callback-controlled payload (trust-boundary fix, Invariants #13/#15).
 //
 // Deviation from the plan's literal `ev.Payload["writes"].([]contract.ResourceWrite)`: that type-assert

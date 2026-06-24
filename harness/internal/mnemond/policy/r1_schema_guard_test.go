@@ -7,7 +7,7 @@ import (
 
 	"github.com/mnemon-dev/mnemon/harness/internal/assets"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/rule"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
 )
 
 func TestR1DeferredCapabilityAssetsRemainDeferred(t *testing.T) {
@@ -115,7 +115,7 @@ func TestR1TeamworkCapabilitySchema(t *testing.T) {
 func evaluateR1Capability(t *testing.T, cap Capability, payload map[string]any) contract.RuleDecision {
 	t.Helper()
 	ref := contract.ResourceRef{Kind: cap.ResourceKind, ID: "project"}
-	dec, err := cap.Rule("codex@project", ref, Limits{}).Evaluate(rule.RuleInput{Event: contract.Event{
+	dec, err := cap.Rule("codex@project", ref, Limits{}).Evaluate(admission.RuleInput{Event: contract.Event{
 		Type: cap.ObservedType, Actor: "codex@project", IngestSeq: 7, Payload: payload,
 	}})
 	if err != nil {

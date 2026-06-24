@@ -7,13 +7,13 @@ import (
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
-	"github.com/mnemon-dev/mnemon/harness/internal/rule"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
 )
 
 // Multi-machine SEMANTICS: two independent execution surfaces (edges) over real loopback HTTP hit ONE
 // canonical writer; a cross-edge CAS conflict resolves deterministically (one accept, one defer).
 func TestTwoEdgesConflictOverHTTP(t *testing.T) {
-	s, _, cs := newServerWith(t, rule.NewRuleSet(proposeRule()))
+	s, _, cs := newServerWith(t, admission.NewRuleSet(proposeRule()))
 	srv := httptest.NewServer(access.NewHTTPHandler(cs))
 	defer srv.Close()
 	edgeA := access.NewClient(srv.URL, "agent")
@@ -58,7 +58,7 @@ func TestTwoEdgesConflictOverHTTP(t *testing.T) {
 }
 
 func TestHTTPIngestTakesPrincipalFromHeaderNotBody(t *testing.T) {
-	s, _, cs := newServerWith(t, rule.NewRuleSet(proposeRule()))
+	s, _, cs := newServerWith(t, admission.NewRuleSet(proposeRule()))
 	srv := httptest.NewServer(access.NewHTTPHandler(cs))
 	defer srv.Close()
 	edge := access.NewClient(srv.URL, "agent")

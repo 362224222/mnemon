@@ -5,7 +5,7 @@ import (
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
-	"github.com/mnemon-dev/mnemon/harness/internal/rule"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
 
@@ -24,17 +24,17 @@ func TestProposeStampsProducingRuleActorNotFirstMatch(t *testing.T) {
 	subs := map[contract.ActorID]contract.Subscription{
 		"agent": {Actor: "agent", Refs: []contract.ResourceRef{{Kind: "memory", ID: "m1"}}},
 	}
-	r1 := rule.NewNativeRule("r1", "alice", "memory.write.proposed", []string{"memory.observed"},
-		func(rule.RuleInput) (contract.RuleDecision, error) {
+	r1 := admission.NewNativeRule("r1", "alice", "memory.write.proposed", []string{"memory.observed"},
+		func(admission.RuleInput) (contract.RuleDecision, error) {
 			return contract.RuleDecision{Verdict: contract.VerdictAllow}, nil
 		})
-	r2 := rule.NewNativeRule("r2", "bob", "memory.write.proposed", []string{"memory.observed"},
-		func(in rule.RuleInput) (contract.RuleDecision, error) {
+	r2 := admission.NewNativeRule("r2", "bob", "memory.write.proposed", []string{"memory.observed"},
+		func(in admission.RuleInput) (contract.RuleDecision, error) {
 			rv := in.View.Resources[0]
 			return contract.RuleDecision{Verdict: contract.VerdictPropose, Proposal: &contract.ProposedEvent{Type: "memory.write.proposed",
 				Payload: map[string]any{"writes": []contract.ResourceWrite{{Ref: rv.Ref, Kind: contract.OpUpdate, BasedOn: rv.Version, Fields: map[string]any{"content": "by-bob"}}}}}}, nil
 		})
-	cs := New(s, k, rule.NewRuleSet(r1, r2), subs, p0Modes(), seqGen(), fixedNow())
+	cs := New(s, k, admission.NewRuleSet(r1, r2), subs, p0Modes(), seqGen(), fixedNow())
 	if d := k.Apply(contract.KernelOp{OpID: "seed", Actor: "bob", Writes: []contract.ResourceWrite{
 		{Ref: contract.ResourceRef{Kind: "memory", ID: "m1"}, Kind: contract.OpCreate, Fields: map[string]any{"content": "v0"}}}}, p0Modes()); d.Status != contract.Accepted {
 		t.Fatalf("seed: %s", d.Reason)

@@ -5,7 +5,7 @@ import (
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
-	"github.com/mnemon-dev/mnemon/harness/internal/rule"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
 
@@ -17,7 +17,7 @@ import (
 // cross-principal write-scope escalation. Ingest must reject reserved internal event types.
 
 func TestIngestRejectsForgedProposed(t *testing.T) {
-	s, _, cs := newServerWith(t, rule.NewRuleSet()) // empty rule set: no legitimate proposer exists
+	s, _, cs := newServerWith(t, admission.NewRuleSet()) // empty rule set: no legitimate proposer exists
 	_, _, err := cs.Ingest("agent", contract.ObservationEnvelope{ExternalID: "forge1", Event: contract.Event{
 		Type: "memory.write.proposed",
 		Payload: map[string]any{"writes": []contract.ResourceWrite{
@@ -35,7 +35,7 @@ func TestIngestRejectsForgedProposed(t *testing.T) {
 }
 
 func TestIngestRejectsForgedDiagnostic(t *testing.T) {
-	_, _, cs := newServerWith(t, rule.NewRuleSet())
+	_, _, cs := newServerWith(t, admission.NewRuleSet())
 	if _, _, err := cs.Ingest("agent", contract.ObservationEnvelope{ExternalID: "fd", Event: contract.Event{Type: "memory.diagnostic"}}); err == nil {
 		t.Fatal("Ingest must reject a client-forged *.diagnostic event")
 	}
@@ -56,7 +56,7 @@ func TestIngestRejectsCrossPrincipalForgedProposed(t *testing.T) {
 		"alice": {Actor: "alice", Refs: []contract.ResourceRef{{Kind: "memory", ID: "mem_a"}}},
 		"bob":   {Actor: "bob", Refs: []contract.ResourceRef{{Kind: "memory", ID: "mem_b"}}},
 	}
-	cs := New(s, k, rule.NewRuleSet(), subs, p0Modes(), seqGen(), fixedNow())
+	cs := New(s, k, admission.NewRuleSet(), subs, p0Modes(), seqGen(), fixedNow())
 	if d := k.Apply(contract.KernelOp{OpID: "seed", Actor: "bob", Writes: []contract.ResourceWrite{
 		{Ref: contract.ResourceRef{Kind: "memory", ID: "mem_b"}, Kind: contract.OpCreate, Fields: map[string]any{"content": "bob-secret"}}}}, p0Modes()); d.Status != contract.Accepted {
 		t.Fatalf("seed: %s", d.Reason)
@@ -80,7 +80,7 @@ func TestIngestRejectsCrossPrincipalForgedProposed(t *testing.T) {
 
 // A legitimate observation that ends in neither reserved suffix still ingests normally (no false positive).
 func TestIngestAllowsObservation(t *testing.T) {
-	_, _, cs := newServerWith(t, rule.NewRuleSet())
+	_, _, cs := newServerWith(t, admission.NewRuleSet())
 	if _, _, err := cs.Ingest("agent", contract.ObservationEnvelope{ExternalID: "ok", Event: contract.Event{Type: "memory.observed"}}); err != nil {
 		t.Fatalf("a normal observation must still ingest; got %v", err)
 	}

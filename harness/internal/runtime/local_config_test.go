@@ -4,8 +4,8 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
-	"github.com/mnemon-dev/mnemon/harness/internal/rule"
 )
 
 // localRuntimeConfigT mirrors app.LocalRuntimeConfigFromBindings for the runtime-level integration
@@ -13,7 +13,7 @@ import (
 // internals). The production derivation lives in app; this keeps the test in package runtime without
 // importing app (which would cycle).
 func localRuntimeConfigT(bindings []access.ChannelBinding) RuntimeConfig {
-	var rules []rule.Rule
+	var rules []admission.Rule
 	allow := map[contract.ActorID][]contract.ResourceKind{}
 	for _, b := range bindings {
 		if b.Allows(access.VerbObserve) && b.AllowsObservedType(policy.MemoryWriteCandidateObserved) {
@@ -42,7 +42,7 @@ func localRuntimeConfigT(bindings []access.ChannelBinding) RuntimeConfig {
 	return RuntimeConfig{
 		Bindings:      bindings,
 		Subs:          access.SubsFromBindings(bindings),
-		Rules:         rule.NewRuleSet(rules...),
+		Rules:         admission.NewRuleSet(rules...),
 		Authority:     kernel.AuthorityRules{Allow: allow},
 		SchemaGuard:   kernel.SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}}),
 		SyncableKinds: policy.ImportableKinds(policy.EmbeddedCatalog()),

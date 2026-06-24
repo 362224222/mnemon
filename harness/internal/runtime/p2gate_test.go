@@ -8,7 +8,7 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
-	"github.com/mnemon-dev/mnemon/harness/internal/rule"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
 )
 
 // TestP2ChannelEndToEnd is the P2 gate's positive path: a runtime booted with ONE in-memory binding
@@ -18,8 +18,8 @@ func TestP2ChannelEndToEnd(t *testing.T) {
 	ref := contract.ResourceRef{Kind: "memory", ID: "m1"}
 	storePath := filepath.Join(t.TempDir(), "governed.db")
 	// A rule that creates m1 on a session.observed, so the single observe produces canonical state.
-	createRule := rule.NewNativeRule("creator", "codex", "memory.write.proposed", []string{"session.observed"},
-		func(in rule.RuleInput) (contract.RuleDecision, error) {
+	createRule := admission.NewNativeRule("creator", "codex", "memory.write.proposed", []string{"session.observed"},
+		func(in admission.RuleInput) (contract.RuleDecision, error) {
 			for _, rv := range in.View.Resources {
 				if rv.Ref == ref && rv.Version > 0 {
 					return contract.RuleDecision{Verdict: contract.VerdictAllow}, nil
@@ -36,7 +36,7 @@ func TestP2ChannelEndToEnd(t *testing.T) {
 		SubscriptionScope: []contract.ResourceRef{ref}, IdempotencyNamespace: "host:codex",
 	}
 	rt, err := OpenRuntime(storePath, RuntimeConfig{
-		Rules:     rule.NewRuleSet(createRule),
+		Rules:     admission.NewRuleSet(createRule),
 		Authority: kernel.AuthorityRules{Allow: map[contract.ActorID][]contract.ResourceKind{"codex": {"memory"}}},
 		Subs:      map[contract.ActorID]contract.Subscription{"codex": {Actor: "codex", Refs: []contract.ResourceRef{ref}}},
 		Bindings:  []access.ChannelBinding{binding},

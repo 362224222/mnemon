@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/rule"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
 )
 
 // Item is one decoded, validated candidate as a field map. The generic kind stamps id/actor/ingest_seq
@@ -67,16 +67,16 @@ func (c Capability) RemoteSyncedEventObserved() string {
 // Deviation from the locked Phase-2 signature Rule(..., cfg config.CapabilityConfig)
 // (plan-control-plane.md:241): the same plan locks capability as a rule/event-view/contract-only
 // leaf (:51,:61); the leaf wins, and the assembler maps config.CapabilityConfig -> Limits.
-func (c Capability) Rule(principal contract.ActorID, ref contract.ResourceRef, limits Limits) rule.Rule {
+func (c Capability) Rule(principal contract.ActorID, ref contract.ResourceRef, limits Limits) admission.Rule {
 	return appendItemRule(c, principal, ref, limits)
 }
 
 // appendItemRule is the ONE generic kind: decode the candidate to an Item, stamp trusted id/actor/seq,
 // append it to the resource's item list, and propose a write carrying the item list + the capability's
 // header fields + updated_by. It only acts on events from its own principal.
-func appendItemRule(c Capability, principal contract.ActorID, ref contract.ResourceRef, limits Limits) rule.Rule {
-	return rule.NewNativeRule("local-"+c.Name+"-admission:"+string(principal), principal, c.ProposedType, []string{c.ObservedType},
-		func(in rule.RuleInput) (contract.RuleDecision, error) {
+func appendItemRule(c Capability, principal contract.ActorID, ref contract.ResourceRef, limits Limits) admission.Rule {
+	return admission.NewNativeRule("local-"+c.Name+"-admission:"+string(principal), principal, c.ProposedType, []string{c.ObservedType},
+		func(in admission.RuleInput) (contract.RuleDecision, error) {
 			if in.Event.Actor != principal {
 				return contract.RuleDecision{Verdict: contract.VerdictAllow}, nil
 			}

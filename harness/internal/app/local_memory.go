@@ -17,7 +17,7 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
-	"github.com/mnemon-dev/mnemon/harness/internal/rule"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
@@ -52,10 +52,10 @@ func OpenLocalRuntime(storePath string, loaded access.LoadedBindings, loops []st
 // (nil = embedded first-party).
 func withSyncImport(rc runtime.RuntimeConfig, bindings []access.ChannelBinding, catalog map[string]policy.Capability) runtime.RuntimeConfig {
 	catalog = resolveSyncCatalog(catalog)
-	rules := append([]rule.Rule(nil), rc.Rules.Rules()...)
+	rules := append([]admission.Rule(nil), rc.Rules.Rules()...)
 	rules = append(rules, policy.RemoteImportRules(catalog, contract.SyncImportActor)...)
 	rules = append(rules, policy.SyncImportSkippedRule(contract.SyncImportActor))
-	rc.Rules = rule.NewRuleSet(rules...)
+	rc.Rules = admission.NewRuleSet(rules...)
 	if rc.Subs == nil {
 		rc.Subs = map[contract.ActorID]contract.Subscription{}
 	}
@@ -374,7 +374,7 @@ func SyncImportRuntimeConfig(refs []contract.ResourceRef, catalog map[string]pol
 		Subs: map[contract.ActorID]contract.Subscription{
 			contract.SyncImportActor: {Actor: contract.SyncImportActor, Refs: refs},
 		},
-		Rules: rule.NewRuleSet(rules...),
+		Rules: admission.NewRuleSet(rules...),
 		Authority: kernel.AuthorityRules{Allow: map[contract.ActorID][]contract.ResourceKind{
 			contract.SyncImportActor: policy.ImportableKinds(catalog),
 		}},

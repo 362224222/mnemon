@@ -66,7 +66,7 @@ func (br *Bridge) Stamp(b ResolvedBinding, dispatchedOn view.View, trigger contr
 	}, nil
 }
 
-// decodeWrites mirrors reconcile.opFromEvent's robust decode (round-trip-safe). Undecodable/absent -> nil
+// decodeWrites mirrors admission's robust event-to-kernel decode (round-trip-safe). Undecodable/absent -> nil
 // (no scope violation; the kernel rejects the empty/malformed op downstream).
 func decodeWrites(payload map[string]any) []contract.ResourceWrite {
 	raw, ok := payload["writes"]

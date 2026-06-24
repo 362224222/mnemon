@@ -5,8 +5,7 @@ import (
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
-	"github.com/mnemon-dev/mnemon/harness/internal/reconcile"
-	"github.com/mnemon-dev/mnemon/harness/internal/rule"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
 
@@ -25,7 +24,7 @@ func liveDecisions(t *testing.T, events []contract.Event) (*store.Store, []contr
 	}
 	t.Cleanup(func() { s.Close() })
 	k := kernel.NewKernel(s, kernel.SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}, "goal": {"statement"}}), permissiveAuthority(events))
-	r := reconcile.NewReconciler(s, k)
+	r := admission.NewReconciler(s, k)
 	for _, ev := range events {
 		if _, err := s.AppendEvent(ev); err != nil {
 			t.Fatalf("append: %v", err)
@@ -50,7 +49,7 @@ func TestReplayDerivesGuardFromLogNotDefault(t *testing.T) {
 		Payload: map[string]any{"writes": []contract.ResourceWrite{{
 			Ref: contract.ResourceRef{Kind: "widget", ID: "x1"}, Kind: contract.OpCreate,
 			Fields: map[string]any{"content": "v"}}}}}
-	decisions := Replay([]contract.Event{ev}, rule.RuleSet{})
+	decisions := Replay([]contract.Event{ev}, admission.RuleSet{})
 	if len(decisions) != 1 {
 		t.Fatalf("want 1 decision, got %d", len(decisions))
 	}
@@ -63,7 +62,7 @@ func TestReplayDerivesGuardFromLogNotDefault(t *testing.T) {
 // masking the dynamic fields (DecisionID/AppliedAt).
 func TestReplayReproducesDecisionsMasked(t *testing.T) {
 	_, live := liveDecisions(t, sampleEvents)
-	replayed := Replay(sampleEvents, rule.RuleSet{})
+	replayed := Replay(sampleEvents, admission.RuleSet{})
 	if len(replayed) != len(live) || len(live) == 0 {
 		t.Fatalf("replay must reproduce %d decisions; got %d", len(live), len(replayed))
 	}
@@ -79,11 +78,11 @@ func TestReplayReproducesDecisionsMasked(t *testing.T) {
 func TestReplayIsReadOnly(t *testing.T) {
 	liveStore, _ := liveDecisions(t, sampleEvents)
 	before := liveStore.DecisionCount()
-	_ = Replay(sampleEvents, rule.RuleSet{})
+	_ = Replay(sampleEvents, admission.RuleSet{})
 	if liveStore.DecisionCount() != before {
 		t.Fatalf("Replay must not mutate any live store; decision count %d -> %d", before, liveStore.DecisionCount())
 	}
-	a, b := Replay(sampleEvents, rule.RuleSet{}), Replay(sampleEvents, rule.RuleSet{})
+	a, b := Replay(sampleEvents, admission.RuleSet{}), Replay(sampleEvents, admission.RuleSet{})
 	if len(a) != len(b) {
 		t.Fatalf("Replay must be deterministic; got %d vs %d", len(a), len(b))
 	}

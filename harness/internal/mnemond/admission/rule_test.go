@@ -1,4 +1,4 @@
-package rule
+package admission
 
 import (
 	"errors"

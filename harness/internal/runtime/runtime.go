@@ -12,7 +12,7 @@ import (
 	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
-	"github.com/mnemon-dev/mnemon/harness/internal/rule"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
 
@@ -37,7 +37,7 @@ type Runtime struct {
 // config boots a bare channel endpoint with no rules or preconfigured actors. NewID/Now default to
 // uuid/RFC3339; Modes defaults to reject + projection-read-set + strict authz.
 type RuntimeConfig struct {
-	Rules     rule.RuleSet
+	Rules     admission.RuleSet
 	Authority kernel.AuthorityRules
 	Subs      map[contract.ActorID]contract.Subscription
 	Modes     contract.Modes

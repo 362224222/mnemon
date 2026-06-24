@@ -5,13 +5,13 @@ import (
 	"testing"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/rule"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
 )
 
 func TestAppendItemRuleEnforcesMaxPayloadBytes(t *testing.T) {
 	r := EmbeddedCatalog()["memory"].Rule("codex@project", contract.ResourceRef{Kind: "memory", ID: "project"},
 		Limits{MaxPayloadBytes: 64})
-	dec, err := r.Evaluate(rule.RuleInput{Event: contract.Event{
+	dec, err := r.Evaluate(admission.RuleInput{Event: contract.Event{
 		Type:  MemoryWriteCandidateObserved,
 		Actor: "codex@project",
 		Payload: map[string]any{
@@ -31,7 +31,7 @@ func TestAppendItemRuleEnforcesMaxPayloadBytes(t *testing.T) {
 
 func TestAppendItemRuleZeroLimitMeansUnbounded(t *testing.T) {
 	r := EmbeddedCatalog()["memory"].Rule("codex@project", contract.ResourceRef{Kind: "memory", ID: "project"}, Limits{})
-	dec, err := r.Evaluate(rule.RuleInput{Event: contract.Event{
+	dec, err := r.Evaluate(admission.RuleInput{Event: contract.Event{
 		Type:  MemoryWriteCandidateObserved,
 		Actor: "codex@project",
 		Payload: map[string]any{

@@ -4,13 +4,13 @@ import (
 	"testing"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/rule"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
 )
 
 // S9/D7: a pull is scoped to the subscription and identity-bound — sub.Actor must equal the authenticated
 // principal (a client cannot pull another actor's scope).
 func TestPullEventViewIsScopedAndIdentityBound(t *testing.T) {
-	_, _, cs := newServerWith(t, rule.NewRuleSet(proposeRule()))
+	_, _, cs := newServerWith(t, admission.NewRuleSet(proposeRule()))
 	proj, err := cs.PullEventView("agent", contract.Subscription{Actor: "agent", Refs: []contract.ResourceRef{{Kind: "memory", ID: "m1"}}})
 	if err != nil {
 		t.Fatalf("pull: %v", err)
@@ -26,7 +26,7 @@ func TestPullEventViewIsScopedAndIdentityBound(t *testing.T) {
 // S10/D8: a host that echoes a digest over tampered/stale content is caught on readback — the dependent
 // write is NOT accepted; a correct echo passes through.
 func TestContentTamperCaughtOnReadback(t *testing.T) {
-	s, _, cs := newServerWith(t, rule.NewRuleSet(proposeRule()))
+	s, _, cs := newServerWith(t, admission.NewRuleSet(proposeRule()))
 	sub := contract.Subscription{Actor: "agent", Refs: []contract.ResourceRef{{Kind: "memory", ID: "m1"}}}
 	proj, _ := cs.PullEventView("agent", sub)
 
