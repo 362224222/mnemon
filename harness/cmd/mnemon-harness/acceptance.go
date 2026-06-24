@@ -20,10 +20,10 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/codexapp"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemonhub"
 	"github.com/mnemon-dev/mnemon/harness/internal/render"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
-	"github.com/mnemon-dev/mnemon/harness/internal/syncserver"
 	"github.com/spf13/cobra"
 )
 
@@ -96,25 +96,36 @@ type r1CodexAcceptanceOptions struct {
 }
 
 type r1CodexAcceptanceReport struct {
-	SchemaVersion   int                        `json:"schema_version"`
-	Status          string                     `json:"status"`
-	StartedAt       string                     `json:"started_at"`
-	FinishedAt      string                     `json:"finished_at"`
-	RunRoot         string                     `json:"run_root"`
-	ReportPath      string                     `json:"report_path"`
-	LocalAddr       string                     `json:"local_addr"`
-	AgentTurns      bool                       `json:"agent_turns"`
-	Starter         string                     `json:"starter,omitempty"`
-	Assignee        string                     `json:"assignee,omitempty"`
-	Agents          []r1CodexAgentReport       `json:"agents"`
-	Sync            *r1CodexSyncReport         `json:"sync,omitempty"`
-	LedgerCounts    map[string]int             `json:"ledger_counts,omitempty"`
-	AgentEventAudit map[string]int             `json:"agent_event_audit,omitempty"`
-	CueAudit        map[string]int             `json:"cue_audit,omitempty"` // compatibility alias for older report consumers
-	Assertions      []r1AcceptanceAssertion    `json:"assertions"`
-	Errors          []string                   `json:"errors,omitempty"`
-	Artifacts       map[string]string          `json:"artifacts,omitempty"`
-	Raw             map[string]json.RawMessage `json:"raw,omitempty"`
+	SchemaVersion     int                         `json:"schema_version"`
+	Status            string                      `json:"status"`
+	StartedAt         string                      `json:"started_at"`
+	FinishedAt        string                      `json:"finished_at"`
+	RunRoot           string                      `json:"run_root"`
+	ReportPath        string                      `json:"report_path"`
+	Topology          *r1AcceptanceTopologyReport `json:"topology,omitempty"`
+	LocalAddr         string                      `json:"local_addr"`
+	AgentTurns        bool                        `json:"agent_turns"`
+	Starter           string                      `json:"starter,omitempty"`
+	Assignee          string                      `json:"assignee,omitempty"`
+	Agents            []r1CodexAgentReport        `json:"agents"`
+	Sync              *r1CodexSyncReport          `json:"sync,omitempty"`
+	Scenarios         []r1TaskSimScenarioReport   `json:"scenarios,omitempty"`
+	LedgerCounts      map[string]int              `json:"ledger_counts,omitempty"`
+	DerivedEventAudit map[string]int              `json:"derived_event_audit,omitempty"`
+	Observability     *acceptanceInspectReport    `json:"observability,omitempty"`
+	Assertions        []r1AcceptanceAssertion     `json:"assertions"`
+	Errors            []string                    `json:"errors,omitempty"`
+	Artifacts         map[string]string           `json:"artifacts,omitempty"`
+	Raw               map[string]json.RawMessage  `json:"raw,omitempty"`
+}
+
+type r1AcceptanceTopologyReport struct {
+	Mode               string            `json:"mode"`
+	Agents             int               `json:"agents"`
+	MnemondInstances   int               `json:"mnemond_instances"`
+	MnemonhubInstances int               `json:"mnemonhub_instances"`
+	SharedMnemond      bool              `json:"shared_mnemond"`
+	AgentMnemondMap    map[string]string `json:"agent_mnemond_map,omitempty"`
 }
 
 type r1CodexAgentReport struct {
@@ -129,16 +140,16 @@ type r1CodexAgentReport struct {
 }
 
 type r1CodexSyncReport struct {
-	Status           string                      `json:"status"`
-	HubURL           string                      `json:"hub_url"`
-	AllowedResources []string                    `json:"allowed_resources"`
-	Source           string                      `json:"source"`
-	Target           string                      `json:"target"`
-	Agents           []r1CodexAgentReport        `json:"agents"`
-	HubStatus        contract.SyncStatusResponse `json:"hub_status"`
-	SourceLedger     map[string]int              `json:"source_ledger,omitempty"`
-	TargetLedger     map[string]int              `json:"target_ledger,omitempty"`
-	Artifacts        map[string]string           `json:"artifacts,omitempty"`
+	Status               string                      `json:"status"`
+	HubURL               string                      `json:"hub_url"`
+	AllowedEventSubjects []string                    `json:"allowed_event_subjects"`
+	Source               string                      `json:"source"`
+	Target               string                      `json:"target"`
+	Agents               []r1CodexAgentReport        `json:"agents"`
+	HubStatus            contract.SyncStatusResponse `json:"hub_status"`
+	SourceLedger         map[string]int              `json:"source_ledger,omitempty"`
+	TargetLedger         map[string]int              `json:"target_ledger,omitempty"`
+	Artifacts            map[string]string           `json:"artifacts,omitempty"`
 }
 
 type r1AcceptanceAssertion struct {
@@ -183,16 +194,15 @@ func runR1CodexAcceptance(ctx context.Context, opts r1CodexAcceptanceOptions) (r
 		return r1CodexAcceptanceReport{}, err
 	}
 	report := r1CodexAcceptanceReport{
-		SchemaVersion:   1,
-		Status:          "running",
-		StartedAt:       started.Format(time.RFC3339),
-		RunRoot:         runRoot,
-		AgentTurns:      opts.AgentTurns,
-		LedgerCounts:    map[string]int{},
-		AgentEventAudit: map[string]int{},
-		CueAudit:        map[string]int{},
-		Artifacts:       map[string]string{},
-		Raw:             map[string]json.RawMessage{},
+		SchemaVersion:     1,
+		Status:            "running",
+		StartedAt:         started.Format(time.RFC3339),
+		RunRoot:           runRoot,
+		AgentTurns:        opts.AgentTurns,
+		LedgerCounts:      map[string]int{},
+		DerivedEventAudit: map[string]int{},
+		Artifacts:         map[string]string{},
+		Raw:               map[string]json.RawMessage{},
 	}
 	reportPath := filepath.Join(runRoot, "report.json")
 	report.ReportPath = reportPath
@@ -296,7 +306,7 @@ func runR1CodexAcceptance(ctx context.Context, opts r1CodexAcceptanceOptions) (r
 	}
 	addR1Assertion(&report, "preflight hooks discovered and render", allHooks, "each appserver lists R1 hooks and manual shim render succeeds")
 	hookTrustApproved := allTrusted || strings.Contains(opts.Command, "--dangerously-bypass-hook-trust")
-	hookTrustDetail := "trust status must be trusted or managed for hook-driven cue proof"
+	hookTrustDetail := "trust status must be trusted or managed for hook-driven derived-event proof"
 	if !allTrusted && hookTrustApproved {
 		hookTrustDetail = "project hooks list as untrusted, but this appserver invocation used --dangerously-bypass-hook-trust as explicit operator approval"
 	}
@@ -310,10 +320,9 @@ func runR1CodexAcceptance(ctx context.Context, opts r1CodexAcceptanceOptions) (r
 		addR1Assertion(&report, "agent turns requested", false, "rerun with --agent-turns to spend real model turns")
 	}
 	report.LedgerCounts = countR1Ledger(report.LocalAddr, agents[0])
-	report.AgentEventAudit = countR1AgentEventAudit(report.Artifacts["render_audit"])
-	report.CueAudit = report.AgentEventAudit
+	report.DerivedEventAudit = countR1DerivedEventAudit(report.Artifacts["render_audit"])
 	addR1Assertion(&report, "A11 no assignment_status/assignment_expired", report.LedgerCounts["assignment_status"] == 0 && report.LedgerCounts["assignment_expired"] == 0, fmt.Sprintf("assignment_status=%d assignment_expired=%d", report.LedgerCounts["assignment_status"], report.LedgerCounts["assignment_expired"]))
-	addR1Assertion(&report, "A12 agent-event render audit has provenance", report.AgentEventAudit["with_provenance"] > 0 && report.AgentEventAudit["with_body_digest"] > 0 && report.AgentEventAudit["with_audit_id"] > 0, fmt.Sprintf("%+v", report.AgentEventAudit))
+	addR1Assertion(&report, "A12 derived event render audit has provenance", report.DerivedEventAudit["with_provenance"] > 0 && report.DerivedEventAudit["with_body_digest"] > 0 && report.DerivedEventAudit["with_audit_id"] > 0, fmt.Sprintf("%+v", report.DerivedEventAudit))
 	addR1Assertion(&report, "A13 activation loop writes no governed event by itself", true, "runner wakes appservers with turns; governed events are emitted by appserver shell commands through control observe")
 	if opts.SyncArm {
 		for i := range agents {
@@ -610,7 +619,7 @@ func initializeR1CodexAgent(agent *r1CodexAgent, turnTimeout time.Duration) (r1C
 
 func r1AcceptanceDeveloperInstructions(principal string) string {
 	return fmt.Sprintf(`You are %s in a Mnemon R1 real Codex cluster acceptance run.
-When a Mnemon cue asks you to update profile, signal, assignment, or feedback, write governed events through Local Mnemon from the shell.
+When a Mnemon derived-event presentation asks you to update profile, signal, assignment, or feedback, write governed events through Local Mnemon from the shell.
 Use this pattern from the workspace root:
   . .mnemon/harness/local/env.sh
   mnemon-harness control observe --addr "$MNEMON_CONTROL_ADDR" --principal "$MNEMON_CONTROL_PRINCIPAL" --token-file "$MNEMON_CONTROL_TOKEN_FILE" --type <event-type> --external-id <id> --payload '<json>'
@@ -690,7 +699,7 @@ func runR1CodexLocalScenario(ctx context.Context, opts r1CodexAcceptanceOptions,
 	}
 	runID := strings.ToLower(time.Now().UTC().Format("150405"))
 	for i := range agents {
-		prompt := fmt.Sprintf(`Act on the Mnemon profile cue for %s.
+		prompt := fmt.Sprintf(`Act on the Mnemon profile derived-event presentation for %s.
 Run a shell command that emits one agent_profile.write_candidate.observed event with external id profile-%02d-%s and payload fields:
 actor=%q, focus="R1 real Codex cluster acceptance", context_advantages=["real Codex appserver %02d","workspace-local R1 shim"], availability="available", ttl="30m", summary="Agent %02d is available for the R1 teamwork acceptance run".
 After the command succeeds, answer "profile done".`, agents[i].principal, i+1, runID, agents[i].principal, i+1, i+1)
@@ -709,17 +718,17 @@ After the command succeeds, answer "profile done".`, agents[i].principal, i+1, r
 	starter := agents[starterIndex]
 	report.Starter = starter.principal
 	addR1Assertion(report, "A3 configurable/random starter", true, "starter="+starter.principal)
-	addR1Assertion(report, "A4 one human entrypoint", true, "runner starts one scenario; agents coordinate through Mnemon cues")
+	addR1Assertion(report, "A4 one human entrypoint", true, "runner starts one scenario; agents coordinate through Mnemon derived-event presentations")
 
 	signalID := "sig-r1-" + runID
 	assignID := "asg-r1-" + runID
 	prompt := fmt.Sprintf(`You are the starter for the R1 teamwork acceptance.
-First render your current Mnemon cue with:
+First render your current Mnemon derived-event presentation with:
   . .mnemon/harness/local/env.sh
-  mnemon-harness control render --addr "$MNEMON_CONTROL_ADDR" --principal "$MNEMON_CONTROL_PRINCIPAL" --token-file "$MNEMON_CONTROL_TOKEN_FILE" --intent teamwork.cue --lifecycle remind --surface hook
+  mnemon-harness control render --addr "$MNEMON_CONTROL_ADDR" --principal "$MNEMON_CONTROL_PRINCIPAL" --token-file "$MNEMON_CONTROL_TOKEN_FILE" --intent teamwork.events --lifecycle remind --surface hook
 Then emit a teamwork_signal.write_candidate.observed event with external id signal-%s and payload:
-{"signal_id":%q,"scope":"r1/real-codex-cluster/local","statement":"Need another real Codex appserver to complete an R1 acceptance work item.","why_teamwork":"five fresh agent profiles are available; delegation verifies the R1 cue loop","ttl":"30m","evidence":"real-codex-cluster acceptance"}
-Then choose one teammate other than yourself and emit assignment.write_candidate.observed with external id assignment-%s, assignment_id %q, signal_ref %q, assignee set to that teammate principal, scope "r1/real-codex-cluster/local", expected_work "Inspect the R1 cue loop and report whether the real appserver can act on the assignment.", expected_feedback "progress_digest with assignment_ref and evidence", ttl "20m", evidence "signal %s".
+{"signal_id":%q,"scope":"r1/real-codex-cluster/local","statement":"Need another real Codex appserver to complete an R1 acceptance work item.","why_teamwork":"five fresh agent profiles are available; delegation verifies the R1 derived-event loop","ttl":"30m","evidence":"real-codex-cluster acceptance"}
+Then choose one teammate other than yourself and emit assignment.write_candidate.observed with external id assignment-%s, assignment_id %q, signal_ref %q, assignee set to that teammate principal, scope "r1/real-codex-cluster/local", expected_work "Inspect the R1 derived-event loop and report whether the real appserver can act on the assignment.", expected_feedback "progress_digest with assignment_ref and evidence", ttl "20m", evidence "signal %s".
 After both commands succeed, answer with the assignee principal only.`, runID, signalID, runID, assignID, signalID, signalID)
 	answer, err := runR1Turn(&starter, prompt, opts.TurnTimeout)
 	appendAgentAnswer(report, starter.principal, answer)
@@ -741,16 +750,16 @@ After both commands succeed, answer with the assignee principal only.`, runID, s
 		addR1Assertion(report, "A6 assignment assignee is a real appserver", false, "assignee="+assignee)
 		return fmt.Errorf("assignment assignee %q is not one of the appservers", assignee)
 	}
-	workCue, err := renderR1Cue(report.LocalAddr, assigneeAgent.token)
+	workPresentation, err := renderR1DerivedEventPresentation(report.LocalAddr, assigneeAgent.token)
 	if err != nil {
-		addR1Assertion(report, "A7 assignee gets work cue by scoped render", false, err.Error())
+		addR1Assertion(report, "A7 assignee gets work derived event by scoped render", false, err.Error())
 		return err
 	}
-	addR1Assertion(report, "A7 assignee gets work cue by scoped render", strings.Contains(workCue.Body, "[mnemon:work]") && strings.Contains(workCue.Body, assignID), workCue.Body)
+	addR1Assertion(report, "A7 assignee gets work derived event by scoped render", strings.Contains(workPresentation.Body, "[mnemon:work]") && strings.Contains(workPresentation.Body, assignID), workPresentation.Body)
 
-	prompt = fmt.Sprintf(`Act on your Mnemon work and feedback cue.
-Render the cue, do the assigned inspection in this workspace, then emit progress_digest.write_candidate.observed with external id progress-%s and payload:
-{"assignment_ref":%q,"scope":"r1/real-codex-cluster/local","summary":"Real Codex appserver acted on the R1 assignment and confirmed the rendered work cue was usable.","evidence":"rendered work cue plus real appserver turn","changed_context":"assignee completed the delegated acceptance work","suggested_next":"starter should integrate the result"}
+	prompt = fmt.Sprintf(`Act on your Mnemon work and feedback derived-event presentation.
+Render the derived-event presentation, do the assigned inspection in this workspace, then emit progress_digest.write_candidate.observed with external id progress-%s and payload:
+{"assignment_ref":%q,"scope":"r1/real-codex-cluster/local","summary":"Real Codex appserver acted on the R1 assignment and confirmed the rendered work derived event was usable.","evidence":"rendered work derived event plus real appserver turn","changed_context":"assignee completed the delegated acceptance work","suggested_next":"starter should integrate the result"}
 After the command succeeds, answer "progress_digest done".`, runID, assignID)
 	answer, err = runR1Turn(&assigneeAgent, prompt, opts.TurnTimeout)
 	appendAgentAnswer(report, assigneeAgent.principal, answer)
@@ -761,32 +770,32 @@ After the command succeeds, answer "progress_digest done".`, runID, assignID)
 	waitForLedgerCount(report.LocalAddr, starter, "progress_digest", 1, 10*time.Second)
 	counts = countR1Ledger(report.LocalAddr, starter)
 	addR1Assertion(report, "A8 assignee emits progress_digest", counts["progress_digest"] >= 1, fmt.Sprintf("progress_digest=%d", counts["progress_digest"]))
-	integrateCue, err := renderR1Cue(report.LocalAddr, starter.token)
+	integratePresentation, err := renderR1DerivedEventPresentation(report.LocalAddr, starter.token)
 	if err != nil {
-		addR1Assertion(report, "A9 starter gets integrate cue", false, err.Error())
+		addR1Assertion(report, "A9 starter gets integrate derived event", false, err.Error())
 		return err
 	}
-	addR1Assertion(report, "A9 starter gets integrate cue", strings.Contains(integrateCue.Body, "[mnemon:integrate]") && strings.Contains(integrateCue.Body, assignID), integrateCue.Body)
+	addR1Assertion(report, "A9 starter gets integrate derived event", strings.Contains(integratePresentation.Body, "[mnemon:integrate]") && strings.Contains(integratePresentation.Body, assignID), integratePresentation.Body)
 
 	expID := "asg-exp-" + runID
 	expAssignee := agents[(starterIndex+1)%len(agents)].principal
 	prompt = fmt.Sprintf(`Emit one assignment.write_candidate.observed event that intentionally expires quickly.
 Use external id assignment-expired-%s and payload:
-{"assignment_id":%q,"assignee":%q,"scope":"r1/real-codex-cluster/ttl-expired","expected_work":"This assignment is intentionally left without progress to verify the render-derived expired cue.","expected_feedback":"progress_digest if completed","ttl":"1s","evidence":"TTL branch acceptance"}
+{"assignment_id":%q,"assignee":%q,"scope":"r1/real-codex-cluster/ttl-expired","expected_work":"This assignment is intentionally left without progress to verify the render-derived expired event.","expected_feedback":"progress_digest if completed","ttl":"1s","evidence":"TTL branch acceptance"}
 Do not emit progress_digest for this assignment. Answer "expired assignment written".`, runID, expID, expAssignee)
 	answer, err = runR1Turn(&starter, prompt, opts.TurnTimeout)
 	appendAgentAnswer(report, starter.principal, answer)
 	if err != nil {
-		addR1Assertion(report, "A10 TTL expired cue and new starter act", false, err.Error())
+		addR1Assertion(report, "A10 TTL expired derived event and new starter act", false, err.Error())
 		return err
 	}
 	time.Sleep(2 * time.Second)
-	expiredCue, err := renderR1Cue(report.LocalAddr, starter.token)
+	expiredPresentation, err := renderR1DerivedEventPresentation(report.LocalAddr, starter.token)
 	if err != nil {
-		addR1Assertion(report, "A10 TTL expired cue and new starter act", false, err.Error())
+		addR1Assertion(report, "A10 TTL expired derived event and new starter act", false, err.Error())
 		return err
 	}
-	addR1Assertion(report, "A10 TTL expired cue and new starter act", strings.Contains(expiredCue.Body, "[mnemon:expired]") && strings.Contains(expiredCue.Body, expID), expiredCue.Body)
+	addR1Assertion(report, "A10 TTL expired derived event and new starter act", strings.Contains(expiredPresentation.Body, "[mnemon:expired]") && strings.Contains(expiredPresentation.Body, expID), expiredPresentation.Body)
 	return ctx.Err()
 }
 
@@ -801,12 +810,12 @@ type r1CodexSyncAgent struct {
 }
 
 type r1SyncHub struct {
-	URL              string
-	AuditPath        string
-	AllowedResources []string
-	Tokens           []string
-	Principals       []string
-	close            func()
+	URL                  string
+	AuditPath            string
+	AllowedEventSubjects []string
+	Tokens               []string
+	Principals           []string
+	close                func()
 }
 
 func runR1CodexSyncScenario(ctx context.Context, opts r1CodexAcceptanceOptions, runRoot, binDir, sourceCodexHome string, report *r1CodexAcceptanceReport) error {
@@ -818,10 +827,10 @@ func runR1CodexSyncScenario(ctx context.Context, opts r1CodexAcceptanceOptions, 
 	}
 	defer hub.close()
 	syncReport := &r1CodexSyncReport{
-		Status:           "running",
-		HubURL:           hub.URL,
-		AllowedResources: hub.AllowedResources,
-		Artifacts:        map[string]string{"hub_audit": hub.AuditPath},
+		Status:               "running",
+		HubURL:               hub.URL,
+		AllowedEventSubjects: hub.AllowedEventSubjects,
+		Artifacts:            map[string]string{"hub_audit": hub.AuditPath},
 	}
 	report.Sync = syncReport
 
@@ -861,7 +870,7 @@ func runR1CodexSyncScenario(ctx context.Context, opts r1CodexAcceptanceOptions, 
 
 	sourcePrompt := fmt.Sprintf(`This is the 6B Remote Workspace sync acceptance source turn.
 Emit exactly one assignment.write_candidate.observed event into your Local Mnemon workspace using external id sync-assignment-%s and payload:
-{"assignment_id":%q,"assignee":%q,"scope":"r1/real-codex-cluster/sync","expected_work":"Verify that a real Codex appserver received this assignment through Remote Workspace sync/import and can act from a local render cue.","expected_feedback":"progress_digest with assignment_ref and evidence","ttl":"20m","evidence":"6B accepted resource sync/import"}
+{"assignment_id":%q,"assignee":%q,"scope":"r1/real-codex-cluster/sync","expected_work":"Verify that a real Codex appserver received this assignment through Remote Workspace sync/import and can act from a local derived-event presentation.","expected_feedback":"progress_digest with assignment_ref and evidence","ttl":"20m","evidence":"6B accepted event sync/import"}
 Use the control observe command pattern from your developer instructions. Do not message the assignee directly. After the command succeeds, answer "sync assignment written".`, runID, assignmentID, target.principal)
 	answer, err := runR1Turn(&source.r1CodexAgent, sourcePrompt, opts.TurnTimeout)
 	appendSyncAgentAnswer(syncReport, source.principal, answer)
@@ -873,17 +882,17 @@ Use the control observe command pattern from your developer instructions. Do not
 	syncReport.SourceLedger = countR1Ledger(source.localURL, source.r1CodexAgent)
 	addR1Assertion(report, "6B source appserver writes local assignment", syncReport.SourceLedger["assignment"] >= 1, fmt.Sprintf("source_assignment=%d", syncReport.SourceLedger["assignment"]))
 
-	workCue, ok := waitForR1Cue(target.localURL, target.token, []string{"[mnemon:work]", assignmentID}, 90*time.Second)
+	workPresentation, ok := waitForR1DerivedEventPresentation(target.localURL, target.token, []string{"[mnemon:work]", assignmentID}, 90*time.Second)
 	syncReport.TargetLedger = countR1Ledger(target.localURL, target.r1CodexAgent)
-	addR1Assertion(report, "6B accepted resource sync/import reaches target render cue", ok, workCue.Body)
+	addR1Assertion(report, "6B accepted event sync/import reaches target derived-event render", ok, workPresentation.Body)
 	if !ok {
 		syncReport.Status = "failed"
-		return fmt.Errorf("target did not receive synced work cue for %s", assignmentID)
+		return fmt.Errorf("target did not receive synced work derived event for %s", assignmentID)
 	}
 
 	targetPrompt := fmt.Sprintf(`This is the 6B Remote Workspace sync acceptance target turn.
-Render your current Mnemon cue, then emit progress_digest.write_candidate.observed with external id sync-progress-%s and payload:
-{"assignment_ref":%q,"scope":"r1/real-codex-cluster/sync","summary":"Target real Codex appserver received the assignment through Local Mnemon sync/import and acted from its own render cue.","evidence":"target local render work cue after hub sync","changed_context":"6B target completed synced work","suggested_next":"source should integrate the synced progress"}
+Render your current Mnemon derived-event presentation, then emit progress_digest.write_candidate.observed with external id sync-progress-%s and payload:
+{"assignment_ref":%q,"scope":"r1/real-codex-cluster/sync","summary":"Target real Codex appserver received the assignment through Local Mnemon sync/import and acted from its own derived-event render.","evidence":"target local render work derived event after hub sync","changed_context":"6B target completed synced work","suggested_next":"source should integrate the synced progress"}
 After the command succeeds, answer "sync progress written".`, runID, assignmentID)
 	answer, err = runR1Turn(&target.r1CodexAgent, targetPrompt, opts.TurnTimeout)
 	appendSyncAgentAnswer(syncReport, target.principal, answer)
@@ -895,23 +904,23 @@ After the command succeeds, answer "sync progress written".`, runID, assignmentI
 	syncReport.TargetLedger = countR1Ledger(target.localURL, target.r1CodexAgent)
 	addR1Assertion(report, "6B target appserver emits progress_digest", syncReport.TargetLedger["progress_digest"] >= 1, fmt.Sprintf("target_progress_digest=%d", syncReport.TargetLedger["progress_digest"]))
 
-	integrateCue, ok := waitForR1Cue(source.localURL, source.token, []string{"[mnemon:integrate]", assignmentID}, 90*time.Second)
+	integratePresentation, ok := waitForR1DerivedEventPresentation(source.localURL, source.token, []string{"[mnemon:integrate]", assignmentID}, 90*time.Second)
 	syncReport.SourceLedger = countR1Ledger(source.localURL, source.r1CodexAgent)
-	addR1Assertion(report, "6B synced progress returns to source integrate cue", ok, integrateCue.Body)
+	addR1Assertion(report, "6B synced progress returns to source integrate derived event", ok, integratePresentation.Body)
 	if !ok {
 		syncReport.Status = "failed"
-		return fmt.Errorf("source did not receive synced integrate cue for %s", assignmentID)
+		return fmt.Errorf("source did not receive synced integrate derived event for %s", assignmentID)
 	}
 	client, err := channel.NewSyncClient(hub.URL, channel.SyncClientConfig{Token: source.replicaToken})
 	if err == nil {
 		syncReport.HubStatus, err = client.SyncStatus()
 	}
 	if err != nil {
-		addR1Assertion(report, "A14 sync arm only moves accepted resources, not prompts", false, err.Error())
+		addR1Assertion(report, "A14 sync arm only moves accepted event subjects, not prompts", false, err.Error())
 		return err
 	}
-	a14 := r1SyncResourcesOnlyAccepted(syncReport.AllowedResources) && syncReport.HubStatus.HubCommitsReceived > 0 && syncReport.HubStatus.HubCommitsServed > 0 && syncReport.TargetLedger["assignment"] >= 1
-	addR1Assertion(report, "A14 sync arm only moves accepted resources, not prompts", a14, fmt.Sprintf("resources=%v hub_received=%d hub_served=%d target_assignment=%d", syncReport.AllowedResources, syncReport.HubStatus.HubCommitsReceived, syncReport.HubStatus.HubCommitsServed, syncReport.TargetLedger["assignment"]))
+	a14 := r1SyncEventSubjectsOnlyAccepted(syncReport.AllowedEventSubjects) && syncReport.HubStatus.HubEventsReceived > 0 && syncReport.HubStatus.HubEventsServed > 0 && syncReport.TargetLedger["assignment"] >= 1
+	addR1Assertion(report, "A14 sync arm only moves accepted events, not prompts", a14, fmt.Sprintf("event_subjects=%v hub_events_received=%d hub_events_served=%d target_assignment=%d", syncReport.AllowedEventSubjects, syncReport.HubStatus.HubEventsReceived, syncReport.HubStatus.HubEventsServed, syncReport.TargetLedger["assignment"]))
 	syncReport.Status = "ok"
 	return nil
 }
@@ -927,7 +936,7 @@ func startR1SyncHub(runRoot string, count int) (r1SyncHub, error) {
 		{Kind: "assignment", ID: "project"},
 		{Kind: "progress_digest", ID: "project"},
 	}
-	grants := syncserver.GrantMap{}
+	grants := mnemonhub.GrantMap{}
 	tokens := map[string]contract.ActorID{}
 	var tokenList []string
 	var principals []string
@@ -956,9 +965,9 @@ func startR1SyncHub(runRoot string, count int) (r1SyncHub, error) {
 		return r1SyncHub{}, err
 	}
 	addr := ln.Addr().String()
-	handler := syncserver.NewHTTPHandler(syncserver.New(st, grants, func() string {
+	handler := mnemonhub.NewHTTPHandler(mnemonhub.New(st, grants, func() string {
 		return time.Now().UTC().Format(time.RFC3339)
-	}), syncserver.BearerAuthenticator{Tokens: tokens}, audit)
+	}), mnemonhub.BearerAuthenticator{Tokens: tokens}, audit)
 	srv := &http.Server{Handler: handler}
 	errc := make(chan error, 1)
 	go func() {
@@ -984,16 +993,16 @@ func startR1SyncHub(runRoot string, count int) (r1SyncHub, error) {
 		_ = st.Close()
 	}
 	return r1SyncHub{
-		URL:              "http://" + addr,
-		AuditPath:        auditPath,
-		AllowedResources: r1SyncResourceLabels(scopes),
-		Tokens:           tokenList,
-		Principals:       principals,
-		close:            closeFn,
+		URL:                  "http://" + addr,
+		AuditPath:            auditPath,
+		AllowedEventSubjects: r1SyncEventSubjectLabels(scopes),
+		Tokens:               tokenList,
+		Principals:           principals,
+		close:                closeFn,
 	}, nil
 }
 
-func r1SyncResourceLabels(scopes []contract.ResourceRef) []string {
+func r1SyncEventSubjectLabels(scopes []contract.ResourceRef) []string {
 	labels := make([]string, 0, len(scopes))
 	for _, scope := range scopes {
 		labels = append(labels, fmt.Sprintf("%s:%s", scope.Kind, scope.ID))
@@ -1002,7 +1011,7 @@ func r1SyncResourceLabels(scopes []contract.ResourceRef) []string {
 	return labels
 }
 
-func r1SyncResourcesOnlyAccepted(labels []string) bool {
+func r1SyncEventSubjectsOnlyAccepted(labels []string) bool {
 	if len(labels) == 0 {
 		return false
 	}
@@ -1126,11 +1135,11 @@ func appendSyncAgentAnswer(report *r1CodexSyncReport, principal, answer string) 
 	}
 }
 
-func waitForR1Cue(controlURL, token string, wants []string, timeout time.Duration) (render.Response, bool) {
+func waitForR1DerivedEventPresentation(controlURL, token string, wants []string, timeout time.Duration) (render.Response, bool) {
 	deadline := time.Now().Add(timeout)
 	var last render.Response
 	for time.Now().Before(deadline) {
-		resp, err := renderR1Cue(controlURL, token)
+		resp, err := renderR1DerivedEventPresentation(controlURL, token)
 		if err == nil {
 			last = resp
 			ok := true
@@ -1203,7 +1212,7 @@ func countR1Ledger(controlURL string, agent r1CodexAgent) map[string]int {
 		"assignment_expired": 0,
 	}
 	client := channel.NewClientWithToken(controlURL, agent.token)
-	proj, err := client.PullProjection("", contract.Subscription{Actor: contract.ActorID(agent.principal)})
+	proj, err := client.PullEventView("", contract.Subscription{Actor: contract.ActorID(agent.principal)})
 	if err != nil {
 		return out
 	}
@@ -1220,7 +1229,7 @@ func countR1Ledger(controlURL string, agent r1CodexAgent) map[string]int {
 
 func findAssignmentAssignee(controlURL string, agent r1CodexAgent, assignmentID string) string {
 	client := channel.NewClientWithToken(controlURL, agent.token)
-	proj, err := client.PullProjection("", contract.Subscription{Actor: contract.ActorID(agent.principal)})
+	proj, err := client.PullEventView("", contract.Subscription{Actor: contract.ActorID(agent.principal)})
 	if err != nil {
 		return ""
 	}
@@ -1240,8 +1249,8 @@ func findAssignmentAssignee(controlURL string, agent r1CodexAgent, assignmentID 
 	return ""
 }
 
-func renderR1Cue(controlURL, token string) (render.Response, error) {
-	body, _ := json.Marshal(render.Request{RenderIntent: render.IntentTeamworkCue, Lifecycle: "remind", Surface: "hook"})
+func renderR1DerivedEventPresentation(controlURL, token string) (render.Response, error) {
+	body, _ := json.Marshal(render.Request{RenderIntent: render.IntentTeamworkEvents, Lifecycle: "remind", Surface: "hook"})
 	req, err := http.NewRequest(http.MethodPost, strings.TrimRight(controlURL, "/")+"/render", bytes.NewReader(body))
 	if err != nil {
 		return render.Response{}, err
@@ -1281,7 +1290,7 @@ func findAgent(agents []r1CodexAgent, principal string) (r1CodexAgent, bool) {
 	return r1CodexAgent{}, false
 }
 
-func countR1AgentEventAudit(path string) map[string]int {
+func countR1DerivedEventAudit(path string) map[string]int {
 	out := map[string]int{
 		"entries":          0,
 		"with_provenance":  0,
@@ -1306,7 +1315,7 @@ func countR1AgentEventAudit(path string) map[string]int {
 		if json.Unmarshal([]byte(line), &obj) != nil {
 			continue
 		}
-		if obj["provenance"] != nil || obj["ProjectionDigest"] != nil || obj["CatalogDigest"] != nil {
+		if obj["provenance"] != nil || obj["EventViewDigest"] != nil || obj["CatalogDigest"] != nil {
 			out["with_provenance"]++
 		}
 		if obj["body_digest"] != nil || obj["BodyDigest"] != nil {
@@ -1331,7 +1340,7 @@ func countR1AgentEventAudit(path string) map[string]int {
 			}
 		}
 		if !usedEventCounts {
-			if counts, ok := obj["CueCounts"].(map[string]any); ok {
+			if counts, ok := obj["PresentationCounts"].(map[string]any); ok {
 				for _, key := range []string{"profile", "work", "integrate", "expired"} {
 					if n, ok := counts[key].(float64); ok && n > 0 {
 						out[key]++
