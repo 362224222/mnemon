@@ -63,14 +63,6 @@ func NewTowerModel(view app.TowerView) TowerModel {
 // Page reports the active page (for the command/tests).
 func (m TowerModel) Page() TowerPage { return m.page }
 
-// WithView returns a copy refreshed to a newly-built view (the command rebuilds each tick), preserving
-// the page + dismissals and clamping the cursor to the new open-escalation list.
-func (m TowerModel) WithView(view app.TowerView) TowerModel {
-	m.view = view
-	m.inbox = clamp(m.inbox, 0, len(m.openEscalations())-1)
-	return m
-}
-
 // openEscalations is the INBOX list MINUS the read-side-dismissed ones.
 func (m TowerModel) openEscalations() []app.InboxRow {
 	var out []app.InboxRow

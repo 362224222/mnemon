@@ -126,15 +126,6 @@ func parseRef(s string) (contract.ResourceRef, error) {
 	return contract.ResourceRef{Kind: contract.ResourceKind(parts[0]), ID: contract.ResourceID(parts[1])}, nil
 }
 
-func allowsAnyObservedType(b channel.ChannelBinding, types []string) bool {
-	for _, t := range types {
-		if b.AllowsObservedType(t) {
-			return true
-		}
-	}
-	return false
-}
-
 func appendKind(kinds []contract.ResourceKind, kind contract.ResourceKind) []contract.ResourceKind {
 	for _, k := range kinds {
 		if k == kind {

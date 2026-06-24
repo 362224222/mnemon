@@ -6,15 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/eventview"
 )
-
-func BuildBody(req Request, proj eventview.EventView, now time.Time) string {
-	body, _ := BuildBodyAndEventEnvelopes(req, proj, now)
-	return body
-}
 
 func BuildBodyAndEventEnvelopes(req Request, proj eventview.EventView, now time.Time) (string, []eventmodel.EventEnvelope) {
 	switch req.RenderIntent {
@@ -33,14 +27,6 @@ func BuildBodyAndEventEnvelopes(req Request, proj eventview.EventView, now time.
 	default:
 		return "", nil
 	}
-}
-
-func BuildPresentation(req Request, proj eventview.EventView, now time.Time) string {
-	return PresentEventEnvelopes(DeriveEventEnvelopes(req, proj, now))
-}
-
-func BuildProfilePresentation(req Request, proj eventview.EventView) string {
-	return PresentEventEnvelopes(DeriveProfileEventEnvelopes(req, proj))
 }
 
 func BuildContextPacket(_ Request, proj eventview.EventView) string {
@@ -194,8 +180,4 @@ func resourceSummary(fields map[string]any) string {
 		}
 	}
 	return ""
-}
-
-func ref(kind, id string) contract.ResourceRef {
-	return contract.ResourceRef{Kind: contract.ResourceKind(kind), ID: contract.ResourceID(id)}
 }

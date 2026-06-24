@@ -18,8 +18,8 @@ var corePackages = []string{
 
 // forbiddenImports are the outer rings the core must never depend on: application vocabulary
 // (capability), host integration (hostsurface), hot content rendering (render),
-// wiring/consumers (app, assembler, driver, ui), the OPTIONAL autopilot, the codex adapter, and
-// the cmd binaries. Dependencies flow inward only.
+// wiring/consumers (app, assembler, driver, ui), the codex adapter, and the cmd binaries.
+// Dependencies flow inward only.
 var forbiddenImports = []string{
 	"harness/internal/capability",
 	"harness/internal/hostsurface",
@@ -28,7 +28,6 @@ var forbiddenImports = []string{
 	"harness/internal/assembler",
 	"harness/internal/driver",
 	"harness/internal/ui",
-	"harness/internal/autopilot",
 	"harness/internal/codexapp",
 	"harness/cmd/",
 }

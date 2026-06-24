@@ -1,6 +1,6 @@
 // Package codexapp drives a real Codex CLI app-server over JSON-RPC (stdio) and parses its
 // output. It is the reusable "run a real Codex turn from Go" adapter — an external-tool
-// integration with zero knowledge of mnemon's governance, the autopilot, or any demo. It
+// integration with zero knowledge of mnemon's governance or any demo. It
 // depends only on the standard library.
 package codexapp
 

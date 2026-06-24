@@ -21,10 +21,6 @@ func Open(path string) (*Store, error) {
 	return &Store{store: st}, nil
 }
 
-func Wrap(st *store.Store) *Store {
-	return &Store{store: st}
-}
-
 func (s *Store) Close() error {
 	return s.store.Close()
 }
