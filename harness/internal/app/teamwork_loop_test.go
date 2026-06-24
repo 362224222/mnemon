@@ -9,7 +9,7 @@ import (
 
 	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/render"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
@@ -53,7 +53,7 @@ func TestMinimalTeamworkLoopThroughRenderPresentations(t *testing.T) {
 		t.Fatalf("binding set: %v", err)
 	}
 	renderNow := mustRenderHTTPTime(t, "2026-06-24T10:05:00Z")
-	srv := httptest.NewServer(NewLocalHTTPHandler(rt, channel.TokenAuthenticator{Tokens: loaded.Tokens}, bindings, render.Renderer{
+	srv := httptest.NewServer(NewLocalHTTPHandler(rt, channel.TokenAuthenticator{Tokens: loaded.Tokens}, bindings, presentation.Renderer{
 		Now: func() time.Time { return renderNow },
 	}))
 	defer srv.Close()
@@ -93,7 +93,7 @@ func TestMinimalTeamworkLoopThroughRenderPresentations(t *testing.T) {
 		"expected_feedback": "progress_digest with result or blocker", "ttl": "30m", "evidence": "signal sig-r1",
 	})
 
-	work := postRender(t, srv.URL, "tok-b", render.Request{RenderIntent: render.IntentTeamworkEvents})
+	work := postRender(t, srv.URL, "tok-b", presentation.Request{RenderIntent: presentation.IntentTeamworkEvents})
 	if !strings.Contains(work.Body, "[mnemon:work]") || !strings.Contains(work.Body, "asg-r1") || !strings.Contains(work.Body, "[mnemon:feedback]") {
 		t.Fatalf("B must see work + feedback presentation for assignment:\n%s", work.Body)
 	}
@@ -102,11 +102,11 @@ func TestMinimalTeamworkLoopThroughRenderPresentations(t *testing.T) {
 		"assignment_ref": "asg-r1", "scope": "harness/r1/render",
 		"summary": "review complete; render endpoint is usable", "evidence": "render endpoint test",
 	})
-	integrate := postRender(t, srv.URL, "tok-a", render.Request{RenderIntent: render.IntentTeamworkEvents})
+	integrate := postRender(t, srv.URL, "tok-a", presentation.Request{RenderIntent: presentation.IntentTeamworkEvents})
 	if !strings.Contains(integrate.Body, "[mnemon:integrate]") || !strings.Contains(integrate.Body, "review complete") {
 		t.Fatalf("A must see integration presentation after B feedback:\n%s", integrate.Body)
 	}
-	afterFeedback := postRender(t, srv.URL, "tok-b", render.Request{RenderIntent: render.IntentTeamworkEvents})
+	afterFeedback := postRender(t, srv.URL, "tok-b", presentation.Request{RenderIntent: presentation.IntentTeamworkEvents})
 	if strings.Contains(afterFeedback.Body, "Assignment asg-r1 is yours") {
 		t.Fatalf("linked progress must remove B work presentation:\n%s", afterFeedback.Body)
 	}
@@ -118,11 +118,11 @@ func TestMinimalTeamworkLoopThroughRenderPresentations(t *testing.T) {
 		"expected_feedback": "progress_digest with result or blocker", "ttl": "5m", "evidence": "TTL branch",
 	})
 	renderNow = mustRenderHTTPTime(t, "2026-06-24T10:20:00Z")
-	expired := postRender(t, srv.URL, "tok-a", render.Request{RenderIntent: render.IntentTeamworkEvents})
+	expired := postRender(t, srv.URL, "tok-a", presentation.Request{RenderIntent: presentation.IntentTeamworkEvents})
 	if !strings.Contains(expired.Body, "[mnemon:expired]") || !strings.Contains(expired.Body, "asg-exp") {
 		t.Fatalf("A must see expired presentation for unreported assignment:\n%s", expired.Body)
 	}
-	assigneeExpired := postRender(t, srv.URL, "tok-b", render.Request{RenderIntent: render.IntentTeamworkEvents})
+	assigneeExpired := postRender(t, srv.URL, "tok-b", presentation.Request{RenderIntent: presentation.IntentTeamworkEvents})
 	if strings.Contains(assigneeExpired.Body, "[mnemon:expired]") {
 		t.Fatalf("B must not see originator expired presentation:\n%s", assigneeExpired.Body)
 	}

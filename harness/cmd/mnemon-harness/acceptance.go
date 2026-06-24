@@ -20,8 +20,8 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/codexapp"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemonhub"
-	"github.com/mnemon-dev/mnemon/harness/internal/render"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 	"github.com/spf13/cobra"
@@ -892,7 +892,7 @@ Use the control observe command pattern from your developer instructions. Do not
 
 	targetPrompt := fmt.Sprintf(`This is the 6B Remote Workspace sync acceptance target turn.
 Render your current Mnemon derived-event presentation, then emit progress_digest.write_candidate.observed with external id sync-progress-%s and payload:
-{"assignment_ref":%q,"scope":"r1/real-codex-cluster/sync","summary":"Target real Codex appserver received the assignment through Local Mnemon sync/import and acted from its own derived-event render.","evidence":"target local render work derived event after hub sync","changed_context":"6B target completed synced work","suggested_next":"source should integrate the synced progress"}
+{"assignment_ref":%q,"scope":"r1/real-codex-cluster/sync","summary":"Target real Codex appserver received the assignment through Local Mnemon sync/import and acted from its own derived-event presentation.","evidence":"target local render work derived event after hub sync","changed_context":"6B target completed synced work","suggested_next":"source should integrate the synced progress"}
 After the command succeeds, answer "sync progress written".`, runID, assignmentID)
 	answer, err = runR1Turn(&target.r1CodexAgent, targetPrompt, opts.TurnTimeout)
 	appendSyncAgentAnswer(syncReport, target.principal, answer)
@@ -1135,9 +1135,9 @@ func appendSyncAgentAnswer(report *r1CodexSyncReport, principal, answer string) 
 	}
 }
 
-func waitForR1DerivedEventPresentation(controlURL, token string, wants []string, timeout time.Duration) (render.Response, bool) {
+func waitForR1DerivedEventPresentation(controlURL, token string, wants []string, timeout time.Duration) (presentation.Response, bool) {
 	deadline := time.Now().Add(timeout)
-	var last render.Response
+	var last presentation.Response
 	for time.Now().Before(deadline) {
 		resp, err := renderR1DerivedEventPresentation(controlURL, token)
 		if err == nil {
@@ -1249,24 +1249,24 @@ func findAssignmentAssignee(controlURL string, agent r1CodexAgent, assignmentID 
 	return ""
 }
 
-func renderR1DerivedEventPresentation(controlURL, token string) (render.Response, error) {
-	body, _ := json.Marshal(render.Request{RenderIntent: render.IntentTeamworkEvents, Lifecycle: "remind", Surface: "hook"})
+func renderR1DerivedEventPresentation(controlURL, token string) (presentation.Response, error) {
+	body, _ := json.Marshal(presentation.Request{RenderIntent: presentation.IntentTeamworkEvents, Lifecycle: "remind", Surface: "hook"})
 	req, err := http.NewRequest(http.MethodPost, strings.TrimRight(controlURL, "/")+"/render", bytes.NewReader(body))
 	if err != nil {
-		return render.Response{}, err
+		return presentation.Response{}, err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return render.Response{}, err
+		return presentation.Response{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		data, _ := io.ReadAll(resp.Body)
-		return render.Response{}, fmt.Errorf("render failed: %s: %s", resp.Status, string(data))
+		return presentation.Response{}, fmt.Errorf("render failed: %s: %s", resp.Status, string(data))
 	}
-	var out render.Response
+	var out presentation.Response
 	return out, json.NewDecoder(resp.Body).Decode(&out)
 }
 

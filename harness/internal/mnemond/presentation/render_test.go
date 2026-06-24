@@ -1,4 +1,4 @@
-package render
+package presentation
 
 import (
 	"context"
@@ -160,7 +160,7 @@ func TestMinimalFallbackHasNoDynamicPresentation(t *testing.T) {
 }
 
 func TestJSONLAuditSinkWritesRecords(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "audit", "render.jsonl")
+	path := filepath.Join(t.TempDir(), "audit", "presentation.jsonl")
 	sink := &JSONLAuditSink{Path: path}
 	rec := AuditRecord{
 		SchemaVersion:   1,

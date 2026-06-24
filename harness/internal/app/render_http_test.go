@@ -14,7 +14,7 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/eventview"
-	"github.com/mnemon-dev/mnemon/harness/internal/render"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
@@ -35,7 +35,7 @@ func TestRenderEndpointUsesAuthenticatedScopedProjection(t *testing.T) {
 		t.Fatalf("runtime config: %v", err)
 	}
 	rc.Now = func() string { return "2026-06-24T10:00:00Z" }
-	rt, err := runtime.OpenRuntime(filepath.Join(t.TempDir(), "render.db"), rc)
+	rt, err := runtime.OpenRuntime(filepath.Join(t.TempDir(), "presentation.db"), rc)
 	if err != nil {
 		t.Fatalf("open runtime: %v", err)
 	}
@@ -44,8 +44,8 @@ func TestRenderEndpointUsesAuthenticatedScopedProjection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("binding set: %v", err)
 	}
-	audit := &render.MemoryAuditSink{}
-	handler := NewLocalHTTPHandler(rt, channel.TokenAuthenticator{Tokens: loaded.Tokens}, bindings, render.Renderer{
+	audit := &presentation.MemoryAuditSink{}
+	handler := NewLocalHTTPHandler(rt, channel.TokenAuthenticator{Tokens: loaded.Tokens}, bindings, presentation.Renderer{
 		Now:       func() time.Time { return mustRenderHTTPTime(t, "2026-06-24T10:05:00Z") },
 		AuditSink: audit,
 	})
@@ -65,8 +65,8 @@ func TestRenderEndpointUsesAuthenticatedScopedProjection(t *testing.T) {
 		t.Fatalf("seed assignment: rec=%+v err=%v", rec, err)
 	}
 
-	resp := postRender(t, srv.URL, "tok-b", render.Request{RenderIntent: render.IntentTeamworkEvents})
-	if resp.Status != render.StatusOK || !strings.Contains(resp.Body, "[mnemon:work]") {
+	resp := postRender(t, srv.URL, "tok-b", presentation.Request{RenderIntent: presentation.IntentTeamworkEvents})
+	if resp.Status != presentation.StatusOK || !strings.Contains(resp.Body, "[mnemon:work]") {
 		t.Fatalf("render endpoint should return assignee work presentation: %#v", resp)
 	}
 	if strings.Contains(resp.Body, "codex-a private") {
@@ -95,10 +95,10 @@ func TestRenderEndpointRequiresRenderVerb(t *testing.T) {
 	if err != nil {
 		t.Fatalf("binding set: %v", err)
 	}
-	srv := httptest.NewServer(NewLocalHTTPHandler(rt, channel.TokenAuthenticator{Tokens: loaded.Tokens}, bindings, render.Renderer{}))
+	srv := httptest.NewServer(NewLocalHTTPHandler(rt, channel.TokenAuthenticator{Tokens: loaded.Tokens}, bindings, presentation.Renderer{}))
 	defer srv.Close()
 
-	body, _ := json.Marshal(render.Request{RenderIntent: render.IntentTeamworkEvents})
+	body, _ := json.Marshal(presentation.Request{RenderIntent: presentation.IntentTeamworkEvents})
 	req, err := http.NewRequest(http.MethodPost, srv.URL+"/render", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
@@ -137,7 +137,7 @@ func TestRenderEndpointAppliesBindingBudgetWithoutReducingAuthority(t *testing.T
 	if err != nil {
 		t.Fatalf("binding set: %v", err)
 	}
-	srv := httptest.NewServer(NewLocalHTTPHandler(rt, channel.TokenAuthenticator{Tokens: loaded.Tokens}, bindings, render.Renderer{
+	srv := httptest.NewServer(NewLocalHTTPHandler(rt, channel.TokenAuthenticator{Tokens: loaded.Tokens}, bindings, presentation.Renderer{
 		Now: func() time.Time { return mustRenderHTTPTime(t, "2026-06-24T10:05:00Z") },
 	}))
 	defer srv.Close()
@@ -155,7 +155,7 @@ func TestRenderEndpointAppliesBindingBudgetWithoutReducingAuthority(t *testing.T
 		}
 	}
 
-	packet := postRender(t, srv.URL, "tok", render.Request{RenderIntent: render.IntentContextPacket})
+	packet := postRender(t, srv.URL, "tok", presentation.Request{RenderIntent: presentation.IntentContextPacket})
 	if !strings.Contains(packet.Body, "render budget entry 3") {
 		t.Fatalf("digest-only render packet must keep newest entry:\n%s", packet.Body)
 	}
@@ -174,7 +174,7 @@ func TestRenderEndpointAppliesBindingBudgetWithoutReducingAuthority(t *testing.T
 	}
 }
 
-func postRender(t *testing.T, baseURL, token string, reqBody render.Request) render.Response {
+func postRender(t *testing.T, baseURL, token string, reqBody presentation.Request) presentation.Response {
 	t.Helper()
 	body, err := json.Marshal(reqBody)
 	if err != nil {
@@ -194,7 +194,7 @@ func postRender(t *testing.T, baseURL, token string, reqBody render.Request) ren
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("render status = %s", res.Status)
 	}
-	var out render.Response
+	var out presentation.Response
 	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
 		t.Fatal(err)
 	}

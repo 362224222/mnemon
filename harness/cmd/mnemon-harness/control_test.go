@@ -14,7 +14,7 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/capability"
 	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/render"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
@@ -176,7 +176,7 @@ func TestControlRenderPrintsDerivedEventPresentationBody(t *testing.T) {
 		t.Fatal(err)
 	}
 	rc.Now = func() string { return "2026-06-24T10:00:00Z" }
-	rt, err := runtime.OpenRuntime(filepath.Join(t.TempDir(), "render.db"), rc)
+	rt, err := runtime.OpenRuntime(filepath.Join(t.TempDir(), "presentation.db"), rc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +185,7 @@ func TestControlRenderPrintsDerivedEventPresentationBody(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(app.NewLocalHTTPHandler(rt, channel.TokenAuthenticator{Tokens: loaded.Tokens}, bindings, render.Renderer{
+	srv := httptest.NewServer(app.NewLocalHTTPHandler(rt, channel.TokenAuthenticator{Tokens: loaded.Tokens}, bindings, presentation.Renderer{
 		Now: func() time.Time { return mustCmdTime(t, "2026-06-24T10:05:00Z") },
 	}))
 	defer srv.Close()
@@ -225,7 +225,7 @@ func TestControlRenderPrintsDerivedEventPresentationBody(t *testing.T) {
 	controlPrincipal = "codex-b@project"
 	controlToken = "tok-b"
 	controlTokenFile = ""
-	controlRenderIntent = render.IntentTeamworkEvents
+	controlRenderIntent = presentation.IntentTeamworkEvents
 	controlRenderLifecycle = "remind"
 	controlRenderSurface = "hook"
 	controlRenderMaxChars = 6000

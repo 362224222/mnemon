@@ -13,7 +13,7 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/capability"
 	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/render"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation"
 	"github.com/spf13/cobra"
 )
 
@@ -164,11 +164,11 @@ var controlRenderCmd = &cobra.Command{
 	Use:   "render",
 	Short: "Render read-only derived-event presentation for the authenticated principal",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		resp, err := controlRender(render.Request{
+		resp, err := controlRender(presentation.Request{
 			RenderIntent: controlRenderIntent,
 			Lifecycle:    controlRenderLifecycle,
 			Surface:      controlRenderSurface,
-			Budget:       render.Budget{MaxChars: controlRenderMaxChars},
+			Budget:       presentation.Budget{MaxChars: controlRenderMaxChars},
 		})
 		if err != nil {
 			return err
@@ -179,13 +179,13 @@ var controlRenderCmd = &cobra.Command{
 			return enc.Encode(resp)
 		}
 		switch resp.Status {
-		case render.StatusOK, render.StatusFallback:
+		case presentation.StatusOK, presentation.StatusFallback:
 			if strings.TrimSpace(resp.Body) != "" {
 				fmt.Fprintln(cmd.OutOrStdout(), resp.Body)
 			}
-		case render.StatusEmpty:
+		case presentation.StatusEmpty:
 			return nil
-		case render.StatusDenied:
+		case presentation.StatusDenied:
 			return fmt.Errorf("render denied for %s", controlPrincipal)
 		default:
 			return fmt.Errorf("render returned status %q", resp.Status)
@@ -194,22 +194,22 @@ var controlRenderCmd = &cobra.Command{
 	},
 }
 
-func controlRender(reqBody render.Request) (render.Response, error) {
+func controlRender(reqBody presentation.Request) (presentation.Response, error) {
 	token := controlToken
 	if controlTokenFile != "" {
 		data, err := os.ReadFile(controlTokenFile)
 		if err != nil {
-			return render.Response{}, fmt.Errorf("read --token-file: %w", err)
+			return presentation.Response{}, fmt.Errorf("read --token-file: %w", err)
 		}
 		token = strings.TrimSpace(string(data))
 	}
 	body, err := json.Marshal(reqBody)
 	if err != nil {
-		return render.Response{}, err
+		return presentation.Response{}, err
 	}
 	req, err := http.NewRequest(http.MethodPost, strings.TrimRight(controlAddr, "/")+"/render", bytes.NewReader(body))
 	if err != nil {
-		return render.Response{}, err
+		return presentation.Response{}, err
 	}
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
@@ -219,16 +219,16 @@ func controlRender(reqBody render.Request) (render.Response, error) {
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return render.Response{}, fmt.Errorf("channel render failed (service unreachable): %w", err)
+		return presentation.Response{}, fmt.Errorf("channel render failed (service unreachable): %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
-		return render.Response{}, fmt.Errorf("channel render failed: %s: %s", resp.Status, string(b))
+		return presentation.Response{}, fmt.Errorf("channel render failed: %s: %s", resp.Status, string(b))
 	}
-	var out render.Response
+	var out presentation.Response
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return render.Response{}, err
+		return presentation.Response{}, err
 	}
 	return out, nil
 }
@@ -275,7 +275,7 @@ func init() {
 	controlPullCmd.Flags().StringVar(&controlActor, "actor", "", "subscription actor (defaults to principal)")
 	controlPullCmd.Flags().BoolVar(&controlPullJSON, "json", false, "emit scoped event view as JSON")
 	controlStatusCmd.Flags().BoolVar(&controlStatusJSON, "json", false, "emit channel status as JSON")
-	controlRenderCmd.Flags().StringVar(&controlRenderIntent, "intent", render.IntentTeamworkEvents, "render intent")
+	controlRenderCmd.Flags().StringVar(&controlRenderIntent, "intent", presentation.IntentTeamworkEvents, "render intent")
 	controlRenderCmd.Flags().StringVar(&controlRenderLifecycle, "lifecycle", "remind", "host lifecycle")
 	controlRenderCmd.Flags().StringVar(&controlRenderSurface, "surface", "hook", "host surface")
 	controlRenderCmd.Flags().IntVar(&controlRenderMaxChars, "max-chars", 6000, "maximum rendered body chars")

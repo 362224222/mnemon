@@ -12,7 +12,7 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/capability"
 	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/render"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
@@ -20,7 +20,7 @@ const renderAuditRelPath = ".mnemon/harness/local/render-audit.jsonl"
 
 // NewLocalHTTPHandler adds the R1 read-only render endpoint at the app wiring layer. Runtime/channel
 // still own observe/pull/status/sync; render reads only the authenticated actor's scoped eventview.
-func NewLocalHTTPHandler(rt *runtime.Runtime, auth channel.Authenticator, bindings *channel.BindingSet, renderer render.Renderer) http.Handler {
+func NewLocalHTTPHandler(rt *runtime.Runtime, auth channel.Authenticator, bindings *channel.BindingSet, renderer presentation.Renderer) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/render", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -48,7 +48,7 @@ func NewLocalHTTPHandler(rt *runtime.Runtime, auth channel.Authenticator, bindin
 			haveBinding = true
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
-		var req render.Request
+		var req presentation.Request
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -86,7 +86,7 @@ func ServeLocalHTTP(ctx context.Context, addr string, rt *runtime.Runtime, auth 
 	if projectRoot != "" {
 		auditPath = filepath.Join(projectRoot, renderAuditRelPath)
 	}
-	renderer := render.Renderer{AuditSink: &render.JSONLAuditSink{Path: auditPath}}
+	renderer := presentation.Renderer{AuditSink: &presentation.JSONLAuditSink{Path: auditPath}}
 	srv := &http.Server{Addr: addr, Handler: NewLocalHTTPHandler(rt, auth, bindings, renderer)}
 	errc := make(chan error, 1)
 	go func() {

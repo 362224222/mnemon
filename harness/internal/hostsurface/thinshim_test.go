@@ -5,14 +5,14 @@ import (
 	"testing"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/assets"
-	"github.com/mnemon-dev/mnemon/harness/internal/render"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation"
 )
 
 func TestRenderThinHookIsStaticRenderShim(t *testing.T) {
 	body, err := RenderThinHook(assets.FS, ThinHookOptions{
 		Host:         "codex",
 		Timing:       "remind",
-		RenderIntent: render.IntentTeamworkEvents,
+		RenderIntent: presentation.IntentTeamworkEvents,
 	})
 	if err != nil {
 		t.Fatalf("render thin hook: %v", err)
@@ -63,8 +63,8 @@ func TestRenderThinHookHostDialect(t *testing.T) {
 
 func TestRenderThinHookRejectsUnknownInputs(t *testing.T) {
 	for _, tc := range []ThinHookOptions{
-		{Host: "../codex", Timing: "remind", RenderIntent: render.IntentTeamworkEvents},
-		{Host: "codex", Timing: "boot", RenderIntent: render.IntentTeamworkEvents},
+		{Host: "../codex", Timing: "remind", RenderIntent: presentation.IntentTeamworkEvents},
+		{Host: "codex", Timing: "boot", RenderIntent: presentation.IntentTeamworkEvents},
 		{Host: "codex", Timing: "remind", RenderIntent: "memory.events"},
 	} {
 		if _, err := RenderThinHook(assets.FS, tc); err == nil {

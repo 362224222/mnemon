@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/assets"
-	"github.com/mnemon-dev/mnemon/harness/internal/render"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation"
 )
 
 type ThinHookOptions struct {
@@ -139,12 +139,12 @@ func RenderThinHook(fsys fs.FS, opts ThinHookOptions) (string, error) {
 }
 
 func RenderStandardThinHook(host, timing string) (string, error) {
-	return RenderThinHook(assets.FS, ThinHookOptions{Host: host, Timing: timing, RenderIntent: render.IntentTeamworkEvents})
+	return RenderThinHook(assets.FS, ThinHookOptions{Host: host, Timing: timing, RenderIntent: presentation.IntentTeamworkEvents})
 }
 
 func isRenderIntent(intent string) bool {
 	switch intent {
-	case render.IntentSkillBootstrap, render.IntentContextPacket, render.IntentProfileEvents, render.IntentTeamworkEvents, render.IntentPayloadContract:
+	case presentation.IntentSkillBootstrap, presentation.IntentContextPacket, presentation.IntentProfileEvents, presentation.IntentTeamworkEvents, presentation.IntentPayloadContract:
 		return true
 	default:
 		return false

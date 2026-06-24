@@ -44,7 +44,6 @@ var packageMainAxisInventory = map[string]packageMainAxis{
 	"kernel":      {owner: ownerMnemond, role: "materialized event state applier", target: "mnemond/state"},
 	"mnemonhub":   {owner: ownerMnemonhub, role: "remote accepted event exchange server and exchange mechanics", target: "mnemonhub"},
 	"reconcile":   {owner: ownerMnemond, role: "event admission/materialization driver", target: "mnemond/admission"},
-	"render":      {owner: ownerMnemond, role: "derived event presentation for hostagents", target: "mnemond/presentation"},
 	"replay":      {owner: ownerMnemond, role: "mnemond determinism verification", target: "mnemond/replay"},
 	"rule":        {owner: ownerMnemond, role: "event admission policy primitive", target: "mnemond/admission"},
 	"runtime":     {owner: ownerMnemond, role: "local mnemond event runtime", target: "mnemond"},
@@ -58,16 +57,17 @@ var demotedMainAxisPackages = map[string]bool{
 	"eventview":  true,
 	"kernel":     true,
 	"reconcile":  true,
-	"render":     true,
 	"rule":       true,
 	"store":      true,
 }
 
 var nestedMainAxisInventory = map[string]packageMainAxis{
-	"mnemonhub/exchange": {owner: ownerMnemonhub, role: "mnemonhub event exchange client, cursors, and local ledger acknowledgements", target: "mnemonhub/exchange"},
+	"mnemond/presentation": {owner: ownerMnemond, role: "derived event presentation for hostagents", target: "mnemond/presentation"},
+	"mnemonhub/exchange":   {owner: ownerMnemonhub, role: "mnemonhub event exchange client, cursors, and local ledger acknowledgements", target: "mnemonhub/exchange"},
 }
 
 var retiredTopLevelImplementationPackages = []string{
+	"render",
 	"remotesync",
 }
 
