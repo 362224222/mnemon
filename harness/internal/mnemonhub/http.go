@@ -1,4 +1,4 @@
-package syncserver
+package mnemonhub
 
 import (
 	"crypto/subtle"
@@ -13,10 +13,10 @@ import (
 )
 
 // maxSyncBodyBytes caps a sync request body so an oversize batch is rejected at the edge rather
-// than buffered into memory (mirrors the channel's ingest cap; a 100-commit pull page fits easily).
+// than buffered into memory (mirrors the channel's ingest cap; a 100-event pull page fits easily).
 const maxSyncBodyBytes = 8 << 20
 
-// Authenticator resolves the authenticated principal from a request. syncserver carries its OWN
+// Authenticator resolves the authenticated principal from a request. mnemonhub carries its OWN
 // seam (not channel's) so the standalone hub never imports channel; mnemon-hub plugs in
 // BearerAuthenticator, tests may plug fakes.
 type Authenticator interface {
@@ -55,8 +55,8 @@ func (a BearerAuthenticator) Authenticate(r *http.Request) (contract.ActorID, er
 // line to audit (ts, principal, verb, result): result is "unauthorized" (401, principal "-"),
 // "bad_request" (400 — bad JSON / missing field / wrong method), "denied" (403 — no grant /
 // out-of-scope), or "ok". The "result" is the REQUEST-level outcome (auth/parse/method); the
-// per-commit accept/reject/conflict verdicts ride the 200 response body, NOT the audit line — a
-// request whose every commit is rejected still audits result=ok (LOW-13). nil audit discards.
+// per-event accept/reject/conflict verdicts ride the 200 response body, NOT the audit line — a
+// request whose every event is rejected still audits result=ok (LOW-13). nil audit discards.
 //
 // Method gates pin the frozen verb→method mapping (sync-abi-v1 §1): push/pull are POST, status is
 // GET or POST. A violation is 405 before auth (the method is request-shape, not identity).

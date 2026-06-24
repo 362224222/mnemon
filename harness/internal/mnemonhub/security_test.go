@@ -1,4 +1,4 @@
-package syncserver
+package mnemonhub
 
 import (
 	"bytes"
@@ -13,7 +13,7 @@ import (
 
 // The T2 security baseline (locked decision 4 / v1.1), pinned at the wire the standalone hub
 // serves: unauthenticated push -> 401; a principal without a replica grant (or without the verb)
-// -> denied; an out-of-scope commit -> rejected via the fail-closed clamp; a replayed batch is
+// -> denied; an out-of-scope event -> rejected via the fail-closed clamp; a replayed batch is
 // idempotent (zero duplicate rows, repeated accepted acks).
 
 type verbGrants struct {
@@ -76,7 +76,7 @@ func postSync(t *testing.T, url, token string, body any) *http.Response {
 func TestUnauthenticatedPushIs401(t *testing.T) {
 	srv, _, audit := newSecurityHub(t)
 	mem := contract.ResourceRef{Kind: "memory", ID: "project"}
-	body := contract.SyncPushRequest{ReplicaID: "local-a", Commits: []contract.LocalCommit{testCommit("local-a", "d1", mem, map[string]any{"content": "x"})}}
+	body := contract.SyncPushRequest{ReplicaID: "local-a", Events: testSyncEvents(t, testMaterial("local-a", "d1", mem, map[string]any{"content": "x"}))}
 
 	if resp := postSync(t, srv.URL+"/sync/push", "", body); resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("missing token must 401, got %d", resp.StatusCode)
@@ -92,7 +92,7 @@ func TestUnauthenticatedPushIs401(t *testing.T) {
 func TestNonReplicaPrincipalAndWrongVerbAreRejected(t *testing.T) {
 	srv, hub, audit := newSecurityHub(t)
 	mem := contract.ResourceRef{Kind: "memory", ID: "project"}
-	body := contract.SyncPushRequest{ReplicaID: "local-a", Commits: []contract.LocalCommit{testCommit("local-a", "d1", mem, map[string]any{"content": "x"})}}
+	body := contract.SyncPushRequest{ReplicaID: "local-a", Events: testSyncEvents(t, testMaterial("local-a", "d1", mem, map[string]any{"content": "x"}))}
 
 	// pull-only credential: authenticated, but no sync.push grant -> denied at the grant seam.
 	if resp := postSync(t, srv.URL+"/sync/push", "tok-pull", body); resp.StatusCode != http.StatusForbidden {
@@ -110,21 +110,21 @@ func TestNonReplicaPrincipalAndWrongVerbAreRejected(t *testing.T) {
 	}
 }
 
-func TestOutOfScopeCommitRejectedByClamp(t *testing.T) {
+func TestOutOfScopeEventRejectedByClamp(t *testing.T) {
 	_, hub, _ := newSecurityHub(t)
-	// replica-a's grant covers memory only; pushing a skill commit must be rejected per-commit by
+	// replica-a's grant covers memory only; pushing a skill event must be rejected per-event by
 	// the fail-closed clamp, with the clamp's diagnostic — never silently accepted.
 	skill := contract.ResourceRef{Kind: "skill", ID: "project"}
-	commit := testCommit("local-a", "dec-skill", skill, map[string]any{"name": "project"})
-	resp, err := hub.Push("replica-a@team", contract.SyncPushRequest{ReplicaID: "local-a", BatchID: "b", Commits: []contract.LocalCommit{commit}})
+	material := testMaterial("local-a", "dec-skill", skill, map[string]any{"name": "project"})
+	resp, err := hub.Push("replica-a@team", contract.SyncPushRequest{ReplicaID: "local-a", BatchID: "b", Events: testSyncEvents(t, material)})
 	if err != nil {
-		t.Fatalf("out-of-scope commit must reject per-commit, not fail transport: %v", err)
+		t.Fatalf("out-of-scope event must reject per-event, not fail transport: %v", err)
 	}
 	if len(resp.Rejected) != 1 || !strings.Contains(resp.Rejected[0].Diagnostic, "outside principal") {
-		t.Fatalf("out-of-scope commit must carry the clamp diagnostic, got %+v", resp)
+		t.Fatalf("out-of-scope event must carry the clamp diagnostic, got %+v", resp)
 	}
-	if st, _ := hub.Status("replica-a@team"); st.HubCommitsReceived != 0 {
-		t.Fatalf("a rejected commit must not land in the log, got %+v", st)
+	if st, _ := hub.Status("replica-a@team"); st.HubEventsReceived != 0 {
+		t.Fatalf("a rejected event must not land in the log, got %+v", st)
 	}
 }
 
@@ -158,7 +158,7 @@ func TestErrorMappingSeparatesValidationFromAuthorization(t *testing.T) {
 	// no-grant push (wrong verb) stays 403 denied (authorization, not validation).
 	mem := contract.ResourceRef{Kind: "memory", ID: "project"}
 	denied := postSync(t, srv.URL+"/sync/push", "tok-pull",
-		contract.SyncPushRequest{ReplicaID: "local-a", Commits: []contract.LocalCommit{testCommit("local-a", "d1", mem, map[string]any{"content": "x"})}})
+		contract.SyncPushRequest{ReplicaID: "local-a", Events: testSyncEvents(t, testMaterial("local-a", "d1", mem, map[string]any{"content": "x"}))})
 	if denied.StatusCode != http.StatusForbidden {
 		t.Fatalf("authorization refusal must stay 403, got %d", denied.StatusCode)
 	}
@@ -201,7 +201,7 @@ func TestReplayedBatchIsIdempotentOverTheWire(t *testing.T) {
 	srv, _, _ := newSecurityHub(t)
 	mem := contract.ResourceRef{Kind: "memory", ID: "project"}
 	body := contract.SyncPushRequest{ReplicaID: "local-a", BatchID: "replayed",
-		Commits: []contract.LocalCommit{testCommit("local-a", "dec-replay", mem, map[string]any{"content": "replayed"})}}
+		Events: testSyncEvents(t, testMaterial("local-a", "dec-replay", mem, map[string]any{"content": "replayed"}))}
 
 	var first, second contract.SyncPushResponse
 	r1 := postSync(t, srv.URL+"/sync/push", "tok-a", body)
@@ -226,7 +226,7 @@ func TestReplayedBatchIsIdempotentOverTheWire(t *testing.T) {
 	if err := json.NewDecoder(r3.Body).Decode(&st); err != nil {
 		t.Fatal(err)
 	}
-	if st.HubCommitsReceived != 1 {
-		t.Fatalf("replayed batch must not duplicate rows: received=%d", st.HubCommitsReceived)
+	if st.HubEventsReceived != 1 {
+		t.Fatalf("replayed batch must not duplicate rows: received=%d", st.HubEventsReceived)
 	}
 }

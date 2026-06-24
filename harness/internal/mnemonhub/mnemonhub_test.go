@@ -1,4 +1,4 @@
-package syncserver
+package mnemonhub
 
 import (
 	"crypto/sha256"
@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
 
@@ -28,8 +29,8 @@ func openTestHub(t *testing.T, grants Grants) (*Server, *store.Store) {
 	return New(st, grants, testNow), st
 }
 
-func testCommit(replicaID, decisionID string, ref contract.ResourceRef, fields map[string]any) contract.LocalCommit {
-	return contract.LocalCommit{
+func testMaterial(replicaID, decisionID string, ref contract.ResourceRef, fields map[string]any) contract.SyncedEventMaterial {
+	return contract.SyncedEventMaterial{
 		OriginReplicaID: replicaID,
 		LocalDecisionID: decisionID,
 		LocalIngestSeq:  1,
@@ -49,6 +50,24 @@ func testDigest(fields map[string]any) string {
 	return hex.EncodeToString(sum[:])
 }
 
+func testSyncEvent(t *testing.T, material contract.SyncedEventMaterial) eventmodel.EventEnvelope {
+	t.Helper()
+	env, err := contract.SyncedEventEnvelopeFromMaterial(material)
+	if err != nil {
+		t.Fatalf("synced event fixture: %v", err)
+	}
+	return env
+}
+
+func testSyncEvents(t *testing.T, materials ...contract.SyncedEventMaterial) []eventmodel.EventEnvelope {
+	t.Helper()
+	events := make([]eventmodel.EventEnvelope, 0, len(materials))
+	for _, material := range materials {
+		events = append(events, testSyncEvent(t, material))
+	}
+	return events
+}
+
 // The hub adjudication semantics extracted from the runtime, pinned at the package they now live in:
 // first push accepted; identical replay idempotent (same ack, zero new rows); same idempotency key
 // with different content -> conflict; invalid digest / non-syncable kind -> rejected with diagnostic.
@@ -57,8 +76,8 @@ func TestPushAdjudicationSemantics(t *testing.T) {
 	grants := GrantMap{"replica-a@team": {Principal: "replica-a@team", Scopes: []contract.ResourceRef{mem}}}
 	hub, st := openTestHub(t, grants)
 
-	commit := testCommit("local-a", "dec-1", mem, map[string]any{"content": "hub accepted memory"})
-	first, err := hub.Push("replica-a@team", contract.SyncPushRequest{ReplicaID: "local-a", BatchID: "b1", Commits: []contract.LocalCommit{commit}})
+	material := testMaterial("local-a", "dec-1", mem, map[string]any{"content": "hub accepted memory"})
+	first, err := hub.Push("replica-a@team", contract.SyncPushRequest{ReplicaID: "local-a", BatchID: "b1", Events: testSyncEvents(t, material)})
 	if err != nil {
 		t.Fatalf("first push: %v", err)
 	}
@@ -66,47 +85,47 @@ func TestPushAdjudicationSemantics(t *testing.T) {
 		t.Fatalf("first push must accept with a cursor, got %+v", first)
 	}
 
-	replay, err := hub.Push("replica-a@team", contract.SyncPushRequest{ReplicaID: "local-a", BatchID: "b1", Commits: []contract.LocalCommit{commit}})
+	replay, err := hub.Push("replica-a@team", contract.SyncPushRequest{ReplicaID: "local-a", BatchID: "b1", Events: testSyncEvents(t, material)})
 	if err != nil {
 		t.Fatalf("replayed push: %v", err)
 	}
 	if !reflect.DeepEqual(first.Accepted, replay.Accepted) || len(replay.Conflicts) != 0 || len(replay.Rejected) != 0 {
 		t.Fatalf("replay must repeat the accepted ack: first=%+v replay=%+v", first, replay)
 	}
-	if n, _ := st.RemoteSyncCommitCount(); n != 1 {
+	if n, _ := st.RemoteSyncedEventCount(); n != 1 {
 		t.Fatalf("replay must append zero rows, got %d", n)
 	}
 
-	mutated := testCommit("local-a", "dec-1", mem, map[string]any{"content": "same key, different body"})
-	conflicted, err := hub.Push("replica-a@team", contract.SyncPushRequest{ReplicaID: "local-a", BatchID: "b2", Commits: []contract.LocalCommit{mutated}})
+	mutated := testMaterial("local-a", "dec-1", mem, map[string]any{"content": "same key, different body"})
+	conflicted, err := hub.Push("replica-a@team", contract.SyncPushRequest{ReplicaID: "local-a", BatchID: "b2", Events: testSyncEvents(t, mutated)})
 	if err != nil {
 		t.Fatalf("conflicting push: %v", err)
 	}
 	if len(conflicted.Conflicts) != 1 || !strings.Contains(conflicted.Conflicts[0].Diagnostic, "idempotency key") {
 		t.Fatalf("key reuse with different content must conflict, got %+v", conflicted)
 	}
-	if conflicted.Conflicts[0].OriginReplicaID != "local-a" || conflicted.Conflicts[0].LocalDecisionID != "dec-1" {
+	if conflicted.Conflicts[0].OriginMnemond != "local-a" || conflicted.Conflicts[0].LocalDecisionID() != "dec-1" {
 		t.Fatalf("conflict result must carry the attribution identity, got %+v", conflicted.Conflicts[0])
 	}
 
-	bad := testCommit("local-a", "dec-bad", mem, map[string]any{"content": "bad digest"})
+	bad := testMaterial("local-a", "dec-bad", mem, map[string]any{"content": "bad digest"})
 	bad.FieldsDigest = "wrong"
-	resp, err := hub.Push("replica-a@team", contract.SyncPushRequest{ReplicaID: "local-a", BatchID: "b3", Commits: []contract.LocalCommit{bad}})
+	resp, err := hub.Push("replica-a@team", contract.SyncPushRequest{ReplicaID: "local-a", BatchID: "b3", Events: testSyncEvents(t, bad)})
 	if err != nil {
-		t.Fatalf("bad commit must reject per-commit, not fail transport: %v", err)
+		t.Fatalf("bad event must reject per-event, not fail transport: %v", err)
 	}
 	if len(resp.Rejected) != 1 || !strings.Contains(resp.Rejected[0].Diagnostic, "fields_digest") {
 		t.Fatalf("bad digest must be rejected with diagnostic, got %+v", resp)
 	}
 
-	if _, err := hub.Push("replica-a@team", contract.SyncPushRequest{ReplicaID: "forged", BatchID: "b4", Commits: []contract.LocalCommit{commit}}); err == nil {
-		t.Fatal("request replica_id mismatching commit origin must reject the request")
+	if _, err := hub.Push("replica-a@team", contract.SyncPushRequest{ReplicaID: "forged", BatchID: "b4", Events: testSyncEvents(t, material)}); err == nil {
+		t.Fatal("request replica_id mismatching event origin must reject the request")
 	}
 }
 
-// Pull serves accepted commits after the cursor, excludes the puller's own origin, clamps scopes,
+// Pull serves synced events after the cursor, excludes the puller's own origin, clamps scopes,
 // and replaying an old cursor re-serves identically (cursor replay idempotency).
-func TestPullServesScopedCommitsAfterCursor(t *testing.T) {
+func TestPullServesScopedEventsAfterCursor(t *testing.T) {
 	mem := contract.ResourceRef{Kind: "memory", ID: "project"}
 	skill := contract.ResourceRef{Kind: "skill", ID: "project"}
 	grants := GrantMap{
@@ -115,40 +134,40 @@ func TestPullServesScopedCommitsAfterCursor(t *testing.T) {
 	}
 	hub, _ := openTestHub(t, grants)
 
-	seedMem := testCommit("local-a", "dec-mem", mem, map[string]any{"content": "memory commit"})
-	seedSkill := testCommit("local-a", "dec-skill", skill, map[string]any{"name": "project", "declarations": []any{}})
-	if _, err := hub.Push("replica-a@team", contract.SyncPushRequest{ReplicaID: "local-a", BatchID: "seed", Commits: []contract.LocalCommit{seedMem, seedSkill}}); err != nil {
+	seedMem := testMaterial("local-a", "dec-mem", mem, map[string]any{"content": "memory event"})
+	seedSkill := testMaterial("local-a", "dec-skill", skill, map[string]any{"name": "project", "declarations": []any{}})
+	if _, err := hub.Push("replica-a@team", contract.SyncPushRequest{ReplicaID: "local-a", BatchID: "seed", Events: testSyncEvents(t, seedMem, seedSkill)}); err != nil {
 		t.Fatalf("seed push: %v", err)
 	}
 
-	// B's grant is memory-only: even with empty requested scopes, only the memory commit serves.
+	// B's grant is memory-only: even with empty requested scopes, only the memory event serves.
 	resp, err := hub.Pull("replica-b@team", contract.SyncPullRequest{ReplicaID: "local-b"})
 	if err != nil {
 		t.Fatalf("pull: %v", err)
 	}
-	if len(resp.Commits) != 1 || resp.Commits[0].ResourceRef != mem {
-		t.Fatalf("memory-only grant must serve only memory commits, got %+v", resp.Commits)
+	if len(resp.Events) != 1 || resp.Events[0].Event.Subject != eventmodel.Subject("memory", "project") {
+		t.Fatalf("memory-only grant must serve only memory events, got %+v", resp.Events)
 	}
 	if resp.NextCursor == "" || resp.NextCursor == "0" {
 		t.Fatalf("pull must advance the cursor, got %q", resp.NextCursor)
 	}
 
-	// Replay from the same old cursor re-serves the same commit (idempotent by cursor).
+	// Replay from the same old cursor re-serves the same event (idempotent by cursor).
 	again, err := hub.Pull("replica-b@team", contract.SyncPullRequest{ReplicaID: "local-b"})
-	if err != nil || len(again.Commits) != 1 || again.NextCursor != resp.NextCursor {
+	if err != nil || len(again.Events) != 1 || again.NextCursor != resp.NextCursor {
 		t.Fatalf("cursor replay must re-serve identically: %+v err=%v", again, err)
 	}
 
 	// From the advanced cursor, nothing more serves.
 	after, err := hub.Pull("replica-b@team", contract.SyncPullRequest{ReplicaID: "local-b", RemoteCursor: resp.NextCursor})
-	if err != nil || len(after.Commits) != 0 || after.NextCursor != resp.NextCursor {
+	if err != nil || len(after.Events) != 0 || after.NextCursor != resp.NextCursor {
 		t.Fatalf("pull past the end must serve nothing and hold the cursor: %+v err=%v", after, err)
 	}
 
-	// The origin replica never sees its own commits echoed.
+	// The origin replica never sees its own events echoed.
 	echo, err := hub.Pull("replica-a@team", contract.SyncPullRequest{ReplicaID: "local-a"})
-	if err != nil || len(echo.Commits) != 0 {
-		t.Fatalf("origin must not pull its own commits back: %+v err=%v", echo, err)
+	if err != nil || len(echo.Events) != 0 {
+		t.Fatalf("origin must not pull its own events back: %+v err=%v", echo, err)
 	}
 
 	// An explicit out-of-grant scope is denied (the ONE clamp).
@@ -171,16 +190,16 @@ func TestStatusReportsHubCounters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("empty status: %v", err)
 	}
-	if st0.HubCommitsReceived != 0 || st0.HubCommitsServed != 0 || len(st0.HubReplicaCursors) != 0 {
+	if st0.HubEventsReceived != 0 || st0.HubEventsServed != 0 || len(st0.HubReplicaCursors) != 0 {
 		t.Fatalf("fresh hub must report zero counters, got %+v", st0)
 	}
 
-	commit := testCommit("local-a", "dec-1", mem, map[string]any{"content": "counted"})
-	if _, err := hub.Push("replica-a@team", contract.SyncPushRequest{ReplicaID: "local-a", BatchID: "b", Commits: []contract.LocalCommit{commit}}); err != nil {
+	material := testMaterial("local-a", "dec-1", mem, map[string]any{"content": "counted"})
+	if _, err := hub.Push("replica-a@team", contract.SyncPushRequest{ReplicaID: "local-a", BatchID: "b", Events: testSyncEvents(t, material)}); err != nil {
 		t.Fatalf("push: %v", err)
 	}
 	pulled, err := hub.Pull("replica-b@team", contract.SyncPullRequest{ReplicaID: "local-b"})
-	if err != nil || len(pulled.Commits) != 1 {
+	if err != nil || len(pulled.Events) != 1 {
 		t.Fatalf("pull: %+v err=%v", pulled, err)
 	}
 
@@ -188,7 +207,7 @@ func TestStatusReportsHubCounters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("status: %v", err)
 	}
-	if st1.HubCommitsReceived != 1 || st1.HubCommitsServed != 1 {
+	if st1.HubEventsReceived != 1 || st1.HubEventsServed != 1 {
 		t.Fatalf("counters must reflect one received + one served, got %+v", st1)
 	}
 	if st1.HubReplicaCursors["replica-b@team"] != pulled.NextCursor {
@@ -211,10 +230,10 @@ func TestConcurrentPushersBothLand(t *testing.T) {
 
 	push := func(principal contract.ActorID, origin string, n int) error {
 		for i := 0; i < n; i++ {
-			commit := testCommit(origin, fmt.Sprintf("dec-%s-%d", origin, i), mem,
-				map[string]any{"content": fmt.Sprintf("commit %s %d", origin, i)})
+			material := testMaterial(origin, fmt.Sprintf("dec-%s-%d", origin, i), mem,
+				map[string]any{"content": fmt.Sprintf("event %s %d", origin, i)})
 			resp, err := hub.Push(principal, contract.SyncPushRequest{
-				ReplicaID: origin, BatchID: fmt.Sprintf("b-%s-%d", origin, i), Commits: []contract.LocalCommit{commit}})
+				ReplicaID: origin, BatchID: fmt.Sprintf("b-%s-%d", origin, i), Events: testSyncEvents(t, material)})
 			if err != nil {
 				return err
 			}
@@ -236,8 +255,8 @@ func TestConcurrentPushersBothLand(t *testing.T) {
 			t.Fatalf("concurrent pusher failed: %v", err)
 		}
 	}
-	if n, _ := st.RemoteSyncCommitCount(); n != 20 {
-		t.Fatalf("both concurrent pushers must land all commits, got %d/20", n)
+	if n, _ := st.RemoteSyncedEventCount(); n != 20 {
+		t.Fatalf("both concurrent pushers must land all events, got %d/20", n)
 	}
 }
 
@@ -250,9 +269,9 @@ func TestConcurrentPushSameKeyDifferentContentDeterministic(t *testing.T) {
 	hub, st := openTestHub(t, grants)
 
 	push := func(content string) (contract.SyncPushResponse, error) {
-		commit := testCommit("local-a", "dec-shared", mem, map[string]any{"content": content})
+		material := testMaterial("local-a", "dec-shared", mem, map[string]any{"content": content})
 		return hub.Push("replica-a@team", contract.SyncPushRequest{
-			ReplicaID: "local-a", BatchID: "b-" + content, Commits: []contract.LocalCommit{commit}})
+			ReplicaID: "local-a", BatchID: "b-" + content, Events: testSyncEvents(t, material)})
 	}
 
 	type result struct {
@@ -275,33 +294,34 @@ func TestConcurrentPushSameKeyDifferentContentDeterministic(t *testing.T) {
 		accepts += len(r.resp.Accepted)
 		conflicts += len(r.resp.Conflicts)
 		if len(r.resp.Rejected) != 0 {
-			t.Fatalf("same-key race must not reject (valid commits), got %+v", r.resp.Rejected)
+			t.Fatalf("same-key race must not reject (valid events), got %+v", r.resp.Rejected)
 		}
 	}
 	if accepts != 1 || conflicts != 1 {
 		t.Fatalf("same-key different-content race must be exactly one accept + one conflict, got %d accept / %d conflict", accepts, conflicts)
 	}
-	if n, _ := st.RemoteSyncCommitCount(); n != 1 {
+	if n, _ := st.RemoteSyncedEventCount(); n != 1 {
 		t.Fatalf("exactly one durable row must persist (no partial/double row), got %d", n)
 	}
 }
 
-// MED-7: Actor is documented attribution — an empty actor is rejected per-commit with a diagnostic.
+// MED-7: Actor is documented attribution — an empty actor is rejected per-event with a diagnostic.
 func TestPushRejectsEmptyActor(t *testing.T) {
 	mem := contract.ResourceRef{Kind: "memory", ID: "project"}
 	grants := GrantMap{"replica-a@team": {Principal: "replica-a@team", Scopes: []contract.ResourceRef{mem}}}
 	hub, st := openTestHub(t, grants)
 
-	commit := testCommit("local-a", "dec-noactor", mem, map[string]any{"content": "no actor"})
-	commit.Actor = "   " // whitespace-only is still empty after trim
-	resp, err := hub.Push("replica-a@team", contract.SyncPushRequest{ReplicaID: "local-a", BatchID: "b", Commits: []contract.LocalCommit{commit}})
+	material := testMaterial("local-a", "dec-noactor", mem, map[string]any{"content": "no actor"})
+	env := testSyncEvent(t, material)
+	env.Event.Actor = "   " // whitespace-only is still empty after trim
+	resp, err := hub.Push("replica-a@team", contract.SyncPushRequest{ReplicaID: "local-a", BatchID: "b", Events: []eventmodel.EventEnvelope{env}})
 	if err != nil {
-		t.Fatalf("empty-actor commit must reject per-commit, not fail transport: %v", err)
+		t.Fatalf("empty-actor event must reject per-event, not fail transport: %v", err)
 	}
-	if len(resp.Rejected) != 1 || !strings.Contains(resp.Rejected[0].Diagnostic, "actor is required") {
+	if len(resp.Rejected) != 1 || !strings.Contains(resp.Rejected[0].Diagnostic, "event actor is required") {
 		t.Fatalf("empty actor must be rejected with 'actor is required', got %+v", resp)
 	}
-	if n, _ := st.RemoteSyncCommitCount(); n != 0 {
-		t.Fatalf("a rejected commit must not persist, got %d rows", n)
+	if n, _ := st.RemoteSyncedEventCount(); n != 0 {
+		t.Fatalf("a rejected event must not persist, got %d rows", n)
 	}
 }

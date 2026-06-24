@@ -1,4 +1,4 @@
-package syncserver
+package mnemonhub
 
 import (
 	"os"
@@ -9,14 +9,14 @@ import (
 )
 
 // The trust-domain import boundary (goal-stage6 adjudication #1): the standalone hub packages —
-// syncserver and the mnemon-hub binary — may import contract/store-level shared leaves only, NEVER
+// mnemonhub and the mnemon-hub binary — may import contract/store-level shared leaves only, NEVER
 // channel / runtime / app / hostsurface. Local and remote are separate trust domains that share
 // only the contract; this test walks the real dependency graph so a casual import cannot slip in.
 // (The mnemond name now belongs to the LOCAL governance daemon, which lives outside this boundary
 // and MAY import app — only the hub trust domain is pinned here.)
 func TestHubImportBoundaryExcludesLocalTrustDomain(t *testing.T) {
 	cmd := exec.Command("go", "list", "-deps",
-		"./harness/internal/syncserver", "./harness/cmd/mnemon-hub")
+		"./harness/internal/mnemonhub", "./harness/cmd/mnemon-hub")
 	cmd.Dir = moduleRoot(t)
 	out, err := cmd.CombinedOutput()
 	if err != nil {

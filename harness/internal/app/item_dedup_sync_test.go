@@ -18,7 +18,7 @@ func TestItemDedupImportPreservesAllFields(t *testing.T) {
 	}
 	defer rt.Close()
 
-	commit := contract.LocalCommit{
+	material := contract.SyncedEventMaterial{
 		OriginReplicaID: "remote-a",
 		LocalDecisionID: "dec-1",
 		LocalIngestSeq:  5,
@@ -38,11 +38,11 @@ func TestItemDedupImportPreservesAllFields(t *testing.T) {
 	if _, _, err := rt.API().Ingest(contract.SyncImportActor, contract.ObservationEnvelope{
 		ExternalID: "imp1",
 		Event: contract.Event{
-			Type:    "assignment.remote_commit.observed",
-			Payload: map[string]any{"commit": commit},
+			Type:    "assignment.remote_synced_event.observed",
+			Payload: map[string]any{"material": material},
 		},
 	}); err != nil {
-		t.Fatalf("ingest remote assignment commit: %v", err)
+		t.Fatalf("ingest remote assignment material: %v", err)
 	}
 	if _, err := rt.Tick(); err != nil {
 		t.Fatalf("tick: %v", err)

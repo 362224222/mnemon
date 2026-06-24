@@ -1,12 +1,12 @@
-// Package syncserver is the hub half of Remote Workspace sync (sync-abi-v2; the accept surface is the
-// grant scope, §4): push adjudication against the append-only sync_remote_commits log, pull serving
-// with the ONE scope clamp, and the status counters. It is extracted from the runtime so the
-// standalone hub binary (mnemon-hub) can host
-// the same wire without the runtime: it imports ONLY contract + store (+stdlib) — never channel /
-// runtime / app / hostsurface (the trust-domain import boundary, pinned by a test). Replica
-// authorization enters through the Grants seam; the co-hosted runtime adapts its channel bindings to
-// grants, mnemon-hub builds grants from replicas.json — same fields, same semantics (dual-form rule).
-package syncserver
+// Package mnemonhub is the remote event exchange for synced event envelopes. The accept surface is
+// the replica grant scope: push adjudicates synced envelopes, pull serves accepted synced envelopes
+// with the same scope clamp, and status reports event counters. It is extracted from the runtime so
+// the standalone hub binary (mnemon-hub) can host the same wire without the runtime: it imports ONLY
+// contract + store (+stdlib) — never channel / runtime / app / hostsurface (the trust-domain import
+// boundary, pinned by a test). Replica authorization enters through the Grants seam; the co-hosted
+// runtime adapts its channel bindings to grants, mnemon-hub builds grants from replicas.json — same
+// fields, same semantics (dual-form rule).
+package mnemonhub
 
 import (
 	"crypto/sha256"
@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
 
@@ -27,7 +28,7 @@ type ReplicaGrant = contract.ReplicaGrant
 // BadRequestError marks a request-VALIDATION failure (a malformed/missing field) as distinct from an
 // AUTHORIZATION failure (no grant / out-of-scope). The HTTP layer maps it to 400; everything else
 // from Push/Pull/Status (no replica grant, out-of-scope clamp) stays 403 (LOW-10). It is the wire
-// layer's only error-class signal — the per-commit accept/reject/conflict verdicts ride the 200 body.
+// layer's only error-class signal — per-event accept/reject/conflict verdicts ride the 200 body.
 type BadRequestError struct{ err error }
 
 func (e *BadRequestError) Error() string { return e.err.Error() }
@@ -67,7 +68,7 @@ func (m GrantMap) Grant(principal contract.ActorID, verb string) (ReplicaGrant, 
 // hub-side durable cursor names (bookkeeping for the status counters; never an ordering source).
 const (
 	serveCursorPrefix = "sync_serve:"       // + principal -> last next_cursor served to it
-	servedTotalCursor = "sync_served_total" // total commits returned across all pulls
+	servedTotalCursor = "sync_served_total" // total synced events returned across all pulls
 )
 
 // Server is one hub over one open store. It holds no other state: adjudication and counters are
@@ -79,17 +80,16 @@ type Server struct {
 }
 
 // New wires a hub Server over an OPEN store (the caller owns the store's single-writer lock and its
-// lifecycle). now stamps received_at on accepted commits.
+// lifecycle). now stamps received_at on accepted synced events.
 func New(st *store.Store, grants Grants, now func() string) *Server {
 	return &Server{store: st, grants: grants, now: now}
 }
 
-// Push adjudicates one batch per commit (sync-abi-v2 §4): accepted (appended, first sight of the
+// Push adjudicates one batch of synced event envelopes: accepted (appended, first sight of the
 // idempotency key), rejected (structural-validation or scope-clamp failure, with diagnostic), or
 // conflict (idempotency-key reuse with DIFFERENT content only). The accept surface is the grant
-// scope — the ref-level clamp is the sole kind/ref gate (no global syncable-kind set; v2). Replaying
-// an identical batch repeats the accepted results and appends nothing. The request replica_id must
-// match every commit's origin — a mismatch rejects the whole request before any adjudication.
+// scope. Replaying an identical batch repeats the accepted results and appends nothing. The request
+// replica_id must match every envelope's origin_mnemond.
 func (s *Server) Push(principal contract.ActorID, req contract.SyncPushRequest) (contract.SyncPushResponse, error) {
 	grant, ok := s.grants.Grant(principal, contract.SyncVerbPush)
 	if !ok {
@@ -100,38 +100,43 @@ func (s *Server) Push(principal contract.ActorID, req contract.SyncPushRequest) 
 		return contract.SyncPushResponse{}, badRequestf("sync push requires replica_id")
 	}
 	var resp contract.SyncPushResponse
-	for _, commit := range req.Commits {
-		if commit.OriginReplicaID != replicaID {
-			return contract.SyncPushResponse{}, badRequestf("sync push replica_id %q does not match commit origin %q", replicaID, commit.OriginReplicaID)
-		}
-		if diagnostic := validateSyncCommit(commit); diagnostic != "" {
-			resp.Rejected = append(resp.Rejected, syncResult(commit, "rejected", diagnostic))
+	for _, env := range req.Events {
+		material, diagnostic := syncedEventMaterial(env)
+		if diagnostic != "" {
+			resp.Rejected = append(resp.Rejected, contract.EventExchangeResultFromEnvelope(env, "rejected", diagnostic))
 			continue
 		}
-		// The ONE clamp (contract.ClampRefs), fail-closed: a commit outside the grant scope is
-		// rejected per-commit with the clamp's diagnostic — the push-side twin of the pull clamp.
-		if _, err := contract.ClampRefs(principal, grant.Scopes, []contract.ResourceRef{commit.ResourceRef}); err != nil {
-			resp.Rejected = append(resp.Rejected, syncResult(commit, "rejected", err.Error()))
+		if material.OriginReplicaID != replicaID {
+			return contract.SyncPushResponse{}, badRequestf("sync push replica_id %q does not match event origin %q", replicaID, material.OriginReplicaID)
+		}
+		if diagnostic := validateSyncedEventMaterial(material); diagnostic != "" {
+			resp.Rejected = append(resp.Rejected, contract.EventExchangeResultFromEnvelope(env, "rejected", diagnostic))
 			continue
 		}
-		rec, err := s.store.RecordRemoteSyncCommit(string(principal), commit, s.now())
+		// The ONE clamp (contract.ClampRefs), fail-closed: an event outside the grant scope is
+		// rejected per-event with the clamp's diagnostic — the push-side twin of the pull clamp.
+		if _, err := contract.ClampRefs(principal, grant.Scopes, []contract.ResourceRef{material.ResourceRef}); err != nil {
+			resp.Rejected = append(resp.Rejected, contract.EventExchangeResultFromEnvelope(env, "rejected", err.Error()))
+			continue
+		}
+		rec, err := s.store.RecordRemoteSyncedEvent(string(principal), env, s.now())
 		if err != nil {
 			return contract.SyncPushResponse{}, err
 		}
 		switch rec.Status {
 		case "accepted":
-			resp.Accepted = append(resp.Accepted, syncResult(rec.Commit, "accepted", ""))
+			resp.Accepted = append(resp.Accepted, contract.EventExchangeResultFromEnvelope(rec.Envelope, "accepted", ""))
 			resp.NextCursor = strconv.FormatInt(rec.RemoteSeq, 10)
 		case "conflict":
-			resp.Conflicts = append(resp.Conflicts, syncResult(commit, "conflict", rec.Diagnostic))
+			resp.Conflicts = append(resp.Conflicts, contract.EventExchangeResultFromEnvelope(env, "conflict", rec.Diagnostic))
 		default:
-			resp.Rejected = append(resp.Rejected, syncResult(commit, rec.Status, rec.Diagnostic))
+			resp.Rejected = append(resp.Rejected, contract.EventExchangeResultFromEnvelope(env, rec.Status, rec.Diagnostic))
 		}
 	}
 	return resp, nil
 }
 
-// Pull serves accepted commits after the request cursor, excluding the puller's own origin and
+// Pull serves synced event envelopes after the request cursor, excluding the puller's own origin and
 // clamped to the grant scope (requested scopes may only narrow). It also advances the hub's serve
 // bookkeeping (last cursor per principal + served total) for the status counters.
 func (s *Server) Pull(principal contract.ActorID, req contract.SyncPullRequest) (contract.SyncPullResponse, error) {
@@ -155,13 +160,13 @@ func (s *Server) Pull(principal contract.ActorID, req contract.SyncPullRequest) 
 	if err != nil {
 		return contract.SyncPullResponse{}, fmt.Errorf("sync scope: %w", err)
 	}
-	records, next, err := s.store.RemoteSyncCommitsAfter(cursor, replicaID, scopes, 100)
+	records, next, err := s.store.RemoteSyncedEventsAfter(cursor, replicaID, scopes, 100)
 	if err != nil {
 		return contract.SyncPullResponse{}, err
 	}
 	resp := contract.SyncPullResponse{NextCursor: strconv.FormatInt(next, 10)}
 	for _, rec := range records {
-		resp.Commits = append(resp.Commits, rec.Commit)
+		resp.Events = append(resp.Events, rec.Envelope)
 	}
 	// Serve bookkeeping for the status counters; best-effort durability is fine (a lost update
 	// understates a counter, never corrupts adjudication), but the write errors still surface.
@@ -176,13 +181,13 @@ func (s *Server) Pull(principal contract.ActorID, req contract.SyncPullRequest) 
 	return resp, nil
 }
 
-// Status reports the hub-side counters (sync-abi-v1 §3, additive): commits received (= rows in the
-// append-only log), commits served across pulls, and the last cursor served per replica principal.
+// Status reports the hub-side counters: synced envelopes received, synced envelopes served, and the
+// last cursor served per replica principal.
 func (s *Server) Status(principal contract.ActorID) (contract.SyncStatusResponse, error) {
 	if _, ok := s.grants.Grant(principal, contract.SyncVerbStatus); !ok {
 		return contract.SyncStatusResponse{}, fmt.Errorf("principal %q has no replica grant for %s", principal, contract.SyncVerbStatus)
 	}
-	received, err := s.store.RemoteSyncCommitCount()
+	received, err := s.store.RemoteSyncedEventCount()
 	if err != nil {
 		return contract.SyncStatusResponse{}, err
 	}
@@ -191,10 +196,10 @@ func (s *Server) Status(principal contract.ActorID) (contract.SyncStatusResponse
 		return contract.SyncStatusResponse{}, err
 	}
 	resp := contract.SyncStatusResponse{
-		Principal:          principal,
-		RemoteWorkspace:    "connected",
-		HubCommitsReceived: received,
-		HubCommitsServed:   s.store.GetCursor(servedTotalCursor),
+		Principal:         principal,
+		RemoteWorkspace:   "connected",
+		HubEventsReceived: received,
+		HubEventsServed:   s.store.GetCursor(servedTotalCursor),
 	}
 	if len(cursors) > 0 {
 		resp.HubReplicaCursors = make(map[string]string, len(cursors))
@@ -205,44 +210,42 @@ func (s *Server) Status(principal contract.ActorID) (contract.SyncStatusResponse
 	return resp, nil
 }
 
-// validateSyncCommit is the hub's per-commit STRUCTURAL validation (sync-abi-v2 §4): provenance,
+// validateSyncedEventMaterial is the hub's per-event STRUCTURAL validation (sync-abi-v2 §4): provenance,
 // resource ref present, fields present, digest matching. It carries NO notion of "syncable kinds":
 // the accept surface is the replica's grant scope, enforced by the ref-level grant clamp
-// (contract.ClampRefs) at the call site — a commit whose ref is outside the grant is rejected there
+// (contract.ClampRefs) at the call site — an event whose ref is outside the grant is rejected there
 // (PD6 removed the hardcoded contract.SyncableResourceKinds; the grant scope is the sole accept
 // authority). Returns "" when valid, else the rejection diagnostic.
-func validateSyncCommit(commit contract.LocalCommit) string {
+func validateSyncedEventMaterial(material contract.SyncedEventMaterial) string {
 	switch {
-	case strings.TrimSpace(commit.OriginReplicaID) == "":
+	case strings.TrimSpace(material.OriginReplicaID) == "":
 		return "origin_replica_id is required"
-	case strings.TrimSpace(commit.LocalDecisionID) == "":
+	case strings.TrimSpace(material.LocalDecisionID) == "":
 		return "local_decision_id is required"
-	case strings.TrimSpace(string(commit.Actor)) == "":
+	case strings.TrimSpace(string(material.Actor)) == "":
 		return "actor is required"
-	case strings.TrimSpace(string(commit.ResourceRef.Kind)) == "" || strings.TrimSpace(string(commit.ResourceRef.ID)) == "":
+	case strings.TrimSpace(string(material.ResourceRef.Kind)) == "" || strings.TrimSpace(string(material.ResourceRef.ID)) == "":
 		return "resource_ref is required"
-	case commit.Fields == nil:
+	case material.Fields == nil:
 		return "fields are required"
-	case strings.TrimSpace(commit.FieldsDigest) == "":
+	case strings.TrimSpace(material.FieldsDigest) == "":
 		return "fields_digest is required"
-	case commit.FieldsDigest != syncCommitFieldsDigest(commit.Fields):
+	case material.FieldsDigest != syncedEventFieldsDigest(material.Fields):
 		return "fields_digest does not match fields"
 	default:
 		return ""
 	}
 }
 
-func syncResult(commit contract.LocalCommit, status, diagnostic string) contract.SyncCommitResult {
-	return contract.SyncCommitResult{
-		OriginReplicaID: commit.OriginReplicaID,
-		LocalDecisionID: commit.LocalDecisionID,
-		ResourceRef:     commit.ResourceRef,
-		Status:          status,
-		Diagnostic:      diagnostic,
+func syncedEventMaterial(env eventmodel.EventEnvelope) (contract.SyncedEventMaterial, string) {
+	material, err := contract.SyncedEventMaterialFromEnvelope(env)
+	if err != nil {
+		return contract.SyncedEventMaterial{}, err.Error()
 	}
+	return material, ""
 }
 
-func syncCommitFieldsDigest(fields map[string]any) string {
+func syncedEventFieldsDigest(fields map[string]any) string {
 	b, _ := json.Marshal(fields)
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])

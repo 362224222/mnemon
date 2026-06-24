@@ -1,7 +1,8 @@
 // Package remotesync holds the pure store-side helpers for Remote Workspace sync: reading the pending
-// push batch, applying a push response's per-commit status, reading pull state/counts, and advancing
-// the pull cursor. It imports store + contract only. The ingest-driving pull import (which re-enters
-// Event Intake via a runtime) lives in app, not here, so remotesync never depends upward.
+// synced-event push batch, applying a push response's per-event status, reading pull state/counts,
+// and advancing the pull cursor. It imports store + contract only. The ingest-driving pull import
+// (which re-enters Event Intake via a runtime) lives in app, not here, so remotesync never depends
+// upward.
 //
 // Each helper exists in two forms: a LiveStore form over an ALREADY-OPEN handle (the in-process sync
 // worker drives these through the live runtime — opening the store by path from inside the serving
@@ -21,6 +22,7 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
 
@@ -29,8 +31,8 @@ import (
 // because the pull cursor is durable sync state; callers must stay on the sync cursor names.
 type LiveStore interface {
 	ReplicaID() (string, error)
-	PendingSyncCommits() ([]contract.LocalCommit, error)
-	MarkSyncCommitStatus(originReplicaID, localDecisionID string, ref contract.ResourceRef, status, remotePeerID, at, diagnostic string) error
+	PendingSyncedEvents() ([]eventmodel.EventEnvelope, error)
+	MarkSyncedEventStatus(originMnemond, eventID string, subject eventmodel.EventSubject, status, remotePeerID, at, diagnostic string) error
 	GetCursor(name string) int64
 	SetCursor(name string, seq int64) error
 }
@@ -39,7 +41,7 @@ var _ LiveStore = (*store.Store)(nil)
 
 type LocalSyncPushBatch struct {
 	ReplicaID string
-	Commits   []contract.LocalCommit
+	Events    []eventmodel.EventEnvelope
 }
 
 type LocalSyncPullState struct {
@@ -53,20 +55,20 @@ type LocalSyncCounts struct {
 	Conflicts int
 }
 
-// ReadPushBatch reads the pending outbound commits + the local replica identity from an open handle.
+// ReadPushBatch reads the pending outbound synced events + the local replica identity from an open handle.
 func ReadPushBatch(s LiveStore) (LocalSyncPushBatch, error) {
-	pending, err := s.PendingSyncCommits()
+	events, err := s.PendingSyncedEvents()
 	if err != nil {
-		return LocalSyncPushBatch{}, fmt.Errorf("read pending sync commits: %w", err)
+		return LocalSyncPushBatch{}, fmt.Errorf("read pending synced events: %w", err)
 	}
-	if len(pending) == 0 {
+	if len(events) == 0 {
 		return LocalSyncPushBatch{}, nil
 	}
 	replicaID, err := s.ReplicaID()
 	if err != nil {
 		return LocalSyncPushBatch{}, fmt.Errorf("read local replica id: %w", err)
 	}
-	return LocalSyncPushBatch{ReplicaID: replicaID, Commits: pending}, nil
+	return LocalSyncPushBatch{ReplicaID: replicaID, Events: events}, nil
 }
 
 func ReadLocalSyncPushBatch(storePath string) (LocalSyncPushBatch, error) {
@@ -78,22 +80,22 @@ func ReadLocalSyncPushBatch(storePath string) (LocalSyncPushBatch, error) {
 	return ReadPushBatch(s)
 }
 
-// ApplyPushResponse mirrors the hub's per-commit verdicts into the local sync_commits ledger (the
+// ApplyPushResponse mirrors the hub's per-event verdicts into the local sync_events ledger (the
 // pusher-side half of the attribution chain) through an open handle.
 func ApplyPushResponse(s LiveStore, remoteID string, resp contract.SyncPushResponse) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	for _, item := range resp.Accepted {
-		if err := s.MarkSyncCommitStatus(item.OriginReplicaID, item.LocalDecisionID, item.ResourceRef, "synced", remoteID, now, ""); err != nil {
+		if err := s.MarkSyncedEventStatus(item.OriginMnemond, item.EventID, item.Subject, "synced", remoteID, now, ""); err != nil {
 			return err
 		}
 	}
 	for _, item := range resp.Rejected {
-		if err := s.MarkSyncCommitStatus(item.OriginReplicaID, item.LocalDecisionID, item.ResourceRef, "rejected", remoteID, now, item.Diagnostic); err != nil {
+		if err := s.MarkSyncedEventStatus(item.OriginMnemond, item.EventID, item.Subject, "rejected", remoteID, now, item.Diagnostic); err != nil {
 			return err
 		}
 	}
 	for _, item := range resp.Conflicts {
-		if err := s.MarkSyncCommitStatus(item.OriginReplicaID, item.LocalDecisionID, item.ResourceRef, "conflict", remoteID, now, item.Diagnostic); err != nil {
+		if err := s.MarkSyncedEventStatus(item.OriginMnemond, item.EventID, item.Subject, "conflict", remoteID, now, item.Diagnostic); err != nil {
 			return err
 		}
 	}
@@ -134,7 +136,7 @@ func ReadLocalSyncCounts(storePath string) (LocalSyncCounts, error) {
 		return LocalSyncCounts{}, err
 	}
 	defer s.Close()
-	counts, err := s.SyncCommitCounts()
+	counts, err := s.SyncEventCounts()
 	if err != nil {
 		return LocalSyncCounts{}, err
 	}
@@ -178,16 +180,17 @@ func syncPullCursorName(remoteID string) string {
 
 // PushBatchID derives a stable batch id from the batch content (order-independent), so a retried
 // identical batch carries the same id — diagnostic provenance for the hub's audit, never an
-// adjudication key (per-commit idempotency is the replay defense, sync-abi-v1 §3).
-func PushBatchID(replicaID string, commits []contract.LocalCommit) string {
-	keys := make([]string, 0, len(commits))
-	for _, c := range commits {
+// adjudication key (per-event idempotency is the replay defense, sync-abi-v1 §3).
+func PushBatchID(replicaID string, events []eventmodel.EventEnvelope) string {
+	keys := make([]string, 0, len(events))
+	for _, env := range events {
+		origin, _ := env.Meta["origin_mnemond"].(string)
+		digest, _ := env.Meta["digest"].(string)
 		keys = append(keys, strings.Join([]string{
-			c.OriginReplicaID,
-			c.LocalDecisionID,
-			string(c.ResourceRef.Kind),
-			string(c.ResourceRef.ID),
-			c.FieldsDigest,
+			origin,
+			env.Event.ID,
+			string(env.Event.Subject),
+			digest,
 		}, "\x00"))
 	}
 	sort.Strings(keys)

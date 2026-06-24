@@ -17,7 +17,7 @@ import (
 )
 
 // The driver sync worker (v1.1 #2): inside the SERVING process, sync operates the already-open
-// runtime/store handle — push reads pending sync commits and applies the hub's verdicts through the
+// runtime/store handle — push reads pending synced events and applies the hub's verdicts through the
 // live handle; pull re-enters Event Intake via the runtime's trusted intake + Tick. It never opens
 // the store by path (the single-writer flock would self-collide); the path-based remotesync helpers
 // remain the OFFLINE CLI verbs' tools, and ProbeAvailable keeps the two mutually exclusive.
@@ -114,20 +114,20 @@ func syncWorkerClient(entry remotesync.RemoteEntry, opts SyncWorkerOptions) (*ch
 	})
 }
 
-// syncWorkerPush pushes the pending batch (if any) and mirrors the hub's per-commit verdicts into
+// syncWorkerPush pushes the pending batch (if any) and mirrors the hub's per-event verdicts into
 // the local ledger — both through the live handle.
 func syncWorkerPush(rt *runtime.Runtime, client *channel.Client, remoteID string) error {
 	batch, err := remotesync.ReadPushBatch(rt)
 	if err != nil {
 		return err
 	}
-	if len(batch.Commits) == 0 {
+	if len(batch.Events) == 0 {
 		return nil
 	}
 	resp, err := client.SyncPush(contract.SyncPushRequest{
 		ReplicaID: batch.ReplicaID,
-		BatchID:   remotesync.PushBatchID(batch.ReplicaID, batch.Commits),
-		Commits:   batch.Commits,
+		BatchID:   remotesync.PushBatchID(batch.ReplicaID, batch.Events),
+		Events:    batch.Events,
 	})
 	if err != nil {
 		return fmt.Errorf("sync push failed: %w", err)
@@ -135,8 +135,8 @@ func syncWorkerPush(rt *runtime.Runtime, client *channel.Client, remoteID string
 	return remotesync.ApplyPushResponse(rt, remoteID, resp)
 }
 
-// syncWorkerPull pulls after the durable cursor, re-enters each commit through the live runtime's
-// trusted intake (importPulledCommits — the same loop the offline path uses), then advances the
+// syncWorkerPull pulls after the durable cursor, re-enters each event through the live runtime's
+// trusted intake (importPulledEvents — the same loop the offline path uses), then advances the
 // cursor.
 func syncWorkerPull(rt *runtime.Runtime, client *channel.Client, remoteID string, catalog map[string]capability.Capability) error {
 	state, err := remotesync.ReadPullState(rt, remoteID)
@@ -150,7 +150,7 @@ func syncWorkerPull(rt *runtime.Runtime, client *channel.Client, remoteID string
 	if err != nil {
 		return fmt.Errorf("sync pull failed: %w", err)
 	}
-	if err := importPulledCommits(rt, remoteID, resp.Commits, catalog); err != nil {
+	if err := importPulledEvents(rt, remoteID, resp.Events, catalog); err != nil {
 		return err
 	}
 	return remotesync.SetPullCursor(rt, remoteID, resp.NextCursor)

@@ -18,7 +18,7 @@ func TestRemoteMemoryImportConflictDiagnosesWithoutOverwrite(t *testing.T) {
 	}
 	defer rt.Close()
 
-	if err := ingestRemoteMemoryForTest(rt, "first", remoteMemoryCommitForTest(ref, "shared-entry", "remote content v1")); err != nil {
+	if err := ingestRemoteMemoryForTest(rt, "first", remoteMemoryMaterialForTest(ref, "shared-entry", "remote content v1")); err != nil {
 		t.Fatalf("first import: %v", err)
 	}
 	if _, err := rt.Tick(); err != nil {
@@ -32,7 +32,7 @@ func TestRemoteMemoryImportConflictDiagnosesWithoutOverwrite(t *testing.T) {
 		t.Fatalf("first import did not write memory: %+v", fields)
 	}
 
-	if err := ingestRemoteMemoryForTest(rt, "conflict", remoteMemoryCommitForTest(ref, "shared-entry", "remote content v2")); err != nil {
+	if err := ingestRemoteMemoryForTest(rt, "conflict", remoteMemoryMaterialForTest(ref, "shared-entry", "remote content v2")); err != nil {
 		t.Fatalf("conflict import: %v", err)
 	}
 	if _, err := rt.Tick(); err != nil {
@@ -70,8 +70,8 @@ func TestRemoteMemoryImportConflictDiagnosesWithoutOverwrite(t *testing.T) {
 
 	// MED-4 / v1.1: the origin attribution (origin_replica_id + local_decision_id) must be
 	// RECOVERABLE from the durable ledger on the B side — not just "a diagnostic fired". Walk the
-	// diagnostic's CausedBy to the memory.remote_commit.observed trigger and recover the identity
-	// from its payload.commit. (The commit round-trips through the event log as a JSON object.)
+	// diagnostic's CausedBy to the memory.remote_synced_event.observed trigger and recover the identity
+	// from its payload.material. (The material round-trips through the event log as a JSON object.)
 	if diag.CausedBy == "" {
 		t.Fatalf("conflict diagnostic must carry a CausedBy lineage, got %+v", diag)
 	}
@@ -79,19 +79,19 @@ func TestRemoteMemoryImportConflictDiagnosesWithoutOverwrite(t *testing.T) {
 	if !ok {
 		t.Fatalf("diagnostic CausedBy %q must resolve to a durable event", diag.CausedBy)
 	}
-	if trigger.Type != capability.EmbeddedCatalog()["memory"].RemoteCommitObserved() {
-		t.Fatalf("diagnostic must be caused by the remote commit observation, got type %q", trigger.Type)
+	if trigger.Type != capability.EmbeddedCatalog()["memory"].RemoteSyncedEventObserved() {
+		t.Fatalf("diagnostic must be caused by the remote material observation, got type %q", trigger.Type)
 	}
-	commit, ok := trigger.Payload["commit"].(map[string]any)
+	material, ok := trigger.Payload["material"].(map[string]any)
 	if !ok {
-		t.Fatalf("commit_observed payload must carry the commit, got %+v", trigger.Payload)
+		t.Fatalf("commit_observed payload must carry the material, got %+v", trigger.Payload)
 	}
-	// contract.LocalCommit carries no JSON tags, so it round-trips with its Go field names.
-	origin, _ := commit["OriginReplicaID"].(string)
-	decision, _ := commit["LocalDecisionID"].(string)
-	wantDecision := "dec-shared-entry-remote-content-v2" // the conflicting commit's decision id
+	// contract.SyncedEventMaterial carries no JSON tags, so it round-trips with its Go field names.
+	origin, _ := material["OriginReplicaID"].(string)
+	decision, _ := material["LocalDecisionID"].(string)
+	wantDecision := "dec-shared-entry-remote-content-v2" // the conflicting material's decision id
 	if origin != "remote-replica" || decision != wantDecision {
-		t.Fatalf("origin attribution must be recoverable from the caused-by commit: origin=%q decision=%q (want remote-replica / %s)", origin, decision, wantDecision)
+		t.Fatalf("origin attribution must be recoverable from the caused-by material: origin=%q decision=%q (want remote-replica / %s)", origin, decision, wantDecision)
 	}
 }
 
@@ -103,7 +103,7 @@ func TestRemoteSkillImportAppendsDeclarationsThroughLocalMnemon(t *testing.T) {
 	}
 	defer rt.Close()
 
-	if err := ingestRemoteSkillForTest(rt, "remote-skill", remoteSkillCommitForTest(ref, "release-checklist", "active")); err != nil {
+	if err := ingestRemoteSkillForTest(rt, "remote-skill", remoteSkillMaterialForTest(ref, "release-checklist", "active")); err != nil {
 		t.Fatalf("remote skill import: %v", err)
 	}
 	if _, err := rt.Tick(); err != nil {
@@ -123,34 +123,34 @@ func TestRemoteSkillImportAppendsDeclarationsThroughLocalMnemon(t *testing.T) {
 	}
 }
 
-func ingestRemoteMemoryForTest(rt *runtime.Runtime, externalID string, commit contract.LocalCommit) error {
+func ingestRemoteMemoryForTest(rt *runtime.Runtime, externalID string, material contract.SyncedEventMaterial) error {
 	_, _, err := rt.API().Ingest(contract.SyncImportActor, contract.ObservationEnvelope{
 		ExternalID: externalID,
 		Event: contract.Event{
-			Type: capability.EmbeddedCatalog()["memory"].RemoteCommitObserved(),
+			Type: capability.EmbeddedCatalog()["memory"].RemoteSyncedEventObserved(),
 			Payload: map[string]any{
-				"commit": commit,
+				"material": material,
 			},
 		},
 	})
 	return err
 }
 
-func ingestRemoteSkillForTest(rt *runtime.Runtime, externalID string, commit contract.LocalCommit) error {
+func ingestRemoteSkillForTest(rt *runtime.Runtime, externalID string, material contract.SyncedEventMaterial) error {
 	_, _, err := rt.API().Ingest(contract.SyncImportActor, contract.ObservationEnvelope{
 		ExternalID: externalID,
 		Event: contract.Event{
-			Type: capability.EmbeddedCatalog()["skill"].RemoteCommitObserved(),
+			Type: capability.EmbeddedCatalog()["skill"].RemoteSyncedEventObserved(),
 			Payload: map[string]any{
-				"commit": commit,
+				"material": material,
 			},
 		},
 	})
 	return err
 }
 
-func remoteMemoryCommitForTest(ref contract.ResourceRef, entryID, content string) contract.LocalCommit {
-	return contract.LocalCommit{
+func remoteMemoryMaterialForTest(ref contract.ResourceRef, entryID, content string) contract.SyncedEventMaterial {
+	return contract.SyncedEventMaterial{
 		OriginReplicaID: "remote-replica",
 		LocalDecisionID: "dec-" + entryID + "-" + strings.ReplaceAll(content, " ", "-"),
 		LocalIngestSeq:  11,
@@ -172,8 +172,8 @@ func remoteMemoryCommitForTest(ref contract.ResourceRef, entryID, content string
 	}
 }
 
-func remoteSkillCommitForTest(ref contract.ResourceRef, skillID, status string) contract.LocalCommit {
-	return contract.LocalCommit{
+func remoteSkillMaterialForTest(ref contract.ResourceRef, skillID, status string) contract.SyncedEventMaterial {
+	return contract.SyncedEventMaterial{
 		OriginReplicaID: "remote-replica",
 		LocalDecisionID: "dec-" + skillID + "-" + status,
 		LocalIngestSeq:  21,

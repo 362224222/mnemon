@@ -54,13 +54,13 @@ func TestEmbeddedImportableKindsAreDescriptorDerived(t *testing.T) {
 			t.Fatalf("%s merge = %q, want %q", kind, cat[string(kind)].Sync.Merge, merge)
 		}
 	}
-	if got := cat["memory"].RemoteCommitObserved(); got != "memory.remote_commit.observed" {
-		t.Fatalf("remote-commit observation must be the system-derived form, got %q", got)
+	if got := cat["memory"].RemoteSyncedEventObserved(); got != "memory.remote_synced_event.observed" {
+		t.Fatalf("remote-material observation must be the system-derived form, got %q", got)
 	}
 	if _, ok := RemoteImportRule(cat["memory"], contract.SyncImportActor); !ok {
 		t.Fatal("an importable capability must yield a remote-import rule")
 	}
-	if r, ok := RemoteImportRule(cat["memory"], contract.SyncImportActor); !ok || !r.Handles("memory.remote_commit.observed") {
+	if r, ok := RemoteImportRule(cat["memory"], contract.SyncImportActor); !ok || !r.Handles("memory.remote_synced_event.observed") {
 		t.Fatalf("the memory import rule must handle its derived observation type, ok=%v", ok)
 	}
 }

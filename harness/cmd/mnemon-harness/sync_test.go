@@ -15,10 +15,11 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/capability"
 	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
-func TestSyncPushOnceAcksPendingLocalCommits(t *testing.T) {
+func TestSyncPushOnceAcksPendingLocalEvents(t *testing.T) {
 	restoreSyncFlags(t)
 	root := t.TempDir()
 	storePath := filepath.Join(root, runtime.DefaultStorePath)
@@ -71,7 +72,7 @@ func TestSyncPushOnceAcksPendingLocalCommits(t *testing.T) {
 		t.Fatalf("status after remote down: %v", err)
 	}
 	if st.SyncPending != 1 || st.SyncSynced != 0 {
-		t.Fatalf("remote-down push must leave local commit pending, got %+v", st)
+		t.Fatalf("remote-down push must leave local event pending, got %+v", st)
 	}
 
 	remoteBinding := channel.ReplicaAgentBinding("replica@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
@@ -101,7 +102,7 @@ func TestSyncPushOnceAcksPendingLocalCommits(t *testing.T) {
 		t.Fatalf("status after push: %v", err)
 	}
 	if st.SyncPending != 0 || st.SyncSynced != 1 || st.SyncConflicts != 0 {
-		t.Fatalf("successful push must mark the local commit synced, got %+v", st)
+		t.Fatalf("successful push must mark the local event synced, got %+v", st)
 	}
 }
 
@@ -127,7 +128,7 @@ func TestSyncPullOnceImportsRemoteMemoryThroughLocalMnemon(t *testing.T) {
 	defer remoteSrv.Close()
 
 	fields := remoteMemoryFields("remote-entry-1", "Remote synced memory appears locally")
-	remoteCommit := contract.LocalCommit{
+	remoteMaterial := contract.SyncedEventMaterial{
 		OriginReplicaID: "other-replica",
 		LocalDecisionID: "dec-remote-1",
 		LocalIngestSeq:  7,
@@ -142,9 +143,9 @@ func TestSyncPullOnceImportsRemoteMemoryThroughLocalMnemon(t *testing.T) {
 	if resp, err := channel.NewClientWithToken(remoteSrv.URL, "other-token").SyncPush(contract.SyncPushRequest{
 		ReplicaID: "other-replica",
 		BatchID:   "remote-batch",
-		Commits:   []contract.LocalCommit{remoteCommit},
+		Events:    syncTestEvents(t, remoteMaterial),
 	}); err != nil || len(resp.Accepted) != 1 {
-		t.Fatalf("seed remote commit: resp=%+v err=%v", resp, err)
+		t.Fatalf("seed remote event: resp=%+v err=%v", resp, err)
 	}
 
 	syncRoot = root
@@ -158,12 +159,12 @@ func TestSyncPullOnceImportsRemoteMemoryThroughLocalMnemon(t *testing.T) {
 	if err := runSyncPull(cmd, nil); err != nil {
 		t.Fatalf("sync pull once: %v", err)
 	}
-	if !strings.Contains(out.String(), "Sync pull: 1 commits") {
+	if !strings.Contains(out.String(), "Sync pull: 1 events") {
 		t.Fatalf("unexpected pull output: %s", out.String())
 	}
 	content := localMemoryContentForTest(t, storePath, ref)
 	if !strings.Contains(content, "Remote synced memory appears locally") {
-		t.Fatalf("pulled memory not visible through local projection:\n%s", content)
+		t.Fatalf("pulled memory not visible through local event view:\n%s", content)
 	}
 	st, err := syncStatusForTest(storePath)
 	if err != nil {
@@ -179,7 +180,7 @@ func TestSyncPullOnceImportsRemoteMemoryThroughLocalMnemon(t *testing.T) {
 	if err := runSyncPull(cmd, nil); err != nil {
 		t.Fatalf("second sync pull: %v", err)
 	}
-	if !strings.Contains(out.String(), "Sync pull: 0 commits") {
+	if !strings.Contains(out.String(), "Sync pull: 0 events") {
 		t.Fatalf("second pull must be cursor-idempotent, got %s", out.String())
 	}
 	content = localMemoryContentForTest(t, storePath, ref)
@@ -210,7 +211,7 @@ func TestSyncPullOnceImportsRemoteSkillThroughLocalMnemon(t *testing.T) {
 	defer remoteSrv.Close()
 
 	fields := remoteSkillFields("release-checklist", "active")
-	remoteCommit := contract.LocalCommit{
+	remoteMaterial := contract.SyncedEventMaterial{
 		OriginReplicaID: "other-replica",
 		LocalDecisionID: "dec-remote-skill-1",
 		LocalIngestSeq:  17,
@@ -225,9 +226,9 @@ func TestSyncPullOnceImportsRemoteSkillThroughLocalMnemon(t *testing.T) {
 	if resp, err := channel.NewClientWithToken(remoteSrv.URL, "other-token").SyncPush(contract.SyncPushRequest{
 		ReplicaID: "other-replica",
 		BatchID:   "remote-skill-batch",
-		Commits:   []contract.LocalCommit{remoteCommit},
+		Events:    syncTestEvents(t, remoteMaterial),
 	}); err != nil || len(resp.Accepted) != 1 {
-		t.Fatalf("seed remote skill commit: resp=%+v err=%v", resp, err)
+		t.Fatalf("seed remote skill event: resp=%+v err=%v", resp, err)
 	}
 
 	syncRoot = root
@@ -241,12 +242,12 @@ func TestSyncPullOnceImportsRemoteSkillThroughLocalMnemon(t *testing.T) {
 	if err := runSyncPull(cmd, nil); err != nil {
 		t.Fatalf("sync pull skill once: %v", err)
 	}
-	if !strings.Contains(out.String(), "Sync pull: 1 commits") {
+	if !strings.Contains(out.String(), "Sync pull: 1 events") {
 		t.Fatalf("unexpected pull output: %s", out.String())
 	}
 	decls := localSkillDeclarationsForTest(t, storePath, ref)
 	if len(decls) != 1 || decls[0]["skill_id"] != "release-checklist" || decls[0]["status"] != "active" {
-		t.Fatalf("pulled skill declaration not visible through local projection: %+v", decls)
+		t.Fatalf("pulled skill declaration not visible through local event view: %+v", decls)
 	}
 	st, err := syncStatusForTest(storePath)
 	if err != nil {
@@ -262,7 +263,7 @@ func TestSyncPullOnceImportsRemoteSkillThroughLocalMnemon(t *testing.T) {
 	if err := runSyncPull(cmd, nil); err != nil {
 		t.Fatalf("second sync pull skill: %v", err)
 	}
-	if !strings.Contains(out.String(), "Sync pull: 0 commits") {
+	if !strings.Contains(out.String(), "Sync pull: 0 events") {
 		t.Fatalf("second pull must be cursor-idempotent, got %s", out.String())
 	}
 	decls = localSkillDeclarationsForTest(t, storePath, ref)
@@ -398,9 +399,9 @@ func localMemoryContentForTest(t *testing.T, storePath string, ref contract.Reso
 		t.Fatalf("open local runtime for projection: %v", err)
 	}
 	defer rt.Close()
-	proj, err := rt.API().PullProjection("codex@project", contract.Subscription{Actor: "codex@project"})
+	proj, err := rt.API().PullEventView("codex@project", contract.Subscription{Actor: "codex@project"})
 	if err != nil {
-		t.Fatalf("pull local projection: %v", err)
+		t.Fatalf("pull local event view: %v", err)
 	}
 	for _, item := range proj.Content {
 		if item.Ref == ref {
@@ -420,7 +421,7 @@ func localSkillDeclarationsForTest(t *testing.T, storePath string, ref contract.
 		t.Fatalf("open local runtime for skill projection: %v", err)
 	}
 	defer rt.Close()
-	proj, err := rt.API().PullProjection("codex@project", contract.Subscription{Actor: "codex@project"})
+	proj, err := rt.API().PullEventView("codex@project", contract.Subscription{Actor: "codex@project"})
 	if err != nil {
 		t.Fatalf("pull local skill projection: %v", err)
 	}
@@ -476,4 +477,17 @@ func syncTestDigest(fields map[string]any) string {
 	data, _ := json.Marshal(fields)
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
+}
+
+func syncTestEvents(t *testing.T, materials ...contract.SyncedEventMaterial) []eventmodel.EventEnvelope {
+	t.Helper()
+	events := make([]eventmodel.EventEnvelope, 0, len(materials))
+	for _, material := range materials {
+		env, err := contract.SyncedEventEnvelopeFromMaterial(material)
+		if err != nil {
+			t.Fatalf("synced event fixture: %v", err)
+		}
+		events = append(events, env)
+	}
+	return events
 }

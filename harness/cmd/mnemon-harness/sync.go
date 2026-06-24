@@ -143,7 +143,7 @@ func runSyncPull(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "Sync pull: %d commits\n", result.commits)
+	fmt.Fprintf(cmd.OutOrStdout(), "Sync pull: %d events\n", result.events)
 	return nil
 }
 
@@ -171,7 +171,7 @@ func runSyncBackground(cmd *cobra.Command, args []string) error {
 		if result, err := syncPullOnce(); err != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(), "sync pull failed: %v\n", err)
 		} else {
-			fmt.Fprintf(cmd.OutOrStdout(), "Sync pull: %d commits\n", result.commits)
+			fmt.Fprintf(cmd.OutOrStdout(), "Sync pull: %d events\n", result.events)
 		}
 		select {
 		case <-cmd.Context().Done():
@@ -188,7 +188,7 @@ type syncPushResult struct {
 }
 
 type syncPullResult struct {
-	commits int
+	events int
 }
 
 func syncPushOnce() (syncPushResult, error) {
@@ -197,7 +197,7 @@ func syncPushOnce() (syncPushResult, error) {
 	if err != nil {
 		return syncPushResult{}, err
 	}
-	if len(batch.Commits) == 0 {
+	if len(batch.Events) == 0 {
 		return syncPushResult{}, nil
 	}
 	remote, err := resolveSyncRemote()
@@ -210,8 +210,8 @@ func syncPushOnce() (syncPushResult, error) {
 	}
 	resp, err := client.SyncPush(contract.SyncPushRequest{
 		ReplicaID: batch.ReplicaID,
-		BatchID:   remotesync.PushBatchID(batch.ReplicaID, batch.Commits),
-		Commits:   batch.Commits,
+		BatchID:   remotesync.PushBatchID(batch.ReplicaID, batch.Events),
+		Events:    batch.Events,
 	})
 	if err != nil {
 		return syncPushResult{}, fmt.Errorf("sync push failed: %w", err)
@@ -244,10 +244,10 @@ func syncPullOnce() (syncPullResult, error) {
 		return syncPullResult{}, fmt.Errorf("sync pull failed: %w", err)
 	}
 	catalog := app.SyncImportCatalog(syncProjectRoot(), os.Stderr)
-	if err := app.ImportLocalSyncPull(storePath, remote.ID, resp.NextCursor, resp.Commits, catalog); err != nil {
+	if err := app.ImportLocalSyncPull(storePath, remote.ID, resp.NextCursor, resp.Events, catalog); err != nil {
 		return syncPullResult{}, err
 	}
-	return syncPullResult{commits: len(resp.Commits)}, nil
+	return syncPullResult{events: len(resp.Events)}, nil
 }
 
 type syncRemoteConfig struct {
