@@ -96,24 +96,25 @@ type r1CodexAcceptanceOptions struct {
 }
 
 type r1CodexAcceptanceReport struct {
-	SchemaVersion int                        `json:"schema_version"`
-	Status        string                     `json:"status"`
-	StartedAt     string                     `json:"started_at"`
-	FinishedAt    string                     `json:"finished_at"`
-	RunRoot       string                     `json:"run_root"`
-	ReportPath    string                     `json:"report_path"`
-	LocalAddr     string                     `json:"local_addr"`
-	AgentTurns    bool                       `json:"agent_turns"`
-	Starter       string                     `json:"starter,omitempty"`
-	Assignee      string                     `json:"assignee,omitempty"`
-	Agents        []r1CodexAgentReport       `json:"agents"`
-	Sync          *r1CodexSyncReport         `json:"sync,omitempty"`
-	LedgerCounts  map[string]int             `json:"ledger_counts,omitempty"`
-	CueAudit      map[string]int             `json:"cue_audit,omitempty"`
-	Assertions    []r1AcceptanceAssertion    `json:"assertions"`
-	Errors        []string                   `json:"errors,omitempty"`
-	Artifacts     map[string]string          `json:"artifacts,omitempty"`
-	Raw           map[string]json.RawMessage `json:"raw,omitempty"`
+	SchemaVersion   int                        `json:"schema_version"`
+	Status          string                     `json:"status"`
+	StartedAt       string                     `json:"started_at"`
+	FinishedAt      string                     `json:"finished_at"`
+	RunRoot         string                     `json:"run_root"`
+	ReportPath      string                     `json:"report_path"`
+	LocalAddr       string                     `json:"local_addr"`
+	AgentTurns      bool                       `json:"agent_turns"`
+	Starter         string                     `json:"starter,omitempty"`
+	Assignee        string                     `json:"assignee,omitempty"`
+	Agents          []r1CodexAgentReport       `json:"agents"`
+	Sync            *r1CodexSyncReport         `json:"sync,omitempty"`
+	LedgerCounts    map[string]int             `json:"ledger_counts,omitempty"`
+	AgentEventAudit map[string]int             `json:"agent_event_audit,omitempty"`
+	CueAudit        map[string]int             `json:"cue_audit,omitempty"` // compatibility alias for older report consumers
+	Assertions      []r1AcceptanceAssertion    `json:"assertions"`
+	Errors          []string                   `json:"errors,omitempty"`
+	Artifacts       map[string]string          `json:"artifacts,omitempty"`
+	Raw             map[string]json.RawMessage `json:"raw,omitempty"`
 }
 
 type r1CodexAgentReport struct {
@@ -182,15 +183,16 @@ func runR1CodexAcceptance(ctx context.Context, opts r1CodexAcceptanceOptions) (r
 		return r1CodexAcceptanceReport{}, err
 	}
 	report := r1CodexAcceptanceReport{
-		SchemaVersion: 1,
-		Status:        "running",
-		StartedAt:     started.Format(time.RFC3339),
-		RunRoot:       runRoot,
-		AgentTurns:    opts.AgentTurns,
-		LedgerCounts:  map[string]int{},
-		CueAudit:      map[string]int{},
-		Artifacts:     map[string]string{},
-		Raw:           map[string]json.RawMessage{},
+		SchemaVersion:   1,
+		Status:          "running",
+		StartedAt:       started.Format(time.RFC3339),
+		RunRoot:         runRoot,
+		AgentTurns:      opts.AgentTurns,
+		LedgerCounts:    map[string]int{},
+		AgentEventAudit: map[string]int{},
+		CueAudit:        map[string]int{},
+		Artifacts:       map[string]string{},
+		Raw:             map[string]json.RawMessage{},
 	}
 	reportPath := filepath.Join(runRoot, "report.json")
 	report.ReportPath = reportPath
@@ -308,9 +310,10 @@ func runR1CodexAcceptance(ctx context.Context, opts r1CodexAcceptanceOptions) (r
 		addR1Assertion(&report, "agent turns requested", false, "rerun with --agent-turns to spend real model turns")
 	}
 	report.LedgerCounts = countR1Ledger(report.LocalAddr, agents[0])
-	report.CueAudit = countR1CueAudit(report.Artifacts["render_audit"])
+	report.AgentEventAudit = countR1AgentEventAudit(report.Artifacts["render_audit"])
+	report.CueAudit = report.AgentEventAudit
 	addR1Assertion(&report, "A11 no assignment_status/assignment_expired", report.LedgerCounts["assignment_status"] == 0 && report.LedgerCounts["assignment_expired"] == 0, fmt.Sprintf("assignment_status=%d assignment_expired=%d", report.LedgerCounts["assignment_status"], report.LedgerCounts["assignment_expired"]))
-	addR1Assertion(&report, "A12 render audit has provenance", report.CueAudit["with_provenance"] > 0 && report.CueAudit["with_body_digest"] > 0 && report.CueAudit["with_audit_id"] > 0, fmt.Sprintf("%+v", report.CueAudit))
+	addR1Assertion(&report, "A12 agent-event render audit has provenance", report.AgentEventAudit["with_provenance"] > 0 && report.AgentEventAudit["with_body_digest"] > 0 && report.AgentEventAudit["with_audit_id"] > 0, fmt.Sprintf("%+v", report.AgentEventAudit))
 	addR1Assertion(&report, "A13 activation loop writes no governed event by itself", true, "runner wakes appservers with turns; governed events are emitted by appserver shell commands through control observe")
 	if opts.SyncArm {
 		for i := range agents {
@@ -1278,7 +1281,7 @@ func findAgent(agents []r1CodexAgent, principal string) (r1CodexAgent, bool) {
 	return r1CodexAgent{}, false
 }
 
-func countR1CueAudit(path string) map[string]int {
+func countR1AgentEventAudit(path string) map[string]int {
 	out := map[string]int{
 		"entries":          0,
 		"with_provenance":  0,
@@ -1313,16 +1316,32 @@ func countR1CueAudit(path string) map[string]int {
 			out["with_audit_id"]++
 		}
 		body, _ := obj["body"].(string)
-		if counts, ok := obj["CueCounts"].(map[string]any); ok {
-			for _, key := range []string{"profile", "work", "integrate", "expired"} {
-				if n, ok := counts[key].(float64); ok && n > 0 {
-					out[key]++
+		usedEventCounts := false
+		if counts, ok := obj["EventCounts"].(map[string]any); ok {
+			for eventType, auditKey := range map[string]string{
+				"profile.update_requested":  "profile",
+				"assignment.work_available": "work",
+				"assignment.progress_ready": "integrate",
+				"assignment.expired":        "expired",
+			} {
+				if n, ok := counts[eventType].(float64); ok && n > 0 {
+					out[auditKey]++
+					usedEventCounts = true
 				}
 			}
 		}
-		for _, key := range []string{"profile", "work", "integrate", "expired"} {
-			if strings.Contains(body, "[mnemon:"+key+"]") {
-				out[key]++
+		if !usedEventCounts {
+			if counts, ok := obj["CueCounts"].(map[string]any); ok {
+				for _, key := range []string{"profile", "work", "integrate", "expired"} {
+					if n, ok := counts[key].(float64); ok && n > 0 {
+						out[key]++
+					}
+				}
+			}
+			for _, key := range []string{"profile", "work", "integrate", "expired"} {
+				if strings.Contains(body, "[mnemon:"+key+"]") {
+					out[key]++
+				}
 			}
 		}
 	}

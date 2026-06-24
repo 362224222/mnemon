@@ -84,7 +84,7 @@ func (r Renderer) RenderCue(ctx context.Context, req Request, proj projection.Pr
 	if req.Principal == "" {
 		return Response{SchemaVersion: 1, Status: StatusDenied, ProjectionDigest: proj.Digest}, nil
 	}
-	body := BuildBody(req, proj, now)
+	body, events := BuildBodyAndAgentEvents(req, proj, now)
 	if req.Budget.MaxChars > 0 && len(body) > req.Budget.MaxChars {
 		body = body[:req.Budget.MaxChars]
 	}
@@ -110,7 +110,7 @@ func (r Renderer) RenderCue(ctx context.Context, req Request, proj projection.Pr
 	}
 	resp.AuditID = auditID(req, resp)
 	if r.AuditSink != nil {
-		if err := r.AuditSink.WriteRenderAudit(ctx, AuditRecordFrom(req, resp, cueCounts(body))); err != nil {
+		if err := r.AuditSink.WriteRenderAudit(ctx, AuditRecordFrom(req, resp, cueCounts(body), agentEventCounts(events))); err != nil {
 			return Response{}, err
 		}
 	}

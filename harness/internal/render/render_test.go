@@ -40,6 +40,9 @@ func TestRenderCueDeterministicDigestAndAudit(t *testing.T) {
 	if len(sink.Records) != 2 || sink.Records[0].BodyDigest != resp1.BodyDigest || sink.Records[0].ProjectionDigest != "proj_digest" {
 		t.Fatalf("audit records must mirror response digest/projection: %+v", sink.Records)
 	}
+	if sink.Records[0].EventCounts[AgentEventTeamworkSignalOpen] != 1 || sink.Records[0].CueCounts["signal"] != 1 {
+		t.Fatalf("audit must record agent-event counts and legacy cue counts: %+v", sink.Records[0])
+	}
 }
 
 func TestRenderCueScopeAndAssignmentState(t *testing.T) {
@@ -73,6 +76,41 @@ func TestRenderCueScopeAndAssignmentState(t *testing.T) {
 	}
 	if strings.Contains(resp.Body, "[mnemon:work]") || strings.Contains(resp.Body, "[mnemon:feedback]") {
 		t.Fatalf("linked progress should remove assignee work/feedback cue:\n%s", resp.Body)
+	}
+}
+
+func TestBuildAgentEventsSeparatesEventModelFromPresentation(t *testing.T) {
+	now := mustTime(t, "2026-06-24T10:00:00Z")
+	reqB := Request{Principal: "codex-b@project", Host: "codex", Lifecycle: "nudge", RenderIntent: IntentTeamworkCue}
+	proj := projection.Projection{Ref: "proj_assign", Digest: "digest_assign", Content: []projection.ResourceContent{
+		content("assignment", "project", []any{map[string]any{
+			"id": "asg1", "actor": "codex-a@project", "assignee": "codex-b@project",
+			"scope": "review render cue", "expected_work": "review render cue",
+			"ttl": "30m", "created_at": "2026-06-24T09:45:00Z",
+		}}),
+	}}
+
+	events := BuildAgentEvents(reqB, proj, now)
+	if len(events) != 3 {
+		t.Fatalf("expected profile/work/feedback events, got %+v", events)
+	}
+	got := map[string]AgentEvent{}
+	for _, event := range events {
+		got[event.Type] = event
+		if strings.Contains(event.Type, "mnemon:") || strings.Contains(event.Body, "[mnemon:") {
+			t.Fatalf("agent-event model must not contain presentation labels: %+v", event)
+		}
+	}
+	if got[AgentEventAssignmentWorkAvailable].Subject != "assignment/asg1" {
+		t.Fatalf("work event must point at assignment subject: %+v", got[AgentEventAssignmentWorkAvailable])
+	}
+	if got[AgentEventAssignmentFeedbackNeeded].SuggestedObservedEvents[0] != "progress_digest.write_candidate.observed" {
+		t.Fatalf("feedback event should name the next observed event: %+v", got[AgentEventAssignmentFeedbackNeeded])
+	}
+
+	body := PresentAgentEvents(events)
+	if !strings.Contains(body, "[mnemon:work]") || !strings.Contains(body, "[mnemon:feedback]") {
+		t.Fatalf("presentation should retain current hook-facing labels:\n%s", body)
 	}
 }
 

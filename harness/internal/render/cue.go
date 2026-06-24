@@ -11,78 +11,35 @@ import (
 )
 
 func BuildBody(req Request, proj projection.Projection, now time.Time) string {
+	body, _ := BuildBodyAndAgentEvents(req, proj, now)
+	return body
+}
+
+func BuildBodyAndAgentEvents(req Request, proj projection.Projection, now time.Time) (string, []AgentEvent) {
 	switch req.RenderIntent {
 	case IntentTeamworkCue:
-		return BuildCue(req, proj, now)
+		events := BuildAgentEvents(req, proj, now)
+		return PresentAgentEvents(events), events
 	case IntentProfileCue:
-		return BuildProfileCue(req, proj)
+		events := BuildProfileEvents(req, proj)
+		return PresentAgentEvents(events), events
 	case IntentContextPacket:
-		return BuildContextPacket(req, proj)
+		return BuildContextPacket(req, proj), nil
 	case IntentPayloadContract:
-		return BuildPayloadContract()
+		return BuildPayloadContract(), nil
 	case IntentSkillBootstrap:
-		return BuildSkillBootstrap()
+		return BuildSkillBootstrap(), nil
 	default:
-		return ""
+		return "", nil
 	}
 }
 
 func BuildCue(req Request, proj projection.Projection, now time.Time) string {
-	principal := string(req.Principal)
-	items := projectionItems(proj)
-	var sections []string
-
-	if profileStaleOrMissing(items["agent_profile"], principal) {
-		sections = append(sections, section("profile", "Update your agent_profile if your focus, availability, or context advantages changed."))
-	}
-
-	for _, signal := range items["teamwork_signal"] {
-		statement := itemString(signal, "statement")
-		if statement == "" {
-			continue
-		}
-		sections = append(sections, section("signal", fmt.Sprintf("Teamwork signal is open: %s. Decide whether to self-assign or assign a suited teammate.", statement)))
-	}
-
-	progressByAssignment := map[string][]map[string]any{}
-	for _, progress := range items["progress_digest"] {
-		if ref := itemString(progress, "assignment_ref"); ref != "" {
-			progressByAssignment[ref] = append(progressByAssignment[ref], progress)
-		}
-	}
-
-	for _, assignment := range items["assignment"] {
-		id := itemID(assignment)
-		assignee := itemString(assignment, "assignee")
-		owner := itemString(assignment, "actor")
-		scope := itemString(assignment, "scope")
-		linked := progressByAssignment[id]
-		expired := assignmentExpired(assignment, now) && len(linked) == 0
-
-		switch {
-		case owner == principal && expired:
-			sections = append(sections, section("expired", fmt.Sprintf("Assignment %s expired without progress: %s. Start a new act: renew, reassign, split, close, or escalate.", id, scope)))
-		case owner == principal && len(linked) > 0:
-			sections = append(sections, section("integrate", fmt.Sprintf("Assignment %s has feedback: %s", id, summarizeProgress(linked))))
-		case assignee == principal && !expired && len(linked) == 0:
-			sections = append(sections, section("work", fmt.Sprintf("Assignment %s is yours: %s. Expected work: %s", id, scope, itemString(assignment, "expected_work"))))
-			sections = append(sections, section("feedback", fmt.Sprintf("When you have progress or a blocker for assignment %s, emit progress_digest with assignment_ref=%s.", id, id)))
-		}
-	}
-
-	if len(sections) == 0 {
-		return ""
-	}
-	return strings.Join(sections, "\n\n")
+	return PresentAgentEvents(BuildAgentEvents(req, proj, now))
 }
 
 func BuildProfileCue(req Request, proj projection.Projection) string {
-	principal := string(req.Principal)
-	items := projectionItems(proj)
-	if !profileStaleOrMissing(items["agent_profile"], principal) {
-		return ""
-	}
-	return section("profile", "Update your agent_profile if your focus, availability, or context advantages changed.")
+	return PresentAgentEvents(BuildProfileEvents(req, proj))
 }
 
 func BuildContextPacket(_ Request, proj projection.Projection) string {

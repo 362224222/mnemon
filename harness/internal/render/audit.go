@@ -27,10 +27,11 @@ type AuditRecord struct {
 	Status           Status
 	BodyChars        int
 	CueCounts        map[string]int
+	EventCounts      map[string]int
 	CreatedAt        string
 }
 
-func AuditRecordFrom(req Request, resp Response, counts map[string]int) AuditRecord {
+func AuditRecordFrom(req Request, resp Response, cueCounts map[string]int, eventCounts map[string]int) AuditRecord {
 	return AuditRecord{
 		SchemaVersion:    1,
 		AuditID:          resp.AuditID,
@@ -44,7 +45,8 @@ func AuditRecordFrom(req Request, resp Response, counts map[string]int) AuditRec
 		DecisionHead:     resp.Provenance.DecisionHead,
 		Status:           resp.Status,
 		BodyChars:        len(resp.Body),
-		CueCounts:        counts,
+		CueCounts:        cueCounts,
+		EventCounts:      eventCounts,
 		CreatedAt:        resp.Provenance.RenderedAt,
 	}
 }
