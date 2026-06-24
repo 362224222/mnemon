@@ -673,7 +673,7 @@ func (s *Store) DispatchTx(events []contract.Event, cursorName string, seq int64
 // auto_merge_disjoint pass that shares the CorrelationID) does NOT pre-seed the count and trigger
 // premature escalation.
 //
-// Scope note: for the reconciler path — the SOLE production caller of Kernel.Apply — this reproduces the
+// Scope note: for the reconciler path — the SOLE production caller of Materializer.Apply — this reproduces the
 // removed in-memory map's predicate exactly (rebase-deferrals are only produced inside RunOnce). A direct
 // (non-reconciler) Apply sharing a CorrelationID would also contribute to this durable count; that is not
 // reachable today and is the intended behaviour for any future direct path (e.g. CLI-inline, Invariant #17).

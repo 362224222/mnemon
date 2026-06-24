@@ -7,7 +7,7 @@ import (
 )
 
 // One identical Arm-A fixture under three conflict modes -> three distinct, each-internally-deterministic
-// loser decisions. The mapping lives in Kernel.Apply (P0.4); this asserts it is wired through reconcile
+// loser decisions. The mapping lives in Materializer.Apply (P0.4); this asserts it is wired through reconcile
 // and that auto_merge_disjoint is FAIL-CLOSED (never a silent accept/merge).
 func TestConflictModeChangesDecisionDeterministically(t *testing.T) {
 	rej := runArmA(t, contract.Modes{Conflict: contract.ConflictReject, Isolation: contract.IsolationWriteCAS, Authz: contract.AuthzStrict})

@@ -106,7 +106,7 @@ func OpenRuntime(storePath string, cfg RuntimeConfig) (*Runtime, error) {
 		return nil, fmt.Errorf("open kernel store: %w", err)
 	}
 	cfg = cfg.withDefaults()
-	k := state.NewKernel(store, cfg.SchemaGuard, cfg.Authority)
+	k := state.NewMaterializer(store, cfg.SchemaGuard, cfg.Authority)
 	cs := New(store, k, cfg.Rules, cfg.Subs, cfg.Modes, cfg.NewID, cfg.Now)
 	cs.syncableKinds = kindSet(cfg.SyncableKinds)
 	rt := &Runtime{store: store, cs: cs, api: cs, storePath: storePath}

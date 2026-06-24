@@ -55,8 +55,8 @@ func TestPullFeedbackTiebreakIsInsertionOrder(t *testing.T) {
 	seedCreate(t, k, X, map[string]any{"content": "v0"})    // X@1
 	seedUpdate(t, k, X, 1, map[string]any{"content": "v1"}) // X@2 -> base 1 stale
 	// two DIRECT deferred Applies for codex, both IngestSeq 0, distinct correlations (no escalation)
-	upd := func(opID, corr string) contract.KernelOp {
-		return contract.KernelOp{OpID: opID, Actor: "codex", CorrelationID: corr,
+	upd := func(opID, corr string) contract.StateOp {
+		return contract.StateOp{OpID: opID, Actor: "codex", CorrelationID: corr,
 			Writes: []contract.ResourceWrite{{Ref: X, Kind: contract.OpUpdate, BasedOn: 1, Fields: map[string]any{"content": "x"}}}}
 	}
 	if d := k.Apply(upd("z_first", "c1"), casModes()); d.Status != contract.Deferred {

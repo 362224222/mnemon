@@ -38,11 +38,11 @@ type ResourceWrite struct {
 	Fields  map[string]any
 }
 
-// KernelOp is ALL-OR-NOTHING (Invariant #5). ReadSet = versions the proposer READ (Invariant #6).
+// StateOp is ALL-OR-NOTHING (Invariant #5). ReadSet = versions the proposer READ (Invariant #6).
 // IngestSeq is the triggering event's durable seq (events.rowid), stamped by the reconciler from a
 // TRUSTED source; 0 for a direct (non-event) Apply. It is the event<->decision audit link and the basis
 // for the reconciler's durable cursor.
-type KernelOp struct {
+type StateOp struct {
 	OpID          string
 	Actor         ActorID
 	Writes        []ResourceWrite
@@ -133,7 +133,7 @@ const (
 )
 
 // RuleDecision is a rule's output: a verdict plus (for propose) a Proposal. It is
-// return-only — a rule never holds a Store/Kernel, so it can describe an effect but never perform one (S12).
+// return-only — a rule never holds a Store/Materializer, so it can describe an effect but never perform one (S12).
 type RuleDecision struct {
 	Verdict  RuleVerdict
 	Reasons  []string

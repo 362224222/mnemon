@@ -28,16 +28,16 @@ var _ access.ServerAPI = (*ControlServer)(nil)
 
 // ControlServer is the one single-writer governed loop. Tick is its deterministic, restart-safe driver.
 type ControlServer struct {
-	tickMu     sync.Mutex // serializes Tick: closes the GetCursor->dispatch TOCTOU + the reconciler-cursor race
-	store      *state.Store
-	kernel     *state.Kernel
-	reconciler *admission.Reconciler
-	bridge     *Bridge
-	rules      admission.RuleSet
-	subs       map[contract.ActorID]contract.Subscription
-	modes      contract.Modes
-	newID      func() string
-	now        func() string
+	tickMu       sync.Mutex // serializes Tick: closes the GetCursor->dispatch TOCTOU + the reconciler-cursor race
+	store        *state.Store
+	materializer *state.Materializer
+	reconciler   *admission.Reconciler
+	bridge       *Bridge
+	rules        admission.RuleSet
+	subs         map[contract.ActorID]contract.Subscription
+	modes        contract.Modes
+	newID        func() string
+	now          func() string
 	// syncableKinds is the produce surface: the resource kinds a host decision becomes a pending synced
 	// event for (sync-abi-v2 §4). Descriptor-derived and injected by OpenRuntime from
 	// RuntimeConfig.SyncableKinds; nil = produce no synced events.
@@ -56,17 +56,17 @@ func kindSet(kinds []contract.ResourceKind) map[contract.ResourceKind]bool {
 	return set
 }
 
-func New(s *state.Store, k *state.Kernel, rules admission.RuleSet, subs map[contract.ActorID]contract.Subscription, modes contract.Modes, newID, now func() string) *ControlServer {
+func New(s *state.Store, k *state.Materializer, rules admission.RuleSet, subs map[contract.ActorID]contract.Subscription, modes contract.Modes, newID, now func() string) *ControlServer {
 	return &ControlServer{
-		store:      s,
-		kernel:     k,
-		reconciler: admission.NewReconciler(s, k),
-		bridge:     NewBridge(newID, now),
-		rules:      rules,
-		subs:       subs,
-		modes:      modes,
-		newID:      newID,
-		now:        now,
+		store:        s,
+		materializer: k,
+		reconciler:   admission.NewReconciler(s, k),
+		bridge:       NewBridge(newID, now),
+		rules:        rules,
+		subs:         subs,
+		modes:        modes,
+		newID:        newID,
+		now:          now,
 	}
 }
 

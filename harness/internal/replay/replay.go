@@ -107,7 +107,7 @@ func Replay(events []contract.Event, candidate admission.RuleSet) []contract.Dec
 // model never ran the candidate's rules at all, so every real rule change passed Clean).
 //
 // View TIMING matches the server, which evaluates rules at DISPATCH time — BEFORE that tick's admission. Shadow
-// walks the log in IngestSeq order on a throwaway kernel: a logged *.proposed event is applied (reconciled) to
+// walks the log in IngestSeq order on a throwaway materializer: a logged *.proposed event is applied (reconciled) to
 // evolve canonical state; an OBSERVED event is evaluated against the state BUILT FROM THE PROPOSALS THAT PRECEDE
 // IT in the log — i.e. the dispatch-time state, not the final state (evaluating against final state yields a
 // false-clean for any version-sensitive rule that diverges at @1 but agrees at @2). Only the logged proposals
@@ -125,7 +125,7 @@ func Shadow(events []contract.Event, subs map[contract.ActorID]contract.Subscrip
 		return admission.ShadowReport{}
 	}
 	defer s.Close()
-	k := state.NewKernel(s, logSchemaGuard(events), permissiveAuthority(events))
+	k := state.NewMaterializer(s, logSchemaGuard(events), permissiveAuthority(events))
 	r := admission.NewReconciler(s, k)
 
 	diffs := 0
@@ -198,7 +198,7 @@ func drive(events []contract.Event) []contract.Decision {
 		return nil
 	}
 	defer s.Close()
-	k := state.NewKernel(s, logSchemaGuard(events), permissiveAuthority(events))
+	k := state.NewMaterializer(s, logSchemaGuard(events), permissiveAuthority(events))
 	r := admission.NewReconciler(s, k)
 	for _, ev := range events {
 		if _, err := s.AppendEvent(ev); err != nil {

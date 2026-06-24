@@ -19,7 +19,7 @@ func TestProposeStampsProducingRuleActorNotFirstMatch(t *testing.T) {
 	}
 	t.Cleanup(func() { s.Close() })
 	rules := state.AuthorityRules{Allow: map[contract.ActorID][]contract.ResourceKind{"alice": {"memory"}, "bob": {"memory"}}}
-	k := state.NewKernel(s, state.SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}, "goal": {"statement"}}), rules)
+	k := state.NewMaterializer(s, state.SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}, "goal": {"statement"}}), rules)
 	subs := map[contract.ActorID]contract.Subscription{
 		"agent": {Actor: "agent", Refs: []contract.ResourceRef{{Kind: "memory", ID: "m1"}}},
 	}
@@ -34,7 +34,7 @@ func TestProposeStampsProducingRuleActorNotFirstMatch(t *testing.T) {
 				Payload: map[string]any{"writes": []contract.ResourceWrite{{Ref: rv.Ref, Kind: contract.OpUpdate, BasedOn: rv.Version, Fields: map[string]any{"content": "by-bob"}}}}}}, nil
 		})
 	cs := New(s, k, admission.NewRuleSet(r1, r2), subs, p0Modes(), seqGen(), fixedNow())
-	if d := k.Apply(contract.KernelOp{OpID: "seed", Actor: "bob", Writes: []contract.ResourceWrite{
+	if d := k.Apply(contract.StateOp{OpID: "seed", Actor: "bob", Writes: []contract.ResourceWrite{
 		{Ref: contract.ResourceRef{Kind: "memory", ID: "m1"}, Kind: contract.OpCreate, Fields: map[string]any{"content": "v0"}}}}, p0Modes()); d.Status != contract.Accepted {
 		t.Fatalf("seed: %s", d.Reason)
 	}

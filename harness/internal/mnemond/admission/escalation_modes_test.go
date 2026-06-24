@@ -18,7 +18,7 @@ func TestEscalationCountsOnlyRebaseDeferrals(t *testing.T) {
 	const corr = "hot"
 
 	// An unrelated human_review deferral on the SAME correlation (via defer_to_human mode).
-	dh := k.Apply(contract.KernelOp{OpID: "h0", Actor: "codex", CorrelationID: corr,
+	dh := k.Apply(contract.StateOp{OpID: "h0", Actor: "codex", CorrelationID: corr,
 		Writes: []contract.ResourceWrite{{Ref: X, Kind: contract.OpUpdate, BasedOn: 1, Fields: map[string]any{"content": "h"}}}},
 		contract.Modes{Conflict: contract.ConflictDeferToHuman, Isolation: contract.IsolationWriteCAS, Authz: contract.AuthzStrict})
 	if dh.Status != contract.Deferred || dh.NextAction != "human_review" {

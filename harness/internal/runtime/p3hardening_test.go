@@ -15,7 +15,7 @@ import (
 func TestPullEventViewEnforcesConfiguredScope(t *testing.T) {
 	_, k, cs := newServerWith(t, admission.NewRuleSet(proposeRule()))
 	// a resource the agent is NOT configured to see (agentSubs scope = {m1}).
-	if d := k.Apply(contract.KernelOp{OpID: "secret", Actor: "agent", Writes: []contract.ResourceWrite{
+	if d := k.Apply(contract.StateOp{OpID: "secret", Actor: "agent", Writes: []contract.ResourceWrite{
 		{Ref: contract.ResourceRef{Kind: "memory", ID: "secret"}, Kind: contract.OpCreate, Fields: map[string]any{"content": "top"}}}}, p0Modes()); d.Status != contract.Accepted {
 		t.Fatalf("seed secret: %s", d.Reason)
 	}
@@ -54,7 +54,7 @@ func TestDecisionSideEffectsRecoveredFromLog(t *testing.T) {
 	s, k, cs := newServerWith(t, admission.NewRuleSet(proposeRule()))
 	// simulate a committed-but-unprocessed decision: apply it directly (a reconciler-style Accepted decision
 	// with IngestSeq>0), bypassing the server's side-effect step ("crash" before handleDecisions).
-	d := k.Apply(contract.KernelOp{OpID: "p", Actor: "agent", IngestSeq: 99, Writes: []contract.ResourceWrite{
+	d := k.Apply(contract.StateOp{OpID: "p", Actor: "agent", IngestSeq: 99, Writes: []contract.ResourceWrite{
 		{Ref: contract.ResourceRef{Kind: "memory", ID: "m1"}, Kind: contract.OpUpdate, BasedOn: 1, Fields: map[string]any{"content": "x"}}}}, p0Modes())
 	if d.Status != contract.Accepted {
 		t.Fatalf("setup apply: %s", d.Reason)

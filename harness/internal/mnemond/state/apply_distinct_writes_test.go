@@ -13,10 +13,10 @@ import (
 // spent_usd, laundering the spend ceiling, S6; also audit-trail corruption — two versions for one resource).
 // Reject duplicate write refs terminally up-front.
 func TestApplyRejectsDuplicateWriteRefs(t *testing.T) {
-	k := newKernel(t)
+	k := newMaterializer(t)
 	mustCreate(t, k, "memory", "m1", map[string]any{"content": "a"})
 	before := k.Store().DecisionCount()
-	op := contract.KernelOp{OpID: "dup", Actor: "user", Writes: []contract.ResourceWrite{
+	op := contract.StateOp{OpID: "dup", Actor: "user", Writes: []contract.ResourceWrite{
 		{Ref: contract.ResourceRef{Kind: "memory", ID: "m1"}, Kind: contract.OpUpdate, BasedOn: 1, Fields: map[string]any{"content": "b"}},
 		{Ref: contract.ResourceRef{Kind: "memory", ID: "m1"}, Kind: contract.OpUpdate, BasedOn: 2, Fields: map[string]any{"content": "c"}},
 	}}
@@ -37,10 +37,10 @@ func TestApplyRejectsDuplicateWriteRefs(t *testing.T) {
 
 // Distinct refs in one op still work (no false positive): two different resources commit all-or-nothing.
 func TestApplyAllowsDistinctWriteRefs(t *testing.T) {
-	k := newKernel(t)
+	k := newMaterializer(t)
 	mustCreate(t, k, "memory", "m1", map[string]any{"content": "a"})
 	mustCreate(t, k, "goal", "g1", map[string]any{"statement": "ship"})
-	d := k.Apply(contract.KernelOp{OpID: "two", Actor: "user", Writes: []contract.ResourceWrite{
+	d := k.Apply(contract.StateOp{OpID: "two", Actor: "user", Writes: []contract.ResourceWrite{
 		{Ref: contract.ResourceRef{Kind: "memory", ID: "m1"}, Kind: contract.OpUpdate, BasedOn: 1, Fields: map[string]any{"content": "b"}},
 		{Ref: contract.ResourceRef{Kind: "goal", ID: "g1"}, Kind: contract.OpUpdate, BasedOn: 1, Fields: map[string]any{"statement": "x"}},
 	}}, p0Modes())

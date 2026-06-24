@@ -17,14 +17,14 @@ func rules() state.AuthorityRules {
 		"codex": {"memory", "goal", "skill"},
 	}}
 }
-func newRecon(t *testing.T) (*state.Store, *state.Kernel) {
+func newRecon(t *testing.T) (*state.Store, *state.Materializer) {
 	t.Helper()
 	s, err := state.OpenStore(":memory:")
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	t.Cleanup(func() { s.Close() })
-	k := state.NewKernel(s, state.SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}, "goal": {"statement"}}), rules())
+	k := state.NewMaterializer(s, state.SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}, "goal": {"statement"}}), rules())
 	return s, k
 }
 func casModes() contract.Modes {
@@ -32,17 +32,17 @@ func casModes() contract.Modes {
 }
 
 // seedCreate / seedUpdate are TRUSTED setup writes (already-accepted state), applied directly via the state.
-func seedCreate(t *testing.T, k *state.Kernel, ref contract.ResourceRef, fields map[string]any) {
+func seedCreate(t *testing.T, k *state.Materializer, ref contract.ResourceRef, fields map[string]any) {
 	t.Helper()
-	d := k.Apply(contract.KernelOp{OpID: "seed_" + string(ref.ID), Actor: "user",
+	d := k.Apply(contract.StateOp{OpID: "seed_" + string(ref.ID), Actor: "user",
 		Writes: []contract.ResourceWrite{{Ref: ref, Kind: contract.OpCreate, Fields: fields}}}, casModes())
 	if d.Status != contract.Accepted {
 		t.Fatalf("seedCreate %s: %s", ref.ID, d.Reason)
 	}
 }
-func seedUpdate(t *testing.T, k *state.Kernel, ref contract.ResourceRef, basedOn contract.Version, fields map[string]any) {
+func seedUpdate(t *testing.T, k *state.Materializer, ref contract.ResourceRef, basedOn contract.Version, fields map[string]any) {
 	t.Helper()
-	d := k.Apply(contract.KernelOp{OpID: "sup_" + string(ref.ID), Actor: "user",
+	d := k.Apply(contract.StateOp{OpID: "sup_" + string(ref.ID), Actor: "user",
 		Writes: []contract.ResourceWrite{{Ref: ref, Kind: contract.OpUpdate, BasedOn: basedOn, Fields: fields}}}, casModes())
 	if d.Status != contract.Accepted {
 		t.Fatalf("seedUpdate %s@%d: %s", ref.ID, basedOn, d.Reason)
@@ -125,7 +125,7 @@ func TestArmB_ReadStaleVsWriteCAS(t *testing.T) {
 	M := contract.ResourceRef{Kind: "memory", ID: "M"}
 	G := contract.ResourceRef{Kind: "goal", ID: "G"}
 
-	build := func(t *testing.T) (*state.Store, *state.Kernel) {
+	build := func(t *testing.T) (*state.Store, *state.Materializer) {
 		s, k := newRecon(t)
 		seedCreate(t, k, M, map[string]any{"content": "m0"})    // M@1
 		seedUpdate(t, k, M, 1, map[string]any{"content": "m1"}) // M@2 (matches based_on M@2)

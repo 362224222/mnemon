@@ -117,7 +117,7 @@ func TestLocalMemoryCandidateDenialLeavesDiagnostic(t *testing.T) {
 func TestLocalMemoryPullContentIsClampedToBindingScope(t *testing.T) {
 	rt, c := openLocalMemoryRuntime(t)
 	secret := contract.ResourceRef{Kind: "memory", ID: "secret"}
-	d := rt.cs.kernel.Apply(contract.KernelOp{OpID: "seed-secret", Actor: "codex@project", Writes: []contract.ResourceWrite{
+	d := rt.cs.materializer.Apply(contract.StateOp{OpID: "seed-secret", Actor: "codex@project", Writes: []contract.ResourceWrite{
 		{Ref: secret, Kind: contract.OpCreate, Fields: map[string]any{"content": "out of scope"}},
 	}}, rt.cs.modes)
 	if d.Status != contract.Accepted {

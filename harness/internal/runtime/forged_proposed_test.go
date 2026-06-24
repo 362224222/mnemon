@@ -50,13 +50,13 @@ func TestIngestRejectsCrossPrincipalForgedProposed(t *testing.T) {
 	}
 	t.Cleanup(func() { s.Close() })
 	rules := state.AuthorityRules{Allow: map[contract.ActorID][]contract.ResourceKind{"alice": {"memory"}, "bob": {"memory"}}}
-	k := state.NewKernel(s, state.SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}, "goal": {"statement"}}), rules)
+	k := state.NewMaterializer(s, state.SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}, "goal": {"statement"}}), rules)
 	subs := map[contract.ActorID]contract.Subscription{
 		"alice": {Actor: "alice", Refs: []contract.ResourceRef{{Kind: "memory", ID: "mem_a"}}},
 		"bob":   {Actor: "bob", Refs: []contract.ResourceRef{{Kind: "memory", ID: "mem_b"}}},
 	}
 	cs := New(s, k, admission.NewRuleSet(), subs, p0Modes(), seqGen(), fixedNow())
-	if d := k.Apply(contract.KernelOp{OpID: "seed", Actor: "bob", Writes: []contract.ResourceWrite{
+	if d := k.Apply(contract.StateOp{OpID: "seed", Actor: "bob", Writes: []contract.ResourceWrite{
 		{Ref: contract.ResourceRef{Kind: "memory", ID: "mem_b"}, Kind: contract.OpCreate, Fields: map[string]any{"content": "bob-secret"}}}}, p0Modes()); d.Status != contract.Accepted {
 		t.Fatalf("seed: %s", d.Reason)
 	}

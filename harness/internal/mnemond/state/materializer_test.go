@@ -6,10 +6,10 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 )
 
-// newKernelTestStore is the kernel package's local test store ctor. It mirrors the helper that moved to
+// newMaterializerTestStore is the kernel package's local test store ctor. It mirrors the helper that moved to
 // the store package with store_test.go; kept in _test.go so the production store package never
 // imports testing.
-func newKernelTestStore(t *testing.T) *Store {
+func newMaterializerTestStore(t *testing.T) *Store {
 	t.Helper()
 	s, err := OpenStore(":memory:")
 	if err != nil {
@@ -25,23 +25,23 @@ func permissiveRules() AuthorityRules {
 func p0Modes() contract.Modes {
 	return contract.Modes{Conflict: contract.ConflictRebase, Isolation: contract.IsolationWriteCAS, Authz: contract.AuthzStrict}
 }
-func mustCreate(t *testing.T, k *Kernel, kind contract.ResourceKind, id contract.ResourceID, f map[string]any) {
+func mustCreate(t *testing.T, k *Materializer, kind contract.ResourceKind, id contract.ResourceID, f map[string]any) {
 	t.Helper()
-	d := k.Apply(contract.KernelOp{OpID: "seed_" + string(id), Actor: "user",
+	d := k.Apply(contract.StateOp{OpID: "seed_" + string(id), Actor: "user",
 		Writes: []contract.ResourceWrite{{Ref: contract.ResourceRef{Kind: kind, ID: id}, Kind: contract.OpCreate, Fields: f}}}, p0Modes())
 	if d.Status != contract.Accepted {
 		t.Fatalf("seed %s failed: %s", id, d.Reason)
 	}
 }
-func newKernel(t *testing.T) *Kernel {
-	return NewKernel(newKernelTestStore(t), SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}, "goal": {"statement"}}), permissiveRules())
+func newMaterializer(t *testing.T) *Materializer {
+	return NewMaterializer(newMaterializerTestStore(t), SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}, "goal": {"statement"}}), permissiveRules())
 }
 
 func TestApplyMultiResourceAllOrNothing(t *testing.T) {
-	k := newKernel(t)
+	k := newMaterializer(t)
 	mustCreate(t, k, "memory", "m1", map[string]any{"content": "a"})
 	mustCreate(t, k, "goal", "g1", map[string]any{"statement": "ship"})
-	op := contract.KernelOp{OpID: "op1", Actor: "user", Writes: []contract.ResourceWrite{
+	op := contract.StateOp{OpID: "op1", Actor: "user", Writes: []contract.ResourceWrite{
 		{Ref: contract.ResourceRef{Kind: "memory", ID: "m1"}, Kind: contract.OpUpdate, BasedOn: 1, Fields: map[string]any{"content": "b"}},
 		{Ref: contract.ResourceRef{Kind: "goal", ID: "g1"}, Kind: contract.OpUpdate, BasedOn: 99, Fields: map[string]any{"statement": "x"}},
 	}}
@@ -54,18 +54,18 @@ func TestApplyMultiResourceAllOrNothing(t *testing.T) {
 	}
 }
 func TestAuthzFailureIsRejectedNotDeferred(t *testing.T) {
-	k := NewKernel(newKernelTestStore(t), SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}, "goal": {"statement"}}), AuthorityRules{}) // nobody allowed
-	d := k.Apply(contract.KernelOp{OpID: "op2", Actor: "codex@x", Writes: []contract.ResourceWrite{
+	k := NewMaterializer(newMaterializerTestStore(t), SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}, "goal": {"statement"}}), AuthorityRules{}) // nobody allowed
+	d := k.Apply(contract.StateOp{OpID: "op2", Actor: "codex@x", Writes: []contract.ResourceWrite{
 		{Ref: contract.ResourceRef{Kind: "memory", ID: "m1"}, Kind: contract.OpCreate, Fields: map[string]any{"content": "a"}}}}, p0Modes())
 	if d.Status != contract.Rejected || d.NextAction != "" {
 		t.Fatalf("authz fail must be Rejected/'' (rebase can't fix), got %s/%q", d.Status, d.NextAction)
 	}
 }
 func TestApplyPersistsExactlyOneDecision(t *testing.T) {
-	k := newKernel(t)
+	k := newMaterializer(t)
 	mustCreate(t, k, "memory", "m1", map[string]any{"content": "a"})
 	before := k.Store().DecisionCount()
-	_ = k.Apply(contract.KernelOp{OpID: "op3", Actor: "user", Writes: []contract.ResourceWrite{
+	_ = k.Apply(contract.StateOp{OpID: "op3", Actor: "user", Writes: []contract.ResourceWrite{
 		{Ref: contract.ResourceRef{Kind: "memory", ID: "m1"}, Kind: contract.OpUpdate, BasedOn: 1, Fields: map[string]any{"content": "b"}}}}, p0Modes())
 	if k.Store().DecisionCount() != before+1 {
 		t.Fatalf("want exactly one new decision")

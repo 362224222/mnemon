@@ -42,7 +42,7 @@ func denyRule() admission.Rule {
 		})
 }
 
-func newServerWith(t *testing.T, rs admission.RuleSet) (*state.Store, *state.Kernel, *ControlServer) {
+func newServerWith(t *testing.T, rs admission.RuleSet) (*state.Store, *state.Materializer, *ControlServer) {
 	t.Helper()
 	s, err := state.OpenStore(":memory:")
 	if err != nil {
@@ -50,9 +50,9 @@ func newServerWith(t *testing.T, rs admission.RuleSet) (*state.Store, *state.Ker
 	}
 	t.Cleanup(func() { s.Close() })
 	rules := state.AuthorityRules{Allow: map[contract.ActorID][]contract.ResourceKind{"agent": {"memory"}}}
-	k := state.NewKernel(s, state.SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}, "goal": {"statement"}}), rules)
+	k := state.NewMaterializer(s, state.SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}, "goal": {"statement"}}), rules)
 	cs := New(s, k, rs, agentSubs(), p0Modes(), seqGen(), fixedNow())
-	if d := k.Apply(contract.KernelOp{OpID: "seed", Actor: "agent", Writes: []contract.ResourceWrite{
+	if d := k.Apply(contract.StateOp{OpID: "seed", Actor: "agent", Writes: []contract.ResourceWrite{
 		{Ref: contract.ResourceRef{Kind: "memory", ID: "m1"}, Kind: contract.OpCreate, Fields: map[string]any{"content": "v0"}}}}, p0Modes()); d.Status != contract.Accepted {
 		t.Fatalf("seed: %s", d.Reason)
 	}

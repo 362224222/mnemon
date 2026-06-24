@@ -22,7 +22,7 @@ func liveDecisions(t *testing.T, events []contract.Event) (*state.Store, []contr
 		t.Fatalf("open: %v", err)
 	}
 	t.Cleanup(func() { s.Close() })
-	k := state.NewKernel(s, state.SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}, "goal": {"statement"}}), permissiveAuthority(events))
+	k := state.NewMaterializer(s, state.SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}, "goal": {"statement"}}), permissiveAuthority(events))
 	r := admission.NewReconciler(s, k)
 	for _, ev := range events {
 		if _, err := s.AppendEvent(ev); err != nil {

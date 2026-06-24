@@ -10,14 +10,14 @@ import (
 
 // isProposal reports whether an event is a proposed operation the reconciler should try to apply.
 // The event log carries BOTH observations and proposals; only proposals (by the "*.proposed" type
-// convention) become KernelOps. Observations are consumed without a decision. A "*.proposed" event that
+// convention) become StateOps. Observations are consumed without a decision. A "*.proposed" event that
 // carries no decodable writes is a MALFORMED proposal and is still Rejected by the kernel (not skipped).
 func isProposal(ev contract.Event) bool { return strings.HasSuffix(ev.Type, ".proposed") }
 
 type Reconciler struct {
-	store  *state.Store
-	kernel *state.Kernel
-	cursor int64
+	store        *state.Store
+	materializer *state.Materializer
+	cursor       int64
 }
 
 // NewReconciler seeds its cursor from the durable decision log (Store.MaxDecidedSeq), so a process
@@ -26,11 +26,11 @@ type Reconciler struct {
 //
 // The liveness-escalation counter (Invariant #10) is NOT kept in memory either — it is derived per event
 // from the durable log (Store.DeferralCount), so escalation survives restart exactly as the cursor does.
-func NewReconciler(s *state.Store, k *state.Kernel) *Reconciler {
-	return &Reconciler{store: s, kernel: k, cursor: s.MaxDecidedSeq()}
+func NewReconciler(s *state.Store, k *state.Materializer) *Reconciler {
+	return &Reconciler{store: s, materializer: k, cursor: s.MaxDecidedSeq()}
 }
 
-// opFromEvent builds the KernelOp from a TRUSTED event. Actor and read-set come from the event envelope
+// opFromEvent builds the StateOp from a TRUSTED event. Actor and read-set come from the event envelope
 // which the admission path stamped from trusted sources (registry binding + the dispatched scoped view),
 // NEVER from callback-controlled payload (trust-boundary fix, Invariants #13/#15).
 //
@@ -38,7 +38,7 @@ func NewReconciler(s *state.Store, k *state.Kernel) *Reconciler {
 // PANICS after the AppendEvent->PendingEvents JSON round-trip (Payload["writes"] decodes to []any, not the
 // typed slice). We re-marshal+unmarshal the payload's "writes" into typed ResourceWrite — round-trip-safe
 // and behaviorally identical for the typed fixtures.
-func opFromEvent(ev contract.Event) contract.KernelOp {
+func opFromEvent(ev contract.Event) contract.StateOp {
 	var writes []contract.ResourceWrite
 	if raw, ok := ev.Payload["writes"]; ok {
 		b, _ := json.Marshal(raw)
@@ -46,7 +46,7 @@ func opFromEvent(ev contract.Event) contract.KernelOp {
 			writes = nil // malformed payload -> no writes -> kernel rejects it (never a phantom Accepted no-op, #3)
 		}
 	}
-	return contract.KernelOp{OpID: ev.ID, Actor: ev.Actor, Writes: writes, ReadSet: ev.BasedOn, IngestSeq: ev.IngestSeq, CorrelationID: ev.CorrelationID}
+	return contract.StateOp{OpID: ev.ID, Actor: ev.Actor, Writes: writes, ReadSet: ev.BasedOn, IngestSeq: ev.IngestSeq, CorrelationID: ev.CorrelationID}
 }
 
 func (r *Reconciler) RunOnce(modes contract.Modes) []contract.Decision {
@@ -75,7 +75,7 @@ func (r *Reconciler) RunOnce(modes contract.Modes) []contract.Decision {
 		if call.Conflict == contract.ConflictRebase && ev.CorrelationID != "" && r.store.DeferralCount(ev.CorrelationID) >= 2 {
 			call.Conflict = contract.ConflictDeferToHuman
 		}
-		d := r.kernel.Apply(opFromEvent(ev), call) // kernel is the serializer, not us (Invariant #2)
+		d := r.materializer.Apply(opFromEvent(ev), call) // kernel is the serializer, not us (Invariant #2)
 		out = append(out, d)
 		r.cursor = ev.IngestSeq
 	}

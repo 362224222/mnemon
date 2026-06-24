@@ -21,27 +21,27 @@ func p1Rules() state.AuthorityRules {
 func writeCASModes() contract.Modes {
 	return contract.Modes{Conflict: contract.ConflictRebase, Isolation: contract.IsolationWriteCAS, Authz: contract.AuthzStrict}
 }
-func newStoreKernel(t *testing.T) (*state.Store, *state.Kernel) {
+func newStoreKernel(t *testing.T) (*state.Store, *state.Materializer) {
 	t.Helper()
 	s, err := state.OpenStore(":memory:")
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	t.Cleanup(func() { s.Close() })
-	k := state.NewKernel(s, state.SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}, "goal": {"statement"}}), p1Rules())
+	k := state.NewMaterializer(s, state.SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}, "goal": {"statement"}}), p1Rules())
 	return s, k
 }
-func createP(t *testing.T, k *state.Kernel, ref contract.ResourceRef, fields map[string]any) {
+func createP(t *testing.T, k *state.Materializer, ref contract.ResourceRef, fields map[string]any) {
 	t.Helper()
-	d := k.Apply(contract.KernelOp{OpID: "seed_" + string(ref.ID), Actor: "user",
+	d := k.Apply(contract.StateOp{OpID: "seed_" + string(ref.ID), Actor: "user",
 		Writes: []contract.ResourceWrite{{Ref: ref, Kind: contract.OpCreate, Fields: fields}}}, writeCASModes())
 	if d.Status != contract.Accepted {
 		t.Fatalf("create %s: %s", ref.ID, d.Reason)
 	}
 }
-func updateP(t *testing.T, k *state.Kernel, ref contract.ResourceRef, basedOn contract.Version, fields map[string]any) {
+func updateP(t *testing.T, k *state.Materializer, ref contract.ResourceRef, basedOn contract.Version, fields map[string]any) {
 	t.Helper()
-	d := k.Apply(contract.KernelOp{OpID: "upd_" + string(ref.ID), Actor: "user",
+	d := k.Apply(contract.StateOp{OpID: "upd_" + string(ref.ID), Actor: "user",
 		Writes: []contract.ResourceWrite{{Ref: ref, Kind: contract.OpUpdate, BasedOn: basedOn, Fields: fields}}}, writeCASModes())
 	if d.Status != contract.Accepted {
 		t.Fatalf("update %s: %s", ref.ID, d.Reason)
@@ -63,20 +63,20 @@ func newStoreWith(t *testing.T) *state.Store {
 // accept applies one accepted update against an existing state.
 func accept(t *testing.T, s *state.Store, ref contract.ResourceRef, basedOn contract.Version, fields map[string]any) {
 	t.Helper()
-	k := state.NewKernel(s, state.SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}, "goal": {"statement"}}), p1Rules())
+	k := state.NewMaterializer(s, state.SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}, "goal": {"statement"}}), p1Rules())
 	updateP(t, k, ref, basedOn, fields)
 }
 
 // deferOneFor produces exactly one Deferred decision for the given actor (a stale CAS under rebase mode).
-func deferOneFor(t *testing.T, k *state.Kernel, actor contract.ActorID) {
+func deferOneFor(t *testing.T, k *state.Materializer, actor contract.ActorID) {
 	t.Helper()
 	ref := contract.ResourceRef{Kind: "memory", ID: contract.ResourceID("d_" + string(actor))}
-	c := k.Apply(contract.KernelOp{OpID: "dseed", Actor: actor,
+	c := k.Apply(contract.StateOp{OpID: "dseed", Actor: actor,
 		Writes: []contract.ResourceWrite{{Ref: ref, Kind: contract.OpCreate, Fields: map[string]any{"content": "x"}}}}, writeCASModes())
 	if c.Status != contract.Accepted {
 		t.Fatalf("defer seed create: %s", c.Reason)
 	}
-	d := k.Apply(contract.KernelOp{OpID: "dstale", Actor: actor,
+	d := k.Apply(contract.StateOp{OpID: "dstale", Actor: actor,
 		Writes: []contract.ResourceWrite{{Ref: ref, Kind: contract.OpUpdate, BasedOn: 99, Fields: map[string]any{"content": "y"}}}}, writeCASModes())
 	if d.Status != contract.Deferred {
 		t.Fatalf("expected deferred, got %s/%s", d.Status, d.Reason)

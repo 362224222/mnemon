@@ -8,21 +8,21 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 )
 
-type Kernel struct {
+type Materializer struct {
 	store  *Store
 	schema SchemaGuard
 	rules  AuthorityRules
 }
 
-func NewKernel(s *Store, g SchemaGuard, r AuthorityRules) *Kernel {
-	return &Kernel{store: s, schema: g, rules: r}
+func NewMaterializer(s *Store, g SchemaGuard, r AuthorityRules) *Materializer {
+	return &Materializer{store: s, schema: g, rules: r}
 }
-func (k *Kernel) Store() *Store { return k.store }
+func (k *Materializer) Store() *Store { return k.store }
 
 // Apply is the ONLY canonical writer (Invariant #2). check+write are one atomic txn (Invariant #3);
 // multi-resource is all-or-nothing (Invariant #5). It persists exactly one terminal decision (Invariant #7):
 // the accept is written INSIDE the writes txn (crash-safe); non-accepts are written in their own txn.
-func (k *Kernel) Apply(op contract.KernelOp, m contract.Modes) contract.Decision {
+func (k *Materializer) Apply(op contract.StateOp, m contract.Modes) contract.Decision {
 	d := contract.Decision{DecisionID: "dec_" + uuid.NewString(), OpID: op.OpID, Actor: op.Actor, IngestSeq: op.IngestSeq, CorrelationID: op.CorrelationID}
 	var newVers []contract.ResourceVersion
 	var newResources []contract.ResourceSnapshot
