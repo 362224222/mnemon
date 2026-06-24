@@ -88,7 +88,7 @@ run_host() {
 		out="$("$MH" control render --addr "$addr" --principal "$principal" --token-file "$tok" --intent context.packet)"
 		case "$out" in *"E2E render context $host"*) ;; *) echo "render context missing progress: $out"; exit 1 ;; esac
 
-		# setup no-clobber: hand-edit the static render hook, rerun setup, assert the edit is preserved.
+		# setup no-clobber: hand-edit the generic lifecycle hook, rerun setup, assert the edit is preserved.
 		local hook="$configdir/hooks/mnemon-r1/prime.sh"
 		printf '# E2E USER EDIT\n\n%s' "$(cat "$hook")" >"$hook.tmp" && mv "$hook.tmp" "$hook"
 		"$MH" setup --host "$host" --principal "$principal" --control-url "$addr" >/dev/null

@@ -16,7 +16,7 @@ type corePaths struct {
 	mnemonDir string
 }
 
-// projectorCore is the small host-io core shared by the R1 static host shim.
+// projectorCore is the small host-io core shared by the R1 host integration.
 type projectorCore struct {
 	host        string
 	projectRoot string

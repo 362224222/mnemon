@@ -54,7 +54,7 @@ func (c projectorCore) beginManaged(loopName string) {
 	}
 }
 
-// projectManagedBytes writes already-rendered static shim content under the no-clobber policy.
+// projectManagedBytes writes already-rendered managed host content under the no-clobber policy.
 func (c projectorCore) projectManagedBytes(desired []byte, dstDisplay string, mode os.FileMode) error {
 	dst := c.resolve(dstDisplay)
 	if classifyManaged(dst, desired, c.managed.prior[dstDisplay]) == classConflict {
@@ -73,7 +73,7 @@ func (c projectorCore) projectManagedBytes(desired []byte, dstDisplay string, mo
 	return nil
 }
 
-// removeManagedTree removes a Mnemon-owned static shim directory safely on uninstall: each recorded
+// removeManagedTree removes a Mnemon-owned managed host directory safely on uninstall: each recorded
 // managed file is removed only if its on-disk hash still matches what we wrote, and a user-edited one
 // is preserved + reported. The directory itself is removed only once empty, so a preserved edit keeps
 // its directory. Call beginManaged(loop) first to load the recorded hashes.
@@ -122,7 +122,7 @@ func (c projectorCore) removeManagedTree(dirDisplay string) error {
 	return nil
 }
 
-// Report is the outcome of a host shim install/uninstall: the managed files preserved because the
+// Report is the outcome of a host integration install/uninstall: the managed files preserved because the
 // user edited them.
 type Report struct {
 	Conflicts []string
@@ -136,7 +136,7 @@ const (
 	classConflict                     // preserve: the user edited a managed file, or a pre-existing unknown file
 )
 
-// managedMarkerVersion stamps the ownership-hash scheme so a future host shim can detect an older
+// managedMarkerVersion stamps the ownership-hash scheme so a future host integration can detect an older
 // marker layout and re-adopt rather than mis-preserve.
 const managedMarkerVersion = 1
 

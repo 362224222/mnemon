@@ -131,6 +131,9 @@ func TestRenderObserveSkill(t *testing.T) {
 	for _, want := range []string{
 		"# mnemon-observe",
 		"When to record",                      // judgment (hand-written)
+		"How to read governed context",        // read path (generic)
+		"mnemon-harness control pull",         // scoped read shape
+		"mnemon-harness control render",       // rendered context shape
 		"assignment.write_candidate.observed", // embedded mechanism (catalog-rendered)
 		"widget.write_candidate.observed",     // external mechanism (catalog-rendered)
 		"mnemon-harness loop schema --type",   // discovery pointer, not hardcoded fields

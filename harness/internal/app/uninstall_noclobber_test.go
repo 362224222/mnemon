@@ -55,7 +55,7 @@ func TestSetupUninstallKeepsSharedShimUntilLastBinding(t *testing.T) {
 		t.Fatalf("uninstall codex: %v", err)
 	}
 	if _, err := os.Stat(hookDir); err != nil {
-		t.Fatalf("shared shim must remain while a sibling binding exists: %v", err)
+		t.Fatalf("shared hook integration must remain while a sibling binding exists: %v", err)
 	}
 	if err := h.SetupUninstall(context.Background(), &out, &out, human); err != nil {
 		t.Fatalf("uninstall human: %v", err)

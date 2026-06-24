@@ -6,26 +6,22 @@ import (
 	"strings"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/assets"
-	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation"
 )
 
 type ThinHookOptions struct {
-	Host         string
-	Timing       string
-	RenderIntent string
+	Host   string
+	Timing string
 }
 
-// RenderThinHook renders the R1 static hook shim. It contains only mechanics for reading host input,
-// loading Local Mnemon credentials, calling render, adapting the host dialect, and safe fallback.
+// RenderThinHook renders the generic lifecycle hook. The hook is deliberately business-free: it only
+// reads host input, locates the project-local managed guide, emits the generic lifecycle reminder for
+// the timing, adapts to the host dialect, and falls back safely.
 func RenderThinHook(fsys fs.FS, opts ThinHookOptions) (string, error) {
 	if !markerNamePattern.MatchString(opts.Host) {
 		return "", fmt.Errorf("invalid host name %q", opts.Host)
 	}
 	if !isHookTiming(opts.Timing) {
 		return "", fmt.Errorf("unknown hook timing %q (closed set: %s)", opts.Timing, strings.Join(hookTimings, "|"))
-	}
-	if !isRenderIntent(opts.RenderIntent) {
-		return "", fmt.Errorf("unknown render intent %q", opts.RenderIntent)
 	}
 	rawHost, err := fs.ReadFile(fsys, "hosts/"+opts.Host+"/host.json")
 	if err != nil {
@@ -58,51 +54,20 @@ func RenderThinHook(fsys fs.FS, opts ThinHookOptions) (string, error) {
 		`CONFIG_DIR="$(cd "${HOOK_DIR}/../.." && pwd)"`,
 		`PROJECT_ROOT="$(cd "${CONFIG_DIR}/.." && pwd)"`,
 		`LOCAL_ENV="${PROJECT_ROOT}/.mnemon/harness/local/env.sh"`,
+		`GUIDE_PATH="${PROJECT_ROOT}/.mnemon/harness/local/guide.md"`,
 		`if [[ -f "${LOCAL_ENV}" ]]; then`,
 		`  # shellcheck source=/dev/null`,
 		`  source "${LOCAL_ENV}"`,
 		`fi`,
 	)
-	add(
-		`HARNESS_BIN="${MNEMON_HARNESS_BIN:-mnemon-harness}"`,
-		`CONTROL_ADDR="${MNEMON_CONTROL_ADDR:-http://127.0.0.1:8787}"`,
-		`CONTROL_PRINCIPAL="${MNEMON_CONTROL_PRINCIPAL:-}"`,
-		`TOKEN_ARGS=()`,
-		`if [[ -n "${MNEMON_CONTROL_TOKEN_FILE:-}" ]]; then`,
-		`  TOKEN_PATH="${MNEMON_CONTROL_TOKEN_FILE}"`,
-		`  if [[ "${TOKEN_PATH}" != /* ]]; then`,
-		`    TOKEN_PATH="${PROJECT_ROOT}/${TOKEN_PATH}"`,
-		`  fi`,
-		`  TOKEN_ARGS=(--token-file "${TOKEN_PATH}")`,
-		`fi`,
-	)
-	add(
-		`FALLBACK_BODY="mnemon is temporarily unavailable; continue only with local context, or retry mnemon status."`,
-		`if command -v "${HARNESS_BIN}" >/dev/null 2>&1; then`,
-		`  if RENDER_BODY="$("${HARNESS_BIN}" control render \`,
-		`      --addr "${CONTROL_ADDR}" \`,
-		`      --principal "${CONTROL_PRINCIPAL}" \`,
-		`      ${TOKEN_ARGS[@]+"${TOKEN_ARGS[@]}"} \`,
-		`      --intent "`+opts.RenderIntent+`" \`,
-		`      --lifecycle "`+opts.Timing+`" \`,
-		`      --surface "hook" 2>/dev/null)"; then`,
-		`    if [[ -z "${RENDER_BODY}" ]]; then`,
-		`      exit 0`,
-		`    fi`,
-		`  else`,
-		`    RENDER_BODY="${FALLBACK_BODY}"`,
-		`  fi`,
-		`else`,
-		`  RENDER_BODY="${FALLBACK_BODY}"`,
-		`fi`,
-	)
+	add(hookBodyBlock(opts.Timing))
 	switch dialect {
 	case dialectPlain:
-		add(`printf '%s\n' "${RENDER_BODY}"`)
+		add(`printf '%s\n' "${HOOK_BODY}"`)
 	case dialectSystemMessageOnly:
 		add(jsonEscapeFunction)
 		add(
-			`SYSTEM_MESSAGE="$(json_escape "${RENDER_BODY}")"`,
+			`SYSTEM_MESSAGE="$(json_escape "${HOOK_BODY}")"`,
 			`cat <<JSON`,
 			`{`,
 			`  "systemMessage": "${SYSTEM_MESSAGE}"`,
@@ -112,7 +77,7 @@ func RenderThinHook(fsys fs.FS, opts ThinHookOptions) (string, error) {
 	case dialectCodexContinue:
 		add(jsonEscapeFunction)
 		add(
-			`SYSTEM_MESSAGE="$(json_escape "${RENDER_BODY}")"`,
+			`SYSTEM_MESSAGE="$(json_escape "${HOOK_BODY}")"`,
 			`cat <<JSON`,
 			`{`,
 			`  "continue": false,`,
@@ -124,7 +89,7 @@ func RenderThinHook(fsys fs.FS, opts ThinHookOptions) (string, error) {
 	case dialectClaudeDecision:
 		add(jsonEscapeFunction)
 		add(
-			`REASON="$(json_escape "${RENDER_BODY}")"`,
+			`REASON="$(json_escape "${HOOK_BODY}")"`,
 			`cat <<JSON`,
 			`{`,
 			`  "decision": "block",`,
@@ -139,14 +104,26 @@ func RenderThinHook(fsys fs.FS, opts ThinHookOptions) (string, error) {
 }
 
 func RenderStandardThinHook(host, timing string) (string, error) {
-	return RenderThinHook(assets.FS, ThinHookOptions{Host: host, Timing: timing, RenderIntent: presentation.IntentTeamworkEvents})
+	return RenderThinHook(assets.FS, ThinHookOptions{Host: host, Timing: timing})
 }
 
-func isRenderIntent(intent string) bool {
-	switch intent {
-	case presentation.IntentSkillBootstrap, presentation.IntentContextPacket, presentation.IntentProfileEvents, presentation.IntentTeamworkEvents, presentation.IntentPayloadContract:
-		return true
+func hookBodyBlock(timing string) string {
+	switch timing {
+	case "prime":
+		return strings.Join([]string{
+			`if [[ -f "${GUIDE_PATH}" ]]; then`,
+			`  HOOK_BODY="$(printf '%s\n\n' "[mnemon] Mnemon integration active. Follow the loaded GUIDE to decide when to read governed context or record durable state."; cat "${GUIDE_PATH}")"`,
+			`else`,
+			`  HOOK_BODY="[mnemon] Mnemon GUIDE is unavailable; continue only with local context, or retry mnemon setup."`,
+			`fi`,
+		}, "\n")
+	case "remind":
+		return `HOOK_BODY="[mnemon] Evaluate whether governed context should be read before responding."`
+	case "nudge":
+		return `HOOK_BODY="[mnemon] Evaluate whether this turn changed durable state that should be recorded."`
+	case "compact":
+		return `HOOK_BODY="[mnemon] Before compaction, preserve important durable continuity through mnemon if needed."`
 	default:
-		return false
+		return `HOOK_BODY="[mnemon] Evaluate whether governed context or durable state should be handled."`
 	}
 }

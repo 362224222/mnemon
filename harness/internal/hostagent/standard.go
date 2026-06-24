@@ -21,8 +21,9 @@ type StandardHostOptions struct {
 	Stderr      io.Writer
 }
 
-// InstallStandardHost installs the R1 static host integration. It writes only shim mechanics and host
-// registration, leaving governed content to render/pull.
+// InstallStandardHost installs the generic host integration. It writes only generic lifecycle hook
+// mechanics and host registration, leaving governed content to the managed guide and agent-invoked
+// read/observe actions.
 func InstallStandardHost(ctx context.Context, opts StandardHostOptions) (Report, error) {
 	_ = ctx
 	core, err := newStandardCore(opts)
@@ -58,11 +59,11 @@ func InstallStandardHost(ctx context.Context, opts StandardHostOptions) (Report,
 	if err := writeStandardHostManifest(core, ownership); err != nil {
 		return Report{}, err
 	}
-	core.printf("Installed Mnemon R1 shim for %s.\n", core.host)
+	core.printf("Installed Mnemon R1 host integration for %s.\n", core.host)
 	return Report{Conflicts: core.managed.conflicts}, nil
 }
 
-// UninstallStandardHost removes the R1 static host integration while preserving user-edited files.
+// UninstallStandardHost removes the R1 generic host integration while preserving user-edited files.
 func UninstallStandardHost(ctx context.Context, opts StandardHostOptions) (Report, error) {
 	_ = ctx
 	core, err := newStandardCore(opts)
@@ -79,7 +80,7 @@ func UninstallStandardHost(ctx context.Context, opts StandardHostOptions) (Repor
 	if err := core.removeHostManifestLoop(standardShimMarker); err != nil {
 		return Report{}, err
 	}
-	core.printf("Removed Mnemon R1 shim from %s.\n", core.paths.configDir)
+	core.printf("Removed Mnemon R1 host integration from %s.\n", core.paths.configDir)
 	return Report{Conflicts: core.managed.conflicts}, nil
 }
 
@@ -185,14 +186,14 @@ func writeStandardHostManifest(core projectorCore, ownership projectionOwnership
 	manifest.Loops[standardShimMarker] = hostManifestLoop{
 		LoopPath:     pathJoin(core.paths.configDir, "hooks", standardShimMarker),
 		StatePath:    pathJoin(core.paths.configDir, "hooks", standardShimMarker),
-		IntentPolicy: "render",
-		StatusPath:   renderAuditRelPathPlaceholder,
+		IntentPolicy: "generic-lifecycle",
+		StatusPath:   managedGuideRelPathPlaceholder,
 		Projection: map[string]any{
 			"path":     core.paths.configDir,
-			"surfaces": []string{"static render hooks"},
+			"surfaces": []string{"generic lifecycle hooks"},
 		},
 		Reality: map[string]any{
-			"surfaces": []string{"render presentation"},
+			"surfaces": []string{"managed guide", "generic observe skill"},
 		},
 		Reconcile: map[string]any{
 			"actions": []string{"install", "uninstall"},
@@ -211,4 +212,4 @@ func writeStandardHostManifest(core projectorCore, ownership projectionOwnership
 	return core.writeJSON(core.hostManifestPath(), manifest, 0o644)
 }
 
-const renderAuditRelPathPlaceholder = ".mnemon/harness/local/render-audit.jsonl"
+const managedGuideRelPathPlaceholder = ".mnemon/harness/local/guide.md"

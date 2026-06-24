@@ -120,6 +120,26 @@ never write a resource directly, and a denied observation is a signal, not a fai
 - If you are unsure a fact is durable, it probably is not. Skip it.
 `
 
+const observeSkillRead = `## How to read governed context
+
+Use the current binding environment when it is available:
+
+    . .mnemon/harness/local/env.sh
+
+Then read the scoped view or a rendered context packet:
+
+    mnemon-harness control pull \
+      --addr "$MNEMON_CONTROL_ADDR" \
+      --principal "$MNEMON_CONTROL_PRINCIPAL" \
+      --token-file "$MNEMON_CONTROL_TOKEN_FILE"
+
+    mnemon-harness control render \
+      --addr "$MNEMON_CONTROL_ADDR" \
+      --principal "$MNEMON_CONTROL_PRINCIPAL" \
+      --token-file "$MNEMON_CONTROL_TOKEN_FILE" \
+      --intent context.packet
+`
+
 // observeSkillSubmit is the static submit/discovery footer (mechanism that does not vary by kind).
 const observeSkillSubmit = `## How to submit
 
@@ -147,6 +167,8 @@ func (h *Harness) RenderObserveSkill() (string, error) {
 	}
 	var b strings.Builder
 	b.WriteString(observeSkillJudgment)
+	b.WriteString("\n")
+	b.WriteString(observeSkillRead)
 	b.WriteString("\n## What you can record (generated from this project's catalog)\n\n")
 	b.WriteString("| kind | observe this event type | source |\n")
 	b.WriteString("|------|-------------------------|--------|\n")

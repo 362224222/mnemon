@@ -7,11 +7,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
+	"github.com/mnemon-dev/mnemon/harness/internal/assets"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/hostagent"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
@@ -23,16 +25,15 @@ import (
 // AND wire the channel (binding entry + optional token + runtime env), so a host agent reaches the
 // governed control plane through one access.
 type SetupOptions struct {
-	Host           string   // host runtime id, e.g. "codex"
-	Loops          []string // event packages to enable, e.g. ["assignment"] or external packages
-	ControlURL     string   // channel endpoint, e.g. "http://127.0.0.1:8787"
-	Principal      string   // authenticated principal, e.g. "codex@project"
-	ActorKind      string   // "host-agent" (default) or "control-agent"
-	UseToken       bool     // generate + reference a bearer token file (vs trusted-header auth)
-	TokenExplicit  bool     // true when the caller explicitly set UseToken
-	ProjectRoot    string   // host projection working dir (defaults to the facade root)
-	DryRun         bool     // print all projection + channel changes without writing
-	ThinRenderShim bool     // install R1 static render hooks on the setup path
+	Host          string   // host runtime id, e.g. "codex"
+	Loops         []string // event packages to enable, e.g. ["assignment"] or external packages
+	ControlURL    string   // channel endpoint, e.g. "http://127.0.0.1:8787"
+	Principal     string   // authenticated principal, e.g. "codex@project"
+	ActorKind     string   // "host-agent" (default) or "control-agent"
+	UseToken      bool     // generate + reference a bearer token file (vs trusted-header auth)
+	TokenExplicit bool     // true when the caller explicitly set UseToken
+	ProjectRoot   string   // host projection working dir (defaults to the facade root)
+	DryRun        bool     // print all projection + channel changes without writing
 }
 
 // SetupResult records the channel artifact paths setup wrote (or would write, on dry-run).
@@ -41,6 +42,8 @@ type SetupResult struct {
 	TokenFile   string
 	EnvFile     string
 	ConfigFile  string
+	GuideFile   string
+	SkillFile   string
 	Changes     []string
 }
 
@@ -57,7 +60,7 @@ func sanitizePrincipal(p string) string {
 }
 
 // validateProductLoops fail-closes setup to known event packages. R1 setup always installs a
-// standard host shim; loops only widen the channel/config event scope and no longer imply host
+// standard host integration; loops only widen the channel/config event scope and no longer imply host
 // asset view.
 func validateProductLoops(host string, loops []string, projectRoot string) error {
 	available := map[string]bool{}
@@ -111,7 +114,7 @@ func (h *Harness) Setup(ctx context.Context, out, errw io.Writer, opts SetupOpti
 		Stdout:      io.Discard,
 		Stderr:      errw,
 	}); err != nil {
-		return SetupResult{}, fmt.Errorf("setup: install static host shim: %w", err)
+		return SetupResult{}, fmt.Errorf("setup: install host integration: %w", err)
 	}
 
 	// 1. Channel artifacts.
@@ -120,6 +123,8 @@ func (h *Harness) Setup(ctx context.Context, out, errw io.Writer, opts SetupOpti
 	bindingFile := filepath.Join(base, "bindings.json")
 	envFile := filepath.Join(localBase(projectRoot), "env.sh")
 	configFile := filepath.Join(localBase(projectRoot), "config.json")
+	guideFile := filepath.Join(localBase(projectRoot), "guide.md")
+	skillFile := hostObserveSkillPath(projectRoot, opts.Host)
 	compatEnvFile := filepath.Join(base, "env.sh")
 	tokenRel := ""
 	tokenFile := ""
@@ -129,13 +134,15 @@ func (h *Harness) Setup(ctx context.Context, out, errw io.Writer, opts SetupOpti
 	}
 
 	binding := h.channelBinding(opts)
-	res := SetupResult{BindingFile: bindingFile, TokenFile: tokenFile, EnvFile: envFile, ConfigFile: configFile}
+	res := SetupResult{BindingFile: bindingFile, TokenFile: tokenFile, EnvFile: envFile, ConfigFile: configFile, GuideFile: guideFile, SkillFile: skillFile}
 
 	if opts.DryRun {
 		res.Changes = append(res.Changes,
 			fmt.Sprintf("would upsert channel binding for %s in %s", opts.Principal, bindingFile),
 			fmt.Sprintf("would write Local Mnemon config %s", configFile),
 			fmt.Sprintf("would write Local Mnemon env %s", envFile),
+			fmt.Sprintf("would write Local Mnemon GUIDE %s", guideFile),
+			fmt.Sprintf("would write generic observe skill %s", skillFile),
 			fmt.Sprintf("would write compatibility env %s", compatEnvFile))
 		if opts.UseToken {
 			res.Changes = append(res.Changes, fmt.Sprintf("would write bearer token file %s", tokenFile))
@@ -161,6 +168,14 @@ func (h *Harness) Setup(ctx context.Context, out, errw io.Writer, opts SetupOpti
 		return res, err
 	}
 	res.Changes = append(res.Changes, "wrote Local Mnemon config "+configFile)
+	if err := writeManagedGuide(guideFile); err != nil {
+		return res, err
+	}
+	res.Changes = append(res.Changes, "wrote Local Mnemon GUIDE "+guideFile)
+	if err := writeHostObserveSkill(projectRoot, opts.Host); err != nil {
+		return res, err
+	}
+	res.Changes = append(res.Changes, "wrote generic observe skill "+skillFile)
 	if err := writeLocalEnv(envFile, opts, tokenRel, effectiveLoops); err != nil {
 		return res, err
 	}
@@ -187,7 +202,6 @@ func (h *Harness) defaultSetupOptions(opts SetupOptions) SetupOptions {
 	if opts.ActorKind == "" {
 		opts.ActorKind = string(contract.KindHostAgent)
 	}
-	opts.ThinRenderShim = true
 	if !opts.TokenExplicit {
 		opts.UseToken = true
 	}
@@ -292,6 +306,40 @@ func writeLocalConfig(path string, opts SetupOptions, loops []string) error {
 	return os.WriteFile(path, append(data, '\n'), 0o644)
 }
 
+func writeManagedGuide(path string) error {
+	data, err := fs.ReadFile(assets.FS, "guides/mnemon-harness-guide.md")
+	if err != nil {
+		return fmt.Errorf("read managed guide asset: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o644)
+}
+
+func hostObserveSkillPath(projectRoot, host string) string {
+	switch host {
+	case "codex":
+		return filepath.Join(projectRoot, ".codex", "skills", "mnemon-observe", "SKILL.md")
+	case "claude-code":
+		return filepath.Join(projectRoot, ".claude", "skills", "mnemon-observe", "SKILL.md")
+	default:
+		return filepath.Join(projectRoot, "."+host, "skills", "mnemon-observe", "SKILL.md")
+	}
+}
+
+func writeHostObserveSkill(projectRoot, host string) error {
+	content, err := New(projectRoot).RenderObserveSkill()
+	if err != nil {
+		return err
+	}
+	path := hostObserveSkillPath(projectRoot, host)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(content), 0o644)
+}
+
 func writeLocalEnv(path string, opts SetupOptions, tokenRel string, loops []string) error {
 	var b strings.Builder
 	b.WriteString("# Managed by mnemon-harness setup - Local Mnemon environment.\n")
@@ -364,7 +412,7 @@ func (h *Harness) SetupStatus(projectRoot, principal string) ([]string, error) {
 	}, nil
 }
 
-// SetupUninstall reverses setup: it removes the standard host shim and the principal's channel
+// SetupUninstall reverses setup: it removes the standard host integration and the principal's channel
 // binding + token file while preserving sibling bindings.
 func (h *Harness) SetupUninstall(ctx context.Context, out, errw io.Writer, opts SetupOptions) error {
 	projectRoot := opts.ProjectRoot
@@ -395,10 +443,44 @@ func (h *Harness) SetupUninstall(ctx context.Context, out, errw io.Writer, opts 
 			Stdout:      io.Discard,
 			Stderr:      errw,
 		}); err != nil {
-			return fmt.Errorf("setup uninstall: remove static host shim: %w", err)
+			return fmt.Errorf("setup uninstall: remove host integration: %w", err)
+		}
+		if err := removeHostObserveSkill(projectRoot, opts.Host); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+func removeHostObserveSkill(projectRoot, host string) error {
+	path := hostObserveSkillPath(projectRoot, host)
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("setup uninstall: read generic observe skill: %w", err)
+	}
+	expected, err := New(projectRoot).RenderObserveSkill()
+	if err != nil {
+		return err
+	}
+	if string(data) != expected {
+		return nil
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("setup uninstall: remove generic observe skill: %w", err)
+	}
+	removeIfEmptyDir(filepath.Dir(path))
+	removeIfEmptyDir(filepath.Dir(filepath.Dir(path)))
+	return nil
+}
+
+func removeIfEmptyDir(path string) {
+	entries, err := os.ReadDir(path)
+	if err == nil && len(entries) == 0 {
+		_ = os.Remove(path)
+	}
 }
 
 func hasAnyBinding(projectRoot, bindingFile string) bool {

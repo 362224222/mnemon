@@ -95,7 +95,6 @@ func restoreSetupFlags(t *testing.T) {
 	oldActorKind := setupActorKind
 	oldUseToken := setupUseToken
 	oldDryRun := setupDryRun
-	oldThinRenderShim := setupThinRenderShim
 	t.Cleanup(func() {
 		setupRoot = oldRoot
 		setupProjectRoot = oldProjectRoot
@@ -106,7 +105,6 @@ func restoreSetupFlags(t *testing.T) {
 		setupActorKind = oldActorKind
 		setupUseToken = oldUseToken
 		setupDryRun = oldDryRun
-		setupThinRenderShim = oldThinRenderShim
 	})
 	setupRoot = "."
 	setupProjectRoot = ""
@@ -117,7 +115,6 @@ func restoreSetupFlags(t *testing.T) {
 	setupActorKind = "host-agent"
 	setupUseToken = false
 	setupDryRun = false
-	setupThinRenderShim = true
 }
 
 func cmdRepoRoot(t *testing.T) string {

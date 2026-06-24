@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestInstallStandardHostWritesStaticShim(t *testing.T) {
+func TestInstallStandardHostWritesGenericLifecycleHooks(t *testing.T) {
 	root := t.TempDir()
 	report, err := InstallStandardHost(context.Background(), StandardHostOptions{Host: "codex", ProjectRoot: root})
 	if err != nil {
@@ -18,14 +18,14 @@ func TestInstallStandardHostWritesStaticShim(t *testing.T) {
 		t.Fatalf("fresh install must not report conflicts: %+v", report)
 	}
 	hook := string(mustReadHostSurface(t, filepath.Join(root, ".codex", "hooks", "mnemon-r1", "prime.sh")))
-	for _, want := range []string{"control render", `--intent "teamwork.events"`, "continue only with local context"} {
+	for _, want := range []string{"Follow the loaded GUIDE", ".mnemon/harness/local/guide.md"} {
 		if !strings.Contains(hook, want) {
 			t.Fatalf("standard hook missing %q:\n%s", want, hook)
 		}
 	}
-	for _, blocked := range []string{"GUIDE.md", "MEMORY.md", "control observe", "control pull", "--mirror"} {
+	for _, blocked := range []string{"MEMORY.md", "control render", "control observe", "control pull", "teamwork", "assignment", "progress_digest", "agent_profile", "project_intent", "teamwork_signal", "--mirror"} {
 		if strings.Contains(hook, blocked) {
-			t.Fatalf("standard hook must not contain legacy dynamic path %q:\n%s", blocked, hook)
+			t.Fatalf("standard hook must not contain legacy/business path %q:\n%s", blocked, hook)
 		}
 	}
 	hooks := string(mustReadHostSurface(t, filepath.Join(root, ".codex", "hooks.json")))

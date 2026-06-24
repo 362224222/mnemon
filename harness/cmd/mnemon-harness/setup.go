@@ -8,36 +8,34 @@ import (
 )
 
 var (
-	setupRoot           string
-	setupProjectRoot    string
-	setupHost           string
-	setupLoops          []string
-	setupPrincipal      string
-	setupControlURL     string
-	setupActorKind      string
-	setupUseToken       bool
-	setupDryRun         bool
-	setupThinRenderShim bool
+	setupRoot        string
+	setupProjectRoot string
+	setupHost        string
+	setupLoops       []string
+	setupPrincipal   string
+	setupControlURL  string
+	setupActorKind   string
+	setupUseToken    bool
+	setupDryRun      bool
 )
 
-// setup is the everyday install front door: it installs the static R1 host shim and wires the Local
-// Mnemon channel artifacts a host agent uses. --loop enables optional event package scope; it does not
-// project host assets on the R1 path.
+// setup is the everyday install front door: it installs generic lifecycle hooks plus managed GUIDE and
+// skill surfaces, then wires the Local Mnemon channel artifacts a host agent uses. --loop enables
+// optional event package scope; it does not project host assets on the R1 path.
 var setupCmd = &cobra.Command{
 	Use:   "setup --host HOST [--loop LOOP ...]",
 	Short: "Install Agent Integration for a host",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		_, err := app.New(setupRoot).Setup(cmd.Context(), cmd.OutOrStdout(), cmd.ErrOrStderr(), app.SetupOptions{
-			Host:           setupHost,
-			Loops:          selectedSetupLoops(),
-			ControlURL:     setupControlURL,
-			Principal:      setupPrincipal,
-			ActorKind:      setupActorKind,
-			UseToken:       setupUseToken,
-			TokenExplicit:  cmd.Flags().Changed("token"),
-			ProjectRoot:    setupProjectRoot,
-			DryRun:         setupDryRun,
-			ThinRenderShim: setupThinRenderShim,
+			Host:          setupHost,
+			Loops:         selectedSetupLoops(),
+			ControlURL:    setupControlURL,
+			Principal:     setupPrincipal,
+			ActorKind:     setupActorKind,
+			UseToken:      setupUseToken,
+			TokenExplicit: cmd.Flags().Changed("token"),
+			ProjectRoot:   setupProjectRoot,
+			DryRun:        setupDryRun,
 		})
 		return err
 	},
@@ -83,8 +81,6 @@ func init() {
 	_ = setupCmd.Flags().MarkHidden("actor-kind")
 	setupCmd.Flags().BoolVar(&setupUseToken, "token", true, "generate a local access token")
 	setupCmd.Flags().BoolVar(&setupDryRun, "dry-run", false, "print changes without writing")
-	setupCmd.Flags().BoolVar(&setupThinRenderShim, "thin-render-shim", true, "install R1 static render hooks")
-	_ = setupCmd.Flags().MarkHidden("thin-render-shim")
 
 	setupCmd.AddCommand(setupStatusCmd, setupUninstallCmd)
 	setupCmd.GroupID = groupSpine

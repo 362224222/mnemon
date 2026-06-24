@@ -1,6 +1,6 @@
 # Mnemon Harness Hosts
 
-Host adapters describe the host mechanics needed by the R1 static render shim.
+Host adapters describe the host mechanics needed by the generic lifecycle hooks.
 
 ```text
 harness/internal/assets/hosts/
@@ -9,6 +9,7 @@ harness/internal/assets/hosts/
 ```
 
 Host-specific settings live here: lifecycle event names, stdin handling, and the
-output dialect each hook should use. Runtime content is rendered by the local
-service at hook time; hosts do not carry per-loop projected guides, mirrors, or
-skills on the R1 path.
+output dialect each hook should use. Hook scripts stay business-free; managed
+guide content and event-specific behavior live in Local Mnemon, not in host
+mechanics. Hosts do not carry per-loop projected guides or mirrors on the R1
+path.

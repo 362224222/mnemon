@@ -135,7 +135,7 @@ type r1CodexAgentReport struct {
 	ThreadID           string   `json:"thread_id,omitempty"`
 	HookCount          int      `json:"hook_count"`
 	HookTrustStatuses  []string `json:"hook_trust_statuses,omitempty"`
-	ManualHookRendered bool     `json:"manual_hook_rendered"`
+	ManualHookReminded bool     `json:"manual_hook_reminded"`
 	FinalAnswers       []string `json:"final_answers,omitempty"`
 }
 
@@ -295,7 +295,7 @@ func runR1CodexAcceptance(ctx context.Context, opts r1CodexAcceptanceOptions) (r
 	allHooks := true
 	allTrusted := true
 	for _, ar := range report.Agents {
-		if ar.HookCount < 4 || !ar.ManualHookRendered {
+		if ar.HookCount < 4 || !ar.ManualHookReminded {
 			allHooks = false
 		}
 		for _, st := range ar.HookTrustStatuses {
@@ -304,9 +304,9 @@ func runR1CodexAcceptance(ctx context.Context, opts r1CodexAcceptanceOptions) (r
 			}
 		}
 	}
-	addR1Assertion(&report, "preflight hooks discovered and render", allHooks, "each appserver lists R1 hooks and manual shim render succeeds")
+	addR1Assertion(&report, "preflight hooks discovered and remind", allHooks, "each appserver lists R1 hooks and manual lifecycle reminder succeeds")
 	hookTrustApproved := allTrusted || strings.Contains(opts.Command, "--dangerously-bypass-hook-trust")
-	hookTrustDetail := "trust status must be trusted or managed for hook-driven derived-event proof"
+	hookTrustDetail := "trust status must be trusted or managed for generic lifecycle hook proof"
 	if !allTrusted && hookTrustApproved {
 		hookTrustDetail = "project hooks list as untrusted, but this appserver invocation used --dangerously-bypass-hook-trust as explicit operator approval"
 	}
@@ -600,7 +600,7 @@ func initializeR1CodexAgent(agent *r1CodexAgent, turnTimeout time.Duration) (r1C
 	if agent.threadID == "" {
 		return r1CodexAgentReport{}, hooksRaw, fmt.Errorf("%s: thread/start returned no thread id", agent.principal)
 	}
-	rendered, err := runManualR1Hook(agent)
+	rendered, err := runManualR1HookReminder(agent)
 	if err != nil {
 		return r1CodexAgentReport{}, hooksRaw, err
 	}
@@ -611,7 +611,7 @@ func initializeR1CodexAgent(agent *r1CodexAgent, turnTimeout time.Duration) (r1C
 		ThreadID:           agent.threadID,
 		HookCount:          len(hooks),
 		HookTrustStatuses:  hookTrustStatuses(hooks),
-		ManualHookRendered: strings.Contains(rendered, "mnemon:profile") || strings.Contains(rendered, "systemMessage"),
+		ManualHookReminded: strings.Contains(rendered, "governed context") || strings.Contains(rendered, "systemMessage"),
 	}
 	_ = turnTimeout
 	return report, hooksRaw, nil
@@ -619,25 +619,27 @@ func initializeR1CodexAgent(agent *r1CodexAgent, turnTimeout time.Duration) (r1C
 
 func r1AcceptanceDeveloperInstructions(principal string) string {
 	return fmt.Sprintf(`You are %s in a Mnemon R1 real Codex cluster acceptance run.
-When a Mnemon derived-event presentation asks you to update profile, signal, assignment, or feedback, write governed events through Local Mnemon from the shell.
-Use this pattern from the workspace root:
+Follow the managed Mnemon GUIDE and the mnemon-observe skill. Read governed context when it is relevant, then write governed events through Local Mnemon from the shell.
+Use these patterns from the workspace root:
   . .mnemon/harness/local/env.sh
+  mnemon-harness control pull --addr "$MNEMON_CONTROL_ADDR" --principal "$MNEMON_CONTROL_PRINCIPAL" --token-file "$MNEMON_CONTROL_TOKEN_FILE"
+  mnemon-harness control render --addr "$MNEMON_CONTROL_ADDR" --principal "$MNEMON_CONTROL_PRINCIPAL" --token-file "$MNEMON_CONTROL_TOKEN_FILE" --intent teamwork.events --lifecycle remind --surface agent
   mnemon-harness control observe --addr "$MNEMON_CONTROL_ADDR" --principal "$MNEMON_CONTROL_PRINCIPAL" --token-file "$MNEMON_CONTROL_TOKEN_FILE" --type <event-type> --external-id <id> --payload '<json>'
 Do not edit files under .mnemon directly. Do not invent assignment_status or assignment_expired. Keep final answers brief and name the governed event you wrote.`, principal)
 }
 
-func runManualR1Hook(agent *r1CodexAgent) (string, error) {
+func runManualR1HookReminder(agent *r1CodexAgent) (string, error) {
 	hook := filepath.Join(agent.workspace, ".codex", "hooks", "mnemon-r1", "remind.sh")
 	cmd := exec.Command("bash", hook)
 	cmd.Dir = agent.workspace
 	cmd.Env = agent.env
-	cmd.Stdin = strings.NewReader(`{"prompt":"manual acceptance hook render"}`)
+	cmd.Stdin = strings.NewReader(`{"prompt":"manual acceptance hook reminder"}`)
 	var out bytes.Buffer
 	var errb bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &errb
 	if err := cmd.Run(); err != nil {
-		return out.String(), fmt.Errorf("%s: manual hook render: %w: %s", agent.principal, err, errb.String())
+		return out.String(), fmt.Errorf("%s: manual hook reminder: %w: %s", agent.principal, err, errb.String())
 	}
 	return out.String(), nil
 }
@@ -699,9 +701,9 @@ func runR1CodexLocalScenario(ctx context.Context, opts r1CodexAcceptanceOptions,
 	}
 	runID := strings.ToLower(time.Now().UTC().Format("150405"))
 	for i := range agents {
-		prompt := fmt.Sprintf(`Act on the Mnemon profile derived-event presentation for %s.
+		prompt := fmt.Sprintf(`Follow the managed Mnemon GUIDE for %s.
 Run a shell command that emits one agent_profile.write_candidate.observed event with external id profile-%02d-%s and payload fields:
-actor=%q, focus="R1 real Codex cluster acceptance", context_advantages=["real Codex appserver %02d","workspace-local R1 shim"], availability="available", ttl="30m", summary="Agent %02d is available for the R1 teamwork acceptance run".
+actor=%q, focus="R1 real Codex cluster acceptance", context_advantages=["real Codex appserver %02d","workspace-local Mnemon hooks"], availability="available", ttl="30m", summary="Agent %02d is available for the R1 teamwork acceptance run".
 After the command succeeds, answer "profile done".`, agents[i].principal, i+1, runID, agents[i].principal, i+1, i+1)
 		answer, err := runR1Turn(&agents[i], prompt, opts.TurnTimeout)
 		appendAgentAnswer(report, agents[i].principal, answer)
@@ -718,17 +720,17 @@ After the command succeeds, answer "profile done".`, agents[i].principal, i+1, r
 	starter := agents[starterIndex]
 	report.Starter = starter.principal
 	addR1Assertion(report, "A3 configurable/random starter", true, "starter="+starter.principal)
-	addR1Assertion(report, "A4 one human entrypoint", true, "runner starts one scenario; agents coordinate through Mnemon derived-event presentations")
+	addR1Assertion(report, "A4 one human entrypoint", true, "runner starts one scenario; agents coordinate through Mnemon GUIDE, explicit reads, and governed events")
 
 	signalID := "sig-r1-" + runID
 	assignID := "asg-r1-" + runID
 	prompt := fmt.Sprintf(`You are the starter for the R1 teamwork acceptance.
-First render your current Mnemon derived-event presentation with:
+Read current governed teamwork context with:
   . .mnemon/harness/local/env.sh
-  mnemon-harness control render --addr "$MNEMON_CONTROL_ADDR" --principal "$MNEMON_CONTROL_PRINCIPAL" --token-file "$MNEMON_CONTROL_TOKEN_FILE" --intent teamwork.events --lifecycle remind --surface hook
+  mnemon-harness control render --addr "$MNEMON_CONTROL_ADDR" --principal "$MNEMON_CONTROL_PRINCIPAL" --token-file "$MNEMON_CONTROL_TOKEN_FILE" --intent teamwork.events --lifecycle remind --surface agent
 Then emit a teamwork_signal.write_candidate.observed event with external id signal-%s and payload:
-{"signal_id":%q,"scope":"r1/real-codex-cluster/local","statement":"Need another real Codex appserver to complete an R1 acceptance work item.","why_teamwork":"five fresh agent profiles are available; delegation verifies the R1 derived-event loop","ttl":"30m","evidence":"real-codex-cluster acceptance"}
-Then choose one teammate other than yourself and emit assignment.write_candidate.observed with external id assignment-%s, assignment_id %q, signal_ref %q, assignee set to that teammate principal, scope "r1/real-codex-cluster/local", expected_work "Inspect the R1 derived-event loop and report whether the real appserver can act on the assignment.", expected_feedback "progress_digest with assignment_ref and evidence", ttl "20m", evidence "signal %s".
+{"signal_id":%q,"scope":"r1/real-codex-cluster/local","statement":"Need another real Codex appserver to complete an R1 acceptance work item.","why_teamwork":"five fresh agent profiles are available; delegation verifies the R1 teamwork event loop","ttl":"30m","evidence":"real-codex-cluster acceptance"}
+Then choose one teammate other than yourself and emit assignment.write_candidate.observed with external id assignment-%s, assignment_id %q, signal_ref %q, assignee set to that teammate principal, scope "r1/real-codex-cluster/local", expected_work "Inspect the R1 teamwork event loop and report whether the real appserver can act on the assignment.", expected_feedback "progress_digest with assignment_ref and evidence", ttl "20m", evidence "signal %s".
 After both commands succeed, answer with the assignee principal only.`, runID, signalID, runID, assignID, signalID, signalID)
 	answer, err := runR1Turn(&starter, prompt, opts.TurnTimeout)
 	appendAgentAnswer(report, starter.principal, answer)
@@ -757,9 +759,8 @@ After both commands succeed, answer with the assignee principal only.`, runID, s
 	}
 	addR1Assertion(report, "A7 assignee gets work derived event by scoped render", strings.Contains(workPresentation.Body, "[mnemon:work]") && strings.Contains(workPresentation.Body, assignID), workPresentation.Body)
 
-	prompt = fmt.Sprintf(`Act on your Mnemon work and feedback derived-event presentation.
-Render the derived-event presentation, do the assigned inspection in this workspace, then emit progress_digest.write_candidate.observed with external id progress-%s and payload:
-{"assignment_ref":%q,"scope":"r1/real-codex-cluster/local","summary":"Real Codex appserver acted on the R1 assignment and confirmed the rendered work derived event was usable.","evidence":"rendered work derived event plus real appserver turn","changed_context":"assignee completed the delegated acceptance work","suggested_next":"starter should integrate the result"}
+	prompt = fmt.Sprintf(`Read your governed work context, do the assigned inspection in this workspace, then emit progress_digest.write_candidate.observed with external id progress-%s and payload:
+{"assignment_ref":%q,"scope":"r1/real-codex-cluster/local","summary":"Real Codex appserver acted on the R1 assignment and confirmed the rendered work event was usable.","evidence":"rendered work event plus real appserver turn","changed_context":"assignee completed the delegated acceptance work","suggested_next":"starter should integrate the result"}
 After the command succeeds, answer "progress_digest done".`, runID, assignID)
 	answer, err = runR1Turn(&assigneeAgent, prompt, opts.TurnTimeout)
 	appendAgentAnswer(report, assigneeAgent.principal, answer)
@@ -891,7 +892,7 @@ Use the control observe command pattern from your developer instructions. Do not
 	}
 
 	targetPrompt := fmt.Sprintf(`This is the 6B Remote Workspace sync acceptance target turn.
-Render your current Mnemon derived-event presentation, then emit progress_digest.write_candidate.observed with external id sync-progress-%s and payload:
+Read your current governed Mnemon context, then emit progress_digest.write_candidate.observed with external id sync-progress-%s and payload:
 {"assignment_ref":%q,"scope":"r1/real-codex-cluster/sync","summary":"Target real Codex appserver received the assignment through Local Mnemon sync/import and acted from its own derived-event presentation.","evidence":"target local render work derived event after hub sync","changed_context":"6B target completed synced work","suggested_next":"source should integrate the synced progress"}
 After the command succeeds, answer "sync progress written".`, runID, assignmentID)
 	answer, err = runR1Turn(&target.r1CodexAgent, targetPrompt, opts.TurnTimeout)

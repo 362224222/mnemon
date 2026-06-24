@@ -11,7 +11,7 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/hostagent"
 )
 
-func TestSetupWiresChannelAndStaticShim(t *testing.T) {
+func TestSetupWiresChannelAndGenericLifecycleHook(t *testing.T) {
 	root := t.TempDir()
 	h := New(root)
 	var out, errw bytes.Buffer
@@ -25,12 +25,29 @@ func TestSetupWiresChannelAndStaticShim(t *testing.T) {
 	assertPublicSetupOutput(t, out.String())
 
 	primeHook := string(mustRead(t, filepath.Join(root, ".codex", "hooks", "mnemon-r1", "prime.sh")))
-	if !strings.Contains(primeHook, "control render") || strings.Contains(primeHook, "MEMORY.md") || strings.Contains(primeHook, "GUIDE.md") {
-		t.Fatalf("standard hook must be render-only:\n%s", primeHook)
+	if !strings.Contains(primeHook, "Follow the loaded GUIDE") || !strings.Contains(primeHook, ".mnemon/harness/local/guide.md") {
+		t.Fatalf("standard hook must load the managed guide:\n%s", primeHook)
+	}
+	for _, blocked := range []string{"control render", "teamwork", "assignment", "progress_digest", "agent_profile", "project_intent", "teamwork_signal", "MEMORY.md"} {
+		if strings.Contains(primeHook, blocked) {
+			t.Fatalf("standard hook must be business-free; found %q:\n%s", blocked, primeHook)
+		}
 	}
 	hooksJSON := string(mustRead(t, filepath.Join(root, ".codex", "hooks.json")))
 	if !strings.Contains(hooksJSON, "mnemon-r1") {
-		t.Fatalf("hooks.json must register standard shim:\n%s", hooksJSON)
+		t.Fatalf("hooks.json must register standard hook integration:\n%s", hooksJSON)
+	}
+	guide := string(mustRead(t, filepath.Join(root, ".mnemon", "harness", "local", "guide.md")))
+	for _, want := range []string{"# Mnemon Harness Guide", "teamwork_signal", "progress_digest", "agent_profile"} {
+		if !strings.Contains(guide, want) {
+			t.Fatalf("managed guide missing %q:\n%s", want, guide)
+		}
+	}
+	skill := string(mustRead(t, filepath.Join(root, ".codex", "skills", "mnemon-observe", "SKILL.md")))
+	for _, want := range []string{"# mnemon-observe", "assignment.write_candidate.observed", "progress_digest.write_candidate.observed"} {
+		if !strings.Contains(skill, want) {
+			t.Fatalf("generic observe skill missing %q:\n%s", want, skill)
+		}
 	}
 	if _, err := os.Stat(filepath.Join(root, ".codex", "skills", "memory-get", "SKILL.md")); !os.IsNotExist(err) {
 		t.Fatalf("setup must not project legacy per-loop skills; err=%v", err)
@@ -82,32 +99,41 @@ func TestSetupWiresChannelAndStaticShim(t *testing.T) {
 		t.Fatalf("uninstall must remove the managed token file; err=%v", err)
 	}
 	if _, err := os.Stat(filepath.Join(root, ".codex", "hooks", "mnemon-r1")); err != nil {
-		t.Fatalf("standard shim must remain while a sibling binding exists: %v", err)
+		t.Fatalf("standard hook integration must remain while a sibling binding exists: %v", err)
 	}
 	if err := h.SetupUninstall(context.Background(), &out, &errw, userOpts); err != nil {
 		t.Fatalf("uninstall human: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(root, ".codex", "hooks", "mnemon-r1")); !os.IsNotExist(err) {
-		t.Fatalf("last binding uninstall must remove standard shim; err=%v", err)
+		t.Fatalf("last binding uninstall must remove standard hook integration; err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".codex", "skills", "mnemon-observe", "SKILL.md")); !os.IsNotExist(err) {
+		t.Fatalf("last binding uninstall must remove generic observe skill if unmodified; err=%v", err)
 	}
 }
 
-func TestSetupInstallsStaticShimWithoutLoop(t *testing.T) {
+func TestSetupInstallsGenericLifecycleHookWithoutLoop(t *testing.T) {
 	root := t.TempDir()
 	var out, errw bytes.Buffer
 	res, err := New(root).Setup(context.Background(), &out, &errw, SetupOptions{
 		Host: "codex", ControlURL: "http://127.0.0.1:8787", Principal: "codex@project", UseToken: true,
 	})
 	if err != nil {
-		t.Fatalf("setup static shim: %v\nstderr=%s", err, errw.String())
+		t.Fatalf("setup generic lifecycle hook: %v\nstderr=%s", err, errw.String())
 	}
 	assertPublicSetupOutput(t, out.String())
-	if !strings.Contains(string(mustRead(t, filepath.Join(root, ".codex", "hooks", "mnemon-r1", "prime.sh"))), "control render") {
-		t.Fatal("setup without --loop must still install the static render hook")
+	if !strings.Contains(string(mustRead(t, filepath.Join(root, ".codex", "hooks", "mnemon-r1", "prime.sh"))), "Follow the loaded GUIDE") {
+		t.Fatal("setup without --loop must still install the generic lifecycle hook")
+	}
+	if !strings.Contains(string(mustRead(t, res.GuideFile)), "# Mnemon Harness Guide") {
+		t.Fatal("setup without --loop must install the managed guide")
+	}
+	if !strings.Contains(string(mustRead(t, res.SkillFile)), "# mnemon-observe") {
+		t.Fatal("setup without --loop must install the generic observe skill")
 	}
 	configJSON := string(mustRead(t, res.ConfigFile))
 	if strings.Contains(configJSON, `"hosts"`) || strings.Contains(configJSON, `"mirror_mode"`) {
-		t.Fatalf("static setup config must not record projection state:\n%s", configJSON)
+		t.Fatalf("setup config must not record projection state:\n%s", configJSON)
 	}
 }
 

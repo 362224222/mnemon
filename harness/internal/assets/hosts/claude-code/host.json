@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "name": "claude-code",
-  "description": "Registers Mnemon R1 static render hooks in Claude Code.",
+  "description": "Registers Mnemon generic lifecycle hooks in Claude Code.",
   "surfaces": {
     "projection": [
       ".claude/hooks/mnemon-r1",

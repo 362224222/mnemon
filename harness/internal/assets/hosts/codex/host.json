@@ -2,7 +2,7 @@
   "schema_version": 2,
   "name": "codex",
   "display_name": "Codex",
-  "description": "Registers Mnemon R1 static render hooks in Codex.",
+  "description": "Registers Mnemon generic lifecycle hooks in Codex.",
   "surfaces": {
     "projection": [
       ".codex/hooks/mnemon-r1",
