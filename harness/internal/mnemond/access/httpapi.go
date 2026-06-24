@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/eventview"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation/view"
 )
 
 // principalHeader carries the AUTHENTICATED edge identity. The server trusts THIS, never the request body
@@ -259,29 +259,29 @@ func (c *Client) Status(_ contract.ActorID) (contract.ChannelStatus, error) {
 // PullEventView fetches the actor's scoped view from the server. The principal argument is ignored: the
 // subscription's actor is sent in the body and the server cross-checks it against the bound credential header,
 // so an edge cannot pull another actor's scope (D7/S9).
-func (c *Client) PullEventView(_ contract.ActorID, sub contract.Subscription) (eventview.EventView, error) {
+func (c *Client) PullEventView(_ contract.ActorID, sub contract.Subscription) (view.View, error) {
 	body, err := json.Marshal(sub)
 	if err != nil {
-		return eventview.EventView{}, err
+		return view.View{}, err
 	}
 	req, err := http.NewRequest(http.MethodPost, c.baseURL+"/event-view", bytes.NewReader(body))
 	if err != nil {
-		return eventview.EventView{}, err
+		return view.View{}, err
 	}
 	c.setAuth(req)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return eventview.EventView{}, err
+		return view.View{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
-		return eventview.EventView{}, fmt.Errorf("pull failed: %s: %s", resp.Status, string(b))
+		return view.View{}, fmt.Errorf("pull failed: %s: %s", resp.Status, string(b))
 	}
-	var proj eventview.EventView
+	var proj view.View
 	if err := json.NewDecoder(resp.Body).Decode(&proj); err != nil {
-		return eventview.EventView{}, err
+		return view.View{}, err
 	}
 	return proj, nil
 }

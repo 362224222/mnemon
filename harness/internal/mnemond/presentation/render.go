@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/eventview"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation/view"
 )
 
 type Status string
@@ -76,7 +76,7 @@ type Renderer struct {
 	AuditSink AuditSink
 }
 
-func (r Renderer) RenderPresentation(ctx context.Context, req Request, proj eventview.EventView) (Response, error) {
+func (r Renderer) RenderPresentation(ctx context.Context, req Request, proj view.View) (Response, error) {
 	now := time.Now().UTC()
 	if r.Now != nil {
 		now = r.Now().UTC()

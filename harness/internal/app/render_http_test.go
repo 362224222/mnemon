@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/eventview"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation/view"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
@@ -201,7 +201,7 @@ func postRender(t *testing.T, baseURL, token string, reqBody presentation.Reques
 	return out
 }
 
-func memoryEntryCount(content []eventview.ResourceContent) int {
+func memoryEntryCount(content []view.ResourceContent) int {
 	for _, rc := range content {
 		if rc.Ref.Kind != "memory" {
 			continue

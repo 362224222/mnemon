@@ -1,4 +1,4 @@
-package eventview
+package view
 
 import (
 	"testing"

@@ -14,12 +14,14 @@ import (
 // The human-readable invariant is "the core contains generic mnemond event mechanics, not
 // hostagent- or product-specific behavior."
 var corePackages = []string{
-	"contract", "mnemond/access", "kernel", "store", "eventview", "rule", "reconcile", "runtime",
+	"contract", "mnemond/access", "kernel", "store", "mnemond/presentation/view", "rule", "reconcile", "runtime",
 }
 
 // forbiddenImports are the outer rings the core must never depend on: mnemond policy,
-// hostagent integration, mnemond presentation,
+// hostagent integration, mnemond presentation rendering,
 // wiring/consumers (app, assembler, driver, ui), the codex adapter, and the cmd binaries.
+// mnemond/presentation/view is intentionally part of the core read model; the higher-level
+// presentation package remains outside the core.
 // Dependencies flow inward only.
 var forbiddenImports = []string{
 	"harness/internal/mnemond/policy",
@@ -94,6 +96,9 @@ func TestGuardLogicIsNotVacuous(t *testing.T) {
 	if !hit {
 		t.Fatal("import guard should flag a forbidden internal/app import")
 	}
+	if forbiddenImportPath("github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation/view", "harness/internal/mnemond/presentation") {
+		t.Fatal("presentation/view must be allowed as the core read model under the mnemond axis")
+	}
 }
 
 func packageFiles(t *testing.T, pkg string) (*token.FileSet, []*ast.File) {
@@ -127,13 +132,21 @@ func TestCoreImportsNoOuterRing(t *testing.T) {
 			for _, imp := range f.Imports {
 				path := strings.Trim(imp.Path.Value, `"`)
 				for _, forbidden := range forbiddenImports {
-					if strings.Contains(path, forbidden) {
+					if forbiddenImportPath(path, forbidden) {
 						t.Errorf("core package %q imports outer ring %q — the mnemond core must stay generic (deps flow inward only)", pkg, path)
 					}
 				}
 			}
 		}
 	}
+}
+
+func forbiddenImportPath(path, forbidden string) bool {
+	if forbidden == "harness/internal/mnemond/presentation" &&
+		strings.Contains(path, "harness/internal/mnemond/presentation/view") {
+		return false
+	}
+	return strings.Contains(path, forbidden)
 }
 
 // TestOuterRingImportBoundaries pins the R1 package topology around the hook/skill event pipeline.

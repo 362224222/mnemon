@@ -6,7 +6,7 @@ import (
 	"time"
 
 	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
-	"github.com/mnemon-dev/mnemon/harness/internal/eventview"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation/view"
 )
 
 const (
@@ -18,7 +18,7 @@ const (
 	DerivedEventAssignmentFeedbackNeeded = "assignment.feedback_needed"
 )
 
-func DeriveEventEnvelopes(req Request, proj eventview.EventView, now time.Time) []eventmodel.EventEnvelope {
+func DeriveEventEnvelopes(req Request, proj view.View, now time.Time) []eventmodel.EventEnvelope {
 	principal := string(req.Principal)
 	if principal == "" {
 		return nil
@@ -121,7 +121,7 @@ func DeriveEventEnvelopes(req Request, proj eventview.EventView, now time.Time) 
 	return events
 }
 
-func DeriveProfileEventEnvelopes(req Request, proj eventview.EventView) []eventmodel.EventEnvelope {
+func DeriveProfileEventEnvelopes(req Request, proj view.View) []eventmodel.EventEnvelope {
 	events := DeriveEventEnvelopes(req, proj, time.Time{})
 	var profile []eventmodel.EventEnvelope
 	for _, event := range events {

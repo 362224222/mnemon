@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/eventview"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation/view"
 )
 
 // ResolvedBinding carries the trusted write identity (Actor) and authorized emit type for a
@@ -34,7 +34,7 @@ func NewBridge(newID, now func() string) *Bridge { return &Bridge{newID: newID, 
 // "actor"/"based_on" into it (R1/R2). Only Payload (the write set) rides through proposer-controlled; the
 // kernel validates it. An empty/undecodable write set PASSES the bridge (the kernel rejects it as a
 // malformed/empty op, preserving the audit trail); only a DECODED, out-of-scope write is blocked here.
-func (br *Bridge) Stamp(b ResolvedBinding, dispatchedOn eventview.EventView, trigger contract.Event, intent contract.ProposedEvent) (contract.Event, error) {
+func (br *Bridge) Stamp(b ResolvedBinding, dispatchedOn view.View, trigger contract.Event, intent contract.ProposedEvent) (contract.Event, error) {
 	scope := make(map[contract.ResourceRef]bool, len(dispatchedOn.Resources))
 	refs := make([]contract.ResourceRef, 0, len(dispatchedOn.Resources))
 	for _, rv := range dispatchedOn.Resources {

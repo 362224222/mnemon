@@ -1,4 +1,4 @@
-package eventview
+package view
 
 import (
 	"crypto/sha256"
@@ -11,7 +11,7 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
 
-type EventView struct {
+type View struct {
 	Ref       string
 	Digest    string
 	Resources []contract.ResourceVersion
@@ -30,7 +30,7 @@ type ResourceContent struct {
 // Build materializes a read-only view over refs for forActor. The context digest folds, per resource in a
 // stable order, Kind:ID:Version AND the canonical field bytes (D8/S10) — so a content tamper that preserves
 // the version is still detectable (a digest covering only Kind:ID:Version would miss it).
-func Build(s *store.Store, refs []contract.ResourceRef, forActor contract.ActorID) EventView {
+func Build(s *store.Store, refs []contract.ResourceRef, forActor contract.ActorID) View {
 	type item struct {
 		rv     contract.ResourceVersion
 		fields map[string]any
@@ -56,13 +56,13 @@ func Build(s *store.Store, refs []contract.ResourceRef, forActor contract.ActorI
 	}
 	dig := hex.EncodeToString(h.Sum(nil))
 	fb, _ := s.DecisionsForActor(forActor)
-	return EventView{Ref: "proj_" + dig[:12], Digest: dig, Resources: rv, Content: content, Feedback: fb}
+	return View{Ref: "proj_" + dig[:12], Digest: dig, Resources: rv, Content: content, Feedback: fb}
 }
 
 // ScopedView builds the server-enforced, scoped event view for a subscription (S9): ONLY sub.Refs are
 // materialized, so an out-of-scope resource can never cross the wire. Identity (forActor) is the
 // subscription's actor — the server passes the AUTHENTICATED principal here, never a client-named scope.
 // (PrivacyTier is reserved for a future per-resource tier filter; today the ref set IS the scope.)
-func ScopedView(s *store.Store, sub contract.Subscription) EventView {
+func ScopedView(s *store.Store, sub contract.Subscription) View {
 	return Build(s, sub.Refs, sub.Actor)
 }

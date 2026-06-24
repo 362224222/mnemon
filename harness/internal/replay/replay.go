@@ -11,8 +11,8 @@ import (
 	"strings"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/eventview"
 	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation/view"
 	"github.com/mnemon-dev/mnemon/harness/internal/reconcile"
 	"github.com/mnemon-dev/mnemon/harness/internal/rule"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
@@ -144,7 +144,7 @@ func Shadow(events []contract.Event, subs map[contract.ActorID]contract.Subscrip
 			continue
 		}
 		// OBSERVED event: evaluate BOTH policies against the current (dispatch-time) scoped view.
-		view := eventview.ScopedView(s, subs[ev.Actor])
+		view := view.ScopedView(s, subs[ev.Actor])
 		in := rule.RuleInput{Event: ev, View: view}
 		ld, ldiag := live.Evaluate(in)
 		cd, cdiag := candidate.Evaluate(in)

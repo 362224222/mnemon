@@ -37,7 +37,6 @@ var packageMainAxisInventory = map[string]packageMainAxis{
 	"driver":     {owner: ownerMnemond, role: "mnemond tick driver", target: "mnemond/daemon"},
 	"event":      {owner: ownerEvent, role: "canonical event and envelope model", target: "event"},
 	"eventstore": {owner: ownerEvent, role: "event envelope append/read facade", target: "event/store"},
-	"eventview":  {owner: ownerMnemond, role: "hostagent-facing derived event read model", target: "mnemond/presentation"},
 	"hostagent":  {owner: ownerHostAgent, role: "hostagent setup and thin shims", target: "hostagent"},
 	"kernel":     {owner: ownerMnemond, role: "materialized event state applier", target: "mnemond/state"},
 	"mnemonhub":  {owner: ownerMnemonhub, role: "remote accepted event exchange server and exchange mechanics", target: "mnemonhub"},
@@ -50,7 +49,6 @@ var packageMainAxisInventory = map[string]packageMainAxis{
 }
 
 var demotedMainAxisPackages = map[string]bool{
-	"eventview": true,
 	"kernel":    true,
 	"reconcile": true,
 	"rule":      true,
@@ -61,12 +59,18 @@ var nestedMainAxisInventory = map[string]packageMainAxis{
 	"mnemond/access":       {owner: ownerMnemond, role: "hostagent, replica, and control access to mnemond", target: "mnemond/access"},
 	"mnemond/policy":       {owner: ownerMnemond, role: "event type schema, admission policy, risk, and default enablement", target: "mnemond/policy"},
 	"mnemond/presentation": {owner: ownerMnemond, role: "derived event presentation for hostagents", target: "mnemond/presentation"},
-	"mnemonhub/exchange":   {owner: ownerMnemonhub, role: "mnemonhub event exchange client, cursors, and local ledger acknowledgements", target: "mnemonhub/exchange"},
+	"mnemond/presentation/view": {
+		owner:  ownerMnemond,
+		role:   "scoped read model for derived event presentation",
+		target: "mnemond/presentation/view",
+	},
+	"mnemonhub/exchange": {owner: ownerMnemonhub, role: "mnemonhub event exchange client, cursors, and local ledger acknowledgements", target: "mnemonhub/exchange"},
 }
 
 var retiredTopLevelImplementationPackages = []string{
 	"capability",
 	"channel",
+	"eventview",
 	"hostsurface",
 	"render",
 	"remotesync",

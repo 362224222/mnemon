@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/eventview"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation/view"
 )
 
 func seqGen() func() string {
@@ -18,7 +18,7 @@ func newBridge() *Bridge      { return NewBridge(seqGen(), fixedNow()) }
 func TestStampUsesTrustedSourcesNotPayload(t *testing.T) {
 	br := newBridge()
 	b := ResolvedBinding{Actor: "agent", Emits: "memory.write.proposed"}
-	proj := eventview.EventView{Ref: "proj_abc", Digest: "abc",
+	proj := view.View{Ref: "proj_abc", Digest: "abc",
 		Resources: []contract.ResourceVersion{{Ref: contract.ResourceRef{Kind: "memory", ID: "m1"}, Version: 3}}}
 	trigger := contract.Event{ID: "ev-trigger", Type: "memory.observed", CorrelationID: "corr-1"}
 	// hostile intent tries to escalate identity / forge a read-set via payload; the write itself is in-scope:
@@ -54,7 +54,7 @@ func TestStampMintsCorrelationWhenTriggerEmpty(t *testing.T) {
 	br := newBridge()
 	b := ResolvedBinding{Actor: "agent", Emits: "memory.write.proposed"}
 	// empty-writes intent passes the bridge (the kernel rejects it later as a malformed/empty op):
-	ev, err := br.Stamp(b, eventview.EventView{}, contract.Event{ID: "t"}, contract.ProposedEvent{Type: "memory.write.proposed"})
+	ev, err := br.Stamp(b, view.View{}, contract.Event{ID: "t"}, contract.ProposedEvent{Type: "memory.write.proposed"})
 	if err != nil {
 		t.Fatalf("empty-writes intent must pass the bridge: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestStampMintsCorrelationWhenTriggerEmpty(t *testing.T) {
 func TestStampRejectsOutOfScopeWrite(t *testing.T) {
 	br := newBridge()
 	b := ResolvedBinding{Actor: "agent", Emits: "memory.write.proposed"}
-	proj := eventview.EventView{Resources: []contract.ResourceVersion{{Ref: contract.ResourceRef{Kind: "memory", ID: "m1"}, Version: 1}}} // scope = {m1}
+	proj := view.View{Resources: []contract.ResourceVersion{{Ref: contract.ResourceRef{Kind: "memory", ID: "m1"}, Version: 1}}} // scope = {m1}
 	intent := contract.ProposedEvent{Type: "memory.write.proposed", Payload: map[string]any{
 		"writes": []contract.ResourceWrite{{Ref: contract.ResourceRef{Kind: "memory", ID: "m2"}, Kind: contract.OpUpdate, BasedOn: 0}}}} // m2 NOT in scope
 	if _, err := br.Stamp(b, proj, contract.Event{ID: "t"}, intent); err == nil {

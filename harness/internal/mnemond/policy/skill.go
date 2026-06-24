@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/eventview"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation/view"
 	"github.com/mnemon-dev/mnemon/harness/internal/rule"
 )
 
@@ -132,7 +132,7 @@ func validSkillID(s string) bool {
 	return true
 }
 
-func skillResourceFromEventView(view eventview.EventView, ref contract.ResourceRef) (contract.Version, map[string]any) {
+func skillResourceFromEventView(view view.View, ref contract.ResourceRef) (contract.Version, map[string]any) {
 	return resourceFromEventView(view, ref)
 }
 

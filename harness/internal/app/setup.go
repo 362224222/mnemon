@@ -58,7 +58,7 @@ func sanitizePrincipal(p string) string {
 
 // validateProductLoops fail-closes setup to known capability packages. R1 setup always installs a
 // standard host shim; loops only widen the channel/config capability scope and no longer imply host
-// asset eventview.
+// asset view.
 func validateProductLoops(host string, loops []string, projectRoot string) error {
 	available := map[string]bool{}
 	var names []string

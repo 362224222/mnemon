@@ -234,7 +234,7 @@ func controlRender(reqBody presentation.Request) (presentation.Response, error) 
 }
 
 // coordinationFieldLine renders "Field: <kind>=<n>, …" over the default-enabled coordination kinds,
-// counting each kind's entries in the principal's pulled eventview.
+// counting each kind's entries in the principal's pulled view.
 func coordinationFieldLine(client *access.Client, principal contract.ActorID) string {
 	proj, err := client.PullEventView(principal, contract.Subscription{Actor: principal})
 	if err != nil {

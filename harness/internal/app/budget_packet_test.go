@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/eventview"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation/view"
 )
 
 func projItems(n int) []any {
@@ -23,9 +23,9 @@ func projItems(n int) []any {
 func TestBudgetShapeProjection(t *testing.T) {
 	catalog := policy.EmbeddedCatalog()
 	ref := contract.ResourceRef{Kind: "assignment", ID: "project"}
-	proj := eventview.EventView{
+	proj := view.View{
 		Digest: "full-scope-digest",
-		Content: []eventview.ResourceContent{
+		Content: []view.ResourceContent{
 			{Ref: ref, Version: 12, Fields: map[string]any{"items": projItems(12), "updated_by": "x"}},
 		},
 	}
@@ -57,7 +57,7 @@ func TestBudgetShapeProjection(t *testing.T) {
 // An uncatalogued kind passes through unchanged (no silent drop) even under a shrinking tier.
 func TestBudgetShapeProjectionUnknownKindPassthrough(t *testing.T) {
 	ref := contract.ResourceRef{Kind: "mystery", ID: "x"}
-	proj := eventview.EventView{Content: []eventview.ResourceContent{
+	proj := view.View{Content: []view.ResourceContent{
 		{Ref: ref, Version: 1, Fields: map[string]any{"items": projItems(20)}},
 	}}
 	out := budgetShapeEventView(proj, policy.EmbeddedCatalog(), contract.BudgetDigestOnly)

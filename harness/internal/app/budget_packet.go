@@ -2,8 +2,8 @@ package app
 
 import (
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/eventview"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation/view"
 )
 
 // budgetShapeEventView returns a copy of proj whose per-resource Content is shaped to the subscriber's
@@ -15,11 +15,11 @@ import (
 // budget bounds CONTEXT, not authority (the grant scope is the security boundary), and render output
 // reads from Content. The input proj is never mutated (a fresh Content slice + fresh shaped maps), so
 // the same projection can also be served unbudgeted elsewhere.
-func budgetShapeEventView(proj eventview.EventView, catalog map[string]policy.Capability, tier contract.BudgetTier) eventview.EventView {
+func budgetShapeEventView(proj view.View, catalog map[string]policy.Capability, tier contract.BudgetTier) view.View {
 	if resolved, err := contract.ResolveBudgetTier(tier); err != nil || resolved == contract.BudgetHot {
 		return proj // hot / full / unknown: no shaping, exact passthrough
 	}
-	shaped := make([]eventview.ResourceContent, len(proj.Content))
+	shaped := make([]view.ResourceContent, len(proj.Content))
 	for i, rc := range proj.Content {
 		shaped[i] = rc
 		cap, ok := catalog[string(rc.Ref.Kind)]

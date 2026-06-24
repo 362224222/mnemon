@@ -11,13 +11,13 @@ import (
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
-	"github.com/mnemon-dev/mnemon/harness/internal/eventview"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation/view"
 )
 
 func TestRenderPresentationDeterministicDigestAndAudit(t *testing.T) {
 	now := mustTime(t, "2026-06-24T10:00:00Z")
 	req := Request{Principal: "codex-a@project", Host: "codex", Lifecycle: "remind", RenderIntent: IntentTeamworkEvents}
-	proj := eventview.EventView{Ref: "proj_head", Digest: "proj_digest", Content: []eventview.ResourceContent{
+	proj := view.View{Ref: "proj_head", Digest: "proj_digest", Content: []view.ResourceContent{
 		content("agent_profile", "project", []any{map[string]any{"id": "p1", "actor": "codex-a@project", "freshness": "fresh", "summary": "A profile"}}),
 		content("teamwork_signal", "project", []any{map[string]any{"id": "sig1", "statement": "Need a render review"}}),
 	}}
@@ -49,7 +49,7 @@ func TestRenderPresentationDeterministicDigestAndAudit(t *testing.T) {
 func TestRenderPresentationScopeAndAssignmentState(t *testing.T) {
 	now := mustTime(t, "2026-06-24T10:00:00Z")
 	reqB := Request{Principal: "codex-b@project", Host: "codex", Lifecycle: "nudge", RenderIntent: IntentTeamworkEvents}
-	proj := eventview.EventView{Ref: "proj_assign", Digest: "digest_assign", Content: []eventview.ResourceContent{
+	proj := view.View{Ref: "proj_assign", Digest: "digest_assign", Content: []view.ResourceContent{
 		content("assignment", "project", []any{map[string]any{
 			"id": "asg1", "actor": "codex-a@project", "assignee": "codex-b@project",
 			"scope": "review render presentation", "expected_work": "review render presentation",
@@ -83,7 +83,7 @@ func TestRenderPresentationScopeAndAssignmentState(t *testing.T) {
 func TestDeriveEventEnvelopesSeparateEventModelFromPresentation(t *testing.T) {
 	now := mustTime(t, "2026-06-24T10:00:00Z")
 	reqB := Request{Principal: "codex-b@project", Host: "codex", Lifecycle: "nudge", RenderIntent: IntentTeamworkEvents}
-	proj := eventview.EventView{Ref: "proj_assign", Digest: "digest_assign", Content: []eventview.ResourceContent{
+	proj := view.View{Ref: "proj_assign", Digest: "digest_assign", Content: []view.ResourceContent{
 		content("assignment", "project", []any{map[string]any{
 			"id": "asg1", "actor": "codex-a@project", "assignee": "codex-b@project",
 			"scope": "review render presentation", "expected_work": "review render presentation",
@@ -127,7 +127,7 @@ func TestDeriveEventEnvelopesSeparateEventModelFromPresentation(t *testing.T) {
 
 func TestRenderPresentationExpiredOnlyForOriginator(t *testing.T) {
 	now := mustTime(t, "2026-06-24T10:00:00Z")
-	proj := eventview.EventView{Ref: "proj_expired", Digest: "digest_expired", Content: []eventview.ResourceContent{
+	proj := view.View{Ref: "proj_expired", Digest: "digest_expired", Content: []view.ResourceContent{
 		content("assignment", "project", []any{map[string]any{
 			"id": "asg-exp", "actor": "codex-a@project", "assignee": "codex-b@project",
 			"scope": "review overdue work", "expected_work": "review overdue work",
@@ -190,7 +190,7 @@ func TestJSONLAuditSinkWritesRecords(t *testing.T) {
 
 func TestRenderIntentsAreBounded(t *testing.T) {
 	now := mustTime(t, "2026-06-24T10:00:00Z")
-	proj := eventview.EventView{Ref: "proj_intent", Digest: "digest_intent", Content: []eventview.ResourceContent{
+	proj := view.View{Ref: "proj_intent", Digest: "digest_intent", Content: []view.ResourceContent{
 		content("agent_profile", "project", []any{map[string]any{
 			"id": "profile-a", "actor": "codex-a@project", "freshness": "stale", "summary": "A stale profile",
 		}}),
@@ -244,12 +244,12 @@ func bytesTrimSpace(in []byte) []byte {
 	return []byte(strings.TrimSpace(string(in)))
 }
 
-func content(kind, id string, items []any) eventview.ResourceContent {
+func content(kind, id string, items []any) view.ResourceContent {
 	return contentWithFields(kind, id, map[string]any{"items": items})
 }
 
-func contentWithFields(kind, id string, fields map[string]any) eventview.ResourceContent {
-	return eventview.ResourceContent{
+func contentWithFields(kind, id string, fields map[string]any) view.ResourceContent {
+	return view.ResourceContent{
 		Ref:     contract.ResourceRef{Kind: contract.ResourceKind(kind), ID: contract.ResourceID(id)},
 		Version: 1,
 		Fields:  fields,

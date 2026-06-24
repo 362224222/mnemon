@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/eventview"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation/view"
 )
 
 // stubAPI is an inert inner ServerAPI: it records whether Ingest reached it, so a test can prove the
@@ -15,8 +15,8 @@ func (s *stubAPI) Ingest(contract.ActorID, contract.ObservationEnvelope) (int64,
 	s.ingested++
 	return 1, false, nil
 }
-func (s *stubAPI) PullEventView(contract.ActorID, contract.Subscription) (eventview.EventView, error) {
-	return eventview.EventView{}, nil
+func (s *stubAPI) PullEventView(contract.ActorID, contract.Subscription) (view.View, error) {
+	return view.View{}, nil
 }
 
 // The authorizer is the only layer holding the binding, so it is where an observation's named

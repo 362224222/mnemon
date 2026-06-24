@@ -1,4 +1,4 @@
-// Package capability holds the built-in admission rules (the pure leaf): given an Event + EventView
+// Package capability holds the built-in admission rules (the pure leaf): given an Event + View
 // it returns a RuleDecision, never writing. It imports rule/eventview/contract only — binding->rule
 // translation and runtime wiring live in app. Memory + skill are the two P0 capabilities.
 package policy
@@ -11,7 +11,7 @@ import (
 	"strings"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/eventview"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation/view"
 	"github.com/mnemon-dev/mnemon/harness/internal/rule"
 )
 
@@ -185,7 +185,7 @@ func containsPromptInjectionShape(content string) bool {
 	return false
 }
 
-func resourceFromEventView(view eventview.EventView, ref contract.ResourceRef) (contract.Version, map[string]any) {
+func resourceFromEventView(view view.View, ref contract.ResourceRef) (contract.Version, map[string]any) {
 	var version contract.Version
 	for _, rv := range view.Resources {
 		if rv.Ref == ref {

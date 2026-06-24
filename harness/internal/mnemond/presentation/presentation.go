@@ -7,10 +7,10 @@ import (
 	"time"
 
 	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
-	"github.com/mnemon-dev/mnemon/harness/internal/eventview"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation/view"
 )
 
-func BuildBodyAndEventEnvelopes(req Request, proj eventview.EventView, now time.Time) (string, []eventmodel.EventEnvelope) {
+func BuildBodyAndEventEnvelopes(req Request, proj view.View, now time.Time) (string, []eventmodel.EventEnvelope) {
 	switch req.RenderIntent {
 	case IntentTeamworkEvents:
 		events := DeriveEventEnvelopes(req, proj, now)
@@ -29,9 +29,9 @@ func BuildBodyAndEventEnvelopes(req Request, proj eventview.EventView, now time.
 	}
 }
 
-func BuildContextPacket(_ Request, proj eventview.EventView) string {
+func BuildContextPacket(_ Request, proj view.View) string {
 	var lines []string
-	lines = append(lines, "[mnemon:context]", fmt.Sprintf("EventView %s digest %s", proj.Ref, proj.Digest))
+	lines = append(lines, "[mnemon:context]", fmt.Sprintf("View %s digest %s", proj.Ref, proj.Digest))
 	for _, content := range proj.Content {
 		kind := string(content.Ref.Kind)
 		items := resourceItems(content)
@@ -79,7 +79,7 @@ func section(kind, body string) string {
 	return fmt.Sprintf("[mnemon:%s]\n%s", kind, body)
 }
 
-func eventViewItems(proj eventview.EventView) map[string][]map[string]any {
+func eventViewItems(proj view.View) map[string][]map[string]any {
 	out := map[string][]map[string]any{}
 	for _, c := range proj.Content {
 		for _, item := range resourceItems(c) {
@@ -92,7 +92,7 @@ func eventViewItems(proj eventview.EventView) map[string][]map[string]any {
 	return out
 }
 
-func resourceItems(content eventview.ResourceContent) []map[string]any {
+func resourceItems(content view.ResourceContent) []map[string]any {
 	for _, field := range []string{"items", "entries", "declarations"} {
 		if raw, ok := content.Fields[field]; ok {
 			return anyItems(raw)

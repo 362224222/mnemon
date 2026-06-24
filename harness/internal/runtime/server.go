@@ -13,9 +13,9 @@ import (
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
-	"github.com/mnemon-dev/mnemon/harness/internal/eventview"
 	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation/view"
 	"github.com/mnemon-dev/mnemon/harness/internal/reconcile"
 	"github.com/mnemon-dev/mnemon/harness/internal/rule"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
@@ -202,9 +202,9 @@ func validateObservedType(t string) error {
 
 // PullEventView serves an actor's scoped, server-built view. The subscription's actor MUST equal the
 // authenticated principal (S9/D7): a client can never name another actor's scope on the wire.
-func (cs *ControlServer) PullEventView(principal contract.ActorID, sub contract.Subscription) (eventview.EventView, error) {
+func (cs *ControlServer) PullEventView(principal contract.ActorID, sub contract.Subscription) (view.View, error) {
 	if sub.Actor != principal {
-		return eventview.EventView{}, fmt.Errorf("subscription actor %q does not match authenticated principal %q", sub.Actor, principal)
+		return view.View{}, fmt.Errorf("subscription actor %q does not match authenticated principal %q", sub.Actor, principal)
 	}
 	// S9: serve ONLY the actor's server-CONFIGURED scope. The client may NARROW (request a subset) but never
 	// widen — requested refs are intersected with the configured scope, so a client-named out-of-scope ref is
@@ -224,7 +224,7 @@ func (cs *ControlServer) PullEventView(principal contract.ActorID, sub contract.
 			refs = append(refs, r)
 		}
 	}
-	return eventview.ScopedView(cs.store, contract.Subscription{Actor: principal, Refs: refs, PrivacyTier: configured.PrivacyTier}), nil
+	return view.ScopedView(cs.store, contract.Subscription{Actor: principal, Refs: refs, PrivacyTier: configured.PrivacyTier}), nil
 }
 
 // Tick runs one governed cycle:
@@ -338,10 +338,10 @@ func (cs *ControlServer) dispatchOne(ev contract.Event) ([]contract.Event, error
 	return stamped, nil
 }
 
-// scopedView builds the actor's scoped eventview. (P2 strengthens the scoping + digest behind this seam;
+// scopedView builds the actor's scoped view. (P2 strengthens the scoping + digest behind this seam;
 // the call site stays stable.)
-func (cs *ControlServer) scopedView(actor contract.ActorID) eventview.EventView {
-	return eventview.ScopedView(cs.store, cs.subs[actor])
+func (cs *ControlServer) scopedView(actor contract.ActorID) view.View {
+	return view.ScopedView(cs.store, cs.subs[actor])
 }
 
 // diagnosticEvent builds a durable "*.diagnostic" event in the trigger's domain (S7). Domain = the prefix of

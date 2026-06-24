@@ -2,7 +2,7 @@ package access
 
 import (
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/eventview"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation/view"
 )
 
 // ServerAPI is the hostagent/replica/control access boundary into mnemond (D5). Production HTTP/gRPC+mTLS
@@ -11,5 +11,5 @@ import (
 // satisfies it structurally, so access never imports runtime.
 type ServerAPI interface {
 	Ingest(principal contract.ActorID, env contract.ObservationEnvelope) (seq int64, dup bool, err error)
-	PullEventView(principal contract.ActorID, sub contract.Subscription) (eventview.EventView, error)
+	PullEventView(principal contract.ActorID, sub contract.Subscription) (view.View, error)
 }

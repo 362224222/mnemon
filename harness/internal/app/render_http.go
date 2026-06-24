@@ -19,7 +19,7 @@ import (
 const renderAuditRelPath = ".mnemon/harness/local/render-audit.jsonl"
 
 // NewLocalHTTPHandler adds the R1 read-only render endpoint at the app wiring layer. Runtime/channel
-// still own observe/pull/status/sync; render reads only the authenticated actor's scoped eventview.
+// still own observe/pull/status/sync; render reads only the authenticated actor's scoped view.
 func NewLocalHTTPHandler(rt *runtime.Runtime, auth access.Authenticator, bindings *access.BindingSet, renderer presentation.Renderer) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/render", func(w http.ResponseWriter, r *http.Request) {
