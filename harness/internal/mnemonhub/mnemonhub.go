@@ -19,7 +19,7 @@ import (
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
-	"github.com/mnemon-dev/mnemon/harness/internal/store"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/state"
 )
 
 // ReplicaGrant aliases the contract type (the grant record is ABI surface, sync-abi-v1 §2).
@@ -71,17 +71,17 @@ const (
 	servedTotalCursor = "sync_served_total" // total synced events returned across all pulls
 )
 
-// Server is one hub over one open store. It holds no other state: adjudication and counters are
+// Server is one hub over one open state. It holds no other state: adjudication and counters are
 // durable in the store, so a restart (or a concurrent co-hosted runtime surface) sees the same hub.
 type Server struct {
-	store  *store.Store
+	store  *state.Store
 	grants Grants
 	now    func() string
 }
 
 // New wires a hub Server over an OPEN store (the caller owns the store's single-writer lock and its
 // lifecycle). now stamps received_at on accepted synced events.
-func New(st *store.Store, grants Grants, now func() string) *Server {
+func New(st *state.Store, grants Grants, now func() string) *Server {
 	return &Server{store: st, grants: grants, now: now}
 }
 

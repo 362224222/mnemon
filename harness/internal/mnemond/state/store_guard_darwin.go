@@ -1,6 +1,6 @@
 //go:build darwin
 
-package store
+package state
 
 import (
 	"path/filepath"

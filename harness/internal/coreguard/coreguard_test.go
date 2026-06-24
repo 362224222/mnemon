@@ -14,7 +14,7 @@ import (
 // The human-readable invariant is "the core contains generic mnemond event mechanics, not
 // hostagent- or product-specific behavior."
 var corePackages = []string{
-	"contract", "mnemond/access", "mnemond/admission", "kernel", "store", "mnemond/presentation/view", "runtime",
+	"contract", "mnemond/access", "mnemond/admission", "mnemond/state", "mnemond/presentation/view", "runtime",
 }
 
 // forbiddenImports are the outer rings the core must never depend on: mnemond policy,
@@ -61,7 +61,7 @@ var outerRingImportBoundaries = []importBoundaryRule{
 	},
 	{
 		pkg:       "hostagent",
-		forbids:   []string{"harness/internal/kernel", "harness/internal/store", "harness/internal/runtime"},
+		forbids:   []string{"harness/internal/mnemond/state", "harness/internal/runtime"},
 		rationale: "hostagent integration is static setup/thin-shim code and must not reach into governed state owners",
 	},
 	{

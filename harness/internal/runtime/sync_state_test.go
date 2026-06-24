@@ -10,7 +10,7 @@ import (
 	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
-	"github.com/mnemon-dev/mnemon/harness/internal/store"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/state"
 )
 
 func TestAcceptedLocalMemoryCreatesPendingSyncEvent(t *testing.T) {
@@ -60,7 +60,7 @@ func TestAcceptedLocalMemoryCreatesPendingSyncEvent(t *testing.T) {
 	if content, _ := material.Fields["content"].(string); !strings.Contains(content, "Sync should queue") {
 		t.Fatalf("pending material fields missing memory content: %+v", material.Fields)
 	}
-	acceptedEvents, err := rt.store.EventEnvelopes(store.EventEnvelopeQuery{
+	acceptedEvents, err := rt.store.EventEnvelopes(state.EventEnvelopeQuery{
 		Phase:   eventmodel.PhaseAccepted,
 		Subject: eventmodel.Subject("memory", "project"),
 	})

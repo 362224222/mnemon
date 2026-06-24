@@ -4,8 +4,7 @@ import (
 	"testing"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
-	"github.com/mnemon-dev/mnemon/harness/internal/store"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/state"
 )
 
 var refs = []contract.ResourceRef{
@@ -13,8 +12,8 @@ var refs = []contract.ResourceRef{
 	{Kind: "goal", ID: "g1"},
 }
 
-func p1Rules() kernel.AuthorityRules {
-	return kernel.AuthorityRules{Allow: map[contract.ActorID][]contract.ResourceKind{
+func p1Rules() state.AuthorityRules {
+	return state.AuthorityRules{Allow: map[contract.ActorID][]contract.ResourceKind{
 		"user":    {"memory", "goal", "skill"},
 		"codex@r": {"memory", "goal", "skill"},
 	}}
@@ -22,17 +21,17 @@ func p1Rules() kernel.AuthorityRules {
 func writeCASModes() contract.Modes {
 	return contract.Modes{Conflict: contract.ConflictRebase, Isolation: contract.IsolationWriteCAS, Authz: contract.AuthzStrict}
 }
-func newStoreKernel(t *testing.T) (*store.Store, *kernel.Kernel) {
+func newStoreKernel(t *testing.T) (*state.Store, *state.Kernel) {
 	t.Helper()
-	s, err := store.OpenStore(":memory:")
+	s, err := state.OpenStore(":memory:")
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	t.Cleanup(func() { s.Close() })
-	k := kernel.NewKernel(s, kernel.SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}, "goal": {"statement"}}), p1Rules())
+	k := state.NewKernel(s, state.SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}, "goal": {"statement"}}), p1Rules())
 	return s, k
 }
-func createP(t *testing.T, k *kernel.Kernel, ref contract.ResourceRef, fields map[string]any) {
+func createP(t *testing.T, k *state.Kernel, ref contract.ResourceRef, fields map[string]any) {
 	t.Helper()
 	d := k.Apply(contract.KernelOp{OpID: "seed_" + string(ref.ID), Actor: "user",
 		Writes: []contract.ResourceWrite{{Ref: ref, Kind: contract.OpCreate, Fields: fields}}}, writeCASModes())
@@ -40,7 +39,7 @@ func createP(t *testing.T, k *kernel.Kernel, ref contract.ResourceRef, fields ma
 		t.Fatalf("create %s: %s", ref.ID, d.Reason)
 	}
 }
-func updateP(t *testing.T, k *kernel.Kernel, ref contract.ResourceRef, basedOn contract.Version, fields map[string]any) {
+func updateP(t *testing.T, k *state.Kernel, ref contract.ResourceRef, basedOn contract.Version, fields map[string]any) {
 	t.Helper()
 	d := k.Apply(contract.KernelOp{OpID: "upd_" + string(ref.ID), Actor: "user",
 		Writes: []contract.ResourceWrite{{Ref: ref, Kind: contract.OpUpdate, BasedOn: basedOn, Fields: fields}}}, writeCASModes())
@@ -50,7 +49,7 @@ func updateP(t *testing.T, k *kernel.Kernel, ref contract.ResourceRef, basedOn c
 }
 
 // newStoreWith seeds m1@1, g1@5.
-func newStoreWith(t *testing.T) *store.Store {
+func newStoreWith(t *testing.T) *state.Store {
 	t.Helper()
 	s, k := newStoreKernel(t)
 	createP(t, k, contract.ResourceRef{Kind: "memory", ID: "m1"}, map[string]any{"content": "a"}) // m1@1
@@ -61,15 +60,15 @@ func newStoreWith(t *testing.T) *store.Store {
 	return s
 }
 
-// accept applies one accepted update against an existing store.
-func accept(t *testing.T, s *store.Store, ref contract.ResourceRef, basedOn contract.Version, fields map[string]any) {
+// accept applies one accepted update against an existing state.
+func accept(t *testing.T, s *state.Store, ref contract.ResourceRef, basedOn contract.Version, fields map[string]any) {
 	t.Helper()
-	k := kernel.NewKernel(s, kernel.SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}, "goal": {"statement"}}), p1Rules())
+	k := state.NewKernel(s, state.SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}, "goal": {"statement"}}), p1Rules())
 	updateP(t, k, ref, basedOn, fields)
 }
 
 // deferOneFor produces exactly one Deferred decision for the given actor (a stale CAS under rebase mode).
-func deferOneFor(t *testing.T, k *kernel.Kernel, actor contract.ActorID) {
+func deferOneFor(t *testing.T, k *state.Kernel, actor contract.ActorID) {
 	t.Helper()
 	ref := contract.ResourceRef{Kind: "memory", ID: contract.ResourceID("d_" + string(actor))}
 	c := k.Apply(contract.KernelOp{OpID: "dseed", Actor: actor,

@@ -1,6 +1,6 @@
 //go:build linux
 
-package store
+package state
 
 import (
 	"path/filepath"

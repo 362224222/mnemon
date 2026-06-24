@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/store"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/state"
 )
 
 // ProbeAvailable lets the standalone sync detect a co-hosted Local Mnemon before it tries to open a
@@ -17,7 +17,7 @@ func TestProbeAvailable(t *testing.T) {
 		t.Fatalf("a free store must probe available; got %v", err)
 	}
 
-	held, err := store.OpenStore(path)
+	held, err := state.OpenStore(path)
 	if err != nil {
 		t.Fatalf("hold the store: %v", err)
 	}

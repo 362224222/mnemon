@@ -8,9 +8,9 @@ import (
 
 	"github.com/mnemon-dev/mnemon/harness/internal/config"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/state"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
@@ -84,11 +84,11 @@ func TestAssembleAdmitsConfiguredNoteCapabilityEndToEnd(t *testing.T) {
 }
 
 // PD2 declared kinds: a capability whose resource kind is NOT in the compiled
-// kernel.DefaultSchemaGuard (a genuinely declared user kind) boots end-to-end — Assemble registers
+// state.DefaultSchemaGuard (a genuinely declared user kind) boots end-to-end — Assemble registers
 // its required header in the RuntimeConfig.SchemaGuard, and the live kernel admits its candidate.
 // This is the assembly-time declared kind set: the live known-kind set is governance ∪ enabled caps.
 func TestAssembleRegistersDeclaredKindNotInDefaultGuard(t *testing.T) {
-	if _, compiled := kernel.DefaultSchemaGuard().Required["widget"]; compiled {
+	if _, compiled := state.DefaultSchemaGuard().Required["widget"]; compiled {
 		t.Fatal("precondition: widget must NOT be a compiled kind for this test to prove declared-kind registration")
 	}
 	widgetSpec := policy.CapabilitySpec{
@@ -359,7 +359,7 @@ func TestBuiltinHeadersSatisfySchemaGuard(t *testing.T) {
 	for _, cap := range policy.EmbeddedCatalog() {
 		extra[cap.ResourceKind] = cap.RequiredHeader
 	}
-	guard := kernel.SchemaGuardWith(extra)
+	guard := state.SchemaGuardWith(extra)
 	for id, cap := range policy.EmbeddedCatalog() {
 		item, err := cap.Decode(minimalAcceptPayload(id))
 		if err != nil {

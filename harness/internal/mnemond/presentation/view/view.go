@@ -8,7 +8,7 @@ import (
 	"sort"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/store"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/state"
 )
 
 type View struct {
@@ -30,7 +30,7 @@ type ResourceContent struct {
 // Build materializes a read-only view over refs for forActor. The context digest folds, per resource in a
 // stable order, Kind:ID:Version AND the canonical field bytes (D8/S10) — so a content tamper that preserves
 // the version is still detectable (a digest covering only Kind:ID:Version would miss it).
-func Build(s *store.Store, refs []contract.ResourceRef, forActor contract.ActorID) View {
+func Build(s *state.Store, refs []contract.ResourceRef, forActor contract.ActorID) View {
 	type item struct {
 		rv     contract.ResourceVersion
 		fields map[string]any
@@ -63,6 +63,6 @@ func Build(s *store.Store, refs []contract.ResourceRef, forActor contract.ActorI
 // materialized, so an out-of-scope resource can never cross the wire. Identity (forActor) is the
 // subscription's actor — the server passes the AUTHENTICATED principal here, never a client-named scope.
 // (PrivacyTier is reserved for a future per-resource tier filter; today the ref set IS the scope.)
-func ScopedView(s *store.Store, sub contract.Subscription) View {
+func ScopedView(s *state.Store, sub contract.Subscription) View {
 	return Build(s, sub.Refs, sub.Actor)
 }

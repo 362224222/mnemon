@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/state"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
@@ -32,9 +32,9 @@ func bootRuntime(t *testing.T) *runtime.Runtime {
 	t.Helper()
 	rt, err := runtime.OpenRuntime(filepath.Join(t.TempDir(), "s.db"), runtime.RuntimeConfig{
 		Rules:       admission.NewRuleSet(createRule()),
-		Authority:   kernel.AuthorityRules{Allow: map[contract.ActorID][]contract.ResourceKind{"agent": {"memory"}}},
+		Authority:   state.AuthorityRules{Allow: map[contract.ActorID][]contract.ResourceKind{"agent": {"memory"}}},
 		Subs:        map[contract.ActorID]contract.Subscription{"agent": {Actor: "agent", Refs: []contract.ResourceRef{{Kind: "memory", ID: "m1"}}}},
-		SchemaGuard: kernel.SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}, "goal": {"statement"}}),
+		SchemaGuard: state.SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}, "goal": {"statement"}}),
 	})
 	if err != nil {
 		t.Fatalf("open runtime: %v", err)

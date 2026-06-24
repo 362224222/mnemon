@@ -4,9 +4,8 @@ import (
 	"testing"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
-	"github.com/mnemon-dev/mnemon/harness/internal/store"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/state"
 )
 
 func proposeWrite(id string, w contract.ResourceWrite) contract.Event {
@@ -16,14 +15,14 @@ func proposeWrite(id string, w contract.ResourceWrite) contract.Event {
 
 // liveDecisions produces decisions the canonical way: append the proposed events to a fresh kernel and
 // reconcile (the same modes Replay uses), returning the store + decisions.
-func liveDecisions(t *testing.T, events []contract.Event) (*store.Store, []contract.Decision) {
+func liveDecisions(t *testing.T, events []contract.Event) (*state.Store, []contract.Decision) {
 	t.Helper()
-	s, err := store.OpenStore(":memory:")
+	s, err := state.OpenStore(":memory:")
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	t.Cleanup(func() { s.Close() })
-	k := kernel.NewKernel(s, kernel.SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}, "goal": {"statement"}}), permissiveAuthority(events))
+	k := state.NewKernel(s, state.SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}, "goal": {"statement"}}), permissiveAuthority(events))
 	r := admission.NewReconciler(s, k)
 	for _, ev := range events {
 		if _, err := s.AppendEvent(ev); err != nil {
@@ -40,7 +39,7 @@ var sampleEvents = []contract.Event{
 }
 
 // I6 determinism under data-driven kinds (PD2b): replay derives the kernel's schema guard from the
-// LOG, not a compiled default — a proposal writing a kind absent from kernel.DefaultSchemaGuard
+// LOG, not a compiled default — a proposal writing a kind absent from state.DefaultSchemaGuard
 // (e.g. an external/declared kind, or a graduated memory/skill after PD5) must still reconcile to
 // Accepted, exactly as the live run that produced the log did. A guard pinned to DefaultSchemaGuard
 // would reject it as an unknown kind, silently breaking I6 once user kinds leave the compiled set.

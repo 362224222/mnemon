@@ -2,19 +2,19 @@ package eventstore
 
 import (
 	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
-	"github.com/mnemon-dev/mnemon/harness/internal/store"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/state"
 )
 
 type Store struct {
-	store *store.Store
+	store *state.Store
 }
 
-type Query = store.EventEnvelopeQuery
+type Query = state.EventEnvelopeQuery
 
-type Record = store.EventEnvelopeRecord
+type Record = state.EventEnvelopeRecord
 
 func Open(path string) (*Store, error) {
-	st, err := store.OpenStore(path)
+	st, err := state.OpenStore(path)
 	if err != nil {
 		return nil, err
 	}

@@ -16,8 +16,8 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/state"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
@@ -251,7 +251,7 @@ func RunLocalHTTPServerWithBindings(ctx context.Context, addr, storePath string,
 	}
 	// Shutdown ordering (MED-5): the sync worker writes through rt's open store on its goroutine.
 	// rt.Close() must not race a mid-flight worker store write, so JOIN the goroutine (it exits
-	// promptly on ctx cancel) BEFORE closing the store.
+	// promptly on ctx cancel) BEFORE closing the state.
 	defer rt.Close()
 	var wg sync.WaitGroup
 	defer wg.Wait()
@@ -273,7 +273,7 @@ func RunLocalHTTPServerWithBindings(ctx context.Context, addr, storePath string,
 
 // resolveBootCatalog resolves the capability catalog ONCE at boot. Default: embedded Builtins +
 // every external package under <projectRoot>/.mnemon/loops via policy.ResolveCatalog
-// (requiredFields = kernel.DefaultSchemaGuard().Required — app owns the kernel import; capability
+// (requiredFields = state.DefaultSchemaGuard().Required — app owns the kernel import; capability
 // stays a contract-level leaf), fail-closed: a bad external package REFUSES to start Local Mnemon
 // — the directory's presence is a contract, not a hint. ignoreExternal is the operator escape
 // hatch (`local run --ignore-external`): boot the embedded-only catalog and name each ignored
@@ -283,7 +283,7 @@ func RunLocalHTTPServerWithBindings(ctx context.Context, addr, storePath string,
 // `unknown rule_ref`.
 func resolveBootCatalog(projectRoot string, ignoreExternal bool, errw io.Writer) (map[string]policy.Capability, []string, error) {
 	if !ignoreExternal {
-		catalog, err := policy.ResolveCatalog(projectRoot, kernel.DefaultSchemaGuard().Required)
+		catalog, err := policy.ResolveCatalog(projectRoot, state.DefaultSchemaGuard().Required)
 		return catalog, nil, err
 	}
 	entries, err := os.ReadDir(filepath.Join(projectRoot, ".mnemon", "loops"))
@@ -307,7 +307,7 @@ func resolveBootCatalog(projectRoot string, ignoreExternal bool, errw io.Writer)
 // embedded catalog (with a stderr warning) when an external package is unreadable — a corrupt loop
 // must not block importing first-party memory/skill commits.
 func SyncImportCatalog(projectRoot string, errw io.Writer) map[string]policy.Capability {
-	catalog, err := policy.ResolveCatalog(projectRoot, kernel.DefaultSchemaGuard().Required)
+	catalog, err := policy.ResolveCatalog(projectRoot, state.DefaultSchemaGuard().Required)
 	if err != nil {
 		fmt.Fprintf(errw, "mnemon-harness: sync import: external package unreadable, importing first-party kinds only: %v\n", err)
 		return policy.EmbeddedCatalog()
@@ -375,9 +375,9 @@ func SyncImportRuntimeConfig(refs []contract.ResourceRef, catalog map[string]pol
 			contract.SyncImportActor: {Actor: contract.SyncImportActor, Refs: refs},
 		},
 		Rules: admission.NewRuleSet(rules...),
-		Authority: kernel.AuthorityRules{Allow: map[contract.ActorID][]contract.ResourceKind{
+		Authority: state.AuthorityRules{Allow: map[contract.ActorID][]contract.ResourceKind{
 			contract.SyncImportActor: policy.ImportableKinds(catalog),
 		}},
-		SchemaGuard: kernel.SchemaGuardWith(extra),
+		SchemaGuard: state.SchemaGuardWith(extra),
 	}
 }

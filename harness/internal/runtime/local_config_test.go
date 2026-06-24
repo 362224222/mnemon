@@ -2,10 +2,10 @@ package runtime
 
 import (
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/state"
 )
 
 // localRuntimeConfigT mirrors app.LocalRuntimeConfigFromBindings for the runtime-level integration
@@ -43,8 +43,8 @@ func localRuntimeConfigT(bindings []access.ChannelBinding) RuntimeConfig {
 		Bindings:      bindings,
 		Subs:          access.SubsFromBindings(bindings),
 		Rules:         admission.NewRuleSet(rules...),
-		Authority:     kernel.AuthorityRules{Allow: allow},
-		SchemaGuard:   kernel.SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}}),
+		Authority:     state.AuthorityRules{Allow: allow},
+		SchemaGuard:   state.SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}}),
 		SyncableKinds: policy.ImportableKinds(policy.EmbeddedCatalog()),
 	}
 }

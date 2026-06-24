@@ -4,36 +4,35 @@ import (
 	"testing"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
-	"github.com/mnemon-dev/mnemon/harness/internal/store"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/state"
 )
 
 // ---- shared harness helpers (simulated agents, deterministic fixtures, ZERO paid turns) ----
 
-func rules() kernel.AuthorityRules {
-	return kernel.AuthorityRules{Allow: map[contract.ActorID][]contract.ResourceKind{
+func rules() state.AuthorityRules {
+	return state.AuthorityRules{Allow: map[contract.ActorID][]contract.ResourceKind{
 		"user":  {"memory", "goal", "skill"},
 		"a1":    {"memory", "goal", "skill"},
 		"a2":    {"memory", "goal", "skill"},
 		"codex": {"memory", "goal", "skill"},
 	}}
 }
-func newRecon(t *testing.T) (*store.Store, *kernel.Kernel) {
+func newRecon(t *testing.T) (*state.Store, *state.Kernel) {
 	t.Helper()
-	s, err := store.OpenStore(":memory:")
+	s, err := state.OpenStore(":memory:")
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	t.Cleanup(func() { s.Close() })
-	k := kernel.NewKernel(s, kernel.SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}, "goal": {"statement"}}), rules())
+	k := state.NewKernel(s, state.SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}, "goal": {"statement"}}), rules())
 	return s, k
 }
 func casModes() contract.Modes {
 	return contract.Modes{Conflict: contract.ConflictRebase, Isolation: contract.IsolationWriteCAS, Authz: contract.AuthzStrict}
 }
 
-// seedCreate / seedUpdate are TRUSTED setup writes (already-accepted state), applied directly via the kernel.
-func seedCreate(t *testing.T, k *kernel.Kernel, ref contract.ResourceRef, fields map[string]any) {
+// seedCreate / seedUpdate are TRUSTED setup writes (already-accepted state), applied directly via the state.
+func seedCreate(t *testing.T, k *state.Kernel, ref contract.ResourceRef, fields map[string]any) {
 	t.Helper()
 	d := k.Apply(contract.KernelOp{OpID: "seed_" + string(ref.ID), Actor: "user",
 		Writes: []contract.ResourceWrite{{Ref: ref, Kind: contract.OpCreate, Fields: fields}}}, casModes())
@@ -41,7 +40,7 @@ func seedCreate(t *testing.T, k *kernel.Kernel, ref contract.ResourceRef, fields
 		t.Fatalf("seedCreate %s: %s", ref.ID, d.Reason)
 	}
 }
-func seedUpdate(t *testing.T, k *kernel.Kernel, ref contract.ResourceRef, basedOn contract.Version, fields map[string]any) {
+func seedUpdate(t *testing.T, k *state.Kernel, ref contract.ResourceRef, basedOn contract.Version, fields map[string]any) {
 	t.Helper()
 	d := k.Apply(contract.KernelOp{OpID: "sup_" + string(ref.ID), Actor: "user",
 		Writes: []contract.ResourceWrite{{Ref: ref, Kind: contract.OpUpdate, BasedOn: basedOn, Fields: fields}}}, casModes())
@@ -65,7 +64,7 @@ func updateProposal(id string, actor contract.ActorID, corr string, ref contract
 		},
 	}
 }
-func appendProposal(t *testing.T, s *store.Store, ev contract.Event) {
+func appendProposal(t *testing.T, s *state.Store, ev contract.Event) {
 	t.Helper()
 	if _, err := s.AppendEvent(ev); err != nil {
 		t.Fatalf("append: %v", err)
@@ -126,7 +125,7 @@ func TestArmB_ReadStaleVsWriteCAS(t *testing.T) {
 	M := contract.ResourceRef{Kind: "memory", ID: "M"}
 	G := contract.ResourceRef{Kind: "goal", ID: "G"}
 
-	build := func(t *testing.T) (*store.Store, *kernel.Kernel) {
+	build := func(t *testing.T) (*state.Store, *state.Kernel) {
 		s, k := newRecon(t)
 		seedCreate(t, k, M, map[string]any{"content": "m0"})    // M@1
 		seedUpdate(t, k, M, 1, map[string]any{"content": "m1"}) // M@2 (matches based_on M@2)

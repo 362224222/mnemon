@@ -18,8 +18,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/state"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemonhub"
-	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
 
 func main() {
@@ -71,7 +71,7 @@ func run(ctx context.Context, args []string, out, errw io.Writer) error {
 			return fmt.Errorf("create hub store dir: %w", err)
 		}
 	}
-	st, err := store.OpenStore(*storePath)
+	st, err := state.OpenStore(*storePath)
 	if err != nil {
 		return fmt.Errorf("open hub store: %w", err)
 	}

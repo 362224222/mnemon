@@ -9,15 +9,15 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/state"
 )
 
 // LoopValidate validates the resolved capability catalog through the same fail-closed resolution boot
 // uses. R1 host setup no longer projects per-loop assets, so validate reports capability packages
 // only: first-party embedded capabilities plus external packages under .mnemon/loops.
 func (h *Harness) LoopValidate() ([]string, error) {
-	merged, err := policy.ResolveCatalog(h.root, kernel.DefaultSchemaGuard().Required)
+	merged, err := policy.ResolveCatalog(h.root, state.DefaultSchemaGuard().Required)
 	if err != nil {
 		return nil, err
 	}
@@ -59,7 +59,7 @@ type CapabilityInfo struct {
 // .mnemon/loops, via the SAME fail-closed boot resolution) and returns one CapabilityInfo per kind,
 // sorted by kind. It is a LOCAL read — no running server is contacted; the catalog is a disk fact.
 func (h *Harness) LoopCapabilities() ([]CapabilityInfo, error) {
-	catalog, err := policy.ResolveCatalog(h.root, kernel.DefaultSchemaGuard().Required)
+	catalog, err := policy.ResolveCatalog(h.root, state.DefaultSchemaGuard().Required)
 	if err != nil {
 		return nil, err
 	}
@@ -199,7 +199,7 @@ func (h *Harness) LoopAdd(srcDir string) (string, error) {
 	}
 	// Validate through the exact boot resolution; roll the copy back on any refusal so a rejected
 	// package never lingers as a half-added, boot-sinking directory.
-	if _, err := policy.ResolveCatalog(h.root, kernel.DefaultSchemaGuard().Required); err != nil {
+	if _, err := policy.ResolveCatalog(h.root, state.DefaultSchemaGuard().Required); err != nil {
 		_ = os.RemoveAll(target)
 		return "", fmt.Errorf("loop %q rejected (fail-closed): %w", spec.Name, err)
 	}

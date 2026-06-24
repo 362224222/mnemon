@@ -8,7 +8,7 @@ import (
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
-	"github.com/mnemon-dev/mnemon/harness/internal/store"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/state"
 )
 
 // #9: PullEventView must serve only the actor's CONFIGURED scope; client-named out-of-scope refs are denied.
@@ -156,7 +156,7 @@ func TestProposedEventReScanEmitsNoSpuriousReadback(t *testing.T) {
 	}
 }
 
-func hasDiagStage(t *testing.T, s *store.Store, stage string) bool {
+func hasDiagStage(t *testing.T, s *state.Store, stage string) bool {
 	t.Helper()
 	for _, dg := range diagEvents(t, s) {
 		if dg.Payload["stage"] == stage {

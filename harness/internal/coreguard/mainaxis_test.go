@@ -38,18 +38,13 @@ var packageMainAxisInventory = map[string]packageMainAxis{
 	"event":      {owner: ownerEvent, role: "canonical event and envelope model", target: "event"},
 	"eventstore": {owner: ownerEvent, role: "event envelope append/read facade", target: "event/store"},
 	"hostagent":  {owner: ownerHostAgent, role: "hostagent setup and thin shims", target: "hostagent"},
-	"kernel":     {owner: ownerMnemond, role: "materialized event state applier", target: "mnemond/state"},
 	"mnemonhub":  {owner: ownerMnemonhub, role: "remote accepted event exchange server and exchange mechanics", target: "mnemonhub"},
 	"replay":     {owner: ownerMnemond, role: "mnemond determinism verification", target: "mnemond/replay"},
 	"runtime":    {owner: ownerMnemond, role: "local mnemond event runtime", target: "mnemond"},
-	"store":      {owner: ownerMnemond, role: "local mnemond event/state store", target: "mnemond/state"},
 	"ui":         {owner: ownerMnemond, role: "read-only mnemond operator observability", target: "mnemond/observe"},
 }
 
-var demotedMainAxisPackages = map[string]bool{
-	"kernel": true,
-	"store":  true,
-}
+var demotedMainAxisPackages = map[string]bool{}
 
 var nestedMainAxisInventory = map[string]packageMainAxis{
 	"mnemond/admission":    {owner: ownerMnemond, role: "event admission rules and materialization driver", target: "mnemond/admission"},
@@ -61,6 +56,7 @@ var nestedMainAxisInventory = map[string]packageMainAxis{
 		role:   "scoped read model for derived event presentation",
 		target: "mnemond/presentation/view",
 	},
+	"mnemond/state":      {owner: ownerMnemond, role: "local event/state store and materialized-state applier", target: "mnemond/state"},
 	"mnemonhub/exchange": {owner: ownerMnemonhub, role: "mnemonhub event exchange client, cursors, and local ledger acknowledgements", target: "mnemonhub/exchange"},
 }
 
@@ -69,10 +65,12 @@ var retiredTopLevelImplementationPackages = []string{
 	"channel",
 	"eventview",
 	"hostsurface",
+	"kernel",
 	"reconcile",
 	"render",
 	"remotesync",
 	"rule",
+	"store",
 }
 
 func TestInternalPackagesHaveMainAxisOwner(t *testing.T) {

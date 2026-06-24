@@ -14,14 +14,14 @@ import (
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
-	"github.com/mnemon-dev/mnemon/harness/internal/store"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/state"
 )
 
 func testNow() string { return time.Now().UTC().Format(time.RFC3339) }
 
-func openTestHub(t *testing.T, grants Grants) (*Server, *store.Store) {
+func openTestHub(t *testing.T, grants Grants) (*Server, *state.Store) {
 	t.Helper()
-	st, err := store.OpenStore(filepath.Join(t.TempDir(), "hub.db"))
+	st, err := state.OpenStore(filepath.Join(t.TempDir(), "hub.db"))
 	if err != nil {
 		t.Fatalf("open hub store: %v", err)
 	}

@@ -13,11 +13,10 @@ import (
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
-	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation/view"
-	"github.com/mnemon-dev/mnemon/harness/internal/store"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/state"
 )
 
 const (
@@ -30,8 +29,8 @@ var _ access.ServerAPI = (*ControlServer)(nil)
 // ControlServer is the one single-writer governed loop. Tick is its deterministic, restart-safe driver.
 type ControlServer struct {
 	tickMu     sync.Mutex // serializes Tick: closes the GetCursor->dispatch TOCTOU + the reconciler-cursor race
-	store      *store.Store
-	kernel     *kernel.Kernel
+	store      *state.Store
+	kernel     *state.Kernel
 	reconciler *admission.Reconciler
 	bridge     *Bridge
 	rules      admission.RuleSet
@@ -57,7 +56,7 @@ func kindSet(kinds []contract.ResourceKind) map[contract.ResourceKind]bool {
 	return set
 }
 
-func New(s *store.Store, k *kernel.Kernel, rules admission.RuleSet, subs map[contract.ActorID]contract.Subscription, modes contract.Modes, newID, now func() string) *ControlServer {
+func New(s *state.Store, k *state.Kernel, rules admission.RuleSet, subs map[contract.ActorID]contract.Subscription, modes contract.Modes, newID, now func() string) *ControlServer {
 	return &ControlServer{
 		store:      s,
 		kernel:     k,
@@ -247,7 +246,7 @@ func (cs *ControlServer) Tick() ([]contract.Decision, error) {
 			return nil, derr
 		}
 		// S2: this observed event's produced events + the cursor advance are ONE tx.
-		if err := cs.store.WithTx(func(tx *store.Tx) error {
+		if err := cs.store.WithTx(func(tx *state.Tx) error {
 			for _, e := range stamped {
 				if err := tx.AppendEvent(e); err != nil {
 					return err
@@ -378,12 +377,12 @@ func (cs *ControlServer) processDecisionSideEffects() error {
 	for _, dr := range decs {
 		d := dr.Decision
 		rid := dr.Rowid
-		if e := cs.store.WithTx(func(tx *store.Tx) error {
+		if e := cs.store.WithTx(func(tx *state.Tx) error {
 			if d.IngestSeq > 0 {
 				if d.Status == contract.Accepted {
 					payload, _ := json.Marshal(d.NewVersions)
 					key := "inv_" + d.DecisionID
-					if err := tx.EnqueueOutbox(store.OutboxRow{ID: key, Kind: "invalidation", EventSeq: d.IngestSeq, Target: "projection", Payload: string(payload), IdempotencyKey: key}); err != nil {
+					if err := tx.EnqueueOutbox(state.OutboxRow{ID: key, Kind: "invalidation", EventSeq: d.IngestSeq, Target: "projection", Payload: string(payload), IdempotencyKey: key}); err != nil {
 						return err
 					}
 					// cs.syncableKinds is the produce surface, descriptor-derived from the replica's

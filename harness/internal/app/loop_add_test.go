@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/state"
 )
 
 const widgetPackageSpec = `{"schema_version":1,"name":"widget","observed_type":"widget.write_candidate.observed",
@@ -37,7 +37,7 @@ func TestLoopAddRegistersAndValidates(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, ".mnemon", "loops", "widget", "capability.json")); err != nil {
 		t.Fatalf("package not placed under .mnemon/loops/widget: %v", err)
 	}
-	catalog, err := policy.ResolveCatalog(root, kernel.DefaultSchemaGuard().Required)
+	catalog, err := policy.ResolveCatalog(root, state.DefaultSchemaGuard().Required)
 	if err != nil {
 		t.Fatalf("resolve after add: %v", err)
 	}

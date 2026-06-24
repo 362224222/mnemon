@@ -21,9 +21,9 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/state"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemonhub"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
-	"github.com/mnemon-dev/mnemon/harness/internal/store"
 	"github.com/spf13/cobra"
 )
 
@@ -948,7 +948,7 @@ func startR1SyncHub(runRoot string, count int) (r1SyncHub, error) {
 		tokenList = append(tokenList, token)
 		principals = append(principals, string(principal))
 	}
-	st, err := store.OpenStore(filepath.Join(hubRoot, "hub.db"))
+	st, err := state.OpenStore(filepath.Join(hubRoot, "hub.db"))
 	if err != nil {
 		return r1SyncHub{}, err
 	}

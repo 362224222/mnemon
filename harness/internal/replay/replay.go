@@ -11,10 +11,9 @@ import (
 	"strings"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation/view"
-	"github.com/mnemon-dev/mnemon/harness/internal/store"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/state"
 )
 
 // canonicalModes is the fixed policy replay reconciles under. It SHARES contract.DefaultModes()
@@ -70,18 +69,18 @@ func logWriteKinds(events []contract.Event) []contract.ResourceKind {
 
 // logSchemaGuard registers every log-write kind with NO required fields: replay re-derives and
 // never re-polices, so a kind whose writes were live-accepted (carrying their fields) must validate.
-func logSchemaGuard(events []contract.Event) kernel.SchemaGuard {
+func logSchemaGuard(events []contract.Event) state.SchemaGuard {
 	required := map[contract.ResourceKind][]string{}
 	for _, k := range logWriteKinds(events) {
 		required[k] = nil
 	}
-	return kernel.SchemaGuard{Required: required}
+	return state.SchemaGuard{Required: required}
 }
 
 // permissiveAuthority lets every actor that appears in the events write every log-write kind, so replay does
 // not introduce authz rejections the live run did not have (the live authority is reproduced by the events
 // themselves having been accepted; replay only re-derives, it does not re-police).
-func permissiveAuthority(events []contract.Event) kernel.AuthorityRules {
+func permissiveAuthority(events []contract.Event) state.AuthorityRules {
 	kinds := logWriteKinds(events)
 	allow := map[contract.ActorID][]contract.ResourceKind{}
 	for _, ev := range events {
@@ -89,11 +88,11 @@ func permissiveAuthority(events []contract.Event) kernel.AuthorityRules {
 			allow[ev.Actor] = kinds
 		}
 	}
-	return kernel.AuthorityRules{Allow: allow}
+	return state.AuthorityRules{Allow: allow}
 }
 
 // Replay re-derives the decisions by reconciling the *.proposed events of the log over a FRESH :memory:
-// kernel. It is a pure function of the events (no live store), reproducing the live decisions up to the
+// state. It is a pure function of the events (no live store), reproducing the live decisions up to the
 // masked dynamic fields. The candidate ruleset is retained for signature symmetry with Shadow — pure replay
 // needs no policy because the logged proposals are authoritative (event-sourcing).
 func Replay(events []contract.Event, candidate admission.RuleSet) []contract.Decision {
@@ -121,12 +120,12 @@ func Replay(events []contract.Event, candidate admission.RuleSet) []contract.Dec
 // borrowed-emit proposal reduces to Verdict allow but emits one. It reports diffs, never pass/fail (the
 // operator gates promotion on Clean).
 func Shadow(events []contract.Event, subs map[contract.ActorID]contract.Subscription, live, candidate admission.RuleSet) admission.ShadowReport {
-	s, err := store.OpenStore(":memory:")
+	s, err := state.OpenStore(":memory:")
 	if err != nil {
 		return admission.ShadowReport{}
 	}
 	defer s.Close()
-	k := kernel.NewKernel(s, logSchemaGuard(events), permissiveAuthority(events))
+	k := state.NewKernel(s, logSchemaGuard(events), permissiveAuthority(events))
 	r := admission.NewReconciler(s, k)
 
 	diffs := 0
@@ -194,12 +193,12 @@ func canonicalRuleResult(d contract.RuleDecision, diags []contract.Diagnostic) s
 // drive replays the events on a throwaway kernel and returns the reconciler's decisions (event-sourcing
 // reproduce-from-log: the logged proposals are authoritative). It never touches a live store/cursor.
 func drive(events []contract.Event) []contract.Decision {
-	s, err := store.OpenStore(":memory:")
+	s, err := state.OpenStore(":memory:")
 	if err != nil {
 		return nil
 	}
 	defer s.Close()
-	k := kernel.NewKernel(s, logSchemaGuard(events), permissiveAuthority(events))
+	k := state.NewKernel(s, logSchemaGuard(events), permissiveAuthority(events))
 	r := admission.NewReconciler(s, k)
 	for _, ev := range events {
 		if _, err := s.AppendEvent(ev); err != nil {

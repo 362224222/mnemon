@@ -15,9 +15,9 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/state"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemonhub"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
-	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
 
 // openServingRuntime boots the PRODUCT serving runtime (OpenLocalRuntime = assembled host policy +
@@ -36,9 +36,9 @@ func openServingRuntime(t *testing.T, root string) *runtime.Runtime {
 }
 
 // startHub serves a mnemonhub hub over its own store and returns the endpoint + the hub handles.
-func startHub(t *testing.T, principals map[string]contract.ActorID, scopes []contract.ResourceRef) (string, *mnemonhub.Server, *store.Store) {
+func startHub(t *testing.T, principals map[string]contract.ActorID, scopes []contract.ResourceRef) (string, *mnemonhub.Server, *state.Store) {
 	t.Helper()
-	st, err := store.OpenStore(filepath.Join(t.TempDir(), "hub.db"))
+	st, err := state.OpenStore(filepath.Join(t.TempDir(), "hub.db"))
 	if err != nil {
 		t.Fatalf("open hub store: %v", err)
 	}
@@ -189,7 +189,7 @@ func TestSyncWorkerPushPullRoundTrip(t *testing.T) {
 	if err != nil || hubStatus.HubEventsReceived != 2 {
 		t.Fatalf("hub must hold seed+pushed events: %+v err=%v", hubStatus, err)
 	}
-	// Pull half: the foreign entry merged into governed memory through the kernel.
+	// Pull half: the foreign entry merged into governed memory through the state.
 	_, fields, err := rt.Resource(memRef)
 	if err != nil {
 		t.Fatalf("read memory: %v", err)

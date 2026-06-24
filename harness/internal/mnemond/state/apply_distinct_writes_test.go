@@ -1,4 +1,4 @@
-package kernel
+package state
 
 import (
 	"testing"

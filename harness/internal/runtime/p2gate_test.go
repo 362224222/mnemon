@@ -6,9 +6,9 @@ import (
 	"testing"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/state"
 )
 
 // TestP2ChannelEndToEnd is the P2 gate's positive path: a runtime booted with ONE in-memory binding
@@ -37,11 +37,11 @@ func TestP2ChannelEndToEnd(t *testing.T) {
 	}
 	rt, err := OpenRuntime(storePath, RuntimeConfig{
 		Rules:     admission.NewRuleSet(createRule),
-		Authority: kernel.AuthorityRules{Allow: map[contract.ActorID][]contract.ResourceKind{"codex": {"memory"}}},
+		Authority: state.AuthorityRules{Allow: map[contract.ActorID][]contract.ResourceKind{"codex": {"memory"}}},
 		Subs:      map[contract.ActorID]contract.Subscription{"codex": {Actor: "codex", Refs: []contract.ResourceRef{ref}}},
 		Bindings:  []access.ChannelBinding{binding},
 		NewID:     seqGen(), Now: fixedNow(),
-		SchemaGuard: kernel.SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}}),
+		SchemaGuard: state.SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}}),
 	})
 	if err != nil {
 		t.Fatalf("open runtime: %v", err)
@@ -83,7 +83,7 @@ func TestP2ChannelNegatives(t *testing.T) {
 			AllowedVerbs: []access.Verb{access.VerbObserve, access.VerbPull, access.VerbStatus}, AllowedObservedTypes: []string{"session.observed"},
 			SubscriptionScope: []contract.ResourceRef{ref}, IdempotencyNamespace: "host:codex",
 		}},
-		SchemaGuard: kernel.SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}}),
+		SchemaGuard: state.SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}}),
 	})
 	if err != nil {
 		t.Fatalf("open runtime: %v", err)

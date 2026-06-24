@@ -23,10 +23,10 @@ import (
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
-	"github.com/mnemon-dev/mnemon/harness/internal/store"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/state"
 )
 
-// LiveStore is the open-handle surface the exchange passes drive: satisfied by *store.Store (the offline
+// LiveStore is the open-handle surface the exchange passes drive: satisfied by *state.Store (the offline
 // opener) and by *runtime.Runtime's passthroughs (the in-process worker). Cursor access is included
 // because the pull cursor is durable sync state; callers must stay on the sync cursor names.
 type LiveStore interface {
@@ -37,7 +37,7 @@ type LiveStore interface {
 	SetCursor(name string, seq int64) error
 }
 
-var _ LiveStore = (*store.Store)(nil)
+var _ LiveStore = (*state.Store)(nil)
 
 type LocalSyncPushBatch struct {
 	ReplicaID string
@@ -198,7 +198,7 @@ func PushBatchID(replicaID string, events []eventmodel.EventEnvelope) string {
 	return "push-" + hex.EncodeToString(sum[:12])
 }
 
-func openLocalSyncStore(path string) (*store.Store, error) {
+func openLocalSyncStore(path string) (*state.Store, error) {
 	if dir := filepath.Dir(path); dir != "" && dir != "." {
 		// T1 floor: this is a user-reachable creation path for the PRIVATE store dir
 		// (`sync pull --once` can precede setup/local run) — owner-only, like every other
@@ -207,7 +207,7 @@ func openLocalSyncStore(path string) (*store.Store, error) {
 			return nil, err
 		}
 	}
-	return store.OpenStore(path)
+	return state.OpenStore(path)
 }
 
 // ProbeAvailable reports whether the local store can be opened for an offline sync pass. It returns an
@@ -221,7 +221,7 @@ func ProbeAvailable(storePath string) error {
 	if _, err := os.Stat(storePath); os.IsNotExist(err) {
 		return nil
 	}
-	s, err := store.OpenStore(storePath)
+	s, err := state.OpenStore(storePath)
 	if err != nil {
 		return err
 	}

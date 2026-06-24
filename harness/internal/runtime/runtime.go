@@ -10,10 +10,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
-	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
-	"github.com/mnemon-dev/mnemon/harness/internal/store"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/state"
 )
 
 // Runtime is the server-owned governed runtime: it owns the canonical kernel
@@ -25,7 +24,7 @@ import (
 // the runtime holds the kernel store's single-writer lock for its lifetime, so an embedded opener and
 // a live server can never own the same store at once.
 type Runtime struct {
-	store     *store.Store
+	store     *state.Store
 	cs        *ControlServer
 	api       access.ServerAPI // cs, or an authorizedAPI wrapping cs when Bindings are configured
 	storePath string
@@ -38,7 +37,7 @@ type Runtime struct {
 // uuid/RFC3339; Modes defaults to reject + projection-read-set + strict authz.
 type RuntimeConfig struct {
 	Rules     admission.RuleSet
-	Authority kernel.AuthorityRules
+	Authority state.AuthorityRules
 	Subs      map[contract.ActorID]contract.Subscription
 	Modes     contract.Modes
 	NewID     func() string
@@ -47,8 +46,8 @@ type RuntimeConfig struct {
 	// SchemaGuard is the kernel's per-kind required-fields guard. The assembler builds it from the
 	// governance kinds plus each enabled capability's declared required header (PD2), so a declared
 	// user kind's required set has ONE source — the policy. The zero value (nil Required) falls
-	// back to kernel.DefaultSchemaGuard for callers that do not assemble a catalog.
-	SchemaGuard kernel.SchemaGuard
+	// back to state.DefaultSchemaGuard for callers that do not assemble a catalog.
+	SchemaGuard state.SchemaGuard
 
 	// Bindings, when non-empty, gates the runtime's channel API with a access.BindingSet authorizer (P2.1):
 	// every principal must have a binding granting the verb / observed type / pull scope it uses. The
@@ -78,7 +77,7 @@ func (cfg RuntimeConfig) withDefaults() RuntimeConfig {
 		cfg.Subs = map[contract.ActorID]contract.Subscription{}
 	}
 	if cfg.SchemaGuard.Required == nil {
-		cfg.SchemaGuard = kernel.DefaultSchemaGuard()
+		cfg.SchemaGuard = state.DefaultSchemaGuard()
 	}
 	return cfg
 }
@@ -102,12 +101,12 @@ func OpenRuntime(storePath string, cfg RuntimeConfig) (*Runtime, error) {
 			return nil, fmt.Errorf("create control store dir: %w", err)
 		}
 	}
-	store, err := store.OpenStore(storePath)
+	store, err := state.OpenStore(storePath)
 	if err != nil {
 		return nil, fmt.Errorf("open kernel store: %w", err)
 	}
 	cfg = cfg.withDefaults()
-	k := kernel.NewKernel(store, cfg.SchemaGuard, cfg.Authority)
+	k := state.NewKernel(store, cfg.SchemaGuard, cfg.Authority)
 	cs := New(store, k, cfg.Rules, cfg.Subs, cfg.Modes, cfg.NewID, cfg.Now)
 	cs.syncableKinds = kindSet(cfg.SyncableKinds)
 	rt := &Runtime{store: store, cs: cs, api: cs, storePath: storePath}
@@ -140,10 +139,10 @@ func (r *Runtime) IngestObservedEnvelope(principal contract.ActorID, env eventmo
 func (r *Runtime) StorePath() string { return r.storePath }
 
 // Tick drives one governed cycle. The runtime owns the SINGLE dispatch-cursor driver — no surface
-// drives Tick independently against the store.
+// drives Tick independently against the state.
 func (r *Runtime) Tick() ([]contract.Decision, error) { return r.cs.Tick() }
 
-// Resource reads one canonical resource's version + fields directly from the store. It is a
+// Resource reads one canonical resource's version + fields directly from the state. It is a
 // read-after-decision helper for the OWNING surface (read-only — never a second writer).
 func (r *Runtime) Resource(ref contract.ResourceRef) (contract.Version, map[string]any, error) {
 	return r.store.GetResource(ref)

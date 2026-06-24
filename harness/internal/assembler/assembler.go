@@ -2,7 +2,7 @@
 // capabilities are enabled + how they are bound/limited) plus the channel bindings into a
 // runtime.RuntimeConfig. It only SELECTS already-compiled capabilities from the provided catalog
 // (resolved via the native:<id> rule_ref); an unknown capability id fails closed. Config can never
-// define new behavior — the canonical state still flows observed -> rule -> kernel.
+// define new behavior — the canonical state still flows observed -> rule -> state.
 package assembler
 
 import (
@@ -11,10 +11,10 @@ import (
 
 	"github.com/mnemon-dev/mnemon/harness/internal/config"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/state"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
@@ -38,11 +38,11 @@ func Assemble(cfg config.File, bindings []access.ChannelBinding, catalog map[str
 	}
 	var rules []admission.Rule
 	allow := map[contract.ActorID][]contract.ResourceKind{}
-	// The live kernel's schema guard is the governance core (kernel.DefaultSchemaGuard) PLUS each
+	// The live kernel's schema guard is the governance core (state.DefaultSchemaGuard) PLUS each
 	// enabled capability's declared required header — so a declared user kind has ONE source, its
 	// capability spec (PD2). DefaultSchemaGuard returns a fresh map per call; add-only registration
 	// keeps a compiled kind's hand-written required while the transitional default still carries it.
-	guard := kernel.DefaultSchemaGuard()
+	guard := state.DefaultSchemaGuard()
 	for name, cc := range cfg.Capabilities {
 		if !cc.Enabled {
 			continue
@@ -96,7 +96,7 @@ func Assemble(cfg config.File, bindings []access.ChannelBinding, catalog map[str
 		Bindings:    bindings,
 		Subs:        access.SubsFromBindings(bindings),
 		Rules:       admission.NewRuleSet(rules...),
-		Authority:   kernel.AuthorityRules{Allow: allow},
+		Authority:   state.AuthorityRules{Allow: allow},
 		SchemaGuard: guard,
 	}, nil
 }

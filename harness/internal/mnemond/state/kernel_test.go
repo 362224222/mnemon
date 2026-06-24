@@ -1,18 +1,17 @@
-package kernel
+package state
 
 import (
 	"testing"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
 
-// newTestStore is the kernel package's local test store ctor. It mirrors the helper that moved to
+// newKernelTestStore is the kernel package's local test store ctor. It mirrors the helper that moved to
 // the store package with store_test.go; kept in _test.go so the production store package never
 // imports testing.
-func newTestStore(t *testing.T) *store.Store {
+func newKernelTestStore(t *testing.T) *Store {
 	t.Helper()
-	s, err := store.OpenStore(":memory:")
+	s, err := OpenStore(":memory:")
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -35,7 +34,7 @@ func mustCreate(t *testing.T, k *Kernel, kind contract.ResourceKind, id contract
 	}
 }
 func newKernel(t *testing.T) *Kernel {
-	return NewKernel(newTestStore(t), SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}, "goal": {"statement"}}), permissiveRules())
+	return NewKernel(newKernelTestStore(t), SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}, "goal": {"statement"}}), permissiveRules())
 }
 
 func TestApplyMultiResourceAllOrNothing(t *testing.T) {
@@ -55,7 +54,7 @@ func TestApplyMultiResourceAllOrNothing(t *testing.T) {
 	}
 }
 func TestAuthzFailureIsRejectedNotDeferred(t *testing.T) {
-	k := NewKernel(newTestStore(t), SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}, "goal": {"statement"}}), AuthorityRules{}) // nobody allowed
+	k := NewKernel(newKernelTestStore(t), SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}, "goal": {"statement"}}), AuthorityRules{}) // nobody allowed
 	d := k.Apply(contract.KernelOp{OpID: "op2", Actor: "codex@x", Writes: []contract.ResourceWrite{
 		{Ref: contract.ResourceRef{Kind: "memory", ID: "m1"}, Kind: contract.OpCreate, Fields: map[string]any{"content": "a"}}}}, p0Modes())
 	if d.Status != contract.Rejected || d.NextAction != "" {
