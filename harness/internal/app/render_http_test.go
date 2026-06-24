@@ -174,6 +174,62 @@ func TestRenderEndpointAppliesBindingBudgetWithoutReducingAuthority(t *testing.T
 	}
 }
 
+func TestMemoryEventDataflowReachesContextPresenter(t *testing.T) {
+	ref := contract.ResourceRef{Kind: "memory", ID: "project"}
+	b := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
+	b.AllowedObservedTypes = []string{"memory.write_candidate.observed"}
+	loaded := access.LoadedBindings{
+		Bindings: []access.ChannelBinding{b},
+		Tokens:   map[string]contract.ActorID{"tok": "codex@project"},
+	}
+	rc, err := LocalRuntimeConfigFromBindings(loaded.Bindings, nil)
+	if err != nil {
+		t.Fatalf("runtime config: %v", err)
+	}
+	rt, err := runtime.OpenRuntime(filepath.Join(t.TempDir(), "memory-dataflow.db"), rc)
+	if err != nil {
+		t.Fatalf("open runtime: %v", err)
+	}
+	defer rt.Close()
+	bindings, err := access.NewBindingSet(loaded.Bindings...)
+	if err != nil {
+		t.Fatalf("binding set: %v", err)
+	}
+	srv := httptest.NewServer(NewLocalHTTPHandler(rt, access.TokenAuthenticator{Tokens: loaded.Tokens}, bindings, presentation.Renderer{
+		Now: func() time.Time { return mustRenderHTTPTime(t, "2026-06-24T10:05:00Z") },
+	}))
+	defer srv.Close()
+
+	client := access.NewClientWithToken(srv.URL, "tok")
+	rec, err := client.IngestObserve("", contract.ObservationEnvelope{
+		ExternalID: "memory-dataflow-1",
+		Event: contract.Event{Type: "memory.write_candidate.observed", Payload: map[string]any{
+			"content":    "Use the presenter registry as the dataflow boundary.",
+			"source":     "test",
+			"confidence": "high",
+			"tags":       []any{"dataflow", "memory"},
+		}},
+	})
+	if err != nil || !rec.Ticked {
+		t.Fatalf("observe memory: rec=%+v err=%v", rec, err)
+	}
+	if v, fields, err := rt.Resource(ref); err != nil || v == 0 || !strings.Contains(fmt.Sprint(fields["content"]), "presenter registry") {
+		t.Fatalf("memory event must materialize through mnemond state: v=%d fields=%+v err=%v", v, fields, err)
+	}
+
+	packet := postRender(t, srv.URL, "tok", presentation.Request{RenderIntent: presentation.IntentContextPacket})
+	if packet.Status != presentation.StatusOK ||
+		!strings.Contains(packet.Body, "[mnemon:context]") ||
+		!strings.Contains(packet.Body, "presenter registry") {
+		t.Fatalf("context presenter must carry admitted memory into the agent packet: %#v", packet)
+	}
+	for _, teamworkLabel := range []string{"[mnemon:work]", "[mnemon:feedback]", "[mnemon:integrate]", "[mnemon:expired]"} {
+		if strings.Contains(packet.Body, teamworkLabel) {
+			t.Fatalf("memory dataflow must not require teamwork presentation label %q:\n%s", teamworkLabel, packet.Body)
+		}
+	}
+}
+
 func postRender(t *testing.T, baseURL, token string, reqBody presentation.Request) presentation.Response {
 	t.Helper()
 	body, err := json.Marshal(reqBody)
