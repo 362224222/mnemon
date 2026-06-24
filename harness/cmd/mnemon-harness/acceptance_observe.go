@@ -19,37 +19,33 @@ import (
 )
 
 var (
-	acceptanceObserveJSON    bool
-	acceptanceWatchInterval  time.Duration
-	acceptanceWatchOnce      bool
-	acceptanceInspectLatestN int
+	acceptanceObserveJSON     bool
+	acceptanceObserveWatch    bool
+	acceptanceObserveOnce     bool
+	acceptanceObserveInterval time.Duration
+	acceptanceObserveLatestN  int
 )
 
-var acceptanceInspectCmd = &cobra.Command{
-	Use:   "inspect",
-	Short: "Inspect an acceptance run's mnemond and mnemonhub event state",
+var acceptanceObserveCmd = &cobra.Command{
+	Use:   "observe",
+	Short: "Observe an acceptance run's mnemond and mnemonhub event state",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		report, err := inspectAcceptanceRun(acceptanceRunRoot, acceptanceInspectLatestN)
-		if err != nil {
-			return err
+		if !acceptanceObserveWatch {
+			report, err := observeAcceptanceRun(acceptanceRunRoot, acceptanceObserveLatestN)
+			if err != nil {
+				return err
+			}
+			if acceptanceObserveJSON {
+				return writeJSON(cmd.OutOrStdout(), report)
+			}
+			writeAcceptanceObserveText(cmd.OutOrStdout(), report)
+			return nil
 		}
-		if acceptanceObserveJSON {
-			return writeJSON(cmd.OutOrStdout(), report)
-		}
-		writeAcceptanceInspectText(cmd.OutOrStdout(), report)
-		return nil
-	},
-}
-
-var acceptanceWatchCmd = &cobra.Command{
-	Use:   "watch",
-	Short: "Watch an acceptance run's mnemond and mnemonhub event state",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		if acceptanceWatchInterval <= 0 {
-			acceptanceWatchInterval = 2 * time.Second
+		if acceptanceObserveInterval <= 0 {
+			acceptanceObserveInterval = 2 * time.Second
 		}
 		for {
-			report, err := inspectAcceptanceRun(acceptanceRunRoot, acceptanceInspectLatestN)
+			report, err := observeAcceptanceRun(acceptanceRunRoot, acceptanceObserveLatestN)
 			if err != nil {
 				return err
 			}
@@ -58,37 +54,35 @@ var acceptanceWatchCmd = &cobra.Command{
 					return err
 				}
 			} else {
-				writeAcceptanceWatchText(cmd.OutOrStdout(), report)
+				writeAcceptanceObserveWatchText(cmd.OutOrStdout(), report)
 			}
-			if acceptanceWatchOnce {
+			if acceptanceObserveOnce {
 				return nil
 			}
 			select {
 			case <-cmd.Context().Done():
 				return cmd.Context().Err()
-			case <-time.After(acceptanceWatchInterval):
+			case <-time.After(acceptanceObserveInterval):
 			}
 		}
 	},
 }
 
 func init() {
-	acceptanceInspectCmd.Flags().StringVar(&acceptanceRunRoot, "run-root", "", "acceptance run directory")
-	acceptanceInspectCmd.Flags().BoolVar(&acceptanceObserveJSON, "json", false, "emit JSON instead of text")
-	acceptanceInspectCmd.Flags().IntVar(&acceptanceInspectLatestN, "latest", 5, "number of latest events to show per store")
-	acceptanceWatchCmd.Flags().StringVar(&acceptanceRunRoot, "run-root", "", "acceptance run directory")
-	acceptanceWatchCmd.Flags().BoolVar(&acceptanceObserveJSON, "json", false, "emit JSON instead of text")
-	acceptanceWatchCmd.Flags().DurationVar(&acceptanceWatchInterval, "interval", 2*time.Second, "watch refresh interval")
-	acceptanceWatchCmd.Flags().BoolVar(&acceptanceWatchOnce, "once", false, "render one watch snapshot and exit")
-	acceptanceWatchCmd.Flags().IntVar(&acceptanceInspectLatestN, "latest", 3, "number of latest events to show per store")
-	acceptanceCmd.AddCommand(acceptanceInspectCmd, acceptanceWatchCmd)
+	acceptanceObserveCmd.Flags().StringVar(&acceptanceRunRoot, "run-root", "", "acceptance run directory")
+	acceptanceObserveCmd.Flags().BoolVar(&acceptanceObserveJSON, "json", false, "emit JSON instead of text")
+	acceptanceObserveCmd.Flags().IntVar(&acceptanceObserveLatestN, "latest", 5, "number of latest events to show per store")
+	acceptanceObserveCmd.Flags().BoolVar(&acceptanceObserveWatch, "watch", false, "continue refreshing observation snapshots")
+	acceptanceObserveCmd.Flags().DurationVar(&acceptanceObserveInterval, "interval", 2*time.Second, "watch refresh interval")
+	acceptanceObserveCmd.Flags().BoolVar(&acceptanceObserveOnce, "once", false, "render one watch snapshot and exit")
+	acceptanceCmd.AddCommand(acceptanceObserveCmd)
 }
 
-type acceptanceInspectReport struct {
+type acceptanceObserveReport struct {
 	SchemaVersion int                         `json:"schema_version"`
 	GeneratedAt   string                      `json:"generated_at"`
 	RunRoot       string                      `json:"run_root"`
-	Topology      acceptanceInspectTopology   `json:"topology"`
+	Topology      acceptanceObserveTopology   `json:"topology"`
 	Stores        []acceptanceStoreInspect    `json:"stores"`
 	HubAudits     []acceptanceAuditInspect    `json:"hub_audits,omitempty"`
 	RenderAudits  []acceptanceRenderAuditInfo `json:"render_audits,omitempty"`
@@ -96,7 +90,7 @@ type acceptanceInspectReport struct {
 	Warnings      []string                    `json:"warnings,omitempty"`
 }
 
-type acceptanceInspectTopology struct {
+type acceptanceObserveTopology struct {
 	MnemondStores      int      `json:"mnemond_stores"`
 	MnemonhubStores    int      `json:"mnemonhub_stores"`
 	SharedMnemond      bool     `json:"shared_mnemond"`
@@ -187,32 +181,32 @@ type acceptanceCrossEvent struct {
 	ImportedBy      []string `json:"imported_by,omitempty"`
 }
 
-func inspectAcceptanceRun(runRoot string, latest int) (acceptanceInspectReport, error) {
+func observeAcceptanceRun(runRoot string, latest int) (acceptanceObserveReport, error) {
 	if strings.TrimSpace(runRoot) == "" {
-		return acceptanceInspectReport{}, fmt.Errorf("--run-root is required")
+		return acceptanceObserveReport{}, fmt.Errorf("--run-root is required")
 	}
 	abs, err := filepath.Abs(runRoot)
 	if err != nil {
-		return acceptanceInspectReport{}, err
+		return acceptanceObserveReport{}, err
 	}
 	info, err := os.Stat(abs)
 	if err != nil {
-		return acceptanceInspectReport{}, err
+		return acceptanceObserveReport{}, err
 	}
 	if !info.IsDir() {
-		return acceptanceInspectReport{}, fmt.Errorf("run root is not a directory: %s", abs)
+		return acceptanceObserveReport{}, fmt.Errorf("run root is not a directory: %s", abs)
 	}
 	if latest <= 0 {
 		latest = 5
 	}
-	report := acceptanceInspectReport{
+	report := acceptanceObserveReport{
 		SchemaVersion: 1,
 		GeneratedAt:   time.Now().UTC().Truncate(time.Second).Format(time.RFC3339),
 		RunRoot:       abs,
 	}
 	dbPaths, renderAuditPaths, hubAuditPaths, err := findAcceptanceArtifacts(abs)
 	if err != nil {
-		return acceptanceInspectReport{}, err
+		return acceptanceObserveReport{}, err
 	}
 	for _, path := range dbPaths {
 		storeReport, err := inspectAcceptanceStore(abs, path, latest)
@@ -644,8 +638,8 @@ func inspectHubAudit(path string, latest int) (acceptanceAuditInspect, error) {
 	return info, nil
 }
 
-func buildAcceptanceTopology(stores []acceptanceStoreInspect) acceptanceInspectTopology {
-	top := acceptanceInspectTopology{}
+func buildAcceptanceTopology(stores []acceptanceStoreInspect) acceptanceObserveTopology {
+	top := acceptanceObserveTopology{}
 	paths := map[string]bool{}
 	hasLocalShared := false
 	for _, st := range stores {
@@ -857,7 +851,7 @@ func writeJSON(w io.Writer, v any) error {
 	return err
 }
 
-func writeAcceptanceInspectText(w io.Writer, report acceptanceInspectReport) {
+func writeAcceptanceObserveText(w io.Writer, report acceptanceObserveReport) {
 	fmt.Fprintf(w, "run_root: %s\n", report.RunRoot)
 	fmt.Fprintf(w, "generated_at: %s\n", report.GeneratedAt)
 	fmt.Fprintf(w, "topology: mode=%s mnemond=%d mnemonhub=%d shared_mnemond=%t per_hostagent=%t\n\n",
@@ -884,7 +878,7 @@ func writeAcceptanceInspectText(w io.Writer, report acceptanceInspectReport) {
 	}
 }
 
-func writeAcceptanceWatchText(w io.Writer, report acceptanceInspectReport) {
+func writeAcceptanceObserveWatchText(w io.Writer, report acceptanceObserveReport) {
 	fmt.Fprintf(w, "[%s] topology mode=%s mnemond=%d mnemonhub=%d shared_mnemond=%t per_hostagent=%t\n\n",
 		report.GeneratedAt, report.Topology.Mode, report.Topology.MnemondStores, report.Topology.MnemonhubStores, report.Topology.SharedMnemond, report.Topology.PerHostagent)
 	writeAcceptanceStoreTable(w, report.Stores)

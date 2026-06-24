@@ -216,7 +216,7 @@ func runR1ProdSimAcceptance(ctx context.Context, opts r1ProdSimAcceptanceOptions
 		report.LedgerCounts = countR1Ledger(agents[0].localURL, agents[0].r1CodexAgent)
 	}
 	report.DerivedEventAudit = prodSimDerivedAudit(agents)
-	if obs, err := inspectAcceptanceRun(runRoot, 1000); err == nil {
+	if obs, err := observeAcceptanceRun(runRoot, 1000); err == nil {
 		report.Observability = &obs
 		addR1Assertion(&report, "prod-sim observability sees strict topology", obs.Topology.Mode == "per-hostagent-mnemond" && !obs.Topology.SharedMnemond, fmt.Sprintf("mode=%s shared=%t mnemond=%d hub=%d", obs.Topology.Mode, obs.Topology.SharedMnemond, obs.Topology.MnemondStores, obs.Topology.MnemonhubStores))
 	} else {
@@ -414,7 +414,7 @@ func (s prodSimRun) runRestartNoDuplicateAction() error {
 	if len(s.agents) < 4 {
 		return fmt.Errorf("restart scenario requires at least four agents")
 	}
-	before, err := inspectAcceptanceRun(s.report.RunRoot, 10)
+	before, err := observeAcceptanceRun(s.report.RunRoot, 10)
 	if err != nil {
 		addR1Assertion(s.report, "prod-sim restart inspect before", false, err.Error())
 		return err
@@ -437,7 +437,7 @@ func (s prodSimRun) runRestartNoDuplicateAction() error {
 	}
 	appendSyncAgentAnswer(s.report.Sync, agent.principal, "restarted thread "+agentReport.ThreadID)
 	time.Sleep(2 * time.Second)
-	after, err := inspectAcceptanceRun(s.report.RunRoot, 10)
+	after, err := observeAcceptanceRun(s.report.RunRoot, 10)
 	if err != nil {
 		addR1Assertion(s.report, "prod-sim restart inspect after", false, err.Error())
 		return err
@@ -581,7 +581,7 @@ func prodSimDerivedAudit(agents []r1CodexSyncAgent) map[string]int {
 	return out
 }
 
-func prodSimAcceptedTotal(report acceptanceInspectReport) int {
+func prodSimAcceptedTotal(report acceptanceObserveReport) int {
 	total := 0
 	for _, store := range report.Stores {
 		if store.Role == "mnemond" {
@@ -591,7 +591,7 @@ func prodSimAcceptedTotal(report acceptanceInspectReport) int {
 	return total
 }
 
-func prodSimHubRemoteTotal(report acceptanceInspectReport) int {
+func prodSimHubRemoteTotal(report acceptanceObserveReport) int {
 	total := 0
 	for _, store := range report.Stores {
 		if store.Role == "mnemonhub" {

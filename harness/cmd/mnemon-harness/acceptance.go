@@ -112,7 +112,7 @@ type r1CodexAcceptanceReport struct {
 	Scenarios         []r1TaskSimScenarioReport   `json:"scenarios,omitempty"`
 	LedgerCounts      map[string]int              `json:"ledger_counts,omitempty"`
 	DerivedEventAudit map[string]int              `json:"derived_event_audit,omitempty"`
-	Observability     *acceptanceInspectReport    `json:"observability,omitempty"`
+	Observability     *acceptanceObserveReport    `json:"observability,omitempty"`
 	Assertions        []r1AcceptanceAssertion     `json:"assertions"`
 	Errors            []string                    `json:"errors,omitempty"`
 	Artifacts         map[string]string           `json:"artifacts,omitempty"`
