@@ -6,31 +6,31 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/capability"
 	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/config"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
-// fixtureCatalog is EmbeddedCatalog() plus the DEMOTED note/decision capabilities, compiled from their
-// canonical fixture specs (capability/testdata/capabilities/*.json — formerly embedded, now
+// fixtureCatalog is EmbeddedCatalog() plus the DEMOTED note/decision policies, compiled from their
+// canonical fixture specs (mnemond/policy/testdata/capabilities/*.json — formerly embedded, now
 // supplied the way an external package would supply them). Mirrors the shape the boot path gets
-// from capability.ResolveCatalog when the operator lays the packages under .mnemon/loops.
-func fixtureCatalog(t *testing.T, names ...string) map[string]capability.Capability {
+// from policy.ResolveCatalog when the operator lays the packages under .mnemon/loops.
+func fixtureCatalog(t *testing.T, names ...string) map[string]policy.Capability {
 	t.Helper()
-	catalog := map[string]capability.Capability{}
-	for id, c := range capability.EmbeddedCatalog() {
+	catalog := map[string]policy.Capability{}
+	for id, c := range policy.EmbeddedCatalog() {
 		catalog[id] = c
 	}
-	fixtures := os.DirFS(filepath.Join("..", "capability", "testdata"))
+	fixtures := os.DirFS(filepath.Join("..", "mnemond", "policy", "testdata"))
 	for _, name := range names {
-		spec, err := capability.LoadSpec(fixtures, name)
+		spec, err := policy.LoadSpec(fixtures, name)
 		if err != nil {
 			t.Fatalf("load fixture spec %s: %v", name, err)
 		}
-		cap, err := capability.FromSpec(spec)
+		cap, err := policy.FromSpec(spec)
 		if err != nil {
 			t.Fatalf("compile fixture spec %s: %v", name, err)
 		}
@@ -91,17 +91,17 @@ func TestAssembleRegistersDeclaredKindNotInDefaultGuard(t *testing.T) {
 	if _, compiled := kernel.DefaultSchemaGuard().Required["widget"]; compiled {
 		t.Fatal("precondition: widget must NOT be a compiled kind for this test to prove declared-kind registration")
 	}
-	widgetSpec := capability.CapabilitySpec{
+	widgetSpec := policy.CapabilitySpec{
 		SchemaVersion: 1, Name: "widget",
 		ObservedType: "widget.write_candidate.observed", ProposedType: "widget.write.proposed",
 		ResourceKind: "widget", ItemsField: "items",
-		Fields: []capability.FieldSpec{{Name: "text", Validators: []capability.ValidatorRef{
+		Fields: []policy.FieldSpec{{Name: "text", Validators: []policy.ValidatorRef{
 			{ID: "required", Params: map[string]string{"missing_style": "empty"}},
 		}}},
-		Render: capability.RenderSpec{Content: &capability.ContentRender{
+		Render: policy.RenderSpec{Content: &policy.ContentRender{
 			Member: "bullet-list", Params: map[string]string{"title": "# Widgets", "field": "text"}}},
 	}
-	widgetCap, err := capability.FromSpec(widgetSpec)
+	widgetCap, err := policy.FromSpec(widgetSpec)
 	if err != nil {
 		t.Fatalf("a declared (non-reserved) kind must compile: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestAssembleRegistersDeclaredKindNotInDefaultGuard(t *testing.T) {
 	cfg := config.File{Capabilities: map[string]config.CapabilityConfig{
 		"widget": {Enabled: true, ResourceRef: "widget/project", RuleRef: "native:widget"},
 	}}
-	rc, err := Assemble(cfg, []channel.ChannelBinding{binding}, map[string]capability.Capability{"widget": widgetCap})
+	rc, err := Assemble(cfg, []channel.ChannelBinding{binding}, map[string]policy.Capability{"widget": widgetCap})
 	if err != nil {
 		t.Fatalf("assemble: %v", err)
 	}
@@ -139,26 +139,26 @@ func TestAssembleRegistersDeclaredKindNotInDefaultGuard(t *testing.T) {
 
 // Stage-5: Assemble selects from the PROVIDED catalog — a capability that exists only in an
 // external package (goal) resolves when the resolved catalog is passed, and fails closed when the
-// caller passes nil (nil = capability.EmbeddedCatalog(), the backward-compatible seam).
+// caller passes nil (nil = policy.EmbeddedCatalog(), the backward-compatible seam).
 func TestAssembleResolvesFromProvidedCatalog(t *testing.T) {
-	goalSpec := capability.CapabilitySpec{
+	goalSpec := policy.CapabilitySpec{
 		SchemaVersion: 1, Name: "goal",
 		ObservedType: "goal.write_candidate.observed", ProposedType: "goal.write.proposed",
 		ResourceKind: "goal", ItemsField: "items",
-		Fields: []capability.FieldSpec{{Name: "statement", Validators: []capability.ValidatorRef{
+		Fields: []policy.FieldSpec{{Name: "statement", Validators: []policy.ValidatorRef{
 			{ID: "required", Params: map[string]string{"missing_style": "empty"}},
 		}}},
-		Render: capability.RenderSpec{
-			Content: &capability.ContentRender{Member: "bullet-list", Params: map[string]string{"title": "# Goals", "field": "statement"}},
+		Render: policy.RenderSpec{
+			Content: &policy.ContentRender{Member: "bullet-list", Params: map[string]string{"title": "# Goals", "field": "statement"}},
 			Static:  map[string]string{"statement": "project"},
 		},
 	}
-	goalCap, err := capability.FromSpec(goalSpec)
+	goalCap, err := policy.FromSpec(goalSpec)
 	if err != nil {
 		t.Fatalf("compile goal spec: %v", err)
 	}
-	catalog := map[string]capability.Capability{"goal": goalCap}
-	for id, c := range capability.EmbeddedCatalog() {
+	catalog := map[string]policy.Capability{"goal": goalCap}
+	for id, c := range policy.EmbeddedCatalog() {
 		catalog[id] = c
 	}
 
@@ -312,7 +312,7 @@ func TestAssembleRejectsBareRuleRef(t *testing.T) {
 }
 
 // 阶段二验收(P1 降级后):第四能力 decision 的全部 Go 足迹 = KindCatalog/SchemaGuard 各一行;
-// 行为完全来自 spec 文件(capability/testdata/capabilities/decision.json,经 P1 降级为
+// 行为完全来自 spec 文件(mnemond/policy/testdata/capabilities/decision.json,经 P1 降级为
 // fixture/外部包供给——曾内嵌于 assets)。端到端与 note 同构。
 func TestAssembleAdmitsDecisionCapabilityEndToEnd(t *testing.T) {
 	ref := contract.ResourceRef{Kind: "decision", ID: "project"}
@@ -356,17 +356,17 @@ func TestBuiltinHeadersSatisfySchemaGuard(t *testing.T) {
 	// registers it). Build the guard from the caps and assert each cap's rendered fields satisfy its
 	// own kind's required — the render⊇required lockstep, now derived from the spec.
 	extra := map[contract.ResourceKind][]string{}
-	for _, cap := range capability.EmbeddedCatalog() {
+	for _, cap := range policy.EmbeddedCatalog() {
 		extra[cap.ResourceKind] = cap.RequiredHeader
 	}
 	guard := kernel.SchemaGuardWith(extra)
-	for id, cap := range capability.EmbeddedCatalog() {
+	for id, cap := range policy.EmbeddedCatalog() {
 		item, err := cap.Decode(minimalAcceptPayload(id))
 		if err != nil {
 			t.Fatalf("%s: decode minimal accept: %v", id, err)
 		}
-		fields := map[string]any{cap.ItemsField: []capability.Item{item}, "updated_by": "x"}
-		for k, v := range cap.Header([]capability.Item{item}) {
+		fields := map[string]any{cap.ItemsField: []policy.Item{item}, "updated_by": "x"}
+		for k, v := range cap.Header([]policy.Item{item}) {
 			fields[k] = v
 		}
 		if err := guard.Validate(cap.ResourceKind, fields); err != nil {

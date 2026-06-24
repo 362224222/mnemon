@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/capability"
 	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemonhub"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
@@ -76,7 +76,7 @@ func observeMemory(t *testing.T, rt *runtime.Runtime, externalID, content string
 	t.Helper()
 	if _, _, err := rt.API().Ingest("codex@project", contract.ObservationEnvelope{
 		ExternalID: externalID,
-		Event: contract.Event{Type: capability.MemoryWriteCandidateObserved, Payload: map[string]any{
+		Event: contract.Event{Type: policy.MemoryWriteCandidateObserved, Payload: map[string]any{
 			"content": content, "source": "test", "confidence": "high",
 		}},
 	}); err != nil {

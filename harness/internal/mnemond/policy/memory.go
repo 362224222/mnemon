@@ -1,7 +1,7 @@
 // Package capability holds the built-in admission rules (the pure leaf): given an Event + EventView
 // it returns a RuleDecision, never writing. It imports rule/eventview/contract only — binding->rule
 // translation and runtime wiring live in app. Memory + skill are the two P0 capabilities.
-package capability
+package policy
 
 import (
 	"encoding/json"

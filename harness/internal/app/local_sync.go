@@ -5,9 +5,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/capability"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemonhub/exchange"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
@@ -17,7 +17,7 @@ import (
 // (above mnemonhub exchange's pure store helpers) — never bypassing the kernel. It is the OFFLINE path: it
 // boots its own import runtime by path, so it must never run inside a serving process (the in-process
 // worker drives importPulledEvents over the LIVE runtime instead — flock, v1.1 #2).
-func ImportLocalSyncPull(storePath, remoteID, nextCursor string, events []eventmodel.EventEnvelope, catalog map[string]capability.Capability) error {
+func ImportLocalSyncPull(storePath, remoteID, nextCursor string, events []eventmodel.EventEnvelope, catalog map[string]policy.Capability) error {
 	if len(events) > 0 {
 		refs, err := refsFromSyncedEvents(events)
 		if err != nil {
@@ -45,7 +45,7 @@ func ImportLocalSyncPull(storePath, remoteID, nextCursor string, events []eventm
 // sync.import_skipped.observed (ExternalID = six-part key + ":skipped") carrying the attribution
 // payload, and the sync-import deny rule turns it into a durable sync.diagnostic. The pull cursor
 // still advances either way — a skip is visible, never wedging.
-func importPulledEvents(rt *runtime.Runtime, remoteID string, events []eventmodel.EventEnvelope, catalog map[string]capability.Capability) error {
+func importPulledEvents(rt *runtime.Runtime, remoteID string, events []eventmodel.EventEnvelope, catalog map[string]policy.Capability) error {
 	catalog = resolveSyncCatalog(catalog)
 	pulledAt := time.Now().UTC().Format(time.RFC3339)
 	for _, event := range events {
@@ -54,7 +54,7 @@ func importPulledEvents(rt *runtime.Runtime, remoteID string, events []eventmode
 			return fmt.Errorf("materialize remote synced event: %w", err)
 		}
 		var env contract.ObservationEnvelope
-		if eventType, ok := capability.RemoteSyncedEventType(catalog, material.ResourceRef.Kind); ok {
+		if eventType, ok := policy.RemoteSyncedEventType(catalog, material.ResourceRef.Kind); ok {
 			env = contract.ObservationEnvelope{
 				ExternalID: syncPullExternalID(remoteID, material),
 				Event: contract.Event{
@@ -70,7 +70,7 @@ func importPulledEvents(rt *runtime.Runtime, remoteID string, events []eventmode
 			env = contract.ObservationEnvelope{
 				ExternalID: syncPullExternalID(remoteID, material) + ":skipped",
 				Event: contract.Event{
-					Type: capability.SyncImportSkippedObserved,
+					Type: policy.SyncImportSkippedObserved,
 					Payload: map[string]any{
 						"kind":              string(material.ResourceRef.Kind),
 						"origin_replica_id": material.OriginReplicaID,

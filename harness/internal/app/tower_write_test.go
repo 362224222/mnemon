@@ -5,10 +5,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/capability"
 	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
@@ -20,7 +20,7 @@ import (
 func TestReobserveCandidateAdmitsViaOperator(t *testing.T) {
 	root := t.TempDir()
 	writeExternalGoalPackage(t, root, "approval", approvalHighRiskSpec)
-	catalog, err := capability.ResolveCatalog(root, kernel.DefaultSchemaGuard().Required)
+	catalog, err := policy.ResolveCatalog(root, kernel.DefaultSchemaGuard().Required)
 	if err != nil {
 		t.Fatalf("resolve catalog: %v", err)
 	}

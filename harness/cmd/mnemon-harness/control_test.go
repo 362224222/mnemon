@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/app"
-	"github.com/mnemon-dev/mnemon/harness/internal/capability"
 	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
@@ -98,7 +98,7 @@ func TestControlTokenFileAuth(t *testing.T) {
 func TestControlPullJSONIncludesScopedContent(t *testing.T) {
 	ref := contract.ResourceRef{Kind: "memory", ID: "project"}
 	binding := channel.HostAgentBinding("codex@project", "http://x", []contract.ResourceRef{ref})
-	binding.AllowedObservedTypes = []string{capability.MemoryWriteCandidateObserved}
+	binding.AllowedObservedTypes = []string{policy.MemoryWriteCandidateObserved}
 	rt, err := app.OpenLocalRuntime(filepath.Join(t.TempDir(), "governed.db"), channel.LoadedBindings{Bindings: []channel.ChannelBinding{binding}}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -109,7 +109,7 @@ func TestControlPullJSONIncludesScopedContent(t *testing.T) {
 	client := channel.NewClient(srv.URL, "codex@project")
 	if rec, err := client.IngestObserve("codex@project", contract.ObservationEnvelope{
 		ExternalID: "memory-json",
-		Event: contract.Event{Type: capability.MemoryWriteCandidateObserved, Payload: map[string]any{
+		Event: contract.Event{Type: policy.MemoryWriteCandidateObserved, Payload: map[string]any{
 			"content": "Use Local Mnemon as the memory source.",
 			"source":  "user", "confidence": "high",
 		}},

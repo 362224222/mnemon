@@ -4,9 +4,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/capability"
 	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 )
 
 // P6a-1: DecisionLedger is the operator-wide, READ-ONLY decision-log read that backs the Control
@@ -17,7 +17,7 @@ func TestDecisionLedgerSurfacesAcceptedDecisions(t *testing.T) {
 	storePath := filepath.Join(t.TempDir(), "governed.db")
 	ref := contract.ResourceRef{Kind: "memory", ID: "project"}
 	binding := channel.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
-	binding.AllowedObservedTypes = []string{capability.MemoryWriteCandidateObserved}
+	binding.AllowedObservedTypes = []string{policy.MemoryWriteCandidateObserved}
 	rt, err := OpenRuntime(storePath, localRuntimeConfigT([]channel.ChannelBinding{binding}))
 	if err != nil {
 		t.Fatalf("open runtime: %v", err)
@@ -26,7 +26,7 @@ func TestDecisionLedgerSurfacesAcceptedDecisions(t *testing.T) {
 
 	if _, _, err := rt.API().Ingest("codex@project", contract.ObservationEnvelope{
 		ExternalID: "led1",
-		Event: contract.Event{Type: capability.MemoryWriteCandidateObserved, Payload: map[string]any{
+		Event: contract.Event{Type: policy.MemoryWriteCandidateObserved, Payload: map[string]any{
 			"content": "a governed ledger entry", "source": "user", "confidence": "high"}},
 	}); err != nil {
 		t.Fatalf("ingest: %v", err)

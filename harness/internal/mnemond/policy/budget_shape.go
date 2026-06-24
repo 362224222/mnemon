@@ -1,4 +1,4 @@
-package capability
+package policy
 
 import "github.com/mnemon-dev/mnemon/harness/internal/contract"
 

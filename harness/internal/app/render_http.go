@@ -9,9 +9,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/capability"
 	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
@@ -60,7 +60,7 @@ func NewLocalHTTPHandler(rt *runtime.Runtime, auth channel.Authenticator, bindin
 			return
 		}
 		if haveBinding {
-			proj = budgetShapeEventView(proj, capability.EmbeddedCatalog(), binding.Budget)
+			proj = budgetShapeEventView(proj, policy.EmbeddedCatalog(), binding.Budget)
 			if req.Budget.EventViewTier == "" {
 				req.Budget.EventViewTier = binding.Budget
 			}

@@ -273,8 +273,8 @@ func DefaultModes() Modes {
 var KindCatalog = map[ResourceKind]bool{"lease": true, "budget": true, "receipt": true, "coordination": true}
 
 // GovernanceKinds are the kernel-internal control-plane kinds (D3): their writes are kernel-produced,
-// never proposed by a capability. They are the compiled core a capability spec may NEVER declare
-// (capability.FromSpec G8 reservation) and that the assembly-time SchemaGuard always carries. User
+// never proposed by a policy. They are the compiled core a capability spec may NEVER declare
+// (policy.FromSpec G8 reservation) and that the assembly-time SchemaGuard always carries. User
 // kinds, by contrast, are declared by capability specs and registered at assembly time — so the live
 // kernel's known-kind set is GovernanceKinds ∪ the enabled capabilities' kinds, not this compiled
 // KindCatalog (which now only pins the kernel-test lockstep and documents the platform kinds).

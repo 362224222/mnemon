@@ -12,10 +12,10 @@ import (
 	"testing"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/app"
-	"github.com/mnemon-dev/mnemon/harness/internal/capability"
 	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
@@ -31,7 +31,7 @@ func TestSyncPushOnceAcksPendingLocalEvents(t *testing.T) {
 		Transport:            channel.TransportHTTP,
 		Endpoint:             "http://127.0.0.1:8787",
 		AllowedVerbs:         []channel.Verb{channel.VerbObserve, channel.VerbPull, channel.VerbStatus},
-		AllowedObservedTypes: []string{capability.MemoryWriteCandidateObserved},
+		AllowedObservedTypes: []string{policy.MemoryWriteCandidateObserved},
 		SubscriptionScope:    []contract.ResourceRef{ref},
 		IdempotencyNamespace: "host:codex@project",
 	}
@@ -43,7 +43,7 @@ func TestSyncPushOnceAcksPendingLocalEvents(t *testing.T) {
 	client := channel.NewClient(localSrv.URL, "codex@project")
 	if _, err := client.IngestObserve("codex@project", contract.ObservationEnvelope{
 		ExternalID: "sync-push-memory",
-		Event: contract.Event{Type: capability.MemoryWriteCandidateObserved, Payload: map[string]any{
+		Event: contract.Event{Type: policy.MemoryWriteCandidateObserved, Payload: map[string]any{
 			"content":    "sync push should ack this local memory",
 			"source":     "test",
 			"confidence": "high",

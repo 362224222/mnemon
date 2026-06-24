@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/capability"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
@@ -79,7 +79,7 @@ func TestRemoteMemoryImportConflictDiagnosesWithoutOverwrite(t *testing.T) {
 	if !ok {
 		t.Fatalf("diagnostic CausedBy %q must resolve to a durable event", diag.CausedBy)
 	}
-	if trigger.Type != capability.EmbeddedCatalog()["memory"].RemoteSyncedEventObserved() {
+	if trigger.Type != policy.EmbeddedCatalog()["memory"].RemoteSyncedEventObserved() {
 		t.Fatalf("diagnostic must be caused by the remote material observation, got type %q", trigger.Type)
 	}
 	material, ok := trigger.Payload["material"].(map[string]any)
@@ -127,7 +127,7 @@ func ingestRemoteMemoryForTest(rt *runtime.Runtime, externalID string, material 
 	_, _, err := rt.API().Ingest(contract.SyncImportActor, contract.ObservationEnvelope{
 		ExternalID: externalID,
 		Event: contract.Event{
-			Type: capability.EmbeddedCatalog()["memory"].RemoteSyncedEventObserved(),
+			Type: policy.EmbeddedCatalog()["memory"].RemoteSyncedEventObserved(),
 			Payload: map[string]any{
 				"material": material,
 			},
@@ -140,7 +140,7 @@ func ingestRemoteSkillForTest(rt *runtime.Runtime, externalID string, material c
 	_, _, err := rt.API().Ingest(contract.SyncImportActor, contract.ObservationEnvelope{
 		ExternalID: externalID,
 		Event: contract.Event{
-			Type: capability.EmbeddedCatalog()["skill"].RemoteSyncedEventObserved(),
+			Type: policy.EmbeddedCatalog()["skill"].RemoteSyncedEventObserved(),
 			Payload: map[string]any{
 				"material": material,
 			},

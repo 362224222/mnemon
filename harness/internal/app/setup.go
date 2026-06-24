@@ -12,10 +12,10 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/capability"
 	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/hostagent"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
@@ -62,7 +62,7 @@ func sanitizePrincipal(p string) string {
 func validateProductLoops(host string, loops []string, projectRoot string) error {
 	available := map[string]bool{}
 	var names []string
-	for loop := range capability.EmbeddedCatalog() {
+	for loop := range policy.EmbeddedCatalog() {
 		available[loop] = true
 		names = append(names, loop)
 	}

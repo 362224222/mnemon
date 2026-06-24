@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/capability"
 	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
@@ -61,8 +61,8 @@ func TestResolveBootCatalogIgnoreExternalNamesIgnoredPackages(t *testing.T) {
 	if _, ok := catalog["goal"]; ok {
 		t.Fatal("--ignore-external must NOT load the external goal capability")
 	}
-	if len(catalog) != len(capability.EmbeddedCatalog()) {
-		t.Fatalf("--ignore-external catalog must be embedded-only (%d), got %d", len(capability.EmbeddedCatalog()), len(catalog))
+	if len(catalog) != len(policy.EmbeddedCatalog()) {
+		t.Fatalf("--ignore-external catalog must be embedded-only (%d), got %d", len(policy.EmbeddedCatalog()), len(catalog))
 	}
 	if len(ignored) != 2 || ignored[0] != "bad" || ignored[1] != "goal" {
 		t.Fatalf("ignored names must carry both packages [bad goal], got %v", ignored)
@@ -174,7 +174,7 @@ func TestRunLocalServerIgnoreExternalDisablesEnabledExternalLoop(t *testing.T) {
 func TestExternalGoalCapabilityAdmitsThroughResolvedCatalog(t *testing.T) {
 	root := t.TempDir()
 	writeExternalGoalPackage(t, root, "goal", goalPackageSpec)
-	catalog, err := capability.ResolveCatalog(root, kernel.DefaultSchemaGuard().Required)
+	catalog, err := policy.ResolveCatalog(root, kernel.DefaultSchemaGuard().Required)
 	if err != nil {
 		t.Fatalf("resolve catalog: %v", err)
 	}

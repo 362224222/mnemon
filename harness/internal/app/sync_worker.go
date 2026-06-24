@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/capability"
 	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemonhub/exchange"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
@@ -31,7 +31,7 @@ type SyncWorkerOptions struct {
 	AllowInsecureRemote bool          // explicit T2 downgrade override (v1.1 #3)
 	// Catalog is the boot-resolved capability catalog the pull import derives its kind→observation
 	// mapping from (descriptor-derived, PD6). nil falls back to the embedded first-party catalog.
-	Catalog map[string]capability.Capability
+	Catalog map[string]policy.Capability
 }
 
 const defaultSyncWorkerInterval = 30 * time.Second
@@ -138,7 +138,7 @@ func syncWorkerPush(rt *runtime.Runtime, client *channel.Client, remoteID string
 // syncWorkerPull pulls after the durable cursor, re-enters each event through the live runtime's
 // trusted intake (importPulledEvents — the same loop the offline path uses), then advances the
 // cursor.
-func syncWorkerPull(rt *runtime.Runtime, client *channel.Client, remoteID string, catalog map[string]capability.Capability) error {
+func syncWorkerPull(rt *runtime.Runtime, client *channel.Client, remoteID string, catalog map[string]policy.Capability) error {
 	state, err := exchange.ReadPullState(rt, remoteID)
 	if err != nil {
 		return err

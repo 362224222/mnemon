@@ -29,7 +29,7 @@ type ChannelConfig struct {
 	CredentialsDir string `json:"credentials_dir,omitempty"`
 }
 
-// CapabilityConfig enables and bounds one built-in capability. RuleRef ("native:<id>") selects the
+// CapabilityConfig enables and bounds one built-in policy. RuleRef ("native:<id>") selects the
 // compiled rule kind; the assembler resolves it select-only and fails closed on an unknown id.
 type CapabilityConfig struct {
 	Enabled         bool   `json:"enabled"`

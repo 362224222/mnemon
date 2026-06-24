@@ -1,10 +1,10 @@
 package runtime
 
 import (
-	"github.com/mnemon-dev/mnemon/harness/internal/capability"
 	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 	"github.com/mnemon-dev/mnemon/harness/internal/rule"
 )
 
@@ -16,14 +16,14 @@ func localRuntimeConfigT(bindings []channel.ChannelBinding) RuntimeConfig {
 	var rules []rule.Rule
 	allow := map[contract.ActorID][]contract.ResourceKind{}
 	for _, b := range bindings {
-		if b.Allows(channel.VerbObserve) && b.AllowsObservedType(capability.MemoryWriteCandidateObserved) {
+		if b.Allows(channel.VerbObserve) && b.AllowsObservedType(policy.MemoryWriteCandidateObserved) {
 			if ref, ok := scopeRefT(b, "memory"); ok {
-				rules = append(rules, capability.EmbeddedCatalog()["memory"].Rule(b.Principal, ref, capability.Limits{}))
+				rules = append(rules, policy.EmbeddedCatalog()["memory"].Rule(b.Principal, ref, policy.Limits{}))
 			}
 		}
-		if b.Allows(channel.VerbObserve) && b.AllowsObservedType(capability.SkillWriteCandidateObserved) {
+		if b.Allows(channel.VerbObserve) && b.AllowsObservedType(policy.SkillWriteCandidateObserved) {
 			if ref, ok := scopeRefT(b, "skill"); ok {
-				rules = append(rules, capability.EmbeddedCatalog()["skill"].Rule(b.Principal, ref, capability.Limits{}))
+				rules = append(rules, policy.EmbeddedCatalog()["skill"].Rule(b.Principal, ref, policy.Limits{}))
 			}
 		}
 		if b.ActorKind != contract.KindHostAgent {
@@ -45,7 +45,7 @@ func localRuntimeConfigT(bindings []channel.ChannelBinding) RuntimeConfig {
 		Rules:         rule.NewRuleSet(rules...),
 		Authority:     kernel.AuthorityRules{Allow: allow},
 		SchemaGuard:   kernel.SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}}),
-		SyncableKinds: capability.ImportableKinds(capability.EmbeddedCatalog()),
+		SyncableKinds: policy.ImportableKinds(policy.EmbeddedCatalog()),
 	}
 }
 

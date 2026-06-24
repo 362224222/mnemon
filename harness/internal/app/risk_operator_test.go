@@ -4,10 +4,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/capability"
 	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
@@ -19,11 +19,11 @@ const approvalHighRiskSpec = `{"schema_version":1,"name":"approval","observed_ty
 
 // A high-risk kind's candidate from an AGENT (host-agent) is DENIED — the operator-only gate
 // (the deny outranks the admission propose) — while the same candidate from an OPERATOR
-// (control-agent) is ADMITTED. This proves the generic high-risk path with a static capability.
+// (control-agent) is ADMITTED. This proves the generic high-risk path with a static policy.
 func TestHighRiskOperatorGate(t *testing.T) {
 	root := t.TempDir()
 	writeExternalGoalPackage(t, root, "approval", approvalHighRiskSpec)
-	catalog, err := capability.ResolveCatalog(root, kernel.DefaultSchemaGuard().Required)
+	catalog, err := policy.ResolveCatalog(root, kernel.DefaultSchemaGuard().Required)
 	if err != nil {
 		t.Fatalf("resolve catalog: %v", err)
 	}

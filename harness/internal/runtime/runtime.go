@@ -46,7 +46,7 @@ type RuntimeConfig struct {
 
 	// SchemaGuard is the kernel's per-kind required-fields guard. The assembler builds it from the
 	// governance kinds plus each enabled capability's declared required header (PD2), so a declared
-	// user kind's required set has ONE source — the capability. The zero value (nil Required) falls
+	// user kind's required set has ONE source — the policy. The zero value (nil Required) falls
 	// back to kernel.DefaultSchemaGuard for callers that do not assemble a catalog.
 	SchemaGuard kernel.SchemaGuard
 
@@ -57,7 +57,7 @@ type RuntimeConfig struct {
 
 	// SyncableKinds names the resource kinds this replica PRODUCES Remote Workspace synced events for —
 	// the produce surface (sync-abi-v2 §4). The assembler injects the catalog's importable kinds
-	// (capability.ImportableKinds), so the produce set is descriptor-derived, never a hardcoded
+	// (policy.ImportableKinds), so the produce set is descriptor-derived, never a hardcoded
 	// constant (PD6 replaced contract.SyncableResourceKinds). The zero (nil) produces no synced events
 	// — correct for a runtime with no Remote Workspace. The runtime stays capability-free: this is a
 	// plain contract.ResourceKind slice the app layer fills.

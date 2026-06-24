@@ -1,4 +1,4 @@
-package capability
+package policy
 
 import (
 	"encoding/json"
@@ -33,7 +33,7 @@ type Capability struct {
 	Header       func(items []Item) map[string]any // resource fields besides the item list + updated_by
 	// RequiredHeader is the kind's kernel-required header fields, derived from the spec (the
 	// render-produced keys, or the declared `required` subset). The assembler reads it to build the
-	// assembly-time SchemaGuard so a declared kind's required set has ONE source — the capability.
+	// assembly-time SchemaGuard so a declared kind's required set has ONE source — the policy.
 	RequiredHeader []string
 	// Sync, when Importable, opts the kind into Remote Workspace import under the named (closed-set)
 	// merge strategy. The sync-import path derives its rules and syncable-kind set from this, so the

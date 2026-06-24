@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/capability"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/eventview"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 )
 
 func projItems(n int) []any {
@@ -21,7 +21,7 @@ func projItems(n int) []any {
 // digest-only/warm shrink the rendered packet; hot is exact passthrough; the input is never mutated;
 // the integrity Digest is left attesting the full authoritative scope (budget bounds context, not authority).
 func TestBudgetShapeProjection(t *testing.T) {
-	catalog := capability.EmbeddedCatalog()
+	catalog := policy.EmbeddedCatalog()
 	ref := contract.ResourceRef{Kind: "assignment", ID: "project"}
 	proj := eventview.EventView{
 		Digest: "full-scope-digest",
@@ -31,16 +31,16 @@ func TestBudgetShapeProjection(t *testing.T) {
 	}
 
 	digest := budgetShapeEventView(proj, catalog, contract.BudgetDigestOnly)
-	if n := len(digest.Content[0].Fields["items"].([]any)); n != capability.BudgetDigestItems {
-		t.Fatalf("digest-only must shrink to %d item, got %d", capability.BudgetDigestItems, n)
+	if n := len(digest.Content[0].Fields["items"].([]any)); n != policy.BudgetDigestItems {
+		t.Fatalf("digest-only must shrink to %d item, got %d", policy.BudgetDigestItems, n)
 	}
 	if digest.Digest != "full-scope-digest" {
 		t.Fatalf("budget must NOT alter the integrity digest (it attests the full scope), got %q", digest.Digest)
 	}
 
 	warm := budgetShapeEventView(proj, catalog, contract.BudgetWarm)
-	if n := len(warm.Content[0].Fields["items"].([]any)); n != capability.BudgetWarmItems {
-		t.Fatalf("warm must shrink to %d items, got %d", capability.BudgetWarmItems, n)
+	if n := len(warm.Content[0].Fields["items"].([]any)); n != policy.BudgetWarmItems {
+		t.Fatalf("warm must shrink to %d items, got %d", policy.BudgetWarmItems, n)
 	}
 
 	hot := budgetShapeEventView(proj, catalog, contract.BudgetHot)
@@ -60,7 +60,7 @@ func TestBudgetShapeProjectionUnknownKindPassthrough(t *testing.T) {
 	proj := eventview.EventView{Content: []eventview.ResourceContent{
 		{Ref: ref, Version: 1, Fields: map[string]any{"items": projItems(20)}},
 	}}
-	out := budgetShapeEventView(proj, capability.EmbeddedCatalog(), contract.BudgetDigestOnly)
+	out := budgetShapeEventView(proj, policy.EmbeddedCatalog(), contract.BudgetDigestOnly)
 	if n := len(out.Content[0].Fields["items"].([]any)); n != 20 {
 		t.Fatalf("uncatalogued kind must pass through unshaped, got %d items", n)
 	}

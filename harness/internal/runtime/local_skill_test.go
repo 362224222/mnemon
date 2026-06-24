@@ -5,15 +5,15 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/capability"
 	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 )
 
 func TestLocalSkillCandidateCreatesSyncPendingDeclaration(t *testing.T) {
 	ref := contract.ResourceRef{Kind: "skill", ID: "project"}
 	binding := channel.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
-	binding.AllowedObservedTypes = []string{capability.SkillWriteCandidateObserved}
+	binding.AllowedObservedTypes = []string{policy.SkillWriteCandidateObserved}
 	rt, err := OpenRuntime(filepath.Join(t.TempDir(), "local.db"), localRuntimeConfigT([]channel.ChannelBinding{binding}))
 	if err != nil {
 		t.Fatalf("open local runtime: %v", err)
@@ -25,7 +25,7 @@ func TestLocalSkillCandidateCreatesSyncPendingDeclaration(t *testing.T) {
 	client := channel.NewClient(srv.URL, "codex@project")
 	if _, err := client.IngestObserve("codex@project", contract.ObservationEnvelope{
 		ExternalID: "skill-declare-release-checklist",
-		Event: contract.Event{Type: capability.SkillWriteCandidateObserved, Payload: map[string]any{
+		Event: contract.Event{Type: policy.SkillWriteCandidateObserved, Payload: map[string]any{
 			"skill_id":   "release-checklist",
 			"name":       "release-checklist",
 			"status":     "active",
@@ -68,7 +68,7 @@ func TestLocalSkillCandidateCreatesSyncPendingDeclaration(t *testing.T) {
 func TestLocalSkillLifecycleChangesAppendDeclarations(t *testing.T) {
 	ref := contract.ResourceRef{Kind: "skill", ID: "project"}
 	binding := channel.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
-	binding.AllowedObservedTypes = []string{capability.SkillWriteCandidateObserved}
+	binding.AllowedObservedTypes = []string{policy.SkillWriteCandidateObserved}
 	rt, err := OpenRuntime(filepath.Join(t.TempDir(), "local.db"), localRuntimeConfigT([]channel.ChannelBinding{binding}))
 	if err != nil {
 		t.Fatalf("open local runtime: %v", err)
@@ -88,7 +88,7 @@ func TestLocalSkillLifecycleChangesAppendDeclarations(t *testing.T) {
 	} {
 		if _, err := client.IngestObserve("codex@project", contract.ObservationEnvelope{
 			ExternalID: item.externalID,
-			Event: contract.Event{Type: capability.SkillWriteCandidateObserved, Payload: map[string]any{
+			Event: contract.Event{Type: policy.SkillWriteCandidateObserved, Payload: map[string]any{
 				"skill_id":   "release-checklist",
 				"name":       "release-checklist",
 				"status":     item.status,

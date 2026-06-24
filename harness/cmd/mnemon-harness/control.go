@@ -10,9 +10,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/capability"
 	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation"
 	"github.com/spf13/cobra"
 )
@@ -240,8 +240,8 @@ func coordinationFieldLine(client *channel.Client, principal contract.ActorID) s
 	if err != nil {
 		return "Field: (unavailable)"
 	}
-	var caps []capability.Capability
-	for _, c := range capability.EmbeddedCatalog() {
+	var caps []policy.Capability
+	for _, c := range policy.EmbeddedCatalog() {
 		if c.DefaultEnabled {
 			caps = append(caps, c)
 		}

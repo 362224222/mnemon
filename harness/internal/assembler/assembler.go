@@ -9,11 +9,11 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/capability"
 	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/config"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 	"github.com/mnemon-dev/mnemon/harness/internal/rule"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
@@ -23,18 +23,18 @@ import (
 // from catalog (fail-closed on an unknown id), then builds one actor-bound rule per binding that may
 // observe the capability's type, granting that principal kernel write authority for the resource kind.
 //
-// catalog selects the capability universe; nil means capability.EmbeddedCatalog(). That nil default is the
+// catalog selects the capability universe; nil means policy.EmbeddedCatalog(). That nil default is the
 // backward-compatible seam: every pre-stage-5 caller (and the test/sync surfaces with no project
 // root to resolve external packages from) keeps embedded-only behavior unchanged, while the boot
-// path passes the merged capability.ResolveCatalog result.
+// path passes the merged policy.ResolveCatalog result.
 //
 // Divergence from the locked Assemble(cfg, loops) signature (code wins): the runtime config needs the
 // channel bindings (principals/scope), which the loop manifests do not carry; bindings are the second
 // argument. This is the production boot path: app.OpenLocalRuntime derives the config.File from the
 // setup-written loops list and assembles here.
-func Assemble(cfg config.File, bindings []channel.ChannelBinding, catalog map[string]capability.Capability) (runtime.RuntimeConfig, error) {
+func Assemble(cfg config.File, bindings []channel.ChannelBinding, catalog map[string]policy.Capability) (runtime.RuntimeConfig, error) {
 	if catalog == nil {
-		catalog = capability.EmbeddedCatalog()
+		catalog = policy.EmbeddedCatalog()
 	}
 	var rules []rule.Rule
 	allow := map[contract.ActorID][]contract.ResourceKind{}
@@ -77,16 +77,16 @@ func Assemble(cfg config.File, bindings []channel.ChannelBinding, catalog map[st
 			if !ok {
 				continue // unscoped for this kind: no rule, no authority (it could never pull what it writes)
 			}
-			rules = append(rules, cap.Rule(b.Principal, ref, capability.Limits{MaxPayloadBytes: cc.MaxPayloadBytes}))
+			rules = append(rules, cap.Rule(b.Principal, ref, policy.Limits{MaxPayloadBytes: cc.MaxPayloadBytes}))
 			// Risk gate alongside the admission rule (P3): the gate's deny outranks the admission propose
 			// (rule.Evaluate is deny-priority). mid → evidence required; high → the operator-only gate,
 			// built ONLY for non-operator (host-agent) principals so an operator (control-agent) is exempt.
 			switch cap.Risk {
 			case "mid":
-				rules = append(rules, capability.RiskEvidenceGate(cap, b.Principal))
+				rules = append(rules, policy.RiskEvidenceGate(cap, b.Principal))
 			case "high":
 				if b.ActorKind != contract.KindControlAgent {
-					rules = append(rules, capability.RiskOperatorGate(cap, b.Principal))
+					rules = append(rules, policy.RiskOperatorGate(cap, b.Principal))
 				}
 			}
 			allow[b.Principal] = appendKind(allow[b.Principal], cap.ResourceKind)

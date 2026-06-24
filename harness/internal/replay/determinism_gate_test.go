@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/capability"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 	"github.com/mnemon-dev/mnemon/harness/internal/rule"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
@@ -19,7 +19,7 @@ func gateRuntime(t *testing.T) *runtime.Runtime {
 	t.Helper()
 	ref := contract.ResourceRef{Kind: "memory", ID: "project"}
 	rt, err := runtime.OpenRuntime(filepath.Join(t.TempDir(), "g.db"), runtime.RuntimeConfig{
-		Rules:       rule.NewRuleSet(capability.EmbeddedCatalog()["memory"].Rule(gateActor, ref, capability.Limits{})),
+		Rules:       rule.NewRuleSet(policy.EmbeddedCatalog()["memory"].Rule(gateActor, ref, policy.Limits{})),
 		Authority:   kernel.AuthorityRules{Allow: map[contract.ActorID][]contract.ResourceKind{gateActor: {"memory"}}},
 		Subs:        map[contract.ActorID]contract.Subscription{gateActor: {Actor: gateActor, Refs: []contract.ResourceRef{ref}}},
 		SchemaGuard: kernel.SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}, "goal": {"statement"}}),
@@ -185,7 +185,7 @@ func TestReplayAndShadowHonorIngestSeqOverSliceOrder(t *testing.T) {
 	subs := map[contract.ActorID]contract.Subscription{
 		gateActor: {Actor: gateActor, Refs: []contract.ResourceRef{{Kind: "memory", ID: "project"}}},
 	}
-	live := rule.NewRuleSet(capability.EmbeddedCatalog()["memory"].Rule(gateActor, contract.ResourceRef{Kind: "memory", ID: "project"}, capability.Limits{}))
+	live := rule.NewRuleSet(policy.EmbeddedCatalog()["memory"].Rule(gateActor, contract.ResourceRef{Kind: "memory", ID: "project"}, policy.Limits{}))
 	a := Shadow(events, subs, live, live)
 	b := Shadow(reversed, subs, live, live)
 	if a != b {

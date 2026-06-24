@@ -11,10 +11,10 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/assembler"
-	"github.com/mnemon-dev/mnemon/harness/internal/capability"
 	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/config"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
 	"github.com/mnemon-dev/mnemon/harness/internal/rule"
@@ -25,10 +25,10 @@ import (
 // localConfig) enable capabilities; bindings stay the source of truth for observe/pull/status scope.
 // An empty loops list (the hidden `local run --bindings` path, which has no localConfig) derives
 // enablement from the binding scope kinds ∩ catalog. catalog selects the capability universe
-// (nil = capability.EmbeddedCatalog()); the serve path passes the boot-resolved external-merged catalog.
+// (nil = policy.EmbeddedCatalog()); the serve path passes the boot-resolved external-merged catalog.
 // The assembled policy is then merged with the sync-import half (withSyncImport), so the SERVING
 // runtime can import pulled commits in-process (v1.1 #2) without a second runtime boot.
-func OpenLocalRuntime(storePath string, loaded channel.LoadedBindings, loops []string, catalog map[string]capability.Capability) (*runtime.Runtime, error) {
+func OpenLocalRuntime(storePath string, loaded channel.LoadedBindings, loops []string, catalog map[string]policy.Capability) (*runtime.Runtime, error) {
 	cat := resolveSyncCatalog(catalog)
 	if len(loops) == 0 {
 		loops = loopsFromBindings(loaded.Bindings, cat)
@@ -50,11 +50,11 @@ func OpenLocalRuntime(storePath string, loaded channel.LoadedBindings, loops []s
 // sync.* observation types AND gate on the sync principal, so host-agent events never match them and
 // host rules never see the import events — pinned by a test. catalog selects the importable universe
 // (nil = embedded first-party).
-func withSyncImport(rc runtime.RuntimeConfig, bindings []channel.ChannelBinding, catalog map[string]capability.Capability) runtime.RuntimeConfig {
+func withSyncImport(rc runtime.RuntimeConfig, bindings []channel.ChannelBinding, catalog map[string]policy.Capability) runtime.RuntimeConfig {
 	catalog = resolveSyncCatalog(catalog)
 	rules := append([]rule.Rule(nil), rc.Rules.Rules()...)
-	rules = append(rules, capability.RemoteImportRules(catalog, contract.SyncImportActor)...)
-	rules = append(rules, capability.SyncImportSkippedRule(contract.SyncImportActor))
+	rules = append(rules, policy.RemoteImportRules(catalog, contract.SyncImportActor)...)
+	rules = append(rules, policy.SyncImportSkippedRule(contract.SyncImportActor))
 	rc.Rules = rule.NewRuleSet(rules...)
 	if rc.Subs == nil {
 		rc.Subs = map[contract.ActorID]contract.Subscription{}
@@ -63,19 +63,19 @@ func withSyncImport(rc runtime.RuntimeConfig, bindings []channel.ChannelBinding,
 	if rc.Authority.Allow == nil {
 		rc.Authority.Allow = map[contract.ActorID][]contract.ResourceKind{}
 	}
-	rc.Authority.Allow[contract.SyncImportActor] = capability.ImportableKinds(catalog)
+	rc.Authority.Allow[contract.SyncImportActor] = policy.ImportableKinds(catalog)
 	// Inject the produce surface: this replica emits synced events for exactly the kinds its catalog
 	// imports (sync-abi-v2 §4). The runtime stays capability-free — the app fills the kind slice.
-	rc.SyncableKinds = capability.ImportableKinds(catalog)
+	rc.SyncableKinds = policy.ImportableKinds(catalog)
 	return rc
 }
 
 // resolveSyncCatalog resolves the catalog the sync-import path derives its rules/authority/guard
 // from: nil falls back to the embedded first-party catalog (memory/skill), so callers without a
 // boot-resolved catalog still get the first-party importable kinds.
-func resolveSyncCatalog(catalog map[string]capability.Capability) map[string]capability.Capability {
+func resolveSyncCatalog(catalog map[string]policy.Capability) map[string]policy.Capability {
 	if catalog == nil {
-		return capability.EmbeddedCatalog()
+		return policy.EmbeddedCatalog()
 	}
 	return catalog
 }
@@ -83,9 +83,9 @@ func resolveSyncCatalog(catalog map[string]capability.Capability) map[string]cap
 // syncableScopeRefs collects the deduped binding-scope refs of importable kinds — the resources a
 // pulled commit may target on this replica (the same canonical refs the host loops govern). The
 // importable-kind set is descriptor-derived from the catalog (PD6), not a hardcoded constant.
-func syncableScopeRefs(bindings []channel.ChannelBinding, catalog map[string]capability.Capability) []contract.ResourceRef {
+func syncableScopeRefs(bindings []channel.ChannelBinding, catalog map[string]policy.Capability) []contract.ResourceRef {
 	syncable := map[contract.ResourceKind]bool{}
-	for _, k := range capability.ImportableKinds(catalog) {
+	for _, k := range policy.ImportableKinds(catalog) {
 		syncable[k] = true
 	}
 	seen := map[contract.ResourceRef]bool{}
@@ -110,7 +110,7 @@ func syncableScopeRefs(bindings []channel.ChannelBinding, catalog map[string]cap
 // LocalRuntimeConfigFromBindings derives Local Mnemon's policy from the installed Agent Integration
 // bindings alone (enablement = binding scope kinds ∩ catalog; nil = Builtins). It is the
 // bindings-only convenience over the same select-only assembly OpenLocalRuntime uses.
-func LocalRuntimeConfigFromBindings(bindings []channel.ChannelBinding, catalog map[string]capability.Capability) (runtime.RuntimeConfig, error) {
+func LocalRuntimeConfigFromBindings(bindings []channel.ChannelBinding, catalog map[string]policy.Capability) (runtime.RuntimeConfig, error) {
 	cat := resolveSyncCatalog(catalog)
 	loops := withDefaultEnabledLoops(loopsFromBindings(bindings, cat), cat)
 	return assembler.Assemble(capabilityFileFromLoops(loops), withDefaultEnabledGrants(bindings, cat), cat)
@@ -118,8 +118,8 @@ func LocalRuntimeConfigFromBindings(bindings []channel.ChannelBinding, catalog m
 
 // defaultEnabledCaps returns the catalog's default-enabled capabilities (the coordination package),
 // sorted by kind for determinism — the kinds the local boot governs without an explicit --loop (P3).
-func defaultEnabledCaps(catalog map[string]capability.Capability) []capability.Capability {
-	var caps []capability.Capability
+func defaultEnabledCaps(catalog map[string]policy.Capability) []policy.Capability {
+	var caps []policy.Capability
 	for _, c := range catalog {
 		if c.DefaultEnabled {
 			caps = append(caps, c)
@@ -131,7 +131,7 @@ func defaultEnabledCaps(catalog map[string]capability.Capability) []capability.C
 
 // withDefaultEnabledLoops unions the catalog's default-enabled kinds into the enabled-loops list, so
 // the assembler builds their rules even when no --loop named them.
-func withDefaultEnabledLoops(loops []string, catalog map[string]capability.Capability) []string {
+func withDefaultEnabledLoops(loops []string, catalog map[string]policy.Capability) []string {
 	for _, c := range defaultEnabledCaps(catalog) {
 		if !containsLoop(loops, c.Name) {
 			loops = append(loops, c.Name)
@@ -145,7 +145,7 @@ func withDefaultEnabledLoops(loops []string, catalog map[string]capability.Capab
 // grant that sits beside the binding's EXPLICIT --loop grants, so a default-enabled kind is
 // governable + pullable from setup alone (P3). The assembler and the channel authorizer both read
 // this same augmented list, so rules, authority, and authz stay consistent.
-func withDefaultEnabledGrants(bindings []channel.ChannelBinding, catalog map[string]capability.Capability) []channel.ChannelBinding {
+func withDefaultEnabledGrants(bindings []channel.ChannelBinding, catalog map[string]policy.Capability) []channel.ChannelBinding {
 	defaults := defaultEnabledCaps(catalog)
 	if len(defaults) == 0 {
 		return bindings
@@ -207,9 +207,9 @@ func capabilityFileFromLoops(loops []string) config.File {
 // loopsFromBindings derives capability enablement from binding scope kinds ∩ catalog (nil =
 // Builtins). config.loops stays the product-path authority — this derivation only runs when the
 // loops list is empty (the hidden bindings-only path).
-func loopsFromBindings(bindings []channel.ChannelBinding, catalog map[string]capability.Capability) []string {
+func loopsFromBindings(bindings []channel.ChannelBinding, catalog map[string]policy.Capability) []string {
 	if catalog == nil {
-		catalog = capability.EmbeddedCatalog()
+		catalog = policy.EmbeddedCatalog()
 	}
 	seen := map[string]bool{}
 	var loops []string
@@ -272,7 +272,7 @@ func RunLocalHTTPServerWithBindings(ctx context.Context, addr, storePath string,
 }
 
 // resolveBootCatalog resolves the capability catalog ONCE at boot. Default: embedded Builtins +
-// every external package under <projectRoot>/.mnemon/loops via capability.ResolveCatalog
+// every external package under <projectRoot>/.mnemon/loops via policy.ResolveCatalog
 // (requiredFields = kernel.DefaultSchemaGuard().Required — app owns the kernel import; capability
 // stays a contract-level leaf), fail-closed: a bad external package REFUSES to start Local Mnemon
 // — the directory's presence is a contract, not a hint. ignoreExternal is the operator escape
@@ -281,14 +281,14 @@ func RunLocalHTTPServerWithBindings(ctx context.Context, addr, storePath string,
 // return is those ignored package names — the serve path must drop them from the enabled loops
 // too (disableIgnoredLoops), or an enabled-then-corrupted package would still sink the boot on
 // `unknown rule_ref`.
-func resolveBootCatalog(projectRoot string, ignoreExternal bool, errw io.Writer) (map[string]capability.Capability, []string, error) {
+func resolveBootCatalog(projectRoot string, ignoreExternal bool, errw io.Writer) (map[string]policy.Capability, []string, error) {
 	if !ignoreExternal {
-		catalog, err := capability.ResolveCatalog(projectRoot, kernel.DefaultSchemaGuard().Required)
+		catalog, err := policy.ResolveCatalog(projectRoot, kernel.DefaultSchemaGuard().Required)
 		return catalog, nil, err
 	}
 	entries, err := os.ReadDir(filepath.Join(projectRoot, ".mnemon", "loops"))
 	if err != nil {
-		return capability.EmbeddedCatalog(), nil, nil // absent (or unreadable) external root: nothing to ignore
+		return policy.EmbeddedCatalog(), nil, nil // absent (or unreadable) external root: nothing to ignore
 	}
 	var ignored []string
 	for _, e := range entries {
@@ -297,7 +297,7 @@ func resolveBootCatalog(projectRoot string, ignoreExternal bool, errw io.Writer)
 			fmt.Fprintf(errw, "mnemon-harness: --ignore-external: ignoring external package .mnemon/loops/%s\n", e.Name())
 		}
 	}
-	return capability.EmbeddedCatalog(), ignored, nil
+	return policy.EmbeddedCatalog(), ignored, nil
 }
 
 // SyncImportCatalog resolves the capability catalog the OFFLINE `sync pull` verb derives its import
@@ -306,11 +306,11 @@ func resolveBootCatalog(projectRoot string, ignoreExternal bool, errw io.Writer)
 // same way the in-process worker imports it. Unlike serve boot, the manual pull verb degrades to the
 // embedded catalog (with a stderr warning) when an external package is unreadable — a corrupt loop
 // must not block importing first-party memory/skill commits.
-func SyncImportCatalog(projectRoot string, errw io.Writer) map[string]capability.Capability {
-	catalog, err := capability.ResolveCatalog(projectRoot, kernel.DefaultSchemaGuard().Required)
+func SyncImportCatalog(projectRoot string, errw io.Writer) map[string]policy.Capability {
+	catalog, err := policy.ResolveCatalog(projectRoot, kernel.DefaultSchemaGuard().Required)
 	if err != nil {
 		fmt.Fprintf(errw, "mnemon-harness: sync import: external package unreadable, importing first-party kinds only: %v\n", err)
-		return capability.EmbeddedCatalog()
+		return policy.EmbeddedCatalog()
 	}
 	return catalog
 }
@@ -349,7 +349,7 @@ func containsLoop(loops []string, name string) bool {
 	return false
 }
 
-func OpenSyncImportRuntime(storePath string, refs []contract.ResourceRef, catalog map[string]capability.Capability) (*runtime.Runtime, error) {
+func OpenSyncImportRuntime(storePath string, refs []contract.ResourceRef, catalog map[string]policy.Capability) (*runtime.Runtime, error) {
 	return runtime.OpenRuntime(storePath, SyncImportRuntimeConfig(refs, catalog))
 }
 
@@ -360,7 +360,7 @@ func OpenSyncImportRuntime(storePath string, refs []contract.ResourceRef, catalo
 // durable diagnostic instead of a silent drop — the same rule set withSyncImport merges into the
 // serving runtime, so the offline and in-process import paths share one policy. catalog selects the
 // importable universe (nil = embedded first-party).
-func SyncImportRuntimeConfig(refs []contract.ResourceRef, catalog map[string]capability.Capability) runtime.RuntimeConfig {
+func SyncImportRuntimeConfig(refs []contract.ResourceRef, catalog map[string]policy.Capability) runtime.RuntimeConfig {
 	catalog = resolveSyncCatalog(catalog)
 	extra := map[contract.ResourceKind][]string{}
 	for _, cap := range catalog {
@@ -368,15 +368,15 @@ func SyncImportRuntimeConfig(refs []contract.ResourceRef, catalog map[string]cap
 			extra[cap.ResourceKind] = cap.RequiredHeader
 		}
 	}
-	rules := append(capability.RemoteImportRules(catalog, contract.SyncImportActor),
-		capability.SyncImportSkippedRule(contract.SyncImportActor))
+	rules := append(policy.RemoteImportRules(catalog, contract.SyncImportActor),
+		policy.SyncImportSkippedRule(contract.SyncImportActor))
 	return runtime.RuntimeConfig{
 		Subs: map[contract.ActorID]contract.Subscription{
 			contract.SyncImportActor: {Actor: contract.SyncImportActor, Refs: refs},
 		},
 		Rules: rule.NewRuleSet(rules...),
 		Authority: kernel.AuthorityRules{Allow: map[contract.ActorID][]contract.ResourceKind{
-			contract.SyncImportActor: capability.ImportableKinds(catalog),
+			contract.SyncImportActor: policy.ImportableKinds(catalog),
 		}},
 		SchemaGuard: kernel.SchemaGuardWith(extra),
 	}

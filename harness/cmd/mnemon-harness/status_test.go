@@ -9,9 +9,9 @@ import (
 	"testing"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/app"
-	"github.com/mnemon-dev/mnemon/harness/internal/capability"
 	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
@@ -76,7 +76,7 @@ func TestProductStatusUsesReachableLocalMnemon(t *testing.T) {
 	defer rt.Close()
 	if _, _, err := rt.API().Ingest("codex@project", contract.ObservationEnvelope{
 		ExternalID: "status-pending",
-		Event: contract.Event{Type: capability.MemoryWriteCandidateObserved, Payload: map[string]any{
+		Event: contract.Event{Type: policy.MemoryWriteCandidateObserved, Payload: map[string]any{
 			"content":    "Status should read pending sync from the live Local Mnemon service.",
 			"source":     "test",
 			"confidence": "high",

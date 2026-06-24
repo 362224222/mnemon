@@ -9,19 +9,19 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/capability"
 	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 )
 
 // LoopValidate validates the resolved capability catalog through the same fail-closed resolution boot
 // uses. R1 host setup no longer projects per-loop assets, so validate reports capability packages
 // only: first-party embedded capabilities plus external packages under .mnemon/loops.
 func (h *Harness) LoopValidate() ([]string, error) {
-	merged, err := capability.ResolveCatalog(h.root, kernel.DefaultSchemaGuard().Required)
+	merged, err := policy.ResolveCatalog(h.root, kernel.DefaultSchemaGuard().Required)
 	if err != nil {
 		return nil, err
 	}
-	embedded := capability.EmbeddedCatalog()
+	embedded := policy.EmbeddedCatalog()
 	names := make([]string, 0, len(merged))
 	for name := range merged {
 		names = append(names, name)
@@ -40,7 +40,7 @@ func (h *Harness) LoopValidate() ([]string, error) {
 
 // CapabilityInfo is the read-only view of a resolved capability — the discoverability answer to "what
 // kinds can the agents work with and what does each expect" (P2). It is a projection of the descriptor
-// (capability.Capability), never the runtime's internal rule state: the runtime is capability-free by
+// (policy.Capability), never the runtime's internal rule state: the runtime is capability-free by
 // design (PD6c), so this query resolves the project catalog from disk rather than coupling the kernel
 // to capability shapes.
 type CapabilityInfo struct {
@@ -59,11 +59,11 @@ type CapabilityInfo struct {
 // .mnemon/loops, via the SAME fail-closed boot resolution) and returns one CapabilityInfo per kind,
 // sorted by kind. It is a LOCAL read — no running server is contacted; the catalog is a disk fact.
 func (h *Harness) LoopCapabilities() ([]CapabilityInfo, error) {
-	catalog, err := capability.ResolveCatalog(h.root, kernel.DefaultSchemaGuard().Required)
+	catalog, err := policy.ResolveCatalog(h.root, kernel.DefaultSchemaGuard().Required)
 	if err != nil {
 		return nil, err
 	}
-	embedded := capability.EmbeddedCatalog()
+	embedded := policy.EmbeddedCatalog()
 	infos := make([]CapabilityInfo, 0, len(catalog))
 	for _, cap := range catalog {
 		source := "external"
@@ -162,7 +162,7 @@ func (h *Harness) RenderObserveSkill() (string, error) {
 // LoopAdd registers an external capability package from srcDir into the project's external loop root
 // (<root>/.mnemon/loops/<name>). It is the "write a directory -> register it" front door (P2 minimal
 // onboarding): the author writes a package dir, `loop add` places it under the canonical name and
-// validates it through the SAME fail-closed boot resolution `local run` uses (capability.ResolveCatalog
+// validates it through the SAME fail-closed boot resolution `local run` uses (policy.ResolveCatalog
 // — symlink screen + LoadExternal + four-axis shadowing merge). A package that would refuse boot is
 // rejected here and the copy is rolled back, so a half-added package never lingers. The canonical name
 // is the spec's `name` (the external loader requires the directory name to equal it); an existing
@@ -199,7 +199,7 @@ func (h *Harness) LoopAdd(srcDir string) (string, error) {
 	}
 	// Validate through the exact boot resolution; roll the copy back on any refusal so a rejected
 	// package never lingers as a half-added, boot-sinking directory.
-	if _, err := capability.ResolveCatalog(h.root, kernel.DefaultSchemaGuard().Required); err != nil {
+	if _, err := policy.ResolveCatalog(h.root, kernel.DefaultSchemaGuard().Required); err != nil {
 		_ = os.RemoveAll(target)
 		return "", fmt.Errorf("loop %q rejected (fail-closed): %w", spec.Name, err)
 	}
