@@ -53,10 +53,10 @@ func TestLoopAddRejectsAndRollsBack(t *testing.T) {
 	if err := os.MkdirAll(src, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// resource_kind "memory" is a first-party kind an external package may not claim (shadowing) —
+	// resource_kind "assignment" is an embedded kind an external package may not claim (shadowing) —
 	// ResolveCatalog refuses it, so loop add must too.
 	bad := `{"schema_version":1,"name":"broken","observed_type":"broken.write_candidate.observed",
-"proposed_type":"broken.write.proposed","resource_kind":"memory","items_field":"items",
+"proposed_type":"broken.write.proposed","resource_kind":"assignment","items_field":"items",
 "fields":[{"name":"text","validators":[{"id":"required","params":{"missing_style":"empty"}}]}],
 "render":{"content":{"member":"bullet-list","params":{"title":"# B","field":"text"}}}}`
 	if err := os.WriteFile(filepath.Join(src, "capability.json"), []byte(bad), 0o644); err != nil {
@@ -102,16 +102,16 @@ func TestLoopCapabilitiesAndSchema(t *testing.T) {
 	for _, info := range infos {
 		byKind[info.Kind] = info
 	}
-	if byKind["memory"].Source != "embedded" || !byKind["memory"].Importable || byKind["memory"].Merge != "entry-dedup" {
-		t.Fatalf("memory must be embedded + importable entry-dedup: %+v", byKind["memory"])
+	if byKind["assignment"].Source != "embedded" || !byKind["assignment"].Importable || byKind["assignment"].Merge != "item-dedup" {
+		t.Fatalf("assignment must be embedded + importable item-dedup: %+v", byKind["assignment"])
 	}
 	if w, ok := byKind["widget"]; !ok || w.Source != "external" || w.ObservedType != "widget.write_candidate.observed" {
 		t.Fatalf("external widget must appear with its descriptor: %+v", w)
 	}
 
-	info, err := New(root).LoopSchema("skill")
-	if err != nil || info.Merge != "declaration-dedup" {
-		t.Fatalf("loop schema skill: info=%+v err=%v", info, err)
+	info, err := New(root).LoopSchema("assignment")
+	if err != nil || info.Merge != "item-dedup" {
+		t.Fatalf("loop schema assignment: info=%+v err=%v", info, err)
 	}
 	if _, err := New(root).LoopSchema("nope"); err == nil {
 		t.Fatal("loop schema must error on an unknown kind, not return an empty success")
@@ -130,11 +130,11 @@ func TestRenderObserveSkill(t *testing.T) {
 	}
 	for _, want := range []string{
 		"# mnemon-observe",
-		"When to record",                    // judgment (hand-written)
-		"memory.write_candidate.observed",   // embedded mechanism (catalog-rendered)
-		"widget.write_candidate.observed",   // external mechanism (catalog-rendered)
-		"mnemon-harness loop schema --type", // discovery pointer, not hardcoded fields
-		"mnemon-harness control observe",    // submit shape
+		"When to record",                      // judgment (hand-written)
+		"assignment.write_candidate.observed", // embedded mechanism (catalog-rendered)
+		"widget.write_candidate.observed",     // external mechanism (catalog-rendered)
+		"mnemon-harness loop schema --type",   // discovery pointer, not hardcoded fields
+		"mnemon-harness control observe",      // submit shape
 	} {
 		if !strings.Contains(skill, want) {
 			t.Fatalf("observe skill missing %q:\n%s", want, skill)

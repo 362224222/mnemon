@@ -8,7 +8,6 @@ import (
 
 	"github.com/mnemon-dev/mnemon/harness/internal/app"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
-	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
@@ -62,13 +61,13 @@ func TestLocalBootAutoDiscoversSetupConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("boot config: %v", err)
 	}
-	var handlesMemory, handlesSkill bool
+	var handlesAssignment, handlesProgress bool
 	for _, r := range cfg.Rules.Rules() {
-		handlesMemory = handlesMemory || r.Handles(policy.MemoryWriteCandidateObserved)
-		handlesSkill = handlesSkill || r.Handles(policy.SkillWriteCandidateObserved)
+		handlesAssignment = handlesAssignment || r.Handles("assignment.write_candidate.observed")
+		handlesProgress = handlesProgress || r.Handles("progress_digest.write_candidate.observed")
 	}
-	if !handlesMemory || !handlesSkill {
-		t.Fatalf("local boot must enable memory and skill rules; memory=%v skill=%v", handlesMemory, handlesSkill)
+	if !handlesAssignment || !handlesProgress {
+		t.Fatalf("local boot must enable default event rules; assignment=%v progress_digest=%v", handlesAssignment, handlesProgress)
 	}
 }
 

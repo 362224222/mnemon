@@ -75,7 +75,7 @@ func init() {
 	setupCmd.PersistentFlags().StringVar(&setupRoot, "root", ".", "repository root containing harness declarations")
 	setupCmd.PersistentFlags().StringVar(&setupProjectRoot, "project-root", "", "project root for Agent Integration artifacts (defaults to root)")
 	setupCmd.PersistentFlags().StringVar(&setupHost, "host", "", "Agent Integration host id")
-	setupCmd.PersistentFlags().StringArrayVar(&setupLoops, "loop", nil, "capability loop id to enable (e.g. memory, skill, or an external package); may be repeated")
+	setupCmd.PersistentFlags().StringArrayVar(&setupLoops, "loop", nil, "event package id to enable (e.g. assignment or an external package); may be repeated")
 	setupCmd.PersistentFlags().StringVar(&setupPrincipal, "principal", "", "Agent Integration principal")
 
 	setupCmd.Flags().StringVar(&setupControlURL, "control-url", "", "Local Mnemon endpoint URL")

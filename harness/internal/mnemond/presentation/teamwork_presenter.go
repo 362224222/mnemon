@@ -275,7 +275,7 @@ func derivedPresentationHint(env eventmodel.EventEnvelope) string {
 }
 
 func teamworkItemID(item map[string]any) string {
-	for _, key := range []string{"assignment_id", "id", "skill_id"} {
+	for _, key := range []string{"assignment_id", "id", "declaration_id"} {
 		if s := itemString(item, key); s != "" {
 			return s
 		}

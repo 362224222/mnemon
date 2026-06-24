@@ -19,12 +19,12 @@ func TestSetupProductFlagsSelectLoops(t *testing.T) {
 		setupLoops = oldLoops
 	})
 
-	// Every integration is a loop now (PD7: no --memory/--skills); selectedSetupLoops only dedupes
+	// selectedSetupLoops only dedupes
 	// the repeated --loop flag, preserving first-seen order.
-	setupLoops = []string{"memory", "skill", "memory"}
+	setupLoops = []string{"assignment", "progress_digest", "assignment"}
 
 	got := selectedSetupLoops()
-	want := []string{"memory", "skill"}
+	want := []string{"assignment", "progress_digest"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("selectedSetupLoops() = %#v, want %#v", got, want)
 	}
@@ -36,7 +36,7 @@ func TestSetupCommandUsesProductDefaults(t *testing.T) {
 	setupRoot = cmdRepoRoot(t)
 	setupProjectRoot = projectRoot
 	setupHost = "codex"
-	setupLoops = []string{"memory", "skill"}
+	setupLoops = nil
 	setupPrincipal = ""
 	setupControlURL = ""
 	setupUseToken = false
@@ -62,8 +62,7 @@ func TestSetupCommandUsesProductDefaults(t *testing.T) {
 	for _, want := range []string{
 		`"principal": "codex@project"`,
 		`"endpoint": "http://127.0.0.1:8787"`,
-		`"memory.write_candidate.observed"`,
-		`"skill.write_candidate.observed"`,
+		`"session.observed"`,
 		`.mnemon/harness/channel/credentials/codex-project.token`,
 	} {
 		if !strings.Contains(bindingJSON, want) {
@@ -136,7 +135,7 @@ func setupProductIntegration(t *testing.T, projectRoot string) {
 	setupRoot = cmdRepoRoot(t)
 	setupProjectRoot = projectRoot
 	setupHost = "codex"
-	setupLoops = []string{"memory", "skill"}
+	setupLoops = nil
 	setupPrincipal = ""
 	setupControlURL = ""
 	setupUseToken = false

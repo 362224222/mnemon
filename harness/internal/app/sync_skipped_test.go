@@ -46,21 +46,21 @@ func countSkippedDiagnostics(t *testing.T, rt *runtime.Runtime, kind string) int
 func TestWorkerPullSkippedKindLandsDurableDiagnosticOnce(t *testing.T) {
 	root := t.TempDir()
 	rt := openServingRuntime(t, root)
-	memRef := contract.ResourceRef{Kind: "memory", ID: "project"}
+	progressRef := contract.ResourceRef{Kind: "progress_digest", ID: "project"}
 	// The newer-hub grant includes the goal ref — otherwise the hub's pull clamp would filter the
 	// foreign-kind material before it ever reached this replica's importer.
 	endpoint, _, hubStore := startHub(t, map[string]contract.ActorID{"tok-local": "replica-local@team"},
-		[]contract.ResourceRef{memRef, {Kind: "goal", ID: "project"}})
+		[]contract.ResourceRef{progressRef, {Kind: "goal", ID: "project"}})
 	connectRemote(t, root, endpoint, "tok-local")
 
-	// Seed the hub log directly: one importable memory event + one goal event (newer-hub shape).
+	// Seed the hub log directly: one importable progress event + one goal event (newer-hub shape).
 	now := "2026-06-12T00:00:00Z"
-	memEnv, err := contract.SyncedEventEnvelopeFromMaterial(foreignMemoryMaterial("dec-mem", "remote-mem", "memory rides alongside the skipped kind"))
+	progressEnv, err := contract.SyncedEventEnvelopeFromMaterial(foreignProgressMaterial("dec-progress", "remote-progress", "progress rides alongside the skipped kind"))
 	if err != nil {
-		t.Fatalf("materialize memory event: %v", err)
+		t.Fatalf("materialize progress event: %v", err)
 	}
-	if _, err := hubStore.RecordRemoteSyncedEvent("replica-other@team", memEnv, now); err != nil {
-		t.Fatalf("seed memory event: %v", err)
+	if _, err := hubStore.RecordRemoteSyncedEvent("replica-other@team", progressEnv, now); err != nil {
+		t.Fatalf("seed progress event: %v", err)
 	}
 	goalEnv, err := contract.SyncedEventEnvelopeFromMaterial(foreignGoalMaterial("dec-goal"))
 	if err != nil {
@@ -76,12 +76,12 @@ func TestWorkerPullSkippedKindLandsDurableDiagnosticOnce(t *testing.T) {
 	if got := countSkippedDiagnostics(t, rt, `"goal"`); got != 1 {
 		t.Fatalf("skipped kind must land exactly one durable diagnostic, got %d", got)
 	}
-	// The memory material in the same batch imported normally.
-	_, fields, err := rt.Resource(memRef)
+	// The progress material in the same batch imported normally.
+	_, fields, err := rt.Resource(progressRef)
 	if err != nil {
-		t.Fatalf("read memory: %v", err)
+		t.Fatalf("read progress: %v", err)
 	}
-	if content, _ := fields["content"].(string); !strings.Contains(content, "memory rides alongside the skipped kind") {
+	if content, _ := fields["content"].(string); !strings.Contains(content, "progress rides alongside the skipped kind") {
 		t.Fatalf("importable kind must be unaffected by the skip:\n%s", content)
 	}
 	// The cursor advanced past the skipped material (the stream never wedges)...
@@ -106,7 +106,7 @@ func TestWorkerPullSkippedKindLandsDurableDiagnosticOnce(t *testing.T) {
 func TestImportLocalSyncPullSkippedKindParity(t *testing.T) {
 	storePath := filepath.Join(t.TempDir(), "local.db")
 	materials := []contract.SyncedEventMaterial{
-		foreignMemoryMaterial("dec-mem-off", "remote-mem-off", "offline memory import works"),
+		foreignProgressMaterial("dec-progress-off", "remote-progress-off", "offline progress import works"),
 		foreignGoalMaterial("dec-goal-off"),
 	}
 	syncedEvents := testSyncedEvents(t, materials...)
@@ -140,12 +140,12 @@ func TestImportLocalSyncPullSkippedKindParity(t *testing.T) {
 	if !observed {
 		t.Fatalf("skipped observation must carry {kind, origin_replica_id, local_decision_id, remote_id}: %+v", events)
 	}
-	// The memory material still imported.
-	_, fields, err := rt.Resource(contract.ResourceRef{Kind: "memory", ID: "project"})
+	// The progress material still imported.
+	_, fields, err := rt.Resource(contract.ResourceRef{Kind: "progress_digest", ID: "project"})
 	if err != nil {
-		t.Fatalf("read memory: %v", err)
+		t.Fatalf("read progress: %v", err)
 	}
-	if content, _ := fields["content"].(string); !strings.Contains(content, "offline memory import works") {
-		t.Fatalf("memory import must be unaffected:\n%s", content)
+	if content, _ := fields["content"].(string); !strings.Contains(content, "offline progress import works") {
+		t.Fatalf("progress import must be unaffected:\n%s", content)
 	}
 }

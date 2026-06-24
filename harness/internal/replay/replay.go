@@ -38,7 +38,7 @@ func ordered(events []contract.Event) []contract.Event {
 // must both KNOW (schema) and AUTHORIZE so it never adds a rejection the live run did not have.
 // Live only ever proposes a kind its enabled capabilities registered, so this is exactly the kinds
 // live accepted writes for; sourcing them from the log (not a compiled catalog) keeps replay
-// deterministic however the LIVE run's user kinds are sourced — a graduated memory/skill or an
+// deterministic however the LIVE run's user kinds are sourced — an embedded descriptor or an
 // external declared kind replays identically (I6, D3/PD5). The write extraction mirrors
 // admission.opFromEvent's JSON round-trip (Payload["writes"] decodes to []any after AppendEvent).
 func logWriteKinds(events []contract.Event) []contract.ResourceKind {

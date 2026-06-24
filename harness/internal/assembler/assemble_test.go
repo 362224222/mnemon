@@ -209,8 +209,8 @@ func TestAssembleFailsClosedOnUnknownCapability(t *testing.T) {
 	}
 }
 
-// The P1 demotion nail: config enables note but NO external package supplies its spec (nil
-// catalog = EmbeddedCatalog(), which is exactly {memory, skill} now) — Assemble must land on the
+// The demotion nail: config enables note but NO external package supplies its spec (nil
+// catalog = EmbeddedCatalog()) — Assemble must land on the
 // 'unknown rule_ref' fail-closed path, never a silent no-op or a builtin fallback.
 func TestAssembleFailsClosedOnNoteWithoutExternalPackage(t *testing.T) {
 	cfg := config.File{Capabilities: map[string]config.CapabilityConfig{
@@ -226,14 +226,14 @@ func TestAssembleFailsClosedOnNoteWithoutExternalPackage(t *testing.T) {
 }
 
 // A binding scoped to a non-default ref of the capability's kind must get a rule targeting ITS ref
-// (parity with the production memoryRefForBinding fallback), not the config-pinned default.
+// (parity with the production binding-scope fallback), not the config-pinned default.
 func TestAssembleDerivesRefFromBindingScope(t *testing.T) {
-	teamRef := contract.ResourceRef{Kind: "memory", ID: "team"}
+	teamRef := contract.ResourceRef{Kind: "progress_digest", ID: "team"}
 	binding := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{teamRef})
-	binding.AllowedObservedTypes = []string{"memory.write_candidate.observed"}
+	binding.AllowedObservedTypes = []string{"progress_digest.write_candidate.observed"}
 
 	cfg := config.File{Capabilities: map[string]config.CapabilityConfig{
-		"memory": {Enabled: true, ResourceRef: "memory/project", RuleRef: "native:memory"},
+		"progress_digest": {Enabled: true, ResourceRef: "progress_digest/project", RuleRef: "native:progress_digest"},
 	}}
 	rc, err := Assemble(cfg, []access.ChannelBinding{binding}, nil)
 	if err != nil {
@@ -247,8 +247,8 @@ func TestAssembleDerivesRefFromBindingScope(t *testing.T) {
 	defer rt.Close()
 
 	if _, _, err := rt.API().Ingest("codex@project", contract.ObservationEnvelope{
-		ExternalID: "m1",
-		Event:      contract.Event{Type: "memory.write_candidate.observed", Payload: map[string]any{"content": "team fact", "source": "s", "confidence": "high"}},
+		ExternalID: "p1",
+		Event:      contract.Event{Type: "progress_digest.write_candidate.observed", Payload: map[string]any{"summary": "team fact"}},
 	}); err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
@@ -256,10 +256,10 @@ func TestAssembleDerivesRefFromBindingScope(t *testing.T) {
 		t.Fatalf("tick: %v", err)
 	}
 	if v, _, err := rt.Resource(teamRef); err != nil || v == 0 {
-		t.Fatalf("write must land on the binding's scoped ref memory/team (v=%d err=%v)", v, err)
+		t.Fatalf("write must land on the binding's scoped ref progress_digest/team (v=%d err=%v)", v, err)
 	}
-	if v, _, _ := rt.Resource(contract.ResourceRef{Kind: "memory", ID: "project"}); v != 0 {
-		t.Fatal("the config default memory/project must NOT be written for a team-scoped binding")
+	if v, _, _ := rt.Resource(contract.ResourceRef{Kind: "progress_digest", ID: "project"}); v != 0 {
+		t.Fatal("the config default progress_digest/project must NOT be written for a team-scoped binding")
 	}
 }
 
@@ -268,10 +268,10 @@ func TestAssembleDerivesRefFromBindingScope(t *testing.T) {
 // what it writes).
 func TestAssembleSkipsUnscopedBinding(t *testing.T) {
 	binding := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", nil)
-	binding.AllowedObservedTypes = []string{"memory.write_candidate.observed"}
+	binding.AllowedObservedTypes = []string{"progress_digest.write_candidate.observed"}
 
 	cfg := config.File{Capabilities: map[string]config.CapabilityConfig{
-		"memory": {Enabled: true, ResourceRef: "memory/project", RuleRef: "native:memory"},
+		"progress_digest": {Enabled: true, ResourceRef: "progress_digest/project", RuleRef: "native:progress_digest"},
 	}}
 	rc, err := Assemble(cfg, []access.ChannelBinding{binding}, nil)
 	if err != nil {
@@ -287,24 +287,24 @@ func TestAssembleSkipsUnscopedBinding(t *testing.T) {
 	}
 	defer rt.Close()
 	if _, _, err := rt.API().Ingest("codex@project", contract.ObservationEnvelope{
-		ExternalID: "m1",
-		Event:      contract.Event{Type: "memory.write_candidate.observed", Payload: map[string]any{"content": "x", "source": "s", "confidence": "high"}},
+		ExternalID: "p1",
+		Event:      contract.Event{Type: "progress_digest.write_candidate.observed", Payload: map[string]any{"summary": "x"}},
 	}); err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
 	if _, err := rt.Tick(); err != nil {
 		t.Fatalf("tick: %v", err)
 	}
-	if v, _, _ := rt.Resource(contract.ResourceRef{Kind: "memory", ID: "project"}); v != 0 {
+	if v, _, _ := rt.Resource(contract.ResourceRef{Kind: "progress_digest", ID: "project"}); v != 0 {
 		t.Fatal("an unscoped binding must not produce a write")
 	}
 }
 
-// rule_ref 必须携带命名空间前缀:裸 id(如 "memory")在 Assemble 这道生产 seam
+// rule_ref 必须携带命名空间前缀:裸 id 在 Assemble 这道生产 seam
 // 上 fail-closed —— 为未来的 wasm: 等命名空间立规,与 config.Load 的校验双门一致。
 func TestAssembleRejectsBareRuleRef(t *testing.T) {
 	cfg := config.File{Capabilities: map[string]config.CapabilityConfig{
-		"memory": {Enabled: true, ResourceRef: "memory/project", RuleRef: "memory"}, // 缺 native: 前缀
+		"progress_digest": {Enabled: true, ResourceRef: "progress_digest/project", RuleRef: "progress_digest"}, // 缺 native: 前缀
 	}}
 	if _, err := Assemble(cfg, nil, nil); err == nil {
 		t.Fatal("a bare rule_ref without the native: namespace prefix must fail closed")
@@ -377,10 +377,6 @@ func TestBuiltinHeadersSatisfySchemaGuard(t *testing.T) {
 
 func minimalAcceptPayload(id string) map[string]any {
 	switch id {
-	case "memory":
-		return map[string]any{"content": "x", "source": "s", "confidence": "high"}
-	case "skill":
-		return map[string]any{"skill_id": "x-skill", "source": "s", "confidence": "high"}
 	case "project_intent":
 		return map[string]any{"statement": "ship the thing"}
 	case "agent_profile":

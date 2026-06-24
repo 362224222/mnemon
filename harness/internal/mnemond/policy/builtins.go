@@ -9,16 +9,15 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/assets"
 )
 
-// embeddedCatalog is the FIRST-PARTY capability catalog, compiled from the embedded capability specs
-// (assets/capabilities/*.json) by the SAME FromSpec machinery as external packages — memory/skill
-// are ordinary first-party packages here, not a privileged registry (PD5 graduation). Embedded specs
+// embeddedCatalog is the embedded event-policy catalog, compiled from the embedded specs
+// (assets/capabilities/*.json) by the same FromSpec machinery as external packages. Embedded specs
 // are compile-time artifacts: a corrupt one is a build defect, caught by the load test and the gates
-// before merge — hence the panic at package init, not an error path. (External packages —
-// LoadExternal/ResolveCatalog — take the error path, never the panic.)
+// before merge, hence the panic at package init rather than an error path. External packages
+// (LoadExternal/ResolveCatalog) take the error path.
 var embeddedCatalog = mustLoadBuiltins()
 
-// EmbeddedCatalog returns the first-party capability catalog: the embedded half of ResolveCatalog
-// and the backward-compatible default when no resolved catalog is supplied.
+// EmbeddedCatalog returns the embedded event-policy catalog: the embedded half of ResolveCatalog
+// and the default when no resolved catalog is supplied.
 func EmbeddedCatalog() map[string]Capability { return embeddedCatalog }
 
 func mustLoadBuiltins() map[string]Capability {

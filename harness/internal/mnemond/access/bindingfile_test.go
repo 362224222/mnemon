@@ -29,8 +29,8 @@ func TestLoadBindingFile(t *testing.T) {
 	    "transport": "http",
 	    "endpoint": "http://127.0.0.1:8787",
 	    "allowed_verbs": ["observe","pull","render","status"],
-	    "allowed_observed_types": ["session.observed","memory.write_candidate.observed"],
-	    "subscription_scope": [{"kind":"memory","id":"project"}],
+	    "allowed_observed_types": ["session.observed","progress_digest.write_candidate.observed"],
+	    "subscription_scope": [{"kind":"progress_digest","id":"project"}],
 	    "idempotency_namespace": "host:codex@project",
 	    "credential_ref": ".mnemon/harness/channel/tokens/codex.token"
 	  },{
@@ -39,7 +39,7 @@ func TestLoadBindingFile(t *testing.T) {
 	    "transport": "http",
 	    "endpoint": "http://127.0.0.1:8787",
 	    "allowed_verbs": ["sync.push","sync.pull","sync.status"],
-	    "subscription_scope": [{"kind":"memory","id":"project"}],
+	    "subscription_scope": [{"kind":"progress_digest","id":"project"}],
 	    "idempotency_namespace": "replica:replica@project",
 	    "credential_ref": ".mnemon/harness/channel/tokens/replica.token"
 	  }]
@@ -63,10 +63,10 @@ func TestLoadBindingFile(t *testing.T) {
 	if !b.Allows(VerbObserve) || !b.Allows(VerbPull) || !b.Allows(VerbRender) || !b.Allows(VerbStatus) {
 		t.Fatalf("verbs not mapped: %+v", b.AllowedVerbs)
 	}
-	if !b.AllowsObservedType("session.observed") || b.AllowsObservedType("memory.observed") {
+	if !b.AllowsObservedType("session.observed") || b.AllowsObservedType("record.observed") {
 		t.Fatalf("observed types not mapped: %+v", b.AllowedObservedTypes)
 	}
-	if len(b.SubscriptionScope) != 1 || b.SubscriptionScope[0] != (contract.ResourceRef{Kind: "memory", ID: "project"}) {
+	if len(b.SubscriptionScope) != 1 || b.SubscriptionScope[0] != (contract.ResourceRef{Kind: "progress_digest", ID: "project"}) {
 		t.Fatalf("scope wrong: %+v", b.SubscriptionScope)
 	}
 	if loaded.Tokens["tok-codex"] != "codex@project" {

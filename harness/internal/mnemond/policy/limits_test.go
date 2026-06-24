@@ -9,13 +9,14 @@ import (
 )
 
 func TestAppendItemRuleEnforcesMaxPayloadBytes(t *testing.T) {
-	r := EmbeddedCatalog()["memory"].Rule("codex@project", contract.ResourceRef{Kind: "memory", ID: "project"},
+	cap := EmbeddedCatalog()["progress_digest"]
+	r := cap.Rule("codex@project", contract.ResourceRef{Kind: cap.ResourceKind, ID: "project"},
 		Limits{MaxPayloadBytes: 64})
 	dec, err := r.Evaluate(admission.RuleInput{Event: contract.Event{
-		Type:  MemoryWriteCandidateObserved,
+		Type:  cap.ObservedType,
 		Actor: "codex@project",
 		Payload: map[string]any{
-			"content": strings.Repeat("x", 256), "source": "s", "confidence": "high",
+			"summary": strings.Repeat("x", 256),
 		},
 	}})
 	if err != nil {
@@ -30,12 +31,13 @@ func TestAppendItemRuleEnforcesMaxPayloadBytes(t *testing.T) {
 }
 
 func TestAppendItemRuleZeroLimitMeansUnbounded(t *testing.T) {
-	r := EmbeddedCatalog()["memory"].Rule("codex@project", contract.ResourceRef{Kind: "memory", ID: "project"}, Limits{})
+	cap := EmbeddedCatalog()["progress_digest"]
+	r := cap.Rule("codex@project", contract.ResourceRef{Kind: cap.ResourceKind, ID: "project"}, Limits{})
 	dec, err := r.Evaluate(admission.RuleInput{Event: contract.Event{
-		Type:  MemoryWriteCandidateObserved,
+		Type:  cap.ObservedType,
 		Actor: "codex@project",
 		Payload: map[string]any{
-			"content": strings.Repeat("x", 256), "source": "s", "confidence": "high",
+			"summary": strings.Repeat("x", 256),
 		},
 	}})
 	if err != nil {

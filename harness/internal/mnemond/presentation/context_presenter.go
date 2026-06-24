@@ -30,7 +30,7 @@ func BuildContextPacket(_ Request, proj view.View) string {
 		}
 		for _, item := range items {
 			summary := firstNonEmpty(item,
-				"content", "name", "summary", "statement", "scope", "expected_work", "focus", "skill_id", "status")
+				"content", "name", "summary", "statement", "scope", "expected_work", "focus", "declaration_id", "status")
 			if summary == "" {
 				summary = contextItemID(item)
 			}
@@ -44,7 +44,7 @@ func BuildContextPacket(_ Request, proj view.View) string {
 }
 
 func contextItemID(item map[string]any) string {
-	for _, key := range []string{"id", "skill_id", "assignment_id"} {
+	for _, key := range []string{"id", "declaration_id", "assignment_id"} {
 		if s := itemString(item, key); s != "" {
 			return s
 		}

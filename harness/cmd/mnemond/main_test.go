@@ -32,8 +32,7 @@ func TestRunWithoutSetupReportsNotSetUp(t *testing.T) {
 func TestRunRefusesNonLoopbackAddr(t *testing.T) {
 	root := t.TempDir()
 	if _, err := app.New(root).Setup(context.Background(), io.Discard, io.Discard, app.SetupOptions{
-		Host:  "codex",
-		Loops: []string{"memory"},
+		Host: "codex",
 	}); err != nil {
 		t.Fatalf("setup: %v", err)
 	}

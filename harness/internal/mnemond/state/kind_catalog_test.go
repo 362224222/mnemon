@@ -7,7 +7,7 @@ import (
 )
 
 // Governance lockstep: contract.KindCatalog == keys(DefaultSchemaGuard) — both now carry ONLY the
-// governance kinds (memory/skill and other user kinds are assembly-time, not compiled; PD5/PD6).
+// governance kinds; event data kinds are assembly-time, not compiled.
 func TestKindCatalogMatchesSchemaGuard(t *testing.T) {
 	g := DefaultSchemaGuard()
 	for k := range g.Required {

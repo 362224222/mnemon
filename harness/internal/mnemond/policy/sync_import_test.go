@@ -13,7 +13,7 @@ import (
 // foreign principal's event through (co-existence gate).
 func TestSyncImportSkippedRuleDeniesNamingKind(t *testing.T) {
 	r := SyncImportSkippedRule(contract.SyncImportActor)
-	if r.Handles(MemoryWriteCandidateObserved) || !r.Handles(SyncImportSkippedObserved) {
+	if r.Handles("fixture_record.write_candidate.observed") || !r.Handles(SyncImportSkippedObserved) {
 		t.Fatal("rule must handle exactly the skipped observation type")
 	}
 	dec, err := r.Evaluate(admission.RuleInput{Event: contract.Event{
@@ -32,16 +32,13 @@ func TestSyncImportSkippedRuleDeniesNamingKind(t *testing.T) {
 	}
 }
 
-// The first-party importable set is descriptor-derived (PD6, replacing the former hardcoded
+// The embedded importable set is descriptor-derived (PD6, replacing the former hardcoded
 // contract.SyncableResourceKinds): the embedded catalog opts each syncable kind into Remote
 // Workspace import under its declared closed-set merge strategy. This is the pin the deleted
 // contract.clamp_test invariant moved to — its home is now the catalog that declares it.
 func TestEmbeddedImportableKindsAreDescriptorDerived(t *testing.T) {
-	// memory/skill plus the R1 teamwork kinds are importable; each selects its declared
-	// closed-set merge strategy (the descriptor-derived sync set — no hardcoded list).
 	cat := EmbeddedCatalog()
 	wantMerge := map[contract.ResourceKind]string{
-		"memory": "entry-dedup", "skill": "declaration-dedup",
 		"agent_profile": "item-dedup", "teamwork_signal": "item-dedup",
 		"project_intent": "item-dedup", "assignment": "item-dedup", "progress_digest": "item-dedup",
 	}
@@ -54,13 +51,13 @@ func TestEmbeddedImportableKindsAreDescriptorDerived(t *testing.T) {
 			t.Fatalf("%s merge = %q, want %q", kind, cat[string(kind)].Sync.Merge, merge)
 		}
 	}
-	if got := cat["memory"].RemoteSyncedEventObserved(); got != "memory.remote_synced_event.observed" {
+	if got := cat["assignment"].RemoteSyncedEventObserved(); got != "assignment.remote_synced_event.observed" {
 		t.Fatalf("remote-material observation must be the system-derived form, got %q", got)
 	}
-	if _, ok := RemoteImportRule(cat["memory"], contract.SyncImportActor); !ok {
+	if _, ok := RemoteImportRule(cat["assignment"], contract.SyncImportActor); !ok {
 		t.Fatal("an importable capability must yield a remote-import rule")
 	}
-	if r, ok := RemoteImportRule(cat["memory"], contract.SyncImportActor); !ok || !r.Handles("memory.remote_synced_event.observed") {
-		t.Fatalf("the memory import rule must handle its derived observation type, ok=%v", ok)
+	if r, ok := RemoteImportRule(cat["assignment"], contract.SyncImportActor); !ok || !r.Handles("assignment.remote_synced_event.observed") {
+		t.Fatalf("the import rule must handle its derived observation type, ok=%v", ok)
 	}
 }

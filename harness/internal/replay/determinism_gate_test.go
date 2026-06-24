@@ -17,12 +17,13 @@ const gateActor = contract.ActorID("codex@project")
 
 func gateRuntime(t *testing.T) *runtime.Runtime {
 	t.Helper()
-	ref := contract.ResourceRef{Kind: "memory", ID: "project"}
+	ref := contract.ResourceRef{Kind: "progress_digest", ID: "project"}
+	cap := policy.EmbeddedCatalog()["progress_digest"]
 	rt, err := runtime.OpenRuntime(filepath.Join(t.TempDir(), "g.db"), runtime.RuntimeConfig{
-		Rules:       admission.NewRuleSet(policy.EmbeddedCatalog()["memory"].Rule(gateActor, ref, policy.Limits{})),
-		Authority:   state.AuthorityRules{Allow: map[contract.ActorID][]contract.ResourceKind{gateActor: {"memory"}}},
+		Rules:       admission.NewRuleSet(cap.Rule(gateActor, ref, policy.Limits{})),
+		Authority:   state.AuthorityRules{Allow: map[contract.ActorID][]contract.ResourceKind{gateActor: {"progress_digest"}}},
 		Subs:        map[contract.ActorID]contract.Subscription{gateActor: {Actor: gateActor, Refs: []contract.ResourceRef{ref}}},
-		SchemaGuard: state.SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}, "goal": {"statement"}}),
+		SchemaGuard: state.SchemaGuardWith(map[contract.ResourceKind][]string{"progress_digest": {"content"}, "goal": {"statement"}}),
 	})
 	if err != nil {
 		t.Fatalf("open runtime: %v", err)
@@ -39,23 +40,23 @@ type gateStep struct {
 	wantDecisions int
 }
 
-func memoryEnv(extID, content string) contract.ObservationEnvelope {
+func progressEnv(extID, summary string) contract.ObservationEnvelope {
 	return contract.ObservationEnvelope{
 		ExternalID: extID,
-		Event: contract.Event{Type: "memory.write_candidate.observed",
-			Payload: map[string]any{"content": content, "source": "user", "confidence": "high"}},
+		Event: contract.Event{Type: "progress_digest.write_candidate.observed",
+			Payload: map[string]any{"summary": summary}},
 	}
 }
 
 func deterministicScript() []gateStep {
 	return []gateStep{
-		{name: "accept create", envs: []contract.ObservationEnvelope{memoryEnv("m1", "first fact")}, wantDecisions: 1},
-		{name: "accept update", envs: []contract.ObservationEnvelope{memoryEnv("m2", "second fact")}, wantDecisions: 1},
+		{name: "accept create", envs: []contract.ObservationEnvelope{progressEnv("m1", "first fact")}, wantDecisions: 1},
+		{name: "accept update", envs: []contract.ObservationEnvelope{progressEnv("m2", "second fact")}, wantDecisions: 1},
 		// deny → 0 决策 + 1 条 *.diagnostic(rule deny 不产 kernel 决策;两侧对齐已经经验探针确认)
-		{name: "deny secret", envs: []contract.ObservationEnvelope{memoryEnv("bad", "password=hunter2")}, wantDecisions: 0},
+		{name: "deny secret", envs: []contract.ObservationEnvelope{progressEnv("bad", "password=hunter2")}, wantDecisions: 0},
 		// 单 tick 双事件:第二个提案基于同一派发时视图 → read-stale 冲突,Reject 默认下 Rejected
 		{name: "read-stale conflict", envs: []contract.ObservationEnvelope{
-			memoryEnv("c1", "third fact"), memoryEnv("c2", "racing fact"),
+			progressEnv("c1", "third fact"), progressEnv("c2", "racing fact"),
 		}, wantDecisions: 2},
 	}
 }
@@ -183,9 +184,9 @@ func TestReplayAndShadowHonorIngestSeqOverSliceOrder(t *testing.T) {
 	}
 
 	subs := map[contract.ActorID]contract.Subscription{
-		gateActor: {Actor: gateActor, Refs: []contract.ResourceRef{{Kind: "memory", ID: "project"}}},
+		gateActor: {Actor: gateActor, Refs: []contract.ResourceRef{{Kind: "progress_digest", ID: "project"}}},
 	}
-	live := admission.NewRuleSet(policy.EmbeddedCatalog()["memory"].Rule(gateActor, contract.ResourceRef{Kind: "memory", ID: "project"}, policy.Limits{}))
+	live := admission.NewRuleSet(policy.EmbeddedCatalog()["progress_digest"].Rule(gateActor, contract.ResourceRef{Kind: "progress_digest", ID: "project"}, policy.Limits{}))
 	a := Shadow(events, subs, live, live)
 	b := Shadow(reversed, subs, live, live)
 	if a != b {

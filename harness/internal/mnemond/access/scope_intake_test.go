@@ -20,12 +20,12 @@ func (s *stubAPI) PullPresentationView(contract.ActorID, contract.Subscription) 
 }
 
 // The authorizer is the only layer holding the binding, so it is where an observation's named
-// ResourceRefs are clamped to the binding scope — a memory-scoped principal cannot observe a write
-// naming a skill resource (mirrors the pull-scope clamp).
+// ResourceRefs are clamped to the binding scope — a principal scoped to one event kind cannot
+// observe a write naming another resource (mirrors the pull-scope clamp).
 func TestIngestRejectsOutOfScopeResourceRef(t *testing.T) {
-	memRef := contract.ResourceRef{Kind: "memory", ID: "project"}
-	binding := HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{memRef})
-	binding.AllowedObservedTypes = []string{"memory.write_candidate.observed"}
+	progressRef := contract.ResourceRef{Kind: "progress_digest", ID: "project"}
+	binding := HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{progressRef})
+	binding.AllowedObservedTypes = []string{"progress_digest.write_candidate.observed"}
 	bs, err := NewBindingSet(binding)
 	if err != nil {
 		t.Fatalf("binding set: %v", err)
@@ -35,9 +35,9 @@ func TestIngestRejectsOutOfScopeResourceRef(t *testing.T) {
 
 	_, _, err = api.Ingest("codex@project", contract.ObservationEnvelope{
 		Event: contract.Event{
-			Type:         "memory.write_candidate.observed",
-			ResourceRefs: []contract.ResourceRef{{Kind: "skill", ID: "project"}},
-			Payload:      map[string]any{"content": "x"},
+			Type:         "progress_digest.write_candidate.observed",
+			ResourceRefs: []contract.ResourceRef{{Kind: "assignment", ID: "project"}},
+			Payload:      map[string]any{"summary": "x"},
 		},
 	})
 	if err == nil {
@@ -49,9 +49,9 @@ func TestIngestRejectsOutOfScopeResourceRef(t *testing.T) {
 
 	if _, _, err := api.Ingest("codex@project", contract.ObservationEnvelope{
 		Event: contract.Event{
-			Type:         "memory.write_candidate.observed",
-			ResourceRefs: []contract.ResourceRef{memRef},
-			Payload:      map[string]any{"content": "x"},
+			Type:         "progress_digest.write_candidate.observed",
+			ResourceRefs: []contract.ResourceRef{progressRef},
+			Payload:      map[string]any{"summary": "x"},
 		},
 	}); err != nil {
 		t.Fatalf("an in-scope observation must pass: %v", err)
@@ -65,7 +65,7 @@ func TestIngestRejectsOutOfScopeResourceRef(t *testing.T) {
 // 此前 len(scope)==0 时整个检查被跳过。唯一例外:未命名 refs 的观察不受约束。
 func TestIngestEmptyScopeRejectsExplicitRefs(t *testing.T) {
 	binding := HostAgentBinding("codex@project", "http://127.0.0.1:8787", nil) // 空 scope
-	binding.AllowedObservedTypes = []string{"memory.write_candidate.observed"}
+	binding.AllowedObservedTypes = []string{"progress_digest.write_candidate.observed"}
 	bs, err := NewBindingSet(binding)
 	if err != nil {
 		t.Fatalf("binding set: %v", err)
@@ -75,9 +75,9 @@ func TestIngestEmptyScopeRejectsExplicitRefs(t *testing.T) {
 
 	if _, _, err := api.Ingest("codex@project", contract.ObservationEnvelope{
 		Event: contract.Event{
-			Type:         "memory.write_candidate.observed",
-			ResourceRefs: []contract.ResourceRef{{Kind: "memory", ID: "project"}},
-			Payload:      map[string]any{"content": "x"},
+			Type:         "progress_digest.write_candidate.observed",
+			ResourceRefs: []contract.ResourceRef{{Kind: "progress_digest", ID: "project"}},
+			Payload:      map[string]any{"summary": "x"},
 		},
 	}); err == nil {
 		t.Fatal("an empty-scope binding must reject every explicitly named ref")
@@ -89,8 +89,8 @@ func TestIngestEmptyScopeRejectsExplicitRefs(t *testing.T) {
 	// 例外不变:同一 binding,未命名 refs → 不受约束,放行。
 	if _, _, err := api.Ingest("codex@project", contract.ObservationEnvelope{
 		Event: contract.Event{
-			Type:    "memory.write_candidate.observed",
-			Payload: map[string]any{"content": "x"},
+			Type:    "progress_digest.write_candidate.observed",
+			Payload: map[string]any{"summary": "x"},
 		},
 	}); err != nil {
 		t.Fatalf("an observation naming no refs must stay unconstrained: %v", err)

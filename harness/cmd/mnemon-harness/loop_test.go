@@ -14,7 +14,7 @@ func TestLoopValidateCommand(t *testing.T) {
 	if err := runLoopValidate(cmd, nil); err != nil {
 		t.Fatalf("runLoopValidate returned error: %v", err)
 	}
-	for _, want := range []string{"embedded capability memory: OK", "embedded capability assignment: OK"} {
+	for _, want := range []string{"embedded capability agent_profile: OK", "embedded capability assignment: OK"} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("expected %q in output:\n%s", want, output.String())
 		}

@@ -11,7 +11,6 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/app"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
-	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
@@ -76,13 +75,11 @@ func TestProductStatusUsesReachableLocalMnemon(t *testing.T) {
 	defer rt.Close()
 	if _, _, err := rt.API().Ingest("codex@project", contract.ObservationEnvelope{
 		ExternalID: "status-pending",
-		Event: contract.Event{Type: policy.MemoryWriteCandidateObserved, Payload: map[string]any{
-			"content":    "Status should read pending sync from the live Local Mnemon service.",
-			"source":     "test",
-			"confidence": "high",
+		Event: contract.Event{Type: "progress_digest.write_candidate.observed", Payload: map[string]any{
+			"summary": "Status should read pending sync from the live Local Mnemon service.",
 		}},
 	}); err != nil {
-		t.Fatalf("seed memory candidate: %v", err)
+		t.Fatalf("seed progress candidate: %v", err)
 	}
 	if _, err := rt.Tick(); err != nil {
 		t.Fatalf("tick local runtime: %v", err)

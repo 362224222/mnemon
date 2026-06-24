@@ -13,7 +13,6 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/app"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
-	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
@@ -23,7 +22,7 @@ import (
 // and surfaces explicit errors for a wrong token or a missing file.
 func TestControlTokenFileAuth(t *testing.T) {
 	root := t.TempDir()
-	ref := contract.ResourceRef{Kind: "memory", ID: "m1"}
+	ref := contract.ResourceRef{Kind: "progress_digest", ID: "project"}
 	rt, err := runtime.OpenRuntime(filepath.Join(root, runtime.DefaultStorePath), runtime.RuntimeConfig{
 		Subs:     map[contract.ActorID]contract.Subscription{"codex@project": {Actor: "codex@project", Refs: []contract.ResourceRef{ref}}},
 		Bindings: []access.ChannelBinding{access.HostAgentBinding("codex@project", "http://x", []contract.ResourceRef{ref})},
@@ -96,9 +95,9 @@ func TestControlTokenFileAuth(t *testing.T) {
 }
 
 func TestControlPullJSONIncludesScopedContent(t *testing.T) {
-	ref := contract.ResourceRef{Kind: "memory", ID: "project"}
+	ref := contract.ResourceRef{Kind: "progress_digest", ID: "project"}
 	binding := access.HostAgentBinding("codex@project", "http://x", []contract.ResourceRef{ref})
-	binding.AllowedObservedTypes = []string{policy.MemoryWriteCandidateObserved}
+	binding.AllowedObservedTypes = []string{"progress_digest.write_candidate.observed"}
 	rt, err := app.OpenLocalRuntime(filepath.Join(t.TempDir(), "governed.db"), access.LoadedBindings{Bindings: []access.ChannelBinding{binding}}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -108,13 +107,12 @@ func TestControlPullJSONIncludesScopedContent(t *testing.T) {
 	defer srv.Close()
 	client := access.NewClient(srv.URL, "codex@project")
 	if rec, err := client.IngestObserve("codex@project", contract.ObservationEnvelope{
-		ExternalID: "memory-json",
-		Event: contract.Event{Type: policy.MemoryWriteCandidateObserved, Payload: map[string]any{
-			"content": "Use Local Mnemon as the memory source.",
-			"source":  "user", "confidence": "high",
+		ExternalID: "progress-json",
+		Event: contract.Event{Type: "progress_digest.write_candidate.observed", Payload: map[string]any{
+			"summary": "Use Local Mnemon as the event source.",
 		}},
 	}); err != nil || !rec.Ticked {
-		t.Fatalf("seed local memory: rec=%+v err=%v", rec, err)
+		t.Fatalf("seed local progress event: rec=%+v err=%v", rec, err)
 	}
 
 	oldAddr := controlAddr
@@ -155,7 +153,7 @@ func TestControlPullJSONIncludesScopedContent(t *testing.T) {
 		t.Fatalf("pull JSON must include one scoped content item, got %+v", out.Content)
 	}
 	if content, _ := out.Content[0].Fields["content"].(string); !strings.Contains(content, "Use Local Mnemon") {
-		t.Fatalf("pull JSON content missing memory text: %+v", out.Content[0].Fields)
+		t.Fatalf("pull JSON content missing progress text: %+v", out.Content[0].Fields)
 	}
 }
 

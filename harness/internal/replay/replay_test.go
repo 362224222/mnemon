@@ -40,7 +40,7 @@ var sampleEvents = []contract.Event{
 
 // I6 determinism under data-driven kinds (PD2b): replay derives the kernel's schema guard from the
 // LOG, not a compiled default — a proposal writing a kind absent from state.DefaultSchemaGuard
-// (e.g. an external/declared kind, or a graduated memory/skill after PD5) must still reconcile to
+// (e.g. an external or declared kind outside the embedded catalog) must still reconcile to
 // Accepted, exactly as the live run that produced the log did. A guard pinned to DefaultSchemaGuard
 // would reject it as an unknown kind, silently breaking I6 once user kinds leave the compiled set.
 func TestReplayDerivesGuardFromLogNotDefault(t *testing.T) {

@@ -137,8 +137,8 @@ func TestBuildTowerViewFieldAndInbox(t *testing.T) {
 // An empty runtime yields empty pages (no panic, no fabricated data).
 func TestBuildTowerViewEmpty(t *testing.T) {
 	binding := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787",
-		[]contract.ResourceRef{{Kind: "memory", ID: "project"}})
-	binding.AllowedObservedTypes = []string{"memory.write_candidate.observed"}
+		[]contract.ResourceRef{{Kind: "progress_digest", ID: "project"}})
+	binding.AllowedObservedTypes = []string{"progress_digest.write_candidate.observed"}
 	rc, err := LocalRuntimeConfigFromBindings([]access.ChannelBinding{binding}, nil)
 	if err != nil {
 		t.Fatalf("boot config: %v", err)

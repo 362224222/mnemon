@@ -169,7 +169,7 @@ func TestOuterRingImportBoundaries(t *testing.T) {
 }
 
 // TestCoreHasNoBusinessKindLiterals enforces that no core package hardcodes an application kind as a
-// string literal — business vocabulary (memory/skill/codex/…) is injected at assembly, never
+// string literal — business vocabulary (for example event kinds or host names) is injected at assembly, never
 // baked into the kernel. Comments are not literals, so a doc that mentions a kind is fine; only real
 // string literals are checked (so the sqlite ":memory:" DSN, for example, never trips this).
 func TestCoreHasNoBusinessKindLiterals(t *testing.T) {

@@ -1,11 +1,6 @@
-// Package capability holds the built-in admission rules (the pure leaf): given an Event + View
-// it returns a RuleDecision, never writing. It imports rule/eventview/contract only — binding->rule
-// translation and runtime wiring live in app. Memory + skill are the two P0 capabilities.
 package policy
 
 import (
-	"encoding/json"
-	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
@@ -15,30 +10,23 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation/view"
 )
 
-const (
-	MemoryWriteCandidateObserved = "memory.write_candidate.observed"
-	MemoryWriteProposed          = "memory.write.proposed"
-)
-
-// entryDedupImport is the "entry-dedup" remote-import strategy (capability-spec v2 §Sync, the
-// closed-set merge a kind selects): merge non-conflicting ENTRIES from a remote material into the
-// resource's entry list, synthesizing one entry from a bare `content` field when the material carries
-// none, and rejecting a same-id-different-content conflict (I15 — receiving-side admission is not
-// relaxed). Parameterized by cap (kind/proposed type), so it carries no kind literal; memory selects
-// it.
+// entryDedupImport is the "entry-dedup" remote-import strategy. It merges non-conflicting
+// entries from a remote material into the resource's entry list, synthesizes one entry from a bare
+// content field when needed, and rejects same-id/different-content conflicts. The strategy is
+// parameterized by the capability descriptor, so it carries no product-kind literal.
 func entryDedupImport(cap Capability, in admission.RuleInput) (contract.RuleDecision, error) {
-	material, err := decodeRemoteMemorySyncedEventMaterial(in.Event.Payload)
+	material, err := decodeRemoteSyncedEventMaterial(in.Event.Payload)
 	if err != nil {
 		return contract.RuleDecision{Verdict: contract.VerdictDeny, Reasons: []string{err.Error()}}, nil
 	}
 	if material.ResourceRef.Kind != cap.ResourceKind {
 		return contract.RuleDecision{Verdict: contract.VerdictDeny, Reasons: []string{"remote import denied: resource kind does not match the importing capability"}}, nil
 	}
-	incoming := memoryEntriesFromFields(material.Fields)
+	incoming := entryItemsFromFields(material.Fields)
 	if len(incoming) == 0 {
 		if content := strings.TrimSpace(stringField(material.Fields, "content")); content != "" {
-			incoming = []memoryEntry{{
-				ID:         remoteMemoryEntryID(material),
+			incoming = []entryItem{{
+				ID:         remoteEntryID(material),
 				Content:    content,
 				Source:     "remote",
 				Confidence: "remote",
@@ -51,12 +39,12 @@ func entryDedupImport(cap Capability, in admission.RuleInput) (contract.RuleDeci
 		return contract.RuleDecision{Verdict: contract.VerdictDeny, Reasons: []string{"remote import denied: no entries"}}, nil
 	}
 	version, fields := resourceFromPresentationView(in.View, material.ResourceRef)
-	existing := memoryEntriesFromFields(fields)
-	byID := make(map[string]memoryEntry, len(existing))
+	existing := entryItemsFromFields(fields)
+	byID := make(map[string]entryItem, len(existing))
 	for _, entry := range existing {
 		byID[entry.ID] = entry
 	}
-	var additions []memoryEntry
+	var additions []entryItem
 	for _, entry := range incoming {
 		if current, ok := byID[entry.ID]; ok {
 			if current.Content != entry.Content {
@@ -69,9 +57,9 @@ func entryDedupImport(cap Capability, in admission.RuleInput) (contract.RuleDeci
 	if len(additions) == 0 {
 		return contract.RuleDecision{Verdict: contract.VerdictAllow}, nil
 	}
-	entries := append(append([]memoryEntry(nil), existing...), additions...)
+	entries := append(append([]entryItem(nil), existing...), additions...)
 	newFields := map[string]any{
-		"content":    renderMemoryContent(entries),
+		"content":    renderEntryContent(entries),
 		"entries":    entries,
 		"updated_by": string(in.Event.Actor),
 	}
@@ -86,30 +74,11 @@ func entryDedupImport(cap Capability, in admission.RuleInput) (contract.RuleDeci
 	}}, nil
 }
 
-func decodeRemoteMemorySyncedEventMaterial(payload map[string]any) (contract.SyncedEventMaterial, error) {
-	raw, ok := payload["material"]
-	if !ok {
-		return contract.SyncedEventMaterial{}, fmt.Errorf("remote memory import denied: missing material")
-	}
-	data, err := json.Marshal(raw)
-	if err != nil {
-		return contract.SyncedEventMaterial{}, fmt.Errorf("remote memory import denied: encode material: %w", err)
-	}
-	var material contract.SyncedEventMaterial
-	if err := json.Unmarshal(data, &material); err != nil {
-		return contract.SyncedEventMaterial{}, fmt.Errorf("remote memory import denied: decode material: %w", err)
-	}
-	if strings.TrimSpace(material.OriginReplicaID) == "" || strings.TrimSpace(material.LocalDecisionID) == "" {
-		return contract.SyncedEventMaterial{}, fmt.Errorf("remote memory import denied: missing provenance")
-	}
-	return material, nil
-}
-
-func remoteMemoryEntryID(material contract.SyncedEventMaterial) string {
+func remoteEntryID(material contract.SyncedEventMaterial) string {
 	return "remote/" + sanitizeEntryIDPart(material.OriginReplicaID) + "/" + sanitizeEntryIDPart(material.LocalDecisionID)
 }
 
-type memoryEntry struct {
+type entryItem struct {
 	ID         string   `json:"id"`
 	Content    string   `json:"content"`
 	Source     string   `json:"source"`
@@ -201,7 +170,7 @@ func resourceFromPresentationView(view view.View, ref contract.ResourceRef) (con
 	return version, nil
 }
 
-func memoryEntriesFromFields(fields map[string]any) []memoryEntry {
+func entryItemsFromFields(fields map[string]any) []entryItem {
 	if fields == nil {
 		return nil
 	}
@@ -209,13 +178,13 @@ func memoryEntriesFromFields(fields map[string]any) []memoryEntry {
 	if !ok {
 		return nil
 	}
-	entries := make([]memoryEntry, 0, len(raw))
+	entries := make([]entryItem, 0, len(raw))
 	for _, item := range raw {
 		m, ok := item.(map[string]any)
 		if !ok {
 			continue
 		}
-		entry := memoryEntry{
+		entry := entryItem{
 			ID:         stringMapField(m, "id"),
 			Content:    stringMapField(m, "content"),
 			Source:     stringMapField(m, "source"),
@@ -264,9 +233,9 @@ func int64MapField(m map[string]any, key string) int64 {
 	}
 }
 
-func renderMemoryContent(entries []memoryEntry) string {
+func renderEntryContent(entries []entryItem) string {
 	var lines []string
-	lines = append(lines, "# Local Memory")
+	lines = append(lines, "# Entries")
 	for _, entry := range entries {
 		meta := []string{"id: " + entry.ID, "source: " + entry.Source, "confidence: " + entry.Confidence}
 		if len(entry.Tags) > 0 {
@@ -277,7 +246,7 @@ func renderMemoryContent(entries []memoryEntry) string {
 	return strings.Join(lines, "\n")
 }
 
-func memoryEntryID(actor contract.ActorID, ingestSeq int64) string {
+func entryItemID(actor contract.ActorID, ingestSeq int64) string {
 	return "local/" + sanitizeEntryIDPart(string(actor)) + "/" + strconv.FormatInt(ingestSeq, 10)
 }
 

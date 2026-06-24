@@ -6,8 +6,8 @@ import "strings"
 // CONCAT-ONLY by frozen contract: a member that evaluates user content as a template is forbidden
 // vocabulary (render injection is structurally impossible — item values are joined, never executed).
 var renderCatalog = map[string]paramSchema{
-	"memory-entry-list": {},
-	"bullet-list":       {required: []string{"title", "field"}},
+	"entry-list":  {},
+	"bullet-list": {required: []string{"title", "field"}},
 }
 
 // compileHeader builds the Capability.Header closure from the render spec: a fresh map per call
@@ -28,8 +28,8 @@ func compileHeader(spec CapabilitySpec) func(items []Item) map[string]any {
 			return h
 		}
 		switch content.Member {
-		case "memory-entry-list":
-			h["content"] = renderMemoryItems(items)
+		case "entry-list":
+			h["content"] = renderEntryItems(items)
 		case "bullet-list":
 			lines := []string{content.Params["title"]}
 			for _, it := range items {

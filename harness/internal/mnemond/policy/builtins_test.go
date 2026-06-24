@@ -7,9 +7,7 @@ import (
 )
 
 func TestBuiltinsLoadFromEmbeddedSpecs(t *testing.T) {
-	// memory/skill are the optional first-party packages; agent_profile/teamwork_signal/
-	// project_intent/assignment/progress_digest are the AgentTeam first-party kinds.
-	for _, id := range []string{"memory", "skill", "agent_profile", "teamwork_signal", "project_intent", "assignment", "progress_digest"} {
+	for _, id := range []string{"agent_profile", "teamwork_signal", "project_intent", "assignment", "progress_digest"} {
 		cap, ok := EmbeddedCatalog()[id]
 		if !ok {
 			t.Fatalf("builtin %q must load from assets/capabilities", id)
@@ -18,16 +16,15 @@ func TestBuiltinsLoadFromEmbeddedSpecs(t *testing.T) {
 			t.Fatalf("builtin %q must carry compiled decode/header", id)
 		}
 	}
-	// The P1 demotion pin: note/decision are EXTERNAL-package/test fixtures now (their specs live
-	// in testdata/capabilities and the e2e external-package leg), never embedded.
-	for _, id := range []string{"note", "decision"} {
+	// Generic substrate fixtures live in testdata/capabilities and the e2e external-package leg,
+	// never in the embedded product catalog.
+	for _, id := range []string{"fixture_record", "fixture_declaration", "note", "decision"} {
 		if _, ok := EmbeddedCatalog()[id]; ok {
 			t.Fatalf("%q must NOT be embedded (demoted to a test/external-package fixture)", id)
 		}
 	}
-	// Two optional packages + five AgentTeam kinds.
-	if len(EmbeddedCatalog()) != 7 {
-		t.Fatalf("EmbeddedCatalog() must be {memory, skill, agent_profile, teamwork_signal, project_intent, assignment, progress_digest}, got %d entries", len(EmbeddedCatalog()))
+	if len(EmbeddedCatalog()) != 5 {
+		t.Fatalf("EmbeddedCatalog() must be {agent_profile, teamwork_signal, project_intent, assignment, progress_digest}, got %d entries", len(EmbeddedCatalog()))
 	}
 }
 

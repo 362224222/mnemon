@@ -15,7 +15,6 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
-	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
@@ -23,7 +22,7 @@ func TestSyncPushOnceAcksPendingLocalEvents(t *testing.T) {
 	restoreSyncFlags(t)
 	root := t.TempDir()
 	storePath := filepath.Join(root, runtime.DefaultStorePath)
-	ref := contract.ResourceRef{Kind: "memory", ID: "project"}
+	ref := contract.ResourceRef{Kind: "progress_digest", ID: "project"}
 
 	localBinding := access.ChannelBinding{
 		Principal:            "codex@project",
@@ -31,7 +30,7 @@ func TestSyncPushOnceAcksPendingLocalEvents(t *testing.T) {
 		Transport:            access.TransportHTTP,
 		Endpoint:             "http://127.0.0.1:8787",
 		AllowedVerbs:         []access.Verb{access.VerbObserve, access.VerbPull, access.VerbStatus},
-		AllowedObservedTypes: []string{policy.MemoryWriteCandidateObserved},
+		AllowedObservedTypes: []string{"progress_digest.write_candidate.observed"},
 		SubscriptionScope:    []contract.ResourceRef{ref},
 		IdempotencyNamespace: "host:codex@project",
 	}
@@ -42,11 +41,9 @@ func TestSyncPushOnceAcksPendingLocalEvents(t *testing.T) {
 	localSrv := httptest.NewServer(runtime.NewRuntimeHandler(local, access.HeaderAuthenticator{}))
 	client := access.NewClient(localSrv.URL, "codex@project")
 	if _, err := client.IngestObserve("codex@project", contract.ObservationEnvelope{
-		ExternalID: "sync-push-memory",
-		Event: contract.Event{Type: policy.MemoryWriteCandidateObserved, Payload: map[string]any{
-			"content":    "sync push should ack this local memory",
-			"source":     "test",
-			"confidence": "high",
+		ExternalID: "sync-push-progress",
+		Event: contract.Event{Type: "progress_digest.write_candidate.observed", Payload: map[string]any{
+			"summary": "sync push should ack this local event",
 		}},
 	}); err != nil {
 		t.Fatalf("local observe: %v", err)
@@ -106,11 +103,11 @@ func TestSyncPushOnceAcksPendingLocalEvents(t *testing.T) {
 	}
 }
 
-func TestSyncPullOnceImportsRemoteMemoryThroughLocalMnemon(t *testing.T) {
+func TestSyncPullOnceImportsRemoteProgressThroughLocalMnemon(t *testing.T) {
 	restoreSyncFlags(t)
 	root := t.TempDir()
 	storePath := filepath.Join(root, runtime.DefaultStorePath)
-	ref := contract.ResourceRef{Kind: "memory", ID: "project"}
+	ref := contract.ResourceRef{Kind: "progress_digest", ID: "project"}
 	localReplica := access.ReplicaAgentBinding("replica@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
 	otherReplica := access.ReplicaAgentBinding("replica@other", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
 	remote, err := runtime.OpenRuntime(filepath.Join(t.TempDir(), "remote.db"), runtime.RuntimeConfig{
@@ -127,7 +124,7 @@ func TestSyncPullOnceImportsRemoteMemoryThroughLocalMnemon(t *testing.T) {
 	}}))
 	defer remoteSrv.Close()
 
-	fields := remoteMemoryFields("remote-entry-1", "Remote synced memory appears locally")
+	fields := remoteProgressFields("remote-entry-1", "Remote synced progress appears locally")
 	remoteMaterial := contract.SyncedEventMaterial{
 		OriginReplicaID: "other-replica",
 		LocalDecisionID: "dec-remote-1",
@@ -162,9 +159,9 @@ func TestSyncPullOnceImportsRemoteMemoryThroughLocalMnemon(t *testing.T) {
 	if !strings.Contains(out.String(), "Sync pull: 1 events") {
 		t.Fatalf("unexpected pull output: %s", out.String())
 	}
-	content := localMemoryContentForTest(t, storePath, ref)
-	if !strings.Contains(content, "Remote synced memory appears locally") {
-		t.Fatalf("pulled memory not visible through local presentation view:\n%s", content)
+	content := localResourceContentForTest(t, storePath, ref)
+	if !strings.Contains(content, "Remote synced progress appears locally") {
+		t.Fatalf("pulled progress not visible through local presentation view:\n%s", content)
 	}
 	st, err := syncStatusForTest(storePath)
 	if err != nil {
@@ -183,17 +180,17 @@ func TestSyncPullOnceImportsRemoteMemoryThroughLocalMnemon(t *testing.T) {
 	if !strings.Contains(out.String(), "Sync pull: 0 events") {
 		t.Fatalf("second pull must be cursor-idempotent, got %s", out.String())
 	}
-	content = localMemoryContentForTest(t, storePath, ref)
-	if strings.Count(content, "Remote synced memory appears locally") != 1 {
-		t.Fatalf("duplicate pull must not duplicate memory:\n%s", content)
+	content = localResourceContentForTest(t, storePath, ref)
+	if strings.Count(content, "Remote synced progress appears locally") != 1 {
+		t.Fatalf("duplicate pull must not duplicate progress:\n%s", content)
 	}
 }
 
-func TestSyncPullOnceImportsRemoteSkillThroughLocalMnemon(t *testing.T) {
+func TestSyncPullOnceImportsRemoteAssignmentThroughLocalMnemon(t *testing.T) {
 	restoreSyncFlags(t)
 	root := t.TempDir()
 	storePath := filepath.Join(root, runtime.DefaultStorePath)
-	ref := contract.ResourceRef{Kind: "skill", ID: "project"}
+	ref := contract.ResourceRef{Kind: "assignment", ID: "project"}
 	localReplica := access.ReplicaAgentBinding("replica@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
 	otherReplica := access.ReplicaAgentBinding("replica@other", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
 	remote, err := runtime.OpenRuntime(filepath.Join(t.TempDir(), "remote.db"), runtime.RuntimeConfig{
@@ -210,10 +207,10 @@ func TestSyncPullOnceImportsRemoteSkillThroughLocalMnemon(t *testing.T) {
 	}}))
 	defer remoteSrv.Close()
 
-	fields := remoteSkillFields("release-checklist", "active")
+	fields := remoteAssignmentFields("release-checklist", "2h")
 	remoteMaterial := contract.SyncedEventMaterial{
 		OriginReplicaID: "other-replica",
-		LocalDecisionID: "dec-remote-skill-1",
+		LocalDecisionID: "dec-remote-assignment-1",
 		LocalIngestSeq:  17,
 		Actor:           "codex@other",
 		ResourceRef:     ref,
@@ -225,10 +222,10 @@ func TestSyncPullOnceImportsRemoteSkillThroughLocalMnemon(t *testing.T) {
 	}
 	if resp, err := access.NewClientWithToken(remoteSrv.URL, "other-token").SyncPush(contract.SyncPushRequest{
 		ReplicaID: "other-replica",
-		BatchID:   "remote-skill-batch",
+		BatchID:   "remote-assignment-batch",
 		Events:    syncTestEvents(t, remoteMaterial),
 	}); err != nil || len(resp.Accepted) != 1 {
-		t.Fatalf("seed remote skill event: resp=%+v err=%v", resp, err)
+		t.Fatalf("seed remote assignment event: resp=%+v err=%v", resp, err)
 	}
 
 	syncRoot = root
@@ -240,35 +237,35 @@ func TestSyncPullOnceImportsRemoteSkillThroughLocalMnemon(t *testing.T) {
 	cmd := mustTestCommand(t)
 	cmd.SetOut(&out)
 	if err := runSyncPull(cmd, nil); err != nil {
-		t.Fatalf("sync pull skill once: %v", err)
+		t.Fatalf("sync pull assignment once: %v", err)
 	}
 	if !strings.Contains(out.String(), "Sync pull: 1 events") {
 		t.Fatalf("unexpected pull output: %s", out.String())
 	}
-	decls := localSkillDeclarationsForTest(t, storePath, ref)
-	if len(decls) != 1 || decls[0]["skill_id"] != "release-checklist" || decls[0]["status"] != "active" {
-		t.Fatalf("pulled skill declaration not visible through local presentation view: %+v", decls)
+	items := localResourceItemsForTest(t, storePath, ref)
+	if len(items) != 1 || items[0]["scope"] != "release-checklist" || items[0]["ttl"] != "2h" {
+		t.Fatalf("pulled assignment item not visible through local presentation view: %+v", items)
 	}
 	st, err := syncStatusForTest(storePath)
 	if err != nil {
-		t.Fatalf("status after skill pull: %v", err)
+		t.Fatalf("status after assignment pull: %v", err)
 	}
 	if st.SyncPending != 0 {
-		t.Fatalf("remote skill import must not create outbound pending echo, got %+v", st)
+		t.Fatalf("remote assignment import must not create outbound pending echo, got %+v", st)
 	}
 
 	out.Reset()
 	cmd = mustTestCommand(t)
 	cmd.SetOut(&out)
 	if err := runSyncPull(cmd, nil); err != nil {
-		t.Fatalf("second sync pull skill: %v", err)
+		t.Fatalf("second sync pull assignment: %v", err)
 	}
 	if !strings.Contains(out.String(), "Sync pull: 0 events") {
 		t.Fatalf("second pull must be cursor-idempotent, got %s", out.String())
 	}
-	decls = localSkillDeclarationsForTest(t, storePath, ref)
-	if len(decls) != 1 {
-		t.Fatalf("duplicate skill pull must not duplicate declarations: %+v", decls)
+	items = localResourceItemsForTest(t, storePath, ref)
+	if len(items) != 1 {
+		t.Fatalf("duplicate assignment pull must not duplicate items: %+v", items)
 	}
 }
 
@@ -391,7 +388,7 @@ func syncStatusForTest(storePath string) (contract.ChannelStatus, error) {
 	return rt.Status("status@test")
 }
 
-func localMemoryContentForTest(t *testing.T, storePath string, ref contract.ResourceRef) string {
+func localResourceContentForTest(t *testing.T, storePath string, ref contract.ResourceRef) string {
 	t.Helper()
 	binding := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
 	rt, err := app.OpenLocalRuntime(storePath, access.LoadedBindings{Bindings: []access.ChannelBinding{binding}}, nil, nil)
@@ -413,24 +410,24 @@ func localMemoryContentForTest(t *testing.T, storePath string, ref contract.Reso
 	return ""
 }
 
-func localSkillDeclarationsForTest(t *testing.T, storePath string, ref contract.ResourceRef) []map[string]any {
+func localResourceItemsForTest(t *testing.T, storePath string, ref contract.ResourceRef) []map[string]any {
 	t.Helper()
 	binding := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
 	rt, err := app.OpenLocalRuntime(storePath, access.LoadedBindings{Bindings: []access.ChannelBinding{binding}}, nil, nil)
 	if err != nil {
-		t.Fatalf("open local runtime for skill projection: %v", err)
+		t.Fatalf("open local runtime for item projection: %v", err)
 	}
 	defer rt.Close()
 	proj, err := rt.API().PullPresentationView("codex@project", contract.Subscription{Actor: "codex@project"})
 	if err != nil {
-		t.Fatalf("pull local skill projection: %v", err)
+		t.Fatalf("pull local item projection: %v", err)
 	}
 	for _, item := range proj.Content {
 		if item.Ref == ref {
-			raw, _ := item.Fields["declarations"].([]any)
+			raw, _ := item.Fields["items"].([]any)
 			out := make([]map[string]any, 0, len(raw))
-			for _, decl := range raw {
-				if m, ok := decl.(map[string]any); ok {
+			for _, entry := range raw {
+				if m, ok := entry.(map[string]any); ok {
 					out = append(out, m)
 				}
 			}
@@ -440,34 +437,32 @@ func localSkillDeclarationsForTest(t *testing.T, storePath string, ref contract.
 	return nil
 }
 
-func remoteMemoryFields(entryID, content string) map[string]any {
-	entries := []any{map[string]any{
+func remoteProgressFields(entryID, summary string) map[string]any {
+	items := []any{map[string]any{
 		"id":         entryID,
-		"content":    content,
-		"source":     "remote",
-		"confidence": "high",
+		"summary":    summary,
 		"actor":      "codex@other",
 		"ingest_seq": float64(7),
 	}}
 	return map[string]any{
-		"content": "# Local Memory\n- " + content,
-		"entries": entries,
+		"content": "# Progress\n- " + summary,
+		"items":   items,
 	}
 }
 
-func remoteSkillFields(skillID, status string) map[string]any {
+func remoteAssignmentFields(scope, ttl string) map[string]any {
 	return map[string]any{
-		"name": "project",
-		"declarations": []any{map[string]any{
-			"id":         "remote/" + skillID + "/" + status,
-			"skill_id":   skillID,
-			"name":       skillID,
-			"status":     status,
-			"content":    "Remote declaration for " + skillID,
-			"source":     "remote",
-			"confidence": "high",
-			"actor":      "codex@other",
-			"ingest_seq": float64(17),
+		"content": "# Assignments\n- " + scope,
+		"items": []any{map[string]any{
+			"id":                "remote/" + scope + "/" + ttl,
+			"scope":             scope,
+			"ttl":               ttl,
+			"assignee":          "codex@impl",
+			"expected_work":     "complete " + scope,
+			"expected_feedback": "summary",
+			"evidence":          "remote import fixture",
+			"actor":             "codex@other",
+			"ingest_seq":        float64(17),
 		}},
 		"updated_by": "codex@other",
 	}

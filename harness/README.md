@@ -5,7 +5,7 @@ agents to Local Mnemon.
 
 The current product surface is intentionally small:
 
-- `setup` installs memory/skill integration assets into Codex or Claude Code.
+- `setup` installs Agent Integration shim assets into Codex or Claude Code.
 - `local run` starts the project-local Mnemon service.
 - `status` reports Agent Integration, Local Mnemon, and sync status.
 - `sync` connects Local Mnemon to a Remote Workspace (`mnemon-hub`) and pushes/pulls
@@ -33,10 +33,10 @@ make harness-validate
 
 ## Try The Harness
 
-Install memory and skill integration for a host:
+Install Agent Integration for a host:
 
 ```sh
-./mnemon-harness setup --host codex --loop memory --loop skill --project-root .
+./mnemon-harness setup --host codex --project-root .
 ./mnemon-harness local run
 ./mnemon-harness status
 ```
@@ -44,7 +44,7 @@ Install memory and skill integration for a host:
 Remove projected assets for a principal:
 
 ```sh
-./mnemon-harness setup uninstall --host codex --loop memory --loop skill --principal codex@project --project-root .
+./mnemon-harness setup uninstall --host codex --principal codex@project --project-root .
 ```
 
 More command examples are in `docs/harness/USAGE.md`.

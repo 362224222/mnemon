@@ -6,18 +6,17 @@ import (
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
-	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 )
 
 // P6a-1: DecisionLedger is the operator-wide, READ-ONLY decision-log read that backs the Control
 // Tower's LEDGER (accepted) page — the cross-actor history the per-actor PullPresentationView cannot serve.
-// An accepted memory write lands as one Accepted decision attributed to the proposing principal; the
+// An accepted event write lands as one Accepted decision attributed to the proposing principal; the
 // ledger surfaces it. Reading is idempotent (no write path).
 func TestDecisionLedgerSurfacesAcceptedDecisions(t *testing.T) {
 	storePath := filepath.Join(t.TempDir(), "governed.db")
-	ref := contract.ResourceRef{Kind: "memory", ID: "project"}
+	ref := contract.ResourceRef{Kind: "progress_digest", ID: "project"}
 	binding := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
-	binding.AllowedObservedTypes = []string{policy.MemoryWriteCandidateObserved}
+	binding.AllowedObservedTypes = []string{"progress_digest.write_candidate.observed"}
 	rt, err := OpenRuntime(storePath, localRuntimeConfigT([]access.ChannelBinding{binding}))
 	if err != nil {
 		t.Fatalf("open runtime: %v", err)
@@ -26,8 +25,8 @@ func TestDecisionLedgerSurfacesAcceptedDecisions(t *testing.T) {
 
 	if _, _, err := rt.API().Ingest("codex@project", contract.ObservationEnvelope{
 		ExternalID: "led1",
-		Event: contract.Event{Type: policy.MemoryWriteCandidateObserved, Payload: map[string]any{
-			"content": "a governed ledger entry", "source": "user", "confidence": "high"}},
+		Event: contract.Event{Type: "progress_digest.write_candidate.observed", Payload: map[string]any{
+			"summary": "a governed ledger entry"}},
 	}); err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
@@ -51,8 +50,8 @@ func TestDecisionLedgerSurfacesAcceptedDecisions(t *testing.T) {
 	if accepted.Actor != "codex@project" {
 		t.Fatalf("accepted decision attribution wrong: got %q, want codex@project", accepted.Actor)
 	}
-	if len(accepted.NewVersions) == 0 || accepted.NewVersions[0].Ref.Kind != "memory" {
-		t.Fatalf("accepted decision must record the memory write it applied: %+v", accepted.NewVersions)
+	if len(accepted.NewVersions) == 0 || accepted.NewVersions[0].Ref.Kind != "progress_digest" {
+		t.Fatalf("accepted decision must record the event write it applied: %+v", accepted.NewVersions)
 	}
 
 	// READ-ONLY: a second read returns the same log (no write path, no mutation).

@@ -84,12 +84,12 @@ func TestRunLocalServerRefusesToStartOnBadExternalPackage(t *testing.T) {
 	root := t.TempDir()
 	writeExternalGoalPackage(t, root, "bad", `{nope`)
 	binding := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787",
-		[]contract.ResourceRef{{Kind: "memory", ID: "project"}})
-	binding.AllowedObservedTypes = []string{"memory.write_candidate.observed"}
+		[]contract.ResourceRef{{Kind: "progress_digest", ID: "project"}})
+	binding.AllowedObservedTypes = []string{"progress_digest.write_candidate.observed"}
 	err := RunLocalHTTPServerWithBindings(context.Background(), "127.0.0.1:0",
 		filepath.Join(t.TempDir(), "governed.db"),
 		access.LoadedBindings{Bindings: []access.ChannelBinding{binding}},
-		ServeOptions{Loops: []string{"memory"}, ProjectRoot: root}, io.Discard)
+		ServeOptions{Loops: []string{"progress_digest"}, ProjectRoot: root}, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), ".mnemon/loops/bad") {
 		t.Fatalf("local serve must refuse to start on a bad external package, got %v", err)
 	}
@@ -115,8 +115,8 @@ func TestRunLocalServerIgnoreExternalDisablesEnabledExternalLoop(t *testing.T) {
 	root := t.TempDir()
 	writeExternalGoalPackage(t, root, "goal", `{nope`)
 	binding := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787",
-		[]contract.ResourceRef{{Kind: "memory", ID: "project"}})
-	binding.AllowedObservedTypes = []string{"memory.write_candidate.observed"}
+		[]contract.ResourceRef{{Kind: "progress_digest", ID: "project"}})
+	binding.AllowedObservedTypes = []string{"progress_digest.write_candidate.observed"}
 
 	// Both ignore lines are product stderr surface (the serve path hardcodes os.Stderr), so the
 	// test captures os.Stderr through a pipe for the duration of the boot.
@@ -136,7 +136,7 @@ func TestRunLocalServerIgnoreExternalDisablesEnabledExternalLoop(t *testing.T) {
 		errc <- RunLocalHTTPServerWithBindings(ctx, "127.0.0.1:0",
 			filepath.Join(t.TempDir(), "governed.db"),
 			access.LoadedBindings{Bindings: []access.ChannelBinding{binding}},
-			ServeOptions{Loops: []string{"memory", "goal"}, ProjectRoot: root, IgnoreExternal: true},
+			ServeOptions{Loops: []string{"progress_digest", "goal"}, ProjectRoot: root, IgnoreExternal: true},
 			&firstWriteNotifier{ready: ready})
 	}()
 	select {
@@ -231,8 +231,8 @@ func TestSetupAcceptsExternalCapabilityLoop(t *testing.T) {
 	_, err = New(root).Setup(context.Background(), &out, &errw, SetupOptions{
 		Host: "codex", Loops: []string{"nope"}, Principal: "codex@project", ProjectRoot: root,
 	})
-	if err == nil || !strings.Contains(err.Error(), "unsupported product loop") {
-		t.Fatalf("an unknown loop must keep the unsupported-product-loop error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "unsupported event package") {
+		t.Fatalf("an unknown loop must keep the unsupported-event-package error, got %v", err)
 	}
 }
 
@@ -242,7 +242,7 @@ func TestUninstallLeavesExternalPackagesUntouched(t *testing.T) {
 	root := t.TempDir()
 	h := New(root)
 	var out bytes.Buffer
-	opts := SetupOptions{Host: "codex", Loops: []string{"memory"}, Principal: "codex@project", ProjectRoot: root}
+	opts := SetupOptions{Host: "codex", Loops: []string{"progress_digest"}, Principal: "codex@project", ProjectRoot: root}
 	if _, err := h.Setup(context.Background(), &out, &out, opts); err != nil {
 		t.Fatalf("setup: %v", err)
 	}

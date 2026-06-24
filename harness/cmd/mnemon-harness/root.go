@@ -14,7 +14,7 @@ var rootCmd = &cobra.Command{
 	Version:           version,
 	Short:             "Mnemon Agent Integration setup",
 	CompletionOptions: cobra.CompletionOptions{DisableDefaultCmd: true},
-	Long: "Install Agent Integration for memory and skill, connect it to Local Mnemon, " +
+	Long: "Install Agent Integration for standard events, connect it to Local Mnemon, " +
 		"and keep Remote Workspace sync as a background concern.",
 }
 

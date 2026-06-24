@@ -21,8 +21,8 @@ const externalRootRel = ".mnemon/loops"
 // externalIdentifierPattern pins every spec-authored IDENTIFIER surface of an external package:
 // field names, items_field, and render static KEYS. Identifiers are class-⑧ surfaces the text
 // scan cannot judge (they land verbatim in payload contracts, headers, and deny messages as bare
-// tokens), so they are pattern-locked instead of scanned. Underscore is allowed — the builtin
-// shapes (skill_id, items_field) carry it — which is why this is a separate pattern from
+// tokens), so they are pattern-locked instead of scanned. Underscore is allowed — descriptor
+// shapes such as items_field carry it — which is why this is a separate pattern from
 // specNamePattern (one grammar across the boundary).
 var externalIdentifierPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
 
@@ -105,7 +105,7 @@ func loadExternalPackage(fsys fs.FS, name string, requiredFields map[contract.Re
 		return Capability{}, fmt.Errorf("external package %s: directory name %q must equal spec name %q (directory-as-declaration)", pkg, name, spec.Name)
 	}
 	// classes ②③ + every FromSpec fail-closed check, INCLUDING the G8 kind reservation (class ⑪):
-	// FromSpec rejects a governance/mnemon/reserved-family kind for first-party and external specs
+	// FromSpec rejects a governance/mnemon/reserved-family kind for embedded and external specs
 	// alike, so the external loader no longer needs its own deny-list.
 	cap, err := FromSpec(spec)
 	if err != nil {

@@ -10,15 +10,15 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
-func TestRemoteMemoryImportConflictDiagnosesWithoutOverwrite(t *testing.T) {
-	ref := contract.ResourceRef{Kind: "memory", ID: "project"}
+func TestRemoteProgressImportConflictDiagnosesWithoutOverwrite(t *testing.T) {
+	ref := contract.ResourceRef{Kind: "progress_digest", ID: "project"}
 	rt, err := OpenSyncImportRuntime(filepath.Join(t.TempDir(), "local.db"), []contract.ResourceRef{ref}, nil)
 	if err != nil {
 		t.Fatalf("open sync import runtime: %v", err)
 	}
 	defer rt.Close()
 
-	if err := ingestRemoteMemoryForTest(rt, "first", remoteMemoryMaterialForTest(ref, "shared-entry", "remote content v1")); err != nil {
+	if err := ingestRemoteMaterialForTest(rt, "first", policy.EmbeddedCatalog()["progress_digest"], remoteProgressMaterialForTest(ref, "shared-entry", "remote content v1")); err != nil {
 		t.Fatalf("first import: %v", err)
 	}
 	if _, err := rt.Tick(); err != nil {
@@ -26,13 +26,13 @@ func TestRemoteMemoryImportConflictDiagnosesWithoutOverwrite(t *testing.T) {
 	}
 	_, fields, err := rt.Resource(ref)
 	if err != nil {
-		t.Fatalf("read memory: %v", err)
+		t.Fatalf("read progress: %v", err)
 	}
 	if content, _ := fields["content"].(string); !strings.Contains(content, "remote content v1") {
-		t.Fatalf("first import did not write memory: %+v", fields)
+		t.Fatalf("first import did not write progress: %+v", fields)
 	}
 
-	if err := ingestRemoteMemoryForTest(rt, "conflict", remoteMemoryMaterialForTest(ref, "shared-entry", "remote content v2")); err != nil {
+	if err := ingestRemoteMaterialForTest(rt, "conflict", policy.EmbeddedCatalog()["progress_digest"], remoteProgressMaterialForTest(ref, "shared-entry", "remote content v2")); err != nil {
 		t.Fatalf("conflict import: %v", err)
 	}
 	if _, err := rt.Tick(); err != nil {
@@ -40,11 +40,11 @@ func TestRemoteMemoryImportConflictDiagnosesWithoutOverwrite(t *testing.T) {
 	}
 	_, fields, err = rt.Resource(ref)
 	if err != nil {
-		t.Fatalf("read memory after conflict: %v", err)
+		t.Fatalf("read progress after conflict: %v", err)
 	}
 	content, _ := fields["content"].(string)
 	if strings.Contains(content, "remote content v2") || !strings.Contains(content, "remote content v1") {
-		t.Fatalf("conflict import overwrote local memory: %s", content)
+		t.Fatalf("conflict import overwrote local progress: %s", content)
 	}
 	events, err := rt.PendingEvents(0)
 	if err != nil {
@@ -57,7 +57,7 @@ func TestRemoteMemoryImportConflictDiagnosesWithoutOverwrite(t *testing.T) {
 	var diag contract.Event
 	var diagnosed bool
 	for _, ev := range events {
-		if ev.Type == "memory.diagnostic" {
+		if ev.Type == "progress_digest.diagnostic" {
 			if reason, _ := ev.Payload["reason"].(string); strings.Contains(reason, "remote import conflict") {
 				diagnosed = true
 				diag = ev
@@ -70,7 +70,7 @@ func TestRemoteMemoryImportConflictDiagnosesWithoutOverwrite(t *testing.T) {
 
 	// MED-4 / v1.1: the origin attribution (origin_replica_id + local_decision_id) must be
 	// RECOVERABLE from the durable ledger on the B side — not just "a diagnostic fired". Walk the
-	// diagnostic's CausedBy to the memory.remote_synced_event.observed trigger and recover the identity
+	// diagnostic's CausedBy to the <kind>.remote_synced_event.observed trigger and recover the identity
 	// from its payload.material. (The material round-trips through the event log as a JSON object.)
 	if diag.CausedBy == "" {
 		t.Fatalf("conflict diagnostic must carry a CausedBy lineage, got %+v", diag)
@@ -79,7 +79,7 @@ func TestRemoteMemoryImportConflictDiagnosesWithoutOverwrite(t *testing.T) {
 	if !ok {
 		t.Fatalf("diagnostic CausedBy %q must resolve to a durable event", diag.CausedBy)
 	}
-	if trigger.Type != policy.EmbeddedCatalog()["memory"].RemoteSyncedEventObserved() {
+	if trigger.Type != policy.EmbeddedCatalog()["progress_digest"].RemoteSyncedEventObserved() {
 		t.Fatalf("diagnostic must be caused by the remote material observation, got type %q", trigger.Type)
 	}
 	material, ok := trigger.Payload["material"].(map[string]any)
@@ -95,39 +95,39 @@ func TestRemoteMemoryImportConflictDiagnosesWithoutOverwrite(t *testing.T) {
 	}
 }
 
-func TestRemoteSkillImportAppendsDeclarationsThroughLocalMnemon(t *testing.T) {
-	ref := contract.ResourceRef{Kind: "skill", ID: "project"}
+func TestRemoteAssignmentImportAppendsItemsThroughLocalMnemon(t *testing.T) {
+	ref := contract.ResourceRef{Kind: "assignment", ID: "project"}
 	rt, err := OpenSyncImportRuntime(filepath.Join(t.TempDir(), "local.db"), []contract.ResourceRef{ref}, nil)
 	if err != nil {
 		t.Fatalf("open sync import runtime: %v", err)
 	}
 	defer rt.Close()
 
-	if err := ingestRemoteSkillForTest(rt, "remote-skill", remoteSkillMaterialForTest(ref, "release-checklist", "active")); err != nil {
-		t.Fatalf("remote skill import: %v", err)
+	if err := ingestRemoteMaterialForTest(rt, "remote-assignment", policy.EmbeddedCatalog()["assignment"], remoteAssignmentMaterialForTest(ref, "release-review", "active")); err != nil {
+		t.Fatalf("remote assignment import: %v", err)
 	}
 	if _, err := rt.Tick(); err != nil {
-		t.Fatalf("tick remote skill import: %v", err)
+		t.Fatalf("tick remote assignment import: %v", err)
 	}
 	_, fields, err := rt.Resource(ref)
 	if err != nil {
-		t.Fatalf("read skill: %v", err)
+		t.Fatalf("read assignment: %v", err)
 	}
-	decls, ok := fields["declarations"].([]any)
-	if !ok || len(decls) != 1 {
-		t.Fatalf("remote skill import must write one declaration, got %+v", fields)
+	items, ok := fields["items"].([]any)
+	if !ok || len(items) != 1 {
+		t.Fatalf("remote assignment import must write one item, got %+v", fields)
 	}
-	decl, ok := decls[0].(map[string]any)
-	if !ok || decl["skill_id"] != "release-checklist" || decl["status"] != "active" {
-		t.Fatalf("unexpected remote skill declaration: %+v", decls[0])
+	item, ok := items[0].(map[string]any)
+	if !ok || item["scope"] != "release-review" || item["ttl"] != "active" {
+		t.Fatalf("unexpected remote assignment item: %+v", items[0])
 	}
 }
 
-func ingestRemoteMemoryForTest(rt *runtime.Runtime, externalID string, material contract.SyncedEventMaterial) error {
+func ingestRemoteMaterialForTest(rt *runtime.Runtime, externalID string, cap policy.Capability, material contract.SyncedEventMaterial) error {
 	_, _, err := rt.API().Ingest(contract.SyncImportActor, contract.ObservationEnvelope{
 		ExternalID: externalID,
 		Event: contract.Event{
-			Type: policy.EmbeddedCatalog()["memory"].RemoteSyncedEventObserved(),
+			Type: cap.RemoteSyncedEventObserved(),
 			Payload: map[string]any{
 				"material": material,
 			},
@@ -136,34 +136,19 @@ func ingestRemoteMemoryForTest(rt *runtime.Runtime, externalID string, material 
 	return err
 }
 
-func ingestRemoteSkillForTest(rt *runtime.Runtime, externalID string, material contract.SyncedEventMaterial) error {
-	_, _, err := rt.API().Ingest(contract.SyncImportActor, contract.ObservationEnvelope{
-		ExternalID: externalID,
-		Event: contract.Event{
-			Type: policy.EmbeddedCatalog()["skill"].RemoteSyncedEventObserved(),
-			Payload: map[string]any{
-				"material": material,
-			},
-		},
-	})
-	return err
-}
-
-func remoteMemoryMaterialForTest(ref contract.ResourceRef, entryID, content string) contract.SyncedEventMaterial {
+func remoteProgressMaterialForTest(ref contract.ResourceRef, itemID, summary string) contract.SyncedEventMaterial {
 	return contract.SyncedEventMaterial{
 		OriginReplicaID: "remote-replica",
-		LocalDecisionID: "dec-" + entryID + "-" + strings.ReplaceAll(content, " ", "-"),
+		LocalDecisionID: "dec-" + itemID + "-" + strings.ReplaceAll(summary, " ", "-"),
 		LocalIngestSeq:  11,
 		Actor:           "codex@remote",
 		ResourceRef:     ref,
 		ResourceVersion: 1,
 		Fields: map[string]any{
-			"content": "# Local Memory\n- " + content,
-			"entries": []any{map[string]any{
-				"id":         entryID,
-				"content":    content,
-				"source":     "remote",
-				"confidence": "high",
+			"content": "# Progress\n- " + summary,
+			"items": []any{map[string]any{
+				"id":         itemID,
+				"summary":    summary,
 				"actor":      "codex@remote",
 				"ingest_seq": float64(11),
 			}},
@@ -172,26 +157,26 @@ func remoteMemoryMaterialForTest(ref contract.ResourceRef, entryID, content stri
 	}
 }
 
-func remoteSkillMaterialForTest(ref contract.ResourceRef, skillID, status string) contract.SyncedEventMaterial {
+func remoteAssignmentMaterialForTest(ref contract.ResourceRef, scope, ttl string) contract.SyncedEventMaterial {
 	return contract.SyncedEventMaterial{
 		OriginReplicaID: "remote-replica",
-		LocalDecisionID: "dec-" + skillID + "-" + status,
+		LocalDecisionID: "dec-" + scope + "-" + ttl,
 		LocalIngestSeq:  21,
 		Actor:           "codex@remote",
 		ResourceRef:     ref,
 		ResourceVersion: 1,
 		Fields: map[string]any{
-			"name": "project",
-			"declarations": []any{map[string]any{
-				"id":         "remote/" + skillID + "/" + status,
-				"skill_id":   skillID,
-				"name":       skillID,
-				"status":     status,
-				"content":    "Remote declaration for " + skillID,
-				"source":     "remote",
-				"confidence": "high",
-				"actor":      "codex@remote",
-				"ingest_seq": float64(21),
+			"content": "# Assignments\n- " + scope,
+			"items": []any{map[string]any{
+				"id":                "remote/" + scope + "/" + ttl,
+				"scope":             scope,
+				"ttl":               ttl,
+				"assignee":          "codex@impl",
+				"expected_work":     "complete " + scope,
+				"expected_feedback": "summary",
+				"evidence":          "remote import fixture",
+				"actor":             "codex@remote",
+				"ingest_seq":        float64(21),
 			}},
 			"updated_by": "codex@remote",
 		},

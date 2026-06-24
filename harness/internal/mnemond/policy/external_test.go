@@ -23,7 +23,7 @@ func testRequiredFields() map[contract.ResourceKind][]string {
 	// Literal on purpose: capability is a contract/rule/presentation-view-only leaf, so even its tests do
 	// not import kernel; production passes kernel.DefaultSchemaGuard().Required from app.
 	return map[contract.ResourceKind][]string{
-		"goal": {"statement"}, "note": {"content"}, "memory": {"content"}, "skill": {"name"},
+		"goal": {"statement"}, "note": {"content"},
 	}
 }
 
@@ -58,9 +58,9 @@ func TestLoadExternalFailClosedClasses(t *testing.T) {
 		{"class2 unknown render member",
 			map[string]string{"goal/capability.json": strings.Replace(goalSpecJSON, `"member":"bullet-list"`, `"member":"bogus-render"`, 1)},
 			[]string{".mnemon/loops/goal", "unknown render"}},
-		{"class11 reserved first-party event family",
+		{"class11 reserved system event family",
 			map[string]string{"sync/capability.json": extSpec("sync", "sync", "sync")},
-			[]string{".mnemon/loops/sync", "reserved first-party event family"}},
+			[]string{".mnemon/loops/sync", "reserved system event family"}},
 		{"class6 hook fragments forbidden",
 			map[string]string{"goal/capability.json": goalSpecJSON, "goal/hooks/fragments/sync.sh": "echo hi"},
 			[]string{".mnemon/loops/goal", "hooks/fragments/", "forbidden"}},
@@ -270,7 +270,7 @@ func TestResolveCatalogRejectsShadowingOnEachAxis(t *testing.T) {
 		// Only the name axis is constructible through the loader: the frozen type grammar
 		// derives both event types from the name, so observed/proposed collisions imply a name
 		// collision (those axes are pinned directly on the merge below, as defense in depth).
-		{"name", "memory", extSpec("memory", "memory", "memory"), "duplicate capability name"},
+		{"name", "assignment", extSpec("assignment", "assignment", "assignment"), "duplicate capability name"},
 	}
 	for _, c := range cases {
 		root := t.TempDir()
@@ -295,12 +295,12 @@ func TestMergeExternalRejectsTypeCollisions(t *testing.T) {
 		return Capability{Name: name, ObservedType: family + ".write_candidate.observed",
 			ProposedType: name + ".write.proposed", ResourceKind: "goal"}
 	}
-	if _, err := mergeExternal(EmbeddedCatalog(), map[string]Capability{"alt": ext("alt", "memory")}); err == nil ||
+	if _, err := mergeExternal(EmbeddedCatalog(), map[string]Capability{"alt": ext("alt", "assignment")}); err == nil ||
 		!strings.Contains(err.Error(), "already claimed") {
 		t.Fatalf("observed-type collision must fail the merge, got %v", err)
 	}
 	prop := Capability{Name: "alt2", ObservedType: "alt2.write_candidate.observed",
-		ProposedType: "memory.write.proposed", ResourceKind: "goal"}
+		ProposedType: "assignment.write.proposed", ResourceKind: "goal"}
 	if _, err := mergeExternal(EmbeddedCatalog(), map[string]Capability{"alt2": prop}); err == nil ||
 		!strings.Contains(err.Error(), "already claimed") {
 		t.Fatalf("proposed-type collision must fail the merge, got %v", err)
@@ -315,9 +315,9 @@ func TestMergeExternalRejectsKindCollisions(t *testing.T) {
 		return Capability{Name: name, ObservedType: family + ".write_candidate.observed",
 			ProposedType: family + ".write.proposed", ResourceKind: contract.ResourceKind(kind)}
 	}
-	_, err := mergeExternal(EmbeddedCatalog(), map[string]Capability{"alt-memory": ext("alt-memory", "altmemory", "memory")})
-	if err == nil || !strings.Contains(err.Error(), `resource_kind "memory" already claimed`) ||
-		!strings.Contains(err.Error(), ".mnemon/loops/alt-memory") {
+	_, err := mergeExternal(EmbeddedCatalog(), map[string]Capability{"alt-assignment": ext("alt-assignment", "altassignment", "assignment")})
+	if err == nil || !strings.Contains(err.Error(), `resource_kind "assignment" already claimed`) ||
+		!strings.Contains(err.Error(), ".mnemon/loops/alt-assignment") {
 		t.Fatalf("external claiming an embedded kind must fail the merge with the package path, got %v", err)
 	}
 	_, err = mergeExternal(EmbeddedCatalog(), map[string]Capability{

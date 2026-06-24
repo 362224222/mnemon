@@ -31,11 +31,11 @@ func TestIngestStampsServerFields(t *testing.T) {
 	seq, _, err := cs.Ingest("codex@project", contract.ObservationEnvelope{
 		ExternalID: "x1",
 		Event: contract.Event{
-			Type: "memory.write_candidate.observed", Actor: "ATTACKER", ID: "forged", TS: "forged",
-			BasedOn:             []contract.ResourceVersion{{Ref: contract.ResourceRef{Kind: "memory", ID: "p"}, Version: 9}},
+			Type: "progress_digest.write_candidate.observed", Actor: "ATTACKER", ID: "forged", TS: "forged",
+			BasedOn:             []contract.ResourceVersion{{Ref: contract.ResourceRef{Kind: "progress_digest", ID: "p"}, Version: 9}},
 			PresentationViewRef: "forged-ref",
 			CorrelationID:       "corr-keep",
-			Payload:             map[string]any{"content": "x", "source": "s", "confidence": "high"},
+			Payload:             map[string]any{"summary": "x"},
 		},
 	})
 	if err != nil {

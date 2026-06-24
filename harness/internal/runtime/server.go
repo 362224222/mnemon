@@ -178,7 +178,7 @@ func (cs *ControlServer) normalizeObservedEvent(principal contract.ActorID, ev *
 }
 
 // validateObservedType requires a lowercase, dot-segmented observed event type (e.g.
-// "memory.write_candidate.observed"; the legacy underscore form is still lowercase). The reserved
+// "progress_digest.write_candidate.observed"; the legacy underscore form is still lowercase). The reserved
 // *.proposed / *.diagnostic suffixes are rejected earlier, at the trust boundary.
 func validateObservedType(t string) error {
 	if t == "" {

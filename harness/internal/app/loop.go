@@ -14,8 +14,8 @@ import (
 )
 
 // LoopValidate validates the resolved capability catalog through the same fail-closed resolution boot
-// uses. R1 host setup no longer projects per-loop assets, so validate reports capability packages
-// only: first-party embedded capabilities plus external packages under .mnemon/loops.
+// uses. R1 host setup no longer projects per-loop assets, so validate reports event packages only:
+// embedded descriptors plus external packages under .mnemon/loops.
 func (h *Harness) LoopValidate() ([]string, error) {
 	merged, err := policy.ResolveCatalog(h.root, state.DefaultSchemaGuard().Required)
 	if err != nil {
@@ -52,10 +52,10 @@ type CapabilityInfo struct {
 	Required     []string `json:"required"`
 	Importable   bool     `json:"importable"`
 	Merge        string   `json:"merge,omitempty"`
-	Source       string   `json:"source"` // "embedded" (first-party) | "external" (.mnemon/loops package)
+	Source       string   `json:"source"` // "embedded" | "external" (.mnemon/loops package)
 }
 
-// LoopCapabilities resolves the project catalog (embedded first-party + every external package under
+// LoopCapabilities resolves the project catalog (embedded descriptors + every external package under
 // .mnemon/loops, via the SAME fail-closed boot resolution) and returns one CapabilityInfo per kind,
 // sorted by kind. It is a LOCAL read — no running server is contacted; the catalog is a disk fact.
 func (h *Harness) LoopCapabilities() ([]CapabilityInfo, error) {
@@ -113,7 +113,7 @@ never write a resource directly, and a denied observation is a signal, not a fai
 
 ## When to record (judgment — yours to apply)
 
-- Record a specific, reusable fact, decision, or skill — something a future session would benefit
+- Record a specific, reusable fact or decision — something a future session would benefit
   from. Prefer the concrete over the vague ("the deploy step needs FOO=1" beats "deploys are tricky").
 - One observation per distinct fact; do not batch unrelated facts into one.
 - Never record secrets, credentials, tokens, or transient state — the safety rules will deny them,

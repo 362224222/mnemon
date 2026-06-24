@@ -195,11 +195,11 @@ func TestRenderIntentsAreBounded(t *testing.T) {
 			"id": "profile-a", "actor": "codex-a@project", "freshness": "stale", "summary": "A stale profile",
 		}}),
 		content("teamwork_signal", "project", []any{map[string]any{"id": "sig1", "statement": "Need a teammate"}}),
-		contentWithFields("memory", "project", map[string]any{"entries": []any{map[string]any{
-			"id": "mem1", "content": "render memory note", "source": "user", "confidence": "high",
+		contentWithFields("progress_digest", "project", map[string]any{"items": []any{map[string]any{
+			"id": "progress1", "summary": "render progress note",
 		}}}),
-		contentWithFields("skill", "project", map[string]any{"declarations": []any{map[string]any{
-			"skill_id": "review-helper", "name": "review helper", "status": "active",
+		contentWithFields("fixture_declaration", "project", map[string]any{"declarations": []any{map[string]any{
+			"declaration_id": "review-helper", "name": "review helper", "status": "active",
 		}}}),
 	}}
 	r := Renderer{Now: func() time.Time { return now }}
@@ -218,7 +218,7 @@ func TestRenderIntentsAreBounded(t *testing.T) {
 	}
 	if !strings.Contains(packet.Body, "[mnemon:context]") ||
 		!strings.Contains(packet.Body, "teamwork_signal/sig1") ||
-		!strings.Contains(packet.Body, "render memory note") ||
+		!strings.Contains(packet.Body, "render progress note") ||
 		!strings.Contains(packet.Body, "review helper") {
 		t.Fatalf("context.packet must summarize scoped presentation view:\n%s", packet.Body)
 	}

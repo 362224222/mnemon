@@ -49,7 +49,7 @@ func OpenLocalRuntime(storePath string, loaded access.LoadedBindings, loops []st
 // Co-existence is by construction: the added rules Handle only the <kind>.remote_synced_event.observed /
 // sync.* observation types AND gate on the sync principal, so host-agent events never match them and
 // host rules never see the import events — pinned by a test. catalog selects the importable universe
-// (nil = embedded first-party).
+// (nil = embedded catalog).
 func withSyncImport(rc runtime.RuntimeConfig, bindings []access.ChannelBinding, catalog map[string]policy.Capability) runtime.RuntimeConfig {
 	catalog = resolveSyncCatalog(catalog)
 	rules := append([]admission.Rule(nil), rc.Rules.Rules()...)
@@ -71,8 +71,8 @@ func withSyncImport(rc runtime.RuntimeConfig, bindings []access.ChannelBinding, 
 }
 
 // resolveSyncCatalog resolves the catalog the sync-import path derives its rules/authority/guard
-// from: nil falls back to the embedded first-party catalog (memory/skill), so callers without a
-// boot-resolved catalog still get the first-party importable kinds.
+// from: nil falls back to the embedded catalog, so callers without a boot-resolved catalog still get
+// the standard importable kinds.
 func resolveSyncCatalog(catalog map[string]policy.Capability) map[string]policy.Capability {
 	if catalog == nil {
 		return policy.EmbeddedCatalog()
@@ -301,15 +301,15 @@ func resolveBootCatalog(projectRoot string, ignoreExternal bool, errw io.Writer)
 }
 
 // SyncImportCatalog resolves the capability catalog the OFFLINE `sync pull` verb derives its import
-// rules from (descriptor-derived, PD6): the embedded first-party catalog plus every external package
+// rules from (descriptor-derived, PD6): the embedded catalog plus every external package
 // under <projectRoot>/.mnemon/loops, so a remote commit of an external importable kind imports the
 // same way the in-process worker imports it. Unlike serve boot, the manual pull verb degrades to the
 // embedded catalog (with a stderr warning) when an external package is unreadable — a corrupt loop
-// must not block importing first-party memory/skill commits.
+// must not block importing standard event commits.
 func SyncImportCatalog(projectRoot string, errw io.Writer) map[string]policy.Capability {
 	catalog, err := policy.ResolveCatalog(projectRoot, state.DefaultSchemaGuard().Required)
 	if err != nil {
-		fmt.Fprintf(errw, "mnemon-harness: sync import: external package unreadable, importing first-party kinds only: %v\n", err)
+		fmt.Fprintf(errw, "mnemon-harness: sync import: external package unreadable, importing embedded kinds only: %v\n", err)
 		return policy.EmbeddedCatalog()
 	}
 	return catalog
@@ -359,7 +359,7 @@ func OpenSyncImportRuntime(storePath string, refs []contract.ResourceRef, catalo
 // onto the governance base. The skipped-kind deny rule (v1.1 #4) keeps any OTHER pulled kind a
 // durable diagnostic instead of a silent drop — the same rule set withSyncImport merges into the
 // serving runtime, so the offline and in-process import paths share one policy. catalog selects the
-// importable universe (nil = embedded first-party).
+// importable universe (nil = embedded catalog).
 func SyncImportRuntimeConfig(refs []contract.ResourceRef, catalog map[string]policy.Capability) runtime.RuntimeConfig {
 	catalog = resolveSyncCatalog(catalog)
 	extra := map[contract.ResourceKind][]string{}

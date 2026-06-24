@@ -9,15 +9,14 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
-	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/state"
 )
 
-func TestAcceptedLocalMemoryCreatesPendingSyncEvent(t *testing.T) {
+func TestAcceptedLocalProgressCreatesPendingSyncEvent(t *testing.T) {
 	storePath := filepath.Join(t.TempDir(), "governed.db")
-	ref := contract.ResourceRef{Kind: "memory", ID: "project"}
+	ref := contract.ResourceRef{Kind: "progress_digest", ID: "project"}
 	binding := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
-	binding.AllowedObservedTypes = []string{policy.MemoryWriteCandidateObserved}
+	binding.AllowedObservedTypes = []string{"progress_digest.write_candidate.observed"}
 	rt, err := OpenRuntime(storePath, localRuntimeConfigT([]access.ChannelBinding{binding}))
 	if err != nil {
 		t.Fatalf("open local runtime: %v", err)
@@ -25,13 +24,12 @@ func TestAcceptedLocalMemoryCreatesPendingSyncEvent(t *testing.T) {
 	srv := httptest.NewServer(NewRuntimeHandler(rt, access.HeaderAuthenticator{}))
 	client := access.NewClient(srv.URL, "codex@project")
 	if rec, err := client.IngestObserve("codex@project", contract.ObservationEnvelope{
-		ExternalID: "sync-memory-1",
-		Event: contract.Event{Type: policy.MemoryWriteCandidateObserved, Payload: map[string]any{
-			"content": "Sync should queue this local memory entry.",
-			"source":  "user", "confidence": "high",
+		ExternalID: "sync-progress-1",
+		Event: contract.Event{Type: "progress_digest.write_candidate.observed", Payload: map[string]any{
+			"summary": "Sync should queue this local event entry.",
 		}},
 	}); err != nil || !rec.Ticked {
-		t.Fatalf("observe memory candidate: rec=%+v err=%v", rec, err)
+		t.Fatalf("observe progress candidate: rec=%+v err=%v", rec, err)
 	}
 	if _, err := rt.Tick(); err != nil {
 		t.Fatalf("extra tick: %v", err)
@@ -58,11 +56,11 @@ func TestAcceptedLocalMemoryCreatesPendingSyncEvent(t *testing.T) {
 		t.Fatalf("pending material must include fields digest: %+v", material)
 	}
 	if content, _ := material.Fields["content"].(string); !strings.Contains(content, "Sync should queue") {
-		t.Fatalf("pending material fields missing memory content: %+v", material.Fields)
+		t.Fatalf("pending material fields missing event content: %+v", material.Fields)
 	}
 	acceptedEvents, err := rt.store.EventEnvelopes(state.EventEnvelopeQuery{
 		Phase:   eventmodel.PhaseAccepted,
-		Subject: eventmodel.Subject("memory", "project"),
+		Subject: eventmodel.Subject("progress_digest", "project"),
 	})
 	if err != nil {
 		t.Fatalf("accepted event envelopes: %v", err)
@@ -71,8 +69,8 @@ func TestAcceptedLocalMemoryCreatesPendingSyncEvent(t *testing.T) {
 		t.Fatalf("want one accepted event envelope, got %+v", acceptedEvents)
 	}
 	accepted := acceptedEvents[0].Envelope
-	if accepted.Event.Type != "memory.accepted" || accepted.Meta["decision_id"] != material.LocalDecisionID {
-		t.Fatalf("accepted envelope should describe the accepted memory decision: %+v", accepted)
+	if accepted.Event.Type != "progress_digest.accepted" || accepted.Meta["decision_id"] != material.LocalDecisionID {
+		t.Fatalf("accepted envelope should describe the accepted event decision: %+v", accepted)
 	}
 	if accepted.Meta["accepted_by"] == "" || accepted.Meta["ingest_seq"] == nil {
 		t.Fatalf("accepted envelope must carry mnemond acceptance meta: %+v", accepted.Meta)

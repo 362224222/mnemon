@@ -116,9 +116,9 @@ func TestRenderEndpointRequiresRenderVerb(t *testing.T) {
 }
 
 func TestRenderEndpointAppliesBindingBudgetWithoutReducingAuthority(t *testing.T) {
-	ref := contract.ResourceRef{Kind: "memory", ID: "project"}
+	ref := contract.ResourceRef{Kind: "progress_digest", ID: "project"}
 	b := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
-	b.AllowedObservedTypes = []string{"memory.write_candidate.observed"}
+	b.AllowedObservedTypes = []string{"progress_digest.write_candidate.observed"}
 	b.Budget = contract.BudgetDigestOnly
 	loaded := access.LoadedBindings{
 		Bindings: []access.ChannelBinding{b},
@@ -145,13 +145,13 @@ func TestRenderEndpointAppliesBindingBudgetWithoutReducingAuthority(t *testing.T
 	client := access.NewClientWithToken(srv.URL, "tok")
 	for i := 1; i <= 3; i++ {
 		rec, err := client.IngestObserve("", contract.ObservationEnvelope{
-			ExternalID: fmt.Sprintf("memory-budget-%d", i),
-			Event: contract.Event{Type: "memory.write_candidate.observed", Payload: map[string]any{
-				"content": fmt.Sprintf("render budget entry %d", i), "source": "user", "confidence": "high",
+			ExternalID: fmt.Sprintf("progress-budget-%d", i),
+			Event: contract.Event{Type: "progress_digest.write_candidate.observed", Payload: map[string]any{
+				"summary": fmt.Sprintf("render budget entry %d", i),
 			}},
 		})
 		if err != nil || !rec.Ticked {
-			t.Fatalf("seed memory %d: rec=%+v err=%v", i, rec, err)
+			t.Fatalf("seed progress %d: rec=%+v err=%v", i, rec, err)
 		}
 	}
 
@@ -169,15 +169,15 @@ func TestRenderEndpointAppliesBindingBudgetWithoutReducingAuthority(t *testing.T
 	if err != nil {
 		t.Fatalf("pull authoritative presentation view: %v", err)
 	}
-	if n := memoryEntryCount(proj.Content); n != 3 {
-		t.Fatalf("budget must not reduce authority: stored memory has %d entries, want 3", n)
+	if n := resourceItemCount(proj.Content, ref); n != 3 {
+		t.Fatalf("budget must not reduce authority: stored resource has %d items, want 3", n)
 	}
 }
 
-func TestMemoryEventDataflowReachesContextPresenter(t *testing.T) {
-	ref := contract.ResourceRef{Kind: "memory", ID: "project"}
+func TestEventDataflowReachesContextPresenter(t *testing.T) {
+	ref := contract.ResourceRef{Kind: "progress_digest", ID: "project"}
 	b := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
-	b.AllowedObservedTypes = []string{"memory.write_candidate.observed"}
+	b.AllowedObservedTypes = []string{"progress_digest.write_candidate.observed"}
 	loaded := access.LoadedBindings{
 		Bindings: []access.ChannelBinding{b},
 		Tokens:   map[string]contract.ActorID{"tok": "codex@project"},
@@ -186,7 +186,7 @@ func TestMemoryEventDataflowReachesContextPresenter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runtime config: %v", err)
 	}
-	rt, err := runtime.OpenRuntime(filepath.Join(t.TempDir(), "memory-dataflow.db"), rc)
+	rt, err := runtime.OpenRuntime(filepath.Join(t.TempDir(), "event-dataflow.db"), rc)
 	if err != nil {
 		t.Fatalf("open runtime: %v", err)
 	}
@@ -202,30 +202,27 @@ func TestMemoryEventDataflowReachesContextPresenter(t *testing.T) {
 
 	client := access.NewClientWithToken(srv.URL, "tok")
 	rec, err := client.IngestObserve("", contract.ObservationEnvelope{
-		ExternalID: "memory-dataflow-1",
-		Event: contract.Event{Type: "memory.write_candidate.observed", Payload: map[string]any{
-			"content":    "Use the presenter registry as the dataflow boundary.",
-			"source":     "test",
-			"confidence": "high",
-			"tags":       []any{"dataflow", "memory"},
+		ExternalID: "event-dataflow-1",
+		Event: contract.Event{Type: "progress_digest.write_candidate.observed", Payload: map[string]any{
+			"summary": "Use the presenter registry as the dataflow boundary.",
 		}},
 	})
 	if err != nil || !rec.Ticked {
-		t.Fatalf("observe memory: rec=%+v err=%v", rec, err)
+		t.Fatalf("observe event: rec=%+v err=%v", rec, err)
 	}
 	if v, fields, err := rt.Resource(ref); err != nil || v == 0 || !strings.Contains(fmt.Sprint(fields["content"]), "presenter registry") {
-		t.Fatalf("memory event must materialize through mnemond state: v=%d fields=%+v err=%v", v, fields, err)
+		t.Fatalf("event must materialize through mnemond state: v=%d fields=%+v err=%v", v, fields, err)
 	}
 
 	packet := postRender(t, srv.URL, "tok", presentation.Request{RenderIntent: presentation.IntentContextPacket})
 	if packet.Status != presentation.StatusOK ||
 		!strings.Contains(packet.Body, "[mnemon:context]") ||
 		!strings.Contains(packet.Body, "presenter registry") {
-		t.Fatalf("context presenter must carry admitted memory into the agent packet: %#v", packet)
+		t.Fatalf("context presenter must carry admitted event state into the agent packet: %#v", packet)
 	}
 	for _, teamworkLabel := range []string{"[mnemon:work]", "[mnemon:feedback]", "[mnemon:integrate]", "[mnemon:expired]"} {
 		if strings.Contains(packet.Body, teamworkLabel) {
-			t.Fatalf("memory dataflow must not require teamwork presentation label %q:\n%s", teamworkLabel, packet.Body)
+			t.Fatalf("event dataflow must not require teamwork presentation label %q:\n%s", teamworkLabel, packet.Body)
 		}
 	}
 }
@@ -257,12 +254,12 @@ func postRender(t *testing.T, baseURL, token string, reqBody presentation.Reques
 	return out
 }
 
-func memoryEntryCount(content []view.ResourceContent) int {
+func resourceItemCount(content []view.ResourceContent, ref contract.ResourceRef) int {
 	for _, rc := range content {
-		if rc.Ref.Kind != "memory" {
+		if rc.Ref != ref {
 			continue
 		}
-		switch entries := rc.Fields["entries"].(type) {
+		switch entries := rc.Fields["items"].(type) {
 		case []any:
 			return len(entries)
 		case []map[string]any:

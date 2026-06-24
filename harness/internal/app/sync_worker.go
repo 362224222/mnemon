@@ -30,7 +30,7 @@ type SyncWorkerOptions struct {
 	Timeout             time.Duration // per-call transport bound; <= 0 defaults to access.DefaultSyncTimeout
 	AllowInsecureRemote bool          // explicit T2 downgrade override (v1.1 #3)
 	// Catalog is the boot-resolved capability catalog the pull import derives its kind→observation
-	// mapping from (descriptor-derived, PD6). nil falls back to the embedded first-party catalog.
+	// mapping from (descriptor-derived, PD6). nil falls back to the embedded catalog.
 	Catalog map[string]policy.Capability
 }
 

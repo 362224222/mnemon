@@ -17,7 +17,7 @@ func TestSetupTokenFalseClearsBindingCredential(t *testing.T) {
 	var out bytes.Buffer
 
 	r1, err := h.Setup(context.Background(), &out, &out, SetupOptions{
-		Host: "codex", Loops: []string{"memory"}, Principal: "codex@project", ProjectRoot: root,
+		Host: "codex", Principal: "codex@project", ProjectRoot: root,
 		UseToken: true, TokenExplicit: true,
 	})
 	if err != nil {
@@ -32,7 +32,7 @@ func TestSetupTokenFalseClearsBindingCredential(t *testing.T) {
 	}
 
 	if _, err := h.Setup(context.Background(), &out, &out, SetupOptions{
-		Host: "codex", Loops: []string{"memory"}, Principal: "codex@project", ProjectRoot: root,
+		Host: "codex", Principal: "codex@project", ProjectRoot: root,
 		UseToken: false, TokenExplicit: true,
 	}); err != nil {
 		t.Fatalf("setup (--token=false): %v", err)

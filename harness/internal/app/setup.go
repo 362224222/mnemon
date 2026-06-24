@@ -19,12 +19,12 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
-// SetupOptions configures the `mnemon-harness setup` front door: project a loop into a host runtime
+// SetupOptions configures the `mnemon-harness setup` front door: project host integration assets
 // AND wire the channel (binding entry + optional token + runtime env), so a host agent reaches the
 // governed control plane through one access.
 type SetupOptions struct {
 	Host           string   // host runtime id, e.g. "codex"
-	Loops          []string // loops to project, e.g. ["memory"]
+	Loops          []string // event packages to enable, e.g. ["assignment"] or external packages
 	ControlURL     string   // channel endpoint, e.g. "http://127.0.0.1:8787"
 	Principal      string   // authenticated principal, e.g. "codex@project"
 	ActorKind      string   // "host-agent" (default) or "control-agent"
@@ -56,8 +56,8 @@ func sanitizePrincipal(p string) string {
 	return strings.NewReplacer("@", "-", "/", "-", ":", "-").Replace(p)
 }
 
-// validateProductLoops fail-closes setup to known capability packages. R1 setup always installs a
-// standard host shim; loops only widen the channel/config capability scope and no longer imply host
+// validateProductLoops fail-closes setup to known event packages. R1 setup always installs a
+// standard host shim; loops only widen the channel/config event scope and no longer imply host
 // asset view.
 func validateProductLoops(host string, loops []string, projectRoot string) error {
 	available := map[string]bool{}
@@ -76,7 +76,7 @@ func validateProductLoops(host string, loops []string, projectRoot string) error
 			if isExternalPackage(projectRoot, loop) {
 				continue
 			}
-			return fmt.Errorf("unsupported product loop %q for host %s; available: %s", loop, host, strings.Join(names, ", "))
+			return fmt.Errorf("unsupported event package %q for host %s; available: %s", loop, host, strings.Join(names, ", "))
 		}
 	}
 	return nil
@@ -97,9 +97,8 @@ func (h *Harness) Setup(ctx context.Context, out, errw io.Writer, opts SetupOpti
 	if opts.Host == "" {
 		return SetupResult{}, fmt.Errorf("setup requires --host")
 	}
-	// No --loop is valid (P3): the coordination package (project_intent/assignment/progress_digest)
-	// is default-enabled at boot, so `setup --host codex` alone wires a host that can govern the
-	// AgentTeam nouns out of the box. --loop adds the optional packages (memory/skill) on top.
+	// No --loop is valid: the standard event packages are default-enabled at boot, so
+	// `setup --host codex` alone wires a host that can govern the standard event set.
 	if err := validateProductLoops(opts.Host, opts.Loops, opts.ProjectRoot); err != nil {
 		return SetupResult{}, err
 	}
@@ -155,8 +154,8 @@ func (h *Harness) Setup(ctx context.Context, out, errw io.Writer, opts SetupOpti
 		return res, fmt.Errorf("setup: merge binding: %w", err)
 	}
 	res.Changes = append(res.Changes, "upserted channel binding for "+opts.Principal+" in "+bindingFile)
-	// Config + env reflect ALL enabled loops (the union with any prior setup), so installing skill
-	// after memory leaves both the config AND the env naming both loops (additive, symmetric).
+	// Config + env reflect ALL enabled event packages (the union with any prior setup), so repeated
+	// setup calls remain additive and symmetric.
 	effectiveLoops := unionLoops(existingConfigLoops(configFile), opts.Loops)
 	if err := writeLocalConfig(configFile, opts, effectiveLoops); err != nil {
 		return res, err

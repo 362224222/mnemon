@@ -13,7 +13,6 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
-	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 )
 
 func TestRemoteSyncPushIsIdempotentAndAuthenticated(t *testing.T) {
@@ -92,11 +91,9 @@ func TestRemoteSyncPushIsIdempotentAndAuthenticated(t *testing.T) {
 	if _, _, err := replicaClient.Ingest("replica@project", contract.ObservationEnvelope{
 		ExternalID: "replica-observe",
 		Event: contract.Event{
-			Type: policy.MemoryWriteCandidateObserved,
+			Type: "progress_digest.write_candidate.observed",
 			Payload: map[string]any{
-				"content":    "replica should not be able to submit host observations",
-				"source":     "test",
-				"confidence": "high",
+				"summary": "replica should not be able to submit host observations",
 			},
 		},
 	}); err == nil {

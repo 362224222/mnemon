@@ -13,7 +13,7 @@ import (
 // pre-data-ization handwritten decoders):
 //
 //	required {missing_style: empty|missing}  empty processed value → "<style> <field>"
-//	format:skill-id                          !validSkillID → "invalid <field>"
+//	format:identifier                        !validIdentifier → "invalid <field>"
 //	enum {values: a|b|c, message}            value not in values → "<message>"
 //	default {value}                          empty processed value ← value
 //	default-from {field}                     empty processed value ← item[field] (declared earlier)
@@ -26,7 +26,7 @@ import (
 //	                                         must be the field's only validator
 var validatorCatalog = map[string]paramSchema{
 	"required":              {required: []string{"missing_style"}},
-	"format:skill-id":       {},
+	"format:identifier":     {},
 	"enum":                  {required: []string{"values", "message"}},
 	"default":               {required: []string{"value"}},
 	"default-from":          {required: []string{"field"}},
@@ -74,8 +74,8 @@ func compileDecode(spec CapabilitySpec) func(payload map[string]any) (Item, erro
 						}
 						return nil, fmt.Errorf("%s candidate denied: %s %s", name, style, f.Name)
 					}
-				case "format:skill-id":
-					if !validSkillID(raw) {
+				case "format:identifier":
+					if !validIdentifier(raw) {
 						return nil, fmt.Errorf("%s candidate denied: invalid %s", name, f.Name)
 					}
 				case "enum":

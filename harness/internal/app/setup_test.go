@@ -16,7 +16,7 @@ func TestSetupWiresChannelAndStaticShim(t *testing.T) {
 	h := New(root)
 	var out, errw bytes.Buffer
 	opts := SetupOptions{
-		Host: "codex", Loops: []string{"memory"}, ControlURL: "http://127.0.0.1:8787",
+		Host: "codex", ControlURL: "http://127.0.0.1:8787",
 		Principal: "codex@project", UseToken: true,
 	}
 	if _, err := h.Setup(context.Background(), &out, &errw, opts); err != nil {
@@ -51,7 +51,7 @@ func TestSetupWiresChannelAndStaticShim(t *testing.T) {
 		t.Fatalf("token file must exist + be non-empty: %v", err)
 	}
 	env := string(mustRead(t, filepath.Join(root, ".mnemon", "harness", "channel", "env.sh")))
-	for _, want := range []string{"MNEMON_HARNESS_BIN", "MNEMON_CONTROL_ADDR", "MNEMON_CONTROL_PRINCIPAL", "MNEMON_CONTROL_TOKEN_FILE", "MNEMON_MEMORY_LOOP_DIR"} {
+	for _, want := range []string{"MNEMON_HARNESS_BIN", "MNEMON_CONTROL_ADDR", "MNEMON_CONTROL_PRINCIPAL", "MNEMON_CONTROL_TOKEN_FILE"} {
 		if !strings.Contains(env, want) {
 			t.Fatalf("channel env must export %s; got:\n%s", want, env)
 		}
@@ -64,7 +64,7 @@ func TestSetupWiresChannelAndStaticShim(t *testing.T) {
 		t.Fatalf("reinstall must not duplicate the binding; got %d codex entries", n)
 	}
 
-	userOpts := SetupOptions{Host: "codex", Loops: []string{"memory"}, ControlURL: "http://127.0.0.1:8787", Principal: "human@project"}
+	userOpts := SetupOptions{Host: "codex", ControlURL: "http://127.0.0.1:8787", Principal: "human@project"}
 	if _, err := h.Setup(context.Background(), &out, &errw, userOpts); err != nil {
 		t.Fatalf("user setup: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestSetupDryRunWritesNothing(t *testing.T) {
 	root := t.TempDir()
 	var out, errw bytes.Buffer
 	_, err := New(root).Setup(context.Background(), &out, &errw, SetupOptions{
-		Host: "codex", Loops: []string{"memory"}, ControlURL: "http://127.0.0.1:8787",
+		Host: "codex", ControlURL: "http://127.0.0.1:8787",
 		Principal: "codex@project", UseToken: true, DryRun: true,
 	})
 	if err != nil {
@@ -135,15 +135,15 @@ func TestSetupDryRunWritesNothing(t *testing.T) {
 	}
 }
 
-func TestSetupRejectsUnsupportedProductLoop(t *testing.T) {
+func TestSetupRejectsUnsupportedEventPackage(t *testing.T) {
 	root := t.TempDir()
 	var out, errw bytes.Buffer
 	_, err := New(root).Setup(context.Background(), &out, &errw, SetupOptions{
 		Host: "codex", Loops: []string{"eval"}, ControlURL: "http://127.0.0.1:8787",
 		Principal: "codex@project",
 	})
-	if err == nil || !strings.Contains(err.Error(), `unsupported product loop "eval"`) {
-		t.Fatalf("expected unsupported product loop error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), `unsupported event package "eval"`) {
+		t.Fatalf("expected unsupported event package error, got %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(root, ".mnemon", "harness", "channel", "bindings.json")); !os.IsNotExist(err) {
 		t.Fatalf("unsupported loop setup must not write channel bindings; err=%v", err)

@@ -14,18 +14,17 @@ import (
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
-	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/state"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemonhub"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
 // openServingRuntime boots the PRODUCT serving runtime (OpenLocalRuntime = assembled host policy +
-// merged sync-import policy) over a memory+skill host binding — the exact runtime the worker
+// merged sync-import policy) over a standard event host binding — the exact runtime the worker
 // operates inside `local run`.
 func openServingRuntime(t *testing.T, root string) *runtime.Runtime {
 	t.Helper()
-	refs := []contract.ResourceRef{{Kind: "memory", ID: "project"}, {Kind: "skill", ID: "project"}}
+	refs := []contract.ResourceRef{{Kind: "progress_digest", ID: "project"}, {Kind: "assignment", ID: "project"}}
 	b := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", refs)
 	rt, err := OpenLocalRuntime(filepath.Join(root, runtime.DefaultStorePath), access.LoadedBindings{Bindings: []access.ChannelBinding{b}}, nil, nil)
 	if err != nil {
@@ -72,12 +71,12 @@ func connectRemote(t *testing.T, root, endpoint, token string) {
 	}
 }
 
-func observeMemory(t *testing.T, rt *runtime.Runtime, externalID, content string) {
+func observeProgress(t *testing.T, rt *runtime.Runtime, externalID, content string) {
 	t.Helper()
 	if _, _, err := rt.API().Ingest("codex@project", contract.ObservationEnvelope{
 		ExternalID: externalID,
-		Event: contract.Event{Type: policy.MemoryWriteCandidateObserved, Payload: map[string]any{
-			"content": content, "source": "test", "confidence": "high",
+		Event: contract.Event{Type: "progress_digest.write_candidate.observed", Payload: map[string]any{
+			"summary": content,
 		}},
 	}); err != nil {
 		t.Fatalf("host observe: %v", err)
@@ -93,17 +92,17 @@ func workerDigest(fields map[string]any) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func foreignMemoryMaterial(decisionID, entryID, content string) contract.SyncedEventMaterial {
+func foreignProgressMaterial(decisionID, itemID, summary string) contract.SyncedEventMaterial {
 	fields := map[string]any{
-		"content": "# Local Memory\n- " + content,
-		"entries": []any{map[string]any{
-			"id": entryID, "content": content, "source": "remote", "confidence": "high",
+		"content": "# Progress\n- " + summary,
+		"items": []any{map[string]any{
+			"id": itemID, "summary": summary,
 			"actor": "codex@other", "ingest_seq": float64(7),
 		}},
 	}
 	return contract.SyncedEventMaterial{
 		OriginReplicaID: "other-replica", LocalDecisionID: decisionID, LocalIngestSeq: 7,
-		Actor: "codex@other", ResourceRef: contract.ResourceRef{Kind: "memory", ID: "project"},
+		Actor: "codex@other", ResourceRef: contract.ResourceRef{Kind: "progress_digest", ID: "project"},
 		ResourceVersion: 1, FieldsDigest: workerDigest(fields), Fields: fields,
 		DecidedAt: "2026-06-12T00:00:00Z", Status: "pending",
 	}
@@ -114,7 +113,7 @@ func foreignMemoryMaterial(decisionID, entryID, content string) contract.SyncedE
 func TestSyncWorkerIdleWithoutRemoteConfig(t *testing.T) {
 	root := t.TempDir()
 	rt := openServingRuntime(t, root)
-	observeMemory(t, rt, "m-idle", "local memory before any remote exists")
+	observeProgress(t, rt, "m-idle", "local progress before any remote exists")
 
 	eventsBefore, _ := rt.PendingEvents(0)
 	if err := syncWorkerPass(rt, SyncWorkerOptions{ProjectRoot: root}); err != nil {
@@ -136,7 +135,7 @@ func TestSyncWorkerIdleWithoutRemoteConfig(t *testing.T) {
 func TestSyncWorkerSurvivesUnreachableRemote(t *testing.T) {
 	root := t.TempDir()
 	rt := openServingRuntime(t, root)
-	observeMemory(t, rt, "m-offline", "offline memory still governed locally")
+	observeProgress(t, rt, "m-offline", "offline progress still governed locally")
 	connectRemote(t, root, "http://127.0.0.1:1", "dead-token")
 
 	start := time.Now()
@@ -148,7 +147,7 @@ func TestSyncWorkerSurvivesUnreachableRemote(t *testing.T) {
 		t.Fatalf("pass must be bounded by the client timeout, took %v", time.Since(start))
 	}
 	// Local loop unaffected: a further host observe is admitted, and the material stays pending.
-	observeMemory(t, rt, "m-offline-2", "second offline memory")
+	observeProgress(t, rt, "m-offline-2", "second offline progress")
 	pending, err := rt.PendingSyncedEvents()
 	if err != nil || len(pending) != 2 {
 		t.Fatalf("offline pass must leave synced events pending: %+v err=%v", pending, err)
@@ -161,16 +160,16 @@ func TestSyncWorkerSurvivesUnreachableRemote(t *testing.T) {
 func TestSyncWorkerPushPullRoundTrip(t *testing.T) {
 	root := t.TempDir()
 	rt := openServingRuntime(t, root)
-	memRef := contract.ResourceRef{Kind: "memory", ID: "project"}
-	scopes := []contract.ResourceRef{memRef, {Kind: "skill", ID: "project"}}
+	progressRef := contract.ResourceRef{Kind: "progress_digest", ID: "project"}
+	scopes := []contract.ResourceRef{progressRef, {Kind: "assignment", ID: "project"}}
 	endpoint, hub, _ := startHub(t, map[string]contract.ActorID{
 		"tok-local": "replica-local@team",
 		"tok-other": "replica-other@team",
 	}, scopes)
 	connectRemote(t, root, endpoint, "tok-local")
 
-	observeMemory(t, rt, "m-rt", "local memory that must reach the hub")
-	foreign := foreignMemoryMaterial("dec-foreign-1", "remote-entry-1", "remote memory that must reach this replica")
+	observeProgress(t, rt, "m-rt", "local progress that must reach the hub")
+	foreign := foreignProgressMaterial("dec-foreign-1", "remote-entry-1", "remote progress that must reach this replica")
 	if resp, err := hub.Push("replica-other@team", contract.SyncPushRequest{
 		ReplicaID: "other-replica", BatchID: "seed", Events: testSyncedEvents(t, foreign),
 	}); err != nil || len(resp.Accepted) != 1 {
@@ -189,15 +188,15 @@ func TestSyncWorkerPushPullRoundTrip(t *testing.T) {
 	if err != nil || hubStatus.HubEventsReceived != 2 {
 		t.Fatalf("hub must hold seed+pushed events: %+v err=%v", hubStatus, err)
 	}
-	// Pull half: the foreign entry merged into governed memory through the state.
-	_, fields, err := rt.Resource(memRef)
+	// Pull half: the foreign entry merged into governed event state.
+	_, fields, err := rt.Resource(progressRef)
 	if err != nil {
-		t.Fatalf("read memory: %v", err)
+		t.Fatalf("read progress: %v", err)
 	}
 	content, _ := fields["content"].(string)
-	if !strings.Contains(content, "remote memory that must reach this replica") ||
-		!strings.Contains(content, "local memory that must reach the hub") {
-		t.Fatalf("memory must hold local + imported entries:\n%s", content)
+	if !strings.Contains(content, "remote progress that must reach this replica") ||
+		!strings.Contains(content, "local progress that must reach the hub") {
+		t.Fatalf("progress must hold local + imported entries:\n%s", content)
 	}
 
 	// Second pass: cursor-idempotent, no duplicate entries, no outbound echo of the import.
@@ -207,9 +206,9 @@ func TestSyncWorkerPushPullRoundTrip(t *testing.T) {
 	if pending, _ := rt.PendingSyncedEvents(); len(pending) != 0 {
 		t.Fatalf("import must not create an outbound echo, got %+v", pending)
 	}
-	_, fields, _ = rt.Resource(memRef)
+	_, fields, _ = rt.Resource(progressRef)
 	content, _ = fields["content"].(string)
-	if strings.Count(content, "remote memory that must reach this replica") != 1 {
+	if strings.Count(content, "remote progress that must reach this replica") != 1 {
 		t.Fatalf("second pass duplicated the import:\n%s", content)
 	}
 	if st, _ := hub.Status("replica-local@team"); st.HubEventsReceived != 2 {
@@ -223,30 +222,30 @@ func TestSyncWorkerPushPullRoundTrip(t *testing.T) {
 func TestServingRuntimeMergesSyncImportWithoutDisturbingHostFlow(t *testing.T) {
 	root := t.TempDir()
 	rt := openServingRuntime(t, root)
-	memRef := contract.ResourceRef{Kind: "memory", ID: "project"}
+	progressRef := contract.ResourceRef{Kind: "progress_digest", ID: "project"}
 
 	// Host flow: a good candidate is admitted...
-	observeMemory(t, rt, "m-good", "host fact survives the merged policy")
-	v1, fields, err := rt.Resource(memRef)
+	observeProgress(t, rt, "m-good", "host fact survives the merged policy")
+	v1, fields, err := rt.Resource(progressRef)
 	if err != nil || v1 == 0 {
 		t.Fatalf("host candidate must be admitted: v=%d err=%v", v1, err)
 	}
 	// ...and the secret-like candidate is still denied (host rule teeth intact under the merge).
-	observeMemory(t, rt, "m-secret", "password=hunter2")
-	v2, _, _ := rt.Resource(memRef)
+	observeProgress(t, rt, "m-secret", "password=hunter2")
+	v2, _, _ := rt.Resource(progressRef)
 	if v2 != v1 {
 		t.Fatalf("secret-like candidate must stay denied under the merged policy: v %d -> %d", v1, v2)
 	}
 
 	// Import flow on the SAME runtime: a foreign material merges under sync@local.
 	if err := importPulledEvents(rt, "hub", testSyncedEvents(t,
-		foreignMemoryMaterial("dec-coexist", "remote-coexist", "imported entry coexists"),
+		foreignProgressMaterial("dec-coexist", "remote-coexist", "imported entry coexists"),
 	), nil); err != nil {
 		t.Fatalf("in-process import: %v", err)
 	}
-	_, fields, err = rt.Resource(memRef)
+	_, fields, err = rt.Resource(progressRef)
 	if err != nil {
-		t.Fatalf("read memory: %v", err)
+		t.Fatalf("read progress: %v", err)
 	}
 	content, _ := fields["content"].(string)
 	if !strings.Contains(content, "imported entry coexists") || !strings.Contains(content, "host fact survives the merged policy") {
@@ -254,8 +253,8 @@ func TestServingRuntimeMergesSyncImportWithoutDisturbingHostFlow(t *testing.T) {
 	}
 
 	// Host flow still live AFTER an import (no policy poisoning either direction).
-	observeMemory(t, rt, "m-after", "host flow still works after import")
-	_, fields, _ = rt.Resource(memRef)
+	observeProgress(t, rt, "m-after", "host flow still works after import")
+	_, fields, _ = rt.Resource(progressRef)
 	content, _ = fields["content"].(string)
 	if !strings.Contains(content, "host flow still works after import") {
 		t.Fatalf("host flow must keep working after an import:\n%s", content)

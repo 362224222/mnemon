@@ -12,10 +12,9 @@ type SchemaGuard struct {
 
 func DefaultSchemaGuard() SchemaGuard {
 	// DefaultSchemaGuard carries ONLY the GOVERNANCE kinds — kernel-internal control-plane state whose
-	// writes the kernel produces (D3). User kinds (memory/skill and any declared/external kind) are
-	// NOT compiled here: the assembler registers each enabled capability's kind + required header onto
-	// this base (PD2), so the live guard is governance ∪ enabled caps. memory/skill are ordinary
-	// first-party packages (PD5 graduation), registered exactly like an external kind.
+	// writes the kernel produces (D3). Event data kinds are NOT compiled here: the assembler registers
+	// each enabled capability's kind + required header onto this base (PD2), so the live guard is
+	// governance ∪ enabled caps.
 	return SchemaGuard{Required: map[contract.ResourceKind][]string{
 		// lease/budget/receipt are versioned control-plane state whose required fields back fencing,
 		// budget accounting, and the durable record of an external effect. Lockstep with

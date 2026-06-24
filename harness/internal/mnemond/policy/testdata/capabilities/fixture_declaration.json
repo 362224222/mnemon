@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "name": "skill",
-  "observed_type": "skill.write_candidate.observed",
-  "proposed_type": "skill.write.proposed",
-  "resource_kind": "skill",
+  "name": "fixture_declaration",
+  "observed_type": "fixture_declaration.write_candidate.observed",
+  "proposed_type": "fixture_declaration.write.proposed",
+  "resource_kind": "fixture_declaration",
   "items_field": "declarations",
   "fields": [
     {
-      "name": "skill_id",
+      "name": "declaration_id",
       "validators": [
         {
           "id": "required",
@@ -16,7 +16,7 @@
           }
         },
         {
-          "id": "format:skill-id"
+          "id": "format:identifier"
         }
       ]
     },
@@ -26,7 +26,7 @@
         {
           "id": "default-from",
           "params": {
-            "field": "skill_id"
+            "field": "declaration_id"
           }
         }
       ]

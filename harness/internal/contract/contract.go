@@ -253,7 +253,7 @@ var (
 // (an unknown kind has no required fields, so SchemaGuard.Validate fails closed on it); since PD2
 // the live guard is the assembly-time set — GovernanceKinds ∪ the enabled capabilities' declared
 // kinds — so a USER kind need not appear here to be admitted (a declared external kind registers at
-// assembly). This map stays the compiled-default reference until memory/skill graduate (PD5).
+// assembly). This map stays the compiled-default reference for kernel-governed kinds.
 // Invariant: keys(kernel.DefaultSchemaGuard().Required) == KindCatalog (enforced by a kernel test).
 // lease/budget/receipt are GOVERNANCE resource kinds — first-class versioned resources (D3) whose
 // per-resource Version is the fence / CAS counter; receipt is the durable record of an external effect.

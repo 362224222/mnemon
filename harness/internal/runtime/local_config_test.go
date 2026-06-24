@@ -13,17 +13,17 @@ import (
 // internals). The production derivation lives in app; this keeps the test in package runtime without
 // importing app (which would cycle).
 func localRuntimeConfigT(bindings []access.ChannelBinding) RuntimeConfig {
+	catalog := policy.EmbeddedCatalog()
 	var rules []admission.Rule
 	allow := map[contract.ActorID][]contract.ResourceKind{}
 	for _, b := range bindings {
-		if b.Allows(access.VerbObserve) && b.AllowsObservedType(policy.MemoryWriteCandidateObserved) {
-			if ref, ok := scopeRefT(b, "memory"); ok {
-				rules = append(rules, policy.EmbeddedCatalog()["memory"].Rule(b.Principal, ref, policy.Limits{}))
+		for _, ref := range b.SubscriptionScope {
+			cap, ok := catalog[string(ref.Kind)]
+			if !ok {
+				continue
 			}
-		}
-		if b.Allows(access.VerbObserve) && b.AllowsObservedType(policy.SkillWriteCandidateObserved) {
-			if ref, ok := scopeRefT(b, "skill"); ok {
-				rules = append(rules, policy.EmbeddedCatalog()["skill"].Rule(b.Principal, ref, policy.Limits{}))
+			if b.Allows(access.VerbObserve) && b.AllowsObservedType(cap.ObservedType) {
+				rules = append(rules, cap.Rule(b.Principal, ref, policy.Limits{}))
 			}
 		}
 		if b.ActorKind != contract.KindHostAgent {
@@ -31,7 +31,7 @@ func localRuntimeConfigT(bindings []access.ChannelBinding) RuntimeConfig {
 		}
 		seen := map[contract.ResourceKind]bool{}
 		for _, ref := range b.SubscriptionScope {
-			if ref.Kind == "memory" || ref.Kind == "skill" {
+			if _, ok := catalog[string(ref.Kind)]; ok {
 				seen[ref.Kind] = true
 			}
 		}
@@ -44,9 +44,17 @@ func localRuntimeConfigT(bindings []access.ChannelBinding) RuntimeConfig {
 		Subs:          access.SubsFromBindings(bindings),
 		Rules:         admission.NewRuleSet(rules...),
 		Authority:     state.AuthorityRules{Allow: allow},
-		SchemaGuard:   state.SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}}),
-		SyncableKinds: policy.ImportableKinds(policy.EmbeddedCatalog()),
+		SchemaGuard:   state.SchemaGuardWith(requiredHeadersT(catalog)),
+		SyncableKinds: policy.ImportableKinds(catalog),
 	}
+}
+
+func requiredHeadersT(catalog map[string]policy.Capability) map[contract.ResourceKind][]string {
+	out := map[contract.ResourceKind][]string{}
+	for _, cap := range catalog {
+		out[cap.ResourceKind] = cap.RequiredHeader
+	}
+	return out
 }
 
 func scopeRefT(b access.ChannelBinding, kind contract.ResourceKind) (contract.ResourceRef, bool) {

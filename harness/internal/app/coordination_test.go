@@ -12,10 +12,10 @@ import (
 )
 
 // P3a: the AgentTeam coordination kinds (project_intent/assignment/progress_digest) are ordinary
-// first-party declared kinds — they govern through the SAME assembler/appendItemRule path as
-// memory/skill, with no per-kind code. This pins one (assignment, which carries the required `scope`)
-// through observe → admit → resource read, plus the negative: a candidate missing the required scope
-// is rejected, never written.
+// declared event kinds — they govern through the SAME assembler/appendItemRule path as every other
+// capability descriptor, with no per-kind code. This pins one (assignment, which carries the
+// required `scope`) through observe → admit → resource read, plus the negative: a candidate missing
+// the required scope is rejected, never written.
 func TestCoordinationAssignmentGoverns(t *testing.T) {
 	ref := contract.ResourceRef{Kind: "assignment", ID: "project"}
 	binding := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
@@ -169,14 +169,14 @@ func TestAssignmentItemsCarryCreatedAtFromEventTimestamp(t *testing.T) {
 	}
 }
 
-// P3b default-enablement: a host whose binding enables ONLY memory (explicit allow-list + scope, as
-// setup writes) STILL governs the coordination kinds — the boot grants them to every host-agent
-// principal without an explicit --loop. This pins the "coordination package is on out of the box".
+// P3b default-enablement: a host whose binding names only one standard event package STILL governs
+// the other default-enabled kinds — the boot grants them to every host-agent principal without an
+// explicit --loop. This pins the "coordination package is on out of the box".
 func TestCoordinationDefaultEnabled(t *testing.T) {
-	memRef := contract.ResourceRef{Kind: "memory", ID: "project"}
-	binding := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{memRef})
-	// explicit allow-list (like setup): memory only — coordination is NOT named here.
-	binding.AllowedObservedTypes = []string{"session.observed", "memory.write_candidate.observed"}
+	progressRef := contract.ResourceRef{Kind: "progress_digest", ID: "project"}
+	binding := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{progressRef})
+	// explicit allow-list (like setup): progress only — assignment is NOT named here.
+	binding.AllowedObservedTypes = []string{"session.observed", "progress_digest.write_candidate.observed"}
 
 	rc, err := LocalRuntimeConfigFromBindings([]access.ChannelBinding{binding}, nil)
 	if err != nil {
@@ -207,14 +207,14 @@ func TestCoordinationDefaultEnabled(t *testing.T) {
 	if err != nil || v == 0 {
 		t.Fatalf("default-enabled assignment must admit without an explicit --loop (v=%d err=%v)", v, err)
 	}
-	// memory still governs (default-enablement did not disturb the explicit grant).
+	// progress still governs (default-enablement did not disturb the explicit grant).
 	if _, _, err := rt.API().Ingest("codex@project", contract.ObservationEnvelope{
 		ExternalID: "de2",
-		Event: contract.Event{Type: "memory.write_candidate.observed", Payload: map[string]any{
-			"content": "still works", "source": "user", "confidence": "high",
+		Event: contract.Event{Type: "progress_digest.write_candidate.observed", Payload: map[string]any{
+			"summary": "still works",
 		}},
 	}); err != nil {
-		t.Fatalf("memory must still be observable alongside default-enabled coordination: %v", err)
+		t.Fatalf("progress must still be observable alongside default-enabled coordination: %v", err)
 	}
 }
 
@@ -254,7 +254,7 @@ func TestCoordinationProjectIntentGoverns(t *testing.T) {
 	}
 }
 
-// R1 Event presentation schema: agent_profile and teamwork_signal are first-party governed resources too,
+// R1 Event presentation schema: agent_profile and teamwork_signal are embedded governed resources too,
 // not role packages or hostagent-only hints.
 func TestCoordinationProfileAndTeamworkSignalGovern(t *testing.T) {
 	profileRef := contract.ResourceRef{Kind: "agent_profile", ID: "project"}

@@ -14,7 +14,6 @@ func setupHost(t *testing.T, root, host string) {
 	var out, errw bytes.Buffer
 	if _, err := New(root).Setup(context.Background(), &out, &errw, SetupOptions{
 		Host:        host,
-		Loops:       []string{"memory"},
 		Principal:   "codex@project",
 		ControlURL:  "http://127.0.0.1:8787",
 		ProjectRoot: root,

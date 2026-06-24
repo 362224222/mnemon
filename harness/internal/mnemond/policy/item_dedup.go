@@ -12,10 +12,9 @@ import (
 
 // itemDedupImport is the "item-dedup" remote-import strategy (capability-spec v2 §Sync): the GENERIC
 // append-merge for a directory-of-items kind (§577). It merges a remote material's items into the
-// resource's item list BY ID, preserving EVERY item field — unlike entry-dedup (shaped for memory's
-// `content`) and declaration-dedup (shaped for skill's `declarations`), it makes no assumption about
-// the item's domain fields, so an arbitrary declared kind (the coordination kinds) syncs without
-// losing its fields (assignment's scope/ttl/assignee, etc.). Item ids are replica-specific
+// resource's item list BY ID, preserving EVERY item field. It makes no assumption about
+// the item's domain fields, so an arbitrary declared kind syncs without losing fields such as
+// assignment scope/ttl/assignee. Item ids are replica-specific
 // (actor+ingest_seq stamped at admission), so cross-replica items never collide; a
 // same-id/different-content divergence is rejected (I15, defensive). The merged resource header is
 // re-derived from the capability's OWN render, never hardcoded.
@@ -67,8 +66,7 @@ func itemDedupImport(cap Capability, in admission.RuleInput) (contract.RuleDecis
 	}}, nil
 }
 
-// decodeRemoteSyncedEventMaterial decodes a remote SyncedEventMaterial from an import event payload (the kind-agnostic
-// form of decodeRemoteMemorySyncedEventMaterial/decodeRemoteSkillSyncedEventMaterial, used by the generic item-dedup strategy).
+// decodeRemoteSyncedEventMaterial decodes a remote SyncedEventMaterial from an import event payload.
 func decodeRemoteSyncedEventMaterial(payload map[string]any) (contract.SyncedEventMaterial, error) {
 	raw, ok := payload["material"]
 	if !ok {

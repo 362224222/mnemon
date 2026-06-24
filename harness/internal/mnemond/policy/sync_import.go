@@ -44,8 +44,7 @@ func importStrategy(merge string) func(Capability, admission.RuleInput) (contrac
 }
 
 // RemoteImportRules builds the remote-import rules for every importable capability in the catalog,
-// sorted by kind for determinism — the descriptor-derived replacement for the hardcoded
-// memory/skill import-rule list (PD6).
+// sorted by kind for determinism.
 func RemoteImportRules(catalog map[string]Capability, principal contract.ActorID) []admission.Rule {
 	var rules []admission.Rule
 	for _, cap := range sortedImportable(catalog) {

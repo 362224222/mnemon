@@ -17,12 +17,12 @@ type Limits struct {
 	MaxPayloadBytes int
 }
 
-// Capability is the built-in descriptor that turns config selection into one compiled rule kind. ALL
-// built-in capabilities admit a candidate through the SAME generic append-item-to-resource rule
+// Capability is the descriptor that turns config selection into one compiled rule kind.
+// Capabilities admit a candidate through the SAME generic append-item-to-resource rule
 // (appendItemRule); they differ only by DATA — the observed/proposed types, the resource kind, the
 // item-list field, how a payload decodes to an Item, and the resource "header" fields a write carries
-// (e.g. memory's rendered content, skill's name). A new capability is a new descriptor + config, not
-// new rule code.
+// (for example rendered content or a static name). A new capability is a new descriptor + config,
+// not new rule code.
 type Capability struct {
 	Name         string
 	ObservedType string
@@ -137,13 +137,11 @@ func itemsFromFields(fields map[string]any, field string) []Item {
 }
 
 func itemID(actor contract.ActorID, ingestSeq int64) string {
-	return memoryEntryID(actor, ingestSeq)
+	return entryItemID(actor, ingestSeq)
 }
 
-// ---- memory descriptor data ----
-
-func renderMemoryItems(items []Item) string {
-	lines := []string{"# Local Memory"}
+func renderEntryItems(items []Item) string {
+	lines := []string{"# Entries"}
 	for _, it := range items {
 		meta := []string{"id: " + itemString(it, "id"), "source: " + itemString(it, "source"), "confidence: " + itemString(it, "confidence")}
 		if tags := itemStrings(it, "tags"); len(tags) > 0 {
@@ -153,8 +151,6 @@ func renderMemoryItems(items []Item) string {
 	}
 	return strings.Join(lines, "\n")
 }
-
-// ---- skill descriptor data ----
 
 func itemString(it Item, key string) string {
 	if s, ok := it[key].(string); ok {
