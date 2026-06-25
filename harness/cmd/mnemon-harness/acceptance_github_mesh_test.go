@@ -177,6 +177,30 @@ func TestBuildR1GitHubMeshSyncReportProvesIsolationAndNoHub(t *testing.T) {
 	}
 }
 
+func TestR1GitHubMeshStrictTopologyRequiresNoHub(t *testing.T) {
+	top := &r1AcceptanceTopologyReport{
+		Mode:               "per-hostagent-mnemond",
+		Agents:             5,
+		MnemondInstances:   5,
+		MnemonhubInstances: 0,
+		SharedMnemond:      false,
+		AgentMnemondMap: map[string]string{
+			"a": "/tmp/a.db",
+			"b": "/tmp/b.db",
+			"c": "/tmp/c.db",
+			"d": "/tmp/d.db",
+			"e": "/tmp/e.db",
+		},
+	}
+	if !r1GitHubMeshStrictTopology(top) {
+		t.Fatalf("github mesh topology should pass without a central hub: %+v", top)
+	}
+	top.MnemonhubInstances = 1
+	if r1GitHubMeshStrictTopology(top) {
+		t.Fatal("github mesh topology must reject central mnemon-hub instances")
+	}
+}
+
 func TestPopulateR1GitHubMeshSyncEvidence(t *testing.T) {
 	report := &r1CodexAcceptanceReport{Sync: &r1CodexSyncReport{
 		Agents: []r1CodexAgentReport{

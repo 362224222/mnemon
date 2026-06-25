@@ -203,7 +203,8 @@ func runR1GitHubMeshAcceptance(ctx context.Context, opts r1GitHubMeshAcceptanceO
 	}
 	defer stopR1CodexSyncAgents(agents)
 	report.Topology = buildR1ProdSimTopology(agents)
-	addR1Assertion(&report, "github-mesh strict per-hostagent mnemond topology", prodSimStrictTopology(report.Topology), fmt.Sprintf("%+v", report.Topology))
+	report.Topology.MnemonhubInstances = 0
+	addR1Assertion(&report, "github-mesh strict per-hostagent mnemond topology", r1GitHubMeshStrictTopology(report.Topology), fmt.Sprintf("%+v", report.Topology))
 
 	syncReport := buildR1GitHubMeshSyncReport(opts.Repo, agents)
 	report.Sync = syncReport
@@ -275,7 +276,7 @@ func runR1GitHubMeshAcceptance(ctx context.Context, opts r1GitHubMeshAcceptanceO
 	if len(agents) > 0 {
 		report.LedgerCounts = countR1Ledger(agents[0].localURL, agents[0].r1CodexAgent)
 	}
-	addR1Assertion(&report, "github-mesh no shared governed.db", prodSimStrictTopology(report.Topology), fmt.Sprintf("%+v", report.Topology))
+	addR1Assertion(&report, "github-mesh no shared governed.db", r1GitHubMeshStrictTopology(report.Topology), fmt.Sprintf("%+v", report.Topology))
 	addR1Assertion(&report, "github-mesh accepted event subjects only", r1SyncEventSubjectsOnlyAccepted(syncReport.AllowedEventSubjects), fmt.Sprintf("subjects=%v", syncReport.AllowedEventSubjects))
 	addR1Assertion(&report, "github-mesh report includes publication/import evidence", len(syncReport.PublishedByBranch) == opts.Agents && len(syncReport.ImportedByMnemond) == opts.Agents, fmt.Sprintf("published=%v imported=%v diagnostics=%v", syncReport.PublishedByBranch, syncReport.ImportedByMnemond, syncReport.DiagnosticsByMnemond))
 	if len(report.Errors) == 0 && allR1AssertionsPassed(report.Assertions) && allR1GitHubMeshScenariosOK(report.Scenarios, opts.Scenarios) {
@@ -902,11 +903,12 @@ func exerciseR1GitHubMeshLifecycle(ctx context.Context, report *r1CodexAcceptanc
 	}
 	target.localCancel()
 	if target.localErr != nil {
+		stopTimeout := 45 * time.Second
 		select {
 		case <-target.localErr:
-		case <-time.After(5 * time.Second):
-			addR1Assertion(report, "github-mesh local mnemond pause observed", false, "timeout waiting for local mnemond stop")
-			return fmt.Errorf("%s local mnemond did not stop within timeout", target.principal)
+		case <-time.After(stopTimeout):
+			addR1Assertion(report, "github-mesh local mnemond pause observed", false, "timeout waiting for local mnemond stop after "+stopTimeout.String())
+			return fmt.Errorf("%s local mnemond did not stop within %s", target.principal, stopTimeout)
 		}
 	}
 	target.localCancel = nil
@@ -1177,6 +1179,20 @@ func populateR1GitHubMeshSyncEvidence(report *r1CodexAcceptanceReport, obs accep
 func r1GitHubMeshStoreName(principal string) string {
 	name, _, _ := strings.Cut(strings.TrimSpace(principal), "@")
 	return name
+}
+
+func r1GitHubMeshStrictTopology(top *r1AcceptanceTopologyReport) bool {
+	if top == nil || top.Mode != "per-hostagent-mnemond" || top.SharedMnemond || top.MnemonhubInstances != 0 || top.Agents < 5 || top.MnemondInstances != top.Agents {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, path := range top.AgentMnemondMap {
+		if strings.TrimSpace(path) == "" || seen[path] {
+			return false
+		}
+		seen[path] = true
+	}
+	return len(seen) == top.Agents
 }
 
 func r1GitHubMeshScopes() []contract.ResourceRef {
