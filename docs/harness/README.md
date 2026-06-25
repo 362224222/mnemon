@@ -14,7 +14,9 @@ The user-facing command surface is intentionally small:
 - `setup`: install Agent Integration shim assets.
 - `local`: run or inspect Local Mnemon.
 - `status`: show Agent Integration, Local Mnemon, and Remote Workspace state.
-- `sync`: connect Local Mnemon to a Remote Workspace.
+- `sync`: connect Local Mnemon to a Remote Workspace. `mnemon-hub` is the
+  first-party backend; GitHub publication branches are available as an
+  experimental repo-mediated backend.
 
 Other implementation commands are internal and are not part of the beta product
 contract.
@@ -28,6 +30,10 @@ such as `.codex/` and `.claude/` are generated surfaces. Local state lives under
 The current beta does not promise production readiness, automatic apply,
 multi-agent governance, broad organization scope, or a general evaluation
 runtime.
+
+The GitHub Remote Workspace backend is experimental. It uses explicitly
+configured publication branches and does not implement P2P discovery, GitHub
+Issues, GitHub PRs, or GitHub Actions as teamwork semantics.
 
 ## 3. Separation From Stable Mnemon
 
