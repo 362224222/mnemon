@@ -121,6 +121,44 @@ func TestGitHubBackendFakePullReturnsDiagnostics(t *testing.T) {
 	}
 }
 
+func TestGitHubBackendPullNormalizesOpaquePublicationCursor(t *testing.T) {
+	env := githubBackendTestEnvelope(t, "replica-b", "dec-foreign", progressRef, map[string]any{"content": "foreign progress"})
+	body, err := json.Marshal(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := opaqueCursorStore{
+		events: []exchange.PublicationStoredEvent{{
+			Path:   "events/replica-b/foreign.json",
+			Body:   body,
+			Cursor: "head-abc",
+		}},
+	}
+	backend, err := New(Config{Store: store, Repo: "mnemon-dev/mnemon-teamwork-example", Branch: "mnemon/agent-b", Scopes: []contract.ResourceRef{progressRef}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := backend.SyncPull(contract.SyncPullRequest{ReplicaID: "replica-a"})
+	if err != nil {
+		t.Fatalf("sync pull: %v", err)
+	}
+	if resp.NextCursor != "1" {
+		t.Fatalf("opaque publication cursor must normalize to local numeric cursor, got %q", resp.NextCursor)
+	}
+	if len(resp.Events) != 1 || resp.Events[0].Event.ID != env.Event.ID {
+		t.Fatalf("sync pull events = %+v, want foreign event", resp.Events)
+	}
+
+	again, err := backend.SyncPull(contract.SyncPullRequest{ReplicaID: "replica-a", RemoteCursor: resp.NextCursor})
+	if err != nil {
+		t.Fatalf("sync pull with local cursor: %v", err)
+	}
+	if again.NextCursor != resp.NextCursor || len(again.Events) != 1 {
+		t.Fatalf("opaque cursor pull should keep local cursor and rely on import idempotency, got %+v", again)
+	}
+}
+
 func newFakeBackend(t *testing.T, branch string, scopes ...contract.ResourceRef) (*exchange.MemoryPublicationStore, *Backend) {
 	t.Helper()
 	store, err := exchange.NewMemoryPublicationStore(branch)
@@ -132,6 +170,26 @@ func newFakeBackend(t *testing.T, branch string, scopes ...contract.ResourceRef)
 		t.Fatal(err)
 	}
 	return store, backend
+}
+
+type opaqueCursorStore struct {
+	events []exchange.PublicationStoredEvent
+}
+
+func (s opaqueCursorStore) PutEvent(context.Context, string, string, []byte) (exchange.PublicationPutResult, error) {
+	return exchange.PublicationPutResult{}, nil
+}
+
+func (s opaqueCursorStore) ListEvents(context.Context, string, string, string) (exchange.PublicationListResult, error) {
+	return exchange.PublicationListResult{Events: append([]exchange.PublicationStoredEvent(nil), s.events...), NextCursor: "head-abc"}, nil
+}
+
+func (s opaqueCursorStore) ReadFile(context.Context, string, string) ([]byte, error) {
+	return nil, nil
+}
+
+func (s opaqueCursorStore) WriteFile(context.Context, string, string, []byte) error {
+	return nil
 }
 
 func putStoredEvent(t *testing.T, store *exchange.MemoryPublicationStore, branch string, env eventmodel.EventEnvelope) {

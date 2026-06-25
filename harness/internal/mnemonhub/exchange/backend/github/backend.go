@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
@@ -112,7 +113,7 @@ func (b *Backend) SyncPull(req contract.SyncPullRequest) (contract.SyncPullRespo
 	if err != nil {
 		return contract.SyncPullResponse{}, err
 	}
-	resp := contract.SyncPullResponse{NextCursor: list.NextCursor}
+	resp := contract.SyncPullResponse{NextCursor: localStateCursor(req.RemoteCursor, list.NextCursor)}
 	for _, stored := range list.Events {
 		env, result, ok := decodeStoredEvent(stored)
 		if !ok {
@@ -138,6 +139,21 @@ func (b *Backend) SyncPull(req contract.SyncPullRequest) (contract.SyncPullRespo
 		resp.Events = append(resp.Events, env)
 	}
 	return resp, nil
+}
+
+func localStateCursor(previous, storeCursor string) string {
+	storeCursor = strings.TrimSpace(storeCursor)
+	if storeCursor == "" {
+		return ""
+	}
+	if _, err := strconv.ParseInt(storeCursor, 10, 64); err == nil {
+		return storeCursor
+	}
+	previous = strings.TrimSpace(previous)
+	if _, err := strconv.ParseInt(previous, 10, 64); err == nil && previous != "" {
+		return previous
+	}
+	return "1"
 }
 
 func (b *Backend) SyncStatus() (contract.SyncStatusResponse, error) {
