@@ -127,6 +127,52 @@ func TestBuildR1GitHubMeshSyncReportProvesIsolationAndNoHub(t *testing.T) {
 	}
 }
 
+func TestPopulateR1GitHubMeshSyncEvidence(t *testing.T) {
+	report := &r1CodexAcceptanceReport{Sync: &r1CodexSyncReport{
+		Agents: []r1CodexAgentReport{
+			{Principal: "codex-01@project"},
+			{Principal: "codex-02@project"},
+		},
+		BranchByAgent: map[string]string{
+			"codex-01@project": "mnemon/acceptance/run/agent-a",
+			"codex-02@project": "mnemon/acceptance/run/agent-b",
+		},
+	}}
+	obs := acceptanceObserveReport{Stores: []acceptanceStoreInspect{
+		{
+			Name:               "codex-01",
+			Role:               "mnemond",
+			Counts:             map[string]int{"imported_accepted": 4},
+			SyncEventsByStatus: map[string]int{"synced": 3},
+			ObservedByType:     map[string]int{"sync.diagnostic": 1},
+			EnvelopeByType:     map[string]int{"agent_profile.accepted": 5},
+		},
+		{
+			Name:               "codex-02",
+			Role:               "mnemond",
+			Counts:             map[string]int{"imported_accepted": 2},
+			SyncEventsByStatus: map[string]int{"synced": 1},
+			ObservedByType:     map[string]int{"sync.remote_diagnostic.observed": 2},
+			EnvelopeByType:     map[string]int{"agent_profile.accepted": 3},
+		},
+	}}
+
+	populateR1GitHubMeshSyncEvidence(report, obs)
+
+	if got := report.Sync.PublishedByBranch["mnemon/acceptance/run/agent-a"]; got != 3 {
+		t.Fatalf("published branch a = %d, want 3", got)
+	}
+	if got := report.Sync.ImportedByMnemond["codex-02@project"]; got != 2 {
+		t.Fatalf("imported codex-02 = %d, want 2", got)
+	}
+	if got := report.Sync.DiagnosticsByMnemond["codex-02@project"]; got != 2 {
+		t.Fatalf("diagnostics codex-02 = %d, want 2", got)
+	}
+	if got := report.Sync.ProfileByMnemond["codex-01@project"]; got != 5 {
+		t.Fatalf("profiles codex-01 = %d, want 5", got)
+	}
+}
+
 func TestR1GitHubMeshScenarioContract(t *testing.T) {
 	names := r1GitHubMeshScenarioNames(nil)
 	want := []string{"onboarding-synthesis", "sync-risk-review", "live-readiness-operator-safety"}

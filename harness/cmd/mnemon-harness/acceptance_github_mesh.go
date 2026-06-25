@@ -260,6 +260,7 @@ func runR1GitHubMeshAcceptance(ctx context.Context, opts r1GitHubMeshAcceptanceO
 	obs, obsErr := observeAcceptanceRun(runRoot, 1000)
 	if obsErr == nil {
 		report.Observability = &obs
+		populateR1GitHubMeshSyncEvidence(&report, obs)
 		report.Participants = r1ClusterParticipants(r1ClusterActorEventCounts(obs), report.Entrypoint)
 	} else {
 		addR1Error(&report, obsErr)
@@ -270,6 +271,7 @@ func runR1GitHubMeshAcceptance(ctx context.Context, opts r1GitHubMeshAcceptanceO
 	}
 	addR1Assertion(&report, "github-mesh no shared governed.db", prodSimStrictTopology(report.Topology), fmt.Sprintf("%+v", report.Topology))
 	addR1Assertion(&report, "github-mesh accepted event subjects only", r1SyncEventSubjectsOnlyAccepted(syncReport.AllowedEventSubjects), fmt.Sprintf("subjects=%v", syncReport.AllowedEventSubjects))
+	addR1Assertion(&report, "github-mesh report includes publication/import evidence", len(syncReport.PublishedByBranch) == opts.Agents && len(syncReport.ImportedByMnemond) == opts.Agents, fmt.Sprintf("published=%v imported=%v diagnostics=%v", syncReport.PublishedByBranch, syncReport.ImportedByMnemond, syncReport.DiagnosticsByMnemond))
 	if len(report.Errors) == 0 && allR1AssertionsPassed(report.Assertions) && allR1GitHubMeshScenariosOK(report.Scenarios, opts.Scenarios) {
 		syncReport.Status = "ok"
 		report.Status = "ok"
@@ -831,6 +833,10 @@ func buildR1GitHubMeshSyncReport(repo string, agents []r1CodexSyncAgent) *r1Code
 		AllowedEventSubjects: r1SyncEventSubjectLabels(r1GitHubMeshScopes()),
 		Artifacts:            map[string]string{},
 		BranchByAgent:        map[string]string{},
+		PublishedByBranch:    map[string]int{},
+		ImportedByMnemond:    map[string]int{},
+		DiagnosticsByMnemond: map[string]int{},
+		ProfileByMnemond:     map[string]int{},
 	}
 	for i, agent := range agents {
 		branch := ""
@@ -855,6 +861,54 @@ func buildR1GitHubMeshSyncReport(repo string, agents []r1CodexSyncAgent) *r1Code
 	sort.Strings(report.PublicationBranches)
 	sort.Strings(report.RemotePlanPaths)
 	return report
+}
+
+func populateR1GitHubMeshSyncEvidence(report *r1CodexAcceptanceReport, obs acceptanceObserveReport) {
+	if report == nil || report.Sync == nil {
+		return
+	}
+	syncReport := report.Sync
+	if syncReport.PublishedByBranch == nil {
+		syncReport.PublishedByBranch = map[string]int{}
+	}
+	if syncReport.ImportedByMnemond == nil {
+		syncReport.ImportedByMnemond = map[string]int{}
+	}
+	if syncReport.DiagnosticsByMnemond == nil {
+		syncReport.DiagnosticsByMnemond = map[string]int{}
+	}
+	if syncReport.ProfileByMnemond == nil {
+		syncReport.ProfileByMnemond = map[string]int{}
+	}
+	stores := map[string]acceptanceStoreInspect{}
+	for _, store := range obs.Stores {
+		if store.Role == "mnemond" {
+			stores[store.Name] = store
+		}
+	}
+	for _, agent := range syncReport.Agents {
+		principal := strings.TrimSpace(agent.Principal)
+		if principal == "" {
+			continue
+		}
+		storeName := r1GitHubMeshStoreName(principal)
+		store, ok := stores[storeName]
+		if !ok {
+			continue
+		}
+		branch := syncReport.BranchByAgent[principal]
+		if branch != "" {
+			syncReport.PublishedByBranch[branch] = store.SyncEventsByStatus["synced"]
+		}
+		syncReport.ImportedByMnemond[principal] = store.Counts["imported_accepted"]
+		syncReport.DiagnosticsByMnemond[principal] = store.ObservedByType["sync.diagnostic"] + store.ObservedByType["sync.remote_diagnostic.observed"]
+		syncReport.ProfileByMnemond[principal] = store.EnvelopeByType["agent_profile.accepted"]
+	}
+}
+
+func r1GitHubMeshStoreName(principal string) string {
+	name, _, _ := strings.Cut(strings.TrimSpace(principal), "@")
+	return name
 }
 
 func r1GitHubMeshScopes() []contract.ResourceRef {

@@ -868,6 +868,15 @@ proof no shared governed.db was used
 proof each appserver used its own mnemond/local store/runtime workspace
 ```
 
+The acceptance report exposes the publication/import summary as machine-readable fields under `sync`:
+
+```text
+sync.published_events_by_branch
+sync.imported_events_by_mnemond
+sync.diagnostics_by_mnemond
+sync.profile_events_by_mnemond
+```
+
 Done when:
 
 - Script is runnable.

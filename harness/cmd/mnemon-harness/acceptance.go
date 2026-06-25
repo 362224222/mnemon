@@ -159,6 +159,10 @@ type r1CodexSyncReport struct {
 	RemotePlanPaths      []string                    `json:"remote_plan_paths,omitempty"`
 	RuntimeWorkspaces    []string                    `json:"runtime_workspace_paths,omitempty"`
 	LocalStorePaths      []string                    `json:"local_mnemond_store_paths,omitempty"`
+	PublishedByBranch    map[string]int              `json:"published_events_by_branch,omitempty"`
+	ImportedByMnemond    map[string]int              `json:"imported_events_by_mnemond,omitempty"`
+	DiagnosticsByMnemond map[string]int              `json:"diagnostics_by_mnemond,omitempty"`
+	ProfileByMnemond     map[string]int              `json:"profile_events_by_mnemond,omitempty"`
 	AllowedEventSubjects []string                    `json:"allowed_event_subjects"`
 	Lifecycle            []r1SyncLifecycleReport     `json:"lifecycle,omitempty"`
 	Source               string                      `json:"source"`
