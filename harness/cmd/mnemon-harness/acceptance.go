@@ -23,6 +23,7 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/state"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemonhub"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemonhub/exchange"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 	"github.com/spf13/cobra"
 )
@@ -1109,7 +1110,7 @@ func setupR1CodexSyncAgents(ctx context.Context, runRoot, binDir string, hub r1S
 		if i-1 >= len(hub.Tokens) {
 			return nil, fmt.Errorf("hub token missing for agent %d", i)
 		}
-		if err := upsertSyncRemote(filepath.Join(workspace, ".mnemon", "harness", "sync", "remotes.json"), workspace, "hub", hub.URL, hub.Tokens[i-1], "", ""); err != nil {
+		if err := upsertSyncRemote(filepath.Join(workspace, ".mnemon", "harness", "sync", "remotes.json"), workspace, "hub", exchange.RemoteBackendHTTP, "", hub.URL, "", "", hub.Tokens[i-1], "", ""); err != nil {
 			return nil, err
 		}
 		loaded, err := access.LoadBindingFile(workspace, filepath.Join(workspace, access.DefaultBindingFile))

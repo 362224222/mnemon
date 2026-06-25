@@ -17,7 +17,10 @@ type RemotesDoc struct {
 	Remotes       []RemoteEntry `json:"remotes"`
 }
 
-const RemoteBackendHTTP = "http"
+const (
+	RemoteBackendHTTP   = "http"
+	RemoteBackendGitHub = "github"
+)
 
 const (
 	RemoteDirectionBidirectional = "bidirectional"
@@ -34,6 +37,8 @@ type RemoteEntry struct {
 	Direction     string `json:"direction,omitempty"`
 	ID            string `json:"id"`
 	Endpoint      string `json:"endpoint,omitempty"`
+	Repo          string `json:"repo,omitempty"`
+	Branch        string `json:"branch,omitempty"`
 	CredentialRef string `json:"credential_ref"`
 	// CAFile optionally pins the remote's TLS root (PEM bundle) — the client trusts exactly it
 	// (sync-abi-v1 §8). Empty = the system roots.
@@ -46,27 +51,43 @@ type RemotePlan struct {
 }
 
 func (r RemoteEntry) NormalizedBackend() string {
-	backend := strings.TrimSpace(r.Backend)
-	if backend == "" {
-		return RemoteBackendHTTP
-	}
+	backend, _ := NormalizeRemoteBackend(r.Backend)
 	return backend
 }
 
 func (r RemoteEntry) NormalizedDirection() string {
-	direction := strings.TrimSpace(r.Direction)
-	if direction == "" {
-		return RemoteDirectionBidirectional
-	}
+	direction, _ := NormalizeRemoteDirection(r.Direction)
 	return direction
+}
+
+func NormalizeRemoteBackend(backend string) (string, error) {
+	backend = strings.TrimSpace(backend)
+	if backend == "" {
+		backend = RemoteBackendHTTP
+	}
+	if err := validateRemoteBackend(backend); err != nil {
+		return "", err
+	}
+	return backend, nil
+}
+
+func NormalizeRemoteDirection(direction string) (string, error) {
+	direction = strings.TrimSpace(direction)
+	if direction == "" {
+		direction = RemoteDirectionBidirectional
+	}
+	if err := validateRemoteDirection(direction); err != nil {
+		return "", err
+	}
+	return direction, nil
 }
 
 func validateRemoteBackend(backend string) error {
 	switch backend {
-	case RemoteBackendHTTP:
+	case RemoteBackendHTTP, RemoteBackendGitHub:
 		return nil
 	default:
-		return fmt.Errorf("unsupported Remote Workspace backend %q (supported: %s)", backend, RemoteBackendHTTP)
+		return fmt.Errorf("unsupported Remote Workspace backend %q (supported: %s, %s)", backend, RemoteBackendHTTP, RemoteBackendGitHub)
 	}
 }
 
@@ -151,18 +172,61 @@ func loadRemotesDoc(path string) (RemotesDoc, error) {
 }
 
 func normalizeRemoteEntry(remote RemoteEntry) (RemoteEntry, error) {
-	remote.Backend = remote.NormalizedBackend()
-	if err := validateRemoteBackend(remote.Backend); err != nil {
+	var err error
+	remote.Backend, err = NormalizeRemoteBackend(remote.Backend)
+	if err != nil {
 		return RemoteEntry{}, err
 	}
-	remote.Direction = remote.NormalizedDirection()
-	if err := validateRemoteDirection(remote.Direction); err != nil {
+	remote.Direction, err = NormalizeRemoteDirection(remote.Direction)
+	if err != nil {
 		return RemoteEntry{}, err
 	}
-	if remote.Backend == RemoteBackendHTTP && strings.TrimSpace(remote.Endpoint) == "" {
-		return RemoteEntry{}, fmt.Errorf("has no endpoint")
+	switch remote.Backend {
+	case RemoteBackendHTTP:
+		if strings.TrimSpace(remote.Endpoint) == "" {
+			return RemoteEntry{}, fmt.Errorf("has no endpoint")
+		}
+	case RemoteBackendGitHub:
+		remote.Repo, err = NormalizeGitHubRepo(remote.Repo)
+		if err != nil {
+			return RemoteEntry{}, err
+		}
+		remote.Branch, err = NormalizePublicationBranch(remote.Branch)
+		if err != nil {
+			return RemoteEntry{}, err
+		}
 	}
 	return remote, nil
+}
+
+func NormalizeGitHubRepo(repo string) (string, error) {
+	repo = strings.TrimSpace(repo)
+	if repo == "" {
+		return "", fmt.Errorf("github repo is required")
+	}
+	parts := strings.Split(repo, "/")
+	if len(parts) != 2 {
+		return "", fmt.Errorf("github repo %q must be owner/name", repo)
+	}
+	for _, part := range parts {
+		if !validGitHubRepoSegment(part) {
+			return "", fmt.Errorf("github repo %q is invalid", repo)
+		}
+	}
+	return repo, nil
+}
+
+func validGitHubRepoSegment(segment string) bool {
+	if segment == "" || segment == "." || segment == ".." {
+		return false
+	}
+	for _, r := range segment {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func findRemoteEntry(doc RemotesDoc, id string) (RemoteEntry, bool) {
