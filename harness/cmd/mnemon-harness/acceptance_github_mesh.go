@@ -1065,8 +1065,9 @@ func ensureR1GitHubMeshBranches(ctx context.Context, repo, tokenFile string, bra
 		return err
 	}
 	store, err := githubbackend.NewPublicationStore(githubbackend.PublicationStoreConfig{
-		Repo:  repo,
-		Token: token,
+		Repo:          repo,
+		Token:         token,
+		MutativeDelay: time.Second,
 	})
 	if err != nil {
 		return err
