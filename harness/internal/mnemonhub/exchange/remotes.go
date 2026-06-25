@@ -19,10 +19,19 @@ type RemotesDoc struct {
 
 const RemoteBackendHTTP = "http"
 
+const (
+	RemoteDirectionBidirectional = "bidirectional"
+	RemoteDirectionPublish       = "publish"
+	RemoteDirectionSubscribe     = "subscribe"
+)
+
 type RemoteEntry struct {
 	// Backend selects the Remote Workspace implementation. Empty is the v1
 	// compatibility default: the first-party HTTP mnemon-hub wire.
-	Backend       string `json:"backend,omitempty"`
+	Backend string `json:"backend,omitempty"`
+	// Direction scopes how this local replica uses the remote. Empty is the v1
+	// compatibility default: bidirectional push+pull.
+	Direction     string `json:"direction,omitempty"`
 	ID            string `json:"id"`
 	Endpoint      string `json:"endpoint,omitempty"`
 	CredentialRef string `json:"credential_ref"`
@@ -31,12 +40,25 @@ type RemoteEntry struct {
 	CAFile string `json:"ca_file,omitempty"`
 }
 
+type RemotePlan struct {
+	PushTargets []RemoteEntry
+	PullSources []RemoteEntry
+}
+
 func (r RemoteEntry) NormalizedBackend() string {
 	backend := strings.TrimSpace(r.Backend)
 	if backend == "" {
 		return RemoteBackendHTTP
 	}
 	return backend
+}
+
+func (r RemoteEntry) NormalizedDirection() string {
+	direction := strings.TrimSpace(r.Direction)
+	if direction == "" {
+		return RemoteDirectionBidirectional
+	}
+	return direction
 }
 
 func validateRemoteBackend(backend string) error {
@@ -48,35 +70,149 @@ func validateRemoteBackend(backend string) error {
 	}
 }
 
+func validateRemoteDirection(direction string) error {
+	switch direction {
+	case RemoteDirectionBidirectional, RemoteDirectionPublish, RemoteDirectionSubscribe:
+		return nil
+	default:
+		return fmt.Errorf("unsupported Remote Workspace direction %q (supported: %s, %s, %s)", direction, RemoteDirectionBidirectional, RemoteDirectionPublish, RemoteDirectionSubscribe)
+	}
+}
+
 // LoadRemoteEntry resolves one remote from the registry at path: id "default" follows the doc's
-// `current` pointer. It validates schema version and the selected backend; credential presence is
-// the caller's concern (the CLI may inject a --token override).
+// `current` pointer. It validates schema version, backend, and direction; credential presence is the
+// caller's concern (the CLI may inject a --token override).
 func LoadRemoteEntry(path, id string) (RemoteEntry, error) {
-	raw, err := os.ReadFile(path)
+	doc, err := loadRemotesDoc(path)
 	if err != nil {
-		return RemoteEntry{}, fmt.Errorf("read Remote Workspace config: %w", err)
-	}
-	var doc RemotesDoc
-	if err := json.Unmarshal(raw, &doc); err != nil {
-		return RemoteEntry{}, fmt.Errorf("parse Remote Workspace config: %w", err)
-	}
-	if doc.SchemaVersion != 1 {
-		return RemoteEntry{}, fmt.Errorf("Remote Workspace config schema_version %d unsupported (want 1)", doc.SchemaVersion)
+		return RemoteEntry{}, err
 	}
 	if id == "default" && strings.TrimSpace(doc.Current) != "" {
 		id = strings.TrimSpace(doc.Current)
 	}
-	for _, remote := range doc.Remotes {
-		if remote.ID == id {
-			remote.Backend = remote.NormalizedBackend()
-			if err := validateRemoteBackend(remote.Backend); err != nil {
-				return RemoteEntry{}, fmt.Errorf("Remote Workspace %q: %w", id, err)
-			}
-			if remote.Backend == RemoteBackendHTTP && strings.TrimSpace(remote.Endpoint) == "" {
-				return RemoteEntry{}, fmt.Errorf("Remote Workspace %q has no endpoint", id)
-			}
-			return remote, nil
+	remote, ok := findRemoteEntry(doc, id)
+	if !ok {
+		return RemoteEntry{}, fmt.Errorf("Remote Workspace %q not found in %s", id, path)
+	}
+	remote, err = normalizeRemoteEntry(remote)
+	if err != nil {
+		return RemoteEntry{}, fmt.Errorf("Remote Workspace %q: %w", id, err)
+	}
+	return remote, nil
+}
+
+// LoadRemotePlan resolves the active Remote Workspace plan. Legacy configs with `current` and no
+// explicit directions keep selecting exactly the current remote. Directional configs select all
+// remotes by default so a local replica can publish to one workspace and subscribe to many sources.
+func LoadRemotePlan(path, id string) (RemotePlan, error) {
+	doc, err := loadRemotesDoc(path)
+	if err != nil {
+		return RemotePlan{}, err
+	}
+	entries, err := selectRemotePlanEntries(doc, id)
+	if err != nil {
+		return RemotePlan{}, fmt.Errorf("%w in %s", err, path)
+	}
+	plan := RemotePlan{}
+	for _, entry := range entries {
+		entry, err = normalizeRemoteEntry(entry)
+		if err != nil {
+			return RemotePlan{}, fmt.Errorf("Remote Workspace %q: %w", entry.ID, err)
+		}
+		switch entry.Direction {
+		case RemoteDirectionBidirectional:
+			plan.PushTargets = append(plan.PushTargets, entry)
+			plan.PullSources = append(plan.PullSources, entry)
+		case RemoteDirectionPublish:
+			plan.PushTargets = append(plan.PushTargets, entry)
+		case RemoteDirectionSubscribe:
+			plan.PullSources = append(plan.PullSources, entry)
 		}
 	}
-	return RemoteEntry{}, fmt.Errorf("Remote Workspace %q not found in %s", id, path)
+	if len(plan.PushTargets) > 1 {
+		return RemotePlan{}, fmt.Errorf("multiple Remote Workspace publish targets unsupported: %s", remoteIDs(plan.PushTargets))
+	}
+	return plan, nil
+}
+
+func loadRemotesDoc(path string) (RemotesDoc, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return RemotesDoc{}, fmt.Errorf("read Remote Workspace config: %w", err)
+	}
+	var doc RemotesDoc
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return RemotesDoc{}, fmt.Errorf("parse Remote Workspace config: %w", err)
+	}
+	if doc.SchemaVersion != 1 {
+		return RemotesDoc{}, fmt.Errorf("Remote Workspace config schema_version %d unsupported (want 1)", doc.SchemaVersion)
+	}
+	return doc, nil
+}
+
+func normalizeRemoteEntry(remote RemoteEntry) (RemoteEntry, error) {
+	remote.Backend = remote.NormalizedBackend()
+	if err := validateRemoteBackend(remote.Backend); err != nil {
+		return RemoteEntry{}, err
+	}
+	remote.Direction = remote.NormalizedDirection()
+	if err := validateRemoteDirection(remote.Direction); err != nil {
+		return RemoteEntry{}, err
+	}
+	if remote.Backend == RemoteBackendHTTP && strings.TrimSpace(remote.Endpoint) == "" {
+		return RemoteEntry{}, fmt.Errorf("has no endpoint")
+	}
+	return remote, nil
+}
+
+func findRemoteEntry(doc RemotesDoc, id string) (RemoteEntry, bool) {
+	for _, remote := range doc.Remotes {
+		if remote.ID == id {
+			return remote, true
+		}
+	}
+	return RemoteEntry{}, false
+}
+
+func selectRemotePlanEntries(doc RemotesDoc, id string) ([]RemoteEntry, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		id = "default"
+	}
+	if id != "default" {
+		remote, ok := findRemoteEntry(doc, id)
+		if !ok {
+			return nil, fmt.Errorf("Remote Workspace %q not found", id)
+		}
+		return []RemoteEntry{remote}, nil
+	}
+	current := strings.TrimSpace(doc.Current)
+	if current != "" && !hasExplicitRemoteDirection(doc) {
+		remote, ok := findRemoteEntry(doc, current)
+		if !ok {
+			return nil, fmt.Errorf("Remote Workspace %q not found", current)
+		}
+		return []RemoteEntry{remote}, nil
+	}
+	if len(doc.Remotes) == 0 {
+		return nil, fmt.Errorf("Remote Workspace config has no remotes")
+	}
+	return append([]RemoteEntry(nil), doc.Remotes...), nil
+}
+
+func hasExplicitRemoteDirection(doc RemotesDoc) bool {
+	for _, remote := range doc.Remotes {
+		if strings.TrimSpace(remote.Direction) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func remoteIDs(remotes []RemoteEntry) string {
+	ids := make([]string, 0, len(remotes))
+	for _, remote := range remotes {
+		ids = append(ids, remote.ID)
+	}
+	return strings.Join(ids, ", ")
 }

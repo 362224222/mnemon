@@ -200,54 +200,70 @@ func syncPushOnce() (syncPushResult, error) {
 	if len(batch.Events) == 0 {
 		return syncPushResult{}, nil
 	}
-	remote, err := resolveSyncRemote()
+	plan, err := resolveSyncRemotePlan()
 	if err != nil {
 		return syncPushResult{}, err
 	}
-	workspace, err := syncRemoteWorkspaceFor(remote)
-	if err != nil {
-		return syncPushResult{}, err
+	if len(plan.PushTargets) == 0 {
+		return syncPushResult{}, fmt.Errorf("Remote Workspace plan has no push targets")
 	}
-	resp, err := workspace.SyncPush(contract.SyncPushRequest{
-		ReplicaID: batch.ReplicaID,
-		BatchID:   exchange.PushBatchID(batch.ReplicaID, batch.Events),
-		Events:    batch.Events,
-	})
-	if err != nil {
-		return syncPushResult{}, fmt.Errorf("sync push failed: %w", err)
+	result := syncPushResult{}
+	for _, remote := range plan.PushTargets {
+		workspace, err := syncRemoteWorkspaceFor(remote)
+		if err != nil {
+			return syncPushResult{}, err
+		}
+		resp, err := workspace.SyncPush(contract.SyncPushRequest{
+			ReplicaID: batch.ReplicaID,
+			BatchID:   exchange.PushBatchID(batch.ReplicaID, batch.Events),
+			Events:    batch.Events,
+		})
+		if err != nil {
+			return syncPushResult{}, fmt.Errorf("sync push failed: %w", err)
+		}
+		if err := exchange.ApplyLocalSyncPushResponse(storePath, remote.ID, resp); err != nil {
+			return syncPushResult{}, err
+		}
+		result.accepted += len(resp.Accepted)
+		result.rejected += len(resp.Rejected)
+		result.conflicts += len(resp.Conflicts)
 	}
-	if err := exchange.ApplyLocalSyncPushResponse(storePath, remote.ID, resp); err != nil {
-		return syncPushResult{}, err
-	}
-	return syncPushResult{accepted: len(resp.Accepted), rejected: len(resp.Rejected), conflicts: len(resp.Conflicts)}, nil
+	return result, nil
 }
 
 func syncPullOnce() (syncPullResult, error) {
-	remote, err := resolveSyncRemote()
+	plan, err := resolveSyncRemotePlan()
 	if err != nil {
 		return syncPullResult{}, err
+	}
+	if len(plan.PullSources) == 0 {
+		return syncPullResult{}, fmt.Errorf("Remote Workspace plan has no pull sources")
 	}
 	storePath := resolvedSyncStorePath()
-	state, err := exchange.ReadLocalSyncPullState(storePath, remote.ID)
-	if err != nil {
-		return syncPullResult{}, err
-	}
-	workspace, err := syncRemoteWorkspaceFor(remote)
-	if err != nil {
-		return syncPullResult{}, err
-	}
-	resp, err := workspace.SyncPull(contract.SyncPullRequest{
-		ReplicaID:    state.ReplicaID,
-		RemoteCursor: state.RemoteCursor,
-	})
-	if err != nil {
-		return syncPullResult{}, fmt.Errorf("sync pull failed: %w", err)
-	}
 	catalog := app.SyncImportCatalog(syncProjectRoot(), os.Stderr)
-	if err := app.ImportLocalSyncPull(storePath, remote.ID, resp.NextCursor, resp.Events, catalog); err != nil {
-		return syncPullResult{}, err
+	result := syncPullResult{}
+	for _, remote := range plan.PullSources {
+		state, err := exchange.ReadLocalSyncPullState(storePath, remote.ID)
+		if err != nil {
+			return syncPullResult{}, err
+		}
+		workspace, err := syncRemoteWorkspaceFor(remote)
+		if err != nil {
+			return syncPullResult{}, err
+		}
+		resp, err := workspace.SyncPull(contract.SyncPullRequest{
+			ReplicaID:    state.ReplicaID,
+			RemoteCursor: state.RemoteCursor,
+		})
+		if err != nil {
+			return syncPullResult{}, fmt.Errorf("sync pull failed: %w", err)
+		}
+		if err := app.ImportLocalSyncPull(storePath, remote.ID, resp.NextCursor, resp.Events, catalog); err != nil {
+			return syncPullResult{}, err
+		}
+		result.events += len(resp.Events)
 	}
-	return syncPullResult{events: len(resp.Events)}, nil
+	return result, nil
 }
 
 type syncRemoteConfig struct {
@@ -256,6 +272,11 @@ type syncRemoteConfig struct {
 	Endpoint string
 	Token    string
 	CAFile   string
+}
+
+type syncRemotePlan struct {
+	PushTargets []syncRemoteConfig
+	PullSources []syncRemoteConfig
 }
 
 // syncRemoteWorkspaceFor builds the selected Remote Workspace backend for one resolved remote. The
@@ -279,6 +300,20 @@ func syncRemoteWorkspaceFor(remote syncRemoteConfig) (exchange.RemoteWorkspace, 
 }
 
 func resolveSyncRemote() (syncRemoteConfig, error) {
+	plan, err := resolveSyncRemotePlan()
+	if err != nil {
+		return syncRemoteConfig{}, err
+	}
+	if len(plan.PushTargets) > 0 {
+		return plan.PushTargets[0], nil
+	}
+	if len(plan.PullSources) > 0 {
+		return plan.PullSources[0], nil
+	}
+	return syncRemoteConfig{}, fmt.Errorf("Remote Workspace plan has no remotes")
+}
+
+func resolveSyncRemotePlan() (syncRemotePlan, error) {
 	if strings.TrimSpace(syncRemoteURL) != "" {
 		tokenFile := syncRemoteTokenFile
 		if tokenFile != "" {
@@ -286,19 +321,41 @@ func resolveSyncRemote() (syncRemoteConfig, error) {
 		}
 		token, err := resolveSyncToken(syncRemoteToken, tokenFile)
 		if err != nil {
-			return syncRemoteConfig{}, err
+			return syncRemotePlan{}, err
 		}
-		return syncRemoteConfig{ID: syncRemoteID, Backend: exchange.RemoteBackendHTTP, Endpoint: syncRemoteURL, Token: token, CAFile: resolvedSyncCAFile("")}, nil
+		remote := syncRemoteConfig{ID: syncRemoteID, Backend: exchange.RemoteBackendHTTP, Endpoint: syncRemoteURL, Token: token, CAFile: resolvedSyncCAFile("")}
+		return syncRemotePlan{PushTargets: []syncRemoteConfig{remote}, PullSources: []syncRemoteConfig{remote}}, nil
 	}
-	entry, err := exchange.LoadRemoteEntry(resolvedSyncRemotesPath(), syncRemoteID)
+	plan, err := exchange.LoadRemotePlan(resolvedSyncRemotesPath(), syncRemoteID)
 	if err != nil {
-		return syncRemoteConfig{}, err
+		return syncRemotePlan{}, err
 	}
+	out := syncRemotePlan{}
+	for _, entry := range plan.PushTargets {
+		remote, err := resolveSyncRemoteEntry(entry)
+		if err != nil {
+			return syncRemotePlan{}, err
+		}
+		out.PushTargets = append(out.PushTargets, remote)
+	}
+	for _, entry := range plan.PullSources {
+		remote, err := resolveSyncRemoteEntry(entry)
+		if err != nil {
+			return syncRemotePlan{}, err
+		}
+		out.PullSources = append(out.PullSources, remote)
+	}
+	return out, nil
+}
+
+func resolveSyncRemoteEntry(entry exchange.RemoteEntry) (syncRemoteConfig, error) {
 	if strings.TrimSpace(entry.CredentialRef) == "" && strings.TrimSpace(syncRemoteToken) == "" && strings.TrimSpace(syncRemoteTokenFile) == "" {
 		return syncRemoteConfig{}, fmt.Errorf("Remote Workspace %q has no credential_ref", entry.ID)
 	}
 	tokenFile := ""
-	if strings.TrimSpace(entry.CredentialRef) != "" {
+	if strings.TrimSpace(syncRemoteTokenFile) != "" {
+		tokenFile = resolveSyncPath(syncRemoteTokenFile)
+	} else if strings.TrimSpace(entry.CredentialRef) != "" {
 		tokenFile = resolveSyncPath(entry.CredentialRef)
 	}
 	token, err := resolveSyncToken(syncRemoteToken, tokenFile)

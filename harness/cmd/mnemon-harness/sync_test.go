@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -344,6 +345,54 @@ func TestSyncRemoteConfigLoadsCredentialRef(t *testing.T) {
 	}
 	if remote.ID != "workspace" || remote.Backend != exchange.RemoteBackendHTTP || remote.Endpoint != "http://127.0.0.1:8787" || remote.Token != "tok-workspace" {
 		t.Fatalf("remote config not loaded: %+v", remote)
+	}
+}
+
+func TestSyncRemotePlanLoadsDirectionalCredentials(t *testing.T) {
+	restoreSyncFlags(t)
+	root := t.TempDir()
+	writeCredential := func(id, token string) string {
+		t.Helper()
+		credRel := filepath.Join(".mnemon", "harness", "sync", "credentials", id+".token")
+		credPath := filepath.Join(root, credRel)
+		if err := os.MkdirAll(filepath.Dir(credPath), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(credPath, []byte(token+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return filepath.ToSlash(credRel)
+	}
+	pubCred := writeCredential("pub", "tok-pub")
+	subCred := writeCredential("sub", "tok-sub")
+	remotesPath := filepath.Join(root, ".mnemon", "harness", "sync", "remotes.json")
+	if err := os.WriteFile(remotesPath, []byte(fmt.Sprintf(`{
+	  "schema_version": 1,
+	  "remotes": [{
+	    "id": "pub",
+	    "direction": "publish",
+	    "endpoint": "http://127.0.0.1:8787",
+	    "credential_ref": %q
+	  }, {
+	    "id": "sub",
+	    "direction": "subscribe",
+	    "endpoint": "http://127.0.0.1:8788",
+	    "credential_ref": %q
+	  }]
+	}`+"\n", pubCred, subCred)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	syncRoot = root
+
+	plan, err := resolveSyncRemotePlan()
+	if err != nil {
+		t.Fatalf("resolve directional remote plan: %v", err)
+	}
+	if len(plan.PushTargets) != 1 || plan.PushTargets[0].ID != "pub" || plan.PushTargets[0].Token != "tok-pub" {
+		t.Fatalf("push target not resolved with its credential: %+v", plan.PushTargets)
+	}
+	if len(plan.PullSources) != 1 || plan.PullSources[0].ID != "sub" || plan.PullSources[0].Token != "tok-sub" {
+		t.Fatalf("pull source not resolved with its credential: %+v", plan.PullSources)
 	}
 }
 

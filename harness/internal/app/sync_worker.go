@@ -58,7 +58,7 @@ func RunSyncWorker(ctx context.Context, rt *runtime.Runtime, opts SyncWorkerOpti
 	}
 }
 
-// syncWorkerPass runs ONE push+pull pass against the configured current remote. Gate: when
+// syncWorkerPass runs ONE sync pass against the configured Remote Workspace plan. Gate: when
 // remotes.json does not exist, the pass is a no-op — zero sync activity without a connected remote
 // (I13), checked per pass so `sync connect` takes effect without a restart.
 func syncWorkerPass(rt *runtime.Runtime, opts SyncWorkerOptions) error {
@@ -69,18 +69,29 @@ func syncWorkerPass(rt *runtime.Runtime, opts SyncWorkerOptions) error {
 		}
 		return fmt.Errorf("stat Remote Workspace config: %w", err)
 	}
-	entry, err := exchange.LoadRemoteEntry(remotesPath, "default")
+	plan, err := exchange.LoadRemotePlan(remotesPath, "default")
 	if err != nil {
 		return err
 	}
-	remote, err := syncWorkerRemote(entry, opts)
-	if err != nil {
-		return err
+	for _, entry := range plan.PushTargets {
+		remote, err := syncWorkerRemote(entry, opts)
+		if err != nil {
+			return err
+		}
+		if err := syncWorkerPush(rt, remote, entry.ID); err != nil {
+			return err
+		}
 	}
-	if err := syncWorkerPush(rt, remote, entry.ID); err != nil {
-		return err
+	for _, entry := range plan.PullSources {
+		remote, err := syncWorkerRemote(entry, opts)
+		if err != nil {
+			return err
+		}
+		if err := syncWorkerPull(rt, remote, entry.ID, opts.Catalog); err != nil {
+			return err
+		}
 	}
-	return syncWorkerPull(rt, remote, entry.ID, opts.Catalog)
+	return nil
 }
 
 // syncWorkerRemote builds the selected Remote Workspace backend from the remote entry. Today only

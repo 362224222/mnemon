@@ -63,6 +63,11 @@ func startHub(t *testing.T, principals map[string]contract.ActorID, scopes []con
 
 func connectRemote(t *testing.T, root, endpoint, token string) {
 	t.Helper()
+	connectRemoteWithDirection(t, root, endpoint, token, "")
+}
+
+func connectRemoteWithDirection(t *testing.T, root, endpoint, token, direction string) {
+	t.Helper()
 	credRel := filepath.Join(".mnemon", "harness", "sync", "credentials", "hub.token")
 	credPath := filepath.Join(root, credRel)
 	if err := os.MkdirAll(filepath.Dir(credPath), 0o700); err != nil {
@@ -72,7 +77,11 @@ func connectRemote(t *testing.T, root, endpoint, token string) {
 		t.Fatal(err)
 	}
 	remotesPath := filepath.Join(root, ".mnemon", "harness", "sync", "remotes.json")
-	doc := fmt.Sprintf(`{"schema_version":1,"current":"hub","remotes":[{"id":"hub","endpoint":%q,"credential_ref":%q}]}`, endpoint, filepath.ToSlash(credRel))
+	directionField := ""
+	if strings.TrimSpace(direction) != "" {
+		directionField = fmt.Sprintf(`,"direction":%q`, direction)
+	}
+	doc := fmt.Sprintf(`{"schema_version":1,"current":"hub","remotes":[{"id":"hub"%s,"endpoint":%q,"credential_ref":%q}]}`, directionField, endpoint, filepath.ToSlash(credRel))
 	if err := os.WriteFile(remotesPath, []byte(doc+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -236,6 +245,80 @@ func TestSyncWorkerPushPullRoundTrip(t *testing.T) {
 	}
 	if st, _ := hub.Status("replica-local@team"); st.HubEventsReceived != 2 {
 		t.Fatalf("second pass must not re-append at the hub: %+v", st)
+	}
+}
+
+func TestSyncWorkerPublishOnlyDoesNotPull(t *testing.T) {
+	root := t.TempDir()
+	rt := openServingRuntime(t, root)
+	progressRef := contract.ResourceRef{Kind: "progress_digest", ID: "project"}
+	endpoint, hub, _ := startHub(t, map[string]contract.ActorID{
+		"tok-local": "replica-local@team",
+		"tok-other": "replica-other@team",
+	}, []contract.ResourceRef{progressRef})
+	connectRemoteWithDirection(t, root, endpoint, "tok-local", "publish")
+
+	observeProgress(t, rt, "m-publish-only", "publish-only local progress reaches the hub")
+	foreign := foreignProgressMaterial("dec-publish-only-foreign", "remote-publish-only", "publish-only must not import this")
+	if resp, err := hub.Push("replica-other@team", contract.SyncPushRequest{
+		ReplicaID: "other-replica", BatchID: "seed-publish-only", Events: testSyncedEvents(t, foreign),
+	}); err != nil || len(resp.Accepted) != 1 {
+		t.Fatalf("seed foreign material: %+v err=%v", resp, err)
+	}
+
+	if err := syncWorkerPass(rt, SyncWorkerOptions{ProjectRoot: root}); err != nil {
+		t.Fatalf("publish-only worker pass: %v", err)
+	}
+	if pending, _ := rt.PendingSyncedEvents(); len(pending) != 0 {
+		t.Fatalf("publish-only pass must push local synced events, got %+v", pending)
+	}
+	if st, _ := hub.Status("replica-local@team"); st.HubEventsReceived != 2 {
+		t.Fatalf("publish-only pass must append local event to hub without duplicate work: %+v", st)
+	}
+	_, fields, err := rt.Resource(progressRef)
+	if err != nil {
+		t.Fatalf("read progress: %v", err)
+	}
+	content, _ := fields["content"].(string)
+	if strings.Contains(content, "publish-only must not import this") {
+		t.Fatalf("publish-only pass must not pull remote content:\n%s", content)
+	}
+}
+
+func TestSyncWorkerSubscribeOnlyDoesNotPush(t *testing.T) {
+	root := t.TempDir()
+	rt := openServingRuntime(t, root)
+	progressRef := contract.ResourceRef{Kind: "progress_digest", ID: "project"}
+	endpoint, hub, _ := startHub(t, map[string]contract.ActorID{
+		"tok-local": "replica-local@team",
+		"tok-other": "replica-other@team",
+	}, []contract.ResourceRef{progressRef})
+	connectRemoteWithDirection(t, root, endpoint, "tok-local", "subscribe")
+
+	observeProgress(t, rt, "m-subscribe-only", "subscribe-only local progress stays pending")
+	foreign := foreignProgressMaterial("dec-subscribe-only-foreign", "remote-subscribe-only", "subscribe-only imports this")
+	if resp, err := hub.Push("replica-other@team", contract.SyncPushRequest{
+		ReplicaID: "other-replica", BatchID: "seed-subscribe-only", Events: testSyncedEvents(t, foreign),
+	}); err != nil || len(resp.Accepted) != 1 {
+		t.Fatalf("seed foreign material: %+v err=%v", resp, err)
+	}
+
+	if err := syncWorkerPass(rt, SyncWorkerOptions{ProjectRoot: root}); err != nil {
+		t.Fatalf("subscribe-only worker pass: %v", err)
+	}
+	if pending, _ := rt.PendingSyncedEvents(); len(pending) != 1 {
+		t.Fatalf("subscribe-only pass must not push local synced events, got %+v", pending)
+	}
+	if st, _ := hub.Status("replica-local@team"); st.HubEventsReceived != 1 {
+		t.Fatalf("subscribe-only pass must not append local event to hub: %+v", st)
+	}
+	_, fields, err := rt.Resource(progressRef)
+	if err != nil {
+		t.Fatalf("read progress: %v", err)
+	}
+	content, _ := fields["content"].(string)
+	if !strings.Contains(content, "subscribe-only imports this") {
+		t.Fatalf("subscribe-only pass must pull remote content:\n%s", content)
 	}
 }
 
