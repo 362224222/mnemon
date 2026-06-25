@@ -12,6 +12,7 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemonhub/exchange"
+	githubbackend "github.com/mnemon-dev/mnemon/harness/internal/mnemonhub/exchange/backend/github"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 	"github.com/spf13/cobra"
 )
@@ -330,6 +331,19 @@ func syncRemoteWorkspaceFor(remote syncRemoteConfig) (exchange.RemoteWorkspace, 
 			Token:         remote.Token,
 			CAFile:        remote.CAFile,
 			AllowInsecure: syncAllowInsecure,
+		})
+	case exchange.RemoteBackendGitHub:
+		store, err := githubbackend.NewPublicationStore(githubbackend.PublicationStoreConfig{
+			Repo:  remote.Repo,
+			Token: remote.Token,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return githubbackend.New(githubbackend.Config{
+			Store:  store,
+			Repo:   remote.Repo,
+			Branch: remote.Branch,
 		})
 	default:
 		return nil, fmt.Errorf("Remote Workspace %q: unsupported backend %q", remote.ID, backend)

@@ -100,9 +100,13 @@ func (b *Backend) SyncPull(req contract.SyncPullRequest) (contract.SyncPullRespo
 	if replicaID == "" {
 		return contract.SyncPullResponse{}, fmt.Errorf("sync pull requires replica_id")
 	}
-	scopes, err := contract.ClampRefs(contract.ActorID("github-publication"), b.scopes, req.Scopes)
-	if err != nil {
-		return contract.SyncPullResponse{}, fmt.Errorf("sync scope: %w", err)
+	scopes := append([]contract.ResourceRef(nil), req.Scopes...)
+	if len(b.scopes) > 0 {
+		var err error
+		scopes, err = contract.ClampRefs(contract.ActorID("github-publication"), b.scopes, req.Scopes)
+		if err != nil {
+			return contract.SyncPullResponse{}, fmt.Errorf("sync scope: %w", err)
+		}
 	}
 	list, err := b.store.ListEvents(context.Background(), b.branch, exchange.PublicationEventRoot, req.RemoteCursor)
 	if err != nil {
@@ -127,7 +131,7 @@ func (b *Backend) SyncPull(req contract.SyncPullRequest) (contract.SyncPullRespo
 			resp.Diagnostics = append(resp.Diagnostics, eventExchangeResult(env, "invalid", diagnostic))
 			continue
 		}
-		if !refAllowed(scopes, material.ResourceRef) {
+		if len(scopes) > 0 && !refAllowed(scopes, material.ResourceRef) {
 			resp.Diagnostics = append(resp.Diagnostics, eventExchangeResult(env, "rejected", fmt.Sprintf("ref %s/%s is outside configured publication scope", material.ResourceRef.Kind, material.ResourceRef.ID)))
 			continue
 		}
