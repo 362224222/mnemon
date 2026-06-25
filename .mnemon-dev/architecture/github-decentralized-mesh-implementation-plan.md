@@ -96,6 +96,16 @@ mnemon-harness acceptance r1-github-mesh-task-suite \
   --github-token-file <token-file>
 ```
 
+When `--github-branch-prefix` is omitted, the runner must create run-scoped publication branches:
+
+```text
+mnemon/acceptance/<run-id>/agent-a
+mnemon/acceptance/<run-id>/agent-b
+...
+```
+
+Fixed branches such as `mnemon/agent-a` through `mnemon/agent-e` are valid for manual operator smoke tests, but not the default real appserver acceptance path because historical publication entries can pollute a fresh run.
+
 Known open evidence:
 
 - The real Codex appserver GitHub mesh suite is runnable, but still requires a GitHub token file and a usable Codex appserver environment.
@@ -787,7 +797,7 @@ Topology:
 5 isolated runtime workspaces
 5 isolated local mnemond stores
 1 shared GitHub repo: mnemon-dev/mnemon-teamwork-example
-5 publication branches
+5 run-scoped publication branches
 0 central active mnemon-hub
 0 shared governed.db
 ```
@@ -800,6 +810,8 @@ Isolation requirements:
 - No appserver reads or writes another appserver's local Mnemon workspace.
 - Cross-agent visibility happens only after publication branch pull/import.
 - The report must include local store paths and prove they are distinct.
+- The default branch prefix is run-scoped; the runner initializes missing branches from `main` before local sync starts.
+- Reusing long-lived branches is allowed only when explicitly requested with `--github-branch-prefix`.
 
 Baseline 5-node Teamwork-ReAct scenario:
 

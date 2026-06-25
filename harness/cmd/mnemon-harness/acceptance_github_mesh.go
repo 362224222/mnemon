@@ -15,6 +15,7 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemonhub/exchange"
+	githubbackend "github.com/mnemon-dev/mnemon/harness/internal/mnemonhub/exchange/backend/github"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 	"github.com/spf13/cobra"
 )
@@ -73,7 +74,7 @@ func init() {
 	acceptanceR1GitHubMeshCmd.Flags().DurationVar(&acceptanceTurnTimeout, "turn-timeout", 5*time.Minute, "timeout per real agent turn")
 	acceptanceR1GitHubMeshCmd.Flags().StringVar(&acceptanceGitHubRepo, "github-repo", "mnemon-dev/mnemon-teamwork-example", "GitHub Remote Workspace repository (owner/name)")
 	acceptanceR1GitHubMeshCmd.Flags().StringVar(&acceptanceGitHubTokenFile, "github-token-file", "", "GitHub token file for publication store access")
-	acceptanceR1GitHubMeshCmd.Flags().StringVar(&acceptanceGitHubBranchPrefix, "github-branch-prefix", "mnemon/agent-", "GitHub publication branch prefix")
+	acceptanceR1GitHubMeshCmd.Flags().StringVar(&acceptanceGitHubBranchPrefix, "github-branch-prefix", "", "GitHub publication branch prefix; empty uses a run-scoped acceptance prefix")
 	acceptanceR1GitHubMeshCmd.Flags().StringArrayVar(&acceptanceGitHubScenarios, "scenario", nil, "natural scenario to run; repeatable")
 	acceptanceCmd.AddCommand(acceptanceR1GitHubMeshCmd)
 }
@@ -105,10 +106,8 @@ func runR1GitHubMeshAcceptance(ctx context.Context, opts r1GitHubMeshAcceptanceO
 	if opts.Repo == "" {
 		opts.Repo = "mnemon-dev/mnemon-teamwork-example"
 	}
-	if opts.BranchPrefix == "" {
-		opts.BranchPrefix = "mnemon/agent-"
-	}
 	started := time.Now().UTC().Truncate(time.Second)
+	branchPrefix := r1GitHubMeshBranchPrefix(opts.BranchPrefix, started)
 	runRoot := opts.RunRoot
 	if runRoot == "" {
 		runRoot = filepath.Join(".testdata", "r1-github-mesh-task-suite", started.Format("20060102T150405Z"))
@@ -165,6 +164,12 @@ func runR1GitHubMeshAcceptance(ctx context.Context, opts r1GitHubMeshAcceptanceO
 		report.Status = "blocked"
 		return report, err
 	}
+	branches := r1GitHubMeshBranches(branchPrefix, opts.Agents)
+	if err := ensureR1GitHubMeshBranches(ctx, opts.Repo, tokenFile, branches); err != nil {
+		addR1Error(&report, err)
+		report.Status = "blocked"
+		return report, err
+	}
 	binDir, err := installAcceptanceHarnessBinary(runRoot)
 	if err != nil {
 		addR1Error(&report, err)
@@ -175,8 +180,9 @@ func runR1GitHubMeshAcceptance(ctx context.Context, opts r1GitHubMeshAcceptanceO
 	report.Artifacts["codex_home_source"] = sourceCodexHome
 	report.Artifacts["github_repo"] = opts.Repo
 	report.Artifacts["github_token_file"] = tokenFile
+	report.Artifacts["github_branch_prefix"] = branchPrefix
 
-	agents, err := setupR1CodexGitHubMeshAgents(ctx, runRoot, binDir, opts.Repo, tokenFile, opts.BranchPrefix, opts.Agents, sourceCodexHome)
+	agents, err := setupR1CodexGitHubMeshAgents(ctx, runRoot, binDir, opts.Repo, tokenFile, branchPrefix, opts.Agents, sourceCodexHome)
 	if err != nil {
 		addR1Error(&report, err)
 		report.Status = "blocked"
@@ -758,6 +764,46 @@ func r1GitHubMeshBranches(prefix string, count int) []string {
 		out = append(out, prefix+suffix)
 	}
 	return out
+}
+
+func r1GitHubMeshBranchPrefix(prefix string, started time.Time) string {
+	prefix = strings.TrimSpace(prefix)
+	if prefix != "" {
+		return prefix
+	}
+	return "mnemon/acceptance/" + started.UTC().Format("20060102T150405Z") + "/agent-"
+}
+
+func ensureR1GitHubMeshBranches(ctx context.Context, repo, tokenFile string, branches []string) error {
+	token, err := readR1GitHubMeshToken(tokenFile)
+	if err != nil {
+		return err
+	}
+	store, err := githubbackend.NewPublicationStore(githubbackend.PublicationStoreConfig{
+		Repo:  repo,
+		Token: token,
+	})
+	if err != nil {
+		return err
+	}
+	for _, branch := range branches {
+		if err := store.EnsureBranch(ctx, branch, "main"); err != nil {
+			return fmt.Errorf("ensure GitHub branch %q: %w", branch, err)
+		}
+	}
+	return nil
+}
+
+func readR1GitHubMeshToken(tokenFile string) (string, error) {
+	body, err := os.ReadFile(tokenFile)
+	if err != nil {
+		return "", fmt.Errorf("read github token file: %w", err)
+	}
+	token := strings.TrimSpace(string(body))
+	if token == "" {
+		return "", fmt.Errorf("github token file is empty")
+	}
+	return token, nil
 }
 
 func buildR1GitHubMeshSyncReport(repo string, agents []r1CodexSyncAgent) *r1CodexSyncReport {

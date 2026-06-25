@@ -177,6 +177,50 @@ func (s *GitHubPublicationStore) WriteFile(ctx context.Context, branch string, p
 	return nil
 }
 
+func (s *GitHubPublicationStore) EnsureBranch(ctx context.Context, branch string, baseBranch string) error {
+	branch, err := exchange.NormalizePublicationBranch(branch)
+	if err != nil {
+		return err
+	}
+	baseBranch, err = normalizeGitHubBranchName(baseBranch)
+	if err != nil {
+		return fmt.Errorf("base branch: %w", err)
+	}
+	if baseBranch == "" {
+		baseBranch = "main"
+	}
+	if _, err := s.branchHead(ctx, branch); err == nil {
+		return nil
+	} else if apiErr, ok := err.(*githubAPIError); !ok || apiErr.Status != http.StatusNotFound {
+		return err
+	}
+	baseSHA, err := s.branchHead(ctx, baseBranch)
+	if err != nil {
+		return fmt.Errorf("read base branch %q: %w", baseBranch, err)
+	}
+	if err := s.pauseBeforeMutation(ctx); err != nil {
+		return err
+	}
+	req := githubCreateRefRequest{
+		Ref: "refs/heads/" + branch,
+		SHA: baseSHA,
+	}
+	status, err := s.do(ctx, http.MethodPost, "/repos/"+s.owner+"/"+s.repo+"/git/refs", nil, req, nil)
+	if err != nil {
+		if apiErr, ok := err.(*githubAPIError); ok && apiErr.Status == http.StatusUnprocessableEntity {
+			if _, headErr := s.branchHead(ctx, branch); headErr == nil {
+				return nil
+			}
+		}
+		return err
+	}
+	if status != http.StatusCreated {
+		return fmt.Errorf("github branch create returned status %d", status)
+	}
+	s.lastWrite = time.Now()
+	return nil
+}
+
 type githubFile struct {
 	body []byte
 	sha  string
@@ -200,6 +244,11 @@ type githubPutFileRequest struct {
 	Content string `json:"content"`
 	SHA     string `json:"sha,omitempty"`
 	Branch  string `json:"branch"`
+}
+
+type githubCreateRefRequest struct {
+	Ref string `json:"ref"`
+	SHA string `json:"sha"`
 }
 
 type githubRefResponse struct {
@@ -411,6 +460,25 @@ func normalizeGitHubPublicationFileRef(branch, path string) (string, string, err
 		return "", "", err
 	}
 	return branch, path, nil
+}
+
+func normalizeGitHubBranchName(branch string) (string, error) {
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		return "", nil
+	}
+	if strings.Contains(branch, "\\") || strings.HasPrefix(branch, "/") {
+		return "", fmt.Errorf("branch %q is invalid", branch)
+	}
+	for _, part := range strings.Split(branch, "/") {
+		if part == "" || part == "." || part == ".." {
+			return "", fmt.Errorf("branch %q is invalid", branch)
+		}
+	}
+	if pathpkg.Clean(branch) != branch {
+		return "", fmt.Errorf("branch %q is invalid", branch)
+	}
+	return branch, nil
 }
 
 func normalizeGitHubPublicationEventPrefix(prefix string) (string, error) {

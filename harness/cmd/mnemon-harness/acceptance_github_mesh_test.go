@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemonhub/exchange"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
@@ -20,6 +21,27 @@ func TestR1GitHubMeshBranchesDefaultShape(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("branches = %v, want %v", got, want)
 		}
+	}
+}
+
+func TestR1GitHubMeshBranchPrefixDefaultsToRunScopedBranches(t *testing.T) {
+	started := time.Date(2026, 6, 25, 18, 57, 20, 0, time.UTC)
+	prefix := r1GitHubMeshBranchPrefix("", started)
+	if prefix != "mnemon/acceptance/20260625T185720Z/agent-" {
+		t.Fatalf("prefix = %q, want run-scoped acceptance prefix", prefix)
+	}
+	got := r1GitHubMeshBranches(prefix, 2)
+	want := []string{
+		"mnemon/acceptance/20260625T185720Z/agent-a",
+		"mnemon/acceptance/20260625T185720Z/agent-b",
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("branches = %v, want %v", got, want)
+		}
+	}
+	if explicit := r1GitHubMeshBranchPrefix("mnemon/agent-", started); explicit != "mnemon/agent-" {
+		t.Fatalf("explicit prefix = %q, want unchanged", explicit)
 	}
 }
 

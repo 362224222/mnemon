@@ -1336,7 +1336,7 @@ Real appserver acceptance:
 5 isolated runtime workspaces
 5 isolated local mnemond stores
 1 shared GitHub repo: mnemon-dev/mnemon-teamwork-example
-5 publication branches
+5 run-scoped publication branches
 0 central mnemon-hub
 0 shared governed.db
 ```
@@ -1347,6 +1347,8 @@ Isolation requirements:
 - each `mnemond` has its own local store;
 - each appserver has its own runtime workspace;
 - cross-agent visibility only happens through publication branch pull/import.
+- default real acceptance branches are `mnemon/acceptance/<run-id>/agent-*` and are initialized from `main` before local sync starts.
+- long-lived branches such as `mnemon/agent-a` are explicit operator smoke-test inputs, not the default acceptance isolation model.
 
 Scenario:
 

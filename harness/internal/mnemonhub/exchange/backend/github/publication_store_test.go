@@ -106,6 +106,36 @@ func TestGitHubPublicationStoreListEventsUsesBranchHeadCursor(t *testing.T) {
 	}
 }
 
+func TestGitHubPublicationStoreEnsureBranchCreatesMissingBranchFromMain(t *testing.T) {
+	fake := newFakeGitHubPublicationAPI(t)
+	fake.refs["main"] = "main-sha"
+	fake.missingRefs["mnemon/acceptance/run-1/agent-a"] = true
+	store, err := NewPublicationStore(PublicationStoreConfig{
+		Repo:       "mnemon-dev/mnemon-teamwork-example",
+		BaseURL:    fake.server.URL,
+		HTTPClient: fake.server.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.EnsureBranch(context.Background(), "mnemon/acceptance/run-1/agent-a", "main"); err != nil {
+		t.Fatalf("ensure branch: %v", err)
+	}
+	if fake.creates != 1 {
+		t.Fatalf("creates = %d, want one branch create", fake.creates)
+	}
+	if got := fake.refs["mnemon/acceptance/run-1/agent-a"]; got != "main-sha" {
+		t.Fatalf("created branch sha = %q, want main-sha", got)
+	}
+	if err := store.EnsureBranch(context.Background(), "mnemon/acceptance/run-1/agent-a", "main"); err != nil {
+		t.Fatalf("ensure branch again: %v", err)
+	}
+	if fake.creates != 1 {
+		t.Fatalf("idempotent ensure must not recreate branch, creates=%d", fake.creates)
+	}
+}
+
 func TestGitHubPublicationStoreLiveGated(t *testing.T) {
 	if os.Getenv("MNEMON_GITHUB_LIVE") != "1" {
 		t.Skip("set MNEMON_GITHUB_LIVE=1 to run the real GitHub publication store smoke test")
@@ -145,11 +175,14 @@ func TestGitHubPublicationStoreLiveGated(t *testing.T) {
 }
 
 type fakeGitHubPublicationAPI struct {
-	server  *httptest.Server
-	files   map[string]fakeGitHubFile
-	head    string
-	puts    int
-	lastSHA string
+	server      *httptest.Server
+	files       map[string]fakeGitHubFile
+	refs        map[string]string
+	missingRefs map[string]bool
+	head        string
+	puts        int
+	creates     int
+	lastSHA     string
 }
 
 type fakeGitHubFile struct {
@@ -159,7 +192,12 @@ type fakeGitHubFile struct {
 
 func newFakeGitHubPublicationAPI(t *testing.T) *fakeGitHubPublicationAPI {
 	t.Helper()
-	fake := &fakeGitHubPublicationAPI{files: map[string]fakeGitHubFile{}, head: "head-1"}
+	fake := &fakeGitHubPublicationAPI{
+		files:       map[string]fakeGitHubFile{},
+		refs:        map[string]string{},
+		missingRefs: map[string]bool{},
+		head:        "head-1",
+	}
 	fake.server = httptest.NewServer(http.HandlerFunc(fake.handle))
 	t.Cleanup(fake.server.Close)
 	return fake
@@ -178,7 +216,34 @@ func (f *fakeGitHubPublicationAPI) handle(w http.ResponseWriter, r *http.Request
 	tail := strings.TrimPrefix(r.URL.Path, prefix)
 	switch {
 	case r.Method == http.MethodGet && strings.HasPrefix(tail, "git/ref/heads/"):
-		writeJSON(w, http.StatusOK, map[string]any{"object": map[string]any{"sha": f.head}})
+		branch := strings.TrimPrefix(tail, "git/ref/heads/")
+		if f.missingRefs[branch] {
+			writeJSON(w, http.StatusNotFound, map[string]any{"message": "ref not found"})
+			return
+		}
+		sha := f.refs[branch]
+		if sha == "" {
+			sha = f.head
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"object": map[string]any{"sha": sha}})
+	case r.Method == http.MethodPost && tail == "git/refs":
+		var req struct {
+			Ref string `json:"ref"`
+			SHA string `json:"sha"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"message": err.Error()})
+			return
+		}
+		branch := strings.TrimPrefix(req.Ref, "refs/heads/")
+		if branch == req.Ref || branch == "" || req.SHA == "" {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"message": "invalid ref"})
+			return
+		}
+		delete(f.missingRefs, branch)
+		f.refs[branch] = req.SHA
+		f.creates++
+		writeJSON(w, http.StatusCreated, map[string]any{"ref": req.Ref, "object": map[string]any{"sha": req.SHA}})
 	case strings.HasPrefix(tail, "contents/"):
 		path := strings.TrimPrefix(tail, "contents/")
 		branch := r.URL.Query().Get("ref")
