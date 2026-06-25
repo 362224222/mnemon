@@ -223,6 +223,9 @@ func runR1GitHubMeshAcceptance(ctx context.Context, opts r1GitHubMeshAcceptanceO
 		}
 	}
 	addR1Assertion(&report, "github-mesh 5/5 appservers start/init", len(report.Agents) == opts.Agents, fmt.Sprintf("started=%d requested=%d", len(report.Agents), opts.Agents))
+	if err := exerciseR1GitHubMeshLifecycle(ctx, &report, agents); err != nil {
+		addR1Error(&report, err)
+	}
 
 	run := r1GitHubMeshRun{
 		ctx:    ctx,
@@ -644,6 +647,66 @@ func setupR1CodexGitHubMeshAgents(ctx context.Context, runRoot, binDir, repo, to
 		agents = append(agents, agent)
 	}
 	return agents, nil
+}
+
+func exerciseR1GitHubMeshLifecycle(ctx context.Context, report *r1CodexAcceptanceReport, agents []r1CodexSyncAgent) error {
+	if report == nil || report.Sync == nil || len(agents) < 5 {
+		return nil
+	}
+	target := &agents[3]
+	branch := report.Sync.BranchByAgent[target.principal]
+	report.Sync.Lifecycle = append(report.Sync.Lifecycle, r1SyncLifecycleReport{
+		At:        time.Now().UTC().Format(time.RFC3339),
+		Principal: target.principal,
+		Action:    "pause_local_mnemond",
+		Result:    "requested",
+		Branch:    branch,
+		Detail:    "cancel one isolated Local Mnemon before teamwork turns; appserver remains initialized",
+	})
+	if target.localCancel == nil {
+		addR1Assertion(report, "github-mesh local mnemond pause/restart exercised", false, "target has no localCancel")
+		return fmt.Errorf("%s has no local mnemond cancel function", target.principal)
+	}
+	target.localCancel()
+	if target.localErr != nil {
+		select {
+		case <-target.localErr:
+		case <-time.After(5 * time.Second):
+			addR1Assertion(report, "github-mesh local mnemond pause observed", false, "timeout waiting for local mnemond stop")
+			return fmt.Errorf("%s local mnemond did not stop within timeout", target.principal)
+		}
+	}
+	loaded, err := access.LoadBindingFile(target.workspace, filepath.Join(target.workspace, access.DefaultBindingFile))
+	if err != nil {
+		addR1Assertion(report, "github-mesh local mnemond restart loads bindings", false, err.Error())
+		return err
+	}
+	addr := strings.TrimPrefix(target.localURL, "http://")
+	localCtx, cancel := context.WithCancel(ctx)
+	localErr := make(chan error, 1)
+	go func(workspace, addr string, loaded access.LoadedBindings) {
+		localErr <- app.RunLocalHTTPServerWithBindings(localCtx, addr, filepath.Join(workspace, runtime.DefaultStorePath), loaded, app.ServeOptions{
+			ProjectRoot:  workspace,
+			SyncInterval: 100 * time.Millisecond,
+		}, io.Discard)
+	}(target.workspace, addr, loaded)
+	target.localCancel = cancel
+	target.localErr = localErr
+	if err := waitR1LocalReady(ctx, target.r1CodexAgent, target.localURL, 10*time.Second); err != nil {
+		cancel()
+		addR1Assertion(report, "github-mesh local mnemond pause/restart exercised", false, err.Error())
+		return err
+	}
+	report.Sync.Lifecycle = append(report.Sync.Lifecycle, r1SyncLifecycleReport{
+		At:        time.Now().UTC().Format(time.RFC3339),
+		Principal: target.principal,
+		Action:    "restart_local_mnemond",
+		Result:    "ready",
+		Branch:    branch,
+		Detail:    "restarted the same isolated Local Mnemon store/workspace and configured GitHub publication branch",
+	})
+	addR1Assertion(report, "github-mesh local mnemond pause/restart exercised", true, fmt.Sprintf("principal=%s branch=%s", target.principal, branch))
+	return nil
 }
 
 func writeR1GitHubMeshRemotes(workspace, repo, tokenFile string, branches []string, self int) error {

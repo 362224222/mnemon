@@ -160,6 +160,7 @@ type r1CodexSyncReport struct {
 	RuntimeWorkspaces    []string                    `json:"runtime_workspace_paths,omitempty"`
 	LocalStorePaths      []string                    `json:"local_mnemond_store_paths,omitempty"`
 	AllowedEventSubjects []string                    `json:"allowed_event_subjects"`
+	Lifecycle            []r1SyncLifecycleReport     `json:"lifecycle,omitempty"`
 	Source               string                      `json:"source"`
 	Target               string                      `json:"target"`
 	Agents               []r1CodexAgentReport        `json:"agents"`
@@ -167,6 +168,15 @@ type r1CodexSyncReport struct {
 	SourceLedger         map[string]int              `json:"source_ledger,omitempty"`
 	TargetLedger         map[string]int              `json:"target_ledger,omitempty"`
 	Artifacts            map[string]string           `json:"artifacts,omitempty"`
+}
+
+type r1SyncLifecycleReport struct {
+	At        string `json:"at"`
+	Principal string `json:"principal"`
+	Action    string `json:"action"`
+	Result    string `json:"result"`
+	Branch    string `json:"branch,omitempty"`
+	Detail    string `json:"detail,omitempty"`
 }
 
 type r1AcceptanceAssertion struct {
