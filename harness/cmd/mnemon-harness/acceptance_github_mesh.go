@@ -239,6 +239,7 @@ func runR1GitHubMeshAcceptance(ctx context.Context, opts r1GitHubMeshAcceptanceO
 			addR1Error(&report, err)
 		}
 	}
+	run.addPostScenarioAssertions()
 	obs, obsErr := observeAcceptanceRun(runRoot, 1000)
 	if obsErr == nil {
 		report.Observability = &obs
@@ -406,8 +407,18 @@ func (s r1GitHubMeshRun) runScenario(name string) error {
 	naturalMessages := r1GitHubMeshPromptKindCount(s.report.RunnerContract, "natural_user_message:"+name)
 	workerWakes := r1GitHubMeshPromptKindCount(s.report.RunnerContract, "worker_wake:"+name)
 	integrationPrompts := r1GitHubMeshPromptKindCount(s.report.RunnerContract, "integration:"+name)
-	passed := participants >= 2 && replans >= 2 && naturalMessages == len(entries) && integrationPrompts >= 1 && s.report.RunnerContract.DirectWorkerBusinessPrompts == 0
-	addR1Assertion(s.report, "github-mesh "+name+" team-shaped multi-round evidence", passed, fmt.Sprintf("participants=%d rounds=%d natural=%d worker_wakes=%d integration=%d actors=%v", participants, replans, naturalMessages, workerWakes, integrationPrompts, counts))
+	assignments := r1GitHubMeshKindTotal(counts, "assignment")
+	progress := r1GitHubMeshKindTotal(counts, "progress_digest")
+	signals := r1GitHubMeshKindTotal(counts, "teamwork_signal")
+	intents := r1GitHubMeshKindTotal(counts, "project_intent")
+	passed := participants >= 2 &&
+		replans >= 2 &&
+		naturalMessages == len(entries) &&
+		integrationPrompts >= 1 &&
+		s.report.RunnerContract.DirectWorkerBusinessPrompts == 0 &&
+		assignments >= 1 &&
+		progress >= 1
+	addR1Assertion(s.report, "github-mesh "+name+" team-shaped multi-round evidence", passed, fmt.Sprintf("participants=%d rounds=%d natural=%d worker_wakes=%d integration=%d assignments=%d progress_digest=%d teamwork_signal=%d project_intent=%d actors=%v", participants, replans, naturalMessages, workerWakes, integrationPrompts, assignments, progress, signals, intents, counts))
 	s.report.Scenarios = append(s.report.Scenarios, r1TaskSimScenarioReport{
 		Name:   name,
 		Status: statusFromBool(passed),
@@ -424,12 +435,36 @@ func (s r1GitHubMeshRun) runScenario(name string) error {
 			"direct_worker_business":    s.report.RunnerContract.DirectWorkerBusinessPrompts,
 			"shared_appserver_threads":  r1GitHubMeshThreadIDs(s.agents),
 			"cross_scenario_mnemon_ctx": true,
+			"actor_event_counts":        counts,
+			"assignment_events":         assignments,
+			"progress_digest_events":    progress,
+			"teamwork_signal_events":    signals,
+			"project_intent_events":     intents,
 		},
 	})
 	if !passed {
 		return fmt.Errorf("github mesh scenario %s did not produce team-shaped multi-round evidence", name)
 	}
 	return nil
+}
+
+func (s r1GitHubMeshRun) addPostScenarioAssertions() {
+	profileCounts := r1GitHubMeshLedgerCountsByAgent(s.agents, "agent_profile")
+	refreshed := false
+	for _, count := range profileCounts {
+		if count > len(s.agents) {
+			refreshed = true
+			break
+		}
+	}
+	addR1Assertion(s.report, "github-mesh profiles refresh during work", refreshed, fmt.Sprintf("agent_profile_counts=%v initial_agents=%d", profileCounts, len(s.agents)))
+	if s.report.Sync != nil {
+		if s.report.Raw == nil {
+			s.report.Raw = map[string]json.RawMessage{}
+		}
+		raw, _ := json.Marshal(profileCounts)
+		s.report.Raw["github_mesh:profile_counts_after_scenarios"] = raw
+	}
 }
 
 type r1GitHubMeshScenarioEntry struct {
@@ -510,6 +545,22 @@ func r1GitHubMeshPromptKindCount(contract *r1RunnerContractReport, kind string) 
 		}
 	}
 	return count
+}
+
+func r1GitHubMeshKindTotal(counts map[string]map[string]int, kind string) int {
+	total := 0
+	for _, byKind := range counts {
+		total += byKind[kind]
+	}
+	return total
+}
+
+func r1GitHubMeshLedgerCountsByAgent(agents []r1CodexSyncAgent, kind string) map[string]int {
+	out := make(map[string]int, len(agents))
+	for _, agent := range agents {
+		out[agent.principal] = countR1Ledger(agent.localURL, agent.r1CodexAgent)[kind]
+	}
+	return out
 }
 
 func r1GitHubMeshThreadIDs(agents []r1CodexSyncAgent) map[string]string {

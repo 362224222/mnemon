@@ -167,3 +167,19 @@ func TestR1GitHubMeshPromptRoundsCountsScenarioPrompts(t *testing.T) {
 		t.Fatalf("worker wake prompt count = %d, want 1", got)
 	}
 }
+
+func TestR1GitHubMeshKindTotalCountsGovernedEvents(t *testing.T) {
+	counts := map[string]map[string]int{
+		"codex-01@project": {"assignment": 2, "progress_digest": 1},
+		"codex-02@project": {"assignment": 1, "teamwork_signal": 1},
+	}
+	if got := r1GitHubMeshKindTotal(counts, "assignment"); got != 3 {
+		t.Fatalf("assignment total = %d, want 3", got)
+	}
+	if got := r1GitHubMeshKindTotal(counts, "progress_digest"); got != 1 {
+		t.Fatalf("progress total = %d, want 1", got)
+	}
+	if got := r1GitHubMeshKindTotal(counts, "project_intent"); got != 0 {
+		t.Fatalf("missing kind total = %d, want 0", got)
+	}
+}
