@@ -26,21 +26,21 @@ func TestGitHubPublicationStorePutEventCreateAndIdempotent(t *testing.T) {
 	}
 	path := exchange.PublicationEventRoot + "/replica-a/progress_digest/project/000000000001-dec-a.json"
 
-	first, err := store.PutEvent(context.Background(), "mnemon/agent-a", path, []byte(`{"id":"a"}`))
+	first, err := store.PutEvent(context.Background(), "mnemon/mnemond-a", path, []byte(`{"id":"a"}`))
 	if err != nil {
 		t.Fatalf("put event create: %v", err)
 	}
 	if !first.Created || fake.puts != 1 {
 		t.Fatalf("first put = %+v, puts=%d; want created with one PUT", first, fake.puts)
 	}
-	same, err := store.PutEvent(context.Background(), "mnemon/agent-a", path, []byte(`{"id":"a"}`))
+	same, err := store.PutEvent(context.Background(), "mnemon/mnemond-a", path, []byte(`{"id":"a"}`))
 	if err != nil {
 		t.Fatalf("put event same: %v", err)
 	}
 	if !same.ExistsSame || same.Conflict || fake.puts != 1 {
 		t.Fatalf("same put = %+v puts=%d; want idempotent without PUT", same, fake.puts)
 	}
-	conflict, err := store.PutEvent(context.Background(), "mnemon/agent-a", path, []byte(`{"id":"b"}`))
+	conflict, err := store.PutEvent(context.Background(), "mnemon/mnemond-a", path, []byte(`{"id":"b"}`))
 	if err != nil {
 		t.Fatalf("put event conflict: %v", err)
 	}
@@ -79,8 +79,8 @@ func TestGitHubPublicationStoreWriteFileUpdatesWithSHA(t *testing.T) {
 func TestGitHubPublicationStoreListEventsUsesBranchHeadCursor(t *testing.T) {
 	fake := newFakeGitHubPublicationAPI(t)
 	fake.head = "head-2"
-	fake.files["mnemon/agent-b:"+exchange.PublicationEventRoot+"/replica-b/progress_digest/project/000000000001-dec-b.json"] = fakeGitHubFile{body: []byte(`{"id":"b"}`), sha: "sha-b"}
-	fake.files["mnemon/agent-b:"+exchange.PublicationEventRoot+"/replica-c/progress_digest/project/000000000001-dec-c.json"] = fakeGitHubFile{body: []byte(`{"id":"c"}`), sha: "sha-c"}
+	fake.files["mnemon/mnemond-b:"+exchange.PublicationEventRoot+"/replica-b/progress_digest/project/000000000001-dec-b.json"] = fakeGitHubFile{body: []byte(`{"id":"b"}`), sha: "sha-b"}
+	fake.files["mnemon/mnemond-b:"+exchange.PublicationEventRoot+"/replica-c/progress_digest/project/000000000001-dec-c.json"] = fakeGitHubFile{body: []byte(`{"id":"c"}`), sha: "sha-c"}
 	store, err := NewPublicationStore(PublicationStoreConfig{
 		Repo:       "mnemon-dev/mnemon-teamwork-example",
 		BaseURL:    fake.server.URL,
@@ -90,14 +90,14 @@ func TestGitHubPublicationStoreListEventsUsesBranchHeadCursor(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	list, err := store.ListEvents(context.Background(), "mnemon/agent-b", exchange.PublicationEventRoot, "")
+	list, err := store.ListEvents(context.Background(), "mnemon/mnemond-b", exchange.PublicationEventRoot, "")
 	if err != nil {
 		t.Fatalf("list events: %v", err)
 	}
 	if len(list.Events) != 2 || list.NextCursor != "head-2" {
 		t.Fatalf("list = %+v, want two events at head-2", list)
 	}
-	again, err := store.ListEvents(context.Background(), "mnemon/agent-b", exchange.PublicationEventRoot, list.NextCursor)
+	again, err := store.ListEvents(context.Background(), "mnemon/mnemond-b", exchange.PublicationEventRoot, list.NextCursor)
 	if err != nil {
 		t.Fatalf("list after head cursor: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestGitHubPublicationStoreListEventsUsesBranchHeadCursor(t *testing.T) {
 func TestGitHubPublicationStoreEnsureBranchCreatesMissingBranchFromMain(t *testing.T) {
 	fake := newFakeGitHubPublicationAPI(t)
 	fake.refs["main"] = "main-sha"
-	fake.missingRefs["mnemon/acceptance/run-1/agent-a"] = true
+	fake.missingRefs["mnemon/mnemond-run-1-a"] = true
 	store, err := NewPublicationStore(PublicationStoreConfig{
 		Repo:       "mnemon-dev/mnemon-teamwork-example",
 		BaseURL:    fake.server.URL,
@@ -119,20 +119,55 @@ func TestGitHubPublicationStoreEnsureBranchCreatesMissingBranchFromMain(t *testi
 		t.Fatal(err)
 	}
 
-	if err := store.EnsureBranch(context.Background(), "mnemon/acceptance/run-1/agent-a", "main"); err != nil {
+	if err := store.EnsureBranch(context.Background(), "mnemon/mnemond-run-1-a", "main"); err != nil {
 		t.Fatalf("ensure branch: %v", err)
 	}
 	if fake.creates != 1 {
 		t.Fatalf("creates = %d, want one branch create", fake.creates)
 	}
-	if got := fake.refs["mnemon/acceptance/run-1/agent-a"]; got != "main-sha" {
+	if got := fake.refs["mnemon/mnemond-run-1-a"]; got != "main-sha" {
 		t.Fatalf("created branch sha = %q, want main-sha", got)
 	}
-	if err := store.EnsureBranch(context.Background(), "mnemon/acceptance/run-1/agent-a", "main"); err != nil {
+	if err := store.EnsureBranch(context.Background(), "mnemon/mnemond-run-1-a", "main"); err != nil {
 		t.Fatalf("ensure branch again: %v", err)
 	}
 	if fake.creates != 1 {
 		t.Fatalf("idempotent ensure must not recreate branch, creates=%d", fake.creates)
+	}
+}
+
+func TestGitHubPublicationStoreEnsureBranchesReadsBaseOnce(t *testing.T) {
+	fake := newFakeGitHubPublicationAPI(t)
+	fake.refs["main"] = "main-sha"
+	fake.missingRefs["mnemon/mnemond-run-a"] = true
+	fake.missingRefs["mnemon/mnemond-run-b"] = true
+	store, err := NewPublicationStore(PublicationStoreConfig{
+		Repo:       "mnemon-dev/mnemon-teamwork-example",
+		BaseURL:    fake.server.URL,
+		HTTPClient: fake.server.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = store.EnsureBranches(context.Background(), []string{
+		"mnemon/mnemond-run-a",
+		"mnemon/mnemond-run-b",
+		"mnemon/mnemond-run-b",
+	}, "main")
+	if err != nil {
+		t.Fatalf("ensure branches: %v", err)
+	}
+	if fake.creates != 2 {
+		t.Fatalf("creates = %d, want two branch creates", fake.creates)
+	}
+	if got := fake.refReads["main"]; got != 1 {
+		t.Fatalf("main ref reads = %d, want one", got)
+	}
+	for _, branch := range []string{"mnemon/mnemond-run-a", "mnemon/mnemond-run-b"} {
+		if got := fake.refs[branch]; got != "main-sha" {
+			t.Fatalf("created branch %s sha = %q, want main-sha", branch, got)
+		}
 	}
 }
 
@@ -153,7 +188,7 @@ func TestGitHubPublicationStoreRateLimitErrorIncludesRetryHints(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = store.EnsureBranch(context.Background(), "mnemon/acceptance/run/agent-a", "main")
+	err = store.EnsureBranch(context.Background(), "mnemon/mnemond-run-a", "main")
 	if err == nil {
 		t.Fatal("ensure branch should return rate-limit error")
 	}
@@ -179,7 +214,7 @@ func TestGitHubPublicationStoreLiveGated(t *testing.T) {
 	}
 	branch := strings.TrimSpace(os.Getenv("MNEMON_GITHUB_BRANCH"))
 	if branch == "" {
-		branch = "mnemon/agent-a"
+		branch = "mnemon/mnemond-a"
 	}
 	store, err := NewPublicationStore(PublicationStoreConfig{Repo: repo, Token: token})
 	if err != nil {
@@ -208,6 +243,7 @@ type fakeGitHubPublicationAPI struct {
 	files       map[string]fakeGitHubFile
 	refs        map[string]string
 	missingRefs map[string]bool
+	refReads    map[string]int
 	head        string
 	puts        int
 	creates     int
@@ -225,6 +261,7 @@ func newFakeGitHubPublicationAPI(t *testing.T) *fakeGitHubPublicationAPI {
 		files:       map[string]fakeGitHubFile{},
 		refs:        map[string]string{},
 		missingRefs: map[string]bool{},
+		refReads:    map[string]int{},
 		head:        "head-1",
 	}
 	fake.server = httptest.NewServer(http.HandlerFunc(fake.handle))
@@ -246,6 +283,7 @@ func (f *fakeGitHubPublicationAPI) handle(w http.ResponseWriter, r *http.Request
 	switch {
 	case r.Method == http.MethodGet && strings.HasPrefix(tail, "git/ref/heads/"):
 		branch := strings.TrimPrefix(tail, "git/ref/heads/")
+		f.refReads[branch]++
 		if f.missingRefs[branch] {
 			writeJSON(w, http.StatusNotFound, map[string]any{"message": "ref not found"})
 			return

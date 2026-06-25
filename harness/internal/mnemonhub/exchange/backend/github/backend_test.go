@@ -14,7 +14,7 @@ import (
 var progressRef = contract.ResourceRef{Kind: "progress_digest", ID: "project"}
 
 func TestGitHubBackendFakePushPublishesSyncedEnvelope(t *testing.T) {
-	store, backend := newFakeBackend(t, "mnemon/agent-a", progressRef)
+	store, backend := newFakeBackend(t, "mnemon/mnemond-a", progressRef)
 	env := githubBackendTestEnvelope(t, "replica-a", "dec-a", progressRef, map[string]any{"content": "published progress"})
 
 	resp, err := backend.SyncPush(contract.SyncPushRequest{ReplicaID: "replica-a", BatchID: "batch-a", Events: []eventmodel.EventEnvelope{env}})
@@ -24,7 +24,7 @@ func TestGitHubBackendFakePushPublishesSyncedEnvelope(t *testing.T) {
 	if len(resp.Accepted) != 1 || len(resp.Rejected) != 0 || len(resp.Conflicts) != 0 {
 		t.Fatalf("push resp = %+v, want one accepted", resp)
 	}
-	list, err := store.ListEvents(context.Background(), "mnemon/agent-a", exchange.PublicationEventRoot, "")
+	list, err := store.ListEvents(context.Background(), "mnemon/mnemond-a", exchange.PublicationEventRoot, "")
 	if err != nil {
 		t.Fatalf("list publication events: %v", err)
 	}
@@ -42,7 +42,7 @@ func TestGitHubBackendFakePushPublishesSyncedEnvelope(t *testing.T) {
 }
 
 func TestGitHubBackendFakePushRejectsInvalidPhase(t *testing.T) {
-	_, backend := newFakeBackend(t, "mnemon/agent-a", progressRef)
+	_, backend := newFakeBackend(t, "mnemon/mnemond-a", progressRef)
 	env := githubBackendTestEnvelope(t, "replica-a", "dec-a", progressRef, map[string]any{"content": "bad phase"})
 	env.Phase = eventmodel.PhaseAccepted
 
@@ -56,7 +56,7 @@ func TestGitHubBackendFakePushRejectsInvalidPhase(t *testing.T) {
 }
 
 func TestGitHubBackendFakePushDetectsSameKeyDifferentBody(t *testing.T) {
-	_, backend := newFakeBackend(t, "mnemon/agent-a", progressRef)
+	_, backend := newFakeBackend(t, "mnemon/mnemond-a", progressRef)
 	env := githubBackendTestEnvelope(t, "replica-a", "dec-a", progressRef, map[string]any{"content": "same key"})
 	if resp, err := backend.SyncPush(contract.SyncPushRequest{ReplicaID: "replica-a", BatchID: "batch-a", Events: []eventmodel.EventEnvelope{env}}); err != nil || len(resp.Accepted) != 1 {
 		t.Fatalf("seed push: resp=%+v err=%v", resp, err)
@@ -73,11 +73,11 @@ func TestGitHubBackendFakePushDetectsSameKeyDifferentBody(t *testing.T) {
 }
 
 func TestGitHubBackendFakePullReturnsValidEventsAndSkipsOwnOrigin(t *testing.T) {
-	store, backend := newFakeBackend(t, "mnemon/agent-b", progressRef)
+	store, backend := newFakeBackend(t, "mnemon/mnemond-b", progressRef)
 	foreign := githubBackendTestEnvelope(t, "replica-b", "dec-foreign", progressRef, map[string]any{"content": "foreign progress"})
 	own := githubBackendTestEnvelope(t, "replica-a", "dec-own", progressRef, map[string]any{"content": "own progress"})
-	putStoredEvent(t, store, "mnemon/agent-b", foreign)
-	putStoredEvent(t, store, "mnemon/agent-b", own)
+	putStoredEvent(t, store, "mnemon/mnemond-b", foreign)
+	putStoredEvent(t, store, "mnemon/mnemond-b", own)
 
 	resp, err := backend.SyncPull(contract.SyncPullRequest{ReplicaID: "replica-a"})
 	if err != nil {
@@ -96,15 +96,15 @@ func TestGitHubBackendFakePullReturnsValidEventsAndSkipsOwnOrigin(t *testing.T) 
 }
 
 func TestGitHubBackendFakePullReturnsDiagnostics(t *testing.T) {
-	store, backend := newFakeBackend(t, "mnemon/agent-b", progressRef)
+	store, backend := newFakeBackend(t, "mnemon/mnemond-b", progressRef)
 	invalidPhase := githubBackendTestEnvelope(t, "replica-b", "dec-invalid-phase", progressRef, map[string]any{"content": "invalid phase"})
 	invalidPhase.Phase = eventmodel.PhaseAccepted
 	badDigest := githubBackendTestEnvelope(t, "replica-b", "dec-bad-digest", progressRef, map[string]any{"content": "bad digest"})
 	badDigest.Meta["digest"] = "wrong"
 	outOfScope := githubBackendTestEnvelope(t, "replica-b", "dec-out-scope", contract.ResourceRef{Kind: "assignment", ID: "project"}, map[string]any{"content": "assignment"})
-	putStoredEvent(t, store, "mnemon/agent-b", invalidPhase)
-	putStoredEvent(t, store, "mnemon/agent-b", badDigest)
-	putStoredEvent(t, store, "mnemon/agent-b", outOfScope)
+	putStoredEvent(t, store, "mnemon/mnemond-b", invalidPhase)
+	putStoredEvent(t, store, "mnemon/mnemond-b", badDigest)
+	putStoredEvent(t, store, "mnemon/mnemond-b", outOfScope)
 
 	resp, err := backend.SyncPull(contract.SyncPullRequest{ReplicaID: "replica-a"})
 	if err != nil {
@@ -134,7 +134,7 @@ func TestGitHubBackendPullNormalizesOpaquePublicationCursor(t *testing.T) {
 			Cursor: "head-abc",
 		}},
 	}
-	backend, err := New(Config{Store: store, Repo: "mnemon-dev/mnemon-teamwork-example", Branch: "mnemon/agent-b", Scopes: []contract.ResourceRef{progressRef}})
+	backend, err := New(Config{Store: store, Repo: "mnemon-dev/mnemon-teamwork-example", Branch: "mnemon/mnemond-b", Scopes: []contract.ResourceRef{progressRef}})
 	if err != nil {
 		t.Fatal(err)
 	}

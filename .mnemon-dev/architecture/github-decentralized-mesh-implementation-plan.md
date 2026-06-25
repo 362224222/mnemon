@@ -77,7 +77,7 @@ Current branch progress:
 - Real GitHub `PublicationStore` adapter exists.
 - GitHub Remote Workspace normalizes opaque GitHub branch-head cursors before writing local mnemond pull state.
 - Gated live publish/pull/import test exists and is skipped unless live credentials are provided.
-- Gated live publish/pull/import passed against `mnemon-dev/mnemon-teamwork-example` on 2026-06-26 after initializing default publication branches `mnemon/agent-a` through `mnemon/agent-e`.
+- Gated live publish/pull/import passed against `mnemon-dev/mnemon-teamwork-example` on 2026-06-26 with operator-created publication branches; the current branch contract names branches after `mnemond_id`, for example `mnemon/mnemond-a`.
 - Deterministic local GitHub mesh tests cover:
   - five isolated mnemond runtimes;
   - one branch per mnemond;
@@ -97,15 +97,15 @@ mnemon-harness acceptance r1-github-mesh-task-suite \
   --sync-interval 30s
 ```
 
-When `--github-branch-prefix` is omitted, the runner must create run-scoped publication branches:
+When `--github-branch-prefix` is omitted, the runner must create run-scoped publication branches by embedding the run id into the temporary `mnemond_id`:
 
 ```text
-mnemon/acceptance/<run-id>/agent-a
-mnemon/acceptance/<run-id>/agent-b
+mnemon/mnemond-<run-id>-a
+mnemon/mnemond-<run-id>-b
 ...
 ```
 
-Fixed branches such as `mnemon/agent-a` through `mnemon/agent-e` are valid for manual operator smoke tests, but not the default real appserver acceptance path because historical publication entries can pollute a fresh run.
+Fixed mnemond branches such as `mnemon/mnemond-a` through `mnemon/mnemond-e` are valid for manual operator smoke tests, but not the default real appserver acceptance path because historical publication entries can pollute a fresh run.
 
 Real runner lifecycle now treats join as delayed activation of preconfigured publication streams:
 
@@ -323,8 +323,8 @@ Team manifest shape:
   "team_id": "mnemon-teamwork-example",
   "members": [
     {
-      "mnemond_id": "agent-a",
-      "branch": "mnemon/agent-a",
+      "mnemond_id": "mnemond-a",
+      "branch": "mnemon/mnemond-a",
       "principal": "codex-a@project"
     }
   ]
@@ -374,7 +374,7 @@ mnemon-publications/v1/events/<origin_mnemond>/<resource_kind>/<resource_id>/<lo
 `local_ingest_seq` is zero-padded to 12 digits. The path is intentionally visible and maintainable in GitHub, for example:
 
 ```text
-mnemon-publications/v1/events/agent-a/progress_digest/project/000000000007-dec-a.json
+mnemon-publications/v1/events/mnemond-a/progress_digest/project/000000000007-dec-a.json
 ```
 
 Put semantics:
@@ -632,11 +632,11 @@ Live branch set:
 
 ```text
 mnemon/team
-mnemon/agent-a
-mnemon/agent-b
-mnemon/agent-c
-mnemon/agent-d
-mnemon/agent-e
+mnemon/mnemond-a
+mnemon/mnemond-b
+mnemon/mnemond-c
+mnemon/mnemond-d
+mnemon/mnemond-e
 ```
 
 Operator UX:
@@ -646,14 +646,14 @@ mnemon-harness sync connect self \
   --backend github \
   --direction publish \
   --github-repo mnemon-dev/mnemon-teamwork-example \
-  --github-branch mnemon/agent-a \
+  --github-branch mnemon/mnemond-a \
   --token-file ...
 
 mnemon-harness sync connect agent-b-stream \
   --backend github \
   --direction subscribe \
   --github-repo mnemon-dev/mnemon-teamwork-example \
-  --github-branch mnemon/agent-b \
+  --github-branch mnemon/mnemond-b \
   --token-file ...
 ```
 
@@ -714,15 +714,15 @@ Gated live case:
 
 ```text
 repo: mnemon-dev/mnemon-teamwork-example
-publish branch: mnemon/agent-a
-subscribe branch: mnemon/agent-b
+publish branch: mnemon/mnemond-a
+subscribe branch: mnemon/mnemond-b
 
 agent-a:
   local accepted synced envelope
-  -> publish mnemon-publications/v1/events/agent-a/progress_digest/project/000000000001-dec-a.json
+  -> publish mnemon-publications/v1/events/mnemond-a/progress_digest/project/000000000001-dec-a.json
 
 agent-b:
-  pull mnemon/agent-a
+  pull mnemon/mnemond-a
   -> validate envelope
   -> import through Event Intake path
   -> persist cursor/status
@@ -737,8 +737,8 @@ Suggested gated command shape:
 MNEMON_GITHUB_LIVE=1 \
 MNEMON_GITHUB_REPO=mnemon-dev/mnemon-teamwork-example \
 MNEMON_GITHUB_TOKEN_FILE=/path/to/token \
-MNEMON_GITHUB_BRANCH_A=mnemon/agent-a \
-MNEMON_GITHUB_BRANCH_B=mnemon/agent-b \
+MNEMON_GITHUB_BRANCH_A=mnemon/mnemond-a \
+MNEMON_GITHUB_BRANCH_B=mnemon/mnemond-b \
 go test ./harness/internal/app -run TestGitHubLivePublishPullImport -count=1 -v
 ```
 

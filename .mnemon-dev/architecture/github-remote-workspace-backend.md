@@ -53,7 +53,7 @@ other mnemond subscribe to those branches and validate locally.
 
 当前仍需外部证据的边界:
 
-- gated live GitHub publish/pull/import 已在 2026-06-26 通过真实 GitHub 访问验证;验证仓库缺失默认 publication branches 时先失败,随后初始化 `mnemon/agent-a` 到 `mnemon/agent-e` 后通过。
+- gated live GitHub publish/pull/import 已在 2026-06-26 通过真实 GitHub 访问验证;验证仓库缺失 operator publication branches 时先失败,随后初始化当时的 smoke branches 后通过。当前 branch contract 使用 `mnemond_id` 命名,例如 `mnemon/mnemond-a`。
 - real Codex appserver GitHub mesh suite 需要 token + Codex appserver 环境后实际运行。
 - 在 real Codex appserver GitHub mesh suite 通过前,不能把 GitHub mesh 目标标记为 complete。
 
@@ -416,11 +416,11 @@ GitHub mesh 改为 shared repo + per-agent branch:
 repo: mnemon-dev/mnemon-teamwork-example
 
 branches:
-  mnemon/agent-a
-  mnemon/agent-b
-  mnemon/agent-c
-  mnemon/agent-d
-  mnemon/agent-e
+  mnemon/mnemond-a
+  mnemon/mnemond-b
+  mnemon/mnemond-c
+  mnemon/mnemond-d
+  mnemon/mnemond-e
 ```
 
 拓扑:
@@ -428,11 +428,11 @@ branches:
 ```text
                  shared GitHub repo
         +----------------------------------+
-        | branch mnemon/agent-a            |
-        | branch mnemon/agent-b            |
-        | branch mnemon/agent-c            |
-        | branch mnemon/agent-d            |
-        | branch mnemon/agent-e            |
+        | branch mnemon/mnemond-a            |
+        | branch mnemon/mnemond-b            |
+        | branch mnemon/mnemond-c            |
+        | branch mnemon/mnemond-d            |
+        | branch mnemon/mnemond-e            |
         +----------------------------------+
              ^       ^       ^       ^
              |       |       |       |
@@ -453,8 +453,8 @@ GitHub mesh 数据流:
 ```text
 agent-a emits teamwork_signal / assignment
   -> mnemond-a accepts event locally
-  -> mnemond-a publishes synced envelope to branch mnemon/agent-a
-  -> mnemond-b/c/d/e read branch mnemon/agent-a
+  -> mnemond-a publishes synced envelope to branch mnemon/mnemond-a
+  -> mnemond-b/c/d/e read branch mnemon/mnemond-a
   -> each local mnemond validates and imports
   -> assigned agents act
   -> each publishes its own accepted events on its own branch
@@ -686,8 +686,8 @@ mnemon-publications/v1/
   "team_id": "mnemon-teamwork-example",
   "members": [
     {
-      "mnemond_id": "agent-a",
-      "branch": "mnemon/agent-a",
+      "mnemond_id": "mnemond-a",
+      "branch": "mnemon/mnemond-a",
       "principal": "codex-a@project"
     }
   ]
@@ -701,7 +701,7 @@ mnemon-publications/v1/
   "schema_version": 1,
   "backend": "github",
   "mode": "publication",
-  "origin_mnemond": "agent-a",
+  "origin_mnemond": "mnemond-a",
   "published_at": "2026-06-26T00:00:00Z",
   "published_scopes": [
     { "kind": "assignment", "id": "project" },
@@ -719,7 +719,7 @@ mnemon-publications/v1/events/<origin_mnemond>/<resource_kind>/<resource_id>/<lo
 `local_ingest_seq` is zero-padded to 12 digits. This keeps GitHub paths human-reviewable:
 
 ```text
-mnemon-publications/v1/events/agent-a/progress_digest/project/000000000007-dec-a.json
+mnemon-publications/v1/events/mnemond-a/progress_digest/project/000000000007-dec-a.json
 ```
 
 Rules:
@@ -750,7 +750,7 @@ ASCII:
 ```text
 +----------+     +---------+     +-------------+     +------------------+
 | decision | --> | synced  | --> | sync worker | --> | GitHub branch    |
-| accepted |     | event   |     | push lane   |     | mnemon/agent-a   |
+| accepted |     | event   |     | push lane   |     | mnemon/mnemond-a   |
 +----------+     +---------+     +-------------+     +------------------+
 ```
 
@@ -773,7 +773,7 @@ ASCII:
 ```text
 +------------------+     +-------------+     +--------------+     +----------+
 | GitHub branch    | --> | pull lane   | --> | Event Intake | --> | local    |
-| mnemon/agent-b   |     | validate    |     | + Tick       |     | resource |
+| mnemon/mnemond-b   |     | validate    |     | + Tick       |     | resource |
 +------------------+     +-------------+     +--------------+     +----------+
 ```
 
@@ -837,7 +837,7 @@ Target acceptance scenario:
 ```text
 agent-a appserver starts
   -> mnemond-a starts
-  -> publish branch mnemon/agent-a exists
+  -> publish branch mnemon/mnemond-a exists
   -> agent-a emits agent_profile
   -> profile is published
 ```
@@ -860,13 +860,13 @@ agent-a receives user teamwork task
   -> emits teamwork_signal
   -> emits assignment(s)
   -> mnemond-a accepts
-  -> mnemond-a publishes to mnemon/agent-a
+  -> mnemond-a publishes to mnemon/mnemond-a
 ```
 
 Subscribed mnemond:
 
 ```text
-mnemond-b/c/d/e subscribe to mnemon/agent-a
+mnemond-b/c/d/e subscribe to mnemon/mnemond-a
   -> import signal/assignment
   -> render work cues
   -> assigned agents act
@@ -879,7 +879,7 @@ agent-b receives assignment
   -> decides it should split
   -> emits new teamwork_signal / assignment
   -> mnemond-b accepts
-  -> mnemond-b publishes to mnemon/agent-b
+  -> mnemond-b publishes to mnemon/mnemond-b
   -> subscribed mnemond pull/import
 ```
 
@@ -899,7 +899,7 @@ Two new `mnemond` instances join during work:
 
 ```text
 agent-f/g appservers start
-  -> create branches mnemon/agent-f/g
+  -> create branches mnemon/mnemond-f/g
   -> publish fresh agent_profile
   -> subscribe to existing branches
   -> pull backlog according to cursors
@@ -1221,14 +1221,14 @@ mnemon-harness sync connect self \
   --backend github \
   --direction publish \
   --github-repo mnemon-dev/mnemon-teamwork-example \
-  --github-branch mnemon/agent-a \
+  --github-branch mnemon/mnemond-a \
   --token-file ...
 
 mnemon-harness sync connect agent-b-stream \
   --backend github \
   --direction subscribe \
   --github-repo mnemon-dev/mnemon-teamwork-example \
-  --github-branch mnemon/agent-b \
+  --github-branch mnemon/mnemond-b \
   --token-file ...
 ```
 
@@ -1254,8 +1254,8 @@ Required gated live case:
 
 ```text
 configured GitHub repo: mnemon-dev/mnemon-teamwork-example
-branch mnemon/agent-a
-branch mnemon/agent-b
+branch mnemon/mnemond-a
+branch mnemon/mnemond-b
 
 agent-a push:
   accepted synced envelope -> GitHub publication branch
@@ -1354,8 +1354,8 @@ Isolation requirements:
 - each `mnemond` has its own local store;
 - each appserver has its own runtime workspace;
 - cross-agent visibility only happens through publication branch pull/import.
-- default real acceptance branches are `mnemon/acceptance/<run-id>/agent-*` and are initialized from `main` before local sync starts.
-- long-lived branches such as `mnemon/agent-a` are explicit operator smoke-test inputs, not the default acceptance isolation model.
+- default real acceptance branches are run-scoped mnemond publication streams such as `mnemon/mnemond-<run-id>-a`, initialized from `main` before local sync starts.
+- long-lived mnemond branches such as `mnemon/mnemond-a` are explicit operator smoke-test inputs, not the default acceptance isolation model.
 - real GitHub acceptance uses a 30 second default sync interval per local `mnemond`; 100ms polling is reserved for fake/local tests.
 
 Scenario:

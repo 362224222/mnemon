@@ -319,7 +319,7 @@ func TestSyncConnectWritesGitHubRemoteConfigWithoutLeakingToken(t *testing.T) {
 	syncRemoteBackend = exchange.RemoteBackendGitHub
 	syncRemoteDirection = exchange.RemoteDirectionPublish
 	syncGitHubRepo = "mnemon-dev/mnemon-teamwork-example"
-	syncGitHubBranch = "mnemon/agent-a"
+	syncGitHubBranch = "mnemon/mnemond-a"
 	syncRemoteToken = "secret-github-token"
 	var out bytes.Buffer
 	cmd := mustTestCommand(t)
@@ -336,7 +336,7 @@ func TestSyncConnectWritesGitHubRemoteConfigWithoutLeakingToken(t *testing.T) {
 		`"direction": "publish"`,
 		`"id": "self"`,
 		`"repo": "mnemon-dev/mnemon-teamwork-example"`,
-		`"branch": "mnemon/agent-a"`,
+		`"branch": "mnemon/mnemond-a"`,
 		`"credential_ref": ".mnemon/harness/sync/credentials/self.token"`,
 	} {
 		if !strings.Contains(config, want) {
@@ -356,7 +356,7 @@ func TestSyncConnectWritesGitHubRemoteConfigWithoutLeakingToken(t *testing.T) {
 		t.Fatalf("resolve github remote: %v", err)
 	}
 	if remote.ID != "self" || remote.Backend != exchange.RemoteBackendGitHub ||
-		remote.Repo != "mnemon-dev/mnemon-teamwork-example" || remote.Branch != "mnemon/agent-a" ||
+		remote.Repo != "mnemon-dev/mnemon-teamwork-example" || remote.Branch != "mnemon/mnemond-a" ||
 		remote.Token != "secret-github-token" {
 		t.Fatalf("github remote not resolved: %+v", remote)
 	}

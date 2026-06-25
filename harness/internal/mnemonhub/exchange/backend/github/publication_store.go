@@ -178,46 +178,75 @@ func (s *GitHubPublicationStore) WriteFile(ctx context.Context, branch string, p
 }
 
 func (s *GitHubPublicationStore) EnsureBranch(ctx context.Context, branch string, baseBranch string) error {
-	branch, err := exchange.NormalizePublicationBranch(branch)
-	if err != nil {
-		return err
-	}
-	baseBranch, err = normalizeGitHubBranchName(baseBranch)
+	return s.EnsureBranches(ctx, []string{branch}, baseBranch)
+}
+
+func (s *GitHubPublicationStore) EnsureBranches(ctx context.Context, branches []string, baseBranch string) error {
+	baseBranch, err := normalizeGitHubBranchName(baseBranch)
 	if err != nil {
 		return fmt.Errorf("base branch: %w", err)
 	}
 	if baseBranch == "" {
 		baseBranch = "main"
 	}
-	if _, err := s.branchHead(ctx, branch); err == nil {
+	normalized := make([]string, 0, len(branches))
+	seen := map[string]bool{}
+	for _, branch := range branches {
+		branch, err := exchange.NormalizePublicationBranch(branch)
+		if err != nil {
+			return err
+		}
+		if seen[branch] {
+			continue
+		}
+		seen[branch] = true
+		normalized = append(normalized, branch)
+	}
+	if len(normalized) == 0 {
 		return nil
-	} else if apiErr, ok := err.(*githubAPIError); !ok || apiErr.Status != http.StatusNotFound {
-		return err
+	}
+	var missing []string
+	for _, branch := range normalized {
+		if _, err := s.branchHead(ctx, branch); err == nil {
+			continue
+		} else if apiErr, ok := err.(*githubAPIError); ok && apiErr.Status == http.StatusNotFound {
+			missing = append(missing, branch)
+			continue
+		} else {
+			return err
+		}
+	}
+	if len(missing) == 0 {
+		return nil
 	}
 	baseSHA, err := s.branchHead(ctx, baseBranch)
 	if err != nil {
 		return fmt.Errorf("read base branch %q: %w", baseBranch, err)
 	}
-	if err := s.pauseBeforeMutation(ctx); err != nil {
-		return err
-	}
-	req := githubCreateRefRequest{
-		Ref: "refs/heads/" + branch,
-		SHA: baseSHA,
-	}
-	status, err := s.do(ctx, http.MethodPost, "/repos/"+s.owner+"/"+s.repo+"/git/refs", nil, req, nil)
-	if err != nil {
-		if apiErr, ok := err.(*githubAPIError); ok && apiErr.Status == http.StatusUnprocessableEntity {
-			if _, headErr := s.branchHead(ctx, branch); headErr == nil {
-				return nil
-			}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	for _, branch := range missing {
+		if err := s.pauseBeforeMutation(ctx); err != nil {
+			return err
 		}
-		return err
+		req := githubCreateRefRequest{
+			Ref: "refs/heads/" + branch,
+			SHA: baseSHA,
+		}
+		status, err := s.do(ctx, http.MethodPost, "/repos/"+s.owner+"/"+s.repo+"/git/refs", nil, req, nil)
+		if err != nil {
+			if apiErr, ok := err.(*githubAPIError); ok && apiErr.Status == http.StatusUnprocessableEntity {
+				if _, headErr := s.branchHead(ctx, branch); headErr == nil {
+					continue
+				}
+			}
+			return fmt.Errorf("create branch %q: %w", branch, err)
+		}
+		if status != http.StatusCreated {
+			return fmt.Errorf("create branch %q returned status %d", branch, status)
+		}
+		s.lastWrite = time.Now()
 	}
-	if status != http.StatusCreated {
-		return fmt.Errorf("github branch create returned status %d", status)
-	}
-	s.lastWrite = time.Now()
 	return nil
 }
 

@@ -76,7 +76,7 @@ func init() {
 	acceptanceR1GitHubMeshCmd.Flags().DurationVar(&acceptanceTurnTimeout, "turn-timeout", 5*time.Minute, "timeout per real agent turn")
 	acceptanceR1GitHubMeshCmd.Flags().StringVar(&acceptanceGitHubRepo, "github-repo", "mnemon-dev/mnemon-teamwork-example", "GitHub Remote Workspace repository (owner/name)")
 	acceptanceR1GitHubMeshCmd.Flags().StringVar(&acceptanceGitHubTokenFile, "github-token-file", "", "GitHub token file for publication store access")
-	acceptanceR1GitHubMeshCmd.Flags().StringVar(&acceptanceGitHubBranchPrefix, "github-branch-prefix", "", "GitHub publication branch prefix; empty uses a run-scoped acceptance prefix")
+	acceptanceR1GitHubMeshCmd.Flags().StringVar(&acceptanceGitHubBranchPrefix, "github-branch-prefix", "", "GitHub publication branch prefix; empty uses a run-scoped mnemond id prefix")
 	acceptanceR1GitHubMeshCmd.Flags().StringArrayVar(&acceptanceGitHubScenarios, "scenario", nil, "natural scenario to run; repeatable")
 	acceptanceR1GitHubMeshCmd.Flags().DurationVar(&acceptanceGitHubSyncInterval, "sync-interval", 30*time.Second, "GitHub sync interval per local mnemond")
 	acceptanceCmd.AddCommand(acceptanceR1GitHubMeshCmd)
@@ -1038,12 +1038,12 @@ func writeR1GitHubMeshRemotes(workspace, repo, tokenFile string, branches []stri
 
 func r1GitHubMeshBranches(prefix string, count int) []string {
 	if prefix == "" {
-		prefix = "mnemon/agent-"
+		prefix = "mnemon/mnemond-"
 	}
 	out := make([]string, 0, count)
 	for i := 0; i < count; i++ {
 		suffix := fmt.Sprintf("%02d", i+1)
-		if strings.HasSuffix(prefix, "agent-") && i < 26 {
+		if strings.HasSuffix(prefix, "-") && i < 26 {
 			suffix = string(rune('a' + i))
 		}
 		out = append(out, prefix+suffix)
@@ -1056,7 +1056,7 @@ func r1GitHubMeshBranchPrefix(prefix string, started time.Time) string {
 	if prefix != "" {
 		return prefix
 	}
-	return "mnemon/acceptance/" + started.UTC().Format("20060102T150405Z") + "/agent-"
+	return "mnemon/mnemond-" + started.UTC().Format("20060102T150405Z") + "-"
 }
 
 func ensureR1GitHubMeshBranches(ctx context.Context, repo, tokenFile string, branches []string) error {
@@ -1071,10 +1071,8 @@ func ensureR1GitHubMeshBranches(ctx context.Context, repo, tokenFile string, bra
 	if err != nil {
 		return err
 	}
-	for _, branch := range branches {
-		if err := store.EnsureBranch(ctx, branch, "main"); err != nil {
-			return fmt.Errorf("ensure GitHub branch %q: %w", branch, err)
-		}
+	if err := store.EnsureBranches(ctx, branches, "main"); err != nil {
+		return fmt.Errorf("ensure GitHub branches: %w", err)
 	}
 	return nil
 }

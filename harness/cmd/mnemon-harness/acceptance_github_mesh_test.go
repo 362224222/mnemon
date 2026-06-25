@@ -13,8 +13,8 @@ import (
 )
 
 func TestR1GitHubMeshBranchesDefaultShape(t *testing.T) {
-	got := r1GitHubMeshBranches("mnemon/agent-", 5)
-	want := []string{"mnemon/agent-a", "mnemon/agent-b", "mnemon/agent-c", "mnemon/agent-d", "mnemon/agent-e"}
+	got := r1GitHubMeshBranches("mnemon/mnemond-", 5)
+	want := []string{"mnemon/mnemond-a", "mnemon/mnemond-b", "mnemon/mnemond-c", "mnemon/mnemond-d", "mnemon/mnemond-e"}
 	if len(got) != len(want) {
 		t.Fatalf("branches = %v, want %v", got, want)
 	}
@@ -28,20 +28,20 @@ func TestR1GitHubMeshBranchesDefaultShape(t *testing.T) {
 func TestR1GitHubMeshBranchPrefixDefaultsToRunScopedBranches(t *testing.T) {
 	started := time.Date(2026, 6, 25, 18, 57, 20, 0, time.UTC)
 	prefix := r1GitHubMeshBranchPrefix("", started)
-	if prefix != "mnemon/acceptance/20260625T185720Z/agent-" {
-		t.Fatalf("prefix = %q, want run-scoped acceptance prefix", prefix)
+	if prefix != "mnemon/mnemond-20260625T185720Z-" {
+		t.Fatalf("prefix = %q, want run-scoped mnemond prefix", prefix)
 	}
 	got := r1GitHubMeshBranches(prefix, 2)
 	want := []string{
-		"mnemon/acceptance/20260625T185720Z/agent-a",
-		"mnemon/acceptance/20260625T185720Z/agent-b",
+		"mnemon/mnemond-20260625T185720Z-a",
+		"mnemon/mnemond-20260625T185720Z-b",
 	}
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("branches = %v, want %v", got, want)
 		}
 	}
-	if explicit := r1GitHubMeshBranchPrefix("mnemon/agent-", started); explicit != "mnemon/agent-" {
+	if explicit := r1GitHubMeshBranchPrefix("mnemon/mnemond-team-", started); explicit != "mnemon/mnemond-team-" {
 		t.Fatalf("explicit prefix = %q, want unchanged", explicit)
 	}
 }
@@ -56,7 +56,7 @@ func TestWriteR1GitHubMeshRemotesCreatesPublishAndSubscribePlan(t *testing.T) {
 	if err := os.MkdirAll(workspace, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	branches := r1GitHubMeshBranches("mnemon/agent-", 5)
+	branches := r1GitHubMeshBranches("mnemon/mnemond-", 5)
 	if err := writeR1GitHubMeshRemotes(workspace, "mnemon-dev/mnemon-teamwork-example", tokenFile, branches, 2); err != nil {
 		t.Fatalf("write github mesh remotes: %v", err)
 	}
@@ -66,8 +66,8 @@ func TestWriteR1GitHubMeshRemotesCreatesPublishAndSubscribePlan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load remote plan: %v", err)
 	}
-	if len(plan.PushTargets) != 1 || plan.PushTargets[0].ID != "self" || plan.PushTargets[0].Branch != "mnemon/agent-c" {
-		t.Fatalf("push targets = %+v, want self on mnemon/agent-c", plan.PushTargets)
+	if len(plan.PushTargets) != 1 || plan.PushTargets[0].ID != "self" || plan.PushTargets[0].Branch != "mnemon/mnemond-c" {
+		t.Fatalf("push targets = %+v, want self on mnemon/mnemond-c", plan.PushTargets)
 	}
 	if len(plan.PullSources) != 4 {
 		t.Fatalf("pull sources = %+v, want four peer streams", plan.PullSources)
@@ -88,7 +88,7 @@ func TestSetupR1CodexGitHubMeshAgentsCanDelayLocalMnemondStart(t *testing.T) {
 	if err := os.WriteFile(tokenFile, []byte("secret-token\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	agents, err := setupR1CodexGitHubMeshAgents(context.Background(), root, root, "mnemon-dev/mnemon-teamwork-example", tokenFile, "mnemon/agent-", 5, "", 30*time.Second, 0)
+	agents, err := setupR1CodexGitHubMeshAgents(context.Background(), root, root, "mnemon-dev/mnemon-teamwork-example", tokenFile, "mnemon/mnemond-", 5, "", 30*time.Second, 0)
 	if err != nil {
 		t.Fatalf("setup delayed github mesh agents: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestBuildR1GitHubMeshSyncReportProvesIsolationAndNoHub(t *testing.T) {
 	if err := os.WriteFile(tokenFile, []byte("secret-token\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	branches := r1GitHubMeshBranches("mnemon/agent-", 3)
+	branches := r1GitHubMeshBranches("mnemon/mnemond-", 3)
 	agents := make([]r1CodexSyncAgent, 0, 3)
 	for i := range branches {
 		workspace := filepath.Join(root, "workspaces", branches[i][len("mnemon/"):])
@@ -184,8 +184,8 @@ func TestPopulateR1GitHubMeshSyncEvidence(t *testing.T) {
 			{Principal: "codex-02@project"},
 		},
 		BranchByAgent: map[string]string{
-			"codex-01@project": "mnemon/acceptance/run/agent-a",
-			"codex-02@project": "mnemon/acceptance/run/agent-b",
+			"codex-01@project": "mnemon/mnemond-run-a",
+			"codex-02@project": "mnemon/mnemond-run-b",
 		},
 	}}
 	obs := acceptanceObserveReport{Stores: []acceptanceStoreInspect{
@@ -209,7 +209,7 @@ func TestPopulateR1GitHubMeshSyncEvidence(t *testing.T) {
 
 	populateR1GitHubMeshSyncEvidence(report, obs)
 
-	if got := report.Sync.PublishedByBranch["mnemon/acceptance/run/agent-a"]; got != 3 {
+	if got := report.Sync.PublishedByBranch["mnemon/mnemond-run-a"]; got != 3 {
 		t.Fatalf("published branch a = %d, want 3", got)
 	}
 	if got := report.Sync.ImportedByMnemond["codex-02@project"]; got != 2 {
