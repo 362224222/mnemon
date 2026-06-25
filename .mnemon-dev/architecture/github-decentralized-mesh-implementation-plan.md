@@ -955,7 +955,7 @@ Entry:
 
 ```text
 PoC agent-a receives:
-"帮我用团队协作快速理解这个仓库现在的 GitHub Remote Workspace 改造方向,整理一份新成员能读懂的上手说明。请通过 Mnemon 拉其他成员分别核对架构、测试和风险中的至少两个方向,再根据第一轮反馈做一次补齐或复核后汇总。"
+"帮我用团队协作快速理解这个仓库现在的 GitHub Remote Workspace 改造方向,整理一份新成员能读懂的上手说明。请先通过 Mnemon 拉其他成员分别核对架构、测试和风险中的至少两个方向,再继续阅读并根据第一轮反馈做一次补齐或复核后汇总。"
 ```
 
 Expected natural behavior:
@@ -980,7 +980,7 @@ Entry:
 
 ```text
 PoC agent-b receives:
-"同步这块我担心还有隐藏问题。请用团队协作检查 GitHub Remote Workspace 相关的配置、诊断和测试设计;把风险排查和验证/补文档拆给合适同伴推进。第一轮先找风险,再根据结果安排第二轮验证或补齐。"
+"同步这块我担心还有隐藏问题。请先通过 Mnemon 发起团队协作,检查 GitHub Remote Workspace 相关的配置、诊断和测试设计;把风险排查和验证/补文档拆给合适同伴推进。第一轮先找风险,再根据结果安排第二轮验证或补齐。"
 ```
 
 Optional earlier/open task:
@@ -1012,10 +1012,10 @@ Entry:
 
 ```text
 PoC agent-a receives:
-"请你用团队协作推进一次 GitHub live case 的准备,目标是能在 mnemon-dev/mnemon-teamwork-example 上证明 publish/pull/import 成立。先让同伴分别找出实现、测试和运行缺口,再根据第一轮结果安排第二轮补齐。"
+"请你用团队协作推进一次 GitHub live case 的准备,目标是能在 mnemon-dev/mnemon-teamwork-example 上证明 publish/pull/import 成立。请先通过 Mnemon 启动协作,让同伴分别找出实现、测试和运行缺口,再根据第一轮结果安排第二轮补齐。"
 
 PoC agent-c, in a separate normal conversation, receives:
-"我主要担心这个 GitHub 方案的操作者安全和失败诊断。请你通过 Mnemon 拉同伴一起从 token、repo、branch、报错可读性这几个角度检查,并把发现反馈给 live case 准备工作。"
+"我主要担心这个 GitHub 方案的操作者安全和失败诊断。请你先通过 Mnemon 拉同伴一起从 token、repo、branch、报错可读性这几个角度检查,并把发现反馈给 live case 准备工作。"
 ```
 
 Expected natural behavior:

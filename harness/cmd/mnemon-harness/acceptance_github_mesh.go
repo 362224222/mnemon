@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/app"
+	"github.com/mnemon-dev/mnemon/harness/internal/codexapp"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemonhub/exchange"
@@ -268,7 +270,14 @@ func runR1GitHubMeshAcceptance(ctx context.Context, opts r1GitHubMeshAcceptanceO
 	if obsErr == nil {
 		report.Observability = &obs
 		populateR1GitHubMeshSyncEvidence(&report, obs)
-		report.Participants = r1ClusterParticipants(r1ClusterActorEventCounts(obs), report.Entrypoint)
+		counts, warnings := r1GitHubMeshAuthoredEventCounts(agents)
+		if len(counts) == 0 {
+			counts = r1ClusterActorEventCounts(obs)
+		}
+		if len(warnings) > 0 {
+			report.Observability.Warnings = append(report.Observability.Warnings, warnings...)
+		}
+		report.Participants = r1ClusterParticipants(counts, report.Entrypoint)
 	} else {
 		addR1Error(&report, obsErr)
 	}
@@ -457,6 +466,7 @@ func (s *r1GitHubMeshRun) runScenario(name string) error {
 		return err
 	}
 	var actors []string
+	var entryTurns []*r1GitHubMeshEntryTurn
 	for _, entry := range entries {
 		agent := &s.agents[entry.index]
 		actors = append(actors, agent.principal)
@@ -467,19 +477,56 @@ func (s *r1GitHubMeshRun) runScenario(name string) error {
 			s.report.Sync.Source = agent.principal
 		}
 		recordR1ClusterPrompt(s.report.RunnerContract, agent.principal, "natural_user_message:"+name, entry.prompt)
-		answer, err := runR1Turn(&agent.r1CodexAgent, entry.prompt, s.opts.TurnTimeout)
-		appendSyncAgentAnswer(s.report.Sync, agent.principal, answer)
+		turn, err := startR1GitHubMeshEntryTurn(agent, entry.index, entry.prompt, s.opts.TurnTimeout)
 		if err != nil {
 			addR1Assertion(s.report, "github-mesh "+name+" entry "+agent.principal, false, err.Error())
 			return err
 		}
-		addR1Assertion(s.report, "github-mesh "+name+" entry "+agent.principal, true, truncateR1Cluster(answer, 300))
+		entryTurns = append(entryTurns, turn)
+	}
+	seedTimeout := r1GitHubMeshEntrySeedTimeout(s.opts.TurnTimeout)
+	for _, turn := range entryTurns {
+		agent := &s.agents[turn.index]
+		turn.counts, turn.seeded = waitR1GitHubMeshEntrySeed(agent, seedTimeout)
+		if res, ok := turn.poll(); ok {
+			appendR1GitHubMeshEntryTurnAnswer(s.report.Sync, turn, res)
+			if res.Err != nil && !turn.seeded {
+				addR1Assertion(s.report, "github-mesh "+name+" entry "+turn.principal, false, fmt.Sprintf("%v counts=%v", res.Err, turn.counts))
+				return res.Err
+			}
+		}
+		if !turn.seeded {
+			err := fmt.Errorf("%s did not publish governed seed events within %s", turn.principal, seedTimeout)
+			addR1Assertion(s.report, "github-mesh "+name+" entry "+turn.principal, false, fmt.Sprintf("%v counts=%v", err, turn.counts))
+			return err
+		}
+		addR1Assertion(s.report, "github-mesh "+name+" entry "+turn.principal, true, fmt.Sprintf("seeded governed teamwork events counts=%v", turn.counts))
 	}
 	if err := s.wakeWorkers(name, entries); err != nil {
 		return err
 	}
 	priorScenarios := r1GitHubMeshOKScenarioNames(s.report.Scenarios)
-	lead := &s.agents[entries[0].index]
+	busyEntries := map[int]bool{}
+	for _, turn := range entryTurns {
+		if res, ok := turn.poll(); ok {
+			appendR1GitHubMeshEntryTurnAnswer(s.report.Sync, turn, res)
+			if res.Err != nil {
+				addR1Assertion(s.report, "github-mesh "+name+" entry "+turn.principal+" yielded governed seed before timeout", turn.seeded, fmt.Sprintf("%v counts=%v", res.Err, turn.counts))
+				if turn.seeded {
+					if err := s.restartAgentAppserver(turn.index, name, "entry turn timed out after publishing governed seed events"); err != nil {
+						return err
+					}
+				}
+			}
+			continue
+		}
+		busyEntries[turn.index] = true
+	}
+	leadIndex := r1GitHubMeshIntegrationAgentIndex(s.agents, entries, busyEntries)
+	if leadIndex < 0 {
+		return fmt.Errorf("github mesh scenario %s has no idle integration agent", name)
+	}
+	lead := &s.agents[leadIndex]
 	integrationPrompt := r1GitHubMeshIntegrationPrompt(name)
 	s.report.RunnerContract.IntegrationPrompts++
 	recordR1ClusterPrompt(s.report.RunnerContract, lead.principal, "integration:"+name, integrationPrompt)
@@ -489,12 +536,31 @@ func (s *r1GitHubMeshRun) runScenario(name string) error {
 		addR1Assertion(s.report, "github-mesh "+name+" integration", false, err.Error())
 		return err
 	}
+	for _, turn := range entryTurns {
+		if turn.pollReady() {
+			res := turn.wait()
+			appendR1GitHubMeshEntryTurnAnswer(s.report.Sync, turn, res)
+			if res.Err != nil && turn.seeded {
+				addR1Assertion(s.report, "github-mesh "+name+" entry "+turn.principal+" completed team handoff despite timeout", true, fmt.Sprintf("%v counts=%v", res.Err, turn.counts))
+			}
+			continue
+		}
+		if turn.seeded {
+			addR1Assertion(s.report, "github-mesh "+name+" entry "+turn.principal+" handed off while still running", true, fmt.Sprintf("counts=%v", turn.counts))
+			if err := s.restartAgentAppserver(turn.index, name, "entry turn still running after team integration"); err != nil {
+				return err
+			}
+		}
+	}
 	waitR1ClusterAcceptedEventSettle(s.report.RunRoot, 15*time.Second, 2*time.Second)
 	obs, err := observeAcceptanceRun(s.report.RunRoot, 1000)
 	if err != nil {
 		return err
 	}
-	counts := r1ClusterActorEventCounts(obs)
+	counts, countWarnings := r1GitHubMeshAuthoredEventCounts(s.agents)
+	if len(counts) == 0 {
+		counts = r1ClusterActorEventCounts(obs)
+	}
 	participants := r1ClusterNonProfileParticipantCount(counts)
 	replans := r1GitHubMeshPromptRounds(s.report.RunnerContract, name)
 	naturalMessages := r1GitHubMeshPromptKindCount(s.report.RunnerContract, "natural_user_message:"+name)
@@ -523,6 +589,7 @@ func (s *r1GitHubMeshRun) runScenario(name string) error {
 			"worker_wake_prompts":            workerWakes,
 			"integration_prompts":            integrationPrompts,
 			"entry_poc_agents":               actors,
+			"integration_agent":              lead.principal,
 			"multi_poc":                      len(actors) > 1,
 			"prior_ok_scenarios":             priorScenarios,
 			"cross_task_reuse_or_completion": r1GitHubMeshCrossTaskReuseCandidate(name, priorScenarios),
@@ -537,6 +604,9 @@ func (s *r1GitHubMeshRun) runScenario(name string) error {
 			"project_intent_events":          intents,
 		},
 	})
+	if len(countWarnings) > 0 {
+		s.report.Scenarios[len(s.report.Scenarios)-1].Evidence["actor_event_count_warnings"] = countWarnings
+	}
 	if !passed {
 		return fmt.Errorf("github mesh scenario %s did not produce team-shaped multi-round evidence", name)
 	}
@@ -579,19 +649,187 @@ type r1GitHubMeshScenarioEntry struct {
 	prompt string
 }
 
+type r1GitHubMeshTurnResult struct {
+	Answer string
+	Err    error
+}
+
+type r1GitHubMeshEntryTurn struct {
+	index     int
+	principal string
+	before    int
+	done      chan r1GitHubMeshTurnResult
+	result    *r1GitHubMeshTurnResult
+	reported  bool
+	seeded    bool
+	counts    map[string]int
+}
+
+func startR1GitHubMeshEntryTurn(agent *r1CodexSyncAgent, index int, prompt string, timeout time.Duration) (*r1GitHubMeshEntryTurn, error) {
+	server := agent.server
+	before := server.NotificationCount()
+	if _, err := server.Request("turn/start", map[string]any{
+		"threadId":       agent.threadID,
+		"input":          []map[string]any{{"type": "text", "text": prompt}},
+		"cwd":            agent.workspace,
+		"approvalPolicy": "never",
+		"sandboxPolicy":  map[string]any{"type": "dangerFullAccess"},
+	}, 30*time.Second); err != nil {
+		return nil, fmt.Errorf("%s: turn/start: %w", agent.principal, err)
+	}
+	turn := &r1GitHubMeshEntryTurn{
+		index:     index,
+		principal: agent.principal,
+		before:    before,
+		done:      make(chan r1GitHubMeshTurnResult, 1),
+	}
+	go func() {
+		if _, err := server.WaitNotification("turn/completed", timeout, before); err != nil {
+			text := codexapp.CombinedText(server.NotificationsSince(before))
+			turn.done <- r1GitHubMeshTurnResult{
+				Answer: truncateR1Cluster(text, 2000),
+				Err:    fmt.Errorf("%s: wait turn/completed: %w", agent.principal, err),
+			}
+			return
+		}
+		notifications := server.NotificationsSince(before)
+		answer := codexapp.FinalAnswer(notifications)
+		if answer == "" {
+			answer = codexapp.CombinedText(notifications)
+		}
+		turn.done <- r1GitHubMeshTurnResult{Answer: answer}
+	}()
+	return turn, nil
+}
+
+func (t *r1GitHubMeshEntryTurn) poll() (r1GitHubMeshTurnResult, bool) {
+	if t == nil {
+		return r1GitHubMeshTurnResult{}, false
+	}
+	if t.result != nil {
+		return *t.result, true
+	}
+	select {
+	case res := <-t.done:
+		t.result = &res
+		return res, true
+	default:
+		return r1GitHubMeshTurnResult{}, false
+	}
+}
+
+func (t *r1GitHubMeshEntryTurn) pollReady() bool {
+	_, ok := t.poll()
+	return ok
+}
+
+func (t *r1GitHubMeshEntryTurn) wait() r1GitHubMeshTurnResult {
+	if res, ok := t.poll(); ok {
+		return res
+	}
+	res := <-t.done
+	t.result = &res
+	return res
+}
+
+func appendR1GitHubMeshEntryTurnAnswer(report *r1CodexSyncReport, turn *r1GitHubMeshEntryTurn, res r1GitHubMeshTurnResult) {
+	if report == nil || turn == nil || turn.reported {
+		return
+	}
+	appendSyncAgentAnswer(report, turn.principal, res.Answer)
+	turn.reported = true
+}
+
+func r1GitHubMeshEntrySeedTimeout(turnTimeout time.Duration) time.Duration {
+	if turnTimeout <= 0 {
+		return 5 * time.Minute
+	}
+	return turnTimeout
+}
+
+func waitR1GitHubMeshEntrySeed(agent *r1CodexSyncAgent, timeout time.Duration) (map[string]int, bool) {
+	deadline := time.Now().Add(timeout)
+	var counts map[string]int
+	for time.Now().Before(deadline) {
+		counts = countR1Ledger(agent.localURL, agent.r1CodexAgent)
+		if r1GitHubMeshEntrySeedReady(counts) {
+			return counts, true
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	counts = countR1Ledger(agent.localURL, agent.r1CodexAgent)
+	return counts, r1GitHubMeshEntrySeedReady(counts)
+}
+
+func r1GitHubMeshEntrySeedReady(counts map[string]int) bool {
+	return counts["assignment"] >= 1
+}
+
+func r1GitHubMeshIntegrationAgentIndex(agents []r1CodexSyncAgent, entries []r1GitHubMeshScenarioEntry, busy map[int]bool) int {
+	if len(entries) > 0 {
+		idx := entries[0].index
+		if idx >= 0 && idx < len(agents) && !busy[idx] && r1GitHubMeshAgentReady(agents[idx]) {
+			return idx
+		}
+	}
+	for i := range agents {
+		if busy[i] || !r1GitHubMeshAgentReady(agents[i]) {
+			continue
+		}
+		return i
+	}
+	return -1
+}
+
+func (s *r1GitHubMeshRun) restartAgentAppserver(index int, scenario, reason string) error {
+	if index < 0 || index >= len(s.agents) {
+		return fmt.Errorf("github mesh restart index out of range: %d", index)
+	}
+	agent := &s.agents[index]
+	if agent.server != nil {
+		agent.server.Close()
+		agent.server = nil
+	}
+	if err := startR1CodexAppserver(&agent.r1CodexAgent, s.opts.Command); err != nil {
+		addR1Assertion(s.report, "github-mesh restart appserver "+agent.principal, false, err.Error())
+		return err
+	}
+	agentReport, raw, err := initializeR1CodexAgent(&agent.r1CodexAgent, s.opts.TurnTimeout)
+	if err != nil {
+		addR1Assertion(s.report, "github-mesh restart appserver "+agent.principal, false, err.Error())
+		return err
+	}
+	if raw != nil && s.report.Raw != nil {
+		s.report.Raw[agent.principal+":hooks:restart:"+scenario] = raw
+	}
+	if s.report.Sync != nil {
+		s.report.Sync.Lifecycle = append(s.report.Sync.Lifecycle, r1SyncLifecycleReport{
+			At:        time.Now().UTC().Format(time.RFC3339),
+			Principal: agent.principal,
+			Action:    "appserver_restart_after_entry_handoff",
+			Result:    "ready",
+			Branch:    s.report.Sync.BranchByAgent[agent.principal],
+			Detail:    reason,
+		})
+		appendSyncAgentAnswer(s.report.Sync, agent.principal, "restarted thread "+agentReport.ThreadID+" after "+reason)
+	}
+	addR1Assertion(s.report, "github-mesh restart appserver "+agent.principal, true, reason)
+	return nil
+}
+
 func (s *r1GitHubMeshRun) scenarioEntries(name string) ([]r1GitHubMeshScenarioEntry, error) {
 	if len(s.agents) < 5 {
 		return nil, fmt.Errorf("github mesh natural scenarios require five agents")
 	}
 	switch name {
 	case "onboarding-synthesis":
-		return []r1GitHubMeshScenarioEntry{{index: 0, prompt: `帮我用团队协作快速理解这个仓库现在的 GitHub Remote Workspace 改造方向,整理一份新成员能读懂的上手说明。请通过 Mnemon 拉其他成员分别核对架构、测试和风险中的至少两个方向,再根据第一轮反馈做一次补齐或复核后汇总。`}}, nil
+		return []r1GitHubMeshScenarioEntry{{index: 0, prompt: `帮我用团队协作快速理解这个仓库现在的 GitHub Remote Workspace 改造方向,整理一份新成员能读懂的上手说明。请先通过 Mnemon 拉其他成员分别核对架构、测试和风险中的至少两个方向,再继续阅读并根据第一轮反馈做一次补齐或复核后汇总。`}}, nil
 	case "sync-risk-review":
-		return []r1GitHubMeshScenarioEntry{{index: 1, prompt: `同步这块我担心还有隐藏问题。请用团队协作检查 GitHub Remote Workspace 相关的配置、诊断和测试设计;把风险排查和验证/补文档拆给合适同伴推进。第一轮先找风险,再根据结果安排第二轮验证或补齐。`}}, nil
+		return []r1GitHubMeshScenarioEntry{{index: 1, prompt: `同步这块我担心还有隐藏问题。请先通过 Mnemon 发起团队协作,检查 GitHub Remote Workspace 相关的配置、诊断和测试设计;把风险排查和验证/补文档拆给合适同伴推进。第一轮先找风险,再根据结果安排第二轮验证或补齐。`}}, nil
 	case "live-readiness-operator-safety":
 		return []r1GitHubMeshScenarioEntry{
-			{index: 0, prompt: `请你用团队协作推进一次 GitHub live case 的准备,目标是能在 mnemon-dev/mnemon-teamwork-example 上证明 publish/pull/import 成立。先让同伴分别找出实现、测试和运行缺口,再根据第一轮结果安排第二轮补齐。`},
-			{index: 2, prompt: `我主要担心这个 GitHub 方案的操作者安全和失败诊断。请你通过 Mnemon 拉同伴一起从 token、repo、branch、报错可读性这几个角度检查,并把发现反馈给 live case 准备工作。`},
+			{index: 0, prompt: `请你用团队协作推进一次 GitHub live case 的准备,目标是能在 mnemon-dev/mnemon-teamwork-example 上证明 publish/pull/import 成立。请先通过 Mnemon 启动协作,让同伴分别找出实现、测试和运行缺口,再根据第一轮结果安排第二轮补齐。`},
+			{index: 2, prompt: `我主要担心这个 GitHub 方案的操作者安全和失败诊断。请你先通过 Mnemon 拉同伴一起从 token、repo、branch、报错可读性这几个角度检查,并把发现反馈给 live case 准备工作。`},
 		}, nil
 	default:
 		return nil, fmt.Errorf("unknown GitHub mesh scenario %q", name)
@@ -628,6 +866,12 @@ func (s *r1GitHubMeshRun) wakeWorkers(name string, entries []r1GitHubMeshScenari
 				return err
 			}
 			s.lifecycleExercised = true
+		}
+		if cycle >= 2 {
+			counts, _ := r1GitHubMeshAuthoredEventCounts(s.agents)
+			if r1GitHubMeshTeamEvidenceCountsReady(counts) {
+				return nil
+			}
 		}
 	}
 	return nil
@@ -790,6 +1034,57 @@ func r1GitHubMeshKindTotal(counts map[string]map[string]int, kind string) int {
 		total += byKind[kind]
 	}
 	return total
+}
+
+func r1GitHubMeshTeamEvidenceCountsReady(counts map[string]map[string]int) bool {
+	return r1ClusterNonProfileParticipantCount(counts) >= 2 &&
+		r1GitHubMeshKindTotal(counts, "assignment") >= 1 &&
+		r1GitHubMeshKindTotal(counts, "progress_digest") >= 1
+}
+
+func r1GitHubMeshAuthoredEventCounts(agents []r1CodexSyncAgent) (map[string]map[string]int, []string) {
+	out := map[string]map[string]int{}
+	var warnings []string
+	for _, agent := range agents {
+		path := prodSimMnemondPath(agent)
+		db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)")
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("%s open authored event counts: %v", agent.principal, err))
+			continue
+		}
+		func() {
+			defer db.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			rows, err := db.QueryContext(ctx, `
+SELECT actor, resource_kind, COUNT(*)
+FROM sync_events
+WHERE actor <> ''
+GROUP BY actor, resource_kind
+ORDER BY actor, resource_kind`)
+			if err != nil {
+				warnings = append(warnings, fmt.Sprintf("%s query authored event counts: %v", agent.principal, err))
+				return
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var actor, kind string
+				var count int
+				if err := rows.Scan(&actor, &kind, &count); err != nil {
+					warnings = append(warnings, fmt.Sprintf("%s scan authored event counts: %v", agent.principal, err))
+					return
+				}
+				if out[actor] == nil {
+					out[actor] = map[string]int{}
+				}
+				out[actor][kind] += count
+			}
+			if err := rows.Err(); err != nil {
+				warnings = append(warnings, fmt.Sprintf("%s read authored event counts: %v", agent.principal, err))
+			}
+		}()
+	}
+	return out, warnings
 }
 
 func r1GitHubMeshLedgerCountsByAgent(agents []r1CodexSyncAgent, kind string) map[string]int {

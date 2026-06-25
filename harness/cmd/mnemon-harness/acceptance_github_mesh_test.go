@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/mnemon-dev/mnemon/harness/internal/codexapp"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemonhub/exchange"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
@@ -342,6 +344,45 @@ func TestR1GitHubMeshPromptRoundsCountsScenarioPrompts(t *testing.T) {
 	}
 }
 
+func TestR1GitHubMeshEntrySeedTimeoutIsBounded(t *testing.T) {
+	if got := r1GitHubMeshEntrySeedTimeout(8 * time.Minute); got != 8*time.Minute {
+		t.Fatalf("seed timeout = %s, want full turn timeout", got)
+	}
+	if got := r1GitHubMeshEntrySeedTimeout(2 * time.Minute); got != 2*time.Minute {
+		t.Fatalf("short seed timeout = %s, want full short turn timeout", got)
+	}
+	if got := r1GitHubMeshEntrySeedTimeout(0); got != 5*time.Minute {
+		t.Fatalf("default seed timeout = %s, want 5m", got)
+	}
+}
+
+func TestR1GitHubMeshEntrySeedReadyUsesAssignment(t *testing.T) {
+	if !r1GitHubMeshEntrySeedReady(map[string]int{"assignment": 1}) {
+		t.Fatal("assignment should be enough to seed worker handoff")
+	}
+	if r1GitHubMeshEntrySeedReady(map[string]int{"teamwork_signal": 1}) {
+		t.Fatal("signal without assignment should not seed worker handoff")
+	}
+}
+
+func TestR1GitHubMeshIntegrationAgentSkipsBusyEntrypoint(t *testing.T) {
+	agents := []r1CodexSyncAgent{
+		{r1CodexAgent: r1CodexAgent{principal: "codex-01@project", server: codexapp.New("codex", t.TempDir()), threadID: "thread-1"}, localCancel: func() {}},
+		{r1CodexAgent: r1CodexAgent{principal: "codex-02@project", server: codexapp.New("codex", t.TempDir()), threadID: "thread-2"}, localCancel: func() {}},
+		{r1CodexAgent: r1CodexAgent{principal: "codex-03@project", server: codexapp.New("codex", t.TempDir()), threadID: "thread-3"}, localCancel: func() {}},
+	}
+	entries := []r1GitHubMeshScenarioEntry{{index: 0}}
+	if got := r1GitHubMeshIntegrationAgentIndex(agents, entries, nil); got != 0 {
+		t.Fatalf("integration agent = %d, want entrypoint when idle", got)
+	}
+	if got := r1GitHubMeshIntegrationAgentIndex(agents, entries, map[int]bool{0: true}); got != 1 {
+		t.Fatalf("integration agent = %d, want first idle teammate", got)
+	}
+	if got := r1GitHubMeshIntegrationAgentIndex(agents, entries, map[int]bool{0: true, 1: true, 2: true}); got != -1 {
+		t.Fatalf("integration agent = %d, want none when all ready agents are busy", got)
+	}
+}
+
 func TestR1GitHubMeshKindTotalCountsGovernedEvents(t *testing.T) {
 	counts := map[string]map[string]int{
 		"codex-01@project": {"assignment": 2, "progress_digest": 1},
@@ -355,5 +396,63 @@ func TestR1GitHubMeshKindTotalCountsGovernedEvents(t *testing.T) {
 	}
 	if got := r1GitHubMeshKindTotal(counts, "project_intent"); got != 0 {
 		t.Fatalf("missing kind total = %d, want 0", got)
+	}
+}
+
+func TestR1GitHubMeshTeamEvidenceCountsReady(t *testing.T) {
+	counts := map[string]map[string]int{
+		"codex-01@project": {"assignment": 2},
+		"codex-02@project": {"progress_digest": 1},
+		"codex-03@project": {"progress_digest": 1},
+	}
+	if !r1GitHubMeshTeamEvidenceCountsReady(counts) {
+		t.Fatalf("team evidence should be ready for two non-profile participants: %+v", counts)
+	}
+	counts = map[string]map[string]int{
+		"codex-01@project": {"assignment": 2},
+		"codex-02@project": {"agent_profile": 1},
+	}
+	if r1GitHubMeshTeamEvidenceCountsReady(counts) {
+		t.Fatalf("team evidence should require progress beyond assignment publication: %+v", counts)
+	}
+}
+
+func TestR1GitHubMeshAuthoredEventCountsUseLocalSyncEvents(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspaces", "codex-01")
+	storePath := filepath.Join(workspace, runtime.DefaultStorePath)
+	if err := os.MkdirAll(filepath.Dir(storePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", storePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`CREATE TABLE sync_events(actor TEXT, resource_kind TEXT, status TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO sync_events(actor, resource_kind, status) VALUES
+		('codex-01@project', 'assignment', 'synced'),
+		('codex-01@project', 'assignment', 'pending'),
+		('codex-02@project', 'progress_digest', 'synced'),
+		('', 'progress_digest', 'synced')`); err != nil {
+		t.Fatal(err)
+	}
+
+	counts, warnings := r1GitHubMeshAuthoredEventCounts([]r1CodexSyncAgent{{
+		r1CodexAgent: r1CodexAgent{principal: "codex-01@project", workspace: workspace},
+	}})
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %v", warnings)
+	}
+	if got := counts["codex-01@project"]["assignment"]; got != 2 {
+		t.Fatalf("codex-01 assignment count = %d, want 2", got)
+	}
+	if got := counts["codex-02@project"]["progress_digest"]; got != 1 {
+		t.Fatalf("codex-02 progress count = %d, want 1", got)
+	}
+	if _, ok := counts[""]; ok {
+		t.Fatal("blank actors must not be counted")
 	}
 }
