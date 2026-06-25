@@ -1,7 +1,6 @@
-// Package coreguard holds architectural guard tests that keep the collaboration-channel core
-// generic. The load-bearing invariant: the core — contract, channel, kernel, store, projection,
-// rule, reconcile, runtime — contains ONLY the generic governed-event mechanism. It imports no
-// application/host/optional ring, and hardcodes no business kind vocabulary. The core is what makes
-// mnemon a protocol; everything specific (capabilities, hosts, the optional autopilot, demos) is an
-// add-on OUTSIDE it. These tests fail the build the moment that line is crossed.
+// Package coreguard holds architectural guard tests for the harness package topology. The
+// load-bearing invariant is that implementation packages remain owned by the main axes:
+// hostagent, mnemond, mnemonhub, and event. Residual words such as capability, channel,
+// admission rule, kernel, sync, render, and scoped view may exist only as implementation details with an explicit
+// main-axis owner; they must not grow into new system-level concepts.
 package coreguard

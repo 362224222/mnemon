@@ -1,11 +1,15 @@
 package contract
 
-import "fmt"
+import (
+	"fmt"
 
-// Channel-facing DTOs shared across the channel/runtime/app layers. They live in contract (zero
-// deps) so the channel port and the runtime that satisfies it can both name them without a back-edge.
+	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
+)
 
-// ActorKind classifies a channel principal by role. It is NOT a privilege path: the channel is
+// Access-facing DTOs shared across the mnemond access/runtime/app layers. They live in contract
+// (zero deps) so the access port and the runtime that satisfies it can both name them without a back-edge.
+
+// ActorKind classifies a mnemond access principal by role. It is NOT a privilege path: access is
 // the same for every principal; the role differs by binding, never by a privileged code path
 // (D6). HostAgent pushes host observations; ControlAgent is an operator/control client;
 // ReplicaAgent is the background Remote Workspace sync actor.
@@ -17,14 +21,14 @@ const (
 	KindReplicaAgent ActorKind = "replica-agent"
 )
 
-// SyncImportActor is the well-known principal under which pulled remote commits re-enter Event Intake.
-// The runtime uses it to skip re-recording sync commits for sync-imported decisions; the app sync glue
+// SyncImportActor is the well-known principal under which pulled synced events re-enter Event Intake.
+// The runtime uses it to skip re-recording synced events for sync-imported decisions; the app sync glue
 // drives the import runtime under it.
 const SyncImportActor = ActorID("sync@local")
 
 // The three Remote Workspace sync wire verbs (sync-abi-v1 §1). They live in contract because the ABI
-// names them: the channel binding layer and the standalone hub (syncserver/mnemon-hub) must agree on the
-// strings without either importing the other. Deliberately untyped so channel can alias them into its
+// names them: the mnemond access binding layer and the standalone hub (mnemonhub/mnemon-hub) must agree on the
+// strings without either importing the other. Deliberately untyped so access can alias them into its
 // Verb space unchanged.
 const (
 	SyncVerbPush   = "sync.push"
@@ -45,7 +49,7 @@ type ReplicaGrant struct {
 
 // ClampRefs clamps a requested ref set to a principal's granted scope — the team-scale authorization
 // ceiling, implemented ONCE for pull / sync / status (hand-rolled copies had already diverged on
-// empty-scope handling). channel.ChannelBinding.ClampRefs and the syncserver hub both delegate here.
+// empty-scope handling). access.ChannelBinding.ClampRefs and the mnemonhub hub both delegate here.
 // Empty requested defaults to the full scope; any explicit ref outside the scope is an error; an
 // EMPTY scope denies every explicit ref (fail closed). The ingest path keeps its documented exception
 // (an observation naming no refs is unconstrained) at its own call site.
@@ -81,16 +85,16 @@ type ChannelStatus struct {
 // Sync{Push,Pull,Status} request/response DTOs for the Remote Workspace sync verbs.
 
 type SyncPushRequest struct {
-	ReplicaID string        `json:"replica_id"`
-	BatchID   string        `json:"batch_id"`
-	Commits   []LocalCommit `json:"commits"`
+	ReplicaID string                     `json:"replica_id"`
+	BatchID   string                     `json:"batch_id"`
+	Events    []eventmodel.EventEnvelope `json:"events"`
 }
 
 type SyncPushResponse struct {
-	Accepted   []SyncCommitResult `json:"accepted"`
-	Rejected   []SyncCommitResult `json:"rejected"`
-	Conflicts  []SyncCommitResult `json:"conflicts"`
-	NextCursor string             `json:"next_cursor,omitempty"`
+	Accepted   []EventExchangeResult `json:"accepted"`
+	Rejected   []EventExchangeResult `json:"rejected"`
+	Conflicts  []EventExchangeResult `json:"conflicts"`
+	NextCursor string                `json:"next_cursor,omitempty"`
 }
 
 type SyncPullRequest struct {
@@ -100,27 +104,26 @@ type SyncPullRequest struct {
 }
 
 type SyncPullResponse struct {
-	Commits     []LocalCommit      `json:"commits"`
-	Diagnostics []SyncCommitResult `json:"diagnostics"`
-	NextCursor  string             `json:"next_cursor"`
+	Events      []eventmodel.EventEnvelope `json:"events"`
+	Diagnostics []EventExchangeResult      `json:"diagnostics"`
+	NextCursor  string                     `json:"next_cursor"`
 }
 
-// SyncStatusResponse carries the hub-side sync evidence. The three Hub* counters are the v1
-// ADDITIVE extension (sync-abi-v1 §3): total commits accepted into the hub log, total commits
-// returned across pulls, and the last next_cursor served to each replica principal. A pre-counter
-// hub omits them; clients treat absent as zero.
+// SyncStatusResponse carries the hub-side event exchange evidence: total synced envelopes accepted
+// into the hub log, total synced envelopes returned across pulls, and the last next_cursor served
+// to each replica principal.
 type SyncStatusResponse struct {
-	Principal          ActorID           `json:"principal"`
-	RemoteWorkspace    string            `json:"remote_workspace"`
-	HubCommitsReceived int64             `json:"hub_commits_received"`
-	HubCommitsServed   int64             `json:"hub_commits_served"`
-	HubReplicaCursors  map[string]string `json:"hub_replica_cursors,omitempty"`
+	Principal         ActorID           `json:"principal"`
+	RemoteWorkspace   string            `json:"remote_workspace"`
+	HubEventsReceived int64             `json:"hub_events_received"`
+	HubEventsServed   int64             `json:"hub_events_served"`
+	HubReplicaCursors map[string]string `json:"hub_replica_cursors,omitempty"`
 }
 
-type SyncCommitResult struct {
-	OriginReplicaID string      `json:"origin_replica_id"`
-	LocalDecisionID string      `json:"local_decision_id"`
-	ResourceRef     ResourceRef `json:"resource_ref"`
-	Status          string      `json:"status"`
-	Diagnostic      string      `json:"diagnostic,omitempty"`
+type EventExchangeResult struct {
+	OriginMnemond string                  `json:"origin_mnemond"`
+	EventID       string                  `json:"event_id"`
+	Subject       eventmodel.EventSubject `json:"subject"`
+	Status        string                  `json:"status"`
+	Diagnostic    string                  `json:"diagnostic,omitempty"`
 }

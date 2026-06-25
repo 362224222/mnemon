@@ -15,10 +15,10 @@
 > 2. The replica's produce surface is its **catalog's importable kinds**, descriptor-derived and
 >    injected as `runtime.RuntimeConfig.SyncableKinds`.
 > 3. The sync-import observation renames `remote.<kind>.commit_observed` →
->    `<kind>.remote_commit.observed` (the system-derived form of the `capability-spec-v2` grammar),
+>    `<kind>.remote_synced_event.observed` (the system-derived form of the `capability-spec-v2` grammar),
 >    so the import diagnostic domain moves `remote.diagnostic` → `<kind>.diagnostic`.
 > 4. An importable kind is selected by a `sync` descriptor block in its capability spec, under a
->    closed-set merge strategy — no hardcoded `{memory, skill}` list anywhere.
+>    closed-set merge strategy — no hardcoded kind list anywhere.
 
 ## 1. The Sync descriptor block (capability-spec-v2 consumer)
 
@@ -35,16 +35,18 @@ A capability spec opts its kind into Remote Workspace import with a `sync` block
   fails closed on any other value):
   - `entry-dedup` — merge non-conflicting ENTRIES by id into the resource's entry list, synthesizing
     one entry from a bare `content` field when the commit carries none; reject a
-    same-id/different-content divergence. (memory selects this.)
+    same-id/different-content divergence.
   - `declaration-dedup` — merge non-conflicting DECLARATIONS by id, VALIDATING each imported
     declaration on the receiving side (id format, status enum, secret/injection scan — I15, receiving
-    admission is not relaxed); reject a same-id/different-content conflict. (skill selects this.)
+    admission is not relaxed); reject a same-id/different-content conflict.
+  - `item-dedup` — merge non-conflicting generic items by id, preserving every item field.
 
 The strategy is parameterized by the capability (kind + proposed type), so the kind name appears in
 NO platform code on the produce, accept, or import surface — a new importable kind is a descriptor
-edit, not a code edit. The first-party importable set is the embedded catalog's: exactly
-`memory` (entry-dedup) + `skill` (declaration-dedup); an external declared kind that ships a `sync`
-block imports the same way (proven by the `journal` arm of `run_sync_pair`).
+edit, not a code edit. The embedded importable set is descriptor-derived from the embedded catalog
+(`agent_profile`, `teamwork_signal`, `project_intent`, `assignment`, `progress_digest`), and an
+external declared kind that ships a `sync` block imports the same way (proven by the `journal` arm
+of `run_sync_pair`).
 
 ## 4. Hub adjudication semantics (revises v1 §4)
 
@@ -62,7 +64,7 @@ sequenced by `remote_seq`). Push adjudicates per commit:
 - **conflict** — idempotency-key reuse with different content ONLY (unchanged from v1).
 
 **The accept surface is the grant scope, not a global syncable-kind set.** v1 gated each commit's
-kind against `contract.SyncableResourceKinds = {memory, skill}` — a hardcoded constant SHARED by the
+kind against `contract.SyncableResourceKinds` — a hardcoded constant SHARED by the
 hub accept path and the local produce path so the two "could not drift". PD6 deletes that constant.
 The hub (its own trust domain — it imports no capability catalog) carries no notion of "syncable
 kinds": its sole accept authority is the per-replica grant scope, already enforced per commit by the
@@ -96,8 +98,8 @@ never bypassing the kernel. Exactly-once is the intake dedupe over the six-part 
 ExternalID = "pull:<remote_id>:<OriginReplicaID>:<LocalDecisionID>:<Kind>:<ID>"
 ```
 
-- An **importable kind** (descriptor-derived: any kind whose spec declares `sync.importable`, e.g.
-  `memory`, `skill`) ingests its `<kind>.remote_commit.observed` event — the system-derived form of
+- An **importable kind** (descriptor-derived: any kind whose spec declares `sync.importable`) ingests
+  its `<kind>.remote_synced_event.observed` event — the system-derived form of
   the `capability-spec-v2` event grammar (v1's `remote.<kind>.commit_observed` is renamed). The
   kind's declared merge strategy (§1) merges non-conflicting items and DENIES a
   same-id/different-content divergence with a durable `<kind>.diagnostic` — the import diagnostic now
@@ -108,7 +110,7 @@ ExternalID = "pull:<remote_id>:<OriginReplicaID>:<LocalDecisionID>:<Kind>:<ID>"
   `{kind, origin_replica_id, local_decision_id, remote_id}`; a deny rule turns it into a durable
   `sync.diagnostic` naming the kind. Exactly-once; the pull cursor still advances — the skip is
   visible, never silent, and never wedges the stream. (Unchanged from v1 except that the importable
-  set is now descriptor-derived: `capability.RemoteCommitEventType(catalog, kind)` returns the
+  set is now descriptor-derived: `policy.RemoteSyncedEventType(catalog, kind)` returns the
   observation type for an importable kind and "no mapping" otherwise.)
 
 The pull cursor is durable per remote (`sync_pull:<remote_id>`), advanced only after the batch is
@@ -118,7 +120,7 @@ imported.
 
 Two consumers, unchanged from v1: the runtime co-hosted hub (`mnemon-harness local run` serving
 `/sync/*`) and the standalone `mnemon-hub` binary — ONE wire, two hostings. The PD6 descriptor-derived
-path is verified at the Go integration layer (`capability` import-dispatch + importable-kind pins,
-`syncserver` accept, `app` sync import) and end-to-end by `run_sync_pair`, which now carries TWO
-kinds across the TLS hub: embedded `memory` AND an external declared kind `journal` (entry-dedup) —
-the journal round-trip is the proof that the produce/accept/import surfaces are kind-agnostic.
+path is verified at the Go integration layer (`policy` import-dispatch + importable-kind pins,
+`mnemonhub` accept, `app` sync import) and end-to-end by `run_sync_pair`, which carries embedded
+`progress_digest`, external `journal`, and embedded `assignment` across the TLS hub. The journal
+round-trip proves the produce/accept/import surfaces are kind-agnostic.

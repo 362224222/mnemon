@@ -6,11 +6,11 @@ import (
 	"os"
 	"testing"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 )
 
-// Installing skill after memory for the same principal must be ADDITIVE: the binding keeps the memory
-// grant (observed types + scope) and gains the skill grant — it does not replace one with the other.
+// Installing a second event package for the same principal must be ADDITIVE: the binding keeps the
+// first grant (observed types + scope) and gains the second grant — it does not replace one with the other.
 // And the bearer token is idempotent: a rerun must not rotate it (a running Local Mnemon still holds
 // the old token in memory, so a rotated token would lock hooks out).
 func TestSetupIsAdditiveAndTokenIdempotent(t *testing.T) {
@@ -19,10 +19,10 @@ func TestSetupIsAdditiveAndTokenIdempotent(t *testing.T) {
 	var out bytes.Buffer
 
 	r1, err := h.Setup(context.Background(), &out, &out, SetupOptions{
-		Host: "codex", Loops: []string{"memory"}, Principal: "codex@project", ProjectRoot: root,
+		Host: "codex", Loops: []string{"assignment"}, Principal: "codex@project", ProjectRoot: root,
 	})
 	if err != nil {
-		t.Fatalf("setup memory: %v", err)
+		t.Fatalf("setup assignment: %v", err)
 	}
 	tok1, err := os.ReadFile(r1.TokenFile)
 	if err != nil {
@@ -30,37 +30,37 @@ func TestSetupIsAdditiveAndTokenIdempotent(t *testing.T) {
 	}
 
 	if _, err := h.Setup(context.Background(), &out, &out, SetupOptions{
-		Host: "codex", Loops: []string{"skill"}, Principal: "codex@project", ProjectRoot: root,
+		Host: "codex", Loops: []string{"progress_digest"}, Principal: "codex@project", ProjectRoot: root,
 	}); err != nil {
-		t.Fatalf("setup skill: %v", err)
+		t.Fatalf("setup progress_digest: %v", err)
 	}
 
-	loaded, err := channel.LoadBindingFile(root, r1.BindingFile)
+	loaded, err := access.LoadBindingFile(root, r1.BindingFile)
 	if err != nil {
 		t.Fatalf("load bindings: %v", err)
 	}
-	var b channel.ChannelBinding
+	var b access.ChannelBinding
 	for _, x := range loaded.Bindings {
 		if x.Principal == "codex@project" {
 			b = x
 		}
 	}
-	if !b.AllowsObservedType("memory.write_candidate.observed") {
-		t.Fatal("additive setup must keep the memory grant after installing skill")
+	if !b.AllowsObservedType("assignment.write_candidate.observed") {
+		t.Fatal("additive setup must keep the assignment grant after installing progress_digest")
 	}
-	if !b.AllowsObservedType("skill.write_candidate.observed") {
-		t.Fatal("additive setup must add the skill grant")
+	if !b.AllowsObservedType("progress_digest.write_candidate.observed") {
+		t.Fatal("additive setup must add the progress_digest grant")
 	}
-	var hasMem, hasSkill bool
+	var hasAssignment, hasProgress bool
 	for _, ref := range b.SubscriptionScope {
-		if ref.Kind == "memory" {
-			hasMem = true
+		if ref.Kind == "assignment" {
+			hasAssignment = true
 		}
-		if ref.Kind == "skill" {
-			hasSkill = true
+		if ref.Kind == "progress_digest" {
+			hasProgress = true
 		}
 	}
-	if !hasMem || !hasSkill {
+	if !hasAssignment || !hasProgress {
 		t.Fatalf("binding scope must union both kinds; got %+v", b.SubscriptionScope)
 	}
 

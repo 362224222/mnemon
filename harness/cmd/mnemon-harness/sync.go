@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/app"
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/remotesync"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemonhub/exchange"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 	"github.com/spf13/cobra"
 )
@@ -98,7 +98,7 @@ func runSyncConnect(cmd *cobra.Command, args []string) error {
 	// T2 downgrade gate at WRITE time (v1.1 #3): a plaintext non-loopback endpoint never enters
 	// remotes.json unless explicitly overridden — the worker and the manual verbs then re-validate
 	// at client construction.
-	if err := channel.ValidateSyncEndpoint(endpoint, syncAllowInsecure); err != nil {
+	if err := access.ValidateSyncEndpoint(endpoint, syncAllowInsecure); err != nil {
 		return err
 	}
 	if strings.TrimSpace(syncRemoteToken) == "" && strings.TrimSpace(syncRemoteTokenFile) == "" {
@@ -117,7 +117,7 @@ func runSyncConnect(cmd *cobra.Command, args []string) error {
 // While the service runs, its in-process sync worker owns sync; the manual verbs cover the
 // service-stopped path.
 func ensureSyncStoreAvailable() error {
-	if err := remotesync.ProbeAvailable(resolvedSyncStorePath()); err != nil {
+	if err := exchange.ProbeAvailable(resolvedSyncStorePath()); err != nil {
 		return fmt.Errorf("the local store is busy (is `mnemon-harness local run` running?) — its in-process sync worker already syncs a connected Remote Workspace; stop it to sync manually: %w", err)
 	}
 	return nil
@@ -143,7 +143,7 @@ func runSyncPull(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "Sync pull: %d commits\n", result.commits)
+	fmt.Fprintf(cmd.OutOrStdout(), "Sync pull: %d events\n", result.events)
 	return nil
 }
 
@@ -171,7 +171,7 @@ func runSyncBackground(cmd *cobra.Command, args []string) error {
 		if result, err := syncPullOnce(); err != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(), "sync pull failed: %v\n", err)
 		} else {
-			fmt.Fprintf(cmd.OutOrStdout(), "Sync pull: %d commits\n", result.commits)
+			fmt.Fprintf(cmd.OutOrStdout(), "Sync pull: %d events\n", result.events)
 		}
 		select {
 		case <-cmd.Context().Done():
@@ -188,16 +188,16 @@ type syncPushResult struct {
 }
 
 type syncPullResult struct {
-	commits int
+	events int
 }
 
 func syncPushOnce() (syncPushResult, error) {
 	storePath := resolvedSyncStorePath()
-	batch, err := remotesync.ReadLocalSyncPushBatch(storePath)
+	batch, err := exchange.ReadLocalSyncPushBatch(storePath)
 	if err != nil {
 		return syncPushResult{}, err
 	}
-	if len(batch.Commits) == 0 {
+	if len(batch.Events) == 0 {
 		return syncPushResult{}, nil
 	}
 	remote, err := resolveSyncRemote()
@@ -210,13 +210,13 @@ func syncPushOnce() (syncPushResult, error) {
 	}
 	resp, err := client.SyncPush(contract.SyncPushRequest{
 		ReplicaID: batch.ReplicaID,
-		BatchID:   remotesync.PushBatchID(batch.ReplicaID, batch.Commits),
-		Commits:   batch.Commits,
+		BatchID:   exchange.PushBatchID(batch.ReplicaID, batch.Events),
+		Events:    batch.Events,
 	})
 	if err != nil {
 		return syncPushResult{}, fmt.Errorf("sync push failed: %w", err)
 	}
-	if err := remotesync.ApplyLocalSyncPushResponse(storePath, remote.ID, resp); err != nil {
+	if err := exchange.ApplyLocalSyncPushResponse(storePath, remote.ID, resp); err != nil {
 		return syncPushResult{}, err
 	}
 	return syncPushResult{accepted: len(resp.Accepted), rejected: len(resp.Rejected), conflicts: len(resp.Conflicts)}, nil
@@ -228,7 +228,7 @@ func syncPullOnce() (syncPullResult, error) {
 		return syncPullResult{}, err
 	}
 	storePath := resolvedSyncStorePath()
-	state, err := remotesync.ReadLocalSyncPullState(storePath, remote.ID)
+	state, err := exchange.ReadLocalSyncPullState(storePath, remote.ID)
 	if err != nil {
 		return syncPullResult{}, err
 	}
@@ -244,10 +244,10 @@ func syncPullOnce() (syncPullResult, error) {
 		return syncPullResult{}, fmt.Errorf("sync pull failed: %w", err)
 	}
 	catalog := app.SyncImportCatalog(syncProjectRoot(), os.Stderr)
-	if err := app.ImportLocalSyncPull(storePath, remote.ID, resp.NextCursor, resp.Commits, catalog); err != nil {
+	if err := app.ImportLocalSyncPull(storePath, remote.ID, resp.NextCursor, resp.Events, catalog); err != nil {
 		return syncPullResult{}, err
 	}
-	return syncPullResult{commits: len(resp.Commits)}, nil
+	return syncPullResult{events: len(resp.Events)}, nil
 }
 
 type syncRemoteConfig struct {
@@ -259,8 +259,8 @@ type syncRemoteConfig struct {
 
 // syncClientFor builds the bounded sync client for one resolved remote: bearer token, optional
 // pinned TLS root, and the T2 downgrade gate (--allow-insecure-remote is the only override).
-func syncClientFor(remote syncRemoteConfig) (*channel.Client, error) {
-	return channel.NewSyncClient(remote.Endpoint, channel.SyncClientConfig{
+func syncClientFor(remote syncRemoteConfig) (*access.Client, error) {
+	return access.NewSyncClient(remote.Endpoint, access.SyncClientConfig{
 		Token:         remote.Token,
 		CAFile:        remote.CAFile,
 		AllowInsecure: syncAllowInsecure,
@@ -279,7 +279,7 @@ func resolveSyncRemote() (syncRemoteConfig, error) {
 		}
 		return syncRemoteConfig{ID: syncRemoteID, Endpoint: syncRemoteURL, Token: token, CAFile: resolvedSyncCAFile("")}, nil
 	}
-	entry, err := remotesync.LoadRemoteEntry(resolvedSyncRemotesPath(), syncRemoteID)
+	entry, err := exchange.LoadRemoteEntry(resolvedSyncRemotesPath(), syncRemoteID)
 	if err != nil {
 		return syncRemoteConfig{}, err
 	}
@@ -311,7 +311,7 @@ func resolvedSyncCAFile(entryCAFile string) string {
 }
 
 func upsertSyncRemote(path, root, id, endpoint, token, tokenFile, caFile string) error {
-	doc := remotesync.RemotesDoc{SchemaVersion: 1}
+	doc := exchange.RemotesDoc{SchemaVersion: 1}
 	if raw, err := os.ReadFile(path); err == nil && len(strings.TrimSpace(string(raw))) > 0 {
 		if err := json.Unmarshal(raw, &doc); err != nil {
 			return fmt.Errorf("parse Remote Workspace config: %w", err)
@@ -326,7 +326,7 @@ func upsertSyncRemote(path, root, id, endpoint, token, tokenFile, caFile string)
 	if err != nil {
 		return err
 	}
-	entry := remotesync.RemoteEntry{ID: id, Endpoint: endpoint, CredentialRef: credentialRef, CAFile: normalizeSyncFileRef(caFile)}
+	entry := exchange.RemoteEntry{ID: id, Endpoint: endpoint, CredentialRef: credentialRef, CAFile: normalizeSyncFileRef(caFile)}
 	replaced := false
 	for i := range doc.Remotes {
 		if doc.Remotes[i].ID == id {

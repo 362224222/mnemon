@@ -5,9 +5,8 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
-	"github.com/mnemon-dev/mnemon/harness/internal/rule"
-	"github.com/mnemon-dev/mnemon/harness/internal/store"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/state"
 )
 
 func agentSubs() map[contract.ActorID]contract.Subscription {
@@ -17,13 +16,13 @@ func agentSubs() map[contract.ActorID]contract.Subscription {
 }
 
 func p0Modes() contract.Modes {
-	return contract.Modes{Conflict: contract.ConflictRebase, Isolation: contract.IsolationProjectionReadSet, Authz: contract.AuthzStrict}
+	return contract.Modes{Conflict: contract.ConflictRebase, Isolation: contract.IsolationPresentationReadSet, Authz: contract.AuthzStrict}
 }
 
 // proposeRule updates the single in-scope memory resource based_on the version it saw.
-func proposeRule() rule.Rule {
-	return rule.NewNativeRule("writer", "agent", "memory.write.proposed", []string{"memory.observed"},
-		func(in rule.RuleInput) (contract.RuleDecision, error) {
+func proposeRule() admission.Rule {
+	return admission.NewNativeRule("writer", "agent", "memory.write.proposed", []string{"memory.observed"},
+		func(in admission.RuleInput) (contract.RuleDecision, error) {
 			if len(in.View.Resources) == 0 {
 				return contract.RuleDecision{Verdict: contract.VerdictDeny, Reasons: []string{"empty scope"}}, nil
 			}
@@ -36,24 +35,24 @@ func proposeRule() rule.Rule {
 		})
 }
 
-func denyRule() rule.Rule {
-	return rule.NewNativeRule("denier", "agent", "memory.write.proposed", []string{"memory.observed"},
-		func(rule.RuleInput) (contract.RuleDecision, error) {
+func denyRule() admission.Rule {
+	return admission.NewNativeRule("denier", "agent", "memory.write.proposed", []string{"memory.observed"},
+		func(admission.RuleInput) (contract.RuleDecision, error) {
 			return contract.RuleDecision{Verdict: contract.VerdictDeny, Reasons: []string{"denied for test"}}, nil
 		})
 }
 
-func newServerWith(t *testing.T, rs rule.RuleSet) (*store.Store, *kernel.Kernel, *ControlServer) {
+func newServerWith(t *testing.T, rs admission.RuleSet) (*state.Store, *state.Materializer, *ControlServer) {
 	t.Helper()
-	s, err := store.OpenStore(":memory:")
+	s, err := state.OpenStore(":memory:")
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	t.Cleanup(func() { s.Close() })
-	rules := kernel.AuthorityRules{Allow: map[contract.ActorID][]contract.ResourceKind{"agent": {"memory"}}}
-	k := kernel.NewKernel(s, kernel.SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}, "goal": {"statement"}}), rules)
+	rules := state.AuthorityRules{Allow: map[contract.ActorID][]contract.ResourceKind{"agent": {"memory"}}}
+	k := state.NewMaterializer(s, state.SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}, "goal": {"statement"}}), rules)
 	cs := New(s, k, rs, agentSubs(), p0Modes(), seqGen(), fixedNow())
-	if d := k.Apply(contract.KernelOp{OpID: "seed", Actor: "agent", Writes: []contract.ResourceWrite{
+	if d := k.Apply(contract.StateOp{OpID: "seed", Actor: "agent", Writes: []contract.ResourceWrite{
 		{Ref: contract.ResourceRef{Kind: "memory", ID: "m1"}, Kind: contract.OpCreate, Fields: map[string]any{"content": "v0"}}}}, p0Modes()); d.Status != contract.Accepted {
 		t.Fatalf("seed: %s", d.Reason)
 	}
@@ -61,7 +60,7 @@ func newServerWith(t *testing.T, rs rule.RuleSet) (*store.Store, *kernel.Kernel,
 }
 
 func TestServerLoopProposeAccepts(t *testing.T) {
-	s, _, cs := newServerWith(t, rule.NewRuleSet(proposeRule()))
+	s, _, cs := newServerWith(t, admission.NewRuleSet(proposeRule()))
 	if _, _, err := cs.Ingest("agent", contract.ObservationEnvelope{ExternalID: "e1", Event: contract.Event{Type: "memory.observed", CorrelationID: "c1"}}); err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
@@ -82,7 +81,7 @@ func TestServerLoopProposeAccepts(t *testing.T) {
 }
 
 func TestServerLoopDenyEmitsDiagnostic(t *testing.T) {
-	s, _, cs := newServerWith(t, rule.NewRuleSet(denyRule()))
+	s, _, cs := newServerWith(t, admission.NewRuleSet(denyRule()))
 	if _, _, err := cs.Ingest("agent", contract.ObservationEnvelope{ExternalID: "e1", Event: contract.Event{Type: "memory.observed", CorrelationID: "c1"}}); err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
@@ -120,7 +119,7 @@ func TestServerLoopDenyEmitsDiagnostic(t *testing.T) {
 }
 
 func TestIngestOverwritesActorFromPrincipal(t *testing.T) {
-	s, _, cs := newServerWith(t, rule.NewRuleSet(proposeRule()))
+	s, _, cs := newServerWith(t, admission.NewRuleSet(proposeRule()))
 	seq, _, err := cs.Ingest("agent", contract.ObservationEnvelope{ExternalID: "e1", Event: contract.Event{Type: "memory.observed", Actor: "admin"}})
 	if err != nil {
 		t.Fatalf("ingest: %v", err)

@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/syncserver"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemonhub"
 )
 
 // replicas.json is the mnemon-hub form of the replica grant (sync-abi-v1 §2, dual-form rule): the same
@@ -39,7 +39,7 @@ type replicaRef struct {
 // credential_ref, and a NON-EMPTY scope list (an empty grant would fail open on pull); principals
 // and tokens must be unique. credential_ref resolves relative to the replicas.json directory
 // (or absolute).
-func loadReplicas(path string) (syncserver.GrantMap, map[string]contract.ActorID, error) {
+func loadReplicas(path string) (mnemonhub.GrantMap, map[string]contract.ActorID, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, nil, fmt.Errorf("stat replicas config: %w", err)
@@ -63,7 +63,7 @@ func loadReplicas(path string) (syncserver.GrantMap, map[string]contract.ActorID
 	if len(doc.Replicas) == 0 {
 		return nil, nil, fmt.Errorf("replicas config %s declares no replicas", path)
 	}
-	grants := syncserver.GrantMap{}
+	grants := mnemonhub.GrantMap{}
 	tokens := map[string]contract.ActorID{}
 	baseDir := filepath.Dir(path)
 	for i, e := range doc.Replicas {

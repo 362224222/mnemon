@@ -9,21 +9,21 @@ go build -o mnemon-harness ./harness/cmd/mnemon-harness
 
 ## 1. Install Agent Integration
 
-Install memory and skill integration into the current project:
+Install Agent Integration into the current project:
 
 ```sh
-./mnemon-harness setup --host codex --loop memory --loop skill --project-root .
+./mnemon-harness setup --host codex --project-root .
 ```
 
 Use `--dry-run` to preview file changes:
 
 ```sh
-./mnemon-harness setup --host codex --loop memory --loop skill --project-root . --dry-run
+./mnemon-harness setup --host codex --project-root . --dry-run
 ```
 
 ## 2. Run Local Mnemon
 
-Start the local service used by the projected host skills:
+Start the local service used by the host integration:
 
 ```sh
 ./mnemon-harness local run

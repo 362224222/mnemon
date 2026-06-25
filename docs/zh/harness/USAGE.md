@@ -9,21 +9,21 @@ go build -o mnemon-harness ./harness/cmd/mnemon-harness
 
 ## 1. 安装 Agent Integration
 
-把 memory 和 skill integration 安装到当前项目：
+把 Agent Integration 安装到当前项目：
 
 ```sh
-./mnemon-harness setup --host codex --loop memory --loop skill --project-root .
+./mnemon-harness setup --host codex --project-root .
 ```
 
 使用 `--dry-run` 预览文件变化：
 
 ```sh
-./mnemon-harness setup --host codex --loop memory --loop skill --project-root . --dry-run
+./mnemon-harness setup --host codex --project-root . --dry-run
 ```
 
 ## 2. 运行 Local Mnemon
 
-启动投影后的 host skills 使用的本地服务：
+启动 host integration 使用的本地服务：
 
 ```sh
 ./mnemon-harness local run

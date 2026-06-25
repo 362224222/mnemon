@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/capability"
-	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/state"
 )
 
 const widgetPackageSpec = `{"schema_version":1,"name":"widget","observed_type":"widget.write_candidate.observed",
@@ -37,7 +37,7 @@ func TestLoopAddRegistersAndValidates(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, ".mnemon", "loops", "widget", "capability.json")); err != nil {
 		t.Fatalf("package not placed under .mnemon/loops/widget: %v", err)
 	}
-	catalog, err := capability.ResolveCatalog(root, kernel.DefaultSchemaGuard().Required)
+	catalog, err := policy.ResolveRegistry(root, state.DefaultSchemaGuard().Required)
 	if err != nil {
 		t.Fatalf("resolve after add: %v", err)
 	}
@@ -53,10 +53,10 @@ func TestLoopAddRejectsAndRollsBack(t *testing.T) {
 	if err := os.MkdirAll(src, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// resource_kind "memory" is a first-party kind an external package may not claim (shadowing) —
-	// ResolveCatalog refuses it, so loop add must too.
+	// resource_kind "assignment" is an embedded kind an external package may not claim (shadowing) —
+	// ResolveRegistry refuses it, so loop add must too.
 	bad := `{"schema_version":1,"name":"broken","observed_type":"broken.write_candidate.observed",
-"proposed_type":"broken.write.proposed","resource_kind":"memory","items_field":"items",
+"proposed_type":"broken.write.proposed","resource_kind":"assignment","items_field":"items",
 "fields":[{"name":"text","validators":[{"id":"required","params":{"missing_style":"empty"}}]}],
 "render":{"content":{"member":"bullet-list","params":{"title":"# B","field":"text"}}}}`
 	if err := os.WriteFile(filepath.Join(src, "capability.json"), []byte(bad), 0o644); err != nil {
@@ -88,30 +88,30 @@ func TestLoopAddRefusesExistingTarget(t *testing.T) {
 	}
 }
 
-// loop capabilities resolves embedded + external kinds; loop schema returns one kind and errors on
+// loop packages resolves standard + external kinds; loop schema returns one kind and errors on
 // an unknown one.
-func TestLoopCapabilitiesAndSchema(t *testing.T) {
+func TestLoopEventPackagesAndSchema(t *testing.T) {
 	root := t.TempDir()
 	writeExternalGoalPackage(t, root, "widget", widgetPackageSpec)
 
-	infos, err := New(root).LoopCapabilities()
+	infos, err := New(root).LoopEventPackages()
 	if err != nil {
-		t.Fatalf("loop capabilities: %v", err)
+		t.Fatalf("loop packages: %v", err)
 	}
-	byKind := map[string]CapabilityInfo{}
+	byKind := map[string]EventPackageInfo{}
 	for _, info := range infos {
 		byKind[info.Kind] = info
 	}
-	if byKind["memory"].Source != "embedded" || !byKind["memory"].Importable || byKind["memory"].Merge != "entry-dedup" {
-		t.Fatalf("memory must be embedded + importable entry-dedup: %+v", byKind["memory"])
+	if byKind["assignment"].Source != "standard" || !byKind["assignment"].Importable || byKind["assignment"].Merge != "item-dedup" {
+		t.Fatalf("assignment must be standard + importable item-dedup: %+v", byKind["assignment"])
 	}
 	if w, ok := byKind["widget"]; !ok || w.Source != "external" || w.ObservedType != "widget.write_candidate.observed" {
 		t.Fatalf("external widget must appear with its descriptor: %+v", w)
 	}
 
-	info, err := New(root).LoopSchema("skill")
-	if err != nil || info.Merge != "declaration-dedup" {
-		t.Fatalf("loop schema skill: info=%+v err=%v", info, err)
+	info, err := New(root).LoopSchema("assignment")
+	if err != nil || info.Merge != "item-dedup" {
+		t.Fatalf("loop schema assignment: info=%+v err=%v", info, err)
 	}
 	if _, err := New(root).LoopSchema("nope"); err == nil {
 		t.Fatal("loop schema must error on an unknown kind, not return an empty success")
@@ -130,11 +130,14 @@ func TestRenderObserveSkill(t *testing.T) {
 	}
 	for _, want := range []string{
 		"# mnemon-observe",
-		"When to record",                    // judgment (hand-written)
-		"memory.write_candidate.observed",   // embedded mechanism (catalog-rendered)
-		"widget.write_candidate.observed",   // external mechanism (catalog-rendered)
-		"mnemon-harness loop schema --type", // discovery pointer, not hardcoded fields
-		"mnemon-harness control observe",    // submit shape
+		"When to record",                      // judgment (hand-written)
+		"How to read governed context",        // read path (generic)
+		"mnemon-harness control pull",         // scoped read shape
+		"mnemon-harness control render",       // rendered context shape
+		"assignment.write_candidate.observed", // embedded mechanism (catalog-rendered)
+		"widget.write_candidate.observed",     // external mechanism (catalog-rendered)
+		"mnemon-harness loop schema --type",   // discovery pointer, not hardcoded fields
+		"mnemon-harness control observe",      // submit shape
 	} {
 		if !strings.Contains(skill, want) {
 			t.Fatalf("observe skill missing %q:\n%s", want, skill)

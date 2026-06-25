@@ -4,12 +4,11 @@ import (
 	"testing"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
-	"github.com/mnemon-dev/mnemon/harness/internal/rule"
-	"github.com/mnemon-dev/mnemon/harness/internal/store"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/state"
 )
 
-// The wire boundary (channel.ServerAPI.Ingest) admits ONLY observations. A *.proposed / *.diagnostic is an INTERNAL
+// The wire boundary (access.ServerAPI.Ingest) admits ONLY observations. A *.proposed / *.diagnostic is an INTERNAL
 // event class: a *.proposed is minted exclusively by the bridge AFTER the rule pre-gate + write-scope check
 // (R11), a *.diagnostic only by the server (S7). The reconciler trusts every *.proposed in the log, so a
 // client-supplied one would skip the rule pre-gate, the bridge write-scope, AND readback (S10) and be
@@ -17,7 +16,7 @@ import (
 // cross-principal write-scope escalation. Ingest must reject reserved internal event types.
 
 func TestIngestRejectsForgedProposed(t *testing.T) {
-	s, _, cs := newServerWith(t, rule.NewRuleSet()) // empty rule set: no legitimate proposer exists
+	s, _, cs := newServerWith(t, admission.NewRuleSet()) // empty rule set: no legitimate proposer exists
 	_, _, err := cs.Ingest("agent", contract.ObservationEnvelope{ExternalID: "forge1", Event: contract.Event{
 		Type: "memory.write.proposed",
 		Payload: map[string]any{"writes": []contract.ResourceWrite{
@@ -35,7 +34,7 @@ func TestIngestRejectsForgedProposed(t *testing.T) {
 }
 
 func TestIngestRejectsForgedDiagnostic(t *testing.T) {
-	_, _, cs := newServerWith(t, rule.NewRuleSet())
+	_, _, cs := newServerWith(t, admission.NewRuleSet())
 	if _, _, err := cs.Ingest("agent", contract.ObservationEnvelope{ExternalID: "fd", Event: contract.Event{Type: "memory.diagnostic"}}); err == nil {
 		t.Fatal("Ingest must reject a client-forged *.diagnostic event")
 	}
@@ -45,19 +44,19 @@ func TestIngestRejectsForgedDiagnostic(t *testing.T) {
 // kind "memory", so kernel authz alone does not stop it — only the bridge write-scope would, and the forged
 // proposed event bypasses the bridge. Ingest must reject it before it enters the log (D7/S9).
 func TestIngestRejectsCrossPrincipalForgedProposed(t *testing.T) {
-	s, err := store.OpenStore(":memory:")
+	s, err := state.OpenStore(":memory:")
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	t.Cleanup(func() { s.Close() })
-	rules := kernel.AuthorityRules{Allow: map[contract.ActorID][]contract.ResourceKind{"alice": {"memory"}, "bob": {"memory"}}}
-	k := kernel.NewKernel(s, kernel.SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}, "goal": {"statement"}}), rules)
+	rules := state.AuthorityRules{Allow: map[contract.ActorID][]contract.ResourceKind{"alice": {"memory"}, "bob": {"memory"}}}
+	k := state.NewMaterializer(s, state.SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}, "goal": {"statement"}}), rules)
 	subs := map[contract.ActorID]contract.Subscription{
 		"alice": {Actor: "alice", Refs: []contract.ResourceRef{{Kind: "memory", ID: "mem_a"}}},
 		"bob":   {Actor: "bob", Refs: []contract.ResourceRef{{Kind: "memory", ID: "mem_b"}}},
 	}
-	cs := New(s, k, rule.NewRuleSet(), subs, p0Modes(), seqGen(), fixedNow())
-	if d := k.Apply(contract.KernelOp{OpID: "seed", Actor: "bob", Writes: []contract.ResourceWrite{
+	cs := New(s, k, admission.NewRuleSet(), subs, p0Modes(), seqGen(), fixedNow())
+	if d := k.Apply(contract.StateOp{OpID: "seed", Actor: "bob", Writes: []contract.ResourceWrite{
 		{Ref: contract.ResourceRef{Kind: "memory", ID: "mem_b"}, Kind: contract.OpCreate, Fields: map[string]any{"content": "bob-secret"}}}}, p0Modes()); d.Status != contract.Accepted {
 		t.Fatalf("seed: %s", d.Reason)
 	}
@@ -80,7 +79,7 @@ func TestIngestRejectsCrossPrincipalForgedProposed(t *testing.T) {
 
 // A legitimate observation that ends in neither reserved suffix still ingests normally (no false positive).
 func TestIngestAllowsObservation(t *testing.T) {
-	_, _, cs := newServerWith(t, rule.NewRuleSet())
+	_, _, cs := newServerWith(t, admission.NewRuleSet())
 	if _, _, err := cs.Ingest("agent", contract.ObservationEnvelope{ExternalID: "ok", Event: contract.Event{Type: "memory.observed"}}); err != nil {
 		t.Fatalf("a normal observation must still ingest; got %v", err)
 	}

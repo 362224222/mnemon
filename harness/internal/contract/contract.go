@@ -38,11 +38,11 @@ type ResourceWrite struct {
 	Fields  map[string]any
 }
 
-// KernelOp is ALL-OR-NOTHING (Invariant #5). ReadSet = versions the proposer READ (Invariant #6).
+// StateOp is ALL-OR-NOTHING (Invariant #5). ReadSet = versions the proposer READ (Invariant #6).
 // IngestSeq is the triggering event's durable seq (events.rowid), stamped by the reconciler from a
 // TRUSTED source; 0 for a direct (non-event) Apply. It is the event<->decision audit link and the basis
 // for the reconciler's durable cursor.
-type KernelOp struct {
+type StateOp struct {
 	OpID          string
 	Actor         ActorID
 	Writes        []ResourceWrite
@@ -90,19 +90,19 @@ type Decision struct {
 
 // ---- events ----
 type Event struct {
-	SchemaVersion int               `json:"schema_version"`
-	ID            string            `json:"id"`
-	IngestSeq     int64             `json:"ingest_seq"` // = events.rowid; the ONLY ordering key (Invariant #9)
-	TS            string            `json:"ts"`         // provenance only; NEVER orders
-	Type          string            `json:"type"`
-	Actor         ActorID           `json:"actor"`
-	ResourceRefs  []ResourceRef     `json:"resource_refs"`
-	BasedOn       []ResourceVersion `json:"based_on"`       // read-set (Invariant #6)
-	ProjectionRef string            `json:"projection_ref"` // provenance of the projection acted on
-	ContextDigest string            `json:"context_digest"` // provenance; P1 may promote to a validation anchor
-	CorrelationID string            `json:"correlation_id"`
-	CausedBy      string            `json:"caused_by,omitempty"`
-	Payload       map[string]any    `json:"payload"`
+	SchemaVersion       int               `json:"schema_version"`
+	ID                  string            `json:"id"`
+	IngestSeq           int64             `json:"ingest_seq"` // = events.rowid; the ONLY ordering key (Invariant #9)
+	TS                  string            `json:"ts"`         // provenance only; NEVER orders
+	Type                string            `json:"type"`
+	Actor               ActorID           `json:"actor"`
+	ResourceRefs        []ResourceRef     `json:"resource_refs"`
+	BasedOn             []ResourceVersion `json:"based_on"`              // read-set (Invariant #6)
+	PresentationViewRef string            `json:"presentation_view_ref"` // provenance of the presentation view acted on
+	ContextDigest       string            `json:"context_digest"`        // provenance; P1 may promote to a validation anchor
+	CorrelationID       string            `json:"correlation_id"`
+	CausedBy            string            `json:"caused_by,omitempty"`
+	Payload             map[string]any    `json:"payload"`
 }
 
 // ---- callback intent ----
@@ -133,7 +133,7 @@ const (
 )
 
 // RuleDecision is a rule's output: a verdict plus (for propose) a Proposal. It is
-// return-only — a rule never holds a Store/Kernel, so it can describe an effect but never perform one (S12).
+// return-only — a rule never holds a Store/Materializer, so it can describe an effect but never perform one (S12).
 type RuleDecision struct {
 	Verdict  RuleVerdict
 	Reasons  []string
@@ -155,7 +155,7 @@ type Diagnostic struct {
 
 // Subscription is a scope descriptor: which refs an actor may see, at what privacy tier. It lives in contract
 // (not server) to avoid a projection<->server cycle (D11/blocker #3). The server builds an actor's scoped
-// projection from its Subscription, and the projection identity (forActor) is the authenticated principal — a
+// projection from its Subscription, and the presentation view identity (forActor) is the authenticated principal — a
 // client never names its own scope on the wire (S9).
 type Subscription struct {
 	Actor       ActorID
@@ -200,10 +200,10 @@ func ResolveBudgetTier(t BudgetTier) (BudgetTier, error) {
 	return t, nil
 }
 
-// LocalCommit is the append-only local sync unit materialized from an accepted local decision.
+// SyncedEventMaterial is the append-only local sync unit materialized from an accepted local decision.
 // It is durable local state; push/pull transports may serialize it, but Agent Integration never
 // handles it directly.
-type LocalCommit struct {
+type SyncedEventMaterial struct {
 	OriginReplicaID string
 	LocalDecisionID string
 	LocalIngestSeq  int64
@@ -226,9 +226,9 @@ const (
 	ConflictAutoMergeDisjoint = "auto_merge_disjoint"
 	ConflictDeferToHuman      = "defer_to_human"
 
-	IsolationWriteCAS          = "write_cas"
-	IsolationProjectionReadSet = "projection_read_set"
-	// "serializable" intentionally ABSENT until P1 evidence shows it differs from projection_read_set (§10).
+	IsolationWriteCAS            = "write_cas"
+	IsolationPresentationReadSet = "presentation_read_set"
+	// "serializable" intentionally ABSENT until P1 evidence shows it differs from presentation_read_set (§10).
 
 	AuthzStrict = "strict" // enforce rules; violation -> Rejected. The only IMPLEMENTED authz mode.
 	// Reserved — NOT in AuthzCatalog until implemented with real, distinct teeth (mirrors `serializable`).
@@ -244,7 +244,7 @@ const (
 // Catalog membership — the define≠select guard (Invariant #12) checks against these.
 var (
 	ConflictCatalog  = map[string]bool{ConflictReject: true, ConflictRebase: true, ConflictAutoMergeDisjoint: true, ConflictDeferToHuman: true}
-	IsolationCatalog = map[string]bool{IsolationWriteCAS: true, IsolationProjectionReadSet: true}
+	IsolationCatalog = map[string]bool{IsolationWriteCAS: true, IsolationPresentationReadSet: true}
 	AuthzCatalog     = map[string]bool{AuthzStrict: true} // only strict is implemented; the rest are reserved (see consts above)
 )
 
@@ -253,7 +253,7 @@ var (
 // (an unknown kind has no required fields, so SchemaGuard.Validate fails closed on it); since PD2
 // the live guard is the assembly-time set — GovernanceKinds ∪ the enabled capabilities' declared
 // kinds — so a USER kind need not appear here to be admitted (a declared external kind registers at
-// assembly). This map stays the compiled-default reference until memory/skill graduate (PD5).
+// assembly). This map stays the compiled-default reference for kernel-governed kinds.
 // Invariant: keys(kernel.DefaultSchemaGuard().Required) == KindCatalog (enforced by a kernel test).
 // lease/budget/receipt are GOVERNANCE resource kinds — first-class versioned resources (D3) whose
 // per-resource Version is the fence / CAS counter; receipt is the durable record of an external effect.
@@ -267,14 +267,14 @@ var (
 // THIS — a divergence between the two silently breaks I6 (replay under different conflict
 // semantics can accept what live rejected; exactly the historical replay-rebase defect).
 func DefaultModes() Modes {
-	return Modes{Conflict: ConflictReject, Isolation: IsolationProjectionReadSet, Authz: AuthzStrict}
+	return Modes{Conflict: ConflictReject, Isolation: IsolationPresentationReadSet, Authz: AuthzStrict}
 }
 
 var KindCatalog = map[ResourceKind]bool{"lease": true, "budget": true, "receipt": true, "coordination": true}
 
 // GovernanceKinds are the kernel-internal control-plane kinds (D3): their writes are kernel-produced,
-// never proposed by a capability. They are the compiled core a capability spec may NEVER declare
-// (capability.FromSpec G8 reservation) and that the assembly-time SchemaGuard always carries. User
+// never proposed by a policy. They are the compiled core a capability spec may NEVER declare
+// (policy.CompileExternalSpec G8 reservation) and that the assembly-time SchemaGuard always carries. User
 // kinds, by contrast, are declared by capability specs and registered at assembly time — so the live
 // kernel's known-kind set is GovernanceKinds ∪ the enabled capabilities' kinds, not this compiled
 // KindCatalog (which now only pins the kernel-test lockstep and documents the platform kinds).

@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/assembler"
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
@@ -16,14 +16,14 @@ import (
 // Before the cutover this pinned the old hand-rolled builders against Assemble; after the cutover it
 // pins the app loops-derivation against direct assembly.
 func TestAssembledBootMatchesBindingDerivedBoot(t *testing.T) {
-	memRef := contract.ResourceRef{Kind: "memory", ID: "project"}
-	skillRef := contract.ResourceRef{Kind: "skill", ID: "project"}
+	assignmentRef := contract.ResourceRef{Kind: "assignment", ID: "project"}
+	progressRef := contract.ResourceRef{Kind: "progress_digest", ID: "project"}
 
-	mkBinding := func() channel.ChannelBinding {
-		b := channel.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{memRef, skillRef})
+	mkBinding := func() access.ChannelBinding {
+		b := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{assignmentRef, progressRef})
 		b.AllowedObservedTypes = []string{
-			"memory.write_candidate.observed",
-			"skill.write_candidate.observed",
+			"assignment.write_candidate.observed",
+			"progress_digest.write_candidate.observed",
 		}
 		return b
 	}
@@ -35,9 +35,9 @@ func TestAssembledBootMatchesBindingDerivedBoot(t *testing.T) {
 			typ     string
 			payload map[string]any
 		}{
-			{"m1", "memory.write_candidate.observed", map[string]any{"content": "parity fact", "source": "s", "confidence": "high"}},
-			{"s1", "skill.write_candidate.observed", map[string]any{"skill_id": "parity-skill", "source": "s", "confidence": "high"}},
-			{"m2", "memory.write_candidate.observed", map[string]any{"content": "password=hunter2", "source": "s", "confidence": "high"}},
+			{"a1", "assignment.write_candidate.observed", map[string]any{"scope": "parity assignment", "ttl": "2h", "assignee": "codex@impl", "expected_work": "do the parity work", "expected_feedback": "progress_digest", "evidence": "test"}},
+			{"p1", "progress_digest.write_candidate.observed", map[string]any{"summary": "parity progress"}},
+			{"p2", "progress_digest.write_candidate.observed", map[string]any{"summary": "password=hunter2"}},
 		}
 		// Tick after EACH ingest, mirroring the product's synchronous per-observe Tick (P2.2).
 		// A single batched Tick would dispatch s1 against the pre-m1 view and reject its proposal
@@ -56,7 +56,7 @@ func TestAssembledBootMatchesBindingDerivedBoot(t *testing.T) {
 		}
 	}
 
-	bootRC, err := LocalRuntimeConfigFromBindings([]channel.ChannelBinding{mkBinding()}, nil)
+	bootRC, err := LocalRuntimeConfigFromBindings([]access.ChannelBinding{mkBinding()}, nil)
 	if err != nil {
 		t.Fatalf("boot config: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestAssembledBootMatchesBindingDerivedBoot(t *testing.T) {
 	}
 	defer bootRT.Close()
 
-	asmRC, err := assembler.Assemble(capabilityFileFromLoops([]string{"memory", "skill"}), []channel.ChannelBinding{mkBinding()}, nil)
+	asmRC, err := assembler.Assemble(eventPackageFileFromLoops([]string{"assignment", "progress_digest"}), []access.ChannelBinding{mkBinding()}, nil)
 	if err != nil {
 		t.Fatalf("assemble: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestAssembledBootMatchesBindingDerivedBoot(t *testing.T) {
 	drive(t, bootRT)
 	drive(t, asmRT)
 
-	for _, ref := range []contract.ResourceRef{memRef, skillRef} {
+	for _, ref := range []contract.ResourceRef{assignmentRef, progressRef} {
 		bv, bf, err := bootRT.Resource(ref)
 		if err != nil {
 			t.Fatalf("boot resource %s: %v", ref.Kind, err)
@@ -98,20 +98,20 @@ func TestAssembledBootMatchesBindingDerivedBoot(t *testing.T) {
 			t.Fatalf("%s fields diverged:\nboot:      %#v\nassembled: %#v", ref.Kind, bf, af)
 		}
 	}
-	// The secret-like candidate must be denied on both paths: memory stays at the single admitted entry.
-	if v, _, _ := bootRT.Resource(memRef); v != 1 {
-		t.Fatalf("boot path admitted the denied candidate (memory v=%d)", v)
+	// The secret-like candidate must be denied on both paths: progress_digest stays at one entry.
+	if v, _, _ := bootRT.Resource(progressRef); v != 1 {
+		t.Fatalf("boot path admitted the denied candidate (progress_digest v=%d)", v)
 	}
 }
 
-// The hidden `local run --bindings` boot path has no localConfig: capability enablement is derived
-// from the binding scope kinds ∩ EmbeddedCatalog(), so a memory/skill-scoped binding still boots both rules.
+// The hidden `local run --bindings` boot path has no localConfig: event package enablement is derived
+// from the binding scope kinds ∩ StandardRegistry().
 func TestLoopsFromBindingsDerivesEnablement(t *testing.T) {
-	b := channel.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{
-		{Kind: "memory", ID: "project"}, {Kind: "skill", ID: "project"},
+	b := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{
+		{Kind: "assignment", ID: "project"}, {Kind: "progress_digest", ID: "project"},
 	})
-	got := loopsFromBindings([]channel.ChannelBinding{b}, nil)
-	want := []string{"memory", "skill"}
+	got := loopsFromBindings([]access.ChannelBinding{b}, nil)
+	want := []string{"assignment", "progress_digest"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("loopsFromBindings = %v, want %v", got, want)
 	}

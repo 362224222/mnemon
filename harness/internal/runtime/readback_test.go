@@ -4,21 +4,21 @@ import (
 	"testing"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/rule"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
 )
 
 // S9/D7: a pull is scoped to the subscription and identity-bound — sub.Actor must equal the authenticated
 // principal (a client cannot pull another actor's scope).
-func TestPullProjectionIsScopedAndIdentityBound(t *testing.T) {
-	_, _, cs := newServerWith(t, rule.NewRuleSet(proposeRule()))
-	proj, err := cs.PullProjection("agent", contract.Subscription{Actor: "agent", Refs: []contract.ResourceRef{{Kind: "memory", ID: "m1"}}})
+func TestPullPresentationViewIsScopedAndIdentityBound(t *testing.T) {
+	_, _, cs := newServerWith(t, admission.NewRuleSet(proposeRule()))
+	proj, err := cs.PullPresentationView("agent", contract.Subscription{Actor: "agent", Refs: []contract.ResourceRef{{Kind: "memory", ID: "m1"}}})
 	if err != nil {
 		t.Fatalf("pull: %v", err)
 	}
 	if len(proj.Resources) != 1 || proj.Resources[0].Ref.ID != "m1" {
 		t.Fatalf("pull must be scoped to m1; got %+v", proj.Resources)
 	}
-	if _, err := cs.PullProjection("agent", contract.Subscription{Actor: "admin", Refs: nil}); err == nil {
+	if _, err := cs.PullPresentationView("agent", contract.Subscription{Actor: "admin", Refs: nil}); err == nil {
 		t.Fatal("pull with sub.Actor != principal must be rejected (forged identity, D7)")
 	}
 }
@@ -26,9 +26,9 @@ func TestPullProjectionIsScopedAndIdentityBound(t *testing.T) {
 // S10/D8: a host that echoes a digest over tampered/stale content is caught on readback — the dependent
 // write is NOT accepted; a correct echo passes through.
 func TestContentTamperCaughtOnReadback(t *testing.T) {
-	s, _, cs := newServerWith(t, rule.NewRuleSet(proposeRule()))
+	s, _, cs := newServerWith(t, admission.NewRuleSet(proposeRule()))
 	sub := contract.Subscription{Actor: "agent", Refs: []contract.ResourceRef{{Kind: "memory", ID: "m1"}}}
-	proj, _ := cs.PullProjection("agent", sub)
+	proj, _ := cs.PullPresentationView("agent", sub)
 
 	// 1) tampered echo -> mismatch -> blocked.
 	if _, _, err := cs.Ingest("agent", contract.ObservationEnvelope{ExternalID: "tampered", Event: contract.Event{

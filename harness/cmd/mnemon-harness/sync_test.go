@@ -12,40 +12,38 @@ import (
 	"testing"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/app"
-	"github.com/mnemon-dev/mnemon/harness/internal/capability"
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
-func TestSyncPushOnceAcksPendingLocalCommits(t *testing.T) {
+func TestSyncPushOnceAcksPendingLocalEvents(t *testing.T) {
 	restoreSyncFlags(t)
 	root := t.TempDir()
 	storePath := filepath.Join(root, runtime.DefaultStorePath)
-	ref := contract.ResourceRef{Kind: "memory", ID: "project"}
+	ref := contract.ResourceRef{Kind: "progress_digest", ID: "project"}
 
-	localBinding := channel.ChannelBinding{
+	localBinding := access.ChannelBinding{
 		Principal:            "codex@project",
 		ActorKind:            contract.KindHostAgent,
-		Transport:            channel.TransportHTTP,
+		Transport:            access.TransportHTTP,
 		Endpoint:             "http://127.0.0.1:8787",
-		AllowedVerbs:         []channel.Verb{channel.VerbObserve, channel.VerbPull, channel.VerbStatus},
-		AllowedObservedTypes: []string{capability.MemoryWriteCandidateObserved},
+		AllowedVerbs:         []access.Verb{access.VerbObserve, access.VerbPull, access.VerbStatus},
+		AllowedObservedTypes: []string{"progress_digest.write_candidate.observed"},
 		SubscriptionScope:    []contract.ResourceRef{ref},
 		IdempotencyNamespace: "host:codex@project",
 	}
-	local, err := app.OpenLocalRuntime(storePath, channel.LoadedBindings{Bindings: []channel.ChannelBinding{localBinding}}, nil, nil)
+	local, err := app.OpenLocalRuntime(storePath, access.LoadedBindings{Bindings: []access.ChannelBinding{localBinding}}, nil, nil)
 	if err != nil {
 		t.Fatalf("open local runtime: %v", err)
 	}
-	localSrv := httptest.NewServer(runtime.NewRuntimeHandler(local, channel.HeaderAuthenticator{}))
-	client := channel.NewClient(localSrv.URL, "codex@project")
+	localSrv := httptest.NewServer(runtime.NewRuntimeHandler(local, access.HeaderAuthenticator{}))
+	client := access.NewClient(localSrv.URL, "codex@project")
 	if _, err := client.IngestObserve("codex@project", contract.ObservationEnvelope{
-		ExternalID: "sync-push-memory",
-		Event: contract.Event{Type: capability.MemoryWriteCandidateObserved, Payload: map[string]any{
-			"content":    "sync push should ack this local memory",
-			"source":     "test",
-			"confidence": "high",
+		ExternalID: "sync-push-progress",
+		Event: contract.Event{Type: "progress_digest.write_candidate.observed", Payload: map[string]any{
+			"summary": "sync push should ack this local event",
 		}},
 	}); err != nil {
 		t.Fatalf("local observe: %v", err)
@@ -71,19 +69,19 @@ func TestSyncPushOnceAcksPendingLocalCommits(t *testing.T) {
 		t.Fatalf("status after remote down: %v", err)
 	}
 	if st.SyncPending != 1 || st.SyncSynced != 0 {
-		t.Fatalf("remote-down push must leave local commit pending, got %+v", st)
+		t.Fatalf("remote-down push must leave local event pending, got %+v", st)
 	}
 
-	remoteBinding := channel.ReplicaAgentBinding("replica@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
+	remoteBinding := access.ReplicaAgentBinding("replica@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
 	remote, err := runtime.OpenRuntime(filepath.Join(t.TempDir(), "remote.db"), runtime.RuntimeConfig{
-		Bindings: []channel.ChannelBinding{remoteBinding},
-		Subs:     channel.SubsFromBindings([]channel.ChannelBinding{remoteBinding}),
+		Bindings: []access.ChannelBinding{remoteBinding},
+		Subs:     access.SubsFromBindings([]access.ChannelBinding{remoteBinding}),
 	})
 	if err != nil {
 		t.Fatalf("open remote runtime: %v", err)
 	}
 	defer remote.Close()
-	remoteSrv := httptest.NewServer(runtime.NewRuntimeHandler(remote, channel.TokenAuthenticator{Tokens: map[string]contract.ActorID{"remote-token": "replica@project"}}))
+	remoteSrv := httptest.NewServer(runtime.NewRuntimeHandler(remote, access.TokenAuthenticator{Tokens: map[string]contract.ActorID{"remote-token": "replica@project"}}))
 	defer remoteSrv.Close()
 
 	syncRemoteURL = remoteSrv.URL
@@ -101,33 +99,33 @@ func TestSyncPushOnceAcksPendingLocalCommits(t *testing.T) {
 		t.Fatalf("status after push: %v", err)
 	}
 	if st.SyncPending != 0 || st.SyncSynced != 1 || st.SyncConflicts != 0 {
-		t.Fatalf("successful push must mark the local commit synced, got %+v", st)
+		t.Fatalf("successful push must mark the local event synced, got %+v", st)
 	}
 }
 
-func TestSyncPullOnceImportsRemoteMemoryThroughLocalMnemon(t *testing.T) {
+func TestSyncPullOnceImportsRemoteProgressThroughLocalMnemon(t *testing.T) {
 	restoreSyncFlags(t)
 	root := t.TempDir()
 	storePath := filepath.Join(root, runtime.DefaultStorePath)
-	ref := contract.ResourceRef{Kind: "memory", ID: "project"}
-	localReplica := channel.ReplicaAgentBinding("replica@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
-	otherReplica := channel.ReplicaAgentBinding("replica@other", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
+	ref := contract.ResourceRef{Kind: "progress_digest", ID: "project"}
+	localReplica := access.ReplicaAgentBinding("replica@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
+	otherReplica := access.ReplicaAgentBinding("replica@other", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
 	remote, err := runtime.OpenRuntime(filepath.Join(t.TempDir(), "remote.db"), runtime.RuntimeConfig{
-		Bindings: []channel.ChannelBinding{localReplica, otherReplica},
-		Subs:     channel.SubsFromBindings([]channel.ChannelBinding{localReplica, otherReplica}),
+		Bindings: []access.ChannelBinding{localReplica, otherReplica},
+		Subs:     access.SubsFromBindings([]access.ChannelBinding{localReplica, otherReplica}),
 	})
 	if err != nil {
 		t.Fatalf("open remote runtime: %v", err)
 	}
 	defer remote.Close()
-	remoteSrv := httptest.NewServer(runtime.NewRuntimeHandler(remote, channel.TokenAuthenticator{Tokens: map[string]contract.ActorID{
+	remoteSrv := httptest.NewServer(runtime.NewRuntimeHandler(remote, access.TokenAuthenticator{Tokens: map[string]contract.ActorID{
 		"local-token": "replica@project",
 		"other-token": "replica@other",
 	}}))
 	defer remoteSrv.Close()
 
-	fields := remoteMemoryFields("remote-entry-1", "Remote synced memory appears locally")
-	remoteCommit := contract.LocalCommit{
+	fields := remoteProgressFields("remote-entry-1", "Remote synced progress appears locally")
+	remoteMaterial := contract.SyncedEventMaterial{
 		OriginReplicaID: "other-replica",
 		LocalDecisionID: "dec-remote-1",
 		LocalIngestSeq:  7,
@@ -139,12 +137,12 @@ func TestSyncPullOnceImportsRemoteMemoryThroughLocalMnemon(t *testing.T) {
 		DecidedAt:       "2026-06-06T00:00:00Z",
 		Status:          "pending",
 	}
-	if resp, err := channel.NewClientWithToken(remoteSrv.URL, "other-token").SyncPush(contract.SyncPushRequest{
+	if resp, err := access.NewClientWithToken(remoteSrv.URL, "other-token").SyncPush(contract.SyncPushRequest{
 		ReplicaID: "other-replica",
 		BatchID:   "remote-batch",
-		Commits:   []contract.LocalCommit{remoteCommit},
+		Events:    syncTestEvents(t, remoteMaterial),
 	}); err != nil || len(resp.Accepted) != 1 {
-		t.Fatalf("seed remote commit: resp=%+v err=%v", resp, err)
+		t.Fatalf("seed remote event: resp=%+v err=%v", resp, err)
 	}
 
 	syncRoot = root
@@ -158,12 +156,12 @@ func TestSyncPullOnceImportsRemoteMemoryThroughLocalMnemon(t *testing.T) {
 	if err := runSyncPull(cmd, nil); err != nil {
 		t.Fatalf("sync pull once: %v", err)
 	}
-	if !strings.Contains(out.String(), "Sync pull: 1 commits") {
+	if !strings.Contains(out.String(), "Sync pull: 1 events") {
 		t.Fatalf("unexpected pull output: %s", out.String())
 	}
-	content := localMemoryContentForTest(t, storePath, ref)
-	if !strings.Contains(content, "Remote synced memory appears locally") {
-		t.Fatalf("pulled memory not visible through local projection:\n%s", content)
+	content := localResourceContentForTest(t, storePath, ref)
+	if !strings.Contains(content, "Remote synced progress appears locally") {
+		t.Fatalf("pulled progress not visible through local presentation view:\n%s", content)
 	}
 	st, err := syncStatusForTest(storePath)
 	if err != nil {
@@ -179,40 +177,40 @@ func TestSyncPullOnceImportsRemoteMemoryThroughLocalMnemon(t *testing.T) {
 	if err := runSyncPull(cmd, nil); err != nil {
 		t.Fatalf("second sync pull: %v", err)
 	}
-	if !strings.Contains(out.String(), "Sync pull: 0 commits") {
+	if !strings.Contains(out.String(), "Sync pull: 0 events") {
 		t.Fatalf("second pull must be cursor-idempotent, got %s", out.String())
 	}
-	content = localMemoryContentForTest(t, storePath, ref)
-	if strings.Count(content, "Remote synced memory appears locally") != 1 {
-		t.Fatalf("duplicate pull must not duplicate memory:\n%s", content)
+	content = localResourceContentForTest(t, storePath, ref)
+	if strings.Count(content, "Remote synced progress appears locally") != 1 {
+		t.Fatalf("duplicate pull must not duplicate progress:\n%s", content)
 	}
 }
 
-func TestSyncPullOnceImportsRemoteSkillThroughLocalMnemon(t *testing.T) {
+func TestSyncPullOnceImportsRemoteAssignmentThroughLocalMnemon(t *testing.T) {
 	restoreSyncFlags(t)
 	root := t.TempDir()
 	storePath := filepath.Join(root, runtime.DefaultStorePath)
-	ref := contract.ResourceRef{Kind: "skill", ID: "project"}
-	localReplica := channel.ReplicaAgentBinding("replica@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
-	otherReplica := channel.ReplicaAgentBinding("replica@other", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
+	ref := contract.ResourceRef{Kind: "assignment", ID: "project"}
+	localReplica := access.ReplicaAgentBinding("replica@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
+	otherReplica := access.ReplicaAgentBinding("replica@other", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
 	remote, err := runtime.OpenRuntime(filepath.Join(t.TempDir(), "remote.db"), runtime.RuntimeConfig{
-		Bindings: []channel.ChannelBinding{localReplica, otherReplica},
-		Subs:     channel.SubsFromBindings([]channel.ChannelBinding{localReplica, otherReplica}),
+		Bindings: []access.ChannelBinding{localReplica, otherReplica},
+		Subs:     access.SubsFromBindings([]access.ChannelBinding{localReplica, otherReplica}),
 	})
 	if err != nil {
 		t.Fatalf("open remote runtime: %v", err)
 	}
 	defer remote.Close()
-	remoteSrv := httptest.NewServer(runtime.NewRuntimeHandler(remote, channel.TokenAuthenticator{Tokens: map[string]contract.ActorID{
+	remoteSrv := httptest.NewServer(runtime.NewRuntimeHandler(remote, access.TokenAuthenticator{Tokens: map[string]contract.ActorID{
 		"local-token": "replica@project",
 		"other-token": "replica@other",
 	}}))
 	defer remoteSrv.Close()
 
-	fields := remoteSkillFields("release-checklist", "active")
-	remoteCommit := contract.LocalCommit{
+	fields := remoteAssignmentFields("release-checklist", "2h")
+	remoteMaterial := contract.SyncedEventMaterial{
 		OriginReplicaID: "other-replica",
-		LocalDecisionID: "dec-remote-skill-1",
+		LocalDecisionID: "dec-remote-assignment-1",
 		LocalIngestSeq:  17,
 		Actor:           "codex@other",
 		ResourceRef:     ref,
@@ -222,12 +220,12 @@ func TestSyncPullOnceImportsRemoteSkillThroughLocalMnemon(t *testing.T) {
 		DecidedAt:       "2026-06-06T00:00:00Z",
 		Status:          "pending",
 	}
-	if resp, err := channel.NewClientWithToken(remoteSrv.URL, "other-token").SyncPush(contract.SyncPushRequest{
+	if resp, err := access.NewClientWithToken(remoteSrv.URL, "other-token").SyncPush(contract.SyncPushRequest{
 		ReplicaID: "other-replica",
-		BatchID:   "remote-skill-batch",
-		Commits:   []contract.LocalCommit{remoteCommit},
+		BatchID:   "remote-assignment-batch",
+		Events:    syncTestEvents(t, remoteMaterial),
 	}); err != nil || len(resp.Accepted) != 1 {
-		t.Fatalf("seed remote skill commit: resp=%+v err=%v", resp, err)
+		t.Fatalf("seed remote assignment event: resp=%+v err=%v", resp, err)
 	}
 
 	syncRoot = root
@@ -239,35 +237,35 @@ func TestSyncPullOnceImportsRemoteSkillThroughLocalMnemon(t *testing.T) {
 	cmd := mustTestCommand(t)
 	cmd.SetOut(&out)
 	if err := runSyncPull(cmd, nil); err != nil {
-		t.Fatalf("sync pull skill once: %v", err)
+		t.Fatalf("sync pull assignment once: %v", err)
 	}
-	if !strings.Contains(out.String(), "Sync pull: 1 commits") {
+	if !strings.Contains(out.String(), "Sync pull: 1 events") {
 		t.Fatalf("unexpected pull output: %s", out.String())
 	}
-	decls := localSkillDeclarationsForTest(t, storePath, ref)
-	if len(decls) != 1 || decls[0]["skill_id"] != "release-checklist" || decls[0]["status"] != "active" {
-		t.Fatalf("pulled skill declaration not visible through local projection: %+v", decls)
+	items := localResourceItemsForTest(t, storePath, ref)
+	if len(items) != 1 || items[0]["scope"] != "release-checklist" || items[0]["ttl"] != "2h" {
+		t.Fatalf("pulled assignment item not visible through local presentation view: %+v", items)
 	}
 	st, err := syncStatusForTest(storePath)
 	if err != nil {
-		t.Fatalf("status after skill pull: %v", err)
+		t.Fatalf("status after assignment pull: %v", err)
 	}
 	if st.SyncPending != 0 {
-		t.Fatalf("remote skill import must not create outbound pending echo, got %+v", st)
+		t.Fatalf("remote assignment import must not create outbound pending echo, got %+v", st)
 	}
 
 	out.Reset()
 	cmd = mustTestCommand(t)
 	cmd.SetOut(&out)
 	if err := runSyncPull(cmd, nil); err != nil {
-		t.Fatalf("second sync pull skill: %v", err)
+		t.Fatalf("second sync pull assignment: %v", err)
 	}
-	if !strings.Contains(out.String(), "Sync pull: 0 commits") {
+	if !strings.Contains(out.String(), "Sync pull: 0 events") {
 		t.Fatalf("second pull must be cursor-idempotent, got %s", out.String())
 	}
-	decls = localSkillDeclarationsForTest(t, storePath, ref)
-	if len(decls) != 1 {
-		t.Fatalf("duplicate skill pull must not duplicate declarations: %+v", decls)
+	items = localResourceItemsForTest(t, storePath, ref)
+	if len(items) != 1 {
+		t.Fatalf("duplicate assignment pull must not duplicate items: %+v", items)
 	}
 }
 
@@ -390,17 +388,17 @@ func syncStatusForTest(storePath string) (contract.ChannelStatus, error) {
 	return rt.Status("status@test")
 }
 
-func localMemoryContentForTest(t *testing.T, storePath string, ref contract.ResourceRef) string {
+func localResourceContentForTest(t *testing.T, storePath string, ref contract.ResourceRef) string {
 	t.Helper()
-	binding := channel.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
-	rt, err := app.OpenLocalRuntime(storePath, channel.LoadedBindings{Bindings: []channel.ChannelBinding{binding}}, nil, nil)
+	binding := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
+	rt, err := app.OpenLocalRuntime(storePath, access.LoadedBindings{Bindings: []access.ChannelBinding{binding}}, nil, nil)
 	if err != nil {
 		t.Fatalf("open local runtime for projection: %v", err)
 	}
 	defer rt.Close()
-	proj, err := rt.API().PullProjection("codex@project", contract.Subscription{Actor: "codex@project"})
+	proj, err := rt.API().PullPresentationView("codex@project", contract.Subscription{Actor: "codex@project"})
 	if err != nil {
-		t.Fatalf("pull local projection: %v", err)
+		t.Fatalf("pull local presentation view: %v", err)
 	}
 	for _, item := range proj.Content {
 		if item.Ref == ref {
@@ -412,24 +410,24 @@ func localMemoryContentForTest(t *testing.T, storePath string, ref contract.Reso
 	return ""
 }
 
-func localSkillDeclarationsForTest(t *testing.T, storePath string, ref contract.ResourceRef) []map[string]any {
+func localResourceItemsForTest(t *testing.T, storePath string, ref contract.ResourceRef) []map[string]any {
 	t.Helper()
-	binding := channel.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
-	rt, err := app.OpenLocalRuntime(storePath, channel.LoadedBindings{Bindings: []channel.ChannelBinding{binding}}, nil, nil)
+	binding := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
+	rt, err := app.OpenLocalRuntime(storePath, access.LoadedBindings{Bindings: []access.ChannelBinding{binding}}, nil, nil)
 	if err != nil {
-		t.Fatalf("open local runtime for skill projection: %v", err)
+		t.Fatalf("open local runtime for item projection: %v", err)
 	}
 	defer rt.Close()
-	proj, err := rt.API().PullProjection("codex@project", contract.Subscription{Actor: "codex@project"})
+	proj, err := rt.API().PullPresentationView("codex@project", contract.Subscription{Actor: "codex@project"})
 	if err != nil {
-		t.Fatalf("pull local skill projection: %v", err)
+		t.Fatalf("pull local item projection: %v", err)
 	}
 	for _, item := range proj.Content {
 		if item.Ref == ref {
-			raw, _ := item.Fields["declarations"].([]any)
+			raw, _ := item.Fields["items"].([]any)
 			out := make([]map[string]any, 0, len(raw))
-			for _, decl := range raw {
-				if m, ok := decl.(map[string]any); ok {
+			for _, entry := range raw {
+				if m, ok := entry.(map[string]any); ok {
 					out = append(out, m)
 				}
 			}
@@ -439,34 +437,32 @@ func localSkillDeclarationsForTest(t *testing.T, storePath string, ref contract.
 	return nil
 }
 
-func remoteMemoryFields(entryID, content string) map[string]any {
-	entries := []any{map[string]any{
+func remoteProgressFields(entryID, summary string) map[string]any {
+	items := []any{map[string]any{
 		"id":         entryID,
-		"content":    content,
-		"source":     "remote",
-		"confidence": "high",
+		"summary":    summary,
 		"actor":      "codex@other",
 		"ingest_seq": float64(7),
 	}}
 	return map[string]any{
-		"content": "# Local Memory\n- " + content,
-		"entries": entries,
+		"content": "# Progress\n- " + summary,
+		"items":   items,
 	}
 }
 
-func remoteSkillFields(skillID, status string) map[string]any {
+func remoteAssignmentFields(scope, ttl string) map[string]any {
 	return map[string]any{
-		"name": "project",
-		"declarations": []any{map[string]any{
-			"id":         "remote/" + skillID + "/" + status,
-			"skill_id":   skillID,
-			"name":       skillID,
-			"status":     status,
-			"content":    "Remote declaration for " + skillID,
-			"source":     "remote",
-			"confidence": "high",
-			"actor":      "codex@other",
-			"ingest_seq": float64(17),
+		"content": "# Assignments\n- " + scope,
+		"items": []any{map[string]any{
+			"id":                "remote/" + scope + "/" + ttl,
+			"scope":             scope,
+			"ttl":               ttl,
+			"assignee":          "codex@impl",
+			"expected_work":     "complete " + scope,
+			"expected_feedback": "summary",
+			"evidence":          "remote import fixture",
+			"actor":             "codex@other",
+			"ingest_seq":        float64(17),
 		}},
 		"updated_by": "codex@other",
 	}
@@ -476,4 +472,17 @@ func syncTestDigest(fields map[string]any) string {
 	data, _ := json.Marshal(fields)
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
+}
+
+func syncTestEvents(t *testing.T, materials ...contract.SyncedEventMaterial) []eventmodel.EventEnvelope {
+	t.Helper()
+	events := make([]eventmodel.EventEnvelope, 0, len(materials))
+	for _, material := range materials {
+		env, err := contract.SyncedEventEnvelopeFromMaterial(material)
+		if err != nil {
+			t.Fatalf("synced event fixture: %v", err)
+		}
+		events = append(events, env)
+	}
+	return events
 }

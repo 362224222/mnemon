@@ -1,42 +1,49 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"sort"
 	"strings"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/capability"
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/hostsurface"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation"
 	"github.com/spf13/cobra"
 )
 
 // The control verbs are the host/control agent's view of the channel (D6): observe pushes an
-// observation IN, pull reads the scoped projection OUT, status checks reachability. They reach
-// the engine ONLY through channel.ServerAPI (the channel client), never kernel/reconcile — the
+// observation IN, pull reads the scoped presentation view OUT, status checks reachability. They reach
+// the engine ONLY through access.ServerAPI (the channel client), never kernel/reconcile — the
 // same channel a HostAgent and a ControlAgent both speak, differing only by binding/credential.
 
 var (
-	controlAddr       string
-	controlPrincipal  string
-	controlToken      string
-	controlType       string
-	controlPayload    string
-	controlExtID      string
-	controlActor      string
-	controlTokenFile  string
-	controlPullJSON   bool
-	controlMirrorPath string
-	controlStatusJSON bool
+	controlAddr            string
+	controlPrincipal       string
+	controlToken           string
+	controlType            string
+	controlPayload         string
+	controlExtID           string
+	controlActor           string
+	controlTokenFile       string
+	controlPullJSON        bool
+	controlStatusJSON      bool
+	controlRenderIntent    string
+	controlRenderLifecycle string
+	controlRenderSurface   string
+	controlRenderMaxChars  int
+	controlRenderJSON      bool
 )
 
 // controlClient builds the channel client from the resolved credential: a bearer token (from
 // --token or, preferring it, --token-file so projected hooks keep the token out of prompt-visible
 // command lines), else the trusted principal header.
-func controlClient() (*channel.Client, error) {
+func controlClient() (*access.Client, error) {
 	token := controlToken
 	if controlTokenFile != "" {
 		data, err := os.ReadFile(controlTokenFile)
@@ -46,9 +53,9 @@ func controlClient() (*channel.Client, error) {
 		token = strings.TrimSpace(string(data))
 	}
 	if token != "" {
-		return channel.NewClientWithToken(controlAddr, token), nil
+		return access.NewClientWithToken(controlAddr, token), nil
 	}
-	return channel.NewClient(controlAddr, contract.ActorID(controlPrincipal)), nil
+	return access.NewClient(controlAddr, contract.ActorID(controlPrincipal)), nil
 }
 
 var controlCmd = &cobra.Command{
@@ -88,7 +95,7 @@ var controlObserveCmd = &cobra.Command{
 
 var controlPullCmd = &cobra.Command{
 	Use:   "pull",
-	Short: "Pull the principal's scoped projection (ServerAPI.PullProjection)",
+	Short: "Pull the principal's scoped presentation view (ServerAPI.PullPresentationView)",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		actor := controlActor
 		if actor == "" {
@@ -98,33 +105,25 @@ var controlPullCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		proj, err := client.PullProjection(contract.ActorID(controlPrincipal), contract.Subscription{Actor: contract.ActorID(actor)})
+		proj, err := client.PullPresentationView(contract.ActorID(controlPrincipal), contract.Subscription{Actor: contract.ActorID(actor)})
 		if err != nil {
 			return fmt.Errorf("channel pull failed (service unreachable or unauthorized): %w", err)
-		}
-		if controlMirrorPath != "" {
-			if err := hostsurface.WriteMemoryMirror(controlMirrorPath, proj); err != nil {
-				return fmt.Errorf("write memory mirror: %w", err)
-			}
-			if !controlPullJSON {
-				fmt.Fprintf(cmd.OutOrStdout(), "wrote memory mirror %s\n", controlMirrorPath)
-			}
 		}
 		if controlPullJSON {
 			enc := json.NewEncoder(cmd.OutOrStdout())
 			enc.SetIndent("", "  ")
 			return enc.Encode(proj)
 		}
-		// Count WRITTEN resources (version > 0), not every scoped ref: a host's scope now includes the
+		// Count WRITTEN event subjects (version > 0), not every scoped ref: a host's scope now includes the
 		// default-enabled coordination kinds (P3b), so an unwritten coordination ref must not inflate
-		// "you have N resources". proj.Resources lists the full scope; the written ones carry a version.
+		// the status line. proj.Resources lists the full scope; the written ones carry a version.
 		written := 0
 		for _, r := range proj.Resources {
 			if r.Version > 0 {
 				written++
 			}
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "projection ref=%s digest=%s resources=%d\n", proj.Ref, proj.Digest, written)
+		fmt.Fprintf(cmd.OutOrStdout(), "presentation-view ref=%s digest=%s event_subjects=%d\n", proj.Ref, proj.Digest, written)
 		return nil
 	},
 }
@@ -149,10 +148,10 @@ var controlStatusCmd = &cobra.Command{
 		// No Remote Workspace line here: channel status has no remote data source (no --root,
 		// ServerAPI only) — `mnemon-harness status` owns that report.
 		fmt.Fprintf(cmd.OutOrStdout(), "Agent Integration: %s\n", st.Principal)
-		fmt.Fprintf(cmd.OutOrStdout(), "Local Mnemon: ready (resources=%d, digest=%s)\n", st.Resources, st.Digest)
+		fmt.Fprintf(cmd.OutOrStdout(), "Local Mnemon: ready (governed_rows=%d, digest=%s)\n", st.Resources, st.Digest)
 		fmt.Fprintf(cmd.OutOrStdout(), "Sync: %d pending, %d synced, %d conflicts (local accepted, remote pending)\n", st.SyncPending, st.SyncSynced, st.SyncConflicts)
 		// FIELD section (P3d, the minimal Control Tower seed): the coordination entry counts derived
-		// client-side from a pull. The runtime stays capability-free, so kind-aware counts live here,
+		// client-side from a pull. The runtime stays package-agnostic, so kind-aware counts live here,
 		// over the default-enabled coordination kinds. Best-effort: a principal not bound to pull just
 		// omits the line rather than failing the status report. (agents / pending / diagnostics =
 		// server-side aggregation, deferred to the P6 Control Tower.)
@@ -161,15 +160,88 @@ var controlStatusCmd = &cobra.Command{
 	},
 }
 
+var controlRenderCmd = &cobra.Command{
+	Use:   "render",
+	Short: "Render read-only derived-event presentation for the authenticated principal",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		resp, err := controlRender(presentation.Request{
+			RenderIntent: controlRenderIntent,
+			Lifecycle:    controlRenderLifecycle,
+			Surface:      controlRenderSurface,
+			Budget:       presentation.Budget{MaxChars: controlRenderMaxChars},
+		})
+		if err != nil {
+			return err
+		}
+		if controlRenderJSON {
+			enc := json.NewEncoder(cmd.OutOrStdout())
+			enc.SetIndent("", "  ")
+			return enc.Encode(resp)
+		}
+		switch resp.Status {
+		case presentation.StatusOK, presentation.StatusFallback:
+			if strings.TrimSpace(resp.Body) != "" {
+				fmt.Fprintln(cmd.OutOrStdout(), resp.Body)
+			}
+		case presentation.StatusEmpty:
+			return nil
+		case presentation.StatusDenied:
+			return fmt.Errorf("render denied for %s", controlPrincipal)
+		default:
+			return fmt.Errorf("render returned status %q", resp.Status)
+		}
+		return nil
+	},
+}
+
+func controlRender(reqBody presentation.Request) (presentation.Response, error) {
+	token := controlToken
+	if controlTokenFile != "" {
+		data, err := os.ReadFile(controlTokenFile)
+		if err != nil {
+			return presentation.Response{}, fmt.Errorf("read --token-file: %w", err)
+		}
+		token = strings.TrimSpace(string(data))
+	}
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return presentation.Response{}, err
+	}
+	req, err := http.NewRequest(http.MethodPost, strings.TrimRight(controlAddr, "/")+"/render", bytes.NewReader(body))
+	if err != nil {
+		return presentation.Response{}, err
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	} else {
+		req.Header.Set(access.PrincipalHeader, controlPrincipal)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return presentation.Response{}, fmt.Errorf("channel render failed (service unreachable): %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return presentation.Response{}, fmt.Errorf("channel render failed: %s: %s", resp.Status, string(b))
+	}
+	var out presentation.Response
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return presentation.Response{}, err
+	}
+	return out, nil
+}
+
 // coordinationFieldLine renders "Field: <kind>=<n>, …" over the default-enabled coordination kinds,
-// counting each kind's entries in the principal's pulled projection.
-func coordinationFieldLine(client *channel.Client, principal contract.ActorID) string {
-	proj, err := client.PullProjection(principal, contract.Subscription{Actor: principal})
+// counting each kind's entries in the principal's pulled view.
+func coordinationFieldLine(client *access.Client, principal contract.ActorID) string {
+	proj, err := client.PullPresentationView(principal, contract.Subscription{Actor: principal})
 	if err != nil {
 		return "Field: (unavailable)"
 	}
-	var caps []capability.Capability
-	for _, c := range capability.EmbeddedCatalog() {
+	var caps []policy.EventPackage
+	for _, c := range policy.StandardRegistry() {
 		if c.DefaultEnabled {
 			caps = append(caps, c)
 		}
@@ -191,7 +263,7 @@ func coordinationFieldLine(client *channel.Client, principal contract.ActorID) s
 }
 
 func init() {
-	for _, c := range []*cobra.Command{controlObserveCmd, controlPullCmd, controlStatusCmd} {
+	for _, c := range []*cobra.Command{controlObserveCmd, controlPullCmd, controlStatusCmd, controlRenderCmd} {
 		c.Flags().StringVar(&controlAddr, "addr", "http://127.0.0.1:8787", "server base URL")
 		c.Flags().StringVar(&controlPrincipal, "principal", "", "authenticated principal (trusted-header transport)")
 		c.Flags().StringVar(&controlToken, "token", "", "bearer token (TokenAuthenticator transport)")
@@ -201,10 +273,14 @@ func init() {
 	controlObserveCmd.Flags().StringVar(&controlPayload, "payload", "", "observation payload as JSON")
 	controlObserveCmd.Flags().StringVar(&controlExtID, "external-id", "", "idempotency external id")
 	controlPullCmd.Flags().StringVar(&controlActor, "actor", "", "subscription actor (defaults to principal)")
-	controlPullCmd.Flags().BoolVar(&controlPullJSON, "json", false, "emit scoped projection as JSON")
-	controlPullCmd.Flags().StringVar(&controlMirrorPath, "mirror", "", "write MEMORY.md mirror from scoped memory content")
+	controlPullCmd.Flags().BoolVar(&controlPullJSON, "json", false, "emit scoped presentation view as JSON")
 	controlStatusCmd.Flags().BoolVar(&controlStatusJSON, "json", false, "emit channel status as JSON")
-	controlCmd.AddCommand(controlObserveCmd, controlPullCmd, controlStatusCmd)
+	controlRenderCmd.Flags().StringVar(&controlRenderIntent, "intent", presentation.IntentTeamworkEvents, "render intent")
+	controlRenderCmd.Flags().StringVar(&controlRenderLifecycle, "lifecycle", "remind", "host lifecycle")
+	controlRenderCmd.Flags().StringVar(&controlRenderSurface, "surface", "hook", "host surface")
+	controlRenderCmd.Flags().IntVar(&controlRenderMaxChars, "max-chars", 6000, "maximum rendered body chars")
+	controlRenderCmd.Flags().BoolVar(&controlRenderJSON, "json", false, "emit full render response as JSON")
+	controlCmd.AddCommand(controlObserveCmd, controlPullCmd, controlStatusCmd, controlRenderCmd)
 	controlCmd.GroupID = groupSpine
 	rootCmd.AddCommand(controlCmd)
 }

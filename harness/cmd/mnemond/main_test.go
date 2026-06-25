@@ -18,7 +18,7 @@ func TestRunWithoutSetupReportsNotSetUp(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Local Mnemon is not set up.",
-		"mnemon-harness setup --host codex --loop memory --loop skill",
+		"mnemon-harness setup --host codex",
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("missing remediation %q in error:\n%v", want, err)
@@ -32,8 +32,7 @@ func TestRunWithoutSetupReportsNotSetUp(t *testing.T) {
 func TestRunRefusesNonLoopbackAddr(t *testing.T) {
 	root := t.TempDir()
 	if _, err := app.New(root).Setup(context.Background(), io.Discard, io.Discard, app.SetupOptions{
-		Host:  "codex",
-		Loops: []string{"memory"},
+		Host: "codex",
 	}); err != nil {
 		t.Fatalf("setup: %v", err)
 	}

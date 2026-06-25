@@ -46,7 +46,7 @@ Markdown 可安装的 runtime 集成：`SKILL.md`、`INSTALL.md`、`GUIDELINE.md
 
 ### [Self-Evolution Harness](harness/README.md)
 
-正式 modular harness 文档，覆盖 agent-agnostic 安装挂载、memory loop、skill loop 与未来可外挂 evolution modules。
+正式 modular harness 文档，覆盖 agent-agnostic 安装挂载、Agent Integration、event package 与未来可外挂 evolution modules。
 
 ### [8. 设计决策与未来方向](design/08-decisions.md)
 

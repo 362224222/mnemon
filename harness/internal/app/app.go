@@ -1,7 +1,7 @@
 // Package app is the small facade used by mnemon-harness product commands.
 //
 // It keeps setup/status/validate command code out of declaration and host
-// projection internals without reintroducing the older lifecycle command model.
+// presentation-view internals without reintroducing the older lifecycle command model.
 package app
 
 // Harness is the facade handle. It carries the project root and constructs inner

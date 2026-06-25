@@ -1,7 +1,7 @@
-// mnemon-hub is the standalone Remote Workspace hub: the syncserver wire (sync.push / sync.pull /
+// mnemon-hub is the standalone Remote Workspace hub: the mnemonhub wire (sync.push / sync.pull /
 // sync.status) over its own store, authenticated by bearer tokens from an operator-supplied
 // replicas.json. It is a SEPARATE trust domain from the local runtime: it imports contract/store/
-// syncserver only — never channel / runtime / app / hostsurface (pinned by the syncserver boundary
+// mnemonhub only — never channel / runtime / app / hostagent (pinned by the mnemonhub boundary
 // test). One mnemon-hub per hub store (the store's single-writer flock enforces it).
 package main
 
@@ -18,8 +18,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/store"
-	"github.com/mnemon-dev/mnemon/harness/internal/syncserver"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/state"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemonhub"
 )
 
 func main() {
@@ -71,14 +71,14 @@ func run(ctx context.Context, args []string, out, errw io.Writer) error {
 			return fmt.Errorf("create hub store dir: %w", err)
 		}
 	}
-	st, err := store.OpenStore(*storePath)
+	st, err := state.OpenStore(*storePath)
 	if err != nil {
 		return fmt.Errorf("open hub store: %w", err)
 	}
 	defer st.Close()
 	now := func() string { return time.Now().UTC().Format(time.RFC3339) }
 	// Audit goes to out (stdout in main): one line per request — ts, principal, verb, result.
-	handler := syncserver.NewHTTPHandler(syncserver.New(st, grants, now), syncserver.BearerAuthenticator{Tokens: tokens}, out)
+	handler := mnemonhub.NewHTTPHandler(mnemonhub.New(st, grants, now), mnemonhub.BearerAuthenticator{Tokens: tokens}, out)
 	return serveHub(ctx, *addr, handler, *tlsCert, *tlsKey, *storePath, out)
 }
 

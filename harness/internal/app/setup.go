@@ -1,32 +1,32 @@
 package app
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/assets"
-	"github.com/mnemon-dev/mnemon/harness/internal/capability"
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/manifest"
+	"github.com/mnemon-dev/mnemon/harness/internal/hostagent"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
-// SetupOptions configures the `mnemon-harness setup` front door: project a loop into a host runtime
+// SetupOptions configures the `mnemon-harness setup` front door: project host integration assets
 // AND wire the channel (binding entry + optional token + runtime env), so a host agent reaches the
-// governed control plane through one channel.
+// governed control plane through one access.
 type SetupOptions struct {
 	Host          string   // host runtime id, e.g. "codex"
-	Loops         []string // loops to project, e.g. ["memory"]
+	Loops         []string // event packages to enable, e.g. ["assignment"] or external packages
 	ControlURL    string   // channel endpoint, e.g. "http://127.0.0.1:8787"
 	Principal     string   // authenticated principal, e.g. "codex@project"
 	ActorKind     string   // "host-agent" (default) or "control-agent"
@@ -42,6 +42,8 @@ type SetupResult struct {
 	TokenFile   string
 	EnvFile     string
 	ConfigFile  string
+	GuideFile   string
+	SkillFile   string
 	Changes     []string
 }
 
@@ -57,25 +59,15 @@ func sanitizePrincipal(p string) string {
 	return strings.NewReplacer("@", "-", "/", "-", ":", "-").Replace(p)
 }
 
-// validateProductLoops fail-closes setup to loops that are BOTH a built-in capability
-// (capability.EmbeddedCatalog()) AND carry projectable assets for the host (manifest.LoopsForHost over the
-// embedded FS) — derived, not hardcoded, so a future loop whose assets land is admitted without
-// editing a literal. Today the intersection is exactly {memory, skill} (the whole builtin set
-// since the P1 note/decision demotion to external-package fixtures).
-// A requested loop that is instead an EXTERNAL capability package under projectRoot gets the
-// pinned admission-vs-projection diagnosis: external packages carry no host assets in v1.
+// validateProductLoops fail-closes setup to known event packages. R1 setup always installs a
+// standard host integration; loops only widen the channel/config event scope and no longer imply host
+// asset view.
 func validateProductLoops(host string, loops []string, projectRoot string) error {
-	hostLoops, err := manifest.LoopsForHost(assets.FS, host)
-	if err != nil {
-		return fmt.Errorf("setup: discover %s loops: %w", host, err)
-	}
 	available := map[string]bool{}
 	var names []string
-	for _, loop := range hostLoops {
-		if _, ok := capability.EmbeddedCatalog()[loop]; ok && !available[loop] {
-			available[loop] = true
-			names = append(names, loop)
-		}
+	for loop := range policy.StandardRegistry() {
+		available[loop] = true
+		names = append(names, loop)
 	}
 	sort.Strings(names)
 	for _, loop := range loops {
@@ -85,33 +77,18 @@ func validateProductLoops(host string, loops []string, projectRoot string) error
 		}
 		if !available[loop] {
 			if isExternalPackage(projectRoot, loop) {
-				// loop-package-v2 (PD4): an external package that ships a loop.json declares host
-				// assets and projects through the same machinery as a builtin; one carrying only a
-				// capability.json (admission-equal, no host assets) is still refused.
-				if hasExternalLoopManifest(projectRoot, loop) {
-					continue
-				}
-				return fmt.Errorf("loop %q: external package declares no host assets (no loop.json); enable via config.loops + binding", loop)
+				continue
 			}
-			return fmt.Errorf("unsupported product loop %q for host %s; available: %s", loop, host, strings.Join(names, ", "))
+			return fmt.Errorf("unsupported event package %q for host %s; available: %s", loop, host, strings.Join(names, ", "))
 		}
 	}
 	return nil
 }
 
-// isExternalPackage reports whether loop names an external capability package under the project
-// root. Presence check only: setup never LOADS external packages — they carry no host assets, so
-// there is nothing for setup to project.
+// isExternalPackage reports whether loop names an external event package under the project root.
+// Presence check only; boot later loads and validates the package.
 func isExternalPackage(projectRoot, loop string) bool {
 	fi, err := os.Stat(filepath.Join(projectRoot, ".mnemon", "loops", loop, "capability.json"))
-	return err == nil && fi.Mode().IsRegular()
-}
-
-// hasExternalLoopManifest reports whether an external package ships a loop.json — the signal that it
-// carries host projection assets (loop-package-v2). Presence check only; the projector validates the
-// manifest at load.
-func hasExternalLoopManifest(projectRoot, loop string) bool {
-	fi, err := os.Stat(filepath.Join(projectRoot, ".mnemon", "loops", loop, "loop.json"))
 	return err == nil && fi.Mode().IsRegular()
 }
 
@@ -123,35 +100,31 @@ func (h *Harness) Setup(ctx context.Context, out, errw io.Writer, opts SetupOpti
 	if opts.Host == "" {
 		return SetupResult{}, fmt.Errorf("setup requires --host")
 	}
-	// No --loop is valid (P3): the coordination package (project_intent/assignment/progress_digest)
-	// is default-enabled at boot, so `setup --host codex` alone wires a host that can govern the
-	// AgentTeam nouns out of the box. --loop adds the optional packages (memory/skill) on top.
+	// No --loop is valid: the standard event packages are default-enabled at boot, so
+	// `setup --host codex` alone wires a host that can govern the standard event set.
 	if err := validateProductLoops(opts.Host, opts.Loops, opts.ProjectRoot); err != nil {
 		return SetupResult{}, err
 	}
 	projectRoot := opts.ProjectRoot
 
-	// 1. Project loop assets. Dry-run lowers to the projector's own --dry-run so projection changes
-	//    print without writing. Skipped when no --loop is named (P3): the default-enabled coordination
-	//    package is governance-only — there are no host assets to project — and step 2 still wires the
-	//    channel so the host can govern the coordination kinds.
-	if len(opts.Loops) > 0 {
-		action, hostArgs := "install", []string(nil)
-		if opts.DryRun {
-			hostArgs = []string{"--dry-run"}
-		}
-		var projectorOut bytes.Buffer
-		if err := h.LoopProject(ctx, &projectorOut, errw, action, projectRoot, opts.Host, opts.Loops, hostArgs); err != nil {
-			return SetupResult{}, fmt.Errorf("setup: project loop assets: %w", err)
-		}
+	if _, err := hostagent.InstallStandardHost(ctx, hostagent.StandardHostOptions{
+		Host:        opts.Host,
+		ProjectRoot: projectRoot,
+		DryRun:      opts.DryRun,
+		Stdout:      io.Discard,
+		Stderr:      errw,
+	}); err != nil {
+		return SetupResult{}, fmt.Errorf("setup: install host integration: %w", err)
 	}
 
-	// 2. Channel artifacts.
+	// 1. Channel artifacts.
 	base := channelBase(projectRoot)
 	defer tightenHarnessDirs(projectRoot) // 重跑校正:即使目录先以宽权限存在(如 local run 先行)
 	bindingFile := filepath.Join(base, "bindings.json")
 	envFile := filepath.Join(localBase(projectRoot), "env.sh")
 	configFile := filepath.Join(localBase(projectRoot), "config.json")
+	guideFile := filepath.Join(localBase(projectRoot), "guide.md")
+	skillFile := hostObserveSkillPath(projectRoot, opts.Host)
 	compatEnvFile := filepath.Join(base, "env.sh")
 	tokenRel := ""
 	tokenFile := ""
@@ -161,13 +134,15 @@ func (h *Harness) Setup(ctx context.Context, out, errw io.Writer, opts SetupOpti
 	}
 
 	binding := h.channelBinding(opts)
-	res := SetupResult{BindingFile: bindingFile, TokenFile: tokenFile, EnvFile: envFile, ConfigFile: configFile}
+	res := SetupResult{BindingFile: bindingFile, TokenFile: tokenFile, EnvFile: envFile, ConfigFile: configFile, GuideFile: guideFile, SkillFile: skillFile}
 
 	if opts.DryRun {
 		res.Changes = append(res.Changes,
 			fmt.Sprintf("would upsert channel binding for %s in %s", opts.Principal, bindingFile),
 			fmt.Sprintf("would write Local Mnemon config %s", configFile),
 			fmt.Sprintf("would write Local Mnemon env %s", envFile),
+			fmt.Sprintf("would write Local Mnemon GUIDE %s", guideFile),
+			fmt.Sprintf("would write generic observe skill %s", skillFile),
 			fmt.Sprintf("would write compatibility env %s", compatEnvFile))
 		if opts.UseToken {
 			res.Changes = append(res.Changes, fmt.Sprintf("would write bearer token file %s", tokenFile))
@@ -182,17 +157,25 @@ func (h *Harness) Setup(ctx context.Context, out, errw io.Writer, opts SetupOpti
 		}
 		res.Changes = append(res.Changes, "wrote bearer token file "+tokenFile)
 	}
-	if err := channel.MergeBinding(bindingFile, binding, tokenRel); err != nil {
+	if err := access.MergeBinding(bindingFile, binding, tokenRel); err != nil {
 		return res, fmt.Errorf("setup: merge binding: %w", err)
 	}
 	res.Changes = append(res.Changes, "upserted channel binding for "+opts.Principal+" in "+bindingFile)
-	// Config + env reflect ALL enabled loops (the union with any prior setup), so installing skill
-	// after memory leaves both the config AND the env naming both loops (additive, symmetric).
+	// Config + env reflect ALL enabled event packages (the union with any prior setup), so repeated
+	// setup calls remain additive and symmetric.
 	effectiveLoops := unionLoops(existingConfigLoops(configFile), opts.Loops)
 	if err := writeLocalConfig(configFile, opts, effectiveLoops); err != nil {
 		return res, err
 	}
 	res.Changes = append(res.Changes, "wrote Local Mnemon config "+configFile)
+	if err := writeManagedGuide(guideFile); err != nil {
+		return res, err
+	}
+	res.Changes = append(res.Changes, "wrote Local Mnemon GUIDE "+guideFile)
+	if err := writeHostObserveSkill(projectRoot, opts.Host); err != nil {
+		return res, err
+	}
+	res.Changes = append(res.Changes, "wrote generic observe skill "+skillFile)
 	if err := writeLocalEnv(envFile, opts, tokenRel, effectiveLoops); err != nil {
 		return res, err
 	}
@@ -248,7 +231,7 @@ func displayHost(host string) string {
 	}
 }
 
-func (h *Harness) channelBinding(opts SetupOptions) channel.ChannelBinding {
+func (h *Harness) channelBinding(opts SetupOptions) access.ChannelBinding {
 	kind := contract.KindHostAgent
 	if opts.ActorKind == string(contract.KindControlAgent) {
 		kind = contract.KindControlAgent
@@ -259,12 +242,12 @@ func (h *Harness) channelBinding(opts SetupOptions) channel.ChannelBinding {
 		observed = append(observed, loop+".write_candidate.observed")
 		scope = append(scope, contract.ResourceRef{Kind: contract.ResourceKind(loop), ID: "project"})
 	}
-	return channel.ChannelBinding{
+	return access.ChannelBinding{
 		Principal:            contract.ActorID(opts.Principal),
 		ActorKind:            kind,
-		Transport:            channel.TransportHTTP,
+		Transport:            access.TransportHTTP,
 		Endpoint:             opts.ControlURL,
-		AllowedVerbs:         []channel.Verb{channel.VerbObserve, channel.VerbPull, channel.VerbStatus},
+		AllowedVerbs:         []access.Verb{access.VerbObserve, access.VerbPull, access.VerbRender, access.VerbStatus},
 		AllowedObservedTypes: observed,
 		SubscriptionScope:    scope,
 		IdempotencyNamespace: "host:" + opts.Principal,
@@ -303,59 +286,13 @@ func existingConfigLoops(path string) []string {
 	return existing.Loops
 }
 
-// existingConfigHosts returns the per-host installed-loops map from an existing local config (nil
-// if absent), so a rerun — possibly for another host — merges rather than clobbers.
-func existingConfigHosts(path string) map[string][]string {
-	prev, err := os.ReadFile(path)
-	if err != nil {
-		return nil
-	}
-	var existing struct {
-		Hosts map[string][]string `json:"hosts"`
-	}
-	if json.Unmarshal(prev, &existing) != nil {
-		return nil
-	}
-	return existing.Hosts
-}
-
-// existingConfigMirrorMode preserves a user-chosen mirror_mode across setup reruns (setup has no
-// flag for it; clobbering a hand-edited "manual" back to the default would be a silent override).
-func existingConfigMirrorMode(path string) string {
-	prev, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	var existing struct {
-		MirrorMode string `json:"mirror_mode"`
-	}
-	if json.Unmarshal(prev, &existing) != nil {
-		return ""
-	}
-	return existing.MirrorMode
-}
-
 func writeLocalConfig(path string, opts SetupOptions, loops []string) error {
-	// hosts records which loops are PROJECTED per host — the background driver's re-projection
-	// authority (loops alone cannot say which host surfaces exist). Old installs without the key
-	// simply get no background re-projection until the next setup run records it.
-	hosts := existingConfigHosts(path)
-	if hosts == nil {
-		hosts = map[string][]string{}
-	}
-	hosts[opts.Host] = unionLoops(hosts[opts.Host], opts.Loops)
-	mirrorMode := existingConfigMirrorMode(path)
-	if mirrorMode == "" {
-		mirrorMode = "prime-refresh"
-	}
 	doc := map[string]any{
 		"schema_version": 1,
 		"mode":           "local",
 		"endpoint":       opts.ControlURL,
 		"principal":      opts.Principal,
 		"loops":          loops,
-		"hosts":          hosts,
-		"mirror_mode":    mirrorMode,
 		"binding_file":   filepath.ToSlash(filepath.Join(".mnemon", "harness", "channel", "bindings.json")),
 		"store_path":     filepath.ToSlash(runtime.DefaultStorePath),
 	}
@@ -367,6 +304,40 @@ func writeLocalConfig(path string, opts SetupOptions, loops []string) error {
 		return err
 	}
 	return os.WriteFile(path, append(data, '\n'), 0o644)
+}
+
+func writeManagedGuide(path string) error {
+	data, err := fs.ReadFile(assets.FS, "guides/mnemon-harness-guide.md")
+	if err != nil {
+		return fmt.Errorf("read managed guide asset: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o644)
+}
+
+func hostObserveSkillPath(projectRoot, host string) string {
+	switch host {
+	case "codex":
+		return filepath.Join(projectRoot, ".codex", "skills", "mnemon-observe", "SKILL.md")
+	case "claude-code":
+		return filepath.Join(projectRoot, ".claude", "skills", "mnemon-observe", "SKILL.md")
+	default:
+		return filepath.Join(projectRoot, "."+host, "skills", "mnemon-observe", "SKILL.md")
+	}
+}
+
+func writeHostObserveSkill(projectRoot, host string) error {
+	content, err := New(projectRoot).RenderObserveSkill()
+	if err != nil {
+		return err
+	}
+	path := hostObserveSkillPath(projectRoot, host)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(content), 0o644)
 }
 
 func writeLocalEnv(path string, opts SetupOptions, tokenRel string, loops []string) error {
@@ -412,7 +383,7 @@ func (h *Harness) SetupStatus(projectRoot, principal string) ([]string, error) {
 		projectRoot = h.root
 	}
 	bindingFile := filepath.Join(channelBase(projectRoot), "bindings.json")
-	loaded, err := channel.LoadBindingFile(projectRoot, bindingFile)
+	loaded, err := access.LoadBindingFile(projectRoot, bindingFile)
 	if err != nil {
 		return []string{
 			"Agent Integration: not installed",
@@ -441,19 +412,17 @@ func (h *Harness) SetupStatus(projectRoot, principal string) ([]string, error) {
 	}, nil
 }
 
-// SetupUninstall reverses setup: it removes projected loop assets and the
-// principal's channel binding + token file while preserving sibling bindings.
+// SetupUninstall reverses setup: it removes the standard host integration and the principal's channel
+// binding + token file while preserving sibling bindings.
 func (h *Harness) SetupUninstall(ctx context.Context, out, errw io.Writer, opts SetupOptions) error {
 	projectRoot := opts.ProjectRoot
 	if projectRoot == "" {
 		projectRoot = h.root
 	}
-	if err := h.LoopProject(ctx, out, errw, "uninstall", projectRoot, opts.Host, opts.Loops, nil); err != nil {
-		return fmt.Errorf("setup uninstall: remove projected loop assets: %w", err)
-	}
 	base := channelBase(projectRoot)
+	bindingFile := filepath.Join(base, "bindings.json")
 	if opts.Principal != "" {
-		removed, err := channel.RemoveBinding(filepath.Join(base, "bindings.json"), contract.ActorID(opts.Principal))
+		removed, err := access.RemoveBinding(bindingFile, contract.ActorID(opts.Principal))
 		if err != nil {
 			return fmt.Errorf("setup uninstall: remove binding: %w", err)
 		}
@@ -467,7 +436,56 @@ func (h *Harness) SetupUninstall(ctx context.Context, out, errw io.Writer, opts 
 			}
 		}
 	}
+	if !hasAnyBinding(projectRoot, bindingFile) {
+		if _, err := hostagent.UninstallStandardHost(ctx, hostagent.StandardHostOptions{
+			Host:        opts.Host,
+			ProjectRoot: projectRoot,
+			Stdout:      io.Discard,
+			Stderr:      errw,
+		}); err != nil {
+			return fmt.Errorf("setup uninstall: remove host integration: %w", err)
+		}
+		if err := removeHostObserveSkill(projectRoot, opts.Host); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func removeHostObserveSkill(projectRoot, host string) error {
+	path := hostObserveSkillPath(projectRoot, host)
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("setup uninstall: read generic observe skill: %w", err)
+	}
+	expected, err := New(projectRoot).RenderObserveSkill()
+	if err != nil {
+		return err
+	}
+	if string(data) != expected {
+		return nil
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("setup uninstall: remove generic observe skill: %w", err)
+	}
+	removeIfEmptyDir(filepath.Dir(path))
+	removeIfEmptyDir(filepath.Dir(filepath.Dir(path)))
+	return nil
+}
+
+func removeIfEmptyDir(path string) {
+	entries, err := os.ReadDir(path)
+	if err == nil && len(entries) == 0 {
+		_ = os.Remove(path)
+	}
+}
+
+func hasAnyBinding(projectRoot, bindingFile string) bool {
+	loaded, err := access.LoadBindingFile(projectRoot, bindingFile)
+	return err == nil && len(loaded.Bindings) > 0
 }
 
 // tightenHarnessDirs enforces the T1 permission floor on the PRIVATE harness state tree:

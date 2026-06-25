@@ -11,11 +11,9 @@ import (
 	"strings"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
-	"github.com/mnemon-dev/mnemon/harness/internal/projection"
-	"github.com/mnemon-dev/mnemon/harness/internal/reconcile"
-	"github.com/mnemon-dev/mnemon/harness/internal/rule"
-	"github.com/mnemon-dev/mnemon/harness/internal/store"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation/view"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/state"
 )
 
 // canonicalModes is the fixed policy replay reconciles under. It SHARES contract.DefaultModes()
@@ -40,9 +38,9 @@ func ordered(events []contract.Event) []contract.Event {
 // must both KNOW (schema) and AUTHORIZE so it never adds a rejection the live run did not have.
 // Live only ever proposes a kind its enabled capabilities registered, so this is exactly the kinds
 // live accepted writes for; sourcing them from the log (not a compiled catalog) keeps replay
-// deterministic however the LIVE run's user kinds are sourced — a graduated memory/skill or an
+// deterministic however the LIVE run's user kinds are sourced — an embedded descriptor or an
 // external declared kind replays identically (I6, D3/PD5). The write extraction mirrors
-// reconcile.opFromEvent's JSON round-trip (Payload["writes"] decodes to []any after AppendEvent).
+// admission.opFromEvent's JSON round-trip (Payload["writes"] decodes to []any after AppendEvent).
 func logWriteKinds(events []contract.Event) []contract.ResourceKind {
 	seen := map[contract.ResourceKind]bool{}
 	var kinds []contract.ResourceKind
@@ -71,18 +69,18 @@ func logWriteKinds(events []contract.Event) []contract.ResourceKind {
 
 // logSchemaGuard registers every log-write kind with NO required fields: replay re-derives and
 // never re-polices, so a kind whose writes were live-accepted (carrying their fields) must validate.
-func logSchemaGuard(events []contract.Event) kernel.SchemaGuard {
+func logSchemaGuard(events []contract.Event) state.SchemaGuard {
 	required := map[contract.ResourceKind][]string{}
 	for _, k := range logWriteKinds(events) {
 		required[k] = nil
 	}
-	return kernel.SchemaGuard{Required: required}
+	return state.SchemaGuard{Required: required}
 }
 
 // permissiveAuthority lets every actor that appears in the events write every log-write kind, so replay does
 // not introduce authz rejections the live run did not have (the live authority is reproduced by the events
 // themselves having been accepted; replay only re-derives, it does not re-police).
-func permissiveAuthority(events []contract.Event) kernel.AuthorityRules {
+func permissiveAuthority(events []contract.Event) state.AuthorityRules {
 	kinds := logWriteKinds(events)
 	allow := map[contract.ActorID][]contract.ResourceKind{}
 	for _, ev := range events {
@@ -90,14 +88,14 @@ func permissiveAuthority(events []contract.Event) kernel.AuthorityRules {
 			allow[ev.Actor] = kinds
 		}
 	}
-	return kernel.AuthorityRules{Allow: allow}
+	return state.AuthorityRules{Allow: allow}
 }
 
 // Replay re-derives the decisions by reconciling the *.proposed events of the log over a FRESH :memory:
-// kernel. It is a pure function of the events (no live store), reproducing the live decisions up to the
+// state. It is a pure function of the events (no live store), reproducing the live decisions up to the
 // masked dynamic fields. The candidate ruleset is retained for signature symmetry with Shadow — pure replay
 // needs no policy because the logged proposals are authoritative (event-sourcing).
-func Replay(events []contract.Event, candidate rule.RuleSet) []contract.Decision {
+func Replay(events []contract.Event, candidate admission.RuleSet) []contract.Decision {
 	return drive(ordered(events))
 }
 
@@ -108,8 +106,8 @@ func Replay(events []contract.Event, candidate rule.RuleSet) []contract.Decision
 // change lives in observed->decision, NOT in re-reconciling the already-minted *.proposed events (the prior
 // model never ran the candidate's rules at all, so every real rule change passed Clean).
 //
-// View TIMING matches the server, which evaluates rules at DISPATCH time — BEFORE that tick's reconcile. Shadow
-// walks the log in IngestSeq order on a throwaway kernel: a logged *.proposed event is applied (reconciled) to
+// View TIMING matches the server, which evaluates rules at DISPATCH time — BEFORE that tick's admission. Shadow
+// walks the log in IngestSeq order on a throwaway materializer: a logged *.proposed event is applied (reconciled) to
 // evolve canonical state; an OBSERVED event is evaluated against the state BUILT FROM THE PROPOSALS THAT PRECEDE
 // IT in the log — i.e. the dispatch-time state, not the final state (evaluating against final state yields a
 // false-clean for any version-sensitive rule that diverges at @1 but agrees at @2). Only the logged proposals
@@ -121,14 +119,14 @@ func Replay(events []contract.Event, candidate rule.RuleSet) []contract.Decision
 // reason) IS a behavior change. Diagnostics likewise are durable: a candidate that errors or returns a
 // borrowed-emit proposal reduces to Verdict allow but emits one. It reports diffs, never pass/fail (the
 // operator gates promotion on Clean).
-func Shadow(events []contract.Event, subs map[contract.ActorID]contract.Subscription, live, candidate rule.RuleSet) rule.ShadowReport {
-	s, err := store.OpenStore(":memory:")
+func Shadow(events []contract.Event, subs map[contract.ActorID]contract.Subscription, live, candidate admission.RuleSet) admission.ShadowReport {
+	s, err := state.OpenStore(":memory:")
 	if err != nil {
-		return rule.ShadowReport{}
+		return admission.ShadowReport{}
 	}
 	defer s.Close()
-	k := kernel.NewKernel(s, logSchemaGuard(events), permissiveAuthority(events))
-	r := reconcile.NewReconciler(s, k)
+	k := state.NewMaterializer(s, logSchemaGuard(events), permissiveAuthority(events))
+	r := admission.NewReconciler(s, k)
 
 	diffs := 0
 	for _, ev := range ordered(events) {
@@ -144,15 +142,15 @@ func Shadow(events []contract.Event, subs map[contract.ActorID]contract.Subscrip
 			continue
 		}
 		// OBSERVED event: evaluate BOTH policies against the current (dispatch-time) scoped view.
-		view := projection.ScopedView(s, subs[ev.Actor])
-		in := rule.RuleInput{Event: ev, View: view}
+		view := view.ScopedView(s, subs[ev.Actor])
+		in := admission.RuleInput{Event: ev, View: view}
 		ld, ldiag := live.Evaluate(in)
 		cd, cdiag := candidate.Evaluate(in)
 		if canonicalRuleResult(ld, ldiag) != canonicalRuleResult(cd, cdiag) {
 			diffs++
 		}
 	}
-	return rule.ShadowReport{Clean: diffs == 0, Diffs: diffs}
+	return admission.ShadowReport{Clean: diffs == 0, Diffs: diffs}
 }
 
 // canonicalRuleResult serializes the behaviorally-meaningful output of a rule evaluation — the decision
@@ -195,13 +193,13 @@ func canonicalRuleResult(d contract.RuleDecision, diags []contract.Diagnostic) s
 // drive replays the events on a throwaway kernel and returns the reconciler's decisions (event-sourcing
 // reproduce-from-log: the logged proposals are authoritative). It never touches a live store/cursor.
 func drive(events []contract.Event) []contract.Decision {
-	s, err := store.OpenStore(":memory:")
+	s, err := state.OpenStore(":memory:")
 	if err != nil {
 		return nil
 	}
 	defer s.Close()
-	k := kernel.NewKernel(s, logSchemaGuard(events), permissiveAuthority(events))
-	r := reconcile.NewReconciler(s, k)
+	k := state.NewMaterializer(s, logSchemaGuard(events), permissiveAuthority(events))
+	r := admission.NewReconciler(s, k)
 	for _, ev := range events {
 		if _, err := s.AppendEvent(ev); err != nil {
 			continue

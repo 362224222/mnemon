@@ -7,19 +7,19 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/rule"
-	"github.com/mnemon-dev/mnemon/harness/internal/store"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/state"
 )
 
-// #9: PullProjection must serve only the actor's CONFIGURED scope; client-named out-of-scope refs are denied.
-func TestPullProjectionEnforcesConfiguredScope(t *testing.T) {
-	_, k, cs := newServerWith(t, rule.NewRuleSet(proposeRule()))
+// #9: PullPresentationView must serve only the actor's CONFIGURED scope; client-named out-of-scope refs are denied.
+func TestPullPresentationViewEnforcesConfiguredScope(t *testing.T) {
+	_, k, cs := newServerWith(t, admission.NewRuleSet(proposeRule()))
 	// a resource the agent is NOT configured to see (agentSubs scope = {m1}).
-	if d := k.Apply(contract.KernelOp{OpID: "secret", Actor: "agent", Writes: []contract.ResourceWrite{
+	if d := k.Apply(contract.StateOp{OpID: "secret", Actor: "agent", Writes: []contract.ResourceWrite{
 		{Ref: contract.ResourceRef{Kind: "memory", ID: "secret"}, Kind: contract.OpCreate, Fields: map[string]any{"content": "top"}}}}, p0Modes()); d.Status != contract.Accepted {
 		t.Fatalf("seed secret: %s", d.Reason)
 	}
-	proj, err := cs.PullProjection("agent", contract.Subscription{Actor: "agent", Refs: []contract.ResourceRef{{Kind: "memory", ID: "secret"}}})
+	proj, err := cs.PullPresentationView("agent", contract.Subscription{Actor: "agent", Refs: []contract.ResourceRef{{Kind: "memory", ID: "secret"}}})
 	if err != nil {
 		t.Fatalf("pull: %v", err)
 	}
@@ -32,7 +32,7 @@ func TestPullProjectionEnforcesConfiguredScope(t *testing.T) {
 
 // #5: concurrent Tick must be data-race-free and never double-dispatch (run under -race).
 func TestConcurrentTickIsSafe(t *testing.T) {
-	s, _, cs := newServerWith(t, rule.NewRuleSet(proposeRule()))
+	s, _, cs := newServerWith(t, admission.NewRuleSet(proposeRule()))
 	if _, _, err := cs.Ingest("agent", contract.ObservationEnvelope{ExternalID: "e1", Event: contract.Event{Type: "memory.observed", CorrelationID: "c1"}}); err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
@@ -51,10 +51,10 @@ func TestConcurrentTickIsSafe(t *testing.T) {
 // server crashed before producing must be RECOVERABLE from the durable decision log — the S2 invalidation is
 // not permanently lost.
 func TestDecisionSideEffectsRecoveredFromLog(t *testing.T) {
-	s, k, cs := newServerWith(t, rule.NewRuleSet(proposeRule()))
+	s, k, cs := newServerWith(t, admission.NewRuleSet(proposeRule()))
 	// simulate a committed-but-unprocessed decision: apply it directly (a reconciler-style Accepted decision
 	// with IngestSeq>0), bypassing the server's side-effect step ("crash" before handleDecisions).
-	d := k.Apply(contract.KernelOp{OpID: "p", Actor: "agent", IngestSeq: 99, Writes: []contract.ResourceWrite{
+	d := k.Apply(contract.StateOp{OpID: "p", Actor: "agent", IngestSeq: 99, Writes: []contract.ResourceWrite{
 		{Ref: contract.ResourceRef{Kind: "memory", ID: "m1"}, Kind: contract.OpUpdate, BasedOn: 1, Fields: map[string]any{"content": "x"}}}}, p0Modes())
 	if d.Status != contract.Accepted {
 		t.Fatalf("setup apply: %s", d.Reason)
@@ -79,11 +79,11 @@ func TestDecisionSideEffectsRecoveredFromLog(t *testing.T) {
 
 // re-verify LOW: a VerdictWarn must surface its reasons as a diagnostic, not be silently dropped.
 func TestWarnVerdictEmitsDiagnostic(t *testing.T) {
-	warnRule := rule.NewNativeRule("w", "agent", "memory.write.proposed", []string{"memory.observed"},
-		func(rule.RuleInput) (contract.RuleDecision, error) {
+	warnRule := admission.NewNativeRule("w", "agent", "memory.write.proposed", []string{"memory.observed"},
+		func(admission.RuleInput) (contract.RuleDecision, error) {
 			return contract.RuleDecision{Verdict: contract.VerdictWarn, Reasons: []string{"heads up"}}, nil
 		})
-	s, _, cs := newServerWith(t, rule.NewRuleSet(warnRule))
+	s, _, cs := newServerWith(t, admission.NewRuleSet(warnRule))
 	if _, _, err := cs.Ingest("agent", contract.ObservationEnvelope{ExternalID: "e1", Event: contract.Event{Type: "memory.observed", CorrelationID: "c1"}}); err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
@@ -103,11 +103,11 @@ func TestWarnVerdictEmitsDiagnostic(t *testing.T) {
 
 // re-verify LOW: warn reasons must surface even when a higher verdict (propose) wins — never a silent warn.
 func TestWarnReasonsSurfacedWhenProposeWins(t *testing.T) {
-	warn := rule.NewNativeRule("warn", "agent", "x.proposed", []string{"memory.observed"},
-		func(rule.RuleInput) (contract.RuleDecision, error) {
+	warn := admission.NewNativeRule("warn", "agent", "x.proposed", []string{"memory.observed"},
+		func(admission.RuleInput) (contract.RuleDecision, error) {
 			return contract.RuleDecision{Verdict: contract.VerdictWarn, Reasons: []string{"DANGER"}}, nil
 		})
-	s, _, cs := newServerWith(t, rule.NewRuleSet(warn, proposeRule()))
+	s, _, cs := newServerWith(t, admission.NewRuleSet(warn, proposeRule()))
 	if _, _, err := cs.Ingest("agent", contract.ObservationEnvelope{ExternalID: "e1", Event: contract.Event{Type: "memory.observed", CorrelationID: "c1"}}); err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
@@ -131,7 +131,7 @@ func TestWarnReasonsSurfacedWhenProposeWins(t *testing.T) {
 // adversarial: re-scanning a *.proposed event (which carries a provenance digest, not an edge echo) on a
 // later Tick must NOT emit a spurious stage:readback diagnostic.
 func TestProposedEventReScanEmitsNoSpuriousReadback(t *testing.T) {
-	s, _, cs := newServerWith(t, rule.NewRuleSet(proposeRule()))
+	s, _, cs := newServerWith(t, admission.NewRuleSet(proposeRule()))
 	if _, _, err := cs.Ingest("agent", contract.ObservationEnvelope{ExternalID: "e1", Event: contract.Event{Type: "memory.observed", CorrelationID: "c1"}}); err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
@@ -156,7 +156,7 @@ func TestProposedEventReScanEmitsNoSpuriousReadback(t *testing.T) {
 	}
 }
 
-func hasDiagStage(t *testing.T, s *store.Store, stage string) bool {
+func hasDiagStage(t *testing.T, s *state.Store, stage string) bool {
 	t.Helper()
 	for _, dg := range diagEvents(t, s) {
 		if dg.Payload["stage"] == stage {

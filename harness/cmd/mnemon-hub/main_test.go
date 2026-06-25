@@ -15,14 +15,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 )
 
 func writeReplicas(t *testing.T, dir, content string, mode os.FileMode) string {
 	t.Helper()
 	path := filepath.Join(dir, "replicas.json")
 	if err := os.WriteFile(path, []byte(content), mode); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, mode); err != nil {
 		t.Fatal(err)
 	}
 	return path
@@ -93,6 +97,9 @@ func TestLoadReplicasFailClosed(t *testing.T) {
 	// is refused even when replicas.json itself is correctly 0600.
 	credDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(credDir, "a.token"), []byte("tok-a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(credDir, "a.token"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(credDir, "b.token"), []byte("tok-b\n"), 0o600); err != nil {
@@ -172,49 +179,49 @@ func TestMnemonHubServesSyncOverTLS(t *testing.T) {
 		}
 	}()
 
-	clientA, err := channel.NewSyncClient(endpoint, channel.SyncClientConfig{Token: "tok-a", CAFile: certPath})
+	clientA, err := access.NewSyncClient(endpoint, access.SyncClientConfig{Token: "tok-a", CAFile: certPath})
 	if err != nil {
 		t.Fatal(err)
 	}
-	clientB, err := channel.NewSyncClient(endpoint, channel.SyncClientConfig{Token: "tok-b", CAFile: certPath})
+	clientB, err := access.NewSyncClient(endpoint, access.SyncClientConfig{Token: "tok-b", CAFile: certPath})
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	mem := contract.ResourceRef{Kind: "memory", ID: "project"}
 	fields := map[string]any{"content": "pushed through mnemon-hub"}
-	commit := contract.LocalCommit{
+	material := contract.SyncedEventMaterial{
 		OriginReplicaID: "local-a", LocalDecisionID: "dec-1", LocalIngestSeq: 1, Actor: "codex@a",
 		ResourceRef: mem, ResourceVersion: 1, FieldsDigest: digestFor(fields), Fields: fields,
 		DecidedAt: "2026-06-12T00:00:00Z", Status: "pending",
 	}
-	pushResp, err := clientA.SyncPush(contract.SyncPushRequest{ReplicaID: "local-a", BatchID: "b1", Commits: []contract.LocalCommit{commit}})
+	pushResp, err := clientA.SyncPush(contract.SyncPushRequest{ReplicaID: "local-a", BatchID: "b1", Events: hubTestSyncEvents(t, material)})
 	if err != nil || len(pushResp.Accepted) != 1 {
 		t.Fatalf("push over TLS: %+v err=%v", pushResp, err)
 	}
 	pullResp, err := clientB.SyncPull(contract.SyncPullRequest{ReplicaID: "local-b"})
-	if err != nil || len(pullResp.Commits) != 1 || pullResp.Commits[0].LocalDecisionID != "dec-1" {
+	if err != nil || len(pullResp.Events) != 1 || contract.DecisionIDFromEventID(pullResp.Events[0].Event.ID) != "dec-1" {
 		t.Fatalf("pull over TLS: %+v err=%v", pullResp, err)
 	}
 	status, err := clientA.SyncStatus()
-	if err != nil || status.HubCommitsReceived != 1 || status.HubCommitsServed != 1 {
+	if err != nil || status.HubEventsReceived != 1 || status.HubEventsServed != 1 {
 		t.Fatalf("status over TLS: %+v err=%v", status, err)
 	}
 
-	// B's grant is memory-only: pushing a skill commit is rejected by the clamp (scope probe).
+	// B's grant is memory-only: pushing a skill event is rejected by the clamp (scope probe).
 	skillFields := map[string]any{"name": "project"}
-	skillCommit := contract.LocalCommit{
+	skillMaterial := contract.SyncedEventMaterial{
 		OriginReplicaID: "local-b", LocalDecisionID: "dec-skill", LocalIngestSeq: 2, Actor: "codex@b",
 		ResourceRef: contract.ResourceRef{Kind: "skill", ID: "project"}, ResourceVersion: 1,
 		FieldsDigest: digestFor(skillFields), Fields: skillFields, DecidedAt: "2026-06-12T00:00:00Z", Status: "pending",
 	}
-	scopeResp, err := clientB.SyncPush(contract.SyncPushRequest{ReplicaID: "local-b", BatchID: "b2", Commits: []contract.LocalCommit{skillCommit}})
+	scopeResp, err := clientB.SyncPush(contract.SyncPushRequest{ReplicaID: "local-b", BatchID: "b2", Events: hubTestSyncEvents(t, skillMaterial)})
 	if err != nil || len(scopeResp.Rejected) != 1 {
-		t.Fatalf("out-of-scope push must reject per-commit: %+v err=%v", scopeResp, err)
+		t.Fatalf("out-of-scope push must reject per-event: %+v err=%v", scopeResp, err)
 	}
 
 	// An unknown token is 401 (the wire security floor under TLS).
-	badClient, err := channel.NewSyncClient(endpoint, channel.SyncClientConfig{Token: "wrong", CAFile: certPath})
+	badClient, err := access.NewSyncClient(endpoint, access.SyncClientConfig{Token: "wrong", CAFile: certPath})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,4 +277,17 @@ func digestFor(fields map[string]any) string {
 	b, _ := json.Marshal(fields)
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
+}
+
+func hubTestSyncEvents(t *testing.T, materials ...contract.SyncedEventMaterial) []eventmodel.EventEnvelope {
+	t.Helper()
+	events := make([]eventmodel.EventEnvelope, 0, len(materials))
+	for _, material := range materials {
+		env, err := contract.SyncedEventEnvelopeFromMaterial(material)
+		if err != nil {
+			t.Fatalf("synced event fixture: %v", err)
+		}
+		events = append(events, env)
+	}
+	return events
 }

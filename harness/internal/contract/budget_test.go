@@ -11,13 +11,13 @@ func TestResolveBudgetTier(t *testing.T) {
 		want    BudgetTier
 		wantErr bool
 	}{
-		{"", BudgetHot, false},            // empty => hot (full), not digest-only — no silent downgrade
-		{BudgetHot, BudgetHot, false},     // catalogued passes through
-		{BudgetWarm, BudgetWarm, false},   //
+		{"", BudgetHot, false},          // empty => hot (full), not digest-only — no silent downgrade
+		{BudgetHot, BudgetHot, false},   // catalogued passes through
+		{BudgetWarm, BudgetWarm, false}, //
 		{BudgetDigestOnly, BudgetDigestOnly, false},
-		{"cold", "", true},                // unknown => fail-loud, never widened
-		{"HOT", "", true},                 // case-sensitive closed set
-		{"hot ", "", true},                // no trimming/normalization beyond the empty default
+		{"cold", "", true}, // unknown => fail-loud, never widened
+		{"HOT", "", true},  // case-sensitive closed set
+		{"hot ", "", true}, // no trimming/normalization beyond the empty default
 	}
 	for _, c := range cases {
 		got, err := ResolveBudgetTier(c.in)
@@ -37,7 +37,7 @@ func TestResolveBudgetTier(t *testing.T) {
 }
 
 // The closed set is exactly three tiers — a guard so adding a tier is a deliberate edit, and so the
-// smallest-context-first ordering the local mirror derivation relies on stays a fixed, known catalog.
+// smallest-context-first ordering the local render/pull derivation relies on stays a fixed catalog.
 func TestBudgetTierCatalogIsClosed(t *testing.T) {
 	if len(budgetTiers) != 3 {
 		t.Fatalf("budget tier catalog must be exactly {hot,warm,digest-only}, got %d entries", len(budgetTiers))

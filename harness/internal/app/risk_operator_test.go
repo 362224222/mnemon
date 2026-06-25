@@ -4,10 +4,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/capability"
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/state"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
@@ -17,24 +17,23 @@ const approvalHighRiskSpec = `{"schema_version":1,"name":"approval","observed_ty
 "render":{"content":{"member":"bullet-list","params":{"title":"# Approvals","field":"text"}}},
 "risk":"high"}`
 
-// P3e-1: a high-risk kind's candidate from an AGENT (host-agent) is DENIED — the operator-only gate
+// A high-risk kind's candidate from an AGENT (host-agent) is DENIED — the operator-only gate
 // (the deny outranks the admission propose) — while the same candidate from an OPERATOR
-// (control-agent) is ADMITTED. This is the governance the D-loop's loopdef will rely on, proven here
-// with a high-risk test kind (no loopdef yet).
+// (control-agent) is ADMITTED. This proves the generic high-risk path with a static policy.
 func TestHighRiskOperatorGate(t *testing.T) {
 	root := t.TempDir()
 	writeExternalGoalPackage(t, root, "approval", approvalHighRiskSpec)
-	catalog, err := capability.ResolveCatalog(root, kernel.DefaultSchemaGuard().Required)
+	catalog, err := policy.ResolveRegistry(root, state.DefaultSchemaGuard().Required)
 	if err != nil {
 		t.Fatalf("resolve catalog: %v", err)
 	}
 	ref := contract.ResourceRef{Kind: "approval", ID: "project"}
-	host := channel.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
+	host := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
 	host.AllowedObservedTypes = []string{"approval.write_candidate.observed"}
-	operator := channel.ControlAgentBinding("human@owner", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
+	operator := access.ControlAgentBinding("human@owner", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
 	operator.AllowedObservedTypes = []string{"approval.write_candidate.observed"}
 
-	rc, err := LocalRuntimeConfigFromBindings([]channel.ChannelBinding{host, operator}, catalog)
+	rc, err := LocalRuntimeConfigFromBindings([]access.ChannelBinding{host, operator}, catalog)
 	if err != nil {
 		t.Fatalf("boot config: %v", err)
 	}

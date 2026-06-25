@@ -47,9 +47,7 @@ var localRunCmd = &cobra.Command{
 		fmt.Fprintln(cmd.OutOrStdout(), "Remote Workspace: "+app.RemoteWorkspaceStatus(projectRoot()))
 		return app.RunLocalHTTPServerWithBindings(cmd.Context(), addr, boot.StorePath, boot.Loaded, app.ServeOptions{
 			Loops:               boot.Config.Loops,
-			Hosts:               boot.Config.Hosts,
 			ProjectRoot:         projectRoot(),
-			MirrorMode:          boot.Config.MirrorMode,
 			IgnoreExternal:      localIgnoreExternal,
 			AllowInsecureRemote: localAllowInsecureRemote,
 			SyncInterval:        localSyncInterval,
@@ -79,7 +77,7 @@ func init() {
 	localRunCmd.Flags().StringVar(&localBindingsPath, "bindings", "", "Agent Integration binding file")
 	localRunCmd.Flags().DurationVar(&localSyncInterval, "sync-interval", 0, "sync worker cadence (0 = default 30s)")
 	localRunCmd.Flags().BoolVar(&localAllowNonLoopback, "allow-nonloopback", false, "explicitly allow listening on a non-loopback address (T1: loopback-only by default)")
-	localRunCmd.Flags().BoolVar(&localIgnoreExternal, "ignore-external", false, "boot the embedded-only capability catalog, ignoring external packages under .mnemon/loops (each ignored package is named on stderr)")
+	localRunCmd.Flags().BoolVar(&localIgnoreExternal, "ignore-external", false, "boot the standard-only event package registry, ignoring external packages under .mnemon/loops (each ignored package is named on stderr)")
 	localRunCmd.Flags().BoolVar(&localAllowInsecureRemote, "allow-insecure-remote", false, "let the background sync worker use a plaintext http:// Remote Workspace endpoint with a non-loopback host (T2: fail-closed by default)")
 	_ = localRunCmd.Flags().MarkHidden("bindings")
 	localCmd.AddCommand(localRunCmd, localStatusCmd, localStopCmd)

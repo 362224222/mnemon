@@ -10,10 +10,11 @@ import (
 var version = "dev"
 
 var rootCmd = &cobra.Command{
-	Use:     "mnemon-harness",
-	Version: version,
-	Short:   "Mnemon Agent Integration setup",
-	Long: "Install Agent Integration for memory and skill, connect it to Local Mnemon, " +
+	Use:               "mnemon-harness",
+	Version:           version,
+	Short:             "Mnemon Agent Integration setup",
+	CompletionOptions: cobra.CompletionOptions{DisableDefaultCmd: true},
+	Long: "Install Agent Integration for standard events, connect it to Local Mnemon, " +
 		"and keep Remote Workspace sync as a background concern.",
 }
 
@@ -31,7 +32,6 @@ func init() {
 		&cobra.Group{ID: groupAdvanced, Title: "Internal/debug commands:"},
 	)
 	rootCmd.SetHelpCommandGroupID(groupAdvanced)
-	rootCmd.SetCompletionCommandGroupID(groupAdvanced)
 }
 
 func main() {

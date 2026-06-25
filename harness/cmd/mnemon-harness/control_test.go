@@ -8,11 +8,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/app"
-	"github.com/mnemon-dev/mnemon/harness/internal/capability"
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
@@ -21,16 +22,16 @@ import (
 // and surfaces explicit errors for a wrong token or a missing file.
 func TestControlTokenFileAuth(t *testing.T) {
 	root := t.TempDir()
-	ref := contract.ResourceRef{Kind: "memory", ID: "m1"}
+	ref := contract.ResourceRef{Kind: "progress_digest", ID: "project"}
 	rt, err := runtime.OpenRuntime(filepath.Join(root, runtime.DefaultStorePath), runtime.RuntimeConfig{
 		Subs:     map[contract.ActorID]contract.Subscription{"codex@project": {Actor: "codex@project", Refs: []contract.ResourceRef{ref}}},
-		Bindings: []channel.ChannelBinding{channel.HostAgentBinding("codex@project", "http://x", []contract.ResourceRef{ref})},
+		Bindings: []access.ChannelBinding{access.HostAgentBinding("codex@project", "http://x", []contract.ResourceRef{ref})},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer rt.Close()
-	srv := httptest.NewServer(runtime.NewRuntimeHandler(rt, channel.TokenAuthenticator{Tokens: map[string]contract.ActorID{"tok-codex": "codex@project"}}))
+	srv := httptest.NewServer(runtime.NewRuntimeHandler(rt, access.TokenAuthenticator{Tokens: map[string]contract.ActorID{"tok-codex": "codex@project"}}))
 	defer srv.Close()
 
 	tokFile := filepath.Join(t.TempDir(), "codex.token")
@@ -65,8 +66,10 @@ func TestControlTokenFileAuth(t *testing.T) {
 	}
 	// P3d: the FIELD section (Control Tower seed) reports the coordination counts; with nothing
 	// observed yet they are all zero, but the line is present and names the default-enabled kinds.
-	if !strings.Contains(buf.String(), "Field: assignment=0") {
-		t.Fatalf("status must include the coordination FIELD section; got %q", buf.String())
+	for _, want := range []string{"Field:", "assignment=0", "agent profile=0", "teamwork signal=0"} {
+		if !strings.Contains(buf.String(), want) {
+			t.Fatalf("status must include coordination FIELD count %q; got %q", want, buf.String())
+		}
 	}
 	// Channel status has no Remote Workspace data source (no --root, ServerAPI only):
 	// it must not assert a connection state it cannot know.
@@ -92,25 +95,24 @@ func TestControlTokenFileAuth(t *testing.T) {
 }
 
 func TestControlPullJSONIncludesScopedContent(t *testing.T) {
-	ref := contract.ResourceRef{Kind: "memory", ID: "project"}
-	binding := channel.HostAgentBinding("codex@project", "http://x", []contract.ResourceRef{ref})
-	binding.AllowedObservedTypes = []string{capability.MemoryWriteCandidateObserved}
-	rt, err := app.OpenLocalRuntime(filepath.Join(t.TempDir(), "governed.db"), channel.LoadedBindings{Bindings: []channel.ChannelBinding{binding}}, nil, nil)
+	ref := contract.ResourceRef{Kind: "progress_digest", ID: "project"}
+	binding := access.HostAgentBinding("codex@project", "http://x", []contract.ResourceRef{ref})
+	binding.AllowedObservedTypes = []string{"progress_digest.write_candidate.observed"}
+	rt, err := app.OpenLocalRuntime(filepath.Join(t.TempDir(), "governed.db"), access.LoadedBindings{Bindings: []access.ChannelBinding{binding}}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer rt.Close()
-	srv := httptest.NewServer(runtime.NewRuntimeHandler(rt, channel.HeaderAuthenticator{}))
+	srv := httptest.NewServer(runtime.NewRuntimeHandler(rt, access.HeaderAuthenticator{}))
 	defer srv.Close()
-	client := channel.NewClient(srv.URL, "codex@project")
+	client := access.NewClient(srv.URL, "codex@project")
 	if rec, err := client.IngestObserve("codex@project", contract.ObservationEnvelope{
-		ExternalID: "memory-json",
-		Event: contract.Event{Type: capability.MemoryWriteCandidateObserved, Payload: map[string]any{
-			"content": "Use Local Mnemon as the memory source.",
-			"source":  "user", "confidence": "high",
+		ExternalID: "progress-json",
+		Event: contract.Event{Type: "progress_digest.write_candidate.observed", Payload: map[string]any{
+			"summary": "Use Local Mnemon as the event source.",
 		}},
 	}); err != nil || !rec.Ticked {
-		t.Fatalf("seed local memory: rec=%+v err=%v", rec, err)
+		t.Fatalf("seed local progress event: rec=%+v err=%v", rec, err)
 	}
 
 	oldAddr := controlAddr
@@ -151,68 +153,89 @@ func TestControlPullJSONIncludesScopedContent(t *testing.T) {
 		t.Fatalf("pull JSON must include one scoped content item, got %+v", out.Content)
 	}
 	if content, _ := out.Content[0].Fields["content"].(string); !strings.Contains(content, "Use Local Mnemon") {
-		t.Fatalf("pull JSON content missing memory text: %+v", out.Content[0].Fields)
+		t.Fatalf("pull JSON content missing progress text: %+v", out.Content[0].Fields)
 	}
 }
 
-func TestControlPullMirrorWritesNonAuthoritativeMemoryFile(t *testing.T) {
-	ref := contract.ResourceRef{Kind: "memory", ID: "project"}
-	binding := channel.HostAgentBinding("codex@project", "http://x", []contract.ResourceRef{ref})
-	binding.AllowedObservedTypes = []string{capability.MemoryWriteCandidateObserved}
-	rt, err := app.OpenLocalRuntime(filepath.Join(t.TempDir(), "governed.db"), channel.LoadedBindings{Bindings: []channel.ChannelBinding{binding}}, nil, nil)
+func TestControlRenderPrintsDerivedEventPresentationBody(t *testing.T) {
+	ref := contract.ResourceRef{Kind: "assignment", ID: "project"}
+	a := access.HostAgentBinding("codex-a@project", "http://x", []contract.ResourceRef{ref})
+	a.AllowedObservedTypes = []string{"assignment.write_candidate.observed"}
+	b := access.HostAgentBinding("codex-b@project", "http://x", []contract.ResourceRef{ref})
+	loaded := access.LoadedBindings{
+		Bindings: []access.ChannelBinding{a, b},
+		Tokens: map[string]contract.ActorID{
+			"tok-a": "codex-a@project",
+			"tok-b": "codex-b@project",
+		},
+	}
+	rc, err := app.LocalRuntimeConfigFromBindings(loaded.Bindings, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rc.Now = func() string { return "2026-06-24T10:00:00Z" }
+	rt, err := runtime.OpenRuntime(filepath.Join(t.TempDir(), "presentation.db"), rc)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer rt.Close()
-	srv := httptest.NewServer(runtime.NewRuntimeHandler(rt, channel.HeaderAuthenticator{}))
+	bindings, err := access.NewBindingSet(loaded.Bindings...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(app.NewLocalHTTPHandler(rt, access.TokenAuthenticator{Tokens: loaded.Tokens}, bindings, presentation.Renderer{
+		Now: func() time.Time { return mustCmdTime(t, "2026-06-24T10:05:00Z") },
+	}))
 	defer srv.Close()
-	client := channel.NewClient(srv.URL, "codex@project")
-	if rec, err := client.IngestObserve("codex@project", contract.ObservationEnvelope{
-		ExternalID: "memory-mirror",
-		Event: contract.Event{Type: capability.MemoryWriteCandidateObserved, Payload: map[string]any{
-			"content": "Mirror content comes from Local Mnemon.",
-			"source":  "user", "confidence": "high",
+	clientA := access.NewClientWithToken(srv.URL, "tok-a")
+	if rec, err := clientA.IngestObserve("", contract.ObservationEnvelope{
+		ExternalID: "control-render-assignment",
+		Event: contract.Event{Type: "assignment.write_candidate.observed", Payload: map[string]any{
+			"scope": "review control render", "ttl": "30m", "assignee": "codex-b@project",
+			"expected_work": "review control render", "expected_feedback": "short result",
+			"evidence": "control render test",
 		}},
 	}); err != nil || !rec.Ticked {
-		t.Fatalf("seed local memory: rec=%+v err=%v", rec, err)
+		t.Fatalf("seed assignment: rec=%+v err=%v", rec, err)
 	}
 
 	oldAddr := controlAddr
 	oldPrincipal := controlPrincipal
 	oldToken := controlToken
 	oldTokenFile := controlTokenFile
-	oldActor := controlActor
-	oldPullJSON := controlPullJSON
-	oldMirror := controlMirrorPath
+	oldIntent := controlRenderIntent
+	oldLifecycle := controlRenderLifecycle
+	oldSurface := controlRenderSurface
+	oldMaxChars := controlRenderMaxChars
+	oldJSON := controlRenderJSON
 	t.Cleanup(func() {
 		controlAddr = oldAddr
 		controlPrincipal = oldPrincipal
 		controlToken = oldToken
 		controlTokenFile = oldTokenFile
-		controlActor = oldActor
-		controlPullJSON = oldPullJSON
-		controlMirrorPath = oldMirror
+		controlRenderIntent = oldIntent
+		controlRenderLifecycle = oldLifecycle
+		controlRenderSurface = oldSurface
+		controlRenderMaxChars = oldMaxChars
+		controlRenderJSON = oldJSON
 	})
-	mirrorPath := filepath.Join(t.TempDir(), "MEMORY.md")
 	controlAddr = srv.URL
-	controlPrincipal = "codex@project"
-	controlToken = ""
+	controlPrincipal = "codex-b@project"
+	controlToken = "tok-b"
 	controlTokenFile = ""
-	controlActor = ""
-	controlPullJSON = false
-	controlMirrorPath = mirrorPath
+	controlRenderIntent = presentation.IntentTeamworkEvents
+	controlRenderLifecycle = "remind"
+	controlRenderSurface = "hook"
+	controlRenderMaxChars = 6000
+	controlRenderJSON = false
 
 	var buf bytes.Buffer
-	controlPullCmd.SetOut(&buf)
-	if err := controlPullCmd.RunE(controlPullCmd, nil); err != nil {
-		t.Fatalf("control pull --mirror: %v", err)
+	controlRenderCmd.SetOut(&buf)
+	if err := controlRenderCmd.RunE(controlRenderCmd, nil); err != nil {
+		t.Fatalf("control render: %v", err)
 	}
-	mirror := string(mustReadCmd(t, mirrorPath))
-	if !strings.Contains(mirror, "Non-authoritative mirror") || !strings.Contains(mirror, "Mirror content comes from Local Mnemon") {
-		t.Fatalf("mirror did not render scoped memory:\n%s", mirror)
-	}
-	if !strings.Contains(buf.String(), "wrote memory mirror") {
-		t.Fatalf("control pull should report mirror refresh, got %q", buf.String())
+	if !strings.Contains(buf.String(), "[mnemon:work]") || strings.Contains(buf.String(), `"body"`) {
+		t.Fatalf("control render must print presentation body only, got:\n%s", buf.String())
 	}
 }
 
@@ -223,4 +246,13 @@ func mustReadCmd(t *testing.T, path string) []byte {
 		t.Fatalf("read %s: %v", path, err)
 	}
 	return data
+}
+
+func mustCmdTime(t *testing.T, s string) time.Time {
+	t.Helper()
+	out, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
 }

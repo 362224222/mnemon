@@ -1,82 +1,48 @@
 package app
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/assets"
-	"github.com/mnemon-dev/mnemon/harness/internal/capability"
-	"github.com/mnemon-dev/mnemon/harness/internal/hostsurface"
-	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
-	"github.com/mnemon-dev/mnemon/harness/internal/manifest"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/state"
 )
 
-// LoopValidate validates the embedded harness loop/host/binding manifests unconditionally, then —
-// when root names an external tree carrying its own loops/hosts/bindings — validates that too (the
-// union). A root with no harness assets (the common case, including the repo root after the assets
-// moved under internal/assets) contributes nothing, so the validation passes.
+// LoopValidate validates the resolved event package registry through the same fail-closed resolution boot
+// uses. R1 host setup no longer projects per-loop assets, so validate reports event packages only:
+// standard descriptors plus external packages under .mnemon/loops.
 func (h *Harness) LoopValidate() ([]string, error) {
-	result, err := manifest.ValidateFS(assets.FS)
+	merged, err := policy.ResolveRegistry(h.root, state.DefaultSchemaGuard().Required)
 	if err != nil {
 		return nil, err
 	}
-	lines := result.Lines
-	// Stage-3: hooks are generated; validate renders for every embedded (host, loop) pair so a
-	// broken intents/mechanics/fragment combination fails HERE, not at install time.
-	hookHosts, hookLoops, err := hostsurface.EmbeddedHookUniverse()
-	if err != nil {
-		return nil, err
-	}
-	hookLines, err := hostsurface.ValidateGeneratedHooks(hookHosts, hookLoops)
-	if err != nil {
-		return nil, err
-	}
-	lines = append(lines, hookLines...)
-	if h.root != "" {
-		// Manifest-TREE validation (a loops/hosts/bindings tree at the root) — distinct from the
-		// .mnemon/loops external CAPABILITY packages validated below.
-		external, err := manifest.ValidateFS(os.DirFS(h.root))
-		if err != nil {
-			return nil, err
-		}
-		lines = append(lines, external.Lines...)
-	}
-	// External capability packages: run the SAME fail-closed resolution boot uses (symlink screen
-	// + LoadExternal + four-axis shadowing merge), so a package that would refuse `local run`
-	// fails validate too. One OK line per package — the v1 source label (status integration is
-	// explicitly deferred). --root must be the PROJECT root for external-package validation —
-	// ResolveCatalog reads <root>/.mnemon/loops (manifest-tree root and project root coincide in
-	// product use; the legacy <root>/loops branch above is manifest-tree validation).
-	merged, err := capability.ResolveCatalog(h.root, kernel.DefaultSchemaGuard().Required)
-	if err != nil {
-		return nil, err
-	}
-	var externalNames []string
+	standard := policy.StandardRegistry()
+	names := make([]string, 0, len(merged))
 	for name := range merged {
-		if _, embedded := capability.EmbeddedCatalog()[name]; !embedded {
-			externalNames = append(externalNames, name)
-		}
+		names = append(names, name)
 	}
-	sort.Strings(externalNames)
-	for _, name := range externalNames {
-		lines = append(lines, fmt.Sprintf("external capability %s: OK", name))
+	sort.Strings(names)
+	lines := make([]string, 0, len(names))
+	for _, name := range names {
+		source := "external"
+		if _, ok := standard[name]; ok {
+			source = "standard"
+		}
+		lines = append(lines, fmt.Sprintf("%s event package %s: OK", source, name))
 	}
 	return lines, nil
 }
 
-// CapabilityInfo is the read-only view of a resolved capability — the discoverability answer to "what
+// EventPackageInfo is the read-only view of a resolved event package — the discoverability answer to "what
 // kinds can the agents work with and what does each expect" (P2). It is a projection of the descriptor
-// (capability.Capability), never the runtime's internal rule state: the runtime is capability-free by
-// design (PD6c), so this query resolves the project catalog from disk rather than coupling the kernel
-// to capability shapes.
-type CapabilityInfo struct {
+// (policy.EventPackage), never the runtime's internal rule state, so this query resolves the project
+// registry from disk rather than coupling the kernel to package shapes.
+type EventPackageInfo struct {
 	Name         string   `json:"name"`
 	Kind         string   `json:"kind"`
 	ObservedType string   `json:"observed_type"`
@@ -85,25 +51,25 @@ type CapabilityInfo struct {
 	Required     []string `json:"required"`
 	Importable   bool     `json:"importable"`
 	Merge        string   `json:"merge,omitempty"`
-	Source       string   `json:"source"` // "embedded" (first-party) | "external" (.mnemon/loops package)
+	Source       string   `json:"source"` // "standard" | "external" (.mnemon/loops package)
 }
 
-// LoopCapabilities resolves the project catalog (embedded first-party + every external package under
-// .mnemon/loops, via the SAME fail-closed boot resolution) and returns one CapabilityInfo per kind,
-// sorted by kind. It is a LOCAL read — no running server is contacted; the catalog is a disk fact.
-func (h *Harness) LoopCapabilities() ([]CapabilityInfo, error) {
-	catalog, err := capability.ResolveCatalog(h.root, kernel.DefaultSchemaGuard().Required)
+// LoopEventPackages resolves the project registry (standard descriptors + every external package under
+// .mnemon/loops, via the SAME fail-closed boot resolution) and returns one EventPackageInfo per kind,
+// sorted by kind. It is a LOCAL read — no running server is contacted; the registry is a disk fact.
+func (h *Harness) LoopEventPackages() ([]EventPackageInfo, error) {
+	catalog, err := policy.ResolveRegistry(h.root, state.DefaultSchemaGuard().Required)
 	if err != nil {
 		return nil, err
 	}
-	embedded := capability.EmbeddedCatalog()
-	infos := make([]CapabilityInfo, 0, len(catalog))
+	standard := policy.StandardRegistry()
+	infos := make([]EventPackageInfo, 0, len(catalog))
 	for _, cap := range catalog {
 		source := "external"
-		if _, ok := embedded[cap.Name]; ok {
-			source = "embedded"
+		if _, ok := standard[cap.Name]; ok {
+			source = "standard"
 		}
-		infos = append(infos, CapabilityInfo{
+		infos = append(infos, EventPackageInfo{
 			Name:         cap.Name,
 			Kind:         string(cap.ResourceKind),
 			ObservedType: cap.ObservedType,
@@ -119,20 +85,20 @@ func (h *Harness) LoopCapabilities() ([]CapabilityInfo, error) {
 	return infos, nil
 }
 
-// LoopSchema returns the CapabilityInfo for one resource kind (the `control schema --type T` answer),
+// LoopSchema returns the EventPackageInfo for one resource kind (the `control schema --type T` answer),
 // resolved from the same project catalog. An unknown kind is an error (fail-closed — never an empty
 // success that reads as "no required fields").
-func (h *Harness) LoopSchema(kind string) (CapabilityInfo, error) {
-	infos, err := h.LoopCapabilities()
+func (h *Harness) LoopSchema(kind string) (EventPackageInfo, error) {
+	infos, err := h.LoopEventPackages()
 	if err != nil {
-		return CapabilityInfo{}, err
+		return EventPackageInfo{}, err
 	}
 	for _, info := range infos {
 		if info.Kind == kind {
 			return info, nil
 		}
 	}
-	return CapabilityInfo{}, fmt.Errorf("unknown capability kind %q (run `mnemon-harness loop capabilities` to list)", kind)
+	return EventPackageInfo{}, fmt.Errorf("unknown event package kind %q (run `mnemon-harness loop packages` to list)", kind)
 }
 
 // observeSkillJudgment is the HAND-WRITTEN half of the mnemon-observe skill (decision F): the
@@ -146,12 +112,32 @@ never write a resource directly, and a denied observation is a signal, not a fai
 
 ## When to record (judgment — yours to apply)
 
-- Record a specific, reusable fact, decision, or skill — something a future session would benefit
+- Record a specific, reusable fact or decision — something a future session would benefit
   from. Prefer the concrete over the vague ("the deploy step needs FOO=1" beats "deploys are tricky").
 - One observation per distinct fact; do not batch unrelated facts into one.
 - Never record secrets, credentials, tokens, or transient state — the safety rules will deny them,
   and the denial is durable.
 - If you are unsure a fact is durable, it probably is not. Skip it.
+`
+
+const observeSkillRead = `## How to read governed context
+
+Use the current binding environment when it is available:
+
+    . .mnemon/harness/local/env.sh
+
+Then read the scoped view or a rendered context packet:
+
+    mnemon-harness control pull \
+      --addr "$MNEMON_CONTROL_ADDR" \
+      --principal "$MNEMON_CONTROL_PRINCIPAL" \
+      --token-file "$MNEMON_CONTROL_TOKEN_FILE"
+
+    mnemon-harness control render \
+      --addr "$MNEMON_CONTROL_ADDR" \
+      --principal "$MNEMON_CONTROL_PRINCIPAL" \
+      --token-file "$MNEMON_CONTROL_TOKEN_FILE" \
+      --intent context.packet
 `
 
 // observeSkillSubmit is the static submit/discovery footer (mechanism that does not vary by kind).
@@ -164,23 +150,25 @@ const observeSkillSubmit = `## How to submit
 
 The exact payload fields for a kind are discoverable — never guess:
 
-    mnemon-harness loop capabilities          # list every kind you can record
+    mnemon-harness loop packages             # list every kind you can record
     mnemon-harness loop schema --type <kind>  # one kind's required fields + sync
 `
 
 // RenderObserveSkill generates the mnemon-observe skill (decision F: a directory-level generated
 // skill). The judgment half is hand-written (observeSkillJudgment); the mechanism half — which kinds
 // this project enables and the event type to observe for each — is RENDERED from the resolved
-// catalog, so the skill never drifts from the live capability set and never hardcodes per-kind fields
+// registry, so the skill never drifts from the live event package set and never hardcodes per-kind fields
 // (it points the agent at `loop schema` for those). It is the generic counterpart to per-loop skills:
 // one skill teaches recording an observation for ANY kind.
 func (h *Harness) RenderObserveSkill() (string, error) {
-	infos, err := h.LoopCapabilities()
+	infos, err := h.LoopEventPackages()
 	if err != nil {
 		return "", err
 	}
 	var b strings.Builder
 	b.WriteString(observeSkillJudgment)
+	b.WriteString("\n")
+	b.WriteString(observeSkillRead)
 	b.WriteString("\n## What you can record (generated from this project's catalog)\n\n")
 	b.WriteString("| kind | observe this event type | source |\n")
 	b.WriteString("|------|-------------------------|--------|\n")
@@ -192,10 +180,10 @@ func (h *Harness) RenderObserveSkill() (string, error) {
 	return b.String(), nil
 }
 
-// LoopAdd registers an external capability package from srcDir into the project's external loop root
+// LoopAdd registers an external event package from srcDir into the project's external loop root
 // (<root>/.mnemon/loops/<name>). It is the "write a directory -> register it" front door (P2 minimal
 // onboarding): the author writes a package dir, `loop add` places it under the canonical name and
-// validates it through the SAME fail-closed boot resolution `local run` uses (capability.ResolveCatalog
+// validates it through the SAME fail-closed boot resolution `local run` uses (policy.ResolveRegistry
 // — symlink screen + LoadExternal + four-axis shadowing merge). A package that would refuse boot is
 // rejected here and the copy is rolled back, so a half-added package never lingers. The canonical name
 // is the spec's `name` (the external loader requires the directory name to equal it); an existing
@@ -232,7 +220,7 @@ func (h *Harness) LoopAdd(srcDir string) (string, error) {
 	}
 	// Validate through the exact boot resolution; roll the copy back on any refusal so a rejected
 	// package never lingers as a half-added, boot-sinking directory.
-	if _, err := capability.ResolveCatalog(h.root, kernel.DefaultSchemaGuard().Required); err != nil {
+	if _, err := policy.ResolveRegistry(h.root, state.DefaultSchemaGuard().Required); err != nil {
 		_ = os.RemoveAll(target)
 		return "", fmt.Errorf("loop %q rejected (fail-closed): %w", spec.Name, err)
 	}
@@ -275,59 +263,4 @@ func copyTree(src, dst string) error {
 		}
 		return os.WriteFile(out, data, info.Mode().Perm())
 	})
-}
-
-// LoopProject runs the product projector action against a supported host
-// runtime, streaming host output to out/errw.
-func (h *Harness) LoopProject(ctx context.Context, out, errw io.Writer, action, projectRoot, host string, loops, hostArgs []string) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if action != "install" && action != "uninstall" {
-		return fmt.Errorf("unsupported projector action %q", action)
-	}
-	switch host {
-	case "codex":
-		return hostsurface.RunCodexProjector(ctx, action, hostsurface.CodexOptions{
-			ProjectRoot: projectRoot,
-			Loops:       loops,
-			HostArgs:    hostArgs,
-			Stdout:      out,
-			Stderr:      errw,
-		})
-	case "claude-code":
-		return hostsurface.RunClaudeProjector(ctx, action, hostsurface.ClaudeOptions{
-			ProjectRoot: projectRoot,
-			Loops:       loops,
-			HostArgs:    hostArgs,
-			Stdout:      out,
-			Stderr:      errw,
-		})
-	default:
-		return fmt.Errorf("unsupported host %q; setup supports codex and claude-code", host)
-	}
-}
-
-// Refresh re-projects the managed definition files (GUIDE, hooks, skill defs) for a host loop under
-// the no-clobber policy: a definition file the user has edited is preserved and reported, never
-// overwritten. It does NOT touch the channel (bindings, token, config) — only the Agent Workspace
-// projection. It returns the display paths it preserved.
-func (h *Harness) Refresh(ctx context.Context, out, errw io.Writer, projectRoot, host string, loops, hostArgs []string) ([]string, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	switch host {
-	case "codex":
-		rep, err := hostsurface.RunCodexProjectorReport(ctx, hostsurface.CodexOptions{
-			ProjectRoot: projectRoot, Loops: loops, HostArgs: hostArgs, Stdout: out, Stderr: errw,
-		})
-		return rep.Conflicts, err
-	case "claude-code":
-		rep, err := hostsurface.RunClaudeProjectorReport(ctx, hostsurface.ClaudeOptions{
-			ProjectRoot: projectRoot, Loops: loops, HostArgs: hostArgs, Stdout: out, Stderr: errw,
-		})
-		return rep.Conflicts, err
-	default:
-		return nil, fmt.Errorf("unsupported host %q; refresh supports codex and claude-code", host)
-	}
 }

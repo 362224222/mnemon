@@ -13,39 +13,39 @@ import (
 
 var (
 	loopRoot         string
-	loopCapsJSON     bool
+	loopPackagesJSON bool
 	loopSchemaType   string
 	loopObserveWrite string
 )
 
 var loopCmd = &cobra.Command{
 	Use:    "loop",
-	Short:  "Validate harness declarations",
+	Short:  "Inspect and validate harness event packages",
 	Hidden: true,
 }
 
 var loopValidateCmd = &cobra.Command{
 	Use:   "validate",
-	Short: "Validate harness loop, host, and binding declarations",
+	Short: "Validate standard and external event packages",
 	RunE:  runLoopValidate,
 }
 
 var loopAddCmd = &cobra.Command{
 	Use:   "add <dir>",
-	Short: "Register an external capability package from a directory",
+	Short: "Register an external event package from a directory",
 	Args:  cobra.ExactArgs(1),
 	RunE:  runLoopAdd,
 }
 
-var loopCapabilitiesCmd = &cobra.Command{
-	Use:   "capabilities",
-	Short: "List the resolvable capability kinds (embedded + external packages)",
-	RunE:  runLoopCapabilities,
+var loopPackagesCmd = &cobra.Command{
+	Use:   "packages",
+	Short: "List the resolvable event package kinds (standard + external packages)",
+	RunE:  runLoopPackages,
 }
 
 var loopSchemaCmd = &cobra.Command{
 	Use:   "schema --type KIND",
-	Short: "Show one capability kind's schema (types, required fields, sync)",
+	Short: "Show one event package kind's schema (types, required fields, sync)",
 	RunE:  runLoopSchema,
 }
 
@@ -57,11 +57,11 @@ var loopObserveSkillCmd = &cobra.Command{
 
 func init() {
 	loopCmd.PersistentFlags().StringVar(&loopRoot, "root", ".", "repository root containing harness declarations")
-	loopCapabilitiesCmd.Flags().BoolVar(&loopCapsJSON, "json", false, "emit the capability list as JSON")
+	loopPackagesCmd.Flags().BoolVar(&loopPackagesJSON, "json", false, "emit the event package list as JSON")
 	loopSchemaCmd.Flags().StringVar(&loopSchemaType, "type", "", "resource kind to describe")
-	loopSchemaCmd.Flags().BoolVar(&loopCapsJSON, "json", false, "emit the schema as JSON")
+	loopSchemaCmd.Flags().BoolVar(&loopPackagesJSON, "json", false, "emit the schema as JSON")
 	loopObserveSkillCmd.Flags().StringVar(&loopObserveWrite, "write", "", "write SKILL.md into this directory instead of stdout")
-	loopCmd.AddCommand(loopValidateCmd, loopAddCmd, loopCapabilitiesCmd, loopSchemaCmd, loopObserveSkillCmd)
+	loopCmd.AddCommand(loopValidateCmd, loopAddCmd, loopPackagesCmd, loopSchemaCmd, loopObserveSkillCmd)
 	loopCmd.GroupID = groupSpine
 	rootCmd.AddCommand(loopCmd)
 }
@@ -86,12 +86,12 @@ func runLoopObserveSkill(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func runLoopCapabilities(cmd *cobra.Command, args []string) error {
-	infos, err := app.New(loopRoot).LoopCapabilities()
+func runLoopPackages(cmd *cobra.Command, args []string) error {
+	infos, err := app.New(loopRoot).LoopEventPackages()
 	if err != nil {
 		return err
 	}
-	if loopCapsJSON {
+	if loopPackagesJSON {
 		enc := json.NewEncoder(cmd.OutOrStdout())
 		enc.SetIndent("", "  ")
 		return enc.Encode(infos)

@@ -15,13 +15,13 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
-	"github.com/mnemon-dev/mnemon/harness/internal/remotesync"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemonhub/exchange"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
 // LocalNotSetupMessage is the product remediation for a boot without setup artifacts.
-const LocalNotSetupMessage = "Local Mnemon is not set up.\nRun: mnemon-harness setup --host codex --loop memory --loop skill"
+const LocalNotSetupMessage = "Local Mnemon is not set up.\nRun: mnemon-harness setup --host codex"
 
 // ErrLocalNotSetup is returned when no Local Mnemon config exists under the project root.
 var ErrLocalNotSetup = errors.New(LocalNotSetupMessage)
@@ -30,21 +30,19 @@ var ErrLocalNotSetup = errors.New(LocalNotSetupMessage)
 type LocalBoot struct {
 	Configured bool
 	StorePath  string
-	Loaded     channel.LoadedBindings
+	Loaded     access.LoadedBindings
 	Config     LocalConfig
 }
 
 // LocalConfig mirrors the setup-written .mnemon/harness/local/config.json document.
 type LocalConfig struct {
-	SchemaVersion int                 `json:"schema_version"`
-	Mode          string              `json:"mode"`
-	Endpoint      string              `json:"endpoint"`
-	Principal     string              `json:"principal"`
-	Loops         []string            `json:"loops"`
-	Hosts         map[string][]string `json:"hosts"`       // per-host projected loops; absent on old installs (no background re-projection)
-	MirrorMode    string              `json:"mirror_mode"` // "manual" | "prime-refresh"; absent defaults to prime-refresh
-	BindingFile   string              `json:"binding_file"`
-	StorePath     string              `json:"store_path"`
+	SchemaVersion int      `json:"schema_version"`
+	Mode          string   `json:"mode"`
+	Endpoint      string   `json:"endpoint"`
+	Principal     string   `json:"principal"`
+	Loops         []string `json:"loops"`
+	BindingFile   string   `json:"binding_file"`
+	StorePath     string   `json:"store_path"`
 }
 
 // ResolveLocalBoot resolves the boot state from the cleaned project root plus the two operator
@@ -52,7 +50,7 @@ type LocalConfig struct {
 // hidden --bindings flag; "" = setup-config-driven discovery).
 func ResolveLocalBoot(root, storePath, bindingsPath string) (LocalBoot, error) {
 	if bindingsPath != "" {
-		loaded, err := channel.LoadBindingFile(root, ResolveProjectPath(root, bindingsPath))
+		loaded, err := access.LoadBindingFile(root, ResolveProjectPath(root, bindingsPath))
 		if err != nil {
 			return LocalBoot{}, err
 		}
@@ -67,9 +65,9 @@ func ResolveLocalBoot(root, storePath, bindingsPath string) (LocalBoot, error) {
 	}
 	bindingPath := cfg.BindingFile
 	if bindingPath == "" {
-		bindingPath = channel.DefaultBindingFile
+		bindingPath = access.DefaultBindingFile
 	}
-	loaded, err := channel.LoadBindingFile(root, ResolveProjectPath(root, bindingPath))
+	loaded, err := access.LoadBindingFile(root, ResolveProjectPath(root, bindingPath))
 	if err != nil {
 		return LocalBoot{}, err
 	}
@@ -97,13 +95,6 @@ func ReadLocalConfig(root string) (LocalConfig, error) {
 	}
 	if cfg.SchemaVersion != 1 {
 		return LocalConfig{}, fmt.Errorf("Local Mnemon config schema_version %d unsupported (want 1)", cfg.SchemaVersion)
-	}
-	switch cfg.MirrorMode {
-	case "":
-		cfg.MirrorMode = "prime-refresh"
-	case "manual", "prime-refresh":
-	default:
-		return LocalConfig{}, fmt.Errorf("Local Mnemon config mirror_mode %q unsupported (manual|prime-refresh)", cfg.MirrorMode)
 	}
 	return cfg, nil
 }
@@ -174,7 +165,7 @@ func currentRemoteWorkspace(projectRoot string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	var doc remotesync.RemotesDoc
+	var doc exchange.RemotesDoc
 	if err := json.Unmarshal(raw, &doc); err != nil || doc.SchemaVersion != 1 {
 		return "", false
 	}

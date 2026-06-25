@@ -14,8 +14,8 @@ Goal: stand up Local Mnemon, observe one candidate, and see it admitted as a
 governed decision on the Control Tower.
 
 ```sh
-# 1. install the integration for your host + a memory loop
-mnemon-harness setup --host codex --loop memory \
+# 1. install the integration for your host
+mnemon-harness setup --host codex \
   --principal codex@project --control-url http://127.0.0.1:8801
 
 # 2. start Local Mnemon (the local governance daemon)
@@ -25,8 +25,8 @@ mnemon-harness local run &
 mnemon-harness control observe \
   --addr http://127.0.0.1:8801 --principal codex@project \
   --token-file .mnemon/harness/channel/credentials/codex-project.token \
-  --type memory.write_candidate.observed --external-id q1 \
-  --payload '{"content":"my first governed memory","source":"user","confidence":"high"}'
+  --type progress_digest.write_candidate.observed --external-id q1 \
+  --payload '{"summary":"my first governed event"}'
 # -> observed seq=1 dup=false ticked=true
 
 # 4. stop the daemon, then read the Control Tower (it needs exclusive store access)
@@ -39,7 +39,7 @@ to its proposer:
 
 ```
 # LEDGER
-  dec_… by codex@project -> memory
+  dec_… by codex@project -> progress_digest
 ```
 
 That is the whole point: a candidate became a **governed, attributed decision**
@@ -53,7 +53,7 @@ Goal: declare a new event kind as a loop package and watch it govern, with no
 code — a capability is **data that SELECTS from a closed catalog** of validators
 and renderers, never new behavior.
 
-Start from a working install (Path A, or `setup --host codex --loop memory …`).
+Start from a working install (Path A, or `setup --host codex …`).
 
 ```sh
 # 1. drop a loop package: .mnemon/loops/<name>/capability.json
@@ -81,7 +81,7 @@ JSON
 #          allowed_observed_types: "note.write_candidate.observed"
 #          subscription_scope:     {"kind":"note","id":"project"}
 
-# 3. run + observe your new kind — it governs through the SAME path as the built-ins
+# 3. run + observe your new kind — it governs through the SAME path as embedded descriptors
 mnemon-harness local run &
 mnemon-harness control observe \
   --addr http://127.0.0.1:8803 --principal codex@project \

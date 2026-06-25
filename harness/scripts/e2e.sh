@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # End-to-end system acceptance: the full hot path (setup -> local run -> observe(EventDraft) ->
-# channel -> intake -> synchronous tick -> rule -> kernel -> projection -> pull/status), plus the
+# channel -> intake -> synchronous tick -> rule -> kernel -> event view -> pull/status), plus the
 # negative diagnostic case and the refresh no-clobber, for BOTH hosts (codex + claude-code).
 set -euo pipefail
 
@@ -41,7 +41,7 @@ run_host() {
 		local addr="http://127.0.0.1:$port"
 		local tok=".mnemon/harness/channel/credentials/$(printf '%s' "$principal" | tr '@' '-').token"
 
-		"$MH" setup --host "$host" --loop memory --principal "$principal" --control-url "$addr" >/dev/null
+		"$MH" setup --host "$host" --principal "$principal" --control-url "$addr" >/dev/null
 
 		# start Local Mnemon (creates governed.db on first serve)
 		"$MH" local run >"$WORK/run-$host.log" 2>&1 &
@@ -62,45 +62,37 @@ run_host() {
 		# observe a valid candidate -> synchronous tick admits -> kernel applies
 		local out
 		out="$("$MH" control observe --addr "$addr" --principal "$principal" --token-file "$tok" \
-			--type memory.write_candidate.observed --external-id m1 \
-			--payload '{"content":"E2E memory works for '"$host"'","source":"user","confidence":"high"}')"
+			--type progress_digest.write_candidate.observed --external-id m1 \
+			--payload '{"summary":"E2E progress works for '"$host"'"}')"
 		case "$out" in *ticked=true*) ;; *) echo "observe: $out"; exit 1 ;; esac
 
-		# pull returns the memory (one resource)
+		# pull returns the admitted progress event state (one event subject)
 		out="$("$MH" control pull --addr "$addr" --principal "$principal" --token-file "$tok")"
-		case "$out" in *resources=1*) ;; *) echo "pull: $out"; exit 1 ;; esac
+		case "$out" in *event_subjects=1*) ;; *) echo "pull: $out"; exit 1 ;; esac
 
 		# status digest non-empty
 		out="$("$MH" control status --addr "$addr" --principal "$principal" --token-file "$tok")"
 		case "$out" in *digest=[0-9a-f]*) ;; *) echo "status: $out"; exit 1 ;; esac
 
-		# negative: a secret-like candidate is denied; pull still shows exactly one resource
+		# negative: a secret-like candidate is denied; pull still shows exactly one event subject
 		"$MH" control observe --addr "$addr" --principal "$principal" --token-file "$tok" \
-			--type memory.write_candidate.observed --external-id bad1 \
-			--payload '{"content":"api_key=sk-abcdefABCDEF123456","source":"user","confidence":"high"}' >/dev/null
+			--type progress_digest.write_candidate.observed --external-id bad1 \
+			--payload '{"summary":"api_key=sk-abcdefABCDEF123456"}' >/dev/null
 		out="$("$MH" control pull --addr "$addr" --principal "$principal" --token-file "$tok")"
-		case "$out" in *resources=1*) ;; *) echo "negative pull leaked: $out"; exit 1 ;; esac
+		case "$out" in *event_subjects=1*) ;; *) echo "negative pull leaked: $out"; exit 1 ;; esac
 
-		# 阶段一:写入即见 —— 不跑任何 prime,driver 在 invalidation 后自动再生镜像。
+		# R1: write is immediately visible through render context; no background workspace mirror.
 		"$MH" control observe --addr "$addr" --principal "$principal" --token-file "$tok" \
-			--type memory.write_candidate.observed --external-id m2 \
-			--payload '{"content":"E2E driver mirror '"$host"'","source":"user","confidence":"high"}' >/dev/null
-		local mirror="$configdir/mnemon-memory/MEMORY.md" seen=0
-		for i in $(seq 1 100); do
-			if grep -q "E2E driver mirror $host" "$mirror" 2>/dev/null; then
-				seen=1
-				break
-			fi
-			sleep 0.1
-		done
-		[ "$seen" = 1 ] || { echo "driver did not regenerate the mirror within 10s"; exit 1; }
+			--type progress_digest.write_candidate.observed --external-id m2 \
+			--payload '{"summary":"E2E render context '"$host"'"}' >/dev/null
+		out="$("$MH" control render --addr "$addr" --principal "$principal" --token-file "$tok" --intent context.packet)"
+		case "$out" in *"E2E render context $host"*) ;; *) echo "render context missing progress: $out"; exit 1 ;; esac
 
-		# refresh no-clobber: hand-edit a projected GUIDE, refresh, assert the edit is preserved + reported
-		local guide="$configdir/mnemon-memory/GUIDE.md"
-		printf '# E2E USER EDIT\n\n%s' "$(cat "$guide")" >"$guide.tmp" && mv "$guide.tmp" "$guide"
-		out="$("$MH" refresh --host "$host" --loop memory)"
-		case "$out" in *GUIDE.md*) ;; *) echo "refresh did not report GUIDE: $out"; exit 1 ;; esac
-		grep -q "E2E USER EDIT" "$guide" || { echo "refresh clobbered GUIDE"; exit 1; }
+		# setup no-clobber: hand-edit the generic lifecycle hook, rerun setup, assert the edit is preserved.
+		local hook="$configdir/hooks/mnemon-r1/prime.sh"
+		printf '# E2E USER EDIT\n\n%s' "$(cat "$hook")" >"$hook.tmp" && mv "$hook.tmp" "$hook"
+		"$MH" setup --host "$host" --principal "$principal" --control-url "$addr" >/dev/null
+		grep -q "E2E USER EDIT" "$hook" || { echo "setup clobbered standard hook"; exit 1; }
 
 		# stop Local Mnemon and reap it quietly (releases the port + the store lock before the next host)
 		{ kill "$runpid" 2>/dev/null; wait "$runpid"; } 2>/dev/null || true
@@ -110,49 +102,28 @@ run_host() {
 	echo "    host=$host OK"
 }
 
-# run_skill exercises the SKILL loop end-to-end (the memory arm above covers the memory loop): setup
-# --loop skill, observe a skill candidate, tick, pull.
-run_skill() {
+# run_observe_skill exercises the host skill integration entry point: generate the generic
+# mnemon-observe SKILL.md from the live registry. This is an access surface, not a harness event package.
+run_observe_skill() {
 	local host="$1" principal="$2" addr="http://127.0.0.1:8787"
-	CUR_HOST="$host-skill"
-	local proj="$WORK/proj-skill-$host"
+	CUR_HOST="$host-observe-skill"
+	local proj="$WORK/proj-observe-skill-$host"
 	mkdir -p "$proj"
-	echo "=== E2E skill loop ($host) ==="
+	echo "=== E2E observe skill generation ($host) ==="
 	(
 		cd "$proj"
-		local tok=".mnemon/harness/channel/credentials/$(printf '%s' "$principal" | tr '@' '-').token"
-		"$MH" setup --host "$host" --loop skill --principal "$principal" --control-url "$addr" >/dev/null
-		"$MH" local run >"$WORK/run-skill.log" 2>&1 &
-		local runpid=$!
-		echo "$runpid" >"$PIDFILE"
-		local up=0 i
-		for i in $(seq 1 60); do
-			if "$MH" control status --addr "$addr" --principal "$principal" --token-file "$tok" >/dev/null 2>&1; then
-				up=1
-				break
-			fi
-			sleep 0.1
-		done
-		[ "$up" = 1 ] || { cat "$WORK/run-skill.log"; exit 1; }
-
-		local out
-		out="$("$MH" control observe --addr "$addr" --principal "$principal" --token-file "$tok" \
-			--type skill.write_candidate.observed --external-id s1 \
-			--payload '{"skill_id":"e2e-skill","name":"E2E Skill","status":"active","source":"user","confidence":"high"}')"
-		case "$out" in *ticked=true*) ;; *) echo "skill observe: $out"; exit 1 ;; esac
-		out="$("$MH" control pull --addr "$addr" --principal "$principal" --token-file "$tok")"
-		case "$out" in *resources=1*) ;; *) echo "skill pull: $out"; exit 1 ;; esac
-
-		{ kill "$runpid" 2>/dev/null; wait "$runpid"; } 2>/dev/null || true
-		rm -f "$PIDFILE"
-	) || fail "skill flow failed (see $WORK/run-skill.log)"
+		"$MH" setup --host "$host" --principal "$principal" --control-url "$addr" >/dev/null
+		"$MH" loop observe-skill --write ".mnemon/generated/mnemon-observe" >/dev/null
+		grep -q "# mnemon-observe" ".mnemon/generated/mnemon-observe/SKILL.md" || { echo "observe skill header missing"; exit 1; }
+		grep -q "progress_digest.write_candidate.observed" ".mnemon/generated/mnemon-observe/SKILL.md" || { echo "observe skill missing progress event"; exit 1; }
+		grep -q "assignment.write_candidate.observed" ".mnemon/generated/mnemon-observe/SKILL.md" || { echo "observe skill missing assignment event"; exit 1; }
+	) || fail "observe skill generation failed"
 	sleep 0.3
-	echo "    skill loop ($host) OK"
+	echo "    observe skill generation ($host) OK"
 }
 
-# run_note proves the platform claim on the PRODUCT path (note AND the 4th capability decision)
-# via the EXTERNAL-PACKAGE route: since the P1 demotion neither capability is embedded — only
-# their KindCatalog/SchemaGuard kind registrations remain in code — so each stands up from a
+# run_note proves the platform claim on the PRODUCT path (note and decision fixtures)
+# via the EXTERNAL-PACKAGE route: neither is a standard event package, so each stands up from a
 # .mnemon/loops/<name>/capability.json package directory plus the SAME config.loops +
 # bindings.json edit (the run_external_goal mechanism; supply path changed, admission semantics
 # unchanged). setup still fail-closes `--loop note` (external packages carry no host assets), so
@@ -163,15 +134,14 @@ run_note() {
 	CUR_HOST="note-external-package"
 	local proj="$WORK/proj-note"
 	mkdir -p "$proj"
-	echo "=== E2E note+decision external capability packages ==="
+	echo "=== E2E note+decision external event packages ==="
 	(
 		cd "$proj"
 		local tok=".mnemon/harness/channel/credentials/codex-project.token"
-		"$MH" setup --host codex --loop memory --principal "$principal" --control-url "$addr" >/dev/null
+		"$MH" setup --host codex --principal "$principal" --control-url "$addr" >/dev/null
 
-		# The external packages: directory presence = capability declaration (loop-package-v1).
-		# capability.json carries the spec formerly embedded as assets/capabilities/note.json /
-		# decision.json (now canonical at harness/internal/capability/testdata/capabilities/).
+		# The external packages: directory presence = event package declaration.
+		# capability.json remains the external adapter filename for compatibility.
 		mkdir -p .mnemon/loops/note .mnemon/loops/decision
 		cat >.mnemon/loops/note/capability.json <<-'JSONEOF'
 		{
@@ -247,7 +217,7 @@ run_note() {
 		done
 		[ "$up" = 1 ] || { cat "$WORK/run-note.log"; exit 1; }
 
-		# `resources=N` counts SCOPED refs (version-0 included), so it cannot prove existence.
+		# `event_subjects=N` counts written event subjects, so digest checks remain the stricter proof here.
 		# The content digest folds Kind:ID:Version+fields per scoped ref: an admitted note write
 		# necessarily changes it. ticked=true + digest delta = the note landed (admitted through
 		# the EXTERNAL note rule — note is no longer embedded, so no builtin could fake this).
@@ -279,7 +249,7 @@ run_note() {
 	echo "    note+decision external packages OK"
 }
 
-# run_external_goal proves stage 5 on the product path: a capability that NEVER had a kind
+# run_external_goal proves stage 5 on the product path: an event package that never had a standard kind
 # registration in code (goal) stands up from a pure external package directory
 # (.mnemon/loops/goal/capability.json) + the SAME config.loops/binding edit the note/decision
 # external packages use — admission-equal rights. Includes the governed pull CONTENT leg (the
@@ -290,14 +260,13 @@ run_external_goal() {
 	CUR_HOST="external-goal"
 	local proj="$WORK/proj-external-goal"
 	mkdir -p "$proj"
-	echo "=== E2E external goal capability package ==="
+	echo "=== E2E external goal event package ==="
 	(
 		cd "$proj"
 		local tok=".mnemon/harness/channel/credentials/codex-project.token"
-		"$MH" setup --host codex --loop memory --principal "$principal" --control-url "$addr" >/dev/null
+		"$MH" setup --host codex --principal "$principal" --control-url "$addr" >/dev/null
 
-		# The external package: directory presence = capability declaration (loop-package-v1,
-		# "External capability packages").
+		# The external package: directory presence = event package declaration.
 		mkdir -p .mnemon/loops/goal
 		cat >.mnemon/loops/goal/capability.json <<-'JSONEOF'
 		{
@@ -364,7 +333,7 @@ run_external_goal() {
 		[ -n "$pre" ] && [ -n "$post" ] && [ "$pre" != "$post" ] || { echo "goal write did not change the scoped digest (pre=$pre post=$post)"; exit 1; }
 
 		# Governed pull CONTENT leg: the goal statement itself arrives via the pull verb
-		# (control pull --json emits the scoped projection's resources + fields).
+		# (control pull --json emits the scoped event view subjects + fields).
 		"$MH" control pull --json --addr "$addr" --principal "$principal" --token-file "$tok" \
 			| grep -q "ship stage five" || { echo "goal content did not arrive via the governed pull verb"; exit 1; }
 
@@ -424,18 +393,16 @@ run_external_goal() {
 	echo "    external goal package OK"
 }
 
-# run_foo_external proves loop-package-v2 (PD4): an EXTERNAL package that ships host assets
-# (loop.json + GUIDE + a skill) projects to BOTH hosts through the same machinery as a builtin —
-# no embedded loop, no embedded binding (the binding is derived host-side).
+# run_foo_external proves an external package added via `loop add` can be enabled on the R1 setup
+# path as event package scope without projecting host assets.
 run_foo_external() {
 	CUR_HOST="foo-external"
 	local proj="$WORK/proj-foo"
 	mkdir -p "$proj"
-	echo "=== E2E external loop-package projection (foo) ==="
+	echo "=== E2E external package setup scope (foo) ==="
 	(
 		cd "$proj"
-		"$MH" setup --host codex --loop memory --principal codex@project --control-url http://127.0.0.1:8787 >/dev/null
-		"$MH" setup --host claude-code --loop memory --principal claude@project --control-url http://127.0.0.1:8899 >/dev/null
+		"$MH" setup --host codex --principal codex@project --control-url http://127.0.0.1:8787 >/dev/null
 
 		# Author writes a package DIRECTORY, then registers it via the product front door
 		# (`loop add`) — the minimal-onboarding path (P2): copy under the canonical name + validate
@@ -459,57 +426,51 @@ run_foo_external() {
 		[ -f .mnemon/loops/foo/capability.json ] || { echo "loop add did not place foo under .mnemon/loops"; exit 1; }
 		[ -f .mnemon/loops/foo/skills/foo-set/SKILL.md ] || { echo "loop add did not copy the package subtree"; exit 1; }
 
-		# Project foo to BOTH hosts.
+		# Enable foo for the host. R1 setup grants event package scope and keeps host assets static.
 		"$MH" setup --host codex --loop foo --principal codex@project --control-url http://127.0.0.1:8787 >"$WORK/foo-codex.log" 2>&1 \
 			|| { echo "setup --loop foo (codex) failed"; cat "$WORK/foo-codex.log"; exit 1; }
-		"$MH" setup --host claude-code --loop foo --principal claude@project --control-url http://127.0.0.1:8899 >"$WORK/foo-claude.log" 2>&1 \
-			|| { echo "setup --loop foo (claude) failed"; cat "$WORK/foo-claude.log"; exit 1; }
 
-		[ -f .codex/mnemon-foo/GUIDE.md ] || { echo "foo GUIDE not projected to codex runtime surface"; exit 1; }
-		[ -f .codex/skills/foo-set/SKILL.md ] || { echo "foo skill not projected to codex"; exit 1; }
-		[ -f .claude/mnemon-foo/GUIDE.md ] || { echo "foo GUIDE not projected to claude runtime surface"; exit 1; }
-		[ -f .claude/skills/foo-set/SKILL.md ] || { echo "foo skill not projected to claude"; exit 1; }
-		grep -q "declarative external loop package" .codex/mnemon-foo/GUIDE.md || { echo "foo GUIDE content wrong"; exit 1; }
+		[ ! -e .codex/mnemon-foo/GUIDE.md ] || { echo "foo GUIDE must not be projected to codex runtime surface"; exit 1; }
+		[ ! -e .codex/skills/foo-set/SKILL.md ] || { echo "foo skill must not be projected to codex"; exit 1; }
+		grep -q "foo.write_candidate.observed" .mnemon/harness/channel/bindings.json \
+			|| { echo "foo grant missing from binding"; exit 1; }
 
 		# Discoverability (PD7): the generic mnemon-observe skill is generated from the live catalog,
 		# so a freshly-added external kind appears in its mechanism section without any per-kind code.
 		"$MH" loop observe-skill | grep -q "foo.write_candidate.observed" \
 			|| { echo "observe-skill did not reflect the external foo kind"; exit 1; }
-		"$MH" loop capabilities | grep -q "^foo " || { echo "loop capabilities missing foo"; exit 1; }
+		"$MH" loop packages | grep -q "^foo " || { echo "loop packages missing foo"; exit 1; }
 
-		# NEGATIVE (loop-package-v2 external-trust): an external package whose hook intents declare an
-		# `include` section (the fragment code face) must REFUSE projection, naming the violation.
-		mkdir -p .mnemon/loops/badfoo/hooks
-		cat >.mnemon/loops/badfoo/capability.json <<-'JSONEOF'
-		{"schema_version":1,"name":"badfoo","observed_type":"badfoo.write_candidate.observed",
-		"proposed_type":"badfoo.write.proposed","resource_kind":"badfoo","items_field":"items",
-		"fields":[{"name":"text","validators":[{"id":"required","params":{"missing_style":"empty"}}]}],
-		"render":{"content":{"member":"bullet-list","params":{"title":"# Badfoo","field":"text"}}}}
-		JSONEOF
-		cat >.mnemon/loops/badfoo/loop.json <<-'JSONEOF'
-		{"schema_version":2,"name":"badfoo","surfaces":{"projection":[],"observation":[]},
-		"assets":{"guide":"GUIDE.md","env":"env.sh","skills":[],"subagents":[]}}
-		JSONEOF
-		printf '# Badfoo\n' >.mnemon/loops/badfoo/GUIDE.md
-		printf '#!/usr/bin/env bash\n' >.mnemon/loops/badfoo/env.sh
-		printf '{"schema_version":1,"hooks":{"prime":{"sections":[{"type":"include","fragment":"sync.sh"}]}}}\n' >.mnemon/loops/badfoo/hooks/intents.json
-		if "$MH" setup --host codex --loop badfoo --principal codex@project --control-url http://127.0.0.1:8787 >"$WORK/badfoo.log" 2>&1; then
-			echo "setup --loop badfoo must fail (an external include intent is the fragment code face)"; exit 1
-		fi
-		grep -q "include" "$WORK/badfoo.log" || { echo "badfoo refusal must name the include violation"; cat "$WORK/badfoo.log"; exit 1; }
-	) || fail "foo external projection failed"
+		"$MH" local run >"$WORK/run-foo.log" 2>&1 &
+		local runpid=$!
+		echo "$runpid" >"$PIDFILE"
+		local tok=".mnemon/harness/channel/credentials/codex-project.token"
+		local up=0 i out
+		for i in $(seq 1 60); do
+			"$MH" control status --addr http://127.0.0.1:8787 --principal codex@project --token-file "$tok" >/dev/null 2>&1 && { up=1; break; }
+			sleep 0.1
+		done
+		[ "$up" = 1 ] || { cat "$WORK/run-foo.log"; exit 1; }
+		out="$("$MH" control observe --addr http://127.0.0.1:8787 --principal codex@project --token-file "$tok" \
+			--type foo.write_candidate.observed --external-id foo1 --payload '{"text":"foo governed by external package"}')"
+		case "$out" in *ticked=true*) ;; *) echo "foo observe: $out"; exit 1 ;; esac
+		out="$("$MH" control pull --addr http://127.0.0.1:8787 --principal codex@project --token-file "$tok")"
+		case "$out" in *event_subjects=1*) ;; *) echo "foo pull: $out"; exit 1 ;; esac
+		{ kill "$runpid" 2>/dev/null; wait "$runpid"; } 2>/dev/null || true
+		rm -f "$PIDFILE"
+	) || fail "foo external setup failed"
 	sleep 0.3
-	echo "    external loop-package projection (foo) OK"
+	echo "    external package setup scope (foo) OK"
 }
 
 # Both hosts run sequentially (the server is stopped between them). codex stays on the default
 # port (covering the bare default path); claude-code deliberately runs on a NON-default port to
 # pin the stage-0 promise that a bare `local run` listens where setup's --control-url pointed.
 
-# write_journal_pkg installs an EXTERNAL, declared-kind capability package ("journal") into a
-# project's .mnemon/loops. journal is memory-shaped (items_field "entries", memory-entry-list
-# render) and opts into Remote Workspace import via the closed-set entry-dedup strategy — a kind
-# whose name appears NOWHERE in the platform code. It is the PD6 proof object: that a novel kind
+# write_journal_pkg installs an EXTERNAL, declared-kind event package ("journal") into a
+# project's .mnemon/loops. journal uses the generic entry list shape (items_field "entries",
+# entry-list render) and opts into Remote Workspace import via the closed-set entry-dedup strategy
+# — a kind whose name appears NOWHERE in the platform code. It is the PD6 proof object: that a novel kind
 # syncs end-to-end (produce -> hub accept -> pull -> import) purely by declaring sync.importable in
 # its descriptor, exercising the descriptor-derived produce surface (RuntimeConfig.SyncableKinds),
 # the grant-scope hub accept, and the catalog-derived import dispatch.
@@ -522,7 +483,7 @@ write_journal_pkg() {
 	"fields":[{"name":"content","validators":[{"id":"required","params":{"missing_style":"empty"}},{"id":"safety:secret"},{"id":"safety:injection"}]},
 	{"name":"source","validators":[{"id":"required","params":{"missing_style":"missing"}}]},
 	{"name":"confidence","validators":[{"id":"required","params":{"missing_style":"missing"}}]}],
-	"render":{"content":{"member":"memory-entry-list"}},
+	"render":{"content":{"member":"entry-list"}},
 	"sync":{"importable":true,"merge":"entry-dedup"}}
 	JSONEOF
 	cat >"$dir/.mnemon/loops/journal/loop.json" <<-'JSONEOF'
@@ -536,12 +497,12 @@ write_journal_pkg() {
 # run_sync_pair proves the stage-6 Remote MVP on the product path: two replicas (A, B) sync
 # through a standalone mnemon-hub over TLS — A writes, the in-process sync worker pushes, B's
 # worker pulls and the content arrives via B's governed pull (attribution carried end to end).
-# It carries TWO kinds: embedded memory AND an external declared kind (journal) — the journal
-# round-trip is the PD6 proof that the descriptor-derived sync path is kind-agnostic (no kind
-# literal anywhere on the produce/accept/import surfaces).
+# It carries three kinds: embedded progress_digest, external journal, and embedded assignment. The
+# journal round-trip is the PD6 proof that the descriptor-derived sync path is kind-agnostic (no kind
+# literal anywhere on the produce/accept/import surfaces), while assignment proves generic item-dedup.
 # Offline leg pins I13 (hub down = local fully functional); the bad-token leg pins authn on the
 # wire. Conflict adjudication (hub idempotency + B-side import conflict) is pinned at the Go
-# integration layer (syncserver_test.go, sync_import_test.go) per the v1.1 redefinition.
+# integration layer (mnemonhub tests, sync_import_test.go) per the v1.1 redefinition.
 run_sync_pair() {
 	CUR_HOST="sync-pair"
 	echo "=== E2E sync pair via mnemon-hub (TLS) ==="
@@ -562,9 +523,9 @@ run_sync_pair() {
 	  "schema_version": 1,
 	  "replicas": [
 	    {"principal": "replica-a@hub", "credential_ref": "replica-a.token",
-	     "scopes": [{"kind": "memory", "id": "project"}, {"kind": "skill", "id": "project"}, {"kind": "journal", "id": "project"}, {"kind": "assignment", "id": "project"}]},
+	     "scopes": [{"kind": "progress_digest", "id": "project"}, {"kind": "journal", "id": "project"}, {"kind": "assignment", "id": "project"}]},
 	    {"principal": "replica-b@hub", "credential_ref": "replica-b.token",
-	     "scopes": [{"kind": "memory", "id": "project"}, {"kind": "journal", "id": "project"}, {"kind": "assignment", "id": "project"}]}
+	     "scopes": [{"kind": "progress_digest", "id": "project"}, {"kind": "journal", "id": "project"}, {"kind": "assignment", "id": "project"}]}
 	  ]
 	}
 	JSON
@@ -584,7 +545,7 @@ run_sync_pair() {
 	(
 		cd "$proja"
 		local tok=".mnemon/harness/channel/credentials/codex-project.token"
-		"$MH" setup --host codex --loop memory --principal codex@project --control-url http://127.0.0.1:8787 >/dev/null
+		"$MH" setup --host codex --principal codex@project --control-url http://127.0.0.1:8787 >/dev/null
 		"$MH" setup --host codex --loop journal --principal codex@project --control-url http://127.0.0.1:8787 >/dev/null
 		"$MH" sync connect hub --remote-url https://127.0.0.1:9787 \
 			--token-file "$hubdir/replica-a.token" --ca-file "$tlsdir/cert.pem" >/dev/null
@@ -597,25 +558,25 @@ run_sync_pair() {
 		done
 		[ "$up" = 1 ] || { cat "$WORK/run-sync-a.log"; exit 1; }
 		"$MH" control observe --addr http://127.0.0.1:8787 --principal codex@project --token-file "$tok" \
-			--type memory.write_candidate.observed --external-id sp1 \
-			--payload '{"content":"sync pair payload from replica A","source":"user","confidence":"high"}' >/dev/null
-		# journal (external declared kind): the PD6 kind-agnostic produce surface emits a sync commit
+			--type progress_digest.write_candidate.observed --external-id sp1 \
+			--payload '{"summary":"sync pair payload from replica A"}' >/dev/null
+		# journal (external declared kind): the PD6 kind-agnostic produce surface emits a synced event
 		# for it exactly because its descriptor declares sync.importable — no kind literal in code.
 		"$MH" control observe --addr http://127.0.0.1:8787 --principal codex@project --token-file "$tok" \
 			--type journal.write_candidate.observed --external-id jp1 \
 			--payload '{"content":"journal entry from replica A","source":"user","confidence":"high"}' >/dev/null
-		# assignment (first-party coordination kind, item-dedup merge): the §577 generic append-merge
-		# syncs a kind whose items carry arbitrary fields (scope/ttl/assignee), preserving them all.
+		# assignment (embedded coordination kind, item-dedup merge): the §577 generic append-merge
+		# syncs a kind whose items carry arbitrary fields (scope/ttl/assignee/work/feedback), preserving them all.
 		"$MH" control observe --addr http://127.0.0.1:8787 --principal codex@project --token-file "$tok" \
 			--type assignment.write_candidate.observed --external-id ap1 \
-			--payload '{"scope":"assignment from replica A","ttl":"2h","assignee":"codex@impl","evidence":"ticket-7"}' >/dev/null
+			--payload '{"scope":"assignment from replica A","ttl":"2h","assignee":"codex@impl","expected_work":"act on assignment from replica A","expected_feedback":"progress_digest with result or blocker","evidence":"ticket-7"}' >/dev/null
 	) || fail "replica A flow failed (see $WORK/run-sync-a.log / $WORK/mnemon-hub.log)"
 	apid="$(cat "$WORK/sync-a.pid")"
 
 	(
 		cd "$projb"
 		local tok=".mnemon/harness/channel/credentials/codex-project.token"
-		"$MH" setup --host codex --loop memory --principal codex@project --control-url http://127.0.0.1:8899 >/dev/null
+		"$MH" setup --host codex --principal codex@project --control-url http://127.0.0.1:8899 >/dev/null
 		"$MH" setup --host codex --loop journal --principal codex@project --control-url http://127.0.0.1:8899 >/dev/null
 		"$MH" sync connect hub --remote-url https://127.0.0.1:9787 \
 			--token-file "$hubdir/replica-b.token" --ca-file "$tlsdir/cert.pem" >/dev/null
@@ -628,7 +589,7 @@ run_sync_pair() {
 		done
 		[ "$up" = 1 ] || { cat "$WORK/run-sync-b.log"; exit 1; }
 		# A worker pushes -> hub -> B worker pulls -> import re-enters intake -> governed pull sees it.
-		# memory (entry-dedup) + journal (external, entry-dedup) + assignment (coordination, item-dedup)
+		# progress_digest (item-dedup) + journal (external, entry-dedup) + assignment (coordination, item-dedup)
 		# must all arrive — three kinds, three descriptor-selected merge strategies, no kind literal.
 		for i in $(seq 1 100); do
 			local bpull
@@ -648,18 +609,18 @@ run_sync_pair() {
 			-H "Authorization: Bearer $(tr -d '\n' <"$hubdir/replica-a.token")" \
 			https://127.0.0.1:9787/sync/status 2>/dev/null)"
 		case "$hubstatus" in
-			*'"hub_commits_received":0'*|'') echo "hub never received A's push (status: ${hubstatus:-<empty>})"; tail -5 "$WORK/run-sync-b.log"; exit 1 ;;
-			*'"hub_commits_received":'*) ;;
+			*'"hub_events_received":0'*|'') echo "hub never received A's push (status: ${hubstatus:-<empty>})"; tail -5 "$WORK/run-sync-b.log"; exit 1 ;;
+			*'"hub_events_received":'*) ;;
 			*) echo "unexpected hub status: $hubstatus"; exit 1 ;;
 		esac
-		[ "$seen" = 1 ] || { echo "B never saw A's memory commit within 20s (hub received the push: $hubstatus -> pull side failed)"; tail -5 "$WORK/run-sync-b.log"; exit 1; }
-		[ "$jseen" = 1 ] || { echo "B never saw A's external journal commit within 20s (descriptor-derived sync path failed for a declared kind)"; tail -5 "$WORK/run-sync-b.log"; exit 1; }
-		[ "$aseen" = 1 ] || { echo "B never saw A's assignment commit within 20s (item-dedup coordination sync failed)"; tail -5 "$WORK/run-sync-b.log"; exit 1; }
+		[ "$seen" = 1 ] || { echo "B never saw A's progress event within 20s (hub received the push: $hubstatus -> pull side failed)"; tail -5 "$WORK/run-sync-b.log"; exit 1; }
+		[ "$jseen" = 1 ] || { echo "B never saw A's external journal event within 20s (descriptor-derived sync path failed for a declared kind)"; tail -5 "$WORK/run-sync-b.log"; exit 1; }
+		[ "$aseen" = 1 ] || { echo "B never saw A's assignment event within 20s (item-dedup coordination sync failed)"; tail -5 "$WORK/run-sync-b.log"; exit 1; }
 		# attribution: the import preserves A's entries VERBATIM (faithful provenance) and the
 		# write itself is attributed to the sync importer; the full origin chain (replica id,
 		# decision id) lives in B's event log + decisions, pinned by sync_import Go tests.
 		"$MH" control pull --json --addr http://127.0.0.1:8899 --principal codex@project --token-file "$tok" | grep -q '"sync@local"' \
-			|| { echo "imported resource lacks sync@local attribution"; exit 1; }
+			|| { echo "imported event subject lacks sync@local attribution"; exit 1; }
 	) || fail "replica B flow failed (see $WORK/run-sync-b.log / $WORK/mnemon-hub.log)"
 	bpid="$(cat "$WORK/sync-b.pid")"
 
@@ -669,8 +630,8 @@ run_sync_pair() {
 		cd "$proja"
 		local tok=".mnemon/harness/channel/credentials/codex-project.token"
 		out="$("$MH" control observe --addr http://127.0.0.1:8787 --principal codex@project --token-file "$tok" \
-			--type memory.write_candidate.observed --external-id sp-offline \
-			--payload '{"content":"offline write while hub is down","source":"user","confidence":"high"}')"
+			--type progress_digest.write_candidate.observed --external-id sp-offline \
+			--payload '{"summary":"offline write while hub is down"}')"
 		case "$out" in *ticked=true*) ;; *) echo "offline observe: $out"; exit 1 ;; esac
 		"$MH" control pull --addr http://127.0.0.1:8787 --principal codex@project --token-file "$tok" >/dev/null
 	) || fail "I13 offline leg failed"
@@ -716,7 +677,7 @@ run_daemon() {
 	(
 		cd "$proj"
 		local tok=".mnemon/harness/channel/credentials/codex-project.token"
-		"$MH" setup --host codex --loop memory --principal codex@project --control-url "http://$addr" >/dev/null
+		"$MH" setup --host codex --principal codex@project --control-url "http://$addr" >/dev/null
 
 		"$WORK/mnemond" status --root . | grep -q "stopped" || { echo "status before up must be stopped"; exit 1; }
 		"$WORK/mnemond" up --root . --addr "$addr" >"$WORK/daemon-up.log" 2>&1 \
@@ -735,8 +696,8 @@ run_daemon() {
 		# the DETACHED daemon governs a real observe over the channel
 		local out
 		out="$("$MH" control observe --addr "http://$addr" --principal codex@project --token-file "$tok" \
-			--type memory.write_candidate.observed --external-id d1 \
-			--payload '{"content":"daemon governs this","source":"user","confidence":"high"}')"
+			--type progress_digest.write_candidate.observed --external-id d1 \
+			--payload '{"summary":"daemon governs this"}')"
 		case "$out" in *ticked=true*) ;; *) echo "daemon observe: $out"; exit 1 ;; esac
 
 		"$WORK/mnemond" down --root . >/dev/null || { echo "mnemond down failed"; exit 1; }
@@ -775,21 +736,21 @@ run_coordination() {
 			--type project_intent.write_candidate.observed --external-id ci1 --payload '{"statement":"ship the AgentTeam beta","evidence":"roadmap-q3"}')"
 		case "$out" in *ticked=true*) ;; *) echo "project_intent observe: $out"; exit 1 ;; esac
 		out="$("$MH" control observe --addr "http://$addr" --principal codex@project --token-file "$tok" \
-			--type assignment.write_candidate.observed --external-id ci2 --payload '{"scope":"fix projection","ttl":"2h","assignee":"codex@impl","evidence":"ticket-123"}')"
+			--type assignment.write_candidate.observed --external-id ci2 --payload '{"scope":"fix event view","ttl":"2h","assignee":"codex@impl","expected_work":"fix event view","expected_feedback":"progress_digest with result or blocker","evidence":"ticket-123"}')"
 		case "$out" in *ticked=true*) ;; *) echo "assignment observe: $out"; exit 1 ;; esac
-		# mid-risk gate: an assignment WITHOUT evidence is denied (resource count stays at the 2 above).
+		# mid-risk gate: an assignment WITHOUT evidence is denied (event subject count stays at the 2 above).
 		"$MH" control observe --addr "http://$addr" --principal codex@project --token-file "$tok" \
-			--type assignment.write_candidate.observed --external-id ci2b --payload '{"scope":"no evidence","ttl":"1h","assignee":"codex@impl"}' >/dev/null
+			--type assignment.write_candidate.observed --external-id ci2b --payload '{"scope":"no evidence","ttl":"1h","assignee":"codex@impl","expected_work":"attempt no-evidence work","expected_feedback":"progress_digest with result or blocker"}' >/dev/null
 		out="$("$MH" control observe --addr "http://$addr" --principal codex@project --token-file "$tok" \
-			--type progress_digest.write_candidate.observed --external-id ci3 --payload '{"summary":"projection 80 percent done"}')"
+			--type progress_digest.write_candidate.observed --external-id ci3 --payload '{"summary":"event view 80 percent done"}')"
 		case "$out" in *ticked=true*) ;; *) echo "progress_digest observe: $out"; exit 1 ;; esac
-		# all three governed resources are pullable in the default coordination scope
+		# all three governed event subjects are pullable in the default coordination scope
 		out="$("$MH" control pull --addr "http://$addr" --principal codex@project --token-file "$tok")"
-		case "$out" in *resources=3*) ;; *) echo "coordination pull (want resources=3): $out"; exit 1 ;; esac
-		# the status FIELD section (P3d, tower seed) reports the coordination entry counts: each kind
-		# has one admitted entry (the evidence-less assignment was denied, so assignment=1 not 2).
+		case "$out" in *event_subjects=3*) ;; *) echo "coordination pull (want event_subjects=3): $out"; exit 1 ;; esac
+		# the status FIELD section (P3d, tower seed) reports the coordination entry counts: each
+		# admitted kind has one entry (the evidence-less assignment was denied, so assignment=1 not 2).
 		out="$("$MH" control status --addr "http://$addr" --principal codex@project --token-file "$tok")"
-		case "$out" in *"Field: assignment=1, loopdef=0, progress digest=1, project intent=1"*) ;; *) echo "status FIELD wrong: $out"; exit 1 ;; esac
+		case "$out" in *"Field: agent profile=0, assignment=1, progress digest=1, project intent=1, teamwork signal=0"*) ;; *) echo "status FIELD wrong: $out"; exit 1 ;; esac
 		{ kill "$runpid" 2>/dev/null; wait "$runpid"; } 2>/dev/null || true
 		rm -f "$PIDFILE"
 	) || fail "coordination flow failed (see $WORK/run-coord.log)"
@@ -797,83 +758,11 @@ run_coordination() {
 	echo "    coordination kinds default-enabled OK"
 }
 
-# run_dloop proves the D-loop end to end (P3e): an OPERATOR (control-agent) proposes a loopdef that
-# defines a NEW event kind (widget2) → it admits (high-risk, operator only) → the driver materializes
-# it under .mnemon/loops → it is NOT governable yet (materialize != activate, G3) → `mnemond reload`
-# re-assembles the catalog (G1) → the new kind is now governed. The host-agent carries memory so the
-# background driver runs (its materialize branch fires on the loopdef accept).
-run_dloop() {
-	CUR_HOST="dloop"
-	local proj="$WORK/proj-dloop" addr="127.0.0.1:8791"
-	mkdir -p "$proj"
-	echo "=== E2E D-loop: governed event-model evolution ==="
-	go build -o "$WORK/mnemond" ./harness/cmd/mnemond
-	(
-		cd "$proj"
-		local htok=".mnemon/harness/channel/credentials/codex-project.token"
-		local otok=".mnemon/harness/channel/credentials/human-owner.token"
-		"$MH" setup --host codex --loop memory --principal codex@project --control-url "http://$addr" >/dev/null
-		"$MH" setup --host codex --actor-kind control-agent --principal human@owner --control-url "http://$addr" >/dev/null
-		"$WORK/mnemond" up --root . --addr "$addr" >"$WORK/dloop-up.log" 2>&1 \
-			|| { echo "up failed"; cat "$WORK/dloop-up.log"; exit 1; }
-		cp .mnemon/harness/local/mnemond.pid "$WORK/dloop.pid" 2>/dev/null || true
-		local up=0 i
-		for i in $(seq 1 60); do
-			"$MH" control status --addr "http://$addr" --principal codex@project --token-file "$htok" >/dev/null 2>&1 && { up=1; break; }
-			sleep 0.1
-		done
-		[ "$up" = 1 ] || { cat "$WORK/dloop-up.log"; exit 1; }
-
-		# the operator proposes a loopdef defining the new kind widget2 (the draft is carried as a
-		# JSON STRING; escape the inner quotes).
-		local draft='{"schema_version":1,"name":"widget2","observed_type":"widget2.write_candidate.observed","proposed_type":"widget2.write.proposed","resource_kind":"widget2","items_field":"items","fields":[{"name":"text","validators":[{"id":"required","params":{"missing_style":"empty"}}]}],"render":{"content":{"member":"bullet-list","params":{"title":"# W2","field":"text"}}}}'
-		local payload
-		payload="{\"spec\":\"$(printf '%s' "$draft" | sed 's/"/\\"/g')\"}"
-		out="$("$MH" control observe --addr "http://$addr" --principal human@owner --token-file "$otok" \
-			--type loopdef.write_candidate.observed --external-id dl1 --payload "$payload")"
-		case "$out" in *ticked=true*) ;; *) echo "operator loopdef propose: $out"; exit 1 ;; esac
-
-		# the driver materializes the draft (async, ~1s driver tick).
-		local mat=0
-		for i in $(seq 1 100); do
-			[ -f .mnemon/loops/widget2/capability.json ] && { mat=1; break; }
-			sleep 0.1
-		done
-		[ "$mat" = 1 ] || { echo "loopdef did not materialize widget2"; tail -5 "$WORK/dloop-up.log"; exit 1; }
-		grep -q default_enabled .mnemon/loops/widget2/capability.json || { echo "materialized widget2 not default_enabled"; exit 1; }
-
-		# G3: BEFORE reload the new kind is materialized but NOT governable.
-		out="$("$MH" control observe --addr "http://$addr" --principal codex@project --token-file "$htok" \
-			--type widget2.write_candidate.observed --external-id w0 --payload '{"text":"too early"}' 2>&1)"
-		case "$out" in *"may not observe"*) ;; *) echo "widget2 must NOT be governable before reload (G3): $out"; exit 1 ;; esac
-
-		# reload re-assembles the catalog (G1) → the new kind is now governed.
-		"$WORK/mnemond" reload --root . --addr "$addr" >"$WORK/dloop-reload.log" 2>&1 \
-			|| { echo "reload failed"; cat "$WORK/dloop-reload.log"; exit 1; }
-		cp .mnemon/harness/local/mnemond.pid "$WORK/dloop.pid" 2>/dev/null || true
-		up=0
-		for i in $(seq 1 60); do
-			"$MH" control status --addr "http://$addr" --principal codex@project --token-file "$htok" >/dev/null 2>&1 && { up=1; break; }
-			sleep 0.1
-		done
-		[ "$up" = 1 ] || { cat "$WORK/dloop-reload.log"; exit 1; }
-
-		# AFTER reload: a widget2 candidate is admitted — the new event model is live.
-		out="$("$MH" control observe --addr "http://$addr" --principal codex@project --token-file "$htok" \
-			--type widget2.write_candidate.observed --external-id w1 --payload '{"text":"the new kind works"}')"
-		case "$out" in *ticked=true*) ;; *) echo "widget2 must be governed after reload: $out"; exit 1 ;; esac
-
-		"$WORK/mnemond" down --root . >/dev/null 2>&1
-		rm -f "$WORK/dloop.pid"
-	) || fail "D-loop failed (see $WORK/dloop-up.log / $WORK/dloop-reload.log)"
-	echo "    D-loop governed event-model evolution OK"
-}
-
 # run_subscription proves the P4 context-budget acceptance ("packet 大小受预算约束"): a host endpoint
-# DECLARES budget=digest-only in its binding; after several memory writes its DERIVED MIRROR
-# (MEMORY.md) carries only the most-recent entry — the older entries are dropped by the LOCAL budget
-# transform (never a hub-side reduction). The authoritative pull still reports the resource present:
-# budget bounds PRESENTATION, not AUTHORITY (A4). The closed-set guard lives at the binding boundary.
+# DECLARES budget=digest-only in its binding; after several progress events its render context packet
+# carries only the most-recent entry — older entries are dropped by the LOCAL budget transform
+# (never a hub-side reduction). The authoritative pull still reports the event subject present: budget
+# bounds PRESENTATION, not AUTHORITY (A4). The closed-set guard lives at the binding boundary.
 run_subscription() {
 	CUR_HOST="subscription"
 	local proj="$WORK/proj-sub" addr="127.0.0.1:8791"
@@ -882,7 +771,7 @@ run_subscription() {
 	(
 		cd "$proj"
 		local tok=".mnemon/harness/channel/credentials/codex-project.token"
-		"$MH" setup --host codex --loop memory --principal codex@project --control-url "http://$addr" >/dev/null
+		"$MH" setup --host codex --principal codex@project --control-url "http://$addr" >/dev/null
 		# the endpoint declares its context-budget tier: digest-only (latest entry only)
 		python3 - <<-'PYEOF'
 		import json
@@ -900,27 +789,22 @@ run_subscription() {
 			sleep 0.1
 		done
 		[ "$up" = 1 ] || { cat "$WORK/run-sub.log"; exit 1; }
-		# three distinct memory writes -> three admitted entries (full authority)
+		# three distinct progress events -> three admitted entries (full authority)
 		local n
 		for n in 1 2 3; do
 			out="$("$MH" control observe --addr "http://$addr" --principal codex@project --token-file "$tok" \
-				--type memory.write_candidate.observed --external-id "sub$n" \
-				--payload '{"content":"budget entry '"$n"'","source":"user","confidence":"high"}')"
+				--type progress_digest.write_candidate.observed --external-id "sub$n" \
+				--payload '{"summary":"budget entry '"$n"'"}')"
 			case "$out" in *ticked=true*) ;; *) echo "sub observe $n: $out"; exit 1 ;; esac
 		done
-		# the DERIVED MIRROR is budgeted to digest-only: the newest entry present, older ones dropped.
-		local mirror=".codex/mnemon-memory/MEMORY.md" seen=0
-		for i in $(seq 1 100); do
-			if grep -q "budget entry 3" "$mirror" 2>/dev/null && ! grep -q "budget entry 1" "$mirror" 2>/dev/null; then
-				seen=1; break
-			fi
-			sleep 0.1
-		done
-		[ "$seen" = 1 ] || { echo "digest-only mirror did not shrink to the newest entry:"; cat "$mirror" 2>/dev/null; exit 1; }
-		# AUTHORITY preserved (A4): the un-budgeted pull still reports the memory resource present —
-		# budget shrank the mirror, never what was admitted/stored.
+		# the context packet is budgeted to digest-only: the newest entry present, older ones dropped.
+		out="$("$MH" control render --addr "http://$addr" --principal codex@project --token-file "$tok" --intent context.packet)"
+		case "$out" in *"budget entry 3"*) ;; *) echo "digest-only context missing newest entry: $out"; exit 1 ;; esac
+		case "$out" in *"budget entry 1"*|*"budget entry 2"*) echo "digest-only context leaked older entries: $out"; exit 1 ;; esac
+		# AUTHORITY preserved (A4): the un-budgeted pull still reports the progress event subject present —
+		# budget shrank the context packet, never what was admitted/stored.
 		out="$("$MH" control pull --addr "http://$addr" --principal codex@project --token-file "$tok")"
-		case "$out" in *resources=1*) ;; *) echo "authority pull (want resources=1): $out"; exit 1 ;; esac
+		case "$out" in *event_subjects=1*) ;; *) echo "authority pull (want event_subjects=1): $out"; exit 1 ;; esac
 		{ kill "$runpid" 2>/dev/null; wait "$runpid"; } 2>/dev/null || true
 		rm -f "$PIDFILE"
 	) || fail "subscription flow failed (see $WORK/run-sub.log)"
@@ -954,7 +838,7 @@ run_tower() {
 		"$MH" control observe --addr "http://$addr" --principal codex@project --token-file "$tok" \
 			--type project_intent.write_candidate.observed --external-id ti1 --payload '{"statement":"ship the AgentTeam beta","evidence":"roadmap"}' >/dev/null
 		"$MH" control observe --addr "http://$addr" --principal codex@project --token-file "$tok" \
-			--type assignment.write_candidate.observed --external-id ta1 --payload '{"scope":"fix projection","ttl":"2h","assignee":"codex@impl","evidence":"ticket"}' >/dev/null
+			--type assignment.write_candidate.observed --external-id ta1 --payload '{"scope":"fix event view","ttl":"2h","assignee":"codex@impl","expected_work":"fix event view","expected_feedback":"progress_digest with result or blocker","evidence":"ticket"}' >/dev/null
 		# stop the daemon so the Tower can open the store (single-writer, S11)
 		{ kill "$runpid" 2>/dev/null; wait "$runpid"; } 2>/dev/null || true
 		rm -f "$PIDFILE"
@@ -965,7 +849,7 @@ run_tower() {
 			case "$out" in *"$title"*) ;; *) echo "tower missing page $title:"; echo "$out"; exit 1 ;; esac
 		done
 		case "$out" in *"ship the AgentTeam beta"*) ;; *) echo "tower GOAL missing the project intent:"; echo "$out"; exit 1 ;; esac
-		case "$out" in *"fix projection"*) ;; *) echo "tower FIELD missing the assignment:"; echo "$out"; exit 1 ;; esac
+		case "$out" in *"fix event view"*) ;; *) echo "tower FIELD missing the assignment:"; echo "$out"; exit 1 ;; esac
 		case "$out" in *"codex@project"*) ;; *) echo "tower FIELD missing the agent:"; echo "$out"; exit 1 ;; esac
 	) || fail "tower flow failed (see $WORK/run-tower.log)"
 	sleep 0.3
@@ -974,16 +858,15 @@ run_tower() {
 
 run_host codex codex@project 8787 .codex
 run_host claude-code claude@project 8899 .claude
-run_skill codex codex@project
-run_skill claude-code claude@project
+run_observe_skill codex codex@project
+run_observe_skill claude-code claude@project
 run_note
 run_external_goal
 run_foo_external
 run_sync_pair
 run_daemon
 run_coordination
-run_dloop
 run_subscription
 run_tower
 
-echo "E2E PASS (codex + claude-code; memory + skill + note-external-package + external-goal + foo-projection + sync-pair[memory+journal+assignment] + daemon + coordination + dloop + subscription + tower)"
+echo "E2E PASS (codex + claude-code; progress + observe-skill + note-external-package + external-goal + foo-scope + sync-pair[progress+journal+assignment] + daemon + coordination + subscription + tower)"

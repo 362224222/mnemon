@@ -4,8 +4,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 )
 
 func obs(t string) contract.ObservationEnvelope {
@@ -26,12 +26,12 @@ func TestChannelBindingAuthorizer(t *testing.T) {
 			"operator": {Actor: "operator", Refs: []contract.ResourceRef{ref}},
 			"reader":   {Actor: "reader", Refs: []contract.ResourceRef{ref}},
 		},
-		Bindings: []channel.ChannelBinding{
-			{Principal: "codex", ActorKind: contract.KindHostAgent, AllowedVerbs: []channel.Verb{channel.VerbObserve, channel.VerbPull},
+		Bindings: []access.ChannelBinding{
+			{Principal: "codex", ActorKind: contract.KindHostAgent, AllowedVerbs: []access.Verb{access.VerbObserve, access.VerbPull},
 				AllowedObservedTypes: []string{"session.observed"}, SubscriptionScope: []contract.ResourceRef{ref}},
-			{Principal: "operator", ActorKind: contract.KindControlAgent, AllowedVerbs: []channel.Verb{channel.VerbObserve, channel.VerbPull},
+			{Principal: "operator", ActorKind: contract.KindControlAgent, AllowedVerbs: []access.Verb{access.VerbObserve, access.VerbPull},
 				SubscriptionScope: []contract.ResourceRef{ref}}, // empty AllowedObservedTypes => any
-			{Principal: "reader", ActorKind: contract.KindHostAgent, AllowedVerbs: []channel.Verb{channel.VerbPull},
+			{Principal: "reader", ActorKind: contract.KindHostAgent, AllowedVerbs: []access.Verb{access.VerbPull},
 				SubscriptionScope: []contract.ResourceRef{ref}},
 		},
 	})
@@ -58,10 +58,10 @@ func TestChannelBindingAuthorizer(t *testing.T) {
 		t.Fatalf("an allowed observed type must ingest: %v", err)
 	}
 	// in-scope pull => OK; out-of-scope ref => rejected by the binding authorizer.
-	if _, err := api.PullProjection("codex", contract.Subscription{Actor: "codex", Refs: []contract.ResourceRef{ref}}); err != nil {
+	if _, err := api.PullPresentationView("codex", contract.Subscription{Actor: "codex", Refs: []contract.ResourceRef{ref}}); err != nil {
 		t.Fatalf("in-scope pull must succeed: %v", err)
 	}
-	if _, err := api.PullProjection("codex", contract.Subscription{Actor: "codex", Refs: []contract.ResourceRef{other}}); err == nil {
+	if _, err := api.PullPresentationView("codex", contract.Subscription{Actor: "codex", Refs: []contract.ResourceRef{other}}); err == nil {
 		t.Fatal("a pull ref outside the binding scope must be rejected")
 	}
 	// internal-only suffix still fails INSIDE ControlServer.Ingest even when the binding allows any

@@ -13,7 +13,7 @@ func sampleView() app.TowerView {
 		Goal:  app.GoalPage{Statements: []string{"ship the beta"}, Progress: []string{"80% done"}},
 		Field: app.FieldPage{Agents: []app.AgentRow{{Principal: "codex@project", Kind: "host-agent"}}, Diagnostics: 2},
 		Inbox: app.InboxPage{Escalations: []app.InboxRow{
-			{Domain: "loopdef", Actor: "codex@project", Stage: "rule", Reason: "needs operator", CausedBy: "ev-1"},
+			{Domain: "approval", Actor: "codex@project", Stage: "rule", Reason: "needs operator", CausedBy: "ev-1"},
 			{Domain: "approval", Actor: "codex@project", Stage: "rule", Reason: "needs operator", CausedBy: "ev-2"},
 		}},
 		Ledger: app.LedgerPage{Decisions: []app.LedgerRow{
@@ -47,7 +47,7 @@ func TestTowerModelPageNavAndRender(t *testing.T) {
 	}
 	// RenderAll carries every page body
 	all := m.RenderAll()
-	for _, want := range []string{"# GOAL", "ship the beta", "# FIELD", "codex@project", "# INBOX", "loopdef", "# LEDGER", "d-1"} {
+	for _, want := range []string{"# GOAL", "ship the beta", "# FIELD", "codex@project", "# INBOX", "approval", "# LEDGER", "d-1"} {
 		if !strings.Contains(all, want) {
 			t.Fatalf("RenderAll missing %q:\n%s", want, all)
 		}
@@ -74,7 +74,7 @@ func TestTowerModelInboxActions(t *testing.T) {
 	}
 	// Dismiss the first escalation -> it leaves the open list; render no longer shows it
 	m3, _ := m.Update(ActionDismiss)
-	if got := m3.Render(); strings.Contains(got, "loopdef") {
+	if got := m3.Render(); strings.Contains(got, "ev-1") {
 		t.Fatalf("a dismissed escalation must leave the INBOX:\n%s", got)
 	}
 	// the dismissal is read-side only — the underlying view is unchanged (still 2 escalations)

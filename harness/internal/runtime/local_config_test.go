@@ -1,29 +1,29 @@
 package runtime
 
 import (
-	"github.com/mnemon-dev/mnemon/harness/internal/capability"
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
-	"github.com/mnemon-dev/mnemon/harness/internal/rule"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/state"
 )
 
 // localRuntimeConfigT mirrors app.LocalRuntimeConfigFromBindings for the runtime-level integration
 // tests, which exercise the capability rules end-to-end through the runtime (and assert on runtime
 // internals). The production derivation lives in app; this keeps the test in package runtime without
 // importing app (which would cycle).
-func localRuntimeConfigT(bindings []channel.ChannelBinding) RuntimeConfig {
-	var rules []rule.Rule
+func localRuntimeConfigT(bindings []access.ChannelBinding) RuntimeConfig {
+	catalog := policy.StandardRegistry()
+	var rules []admission.Rule
 	allow := map[contract.ActorID][]contract.ResourceKind{}
 	for _, b := range bindings {
-		if b.Allows(channel.VerbObserve) && b.AllowsObservedType(capability.MemoryWriteCandidateObserved) {
-			if ref, ok := scopeRefT(b, "memory"); ok {
-				rules = append(rules, capability.EmbeddedCatalog()["memory"].Rule(b.Principal, ref, capability.Limits{}))
+		for _, ref := range b.SubscriptionScope {
+			cap, ok := catalog[string(ref.Kind)]
+			if !ok {
+				continue
 			}
-		}
-		if b.Allows(channel.VerbObserve) && b.AllowsObservedType(capability.SkillWriteCandidateObserved) {
-			if ref, ok := scopeRefT(b, "skill"); ok {
-				rules = append(rules, capability.EmbeddedCatalog()["skill"].Rule(b.Principal, ref, capability.Limits{}))
+			if b.Allows(access.VerbObserve) && b.AllowsObservedType(cap.ObservedType) {
+				rules = append(rules, cap.Rule(b.Principal, ref, policy.Limits{}))
 			}
 		}
 		if b.ActorKind != contract.KindHostAgent {
@@ -31,7 +31,7 @@ func localRuntimeConfigT(bindings []channel.ChannelBinding) RuntimeConfig {
 		}
 		seen := map[contract.ResourceKind]bool{}
 		for _, ref := range b.SubscriptionScope {
-			if ref.Kind == "memory" || ref.Kind == "skill" {
+			if _, ok := catalog[string(ref.Kind)]; ok {
 				seen[ref.Kind] = true
 			}
 		}
@@ -41,15 +41,23 @@ func localRuntimeConfigT(bindings []channel.ChannelBinding) RuntimeConfig {
 	}
 	return RuntimeConfig{
 		Bindings:      bindings,
-		Subs:          channel.SubsFromBindings(bindings),
-		Rules:         rule.NewRuleSet(rules...),
-		Authority:     kernel.AuthorityRules{Allow: allow},
-		SchemaGuard:   kernel.SchemaGuardWith(map[contract.ResourceKind][]string{"memory": {"content"}, "skill": {"name"}}),
-		SyncableKinds: capability.ImportableKinds(capability.EmbeddedCatalog()),
+		Subs:          access.SubsFromBindings(bindings),
+		Rules:         admission.NewRuleSet(rules...),
+		Authority:     state.AuthorityRules{Allow: allow},
+		SchemaGuard:   state.SchemaGuardWith(requiredHeadersT(catalog)),
+		SyncableKinds: policy.ImportableKinds(catalog),
 	}
 }
 
-func scopeRefT(b channel.ChannelBinding, kind contract.ResourceKind) (contract.ResourceRef, bool) {
+func requiredHeadersT(catalog policy.Registry) map[contract.ResourceKind][]string {
+	out := map[contract.ResourceKind][]string{}
+	for _, cap := range catalog {
+		out[cap.ResourceKind] = cap.RequiredHeader
+	}
+	return out
+}
+
+func scopeRefT(b access.ChannelBinding, kind contract.ResourceKind) (contract.ResourceRef, bool) {
 	for _, ref := range b.SubscriptionScope {
 		if ref.Kind == kind {
 			return ref, true

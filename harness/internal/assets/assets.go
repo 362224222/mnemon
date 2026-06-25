@@ -1,10 +1,9 @@
-// Package assets embeds the harness's built-in loop/host/binding manifests and their projected asset
-// files (GUIDE, hooks, skills, subagents). Embedding makes the mnemon-harness binary self-contained:
-// setup/refresh/validate read from FS, never from an on-disk source tree. Embedded keys carry NO
-// "harness/" prefix and use forward slashes ("loops/<loop>/loop.json").
+// Package assets embeds the harness's built-in host mechanics and managed guide content. Embedding
+// makes the mnemon-harness binary self-contained: setup/render/validate read from FS, never from an
+// on-disk source tree.
 package assets
 
 import "embed"
 
-//go:embed loops hosts bindings capabilities
+//go:embed hosts guides
 var FS embed.FS

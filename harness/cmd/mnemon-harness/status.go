@@ -7,9 +7,9 @@ import (
 	"strings"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/app"
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/remotesync"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemonhub/exchange"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 	"github.com/spf13/cobra"
 )
@@ -76,15 +76,15 @@ func localServiceStatus(projectRoot string, cfg app.LocalConfig, principal strin
 	}
 	bindingFile := cfg.BindingFile
 	if bindingFile == "" {
-		bindingFile = channel.DefaultBindingFile
+		bindingFile = access.DefaultBindingFile
 	}
-	loaded, err := channel.LoadBindingFile(projectRoot, app.ResolveProjectPath(projectRoot, bindingFile))
+	loaded, err := access.LoadBindingFile(projectRoot, app.ResolveProjectPath(projectRoot, bindingFile))
 	if err != nil {
 		return contract.ChannelStatus{}, false
 	}
-	client := channel.NewClient(cfg.Endpoint, contract.ActorID(principal))
+	client := access.NewClient(cfg.Endpoint, contract.ActorID(principal))
 	if tok := tokenForPrincipal(loaded.Tokens, contract.ActorID(principal)); tok != "" {
-		client = channel.NewClientWithToken(cfg.Endpoint, tok)
+		client = access.NewClientWithToken(cfg.Endpoint, tok)
 	}
 	st, err := client.Status(contract.ActorID(principal))
 	if err != nil {
@@ -117,14 +117,14 @@ func tokenForPrincipal(tokens map[string]contract.ActorID, principal contract.Ac
 	return ""
 }
 
-func syncCounts(projectRoot string) remotesync.LocalSyncCounts {
+func syncCounts(projectRoot string) exchange.LocalSyncCounts {
 	storePath := filepath.Join(projectRoot, runtime.DefaultStorePath)
 	if _, err := os.Stat(storePath); err != nil {
-		return remotesync.LocalSyncCounts{}
+		return exchange.LocalSyncCounts{}
 	}
-	counts, err := remotesync.ReadLocalSyncCounts(storePath)
+	counts, err := exchange.ReadLocalSyncCounts(storePath)
 	if err != nil {
-		return remotesync.LocalSyncCounts{}
+		return exchange.LocalSyncCounts{}
 	}
 	return counts
 }

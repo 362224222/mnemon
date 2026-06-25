@@ -1,7 +1,7 @@
 // Package driver is the co-hosted Background Driver: it runs INSIDE the Local Runtime process (holding
 // the same single store-writer lock — never a second opener) and periodically drives the governed
-// Tick, drains projection invalidations, and re-projects the host's managed definition files. It is
-// the only place re-projection lives, so the runtime never imports hostsurface (the locked boundary).
+// Tick, drains projection invalidations, and invokes the caller-supplied side effect for explicit
+// workers such as tests. Runtime serving paths do not write host projection files.
 package driver
 
 import (
@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/hostsurface"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
@@ -27,15 +26,9 @@ func New(rt *runtime.Runtime, reproject func(refs []contract.ResourceRef) error,
 	return &Driver{rt: rt, reproject: reproject, interval: interval}
 }
 
-// ForHost builds a Driver whose re-projection refreshes the host's managed definition files via
-// hostsurface.ReProject (the no-clobber path). Re-projection lives here, in the driver, so the runtime
-// never imports hostsurface.
-func ForHost(rt *runtime.Runtime, pc hostsurface.ProjectContext, interval time.Duration) *Driver {
-	return New(rt, func(refs []contract.ResourceRef) error { _, err := hostsurface.ReProject(pc, refs); return err }, interval)
-}
-
 // Tick runs one background cycle: advance the governed Tick, drain any projection invalidations, and —
-// only if something was invalidated — re-project. It uses the runtime's own store (no second opener).
+// only if something was invalidated — call the injected side effect. It uses the runtime's own store
+// (no second opener).
 func (d *Driver) Tick(ctx context.Context) error {
 	if _, err := d.rt.Tick(); err != nil {
 		return err

@@ -7,8 +7,7 @@ import (
 	"testing"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/app"
-	"github.com/mnemon-dev/mnemon/harness/internal/capability"
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
@@ -62,13 +61,13 @@ func TestLocalBootAutoDiscoversSetupConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("boot config: %v", err)
 	}
-	var handlesMemory, handlesSkill bool
+	var handlesAssignment, handlesProgress bool
 	for _, r := range cfg.Rules.Rules() {
-		handlesMemory = handlesMemory || r.Handles(capability.MemoryWriteCandidateObserved)
-		handlesSkill = handlesSkill || r.Handles(capability.SkillWriteCandidateObserved)
+		handlesAssignment = handlesAssignment || r.Handles("assignment.write_candidate.observed")
+		handlesProgress = handlesProgress || r.Handles("progress_digest.write_candidate.observed")
 	}
-	if !handlesMemory || !handlesSkill {
-		t.Fatalf("local boot must enable memory and skill rules; memory=%v skill=%v", handlesMemory, handlesSkill)
+	if !handlesAssignment || !handlesProgress {
+		t.Fatalf("local boot must enable default event rules; assignment=%v progress_digest=%v", handlesAssignment, handlesProgress)
 	}
 }
 
@@ -81,7 +80,7 @@ func TestLocalBootMissingSetupShowsProductRemediation(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Local Mnemon is not set up.",
-		"mnemon-harness setup --host codex --loop memory --loop skill",
+		"mnemon-harness setup --host codex",
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("missing remediation %q in error:\n%v", want, err)
@@ -131,34 +130,6 @@ func TestListenAddrFromEndpoint(t *testing.T) {
 	}
 }
 
-// mirror_mode 驱动 driver 的镜像再生:缺省 prime-refresh(写入即见);
-// manual 退回仅 prime 再生;unknown 值 fail-closed。
-func TestReadLocalConfigMirrorMode(t *testing.T) {
-	root := t.TempDir()
-	write := func(body string) {
-		p := filepath.Join(root, ".mnemon", "harness", "local")
-		if err := os.MkdirAll(p, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(p, "config.json"), []byte(body), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	write(`{"schema_version":1,"mode":"local"}`) // 旧安装:缺省
-	cfg, err := app.ReadLocalConfig(root)
-	if err != nil || cfg.MirrorMode != "prime-refresh" {
-		t.Fatalf("absent mirror_mode must default to prime-refresh; got %q err=%v", cfg.MirrorMode, err)
-	}
-	write(`{"schema_version":1,"mode":"local","mirror_mode":"manual"}`)
-	if cfg, err = app.ReadLocalConfig(root); err != nil || cfg.MirrorMode != "manual" {
-		t.Fatalf("manual must round-trip; got %q err=%v", cfg.MirrorMode, err)
-	}
-	write(`{"schema_version":1,"mode":"local","mirror_mode":"bogus"}`)
-	if _, err = app.ReadLocalConfig(root); err == nil {
-		t.Fatal("unknown mirror_mode must fail closed")
-	}
-}
-
 // T1 回环地板:非回环监听地址 fail-closed,--allow-nonloopback 显式越权。
 func TestValidateListenAddrLoopbackOnly(t *testing.T) {
 	for _, ok := range []string{"127.0.0.1:8787", "localhost:8787", "[::1]:8787"} {
@@ -203,7 +174,7 @@ func TestRotateTokenInvalidatesOldValue(t *testing.T) {
 	if st, _ := os.Stat(tokPath); st.Mode().Perm() != 0o600 {
 		t.Fatalf("rotated token mode %o, want 0600", st.Mode().Perm())
 	}
-	loaded, err := channel.LoadBindingFile(root, filepath.Join(root, ".mnemon", "harness", "channel", "bindings.json"))
+	loaded, err := access.LoadBindingFile(root, filepath.Join(root, ".mnemon", "harness", "channel", "bindings.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

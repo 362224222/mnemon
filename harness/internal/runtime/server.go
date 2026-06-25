@@ -1,7 +1,7 @@
 // Package runtime is the governed control loop: a ControlServer ingests observations exactly-once, runs
 // them through the rule pre-gate, bridges proposals into trusted *.proposed events, reconciles them
 // through the single-writer kernel, and emits outbox invalidations + durable diagnostics. The Runtime
-// owns the store + the single Tick driver; hosts reach it over the channel.ServerAPI port (D5). The
+// owns the store + the single Tick driver; hosts reach it over the access.ServerAPI port (D5). The
 // kernel stays minimal; the rich admission semantics live here (D4).
 package runtime
 
@@ -11,13 +11,12 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/kernel"
-	"github.com/mnemon-dev/mnemon/harness/internal/projection"
-	"github.com/mnemon-dev/mnemon/harness/internal/reconcile"
-	"github.com/mnemon-dev/mnemon/harness/internal/rule"
-	"github.com/mnemon-dev/mnemon/harness/internal/store"
+	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation/view"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/state"
 )
 
 const (
@@ -25,23 +24,23 @@ const (
 	decisionSinkCursor   = "decision_sink" // tracks decisions whose S2/S7 side-effects are produced (recoverable)
 )
 
-var _ channel.ServerAPI = (*ControlServer)(nil)
+var _ access.ServerAPI = (*ControlServer)(nil)
 
 // ControlServer is the one single-writer governed loop. Tick is its deterministic, restart-safe driver.
 type ControlServer struct {
-	tickMu     sync.Mutex // serializes Tick: closes the GetCursor->dispatch TOCTOU + the reconciler-cursor race
-	store      *store.Store
-	kernel     *kernel.Kernel
-	reconciler *reconcile.Reconciler
-	bridge     *Bridge
-	rules      rule.RuleSet
-	subs       map[contract.ActorID]contract.Subscription
-	modes      contract.Modes
-	newID      func() string
-	now        func() string
-	// syncableKinds is the produce surface: the resource kinds a host decision becomes a pending sync
-	// commit for (sync-abi-v2 §4). Descriptor-derived and injected by OpenRuntime from
-	// RuntimeConfig.SyncableKinds; nil = produce no sync commits.
+	tickMu       sync.Mutex // serializes Tick: closes the GetCursor->dispatch TOCTOU + the reconciler-cursor race
+	store        *state.Store
+	materializer *state.Materializer
+	reconciler   *admission.Reconciler
+	bridge       *Bridge
+	rules        admission.RuleSet
+	subs         map[contract.ActorID]contract.Subscription
+	modes        contract.Modes
+	newID        func() string
+	now          func() string
+	// syncableKinds is the produce surface: the resource kinds a host decision becomes a pending synced
+	// event for (sync-abi-v2 §4). Descriptor-derived and injected by OpenRuntime from
+	// RuntimeConfig.SyncableKinds; nil = produce no synced events.
 	syncableKinds map[contract.ResourceKind]bool
 }
 
@@ -57,17 +56,17 @@ func kindSet(kinds []contract.ResourceKind) map[contract.ResourceKind]bool {
 	return set
 }
 
-func New(s *store.Store, k *kernel.Kernel, rules rule.RuleSet, subs map[contract.ActorID]contract.Subscription, modes contract.Modes, newID, now func() string) *ControlServer {
+func New(s *state.Store, k *state.Materializer, rules admission.RuleSet, subs map[contract.ActorID]contract.Subscription, modes contract.Modes, newID, now func() string) *ControlServer {
 	return &ControlServer{
-		store:      s,
-		kernel:     k,
-		reconciler: reconcile.NewReconciler(s, k),
-		bridge:     NewBridge(newID, now),
-		rules:      rules,
-		subs:       subs,
-		modes:      modes,
-		newID:      newID,
-		now:        now,
+		store:        s,
+		materializer: k,
+		reconciler:   admission.NewReconciler(s, k),
+		bridge:       NewBridge(newID, now),
+		rules:        rules,
+		subs:         subs,
+		modes:        modes,
+		newID:        newID,
+		now:          now,
 	}
 }
 
@@ -92,9 +91,81 @@ func (cs *ControlServer) Ingest(principal contract.ActorID, env contract.Observa
 	return cs.store.IngestObservation(env)
 }
 
+func (cs *ControlServer) IngestObservedEnvelope(principal contract.ActorID, env eventmodel.EventEnvelope) (int64, bool, error) {
+	obs, err := observationFromObservedEnvelope(env)
+	if err != nil {
+		return 0, false, err
+	}
+	return cs.Ingest(principal, obs)
+}
+
+func observationFromObservedEnvelope(env eventmodel.EventEnvelope) (contract.ObservationEnvelope, error) {
+	if env.Phase != eventmodel.PhaseObserved {
+		return contract.ObservationEnvelope{}, fmt.Errorf("ingest envelope: phase must be %q, got %q", eventmodel.PhaseObserved, env.Phase)
+	}
+	if err := env.Validate(); err != nil {
+		return contract.ObservationEnvelope{}, err
+	}
+	externalID, _ := env.Meta["external_id"].(string)
+	externalID = strings.TrimSpace(externalID)
+	if externalID == "" {
+		return contract.ObservationEnvelope{}, fmt.Errorf("ingest envelope: observed meta external_id is required")
+	}
+	refs, err := resourceRefsFromEventSubject(env.Event.Subject)
+	if err != nil {
+		return contract.ObservationEnvelope{}, err
+	}
+	payload := copyEventPayload(env.Event.Payload)
+	if env.Event.TTL != "" {
+		if _, ok := payload["ttl"]; !ok {
+			payload["ttl"] = env.Event.TTL
+		}
+	}
+	return contract.ObservationEnvelope{
+		ExternalID: externalID,
+		Event: contract.Event{
+			SchemaVersion: env.Event.SchemaVersion,
+			ID:            env.Event.ID,
+			TS:            env.Event.CreatedAt,
+			Type:          env.Event.Type,
+			Actor:         contract.ActorID(env.Event.Actor),
+			ResourceRefs:  refs,
+			CorrelationID: env.Event.CorrelationID,
+			CausedBy:      firstCause(env.Event.CausedBy),
+			Payload:       payload,
+		},
+	}, nil
+}
+
+func resourceRefsFromEventSubject(subject eventmodel.EventSubject) ([]contract.ResourceRef, error) {
+	parts := strings.SplitN(string(subject), "/", 2)
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+		return nil, fmt.Errorf("ingest envelope: event subject %q must be kind/id", subject)
+	}
+	return []contract.ResourceRef{{Kind: contract.ResourceKind(parts[0]), ID: contract.ResourceID(parts[1])}}, nil
+}
+
+func copyEventPayload(payload map[string]any) map[string]any {
+	if payload == nil {
+		return map[string]any{}
+	}
+	out := make(map[string]any, len(payload))
+	for key, value := range payload {
+		out[key] = value
+	}
+	return out
+}
+
+func firstCause(causes []string) string {
+	if len(causes) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(causes[0])
+}
+
 // normalizeObservedEvent turns a client EventDraft into a server-stamped observed Event (the Event
 // Intake duty): it STAMPS the server-authoritative fields from the AUTHENTICATED principal (id, ts,
-// schema version, actor) and ZEROES the client-forgeable provenance (read-set, projection ref, ingest
+// schema version, actor) and ZEROES the client-forgeable provenance (read-set, presentation-view ref, ingest
 // seq). The payload, resource refs, correlation/lineage, and context digest are preserved — a client
 // can never forge identity or a read-set on the wire (D7/S9).
 func (cs *ControlServer) normalizeObservedEvent(principal contract.ActorID, ev *contract.Event) error {
@@ -102,12 +173,12 @@ func (cs *ControlServer) normalizeObservedEvent(principal contract.ActorID, ev *
 		return err
 	}
 	ev.SchemaVersion, ev.ID, ev.TS, ev.Actor = 1, cs.newID(), cs.now(), principal // STAMP
-	ev.BasedOn, ev.ProjectionRef, ev.IngestSeq = nil, "", 0                       // ZERO forgeable
+	ev.BasedOn, ev.PresentationViewRef, ev.IngestSeq = nil, "", 0                 // ZERO forgeable
 	return nil
 }
 
 // validateObservedType requires a lowercase, dot-segmented observed event type (e.g.
-// "memory.write_candidate.observed"; the legacy underscore form is still lowercase). The reserved
+// "progress_digest.write_candidate.observed"; the legacy underscore form is still lowercase). The reserved
 // *.proposed / *.diagnostic suffixes are rejected earlier, at the trust boundary.
 func validateObservedType(t string) error {
 	if t == "" {
@@ -127,11 +198,11 @@ func validateObservedType(t string) error {
 	return nil
 }
 
-// PullProjection serves an actor's scoped, server-built view. The subscription's actor MUST equal the
+// PullPresentationView serves an actor's scoped, server-built view. The subscription's actor MUST equal the
 // authenticated principal (S9/D7): a client can never name another actor's scope on the wire.
-func (cs *ControlServer) PullProjection(principal contract.ActorID, sub contract.Subscription) (projection.Projection, error) {
+func (cs *ControlServer) PullPresentationView(principal contract.ActorID, sub contract.Subscription) (view.View, error) {
 	if sub.Actor != principal {
-		return projection.Projection{}, fmt.Errorf("subscription actor %q does not match authenticated principal %q", sub.Actor, principal)
+		return view.View{}, fmt.Errorf("subscription actor %q does not match authenticated principal %q", sub.Actor, principal)
 	}
 	// S9: serve ONLY the actor's server-CONFIGURED scope. The client may NARROW (request a subset) but never
 	// widen — requested refs are intersected with the configured scope, so a client-named out-of-scope ref is
@@ -151,7 +222,7 @@ func (cs *ControlServer) PullProjection(principal contract.ActorID, sub contract
 			refs = append(refs, r)
 		}
 	}
-	return projection.ScopedView(cs.store, contract.Subscription{Actor: principal, Refs: refs, PrivacyTier: configured.PrivacyTier}), nil
+	return view.ScopedView(cs.store, contract.Subscription{Actor: principal, Refs: refs, PrivacyTier: configured.PrivacyTier}), nil
 }
 
 // Tick runs one governed cycle:
@@ -175,7 +246,7 @@ func (cs *ControlServer) Tick() ([]contract.Decision, error) {
 			return nil, derr
 		}
 		// S2: this observed event's produced events + the cursor advance are ONE tx.
-		if err := cs.store.WithTx(func(tx *store.Tx) error {
+		if err := cs.store.WithTx(func(tx *state.Tx) error {
 			for _, e := range stamped {
 				if err := tx.AppendEvent(e); err != nil {
 					return err
@@ -216,7 +287,7 @@ func (cs *ControlServer) dispatchOne(ev contract.Event) ([]contract.Event, error
 		return []contract.Event{cs.diagnosticEvent(ev, contract.Diagnostic{
 			Stage: "readback", Reason: fmt.Sprintf("echoed digest %q != current %q", ev.ContextDigest, view.Digest), Ref: string(ev.Actor)})}, nil
 	}
-	dec, diags := cs.rules.Evaluate(rule.RuleInput{Event: ev, View: view})
+	dec, diags := cs.rules.Evaluate(admission.RuleInput{Event: ev, View: view})
 	var stamped []contract.Event
 	for _, dg := range diags { // S7: every rule error is a durable diagnostic.
 		stamped = append(stamped, cs.diagnosticEvent(ev, dg))
@@ -265,10 +336,10 @@ func (cs *ControlServer) dispatchOne(ev contract.Event) ([]contract.Event, error
 	return stamped, nil
 }
 
-// scopedView builds the actor's scoped projection. (P2 strengthens the scoping + digest behind this seam;
+// scopedView builds the actor's scoped view. (P2 strengthens the scoping + digest behind this seam;
 // the call site stays stable.)
-func (cs *ControlServer) scopedView(actor contract.ActorID) projection.Projection {
-	return projection.ScopedView(cs.store, cs.subs[actor])
+func (cs *ControlServer) scopedView(actor contract.ActorID) view.View {
+	return view.ScopedView(cs.store, cs.subs[actor])
 }
 
 // diagnosticEvent builds a durable "*.diagnostic" event in the trigger's domain (S7). Domain = the prefix of
@@ -306,21 +377,21 @@ func (cs *ControlServer) processDecisionSideEffects() error {
 	for _, dr := range decs {
 		d := dr.Decision
 		rid := dr.Rowid
-		if e := cs.store.WithTx(func(tx *store.Tx) error {
+		if e := cs.store.WithTx(func(tx *state.Tx) error {
 			if d.IngestSeq > 0 {
 				if d.Status == contract.Accepted {
 					payload, _ := json.Marshal(d.NewVersions)
 					key := "inv_" + d.DecisionID
-					if err := tx.EnqueueOutbox(store.OutboxRow{ID: key, Kind: "invalidation", EventSeq: d.IngestSeq, Target: "projection", Payload: string(payload), IdempotencyKey: key}); err != nil {
+					if err := tx.EnqueueOutbox(state.OutboxRow{ID: key, Kind: "invalidation", EventSeq: d.IngestSeq, Target: "projection", Payload: string(payload), IdempotencyKey: key}); err != nil {
 						return err
 					}
 					// cs.syncableKinds is the produce surface, descriptor-derived from the replica's
 					// capability catalog (sync-abi-v2 §4): a host decision on a syncable kind becomes a
-					// pending sync commit. The hub's accept surface is its per-replica grant scope; the
-					// two align by configuration (a mismatch surfaces as a per-commit rejection, never a
+					// pending synced event. The hub's accept surface is its per-replica grant scope; the
+					// two align by configuration (a mismatch surfaces as a per-event rejection, never a
 					// silent drop). The sync-import principal is excluded — imported writes never re-emit.
 					if d.Actor != contract.SyncImportActor {
-						if err := tx.RecordSyncCommitsTx(d, cs.syncableKinds); err != nil {
+						if err := tx.RecordSyncEventsTx(d, cs.syncableKinds); err != nil {
 							return err
 						}
 					}

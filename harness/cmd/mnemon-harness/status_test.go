@@ -9,9 +9,8 @@ import (
 	"testing"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/app"
-	"github.com/mnemon-dev/mnemon/harness/internal/capability"
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
@@ -76,19 +75,17 @@ func TestProductStatusUsesReachableLocalMnemon(t *testing.T) {
 	defer rt.Close()
 	if _, _, err := rt.API().Ingest("codex@project", contract.ObservationEnvelope{
 		ExternalID: "status-pending",
-		Event: contract.Event{Type: capability.MemoryWriteCandidateObserved, Payload: map[string]any{
-			"content":    "Status should read pending sync from the live Local Mnemon service.",
-			"source":     "test",
-			"confidence": "high",
+		Event: contract.Event{Type: "progress_digest.write_candidate.observed", Payload: map[string]any{
+			"summary": "Status should read pending sync from the live Local Mnemon service.",
 		}},
 	}); err != nil {
-		t.Fatalf("seed memory candidate: %v", err)
+		t.Fatalf("seed progress candidate: %v", err)
 	}
 	if _, err := rt.Tick(); err != nil {
 		t.Fatalf("tick local runtime: %v", err)
 	}
 
-	srv := httptest.NewServer(runtime.NewRuntimeHandler(rt, channel.TokenAuthenticator{Tokens: boot.Loaded.Tokens}))
+	srv := httptest.NewServer(runtime.NewRuntimeHandler(rt, access.TokenAuthenticator{Tokens: boot.Loaded.Tokens}))
 	defer srv.Close()
 	cfg := boot.Config
 	cfg.Endpoint = srv.URL

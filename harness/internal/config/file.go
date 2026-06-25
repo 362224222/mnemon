@@ -8,15 +8,15 @@ import (
 	"strings"
 )
 
-// File is the 4-layer config that drives select-only capability assembly: where the store/endpoint
-// live (local), how the channel authenticates (channel), which built-in capabilities are enabled and
-// bound (capabilities), and which background workers run (background). It enables/binds/limits
-// already-compiled capabilities; it can never define new behavior (the assembler is fail-closed).
+// File is the 4-layer config that drives select-only event package assembly: where the
+// store/endpoint live (local), how the channel authenticates (channel), which event packages are
+// enabled through the legacy JSON key ("capabilities"), and which background workers run
+// (background). It enables/binds/limits already-compiled packages; it can never define new behavior.
 type File struct {
-	Local        localConfig                 `json:"local"`
-	Channel      ChannelConfig               `json:"channel"`
-	Capabilities map[string]CapabilityConfig `json:"capabilities"`
-	Background   BackgroundConfig            `json:"background"`
+	Local         localConfig                   `json:"local"`
+	Channel       ChannelConfig                 `json:"channel"`
+	EventPackages map[string]EventPackageConfig `json:"capabilities"`
+	Background    BackgroundConfig              `json:"background"`
 }
 
 type localConfig struct {
@@ -29,26 +29,22 @@ type ChannelConfig struct {
 	CredentialsDir string `json:"credentials_dir,omitempty"`
 }
 
-// CapabilityConfig enables and bounds one built-in capability. RuleRef ("native:<id>") selects the
+// EventPackageConfig enables and bounds one compiled event package. RuleRef ("native:<id>") selects the
 // compiled rule kind; the assembler resolves it select-only and fails closed on an unknown id.
-type CapabilityConfig struct {
+type EventPackageConfig struct {
 	Enabled         bool   `json:"enabled"`
 	ResourceRef     string `json:"resource_ref,omitempty"`
 	MaxPayloadBytes int    `json:"max_payload_bytes,omitempty"`
-	// MirrorMode is staged for the `control pull --mirror` regenerate cadence (plan reconciliation
-	// ii): validated here, read when the mirror cadence lands. "manual" | "prime-refresh".
-	MirrorMode string `json:"mirror_mode,omitempty"`
-	RuleRef    string `json:"rule_ref,omitempty"` // "native:<id>"
+	RuleRef         string `json:"rule_ref,omitempty"` // "native:<id>"
 }
 
 type BackgroundConfig struct {
-	Sync              string `json:"sync,omitempty"`               // "disabled" | "manual"
-	ProjectionRefresh string `json:"projection_refresh,omitempty"` // "manual"
+	Sync                    string `json:"sync,omitempty"`                      // "disabled" | "manual"
+	PresentationViewRefresh string `json:"presentation_view_refresh,omitempty"` // "manual"
 }
 
 // Load reads and validates a config File. It is fail-closed: an unknown field anywhere in the document
-// is rejected (DisallowUnknownFields), and an enabled capability must carry a native rule_ref and a
-// known mirror_mode.
+// is rejected (DisallowUnknownFields), and an enabled event package must carry a native rule_ref.
 func Load(path string) (File, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -67,17 +63,12 @@ func Load(path string) (File, error) {
 }
 
 func (f File) validate() error {
-	for name, c := range f.Capabilities {
+	for name, c := range f.EventPackages {
 		if !c.Enabled {
 			continue
 		}
 		if !strings.HasPrefix(c.RuleRef, "native:") {
-			return fmt.Errorf("capability %q: rule_ref must be \"native:<id>\", got %q", name, c.RuleRef)
-		}
-		switch c.MirrorMode {
-		case "", "manual", "prime-refresh":
-		default:
-			return fmt.Errorf("capability %q: unknown mirror_mode %q", name, c.MirrorMode)
+			return fmt.Errorf("event package %q: rule_ref must be \"native:<id>\", got %q", name, c.RuleRef)
 		}
 	}
 	switch f.Background.Sync {

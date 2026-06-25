@@ -47,7 +47,7 @@ Markdown-installable runtime integration: `SKILL.md`, `INSTALL.md`, `GUIDELINE.m
 
 ### [Self-Evolution Harness](harness/README.md)
 
-The formal modular harness docs for agent-agnostic installation, memory loop, skill loop, and future attachable evolution modules.
+The formal modular harness docs for agent-agnostic installation, Agent Integration, event packages, and future attachable evolution modules.
 
 ### [8. Design Decisions & Future Direction](design/08-decisions.md)
 

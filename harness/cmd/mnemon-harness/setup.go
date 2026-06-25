@@ -19,13 +19,12 @@ var (
 	setupDryRun      bool
 )
 
-// setup is the everyday install front door: it projects a loop's assets and wires
-// the Local Mnemon channel artifacts a projected host agent uses. Every integration
-// is a loop — memory and skill are ordinary first-party loops, enabled with
-// `--loop memory` / `--loop skill` like any other (PD7: no privileged flags).
+// setup is the everyday install front door: it installs generic lifecycle hooks plus managed GUIDE and
+// skill surfaces, then wires the Local Mnemon channel artifacts a host agent uses. --loop enables
+// optional event package scope; it does not project host assets on the R1 path.
 var setupCmd = &cobra.Command{
-	Use:   "setup --host HOST --loop LOOP [--loop LOOP ...]",
-	Short: "Install Agent Integration for one or more loops",
+	Use:   "setup --host HOST [--loop LOOP ...]",
+	Short: "Install Agent Integration for a host",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		_, err := app.New(setupRoot).Setup(cmd.Context(), cmd.OutOrStdout(), cmd.ErrOrStderr(), app.SetupOptions{
 			Host:          setupHost,
@@ -74,7 +73,7 @@ func init() {
 	setupCmd.PersistentFlags().StringVar(&setupRoot, "root", ".", "repository root containing harness declarations")
 	setupCmd.PersistentFlags().StringVar(&setupProjectRoot, "project-root", "", "project root for Agent Integration artifacts (defaults to root)")
 	setupCmd.PersistentFlags().StringVar(&setupHost, "host", "", "Agent Integration host id")
-	setupCmd.PersistentFlags().StringArrayVar(&setupLoops, "loop", nil, "loop id to install (e.g. memory, skill, or an external package); may be repeated")
+	setupCmd.PersistentFlags().StringArrayVar(&setupLoops, "loop", nil, "event package id to enable (e.g. assignment or an external package); may be repeated")
 	setupCmd.PersistentFlags().StringVar(&setupPrincipal, "principal", "", "Agent Integration principal")
 
 	setupCmd.Flags().StringVar(&setupControlURL, "control-url", "", "Local Mnemon endpoint URL")
@@ -88,8 +87,7 @@ func init() {
 	rootCmd.AddCommand(setupCmd)
 }
 
-// selectedSetupLoops dedupes the repeated --loop flag (every integration is a loop; PD7 removed the
-// privileged --memory/--skills shortcuts — memory and skill are now `--loop memory` / `--loop skill`).
+// selectedSetupLoops dedupes the repeated --loop flag.
 func selectedSetupLoops() []string {
 	seen := map[string]bool{}
 	var loops []string

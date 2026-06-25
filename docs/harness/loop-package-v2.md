@@ -17,7 +17,7 @@
 >    path-miss).
 > 3. Prose assets (GUIDE.md, SKILL.md) carry a documentation-grade injection scan, not the
 >    content-grade secret scan (a legitimate GUIDE may honestly discuss "private keys").
-> 4. The v1 "sync-import stays memory/skill-only … external capabilities have no remote producer"
+> 4. The v1 "sync-import stays fixed-embedded-only … external capabilities have no remote producer"
 >    sentence is superseded by `sync-abi-v2.md` (PD6, descriptor-derived sync).
 
 ## Package contents (external packages, v2)

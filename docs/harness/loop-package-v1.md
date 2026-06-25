@@ -117,17 +117,17 @@ document maps to an enforcing fault class:
 | strict spec decode | class ① bad JSON / trailing data / unknown keys (decodeSpec); ② unknown vocabulary, ③ kind outside KindCatalog (FromSpec) |
 | no shadowing | class ④ four-axis merge rejection — name, observed type, proposed type, resource kind — external may not claim what embedded claims; ⑤ two externals may not collide either (incl. sharing a kind) |
 | kernel-satisfiable | class ⑦ load-time SchemaGuard lockstep: statically derived header keys (static ∪ content ∪ items_field ∪ updated_by) must cover the kind's required fields |
-| untrusted spec surfaces | class ⑧, EXTERNAL ONLY, two halves. VALUES → scanned by the secret + prompt-injection scanners: enum deny messages, `default` validator values, render static values, the bullet-list title. IDENTIFIERS → pattern-locked to `^[a-z][a-z0-9_-]*$` (underscore allowed; the builtin `skill_id`/`items_field` shapes carry it): field names, `items_field`, render static keys. The spec `name` is pattern-locked via directory == name (class ⑨) and scanned as belt-and-braces |
+| untrusted spec surfaces | class ⑧, EXTERNAL ONLY, two halves. VALUES → scanned by the secret + prompt-injection scanners: enum deny messages, `default` validator values, render static values, the bullet-list title. IDENTIFIERS → pattern-locked to `^[a-z][a-z0-9_-]*$` (underscore allowed for descriptor field names such as `items_field`): field names, `items_field`, render static keys. The spec `name` is pattern-locked via directory == name (class ⑨) and scanned as belt-and-braces |
 | no kernel-internal kinds | class ⑪: `lease`/`budget`/`receipt`/`coordination` are deny-listed for external claim |
 | no symlinks | class ⑩: a symlinked external root, package dir, or capability.json is rejected by ResolveCatalog's lstat screening on the real path |
 
 A bad package REFUSES `local run` boot — the directory's presence is a contract, not a hint;
 `local run --ignore-external` is the operator escape hatch (embedded-only catalog, each ignored
 package named on stderr). `loop validate` reports each loadable package as
-`external capability <name>: OK` and goes red on any loader failure. Sync-import stays
-memory/skill-only — narrower than Builtins: pushes are kind-agnostic, but the puller imports only
-memory and skill commits and drops every other kind; external capabilities have no remote
-producer in v1.
+`external capability <name>: OK` and goes red on any loader failure. In v1, sync-import stayed
+limited to a fixed embedded set — narrower than the catalog: pushes were kind-agnostic, but the
+puller imported only that fixed set and dropped every other kind; external capabilities had no
+remote producer in v1. This is superseded by `sync-abi-v2.md`.
 
 ## Migration provenance
 

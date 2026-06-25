@@ -20,9 +20,9 @@ func TestLoadConfigRoundTrips(t *testing.T) {
   "local": {"store_path": ".mnemon/harness/local/governed.db", "endpoint": "http://127.0.0.1:8787"},
   "channel": {"binding_file": ".mnemon/harness/channel/bindings.json"},
   "capabilities": {
-    "memory": {"enabled": true, "resource_ref": "memory/project", "rule_ref": "native:memory", "mirror_mode": "prime-refresh"}
+    "note": {"enabled": true, "resource_ref": "note/project", "rule_ref": "native:note"}
   },
-  "background": {"sync": "disabled", "projection_refresh": "manual"}
+  "background": {"sync": "disabled", "presentation_view_refresh": "manual"}
 }`))
 	if err != nil {
 		t.Fatalf("load valid config: %v", err)
@@ -30,9 +30,9 @@ func TestLoadConfigRoundTrips(t *testing.T) {
 	if f.Local.Endpoint != "http://127.0.0.1:8787" {
 		t.Fatalf("endpoint not parsed: %q", f.Local.Endpoint)
 	}
-	mem, ok := f.Capabilities["memory"]
-	if !ok || !mem.Enabled || mem.RuleRef != "native:memory" {
-		t.Fatalf("memory capability not parsed: %+v", mem)
+	note, ok := f.EventPackages["note"]
+	if !ok || !note.Enabled || note.RuleRef != "native:note" {
+		t.Fatalf("event package config not parsed: %+v", note)
 	}
 }
 
@@ -43,11 +43,11 @@ func TestLoadConfigFailsClosedOnUnknownKey(t *testing.T) {
 	}
 }
 
-func TestLoadConfigRejectsBadRuleRefAndMirror(t *testing.T) {
-	if _, err := Load(writeConfig(t, `{"capabilities": {"x": {"enabled": true, "rule_ref": "memory"}}}`)); err == nil {
+func TestLoadConfigRejectsBadRuleRefAndRetiredMirrorMode(t *testing.T) {
+	if _, err := Load(writeConfig(t, `{"capabilities": {"x": {"enabled": true, "rule_ref": "note"}}}`)); err == nil {
 		t.Fatal("a non-native rule_ref must be rejected")
 	}
-	if _, err := Load(writeConfig(t, `{"capabilities": {"x": {"enabled": true, "rule_ref": "native:memory", "mirror_mode": "weird"}}}`)); err == nil {
-		t.Fatal("an unknown mirror_mode must be rejected")
+	if _, err := Load(writeConfig(t, `{"capabilities": {"x": {"enabled": true, "rule_ref": "native:note", "mirror_mode": "weird"}}}`)); err == nil {
+		t.Fatal("retired mirror_mode must be rejected as an unknown event package field")
 	}
 }

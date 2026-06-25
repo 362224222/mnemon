@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "name": "fixture_declaration",
+  "observed_type": "fixture_declaration.write_candidate.observed",
+  "proposed_type": "fixture_declaration.write.proposed",
+  "resource_kind": "fixture_declaration",
+  "items_field": "declarations",
+  "fields": [
+    {
+      "name": "declaration_id",
+      "validators": [
+        {
+          "id": "required",
+          "params": {
+            "missing_style": "missing"
+          }
+        },
+        {
+          "id": "format:identifier"
+        }
+      ]
+    },
+    {
+      "name": "name",
+      "validators": [
+        {
+          "id": "default-from",
+          "params": {
+            "field": "declaration_id"
+          }
+        }
+      ]
+    },
+    {
+      "name": "status",
+      "validators": [
+        {
+          "id": "default",
+          "params": {
+            "value": "active"
+          }
+        },
+        {
+          "id": "enum",
+          "params": {
+            "values": "active|stale|archived",
+            "message": "invalid status"
+          }
+        }
+      ]
+    },
+    {
+      "name": "source",
+      "validators": [
+        {
+          "id": "required",
+          "params": {
+            "missing_style": "missing"
+          }
+        }
+      ]
+    },
+    {
+      "name": "confidence",
+      "validators": [
+        {
+          "id": "required",
+          "params": {
+            "missing_style": "missing"
+          }
+        }
+      ]
+    },
+    {
+      "name": "content",
+      "validators": [
+        {
+          "id": "safety:unsafe"
+        }
+      ]
+    }
+  ],
+  "render": {
+    "static": {
+      "name": "project"
+    }
+  },
+  "sync": {
+    "importable": true,
+    "merge": "declaration-dedup"
+  }
+}

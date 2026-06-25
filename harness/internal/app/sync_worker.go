@@ -9,29 +9,29 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/capability"
-	"github.com/mnemon-dev/mnemon/harness/internal/channel"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
-	"github.com/mnemon-dev/mnemon/harness/internal/remotesync"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemonhub/exchange"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
 // The driver sync worker (v1.1 #2): inside the SERVING process, sync operates the already-open
-// runtime/store handle — push reads pending sync commits and applies the hub's verdicts through the
+// runtime/store handle — push reads pending synced events and applies the hub's verdicts through the
 // live handle; pull re-enters Event Intake via the runtime's trusted intake + Tick. It never opens
-// the store by path (the single-writer flock would self-collide); the path-based remotesync helpers
-// remain the OFFLINE CLI verbs' tools, and ProbeAvailable keeps the two mutually exclusive.
+// the store by path (the single-writer flock would self-collide); the path-based mnemonhub exchange
+// helpers remain the OFFLINE CLI verbs' tools, and ProbeAvailable keeps the two mutually exclusive.
 
 // SyncWorkerOptions configures the worker. The zero value is safe: default cadence and transport
 // timeout, fail-closed transport security.
 type SyncWorkerOptions struct {
 	ProjectRoot         string
 	Interval            time.Duration // <= 0 defaults to defaultSyncWorkerInterval
-	Timeout             time.Duration // per-call transport bound; <= 0 defaults to channel.DefaultSyncTimeout
+	Timeout             time.Duration // per-call transport bound; <= 0 defaults to access.DefaultSyncTimeout
 	AllowInsecureRemote bool          // explicit T2 downgrade override (v1.1 #3)
-	// Catalog is the boot-resolved capability catalog the pull import derives its kind→observation
-	// mapping from (descriptor-derived, PD6). nil falls back to the embedded first-party catalog.
-	Catalog map[string]capability.Capability
+	// Catalog is the boot-resolved event package registry the pull import derives its kind→observation
+	// mapping from (descriptor-derived, PD6). nil falls back to the embedded catalog.
+	Catalog policy.Registry
 }
 
 const defaultSyncWorkerInterval = 30 * time.Second
@@ -69,7 +69,7 @@ func syncWorkerPass(rt *runtime.Runtime, opts SyncWorkerOptions) error {
 		}
 		return fmt.Errorf("stat Remote Workspace config: %w", err)
 	}
-	entry, err := remotesync.LoadRemoteEntry(remotesPath, "default")
+	entry, err := exchange.LoadRemoteEntry(remotesPath, "default")
 	if err != nil {
 		return err
 	}
@@ -86,7 +86,7 @@ func syncWorkerPass(rt *runtime.Runtime, opts SyncWorkerOptions) error {
 // syncWorkerClient builds the bounded sync client from the remote entry: credential_ref + ca_file
 // resolve relative to the project root (the same resolution `sync connect` wrote them under), and
 // the endpoint passes the T2 downgrade gate unless explicitly overridden.
-func syncWorkerClient(entry remotesync.RemoteEntry, opts SyncWorkerOptions) (*channel.Client, error) {
+func syncWorkerClient(entry exchange.RemoteEntry, opts SyncWorkerOptions) (*access.Client, error) {
 	if strings.TrimSpace(entry.CredentialRef) == "" {
 		return nil, fmt.Errorf("Remote Workspace %q has no credential_ref", entry.ID)
 	}
@@ -106,7 +106,7 @@ func syncWorkerClient(entry remotesync.RemoteEntry, opts SyncWorkerOptions) (*ch
 	if caFile != "" && !filepath.IsAbs(caFile) {
 		caFile = filepath.Join(opts.ProjectRoot, caFile)
 	}
-	return channel.NewSyncClient(entry.Endpoint, channel.SyncClientConfig{
+	return access.NewSyncClient(entry.Endpoint, access.SyncClientConfig{
 		Token:         token,
 		Timeout:       opts.Timeout,
 		CAFile:        caFile,
@@ -114,32 +114,32 @@ func syncWorkerClient(entry remotesync.RemoteEntry, opts SyncWorkerOptions) (*ch
 	})
 }
 
-// syncWorkerPush pushes the pending batch (if any) and mirrors the hub's per-commit verdicts into
+// syncWorkerPush pushes the pending batch (if any) and mirrors the hub's per-event verdicts into
 // the local ledger — both through the live handle.
-func syncWorkerPush(rt *runtime.Runtime, client *channel.Client, remoteID string) error {
-	batch, err := remotesync.ReadPushBatch(rt)
+func syncWorkerPush(rt *runtime.Runtime, client *access.Client, remoteID string) error {
+	batch, err := exchange.ReadPushBatch(rt)
 	if err != nil {
 		return err
 	}
-	if len(batch.Commits) == 0 {
+	if len(batch.Events) == 0 {
 		return nil
 	}
 	resp, err := client.SyncPush(contract.SyncPushRequest{
 		ReplicaID: batch.ReplicaID,
-		BatchID:   remotesync.PushBatchID(batch.ReplicaID, batch.Commits),
-		Commits:   batch.Commits,
+		BatchID:   exchange.PushBatchID(batch.ReplicaID, batch.Events),
+		Events:    batch.Events,
 	})
 	if err != nil {
 		return fmt.Errorf("sync push failed: %w", err)
 	}
-	return remotesync.ApplyPushResponse(rt, remoteID, resp)
+	return exchange.ApplyPushResponse(rt, remoteID, resp)
 }
 
-// syncWorkerPull pulls after the durable cursor, re-enters each commit through the live runtime's
-// trusted intake (importPulledCommits — the same loop the offline path uses), then advances the
+// syncWorkerPull pulls after the durable cursor, re-enters each event through the live runtime's
+// trusted intake (importPulledEvents — the same loop the offline path uses), then advances the
 // cursor.
-func syncWorkerPull(rt *runtime.Runtime, client *channel.Client, remoteID string, catalog map[string]capability.Capability) error {
-	state, err := remotesync.ReadPullState(rt, remoteID)
+func syncWorkerPull(rt *runtime.Runtime, client *access.Client, remoteID string, catalog policy.Registry) error {
+	state, err := exchange.ReadPullState(rt, remoteID)
 	if err != nil {
 		return err
 	}
@@ -150,8 +150,8 @@ func syncWorkerPull(rt *runtime.Runtime, client *channel.Client, remoteID string
 	if err != nil {
 		return fmt.Errorf("sync pull failed: %w", err)
 	}
-	if err := importPulledCommits(rt, remoteID, resp.Commits, catalog); err != nil {
+	if err := importPulledEvents(rt, remoteID, resp.Events, catalog); err != nil {
 		return err
 	}
-	return remotesync.SetPullCursor(rt, remoteID, resp.NextCursor)
+	return exchange.SetPullCursor(rt, remoteID, resp.NextCursor)
 }
