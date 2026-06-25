@@ -38,12 +38,14 @@ compare_pair() {
     failed=1
   }
 }
-for en in "${EN_DIR}"/*.md; do compare_pair "${en}"; done
 for zh in "${ZH_DIR}"/*.md; do
   base="$(basename "${zh}")"
-  [[ -f "${EN_DIR}/${base}" || "${base}" == "README.md" ]] || {
+  en="${EN_DIR}/${base}"
+  [[ -f "${en}" || "${base}" == "README.md" ]] || {
     echo "missing English mirror: ${EN_DIR}/${base}" >&2
     failed=1
+    continue
   }
+  [[ -f "${en}" ]] && compare_pair "${en}"
 done
 exit "${failed}"

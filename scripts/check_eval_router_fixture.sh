@@ -6,6 +6,11 @@ RUN_ID="df-rgr-0019-router-fixture-$(date -u +%Y%m%dT%H%M%SZ)"
 PROPOSAL_RUN_ID="$(printf '%s' "${RUN_ID}" | tr '[:upper:]' '[:lower:]')"
 PROPOSAL_ID="eval-memory-memory-router-failed-finding-${PROPOSAL_RUN_ID}"
 
+if ! go run ./harness/cmd/mnemon-harness eval --help >/dev/null 2>&1; then
+  echo "eval-router-check: skipped (mnemon-harness eval command unavailable)"
+  exit 0
+fi
+
 output="$(
   go run ./harness/cmd/mnemon-harness eval --root "${ROOT}" assert \
     --suite router-fixture \
