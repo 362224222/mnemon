@@ -258,15 +258,34 @@ type githubRefResponse struct {
 }
 
 type githubAPIError struct {
-	Status  int
-	Message string
+	Status             int
+	Message            string
+	RetryAfter         string
+	RateLimitRemaining string
+	RateLimitReset     string
 }
 
 func (e *githubAPIError) Error() string {
+	base := ""
 	if strings.TrimSpace(e.Message) == "" {
-		return fmt.Sprintf("github api status %d", e.Status)
+		base = fmt.Sprintf("github api status %d", e.Status)
+	} else {
+		base = fmt.Sprintf("github api status %d: %s", e.Status, e.Message)
 	}
-	return fmt.Sprintf("github api status %d: %s", e.Status, e.Message)
+	var hints []string
+	if strings.TrimSpace(e.RetryAfter) != "" {
+		hints = append(hints, "retry_after="+strings.TrimSpace(e.RetryAfter))
+	}
+	if strings.TrimSpace(e.RateLimitRemaining) != "" {
+		hints = append(hints, "rate_limit_remaining="+strings.TrimSpace(e.RateLimitRemaining))
+	}
+	if strings.TrimSpace(e.RateLimitReset) != "" {
+		hints = append(hints, "rate_limit_reset="+strings.TrimSpace(e.RateLimitReset))
+	}
+	if len(hints) == 0 {
+		return base
+	}
+	return base + " (" + strings.Join(hints, ", ") + ")"
 }
 
 func (s *GitHubPublicationStore) readFileWithSHA(ctx context.Context, branch, path string) (githubFile, bool, error) {
@@ -396,7 +415,13 @@ func (s *GitHubPublicationStore) do(ctx context.Context, method, apiPath string,
 			Message string `json:"message"`
 		}
 		_ = json.Unmarshal(data, &apiErr)
-		return resp.StatusCode, &githubAPIError{Status: resp.StatusCode, Message: apiErr.Message}
+		return resp.StatusCode, &githubAPIError{
+			Status:             resp.StatusCode,
+			Message:            apiErr.Message,
+			RetryAfter:         resp.Header.Get("Retry-After"),
+			RateLimitRemaining: resp.Header.Get("X-RateLimit-Remaining"),
+			RateLimitReset:     resp.Header.Get("X-RateLimit-Reset"),
+		}
 	}
 	if out != nil && len(data) > 0 {
 		if err := json.Unmarshal(data, out); err != nil {

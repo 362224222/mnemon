@@ -885,6 +885,7 @@ Done when:
 - At least one successful scenario contains two or more output-driven replanning rounds.
 - At least one successful scenario demonstrates isolated per-agent `mnemond` and local store paths.
 - Failure mode leaves enough diagnostics to distinguish API/auth/config errors from Mnemon import/admission errors.
+- GitHub API rate-limit failures must preserve retry/rate-limit headers when GitHub returns them, so an operator can distinguish temporary cooldown from auth or repo misconfiguration.
 
 ## 18. Natural acceptance task suite
 

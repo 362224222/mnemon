@@ -136,6 +136,35 @@ func TestGitHubPublicationStoreEnsureBranchCreatesMissingBranchFromMain(t *testi
 	}
 }
 
+func TestGitHubPublicationStoreRateLimitErrorIncludesRetryHints(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "120")
+		w.Header().Set("X-RateLimit-Remaining", "0")
+		w.Header().Set("X-RateLimit-Reset", "1782416790")
+		writeJSON(w, http.StatusForbidden, map[string]any{"message": "API rate limit exceeded"})
+	}))
+	t.Cleanup(server.Close)
+	store, err := NewPublicationStore(PublicationStoreConfig{
+		Repo:       "mnemon-dev/mnemon-teamwork-example",
+		BaseURL:    server.URL,
+		HTTPClient: server.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = store.EnsureBranch(context.Background(), "mnemon/acceptance/run/agent-a", "main")
+	if err == nil {
+		t.Fatal("ensure branch should return rate-limit error")
+	}
+	msg := err.Error()
+	for _, want := range []string{"API rate limit exceeded", "retry_after=120", "rate_limit_remaining=0", "rate_limit_reset=1782416790"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("error %q does not include %q", msg, want)
+		}
+	}
+}
+
 func TestGitHubPublicationStoreLiveGated(t *testing.T) {
 	if os.Getenv("MNEMON_GITHUB_LIVE") != "1" {
 		t.Skip("set MNEMON_GITHUB_LIVE=1 to run the real GitHub publication store smoke test")
