@@ -175,12 +175,13 @@ type r1CodexSyncReport struct {
 }
 
 type r1SyncLifecycleReport struct {
-	At        string `json:"at"`
-	Principal string `json:"principal"`
-	Action    string `json:"action"`
-	Result    string `json:"result"`
-	Branch    string `json:"branch,omitempty"`
-	Detail    string `json:"detail,omitempty"`
+	At        string         `json:"at"`
+	Principal string         `json:"principal"`
+	Action    string         `json:"action"`
+	Result    string         `json:"result"`
+	Branch    string         `json:"branch,omitempty"`
+	Detail    string         `json:"detail,omitempty"`
+	Ledger    map[string]int `json:"ledger,omitempty"`
 }
 
 type r1AcceptanceAssertion struct {

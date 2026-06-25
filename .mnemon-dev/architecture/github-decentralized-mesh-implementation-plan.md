@@ -107,6 +107,19 @@ mnemon/acceptance/<run-id>/agent-b
 
 Fixed branches such as `mnemon/agent-a` through `mnemon/agent-e` are valid for manual operator smoke tests, but not the default real appserver acceptance path because historical publication entries can pollute a fresh run.
 
+Real runner lifecycle now treats join as delayed activation of preconfigured publication streams:
+
+```text
+configure 5 workspaces/remotes/branches up front
+start 3 mnemond/appservers for the first natural task round
+start the remaining 2 mnemond/appservers during the task
+publish fresh joined agent_profile events
+verify profiles converge through configured publication branches
+pause/restart one already joined local mnemond during the task
+```
+
+This is intentionally not branch discovery, P2P node discovery, or dynamic networking. The branch list and `remotes.json` remain configured bootstrap inventory; the lifecycle evidence proves delayed availability and backlog import against those configured streams.
+
 Known open evidence:
 
 - The real Codex appserver GitHub mesh suite is runnable, but still requires a GitHub token file and a usable Codex appserver environment.
@@ -817,21 +830,23 @@ Isolation requirements:
 
 Baseline 5-node Teamwork-ReAct scenario:
 
-1. Start 5 appservers/mnemond.
-2. Install generic hook/GUIDE/skill.
-3. Publish fresh `agent_profile`.
-4. Send an ordinary user message to one connected PoC agent to start the teamwork task.
-5. Verify assignment propagation.
-6. Verify nested decomposition.
-7. Verify first round outputs are published as progress digests.
-8. Verify a PoC-like agent reviews outputs and emits a second-round plan.
-9. Verify second-round reassignment or refinement is published and executed.
-10. Add 2 `mnemond` instances mid-run.
-11. Stop 1 `mnemond` mid-run.
-12. Verify reassignment through TTL/stalled cue.
-13. Verify aggregation.
-14. Verify another act can be emitted after aggregation if the result is incomplete.
-15. Verify final completion evidence.
+1. Configure 5 isolated appserver/mnemond workspaces, remotes, and run-scoped publication branches.
+2. Start the initial online subset of appservers/mnemond; the current runner uses 3 online and 2 delayed nodes for the natural task round.
+3. Install generic hook/GUIDE/skill for started appservers.
+4. Publish fresh `agent_profile` from the initial online nodes.
+5. Send an ordinary user message to one connected PoC agent to start the teamwork task.
+6. Verify assignment propagation.
+7. Verify nested decomposition.
+8. Verify first round outputs are published as progress digests.
+9. Verify a PoC-like agent reviews outputs and emits a second-round plan.
+10. Verify second-round reassignment or refinement is published and executed.
+11. Start 2 delayed `mnemond`/appserver pairs mid-run from the already configured `remotes.json`.
+12. Verify delayed nodes import backlog and publish fresh `agent_profile` events.
+13. Stop/restart 1 `mnemond` mid-run.
+14. Verify reassignment or renewed progress through governed events rather than direct scheduling.
+15. Verify aggregation.
+16. Verify another act can be emitted after aggregation if the result is incomplete.
+17. Verify final completion evidence.
 
 Natural task suite:
 
@@ -875,6 +890,8 @@ sync.published_events_by_branch
 sync.imported_events_by_mnemond
 sync.diagnostics_by_mnemond
 sync.profile_events_by_mnemond
+sync.lifecycle[].action = delayed_join_start | delayed_join_ready | pause_local_mnemond | restart_local_mnemond
+sync.lifecycle[].ledger = local ledger counts captured at lifecycle boundaries
 ```
 
 Done when:

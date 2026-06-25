@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -78,6 +79,55 @@ func TestWriteR1GitHubMeshRemotesCreatesPublishAndSubscribePlan(t *testing.T) {
 			remote.Endpoint != "" {
 			t.Fatalf("remote not a github publication stream: %+v", remote)
 		}
+	}
+}
+
+func TestSetupR1CodexGitHubMeshAgentsCanDelayLocalMnemondStart(t *testing.T) {
+	root := t.TempDir()
+	tokenFile := filepath.Join(root, "github.token")
+	if err := os.WriteFile(tokenFile, []byte("secret-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	agents, err := setupR1CodexGitHubMeshAgents(context.Background(), root, root, "mnemon-dev/mnemon-teamwork-example", tokenFile, "mnemon/agent-", 5, "", 30*time.Second, 0)
+	if err != nil {
+		t.Fatalf("setup delayed github mesh agents: %v", err)
+	}
+	if len(agents) != 5 {
+		t.Fatalf("agents = %d, want 5", len(agents))
+	}
+	if got := r1GitHubMeshLocalOnlineIndexes(agents); len(got) != 0 {
+		t.Fatalf("local online indexes = %v, want none before delayed start", got)
+	}
+	for i, agent := range agents {
+		if agent.localCancel != nil || agent.localErr != nil {
+			t.Fatalf("agent %d local mnemond should not be started", i)
+		}
+		remotesPath := filepath.Join(agent.workspace, ".mnemon", "harness", "sync", "remotes.json")
+		plan, err := exchange.LoadRemotePlan(remotesPath, "default")
+		if err != nil {
+			t.Fatalf("load delayed remote plan %d: %v", i, err)
+		}
+		if len(plan.PushTargets) != 1 || len(plan.PullSources) != 4 {
+			t.Fatalf("remote plan %d = %+v, want one publish and four subscribe streams", i, plan)
+		}
+	}
+}
+
+func TestR1GitHubMeshInitialOnlineLeavesTwoDelayedAgents(t *testing.T) {
+	if got := r1GitHubMeshInitialOnline(5); got != 3 {
+		t.Fatalf("initial online for 5 = %d, want 3", got)
+	}
+	if got := r1GitHubMeshInitialOnline(7); got != 5 {
+		t.Fatalf("initial online for 7 = %d, want 5", got)
+	}
+	agents := []r1CodexSyncAgent{
+		{localCancel: func() {}},
+		{},
+		{localCancel: func() {}},
+	}
+	got := r1GitHubMeshLocalOnlineIndexes(agents)
+	if len(got) != 2 || got[0] != 0 || got[1] != 2 {
+		t.Fatalf("local online indexes = %v, want [0 2]", got)
 	}
 }
 

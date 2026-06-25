@@ -47,6 +47,8 @@ other mnemond subscribe to those branches and validate locally.
   - per-workspace `remotes.json`
   - per-agent publication branch
   - per-agent local mnemond store path
+  - delayed join / pause / restart lifecycle entries under `sync.lifecycle`
+  - publication/import/profile summaries under `sync.published_events_by_branch`, `sync.imported_events_by_mnemond`, and `sync.profile_events_by_mnemond`
 
 当前仍需外部证据的边界:
 
@@ -1310,6 +1312,7 @@ events imported per mnemond
 diagnostics per mnemond
 assignment/progress chain
 mnemond join/leave timeline
+profile refresh/update timeline
 proof no central mnemon-hub endpoint was used
 proof no shared governed.db was used
 ```
@@ -1353,19 +1356,23 @@ Isolation requirements:
 
 Scenario:
 
-1. Start 5 appservers/mnemond.
-2. Publish fresh profiles.
-3. Send an ordinary user message to one connected PoC agent to start teamwork.
-4. Verify assignment propagation.
-5. Verify nested decomposition.
-6. Verify first-round outputs cause a second-round plan.
-7. Verify second-round reassignment/refinement is executed.
-8. Add 2 `mnemond` instances mid-run.
-9. Stop 1 `mnemond` mid-run.
-10. Verify stale/TTL cue causes governed reassignment.
-11. Verify progress aggregation.
-12. Verify another act can be emitted after aggregation.
-13. Verify completion proof uses accepted events, not GitHub issue/PR state.
+1. Configure 5 appserver/mnemond workspaces, remotes, and run-scoped publication branches.
+2. Start the initial online subset of appservers/mnemond; the current runner uses 3 online and 2 delayed nodes for the natural task round.
+3. Publish fresh profiles from the initial online nodes.
+4. Send an ordinary user message to one connected PoC agent to start teamwork.
+5. Verify assignment propagation.
+6. Verify nested decomposition.
+7. Verify first-round outputs cause a second-round plan.
+8. Verify second-round reassignment/refinement is executed.
+9. Start 2 delayed `mnemond`/appserver pairs mid-run from the already configured `remotes.json`.
+10. Verify delayed nodes import backlog and publish fresh `agent_profile` events.
+11. Stop/restart 1 `mnemond` mid-run.
+12. Verify stale/TTL cue or renewed progress is expressed through governed events.
+13. Verify progress aggregation.
+14. Verify another act can be emitted after aggregation.
+15. Verify completion proof uses accepted events, not GitHub issue/PR state.
+
+The delayed join step is not discovery. It proves that preconfigured publication streams can become available later, import backlog through the normal pull/import path, and then participate by publishing fresh accepted events.
 
 Additional natural task scenarios should cover:
 

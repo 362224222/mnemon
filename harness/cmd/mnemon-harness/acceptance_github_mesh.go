@@ -189,8 +189,13 @@ func runR1GitHubMeshAcceptance(ctx context.Context, opts r1GitHubMeshAcceptanceO
 	report.Artifacts["github_token_file"] = tokenFile
 	report.Artifacts["github_branch_prefix"] = branchPrefix
 	report.Artifacts["github_sync_interval"] = opts.SyncInterval.String()
+	initialOnline := opts.Agents
+	if opts.AgentTurns {
+		initialOnline = r1GitHubMeshInitialOnline(opts.Agents)
+	}
+	report.Artifacts["github_initial_online_agents"] = fmt.Sprintf("%d", initialOnline)
 
-	agents, err := setupR1CodexGitHubMeshAgents(ctx, runRoot, binDir, opts.Repo, tokenFile, branchPrefix, opts.Agents, sourceCodexHome, opts.SyncInterval)
+	agents, err := setupR1CodexGitHubMeshAgents(ctx, runRoot, binDir, opts.Repo, tokenFile, branchPrefix, opts.Agents, sourceCodexHome, opts.SyncInterval, initialOnline)
 	if err != nil {
 		addR1Error(&report, err)
 		report.Status = "blocked"
@@ -218,7 +223,7 @@ func runR1GitHubMeshAcceptance(ctx context.Context, opts r1GitHubMeshAcceptanceO
 		report.Status = "failed"
 		return report, fmt.Errorf("GitHub mesh task-suite acceptance requires --agent-turns")
 	}
-	for i := range agents {
+	for _, i := range r1GitHubMeshLocalOnlineIndexes(agents) {
 		if err := startR1CodexAppserver(&agents[i].r1CodexAgent, opts.Command); err != nil {
 			addR1Error(&report, err)
 			report.Status = "blocked"
@@ -236,17 +241,15 @@ func runR1GitHubMeshAcceptance(ctx context.Context, opts r1GitHubMeshAcceptanceO
 			report.Raw[agents[i].principal+":hooks"] = raw
 		}
 	}
-	addR1Assertion(&report, "github-mesh 5/5 appservers start/init", len(report.Agents) == opts.Agents, fmt.Sprintf("started=%d requested=%d", len(report.Agents), opts.Agents))
-	if err := exerciseR1GitHubMeshLifecycle(ctx, &report, agents, opts.SyncInterval); err != nil {
-		addR1Error(&report, err)
-	}
+	addR1Assertion(&report, "github-mesh initial appservers start/init", len(report.Agents) == initialOnline, fmt.Sprintf("started=%d initial_online=%d requested=%d", len(report.Agents), initialOnline, opts.Agents))
 
 	run := r1GitHubMeshRun{
-		ctx:    ctx,
-		opts:   opts,
-		report: &report,
-		agents: agents,
-		runID:  started.Format("150405"),
+		ctx:           ctx,
+		opts:          opts,
+		report:        &report,
+		agents:        agents,
+		runID:         started.Format("150405"),
+		initialOnline: initialOnline,
 	}
 	if err := run.bootstrapProfiles(); err != nil {
 		addR1Error(&report, err)
@@ -256,6 +259,9 @@ func runR1GitHubMeshAcceptance(ctx context.Context, opts r1GitHubMeshAcceptanceO
 			addR1Error(&report, err)
 		}
 	}
+	addR1Assertion(&report, "github-mesh 5/5 appservers start/init", len(report.Agents) == opts.Agents, fmt.Sprintf("started=%d requested=%d", len(report.Agents), opts.Agents))
+	addR1Assertion(&report, "github-mesh delayed mnemond join exercised", run.joined || initialOnline == opts.Agents, fmt.Sprintf("initial_online=%d total=%d lifecycle=%v", initialOnline, opts.Agents, syncReport.Lifecycle))
+	addR1Assertion(&report, "github-mesh local mnemond leave/restart exercised", run.lifecycleExercised, fmt.Sprintf("lifecycle=%v", syncReport.Lifecycle))
 	run.addPostScenarioAssertions()
 	obs, obsErr := observeAcceptanceRun(runRoot, 1000)
 	if obsErr == nil {
@@ -283,11 +289,14 @@ func runR1GitHubMeshAcceptance(ctx context.Context, opts r1GitHubMeshAcceptanceO
 }
 
 type r1GitHubMeshRun struct {
-	ctx    context.Context
-	opts   r1GitHubMeshAcceptanceOptions
-	report *r1CodexAcceptanceReport
-	agents []r1CodexSyncAgent
-	runID  string
+	ctx                context.Context
+	opts               r1GitHubMeshAcceptanceOptions
+	report             *r1CodexAcceptanceReport
+	agents             []r1CodexSyncAgent
+	runID              string
+	initialOnline      int
+	joined             bool
+	lifecycleExercised bool
 }
 
 func r1GitHubMeshScenarioNames(selected []string) []string {
@@ -325,9 +334,13 @@ func allR1GitHubMeshScenariosOK(scenarios []r1TaskSimScenarioReport, selected []
 	return true
 }
 
-func (s r1GitHubMeshRun) bootstrapProfiles() error {
+func (s *r1GitHubMeshRun) bootstrapProfiles() error {
 	profileCounts := map[string]int{}
-	for i := range s.agents {
+	active := r1GitHubMeshReadyAgentIndexes(s.agents)
+	if len(active) == 0 {
+		return fmt.Errorf("github mesh profile bootstrap requires at least one online agent")
+	}
+	for _, i := range active {
 		agent := &s.agents[i]
 		payload := taskSimJSON(map[string]any{
 			"actor":              agent.principal,
@@ -353,21 +366,22 @@ After the command succeeds, answer "profile written".`, s.runID, prodSafeID(agen
 		profileCounts[agent.principal] = countR1Ledger(agent.localURL, agent.r1CodexAgent)["agent_profile"]
 	}
 	allVisible := true
-	for i := range s.agents {
+	for _, i := range active {
 		agent := s.agents[i]
-		waitForLedgerCount(agent.localURL, agent.r1CodexAgent, "agent_profile", len(s.agents), 120*time.Second)
+		waitForLedgerCount(agent.localURL, agent.r1CodexAgent, "agent_profile", len(active), 120*time.Second)
 		counts := countR1Ledger(agent.localURL, agent.r1CodexAgent)
 		profileCounts[agent.principal] = counts["agent_profile"]
-		if counts["agent_profile"] < len(s.agents) {
+		if counts["agent_profile"] < len(active) {
 			allVisible = false
 		}
 	}
-	addR1Assertion(s.report, "github-mesh profiles converge through publication branches", allVisible, fmt.Sprintf("agents=%d", len(s.agents)))
+	addR1Assertion(s.report, "github-mesh initial profiles converge through publication branches", allVisible, fmt.Sprintf("initial_online_agents=%d", len(active)))
 	s.report.Scenarios = append(s.report.Scenarios, r1TaskSimScenarioReport{
 		Name:   "bootstrap_profiles",
 		Status: statusFromBool(allVisible),
 		Evidence: map[string]any{
 			"profile_counts_by_agent": profileCounts,
+			"initial_online_agents":   len(active),
 			"publication_branches":    s.report.Sync.PublicationBranches,
 		},
 	})
@@ -377,7 +391,7 @@ After the command succeeds, answer "profile written".`, s.runID, prodSafeID(agen
 	return nil
 }
 
-func (s r1GitHubMeshRun) runScenario(name string) error {
+func (s *r1GitHubMeshRun) runScenario(name string) error {
 	entries, err := s.scenarioEntries(name)
 	if err != nil {
 		s.report.Scenarios = append(s.report.Scenarios, r1TaskSimScenarioReport{Name: name, Status: "blocked", Evidence: map[string]any{"error": err.Error()}})
@@ -467,16 +481,20 @@ func (s r1GitHubMeshRun) runScenario(name string) error {
 	return nil
 }
 
-func (s r1GitHubMeshRun) addPostScenarioAssertions() {
+func (s *r1GitHubMeshRun) addPostScenarioAssertions() {
 	profileCounts := r1GitHubMeshLedgerCountsByAgent(s.agents, "agent_profile")
+	baseline := len(s.agents)
+	if s.initialOnline > 0 && s.initialOnline < len(s.agents) {
+		baseline = s.initialOnline
+	}
 	refreshed := false
 	for _, count := range profileCounts {
-		if count > len(s.agents) {
+		if count > baseline {
 			refreshed = true
 			break
 		}
 	}
-	addR1Assertion(s.report, "github-mesh profiles refresh during work", refreshed, fmt.Sprintf("agent_profile_counts=%v initial_agents=%d", profileCounts, len(s.agents)))
+	addR1Assertion(s.report, "github-mesh profiles refresh during work", refreshed, fmt.Sprintf("agent_profile_counts=%v initial_online_agents=%d total_agents=%d", profileCounts, baseline, len(s.agents)))
 	if s.report.Sync != nil {
 		if s.report.Raw == nil {
 			s.report.Raw = map[string]json.RawMessage{}
@@ -491,7 +509,7 @@ type r1GitHubMeshScenarioEntry struct {
 	prompt string
 }
 
-func (s r1GitHubMeshRun) scenarioEntries(name string) ([]r1GitHubMeshScenarioEntry, error) {
+func (s *r1GitHubMeshRun) scenarioEntries(name string) ([]r1GitHubMeshScenarioEntry, error) {
 	if len(s.agents) < 5 {
 		return nil, fmt.Errorf("github mesh natural scenarios require five agents")
 	}
@@ -510,14 +528,14 @@ func (s r1GitHubMeshRun) scenarioEntries(name string) ([]r1GitHubMeshScenarioEnt
 	}
 }
 
-func (s r1GitHubMeshRun) wakeWorkers(name string, entries []r1GitHubMeshScenarioEntry) error {
+func (s *r1GitHubMeshRun) wakeWorkers(name string, entries []r1GitHubMeshScenarioEntry) error {
 	entry := map[int]bool{}
 	for _, item := range entries {
 		entry[item.index] = true
 	}
 	for cycle := 1; cycle <= 3; cycle++ {
 		for i := range s.agents {
-			if entry[i] {
+			if entry[i] || !r1GitHubMeshAgentReady(s.agents[i]) {
 				continue
 			}
 			agent := &s.agents[i]
@@ -530,7 +548,137 @@ func (s r1GitHubMeshRun) wakeWorkers(name string, entries []r1GitHubMeshScenario
 			}
 		}
 		waitR1ClusterAcceptedEventSettle(s.report.RunRoot, 8*time.Second, 1*time.Second)
+		if cycle == 1 {
+			if err := s.joinDelayedAgents(name); err != nil {
+				return err
+			}
+		}
+		if cycle == 2 && !s.lifecycleExercised {
+			if err := exerciseR1GitHubMeshLifecycle(s.ctx, s.report, s.agents, s.opts.SyncInterval); err != nil {
+				return err
+			}
+			s.lifecycleExercised = true
+		}
 	}
+	return nil
+}
+
+func (s *r1GitHubMeshRun) joinDelayedAgents(scenario string) error {
+	if s.joined {
+		return nil
+	}
+	var joined []string
+	profileCounts := map[string]int{}
+	for i := range s.agents {
+		if r1GitHubMeshAgentReady(s.agents[i]) {
+			continue
+		}
+		agent := &s.agents[i]
+		branch := ""
+		if s.report.Sync != nil {
+			branch = s.report.Sync.BranchByAgent[agent.principal]
+			s.report.Sync.Lifecycle = append(s.report.Sync.Lifecycle, r1SyncLifecycleReport{
+				At:        time.Now().UTC().Format(time.RFC3339),
+				Principal: agent.principal,
+				Action:    "delayed_join_start",
+				Result:    "requested",
+				Branch:    branch,
+				Detail:    "start a preconfigured isolated Local Mnemon during the natural GitHub mesh task",
+			})
+		}
+		if err := startR1GitHubMeshLocalMnemond(s.ctx, agent, s.opts.SyncInterval); err != nil {
+			addR1Assertion(s.report, "github-mesh delayed mnemond join "+agent.principal, false, err.Error())
+			return err
+		}
+		if err := startR1CodexAppserver(&agent.r1CodexAgent, s.opts.Command); err != nil {
+			addR1Assertion(s.report, "github-mesh delayed appserver join "+agent.principal, false, err.Error())
+			return err
+		}
+		agentReport, raw, err := initializeR1CodexAgent(&agent.r1CodexAgent, s.opts.TurnTimeout)
+		if err != nil {
+			addR1Assertion(s.report, "github-mesh delayed appserver join "+agent.principal, false, err.Error())
+			return err
+		}
+		s.report.Agents = append(s.report.Agents, agentReport)
+		if s.report.Sync != nil {
+			s.report.Sync.Agents = append(s.report.Sync.Agents, agentReport)
+		}
+		if raw != nil {
+			s.report.Raw[agent.principal+":hooks"] = raw
+		}
+		if err := s.emitJoinedProfile(agent, scenario); err != nil {
+			return err
+		}
+		counts := countR1Ledger(agent.localURL, agent.r1CodexAgent)
+		profileCounts[agent.principal] = counts["agent_profile"]
+		joined = append(joined, agent.principal)
+		if s.report.Sync != nil {
+			s.report.Sync.Lifecycle = append(s.report.Sync.Lifecycle, r1SyncLifecycleReport{
+				At:        time.Now().UTC().Format(time.RFC3339),
+				Principal: agent.principal,
+				Action:    "delayed_join_ready",
+				Result:    "ready",
+				Branch:    branch,
+				Detail:    "joined configured publication mesh, initialized appserver, and published fresh profile",
+				Ledger:    counts,
+			})
+		}
+	}
+	s.joined = true
+	if len(joined) == 0 {
+		return nil
+	}
+	allVisible := true
+	for _, i := range r1GitHubMeshReadyAgentIndexes(s.agents) {
+		agent := s.agents[i]
+		waitForLedgerCount(agent.localURL, agent.r1CodexAgent, "agent_profile", len(s.agents), 120*time.Second)
+		counts := countR1Ledger(agent.localURL, agent.r1CodexAgent)
+		profileCounts[agent.principal] = counts["agent_profile"]
+		if counts["agent_profile"] < len(s.agents) {
+			allVisible = false
+		}
+	}
+	passed := len(joined) >= 2 && allVisible
+	addR1Assertion(s.report, "github-mesh two delayed mnemond join and import backlog", passed, fmt.Sprintf("joined=%v profile_counts=%v", joined, profileCounts))
+	s.report.Scenarios = append(s.report.Scenarios, r1TaskSimScenarioReport{
+		Name:   "delayed_join_profiles",
+		Status: statusFromBool(passed),
+		Actors: joined,
+		Evidence: map[string]any{
+			"scenario":                scenario,
+			"joined_agents":           joined,
+			"profile_counts_by_agent": profileCounts,
+			"publication_branches":    s.report.Sync.PublicationBranches,
+		},
+	})
+	if !passed {
+		return fmt.Errorf("delayed GitHub mesh join did not converge profiles through publication branches")
+	}
+	return nil
+}
+
+func (s *r1GitHubMeshRun) emitJoinedProfile(agent *r1CodexSyncAgent, scenario string) error {
+	payload := taskSimJSON(map[string]any{
+		"actor":              agent.principal,
+		"focus":              fmt.Sprintf("Joined GitHub mesh task %s with fresh local context", scenario),
+		"context_advantages": []string{"late join backlog import", "github publication branch sync", "isolated local mnemond"},
+		"availability":       "available",
+		"ttl":                "30m",
+		"summary":            fmt.Sprintf("%s joined during %s and can pick up governed work from imported context.", agent.principal, scenario),
+	})
+	prompt := fmt.Sprintf(`Emit exactly one agent_profile.write_candidate.observed event through your own Local Mnemon.
+Use external id github-mesh-join-profile-%s-%s and payload:
+%s
+After the command succeeds, answer "joined profile written".`, s.runID, prodSafeID(agent.principal), payload)
+	recordR1ClusterPrompt(s.report.RunnerContract, agent.principal, "delayed_join_profile:"+scenario, prompt)
+	s.report.RunnerContract.ProfileBootstrapPrompts++
+	answer, err := runR1Turn(&agent.r1CodexAgent, prompt, s.opts.TurnTimeout)
+	appendSyncAgentAnswer(s.report.Sync, agent.principal, answer)
+	if err != nil {
+		addR1Assertion(s.report, "github-mesh delayed profile emitted "+agent.principal, false, err.Error())
+		return err
+	}
+	waitForLedgerCount(agent.localURL, agent.r1CodexAgent, "agent_profile", 1, 20*time.Second)
 	return nil
 }
 
@@ -592,9 +740,12 @@ func r1GitHubMeshThreadIDs(agents []r1CodexSyncAgent) map[string]string {
 	return out
 }
 
-func setupR1CodexGitHubMeshAgents(ctx context.Context, runRoot, binDir, repo, tokenFile, branchPrefix string, count int, sourceCodexHome string, syncInterval time.Duration) ([]r1CodexSyncAgent, error) {
+func setupR1CodexGitHubMeshAgents(ctx context.Context, runRoot, binDir, repo, tokenFile, branchPrefix string, count int, sourceCodexHome string, syncInterval time.Duration, initialOnline int) ([]r1CodexSyncAgent, error) {
 	if syncInterval <= 0 {
 		syncInterval = 30 * time.Second
+	}
+	if initialOnline < 0 || initialOnline > count {
+		initialOnline = count
 	}
 	var agents []r1CodexSyncAgent
 	branches := r1GitHubMeshBranches(branchPrefix, count)
@@ -636,14 +787,6 @@ func setupR1CodexGitHubMeshAgents(ctx context.Context, runRoot, binDir, repo, to
 		if err != nil {
 			return nil, err
 		}
-		localCtx, cancel := context.WithCancel(ctx)
-		localErr := make(chan error, 1)
-		go func(workspace, addr string, loaded access.LoadedBindings) {
-			localErr <- app.RunLocalHTTPServerWithBindings(localCtx, addr, filepath.Join(workspace, runtime.DefaultStorePath), loaded, app.ServeOptions{
-				ProjectRoot:  workspace,
-				SyncInterval: syncInterval,
-			}, io.Discard)
-		}(workspace, localAddr, loaded)
 		agent := r1CodexSyncAgent{
 			r1CodexAgent: r1CodexAgent{
 				principal: principal,
@@ -656,12 +799,11 @@ func setupR1CodexGitHubMeshAgents(ctx context.Context, runRoot, binDir, repo, to
 			replicaPrincipal: principal,
 			replicaToken:     tokenFile,
 			renderAuditPath:  filepath.Join(workspace, ".mnemon", "harness", "local", "render-audit.jsonl"),
-			localCancel:      cancel,
-			localErr:         localErr,
 		}
-		if err := waitR1LocalReady(ctx, agent.r1CodexAgent, localURL, 10*time.Second); err != nil {
-			cancel()
-			return nil, err
+		if i <= initialOnline {
+			if err := startR1GitHubMeshLocalMnemond(ctx, &agent, syncInterval); err != nil {
+				return nil, err
+			}
 		}
 		agents = append(agents, agent)
 	}
@@ -675,7 +817,7 @@ func exerciseR1GitHubMeshLifecycle(ctx context.Context, report *r1CodexAcceptanc
 	if syncInterval <= 0 {
 		syncInterval = 30 * time.Second
 	}
-	target := &agents[3]
+	target := &agents[2]
 	branch := report.Sync.BranchByAgent[target.principal]
 	report.Sync.Lifecycle = append(report.Sync.Lifecycle, r1SyncLifecycleReport{
 		At:        time.Now().UTC().Format(time.RFC3339),
@@ -698,27 +840,13 @@ func exerciseR1GitHubMeshLifecycle(ctx context.Context, report *r1CodexAcceptanc
 			return fmt.Errorf("%s local mnemond did not stop within timeout", target.principal)
 		}
 	}
-	loaded, err := access.LoadBindingFile(target.workspace, filepath.Join(target.workspace, access.DefaultBindingFile))
-	if err != nil {
-		addR1Assertion(report, "github-mesh local mnemond restart loads bindings", false, err.Error())
-		return err
-	}
-	addr := strings.TrimPrefix(target.localURL, "http://")
-	localCtx, cancel := context.WithCancel(ctx)
-	localErr := make(chan error, 1)
-	go func(workspace, addr string, loaded access.LoadedBindings) {
-		localErr <- app.RunLocalHTTPServerWithBindings(localCtx, addr, filepath.Join(workspace, runtime.DefaultStorePath), loaded, app.ServeOptions{
-			ProjectRoot:  workspace,
-			SyncInterval: syncInterval,
-		}, io.Discard)
-	}(target.workspace, addr, loaded)
-	target.localCancel = cancel
-	target.localErr = localErr
-	if err := waitR1LocalReady(ctx, target.r1CodexAgent, target.localURL, 10*time.Second); err != nil {
-		cancel()
+	target.localCancel = nil
+	target.localErr = nil
+	if err := startR1GitHubMeshLocalMnemond(ctx, target, syncInterval); err != nil {
 		addR1Assertion(report, "github-mesh local mnemond pause/restart exercised", false, err.Error())
 		return err
 	}
+	counts := countR1Ledger(target.localURL, target.r1CodexAgent)
 	report.Sync.Lifecycle = append(report.Sync.Lifecycle, r1SyncLifecycleReport{
 		At:        time.Now().UTC().Format(time.RFC3339),
 		Principal: target.principal,
@@ -726,9 +854,81 @@ func exerciseR1GitHubMeshLifecycle(ctx context.Context, report *r1CodexAcceptanc
 		Result:    "ready",
 		Branch:    branch,
 		Detail:    "restarted the same isolated Local Mnemon store/workspace and configured GitHub publication branch",
+		Ledger:    counts,
 	})
 	addR1Assertion(report, "github-mesh local mnemond pause/restart exercised", true, fmt.Sprintf("principal=%s branch=%s", target.principal, branch))
 	return nil
+}
+
+func startR1GitHubMeshLocalMnemond(ctx context.Context, agent *r1CodexSyncAgent, syncInterval time.Duration) error {
+	if agent == nil {
+		return fmt.Errorf("nil GitHub mesh agent")
+	}
+	if agent.localCancel != nil {
+		return nil
+	}
+	if syncInterval <= 0 {
+		syncInterval = 30 * time.Second
+	}
+	loaded, err := access.LoadBindingFile(agent.workspace, filepath.Join(agent.workspace, access.DefaultBindingFile))
+	if err != nil {
+		return err
+	}
+	addr := strings.TrimPrefix(agent.localURL, "http://")
+	if strings.TrimSpace(addr) == "" {
+		return fmt.Errorf("%s has no local URL", agent.principal)
+	}
+	localCtx, cancel := context.WithCancel(ctx)
+	localErr := make(chan error, 1)
+	go func(workspace, addr string, loaded access.LoadedBindings) {
+		localErr <- app.RunLocalHTTPServerWithBindings(localCtx, addr, filepath.Join(workspace, runtime.DefaultStorePath), loaded, app.ServeOptions{
+			ProjectRoot:  workspace,
+			SyncInterval: syncInterval,
+		}, io.Discard)
+	}(agent.workspace, addr, loaded)
+	agent.localCancel = cancel
+	agent.localErr = localErr
+	if err := waitR1LocalReady(ctx, agent.r1CodexAgent, agent.localURL, 10*time.Second); err != nil {
+		cancel()
+		agent.localCancel = nil
+		agent.localErr = nil
+		return err
+	}
+	return nil
+}
+
+func r1GitHubMeshInitialOnline(count int) int {
+	if count <= 2 {
+		return count
+	}
+	if count <= 5 {
+		return count - 2
+	}
+	return count - 2
+}
+
+func r1GitHubMeshAgentReady(agent r1CodexSyncAgent) bool {
+	return agent.localCancel != nil && agent.server != nil && strings.TrimSpace(agent.threadID) != ""
+}
+
+func r1GitHubMeshLocalOnlineIndexes(agents []r1CodexSyncAgent) []int {
+	out := []int{}
+	for i, agent := range agents {
+		if agent.localCancel != nil {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+func r1GitHubMeshReadyAgentIndexes(agents []r1CodexSyncAgent) []int {
+	out := []int{}
+	for i, agent := range agents {
+		if r1GitHubMeshAgentReady(agent) {
+			out = append(out, i)
+		}
+	}
+	return out
 }
 
 func writeR1GitHubMeshRemotes(workspace, repo, tokenFile string, branches []string, self int) error {
