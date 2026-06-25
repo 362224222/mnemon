@@ -77,6 +77,7 @@ Current branch progress:
 - Real GitHub `PublicationStore` adapter exists.
 - GitHub Remote Workspace normalizes opaque GitHub branch-head cursors before writing local mnemond pull state.
 - Gated live publish/pull/import test exists and is skipped unless live credentials are provided.
+- Gated live publish/pull/import passed against `mnemon-dev/mnemon-teamwork-example` on 2026-06-26 after initializing default publication branches `mnemon/agent-a` through `mnemon/agent-e`.
 - Deterministic local GitHub mesh tests cover:
   - five isolated mnemond runtimes;
   - one branch per mnemond;
@@ -97,9 +98,8 @@ mnemon-harness acceptance r1-github-mesh-task-suite \
 
 Known open evidence:
 
-- The live GitHub case has not been executed in this workspace because `MNEMON_GITHUB_LIVE`, `GITHUB_TOKEN`, and `MNEMON_GITHUB_TOKEN_FILE` are absent.
 - The real Codex appserver GitHub mesh suite is runnable, but still requires a GitHub token file and a usable Codex appserver environment.
-- Until the live GitHub and real appserver runs pass, this goal is not closed.
+- Until the real appserver run passes, this goal is not closed.
 
 ## 2. Non-goals and invariants
 

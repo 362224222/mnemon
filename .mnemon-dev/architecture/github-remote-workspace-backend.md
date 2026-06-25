@@ -50,9 +50,9 @@ other mnemond subscribe to those branches and validate locally.
 
 当前仍需外部证据的边界:
 
-- gated live GitHub publish/pull/import 需要 token 后实际运行。
+- gated live GitHub publish/pull/import 已在 2026-06-26 通过真实 GitHub 访问验证;验证仓库缺失默认 publication branches 时先失败,随后初始化 `mnemon/agent-a` 到 `mnemon/agent-e` 后通过。
 - real Codex appserver GitHub mesh suite 需要 token + Codex appserver 环境后实际运行。
-- 在这些验收通过前,不能把 GitHub mesh 目标标记为 complete。
+- 在 real Codex appserver GitHub mesh suite 通过前,不能把 GitHub mesh 目标标记为 complete。
 
 ## 1. 非目标与红线
 
