@@ -14,10 +14,17 @@ import (
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/state"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemonhub"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
+
+const noteImportablePackageSpec = `{"schema_version":1,"name":"note","observed_type":"note.write_candidate.observed",
+"proposed_type":"note.write.proposed","resource_kind":"note","items_field":"items",
+"fields":[{"name":"text","validators":[{"id":"required","params":{"missing_style":"empty"}},{"id":"safety:unsafe"}]}],
+"render":{"content":{"member":"bullet-list","params":{"title":"# Notes","field":"text"}}},
+"sync":{"importable":true,"merge":"item-dedup"}}`
 
 // openServingRuntime boots the PRODUCT serving runtime (OpenLocalRuntime = assembled host policy +
 // merged sync-import policy) over a standard event host binding — the exact runtime the worker
@@ -103,6 +110,22 @@ func foreignProgressMaterial(decisionID, itemID, summary string) contract.Synced
 	return contract.SyncedEventMaterial{
 		OriginReplicaID: "other-replica", LocalDecisionID: decisionID, LocalIngestSeq: 7,
 		Actor: "codex@other", ResourceRef: contract.ResourceRef{Kind: "progress_digest", ID: "project"},
+		ResourceVersion: 1, FieldsDigest: workerDigest(fields), Fields: fields,
+		DecidedAt: "2026-06-12T00:00:00Z", Status: "pending",
+	}
+}
+
+func foreignNoteMaterial(decisionID, itemID, text string) contract.SyncedEventMaterial {
+	fields := map[string]any{
+		"content": "# Notes\n- " + text,
+		"items": []any{map[string]any{
+			"id": itemID, "text": text,
+			"actor": "codex@other", "ingest_seq": float64(8),
+		}},
+	}
+	return contract.SyncedEventMaterial{
+		OriginReplicaID: "other-replica", LocalDecisionID: decisionID, LocalIngestSeq: 8,
+		Actor: "codex@other", ResourceRef: contract.ResourceRef{Kind: "note", ID: "project"},
 		ResourceVersion: 1, FieldsDigest: workerDigest(fields), Fields: fields,
 		DecidedAt: "2026-06-12T00:00:00Z", Status: "pending",
 	}
@@ -258,5 +281,38 @@ func TestServingRuntimeMergesSyncImportWithoutDisturbingHostFlow(t *testing.T) {
 	content, _ = fields["content"].(string)
 	if !strings.Contains(content, "host flow still works after import") {
 		t.Fatalf("host flow must keep working after an import:\n%s", content)
+	}
+}
+
+func TestServingRuntimeImportsExternalKindWithoutLocalLoopEnabled(t *testing.T) {
+	root := t.TempDir()
+	writeExternalGoalPackage(t, root, "note", noteImportablePackageSpec)
+	catalog, err := policy.ResolveRegistry(root, state.DefaultSchemaGuard().Required)
+	if err != nil {
+		t.Fatalf("resolve catalog: %v", err)
+	}
+	progressRef := contract.ResourceRef{Kind: "progress_digest", ID: "project"}
+	noteRef := contract.ResourceRef{Kind: "note", ID: "project"}
+	binding := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{progressRef, noteRef})
+	binding.AllowedObservedTypes = []string{"progress_digest.write_candidate.observed"}
+	rt, err := OpenLocalRuntime(filepath.Join(root, runtime.DefaultStorePath),
+		access.LoadedBindings{Bindings: []access.ChannelBinding{binding}},
+		[]string{"progress_digest"}, catalog)
+	if err != nil {
+		t.Fatalf("open serving runtime: %v", err)
+	}
+	defer rt.Close()
+
+	if err := importPulledEvents(rt, "hub", testSyncedEvents(t,
+		foreignNoteMaterial("dec-note", "remote-note", "external note import works"),
+	), catalog); err != nil {
+		t.Fatalf("in-process external import: %v", err)
+	}
+	_, fields, err := rt.Resource(noteRef)
+	if err != nil {
+		t.Fatalf("read note: %v", err)
+	}
+	if content, _ := fields["content"].(string); !strings.Contains(content, "external note import works") {
+		t.Fatalf("external import missing note content:\n%s", content)
 	}
 }

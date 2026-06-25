@@ -73,7 +73,7 @@ func ClaudeWriteHook(configDir, filename string, content []byte) (string, error)
 		return "", err
 	}
 	hookPath := filepath.Join(hooksDir, filename)
-	if err := os.WriteFile(hookPath, content, 0755); err != nil {
+	if err := writeExecutableFile(hookPath, content); err != nil {
 		return "", err
 	}
 	return hookPath, nil

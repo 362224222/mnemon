@@ -96,27 +96,33 @@ type r1CodexAcceptanceOptions struct {
 }
 
 type r1CodexAcceptanceReport struct {
-	SchemaVersion     int                         `json:"schema_version"`
-	Status            string                      `json:"status"`
-	StartedAt         string                      `json:"started_at"`
-	FinishedAt        string                      `json:"finished_at"`
-	RunRoot           string                      `json:"run_root"`
-	ReportPath        string                      `json:"report_path"`
-	Topology          *r1AcceptanceTopologyReport `json:"topology,omitempty"`
-	LocalAddr         string                      `json:"local_addr"`
-	AgentTurns        bool                        `json:"agent_turns"`
-	Starter           string                      `json:"starter,omitempty"`
-	Assignee          string                      `json:"assignee,omitempty"`
-	Agents            []r1CodexAgentReport        `json:"agents"`
-	Sync              *r1CodexSyncReport          `json:"sync,omitempty"`
-	Scenarios         []r1TaskSimScenarioReport   `json:"scenarios,omitempty"`
-	LedgerCounts      map[string]int              `json:"ledger_counts,omitempty"`
-	DerivedEventAudit map[string]int              `json:"derived_event_audit,omitempty"`
-	Observability     *acceptanceObserveReport    `json:"observability,omitempty"`
-	Assertions        []r1AcceptanceAssertion     `json:"assertions"`
-	Errors            []string                    `json:"errors,omitempty"`
-	Artifacts         map[string]string           `json:"artifacts,omitempty"`
-	Raw               map[string]json.RawMessage  `json:"raw,omitempty"`
+	SchemaVersion     int                          `json:"schema_version"`
+	Status            string                       `json:"status"`
+	StartedAt         string                       `json:"started_at"`
+	FinishedAt        string                       `json:"finished_at"`
+	RunRoot           string                       `json:"run_root"`
+	ReportPath        string                       `json:"report_path"`
+	Scenario          string                       `json:"scenario,omitempty"`
+	Seed              int64                        `json:"seed,omitempty"`
+	Topology          *r1AcceptanceTopologyReport  `json:"topology,omitempty"`
+	LocalAddr         string                       `json:"local_addr"`
+	AgentTurns        bool                         `json:"agent_turns"`
+	Starter           string                       `json:"starter,omitempty"`
+	Entrypoint        string                       `json:"entrypoint,omitempty"`
+	Assignee          string                       `json:"assignee,omitempty"`
+	Agents            []r1CodexAgentReport         `json:"agents"`
+	Sync              *r1CodexSyncReport           `json:"sync,omitempty"`
+	Scenarios         []r1TaskSimScenarioReport    `json:"scenarios,omitempty"`
+	RunnerContract    *r1RunnerContractReport      `json:"runner_contract,omitempty"`
+	Participants      []r1ClusterParticipantReport `json:"participants,omitempty"`
+	Findings          []r1ClusterFindingReport     `json:"findings,omitempty"`
+	LedgerCounts      map[string]int               `json:"ledger_counts,omitempty"`
+	DerivedEventAudit map[string]int               `json:"derived_event_audit,omitempty"`
+	Observability     *acceptanceObserveReport     `json:"observability,omitempty"`
+	Assertions        []r1AcceptanceAssertion      `json:"assertions"`
+	Errors            []string                     `json:"errors,omitempty"`
+	Artifacts         map[string]string            `json:"artifacts,omitempty"`
+	Raw               map[string]json.RawMessage   `json:"raw,omitempty"`
 }
 
 type r1AcceptanceTopologyReport struct {
@@ -438,7 +444,7 @@ func setupR1CodexAgents(runRoot, binDir, controlURL string, count int, sourceCod
 			workspace: workspace,
 			codexHome: codexHome,
 			token:     token,
-			env:       acceptanceEnv(binDir, codexHome),
+			env:       acceptanceEnv(binDir, codexHome, runRoot),
 		})
 	}
 	return agents, loaded, nil
@@ -508,10 +514,21 @@ func copyRegularFile(src, dst string, mode os.FileMode) error {
 	return out.Close()
 }
 
-func acceptanceEnv(binDir, codexHome string) []string {
+func acceptanceEnv(binDir, codexHome string, gitCeilingDirs ...string) []string {
 	env := os.Environ()
 	env = setEnv(env, "CODEX_HOME", codexHome)
 	env = setEnv(env, "PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if len(gitCeilingDirs) > 0 {
+		var dirs []string
+		for _, dir := range gitCeilingDirs {
+			if dir != "" {
+				dirs = append(dirs, dir)
+			}
+		}
+		if len(dirs) > 0 {
+			env = setEnv(env, "GIT_CEILING_DIRECTORIES", strings.Join(dirs, string(os.PathListSeparator)))
+		}
+	}
 	return env
 }
 
@@ -933,6 +950,7 @@ func startR1SyncHub(runRoot string, count int) (r1SyncHub, error) {
 	}
 	scopes := []contract.ResourceRef{
 		{Kind: "agent_profile", ID: "project"},
+		{Kind: "project_intent", ID: "project"},
 		{Kind: "teamwork_signal", ID: "project"},
 		{Kind: "assignment", ID: "project"},
 		{Kind: "progress_digest", ID: "project"},
@@ -1020,6 +1038,7 @@ func r1SyncEventSubjectsOnlyAccepted(labels []string) bool {
 		"agent_profile:project":   true,
 		"assignment:project":      true,
 		"progress_digest:project": true,
+		"project_intent:project":  true,
 		"teamwork_signal:project": true,
 	}
 	for _, label := range labels {
@@ -1087,7 +1106,7 @@ func setupR1CodexSyncAgents(ctx context.Context, runRoot, binDir string, hub r1S
 				workspace: workspace,
 				codexHome: codexHome,
 				token:     token,
-				env:       acceptanceEnv(binDir, codexHome),
+				env:       acceptanceEnv(binDir, codexHome, runRoot),
 			},
 			localURL:         localURL,
 			replicaPrincipal: hub.Principals[i-1],
@@ -1206,6 +1225,7 @@ func waitForLedgerCount(controlURL string, agent r1CodexAgent, kind string, want
 func countR1Ledger(controlURL string, agent r1CodexAgent) map[string]int {
 	out := map[string]int{
 		"agent_profile":      0,
+		"project_intent":     0,
 		"teamwork_signal":    0,
 		"assignment":         0,
 		"progress_digest":    0,
