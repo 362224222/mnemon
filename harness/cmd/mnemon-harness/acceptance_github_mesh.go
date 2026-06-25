@@ -25,6 +25,7 @@ var (
 	acceptanceGitHubTokenFile    string
 	acceptanceGitHubBranchPrefix string
 	acceptanceGitHubScenarios    []string
+	acceptanceGitHubSyncInterval time.Duration
 )
 
 var acceptanceR1GitHubMeshCmd = &cobra.Command{
@@ -46,6 +47,7 @@ var acceptanceR1GitHubMeshCmd = &cobra.Command{
 			TokenFile:    acceptanceGitHubTokenFile,
 			BranchPrefix: acceptanceGitHubBranchPrefix,
 			Scenarios:    acceptanceGitHubScenarios,
+			SyncInterval: acceptanceGitHubSyncInterval,
 		})
 		if report.ReportPath != "" {
 			fmt.Fprintf(cmd.OutOrStdout(), "acceptance report: %s\n", report.ReportPath)
@@ -76,6 +78,7 @@ func init() {
 	acceptanceR1GitHubMeshCmd.Flags().StringVar(&acceptanceGitHubTokenFile, "github-token-file", "", "GitHub token file for publication store access")
 	acceptanceR1GitHubMeshCmd.Flags().StringVar(&acceptanceGitHubBranchPrefix, "github-branch-prefix", "", "GitHub publication branch prefix; empty uses a run-scoped acceptance prefix")
 	acceptanceR1GitHubMeshCmd.Flags().StringArrayVar(&acceptanceGitHubScenarios, "scenario", nil, "natural scenario to run; repeatable")
+	acceptanceR1GitHubMeshCmd.Flags().DurationVar(&acceptanceGitHubSyncInterval, "sync-interval", 30*time.Second, "GitHub sync interval per local mnemond")
 	acceptanceCmd.AddCommand(acceptanceR1GitHubMeshCmd)
 }
 
@@ -85,6 +88,7 @@ type r1GitHubMeshAcceptanceOptions struct {
 	TokenFile    string
 	BranchPrefix string
 	Scenarios    []string
+	SyncInterval time.Duration
 }
 
 func runR1GitHubMeshAcceptance(ctx context.Context, opts r1GitHubMeshAcceptanceOptions) (r1CodexAcceptanceReport, error) {
@@ -105,6 +109,9 @@ func runR1GitHubMeshAcceptance(ctx context.Context, opts r1GitHubMeshAcceptanceO
 	}
 	if opts.Repo == "" {
 		opts.Repo = "mnemon-dev/mnemon-teamwork-example"
+	}
+	if opts.SyncInterval <= 0 {
+		opts.SyncInterval = 30 * time.Second
 	}
 	started := time.Now().UTC().Truncate(time.Second)
 	branchPrefix := r1GitHubMeshBranchPrefix(opts.BranchPrefix, started)
@@ -181,8 +188,9 @@ func runR1GitHubMeshAcceptance(ctx context.Context, opts r1GitHubMeshAcceptanceO
 	report.Artifacts["github_repo"] = opts.Repo
 	report.Artifacts["github_token_file"] = tokenFile
 	report.Artifacts["github_branch_prefix"] = branchPrefix
+	report.Artifacts["github_sync_interval"] = opts.SyncInterval.String()
 
-	agents, err := setupR1CodexGitHubMeshAgents(ctx, runRoot, binDir, opts.Repo, tokenFile, branchPrefix, opts.Agents, sourceCodexHome)
+	agents, err := setupR1CodexGitHubMeshAgents(ctx, runRoot, binDir, opts.Repo, tokenFile, branchPrefix, opts.Agents, sourceCodexHome, opts.SyncInterval)
 	if err != nil {
 		addR1Error(&report, err)
 		report.Status = "blocked"
@@ -229,7 +237,7 @@ func runR1GitHubMeshAcceptance(ctx context.Context, opts r1GitHubMeshAcceptanceO
 		}
 	}
 	addR1Assertion(&report, "github-mesh 5/5 appservers start/init", len(report.Agents) == opts.Agents, fmt.Sprintf("started=%d requested=%d", len(report.Agents), opts.Agents))
-	if err := exerciseR1GitHubMeshLifecycle(ctx, &report, agents); err != nil {
+	if err := exerciseR1GitHubMeshLifecycle(ctx, &report, agents, opts.SyncInterval); err != nil {
 		addR1Error(&report, err)
 	}
 
@@ -582,7 +590,10 @@ func r1GitHubMeshThreadIDs(agents []r1CodexSyncAgent) map[string]string {
 	return out
 }
 
-func setupR1CodexGitHubMeshAgents(ctx context.Context, runRoot, binDir, repo, tokenFile, branchPrefix string, count int, sourceCodexHome string) ([]r1CodexSyncAgent, error) {
+func setupR1CodexGitHubMeshAgents(ctx context.Context, runRoot, binDir, repo, tokenFile, branchPrefix string, count int, sourceCodexHome string, syncInterval time.Duration) ([]r1CodexSyncAgent, error) {
+	if syncInterval <= 0 {
+		syncInterval = 30 * time.Second
+	}
 	var agents []r1CodexSyncAgent
 	branches := r1GitHubMeshBranches(branchPrefix, count)
 	for i := 1; i <= count; i++ {
@@ -628,7 +639,7 @@ func setupR1CodexGitHubMeshAgents(ctx context.Context, runRoot, binDir, repo, to
 		go func(workspace, addr string, loaded access.LoadedBindings) {
 			localErr <- app.RunLocalHTTPServerWithBindings(localCtx, addr, filepath.Join(workspace, runtime.DefaultStorePath), loaded, app.ServeOptions{
 				ProjectRoot:  workspace,
-				SyncInterval: 100 * time.Millisecond,
+				SyncInterval: syncInterval,
 			}, io.Discard)
 		}(workspace, localAddr, loaded)
 		agent := r1CodexSyncAgent{
@@ -655,9 +666,12 @@ func setupR1CodexGitHubMeshAgents(ctx context.Context, runRoot, binDir, repo, to
 	return agents, nil
 }
 
-func exerciseR1GitHubMeshLifecycle(ctx context.Context, report *r1CodexAcceptanceReport, agents []r1CodexSyncAgent) error {
+func exerciseR1GitHubMeshLifecycle(ctx context.Context, report *r1CodexAcceptanceReport, agents []r1CodexSyncAgent, syncInterval time.Duration) error {
 	if report == nil || report.Sync == nil || len(agents) < 5 {
 		return nil
+	}
+	if syncInterval <= 0 {
+		syncInterval = 30 * time.Second
 	}
 	target := &agents[3]
 	branch := report.Sync.BranchByAgent[target.principal]
@@ -693,7 +707,7 @@ func exerciseR1GitHubMeshLifecycle(ctx context.Context, report *r1CodexAcceptanc
 	go func(workspace, addr string, loaded access.LoadedBindings) {
 		localErr <- app.RunLocalHTTPServerWithBindings(localCtx, addr, filepath.Join(workspace, runtime.DefaultStorePath), loaded, app.ServeOptions{
 			ProjectRoot:  workspace,
-			SyncInterval: 100 * time.Millisecond,
+			SyncInterval: syncInterval,
 		}, io.Discard)
 	}(target.workspace, addr, loaded)
 	target.localCancel = cancel

@@ -1349,6 +1349,7 @@ Isolation requirements:
 - cross-agent visibility only happens through publication branch pull/import.
 - default real acceptance branches are `mnemon/acceptance/<run-id>/agent-*` and are initialized from `main` before local sync starts.
 - long-lived branches such as `mnemon/agent-a` are explicit operator smoke-test inputs, not the default acceptance isolation model.
+- real GitHub acceptance uses a 30 second default sync interval per local `mnemond`; 100ms polling is reserved for fake/local tests.
 
 Scenario:
 

@@ -93,7 +93,8 @@ mnemon-harness acceptance r1-github-mesh-task-suite \
   --agents 5 \
   --agent-turns \
   --github-repo mnemon-dev/mnemon-teamwork-example \
-  --github-token-file <token-file>
+  --github-token-file <token-file> \
+  --sync-interval 30s
 ```
 
 When `--github-branch-prefix` is omitted, the runner must create run-scoped publication branches:
@@ -812,6 +813,7 @@ Isolation requirements:
 - The report must include local store paths and prove they are distinct.
 - The default branch prefix is run-scoped; the runner initializes missing branches from `main` before local sync starts.
 - Reusing long-lived branches is allowed only when explicitly requested with `--github-branch-prefix`.
+- The default real GitHub sync interval is 30 seconds per local `mnemond`; fake/local tests may use shorter intervals, but real GitHub acceptance must not use 100ms polling.
 
 Baseline 5-node Teamwork-ReAct scenario:
 
