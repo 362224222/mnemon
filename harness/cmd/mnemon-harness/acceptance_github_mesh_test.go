@@ -365,6 +365,18 @@ func TestR1GitHubMeshEntrySeedReadyUsesAssignment(t *testing.T) {
 	}
 }
 
+func TestR1GitHubMeshProfileConvergenceTimeoutScalesWithSyncInterval(t *testing.T) {
+	if got := r1GitHubMeshProfileConvergenceTimeout(30 * time.Second); got != 150*time.Second {
+		t.Fatalf("30s sync convergence timeout = %s, want 150s", got)
+	}
+	if got := r1GitHubMeshProfileConvergenceTimeout(90 * time.Second); got != 6*time.Minute {
+		t.Fatalf("90s sync convergence timeout = %s, want capped 6m", got)
+	}
+	if got := r1GitHubMeshProfileConvergenceTimeout(0); got != 120*time.Second {
+		t.Fatalf("default convergence timeout = %s, want 120s", got)
+	}
+}
+
 func TestR1GitHubMeshIntegrationAgentSkipsBusyEntrypoint(t *testing.T) {
 	agents := []r1CodexSyncAgent{
 		{r1CodexAgent: r1CodexAgent{principal: "codex-01@project", server: codexapp.New("codex", t.TempDir()), threadID: "thread-1"}, localCancel: func() {}},

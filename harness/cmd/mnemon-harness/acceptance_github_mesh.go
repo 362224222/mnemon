@@ -943,9 +943,10 @@ func (s *r1GitHubMeshRun) joinDelayedAgents(scenario string) error {
 		return nil
 	}
 	allVisible := true
+	convergeTimeout := r1GitHubMeshProfileConvergenceTimeout(s.opts.SyncInterval)
 	for _, i := range r1GitHubMeshReadyAgentIndexes(s.agents) {
 		agent := s.agents[i]
-		waitForLedgerCount(agent.localURL, agent.r1CodexAgent, "agent_profile", len(s.agents), 120*time.Second)
+		waitForLedgerCount(agent.localURL, agent.r1CodexAgent, "agent_profile", len(s.agents), convergeTimeout)
 		counts := countR1Ledger(agent.localURL, agent.r1CodexAgent)
 		profileCounts[agent.principal] = counts["agent_profile"]
 		if counts["agent_profile"] < len(s.agents) {
@@ -969,6 +970,20 @@ func (s *r1GitHubMeshRun) joinDelayedAgents(scenario string) error {
 		return fmt.Errorf("delayed GitHub mesh join did not converge profiles through publication branches")
 	}
 	return nil
+}
+
+func r1GitHubMeshProfileConvergenceTimeout(syncInterval time.Duration) time.Duration {
+	if syncInterval <= 0 {
+		return 120 * time.Second
+	}
+	timeout := syncInterval*4 + 30*time.Second
+	if timeout < 120*time.Second {
+		return 120 * time.Second
+	}
+	if timeout > 6*time.Minute {
+		return 6 * time.Minute
+	}
+	return timeout
 }
 
 func (s *r1GitHubMeshRun) emitJoinedProfile(agent *r1CodexSyncAgent, scenario string) error {
