@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemonhub/exchange"
@@ -95,5 +96,62 @@ func TestBuildR1GitHubMeshSyncReportProvesIsolationAndNoHub(t *testing.T) {
 		if storePath != want {
 			t.Fatalf("store path[%d] = %q, want %q", i, storePath, want)
 		}
+	}
+}
+
+func TestR1GitHubMeshScenarioContract(t *testing.T) {
+	names := r1GitHubMeshScenarioNames(nil)
+	want := []string{"onboarding-synthesis", "sync-risk-review", "live-readiness-operator-safety"}
+	if len(names) != len(want) {
+		t.Fatalf("default scenarios = %v, want %v", names, want)
+	}
+	for i := range want {
+		if names[i] != want[i] {
+			t.Fatalf("default scenarios = %v, want %v", names, want)
+		}
+	}
+	run := r1GitHubMeshRun{agents: make([]r1CodexSyncAgent, 5)}
+	entries, err := run.scenarioEntries("live-readiness-operator-safety")
+	if err != nil {
+		t.Fatalf("multi-poc scenario entries: %v", err)
+	}
+	if len(entries) != 2 || entries[0].index == entries[1].index {
+		t.Fatalf("live-readiness scenario must use two distinct PoC agents, got %+v", entries)
+	}
+	for _, entry := range entries {
+		for _, forbidden := range []string{"Agent A must", "Agent B must", "must create assignments for"} {
+			if strings.Contains(entry.prompt, forbidden) {
+				t.Fatalf("natural prompt contains forced choreography %q: %s", forbidden, entry.prompt)
+			}
+		}
+	}
+}
+
+func TestR1GitHubMeshScenarioStatusRequiresSelectedOK(t *testing.T) {
+	scenarios := []r1TaskSimScenarioReport{
+		{Name: "onboarding-synthesis", Status: "ok"},
+		{Name: "sync-risk-review", Status: "failed"},
+		{Name: "live-readiness-operator-safety", Status: "ok"},
+	}
+	if allR1GitHubMeshScenariosOK(scenarios, nil) {
+		t.Fatal("default scenario set must require every selected scenario to be ok")
+	}
+	scenarios[1].Status = "ok"
+	if !allR1GitHubMeshScenariosOK(scenarios, nil) {
+		t.Fatal("default scenario set should pass when every default scenario is ok")
+	}
+	if !allR1GitHubMeshScenariosOK(scenarios[:1], []string{"onboarding-synthesis"}) {
+		t.Fatal("explicit scenario selection should require only the selected scenario")
+	}
+}
+
+func TestR1GitHubMeshPromptRoundsCountsScenarioPrompts(t *testing.T) {
+	contract := &r1RunnerContractReport{}
+	recordR1ClusterPrompt(contract, "codex-01@project", "natural_user_message:onboarding-synthesis", "prompt")
+	recordR1ClusterPrompt(contract, "codex-02@project", "worker_wake:onboarding-synthesis", "wake")
+	recordR1ClusterPrompt(contract, "codex-01@project", "integration:onboarding-synthesis", "integrate")
+	recordR1ClusterPrompt(contract, "codex-01@project", "integration:other", "other")
+	if got := r1GitHubMeshPromptRounds(contract, "onboarding-synthesis"); got != 3 {
+		t.Fatalf("prompt rounds = %d, want 3", got)
 	}
 }

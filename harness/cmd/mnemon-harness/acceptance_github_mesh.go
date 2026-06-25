@@ -123,6 +123,11 @@ func runR1GitHubMeshAcceptance(ctx context.Context, opts r1GitHubMeshAcceptanceO
 		DerivedEventAudit: map[string]int{},
 		Artifacts:         map[string]string{},
 		Raw:               map[string]json.RawMessage{},
+		RunnerContract: &r1RunnerContractReport{
+			EntrypointProgressBeforeIntegration: -1,
+			EntrypointProgressAfterIntegration:  -1,
+			WorkerWakePrompt:                    r1ClusterWorkerWakePrompt,
+		},
 	}
 	reportPath := filepath.Join(runRoot, "report.json")
 	report.ReportPath = reportPath
@@ -211,9 +216,259 @@ func runR1GitHubMeshAcceptance(ctx context.Context, opts r1GitHubMeshAcceptanceO
 		}
 	}
 	addR1Assertion(&report, "github-mesh 5/5 appservers start/init", len(report.Agents) == opts.Agents, fmt.Sprintf("started=%d requested=%d", len(report.Agents), opts.Agents))
-	addR1Assertion(&report, "github-mesh natural suite implementation pending", false, "P8 topology is wired; natural Teamwork-ReAct scenarios still need execution wiring")
+
+	run := r1GitHubMeshRun{
+		ctx:    ctx,
+		opts:   opts,
+		report: &report,
+		agents: agents,
+		runID:  started.Format("150405"),
+	}
+	if err := run.bootstrapProfiles(); err != nil {
+		addR1Error(&report, err)
+	}
+	for _, name := range r1GitHubMeshScenarioNames(opts.Scenarios) {
+		if err := run.runScenario(name); err != nil {
+			addR1Error(&report, err)
+		}
+	}
+	obs, obsErr := observeAcceptanceRun(runRoot, 1000)
+	if obsErr == nil {
+		report.Observability = &obs
+		report.Participants = r1ClusterParticipants(r1ClusterActorEventCounts(obs), report.Entrypoint)
+	} else {
+		addR1Error(&report, obsErr)
+	}
+	report.DerivedEventAudit = prodSimDerivedAudit(agents)
+	if len(agents) > 0 {
+		report.LedgerCounts = countR1Ledger(agents[0].localURL, agents[0].r1CodexAgent)
+	}
+	addR1Assertion(&report, "github-mesh no shared governed.db", prodSimStrictTopology(report.Topology), fmt.Sprintf("%+v", report.Topology))
+	addR1Assertion(&report, "github-mesh accepted event subjects only", r1SyncEventSubjectsOnlyAccepted(syncReport.AllowedEventSubjects), fmt.Sprintf("subjects=%v", syncReport.AllowedEventSubjects))
+	if len(report.Errors) == 0 && allR1AssertionsPassed(report.Assertions) && allR1GitHubMeshScenariosOK(report.Scenarios, opts.Scenarios) {
+		syncReport.Status = "ok"
+		report.Status = "ok"
+		return report, nil
+	}
+	syncReport.Status = "failed"
 	report.Status = "failed"
-	return report, fmt.Errorf("GitHub mesh natural task suite is not fully wired yet")
+	return report, fmt.Errorf("GitHub mesh natural task suite failed")
+}
+
+type r1GitHubMeshRun struct {
+	ctx    context.Context
+	opts   r1GitHubMeshAcceptanceOptions
+	report *r1CodexAcceptanceReport
+	agents []r1CodexSyncAgent
+	runID  string
+}
+
+func r1GitHubMeshScenarioNames(selected []string) []string {
+	if len(selected) == 0 {
+		return []string{"onboarding-synthesis", "sync-risk-review", "live-readiness-operator-safety"}
+	}
+	out := make([]string, 0, len(selected))
+	for _, name := range selected {
+		name = strings.TrimSpace(name)
+		if name != "" {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+func allR1GitHubMeshScenariosOK(scenarios []r1TaskSimScenarioReport, selected []string) bool {
+	want := map[string]bool{}
+	for _, name := range r1GitHubMeshScenarioNames(selected) {
+		want[name] = false
+	}
+	for _, scenario := range scenarios {
+		if _, ok := want[scenario.Name]; ok && scenario.Status == "ok" {
+			want[scenario.Name] = true
+		}
+	}
+	if len(want) == 0 {
+		return false
+	}
+	for _, ok := range want {
+		if !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func (s r1GitHubMeshRun) bootstrapProfiles() error {
+	for i := range s.agents {
+		agent := &s.agents[i]
+		payload := taskSimJSON(map[string]any{
+			"actor":              agent.principal,
+			"focus":              fmt.Sprintf("GitHub mesh Remote Workspace acceptance node %s", agent.principal),
+			"context_advantages": []string{"isolated local mnemond", "github publication branch sync", "real Codex appserver turn"},
+			"availability":       "available",
+			"ttl":                "30m",
+			"summary":            fmt.Sprintf("%s is available for GitHub mesh teamwork validation.", agent.principal),
+		})
+		prompt := fmt.Sprintf(`Emit exactly one agent_profile.write_candidate.observed event through your own Local Mnemon.
+Use external id github-mesh-profile-%s-%s and payload:
+%s
+After the command succeeds, answer "profile written".`, s.runID, prodSafeID(agent.principal), payload)
+		recordR1ClusterPrompt(s.report.RunnerContract, agent.principal, "profile_bootstrap", prompt)
+		s.report.RunnerContract.ProfileBootstrapPrompts++
+		answer, err := runR1Turn(&agent.r1CodexAgent, prompt, s.opts.TurnTimeout)
+		appendSyncAgentAnswer(s.report.Sync, agent.principal, answer)
+		if err != nil {
+			addR1Assertion(s.report, "github-mesh profile emitted "+agent.principal, false, err.Error())
+			return err
+		}
+		waitForLedgerCount(agent.localURL, agent.r1CodexAgent, "agent_profile", 1, 20*time.Second)
+	}
+	allVisible := true
+	for i := range s.agents {
+		agent := s.agents[i]
+		waitForLedgerCount(agent.localURL, agent.r1CodexAgent, "agent_profile", len(s.agents), 120*time.Second)
+		counts := countR1Ledger(agent.localURL, agent.r1CodexAgent)
+		if counts["agent_profile"] < len(s.agents) {
+			allVisible = false
+		}
+	}
+	addR1Assertion(s.report, "github-mesh profiles converge through publication branches", allVisible, fmt.Sprintf("agents=%d", len(s.agents)))
+	s.report.Scenarios = append(s.report.Scenarios, r1TaskSimScenarioReport{Name: "bootstrap_profiles", Status: statusFromBool(allVisible)})
+	if !allVisible {
+		return fmt.Errorf("profiles did not converge through GitHub publication branches")
+	}
+	return nil
+}
+
+func (s r1GitHubMeshRun) runScenario(name string) error {
+	entries, err := s.scenarioEntries(name)
+	if err != nil {
+		s.report.Scenarios = append(s.report.Scenarios, r1TaskSimScenarioReport{Name: name, Status: "blocked", Evidence: map[string]any{"error": err.Error()}})
+		return err
+	}
+	var actors []string
+	for _, entry := range entries {
+		agent := &s.agents[entry.index]
+		actors = append(actors, agent.principal)
+		s.report.RunnerContract.BusinessTaskPrompts++
+		if s.report.Entrypoint == "" {
+			s.report.Entrypoint = agent.principal
+			s.report.Starter = agent.principal
+			s.report.Sync.Source = agent.principal
+		}
+		recordR1ClusterPrompt(s.report.RunnerContract, agent.principal, "natural_user_message:"+name, entry.prompt)
+		answer, err := runR1Turn(&agent.r1CodexAgent, entry.prompt, s.opts.TurnTimeout)
+		appendSyncAgentAnswer(s.report.Sync, agent.principal, answer)
+		if err != nil {
+			addR1Assertion(s.report, "github-mesh "+name+" entry "+agent.principal, false, err.Error())
+			return err
+		}
+		addR1Assertion(s.report, "github-mesh "+name+" entry "+agent.principal, true, truncateR1Cluster(answer, 300))
+	}
+	if err := s.wakeWorkers(name, entries); err != nil {
+		return err
+	}
+	lead := &s.agents[entries[0].index]
+	integrationPrompt := r1GitHubMeshIntegrationPrompt(name)
+	s.report.RunnerContract.IntegrationPrompts++
+	recordR1ClusterPrompt(s.report.RunnerContract, lead.principal, "integration:"+name, integrationPrompt)
+	answer, err := runR1Turn(&lead.r1CodexAgent, integrationPrompt, s.opts.TurnTimeout)
+	appendSyncAgentAnswer(s.report.Sync, lead.principal, answer)
+	if err != nil {
+		addR1Assertion(s.report, "github-mesh "+name+" integration", false, err.Error())
+		return err
+	}
+	waitR1ClusterAcceptedEventSettle(s.report.RunRoot, 15*time.Second, 2*time.Second)
+	obs, err := observeAcceptanceRun(s.report.RunRoot, 1000)
+	if err != nil {
+		return err
+	}
+	counts := r1ClusterActorEventCounts(obs)
+	participants := r1ClusterNonProfileParticipantCount(counts)
+	replans := r1GitHubMeshPromptRounds(s.report.RunnerContract, name)
+	passed := participants >= 2 && replans >= 2
+	addR1Assertion(s.report, "github-mesh "+name+" team-shaped multi-round evidence", passed, fmt.Sprintf("participants=%d rounds=%d actors=%v", participants, replans, counts))
+	s.report.Scenarios = append(s.report.Scenarios, r1TaskSimScenarioReport{
+		Name:   name,
+		Status: statusFromBool(passed),
+		Actors: actors,
+		Evidence: map[string]any{
+			"participants":      participants,
+			"replanning_rounds": replans,
+			"entry_poc_agents":  actors,
+		},
+	})
+	if !passed {
+		return fmt.Errorf("github mesh scenario %s did not produce team-shaped multi-round evidence", name)
+	}
+	return nil
+}
+
+type r1GitHubMeshScenarioEntry struct {
+	index  int
+	prompt string
+}
+
+func (s r1GitHubMeshRun) scenarioEntries(name string) ([]r1GitHubMeshScenarioEntry, error) {
+	if len(s.agents) < 5 {
+		return nil, fmt.Errorf("github mesh natural scenarios require five agents")
+	}
+	switch name {
+	case "onboarding-synthesis":
+		return []r1GitHubMeshScenarioEntry{{index: 0, prompt: `帮我快速理解这个仓库现在的 GitHub Remote Workspace 改造方向,整理一份新成员能读懂的上手说明。你可以让其他成员帮忙核对架构、测试和风险。如果第一轮信息不够,请根据大家的反馈再拆一轮补齐。`}}, nil
+	case "sync-risk-review":
+		return []r1GitHubMeshScenarioEntry{{index: 1, prompt: `同步这块我担心还有隐藏问题。你帮我检查一下 GitHub Remote Workspace 相关的配置、诊断和测试设计;如果发现顺手能补的文档或测试缺口,一起处理。第一轮先找风险,再根据结果安排第二轮验证。`}}, nil
+	case "live-readiness-operator-safety":
+		return []r1GitHubMeshScenarioEntry{
+			{index: 0, prompt: `请你推进一次 GitHub live case 的准备,目标是能在 mnemon-dev/mnemon-teamwork-example 上证明 publish/pull/import 成立。先让大家找出缺口,再根据第一轮结果安排第二轮补齐。`},
+			{index: 2, prompt: `我主要担心这个 GitHub 方案的操作者安全和失败诊断。你帮我从 token、repo、branch、报错可读性这几个角度检查一下。`},
+		}, nil
+	default:
+		return nil, fmt.Errorf("unknown GitHub mesh scenario %q", name)
+	}
+}
+
+func (s r1GitHubMeshRun) wakeWorkers(name string, entries []r1GitHubMeshScenarioEntry) error {
+	entry := map[int]bool{}
+	for _, item := range entries {
+		entry[item.index] = true
+	}
+	for cycle := 1; cycle <= 3; cycle++ {
+		for i := range s.agents {
+			if entry[i] {
+				continue
+			}
+			agent := &s.agents[i]
+			s.report.RunnerContract.WorkerWakePrompts++
+			recordR1ClusterPrompt(s.report.RunnerContract, agent.principal, "worker_wake:"+name, r1ClusterWorkerWakePrompt)
+			answer, err := runR1Turn(&agent.r1CodexAgent, r1ClusterWorkerWakePrompt, s.opts.TurnTimeout)
+			appendSyncAgentAnswer(s.report.Sync, agent.principal, answer)
+			if err != nil {
+				s.report.RunnerContract.WorkerWakeErrors = append(s.report.RunnerContract.WorkerWakeErrors, fmt.Sprintf("%s cycle %d %s: %v", name, cycle, agent.principal, err))
+			}
+		}
+		waitR1ClusterAcceptedEventSettle(s.report.RunRoot, 8*time.Second, 1*time.Second)
+	}
+	return nil
+}
+
+func r1GitHubMeshIntegrationPrompt(name string) string {
+	return fmt.Sprintf(`Read your own Local Mnemon context and integrate the GitHub mesh teamwork scenario %q.
+Use only governed Mnemon events as teammate evidence. If first-round output reveals gaps, emit a follow-up assignment before finalizing; otherwise emit a final progress_digest with participants, evidence, gaps, and next action.
+Answer with the event-backed result.`, name)
+}
+
+func r1GitHubMeshPromptRounds(contract *r1RunnerContractReport, scenario string) int {
+	if contract == nil {
+		return 0
+	}
+	rounds := 0
+	for _, prompt := range contract.PromptAudit {
+		if strings.Contains(prompt.Kind, scenario) {
+			rounds++
+		}
+	}
+	return rounds
 }
 
 func setupR1CodexGitHubMeshAgents(ctx context.Context, runRoot, binDir, repo, tokenFile, branchPrefix string, count int, sourceCodexHome string) ([]r1CodexSyncAgent, error) {
