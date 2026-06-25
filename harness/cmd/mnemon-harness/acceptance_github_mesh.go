@@ -585,13 +585,13 @@ func (s *r1GitHubMeshRun) scenarioEntries(name string) ([]r1GitHubMeshScenarioEn
 	}
 	switch name {
 	case "onboarding-synthesis":
-		return []r1GitHubMeshScenarioEntry{{index: 0, prompt: `帮我快速理解这个仓库现在的 GitHub Remote Workspace 改造方向,整理一份新成员能读懂的上手说明。你可以让其他成员帮忙核对架构、测试和风险。如果第一轮信息不够,请根据大家的反馈再拆一轮补齐。`}}, nil
+		return []r1GitHubMeshScenarioEntry{{index: 0, prompt: `帮我用团队协作快速理解这个仓库现在的 GitHub Remote Workspace 改造方向,整理一份新成员能读懂的上手说明。请通过 Mnemon 拉其他成员分别核对架构、测试和风险中的至少两个方向,再根据第一轮反馈做一次补齐或复核后汇总。`}}, nil
 	case "sync-risk-review":
-		return []r1GitHubMeshScenarioEntry{{index: 1, prompt: `同步这块我担心还有隐藏问题。你帮我检查一下 GitHub Remote Workspace 相关的配置、诊断和测试设计;如果发现顺手能补的文档或测试缺口,一起处理。第一轮先找风险,再根据结果安排第二轮验证。`}}, nil
+		return []r1GitHubMeshScenarioEntry{{index: 1, prompt: `同步这块我担心还有隐藏问题。请用团队协作检查 GitHub Remote Workspace 相关的配置、诊断和测试设计;把风险排查和验证/补文档拆给合适同伴推进。第一轮先找风险,再根据结果安排第二轮验证或补齐。`}}, nil
 	case "live-readiness-operator-safety":
 		return []r1GitHubMeshScenarioEntry{
-			{index: 0, prompt: `请你推进一次 GitHub live case 的准备,目标是能在 mnemon-dev/mnemon-teamwork-example 上证明 publish/pull/import 成立。先让大家找出缺口,再根据第一轮结果安排第二轮补齐。`},
-			{index: 2, prompt: `我主要担心这个 GitHub 方案的操作者安全和失败诊断。你帮我从 token、repo、branch、报错可读性这几个角度检查一下。`},
+			{index: 0, prompt: `请你用团队协作推进一次 GitHub live case 的准备,目标是能在 mnemon-dev/mnemon-teamwork-example 上证明 publish/pull/import 成立。先让同伴分别找出实现、测试和运行缺口,再根据第一轮结果安排第二轮补齐。`},
+			{index: 2, prompt: `我主要担心这个 GitHub 方案的操作者安全和失败诊断。请你通过 Mnemon 拉同伴一起从 token、repo、branch、报错可读性这几个角度检查,并把发现反馈给 live case 准备工作。`},
 		}, nil
 	default:
 		return nil, fmt.Errorf("unknown GitHub mesh scenario %q", name)
