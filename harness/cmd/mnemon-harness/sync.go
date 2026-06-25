@@ -204,11 +204,11 @@ func syncPushOnce() (syncPushResult, error) {
 	if err != nil {
 		return syncPushResult{}, err
 	}
-	client, err := syncClientFor(remote)
+	workspace, err := syncRemoteWorkspaceFor(remote)
 	if err != nil {
 		return syncPushResult{}, err
 	}
-	resp, err := client.SyncPush(contract.SyncPushRequest{
+	resp, err := workspace.SyncPush(contract.SyncPushRequest{
 		ReplicaID: batch.ReplicaID,
 		BatchID:   exchange.PushBatchID(batch.ReplicaID, batch.Events),
 		Events:    batch.Events,
@@ -232,11 +232,11 @@ func syncPullOnce() (syncPullResult, error) {
 	if err != nil {
 		return syncPullResult{}, err
 	}
-	client, err := syncClientFor(remote)
+	workspace, err := syncRemoteWorkspaceFor(remote)
 	if err != nil {
 		return syncPullResult{}, err
 	}
-	resp, err := client.SyncPull(contract.SyncPullRequest{
+	resp, err := workspace.SyncPull(contract.SyncPullRequest{
 		ReplicaID:    state.ReplicaID,
 		RemoteCursor: state.RemoteCursor,
 	})
@@ -252,19 +252,30 @@ func syncPullOnce() (syncPullResult, error) {
 
 type syncRemoteConfig struct {
 	ID       string
+	Backend  string
 	Endpoint string
 	Token    string
 	CAFile   string
 }
 
-// syncClientFor builds the bounded sync client for one resolved remote: bearer token, optional
-// pinned TLS root, and the T2 downgrade gate (--allow-insecure-remote is the only override).
-func syncClientFor(remote syncRemoteConfig) (*access.Client, error) {
-	return access.NewSyncClient(remote.Endpoint, access.SyncClientConfig{
-		Token:         remote.Token,
-		CAFile:        remote.CAFile,
-		AllowInsecure: syncAllowInsecure,
-	})
+// syncRemoteWorkspaceFor builds the selected Remote Workspace backend for one resolved remote. The
+// current CLI supports the first-party HTTP mnemon-hub backend; future backends must preserve this
+// SyncPush/SyncPull/SyncStatus ABI rather than bypassing local import.
+func syncRemoteWorkspaceFor(remote syncRemoteConfig) (exchange.RemoteWorkspace, error) {
+	backend := strings.TrimSpace(remote.Backend)
+	if backend == "" {
+		backend = exchange.RemoteBackendHTTP
+	}
+	switch backend {
+	case exchange.RemoteBackendHTTP:
+		return access.NewSyncClient(remote.Endpoint, access.SyncClientConfig{
+			Token:         remote.Token,
+			CAFile:        remote.CAFile,
+			AllowInsecure: syncAllowInsecure,
+		})
+	default:
+		return nil, fmt.Errorf("Remote Workspace %q: unsupported backend %q", remote.ID, backend)
+	}
 }
 
 func resolveSyncRemote() (syncRemoteConfig, error) {
@@ -277,7 +288,7 @@ func resolveSyncRemote() (syncRemoteConfig, error) {
 		if err != nil {
 			return syncRemoteConfig{}, err
 		}
-		return syncRemoteConfig{ID: syncRemoteID, Endpoint: syncRemoteURL, Token: token, CAFile: resolvedSyncCAFile("")}, nil
+		return syncRemoteConfig{ID: syncRemoteID, Backend: exchange.RemoteBackendHTTP, Endpoint: syncRemoteURL, Token: token, CAFile: resolvedSyncCAFile("")}, nil
 	}
 	entry, err := exchange.LoadRemoteEntry(resolvedSyncRemotesPath(), syncRemoteID)
 	if err != nil {
@@ -294,7 +305,7 @@ func resolveSyncRemote() (syncRemoteConfig, error) {
 	if err != nil {
 		return syncRemoteConfig{}, err
 	}
-	return syncRemoteConfig{ID: entry.ID, Endpoint: entry.Endpoint, Token: token, CAFile: resolvedSyncCAFile(entry.CAFile)}, nil
+	return syncRemoteConfig{ID: entry.ID, Backend: entry.NormalizedBackend(), Endpoint: entry.Endpoint, Token: token, CAFile: resolvedSyncCAFile(entry.CAFile)}, nil
 }
 
 // resolvedSyncCAFile picks the pinned-root file: the --ca-file flag overrides the remotes.json
@@ -326,7 +337,7 @@ func upsertSyncRemote(path, root, id, endpoint, token, tokenFile, caFile string)
 	if err != nil {
 		return err
 	}
-	entry := exchange.RemoteEntry{ID: id, Endpoint: endpoint, CredentialRef: credentialRef, CAFile: normalizeSyncFileRef(caFile)}
+	entry := exchange.RemoteEntry{Backend: exchange.RemoteBackendHTTP, ID: id, Endpoint: endpoint, CredentialRef: credentialRef, CAFile: normalizeSyncFileRef(caFile)}
 	replaced := false
 	for i := range doc.Remotes {
 		if doc.Remotes[i].ID == id {

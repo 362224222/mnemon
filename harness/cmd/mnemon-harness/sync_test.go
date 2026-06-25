@@ -15,6 +15,7 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemonhub/exchange"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
@@ -290,7 +291,7 @@ func TestSyncConnectWritesRemoteConfigWithoutLeakingToken(t *testing.T) {
 		}
 	}
 	config := string(mustReadCmd(t, filepath.Join(root, ".mnemon", "harness", "sync", "remotes.json")))
-	for _, want := range []string{`"current": "team"`, `"id": "team"`, `"credential_ref": ".mnemon/harness/sync/credentials/team.token"`} {
+	for _, want := range []string{`"current": "team"`, `"backend": "http"`, `"id": "team"`, `"credential_ref": ".mnemon/harness/sync/credentials/team.token"`} {
 		if !strings.Contains(config, want) {
 			t.Fatalf("sync connect config missing %q:\n%s", want, config)
 		}
@@ -305,7 +306,7 @@ func TestSyncConnectWritesRemoteConfigWithoutLeakingToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve current remote: %v", err)
 	}
-	if remote.ID != "team" || remote.Endpoint != "https://remote.example.test" || remote.Token != "secret-workspace-token" {
+	if remote.ID != "team" || remote.Backend != exchange.RemoteBackendHTTP || remote.Endpoint != "https://remote.example.test" || remote.Token != "secret-workspace-token" {
 		t.Fatalf("current remote not resolved: %+v", remote)
 	}
 }
@@ -341,7 +342,7 @@ func TestSyncRemoteConfigLoadsCredentialRef(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve remote config: %v", err)
 	}
-	if remote.ID != "workspace" || remote.Endpoint != "http://127.0.0.1:8787" || remote.Token != "tok-workspace" {
+	if remote.ID != "workspace" || remote.Backend != exchange.RemoteBackendHTTP || remote.Endpoint != "http://127.0.0.1:8787" || remote.Token != "tok-workspace" {
 		t.Fatalf("remote config not loaded: %+v", remote)
 	}
 }

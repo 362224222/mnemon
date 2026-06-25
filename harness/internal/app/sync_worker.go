@@ -73,20 +73,32 @@ func syncWorkerPass(rt *runtime.Runtime, opts SyncWorkerOptions) error {
 	if err != nil {
 		return err
 	}
-	client, err := syncWorkerClient(entry, opts)
+	remote, err := syncWorkerRemote(entry, opts)
 	if err != nil {
 		return err
 	}
-	if err := syncWorkerPush(rt, client, entry.ID); err != nil {
+	if err := syncWorkerPush(rt, remote, entry.ID); err != nil {
 		return err
 	}
-	return syncWorkerPull(rt, client, entry.ID, opts.Catalog)
+	return syncWorkerPull(rt, remote, entry.ID, opts.Catalog)
 }
 
-// syncWorkerClient builds the bounded sync client from the remote entry: credential_ref + ca_file
-// resolve relative to the project root (the same resolution `sync connect` wrote them under), and
-// the endpoint passes the T2 downgrade gate unless explicitly overridden.
-func syncWorkerClient(entry exchange.RemoteEntry, opts SyncWorkerOptions) (*access.Client, error) {
+// syncWorkerRemote builds the selected Remote Workspace backend from the remote entry. Today only
+// the first-party HTTP mnemon-hub backend is implemented; the sync loop above depends only on the
+// exchange.RemoteWorkspace ABI so a future GitHub publication mesh does not touch runtime import.
+func syncWorkerRemote(entry exchange.RemoteEntry, opts SyncWorkerOptions) (exchange.RemoteWorkspace, error) {
+	switch entry.NormalizedBackend() {
+	case exchange.RemoteBackendHTTP:
+		return syncWorkerHTTPRemote(entry, opts)
+	default:
+		return nil, fmt.Errorf("Remote Workspace %q: unsupported backend %q", entry.ID, entry.NormalizedBackend())
+	}
+}
+
+// syncWorkerHTTPRemote builds the bounded HTTP mnemon-hub sync client from the remote entry:
+// credential_ref + ca_file resolve relative to the project root (the same resolution `sync connect`
+// wrote them under), and the endpoint passes the T2 downgrade gate unless explicitly overridden.
+func syncWorkerHTTPRemote(entry exchange.RemoteEntry, opts SyncWorkerOptions) (exchange.RemoteWorkspace, error) {
 	if strings.TrimSpace(entry.CredentialRef) == "" {
 		return nil, fmt.Errorf("Remote Workspace %q has no credential_ref", entry.ID)
 	}
@@ -116,7 +128,7 @@ func syncWorkerClient(entry exchange.RemoteEntry, opts SyncWorkerOptions) (*acce
 
 // syncWorkerPush pushes the pending batch (if any) and mirrors the hub's per-event verdicts into
 // the local ledger — both through the live handle.
-func syncWorkerPush(rt *runtime.Runtime, client *access.Client, remoteID string) error {
+func syncWorkerPush(rt *runtime.Runtime, remote exchange.RemoteWorkspace, remoteID string) error {
 	batch, err := exchange.ReadPushBatch(rt)
 	if err != nil {
 		return err
@@ -124,7 +136,7 @@ func syncWorkerPush(rt *runtime.Runtime, client *access.Client, remoteID string)
 	if len(batch.Events) == 0 {
 		return nil
 	}
-	resp, err := client.SyncPush(contract.SyncPushRequest{
+	resp, err := remote.SyncPush(contract.SyncPushRequest{
 		ReplicaID: batch.ReplicaID,
 		BatchID:   exchange.PushBatchID(batch.ReplicaID, batch.Events),
 		Events:    batch.Events,
@@ -138,12 +150,12 @@ func syncWorkerPush(rt *runtime.Runtime, client *access.Client, remoteID string)
 // syncWorkerPull pulls after the durable cursor, re-enters each event through the live runtime's
 // trusted intake (importPulledEvents — the same loop the offline path uses), then advances the
 // cursor.
-func syncWorkerPull(rt *runtime.Runtime, client *access.Client, remoteID string, catalog policy.Registry) error {
+func syncWorkerPull(rt *runtime.Runtime, remote exchange.RemoteWorkspace, remoteID string, catalog policy.Registry) error {
 	state, err := exchange.ReadPullState(rt, remoteID)
 	if err != nil {
 		return err
 	}
-	resp, err := client.SyncPull(contract.SyncPullRequest{
+	resp, err := remote.SyncPull(contract.SyncPullRequest{
 		ReplicaID:    state.ReplicaID,
 		RemoteCursor: state.RemoteCursor,
 	})
