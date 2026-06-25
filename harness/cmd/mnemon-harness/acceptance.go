@@ -148,7 +148,13 @@ type r1CodexAgentReport struct {
 
 type r1CodexSyncReport struct {
 	Status               string                      `json:"status"`
+	Backend              string                      `json:"backend,omitempty"`
+	Repo                 string                      `json:"repo,omitempty"`
 	HubURL               string                      `json:"hub_url"`
+	PublicationBranches  []string                    `json:"publication_branches,omitempty"`
+	BranchByAgent        map[string]string           `json:"branch_by_agent,omitempty"`
+	RuntimeWorkspaces    []string                    `json:"runtime_workspace_paths,omitempty"`
+	LocalStorePaths      []string                    `json:"local_mnemond_store_paths,omitempty"`
 	AllowedEventSubjects []string                    `json:"allowed_event_subjects"`
 	Source               string                      `json:"source"`
 	Target               string                      `json:"target"`
