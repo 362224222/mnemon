@@ -150,9 +150,13 @@ type r1CodexSyncReport struct {
 	Status               string                      `json:"status"`
 	Backend              string                      `json:"backend,omitempty"`
 	Repo                 string                      `json:"repo,omitempty"`
+	TransportModel       string                      `json:"transport_model,omitempty"`
+	RosterSource         string                      `json:"roster_source,omitempty"`
+	NetworkDiscovery     string                      `json:"network_discovery,omitempty"`
 	HubURL               string                      `json:"hub_url"`
 	PublicationBranches  []string                    `json:"publication_branches,omitempty"`
 	BranchByAgent        map[string]string           `json:"branch_by_agent,omitempty"`
+	RemotePlanPaths      []string                    `json:"remote_plan_paths,omitempty"`
 	RuntimeWorkspaces    []string                    `json:"runtime_workspace_paths,omitempty"`
 	LocalStorePaths      []string                    `json:"local_mnemond_store_paths,omitempty"`
 	AllowedEventSubjects []string                    `json:"allowed_event_subjects"`

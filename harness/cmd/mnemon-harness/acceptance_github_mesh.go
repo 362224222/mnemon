@@ -59,6 +59,11 @@ var acceptanceR1GitHubMeshCmd = &cobra.Command{
 	},
 }
 
+const r1GitHubMeshWorkerWakePrompt = `Check your Mnemon context. If there is governed work for you, act on it through
+your own Local Mnemon and record durable progress. If your focus, availability,
+or working state changed, update your agent_profile through your own Local Mnemon.
+If there is no work for you, answer "no governed work".`
+
 func init() {
 	acceptanceR1GitHubMeshCmd.Flags().StringVar(&acceptanceRunRoot, "run-root", "", "acceptance run directory")
 	acceptanceR1GitHubMeshCmd.Flags().StringVar(&acceptanceCommand, "command", "codex --dangerously-bypass-hook-trust", "Codex CLI command")
@@ -126,7 +131,7 @@ func runR1GitHubMeshAcceptance(ctx context.Context, opts r1GitHubMeshAcceptanceO
 		RunnerContract: &r1RunnerContractReport{
 			EntrypointProgressBeforeIntegration: -1,
 			EntrypointProgressAfterIntegration:  -1,
-			WorkerWakePrompt:                    r1ClusterWorkerWakePrompt,
+			WorkerWakePrompt:                    r1GitHubMeshWorkerWakePrompt,
 		},
 	}
 	reportPath := filepath.Join(runRoot, "report.json")
@@ -188,7 +193,9 @@ func runR1GitHubMeshAcceptance(ctx context.Context, opts r1GitHubMeshAcceptanceO
 		report.Artifacts["render_audit:"+agent.principal] = agent.renderAuditPath
 	}
 	addR1Assertion(&report, "github-mesh no central mnemon-hub endpoint", syncReport.HubURL == "" && syncReport.HubStatus.HubEventsReceived == 0, "backend=github repo-mediated publication")
+	addR1Assertion(&report, "github-mesh no p2p node discovery", syncReport.NetworkDiscovery == "none" && syncReport.RosterSource == "configured-remotes-json", fmt.Sprintf("roster_source=%s network_discovery=%s", syncReport.RosterSource, syncReport.NetworkDiscovery))
 	addR1Assertion(&report, "github-mesh publication branches configured", len(syncReport.PublicationBranches) == opts.Agents && len(syncReport.BranchByAgent) == opts.Agents, fmt.Sprintf("branches=%v", syncReport.PublicationBranches))
+	addR1Assertion(&report, "github-mesh remote plans are per-workspace", distinctStrings(syncReport.RemotePlanPaths) && len(syncReport.RemotePlanPaths) == opts.Agents, fmt.Sprintf("remote_plans=%v", syncReport.RemotePlanPaths))
 	addR1Assertion(&report, "github-mesh local stores isolated", distinctStrings(syncReport.LocalStorePaths) && len(syncReport.LocalStorePaths) == opts.Agents, fmt.Sprintf("stores=%v", syncReport.LocalStorePaths))
 	addR1Assertion(&report, "github-mesh runtime workspaces isolated", distinctStrings(syncReport.RuntimeWorkspaces) && len(syncReport.RuntimeWorkspaces) == opts.Agents, fmt.Sprintf("workspaces=%v", syncReport.RuntimeWorkspaces))
 
@@ -299,6 +306,7 @@ func allR1GitHubMeshScenariosOK(scenarios []r1TaskSimScenarioReport, selected []
 }
 
 func (s r1GitHubMeshRun) bootstrapProfiles() error {
+	profileCounts := map[string]int{}
 	for i := range s.agents {
 		agent := &s.agents[i]
 		payload := taskSimJSON(map[string]any{
@@ -322,18 +330,27 @@ After the command succeeds, answer "profile written".`, s.runID, prodSafeID(agen
 			return err
 		}
 		waitForLedgerCount(agent.localURL, agent.r1CodexAgent, "agent_profile", 1, 20*time.Second)
+		profileCounts[agent.principal] = countR1Ledger(agent.localURL, agent.r1CodexAgent)["agent_profile"]
 	}
 	allVisible := true
 	for i := range s.agents {
 		agent := s.agents[i]
 		waitForLedgerCount(agent.localURL, agent.r1CodexAgent, "agent_profile", len(s.agents), 120*time.Second)
 		counts := countR1Ledger(agent.localURL, agent.r1CodexAgent)
+		profileCounts[agent.principal] = counts["agent_profile"]
 		if counts["agent_profile"] < len(s.agents) {
 			allVisible = false
 		}
 	}
 	addR1Assertion(s.report, "github-mesh profiles converge through publication branches", allVisible, fmt.Sprintf("agents=%d", len(s.agents)))
-	s.report.Scenarios = append(s.report.Scenarios, r1TaskSimScenarioReport{Name: "bootstrap_profiles", Status: statusFromBool(allVisible)})
+	s.report.Scenarios = append(s.report.Scenarios, r1TaskSimScenarioReport{
+		Name:   "bootstrap_profiles",
+		Status: statusFromBool(allVisible),
+		Evidence: map[string]any{
+			"profile_counts_by_agent": profileCounts,
+			"publication_branches":    s.report.Sync.PublicationBranches,
+		},
+	})
 	if !allVisible {
 		return fmt.Errorf("profiles did not converge through GitHub publication branches")
 	}
@@ -386,16 +403,27 @@ func (s r1GitHubMeshRun) runScenario(name string) error {
 	counts := r1ClusterActorEventCounts(obs)
 	participants := r1ClusterNonProfileParticipantCount(counts)
 	replans := r1GitHubMeshPromptRounds(s.report.RunnerContract, name)
-	passed := participants >= 2 && replans >= 2
-	addR1Assertion(s.report, "github-mesh "+name+" team-shaped multi-round evidence", passed, fmt.Sprintf("participants=%d rounds=%d actors=%v", participants, replans, counts))
+	naturalMessages := r1GitHubMeshPromptKindCount(s.report.RunnerContract, "natural_user_message:"+name)
+	workerWakes := r1GitHubMeshPromptKindCount(s.report.RunnerContract, "worker_wake:"+name)
+	integrationPrompts := r1GitHubMeshPromptKindCount(s.report.RunnerContract, "integration:"+name)
+	passed := participants >= 2 && replans >= 2 && naturalMessages == len(entries) && integrationPrompts >= 1 && s.report.RunnerContract.DirectWorkerBusinessPrompts == 0
+	addR1Assertion(s.report, "github-mesh "+name+" team-shaped multi-round evidence", passed, fmt.Sprintf("participants=%d rounds=%d natural=%d worker_wakes=%d integration=%d actors=%v", participants, replans, naturalMessages, workerWakes, integrationPrompts, counts))
 	s.report.Scenarios = append(s.report.Scenarios, r1TaskSimScenarioReport{
 		Name:   name,
 		Status: statusFromBool(passed),
 		Actors: actors,
 		Evidence: map[string]any{
-			"participants":      participants,
-			"replanning_rounds": replans,
-			"entry_poc_agents":  actors,
+			"participants":              participants,
+			"replanning_rounds":         replans,
+			"natural_user_messages":     naturalMessages,
+			"worker_wake_prompts":       workerWakes,
+			"integration_prompts":       integrationPrompts,
+			"entry_poc_agents":          actors,
+			"multi_poc":                 len(actors) > 1,
+			"profile_update_prompted":   strings.Contains(r1GitHubMeshWorkerWakePrompt, "agent_profile"),
+			"direct_worker_business":    s.report.RunnerContract.DirectWorkerBusinessPrompts,
+			"shared_appserver_threads":  r1GitHubMeshThreadIDs(s.agents),
+			"cross_scenario_mnemon_ctx": true,
 		},
 	})
 	if !passed {
@@ -440,8 +468,8 @@ func (s r1GitHubMeshRun) wakeWorkers(name string, entries []r1GitHubMeshScenario
 			}
 			agent := &s.agents[i]
 			s.report.RunnerContract.WorkerWakePrompts++
-			recordR1ClusterPrompt(s.report.RunnerContract, agent.principal, "worker_wake:"+name, r1ClusterWorkerWakePrompt)
-			answer, err := runR1Turn(&agent.r1CodexAgent, r1ClusterWorkerWakePrompt, s.opts.TurnTimeout)
+			recordR1ClusterPrompt(s.report.RunnerContract, agent.principal, "worker_wake:"+name, r1GitHubMeshWorkerWakePrompt)
+			answer, err := runR1Turn(&agent.r1CodexAgent, r1GitHubMeshWorkerWakePrompt, s.opts.TurnTimeout)
 			appendSyncAgentAnswer(s.report.Sync, agent.principal, answer)
 			if err != nil {
 				s.report.RunnerContract.WorkerWakeErrors = append(s.report.RunnerContract.WorkerWakeErrors, fmt.Sprintf("%s cycle %d %s: %v", name, cycle, agent.principal, err))
@@ -469,6 +497,29 @@ func r1GitHubMeshPromptRounds(contract *r1RunnerContractReport, scenario string)
 		}
 	}
 	return rounds
+}
+
+func r1GitHubMeshPromptKindCount(contract *r1RunnerContractReport, kind string) int {
+	if contract == nil {
+		return 0
+	}
+	count := 0
+	for _, prompt := range contract.PromptAudit {
+		if prompt.Kind == kind {
+			count++
+		}
+	}
+	return count
+}
+
+func r1GitHubMeshThreadIDs(agents []r1CodexSyncAgent) map[string]string {
+	out := make(map[string]string, len(agents))
+	for _, agent := range agents {
+		if strings.TrimSpace(agent.threadID) != "" {
+			out[agent.principal] = agent.threadID
+		}
+	}
+	return out
 }
 
 func setupR1CodexGitHubMeshAgents(ctx context.Context, runRoot, binDir, repo, tokenFile, branchPrefix string, count int, sourceCodexHome string) ([]r1CodexSyncAgent, error) {
@@ -600,6 +651,9 @@ func buildR1GitHubMeshSyncReport(repo string, agents []r1CodexSyncAgent) *r1Code
 		Status:               "running",
 		Backend:              exchange.RemoteBackendGitHub,
 		Repo:                 repo,
+		TransportModel:       "repo-mediated-publication",
+		RosterSource:         "configured-remotes-json",
+		NetworkDiscovery:     "none",
 		AllowedEventSubjects: r1SyncEventSubjectLabels(r1GitHubMeshScopes()),
 		Artifacts:            map[string]string{},
 		BranchByAgent:        map[string]string{},
@@ -617,12 +671,15 @@ func buildR1GitHubMeshSyncReport(repo string, agents []r1CodexSyncAgent) *r1Code
 		}
 		report.RuntimeWorkspaces = append(report.RuntimeWorkspaces, agent.workspace)
 		report.LocalStorePaths = append(report.LocalStorePaths, filepath.Join(agent.workspace, runtime.DefaultStorePath))
-		report.Artifacts[fmt.Sprintf("remotes:%s", agent.principal)] = filepath.Join(agent.workspace, ".mnemon", "harness", "sync", "remotes.json")
+		remotesPath := filepath.Join(agent.workspace, ".mnemon", "harness", "sync", "remotes.json")
+		report.RemotePlanPaths = append(report.RemotePlanPaths, remotesPath)
+		report.Artifacts[fmt.Sprintf("remotes:%s", agent.principal)] = remotesPath
 		if i == 0 {
 			report.Source = agent.principal
 		}
 	}
 	sort.Strings(report.PublicationBranches)
+	sort.Strings(report.RemotePlanPaths)
 	return report
 }
 

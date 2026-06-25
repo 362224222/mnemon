@@ -85,8 +85,14 @@ func TestBuildR1GitHubMeshSyncReportProvesIsolationAndNoHub(t *testing.T) {
 	if report.Backend != exchange.RemoteBackendGitHub || report.Repo != "mnemon-dev/mnemon-teamwork-example" || report.HubURL != "" {
 		t.Fatalf("report backend/repo/hub wrong: %+v", report)
 	}
+	if report.TransportModel != "repo-mediated-publication" || report.RosterSource != "configured-remotes-json" || report.NetworkDiscovery != "none" {
+		t.Fatalf("report must pin github bootstrap semantics without p2p discovery: %+v", report)
+	}
 	if len(report.PublicationBranches) != 3 || len(report.BranchByAgent) != 3 {
 		t.Fatalf("report branches wrong: %+v", report)
+	}
+	if len(report.RemotePlanPaths) != 3 || !distinctStrings(report.RemotePlanPaths) {
+		t.Fatalf("report must expose one remotes.json per workspace, got %+v", report.RemotePlanPaths)
 	}
 	if !distinctStrings(report.RuntimeWorkspaces) || !distinctStrings(report.LocalStorePaths) {
 		t.Fatalf("report must prove isolated workspaces/stores: workspaces=%v stores=%v", report.RuntimeWorkspaces, report.LocalStorePaths)
@@ -125,6 +131,9 @@ func TestR1GitHubMeshScenarioContract(t *testing.T) {
 			}
 		}
 	}
+	if !strings.Contains(r1GitHubMeshWorkerWakePrompt, "agent_profile") {
+		t.Fatal("github mesh worker wake prompt should let agents naturally refresh their profile")
+	}
 }
 
 func TestR1GitHubMeshScenarioStatusRequiresSelectedOK(t *testing.T) {
@@ -153,5 +162,8 @@ func TestR1GitHubMeshPromptRoundsCountsScenarioPrompts(t *testing.T) {
 	recordR1ClusterPrompt(contract, "codex-01@project", "integration:other", "other")
 	if got := r1GitHubMeshPromptRounds(contract, "onboarding-synthesis"); got != 3 {
 		t.Fatalf("prompt rounds = %d, want 3", got)
+	}
+	if got := r1GitHubMeshPromptKindCount(contract, "worker_wake:onboarding-synthesis"); got != 1 {
+		t.Fatalf("worker wake prompt count = %d, want 1", got)
 	}
 }
