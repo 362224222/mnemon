@@ -1,6 +1,8 @@
 package app
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
@@ -18,16 +20,31 @@ import (
 // boots its own import runtime by path, so it must never run inside a serving process (the in-process
 // worker drives importPulledEvents over the LIVE runtime instead — flock, v1.1 #2).
 func ImportLocalSyncPull(storePath, remoteID, nextCursor string, events []eventmodel.EventEnvelope, catalog policy.Registry) error {
-	if len(events) > 0 {
-		refs, err := refsFromSyncedEvents(events)
-		if err != nil {
-			return err
+	return ImportLocalSyncPullWithDiagnostics(storePath, remoteID, nextCursor, events, nil, catalog)
+}
+
+// ImportLocalSyncPullWithDiagnostics is ImportLocalSyncPull plus pull-side Remote Workspace
+// diagnostics. Diagnostics enter as trusted sync.remote_diagnostic.observed observations and are
+// converted by policy into durable sync.diagnostic events, exactly like skipped-kind diagnostics.
+func ImportLocalSyncPullWithDiagnostics(storePath, remoteID, nextCursor string, events []eventmodel.EventEnvelope, diagnostics []contract.EventExchangeResult, catalog policy.Registry) error {
+	if len(events) > 0 || len(diagnostics) > 0 {
+		var refs []contract.ResourceRef
+		if len(events) > 0 {
+			var err error
+			refs, err = refsFromSyncedEvents(events)
+			if err != nil {
+				return err
+			}
 		}
 		rt, err := OpenSyncImportRuntime(storePath, refs, catalog)
 		if err != nil {
 			return fmt.Errorf("open Local Mnemon import runtime: %w", err)
 		}
 		if err := importPulledEvents(rt, remoteID, events, catalog); err != nil {
+			_ = rt.Close()
+			return err
+		}
+		if err := importRemoteDiagnostics(rt, remoteID, diagnostics); err != nil {
 			_ = rt.Close()
 			return err
 		}
@@ -93,6 +110,40 @@ func importPulledEvents(rt *runtime.Runtime, remoteID string, events []eventmode
 	return nil
 }
 
+func importRemoteDiagnostics(rt *runtime.Runtime, remoteID string, diagnostics []contract.EventExchangeResult) error {
+	if len(diagnostics) == 0 {
+		return nil
+	}
+	pulledAt := time.Now().UTC().Format(time.RFC3339)
+	for _, item := range diagnostics {
+		env := contract.ObservationEnvelope{
+			ExternalID: syncRemoteDiagnosticExternalID(remoteID, item),
+			Event: contract.Event{
+				Type: policy.SyncRemoteDiagnosticObserved,
+				Payload: map[string]any{
+					"remote_id":      remoteID,
+					"origin_mnemond": item.OriginMnemond,
+					"event_id":       item.EventID,
+					"subject":        string(item.Subject),
+					"status":         item.Status,
+					"diagnostic":     item.Diagnostic,
+					"pulled_at":      pulledAt,
+				},
+			},
+		}
+		_, dup, err := rt.IngestTrusted(contract.SyncImportActor, env)
+		if err != nil {
+			return fmt.Errorf("ingest remote workspace diagnostic: %w", err)
+		}
+		if !dup {
+			if _, err := rt.Tick(); err != nil {
+				return fmt.Errorf("apply remote workspace diagnostic: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
 func refsFromSyncedEvents(events []eventmodel.EventEnvelope) ([]contract.ResourceRef, error) {
 	seen := map[contract.ResourceRef]bool{}
 	var refs []contract.ResourceRef
@@ -118,4 +169,16 @@ func syncPullExternalID(remoteID string, material contract.SyncedEventMaterial) 
 		string(material.ResourceRef.Kind),
 		string(material.ResourceRef.ID),
 	}, ":")
+}
+
+func syncRemoteDiagnosticExternalID(remoteID string, item contract.EventExchangeResult) string {
+	sum := sha256.Sum256([]byte(strings.Join([]string{
+		remoteID,
+		item.OriginMnemond,
+		item.EventID,
+		string(item.Subject),
+		item.Status,
+		item.Diagnostic,
+	}, "\x00")))
+	return "pull:" + remoteID + ":diagnostic:" + hex.EncodeToString(sum[:12])
 }

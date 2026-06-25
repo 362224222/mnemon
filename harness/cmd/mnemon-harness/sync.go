@@ -258,7 +258,7 @@ func syncPullOnce() (syncPullResult, error) {
 		if err != nil {
 			return syncPullResult{}, fmt.Errorf("sync pull failed: %w", err)
 		}
-		if err := app.ImportLocalSyncPull(storePath, remote.ID, resp.NextCursor, resp.Events, catalog); err != nil {
+		if err := app.ImportLocalSyncPullWithDiagnostics(storePath, remote.ID, resp.NextCursor, resp.Events, resp.Diagnostics, catalog); err != nil {
 			return syncPullResult{}, err
 		}
 		result.events += len(resp.Events)

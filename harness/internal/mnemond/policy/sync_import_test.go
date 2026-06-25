@@ -32,6 +32,38 @@ func TestSyncImportSkippedRuleDeniesNamingKind(t *testing.T) {
 	}
 }
 
+func TestSyncRemoteDiagnosticRuleDeniesNamingRemoteDiagnostic(t *testing.T) {
+	r := SyncRemoteDiagnosticRule(contract.SyncImportActor)
+	if r.Handles("fixture_record.write_candidate.observed") || !r.Handles(SyncRemoteDiagnosticObserved) {
+		t.Fatal("rule must handle exactly the remote diagnostic observation type")
+	}
+	dec, err := r.Evaluate(admission.RuleInput{Event: contract.Event{
+		Type:  SyncRemoteDiagnosticObserved,
+		Actor: contract.SyncImportActor,
+		Payload: map[string]any{
+			"remote_id":      "github-sub",
+			"origin_mnemond": "agent-b",
+			"event_id":       "evt-bad",
+			"subject":        "progress_digest/project",
+			"status":         "invalid",
+			"diagnostic":     "digest mismatch",
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dec.Verdict != contract.VerdictDeny || len(dec.Reasons) != 1 ||
+		!strings.Contains(dec.Reasons[0], `"github-sub"`) ||
+		!strings.Contains(dec.Reasons[0], `"invalid"`) ||
+		!strings.Contains(dec.Reasons[0], "digest mismatch") {
+		t.Fatalf("remote diagnostic must deny naming remote/status/reason, got %+v", dec)
+	}
+	foreign, err := r.Evaluate(admission.RuleInput{Event: contract.Event{Type: SyncRemoteDiagnosticObserved, Actor: "someone@else"}})
+	if err != nil || foreign.Verdict != contract.VerdictAllow {
+		t.Fatalf("a foreign principal's event must pass through, got %+v err=%v", foreign, err)
+	}
+}
+
 // The embedded importable set is descriptor-derived (PD6, replacing the former hardcoded
 // contract.SyncableResourceKinds): the embedded catalog opts each syncable kind into Remote
 // Workspace import under its declared closed-set merge strategy. This is the pin the deleted

@@ -176,5 +176,8 @@ func syncWorkerPull(rt *runtime.Runtime, remote exchange.RemoteWorkspace, remote
 	if err := importPulledEvents(rt, remoteID, resp.Events, catalog); err != nil {
 		return err
 	}
+	if err := importRemoteDiagnostics(rt, remoteID, resp.Diagnostics); err != nil {
+		return err
+	}
 	return exchange.SetPullCursor(rt, remoteID, resp.NextCursor)
 }
