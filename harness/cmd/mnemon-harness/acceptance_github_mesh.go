@@ -334,6 +334,64 @@ func allR1GitHubMeshScenariosOK(scenarios []r1TaskSimScenarioReport, selected []
 	return true
 }
 
+func r1GitHubMeshScenarioSelected(selected []string, name string) bool {
+	for _, selectedName := range selected {
+		if selectedName == name {
+			return true
+		}
+	}
+	return false
+}
+
+func r1GitHubMeshOKScenarioNames(scenarios []r1TaskSimScenarioReport) []string {
+	out := []string{}
+	for _, scenario := range scenarios {
+		if scenario.Status == "ok" && strings.TrimSpace(scenario.Name) != "" {
+			out = append(out, scenario.Name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func r1GitHubMeshCrossTaskReuseCandidate(name string, priorOK []string) bool {
+	if name != "sync-risk-review" {
+		return false
+	}
+	return r1GitHubMeshScenarioSelected(priorOK, "onboarding-synthesis")
+}
+
+func r1GitHubMeshHasOKScenarioEvidenceBool(scenarios []r1TaskSimScenarioReport, name, key string) bool {
+	for _, scenario := range scenarios {
+		if scenario.Name != name || scenario.Status != "ok" {
+			continue
+		}
+		if value, ok := scenario.Evidence[key].(bool); ok && value {
+			return true
+		}
+	}
+	return false
+}
+
+func r1GitHubMeshHasAnyOKScenarioEvidenceIntAtLeast(scenarios []r1TaskSimScenarioReport, key string, min int) bool {
+	for _, scenario := range scenarios {
+		if scenario.Status != "ok" {
+			continue
+		}
+		switch value := scenario.Evidence[key].(type) {
+		case int:
+			if value >= min {
+				return true
+			}
+		case float64:
+			if int(value) >= min {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (s *r1GitHubMeshRun) bootstrapProfiles() error {
 	profileCounts := map[string]int{}
 	active := r1GitHubMeshReadyAgentIndexes(s.agents)
@@ -419,6 +477,7 @@ func (s *r1GitHubMeshRun) runScenario(name string) error {
 	if err := s.wakeWorkers(name, entries); err != nil {
 		return err
 	}
+	priorScenarios := r1GitHubMeshOKScenarioNames(s.report.Scenarios)
 	lead := &s.agents[entries[0].index]
 	integrationPrompt := r1GitHubMeshIntegrationPrompt(name)
 	s.report.RunnerContract.IntegrationPrompts++
@@ -457,22 +516,24 @@ func (s *r1GitHubMeshRun) runScenario(name string) error {
 		Status: statusFromBool(passed),
 		Actors: actors,
 		Evidence: map[string]any{
-			"participants":              participants,
-			"replanning_rounds":         replans,
-			"natural_user_messages":     naturalMessages,
-			"worker_wake_prompts":       workerWakes,
-			"integration_prompts":       integrationPrompts,
-			"entry_poc_agents":          actors,
-			"multi_poc":                 len(actors) > 1,
-			"profile_update_prompted":   strings.Contains(r1GitHubMeshWorkerWakePrompt, "agent_profile"),
-			"direct_worker_business":    s.report.RunnerContract.DirectWorkerBusinessPrompts,
-			"shared_appserver_threads":  r1GitHubMeshThreadIDs(s.agents),
-			"cross_scenario_mnemon_ctx": true,
-			"actor_event_counts":        counts,
-			"assignment_events":         assignments,
-			"progress_digest_events":    progress,
-			"teamwork_signal_events":    signals,
-			"project_intent_events":     intents,
+			"participants":                   participants,
+			"replanning_rounds":              replans,
+			"natural_user_messages":          naturalMessages,
+			"worker_wake_prompts":            workerWakes,
+			"integration_prompts":            integrationPrompts,
+			"entry_poc_agents":               actors,
+			"multi_poc":                      len(actors) > 1,
+			"prior_ok_scenarios":             priorScenarios,
+			"cross_task_reuse_or_completion": r1GitHubMeshCrossTaskReuseCandidate(name, priorScenarios),
+			"profile_update_prompted":        strings.Contains(r1GitHubMeshWorkerWakePrompt, "agent_profile"),
+			"direct_worker_business":         s.report.RunnerContract.DirectWorkerBusinessPrompts,
+			"shared_appserver_threads":       r1GitHubMeshThreadIDs(s.agents),
+			"cross_scenario_mnemon_ctx":      true,
+			"actor_event_counts":             counts,
+			"assignment_events":              assignments,
+			"progress_digest_events":         progress,
+			"teamwork_signal_events":         signals,
+			"project_intent_events":          intents,
 		},
 	})
 	if !passed {
@@ -502,6 +563,14 @@ func (s *r1GitHubMeshRun) addPostScenarioAssertions() {
 		raw, _ := json.Marshal(profileCounts)
 		s.report.Raw["github_mesh:profile_counts_after_scenarios"] = raw
 	}
+	selected := r1GitHubMeshScenarioNames(s.opts.Scenarios)
+	if r1GitHubMeshScenarioSelected(selected, "live-readiness-operator-safety") {
+		addR1Assertion(s.report, "github-mesh multi-poc scenario exercised", r1GitHubMeshHasOKScenarioEvidenceBool(s.report.Scenarios, "live-readiness-operator-safety", "multi_poc"), "scenario=live-readiness-operator-safety")
+	}
+	if r1GitHubMeshScenarioSelected(selected, "onboarding-synthesis") && r1GitHubMeshScenarioSelected(selected, "sync-risk-review") {
+		addR1Assertion(s.report, "github-mesh cross-task reuse/completion evidence recorded", r1GitHubMeshHasOKScenarioEvidenceBool(s.report.Scenarios, "sync-risk-review", "cross_task_reuse_or_completion"), "scenario=sync-risk-review prior=onboarding-synthesis")
+	}
+	addR1Assertion(s.report, "github-mesh output-driven replanning evidence recorded", r1GitHubMeshHasAnyOKScenarioEvidenceIntAtLeast(s.report.Scenarios, "replanning_rounds", 2), "requires at least one successful natural scenario with two or more prompt rounds")
 }
 
 type r1GitHubMeshScenarioEntry struct {

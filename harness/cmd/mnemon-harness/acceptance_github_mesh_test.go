@@ -272,6 +272,38 @@ func TestR1GitHubMeshScenarioStatusRequiresSelectedOK(t *testing.T) {
 	}
 }
 
+func TestR1GitHubMeshNaturalSuiteEvidenceHelpers(t *testing.T) {
+	scenarios := []r1TaskSimScenarioReport{
+		{Name: "onboarding-synthesis", Status: "ok", Evidence: map[string]any{"replanning_rounds": 3}},
+		{Name: "sync-risk-review", Status: "ok", Evidence: map[string]any{"cross_task_reuse_or_completion": true}},
+		{Name: "live-readiness-operator-safety", Status: "ok", Evidence: map[string]any{"multi_poc": true}},
+	}
+	prior := r1GitHubMeshOKScenarioNames(scenarios[:1])
+	if !r1GitHubMeshCrossTaskReuseCandidate("sync-risk-review", prior) {
+		t.Fatal("sync-risk-review should be a cross-task reuse candidate after onboarding-synthesis")
+	}
+	if r1GitHubMeshCrossTaskReuseCandidate("sync-risk-review", nil) {
+		t.Fatal("sync-risk-review without prior onboarding should not claim cross-task reuse")
+	}
+	if !r1GitHubMeshHasOKScenarioEvidenceBool(scenarios, "live-readiness-operator-safety", "multi_poc") {
+		t.Fatal("multi-poc evidence should be detected on the successful live-readiness scenario")
+	}
+	if !r1GitHubMeshHasOKScenarioEvidenceBool(scenarios, "sync-risk-review", "cross_task_reuse_or_completion") {
+		t.Fatal("cross-task evidence should be detected on the successful sync-risk scenario")
+	}
+	if !r1GitHubMeshHasAnyOKScenarioEvidenceIntAtLeast(scenarios, "replanning_rounds", 2) {
+		t.Fatal("replanning evidence should accept int counts")
+	}
+	scenarios[0].Evidence["replanning_rounds"] = float64(2)
+	if !r1GitHubMeshHasAnyOKScenarioEvidenceIntAtLeast(scenarios, "replanning_rounds", 2) {
+		t.Fatal("replanning evidence should accept json-decoded float64 counts")
+	}
+	scenarios[2].Status = "failed"
+	if r1GitHubMeshHasOKScenarioEvidenceBool(scenarios, "live-readiness-operator-safety", "multi_poc") {
+		t.Fatal("failed scenarios must not satisfy evidence assertions")
+	}
+}
+
 func TestR1GitHubMeshPromptRoundsCountsScenarioPrompts(t *testing.T) {
 	contract := &r1RunnerContractReport{}
 	recordR1ClusterPrompt(contract, "codex-01@project", "natural_user_message:onboarding-synthesis", "prompt")

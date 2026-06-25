@@ -49,6 +49,7 @@ other mnemond subscribe to those branches and validate locally.
   - per-agent local mnemond store path
   - delayed join / pause / restart lifecycle entries under `sync.lifecycle`
   - publication/import/profile summaries under `sync.published_events_by_branch`, `sync.imported_events_by_mnemond`, and `sync.profile_events_by_mnemond`
+  - natural suite evidence under `scenarios[].evidence` for multi-PoC, prior completed scenarios, cross-task reuse/completion, and replanning rounds
 
 当前仍需外部证据的边界:
 
@@ -1313,6 +1314,9 @@ diagnostics per mnemond
 assignment/progress chain
 mnemond join/leave timeline
 profile refresh/update timeline
+multi-PoC evidence
+cross-task reuse/completion evidence
+output-driven replanning evidence
 proof no central mnemon-hub endpoint was used
 proof no shared governed.db was used
 ```

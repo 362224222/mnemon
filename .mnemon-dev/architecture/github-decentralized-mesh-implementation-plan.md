@@ -892,6 +892,10 @@ sync.diagnostics_by_mnemond
 sync.profile_events_by_mnemond
 sync.lifecycle[].action = delayed_join_start | delayed_join_ready | pause_local_mnemond | restart_local_mnemond
 sync.lifecycle[].ledger = local ledger counts captured at lifecycle boundaries
+scenarios[].evidence.multi_poc
+scenarios[].evidence.prior_ok_scenarios
+scenarios[].evidence.cross_task_reuse_or_completion
+scenarios[].evidence.replanning_rounds
 ```
 
 Done when:
