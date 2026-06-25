@@ -3,8 +3,6 @@ package exchange
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	pathpkg "path"
 	"sort"
@@ -16,7 +14,7 @@ import (
 	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
 )
 
-const PublicationEventRoot = ".mnemonhub/v1/events"
+const PublicationEventRoot = "mnemon-publications/v1/events"
 
 // PublicationStore is the storage seam under a Remote Workspace publication backend. It is
 // intentionally repository-shaped but not tied to any GitHub client, so exchange semantics can be
@@ -54,27 +52,34 @@ func PublicationEventPath(env eventmodel.EventEnvelope) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("publication origin: %w", err)
 	}
-	key, err := PublicationEventKey(env)
+	kind, err := normalizePublicationPathSegment(string(material.ResourceRef.Kind))
+	if err != nil {
+		return "", fmt.Errorf("publication resource kind: %w", err)
+	}
+	resourceID, err := normalizePublicationPathSegment(string(material.ResourceRef.ID))
+	if err != nil {
+		return "", fmt.Errorf("publication resource id: %w", err)
+	}
+	stem, err := PublicationEventFileStem(env)
 	if err != nil {
 		return "", err
 	}
-	return PublicationEventRoot + "/" + origin + "/" + key + ".json", nil
+	return PublicationEventRoot + "/" + origin + "/" + kind + "/" + resourceID + "/" + stem + ".json", nil
 }
 
-func PublicationEventKey(env eventmodel.EventEnvelope) (string, error) {
+func PublicationEventFileStem(env eventmodel.EventEnvelope) (string, error) {
 	material, err := contract.SyncedEventMaterialFromEnvelope(env)
 	if err != nil {
 		return "", err
 	}
-	sum := sha256.Sum256([]byte(strings.Join([]string{
-		material.OriginReplicaID,
-		material.LocalDecisionID,
-		strconv.FormatInt(material.LocalIngestSeq, 10),
-		string(material.ResourceRef.Kind),
-		string(material.ResourceRef.ID),
-		material.FieldsDigest,
-	}, "\x00")))
-	return hex.EncodeToString(sum[:16]), nil
+	if material.LocalIngestSeq < 0 {
+		return "", fmt.Errorf("local_ingest_seq must be non-negative")
+	}
+	decisionID, err := normalizePublicationPathSegment(material.LocalDecisionID)
+	if err != nil {
+		return "", fmt.Errorf("publication decision id: %w", err)
+	}
+	return fmt.Sprintf("%012d-%s", material.LocalIngestSeq, decisionID), nil
 }
 
 func NormalizePublicationBranch(branch string) (string, error) {

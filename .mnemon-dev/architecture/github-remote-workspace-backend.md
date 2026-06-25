@@ -666,14 +666,13 @@ Per-mnemond publication branches:
 ```text
 branch: mnemon/<mnemond-id>
 
-.mnemonhub/v1/
+mnemon-publications/v1/
   manifest.json
   events/
     <origin_mnemond>/
-      <event_key>.json
-  receipts/
-    <origin_mnemond>/
-      <event_key>.json
+      <resource_kind>/
+        <resource_id>/
+          <local_ingest_seq>-<local_decision_id>.json
 ```
 
 `team.json` sketch:
@@ -711,20 +710,21 @@ branch: mnemon/<mnemond-id>
 Event file:
 
 ```text
-.mnemonhub/v1/events/<origin_mnemond>/<event_key>.json
+mnemon-publications/v1/events/<origin_mnemond>/<resource_kind>/<resource_id>/<local_ingest_seq>-<local_decision_id>.json
 ```
 
-`event_key`:
+`local_ingest_seq` is zero-padded to 12 digits. This keeps GitHub paths human-reviewable:
 
 ```text
-sha256(origin_mnemond + "\0" + event_id + "\0" + subject + "\0" + digest)
+mnemon-publications/v1/events/agent-a/progress_digest/project/000000000007-dec-a.json
 ```
 
 Rules:
 
 - File body is a single `event.EventEnvelope` with `phase=synced`.
-- Same key + same body = idempotent.
-- Same key + different body = conflict diagnostic.
+- Same path + same body = idempotent.
+- Same path + different body = conflict diagnostic.
+- The path is a visible publication address, not a hash key.
 - Git commit SHA is transport cursor/provenance only.
 - Governance ordering remains local ingest seq after import.
 
@@ -737,7 +737,7 @@ local Materializer accepts decision
   -> state records accepted envelope
   -> state records pending sync event
   -> sync orchestrator reads PushTargets
-  -> GitHub backend derives event_key
+  -> GitHub backend derives visible publication path
   -> writes event file to own publication branch
   -> records per-target ack locally
 ```
@@ -795,7 +795,7 @@ invalid phase
 invalid schema
 digest mismatch
 out-of-subscription scope
-same event_key different body
+same publication path different body
 unknown importable kind
 ```
 
@@ -1108,7 +1108,7 @@ Likely requirement:
 
 ```text
 sync_event_targets
-  event_key
+  publication_path
   remote_id
   status
   diagnostic
@@ -1183,7 +1183,7 @@ Implement `RemoteWorkspace` over `PublicationStore`.
 Push:
 
 - read local batch
-- derive event key
+- derive visible publication path
 - write to own branch store
 - return accepted/conflict
 
@@ -1283,8 +1283,8 @@ mnemon/team
   .mnemon/reports/<run-id>/summary.json
 
 mnemon/<mnemond-a>
-  .mnemonhub/v1/manifest.json
-  .mnemonhub/v1/events/<origin>/<event-key>.json
+  mnemon-publications/v1/manifest.json
+  mnemon-publications/v1/events/<origin>/<resource-kind>/<resource-id>/<local-seq>-<decision-id>.json
 
 mnemon/<mnemond-b>
 mnemon/<mnemond-c>

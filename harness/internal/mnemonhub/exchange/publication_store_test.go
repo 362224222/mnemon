@@ -22,8 +22,9 @@ func TestPublicationStoreEventPathDeterministic(t *testing.T) {
 	if path1 != path2 {
 		t.Fatalf("event path must be deterministic: %q != %q", path1, path2)
 	}
-	if !strings.HasPrefix(path1, PublicationEventRoot+"/replica-a/") || !strings.HasSuffix(path1, ".json") {
-		t.Fatalf("event path must stay under publication event root, got %q", path1)
+	wantPath := PublicationEventRoot + "/replica-a/progress_digest/project/000000000007-dec-a.json"
+	if path1 != wantPath {
+		t.Fatalf("event path = %q, want explicit maintainable path %q", path1, wantPath)
 	}
 
 	changed := publicationTestEnvelope(t, "dec-b", "remote-entry-b", "different event")
@@ -42,7 +43,7 @@ func TestPublicationStorePutEventIsIdempotentAndConflictAware(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := PublicationEventRoot + "/replica-a/event-a.json"
+	path := PublicationEventRoot + "/replica-a/progress_digest/project/000000000007-dec-a.json"
 
 	first, err := store.PutEvent(ctx, "mnemon/agent-a", path, []byte(`{"id":"a"}`))
 	if err != nil {
@@ -80,10 +81,10 @@ func TestPublicationStoreListEventsAfterCursor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.PutEvent(ctx, "mnemon/agent-a", PublicationEventRoot+"/replica-a/event-a.json", []byte("a")); err != nil {
+	if _, err := store.PutEvent(ctx, "mnemon/agent-a", PublicationEventRoot+"/replica-a/progress_digest/project/000000000001-dec-a.json", []byte("a")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.PutEvent(ctx, "mnemon/agent-a", PublicationEventRoot+"/replica-a/event-b.json", []byte("b")); err != nil {
+	if _, err := store.PutEvent(ctx, "mnemon/agent-a", PublicationEventRoot+"/replica-a/progress_digest/project/000000000002-dec-b.json", []byte("b")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -98,7 +99,7 @@ func TestPublicationStoreListEventsAfterCursor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list after first: %v", err)
 	}
-	if len(afterFirst.Events) != 1 || afterFirst.Events[0].Path != PublicationEventRoot+"/replica-a/event-b.json" || afterFirst.NextCursor != "2" {
+	if len(afterFirst.Events) != 1 || afterFirst.Events[0].Path != PublicationEventRoot+"/replica-a/progress_digest/project/000000000002-dec-b.json" || afterFirst.NextCursor != "2" {
 		t.Fatalf("list after first = %+v, want event-b only", afterFirst)
 	}
 	empty, err := store.ListEvents(ctx, "mnemon/agent-a", PublicationEventRoot, afterFirst.NextCursor)
@@ -116,19 +117,19 @@ func TestPublicationStoreRejectsUnsupportedBranchAndPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.PutEvent(ctx, "mnemon/agent-b", PublicationEventRoot+"/replica-a/event-a.json", []byte("a")); err == nil || !strings.Contains(err.Error(), "not configured") {
+	if _, err := store.PutEvent(ctx, "mnemon/agent-b", PublicationEventRoot+"/replica-a/progress_digest/project/000000000001-dec-a.json", []byte("a")); err == nil || !strings.Contains(err.Error(), "not configured") {
 		t.Fatalf("unsupported branch must fail closed, got %v", err)
 	}
-	if _, err := store.PutEvent(ctx, "refs/heads/main", PublicationEventRoot+"/replica-a/event-a.json", []byte("a")); err == nil || !strings.Contains(err.Error(), "outside the mnemon namespace") {
+	if _, err := store.PutEvent(ctx, "refs/heads/main", PublicationEventRoot+"/replica-a/progress_digest/project/000000000001-dec-a.json", []byte("a")); err == nil || !strings.Contains(err.Error(), "outside the mnemon namespace") {
 		t.Fatalf("non-publication branch must fail closed, got %v", err)
 	}
-	if _, err := store.PutEvent(ctx, "mnemon/agent-a", ".mnemonhub/v1/../events/event-a.json", []byte("a")); err == nil || !strings.Contains(err.Error(), "invalid") {
+	if _, err := store.PutEvent(ctx, "mnemon/agent-a", "mnemon-publications/v1/../events/event-a.json", []byte("a")); err == nil || !strings.Contains(err.Error(), "invalid") {
 		t.Fatalf("escaping event path must fail closed, got %v", err)
 	}
 	if _, err := store.PutEvent(ctx, "mnemon/agent-a", ".mnemon/reports/run.json", []byte("a")); err == nil || !strings.Contains(err.Error(), "must be under") {
 		t.Fatalf("non-event PutEvent path must fail closed, got %v", err)
 	}
-	if err := store.WriteFile(ctx, "mnemon/agent-a", PublicationEventRoot+"/replica-a/event-a.json", []byte("a")); err == nil || !strings.Contains(err.Error(), "PutEvent") {
+	if err := store.WriteFile(ctx, "mnemon/agent-a", PublicationEventRoot+"/replica-a/progress_digest/project/000000000001-dec-a.json", []byte("a")); err == nil || !strings.Contains(err.Error(), "PutEvent") {
 		t.Fatalf("WriteFile must not write event paths, got %v", err)
 	}
 }

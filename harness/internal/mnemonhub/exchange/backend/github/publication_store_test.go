@@ -24,7 +24,7 @@ func TestGitHubPublicationStorePutEventCreateAndIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := exchange.PublicationEventRoot + "/replica-a/event-a.json"
+	path := exchange.PublicationEventRoot + "/replica-a/progress_digest/project/000000000001-dec-a.json"
 
 	first, err := store.PutEvent(context.Background(), "mnemon/agent-a", path, []byte(`{"id":"a"}`))
 	if err != nil {
@@ -79,8 +79,8 @@ func TestGitHubPublicationStoreWriteFileUpdatesWithSHA(t *testing.T) {
 func TestGitHubPublicationStoreListEventsUsesBranchHeadCursor(t *testing.T) {
 	fake := newFakeGitHubPublicationAPI(t)
 	fake.head = "head-2"
-	fake.files["mnemon/agent-b:"+exchange.PublicationEventRoot+"/replica-b/event-b.json"] = fakeGitHubFile{body: []byte(`{"id":"b"}`), sha: "sha-b"}
-	fake.files["mnemon/agent-b:"+exchange.PublicationEventRoot+"/replica-c/event-c.json"] = fakeGitHubFile{body: []byte(`{"id":"c"}`), sha: "sha-c"}
+	fake.files["mnemon/agent-b:"+exchange.PublicationEventRoot+"/replica-b/progress_digest/project/000000000001-dec-b.json"] = fakeGitHubFile{body: []byte(`{"id":"b"}`), sha: "sha-b"}
+	fake.files["mnemon/agent-b:"+exchange.PublicationEventRoot+"/replica-c/progress_digest/project/000000000001-dec-c.json"] = fakeGitHubFile{body: []byte(`{"id":"c"}`), sha: "sha-c"}
 	store, err := NewPublicationStore(PublicationStoreConfig{
 		Repo:       "mnemon-dev/mnemon-teamwork-example",
 		BaseURL:    fake.server.URL,
@@ -126,7 +126,7 @@ func TestGitHubPublicationStoreLiveGated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := exchange.PublicationEventRoot + "/live-smoke/live-smoke.json"
+	path := exchange.PublicationEventRoot + "/live-smoke/progress_digest/project/000000000001-live-smoke.json"
 	body := []byte(`{"schema_version":1,"source":"mnemon live smoke"}`)
 	res, err := store.PutEvent(context.Background(), branch, path, body)
 	if err != nil {

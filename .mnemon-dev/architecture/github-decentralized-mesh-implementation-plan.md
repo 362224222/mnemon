@@ -276,8 +276,8 @@ mnemon/team
   .mnemon/reports/<run-id>/summary.json
 
 mnemon/<mnemond-id>
-  .mnemonhub/v1/manifest.json
-  .mnemonhub/v1/events/<origin_mnemond>/<event_key>.json
+  mnemon-publications/v1/manifest.json
+  mnemon-publications/v1/events/<origin_mnemond>/<resource_kind>/<resource_id>/<local_ingest_seq>-<local_decision_id>.json
 ```
 
 Contract:
@@ -344,7 +344,13 @@ type StoredEvent struct {
 Event path:
 
 ```text
-.mnemonhub/v1/events/<origin_mnemond>/<event_key>.json
+mnemon-publications/v1/events/<origin_mnemond>/<resource_kind>/<resource_id>/<local_ingest_seq>-<local_decision_id>.json
+```
+
+`local_ingest_seq` is zero-padded to 12 digits. The path is intentionally visible and maintainable in GitHub, for example:
+
+```text
+mnemon-publications/v1/events/agent-a/progress_digest/project/000000000007-dec-a.json
 ```
 
 Put semantics:
@@ -506,7 +512,7 @@ Scope:
 
 Tests:
 
-- event key deterministic.
+- publication path deterministic and human-reviewable.
 - idempotent put.
 - conflict put.
 - list after cursor.
@@ -546,8 +552,8 @@ SyncPush(req)
   for each synced envelope:
     require phase=synced
     materialize SyncedEventMaterial
-    derive event_key
-    write .mnemonhub/v1/events/<origin>/<event_key>.json
+    derive visible publication path
+    write mnemon-publications/v1/events/<origin>/<kind>/<resource>/<seq>-<decision>.json
     created/exists-same -> accepted
     exists-different -> conflict diagnostic
 ```
@@ -689,7 +695,7 @@ subscribe branch: mnemon/agent-b
 
 agent-a:
   local accepted synced envelope
-  -> publish .mnemonhub/v1/events/agent-a/<event_key>.json
+  -> publish mnemon-publications/v1/events/agent-a/progress_digest/project/000000000001-dec-a.json
 
 agent-b:
   pull mnemon/agent-a
