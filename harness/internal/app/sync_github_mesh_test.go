@@ -92,6 +92,142 @@ func TestSyncGitHubFakeFiveMnemondPublicationMesh(t *testing.T) {
 	}
 }
 
+func TestSyncGitHubFakePublicationMeshJoinLeaveReassignment(t *testing.T) {
+	ids := []string{"agent-a", "agent-b", "agent-c", "agent-d", "agent-e", "agent-f", "agent-g"}
+	branches := make([]string, 0, len(ids))
+	for _, id := range ids {
+		branches = append(branches, "mnemon/"+id)
+	}
+	store, err := exchange.NewMemoryPublicationStore(branches...)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	nodes := make([]meshTestNode, 0, len(ids))
+	for _, id := range ids[:5] {
+		node := newMeshTestNode(t, id)
+		observeMeshAssignment(t, node.rt, node.principal, id)
+		publishMeshNode(t, store, node)
+		nodes = append(nodes, node)
+	}
+	pullMeshAllSources(t, store, nodes[:5], nodes[:5])
+
+	for _, id := range ids[5:] {
+		node := newMeshTestNode(t, id)
+		observeMeshAssignment(t, node.rt, node.principal, id)
+		publishMeshNode(t, store, node)
+		nodes = append(nodes, node)
+	}
+	offline := nodes[3]
+	active := append([]meshTestNode{}, nodes[:3]...)
+	active = append(active, nodes[4:]...)
+	reassignScope := "agent-d down; reassign delayed work to agent-f"
+	observeMeshAssignmentWithScope(t, nodes[0].rt, nodes[0].principal, "reassign-agent-d", reassignScope, "codex@agent-f")
+	publishMeshNode(t, store, nodes[0])
+
+	pullMeshAllSources(t, store, active, nodes)
+	assertMeshScopes(t, active, []string{
+		meshAssignmentScope("agent-a"),
+		meshAssignmentScope("agent-b"),
+		meshAssignmentScope("agent-c"),
+		meshAssignmentScope("agent-d"),
+		meshAssignmentScope("agent-e"),
+		meshAssignmentScope("agent-f"),
+		meshAssignmentScope("agent-g"),
+		reassignScope,
+	})
+	assertMeshScopesAbsent(t, []meshTestNode{offline}, []string{meshAssignmentScope("agent-f"), meshAssignmentScope("agent-g"), reassignScope})
+
+	pullMeshAllSources(t, store, []meshTestNode{offline}, nodes)
+	assertMeshScopes(t, []meshTestNode{offline}, []string{meshAssignmentScope("agent-f"), meshAssignmentScope("agent-g"), reassignScope})
+}
+
+type meshTestNode struct {
+	id        string
+	branch    string
+	principal string
+	rt        *runtime.Runtime
+}
+
+func newMeshTestNode(t *testing.T, id string) meshTestNode {
+	t.Helper()
+	root := t.TempDir()
+	principal := "codex-" + id + "@project"
+	return meshTestNode{
+		id:        id,
+		branch:    "mnemon/" + id,
+		principal: principal,
+		rt:        openMeshServingRuntime(t, root, principal),
+	}
+}
+
+func publishMeshNode(t *testing.T, store exchange.PublicationStore, node meshTestNode) {
+	t.Helper()
+	remote := githubFakeRemote(t, store, node.branch)
+	if err := syncWorkerPush(node.rt, remote, "publish-"+node.id); err != nil {
+		t.Fatalf("%s publish: %v", node.id, err)
+	}
+	if pending, err := node.rt.PendingSyncedEvents(); err != nil || len(pending) != 0 {
+		t.Fatalf("%s publish must drain pending events, pending=%+v err=%v", node.id, pending, err)
+	}
+}
+
+func pullMeshAllSources(t *testing.T, store exchange.PublicationStore, targets, sources []meshTestNode) {
+	t.Helper()
+	for _, target := range targets {
+		for _, source := range sources {
+			if source.id == target.id {
+				continue
+			}
+			remote := githubFakeRemote(t, store, source.branch)
+			if err := syncWorkerPull(target.rt, remote, "subscribe-"+source.id, nil); err != nil {
+				t.Fatalf("%s subscribe %s: %v", target.id, source.id, err)
+			}
+		}
+	}
+}
+
+func assertMeshScopes(t *testing.T, nodes []meshTestNode, scopes []string) {
+	t.Helper()
+	for _, node := range nodes {
+		got := meshScopes(t, node)
+		for _, want := range scopes {
+			if !got[want] {
+				t.Fatalf("%s assignments missing %q in %+v", node.id, want, got)
+			}
+		}
+	}
+}
+
+func assertMeshScopesAbsent(t *testing.T, nodes []meshTestNode, scopes []string) {
+	t.Helper()
+	for _, node := range nodes {
+		got := meshScopes(t, node)
+		for _, want := range scopes {
+			if got[want] {
+				t.Fatalf("%s assignments unexpectedly contain %q in %+v", node.id, want, got)
+			}
+		}
+	}
+}
+
+func meshScopes(t *testing.T, node meshTestNode) map[string]bool {
+	t.Helper()
+	assignmentRef := contract.ResourceRef{Kind: "assignment", ID: "project"}
+	_, fields, err := node.rt.Resource(assignmentRef)
+	if err != nil {
+		t.Fatalf("%s read assignments: %v", node.id, err)
+	}
+	items, _ := fields["items"].([]any)
+	scopes := map[string]bool{}
+	for _, item := range items {
+		m, _ := item.(map[string]any)
+		scope, _ := m["scope"].(string)
+		scopes[scope] = true
+	}
+	return scopes
+}
+
 func openMeshServingRuntime(t *testing.T, root, principal string) *runtime.Runtime {
 	t.Helper()
 	refs := []contract.ResourceRef{{Kind: "progress_digest", ID: "project"}, {Kind: "assignment", ID: "project"}}
@@ -106,13 +242,18 @@ func openMeshServingRuntime(t *testing.T, root, principal string) *runtime.Runti
 
 func observeMeshAssignment(t *testing.T, rt *runtime.Runtime, principal, id string) {
 	t.Helper()
+	observeMeshAssignmentWithScope(t, rt, principal, id, meshAssignmentScope(id), "codex@"+id)
+}
+
+func observeMeshAssignmentWithScope(t *testing.T, rt *runtime.Runtime, principal, id, scope, assignee string) {
+	t.Helper()
 	if _, _, err := rt.API().Ingest(contract.ActorID(principal), contract.ObservationEnvelope{
 		ExternalID: "github-mesh-assignment-" + id,
 		Event: contract.Event{Type: "assignment.write_candidate.observed", Payload: map[string]any{
 			"assignment_id":     "mesh-" + id,
-			"scope":             meshAssignmentScope(id),
+			"scope":             scope,
 			"ttl":               "2h",
-			"assignee":          "codex@" + id,
+			"assignee":          assignee,
 			"expected_work":     "complete deterministic publication mesh validation for " + id,
 			"expected_feedback": "progress_digest",
 			"evidence":          "deterministic fake GitHub publication mesh test",
