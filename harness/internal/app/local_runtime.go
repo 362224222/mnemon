@@ -44,8 +44,9 @@ func OpenLocalRuntime(storePath string, loaded access.LoadedBindings, loops []st
 
 // withSyncImport merges the sync-import half into an assembled runtime policy (v1.1 #2): sync@local
 // gets one import rule per importable event package + the skipped-kind deny
-// rule, kernel authority for the importable kinds, and a subscription covering the binding scope's
-// syncable refs (the import rules read the current resource through this view to merge against).
+// rule, kernel authority + SchemaGuard headers for the importable kinds, and a subscription covering
+// the binding scope's syncable refs (the import rules read the current resource through this view to
+// merge against).
 // Co-existence is by construction: the added rules Handle only the <kind>.remote_synced_event.observed /
 // sync.* observation types AND gate on the sync principal, so host-agent events never match them and
 // host rules never see the import events — pinned by a test. catalog selects the importable universe
@@ -64,6 +65,16 @@ func withSyncImport(rc runtime.RuntimeConfig, bindings []access.ChannelBinding, 
 		rc.Authority.Allow = map[contract.ActorID][]contract.ResourceKind{}
 	}
 	rc.Authority.Allow[contract.SyncImportActor] = policy.ImportableKinds(catalog)
+	if rc.SchemaGuard.Required == nil {
+		rc.SchemaGuard = state.DefaultSchemaGuard()
+	}
+	for _, cap := range catalog {
+		if cap.Sync.Importable {
+			if _, known := rc.SchemaGuard.Required[cap.ResourceKind]; !known {
+				rc.SchemaGuard.Required[cap.ResourceKind] = cap.RequiredHeader
+			}
+		}
+	}
 	// Inject the produce surface: this replica emits synced events for exactly the kinds its catalog
 	// imports (sync-abi-v2 §4). The app fills the kind slice from the event package registry.
 	rc.SyncableKinds = policy.ImportableKinds(catalog)
