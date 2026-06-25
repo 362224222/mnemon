@@ -376,7 +376,11 @@ func installAcceptanceHarnessBinary(runRoot string) (string, error) {
 }
 
 func prepareR1AcceptanceRunRoot(runRoot string) error {
-	testdataRoot, err := filepath.Abs(".testdata")
+	testdataRoot, err := physicalAcceptancePath(".testdata")
+	if err != nil {
+		return err
+	}
+	runRoot, err = physicalAcceptancePath(runRoot)
 	if err != nil {
 		return err
 	}
@@ -399,6 +403,30 @@ func prepareR1AcceptanceRunRoot(runRoot string) error {
 		return fmt.Errorf("run-root %s already exists outside .testdata; choose an empty or .testdata-scoped directory", runRoot)
 	}
 	return nil
+}
+
+func physicalAcceptancePath(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		return resolved, nil
+	}
+	var missing []string
+	for current := abs; ; current = filepath.Dir(current) {
+		if resolved, err := filepath.EvalSymlinks(current); err == nil {
+			for i := len(missing) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, missing[i])
+			}
+			return resolved, nil
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return abs, nil
+		}
+		missing = append(missing, filepath.Base(current))
+	}
 }
 
 func setupR1CodexAgents(runRoot, binDir, controlURL string, count int, sourceCodexHome string) ([]r1CodexAgent, access.LoadedBindings, error) {
