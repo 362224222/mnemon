@@ -233,6 +233,150 @@ func TestControlRenderPrintsDerivedEventPresentationBody(t *testing.T) {
 	}
 }
 
+func TestControlShortCommandsEmitR2Payloads(t *testing.T) {
+	refs := []contract.ResourceRef{
+		{Kind: "agent_profile", ID: "project"},
+		{Kind: "teamwork_signal", ID: "project"},
+		{Kind: "assignment", ID: "project"},
+		{Kind: "progress_digest", ID: "project"},
+	}
+	binding := access.HostAgentBinding("codex-a@project", "http://x", refs)
+	binding.AllowedObservedTypes = []string{
+		"agent_profile.write_candidate.observed",
+		"teamwork_signal.write_candidate.observed",
+		"assignment.write_candidate.observed",
+		"progress_digest.write_candidate.observed",
+	}
+	rt, err := app.OpenLocalRuntime(filepath.Join(t.TempDir(), "short.db"), access.LoadedBindings{Bindings: []access.ChannelBinding{binding}}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rt.Close()
+	srv := httptest.NewServer(runtime.NewRuntimeHandler(rt, access.HeaderAuthenticator{}))
+	defer srv.Close()
+
+	oldAddr := controlAddr
+	oldPrincipal := controlPrincipal
+	oldToken := controlToken
+	oldTokenFile := controlTokenFile
+	oldExtID := controlExtID
+	resetControlShortCommandVars()
+	t.Cleanup(func() {
+		controlAddr = oldAddr
+		controlPrincipal = oldPrincipal
+		controlToken = oldToken
+		controlTokenFile = oldTokenFile
+		controlExtID = oldExtID
+		resetControlShortCommandVars()
+	})
+	controlAddr = srv.URL
+	controlPrincipal = "codex-a@project"
+	controlToken = ""
+	controlTokenFile = ""
+
+	var buf bytes.Buffer
+	controlExtID = "short-signal"
+	controlTeamworkSignalScope = "r2/short"
+	controlTeamworkSignalStatement = "Need another agent to review the R2 short command surface."
+	controlTeamworkSignalWhy = "The work touches producer ergonomics and should be validated by a teammate."
+	controlTeamworkSignalTTL = "30m"
+	controlTeamworkSignalID = "sig-short"
+	controlTeamworkSignalEvidence = []string{"implementation plan"}
+	controlTeamworkSignalCmd.SetOut(&buf)
+	if err := controlTeamworkSignalCmd.RunE(controlTeamworkSignalCmd, nil); err != nil {
+		t.Fatalf("teamwork signal: %v", err)
+	}
+	if !strings.Contains(buf.String(), "ticked=true") {
+		t.Fatalf("signal command should tick admission, got %q", buf.String())
+	}
+
+	buf.Reset()
+	controlExtID = "short-assignment"
+	controlTeamworkAssignID = "asg-short"
+	controlTeamworkAssignSignalRef = "sig-short"
+	controlTeamworkAssignAssignee = "codex-b@project"
+	controlTeamworkAssignScope = "r2/short"
+	controlTeamworkAssignTTL = "20m"
+	controlTeamworkAssignWork = "Review the short command output and report whether it is usable."
+	controlTeamworkAssignFeedback = "progress_digest with result or blocker"
+	controlTeamworkAssignEvidence = []string{"signal sig-short"}
+	controlTeamworkAssignCmd.SetOut(&buf)
+	if err := controlTeamworkAssignCmd.RunE(controlTeamworkAssignCmd, nil); err != nil {
+		t.Fatalf("teamwork assign: %v", err)
+	}
+	if !strings.Contains(buf.String(), "ticked=true") {
+		t.Fatalf("assign command should tick admission, got %q", buf.String())
+	}
+
+	buf.Reset()
+	controlExtID = "short-progress"
+	controlTeamworkProgressAssignmentRef = "asg-short"
+	controlTeamworkProgressFeedbackKind = "progress"
+	controlTeamworkProgressSummary = "Reviewed the short command surface; it emits nested payload sections."
+	controlTeamworkProgressEvidence = []string{"assignment asg-short"}
+	controlTeamworkProgressCmd.SetOut(&buf)
+	if err := controlTeamworkProgressCmd.RunE(controlTeamworkProgressCmd, nil); err != nil {
+		t.Fatalf("teamwork progress: %v", err)
+	}
+	if !strings.Contains(buf.String(), "ticked=true") {
+		t.Fatalf("progress command should tick admission, got %q", buf.String())
+	}
+
+	buf.Reset()
+	controlExtID = "short-profile"
+	controlProfileAvailability = "available"
+	controlProfileFreshness = "fresh"
+	controlProfileTTL = "30m"
+	controlProfileFocus = "R2 short command validation"
+	controlProfileAdvantages = []string{"knows the current event redesign"}
+	controlProfileSummary = "Available to validate R2 producer ergonomics."
+	controlProfileUpdateCmd.SetOut(&buf)
+	if err := controlProfileUpdateCmd.RunE(controlProfileUpdateCmd, nil); err != nil {
+		t.Fatalf("profile update: %v", err)
+	}
+	if !strings.Contains(buf.String(), "ticked=true") {
+		t.Fatalf("profile command should tick admission, got %q", buf.String())
+	}
+
+	signal := latestShortItem(t, rt, "teamwork_signal")
+	if _, ok := signal["statement"]; ok {
+		t.Fatalf("signal item must not store flat business fields: %+v", signal)
+	}
+	if got := shortItemSection(t, signal, "rule")["scope"]; got != "r2/short" {
+		t.Fatalf("signal rule scope = %v", got)
+	}
+	if got := shortItemSection(t, signal, "narrative")["statement"]; got != controlTeamworkSignalStatement {
+		t.Fatalf("signal narrative statement = %v", got)
+	}
+	if got := stringListLen(shortItemSection(t, signal, "refs")["evidence_refs"]); got != 1 {
+		t.Fatalf("signal evidence refs len = %d", got)
+	}
+
+	assignment := latestShortItem(t, rt, "assignment")
+	if got := shortItemSection(t, assignment, "rule")["assignee"]; got != "codex-b@project" {
+		t.Fatalf("assignment assignee = %v", got)
+	}
+	if got := shortItemSection(t, assignment, "narrative")["expected_work"]; got != controlTeamworkAssignWork {
+		t.Fatalf("assignment expected_work = %v", got)
+	}
+
+	progress := latestShortItem(t, rt, "progress_digest")
+	if got := shortItemSection(t, progress, "rule")["assignment_ref"]; got != "asg-short" {
+		t.Fatalf("progress assignment_ref = %v", got)
+	}
+	if got := shortItemSection(t, progress, "narrative")["summary"]; got != controlTeamworkProgressSummary {
+		t.Fatalf("progress summary = %v", got)
+	}
+
+	profile := latestShortItem(t, rt, "agent_profile")
+	if got := shortItemSection(t, profile, "rule")["actor"]; got != "codex-a@project" {
+		t.Fatalf("profile rule actor = %v", got)
+	}
+	if got := shortItemSection(t, profile, "narrative")["focus"]; got != controlProfileFocus {
+		t.Fatalf("profile focus = %v", got)
+	}
+}
+
 func mustReadCmd(t *testing.T, path string) []byte {
 	t.Helper()
 	data, err := os.ReadFile(path)
@@ -240,6 +384,88 @@ func mustReadCmd(t *testing.T, path string) []byte {
 		t.Fatalf("read %s: %v", path, err)
 	}
 	return data
+}
+
+func latestShortItem(t *testing.T, rt *runtime.Runtime, kind contract.ResourceKind) map[string]any {
+	t.Helper()
+	_, fields, err := rt.Resource(contract.ResourceRef{Kind: kind, ID: "project"})
+	if err != nil {
+		t.Fatalf("read %s resource: %v", kind, err)
+	}
+	items, ok := fields["items"].([]any)
+	if !ok || len(items) == 0 {
+		t.Fatalf("%s resource must contain items, got %+v", kind, fields)
+	}
+	item, ok := items[len(items)-1].(map[string]any)
+	if !ok {
+		t.Fatalf("%s item has unexpected type %T", kind, items[len(items)-1])
+	}
+	return item
+}
+
+func shortItemSection(t *testing.T, item map[string]any, name string) map[string]any {
+	t.Helper()
+	section, ok := item[name].(map[string]any)
+	if !ok {
+		t.Fatalf("item missing %s section: %+v", name, item)
+	}
+	return section
+}
+
+func stringListLen(value any) int {
+	switch list := value.(type) {
+	case []string:
+		return len(list)
+	case []any:
+		return len(list)
+	default:
+		return 0
+	}
+}
+
+func resetControlShortCommandVars() {
+	controlTeamworkSignalID = ""
+	controlTeamworkSignalScope = ""
+	controlTeamworkSignalUrgency = "normal"
+	controlTeamworkSignalTTL = "30m"
+	controlTeamworkSignalStatement = ""
+	controlTeamworkSignalWhy = ""
+	controlTeamworkSignalNeeded = nil
+	controlTeamworkSignalEvidence = nil
+	controlTeamworkSignalContextRefs = nil
+
+	controlTeamworkAssignID = ""
+	controlTeamworkAssignSignalRef = ""
+	controlTeamworkAssignAssignee = ""
+	controlTeamworkAssignScope = ""
+	controlTeamworkAssignTTL = "20m"
+	controlTeamworkAssignReportOn = nil
+	controlTeamworkAssignWork = ""
+	controlTeamworkAssignFeedback = "progress_digest with result or blocker"
+	controlTeamworkAssignRationale = ""
+	controlTeamworkAssignEvidence = nil
+	controlTeamworkAssignContextRefs = nil
+
+	controlTeamworkProgressAssignmentRef = ""
+	controlTeamworkProgressScope = ""
+	controlTeamworkProgressFeedbackKind = "progress"
+	controlTeamworkProgressSummary = ""
+	controlTeamworkProgressBlocker = ""
+	controlTeamworkProgressResult = ""
+	controlTeamworkProgressChanged = nil
+	controlTeamworkProgressSuggestedNext = ""
+	controlTeamworkProgressEvidence = nil
+	controlTeamworkProgressArtifacts = nil
+
+	controlProfileAvailability = "available"
+	controlProfileFreshness = "fresh"
+	controlProfileTTL = "30m"
+	controlProfileFocus = ""
+	controlProfileAdvantages = nil
+	controlProfileConstraints = nil
+	controlProfileSummary = ""
+	controlProfileActiveScopes = nil
+	controlProfileRecentEvidence = nil
 }
 
 func mustCmdTime(t *testing.T, s string) time.Time {
