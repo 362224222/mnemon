@@ -152,11 +152,36 @@ func itemString(it Item, key string) string {
 	if s, ok := it[key].(string); ok {
 		return s
 	}
+	for _, section := range []string{FieldSectionRule, FieldSectionNarrative, FieldSectionRefs} {
+		if m, ok := it[section].(map[string]any); ok {
+			if s, ok := m[key].(string); ok {
+				return s
+			}
+		}
+	}
 	return ""
 }
 
 func itemStrings(it Item, key string) []string {
-	switch raw := it[key].(type) {
+	return stringsFromAny(itemValue(it, key))
+}
+
+func itemValue(it Item, key string) any {
+	if v, ok := it[key]; ok {
+		return v
+	}
+	for _, section := range []string{FieldSectionRule, FieldSectionNarrative, FieldSectionRefs} {
+		if m, ok := it[section].(map[string]any); ok {
+			if v, ok := m[key]; ok {
+				return v
+			}
+		}
+	}
+	return nil
+}
+
+func stringsFromAny(raw any) []string {
+	switch raw := raw.(type) {
 	case []string:
 		return raw
 	case []any:

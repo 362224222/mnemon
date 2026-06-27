@@ -18,9 +18,9 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
-const goalPackageSpec = `{"schema_version":1,"name":"goal","observed_type":"goal.write_candidate.observed",
+const goalPackageSpec = `{"schema_version":2,"name":"goal","observed_type":"goal.write_candidate.observed",
 "proposed_type":"goal.write.proposed","resource_kind":"goal","items_field":"items",
-"fields":[{"name":"statement","validators":[{"id":"required","params":{"missing_style":"empty"}},{"id":"safety:unsafe"}]}],
+"fields":[{"section":"narrative","name":"statement","validators":[{"id":"required","params":{"missing_style":"empty"}},{"id":"safety:unsafe"}]}],
 "render":{"content":{"member":"bullet-list","params":{"title":"# Goals","field":"statement"}},"static":{"statement":"project"}}}`
 
 func writeExternalGoalPackage(t *testing.T, projectRoot, name, spec string) string {
@@ -193,7 +193,7 @@ func TestExternalGoalEventPackageAdmitsThroughResolvedCatalog(t *testing.T) {
 	defer rt.Close()
 	if _, _, err := rt.API().Ingest("codex@project", contract.ObservationEnvelope{
 		ExternalID: "g1",
-		Event:      contract.Event{Type: "goal.write_candidate.observed", Payload: map[string]any{"statement": "ship stage five"}},
+		Event:      contract.Event{Type: "goal.write_candidate.observed", Payload: r2NarrativeField("statement", "ship stage five")},
 	}); err != nil {
 		t.Fatalf("ingest goal: %v", err)
 	}

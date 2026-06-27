@@ -20,7 +20,7 @@ func TestAppendAndReadAcceptedEnvelopeByIndexes(t *testing.T) {
 		Subject:       eventmodel.Subject("assignment", "asg1"),
 		Actor:         "codex-a@project",
 		Audience:      "codex-b@project",
-		Payload:       map[string]any{"scope": "review implementation"},
+		Payload:       eventmodel.BuildPayload(map[string]any{"scope": "review implementation"}, nil, nil),
 		CorrelationID: "corr-1",
 		CreatedAt:     "2026-06-24T00:00:00Z",
 	}
@@ -98,7 +98,7 @@ func TestReadHonorsCursorLimitAndPhase(t *testing.T) {
 			Type:          typ,
 			Subject:       eventmodel.Subject("assignment", "asg1"),
 			Actor:         "mnemond-a",
-			Payload:       map[string]any{"n": i},
+			Payload:       eventmodel.BuildPayload(map[string]any{"n": i}, nil, nil),
 			CreatedAt:     "2026-06-24T00:00:00Z",
 		}
 		var env eventmodel.EventEnvelope

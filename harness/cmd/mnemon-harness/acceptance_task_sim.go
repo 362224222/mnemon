@@ -470,12 +470,16 @@ func (s taskSimRun) runConflictRework() error {
 
 func (s taskSimRun) emitTeamworkSignal(agent *r1CodexAgent, signalID, scope, statement string) error {
 	payload := taskSimJSON(map[string]any{
-		"signal_id":    signalID,
-		"scope":        scope,
-		"statement":    statement,
-		"why_teamwork": "task simulation requires multiple hostagents to coordinate through events",
-		"ttl":          "30m",
-		"evidence":     "r1-task-sim",
+		"rule": map[string]any{
+			"signal_id": signalID,
+			"scope":     scope,
+			"ttl":       "30m",
+		},
+		"narrative": map[string]any{
+			"statement":    statement,
+			"why_teamwork": "task simulation requires multiple hostagents to coordinate through events",
+		},
+		"refs": map[string]any{"evidence_refs": []string{"r1-task-sim"}},
 	})
 	prompt := fmt.Sprintf(`Emit teamwork_signal.write_candidate.observed for the task simulation.
 Use external id signal-%s and payload:
@@ -492,13 +496,17 @@ After the command succeeds, answer "signal %s written".`, signalID, payload, sig
 
 func (s taskSimRun) emitAssignment(agent *r1CodexAgent, assignmentID, assignee, scope, expectedWork, expectedFeedback string) error {
 	payload := taskSimJSON(map[string]any{
-		"assignment_id":     assignmentID,
-		"assignee":          assignee,
-		"scope":             scope,
-		"expected_work":     expectedWork,
-		"expected_feedback": expectedFeedback,
-		"ttl":               "20m",
-		"evidence":          "r1-task-sim",
+		"rule": map[string]any{
+			"assignment_id": assignmentID,
+			"assignee":      assignee,
+			"scope":         scope,
+			"ttl":           "20m",
+		},
+		"narrative": map[string]any{
+			"expected_work":     expectedWork,
+			"expected_feedback": expectedFeedback,
+		},
+		"refs": map[string]any{"evidence_refs": []string{"r1-task-sim"}},
 	})
 	prompt := fmt.Sprintf(`Emit assignment.write_candidate.observed for the task simulation.
 Use external id assignment-%s and payload:
@@ -520,12 +528,17 @@ func (s taskSimRun) waitAndAct(agent *r1CodexAgent, assignmentID, externalID, su
 		return fmt.Errorf("%s did not receive assignment %s as derived event", agent.principal, assignmentID)
 	}
 	payload := taskSimJSON(map[string]any{
-		"assignment_ref":  assignmentID,
-		"scope":           "task-sim",
-		"summary":         summary,
-		"evidence":        evidence,
-		"changed_context": "simulated real task advanced through observed event",
-		"suggested_next":  "starter should integrate or assign follow-up work",
+		"rule": map[string]any{
+			"assignment_ref": assignmentID,
+			"scope":          "task-sim",
+			"feedback_kind":  "progress",
+		},
+		"narrative": map[string]any{
+			"summary":         summary,
+			"changed_context": []string{"simulated real task advanced through observed event"},
+			"suggested_next":  "starter should integrate or assign follow-up work",
+		},
+		"refs": map[string]any{"evidence_refs": []string{evidence}},
 	})
 	prompt := fmt.Sprintf(`Act on assignment %s from your derived-event presentation.
 Emit progress_digest.write_candidate.observed with external id %s and payload:

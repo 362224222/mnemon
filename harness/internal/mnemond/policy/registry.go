@@ -137,70 +137,90 @@ func bulletListRender(title, field string) RenderSpec {
 
 func agentProfileFields() []FieldSpec {
 	return []FieldSpec{
-		field("actor", required("missing")),
-		field("active_scopes", listStrings()),
-		field("focus", required("empty"), unsafeText()),
-		field("context_advantages", listStringsRequired()),
-		field("recent_evidence", listStrings()),
-		field("constraints", listStrings()),
-		field("availability", required("missing"), enum("available|busy|blocked|unknown", "invalid availability")),
-		field("freshness", enum("|fresh|stale", "invalid freshness")),
-		field("ttl", required("missing")),
-		field("summary", required("empty"), unsafeText()),
+		ruleField("actor", required("missing")),
+		ruleField("availability", required("missing"), enum("available|busy|blocked|unknown", "invalid availability")),
+		ruleField("freshness", enum("|fresh|stale", "invalid freshness")),
+		ruleField("ttl", required("missing")),
+		narrativeField("focus", required("empty"), unsafeText()),
+		narrativeField("context_advantages", listStringsRequired()),
+		narrativeField("constraints", listStrings()),
+		narrativeField("summary", required("empty"), unsafeText()),
+		refsField("active_scopes", listStrings()),
+		refsField("recent_evidence", listStrings()),
 	}
 }
 
 func projectIntentFields() []FieldSpec {
 	return []FieldSpec{
-		field("statement", required("empty"), unsafeText()),
-		field("evidence", unsafeText()),
+		ruleField("intent_id", unsafeText()),
+		ruleField("scope", unsafeText()),
+		ruleField("ttl"),
+		narrativeField("statement", required("empty"), unsafeText()),
+		narrativeField("evidence_summary", unsafeText()),
+		refsField("evidence_refs", listStrings()),
+		refsField("context_refs", listStrings()),
 	}
 }
 
 func teamworkSignalFields() []FieldSpec {
 	return []FieldSpec{
-		field("signal_id", unsafeText()),
-		field("scope", required("empty"), unsafeText()),
-		field("statement", required("empty"), unsafeText()),
-		field("why_teamwork", required("empty"), unsafeText()),
-		field("needed_context", listStrings()),
-		field("urgency", enum("|low|normal|high", "invalid urgency")),
-		field("evidence_refs", listStrings()),
-		field("evidence", unsafeText()),
-		field("ttl", required("missing")),
+		ruleField("signal_id", unsafeText()),
+		ruleField("scope", required("empty"), unsafeText()),
+		ruleField("urgency", enum("|low|normal|high", "invalid urgency")),
+		ruleField("ttl", required("missing")),
+		narrativeField("statement", required("empty"), unsafeText()),
+		narrativeField("why_teamwork", required("empty"), unsafeText()),
+		narrativeField("needed_context", listStrings()),
+		refsField("evidence_refs", listStrings()),
+		refsField("context_refs", listStrings()),
 	}
 }
 
 func assignmentFields() []FieldSpec {
 	return []FieldSpec{
-		field("assignment_id", unsafeText()),
-		field("signal_ref", unsafeText()),
-		field("scope", required("empty"), unsafeText()),
-		field("ttl", required("missing")),
-		field("assignee", required("missing")),
-		field("expected_work", required("empty"), unsafeText()),
-		field("expected_feedback", required("empty"), unsafeText()),
-		field("report_on", listStrings()),
-		field("rationale", unsafeText()),
-		field("evidence_refs", listStrings()),
-		field("evidence", unsafeText()),
+		ruleField("assignment_id", unsafeText()),
+		ruleField("signal_ref", unsafeText()),
+		ruleField("assignee", required("missing")),
+		ruleField("scope", required("empty"), unsafeText()),
+		ruleField("ttl", required("missing")),
+		ruleField("report_on", listStrings()),
+		narrativeField("expected_work", required("empty"), unsafeText()),
+		narrativeField("expected_feedback", required("empty"), unsafeText()),
+		narrativeField("rationale", unsafeText()),
+		refsField("evidence_refs", listStrings()),
+		refsField("context_refs", listStrings()),
 	}
 }
 
 func progressDigestFields() []FieldSpec {
 	return []FieldSpec{
-		field("assignment_ref", unsafeText()),
-		field("scope", unsafeText()),
-		field("summary", required("empty"), unsafeText()),
-		field("evidence_refs", listStrings()),
-		field("evidence", unsafeText()),
-		field("changed_context", listStrings()),
-		field("suggested_next", unsafeText()),
+		ruleField("assignment_ref", unsafeText()),
+		ruleField("scope", unsafeText()),
+		ruleField("feedback_kind", required("missing"), enum("progress|result|blocker", "invalid feedback_kind")),
+		narrativeField("summary", required("empty"), unsafeText()),
+		narrativeField("blocker", unsafeText()),
+		narrativeField("result", unsafeText()),
+		narrativeField("changed_context", listStrings()),
+		narrativeField("suggested_next", unsafeText()),
+		refsField("evidence_refs", listStrings()),
+		refsField("artifact_refs", listStrings()),
 	}
 }
 
-func field(name string, validators ...ValidatorRef) FieldSpec {
-	return FieldSpec{Name: name, Validators: validators}
+func ruleField(name string, validators ...ValidatorRef) FieldSpec {
+	return field(FieldSectionRule, name, validators...)
+}
+
+func narrativeField(name string, validators ...ValidatorRef) FieldSpec {
+	return field(FieldSectionNarrative, name, validators...)
+}
+
+func refsField(name string, validators ...ValidatorRef) FieldSpec {
+	return field(FieldSectionRefs, name, validators...)
+}
+
+func field(section, name string, validators ...ValidatorRef) FieldSpec {
+	return FieldSpec{Section: section, Name: name, Validators: validators}
 }
 
 func required(style string) ValidatorRef {

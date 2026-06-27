@@ -108,9 +108,7 @@ func TestControlPullJSONIncludesScopedContent(t *testing.T) {
 	client := access.NewClient(srv.URL, "codex@project")
 	if rec, err := client.IngestObserve("codex@project", contract.ObservationEnvelope{
 		ExternalID: "progress-json",
-		Event: contract.Event{Type: "progress_digest.write_candidate.observed", Payload: map[string]any{
-			"summary": "Use Local Mnemon as the event source.",
-		}},
+		Event:      contract.Event{Type: "progress_digest.write_candidate.observed", Payload: cmdR2Progress("Use Local Mnemon as the event source.")},
 	}); err != nil || !rec.Ticked {
 		t.Fatalf("seed local progress event: rec=%+v err=%v", rec, err)
 	}
@@ -190,11 +188,7 @@ func TestControlRenderPrintsDerivedEventPresentationBody(t *testing.T) {
 	clientA := access.NewClientWithToken(srv.URL, "tok-a")
 	if rec, err := clientA.IngestObserve("", contract.ObservationEnvelope{
 		ExternalID: "control-render-assignment",
-		Event: contract.Event{Type: "assignment.write_candidate.observed", Payload: map[string]any{
-			"scope": "review control render", "ttl": "30m", "assignee": "codex-b@project",
-			"expected_work": "review control render", "expected_feedback": "short result",
-			"evidence": "control render test",
-		}},
+		Event:      contract.Event{Type: "assignment.write_candidate.observed", Payload: cmdR2Assignment("review control render", "30m", "codex-b@project", "review control render", "short result", "control render test")},
 	}); err != nil || !rec.Ticked {
 		t.Fatalf("seed assignment: rec=%+v err=%v", rec, err)
 	}

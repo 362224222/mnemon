@@ -90,13 +90,13 @@ func sortedImportable(catalog Registry) []EventPackage {
 // SyncImportSkippedObserved is the observation a sync puller ingests for a pulled material whose
 // resource kind has no import mapping (v1.1 #4): instead of a silent continue, the skip enters the
 // canonical log exactly-once (ExternalID = the six-part pull key + ":skipped") and the deny rule
-// below turns it into a durable sync.diagnostic via the existing pre-gate. Payload: {kind,
-// origin_replica_id, local_decision_id, remote_id}.
+// below turns it into a durable sync.diagnostic via the existing pre-gate. Payload rule:
+// {kind, origin_replica_id, local_decision_id, remote_id}.
 const SyncImportSkippedObserved = "sync.import_skipped.observed"
 
 // SyncRemoteDiagnosticObserved is the observation a sync puller ingests when a Remote Workspace
-// returns a pull-side diagnostic for an invalid/rejected/conflicting publication entry. Payload:
-// {remote_id, origin_mnemond, event_id, subject, status, diagnostic}.
+// returns a pull-side diagnostic for an invalid/rejected/conflicting publication entry. Payload rule:
+// {remote_id, origin_mnemond, event_id, subject, status}; payload narrative: {diagnostic}.
 const SyncRemoteDiagnosticObserved = "sync.remote_diagnostic.observed"
 
 // SyncImportSkippedRule is the legal diagnostic mechanism for skipped kinds: it Handles ONLY the
@@ -109,7 +109,8 @@ func SyncImportSkippedRule(principal contract.ActorID) admission.Rule {
 			if in.Event.Actor != principal {
 				return contract.RuleDecision{Verdict: contract.VerdictAllow}, nil
 			}
-			kind, _ := in.Event.Payload["kind"].(string)
+			rule := payloadSection(in.Event.Payload, FieldSectionRule)
+			kind, _ := rule["kind"].(string)
 			if kind == "" {
 				kind = "unknown"
 			}
@@ -129,12 +130,14 @@ func SyncRemoteDiagnosticRule(principal contract.ActorID) admission.Rule {
 			if in.Event.Actor != principal {
 				return contract.RuleDecision{Verdict: contract.VerdictAllow}, nil
 			}
-			remoteID, _ := in.Event.Payload["remote_id"].(string)
-			status, _ := in.Event.Payload["status"].(string)
-			origin, _ := in.Event.Payload["origin_mnemond"].(string)
-			eventID, _ := in.Event.Payload["event_id"].(string)
-			subject, _ := in.Event.Payload["subject"].(string)
-			diagnostic, _ := in.Event.Payload["diagnostic"].(string)
+			rule := payloadSection(in.Event.Payload, FieldSectionRule)
+			narrative := payloadSection(in.Event.Payload, FieldSectionNarrative)
+			remoteID, _ := rule["remote_id"].(string)
+			status, _ := rule["status"].(string)
+			origin, _ := rule["origin_mnemond"].(string)
+			eventID, _ := rule["event_id"].(string)
+			subject, _ := rule["subject"].(string)
+			diagnostic, _ := narrative["diagnostic"].(string)
 			return contract.RuleDecision{
 				Verdict: contract.VerdictDeny,
 				Reasons: []string{fmt.Sprintf("remote workspace diagnostic: remote_id=%q status=%q origin_mnemond=%q event_id=%q subject=%q: %s",

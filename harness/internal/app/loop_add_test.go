@@ -10,9 +10,9 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/state"
 )
 
-const widgetPackageSpec = `{"schema_version":1,"name":"widget","observed_type":"widget.write_candidate.observed",
+const widgetPackageSpec = `{"schema_version":2,"name":"widget","observed_type":"widget.write_candidate.observed",
 "proposed_type":"widget.write.proposed","resource_kind":"widget","items_field":"items",
-"fields":[{"name":"text","validators":[{"id":"required","params":{"missing_style":"empty"}}]}],
+"fields":[{"section":"narrative","name":"text","validators":[{"id":"required","params":{"missing_style":"empty"}}]}],
 "render":{"content":{"member":"bullet-list","params":{"title":"# Widgets","field":"text"}}}}`
 
 // loop add places a package under its canonical name and validates it through the boot resolution;
@@ -55,9 +55,9 @@ func TestLoopAddRejectsAndRollsBack(t *testing.T) {
 	}
 	// resource_kind "assignment" is an embedded kind an external package may not claim (shadowing) —
 	// ResolveRegistry refuses it, so loop add must too.
-	bad := `{"schema_version":1,"name":"broken","observed_type":"broken.write_candidate.observed",
+	bad := `{"schema_version":2,"name":"broken","observed_type":"broken.write_candidate.observed",
 "proposed_type":"broken.write.proposed","resource_kind":"assignment","items_field":"items",
-"fields":[{"name":"text","validators":[{"id":"required","params":{"missing_style":"empty"}}]}],
+"fields":[{"section":"narrative","name":"text","validators":[{"id":"required","params":{"missing_style":"empty"}}]}],
 "render":{"content":{"member":"bullet-list","params":{"title":"# B","field":"text"}}}}`
 	if err := os.WriteFile(filepath.Join(src, "capability.json"), []byte(bad), 0o644); err != nil {
 		t.Fatal(err)

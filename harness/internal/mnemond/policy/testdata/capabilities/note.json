@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "name": "note",
   "observed_type": "note.write_candidate.observed",
   "proposed_type": "note.write.proposed",
@@ -7,6 +7,7 @@
   "items_field": "items",
   "fields": [
     {
+      "section": "narrative",
       "name": "text",
       "validators": [
         {

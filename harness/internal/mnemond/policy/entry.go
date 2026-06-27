@@ -204,18 +204,26 @@ func stringMapField(m map[string]any, key string) string {
 	if s, ok := m[key].(string); ok {
 		return s
 	}
+	for _, section := range []string{FieldSectionRule, FieldSectionNarrative, FieldSectionRefs} {
+		if sm, ok := m[section].(map[string]any); ok {
+			if s, ok := sm[key].(string); ok {
+				return s
+			}
+		}
+	}
 	return ""
 }
 
 func stringSliceMapField(m map[string]any, key string) []string {
-	if raw, ok := m[key].([]any); ok {
-		out := make([]string, 0, len(raw))
-		for _, v := range raw {
-			if s, ok := v.(string); ok {
-				out = append(out, s)
+	if vals := stringsFromAny(m[key]); len(vals) > 0 {
+		return vals
+	}
+	for _, section := range []string{FieldSectionRule, FieldSectionNarrative, FieldSectionRefs} {
+		if sm, ok := m[section].(map[string]any); ok {
+			if vals := stringsFromAny(sm[key]); len(vals) > 0 {
+				return vals
 			}
 		}
-		return out
 	}
 	return nil
 }

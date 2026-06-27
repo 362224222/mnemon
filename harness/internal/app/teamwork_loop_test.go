@@ -70,38 +70,28 @@ func TestMinimalTeamworkLoopThroughRenderPresentations(t *testing.T) {
 		}
 	}
 
-	observe(clientA, "profile-a", "agent_profile.write_candidate.observed", map[string]any{
-		"actor": "codex-a@project", "focus": "coordinate R1 render loop",
-		"context_advantages": []any{"read R1 event-presentation plan"},
-		"availability":       "available", "freshness": "fresh", "ttl": "30m",
-		"summary": "A can originate and integrate render assignments.",
-	})
-	observe(clientB, "profile-b", "agent_profile.write_candidate.observed", map[string]any{
-		"actor": "codex-b@project", "focus": "review R1 render loop",
-		"context_advantages": []any{"fresh context on render endpoint"},
-		"availability":       "available", "freshness": "fresh", "ttl": "30m",
-		"summary": "B can review render assignments.",
-	})
-	observe(clientA, "signal-r1", "teamwork_signal.write_candidate.observed", map[string]any{
-		"signal_id": "sig-r1", "scope": "harness/r1/render",
-		"statement":    "Need another agent to review the render endpoint.",
-		"why_teamwork": "another profile has endpoint context", "ttl": "1h", "evidence": "profile roster",
-	})
-	observe(clientA, "assignment-r1", "assignment.write_candidate.observed", map[string]any{
-		"assignment_id": "asg-r1", "signal_ref": "sig-r1", "assignee": "codex-b@project",
-		"scope": "review render endpoint", "expected_work": "review the render endpoint",
-		"expected_feedback": "progress_digest with result or blocker", "ttl": "30m", "evidence": "signal sig-r1",
-	})
+	observe(clientA, "profile-a", "agent_profile.write_candidate.observed",
+		r2AgentProfile("codex-a@project", "coordinate R1 render loop", "available", "30m",
+			"A can originate and integrate render assignments.", "read R1 event-presentation plan"))
+	observe(clientB, "profile-b", "agent_profile.write_candidate.observed",
+		r2AgentProfile("codex-b@project", "review R1 render loop", "available", "30m",
+			"B can review render assignments.", "fresh context on render endpoint"))
+	observe(clientA, "signal-r1", "teamwork_signal.write_candidate.observed",
+		r2TeamworkSignal("harness/r1/render", "Need another agent to review the render endpoint.",
+			"another profile has endpoint context", "1h", "profile roster"))
+	observe(clientA, "assignment-r1", "assignment.write_candidate.observed", r2AssignmentPayload(
+		map[string]any{"assignment_id": "asg-r1", "signal_ref": "sig-r1", "assignee": "codex-b@project", "scope": "review render endpoint", "ttl": "30m"},
+		map[string]any{"expected_work": "review the render endpoint", "expected_feedback": "progress_digest with result or blocker"},
+		map[string]any{"evidence_refs": []any{"signal sig-r1"}},
+	))
 
 	work := postRender(t, srv.URL, "tok-b", presentation.Request{RenderIntent: presentation.IntentTeamworkEvents})
 	if !strings.Contains(work.Body, "[mnemon:work]") || !strings.Contains(work.Body, "asg-r1") || !strings.Contains(work.Body, "[mnemon:feedback]") {
 		t.Fatalf("B must see work + feedback presentation for assignment:\n%s", work.Body)
 	}
 
-	observe(clientB, "progress-r1", "progress_digest.write_candidate.observed", map[string]any{
-		"assignment_ref": "asg-r1", "scope": "harness/r1/render",
-		"summary": "review complete; render endpoint is usable", "evidence": "render endpoint test",
-	})
+	observe(clientB, "progress-r1", "progress_digest.write_candidate.observed",
+		r2ProgressFor("asg-r1", "harness/r1/render", "review complete; render endpoint is usable", "render endpoint test"))
 	integrate := postRender(t, srv.URL, "tok-a", presentation.Request{RenderIntent: presentation.IntentTeamworkEvents})
 	if !strings.Contains(integrate.Body, "[mnemon:integrate]") || !strings.Contains(integrate.Body, "review complete") {
 		t.Fatalf("A must see integration presentation after B feedback:\n%s", integrate.Body)
@@ -112,11 +102,11 @@ func TestMinimalTeamworkLoopThroughRenderPresentations(t *testing.T) {
 	}
 
 	now = "2026-06-24T10:10:00Z"
-	observe(clientA, "assignment-expired", "assignment.write_candidate.observed", map[string]any{
-		"assignment_id": "asg-exp", "assignee": "codex-b@project",
-		"scope": "check expired branch", "expected_work": "check expired branch",
-		"expected_feedback": "progress_digest with result or blocker", "ttl": "5m", "evidence": "TTL branch",
-	})
+	observe(clientA, "assignment-expired", "assignment.write_candidate.observed", r2AssignmentPayload(
+		map[string]any{"assignment_id": "asg-exp", "assignee": "codex-b@project", "scope": "check expired branch", "ttl": "5m"},
+		map[string]any{"expected_work": "check expired branch", "expected_feedback": "progress_digest with result or blocker"},
+		map[string]any{"evidence_refs": []any{"TTL branch"}},
+	))
 	renderNow = mustRenderHTTPTime(t, "2026-06-24T10:20:00Z")
 	expired := postRender(t, srv.URL, "tok-a", presentation.Request{RenderIntent: presentation.IntentTeamworkEvents})
 	if !strings.Contains(expired.Body, "[mnemon:expired]") || !strings.Contains(expired.Body, "asg-exp") {

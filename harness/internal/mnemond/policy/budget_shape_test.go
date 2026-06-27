@@ -8,11 +8,14 @@ import (
 )
 
 // makeItems builds n id-bearing items (id-bearing because itemsFromFields requires a non-empty id),
-// each with a summary field the progress_digest render folds into the rendered `content`.
+// each with a narrative.summary field the progress_digest render folds into the rendered `content`.
 func makeBudgetItems(n int) []any {
 	out := make([]any, n)
 	for i := 0; i < n; i++ {
-		out[i] = map[string]any{"id": "e" + string(rune('a'+i)), "summary": "item-" + string(rune('a'+i))}
+		out[i] = map[string]any{
+			"id":        "e" + string(rune('a'+i)),
+			"narrative": map[string]any{"summary": "item-" + string(rune('a'+i))},
+		}
 	}
 	return out
 }

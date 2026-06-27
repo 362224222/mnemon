@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 )
@@ -12,22 +13,22 @@ import (
 // rule-behavior change without relying on a product capability name.
 func declarationSpecWithMessage(message string) policy.ExternalSpec {
 	return policy.ExternalSpec{
-		SchemaVersion: 1, Name: "fixture_declaration",
+		SchemaVersion: 2, Name: "fixture_declaration",
 		ObservedType: "fixture_declaration.write_candidate.observed", ProposedType: "fixture_declaration.write.proposed",
 		ResourceKind: "fixture_declaration", ItemsField: "declarations",
 		Fields: []policy.FieldSpec{
-			{Name: "declaration_id", Validators: []policy.ValidatorRef{
+			{Section: policy.FieldSectionRule, Name: "declaration_id", Validators: []policy.ValidatorRef{
 				{ID: "required", Params: map[string]string{"missing_style": "missing"}},
 				{ID: "format:identifier"},
 			}},
-			{Name: "name", Validators: []policy.ValidatorRef{{ID: "default-from", Params: map[string]string{"field": "declaration_id"}}}},
-			{Name: "status", Validators: []policy.ValidatorRef{
+			{Section: policy.FieldSectionRule, Name: "name", Validators: []policy.ValidatorRef{{ID: "default-from", Params: map[string]string{"field": "declaration_id"}}}},
+			{Section: policy.FieldSectionRule, Name: "status", Validators: []policy.ValidatorRef{
 				{ID: "default", Params: map[string]string{"value": "active"}},
 				{ID: "enum", Params: map[string]string{"values": "active|stale|archived", "message": message}},
 			}},
-			{Name: "source", Validators: []policy.ValidatorRef{{ID: "required", Params: map[string]string{"missing_style": "missing"}}}},
-			{Name: "confidence", Validators: []policy.ValidatorRef{{ID: "required", Params: map[string]string{"missing_style": "missing"}}}},
-			{Name: "content", Validators: []policy.ValidatorRef{{ID: "safety:unsafe"}}},
+			{Section: policy.FieldSectionRefs, Name: "source", Validators: []policy.ValidatorRef{{ID: "required", Params: map[string]string{"missing_style": "missing"}}}},
+			{Section: policy.FieldSectionRefs, Name: "confidence", Validators: []policy.ValidatorRef{{ID: "required", Params: map[string]string{"missing_style": "missing"}}}},
+			{Section: policy.FieldSectionNarrative, Name: "content", Validators: []policy.ValidatorRef{{ID: "safety:unsafe"}}},
 		},
 		Render: policy.RenderSpec{Static: map[string]string{"name": "project"}},
 	}
@@ -53,9 +54,9 @@ func TestShadowCleanOnSelfAndDetectsSpecChange(t *testing.T) {
 	}
 	events := []contract.Event{
 		{SchemaVersion: 1, ID: "e1", IngestSeq: 1, Type: "fixture_declaration.write_candidate.observed", Actor: gateActor,
-			Payload: map[string]any{"declaration_id": "good-declaration", "source": "user", "confidence": "high"}},
+			Payload: eventmodel.BuildPayload(map[string]any{"declaration_id": "good-declaration"}, nil, map[string]any{"source": "user", "confidence": "high"})},
 		{SchemaVersion: 1, ID: "e2", IngestSeq: 2, Type: "fixture_declaration.write_candidate.observed", Actor: gateActor,
-			Payload: map[string]any{"declaration_id": "bad-declaration", "status": "frozen", "source": "user", "confidence": "high"}},
+			Payload: eventmodel.BuildPayload(map[string]any{"declaration_id": "bad-declaration", "status": "frozen"}, nil, map[string]any{"source": "user", "confidence": "high"})},
 	}
 
 	if rep := Shadow(events, subs, live, live); !rep.Clean || rep.Diffs != 0 {

@@ -28,8 +28,7 @@ func TestBuildTowerViewGoalAndLedger(t *testing.T) {
 
 	if _, _, err := rt.API().Ingest("codex@project", contract.ObservationEnvelope{
 		ExternalID: "pi1",
-		Event: contract.Event{Type: "project_intent.write_candidate.observed", Payload: map[string]any{
-			"statement": "ship the AgentTeam beta", "evidence": "roadmap-q3"}},
+		Event:      contract.Event{Type: "project_intent.write_candidate.observed", Payload: r2ProjectIntent("ship the AgentTeam beta", "roadmap-q3")},
 	}); err != nil {
 		t.Fatalf("ingest project_intent: %v", err)
 	}
@@ -84,9 +83,7 @@ func TestBuildTowerViewFieldAndInbox(t *testing.T) {
 	// valid assignment -> admitted (FIELD)
 	if _, _, err := rt.API().Ingest("codex@project", contract.ObservationEnvelope{
 		ExternalID: "asg1",
-		Event: contract.Event{Type: "assignment.write_candidate.observed", Payload: map[string]any{
-			"scope": "fix projection", "ttl": "2h", "assignee": "codex@impl", "evidence": "ticket-1",
-			"expected_work": "fix projection", "expected_feedback": "summary and blockers"}},
+		Event:      contract.Event{Type: "assignment.write_candidate.observed", Payload: r2Assignment("fix projection", "2h", "codex@impl", "fix projection", "summary and blockers", "ticket-1")},
 	}); err != nil {
 		t.Fatalf("ingest valid assignment: %v", err)
 	}
@@ -96,9 +93,11 @@ func TestBuildTowerViewFieldAndInbox(t *testing.T) {
 	// invalid assignment (missing the required scope) -> denied -> diagnostic (INBOX)
 	if _, _, err := rt.API().Ingest("codex@project", contract.ObservationEnvelope{
 		ExternalID: "asg2",
-		Event: contract.Event{Type: "assignment.write_candidate.observed", Payload: map[string]any{
-			"ttl": "1h", "assignee": "codex@impl", "evidence": "ticket-2",
-			"expected_work": "fix projection", "expected_feedback": "summary and blockers"}},
+		Event: contract.Event{Type: "assignment.write_candidate.observed", Payload: r2AssignmentPayload(
+			map[string]any{"ttl": "1h", "assignee": "codex@impl"},
+			map[string]any{"expected_work": "fix projection", "expected_feedback": "summary and blockers"},
+			map[string]any{"evidence_refs": []any{"ticket-2"}},
+		)},
 	}); err != nil {
 		t.Fatalf("ingest invalid assignment: %v", err)
 	}

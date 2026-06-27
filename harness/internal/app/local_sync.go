@@ -76,11 +76,11 @@ func importPulledEvents(rt *runtime.Runtime, remoteID string, events []eventmode
 				ExternalID: syncPullExternalID(remoteID, material),
 				Event: contract.Event{
 					Type: eventType,
-					Payload: map[string]any{
+					Payload: eventmodel.BuildPayload(map[string]any{
 						"material":  material,
 						"remote_id": remoteID,
 						"pulled_at": pulledAt,
-					},
+					}, nil, nil),
 				},
 			}
 		} else {
@@ -88,12 +88,12 @@ func importPulledEvents(rt *runtime.Runtime, remoteID string, events []eventmode
 				ExternalID: syncPullExternalID(remoteID, material) + ":skipped",
 				Event: contract.Event{
 					Type: policy.SyncImportSkippedObserved,
-					Payload: map[string]any{
+					Payload: eventmodel.BuildPayload(map[string]any{
 						"kind":              string(material.ResourceRef.Kind),
 						"origin_replica_id": material.OriginReplicaID,
 						"local_decision_id": material.LocalDecisionID,
 						"remote_id":         remoteID,
-					},
+					}, nil, nil),
 				},
 			}
 		}
@@ -120,15 +120,14 @@ func importRemoteDiagnostics(rt *runtime.Runtime, remoteID string, diagnostics [
 			ExternalID: syncRemoteDiagnosticExternalID(remoteID, item),
 			Event: contract.Event{
 				Type: policy.SyncRemoteDiagnosticObserved,
-				Payload: map[string]any{
+				Payload: eventmodel.BuildPayload(map[string]any{
 					"remote_id":      remoteID,
 					"origin_mnemond": item.OriginMnemond,
 					"event_id":       item.EventID,
 					"subject":        string(item.Subject),
 					"status":         item.Status,
-					"diagnostic":     item.Diagnostic,
 					"pulled_at":      pulledAt,
-				},
+				}, map[string]any{"diagnostic": item.Diagnostic}, nil),
 			},
 		}
 		_, dup, err := rt.IngestTrusted(contract.SyncImportActor, env)

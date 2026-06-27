@@ -73,18 +73,13 @@ func eventKind(eventType string) string {
 }
 
 func eventSubjectIDKeys(kind string) []string {
-	switch kind {
-	case "assignment":
-		return []string{"assignment_id"}
-	case "teamwork_signal":
-		return []string{"signal_id"}
-	case "agent_profile":
-		return []string{"actor"}
-	case "project_intent":
-		return []string{"intent_id"}
-	default:
-		return []string{kind + "_id", "id"}
+	keys := []string{kind + "_id", "id"}
+	for _, key := range []string{"assignment_id", "signal_id", "intent_id", "actor"} {
+		if key != kind+"_id" {
+			keys = append(keys, key)
+		}
 	}
+	return keys
 }
 
 func eventCausedBy(id string) []string {

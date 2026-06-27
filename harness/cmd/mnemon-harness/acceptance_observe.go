@@ -514,19 +514,21 @@ func sqliteImportedRemoteDecisions(ctx context.Context, db *sql.DB) (map[string]
 		}
 		var raw struct {
 			Payload struct {
-				Material struct {
-					OriginReplicaID string `json:"OriginReplicaID"`
-					LocalDecisionID string `json:"LocalDecisionID"`
-				} `json:"material"`
+				Rule struct {
+					Material struct {
+						OriginReplicaID string `json:"OriginReplicaID"`
+						LocalDecisionID string `json:"LocalDecisionID"`
+					} `json:"material"`
+				} `json:"rule"`
 			} `json:"payload"`
 		}
 		if err := json.Unmarshal([]byte(payload), &raw); err != nil {
 			continue
 		}
-		if raw.Payload.Material.OriginReplicaID == "" || raw.Payload.Material.LocalDecisionID == "" {
+		if raw.Payload.Rule.Material.OriginReplicaID == "" || raw.Payload.Rule.Material.LocalDecisionID == "" {
 			continue
 		}
-		out[remoteDecisionKey(raw.Payload.Material.OriginReplicaID, raw.Payload.Material.LocalDecisionID)]++
+		out[remoteDecisionKey(raw.Payload.Rule.Material.OriginReplicaID, raw.Payload.Rule.Material.LocalDecisionID)]++
 	}
 	return out, rows.Err()
 }

@@ -25,9 +25,7 @@ func TestAcceptedLocalProgressCreatesPendingSyncEvent(t *testing.T) {
 	client := access.NewClient(srv.URL, "codex@project")
 	if rec, err := client.IngestObserve("codex@project", contract.ObservationEnvelope{
 		ExternalID: "sync-progress-1",
-		Event: contract.Event{Type: "progress_digest.write_candidate.observed", Payload: map[string]any{
-			"summary": "Sync should queue this local event entry.",
-		}},
+		Event:      contract.Event{Type: "progress_digest.write_candidate.observed", Payload: runtimeR2Progress("Sync should queue this local event entry.")},
 	}); err != nil || !rec.Ticked {
 		t.Fatalf("observe progress candidate: rec=%+v err=%v", rec, err)
 	}

@@ -20,9 +20,9 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
-const noteImportablePackageSpec = `{"schema_version":1,"name":"note","observed_type":"note.write_candidate.observed",
+const noteImportablePackageSpec = `{"schema_version":2,"name":"note","observed_type":"note.write_candidate.observed",
 "proposed_type":"note.write.proposed","resource_kind":"note","items_field":"items",
-"fields":[{"name":"text","validators":[{"id":"required","params":{"missing_style":"empty"}},{"id":"safety:unsafe"}]}],
+"fields":[{"section":"narrative","name":"text","validators":[{"id":"required","params":{"missing_style":"empty"}},{"id":"safety:unsafe"}]}],
 "render":{"content":{"member":"bullet-list","params":{"title":"# Notes","field":"text"}}},
 "sync":{"importable":true,"merge":"item-dedup"}}`
 
@@ -91,9 +91,7 @@ func observeProgress(t *testing.T, rt *runtime.Runtime, externalID, content stri
 	t.Helper()
 	if _, _, err := rt.API().Ingest("codex@project", contract.ObservationEnvelope{
 		ExternalID: externalID,
-		Event: contract.Event{Type: "progress_digest.write_candidate.observed", Payload: map[string]any{
-			"summary": content,
-		}},
+		Event:      contract.Event{Type: "progress_digest.write_candidate.observed", Payload: r2Progress(content)},
 	}); err != nil {
 		t.Fatalf("host observe: %v", err)
 	}
@@ -112,7 +110,7 @@ func foreignProgressMaterial(decisionID, itemID, summary string) contract.Synced
 	fields := map[string]any{
 		"content": "# Progress\n- " + summary,
 		"items": []any{map[string]any{
-			"id": itemID, "summary": summary,
+			"id": itemID, "narrative": map[string]any{"summary": summary},
 			"actor": "codex@other", "ingest_seq": float64(7),
 		}},
 	}
@@ -128,7 +126,7 @@ func foreignNoteMaterial(decisionID, itemID, text string) contract.SyncedEventMa
 	fields := map[string]any{
 		"content": "# Notes\n- " + text,
 		"items": []any{map[string]any{
-			"id": itemID, "text": text,
+			"id": itemID, "narrative": map[string]any{"text": text},
 			"actor": "codex@other", "ingest_seq": float64(8),
 		}},
 	}

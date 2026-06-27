@@ -2,14 +2,14 @@ package policy
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
 )
 
 // RiskEvidenceGate is the mid-risk governance gate (P3 three-tier risk): a candidate for this
-// event package's kind must carry a non-empty `evidence` field, else it is DENIED with a durable
+// event package's kind must carry non-empty `refs.evidence_refs`, else it is DENIED with a durable
 // diagnostic. It is a SEPARATE rule that handles the same observed type as the admission rule; when
 // it denies, admission.Evaluate's deny-priority reduction makes the deny outrank the admission rule's
 // propose, so the write is refused — no new kernel verdict or held state (M1 review correction). It
@@ -24,9 +24,9 @@ func RiskEvidenceGate(cap EventPackage, principal contract.ActorID) admission.Ru
 			if in.Event.Actor != principal {
 				return contract.RuleDecision{Verdict: contract.VerdictAllow}, nil
 			}
-			if strings.TrimSpace(stringField(in.Event.Payload, "evidence")) == "" {
+			if len(stringSliceField(eventmodel.PayloadRefs(in.Event.Payload), "evidence_refs")) == 0 {
 				return contract.RuleDecision{Verdict: contract.VerdictDeny, Reasons: []string{
-					fmt.Sprintf("mid-risk %s candidate denied: evidence is required", cap.ResourceKind)}}, nil
+					fmt.Sprintf("mid-risk %s candidate denied: evidence_refs is required", cap.ResourceKind)}}, nil
 			}
 			return contract.RuleDecision{Verdict: contract.VerdictAllow}, nil
 		})

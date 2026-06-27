@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
@@ -108,9 +109,9 @@ func BuildTowerView(rt *runtime.Runtime, bindings []access.ChannelBinding) (Towe
 		if raw, ok := fields["items"].([]any); ok {
 			for _, r := range raw {
 				if m, ok := r.(map[string]any); ok {
-					scope, _ := m["scope"].(string)
-					assignee, _ := m["assignee"].(string)
-					ttl, _ := m["ttl"].(string)
+					scope := towerItemString(m, "scope")
+					assignee := towerItemString(m, "assignee")
+					ttl := towerItemString(m, "ttl")
 					v.Field.Assignments = append(v.Field.Assignments, AssignmentRow{Scope: scope, Assignee: assignee, TTL: ttl})
 				}
 			}
@@ -169,12 +170,26 @@ func towerItemStrings(fields map[string]any, itemsField, field string) []string 
 	out := make([]string, 0, len(raw))
 	for _, r := range raw {
 		if m, ok := r.(map[string]any); ok {
-			if s, ok := m[field].(string); ok && s != "" {
+			if s := towerItemString(m, field); s != "" {
 				out = append(out, s)
 			}
 		}
 	}
 	return out
+}
+
+func towerItemString(item map[string]any, key string) string {
+	if s, ok := item[key].(string); ok && s != "" {
+		return s
+	}
+	for _, section := range []string{eventmodel.PayloadRuleKey, eventmodel.PayloadNarrativeKey, eventmodel.PayloadRefsKey} {
+		if m, ok := item[section].(map[string]any); ok {
+			if s, ok := m[key].(string); ok && s != "" {
+				return s
+			}
+		}
+	}
+	return ""
 }
 
 // ReobserveCandidate is the Tower's ONLY write action (P6b): it resolves an INBOX escalation by

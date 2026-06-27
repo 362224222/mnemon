@@ -117,8 +117,13 @@ func observationFromObservedEnvelope(env eventmodel.EventEnvelope) (contract.Obs
 	}
 	payload := copyEventPayload(env.Event.Payload)
 	if env.Event.TTL != "" {
-		if _, ok := payload["ttl"]; !ok {
-			payload["ttl"] = env.Event.TTL
+		rule, _ := payload[eventmodel.PayloadRuleKey].(map[string]any)
+		if rule == nil {
+			rule = map[string]any{}
+			payload[eventmodel.PayloadRuleKey] = rule
+		}
+		if _, ok := rule["ttl"]; !ok {
+			rule["ttl"] = env.Event.TTL
 		}
 	}
 	return contract.ObservationEnvelope{

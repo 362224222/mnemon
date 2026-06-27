@@ -43,7 +43,7 @@ func TestReobserveCandidateAdmitsViaOperator(t *testing.T) {
 	// host candidate -> denied by the operator gate -> diagnostic (never written)
 	if _, _, err := rt.API().Ingest("codex@project", contract.ObservationEnvelope{
 		ExternalID: "h1",
-		Event:      contract.Event{Type: "approval.write_candidate.observed", Payload: map[string]any{"text": "needs operator approval"}},
+		Event:      contract.Event{Type: "approval.write_candidate.observed", Payload: r2Text("needs operator approval")},
 	}); err != nil {
 		t.Fatalf("ingest host candidate: %v", err)
 	}

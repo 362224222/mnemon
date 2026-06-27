@@ -75,9 +75,7 @@ func TestProductStatusUsesReachableLocalMnemon(t *testing.T) {
 	defer rt.Close()
 	if _, _, err := rt.API().Ingest("codex@project", contract.ObservationEnvelope{
 		ExternalID: "status-pending",
-		Event: contract.Event{Type: "progress_digest.write_candidate.observed", Payload: map[string]any{
-			"summary": "Status should read pending sync from the live Local Mnemon service.",
-		}},
+		Event:      contract.Event{Type: "progress_digest.write_candidate.observed", Payload: cmdR2Progress("Status should read pending sync from the live Local Mnemon service.")},
 	}); err != nil {
 		t.Fatalf("seed progress candidate: %v", err)
 	}

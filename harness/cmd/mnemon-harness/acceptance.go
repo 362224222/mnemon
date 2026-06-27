@@ -19,6 +19,7 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/app"
 	"github.com/mnemon-dev/mnemon/harness/internal/codexapp"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/state"
@@ -773,8 +774,8 @@ func runR1CodexLocalScenario(ctx context.Context, opts r1CodexAcceptanceOptions,
 	runID := strings.ToLower(time.Now().UTC().Format("150405"))
 	for i := range agents {
 		prompt := fmt.Sprintf(`Follow the managed Mnemon GUIDE for %s.
-Run a shell command that emits one agent_profile.write_candidate.observed event with external id profile-%02d-%s and payload fields:
-actor=%q, focus="R1 real Codex cluster acceptance", context_advantages=["real Codex appserver %02d","workspace-local Mnemon hooks"], availability="available", ttl="30m", summary="Agent %02d is available for the R1 teamwork acceptance run".
+Run a shell command that emits one agent_profile.write_candidate.observed event with external id profile-%02d-%s and payload:
+{"rule":{"actor":%q,"availability":"available","ttl":"30m"},"narrative":{"focus":"R1 real Codex cluster acceptance","context_advantages":["real Codex appserver %02d","workspace-local Mnemon hooks"],"summary":"Agent %02d is available for the R1 teamwork acceptance run"}}
 After the command succeeds, answer "profile done".`, agents[i].principal, i+1, runID, agents[i].principal, i+1, i+1)
 		answer, err := runR1Turn(&agents[i], prompt, opts.TurnTimeout)
 		appendAgentAnswer(report, agents[i].principal, answer)
@@ -800,8 +801,9 @@ Read current governed teamwork context with:
   . .mnemon/harness/local/env.sh
   mnemon-harness control render --addr "$MNEMON_CONTROL_ADDR" --principal "$MNEMON_CONTROL_PRINCIPAL" --token-file "$MNEMON_CONTROL_TOKEN_FILE" --intent teamwork.events --lifecycle remind --surface agent
 Then emit a teamwork_signal.write_candidate.observed event with external id signal-%s and payload:
-{"signal_id":%q,"scope":"r1/real-codex-cluster/local","statement":"Need another real Codex appserver to complete an R1 acceptance work item.","why_teamwork":"five fresh agent profiles are available; delegation verifies the R1 teamwork event loop","ttl":"30m","evidence":"real-codex-cluster acceptance"}
-Then choose one teammate other than yourself and emit assignment.write_candidate.observed with external id assignment-%s, assignment_id %q, signal_ref %q, assignee set to that teammate principal, scope "r1/real-codex-cluster/local", expected_work "Inspect the R1 teamwork event loop and report whether the real appserver can act on the assignment.", expected_feedback "progress_digest with assignment_ref and evidence", ttl "20m", evidence "signal %s".
+{"rule":{"signal_id":%q,"scope":"r1/real-codex-cluster/local","ttl":"30m"},"narrative":{"statement":"Need another real Codex appserver to complete an R1 acceptance work item.","why_teamwork":"five fresh agent profiles are available; delegation verifies the R1 teamwork event loop"},"refs":{"evidence_refs":["real-codex-cluster acceptance"]}}
+Then choose one teammate other than yourself and emit assignment.write_candidate.observed with external id assignment-%s and payload:
+{"rule":{"assignment_id":%q,"signal_ref":%q,"assignee":"<chosen teammate principal>","scope":"r1/real-codex-cluster/local","ttl":"20m"},"narrative":{"expected_work":"Inspect the R1 teamwork event loop and report whether the real appserver can act on the assignment.","expected_feedback":"progress_digest with assignment_ref and evidence"},"refs":{"evidence_refs":["signal %s"]}}
 After both commands succeed, answer with the assignee principal only.`, runID, signalID, runID, assignID, signalID, signalID)
 	answer, err := runR1Turn(&starter, prompt, opts.TurnTimeout)
 	appendAgentAnswer(report, starter.principal, answer)
@@ -831,7 +833,7 @@ After both commands succeed, answer with the assignee principal only.`, runID, s
 	addR1Assertion(report, "A7 assignee gets work derived event by scoped render", strings.Contains(workPresentation.Body, "[mnemon:work]") && strings.Contains(workPresentation.Body, assignID), workPresentation.Body)
 
 	prompt = fmt.Sprintf(`Read your governed work context, do the assigned inspection in this workspace, then emit progress_digest.write_candidate.observed with external id progress-%s and payload:
-{"assignment_ref":%q,"scope":"r1/real-codex-cluster/local","summary":"Real Codex appserver acted on the R1 assignment and confirmed the rendered work event was usable.","evidence":"rendered work event plus real appserver turn","changed_context":"assignee completed the delegated acceptance work","suggested_next":"starter should integrate the result"}
+{"rule":{"assignment_ref":%q,"scope":"r1/real-codex-cluster/local","feedback_kind":"progress"},"narrative":{"summary":"Real Codex appserver acted on the R1 assignment and confirmed the rendered work event was usable.","changed_context":["assignee completed the delegated acceptance work"],"suggested_next":"starter should integrate the result"},"refs":{"evidence_refs":["rendered work event plus real appserver turn"]}}
 After the command succeeds, answer "progress_digest done".`, runID, assignID)
 	answer, err = runR1Turn(&assigneeAgent, prompt, opts.TurnTimeout)
 	appendAgentAnswer(report, assigneeAgent.principal, answer)
@@ -853,7 +855,7 @@ After the command succeeds, answer "progress_digest done".`, runID, assignID)
 	expAssignee := agents[(starterIndex+1)%len(agents)].principal
 	prompt = fmt.Sprintf(`Emit one assignment.write_candidate.observed event that intentionally expires quickly.
 Use external id assignment-expired-%s and payload:
-{"assignment_id":%q,"assignee":%q,"scope":"r1/real-codex-cluster/ttl-expired","expected_work":"This assignment is intentionally left without progress to verify the render-derived expired event.","expected_feedback":"progress_digest if completed","ttl":"1s","evidence":"TTL branch acceptance"}
+{"rule":{"assignment_id":%q,"assignee":%q,"scope":"r1/real-codex-cluster/ttl-expired","ttl":"1s"},"narrative":{"expected_work":"This assignment is intentionally left without progress to verify the render-derived expired event.","expected_feedback":"progress_digest if completed"},"refs":{"evidence_refs":["TTL branch acceptance"]}}
 Do not emit progress_digest for this assignment. Answer "expired assignment written".`, runID, expID, expAssignee)
 	answer, err = runR1Turn(&starter, prompt, opts.TurnTimeout)
 	appendAgentAnswer(report, starter.principal, answer)
@@ -942,7 +944,7 @@ func runR1CodexSyncScenario(ctx context.Context, opts r1CodexAcceptanceOptions, 
 
 	sourcePrompt := fmt.Sprintf(`This is the 6B Remote Workspace sync acceptance source turn.
 Emit exactly one assignment.write_candidate.observed event into your Local Mnemon workspace using external id sync-assignment-%s and payload:
-{"assignment_id":%q,"assignee":%q,"scope":"r1/real-codex-cluster/sync","expected_work":"Verify that a real Codex appserver received this assignment through Remote Workspace sync/import and can act from a local derived-event presentation.","expected_feedback":"progress_digest with assignment_ref and evidence","ttl":"20m","evidence":"6B accepted event sync/import"}
+{"rule":{"assignment_id":%q,"assignee":%q,"scope":"r1/real-codex-cluster/sync","ttl":"20m"},"narrative":{"expected_work":"Verify that a real Codex appserver received this assignment through Remote Workspace sync/import and can act from a local derived-event presentation.","expected_feedback":"progress_digest with assignment_ref and evidence"},"refs":{"evidence_refs":["6B accepted event sync/import"]}}
 Use the control observe command pattern from your developer instructions. Do not message the assignee directly. After the command succeeds, answer "sync assignment written".`, runID, assignmentID, target.principal)
 	answer, err := runR1Turn(&source.r1CodexAgent, sourcePrompt, opts.TurnTimeout)
 	appendSyncAgentAnswer(syncReport, source.principal, answer)
@@ -964,7 +966,7 @@ Use the control observe command pattern from your developer instructions. Do not
 
 	targetPrompt := fmt.Sprintf(`This is the 6B Remote Workspace sync acceptance target turn.
 Read your current governed Mnemon context, then emit progress_digest.write_candidate.observed with external id sync-progress-%s and payload:
-{"assignment_ref":%q,"scope":"r1/real-codex-cluster/sync","summary":"Target real Codex appserver received the assignment through Local Mnemon sync/import and acted from its own derived-event presentation.","evidence":"target local render work derived event after hub sync","changed_context":"6B target completed synced work","suggested_next":"source should integrate the synced progress"}
+{"rule":{"assignment_ref":%q,"scope":"r1/real-codex-cluster/sync","feedback_kind":"progress"},"narrative":{"summary":"Target real Codex appserver received the assignment through Local Mnemon sync/import and acted from its own derived-event presentation.","changed_context":["6B target completed synced work"],"suggested_next":"source should integrate the synced progress"},"refs":{"evidence_refs":["target local render work derived event after hub sync"]}}
 After the command succeeds, answer "sync progress written".`, runID, assignmentID)
 	answer, err = runR1Turn(&target.r1CodexAgent, targetPrompt, opts.TurnTimeout)
 	appendSyncAgentAnswer(syncReport, target.principal, answer)
@@ -1315,9 +1317,22 @@ func findAssignmentAssignee(controlURL string, agent r1CodexAgent, assignmentID 
 		items, _ := content.Fields["items"].([]any)
 		for _, raw := range items {
 			item, _ := raw.(map[string]any)
-			if id, _ := item["assignment_id"].(string); id == assignmentID {
-				assignee, _ := item["assignee"].(string)
-				return assignee
+			if acceptanceItemString(item, "assignment_id") == assignmentID {
+				return acceptanceItemString(item, "assignee")
+			}
+		}
+	}
+	return ""
+}
+
+func acceptanceItemString(item map[string]any, key string) string {
+	if s, ok := item[key].(string); ok {
+		return s
+	}
+	for _, section := range []string{eventmodel.PayloadRuleKey, eventmodel.PayloadNarrativeKey, eventmodel.PayloadRefsKey} {
+		if m, ok := item[section].(map[string]any); ok {
+			if s, ok := m[key].(string); ok {
+				return s
 			}
 		}
 	}

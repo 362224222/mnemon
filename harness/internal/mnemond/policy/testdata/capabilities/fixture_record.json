@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "name": "fixture_record",
   "observed_type": "fixture_record.write_candidate.observed",
   "proposed_type": "fixture_record.write.proposed",
@@ -7,6 +7,7 @@
   "items_field": "entries",
   "fields": [
     {
+      "section": "narrative",
       "name": "content",
       "validators": [
         {
@@ -24,6 +25,7 @@
       ]
     },
     {
+      "section": "refs",
       "name": "source",
       "validators": [
         {
@@ -35,6 +37,7 @@
       ]
     },
     {
+      "section": "refs",
       "name": "confidence",
       "validators": [
         {
@@ -46,6 +49,7 @@
       ]
     },
     {
+      "section": "refs",
       "name": "tags",
       "validators": [
         {
