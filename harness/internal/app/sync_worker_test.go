@@ -184,6 +184,24 @@ func TestSyncWorkerSurvivesUnreachableRemote(t *testing.T) {
 	}
 }
 
+func TestSyncWorkerBacksOffGitHubRateLimit(t *testing.T) {
+	now := time.Unix(100, 0)
+	err := fmt.Errorf("sync pull failed: github api status 403: API rate limit exceeded (rate_limit_remaining=0, rate_limit_reset=160)")
+	if got := syncWorkerErrorBackoff(err, now); got != 61*time.Second {
+		t.Fatalf("rate-limit reset backoff = %v, want 61s", got)
+	}
+
+	err = fmt.Errorf("sync pull failed: github api status 403: secondary limit (retry_after=12, rate_limit_remaining=0, rate_limit_reset=160)")
+	if got := syncWorkerErrorBackoff(err, now); got != 12*time.Second {
+		t.Fatalf("retry-after backoff = %v, want 12s", got)
+	}
+
+	err = fmt.Errorf("sync pull failed: github api status 500")
+	if got := syncWorkerErrorBackoff(err, now); got != 0 {
+		t.Fatalf("non-rate-limit error backoff = %v, want zero", got)
+	}
+}
+
 // The worker round trip over the LIVE runtime handle: pending local materials push (acked to synced),
 // a foreign material pulls and merges through the kernel, the cursor advances, and a second pass is a
 // no-op (no duplicates, no echo) — all without a second store opener.
