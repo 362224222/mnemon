@@ -17,10 +17,10 @@ func TestRecordSyncEventsDerivesFromAcceptedEventEnvelopes(t *testing.T) {
 			Type:          "memory.accepted",
 			Subject:       eventmodel.Subject("memory", "project"),
 			Actor:         "codex@project",
-			Payload: map[string]any{
+			Payload: eventmodel.BuildPayload(map[string]any{
 				"resource_version": int64(3),
 				"fields":           map[string]any{"content": "accepted envelope source"},
-			},
+			}, nil, nil),
 			CorrelationID: "corr-1",
 			CreatedAt:     "2026-06-24T00:00:00Z",
 		}

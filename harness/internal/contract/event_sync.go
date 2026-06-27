@@ -16,10 +16,10 @@ func SyncedEventEnvelopeFromMaterial(material SyncedEventMaterial) (eventmodel.E
 		Type:          string(material.ResourceRef.Kind) + ".accepted",
 		Subject:       subject,
 		Actor:         string(material.Actor),
-		Payload: map[string]any{
+		Payload: eventmodel.BuildPayload(map[string]any{
 			"resource_version": int64(material.ResourceVersion),
 			"fields":           cloneSyncFields(material.Fields),
-		},
+		}, nil, nil),
 		CorrelationID: material.CorrelationID,
 		CreatedAt:     material.DecidedAt,
 	}
@@ -45,13 +45,14 @@ func SyncedEventMaterialFromEnvelope(env eventmodel.EventEnvelope) (SyncedEventM
 	if decisionID == "" {
 		return SyncedEventMaterial{}, fmt.Errorf("synced event %q does not carry a decision identity", env.Event.ID)
 	}
-	version, err := int64FromSyncAny(env.Event.Payload["resource_version"])
+	rule := eventmodel.PayloadRule(env.Event.Payload)
+	version, err := int64FromSyncAny(rule["resource_version"])
 	if err != nil {
 		return SyncedEventMaterial{}, fmt.Errorf("synced event %q has invalid resource_version: %w", env.Event.ID, err)
 	}
-	fields, ok := env.Event.Payload["fields"].(map[string]any)
+	fields, ok := rule["fields"].(map[string]any)
 	if !ok {
-		return SyncedEventMaterial{}, fmt.Errorf("synced event %q payload.fields must be an object", env.Event.ID)
+		return SyncedEventMaterial{}, fmt.Errorf("synced event %q payload.rule.fields must be an object", env.Event.ID)
 	}
 	origin, _ := env.Meta["origin_mnemond"].(string)
 	cursor, _ := env.Meta["cursor"].(string)
