@@ -23,6 +23,7 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/state"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemonhub"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemonhub/exchange"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 	"github.com/spf13/cobra"
 )
@@ -147,8 +148,23 @@ type r1CodexAgentReport struct {
 
 type r1CodexSyncReport struct {
 	Status               string                      `json:"status"`
+	Backend              string                      `json:"backend,omitempty"`
+	Repo                 string                      `json:"repo,omitempty"`
+	TransportModel       string                      `json:"transport_model,omitempty"`
+	RosterSource         string                      `json:"roster_source,omitempty"`
+	NetworkDiscovery     string                      `json:"network_discovery,omitempty"`
 	HubURL               string                      `json:"hub_url"`
+	PublicationBranches  []string                    `json:"publication_branches,omitempty"`
+	BranchByAgent        map[string]string           `json:"branch_by_agent,omitempty"`
+	RemotePlanPaths      []string                    `json:"remote_plan_paths,omitempty"`
+	RuntimeWorkspaces    []string                    `json:"runtime_workspace_paths,omitempty"`
+	LocalStorePaths      []string                    `json:"local_mnemond_store_paths,omitempty"`
+	PublishedByBranch    map[string]int              `json:"published_events_by_branch,omitempty"`
+	ImportedByMnemond    map[string]int              `json:"imported_events_by_mnemond,omitempty"`
+	DiagnosticsByMnemond map[string]int              `json:"diagnostics_by_mnemond,omitempty"`
+	ProfileByMnemond     map[string]int              `json:"profile_events_by_mnemond,omitempty"`
 	AllowedEventSubjects []string                    `json:"allowed_event_subjects"`
+	Lifecycle            []r1SyncLifecycleReport     `json:"lifecycle,omitempty"`
 	Source               string                      `json:"source"`
 	Target               string                      `json:"target"`
 	Agents               []r1CodexAgentReport        `json:"agents"`
@@ -156,6 +172,16 @@ type r1CodexSyncReport struct {
 	SourceLedger         map[string]int              `json:"source_ledger,omitempty"`
 	TargetLedger         map[string]int              `json:"target_ledger,omitempty"`
 	Artifacts            map[string]string           `json:"artifacts,omitempty"`
+}
+
+type r1SyncLifecycleReport struct {
+	At        string         `json:"at"`
+	Principal string         `json:"principal"`
+	Action    string         `json:"action"`
+	Result    string         `json:"result"`
+	Branch    string         `json:"branch,omitempty"`
+	Detail    string         `json:"detail,omitempty"`
+	Ledger    map[string]int `json:"ledger,omitempty"`
 }
 
 type r1AcceptanceAssertion struct {
@@ -376,7 +402,11 @@ func installAcceptanceHarnessBinary(runRoot string) (string, error) {
 }
 
 func prepareR1AcceptanceRunRoot(runRoot string) error {
-	testdataRoot, err := filepath.Abs(".testdata")
+	testdataRoot, err := physicalAcceptancePath(".testdata")
+	if err != nil {
+		return err
+	}
+	runRoot, err = physicalAcceptancePath(runRoot)
 	if err != nil {
 		return err
 	}
@@ -399,6 +429,30 @@ func prepareR1AcceptanceRunRoot(runRoot string) error {
 		return fmt.Errorf("run-root %s already exists outside .testdata; choose an empty or .testdata-scoped directory", runRoot)
 	}
 	return nil
+}
+
+func physicalAcceptancePath(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		return resolved, nil
+	}
+	var missing []string
+	for current := abs; ; current = filepath.Dir(current) {
+		if resolved, err := filepath.EvalSymlinks(current); err == nil {
+			for i := len(missing) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, missing[i])
+			}
+			return resolved, nil
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return abs, nil
+		}
+		missing = append(missing, filepath.Base(current))
+	}
 }
 
 func setupR1CodexAgents(runRoot, binDir, controlURL string, count int, sourceCodexHome string) ([]r1CodexAgent, access.LoadedBindings, error) {
@@ -1081,7 +1135,7 @@ func setupR1CodexSyncAgents(ctx context.Context, runRoot, binDir string, hub r1S
 		if i-1 >= len(hub.Tokens) {
 			return nil, fmt.Errorf("hub token missing for agent %d", i)
 		}
-		if err := upsertSyncRemote(filepath.Join(workspace, ".mnemon", "harness", "sync", "remotes.json"), workspace, "hub", hub.URL, hub.Tokens[i-1], "", ""); err != nil {
+		if err := upsertSyncRemote(filepath.Join(workspace, ".mnemon", "harness", "sync", "remotes.json"), workspace, "hub", exchange.RemoteBackendHTTP, "", hub.URL, "", "", hub.Tokens[i-1], "", ""); err != nil {
 			return nil, err
 		}
 		loaded, err := access.LoadBindingFile(workspace, filepath.Join(workspace, access.DefaultBindingFile))

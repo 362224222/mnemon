@@ -56,6 +56,7 @@ func withSyncImport(rc runtime.RuntimeConfig, bindings []access.ChannelBinding, 
 	rules := append([]admission.Rule(nil), rc.Rules.Rules()...)
 	rules = append(rules, policy.RemoteImportRules(catalog, contract.SyncImportActor)...)
 	rules = append(rules, policy.SyncImportSkippedRule(contract.SyncImportActor))
+	rules = append(rules, policy.SyncRemoteDiagnosticRule(contract.SyncImportActor))
 	rc.Rules = admission.NewRuleSet(rules...)
 	if rc.Subs == nil {
 		rc.Subs = map[contract.ActorID]contract.Subscription{}
@@ -380,7 +381,8 @@ func SyncImportRuntimeConfig(refs []contract.ResourceRef, catalog policy.Registr
 		}
 	}
 	rules := append(policy.RemoteImportRules(catalog, contract.SyncImportActor),
-		policy.SyncImportSkippedRule(contract.SyncImportActor))
+		policy.SyncImportSkippedRule(contract.SyncImportActor),
+		policy.SyncRemoteDiagnosticRule(contract.SyncImportActor))
 	return runtime.RuntimeConfig{
 		Subs: map[contract.ActorID]contract.Subscription{
 			contract.SyncImportActor: {Actor: contract.SyncImportActor, Refs: refs},

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemonhub/exchange"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
@@ -290,7 +292,7 @@ func TestSyncConnectWritesRemoteConfigWithoutLeakingToken(t *testing.T) {
 		}
 	}
 	config := string(mustReadCmd(t, filepath.Join(root, ".mnemon", "harness", "sync", "remotes.json")))
-	for _, want := range []string{`"current": "team"`, `"id": "team"`, `"credential_ref": ".mnemon/harness/sync/credentials/team.token"`} {
+	for _, want := range []string{`"current": "team"`, `"backend": "http"`, `"id": "team"`, `"credential_ref": ".mnemon/harness/sync/credentials/team.token"`} {
 		if !strings.Contains(config, want) {
 			t.Fatalf("sync connect config missing %q:\n%s", want, config)
 		}
@@ -305,8 +307,58 @@ func TestSyncConnectWritesRemoteConfigWithoutLeakingToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve current remote: %v", err)
 	}
-	if remote.ID != "team" || remote.Endpoint != "https://remote.example.test" || remote.Token != "secret-workspace-token" {
+	if remote.ID != "team" || remote.Backend != exchange.RemoteBackendHTTP || remote.Endpoint != "https://remote.example.test" || remote.Token != "secret-workspace-token" {
 		t.Fatalf("current remote not resolved: %+v", remote)
+	}
+}
+
+func TestSyncConnectWritesGitHubRemoteConfigWithoutLeakingToken(t *testing.T) {
+	restoreSyncFlags(t)
+	root := t.TempDir()
+	syncRoot = root
+	syncRemoteBackend = exchange.RemoteBackendGitHub
+	syncRemoteDirection = exchange.RemoteDirectionPublish
+	syncGitHubRepo = "mnemon-dev/mnemon-teamwork-example"
+	syncGitHubBranch = "mnemon/mnemond-a"
+	syncRemoteToken = "secret-github-token"
+	var out bytes.Buffer
+	cmd := mustTestCommand(t)
+	cmd.SetOut(&out)
+	if err := runSyncConnect(cmd, []string{"self"}); err != nil {
+		t.Fatalf("sync connect github: %v", err)
+	}
+	if strings.Contains(out.String(), "secret-github-token") {
+		t.Fatalf("sync connect output must not expose token:\n%s", out.String())
+	}
+	config := string(mustReadCmd(t, filepath.Join(root, ".mnemon", "harness", "sync", "remotes.json")))
+	for _, want := range []string{
+		`"backend": "github"`,
+		`"direction": "publish"`,
+		`"id": "self"`,
+		`"repo": "mnemon-dev/mnemon-teamwork-example"`,
+		`"branch": "mnemon/mnemond-a"`,
+		`"credential_ref": ".mnemon/harness/sync/credentials/self.token"`,
+	} {
+		if !strings.Contains(config, want) {
+			t.Fatalf("sync connect github config missing %q:\n%s", want, config)
+		}
+	}
+	if strings.Contains(config, "secret-github-token") || strings.Contains(config, "endpoint") {
+		t.Fatalf("github remote config must not leak token or write an endpoint:\n%s", config)
+	}
+	syncRemoteBackend = ""
+	syncRemoteDirection = ""
+	syncGitHubRepo = ""
+	syncGitHubBranch = ""
+	syncRemoteToken = ""
+	remote, err := resolveSyncRemote()
+	if err != nil {
+		t.Fatalf("resolve github remote: %v", err)
+	}
+	if remote.ID != "self" || remote.Backend != exchange.RemoteBackendGitHub ||
+		remote.Repo != "mnemon-dev/mnemon-teamwork-example" || remote.Branch != "mnemon/mnemond-a" ||
+		remote.Token != "secret-github-token" {
+		t.Fatalf("github remote not resolved: %+v", remote)
 	}
 }
 
@@ -341,8 +393,56 @@ func TestSyncRemoteConfigLoadsCredentialRef(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve remote config: %v", err)
 	}
-	if remote.ID != "workspace" || remote.Endpoint != "http://127.0.0.1:8787" || remote.Token != "tok-workspace" {
+	if remote.ID != "workspace" || remote.Backend != exchange.RemoteBackendHTTP || remote.Endpoint != "http://127.0.0.1:8787" || remote.Token != "tok-workspace" {
 		t.Fatalf("remote config not loaded: %+v", remote)
+	}
+}
+
+func TestSyncRemotePlanLoadsDirectionalCredentials(t *testing.T) {
+	restoreSyncFlags(t)
+	root := t.TempDir()
+	writeCredential := func(id, token string) string {
+		t.Helper()
+		credRel := filepath.Join(".mnemon", "harness", "sync", "credentials", id+".token")
+		credPath := filepath.Join(root, credRel)
+		if err := os.MkdirAll(filepath.Dir(credPath), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(credPath, []byte(token+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return filepath.ToSlash(credRel)
+	}
+	pubCred := writeCredential("pub", "tok-pub")
+	subCred := writeCredential("sub", "tok-sub")
+	remotesPath := filepath.Join(root, ".mnemon", "harness", "sync", "remotes.json")
+	if err := os.WriteFile(remotesPath, []byte(fmt.Sprintf(`{
+	  "schema_version": 1,
+	  "remotes": [{
+	    "id": "pub",
+	    "direction": "publish",
+	    "endpoint": "http://127.0.0.1:8787",
+	    "credential_ref": %q
+	  }, {
+	    "id": "sub",
+	    "direction": "subscribe",
+	    "endpoint": "http://127.0.0.1:8788",
+	    "credential_ref": %q
+	  }]
+	}`+"\n", pubCred, subCred)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	syncRoot = root
+
+	plan, err := resolveSyncRemotePlan()
+	if err != nil {
+		t.Fatalf("resolve directional remote plan: %v", err)
+	}
+	if len(plan.PushTargets) != 1 || plan.PushTargets[0].ID != "pub" || plan.PushTargets[0].Token != "tok-pub" {
+		t.Fatalf("push target not resolved with its credential: %+v", plan.PushTargets)
+	}
+	if len(plan.PullSources) != 1 || plan.PullSources[0].ID != "sub" || plan.PullSources[0].Token != "tok-sub" {
+		t.Fatalf("pull source not resolved with its credential: %+v", plan.PullSources)
 	}
 }
 
@@ -352,30 +452,42 @@ func restoreSyncFlags(t *testing.T) {
 	oldStorePath := syncStorePath
 	oldRemotesPath := syncRemotesPath
 	oldRemoteID := syncRemoteID
+	oldRemoteBackend := syncRemoteBackend
+	oldRemoteDirection := syncRemoteDirection
 	oldRemoteURL := syncRemoteURL
 	oldRemoteToken := syncRemoteToken
 	oldRemoteTokenFile := syncRemoteTokenFile
 	oldCAFile := syncCAFile
+	oldGitHubRepo := syncGitHubRepo
+	oldGitHubBranch := syncGitHubBranch
 	oldAllowInsecure := syncAllowInsecure
 	t.Cleanup(func() {
 		syncRoot = oldRoot
 		syncStorePath = oldStorePath
 		syncRemotesPath = oldRemotesPath
 		syncRemoteID = oldRemoteID
+		syncRemoteBackend = oldRemoteBackend
+		syncRemoteDirection = oldRemoteDirection
 		syncRemoteURL = oldRemoteURL
 		syncRemoteToken = oldRemoteToken
 		syncRemoteTokenFile = oldRemoteTokenFile
 		syncCAFile = oldCAFile
+		syncGitHubRepo = oldGitHubRepo
+		syncGitHubBranch = oldGitHubBranch
 		syncAllowInsecure = oldAllowInsecure
 	})
 	syncRoot = "."
 	syncStorePath = ""
 	syncRemotesPath = ""
 	syncRemoteID = "default"
+	syncRemoteBackend = ""
+	syncRemoteDirection = ""
 	syncRemoteURL = ""
 	syncRemoteToken = ""
 	syncRemoteTokenFile = ""
 	syncCAFile = ""
+	syncGitHubRepo = ""
+	syncGitHubBranch = ""
 	syncAllowInsecure = false
 }
 

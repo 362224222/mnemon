@@ -106,6 +106,7 @@ type acceptanceStoreInspect struct {
 	Counts                  map[string]int             `json:"counts"`
 	EnvelopeByPhase         map[string]int             `json:"envelope_by_phase,omitempty"`
 	EnvelopeByType          map[string]int             `json:"envelope_by_type,omitempty"`
+	ObservedByType          map[string]int             `json:"observed_by_type,omitempty"`
 	SyncEventsByStatus      map[string]int             `json:"sync_events_by_status,omitempty"`
 	RemoteEventsByStatus    map[string]int             `json:"remote_events_by_status,omitempty"`
 	GovernedRowsByKind      map[string]int             `json:"governed_rows_by_kind,omitempty"`
@@ -349,6 +350,10 @@ func inspectAcceptanceStore(root, path string, latest int) (acceptanceStoreInspe
 		report.Counts["imported_accepted"] = sumCountMap(report.ImportedAcceptedByRef)
 	}
 	if report.Counts["events"] > 0 {
+		report.ObservedByType, err = sqliteObservedByType(ctx, db)
+		if err != nil {
+			return report, err
+		}
 		report.LatestObserved, err = sqliteLatestObservedEvents(ctx, db, latest)
 		if err != nil {
 			return report, err
@@ -468,6 +473,29 @@ func sqliteLatestObservedEvents(ctx context.Context, db *sql.DB, limit int) ([]a
 			}
 		}
 		out = append(out, rec)
+	}
+	return out, rows.Err()
+}
+
+func sqliteObservedByType(ctx context.Context, db *sql.DB) (map[string]int, error) {
+	rows, err := db.QueryContext(ctx, `SELECT payload FROM events`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var payload string
+		if err := rows.Scan(&payload); err != nil {
+			return nil, err
+		}
+		var raw map[string]any
+		if err := json.Unmarshal([]byte(payload), &raw); err != nil {
+			continue
+		}
+		if eventType, _ := raw["type"].(string); eventType != "" {
+			out[eventType]++
+		}
 	}
 	return out, rows.Err()
 }

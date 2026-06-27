@@ -38,11 +38,32 @@ Inspect local state:
 
 ## 3. Remote Workspace Sync
 
-Connect a Remote Workspace:
+Connect an HTTP `mnemon-hub` Remote Workspace:
 
 ```sh
-./mnemon-harness sync connect my-workspace
+./mnemon-harness sync connect my-workspace --remote-url https://mnemon-hub.example/sync --token-file ./hub.token
 ```
+
+Experimental GitHub publication backend:
+
+```sh
+./mnemon-harness sync connect self \
+  --backend github \
+  --direction publish \
+  --github-repo mnemon-dev/mnemon-teamwork-example \
+  --github-branch mnemon/agent-a \
+  --token-file ~/.config/mnemon/github.token
+
+./mnemon-harness sync connect agent-b \
+  --backend github \
+  --direction subscribe \
+  --github-repo mnemon-dev/mnemon-teamwork-example \
+  --github-branch mnemon/agent-b \
+  --token-file ~/.config/mnemon/github.token
+```
+
+The GitHub backend is repo-mediated publication, not P2P discovery. Configure the
+branches you publish and subscribe to explicitly.
 
 Run one push or pull:
 

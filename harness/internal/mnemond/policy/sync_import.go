@@ -94,6 +94,11 @@ func sortedImportable(catalog Registry) []EventPackage {
 // origin_replica_id, local_decision_id, remote_id}.
 const SyncImportSkippedObserved = "sync.import_skipped.observed"
 
+// SyncRemoteDiagnosticObserved is the observation a sync puller ingests when a Remote Workspace
+// returns a pull-side diagnostic for an invalid/rejected/conflicting publication entry. Payload:
+// {remote_id, origin_mnemond, event_id, subject, status, diagnostic}.
+const SyncRemoteDiagnosticObserved = "sync.remote_diagnostic.observed"
+
 // SyncImportSkippedRule is the legal diagnostic mechanism for skipped kinds: it Handles ONLY the
 // skipped observation, gates on the sync import principal (foreign events pass through), and always
 // denies with a reason naming the kind — the deny is what produces the durable *.diagnostic (S7);
@@ -111,6 +116,29 @@ func SyncImportSkippedRule(principal contract.ActorID) admission.Rule {
 			return contract.RuleDecision{
 				Verdict: contract.VerdictDeny,
 				Reasons: []string{fmt.Sprintf("sync import skipped: resource kind %q has no import mapping on this replica", kind)},
+			}, nil
+		})
+}
+
+// SyncRemoteDiagnosticRule is the legal diagnostic mechanism for pull-side Remote Workspace
+// diagnostics. Like skipped-kind import, it denies a sync.* observation so the kernel emits one
+// durable sync.diagnostic with lineage to the original remote diagnostic observation.
+func SyncRemoteDiagnosticRule(principal contract.ActorID) admission.Rule {
+	return admission.NewNativeRule("sync-remote-diagnostic:"+string(principal), principal, "", []string{SyncRemoteDiagnosticObserved},
+		func(in admission.RuleInput) (contract.RuleDecision, error) {
+			if in.Event.Actor != principal {
+				return contract.RuleDecision{Verdict: contract.VerdictAllow}, nil
+			}
+			remoteID, _ := in.Event.Payload["remote_id"].(string)
+			status, _ := in.Event.Payload["status"].(string)
+			origin, _ := in.Event.Payload["origin_mnemond"].(string)
+			eventID, _ := in.Event.Payload["event_id"].(string)
+			subject, _ := in.Event.Payload["subject"].(string)
+			diagnostic, _ := in.Event.Payload["diagnostic"].(string)
+			return contract.RuleDecision{
+				Verdict: contract.VerdictDeny,
+				Reasons: []string{fmt.Sprintf("remote workspace diagnostic: remote_id=%q status=%q origin_mnemond=%q event_id=%q subject=%q: %s",
+					remoteID, status, origin, eventID, subject, diagnostic)},
 			}, nil
 		})
 }

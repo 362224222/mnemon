@@ -12,6 +12,7 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemonhub/exchange"
+	githubbackend "github.com/mnemon-dev/mnemon/harness/internal/mnemonhub/exchange/backend/github"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 	"github.com/spf13/cobra"
 )
@@ -21,10 +22,14 @@ var (
 	syncStorePath       string
 	syncRemotesPath     string
 	syncRemoteID        string
+	syncRemoteBackend   string
+	syncRemoteDirection string
 	syncRemoteURL       string
 	syncRemoteToken     string
 	syncRemoteTokenFile string
 	syncCAFile          string
+	syncGitHubRepo      string
+	syncGitHubBranch    string
 	syncAllowInsecure   bool
 	syncOnce            bool
 	syncBackground      bool
@@ -66,10 +71,14 @@ func init() {
 	syncCmd.PersistentFlags().StringVar(&syncStorePath, "store", "", "Local Mnemon store path")
 	syncCmd.PersistentFlags().StringVar(&syncRemotesPath, "remotes", "", "Remote Workspace config path")
 	syncCmd.PersistentFlags().StringVar(&syncRemoteID, "remote", "default", "Remote Workspace id")
+	syncCmd.PersistentFlags().StringVar(&syncRemoteBackend, "backend", "", "Remote Workspace backend (http or github)")
+	syncCmd.PersistentFlags().StringVar(&syncRemoteDirection, "direction", "", "Remote Workspace direction (bidirectional, publish, or subscribe)")
 	syncCmd.PersistentFlags().StringVar(&syncRemoteURL, "remote-url", "", "Remote Workspace sync endpoint")
 	syncCmd.PersistentFlags().StringVar(&syncRemoteToken, "token", "", "Remote Workspace sync token")
 	syncCmd.PersistentFlags().StringVar(&syncRemoteTokenFile, "token-file", "", "Remote Workspace sync token file")
 	syncCmd.PersistentFlags().StringVar(&syncCAFile, "ca-file", "", "PEM bundle pinning the Remote Workspace TLS root (e.g. the mnemon-hub --dev-selfsigned cert)")
+	syncCmd.PersistentFlags().StringVar(&syncGitHubRepo, "github-repo", "", "GitHub Remote Workspace repository (owner/name)")
+	syncCmd.PersistentFlags().StringVar(&syncGitHubBranch, "github-branch", "", "GitHub Remote Workspace publication branch")
 	syncCmd.PersistentFlags().BoolVar(&syncAllowInsecure, "allow-insecure-remote", false, "explicitly allow a plaintext http:// Remote Workspace endpoint with a non-loopback host (T2: fail-closed by default)")
 	_ = syncCmd.PersistentFlags().MarkHidden("store")
 	_ = syncCmd.PersistentFlags().MarkHidden("remotes")
@@ -92,19 +101,46 @@ func runSyncConnect(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("Remote Workspace name must use letters, numbers, dot, dash, or underscore")
 	}
 	endpoint := strings.TrimSpace(syncRemoteURL)
-	if endpoint == "" {
-		return fmt.Errorf("--remote-url is required")
-	}
-	// T2 downgrade gate at WRITE time (v1.1 #3): a plaintext non-loopback endpoint never enters
-	// remotes.json unless explicitly overridden — the worker and the manual verbs then re-validate
-	// at client construction.
-	if err := access.ValidateSyncEndpoint(endpoint, syncAllowInsecure); err != nil {
+	backend, err := exchange.NormalizeRemoteBackend(syncRemoteBackend)
+	if err != nil {
 		return err
+	}
+	direction, err := exchange.NormalizeRemoteDirection(syncRemoteDirection)
+	if err != nil {
+		return err
+	}
+	repo, branch := "", ""
+	switch backend {
+	case exchange.RemoteBackendHTTP:
+		if endpoint == "" {
+			return fmt.Errorf("--remote-url is required")
+		}
+		// T2 downgrade gate at WRITE time (v1.1 #3): a plaintext non-loopback endpoint never enters
+		// remotes.json unless explicitly overridden — the worker and the manual verbs then re-validate
+		// at client construction.
+		if err := access.ValidateSyncEndpoint(endpoint, syncAllowInsecure); err != nil {
+			return err
+		}
+	case exchange.RemoteBackendGitHub:
+		repo, err = exchange.NormalizeGitHubRepo(syncGitHubRepo)
+		if err != nil {
+			return err
+		}
+		branch, err = exchange.NormalizePublicationBranch(syncGitHubBranch)
+		if err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("unsupported Remote Workspace backend %q", backend)
 	}
 	if strings.TrimSpace(syncRemoteToken) == "" && strings.TrimSpace(syncRemoteTokenFile) == "" {
 		return fmt.Errorf("--token or --token-file is required")
 	}
-	if err := upsertSyncRemote(resolvedSyncRemotesPath(), syncProjectRoot(), workspace, endpoint, syncRemoteToken, syncRemoteTokenFile, syncCAFile); err != nil {
+	directionForWrite := direction
+	if backend == exchange.RemoteBackendHTTP && direction == exchange.RemoteDirectionBidirectional {
+		directionForWrite = ""
+	}
+	if err := upsertSyncRemote(resolvedSyncRemotesPath(), syncProjectRoot(), workspace, backend, directionForWrite, endpoint, repo, branch, syncRemoteToken, syncRemoteTokenFile, syncCAFile); err != nil {
 		return err
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "Remote Workspace: connected %s\n", workspace)
@@ -200,74 +236,135 @@ func syncPushOnce() (syncPushResult, error) {
 	if len(batch.Events) == 0 {
 		return syncPushResult{}, nil
 	}
-	remote, err := resolveSyncRemote()
+	plan, err := resolveSyncRemotePlan()
 	if err != nil {
 		return syncPushResult{}, err
 	}
-	client, err := syncClientFor(remote)
-	if err != nil {
-		return syncPushResult{}, err
+	if len(plan.PushTargets) == 0 {
+		return syncPushResult{}, fmt.Errorf("Remote Workspace plan has no push targets")
 	}
-	resp, err := client.SyncPush(contract.SyncPushRequest{
-		ReplicaID: batch.ReplicaID,
-		BatchID:   exchange.PushBatchID(batch.ReplicaID, batch.Events),
-		Events:    batch.Events,
-	})
-	if err != nil {
-		return syncPushResult{}, fmt.Errorf("sync push failed: %w", err)
+	result := syncPushResult{}
+	for _, remote := range plan.PushTargets {
+		workspace, err := syncRemoteWorkspaceFor(remote)
+		if err != nil {
+			return syncPushResult{}, err
+		}
+		resp, err := workspace.SyncPush(contract.SyncPushRequest{
+			ReplicaID: batch.ReplicaID,
+			BatchID:   exchange.PushBatchID(batch.ReplicaID, batch.Events),
+			Events:    batch.Events,
+		})
+		if err != nil {
+			return syncPushResult{}, fmt.Errorf("sync push failed: %w", err)
+		}
+		if err := exchange.ApplyLocalSyncPushResponse(storePath, remote.ID, resp); err != nil {
+			return syncPushResult{}, err
+		}
+		result.accepted += len(resp.Accepted)
+		result.rejected += len(resp.Rejected)
+		result.conflicts += len(resp.Conflicts)
 	}
-	if err := exchange.ApplyLocalSyncPushResponse(storePath, remote.ID, resp); err != nil {
-		return syncPushResult{}, err
-	}
-	return syncPushResult{accepted: len(resp.Accepted), rejected: len(resp.Rejected), conflicts: len(resp.Conflicts)}, nil
+	return result, nil
 }
 
 func syncPullOnce() (syncPullResult, error) {
-	remote, err := resolveSyncRemote()
+	plan, err := resolveSyncRemotePlan()
 	if err != nil {
 		return syncPullResult{}, err
+	}
+	if len(plan.PullSources) == 0 {
+		return syncPullResult{}, fmt.Errorf("Remote Workspace plan has no pull sources")
 	}
 	storePath := resolvedSyncStorePath()
-	state, err := exchange.ReadLocalSyncPullState(storePath, remote.ID)
-	if err != nil {
-		return syncPullResult{}, err
-	}
-	client, err := syncClientFor(remote)
-	if err != nil {
-		return syncPullResult{}, err
-	}
-	resp, err := client.SyncPull(contract.SyncPullRequest{
-		ReplicaID:    state.ReplicaID,
-		RemoteCursor: state.RemoteCursor,
-	})
-	if err != nil {
-		return syncPullResult{}, fmt.Errorf("sync pull failed: %w", err)
-	}
 	catalog := app.SyncImportCatalog(syncProjectRoot(), os.Stderr)
-	if err := app.ImportLocalSyncPull(storePath, remote.ID, resp.NextCursor, resp.Events, catalog); err != nil {
-		return syncPullResult{}, err
+	result := syncPullResult{}
+	for _, remote := range plan.PullSources {
+		state, err := exchange.ReadLocalSyncPullState(storePath, remote.ID)
+		if err != nil {
+			return syncPullResult{}, err
+		}
+		workspace, err := syncRemoteWorkspaceFor(remote)
+		if err != nil {
+			return syncPullResult{}, err
+		}
+		resp, err := workspace.SyncPull(contract.SyncPullRequest{
+			ReplicaID:    state.ReplicaID,
+			RemoteCursor: state.RemoteCursor,
+		})
+		if err != nil {
+			return syncPullResult{}, fmt.Errorf("sync pull failed: %w", err)
+		}
+		if err := app.ImportLocalSyncPullWithDiagnostics(storePath, remote.ID, resp.NextCursor, resp.Events, resp.Diagnostics, catalog); err != nil {
+			return syncPullResult{}, err
+		}
+		result.events += len(resp.Events)
 	}
-	return syncPullResult{events: len(resp.Events)}, nil
+	return result, nil
 }
 
 type syncRemoteConfig struct {
 	ID       string
+	Backend  string
 	Endpoint string
+	Repo     string
+	Branch   string
 	Token    string
 	CAFile   string
 }
 
-// syncClientFor builds the bounded sync client for one resolved remote: bearer token, optional
-// pinned TLS root, and the T2 downgrade gate (--allow-insecure-remote is the only override).
-func syncClientFor(remote syncRemoteConfig) (*access.Client, error) {
-	return access.NewSyncClient(remote.Endpoint, access.SyncClientConfig{
-		Token:         remote.Token,
-		CAFile:        remote.CAFile,
-		AllowInsecure: syncAllowInsecure,
-	})
+type syncRemotePlan struct {
+	PushTargets []syncRemoteConfig
+	PullSources []syncRemoteConfig
+}
+
+// syncRemoteWorkspaceFor builds the selected Remote Workspace backend for one resolved remote. The
+// current CLI supports the first-party HTTP mnemon-hub backend; future backends must preserve this
+// SyncPush/SyncPull/SyncStatus ABI rather than bypassing local import.
+func syncRemoteWorkspaceFor(remote syncRemoteConfig) (exchange.RemoteWorkspace, error) {
+	backend := strings.TrimSpace(remote.Backend)
+	if backend == "" {
+		backend = exchange.RemoteBackendHTTP
+	}
+	switch backend {
+	case exchange.RemoteBackendHTTP:
+		return access.NewSyncClient(remote.Endpoint, access.SyncClientConfig{
+			Token:         remote.Token,
+			CAFile:        remote.CAFile,
+			AllowInsecure: syncAllowInsecure,
+		})
+	case exchange.RemoteBackendGitHub:
+		store, err := githubbackend.NewPublicationStore(githubbackend.PublicationStoreConfig{
+			Repo:  remote.Repo,
+			Token: remote.Token,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return githubbackend.New(githubbackend.Config{
+			Store:  store,
+			Repo:   remote.Repo,
+			Branch: remote.Branch,
+		})
+	default:
+		return nil, fmt.Errorf("Remote Workspace %q: unsupported backend %q", remote.ID, backend)
+	}
 }
 
 func resolveSyncRemote() (syncRemoteConfig, error) {
+	plan, err := resolveSyncRemotePlan()
+	if err != nil {
+		return syncRemoteConfig{}, err
+	}
+	if len(plan.PushTargets) > 0 {
+		return plan.PushTargets[0], nil
+	}
+	if len(plan.PullSources) > 0 {
+		return plan.PullSources[0], nil
+	}
+	return syncRemoteConfig{}, fmt.Errorf("Remote Workspace plan has no remotes")
+}
+
+func resolveSyncRemotePlan() (syncRemotePlan, error) {
 	if strings.TrimSpace(syncRemoteURL) != "" {
 		tokenFile := syncRemoteTokenFile
 		if tokenFile != "" {
@@ -275,26 +372,48 @@ func resolveSyncRemote() (syncRemoteConfig, error) {
 		}
 		token, err := resolveSyncToken(syncRemoteToken, tokenFile)
 		if err != nil {
-			return syncRemoteConfig{}, err
+			return syncRemotePlan{}, err
 		}
-		return syncRemoteConfig{ID: syncRemoteID, Endpoint: syncRemoteURL, Token: token, CAFile: resolvedSyncCAFile("")}, nil
+		remote := syncRemoteConfig{ID: syncRemoteID, Backend: exchange.RemoteBackendHTTP, Endpoint: syncRemoteURL, Token: token, CAFile: resolvedSyncCAFile("")}
+		return syncRemotePlan{PushTargets: []syncRemoteConfig{remote}, PullSources: []syncRemoteConfig{remote}}, nil
 	}
-	entry, err := exchange.LoadRemoteEntry(resolvedSyncRemotesPath(), syncRemoteID)
+	plan, err := exchange.LoadRemotePlan(resolvedSyncRemotesPath(), syncRemoteID)
 	if err != nil {
-		return syncRemoteConfig{}, err
+		return syncRemotePlan{}, err
 	}
+	out := syncRemotePlan{}
+	for _, entry := range plan.PushTargets {
+		remote, err := resolveSyncRemoteEntry(entry)
+		if err != nil {
+			return syncRemotePlan{}, err
+		}
+		out.PushTargets = append(out.PushTargets, remote)
+	}
+	for _, entry := range plan.PullSources {
+		remote, err := resolveSyncRemoteEntry(entry)
+		if err != nil {
+			return syncRemotePlan{}, err
+		}
+		out.PullSources = append(out.PullSources, remote)
+	}
+	return out, nil
+}
+
+func resolveSyncRemoteEntry(entry exchange.RemoteEntry) (syncRemoteConfig, error) {
 	if strings.TrimSpace(entry.CredentialRef) == "" && strings.TrimSpace(syncRemoteToken) == "" && strings.TrimSpace(syncRemoteTokenFile) == "" {
 		return syncRemoteConfig{}, fmt.Errorf("Remote Workspace %q has no credential_ref", entry.ID)
 	}
 	tokenFile := ""
-	if strings.TrimSpace(entry.CredentialRef) != "" {
+	if strings.TrimSpace(syncRemoteTokenFile) != "" {
+		tokenFile = resolveSyncPath(syncRemoteTokenFile)
+	} else if strings.TrimSpace(entry.CredentialRef) != "" {
 		tokenFile = resolveSyncPath(entry.CredentialRef)
 	}
 	token, err := resolveSyncToken(syncRemoteToken, tokenFile)
 	if err != nil {
 		return syncRemoteConfig{}, err
 	}
-	return syncRemoteConfig{ID: entry.ID, Endpoint: entry.Endpoint, Token: token, CAFile: resolvedSyncCAFile(entry.CAFile)}, nil
+	return syncRemoteConfig{ID: entry.ID, Backend: entry.NormalizedBackend(), Endpoint: entry.Endpoint, Repo: entry.Repo, Branch: entry.Branch, Token: token, CAFile: resolvedSyncCAFile(entry.CAFile)}, nil
 }
 
 // resolvedSyncCAFile picks the pinned-root file: the --ca-file flag overrides the remotes.json
@@ -310,7 +429,7 @@ func resolvedSyncCAFile(entryCAFile string) string {
 	return resolveSyncPath(caFile)
 }
 
-func upsertSyncRemote(path, root, id, endpoint, token, tokenFile, caFile string) error {
+func upsertSyncRemote(path, root, id, backend, direction, endpoint, repo, branch, token, tokenFile, caFile string) error {
 	doc := exchange.RemotesDoc{SchemaVersion: 1}
 	if raw, err := os.ReadFile(path); err == nil && len(strings.TrimSpace(string(raw))) > 0 {
 		if err := json.Unmarshal(raw, &doc); err != nil {
@@ -326,7 +445,7 @@ func upsertSyncRemote(path, root, id, endpoint, token, tokenFile, caFile string)
 	if err != nil {
 		return err
 	}
-	entry := exchange.RemoteEntry{ID: id, Endpoint: endpoint, CredentialRef: credentialRef, CAFile: normalizeSyncFileRef(caFile)}
+	entry := exchange.RemoteEntry{Backend: backend, Direction: direction, ID: id, Endpoint: endpoint, Repo: repo, Branch: branch, CredentialRef: credentialRef, CAFile: normalizeSyncFileRef(caFile)}
 	replaced := false
 	for i := range doc.Remotes {
 		if doc.Remotes[i].ID == id {
