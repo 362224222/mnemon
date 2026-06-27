@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation/view"
 )
 
@@ -56,6 +57,7 @@ type Response struct {
 	SchemaVersion          int
 	Status                 Status
 	Body                   string
+	Events                 []eventmodel.EventEnvelope
 	BodyFormat             string
 	BodyDigest             string
 	PresentationViewDigest string
@@ -92,6 +94,7 @@ func (r Renderer) RenderPresentation(ctx context.Context, req Request, proj view
 		SchemaVersion:          1,
 		Status:                 StatusOK,
 		Body:                   body,
+		Events:                 events,
 		BodyFormat:             "plain_text",
 		BodyDigest:             digest(body),
 		PresentationViewDigest: proj.Digest,

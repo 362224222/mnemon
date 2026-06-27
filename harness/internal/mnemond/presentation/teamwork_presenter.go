@@ -53,7 +53,7 @@ func DeriveEventEnvelopes(req Request, proj view.View, now time.Time) []eventmod
 			Subject:       eventmodel.EventSubject(subject),
 			Actor:         "mnemond@local",
 			Audience:      principal,
-			Payload:       map[string]any{"body": body},
+			Payload:       eventmodel.BuildPayload(nil, map[string]any{"body": body}, nil),
 			CausedBy:      append([]string(nil), causedBy...),
 			CreatedAt:     derivedAt,
 		}
@@ -265,7 +265,7 @@ func derivedTimes(now time.Time) (string, string) {
 }
 
 func derivedBody(env eventmodel.EventEnvelope) string {
-	body, _ := env.Event.Payload["body"].(string)
+	body, _ := eventmodel.PayloadNarrative(env.Event.Payload)["body"].(string)
 	return body
 }
 
