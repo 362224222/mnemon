@@ -357,6 +357,13 @@ func runR1CodexAcceptance(ctx context.Context, opts r1CodexAcceptanceOptions) (r
 	addR1Assertion(&report, "A11 no assignment_status/assignment_expired", report.LedgerCounts["assignment_status"] == 0 && report.LedgerCounts["assignment_expired"] == 0, fmt.Sprintf("assignment_status=%d assignment_expired=%d", report.LedgerCounts["assignment_status"], report.LedgerCounts["assignment_expired"]))
 	addR1Assertion(&report, "A12 derived event render audit has provenance", report.DerivedEventAudit["with_provenance"] > 0 && report.DerivedEventAudit["with_body_digest"] > 0 && report.DerivedEventAudit["with_audit_id"] > 0, fmt.Sprintf("%+v", report.DerivedEventAudit))
 	addR1Assertion(&report, "A13 activation loop writes no governed event by itself", true, "runner wakes appservers with turns; governed events are emitted by appserver shell commands through control observe")
+	if obs, err := observeAcceptanceRun(runRoot, 1000); err == nil {
+		report.Observability = &obs
+		ok, detail := acceptedR2PayloadShapeAssertion(obs)
+		addR1Assertion(&report, "A14 accepted event payloads are R2 nested", ok, detail)
+	} else {
+		addR1Assertion(&report, "A14 accepted event payloads are R2 nested", false, err.Error())
+	}
 	if opts.SyncArm {
 		for i := range agents {
 			agents[i].server.Close()

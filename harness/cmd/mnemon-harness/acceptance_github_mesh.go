@@ -278,8 +278,11 @@ func runR1GitHubMeshAcceptance(ctx context.Context, opts r1GitHubMeshAcceptanceO
 			report.Observability.Warnings = append(report.Observability.Warnings, warnings...)
 		}
 		report.Participants = r1ClusterParticipants(counts, report.Entrypoint)
+		ok, detail := acceptedR2PayloadShapeAssertion(obs)
+		addR1Assertion(&report, "github-mesh accepted event payloads are R2 nested", ok, detail)
 	} else {
 		addR1Error(&report, obsErr)
+		addR1Assertion(&report, "github-mesh accepted event payloads are R2 nested", false, obsErr.Error())
 	}
 	report.DerivedEventAudit = prodSimDerivedAudit(agents)
 	if len(agents) > 0 {

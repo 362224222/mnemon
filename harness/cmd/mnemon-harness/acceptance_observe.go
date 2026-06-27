@@ -106,6 +106,7 @@ type acceptanceStoreInspect struct {
 	Counts                  map[string]int             `json:"counts"`
 	EnvelopeByPhase         map[string]int             `json:"envelope_by_phase,omitempty"`
 	EnvelopeByType          map[string]int             `json:"envelope_by_type,omitempty"`
+	EnvelopePayloadShape    map[string]int             `json:"envelope_payload_shape,omitempty"`
 	ObservedByType          map[string]int             `json:"observed_by_type,omitempty"`
 	SyncEventsByStatus      map[string]int             `json:"sync_events_by_status,omitempty"`
 	RemoteEventsByStatus    map[string]int             `json:"remote_events_by_status,omitempty"`
@@ -339,6 +340,10 @@ func inspectAcceptanceStore(root, path string, latest int) (acceptanceStoreInspe
 		if err != nil {
 			return report, err
 		}
+		report.EnvelopePayloadShape, err = sqliteEnvelopePayloadShape(ctx, db)
+		if err != nil {
+			return report, err
+		}
 		report.LatestEnvelopes, err = sqliteLatestEventEnvelopes(ctx, db, latest)
 		if err != nil {
 			return report, err
@@ -445,6 +450,62 @@ LIMIT ?`, limit)
 		out = append(out, rec)
 	}
 	return out, rows.Err()
+}
+
+func sqliteEnvelopePayloadShape(ctx context.Context, db *sql.DB) (map[string]int, error) {
+	rows, err := db.QueryContext(ctx, `SELECT phase, envelope FROM event_envelopes`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	counts := map[string]int{}
+	for rows.Next() {
+		var phase, envelope string
+		if err := rows.Scan(&phase, &envelope); err != nil {
+			return nil, err
+		}
+		if phase != "accepted" {
+			continue
+		}
+		counts["accepted_total"]++
+		var raw struct {
+			Event struct {
+				SchemaVersion int            `json:"schema_version"`
+				Payload       map[string]any `json:"payload"`
+			} `json:"event"`
+		}
+		if err := json.Unmarshal([]byte(envelope), &raw); err != nil {
+			counts["accepted_decode_error"]++
+			continue
+		}
+		if raw.Event.SchemaVersion == 2 {
+			counts["accepted_event_schema_v2"]++
+		} else {
+			counts["accepted_event_schema_not_v2"]++
+		}
+		if len(raw.Event.Payload) == 0 {
+			counts["accepted_empty_payload"]++
+			continue
+		}
+		if acceptedPayloadIsR2(raw.Event.Payload) {
+			counts["accepted_r2_payload"]++
+		} else {
+			counts["accepted_non_r2_payload"]++
+		}
+	}
+	return counts, rows.Err()
+}
+
+func acceptedPayloadIsR2(payload map[string]any) bool {
+	for key, value := range payload {
+		if key != "rule" && key != "narrative" && key != "refs" {
+			return false
+		}
+		if _, ok := value.(map[string]any); !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func sqliteLatestObservedEvents(ctx context.Context, db *sql.DB, limit int) ([]acceptanceEventSummary, error) {
@@ -701,6 +762,32 @@ func buildAcceptanceTopology(stores []acceptanceStoreInspect) acceptanceObserveT
 		top.Mode = "unknown"
 	}
 	return top
+}
+
+func acceptedR2PayloadShapeAssertion(obs acceptanceObserveReport) (bool, string) {
+	counts := map[string]int{}
+	for _, store := range obs.Stores {
+		for key, count := range store.EnvelopePayloadShape {
+			counts[key] += count
+		}
+	}
+	total := counts["accepted_total"]
+	ok := total > 0 &&
+		counts["accepted_event_schema_v2"] == total &&
+		counts["accepted_r2_payload"] == total &&
+		counts["accepted_event_schema_not_v2"] == 0 &&
+		counts["accepted_non_r2_payload"] == 0 &&
+		counts["accepted_decode_error"] == 0 &&
+		counts["accepted_empty_payload"] == 0
+	return ok, fmt.Sprintf("accepted_total=%d r2_payload=%d schema_v2=%d non_r2=%d schema_not_v2=%d empty=%d decode_error=%d",
+		total,
+		counts["accepted_r2_payload"],
+		counts["accepted_event_schema_v2"],
+		counts["accepted_non_r2_payload"],
+		counts["accepted_event_schema_not_v2"],
+		counts["accepted_empty_payload"],
+		counts["accepted_decode_error"],
+	)
 }
 
 func buildAcceptanceCrossEvents(stores []acceptanceStoreInspect) []acceptanceCrossEvent {

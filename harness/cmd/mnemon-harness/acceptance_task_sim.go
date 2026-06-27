@@ -249,6 +249,13 @@ func runR1TaskSimAcceptance(ctx context.Context, opts r1TaskSimAcceptanceOptions
 	report.DerivedEventAudit = countR1DerivedEventAudit(report.Artifacts["render_audit"])
 	addR1Assertion(&report, "task-sim no assignment_status/assignment_expired", report.LedgerCounts["assignment_status"] == 0 && report.LedgerCounts["assignment_expired"] == 0, fmt.Sprintf("assignment_status=%d assignment_expired=%d", report.LedgerCounts["assignment_status"], report.LedgerCounts["assignment_expired"]))
 	addR1Assertion(&report, "task-sim derived event audit has provenance", report.DerivedEventAudit["with_provenance"] > 0 && report.DerivedEventAudit["with_body_digest"] > 0 && report.DerivedEventAudit["with_audit_id"] > 0, fmt.Sprintf("%+v", report.DerivedEventAudit))
+	if obs, err := observeAcceptanceRun(runRoot, 1000); err == nil {
+		report.Observability = &obs
+		ok, detail := acceptedR2PayloadShapeAssertion(obs)
+		addR1Assertion(&report, "task-sim accepted event payloads are R2 nested", ok, detail)
+	} else {
+		addR1Assertion(&report, "task-sim accepted event payloads are R2 nested", false, err.Error())
+	}
 	if allR1AssertionsPassed(report.Assertions) && len(report.Errors) == 0 && allTaskSimScenariosOK(report.Scenarios, opts.Scenarios) {
 		report.Status = "ok"
 		return report, nil

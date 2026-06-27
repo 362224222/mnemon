@@ -219,8 +219,11 @@ func runR1ProdSimAcceptance(ctx context.Context, opts r1ProdSimAcceptanceOptions
 	if obs, err := observeAcceptanceRun(runRoot, 1000); err == nil {
 		report.Observability = &obs
 		addR1Assertion(&report, "prod-sim observability sees strict topology", obs.Topology.Mode == "per-hostagent-mnemond" && !obs.Topology.SharedMnemond, fmt.Sprintf("mode=%s shared=%t mnemond=%d hub=%d", obs.Topology.Mode, obs.Topology.SharedMnemond, obs.Topology.MnemondStores, obs.Topology.MnemonhubStores))
+		ok, detail := acceptedR2PayloadShapeAssertion(obs)
+		addR1Assertion(&report, "prod-sim accepted event payloads are R2 nested", ok, detail)
 	} else {
 		addR1Assertion(&report, "prod-sim observability sees strict topology", false, err.Error())
+		addR1Assertion(&report, "prod-sim accepted event payloads are R2 nested", false, err.Error())
 	}
 	syncReport.Status = statusFromBool(len(report.Errors) == 0 && allR1AssertionsPassed(report.Assertions) && allProdSimScenariosOK(report.Scenarios))
 	if syncReport.Status == "ok" {
