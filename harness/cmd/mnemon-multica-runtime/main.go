@@ -77,6 +77,10 @@ type runtimeImportResult struct {
 	WakeStatus            string
 	WakeTurnID            string
 	WakeErr               error
+	HubWriteStatus        string
+	HubChildIssues        int
+	HubFeedbackComments   int
+	HubWriteErr           error
 	Err                   error
 }
 
@@ -338,6 +342,7 @@ func (s *runtimeRPCState) importIssue(input string) runtimeImportResult {
 	result.Status = "recorded"
 	result.Receipt = &rec
 	s.wakeManagedAgent(&result)
+	s.writeMulticaHubArtifacts(ctx, cli, client, issue, &result)
 	s.projectImportComment(ctx, cli, issue, draft.ExternalID, &result)
 	return result
 }
@@ -620,6 +625,9 @@ func (s *runtimeRPCState) projectImportComment(ctx context.Context, cli driver.M
 	if result.WakeStatus != "" {
 		body += "\nManaged wake: " + result.WakeStatus
 	}
+	if result.HubWriteStatus != "" {
+		body += fmt.Sprintf("\nMultica hub write: %s child_issues=%d feedback_comments=%d", result.HubWriteStatus, result.HubChildIssues, result.HubFeedbackComments)
+	}
 	commentBody := driver.FormatMulticaProjectionComment(title, body, []string{externalID})
 	comment, err := cli.AddIssueComment(ctx, issue.ID, commentBody)
 	if err != nil {
@@ -868,6 +876,28 @@ func formatRuntimeFinalAnswer(result runtimeImportResult) string {
 			b.WriteString(result.WakeStatus)
 			b.WriteString(".")
 		}
+	}
+	switch result.HubWriteStatus {
+	case "created", "commented", "updated", "noop":
+		b.WriteString(" Multica hub write: ")
+		b.WriteString(result.HubWriteStatus)
+		if result.HubChildIssues > 0 {
+			b.WriteString(fmt.Sprintf(" child_issues=%d", result.HubChildIssues))
+		}
+		if result.HubFeedbackComments > 0 {
+			b.WriteString(fmt.Sprintf(" feedback_comments=%d", result.HubFeedbackComments))
+		}
+		b.WriteString(".")
+	case "skipped":
+		b.WriteString(" Multica hub write: skipped.")
+	case "failed":
+		b.WriteString(" Multica hub write: failed")
+		if result.HubWriteErr != nil {
+			b.WriteString(" (")
+			b.WriteString(result.HubWriteErr.Error())
+			b.WriteString(")")
+		}
+		b.WriteString(".")
 	}
 	return strings.TrimSpace(b.String())
 }

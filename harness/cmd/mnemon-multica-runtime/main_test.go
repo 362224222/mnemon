@@ -16,6 +16,7 @@ import (
 	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation"
+	pview "github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation/view"
 )
 
 func TestRuntimeImportsAssignedIssueIntoMnemon(t *testing.T) {
@@ -246,6 +247,7 @@ esac
 		Env: append(os.Environ(),
 			"MNEMON_MULTICA_BIN="+bin,
 			"MNEMON_HUB_BACKEND=multica",
+			"MNEMON_MULTICA_HUB_WRITE=off",
 			"MNEMON_CONTROL_ADDR="+srv.URL,
 			"MNEMON_CONTROL_PRINCIPAL=planner@team",
 			"MULTICA_ARGS_PATH="+argsPath,
@@ -287,6 +289,142 @@ esac
 	}
 	if !strings.Contains(out.String(), "Mnemon ingest: recorded seq=21") {
 		t.Fatalf("runtime output missing ingest evidence:\n%s", out.String())
+	}
+}
+
+func TestRuntimeWritesAssignmentMailboxChildIssueFromView(t *testing.T) {
+	tmp := t.TempDir()
+	argsPath := filepath.Join(tmp, "multica.args")
+	commentPath := filepath.Join(tmp, "comment.txt")
+	createDescriptionPath := filepath.Join(tmp, "child-description.txt")
+	bin := filepath.Join(tmp, "multica")
+	script := `#!/usr/bin/env sh
+printf '%s\n' "$*" >> "$MULTICA_ARGS_PATH"
+case "$*" in
+  *"issue get root-2"*) printf '{"id":"root-2","identifier":"TEA-10","title":"Coordinate docs release","description":"Split docs release validation across the team.","status":"todo","priority":"medium"}\n' ;;
+  *"issue metadata set root-2"*) printf '{}\n' ;;
+  *"issue children root-2"*) printf '{"children":[]}\n' ;;
+  *"issue create"*) cat > "$MULTICA_CREATE_DESCRIPTION_PATH"; printf '{"id":"child-2","identifier":"TEA-11","title":"Mnemon assignment asg-writer","status":"todo","metadata":{}}\n' ;;
+  *"issue metadata set child-2"*) printf '{}\n' ;;
+  *"issue comment add root-2"*) cat > "$MULTICA_COMMENT_PATH"; printf '{"id":"comment-root-2","issue_id":"root-2","content":"ok","type":"comment"}\n' ;;
+  *) printf '{}\n' ;;
+esac
+`
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	registryPath := filepath.Join(tmp, "registry.json")
+	if err := driver.SaveMulticaRegistry(registryPath, driver.MulticaRegistry{
+		SchemaVersion: 1,
+		WorkspaceID:   "ws-1",
+		Participants: []driver.MulticaParticipantRecord{{
+			Principal: "worker@team",
+			AgentName: "mnemon-worker",
+			AgentID:   "agent-worker",
+			Role:      "implementer",
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/ingest":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(access.IngestReceipt{Seq: 31, Dup: false, Ticked: true})
+		case "/presentation-view":
+			var sub contract.Subscription
+			if err := json.NewDecoder(r.Body).Decode(&sub); err != nil {
+				t.Fatal(err)
+			}
+			if sub.Actor != "planner@team" {
+				t.Fatalf("presentation actor = %q", sub.Actor)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(pview.View{
+				Ref:    "view-assignments",
+				Digest: "digest-assignments",
+				Content: []pview.ResourceContent{{
+					Ref: contract.ResourceRef{Kind: "assignment", ID: "project"},
+					Fields: map[string]any{"items": []any{map[string]any{
+						"id":    "asg-writer",
+						"actor": "planner@team",
+						"rule": map[string]any{
+							"assignment_id": "asg-writer",
+							"assignee":      "worker@team",
+							"scope":         "check release notes",
+							"ttl":           "30m",
+							"signal_ref":    "teamwork_signal/root-2",
+						},
+						"narrative": map[string]any{
+							"expected_work":     "check release notes against the public changelog",
+							"expected_feedback": "progress_digest with result or blocker",
+						},
+						"refs": map[string]any{
+							"context_refs":  []any{"multica:issue:root-2"},
+							"evidence_refs": []any{"multica:issue:root-2"},
+						},
+					}}},
+				}},
+			})
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	input := `{"jsonrpc":"2.0","id":3,"method":"turn/start","params":{"input":[{"type":"text","text":"Your assigned issue ID is: root-2"}]}}` + "\n"
+	var out bytes.Buffer
+	err := runRuntime(runtimeConfig{
+		Args: []string{"app-server", "--listen", "stdio://"},
+		Env: append(os.Environ(),
+			"MNEMON_MULTICA_BIN="+bin,
+			"MNEMON_HUB_BACKEND=multica",
+			"MNEMON_CONTROL_ADDR="+srv.URL,
+			"MNEMON_CONTROL_PRINCIPAL=planner@team",
+			"MNEMON_MULTICA_REGISTRY="+registryPath,
+			"MNEMON_MULTICA_HUB_LEDGER="+filepath.Join(tmp, "hub-ledger.jsonl"),
+			"MULTICA_ARGS_PATH="+argsPath,
+			"MULTICA_COMMENT_PATH="+commentPath,
+			"MULTICA_CREATE_DESCRIPTION_PATH="+createDescriptionPath,
+			"MULTICA_TASK_ID=task-root-2",
+			"MULTICA_AGENT_ID=agent-planner",
+		),
+		CWD:    tmp,
+		Stdin:  strings.NewReader(input),
+		Stdout: &out,
+		Now:    fixedRuntimeTime,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Multica hub write: created child_issues=1") {
+		t.Fatalf("runtime output missing hub write evidence:\n%s", out.String())
+	}
+	args := mustReadRuntimeTestFile(t, argsPath)
+	for _, want := range []string{
+		"issue children root-2 --output json",
+		"issue create --title Mnemon assignment asg-writer: check release notes --output json --description-stdin --assignee-id agent-worker --parent root-2 --status todo --priority medium",
+		"issue metadata set child-2 --key mnemon.kind --value assignment_mailbox --type string --output json",
+		"issue metadata set child-2 --key mnemon.assignment_id --value asg-writer --type string --output json",
+		"issue metadata set child-2 --key mnemon.principal --value worker@team --type string --output json",
+	} {
+		if !strings.Contains(args, want) {
+			t.Fatalf("args missing %q:\n%s", want, args)
+		}
+	}
+	if strings.Contains(args, "check release notes against") {
+		t.Fatalf("assignment description leaked into argv:\n%s", args)
+	}
+	description := mustReadRuntimeTestFile(t, createDescriptionPath)
+	for _, want := range []string{"Mnemon assignment mailbox", "Expected work: check release notes against the public changelog", "Expected feedback: progress_digest with result or blocker"} {
+		if !strings.Contains(description, want) {
+			t.Fatalf("description missing %q:\n%s", want, description)
+		}
+	}
+	comment := mustReadRuntimeTestFile(t, commentPath)
+	if !strings.Contains(comment, "Multica hub write: created child_issues=1") {
+		t.Fatalf("root comment missing hub write summary:\n%s", comment)
 	}
 }
 

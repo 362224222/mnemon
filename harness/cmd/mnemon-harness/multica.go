@@ -468,6 +468,7 @@ func ensureMulticaParticipantEnv(ctx context.Context, cli driver.MulticaCLI, par
 
 func multicaParticipantRuntimeEnv(cli driver.MulticaCLI, participant driver.MulticaParticipantRecord, registryPath, workspaceID string) map[string]string {
 	env := map[string]string{}
+	addStringEnv(env, "MNEMON_HUB_BACKEND", driver.MulticaHubBackend)
 	addStringEnv(env, "MNEMON_MULTICA_REGISTRY", registryPath)
 	addStringEnv(env, "MNEMON_MULTICA_WORKSPACE_ID", workspaceID)
 	addStringEnv(env, "MNEMON_MULTICA_BIN", multicaCLICommand(cli))

@@ -166,6 +166,7 @@ esac
 		t.Fatal(err)
 	}
 	for _, want := range []string{
+		`"MNEMON_HUB_BACKEND":"multica"`,
 		`"MNEMON_MULTICA_REGISTRY":"` + registryPath + `"`,
 		`"MNEMON_MULTICA_WORKSPACE_ID":"ws-1"`,
 		`"MNEMON_CONTROL_ADDR":"http://127.0.0.1:8787"`,
