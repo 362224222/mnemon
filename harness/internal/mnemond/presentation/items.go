@@ -45,6 +45,41 @@ func itemString(item map[string]any, key string) string {
 	return ""
 }
 
+func itemStringList(item map[string]any, key string) []string {
+	if out := stringList(item[key]); len(out) > 0 {
+		return out
+	}
+	for _, section := range []string{eventmodel.PayloadRuleKey, eventmodel.PayloadNarrativeKey, eventmodel.PayloadRefsKey} {
+		if m, ok := item[section].(map[string]any); ok {
+			if out := stringList(m[key]); len(out) > 0 {
+				return out
+			}
+		}
+	}
+	return nil
+}
+
+func stringList(raw any) []string {
+	var out []string
+	switch v := raw.(type) {
+	case []string:
+		for _, s := range v {
+			if s = strings.TrimSpace(s); s != "" {
+				out = append(out, s)
+			}
+		}
+	case []any:
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				if s = strings.TrimSpace(s); s != "" {
+					out = append(out, s)
+				}
+			}
+		}
+	}
+	return out
+}
+
 func firstNonEmpty(item map[string]any, keys ...string) string {
 	for _, key := range keys {
 		if s := itemString(item, key); s != "" {

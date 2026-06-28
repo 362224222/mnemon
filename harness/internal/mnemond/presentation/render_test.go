@@ -104,8 +104,8 @@ func TestDeriveEventEnvelopesSeparateEventModelFromPresentation(t *testing.T) {
 	}}
 
 	envelopes := DeriveEventEnvelopes(reqB, proj, now)
-	if len(envelopes) != 3 {
-		t.Fatalf("expected profile/work/feedback derived envelopes, got %+v", envelopes)
+	if len(envelopes) != 2 {
+		t.Fatalf("expected work/feedback derived envelopes, got %+v", envelopes)
 	}
 	got := map[string]eventmodel.EventEnvelope{}
 	for _, env := range envelopes {
@@ -144,6 +144,64 @@ func TestDeriveEventEnvelopesSeparateEventModelFromPresentation(t *testing.T) {
 	body := PresentEventEnvelopes(envelopes)
 	if !strings.Contains(body, "[mnemon:work]") || !strings.Contains(body, "[mnemon:feedback]") {
 		t.Fatalf("presentation should retain current hook-facing labels:\n%s", body)
+	}
+}
+
+func TestProfileCuePolicyFollowsLifecycle(t *testing.T) {
+	now := mustTime(t, "2026-06-24T10:00:00Z")
+	proj := view.View{Ref: "proj_profile", Digest: "digest_profile", Content: []view.ResourceContent{
+		content("teamwork_signal", "project", []any{map[string]any{"id": "sig1", "statement": "Need teammate context"}}),
+	}}
+
+	prime := DeriveEventEnvelopes(Request{Principal: "codex-a@project", Lifecycle: "prime", RenderIntent: IntentTeamworkEvents}, proj, now)
+	if _, ok := eventByType(prime, DerivedEventProfileUpdateRequested); !ok {
+		t.Fatalf("prime with missing profile should render a bounded profile cue: %+v", prime)
+	}
+
+	remind := DeriveEventEnvelopes(Request{Principal: "codex-a@project", Lifecycle: "remind", RenderIntent: IntentTeamworkEvents}, proj, now)
+	if _, ok := eventByType(remind, DerivedEventProfileUpdateRequested); !ok {
+		t.Fatalf("remind with open teamwork signal should render a contextual profile cue: %+v", remind)
+	}
+
+	workOnly := view.View{Ref: "proj_work", Digest: "digest_work", Content: []view.ResourceContent{
+		content("assignment", "project", []any{map[string]any{
+			"id": "asg1", "actor": "codex-b@project", "assignee": "codex-a@project",
+			"scope": "review render presentation", "expected_work": "review render presentation",
+			"ttl": "30m", "created_at": "2026-06-24T09:45:00Z",
+		}}),
+	}}
+	nudge := DeriveEventEnvelopes(Request{Principal: "codex-a@project", Lifecycle: "nudge", RenderIntent: IntentTeamworkEvents}, workOnly, now)
+	if _, ok := eventByType(nudge, DerivedEventProfileUpdateRequested); ok {
+		t.Fatalf("nudge should not render profile cue merely because profile is missing: %+v", nudge)
+	}
+
+	changed := view.View{Ref: "proj_changed", Digest: "digest_changed", Content: []view.ResourceContent{
+		content("progress_digest", "project", []any{map[string]any{
+			"id": "pg1", "actor": "codex-a@project", "feedback_kind": "progress",
+			"changed_context": []any{"learned managed wake constraint"},
+		}}),
+	}}
+	nudgeChanged := DeriveEventEnvelopes(Request{Principal: "codex-a@project", Lifecycle: "nudge", RenderIntent: IntentTeamworkEvents}, changed, now)
+	if _, ok := eventByType(nudgeChanged, DerivedEventProfileUpdateRequested); !ok {
+		t.Fatalf("nudge with structured changed_context should render profile cue: %+v", nudgeChanged)
+	}
+}
+
+func TestDerivedCueTextAvoidsForcedActionWording(t *testing.T) {
+	now := mustTime(t, "2026-06-24T10:00:00Z")
+	proj := view.View{Ref: "proj_cues", Digest: "digest_cues", Content: []view.ResourceContent{
+		content("teamwork_signal", "project", []any{map[string]any{"id": "sig1", "statement": "Need teammate context"}}),
+		content("assignment", "project", []any{map[string]any{
+			"id": "asg-exp", "actor": "codex-a@project", "assignee": "codex-b@project",
+			"scope": "review overdue work", "expected_work": "review overdue work",
+			"ttl": "30m", "created_at": "2026-06-24T09:00:00Z",
+		}}),
+	}}
+	body := PresentEventEnvelopes(DeriveEventEnvelopes(Request{Principal: "codex-a@project", Lifecycle: "remind", RenderIntent: IntentTeamworkEvents}, proj, now))
+	for _, forced := range []string{"Update your agent_profile", "Decide whether", "Start a new act", "emit progress_digest"} {
+		if strings.Contains(body, forced) {
+			t.Fatalf("derived cue body should not force action with %q:\n%s", forced, body)
+		}
 	}
 }
 
@@ -264,6 +322,15 @@ func TestRenderIntentsAreBounded(t *testing.T) {
 
 func bytesTrimSpace(in []byte) []byte {
 	return []byte(strings.TrimSpace(string(in)))
+}
+
+func eventByType(events []eventmodel.EventEnvelope, eventType string) (eventmodel.EventEnvelope, bool) {
+	for _, event := range events {
+		if event.Event.Type == eventType {
+			return event, true
+		}
+	}
+	return eventmodel.EventEnvelope{}, false
 }
 
 func content(kind, id string, items []any) view.ResourceContent {
