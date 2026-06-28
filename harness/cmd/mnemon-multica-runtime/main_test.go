@@ -13,7 +13,9 @@ import (
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/driver"
+	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation"
 )
 
 func TestRuntimeImportsAssignedIssueIntoMnemon(t *testing.T) {
@@ -51,15 +53,44 @@ esac
 	var gotPrincipal string
 	var got contract.ObservationEnvelope
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/ingest" {
+		switch r.URL.Path {
+		case "/ingest":
+			gotPrincipal = r.Header.Get(access.PrincipalHeader)
+			if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+				t.Fatal(err)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(access.IngestReceipt{Seq: 17, Dup: false, Ticked: true})
+		case "/render":
+			if r.Header.Get(access.PrincipalHeader) != "planner@team" {
+				t.Fatalf("render principal header = %q", r.Header.Get(access.PrincipalHeader))
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(presentation.Response{
+				SchemaVersion: 1,
+				Status:        presentation.StatusOK,
+				AuditID:       "render-audit-1",
+				BodyDigest:    "sha256:render-body",
+				Events: []eventmodel.EventEnvelope{{
+					SchemaVersion: eventmodel.SchemaVersion,
+					Phase:         eventmodel.PhaseDerived,
+					Event: eventmodel.Event{
+						SchemaVersion: eventmodel.SchemaVersion,
+						ID:            "derived-1",
+						Type:          "assignment.brief.derived",
+						Subject:       "assignment/asg-1",
+						Actor:         "mnemond",
+						Audience:      "planner@team",
+						Payload: eventmodel.BuildPayload(nil, map[string]any{
+							"body": "assignment for iss-7",
+						}, nil),
+					},
+					Meta: map[string]any{"presentation_hint": "work"},
+				}},
+			})
+		default:
 			t.Fatalf("unexpected path %s", r.URL.Path)
 		}
-		gotPrincipal = r.Header.Get(access.PrincipalHeader)
-		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
-			t.Fatal(err)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(access.IngestReceipt{Seq: 17, Dup: false, Ticked: true})
 	}))
 	defer srv.Close()
 
@@ -78,6 +109,8 @@ esac
 			"MNEMON_MULTICA_REGISTRY="+registryPath,
 			"MNEMON_CONTROL_ADDR="+srv.URL,
 			"MNEMON_CONTROL_PRINCIPAL=wrong@team",
+			"MNEMON_MANAGED_RUNTIME=noop",
+			"MNEMON_MANAGED_LEDGER="+filepath.Join(tmp, "wake-ledger.jsonl"),
 			"MULTICA_ARGS_PATH="+argsPath,
 			"MULTICA_COMMENT_PATH="+commentPath,
 			"MULTICA_WORKSPACE_ID=ws-1",
@@ -133,7 +166,7 @@ esac
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Mnemon update: issue admitted", "Principal: planner@team", "mnemon:event=multica-task-task-1"} {
+	for _, want := range []string{"Mnemon update: issue admitted", "Principal: planner@team", "Managed wake: completed", "mnemon:event=multica-task-task-1"} {
 		if !strings.Contains(string(comment), want) {
 			t.Fatalf("comment missing %s:\n%s", want, comment)
 		}
@@ -149,7 +182,7 @@ esac
 		if msg["method"] == "turn/completed" {
 			sawComplete = true
 		}
-		if msg["method"] == "item/agentMessage/delta" && strings.Contains(line, "Mnemon ingest: recorded seq=17") && strings.Contains(line, "Multica projection: comment=comment-1") {
+		if msg["method"] == "item/agentMessage/delta" && strings.Contains(line, "Mnemon ingest: recorded seq=17") && strings.Contains(line, "Multica projection: comment=comment-1") && strings.Contains(line, "Managed wake: completed turn=noop-turn") {
 			sawAnswer = true
 		}
 	}

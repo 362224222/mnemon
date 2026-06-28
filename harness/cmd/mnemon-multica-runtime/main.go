@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/driver"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation"
 )
 
 const runtimeVersion = "dev"
@@ -61,6 +63,9 @@ type runtimeImportResult struct {
 	ProjectionStatus    string
 	ProjectionCommentID string
 	ProjectionErr       error
+	WakeStatus          string
+	WakeTurnID          string
+	WakeErr             error
 	Err                 error
 }
 
@@ -302,8 +307,81 @@ func (s *runtimeRPCState) importIssue(input string) runtimeImportResult {
 	}
 	result.Status = "recorded"
 	result.Receipt = &rec
+	s.wakeManagedAgent(&result)
 	s.projectImportComment(ctx, cli, issue, draft.ExternalID, &result)
 	return result
+}
+
+func (s *runtimeRPCState) wakeManagedAgent(result *runtimeImportResult) {
+	if result == nil {
+		return
+	}
+	runtimeName := strings.TrimSpace(envValue(s.Env, "MNEMON_MANAGED_RUNTIME"))
+	if runtimeName == "" || strings.EqualFold(runtimeName, "off") || strings.EqualFold(runtimeName, "disabled") || strings.EqualFold(runtimeName, "none") {
+		result.WakeStatus = "skipped"
+		return
+	}
+	addr := strings.TrimSpace(envValue(s.Env, "MNEMON_CONTROL_ADDR"))
+	if addr == "" {
+		result.WakeStatus = "skipped"
+		result.WakeErr = fmt.Errorf("MNEMON_CONTROL_ADDR is not set")
+		return
+	}
+	token, err := runtimeControlToken(s.Env)
+	if err != nil {
+		result.WakeStatus = "failed"
+		result.WakeErr = err
+		return
+	}
+	renderCtx, cancel := context.WithTimeout(context.Background(), runtimeTimeout(s.Env))
+	defer cancel()
+	resp, err := (driver.HTTPRenderClient{
+		BaseURL:   addr,
+		Token:     token,
+		Principal: contract.ActorID(result.Principal),
+	}).Render(renderCtx, presentation.Request{
+		SchemaVersion: 1,
+		Principal:     contract.ActorID(result.Principal),
+		Host:          "multica",
+		Lifecycle:     envDefault(s.Env, "MNEMON_MANAGED_RENDER_LIFECYCLE", "remind"),
+		Surface:       "runtime",
+		RenderIntent:  presentation.IntentTeamworkEvents,
+	})
+	if err != nil {
+		result.WakeStatus = "failed"
+		result.WakeErr = fmt.Errorf("render managed wake candidates: %w", err)
+		return
+	}
+	candidates := driver.ManagedWakeCandidatesFromRender(result.Principal, resp)
+	if len(candidates) == 0 {
+		result.WakeStatus = "skipped"
+		result.WakeErr = fmt.Errorf("no managed wake candidate in rendered context")
+		return
+	}
+	client, workspace, err := runtimeManagedTurnClient(s.Env, s.CWD, runtimeName)
+	if err != nil {
+		result.WakeStatus = "failed"
+		result.WakeErr = err
+		return
+	}
+	wakeCtx, cancel := context.WithTimeout(context.Background(), runtimeManagedTurnTimeout(s.Env))
+	defer cancel()
+	record, err := (&driver.ManagedAgentDriver{
+		Principal: result.Principal,
+		Client:    client,
+		Ledger:    driver.NewFileManagedWakeLedger(runtimeManagedLedgerPath(s.Env, workspace)),
+		Now:       func() time.Time { return s.now() },
+	}).Wake(wakeCtx, candidates[0])
+	result.WakeTurnID = record.TurnID
+	if err != nil {
+		result.WakeStatus = "failed"
+		result.WakeErr = err
+		return
+	}
+	result.WakeStatus = record.Status
+	if result.WakeStatus == "" {
+		result.WakeStatus = "completed"
+	}
 }
 
 func (s *runtimeRPCState) projectImportComment(ctx context.Context, cli driver.MulticaCLI, issue driver.MulticaIssue, externalID string, result *runtimeImportResult) {
@@ -323,6 +401,9 @@ func (s *runtimeRPCState) projectImportComment(ctx context.Context, cli driver.M
 	}
 	if result.Receipt != nil {
 		body += fmt.Sprintf("\nMnemon ingest: seq=%d duplicate=%v ticked=%v", result.Receipt.Seq, result.Receipt.Dup, result.Receipt.Ticked)
+	}
+	if result.WakeStatus != "" {
+		body += "\nManaged wake: " + result.WakeStatus
 	}
 	commentBody := driver.FormatMulticaProjectionComment("issue admitted", body, []string{externalID})
 	comment, err := cli.AddIssueComment(ctx, issue.ID, commentBody)
@@ -347,13 +428,9 @@ func runtimeMulticaCLI(env []string) driver.MulticaCLI {
 }
 
 func runtimeControlClient(env []string, addr, principal string) (*access.Client, error) {
-	token := envValue(env, "MNEMON_CONTROL_TOKEN")
-	if tokenFile := envValue(env, "MNEMON_CONTROL_TOKEN_FILE"); tokenFile != "" {
-		data, err := os.ReadFile(tokenFile)
-		if err != nil {
-			return nil, fmt.Errorf("read MNEMON_CONTROL_TOKEN_FILE: %w", err)
-		}
-		token = strings.TrimSpace(string(data))
+	token, err := runtimeControlToken(env)
+	if err != nil {
+		return nil, err
 	}
 	if token != "" {
 		return access.NewClientWithToken(addr, token), nil
@@ -362,6 +439,49 @@ func runtimeControlClient(env []string, addr, principal string) (*access.Client,
 		return nil, fmt.Errorf("Mnemon principal is required when MNEMON_CONTROL_TOKEN is not set")
 	}
 	return access.NewClient(addr, contract.ActorID(principal)), nil
+}
+
+func runtimeControlToken(env []string) (string, error) {
+	token := envValue(env, "MNEMON_CONTROL_TOKEN")
+	if tokenFile := envValue(env, "MNEMON_CONTROL_TOKEN_FILE"); tokenFile != "" {
+		data, err := os.ReadFile(tokenFile)
+		if err != nil {
+			return "", fmt.Errorf("read MNEMON_CONTROL_TOKEN_FILE: %w", err)
+		}
+		token = strings.TrimSpace(string(data))
+	}
+	return token, nil
+}
+
+func runtimeManagedTurnClient(env []string, cwd, runtimeName string) (driver.ManagedTurnClient, string, error) {
+	workspace := envDefault(env, "MNEMON_MANAGED_WORKSPACE", cwd)
+	if strings.TrimSpace(workspace) == "" {
+		workspace = "."
+	}
+	switch strings.TrimSpace(runtimeName) {
+	case "noop":
+		return runtimeNoopTurnClient{}, workspace, nil
+	case "codex-appserver":
+		return driver.CodexAppServerTurnClient{
+			Principal:   resolveRuntimePrincipal(env, cwd),
+			Command:     envDefault(env, "MNEMON_MANAGED_COMMAND", "codex"),
+			Workspace:   workspace,
+			Env:         append([]string(nil), env...),
+			TurnTimeout: runtimeManagedTurnTimeout(env),
+			ClientName:  "mnemon-multica-runtime",
+		}, workspace, nil
+	default:
+		return nil, workspace, fmt.Errorf("unsupported MNEMON_MANAGED_RUNTIME %q", runtimeName)
+	}
+}
+
+type runtimeNoopTurnClient struct{}
+
+func (runtimeNoopTurnClient) StartTurn(_ context.Context, query string) (driver.ManagedTurnResult, error) {
+	if strings.TrimSpace(query) != driver.ManagedWakeQuery {
+		return driver.ManagedTurnResult{}, fmt.Errorf("unexpected managed wake query %q", query)
+	}
+	return driver.ManagedTurnResult{TurnID: "noop-turn", Status: "completed"}, nil
 }
 
 func resolveRuntimePrincipal(env []string, cwd string) string {
@@ -491,6 +611,37 @@ func formatRuntimeFinalAnswer(result runtimeImportResult) string {
 			b.WriteString(")")
 		}
 		b.WriteString(".")
+	}
+	switch result.WakeStatus {
+	case "completed":
+		b.WriteString(" Managed wake: completed")
+		if result.WakeTurnID != "" {
+			b.WriteString(" turn=")
+			b.WriteString(result.WakeTurnID)
+		}
+		b.WriteString(".")
+	case "skipped":
+		b.WriteString(" Managed wake: skipped")
+		if result.WakeErr != nil {
+			b.WriteString(" (")
+			b.WriteString(result.WakeErr.Error())
+			b.WriteString(")")
+		}
+		b.WriteString(".")
+	case "failed":
+		b.WriteString(" Managed wake: failed")
+		if result.WakeErr != nil {
+			b.WriteString(" (")
+			b.WriteString(result.WakeErr.Error())
+			b.WriteString(")")
+		}
+		b.WriteString(".")
+	default:
+		if result.WakeStatus != "" {
+			b.WriteString(" Managed wake: ")
+			b.WriteString(result.WakeStatus)
+			b.WriteString(".")
+		}
 	}
 	return strings.TrimSpace(b.String())
 }
@@ -672,6 +823,29 @@ func runtimeTimeout(env []string) time.Duration {
 		return 30 * time.Second
 	}
 	return d
+}
+
+func runtimeManagedTurnTimeout(env []string) time.Duration {
+	raw := envValue(env, "MNEMON_MANAGED_TURN_TIMEOUT")
+	if raw == "" {
+		return 5 * time.Minute
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		return 5 * time.Minute
+	}
+	return d
+}
+
+func runtimeManagedLedgerPath(env []string, workspace string) string {
+	if explicit := envValue(env, "MNEMON_MANAGED_LEDGER"); explicit != "" {
+		return explicit
+	}
+	root := strings.TrimSpace(workspace)
+	if root == "" {
+		root = "."
+	}
+	return filepath.Join(root, ".mnemon", "harness", "local", "managed-agent", "wake-ledger.jsonl")
 }
 
 func runtimeProjectionEnabled(env []string) bool {
