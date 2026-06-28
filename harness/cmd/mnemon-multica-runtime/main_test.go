@@ -189,7 +189,7 @@ esac
 	}
 
 	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
-	var sawComplete, sawProgress, sawAnswer bool
+	var sawComplete, sawProgress, sawAnswer, sawUserItem, sawAgentStart, sawAgentCompletedAt bool
 	for _, line := range lines {
 		var msg map[string]any
 		if err := json.Unmarshal([]byte(line), &msg); err != nil {
@@ -198,6 +198,27 @@ esac
 		if msg["method"] == "turn/completed" {
 			sawComplete = true
 		}
+		if msg["method"] == "item/started" {
+			params, _ := msg["params"].(map[string]any)
+			item, _ := params["item"].(map[string]any)
+			switch item["type"] {
+			case "userMessage":
+				_, sawUserItem = params["startedAtMs"]
+			case "agentMessage":
+				id, _ := item["id"].(string)
+				_, hasStarted := params["startedAtMs"]
+				if hasStarted && strings.HasPrefix(id, "msg-") {
+					sawAgentStart = true
+				}
+			}
+		}
+		if msg["method"] == "item/completed" {
+			params, _ := msg["params"].(map[string]any)
+			item, _ := params["item"].(map[string]any)
+			if item["type"] == "agentMessage" {
+				_, sawAgentCompletedAt = params["completedAtMs"]
+			}
+		}
 		if msg["method"] == "item/agentMessage/delta" && strings.Contains(line, "Loading Multica issue iss-7") {
 			sawProgress = true
 		}
@@ -205,8 +226,9 @@ esac
 			sawAnswer = true
 		}
 	}
-	if !sawComplete || !sawProgress || !sawAnswer {
-		t.Fatalf("missing expected runtime response complete=%v progress=%v answer=%v:\n%s", sawComplete, sawProgress, sawAnswer, out.String())
+	if !sawComplete || !sawProgress || !sawAnswer || !sawUserItem || !sawAgentStart || !sawAgentCompletedAt {
+		t.Fatalf("missing expected runtime response complete=%v progress=%v answer=%v user=%v agent_start=%v agent_completed_at=%v:\n%s",
+			sawComplete, sawProgress, sawAnswer, sawUserItem, sawAgentStart, sawAgentCompletedAt, out.String())
 	}
 }
 
@@ -412,6 +434,7 @@ esac
 		"issue metadata set child-2 --key mnemon.assignment_id --value asg-writer --type string --output json",
 		"issue metadata set child-2 --key mnemon.principal --value worker@team --type string --output json",
 		"issue assign child-2 --to-id agent-worker --output json",
+		"issue status child-2 in_progress --output json",
 	} {
 		if !strings.Contains(args, want) {
 			t.Fatalf("args missing %q:\n%s", want, args)
@@ -423,7 +446,8 @@ esac
 	createIdx := strings.Index(args, "issue create --title Mnemon assignment asg-writer")
 	metaIdx := strings.Index(args, "issue metadata set child-2 --key mnemon.kind")
 	assignIdx := strings.Index(args, "issue assign child-2 --to-id agent-worker")
-	if createIdx < 0 || metaIdx < 0 || assignIdx < 0 || !(createIdx < metaIdx && metaIdx < assignIdx) {
+	statusIdx := strings.Index(args, "issue status child-2 in_progress")
+	if createIdx < 0 || metaIdx < 0 || assignIdx < 0 || statusIdx < 0 || !(createIdx < metaIdx && metaIdx < assignIdx && assignIdx < statusIdx) {
 		t.Fatalf("assignment mailbox must be created, tagged, then assigned; args:\n%s", args)
 	}
 	description := mustReadRuntimeTestFile(t, createDescriptionPath)
@@ -533,6 +557,25 @@ esac
 	} {
 		if !strings.Contains(comment, want) {
 			t.Fatalf("comment missing %q:\n%s", want, comment)
+		}
+	}
+}
+
+func TestMulticaStatusForProgressIsRuleBased(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		item runtimeProgress
+		want string
+	}{
+		{name: "progress", item: runtimeProgress{FeedbackKind: "progress"}, want: "in_progress"},
+		{name: "result", item: runtimeProgress{FeedbackKind: "result"}, want: "in_review"},
+		{name: "blocker", item: runtimeProgress{FeedbackKind: "blocker"}, want: "blocked"},
+		{name: "blocker narrative fallback", item: runtimeProgress{Blocker: "waiting on access"}, want: "blocked"},
+		{name: "result narrative fallback", item: runtimeProgress{Result: "validated"}, want: "in_review"},
+		{name: "unknown", item: runtimeProgress{Summary: "not enough signal"}, want: ""},
+	} {
+		if got := multicaStatusForProgress(tc.item); got != tc.want {
+			t.Fatalf("%s: status = %q, want %q", tc.name, got, tc.want)
 		}
 	}
 }

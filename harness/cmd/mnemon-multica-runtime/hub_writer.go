@@ -161,6 +161,7 @@ func (s *runtimeRPCState) writeAssignmentMailboxes(ctx context.Context, cli driv
 		if _, err := cli.AssignIssue(ctx, child.ID, participant.AgentID); err != nil {
 			return err
 		}
+		markIssueInProgress(ctx, cli, child.ID)
 		if err := ledger.Record(driver.MulticaHubLedgerRecord{
 			Kind:   driver.MulticaHubKindAssignmentMailbox,
 			Source: source,
@@ -208,6 +209,10 @@ func (s *runtimeRPCState) writeProgressComments(ctx context.Context, cli driver.
 		if err != nil {
 			return err
 		}
+		if status := multicaStatusForProgress(item); status != "" {
+			_, _ = cli.SetIssueStatus(ctx, child, status)
+		}
+		_, _ = cli.SetIssueStatus(ctx, result.RootIssueID, "in_review")
 		if err := ledger.Record(driver.MulticaHubLedgerRecord{
 			Kind:   driver.MulticaHubKindFeedbackCarrier,
 			Source: source,
@@ -223,6 +228,24 @@ func (s *runtimeRPCState) writeProgressComments(ctx context.Context, cli driver.
 		result.HubFeedbackComments++
 	}
 	return nil
+}
+
+func multicaStatusForProgress(item runtimeProgress) string {
+	switch strings.ToLower(strings.TrimSpace(item.FeedbackKind)) {
+	case "blocker":
+		return "blocked"
+	case "result":
+		return "in_review"
+	case "progress":
+		return "in_progress"
+	}
+	if strings.TrimSpace(item.Blocker) != "" {
+		return "blocked"
+	}
+	if strings.TrimSpace(item.Result) != "" {
+		return "in_review"
+	}
+	return ""
 }
 
 type runtimeAssignment struct {

@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -200,6 +201,9 @@ func (s *runtimeRPCState) handle(msg rpcMessage, emit func(rpcMessage) error) er
 	case "turn/start":
 		s.TurnID = runtimeID("turn", s.now())
 		input := extractRuntimeInput(msg.Params)
+		nowMs := s.now().UnixMilli()
+		userItem := runtimeUserMessage(input)
+		agentItemID := runtimeID("msg", s.now())
 		if err := emitAll(
 			rpcMessage{
 				ID: msg.ID,
@@ -217,7 +221,15 @@ func (s *runtimeRPCState) handle(msg rpcMessage, emit func(rpcMessage) error) er
 			},
 			rpcMessage{
 				Method: "item/started",
-				Params: map[string]any{"threadId": s.ThreadID, "turnId": s.TurnID, "item": runtimeAgentMessage("")},
+				Params: runtimeItemParams(s.ThreadID, s.TurnID, userItem, "startedAtMs", nowMs),
+			},
+			rpcMessage{
+				Method: "item/completed",
+				Params: runtimeItemParams(s.ThreadID, s.TurnID, userItem, "completedAtMs", nowMs),
+			},
+			rpcMessage{
+				Method: "item/started",
+				Params: runtimeItemParams(s.ThreadID, s.TurnID, runtimeAgentMessage(agentItemID, ""), "startedAtMs", nowMs),
 			},
 		); err != nil {
 			return err
@@ -230,7 +242,7 @@ func (s *runtimeRPCState) handle(msg rpcMessage, emit func(rpcMessage) error) er
 				return
 			}
 			chunks = append(chunks, text)
-			progressErr = emit(runtimeAgentDelta(s.ThreadID, s.TurnID, text+"\n\n"))
+			progressErr = emit(runtimeAgentDelta(s.ThreadID, s.TurnID, agentItemID, text+"\n\n"))
 		}
 		finalAnswer := s.runTurn(input, progress)
 		if progressErr != nil {
@@ -243,13 +255,13 @@ func (s *runtimeRPCState) handle(msg rpcMessage, emit func(rpcMessage) error) er
 				Params: map[string]any{
 					"threadId": s.ThreadID,
 					"turnId":   s.TurnID,
-					"itemId":   "mnemon-runtime-message",
+					"itemId":   agentItemID,
 					"delta":    finalAnswer,
 				},
 			},
 			rpcMessage{
 				Method: "item/completed",
-				Params: map[string]any{"threadId": s.ThreadID, "turnId": s.TurnID, "item": runtimeAgentMessage(completedText)},
+				Params: runtimeItemParams(s.ThreadID, s.TurnID, runtimeAgentMessage(agentItemID, completedText), "completedAtMs", s.now().UnixMilli()),
 			},
 			rpcMessage{
 				Method: "thread/status/changed",
@@ -288,11 +300,10 @@ func (s *runtimeRPCState) importIssue(input string, progress runtimeProgressSink
 		emitRuntimeProgress(progress, "No assigned Multica issue id was available; Mnemon skipped this turn.")
 		return result
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), runtimeTimeout(s.Env))
-	defer cancel()
 	cli := runtimeMulticaCLI(s.Env)
+	multicaCtx := context.Background()
 	emitRuntimeProgress(progress, "Loading Multica issue "+issueID+".")
-	issue, err := cli.GetIssue(ctx, issueID)
+	issue, err := cli.GetIssue(multicaCtx, issueID)
 	if err != nil {
 		result.Status = "failed"
 		result.Err = fmt.Errorf("fetch Multica issue %s: %w", issueID, err)
@@ -307,9 +318,9 @@ func (s *runtimeRPCState) importIssue(input string, progress runtimeProgressSink
 	applyMulticaHubMetadata(&result, issue)
 	result.HubBackend = firstNonEmpty(result.HubBackend, envValue(s.Env, "MNEMON_HUB_BACKEND"))
 	emitRuntimeProgress(progress, "Loaded "+runtimeIssueLabel(issue)+"; classifying Mnemon hub metadata.")
-	markIssueInProgress(ctx, cli, issue.ID)
+	markIssueInProgress(multicaCtx, cli, issue.ID)
 	if result.HubMetadata.IsAssignmentMailbox() {
-		return s.correlateAssignmentMailbox(ctx, cli, issue, &result, progress)
+		return s.correlateAssignmentMailbox(multicaCtx, cli, issue, &result, progress)
 	}
 	externalID := ""
 	if taskID != "" {
@@ -342,7 +353,7 @@ func (s *runtimeRPCState) importIssue(input string, progress runtimeProgressSink
 		addPayloadRuleString(draft.Payload, "root_issue_id", result.RootIssueID)
 		addPayloadRuleString(draft.Payload, "session_id", result.SessionID)
 		addPayloadRuleString(draft.Payload, "source_issue_id", issue.ID)
-		if err := cli.SetIssueMetadataMap(ctx, issue.ID, rootSessionMetadata(result, draft, s.now())); err != nil {
+		if err := cli.SetIssueMetadataMap(multicaCtx, issue.ID, rootSessionMetadata(result, draft, s.now())); err != nil {
 			result.Status = "failed"
 			result.Err = fmt.Errorf("set Multica root session metadata: %w", err)
 			emitRuntimeProgress(progress, "Failed to write Mnemon root session metadata.")
@@ -384,9 +395,9 @@ func (s *runtimeRPCState) importIssue(input string, progress runtimeProgressSink
 	emitRuntimeProgress(progress, "Waking the managed local agent with [mnemon:wake].")
 	s.wakeManagedAgent(&result)
 	emitRuntimeProgress(progress, runtimeWakeProgress(result))
-	s.writeMulticaHubArtifacts(ctx, cli, client, issue, &result)
+	s.writeMulticaHubArtifacts(multicaCtx, cli, client, issue, &result)
 	emitRuntimeProgress(progress, runtimeHubWriteProgress(result))
-	s.projectImportComment(ctx, cli, issue, draft.ExternalID, &result)
+	s.projectImportComment(multicaCtx, cli, issue, draft.ExternalID, &result)
 	emitRuntimeProgress(progress, runtimeProjectionProgress(result))
 	return result
 }
@@ -1018,26 +1029,65 @@ func writeRuntimeRPC(w io.Writer, msg rpcMessage) error {
 	return err
 }
 
-func runtimeAgentDelta(threadID, turnID, delta string) rpcMessage {
+func runtimeAgentDelta(threadID, turnID, itemID, delta string) rpcMessage {
 	return rpcMessage{
 		Method: "item/agentMessage/delta",
 		Params: map[string]any{
 			"threadId": threadID,
 			"turnId":   turnID,
-			"itemId":   "mnemon-runtime-message",
+			"itemId":   itemID,
 			"delta":    delta,
 		},
 	}
 }
 
-func runtimeAgentMessage(text string) map[string]any {
+func runtimeItemParams(threadID, turnID string, item map[string]any, timeKey string, timestampMs int64) map[string]any {
+	params := map[string]any{
+		"threadId": threadID,
+		"turnId":   turnID,
+		"item":     item,
+	}
+	if timeKey != "" && timestampMs > 0 {
+		params[timeKey] = timestampMs
+	}
+	return params
+}
+
+func runtimeUserMessage(text string) map[string]any {
+	return map[string]any{
+		"type":     "userMessage",
+		"id":       runtimeTextDigestID("user", text),
+		"clientId": nil,
+		"content": []any{map[string]any{
+			"type":          "text",
+			"text":          text,
+			"text_elements": []any{},
+		}},
+	}
+}
+
+func runtimeAgentMessage(id, text string) map[string]any {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		id = runtimeTextDigestID("msg", text)
+	}
 	return map[string]any{
 		"type":           "agentMessage",
-		"id":             "mnemon-runtime-message",
+		"id":             id,
 		"text":           text,
 		"phase":          "final_answer",
 		"memoryCitation": nil,
 	}
+}
+
+func runtimeTextDigestID(prefix, text string) string {
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		prefix = "item"
+	}
+	sum := sha256.Sum256([]byte(text))
+	digest := fmt.Sprintf("%x", sum[:])[:24]
+	return prefix + "_" + digest
 }
 
 func emitRuntimeProgress(progress runtimeProgressSink, text string) {
