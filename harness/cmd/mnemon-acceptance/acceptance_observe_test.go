@@ -57,7 +57,7 @@ func TestObserveAcceptanceRunReadsMnemondAndHubEvents(t *testing.T) {
 
 func TestAcceptanceObservationUsesSingleCommandSurface(t *testing.T) {
 	commands := map[string]bool{}
-	for _, cmd := range acceptanceCmd.Commands() {
+	for _, cmd := range rootCmd.Commands() {
 		commands[cmd.Name()] = true
 	}
 	if !commands["observe"] {

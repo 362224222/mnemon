@@ -60,12 +60,12 @@ func DeriveEventEnvelopes(req Request, proj view.View, now time.Time) []eventmod
 		events = append(events, eventmodel.DerivedEnvelope(model, derivedAt, expiresAt, presentationHintForDerivedEventType(eventType), suggested))
 	}
 
-	if profileStaleOrMissing(items["agent_profile"], principal) {
+	if shouldRenderProfileCue(req, items, principal, now) {
 		appendDerived(
 			DerivedEventProfileUpdateRequested,
 			"agent_profile/project",
 			nil,
-			"Update your agent_profile if your focus, availability, or context advantages changed.",
+			"Your agent_profile is missing or stale. If your focus, availability, context advantages, or active scopes changed, you may record an agent_profile update.",
 			[]string{"agent_profile.write_candidate.observed"},
 		)
 	}
@@ -81,7 +81,7 @@ func DeriveEventEnvelopes(req Request, proj view.View, now time.Time) []eventmod
 			DerivedEventTeamworkSignalOpen,
 			subject,
 			[]string{subject},
-			fmt.Sprintf("Teamwork signal is open: %s. Decide whether to self-assign or assign a suited teammate.", statement),
+			fmt.Sprintf("Teamwork signal is open: %s. Assignment or self-assignment may be useful when you choose to act.", statement),
 			[]string{"assignment.write_candidate.observed"},
 		)
 	}
@@ -108,7 +108,7 @@ func DeriveEventEnvelopes(req Request, proj view.View, now time.Time) []eventmod
 				DerivedEventAssignmentExpired,
 				subject,
 				[]string{subject},
-				fmt.Sprintf("Assignment %s expired without progress: %s. Start a new act: renew, reassign, split, close, or escalate.", id, scope),
+				fmt.Sprintf("Assignment %s expired without progress: %s. Available follow-up options include renew, reassign, split, close, or escalate.", id, scope),
 				[]string{"assignment.write_candidate.observed", "teamwork_signal.write_candidate.observed"},
 			)
 		case owner == principal && len(linked) > 0:
@@ -131,7 +131,7 @@ func DeriveEventEnvelopes(req Request, proj view.View, now time.Time) []eventmod
 				DerivedEventAssignmentFeedbackNeeded,
 				subject,
 				[]string{subject},
-				fmt.Sprintf("When you have progress or a blocker for assignment %s, emit progress_digest with assignment_ref=%s.", id, id),
+				fmt.Sprintf("Progress or blocker feedback for assignment %s can be recorded as progress_digest with assignment_ref=%s when useful.", id, id),
 				[]string{"progress_digest.write_candidate.observed"},
 			)
 		}
@@ -185,14 +185,81 @@ func teamworkItems(proj view.View) map[string][]map[string]any {
 	return out
 }
 
-func profileStaleOrMissing(profiles []map[string]any, principal string) bool {
+func shouldRenderProfileCue(req Request, items map[string][]map[string]any, principal string, now time.Time) bool {
+	if !profileStaleOrMissing(items["agent_profile"], principal, now) {
+		return false
+	}
+	switch req.RenderIntent {
+	case IntentProfileEvents:
+		return true
+	case IntentTeamworkEvents:
+		switch strings.TrimSpace(req.Lifecycle) {
+		case "prime", "compact":
+			return true
+		case "remind":
+			return profileRelevantForCollaboration(items, principal, now)
+		case "nudge":
+			return profileRelevantForRecentChange(items, principal)
+		default:
+			return false
+		}
+	default:
+		return false
+	}
+}
+
+func profileStaleOrMissing(profiles []map[string]any, principal string, now time.Time) bool {
 	for _, p := range profiles {
 		if itemString(p, "actor") != principal {
 			continue
 		}
-		return itemString(p, "freshness") == "stale"
+		return itemString(p, "freshness") == "stale" || profileTTLExpired(p, now)
 	}
 	return true
+}
+
+func profileTTLExpired(profile map[string]any, now time.Time) bool {
+	if now.IsZero() {
+		return false
+	}
+	created, err := time.Parse(time.RFC3339, itemString(profile, "created_at"))
+	if err != nil {
+		return false
+	}
+	ttl, err := time.ParseDuration(itemString(profile, "ttl"))
+	if err != nil || ttl <= 0 {
+		return false
+	}
+	return now.After(created.Add(ttl))
+}
+
+func profileRelevantForCollaboration(items map[string][]map[string]any, principal string, now time.Time) bool {
+	for _, signal := range items["teamwork_signal"] {
+		if itemString(signal, "statement") != "" {
+			return true
+		}
+	}
+	for _, assignment := range items["assignment"] {
+		if itemString(assignment, "actor") != principal {
+			continue
+		}
+		if assignmentExpired(assignment, now) {
+			return true
+		}
+	}
+	return false
+}
+
+func profileRelevantForRecentChange(items map[string][]map[string]any, principal string) bool {
+	for _, progress := range items["progress_digest"] {
+		if itemString(progress, "actor") != principal {
+			continue
+		}
+		if itemString(progress, "blocker") != "" || len(itemStringList(progress, "changed_context")) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func assignmentExpired(item map[string]any, now time.Time) bool {

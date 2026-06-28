@@ -266,10 +266,10 @@ func init() {
 	controlLeafCommands := []*cobra.Command{controlObserveCmd, controlPullCmd, controlStatusCmd, controlRenderCmd}
 	controlLeafCommands = append(controlLeafCommands, controlShortObserveCommands()...)
 	for _, c := range controlLeafCommands {
-		c.Flags().StringVar(&controlAddr, "addr", "http://127.0.0.1:8787", "server base URL")
-		c.Flags().StringVar(&controlPrincipal, "principal", "", "authenticated principal (trusted-header transport)")
-		c.Flags().StringVar(&controlToken, "token", "", "bearer token (TokenAuthenticator transport)")
-		c.Flags().StringVar(&controlTokenFile, "token-file", "", "read the bearer token from a file (keeps tokens out of prompt-visible command lines)")
+		c.Flags().StringVar(&controlAddr, "addr", envDefault("MNEMON_CONTROL_ADDR", "http://127.0.0.1:8787"), "server base URL")
+		c.Flags().StringVar(&controlPrincipal, "principal", envDefault("MNEMON_CONTROL_PRINCIPAL", ""), "authenticated principal (trusted-header transport)")
+		c.Flags().StringVar(&controlToken, "token", envDefault("MNEMON_CONTROL_TOKEN", ""), "bearer token (TokenAuthenticator transport)")
+		c.Flags().StringVar(&controlTokenFile, "token-file", envDefault("MNEMON_CONTROL_TOKEN_FILE", ""), "read the bearer token from a file (keeps tokens out of prompt-visible command lines)")
 	}
 	controlObserveCmd.Flags().StringVar(&controlType, "type", "", "observed event type")
 	controlObserveCmd.Flags().StringVar(&controlPayload, "payload", "", "observation payload as JSON")
@@ -285,4 +285,11 @@ func init() {
 	controlCmd.AddCommand(controlObserveCmd, controlPullCmd, controlStatusCmd, controlRenderCmd, controlTeamworkCmd, controlProfileCmd)
 	controlCmd.GroupID = groupSpine
 	rootCmd.AddCommand(controlCmd)
+}
+
+func envDefault(key, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+		return value
+	}
+	return fallback
 }

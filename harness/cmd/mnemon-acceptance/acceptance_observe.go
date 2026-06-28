@@ -75,7 +75,7 @@ func init() {
 	acceptanceObserveCmd.Flags().BoolVar(&acceptanceObserveWatch, "watch", false, "continue refreshing observation snapshots")
 	acceptanceObserveCmd.Flags().DurationVar(&acceptanceObserveInterval, "interval", 2*time.Second, "watch refresh interval")
 	acceptanceObserveCmd.Flags().BoolVar(&acceptanceObserveOnce, "once", false, "render one watch snapshot and exit")
-	acceptanceCmd.AddCommand(acceptanceObserveCmd)
+	rootCmd.AddCommand(acceptanceObserveCmd)
 }
 
 type acceptanceObserveReport struct {

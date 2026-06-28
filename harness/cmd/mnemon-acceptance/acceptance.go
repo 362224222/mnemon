@@ -39,12 +39,6 @@ var (
 	acceptanceTurnTimeout time.Duration
 )
 
-var acceptanceCmd = &cobra.Command{
-	Use:    "acceptance",
-	Short:  "Run hidden acceptance gates",
-	Hidden: true,
-}
-
 var acceptanceR1CodexCmd = &cobra.Command{
 	Use:   "r1-codex",
 	Short: "Run the R1 real Codex appserver acceptance gate",
@@ -81,8 +75,7 @@ func init() {
 	acceptanceR1CodexCmd.Flags().BoolVar(&acceptanceAgentTurns, "agent-turns", false, "run real model turns that write governed R1 events")
 	acceptanceR1CodexCmd.Flags().BoolVar(&acceptanceSyncArm, "sync-arm", false, "run the 6B real sync/import arm after the local arm")
 	acceptanceR1CodexCmd.Flags().DurationVar(&acceptanceTurnTimeout, "turn-timeout", 5*time.Minute, "timeout per real agent turn")
-	acceptanceCmd.AddCommand(acceptanceR1CodexCmd)
-	rootCmd.AddCommand(acceptanceCmd)
+	rootCmd.AddCommand(acceptanceR1CodexCmd)
 }
 
 type r1CodexAcceptanceOptions struct {
@@ -381,12 +374,29 @@ func runR1CodexAcceptance(ctx context.Context, opts r1CodexAcceptanceOptions) (r
 }
 
 func installAcceptanceHarnessBinary(runRoot string) (string, error) {
-	exe, err := os.Executable()
-	if err != nil {
-		return "", err
-	}
 	binDir := filepath.Join(runRoot, "bin")
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		return "", err
+	}
+	if sourceRoot, ok := acceptanceSourceRoot(); ok {
+		targets := map[string]string{
+			"mnemon-harness": "./harness/cmd/mnemon-harness",
+			"mnemond":        "./harness/cmd/mnemond",
+			"mnemon-hub":     "./harness/cmd/mnemon-hub",
+		}
+		for name, pkg := range targets {
+			target := filepath.Join(binDir, name)
+			cmd := exec.Command("go", "build", "-o", target, pkg)
+			cmd.Dir = sourceRoot
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				return "", fmt.Errorf("build acceptance product binary %s: %w: %s", name, err, strings.TrimSpace(string(out)))
+			}
+		}
+		return binDir, nil
+	}
+	exe, err := os.Executable()
+	if err != nil {
 		return "", err
 	}
 	target := filepath.Join(binDir, "mnemon-harness")
@@ -407,6 +417,27 @@ func installAcceptanceHarnessBinary(runRoot string) (string, error) {
 		return "", err
 	}
 	return binDir, nil
+}
+
+func acceptanceSourceRoot() (string, bool) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", false
+	}
+	for dir := cwd; ; dir = filepath.Dir(dir) {
+		if fileExists(filepath.Join(dir, "go.mod")) && fileExists(filepath.Join(dir, "harness", "cmd", "mnemon-harness", "root.go")) {
+			return dir, true
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", false
+		}
+	}
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }
 
 func prepareR1AcceptanceRunRoot(runRoot string) error {
@@ -484,6 +515,7 @@ func setupR1CodexAgents(runRoot, binDir, controlURL string, count int, sourceCod
 			Host:        "codex",
 			ControlURL:  controlURL,
 			Principal:   principal,
+			HarnessBin:  filepath.Join(binDir, "mnemon-harness"),
 			ProjectRoot: workspace,
 			UseToken:    true,
 		}); err != nil {
@@ -653,7 +685,8 @@ func startR1CodexAppserver(agent *r1CodexAgent, command string) error {
 
 func initializeR1CodexAgent(agent *r1CodexAgent, turnTimeout time.Duration) (r1CodexAgentReport, json.RawMessage, error) {
 	initResp, err := agent.server.Request("initialize", map[string]any{
-		"clientInfo": map[string]any{"name": "mnemon-r1-codex-acceptance", "version": version},
+		"clientInfo":   map[string]any{"name": "mnemon-r1-codex-acceptance", "version": version},
+		"capabilities": codexAppServerCapabilities(),
 	}, 30*time.Second)
 	if err != nil {
 		return r1CodexAgentReport{}, nil, fmt.Errorf("%s: initialize: %w", agent.principal, err)
@@ -694,6 +727,13 @@ func initializeR1CodexAgent(agent *r1CodexAgent, turnTimeout time.Duration) (r1C
 	}
 	_ = turnTimeout
 	return report, hooksRaw, nil
+}
+
+func codexAppServerCapabilities() map[string]any {
+	return map[string]any{
+		"experimentalApi":    true,
+		"requestAttestation": false,
+	}
 }
 
 func r1AcceptanceDeveloperInstructions(principal string) string {
@@ -1136,6 +1176,7 @@ func setupR1CodexSyncAgents(ctx context.Context, runRoot, binDir string, hub r1S
 			Host:        "codex",
 			ControlURL:  localURL,
 			Principal:   principal,
+			HarnessBin:  filepath.Join(binDir, "mnemon-harness"),
 			ProjectRoot: workspace,
 			UseToken:    true,
 		}); err != nil {
@@ -1242,14 +1283,22 @@ func waitForR1DerivedEventPresentation(controlURL, token string, wants []string,
 }
 
 func runR1Turn(agent *r1CodexAgent, prompt string, timeout time.Duration) (string, error) {
+	return runR1TurnWithAdditionalContext(agent, prompt, timeout, nil)
+}
+
+func runR1TurnWithAdditionalContext(agent *r1CodexAgent, prompt string, timeout time.Duration, additionalContext map[string]any) (string, error) {
 	before := agent.server.NotificationCount()
-	if _, err := agent.server.Request("turn/start", map[string]any{
+	params := map[string]any{
 		"threadId":       agent.threadID,
 		"input":          []map[string]any{{"type": "text", "text": prompt}},
 		"cwd":            agent.workspace,
 		"approvalPolicy": "never",
 		"sandboxPolicy":  map[string]any{"type": "dangerFullAccess"},
-	}, 30*time.Second); err != nil {
+	}
+	if len(additionalContext) > 0 {
+		params["additionalContext"] = additionalContext
+	}
+	if _, err := agent.server.Request("turn/start", params, 30*time.Second); err != nil {
 		return "", fmt.Errorf("%s: turn/start: %w", agent.principal, err)
 	}
 	if _, err := agent.server.WaitNotification("turn/completed", timeout, before); err != nil {

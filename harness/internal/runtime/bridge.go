@@ -29,22 +29,30 @@ func NewBridge(newID, now func() string) *Bridge { return &Bridge{newID: newID, 
 
 // Stamp turns intent into a trusted *.proposed event, OR returns an error if any proposed write targets a
 // ref outside the actor's DISPATCHED SCOPE (write-scope, R11 — the kernel's authz is actor/kind only).
-// Trusted fields come from the binding (write identity), the dispatched presentation view (read-set + provenance),
+// Trusted fields come from the binding (write identity), the dispatched presentation view (scope + provenance),
 // and the trigger (correlation + lineage) — NEVER from the intent payload, even if a hostile callback stuffs
-// "actor"/"based_on" into it (R1/R2). Only Payload (the write set) rides through proposer-controlled; the
-// kernel validates it. An empty/undecodable write set PASSES the bridge (the kernel rejects it as a
-// malformed/empty op, preserving the audit trail); only a DECODED, out-of-scope write is blocked here.
+// "actor"/"based_on" into it (R1/R2). The bridge uses the full dispatched scope for ref-level authorization,
+// but stamps the proposal read-set from the written refs only; generic append-item rules read the target
+// resource they update, not every resource visible to the actor. Only Payload (the write set) rides through
+// proposer-controlled; the kernel validates it. An empty/undecodable write set PASSES the bridge (the kernel
+// rejects it as a malformed/empty op, preserving the audit trail); only a DECODED, out-of-scope write is
+// blocked here.
 func (br *Bridge) Stamp(b ResolvedBinding, dispatchedOn view.View, trigger contract.Event, intent contract.ProposedEvent) (contract.Event, error) {
 	scope := make(map[contract.ResourceRef]bool, len(dispatchedOn.Resources))
+	versions := make(map[contract.ResourceRef]contract.Version, len(dispatchedOn.Resources))
 	refs := make([]contract.ResourceRef, 0, len(dispatchedOn.Resources))
 	for _, rv := range dispatchedOn.Resources {
 		scope[rv.Ref] = true
+		versions[rv.Ref] = rv.Version
 		refs = append(refs, rv.Ref)
 	}
-	for _, w := range decodeWrites(intent.Payload) {
+	writes := decodeWrites(intent.Payload)
+	readSet := make([]contract.ResourceVersion, 0, len(writes))
+	for _, w := range writes {
 		if !scope[w.Ref] {
 			return contract.Event{}, fmt.Errorf("proposal writes %s/%s outside actor %q dispatched scope", w.Ref.Kind, w.Ref.ID, b.Actor)
 		}
+		readSet = append(readSet, contract.ResourceVersion{Ref: w.Ref, Version: versions[w.Ref]})
 	}
 	corr := trigger.CorrelationID
 	if corr == "" {
@@ -57,12 +65,12 @@ func (br *Bridge) Stamp(b ResolvedBinding, dispatchedOn view.View, trigger contr
 		Type:                b.Emits, // authorized type from the binding, not the intent's claim
 		Actor:               b.Actor, // TRUSTED write identity
 		ResourceRefs:        refs,
-		BasedOn:             dispatchedOn.Resources, // TRUSTED read-set
-		PresentationViewRef: dispatchedOn.Ref,       // provenance
-		ContextDigest:       dispatchedOn.Digest,    // provenance
-		CorrelationID:       corr,                   // TRUSTED: inherited or minted
-		CausedBy:            trigger.ID,             // lineage
-		Payload:             intent.Payload,         // proposer-controlled write set (kernel-validated)
+		BasedOn:             readSet,             // TRUSTED rule read-set, narrowed to written refs
+		PresentationViewRef: dispatchedOn.Ref,    // provenance
+		ContextDigest:       dispatchedOn.Digest, // provenance
+		CorrelationID:       corr,                // TRUSTED: inherited or minted
+		CausedBy:            trigger.ID,          // lineage
+		Payload:             intent.Payload,      // proposer-controlled write set (kernel-validated)
 	}, nil
 }
 

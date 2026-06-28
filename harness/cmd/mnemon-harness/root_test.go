@@ -34,6 +34,18 @@ func TestRootHelpUsesLocalFirstProductSurface(t *testing.T) {
 	}
 }
 
+func TestRootDoesNotExposeAcceptanceCommands(t *testing.T) {
+	commands := map[string]bool{}
+	for _, cmd := range rootCmd.Commands() {
+		commands[cmd.Name()] = true
+	}
+	for _, blocked := range []string{"acceptance", "r1-codex", "r1-prod-sim", "r1-task-sim", "r1-github-mesh-task-suite"} {
+		if commands[blocked] {
+			t.Fatalf("mnemon-harness must not expose test-only acceptance command %q", blocked)
+		}
+	}
+}
+
 func TestProductHelpDoesNotExposeInternalVocabulary(t *testing.T) {
 	for _, args := range [][]string{
 		{"setup", "--help"},

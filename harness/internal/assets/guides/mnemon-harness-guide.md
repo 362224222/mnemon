@@ -7,6 +7,7 @@ Mnemon is the governed event layer for durable agent context. Use it when the cu
 - Before substantive work, decide whether governed context should be read.
 - After substantive work, decide whether durable state should be recorded.
 - Before context compaction, preserve important continuity through Mnemon when needed.
+- `[mnemon:wake]` is only a local wake signal.
 
 ## Read
 
@@ -15,11 +16,12 @@ Use the generic skill or CLI to inspect current state before acting when the pro
 Useful commands:
 
 ```bash
-mnemon-harness control pull
-mnemon-harness control render --intent context.packet
-mnemon-harness control render --intent teamwork.events
-mnemon-harness loop packages
-mnemon-harness loop schema --type <kind>
+. .mnemon/harness/local/env.sh
+"${MNEMON_HARNESS_BIN:-mnemon-harness}" control pull
+"${MNEMON_HARNESS_BIN:-mnemon-harness}" control render --intent context.packet
+"${MNEMON_HARNESS_BIN:-mnemon-harness}" control render --intent teamwork.events
+"${MNEMON_HARNESS_BIN:-mnemon-harness}" loop packages
+"${MNEMON_HARNESS_BIN:-mnemon-harness}" loop schema --type <kind>
 ```
 
 ## Record
@@ -29,26 +31,27 @@ Emit governed events through Mnemon. Do not write `.mnemon` state files directly
 Prefer the short teamwork/profile commands when they fit the event you need:
 
 ```bash
-mnemon-harness control teamwork signal \
+. .mnemon/harness/local/env.sh
+"${MNEMON_HARNESS_BIN:-mnemon-harness}" control teamwork signal \
   --scope <scope> \
   --statement "<collaboration need>" \
   --why-teamwork "<why another agent is useful>" \
   --evidence "<evidence ref>" \
   --external-id <unique-id>
 
-mnemon-harness control teamwork assign \
+"${MNEMON_HARNESS_BIN:-mnemon-harness}" control teamwork assign \
   --assignee <agent-principal> \
   --scope <scope> \
   --work "<expected work>" \
   --evidence "<evidence ref>" \
   --external-id <unique-id>
 
-mnemon-harness control teamwork progress \
+"${MNEMON_HARNESS_BIN:-mnemon-harness}" control teamwork progress \
   --assignment-ref <assignment-id> \
   --summary "<progress, result, or blocker>" \
   --external-id <unique-id>
 
-mnemon-harness control profile update \
+"${MNEMON_HARNESS_BIN:-mnemon-harness}" control profile update \
   --focus "<current focus>" \
   --advantage "<context advantage>" \
   --summary "<profile summary>" \
@@ -58,13 +61,14 @@ mnemon-harness control profile update \
 Use the low-level observe API only when you need fields the short commands do not expose:
 
 ```bash
-mnemon-harness control observe \
+. .mnemon/harness/local/env.sh
+"${MNEMON_HARNESS_BIN:-mnemon-harness}" control observe \
   --type <kind>.write_candidate.observed \
   --payload '{"rule":{...},"narrative":{...},"refs":{...}}' \
   --external-id <unique-id>
 ```
 
-Check `mnemon-harness loop schema --type <kind>` before guessing payload fields.
+Check `"${MNEMON_HARNESS_BIN:-mnemon-harness}" loop schema --type <kind>` before guessing payload fields.
 
 ## Teamwork Events
 

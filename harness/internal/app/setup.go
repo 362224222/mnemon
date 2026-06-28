@@ -30,6 +30,7 @@ type SetupOptions struct {
 	ControlURL    string   // channel endpoint, e.g. "http://127.0.0.1:8787"
 	Principal     string   // authenticated principal, e.g. "codex@project"
 	ActorKind     string   // "host-agent" (default) or "control-agent"
+	HarnessBin    string   // command or absolute path agents should use for Local Mnemon CLI calls
 	UseToken      bool     // generate + reference a bearer token file (vs trusted-header auth)
 	TokenExplicit bool     // true when the caller explicitly set UseToken
 	ProjectRoot   string   // host projection working dir (defaults to the facade root)
@@ -341,9 +342,13 @@ func writeHostObserveSkill(projectRoot, host string) error {
 }
 
 func writeLocalEnv(path string, opts SetupOptions, tokenRel string, loops []string) error {
+	harnessBin := strings.TrimSpace(opts.HarnessBin)
+	if harnessBin == "" {
+		harnessBin = "mnemon-harness"
+	}
 	var b strings.Builder
 	b.WriteString("# Managed by mnemon-harness setup - Local Mnemon environment.\n")
-	b.WriteString(exportLine("MNEMON_HARNESS_BIN", "mnemon-harness"))
+	b.WriteString(exportLine("MNEMON_HARNESS_BIN", harnessBin))
 	b.WriteString(exportLine("MNEMON_CONTROL_ADDR", opts.ControlURL))
 	b.WriteString(exportLine("MNEMON_CONTROL_PRINCIPAL", opts.Principal))
 	if tokenRel != "" {
