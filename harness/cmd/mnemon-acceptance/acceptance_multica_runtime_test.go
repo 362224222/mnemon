@@ -62,7 +62,7 @@ esac
 		RequireManagedWake: true,
 	})
 	if err != nil {
-		t.Fatalf("acceptance: %v", err)
+		t.Fatalf("acceptance: %v report=%+v", err, report)
 	}
 	if report.Status != "ok" || report.Issue.ID != "iss-9" || len(report.RunMessages) != 1 {
 		t.Fatalf("report mismatch: %+v", report)
@@ -91,5 +91,95 @@ esac
 	}
 	if !strings.Contains(string(stdin), "Teamwork acceptance") {
 		t.Fatalf("issue description was not passed through stdin:\n%s", stdin)
+	}
+}
+
+func TestMulticaRuntimeProdSimAcceptanceRequiresHubFlow(t *testing.T) {
+	tmp := t.TempDir()
+	registryPath := filepath.Join(tmp, "registry.json")
+	var participants []driver.MulticaParticipantRecord
+	for _, role := range []string{"planner", "researcher", "implementer", "reviewer", "integrator"} {
+		participants = append(participants, driver.MulticaParticipantRecord{
+			Principal: role + "@team",
+			AgentName: "mnemon-" + role,
+			AgentID:   "agent-" + role,
+			Role:      role,
+		})
+	}
+	if err := driver.SaveMulticaRegistry(registryPath, driver.MulticaRegistry{
+		SchemaVersion:    1,
+		WorkspaceID:      "ws-1",
+		RuntimeProfileID: "profile-1",
+		RuntimeID:        "runtime-1",
+		Participants:     participants,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	argsPath := filepath.Join(tmp, "args.txt")
+	stdinPath := filepath.Join(tmp, "stdin.txt")
+	bin := filepath.Join(tmp, "multica")
+	script := `#!/usr/bin/env sh
+printf '%s\n' "$*" >> "$MULTICA_ARGS_PATH"
+cat >> "$MULTICA_STDIN_PATH"
+case "$*" in
+  *"issue create"*) printf '{"id":"root-9","identifier":"TEA-9","title":"Runtime hub flow","description":"Teamwork acceptance","status":"todo"}\n' ;;
+  *"issue metadata list root-9"*) printf '[{"key":"mnemon.hub_backend","value":"multica"},{"key":"mnemon.kind","value":"session_mailbox"},{"key":"mnemon.session_id","value":"multica:session:root-9"}]\n' ;;
+  *"issue children root-9"*) printf '{"children":[{"id":"child-2","identifier":"TEA-10","title":"Assignment 2","metadata":{"mnemon.hub_backend":"multica","mnemon.kind":"assignment_mailbox","mnemon.session_id":"multica:session:root-9","mnemon.assignment_id":"asg-2","mnemon.principal":"researcher@team"}},{"id":"child-3","identifier":"TEA-11","title":"Assignment 3","metadata":{"mnemon.hub_backend":"multica","mnemon.kind":"assignment_mailbox","mnemon.session_id":"multica:session:root-9","mnemon.assignment_id":"asg-3","mnemon.principal":"implementer@team"}}]}\n' ;;
+  *"issue runs root-9"*) printf '[{"id":"task-root","issue_id":"root-9","agent_id":"agent-planner","status":"completed","completed_at":"2026-06-28T09:00:00Z","workspace_id":"ws-1"}]\n' ;;
+  *"issue run-messages task-root"*) printf '[{"task_id":"task-root","issue_id":"root-9","seq":1,"type":"assistant","content":"Mnemon Multica runtime handled issue TEA-9. Mnemon ingest: recorded seq=17. Managed wake: completed turn=noop-turn. Multica hub write: created child_issues=2.","created_at":"2026-06-28T09:00:01Z"}]\n' ;;
+  *"issue runs child-2"*) printf '[{"id":"task-child-2","issue_id":"child-2","agent_id":"agent-researcher","status":"completed","completed_at":"2026-06-28T09:01:00Z","workspace_id":"ws-1"}]\n' ;;
+  *"issue run-messages task-child-2"*) printf '[{"task_id":"task-child-2","issue_id":"child-2","seq":1,"type":"assistant","content":"Mnemon Multica runtime handled issue TEA-10. Mnemon assignment mailbox: correlated assignment=asg-2. Managed wake: completed turn=noop-turn.","created_at":"2026-06-28T09:01:01Z"}]\n' ;;
+  *"issue runs child-3"*) printf '[{"id":"task-child-3","issue_id":"child-3","agent_id":"agent-implementer","status":"completed","completed_at":"2026-06-28T09:02:00Z","workspace_id":"ws-1"}]\n' ;;
+  *"issue run-messages task-child-3"*) printf '[{"task_id":"task-child-3","issue_id":"child-3","seq":1,"type":"assistant","content":"Mnemon Multica runtime handled issue TEA-11. Mnemon assignment mailbox: correlated assignment=asg-3. Managed wake: completed turn=noop-turn.","created_at":"2026-06-28T09:02:01Z"}]\n' ;;
+  *) printf '{}\n' ;;
+esac
+`
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MULTICA_ARGS_PATH", argsPath)
+	t.Setenv("MULTICA_STDIN_PATH", stdinPath)
+
+	report, err := runMulticaRuntimeProdSimAcceptance(context.Background(), multicaRuntimeProdSimOptions{
+		RunRoot:            filepath.Join(tmp, ".testdata", "multica-hub-runtime"),
+		MulticaBin:         bin,
+		WorkspaceID:        "ws-1",
+		RegistryPath:       registryPath,
+		AssigneePrincipal:  "planner@team",
+		IssueTitle:         "Runtime hub flow",
+		IssueDescription:   "Teamwork acceptance",
+		Wait:               time.Millisecond,
+		Poll:               time.Millisecond,
+		RequireIngest:      true,
+		RequireManagedWake: true,
+		RequireHubFlow:     true,
+		MinParticipants:    5,
+		MinActiveAgents:    3,
+	})
+	if err != nil {
+		t.Fatalf("acceptance: %v report=%+v", err, report)
+	}
+	if report.Status != "ok" || len(report.Participants) != 5 || len(report.ChildIssues) != 2 || len(report.ActiveAgents) != 3 {
+		t.Fatalf("hub report mismatch: %+v", report)
+	}
+	if report.RootMetadata[driver.MulticaMetadataKind] != driver.MulticaHubKindSession {
+		t.Fatalf("root metadata mismatch: %+v", report.RootMetadata)
+	}
+	if !multicaProdSimAssertionsPassed(report) {
+		t.Fatalf("hub assertions failed: %+v", report.Assertions)
+	}
+	args, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"issue metadata list root-9 --output json",
+		"issue children root-9 --output json",
+		"issue runs child-2 --output json",
+		"issue runs child-3 --output json",
+	} {
+		if !strings.Contains(string(args), want) {
+			t.Fatalf("args missing %q:\n%s", want, args)
+		}
 	}
 }
