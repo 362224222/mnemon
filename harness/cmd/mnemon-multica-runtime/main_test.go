@@ -19,11 +19,13 @@ import (
 func TestRuntimeImportsAssignedIssueIntoMnemon(t *testing.T) {
 	tmp := t.TempDir()
 	argsPath := filepath.Join(tmp, "multica.args")
+	commentPath := filepath.Join(tmp, "comment.txt")
 	bin := filepath.Join(tmp, "multica")
 	script := `#!/usr/bin/env sh
 printf '%s\n' "$*" > "$MULTICA_ARGS_PATH"
 case "$*" in
   *"issue get iss-7"*) printf '{"id":"iss-7","identifier":"TEA-7","title":"Prepare teamwork acceptance","description":"Validate runtime issue import through real Multica task context.","status":"todo","priority":"medium"}\n' ;;
+  *"issue comment add iss-7"*) cat > "$MULTICA_COMMENT_PATH"; printf '{"id":"comment-1","issue_id":"iss-7","content":"ok","type":"comment"}\n' ;;
   *) printf '{}\n' ;;
 esac
 `
@@ -77,6 +79,7 @@ esac
 			"MNEMON_CONTROL_ADDR="+srv.URL,
 			"MNEMON_CONTROL_PRINCIPAL=wrong@team",
 			"MULTICA_ARGS_PATH="+argsPath,
+			"MULTICA_COMMENT_PATH="+commentPath,
 			"MULTICA_WORKSPACE_ID=ws-1",
 			"MULTICA_TASK_ID=task-1",
 			"MULTICA_AGENT_ID=agent-1",
@@ -123,8 +126,17 @@ esac
 	if strings.Contains(string(args), "Validate runtime issue import") {
 		t.Fatalf("issue narrative leaked into CLI arguments: %q", string(args))
 	}
-	if !strings.Contains(string(args), "issue get iss-7 --output json") {
+	if !strings.Contains(string(args), "issue comment add iss-7 --content-stdin --output json") {
 		t.Fatalf("unexpected multica args: %q", string(args))
+	}
+	comment, err := os.ReadFile(commentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Mnemon update: issue admitted", "Principal: planner@team", "mnemon:event=multica-task-task-1"} {
+		if !strings.Contains(string(comment), want) {
+			t.Fatalf("comment missing %s:\n%s", want, comment)
+		}
 	}
 
 	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
@@ -137,7 +149,7 @@ esac
 		if msg["method"] == "turn/completed" {
 			sawComplete = true
 		}
-		if msg["method"] == "item/agentMessage/delta" && strings.Contains(line, "Mnemon ingest: recorded seq=17") {
+		if msg["method"] == "item/agentMessage/delta" && strings.Contains(line, "Mnemon ingest: recorded seq=17") && strings.Contains(line, "Multica projection: comment=comment-1") {
 			sawAnswer = true
 		}
 	}

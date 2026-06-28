@@ -51,14 +51,17 @@ type runtimeRPCState struct {
 }
 
 type runtimeImportResult struct {
-	IssueID    string
-	Identifier string
-	Title      string
-	Principal  string
-	TaskID     string
-	Status     string
-	Receipt    *access.IngestReceipt
-	Err        error
+	IssueID             string
+	Identifier          string
+	Title               string
+	Principal           string
+	TaskID              string
+	Status              string
+	Receipt             *access.IngestReceipt
+	ProjectionStatus    string
+	ProjectionCommentID string
+	ProjectionErr       error
+	Err                 error
 }
 
 func main() {
@@ -299,7 +302,37 @@ func (s *runtimeRPCState) importIssue(input string) runtimeImportResult {
 	}
 	result.Status = "recorded"
 	result.Receipt = &rec
+	s.projectImportComment(ctx, cli, issue, draft.ExternalID, &result)
 	return result
+}
+
+func (s *runtimeRPCState) projectImportComment(ctx context.Context, cli driver.MulticaCLI, issue driver.MulticaIssue, externalID string, result *runtimeImportResult) {
+	if result == nil {
+		return
+	}
+	if !runtimeProjectionEnabled(s.Env) {
+		result.ProjectionStatus = "skipped"
+		return
+	}
+	body := "Issue admitted into Mnemon teamwork."
+	if result.Principal != "" {
+		body += "\nPrincipal: " + result.Principal
+	}
+	if result.TaskID != "" {
+		body += "\nMultica task: " + result.TaskID
+	}
+	if result.Receipt != nil {
+		body += fmt.Sprintf("\nMnemon ingest: seq=%d duplicate=%v ticked=%v", result.Receipt.Seq, result.Receipt.Dup, result.Receipt.Ticked)
+	}
+	commentBody := driver.FormatMulticaProjectionComment("issue admitted", body, []string{externalID})
+	comment, err := cli.AddIssueComment(ctx, issue.ID, commentBody)
+	if err != nil {
+		result.ProjectionStatus = "failed"
+		result.ProjectionErr = err
+		return
+	}
+	result.ProjectionStatus = "commented"
+	result.ProjectionCommentID = comment.ID
 }
 
 func runtimeMulticaCLI(env []string) driver.MulticaCLI {
@@ -439,6 +472,25 @@ func formatRuntimeFinalAnswer(result runtimeImportResult) string {
 			b.WriteString(result.Err.Error())
 			b.WriteString(").")
 		}
+	}
+	switch result.ProjectionStatus {
+	case "commented":
+		b.WriteString(" Multica projection: comment")
+		if result.ProjectionCommentID != "" {
+			b.WriteString("=")
+			b.WriteString(result.ProjectionCommentID)
+		}
+		b.WriteString(".")
+	case "skipped":
+		b.WriteString(" Multica projection: skipped.")
+	case "failed":
+		b.WriteString(" Multica projection: failed")
+		if result.ProjectionErr != nil {
+			b.WriteString(" (")
+			b.WriteString(result.ProjectionErr.Error())
+			b.WriteString(")")
+		}
+		b.WriteString(".")
 	}
 	return strings.TrimSpace(b.String())
 }
@@ -620,6 +672,16 @@ func runtimeTimeout(env []string) time.Duration {
 		return 30 * time.Second
 	}
 	return d
+}
+
+func runtimeProjectionEnabled(env []string) bool {
+	value := strings.ToLower(envDefault(env, "MNEMON_MULTICA_PROJECT_COMMENTS", "true"))
+	switch value {
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return true
+	}
 }
 
 func sanitizePrincipal(value string) string {
