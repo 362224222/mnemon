@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -161,6 +162,31 @@ func TestSetupDryRunWritesNothing(t *testing.T) {
 	}
 }
 
+func TestSetupLocalEnvPreservesExplicitRuntimePrincipal(t *testing.T) {
+	root := t.TempDir()
+	var out, errw bytes.Buffer
+	if _, err := New(root).Setup(context.Background(), &out, &errw, SetupOptions{
+		Host:       "codex",
+		ControlURL: "http://127.0.0.1:8787",
+		Principal:  "setup@project",
+		UseToken:   false,
+	}); err != nil {
+		t.Fatalf("setup: %v\nstderr=%s", err, errw.String())
+	}
+	envPath := filepath.Join(root, ".mnemon", "harness", "local", "env.sh")
+
+	defaultOut := sourceLocalEnv(t, envPath, envWithout("MNEMON_CONTROL_PRINCIPAL"))
+	if got, want := strings.TrimSpace(defaultOut), "setup@project"; got != want {
+		t.Fatalf("local env default principal = %q, want %q", got, want)
+	}
+
+	explicitEnv := append(envWithout("MNEMON_CONTROL_PRINCIPAL"), "MNEMON_CONTROL_PRINCIPAL=runtime@project")
+	explicitOut := sourceLocalEnv(t, envPath, explicitEnv)
+	if got, want := strings.TrimSpace(explicitOut), "runtime@project"; got != want {
+		t.Fatalf("local env must preserve explicit runtime principal = %q, want %q", got, want)
+	}
+}
+
 func TestSetupRejectsUnsupportedEventPackage(t *testing.T) {
 	root := t.TempDir()
 	var out, errw bytes.Buffer
@@ -209,6 +235,32 @@ func mustRead(t *testing.T, path string) []byte {
 		t.Fatalf("read %s: %v", path, err)
 	}
 	return b
+}
+
+func sourceLocalEnv(t *testing.T, envPath string, env []string) string {
+	t.Helper()
+	cmd := exec.Command("bash", "-c", `source "$1"; printf '%s\n' "$MNEMON_CONTROL_PRINCIPAL"`, "bash", envPath)
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("source local env: %v\n%s", err, out)
+	}
+	return string(out)
+}
+
+func envWithout(keys ...string) []string {
+	blocked := map[string]bool{}
+	for _, key := range keys {
+		blocked[key] = true
+	}
+	out := make([]string, 0, len(os.Environ()))
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		if !blocked[key] {
+			out = append(out, entry)
+		}
+	}
+	return out
 }
 
 func assertPublicSetupOutput(t *testing.T, output string) {
