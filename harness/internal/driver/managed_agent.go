@@ -18,27 +18,33 @@ type ManagedTurnClient interface {
 }
 
 type ManagedTurnResult struct {
-	TurnID string
-	Status string
+	TurnID      string
+	Status      string
+	FinalAnswer string
 }
 
 type ManagedWakeCandidate struct {
-	Principal      string
-	DerivedEventID string
-	BodyDigest     string
-	Reason         string
+	Principal        string
+	DerivedEventID   string
+	BodyDigest       string
+	Reason           string
+	RenderAuditID    string
+	RenderBodyDigest string
 }
 
 type ManagedWakeRecord struct {
-	Principal      string    `json:"principal"`
-	DerivedEventID string    `json:"derived_event_id"`
-	BodyDigest     string    `json:"body_digest"`
-	Reason         string    `json:"reason"`
-	Query          string    `json:"query"`
-	TurnID         string    `json:"turn_id,omitempty"`
-	Status         string    `json:"status"`
-	StartedAt      time.Time `json:"started_at"`
-	Error          string    `json:"error,omitempty"`
+	Principal        string    `json:"principal"`
+	DerivedEventID   string    `json:"derived_event_id"`
+	BodyDigest       string    `json:"body_digest"`
+	Reason           string    `json:"reason"`
+	Query            string    `json:"query"`
+	TurnID           string    `json:"turn_id,omitempty"`
+	Status           string    `json:"status"`
+	StartedAt        time.Time `json:"started_at"`
+	RenderAuditID    string    `json:"render_audit_id,omitempty"`
+	RenderBodyDigest string    `json:"render_body_digest,omitempty"`
+	FinalAnswer      string    `json:"final_answer,omitempty"`
+	Error            string    `json:"error,omitempty"`
 }
 
 type ManagedWakeLedger interface {
@@ -121,13 +127,15 @@ func (d *ManagedAgentDriver) Wake(ctx context.Context, candidate ManagedWakeCand
 	d.mu.Unlock()
 
 	record := ManagedWakeRecord{
-		Principal:      candidate.Principal,
-		DerivedEventID: candidate.DerivedEventID,
-		BodyDigest:     candidate.BodyDigest,
-		Reason:         candidate.Reason,
-		Query:          ManagedWakeQuery,
-		StartedAt:      now,
-		Status:         "started",
+		Principal:        candidate.Principal,
+		DerivedEventID:   candidate.DerivedEventID,
+		BodyDigest:       candidate.BodyDigest,
+		Reason:           candidate.Reason,
+		Query:            ManagedWakeQuery,
+		StartedAt:        now,
+		Status:           "started",
+		RenderAuditID:    candidate.RenderAuditID,
+		RenderBodyDigest: candidate.RenderBodyDigest,
 	}
 	result, err := d.Client.StartTurn(ctx, ManagedWakeQuery)
 	if err != nil {
@@ -138,6 +146,7 @@ func (d *ManagedAgentDriver) Wake(ctx context.Context, candidate ManagedWakeCand
 		return record, err
 	}
 	record.TurnID = result.TurnID
+	record.FinalAnswer = result.FinalAnswer
 	record.Status = result.Status
 	if record.Status == "" {
 		record.Status = "completed"
