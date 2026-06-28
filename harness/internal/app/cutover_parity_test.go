@@ -35,9 +35,9 @@ func TestAssembledBootMatchesBindingDerivedBoot(t *testing.T) {
 			typ     string
 			payload map[string]any
 		}{
-			{"a1", "assignment.write_candidate.observed", map[string]any{"scope": "parity assignment", "ttl": "2h", "assignee": "codex@impl", "expected_work": "do the parity work", "expected_feedback": "progress_digest", "evidence": "test"}},
-			{"p1", "progress_digest.write_candidate.observed", map[string]any{"summary": "parity progress"}},
-			{"p2", "progress_digest.write_candidate.observed", map[string]any{"summary": "password=hunter2"}},
+			{"a1", "assignment.write_candidate.observed", r2Assignment("parity assignment", "2h", "codex@impl", "do the parity work", "progress_digest", "test")},
+			{"p1", "progress_digest.write_candidate.observed", r2Progress("parity progress")},
+			{"p2", "progress_digest.write_candidate.observed", r2Progress("password=hunter2")},
 		}
 		// Tick after EACH ingest, mirroring the product's synchronous per-observe Tick (P2.2).
 		// A single batched Tick would dispatch s1 against the pre-m1 view and reject its proposal

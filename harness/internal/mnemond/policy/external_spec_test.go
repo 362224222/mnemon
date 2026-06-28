@@ -7,10 +7,10 @@ import (
 
 func minimalSpec() ExternalSpec {
 	return ExternalSpec{
-		SchemaVersion: 1,
+		SchemaVersion: 2,
 		Name:          "note", ObservedType: "note.write_candidate.observed",
 		ProposedType: "note.write.proposed", ResourceKind: "note", ItemsField: "items",
-		Fields: []FieldSpec{{Name: "text", Validators: []ValidatorRef{
+		Fields: []FieldSpec{{Section: FieldSectionNarrative, Name: "text", Validators: []ValidatorRef{
 			{ID: "required", Params: map[string]string{"missing_style": "empty"}},
 			{ID: "safety:unsafe"},
 		}}},
@@ -49,7 +49,7 @@ func TestCompileExternalSpecRequiredDerivation(t *testing.T) {
 	}
 }
 
-// 每条 fail-closed 路径一例:unknown 成员、参数缺失/未知、schema_version、重复字段、
+// 每条 fail-closed 路径一例:unknown 成员、参数缺失/未知、schema_version、section、重复字段、
 // 前向 default-from、list 独占、render 键冲突、kind 不在 KindCatalog。
 func TestCompileExternalSpecFailsClosed(t *testing.T) {
 	mutate := func(name string, fn func(*ExternalSpec), wantErr string) {
@@ -90,7 +90,8 @@ func TestCompileExternalSpecFailsClosed(t *testing.T) {
 	mutate("free-form proposed type", func(s *ExternalSpec) {
 		s.ProposedType = "note.write.done"
 	}, "reconciler consumes only *.proposed")
-	mutate("bad schema version", func(s *ExternalSpec) { s.SchemaVersion = 2 }, "schema_version 2 unsupported")
+	mutate("bad schema version", func(s *ExternalSpec) { s.SchemaVersion = 1 }, "schema_version 1 unsupported")
+	mutate("missing field section", func(s *ExternalSpec) { s.Fields[0].Section = "" }, "must be rule|narrative|refs")
 	mutate("missing validator param", func(s *ExternalSpec) { s.Fields[0].Validators[0].Params = nil }, "missing param")
 	mutate("unknown validator param", func(s *ExternalSpec) {
 		s.Fields[0].Validators[0].Params["typo"] = "x"
@@ -99,15 +100,15 @@ func TestCompileExternalSpecFailsClosed(t *testing.T) {
 		s.Fields[0].Validators[0].Params["missing_style"] = "loud"
 	}, "must be empty|missing")
 	mutate("duplicate field", func(s *ExternalSpec) {
-		s.Fields = append(s.Fields, FieldSpec{Name: "text"})
+		s.Fields = append(s.Fields, FieldSpec{Section: FieldSectionNarrative, Name: "text"})
 	}, "duplicate field")
 	mutate("forward default-from", func(s *ExternalSpec) {
-		s.Fields = append(s.Fields, FieldSpec{Name: "alias", Validators: []ValidatorRef{
+		s.Fields = append(s.Fields, FieldSpec{Section: FieldSectionNarrative, Name: "alias", Validators: []ValidatorRef{
 			{ID: "default-from", Params: map[string]string{"field": "later"}},
-		}}, FieldSpec{Name: "later"})
+		}}, FieldSpec{Section: FieldSectionNarrative, Name: "later"})
 	}, "previously declared")
 	mutate("list not exclusive", func(s *ExternalSpec) {
-		s.Fields = append(s.Fields, FieldSpec{Name: "tags", Validators: []ValidatorRef{
+		s.Fields = append(s.Fields, FieldSpec{Section: FieldSectionRefs, Name: "tags", Validators: []ValidatorRef{
 			{ID: "list:strings"}, {ID: "safety:unsafe"},
 		}})
 	}, "only validator")

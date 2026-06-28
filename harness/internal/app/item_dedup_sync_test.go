@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
 )
 
 // P3f: a coordination kind (assignment) syncs via the GENERIC item-dedup strategy — the import
@@ -27,9 +28,12 @@ func TestItemDedupImportPreservesAllFields(t *testing.T) {
 		ResourceVersion: 1,
 		Fields: map[string]any{
 			"items": []any{map[string]any{
-				"id": "remote/remote-a/dec-1", "scope": "fix the projector", "ttl": "2h",
-				"assignee": "codex@impl", "expected_work": "fix the projector",
-				"expected_feedback": "summary and blockers", "evidence": "PR-42", "actor": "codex@remote", "ingest_seq": float64(5),
+				"id":         "remote/remote-a/dec-1",
+				"rule":       map[string]any{"scope": "fix the projector", "ttl": "2h", "assignee": "codex@impl"},
+				"narrative":  map[string]any{"expected_work": "fix the projector", "expected_feedback": "summary and blockers"},
+				"refs":       map[string]any{"evidence_refs": []any{"PR-42"}},
+				"actor":      "codex@remote",
+				"ingest_seq": float64(5),
 			}},
 			"content":    "# Assignments\n- fix the projector",
 			"updated_by": "codex@remote",
@@ -39,7 +43,7 @@ func TestItemDedupImportPreservesAllFields(t *testing.T) {
 		ExternalID: "imp1",
 		Event: contract.Event{
 			Type:    "assignment.remote_synced_event.observed",
-			Payload: map[string]any{"material": material},
+			Payload: eventmodel.BuildPayload(map[string]any{"material": material}, nil, nil),
 		},
 	}); err != nil {
 		t.Fatalf("ingest remote assignment material: %v", err)
@@ -59,10 +63,14 @@ func TestItemDedupImportPreservesAllFields(t *testing.T) {
 	item, _ := items[0].(map[string]any)
 	for k, want := range map[string]string{
 		"scope": "fix the projector", "ttl": "2h", "assignee": "codex@impl",
-		"expected_work": "fix the projector", "expected_feedback": "summary and blockers", "evidence": "PR-42",
+		"expected_work": "fix the projector", "expected_feedback": "summary and blockers",
 	} {
-		if got, _ := item[k].(string); got != want {
+		if got := towerItemString(item, k); got != want {
 			t.Fatalf("item-dedup must preserve %q: got %q, want %q (item: %+v)", k, got, want, item)
 		}
+	}
+	refs, _ := item["refs"].(map[string]any)
+	if refs == nil || len(refs["evidence_refs"].([]any)) != 1 {
+		t.Fatalf("item-dedup must preserve refs.evidence_refs: %+v", item)
 	}
 }

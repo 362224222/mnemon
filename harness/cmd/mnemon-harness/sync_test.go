@@ -44,9 +44,7 @@ func TestSyncPushOnceAcksPendingLocalEvents(t *testing.T) {
 	client := access.NewClient(localSrv.URL, "codex@project")
 	if _, err := client.IngestObserve("codex@project", contract.ObservationEnvelope{
 		ExternalID: "sync-push-progress",
-		Event: contract.Event{Type: "progress_digest.write_candidate.observed", Payload: map[string]any{
-			"summary": "sync push should ack this local event",
-		}},
+		Event:      contract.Event{Type: "progress_digest.write_candidate.observed", Payload: cmdR2Progress("sync push should ack this local event")},
 	}); err != nil {
 		t.Fatalf("local observe: %v", err)
 	}
@@ -245,7 +243,7 @@ func TestSyncPullOnceImportsRemoteAssignmentThroughLocalMnemon(t *testing.T) {
 		t.Fatalf("unexpected pull output: %s", out.String())
 	}
 	items := localResourceItemsForTest(t, storePath, ref)
-	if len(items) != 1 || items[0]["scope"] != "release-checklist" || items[0]["ttl"] != "2h" {
+	if len(items) != 1 || cmdItemString(items[0], "scope") != "release-checklist" || cmdItemString(items[0], "ttl") != "2h" {
 		t.Fatalf("pulled assignment item not visible through local presentation view: %+v", items)
 	}
 	st, err := syncStatusForTest(storePath)
@@ -552,7 +550,7 @@ func localResourceItemsForTest(t *testing.T, storePath string, ref contract.Reso
 func remoteProgressFields(entryID, summary string) map[string]any {
 	items := []any{map[string]any{
 		"id":         entryID,
-		"summary":    summary,
+		"narrative":  map[string]any{"summary": summary},
 		"actor":      "codex@other",
 		"ingest_seq": float64(7),
 	}}
@@ -566,15 +564,12 @@ func remoteAssignmentFields(scope, ttl string) map[string]any {
 	return map[string]any{
 		"content": "# Assignments\n- " + scope,
 		"items": []any{map[string]any{
-			"id":                "remote/" + scope + "/" + ttl,
-			"scope":             scope,
-			"ttl":               ttl,
-			"assignee":          "codex@impl",
-			"expected_work":     "complete " + scope,
-			"expected_feedback": "summary",
-			"evidence":          "remote import fixture",
-			"actor":             "codex@other",
-			"ingest_seq":        float64(17),
+			"id":         "remote/" + scope + "/" + ttl,
+			"rule":       map[string]any{"scope": scope, "ttl": ttl, "assignee": "codex@impl"},
+			"narrative":  map[string]any{"expected_work": "complete " + scope, "expected_feedback": "summary"},
+			"refs":       map[string]any{"evidence_refs": []any{"remote import fixture"}},
+			"actor":      "codex@other",
+			"ingest_seq": float64(17),
 		}},
 		"updated_by": "codex@other",
 	}

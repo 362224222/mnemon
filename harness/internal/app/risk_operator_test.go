@@ -11,9 +11,9 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
-const approvalHighRiskSpec = `{"schema_version":1,"name":"approval","observed_type":"approval.write_candidate.observed",
+const approvalHighRiskSpec = `{"schema_version":2,"name":"approval","observed_type":"approval.write_candidate.observed",
 "proposed_type":"approval.write.proposed","resource_kind":"approval","items_field":"items",
-"fields":[{"name":"text","validators":[{"id":"required","params":{"missing_style":"empty"}}]}],
+"fields":[{"section":"narrative","name":"text","validators":[{"id":"required","params":{"missing_style":"empty"}}]}],
 "render":{"content":{"member":"bullet-list","params":{"title":"# Approvals","field":"text"}}},
 "risk":"high"}`
 
@@ -46,7 +46,7 @@ func TestHighRiskOperatorGate(t *testing.T) {
 	// agent (host-agent) candidate → denied by the operator gate, never written.
 	if _, _, err := rt.API().Ingest("codex@project", contract.ObservationEnvelope{
 		ExternalID: "h1",
-		Event:      contract.Event{Type: "approval.write_candidate.observed", Payload: map[string]any{"text": "agent tries a high-risk write"}},
+		Event:      contract.Event{Type: "approval.write_candidate.observed", Payload: r2Text("agent tries a high-risk write")},
 	}); err != nil {
 		t.Fatalf("ingest as agent: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestHighRiskOperatorGate(t *testing.T) {
 	// operator (control-agent) candidate → admitted (the operator is exempt from the gate).
 	if _, _, err := rt.API().Ingest("human@owner", contract.ObservationEnvelope{
 		ExternalID: "o1",
-		Event:      contract.Event{Type: "approval.write_candidate.observed", Payload: map[string]any{"text": "operator approves"}},
+		Event:      contract.Event{Type: "approval.write_candidate.observed", Payload: r2Text("operator approves")},
 	}); err != nil {
 		t.Fatalf("ingest as operator: %v", err)
 	}

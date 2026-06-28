@@ -3,6 +3,7 @@ package presentation
 import (
 	"strings"
 
+	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation/view"
 )
 
@@ -33,6 +34,13 @@ func anyItems(raw any) []map[string]any {
 func itemString(item map[string]any, key string) string {
 	if s, ok := item[key].(string); ok {
 		return strings.TrimSpace(s)
+	}
+	for _, section := range []string{eventmodel.PayloadRuleKey, eventmodel.PayloadNarrativeKey, eventmodel.PayloadRefsKey} {
+		if m, ok := item[section].(map[string]any); ok {
+			if s, ok := m[key].(string); ok {
+				return strings.TrimSpace(s)
+			}
+		}
 	}
 	return ""
 }

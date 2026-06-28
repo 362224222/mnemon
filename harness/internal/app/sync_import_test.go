@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
@@ -71,7 +72,7 @@ func TestRemoteProgressImportConflictDiagnosesWithoutOverwrite(t *testing.T) {
 	// MED-4 / v1.1: the origin attribution (origin_replica_id + local_decision_id) must be
 	// RECOVERABLE from the durable ledger on the B side — not just "a diagnostic fired". Walk the
 	// diagnostic's CausedBy to the <kind>.remote_synced_event.observed trigger and recover the identity
-	// from its payload.material. (The material round-trips through the event log as a JSON object.)
+	// from its payload.rule.material. (The material round-trips through the event log as a JSON object.)
 	if diag.CausedBy == "" {
 		t.Fatalf("conflict diagnostic must carry a CausedBy lineage, got %+v", diag)
 	}
@@ -82,7 +83,7 @@ func TestRemoteProgressImportConflictDiagnosesWithoutOverwrite(t *testing.T) {
 	if trigger.Type != policy.StandardRegistry()["progress_digest"].RemoteSyncedEventObserved() {
 		t.Fatalf("diagnostic must be caused by the remote material observation, got type %q", trigger.Type)
 	}
-	material, ok := trigger.Payload["material"].(map[string]any)
+	material, ok := eventmodel.PayloadRule(trigger.Payload)["material"].(map[string]any)
 	if !ok {
 		t.Fatalf("commit_observed payload must carry the material, got %+v", trigger.Payload)
 	}
@@ -118,7 +119,7 @@ func TestRemoteAssignmentImportAppendsItemsThroughLocalMnemon(t *testing.T) {
 		t.Fatalf("remote assignment import must write one item, got %+v", fields)
 	}
 	item, ok := items[0].(map[string]any)
-	if !ok || item["scope"] != "release-review" || item["ttl"] != "active" {
+	if !ok || towerItemString(item, "scope") != "release-review" || towerItemString(item, "ttl") != "active" {
 		t.Fatalf("unexpected remote assignment item: %+v", items[0])
 	}
 }
@@ -127,10 +128,8 @@ func ingestRemoteMaterialForTest(rt *runtime.Runtime, externalID string, cap pol
 	_, _, err := rt.API().Ingest(contract.SyncImportActor, contract.ObservationEnvelope{
 		ExternalID: externalID,
 		Event: contract.Event{
-			Type: cap.RemoteSyncedEventObserved(),
-			Payload: map[string]any{
-				"material": material,
-			},
+			Type:    cap.RemoteSyncedEventObserved(),
+			Payload: eventmodel.BuildPayload(map[string]any{"material": material}, nil, nil),
 		},
 	})
 	return err
@@ -148,7 +147,7 @@ func remoteProgressMaterialForTest(ref contract.ResourceRef, itemID, summary str
 			"content": "# Progress\n- " + summary,
 			"items": []any{map[string]any{
 				"id":         itemID,
-				"summary":    summary,
+				"narrative":  map[string]any{"summary": summary},
 				"actor":      "codex@remote",
 				"ingest_seq": float64(11),
 			}},
@@ -168,15 +167,12 @@ func remoteAssignmentMaterialForTest(ref contract.ResourceRef, scope, ttl string
 		Fields: map[string]any{
 			"content": "# Assignments\n- " + scope,
 			"items": []any{map[string]any{
-				"id":                "remote/" + scope + "/" + ttl,
-				"scope":             scope,
-				"ttl":               ttl,
-				"assignee":          "codex@impl",
-				"expected_work":     "complete " + scope,
-				"expected_feedback": "summary",
-				"evidence":          "remote import fixture",
-				"actor":             "codex@remote",
-				"ingest_seq":        float64(21),
+				"id":         "remote/" + scope + "/" + ttl,
+				"rule":       map[string]any{"scope": scope, "ttl": ttl, "assignee": "codex@impl"},
+				"narrative":  map[string]any{"expected_work": "complete " + scope, "expected_feedback": "summary"},
+				"refs":       map[string]any{"evidence_refs": []any{"remote import fixture"}},
+				"actor":      "codex@remote",
+				"ingest_seq": float64(21),
 			}},
 			"updated_by": "codex@remote",
 		},

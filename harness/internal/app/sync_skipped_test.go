@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
@@ -130,9 +131,10 @@ func TestImportLocalSyncPullSkippedKindParity(t *testing.T) {
 	var observed bool
 	for _, ev := range events {
 		if ev.Type == "sync.import_skipped.observed" {
-			if ev.Payload["origin_replica_id"] == "other-replica" &&
-				ev.Payload["local_decision_id"] == "dec-goal-off" &&
-				ev.Payload["kind"] == "goal" && ev.Payload["remote_id"] == "hub" {
+			rule := eventmodel.PayloadRule(ev.Payload)
+			if rule["origin_replica_id"] == "other-replica" &&
+				rule["local_decision_id"] == "dec-goal-off" &&
+				rule["kind"] == "goal" && rule["remote_id"] == "hub" {
 				observed = true
 			}
 		}

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
 )
 
@@ -18,7 +19,7 @@ func TestSyncImportSkippedRuleDeniesNamingKind(t *testing.T) {
 	}
 	dec, err := r.Evaluate(admission.RuleInput{Event: contract.Event{
 		Type: SyncImportSkippedObserved, Actor: contract.SyncImportActor,
-		Payload: map[string]any{"kind": "goal", "origin_replica_id": "r1", "local_decision_id": "d1", "remote_id": "hub"},
+		Payload: eventmodel.BuildPayload(map[string]any{"kind": "goal", "origin_replica_id": "r1", "local_decision_id": "d1", "remote_id": "hub"}, nil, nil),
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -40,14 +41,13 @@ func TestSyncRemoteDiagnosticRuleDeniesNamingRemoteDiagnostic(t *testing.T) {
 	dec, err := r.Evaluate(admission.RuleInput{Event: contract.Event{
 		Type:  SyncRemoteDiagnosticObserved,
 		Actor: contract.SyncImportActor,
-		Payload: map[string]any{
+		Payload: eventmodel.BuildPayload(map[string]any{
 			"remote_id":      "github-sub",
 			"origin_mnemond": "agent-b",
 			"event_id":       "evt-bad",
 			"subject":        "progress_digest/project",
 			"status":         "invalid",
-			"diagnostic":     "digest mismatch",
-		},
+		}, map[string]any{"diagnostic": "digest mismatch"}, nil),
 	}})
 	if err != nil {
 		t.Fatal(err)

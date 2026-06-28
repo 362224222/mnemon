@@ -8,6 +8,7 @@ import (
 
 	"github.com/mnemon-dev/mnemon/harness/internal/config"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/state"
@@ -64,7 +65,7 @@ func TestAssembleAdmitsConfiguredNoteEventPackageEndToEnd(t *testing.T) {
 
 	if _, _, err := rt.API().Ingest("codex@project", contract.ObservationEnvelope{
 		ExternalID: "n1",
-		Event:      contract.Event{Type: "note.write_candidate.observed", Payload: map[string]any{"text": "remember the assembler"}},
+		Event:      contract.Event{Type: "note.write_candidate.observed", Payload: eventmodel.BuildPayload(nil, map[string]any{"text": "remember the assembler"}, nil)},
 	}); err != nil {
 		t.Fatalf("ingest note: %v", err)
 	}
@@ -92,10 +93,10 @@ func TestAssembleRegistersDeclaredKindNotInDefaultGuard(t *testing.T) {
 		t.Fatal("precondition: widget must NOT be a compiled kind for this test to prove declared-kind registration")
 	}
 	widgetSpec := policy.ExternalSpec{
-		SchemaVersion: 1, Name: "widget",
+		SchemaVersion: 2, Name: "widget",
 		ObservedType: "widget.write_candidate.observed", ProposedType: "widget.write.proposed",
 		ResourceKind: "widget", ItemsField: "items",
-		Fields: []policy.FieldSpec{{Name: "text", Validators: []policy.ValidatorRef{
+		Fields: []policy.FieldSpec{{Section: policy.FieldSectionNarrative, Name: "text", Validators: []policy.ValidatorRef{
 			{ID: "required", Params: map[string]string{"missing_style": "empty"}},
 		}}},
 		Render: policy.RenderSpec{Content: &policy.ContentRender{
@@ -125,7 +126,7 @@ func TestAssembleRegistersDeclaredKindNotInDefaultGuard(t *testing.T) {
 	defer rt.Close()
 	if _, _, err := rt.API().Ingest("codex@project", contract.ObservationEnvelope{
 		ExternalID: "w1",
-		Event:      contract.Event{Type: "widget.write_candidate.observed", Payload: map[string]any{"text": "a declared kind"}},
+		Event:      contract.Event{Type: "widget.write_candidate.observed", Payload: eventmodel.BuildPayload(nil, map[string]any{"text": "a declared kind"}, nil)},
 	}); err != nil {
 		t.Fatalf("ingest widget: %v", err)
 	}
@@ -142,10 +143,10 @@ func TestAssembleRegistersDeclaredKindNotInDefaultGuard(t *testing.T) {
 // caller passes nil (nil = policy.StandardRegistry(), the backward-compatible seam).
 func TestAssembleResolvesFromProvidedCatalog(t *testing.T) {
 	goalSpec := policy.ExternalSpec{
-		SchemaVersion: 1, Name: "goal",
+		SchemaVersion: 2, Name: "goal",
 		ObservedType: "goal.write_candidate.observed", ProposedType: "goal.write.proposed",
 		ResourceKind: "goal", ItemsField: "items",
-		Fields: []policy.FieldSpec{{Name: "statement", Validators: []policy.ValidatorRef{
+		Fields: []policy.FieldSpec{{Section: policy.FieldSectionNarrative, Name: "statement", Validators: []policy.ValidatorRef{
 			{ID: "required", Params: map[string]string{"missing_style": "empty"}},
 		}}},
 		Render: policy.RenderSpec{
@@ -184,7 +185,7 @@ func TestAssembleResolvesFromProvidedCatalog(t *testing.T) {
 	defer rt.Close()
 	if _, _, err := rt.API().Ingest("codex@project", contract.ObservationEnvelope{
 		ExternalID: "g1",
-		Event:      contract.Event{Type: "goal.write_candidate.observed", Payload: map[string]any{"statement": "ship stage five"}},
+		Event:      contract.Event{Type: "goal.write_candidate.observed", Payload: eventmodel.BuildPayload(nil, map[string]any{"statement": "ship stage five"}, nil)},
 	}); err != nil {
 		t.Fatalf("ingest goal: %v", err)
 	}
@@ -248,7 +249,7 @@ func TestAssembleDerivesRefFromBindingScope(t *testing.T) {
 
 	if _, _, err := rt.API().Ingest("codex@project", contract.ObservationEnvelope{
 		ExternalID: "p1",
-		Event:      contract.Event{Type: "progress_digest.write_candidate.observed", Payload: map[string]any{"summary": "team fact"}},
+		Event:      contract.Event{Type: "progress_digest.write_candidate.observed", Payload: eventmodel.BuildPayload(map[string]any{"feedback_kind": "progress"}, map[string]any{"summary": "team fact"}, nil)},
 	}); err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
@@ -288,7 +289,7 @@ func TestAssembleSkipsUnscopedBinding(t *testing.T) {
 	defer rt.Close()
 	if _, _, err := rt.API().Ingest("codex@project", contract.ObservationEnvelope{
 		ExternalID: "p1",
-		Event:      contract.Event{Type: "progress_digest.write_candidate.observed", Payload: map[string]any{"summary": "x"}},
+		Event:      contract.Event{Type: "progress_digest.write_candidate.observed", Payload: eventmodel.BuildPayload(map[string]any{"feedback_kind": "progress"}, map[string]any{"summary": "x"}, nil)},
 	}); err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
@@ -333,7 +334,7 @@ func TestAssembleAdmitsDecisionEventPackageEndToEnd(t *testing.T) {
 	defer rt.Close()
 	if _, _, err := rt.API().Ingest("codex@project", contract.ObservationEnvelope{
 		ExternalID: "d1",
-		Event:      contract.Event{Type: "decision.write_candidate.observed", Payload: map[string]any{"text": "adopt the spec catalogs"}},
+		Event:      contract.Event{Type: "decision.write_candidate.observed", Payload: eventmodel.BuildPayload(nil, map[string]any{"text": "adopt the spec catalogs"}, nil)},
 	}); err != nil {
 		t.Fatalf("ingest decision: %v", err)
 	}
@@ -378,22 +379,28 @@ func TestBuiltinHeadersSatisfySchemaGuard(t *testing.T) {
 func minimalAcceptPayload(id string) map[string]any {
 	switch id {
 	case "project_intent":
-		return map[string]any{"statement": "ship the thing"}
+		return eventmodel.BuildPayload(nil, map[string]any{"statement": "ship the thing"}, map[string]any{"evidence_refs": []any{"roadmap"}})
 	case "agent_profile":
-		return map[string]any{
-			"actor": "codex@impl", "focus": "projection", "context_advantages": []any{"read projection code"},
-			"availability": "available", "ttl": "30m", "summary": "projection context",
-		}
+		return eventmodel.BuildPayload(
+			map[string]any{"actor": "codex@impl", "availability": "available", "ttl": "30m"},
+			map[string]any{"focus": "projection", "context_advantages": []any{"read projection code"}, "summary": "projection context"},
+			nil,
+		)
 	case "teamwork_signal":
-		return map[string]any{"scope": "projection", "statement": "needs review", "why_teamwork": "another agent has context", "ttl": "2h", "evidence": "profile roster"}
+		return eventmodel.BuildPayload(
+			map[string]any{"scope": "projection", "ttl": "2h"},
+			map[string]any{"statement": "needs review", "why_teamwork": "another agent has context"},
+			map[string]any{"evidence_refs": []any{"profile roster"}},
+		)
 	case "assignment":
-		return map[string]any{
-			"scope": "projection", "ttl": "2h", "assignee": "codex@impl",
-			"expected_work": "review projection", "expected_feedback": "short result", "evidence": "profile roster",
-		}
+		return eventmodel.BuildPayload(
+			map[string]any{"scope": "projection", "ttl": "2h", "assignee": "codex@impl"},
+			map[string]any{"expected_work": "review projection", "expected_feedback": "short result"},
+			map[string]any{"evidence_refs": []any{"profile roster"}},
+		)
 	case "progress_digest":
-		return map[string]any{"summary": "projection 80% done"}
+		return eventmodel.BuildPayload(map[string]any{"feedback_kind": "progress"}, map[string]any{"summary": "projection 80% done"}, nil)
 	default:
-		return map[string]any{"text": "x"}
+		return eventmodel.BuildPayload(nil, map[string]any{"text": "x"}, nil)
 	}
 }

@@ -91,10 +91,8 @@ func TestRemoteSyncPushIsIdempotentAndAuthenticated(t *testing.T) {
 	if _, _, err := replicaClient.Ingest("replica@project", contract.ObservationEnvelope{
 		ExternalID: "replica-observe",
 		Event: contract.Event{
-			Type: "progress_digest.write_candidate.observed",
-			Payload: map[string]any{
-				"summary": "replica should not be able to submit host observations",
-			},
+			Type:    "progress_digest.write_candidate.observed",
+			Payload: runtimeR2Progress("replica should not be able to submit host observations"),
 		},
 	}); err == nil {
 		t.Fatalf("replica-agent credential must not call Agent Integration observe endpoints")

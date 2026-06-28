@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/state"
@@ -44,7 +45,7 @@ func progressEnv(extID, summary string) contract.ObservationEnvelope {
 	return contract.ObservationEnvelope{
 		ExternalID: extID,
 		Event: contract.Event{Type: "progress_digest.write_candidate.observed",
-			Payload: map[string]any{"summary": summary}},
+			Payload: eventmodel.BuildPayload(map[string]any{"feedback_kind": "progress"}, map[string]any{"summary": summary}, nil)},
 	}
 }
 

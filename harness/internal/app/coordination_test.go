@@ -35,10 +35,7 @@ func TestCoordinationAssignmentGoverns(t *testing.T) {
 	// positive: a well-formed assignment candidate is admitted.
 	if _, _, err := rt.API().Ingest("codex@project", contract.ObservationEnvelope{
 		ExternalID: "a1",
-		Event: contract.Event{Type: "assignment.write_candidate.observed", Payload: map[string]any{
-			"scope": "fix projection", "ttl": "2h", "assignee": "codex@impl", "evidence": "ticket-123",
-			"expected_work": "fix the projection path", "expected_feedback": "summary and blockers",
-		}},
+		Event:      contract.Event{Type: "assignment.write_candidate.observed", Payload: r2Assignment("fix projection", "2h", "codex@impl", "fix the projection path", "summary and blockers", "ticket-123")},
 	}); err != nil {
 		t.Fatalf("ingest assignment: %v", err)
 	}
@@ -57,10 +54,11 @@ func TestCoordinationAssignmentGoverns(t *testing.T) {
 	// unchanged (evidence present so the only failure is the missing required scope).
 	if _, _, err := rt.API().Ingest("codex@project", contract.ObservationEnvelope{
 		ExternalID: "a2",
-		Event: contract.Event{Type: "assignment.write_candidate.observed", Payload: map[string]any{
-			"ttl": "1h", "assignee": "codex@impl", "evidence": "ticket-123",
-			"expected_work": "fix the projection path", "expected_feedback": "summary and blockers",
-		}},
+		Event: contract.Event{Type: "assignment.write_candidate.observed", Payload: r2AssignmentPayload(
+			map[string]any{"ttl": "1h", "assignee": "codex@impl"},
+			map[string]any{"expected_work": "fix the projection path", "expected_feedback": "summary and blockers"},
+			map[string]any{"evidence_refs": []any{"ticket-123"}},
+		)},
 	}); err != nil {
 		t.Fatalf("ingest scopeless assignment: %v", err)
 	}
@@ -92,10 +90,7 @@ func TestCoordinationMidRiskRequiresEvidence(t *testing.T) {
 	// complete assignment but NO evidence → mid-risk gate denies.
 	if _, _, err := rt.API().Ingest("codex@project", contract.ObservationEnvelope{
 		ExternalID: "r1",
-		Event: contract.Event{Type: "assignment.write_candidate.observed", Payload: map[string]any{
-			"scope": "evidence-less work", "ttl": "2h", "assignee": "codex@impl",
-			"expected_work": "review evidence-less path", "expected_feedback": "short result",
-		}},
+		Event:      contract.Event{Type: "assignment.write_candidate.observed", Payload: r2Assignment("evidence-less work", "2h", "codex@impl", "review evidence-less path", "short result")},
 	}); err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
@@ -109,10 +104,7 @@ func TestCoordinationMidRiskRequiresEvidence(t *testing.T) {
 	// the same candidate WITH evidence is admitted.
 	if _, _, err := rt.API().Ingest("codex@project", contract.ObservationEnvelope{
 		ExternalID: "r2",
-		Event: contract.Event{Type: "assignment.write_candidate.observed", Payload: map[string]any{
-			"scope": "evidence-backed work", "ttl": "2h", "assignee": "codex@impl", "evidence": "PR-42",
-			"expected_work": "review evidence-backed path", "expected_feedback": "short result",
-		}},
+		Event:      contract.Event{Type: "assignment.write_candidate.observed", Payload: r2Assignment("evidence-backed work", "2h", "codex@impl", "review evidence-backed path", "short result", "PR-42")},
 	}); err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
@@ -142,10 +134,7 @@ func TestAssignmentItemsCarryCreatedAtFromEventTimestamp(t *testing.T) {
 
 	if _, _, err := rt.API().Ingest("codex@project", contract.ObservationEnvelope{
 		ExternalID: "created-at-1",
-		Event: contract.Event{TS: "client-forged", Type: "assignment.write_candidate.observed", Payload: map[string]any{
-			"scope": "timestamped work", "ttl": "30m", "assignee": "codex@impl", "evidence": "ticket-10",
-			"expected_work": "check timestamp propagation", "expected_feedback": "short result",
-		}},
+		Event:      contract.Event{TS: "client-forged", Type: "assignment.write_candidate.observed", Payload: r2Assignment("timestamped work", "30m", "codex@impl", "check timestamp propagation", "short result", "ticket-10")},
 	}); err != nil {
 		t.Fatalf("ingest timestamped assignment: %v", err)
 	}
@@ -193,10 +182,7 @@ func TestCoordinationDefaultEnabled(t *testing.T) {
 	assignRef := contract.ResourceRef{Kind: "assignment", ID: "project"}
 	if _, _, err := rt.API().Ingest("codex@project", contract.ObservationEnvelope{
 		ExternalID: "de1",
-		Event: contract.Event{Type: "assignment.write_candidate.observed", Payload: map[string]any{
-			"scope": "default-enabled work", "ttl": "2h", "assignee": "codex@impl", "evidence": "ticket-9",
-			"expected_work": "handle default-enabled assignment", "expected_feedback": "short result",
-		}},
+		Event:      contract.Event{Type: "assignment.write_candidate.observed", Payload: r2Assignment("default-enabled work", "2h", "codex@impl", "handle default-enabled assignment", "short result", "ticket-9")},
 	}); err != nil {
 		t.Fatalf("default-enabled assignment observe must be authorized: %v", err)
 	}
@@ -210,9 +196,7 @@ func TestCoordinationDefaultEnabled(t *testing.T) {
 	// progress still governs (default-enablement did not disturb the explicit grant).
 	if _, _, err := rt.API().Ingest("codex@project", contract.ObservationEnvelope{
 		ExternalID: "de2",
-		Event: contract.Event{Type: "progress_digest.write_candidate.observed", Payload: map[string]any{
-			"summary": "still works",
-		}},
+		Event:      contract.Event{Type: "progress_digest.write_candidate.observed", Payload: r2Progress("still works")},
 	}); err != nil {
 		t.Fatalf("progress must still be observable alongside default-enabled coordination: %v", err)
 	}
@@ -236,9 +220,7 @@ func TestCoordinationProjectIntentGoverns(t *testing.T) {
 	defer rt.Close()
 	if _, _, err := rt.API().Ingest("codex@project", contract.ObservationEnvelope{
 		ExternalID: "p1",
-		Event: contract.Event{Type: "project_intent.write_candidate.observed", Payload: map[string]any{
-			"statement": "ship the AgentTeam beta", "evidence": "roadmap-q3",
-		}},
+		Event:      contract.Event{Type: "project_intent.write_candidate.observed", Payload: r2ProjectIntent("ship the AgentTeam beta", "roadmap-q3")},
 	}); err != nil {
 		t.Fatalf("ingest project_intent: %v", err)
 	}
@@ -274,11 +256,7 @@ func TestCoordinationProfileAndTeamworkSignalGovern(t *testing.T) {
 
 	if _, _, err := rt.API().Ingest("codex@project", contract.ObservationEnvelope{
 		ExternalID: "profile-1",
-		Event: contract.Event{Type: "agent_profile.write_candidate.observed", Payload: map[string]any{
-			"actor": "codex@project", "focus": "harness R1 schema",
-			"context_advantages": []any{"read Event presentation plan", "knows event package"},
-			"availability":       "available", "ttl": "30m", "summary": "Working on schema phase.",
-		}},
+		Event:      contract.Event{Type: "agent_profile.write_candidate.observed", Payload: r2AgentProfile("codex@project", "harness R1 schema", "available", "30m", "Working on schema phase.", "read Event presentation plan", "knows event package")},
 	}); err != nil {
 		t.Fatalf("ingest profile: %v", err)
 	}
@@ -292,10 +270,7 @@ func TestCoordinationProfileAndTeamworkSignalGovern(t *testing.T) {
 
 	if _, _, err := rt.API().Ingest("codex@project", contract.ObservationEnvelope{
 		ExternalID: "signal-1",
-		Event: contract.Event{Type: "teamwork_signal.write_candidate.observed", Payload: map[string]any{
-			"scope": "harness/r1", "statement": "Need a second review of render/presentation schema.",
-			"why_teamwork": "another agent has fresher render context", "ttl": "1h", "evidence": "profile roster",
-		}},
+		Event:      contract.Event{Type: "teamwork_signal.write_candidate.observed", Payload: r2TeamworkSignal("harness/r1", "Need a second review of render/presentation schema.", "another agent has fresher render context", "1h", "profile roster")},
 	}); err != nil {
 		t.Fatalf("ingest teamwork signal: %v", err)
 	}

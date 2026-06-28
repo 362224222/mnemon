@@ -35,7 +35,7 @@ func TestIngestStampsServerFields(t *testing.T) {
 			BasedOn:             []contract.ResourceVersion{{Ref: contract.ResourceRef{Kind: "progress_digest", ID: "p"}, Version: 9}},
 			PresentationViewRef: "forged-ref",
 			CorrelationID:       "corr-keep",
-			Payload:             map[string]any{"summary": "x"},
+			Payload:             runtimeR2Progress("x"),
 		},
 	})
 	if err != nil {

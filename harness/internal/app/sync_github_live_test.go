@@ -133,15 +133,11 @@ func observeLiveAssignment(t *testing.T, rt *runtime.Runtime, principal contract
 	t.Helper()
 	if _, _, err := rt.API().Ingest(principal, contract.ObservationEnvelope{
 		ExternalID: assignmentID,
-		Event: contract.Event{Type: "assignment.write_candidate.observed", Payload: map[string]any{
-			"assignment_id":     assignmentID,
-			"scope":             scope,
-			"ttl":               "30m",
-			"assignee":          string(assignee),
-			"expected_work":     "complete live GitHub Remote Workspace publish/pull/import validation",
-			"expected_feedback": "progress_digest with result evidence",
-			"evidence":          "gated live GitHub publication backend test",
-		}},
+		Event: contract.Event{Type: "assignment.write_candidate.observed", Payload: r2AssignmentPayload(
+			map[string]any{"assignment_id": assignmentID, "scope": scope, "ttl": "30m", "assignee": string(assignee)},
+			map[string]any{"expected_work": "complete live GitHub Remote Workspace publish/pull/import validation", "expected_feedback": "progress_digest with result evidence"},
+			map[string]any{"evidence_refs": []any{"gated live GitHub publication backend test"}},
+		)},
 	}); err != nil {
 		t.Fatalf("observe live assignment: %v", err)
 	}
@@ -154,9 +150,7 @@ func observeLiveProgress(t *testing.T, rt *runtime.Runtime, principal contract.A
 	t.Helper()
 	if _, _, err := rt.API().Ingest(principal, contract.ObservationEnvelope{
 		ExternalID: externalID,
-		Event: contract.Event{Type: "progress_digest.write_candidate.observed", Payload: map[string]any{
-			"summary": summary,
-		}},
+		Event:      contract.Event{Type: "progress_digest.write_candidate.observed", Payload: r2Progress(summary)},
 	}); err != nil {
 		t.Fatalf("observe live progress: %v", err)
 	}

@@ -34,8 +34,8 @@ func countRemoteDiagnostics(t *testing.T, rt *runtime.Runtime, remoteID string, 
 	n := 0
 	for _, ev := range events {
 		if ev.Type == "sync.remote_diagnostic.observed" &&
-			ev.Payload["remote_id"] == remoteID &&
-			strings.Contains(stringPayload(ev.Payload, "diagnostic"), want) {
+			eventmodel.PayloadRule(ev.Payload)["remote_id"] == remoteID &&
+			strings.Contains(stringPayload(eventmodel.PayloadNarrative(ev.Payload), "diagnostic"), want) {
 			n++
 		}
 		if ev.Type == "sync.diagnostic" &&

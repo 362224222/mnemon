@@ -249,6 +249,13 @@ func runR1TaskSimAcceptance(ctx context.Context, opts r1TaskSimAcceptanceOptions
 	report.DerivedEventAudit = countR1DerivedEventAudit(report.Artifacts["render_audit"])
 	addR1Assertion(&report, "task-sim no assignment_status/assignment_expired", report.LedgerCounts["assignment_status"] == 0 && report.LedgerCounts["assignment_expired"] == 0, fmt.Sprintf("assignment_status=%d assignment_expired=%d", report.LedgerCounts["assignment_status"], report.LedgerCounts["assignment_expired"]))
 	addR1Assertion(&report, "task-sim derived event audit has provenance", report.DerivedEventAudit["with_provenance"] > 0 && report.DerivedEventAudit["with_body_digest"] > 0 && report.DerivedEventAudit["with_audit_id"] > 0, fmt.Sprintf("%+v", report.DerivedEventAudit))
+	if obs, err := observeAcceptanceRun(runRoot, 1000); err == nil {
+		report.Observability = &obs
+		ok, detail := acceptedR2PayloadShapeAssertion(obs)
+		addR1Assertion(&report, "task-sim accepted event payloads are R2 nested", ok, detail)
+	} else {
+		addR1Assertion(&report, "task-sim accepted event payloads are R2 nested", false, err.Error())
+	}
 	if allR1AssertionsPassed(report.Assertions) && len(report.Errors) == 0 && allTaskSimScenariosOK(report.Scenarios, opts.Scenarios) {
 		report.Status = "ok"
 		return report, nil
@@ -470,12 +477,16 @@ func (s taskSimRun) runConflictRework() error {
 
 func (s taskSimRun) emitTeamworkSignal(agent *r1CodexAgent, signalID, scope, statement string) error {
 	payload := taskSimJSON(map[string]any{
-		"signal_id":    signalID,
-		"scope":        scope,
-		"statement":    statement,
-		"why_teamwork": "task simulation requires multiple hostagents to coordinate through events",
-		"ttl":          "30m",
-		"evidence":     "r1-task-sim",
+		"rule": map[string]any{
+			"signal_id": signalID,
+			"scope":     scope,
+			"ttl":       "30m",
+		},
+		"narrative": map[string]any{
+			"statement":    statement,
+			"why_teamwork": "task simulation requires multiple hostagents to coordinate through events",
+		},
+		"refs": map[string]any{"evidence_refs": []string{"r1-task-sim"}},
 	})
 	prompt := fmt.Sprintf(`Emit teamwork_signal.write_candidate.observed for the task simulation.
 Use external id signal-%s and payload:
@@ -492,13 +503,17 @@ After the command succeeds, answer "signal %s written".`, signalID, payload, sig
 
 func (s taskSimRun) emitAssignment(agent *r1CodexAgent, assignmentID, assignee, scope, expectedWork, expectedFeedback string) error {
 	payload := taskSimJSON(map[string]any{
-		"assignment_id":     assignmentID,
-		"assignee":          assignee,
-		"scope":             scope,
-		"expected_work":     expectedWork,
-		"expected_feedback": expectedFeedback,
-		"ttl":               "20m",
-		"evidence":          "r1-task-sim",
+		"rule": map[string]any{
+			"assignment_id": assignmentID,
+			"assignee":      assignee,
+			"scope":         scope,
+			"ttl":           "20m",
+		},
+		"narrative": map[string]any{
+			"expected_work":     expectedWork,
+			"expected_feedback": expectedFeedback,
+		},
+		"refs": map[string]any{"evidence_refs": []string{"r1-task-sim"}},
 	})
 	prompt := fmt.Sprintf(`Emit assignment.write_candidate.observed for the task simulation.
 Use external id assignment-%s and payload:
@@ -520,12 +535,17 @@ func (s taskSimRun) waitAndAct(agent *r1CodexAgent, assignmentID, externalID, su
 		return fmt.Errorf("%s did not receive assignment %s as derived event", agent.principal, assignmentID)
 	}
 	payload := taskSimJSON(map[string]any{
-		"assignment_ref":  assignmentID,
-		"scope":           "task-sim",
-		"summary":         summary,
-		"evidence":        evidence,
-		"changed_context": "simulated real task advanced through observed event",
-		"suggested_next":  "starter should integrate or assign follow-up work",
+		"rule": map[string]any{
+			"assignment_ref": assignmentID,
+			"scope":          "task-sim",
+			"feedback_kind":  "progress",
+		},
+		"narrative": map[string]any{
+			"summary":         summary,
+			"changed_context": []string{"simulated real task advanced through observed event"},
+			"suggested_next":  "starter should integrate or assign follow-up work",
+		},
+		"refs": map[string]any{"evidence_refs": []string{evidence}},
 	})
 	prompt := fmt.Sprintf(`Act on assignment %s from your derived-event presentation.
 Emit progress_digest.write_candidate.observed with external id %s and payload:

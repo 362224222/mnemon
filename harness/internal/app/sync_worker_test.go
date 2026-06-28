@@ -20,9 +20,9 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
-const noteImportablePackageSpec = `{"schema_version":1,"name":"note","observed_type":"note.write_candidate.observed",
+const noteImportablePackageSpec = `{"schema_version":2,"name":"note","observed_type":"note.write_candidate.observed",
 "proposed_type":"note.write.proposed","resource_kind":"note","items_field":"items",
-"fields":[{"name":"text","validators":[{"id":"required","params":{"missing_style":"empty"}},{"id":"safety:unsafe"}]}],
+"fields":[{"section":"narrative","name":"text","validators":[{"id":"required","params":{"missing_style":"empty"}},{"id":"safety:unsafe"}]}],
 "render":{"content":{"member":"bullet-list","params":{"title":"# Notes","field":"text"}}},
 "sync":{"importable":true,"merge":"item-dedup"}}`
 
@@ -91,9 +91,7 @@ func observeProgress(t *testing.T, rt *runtime.Runtime, externalID, content stri
 	t.Helper()
 	if _, _, err := rt.API().Ingest("codex@project", contract.ObservationEnvelope{
 		ExternalID: externalID,
-		Event: contract.Event{Type: "progress_digest.write_candidate.observed", Payload: map[string]any{
-			"summary": content,
-		}},
+		Event:      contract.Event{Type: "progress_digest.write_candidate.observed", Payload: r2Progress(content)},
 	}); err != nil {
 		t.Fatalf("host observe: %v", err)
 	}
@@ -112,7 +110,7 @@ func foreignProgressMaterial(decisionID, itemID, summary string) contract.Synced
 	fields := map[string]any{
 		"content": "# Progress\n- " + summary,
 		"items": []any{map[string]any{
-			"id": itemID, "summary": summary,
+			"id": itemID, "narrative": map[string]any{"summary": summary},
 			"actor": "codex@other", "ingest_seq": float64(7),
 		}},
 	}
@@ -128,7 +126,7 @@ func foreignNoteMaterial(decisionID, itemID, text string) contract.SyncedEventMa
 	fields := map[string]any{
 		"content": "# Notes\n- " + text,
 		"items": []any{map[string]any{
-			"id": itemID, "text": text,
+			"id": itemID, "narrative": map[string]any{"text": text},
 			"actor": "codex@other", "ingest_seq": float64(8),
 		}},
 	}
@@ -183,6 +181,24 @@ func TestSyncWorkerSurvivesUnreachableRemote(t *testing.T) {
 	pending, err := rt.PendingSyncedEvents()
 	if err != nil || len(pending) != 2 {
 		t.Fatalf("offline pass must leave synced events pending: %+v err=%v", pending, err)
+	}
+}
+
+func TestSyncWorkerBacksOffGitHubRateLimit(t *testing.T) {
+	now := time.Unix(100, 0)
+	err := fmt.Errorf("sync pull failed: github api status 403: API rate limit exceeded (rate_limit_remaining=0, rate_limit_reset=160)")
+	if got := syncWorkerErrorBackoff(err, now); got != 61*time.Second {
+		t.Fatalf("rate-limit reset backoff = %v, want 61s", got)
+	}
+
+	err = fmt.Errorf("sync pull failed: github api status 403: secondary limit (retry_after=12, rate_limit_remaining=0, rate_limit_reset=160)")
+	if got := syncWorkerErrorBackoff(err, now); got != 12*time.Second {
+		t.Fatalf("retry-after backoff = %v, want 12s", got)
+	}
+
+	err = fmt.Errorf("sync pull failed: github api status 500")
+	if got := syncWorkerErrorBackoff(err, now); got != 0 {
+		t.Fatalf("non-rate-limit error backoff = %v, want zero", got)
 	}
 }
 

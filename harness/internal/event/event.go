@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-const SchemaVersion = 1
+const SchemaVersion = 2
 
 type EventPhase string
 
@@ -99,8 +99,8 @@ func (p EventPhase) Valid() bool {
 }
 
 func (ev Event) Validate() error {
-	if ev.SchemaVersion <= 0 {
-		return fmt.Errorf("event schema_version must be positive")
+	if ev.SchemaVersion != SchemaVersion {
+		return fmt.Errorf("event schema_version must be %d", SchemaVersion)
 	}
 	if strings.TrimSpace(ev.ID) == "" {
 		return fmt.Errorf("event id is required")
@@ -114,10 +114,8 @@ func (ev Event) Validate() error {
 	if strings.TrimSpace(ev.Actor) == "" {
 		return fmt.Errorf("event actor is required")
 	}
-	for key := range phaseMetaKeys {
-		if _, ok := ev.Payload[key]; ok {
-			return fmt.Errorf("event payload must not carry phase meta key %q", key)
-		}
+	if err := validatePayload(ev.Payload); err != nil {
+		return err
 	}
 	return nil
 }

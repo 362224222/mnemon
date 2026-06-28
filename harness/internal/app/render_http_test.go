@@ -55,11 +55,7 @@ func TestRenderEndpointUsesAuthenticatedScopedProjection(t *testing.T) {
 	clientA := access.NewClientWithToken(srv.URL, "tok-a")
 	rec, err := clientA.IngestObserve("", contract.ObservationEnvelope{
 		ExternalID: "assignment-render-endpoint",
-		Event: contract.Event{Type: "assignment.write_candidate.observed", Payload: map[string]any{
-			"scope": "review render endpoint", "ttl": "30m", "assignee": "codex-b@project",
-			"expected_work": "review the render endpoint", "expected_feedback": "short result",
-			"evidence": "endpoint test",
-		}},
+		Event:      contract.Event{Type: "assignment.write_candidate.observed", Payload: r2Assignment("review render endpoint", "30m", "codex-b@project", "review the render endpoint", "short result", "endpoint test")},
 	})
 	if err != nil || !rec.Ticked {
 		t.Fatalf("seed assignment: rec=%+v err=%v", rec, err)
@@ -146,9 +142,7 @@ func TestRenderEndpointAppliesBindingBudgetWithoutReducingAuthority(t *testing.T
 	for i := 1; i <= 3; i++ {
 		rec, err := client.IngestObserve("", contract.ObservationEnvelope{
 			ExternalID: fmt.Sprintf("progress-budget-%d", i),
-			Event: contract.Event{Type: "progress_digest.write_candidate.observed", Payload: map[string]any{
-				"summary": fmt.Sprintf("render budget entry %d", i),
-			}},
+			Event:      contract.Event{Type: "progress_digest.write_candidate.observed", Payload: r2Progress(fmt.Sprintf("render budget entry %d", i))},
 		})
 		if err != nil || !rec.Ticked {
 			t.Fatalf("seed progress %d: rec=%+v err=%v", i, rec, err)
@@ -203,9 +197,7 @@ func TestEventDataflowReachesContextPresenter(t *testing.T) {
 	client := access.NewClientWithToken(srv.URL, "tok")
 	rec, err := client.IngestObserve("", contract.ObservationEnvelope{
 		ExternalID: "event-dataflow-1",
-		Event: contract.Event{Type: "progress_digest.write_candidate.observed", Payload: map[string]any{
-			"summary": "Use the presenter registry as the dataflow boundary.",
-		}},
+		Event:      contract.Event{Type: "progress_digest.write_candidate.observed", Payload: r2Progress("Use the presenter registry as the dataflow boundary.")},
 	})
 	if err != nil || !rec.Ticked {
 		t.Fatalf("observe event: rec=%+v err=%v", rec, err)

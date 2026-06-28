@@ -26,12 +26,41 @@ mnemon-harness loop schema --type <kind>
 
 Emit governed events through Mnemon. Do not write `.mnemon` state files directly.
 
-Use:
+Prefer the short teamwork/profile commands when they fit the event you need:
+
+```bash
+mnemon-harness control teamwork signal \
+  --scope <scope> \
+  --statement "<collaboration need>" \
+  --why-teamwork "<why another agent is useful>" \
+  --evidence "<evidence ref>" \
+  --external-id <unique-id>
+
+mnemon-harness control teamwork assign \
+  --assignee <agent-principal> \
+  --scope <scope> \
+  --work "<expected work>" \
+  --evidence "<evidence ref>" \
+  --external-id <unique-id>
+
+mnemon-harness control teamwork progress \
+  --assignment-ref <assignment-id> \
+  --summary "<progress, result, or blocker>" \
+  --external-id <unique-id>
+
+mnemon-harness control profile update \
+  --focus "<current focus>" \
+  --advantage "<context advantage>" \
+  --summary "<profile summary>" \
+  --external-id <unique-id>
+```
+
+Use the low-level observe API only when you need fields the short commands do not expose:
 
 ```bash
 mnemon-harness control observe \
   --type <kind>.write_candidate.observed \
-  --payload '{ "<field>": "<value>", ... }' \
+  --payload '{"rule":{...},"narrative":{...},"refs":{...}}' \
   --external-id <unique-id>
 ```
 

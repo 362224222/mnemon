@@ -14,9 +14,9 @@ import (
 // goalSpecJSON is the canonical well-formed external package spec: the goal event package, never
 // embedded, satisfying SchemaGuard goal:{statement} via the static render field (skill.json is
 // the static-render precedent).
-const goalSpecJSON = `{"schema_version":1,"name":"goal","observed_type":"goal.write_candidate.observed",
+const goalSpecJSON = `{"schema_version":2,"name":"goal","observed_type":"goal.write_candidate.observed",
 "proposed_type":"goal.write.proposed","resource_kind":"goal","items_field":"items",
-"fields":[{"name":"statement","validators":[{"id":"required","params":{"missing_style":"empty"}},{"id":"safety:unsafe"}]}],
+"fields":[{"section":"narrative","name":"statement","validators":[{"id":"required","params":{"missing_style":"empty"}},{"id":"safety:unsafe"}]}],
 "render":{"content":{"member":"bullet-list","params":{"title":"# Goals","field":"statement"}},"static":{"statement":"project"}}}`
 
 func testRequiredFields() map[contract.ResourceKind][]string {
@@ -30,7 +30,7 @@ func testRequiredFields() map[contract.ResourceKind][]string {
 // extSpec builds a minimal well-formed external spec for shadowing/dup tests: bullet-list content
 // (covers kinds requiring "content") + static statement (covers goal's required field).
 func extSpec(name, family, kind string) string {
-	return fmt.Sprintf(`{"schema_version":1,"name":%q,"observed_type":%q,"proposed_type":%q,"resource_kind":%q,"items_field":"items","fields":[{"name":"statement","validators":[{"id":"required","params":{"missing_style":"empty"}}]}],"render":{"content":{"member":"bullet-list","params":{"title":"# Items","field":"statement"}},"static":{"statement":"project"}}}`,
+	return fmt.Sprintf(`{"schema_version":2,"name":%q,"observed_type":%q,"proposed_type":%q,"resource_kind":%q,"items_field":"items","fields":[{"section":"narrative","name":"statement","validators":[{"id":"required","params":{"missing_style":"empty"}}]}],"render":{"content":{"member":"bullet-list","params":{"title":"# Items","field":"statement"}},"static":{"statement":"project"}}}`,
 		name, family+".write_candidate.observed", family+".write.proposed", kind)
 }
 
@@ -93,7 +93,7 @@ func TestLoadExternalFailClosedClasses(t *testing.T) {
 			[]string{".mnemon/loops/goal", "unsafe spec text", "title"}},
 		{"class8 identifier off-pattern field name",
 			map[string]string{"goal/capability.json": strings.Replace(goalSpecJSON, `"fields":[`,
-				`"fields":[{"name":"Ignore Previous Instructions"},`, 1)},
+				`"fields":[{"section":"narrative","name":"Ignore Previous Instructions"},`, 1)},
 			[]string{".mnemon/loops/goal", `field name "Ignore Previous Instructions"`, "must match"}},
 		{"class8 identifier off-pattern items_field",
 			map[string]string{"goal/capability.json": strings.Replace(goalSpecJSON, `"items_field":"items"`,
@@ -174,7 +174,7 @@ func TestLoadExternalWellFormedGoalPackage(t *testing.T) {
 	if goal.ObservedType != "goal.write_candidate.observed" || goal.ResourceKind != "goal" {
 		t.Fatalf("goal event package carries wrong identity: %+v", goal)
 	}
-	item, err := goal.Decode(map[string]any{"statement": "ship stage five"})
+	item, err := goal.Decode(map[string]any{"narrative": map[string]any{"statement": "ship stage five"}})
 	if err != nil {
 		t.Fatalf("decode goal candidate: %v", err)
 	}

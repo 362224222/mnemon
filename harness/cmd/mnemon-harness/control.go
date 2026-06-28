@@ -263,7 +263,9 @@ func coordinationFieldLine(client *access.Client, principal contract.ActorID) st
 }
 
 func init() {
-	for _, c := range []*cobra.Command{controlObserveCmd, controlPullCmd, controlStatusCmd, controlRenderCmd} {
+	controlLeafCommands := []*cobra.Command{controlObserveCmd, controlPullCmd, controlStatusCmd, controlRenderCmd}
+	controlLeafCommands = append(controlLeafCommands, controlShortObserveCommands()...)
+	for _, c := range controlLeafCommands {
 		c.Flags().StringVar(&controlAddr, "addr", "http://127.0.0.1:8787", "server base URL")
 		c.Flags().StringVar(&controlPrincipal, "principal", "", "authenticated principal (trusted-header transport)")
 		c.Flags().StringVar(&controlToken, "token", "", "bearer token (TokenAuthenticator transport)")
@@ -280,7 +282,7 @@ func init() {
 	controlRenderCmd.Flags().StringVar(&controlRenderSurface, "surface", "hook", "host surface")
 	controlRenderCmd.Flags().IntVar(&controlRenderMaxChars, "max-chars", 6000, "maximum rendered body chars")
 	controlRenderCmd.Flags().BoolVar(&controlRenderJSON, "json", false, "emit full render response as JSON")
-	controlCmd.AddCommand(controlObserveCmd, controlPullCmd, controlStatusCmd, controlRenderCmd)
+	controlCmd.AddCommand(controlObserveCmd, controlPullCmd, controlStatusCmd, controlRenderCmd, controlTeamworkCmd, controlProfileCmd)
 	controlCmd.GroupID = groupSpine
 	rootCmd.AddCommand(controlCmd)
 }

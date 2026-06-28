@@ -552,10 +552,10 @@ func (t *Tx) RecordAcceptedEventEnvelopesTx(d contract.Decision) error {
 			Type:          string(snap.Ref.Kind) + ".accepted",
 			Subject:       eventmodel.Subject(string(snap.Ref.Kind), string(snap.Ref.ID)),
 			Actor:         string(d.Actor),
-			Payload: map[string]any{
+			Payload: eventmodel.BuildPayload(map[string]any{
 				"resource_version": int64(snap.Version),
 				"fields":           fields,
-			},
+			}, nil, nil),
 			CorrelationID: d.CorrelationID,
 			CreatedAt:     d.AppliedAt,
 		}
@@ -821,13 +821,14 @@ func syncMaterialFromAcceptedEnvelope(env eventmodel.EventEnvelope) (acceptedSyn
 	if err != nil {
 		return acceptedSyncMaterial{}, err
 	}
-	version, err := int64FromAny(env.Event.Payload["resource_version"])
+	rule := eventmodel.PayloadRule(env.Event.Payload)
+	version, err := int64FromAny(rule["resource_version"])
 	if err != nil {
 		return acceptedSyncMaterial{}, fmt.Errorf("accepted envelope %q has invalid resource_version: %w", env.Event.ID, err)
 	}
-	fields, ok := env.Event.Payload["fields"].(map[string]any)
+	fields, ok := rule["fields"].(map[string]any)
 	if !ok {
-		return acceptedSyncMaterial{}, fmt.Errorf("accepted envelope %q payload.fields must be an object", env.Event.ID)
+		return acceptedSyncMaterial{}, fmt.Errorf("accepted envelope %q payload.rule.fields must be an object", env.Event.ID)
 	}
 	decisionID, _ := env.Meta["decision_id"].(string)
 	acceptedBy, _ := env.Meta["accepted_by"].(string)

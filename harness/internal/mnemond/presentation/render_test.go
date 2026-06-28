@@ -38,6 +38,18 @@ func TestRenderPresentationDeterministicDigestAndAudit(t *testing.T) {
 	if !strings.Contains(resp1.Body, "[mnemon:signal]") || strings.Contains(resp1.Body, "[mnemon:profile]") {
 		t.Fatalf("expected signal presentation and no fresh-profile presentation:\n%s", resp1.Body)
 	}
+	if len(resp1.Events) != 1 {
+		t.Fatalf("response should expose derived event envelopes for rule consumers: %+v", resp1.Events)
+	}
+	if err := resp1.Events[0].Validate(); err != nil {
+		t.Fatalf("response event envelope must validate: %v", err)
+	}
+	if _, ok := resp1.Events[0].Event.Payload["body"]; ok {
+		t.Fatalf("derived event payload must not keep flat body key: %+v", resp1.Events[0].Event.Payload)
+	}
+	if body, _ := eventmodel.PayloadNarrative(resp1.Events[0].Event.Payload)["body"].(string); body == "" {
+		t.Fatalf("derived event narrative must carry hook-facing body text: %+v", resp1.Events[0].Event.Payload)
+	}
 	if len(sink.Records) != 2 || sink.Records[0].BodyDigest != resp1.BodyDigest || sink.Records[0].PresentationViewDigest != "proj_digest" {
 		t.Fatalf("audit records must mirror response digest/presentation-view: %+v", sink.Records)
 	}
@@ -100,7 +112,17 @@ func TestDeriveEventEnvelopesSeparateEventModelFromPresentation(t *testing.T) {
 		if env.Phase != "derived" {
 			t.Fatalf("read-side events must be derived envelopes, got %+v", env)
 		}
-		if strings.Contains(env.Event.Type, "mnemon:") || strings.Contains(env.Event.Payload["body"].(string), "[mnemon:") {
+		if err := env.Validate(); err != nil {
+			t.Fatalf("derived envelope must validate: %v", err)
+		}
+		if _, ok := env.Event.Payload["body"]; ok {
+			t.Fatalf("derived envelope must not contain flat presentation body: %+v", env.Event.Payload)
+		}
+		body, _ := eventmodel.PayloadNarrative(env.Event.Payload)["body"].(string)
+		if body == "" {
+			t.Fatalf("derived envelope must carry natural language body in payload.narrative: %+v", env.Event.Payload)
+		}
+		if strings.Contains(env.Event.Type, "mnemon:") || strings.Contains(body, "[mnemon:") {
 			t.Fatalf("derived envelope must not contain presentation labels: %+v", env)
 		}
 		if env.Meta["presentation_hint"] == "" {

@@ -80,8 +80,7 @@ func TestSyncGitHubFakeFiveMnemondPublicationMesh(t *testing.T) {
 		scopes := map[string]bool{}
 		for _, item := range items {
 			m, _ := item.(map[string]any)
-			scope, _ := m["scope"].(string)
-			scopes[scope] = true
+			scopes[towerItemString(m, "scope")] = true
 		}
 		for _, source := range nodes {
 			want := meshAssignmentScope(source.id)
@@ -222,8 +221,7 @@ func meshScopes(t *testing.T, node meshTestNode) map[string]bool {
 	scopes := map[string]bool{}
 	for _, item := range items {
 		m, _ := item.(map[string]any)
-		scope, _ := m["scope"].(string)
-		scopes[scope] = true
+		scopes[towerItemString(m, "scope")] = true
 	}
 	return scopes
 }
@@ -249,15 +247,11 @@ func observeMeshAssignmentWithScope(t *testing.T, rt *runtime.Runtime, principal
 	t.Helper()
 	if _, _, err := rt.API().Ingest(contract.ActorID(principal), contract.ObservationEnvelope{
 		ExternalID: "github-mesh-assignment-" + id,
-		Event: contract.Event{Type: "assignment.write_candidate.observed", Payload: map[string]any{
-			"assignment_id":     "mesh-" + id,
-			"scope":             scope,
-			"ttl":               "2h",
-			"assignee":          assignee,
-			"expected_work":     "complete deterministic publication mesh validation for " + id,
-			"expected_feedback": "progress_digest",
-			"evidence":          "deterministic fake GitHub publication mesh test",
-		}},
+		Event: contract.Event{Type: "assignment.write_candidate.observed", Payload: r2AssignmentPayload(
+			map[string]any{"assignment_id": "mesh-" + id, "scope": scope, "ttl": "2h", "assignee": assignee},
+			map[string]any{"expected_work": "complete deterministic publication mesh validation for " + id, "expected_feedback": "progress_digest"},
+			map[string]any{"evidence_refs": []any{"deterministic fake GitHub publication mesh test"}},
+		)},
 	}); err != nil {
 		t.Fatalf("observe assignment: %v", err)
 	}

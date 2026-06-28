@@ -25,8 +25,7 @@ func TestDecisionLedgerSurfacesAcceptedDecisions(t *testing.T) {
 
 	if _, _, err := rt.API().Ingest("codex@project", contract.ObservationEnvelope{
 		ExternalID: "led1",
-		Event: contract.Event{Type: "progress_digest.write_candidate.observed", Payload: map[string]any{
-			"summary": "a governed ledger entry"}},
+		Event:      contract.Event{Type: "progress_digest.write_candidate.observed", Payload: runtimeR2Progress("a governed ledger entry")},
 	}); err != nil {
 		t.Fatalf("ingest: %v", err)
 	}

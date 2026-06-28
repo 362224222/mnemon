@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/admission"
 )
 
@@ -19,6 +20,7 @@ func TestR1DeferredEventPackagesRemainDeferred(t *testing.T) {
 
 func TestR1TeamworkEventPackageSchema(t *testing.T) {
 	catalog := StandardRegistry()
+	payload := eventmodel.BuildPayload
 	cases := []struct {
 		name         string
 		risk         string
@@ -30,47 +32,40 @@ func TestR1TeamworkEventPackageSchema(t *testing.T) {
 			name:         "agent_profile",
 			risk:         "low",
 			requiredMiss: "empty context_advantages",
-			valid: map[string]any{
-				"actor": "codex@project", "focus": "render presentation implementation",
-				"context_advantages": []any{"read r1 docs", "inspected hostagent setup"},
-				"availability":       "available", "ttl": "30m", "summary": "Working on R1 render/presentation.",
-			},
-			invalid: map[string]any{
-				"actor": "codex@project", "focus": "render presentation implementation",
-				"availability": "available", "ttl": "30m", "summary": "Missing advantages.",
-			},
+			valid: payload(map[string]any{"actor": "codex@project", "availability": "available", "ttl": "30m"},
+				map[string]any{"focus": "render presentation implementation",
+					"context_advantages": []any{"read r1 docs", "inspected hostagent setup"},
+					"summary":            "Working on R1 render/presentation."}, nil),
+			invalid: payload(map[string]any{"actor": "codex@project", "availability": "available", "ttl": "30m"},
+				map[string]any{"focus": "render presentation implementation", "summary": "Missing advantages."}, nil),
 		},
 		{
 			name:         "teamwork_signal",
 			risk:         "mid",
 			requiredMiss: "empty why_teamwork",
-			valid: map[string]any{
-				"scope": "harness/r1", "statement": "Need teammate review",
-				"why_teamwork": "another agent has fresher sync context",
-				"ttl":          "2h", "evidence": "profile roster says sync context is elsewhere",
-			},
-			invalid: map[string]any{"scope": "harness/r1", "statement": "Need teammate review", "ttl": "2h", "evidence": "x"},
+			valid: payload(map[string]any{"scope": "harness/r1", "ttl": "2h"},
+				map[string]any{"statement": "Need teammate review",
+					"why_teamwork": "another agent has fresher sync context",
+				}, map[string]any{"evidence_refs": []any{"profile:sync-context"}}),
+			invalid: payload(map[string]any{"scope": "harness/r1", "ttl": "2h"},
+				map[string]any{"statement": "Need teammate review"}, map[string]any{"evidence_refs": []any{"x"}}),
 		},
 		{
 			name:         "assignment",
 			risk:         "mid",
 			requiredMiss: "empty expected_feedback",
-			valid: map[string]any{
-				"assignee": "codex-b@project", "scope": "harness/r1/render",
-				"expected_work": "review render audit fields", "expected_feedback": "short blockers list",
-				"ttl": "45m", "evidence": "assigned from accepted profile",
-			},
-			invalid: map[string]any{
-				"assignee": "codex-b@project", "scope": "harness/r1/render",
-				"expected_work": "review render audit fields", "ttl": "45m", "evidence": "x",
-			},
+			valid: payload(map[string]any{"assignee": "codex-b@project", "scope": "harness/r1/render", "ttl": "45m"},
+				map[string]any{"expected_work": "review render audit fields", "expected_feedback": "short blockers list"},
+				map[string]any{"evidence_refs": []any{"profile:codex-b"}}),
+			invalid: payload(map[string]any{"assignee": "codex-b@project", "scope": "harness/r1/render", "ttl": "45m"},
+				map[string]any{"expected_work": "review render audit fields"}, map[string]any{"evidence_refs": []any{"x"}}),
 		},
 		{
 			name:         "progress_digest",
 			risk:         "low",
 			requiredMiss: "empty summary",
-			valid:        map[string]any{"summary": "Rendered work presentation and tests pass.", "assignment_ref": "asg-1"},
-			invalid:      map[string]any{"assignment_ref": "asg-1"},
+			valid:        payload(map[string]any{"assignment_ref": "asg-1", "feedback_kind": "progress"}, map[string]any{"summary": "Rendered work presentation and tests pass."}, nil),
+			invalid:      payload(map[string]any{"assignment_ref": "asg-1", "feedback_kind": "progress"}, nil, nil),
 		},
 	}
 

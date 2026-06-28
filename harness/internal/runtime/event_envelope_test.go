@@ -17,7 +17,7 @@ func TestIngestObservedEventEnvelopeUsesGovernedObservationPath(t *testing.T) {
 		Type:          "memory.observed",
 		Subject:       eventmodel.Subject("memory", "m1"),
 		Actor:         "attacker@payload",
-		Payload:       map[string]any{"content": "hostagent event"},
+		Payload:       eventmodel.BuildPayload(map[string]any{"content": "hostagent event"}, nil, nil),
 		CorrelationID: "corr-envelope",
 		TTL:           "20m",
 		CreatedAt:     "2026-06-24T00:00:00Z",
@@ -40,8 +40,8 @@ func TestIngestObservedEventEnvelopeUsesGovernedObservationPath(t *testing.T) {
 	if len(stored.ResourceRefs) != 1 || stored.ResourceRefs[0] != (contract.ResourceRef{Kind: "memory", ID: "m1"}) {
 		t.Fatalf("observed envelope subject must bridge to resource ref, got %+v", stored.ResourceRefs)
 	}
-	if stored.Payload["ttl"] != "20m" {
-		t.Fatalf("event ttl should bridge to legacy payload for existing validators, got %+v", stored.Payload)
+	if eventmodel.PayloadRule(stored.Payload)["ttl"] != "20m" {
+		t.Fatalf("event ttl should bridge to payload.rule for existing validators, got %+v", stored.Payload)
 	}
 
 	ds, err := cs.Tick()
@@ -61,7 +61,7 @@ func TestIngestObservedEventEnvelopeRejectsWrongPhase(t *testing.T) {
 		Type:          "memory.accepted",
 		Subject:       eventmodel.Subject("memory", "m1"),
 		Actor:         "agent",
-		Payload:       map[string]any{"content": "not observed"},
+		Payload:       eventmodel.BuildPayload(map[string]any{"content": "not observed"}, nil, nil),
 		CreatedAt:     "2026-06-24T00:00:00Z",
 	}
 	_, _, err := cs.IngestObservedEnvelope("agent", eventmodel.AcceptedEnvelope(ev, "dec-1", 1, "2026-06-24T00:01:00Z", "mnemond-a"))

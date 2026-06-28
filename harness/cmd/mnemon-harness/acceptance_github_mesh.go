@@ -278,8 +278,11 @@ func runR1GitHubMeshAcceptance(ctx context.Context, opts r1GitHubMeshAcceptanceO
 			report.Observability.Warnings = append(report.Observability.Warnings, warnings...)
 		}
 		report.Participants = r1ClusterParticipants(counts, report.Entrypoint)
+		ok, detail := acceptedR2PayloadShapeAssertion(obs)
+		addR1Assertion(&report, "github-mesh accepted event payloads are R2 nested", ok, detail)
 	} else {
 		addR1Error(&report, obsErr)
+		addR1Assertion(&report, "github-mesh accepted event payloads are R2 nested", false, obsErr.Error())
 	}
 	report.DerivedEventAudit = prodSimDerivedAudit(agents)
 	if len(agents) > 0 {
@@ -411,12 +414,16 @@ func (s *r1GitHubMeshRun) bootstrapProfiles() error {
 	for _, i := range active {
 		agent := &s.agents[i]
 		payload := taskSimJSON(map[string]any{
-			"actor":              agent.principal,
-			"focus":              fmt.Sprintf("GitHub mesh Remote Workspace acceptance node %s", agent.principal),
-			"context_advantages": []string{"isolated local mnemond", "github publication branch sync", "real Codex appserver turn"},
-			"availability":       "available",
-			"ttl":                "30m",
-			"summary":            fmt.Sprintf("%s is available for GitHub mesh teamwork validation.", agent.principal),
+			"rule": map[string]any{
+				"actor":        agent.principal,
+				"availability": "available",
+				"ttl":          "30m",
+			},
+			"narrative": map[string]any{
+				"focus":              fmt.Sprintf("GitHub mesh Remote Workspace acceptance node %s", agent.principal),
+				"context_advantages": []string{"isolated local mnemond", "github publication branch sync", "real Codex appserver turn"},
+				"summary":            fmt.Sprintf("%s is available for GitHub mesh teamwork validation.", agent.principal),
+			},
 		})
 		prompt := fmt.Sprintf(`Emit exactly one agent_profile.write_candidate.observed event through your own Local Mnemon.
 Use external id github-mesh-profile-%s-%s and payload:
@@ -988,12 +995,16 @@ func r1GitHubMeshProfileConvergenceTimeout(syncInterval time.Duration) time.Dura
 
 func (s *r1GitHubMeshRun) emitJoinedProfile(agent *r1CodexSyncAgent, scenario string) error {
 	payload := taskSimJSON(map[string]any{
-		"actor":              agent.principal,
-		"focus":              fmt.Sprintf("Joined GitHub mesh task %s with fresh local context", scenario),
-		"context_advantages": []string{"late join backlog import", "github publication branch sync", "isolated local mnemond"},
-		"availability":       "available",
-		"ttl":                "30m",
-		"summary":            fmt.Sprintf("%s joined during %s and can pick up governed work from imported context.", agent.principal, scenario),
+		"rule": map[string]any{
+			"actor":        agent.principal,
+			"availability": "available",
+			"ttl":          "30m",
+		},
+		"narrative": map[string]any{
+			"focus":              fmt.Sprintf("Joined GitHub mesh task %s with fresh local context", scenario),
+			"context_advantages": []string{"late join backlog import", "github publication branch sync", "isolated local mnemond"},
+			"summary":            fmt.Sprintf("%s joined during %s and can pick up governed work from imported context.", agent.principal, scenario),
+		},
 	})
 	prompt := fmt.Sprintf(`Emit exactly one agent_profile.write_candidate.observed event through your own Local Mnemon.
 Use external id github-mesh-join-profile-%s-%s and payload:

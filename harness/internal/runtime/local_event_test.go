@@ -32,7 +32,7 @@ func observeProgressCandidate(t *testing.T, c *access.Client, ext, summary strin
 		ExternalID: ext,
 		Event: contract.Event{
 			Type:    "progress_digest.write_candidate.observed",
-			Payload: map[string]any{"summary": summary, "changed_context": []string{"architecture"}},
+			Payload: runtimeR2ProgressWithContext(summary, "architecture"),
 		},
 	})
 	if err != nil {

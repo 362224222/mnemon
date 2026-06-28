@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -54,10 +55,63 @@ func RunSyncWorker(ctx context.Context, rt *runtime.Runtime, opts SyncWorkerOpti
 			return
 		case <-t.C:
 			if err := syncWorkerPass(rt, opts); err != nil {
+				if delay := syncWorkerErrorBackoff(err, time.Now()); delay > 0 {
+					fmt.Fprintf(errw, "mnemon-harness: sync worker: %v; backing off %s\n", err, delay.Round(time.Second))
+					timer := time.NewTimer(delay)
+					select {
+					case <-ctx.Done():
+						timer.Stop()
+						return
+					case <-timer.C:
+					}
+					continue
+				}
 				fmt.Fprintf(errw, "mnemon-harness: sync worker: %v\n", err)
 			}
 		}
 	}
+}
+
+func syncWorkerErrorBackoff(err error, now time.Time) time.Duration {
+	if err == nil {
+		return 0
+	}
+	msg := err.Error()
+	if retryAfter := syncWorkerErrorToken(msg, "retry_after"); retryAfter != "" {
+		seconds, parseErr := strconv.Atoi(retryAfter)
+		if parseErr == nil && seconds > 0 {
+			return time.Duration(seconds) * time.Second
+		}
+	}
+	if syncWorkerErrorToken(msg, "rate_limit_remaining") != "0" {
+		return 0
+	}
+	reset := syncWorkerErrorToken(msg, "rate_limit_reset")
+	if reset == "" {
+		return 0
+	}
+	seconds, parseErr := strconv.ParseInt(reset, 10, 64)
+	if parseErr != nil || seconds <= 0 {
+		return 0
+	}
+	resetAt := time.Unix(seconds, 0)
+	if !resetAt.After(now) {
+		return 0
+	}
+	return resetAt.Sub(now) + time.Second
+}
+
+func syncWorkerErrorToken(msg, key string) string {
+	prefix := key + "="
+	start := strings.Index(msg, prefix)
+	if start < 0 {
+		return ""
+	}
+	value := msg[start+len(prefix):]
+	if end := strings.IndexAny(value, ",) "); end >= 0 {
+		value = value[:end]
+	}
+	return strings.TrimSpace(value)
 }
 
 // syncWorkerPass runs ONE sync pass against the configured Remote Workspace plan. Gate: when

@@ -68,7 +68,7 @@ func itemDedupImport(cap EventPackage, in admission.RuleInput) (contract.RuleDec
 
 // decodeRemoteSyncedEventMaterial decodes a remote SyncedEventMaterial from an import event payload.
 func decodeRemoteSyncedEventMaterial(payload map[string]any) (contract.SyncedEventMaterial, error) {
-	raw, ok := payload["material"]
+	raw, ok := payloadSection(payload, FieldSectionRule)["material"]
 	if !ok {
 		return contract.SyncedEventMaterial{}, fmt.Errorf("remote import denied: missing material")
 	}

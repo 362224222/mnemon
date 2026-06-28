@@ -21,7 +21,11 @@ func TestObservationEnvelopeAdaptsToObservedEventEnvelope(t *testing.T) {
 			ResourceRefs:  []contract.ResourceRef{{Kind: "assignment", ID: "asg1"}},
 			CorrelationID: "corr-1",
 			CausedBy:      "teamwork_signal/sig1",
-			Payload:       map[string]any{"ttl": "20m", "scope": "review implementation"},
+			Payload: eventmodel.BuildPayload(map[string]any{
+				"assignment_id": "asg1",
+				"ttl":           "20m",
+				"scope":         "review implementation",
+			}, map[string]any{"expected_work": "review implementation"}, nil),
 		},
 	}
 
@@ -53,7 +57,7 @@ func TestEventEnvelopeRejectsPhaseMetaMismatchFromContractTest(t *testing.T) {
 		Type:          "assignment.accepted",
 		Subject:       eventmodel.Subject("assignment", "asg1"),
 		Actor:         "mnemond-a",
-		Payload:       map[string]any{"summary": "accepted work"},
+		Payload:       eventmodel.BuildPayload(nil, map[string]any{"summary": "accepted work"}, nil),
 		CreatedAt:     "2026-06-24T00:00:00Z",
 	}
 	env := eventmodel.NewEnvelope(eventmodel.PhaseSynced, ev, map[string]any{

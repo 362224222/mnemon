@@ -25,9 +25,7 @@ func TestLocalProgressCandidateCreatesSyncPendingEvent(t *testing.T) {
 	client := access.NewClient(srv.URL, "codex@project")
 	if _, err := client.IngestObserve("codex@project", contract.ObservationEnvelope{
 		ExternalID: "progress-release-checklist",
-		Event: contract.Event{Type: "progress_digest.write_candidate.observed", Payload: map[string]any{
-			"summary": "Check tests, build, and release notes before shipping.",
-		}},
+		Event:      contract.Event{Type: "progress_digest.write_candidate.observed", Payload: runtimeR2Progress("Check tests, build, and release notes before shipping.")},
 	}); err != nil {
 		t.Fatalf("observe progress candidate: %v", err)
 	}
@@ -78,9 +76,7 @@ func TestLocalProgressChangesAppendItems(t *testing.T) {
 	} {
 		if _, err := client.IngestObserve("codex@project", contract.ObservationEnvelope{
 			ExternalID: item.externalID,
-			Event: contract.Event{Type: "progress_digest.write_candidate.observed", Payload: map[string]any{
-				"summary": item.summary,
-			}},
+			Event:      contract.Event{Type: "progress_digest.write_candidate.observed", Payload: runtimeR2Progress(item.summary)},
 		}); err != nil {
 			t.Fatalf("observe %s: %v", item.externalID, err)
 		}
@@ -96,7 +92,7 @@ func TestLocalProgressChangesAppendItems(t *testing.T) {
 	}
 	first := items[0].(map[string]any)
 	second := items[1].(map[string]any)
-	if first["summary"] != "Initial active manifest." || second["summary"] != "Approved lifecycle change to stale." {
+	if runtimeItemString(first, "summary") != "Initial active manifest." || runtimeItemString(second, "summary") != "Approved lifecycle change to stale." {
 		t.Fatalf("items must preserve progress history, got %+v", items)
 	}
 }

@@ -13,7 +13,7 @@ func validEvent() Event {
 		Subject:       Subject("assignment", "asg1"),
 		Actor:         "mnemond@local",
 		Audience:      "codex-b@project",
-		Payload:       map[string]any{"summary": "review the implementation"},
+		Payload:       BuildPayload(nil, map[string]any{"summary": "review the implementation"}, nil),
 		CorrelationID: "corr-1",
 		CreatedAt:     "2026-06-24T00:00:00Z",
 	}
@@ -94,8 +94,30 @@ func TestEventPayloadStaysPhaseAgnostic(t *testing.T) {
 	}
 
 	leaky := validEvent()
-	leaky.Payload["external_id"] = "edge-1"
+	leaky.Payload[PayloadNarrativeKey].(map[string]any)["external_id"] = "edge-1"
 	if err := ObservedEnvelope(leaky, "edge-1", "codex", "nudge").Validate(); err == nil {
 		t.Fatal("Validate() must reject phase meta copied into event payload")
+	}
+}
+
+func TestEventPayloadRequiresR2Sections(t *testing.T) {
+	flat := validEvent()
+	flat.Payload = map[string]any{"summary": "flat payload is no longer valid"}
+	if err := ObservedEnvelope(flat, "edge-1", "codex", "nudge").Validate(); err == nil || !strings.Contains(err.Error(), "outside rule/narrative/refs") {
+		t.Fatalf("flat payload must be rejected, got %v", err)
+	}
+
+	wrongSection := validEvent()
+	wrongSection.Payload = map[string]any{PayloadRuleKey: "not an object"}
+	if err := ObservedEnvelope(wrongSection, "edge-1", "codex", "nudge").Validate(); err == nil || !strings.Contains(err.Error(), "section \"rule\" must be an object") {
+		t.Fatalf("non-object payload section must be rejected, got %v", err)
+	}
+}
+
+func TestEventSchemaVersionIsPinnedToR2(t *testing.T) {
+	ev := validEvent()
+	ev.SchemaVersion = 1
+	if err := ObservedEnvelope(ev, "edge-1", "codex", "nudge").Validate(); err == nil || !strings.Contains(err.Error(), "schema_version must be 2") {
+		t.Fatalf("schema v1 must be rejected, got %v", err)
 	}
 }

@@ -63,7 +63,7 @@ run_host() {
 		local out
 		out="$("$MH" control observe --addr "$addr" --principal "$principal" --token-file "$tok" \
 			--type progress_digest.write_candidate.observed --external-id m1 \
-			--payload '{"summary":"E2E progress works for '"$host"'"}')"
+			--payload '{"rule":{"feedback_kind":"progress"},"narrative":{"summary":"E2E progress works for '"$host"'"}}')"
 		case "$out" in *ticked=true*) ;; *) echo "observe: $out"; exit 1 ;; esac
 
 		# pull returns the admitted progress event state (one event subject)
@@ -77,14 +77,14 @@ run_host() {
 		# negative: a secret-like candidate is denied; pull still shows exactly one event subject
 		"$MH" control observe --addr "$addr" --principal "$principal" --token-file "$tok" \
 			--type progress_digest.write_candidate.observed --external-id bad1 \
-			--payload '{"summary":"api_key=sk-abcdefABCDEF123456"}' >/dev/null
+			--payload '{"rule":{"feedback_kind":"progress"},"narrative":{"summary":"api_key=sk-abcdefABCDEF123456"}}' >/dev/null
 		out="$("$MH" control pull --addr "$addr" --principal "$principal" --token-file "$tok")"
 		case "$out" in *event_subjects=1*) ;; *) echo "negative pull leaked: $out"; exit 1 ;; esac
 
 		# R1: write is immediately visible through render context; no background workspace mirror.
 		"$MH" control observe --addr "$addr" --principal "$principal" --token-file "$tok" \
 			--type progress_digest.write_candidate.observed --external-id m2 \
-			--payload '{"summary":"E2E render context '"$host"'"}' >/dev/null
+			--payload '{"rule":{"feedback_kind":"progress"},"narrative":{"summary":"E2E render context '"$host"'"}}' >/dev/null
 		out="$("$MH" control render --addr "$addr" --principal "$principal" --token-file "$tok" --intent context.packet)"
 		case "$out" in *"E2E render context $host"*) ;; *) echo "render context missing progress: $out"; exit 1 ;; esac
 
@@ -145,7 +145,7 @@ run_note() {
 		mkdir -p .mnemon/loops/note .mnemon/loops/decision
 		cat >.mnemon/loops/note/capability.json <<-'JSONEOF'
 		{
-		  "schema_version": 1,
+		  "schema_version": 2,
 		  "name": "note",
 		  "observed_type": "note.write_candidate.observed",
 		  "proposed_type": "note.write.proposed",
@@ -153,6 +153,7 @@ run_note() {
 		  "items_field": "items",
 		  "fields": [
 		    {
+		      "section": "narrative",
 		      "name": "text",
 		      "validators": [
 		        {"id": "required", "params": {"missing_style": "empty"}},
@@ -167,7 +168,7 @@ run_note() {
 		JSONEOF
 		cat >.mnemon/loops/decision/capability.json <<-'JSONEOF'
 		{
-		  "schema_version": 1,
+		  "schema_version": 2,
 		  "name": "decision",
 		  "observed_type": "decision.write_candidate.observed",
 		  "proposed_type": "decision.write.proposed",
@@ -175,6 +176,7 @@ run_note() {
 		  "items_field": "items",
 		  "fields": [
 		    {
+		      "section": "narrative",
 		      "name": "text",
 		      "validators": [
 		        {"id": "required", "params": {"missing_style": "empty"}},
@@ -226,7 +228,7 @@ run_note() {
 		pre="${out##*digest=}"; pre="${pre%% *}"
 		out="$("$MH" control observe --addr "$addr" --principal "$principal" --token-file "$tok" \
 			--type note.write_candidate.observed --external-id n1 \
-			--payload '{"text":"note stands up via config alone"}')"
+			--payload '{"narrative":{"text":"note stands up via config alone"}}')"
 		case "$out" in *ticked=true*) ;; *) echo "note observe: $out"; exit 1 ;; esac
 		out="$("$MH" control pull --addr "$addr" --principal "$principal" --token-file "$tok")"
 		post="${out##*digest=}"; post="${post%% *}"
@@ -236,7 +238,7 @@ run_note() {
 		# 各一行 kind 注册,零新增行为代码。
 		out="$("$MH" control observe --addr "$addr" --principal "$principal" --token-file "$tok" \
 			--type decision.write_candidate.observed --external-id d1 \
-			--payload '{"text":"decision stands up from a spec file"}')"
+			--payload '{"narrative":{"text":"decision stands up from a spec file"}}')"
 		case "$out" in *ticked=true*) ;; *) echo "decision observe: $out"; exit 1 ;; esac
 		out="$("$MH" control pull --addr "$addr" --principal "$principal" --token-file "$tok")"
 		post2="${out##*digest=}"; post2="${post2%% *}"
@@ -270,7 +272,7 @@ run_external_goal() {
 		mkdir -p .mnemon/loops/goal
 		cat >.mnemon/loops/goal/capability.json <<-'JSONEOF'
 		{
-		  "schema_version": 1,
+		  "schema_version": 2,
 		  "name": "goal",
 		  "observed_type": "goal.write_candidate.observed",
 		  "proposed_type": "goal.write.proposed",
@@ -278,6 +280,7 @@ run_external_goal() {
 		  "items_field": "items",
 		  "fields": [
 		    {
+		      "section": "narrative",
 		      "name": "statement",
 		      "validators": [
 		        {"id": "required", "params": {"missing_style": "empty"}},
@@ -326,7 +329,7 @@ run_external_goal() {
 		pre="${out##*digest=}"; pre="${pre%% *}"
 		out="$("$MH" control observe --addr "$addr" --principal "$principal" --token-file "$tok" \
 			--type goal.write_candidate.observed --external-id g1 \
-			--payload '{"statement":"ship stage five"}')"
+			--payload '{"narrative":{"statement":"ship stage five"}}')"
 		case "$out" in *ticked=true*) ;; *) echo "goal observe: $out"; exit 1 ;; esac
 		out="$("$MH" control pull --addr "$addr" --principal "$principal" --token-file "$tok")"
 		post="${out##*digest=}"; post="${post%% *}"
@@ -409,9 +412,9 @@ run_foo_external() {
 		# through the same fail-closed boot resolution. No hand-placement into .mnemon/loops.
 		mkdir -p src/foo/skills/foo-set
 		cat >src/foo/capability.json <<-'JSONEOF'
-		{"schema_version":1,"name":"foo","observed_type":"foo.write_candidate.observed",
+		{"schema_version":2,"name":"foo","observed_type":"foo.write_candidate.observed",
 		"proposed_type":"foo.write.proposed","resource_kind":"foo","items_field":"items",
-		"fields":[{"name":"text","validators":[{"id":"required","params":{"missing_style":"empty"}}]}],
+		"fields":[{"section":"narrative","name":"text","validators":[{"id":"required","params":{"missing_style":"empty"}}]}],
 		"render":{"content":{"member":"bullet-list","params":{"title":"# Foo","field":"text"}}}}
 		JSONEOF
 		cat >src/foo/loop.json <<-'JSONEOF'
@@ -452,7 +455,7 @@ run_foo_external() {
 		done
 		[ "$up" = 1 ] || { cat "$WORK/run-foo.log"; exit 1; }
 		out="$("$MH" control observe --addr http://127.0.0.1:8787 --principal codex@project --token-file "$tok" \
-			--type foo.write_candidate.observed --external-id foo1 --payload '{"text":"foo governed by external package"}')"
+			--type foo.write_candidate.observed --external-id foo1 --payload '{"narrative":{"text":"foo governed by external package"}}')"
 		case "$out" in *ticked=true*) ;; *) echo "foo observe: $out"; exit 1 ;; esac
 		out="$("$MH" control pull --addr http://127.0.0.1:8787 --principal codex@project --token-file "$tok")"
 		case "$out" in *event_subjects=1*) ;; *) echo "foo pull: $out"; exit 1 ;; esac
@@ -478,11 +481,11 @@ write_journal_pkg() {
 	local dir="$1"
 	mkdir -p "$dir/.mnemon/loops/journal"
 	cat >"$dir/.mnemon/loops/journal/capability.json" <<-'JSONEOF'
-	{"schema_version":1,"name":"journal","observed_type":"journal.write_candidate.observed",
+	{"schema_version":2,"name":"journal","observed_type":"journal.write_candidate.observed",
 	"proposed_type":"journal.write.proposed","resource_kind":"journal","items_field":"entries",
-	"fields":[{"name":"content","validators":[{"id":"required","params":{"missing_style":"empty"}},{"id":"safety:secret"},{"id":"safety:injection"}]},
-	{"name":"source","validators":[{"id":"required","params":{"missing_style":"missing"}}]},
-	{"name":"confidence","validators":[{"id":"required","params":{"missing_style":"missing"}}]}],
+	"fields":[{"section":"narrative","name":"content","validators":[{"id":"required","params":{"missing_style":"empty"}},{"id":"safety:secret"},{"id":"safety:injection"}]},
+	{"section":"rule","name":"source","validators":[{"id":"required","params":{"missing_style":"missing"}}]},
+	{"section":"rule","name":"confidence","validators":[{"id":"required","params":{"missing_style":"missing"}}]}],
 	"render":{"content":{"member":"entry-list"}},
 	"sync":{"importable":true,"merge":"entry-dedup"}}
 	JSONEOF
@@ -559,17 +562,17 @@ run_sync_pair() {
 		[ "$up" = 1 ] || { cat "$WORK/run-sync-a.log"; exit 1; }
 		"$MH" control observe --addr http://127.0.0.1:8787 --principal codex@project --token-file "$tok" \
 			--type progress_digest.write_candidate.observed --external-id sp1 \
-			--payload '{"summary":"sync pair payload from replica A"}' >/dev/null
+			--payload '{"rule":{"feedback_kind":"progress"},"narrative":{"summary":"sync pair payload from replica A"}}' >/dev/null
 		# journal (external declared kind): the PD6 kind-agnostic produce surface emits a synced event
 		# for it exactly because its descriptor declares sync.importable — no kind literal in code.
 		"$MH" control observe --addr http://127.0.0.1:8787 --principal codex@project --token-file "$tok" \
 			--type journal.write_candidate.observed --external-id jp1 \
-			--payload '{"content":"journal entry from replica A","source":"user","confidence":"high"}' >/dev/null
+			--payload '{"rule":{"source":"user","confidence":"high"},"narrative":{"content":"journal entry from replica A"}}' >/dev/null
 		# assignment (embedded coordination kind, item-dedup merge): the §577 generic append-merge
 		# syncs a kind whose items carry arbitrary fields (scope/ttl/assignee/work/feedback), preserving them all.
 		"$MH" control observe --addr http://127.0.0.1:8787 --principal codex@project --token-file "$tok" \
 			--type assignment.write_candidate.observed --external-id ap1 \
-			--payload '{"scope":"assignment from replica A","ttl":"2h","assignee":"codex@impl","expected_work":"act on assignment from replica A","expected_feedback":"progress_digest with result or blocker","evidence":"ticket-7"}' >/dev/null
+			--payload '{"rule":{"scope":"assignment from replica A","ttl":"2h","assignee":"codex@impl"},"narrative":{"expected_work":"act on assignment from replica A","expected_feedback":"progress_digest with result or blocker"},"refs":{"evidence_refs":["ticket-7"]}}' >/dev/null
 	) || fail "replica A flow failed (see $WORK/run-sync-a.log / $WORK/mnemon-hub.log)"
 	apid="$(cat "$WORK/sync-a.pid")"
 
@@ -631,7 +634,7 @@ run_sync_pair() {
 		local tok=".mnemon/harness/channel/credentials/codex-project.token"
 		out="$("$MH" control observe --addr http://127.0.0.1:8787 --principal codex@project --token-file "$tok" \
 			--type progress_digest.write_candidate.observed --external-id sp-offline \
-			--payload '{"summary":"offline write while hub is down"}')"
+			--payload '{"rule":{"feedback_kind":"progress"},"narrative":{"summary":"offline write while hub is down"}}')"
 		case "$out" in *ticked=true*) ;; *) echo "offline observe: $out"; exit 1 ;; esac
 		"$MH" control pull --addr http://127.0.0.1:8787 --principal codex@project --token-file "$tok" >/dev/null
 	) || fail "I13 offline leg failed"
@@ -697,7 +700,7 @@ run_daemon() {
 		local out
 		out="$("$MH" control observe --addr "http://$addr" --principal codex@project --token-file "$tok" \
 			--type progress_digest.write_candidate.observed --external-id d1 \
-			--payload '{"summary":"daemon governs this"}')"
+			--payload '{"rule":{"feedback_kind":"progress"},"narrative":{"summary":"daemon governs this"}}')"
 		case "$out" in *ticked=true*) ;; *) echo "daemon observe: $out"; exit 1 ;; esac
 
 		"$WORK/mnemond" down --root . >/dev/null || { echo "mnemond down failed"; exit 1; }
@@ -733,16 +736,16 @@ run_coordination() {
 		local out
 		# project_intent + assignment are mid-risk (P3c): the candidate must carry evidence.
 		out="$("$MH" control observe --addr "http://$addr" --principal codex@project --token-file "$tok" \
-			--type project_intent.write_candidate.observed --external-id ci1 --payload '{"statement":"ship the AgentTeam beta","evidence":"roadmap-q3"}')"
+			--type project_intent.write_candidate.observed --external-id ci1 --payload '{"narrative":{"statement":"ship the AgentTeam beta","evidence_summary":"roadmap-q3"},"refs":{"evidence_refs":["roadmap-q3"]}}')"
 		case "$out" in *ticked=true*) ;; *) echo "project_intent observe: $out"; exit 1 ;; esac
 		out="$("$MH" control observe --addr "http://$addr" --principal codex@project --token-file "$tok" \
-			--type assignment.write_candidate.observed --external-id ci2 --payload '{"scope":"fix event view","ttl":"2h","assignee":"codex@impl","expected_work":"fix event view","expected_feedback":"progress_digest with result or blocker","evidence":"ticket-123"}')"
+			--type assignment.write_candidate.observed --external-id ci2 --payload '{"rule":{"scope":"fix event view","ttl":"2h","assignee":"codex@impl"},"narrative":{"expected_work":"fix event view","expected_feedback":"progress_digest with result or blocker"},"refs":{"evidence_refs":["ticket-123"]}}')"
 		case "$out" in *ticked=true*) ;; *) echo "assignment observe: $out"; exit 1 ;; esac
 		# mid-risk gate: an assignment WITHOUT evidence is denied (event subject count stays at the 2 above).
 		"$MH" control observe --addr "http://$addr" --principal codex@project --token-file "$tok" \
-			--type assignment.write_candidate.observed --external-id ci2b --payload '{"scope":"no evidence","ttl":"1h","assignee":"codex@impl","expected_work":"attempt no-evidence work","expected_feedback":"progress_digest with result or blocker"}' >/dev/null
+			--type assignment.write_candidate.observed --external-id ci2b --payload '{"rule":{"scope":"no evidence","ttl":"1h","assignee":"codex@impl"},"narrative":{"expected_work":"attempt no-evidence work","expected_feedback":"progress_digest with result or blocker"}}' >/dev/null
 		out="$("$MH" control observe --addr "http://$addr" --principal codex@project --token-file "$tok" \
-			--type progress_digest.write_candidate.observed --external-id ci3 --payload '{"summary":"event view 80 percent done"}')"
+			--type progress_digest.write_candidate.observed --external-id ci3 --payload '{"rule":{"feedback_kind":"progress"},"narrative":{"summary":"event view 80 percent done"}}')"
 		case "$out" in *ticked=true*) ;; *) echo "progress_digest observe: $out"; exit 1 ;; esac
 		# all three governed event subjects are pullable in the default coordination scope
 		out="$("$MH" control pull --addr "http://$addr" --principal codex@project --token-file "$tok")"
@@ -794,7 +797,7 @@ run_subscription() {
 		for n in 1 2 3; do
 			out="$("$MH" control observe --addr "http://$addr" --principal codex@project --token-file "$tok" \
 				--type progress_digest.write_candidate.observed --external-id "sub$n" \
-				--payload '{"summary":"budget entry '"$n"'"}')"
+				--payload '{"rule":{"feedback_kind":"progress"},"narrative":{"summary":"budget entry '"$n"'"}}')"
 			case "$out" in *ticked=true*) ;; *) echo "sub observe $n: $out"; exit 1 ;; esac
 		done
 		# the context packet is budgeted to digest-only: the newest entry present, older ones dropped.
@@ -836,9 +839,9 @@ run_tower() {
 		[ "$up" = 1 ] || { cat "$WORK/run-tower.log"; exit 1; }
 		# seed GOAL (project_intent, mid-risk -> needs evidence) + FIELD (assignment with lease TTL)
 		"$MH" control observe --addr "http://$addr" --principal codex@project --token-file "$tok" \
-			--type project_intent.write_candidate.observed --external-id ti1 --payload '{"statement":"ship the AgentTeam beta","evidence":"roadmap"}' >/dev/null
+			--type project_intent.write_candidate.observed --external-id ti1 --payload '{"narrative":{"statement":"ship the AgentTeam beta","evidence_summary":"roadmap"},"refs":{"evidence_refs":["roadmap"]}}' >/dev/null
 		"$MH" control observe --addr "http://$addr" --principal codex@project --token-file "$tok" \
-			--type assignment.write_candidate.observed --external-id ta1 --payload '{"scope":"fix event view","ttl":"2h","assignee":"codex@impl","expected_work":"fix event view","expected_feedback":"progress_digest with result or blocker","evidence":"ticket"}' >/dev/null
+			--type assignment.write_candidate.observed --external-id ta1 --payload '{"rule":{"scope":"fix event view","ttl":"2h","assignee":"codex@impl"},"narrative":{"expected_work":"fix event view","expected_feedback":"progress_digest with result or blocker"},"refs":{"evidence_refs":["ticket"]}}' >/dev/null
 		# stop the daemon so the Tower can open the store (single-writer, S11)
 		{ kill "$runpid" 2>/dev/null; wait "$runpid"; } 2>/dev/null || true
 		rm -f "$PIDFILE"

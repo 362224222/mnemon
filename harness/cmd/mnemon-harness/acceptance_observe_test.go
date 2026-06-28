@@ -81,7 +81,7 @@ func writeObserveTestMnemondDB(t *testing.T, path, actor string, imported bool) 
 	payload := `{"type":"` + eventType + `","actor":"` + actor + `","correlation_id":"corr-1","ts":"2026-06-24T00:00:00Z"}`
 	if imported {
 		eventType = "assignment.remote_synced_event.observed"
-		payload = `{"type":"` + eventType + `","actor":"` + actor + `","correlation_id":"corr-1","ts":"2026-06-24T00:00:00Z","payload":{"material":{"OriginReplicaID":"local-a","LocalDecisionID":"dec-1"}}}`
+		payload = `{"type":"` + eventType + `","actor":"` + actor + `","correlation_id":"corr-1","ts":"2026-06-24T00:00:00Z","payload":{"rule":{"material":{"OriginReplicaID":"local-a","LocalDecisionID":"dec-1"}}}}`
 	}
 	execObserveTestSQL(t, db, `INSERT INTO events (payload) VALUES (?)`, payload)
 	execObserveTestSQL(t, db, `INSERT INTO event_envelopes (schema_version, phase, event_id, event_type, subject, actor, correlation_id, created_at, decision_id, envelope) VALUES (1, 'accepted', 'evt-1', 'assignment.accepted', 'assignment/project', ?, 'corr-1', '2026-06-24T00:00:00Z', 'dec-1', '{}')`, actor)

@@ -403,8 +403,11 @@ func runR1ClusterSingleEntrypointAcceptance(ctx context.Context, opts r1ClusterS
 	addR1ClusterAuditAssertions(&report, syncReport, actorCounts, finalAnswer, opts.WakeCycles)
 	if report.Observability != nil {
 		addR1Assertion(&report, "cluster observability sees strict topology", report.Observability.Topology.Mode == "per-hostagent-mnemond" && !report.Observability.Topology.SharedMnemond, fmt.Sprintf("mode=%s shared=%t mnemond=%d hub=%d", report.Observability.Topology.Mode, report.Observability.Topology.SharedMnemond, report.Observability.Topology.MnemondStores, report.Observability.Topology.MnemonhubStores))
+		ok, detail := acceptedR2PayloadShapeAssertion(*report.Observability)
+		addR1Assertion(&report, "cluster accepted event payloads are R2 nested", ok, detail)
 	} else {
 		addR1Assertion(&report, "cluster observability sees strict topology", false, "observe report unavailable")
+		addR1Assertion(&report, "cluster accepted event payloads are R2 nested", false, "observe report unavailable")
 	}
 
 	scenarioOK := len(report.Errors) == 0 && allR1AssertionsPassed(report.Assertions)

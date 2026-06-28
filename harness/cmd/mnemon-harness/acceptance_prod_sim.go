@@ -219,8 +219,11 @@ func runR1ProdSimAcceptance(ctx context.Context, opts r1ProdSimAcceptanceOptions
 	if obs, err := observeAcceptanceRun(runRoot, 1000); err == nil {
 		report.Observability = &obs
 		addR1Assertion(&report, "prod-sim observability sees strict topology", obs.Topology.Mode == "per-hostagent-mnemond" && !obs.Topology.SharedMnemond, fmt.Sprintf("mode=%s shared=%t mnemond=%d hub=%d", obs.Topology.Mode, obs.Topology.SharedMnemond, obs.Topology.MnemondStores, obs.Topology.MnemonhubStores))
+		ok, detail := acceptedR2PayloadShapeAssertion(obs)
+		addR1Assertion(&report, "prod-sim accepted event payloads are R2 nested", ok, detail)
 	} else {
 		addR1Assertion(&report, "prod-sim observability sees strict topology", false, err.Error())
+		addR1Assertion(&report, "prod-sim accepted event payloads are R2 nested", false, err.Error())
 	}
 	syncReport.Status = statusFromBool(len(report.Errors) == 0 && allR1AssertionsPassed(report.Assertions) && allProdSimScenariosOK(report.Scenarios))
 	if syncReport.Status == "ok" {
@@ -235,12 +238,16 @@ func (s prodSimRun) bootstrapProfiles() error {
 	for i := range s.agents {
 		agent := &s.agents[i]
 		payload := taskSimJSON(map[string]any{
-			"actor":              agent.principal,
-			"focus":              fmt.Sprintf("production-like acceptance node %s", agent.principal),
-			"context_advantages": []string{"isolated local mnemond", "sync/import visibility", "real Codex appserver turn"},
-			"availability":       "available",
-			"ttl":                "30m",
-			"summary":            fmt.Sprintf("%s is available for production-like Mnemon teamwork validation.", agent.principal),
+			"rule": map[string]any{
+				"actor":        agent.principal,
+				"availability": "available",
+				"ttl":          "30m",
+			},
+			"narrative": map[string]any{
+				"focus":              fmt.Sprintf("production-like acceptance node %s", agent.principal),
+				"context_advantages": []string{"isolated local mnemond", "sync/import visibility", "real Codex appserver turn"},
+				"summary":            fmt.Sprintf("%s is available for production-like Mnemon teamwork validation.", agent.principal),
+			},
 		})
 		prompt := fmt.Sprintf(`Emit exactly one agent_profile.write_candidate.observed event through your own Local Mnemon.
 Use external id prod-profile-%s-%s and payload:
@@ -465,12 +472,16 @@ func (s prodSimRun) runRestartNoDuplicateAction() error {
 
 func (s prodSimRun) emitTeamworkSignal(agent *r1CodexSyncAgent, signalID, scope, statement string) error {
 	payload := taskSimJSON(map[string]any{
-		"signal_id":    signalID,
-		"scope":        scope,
-		"statement":    statement,
-		"why_teamwork": "production-like validation requires multiple isolated hostagents",
-		"ttl":          "30m",
-		"evidence":     "r1-prod-sim",
+		"rule": map[string]any{
+			"signal_id": signalID,
+			"scope":     scope,
+			"ttl":       "30m",
+		},
+		"narrative": map[string]any{
+			"statement":    statement,
+			"why_teamwork": "production-like validation requires multiple isolated hostagents",
+		},
+		"refs": map[string]any{"evidence_refs": []string{"r1-prod-sim"}},
 	})
 	prompt := fmt.Sprintf(`Emit teamwork_signal.write_candidate.observed through your own Local Mnemon.
 Use external id signal-%s and payload:
@@ -488,13 +499,17 @@ After the command succeeds, answer "signal %s written".`, signalID, payload, sig
 
 func (s prodSimRun) emitAssignment(agent *r1CodexSyncAgent, assignmentID, assignee, scope, expectedWork, expectedFeedback, ttl string) error {
 	payload := taskSimJSON(map[string]any{
-		"assignment_id":     assignmentID,
-		"assignee":          assignee,
-		"scope":             scope,
-		"expected_work":     expectedWork,
-		"expected_feedback": expectedFeedback,
-		"ttl":               ttl,
-		"evidence":          "r1-prod-sim",
+		"rule": map[string]any{
+			"assignment_id": assignmentID,
+			"assignee":      assignee,
+			"scope":         scope,
+			"ttl":           ttl,
+		},
+		"narrative": map[string]any{
+			"expected_work":     expectedWork,
+			"expected_feedback": expectedFeedback,
+		},
+		"refs": map[string]any{"evidence_refs": []string{"r1-prod-sim"}},
 	})
 	prompt := fmt.Sprintf(`Emit assignment.write_candidate.observed through your own Local Mnemon.
 Use external id assignment-%s and payload:
@@ -517,12 +532,17 @@ func (s prodSimRun) waitAndAct(agent *r1CodexSyncAgent, assignmentID, externalID
 		return fmt.Errorf("%s did not receive assignment %s through local mnemond", agent.principal, assignmentID)
 	}
 	payload := taskSimJSON(map[string]any{
-		"assignment_ref":  assignmentID,
-		"scope":           "prod-sim",
-		"summary":         summary,
-		"evidence":        evidence,
-		"changed_context": "production-like task advanced through local observed event",
-		"suggested_next":  "starter should integrate or assign follow-up work",
+		"rule": map[string]any{
+			"assignment_ref": assignmentID,
+			"scope":          "prod-sim",
+			"feedback_kind":  "progress",
+		},
+		"narrative": map[string]any{
+			"summary":         summary,
+			"changed_context": []string{"production-like task advanced through local observed event"},
+			"suggested_next":  "starter should integrate or assign follow-up work",
+		},
+		"refs": map[string]any{"evidence_refs": []string{evidence}},
 	})
 	prompt := fmt.Sprintf(`Act on assignment %s from your local derived-event presentation.
 Emit progress_digest.write_candidate.observed through your own Local Mnemon with external id %s and payload:

@@ -18,7 +18,7 @@ import (
 // (.mnemon/loops/<name>/capability.json). It can only SELECT closed Go members
 // (validators, renders, sync merge strategies, risk tiers); it cannot define behavior.
 type ExternalSpec struct {
-	SchemaVersion int         `json:"schema_version"` // external event package spec v1
+	SchemaVersion int         `json:"schema_version"` // external event package spec v2
 	Name          string      `json:"name"`
 	ObservedType  string      `json:"observed_type"`
 	ProposedType  string      `json:"proposed_type"`
@@ -40,7 +40,7 @@ type ExternalSpec struct {
 	// from setup alone. Omitted = opt-in (enabled only when named in config.loops / a binding scope).
 	DefaultEnabled bool `json:"default_enabled,omitempty"`
 	// Risk is the kind's governance risk tier (P3, CLOSED set): "" / "low" = no gate; "mid" requires
-	// the candidate to carry non-empty `evidence`; "high" requires an operator (control-agent)
+	// the candidate to carry non-empty `refs.evidence_refs`; "high" requires an operator (control-agent)
 	// principal — an agent's high-risk candidate is denied with a durable diagnostic (Inbox) and a
 	// human re-submits. The tier maps to a generated risk-gate rule (define≠select), never a new
 	// kernel verdict/state.
@@ -61,7 +61,14 @@ var syncMergeStrategies = map[string]bool{"entry-dedup": true, "declaration-dedu
 // riskTiers is the CLOSED set of governance risk tiers a spec may select (empty = low = no gate).
 var riskTiers = map[string]bool{"low": true, "mid": true, "high": true}
 
+const (
+	FieldSectionRule      = "rule"
+	FieldSectionNarrative = "narrative"
+	FieldSectionRefs      = "refs"
+)
+
 type FieldSpec struct {
+	Section    string         `json:"section"`
 	Name       string         `json:"name"`
 	Validators []ValidatorRef `json:"validators,omitempty"`
 }
@@ -99,24 +106,28 @@ type eventPackageDefinition struct {
 
 // CompileExternalSpec compiles an ExternalSpec into an EventPackage, fail-closed on everything the spec gets
 // wrong: unknown/missing core fields, a resource kind outside contract.KindCatalog, duplicate
-// field names, unknown validator/render members, bad or extra member params, forward
+// field names, missing/unknown field sections, unknown validator/render members, bad or extra member params, forward
 // default-from references, list:strings sharing a field with other validators, and render keys
 // colliding with the reserved items/updated_by keys.
 //
-// The compiled Decode contract (parity-frozen, external event package spec v1):
-//   - ONLY declared fields are processed; payload keys outside the declared set NEVER enter the
-//     Item (no leakage into governed state).
-//   - For each string field, in declaration order: raw = strings.TrimSpace(stringField(payload,
+// The compiled Decode contract (external event package spec v2):
+//   - ONLY declared section+field pairs are processed; payload keys outside those declarations NEVER
+//     enter the Item (no leakage into governed state).
+//   - Producer payload is R2-shaped: fields are read from payload.rule, payload.narrative, or
+//     payload.refs according to the field's declared section. Flat business payload is not migrated.
+//   - The decoded Item is R2-shaped too: domain fields are written under rule/narrative/refs, while
+//     trusted metadata (id/actor/ingest_seq/created_at) is stamped later at top level.
+//   - For each string field, in declaration order: raw = strings.TrimSpace(stringField(sectionPayload,
 //     name)); validators run in declared order against the processed value, first error rejects;
-//     the processed (trimmed/defaulted) value is what lands in the Item — and EVERY declared
+//     the processed (trimmed/defaulted) value lands in the matching Item section — and EVERY declared
 //     string field emits its key (possibly ""), matching the handwritten decoders.
 //   - list validators are the exception: they use stringSliceField's full semantics ([]string /
 //     []any dropping non-strings / comma-separated string; trimmed, empties compacted) and OMIT
 //     the key when the list is empty, except list:strings-required rejects an empty list.
 //   - Deny messages are protocol surface: "<name> candidate denied: <member message>".
 func CompileExternalSpec(spec ExternalSpec) (EventPackage, error) {
-	if spec.SchemaVersion != 1 {
-		return EventPackage{}, fmt.Errorf("external event package spec %q: schema_version %d unsupported (want 1)", spec.Name, spec.SchemaVersion)
+	if spec.SchemaVersion != 2 {
+		return EventPackage{}, fmt.Errorf("external event package spec %q: schema_version %d unsupported (want 2)", spec.Name, spec.SchemaVersion)
 	}
 	var sync SyncOptions
 	syncSet := spec.Sync != nil
@@ -193,6 +204,9 @@ func compileEventPackage(def eventPackageDefinition) (EventPackage, error) {
 	}
 	declared := map[string]bool{}
 	for _, f := range def.Fields {
+		if !validFieldSection(f.Section) {
+			return EventPackage{}, fmt.Errorf("%s %q field %q: section %q must be rule|narrative|refs", source, def.Name, f.Name, f.Section)
+		}
 		if strings.TrimSpace(f.Name) == "" {
 			return EventPackage{}, fmt.Errorf("%s %q: field with empty name", source, def.Name)
 		}
@@ -315,6 +329,10 @@ func requiredHeader(source, name string, required []string, produced map[string]
 	}
 	sort.Strings(out)
 	return out, nil
+}
+
+func validFieldSection(section string) bool {
+	return section == FieldSectionRule || section == FieldSectionNarrative || section == FieldSectionRefs
 }
 
 // LoadSpec reads capabilities/<name>.json from fsys and strictly decodes it into its external DATA form,

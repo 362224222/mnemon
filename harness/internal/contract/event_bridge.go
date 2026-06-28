@@ -25,7 +25,7 @@ func eventFromObservation(source ActorID, ev Event) eventmodel.Event {
 		actor = strings.TrimSpace(string(ev.Actor))
 	}
 	out := eventmodel.Event{
-		SchemaVersion: ev.SchemaVersion,
+		SchemaVersion: eventmodel.SchemaVersion,
 		ID:            strings.TrimSpace(ev.ID),
 		Type:          strings.TrimSpace(ev.Type),
 		Subject:       eventSubject(ev),
@@ -35,30 +35,51 @@ func eventFromObservation(source ActorID, ev Event) eventmodel.Event {
 		CorrelationID: strings.TrimSpace(ev.CorrelationID),
 		CreatedAt:     strings.TrimSpace(ev.TS),
 	}
-	if out.SchemaVersion <= 0 {
-		out.SchemaVersion = eventmodel.SchemaVersion
-	}
-	if ttl, ok := ev.Payload["ttl"].(string); ok {
+	if ttl, ok := eventmodel.PayloadRule(ev.Payload)["ttl"].(string); ok {
 		out.TTL = strings.TrimSpace(ttl)
 	}
 	return out
 }
 
 func eventSubject(ev Event) eventmodel.EventSubject {
+	kind := eventKind(ev.Type)
+	if rule := eventmodel.PayloadRule(ev.Payload); len(rule) > 0 {
+		for _, key := range eventSubjectIDKeys(kind) {
+			if id, _ := rule[key].(string); strings.TrimSpace(id) != "" {
+				if subject := eventmodel.Subject(kind, id); subject != "" {
+					return subject
+				}
+			}
+		}
+	}
 	if len(ev.ResourceRefs) > 0 {
 		ref := ev.ResourceRefs[0]
 		if subject := eventmodel.Subject(string(ref.Kind), string(ref.ID)); subject != "" {
 			return subject
 		}
 	}
-	kind := strings.TrimSpace(ev.Type)
-	if i := strings.Index(kind, "."); i >= 0 {
-		kind = kind[:i]
-	}
 	if kind == "" {
 		return ""
 	}
 	return eventmodel.Subject(kind, "project")
+}
+
+func eventKind(eventType string) string {
+	kind := strings.TrimSpace(eventType)
+	if i := strings.Index(kind, "."); i >= 0 {
+		kind = kind[:i]
+	}
+	return kind
+}
+
+func eventSubjectIDKeys(kind string) []string {
+	keys := []string{kind + "_id", "id"}
+	for _, key := range []string{"assignment_id", "signal_id", "intent_id", "actor"} {
+		if key != kind+"_id" {
+			keys = append(keys, key)
+		}
+	}
+	return keys
 }
 
 func eventCausedBy(id string) []string {
