@@ -123,6 +123,7 @@ esac
 	multicaProvisionRestartDaemon = false
 	multicaProvisionWait = 0
 	multicaProvisionControlAddr = "http://127.0.0.1:8787"
+	multicaProvisionHarnessBin = "/abs/mnemon-harness"
 	multicaProvisionManagedRuntime = "noop"
 	multicaProvisionManagedWorkspace = tmp
 	multicaJSON = true
@@ -171,6 +172,7 @@ esac
 		`"MNEMON_MULTICA_WORKSPACE_ID":"ws-1"`,
 		`"MNEMON_CONTROL_ADDR":"http://127.0.0.1:8787"`,
 		`"MNEMON_CONTROL_PRINCIPAL":"planner@team"`,
+		`"MNEMON_HARNESS_BIN":"/abs/mnemon-harness"`,
 		`"MNEMON_MANAGED_RUNTIME":"noop"`,
 		`"MNEMON_MANAGED_WORKSPACE":"` + tmp + `"`,
 	} {
@@ -216,6 +218,7 @@ func restoreMulticaFlags(t *testing.T) {
 	oldProvisionControlAddr := multicaProvisionControlAddr
 	oldProvisionControlToken := multicaProvisionControlToken
 	oldProvisionControlTokenFile := multicaProvisionControlTokenFile
+	oldProvisionHarnessBin := multicaProvisionHarnessBin
 	oldProvisionManagedRuntime := multicaProvisionManagedRuntime
 	oldProvisionManagedCommand := multicaProvisionManagedCommand
 	oldProvisionManagedWorkspace := multicaProvisionManagedWorkspace
@@ -255,6 +258,7 @@ func restoreMulticaFlags(t *testing.T) {
 		multicaProvisionControlAddr = oldProvisionControlAddr
 		multicaProvisionControlToken = oldProvisionControlToken
 		multicaProvisionControlTokenFile = oldProvisionControlTokenFile
+		multicaProvisionHarnessBin = oldProvisionHarnessBin
 		multicaProvisionManagedRuntime = oldProvisionManagedRuntime
 		multicaProvisionManagedCommand = oldProvisionManagedCommand
 		multicaProvisionManagedWorkspace = oldProvisionManagedWorkspace

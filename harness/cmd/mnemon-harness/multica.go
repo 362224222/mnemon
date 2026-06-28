@@ -54,6 +54,7 @@ var (
 	multicaProvisionControlAddr      string
 	multicaProvisionControlToken     string
 	multicaProvisionControlTokenFile string
+	multicaProvisionHarnessBin       string
 	multicaProvisionManagedRuntime   string
 	multicaProvisionManagedCommand   string
 	multicaProvisionManagedWorkspace string
@@ -478,6 +479,7 @@ func multicaParticipantRuntimeEnv(cli driver.MulticaCLI, participant driver.Mult
 	addStringEnv(env, "MNEMON_CONTROL_TOKEN", multicaProvisionControlToken)
 	addStringEnv(env, "MNEMON_CONTROL_TOKEN_FILE", multicaProvisionControlTokenFile)
 	addStringEnv(env, "MNEMON_CONTROL_PRINCIPAL", participant.Principal)
+	addStringEnv(env, "MNEMON_HARNESS_BIN", multicaProvisionHarnessBin)
 	addStringEnv(env, "MNEMON_MANAGED_RUNTIME", multicaProvisionManagedRuntime)
 	addStringEnv(env, "MNEMON_MANAGED_COMMAND", multicaProvisionManagedCommand)
 	addStringEnv(env, "MNEMON_MANAGED_WORKSPACE", multicaProvisionManagedWorkspace)
@@ -669,6 +671,7 @@ func init() {
 	multicaProvisionCmd.Flags().StringVar(&multicaProvisionControlAddr, "mnemon-control-addr", envDefault("MNEMON_CONTROL_ADDR", ""), "Local Mnemon URL injected into participant runtime env")
 	multicaProvisionCmd.Flags().StringVar(&multicaProvisionControlToken, "mnemon-control-token", envDefault("MNEMON_CONTROL_TOKEN", ""), "Local Mnemon bearer token injected into participant runtime env")
 	multicaProvisionCmd.Flags().StringVar(&multicaProvisionControlTokenFile, "mnemon-control-token-file", envDefault("MNEMON_CONTROL_TOKEN_FILE", ""), "Local Mnemon bearer token file injected into participant runtime env")
+	multicaProvisionCmd.Flags().StringVar(&multicaProvisionHarnessBin, "harness-bin", envDefault("MNEMON_HARNESS_BIN", ""), "mnemon-harness executable injected into participant runtime env")
 	multicaProvisionCmd.Flags().StringVar(&multicaProvisionManagedRuntime, "managed-runtime", envDefault("MNEMON_MANAGED_RUNTIME", ""), "managed agent runtime injected into participant env (noop or codex-appserver)")
 	multicaProvisionCmd.Flags().StringVar(&multicaProvisionManagedCommand, "managed-command", envDefault("MNEMON_MANAGED_COMMAND", ""), "managed runtime command injected into participant env")
 	multicaProvisionCmd.Flags().StringVar(&multicaProvisionManagedWorkspace, "managed-workspace", envDefault("MNEMON_MANAGED_WORKSPACE", ""), "managed runtime workspace injected into participant env")
