@@ -1,6 +1,9 @@
 package hostagent
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -31,6 +34,7 @@ func TestRenderThinHookIsGenericLifecycleShim(t *testing.T) {
 		"MEMORY.md",
 		"control pull",
 		"control observe",
+		"TOKEN_ARGS",
 		"assignment",
 		"progress_digest",
 		"agent_profile",
@@ -42,6 +46,57 @@ func TestRenderThinHookIsGenericLifecycleShim(t *testing.T) {
 		if strings.Contains(body, blocked) {
 			t.Fatalf("thin hook must not contain dynamic/per-loop content %q:\n%s", blocked, body)
 		}
+	}
+}
+
+func TestRenderThinHookWakeRendersWithoutTokenFile(t *testing.T) {
+	root := t.TempDir()
+	hookDir := filepath.Join(root, ".codex", "hooks", "mnemon-r1")
+	if err := os.MkdirAll(hookDir, 0o755); err != nil {
+		t.Fatalf("mkdir hook dir: %v", err)
+	}
+	binDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir bin dir: %v", err)
+	}
+
+	hook, err := RenderStandardThinHook("codex", "remind")
+	if err != nil {
+		t.Fatalf("render codex remind hook: %v", err)
+	}
+	hookPath := filepath.Join(hookDir, "remind.sh")
+	if err := os.WriteFile(hookPath, []byte(hook), 0o755); err != nil {
+		t.Fatalf("write hook: %v", err)
+	}
+
+	harnessPath := filepath.Join(binDir, "mnemon-harness")
+	stub := `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == *"--token-file"* ]]; then
+  exit 7
+fi
+if [[ "$*" != *"control render"* || "$*" != *"--intent teamwork.events"* ]]; then
+  exit 8
+fi
+printf '[mnemon:work]\nassignment addressed to this principal\n'
+`
+	if err := os.WriteFile(harnessPath, []byte(stub), 0o755); err != nil {
+		t.Fatalf("write harness stub: %v", err)
+	}
+
+	cmd := exec.Command("bash", hookPath)
+	cmd.Stdin = strings.NewReader("[mnemon:wake]\n")
+	cmd.Env = append(os.Environ(),
+		"MNEMON_HARNESS_BIN="+harnessPath,
+		"MNEMON_CONTROL_ADDR=http://127.0.0.1:8791",
+		"MNEMON_CONTROL_PRINCIPAL=planner@team",
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("run hook without token file: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "[mnemon:work]") {
+		t.Fatalf("wake hook must include rendered governed context, got:\n%s", out)
 	}
 }
 
