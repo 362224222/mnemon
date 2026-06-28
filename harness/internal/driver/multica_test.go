@@ -127,8 +127,8 @@ func TestMulticaCLIAgentEnvUsesStdin(t *testing.T) {
 printf '%s\n' "$*" > "$MULTICA_ARGS_PATH"
 cat > "$MULTICA_STDIN_PATH"
 case "$*" in
-  *"agent env get agent-1"*) printf '{"EXISTING":"****"}\n' ;;
-  *"agent env set agent-1"*) cat "$MULTICA_STDIN_PATH" ;;
+  *"agent env get agent-1"*) printf '{"agent_id":"agent-1","custom_env":{"EXISTING":"****"}}\n' ;;
+  *"agent env set agent-1"*) printf '{"agent_id":"agent-1","custom_env":'; cat "$MULTICA_STDIN_PATH"; printf '}\n' ;;
   *) printf '{}\n' ;;
 esac
 `

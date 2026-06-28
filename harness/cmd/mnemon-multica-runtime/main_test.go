@@ -76,6 +76,21 @@ esac
 					Phase:         eventmodel.PhaseDerived,
 					Event: eventmodel.Event{
 						SchemaVersion: eventmodel.SchemaVersion,
+						ID:            "derived-stale",
+						Type:          "assignment.brief.derived",
+						Subject:       "assignment/asg-stale",
+						Actor:         "mnemond",
+						Audience:      "planner@team",
+						Payload: eventmodel.BuildPayload(nil, map[string]any{
+							"body": "assignment for an older issue",
+						}, nil),
+					},
+					Meta: map[string]any{"presentation_hint": "work"},
+				}, {
+					SchemaVersion: eventmodel.SchemaVersion,
+					Phase:         eventmodel.PhaseDerived,
+					Event: eventmodel.Event{
+						SchemaVersion: eventmodel.SchemaVersion,
 						ID:            "derived-1",
 						Type:          "assignment.brief.derived",
 						Subject:       "assignment/asg-1",

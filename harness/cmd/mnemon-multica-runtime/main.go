@@ -17,6 +17,7 @@ import (
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/driver"
+	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation"
 )
@@ -56,6 +57,7 @@ type runtimeImportResult struct {
 	IssueID             string
 	Identifier          string
 	Title               string
+	Statement           string
 	Principal           string
 	TaskID              string
 	Status              string
@@ -256,6 +258,7 @@ func (s *runtimeRPCState) importIssue(input string) runtimeImportResult {
 	result.IssueID = issue.ID
 	result.Identifier = issue.Identifier
 	result.Title = issue.Title
+	result.Statement = issue.Description
 	externalID := ""
 	if taskID != "" {
 		externalID = "multica-task-" + taskID
@@ -352,8 +355,8 @@ func (s *runtimeRPCState) wakeManagedAgent(result *runtimeImportResult) {
 		result.WakeErr = fmt.Errorf("render managed wake candidates: %w", err)
 		return
 	}
-	candidates := driver.ManagedWakeCandidatesFromRender(result.Principal, resp)
-	if len(candidates) == 0 {
+	candidate, ok := managedWakeCandidateForResult(result.Principal, resp, *result)
+	if !ok {
 		result.WakeStatus = "skipped"
 		result.WakeErr = fmt.Errorf("no managed wake candidate in rendered context")
 		return
@@ -371,7 +374,7 @@ func (s *runtimeRPCState) wakeManagedAgent(result *runtimeImportResult) {
 		Client:    client,
 		Ledger:    driver.NewFileManagedWakeLedger(runtimeManagedLedgerPath(s.Env, workspace)),
 		Now:       func() time.Time { return s.now() },
-	}).Wake(wakeCtx, candidates[0])
+	}).Wake(wakeCtx, candidate)
 	result.WakeTurnID = record.TurnID
 	if err != nil {
 		result.WakeStatus = "failed"
@@ -382,6 +385,52 @@ func (s *runtimeRPCState) wakeManagedAgent(result *runtimeImportResult) {
 	if result.WakeStatus == "" {
 		result.WakeStatus = "completed"
 	}
+}
+
+func managedWakeCandidateForResult(principal string, resp presentation.Response, result runtimeImportResult) (driver.ManagedWakeCandidate, bool) {
+	terms := managedWakeMatchTerms(result)
+	var fallback driver.ManagedWakeCandidate
+	for _, env := range resp.Events {
+		candidates := driver.ManagedWakeCandidatesFromEvents(principal, []eventmodel.EventEnvelope{env})
+		if len(candidates) == 0 {
+			continue
+		}
+		candidates[0].RenderAuditID = resp.AuditID
+		candidates[0].RenderBodyDigest = resp.BodyDigest
+		if fallback.Principal == "" {
+			fallback = candidates[0]
+		}
+		if len(terms) == 0 || eventNarrativeContainsAny(env, terms) {
+			return candidates[0], true
+		}
+	}
+	if len(terms) == 0 && fallback.Principal != "" {
+		return fallback, true
+	}
+	return driver.ManagedWakeCandidate{}, false
+}
+
+func managedWakeMatchTerms(result runtimeImportResult) []string {
+	raw := []string{result.IssueID, result.Identifier, result.Title, result.Statement, result.TaskID}
+	var out []string
+	for _, value := range raw {
+		value = strings.TrimSpace(value)
+		if len(value) >= 3 {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func eventNarrativeContainsAny(env eventmodel.EventEnvelope, terms []string) bool {
+	body, _ := eventmodel.PayloadNarrative(env.Event.Payload)["body"].(string)
+	body = strings.ToLower(body)
+	for _, term := range terms {
+		if strings.Contains(body, strings.ToLower(term)) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *runtimeRPCState) projectImportComment(ctx context.Context, cli driver.MulticaCLI, issue driver.MulticaIssue, externalID string, result *runtimeImportResult) {

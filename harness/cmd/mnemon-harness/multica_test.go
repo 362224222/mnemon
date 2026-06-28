@@ -123,6 +123,8 @@ esac
 	multicaProvisionRestartDaemon = false
 	multicaProvisionWait = 0
 	multicaProvisionControlAddr = "http://127.0.0.1:8787"
+	multicaProvisionManagedRuntime = "noop"
+	multicaProvisionManagedWorkspace = tmp
 	multicaJSON = true
 	t.Setenv("MULTICA_ENV_STDIN_PATH", envStdinPath)
 
@@ -168,6 +170,8 @@ esac
 		`"MNEMON_MULTICA_WORKSPACE_ID":"ws-1"`,
 		`"MNEMON_CONTROL_ADDR":"http://127.0.0.1:8787"`,
 		`"MNEMON_CONTROL_PRINCIPAL":"planner@team"`,
+		`"MNEMON_MANAGED_RUNTIME":"noop"`,
+		`"MNEMON_MANAGED_WORKSPACE":"` + tmp + `"`,
 	} {
 		if !strings.Contains(string(envStdin), want) {
 			t.Fatalf("agent env stdin missing %s:\n%s", want, envStdin)
@@ -211,6 +215,10 @@ func restoreMulticaFlags(t *testing.T) {
 	oldProvisionControlAddr := multicaProvisionControlAddr
 	oldProvisionControlToken := multicaProvisionControlToken
 	oldProvisionControlTokenFile := multicaProvisionControlTokenFile
+	oldProvisionManagedRuntime := multicaProvisionManagedRuntime
+	oldProvisionManagedCommand := multicaProvisionManagedCommand
+	oldProvisionManagedWorkspace := multicaProvisionManagedWorkspace
+	oldProvisionManagedTimeout := multicaProvisionManagedTimeout
 	t.Cleanup(func() {
 		multicaBin = oldBin
 		multicaProfile = oldProfile
@@ -246,6 +254,10 @@ func restoreMulticaFlags(t *testing.T) {
 		multicaProvisionControlAddr = oldProvisionControlAddr
 		multicaProvisionControlToken = oldProvisionControlToken
 		multicaProvisionControlTokenFile = oldProvisionControlTokenFile
+		multicaProvisionManagedRuntime = oldProvisionManagedRuntime
+		multicaProvisionManagedCommand = oldProvisionManagedCommand
+		multicaProvisionManagedWorkspace = oldProvisionManagedWorkspace
+		multicaProvisionManagedTimeout = oldProvisionManagedTimeout
 	})
 	multicaBin = ""
 	multicaProfile = ""
@@ -280,4 +292,8 @@ func restoreMulticaFlags(t *testing.T) {
 	multicaProvisionControlAddr = ""
 	multicaProvisionControlToken = ""
 	multicaProvisionControlTokenFile = ""
+	multicaProvisionManagedRuntime = ""
+	multicaProvisionManagedCommand = ""
+	multicaProvisionManagedWorkspace = ""
+	multicaProvisionManagedTimeout = 0
 }

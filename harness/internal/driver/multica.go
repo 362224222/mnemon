@@ -508,12 +508,9 @@ func (c MulticaCLI) GetAgentEnv(ctx context.Context, agentID string) (map[string
 	if err != nil {
 		return nil, err
 	}
-	var env map[string]string
-	if err := json.Unmarshal([]byte(out.Stdout), &env); err != nil {
+	env, err := decodeMulticaAgentEnv([]byte(out.Stdout))
+	if err != nil {
 		return nil, fmt.Errorf("decode multica agent env: %w", err)
-	}
-	if env == nil {
-		env = map[string]string{}
 	}
 	return env, nil
 }
@@ -537,12 +534,9 @@ func (c MulticaCLI) SetAgentEnv(ctx context.Context, agentID string, env map[str
 	if strings.TrimSpace(out.Stdout) == "" {
 		return env, nil
 	}
-	var updated map[string]string
-	if err := json.Unmarshal([]byte(out.Stdout), &updated); err != nil {
+	updated, err := decodeMulticaAgentEnv([]byte(out.Stdout))
+	if err != nil {
 		return nil, fmt.Errorf("decode updated multica agent env: %w", err)
-	}
-	if updated == nil {
-		updated = map[string]string{}
 	}
 	return updated, nil
 }
@@ -840,6 +834,36 @@ func DecodeMulticaIssue(r io.Reader) (MulticaIssue, error) {
 		return MulticaIssue{}, err
 	}
 	return issue, nil
+}
+
+func decodeMulticaAgentEnv(data []byte) (map[string]string, error) {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, err
+	}
+	if custom, ok := raw["custom_env"]; ok {
+		return decodeMulticaStringMap(custom)
+	}
+	return decodeMulticaStringMap(data)
+}
+
+func decodeMulticaStringMap(data []byte) (map[string]string, error) {
+	var values map[string]any
+	if err := json.Unmarshal(data, &values); err != nil {
+		return nil, err
+	}
+	out := map[string]string{}
+	for key, value := range values {
+		switch v := value.(type) {
+		case string:
+			out[key] = v
+		case nil:
+			out[key] = ""
+		default:
+			out[key] = fmt.Sprint(v)
+		}
+	}
+	return out, nil
 }
 
 func multicaIssueStatement(issue MulticaIssue, fallback string) string {
