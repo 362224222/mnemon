@@ -64,6 +64,7 @@ type runtimeProgressEvent struct {
 	Output     string
 	ExitCode   int
 	DurationMs int64
+	Trace      *driver.ManagedTurnTraceEvent
 }
 
 type runtimeImportResult struct {
@@ -247,6 +248,10 @@ func (s *runtimeRPCState) handle(msg rpcMessage, emit func(rpcMessage) error) er
 			if progressErr != nil {
 				return
 			}
+			if event.Trace != nil {
+				progressErr = emitRuntimeManagedTraceEvent(emit, s.ThreadID, s.TurnID, *event.Trace, s.now())
+				return
+			}
 			if strings.TrimSpace(event.Command) != "" {
 				progressErr = emitRuntimeCommandExecution(emit, s.ThreadID, s.TurnID, s.nextItemID("call"), s.CWD, event, s.now())
 				return
@@ -408,7 +413,7 @@ func (s *runtimeRPCState) importIssue(input string, progress runtimeProgressSink
 	emitRuntimeCommand(progress, "mnemond ingest observe --principal "+result.Principal, fmt.Sprintf("recorded seq=%d duplicate=%v ticked=%v", rec.Seq, rec.Dup, rec.Ticked), 0)
 	emitRuntimeProgress(progress, fmt.Sprintf("Mnemon recorded the issue observation at seq=%d.", rec.Seq))
 	emitRuntimeProgress(progress, "Waking the managed local agent with [mnemon:wake].")
-	earlyHubDeltas := s.wakeManagedAgentWithHubProjection(multicaCtx, cli, client, issue, &result)
+	earlyHubDeltas := s.wakeManagedAgentWithHubProjection(multicaCtx, cli, client, issue, &result, progress)
 	emitRuntimeCommand(progress, "mnemond managed wake --principal "+result.Principal+" [mnemon:wake]", runtimeWakeProgress(result), runtimeExitCode(result.WakeErr))
 	emitRuntimeProgress(progress, runtimeWakeProgress(result))
 	s.writeMulticaHubArtifacts(multicaCtx, cli, client, issue, &result)
@@ -447,7 +452,7 @@ func (s *runtimeRPCState) correlateAssignmentMailbox(ctx context.Context, cli dr
 			emitRuntimeProgress(progress, "Failed to create Local Mnemon control client.")
 		} else {
 			emitRuntimeProgress(progress, "Waking assigned local agent with [mnemon:wake].")
-			s.wakeManagedAgent(result)
+			s.wakeManagedAgent(result, progress)
 			emitRuntimeCommand(progress, "mnemond managed wake --principal "+result.Principal+" [mnemon:wake]", runtimeWakeProgress(*result), runtimeExitCode(result.WakeErr))
 			emitRuntimeProgress(progress, runtimeWakeProgress(*result))
 			s.writeMulticaHubArtifacts(ctx, cli, client, issue, result)
@@ -557,7 +562,7 @@ func assignmentMailboxMarker(result runtimeImportResult) string {
 	return "multica-issue-" + result.IssueID
 }
 
-func (s *runtimeRPCState) wakeManagedAgent(result *runtimeImportResult) {
+func (s *runtimeRPCState) wakeManagedAgent(result *runtimeImportResult, progress runtimeProgressSink) {
 	if result == nil {
 		return
 	}
@@ -615,7 +620,12 @@ func (s *runtimeRPCState) wakeManagedAgent(result *runtimeImportResult) {
 		Principal: result.Principal,
 		Client:    client,
 		Ledger:    driver.NewFileManagedWakeLedger(runtimeManagedLedgerPath(s.Env, workspace)),
-		Now:       func() time.Time { return s.now() },
+		TraceSink: driver.ManagedTurnTraceSinkFunc(func(event driver.ManagedTurnTraceEvent) {
+			if progress != nil {
+				progress(runtimeProgressEvent{Trace: &event})
+			}
+		}),
+		Now: func() time.Time { return s.now() },
 	}).Wake(wakeCtx, candidate)
 	result.WakeTurnID = record.TurnID
 	if err != nil {
@@ -640,12 +650,12 @@ func (d runtimeHubProjectionDelta) active() bool {
 	return d.ChildIssues > 0 || d.FeedbackComments > 0
 }
 
-func (s *runtimeRPCState) wakeManagedAgentWithHubProjection(ctx context.Context, cli driver.MulticaCLI, client *access.Client, rootIssue driver.MulticaIssue, result *runtimeImportResult) []runtimeHubProjectionDelta {
+func (s *runtimeRPCState) wakeManagedAgentWithHubProjection(ctx context.Context, cli driver.MulticaCLI, client *access.Client, rootIssue driver.MulticaIssue, result *runtimeImportResult, progress runtimeProgressSink) []runtimeHubProjectionDelta {
 	if result == nil || client == nil ||
 		!strings.EqualFold(result.HubBackend, driver.MulticaHubBackend) ||
 		result.HubKind != driver.MulticaHubKindSession ||
 		!runtimeMulticaHubWriteEnabled(s.Env) {
-		s.wakeManagedAgent(result)
+		s.wakeManagedAgent(result, progress)
 		return nil
 	}
 	done := make(chan struct{})
@@ -669,7 +679,7 @@ func (s *runtimeRPCState) wakeManagedAgentWithHubProjection(ctx context.Context,
 			}
 		}
 	}(*result)
-	s.wakeManagedAgent(result)
+	s.wakeManagedAgent(result, progress)
 	close(done)
 	var out []runtimeHubProjectionDelta
 	for delta := range deltas {
@@ -1152,6 +1162,85 @@ func writeRuntimeRPC(w io.Writer, msg rpcMessage) error {
 	}
 	_, err = fmt.Fprintln(w, string(data))
 	return err
+}
+
+func emitRuntimeManagedTraceEvent(emit func(rpcMessage) error, threadID, turnID string, event driver.ManagedTurnTraceEvent, now time.Time) error {
+	switch event.Method {
+	case "item/started":
+		item := runtimeManagedTraceItem(event)
+		if len(item) == 0 {
+			return nil
+		}
+		return emit(rpcMessage{
+			Method: "item/started",
+			Params: runtimeItemParams(threadID, turnID, item, "startedAtMs", now.UTC().UnixMilli()),
+		})
+	case "item/completed":
+		item := runtimeManagedTraceItem(event)
+		if len(item) == 0 {
+			return nil
+		}
+		return emit(rpcMessage{
+			Method: "item/completed",
+			Params: runtimeItemParams(threadID, turnID, item, "completedAtMs", now.UTC().UnixMilli()),
+		})
+	case "item/agentMessage/delta":
+		text := strings.TrimSpace(event.Text)
+		if text == "" {
+			return nil
+		}
+		return emit(runtimeAgentDelta(threadID, turnID, runtimeManagedTraceItemID(event), text))
+	default:
+		return nil
+	}
+}
+
+func runtimeManagedTraceItem(event driver.ManagedTurnTraceEvent) map[string]any {
+	if len(event.Item) == 0 {
+		return nil
+	}
+	item, _ := cloneRuntimeAny(event.Item).(map[string]any)
+	if item == nil {
+		return nil
+	}
+	item["id"] = runtimeManagedTraceItemID(event)
+	if _, ok := item["source"]; !ok {
+		item["source"] = "managedCodexAppServer"
+	}
+	if strings.TrimSpace(event.SourceRuntime) != "" {
+		item["mnemonSourceRuntime"] = event.SourceRuntime
+	}
+	if strings.TrimSpace(event.Principal) != "" {
+		item["mnemonPrincipal"] = event.Principal
+	}
+	if strings.TrimSpace(event.TurnID) != "" {
+		item["mnemonManagedTurnId"] = event.TurnID
+	}
+	return item
+}
+
+func runtimeManagedTraceItemID(event driver.ManagedTurnTraceEvent) string {
+	key := firstNonEmpty(event.ItemID, event.Command, event.Text, event.Kind, event.Method)
+	return runtimeTextDigestID("managed", event.SourceRuntime+"\n"+event.TurnID+"\n"+key)
+}
+
+func cloneRuntimeAny(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		out := map[string]any{}
+		for key, item := range typed {
+			out[key] = cloneRuntimeAny(item)
+		}
+		return out
+	case []any:
+		out := make([]any, 0, len(typed))
+		for _, item := range typed {
+			out = append(out, cloneRuntimeAny(item))
+		}
+		return out
+	default:
+		return typed
+	}
 }
 
 func emitRuntimeCommandExecution(emit func(rpcMessage) error, threadID, turnID, itemID, fallbackCWD string, event runtimeProgressEvent, now time.Time) error {

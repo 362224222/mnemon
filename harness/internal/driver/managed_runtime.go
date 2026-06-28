@@ -183,6 +183,10 @@ type CodexAppServerTurnClient struct {
 }
 
 func (c CodexAppServerTurnClient) StartTurn(ctx context.Context, query string) (ManagedTurnResult, error) {
+	return c.StartTurnWithTrace(ctx, query, nil)
+}
+
+func (c CodexAppServerTurnClient) StartTurnWithTrace(ctx context.Context, query string, sink ManagedTurnTraceSink) (ManagedTurnResult, error) {
 	if strings.TrimSpace(query) != ManagedWakeQuery {
 		return ManagedTurnResult{}, fmt.Errorf("managed codex appserver client only accepts %q queries", ManagedWakeQuery)
 	}
@@ -256,7 +260,15 @@ func (c CodexAppServerTurnClient) StartTurn(ctx context.Context, query string) (
 	if _, err := server.Request("turn/start", turnParams, requestTimeout); err != nil {
 		return ManagedTurnResult{}, fmt.Errorf("turn/start: %w", err)
 	}
-	if _, err := server.WaitNotification("turn/completed", turnTimeout, before); err != nil {
+	emitTrace := func(notifications []map[string]any) {
+		if sink == nil {
+			return
+		}
+		for _, event := range ManagedTurnTraceEventsFromCodexNotifications(c.Principal, notifications) {
+			sink.OnManagedTurnTrace(event)
+		}
+	}
+	if _, err := server.WaitNotificationWithCallback("turn/completed", turnTimeout, before, emitTrace); err != nil {
 		text := codexapp.CombinedText(server.NotificationsSince(before))
 		return ManagedTurnResult{TurnID: threadID, Status: "failed", FinalAnswer: text}, fmt.Errorf("wait turn/completed: %w", err)
 	}

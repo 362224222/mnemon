@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation"
@@ -74,6 +75,66 @@ func TestCodexAppServerTurnClientRejectsContextQuery(t *testing.T) {
 	client := CodexAppServerTurnClient{Command: "definitely-not-run"}
 	if _, err := client.StartTurn(context.Background(), "assignment asg1"); err == nil {
 		t.Fatal("codex appserver client must reject non-sentinel queries before starting a process")
+	}
+}
+
+func TestCodexAppServerTurnClientEmitsActivationTrace(t *testing.T) {
+	workspace := t.TempDir()
+	fakeCodex := filepath.Join(workspace, "fake-codex")
+	if err := os.WriteFile(fakeCodex, []byte(`#!/usr/bin/env bash
+while IFS= read -r line; do
+  case "$line" in
+    *'"method":"initialize"'*)
+      printf '{"jsonrpc":"2.0","id":1,"result":{"userAgent":"fake"}}\n'
+      ;;
+    *'"method":"thread/start"'*)
+      printf '{"jsonrpc":"2.0","id":2,"result":{"thread":{"id":"thread-1"}}}\n'
+      ;;
+    *'"method":"turn/start"'*)
+      printf '{"jsonrpc":"2.0","id":3,"result":{"turn":{"id":"turn-1","status":"inProgress"}}}\n'
+      printf '{"jsonrpc":"2.0","method":"item/started","params":{"threadId":"thread-1","turnId":"turn-1","item":{"type":"agentMessage","id":"msg-1","text":"","phase":"commentary"}}}\n'
+      printf '{"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"msg-1","delta":"native trace detail"}}\n'
+      printf '{"jsonrpc":"2.0","method":"item/completed","params":{"threadId":"thread-1","turnId":"turn-1","item":{"type":"agentMessage","id":"msg-1","text":"native trace detail","phase":"final_answer"}}}\n'
+      printf '{"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed"}}}\n'
+      ;;
+  esac
+done
+`), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var traces []ManagedTurnTraceEvent
+	client := CodexAppServerTurnClient{
+		Principal:      "planner@team",
+		Command:        fakeCodex,
+		Workspace:      workspace,
+		TurnTimeout:    5 * time.Second,
+		RequestTimeout: 5 * time.Second,
+	}
+	result, err := client.StartTurnWithTrace(context.Background(), ManagedWakeQuery, ManagedTurnTraceSinkFunc(func(event ManagedTurnTraceEvent) {
+		traces = append(traces, event)
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "completed" || !strings.Contains(result.FinalAnswer, "native trace detail") {
+		t.Fatalf("result = %+v", result)
+	}
+	var sawStart, sawDelta, sawComplete bool
+	for _, event := range traces {
+		if event.Principal != "planner@team" || event.SourceRuntime != ManagedTurnTraceSourceCodexAppServer {
+			t.Fatalf("unexpected trace identity: %+v", event)
+		}
+		switch event.Method {
+		case "item/started":
+			sawStart = event.ItemType == "agentMessage"
+		case "item/agentMessage/delta":
+			sawDelta = event.Text == "native trace detail"
+		case "item/completed":
+			sawComplete = event.Phase == "final_answer"
+		}
+	}
+	if !sawStart || !sawDelta || !sawComplete {
+		t.Fatalf("missing native trace events start=%v delta=%v complete=%v traces=%+v", sawStart, sawDelta, sawComplete, traces)
 	}
 }
 

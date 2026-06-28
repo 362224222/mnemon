@@ -358,6 +358,83 @@ esac
 	}
 }
 
+func TestRuntimeForwardsManagedCodexTraceItemsOnOuterTurn(t *testing.T) {
+	var messages []rpcMessage
+	emit := func(message rpcMessage) error {
+		messages = append(messages, message)
+		return nil
+	}
+	traceStarted := driver.ManagedTurnTraceEvent{
+		SourceRuntime: driver.ManagedTurnTraceSourceCodexAppServer,
+		Principal:     "planner@team",
+		TurnID:        "inner-turn",
+		ItemID:        "inner-msg",
+		Method:        "item/started",
+		ItemType:      "agentMessage",
+		Item: map[string]any{
+			"type":  "agentMessage",
+			"id":    "inner-msg",
+			"text":  "",
+			"phase": "commentary",
+		},
+	}
+	traceDelta := driver.ManagedTurnTraceEvent{
+		SourceRuntime: driver.ManagedTurnTraceSourceCodexAppServer,
+		Principal:     "planner@team",
+		TurnID:        "inner-turn",
+		ItemID:        "inner-msg",
+		Method:        "item/agentMessage/delta",
+		Text:          "native Codex agent detail",
+	}
+	traceCompleted := traceStarted
+	traceCompleted.Method = "item/completed"
+	traceCompleted.Item = map[string]any{
+		"type":  "agentMessage",
+		"id":    "inner-msg",
+		"text":  "native Codex agent detail",
+		"phase": "commentary",
+	}
+	for _, event := range []driver.ManagedTurnTraceEvent{traceStarted, traceDelta, traceCompleted} {
+		if err := emitRuntimeManagedTraceEvent(emit, "outer-thread", "outer-turn", event, fixedRuntimeTime()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(messages) != 3 {
+		t.Fatalf("messages = %+v, want 3", messages)
+	}
+	var itemID string
+	for i, message := range messages {
+		params := message.Params
+		if params["threadId"] != "outer-thread" || params["turnId"] != "outer-turn" {
+			t.Fatalf("message %d not attached to outer turn: %+v", i, message)
+		}
+		switch message.Method {
+		case "item/started", "item/completed":
+			item, _ := params["item"].(map[string]any)
+			if item["id"] == "inner-msg" {
+				t.Fatalf("message %d leaked inner item id: %+v", i, message)
+			}
+			if item["mnemonManagedTurnId"] != "inner-turn" || item["mnemonPrincipal"] != "planner@team" {
+				t.Fatalf("message %d missing trace metadata: %+v", i, item)
+			}
+			if itemID == "" {
+				itemID, _ = item["id"].(string)
+			} else if item["id"] != itemID {
+				t.Fatalf("trace item id changed across lifecycle: first=%q got=%q", itemID, item["id"])
+			}
+		case "item/agentMessage/delta":
+			if params["itemId"] != itemID {
+				t.Fatalf("delta item id = %q, want %q", params["itemId"], itemID)
+			}
+			if params["delta"] != "native Codex agent detail" {
+				t.Fatalf("delta = %+v", params)
+			}
+		default:
+			t.Fatalf("unexpected method %q", message.Method)
+		}
+	}
+}
+
 func TestRuntimeInitializesMulticaRootSessionMetadata(t *testing.T) {
 	tmp := t.TempDir()
 	argsPath := filepath.Join(tmp, "multica.args")
