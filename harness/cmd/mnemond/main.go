@@ -50,6 +50,8 @@ func run(ctx context.Context, args []string, out, errw io.Writer) error {
 			return daemonStatus(args[1:], out, errw)
 		case "logs":
 			return daemonLogs(args[1:], out, errw)
+		case "agent":
+			return runAgent(ctx, args[1:], out, errw)
 		case "serve":
 			args = args[1:]
 		}
