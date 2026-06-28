@@ -43,14 +43,17 @@ var (
 	multicaCommentTitle   string
 	multicaCommentEvents  []string
 
-	multicaProvisionRegistry       string
-	multicaProvisionProjectRoot    string
-	multicaProvisionProfileName    string
-	multicaProvisionRuntimeCommand string
-	multicaProvisionRuntimePath    string
-	multicaProvisionAgentPrefix    string
-	multicaProvisionRestartDaemon  bool
-	multicaProvisionWait           time.Duration
+	multicaProvisionRegistry         string
+	multicaProvisionProjectRoot      string
+	multicaProvisionProfileName      string
+	multicaProvisionRuntimeCommand   string
+	multicaProvisionRuntimePath      string
+	multicaProvisionAgentPrefix      string
+	multicaProvisionRestartDaemon    bool
+	multicaProvisionWait             time.Duration
+	multicaProvisionControlAddr      string
+	multicaProvisionControlToken     string
+	multicaProvisionControlTokenFile string
 )
 
 var multicaCmd = &cobra.Command{
@@ -107,6 +110,7 @@ type multicaProvisionReport struct {
 	CreatedAgents   []string                          `json:"created_agents,omitempty"`
 	RestoredAgents  []string                          `json:"restored_agents,omitempty"`
 	UpdatedAgents   []string                          `json:"updated_agents,omitempty"`
+	UpdatedEnv      []string                          `json:"updated_env,omitempty"`
 	Warnings        []string                          `json:"warnings,omitempty"`
 }
 
@@ -239,6 +243,9 @@ func runMulticaProvision(cmd *cobra.Command, args []string) error {
 	if workspaceID == "" {
 		return fmt.Errorf("--multica-workspace-id is required for provision")
 	}
+	if strings.TrimSpace(multicaProvisionControlToken) != "" && strings.TrimSpace(multicaProvisionControlTokenFile) != "" {
+		return fmt.Errorf("--mnemon-control-token and --mnemon-control-token-file are mutually exclusive")
+	}
 	cli := multicaCLI()
 	if err := ensureMulticaReady(ctx, cli); err != nil {
 		return err
@@ -251,7 +258,8 @@ func runMulticaProvision(cmd *cobra.Command, args []string) error {
 	if runtimeCommand == "" {
 		runtimeCommand = "mnemon-multica-runtime"
 	}
-	report := multicaProvisionReport{WorkspaceID: workspaceID}
+	registryPath := driver.MulticaRegistryPath(multicaProvisionProjectRoot, multicaProvisionRegistry)
+	report := multicaProvisionReport{WorkspaceID: workspaceID, RegistryPath: registryPath}
 	profile, created, err := ensureMulticaRuntimeProfile(ctx, cli, profileName, runtimeCommand)
 	if err != nil {
 		return err
@@ -296,8 +304,6 @@ func runMulticaProvision(cmd *cobra.Command, args []string) error {
 		}
 		agents = upsertMulticaAgent(agents, agent)
 	}
-	registryPath := driver.MulticaRegistryPath(multicaProvisionProjectRoot, multicaProvisionRegistry)
-	report.RegistryPath = registryPath
 	if err := driver.SaveMulticaRegistry(registryPath, driver.MulticaRegistry{
 		SchemaVersion:    1,
 		WorkspaceID:      workspaceID,
@@ -307,8 +313,20 @@ func runMulticaProvision(cmd *cobra.Command, args []string) error {
 	}); err != nil {
 		return err
 	}
+	for _, participant := range report.Participants {
+		updated, err := ensureMulticaParticipantEnv(ctx, cli, participant, registryPath, workspaceID)
+		if err != nil {
+			return err
+		}
+		if updated {
+			report.UpdatedEnv = append(report.UpdatedEnv, participant.AgentID)
+		}
+	}
 	if !multicaProvisionRestartDaemon && strings.TrimSpace(multicaProvisionRuntimePath) != "" && created {
 		report.Warnings = append(report.Warnings, "if the runtime did not appear, restart the Multica daemon so the per-machine runtime path is loaded")
+	}
+	if strings.TrimSpace(multicaProvisionControlAddr) == "" {
+		report.Warnings = append(report.Warnings, "participant env does not include MNEMON_CONTROL_ADDR; runtime turns can complete but will skip local mnemond ingest")
 	}
 	if multicaJSON {
 		enc := json.NewEncoder(cmd.OutOrStdout())
@@ -421,6 +439,68 @@ func ensureMulticaParticipantAgent(ctx context.Context, cli driver.MulticaCLI, a
 		return driver.MulticaAgent{}, "", err
 	}
 	return agent, "created", nil
+}
+
+func ensureMulticaParticipantEnv(ctx context.Context, cli driver.MulticaCLI, participant driver.MulticaParticipantRecord, registryPath, workspaceID string) (bool, error) {
+	if strings.TrimSpace(participant.AgentID) == "" {
+		return false, fmt.Errorf("participant %s is missing a Multica agent id", participant.Principal)
+	}
+	existing, err := cli.GetAgentEnv(ctx, participant.AgentID)
+	if err != nil {
+		return false, fmt.Errorf("read Multica agent env %s: %w", participant.AgentID, err)
+	}
+	merged := cloneStringMap(existing)
+	for key, value := range multicaParticipantRuntimeEnv(cli, participant, registryPath, workspaceID) {
+		merged[key] = value
+	}
+	if sameStringMap(existing, merged) {
+		return false, nil
+	}
+	if _, err := cli.SetAgentEnv(ctx, participant.AgentID, merged); err != nil {
+		return false, fmt.Errorf("write Multica agent env %s: %w", participant.AgentID, err)
+	}
+	return true, nil
+}
+
+func multicaParticipantRuntimeEnv(cli driver.MulticaCLI, participant driver.MulticaParticipantRecord, registryPath, workspaceID string) map[string]string {
+	env := map[string]string{}
+	addStringEnv(env, "MNEMON_MULTICA_REGISTRY", registryPath)
+	addStringEnv(env, "MNEMON_MULTICA_WORKSPACE_ID", workspaceID)
+	addStringEnv(env, "MNEMON_MULTICA_BIN", multicaCLICommand(cli))
+	addStringEnv(env, "MNEMON_MULTICA_PROFILE", multicaProfile)
+	addStringEnv(env, "MNEMON_MULTICA_SERVER_URL", multicaServerURL)
+	addStringEnv(env, "MNEMON_CONTROL_ADDR", multicaProvisionControlAddr)
+	addStringEnv(env, "MNEMON_CONTROL_TOKEN", multicaProvisionControlToken)
+	addStringEnv(env, "MNEMON_CONTROL_TOKEN_FILE", multicaProvisionControlTokenFile)
+	addStringEnv(env, "MNEMON_CONTROL_PRINCIPAL", participant.Principal)
+	return env
+}
+
+func addStringEnv(env map[string]string, key, value string) {
+	value = strings.TrimSpace(value)
+	if value != "" {
+		env[key] = value
+	}
+}
+
+func cloneStringMap(in map[string]string) map[string]string {
+	out := map[string]string{}
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
+func sameStringMap(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for key, value := range a {
+		if b[key] != value {
+			return false
+		}
+	}
+	return true
 }
 
 func multicaParticipantInstructions(participant driver.MulticaParticipantRecord) string {
@@ -575,6 +655,9 @@ func init() {
 	multicaProvisionCmd.Flags().StringVar(&multicaProvisionAgentPrefix, "agent-prefix", "mnemon", "Multica participant agent name prefix")
 	multicaProvisionCmd.Flags().BoolVar(&multicaProvisionRestartDaemon, "restart-daemon", false, "restart the local Multica daemon after setting the runtime path")
 	multicaProvisionCmd.Flags().DurationVar(&multicaProvisionWait, "wait", 30*time.Second, "time to wait for the runtime to appear online")
+	multicaProvisionCmd.Flags().StringVar(&multicaProvisionControlAddr, "mnemon-control-addr", envDefault("MNEMON_CONTROL_ADDR", ""), "Local Mnemon URL injected into participant runtime env")
+	multicaProvisionCmd.Flags().StringVar(&multicaProvisionControlToken, "mnemon-control-token", envDefault("MNEMON_CONTROL_TOKEN", ""), "Local Mnemon bearer token injected into participant runtime env")
+	multicaProvisionCmd.Flags().StringVar(&multicaProvisionControlTokenFile, "mnemon-control-token-file", envDefault("MNEMON_CONTROL_TOKEN_FILE", ""), "Local Mnemon bearer token file injected into participant runtime env")
 
 	multicaCmd.AddCommand(multicaProbeCmd, multicaProvisionCmd, multicaImportIssueCmd, multicaProjectCommentCmd)
 	multicaCmd.GroupID = groupSpine

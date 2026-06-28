@@ -499,6 +499,54 @@ func (c MulticaCLI) UpdateAgent(ctx context.Context, agentID string, req Multica
 	return agent, nil
 }
 
+func (c MulticaCLI) GetAgentEnv(ctx context.Context, agentID string) (map[string]string, error) {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return nil, fmt.Errorf("multica agent id is required")
+	}
+	out, err := c.Run(ctx, []string{"agent", "env", "get", agentID, "--output", "json"}, "")
+	if err != nil {
+		return nil, err
+	}
+	var env map[string]string
+	if err := json.Unmarshal([]byte(out.Stdout), &env); err != nil {
+		return nil, fmt.Errorf("decode multica agent env: %w", err)
+	}
+	if env == nil {
+		env = map[string]string{}
+	}
+	return env, nil
+}
+
+func (c MulticaCLI) SetAgentEnv(ctx context.Context, agentID string, env map[string]string) (map[string]string, error) {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return nil, fmt.Errorf("multica agent id is required")
+	}
+	if env == nil {
+		env = map[string]string{}
+	}
+	data, err := json.Marshal(env)
+	if err != nil {
+		return nil, fmt.Errorf("encode multica agent env: %w", err)
+	}
+	out, err := c.Run(ctx, []string{"agent", "env", "set", agentID, "--custom-env-stdin", "--output", "json"}, string(data))
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(out.Stdout) == "" {
+		return env, nil
+	}
+	var updated map[string]string
+	if err := json.Unmarshal([]byte(out.Stdout), &updated); err != nil {
+		return nil, fmt.Errorf("decode updated multica agent env: %w", err)
+	}
+	if updated == nil {
+		updated = map[string]string{}
+	}
+	return updated, nil
+}
+
 func (c MulticaCLI) CreateIssue(ctx context.Context, req MulticaCreateIssueRequest) (MulticaIssue, error) {
 	if strings.TrimSpace(req.Title) == "" {
 		return MulticaIssue{}, fmt.Errorf("multica issue title is required")

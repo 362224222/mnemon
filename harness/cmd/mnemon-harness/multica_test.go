@@ -90,6 +90,7 @@ func TestMulticaProvisionCreatesParticipantRegistry(t *testing.T) {
 
 	tmp := t.TempDir()
 	bin := filepath.Join(tmp, "multica")
+	envStdinPath := filepath.Join(tmp, "agent-env.jsonl")
 	script := `#!/usr/bin/env sh
 case "$*" in
   *"version --output json"*) printf '{"version":"v0.3.31","commit":"test","date":"now","os":"darwin","arch":"arm64","go":"go"}\n' ;;
@@ -101,6 +102,8 @@ case "$*" in
   *"runtime list"*) printf '[{"id":"runtime-1","name":"Mnemon (Mac)","provider":"codex","status":"online","profile_id":"profile-1","workspace_id":"ws-1"}]\n' ;;
   *"agent list"*) printf '[]\n' ;;
   *"agent create"*) name=""; prev=""; for arg in "$@"; do if [ "$prev" = "--name" ]; then name="$arg"; fi; prev="$arg"; done; printf '{"id":"agent-%s","name":"%s","runtime_id":"runtime-1","status":"idle","visibility":"private","workspace_id":"ws-1"}\n' "$name" "$name" ;;
+  *"agent env get"*) printf '{}\n' ;;
+  *"agent env set"*) cat >> "$MULTICA_ENV_STDIN_PATH"; printf '\n' >> "$MULTICA_ENV_STDIN_PATH"; printf '{}\n' ;;
   *) printf '{}\n' ;;
 esac
 `
@@ -119,7 +122,9 @@ esac
 	multicaProvisionAgentPrefix = "mnemon"
 	multicaProvisionRestartDaemon = false
 	multicaProvisionWait = 0
+	multicaProvisionControlAddr = "http://127.0.0.1:8787"
 	multicaJSON = true
+	t.Setenv("MULTICA_ENV_STDIN_PATH", envStdinPath)
 
 	var out bytes.Buffer
 	multicaProvisionCmd.SetOut(&out)
@@ -136,6 +141,9 @@ esac
 	if report.RuntimeProfile.ID != "profile-1" || report.Runtime.ID != "runtime-1" || len(report.Participants) != 5 {
 		t.Fatalf("report mismatch: %+v", report)
 	}
+	if len(report.UpdatedEnv) != 5 {
+		t.Fatalf("expected env updates for every participant: %+v", report)
+	}
 	reg, ok, err := driver.LoadMulticaRegistry(registryPath)
 	if err != nil {
 		t.Fatal(err)
@@ -149,6 +157,20 @@ esac
 	for _, participant := range reg.Participants {
 		if !strings.HasPrefix(participant.AgentID, "agent-mnemon-") {
 			t.Fatalf("participant missing agent id: %+v", participant)
+		}
+	}
+	envStdin, err := os.ReadFile(envStdinPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`"MNEMON_MULTICA_REGISTRY":"` + registryPath + `"`,
+		`"MNEMON_MULTICA_WORKSPACE_ID":"ws-1"`,
+		`"MNEMON_CONTROL_ADDR":"http://127.0.0.1:8787"`,
+		`"MNEMON_CONTROL_PRINCIPAL":"planner@team"`,
+	} {
+		if !strings.Contains(string(envStdin), want) {
+			t.Fatalf("agent env stdin missing %s:\n%s", want, envStdin)
 		}
 	}
 }
@@ -186,6 +208,9 @@ func restoreMulticaFlags(t *testing.T) {
 	oldProvisionAgentPrefix := multicaProvisionAgentPrefix
 	oldProvisionRestartDaemon := multicaProvisionRestartDaemon
 	oldProvisionWait := multicaProvisionWait
+	oldProvisionControlAddr := multicaProvisionControlAddr
+	oldProvisionControlToken := multicaProvisionControlToken
+	oldProvisionControlTokenFile := multicaProvisionControlTokenFile
 	t.Cleanup(func() {
 		multicaBin = oldBin
 		multicaProfile = oldProfile
@@ -218,6 +243,9 @@ func restoreMulticaFlags(t *testing.T) {
 		multicaProvisionAgentPrefix = oldProvisionAgentPrefix
 		multicaProvisionRestartDaemon = oldProvisionRestartDaemon
 		multicaProvisionWait = oldProvisionWait
+		multicaProvisionControlAddr = oldProvisionControlAddr
+		multicaProvisionControlToken = oldProvisionControlToken
+		multicaProvisionControlTokenFile = oldProvisionControlTokenFile
 	})
 	multicaBin = ""
 	multicaProfile = ""
@@ -249,4 +277,7 @@ func restoreMulticaFlags(t *testing.T) {
 	multicaProvisionAgentPrefix = "mnemon"
 	multicaProvisionRestartDaemon = false
 	multicaProvisionWait = 30 * 1_000_000_000
+	multicaProvisionControlAddr = ""
+	multicaProvisionControlToken = ""
+	multicaProvisionControlTokenFile = ""
 }

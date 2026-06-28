@@ -118,6 +118,64 @@ printf 'Server:  https://api.multica.ai\nUser:    Test User\nToken:   mul_test..
 	}
 }
 
+func TestMulticaCLIAgentEnvUsesStdin(t *testing.T) {
+	tmp := t.TempDir()
+	argsPath := filepath.Join(tmp, "args.txt")
+	stdinPath := filepath.Join(tmp, "stdin.txt")
+	bin := filepath.Join(tmp, "multica")
+	script := `#!/usr/bin/env sh
+printf '%s\n' "$*" > "$MULTICA_ARGS_PATH"
+cat > "$MULTICA_STDIN_PATH"
+case "$*" in
+  *"agent env get agent-1"*) printf '{"EXISTING":"****"}\n' ;;
+  *"agent env set agent-1"*) cat "$MULTICA_STDIN_PATH" ;;
+  *) printf '{}\n' ;;
+esac
+`
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cli := MulticaCLI{
+		Command: bin,
+		Env: append(os.Environ(),
+			"MULTICA_ARGS_PATH="+argsPath,
+			"MULTICA_STDIN_PATH="+stdinPath,
+		),
+	}
+	env, err := cli.GetAgentEnv(context.Background(), "agent-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if env["EXISTING"] != "****" {
+		t.Fatalf("env = %+v", env)
+	}
+	updated, err := cli.SetAgentEnv(context.Background(), "agent-1", map[string]string{
+		"EXISTING":                "****",
+		"MNEMON_CONTROL_TOKEN":    "secret-token",
+		"MNEMON_MULTICA_REGISTRY": "/tmp/registry.json",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated["MNEMON_CONTROL_TOKEN"] != "secret-token" {
+		t.Fatalf("updated env = %+v", updated)
+	}
+	args, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(args), "secret-token") || !strings.Contains(string(args), "agent env set agent-1 --custom-env-stdin --output json") {
+		t.Fatalf("env update used unsafe args: %q", string(args))
+	}
+	stdin, err := os.ReadFile(stdinPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(stdin), `"MNEMON_CONTROL_TOKEN":"secret-token"`) {
+		t.Fatalf("env JSON was not written to stdin: %s", stdin)
+	}
+}
+
 func TestMulticaCLIProvisioningCommandsUseExpectedShapes(t *testing.T) {
 	tmp := t.TempDir()
 	argsPath := filepath.Join(tmp, "args.txt")
