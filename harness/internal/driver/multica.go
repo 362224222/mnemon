@@ -686,8 +686,13 @@ type MulticaIssueSignalOptions struct {
 	Scope        string
 	TTL          string
 	WhyTeamwork  string
+	WorkspaceID  string
+	TaskID       string
+	AgentID      string
+	Principal    string
 	EvidenceRefs []string
 	ContextRefs  []string
+	ExternalID   string
 }
 
 type MulticaObservedDraft struct {
@@ -724,6 +729,10 @@ func BuildMulticaIssueTeamworkSignal(issue MulticaIssue, opts MulticaIssueSignal
 		"scope":                     scope,
 		"ttl":                       ttl,
 	}
+	addMulticaRuleString(rule, "external_workspace_id", opts.WorkspaceID)
+	addMulticaRuleString(rule, "external_task_id", opts.TaskID)
+	addMulticaRuleString(rule, "external_agent_id", opts.AgentID)
+	addMulticaRuleString(rule, "principal", opts.Principal)
 	narrative := map[string]any{
 		"title":        title,
 		"statement":    multicaIssueStatement(issue, title),
@@ -740,9 +749,13 @@ func BuildMulticaIssueTeamworkSignal(issue MulticaIssue, opts MulticaIssueSignal
 	} else {
 		refs["evidence_refs"] = []string{correlation}
 	}
+	externalID := strings.TrimSpace(opts.ExternalID)
+	if externalID == "" {
+		externalID = "multica-issue-" + issue.ID
+	}
 	return MulticaObservedDraft{
 		EventType:  "teamwork_signal.write_candidate.observed",
-		ExternalID: "multica-issue-" + issue.ID,
+		ExternalID: externalID,
 		Payload:    eventmodel.BuildPayload(rule, narrative, refs),
 	}, nil
 }
@@ -800,4 +813,11 @@ func cleanMulticaRefs(values []string) []string {
 		out = append(out, value)
 	}
 	return out
+}
+
+func addMulticaRuleString(rule map[string]any, key, value string) {
+	value = strings.TrimSpace(value)
+	if value != "" {
+		rule[key] = value
+	}
 }
