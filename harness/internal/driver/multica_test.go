@@ -322,6 +322,169 @@ func TestFormatMulticaProjectionCommentCarriesStableMarkers(t *testing.T) {
 	}
 }
 
+func TestMulticaHubMetadataDetectsAssignmentMailbox(t *testing.T) {
+	issue := MulticaIssue{
+		ID: "issue-2",
+		Metadata: map[string]any{
+			"metadata": []any{
+				map[string]any{"key": MulticaMetadataHubBackend, "value": MulticaHubBackend},
+				map[string]any{"key": MulticaMetadataKind, "value": MulticaHubKindAssignmentMailbox},
+				map[string]any{"key": MulticaMetadataAssignmentID, "value": "assignment-1"},
+				map[string]any{"key": MulticaMetadataRootIssueID, "value": "root-1"},
+				map[string]any{"key": MulticaMetadataPrincipal, "value": "worker@team"},
+			},
+		},
+	}
+	if !IsMulticaAssignmentMailboxIssue(issue) {
+		t.Fatalf("issue was not detected as assignment mailbox: %+v", MulticaIssueHubMetadata(issue))
+	}
+	meta := MulticaIssueHubMetadata(issue)
+	if meta.RootIssueID != "root-1" || meta.Principal != "worker@team" {
+		t.Fatalf("metadata mismatch: %+v", meta)
+	}
+	back := meta.Map()
+	if back[MulticaMetadataHubBackend] != MulticaHubBackend {
+		t.Fatalf("metadata map missing backend: %+v", back)
+	}
+}
+
+func TestMulticaAssignmentFingerprintStable(t *testing.T) {
+	left := MulticaAssignmentFingerprint(MulticaAssignmentFingerprintInput{
+		AssignmentID:     " assignment-1 ",
+		Assignee:         "worker@team",
+		Scope:            "docs",
+		ExpectedWork:     "write the API notes",
+		ExpectedFeedback: "summary",
+		ContextRefs:      []string{"ctx-b", "ctx-a", "ctx-a"},
+		EvidenceRefs:     []string{" ev-1 "},
+		CorrelationID:    "session-1",
+	})
+	right := MulticaAssignmentFingerprint(MulticaAssignmentFingerprintInput{
+		AssignmentID:     "assignment-1",
+		Assignee:         " worker@team ",
+		Scope:            "docs",
+		ExpectedWork:     "write the API notes",
+		ExpectedFeedback: "summary",
+		ContextRefs:      []string{"ctx-a", "ctx-b"},
+		EvidenceRefs:     []string{"ev-1"},
+		CorrelationID:    "session-1",
+	})
+	if left != right {
+		t.Fatalf("fingerprint should be stable across whitespace/order/dedup:\nleft=%s\nright=%s", left, right)
+	}
+	if !strings.HasPrefix(left, "sha256:") {
+		t.Fatalf("fingerprint should carry algorithm prefix: %q", left)
+	}
+}
+
+func TestFileMulticaHubLedgerDedupesRecords(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "hub-ledger.jsonl")
+	ledger := NewFileMulticaHubLedger(path)
+	source := MulticaHubLedgerSource{
+		SessionID:             "session-1",
+		AssignmentID:          "assignment-1",
+		AssignmentFingerprint: "sha256:abc",
+		Principal:             "worker@team",
+		ProjectionKind:        "assignment",
+	}
+	record := MulticaHubLedgerRecord{
+		Kind:   MulticaHubKindAssignmentMailbox,
+		Source: source,
+		Target: MulticaHubLedgerTarget{
+			RootIssueID:  "root-1",
+			ChildIssueID: "child-1",
+			Status:       "created",
+		},
+	}
+	if err := ledger.Record(record); err != nil {
+		t.Fatal(err)
+	}
+	if err := ledger.Record(record); err != nil {
+		t.Fatal(err)
+	}
+	records, err := NewFileMulticaHubLedger(path).Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("ledger should keep one record for the same source key, got %d: %+v", len(records), records)
+	}
+	found, ok, err := NewFileMulticaHubLedger(path).Find(MulticaHubKindAssignmentMailbox, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || found.Target.ChildIssueID != "child-1" {
+		t.Fatalf("ledger find mismatch: ok=%v record=%+v", ok, found)
+	}
+}
+
+func TestMulticaCLIChildrenAndMetadataCommands(t *testing.T) {
+	tmp := t.TempDir()
+	argsPath := filepath.Join(tmp, "args.txt")
+	bin := filepath.Join(tmp, "multica")
+	script := `#!/usr/bin/env sh
+printf '%s\n' "$*" >> "$MULTICA_ARGS_PATH"
+case "$*" in
+  *"issue children root-1"*) printf '{"children":[{"id":"child-1","identifier":"TEA-2","title":"Assignment","metadata":{"mnemon.kind":"assignment_mailbox"}}]}\n' ;;
+  *"issue metadata list child-1"*) printf '[{"key":"mnemon.kind","value":"assignment_mailbox"},{"key":"mnemon.assignment_id","value":"assignment-1"}]\n' ;;
+  *"issue metadata get child-1 --key mnemon.kind"*) printf '{"key":"mnemon.kind","value":"assignment_mailbox"}\n' ;;
+  *"issue metadata set child-1"*) printf '{}\n' ;;
+  *) printf '{}\n' ;;
+esac
+`
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cli := MulticaCLI{
+		Command: bin,
+		Env: append(os.Environ(),
+			"MULTICA_ARGS_PATH="+argsPath,
+		),
+	}
+	children, err := cli.ListIssueChildren(context.Background(), "root-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(children) != 1 || children[0].ID != "child-1" {
+		t.Fatalf("children = %+v", children)
+	}
+	meta, err := cli.ListIssueMetadata(context.Background(), "child-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta[MulticaMetadataKind] != MulticaHubKindAssignmentMailbox || meta[MulticaMetadataAssignmentID] != "assignment-1" {
+		t.Fatalf("metadata = %+v", meta)
+	}
+	value, ok, err := cli.GetIssueMetadata(context.Background(), "child-1", MulticaMetadataKind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || value != MulticaHubKindAssignmentMailbox {
+		t.Fatalf("metadata get = %q ok=%v", value, ok)
+	}
+	if err := cli.SetIssueMetadataMap(context.Background(), "child-1", map[string]string{
+		"b": "two",
+		"a": "one",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	args := mustReadDriverTestFile(t, argsPath)
+	for _, want := range []string{
+		"issue children root-1 --output json",
+		"issue metadata list child-1 --output json",
+		"issue metadata get child-1 --key mnemon.kind --output json",
+		"issue metadata set child-1 --key a --value one --type string --output json",
+		"issue metadata set child-1 --key b --value two --type string --output json",
+	} {
+		if !strings.Contains(args, want) {
+			t.Fatalf("args missing %q:\n%s", want, args)
+		}
+	}
+	if strings.Index(args, "--key a") > strings.Index(args, "--key b") {
+		t.Fatalf("metadata map should be written in deterministic key order:\n%s", args)
+	}
+}
+
 func mustReadDriverTestFile(t *testing.T, path string) string {
 	t.Helper()
 	data, err := os.ReadFile(path)

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
 
@@ -639,6 +640,69 @@ func (c MulticaCLI) SetIssueMetadata(ctx context.Context, issueID, key, value, v
 	return err
 }
 
+func (c MulticaCLI) SetIssueMetadataMap(ctx context.Context, issueID string, values map[string]string) error {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if err := c.SetIssueMetadata(ctx, issueID, key, values[key], "string"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c MulticaCLI) GetIssueMetadata(ctx context.Context, issueID, key string) (string, bool, error) {
+	issueID = strings.TrimSpace(issueID)
+	key = strings.TrimSpace(key)
+	if issueID == "" {
+		return "", false, fmt.Errorf("multica issue id is required")
+	}
+	if key == "" {
+		return "", false, fmt.Errorf("multica metadata key is required")
+	}
+	out, err := c.Run(ctx, []string{"issue", "metadata", "get", issueID, "--key", key, "--output", "json"}, "")
+	if err != nil {
+		return "", false, err
+	}
+	meta, err := decodeMulticaMetadataOutput([]byte(out.Stdout))
+	if err != nil {
+		return "", false, err
+	}
+	value, ok := meta[key]
+	return value, ok, nil
+}
+
+func (c MulticaCLI) ListIssueMetadata(ctx context.Context, issueID string) (map[string]string, error) {
+	issueID = strings.TrimSpace(issueID)
+	if issueID == "" {
+		return nil, fmt.Errorf("multica issue id is required")
+	}
+	out, err := c.Run(ctx, []string{"issue", "metadata", "list", issueID, "--output", "json"}, "")
+	if err != nil {
+		return nil, err
+	}
+	return decodeMulticaMetadataOutput([]byte(out.Stdout))
+}
+
+func (c MulticaCLI) ListIssueChildren(ctx context.Context, parentID string) ([]MulticaIssue, error) {
+	parentID = strings.TrimSpace(parentID)
+	if parentID == "" {
+		return nil, fmt.Errorf("multica parent issue id is required")
+	}
+	out, err := c.Run(ctx, []string{"issue", "children", parentID, "--output", "json"}, "")
+	if err != nil {
+		return nil, err
+	}
+	issues, err := decodeMulticaIssueListOutput([]byte(out.Stdout))
+	if err != nil {
+		return nil, err
+	}
+	return issues, nil
+}
+
 func (c MulticaCLI) ListIssueRuns(ctx context.Context, issueID string) ([]MulticaIssueRun, error) {
 	issueID = strings.TrimSpace(issueID)
 	if issueID == "" {
@@ -834,6 +898,74 @@ func DecodeMulticaIssue(r io.Reader) (MulticaIssue, error) {
 		return MulticaIssue{}, err
 	}
 	return issue, nil
+}
+
+func decodeMulticaMetadataOutput(data []byte) (map[string]string, error) {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	var raw any
+	if err := dec.Decode(&raw); err != nil {
+		return nil, fmt.Errorf("decode multica metadata: %w", err)
+	}
+	return NormalizeMulticaMetadata(raw), nil
+}
+
+func decodeMulticaIssueListOutput(data []byte) ([]MulticaIssue, error) {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	var raw any
+	if err := dec.Decode(&raw); err != nil {
+		return nil, fmt.Errorf("decode multica issue children: %w", err)
+	}
+	var out []MulticaIssue
+	seen := map[string]bool{}
+	var walk func(any)
+	walk = func(v any) {
+		switch value := v.(type) {
+		case []any:
+			for _, item := range value {
+				walk(item)
+			}
+		case map[string]any:
+			if issue, ok := multicaIssueFromRawMap(value); ok {
+				if !seen[issue.ID] {
+					seen[issue.ID] = true
+					out = append(out, issue)
+				}
+				return
+			}
+			for _, item := range value {
+				walk(item)
+			}
+		}
+	}
+	walk(raw)
+	return out, nil
+}
+
+func multicaIssueFromRawMap(raw map[string]any) (MulticaIssue, bool) {
+	id, _ := raw["id"].(string)
+	if strings.TrimSpace(id) == "" {
+		return MulticaIssue{}, false
+	}
+	if _, ok := raw["title"]; !ok {
+		if _, ok := raw["identifier"]; !ok {
+			if _, ok := raw["description"]; !ok {
+				if _, ok := raw["status"]; !ok {
+					return MulticaIssue{}, false
+				}
+			}
+		}
+	}
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return MulticaIssue{}, false
+	}
+	var issue MulticaIssue
+	if err := json.Unmarshal(data, &issue); err != nil {
+		return MulticaIssue{}, false
+	}
+	return issue, true
 }
 
 func decodeMulticaAgentEnv(data []byte) (map[string]string, error) {
