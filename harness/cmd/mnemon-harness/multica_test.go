@@ -85,6 +85,95 @@ func TestMulticaImportIssueWritesObservedDraftToLocalIngest(t *testing.T) {
 	}
 }
 
+func TestMulticaParticipantRegisterAdoptsExistingUIAgent(t *testing.T) {
+	restoreMulticaFlags(t)
+
+	tmp := t.TempDir()
+	bin := filepath.Join(tmp, "multica")
+	envStdinPath := filepath.Join(tmp, "agent-env.jsonl")
+	argsPath := filepath.Join(tmp, "args.log")
+	script := `#!/usr/bin/env sh
+printf '%s\n' "$*" >> "$MULTICA_ARGS_PATH"
+case "$*" in
+  *"version --output json"*) printf '{"version":"v0.3.31","commit":"test","date":"now","os":"darwin","arch":"arm64","go":"go"}\n' ;;
+  *"auth status"*) printf 'Server: https://api.multica.ai\nUser: Test\n' >&2 ;;
+  *"daemon status --output json"*) printf '{"status":"running"}\n' ;;
+  *"agent list"*) printf '[{"id":"agent-ui-reviewer","name":"ui-reviewer","description":"Created in UI","runtime_id":"runtime-ui","status":"idle","visibility":"workspace","workspace_id":"ws-ui"}]\n' ;;
+  *"agent env get"*) printf '{}\n' ;;
+  *"agent env set"*) cat >> "$MULTICA_ENV_STDIN_PATH"; printf '\n' >> "$MULTICA_ENV_STDIN_PATH"; printf '{}\n' ;;
+  *"agent create"*|*"agent update"*|*"agent restore"*) printf 'unexpected mutation: %s\n' "$*" >&2; exit 42 ;;
+  *) printf '{}\n' ;;
+esac
+`
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	registryPath := filepath.Join(tmp, "registry.json")
+	multicaBin = bin
+	multicaProfile = "desktop-api.multica.ai"
+	multicaWorkspaceID = "ws-ui"
+	multicaParticipantRegistry = registryPath
+	multicaParticipantAgentName = "ui-reviewer"
+	multicaParticipantPrincipal = "reviewer@team"
+	multicaParticipantRole = "reviewer"
+	multicaParticipantControlAddr = "http://127.0.0.1:8791"
+	multicaParticipantHarnessBin = "/abs/mnemon-harness"
+	multicaParticipantManagedRuntime = "codex-appserver"
+	multicaParticipantManagedCommand = "codex"
+	multicaParticipantManagedWorkspace = tmp
+	multicaJSON = true
+	t.Setenv("MULTICA_ARGS_PATH", argsPath)
+	t.Setenv("MULTICA_ENV_STDIN_PATH", envStdinPath)
+
+	var out bytes.Buffer
+	multicaParticipantRegisterCmd.SetOut(&out)
+	t.Cleanup(func() {
+		multicaParticipantRegisterCmd.SetOut(os.Stdout)
+	})
+	if err := runMulticaParticipantRegister(multicaParticipantRegisterCmd, nil); err != nil {
+		t.Fatalf("participant register: %v", err)
+	}
+	var report multicaParticipantRegisterReport
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatalf("register output must be JSON: %v\n%s", err, out.String())
+	}
+	if report.AgentAction != "reused" || !report.UpdatedEnv {
+		t.Fatalf("register report mismatch: %+v", report)
+	}
+	if report.Participant.Principal != "reviewer@team" || report.Participant.AgentID != "agent-ui-reviewer" || report.Participant.AgentName != "ui-reviewer" {
+		t.Fatalf("participant mismatch: %+v", report.Participant)
+	}
+	reg, ok, err := driver.LoadMulticaRegistry(registryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || reg.WorkspaceID != "ws-ui" || reg.RuntimeID != "runtime-ui" || len(reg.Participants) != 1 {
+		t.Fatalf("registry mismatch: ok=%v reg=%+v", ok, reg)
+	}
+	envStdin, err := os.ReadFile(envStdinPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`"MNEMON_CONTROL_PRINCIPAL":"reviewer@team"`,
+		`"MNEMON_HUB_BACKEND":"multica"`,
+		`"MNEMON_MULTICA_REGISTRY":"` + registryPath + `"`,
+		`"MNEMON_MANAGED_RUNTIME":"codex-appserver"`,
+		`"MNEMON_MANAGED_COMMAND":"codex"`,
+	} {
+		if !strings.Contains(string(envStdin), want) {
+			t.Fatalf("agent env stdin missing %s:\n%s", want, envStdin)
+		}
+	}
+	argsLog, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(argsLog), "agent create") || strings.Contains(string(argsLog), "agent update") {
+		t.Fatalf("register must adopt without creating/updating the UI agent:\n%s", argsLog)
+	}
+}
+
 func TestMulticaProvisionCreatesParticipantRegistry(t *testing.T) {
 	restoreMulticaFlags(t)
 
@@ -223,6 +312,23 @@ func restoreMulticaFlags(t *testing.T) {
 	oldProvisionManagedCommand := multicaProvisionManagedCommand
 	oldProvisionManagedWorkspace := multicaProvisionManagedWorkspace
 	oldProvisionManagedTimeout := multicaProvisionManagedTimeout
+	oldParticipantRegistry := multicaParticipantRegistry
+	oldParticipantProjectRoot := multicaParticipantProjectRoot
+	oldParticipantAgentID := multicaParticipantAgentID
+	oldParticipantAgentName := multicaParticipantAgentName
+	oldParticipantPrincipal := multicaParticipantPrincipal
+	oldParticipantRole := multicaParticipantRole
+	oldParticipantRuntimeID := multicaParticipantRuntimeID
+	oldParticipantCreateIfMissing := multicaParticipantCreateIfMissing
+	oldParticipantSyncAgent := multicaParticipantSyncAgent
+	oldParticipantControlAddr := multicaParticipantControlAddr
+	oldParticipantControlToken := multicaParticipantControlToken
+	oldParticipantControlTokenFile := multicaParticipantControlTokenFile
+	oldParticipantHarnessBin := multicaParticipantHarnessBin
+	oldParticipantManagedRuntime := multicaParticipantManagedRuntime
+	oldParticipantManagedCommand := multicaParticipantManagedCommand
+	oldParticipantManagedWorkspace := multicaParticipantManagedWorkspace
+	oldParticipantManagedTimeout := multicaParticipantManagedTimeout
 	t.Cleanup(func() {
 		multicaBin = oldBin
 		multicaProfile = oldProfile
@@ -263,6 +369,23 @@ func restoreMulticaFlags(t *testing.T) {
 		multicaProvisionManagedCommand = oldProvisionManagedCommand
 		multicaProvisionManagedWorkspace = oldProvisionManagedWorkspace
 		multicaProvisionManagedTimeout = oldProvisionManagedTimeout
+		multicaParticipantRegistry = oldParticipantRegistry
+		multicaParticipantProjectRoot = oldParticipantProjectRoot
+		multicaParticipantAgentID = oldParticipantAgentID
+		multicaParticipantAgentName = oldParticipantAgentName
+		multicaParticipantPrincipal = oldParticipantPrincipal
+		multicaParticipantRole = oldParticipantRole
+		multicaParticipantRuntimeID = oldParticipantRuntimeID
+		multicaParticipantCreateIfMissing = oldParticipantCreateIfMissing
+		multicaParticipantSyncAgent = oldParticipantSyncAgent
+		multicaParticipantControlAddr = oldParticipantControlAddr
+		multicaParticipantControlToken = oldParticipantControlToken
+		multicaParticipantControlTokenFile = oldParticipantControlTokenFile
+		multicaParticipantHarnessBin = oldParticipantHarnessBin
+		multicaParticipantManagedRuntime = oldParticipantManagedRuntime
+		multicaParticipantManagedCommand = oldParticipantManagedCommand
+		multicaParticipantManagedWorkspace = oldParticipantManagedWorkspace
+		multicaParticipantManagedTimeout = oldParticipantManagedTimeout
 	})
 	multicaBin = ""
 	multicaProfile = ""
@@ -301,4 +424,21 @@ func restoreMulticaFlags(t *testing.T) {
 	multicaProvisionManagedCommand = ""
 	multicaProvisionManagedWorkspace = ""
 	multicaProvisionManagedTimeout = 0
+	multicaParticipantRegistry = ""
+	multicaParticipantProjectRoot = "."
+	multicaParticipantAgentID = ""
+	multicaParticipantAgentName = ""
+	multicaParticipantPrincipal = ""
+	multicaParticipantRole = ""
+	multicaParticipantRuntimeID = ""
+	multicaParticipantCreateIfMissing = false
+	multicaParticipantSyncAgent = false
+	multicaParticipantControlAddr = ""
+	multicaParticipantControlToken = ""
+	multicaParticipantControlTokenFile = ""
+	multicaParticipantHarnessBin = ""
+	multicaParticipantManagedRuntime = ""
+	multicaParticipantManagedCommand = ""
+	multicaParticipantManagedWorkspace = ""
+	multicaParticipantManagedTimeout = 0
 }
