@@ -54,21 +54,30 @@ type runtimeRPCState struct {
 }
 
 type runtimeImportResult struct {
-	IssueID             string
-	Identifier          string
-	Title               string
-	Statement           string
-	Principal           string
-	TaskID              string
-	Status              string
-	Receipt             *access.IngestReceipt
-	ProjectionStatus    string
-	ProjectionCommentID string
-	ProjectionErr       error
-	WakeStatus          string
-	WakeTurnID          string
-	WakeErr             error
-	Err                 error
+	IssueID               string
+	Identifier            string
+	Title                 string
+	Statement             string
+	Principal             string
+	TaskID                string
+	HubMetadata           driver.MulticaHubMetadata
+	HubBackend            string
+	HubKind               string
+	SessionID             string
+	CorrelationID         string
+	RootIssueID           string
+	AssignmentID          string
+	AssignmentFingerprint string
+	MatchTerms            []string
+	Status                string
+	Receipt               *access.IngestReceipt
+	ProjectionStatus      string
+	ProjectionCommentID   string
+	ProjectionErr         error
+	WakeStatus            string
+	WakeTurnID            string
+	WakeErr               error
+	Err                   error
 }
 
 func main() {
@@ -259,6 +268,12 @@ func (s *runtimeRPCState) importIssue(input string) runtimeImportResult {
 	result.Identifier = issue.Identifier
 	result.Title = issue.Title
 	result.Statement = issue.Description
+	result.HubMetadata = driver.MulticaIssueHubMetadata(issue)
+	applyMulticaHubMetadata(&result, issue)
+	result.HubBackend = firstNonEmpty(result.HubBackend, envValue(s.Env, "MNEMON_HUB_BACKEND"))
+	if result.HubMetadata.IsAssignmentMailbox() {
+		return s.correlateAssignmentMailbox(ctx, cli, issue, &result)
+	}
 	externalID := ""
 	if taskID != "" {
 		externalID = "multica-task-" + taskID
@@ -283,6 +298,18 @@ func (s *runtimeRPCState) importIssue(input string) runtimeImportResult {
 		result.Status = "failed"
 		result.Err = err
 		return result
+	}
+	if strings.EqualFold(result.HubBackend, driver.MulticaHubBackend) {
+		ensureRootSessionHubFields(&result, issue)
+		addPayloadRuleString(draft.Payload, "hub_backend", driver.MulticaHubBackend)
+		addPayloadRuleString(draft.Payload, "root_issue_id", result.RootIssueID)
+		addPayloadRuleString(draft.Payload, "session_id", result.SessionID)
+		addPayloadRuleString(draft.Payload, "source_issue_id", issue.ID)
+		if err := cli.SetIssueMetadataMap(ctx, issue.ID, rootSessionMetadata(result, draft, s.now())); err != nil {
+			result.Status = "failed"
+			result.Err = fmt.Errorf("set Multica root session metadata: %w", err)
+			return result
+		}
 	}
 	addr := strings.TrimSpace(envValue(s.Env, "MNEMON_CONTROL_ADDR"))
 	if addr == "" {
@@ -313,6 +340,122 @@ func (s *runtimeRPCState) importIssue(input string) runtimeImportResult {
 	s.wakeManagedAgent(&result)
 	s.projectImportComment(ctx, cli, issue, draft.ExternalID, &result)
 	return result
+}
+
+func (s *runtimeRPCState) correlateAssignmentMailbox(ctx context.Context, cli driver.MulticaCLI, issue driver.MulticaIssue, result *runtimeImportResult) runtimeImportResult {
+	ensureAssignmentHubFields(result, issue)
+	result.Status = "correlated"
+	result.MatchTerms = cleanRuntimeTerms(
+		result.AssignmentID,
+		result.AssignmentFingerprint,
+		result.HubMetadata.EventID,
+		string(eventmodel.Subject("assignment", result.AssignmentID)),
+	)
+	addr := strings.TrimSpace(envValue(s.Env, "MNEMON_CONTROL_ADDR"))
+	if addr == "" {
+		result.WakeStatus = "skipped"
+		result.WakeErr = fmt.Errorf("MNEMON_CONTROL_ADDR is not set")
+	} else {
+		s.wakeManagedAgent(result)
+	}
+	s.projectImportComment(ctx, cli, issue, assignmentMailboxMarker(*result), result)
+	return *result
+}
+
+func applyMulticaHubMetadata(result *runtimeImportResult, issue driver.MulticaIssue) {
+	if result == nil {
+		return
+	}
+	meta := result.HubMetadata
+	result.HubBackend = firstNonEmpty(meta.HubBackend, result.HubBackend)
+	result.HubKind = firstNonEmpty(meta.Kind, result.HubKind)
+	result.SessionID = firstNonEmpty(meta.SessionID, result.SessionID)
+	result.CorrelationID = firstNonEmpty(meta.CorrelationID, result.CorrelationID)
+	result.RootIssueID = firstNonEmpty(meta.RootIssueID, result.RootIssueID)
+	result.AssignmentID = firstNonEmpty(meta.AssignmentID, result.AssignmentID)
+	result.AssignmentFingerprint = firstNonEmpty(meta.AssignmentFingerprint, result.AssignmentFingerprint)
+	if result.RootIssueID == "" && meta.IsAssignmentMailbox() {
+		result.RootIssueID = firstNonEmpty(meta.SourceIssueID, issue.ID)
+	}
+}
+
+func ensureRootSessionHubFields(result *runtimeImportResult, issue driver.MulticaIssue) {
+	if result == nil {
+		return
+	}
+	result.HubBackend = driver.MulticaHubBackend
+	result.HubKind = firstNonEmpty(result.HubKind, driver.MulticaHubKindSession)
+	result.RootIssueID = firstNonEmpty(result.RootIssueID, issue.ID)
+	result.SessionID = firstNonEmpty(result.SessionID, driver.MulticaSessionID(result.RootIssueID))
+	result.CorrelationID = firstNonEmpty(result.CorrelationID, "multica:issue:"+issue.ID)
+}
+
+func ensureAssignmentHubFields(result *runtimeImportResult, issue driver.MulticaIssue) {
+	if result == nil {
+		return
+	}
+	result.HubBackend = firstNonEmpty(result.HubBackend, driver.MulticaHubBackend)
+	result.HubKind = firstNonEmpty(result.HubKind, driver.MulticaHubKindAssignmentMailbox)
+	result.RootIssueID = firstNonEmpty(result.RootIssueID, result.HubMetadata.SourceIssueID)
+	result.SessionID = firstNonEmpty(result.SessionID, driver.MulticaSessionID(result.RootIssueID))
+	result.CorrelationID = firstNonEmpty(result.CorrelationID, "multica:issue:"+issue.ID)
+}
+
+func rootSessionMetadata(result runtimeImportResult, draft driver.MulticaObservedDraft, now time.Time) map[string]string {
+	meta := driver.MulticaHubMetadata{
+		SchemaVersion:   "1",
+		HubBackend:      driver.MulticaHubBackend,
+		Kind:            driver.MulticaHubKindSession,
+		SessionID:       result.SessionID,
+		CorrelationID:   result.CorrelationID,
+		EventID:         draft.ExternalID,
+		EventType:       draft.EventType,
+		EventPhase:      string(eventmodel.PhaseObserved),
+		Principal:       result.Principal,
+		SourceIssueID:   result.IssueID,
+		RootIssueID:     result.RootIssueID,
+		ProjectionOwner: result.Principal,
+		ProjectedAt:     now.UTC().Format(time.RFC3339),
+	}
+	return meta.Map()
+}
+
+func addPayloadRuleString(payload map[string]any, key, value string) {
+	key = strings.TrimSpace(key)
+	value = strings.TrimSpace(value)
+	if payload == nil || key == "" || value == "" {
+		return
+	}
+	rule, _ := payload[eventmodel.PayloadRuleKey].(map[string]any)
+	if rule == nil {
+		rule = map[string]any{}
+		payload[eventmodel.PayloadRuleKey] = rule
+	}
+	rule[key] = value
+}
+
+func cleanRuntimeTerms(values ...string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if len(value) < 3 || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	return out
+}
+
+func assignmentMailboxMarker(result runtimeImportResult) string {
+	if result.HubMetadata.EventID != "" {
+		return result.HubMetadata.EventID
+	}
+	if result.AssignmentID != "" {
+		return "multica-assignment-" + result.AssignmentID
+	}
+	return "multica-issue-" + result.IssueID
 }
 
 func (s *runtimeRPCState) wakeManagedAgent(result *runtimeImportResult) {
@@ -411,6 +554,12 @@ func managedWakeCandidateForResult(principal string, resp presentation.Response,
 }
 
 func managedWakeMatchTerms(result runtimeImportResult) []string {
+	if len(result.MatchTerms) > 0 {
+		return cleanRuntimeTerms(result.MatchTerms...)
+	}
+	if result.AssignmentID != "" || result.AssignmentFingerprint != "" {
+		return cleanRuntimeTerms(result.AssignmentID, result.AssignmentFingerprint)
+	}
 	raw := []string{result.IssueID, result.Identifier, result.Title, result.Statement, result.TaskID}
 	var out []string
 	for _, value := range raw {
@@ -424,7 +573,7 @@ func managedWakeMatchTerms(result runtimeImportResult) []string {
 
 func eventNarrativeContainsAny(env eventmodel.EventEnvelope, terms []string) bool {
 	body, _ := eventmodel.PayloadNarrative(env.Event.Payload)["body"].(string)
-	body = strings.ToLower(body)
+	body = strings.ToLower(strings.Join([]string{body, string(env.Event.Subject), env.Event.ID, env.Event.Type}, "\n"))
 	for _, term := range terms {
 		if strings.Contains(body, strings.ToLower(term)) {
 			return true
@@ -441,12 +590,29 @@ func (s *runtimeRPCState) projectImportComment(ctx context.Context, cli driver.M
 		result.ProjectionStatus = "skipped"
 		return
 	}
+	title := "issue admitted"
 	body := "Issue admitted into Mnemon teamwork."
+	if result.HubKind == driver.MulticaHubKindAssignmentMailbox || result.Status == "correlated" {
+		title = "assignment mailbox correlated"
+		body = "Assignment mailbox correlated with Mnemon teamwork."
+	}
 	if result.Principal != "" {
 		body += "\nPrincipal: " + result.Principal
 	}
 	if result.TaskID != "" {
 		body += "\nMultica task: " + result.TaskID
+	}
+	if result.HubBackend != "" {
+		body += "\nHub backend: " + result.HubBackend
+	}
+	if result.SessionID != "" {
+		body += "\nSession: " + result.SessionID
+	}
+	if result.RootIssueID != "" {
+		body += "\nRoot issue: " + result.RootIssueID
+	}
+	if result.AssignmentID != "" {
+		body += "\nAssignment: " + result.AssignmentID
 	}
 	if result.Receipt != nil {
 		body += fmt.Sprintf("\nMnemon ingest: seq=%d duplicate=%v ticked=%v", result.Receipt.Seq, result.Receipt.Dup, result.Receipt.Ticked)
@@ -454,7 +620,7 @@ func (s *runtimeRPCState) projectImportComment(ctx context.Context, cli driver.M
 	if result.WakeStatus != "" {
 		body += "\nManaged wake: " + result.WakeStatus
 	}
-	commentBody := driver.FormatMulticaProjectionComment("issue admitted", body, []string{externalID})
+	commentBody := driver.FormatMulticaProjectionComment(title, body, []string{externalID})
 	comment, err := cli.AddIssueComment(ctx, issue.ID, commentBody)
 	if err != nil {
 		result.ProjectionStatus = "failed"
@@ -615,6 +781,17 @@ func formatRuntimeFinalAnswer(result runtimeImportResult) string {
 		b.WriteString(" Mnemon ingest: recorded")
 		if result.Receipt != nil {
 			b.WriteString(fmt.Sprintf(" seq=%d duplicate=%v ticked=%v", result.Receipt.Seq, result.Receipt.Dup, result.Receipt.Ticked))
+		}
+		b.WriteString(".")
+	case "correlated":
+		b.WriteString(" Mnemon assignment mailbox: correlated")
+		if result.AssignmentID != "" {
+			b.WriteString(" assignment=")
+			b.WriteString(result.AssignmentID)
+		}
+		if result.SessionID != "" {
+			b.WriteString(" session=")
+			b.WriteString(result.SessionID)
 		}
 		b.WriteString(".")
 	case "skipped":
