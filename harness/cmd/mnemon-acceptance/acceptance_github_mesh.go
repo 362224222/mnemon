@@ -81,7 +81,7 @@ func init() {
 	acceptanceR1GitHubMeshCmd.Flags().StringVar(&acceptanceGitHubBranchPrefix, "github-branch-prefix", "", "GitHub publication branch prefix; empty uses a run-scoped mnemond id prefix")
 	acceptanceR1GitHubMeshCmd.Flags().StringArrayVar(&acceptanceGitHubScenarios, "scenario", nil, "natural scenario to run; repeatable")
 	acceptanceR1GitHubMeshCmd.Flags().DurationVar(&acceptanceGitHubSyncInterval, "sync-interval", 30*time.Second, "GitHub sync interval per local mnemond")
-	acceptanceCmd.AddCommand(acceptanceR1GitHubMeshCmd)
+	rootCmd.AddCommand(acceptanceR1GitHubMeshCmd)
 }
 
 type r1GitHubMeshAcceptanceOptions struct {

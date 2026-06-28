@@ -39,12 +39,6 @@ var (
 	acceptanceTurnTimeout time.Duration
 )
 
-var acceptanceCmd = &cobra.Command{
-	Use:    "acceptance",
-	Short:  "Run hidden acceptance gates",
-	Hidden: true,
-}
-
 var acceptanceR1CodexCmd = &cobra.Command{
 	Use:   "r1-codex",
 	Short: "Run the R1 real Codex appserver acceptance gate",
@@ -81,8 +75,7 @@ func init() {
 	acceptanceR1CodexCmd.Flags().BoolVar(&acceptanceAgentTurns, "agent-turns", false, "run real model turns that write governed R1 events")
 	acceptanceR1CodexCmd.Flags().BoolVar(&acceptanceSyncArm, "sync-arm", false, "run the 6B real sync/import arm after the local arm")
 	acceptanceR1CodexCmd.Flags().DurationVar(&acceptanceTurnTimeout, "turn-timeout", 5*time.Minute, "timeout per real agent turn")
-	acceptanceCmd.AddCommand(acceptanceR1CodexCmd)
-	rootCmd.AddCommand(acceptanceCmd)
+	rootCmd.AddCommand(acceptanceR1CodexCmd)
 }
 
 type r1CodexAcceptanceOptions struct {

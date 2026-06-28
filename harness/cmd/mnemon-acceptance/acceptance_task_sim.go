@@ -57,7 +57,7 @@ func init() {
 	acceptanceR1TaskSimCmd.Flags().BoolVar(&acceptanceSyncArm, "sync-arm", false, "run the cross-workspace sync/import scenario")
 	acceptanceR1TaskSimCmd.Flags().DurationVar(&acceptanceTurnTimeout, "turn-timeout", 5*time.Minute, "timeout per real agent turn")
 	acceptanceR1TaskSimCmd.Flags().StringArrayVar(&acceptanceTaskSimScenarios, "scenario", nil, "scenario to run; repeatable")
-	acceptanceCmd.AddCommand(acceptanceR1TaskSimCmd)
+	rootCmd.AddCommand(acceptanceR1TaskSimCmd)
 }
 
 type r1TaskSimAcceptanceOptions struct {

@@ -51,7 +51,7 @@ func init() {
 	acceptanceR1ProdSimCmd.Flags().IntVar(&acceptanceAgents, "agents", 5, "number of Codex appservers")
 	acceptanceR1ProdSimCmd.Flags().BoolVar(&acceptanceAgentTurns, "agent-turns", false, "run real model turns that write governed R1 production-like events")
 	acceptanceR1ProdSimCmd.Flags().DurationVar(&acceptanceTurnTimeout, "turn-timeout", 5*time.Minute, "timeout per real agent turn")
-	acceptanceCmd.AddCommand(acceptanceR1ProdSimCmd)
+	rootCmd.AddCommand(acceptanceR1ProdSimCmd)
 }
 
 type r1ProdSimAcceptanceOptions struct {

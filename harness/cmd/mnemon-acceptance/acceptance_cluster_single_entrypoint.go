@@ -74,7 +74,7 @@ func init() {
 	acceptanceR1ClusterSingleEntrypointCmd.Flags().IntVar(&acceptanceClusterWakeCycles, "wake-cycles", 4, "generic worker wake cycles")
 	acceptanceR1ClusterSingleEntrypointCmd.Flags().DurationVar(&acceptanceClusterWakeInterval, "wake-interval", 3*time.Second, "delay between worker wake cycles")
 	acceptanceR1ClusterSingleEntrypointCmd.Flags().StringVar(&acceptanceClusterEntrypoint, "entrypoint", "", "explicit entrypoint principal; empty chooses by seed")
-	acceptanceCmd.AddCommand(acceptanceR1ClusterSingleEntrypointCmd)
+	rootCmd.AddCommand(acceptanceR1ClusterSingleEntrypointCmd)
 }
 
 type r1ClusterSingleEntrypointOptions struct {
