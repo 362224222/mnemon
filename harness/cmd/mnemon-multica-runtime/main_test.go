@@ -19,6 +19,31 @@ import (
 	pview "github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation/view"
 )
 
+func TestRuntimeEnvValueUsesLastValue(t *testing.T) {
+	env := []string{
+		"MNEMON_MANAGED_RUNTIME=codex-appserver",
+		"MNEMON_MANAGED_RUNTIME=off",
+	}
+	if got := envValue(env, "MNEMON_MANAGED_RUNTIME"); got != "off" {
+		t.Fatalf("envValue = %q, want off", got)
+	}
+}
+
+func runtimeTestEnv(values ...string) []string {
+	env := make([]string, 0, len(os.Environ())+len(values))
+	for _, item := range os.Environ() {
+		key, _, ok := strings.Cut(item, "=")
+		if !ok {
+			continue
+		}
+		if strings.HasPrefix(key, "MNEMON_") || strings.HasPrefix(key, "MULTICA_") {
+			continue
+		}
+		env = append(env, item)
+	}
+	return append(env, values...)
+}
+
 func TestRuntimeImportsAssignedIssueIntoMnemon(t *testing.T) {
 	tmp := t.TempDir()
 	argsPath := filepath.Join(tmp, "multica.args")
@@ -120,7 +145,7 @@ esac
 	var out bytes.Buffer
 	err := runRuntime(runtimeConfig{
 		Args: []string{"app-server", "--listen", "stdio://"},
-		Env: append(os.Environ(),
+		Env: runtimeTestEnv(
 			"MNEMON_MULTICA_BIN="+bin,
 			"MNEMON_MULTICA_REGISTRY="+registryPath,
 			"MNEMON_CONTROL_ADDR="+srv.URL,
@@ -190,6 +215,11 @@ esac
 
 	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
 	var sawComplete, sawProgress, sawAnswer, sawUserItem, sawAgentStart, sawAgentCompletedAt bool
+	var sawCommandStart, sawCommandComplete bool
+	var sawCommentaryProgress, sawFinalPhaseAnswer bool
+	agentCompleted := map[string]string{}
+	progressItemIDs := map[string]bool{}
+	answerItemID := ""
 	for _, line := range lines {
 		var msg map[string]any
 		if err := json.Unmarshal([]byte(line), &msg); err != nil {
@@ -210,6 +240,11 @@ esac
 				if hasStarted && strings.HasPrefix(id, "msg-") {
 					sawAgentStart = true
 				}
+			case "commandExecution":
+				command, _ := item["command"].(string)
+				if strings.Contains(command, "multica issue get iss-7") && item["status"] == "inProgress" {
+					sawCommandStart = true
+				}
 			}
 		}
 		if msg["method"] == "item/completed" {
@@ -217,18 +252,55 @@ esac
 			item, _ := params["item"].(map[string]any)
 			if item["type"] == "agentMessage" {
 				_, sawAgentCompletedAt = params["completedAtMs"]
+				id, _ := item["id"].(string)
+				text, _ := item["text"].(string)
+				if id != "" {
+					agentCompleted[id] = text
+				}
+				phase, _ := item["phase"].(string)
+				if strings.Contains(text, "Loading Multica issue iss-7") && phase == "commentary" {
+					sawCommentaryProgress = true
+				}
+				if strings.Contains(text, "Mnemon ingest: recorded seq=17") && phase == "final_answer" {
+					sawFinalPhaseAnswer = true
+				}
+			}
+			if item["type"] == "commandExecution" {
+				command, _ := item["command"].(string)
+				output, _ := item["aggregatedOutput"].(string)
+				if strings.Contains(command, "multica issue get iss-7") && item["status"] == "completed" && strings.Contains(output, "Loaded TEA-7") {
+					sawCommandComplete = true
+				}
 			}
 		}
 		if msg["method"] == "item/agentMessage/delta" && strings.Contains(line, "Loading Multica issue iss-7") {
 			sawProgress = true
+			params, _ := msg["params"].(map[string]any)
+			if itemID, _ := params["itemId"].(string); itemID != "" {
+				progressItemIDs[itemID] = true
+			}
 		}
 		if msg["method"] == "item/agentMessage/delta" && strings.Contains(line, "Mnemon ingest: recorded seq=17") && strings.Contains(line, "Multica projection: comment=comment-1") && strings.Contains(line, "Managed wake: completed turn=noop-turn") {
 			sawAnswer = true
+			params, _ := msg["params"].(map[string]any)
+			answerItemID, _ = params["itemId"].(string)
 		}
 	}
 	if !sawComplete || !sawProgress || !sawAnswer || !sawUserItem || !sawAgentStart || !sawAgentCompletedAt {
 		t.Fatalf("missing expected runtime response complete=%v progress=%v answer=%v user=%v agent_start=%v agent_completed_at=%v:\n%s",
 			sawComplete, sawProgress, sawAnswer, sawUserItem, sawAgentStart, sawAgentCompletedAt, out.String())
+	}
+	if !sawCommandStart || !sawCommandComplete {
+		t.Fatalf("missing commandExecution projection start=%v complete=%v:\n%s", sawCommandStart, sawCommandComplete, out.String())
+	}
+	if !sawCommentaryProgress || !sawFinalPhaseAnswer {
+		t.Fatalf("unexpected agent message phases commentary=%v final=%v:\n%s", sawCommentaryProgress, sawFinalPhaseAnswer, out.String())
+	}
+	if len(agentCompleted) < 4 {
+		t.Fatalf("runtime progress should complete multiple agent messages, got %d:\n%s", len(agentCompleted), out.String())
+	}
+	if answerItemID == "" || progressItemIDs[answerItemID] {
+		t.Fatalf("final answer should be a separate agent message item from progress, answer=%q progress=%v", answerItemID, progressItemIDs)
 	}
 }
 
@@ -269,7 +341,7 @@ esac
 	var out bytes.Buffer
 	err := runRuntime(runtimeConfig{
 		Args: []string{"app-server", "--listen", "stdio://"},
-		Env: append(os.Environ(),
+		Env: runtimeTestEnv(
 			"MNEMON_MULTICA_BIN="+bin,
 			"MNEMON_HUB_BACKEND=multica",
 			"MNEMON_MULTICA_HUB_WRITE=off",
@@ -402,7 +474,7 @@ esac
 	var out bytes.Buffer
 	err := runRuntime(runtimeConfig{
 		Args: []string{"app-server", "--listen", "stdio://"},
-		Env: append(os.Environ(),
+		Env: runtimeTestEnv(
 			"MNEMON_MULTICA_BIN="+bin,
 			"MNEMON_HUB_BACKEND=multica",
 			"MNEMON_CONTROL_ADDR="+srv.URL,
@@ -522,7 +594,7 @@ esac
 	var out bytes.Buffer
 	err := runRuntime(runtimeConfig{
 		Args: []string{"app-server", "--listen", "stdio://"},
-		Env: append(os.Environ(),
+		Env: runtimeTestEnv(
 			"MNEMON_MULTICA_BIN="+bin,
 			"MNEMON_HUB_BACKEND=multica",
 			"MNEMON_CONTROL_ADDR="+srv.URL,
@@ -595,7 +667,7 @@ printf '{"id":"iss-8","identifier":"TEA-8","title":"No local mnemond","descripti
 	var out bytes.Buffer
 	err := runRuntime(runtimeConfig{
 		Args: []string{"app-server", "--listen", "stdio://"},
-		Env: append(os.Environ(),
+		Env: runtimeTestEnv(
 			"MNEMON_MULTICA_BIN="+bin,
 			"MULTICA_ARGS_PATH="+argsPath,
 			"MULTICA_TASK_ID=task-8",

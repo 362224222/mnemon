@@ -50,11 +50,21 @@ type runtimeRPCState struct {
 	CWD      string
 	ThreadID string
 	TurnID   string
+	ItemSeq  int
 	Env      []string
 	Now      func() time.Time
 }
 
-type runtimeProgressSink func(string)
+type runtimeProgressSink func(runtimeProgressEvent)
+
+type runtimeProgressEvent struct {
+	Text       string
+	Command    string
+	CWD        string
+	Output     string
+	ExitCode   int
+	DurationMs int64
+}
 
 type runtimeImportResult struct {
 	IssueID               string
@@ -203,7 +213,6 @@ func (s *runtimeRPCState) handle(msg rpcMessage, emit func(rpcMessage) error) er
 		input := extractRuntimeInput(msg.Params)
 		nowMs := s.now().UnixMilli()
 		userItem := runtimeUserMessage(input)
-		agentItemID := runtimeID("msg", s.now())
 		if err := emitAll(
 			rpcMessage{
 				ID: msg.ID,
@@ -227,42 +236,31 @@ func (s *runtimeRPCState) handle(msg rpcMessage, emit func(rpcMessage) error) er
 				Method: "item/completed",
 				Params: runtimeItemParams(s.ThreadID, s.TurnID, userItem, "completedAtMs", nowMs),
 			},
-			rpcMessage{
-				Method: "item/started",
-				Params: runtimeItemParams(s.ThreadID, s.TurnID, runtimeAgentMessage(agentItemID, ""), "startedAtMs", nowMs),
-			},
 		); err != nil {
 			return err
 		}
-		var chunks []string
 		var progressErr error
-		progress := func(text string) {
-			text = strings.TrimSpace(text)
-			if text == "" || progressErr != nil {
+		progress := func(event runtimeProgressEvent) {
+			if progressErr != nil {
 				return
 			}
-			chunks = append(chunks, text)
-			progressErr = emit(runtimeAgentDelta(s.ThreadID, s.TurnID, agentItemID, text+"\n\n"))
+			if strings.TrimSpace(event.Command) != "" {
+				progressErr = emitRuntimeCommandExecution(emit, s.ThreadID, s.TurnID, s.nextItemID("call"), s.CWD, event, s.now())
+				return
+			}
+			text := strings.TrimSpace(event.Text)
+			if text != "" {
+				progressErr = emitRuntimeAgentMessage(emit, s.ThreadID, s.TurnID, s.nextItemID("msg"), text, "commentary", s.now())
+			}
 		}
 		finalAnswer := s.runTurn(input, progress)
 		if progressErr != nil {
 			return progressErr
 		}
-		completedText := strings.Join(append(append([]string{}, chunks...), finalAnswer), "\n\n")
+		if err := emitRuntimeAgentMessage(emit, s.ThreadID, s.TurnID, s.nextItemID("msg"), finalAnswer, "final_answer", s.now()); err != nil {
+			return err
+		}
 		return emitAll(
-			rpcMessage{
-				Method: "item/agentMessage/delta",
-				Params: map[string]any{
-					"threadId": s.ThreadID,
-					"turnId":   s.TurnID,
-					"itemId":   agentItemID,
-					"delta":    finalAnswer,
-				},
-			},
-			rpcMessage{
-				Method: "item/completed",
-				Params: runtimeItemParams(s.ThreadID, s.TurnID, runtimeAgentMessage(agentItemID, completedText), "completedAtMs", s.now().UnixMilli()),
-			},
 			rpcMessage{
 				Method: "thread/status/changed",
 				Params: map[string]any{"threadId": s.ThreadID, "status": map[string]any{"type": "idle"}},
@@ -278,6 +276,14 @@ func (s *runtimeRPCState) handle(msg rpcMessage, emit func(rpcMessage) error) er
 		}
 		return emitAll(rpcMessage{ID: msg.ID, Result: map[string]any{}})
 	}
+}
+
+func (s *runtimeRPCState) nextItemID(prefix string) string {
+	s.ItemSeq++
+	if strings.TrimSpace(prefix) == "" {
+		prefix = "item"
+	}
+	return fmt.Sprintf("%s-%d-%d", prefix, s.now().UTC().UnixNano(), s.ItemSeq)
 }
 
 func (s *runtimeRPCState) runTurn(input string, progress runtimeProgressSink) string {
@@ -307,9 +313,11 @@ func (s *runtimeRPCState) importIssue(input string, progress runtimeProgressSink
 	if err != nil {
 		result.Status = "failed"
 		result.Err = fmt.Errorf("fetch Multica issue %s: %w", issueID, err)
+		emitRuntimeCommand(progress, "multica issue get "+issueID, result.Err.Error(), 1)
 		emitRuntimeProgress(progress, "Failed to load Multica issue "+issueID+".")
 		return result
 	}
+	emitRuntimeCommand(progress, "multica issue get "+issueID, "Loaded "+runtimeIssueLabel(issue)+".", 0)
 	result.IssueID = issue.ID
 	result.Identifier = issue.Identifier
 	result.Title = issue.Title
@@ -356,9 +364,11 @@ func (s *runtimeRPCState) importIssue(input string, progress runtimeProgressSink
 		if err := cli.SetIssueMetadataMap(multicaCtx, issue.ID, rootSessionMetadata(result, draft, s.now())); err != nil {
 			result.Status = "failed"
 			result.Err = fmt.Errorf("set Multica root session metadata: %w", err)
+			emitRuntimeCommand(progress, "multica issue metadata set "+issue.ID+" mnemon.root-session", result.Err.Error(), 1)
 			emitRuntimeProgress(progress, "Failed to write Mnemon root session metadata.")
 			return result
 		}
+		emitRuntimeCommand(progress, "multica issue metadata set "+issue.ID+" mnemon.root-session", "Root session metadata written for "+runtimeIssueLabel(issue)+".", 0)
 		emitRuntimeProgress(progress, "Root session metadata written for "+runtimeIssueLabel(issue)+".")
 	}
 	addr := strings.TrimSpace(envValue(s.Env, "MNEMON_CONTROL_ADDR"))
@@ -386,18 +396,23 @@ func (s *runtimeRPCState) importIssue(input string, progress runtimeProgressSink
 	if err != nil {
 		result.Status = "failed"
 		result.Err = fmt.Errorf("ingest Mnemon observation: %w", err)
+		emitRuntimeCommand(progress, "mnemond ingest observe --principal "+result.Principal, result.Err.Error(), 1)
 		emitRuntimeProgress(progress, "Mnemon rejected or failed the issue observation.")
 		return result
 	}
 	result.Status = "recorded"
 	result.Receipt = &rec
+	emitRuntimeCommand(progress, "mnemond ingest observe --principal "+result.Principal, fmt.Sprintf("recorded seq=%d duplicate=%v ticked=%v", rec.Seq, rec.Dup, rec.Ticked), 0)
 	emitRuntimeProgress(progress, fmt.Sprintf("Mnemon recorded the issue observation at seq=%d.", rec.Seq))
 	emitRuntimeProgress(progress, "Waking the managed local agent with [mnemon:wake].")
 	s.wakeManagedAgent(&result)
+	emitRuntimeCommand(progress, "mnemond managed wake --principal "+result.Principal+" [mnemon:wake]", runtimeWakeProgress(result), runtimeExitCode(result.WakeErr))
 	emitRuntimeProgress(progress, runtimeWakeProgress(result))
 	s.writeMulticaHubArtifacts(multicaCtx, cli, client, issue, &result)
+	emitRuntimeCommand(progress, "mnemon multica hub project --issue "+issue.ID, runtimeHubWriteProgress(result), runtimeExitCode(result.HubWriteErr))
 	emitRuntimeProgress(progress, runtimeHubWriteProgress(result))
 	s.projectImportComment(multicaCtx, cli, issue, draft.ExternalID, &result)
+	emitRuntimeCommand(progress, "multica issue comment add "+issue.ID, runtimeProjectionProgress(result), runtimeExitCode(result.ProjectionErr))
 	emitRuntimeProgress(progress, runtimeProjectionProgress(result))
 	return result
 }
@@ -411,6 +426,7 @@ func (s *runtimeRPCState) correlateAssignmentMailbox(ctx context.Context, cli dr
 		result.HubMetadata.EventID,
 		string(eventmodel.Subject("assignment", result.AssignmentID)),
 	)
+	emitRuntimeCommand(progress, "mnemon multica assignment correlate --issue "+issue.ID, "Assignment mailbox correlated: "+runtimeAssignmentLabel(*result)+".", 0)
 	emitRuntimeProgress(progress, "Assignment mailbox correlated: "+runtimeAssignmentLabel(*result)+".")
 	addr := strings.TrimSpace(envValue(s.Env, "MNEMON_CONTROL_ADDR"))
 	if addr == "" {
@@ -420,9 +436,11 @@ func (s *runtimeRPCState) correlateAssignmentMailbox(ctx context.Context, cli dr
 	} else {
 		emitRuntimeProgress(progress, "Waking assigned local agent with [mnemon:wake].")
 		s.wakeManagedAgent(result)
+		emitRuntimeCommand(progress, "mnemond managed wake --principal "+result.Principal+" [mnemon:wake]", runtimeWakeProgress(*result), runtimeExitCode(result.WakeErr))
 		emitRuntimeProgress(progress, runtimeWakeProgress(*result))
 	}
 	s.projectImportComment(ctx, cli, issue, assignmentMailboxMarker(*result), result)
+	emitRuntimeCommand(progress, "multica issue comment add "+issue.ID, runtimeProjectionProgress(*result), runtimeExitCode(result.ProjectionErr))
 	emitRuntimeProgress(progress, runtimeProjectionProgress(*result))
 	return *result
 }
@@ -1029,6 +1047,98 @@ func writeRuntimeRPC(w io.Writer, msg rpcMessage) error {
 	return err
 }
 
+func emitRuntimeCommandExecution(emit func(rpcMessage) error, threadID, turnID, itemID, fallbackCWD string, event runtimeProgressEvent, now time.Time) error {
+	command := strings.TrimSpace(event.Command)
+	if command == "" {
+		return nil
+	}
+	if strings.TrimSpace(itemID) == "" {
+		itemID = runtimeTextDigestID("call", command+"\n"+event.Output)
+	}
+	cwd := strings.TrimSpace(event.CWD)
+	if cwd == "" {
+		cwd = fallbackCWD
+	}
+	output := strings.TrimSpace(event.Output)
+	durationMs := event.DurationMs
+	if durationMs < 0 {
+		durationMs = 0
+	}
+	nowMs := now.UTC().UnixMilli()
+	started := runtimeCommandExecution(itemID, command, cwd, "inProgress", "", nil, nil)
+	completed := runtimeCommandExecution(itemID, command, cwd, "completed", output, event.ExitCode, durationMs)
+	messages := []rpcMessage{
+		{
+			Method: "item/started",
+			Params: runtimeItemParams(threadID, turnID, started, "startedAtMs", nowMs),
+		},
+		{
+			Method: "item/completed",
+			Params: runtimeItemParams(threadID, turnID, completed, "completedAtMs", nowMs),
+		},
+	}
+	for _, message := range messages {
+		if err := emit(message); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func runtimeCommandExecution(id, command, cwd, status, output string, exitCode any, durationMs any) map[string]any {
+	item := map[string]any{
+		"type":             "commandExecution",
+		"id":               id,
+		"command":          command,
+		"cwd":              cwd,
+		"processId":        "mnemon-runtime",
+		"source":           "mnemonRuntime",
+		"status":           status,
+		"commandActions":   []any{map[string]any{"type": "unknown", "command": command}},
+		"aggregatedOutput": nil,
+		"exitCode":         nil,
+		"durationMs":       nil,
+	}
+	if status == "completed" {
+		item["aggregatedOutput"] = output
+		item["exitCode"] = exitCode
+		item["durationMs"] = durationMs
+	}
+	return item
+}
+
+func emitRuntimeAgentMessage(emit func(rpcMessage) error, threadID, turnID, itemID, text, phase string, now time.Time) error {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	phase = strings.TrimSpace(phase)
+	if phase == "" {
+		phase = "commentary"
+	}
+	if strings.TrimSpace(itemID) == "" {
+		itemID = runtimeTextDigestID("msg", text)
+	}
+	nowMs := now.UTC().UnixMilli()
+	messages := []rpcMessage{
+		{
+			Method: "item/started",
+			Params: runtimeItemParams(threadID, turnID, runtimeAgentMessage(itemID, "", phase), "startedAtMs", nowMs),
+		},
+		runtimeAgentDelta(threadID, turnID, itemID, text),
+		{
+			Method: "item/completed",
+			Params: runtimeItemParams(threadID, turnID, runtimeAgentMessage(itemID, text, phase), "completedAtMs", nowMs),
+		},
+	}
+	for _, message := range messages {
+		if err := emit(message); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func runtimeAgentDelta(threadID, turnID, itemID, delta string) rpcMessage {
 	return rpcMessage{
 		Method: "item/agentMessage/delta",
@@ -1066,16 +1176,20 @@ func runtimeUserMessage(text string) map[string]any {
 	}
 }
 
-func runtimeAgentMessage(id, text string) map[string]any {
+func runtimeAgentMessage(id, text, phase string) map[string]any {
 	id = strings.TrimSpace(id)
 	if id == "" {
 		id = runtimeTextDigestID("msg", text)
+	}
+	phase = strings.TrimSpace(phase)
+	if phase == "" {
+		phase = "commentary"
 	}
 	return map[string]any{
 		"type":           "agentMessage",
 		"id":             id,
 		"text":           text,
-		"phase":          "final_answer",
+		"phase":          phase,
 		"memoryCitation": nil,
 	}
 }
@@ -1092,8 +1206,21 @@ func runtimeTextDigestID(prefix, text string) string {
 
 func emitRuntimeProgress(progress runtimeProgressSink, text string) {
 	if progress != nil {
-		progress(text)
+		progress(runtimeProgressEvent{Text: text})
 	}
+}
+
+func emitRuntimeCommand(progress runtimeProgressSink, command, output string, exitCode int) {
+	if progress != nil {
+		progress(runtimeProgressEvent{Command: command, Output: output, ExitCode: exitCode})
+	}
+}
+
+func runtimeExitCode(err error) int {
+	if err != nil {
+		return 1
+	}
+	return 0
 }
 
 func displayRuntimePrincipal(principal string) string {
@@ -1246,7 +1373,8 @@ func stringParam(params map[string]any, key string) string {
 
 func envValue(env []string, key string) string {
 	prefix := key + "="
-	for _, item := range env {
+	for i := len(env) - 1; i >= 0; i-- {
+		item := env[i]
 		if strings.HasPrefix(item, prefix) {
 			return strings.TrimSpace(strings.TrimPrefix(item, prefix))
 		}
