@@ -130,7 +130,6 @@ func (s *runtimeRPCState) writeAssignmentMailboxes(ctx context.Context, cli driv
 		child, err := cli.CreateIssue(ctx, driver.MulticaCreateIssueRequest{
 			Title:       assignmentMailboxTitle(item),
 			Description: assignmentMailboxDescription(item, result),
-			AssigneeID:  participant.AgentID,
 			ParentID:    result.RootIssueID,
 			Status:      "todo",
 			Priority:    "medium",
@@ -157,6 +156,9 @@ func (s *runtimeRPCState) writeAssignmentMailboxes(ctx context.Context, cli driv
 			ProjectedAt:           s.now().UTC().Format(time.RFC3339),
 		}
 		if err := cli.SetIssueMetadataMap(ctx, child.ID, meta.Map()); err != nil {
+			return err
+		}
+		if _, err := cli.AssignIssue(ctx, child.ID, participant.AgentID); err != nil {
 			return err
 		}
 		if err := ledger.Record(driver.MulticaHubLedgerRecord{

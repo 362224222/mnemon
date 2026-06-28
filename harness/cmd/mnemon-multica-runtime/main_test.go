@@ -189,7 +189,7 @@ esac
 	}
 
 	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
-	var sawComplete, sawAnswer bool
+	var sawComplete, sawProgress, sawAnswer bool
 	for _, line := range lines {
 		var msg map[string]any
 		if err := json.Unmarshal([]byte(line), &msg); err != nil {
@@ -198,12 +198,15 @@ esac
 		if msg["method"] == "turn/completed" {
 			sawComplete = true
 		}
+		if msg["method"] == "item/agentMessage/delta" && strings.Contains(line, "Loading Multica issue iss-7") {
+			sawProgress = true
+		}
 		if msg["method"] == "item/agentMessage/delta" && strings.Contains(line, "Mnemon ingest: recorded seq=17") && strings.Contains(line, "Multica projection: comment=comment-1") && strings.Contains(line, "Managed wake: completed turn=noop-turn") {
 			sawAnswer = true
 		}
 	}
-	if !sawComplete || !sawAnswer {
-		t.Fatalf("missing expected runtime response complete=%v answer=%v:\n%s", sawComplete, sawAnswer, out.String())
+	if !sawComplete || !sawProgress || !sawAnswer {
+		t.Fatalf("missing expected runtime response complete=%v progress=%v answer=%v:\n%s", sawComplete, sawProgress, sawAnswer, out.String())
 	}
 }
 
@@ -404,10 +407,11 @@ esac
 	args := mustReadRuntimeTestFile(t, argsPath)
 	for _, want := range []string{
 		"issue children root-2 --output json",
-		"issue create --title Mnemon assignment asg-writer: check release notes --output json --description-stdin --assignee-id agent-worker --parent root-2 --status todo --priority medium",
+		"issue create --title Mnemon assignment asg-writer: check release notes --output json --description-stdin --parent root-2 --status todo --priority medium",
 		"issue metadata set child-2 --key mnemon.kind --value assignment_mailbox --type string --output json",
 		"issue metadata set child-2 --key mnemon.assignment_id --value asg-writer --type string --output json",
 		"issue metadata set child-2 --key mnemon.principal --value worker@team --type string --output json",
+		"issue assign child-2 --to-id agent-worker --output json",
 	} {
 		if !strings.Contains(args, want) {
 			t.Fatalf("args missing %q:\n%s", want, args)
@@ -415,6 +419,12 @@ esac
 	}
 	if strings.Contains(args, "check release notes against") {
 		t.Fatalf("assignment description leaked into argv:\n%s", args)
+	}
+	createIdx := strings.Index(args, "issue create --title Mnemon assignment asg-writer")
+	metaIdx := strings.Index(args, "issue metadata set child-2 --key mnemon.kind")
+	assignIdx := strings.Index(args, "issue assign child-2 --to-id agent-worker")
+	if createIdx < 0 || metaIdx < 0 || assignIdx < 0 || !(createIdx < metaIdx && metaIdx < assignIdx) {
+		t.Fatalf("assignment mailbox must be created, tagged, then assigned; args:\n%s", args)
 	}
 	description := mustReadRuntimeTestFile(t, createDescriptionPath)
 	for _, want := range []string{"Mnemon assignment mailbox", "Expected work: check release notes against the public changelog", "Expected feedback: progress_digest with result or blocker"} {
