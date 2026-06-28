@@ -171,6 +171,7 @@ func (l *FileManagedWakeLedger) loadLocked() {
 }
 
 type CodexAppServerTurnClient struct {
+	Principal             string
 	Command               string
 	Workspace             string
 	Env                   []string
@@ -262,8 +263,12 @@ func (c CodexAppServerTurnClient) developerInstructions() string {
 	if strings.TrimSpace(c.DeveloperInstructions) != "" {
 		return c.DeveloperInstructions
 	}
-	return `You are a mnemond-managed Mnemon agent.
+	principal := strings.TrimSpace(c.Principal)
+	if principal == "" {
+		principal = "the local managed principal"
+	}
+	return fmt.Sprintf(`You are %s in a mnemond-managed Mnemon runtime.
 When the user input is [mnemon:wake], treat it only as a local wake signal.
 Use the normal Mnemon hooks/skills and Local Mnemon commands in this workspace to inspect governed context and decide whether to act.
-Do not expect assignment details in the raw wake query. Keep any governed event drafts short and emit them through Local Mnemon.`
+Do not expect assignment details in the raw wake query. Keep any governed event drafts short and emit them through Local Mnemon.`, principal)
 }

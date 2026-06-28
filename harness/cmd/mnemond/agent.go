@@ -94,7 +94,7 @@ func runAgentRun(ctx context.Context, args []string, out, errw io.Writer) error 
 		}
 		candidate = candidates[0]
 	}
-	client, err := managedTurnClient(*runtimeName, *command, *workspace, *codexHome, *turnTimeout)
+	client, err := managedTurnClient(localPrincipal, *runtimeName, *command, *workspace, *codexHome, *turnTimeout)
 	if err != nil {
 		return err
 	}
@@ -113,7 +113,7 @@ func runAgentRun(ctx context.Context, args []string, out, errw io.Writer) error 
 	return writeManagedAgentRecord(out, record)
 }
 
-func managedTurnClient(runtimeName, command, workspace, codexHome string, turnTimeout time.Duration) (driver.ManagedTurnClient, error) {
+func managedTurnClient(principal, runtimeName, command, workspace, codexHome string, turnTimeout time.Duration) (driver.ManagedTurnClient, error) {
 	switch strings.TrimSpace(runtimeName) {
 	case "", "noop":
 		return noopManagedTurnClient{}, nil
@@ -123,6 +123,7 @@ func managedTurnClient(runtimeName, command, workspace, codexHome string, turnTi
 			env = setAgentEnv(env, "CODEX_HOME", strings.TrimSpace(codexHome))
 		}
 		return driver.CodexAppServerTurnClient{
+			Principal:   strings.TrimSpace(principal),
 			Command:     strings.TrimSpace(command),
 			Workspace:   strings.TrimSpace(workspace),
 			Env:         env,

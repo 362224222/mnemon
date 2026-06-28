@@ -374,12 +374,29 @@ func runR1CodexAcceptance(ctx context.Context, opts r1CodexAcceptanceOptions) (r
 }
 
 func installAcceptanceHarnessBinary(runRoot string) (string, error) {
-	exe, err := os.Executable()
-	if err != nil {
-		return "", err
-	}
 	binDir := filepath.Join(runRoot, "bin")
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		return "", err
+	}
+	if sourceRoot, ok := acceptanceSourceRoot(); ok {
+		targets := map[string]string{
+			"mnemon-harness": "./harness/cmd/mnemon-harness",
+			"mnemond":        "./harness/cmd/mnemond",
+			"mnemon-hub":     "./harness/cmd/mnemon-hub",
+		}
+		for name, pkg := range targets {
+			target := filepath.Join(binDir, name)
+			cmd := exec.Command("go", "build", "-o", target, pkg)
+			cmd.Dir = sourceRoot
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				return "", fmt.Errorf("build acceptance product binary %s: %w: %s", name, err, strings.TrimSpace(string(out)))
+			}
+		}
+		return binDir, nil
+	}
+	exe, err := os.Executable()
+	if err != nil {
 		return "", err
 	}
 	target := filepath.Join(binDir, "mnemon-harness")
@@ -400,6 +417,27 @@ func installAcceptanceHarnessBinary(runRoot string) (string, error) {
 		return "", err
 	}
 	return binDir, nil
+}
+
+func acceptanceSourceRoot() (string, bool) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", false
+	}
+	for dir := cwd; ; dir = filepath.Dir(dir) {
+		if fileExists(filepath.Join(dir, "go.mod")) && fileExists(filepath.Join(dir, "harness", "cmd", "mnemon-harness", "root.go")) {
+			return dir, true
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", false
+		}
+	}
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }
 
 func prepareR1AcceptanceRunRoot(runRoot string) error {
