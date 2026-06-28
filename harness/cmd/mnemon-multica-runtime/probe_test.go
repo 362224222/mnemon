@@ -13,8 +13,8 @@ import (
 func TestProbeVersionRedactsEnvironmentInLog(t *testing.T) {
 	logPath := filepath.Join(t.TempDir(), "probe.jsonl")
 	var out bytes.Buffer
-	err := runProbe(probeConfig{
-		Args: []string{"--version"},
+	err := runRuntime(runtimeConfig{
+		Args: []string{"--probe", "--version"},
 		Env: []string{
 			"MNEMON_MULTICA_PROBE_LOG=" + logPath,
 			"MULTICA_TASK_ID=task-1",
@@ -28,7 +28,7 @@ func TestProbeVersionRedactsEnvironmentInLog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "mnemon-multica-runtime-probe") {
+	if !strings.Contains(out.String(), "mnemon-multica-runtime") || !strings.Contains(out.String(), "probe mode") {
 		t.Fatalf("version output = %q", out.String())
 	}
 	logData, err := os.ReadFile(logPath)
@@ -52,8 +52,8 @@ func TestProbeSpeaksMinimalCodexAppServerRPC(t *testing.T) {
 		`{"jsonrpc":"2.0","id":3,"method":"turn/start","params":{"threadId":"thread-known","input":[{"type":"text","text":"hello"}]}}`,
 	}, "\n") + "\n"
 	var out bytes.Buffer
-	err := runProbe(probeConfig{
-		Args:   []string{"app-server", "--listen", "stdio://"},
+	err := runRuntime(runtimeConfig{
+		Args:   []string{"--diagnose", "app-server", "--listen", "stdio://"},
 		Env:    []string{"MNEMON_MULTICA_PROBE_LOG=" + logPath},
 		CWD:    t.TempDir(),
 		Stdin:  strings.NewReader(input),

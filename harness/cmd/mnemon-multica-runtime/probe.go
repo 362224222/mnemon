@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -12,18 +11,6 @@ import (
 	"strings"
 	"time"
 )
-
-const probeVersion = "dev"
-
-type probeConfig struct {
-	Args   []string
-	Env    []string
-	CWD    string
-	Stdin  io.Reader
-	Stdout io.Writer
-	Stderr io.Writer
-	Now    func() time.Time
-}
 
 type probeRecorder struct {
 	path string
@@ -43,30 +30,7 @@ type probeEvent struct {
 	Error  string         `json:"error,omitempty"`
 }
 
-type rpcMessage struct {
-	JSONRPC string         `json:"jsonrpc,omitempty"`
-	ID      any            `json:"id,omitempty"`
-	Method  string         `json:"method,omitempty"`
-	Params  map[string]any `json:"params,omitempty"`
-	Result  any            `json:"result,omitempty"`
-	Error   any            `json:"error,omitempty"`
-}
-
-func main() {
-	if err := runProbe(probeConfig{
-		Args:   os.Args[1:],
-		Env:    os.Environ(),
-		Stdin:  os.Stdin,
-		Stdout: os.Stdout,
-		Stderr: os.Stderr,
-		Now:    time.Now,
-	}); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-}
-
-func runProbe(cfg probeConfig) error {
+func runRuntimeProbe(cfg runtimeConfig) error {
 	if cfg.Stdin == nil {
 		cfg.Stdin = strings.NewReader("")
 	}
@@ -100,13 +64,13 @@ func runProbe(cfg probeConfig) error {
 		return err
 	}
 	if wantsVersion(cfg.Args) {
-		fmt.Fprintf(cfg.Stdout, "mnemon-multica-runtime-probe %s\n", probeVersion)
+		fmt.Fprintf(cfg.Stdout, "mnemon-multica-runtime %s (probe mode)\n", runtimeVersion)
 		return rec.record(probeEvent{Kind: "version"})
 	}
 	return runProbeRPC(cfg, rec, cwd)
 }
 
-func runProbeRPC(cfg probeConfig, rec *probeRecorder, cwd string) error {
+func runProbeRPC(cfg runtimeConfig, rec *probeRecorder, cwd string) error {
 	scanner := bufio.NewScanner(cfg.Stdin)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	state := probeRPCState{CWD: cwd, Now: cfg.Now}
@@ -156,7 +120,7 @@ func (s *probeRPCState) handle(msg rpcMessage) []rpcMessage {
 		return []rpcMessage{{
 			ID: msg.ID,
 			Result: map[string]any{
-				"userAgent":      "mnemon-multica-runtime-probe/" + probeVersion,
+				"userAgent":      "mnemon-multica-runtime/" + runtimeVersion + " probe",
 				"codexHome":      os.Getenv("CODEX_HOME"),
 				"platformFamily": "unix",
 				"platformOs":     runtime.GOOS,
@@ -169,8 +133,8 @@ func (s *probeRPCState) handle(msg rpcMessage) []rpcMessage {
 				Method: "remoteControl/status/changed",
 				Params: map[string]any{
 					"status":         "disabled",
-					"serverName":     "mnemon-multica-runtime-probe",
-					"installationId": "mnemon-probe",
+					"serverName":     "mnemon-multica-runtime",
+					"installationId": "mnemon-runtime-probe",
 				},
 			},
 			{
@@ -267,7 +231,7 @@ func (s *probeRPCState) threadObject() map[string]any {
 		"recencyAt":     s.now().Unix(),
 		"status":        map[string]any{"type": "idle"},
 		"cwd":           s.CWD,
-		"cliVersion":    probeVersion,
+		"cliVersion":    runtimeVersion,
 		"source":        "multica",
 		"turns":         []any{},
 	}
@@ -384,23 +348,6 @@ func (r *probeRecorder) record(event probeEvent) error {
 	return f.Close()
 }
 
-func wantsVersion(args []string) bool {
-	fs := flag.NewFlagSet("mnemon-multica-runtime-probe", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	version := fs.Bool("version", false, "")
-	_ = fs.Parse(args)
-	if *version {
-		return true
-	}
-	for _, arg := range args {
-		switch arg {
-		case "version", "--version", "-version", "-v":
-			return true
-		}
-	}
-	return false
-}
-
 func redactProbeEnv(env []string) map[string]any {
 	out := map[string]any{}
 	for _, item := range env {
@@ -429,33 +376,6 @@ func isSensitiveProbeEnv(key string) bool {
 		}
 	}
 	return false
-}
-
-func envValue(env []string, key string) string {
-	prefix := key + "="
-	for _, item := range env {
-		if strings.HasPrefix(item, prefix) {
-			return strings.TrimSpace(strings.TrimPrefix(item, prefix))
-		}
-	}
-	return ""
-}
-
-func stringParam(params map[string]any, key string) string {
-	if params == nil {
-		return ""
-	}
-	value, _ := params[key].(string)
-	return strings.TrimSpace(value)
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return strings.TrimSpace(value)
-		}
-	}
-	return ""
 }
 
 func probeID(prefix string, ts time.Time) string {

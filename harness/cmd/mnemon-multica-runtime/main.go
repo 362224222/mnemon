@@ -132,6 +132,9 @@ func runRuntime(cfg runtimeConfig) error {
 			return err
 		}
 	}
+	if runtimeProbeModeEnabled(cfg.Args) {
+		return runRuntimeProbe(cfg)
+	}
 	if wantsVersion(cfg.Args) {
 		fmt.Fprintf(cfg.Stdout, "mnemon-multica-runtime %s\n", runtimeVersion)
 		return nil
@@ -1461,6 +1464,16 @@ func wantsVersion(args []string) bool {
 	for _, arg := range args {
 		switch arg {
 		case "version", "--version", "-version", "-v":
+			return true
+		}
+	}
+	return false
+}
+
+func runtimeProbeModeEnabled(args []string) bool {
+	for _, arg := range args {
+		switch strings.TrimSpace(arg) {
+		case "probe", "diagnose", "--probe", "-probe", "--diagnose", "-diagnose":
 			return true
 		}
 	}
