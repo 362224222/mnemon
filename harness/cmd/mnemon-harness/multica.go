@@ -42,6 +42,15 @@ var (
 	multicaCommentStdin   bool
 	multicaCommentTitle   string
 	multicaCommentEvents  []string
+
+	multicaProvisionRegistry       string
+	multicaProvisionProjectRoot    string
+	multicaProvisionProfileName    string
+	multicaProvisionRuntimeCommand string
+	multicaProvisionRuntimePath    string
+	multicaProvisionAgentPrefix    string
+	multicaProvisionRestartDaemon  bool
+	multicaProvisionWait           time.Duration
 )
 
 var multicaCmd = &cobra.Command{
@@ -67,6 +76,12 @@ var multicaProjectCommentCmd = &cobra.Command{
 	RunE:  runMulticaProjectComment,
 }
 
+var multicaProvisionCmd = &cobra.Command{
+	Use:   "provision",
+	Short: "Provision Multica runtime profile and Mnemon participant agents",
+	RunE:  runMulticaProvision,
+}
+
 type multicaProbeReport struct {
 	Command          string                      `json:"command"`
 	Profile          string                      `json:"profile,omitempty"`
@@ -81,7 +96,22 @@ type multicaProbeReport struct {
 	IntegrationReady bool                        `json:"integration_ready"`
 }
 
+type multicaProvisionReport struct {
+	WorkspaceID     string                            `json:"workspace_id"`
+	RuntimeProfile  driver.MulticaRuntimeProfile      `json:"runtime_profile"`
+	Runtime         driver.MulticaRuntime             `json:"runtime"`
+	Participants    []driver.MulticaParticipantRecord `json:"participants"`
+	RegistryPath    string                            `json:"registry_path"`
+	RestartedDaemon bool                              `json:"restarted_daemon"`
+	CreatedProfile  bool                              `json:"created_profile"`
+	CreatedAgents   []string                          `json:"created_agents,omitempty"`
+	RestoredAgents  []string                          `json:"restored_agents,omitempty"`
+	UpdatedAgents   []string                          `json:"updated_agents,omitempty"`
+	Warnings        []string                          `json:"warnings,omitempty"`
+}
+
 func runMulticaProbe(cmd *cobra.Command, args []string) error {
+	ctx := multicaCommandContext(cmd)
 	cli := multicaCLI()
 	report := multicaProbeReport{
 		Command:     multicaCLICommand(cli),
@@ -89,18 +119,18 @@ func runMulticaProbe(cmd *cobra.Command, args []string) error {
 		ServerURL:   strings.TrimSpace(multicaServerURL),
 		WorkspaceID: strings.TrimSpace(multicaWorkspaceID),
 	}
-	if version, err := cli.Version(cmd.Context()); err != nil {
+	if version, err := cli.Version(ctx); err != nil {
 		report.VersionError = err.Error()
 	} else {
 		report.Version = &version
 	}
-	if status, err := cli.AuthStatus(cmd.Context()); err != nil {
+	if status, err := cli.AuthStatus(ctx); err != nil {
 		report.AuthStatus = status
 		report.AuthError = err.Error()
 	} else {
 		report.AuthStatus = status
 	}
-	if daemon, err := cli.DaemonStatus(cmd.Context()); err != nil {
+	if daemon, err := cli.DaemonStatus(ctx); err != nil {
 		report.DaemonStatus = &daemon
 		report.DaemonError = err.Error()
 	} else {
@@ -134,7 +164,8 @@ func runMulticaProbe(cmd *cobra.Command, args []string) error {
 }
 
 func runMulticaImportIssue(cmd *cobra.Command, args []string) error {
-	issue, err := loadMulticaIssue(cmd.Context(), cmd.InOrStdin())
+	ctx := multicaCommandContext(cmd)
+	issue, err := loadMulticaIssue(ctx, cmd.InOrStdin())
 	if err != nil {
 		return err
 	}
@@ -189,7 +220,7 @@ func runMulticaProjectComment(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	body := driver.FormatMulticaProjectionComment(multicaCommentTitle, content, multicaCommentEvents)
-	comment, err := multicaCLI().AddIssueComment(cmd.Context(), multicaIssueID, body)
+	comment, err := multicaCLI().AddIssueComment(multicaCommandContext(cmd), multicaIssueID, body)
 	if err != nil {
 		return err
 	}
@@ -200,6 +231,214 @@ func runMulticaProjectComment(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "commented issue %s comment=%s\n", multicaIssueID, comment.ID)
 	return nil
+}
+
+func runMulticaProvision(cmd *cobra.Command, args []string) error {
+	ctx := multicaCommandContext(cmd)
+	workspaceID := strings.TrimSpace(multicaWorkspaceID)
+	if workspaceID == "" {
+		return fmt.Errorf("--multica-workspace-id is required for provision")
+	}
+	cli := multicaCLI()
+	if err := ensureMulticaReady(ctx, cli); err != nil {
+		return err
+	}
+	profileName := strings.TrimSpace(multicaProvisionProfileName)
+	if profileName == "" {
+		profileName = "mnemon-runtime"
+	}
+	runtimeCommand := strings.TrimSpace(multicaProvisionRuntimeCommand)
+	if runtimeCommand == "" {
+		runtimeCommand = "mnemon-multica-runtime"
+	}
+	report := multicaProvisionReport{WorkspaceID: workspaceID}
+	profile, created, err := ensureMulticaRuntimeProfile(ctx, cli, profileName, runtimeCommand)
+	if err != nil {
+		return err
+	}
+	report.RuntimeProfile = profile
+	report.CreatedProfile = created
+	if strings.TrimSpace(multicaProvisionRuntimePath) != "" {
+		if err := cli.SetRuntimeProfilePath(ctx, profile.ID, multicaProvisionRuntimePath); err != nil {
+			return err
+		}
+	}
+	if multicaProvisionRestartDaemon {
+		if _, err := cli.Run(ctx, []string{"daemon", "restart"}, ""); err != nil {
+			return err
+		}
+		report.RestartedDaemon = true
+	}
+	runtime, err := waitMulticaRuntimeForProfile(ctx, cli, profile.ID, multicaProvisionWait)
+	if err != nil {
+		return err
+	}
+	report.Runtime = runtime
+	participants := driver.DefaultMulticaParticipantRecords(multicaProvisionAgentPrefix)
+	agents, err := cli.ListAgents(ctx, true)
+	if err != nil {
+		return err
+	}
+	for _, participant := range participants {
+		agent, action, err := ensureMulticaParticipantAgent(ctx, cli, agents, runtime.ID, participant)
+		if err != nil {
+			return err
+		}
+		participant.AgentID = agent.ID
+		report.Participants = driver.UpsertMulticaParticipantRecord(report.Participants, participant)
+		switch action {
+		case "created":
+			report.CreatedAgents = append(report.CreatedAgents, agent.ID)
+		case "restored":
+			report.RestoredAgents = append(report.RestoredAgents, agent.ID)
+		case "updated":
+			report.UpdatedAgents = append(report.UpdatedAgents, agent.ID)
+		}
+		agents = upsertMulticaAgent(agents, agent)
+	}
+	registryPath := driver.MulticaRegistryPath(multicaProvisionProjectRoot, multicaProvisionRegistry)
+	report.RegistryPath = registryPath
+	if err := driver.SaveMulticaRegistry(registryPath, driver.MulticaRegistry{
+		SchemaVersion:    1,
+		WorkspaceID:      workspaceID,
+		RuntimeProfileID: profile.ID,
+		RuntimeID:        runtime.ID,
+		Participants:     report.Participants,
+	}); err != nil {
+		return err
+	}
+	if !multicaProvisionRestartDaemon && strings.TrimSpace(multicaProvisionRuntimePath) != "" && created {
+		report.Warnings = append(report.Warnings, "if the runtime did not appear, restart the Multica daemon so the per-machine runtime path is loaded")
+	}
+	if multicaJSON {
+		enc := json.NewEncoder(cmd.OutOrStdout())
+		enc.SetIndent("", "  ")
+		return enc.Encode(report)
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "provisioned Multica runtime %s with %d Mnemon participants\n", report.Runtime.ID, len(report.Participants))
+	fmt.Fprintf(cmd.OutOrStdout(), "registry: %s\n", report.RegistryPath)
+	return nil
+}
+
+func ensureMulticaReady(ctx context.Context, cli driver.MulticaCLI) error {
+	if _, err := cli.Version(ctx); err != nil {
+		return err
+	}
+	auth, err := cli.AuthStatus(ctx)
+	if err != nil {
+		return err
+	}
+	if auth == "" || strings.Contains(strings.ToLower(auth), "not authenticated") {
+		return fmt.Errorf("Multica profile is not authenticated")
+	}
+	status, err := cli.DaemonStatus(ctx)
+	if err != nil {
+		return err
+	}
+	if !strings.EqualFold(strings.TrimSpace(status.Status), "running") {
+		return fmt.Errorf("Multica daemon is not running")
+	}
+	return nil
+}
+
+func ensureMulticaRuntimeProfile(ctx context.Context, cli driver.MulticaCLI, profileName, runtimeCommand string) (driver.MulticaRuntimeProfile, bool, error) {
+	profiles, err := cli.ListRuntimeProfiles(ctx)
+	if err != nil {
+		return driver.MulticaRuntimeProfile{}, false, err
+	}
+	for _, profile := range profiles {
+		if profile.DisplayName == profileName && profile.ProtocolFamily == "codex" {
+			return profile, false, nil
+		}
+	}
+	profile, err := cli.CreateRuntimeProfile(ctx, driver.MulticaCreateRuntimeProfileRequest{
+		DisplayName:    profileName,
+		Description:    "Mnemon teamwork runtime adapter",
+		ProtocolFamily: "codex",
+		CommandName:    runtimeCommand,
+	})
+	return profile, true, err
+}
+
+func waitMulticaRuntimeForProfile(ctx context.Context, cli driver.MulticaCLI, profileID string, wait time.Duration) (driver.MulticaRuntime, error) {
+	deadline := time.Now().Add(wait)
+	for {
+		runtimes, err := cli.ListRuntimes(ctx)
+		if err != nil {
+			return driver.MulticaRuntime{}, err
+		}
+		for _, runtime := range runtimes {
+			if runtime.ProfileID == profileID && strings.EqualFold(runtime.Status, "online") {
+				return runtime, nil
+			}
+		}
+		if wait <= 0 || time.Now().After(deadline) {
+			return driver.MulticaRuntime{}, fmt.Errorf("no online Multica runtime found for profile %s", profileID)
+		}
+		select {
+		case <-ctx.Done():
+			return driver.MulticaRuntime{}, ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
+func ensureMulticaParticipantAgent(ctx context.Context, cli driver.MulticaCLI, agents []driver.MulticaAgent, runtimeID string, participant driver.MulticaParticipantRecord) (driver.MulticaAgent, string, error) {
+	req := driver.MulticaCreateAgentRequest{
+		Name:               participant.AgentName,
+		Description:        "Mnemon teamwork participant: " + participant.Principal,
+		Instructions:       multicaParticipantInstructions(participant),
+		RuntimeID:          runtimeID,
+		Visibility:         "private",
+		MaxConcurrentTasks: 1,
+	}
+	for _, agent := range agents {
+		if agent.Name != participant.AgentName {
+			continue
+		}
+		if strings.TrimSpace(agent.ArchivedAt) != "" {
+			restored, err := cli.RestoreAgent(ctx, agent.ID)
+			if err != nil {
+				return driver.MulticaAgent{}, "", err
+			}
+			updated, err := cli.UpdateAgent(ctx, restored.ID, req)
+			if err != nil {
+				return driver.MulticaAgent{}, "", err
+			}
+			return updated, "restored", nil
+		}
+		if agent.RuntimeID != runtimeID || agent.Description != req.Description || agent.Instructions != req.Instructions {
+			updated, err := cli.UpdateAgent(ctx, agent.ID, req)
+			if err != nil {
+				return driver.MulticaAgent{}, "", err
+			}
+			return updated, "updated", nil
+		}
+		return agent, "reused", nil
+	}
+	agent, err := cli.CreateAgent(ctx, req)
+	if err != nil {
+		return driver.MulticaAgent{}, "", err
+	}
+	return agent, "created", nil
+}
+
+func multicaParticipantInstructions(participant driver.MulticaParticipantRecord) string {
+	return strings.Join([]string{
+		"You are the Multica-visible identity for Mnemon principal " + participant.Principal + ".",
+		"Treat Multica issues as product-facing task surfaces; Mnemon events remain the teamwork protocol source of truth.",
+		"When the Mnemon runtime wakes you, rely on Mnemon-rendered context rather than copying issue metadata into your own prompt.",
+	}, "\n")
+}
+
+func upsertMulticaAgent(agents []driver.MulticaAgent, next driver.MulticaAgent) []driver.MulticaAgent {
+	for i := range agents {
+		if agents[i].ID == next.ID {
+			agents[i] = next
+			return agents
+		}
+	}
+	return append(agents, next)
 }
 
 func loadMulticaIssue(ctx context.Context, stdin io.Reader) (driver.MulticaIssue, error) {
@@ -219,6 +458,13 @@ func loadMulticaIssue(ctx context.Context, stdin io.Reader) (driver.MulticaIssue
 	default:
 		return driver.MulticaIssue{}, fmt.Errorf("one of --issue-id or --issue-json is required")
 	}
+}
+
+func multicaCommandContext(cmd *cobra.Command) context.Context {
+	if cmd != nil && cmd.Context() != nil {
+		return cmd.Context()
+	}
+	return context.Background()
 }
 
 func multicaLocalClient() (*access.Client, string, error) {
@@ -321,7 +567,16 @@ func init() {
 	multicaProjectCommentCmd.Flags().StringVar(&multicaCommentTitle, "title", "", "short Mnemon update title")
 	multicaProjectCommentCmd.Flags().StringArrayVar(&multicaCommentEvents, "event", nil, "Mnemon event marker; may be repeated")
 
-	multicaCmd.AddCommand(multicaProbeCmd, multicaImportIssueCmd, multicaProjectCommentCmd)
+	multicaProvisionCmd.Flags().StringVar(&multicaProvisionRegistry, "registry", "", "Multica registry path")
+	multicaProvisionCmd.Flags().StringVar(&multicaProvisionProjectRoot, "project-root", ".", "project root for the default registry path")
+	multicaProvisionCmd.Flags().StringVar(&multicaProvisionProfileName, "runtime-profile-name", "mnemon-runtime", "Multica runtime profile display name")
+	multicaProvisionCmd.Flags().StringVar(&multicaProvisionRuntimeCommand, "runtime-command", "mnemon-multica-runtime", "runtime executable name registered with Multica")
+	multicaProvisionCmd.Flags().StringVar(&multicaProvisionRuntimePath, "runtime-path", "", "absolute local executable path for the runtime profile")
+	multicaProvisionCmd.Flags().StringVar(&multicaProvisionAgentPrefix, "agent-prefix", "mnemon", "Multica participant agent name prefix")
+	multicaProvisionCmd.Flags().BoolVar(&multicaProvisionRestartDaemon, "restart-daemon", false, "restart the local Multica daemon after setting the runtime path")
+	multicaProvisionCmd.Flags().DurationVar(&multicaProvisionWait, "wait", 30*time.Second, "time to wait for the runtime to appear online")
+
+	multicaCmd.AddCommand(multicaProbeCmd, multicaProvisionCmd, multicaImportIssueCmd, multicaProjectCommentCmd)
 	multicaCmd.GroupID = groupSpine
 	rootCmd.AddCommand(multicaCmd)
 }

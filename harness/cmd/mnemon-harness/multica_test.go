@@ -7,9 +7,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	"github.com/mnemon-dev/mnemon/harness/internal/driver"
 )
 
 func TestMulticaImportIssueWritesObservedDraftToLocalIngest(t *testing.T) {
@@ -83,6 +85,74 @@ func TestMulticaImportIssueWritesObservedDraftToLocalIngest(t *testing.T) {
 	}
 }
 
+func TestMulticaProvisionCreatesParticipantRegistry(t *testing.T) {
+	restoreMulticaFlags(t)
+
+	tmp := t.TempDir()
+	bin := filepath.Join(tmp, "multica")
+	script := `#!/usr/bin/env sh
+case "$*" in
+  *"version --output json"*) printf '{"version":"v0.3.31","commit":"test","date":"now","os":"darwin","arch":"arm64","go":"go"}\n' ;;
+  *"auth status"*) printf 'Server: https://api.multica.ai\nUser: Test\n' >&2 ;;
+  *"daemon status --output json"*) printf '{"status":"running"}\n' ;;
+  *"runtime profile list"*) printf '[]\n' ;;
+  *"runtime profile create"*) printf '{"id":"profile-1","display_name":"mnemon-runtime","command_name":"mnemon-multica-runtime","protocol_family":"codex","enabled":true,"workspace_id":"ws-1"}\n' ;;
+  *"runtime profile set-path"*) printf '{}\n' ;;
+  *"runtime list"*) printf '[{"id":"runtime-1","name":"Mnemon (Mac)","provider":"codex","status":"online","profile_id":"profile-1","workspace_id":"ws-1"}]\n' ;;
+  *"agent list"*) printf '[]\n' ;;
+  *"agent create"*) name=""; prev=""; for arg in "$@"; do if [ "$prev" = "--name" ]; then name="$arg"; fi; prev="$arg"; done; printf '{"id":"agent-%s","name":"%s","runtime_id":"runtime-1","status":"idle","visibility":"private","workspace_id":"ws-1"}\n' "$name" "$name" ;;
+  *) printf '{}\n' ;;
+esac
+`
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	registryPath := filepath.Join(tmp, "registry.json")
+	multicaBin = bin
+	multicaProfile = "desktop-api.multica.ai"
+	multicaWorkspaceID = "ws-1"
+	multicaProvisionRegistry = registryPath
+	multicaProvisionProjectRoot = tmp
+	multicaProvisionProfileName = "mnemon-runtime"
+	multicaProvisionRuntimeCommand = "mnemon-multica-runtime"
+	multicaProvisionRuntimePath = "/abs/mnemon-multica-runtime"
+	multicaProvisionAgentPrefix = "mnemon"
+	multicaProvisionRestartDaemon = false
+	multicaProvisionWait = 0
+	multicaJSON = true
+
+	var out bytes.Buffer
+	multicaProvisionCmd.SetOut(&out)
+	t.Cleanup(func() {
+		multicaProvisionCmd.SetOut(os.Stdout)
+	})
+	if err := runMulticaProvision(multicaProvisionCmd, nil); err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	var report multicaProvisionReport
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatalf("provision output must be JSON: %v\n%s", err, out.String())
+	}
+	if report.RuntimeProfile.ID != "profile-1" || report.Runtime.ID != "runtime-1" || len(report.Participants) != 5 {
+		t.Fatalf("report mismatch: %+v", report)
+	}
+	reg, ok, err := driver.LoadMulticaRegistry(registryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("registry was not written")
+	}
+	if reg.WorkspaceID != "ws-1" || reg.RuntimeProfileID != "profile-1" || reg.RuntimeID != "runtime-1" || len(reg.Participants) != 5 {
+		t.Fatalf("registry mismatch: %+v", reg)
+	}
+	for _, participant := range reg.Participants {
+		if !strings.HasPrefix(participant.AgentID, "agent-mnemon-") {
+			t.Fatalf("participant missing agent id: %+v", participant)
+		}
+	}
+}
+
 func restoreMulticaFlags(t *testing.T) {
 	t.Helper()
 	oldBin := multicaBin
@@ -108,6 +178,14 @@ func restoreMulticaFlags(t *testing.T) {
 	oldStdin := multicaCommentStdin
 	oldTitle := multicaCommentTitle
 	oldEvents := multicaCommentEvents
+	oldProvisionRegistry := multicaProvisionRegistry
+	oldProvisionProjectRoot := multicaProvisionProjectRoot
+	oldProvisionProfileName := multicaProvisionProfileName
+	oldProvisionRuntimeCommand := multicaProvisionRuntimeCommand
+	oldProvisionRuntimePath := multicaProvisionRuntimePath
+	oldProvisionAgentPrefix := multicaProvisionAgentPrefix
+	oldProvisionRestartDaemon := multicaProvisionRestartDaemon
+	oldProvisionWait := multicaProvisionWait
 	t.Cleanup(func() {
 		multicaBin = oldBin
 		multicaProfile = oldProfile
@@ -132,6 +210,14 @@ func restoreMulticaFlags(t *testing.T) {
 		multicaCommentStdin = oldStdin
 		multicaCommentTitle = oldTitle
 		multicaCommentEvents = oldEvents
+		multicaProvisionRegistry = oldProvisionRegistry
+		multicaProvisionProjectRoot = oldProvisionProjectRoot
+		multicaProvisionProfileName = oldProvisionProfileName
+		multicaProvisionRuntimeCommand = oldProvisionRuntimeCommand
+		multicaProvisionRuntimePath = oldProvisionRuntimePath
+		multicaProvisionAgentPrefix = oldProvisionAgentPrefix
+		multicaProvisionRestartDaemon = oldProvisionRestartDaemon
+		multicaProvisionWait = oldProvisionWait
 	})
 	multicaBin = ""
 	multicaProfile = ""
@@ -155,4 +241,12 @@ func restoreMulticaFlags(t *testing.T) {
 	multicaCommentStdin = false
 	multicaCommentTitle = ""
 	multicaCommentEvents = nil
+	multicaProvisionRegistry = ""
+	multicaProvisionProjectRoot = "."
+	multicaProvisionProfileName = "mnemon-runtime"
+	multicaProvisionRuntimeCommand = "mnemon-multica-runtime"
+	multicaProvisionRuntimePath = ""
+	multicaProvisionAgentPrefix = "mnemon"
+	multicaProvisionRestartDaemon = false
+	multicaProvisionWait = 30 * 1_000_000_000
 }

@@ -436,6 +436,69 @@ func (c MulticaCLI) ArchiveAgent(ctx context.Context, agentID string) (MulticaAg
 	return agent, nil
 }
 
+func (c MulticaCLI) RestoreAgent(ctx context.Context, agentID string) (MulticaAgent, error) {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return MulticaAgent{}, fmt.Errorf("multica agent id is required")
+	}
+	out, err := c.Run(ctx, []string{"agent", "restore", agentID, "--output", "json"}, "")
+	if err != nil {
+		return MulticaAgent{}, err
+	}
+	var agent MulticaAgent
+	if err := json.Unmarshal([]byte(out.Stdout), &agent); err != nil {
+		return MulticaAgent{}, fmt.Errorf("decode restored multica agent: %w", err)
+	}
+	return agent, nil
+}
+
+func (c MulticaCLI) UpdateAgent(ctx context.Context, agentID string, req MulticaCreateAgentRequest) (MulticaAgent, error) {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return MulticaAgent{}, fmt.Errorf("multica agent id is required")
+	}
+	args := []string{"agent", "update", agentID, "--output", "json"}
+	if strings.TrimSpace(req.Name) != "" {
+		args = append(args, "--name", strings.TrimSpace(req.Name))
+	}
+	if strings.TrimSpace(req.Description) != "" {
+		args = append(args, "--description", strings.TrimSpace(req.Description))
+	}
+	if strings.TrimSpace(req.Instructions) != "" {
+		args = append(args, "--instructions", strings.TrimSpace(req.Instructions))
+	}
+	if strings.TrimSpace(req.RuntimeID) != "" {
+		args = append(args, "--runtime-id", strings.TrimSpace(req.RuntimeID))
+	}
+	if strings.TrimSpace(req.Visibility) != "" {
+		args = append(args, "--visibility", strings.TrimSpace(req.Visibility))
+	}
+	if strings.TrimSpace(req.Model) != "" {
+		args = append(args, "--model", strings.TrimSpace(req.Model))
+	}
+	if strings.TrimSpace(req.ThinkingLevel) != "" {
+		args = append(args, "--thinking-level", strings.TrimSpace(req.ThinkingLevel))
+	}
+	if req.MaxConcurrentTasks > 0 {
+		args = append(args, "--max-concurrent-tasks", fmt.Sprint(req.MaxConcurrentTasks))
+	}
+	if strings.TrimSpace(req.CustomArgsJSON) != "" {
+		args = append(args, "--custom-args", strings.TrimSpace(req.CustomArgsJSON))
+	}
+	if strings.TrimSpace(req.RuntimeConfigJSON) != "" {
+		args = append(args, "--runtime-config", strings.TrimSpace(req.RuntimeConfigJSON))
+	}
+	out, err := c.Run(ctx, args, "")
+	if err != nil {
+		return MulticaAgent{}, err
+	}
+	var agent MulticaAgent
+	if err := json.Unmarshal([]byte(out.Stdout), &agent); err != nil {
+		return MulticaAgent{}, fmt.Errorf("decode updated multica agent: %w", err)
+	}
+	return agent, nil
+}
+
 func (c MulticaCLI) CreateIssue(ctx context.Context, req MulticaCreateIssueRequest) (MulticaIssue, error) {
 	if strings.TrimSpace(req.Title) == "" {
 		return MulticaIssue{}, fmt.Errorf("multica issue title is required")
