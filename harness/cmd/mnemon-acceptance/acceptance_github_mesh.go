@@ -1162,6 +1162,7 @@ func setupR1CodexGitHubMeshAgents(ctx context.Context, runRoot, binDir, repo, to
 			Host:        "codex",
 			ControlURL:  localURL,
 			Principal:   principal,
+			HarnessBin:  filepath.Join(binDir, "mnemon-harness"),
 			ProjectRoot: workspace,
 			UseToken:    true,
 		}); err != nil {

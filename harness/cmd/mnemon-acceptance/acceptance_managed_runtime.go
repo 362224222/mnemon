@@ -419,7 +419,8 @@ Do not contact the worker directly. After both commands succeed, answer "seed wr
 
 func initializeManagedRuntimeCodexAgent(agent *r1CodexAgent) (r1CodexAgentReport, json.RawMessage, error) {
 	initResp, err := agent.server.Request("initialize", map[string]any{
-		"clientInfo": map[string]any{"name": "mnemon-managed-runtime-acceptance", "version": version},
+		"clientInfo":   map[string]any{"name": "mnemon-managed-runtime-acceptance", "version": version},
+		"capabilities": codexAppServerCapabilities(),
 	}, 30*time.Second)
 	if err != nil {
 		return r1CodexAgentReport{}, nil, fmt.Errorf("%s: initialize: %w", agent.principal, err)
@@ -432,11 +433,10 @@ func initializeManagedRuntimeCodexAgent(agent *r1CodexAgent) (r1CodexAgentReport
 	hooksRaw, _ := json.Marshal(hooksResp)
 	hooks := collectHookMetadata(hooksResp)
 	thread, err := agent.server.Request("thread/start", map[string]any{
-		"cwd":                   agent.workspace,
-		"approvalPolicy":        "never",
-		"sandbox":               "danger-full-access",
-		"ephemeral":             true,
-		"developerInstructions": managedRuntimeDeveloperInstructions(agent.principal),
+		"cwd":            agent.workspace,
+		"approvalPolicy": "never",
+		"sandbox":        "danger-full-access",
+		"ephemeral":      true,
 	}, 30*time.Second)
 	if err != nil {
 		return r1CodexAgentReport{}, hooksRaw, fmt.Errorf("%s: thread/start: %w", agent.principal, err)
@@ -460,30 +460,20 @@ func initializeManagedRuntimeCodexAgent(agent *r1CodexAgent) (r1CodexAgentReport
 	}, hooksRaw, nil
 }
 
-func managedRuntimeDeveloperInstructions(principal string) string {
-	return fmt.Sprintf(`You are %s in a Mnemon managed-runtime acceptance run.
-The user input [mnemon:wake] is only a local wake signal. It is not task context.
-On a wake, inspect governed Mnemon context through the normal hook/skill surface and Local Mnemon commands from the workspace root:
-  . .mnemon/harness/local/env.sh
-  mnemon-harness control render --addr "$MNEMON_CONTROL_ADDR" --principal "$MNEMON_CONTROL_PRINCIPAL" --token-file "$MNEMON_CONTROL_TOKEN_FILE" --intent teamwork.events --lifecycle remind --surface agent
-  mnemon-harness control render --addr "$MNEMON_CONTROL_ADDR" --principal "$MNEMON_CONTROL_PRINCIPAL" --token-file "$MNEMON_CONTROL_TOKEN_FILE" --intent payload.contract --lifecycle remind --surface agent
-  mnemon-harness control teamwork progress --addr "$MNEMON_CONTROL_ADDR" --principal "$MNEMON_CONTROL_PRINCIPAL" --token-file "$MNEMON_CONTROL_TOKEN_FILE" --assignment-ref <assignment-id> --summary "<progress, result, or blocker>" --external-id <unique-id>
-  mnemon-harness control observe --addr "$MNEMON_CONTROL_ADDR" --principal "$MNEMON_CONTROL_PRINCIPAL" --token-file "$MNEMON_CONTROL_TOKEN_FILE" --type <event-type> --external-id <id> --payload '<json>'
-If the rendered brief contains [mnemon:work], you may complete the addressed work and emit a short progress_digest.write_candidate.observed event with assignment_ref from the brief.
-If the rendered brief contains [mnemon:integrate], you may integrate, close, or assign follow-up work through normal governed events.
-Do not say an event was written unless the Local Mnemon command succeeded. Keep final answers brief and name the governed event actually written.`, principal)
-}
-
 type managedRuntimeExistingCodexClient struct {
 	agent   *r1CodexAgent
 	timeout time.Duration
 }
 
-func (c managedRuntimeExistingCodexClient) StartTurn(_ context.Context, query string) (driver.ManagedTurnResult, error) {
+func (c managedRuntimeExistingCodexClient) StartTurn(ctx context.Context, query string) (driver.ManagedTurnResult, error) {
 	if strings.TrimSpace(query) != driver.ManagedWakeQuery {
 		return driver.ManagedTurnResult{}, fmt.Errorf("managed acceptance client only accepts %q queries", driver.ManagedWakeQuery)
 	}
-	answer, err := runR1Turn(c.agent, driver.ManagedWakeQuery, c.timeout)
+	additionalContext, err := driver.CodexAppServerAdditionalContext(ctx, c.agent.workspace, c.agent.env, driver.ManagedWakeQuery)
+	if err != nil {
+		return driver.ManagedTurnResult{}, err
+	}
+	answer, err := runR1TurnWithAdditionalContext(c.agent, driver.ManagedWakeQuery, c.timeout, additionalContext)
 	status := "completed"
 	if err != nil {
 		status = "failed"

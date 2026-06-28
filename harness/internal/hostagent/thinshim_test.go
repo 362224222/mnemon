@@ -19,6 +19,8 @@ func TestRenderThinHookIsGenericLifecycleShim(t *testing.T) {
 		`LOCAL_ENV="${PROJECT_ROOT}/.mnemon/harness/local/env.sh"`,
 		`GUIDE_PATH="${PROJECT_ROOT}/.mnemon/harness/local/guide.md"`,
 		"Evaluate whether governed context should be read before responding.",
+		`grep -q '\[mnemon:wake\]'`,
+		`--intent teamwork.events --lifecycle remind --surface hook`,
 		`"systemMessage": "${SYSTEM_MESSAGE}"`,
 	} {
 		if !strings.Contains(body, want) {
@@ -27,10 +29,8 @@ func TestRenderThinHookIsGenericLifecycleShim(t *testing.T) {
 	}
 	for _, blocked := range []string{
 		"MEMORY.md",
-		"control render",
 		"control pull",
 		"control observe",
-		"teamwork",
 		"assignment",
 		"progress_digest",
 		"agent_profile",

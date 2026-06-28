@@ -19,7 +19,10 @@ func TestStampUsesTrustedSourcesNotPayload(t *testing.T) {
 	br := newBridge()
 	b := ResolvedBinding{Actor: "agent", Emits: "memory.write.proposed"}
 	proj := view.View{Ref: "proj_abc", Digest: "abc",
-		Resources: []contract.ResourceVersion{{Ref: contract.ResourceRef{Kind: "memory", ID: "m1"}, Version: 3}}}
+		Resources: []contract.ResourceVersion{
+			{Ref: contract.ResourceRef{Kind: "memory", ID: "m1"}, Version: 3},
+			{Ref: contract.ResourceRef{Kind: "goal", ID: "g1"}, Version: 9},
+		}}
 	trigger := contract.Event{ID: "ev-trigger", Type: "memory.observed", CorrelationID: "corr-1"}
 	// hostile intent tries to escalate identity / forge a read-set via payload; the write itself is in-scope:
 	intent := contract.ProposedEvent{Type: "memory.write.proposed", Payload: map[string]any{
@@ -33,8 +36,11 @@ func TestStampUsesTrustedSourcesNotPayload(t *testing.T) {
 	if ev.Actor != "agent" {
 		t.Fatalf("Actor must come from binding, not payload; got %q", ev.Actor)
 	}
-	if len(ev.BasedOn) != 1 || ev.BasedOn[0].Version != 3 {
-		t.Fatalf("BasedOn must be the dispatched presentation view's read-set; got %+v", ev.BasedOn)
+	if len(ev.ResourceRefs) != 2 {
+		t.Fatalf("ResourceRefs must retain the dispatched scope, got %+v", ev.ResourceRefs)
+	}
+	if len(ev.BasedOn) != 1 || ev.BasedOn[0].Ref != (contract.ResourceRef{Kind: "memory", ID: "m1"}) || ev.BasedOn[0].Version != 3 {
+		t.Fatalf("BasedOn must be narrowed to written refs from the dispatched view; got %+v", ev.BasedOn)
 	}
 	if ev.PresentationViewRef != "proj_abc" || ev.ContextDigest != "abc" {
 		t.Fatalf("provenance must come from the presentation view; got ref=%q digest=%q", ev.PresentationViewRef, ev.ContextDigest)

@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -171,18 +172,17 @@ func (l *FileManagedWakeLedger) loadLocked() {
 }
 
 type CodexAppServerTurnClient struct {
-	Principal             string
-	Command               string
-	Workspace             string
-	Env                   []string
-	DeveloperInstructions string
-	TurnTimeout           time.Duration
-	RequestTimeout        time.Duration
-	ClientName            string
-	ClientVersion         string
+	Principal      string
+	Command        string
+	Workspace      string
+	Env            []string
+	TurnTimeout    time.Duration
+	RequestTimeout time.Duration
+	ClientName     string
+	ClientVersion  string
 }
 
-func (c CodexAppServerTurnClient) StartTurn(_ context.Context, query string) (ManagedTurnResult, error) {
+func (c CodexAppServerTurnClient) StartTurn(ctx context.Context, query string) (ManagedTurnResult, error) {
 	if strings.TrimSpace(query) != ManagedWakeQuery {
 		return ManagedTurnResult{}, fmt.Errorf("managed codex appserver client only accepts %q queries", ManagedWakeQuery)
 	}
@@ -219,17 +219,18 @@ func (c CodexAppServerTurnClient) StartTurn(_ context.Context, query string) (Ma
 	}
 	defer server.Close()
 	if _, err := server.Request("initialize", map[string]any{
-		"clientInfo": map[string]any{"name": clientName, "version": clientVersion},
+		"clientInfo":   map[string]any{"name": clientName, "version": clientVersion},
+		"capabilities": codexAppServerCapabilities(),
 	}, requestTimeout); err != nil {
 		return ManagedTurnResult{}, fmt.Errorf("initialize: %w", err)
 	}
-	thread, err := server.Request("thread/start", map[string]any{
-		"cwd":                   workspace,
-		"approvalPolicy":        "never",
-		"sandbox":               "danger-full-access",
-		"ephemeral":             true,
-		"developerInstructions": c.developerInstructions(),
-	}, requestTimeout)
+	threadParams := map[string]any{
+		"cwd":            workspace,
+		"approvalPolicy": "never",
+		"sandbox":        "danger-full-access",
+		"ephemeral":      true,
+	}
+	thread, err := server.Request("thread/start", threadParams, requestTimeout)
 	if err != nil {
 		return ManagedTurnResult{}, fmt.Errorf("thread/start: %w", err)
 	}
@@ -237,14 +238,22 @@ func (c CodexAppServerTurnClient) StartTurn(_ context.Context, query string) (Ma
 	if threadID == "" {
 		return ManagedTurnResult{}, fmt.Errorf("thread/start returned no thread id")
 	}
-	before := server.NotificationCount()
-	if _, err := server.Request("turn/start", map[string]any{
+	additionalContext, err := CodexAppServerAdditionalContext(ctx, workspace, c.Env, ManagedWakeQuery)
+	if err != nil {
+		return ManagedTurnResult{}, fmt.Errorf("load hook context: %w", err)
+	}
+	turnParams := map[string]any{
 		"threadId":       threadID,
 		"input":          []map[string]any{{"type": "text", "text": ManagedWakeQuery}},
 		"cwd":            workspace,
 		"approvalPolicy": "never",
 		"sandboxPolicy":  map[string]any{"type": "dangerFullAccess"},
-	}, requestTimeout); err != nil {
+	}
+	if len(additionalContext) > 0 {
+		turnParams["additionalContext"] = additionalContext
+	}
+	before := server.NotificationCount()
+	if _, err := server.Request("turn/start", turnParams, requestTimeout); err != nil {
 		return ManagedTurnResult{}, fmt.Errorf("turn/start: %w", err)
 	}
 	if _, err := server.WaitNotification("turn/completed", turnTimeout, before); err != nil {
@@ -259,16 +268,76 @@ func (c CodexAppServerTurnClient) StartTurn(_ context.Context, query string) (Ma
 	return ManagedTurnResult{TurnID: threadID, Status: "completed", FinalAnswer: answer}, nil
 }
 
-func (c CodexAppServerTurnClient) developerInstructions() string {
-	if strings.TrimSpace(c.DeveloperInstructions) != "" {
-		return c.DeveloperInstructions
+func CodexAppServerAdditionalContext(ctx context.Context, workspace string, env []string, query string) (map[string]any, error) {
+	out := map[string]any{}
+	for _, lifecycle := range []string{"prime", "remind"} {
+		message, err := runCodexLifecycleHook(ctx, workspace, env, lifecycle, query)
+		if err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(message) == "" {
+			continue
+		}
+		out["mnemon.hook."+lifecycle] = map[string]any{
+			"kind":  "application",
+			"value": message,
+		}
 	}
-	principal := strings.TrimSpace(c.Principal)
-	if principal == "" {
-		principal = "the local managed principal"
+	return out, nil
+}
+
+func runCodexLifecycleHook(ctx context.Context, workspace string, env []string, lifecycle string, query string) (string, error) {
+	hook := filepath.Join(workspace, ".codex", "hooks", "mnemon-r1", lifecycle+".sh")
+	if _, err := os.Stat(hook); errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	} else if err != nil {
+		return "", err
 	}
-	return fmt.Sprintf(`You are %s in a mnemond-managed Mnemon runtime.
-When the user input is [mnemon:wake], treat it only as a local wake signal.
-Use the normal Mnemon hooks/skills and Local Mnemon commands in this workspace to inspect governed context and decide whether to act.
-Do not expect assignment details in the raw wake query. Keep any governed event drafts short and emit them through Local Mnemon.`, principal)
+	stdin := "{}"
+	if lifecycle == "remind" {
+		raw, err := json.Marshal(map[string]string{"prompt": query})
+		if err != nil {
+			return "", err
+		}
+		stdin = string(raw)
+	}
+	cmd := exec.CommandContext(ctx, "bash", hook)
+	cmd.Dir = workspace
+	if len(env) > 0 {
+		cmd.Env = append([]string(nil), env...)
+	}
+	cmd.Stdin = strings.NewReader(stdin)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		detail := strings.TrimSpace(stderr.String())
+		if detail != "" {
+			return "", fmt.Errorf("%s hook failed: %w: %s", lifecycle, err, detail)
+		}
+		return "", fmt.Errorf("%s hook failed: %w", lifecycle, err)
+	}
+	return codexHookSystemMessage(stdout.String()), nil
+}
+
+func codexHookSystemMessage(raw string) string {
+	text := strings.TrimSpace(raw)
+	if text == "" {
+		return ""
+	}
+	var envelope map[string]any
+	if err := json.Unmarshal([]byte(text), &envelope); err == nil {
+		if message, ok := envelope["systemMessage"].(string); ok {
+			return strings.TrimSpace(message)
+		}
+	}
+	return text
+}
+
+func codexAppServerCapabilities() map[string]any {
+	return map[string]any{
+		"experimentalApi":    true,
+		"requestAttestation": false,
+	}
 }

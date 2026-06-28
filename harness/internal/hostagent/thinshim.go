@@ -118,7 +118,22 @@ func hookBodyBlock(timing string) string {
 			`fi`,
 		}, "\n")
 	case "remind":
-		return `HOOK_BODY="[mnemon] Evaluate whether governed context should be read before responding."`
+		return strings.Join([]string{
+			`HOOK_BODY="[mnemon] Evaluate whether governed context should be read before responding."`,
+			`if printf '%s' "${INPUT}" | grep -q '\[mnemon:wake\]'; then`,
+			`  if [[ -n "${MNEMON_CONTROL_ADDR:-}" && -n "${MNEMON_CONTROL_PRINCIPAL:-}" ]]; then`,
+			`    TOKEN_ARGS=()`,
+			`    if [[ -n "${MNEMON_CONTROL_TOKEN_FILE:-}" ]]; then`,
+			`      TOKEN_ARGS=(--token-file "${MNEMON_CONTROL_TOKEN_FILE}")`,
+			`    fi`,
+			`    if RENDERED="$(cd "${PROJECT_ROOT}" && "${MNEMON_HARNESS_BIN:-mnemon-harness}" control render --addr "${MNEMON_CONTROL_ADDR}" --principal "${MNEMON_CONTROL_PRINCIPAL}" "${TOKEN_ARGS[@]}" --intent teamwork.events --lifecycle remind --surface hook 2>/dev/null)"; then`,
+			`      if [[ -n "${RENDERED}" ]]; then`,
+			`        HOOK_BODY="$(printf '%s\n\n%s' "[mnemon] Wake signal received. Current governed context:" "${RENDERED}")"`,
+			`      fi`,
+			`    fi`,
+			`  fi`,
+			`fi`,
+		}, "\n")
 	case "nudge":
 		return `HOOK_BODY="[mnemon] Evaluate whether this turn changed durable state that should be recorded."`
 	case "compact":

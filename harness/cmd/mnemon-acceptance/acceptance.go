@@ -515,6 +515,7 @@ func setupR1CodexAgents(runRoot, binDir, controlURL string, count int, sourceCod
 			Host:        "codex",
 			ControlURL:  controlURL,
 			Principal:   principal,
+			HarnessBin:  filepath.Join(binDir, "mnemon-harness"),
 			ProjectRoot: workspace,
 			UseToken:    true,
 		}); err != nil {
@@ -684,7 +685,8 @@ func startR1CodexAppserver(agent *r1CodexAgent, command string) error {
 
 func initializeR1CodexAgent(agent *r1CodexAgent, turnTimeout time.Duration) (r1CodexAgentReport, json.RawMessage, error) {
 	initResp, err := agent.server.Request("initialize", map[string]any{
-		"clientInfo": map[string]any{"name": "mnemon-r1-codex-acceptance", "version": version},
+		"clientInfo":   map[string]any{"name": "mnemon-r1-codex-acceptance", "version": version},
+		"capabilities": codexAppServerCapabilities(),
 	}, 30*time.Second)
 	if err != nil {
 		return r1CodexAgentReport{}, nil, fmt.Errorf("%s: initialize: %w", agent.principal, err)
@@ -725,6 +727,13 @@ func initializeR1CodexAgent(agent *r1CodexAgent, turnTimeout time.Duration) (r1C
 	}
 	_ = turnTimeout
 	return report, hooksRaw, nil
+}
+
+func codexAppServerCapabilities() map[string]any {
+	return map[string]any{
+		"experimentalApi":    true,
+		"requestAttestation": false,
+	}
 }
 
 func r1AcceptanceDeveloperInstructions(principal string) string {
@@ -1167,6 +1176,7 @@ func setupR1CodexSyncAgents(ctx context.Context, runRoot, binDir string, hub r1S
 			Host:        "codex",
 			ControlURL:  localURL,
 			Principal:   principal,
+			HarnessBin:  filepath.Join(binDir, "mnemon-harness"),
 			ProjectRoot: workspace,
 			UseToken:    true,
 		}); err != nil {
@@ -1273,14 +1283,22 @@ func waitForR1DerivedEventPresentation(controlURL, token string, wants []string,
 }
 
 func runR1Turn(agent *r1CodexAgent, prompt string, timeout time.Duration) (string, error) {
+	return runR1TurnWithAdditionalContext(agent, prompt, timeout, nil)
+}
+
+func runR1TurnWithAdditionalContext(agent *r1CodexAgent, prompt string, timeout time.Duration, additionalContext map[string]any) (string, error) {
 	before := agent.server.NotificationCount()
-	if _, err := agent.server.Request("turn/start", map[string]any{
+	params := map[string]any{
 		"threadId":       agent.threadID,
 		"input":          []map[string]any{{"type": "text", "text": prompt}},
 		"cwd":            agent.workspace,
 		"approvalPolicy": "never",
 		"sandboxPolicy":  map[string]any{"type": "dangerFullAccess"},
-	}, 30*time.Second); err != nil {
+	}
+	if len(additionalContext) > 0 {
+		params["additionalContext"] = additionalContext
+	}
+	if _, err := agent.server.Request("turn/start", params, 30*time.Second); err != nil {
 		return "", fmt.Errorf("%s: turn/start: %w", agent.principal, err)
 	}
 	if _, err := agent.server.WaitNotification("turn/completed", timeout, before); err != nil {

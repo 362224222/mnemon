@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 
@@ -80,5 +81,15 @@ func TestManagedRuntimeGitHubRequiresTokenFile(t *testing.T) {
 	}
 	if report.Status != "blocked" || !strings.Contains(err.Error(), "--github-token-file") {
 		t.Fatalf("github blocker mismatch: status=%s err=%v report=%+v", report.Status, err, report)
+	}
+}
+
+func TestManagedRuntimeAcceptanceDoesNotInjectDeveloperInstructions(t *testing.T) {
+	raw, err := os.ReadFile("acceptance_managed_runtime.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "developerInstructions") {
+		t.Fatal("managed-runtime acceptance must rely on standard GUIDE/hook/render flow, not acceptance-specific developer instructions")
 	}
 }

@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
@@ -72,5 +74,59 @@ func TestCodexAppServerTurnClientRejectsContextQuery(t *testing.T) {
 	client := CodexAppServerTurnClient{Command: "definitely-not-run"}
 	if _, err := client.StartTurn(context.Background(), "assignment asg1"); err == nil {
 		t.Fatal("codex appserver client must reject non-sentinel queries before starting a process")
+	}
+}
+
+func TestCodexAppServerAdditionalContextRunsStandardHooks(t *testing.T) {
+	workspace := t.TempDir()
+	hookDir := filepath.Join(workspace, ".codex", "hooks", "mnemon-r1")
+	if err := os.MkdirAll(hookDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	prime := filepath.Join(hookDir, "prime.sh")
+	if err := os.WriteFile(prime, []byte(`#!/usr/bin/env bash
+printf '{"systemMessage":"prime guide loaded"}\n'
+`), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	remind := filepath.Join(hookDir, "remind.sh")
+	if err := os.WriteFile(remind, []byte(`#!/usr/bin/env bash
+INPUT="$(cat || true)"
+case "${INPUT}" in
+  *"[mnemon:wake]"*) printf '{"systemMessage":"remind rendered governed context"}\n' ;;
+  *) printf '{"systemMessage":"remind generic"}\n' ;;
+esac
+`), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, err := CodexAppServerAdditionalContext(context.Background(), workspace, os.Environ(), ManagedWakeQuery)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ctx) != 2 {
+		t.Fatalf("additional context keys = %+v, want prime and remind", ctx)
+	}
+	for key, want := range map[string]string{
+		"mnemon.hook.prime":  "prime guide loaded",
+		"mnemon.hook.remind": "remind rendered governed context",
+	} {
+		entry, ok := ctx[key].(map[string]any)
+		if !ok {
+			t.Fatalf("%s entry = %#v", key, ctx[key])
+		}
+		if entry["kind"] != "application" || !strings.Contains(entry["value"].(string), want) {
+			t.Fatalf("%s entry = %#v, want application context containing %q", key, entry, want)
+		}
+	}
+}
+
+func TestCodexAppServerAdditionalContextSkipsMissingHooks(t *testing.T) {
+	ctx, err := CodexAppServerAdditionalContext(context.Background(), t.TempDir(), nil, ManagedWakeQuery)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ctx) != 0 {
+		t.Fatalf("additional context = %+v, want empty when hooks are absent", ctx)
 	}
 }
