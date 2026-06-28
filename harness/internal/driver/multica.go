@@ -60,11 +60,105 @@ type MulticaIssue struct {
 	Metadata    map[string]any `json:"metadata"`
 }
 
+type MulticaRuntimeProfile struct {
+	ID             string `json:"id"`
+	DisplayName    string `json:"display_name"`
+	Description    string `json:"description"`
+	CommandName    string `json:"command_name"`
+	ProtocolFamily string `json:"protocol_family"`
+	Enabled        bool   `json:"enabled"`
+	Visibility     string `json:"visibility"`
+	WorkspaceID    string `json:"workspace_id"`
+}
+
+type MulticaRuntime struct {
+	ID           string         `json:"id"`
+	Name         string         `json:"name"`
+	Provider     string         `json:"provider"`
+	Status       string         `json:"status"`
+	RuntimeMode  string         `json:"runtime_mode"`
+	ProfileID    string         `json:"profile_id"`
+	LaunchHeader string         `json:"launch_header"`
+	Metadata     map[string]any `json:"metadata"`
+	WorkspaceID  string         `json:"workspace_id"`
+}
+
+type MulticaAgent struct {
+	ID            string         `json:"id"`
+	Name          string         `json:"name"`
+	Description   string         `json:"description"`
+	Instructions  string         `json:"instructions"`
+	RuntimeID     string         `json:"runtime_id"`
+	RuntimeMode   string         `json:"runtime_mode"`
+	Status        string         `json:"status"`
+	Visibility    string         `json:"visibility"`
+	ArchivedAt    string         `json:"archived_at"`
+	CustomArgs    []string       `json:"custom_args"`
+	RuntimeConfig map[string]any `json:"runtime_config"`
+	WorkspaceID   string         `json:"workspace_id"`
+}
+
 type MulticaComment struct {
 	ID      string `json:"id"`
 	IssueID string `json:"issue_id"`
 	Content string `json:"content"`
 	Type    string `json:"type"`
+}
+
+type MulticaIssueRun struct {
+	ID          string         `json:"id"`
+	IssueID     string         `json:"issue_id"`
+	AgentID     string         `json:"agent_id"`
+	RuntimeID   string         `json:"runtime_id"`
+	Status      string         `json:"status"`
+	Kind        string         `json:"kind"`
+	Attempt     int            `json:"attempt"`
+	Result      map[string]any `json:"result"`
+	WorkDir     string         `json:"work_dir"`
+	CreatedAt   string         `json:"created_at"`
+	StartedAt   string         `json:"started_at"`
+	CompletedAt string         `json:"completed_at"`
+	WorkspaceID string         `json:"workspace_id"`
+}
+
+type MulticaRunMessage struct {
+	TaskID    string `json:"task_id"`
+	IssueID   string `json:"issue_id"`
+	Seq       int64  `json:"seq"`
+	Type      string `json:"type"`
+	Content   string `json:"content"`
+	CreatedAt string `json:"created_at"`
+}
+
+type MulticaCreateRuntimeProfileRequest struct {
+	DisplayName    string
+	Description    string
+	ProtocolFamily string
+	CommandName    string
+}
+
+type MulticaCreateAgentRequest struct {
+	Name               string
+	Description        string
+	Instructions       string
+	RuntimeID          string
+	Visibility         string
+	Model              string
+	ThinkingLevel      string
+	MaxConcurrentTasks int
+	CustomArgsJSON     string
+	RuntimeConfigJSON  string
+}
+
+type MulticaCreateIssueRequest struct {
+	Title          string
+	Description    string
+	AssigneeID     string
+	Assignee       string
+	ParentID       string
+	Status         string
+	Priority       string
+	AllowDuplicate bool
 }
 
 type MulticaCommandResult struct {
@@ -183,6 +277,297 @@ func (c MulticaCLI) AddIssueComment(ctx context.Context, issueID, content string
 		return MulticaComment{}, fmt.Errorf("decode multica comment: %w", err)
 	}
 	return comment, nil
+}
+
+func (c MulticaCLI) ListRuntimeProfiles(ctx context.Context) ([]MulticaRuntimeProfile, error) {
+	out, err := c.Run(ctx, []string{"runtime", "profile", "list", "--output", "json"}, "")
+	if err != nil {
+		return nil, err
+	}
+	var profiles []MulticaRuntimeProfile
+	if err := json.Unmarshal([]byte(out.Stdout), &profiles); err != nil {
+		return nil, fmt.Errorf("decode multica runtime profiles: %w", err)
+	}
+	return profiles, nil
+}
+
+func (c MulticaCLI) CreateRuntimeProfile(ctx context.Context, req MulticaCreateRuntimeProfileRequest) (MulticaRuntimeProfile, error) {
+	if strings.TrimSpace(req.DisplayName) == "" {
+		return MulticaRuntimeProfile{}, fmt.Errorf("multica runtime profile display name is required")
+	}
+	if strings.TrimSpace(req.ProtocolFamily) == "" {
+		return MulticaRuntimeProfile{}, fmt.Errorf("multica runtime profile protocol family is required")
+	}
+	if strings.TrimSpace(req.CommandName) == "" {
+		return MulticaRuntimeProfile{}, fmt.Errorf("multica runtime profile command name is required")
+	}
+	args := []string{
+		"runtime", "profile", "create",
+		"--display-name", strings.TrimSpace(req.DisplayName),
+		"--protocol-family", strings.TrimSpace(req.ProtocolFamily),
+		"--command-name", strings.TrimSpace(req.CommandName),
+		"--output", "json",
+	}
+	if strings.TrimSpace(req.Description) != "" {
+		args = append(args, "--description", strings.TrimSpace(req.Description))
+	}
+	out, err := c.Run(ctx, args, "")
+	if err != nil {
+		return MulticaRuntimeProfile{}, err
+	}
+	var profile MulticaRuntimeProfile
+	if err := json.Unmarshal([]byte(out.Stdout), &profile); err != nil {
+		return MulticaRuntimeProfile{}, fmt.Errorf("decode multica runtime profile: %w", err)
+	}
+	return profile, nil
+}
+
+func (c MulticaCLI) SetRuntimeProfilePath(ctx context.Context, profileID, path string) error {
+	profileID = strings.TrimSpace(profileID)
+	path = strings.TrimSpace(path)
+	if profileID == "" {
+		return fmt.Errorf("multica runtime profile id is required")
+	}
+	if path == "" {
+		return fmt.Errorf("multica runtime profile path is required")
+	}
+	_, err := c.Run(ctx, []string{"runtime", "profile", "set-path", profileID, "--path", path}, "")
+	return err
+}
+
+func (c MulticaCLI) DeleteRuntimeProfile(ctx context.Context, profileID string) error {
+	profileID = strings.TrimSpace(profileID)
+	if profileID == "" {
+		return fmt.Errorf("multica runtime profile id is required")
+	}
+	_, err := c.Run(ctx, []string{"runtime", "profile", "delete", profileID}, "")
+	return err
+}
+
+func (c MulticaCLI) ListRuntimes(ctx context.Context) ([]MulticaRuntime, error) {
+	out, err := c.Run(ctx, []string{"runtime", "list", "--output", "json"}, "")
+	if err != nil {
+		return nil, err
+	}
+	var runtimes []MulticaRuntime
+	if err := json.Unmarshal([]byte(out.Stdout), &runtimes); err != nil {
+		return nil, fmt.Errorf("decode multica runtimes: %w", err)
+	}
+	return runtimes, nil
+}
+
+func (c MulticaCLI) ListAgents(ctx context.Context, includeArchived bool) ([]MulticaAgent, error) {
+	args := []string{"agent", "list", "--output", "json"}
+	if includeArchived {
+		args = append(args, "--include-archived")
+	}
+	out, err := c.Run(ctx, args, "")
+	if err != nil {
+		return nil, err
+	}
+	var agents []MulticaAgent
+	if err := json.Unmarshal([]byte(out.Stdout), &agents); err != nil {
+		return nil, fmt.Errorf("decode multica agents: %w", err)
+	}
+	return agents, nil
+}
+
+func (c MulticaCLI) CreateAgent(ctx context.Context, req MulticaCreateAgentRequest) (MulticaAgent, error) {
+	if strings.TrimSpace(req.Name) == "" {
+		return MulticaAgent{}, fmt.Errorf("multica agent name is required")
+	}
+	if strings.TrimSpace(req.RuntimeID) == "" {
+		return MulticaAgent{}, fmt.Errorf("multica agent runtime id is required")
+	}
+	args := []string{
+		"agent", "create",
+		"--name", strings.TrimSpace(req.Name),
+		"--runtime-id", strings.TrimSpace(req.RuntimeID),
+		"--output", "json",
+	}
+	if strings.TrimSpace(req.Description) != "" {
+		args = append(args, "--description", strings.TrimSpace(req.Description))
+	}
+	if strings.TrimSpace(req.Instructions) != "" {
+		args = append(args, "--instructions", strings.TrimSpace(req.Instructions))
+	}
+	if strings.TrimSpace(req.Visibility) != "" {
+		args = append(args, "--visibility", strings.TrimSpace(req.Visibility))
+	}
+	if strings.TrimSpace(req.Model) != "" {
+		args = append(args, "--model", strings.TrimSpace(req.Model))
+	}
+	if strings.TrimSpace(req.ThinkingLevel) != "" {
+		args = append(args, "--thinking-level", strings.TrimSpace(req.ThinkingLevel))
+	}
+	if req.MaxConcurrentTasks > 0 {
+		args = append(args, "--max-concurrent-tasks", fmt.Sprint(req.MaxConcurrentTasks))
+	}
+	if strings.TrimSpace(req.CustomArgsJSON) != "" {
+		args = append(args, "--custom-args", strings.TrimSpace(req.CustomArgsJSON))
+	}
+	if strings.TrimSpace(req.RuntimeConfigJSON) != "" {
+		args = append(args, "--runtime-config", strings.TrimSpace(req.RuntimeConfigJSON))
+	}
+	out, err := c.Run(ctx, args, "")
+	if err != nil {
+		return MulticaAgent{}, err
+	}
+	var agent MulticaAgent
+	if err := json.Unmarshal([]byte(out.Stdout), &agent); err != nil {
+		return MulticaAgent{}, fmt.Errorf("decode multica agent: %w", err)
+	}
+	return agent, nil
+}
+
+func (c MulticaCLI) ArchiveAgent(ctx context.Context, agentID string) (MulticaAgent, error) {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return MulticaAgent{}, fmt.Errorf("multica agent id is required")
+	}
+	out, err := c.Run(ctx, []string{"agent", "archive", agentID, "--output", "json"}, "")
+	if err != nil {
+		return MulticaAgent{}, err
+	}
+	var agent MulticaAgent
+	if err := json.Unmarshal([]byte(out.Stdout), &agent); err != nil {
+		return MulticaAgent{}, fmt.Errorf("decode archived multica agent: %w", err)
+	}
+	return agent, nil
+}
+
+func (c MulticaCLI) CreateIssue(ctx context.Context, req MulticaCreateIssueRequest) (MulticaIssue, error) {
+	if strings.TrimSpace(req.Title) == "" {
+		return MulticaIssue{}, fmt.Errorf("multica issue title is required")
+	}
+	args := []string{"issue", "create", "--title", strings.TrimSpace(req.Title), "--output", "json"}
+	stdin := ""
+	if strings.TrimSpace(req.Description) != "" {
+		args = append(args, "--description-stdin")
+		stdin = req.Description
+	}
+	if strings.TrimSpace(req.AssigneeID) != "" {
+		args = append(args, "--assignee-id", strings.TrimSpace(req.AssigneeID))
+	}
+	if strings.TrimSpace(req.Assignee) != "" {
+		args = append(args, "--assignee", strings.TrimSpace(req.Assignee))
+	}
+	if strings.TrimSpace(req.ParentID) != "" {
+		args = append(args, "--parent", strings.TrimSpace(req.ParentID))
+	}
+	if strings.TrimSpace(req.Status) != "" {
+		args = append(args, "--status", strings.TrimSpace(req.Status))
+	}
+	if strings.TrimSpace(req.Priority) != "" {
+		args = append(args, "--priority", strings.TrimSpace(req.Priority))
+	}
+	if req.AllowDuplicate {
+		args = append(args, "--allow-duplicate")
+	}
+	out, err := c.Run(ctx, args, stdin)
+	if err != nil {
+		return MulticaIssue{}, err
+	}
+	var issue MulticaIssue
+	if err := json.Unmarshal([]byte(out.Stdout), &issue); err != nil {
+		return MulticaIssue{}, fmt.Errorf("decode created multica issue: %w", err)
+	}
+	return issue, nil
+}
+
+func (c MulticaCLI) AssignIssue(ctx context.Context, issueID, assigneeID string) (MulticaIssue, error) {
+	issueID = strings.TrimSpace(issueID)
+	assigneeID = strings.TrimSpace(assigneeID)
+	if issueID == "" {
+		return MulticaIssue{}, fmt.Errorf("multica issue id is required")
+	}
+	if assigneeID == "" {
+		return MulticaIssue{}, fmt.Errorf("multica assignee id is required")
+	}
+	out, err := c.Run(ctx, []string{"issue", "assign", issueID, "--to-id", assigneeID, "--output", "json"}, "")
+	if err != nil {
+		return MulticaIssue{}, err
+	}
+	var issue MulticaIssue
+	if err := json.Unmarshal([]byte(out.Stdout), &issue); err != nil {
+		return MulticaIssue{}, fmt.Errorf("decode assigned multica issue: %w", err)
+	}
+	return issue, nil
+}
+
+func (c MulticaCLI) SetIssueStatus(ctx context.Context, issueID, status string) (MulticaIssue, error) {
+	issueID = strings.TrimSpace(issueID)
+	status = strings.TrimSpace(status)
+	if issueID == "" {
+		return MulticaIssue{}, fmt.Errorf("multica issue id is required")
+	}
+	if status == "" {
+		return MulticaIssue{}, fmt.Errorf("multica issue status is required")
+	}
+	out, err := c.Run(ctx, []string{"issue", "status", issueID, status, "--output", "json"}, "")
+	if err != nil {
+		return MulticaIssue{}, err
+	}
+	var issue MulticaIssue
+	if err := json.Unmarshal([]byte(out.Stdout), &issue); err != nil {
+		return MulticaIssue{}, fmt.Errorf("decode multica issue status: %w", err)
+	}
+	return issue, nil
+}
+
+func (c MulticaCLI) SetIssueMetadata(ctx context.Context, issueID, key, value, valueType string) error {
+	issueID = strings.TrimSpace(issueID)
+	key = strings.TrimSpace(key)
+	value = strings.TrimSpace(value)
+	if issueID == "" {
+		return fmt.Errorf("multica issue id is required")
+	}
+	if key == "" {
+		return fmt.Errorf("multica metadata key is required")
+	}
+	args := []string{"issue", "metadata", "set", issueID, "--key", key, "--value", value}
+	if strings.TrimSpace(valueType) != "" {
+		args = append(args, "--type", strings.TrimSpace(valueType))
+	}
+	args = append(args, "--output", "json")
+	_, err := c.Run(ctx, args, "")
+	return err
+}
+
+func (c MulticaCLI) ListIssueRuns(ctx context.Context, issueID string) ([]MulticaIssueRun, error) {
+	issueID = strings.TrimSpace(issueID)
+	if issueID == "" {
+		return nil, fmt.Errorf("multica issue id is required")
+	}
+	out, err := c.Run(ctx, []string{"issue", "runs", issueID, "--output", "json"}, "")
+	if err != nil {
+		return nil, err
+	}
+	var runs []MulticaIssueRun
+	if err := json.Unmarshal([]byte(out.Stdout), &runs); err != nil {
+		return nil, fmt.Errorf("decode multica issue runs: %w", err)
+	}
+	return runs, nil
+}
+
+func (c MulticaCLI) ListRunMessages(ctx context.Context, taskID, issueID string) ([]MulticaRunMessage, error) {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return nil, fmt.Errorf("multica task id is required")
+	}
+	args := []string{"issue", "run-messages", taskID, "--output", "json"}
+	if strings.TrimSpace(issueID) != "" {
+		args = append(args, "--issue", strings.TrimSpace(issueID))
+	}
+	out, err := c.Run(ctx, args, "")
+	if err != nil {
+		return nil, err
+	}
+	var messages []MulticaRunMessage
+	if err := json.Unmarshal([]byte(out.Stdout), &messages); err != nil {
+		return nil, fmt.Errorf("decode multica run messages: %w", err)
+	}
+	return messages, nil
 }
 
 func (c MulticaCLI) Run(ctx context.Context, args []string, stdin string) (MulticaCommandResult, error) {
