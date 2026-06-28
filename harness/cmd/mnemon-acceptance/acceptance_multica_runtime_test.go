@@ -123,14 +123,20 @@ printf '%s\n' "$*" >> "$MULTICA_ARGS_PATH"
 cat >> "$MULTICA_STDIN_PATH"
 case "$*" in
   *"issue create"*) printf '{"id":"root-9","identifier":"TEA-9","title":"Runtime hub flow","description":"Teamwork acceptance","status":"todo"}\n' ;;
+  *"issue get root-9"*) printf '{"id":"root-9","identifier":"TEA-9","title":"Runtime hub flow","description":"Teamwork acceptance","status":"done"}\n' ;;
+  *"issue get child-2"*) printf '{"id":"child-2","identifier":"TEA-10","title":"Assignment 2","status":"done"}\n' ;;
+  *"issue get child-3"*) printf '{"id":"child-3","identifier":"TEA-11","title":"Assignment 3","status":"done"}\n' ;;
   *"issue metadata list root-9"*) printf '[{"key":"mnemon.hub_backend","value":"multica"},{"key":"mnemon.kind","value":"session_mailbox"},{"key":"mnemon.session_id","value":"multica:session:root-9"}]\n' ;;
-  *"issue children root-9"*) printf '{"children":[{"id":"child-2","identifier":"TEA-10","title":"Assignment 2","metadata":{"mnemon.hub_backend":"multica","mnemon.kind":"assignment_mailbox","mnemon.session_id":"multica:session:root-9","mnemon.assignment_id":"asg-2","mnemon.principal":"researcher@team"}},{"id":"child-3","identifier":"TEA-11","title":"Assignment 3","metadata":{"mnemon.hub_backend":"multica","mnemon.kind":"assignment_mailbox","mnemon.session_id":"multica:session:root-9","mnemon.assignment_id":"asg-3","mnemon.principal":"implementer@team"}}]}\n' ;;
+  *"issue children root-9"*) printf '{"children":[{"id":"child-2","identifier":"TEA-10","title":"Assignment 2","status":"done","metadata":{"mnemon.hub_backend":"multica","mnemon.kind":"assignment_mailbox","mnemon.session_id":"multica:session:root-9","mnemon.assignment_id":"asg-2","mnemon.principal":"researcher@team"}},{"id":"child-3","identifier":"TEA-11","title":"Assignment 3","status":"done","metadata":{"mnemon.hub_backend":"multica","mnemon.kind":"assignment_mailbox","mnemon.session_id":"multica:session:root-9","mnemon.assignment_id":"asg-3","mnemon.principal":"implementer@team"}}]}\n' ;;
+  *"issue comment list root-9"*) printf '[{"id":"comment-root","issue_id":"root-9","content":"Mnemon update: issue admitted\\n\\nmnemon:event=multica-task-root"}]\n' ;;
+  *"issue comment list child-2"*) printf '[{"id":"comment-child-2","issue_id":"child-2","content":"Mnemon update: assignment feedback\\n\\nSummary: checked routing.\\n\\nmnemon:event=pg-2"}]\n' ;;
+  *"issue comment list child-3"*) printf '[{"id":"comment-child-3","issue_id":"child-3","content":"Mnemon update: assignment feedback\\n\\nSummary: checked runtime display.\\n\\nmnemon:event=pg-3"}]\n' ;;
   *"issue runs root-9"*) printf '[{"id":"task-root","issue_id":"root-9","agent_id":"agent-planner","status":"completed","completed_at":"2026-06-28T09:00:00Z","workspace_id":"ws-1"}]\n' ;;
-  *"issue run-messages task-root"*) printf '[{"task_id":"task-root","issue_id":"root-9","seq":1,"type":"assistant","content":"Mnemon Multica runtime handled issue TEA-9. Mnemon ingest: recorded seq=17. Managed wake: completed turn=noop-turn. Multica hub write: created child_issues=2.","created_at":"2026-06-28T09:00:01Z"}]\n' ;;
+  *"issue run-messages task-root"*) printf '[{"task_id":"task-root","issue_id":"root-9","seq":1,"type":"text","content":"Mnemon Multica runtime handled issue TEA-9. Mnemon ingest: recorded seq=17. Managed wake: completed turn=noop-turn. Multica hub write: created child_issues=2.","created_at":"2026-06-28T09:00:01Z"},{"task_id":"task-root","issue_id":"root-9","seq":2,"type":"tool_use","content":"mnemond ingest observe --principal planner@team","created_at":"2026-06-28T09:00:02Z"},{"task_id":"task-root","issue_id":"root-9","seq":3,"type":"tool_result","content":"recorded seq=17 duplicate=false ticked=true","created_at":"2026-06-28T09:00:03Z"}]\n' ;;
   *"issue runs child-2"*) printf '[{"id":"task-child-2","issue_id":"child-2","agent_id":"agent-researcher","status":"completed","completed_at":"2026-06-28T09:01:00Z","workspace_id":"ws-1"}]\n' ;;
-  *"issue run-messages task-child-2"*) printf '[{"task_id":"task-child-2","issue_id":"child-2","seq":1,"type":"assistant","content":"Mnemon Multica runtime handled issue TEA-10. Mnemon assignment mailbox: correlated assignment=asg-2. Managed wake: completed turn=noop-turn.","created_at":"2026-06-28T09:01:01Z"}]\n' ;;
+  *"issue run-messages task-child-2"*) printf '[{"task_id":"task-child-2","issue_id":"child-2","seq":1,"type":"text","content":"Mnemon Multica runtime handled issue TEA-10. Mnemon assignment mailbox: correlated assignment=asg-2. Managed wake: completed turn=noop-turn.","created_at":"2026-06-28T09:01:01Z"},{"task_id":"task-child-2","issue_id":"child-2","seq":2,"type":"tool_use","content":"mnemond managed wake --principal researcher@team [mnemon:wake]","created_at":"2026-06-28T09:01:02Z"},{"task_id":"task-child-2","issue_id":"child-2","seq":3,"type":"tool_result","content":"Managed wake: completed turn=noop-turn","created_at":"2026-06-28T09:01:03Z"}]\n' ;;
   *"issue runs child-3"*) printf '[{"id":"task-child-3","issue_id":"child-3","agent_id":"agent-implementer","status":"completed","completed_at":"2026-06-28T09:02:00Z","workspace_id":"ws-1"}]\n' ;;
-  *"issue run-messages task-child-3"*) printf '[{"task_id":"task-child-3","issue_id":"child-3","seq":1,"type":"assistant","content":"Mnemon Multica runtime handled issue TEA-11. Mnemon assignment mailbox: correlated assignment=asg-3. Managed wake: completed turn=noop-turn.","created_at":"2026-06-28T09:02:01Z"}]\n' ;;
+  *"issue run-messages task-child-3"*) printf '[{"task_id":"task-child-3","issue_id":"child-3","seq":1,"type":"text","content":"Mnemon Multica runtime handled issue TEA-11. Mnemon assignment mailbox: correlated assignment=asg-3. Managed wake: completed turn=noop-turn.","created_at":"2026-06-28T09:02:01Z"},{"task_id":"task-child-3","issue_id":"child-3","seq":2,"type":"tool_use","content":"mnemond managed wake --principal implementer@team [mnemon:wake]","created_at":"2026-06-28T09:02:02Z"},{"task_id":"task-child-3","issue_id":"child-3","seq":3,"type":"tool_result","content":"Managed wake: completed turn=noop-turn","created_at":"2026-06-28T09:02:03Z"}]\n' ;;
   *) printf '{}\n' ;;
 esac
 `
@@ -159,7 +165,7 @@ esac
 	if err != nil {
 		t.Fatalf("acceptance: %v report=%+v", err, report)
 	}
-	if report.Status != "ok" || len(report.Participants) != 5 || len(report.ChildIssues) != 2 || len(report.ActiveAgents) != 3 {
+	if report.Status != "ok" || len(report.Participants) != 5 || len(report.ChildIssues) != 2 || len(report.ActiveAgents) != 3 || report.FinalRoot.Status != "done" {
 		t.Fatalf("hub report mismatch: %+v", report)
 	}
 	if report.RootMetadata[driver.MulticaMetadataKind] != driver.MulticaHubKindSession {

@@ -29,6 +29,60 @@ func TestRuntimeEnvValueUsesLastValue(t *testing.T) {
 	}
 }
 
+func TestRuntimeMulticaHubLedgerPathDefaultsToManagedWorkspace(t *testing.T) {
+	tmp := t.TempDir()
+	workspace := filepath.Join(tmp, "managed-workspace")
+	cwd := filepath.Join(tmp, "task-workdir")
+	got := runtimeMulticaHubLedgerPath([]string{"MNEMON_MANAGED_WORKSPACE=" + workspace}, cwd)
+	want := filepath.Join(workspace, driver.MulticaDefaultHubLedgerRelPath)
+	if got != want {
+		t.Fatalf("hub ledger path = %q, want %q", got, want)
+	}
+	explicit := filepath.Join(tmp, "explicit.jsonl")
+	got = runtimeMulticaHubLedgerPath([]string{
+		"MNEMON_MANAGED_WORKSPACE=" + workspace,
+		"MNEMON_MULTICA_HUB_LEDGER=" + explicit,
+	}, cwd)
+	if got != explicit {
+		t.Fatalf("explicit hub ledger path = %q, want %q", got, explicit)
+	}
+}
+
+func TestMergeRuntimeHubProjectionDeltasPreservesEarlyDispatchCounts(t *testing.T) {
+	result := runtimeImportResult{HubWriteStatus: "noop"}
+	mergeRuntimeHubProjectionDeltas(&result, []runtimeHubProjectionDelta{
+		{ChildIssues: 2},
+		{FeedbackComments: 1},
+	})
+	if result.HubChildIssues != 2 || result.HubFeedbackComments != 1 || result.HubWriteStatus != "updated" {
+		t.Fatalf("merged projection result = %+v", result)
+	}
+	failed := runtimeImportResult{HubWriteStatus: "failed", HubWriteErr: os.ErrInvalid}
+	mergeRuntimeHubProjectionDeltas(&failed, []runtimeHubProjectionDelta{{ChildIssues: 1}})
+	if failed.HubWriteStatus != "failed" || failed.HubChildIssues != 1 {
+		t.Fatalf("failed projection merge should preserve final failure while carrying counts: %+v", failed)
+	}
+}
+
+func TestManagedWakeMatchTermsPreferStableIssueIdentity(t *testing.T) {
+	got := managedWakeMatchTerms(runtimeImportResult{
+		IssueID:    "issue-123",
+		Identifier: "TEA-27",
+		Title:      "Mnemon R2 hub-flow completion drill",
+		Statement:  "Run a small hub-flow readiness drill.",
+		TaskID:     "task-123",
+	})
+	joined := strings.Join(got, "\n")
+	for _, want := range []string{"issue-123", "TEA-27", "Mnemon R2 hub-flow completion drill", "task-123"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("match terms missing %q: %+v", want, got)
+		}
+	}
+	if strings.Contains(joined, "Run a small hub-flow readiness drill.") {
+		t.Fatalf("root issue matching must not prefer reusable statement text: %+v", got)
+	}
+}
+
 func runtimeTestEnv(values ...string) []string {
 	env := make([]string, 0, len(os.Environ())+len(values))
 	for _, item := range os.Environ() {
@@ -444,8 +498,22 @@ esac
 				Content: []pview.ResourceContent{{
 					Ref: contract.ResourceRef{Kind: "assignment", ID: "project"},
 					Fields: map[string]any{"items": []any{map[string]any{
-						"id":    "asg-writer",
-						"actor": "planner@team",
+						"id":         "asg-stale",
+						"ingest_seq": float64(30),
+						"actor":      "planner@team",
+						"rule": map[string]any{
+							"assignment_id": "asg-stale",
+							"assignee":      "worker@team",
+							"scope":         "old release notes",
+						},
+						"narrative": map[string]any{
+							"expected_work":     "stale assignment from an older Multica session",
+							"expected_feedback": "progress_digest with result or blocker",
+						},
+					}, map[string]any{
+						"id":         "asg-writer",
+						"ingest_seq": float64(32),
+						"actor":      "planner@team",
 						"rule": map[string]any{
 							"assignment_id": "asg-writer",
 							"assignee":      "worker@team",
@@ -501,12 +569,11 @@ esac
 	args := mustReadRuntimeTestFile(t, argsPath)
 	for _, want := range []string{
 		"issue children root-2 --output json",
-		"issue create --title Mnemon assignment asg-writer: check release notes --output json --description-stdin --parent root-2 --status todo --priority medium",
+		"issue create --title Mnemon assignment asg-writer: check release notes --output json --description-stdin --parent root-2 --status in_progress --priority medium",
 		"issue metadata set child-2 --key mnemon.kind --value assignment_mailbox --type string --output json",
 		"issue metadata set child-2 --key mnemon.assignment_id --value asg-writer --type string --output json",
 		"issue metadata set child-2 --key mnemon.principal --value worker@team --type string --output json",
 		"issue assign child-2 --to-id agent-worker --output json",
-		"issue status child-2 in_progress --output json",
 	} {
 		if !strings.Contains(args, want) {
 			t.Fatalf("args missing %q:\n%s", want, args)
@@ -515,12 +582,21 @@ esac
 	if strings.Contains(args, "check release notes against") {
 		t.Fatalf("assignment description leaked into argv:\n%s", args)
 	}
+	if strings.Contains(args, "asg-stale") {
+		t.Fatalf("stale pre-root assignment must not be projected into current root session:\n%s", args)
+	}
 	createIdx := strings.Index(args, "issue create --title Mnemon assignment asg-writer")
 	metaIdx := strings.Index(args, "issue metadata set child-2 --key mnemon.kind")
 	assignIdx := strings.Index(args, "issue assign child-2 --to-id agent-worker")
-	statusIdx := strings.Index(args, "issue status child-2 in_progress")
-	if createIdx < 0 || metaIdx < 0 || assignIdx < 0 || statusIdx < 0 || !(createIdx < metaIdx && metaIdx < assignIdx && assignIdx < statusIdx) {
+	if createIdx < 0 || metaIdx < 0 || assignIdx < 0 || !(createIdx < metaIdx && metaIdx < assignIdx) {
 		t.Fatalf("assignment mailbox must be created, tagged, then assigned; args:\n%s", args)
+	}
+	supplementalIdx := strings.Index(args, "issue metadata set child-2 --key mnemon.projection_owner")
+	if supplementalIdx < 0 || !(assignIdx < supplementalIdx) {
+		t.Fatalf("non-dispatch metadata must not block child assignment; args:\n%s", args)
+	}
+	if strings.Contains(args, "issue status child-2 in_progress") {
+		t.Fatalf("assignment mailbox should be created in progress without a separate status call:\n%s", args)
 	}
 	description := mustReadRuntimeTestFile(t, createDescriptionPath)
 	for _, want := range []string{"Mnemon assignment mailbox", "Expected work: check release notes against the public changelog", "Expected feedback: progress_digest with result or blocker"} {
@@ -584,6 +660,12 @@ esac
 					Meta: map[string]any{"presentation_hint": "work"},
 				}},
 			})
+		case "/presentation-view":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(pview.View{
+				Ref:    "view-empty",
+				Digest: "digest-empty",
+			})
 		default:
 			t.Fatalf("unexpected path %s", r.URL.Path)
 		}
@@ -640,10 +722,10 @@ func TestMulticaStatusForProgressIsRuleBased(t *testing.T) {
 		want string
 	}{
 		{name: "progress", item: runtimeProgress{FeedbackKind: "progress"}, want: "in_progress"},
-		{name: "result", item: runtimeProgress{FeedbackKind: "result"}, want: "in_review"},
+		{name: "result", item: runtimeProgress{FeedbackKind: "result"}, want: "done"},
 		{name: "blocker", item: runtimeProgress{FeedbackKind: "blocker"}, want: "blocked"},
 		{name: "blocker narrative fallback", item: runtimeProgress{Blocker: "waiting on access"}, want: "blocked"},
-		{name: "result narrative fallback", item: runtimeProgress{Result: "validated"}, want: "in_review"},
+		{name: "result narrative fallback", item: runtimeProgress{Result: "validated"}, want: "done"},
 		{name: "unknown", item: runtimeProgress{Summary: "not enough signal"}, want: ""},
 	} {
 		if got := multicaStatusForProgress(tc.item); got != tc.want {

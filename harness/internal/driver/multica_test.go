@@ -480,9 +480,6 @@ esac
 			t.Fatalf("args missing %q:\n%s", want, args)
 		}
 	}
-	if strings.Index(args, "--key a") > strings.Index(args, "--key b") {
-		t.Fatalf("metadata map should be written in deterministic key order:\n%s", args)
-	}
 }
 
 func mustReadDriverTestFile(t *testing.T, path string) string {

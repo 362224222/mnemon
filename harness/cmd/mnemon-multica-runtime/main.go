@@ -405,10 +405,11 @@ func (s *runtimeRPCState) importIssue(input string, progress runtimeProgressSink
 	emitRuntimeCommand(progress, "mnemond ingest observe --principal "+result.Principal, fmt.Sprintf("recorded seq=%d duplicate=%v ticked=%v", rec.Seq, rec.Dup, rec.Ticked), 0)
 	emitRuntimeProgress(progress, fmt.Sprintf("Mnemon recorded the issue observation at seq=%d.", rec.Seq))
 	emitRuntimeProgress(progress, "Waking the managed local agent with [mnemon:wake].")
-	s.wakeManagedAgent(&result)
+	earlyHubDeltas := s.wakeManagedAgentWithHubProjection(multicaCtx, cli, client, issue, &result)
 	emitRuntimeCommand(progress, "mnemond managed wake --principal "+result.Principal+" [mnemon:wake]", runtimeWakeProgress(result), runtimeExitCode(result.WakeErr))
 	emitRuntimeProgress(progress, runtimeWakeProgress(result))
 	s.writeMulticaHubArtifacts(multicaCtx, cli, client, issue, &result)
+	mergeRuntimeHubProjectionDeltas(&result, earlyHubDeltas)
 	emitRuntimeCommand(progress, "mnemon multica hub project --issue "+issue.ID, runtimeHubWriteProgress(result), runtimeExitCode(result.HubWriteErr))
 	emitRuntimeProgress(progress, runtimeHubWriteProgress(result))
 	s.projectImportComment(multicaCtx, cli, issue, draft.ExternalID, &result)
@@ -429,15 +430,27 @@ func (s *runtimeRPCState) correlateAssignmentMailbox(ctx context.Context, cli dr
 	emitRuntimeCommand(progress, "mnemon multica assignment correlate --issue "+issue.ID, "Assignment mailbox correlated: "+runtimeAssignmentLabel(*result)+".", 0)
 	emitRuntimeProgress(progress, "Assignment mailbox correlated: "+runtimeAssignmentLabel(*result)+".")
 	addr := strings.TrimSpace(envValue(s.Env, "MNEMON_CONTROL_ADDR"))
+	var client *access.Client
 	if addr == "" {
 		result.WakeStatus = "skipped"
 		result.WakeErr = fmt.Errorf("MNEMON_CONTROL_ADDR is not set")
 		emitRuntimeProgress(progress, "Local Mnemon control address is not configured; skipping managed wake.")
 	} else {
-		emitRuntimeProgress(progress, "Waking assigned local agent with [mnemon:wake].")
-		s.wakeManagedAgent(result)
-		emitRuntimeCommand(progress, "mnemond managed wake --principal "+result.Principal+" [mnemon:wake]", runtimeWakeProgress(*result), runtimeExitCode(result.WakeErr))
-		emitRuntimeProgress(progress, runtimeWakeProgress(*result))
+		var err error
+		client, err = runtimeControlClient(s.Env, addr, result.Principal)
+		if err != nil {
+			result.WakeStatus = "failed"
+			result.WakeErr = err
+			emitRuntimeProgress(progress, "Failed to create Local Mnemon control client.")
+		} else {
+			emitRuntimeProgress(progress, "Waking assigned local agent with [mnemon:wake].")
+			s.wakeManagedAgent(result)
+			emitRuntimeCommand(progress, "mnemond managed wake --principal "+result.Principal+" [mnemon:wake]", runtimeWakeProgress(*result), runtimeExitCode(result.WakeErr))
+			emitRuntimeProgress(progress, runtimeWakeProgress(*result))
+			s.writeMulticaHubArtifacts(ctx, cli, client, issue, result)
+			emitRuntimeCommand(progress, "mnemon multica hub project --issue "+issue.ID, runtimeHubWriteProgress(*result), runtimeExitCode(result.HubWriteErr))
+			emitRuntimeProgress(progress, runtimeHubWriteProgress(*result))
+		}
 	}
 	s.projectImportComment(ctx, cli, issue, assignmentMailboxMarker(*result), result)
 	emitRuntimeCommand(progress, "multica issue comment add "+issue.ID, runtimeProjectionProgress(*result), runtimeExitCode(result.ProjectionErr))
@@ -613,6 +626,91 @@ func (s *runtimeRPCState) wakeManagedAgent(result *runtimeImportResult) {
 	}
 }
 
+type runtimeHubProjectionDelta struct {
+	ChildIssues      int
+	FeedbackComments int
+	Status           string
+	Err              error
+}
+
+func (d runtimeHubProjectionDelta) active() bool {
+	return d.ChildIssues > 0 || d.FeedbackComments > 0
+}
+
+func (s *runtimeRPCState) wakeManagedAgentWithHubProjection(ctx context.Context, cli driver.MulticaCLI, client *access.Client, rootIssue driver.MulticaIssue, result *runtimeImportResult) []runtimeHubProjectionDelta {
+	if result == nil || client == nil ||
+		!strings.EqualFold(result.HubBackend, driver.MulticaHubBackend) ||
+		result.HubKind != driver.MulticaHubKindSession ||
+		!runtimeMulticaHubWriteEnabled(s.Env) {
+		s.wakeManagedAgent(result)
+		return nil
+	}
+	done := make(chan struct{})
+	deltas := make(chan runtimeHubProjectionDelta, 16)
+	go func(snapshot runtimeImportResult) {
+		defer close(deltas)
+		ticker := time.NewTicker(runtimeHubProjectionInterval(s.Env))
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				delta := s.writeMulticaHubArtifactsDelta(ctx, cli, client, rootIssue, snapshot)
+				if delta.active() {
+					select {
+					case deltas <- delta:
+					default:
+					}
+				}
+			}
+		}
+	}(*result)
+	s.wakeManagedAgent(result)
+	close(done)
+	var out []runtimeHubProjectionDelta
+	for delta := range deltas {
+		out = append(out, delta)
+	}
+	return out
+}
+
+func (s *runtimeRPCState) writeMulticaHubArtifactsDelta(ctx context.Context, cli driver.MulticaCLI, client *access.Client, rootIssue driver.MulticaIssue, base runtimeImportResult) runtimeHubProjectionDelta {
+	snapshot := base
+	snapshot.HubChildIssues = 0
+	snapshot.HubFeedbackComments = 0
+	snapshot.HubWriteStatus = ""
+	snapshot.HubWriteErr = nil
+	s.writeMulticaHubArtifacts(ctx, cli, client, rootIssue, &snapshot)
+	return runtimeHubProjectionDelta{
+		ChildIssues:      snapshot.HubChildIssues,
+		FeedbackComments: snapshot.HubFeedbackComments,
+		Status:           snapshot.HubWriteStatus,
+		Err:              snapshot.HubWriteErr,
+	}
+}
+
+func mergeRuntimeHubProjectionDeltas(result *runtimeImportResult, deltas []runtimeHubProjectionDelta) {
+	if result == nil || len(deltas) == 0 {
+		return
+	}
+	for _, delta := range deltas {
+		result.HubChildIssues += delta.ChildIssues
+		result.HubFeedbackComments += delta.FeedbackComments
+	}
+	if result.HubWriteErr != nil {
+		return
+	}
+	switch {
+	case result.HubChildIssues > 0 && result.HubFeedbackComments > 0:
+		result.HubWriteStatus = "updated"
+	case result.HubChildIssues > 0:
+		result.HubWriteStatus = "created"
+	case result.HubFeedbackComments > 0:
+		result.HubWriteStatus = "commented"
+	}
+}
+
 func managedWakeCandidateForResult(principal string, resp presentation.Response, result runtimeImportResult) (driver.ManagedWakeCandidate, bool) {
 	terms := managedWakeMatchTerms(result)
 	var fallback driver.ManagedWakeCandidate
@@ -643,13 +741,19 @@ func managedWakeMatchTerms(result runtimeImportResult) []string {
 	if result.AssignmentID != "" || result.AssignmentFingerprint != "" {
 		return cleanRuntimeTerms(result.AssignmentID, result.AssignmentFingerprint)
 	}
-	raw := []string{result.IssueID, result.Identifier, result.Title, result.Statement, result.TaskID}
+	raw := []string{result.IssueID, result.Identifier, result.Title, result.TaskID}
 	var out []string
 	for _, value := range raw {
 		value = strings.TrimSpace(value)
 		if len(value) >= 3 {
 			out = append(out, value)
 		}
+	}
+	if len(out) > 0 {
+		return out
+	}
+	if value := strings.TrimSpace(result.Statement); len(value) >= 3 {
+		out = append(out, value)
 	}
 	return out
 }
@@ -1431,6 +1535,18 @@ func runtimeManagedTurnTimeout(env []string) time.Duration {
 	d, err := time.ParseDuration(raw)
 	if err != nil || d <= 0 {
 		return 5 * time.Minute
+	}
+	return d
+}
+
+func runtimeHubProjectionInterval(env []string) time.Duration {
+	raw := envValue(env, "MNEMON_MULTICA_HUB_PROJECT_INTERVAL")
+	if raw == "" {
+		return 5 * time.Second
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		return 5 * time.Second
 	}
 	return d
 }

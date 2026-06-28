@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
@@ -278,6 +279,22 @@ func (c MulticaCLI) AddIssueComment(ctx context.Context, issueID, content string
 		return MulticaComment{}, fmt.Errorf("decode multica comment: %w", err)
 	}
 	return comment, nil
+}
+
+func (c MulticaCLI) ListIssueComments(ctx context.Context, issueID string) ([]MulticaComment, error) {
+	issueID = strings.TrimSpace(issueID)
+	if issueID == "" {
+		return nil, fmt.Errorf("multica issue id is required")
+	}
+	out, err := c.Run(ctx, []string{"issue", "comment", "list", issueID, "--full", "--output", "json"}, "")
+	if err != nil {
+		return nil, err
+	}
+	comments, err := decodeMulticaCommentListOutput([]byte(out.Stdout))
+	if err != nil {
+		return nil, err
+	}
+	return comments, nil
 }
 
 func (c MulticaCLI) ListRuntimeProfiles(ctx context.Context) ([]MulticaRuntimeProfile, error) {
@@ -646,12 +663,49 @@ func (c MulticaCLI) SetIssueMetadataMap(ctx context.Context, issueID string, val
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	for _, key := range keys {
-		if err := c.SetIssueMetadata(ctx, issueID, key, values[key], "string"); err != nil {
-			return err
+	if len(keys) == 0 {
+		return nil
+	}
+	const maxMetadataWorkers = 6
+	workers := maxMetadataWorkers
+	if len(keys) < workers {
+		workers = len(keys)
+	}
+	jobs := make(chan string)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var firstErr error
+	recordErr := func(err error) {
+		if err == nil {
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if firstErr == nil {
+			firstErr = err
 		}
 	}
-	return nil
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for key := range jobs {
+				mu.Lock()
+				stopped := firstErr != nil
+				mu.Unlock()
+				if stopped {
+					continue
+				}
+				recordErr(c.SetIssueMetadata(ctx, issueID, key, values[key], "string"))
+			}
+		}()
+	}
+	for _, key := range keys {
+		jobs <- key
+	}
+	close(jobs)
+	wg.Wait()
+	return firstErr
 }
 
 func (c MulticaCLI) GetIssueMetadata(ctx context.Context, issueID, key string) (string, bool, error) {
@@ -943,6 +997,39 @@ func decodeMulticaIssueListOutput(data []byte) ([]MulticaIssue, error) {
 	return out, nil
 }
 
+func decodeMulticaCommentListOutput(data []byte) ([]MulticaComment, error) {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	var raw any
+	if err := dec.Decode(&raw); err != nil {
+		return nil, fmt.Errorf("decode multica comments: %w", err)
+	}
+	var out []MulticaComment
+	seen := map[string]bool{}
+	var walk func(any)
+	walk = func(v any) {
+		switch value := v.(type) {
+		case []any:
+			for _, item := range value {
+				walk(item)
+			}
+		case map[string]any:
+			if comment, ok := multicaCommentFromRawMap(value); ok {
+				if !seen[comment.ID] {
+					seen[comment.ID] = true
+					out = append(out, comment)
+				}
+				return
+			}
+			for _, item := range value {
+				walk(item)
+			}
+		}
+	}
+	walk(raw)
+	return out, nil
+}
+
 func multicaIssueFromRawMap(raw map[string]any) (MulticaIssue, bool) {
 	id, _ := raw["id"].(string)
 	if strings.TrimSpace(id) == "" {
@@ -966,6 +1053,36 @@ func multicaIssueFromRawMap(raw map[string]any) (MulticaIssue, bool) {
 		return MulticaIssue{}, false
 	}
 	return issue, true
+}
+
+func multicaCommentFromRawMap(raw map[string]any) (MulticaComment, bool) {
+	id, _ := raw["id"].(string)
+	if strings.TrimSpace(id) == "" {
+		return MulticaComment{}, false
+	}
+	if _, ok := raw["content"]; !ok {
+		if _, ok := raw["body"]; !ok {
+			if _, ok := raw["text"]; !ok {
+				return MulticaComment{}, false
+			}
+		}
+	}
+	comment := MulticaComment{
+		ID:      strings.TrimSpace(id),
+		IssueID: firstRawString(raw, "issue_id", "issueId"),
+		Content: firstRawString(raw, "content", "body", "text"),
+		Type:    firstRawString(raw, "type", "kind"),
+	}
+	return comment, true
+}
+
+func firstRawString(raw map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value, ok := raw[key].(string); ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func decodeMulticaAgentEnv(data []byte) (map[string]string, error) {
