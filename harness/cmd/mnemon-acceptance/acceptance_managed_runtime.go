@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mnemon-dev/mnemon/harness/internal/codexapp"
 	"github.com/mnemon-dev/mnemon/harness/internal/driver"
 	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation"
@@ -166,6 +167,11 @@ func runManagedRuntimeAcceptance(ctx context.Context, opts managedRuntimeAccepta
 	if runRoot == "" {
 		runRoot = filepath.Join(".testdata", "managed-runtime", started.Format("20060102T150405Z"))
 	}
+	absRunRoot, err := filepath.Abs(runRoot)
+	if err != nil {
+		return managedRuntimeAcceptanceReport{}, err
+	}
+	runRoot = absRunRoot
 	report := managedRuntimeAcceptanceReport{
 		SchemaVersion: 1,
 		Status:        "ok",
@@ -334,7 +340,7 @@ func runManagedRuntimeRealScenario(ctx context.Context, opts managedRuntimeAccep
 		if err := startR1CodexAppserver(&agents[i].r1CodexAgent, opts.Command); err != nil {
 			return managedRuntimeBlocked(report, err)
 		}
-		agentReport, _, err := initializeR1CodexAgent(&agents[i].r1CodexAgent, opts.TurnTimeout)
+		agentReport, _, err := initializeManagedRuntimeCodexAgent(&agents[i].r1CodexAgent)
 		if err != nil {
 			return managedRuntimeBlocked(report, err)
 		}
@@ -409,6 +415,63 @@ Do not contact the worker directly. After both commands succeed, answer "seed wr
 		return finishAndWriteManagedRuntimeReport(report)
 	}
 	return managedRuntimeFailed(report, fmt.Errorf("managed-runtime acceptance failed"))
+}
+
+func initializeManagedRuntimeCodexAgent(agent *r1CodexAgent) (r1CodexAgentReport, json.RawMessage, error) {
+	initResp, err := agent.server.Request("initialize", map[string]any{
+		"clientInfo": map[string]any{"name": "mnemon-managed-runtime-acceptance", "version": version},
+	}, 30*time.Second)
+	if err != nil {
+		return r1CodexAgentReport{}, nil, fmt.Errorf("%s: initialize: %w", agent.principal, err)
+	}
+	_ = initResp
+	hooksResp, err := agent.server.Request("hooks/list", map[string]any{"cwds": []string{agent.workspace}}, 30*time.Second)
+	if err != nil {
+		return r1CodexAgentReport{}, nil, fmt.Errorf("%s: hooks/list: %w", agent.principal, err)
+	}
+	hooksRaw, _ := json.Marshal(hooksResp)
+	hooks := collectHookMetadata(hooksResp)
+	thread, err := agent.server.Request("thread/start", map[string]any{
+		"cwd":                   agent.workspace,
+		"approvalPolicy":        "never",
+		"sandbox":               "danger-full-access",
+		"ephemeral":             true,
+		"developerInstructions": managedRuntimeDeveloperInstructions(agent.principal),
+	}, 30*time.Second)
+	if err != nil {
+		return r1CodexAgentReport{}, hooksRaw, fmt.Errorf("%s: thread/start: %w", agent.principal, err)
+	}
+	agent.threadID = codexapp.ThreadID(thread)
+	if agent.threadID == "" {
+		return r1CodexAgentReport{}, hooksRaw, fmt.Errorf("%s: thread/start returned no thread id", agent.principal)
+	}
+	rendered, err := runManualR1HookReminder(agent)
+	if err != nil {
+		return r1CodexAgentReport{}, hooksRaw, err
+	}
+	return r1CodexAgentReport{
+		Principal:          agent.principal,
+		Workspace:          agent.workspace,
+		CodexHome:          agent.codexHome,
+		ThreadID:           agent.threadID,
+		HookCount:          len(hooks),
+		HookTrustStatuses:  hookTrustStatuses(hooks),
+		ManualHookReminded: strings.Contains(rendered, "governed context") || strings.Contains(rendered, "systemMessage"),
+	}, hooksRaw, nil
+}
+
+func managedRuntimeDeveloperInstructions(principal string) string {
+	return fmt.Sprintf(`You are %s in a Mnemon managed-runtime acceptance run.
+The user input [mnemon:wake] is only a local wake signal. It is not task context.
+On a wake, inspect governed Mnemon context through the normal hook/skill surface and Local Mnemon commands from the workspace root:
+  . .mnemon/harness/local/env.sh
+  mnemon-harness control render --addr "$MNEMON_CONTROL_ADDR" --principal "$MNEMON_CONTROL_PRINCIPAL" --token-file "$MNEMON_CONTROL_TOKEN_FILE" --intent teamwork.events --lifecycle remind --surface agent
+  mnemon-harness control render --addr "$MNEMON_CONTROL_ADDR" --principal "$MNEMON_CONTROL_PRINCIPAL" --token-file "$MNEMON_CONTROL_TOKEN_FILE" --intent payload.contract --lifecycle remind --surface agent
+  mnemon-harness control teamwork progress --addr "$MNEMON_CONTROL_ADDR" --principal "$MNEMON_CONTROL_PRINCIPAL" --token-file "$MNEMON_CONTROL_TOKEN_FILE" --assignment-ref <assignment-id> --summary "<progress, result, or blocker>" --external-id <unique-id>
+  mnemon-harness control observe --addr "$MNEMON_CONTROL_ADDR" --principal "$MNEMON_CONTROL_PRINCIPAL" --token-file "$MNEMON_CONTROL_TOKEN_FILE" --type <event-type> --external-id <id> --payload '<json>'
+If the rendered brief contains [mnemon:work], you may complete the addressed work and emit a short progress_digest.write_candidate.observed event with assignment_ref from the brief.
+If the rendered brief contains [mnemon:integrate], you may integrate, close, or assign follow-up work through normal governed events.
+Do not say an event was written unless the Local Mnemon command succeeded. Keep final answers brief and name the governed event actually written.`, principal)
 }
 
 type managedRuntimeExistingCodexClient struct {
