@@ -24,6 +24,7 @@ var (
 	acceptanceMulticaWorkspaceID        string
 	acceptanceMulticaRegistry           string
 	acceptanceMulticaAssigneePrincipal  string
+	acceptanceMulticaTaskCase           string
 	acceptanceMulticaIssueTitle         string
 	acceptanceMulticaIssueDescription   string
 	acceptanceMulticaWait               time.Duration
@@ -47,6 +48,7 @@ var acceptanceMulticaRuntimeCmd = &cobra.Command{
 			WorkspaceID:        acceptanceMulticaWorkspaceID,
 			RegistryPath:       acceptanceMulticaRegistry,
 			AssigneePrincipal:  acceptanceMulticaAssigneePrincipal,
+			TaskCase:           acceptanceMulticaTaskCase,
 			IssueTitle:         acceptanceMulticaIssueTitle,
 			IssueDescription:   acceptanceMulticaIssueDescription,
 			Wait:               acceptanceMulticaWait,
@@ -80,6 +82,7 @@ func init() {
 	acceptanceMulticaRuntimeCmd.Flags().StringVar(&acceptanceMulticaWorkspaceID, "multica-workspace-id", multicaAcceptanceEnvDefault("MNEMON_MULTICA_WORKSPACE_ID", ""), "Multica workspace ID")
 	acceptanceMulticaRuntimeCmd.Flags().StringVar(&acceptanceMulticaRegistry, "registry", "", "Multica participant registry path")
 	acceptanceMulticaRuntimeCmd.Flags().StringVar(&acceptanceMulticaAssigneePrincipal, "assignee-principal", "planner@team", "Mnemon principal whose Multica agent receives the issue")
+	acceptanceMulticaRuntimeCmd.Flags().StringVar(&acceptanceMulticaTaskCase, "task-case", multicaAcceptanceTaskCaseR2Readiness, "real Multica task case to create ("+strings.Join(multicaAcceptanceTaskCaseNames(), ", ")+")")
 	acceptanceMulticaRuntimeCmd.Flags().StringVar(&acceptanceMulticaIssueTitle, "issue-title", "", "Multica issue title")
 	acceptanceMulticaRuntimeCmd.Flags().StringVar(&acceptanceMulticaIssueDescription, "issue-description", "", "Multica issue description")
 	acceptanceMulticaRuntimeCmd.Flags().DurationVar(&acceptanceMulticaWait, "wait", 10*time.Minute, "time to wait for Multica runtime evidence")
@@ -100,6 +103,7 @@ type multicaRuntimeProdSimOptions struct {
 	WorkspaceID        string
 	RegistryPath       string
 	AssigneePrincipal  string
+	TaskCase           string
 	IssueTitle         string
 	IssueDescription   string
 	Wait               time.Duration
@@ -122,6 +126,9 @@ type multicaRuntimeProdSimReport struct {
 	ReportPath        string                                `json:"report_path"`
 	WorkspaceID       string                                `json:"workspace_id"`
 	RegistryPath      string                                `json:"registry_path"`
+	TaskCase          string                                `json:"task_case,omitempty"`
+	TaskExpectations  multicaAcceptanceTaskCaseExpectations `json:"task_expectations,omitempty"`
+	ExecutionPlan     multicaAcceptanceExecutionPlan        `json:"execution_plan,omitempty"`
 	Assignee          driver.MulticaParticipantRecord       `json:"assignee"`
 	Participants      []driver.MulticaParticipantRecord     `json:"participants,omitempty"`
 	Issue             driver.MulticaIssue                   `json:"issue"`
@@ -169,9 +176,20 @@ func runMulticaRuntimeProdSimAcceptance(ctx context.Context, opts multicaRuntime
 	if opts.MinActiveAgents <= 0 {
 		opts.MinActiveAgents = 3
 	}
+	requestedTaskCase := strings.TrimSpace(opts.TaskCase)
+	if requestedTaskCase == "" {
+		requestedTaskCase = multicaAcceptanceTaskCaseR2Readiness
+	}
+	taskCase, taskCaseErr := multicaAcceptanceTaskCase(requestedTaskCase, started)
 	runRoot := strings.TrimSpace(opts.RunRoot)
 	if runRoot == "" {
-		runRoot = filepath.Join(".testdata", "multica-runtime-prod-sim", started.Format("20060102T150405Z"))
+		caseID := requestedTaskCase
+		if taskCaseErr != nil {
+			caseID = "invalid-task-case"
+		} else {
+			caseID = taskCase.ID
+		}
+		runRoot = filepath.Join(".testdata", "multica-runtime-prod-sim", multicaAcceptancePathSegment(caseID, "task-case"), started.Format("20060102T150405Z"))
 	}
 	absRunRoot, err := filepath.Abs(runRoot)
 	if err != nil {
@@ -185,10 +203,20 @@ func runMulticaRuntimeProdSimAcceptance(ctx context.Context, opts multicaRuntime
 		RunRoot:       runRoot,
 		WorkspaceID:   strings.TrimSpace(opts.WorkspaceID),
 		RegistryPath:  strings.TrimSpace(opts.RegistryPath),
+		TaskCase:      requestedTaskCase,
 	}
 	if err := prepareR1AcceptanceRunRoot(runRoot); err != nil {
 		return finishMulticaRuntimeProdSimReport(report, err)
 	}
+	if taskCaseErr != nil {
+		return finishMulticaRuntimeProdSimReport(report, taskCaseErr)
+	}
+	report.TaskCase = taskCase.ID
+	executionPlan, err := materializeMulticaAcceptanceExecutionPlan(runRoot, taskCase)
+	if err != nil {
+		return finishMulticaRuntimeProdSimReport(report, err)
+	}
+	report.ExecutionPlan = executionPlan
 	var prereqErrs []error
 	if cliPath, err := resolveMulticaAcceptanceCLI(opts.MulticaBin); err != nil {
 		addMulticaProdSimAssertion(&report, "Multica CLI available", false, err.Error())
@@ -228,6 +256,10 @@ func runMulticaRuntimeProdSimAcceptance(ctx context.Context, opts multicaRuntime
 		return finishMulticaRuntimeProdSimReport(report, err)
 	}
 	report.Assignee = assignee
+	report.TaskExpectations = taskCase.Expectations
+	if taskCase.Expectations.MinActiveAgents > opts.MinActiveAgents {
+		opts.MinActiveAgents = taskCase.Expectations.MinActiveAgents
+	}
 	cli := driver.MulticaCLI{
 		Command:     strings.TrimSpace(opts.MulticaBin),
 		Profile:     strings.TrimSpace(opts.Profile),
@@ -238,26 +270,11 @@ func runMulticaRuntimeProdSimAcceptance(ctx context.Context, opts multicaRuntime
 	}
 	title := strings.TrimSpace(opts.IssueTitle)
 	if title == "" {
-		title = "Mnemon Multica runtime prod-sim " + started.Format("150405")
+		title = taskCase.Title
 	}
 	description := strings.TrimSpace(opts.IssueDescription)
 	if description == "" {
-		description = multicasurface.RootSessionDescription(multicasurface.RootSessionMaterial{
-			Request:  "Run a small Mnemon R2 Multica readiness drill.",
-			WorkMode: "Use Mnemon teamwork; Multica shows issues, runs, comments, and statuses.",
-			Handoffs: []string{
-				"Route root session visibility and child issue routing checks to separate teammates.",
-				"After teammate feedback is visible, route a final integration check.",
-			},
-			Validation: []string{
-				"Root issue carries session metadata and shows run activity.",
-				"Accepted assignments become child issue mailboxes assigned to target agents.",
-				"Feedback comments and statuses are projected back to Multica.",
-				"Stale or cross-session assignment material is ignored.",
-				"Final root status reflects completion.",
-			},
-			Completion: "Finish when child feedback comments are visible and the root issue reaches a terminal status.",
-		})
+		description = strings.TrimSpace(taskCase.Description + "\n\n" + renderMulticaAcceptanceExecutionPlan(executionPlan))
 	}
 	issue, err := cli.CreateIssue(ctx, driver.MulticaCreateIssueRequest{
 		Title:          title,
@@ -347,6 +364,9 @@ func collectMulticaHubFlowEvidence(ctx context.Context, cli driver.MulticaCLI, o
 	if minAssignmentChildren < 1 {
 		minAssignmentChildren = 1
 	}
+	if report.TaskExpectations.MinChildMailboxes > minAssignmentChildren {
+		minAssignmentChildren = report.TaskExpectations.MinChildMailboxes
+	}
 	children, childMeta, err := waitMulticaAssignmentChildren(ctx, cli, report.Issue.ID, opts.Wait, opts.Poll, minAssignmentChildren)
 	report.ChildIssues = children
 	report.ChildMetadata = childMeta
@@ -398,6 +418,12 @@ func collectMulticaHubFlowEvidence(ctx context.Context, cli driver.MulticaCLI, o
 		return err
 	}
 	addMulticaProdSimAssertion(report, "hub-flow projects feedback comments and completion statuses", multicaHubProjectionComplete(finalRoot, finalChildren, childComments), fmt.Sprintf("root=%s children=%v comments=%d", finalRoot.Status, multicaIssueStatuses(finalChildren), multicaCommentCount(childComments)))
+	if report.TaskExpectations.MinChildMailboxes > 0 {
+		addMulticaProdSimAssertion(report, "task case child mailbox expectation met", len(finalChildren) >= report.TaskExpectations.MinChildMailboxes, fmt.Sprintf("children=%d min=%d", len(finalChildren), report.TaskExpectations.MinChildMailboxes))
+	}
+	if report.TaskExpectations.MinFeedbackComments > 0 {
+		addMulticaProdSimAssertion(report, "task case feedback comment expectation met", multicaCommentCount(childComments) >= report.TaskExpectations.MinFeedbackComments, fmt.Sprintf("comments=%d min=%d", multicaCommentCount(childComments), report.TaskExpectations.MinFeedbackComments))
+	}
 	visibleOK, visibleDetail := multicaAssignmentChildrenUseStructuredVisibleText(finalChildren)
 	addMulticaProdSimAssertion(report, "assignment child issue visible text is structured", visibleOK, visibleDetail)
 	return nil
