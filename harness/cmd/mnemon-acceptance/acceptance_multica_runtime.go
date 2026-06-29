@@ -268,6 +268,16 @@ func runMulticaRuntimeProdSimAcceptance(ctx context.Context, opts multicaRuntime
 		Env:         os.Environ(),
 		Timeout:     30 * time.Second,
 	}
+	if opts.RequireHubFlow {
+		ok, detail, err := multicaHubFlowManagedRuntimeReady(ctx, cli, registry.Participants, opts.MinActiveAgents, assignee.Principal)
+		addMulticaProdSimAssertion(&report, "hub-flow agents expose managed runtime", ok, detail)
+		if err != nil {
+			return finishMulticaRuntimeProdSimReport(report, err)
+		}
+		if !ok {
+			return finishMulticaRuntimeProdSimReport(report, fmt.Errorf("Multica hub-flow requires at least %d managed runtime participants and a managed root assignee", opts.MinActiveAgents))
+		}
+	}
 	title := strings.TrimSpace(opts.IssueTitle)
 	if title == "" {
 		title = taskCase.Title
@@ -345,6 +355,59 @@ func selectMulticaAcceptanceAssignee(reg driver.MulticaRegistry, principal strin
 		return participant, nil
 	}
 	return driver.MulticaParticipantRecord{}, fmt.Errorf("registry has no participant with a Multica agent id")
+}
+
+func multicaHubFlowManagedRuntimeReady(ctx context.Context, cli driver.MulticaCLI, participants []driver.MulticaParticipantRecord, minActive int, requiredPrincipal string) (bool, string, error) {
+	if minActive < 1 {
+		minActive = 1
+	}
+	requiredPrincipal = strings.TrimSpace(requiredPrincipal)
+	active := 0
+	requiredActive := requiredPrincipal == ""
+	var details []string
+	for _, participant := range participants {
+		principal := strings.TrimSpace(participant.Principal)
+		agentID := strings.TrimSpace(participant.AgentID)
+		if principal == "" || agentID == "" {
+			continue
+		}
+		env, err := cli.GetAgentEnv(ctx, agentID)
+		if err != nil {
+			return false, strings.Join(details, "; "), fmt.Errorf("read Multica agent env for %s: %w", principal, err)
+		}
+		runtimeName := strings.TrimSpace(env["MNEMON_MANAGED_RUNTIME"])
+		ready := multicaManagedRuntimeCanDriveTeamwork(runtimeName)
+		if ready {
+			active++
+		}
+		if principal == requiredPrincipal {
+			requiredActive = ready
+		}
+		details = append(details, fmt.Sprintf("%s=%s", principal, multicaManagedRuntimeReadinessLabel(runtimeName, ready)))
+	}
+	ok := active >= minActive && requiredActive
+	details = append(details, fmt.Sprintf("active=%d min=%d root_ready=%v", active, minActive, requiredActive))
+	return ok, strings.Join(details, "; "), nil
+}
+
+func multicaManagedRuntimeCanDriveTeamwork(runtimeName string) bool {
+	switch strings.ToLower(strings.TrimSpace(runtimeName)) {
+	case "codex-appserver":
+		return true
+	default:
+		return false
+	}
+}
+
+func multicaManagedRuntimeReadinessLabel(runtimeName string, ready bool) string {
+	runtimeName = strings.TrimSpace(runtimeName)
+	if runtimeName == "" {
+		runtimeName = "missing"
+	}
+	if ready {
+		return runtimeName
+	}
+	return runtimeName + " (not hub-flow capable)"
 }
 
 func collectMulticaHubFlowEvidence(ctx context.Context, cli driver.MulticaCLI, opts multicaRuntimeProdSimOptions, report *multicaRuntimeProdSimReport) error {

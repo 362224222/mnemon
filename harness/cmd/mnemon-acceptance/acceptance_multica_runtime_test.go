@@ -147,6 +147,7 @@ func TestMulticaRuntimeProdSimAcceptanceRequiresHubFlow(t *testing.T) {
 printf '%s\n' "$*" >> "$MULTICA_ARGS_PATH"
 cat >> "$MULTICA_STDIN_PATH"
 case "$*" in
+  *"agent env get agent-"*) agent="${4:-}"; printf '{"agent_id":"%s","custom_env":{"MNEMON_MANAGED_RUNTIME":"codex-appserver"}}\n' "$agent" ;;
   *"issue create"*) printf '{"id":"root-9","identifier":"TEA-9","title":"Runtime hub flow","description":"Teamwork acceptance","status":"todo"}\n' ;;
   *"issue get root-9"*) printf '{"id":"root-9","identifier":"TEA-9","title":"Runtime hub flow","description":"Teamwork acceptance","status":"done"}\n' ;;
   *"issue get child-2"*) printf '%s\n' '{"id":"child-2","identifier":"TEA-10","title":"TEA-9: routing check","description":"## Assignment\n\nCheck routing.\n\n## Context\n\n- Root issue: [TEA-9](mention://issue/root-9) - Runtime hub flow\n- Assignee: researcher@team (mnemon-researcher)\n- Scope: routing check\n\n## Feedback\n\n- Expected feedback: result or blocker\n- Progress path: Mnemon runtime progress, result, or blocker feedback","status":"done"}' ;;
@@ -227,6 +228,86 @@ esac
 	}
 }
 
+func TestMulticaRuntimeProdSimHubFlowRejectsNoopManagedRuntimeBeforeCreatingIssue(t *testing.T) {
+	tmp := t.TempDir()
+	registryPath := filepath.Join(tmp, "registry.json")
+	var participants []driver.MulticaParticipantRecord
+	for _, role := range []string{"planner", "researcher", "implementer", "reviewer", "integrator"} {
+		participants = append(participants, driver.MulticaParticipantRecord{
+			Principal: role + "@team",
+			AgentName: "mnemon-" + role,
+			AgentID:   "agent-" + role,
+			Role:      role,
+		})
+	}
+	if err := driver.SaveMulticaRegistry(registryPath, driver.MulticaRegistry{
+		SchemaVersion:    1,
+		WorkspaceID:      "ws-1",
+		RuntimeProfileID: "profile-1",
+		RuntimeID:        "runtime-1",
+		Participants:     participants,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	argsPath := filepath.Join(tmp, "args.txt")
+	stdinPath := filepath.Join(tmp, "stdin.txt")
+	bin := filepath.Join(tmp, "multica")
+	script := `#!/usr/bin/env sh
+printf '%s\n' "$*" >> "$MULTICA_ARGS_PATH"
+cat >> "$MULTICA_STDIN_PATH"
+case "$*" in
+  *"agent env get agent-"*) agent="${4:-}"; printf '{"agent_id":"%s","custom_env":{"MNEMON_MANAGED_RUNTIME":"noop"}}\n' "$agent" ;;
+  *"issue create"*) printf 'issue create should not be reached\n' >&2; exit 99 ;;
+  *) printf '{}\n' ;;
+esac
+`
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MULTICA_ARGS_PATH", argsPath)
+	t.Setenv("MULTICA_STDIN_PATH", stdinPath)
+
+	report, err := runMulticaRuntimeProdSimAcceptance(context.Background(), multicaRuntimeProdSimOptions{
+		RunRoot:           filepath.Join(tmp, ".testdata", "multica-hub-noop"),
+		MulticaBin:        bin,
+		WorkspaceID:       "ws-1",
+		RegistryPath:      registryPath,
+		AssigneePrincipal: "planner@team",
+		IssueTitle:        "Noop hub flow",
+		IssueDescription:  "Teamwork acceptance",
+		Wait:              time.Millisecond,
+		Poll:              time.Millisecond,
+		RequireIngest:     true,
+		RequireHubFlow:    true,
+		MinParticipants:   5,
+		MinActiveAgents:   3,
+	})
+	if err == nil || !strings.Contains(err.Error(), "managed runtime participants") {
+		t.Fatalf("expected managed runtime prerequisite error, got err=%v report=%+v", err, report)
+	}
+	if report.Status != "failed" || report.Issue.ID != "" {
+		t.Fatalf("hub-flow prerequisite should fail before issue create: %+v", report)
+	}
+	var readinessAssertion *multicaRuntimeProdSimAssertion
+	for i := range report.Assertions {
+		if report.Assertions[i].Name == "hub-flow agents expose managed runtime" {
+			readinessAssertion = &report.Assertions[i]
+			break
+		}
+	}
+	if readinessAssertion == nil || readinessAssertion.Passed || !strings.Contains(readinessAssertion.Detail, "noop (not hub-flow capable)") {
+		t.Fatalf("unexpected readiness assertion: %+v all=%+v", readinessAssertion, report.Assertions)
+	}
+	rawArgs, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := string(rawArgs)
+	if strings.Contains(args, "issue create") {
+		t.Fatalf("issue create must not run when hub-flow managed runtime is noop:\n%s", args)
+	}
+}
+
 func TestMulticaRuntimeProdSimHubFlowWritesPartialSnapshotWhenMailboxExpectationMisses(t *testing.T) {
 	tmp := t.TempDir()
 	registryPath := filepath.Join(tmp, "registry.json")
@@ -255,6 +336,7 @@ func TestMulticaRuntimeProdSimHubFlowWritesPartialSnapshotWhenMailboxExpectation
 printf '%s\n' "$*" >> "$MULTICA_ARGS_PATH"
 cat >> "$MULTICA_STDIN_PATH"
 case "$*" in
+  *"agent env get agent-"*) agent="${4:-}"; printf '{"agent_id":"%s","custom_env":{"MNEMON_MANAGED_RUNTIME":"codex-appserver"}}\n' "$agent" ;;
   *"issue create"*) printf '{"id":"root-partial","identifier":"TEA-30","title":"Partial hub evidence","description":"Teamwork acceptance","status":"todo"}\n' ;;
   *"issue get root-partial"*) printf '{"id":"root-partial","identifier":"TEA-30","title":"Partial hub evidence","description":"Teamwork acceptance","status":"in_progress"}\n' ;;
   *"issue get child-partial"*) printf '%s\n' '{"id":"child-partial","identifier":"TEA-31","title":"TEA-30: routing","description":"## Assignment\n\nCheck routing.\n\n## Context\n\n- Root issue: [TEA-30](mention://issue/root-partial) - Partial hub evidence\n- Assignee: researcher@team (mnemon-researcher)\n- Scope: routing\n\n## Feedback\n\n- Expected feedback: result","status":"done"}' ;;
@@ -354,6 +436,7 @@ func TestMulticaRuntimeProdSimHubFlowAllowsDeferredRunMessages(t *testing.T) {
 printf '%s\n' "$*" >> "$MULTICA_ARGS_PATH"
 cat >> "$MULTICA_STDIN_PATH"
 case "$*" in
+  *"agent env get agent-"*) agent="${4:-}"; printf '{"agent_id":"%s","custom_env":{"MNEMON_MANAGED_RUNTIME":"codex-appserver"}}\n' "$agent" ;;
   *"issue create"*) printf '{"id":"root-deferred","identifier":"TEA-20","title":"Deferred run messages","description":"Teamwork acceptance","status":"todo"}\n' ;;
   *"issue get root-deferred"*) printf '{"id":"root-deferred","identifier":"TEA-20","title":"Deferred run messages","description":"Teamwork acceptance","status":"done"}\n' ;;
   *"issue get child-a"*) printf '%s\n' '{"id":"child-a","identifier":"TEA-21","title":"TEA-20: routing","description":"## Assignment\n\nCheck routing.\n\n## Context\n\n- Root issue: [TEA-20](mention://issue/root-deferred) - Deferred run messages\n- Assignee: researcher@team (mnemon-researcher)\n- Scope: routing\n\n## Feedback\n\n- Expected feedback: result","status":"done"}' ;;
