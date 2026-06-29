@@ -497,29 +497,13 @@ func findAssignmentTargetFromLedger(ledger *driver.FileMulticaHubLedger, session
 	if err != nil {
 		return "", false, err
 	}
-	var fallback string
-	matches := 0
-	principal = strings.TrimSpace(principal)
-	for i := len(records) - 1; i >= 0; i-- {
-		record := records[i]
-		if record.Kind != driver.MulticaHubKindAssignmentMailbox {
-			continue
-		}
-		if record.Source.SessionID != sessionID || record.Source.AssignmentID != assignmentID || strings.TrimSpace(record.Target.ChildIssueID) == "" {
-			continue
-		}
-		matches++
-		if principal != "" && record.Source.Principal == principal {
-			return record.Target.ChildIssueID, true, nil
-		}
-		if fallback == "" {
-			fallback = record.Target.ChildIssueID
-		}
-	}
-	if principal == "" || matches == 1 {
-		return fallback, fallback != "", nil
-	}
-	return "", false, nil
+	target, ok := multicasurface.SelectAssignmentTarget(
+		multicasurface.AssignmentTargetCandidatesFromLedgerRecords(records),
+		sessionID,
+		assignmentID,
+		principal,
+	)
+	return target, ok, nil
 }
 
 func findAssignmentTargetFromMulticaHub(ctx context.Context, cli driver.MulticaCLI, rootIssueID, sessionID, assignmentID, principal string) (string, bool, error) {
@@ -527,9 +511,7 @@ func findAssignmentTargetFromMulticaHub(ctx context.Context, cli driver.MulticaC
 	if err != nil {
 		return "", false, err
 	}
-	var fallback string
-	matches := 0
-	principal = strings.TrimSpace(principal)
+	candidates := []multicasurface.AssignmentTargetCandidate{}
 	for _, child := range children {
 		meta := driver.MulticaIssueHubMetadata(child)
 		if !meta.IsAssignmentMailbox() {
@@ -542,21 +524,12 @@ func findAssignmentTargetFromMulticaHub(ctx context.Context, cli driver.MulticaC
 		if !meta.IsAssignmentMailbox() {
 			continue
 		}
-		if meta.SessionID != sessionID || meta.AssignmentID != assignmentID || strings.TrimSpace(child.ID) == "" {
-			continue
-		}
-		matches++
-		if principal != "" && meta.Principal == principal {
-			return child.ID, true, nil
-		}
-		if fallback == "" {
-			fallback = child.ID
+		if candidate, ok := multicasurface.AssignmentTargetCandidateFromMailboxMetadata(child.ID, meta); ok {
+			candidates = append(candidates, candidate)
 		}
 	}
-	if principal == "" || matches == 1 {
-		return fallback, fallback != "", nil
-	}
-	return "", false, nil
+	target, ok := multicasurface.SelectAssignmentTarget(candidates, sessionID, assignmentID, principal)
+	return target, ok, nil
 }
 
 func allMulticaAssignmentChildrenDone(ctx context.Context, cli driver.MulticaCLI, rootIssueID, sessionID, justCompletedChildID string) (bool, error) {

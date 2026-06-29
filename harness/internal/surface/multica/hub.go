@@ -127,6 +127,13 @@ type MulticaHubLedgerTarget struct {
 	Status       string `json:"status,omitempty"`
 }
 
+type AssignmentTargetCandidate struct {
+	SessionID    string
+	AssignmentID string
+	Principal    string
+	ChildIssueID string
+}
+
 type FileMulticaHubLedger struct {
 	path    string
 	loaded  bool
@@ -263,6 +270,62 @@ func (l *FileMulticaHubLedger) upsertLoaded(record MulticaHubLedgerRecord) {
 		}
 	}
 	l.records = append(l.records, record)
+}
+
+func AssignmentTargetCandidatesFromLedgerRecords(records []MulticaHubLedgerRecord) []AssignmentTargetCandidate {
+	out := []AssignmentTargetCandidate{}
+	for i := len(records) - 1; i >= 0; i-- {
+		record := records[i]
+		if record.Kind != MulticaHubKindAssignmentMailbox {
+			continue
+		}
+		out = append(out, AssignmentTargetCandidate{
+			SessionID:    record.Source.SessionID,
+			AssignmentID: record.Source.AssignmentID,
+			Principal:    record.Source.Principal,
+			ChildIssueID: record.Target.ChildIssueID,
+		})
+	}
+	return out
+}
+
+func AssignmentTargetCandidateFromMailboxMetadata(childIssueID string, meta MulticaHubMetadata) (AssignmentTargetCandidate, bool) {
+	if !meta.IsAssignmentMailbox() {
+		return AssignmentTargetCandidate{}, false
+	}
+	return AssignmentTargetCandidate{
+		SessionID:    meta.SessionID,
+		AssignmentID: meta.AssignmentID,
+		Principal:    meta.Principal,
+		ChildIssueID: childIssueID,
+	}, true
+}
+
+func SelectAssignmentTarget(candidates []AssignmentTargetCandidate, sessionID, assignmentID, principal string) (string, bool) {
+	sessionID = strings.TrimSpace(sessionID)
+	assignmentID = strings.TrimSpace(assignmentID)
+	principal = strings.TrimSpace(principal)
+	var fallback string
+	matches := 0
+	for _, candidate := range candidates {
+		childIssueID := strings.TrimSpace(candidate.ChildIssueID)
+		if strings.TrimSpace(candidate.SessionID) != sessionID ||
+			strings.TrimSpace(candidate.AssignmentID) != assignmentID ||
+			childIssueID == "" {
+			continue
+		}
+		matches++
+		if principal != "" && strings.TrimSpace(candidate.Principal) == principal {
+			return childIssueID, true
+		}
+		if fallback == "" {
+			fallback = childIssueID
+		}
+	}
+	if principal == "" || matches == 1 {
+		return fallback, fallback != ""
+	}
+	return "", false
 }
 
 func multicaHubLedgerKey(kind string, source MulticaHubLedgerSource) string {

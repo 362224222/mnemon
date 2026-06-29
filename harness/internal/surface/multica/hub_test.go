@@ -283,3 +283,64 @@ func TestFileHubLedgerDedupesRecords(t *testing.T) {
 		t.Fatalf("ledger find mismatch: ok=%v record=%+v", ok, found)
 	}
 }
+
+func TestSelectAssignmentTargetDisambiguatesDuplicateAssignments(t *testing.T) {
+	candidates := []AssignmentTargetCandidate{
+		{SessionID: "session-1", AssignmentID: "asg-1", Principal: "implementer@team", ChildIssueID: "child-impl"},
+		{SessionID: "session-1", AssignmentID: "asg-1", Principal: "researcher@team", ChildIssueID: "child-research"},
+	}
+	if got, ok := SelectAssignmentTarget(candidates, "session-1", "asg-1", "researcher@team"); !ok || got != "child-research" {
+		t.Fatalf("principal target = %q ok=%v", got, ok)
+	}
+	if got, ok := SelectAssignmentTarget(candidates, "session-1", "asg-1", "writer@team"); ok || got != "" {
+		t.Fatalf("ambiguous unmatched principal should not fallback, got %q ok=%v", got, ok)
+	}
+	if got, ok := SelectAssignmentTarget(candidates[:1], "session-1", "asg-1", "writer@team"); !ok || got != "child-impl" {
+		t.Fatalf("single candidate fallback = %q ok=%v", got, ok)
+	}
+	if got, ok := SelectAssignmentTarget(candidates, "session-1", "asg-1", ""); !ok || got != "child-impl" {
+		t.Fatalf("empty principal fallback = %q ok=%v", got, ok)
+	}
+}
+
+func TestAssignmentTargetCandidatesFromLedgerRecordsPreferNewestRecordOrder(t *testing.T) {
+	records := []MulticaHubLedgerRecord{
+		{
+			Kind: MulticaHubKindAssignmentMailbox,
+			Source: MulticaHubLedgerSource{
+				SessionID:    "session-1",
+				AssignmentID: "asg-1",
+				Principal:    "worker@team",
+			},
+			Target: MulticaHubLedgerTarget{ChildIssueID: "child-old"},
+		},
+		{
+			Kind: MulticaHubKindAssignmentMailbox,
+			Source: MulticaHubLedgerSource{
+				SessionID:    "session-1",
+				AssignmentID: "asg-1",
+				Principal:    "worker@team",
+			},
+			Target: MulticaHubLedgerTarget{ChildIssueID: "child-new"},
+		},
+	}
+	if got, ok := SelectAssignmentTarget(AssignmentTargetCandidatesFromLedgerRecords(records), "session-1", "asg-1", "worker@team"); !ok || got != "child-new" {
+		t.Fatalf("ledger target = %q ok=%v", got, ok)
+	}
+}
+
+func TestAssignmentTargetCandidateFromMailboxMetadata(t *testing.T) {
+	candidate, ok := AssignmentTargetCandidateFromMailboxMetadata("child-1", MulticaHubMetadata{
+		HubBackend:   MulticaHubBackend,
+		Kind:         MulticaHubKindAssignmentMailbox,
+		SessionID:    "session-1",
+		AssignmentID: "asg-1",
+		Principal:    "worker@team",
+	})
+	if !ok || candidate.ChildIssueID != "child-1" || candidate.SessionID != "session-1" || candidate.AssignmentID != "asg-1" || candidate.Principal != "worker@team" {
+		t.Fatalf("candidate mismatch: ok=%v candidate=%+v", ok, candidate)
+	}
+	if _, ok := AssignmentTargetCandidateFromMailboxMetadata("child-2", MulticaHubMetadata{Kind: MulticaHubKindSession}); ok {
+		t.Fatal("non-assignment mailbox metadata should not produce a candidate")
+	}
+}
