@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	participantrole "github.com/mnemon-dev/mnemon/harness/internal/participant"
 	multicasurface "github.com/mnemon-dev/mnemon/harness/internal/surface/multica"
 )
 
@@ -155,16 +156,13 @@ func (cfg Config) Validate() error {
 	if cfg.SchemaVersion != SchemaVersion {
 		return fmt.Errorf("product config schema_version %d unsupported (want %d)", cfg.SchemaVersion, SchemaVersion)
 	}
-	seen := map[string]bool{}
+	if err := participantrole.ValidateUniquePrincipals(cfg.Participants, "participant", func(participant Participant) string {
+		return participant.Principal
+	}); err != nil {
+		return err
+	}
 	for _, participant := range cfg.Participants {
-		principal := strings.TrimSpace(participant.Principal)
-		if principal == "" {
-			return fmt.Errorf("participant principal is required")
-		}
-		if seen[principal] {
-			return fmt.Errorf("duplicate participant principal %q", principal)
-		}
-		seen[principal] = true
+		principal := participantrole.NormalizePrincipal(participant.Principal)
 		if strings.TrimSpace(participant.HostRuntime.Kind) == "" {
 			return fmt.Errorf("participant %q host_runtime.kind is required", principal)
 		}
@@ -270,9 +268,9 @@ func FromLegacy(root string) (Config, bool, error) {
 	}
 	if ok {
 		found = true
-		if strings.TrimSpace(local.Principal) != "" {
+		if principal := participantrole.NormalizePrincipal(local.Principal); principal != "" {
 			cfg.Participants = append(cfg.Participants, Participant{
-				Principal: local.Principal,
+				Principal: principal,
 				HostRuntime: HostRuntime{
 					Kind: RuntimeKindConfigured,
 					Mode: RuntimeModeAttached,
@@ -360,9 +358,9 @@ func bridgeMulticaRegistry(cfg *Config, reg multicasurface.MulticaRegistry) erro
 }
 
 func participantFromMulticaRegistryRecord(record multicasurface.MulticaParticipantRecord) (Participant, error) {
-	principal := strings.TrimSpace(record.Principal)
-	if principal == "" {
-		return Participant{}, fmt.Errorf("multica registry participant principal is required")
+	principal, err := participantrole.RequirePrincipal("multica registry participant", record.Principal)
+	if err != nil {
+		return Participant{}, err
 	}
 	displayName := strings.TrimSpace(record.AgentName)
 	if displayName == "" {
@@ -380,25 +378,23 @@ func participantFromMulticaRegistryRecord(record multicasurface.MulticaParticipa
 }
 
 func mergeParticipant(participants []Participant, next Participant) []Participant {
-	for i := range participants {
-		if participants[i].Principal != next.Principal {
-			continue
+	return participantrole.UpsertByPrincipal(participants, next, func(participant Participant) string {
+		return participant.Principal
+	}, func(existing, next Participant) Participant {
+		if strings.TrimSpace(existing.DisplayName) == "" {
+			existing.DisplayName = next.DisplayName
 		}
-		if strings.TrimSpace(participants[i].DisplayName) == "" {
-			participants[i].DisplayName = next.DisplayName
+		if strings.TrimSpace(existing.Role) == "" {
+			existing.Role = next.Role
 		}
-		if strings.TrimSpace(participants[i].Role) == "" {
-			participants[i].Role = next.Role
+		if strings.TrimSpace(existing.HostRuntime.Kind) == "" {
+			existing.HostRuntime.Kind = next.HostRuntime.Kind
 		}
-		if strings.TrimSpace(participants[i].HostRuntime.Kind) == "" {
-			participants[i].HostRuntime.Kind = next.HostRuntime.Kind
+		if strings.TrimSpace(existing.HostRuntime.Mode) == "" {
+			existing.HostRuntime.Mode = next.HostRuntime.Mode
 		}
-		if strings.TrimSpace(participants[i].HostRuntime.Mode) == "" {
-			participants[i].HostRuntime.Mode = next.HostRuntime.Mode
-		}
-		return participants
-	}
-	return append(participants, next)
+		return existing
+	})
 }
 
 func loadLegacyLocal(root string) (legacyLocalConfig, bool, error) {

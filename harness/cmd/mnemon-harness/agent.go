@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	participantrole "github.com/mnemon-dev/mnemon/harness/internal/participant"
 	"github.com/mnemon-dev/mnemon/harness/internal/productconfig"
 	"github.com/spf13/cobra"
 )
@@ -52,7 +53,7 @@ func init() {
 }
 
 func runAgentAdd(cmd *cobra.Command, args []string) error {
-	principal := strings.TrimSpace(agentPrincipal)
+	principal := participantrole.NormalizePrincipal(agentPrincipal)
 	if principal == "" {
 		return fmt.Errorf("agent add requires --principal")
 	}
@@ -107,11 +108,7 @@ func runAgentList(cmd *cobra.Command, args []string) error {
 }
 
 func upsertProductParticipant(participants []productconfig.Participant, next productconfig.Participant) []productconfig.Participant {
-	for i := range participants {
-		if participants[i].Principal == next.Principal {
-			participants[i] = next
-			return participants
-		}
-	}
-	return append(participants, next)
+	return participantrole.UpsertByPrincipal(participants, next, func(participant productconfig.Participant) string {
+		return participant.Principal
+	}, nil)
 }

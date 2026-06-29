@@ -14,6 +14,7 @@ const (
 	ownerHostAgent         mainAxisOwner = "hostagent"
 	ownerMnemond           mainAxisOwner = "mnemond"
 	ownerMnemonhub         mainAxisOwner = "mnemonhub"
+	ownerParticipant       mainAxisOwner = "participant"
 	ownerInteractionPoint  mainAxisOwner = "interaction-point"
 	ownerDriveSource       mainAxisOwner = "drive-source"
 	ownerProjectionSurface mainAxisOwner = "projection-surface"
@@ -47,6 +48,7 @@ var packageMainAxisInventory = map[string]packageMainAxis{
 	"hostagent":       {owner: ownerHostAgent, role: "hostagent setup and thin shims", target: "hostagent"},
 	"interaction":     {owner: ownerInteractionPoint, role: "external stimulus material separated into rule/narrative/refs", target: "interaction/event-material"},
 	"mnemonhub":       {owner: ownerMnemonhub, role: "remote accepted event exchange server and exchange mechanics", target: "mnemonhub"},
+	"participant":     {owner: ownerParticipant, role: "principal identity and participant list helpers shared by product config and adapters", target: "participant"},
 	"productconfig":   {owner: ownerProductConfig, role: "harness product configuration for agents, connections, daemon workers, and surfaces", target: "product/config"},
 	"projection":      {owner: ownerProjectionSurface, role: "accepted/derived state material prepared for external projection surfaces", target: "projection"},
 	"replay":          {owner: ownerMnemond, role: "mnemond determinism verification", target: "mnemond/replay"},
