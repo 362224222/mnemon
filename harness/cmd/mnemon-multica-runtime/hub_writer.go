@@ -324,13 +324,13 @@ func (s *runtimeRPCState) writeProgressComments(ctx context.Context, cli driver.
 		if status := multicasurface.ProgressIssueStatus(material); status != "" {
 			_, _ = cli.SetIssueStatus(ctx, child, status)
 		}
-		rootStatus := "in_review"
+		allDone := false
 		if multicasurface.ProgressCompletesAssignment(material) {
-			if done, _ := allMulticaAssignmentChildrenDone(ctx, cli, result.RootIssueID, result.SessionID, child); done {
-				rootStatus = "done"
-			}
+			allDone, _ = allMulticaAssignmentChildrenDone(ctx, cli, result.RootIssueID, result.SessionID, child)
 		}
-		_, _ = cli.SetIssueStatus(ctx, result.RootIssueID, rootStatus)
+		if rootStatus := multicasurface.ProgressRootIssueStatus(material, allDone); rootStatus != "" {
+			_, _ = cli.SetIssueStatus(ctx, result.RootIssueID, rootStatus)
+		}
 		if err := ledger.Record(driver.MulticaHubLedgerRecord{
 			Kind:   driver.MulticaHubKindFeedbackCarrier,
 			Source: source,
@@ -749,12 +749,10 @@ func allMulticaAssignmentChildrenDone(ctx context.Context, cli driver.MulticaCLI
 		if child.ID == justCompletedChildID {
 			continue
 		}
-		switch strings.ToLower(strings.TrimSpace(child.Status)) {
-		case "done", "completed", "complete":
+		if multicasurface.IssueStatusDone(child.Status) {
 			continue
-		default:
-			return false, nil
 		}
+		return false, nil
 	}
 	return seen, nil
 }

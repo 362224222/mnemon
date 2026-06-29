@@ -115,37 +115,59 @@ func IssueMention(label, issueID string) string {
 }
 
 func ProgressIssueStatus(item ProgressFeedbackMaterial) string {
-	switch strings.ToLower(strings.TrimSpace(item.FeedbackKind)) {
+	switch canonicalProgressStatus(item.FeedbackKind) {
 	case "blocker":
-		return "blocked"
+		return StatusBlocked
 	case "result":
-		return "done"
+		return StatusDone
 	case "progress":
-		return "in_progress"
+		return StatusInProgress
+	case "review":
+		return StatusInReview
+	case "waiting":
+		return StatusTodo
+	case "cancelled":
+		return StatusCancelled
 	}
 	if strings.TrimSpace(item.Blocker) != "" {
-		return "blocked"
+		return StatusBlocked
 	}
 	if strings.TrimSpace(item.Result) != "" {
-		return "done"
+		return StatusDone
 	}
 	return ""
 }
 
-func ProgressCompletesAssignment(item ProgressFeedbackMaterial) bool {
-	if strings.EqualFold(strings.TrimSpace(item.FeedbackKind), "result") {
-		return true
+func ProgressRootIssueStatus(item ProgressFeedbackMaterial, allAssignmentsDone bool) string {
+	switch ProgressIssueStatus(item) {
+	case StatusBlocked:
+		return StatusBlocked
+	case StatusCancelled:
+		return StatusCancelled
+	case StatusDone:
+		if allAssignmentsDone {
+			return StatusDone
+		}
+		return StatusInReview
+	case StatusInReview:
+		return StatusInReview
+	case StatusInProgress:
+		return StatusInProgress
+	case StatusTodo:
+		return StatusTodo
+	case StatusBacklog:
+		return StatusBacklog
+	default:
+		return ""
 	}
-	return strings.TrimSpace(item.Result) != ""
+}
+
+func ProgressCompletesAssignment(item ProgressFeedbackMaterial) bool {
+	return ProgressIssueStatus(item) == StatusDone
 }
 
 func IssueStatusDone(status string) bool {
-	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "done", "completed", "complete":
-		return true
-	default:
-		return false
-	}
+	return CanonicalIssueStatus(status) == StatusDone
 }
 
 func assignmentTitleTopic(item AssignmentMailboxMaterial) string {

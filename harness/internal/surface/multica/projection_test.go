@@ -84,3 +84,61 @@ func TestProgressFeedbackMaterial(t *testing.T) {
 		t.Fatal("completed should be terminal")
 	}
 }
+
+func TestCanonicalIssueStatus(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want string
+	}{
+		{in: "backlog", want: StatusBacklog},
+		{in: "waiting", want: StatusTodo},
+		{in: "in progress", want: StatusInProgress},
+		{in: "review", want: StatusInReview},
+		{in: "completed", want: StatusDone},
+		{in: "blocked", want: StatusBlocked},
+		{in: "canceled", want: StatusCancelled},
+		{in: "cancelled", want: StatusCancelled},
+		{in: "unknown", want: ""},
+	} {
+		if got := CanonicalIssueStatus(tc.in); got != tc.want {
+			t.Fatalf("CanonicalIssueStatus(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestProgressIssueStatusMapping(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		item ProgressFeedbackMaterial
+		want string
+	}{
+		{name: "waiting", item: ProgressFeedbackMaterial{FeedbackKind: "waiting"}, want: StatusTodo},
+		{name: "in progress", item: ProgressFeedbackMaterial{FeedbackKind: "progress"}, want: StatusInProgress},
+		{name: "review", item: ProgressFeedbackMaterial{FeedbackKind: "review"}, want: StatusInReview},
+		{name: "done", item: ProgressFeedbackMaterial{FeedbackKind: "result"}, want: StatusDone},
+		{name: "blocked", item: ProgressFeedbackMaterial{FeedbackKind: "blocker"}, want: StatusBlocked},
+		{name: "canceled", item: ProgressFeedbackMaterial{FeedbackKind: "canceled"}, want: StatusCancelled},
+		{name: "blocked fallback", item: ProgressFeedbackMaterial{Blocker: "waiting on access"}, want: StatusBlocked},
+		{name: "done fallback", item: ProgressFeedbackMaterial{Result: "validated"}, want: StatusDone},
+		{name: "unknown", item: ProgressFeedbackMaterial{Summary: "no lifecycle signal"}, want: ""},
+	} {
+		if got := ProgressIssueStatus(tc.item); got != tc.want {
+			t.Fatalf("%s: ProgressIssueStatus = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestProgressRootIssueStatusMapping(t *testing.T) {
+	if got := ProgressRootIssueStatus(ProgressFeedbackMaterial{FeedbackKind: "progress"}, false); got != StatusInProgress {
+		t.Fatalf("progress root status = %q", got)
+	}
+	if got := ProgressRootIssueStatus(ProgressFeedbackMaterial{FeedbackKind: "blocker"}, false); got != StatusBlocked {
+		t.Fatalf("blocked root status = %q", got)
+	}
+	if got := ProgressRootIssueStatus(ProgressFeedbackMaterial{FeedbackKind: "result"}, false); got != StatusInReview {
+		t.Fatalf("partial result root status = %q", got)
+	}
+	if got := ProgressRootIssueStatus(ProgressFeedbackMaterial{FeedbackKind: "result"}, true); got != StatusDone {
+		t.Fatalf("complete result root status = %q", got)
+	}
+}

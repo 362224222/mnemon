@@ -960,8 +960,11 @@ func TestMulticaStatusForProgressIsRuleBased(t *testing.T) {
 		want string
 	}{
 		{name: "progress", item: runtimeProgress{FeedbackKind: "progress"}, want: "in_progress"},
+		{name: "waiting", item: runtimeProgress{FeedbackKind: "waiting"}, want: "todo"},
+		{name: "review", item: runtimeProgress{FeedbackKind: "review"}, want: "in_review"},
 		{name: "result", item: runtimeProgress{FeedbackKind: "result"}, want: "done"},
 		{name: "blocker", item: runtimeProgress{FeedbackKind: "blocker"}, want: "blocked"},
+		{name: "canceled", item: runtimeProgress{FeedbackKind: "canceled"}, want: "cancelled"},
 		{name: "blocker narrative fallback", item: runtimeProgress{Blocker: "waiting on access"}, want: "blocked"},
 		{name: "result narrative fallback", item: runtimeProgress{Result: "validated"}, want: "done"},
 		{name: "unknown", item: runtimeProgress{Summary: "not enough signal"}, want: ""},
