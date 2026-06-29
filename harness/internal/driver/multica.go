@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
+	"github.com/mnemon-dev/mnemon/harness/internal/interaction"
 )
 
 const (
@@ -855,11 +855,7 @@ type MulticaIssueSignalOptions struct {
 	ExternalID   string
 }
 
-type MulticaObservedDraft struct {
-	EventType  string         `json:"event_type"`
-	ExternalID string         `json:"external_id"`
-	Payload    map[string]any `json:"payload"`
-}
+type MulticaObservedDraft = interaction.EventMaterial
 
 func BuildMulticaIssueTeamworkSignal(issue MulticaIssue, opts MulticaIssueSignalOptions) (MulticaObservedDraft, error) {
 	if strings.TrimSpace(issue.ID) == "" {
@@ -916,7 +912,7 @@ func BuildMulticaIssueTeamworkSignal(issue MulticaIssue, opts MulticaIssueSignal
 	return MulticaObservedDraft{
 		EventType:  "teamwork_signal.write_candidate.observed",
 		ExternalID: externalID,
-		Payload:    eventmodel.BuildPayload(rule, narrative, refs),
+		Payload:    interaction.BuildPayload(rule, narrative, refs),
 	}, nil
 }
 
