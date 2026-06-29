@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -26,12 +25,6 @@ import (
 )
 
 const runtimeVersion = "dev"
-
-var (
-	assignedIssuePattern       = regexp.MustCompile(`(?i)(?:assigned\s+issue\s+id\s+is|issue[_\s-]*id)\s*[:：]\s*([A-Za-z0-9][A-Za-z0-9._:-]*)`)
-	multicaIssueMentionPattern = regexp.MustCompile(`(?i)mention://issue/([A-Za-z0-9][A-Za-z0-9._:-]*)`)
-	multicaTaggedIssuePattern  = regexp.MustCompile(`(?i)(?:^|[\s([{"'])[@#]([A-Z][A-Z0-9]+-\d+)(?:$|[\s\])}.,;:'"])`)
-)
 
 type runtimeConfig struct {
 	Args   []string
@@ -313,7 +306,7 @@ func (s *runtimeRPCState) runTurn(input string, progress runtimeProgressSink) st
 
 func (s *runtimeRPCState) importIssue(input string, progress runtimeProgressSink) runtimeImportResult {
 	taskID := envValue(s.Env, "MULTICA_TASK_ID")
-	issueID := firstNonEmpty(envValue(s.Env, "MULTICA_ISSUE_ID"), extractAssignedIssueID(input))
+	issueID := firstNonEmpty(envValue(s.Env, "MULTICA_ISSUE_ID"), multicasurface.ExtractIssueIdentity(input))
 	result := runtimeImportResult{
 		IssueID:   issueID,
 		Principal: resolveRuntimePrincipal(s.Env, s.CWD),
@@ -1276,22 +1269,6 @@ func extractRuntimeInput(params map[string]any) string {
 		}
 	}
 	return strings.Join(parts, "\n")
-}
-
-func extractAssignedIssueID(input string) string {
-	match := multicaIssueMentionPattern.FindStringSubmatch(input)
-	if len(match) >= 2 {
-		return strings.Trim(match[1], " \t\r\n.,;)")
-	}
-	match = assignedIssuePattern.FindStringSubmatch(input)
-	if len(match) >= 2 {
-		return strings.Trim(match[1], " \t\r\n.,;)")
-	}
-	match = multicaTaggedIssuePattern.FindStringSubmatch(input)
-	if len(match) >= 2 {
-		return strings.Trim(match[1], " \t\r\n.,;)")
-	}
-	return ""
 }
 
 func wantsVersion(args []string) bool {
