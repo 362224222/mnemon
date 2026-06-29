@@ -65,6 +65,18 @@ func TestAssignmentMailboxTitleUsesAssignmentIDForBroadDrillScope(t *testing.T) 
 	}
 }
 
+func TestAssignmentMailboxTitleUsesAssignmentIDForMachineReferenceScope(t *testing.T) {
+	item := AssignmentMailboxMaterial{
+		ID:             "assignment-tea84-root-runtime",
+		Scope:          "multica:issue:582a0697-df9b-4e81-84f9-da72b0a685e5",
+		RootIssueLabel: "TEA-84",
+		ExpectedWork:   "Validate root session metadata and run visibility.",
+	}
+	if got := AssignmentMailboxTitle(item); got != "TEA-84: root runtime" {
+		t.Fatalf("title = %q", got)
+	}
+}
+
 func TestAssignmentMailboxDescriptionNormalizesProtocolFeedback(t *testing.T) {
 	body := AssignmentMailboxDescription(AssignmentMailboxMaterial{
 		ID:               "asg-1",

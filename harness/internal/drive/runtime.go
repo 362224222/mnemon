@@ -94,8 +94,8 @@ func (l *FileManagedWakeLedger) Seen(candidate ManagedWakeCandidate) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.loadLocked()
-	_, ok := l.seen[managedWakeKey(candidate)]
-	return ok
+	record, ok := l.seen[managedWakeKey(candidate)]
+	return ok && managedWakeRecordHandled(record)
 }
 
 func (l *FileManagedWakeLedger) Record(record ManagedWakeRecord) error {

@@ -93,8 +93,11 @@ func TestManagedAgentDriverRecordsFailureWithoutChangingQuery(t *testing.T) {
 	if record.Status != "failed" || record.Query != ManagedWakeQuery {
 		t.Fatalf("failed record mismatch: %+v", record)
 	}
-	if !ledger.Seen(candidate) {
-		t.Fatal("failure should be recorded locally for audit/idempotence")
+	if ledger.Seen(candidate) {
+		t.Fatal("failed wake should be audited but remain retryable")
+	}
+	if len(ledger.seen) != 1 {
+		t.Fatal("failure should still be recorded locally for audit")
 	}
 }
 

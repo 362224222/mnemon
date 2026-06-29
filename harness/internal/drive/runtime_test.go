@@ -51,6 +51,39 @@ func TestFileManagedWakeLedgerPersistsSeen(t *testing.T) {
 	}
 }
 
+func TestFileManagedWakeLedgerAllowsRetryAfterFailed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "wake-ledger.jsonl")
+	candidate := ManagedWakeCandidate{Principal: "codex-a@project", DerivedEventID: "d1", BodyDigest: "sha256:x"}
+	ledger := NewFileManagedWakeLedger(path)
+	if err := ledger.Record(ManagedWakeRecord{
+		Principal:      candidate.Principal,
+		DerivedEventID: candidate.DerivedEventID,
+		BodyDigest:     candidate.BodyDigest,
+		Status:         "failed",
+		Error:          "timeout",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if ledger.Seen(candidate) {
+		t.Fatal("failed wake must remain retryable")
+	}
+	reopened := NewFileManagedWakeLedger(path)
+	if reopened.Seen(candidate) {
+		t.Fatal("failed wake must remain retryable after reload")
+	}
+	if err := reopened.Record(ManagedWakeRecord{
+		Principal:      candidate.Principal,
+		DerivedEventID: candidate.DerivedEventID,
+		BodyDigest:     candidate.BodyDigest,
+		Status:         "completed",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !reopened.Seen(candidate) {
+		t.Fatal("completed retry should mark candidate handled")
+	}
+}
+
 func TestHTTPRenderClientUsesBearerAndDecodesResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "Bearer token-1" {

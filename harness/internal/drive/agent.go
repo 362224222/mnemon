@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -64,8 +65,8 @@ func NewMemoryManagedWakeLedger() *MemoryManagedWakeLedger {
 func (l *MemoryManagedWakeLedger) Seen(candidate ManagedWakeCandidate) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	_, ok := l.seen[managedWakeKey(candidate)]
-	return ok
+	record, ok := l.seen[managedWakeKey(candidate)]
+	return ok && managedWakeRecordHandled(record)
 }
 
 func (l *MemoryManagedWakeLedger) Record(record ManagedWakeRecord) error {
@@ -77,6 +78,10 @@ func (l *MemoryManagedWakeLedger) Record(record ManagedWakeRecord) error {
 		BodyDigest:     record.BodyDigest,
 	})] = record
 	return nil
+}
+
+func managedWakeRecordHandled(record ManagedWakeRecord) bool {
+	return strings.EqualFold(strings.TrimSpace(record.Status), "completed")
 }
 
 type ManagedAgentDriver struct {

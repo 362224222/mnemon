@@ -230,7 +230,7 @@ func IssueStatusDone(status string) bool {
 func assignmentTitleTopic(item AssignmentMailboxMaterial) string {
 	scope := firstSentence(item.Scope)
 	idTopic := assignmentIDTitleTopic(item.ID, item.RootIssueLabel)
-	if broadAssignmentScope(scope) && idTopic != "" {
+	if idTopic != "" && (broadAssignmentScope(scope) || machineReferenceScope(scope)) {
 		return idTopic
 	}
 	for _, candidate := range []string{scope, firstSentence(item.ExpectedWork), idTopic, item.ID} {
@@ -245,6 +245,14 @@ func assignmentTitleTopic(item AssignmentMailboxMaterial) string {
 func broadAssignmentScope(scope string) bool {
 	lower := strings.ToLower(strings.TrimSpace(scope))
 	return strings.Contains(lower, "drill") || strings.Contains(lower, "validation")
+}
+
+func machineReferenceScope(scope string) bool {
+	scope = strings.TrimSpace(strings.ToLower(scope))
+	if scope == "" {
+		return false
+	}
+	return strings.HasPrefix(scope, "multica:") || strings.HasPrefix(scope, "github:") || strings.Contains(scope, "://")
 }
 
 func assignmentIDTitleTopic(id, rootLabel string) string {
