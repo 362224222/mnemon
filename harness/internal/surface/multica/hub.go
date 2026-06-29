@@ -404,6 +404,14 @@ func (m MulticaHubMetadata) IsAssignmentMailbox() bool {
 	}
 }
 
+func AssignmentMailboxMatchesSource(meta MulticaHubMetadata, source MulticaHubLedgerSource) bool {
+	return meta.IsAssignmentMailbox() &&
+		strings.TrimSpace(meta.SessionID) == strings.TrimSpace(source.SessionID) &&
+		strings.TrimSpace(meta.AssignmentID) == strings.TrimSpace(source.AssignmentID) &&
+		strings.TrimSpace(meta.AssignmentFingerprint) == strings.TrimSpace(source.AssignmentFingerprint) &&
+		strings.TrimSpace(meta.Principal) == strings.TrimSpace(source.Principal)
+}
+
 func RootSessionHubMetadata(meta MulticaHubMetadata, issueID string) MulticaHubMetadata {
 	issueID = strings.TrimSpace(issueID)
 	meta.HubBackend = MulticaHubBackend

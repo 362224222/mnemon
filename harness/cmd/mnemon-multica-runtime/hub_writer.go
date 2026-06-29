@@ -482,10 +482,7 @@ func findExistingMulticaAssignmentIssueInChildren(ctx context.Context, cli drive
 		if !meta.IsAssignmentMailbox() {
 			continue
 		}
-		if meta.SessionID == source.SessionID &&
-			meta.AssignmentID == source.AssignmentID &&
-			meta.AssignmentFingerprint == source.AssignmentFingerprint &&
-			meta.Principal == source.Principal {
+		if multicasurface.AssignmentMailboxMatchesSource(meta, source) {
 			return child, true, nil
 		}
 	}

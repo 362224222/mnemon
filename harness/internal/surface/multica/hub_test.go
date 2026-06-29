@@ -87,6 +87,34 @@ func TestAssignmentMailboxHubMetadataDefaults(t *testing.T) {
 	}
 }
 
+func TestAssignmentMailboxMatchesSource(t *testing.T) {
+	source := MulticaHubLedgerSource{
+		SessionID:             "session-1",
+		AssignmentID:          "asg-1",
+		AssignmentFingerprint: "sha256:abc",
+		Principal:             "worker@team",
+	}
+	meta := MulticaHubMetadata{
+		Kind:                  MulticaHubKindAssignmentMailbox,
+		SessionID:             " session-1 ",
+		AssignmentID:          " asg-1 ",
+		AssignmentFingerprint: " sha256:abc ",
+		Principal:             " worker@team ",
+	}
+	if !AssignmentMailboxMatchesSource(meta, source) {
+		t.Fatalf("metadata should match source: meta=%+v source=%+v", meta, source)
+	}
+	meta.Principal = "other@team"
+	if AssignmentMailboxMatchesSource(meta, source) {
+		t.Fatalf("principal mismatch should not match: meta=%+v source=%+v", meta, source)
+	}
+	meta.Principal = "worker@team"
+	meta.Kind = MulticaHubKindSession
+	if AssignmentMailboxMatchesSource(meta, source) {
+		t.Fatal("non-assignment mailbox metadata should not match")
+	}
+}
+
 func TestAssignmentMailboxMarkerPrefersEventThenAssignmentThenIssue(t *testing.T) {
 	if got := AssignmentMailboxMarker(MulticaHubMetadata{EventID: "event-1", AssignmentID: "asg-1"}, "child-1"); got != "event-1" {
 		t.Fatalf("event marker = %q", got)
