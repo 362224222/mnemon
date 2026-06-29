@@ -13,7 +13,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/projection"
 	multicasurface "github.com/mnemon-dev/mnemon/harness/internal/surface/multica"
 )
 
@@ -854,14 +853,6 @@ func BuildMulticaIssueTeamworkSignal(issue MulticaIssue, opts MulticaIssueSignal
 		Title:       issue.Title,
 		Description: issue.Description,
 	}, opts)
-}
-
-func FormatMulticaProjectionComment(title string, body string, eventIDs []string) string {
-	return projection.FormatComment(projection.CommentMaterial{
-		Title:    title,
-		Body:     body,
-		EventIDs: eventIDs,
-	})
 }
 
 func DecodeMulticaIssue(r io.Reader) (MulticaIssue, error) {
