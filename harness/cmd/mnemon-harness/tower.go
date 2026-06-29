@@ -13,9 +13,10 @@ var towerDump bool
 // towerCmd is the Agent Control Tower (P6, D5: TUI-only, command name `tower`) — the human-visible
 // boundary over the agent field. It renders the four §3.3 pages (GOAL/FIELD/INBOX/LEDGER) read-only.
 var towerCmd = &cobra.Command{
-	Use:   "tower",
-	Short: "Agent Control Tower — the four-page human boundary over the agent field (GOAL/FIELD/INBOX/LEDGER)",
-	RunE:  runTower,
+	Use:    "tower",
+	Short:  "Agent Control Tower — the four-page human boundary over the agent field (GOAL/FIELD/INBOX/LEDGER)",
+	Hidden: true,
+	RunE:   runTower,
 }
 
 func init() {

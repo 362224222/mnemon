@@ -81,8 +81,9 @@ var (
 )
 
 var multicaCmd = &cobra.Command{
-	Use:   "multica",
-	Short: "Bridge Multica issues and comments with Local Mnemon",
+	Use:    "multica",
+	Short:  "Bridge Multica issues and comments with Local Mnemon",
+	Hidden: true,
 }
 
 var multicaProbeCmd = &cobra.Command{
