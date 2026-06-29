@@ -16,6 +16,7 @@ import (
 	"unicode"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	"github.com/mnemon-dev/mnemon/harness/internal/drive"
 	"github.com/mnemon-dev/mnemon/harness/internal/driver"
 	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
@@ -464,7 +465,7 @@ func loadRuntimeIssueMetadata(ctx context.Context, cli driver.MulticaCLI, issue 
 func (s *runtimeRPCState) correlateAssignmentMailbox(ctx context.Context, cli driver.MulticaCLI, issue driver.MulticaIssue, result *runtimeImportResult, progress runtimeProgressSink) runtimeImportResult {
 	ensureAssignmentHubFields(result, issue)
 	result.Status = "correlated"
-	result.MatchTerms = cleanRuntimeTerms(
+	result.MatchTerms = drive.CleanManagedWakeMatchTerms(
 		result.AssignmentID,
 		result.AssignmentFingerprint,
 		result.HubMetadata.EventID,
@@ -573,20 +574,6 @@ func addPayloadRuleString(payload map[string]any, key, value string) {
 	rule[key] = value
 }
 
-func cleanRuntimeTerms(values ...string) []string {
-	seen := map[string]bool{}
-	var out []string
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if len(value) < 3 || seen[value] {
-			continue
-		}
-		seen[value] = true
-		out = append(out, value)
-	}
-	return out
-}
-
 func assignmentMailboxMarker(result runtimeImportResult) string {
 	if result.HubMetadata.EventID != "" {
 		return result.HubMetadata.EventID
@@ -595,6 +582,19 @@ func assignmentMailboxMarker(result runtimeImportResult) string {
 		return "multica-assignment-" + result.AssignmentID
 	}
 	return "multica-issue-" + result.IssueID
+}
+
+func runtimeManagedWakeMatchMaterial(result runtimeImportResult) drive.ManagedWakeMatchMaterial {
+	return drive.ManagedWakeMatchMaterial{
+		MatchTerms:            result.MatchTerms,
+		AssignmentID:          result.AssignmentID,
+		AssignmentFingerprint: result.AssignmentFingerprint,
+		IssueID:               result.IssueID,
+		Identifier:            result.Identifier,
+		Title:                 result.Title,
+		Statement:             result.Statement,
+		TaskID:                result.TaskID,
+	}
 }
 
 func (s *runtimeRPCState) wakeManagedAgent(result *runtimeImportResult, progress runtimeProgressSink) {
@@ -637,7 +637,7 @@ func (s *runtimeRPCState) wakeManagedAgent(result *runtimeImportResult, progress
 		result.WakeErr = fmt.Errorf("render managed wake candidates: %w", err)
 		return
 	}
-	candidate, ok := managedWakeCandidateForResult(result.Principal, resp, *result)
+	candidate, ok := drive.ManagedWakeCandidateForRender(result.Principal, resp, runtimeManagedWakeMatchMaterial(*result))
 	if !ok {
 		result.WakeStatus = "skipped"
 		result.WakeErr = fmt.Errorf("no managed wake candidate in rendered context")
@@ -757,64 +757,6 @@ func mergeRuntimeHubProjectionDeltas(result *runtimeImportResult, deltas []runti
 	case result.HubFeedbackComments > 0:
 		result.HubWriteStatus = "commented"
 	}
-}
-
-func managedWakeCandidateForResult(principal string, resp presentation.Response, result runtimeImportResult) (driver.ManagedWakeCandidate, bool) {
-	terms := managedWakeMatchTerms(result)
-	var fallback driver.ManagedWakeCandidate
-	for _, env := range resp.Events {
-		candidates := driver.ManagedWakeCandidatesFromEvents(principal, []eventmodel.EventEnvelope{env})
-		if len(candidates) == 0 {
-			continue
-		}
-		candidates[0].RenderAuditID = resp.AuditID
-		candidates[0].RenderBodyDigest = resp.BodyDigest
-		if fallback.Principal == "" {
-			fallback = candidates[0]
-		}
-		if len(terms) == 0 || eventNarrativeContainsAny(env, terms) {
-			return candidates[0], true
-		}
-	}
-	if len(terms) == 0 && fallback.Principal != "" {
-		return fallback, true
-	}
-	return driver.ManagedWakeCandidate{}, false
-}
-
-func managedWakeMatchTerms(result runtimeImportResult) []string {
-	if len(result.MatchTerms) > 0 {
-		return cleanRuntimeTerms(result.MatchTerms...)
-	}
-	if result.AssignmentID != "" || result.AssignmentFingerprint != "" {
-		return cleanRuntimeTerms(result.AssignmentID, result.AssignmentFingerprint)
-	}
-	raw := []string{result.IssueID, result.Identifier, result.Title, result.TaskID}
-	var out []string
-	for _, value := range raw {
-		value = strings.TrimSpace(value)
-		if len(value) >= 3 {
-			out = append(out, value)
-		}
-	}
-	if len(out) > 0 {
-		return out
-	}
-	if value := strings.TrimSpace(result.Statement); len(value) >= 3 {
-		out = append(out, value)
-	}
-	return out
-}
-
-func eventNarrativeContainsAny(env eventmodel.EventEnvelope, terms []string) bool {
-	body, _ := eventmodel.PayloadNarrative(env.Event.Payload)["body"].(string)
-	body = strings.ToLower(strings.Join([]string{body, string(env.Event.Subject), env.Event.ID, env.Event.Type}, "\n"))
-	for _, term := range terms {
-		if strings.Contains(body, strings.ToLower(term)) {
-			return true
-		}
-	}
-	return false
 }
 
 func (s *runtimeRPCState) projectImportComment(ctx context.Context, cli driver.MulticaCLI, issue driver.MulticaIssue, externalID string, result *runtimeImportResult) {

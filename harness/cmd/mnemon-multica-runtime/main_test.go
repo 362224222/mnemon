@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	"github.com/mnemon-dev/mnemon/harness/internal/drive"
 	"github.com/mnemon-dev/mnemon/harness/internal/driver"
 	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
@@ -97,13 +98,13 @@ func TestMergeRuntimeHubProjectionDeltasPreservesEarlyDispatchCounts(t *testing.
 }
 
 func TestManagedWakeMatchTermsPreferStableIssueIdentity(t *testing.T) {
-	got := managedWakeMatchTerms(runtimeImportResult{
+	got := drive.ManagedWakeMatchTerms(runtimeManagedWakeMatchMaterial(runtimeImportResult{
 		IssueID:    "issue-123",
 		Identifier: "TEA-27",
 		Title:      "Mnemon R2 hub-flow completion drill",
 		Statement:  "Run a small hub-flow readiness drill.",
 		TaskID:     "task-123",
-	})
+	}))
 	joined := strings.Join(got, "\n")
 	for _, want := range []string{"issue-123", "TEA-27", "Mnemon R2 hub-flow completion drill", "task-123"} {
 		if !strings.Contains(joined, want) {
