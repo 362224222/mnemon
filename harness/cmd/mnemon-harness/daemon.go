@@ -89,10 +89,12 @@ func runDaemonStart(cmd *cobra.Command, args []string) error {
 
 func runDaemonStatus(cmd *cobra.Command, args []string) error {
 	root := daemonProjectRoot()
-	if _, err := productconfig.Load(productconfig.DefaultPath(root, "")); err == nil {
+	if cfg, err := productconfig.Load(productconfig.DefaultPath(root, "")); err == nil {
 		fmt.Fprintln(cmd.OutOrStdout(), "Harness config: configured")
-	} else if _, found, legacyErr := productconfig.FromLegacy(root); legacyErr == nil && found {
+		writeDaemonRoleSummary(cmd.OutOrStdout(), cfg)
+	} else if legacy, found, legacyErr := productconfig.FromLegacy(root); legacyErr == nil && found {
 		fmt.Fprintln(cmd.OutOrStdout(), "Harness config: legacy bridge")
+		writeDaemonRoleSummary(cmd.OutOrStdout(), legacy)
 	} else {
 		fmt.Fprintln(cmd.OutOrStdout(), "Harness config: not configured")
 	}
@@ -104,6 +106,10 @@ func runDaemonStatus(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Fprintln(cmd.OutOrStdout(), "Harness daemon: not running")
 	return nil
+}
+
+func writeDaemonRoleSummary(out io.Writer, cfg productconfig.Config) {
+	fmt.Fprintf(out, "Harness daemon roles: watchers=%d drive=%d surfaces=%d\n", len(cfg.Daemon.InteractionWatchers), len(cfg.Daemon.DriveSources), len(cfg.Daemon.ProjectionSurfaces))
 }
 
 func daemonProjectRoot() string {

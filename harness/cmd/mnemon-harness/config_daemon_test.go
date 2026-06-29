@@ -80,6 +80,64 @@ func TestDaemonStatusDoesNotMutateMissingConfig(t *testing.T) {
 	}
 }
 
+func TestDaemonStatusShowsConfiguredRoleSummary(t *testing.T) {
+	root := t.TempDir()
+	cfg := productconfig.Default()
+	cfg.Connections.Multica = productconfig.MulticaConnection{Enabled: true, Workspace: "ws-multica", RuntimeBinary: "mnemon-multica-runtime"}
+	cfg.Connections.GitHub = productconfig.GitHubConnection{Enabled: true, Repo: "mnemon-dev/mnemon-teamwork-example"}
+	cfg.Daemon.InteractionWatchers = []string{productconfig.ConnectionMultica, productconfig.ConnectionGitHub}
+	cfg.Daemon.DriveSources = []string{productconfig.DriveManagedLocal}
+	cfg.Daemon.ProjectionSurfaces = []string{productconfig.ConnectionMultica}
+	if err := productconfig.Save(productconfig.DefaultPath(root, ""), cfg); err != nil {
+		t.Fatal(err)
+	}
+	oldRoot := daemonRoot
+	daemonRoot = root
+	t.Cleanup(func() { daemonRoot = oldRoot })
+
+	cmd, out := testCommand()
+	if err := runDaemonStatus(cmd, nil); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	for _, want := range []string{"Harness config: configured", "Harness daemon roles: watchers=2 drive=1 surfaces=1", "Harness daemon: not running"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("daemon status missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestDaemonStatusShowsLegacyMulticaRoleSummary(t *testing.T) {
+	root := t.TempDir()
+	reg := multicasurface.MulticaRegistry{
+		SchemaVersion: 1,
+		WorkspaceID:   "ws-multica",
+		Participants: []multicasurface.MulticaParticipantRecord{{
+			Principal: "planner@team",
+			AgentName: "mnemon-planner",
+			AgentID:   "agent-planner",
+			Role:      "planner",
+		}},
+	}
+	if err := multicasurface.SaveMulticaRegistry(multicasurface.MulticaRegistryPath(root, ""), reg); err != nil {
+		t.Fatal(err)
+	}
+	oldRoot := daemonRoot
+	daemonRoot = root
+	t.Cleanup(func() { daemonRoot = oldRoot })
+
+	cmd, out := testCommand()
+	if err := runDaemonStatus(cmd, nil); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	for _, want := range []string{"Harness config: legacy bridge", "Harness daemon roles: watchers=1 drive=1 surfaces=1"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("daemon status missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestAgentAddAndListWriteProductConfig(t *testing.T) {
 	root := t.TempDir()
 	oldRoot, oldPath := agentRoot, agentConfigPath
