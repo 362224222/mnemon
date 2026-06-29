@@ -376,7 +376,17 @@ func (s *runtimeRPCState) importIssue(input string, progress runtimeProgressSink
 		addPayloadRuleString(draft.Payload, "root_issue_id", result.RootIssueID)
 		addPayloadRuleString(draft.Payload, "session_id", result.SessionID)
 		addPayloadRuleString(draft.Payload, "source_issue_id", issue.ID)
-		if err := cli.SetIssueMetadataMap(multicaCtx, issue.ID, rootSessionMetadata(result, draft, s.now())); err != nil {
+		rootSessionMaterial := multicasurface.RootSessionMetadataMaterial{
+			HubMetadata:     result.HubMetadata,
+			EventID:         draft.ExternalID,
+			EventType:       draft.EventType,
+			EventPhase:      string(eventmodel.PhaseObserved),
+			Principal:       result.Principal,
+			SourceIssueID:   result.IssueID,
+			ProjectionOwner: result.Principal,
+			ProjectedAt:     s.now(),
+		}
+		if err := cli.SetIssueMetadataMap(multicaCtx, issue.ID, multicasurface.RootSessionMetadataMap(rootSessionMaterial)); err != nil {
 			metadataErr := fmt.Errorf("set Multica root session metadata: %w", err)
 			emitRuntimeCommand(progress, "multica issue metadata set "+issue.ID+" mnemon.root-session", metadataErr.Error(), 1)
 			emitRuntimeProgress(progress, "Root session metadata write failed; continuing with Mnemon ingest from issue context.")
@@ -499,25 +509,6 @@ func applyMulticaHubMetadata(result *runtimeImportResult, meta driver.MulticaHub
 	result.RootIssueID = firstNonEmpty(meta.RootIssueID, result.RootIssueID)
 	result.AssignmentID = firstNonEmpty(meta.AssignmentID, result.AssignmentID)
 	result.AssignmentFingerprint = firstNonEmpty(meta.AssignmentFingerprint, result.AssignmentFingerprint)
-}
-
-func rootSessionMetadata(result runtimeImportResult, draft driver.MulticaObservedDraft, now time.Time) map[string]string {
-	meta := driver.MulticaHubMetadata{
-		SchemaVersion:   "1",
-		HubBackend:      driver.MulticaHubBackend,
-		Kind:            driver.MulticaHubKindSession,
-		SessionID:       result.SessionID,
-		CorrelationID:   result.CorrelationID,
-		EventID:         draft.ExternalID,
-		EventType:       draft.EventType,
-		EventPhase:      string(eventmodel.PhaseObserved),
-		Principal:       result.Principal,
-		SourceIssueID:   result.IssueID,
-		RootIssueID:     result.RootIssueID,
-		ProjectionOwner: result.Principal,
-		ProjectedAt:     now.UTC().Format(time.RFC3339),
-	}
-	return meta.Map()
 }
 
 func addPayloadRuleString(payload map[string]any, key, value string) {

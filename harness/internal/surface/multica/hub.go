@@ -61,6 +61,17 @@ type MulticaHubMetadata struct {
 	EnvelopeDigest        string
 }
 
+type RootSessionMetadataMaterial struct {
+	HubMetadata     MulticaHubMetadata
+	EventID         string
+	EventType       string
+	EventPhase      string
+	Principal       string
+	SourceIssueID   string
+	ProjectionOwner string
+	ProjectedAt     time.Time
+}
+
 type MulticaAssignmentFingerprintInput struct {
 	AssignmentID     string   `json:"assignment_id,omitempty"`
 	Assignee         string   `json:"assignee,omitempty"`
@@ -349,6 +360,20 @@ func AssignmentMailboxMarker(meta MulticaHubMetadata, issueID string) string {
 		return ""
 	}
 	return "multica-issue-" + issueID
+}
+
+func RootSessionMetadataMap(material RootSessionMetadataMaterial) map[string]string {
+	meta := RootSessionHubMetadata(material.HubMetadata, material.SourceIssueID)
+	meta.EventID = firstNonEmptyString(material.EventID, meta.EventID)
+	meta.EventType = firstNonEmptyString(material.EventType, meta.EventType)
+	meta.EventPhase = firstNonEmptyString(material.EventPhase, meta.EventPhase)
+	meta.Principal = firstNonEmptyString(material.Principal, meta.Principal)
+	meta.SourceIssueID = firstNonEmptyString(material.SourceIssueID, meta.SourceIssueID)
+	meta.ProjectionOwner = firstNonEmptyString(material.ProjectionOwner, meta.ProjectionOwner)
+	if !material.ProjectedAt.IsZero() {
+		meta.ProjectedAt = firstNonEmptyString(meta.ProjectedAt, material.ProjectedAt.UTC().Format(time.RFC3339))
+	}
+	return meta.Map()
 }
 
 func NormalizeMulticaMetadata(raw any) map[string]string {

@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestHubMetadataDetectsAssignmentMailbox(t *testing.T) {
@@ -95,6 +96,37 @@ func TestAssignmentMailboxMarkerPrefersEventThenAssignmentThenIssue(t *testing.T
 	}
 	if got := AssignmentMailboxMarker(MulticaHubMetadata{}, "child-1"); got != "multica-issue-child-1" {
 		t.Fatalf("issue marker = %q", got)
+	}
+}
+
+func TestRootSessionMetadataMap(t *testing.T) {
+	now := time.Unix(100, 0).UTC()
+	meta := RootSessionMetadataMap(RootSessionMetadataMaterial{
+		HubMetadata:     MulticaHubMetadata{Principal: "planner@team"},
+		EventID:         "multica-task-task-1",
+		EventType:       "teamwork_signal.write_candidate.observed",
+		EventPhase:      "observed",
+		SourceIssueID:   "root-1",
+		ProjectionOwner: "planner@team",
+		ProjectedAt:     now,
+	})
+	for key, want := range map[string]string{
+		MulticaMetadataHubBackend:      MulticaHubBackend,
+		MulticaMetadataKind:            MulticaHubKindSession,
+		MulticaMetadataRootIssueID:     "root-1",
+		MulticaMetadataSessionID:       MulticaSessionID("root-1"),
+		MulticaMetadataCorrelationID:   "multica:issue:root-1",
+		MulticaMetadataEventID:         "multica-task-task-1",
+		MulticaMetadataEventType:       "teamwork_signal.write_candidate.observed",
+		MulticaMetadataEventPhase:      "observed",
+		MulticaMetadataPrincipal:       "planner@team",
+		MulticaMetadataSourceIssueID:   "root-1",
+		MulticaMetadataProjectionOwner: "planner@team",
+		MulticaMetadataProjectedAt:     now.Format(time.RFC3339),
+	} {
+		if got := meta[key]; got != want {
+			t.Fatalf("metadata[%s] = %q, want %q: %+v", key, got, want, meta)
+		}
 	}
 }
 
