@@ -91,15 +91,17 @@ var multicaProbeCmd = &cobra.Command{
 }
 
 var multicaImportIssueCmd = &cobra.Command{
-	Use:   "import-issue",
-	Short: "Import one Multica issue as a Mnemon teamwork signal",
-	RunE:  runMulticaImportIssue,
+	Use:    "import-issue",
+	Short:  "Import one Multica issue as a Mnemon teamwork signal",
+	Hidden: true,
+	RunE:   runMulticaImportIssue,
 }
 
 var multicaProjectCommentCmd = &cobra.Command{
-	Use:   "project-comment",
-	Short: "Write a Mnemon update as a Multica issue comment",
-	RunE:  runMulticaProjectComment,
+	Use:    "project-comment",
+	Short:  "Write a Mnemon update as a Multica issue comment",
+	Hidden: true,
+	RunE:   runMulticaProjectComment,
 }
 
 var multicaProvisionCmd = &cobra.Command{
