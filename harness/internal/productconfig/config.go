@@ -196,7 +196,7 @@ func (cfg Config) Validate() error {
 	if err := validateDaemonCarriers("interaction watcher", cfg.Daemon.InteractionWatchers, cfg); err != nil {
 		return err
 	}
-	if err := validateDaemonCarriers("projection surface", cfg.Daemon.ProjectionSurfaces, cfg); err != nil {
+	if err := validateProjectionSurfaces(cfg.Daemon.ProjectionSurfaces, cfg); err != nil {
 		return err
 	}
 	if err := validateDaemonDriveSources(cfg.Daemon.DriveSources); err != nil {
@@ -219,6 +219,27 @@ func validateDaemonCarriers(label string, values []string, cfg Config) error {
 			return fmt.Errorf("duplicate %s %q", label, carrier)
 		}
 		seen[carrier] = true
+	}
+	return nil
+}
+
+func validateProjectionSurfaces(values []string, cfg Config) error {
+	seen := map[string]bool{}
+	for _, value := range values {
+		surface := strings.TrimSpace(value)
+		if surface == "" {
+			return fmt.Errorf("projection surface cannot be empty")
+		}
+		if surface == ConnectionMnemonhub {
+			return fmt.Errorf("projection surface %q is unsupported; mnemonhub is a remote exchange backend", surface)
+		}
+		if err := validateCarrier("projection surface", surface, cfg); err != nil {
+			return err
+		}
+		if seen[surface] {
+			return fmt.Errorf("duplicate projection surface %q", surface)
+		}
+		seen[surface] = true
 	}
 	return nil
 }
@@ -342,7 +363,6 @@ func FromLegacy(root string) (Config, bool, error) {
 	}
 	if cfg.Connections.Mnemonhub.Enabled {
 		cfg.Daemon.InteractionWatchers = appendCarrier(cfg.Daemon.InteractionWatchers, ConnectionMnemonhub)
-		cfg.Daemon.ProjectionSurfaces = appendCarrier(cfg.Daemon.ProjectionSurfaces, ConnectionMnemonhub)
 	}
 	if cfg.Connections.GitHub.Enabled {
 		cfg.Daemon.InteractionWatchers = appendCarrier(cfg.Daemon.InteractionWatchers, ConnectionGitHub)

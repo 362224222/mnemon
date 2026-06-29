@@ -56,6 +56,14 @@ func TestConfigValidateRejectsCrossLayerLeaks(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "not enabled") {
 		t.Fatalf("expected disabled projection surface error, got %v", err)
 	}
+
+	cfg = Default()
+	cfg.Connections.Mnemonhub = MnemonhubConnection{Enabled: true, Endpoint: "https://hub.example"}
+	cfg.Daemon.ProjectionSurfaces = []string{ConnectionMnemonhub}
+	err = cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "remote exchange backend") {
+		t.Fatalf("expected mnemonhub projection surface error, got %v", err)
+	}
 }
 
 func TestConfigValidateRejectsDuplicateParticipants(t *testing.T) {
@@ -173,6 +181,12 @@ func TestFromLegacyBridgesLocalAndRemoteConfigs(t *testing.T) {
 	}
 	if !cfg.Connections.Mnemonhub.Enabled || cfg.Connections.Mnemonhub.Endpoint != "https://hub.example" {
 		t.Fatalf("mnemonhub bridge mismatch: %+v", cfg.Connections.Mnemonhub)
+	}
+	if !stringSliceContains(cfg.Daemon.InteractionWatchers, ConnectionMnemonhub) {
+		t.Fatalf("mnemonhub watcher missing: %+v", cfg.Daemon.InteractionWatchers)
+	}
+	if stringSliceContains(cfg.Daemon.ProjectionSurfaces, ConnectionMnemonhub) {
+		t.Fatalf("mnemonhub must not be bridged as a projection surface: %+v", cfg.Daemon.ProjectionSurfaces)
 	}
 	if len(cfg.Daemon.DriveSources) != 1 || cfg.Daemon.DriveSources[0] != DriveManagedLocal {
 		t.Fatalf("drive sources mismatch: %+v", cfg.Daemon.DriveSources)

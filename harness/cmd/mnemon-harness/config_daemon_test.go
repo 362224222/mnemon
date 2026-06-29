@@ -348,9 +348,14 @@ func TestConnectCommandsWriteProductConfig(t *testing.T) {
 		if !containsString(cfg.Daemon.InteractionWatchers, want) {
 			t.Fatalf("interaction watcher %q missing: %+v", want, cfg.Daemon.InteractionWatchers)
 		}
+	}
+	for _, want := range []string{productconfig.ConnectionMultica, productconfig.ConnectionGitHub} {
 		if !containsString(cfg.Daemon.ProjectionSurfaces, want) {
 			t.Fatalf("projection surface %q missing: %+v", want, cfg.Daemon.ProjectionSurfaces)
 		}
+	}
+	if containsString(cfg.Daemon.ProjectionSurfaces, productconfig.ConnectionMnemonhub) {
+		t.Fatalf("mnemonhub must remain an exchange backend, not projection surface: %+v", cfg.Daemon.ProjectionSurfaces)
 	}
 	if got := cfg.Sessions.PrimaryActivationCarrier; got != productconfig.ConnectionMultica {
 		t.Fatalf("unexpected primary activation carrier: %q", got)

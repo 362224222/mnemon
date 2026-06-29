@@ -120,7 +120,6 @@ func runConnectMnemonhub(cmd *cobra.Command, args []string) error {
 		Endpoint: strings.TrimSpace(connectMnemonhubURL),
 	}
 	cfg.Daemon.InteractionWatchers = appendUniqueString(cfg.Daemon.InteractionWatchers, productconfig.ConnectionMnemonhub)
-	cfg.Daemon.ProjectionSurfaces = appendUniqueString(cfg.Daemon.ProjectionSurfaces, productconfig.ConnectionMnemonhub)
 	path, err := saveHarnessProductConfig(connectRoot, connectConfigPath, cfg)
 	if err != nil {
 		return err
