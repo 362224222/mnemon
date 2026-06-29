@@ -76,6 +76,31 @@ func TestProductHelpDoesNotExposeInternalVocabulary(t *testing.T) {
 	}
 }
 
+func TestInternalCommandsStayHidden(t *testing.T) {
+	for _, path := range [][]string{
+		{"control"},
+		{"loop"},
+		{"multica"},
+		{"multica", "import-issue"},
+		{"multica", "participant"},
+		{"multica", "project-comment"},
+		{"multica", "provision"},
+		{"token"},
+		{"tower"},
+	} {
+		cmd, _, err := rootCmd.Find(path)
+		if err != nil {
+			t.Fatalf("find command %q: %v", strings.Join(path, " "), err)
+		}
+		if cmd == nil || cmd.Name() != path[len(path)-1] {
+			t.Fatalf("command %q resolved to %+v", strings.Join(path, " "), cmd)
+		}
+		if !cmd.Hidden {
+			t.Fatalf("internal/debug command %q must remain hidden from public help", strings.Join(path, " "))
+		}
+	}
+}
+
 func executeRootForHelp(t *testing.T, args ...string) string {
 	t.Helper()
 	var out bytes.Buffer
