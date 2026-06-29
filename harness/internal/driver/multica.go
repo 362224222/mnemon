@@ -13,13 +13,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/interaction"
 	"github.com/mnemon-dev/mnemon/harness/internal/projection"
+	multicasurface "github.com/mnemon-dev/mnemon/harness/internal/surface/multica"
 )
 
 const (
 	MulticaDefaultCommand = "multica"
-	MulticaExternalSource = "multica"
+	MulticaExternalSource = multicasurface.MulticaExternalSource
 )
 
 type MulticaCLI struct {
@@ -843,78 +843,17 @@ func (c MulticaCLI) globalArgs(args []string) []string {
 	return append(out, args...)
 }
 
-type MulticaIssueSignalOptions struct {
-	Scope        string
-	TTL          string
-	WhyTeamwork  string
-	WorkspaceID  string
-	TaskID       string
-	AgentID      string
-	Principal    string
-	EvidenceRefs []string
-	ContextRefs  []string
-	ExternalID   string
-}
+type MulticaIssueSignalOptions = multicasurface.IssueSignalOptions
 
-type MulticaObservedDraft = interaction.EventMaterial
+type MulticaObservedDraft = multicasurface.ObservedDraft
 
 func BuildMulticaIssueTeamworkSignal(issue MulticaIssue, opts MulticaIssueSignalOptions) (MulticaObservedDraft, error) {
-	if strings.TrimSpace(issue.ID) == "" {
-		return MulticaObservedDraft{}, fmt.Errorf("multica issue id is required")
-	}
-	title := strings.TrimSpace(issue.Title)
-	if title == "" {
-		title = strings.TrimSpace(issue.Identifier)
-	}
-	if title == "" {
-		title = issue.ID
-	}
-	scope := strings.TrimSpace(opts.Scope)
-	if scope == "" {
-		scope = "multica/teamwork"
-	}
-	ttl := strings.TrimSpace(opts.TTL)
-	if ttl == "" {
-		ttl = "30m"
-	}
-	correlation := "multica:issue:" + issue.ID
-	rule := map[string]any{
-		"external_source":           MulticaExternalSource,
-		"external_issue_id":         issue.ID,
-		"external_issue_identifier": strings.TrimSpace(issue.Identifier),
-		"correlation_id":            correlation,
-		"scope":                     scope,
-		"ttl":                       ttl,
-	}
-	addMulticaRuleString(rule, "external_workspace_id", opts.WorkspaceID)
-	addMulticaRuleString(rule, "external_task_id", opts.TaskID)
-	addMulticaRuleString(rule, "external_agent_id", opts.AgentID)
-	addMulticaRuleString(rule, "principal", opts.Principal)
-	narrative := map[string]any{
-		"title":        title,
-		"statement":    multicaIssueStatement(issue, title),
-		"why_teamwork": strings.TrimSpace(opts.WhyTeamwork),
-	}
-	if narrative["why_teamwork"] == "" {
-		narrative["why_teamwork"] = "The Multica issue is being bridged into Mnemon so local agents can decide whether and how to coordinate."
-	}
-	refs := map[string]any{
-		"context_refs": append([]string{correlation}, cleanMulticaRefs(opts.ContextRefs)...),
-	}
-	if evidence := cleanMulticaRefs(opts.EvidenceRefs); len(evidence) > 0 {
-		refs["evidence_refs"] = evidence
-	} else {
-		refs["evidence_refs"] = []string{correlation}
-	}
-	externalID := strings.TrimSpace(opts.ExternalID)
-	if externalID == "" {
-		externalID = "multica-issue-" + issue.ID
-	}
-	return MulticaObservedDraft{
-		EventType:  "teamwork_signal.write_candidate.observed",
-		ExternalID: externalID,
-		Payload:    interaction.BuildPayload(rule, narrative, refs),
-	}, nil
+	return multicasurface.BuildIssueTeamworkSignal(multicasurface.IssueSignalMaterial{
+		ID:          issue.ID,
+		Identifier:  issue.Identifier,
+		Title:       issue.Title,
+		Description: issue.Description,
+	}, opts)
 }
 
 func FormatMulticaProjectionComment(title string, body string, eventIDs []string) string {
@@ -1092,32 +1031,4 @@ func decodeMulticaStringMap(data []byte) (map[string]string, error) {
 		}
 	}
 	return out, nil
-}
-
-func multicaIssueStatement(issue MulticaIssue, fallback string) string {
-	if strings.TrimSpace(issue.Description) != "" {
-		return strings.TrimSpace(issue.Description)
-	}
-	return fallback
-}
-
-func cleanMulticaRefs(values []string) []string {
-	var out []string
-	seen := map[string]bool{}
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value == "" || seen[value] {
-			continue
-		}
-		seen[value] = true
-		out = append(out, value)
-	}
-	return out
-}
-
-func addMulticaRuleString(rule map[string]any, key, value string) {
-	value = strings.TrimSpace(value)
-	if value != "" {
-		rule[key] = value
-	}
 }
