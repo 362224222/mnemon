@@ -334,6 +334,49 @@ esac
 	}
 }
 
+func TestMulticaCLILoadIssueMetadataMergesListedMetadata(t *testing.T) {
+	tmp := t.TempDir()
+	argsPath := filepath.Join(tmp, "args.txt")
+	bin := filepath.Join(tmp, "multica")
+	script := `#!/usr/bin/env sh
+printf '%s\n' "$*" >> "$MULTICA_ARGS_PATH"
+case "$*" in
+  *"issue metadata list issue-1"*) printf '[{"key":"mnemon.kind","value":"session_mailbox"},{"key":"listed","value":"yes"}]\n' ;;
+  *) printf '{}\n' ;;
+esac
+`
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cli := MulticaCLI{
+		Command: bin,
+		Env: append(os.Environ(),
+			"MULTICA_ARGS_PATH="+argsPath,
+		),
+	}
+	loaded, count, err := cli.LoadIssueMetadata(context.Background(), MulticaIssue{
+		ID: "issue-1",
+		Metadata: map[string]any{
+			MulticaMetadataKind: "stale",
+			"base":              "kept",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 || loaded.Metadata[MulticaMetadataKind] != MulticaHubKindSession || loaded.Metadata["base"] != "kept" || loaded.Metadata["listed"] != "yes" {
+		t.Fatalf("loaded metadata count=%d metadata=%+v", count, loaded.Metadata)
+	}
+	empty, count, err := cli.LoadIssueMetadata(context.Background(), MulticaIssue{Title: "missing id"})
+	if err != nil || count != 0 || empty.Title != "missing id" {
+		t.Fatalf("empty metadata load = count:%d issue:%+v err:%v", count, empty, err)
+	}
+	args := mustReadDriverTestFile(t, argsPath)
+	if !strings.Contains(args, "issue metadata list issue-1 --output json") || strings.Contains(args, "missing id") {
+		t.Fatalf("metadata load args mismatch:\n%s", args)
+	}
+}
+
 func TestMulticaAssignmentFingerprintStable(t *testing.T) {
 	left := MulticaAssignmentFingerprint(MulticaAssignmentFingerprintInput{
 		AssignmentID:     " assignment-1 ",

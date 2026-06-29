@@ -741,6 +741,18 @@ func (c MulticaCLI) ListIssueMetadata(ctx context.Context, issueID string) (map[
 	return decodeMulticaMetadataOutput([]byte(out.Stdout))
 }
 
+func (c MulticaCLI) LoadIssueMetadata(ctx context.Context, issue MulticaIssue) (MulticaIssue, int, error) {
+	if strings.TrimSpace(issue.ID) == "" {
+		return issue, 0, nil
+	}
+	listed, err := c.ListIssueMetadata(ctx, issue.ID)
+	if err != nil {
+		return issue, 0, err
+	}
+	issue.Metadata = multicasurface.MergeIssueMetadata(issue.Metadata, listed)
+	return issue, len(listed), nil
+}
+
 func (c MulticaCLI) ListIssueChildren(ctx context.Context, parentID string) ([]MulticaIssue, error) {
 	parentID = strings.TrimSpace(parentID)
 	if parentID == "" {

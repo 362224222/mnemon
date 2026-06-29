@@ -450,15 +450,14 @@ func loadRuntimeIssueMetadata(ctx context.Context, cli driver.MulticaCLI, issue 
 	if strings.TrimSpace(issue.ID) == "" {
 		return issue
 	}
-	listed, err := cli.ListIssueMetadata(ctx, issue.ID)
+	loaded, count, err := cli.LoadIssueMetadata(ctx, issue)
 	if err != nil {
 		emitRuntimeCommand(progress, "multica issue metadata list "+issue.ID, err.Error(), 1)
 		emitRuntimeProgress(progress, "Multica issue metadata list failed; falling back to metadata returned by issue get.")
 		return issue
 	}
-	issue.Metadata = multicasurface.MergeIssueMetadata(issue.Metadata, listed)
-	emitRuntimeCommand(progress, "multica issue metadata list "+issue.ID, fmt.Sprintf("Loaded %d Multica issue metadata keys.", len(listed)), 0)
-	return issue
+	emitRuntimeCommand(progress, "multica issue metadata list "+issue.ID, fmt.Sprintf("Loaded %d Multica issue metadata keys.", count), 0)
+	return loaded
 }
 
 func (s *runtimeRPCState) correlateAssignmentMailbox(ctx context.Context, cli driver.MulticaCLI, issue driver.MulticaIssue, result *runtimeImportResult, progress runtimeProgressSink) runtimeImportResult {
