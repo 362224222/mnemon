@@ -130,6 +130,61 @@ func TestRootSessionMetadataMap(t *testing.T) {
 	}
 }
 
+func TestAssignmentMailboxProjectionForRuntimeItem(t *testing.T) {
+	now := time.Unix(200, 0).UTC()
+	projection := AssignmentMailboxProjectionForRuntimeItem(AssignmentMailboxProjectionMaterial{
+		Item: RuntimeAssignmentItem{
+			ID:               " assignment-1 ",
+			EventID:          "event-1",
+			Assignee:         "worker@team",
+			Scope:            "release/readiness",
+			ExpectedWork:     "Check release notes.",
+			ExpectedFeedback: "result or blocker",
+			SignalRef:        "sig-1",
+			ContextRefs:      []string{"ctx-b", "ctx-a", "ctx-a"},
+			EvidenceRefs:     []string{" ev-1 "},
+		},
+		SessionID:       "multica:session:root-1",
+		CorrelationID:   "multica:issue:root-1",
+		RootIssueID:     "root-1",
+		SourceIssueID:   "root-1",
+		ProjectionOwner: "planner@team",
+		MulticaAgentID:  "agent-worker",
+		ProjectedAt:     now,
+	})
+	if projection.Fingerprint == "" || !strings.HasPrefix(projection.Fingerprint, "sha256:") {
+		t.Fatalf("fingerprint missing algorithm prefix: %+v", projection)
+	}
+	if projection.Source.SessionID != "multica:session:root-1" ||
+		projection.Source.CorrelationID != "multica:issue:root-1" ||
+		projection.Source.EventID != "event-1" ||
+		projection.Source.AssignmentID != " assignment-1 " ||
+		projection.Source.AssignmentFingerprint != projection.Fingerprint ||
+		projection.Source.Principal != "worker@team" ||
+		projection.Source.ProjectionKind != "assignment" {
+		t.Fatalf("source mismatch: %+v", projection.Source)
+	}
+	meta := projection.Metadata
+	if meta.SchemaVersion != "1" ||
+		meta.HubBackend != MulticaHubBackend ||
+		meta.Kind != MulticaHubKindAssignmentMailbox ||
+		meta.SessionID != "multica:session:root-1" ||
+		meta.CorrelationID != "multica:issue:root-1" ||
+		meta.EventID != "event-1" ||
+		meta.EventType != "assignment.accepted" ||
+		meta.EventPhase != "accepted" ||
+		meta.AssignmentID != " assignment-1 " ||
+		meta.AssignmentFingerprint != projection.Fingerprint ||
+		meta.Principal != "worker@team" ||
+		meta.SourceIssueID != "root-1" ||
+		meta.RootIssueID != "root-1" ||
+		meta.ProjectionOwner != "planner@team" ||
+		meta.MulticaAgentID != "agent-worker" ||
+		meta.ProjectedAt != now.Format(time.RFC3339) {
+		t.Fatalf("metadata mismatch: %+v", meta)
+	}
+}
+
 func TestAssignmentMailboxMetadataGroupsDispatchBeforeSupplemental(t *testing.T) {
 	full := map[string]string{
 		MulticaMetadataSchemaVersion:         " 1 ",

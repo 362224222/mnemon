@@ -10,7 +10,6 @@ import (
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/driver"
-	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	pview "github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation/view"
 	"github.com/mnemon-dev/mnemon/harness/internal/projection"
@@ -104,26 +103,17 @@ func (s *runtimeRPCState) writeAssignmentMailboxes(ctx context.Context, cli driv
 		if !ok || strings.TrimSpace(participant.AgentID) == "" {
 			return fmt.Errorf("no Multica agent mapping for assignment assignee %q", item.Assignee)
 		}
-		fingerprint := driver.MulticaAssignmentFingerprint(driver.MulticaAssignmentFingerprintInput{
-			AssignmentID:     item.ID,
-			Assignee:         item.Assignee,
-			Scope:            item.Scope,
-			ExpectedWork:     item.ExpectedWork,
-			ExpectedFeedback: item.ExpectedFeedback,
-			SignalRef:        item.SignalRef,
-			ContextRefs:      item.ContextRefs,
-			EvidenceRefs:     item.EvidenceRefs,
-			CorrelationID:    result.CorrelationID,
+		projection := multicasurface.AssignmentMailboxProjectionForRuntimeItem(multicasurface.AssignmentMailboxProjectionMaterial{
+			Item:            item,
+			SessionID:       result.SessionID,
+			CorrelationID:   result.CorrelationID,
+			RootIssueID:     result.RootIssueID,
+			SourceIssueID:   rootIssue.ID,
+			ProjectionOwner: result.Principal,
+			MulticaAgentID:  participant.AgentID,
+			ProjectedAt:     s.now(),
 		})
-		source := driver.MulticaHubLedgerSource{
-			SessionID:             result.SessionID,
-			CorrelationID:         result.CorrelationID,
-			EventID:               item.EventID,
-			AssignmentID:          item.ID,
-			AssignmentFingerprint: fingerprint,
-			Principal:             item.Assignee,
-			ProjectionKind:        "assignment",
-		}
+		source := projection.Source
 		if _, ok, err := ledger.Find(driver.MulticaHubKindAssignmentMailbox, source); err != nil {
 			return err
 		} else if ok {
@@ -145,29 +135,11 @@ func (s *runtimeRPCState) writeAssignmentMailboxes(ctx context.Context, cli driv
 			}
 			continue
 		}
-		meta := driver.MulticaHubMetadata{
-			SchemaVersion:         "1",
-			HubBackend:            driver.MulticaHubBackend,
-			Kind:                  driver.MulticaHubKindAssignmentMailbox,
-			SessionID:             result.SessionID,
-			CorrelationID:         result.CorrelationID,
-			EventID:               item.EventID,
-			EventType:             "assignment.accepted",
-			EventPhase:            string(eventmodel.PhaseAccepted),
-			AssignmentID:          item.ID,
-			AssignmentFingerprint: fingerprint,
-			Principal:             item.Assignee,
-			SourceIssueID:         rootIssue.ID,
-			RootIssueID:           result.RootIssueID,
-			ProjectionOwner:       result.Principal,
-			MulticaAgentID:        participant.AgentID,
-			ProjectedAt:           s.now().UTC().Format(time.RFC3339),
-		}
 		projections = append(projections, runtimeAssignmentProjection{
 			Item:        item,
 			Participant: participant,
 			Source:      source,
-			Metadata:    meta,
+			Metadata:    projection.Metadata,
 			RootIssue:   rootIssue,
 			Result:      result,
 		})

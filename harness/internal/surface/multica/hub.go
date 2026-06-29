@@ -72,6 +72,23 @@ type RootSessionMetadataMaterial struct {
 	ProjectedAt     time.Time
 }
 
+type AssignmentMailboxProjectionMaterial struct {
+	Item            RuntimeAssignmentItem
+	SessionID       string
+	CorrelationID   string
+	RootIssueID     string
+	SourceIssueID   string
+	ProjectionOwner string
+	MulticaAgentID  string
+	ProjectedAt     time.Time
+}
+
+type AssignmentMailboxProjection struct {
+	Fingerprint string
+	Source      MulticaHubLedgerSource
+	Metadata    MulticaHubMetadata
+}
+
 type MulticaAssignmentFingerprintInput struct {
 	AssignmentID     string   `json:"assignment_id,omitempty"`
 	Assignee         string   `json:"assignee,omitempty"`
@@ -374,6 +391,55 @@ func RootSessionMetadataMap(material RootSessionMetadataMaterial) map[string]str
 		meta.ProjectedAt = firstNonEmptyString(meta.ProjectedAt, material.ProjectedAt.UTC().Format(time.RFC3339))
 	}
 	return meta.Map()
+}
+
+func AssignmentMailboxProjectionForRuntimeItem(material AssignmentMailboxProjectionMaterial) AssignmentMailboxProjection {
+	item := material.Item
+	fingerprint := MulticaAssignmentFingerprint(MulticaAssignmentFingerprintInput{
+		AssignmentID:     item.ID,
+		Assignee:         item.Assignee,
+		Scope:            item.Scope,
+		ExpectedWork:     item.ExpectedWork,
+		ExpectedFeedback: item.ExpectedFeedback,
+		SignalRef:        item.SignalRef,
+		ContextRefs:      item.ContextRefs,
+		EvidenceRefs:     item.EvidenceRefs,
+		CorrelationID:    material.CorrelationID,
+	})
+	source := MulticaHubLedgerSource{
+		SessionID:             material.SessionID,
+		CorrelationID:         material.CorrelationID,
+		EventID:               item.EventID,
+		AssignmentID:          item.ID,
+		AssignmentFingerprint: fingerprint,
+		Principal:             item.Assignee,
+		ProjectionKind:        "assignment",
+	}
+	meta := MulticaHubMetadata{
+		SchemaVersion:         "1",
+		HubBackend:            MulticaHubBackend,
+		Kind:                  MulticaHubKindAssignmentMailbox,
+		SessionID:             material.SessionID,
+		CorrelationID:         material.CorrelationID,
+		EventID:               item.EventID,
+		EventType:             "assignment.accepted",
+		EventPhase:            "accepted",
+		AssignmentID:          item.ID,
+		AssignmentFingerprint: fingerprint,
+		Principal:             item.Assignee,
+		SourceIssueID:         material.SourceIssueID,
+		RootIssueID:           material.RootIssueID,
+		ProjectionOwner:       material.ProjectionOwner,
+		MulticaAgentID:        material.MulticaAgentID,
+	}
+	if !material.ProjectedAt.IsZero() {
+		meta.ProjectedAt = material.ProjectedAt.UTC().Format(time.RFC3339)
+	}
+	return AssignmentMailboxProjection{
+		Fingerprint: fingerprint,
+		Source:      source,
+		Metadata:    meta,
+	}
 }
 
 func AssignmentMailboxDispatchMetadata(full map[string]string) map[string]string {
