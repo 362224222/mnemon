@@ -37,6 +37,9 @@ var commandImportBoundaries = []commandImportBoundary{
 			"harness/internal/drive",
 			"harness/internal/driver",
 			"harness/internal/hostagent",
+			"harness/internal/mnemond/access",
+			"harness/internal/mnemond/admission",
+			"harness/internal/mnemond/presentation",
 			"harness/internal/productconfig",
 			"harness/internal/projection",
 			"harness/internal/runtime",
@@ -69,6 +72,9 @@ func TestCommandImportBoundaryGuardLogicIsNotVacuous(t *testing.T) {
 	}
 	if !commandImportForbidden("github.com/mnemon-dev/mnemon/harness/internal/app", commandImportBoundaries[1].forbids) {
 		t.Fatal("mnemon-hub command boundary must flag app imports")
+	}
+	if !commandImportForbidden("github.com/mnemon-dev/mnemon/harness/internal/mnemond/access", commandImportBoundaries[1].forbids) {
+		t.Fatal("mnemon-hub command boundary must flag local mnemond access imports")
 	}
 	if commandImportForbidden("github.com/mnemon-dev/mnemon/harness/internal/mnemond/access", commandImportBoundaries[2].forbids) {
 		t.Fatal("mnemon-multica-runtime must be allowed to call mnemond access APIs")

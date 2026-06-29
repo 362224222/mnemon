@@ -7,8 +7,6 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
-	"flag"
 	"io"
 	"os"
 	"path/filepath"
@@ -45,8 +43,8 @@ func writeToken(t *testing.T, dir, name, token string) {
 func TestHelpDescribesRemoteExchangeBackend(t *testing.T) {
 	var errw bytes.Buffer
 	err := run(context.Background(), []string{"--help"}, io.Discard, &errw)
-	if !errors.Is(err, flag.ErrHelp) {
-		t.Fatalf("help error = %v, want flag.ErrHelp", err)
+	if err != nil {
+		t.Fatalf("help should exit successfully, got %v", err)
 	}
 	got := errw.String()
 	for _, want := range []string{"remote event exchange backend", "replica push", "pull", "status", "cursors", "tenant boundaries"} {

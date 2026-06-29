@@ -50,6 +50,9 @@ func run(ctx context.Context, args []string, out, errw io.Writer) error {
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
+		if err == flag.ErrHelp {
+			return nil
+		}
 		return err
 	}
 	if *devSelfsigned != "" {
