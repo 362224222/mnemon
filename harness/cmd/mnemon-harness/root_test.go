@@ -32,7 +32,7 @@ func TestRootHelpUsesLocalFirstProductSurface(t *testing.T) {
 			t.Fatalf("root help leaked unsupported product term %q:\n%s", blocked, got)
 		}
 	}
-	for _, blocked := range []string{"  multica", "  tower"} {
+	for _, blocked := range []string{"  multica", "  tower", "  token"} {
 		if strings.Contains(got, blocked) {
 			t.Fatalf("root help leaked debug command %q:\n%s", strings.TrimSpace(blocked), got)
 		}
