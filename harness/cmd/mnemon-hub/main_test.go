@@ -7,6 +7,9 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"flag"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -36,6 +39,25 @@ func writeToken(t *testing.T, dir, name, token string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(token+"\n"), 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestHelpDescribesRemoteExchangeBackend(t *testing.T) {
+	var errw bytes.Buffer
+	err := run(context.Background(), []string{"--help"}, io.Discard, &errw)
+	if !errors.Is(err, flag.ErrHelp) {
+		t.Fatalf("help error = %v, want flag.ErrHelp", err)
+	}
+	got := errw.String()
+	for _, want := range []string{"remote event exchange backend", "replica push", "pull", "status", "cursors", "tenant boundaries"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("mnemon-hub help missing %q:\n%s", want, got)
+		}
+	}
+	for _, blocked := range []string{"managed runtime", "Multica projection", "local drive source"} {
+		if strings.Contains(got, blocked) {
+			t.Fatalf("mnemon-hub help leaked non-exchange wording %q:\n%s", blocked, got)
+		}
 	}
 }
 

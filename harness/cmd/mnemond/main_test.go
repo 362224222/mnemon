@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"flag"
 	"io"
 	"strings"
 	"testing"
@@ -39,5 +42,33 @@ func TestRunRefusesNonLoopbackAddr(t *testing.T) {
 	err := run(context.Background(), []string{"--root", root, "--addr", "0.0.0.0:0"}, io.Discard, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "loopback") {
 		t.Fatalf("non-loopback --addr must be refused (T1), got: %v", err)
+	}
+}
+
+func TestHelpDescribesLocalEventNode(t *testing.T) {
+	var errw bytes.Buffer
+	err := run(context.Background(), []string{"--help"}, io.Discard, &errw)
+	if !errors.Is(err, flag.ErrHelp) {
+		t.Fatalf("help error = %v, want flag.ErrHelp", err)
+	}
+	got := errw.String()
+	for _, want := range []string{"Local Mnemon event node", "local event API", "admission", "state", "presentation", "drive candidates"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("mnemond help missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestAgentRunHelpFramesLocalDriveSource(t *testing.T) {
+	var errw bytes.Buffer
+	err := run(context.Background(), []string{"agent", "run", "--help"}, io.Discard, &errw)
+	if !errors.Is(err, flag.ErrHelp) {
+		t.Fatalf("agent run help error = %v, want flag.ErrHelp", err)
+	}
+	got := errw.String()
+	for _, want := range []string{"local drive source", "[mnemon:wake]", "managed runtime"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("agent run help missing %q:\n%s", want, got)
+		}
 	}
 }

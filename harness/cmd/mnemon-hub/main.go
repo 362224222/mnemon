@@ -43,6 +43,12 @@ func run(ctx context.Context, args []string, out, errw io.Writer) error {
 	tlsCert := fs.String("tls-cert", "", "TLS certificate file (TLS is served when --tls-cert and --tls-key are both set)")
 	tlsKey := fs.String("tls-key", "", "TLS private key file")
 	devSelfsigned := fs.String("dev-selfsigned", "", "generate a self-signed dev/e2e cert+key pair into this directory, print their paths, and exit")
+	fs.Usage = func() {
+		fmt.Fprintln(errw, "mnemon-hub is the remote event exchange backend: it handles authenticated replica push, pull, status, cursors, and tenant boundaries.")
+		fmt.Fprintln(errw)
+		fmt.Fprintln(errw, "Usage of mnemon-hub:")
+		fs.PrintDefaults()
+	}
 	if err := fs.Parse(args); err != nil {
 		return err
 	}

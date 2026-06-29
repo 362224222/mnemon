@@ -45,6 +45,12 @@ func runAgentRun(ctx context.Context, args []string, out, errw io.Writer) error 
 	renderIntent := fs.String("render-intent", presentation.IntentTeamworkEvents, "render intent used for wake candidate derivation")
 	surface := fs.String("surface", "hook", "render surface used for wake candidate derivation")
 	turnTimeout := fs.Duration("turn-timeout", 5*time.Minute, "timeout for one managed agent turn")
+	fs.Usage = func() {
+		fmt.Fprintln(errw, "mnemond agent run is a local drive source: it renders wake candidates and sends only the [mnemon:wake] sentinel to the selected managed runtime.")
+		fmt.Fprintln(errw)
+		fmt.Fprintln(errw, "Usage of mnemond agent run:")
+		fs.PrintDefaults()
+	}
 	if err := fs.Parse(args); err != nil {
 		return err
 	}

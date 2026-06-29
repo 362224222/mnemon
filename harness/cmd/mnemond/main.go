@@ -86,6 +86,12 @@ func parseServe(args []string, errw io.Writer) (serveConfig, error) {
 	allowNonLoopback := fs.Bool("allow-nonloopback", false, "explicitly allow listening on a non-loopback address (T1: loopback-only by default)")
 	ignoreExternal := fs.Bool("ignore-external", false, "boot the embedded-only capability catalog, ignoring external packages under .mnemon/loops (each ignored package is named on stderr)")
 	allowInsecureRemote := fs.Bool("allow-insecure-remote", false, "let the background sync worker use a plaintext http:// Remote Workspace endpoint with a non-loopback host (T2: fail-closed by default)")
+	fs.Usage = func() {
+		fmt.Fprintln(errw, "mnemond is the Local Mnemon event node: it serves local event API, admission, state, presentation, and drive candidates.")
+		fmt.Fprintln(errw)
+		fmt.Fprintln(errw, "Usage of mnemond:")
+		fs.PrintDefaults()
+	}
 	if err := fs.Parse(args); err != nil {
 		return serveConfig{}, err
 	}
