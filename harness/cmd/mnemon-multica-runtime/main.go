@@ -505,21 +505,7 @@ func (s *runtimeRPCState) correlateAssignmentMailbox(ctx context.Context, cli dr
 }
 
 func runtimeAssignmentCorrelationProgress(result runtimeImportResult) string {
-	var b strings.Builder
-	b.WriteString("Mnemon assignment mailbox: correlated")
-	if result.AssignmentID != "" {
-		b.WriteString(" assignment=")
-		b.WriteString(result.AssignmentID)
-	} else if label := strings.TrimSpace(runtimeAssignmentLabel(result)); label != "" {
-		b.WriteString(" assignment=")
-		b.WriteString(label)
-	}
-	if result.SessionID != "" {
-		b.WriteString(" session=")
-		b.WriteString(result.SessionID)
-	}
-	b.WriteString(".")
-	return b.String()
+	return "Mnemon assignment mailbox: correlated."
 }
 
 func applyMulticaHubMetadata(result *runtimeImportResult, meta driver.MulticaHubMetadata) {
@@ -935,29 +921,11 @@ func formatRuntimeFinalAnswer(result runtimeImportResult) string {
 		b.WriteString(principal)
 		b.WriteString(".")
 	}
-	if taskID := strings.TrimSpace(result.TaskID); taskID != "" {
-		b.WriteString(" Multica task: ")
-		b.WriteString(taskID)
-		b.WriteString(".")
-	}
 	switch result.Status {
 	case "recorded":
-		b.WriteString(" Mnemon ingest: recorded")
-		if result.Receipt != nil {
-			b.WriteString(fmt.Sprintf(" seq=%d duplicate=%v ticked=%v", result.Receipt.Seq, result.Receipt.Dup, result.Receipt.Ticked))
-		}
-		b.WriteString(".")
+		b.WriteString(" Mnemon ingest: recorded.")
 	case "correlated":
-		b.WriteString(" Mnemon assignment mailbox: correlated")
-		if result.AssignmentID != "" {
-			b.WriteString(" assignment=")
-			b.WriteString(result.AssignmentID)
-		}
-		if result.SessionID != "" {
-			b.WriteString(" session=")
-			b.WriteString(result.SessionID)
-		}
-		b.WriteString(".")
+		b.WriteString(" Mnemon assignment mailbox: correlated.")
 	case "skipped":
 		b.WriteString(" Mnemon ingest: skipped")
 		if result.Err != nil {
@@ -985,12 +953,7 @@ func formatRuntimeFinalAnswer(result runtimeImportResult) string {
 	}
 	switch result.ProjectionStatus {
 	case "commented":
-		b.WriteString(" Multica projection: comment")
-		if result.ProjectionCommentID != "" {
-			b.WriteString("=")
-			b.WriteString(result.ProjectionCommentID)
-		}
-		b.WriteString(".")
+		b.WriteString(" Multica projection: comment posted.")
 	case "skipped":
 		b.WriteString(" Multica projection: skipped.")
 	case "failed":
@@ -1004,12 +967,7 @@ func formatRuntimeFinalAnswer(result runtimeImportResult) string {
 	}
 	switch result.WakeStatus {
 	case "completed":
-		b.WriteString(" Managed wake: completed")
-		if result.WakeTurnID != "" {
-			b.WriteString(" turn=")
-			b.WriteString(result.WakeTurnID)
-		}
-		b.WriteString(".")
+		b.WriteString(" Managed wake: completed.")
 	case "skipped":
 		b.WriteString(" Managed wake: skipped")
 		if result.WakeErr != nil {
@@ -1035,19 +993,12 @@ func formatRuntimeFinalAnswer(result runtimeImportResult) string {
 	}
 	switch result.HubWriteStatus {
 	case "created", "commented", "updated", "noop":
-		b.WriteString(" Multica hub write: ")
-		b.WriteString(result.HubWriteStatus)
-		if result.HubChildIssues > 0 {
-			b.WriteString(fmt.Sprintf(" child_issues=%d", result.HubChildIssues))
-		}
-		if result.HubFeedbackComments > 0 {
-			b.WriteString(fmt.Sprintf(" feedback_comments=%d", result.HubFeedbackComments))
-		}
-		b.WriteString(".")
+		b.WriteString(" Multica updates: ")
+		b.WriteString(runtimeHubWriteSummary(result))
 	case "skipped":
-		b.WriteString(" Multica hub write: skipped.")
+		b.WriteString(" Multica updates: skipped.")
 	case "failed":
-		b.WriteString(" Multica hub write: failed")
+		b.WriteString(" Multica updates: failed")
 		if result.HubWriteErr != nil {
 			b.WriteString(" (")
 			b.WriteString(result.HubWriteErr.Error())
@@ -1217,14 +1168,46 @@ func runtimeHubWriteProgress(result runtimeImportResult) string {
 		return ""
 	case "failed":
 		if result.HubWriteErr != nil {
-			return "Multica hub projection failed: " + result.HubWriteErr.Error()
+			return "Multica updates failed: " + result.HubWriteErr.Error()
 		}
-		return "Multica hub projection failed."
+		return "Multica updates failed."
 	case "skipped":
-		return "Multica hub projection skipped."
+		return "Multica updates skipped."
 	default:
-		return fmt.Sprintf("Multica hub projection %s: child issues=%d, feedback comments=%d.", result.HubWriteStatus, result.HubChildIssues, result.HubFeedbackComments)
+		return "Multica updates: " + runtimeHubWriteSummary(result)
 	}
+}
+
+func runtimeHubWriteSummary(result runtimeImportResult) string {
+	status := strings.TrimSpace(result.HubWriteStatus)
+	var parts []string
+	if result.HubChildIssues > 0 {
+		parts = append(parts, fmt.Sprintf("%d %s", result.HubChildIssues, pluralize(result.HubChildIssues, "assignment mailbox", "assignment mailboxes")))
+	}
+	if result.HubFeedbackComments > 0 {
+		parts = append(parts, fmt.Sprintf("%d %s", result.HubFeedbackComments, pluralize(result.HubFeedbackComments, "feedback comment", "feedback comments")))
+	}
+	switch {
+	case len(parts) > 0 && status == "created":
+		return strings.Join(parts, " and ") + " created."
+	case len(parts) > 0 && status == "commented":
+		return strings.Join(parts, " and ") + " posted."
+	case len(parts) > 0:
+		return strings.Join(parts, " and ") + " synced."
+	case status == "noop":
+		return "no visible updates needed."
+	case status != "":
+		return strings.ReplaceAll(status, "_", " ") + "."
+	default:
+		return "no visible updates needed."
+	}
+}
+
+func pluralize(n int, singular, plural string) string {
+	if n == 1 {
+		return singular
+	}
+	return plural
 }
 
 func runtimeProjectionProgress(result runtimeImportResult) string {

@@ -242,13 +242,22 @@ func runMulticaRuntimeProdSimAcceptance(ctx context.Context, opts multicaRuntime
 	}
 	description := strings.TrimSpace(opts.IssueDescription)
 	if description == "" {
-		description = strings.TrimSpace(`Run a small Mnemon R2 Multica hub-flow readiness drill.
-
-Coordinate this as teamwork rather than solo work. Use Mnemon teamwork handoffs when delegating validation slices; the Multica runtime should project accepted assignments into child assignment mailboxes and route them to the target agents.
-
-Stage the handoffs: first assign root metadata/run visibility and child routing/isolation to separate teammates. After both teammate result digests are visible and their Multica feedback comments/statuses have projected, assign an integrator to verify feedback projection and final status completion.
-
-The validation should cover root session metadata, assignment child issue routing, assignment feedback comments, agent run activity visibility, stale or cross-session assignment isolation, and final Multica status completion.`)
+		description = multicasurface.RootSessionDescription(multicasurface.RootSessionMaterial{
+			Request:  "Run a small Mnemon R2 Multica readiness drill.",
+			WorkMode: "Use Mnemon teamwork; Multica shows issues, runs, comments, and statuses.",
+			Handoffs: []string{
+				"Route root session visibility and child issue routing checks to separate teammates.",
+				"After teammate feedback is visible, route a final integration check.",
+			},
+			Validation: []string{
+				"Root issue carries session metadata and shows run activity.",
+				"Accepted assignments become child issue mailboxes assigned to target agents.",
+				"Feedback comments and statuses are projected back to Multica.",
+				"Stale or cross-session assignment material is ignored.",
+				"Final root status reflects completion.",
+			},
+			Completion: "Finish when child feedback comments are visible and the root issue reaches a terminal status.",
+		})
 	}
 	issue, err := cli.CreateIssue(ctx, driver.MulticaCreateIssueRequest{
 		Title:          title,
@@ -352,16 +361,7 @@ func collectMulticaHubFlowEvidence(ctx context.Context, cli driver.MulticaCLI, o
 		return rawErr
 	}
 	addMulticaProdSimAssertion(report, "root children are session-scoped assignment mailboxes", multicaRawChildrenMatchSessionAssignments(rawChildren, rawChildMeta, rootMeta[driver.MulticaMetadataSessionID]), fmt.Sprintf("raw_children=%d assignment_children=%d", len(rawChildren), len(children)))
-	allChildrenTagged := len(children) > 0
-	for _, child := range children {
-		meta := childMeta[child.ID]
-		if meta[driver.MulticaMetadataKind] != driver.MulticaHubKindAssignmentMailbox ||
-			strings.TrimSpace(meta[driver.MulticaMetadataAssignmentID]) == "" ||
-			strings.TrimSpace(meta[driver.MulticaMetadataPrincipal]) == "" {
-			allChildrenTagged = false
-			break
-		}
-	}
+	allChildrenTagged := multicaAssignmentChildrenHaveCompleteMetadata(children, childMeta, rootMeta[driver.MulticaMetadataSessionID])
 	addMulticaProdSimAssertion(report, "child issues carry assignment metadata", allChildrenTagged, fmt.Sprintf("%+v", childMeta))
 
 	childRuns, childMessages, activeAgents, err := waitMulticaChildRunEvidence(ctx, cli, report.Issue.ID, report.Runs, children, opts.Wait, opts.Poll, opts.MinActiveAgents)
@@ -445,7 +445,7 @@ func waitMulticaAssignmentChildren(ctx context.Context, cli driver.MulticaCLI, r
 		if err != nil {
 			return children, meta, err
 		}
-		if len(children) >= minChildren {
+		if len(children) >= minChildren && multicaAssignmentChildrenHaveCompleteMetadata(children, meta, "") {
 			return children, meta, nil
 		}
 		if wait <= 0 || time.Now().After(deadline) {
@@ -628,9 +628,22 @@ func multicaRawChildrenMatchSessionAssignments(children []driver.MulticaIssue, m
 	if len(children) == 0 {
 		return false
 	}
+	return multicaAssignmentChildrenHaveCompleteMetadata(children, meta, sessionID)
+}
+
+func multicaAssignmentChildrenHaveCompleteMetadata(children []driver.MulticaIssue, meta map[string]map[string]string, sessionID string) bool {
+	if len(children) == 0 {
+		return false
+	}
 	for _, child := range children {
 		childMeta := meta[child.ID]
 		if childMeta[driver.MulticaMetadataKind] != driver.MulticaHubKindAssignmentMailbox {
+			return false
+		}
+		if strings.TrimSpace(childMeta[driver.MulticaMetadataAssignmentID]) == "" ||
+			strings.TrimSpace(childMeta[driver.MulticaMetadataPrincipal]) == "" ||
+			strings.TrimSpace(childMeta[driver.MulticaMetadataRootIssueID]) == "" ||
+			strings.TrimSpace(childMeta[driver.MulticaMetadataSessionID]) == "" {
 			return false
 		}
 		if strings.TrimSpace(sessionID) != "" && childMeta[driver.MulticaMetadataSessionID] != sessionID {

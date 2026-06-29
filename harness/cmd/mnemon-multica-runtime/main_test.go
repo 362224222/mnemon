@@ -373,7 +373,7 @@ esac
 				if strings.Contains(text, "Loading Multica issue iss-7") && phase == "commentary" {
 					sawCommentaryProgress = true
 				}
-				if strings.Contains(text, "Mnemon ingest: recorded seq=17") && phase == "final_answer" {
+				if strings.Contains(text, "Mnemon ingest: recorded") && phase == "final_answer" {
 					sawFinalPhaseAnswer = true
 				}
 			}
@@ -392,7 +392,7 @@ esac
 				progressItemIDs[itemID] = true
 			}
 		}
-		if msg["method"] == "item/agentMessage/delta" && strings.Contains(line, "Mnemon ingest: recorded seq=17") && strings.Contains(line, "Multica projection: comment=comment-1") && strings.Contains(line, "Managed wake: completed turn=noop-turn") {
+		if msg["method"] == "item/agentMessage/delta" && strings.Contains(line, "Mnemon ingest: recorded") && strings.Contains(line, "Multica projection: comment posted") && strings.Contains(line, "Managed wake: completed") {
 			sawAnswer = true
 			params, _ := msg["params"].(map[string]any)
 			answerItemID, _ = params["itemId"].(string)
@@ -584,7 +584,7 @@ esac
 			t.Fatalf("runtime comment must not expose machine field %q:\n%s", blocked, comment)
 		}
 	}
-	if !strings.Contains(out.String(), "Mnemon ingest: recorded seq=21") {
+	if !strings.Contains(out.String(), "Mnemon ingest: recorded") {
 		t.Fatalf("runtime output missing ingest evidence:\n%s", out.String())
 	}
 }
@@ -660,14 +660,14 @@ esac
 	output := out.String()
 	for _, want := range []string{
 		"Root session metadata write failed; continuing with Mnemon ingest from issue context.",
-		"Mnemon ingest: recorded seq=29",
-		"Multica projection: comment=comment-9",
+		"Mnemon ingest: recorded",
+		"Multica projection: comment posted",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("runtime output missing %q:\n%s", want, output)
 		}
 	}
-	if strings.Contains(output, "Mnemon ingest: failed") || strings.Contains(output, "Multica hub write: failed") {
+	if strings.Contains(output, "Mnemon ingest: failed") || strings.Contains(output, "Multica updates: failed") {
 		t.Fatalf("metadata projection failure polluted protocol result:\n%s", output)
 	}
 	comment := mustReadRuntimeTestFile(t, commentPath)
@@ -854,7 +854,7 @@ esac
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "Multica hub write: updated child_issues=1 feedback_comments=1") {
+	if !strings.Contains(out.String(), "Multica updates: 1 assignment mailbox and 1 feedback comment synced") {
 		t.Fatalf("runtime output missing hub write evidence:\n%s", out.String())
 	}
 	args := mustReadRuntimeTestFile(t, argsPath)
@@ -1108,7 +1108,7 @@ esac
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "Multica hub write: updated child_issues=2 feedback_comments=2") {
+	if !strings.Contains(out.String(), "Multica updates: 2 assignment mailboxes and 2 feedback comments synced") {
 		t.Fatalf("runtime output missing duplicate-id hub write evidence:\n%s", out.String())
 	}
 	args := mustReadRuntimeTestFile(t, argsPath)
@@ -1251,7 +1251,7 @@ esac
 		t.Fatal(err)
 	}
 	output := out.String()
-	if !strings.Contains(output, "Multica hub write: failed") {
+	if !strings.Contains(output, "Multica updates: failed") {
 		t.Fatalf("runtime should surface the partial metadata failure:\n%s", output)
 	}
 	args := mustReadRuntimeTestFile(t, argsPath)
@@ -1361,7 +1361,7 @@ esac
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "Multica hub write: commented feedback_comments=1") {
+	if !strings.Contains(out.String(), "Multica updates: 1 feedback comment posted") {
 		t.Fatalf("runtime output missing recovered feedback projection:\n%s", out.String())
 	}
 	args := mustReadRuntimeTestFile(t, argsPath)
@@ -1617,7 +1617,7 @@ esac
 	if ingestCalled {
 		t.Fatal("assignment mailbox dispatch must not ingest a new teamwork signal")
 	}
-	if !strings.Contains(out.String(), "Mnemon assignment mailbox: correlated assignment=asg-1") || !strings.Contains(out.String(), "Managed wake: completed turn=noop-turn") {
+	if !strings.Contains(out.String(), "Mnemon assignment mailbox: correlated") || !strings.Contains(out.String(), "Managed wake: completed") {
 		t.Fatalf("runtime output missing correlation/wake evidence:\n%s", out.String())
 	}
 	args := mustReadRuntimeTestFile(t, argsPath)

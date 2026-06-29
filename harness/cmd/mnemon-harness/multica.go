@@ -693,10 +693,7 @@ func ensureMulticaParticipantEnv(ctx context.Context, cli driver.MulticaCLI, par
 	if err != nil {
 		return false, fmt.Errorf("read Multica agent env %s: %w", participant.AgentID, err)
 	}
-	merged := cloneStringMap(existing)
-	for key, value := range multicaParticipantRuntimeEnv(cli, participant, registryPath, workspaceID, opts) {
-		merged[key] = value
-	}
+	merged := mergeMulticaParticipantRuntimeEnv(existing, multicaParticipantRuntimeEnv(cli, participant, registryPath, workspaceID, opts))
 	if sameStringMap(existing, merged) {
 		return false, nil
 	}
@@ -730,6 +727,37 @@ func multicaParticipantRuntimeEnv(cli driver.MulticaCLI, participant driver.Mult
 		env["MNEMON_MANAGED_TURN_TIMEOUT"] = opts.ManagedTimeout.String()
 	}
 	return env
+}
+
+func mergeMulticaParticipantRuntimeEnv(existing, desired map[string]string) map[string]string {
+	merged := cloneStringMap(existing)
+	for _, key := range multicaParticipantRuntimeEnvKeys {
+		delete(merged, key)
+	}
+	for key, value := range desired {
+		if strings.TrimSpace(value) != "" {
+			merged[key] = value
+		}
+	}
+	return merged
+}
+
+var multicaParticipantRuntimeEnvKeys = []string{
+	"MNEMON_HUB_BACKEND",
+	"MNEMON_MULTICA_REGISTRY",
+	"MNEMON_MULTICA_WORKSPACE_ID",
+	"MNEMON_MULTICA_BIN",
+	"MNEMON_MULTICA_PROFILE",
+	"MNEMON_MULTICA_SERVER_URL",
+	"MNEMON_CONTROL_ADDR",
+	"MNEMON_CONTROL_TOKEN",
+	"MNEMON_CONTROL_TOKEN_FILE",
+	"MNEMON_CONTROL_PRINCIPAL",
+	"MNEMON_HARNESS_BIN",
+	"MNEMON_MANAGED_RUNTIME",
+	"MNEMON_MANAGED_COMMAND",
+	"MNEMON_MANAGED_WORKSPACE",
+	"MNEMON_MANAGED_TURN_TIMEOUT",
 }
 
 func defaultMulticaParticipantControlTokenFile(workspace, principal string) string {

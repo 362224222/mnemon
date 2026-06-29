@@ -5,6 +5,45 @@ import (
 	"testing"
 )
 
+func TestRootSessionDescriptionIsStructuredVisibleText(t *testing.T) {
+	body := RootSessionDescription(RootSessionMaterial{
+		Request:  "Run a Multica readiness drill.",
+		WorkMode: "Mnemon teamwork with Multica issue visibility.",
+		Handoffs: []string{
+			"Route root visibility and child routing checks to separate teammates.",
+			"Route a final integration check after teammate feedback is visible.",
+		},
+		Validation: []string{
+			"Root issue carries session metadata and shows run activity.",
+			"Accepted assignments become child issue mailboxes assigned to target agents.",
+			"Final root status reflects completion.",
+		},
+		Completion: "Finish when child feedback comments are visible and the root issue reaches a terminal status.",
+	})
+	for _, want := range []string{
+		"## Request",
+		"Run a Multica readiness drill.",
+		"## Teamwork",
+		"Work mode: Mnemon teamwork with Multica issue visibility.",
+		"Assignment path: Accepted assignments appear as child issues assigned to target agents",
+		"Feedback path: Progress, results, and blockers appear as child issue comments and statuses",
+		"## Handoffs",
+		"Route root visibility and child routing checks to separate teammates.",
+		"## Validation",
+		"Root issue carries session metadata and shows run activity.",
+		"## Completion",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("root session description missing %q:\n%s", want, body)
+		}
+	}
+	for _, blocked := range []string{"mnemon.", "session_id", "assignment_id", "assignment_ref", "progress_digest", "hub_backend", "projection owner"} {
+		if strings.Contains(strings.ToLower(body), blocked) {
+			t.Fatalf("root session description must not expose machine field %q:\n%s", blocked, body)
+		}
+	}
+}
+
 func TestAssignmentMailboxMaterial(t *testing.T) {
 	item := AssignmentMailboxMaterial{
 		ID:               "asg-1",
@@ -124,6 +163,28 @@ func TestAssignmentMailboxDescriptionNormalizesProtocolFeedback(t *testing.T) {
 	}
 	if strings.Contains(body, "progress_digest") {
 		t.Fatalf("description should keep protocol event type out of visible text:\n%s", body)
+	}
+}
+
+func TestAssignmentMailboxDescriptionNormalizesProtocolWorkAndRationale(t *testing.T) {
+	body := AssignmentMailboxDescription(AssignmentMailboxMaterial{
+		ID:           "asg-1",
+		Scope:        "release validation",
+		ExpectedWork: "Report a progress_digest result with exact evidence.",
+		Rationale:    "Use feedback_kind=result only after checking Multica evidence.",
+	})
+	for _, blocked := range []string{"progress_digest", "feedback_kind"} {
+		if strings.Contains(body, blocked) {
+			t.Fatalf("description should keep protocol word %q out of visible text:\n%s", blocked, body)
+		}
+	}
+	for _, want := range []string{
+		"Report a runtime feedback result with exact evidence.",
+		"Use status=result only after checking Multica evidence.",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("description missing normalized text %q:\n%s", want, body)
+		}
 	}
 }
 

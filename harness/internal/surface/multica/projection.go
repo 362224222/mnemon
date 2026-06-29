@@ -19,6 +19,14 @@ type AssignmentMailboxMaterial struct {
 	Rationale        string
 }
 
+type RootSessionMaterial struct {
+	Request    string
+	WorkMode   string
+	Handoffs   []string
+	Validation []string
+	Completion string
+}
+
 type ProgressFeedbackMaterial struct {
 	AssignmentRef string
 	FeedbackKind  string
@@ -64,10 +72,41 @@ func AssignmentMailboxTitle(item AssignmentMailboxMaterial) string {
 	return trimTitle("Assignment: " + topic)
 }
 
+func RootSessionDescription(item RootSessionMaterial) string {
+	var b strings.Builder
+	request := strings.TrimSpace(item.Request)
+	if request == "" {
+		request = "Coordinate this request through Mnemon teamwork in Multica."
+	}
+	b.WriteString("## Request\n\n")
+	b.WriteString(request)
+	b.WriteString("\n\n")
+
+	b.WriteString("## Teamwork\n\n")
+	writeBullet(&b, "Work mode", firstNonEmptyString(item.WorkMode, "Mnemon teamwork with Multica issue visibility"))
+	writeBullet(&b, "Assignment path", "Accepted assignments appear as child issues assigned to target agents")
+	writeBullet(&b, "Feedback path", "Progress, results, and blockers appear as child issue comments and statuses")
+
+	if handoffs := cleanStrings(item.Handoffs); len(handoffs) > 0 {
+		b.WriteString("\n## Handoffs\n\n")
+		writeList(&b, handoffs)
+	}
+	if validation := cleanStrings(item.Validation); len(validation) > 0 {
+		b.WriteString("\n## Validation\n\n")
+		writeList(&b, validation)
+	}
+	if completion := strings.TrimSpace(item.Completion); completion != "" {
+		b.WriteString("\n## Completion\n\n")
+		b.WriteString(completion)
+		b.WriteString("\n")
+	}
+	return strings.TrimSpace(b.String())
+}
+
 func AssignmentMailboxDescription(item AssignmentMailboxMaterial) string {
 	var b strings.Builder
 	b.WriteString("## Assignment\n\n")
-	if work := strings.TrimSpace(item.ExpectedWork); work != "" {
+	if work := visibleProtocolText(item.ExpectedWork); work != "" {
 		b.WriteString(work)
 		b.WriteString("\n\n")
 	} else if scope := strings.TrimSpace(item.Scope); scope != "" {
@@ -78,7 +117,7 @@ func AssignmentMailboxDescription(item AssignmentMailboxMaterial) string {
 	writeBullet(&b, "Root issue", rootIssueReference(item))
 	writeBullet(&b, "Assignee", assigneeReference(item))
 	writeBullet(&b, "Scope", item.Scope)
-	if rationale := strings.TrimSpace(item.Rationale); rationale != "" {
+	if rationale := visibleProtocolText(item.Rationale); rationale != "" {
 		b.WriteString("\n## Rationale\n\n")
 		b.WriteString(rationale)
 		b.WriteString("\n")
@@ -404,14 +443,10 @@ func assigneeReference(item AssignmentMailboxMaterial) string {
 }
 
 func visibleExpectedFeedback(value string) string {
-	value = strings.TrimSpace(value)
+	value = visibleProtocolText(value)
 	if value == "" {
 		return ""
 	}
-	value = strings.ReplaceAll(value, "progress_digest", "runtime feedback")
-	value = strings.ReplaceAll(value, "progress digest", "runtime feedback")
-	value = strings.ReplaceAll(value, "feedback_kind=", "status=")
-	value = strings.ReplaceAll(value, "feedback_kind", "status")
 	lower := strings.ToLower(value)
 	for _, prefix := range []string{"runtime feedback with "} {
 		if strings.HasPrefix(lower, prefix) {
@@ -422,6 +457,15 @@ func visibleExpectedFeedback(value string) string {
 		return "progress, result, or blocker"
 	}
 	return value
+}
+
+func visibleProtocolText(value string) string {
+	value = strings.TrimSpace(value)
+	value = strings.ReplaceAll(value, "progress_digest", "runtime feedback")
+	value = strings.ReplaceAll(value, "progress digest", "runtime feedback")
+	value = strings.ReplaceAll(value, "feedback_kind=", "status=")
+	value = strings.ReplaceAll(value, "feedback_kind", "status")
+	return strings.TrimSpace(value)
 }
 
 func visibleFeedbackStatus(value string) string {
