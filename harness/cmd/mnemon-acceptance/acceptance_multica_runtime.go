@@ -331,21 +331,18 @@ func runMulticaRuntimeProdSimAcceptance(ctx context.Context, opts multicaRuntime
 
 func selectMulticaAcceptanceAssignee(reg driver.MulticaRegistry, principal string) (driver.MulticaParticipantRecord, error) {
 	principal = strings.TrimSpace(principal)
-	for _, participant := range reg.Participants {
-		if principal != "" && participant.Principal == principal {
-			if strings.TrimSpace(participant.AgentID) == "" {
-				return driver.MulticaParticipantRecord{}, fmt.Errorf("participant %s has no Multica agent id", participant.Principal)
-			}
-			return participant, nil
-		}
-	}
 	if principal != "" {
-		return driver.MulticaParticipantRecord{}, fmt.Errorf("participant principal %q not found in registry", principal)
-	}
-	for _, participant := range reg.Participants {
+		participant, ok := multicasurface.MulticaParticipantForPrincipal(reg, principal)
+		if !ok {
+			return driver.MulticaParticipantRecord{}, fmt.Errorf("participant principal %q not found in registry", principal)
+		}
 		if strings.TrimSpace(participant.AgentID) != "" {
 			return participant, nil
 		}
+		return driver.MulticaParticipantRecord{}, fmt.Errorf("participant %s has no Multica agent id", participant.Principal)
+	}
+	if participant, ok := multicasurface.FirstMulticaParticipantWithAgentID(reg); ok {
+		return participant, nil
 	}
 	return driver.MulticaParticipantRecord{}, fmt.Errorf("registry has no participant with a Multica agent id")
 }

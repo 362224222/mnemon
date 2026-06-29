@@ -12,6 +12,31 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/driver"
 )
 
+func TestSelectMulticaAcceptanceAssigneeUsesRegistryHelpers(t *testing.T) {
+	reg := driver.MulticaRegistry{Participants: []driver.MulticaParticipantRecord{
+		{Principal: "planner@team", AgentName: "mnemon-planner"},
+		{Principal: " reviewer@team ", AgentName: "mnemon-reviewer", AgentID: "agent-reviewer"},
+		{Principal: "implementer@team", AgentName: "mnemon-implementer", AgentID: "agent-implementer"},
+	}}
+	assignee, err := selectMulticaAcceptanceAssignee(reg, "reviewer@team")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if assignee.AgentID != "agent-reviewer" {
+		t.Fatalf("principal assignee = %+v", assignee)
+	}
+	assignee, err = selectMulticaAcceptanceAssignee(reg, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if assignee.AgentID != "agent-reviewer" {
+		t.Fatalf("fallback assignee = %+v", assignee)
+	}
+	if _, err := selectMulticaAcceptanceAssignee(reg, "planner@team"); err == nil || !strings.Contains(err.Error(), "no Multica agent id") {
+		t.Fatalf("missing agent id error = %v", err)
+	}
+}
+
 func TestMulticaRuntimeProdSimAcceptanceObservesRunMessages(t *testing.T) {
 	tmp := t.TempDir()
 	registryPath := filepath.Join(tmp, "registry.json")

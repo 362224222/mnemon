@@ -60,19 +60,29 @@ func TestRegistryRoundTrip(t *testing.T) {
 }
 
 func TestMulticaParticipantLookups(t *testing.T) {
-	reg := MulticaRegistry{Participants: []MulticaParticipantRecord{{
-		Principal: "planner@team",
-		AgentName: "mnemon-planner",
-		AgentID:   "agent-planner",
-	}}}
+	reg := MulticaRegistry{Participants: []MulticaParticipantRecord{
+		{
+			Principal: "planner@team",
+			AgentName: "mnemon-planner",
+		},
+		{
+			Principal: "reviewer@team",
+			AgentName: "mnemon-reviewer",
+			AgentID:   "agent-reviewer",
+		},
+	}}
 	participant, ok := MulticaParticipantForPrincipal(reg, " planner@team ")
-	if !ok || participant.AgentID != "agent-planner" {
+	if !ok || participant.AgentName != "mnemon-planner" {
 		t.Fatalf("participant lookup = ok:%v %+v", ok, participant)
 	}
-	if got := MulticaPrincipalForAgent(reg, " agent-planner ", ""); got != "planner@team" {
+	participant, ok = FirstMulticaParticipantWithAgentID(reg)
+	if !ok || participant.Principal != "reviewer@team" {
+		t.Fatalf("first participant with agent id = ok:%v %+v", ok, participant)
+	}
+	if got := MulticaPrincipalForAgent(reg, " agent-reviewer ", ""); got != "reviewer@team" {
 		t.Fatalf("principal by agent id = %q", got)
 	}
-	if got := MulticaPrincipalForAgent(reg, "", " mnemon-planner "); got != "planner@team" {
+	if got := MulticaPrincipalForAgent(reg, "", " mnemon-reviewer "); got != "reviewer@team" {
 		t.Fatalf("principal by agent name = %q", got)
 	}
 }

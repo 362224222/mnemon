@@ -103,6 +103,15 @@ func MulticaParticipantForPrincipal(reg MulticaRegistry, principal string) (Mult
 	return MulticaParticipantRecord{}, false
 }
 
+func FirstMulticaParticipantWithAgentID(reg MulticaRegistry) (MulticaParticipantRecord, bool) {
+	for _, participant := range reg.Participants {
+		if strings.TrimSpace(participant.AgentID) != "" {
+			return participant, true
+		}
+	}
+	return MulticaParticipantRecord{}, false
+}
+
 func MulticaPrincipalForAgent(reg MulticaRegistry, agentID, agentName string) string {
 	agentID = strings.TrimSpace(agentID)
 	agentName = strings.TrimSpace(agentName)
