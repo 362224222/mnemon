@@ -362,6 +362,38 @@ func TestConnectCommandsWriteProductConfig(t *testing.T) {
 	}
 }
 
+func TestConnectMnemonhubKeepsExchangeOutOfActivationAndProjection(t *testing.T) {
+	root := t.TempDir()
+	oldRoot, oldPath := connectRoot, connectConfigPath
+	oldEndpoint := connectMnemonhubURL
+	connectRoot = root
+	connectConfigPath = ""
+	connectMnemonhubURL = "https://hub.example.invalid"
+	t.Cleanup(func() {
+		connectRoot, connectConfigPath = oldRoot, oldPath
+		connectMnemonhubURL = oldEndpoint
+	})
+
+	cmd, _ := testCommand()
+	if err := runConnectMnemonhub(cmd, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := loadProductConfigForTest(t, root)
+	if !cfg.Connections.Mnemonhub.Enabled || cfg.Connections.Mnemonhub.Endpoint != "https://hub.example.invalid" {
+		t.Fatalf("mnemonhub connection not written: %+v", cfg.Connections.Mnemonhub)
+	}
+	if !containsString(cfg.Daemon.InteractionWatchers, productconfig.ConnectionMnemonhub) {
+		t.Fatalf("mnemonhub watcher missing: %+v", cfg.Daemon.InteractionWatchers)
+	}
+	if containsString(cfg.Daemon.ProjectionSurfaces, productconfig.ConnectionMnemonhub) {
+		t.Fatalf("mnemonhub must remain an exchange backend, not projection surface: %+v", cfg.Daemon.ProjectionSurfaces)
+	}
+	if got := cfg.Sessions.PrimaryActivationCarrier; got != "" {
+		t.Fatalf("mnemonhub must not become primary activation carrier, got %q", got)
+	}
+}
+
 func loadProductConfigForTest(t *testing.T, root string) productconfig.Config {
 	t.Helper()
 	cfg, err := productconfig.Load(filepath.Join(root, productconfig.DefaultRelPath))

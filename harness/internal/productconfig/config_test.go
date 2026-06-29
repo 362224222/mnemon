@@ -64,6 +64,14 @@ func TestConfigValidateRejectsCrossLayerLeaks(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "remote exchange backend") {
 		t.Fatalf("expected mnemonhub projection surface error, got %v", err)
 	}
+
+	cfg = Default()
+	cfg.Connections.Mnemonhub = MnemonhubConnection{Enabled: true, Endpoint: "https://hub.example"}
+	cfg.Sessions.PrimaryActivationCarrier = ConnectionMnemonhub
+	err = cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "primary activation carrier") || !strings.Contains(err.Error(), "remote exchange backend") {
+		t.Fatalf("expected mnemonhub primary activation carrier error, got %v", err)
+	}
 }
 
 func TestConfigValidateRejectsDuplicateParticipants(t *testing.T) {

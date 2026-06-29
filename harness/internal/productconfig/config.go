@@ -185,7 +185,7 @@ func (cfg Config) Validate() error {
 			return fmt.Errorf("mnemonhub connection endpoint is required when enabled")
 		}
 	}
-	if err := validateCarrier("primary activation carrier", cfg.Sessions.PrimaryActivationCarrier, cfg); err != nil {
+	if err := validatePrimaryActivationCarrier(cfg.Sessions.PrimaryActivationCarrier, cfg); err != nil {
 		return err
 	}
 	switch strings.TrimSpace(cfg.Sessions.DuplicateActivationPolicy) {
@@ -221,6 +221,17 @@ func validateDaemonCarriers(label string, values []string, cfg Config) error {
 		seen[carrier] = true
 	}
 	return nil
+}
+
+func validatePrimaryActivationCarrier(carrier string, cfg Config) error {
+	carrier = strings.TrimSpace(carrier)
+	if carrier == "" {
+		return nil
+	}
+	if carrier == ConnectionMnemonhub {
+		return fmt.Errorf("primary activation carrier %q is unsupported; mnemonhub is a remote exchange backend", carrier)
+	}
+	return validateCarrier("primary activation carrier", carrier, cfg)
 }
 
 func validateProjectionSurfaces(values []string, cfg Config) error {
