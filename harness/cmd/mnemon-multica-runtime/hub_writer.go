@@ -238,7 +238,7 @@ func (s *runtimeRPCState) projectAssignmentMailboxes(ctx context.Context, cli dr
 					continue
 				}
 				fullMeta := projection.Metadata.Map()
-				dispatchMeta := assignmentMailboxDispatchMetadata(fullMeta)
+				dispatchMeta := multicasurface.AssignmentMailboxDispatchMetadata(fullMeta)
 				if err := cli.SetIssueMetadataMap(ctx, child.ID, dispatchMeta); err != nil {
 					recordErr(err)
 					continue
@@ -265,7 +265,7 @@ func (s *runtimeRPCState) projectAssignmentMailboxes(ctx context.Context, cli dr
 				mu.Lock()
 				created++
 				mu.Unlock()
-				if err := cli.SetIssueMetadataMap(ctx, child.ID, assignmentMailboxSupplementalMetadata(fullMeta, dispatchMeta)); err != nil {
+				if err := cli.SetIssueMetadataMap(ctx, child.ID, multicasurface.AssignmentMailboxSupplementalMetadata(fullMeta, dispatchMeta)); err != nil {
 					recordErr(err)
 				}
 			}
@@ -460,42 +460,6 @@ func runtimeMulticaHubLedgerPath(env []string, cwd string) string {
 		return driver.MulticaHubLedgerPath(workspace, "")
 	}
 	return driver.MulticaHubLedgerPath(cwd, "")
-}
-
-func assignmentMailboxDispatchMetadata(full map[string]string) map[string]string {
-	keys := []string{
-		driver.MulticaMetadataSchemaVersion,
-		driver.MulticaMetadataHubBackend,
-		driver.MulticaMetadataKind,
-		driver.MulticaMetadataSessionID,
-		driver.MulticaMetadataCorrelationID,
-		driver.MulticaMetadataEventID,
-		driver.MulticaMetadataAssignmentID,
-		driver.MulticaMetadataAssignmentFingerprint,
-		driver.MulticaMetadataPrincipal,
-		driver.MulticaMetadataSourceIssueID,
-		driver.MulticaMetadataRootIssueID,
-	}
-	out := map[string]string{}
-	for _, key := range keys {
-		if value := strings.TrimSpace(full[key]); value != "" {
-			out[key] = value
-		}
-	}
-	return out
-}
-
-func assignmentMailboxSupplementalMetadata(full, dispatch map[string]string) map[string]string {
-	out := map[string]string{}
-	for key, value := range full {
-		if _, ok := dispatch[key]; ok {
-			continue
-		}
-		if value = strings.TrimSpace(value); value != "" {
-			out[key] = value
-		}
-	}
-	return out
 }
 
 func multicaParticipantForPrincipal(reg driver.MulticaRegistry, principal string) (driver.MulticaParticipantRecord, bool) {

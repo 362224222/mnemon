@@ -376,6 +376,42 @@ func RootSessionMetadataMap(material RootSessionMetadataMaterial) map[string]str
 	return meta.Map()
 }
 
+func AssignmentMailboxDispatchMetadata(full map[string]string) map[string]string {
+	keys := []string{
+		MulticaMetadataSchemaVersion,
+		MulticaMetadataHubBackend,
+		MulticaMetadataKind,
+		MulticaMetadataSessionID,
+		MulticaMetadataCorrelationID,
+		MulticaMetadataEventID,
+		MulticaMetadataAssignmentID,
+		MulticaMetadataAssignmentFingerprint,
+		MulticaMetadataPrincipal,
+		MulticaMetadataSourceIssueID,
+		MulticaMetadataRootIssueID,
+	}
+	out := map[string]string{}
+	for _, key := range keys {
+		if value := strings.TrimSpace(full[key]); value != "" {
+			out[key] = value
+		}
+	}
+	return out
+}
+
+func AssignmentMailboxSupplementalMetadata(full, dispatch map[string]string) map[string]string {
+	out := map[string]string{}
+	for key, value := range full {
+		if _, ok := dispatch[key]; ok {
+			continue
+		}
+		if value = strings.TrimSpace(value); value != "" {
+			out[key] = value
+		}
+	}
+	return out
+}
+
 func NormalizeMulticaMetadata(raw any) map[string]string {
 	out := map[string]string{}
 	merge := func(key string, value any) {

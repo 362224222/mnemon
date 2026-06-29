@@ -130,6 +130,60 @@ func TestRootSessionMetadataMap(t *testing.T) {
 	}
 }
 
+func TestAssignmentMailboxMetadataGroupsDispatchBeforeSupplemental(t *testing.T) {
+	full := map[string]string{
+		MulticaMetadataSchemaVersion:         " 1 ",
+		MulticaMetadataHubBackend:            MulticaHubBackend,
+		MulticaMetadataKind:                  MulticaHubKindAssignmentMailbox,
+		MulticaMetadataSessionID:             "session-1",
+		MulticaMetadataCorrelationID:         "correlation-1",
+		MulticaMetadataEventID:               "event-1",
+		MulticaMetadataAssignmentID:          "asg-1",
+		MulticaMetadataAssignmentFingerprint: "sha256:abc",
+		MulticaMetadataPrincipal:             "worker@team",
+		MulticaMetadataSourceIssueID:         "root-1",
+		MulticaMetadataRootIssueID:           "root-1",
+		MulticaMetadataProjectionOwner:       " planner@team ",
+		MulticaMetadataProjectedAt:           "2026-06-29T09:00:00Z",
+		MulticaMetadataEnvelopeDigest:        "",
+	}
+	dispatch := AssignmentMailboxDispatchMetadata(full)
+	for _, key := range []string{
+		MulticaMetadataSchemaVersion,
+		MulticaMetadataHubBackend,
+		MulticaMetadataKind,
+		MulticaMetadataSessionID,
+		MulticaMetadataCorrelationID,
+		MulticaMetadataEventID,
+		MulticaMetadataAssignmentID,
+		MulticaMetadataAssignmentFingerprint,
+		MulticaMetadataPrincipal,
+		MulticaMetadataSourceIssueID,
+		MulticaMetadataRootIssueID,
+	} {
+		if strings.TrimSpace(full[key]) == "" {
+			continue
+		}
+		if got := dispatch[key]; got != strings.TrimSpace(full[key]) {
+			t.Fatalf("dispatch metadata[%s] = %q, want %q: %+v", key, got, strings.TrimSpace(full[key]), dispatch)
+		}
+	}
+	if _, ok := dispatch[MulticaMetadataProjectionOwner]; ok {
+		t.Fatalf("projection owner should be supplemental, not dispatch metadata: %+v", dispatch)
+	}
+
+	supplemental := AssignmentMailboxSupplementalMetadata(full, dispatch)
+	if supplemental[MulticaMetadataProjectionOwner] != "planner@team" {
+		t.Fatalf("supplemental metadata should trim projection owner: %+v", supplemental)
+	}
+	if _, ok := supplemental[MulticaMetadataAssignmentID]; ok {
+		t.Fatalf("supplemental metadata must not duplicate dispatch keys: %+v", supplemental)
+	}
+	if _, ok := supplemental[MulticaMetadataEnvelopeDigest]; ok {
+		t.Fatalf("empty supplemental metadata must be omitted: %+v", supplemental)
+	}
+}
+
 func TestFileHubLedgerDedupesRecords(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "hub-ledger.jsonl")
 	ledger := NewFileMulticaHubLedger(path)
