@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/driver"
+	multicasurface "github.com/mnemon-dev/mnemon/harness/internal/surface/multica"
 	"github.com/spf13/cobra"
 )
 
@@ -628,11 +629,11 @@ func waitMulticaHubProjectionCompletion(ctx context.Context, cli driver.MulticaC
 }
 
 func multicaHubProjectionComplete(root driver.MulticaIssue, children []driver.MulticaIssue, childComments map[string][]driver.MulticaComment) bool {
-	if !multicaIssueStatusDone(root.Status) || len(children) == 0 {
+	if !multicasurface.IssueStatusDone(root.Status) || len(children) == 0 {
 		return false
 	}
 	for _, child := range children {
-		if !multicaIssueStatusDone(child.Status) {
+		if !multicasurface.IssueStatusDone(child.Status) {
 			return false
 		}
 		if !multicaCommentsContainFeedbackMarker(childComments[child.ID]) {
@@ -650,15 +651,6 @@ func multicaCommentsContainFeedbackMarker(comments []driver.MulticaComment) bool
 		}
 	}
 	return false
-}
-
-func multicaIssueStatusDone(status string) bool {
-	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "done", "completed", "complete":
-		return true
-	default:
-		return false
-	}
 }
 
 func multicaIssueStatuses(issues []driver.MulticaIssue) map[string]string {

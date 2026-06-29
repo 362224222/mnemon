@@ -15,6 +15,7 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	pview "github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation/view"
 	"github.com/mnemon-dev/mnemon/harness/internal/projection"
+	multicasurface "github.com/mnemon-dev/mnemon/harness/internal/surface/multica"
 )
 
 func (s *runtimeRPCState) writeMulticaHubArtifacts(ctx context.Context, cli driver.MulticaCLI, client *access.Client, rootIssue driver.MulticaIssue, result *runtimeImportResult) {
@@ -223,8 +224,8 @@ func (s *runtimeRPCState) projectAssignmentMailboxes(ctx context.Context, cli dr
 					continue
 				}
 				child, err := cli.CreateIssue(ctx, driver.MulticaCreateIssueRequest{
-					Title:       assignmentMailboxTitle(projection.Item),
-					Description: assignmentMailboxDescription(projection.Item, projection.Result),
+					Title:       multicasurface.AssignmentMailboxTitle(assignmentMailboxMaterial(projection.Item, projection.Result)),
+					Description: multicasurface.AssignmentMailboxDescription(assignmentMailboxMaterial(projection.Item, projection.Result)),
 					ParentID:    projection.Result.RootIssueID,
 					Status:      "in_progress",
 					Priority:    "medium",
@@ -307,20 +308,21 @@ func (s *runtimeRPCState) writeProgressComments(ctx context.Context, cli driver.
 		if !ok {
 			continue
 		}
+		material := progressFeedbackMaterial(item)
 		commentBody := projection.FormatComment(projection.CommentMaterial{
 			Title:    "assignment feedback",
-			Body:     progressCommentBody(item),
+			Body:     multicasurface.ProgressCommentBody(material),
 			EventIDs: []string{item.EventID},
 		})
 		comment, err := cli.AddIssueComment(ctx, child, commentBody)
 		if err != nil {
 			return err
 		}
-		if status := multicaStatusForProgress(item); status != "" {
+		if status := multicasurface.ProgressIssueStatus(material); status != "" {
 			_, _ = cli.SetIssueStatus(ctx, child, status)
 		}
 		rootStatus := "in_review"
-		if multicaProgressCompletesAssignment(item) {
+		if multicasurface.ProgressCompletesAssignment(material) {
 			if done, _ := allMulticaAssignmentChildrenDone(ctx, cli, result.RootIssueID, result.SessionID, child); done {
 				rootStatus = "done"
 			}
@@ -341,31 +343,6 @@ func (s *runtimeRPCState) writeProgressComments(ctx context.Context, cli driver.
 		result.HubFeedbackComments++
 	}
 	return nil
-}
-
-func multicaStatusForProgress(item runtimeProgress) string {
-	switch strings.ToLower(strings.TrimSpace(item.FeedbackKind)) {
-	case "blocker":
-		return "blocked"
-	case "result":
-		return "done"
-	case "progress":
-		return "in_progress"
-	}
-	if strings.TrimSpace(item.Blocker) != "" {
-		return "blocked"
-	}
-	if strings.TrimSpace(item.Result) != "" {
-		return "done"
-	}
-	return ""
-}
-
-func multicaProgressCompletesAssignment(item runtimeProgress) bool {
-	if strings.EqualFold(strings.TrimSpace(item.FeedbackKind), "result") {
-		return true
-	}
-	return strings.TrimSpace(item.Result) != ""
 }
 
 type runtimeAssignment struct {
@@ -667,64 +644,31 @@ func hubStringList(raw any) []string {
 	return out
 }
 
-func assignmentMailboxTitle(item runtimeAssignment) string {
-	scope := strings.TrimSpace(item.Scope)
-	if scope == "" {
-		scope = strings.TrimSpace(item.ID)
+func assignmentMailboxMaterial(item runtimeAssignment, result *runtimeImportResult) multicasurface.AssignmentMailboxMaterial {
+	material := multicasurface.AssignmentMailboxMaterial{
+		ID:               item.ID,
+		Scope:            item.Scope,
+		Assignee:         item.Assignee,
+		ExpectedWork:     item.ExpectedWork,
+		ExpectedFeedback: item.ExpectedFeedback,
+		Rationale:        item.Rationale,
 	}
-	if scope == "" {
-		scope = "assignment"
+	if result != nil {
+		material.SessionID = result.SessionID
 	}
-	return "Mnemon assignment " + item.ID + ": " + scope
+	return material
 }
 
-func assignmentMailboxDescription(item runtimeAssignment, result *runtimeImportResult) string {
-	var b strings.Builder
-	b.WriteString("Mnemon assignment mailbox\n\n")
-	writeLine := func(label, value string) {
-		value = strings.TrimSpace(value)
-		if value == "" {
-			return
-		}
-		b.WriteString(label)
-		b.WriteString(": ")
-		b.WriteString(value)
-		b.WriteString("\n")
+func progressFeedbackMaterial(item runtimeProgress) multicasurface.ProgressFeedbackMaterial {
+	return multicasurface.ProgressFeedbackMaterial{
+		AssignmentRef: item.AssignmentRef,
+		FeedbackKind:  item.FeedbackKind,
+		Summary:       item.Summary,
+		Result:        item.Result,
+		Blocker:       item.Blocker,
+		ArtifactRefs:  item.ArtifactRefs,
+		EvidenceRefs:  item.EvidenceRefs,
 	}
-	writeLine("Assignment", item.ID)
-	writeLine("Session", result.SessionID)
-	writeLine("Scope", item.Scope)
-	writeLine("Assignee", item.Assignee)
-	writeLine("Expected work", item.ExpectedWork)
-	writeLine("Expected feedback", item.ExpectedFeedback)
-	writeLine("Rationale", item.Rationale)
-	return strings.TrimSpace(b.String())
-}
-
-func progressCommentBody(item runtimeProgress) string {
-	var b strings.Builder
-	writeLine := func(label, value string) {
-		value = strings.TrimSpace(value)
-		if value == "" {
-			return
-		}
-		b.WriteString(label)
-		b.WriteString(": ")
-		b.WriteString(value)
-		b.WriteString("\n")
-	}
-	writeLine("Assignment", item.AssignmentRef)
-	writeLine("Feedback", item.FeedbackKind)
-	writeLine("Summary", item.Summary)
-	writeLine("Result", item.Result)
-	writeLine("Blocker", item.Blocker)
-	if len(item.ArtifactRefs) > 0 {
-		writeLine("Artifacts", strings.Join(item.ArtifactRefs, ", "))
-	}
-	if len(item.EvidenceRefs) > 0 {
-		writeLine("Evidence", strings.Join(item.EvidenceRefs, ", "))
-	}
-	return strings.TrimSpace(b.String())
 }
 
 func findExistingMulticaAssignmentIssue(ctx context.Context, cli driver.MulticaCLI, rootIssueID string, source driver.MulticaHubLedgerSource) (driver.MulticaIssue, bool, error) {

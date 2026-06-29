@@ -17,6 +17,7 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation"
 	pview "github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation/view"
+	multicasurface "github.com/mnemon-dev/mnemon/harness/internal/surface/multica"
 )
 
 func TestRuntimeEnvValueUsesLastValue(t *testing.T) {
@@ -805,7 +806,7 @@ func TestMulticaStatusForProgressIsRuleBased(t *testing.T) {
 		{name: "result narrative fallback", item: runtimeProgress{Result: "validated"}, want: "done"},
 		{name: "unknown", item: runtimeProgress{Summary: "not enough signal"}, want: ""},
 	} {
-		if got := multicaStatusForProgress(tc.item); got != tc.want {
+		if got := multicasurface.ProgressIssueStatus(progressFeedbackMaterial(tc.item)); got != tc.want {
 			t.Fatalf("%s: status = %q, want %q", tc.name, got, tc.want)
 		}
 	}
