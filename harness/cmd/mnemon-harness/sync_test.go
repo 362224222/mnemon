@@ -11,11 +11,14 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/app"
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/state"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemonhub"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemonhub/exchange"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
@@ -266,6 +269,127 @@ func TestSyncPullOnceImportsRemoteAssignmentThroughLocalMnemon(t *testing.T) {
 	items = localResourceItemsForTest(t, storePath, ref)
 	if len(items) != 1 {
 		t.Fatalf("duplicate assignment pull must not duplicate items: %+v", items)
+	}
+}
+
+func TestSyncPushPullOnceRoundTripsThroughMnemonHub(t *testing.T) {
+	restoreSyncFlags(t)
+	root := t.TempDir()
+	storePath := filepath.Join(root, runtime.DefaultStorePath)
+	ref := contract.ResourceRef{Kind: "progress_digest", ID: "project"}
+
+	localBinding := access.HostAgentBinding("codex@project", "http://127.0.0.1:8787", []contract.ResourceRef{ref})
+	local, err := app.OpenLocalRuntime(storePath, access.LoadedBindings{Bindings: []access.ChannelBinding{localBinding}}, nil, nil)
+	if err != nil {
+		t.Fatalf("open local runtime: %v", err)
+	}
+	if _, _, err := local.API().Ingest("codex@project", contract.ObservationEnvelope{
+		ExternalID: "hub-cli-local-progress",
+		Event:      contract.Event{Type: "progress_digest.write_candidate.observed", Payload: cmdR2Progress("manual sync push reaches mnemonhub")},
+	}); err != nil {
+		t.Fatalf("local observe: %v", err)
+	}
+	if _, err := local.Tick(); err != nil {
+		t.Fatalf("local tick: %v", err)
+	}
+	if err := local.Close(); err != nil {
+		t.Fatalf("close local runtime: %v", err)
+	}
+
+	hubStore, err := state.OpenStore(filepath.Join(t.TempDir(), "hub.db"))
+	if err != nil {
+		t.Fatalf("open hub store: %v", err)
+	}
+	defer hubStore.Close()
+	grants := mnemonhub.GrantMap{
+		"replica-local@team": {Principal: "replica-local@team", Scopes: []contract.ResourceRef{ref}},
+		"replica-other@team": {Principal: "replica-other@team", Scopes: []contract.ResourceRef{ref}},
+	}
+	tokens := map[string]contract.ActorID{
+		"tok-local": "replica-local@team",
+		"tok-other": "replica-other@team",
+	}
+	hub := mnemonhub.New(hubStore, grants, func() string { return time.Now().UTC().Format(time.RFC3339) })
+	hubSrv := httptest.NewServer(mnemonhub.NewHTTPHandler(hub, mnemonhub.BearerAuthenticator{Tokens: tokens}, nil))
+	defer hubSrv.Close()
+
+	foreignFields := remoteProgressFields("hub-cli-remote-entry", "manual sync pull imports from mnemonhub")
+	foreignMaterial := contract.SyncedEventMaterial{
+		OriginReplicaID: "other-replica",
+		LocalDecisionID: "dec-hub-cli-remote",
+		LocalIngestSeq:  9,
+		Actor:           "codex@other",
+		ResourceRef:     ref,
+		ResourceVersion: 1,
+		FieldsDigest:    syncTestDigest(foreignFields),
+		Fields:          foreignFields,
+		DecidedAt:       "2026-06-30T00:00:00Z",
+		Status:          "pending",
+	}
+	otherClient, err := access.NewSyncClient(hubSrv.URL, access.SyncClientConfig{Token: "tok-other"})
+	if err != nil {
+		t.Fatalf("build other hub client: %v", err)
+	}
+	if resp, err := otherClient.SyncPush(contract.SyncPushRequest{
+		ReplicaID: "other-replica",
+		BatchID:   "seed-hub-cli-remote",
+		Events:    syncTestEvents(t, foreignMaterial),
+	}); err != nil || len(resp.Accepted) != 1 {
+		t.Fatalf("seed hub remote material: resp=%+v err=%v", resp, err)
+	}
+
+	syncRoot = root
+	syncStorePath = storePath
+	syncRemoteID = "hub"
+	syncRemoteURL = hubSrv.URL
+	syncRemoteToken = "tok-local"
+	var out bytes.Buffer
+	cmd := mustTestCommand(t)
+	cmd.SetOut(&out)
+	if err := runSyncPush(cmd, nil); err != nil {
+		t.Fatalf("sync push to mnemonhub: %v", err)
+	}
+	if !strings.Contains(out.String(), "Sync push: 1 accepted, 0 rejected, 0 conflicts") {
+		t.Fatalf("unexpected hub push output: %s", out.String())
+	}
+	st, err := syncStatusForTest(storePath)
+	if err != nil {
+		t.Fatalf("status after hub push: %v", err)
+	}
+	if st.SyncPending != 0 || st.SyncSynced != 1 {
+		t.Fatalf("hub push must ack local synced event, got %+v", st)
+	}
+	hubStatus, err := hub.Status("replica-local@team")
+	if err != nil || hubStatus.HubEventsReceived != 2 {
+		t.Fatalf("hub must hold seeded and pushed events: %+v err=%v", hubStatus, err)
+	}
+
+	out.Reset()
+	cmd = mustTestCommand(t)
+	cmd.SetOut(&out)
+	if err := runSyncPull(cmd, nil); err != nil {
+		t.Fatalf("sync pull from mnemonhub: %v", err)
+	}
+	if !strings.Contains(out.String(), "Sync pull: 1 events") {
+		t.Fatalf("unexpected hub pull output: %s", out.String())
+	}
+	content := localResourceContentForTest(t, storePath, ref)
+	if !strings.Contains(content, "manual sync push reaches mnemonhub") || !strings.Contains(content, "manual sync pull imports from mnemonhub") {
+		t.Fatalf("manual hub round trip not visible through local presentation view:\n%s", content)
+	}
+
+	out.Reset()
+	cmd = mustTestCommand(t)
+	cmd.SetOut(&out)
+	if err := runSyncPull(cmd, nil); err != nil {
+		t.Fatalf("second sync pull from mnemonhub: %v", err)
+	}
+	if !strings.Contains(out.String(), "Sync pull: 0 events") {
+		t.Fatalf("second hub pull must be cursor-idempotent, got %s", out.String())
+	}
+	content = localResourceContentForTest(t, storePath, ref)
+	if strings.Count(content, "manual sync pull imports from mnemonhub") != 1 {
+		t.Fatalf("second hub pull duplicated imported progress:\n%s", content)
 	}
 }
 
