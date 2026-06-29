@@ -79,6 +79,9 @@ func daemonUp(args []string, out, errw io.Writer) error {
 	if pid, alive := readLivePid(pidPath); alive {
 		return fmt.Errorf("already running (pid %d); run `mnemond down` first", pid)
 	}
+	if err := ensureListenAddrAvailable(cfg.listenAddr); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
@@ -113,6 +116,14 @@ func daemonUp(args []string, out, errw io.Writer) error {
 	_ = child.Process.Release()
 	fmt.Fprintf(out, "mnemond: started (pid %d) on %s\nlogs: %s\n", pid, cfg.listenAddr, logPath)
 	return nil
+}
+
+func ensureListenAddrAvailable(addr string) error {
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("listen address %s is unavailable: %w", addr, err)
+	}
+	return ln.Close()
 }
 
 // waitListening confirms the detached child came up: it polls for the child to accept a TCP

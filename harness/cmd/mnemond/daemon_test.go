@@ -2,11 +2,16 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/mnemon-dev/mnemon/harness/internal/app"
 )
 
 // status/down/logs operate on the pidfile + logfile under .mnemon/harness/local without spawning a
@@ -98,6 +103,32 @@ func TestDaemonLogsNoFileYet(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "no log yet") {
 		t.Fatalf("logs with no file must say so, got %q", out.String())
+	}
+}
+
+func TestDaemonUpRefusesOccupiedListenAddress(t *testing.T) {
+	root := t.TempDir()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	addr := ln.Addr().String()
+	if _, err := app.New(root).Setup(context.Background(), io.Discard, io.Discard, app.SetupOptions{
+		Host:       "codex",
+		Principal:  "planner@team",
+		ControlURL: "http://" + addr,
+	}); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	var out bytes.Buffer
+	err = daemonUp([]string{"--root", root, "--addr", addr}, &out, &out)
+	if err == nil || !strings.Contains(err.Error(), "listen address") || !strings.Contains(err.Error(), "unavailable") {
+		t.Fatalf("daemon up should refuse occupied address, got %v output=%q", err, out.String())
+	}
+	_, pidPath, _ := daemonPaths(root)
+	if _, err := os.Stat(pidPath); !os.IsNotExist(err) {
+		t.Fatalf("daemon up must not write pidfile when address is occupied, stat err=%v", err)
 	}
 }
 
