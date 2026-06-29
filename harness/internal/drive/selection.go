@@ -19,6 +19,23 @@ type ManagedWakeMatchMaterial struct {
 }
 
 func ManagedWakeCandidateForRender(principal string, resp presentation.Response, material ManagedWakeMatchMaterial) (ManagedWakeCandidate, bool) {
+	strongTerms := ManagedWakeStrongMatchTerms(material)
+	if len(strongTerms) > 0 {
+		for _, env := range resp.Events {
+			candidates := ManagedWakeCandidatesFromEvents(principal, []eventmodel.EventEnvelope{env})
+			if len(candidates) == 0 {
+				continue
+			}
+			candidate := candidates[0]
+			candidate.RenderAuditID = resp.AuditID
+			candidate.RenderBodyDigest = resp.BodyDigest
+			if eventNarrativeContainsAny(env, strongTerms) {
+				return candidate, true
+			}
+		}
+		return ManagedWakeCandidate{}, false
+	}
+
 	terms := ManagedWakeMatchTerms(material)
 	var fallback ManagedWakeCandidate
 	for _, env := range resp.Events {
@@ -40,6 +57,16 @@ func ManagedWakeCandidateForRender(principal string, resp presentation.Response,
 		return fallback, true
 	}
 	return ManagedWakeCandidate{}, false
+}
+
+func ManagedWakeStrongMatchTerms(material ManagedWakeMatchMaterial) []string {
+	if len(material.MatchTerms) > 0 {
+		return CleanManagedWakeMatchTerms(material.MatchTerms...)
+	}
+	if material.AssignmentID != "" || material.AssignmentFingerprint != "" {
+		return CleanManagedWakeMatchTerms(material.AssignmentID, material.AssignmentFingerprint)
+	}
+	return CleanManagedWakeMatchTerms(material.IssueID, material.Identifier, material.TaskID)
 }
 
 func ManagedWakeMatchTerms(material ManagedWakeMatchMaterial) []string {

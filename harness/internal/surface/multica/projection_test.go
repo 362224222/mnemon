@@ -53,6 +53,18 @@ func TestAssignmentMailboxTitleStripsRootLabelFromScope(t *testing.T) {
 	}
 }
 
+func TestAssignmentMailboxTitleUsesAssignmentIDForBroadDrillScope(t *testing.T) {
+	item := AssignmentMailboxMaterial{
+		ID:             "assignment-tea66-routing-isolation",
+		Scope:          "TEA-66 Mnemon R2 hub-flow readiness drill",
+		RootIssueLabel: "TEA-66",
+		ExpectedWork:   "Validate assignment child issue routing and stale or cross-session isolation.",
+	}
+	if got := AssignmentMailboxTitle(item); got != "TEA-66: routing isolation" {
+		t.Fatalf("title = %q", got)
+	}
+}
+
 func TestAssignmentMailboxDescriptionNormalizesProtocolFeedback(t *testing.T) {
 	body := AssignmentMailboxDescription(AssignmentMailboxMaterial{
 		ID:               "asg-1",

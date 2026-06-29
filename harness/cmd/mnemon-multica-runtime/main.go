@@ -472,8 +472,9 @@ func (s *runtimeRPCState) correlateAssignmentMailbox(ctx context.Context, cli dr
 		result.HubMetadata.EventID,
 		string(eventmodel.Subject("assignment", result.AssignmentID)),
 	)
-	emitRuntimeCommand(progress, "mnemon multica assignment correlate --issue "+issue.ID, "Assignment mailbox correlated: "+runtimeAssignmentLabel(*result)+".", 0)
-	emitRuntimeProgress(progress, "Assignment mailbox correlated: "+runtimeAssignmentLabel(*result)+".")
+	correlationProgress := runtimeAssignmentCorrelationProgress(*result)
+	emitRuntimeCommand(progress, "mnemon multica assignment correlate --issue "+issue.ID, correlationProgress, 0)
+	emitRuntimeProgress(progress, correlationProgress)
 	addr := strings.TrimSpace(envValue(s.Env, "MNEMON_CONTROL_ADDR"))
 	var client *access.Client
 	if addr == "" {
@@ -501,6 +502,24 @@ func (s *runtimeRPCState) correlateAssignmentMailbox(ctx context.Context, cli dr
 	emitRuntimeCommand(progress, "multica issue comment add "+issue.ID, runtimeProjectionProgress(*result), runtimeExitCode(result.ProjectionErr))
 	emitRuntimeProgress(progress, runtimeProjectionProgress(*result))
 	return *result
+}
+
+func runtimeAssignmentCorrelationProgress(result runtimeImportResult) string {
+	var b strings.Builder
+	b.WriteString("Mnemon assignment mailbox: correlated")
+	if result.AssignmentID != "" {
+		b.WriteString(" assignment=")
+		b.WriteString(result.AssignmentID)
+	} else if label := strings.TrimSpace(runtimeAssignmentLabel(result)); label != "" {
+		b.WriteString(" assignment=")
+		b.WriteString(label)
+	}
+	if result.SessionID != "" {
+		b.WriteString(" session=")
+		b.WriteString(result.SessionID)
+	}
+	b.WriteString(".")
+	return b.String()
 }
 
 func applyMulticaHubMetadata(result *runtimeImportResult, meta driver.MulticaHubMetadata) {
@@ -577,6 +596,8 @@ func (s *runtimeRPCState) wakeManagedAgent(result *runtimeImportResult, progress
 		Lifecycle:     envDefault(s.Env, "MNEMON_MANAGED_RENDER_LIFECYCLE", "remind"),
 		Surface:       "runtime",
 		RenderIntent:  presentation.IntentTeamworkEvents,
+		SessionID:     result.SessionID,
+		InputDigest:   runtimeManagedWakeScopeID(*result),
 	})
 	if err != nil {
 		result.WakeStatus = "failed"
@@ -589,7 +610,8 @@ func (s *runtimeRPCState) wakeManagedAgent(result *runtimeImportResult, progress
 		result.WakeErr = fmt.Errorf("no managed wake candidate in rendered context")
 		return
 	}
-	client, workspace, err := runtimeManagedTurnClient(s.Env, s.CWD, runtimeName)
+	managedEnv := runtimeManagedTurnEnv(s.Env, *result)
+	client, workspace, err := runtimeManagedTurnClient(managedEnv, s.CWD, runtimeName)
 	if err != nil {
 		result.WakeStatus = "failed"
 		result.WakeErr = err
@@ -620,6 +642,25 @@ func (s *runtimeRPCState) wakeManagedAgent(result *runtimeImportResult, progress
 	}
 }
 
+func runtimeManagedWakeScopeID(result runtimeImportResult) string {
+	return firstNonEmpty(result.AssignmentID, result.RootIssueID, result.IssueID)
+}
+
+func runtimeManagedTurnEnv(env []string, result runtimeImportResult) []string {
+	out := append([]string(nil), env...)
+	add := func(key, value string) {
+		value = strings.TrimSpace(value)
+		if value == "" || envValue(out, key) != "" {
+			return
+		}
+		out = append(out, key+"="+value)
+	}
+	add("MNEMON_RENDER_HOST", "multica")
+	add("MNEMON_RENDER_SESSION_ID", result.SessionID)
+	add("MNEMON_RENDER_INPUT_ID", runtimeManagedWakeScopeID(result))
+	return out
+}
+
 type runtimeHubProjectionDelta struct {
 	ChildIssues      int
 	FeedbackComments int
@@ -628,7 +669,7 @@ type runtimeHubProjectionDelta struct {
 }
 
 func (d runtimeHubProjectionDelta) active() bool {
-	return d.ChildIssues > 0 || d.FeedbackComments > 0
+	return d.ChildIssues > 0 || d.FeedbackComments > 0 || d.Err != nil
 }
 
 func (s *runtimeRPCState) wakeManagedAgentWithHubProjection(ctx context.Context, cli driver.MulticaCLI, client *access.Client, rootIssue driver.MulticaIssue, result *runtimeImportResult, progress runtimeProgressSink) []runtimeHubProjectionDelta {

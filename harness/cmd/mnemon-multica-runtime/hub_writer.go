@@ -3,10 +3,11 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
@@ -191,95 +192,105 @@ func (s *runtimeRPCState) projectAssignmentMailboxes(ctx context.Context, cli dr
 	if len(projections) == 0 {
 		return 0, nil
 	}
-	const maxAssignmentWorkers = 3
-	workers := maxAssignmentWorkers
-	if len(projections) < workers {
-		workers = len(projections)
-	}
-	jobs := make(chan runtimeAssignmentProjection)
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	var ledgerMu sync.Mutex
-	var firstErr error
 	created := 0
-	recordErr := func(err error) {
-		if err == nil {
-			return
-		}
-		mu.Lock()
-		defer mu.Unlock()
-		if firstErr == nil {
-			firstErr = err
-		}
-	}
-	hasErr := func() bool {
-		mu.Lock()
-		defer mu.Unlock()
-		return firstErr != nil
-	}
-	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for projection := range jobs {
-				if hasErr() {
-					continue
-				}
-				material := assignmentMailboxMaterial(projection.Item, projection.Result, projection.RootIssue, projection.Participant)
-				child, err := cli.CreateIssue(ctx, driver.MulticaCreateIssueRequest{
-					Title:       multicasurface.AssignmentMailboxTitle(material),
-					Description: multicasurface.AssignmentMailboxDescription(material),
-					ParentID:    projection.Result.RootIssueID,
-					Status:      "in_progress",
-					Priority:    "medium",
-				})
-				if err != nil {
-					recordErr(err)
-					continue
-				}
-				fullMeta := projection.Metadata.Map()
-				dispatchMeta := multicasurface.AssignmentMailboxDispatchMetadata(fullMeta)
-				if err := cli.SetIssueMetadataMap(ctx, child.ID, dispatchMeta); err != nil {
-					recordErr(err)
-					continue
-				}
-				if _, err := cli.AssignIssue(ctx, child.ID, projection.Participant.AgentID); err != nil {
-					recordErr(err)
-					continue
-				}
-				ledgerMu.Lock()
-				err = ledger.Record(driver.MulticaHubLedgerRecord{
-					Kind:   driver.MulticaHubKindAssignmentMailbox,
-					Source: projection.Source,
-					Target: driver.MulticaHubLedgerTarget{
-						RootIssueID:  projection.Result.RootIssueID,
-						ChildIssueID: child.ID,
-						Status:       "created",
-					},
-				})
-				ledgerMu.Unlock()
-				if err != nil {
-					recordErr(err)
-					continue
-				}
-				mu.Lock()
-				created++
-				mu.Unlock()
-				if err := cli.SetIssueMetadataMap(ctx, child.ID, multicasurface.AssignmentMailboxSupplementalMetadata(fullMeta, dispatchMeta)); err != nil {
-					recordErr(err)
-				}
-			}
-		}()
-	}
+	var errs []error
 	for _, projection := range projections {
-		if hasErr() {
-			break
+		material := assignmentMailboxMaterial(projection.Item, projection.Result, projection.RootIssue, projection.Participant)
+		child, err := retryMulticaHubValue(ctx, func() (driver.MulticaIssue, error) {
+			return cli.CreateIssue(ctx, driver.MulticaCreateIssueRequest{
+				Title:          multicasurface.AssignmentMailboxTitle(material),
+				Description:    multicasurface.AssignmentMailboxDescription(material),
+				ParentID:       projection.Result.RootIssueID,
+				Status:         "in_progress",
+				Priority:       "medium",
+				AllowDuplicate: true,
+			})
+		})
+		if err != nil {
+			errs = append(errs, fmt.Errorf("create assignment mailbox %s: %w", projection.Item.ID, err))
+			continue
 		}
-		jobs <- projection
+		fullMeta := projection.Metadata.Map()
+		dispatchMeta := multicasurface.AssignmentMailboxDispatchMetadata(fullMeta)
+		if err := setMulticaHubMetadataMap(ctx, cli, child.ID, dispatchMeta); err != nil {
+			errs = append(errs, fmt.Errorf("tag assignment mailbox %s (%s): %w", projection.Item.ID, child.ID, err))
+			continue
+		}
+		if _, err := retryMulticaHubValue(ctx, func() (driver.MulticaIssue, error) {
+			return cli.AssignIssue(ctx, child.ID, projection.Participant.AgentID)
+		}); err != nil {
+			errs = append(errs, fmt.Errorf("assign assignment mailbox %s (%s): %w", projection.Item.ID, child.ID, err))
+			continue
+		}
+		if err := ledger.Record(driver.MulticaHubLedgerRecord{
+			Kind:   driver.MulticaHubKindAssignmentMailbox,
+			Source: projection.Source,
+			Target: driver.MulticaHubLedgerTarget{
+				RootIssueID:  projection.Result.RootIssueID,
+				ChildIssueID: child.ID,
+				Status:       "created",
+			},
+		}); err != nil {
+			return created, err
+		}
+		created++
+		if err := setMulticaHubMetadataMap(ctx, cli, child.ID, multicasurface.AssignmentMailboxSupplementalMetadata(fullMeta, dispatchMeta)); err != nil {
+			errs = append(errs, fmt.Errorf("tag supplemental assignment mailbox %s (%s): %w", projection.Item.ID, child.ID, err))
+			continue
+		}
 	}
-	close(jobs)
-	wg.Wait()
-	return created, firstErr
+	return created, errors.Join(errs...)
+}
+
+func setMulticaHubMetadataMap(ctx context.Context, cli driver.MulticaCLI, issueID string, values map[string]string) error {
+	keys := make([]string, 0, len(values))
+	for key, value := range values {
+		if strings.TrimSpace(key) == "" || strings.TrimSpace(value) == "" {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	var errs []error
+	for _, key := range keys {
+		value := values[key]
+		if err := retryMulticaHubOperation(ctx, func() error {
+			return cli.SetIssueMetadata(ctx, issueID, key, value, "string")
+		}); err != nil {
+			errs = append(errs, fmt.Errorf("set %s: %w", key, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func retryMulticaHubOperation(ctx context.Context, op func() error) error {
+	_, err := retryMulticaHubValue(ctx, func() (struct{}, error) {
+		return struct{}{}, op()
+	})
+	return err
+}
+
+func retryMulticaHubValue[T any](ctx context.Context, op func() (T, error)) (T, error) {
+	var zero T
+	const attempts = 3
+	var err error
+	for attempt := 0; attempt < attempts; attempt++ {
+		if attempt > 0 {
+			timer := time.NewTimer(time.Duration(attempt) * 250 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return zero, ctx.Err()
+			case <-timer.C:
+			}
+		}
+		var value T
+		value, err = op()
+		if err == nil {
+			return value, nil
+		}
+	}
+	return zero, err
 }
 
 func (s *runtimeRPCState) writeProgressComments(ctx context.Context, cli driver.MulticaCLI, ledger *driver.FileMulticaHubLedger, proj pview.View, result *runtimeImportResult) error {
@@ -299,9 +310,30 @@ func (s *runtimeRPCState) writeProgressComments(ctx context.Context, cli driver.
 			Principal:      item.Actor,
 			ProjectionKind: "progress",
 		}
-		if _, ok, err := ledger.Find(driver.MulticaHubKindFeedbackCarrier, source); err != nil {
+		material := progressFeedbackMaterial(item)
+		if rec, ok, err := ledger.Find(driver.MulticaHubKindFeedbackCarrier, source); err != nil {
 			return err
 		} else if ok {
+			child := strings.TrimSpace(rec.Target.ChildIssueID)
+			if child == "" {
+				var found bool
+				child, found, err = findAssignmentTargetFromLedger(ledger, result.SessionID, item.AssignmentRef)
+				if err != nil {
+					return err
+				}
+				if !found {
+					child, found, err = findAssignmentTargetFromMulticaHub(ctx, cli, result.RootIssueID, result.SessionID, item.AssignmentRef)
+					if err != nil {
+						return err
+					}
+				}
+				if !found {
+					continue
+				}
+			}
+			if err := s.ensureProgressIssueStatuses(ctx, cli, result, child, material); err != nil {
+				return err
+			}
 			continue
 		}
 		child, ok, err := findAssignmentTargetFromLedger(ledger, result.SessionID, item.AssignmentRef)
@@ -317,7 +349,6 @@ func (s *runtimeRPCState) writeProgressComments(ctx context.Context, cli driver.
 		if !ok {
 			continue
 		}
-		material := progressFeedbackMaterial(item)
 		commentBody := projection.FormatComment(projection.CommentMaterial{
 			Title:        "assignment feedback",
 			Body:         multicasurface.ProgressCommentBody(material),
@@ -330,15 +361,8 @@ func (s *runtimeRPCState) writeProgressComments(ctx context.Context, cli driver.
 		if err != nil {
 			return err
 		}
-		if status := multicasurface.ProgressIssueStatus(material); status != "" {
-			_, _ = cli.SetIssueStatus(ctx, child, status)
-		}
-		allDone := false
-		if multicasurface.ProgressCompletesAssignment(material) {
-			allDone, _ = allMulticaAssignmentChildrenDone(ctx, cli, result.RootIssueID, result.SessionID, child)
-		}
-		if rootStatus := multicasurface.ProgressRootIssueStatus(material, allDone); rootStatus != "" {
-			_, _ = cli.SetIssueStatus(ctx, result.RootIssueID, rootStatus)
+		if err := s.ensureProgressIssueStatuses(ctx, cli, result, child, material); err != nil {
+			return err
 		}
 		if err := ledger.Record(driver.MulticaHubLedgerRecord{
 			Kind:   driver.MulticaHubKindFeedbackCarrier,
@@ -353,6 +377,34 @@ func (s *runtimeRPCState) writeProgressComments(ctx context.Context, cli driver.
 			return err
 		}
 		result.HubFeedbackComments++
+	}
+	return nil
+}
+
+func (s *runtimeRPCState) ensureProgressIssueStatuses(ctx context.Context, cli driver.MulticaCLI, result *runtimeImportResult, child string, material multicasurface.ProgressFeedbackMaterial) error {
+	if status := multicasurface.ProgressIssueStatus(material); status != "" {
+		if err := retryMulticaHubOperation(ctx, func() error {
+			_, err := cli.SetIssueStatus(ctx, child, status)
+			return err
+		}); err != nil {
+			return fmt.Errorf("set assignment feedback issue %s status %s: %w", child, status, err)
+		}
+	}
+	allDone := false
+	if multicasurface.ProgressCompletesAssignment(material) {
+		var err error
+		allDone, err = allMulticaAssignmentChildrenDone(ctx, cli, result.RootIssueID, result.SessionID, child)
+		if err != nil {
+			return err
+		}
+	}
+	if rootStatus := multicasurface.ProgressRootIssueStatus(material, allDone); rootStatus != "" {
+		if err := retryMulticaHubOperation(ctx, func() error {
+			_, err := cli.SetIssueStatus(ctx, result.RootIssueID, rootStatus)
+			return err
+		}); err != nil {
+			return fmt.Errorf("set root issue %s status %s: %w", result.RootIssueID, rootStatus, err)
+		}
 	}
 	return nil
 }

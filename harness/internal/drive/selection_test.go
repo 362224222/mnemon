@@ -34,6 +34,43 @@ func TestManagedWakeCandidateForRenderMatchesStableIssueIdentity(t *testing.T) {
 	}
 }
 
+func TestManagedWakeCandidateForRenderRequiresStrongRootIdentity(t *testing.T) {
+	resp := presentation.Response{
+		AuditID:    "audit-1",
+		BodyDigest: "sha256:render",
+		Events: []eventmodel.EventEnvelope{
+			renderedWakeEnvelope("derived:stale", "assignment/asg-stale", "Assignment asg-stale is yours: Mnemon R2 Multica hub live validation. Expected work: inspect an older mailbox."),
+			renderedWakeEnvelopeOfType("derived:current", "teamwork.signal_open", "teamwork_signal/sig-current", "Teamwork signal is open: Mnemon R2 Multica hub live validation. Context refs: multica:issue:issue-current, multica:task:task-current."),
+		},
+	}
+	candidate, ok := ManagedWakeCandidateForRender("planner@team", resp, ManagedWakeMatchMaterial{
+		IssueID:    "issue-current",
+		Identifier: "TEA-54",
+		Title:      "Mnemon R2 Multica hub live validation",
+		TaskID:     "task-current",
+	})
+	if !ok {
+		t.Fatal("expected current root signal candidate")
+	}
+	if candidate.DerivedEventID != "derived:current" {
+		t.Fatalf("selected candidate = %+v, want current root signal", candidate)
+	}
+
+	_, ok = ManagedWakeCandidateForRender("planner@team", presentation.Response{
+		Events: []eventmodel.EventEnvelope{
+			renderedWakeEnvelope("derived:stale", "assignment/asg-stale", "Assignment asg-stale is yours: Mnemon R2 Multica hub live validation."),
+		},
+	}, ManagedWakeMatchMaterial{
+		IssueID:    "issue-current",
+		Identifier: "TEA-54",
+		Title:      "Mnemon R2 Multica hub live validation",
+		TaskID:     "task-current",
+	})
+	if ok {
+		t.Fatal("stale title-only assignment must not satisfy a root Multica wake")
+	}
+}
+
 func TestManagedWakeMatchTermsPreferStableIssueIdentity(t *testing.T) {
 	got := ManagedWakeMatchTerms(ManagedWakeMatchMaterial{
 		IssueID:    "issue-123",
@@ -66,10 +103,14 @@ func TestManagedWakeMatchTermsPreferAssignmentMailboxIdentity(t *testing.T) {
 }
 
 func renderedWakeEnvelope(id, subject, body string) eventmodel.EventEnvelope {
+	return renderedWakeEnvelopeOfType(id, "assignment.work_available", subject, body)
+}
+
+func renderedWakeEnvelopeOfType(id, typ, subject, body string) eventmodel.EventEnvelope {
 	return eventmodel.DerivedEnvelope(eventmodel.Event{
 		SchemaVersion: eventmodel.SchemaVersion,
 		ID:            id,
-		Type:          "assignment.work_available",
+		Type:          typ,
 		Subject:       eventmodel.EventSubject(subject),
 		Actor:         "mnemond@local",
 		Audience:      "planner@team",

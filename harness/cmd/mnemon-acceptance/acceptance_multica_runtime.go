@@ -244,7 +244,7 @@ func runMulticaRuntimeProdSimAcceptance(ctx context.Context, opts multicaRuntime
 	if description == "" {
 		description = strings.TrimSpace(`Run a small Mnemon R2 Multica hub-flow readiness drill.
 
-Coordinate this as teamwork rather than solo work. Split the validation across researcher, reviewer, and integrator teammates, ask for concise feedback, use another assignment round if a gap appears, then integrate the final status.
+Coordinate this as teamwork rather than solo work. Use Mnemon teamwork handoffs when delegating validation slices; the Multica runtime should project accepted assignments into child assignment mailboxes and route them to the target agents.
 
 The validation should cover root session metadata, assignment child issue routing, assignment feedback comments, agent run activity visibility, stale or cross-session assignment isolation, and final Multica status completion.`)
 	}

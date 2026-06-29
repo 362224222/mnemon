@@ -228,13 +228,50 @@ func IssueStatusDone(status string) bool {
 }
 
 func assignmentTitleTopic(item AssignmentMailboxMaterial) string {
-	for _, candidate := range []string{firstSentence(item.Scope), firstSentence(item.ExpectedWork), item.ID} {
+	scope := firstSentence(item.Scope)
+	idTopic := assignmentIDTitleTopic(item.ID, item.RootIssueLabel)
+	if broadAssignmentScope(scope) && idTopic != "" {
+		return idTopic
+	}
+	for _, candidate := range []string{scope, firstSentence(item.ExpectedWork), idTopic, item.ID} {
 		candidate = stripTitleRootLabel(candidate, item.RootIssueLabel)
 		if strings.TrimSpace(candidate) != "" {
 			return candidate
 		}
 	}
 	return ""
+}
+
+func broadAssignmentScope(scope string) bool {
+	lower := strings.ToLower(strings.TrimSpace(scope))
+	return strings.Contains(lower, "drill") || strings.Contains(lower, "validation")
+}
+
+func assignmentIDTitleTopic(id, rootLabel string) string {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return ""
+	}
+	root := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(rootLabel), "-", ""))
+	parts := strings.FieldsFunc(strings.ToLower(id), func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9')
+	})
+	var out []string
+	for _, part := range parts {
+		switch part {
+		case "", "assignment", "asg", root:
+			continue
+		}
+		if root != "" && strings.TrimPrefix(part, root) == "" {
+			continue
+		}
+		out = append(out, part)
+	}
+	joined := strings.Join(out, " ")
+	if strings.IndexFunc(joined, func(r rune) bool { return r >= 'a' && r <= 'z' }) < 0 {
+		return ""
+	}
+	return joined
 }
 
 func stripTitleRootLabel(value, label string) string {
