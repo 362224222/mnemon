@@ -505,15 +505,11 @@ func listMulticaChildrenWithMetadata(ctx context.Context, cli driver.MulticaCLI,
 	}
 	metaByIssue := map[string]map[string]string{}
 	for _, child := range rawChildren {
-		meta := driver.NormalizeMulticaMetadata(child.Metadata)
-		if len(meta) == 0 || meta[driver.MulticaMetadataKind] == "" {
-			listed, err := cli.ListIssueMetadata(ctx, child.ID)
-			if err != nil {
-				return nil, nil, err
-			}
-			meta = listed
+		meta, err := cli.ResolveIssueHubMetadata(ctx, child)
+		if err != nil {
+			return nil, nil, err
 		}
-		metaByIssue[child.ID] = meta
+		metaByIssue[child.ID] = meta.Map()
 	}
 	return rawChildren, metaByIssue, nil
 }

@@ -152,7 +152,8 @@ case "$*" in
   *"issue get child-2"*) printf '%s\n' '{"id":"child-2","identifier":"TEA-10","title":"TEA-9: routing check","description":"## Assignment\n\nCheck routing.\n\n## Context\n\n- Root issue: [TEA-9](mention://issue/root-9) - Runtime hub flow\n- Assignee: researcher@team (mnemon-researcher)\n- Scope: routing check\n\n## Feedback\n\n- Expected feedback: result or blocker\n- Progress path: Mnemon runtime progress, result, or blocker feedback","status":"done"}' ;;
   *"issue get child-3"*) printf '%s\n' '{"id":"child-3","identifier":"TEA-11","title":"TEA-9: runtime display","description":"## Assignment\n\nCheck runtime display.\n\n## Context\n\n- Root issue: [TEA-9](mention://issue/root-9) - Runtime hub flow\n- Assignee: implementer@team (mnemon-implementer)\n- Scope: runtime display\n\n## Feedback\n\n- Expected feedback: result or blocker\n- Progress path: Mnemon runtime progress, result, or blocker feedback","status":"done"}' ;;
   *"issue metadata list root-9"*) printf '[{"key":"mnemon.hub_backend","value":"multica"},{"key":"mnemon.kind","value":"session_mailbox"},{"key":"mnemon.session_id","value":"multica:session:root-9"}]\n' ;;
-  *"issue children root-9"*) printf '{"children":[{"id":"child-2","identifier":"TEA-10","title":"Assignment 2","status":"done","metadata":{"mnemon.hub_backend":"multica","mnemon.kind":"assignment_mailbox","mnemon.root_issue_id":"root-9","mnemon.session_id":"multica:session:root-9","mnemon.assignment_id":"asg-2","mnemon.principal":"researcher@team"}},{"id":"child-3","identifier":"TEA-11","title":"Assignment 3","status":"done","metadata":{"mnemon.hub_backend":"multica","mnemon.kind":"assignment_mailbox","mnemon.root_issue_id":"root-9","mnemon.session_id":"multica:session:root-9","mnemon.assignment_id":"asg-3","mnemon.principal":"implementer@team"}}]}\n' ;;
+  *"issue children root-9"*) printf '{"children":[{"id":"child-2","identifier":"TEA-10","title":"Assignment 2","status":"done","metadata":{"mnemon.hub_backend":"multica","mnemon.kind":"assignment_mailbox"}},{"id":"child-3","identifier":"TEA-11","title":"Assignment 3","status":"done","metadata":{"mnemon.hub_backend":"multica","mnemon.kind":"assignment_mailbox","mnemon.root_issue_id":"root-9","mnemon.session_id":"multica:session:root-9","mnemon.assignment_id":"asg-3","mnemon.principal":"implementer@team"}}]}\n' ;;
+  *"issue metadata list child-2"*) printf '[{"key":"mnemon.hub_backend","value":"multica"},{"key":"mnemon.kind","value":"assignment_mailbox"},{"key":"mnemon.root_issue_id","value":"root-9"},{"key":"mnemon.session_id","value":"multica:session:root-9"},{"key":"mnemon.assignment_id","value":"asg-2"},{"key":"mnemon.principal","value":"researcher@team"}]\n' ;;
   *"issue comment list root-9"*) printf '[{"id":"comment-root","issue_id":"root-9","content":"Mnemon update: issue admitted\\n\\nmnemon:event=multica-task-root"}]\n' ;;
   *"issue comment list child-2"*) printf '[{"id":"comment-child-2","issue_id":"child-2","content":"Mnemon update: assignment feedback\\n\\nSummary: checked routing.\\n\\nmnemon:event=pg-2"}]\n' ;;
   *"issue comment list child-3"*) printf '[{"id":"comment-child-3","issue_id":"child-3","content":"Mnemon update: assignment feedback\\n\\nSummary: checked runtime display.\\n\\nmnemon:event=pg-3"}]\n' ;;
@@ -215,6 +216,7 @@ esac
 	}
 	for _, want := range []string{
 		"issue metadata list root-9 --output json",
+		"issue metadata list child-2 --output json",
 		"issue children root-9 --output json",
 		"issue runs child-2 --output json",
 		"issue runs child-3 --output json",
