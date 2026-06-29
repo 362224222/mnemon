@@ -49,6 +49,14 @@ func run(ctx context.Context, args []string, out, errw io.Writer) error {
 			return daemonReload(args[1:], out, errw)
 		case "status":
 			return daemonStatus(args[1:], out, errw)
+		case "doctor":
+			if err := daemonDoctor(args[1:], out, errw); err != nil {
+				if errors.Is(err, flag.ErrHelp) {
+					return nil
+				}
+				return err
+			}
+			return nil
 		case "logs":
 			return daemonLogs(args[1:], out, errw)
 		case "agent":
@@ -144,7 +152,7 @@ func writeMnemondHelp(errw io.Writer, fs *flag.FlagSet) {
 	fmt.Fprintln(errw, "Usage:")
 	fmt.Fprintln(errw, "  mnemond serve [flags]")
 	fmt.Fprintln(errw, "  mnemond [flags]")
-	fmt.Fprintln(errw, "  mnemond up|down|reload|status|logs [flags]")
+	fmt.Fprintln(errw, "  mnemond up|down|reload|status|doctor|logs [flags]")
 	fmt.Fprintln(errw, "  mnemond agent run [flags]")
 	fmt.Fprintln(errw)
 	fmt.Fprintln(errw, "Commands:")
@@ -153,6 +161,7 @@ func writeMnemondHelp(errw io.Writer, fs *flag.FlagSet) {
 	fmt.Fprintln(errw, "  down        Stop the background local event node")
 	fmt.Fprintln(errw, "  reload      Restart the background local event node")
 	fmt.Fprintln(errw, "  status      Show background local event node status")
+	fmt.Fprintln(errw, "  doctor      Check local event node readiness")
 	fmt.Fprintln(errw, "  logs        Show background local event node logs")
 	fmt.Fprintln(errw, "  agent run   Local managed-agent drive source using [mnemon:wake]")
 	fmt.Fprintln(errw)
