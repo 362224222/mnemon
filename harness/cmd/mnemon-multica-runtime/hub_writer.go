@@ -500,111 +500,36 @@ func runtimeProgressItem(item map[string]any) runtimeProgress {
 }
 
 func runtimeAssignmentMatchesCurrentMulticaScope(item runtimeAssignment, result *runtimeImportResult) bool {
-	if !runtimeExplicitMulticaScopeMatches(item.SessionID, item.RootIssueID, result) {
+	scope := runtimeMulticaScopeMaterial(result)
+	if !multicasurface.RuntimeExplicitScopeMatches(item.SessionID, item.RootIssueID, scope) {
 		return false
 	}
 	refs := append([]string{}, item.ContextRefs...)
 	refs = append(refs, item.EvidenceRefs...)
-	return runtimeRefsMatchCurrentMulticaScope(refs, result)
+	return multicasurface.RuntimeRefsMatchScope(refs, scope)
 }
 
 func runtimeProgressMatchesCurrentMulticaScope(item runtimeProgress, result *runtimeImportResult, childIssueID string) bool {
-	if !runtimeExplicitMulticaScopeMatches(item.SessionID, item.RootIssueID, result) {
+	scope := runtimeMulticaScopeMaterial(result)
+	if !multicasurface.RuntimeExplicitScopeMatches(item.SessionID, item.RootIssueID, scope) {
 		return false
 	}
 	refs := append([]string{}, item.ContextRefs...)
 	refs = append(refs, item.EvidenceRefs...)
 	refs = append(refs, item.ArtifactRefs...)
-	return runtimeRefsMatchCurrentMulticaScope(refs, result, childIssueID)
+	return multicasurface.RuntimeRefsMatchScope(refs, scope, childIssueID)
 }
 
-func runtimeExplicitMulticaScopeMatches(sessionID, rootIssueID string, result *runtimeImportResult) bool {
+func runtimeMulticaScopeMaterial(result *runtimeImportResult) multicasurface.RuntimeScopeMaterial {
 	if result == nil {
-		return true
+		return multicasurface.RuntimeScopeMaterial{}
 	}
-	if sessionID = strings.TrimSpace(sessionID); sessionID != "" && strings.TrimSpace(result.SessionID) != "" && sessionID != strings.TrimSpace(result.SessionID) {
-		return false
+	return multicasurface.RuntimeScopeMaterial{
+		SessionID:     result.SessionID,
+		RootIssueID:   result.RootIssueID,
+		CorrelationID: result.CorrelationID,
+		TaskID:        result.TaskID,
 	}
-	if rootIssueID = strings.TrimSpace(rootIssueID); rootIssueID != "" && strings.TrimSpace(result.RootIssueID) != "" && rootIssueID != strings.TrimSpace(result.RootIssueID) {
-		return false
-	}
-	return true
-}
-
-func runtimeRefsMatchCurrentMulticaScope(refs []string, result *runtimeImportResult, extraIssueIDs ...string) bool {
-	scoped := false
-	for _, ref := range refs {
-		isScoped, matches := runtimeMulticaScopeRefMatches(ref, result, extraIssueIDs...)
-		if !isScoped {
-			continue
-		}
-		scoped = true
-		if matches {
-			return true
-		}
-	}
-	return !scoped
-}
-
-func runtimeMulticaScopeRefMatches(ref string, result *runtimeImportResult, extraIssueIDs ...string) (bool, bool) {
-	ref = strings.TrimSpace(ref)
-	if ref == "" {
-		return false, false
-	}
-	lower := strings.ToLower(ref)
-	prefixes := []string{"multica:issue:", "multica:issue/", "mention://issue/", "multica:session:", "multica:session/", "multica:task:", "multica:task/"}
-	scoped := false
-	for _, prefix := range prefixes {
-		if strings.HasPrefix(lower, prefix) {
-			scoped = true
-			break
-		}
-	}
-	if !scoped {
-		return false, false
-	}
-	candidates := []string{}
-	if result != nil {
-		root := strings.TrimSpace(result.RootIssueID)
-		if root != "" {
-			candidates = append(candidates,
-				"multica:issue:"+root,
-				"multica:issue/"+root,
-				"mention://issue/"+root,
-				"multica:session:"+root,
-				"multica:session/"+root,
-			)
-		}
-		if session := strings.TrimSpace(result.SessionID); session != "" {
-			candidates = append(candidates, session)
-		}
-		if correlation := strings.TrimSpace(result.CorrelationID); correlation != "" {
-			candidates = append(candidates, correlation)
-		}
-		if task := strings.TrimSpace(result.TaskID); task != "" {
-			candidates = append(candidates,
-				"multica:task:"+task,
-				"multica:task/"+task,
-			)
-		}
-	}
-	for _, issueID := range extraIssueIDs {
-		issueID = strings.TrimSpace(issueID)
-		if issueID == "" {
-			continue
-		}
-		candidates = append(candidates,
-			"multica:issue:"+issueID,
-			"multica:issue/"+issueID,
-			"mention://issue/"+issueID,
-		)
-	}
-	for _, candidate := range candidates {
-		if ref == candidate {
-			return true, true
-		}
-	}
-	return true, false
 }
 
 func runtimeMulticaRegistry(env []string, cwd string) (driver.MulticaRegistry, bool, error) {
