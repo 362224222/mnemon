@@ -337,7 +337,7 @@ func (s *runtimeRPCState) importIssue(input string, progress runtimeProgressSink
 	result.Title = issue.Title
 	result.Statement = issue.Description
 	result.HubMetadata = driver.MulticaIssueHubMetadata(issue)
-	applyMulticaHubMetadata(&result, issue)
+	applyMulticaHubMetadata(&result, result.HubMetadata)
 	result.HubBackend = firstNonEmpty(result.HubBackend, envValue(s.Env, "MNEMON_HUB_BACKEND"))
 	emitRuntimeProgress(progress, "Loaded "+runtimeIssueLabel(issue)+"; classifying Mnemon hub metadata.")
 	markIssueInProgress(multicaCtx, cli, issue.ID)
@@ -370,7 +370,8 @@ func (s *runtimeRPCState) importIssue(input string, progress runtimeProgressSink
 		return result
 	}
 	if strings.EqualFold(result.HubBackend, driver.MulticaHubBackend) {
-		ensureRootSessionHubFields(&result, issue)
+		result.HubMetadata = multicasurface.RootSessionHubMetadata(result.HubMetadata, issue.ID)
+		applyMulticaHubMetadata(&result, result.HubMetadata)
 		addPayloadRuleString(draft.Payload, "hub_backend", driver.MulticaHubBackend)
 		addPayloadRuleString(draft.Payload, "root_issue_id", result.RootIssueID)
 		addPayloadRuleString(draft.Payload, "session_id", result.SessionID)
@@ -447,7 +448,8 @@ func loadRuntimeIssueMetadata(ctx context.Context, cli driver.MulticaCLI, issue 
 }
 
 func (s *runtimeRPCState) correlateAssignmentMailbox(ctx context.Context, cli driver.MulticaCLI, issue driver.MulticaIssue, result *runtimeImportResult, progress runtimeProgressSink) runtimeImportResult {
-	ensureAssignmentHubFields(result, issue)
+	result.HubMetadata = multicasurface.AssignmentMailboxHubMetadata(result.HubMetadata, issue.ID)
+	applyMulticaHubMetadata(result, result.HubMetadata)
 	result.Status = "correlated"
 	result.MatchTerms = drive.CleanManagedWakeMatchTerms(
 		result.AssignmentID,
@@ -480,17 +482,16 @@ func (s *runtimeRPCState) correlateAssignmentMailbox(ctx context.Context, cli dr
 			emitRuntimeProgress(progress, runtimeHubWriteProgress(*result))
 		}
 	}
-	s.projectImportComment(ctx, cli, issue, assignmentMailboxMarker(*result), result)
+	s.projectImportComment(ctx, cli, issue, multicasurface.AssignmentMailboxMarker(result.HubMetadata, result.IssueID), result)
 	emitRuntimeCommand(progress, "multica issue comment add "+issue.ID, runtimeProjectionProgress(*result), runtimeExitCode(result.ProjectionErr))
 	emitRuntimeProgress(progress, runtimeProjectionProgress(*result))
 	return *result
 }
 
-func applyMulticaHubMetadata(result *runtimeImportResult, issue driver.MulticaIssue) {
+func applyMulticaHubMetadata(result *runtimeImportResult, meta driver.MulticaHubMetadata) {
 	if result == nil {
 		return
 	}
-	meta := result.HubMetadata
 	result.HubBackend = firstNonEmpty(meta.HubBackend, result.HubBackend)
 	result.HubKind = firstNonEmpty(meta.Kind, result.HubKind)
 	result.SessionID = firstNonEmpty(meta.SessionID, result.SessionID)
@@ -498,31 +499,6 @@ func applyMulticaHubMetadata(result *runtimeImportResult, issue driver.MulticaIs
 	result.RootIssueID = firstNonEmpty(meta.RootIssueID, result.RootIssueID)
 	result.AssignmentID = firstNonEmpty(meta.AssignmentID, result.AssignmentID)
 	result.AssignmentFingerprint = firstNonEmpty(meta.AssignmentFingerprint, result.AssignmentFingerprint)
-	if result.RootIssueID == "" && meta.IsAssignmentMailbox() {
-		result.RootIssueID = firstNonEmpty(meta.SourceIssueID, issue.ID)
-	}
-}
-
-func ensureRootSessionHubFields(result *runtimeImportResult, issue driver.MulticaIssue) {
-	if result == nil {
-		return
-	}
-	result.HubBackend = driver.MulticaHubBackend
-	result.HubKind = firstNonEmpty(result.HubKind, driver.MulticaHubKindSession)
-	result.RootIssueID = firstNonEmpty(result.RootIssueID, issue.ID)
-	result.SessionID = firstNonEmpty(result.SessionID, driver.MulticaSessionID(result.RootIssueID))
-	result.CorrelationID = firstNonEmpty(result.CorrelationID, "multica:issue:"+issue.ID)
-}
-
-func ensureAssignmentHubFields(result *runtimeImportResult, issue driver.MulticaIssue) {
-	if result == nil {
-		return
-	}
-	result.HubBackend = firstNonEmpty(result.HubBackend, driver.MulticaHubBackend)
-	result.HubKind = firstNonEmpty(result.HubKind, driver.MulticaHubKindAssignmentMailbox)
-	result.RootIssueID = firstNonEmpty(result.RootIssueID, result.HubMetadata.SourceIssueID)
-	result.SessionID = firstNonEmpty(result.SessionID, driver.MulticaSessionID(result.RootIssueID))
-	result.CorrelationID = firstNonEmpty(result.CorrelationID, "multica:issue:"+issue.ID)
 }
 
 func rootSessionMetadata(result runtimeImportResult, draft driver.MulticaObservedDraft, now time.Time) map[string]string {
@@ -556,16 +532,6 @@ func addPayloadRuleString(payload map[string]any, key, value string) {
 		payload[eventmodel.PayloadRuleKey] = rule
 	}
 	rule[key] = value
-}
-
-func assignmentMailboxMarker(result runtimeImportResult) string {
-	if result.HubMetadata.EventID != "" {
-		return result.HubMetadata.EventID
-	}
-	if result.AssignmentID != "" {
-		return "multica-assignment-" + result.AssignmentID
-	}
-	return "multica-issue-" + result.IssueID
 }
 
 func runtimeManagedWakeMatchMaterial(result runtimeImportResult) drive.ManagedWakeMatchMaterial {

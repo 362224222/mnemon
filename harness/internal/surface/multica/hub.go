@@ -313,6 +313,44 @@ func (m MulticaHubMetadata) IsAssignmentMailbox() bool {
 	}
 }
 
+func RootSessionHubMetadata(meta MulticaHubMetadata, issueID string) MulticaHubMetadata {
+	issueID = strings.TrimSpace(issueID)
+	meta.HubBackend = MulticaHubBackend
+	meta.Kind = firstNonEmptyString(meta.Kind, MulticaHubKindSession)
+	meta.RootIssueID = firstNonEmptyString(meta.RootIssueID, issueID)
+	meta.SessionID = firstNonEmptyString(meta.SessionID, MulticaSessionID(meta.RootIssueID))
+	if issueID != "" {
+		meta.CorrelationID = firstNonEmptyString(meta.CorrelationID, "multica:issue:"+issueID)
+	}
+	return meta
+}
+
+func AssignmentMailboxHubMetadata(meta MulticaHubMetadata, issueID string) MulticaHubMetadata {
+	issueID = strings.TrimSpace(issueID)
+	meta.HubBackend = firstNonEmptyString(meta.HubBackend, MulticaHubBackend)
+	meta.Kind = firstNonEmptyString(meta.Kind, MulticaHubKindAssignmentMailbox)
+	meta.RootIssueID = firstNonEmptyString(meta.RootIssueID, meta.SourceIssueID, issueID)
+	meta.SessionID = firstNonEmptyString(meta.SessionID, MulticaSessionID(meta.RootIssueID))
+	if issueID != "" {
+		meta.CorrelationID = firstNonEmptyString(meta.CorrelationID, "multica:issue:"+issueID)
+	}
+	return meta
+}
+
+func AssignmentMailboxMarker(meta MulticaHubMetadata, issueID string) string {
+	if strings.TrimSpace(meta.EventID) != "" {
+		return strings.TrimSpace(meta.EventID)
+	}
+	if strings.TrimSpace(meta.AssignmentID) != "" {
+		return "multica-assignment-" + strings.TrimSpace(meta.AssignmentID)
+	}
+	issueID = strings.TrimSpace(issueID)
+	if issueID == "" {
+		return ""
+	}
+	return "multica-issue-" + issueID
+}
+
 func NormalizeMulticaMetadata(raw any) map[string]string {
 	out := map[string]string{}
 	merge := func(key string, value any) {

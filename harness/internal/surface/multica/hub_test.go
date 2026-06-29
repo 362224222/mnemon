@@ -57,6 +57,47 @@ func TestAssignmentFingerprintStable(t *testing.T) {
 	}
 }
 
+func TestRootSessionHubMetadataDefaults(t *testing.T) {
+	meta := RootSessionHubMetadata(MulticaHubMetadata{Principal: "planner@team"}, "root-1")
+	if meta.HubBackend != MulticaHubBackend ||
+		meta.Kind != MulticaHubKindSession ||
+		meta.RootIssueID != "root-1" ||
+		meta.SessionID != MulticaSessionID("root-1") ||
+		meta.CorrelationID != "multica:issue:root-1" ||
+		meta.Principal != "planner@team" {
+		t.Fatalf("root session metadata mismatch: %+v", meta)
+	}
+}
+
+func TestAssignmentMailboxHubMetadataDefaults(t *testing.T) {
+	meta := AssignmentMailboxHubMetadata(MulticaHubMetadata{
+		SourceIssueID: "root-1",
+		AssignmentID:  "asg-1",
+		Principal:     "worker@team",
+	}, "child-1")
+	if meta.HubBackend != MulticaHubBackend ||
+		meta.Kind != MulticaHubKindAssignmentMailbox ||
+		meta.RootIssueID != "root-1" ||
+		meta.SessionID != MulticaSessionID("root-1") ||
+		meta.CorrelationID != "multica:issue:child-1" ||
+		meta.AssignmentID != "asg-1" ||
+		meta.Principal != "worker@team" {
+		t.Fatalf("assignment mailbox metadata mismatch: %+v", meta)
+	}
+}
+
+func TestAssignmentMailboxMarkerPrefersEventThenAssignmentThenIssue(t *testing.T) {
+	if got := AssignmentMailboxMarker(MulticaHubMetadata{EventID: "event-1", AssignmentID: "asg-1"}, "child-1"); got != "event-1" {
+		t.Fatalf("event marker = %q", got)
+	}
+	if got := AssignmentMailboxMarker(MulticaHubMetadata{AssignmentID: "asg-1"}, "child-1"); got != "multica-assignment-asg-1" {
+		t.Fatalf("assignment marker = %q", got)
+	}
+	if got := AssignmentMailboxMarker(MulticaHubMetadata{}, "child-1"); got != "multica-issue-child-1" {
+		t.Fatalf("issue marker = %q", got)
+	}
+}
+
 func TestFileHubLedgerDedupesRecords(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "hub-ledger.jsonl")
 	ledger := NewFileMulticaHubLedger(path)
