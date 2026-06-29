@@ -73,6 +73,30 @@ func TestAgentHelpListsLocalDriveSourceCommand(t *testing.T) {
 	}
 }
 
+func TestLifecycleHelpExitsSuccessfully(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"serve", "--help"}, "Local Mnemon event node"},
+		{[]string{"up", "--help"}, "Local Mnemon event node"},
+		{[]string{"reload", "--help"}, "Local Mnemon event node"},
+		{[]string{"down", "--help"}, "Usage of mnemond down"},
+		{[]string{"status", "--help"}, "Usage of mnemond status"},
+		{[]string{"logs", "--help"}, "Usage of mnemond logs"},
+		{[]string{"doctor", "--help"}, "Usage of mnemond doctor"},
+	} {
+		var errw bytes.Buffer
+		err := run(context.Background(), tc.args, io.Discard, &errw)
+		if err != nil {
+			t.Fatalf("%v help should exit successfully, got %v", tc.args, err)
+		}
+		if got := errw.String(); !strings.Contains(got, tc.want) {
+			t.Fatalf("%v help missing %q:\n%s", tc.args, tc.want, got)
+		}
+	}
+}
+
 func TestAgentRunHelpFramesLocalDriveSource(t *testing.T) {
 	var errw bytes.Buffer
 	err := run(context.Background(), []string{"agent", "run", "--help"}, io.Discard, &errw)

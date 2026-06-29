@@ -24,10 +24,18 @@ func daemonPaths(root string) (dir, pidPath, logPath string) {
 }
 
 // rootFlag parses --root for the lifecycle verbs that take no serve flags (down/status/logs).
-func rootFlag(args []string, errw io.Writer) (string, error) {
-	fs := flag.NewFlagSet("mnemond", flag.ContinueOnError)
+func rootFlag(args []string, errw io.Writer, verb ...string) (string, error) {
+	name := "mnemond"
+	if len(verb) > 0 && strings.TrimSpace(verb[0]) != "" {
+		name = "mnemond " + strings.TrimSpace(verb[0])
+	}
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(errw)
 	root := fs.String("root", ".", "project root")
+	fs.Usage = func() {
+		fmt.Fprintf(errw, "Usage of %s:\n", name)
+		fs.PrintDefaults()
+	}
 	if err := fs.Parse(args); err != nil {
 		return "", err
 	}
@@ -129,7 +137,7 @@ func waitListening(pid int, addr string) error {
 // traps for graceful shutdown), waits for it to exit, and removes the pidfile. A stale or absent
 // pidfile is reported, not an error — `down` is idempotent.
 func daemonDown(args []string, out, errw io.Writer) error {
-	root, err := rootFlag(args, errw)
+	root, err := rootFlag(args, errw, "down")
 	if err != nil {
 		return err
 	}
@@ -193,7 +201,7 @@ func daemonReload(args []string, out, errw io.Writer) error {
 
 // daemonStatus reports whether the recorded daemon is alive.
 func daemonStatus(args []string, out, errw io.Writer) error {
-	root, err := rootFlag(args, errw)
+	root, err := rootFlag(args, errw, "status")
 	if err != nil {
 		return err
 	}
@@ -208,7 +216,7 @@ func daemonStatus(args []string, out, errw io.Writer) error {
 
 // daemonLogs prints the daemon's captured stdout/stderr.
 func daemonLogs(args []string, out, errw io.Writer) error {
-	root, err := rootFlag(args, errw)
+	root, err := rootFlag(args, errw, "logs")
 	if err != nil {
 		return err
 	}

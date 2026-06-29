@@ -42,13 +42,37 @@ func run(ctx context.Context, args []string, out, errw io.Writer) error {
 	if len(args) > 0 {
 		switch args[0] {
 		case "up":
-			return daemonUp(args[1:], out, errw)
+			if err := daemonUp(args[1:], out, errw); err != nil {
+				if errors.Is(err, flag.ErrHelp) {
+					return nil
+				}
+				return err
+			}
+			return nil
 		case "down":
-			return daemonDown(args[1:], out, errw)
+			if err := daemonDown(args[1:], out, errw); err != nil {
+				if errors.Is(err, flag.ErrHelp) {
+					return nil
+				}
+				return err
+			}
+			return nil
 		case "reload":
-			return daemonReload(args[1:], out, errw)
+			if err := daemonReload(args[1:], out, errw); err != nil {
+				if errors.Is(err, flag.ErrHelp) {
+					return nil
+				}
+				return err
+			}
+			return nil
 		case "status":
-			return daemonStatus(args[1:], out, errw)
+			if err := daemonStatus(args[1:], out, errw); err != nil {
+				if errors.Is(err, flag.ErrHelp) {
+					return nil
+				}
+				return err
+			}
+			return nil
 		case "doctor":
 			if err := daemonDoctor(args[1:], out, errw); err != nil {
 				if errors.Is(err, flag.ErrHelp) {
@@ -58,7 +82,13 @@ func run(ctx context.Context, args []string, out, errw io.Writer) error {
 			}
 			return nil
 		case "logs":
-			return daemonLogs(args[1:], out, errw)
+			if err := daemonLogs(args[1:], out, errw); err != nil {
+				if errors.Is(err, flag.ErrHelp) {
+					return nil
+				}
+				return err
+			}
+			return nil
 		case "agent":
 			if err := runAgent(ctx, args[1:], out, errw); err != nil {
 				if errors.Is(err, flag.ErrHelp) {
