@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"database/sql"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -45,6 +47,58 @@ func TestR1GitHubMeshBranchPrefixDefaultsToRunScopedBranches(t *testing.T) {
 	}
 	if explicit := r1GitHubMeshBranchPrefix("mnemon/mnemond-team-", started); explicit != "mnemon/mnemond-team-" {
 		t.Fatalf("explicit prefix = %q, want unchanged", explicit)
+	}
+}
+
+func TestFetchR1GitHubMeshRateLimit(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer secret-token" {
+			t.Fatalf("authorization header = %q", got)
+		}
+		_, _ = w.Write([]byte(`{"resources":{"core":{"limit":5000,"remaining":4321,"reset":1782725122,"used":679}}}`))
+	}))
+	defer server.Close()
+	oldURL := r1GitHubMeshRateLimitAPIURL
+	oldClient := r1GitHubMeshHTTPClient
+	r1GitHubMeshRateLimitAPIURL = server.URL
+	r1GitHubMeshHTTPClient = server.Client()
+	t.Cleanup(func() {
+		r1GitHubMeshRateLimitAPIURL = oldURL
+		r1GitHubMeshHTTPClient = oldClient
+	})
+
+	limit, err := fetchR1GitHubMeshRateLimit(context.Background(), "secret-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if limit.Limit != 5000 || limit.Remaining != 4321 || limit.Used != 679 || limit.ResetAt.Unix() != 1782725122 {
+		t.Fatalf("rate limit mismatch: %+v", limit)
+	}
+}
+
+func TestPreflightR1GitHubMeshRateLimitBlocksLowRemaining(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"resources":{"core":{"limit":5000,"remaining":42,"reset":1782725122,"used":4958}}}`))
+	}))
+	defer server.Close()
+	oldURL := r1GitHubMeshRateLimitAPIURL
+	oldClient := r1GitHubMeshHTTPClient
+	r1GitHubMeshRateLimitAPIURL = server.URL
+	r1GitHubMeshHTTPClient = server.Client()
+	t.Cleanup(func() {
+		r1GitHubMeshRateLimitAPIURL = oldURL
+		r1GitHubMeshHTTPClient = oldClient
+	})
+	tokenFile := filepath.Join(t.TempDir(), "github.token")
+	if err := os.WriteFile(tokenFile, []byte("secret-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	limit, err := preflightR1GitHubMeshRateLimit(context.Background(), tokenFile, 1500)
+	if err == nil || !strings.Contains(err.Error(), "below required 1500") {
+		t.Fatalf("expected low-rate-limit error, got limit=%+v err=%v", limit, err)
+	}
+	if limit.Remaining != 42 {
+		t.Fatalf("rate limit should be returned for diagnostics: %+v", limit)
 	}
 }
 
