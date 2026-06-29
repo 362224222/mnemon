@@ -85,6 +85,64 @@ func TestProgressFeedbackMaterial(t *testing.T) {
 	}
 }
 
+func TestRuntimeProjectionCommentBodyForIntake(t *testing.T) {
+	body := RuntimeProjectionCommentBody(RuntimeProjectionMaterial{
+		Status:             "recorded",
+		IssueID:            "issue-1",
+		IssueLabel:         "TEA-1",
+		Principal:          "planner@team",
+		TaskID:             "task-1",
+		HubBackend:         "multica",
+		SessionID:          "multica:session:issue-1",
+		HasIngestReceipt:   true,
+		IngestSeq:          42,
+		IngestDuplicate:    false,
+		IngestTicked:       true,
+		WakeStatus:         "completed",
+		WakeTurnID:         "turn-1",
+		HubWriteStatus:     "created",
+		HubChildIssues:     2,
+		HubFeedbackComment: 1,
+	})
+	for _, want := range []string{
+		"## Mnemon Intake",
+		"Issue: [TEA-1](mention://issue/issue-1)",
+		"Principal: `planner@team`",
+		"Mnemond ingest: seq=42 duplicate=false ticked=true",
+		"Managed wake: `completed`",
+		"Managed turn: `turn-1`",
+		"Multica hub write: created child_issues=2 feedback_comments=1",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("runtime projection body missing %q:\n%s", want, body)
+		}
+	}
+}
+
+func TestRuntimeProjectionCommentBodyForAssignmentMailbox(t *testing.T) {
+	body := RuntimeProjectionCommentBody(RuntimeProjectionMaterial{
+		AssignmentMailbox: true,
+		Status:            "correlated",
+		RootIssueID:       "root-1",
+		RootIssueLabel:    "TEA-1",
+		AssignmentID:      "asg-1",
+		SessionID:         "multica:session:root-1",
+		WakeStatus:        "completed",
+	})
+	for _, want := range []string{
+		"## Assignment Mailbox",
+		"Status: correlated",
+		"Assignment: `asg-1`",
+		"Session: `multica:session:root-1`",
+		"Root issue: [TEA-1](mention://issue/root-1)",
+		"Managed wake: `completed`",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("assignment runtime projection body missing %q:\n%s", want, body)
+		}
+	}
+}
+
 func TestCanonicalIssueStatus(t *testing.T) {
 	for _, tc := range []struct {
 		in   string

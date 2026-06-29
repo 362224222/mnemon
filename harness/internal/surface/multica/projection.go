@@ -1,6 +1,7 @@
 package multica
 
 import (
+	"fmt"
 	"strings"
 )
 
@@ -26,6 +27,29 @@ type ProgressFeedbackMaterial struct {
 	Blocker       string
 	ArtifactRefs  []string
 	EvidenceRefs  []string
+}
+
+type RuntimeProjectionMaterial struct {
+	AssignmentMailbox  bool
+	Status             string
+	IssueID            string
+	IssueLabel         string
+	Principal          string
+	TaskID             string
+	HubBackend         string
+	SessionID          string
+	RootIssueID        string
+	RootIssueLabel     string
+	AssignmentID       string
+	HasIngestReceipt   bool
+	IngestSeq          int64
+	IngestDuplicate    bool
+	IngestTicked       bool
+	WakeStatus         string
+	WakeTurnID         string
+	HubWriteStatus     string
+	HubChildIssues     int
+	HubFeedbackComment int
 }
 
 func AssignmentMailboxTitle(item AssignmentMailboxMaterial) string {
@@ -98,6 +122,37 @@ func ProgressCommentBody(item ProgressFeedbackMaterial) string {
 	if len(item.EvidenceRefs) > 0 {
 		b.WriteString("\n## Evidence\n\n")
 		writeList(&b, item.EvidenceRefs)
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func RuntimeProjectionCommentBody(item RuntimeProjectionMaterial) string {
+	var b strings.Builder
+	if item.AssignmentMailbox {
+		b.WriteString("## Assignment Mailbox\n\n")
+		writeBullet(&b, "Status", firstNonEmptyString(item.Status, "correlated"))
+		writeBullet(&b, "Assignment", codeSpan(item.AssignmentID))
+		writeBullet(&b, "Session", codeSpan(item.SessionID))
+		writeBullet(&b, "Root issue", IssueMention(firstNonEmptyString(item.RootIssueLabel, item.RootIssueID), item.RootIssueID))
+	} else {
+		b.WriteString("## Mnemon Intake\n\n")
+		writeBullet(&b, "Status", item.Status)
+		writeBullet(&b, "Issue", IssueMention(firstNonEmptyString(item.IssueLabel, item.IssueID), item.IssueID))
+		writeBullet(&b, "Principal", codeSpan(item.Principal))
+		writeBullet(&b, "Task", codeSpan(item.TaskID))
+		writeBullet(&b, "Hub backend", codeSpan(item.HubBackend))
+		writeBullet(&b, "Session", codeSpan(item.SessionID))
+		if item.HasIngestReceipt {
+			writeBullet(&b, "Mnemond ingest", fmt.Sprintf("seq=%d duplicate=%v ticked=%v", item.IngestSeq, item.IngestDuplicate, item.IngestTicked))
+		}
+	}
+	if item.WakeStatus != "" || item.HubWriteStatus != "" {
+		b.WriteString("\n## Runtime Effects\n\n")
+		writeBullet(&b, "Managed wake", codeSpan(item.WakeStatus))
+		writeBullet(&b, "Managed turn", codeSpan(item.WakeTurnID))
+		if item.HubWriteStatus != "" {
+			writeBullet(&b, "Multica hub write", fmt.Sprintf("%s child_issues=%d feedback_comments=%d", item.HubWriteStatus, item.HubChildIssues, item.HubFeedbackComment))
+		}
 	}
 	return strings.TrimSpace(b.String())
 }
