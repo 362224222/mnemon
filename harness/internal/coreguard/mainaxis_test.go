@@ -51,6 +51,7 @@ var packageMainAxisInventory = map[string]packageMainAxis{
 	"projection":      {owner: ownerProjectionSurface, role: "accepted/derived state material prepared for external projection surfaces", target: "projection"},
 	"replay":          {owner: ownerMnemond, role: "mnemond determinism verification", target: "mnemond/replay"},
 	"runtime":         {owner: ownerMnemond, role: "local mnemond event runtime", target: "mnemond"},
+	"session":         {owner: ownerProductConfig, role: "harness session records and external attachment policy", target: "product/session"},
 	"ui":              {owner: ownerMnemond, role: "read-only mnemond operator observability", target: "mnemond/observe"},
 }
 

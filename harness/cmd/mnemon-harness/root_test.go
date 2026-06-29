@@ -22,7 +22,7 @@ func TestRootHelpUsesLocalFirstProductSurface(t *testing.T) {
 		t.Fatalf("root help returned error: %v", err)
 	}
 	got := out.String()
-	for _, want := range []string{"event-driven", "collaboration substrate", "Teamwork is a profile", "Agent Integration", "Local Mnemon", "setup", "local", "config", "daemon", "doctor", "agent", "connect"} {
+	for _, want := range []string{"event-driven", "collaboration substrate", "Teamwork is a profile", "Agent Integration", "Local Mnemon", "setup", "local", "config", "daemon", "doctor", "session", "agent", "connect"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("expected root help to contain %q:\n%s", want, got)
 		}
@@ -57,6 +57,9 @@ func TestProductHelpDoesNotExposeInternalVocabulary(t *testing.T) {
 		{"agent", "add", "--help"},
 		{"connect", "--help"},
 		{"connect", "multica", "--help"},
+		{"session", "--help"},
+		{"session", "start", "--help"},
+		{"session", "attach", "--help"},
 		{"multica", "--help"},
 	} {
 		got := executeRootForHelp(t, args...)
