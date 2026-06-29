@@ -16,11 +16,11 @@ func TestManagedTurnTraceEventsFromCodexNotificationsRedactsAndBounds(t *testing
 				"item": map[string]any{
 					"type":             "commandExecution",
 					"id":               "call-1",
-					"command":          "TOKEN=raw-secret multica issue get TEA-1",
+					"command":          "TOKEN=raw-secret curl -H 'Authorization: Bearer ghp_secret' https://api.github.com",
 					"cwd":              "/tmp/work",
 					"status":           "completed",
 					"exitCode":         0,
-					"aggregatedOutput": "API_KEY=abc123 " + longOutput,
+					"aggregatedOutput": "API_KEY=abc123 authorization: bearer mat_secret " + longOutput,
 					"authToken":        "must-not-leak",
 				},
 			},
@@ -34,12 +34,13 @@ func TestManagedTurnTraceEventsFromCodexNotificationsRedactsAndBounds(t *testing
 		t.Fatalf("unexpected trace event: %+v", got)
 	}
 	joined := got.Command + "\n" + got.Output + "\n" + strings.TrimSpace(traceTestString(got.Item["authToken"]))
-	for _, forbidden := range []string{"raw-secret", "abc123", "must-not-leak"} {
+	for _, forbidden := range []string{"raw-secret", "abc123", "must-not-leak", "ghp_secret", "mat_secret"} {
 		if strings.Contains(joined, forbidden) {
 			t.Fatalf("trace leaked %q: %+v", forbidden, got)
 		}
 	}
-	if !strings.Contains(got.Command, "TOKEN=[redacted]") || !strings.Contains(got.Output, "API_KEY=[redacted]") {
+	if !strings.Contains(got.Command, "TOKEN=[redacted]") || !strings.Contains(got.Command, "Bearer [redacted]") ||
+		!strings.Contains(got.Output, "API_KEY=[redacted]") || !strings.Contains(got.Output, "bearer [redacted]") {
 		t.Fatalf("trace did not redact command/output: command=%q output=%q", got.Command, got.Output[:80])
 	}
 	if !strings.Contains(got.Output, "[truncated]") {

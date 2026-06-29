@@ -180,7 +180,37 @@ func redactSecrets(key, value string) string {
 	for _, marker := range sensitiveMarkers() {
 		redacted = redactMarkerAssignments(redacted, marker)
 	}
+	redacted = redactBearerTokens(redacted)
 	return redacted
+}
+
+func redactBearerTokens(value string) string {
+	searchFrom := 0
+	for {
+		lower := strings.ToLower(value)
+		if searchFrom >= len(value) {
+			return value
+		}
+		relative := strings.Index(lower[searchFrom:], "bearer ")
+		if relative < 0 {
+			return value
+		}
+		tokenStart := searchFrom + relative + len("bearer ")
+		tokenEnd := tokenStart
+		for tokenEnd < len(value) {
+			ch := value[tokenEnd]
+			if ch == ' ' || ch == '\n' || ch == '\t' || ch == ',' || ch == ';' || ch == '"' || ch == '\'' {
+				break
+			}
+			tokenEnd++
+		}
+		if tokenEnd == tokenStart {
+			searchFrom = tokenEnd
+			continue
+		}
+		value = value[:tokenStart] + "[redacted]" + value[tokenEnd:]
+		searchFrom = tokenStart + len("[redacted]")
+	}
 }
 
 func redactMarkerAssignments(value, marker string) string {
