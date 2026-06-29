@@ -226,6 +226,7 @@ esac
 	multicaProvisionHarnessBin = "/abs/mnemon-harness"
 	multicaProvisionManagedRuntime = "noop"
 	multicaProvisionManagedWorkspace = tmp
+	multicaProvisionAcceptanceBridge = true
 	multicaJSON = true
 	t.Setenv("MULTICA_ENV_STDIN_PATH", envStdinPath)
 
@@ -281,6 +282,19 @@ esac
 		if !strings.Contains(string(envStdin), want) {
 			t.Fatalf("agent env stdin missing %s:\n%s", want, envStdin)
 		}
+	}
+}
+
+func TestMulticaProvisionRejectsDirectHarnessUse(t *testing.T) {
+	restoreMulticaFlags(t)
+
+	multicaProvisionAcceptanceBridge = false
+	err := runMulticaProvision(multicaProvisionCmd, nil)
+	if err == nil {
+		t.Fatal("direct hidden harness provision should be rejected")
+	}
+	if !strings.Contains(err.Error(), "mnemon-acceptance multica-provision") {
+		t.Fatalf("unexpected direct provision error: %v", err)
 	}
 }
 
@@ -353,6 +367,7 @@ func restoreMulticaFlags(t *testing.T) {
 	oldProvisionManagedCommand := multicaProvisionManagedCommand
 	oldProvisionManagedWorkspace := multicaProvisionManagedWorkspace
 	oldProvisionManagedTimeout := multicaProvisionManagedTimeout
+	oldProvisionAcceptanceBridge := multicaProvisionAcceptanceBridge
 	oldParticipantRegistry := multicaParticipantRegistry
 	oldParticipantProjectRoot := multicaParticipantProjectRoot
 	oldParticipantAgentID := multicaParticipantAgentID
@@ -410,6 +425,7 @@ func restoreMulticaFlags(t *testing.T) {
 		multicaProvisionManagedCommand = oldProvisionManagedCommand
 		multicaProvisionManagedWorkspace = oldProvisionManagedWorkspace
 		multicaProvisionManagedTimeout = oldProvisionManagedTimeout
+		multicaProvisionAcceptanceBridge = oldProvisionAcceptanceBridge
 		multicaParticipantRegistry = oldParticipantRegistry
 		multicaParticipantProjectRoot = oldParticipantProjectRoot
 		multicaParticipantAgentID = oldParticipantAgentID
@@ -465,6 +481,7 @@ func restoreMulticaFlags(t *testing.T) {
 	multicaProvisionManagedCommand = ""
 	multicaProvisionManagedWorkspace = ""
 	multicaProvisionManagedTimeout = 0
+	multicaProvisionAcceptanceBridge = false
 	multicaParticipantRegistry = ""
 	multicaParticipantProjectRoot = "."
 	multicaParticipantAgentID = ""

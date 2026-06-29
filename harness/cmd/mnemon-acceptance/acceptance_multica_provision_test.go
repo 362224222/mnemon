@@ -45,6 +45,7 @@ func TestMulticaProvisionAcceptanceBuildsHiddenHarnessBridge(t *testing.T) {
 		"multica",
 		"--json",
 		"provision",
+		"--acceptance-bridge",
 		"--multica-workspace-id",
 		"ws-1",
 		"--runtime-command",
@@ -90,7 +91,7 @@ func TestMulticaProvisionAcceptanceRunsHarnessBridge(t *testing.T) {
 	if gotCommand != "/tmp/mnemon-harness" {
 		t.Fatalf("command = %q", gotCommand)
 	}
-	if !slices.Contains(gotArgs, "provision") || !slices.Contains(gotArgs, "ws-acceptance") {
+	if !slices.Contains(gotArgs, "provision") || !slices.Contains(gotArgs, "--acceptance-bridge") || !slices.Contains(gotArgs, "ws-acceptance") {
 		t.Fatalf("hidden harness provision args not propagated: %v", gotArgs)
 	}
 }

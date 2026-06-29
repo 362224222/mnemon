@@ -62,6 +62,7 @@ var (
 	multicaProvisionManagedCommand   string
 	multicaProvisionManagedWorkspace string
 	multicaProvisionManagedTimeout   time.Duration
+	multicaProvisionAcceptanceBridge bool
 
 	multicaParticipantRegistry         string
 	multicaParticipantProjectRoot      string
@@ -372,6 +373,9 @@ func runMulticaParticipantRegister(cmd *cobra.Command, args []string) error {
 }
 
 func runMulticaProvision(cmd *cobra.Command, args []string) error {
+	if !multicaProvisionAcceptanceBridge {
+		return fmt.Errorf("multica provision is test-only; use mnemon-acceptance multica-provision")
+	}
 	ctx := multicaCommandContext(cmd)
 	workspaceID := strings.TrimSpace(multicaWorkspaceID)
 	if workspaceID == "" {
@@ -1001,6 +1005,8 @@ func init() {
 	multicaProvisionCmd.Flags().StringVar(&multicaProvisionManagedCommand, "managed-command", envDefault("MNEMON_MANAGED_COMMAND", ""), "managed runtime command injected into participant env")
 	multicaProvisionCmd.Flags().StringVar(&multicaProvisionManagedWorkspace, "managed-workspace", envDefault("MNEMON_MANAGED_WORKSPACE", ""), "managed runtime workspace injected into participant env")
 	multicaProvisionCmd.Flags().DurationVar(&multicaProvisionManagedTimeout, "managed-turn-timeout", 0, "managed runtime turn timeout injected into participant env")
+	multicaProvisionCmd.Flags().BoolVar(&multicaProvisionAcceptanceBridge, "acceptance-bridge", false, "allow mnemon-acceptance to invoke hidden Multica provisioning bridge")
+	_ = multicaProvisionCmd.Flags().MarkHidden("acceptance-bridge")
 
 	multicaParticipantRegisterCmd.Flags().StringVar(&multicaParticipantRegistry, "registry", "", "Multica registry path")
 	multicaParticipantRegisterCmd.Flags().StringVar(&multicaParticipantProjectRoot, "project-root", ".", "project root for the default registry path")

@@ -91,7 +91,7 @@ func buildAcceptanceMulticaProvisionArgs() []string {
 	args = appendFlag(args, "--multica-profile", acceptanceMulticaProvisionProfile)
 	args = appendFlag(args, "--multica-server-url", acceptanceMulticaProvisionServerURL)
 	args = appendFlag(args, "--multica-workspace-id", acceptanceMulticaProvisionWorkspaceID)
-	args = append(args, "--json", "provision")
+	args = append(args, "--json", "provision", "--acceptance-bridge")
 	args = appendFlag(args, "--registry", acceptanceMulticaProvisionRegistry)
 	args = appendFlag(args, "--project-root", acceptanceMulticaProvisionProjectRoot)
 	args = appendFlag(args, "--runtime-profile-name", acceptanceMulticaProvisionProfileName)
