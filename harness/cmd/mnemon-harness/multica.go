@@ -709,10 +709,13 @@ func ensureMulticaParticipantEnv(ctx context.Context, cli driver.MulticaCLI, par
 
 func multicaParticipantRuntimeEnv(cli driver.MulticaCLI, participant driver.MulticaParticipantRecord, registryPath, workspaceID string, opts multicaParticipantEnvOptions) map[string]string {
 	env := map[string]string{}
+	registryPath = multicaLocalEnvPath(registryPath)
+	managedWorkspace := multicaLocalEnvPath(opts.ManagedWorkspace)
 	controlTokenFile := strings.TrimSpace(opts.ControlTokenFile)
 	if controlTokenFile == "" && strings.TrimSpace(opts.ControlToken) == "" {
-		controlTokenFile = defaultMulticaParticipantControlTokenFile(opts.ManagedWorkspace, participant.Principal)
+		controlTokenFile = defaultMulticaParticipantControlTokenFile(managedWorkspace, participant.Principal)
 	}
+	controlTokenFile = multicaLocalEnvPath(controlTokenFile)
 	addStringEnv(env, "MNEMON_HUB_BACKEND", driver.MulticaHubBackend)
 	addStringEnv(env, "MNEMON_MULTICA_REGISTRY", registryPath)
 	addStringEnv(env, "MNEMON_MULTICA_WORKSPACE_ID", workspaceID)
@@ -726,11 +729,26 @@ func multicaParticipantRuntimeEnv(cli driver.MulticaCLI, participant driver.Mult
 	addStringEnv(env, "MNEMON_HARNESS_BIN", opts.HarnessBin)
 	addStringEnv(env, "MNEMON_MANAGED_RUNTIME", opts.ManagedRuntime)
 	addStringEnv(env, "MNEMON_MANAGED_COMMAND", opts.ManagedCommand)
-	addStringEnv(env, "MNEMON_MANAGED_WORKSPACE", opts.ManagedWorkspace)
+	addStringEnv(env, "MNEMON_MANAGED_WORKSPACE", managedWorkspace)
 	if opts.ManagedTimeout > 0 {
 		env["MNEMON_MANAGED_TURN_TIMEOUT"] = opts.ManagedTimeout.String()
 	}
 	return env
+}
+
+func multicaLocalEnvPath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path)
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	return abs
 }
 
 func mergeMulticaParticipantRuntimeEnv(existing, desired map[string]string) map[string]string {

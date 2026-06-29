@@ -326,6 +326,39 @@ func TestMergeMulticaParticipantRuntimeEnvPrunesStaleManagedKeys(t *testing.T) {
 	}
 }
 
+func TestMulticaParticipantRuntimeEnvUsesAbsoluteLocalPaths(t *testing.T) {
+	restoreMulticaFlags(t)
+
+	tmp := t.TempDir()
+	t.Chdir(tmp)
+	workspace := "managed-workspace"
+	tokenDir := filepath.Join(workspace, ".mnemon", "harness", "channel", "credentials")
+	if err := os.MkdirAll(tokenDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tokenDir, "planner-team.token"), []byte("token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	multicaProfile = "desktop-api.multica.ai"
+	env := multicaParticipantRuntimeEnv(driver.MulticaCLI{Command: "multica"}, driver.MulticaParticipantRecord{
+		Principal: "planner@team",
+		AgentName: "mnemon-planner",
+		AgentID:   "agent-planner",
+	}, filepath.Join("state", "registry.json"), "ws-1", multicaParticipantEnvOptions{
+		ManagedWorkspace: workspace,
+	})
+
+	for _, key := range []string{"MNEMON_MULTICA_REGISTRY", "MNEMON_MANAGED_WORKSPACE", "MNEMON_CONTROL_TOKEN_FILE"} {
+		value := env[key]
+		if value == "" || !filepath.IsAbs(value) {
+			t.Fatalf("%s should be absolute, got %q in %+v", key, value, env)
+		}
+	}
+	if want := filepath.Join(tmp, workspace, ".mnemon", "harness", "channel", "credentials", "planner-team.token"); env["MNEMON_CONTROL_TOKEN_FILE"] != want {
+		t.Fatalf("token file = %q, want %q", env["MNEMON_CONTROL_TOKEN_FILE"], want)
+	}
+}
+
 func restoreMulticaFlags(t *testing.T) {
 	t.Helper()
 	oldBin := multicaBin
