@@ -296,7 +296,7 @@ esac
 	}
 	for _, want := range []string{
 		"Mnemon update: issue admitted",
-		"## Mnemon Intake",
+		"## Mnemon Runtime",
 		"Issue: [TEA-7](mention://issue/iss-7)",
 		"Principal: `planner@team`",
 		"Managed wake: `completed`",
@@ -552,12 +552,16 @@ esac
 	comment := mustReadRuntimeTestFile(t, commentPath)
 	for _, want := range []string{
 		"Mnemon update: issue admitted",
-		"## Mnemon Intake",
-		"Hub backend: `multica`",
-		"Session: `multica:session:root-1`",
+		"## Mnemon Runtime",
+		"Issue: [TEA-1](mention://issue/root-1)",
 	} {
 		if !strings.Contains(comment, want) {
 			t.Fatalf("comment missing %q:\n%s", want, comment)
+		}
+	}
+	for _, blocked := range []string{"Hub backend:", "Session: `multica:session:root-1`"} {
+		if strings.Contains(comment, blocked) {
+			t.Fatalf("runtime comment must not expose machine field %q:\n%s", blocked, comment)
 		}
 	}
 	if !strings.Contains(out.String(), "Mnemon ingest: recorded seq=21") {
@@ -650,11 +654,14 @@ esac
 	for _, want := range []string{
 		"Mnemon update: issue admitted",
 		"Mnemond ingest: seq=29",
-		"Hub backend: `multica`",
+		"## Mnemon Runtime",
 	} {
 		if !strings.Contains(comment, want) {
 			t.Fatalf("comment missing %q:\n%s", want, comment)
 		}
+	}
+	if strings.Contains(comment, "Hub backend:") {
+		t.Fatalf("runtime comment must not expose hub backend routing details:\n%s", comment)
 	}
 	args := mustReadRuntimeTestFile(t, argsPath)
 	if !strings.Contains(args, "issue metadata set iss-9 --key mnemon.hub_backend") || !strings.Contains(args, "issue comment add iss-9 --content-stdin --output json") {
@@ -823,18 +830,18 @@ esac
 		"check release notes against the public changelog",
 		"Root issue: [TEA-10](mention://issue/root-2) - Coordinate docs release",
 		"Assignee: `worker@team` (mnemon-worker)",
-		"Assignment: `asg-writer`",
-		"Post a `progress_digest`",
-		"Requested content: progress_digest with result or blocker",
-		"metadata under `mnemon.*`",
+		"Scope: check release notes",
+		"## Feedback",
+		"Expected feedback: result or blocker",
+		"Progress path: Mnemon runtime progress, result, or blocker feedback",
 	} {
 		if !strings.Contains(description, want) {
 			t.Fatalf("description missing %q:\n%s", want, description)
 		}
 	}
-	for _, blocked := range []string{"mnemon.session_id", "mnemon.assignment_id", "mnemon.root_issue_id"} {
+	for _, blocked := range []string{"mnemon.", "Session:", "Assignment: `asg-writer`", "assignment_ref", "progress_digest"} {
 		if strings.Contains(description, blocked) {
-			t.Fatalf("description must not expose machine metadata key %q:\n%s", blocked, description)
+			t.Fatalf("description must not expose machine field %q:\n%s", blocked, description)
 		}
 	}
 	comment := mustReadRuntimeTestFile(t, commentPath)
@@ -943,13 +950,18 @@ esac
 	comment := mustReadRuntimeTestFile(t, commentPath)
 	for _, want := range []string{
 		"Mnemon update: assignment mailbox correlated",
-		"## Assignment Mailbox",
-		"Assignment: `asg-1`",
+		"## Mnemon Runtime",
+		"Root issue: [root-1](mention://issue/root-1)",
 		"mnemon:event=event-assignment-1",
 		"Managed wake: `completed`",
 	} {
 		if !strings.Contains(comment, want) {
 			t.Fatalf("comment missing %q:\n%s", want, comment)
+		}
+	}
+	for _, blocked := range []string{"Assignment: `asg-1`", "Session: `multica:session:root-1`"} {
+		if strings.Contains(comment, blocked) {
+			t.Fatalf("assignment mailbox comment must not expose machine field %q:\n%s", blocked, comment)
 		}
 	}
 }

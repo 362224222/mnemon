@@ -26,17 +26,19 @@ func TestAssignmentMailboxMaterial(t *testing.T) {
 		"## Assignment",
 		"Root issue: [TEA-1](mention://issue/root-1) - Validate runtime",
 		"Assignee: `researcher@team` (mnemon-researcher)",
-		"Session: `session-1`",
-		"Assignment: `asg-1`",
-		"Post a `progress_digest`",
-		"metadata under `mnemon.*`",
+		"Scope: runtime/readiness",
+		"## Feedback",
+		"Expected feedback: Brief result.",
+		"Progress path: Mnemon runtime progress, result, or blocker feedback",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("description missing %q:\n%s", want, body)
 		}
 	}
-	if strings.Contains(body, "mnemon.session_id") {
-		t.Fatalf("visible description must not copy machine metadata keys:\n%s", body)
+	for _, blocked := range []string{"Session:", "Assignment: `asg-1`", "progress_digest", "assignment_ref", "mnemon."} {
+		if strings.Contains(body, blocked) {
+			t.Fatalf("visible description must not expose machine field %q:\n%s", blocked, body)
+		}
 	}
 }
 
@@ -48,6 +50,20 @@ func TestAssignmentMailboxTitleStripsRootLabelFromScope(t *testing.T) {
 	}
 	if got := AssignmentMailboxTitle(item); got != "TEA-14: Mnemon R2 Multica hub final validation" {
 		t.Fatalf("title = %q", got)
+	}
+}
+
+func TestAssignmentMailboxDescriptionNormalizesProtocolFeedback(t *testing.T) {
+	body := AssignmentMailboxDescription(AssignmentMailboxMaterial{
+		ID:               "asg-1",
+		Scope:            "release validation",
+		ExpectedFeedback: "progress_digest with result or blocker",
+	})
+	if !strings.Contains(body, "Expected feedback: result or blocker") {
+		t.Fatalf("description should expose human feedback wording:\n%s", body)
+	}
+	if strings.Contains(body, "progress_digest") {
+		t.Fatalf("description should keep protocol event type out of visible text:\n%s", body)
 	}
 }
 
@@ -105,7 +121,7 @@ func TestRuntimeProjectionCommentBodyForIntake(t *testing.T) {
 		HubFeedbackComment: 1,
 	})
 	for _, want := range []string{
-		"## Mnemon Intake",
+		"## Mnemon Runtime",
 		"Issue: [TEA-1](mention://issue/issue-1)",
 		"Principal: `planner@team`",
 		"Mnemond ingest: seq=42 duplicate=false ticked=true",
@@ -130,15 +146,18 @@ func TestRuntimeProjectionCommentBodyForAssignmentMailbox(t *testing.T) {
 		WakeStatus:        "completed",
 	})
 	for _, want := range []string{
-		"## Assignment Mailbox",
+		"## Mnemon Runtime",
 		"Status: correlated",
-		"Assignment: `asg-1`",
-		"Session: `multica:session:root-1`",
 		"Root issue: [TEA-1](mention://issue/root-1)",
 		"Managed wake: `completed`",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("assignment runtime projection body missing %q:\n%s", want, body)
+		}
+	}
+	for _, blocked := range []string{"Assignment: `asg-1`", "Session: `multica:session:root-1`"} {
+		if strings.Contains(body, blocked) {
+			t.Fatalf("assignment runtime projection should keep %q in metadata, not comment text:\n%s", blocked, body)
 		}
 	}
 }

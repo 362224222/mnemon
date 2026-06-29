@@ -78,20 +78,20 @@ func AssignmentMailboxDescription(item AssignmentMailboxMaterial) string {
 	writeBullet(&b, "Root issue", rootIssueReference(item))
 	writeBullet(&b, "Assignee", assigneeReference(item))
 	writeBullet(&b, "Scope", item.Scope)
-	writeBullet(&b, "Session", codeSpan(item.SessionID))
-	writeBullet(&b, "Assignment", codeSpan(item.ID))
 	if rationale := strings.TrimSpace(item.Rationale); rationale != "" {
 		b.WriteString("\n## Rationale\n\n")
 		b.WriteString(rationale)
 		b.WriteString("\n")
 	}
-	b.WriteString("\n## Expected Feedback\n\n")
-	b.WriteString("Post a `progress_digest` that includes:\n")
-	writeBullet(&b, "`assignment_ref`", codeSpan(item.ID))
-	if feedback := strings.TrimSpace(item.ExpectedFeedback); feedback != "" {
-		writeBullet(&b, "Requested content", feedback)
+	b.WriteString("\n## Feedback\n\n")
+	if feedback := visibleExpectedFeedback(item.ExpectedFeedback); feedback != "" {
+		writeBullet(&b, "Expected feedback", feedback)
 	}
-	b.WriteString("\nRouting and dedupe fields live in Multica issue metadata under `mnemon.*`; this description is for human review.\n")
+	if strings.TrimSpace(item.ExpectedFeedback) == "" {
+		b.WriteString("Report progress, results, or blockers through the Mnemon runtime path.\n")
+	} else {
+		writeBullet(&b, "Progress path", "Mnemon runtime progress, result, or blocker feedback")
+	}
 	return strings.TrimSpace(b.String())
 }
 
@@ -129,25 +129,20 @@ func ProgressCommentBody(item ProgressFeedbackMaterial) string {
 func RuntimeProjectionCommentBody(item RuntimeProjectionMaterial) string {
 	var b strings.Builder
 	if item.AssignmentMailbox {
-		b.WriteString("## Assignment Mailbox\n\n")
+		b.WriteString("## Mnemon Runtime\n\n")
 		writeBullet(&b, "Status", firstNonEmptyString(item.Status, "correlated"))
-		writeBullet(&b, "Assignment", codeSpan(item.AssignmentID))
-		writeBullet(&b, "Session", codeSpan(item.SessionID))
 		writeBullet(&b, "Root issue", IssueMention(firstNonEmptyString(item.RootIssueLabel, item.RootIssueID), item.RootIssueID))
 	} else {
-		b.WriteString("## Mnemon Intake\n\n")
+		b.WriteString("## Mnemon Runtime\n\n")
 		writeBullet(&b, "Status", item.Status)
 		writeBullet(&b, "Issue", IssueMention(firstNonEmptyString(item.IssueLabel, item.IssueID), item.IssueID))
 		writeBullet(&b, "Principal", codeSpan(item.Principal))
-		writeBullet(&b, "Task", codeSpan(item.TaskID))
-		writeBullet(&b, "Hub backend", codeSpan(item.HubBackend))
-		writeBullet(&b, "Session", codeSpan(item.SessionID))
 		if item.HasIngestReceipt {
 			writeBullet(&b, "Mnemond ingest", fmt.Sprintf("seq=%d duplicate=%v ticked=%v", item.IngestSeq, item.IngestDuplicate, item.IngestTicked))
 		}
 	}
 	if item.WakeStatus != "" || item.HubWriteStatus != "" {
-		b.WriteString("\n## Runtime Effects\n\n")
+		b.WriteString("\n## Effects\n\n")
 		writeBullet(&b, "Managed wake", codeSpan(item.WakeStatus))
 		writeBullet(&b, "Managed turn", codeSpan(item.WakeTurnID))
 		if item.HubWriteStatus != "" {
@@ -276,6 +271,23 @@ func assigneeReference(item AssignmentMailboxMaterial) string {
 		return display
 	}
 	return principal + " (" + display + ")"
+}
+
+func visibleExpectedFeedback(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	lower := strings.ToLower(value)
+	for _, prefix := range []string{"progress_digest with ", "progress digest with "} {
+		if strings.HasPrefix(lower, prefix) {
+			return strings.TrimSpace(value[len(prefix):])
+		}
+	}
+	if lower == "progress_digest" || lower == "progress digest" {
+		return "progress, result, or blocker"
+	}
+	return value
 }
 
 func writeBullet(b *strings.Builder, label, value string) {
