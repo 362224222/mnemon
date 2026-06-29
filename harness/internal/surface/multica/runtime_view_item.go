@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
+	pview "github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation/view"
 )
 
 type RuntimeAssignmentItem struct {
@@ -89,6 +90,22 @@ func RuntimeProgressViewItem(item map[string]any) RuntimeProgressItem {
 	}
 }
 
+func RuntimeViewItems(proj pview.View, kind string) []map[string]any {
+	var out []map[string]any
+	for _, content := range proj.Content {
+		if string(content.Ref.Kind) != kind {
+			continue
+		}
+		for _, field := range []string{"items", "entries", "declarations"} {
+			if raw, ok := content.Fields[field]; ok {
+				out = append(out, runtimeViewAnyItems(raw)...)
+				break
+			}
+		}
+	}
+	return out
+}
+
 func RuntimeAssignmentMatchesScope(item RuntimeAssignmentItem, scope RuntimeScopeMaterial) bool {
 	if !RuntimeExplicitScopeMatches(item.SessionID, item.RootIssueID, scope) {
 		return false
@@ -113,6 +130,21 @@ func RuntimeItemAfterRootIngest(ingestSeq, rootIngestSeq int64) bool {
 		return true
 	}
 	return ingestSeq > rootIngestSeq
+}
+
+func runtimeViewAnyItems(raw any) []map[string]any {
+	var out []map[string]any
+	switch v := raw.(type) {
+	case []any:
+		for _, item := range v {
+			if m, ok := item.(map[string]any); ok {
+				out = append(out, m)
+			}
+		}
+	case []map[string]any:
+		out = append(out, v...)
+	}
+	return out
 }
 
 func runtimeViewItemFirstString(item map[string]any, keys ...string) string {

@@ -5,7 +5,9 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
+	pview "github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation/view"
 )
 
 func TestRuntimeAssignmentViewItemReadsStructuredPayloadSections(t *testing.T) {
@@ -78,6 +80,43 @@ func TestRuntimeProgressViewItemReadsRefsAndNarrative(t *testing.T) {
 	}
 	if !reflect.DeepEqual(item.ArtifactRefs, []string{"artifact-1"}) {
 		t.Fatalf("artifact refs = %#v", item.ArtifactRefs)
+	}
+}
+
+func TestRuntimeViewItemsSelectsKindAndCompatibleItemFields(t *testing.T) {
+	view := pview.View{Content: []pview.ResourceContent{
+		{
+			Ref: contract.ResourceRef{Kind: "assignment", ID: "project"},
+			Fields: map[string]any{
+				"items": []any{
+					map[string]any{"id": "asg-items"},
+					"ignored",
+				},
+			},
+		},
+		{
+			Ref: contract.ResourceRef{Kind: "assignment", ID: "team"},
+			Fields: map[string]any{
+				"entries": []map[string]any{{"id": "asg-entries"}},
+			},
+		},
+		{
+			Ref: contract.ResourceRef{Kind: "progress_digest", ID: "project"},
+			Fields: map[string]any{
+				"declarations": []any{map[string]any{"id": "pg-1"}},
+			},
+		},
+	}}
+	assignments := RuntimeViewItems(view, "assignment")
+	if len(assignments) != 2 {
+		t.Fatalf("assignment items = %d, want 2: %#v", len(assignments), assignments)
+	}
+	if assignments[0]["id"] != "asg-items" || assignments[1]["id"] != "asg-entries" {
+		t.Fatalf("assignment order/content mismatch: %#v", assignments)
+	}
+	progress := RuntimeViewItems(view, "progress_digest")
+	if len(progress) != 1 || progress[0]["id"] != "pg-1" {
+		t.Fatalf("progress items mismatch: %#v", progress)
 	}
 }
 

@@ -89,7 +89,7 @@ func (s *runtimeRPCState) writeAssignmentMailboxes(ctx context.Context, cli driv
 		return err
 	}
 	var projections []runtimeAssignmentProjection
-	for _, assignment := range hubViewItems(proj, "assignment") {
+	for _, assignment := range multicasurface.RuntimeViewItems(proj, "assignment") {
 		item := multicasurface.RuntimeAssignmentViewItem(assignment)
 		if item.ID == "" || item.Assignee == "" {
 			continue
@@ -295,7 +295,7 @@ func retryMulticaHubValue[T any](ctx context.Context, op func() (T, error)) (T, 
 }
 
 func (s *runtimeRPCState) writeProgressComments(ctx context.Context, cli driver.MulticaCLI, ledger *driver.FileMulticaHubLedger, proj pview.View, result *runtimeImportResult) error {
-	for _, progress := range hubViewItems(proj, "progress_digest") {
+	for _, progress := range multicasurface.RuntimeViewItems(proj, "progress_digest") {
 		item := multicasurface.RuntimeProgressViewItem(progress)
 		if item.ID == "" || item.AssignmentRef == "" {
 			continue
@@ -473,37 +473,6 @@ func multicaParticipantForPrincipal(reg driver.MulticaRegistry, principal string
 		}
 	}
 	return driver.MulticaParticipantRecord{}, false
-}
-
-func hubViewItems(proj pview.View, kind string) []map[string]any {
-	var out []map[string]any
-	for _, content := range proj.Content {
-		if string(content.Ref.Kind) != kind {
-			continue
-		}
-		for _, field := range []string{"items", "entries", "declarations"} {
-			if raw, ok := content.Fields[field]; ok {
-				out = append(out, hubAnyItems(raw)...)
-				break
-			}
-		}
-	}
-	return out
-}
-
-func hubAnyItems(raw any) []map[string]any {
-	var out []map[string]any
-	switch v := raw.(type) {
-	case []any:
-		for _, item := range v {
-			if m, ok := item.(map[string]any); ok {
-				out = append(out, m)
-			}
-		}
-	case []map[string]any:
-		out = append(out, v...)
-	}
-	return out
 }
 
 func runtimeItemAfterRootIngest(ingestSeq int64, result *runtimeImportResult) bool {
