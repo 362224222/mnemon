@@ -2,11 +2,9 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -92,11 +90,11 @@ func (s *runtimeRPCState) writeAssignmentMailboxes(ctx context.Context, cli driv
 	}
 	var projections []runtimeAssignmentProjection
 	for _, assignment := range hubViewItems(proj, "assignment") {
-		item := runtimeAssignmentItem(assignment)
+		item := multicasurface.RuntimeAssignmentViewItem(assignment)
 		if item.ID == "" || item.Assignee == "" {
 			continue
 		}
-		if !hubItemAfterRootIngest(item.IngestSeq, result) {
+		if !runtimeItemAfterRootIngest(item.IngestSeq, result) {
 			continue
 		}
 		if !runtimeAssignmentMatchesCurrentMulticaScope(item, result) {
@@ -183,7 +181,7 @@ func (s *runtimeRPCState) writeAssignmentMailboxes(ctx context.Context, cli driv
 }
 
 type runtimeAssignmentProjection struct {
-	Item        runtimeAssignment
+	Item        multicasurface.RuntimeAssignmentItem
 	Participant driver.MulticaParticipantRecord
 	Source      driver.MulticaHubLedgerSource
 	Metadata    driver.MulticaHubMetadata
@@ -298,11 +296,11 @@ func retryMulticaHubValue[T any](ctx context.Context, op func() (T, error)) (T, 
 
 func (s *runtimeRPCState) writeProgressComments(ctx context.Context, cli driver.MulticaCLI, ledger *driver.FileMulticaHubLedger, proj pview.View, result *runtimeImportResult) error {
 	for _, progress := range hubViewItems(proj, "progress_digest") {
-		item := runtimeProgressItem(progress)
+		item := multicasurface.RuntimeProgressViewItem(progress)
 		if item.ID == "" || item.AssignmentRef == "" {
 			continue
 		}
-		if !hubItemAfterRootIngest(item.IngestSeq, result) {
+		if !runtimeItemAfterRootIngest(item.IngestSeq, result) {
 			continue
 		}
 		source := driver.MulticaHubLedgerSource{
@@ -418,106 +416,12 @@ func (s *runtimeRPCState) ensureProgressIssueStatuses(ctx context.Context, cli d
 	return nil
 }
 
-type runtimeAssignment struct {
-	ID               string
-	EventID          string
-	IngestSeq        int64
-	SessionID        string
-	RootIssueID      string
-	Actor            string
-	Assignee         string
-	Scope            string
-	TTL              string
-	SignalRef        string
-	ExpectedWork     string
-	ExpectedFeedback string
-	Rationale        string
-	ContextRefs      []string
-	EvidenceRefs     []string
+func runtimeAssignmentMatchesCurrentMulticaScope(item multicasurface.RuntimeAssignmentItem, result *runtimeImportResult) bool {
+	return multicasurface.RuntimeAssignmentMatchesScope(item, runtimeMulticaScopeMaterial(result))
 }
 
-type runtimeProgress struct {
-	ID            string
-	EventID       string
-	IngestSeq     int64
-	SessionID     string
-	RootIssueID   string
-	Actor         string
-	AssignmentRef string
-	Scope         string
-	FeedbackKind  string
-	Summary       string
-	Result        string
-	Blocker       string
-	ContextRefs   []string
-	ArtifactRefs  []string
-	EvidenceRefs  []string
-}
-
-func runtimeAssignmentItem(item map[string]any) runtimeAssignment {
-	id := hubItemFirstString(item, "assignment_id", "id", "declaration_id")
-	if id == "" {
-		id = hubItemString(item, "event_id")
-	}
-	return runtimeAssignment{
-		ID:               id,
-		EventID:          hubItemFirstString(item, "event_id", "id", "declaration_id", "assignment_id"),
-		IngestSeq:        hubItemInt64(item, "ingest_seq"),
-		SessionID:        hubItemString(item, "session_id"),
-		RootIssueID:      hubItemString(item, "root_issue_id"),
-		Actor:            hubItemString(item, "actor"),
-		Assignee:         hubItemString(item, "assignee"),
-		Scope:            hubItemString(item, "scope"),
-		TTL:              hubItemString(item, "ttl"),
-		SignalRef:        hubItemString(item, "signal_ref"),
-		ExpectedWork:     hubItemString(item, "expected_work"),
-		ExpectedFeedback: hubItemString(item, "expected_feedback"),
-		Rationale:        hubItemString(item, "rationale"),
-		ContextRefs:      hubItemStringList(item, "context_refs"),
-		EvidenceRefs:     hubItemStringList(item, "evidence_refs"),
-	}
-}
-
-func runtimeProgressItem(item map[string]any) runtimeProgress {
-	id := hubItemFirstString(item, "id", "declaration_id", "event_id")
-	return runtimeProgress{
-		ID:            id,
-		EventID:       hubItemFirstString(item, "event_id", "id", "declaration_id"),
-		IngestSeq:     hubItemInt64(item, "ingest_seq"),
-		SessionID:     hubItemString(item, "session_id"),
-		RootIssueID:   hubItemString(item, "root_issue_id"),
-		Actor:         hubItemString(item, "actor"),
-		AssignmentRef: hubItemString(item, "assignment_ref"),
-		Scope:         hubItemString(item, "scope"),
-		FeedbackKind:  hubItemString(item, "feedback_kind"),
-		Summary:       hubItemString(item, "summary"),
-		Result:        hubItemString(item, "result"),
-		Blocker:       hubItemString(item, "blocker"),
-		ContextRefs:   hubItemStringList(item, "context_refs"),
-		ArtifactRefs:  hubItemStringList(item, "artifact_refs"),
-		EvidenceRefs:  hubItemStringList(item, "evidence_refs"),
-	}
-}
-
-func runtimeAssignmentMatchesCurrentMulticaScope(item runtimeAssignment, result *runtimeImportResult) bool {
-	scope := runtimeMulticaScopeMaterial(result)
-	if !multicasurface.RuntimeExplicitScopeMatches(item.SessionID, item.RootIssueID, scope) {
-		return false
-	}
-	refs := append([]string{}, item.ContextRefs...)
-	refs = append(refs, item.EvidenceRefs...)
-	return multicasurface.RuntimeRefsMatchScope(refs, scope)
-}
-
-func runtimeProgressMatchesCurrentMulticaScope(item runtimeProgress, result *runtimeImportResult, childIssueID string) bool {
-	scope := runtimeMulticaScopeMaterial(result)
-	if !multicasurface.RuntimeExplicitScopeMatches(item.SessionID, item.RootIssueID, scope) {
-		return false
-	}
-	refs := append([]string{}, item.ContextRefs...)
-	refs = append(refs, item.EvidenceRefs...)
-	refs = append(refs, item.ArtifactRefs...)
-	return multicasurface.RuntimeRefsMatchScope(refs, scope, childIssueID)
+func runtimeProgressMatchesCurrentMulticaScope(item multicasurface.RuntimeProgressItem, result *runtimeImportResult, childIssueID string) bool {
+	return multicasurface.RuntimeProgressMatchesScope(item, runtimeMulticaScopeMaterial(result), childIssueID)
 }
 
 func runtimeMulticaScopeMaterial(result *runtimeImportResult) multicasurface.RuntimeScopeMaterial {
@@ -602,116 +506,14 @@ func hubAnyItems(raw any) []map[string]any {
 	return out
 }
 
-func hubItemFirstString(item map[string]any, keys ...string) string {
-	for _, key := range keys {
-		if value := hubItemString(item, key); value != "" {
-			return value
-		}
-	}
-	return ""
-}
-
-func hubItemString(item map[string]any, key string) string {
-	if value, ok := item[key].(string); ok {
-		return strings.TrimSpace(value)
-	}
-	for _, section := range []string{eventmodel.PayloadRuleKey, eventmodel.PayloadNarrativeKey, eventmodel.PayloadRefsKey} {
-		if m, ok := item[section].(map[string]any); ok {
-			if value, ok := m[key].(string); ok {
-				return strings.TrimSpace(value)
-			}
-		}
-	}
-	return ""
-}
-
-func hubItemInt64(item map[string]any, key string) int64 {
-	if value, ok := hubInt64(item[key]); ok {
-		return value
-	}
-	for _, section := range []string{eventmodel.PayloadRuleKey, eventmodel.PayloadNarrativeKey, eventmodel.PayloadRefsKey} {
-		if m, ok := item[section].(map[string]any); ok {
-			if value, ok := hubInt64(m[key]); ok {
-				return value
-			}
-		}
-	}
-	return 0
-}
-
-func hubInt64(raw any) (int64, bool) {
-	switch v := raw.(type) {
-	case int:
-		return int64(v), true
-	case int64:
-		return v, true
-	case int32:
-		return int64(v), true
-	case float64:
-		return int64(v), true
-	case float32:
-		return int64(v), true
-	case json.Number:
-		n, err := v.Int64()
-		return n, err == nil
-	case string:
-		n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
-		return n, err == nil
-	default:
-		return 0, false
-	}
-}
-
-func hubItemAfterRootIngest(ingestSeq int64, result *runtimeImportResult) bool {
+func runtimeItemAfterRootIngest(ingestSeq int64, result *runtimeImportResult) bool {
 	if result == nil || result.Receipt == nil || result.Receipt.Seq <= 0 || ingestSeq <= 0 {
 		return true
 	}
-	return ingestSeq > result.Receipt.Seq
+	return multicasurface.RuntimeItemAfterRootIngest(ingestSeq, result.Receipt.Seq)
 }
 
-func hubItemStringList(item map[string]any, key string) []string {
-	if out := hubStringList(item[key]); len(out) > 0 {
-		return out
-	}
-	for _, section := range []string{eventmodel.PayloadRuleKey, eventmodel.PayloadNarrativeKey, eventmodel.PayloadRefsKey} {
-		if m, ok := item[section].(map[string]any); ok {
-			if out := hubStringList(m[key]); len(out) > 0 {
-				return out
-			}
-		}
-	}
-	return nil
-}
-
-func hubStringList(raw any) []string {
-	seen := map[string]bool{}
-	var out []string
-	add := func(value string) {
-		value = strings.TrimSpace(value)
-		if value == "" || seen[value] {
-			return
-		}
-		seen[value] = true
-		out = append(out, value)
-	}
-	switch v := raw.(type) {
-	case []string:
-		for _, item := range v {
-			add(item)
-		}
-	case []any:
-		for _, item := range v {
-			if value, ok := item.(string); ok {
-				add(value)
-			}
-		}
-	case string:
-		add(v)
-	}
-	return out
-}
-
-func assignmentMailboxMaterial(item runtimeAssignment, result *runtimeImportResult, rootIssue driver.MulticaIssue, participant driver.MulticaParticipantRecord) multicasurface.AssignmentMailboxMaterial {
+func assignmentMailboxMaterial(item multicasurface.RuntimeAssignmentItem, result *runtimeImportResult, rootIssue driver.MulticaIssue, participant driver.MulticaParticipantRecord) multicasurface.AssignmentMailboxMaterial {
 	material := multicasurface.AssignmentMailboxMaterial{
 		ID:               item.ID,
 		Scope:            item.Scope,
@@ -731,7 +533,7 @@ func assignmentMailboxMaterial(item runtimeAssignment, result *runtimeImportResu
 	return material
 }
 
-func progressFeedbackMaterial(item runtimeProgress) multicasurface.ProgressFeedbackMaterial {
+func progressFeedbackMaterial(item multicasurface.RuntimeProgressItem) multicasurface.ProgressFeedbackMaterial {
 	return multicasurface.ProgressFeedbackMaterial{
 		AssignmentRef: item.AssignmentRef,
 		FeedbackKind:  item.FeedbackKind,

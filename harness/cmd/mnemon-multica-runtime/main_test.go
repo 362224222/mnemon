@@ -1633,18 +1633,18 @@ esac
 func TestMulticaStatusForProgressIsRuleBased(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		item runtimeProgress
+		item multicasurface.RuntimeProgressItem
 		want string
 	}{
-		{name: "progress", item: runtimeProgress{FeedbackKind: "progress"}, want: "in_progress"},
-		{name: "waiting", item: runtimeProgress{FeedbackKind: "waiting"}, want: "todo"},
-		{name: "review", item: runtimeProgress{FeedbackKind: "review"}, want: "in_review"},
-		{name: "result", item: runtimeProgress{FeedbackKind: "result"}, want: "done"},
-		{name: "blocker", item: runtimeProgress{FeedbackKind: "blocker"}, want: "blocked"},
-		{name: "canceled", item: runtimeProgress{FeedbackKind: "canceled"}, want: "cancelled"},
-		{name: "blocker narrative fallback", item: runtimeProgress{Blocker: "waiting on access"}, want: "blocked"},
-		{name: "result narrative fallback", item: runtimeProgress{Result: "validated"}, want: "done"},
-		{name: "unknown", item: runtimeProgress{Summary: "not enough signal"}, want: ""},
+		{name: "progress", item: multicasurface.RuntimeProgressItem{FeedbackKind: "progress"}, want: "in_progress"},
+		{name: "waiting", item: multicasurface.RuntimeProgressItem{FeedbackKind: "waiting"}, want: "todo"},
+		{name: "review", item: multicasurface.RuntimeProgressItem{FeedbackKind: "review"}, want: "in_review"},
+		{name: "result", item: multicasurface.RuntimeProgressItem{FeedbackKind: "result"}, want: "done"},
+		{name: "blocker", item: multicasurface.RuntimeProgressItem{FeedbackKind: "blocker"}, want: "blocked"},
+		{name: "canceled", item: multicasurface.RuntimeProgressItem{FeedbackKind: "canceled"}, want: "cancelled"},
+		{name: "blocker narrative fallback", item: multicasurface.RuntimeProgressItem{Blocker: "waiting on access"}, want: "blocked"},
+		{name: "result narrative fallback", item: multicasurface.RuntimeProgressItem{Result: "validated"}, want: "done"},
+		{name: "unknown", item: multicasurface.RuntimeProgressItem{Summary: "not enough signal"}, want: ""},
 	} {
 		if got := multicasurface.ProgressIssueStatus(progressFeedbackMaterial(tc.item)); got != tc.want {
 			t.Fatalf("%s: status = %q, want %q", tc.name, got, tc.want)
