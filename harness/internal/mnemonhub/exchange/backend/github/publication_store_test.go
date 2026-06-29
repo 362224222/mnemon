@@ -79,8 +79,8 @@ func TestGitHubPublicationStoreWriteFileUpdatesWithSHA(t *testing.T) {
 func TestGitHubPublicationStoreListEventsUsesBranchHeadCursor(t *testing.T) {
 	fake := newFakeGitHubPublicationAPI(t)
 	fake.head = "head-2"
-	fake.files["mnemon/mnemond-b:"+exchange.PublicationEventRoot+"/replica-b/progress_digest/project/000000000001-dec-b.json"] = fakeGitHubFile{body: []byte(`{"id":"b"}`), sha: "sha-b"}
-	fake.files["mnemon/mnemond-b:"+exchange.PublicationEventRoot+"/replica-c/progress_digest/project/000000000001-dec-c.json"] = fakeGitHubFile{body: []byte(`{"id":"c"}`), sha: "sha-c"}
+	fake.files["head-2:"+exchange.PublicationEventRoot+"/replica-b/progress_digest/project/000000000001-dec-b.json"] = fakeGitHubFile{body: []byte(`{"id":"b"}`), sha: "sha-b"}
+	fake.files["head-2:"+exchange.PublicationEventRoot+"/replica-c/progress_digest/project/000000000001-dec-c.json"] = fakeGitHubFile{body: []byte(`{"id":"c"}`), sha: "sha-c"}
 	store, err := NewPublicationStore(PublicationStoreConfig{
 		Repo:       "mnemon-dev/mnemon-teamwork-example",
 		BaseURL:    fake.server.URL,
@@ -96,6 +96,9 @@ func TestGitHubPublicationStoreListEventsUsesBranchHeadCursor(t *testing.T) {
 	}
 	if len(list.Events) != 2 || list.NextCursor != "head-2" {
 		t.Fatalf("list = %+v, want two events at head-2", list)
+	}
+	if !stringSliceContains(fake.contentRefs, "head-2") {
+		t.Fatalf("list events must read contents at branch head sha, refs=%v", fake.contentRefs)
 	}
 	again, err := store.ListEvents(context.Background(), "mnemon/mnemond-b", exchange.PublicationEventRoot, list.NextCursor)
 	if err != nil {
@@ -220,6 +223,9 @@ func TestGitHubPublicationStoreLiveGated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := store.EnsureBranch(context.Background(), branch, "main"); err != nil {
+		t.Fatalf("ensure live branch: %v", err)
+	}
 	path := exchange.PublicationEventRoot + "/live-smoke/progress_digest/project/000000000001-live-smoke.json"
 	body := []byte(`{"schema_version":1,"source":"mnemon live smoke"}`)
 	res, err := store.PutEvent(context.Background(), branch, path, body)
@@ -244,6 +250,7 @@ type fakeGitHubPublicationAPI struct {
 	refs        map[string]string
 	missingRefs map[string]bool
 	refReads    map[string]int
+	contentRefs []string
 	head        string
 	puts        int
 	creates     int
@@ -314,10 +321,20 @@ func (f *fakeGitHubPublicationAPI) handle(w http.ResponseWriter, r *http.Request
 	case strings.HasPrefix(tail, "contents/"):
 		path := strings.TrimPrefix(tail, "contents/")
 		branch := r.URL.Query().Get("ref")
+		f.contentRefs = append(f.contentRefs, branch)
 		f.handleContents(w, r, branch, path)
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+func stringSliceContains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func (f *fakeGitHubPublicationAPI) handleContents(w http.ResponseWriter, r *http.Request, branch, path string) {

@@ -116,13 +116,13 @@ func (s *GitHubPublicationStore) ListEvents(ctx context.Context, branch string, 
 	if strings.TrimSpace(cursor) == head {
 		return exchange.PublicationListResult{NextCursor: head}, nil
 	}
-	paths, err := s.listEventPaths(ctx, branch, prefix)
+	paths, err := s.listEventPaths(ctx, head, prefix)
 	if err != nil {
 		return exchange.PublicationListResult{}, err
 	}
 	events := make([]exchange.PublicationStoredEvent, 0, len(paths))
 	for _, path := range paths {
-		file, found, err := s.readFileWithSHA(ctx, branch, path)
+		file, found, err := s.readFileWithSHA(ctx, head, path)
 		if err != nil {
 			return exchange.PublicationListResult{}, err
 		}
