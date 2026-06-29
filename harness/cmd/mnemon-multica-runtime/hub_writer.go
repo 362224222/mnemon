@@ -166,6 +166,7 @@ func (s *runtimeRPCState) writeAssignmentMailboxes(ctx context.Context, cli driv
 			Participant: participant,
 			Source:      source,
 			Metadata:    meta,
+			RootIssue:   rootIssue,
 			Result:      result,
 		})
 	}
@@ -182,6 +183,7 @@ type runtimeAssignmentProjection struct {
 	Participant driver.MulticaParticipantRecord
 	Source      driver.MulticaHubLedgerSource
 	Metadata    driver.MulticaHubMetadata
+	RootIssue   driver.MulticaIssue
 	Result      *runtimeImportResult
 }
 
@@ -223,9 +225,10 @@ func (s *runtimeRPCState) projectAssignmentMailboxes(ctx context.Context, cli dr
 				if hasErr() {
 					continue
 				}
+				material := assignmentMailboxMaterial(projection.Item, projection.Result, projection.RootIssue, projection.Participant)
 				child, err := cli.CreateIssue(ctx, driver.MulticaCreateIssueRequest{
-					Title:       multicasurface.AssignmentMailboxTitle(assignmentMailboxMaterial(projection.Item, projection.Result)),
-					Description: multicasurface.AssignmentMailboxDescription(assignmentMailboxMaterial(projection.Item, projection.Result)),
+					Title:       multicasurface.AssignmentMailboxTitle(material),
+					Description: multicasurface.AssignmentMailboxDescription(material),
 					ParentID:    projection.Result.RootIssueID,
 					Status:      "in_progress",
 					Priority:    "medium",
@@ -644,17 +647,22 @@ func hubStringList(raw any) []string {
 	return out
 }
 
-func assignmentMailboxMaterial(item runtimeAssignment, result *runtimeImportResult) multicasurface.AssignmentMailboxMaterial {
+func assignmentMailboxMaterial(item runtimeAssignment, result *runtimeImportResult, rootIssue driver.MulticaIssue, participant driver.MulticaParticipantRecord) multicasurface.AssignmentMailboxMaterial {
 	material := multicasurface.AssignmentMailboxMaterial{
 		ID:               item.ID,
 		Scope:            item.Scope,
 		Assignee:         item.Assignee,
+		AssigneeDisplay:  firstNonEmpty(participant.AgentName, participant.AgentID),
+		RootIssueID:      rootIssue.ID,
+		RootIssueLabel:   firstNonEmpty(rootIssue.Identifier, rootIssue.ID),
+		RootIssueTitle:   rootIssue.Title,
 		ExpectedWork:     item.ExpectedWork,
 		ExpectedFeedback: item.ExpectedFeedback,
 		Rationale:        item.Rationale,
 	}
 	if result != nil {
 		material.SessionID = result.SessionID
+		material.RootIssueID = firstNonEmpty(material.RootIssueID, result.RootIssueID)
 	}
 	return material
 }

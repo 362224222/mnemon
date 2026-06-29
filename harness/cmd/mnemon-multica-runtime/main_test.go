@@ -293,7 +293,14 @@ esac
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Mnemon update: issue admitted", "Principal: planner@team", "Managed wake: completed", "mnemon:event=multica-task-task-1"} {
+	for _, want := range []string{
+		"Mnemon update: issue admitted",
+		"## Mnemon Intake",
+		"Issue: [TEA-7](mention://issue/iss-7)",
+		"Principal: `planner@team`",
+		"Managed wake: `completed`",
+		"mnemon:event=multica-task-task-1",
+	} {
 		if !strings.Contains(string(comment), want) {
 			t.Fatalf("comment missing %s:\n%s", want, comment)
 		}
@@ -542,7 +549,12 @@ esac
 		}
 	}
 	comment := mustReadRuntimeTestFile(t, commentPath)
-	for _, want := range []string{"Mnemon update: issue admitted", "Hub backend: multica", "Session: multica:session:root-1"} {
+	for _, want := range []string{
+		"Mnemon update: issue admitted",
+		"## Mnemon Intake",
+		"Hub backend: `multica`",
+		"Session: `multica:session:root-1`",
+	} {
 		if !strings.Contains(comment, want) {
 			t.Fatalf("comment missing %q:\n%s", want, comment)
 		}
@@ -634,7 +646,11 @@ esac
 		t.Fatalf("metadata projection failure polluted protocol result:\n%s", output)
 	}
 	comment := mustReadRuntimeTestFile(t, commentPath)
-	for _, want := range []string{"Mnemon update: issue admitted", "Mnemon ingest: seq=29", "Hub backend: multica"} {
+	for _, want := range []string{
+		"Mnemon update: issue admitted",
+		"Mnemond ingest: seq=29",
+		"Hub backend: `multica`",
+	} {
 		if !strings.Contains(comment, want) {
 			t.Fatalf("comment missing %q:\n%s", want, comment)
 		}
@@ -771,7 +787,7 @@ esac
 	args := mustReadRuntimeTestFile(t, argsPath)
 	for _, want := range []string{
 		"issue children root-2 --output json",
-		"issue create --title Mnemon assignment asg-writer: check release notes --output json --description-stdin --parent root-2 --status in_progress --priority medium",
+		"issue create --title TEA-10: check release notes --output json --description-stdin --parent root-2 --status in_progress --priority medium",
 		"issue metadata set child-2 --key mnemon.kind --value assignment_mailbox --type string --output json",
 		"issue metadata set child-2 --key mnemon.assignment_id --value asg-writer --type string --output json",
 		"issue metadata set child-2 --key mnemon.principal --value worker@team --type string --output json",
@@ -787,7 +803,7 @@ esac
 	if strings.Contains(args, "asg-stale") {
 		t.Fatalf("stale pre-root assignment must not be projected into current root session:\n%s", args)
 	}
-	createIdx := strings.Index(args, "issue create --title Mnemon assignment asg-writer")
+	createIdx := strings.Index(args, "issue create --title TEA-10: check release notes")
 	metaIdx := strings.Index(args, "issue metadata set child-2 --key mnemon.kind")
 	assignIdx := strings.Index(args, "issue assign child-2 --to-id agent-worker")
 	if createIdx < 0 || metaIdx < 0 || assignIdx < 0 || !(createIdx < metaIdx && metaIdx < assignIdx) {
@@ -801,9 +817,23 @@ esac
 		t.Fatalf("assignment mailbox should be created in progress without a separate status call:\n%s", args)
 	}
 	description := mustReadRuntimeTestFile(t, createDescriptionPath)
-	for _, want := range []string{"Mnemon assignment mailbox", "Expected work: check release notes against the public changelog", "Expected feedback: progress_digest with result or blocker"} {
+	for _, want := range []string{
+		"## Assignment",
+		"check release notes against the public changelog",
+		"Root issue: [TEA-10](mention://issue/root-2) - Coordinate docs release",
+		"Assignee: `worker@team` (mnemon-worker)",
+		"Assignment: `asg-writer`",
+		"Post a `progress_digest`",
+		"Requested content: progress_digest with result or blocker",
+		"metadata under `mnemon.*`",
+	} {
 		if !strings.Contains(description, want) {
 			t.Fatalf("description missing %q:\n%s", want, description)
+		}
+	}
+	for _, blocked := range []string{"mnemon.session_id", "mnemon.assignment_id", "mnemon.root_issue_id"} {
+		if strings.Contains(description, blocked) {
+			t.Fatalf("description must not expose machine metadata key %q:\n%s", blocked, description)
 		}
 	}
 	comment := mustReadRuntimeTestFile(t, commentPath)
@@ -820,7 +850,8 @@ func TestRuntimeCorrelatesAssignmentMailboxWithoutNewIngest(t *testing.T) {
 	script := `#!/usr/bin/env sh
 printf '%s\n' "$*" >> "$MULTICA_ARGS_PATH"
 case "$*" in
-  *"issue get child-1"*) printf '{"id":"child-1","identifier":"TEA-2","title":"Assignment mailbox","description":"Visible assignment summary only.","status":"todo","metadata":{"mnemon.hub_backend":"multica","mnemon.kind":"assignment_mailbox","mnemon.session_id":"multica:session:root-1","mnemon.root_issue_id":"root-1","mnemon.assignment_id":"asg-1","mnemon.assignment_fingerprint":"sha256:abc","mnemon.event_id":"event-assignment-1","mnemon.principal":"worker@team"}}\n' ;;
+  *"issue get child-1"*) printf '{"id":"child-1","identifier":"TEA-2","title":"Assignment mailbox","description":"Visible assignment summary only.","status":"todo","metadata":{}}\n' ;;
+  *"issue metadata list child-1"*) printf '[{"key":"mnemon.hub_backend","value":"multica"},{"key":"mnemon.kind","value":"assignment_mailbox"},{"key":"mnemon.session_id","value":"multica:session:root-1"},{"key":"mnemon.root_issue_id","value":"root-1"},{"key":"mnemon.assignment_id","value":"asg-1"},{"key":"mnemon.assignment_fingerprint","value":"sha256:abc"},{"key":"mnemon.event_id","value":"event-assignment-1"},{"key":"mnemon.principal","value":"worker@team"}]\n' ;;
   *"issue comment add child-1"*) cat > "$MULTICA_COMMENT_PATH"; printf '{"id":"comment-child","issue_id":"child-1","content":"ok","type":"comment"}\n' ;;
   *) printf '{}\n' ;;
 esac
@@ -904,12 +935,17 @@ esac
 	if !strings.Contains(out.String(), "Mnemon assignment mailbox: correlated assignment=asg-1") || !strings.Contains(out.String(), "Managed wake: completed turn=noop-turn") {
 		t.Fatalf("runtime output missing correlation/wake evidence:\n%s", out.String())
 	}
+	args := mustReadRuntimeTestFile(t, argsPath)
+	if !strings.Contains(args, "issue metadata list child-1 --output json") {
+		t.Fatalf("assignment mailbox classification must query Multica issue metadata:\n%s", args)
+	}
 	comment := mustReadRuntimeTestFile(t, commentPath)
 	for _, want := range []string{
 		"Mnemon update: assignment mailbox correlated",
-		"Assignment: asg-1",
+		"## Assignment Mailbox",
+		"Assignment: `asg-1`",
 		"mnemon:event=event-assignment-1",
-		"Managed wake: completed",
+		"Managed wake: `completed`",
 	} {
 		if !strings.Contains(comment, want) {
 			t.Fatalf("comment missing %q:\n%s", want, comment)

@@ -22,6 +22,7 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation"
 	"github.com/mnemon-dev/mnemon/harness/internal/projection"
+	multicasurface "github.com/mnemon-dev/mnemon/harness/internal/surface/multica"
 )
 
 const runtimeVersion = "dev"
@@ -331,6 +332,7 @@ func (s *runtimeRPCState) importIssue(input string, progress runtimeProgressSink
 		return result
 	}
 	emitRuntimeCommand(progress, "multica issue get "+issueID, "Loaded "+runtimeIssueLabel(issue)+".", 0)
+	issue = loadRuntimeIssueMetadata(multicaCtx, cli, issue, progress)
 	result.IssueID = issue.ID
 	result.Identifier = issue.Identifier
 	result.Title = issue.Title
@@ -428,6 +430,30 @@ func (s *runtimeRPCState) importIssue(input string, progress runtimeProgressSink
 	emitRuntimeCommand(progress, "multica issue comment add "+issue.ID, runtimeProjectionProgress(result), runtimeExitCode(result.ProjectionErr))
 	emitRuntimeProgress(progress, runtimeProjectionProgress(result))
 	return result
+}
+
+func loadRuntimeIssueMetadata(ctx context.Context, cli driver.MulticaCLI, issue driver.MulticaIssue, progress runtimeProgressSink) driver.MulticaIssue {
+	if strings.TrimSpace(issue.ID) == "" {
+		return issue
+	}
+	listed, err := cli.ListIssueMetadata(ctx, issue.ID)
+	if err != nil {
+		emitRuntimeCommand(progress, "multica issue metadata list "+issue.ID, err.Error(), 1)
+		emitRuntimeProgress(progress, "Multica issue metadata list failed; falling back to metadata returned by issue get.")
+		return issue
+	}
+	merged := map[string]any{}
+	for key, value := range issue.Metadata {
+		merged[key] = value
+	}
+	for key, value := range listed {
+		if strings.TrimSpace(key) != "" {
+			merged[key] = value
+		}
+	}
+	issue.Metadata = merged
+	emitRuntimeCommand(progress, "multica issue metadata list "+issue.ID, fmt.Sprintf("Loaded %d Multica issue metadata keys.", len(listed)), 0)
+	return issue
 }
 
 func (s *runtimeRPCState) correlateAssignmentMailbox(ctx context.Context, cli driver.MulticaCLI, issue driver.MulticaIssue, result *runtimeImportResult, progress runtimeProgressSink) runtimeImportResult {
@@ -795,41 +821,12 @@ func (s *runtimeRPCState) projectImportComment(ctx context.Context, cli driver.M
 		return
 	}
 	title := "issue admitted"
-	body := "Issue admitted into Mnemon teamwork."
 	if result.HubKind == driver.MulticaHubKindAssignmentMailbox || result.Status == "correlated" {
 		title = "assignment mailbox correlated"
-		body = "Assignment mailbox correlated with Mnemon teamwork."
-	}
-	if result.Principal != "" {
-		body += "\nPrincipal: " + result.Principal
-	}
-	if result.TaskID != "" {
-		body += "\nMultica task: " + result.TaskID
-	}
-	if result.HubBackend != "" {
-		body += "\nHub backend: " + result.HubBackend
-	}
-	if result.SessionID != "" {
-		body += "\nSession: " + result.SessionID
-	}
-	if result.RootIssueID != "" {
-		body += "\nRoot issue: " + result.RootIssueID
-	}
-	if result.AssignmentID != "" {
-		body += "\nAssignment: " + result.AssignmentID
-	}
-	if result.Receipt != nil {
-		body += fmt.Sprintf("\nMnemon ingest: seq=%d duplicate=%v ticked=%v", result.Receipt.Seq, result.Receipt.Dup, result.Receipt.Ticked)
-	}
-	if result.WakeStatus != "" {
-		body += "\nManaged wake: " + result.WakeStatus
-	}
-	if result.HubWriteStatus != "" {
-		body += fmt.Sprintf("\nMultica hub write: %s child_issues=%d feedback_comments=%d", result.HubWriteStatus, result.HubChildIssues, result.HubFeedbackComments)
 	}
 	commentBody := projection.FormatComment(projection.CommentMaterial{
 		Title:    title,
-		Body:     body,
+		Body:     runtimeProjectionCommentBody(issue, *result),
 		EventIDs: []string{externalID},
 	})
 	comment, err := cli.AddIssueComment(ctx, issue.ID, commentBody)
@@ -840,6 +837,59 @@ func (s *runtimeRPCState) projectImportComment(ctx context.Context, cli driver.M
 	}
 	result.ProjectionStatus = "commented"
 	result.ProjectionCommentID = comment.ID
+}
+
+func runtimeProjectionCommentBody(issue driver.MulticaIssue, result runtimeImportResult) string {
+	var b strings.Builder
+	if result.HubKind == driver.MulticaHubKindAssignmentMailbox || result.Status == "correlated" {
+		b.WriteString("## Assignment Mailbox\n\n")
+		writeRuntimeCommentBullet(&b, "Status", "correlated")
+		writeRuntimeCommentBullet(&b, "Assignment", runtimeCodeSpan(result.AssignmentID))
+		writeRuntimeCommentBullet(&b, "Session", runtimeCodeSpan(result.SessionID))
+		writeRuntimeCommentBullet(&b, "Root issue", multicasurface.IssueMention(firstNonEmpty(result.RootIssueID, issue.Identifier), result.RootIssueID))
+	} else {
+		b.WriteString("## Mnemon Intake\n\n")
+		writeRuntimeCommentBullet(&b, "Status", result.Status)
+		writeRuntimeCommentBullet(&b, "Issue", multicasurface.IssueMention(firstNonEmpty(issue.Identifier, issue.ID), issue.ID))
+		writeRuntimeCommentBullet(&b, "Principal", runtimeCodeSpan(result.Principal))
+		writeRuntimeCommentBullet(&b, "Task", runtimeCodeSpan(result.TaskID))
+		writeRuntimeCommentBullet(&b, "Hub backend", runtimeCodeSpan(result.HubBackend))
+		writeRuntimeCommentBullet(&b, "Session", runtimeCodeSpan(result.SessionID))
+		if result.Receipt != nil {
+			writeRuntimeCommentBullet(&b, "Mnemond ingest", fmt.Sprintf("seq=%d duplicate=%v ticked=%v", result.Receipt.Seq, result.Receipt.Dup, result.Receipt.Ticked))
+		}
+	}
+	if result.WakeStatus != "" || result.HubWriteStatus != "" {
+		b.WriteString("\n## Runtime Effects\n\n")
+		writeRuntimeCommentBullet(&b, "Managed wake", runtimeCodeSpan(result.WakeStatus))
+		if result.WakeTurnID != "" {
+			writeRuntimeCommentBullet(&b, "Managed turn", runtimeCodeSpan(result.WakeTurnID))
+		}
+		if result.HubWriteStatus != "" {
+			writeRuntimeCommentBullet(&b, "Multica hub write", fmt.Sprintf("%s child_issues=%d feedback_comments=%d", result.HubWriteStatus, result.HubChildIssues, result.HubFeedbackComments))
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func writeRuntimeCommentBullet(b *strings.Builder, label, value string) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return
+	}
+	b.WriteString("- ")
+	b.WriteString(label)
+	b.WriteString(": ")
+	b.WriteString(value)
+	b.WriteString("\n")
+}
+
+func runtimeCodeSpan(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	return "`" + strings.ReplaceAll(value, "`", "'") + "`"
 }
 
 func runtimeMulticaCLI(env []string) driver.MulticaCLI {
