@@ -3,8 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"errors"
-	"flag"
 	"io"
 	"strings"
 	"testing"
@@ -48,8 +46,8 @@ func TestRunRefusesNonLoopbackAddr(t *testing.T) {
 func TestHelpDescribesLocalEventNode(t *testing.T) {
 	var errw bytes.Buffer
 	err := run(context.Background(), []string{"--help"}, io.Discard, &errw)
-	if !errors.Is(err, flag.ErrHelp) {
-		t.Fatalf("help error = %v, want flag.ErrHelp", err)
+	if err != nil {
+		t.Fatalf("help should exit successfully, got %v", err)
 	}
 	got := errw.String()
 	for _, want := range []string{"Local Mnemon event node", "local event API", "admission", "state", "presentation", "drive candidates"} {
@@ -62,8 +60,8 @@ func TestHelpDescribesLocalEventNode(t *testing.T) {
 func TestAgentRunHelpFramesLocalDriveSource(t *testing.T) {
 	var errw bytes.Buffer
 	err := run(context.Background(), []string{"agent", "run", "--help"}, io.Discard, &errw)
-	if !errors.Is(err, flag.ErrHelp) {
-		t.Fatalf("agent run help error = %v, want flag.ErrHelp", err)
+	if err != nil {
+		t.Fatalf("agent run help should exit successfully, got %v", err)
 	}
 	got := errw.String()
 	for _, want := range []string{"local drive source", "[mnemon:wake]", "managed runtime"} {

@@ -13,6 +13,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -51,13 +52,22 @@ func run(ctx context.Context, args []string, out, errw io.Writer) error {
 		case "logs":
 			return daemonLogs(args[1:], out, errw)
 		case "agent":
-			return runAgent(ctx, args[1:], out, errw)
+			if err := runAgent(ctx, args[1:], out, errw); err != nil {
+				if errors.Is(err, flag.ErrHelp) {
+					return nil
+				}
+				return err
+			}
+			return nil
 		case "serve":
 			args = args[1:]
 		}
 	}
 	cfg, err := parseServe(args, errw)
 	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 	return serveForeground(ctx, cfg, out)
