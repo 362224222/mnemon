@@ -58,6 +58,33 @@ func TestRenderPresentationDeterministicDigestAndAudit(t *testing.T) {
 	}
 }
 
+func TestTeamworkSignalPresentationCarriesContextRefs(t *testing.T) {
+	now := mustTime(t, "2026-06-24T10:00:00Z")
+	req := Request{Principal: "codex-a@project", Host: "codex", Lifecycle: "remind", RenderIntent: IntentTeamworkEvents}
+	proj := view.View{Ref: "proj_signal_refs", Digest: "digest_signal_refs", Content: []view.ResourceContent{
+		content("agent_profile", "project", []any{map[string]any{"id": "p1", "actor": "codex-a@project", "freshness": "fresh", "summary": "A profile"}}),
+		content("teamwork_signal", "project", []any{map[string]any{
+			"id":           "sig1",
+			"statement":    "Run the shared readiness drill",
+			"context_refs": []any{"multica:issue:issue-123"},
+		}}),
+	}}
+	resp, err := (Renderer{Now: func() time.Time { return now }}).RenderPresentation(context.Background(), req, proj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(resp.Body, "Context refs: multica:issue:issue-123") {
+		t.Fatalf("signal presentation must carry stable context refs for wake matching:\n%s", resp.Body)
+	}
+	if len(resp.Events) != 1 {
+		t.Fatalf("expected one signal event: %+v", resp.Events)
+	}
+	body, _ := eventmodel.PayloadNarrative(resp.Events[0].Event.Payload)["body"].(string)
+	if !strings.Contains(body, "multica:issue:issue-123") {
+		t.Fatalf("derived event body must carry stable context refs: %q", body)
+	}
+}
+
 func TestRenderPresentationScopeAndAssignmentState(t *testing.T) {
 	now := mustTime(t, "2026-06-24T10:00:00Z")
 	reqB := Request{Principal: "codex-b@project", Host: "codex", Lifecycle: "nudge", RenderIntent: IntentTeamworkEvents}

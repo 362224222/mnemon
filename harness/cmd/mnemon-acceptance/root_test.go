@@ -14,6 +14,7 @@ func TestRootExposesAcceptanceScenarioCommands(t *testing.T) {
 		"r1-task-sim",
 		"r1-cluster-single-entrypoint",
 		"r1-github-mesh-task-suite",
+		"multica-runtime-prod-sim",
 	} {
 		if !commands[want] {
 			t.Fatalf("mnemon-acceptance missing command %q; commands=%v", want, commands)

@@ -48,7 +48,9 @@ Prefer the short teamwork/profile commands when they fit the event you need:
 
 "${MNEMON_HARNESS_BIN:-mnemon-harness}" control teamwork progress \
   --assignment-ref <assignment-id> \
+  --feedback-kind result \
   --summary "<progress, result, or blocker>" \
+  --result "<completed result>" \
   --external-id <unique-id>
 
 "${MNEMON_HARNESS_BIN:-mnemon-harness}" control profile update \
@@ -77,6 +79,15 @@ Check `"${MNEMON_HARNESS_BIN:-mnemon-harness}" loop schema --type <kind>` before
 - Emit `teamwork_signal` when collaboration is needed and the need should be visible to other agents.
 - Emit `assignment` when concrete work is delegated or self-assigned with expected feedback.
 - Emit `progress_digest` when a result, blocker, or important context change should be returned.
+
+When a `teamwork_signal` requires coordination, record the minimal concrete `assignment` events as
+soon as assignees and expected feedback are clear. Do not wait for local verification, integration,
+or a final answer before recording delegation; those can continue after child agents have enough
+durable state to start.
+
+When an assigned slice is complete, emit `progress_digest` with `feedback_kind=result` and a result
+field. Reserve `feedback_kind=progress` for partial work and `feedback_kind=blocker` for work that
+cannot proceed.
 
 ## Guardrails
 

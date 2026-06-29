@@ -205,6 +205,13 @@ func (s *AppServer) waitResponse(id int, timeout time.Duration) (map[string]any,
 // WaitNotification waits up to timeout for a notification with the given method, starting from
 // startIndex into the notification log (use NotificationCount before the action that triggers it).
 func (s *AppServer) WaitNotification(method string, timeout time.Duration, startIndex int) (map[string]any, error) {
+	return s.WaitNotificationWithCallback(method, timeout, startIndex, nil)
+}
+
+// WaitNotificationWithCallback waits for a notification while calling onNotifications for every
+// notification observed from startIndex onward. The callback runs on the AppServer driving goroutine;
+// callers should keep it lightweight and must not call back into AppServer methods from it.
+func (s *AppServer) WaitNotificationWithCallback(method string, timeout time.Duration, startIndex int, onNotifications func([]map[string]any)) (map[string]any, error) {
 	deadline := time.After(timeout)
 	cursor := startIndex
 	if cursor < 0 || cursor > len(s.notifications) {
@@ -214,6 +221,9 @@ func (s *AppServer) WaitNotification(method string, timeout time.Duration, start
 		for cursor < len(s.notifications) {
 			n := s.notifications[cursor]
 			cursor++
+			if onNotifications != nil {
+				onNotifications([]map[string]any{n})
+			}
 			if n["method"] == method {
 				return n, nil
 			}

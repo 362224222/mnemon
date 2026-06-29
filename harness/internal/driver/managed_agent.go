@@ -83,6 +83,7 @@ type ManagedAgentDriver struct {
 	Principal string
 	Client    ManagedTurnClient
 	Ledger    ManagedWakeLedger
+	TraceSink ManagedTurnTraceSink
 	Cooldown  time.Duration
 	Now       func() time.Time
 
@@ -137,7 +138,13 @@ func (d *ManagedAgentDriver) Wake(ctx context.Context, candidate ManagedWakeCand
 		RenderAuditID:    candidate.RenderAuditID,
 		RenderBodyDigest: candidate.RenderBodyDigest,
 	}
-	result, err := d.Client.StartTurn(ctx, ManagedWakeQuery)
+	var result ManagedTurnResult
+	var err error
+	if traced, ok := d.Client.(ManagedTurnClientWithTrace); ok && d.TraceSink != nil {
+		result, err = traced.StartTurnWithTrace(ctx, ManagedWakeQuery, d.TraceSink)
+	} else {
+		result, err = d.Client.StartTurn(ctx, ManagedWakeQuery)
+	}
 	if err != nil {
 		record.Status = "failed"
 		record.Error = err.Error()

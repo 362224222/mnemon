@@ -77,11 +77,15 @@ func DeriveEventEnvelopes(req Request, proj view.View, now time.Time) []eventmod
 		}
 		id := teamworkItemID(signal)
 		subject := "teamwork_signal/" + id
+		body := fmt.Sprintf("Teamwork signal is open: %s. Assignment or self-assignment may be useful when you choose to act.", statement)
+		if refs := signalContextRefs(signal); len(refs) > 0 {
+			body = fmt.Sprintf("%s Context refs: %s.", body, strings.Join(refs, ", "))
+		}
 		appendDerived(
 			DerivedEventTeamworkSignalOpen,
 			subject,
 			[]string{subject},
-			fmt.Sprintf("Teamwork signal is open: %s. Assignment or self-assignment may be useful when you choose to act.", statement),
+			body,
 			[]string{"assignment.write_candidate.observed"},
 		)
 	}
@@ -293,6 +297,22 @@ func progressRefs(items []map[string]any) []string {
 		}
 	}
 	return refs
+}
+
+func signalContextRefs(signal map[string]any) []string {
+	refs := append([]string{}, itemStringList(signal, "context_refs")...)
+	refs = append(refs, itemStringList(signal, "evidence_refs")...)
+	seen := map[string]bool{}
+	var out []string
+	for _, ref := range refs {
+		ref = strings.TrimSpace(ref)
+		if ref == "" || seen[ref] {
+			continue
+		}
+		seen[ref] = true
+		out = append(out, ref)
+	}
+	return out
 }
 
 func presentationHintForDerivedEventType(eventType string) string {

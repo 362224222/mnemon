@@ -364,7 +364,7 @@ func writeLocalEnv(path string, opts SetupOptions, tokenRel string, loops []stri
 }
 
 func exportLine(key, value string) string {
-	return fmt.Sprintf("export %s=%q\n", key, value)
+	return fmt.Sprintf("if [ -z \"${%s:-}\" ]; then\n  export %s=%q\nelse\n  export %s\nfi\n", key, key, value, key)
 }
 
 func unionLoops(a, b []string) []string {
