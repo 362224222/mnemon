@@ -102,6 +102,72 @@ func TestPreflightR1GitHubMeshRateLimitBlocksLowRemaining(t *testing.T) {
 	}
 }
 
+func TestR1GitHubMeshAcceptanceBlocksInvalidRepositoryTokenBeforeSetup(t *testing.T) {
+	tmp := t.TempDir()
+	var repoChecked bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer secret-token" {
+			t.Fatalf("authorization header = %q", got)
+		}
+		switch r.URL.Path {
+		case "/rate_limit":
+			_, _ = w.Write([]byte(`{"resources":{"core":{"limit":5000,"remaining":5000,"reset":1782725122,"used":0}}}`))
+		case "/repos/mnemon-dev/mnemon-teamwork-example":
+			repoChecked = true
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"message":"Bad credentials"}`))
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	oldRateLimitURL := r1GitHubMeshRateLimitAPIURL
+	oldAPIBaseURL := r1GitHubMeshAPIBaseURL
+	oldClient := r1GitHubMeshHTTPClient
+	r1GitHubMeshRateLimitAPIURL = server.URL + "/rate_limit"
+	r1GitHubMeshAPIBaseURL = server.URL
+	r1GitHubMeshHTTPClient = server.Client()
+	t.Cleanup(func() {
+		r1GitHubMeshRateLimitAPIURL = oldRateLimitURL
+		r1GitHubMeshAPIBaseURL = oldAPIBaseURL
+		r1GitHubMeshHTTPClient = oldClient
+	})
+
+	tokenFile := filepath.Join(tmp, "github.token")
+	if err := os.WriteFile(tokenFile, []byte("secret-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	report, err := runR1GitHubMeshAcceptance(context.Background(), r1GitHubMeshAcceptanceOptions{
+		r1CodexAcceptanceOptions: r1CodexAcceptanceOptions{
+			RunRoot:     filepath.Join(tmp, "run"),
+			AgentTurns:  true,
+			TurnTimeout: time.Millisecond,
+		},
+		Repo:         "mnemon-dev/mnemon-teamwork-example",
+		TokenFile:    tokenFile,
+		SyncInterval: 30 * time.Second,
+	})
+	if err == nil || !strings.Contains(err.Error(), "github repo access status 401") || !strings.Contains(err.Error(), "Bad credentials") {
+		t.Fatalf("expected invalid repo token blocker, got report=%+v err=%v", report, err)
+	}
+	if !repoChecked {
+		t.Fatal("repository access preflight was not called")
+	}
+	if report.Status != "blocked" || !strings.Contains(strings.Join(report.Errors, "\n"), "Bad credentials") {
+		t.Fatalf("report should be blocked with repo credential error: %+v", report)
+	}
+	if _, err := os.Stat(filepath.Join(report.RunRoot, "bin")); !os.IsNotExist(err) {
+		t.Fatalf("acceptance should block before installing binaries, stat err=%v", err)
+	}
+	data, err := os.ReadFile(report.ReportPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "github repo access status 401") {
+		t.Fatalf("written report missing repo access blocker:\n%s", data)
+	}
+}
+
 func TestValidateR1GitHubMeshSyncIntervalProtectsAgentTurns(t *testing.T) {
 	err := validateR1GitHubMeshSyncInterval(r1GitHubMeshAcceptanceOptions{
 		r1CodexAcceptanceOptions: r1CodexAcceptanceOptions{AgentTurns: true},
