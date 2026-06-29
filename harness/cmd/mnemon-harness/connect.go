@@ -1,0 +1,144 @@
+package main
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/mnemon-dev/mnemon/harness/internal/productconfig"
+	"github.com/spf13/cobra"
+)
+
+var (
+	connectRoot           string
+	connectConfigPath     string
+	connectMulticaWS      string
+	connectMulticaRuntime string
+	connectGitHubRepo     string
+	connectGitHubBranch   string
+	connectMnemonhubURL   string
+)
+
+var connectCmd = &cobra.Command{
+	Use:   "connect",
+	Short: "Configure harness external connections",
+}
+
+var connectMulticaCmd = &cobra.Command{
+	Use:   "multica --workspace WORKSPACE",
+	Short: "Connect Multica as a harness connection",
+	RunE:  runConnectMultica,
+}
+
+var connectGitHubCmd = &cobra.Command{
+	Use:   "github --repo OWNER/REPO",
+	Short: "Connect GitHub as a harness connection",
+	RunE:  runConnectGitHub,
+}
+
+var connectMnemonhubCmd = &cobra.Command{
+	Use:   "mnemonhub --endpoint URL",
+	Short: "Connect mnemonhub as a harness connection",
+	RunE:  runConnectMnemonhub,
+}
+
+func init() {
+	connectCmd.PersistentFlags().StringVar(&connectRoot, "root", ".", "project root")
+	connectCmd.PersistentFlags().StringVar(&connectConfigPath, "config", "", "harness product config path")
+	_ = connectCmd.PersistentFlags().MarkHidden("config")
+	connectMulticaCmd.Flags().StringVar(&connectMulticaWS, "workspace", "", "Multica workspace")
+	connectMulticaCmd.Flags().StringVar(&connectMulticaRuntime, "runtime-binary", "mnemon-multica-runtime", "Multica runtime binary")
+	_ = connectMulticaCmd.Flags().MarkHidden("runtime-binary")
+	connectGitHubCmd.Flags().StringVar(&connectGitHubRepo, "repo", "", "GitHub repository owner/name")
+	connectGitHubCmd.Flags().StringVar(&connectGitHubBranch, "branch", "", "GitHub publication branch")
+	connectMnemonhubCmd.Flags().StringVar(&connectMnemonhubURL, "endpoint", "", "mnemonhub endpoint")
+	connectCmd.AddCommand(connectMulticaCmd, connectGitHubCmd, connectMnemonhubCmd)
+	connectCmd.GroupID = groupSpine
+	rootCmd.AddCommand(connectCmd)
+}
+
+func runConnectMultica(cmd *cobra.Command, args []string) error {
+	if strings.TrimSpace(connectMulticaWS) == "" {
+		return fmt.Errorf("connect multica requires --workspace")
+	}
+	cfg, _, err := loadHarnessProductConfig(connectRoot, connectConfigPath)
+	if err != nil {
+		return err
+	}
+	cfg.Connections.Multica = productconfig.MulticaConnection{
+		Enabled:       true,
+		Workspace:     strings.TrimSpace(connectMulticaWS),
+		RuntimeBinary: strings.TrimSpace(connectMulticaRuntime),
+	}
+	cfg.Daemon.InteractionWatchers = appendUniqueString(cfg.Daemon.InteractionWatchers, productconfig.ConnectionMultica)
+	cfg.Daemon.ProjectionSurfaces = appendUniqueString(cfg.Daemon.ProjectionSurfaces, productconfig.ConnectionMultica)
+	if cfg.Sessions.PrimaryActivationCarrier == "" {
+		cfg.Sessions.PrimaryActivationCarrier = productconfig.ConnectionMultica
+	}
+	path, err := saveHarnessProductConfig(connectRoot, connectConfigPath, cfg)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(cmd.OutOrStdout(), "Connection: multica ready")
+	fmt.Fprintf(cmd.OutOrStdout(), "Harness config: %s\n", path)
+	return nil
+}
+
+func runConnectGitHub(cmd *cobra.Command, args []string) error {
+	if strings.TrimSpace(connectGitHubRepo) == "" {
+		return fmt.Errorf("connect github requires --repo")
+	}
+	cfg, _, err := loadHarnessProductConfig(connectRoot, connectConfigPath)
+	if err != nil {
+		return err
+	}
+	cfg.Connections.GitHub = productconfig.GitHubConnection{
+		Enabled: true,
+		Repo:    strings.TrimSpace(connectGitHubRepo),
+		Branch:  strings.TrimSpace(connectGitHubBranch),
+	}
+	cfg.Daemon.InteractionWatchers = appendUniqueString(cfg.Daemon.InteractionWatchers, productconfig.ConnectionGitHub)
+	cfg.Daemon.ProjectionSurfaces = appendUniqueString(cfg.Daemon.ProjectionSurfaces, productconfig.ConnectionGitHub)
+	path, err := saveHarnessProductConfig(connectRoot, connectConfigPath, cfg)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(cmd.OutOrStdout(), "Connection: github ready")
+	fmt.Fprintf(cmd.OutOrStdout(), "Harness config: %s\n", path)
+	return nil
+}
+
+func runConnectMnemonhub(cmd *cobra.Command, args []string) error {
+	if strings.TrimSpace(connectMnemonhubURL) == "" {
+		return fmt.Errorf("connect mnemonhub requires --endpoint")
+	}
+	cfg, _, err := loadHarnessProductConfig(connectRoot, connectConfigPath)
+	if err != nil {
+		return err
+	}
+	cfg.Connections.Mnemonhub = productconfig.MnemonhubConnection{
+		Enabled:  true,
+		Endpoint: strings.TrimSpace(connectMnemonhubURL),
+	}
+	cfg.Daemon.InteractionWatchers = appendUniqueString(cfg.Daemon.InteractionWatchers, productconfig.ConnectionMnemonhub)
+	cfg.Daemon.ProjectionSurfaces = appendUniqueString(cfg.Daemon.ProjectionSurfaces, productconfig.ConnectionMnemonhub)
+	path, err := saveHarnessProductConfig(connectRoot, connectConfigPath, cfg)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(cmd.OutOrStdout(), "Connection: mnemonhub ready")
+	fmt.Fprintf(cmd.OutOrStdout(), "Harness config: %s\n", path)
+	return nil
+}
+
+func appendUniqueString(values []string, next string) []string {
+	next = strings.TrimSpace(next)
+	if next == "" {
+		return values
+	}
+	for _, value := range values {
+		if value == next {
+			return values
+		}
+	}
+	return append(values, next)
+}

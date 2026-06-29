@@ -22,7 +22,7 @@ func TestRootHelpUsesLocalFirstProductSurface(t *testing.T) {
 		t.Fatalf("root help returned error: %v", err)
 	}
 	got := out.String()
-	for _, want := range []string{"Agent Integration", "Local Mnemon", "Remote Workspace", "standard events", "setup", "local", "config", "daemon"} {
+	for _, want := range []string{"Agent Integration", "Local Mnemon", "Remote Workspace", "standard events", "setup", "local", "config", "daemon", "agent", "connect"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("expected root help to contain %q:\n%s", want, got)
 		}
@@ -53,10 +53,14 @@ func TestProductHelpDoesNotExposeInternalVocabulary(t *testing.T) {
 		{"status", "--help"},
 		{"sync", "--help"},
 		{"sync", "connect", "--help"},
+		{"agent", "--help"},
+		{"agent", "add", "--help"},
+		{"connect", "--help"},
+		{"connect", "multica", "--help"},
 		{"multica", "--help"},
 	} {
 		got := executeRootForHelp(t, args...)
-		for _, blocked := range []string{"binding", "channel", "projection", "kernel", "runtime", "sync cursor", "token file", "control-agent", "import-issue", "project-comment"} {
+		for _, blocked := range []string{"binding", "channel", "projection", "kernel", "runtime", "sync cursor", "token file", "control-agent", "import-issue", "project-comment", "provision", "participant"} {
 			if strings.Contains(strings.ToLower(got), blocked) {
 				t.Fatalf("%q help leaked internal term %q:\n%s", strings.Join(args, " "), blocked, got)
 			}

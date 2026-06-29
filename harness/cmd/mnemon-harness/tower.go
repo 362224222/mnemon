@@ -20,6 +20,7 @@ var towerCmd = &cobra.Command{
 
 func init() {
 	towerCmd.Flags().BoolVar(&towerDump, "dump", false, "render a one-shot read-only snapshot of the four pages and exit (headless/scriptable)")
+	towerCmd.GroupID = groupAdvanced
 	rootCmd.AddCommand(towerCmd)
 }
 

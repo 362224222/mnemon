@@ -16,7 +16,7 @@ var tokenPrincipal string
 
 var tokenCmd = &cobra.Command{
 	Use:   "token",
-	Short: "Manage channel credentials",
+	Short: "Manage local access credentials",
 }
 
 var tokenRotateCmd = &cobra.Command{

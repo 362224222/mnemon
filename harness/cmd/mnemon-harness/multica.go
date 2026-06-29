@@ -112,8 +112,9 @@ var multicaProvisionCmd = &cobra.Command{
 }
 
 var multicaParticipantCmd = &cobra.Command{
-	Use:   "participant",
-	Short: "Manage explicit Mnemon participants backed by Multica agents",
+	Use:    "participant",
+	Short:  "Manage explicit Mnemon participants backed by Multica agents",
+	Hidden: true,
 }
 
 var multicaParticipantRegisterCmd = &cobra.Command{
@@ -958,6 +959,6 @@ func init() {
 
 	multicaParticipantCmd.AddCommand(multicaParticipantRegisterCmd)
 	multicaCmd.AddCommand(multicaProbeCmd, multicaParticipantCmd, multicaProvisionCmd, multicaImportIssueCmd, multicaProjectCommentCmd)
-	multicaCmd.GroupID = groupSpine
+	multicaCmd.GroupID = groupAdvanced
 	rootCmd.AddCommand(multicaCmd)
 }
