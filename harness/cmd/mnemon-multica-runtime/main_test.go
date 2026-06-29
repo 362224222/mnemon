@@ -21,25 +21,6 @@ import (
 	multicasurface "github.com/mnemon-dev/mnemon/harness/internal/surface/multica"
 )
 
-func TestRuntimeEnvValueUsesLastValue(t *testing.T) {
-	env := []string{
-		"MNEMON_MANAGED_RUNTIME=codex-appserver",
-		"MNEMON_MANAGED_RUNTIME=off",
-	}
-	if got := envValue(env, "MNEMON_MANAGED_RUNTIME"); got != "off" {
-		t.Fatalf("envValue = %q, want off", got)
-	}
-}
-
-func TestRuntimeTimeoutUsesMulticaHTTPFallback(t *testing.T) {
-	if got := runtimeTimeout([]string{"MULTICA_HTTP_TIMEOUT=2m"}); got != 2*time.Minute {
-		t.Fatalf("runtimeTimeout fallback = %s, want 2m", got)
-	}
-	if got := runtimeTimeout([]string{"MULTICA_HTTP_TIMEOUT=2m", "MNEMON_MULTICA_RUNTIME_TIMEOUT=15s"}); got != 15*time.Second {
-		t.Fatalf("runtimeTimeout override = %s, want 15s", got)
-	}
-}
-
 func TestRuntimeMulticaHubLedgerPathDefaultsToManagedWorkspace(t *testing.T) {
 	tmp := t.TempDir()
 	workspace := filepath.Join(tmp, "managed-workspace")
@@ -128,7 +109,7 @@ func TestRuntimeManagedTurnEnvInjectsRenderScope(t *testing.T) {
 	}
 
 	preserved := runtimeManagedTurnEnv([]string{"MNEMON_RENDER_HOST=custom"}, runtimeImportResult{SessionID: "session-1", RootIssueID: "root-1"})
-	if got := envValue(preserved, "MNEMON_RENDER_HOST"); got != "custom" {
+	if got := multicasurface.RuntimeEnvValue(preserved, "MNEMON_RENDER_HOST"); got != "custom" {
 		t.Fatalf("managed env should preserve explicit host, got %q", got)
 	}
 }

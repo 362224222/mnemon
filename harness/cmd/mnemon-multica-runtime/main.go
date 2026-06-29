@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -180,7 +179,7 @@ func (s *runtimeRPCState) handle(msg rpcMessage, emit func(rpcMessage) error) er
 			ID: msg.ID,
 			Result: map[string]any{
 				"userAgent":      "mnemon-multica-runtime/" + runtimeVersion,
-				"codexHome":      envValue(s.Env, "CODEX_HOME"),
+				"codexHome":      multicasurface.RuntimeEnvValue(s.Env, "CODEX_HOME"),
 				"platformFamily": "unix",
 				"platformOs":     runtime.GOOS,
 			},
@@ -305,8 +304,8 @@ func (s *runtimeRPCState) runTurn(input multicasurface.RuntimeInput, progress ru
 }
 
 func (s *runtimeRPCState) importIssue(input multicasurface.RuntimeInput, progress runtimeProgressSink) runtimeImportResult {
-	taskID := envValue(s.Env, "MULTICA_TASK_ID")
-	issueID := firstNonEmpty(envValue(s.Env, "MULTICA_ISSUE_ID"), input.IssueIdentity, multicasurface.ExtractIssueIdentity(input.Text))
+	taskID := multicasurface.RuntimeEnvValue(s.Env, "MULTICA_TASK_ID")
+	issueID := firstNonEmpty(multicasurface.RuntimeEnvValue(s.Env, "MULTICA_ISSUE_ID"), input.IssueIdentity, multicasurface.ExtractIssueIdentity(input.Text))
 	result := runtimeImportResult{
 		IssueID:   issueID,
 		Principal: resolveRuntimePrincipal(s.Env, s.CWD),
@@ -338,7 +337,7 @@ func (s *runtimeRPCState) importIssue(input multicasurface.RuntimeInput, progres
 	result.Statement = issue.Description
 	result.HubMetadata = driver.MulticaIssueHubMetadata(issue)
 	applyMulticaHubMetadata(&result, result.HubMetadata)
-	result.HubBackend = firstNonEmpty(result.HubBackend, envValue(s.Env, "MNEMON_HUB_BACKEND"))
+	result.HubBackend = firstNonEmpty(result.HubBackend, multicasurface.RuntimeEnvValue(s.Env, "MNEMON_HUB_BACKEND"))
 	emitRuntimeProgress(progress, "Loaded "+runtimeIssueLabel(issue)+"; classifying Mnemon hub metadata.")
 	markIssueInProgress(multicaCtx, cli, issue.ID)
 	if result.HubMetadata.IsAssignmentMailbox() {
@@ -354,17 +353,17 @@ func (s *runtimeRPCState) importIssue(input multicasurface.RuntimeInput, progres
 		Title:       issue.Title,
 		Description: issue.Description,
 	}, multicasurface.IssueSignalOptions{
-		Scope:       envDefault(s.Env, "MNEMON_MULTICA_SCOPE", "multica/teamwork"),
-		TTL:         envDefault(s.Env, "MNEMON_MULTICA_TTL", "30m"),
+		Scope:       multicasurface.RuntimeEnvDefault(s.Env, "MNEMON_MULTICA_SCOPE", "multica/teamwork"),
+		TTL:         multicasurface.RuntimeEnvDefault(s.Env, "MNEMON_MULTICA_TTL", "30m"),
 		WhyTeamwork: "Multica assigned this issue to a Mnemon participant, so Mnemon should admit it through the teamwork protocol.",
-		WorkspaceID: firstNonEmpty(envValue(s.Env, "MNEMON_MULTICA_WORKSPACE_ID"), envValue(s.Env, "MULTICA_WORKSPACE_ID")),
+		WorkspaceID: firstNonEmpty(multicasurface.RuntimeEnvValue(s.Env, "MNEMON_MULTICA_WORKSPACE_ID"), multicasurface.RuntimeEnvValue(s.Env, "MULTICA_WORKSPACE_ID")),
 		TaskID:      taskID,
-		AgentID:     envValue(s.Env, "MULTICA_AGENT_ID"),
+		AgentID:     multicasurface.RuntimeEnvValue(s.Env, "MULTICA_AGENT_ID"),
 		Principal:   result.Principal,
 		ContextRefs: []string{
 			multicasurface.RuntimeRef("issue", issue.ID),
 			multicasurface.RuntimeRef("task", taskID),
-			multicasurface.RuntimeRef("agent", envValue(s.Env, "MULTICA_AGENT_ID")),
+			multicasurface.RuntimeRef("agent", multicasurface.RuntimeEnvValue(s.Env, "MULTICA_AGENT_ID")),
 		},
 		EvidenceRefs: []string{multicasurface.RuntimeRef("issue", issue.ID)},
 		ExternalID:   externalID,
@@ -400,7 +399,7 @@ func (s *runtimeRPCState) importIssue(input multicasurface.RuntimeInput, progres
 			emitRuntimeProgress(progress, "Root session metadata written for "+runtimeIssueLabel(issue)+".")
 		}
 	}
-	addr := strings.TrimSpace(envValue(s.Env, "MNEMON_CONTROL_ADDR"))
+	addr := strings.TrimSpace(multicasurface.RuntimeEnvValue(s.Env, "MNEMON_CONTROL_ADDR"))
 	if addr == "" {
 		result.Status = "skipped"
 		emitRuntimeProgress(progress, "Local Mnemon control address is not configured; skipping protocol ingest.")
@@ -475,7 +474,7 @@ func (s *runtimeRPCState) correlateAssignmentMailbox(ctx context.Context, cli dr
 	correlationProgress := runtimeAssignmentCorrelationProgress(*result)
 	emitRuntimeCommand(progress, "mnemon multica assignment correlate --issue "+issue.ID, correlationProgress, 0)
 	emitRuntimeProgress(progress, correlationProgress)
-	addr := strings.TrimSpace(envValue(s.Env, "MNEMON_CONTROL_ADDR"))
+	addr := strings.TrimSpace(multicasurface.RuntimeEnvValue(s.Env, "MNEMON_CONTROL_ADDR"))
 	var client *access.Client
 	if addr == "" {
 		result.WakeStatus = "skipped"
@@ -552,12 +551,12 @@ func (s *runtimeRPCState) wakeManagedAgent(result *runtimeImportResult, progress
 	if result == nil {
 		return
 	}
-	runtimeName := strings.TrimSpace(envValue(s.Env, "MNEMON_MANAGED_RUNTIME"))
+	runtimeName := strings.TrimSpace(multicasurface.RuntimeEnvValue(s.Env, "MNEMON_MANAGED_RUNTIME"))
 	if runtimeName == "" || strings.EqualFold(runtimeName, "off") || strings.EqualFold(runtimeName, "disabled") || strings.EqualFold(runtimeName, "none") {
 		result.WakeStatus = "skipped"
 		return
 	}
-	addr := strings.TrimSpace(envValue(s.Env, "MNEMON_CONTROL_ADDR"))
+	addr := strings.TrimSpace(multicasurface.RuntimeEnvValue(s.Env, "MNEMON_CONTROL_ADDR"))
 	if addr == "" {
 		result.WakeStatus = "skipped"
 		result.WakeErr = fmt.Errorf("MNEMON_CONTROL_ADDR is not set")
@@ -569,7 +568,7 @@ func (s *runtimeRPCState) wakeManagedAgent(result *runtimeImportResult, progress
 		result.WakeErr = err
 		return
 	}
-	renderCtx, cancel := context.WithTimeout(context.Background(), runtimeTimeout(s.Env))
+	renderCtx, cancel := context.WithTimeout(context.Background(), multicasurface.RuntimeTimeout(s.Env))
 	defer cancel()
 	resp, err := (driver.HTTPRenderClient{
 		BaseURL:   addr,
@@ -579,7 +578,7 @@ func (s *runtimeRPCState) wakeManagedAgent(result *runtimeImportResult, progress
 		SchemaVersion: 1,
 		Principal:     contract.ActorID(result.Principal),
 		Host:          "multica",
-		Lifecycle:     envDefault(s.Env, "MNEMON_MANAGED_RENDER_LIFECYCLE", "remind"),
+		Lifecycle:     multicasurface.RuntimeEnvDefault(s.Env, "MNEMON_MANAGED_RENDER_LIFECYCLE", "remind"),
 		Surface:       "runtime",
 		RenderIntent:  presentation.IntentTeamworkEvents,
 		SessionID:     result.SessionID,
@@ -603,12 +602,12 @@ func (s *runtimeRPCState) wakeManagedAgent(result *runtimeImportResult, progress
 		result.WakeErr = err
 		return
 	}
-	wakeCtx, cancel := context.WithTimeout(context.Background(), runtimeManagedTurnTimeout(s.Env))
+	wakeCtx, cancel := context.WithTimeout(context.Background(), multicasurface.RuntimeManagedTurnTimeout(s.Env))
 	defer cancel()
 	record, err := (&driver.ManagedAgentDriver{
 		Principal: result.Principal,
 		Client:    client,
-		Ledger:    driver.NewFileManagedWakeLedger(runtimeManagedLedgerPath(s.Env, workspace)),
+		Ledger:    driver.NewFileManagedWakeLedger(multicasurface.RuntimeManagedLedgerPath(s.Env, workspace)),
 		TraceSink: driver.ManagedTurnTraceSinkFunc(func(event driver.ManagedTurnTraceEvent) {
 			if progress != nil {
 				progress(runtimeProgressEvent{Trace: &event})
@@ -636,7 +635,7 @@ func runtimeManagedTurnEnv(env []string, result runtimeImportResult) []string {
 	out := append([]string(nil), env...)
 	add := func(key, value string) {
 		value = strings.TrimSpace(value)
-		if value == "" || envValue(out, key) != "" {
+		if value == "" || multicasurface.RuntimeEnvValue(out, key) != "" {
 			return
 		}
 		out = append(out, key+"="+value)
@@ -662,7 +661,7 @@ func (s *runtimeRPCState) wakeManagedAgentWithHubProjection(ctx context.Context,
 	if result == nil || client == nil ||
 		!strings.EqualFold(result.HubBackend, driver.MulticaHubBackend) ||
 		result.HubKind != driver.MulticaHubKindSession ||
-		!runtimeMulticaHubWriteEnabled(s.Env) {
+		!multicasurface.RuntimeHubWriteEnabled(s.Env) {
 		s.wakeManagedAgent(result, progress)
 		return nil
 	}
@@ -670,7 +669,7 @@ func (s *runtimeRPCState) wakeManagedAgentWithHubProjection(ctx context.Context,
 	deltas := make(chan runtimeHubProjectionDelta, 16)
 	go func(snapshot runtimeImportResult) {
 		defer close(deltas)
-		ticker := time.NewTicker(runtimeHubProjectionInterval(s.Env))
+		ticker := time.NewTicker(multicasurface.RuntimeHubProjectionInterval(s.Env))
 		defer ticker.Stop()
 		for {
 			select {
@@ -736,7 +735,7 @@ func (s *runtimeRPCState) projectImportComment(ctx context.Context, cli driver.M
 	if result == nil {
 		return
 	}
-	if !runtimeProjectionEnabled(s.Env) {
+	if !multicasurface.RuntimeProjectionCommentsEnabled(s.Env) {
 		result.ProjectionStatus = "skipped"
 		return
 	}
@@ -792,12 +791,12 @@ func runtimeProjectionMaterial(issue driver.MulticaIssue, result runtimeImportRe
 
 func runtimeMulticaCLI(env []string) driver.MulticaCLI {
 	return driver.MulticaCLI{
-		Command:     envValue(env, "MNEMON_MULTICA_BIN"),
-		Profile:     envValue(env, "MNEMON_MULTICA_PROFILE"),
-		ServerURL:   firstNonEmpty(envValue(env, "MNEMON_MULTICA_SERVER_URL"), envValue(env, "MULTICA_SERVER_URL")),
-		WorkspaceID: firstNonEmpty(envValue(env, "MNEMON_MULTICA_WORKSPACE_ID"), envValue(env, "MULTICA_WORKSPACE_ID")),
+		Command:     multicasurface.RuntimeEnvValue(env, "MNEMON_MULTICA_BIN"),
+		Profile:     multicasurface.RuntimeEnvValue(env, "MNEMON_MULTICA_PROFILE"),
+		ServerURL:   firstNonEmpty(multicasurface.RuntimeEnvValue(env, "MNEMON_MULTICA_SERVER_URL"), multicasurface.RuntimeEnvValue(env, "MULTICA_SERVER_URL")),
+		WorkspaceID: firstNonEmpty(multicasurface.RuntimeEnvValue(env, "MNEMON_MULTICA_WORKSPACE_ID"), multicasurface.RuntimeEnvValue(env, "MULTICA_WORKSPACE_ID")),
 		Env:         append([]string(nil), env...),
-		Timeout:     runtimeTimeout(env),
+		Timeout:     multicasurface.RuntimeTimeout(env),
 	}
 }
 
@@ -816,8 +815,8 @@ func runtimeControlClient(env []string, addr, principal string) (*access.Client,
 }
 
 func runtimeControlToken(env []string) (string, error) {
-	token := envValue(env, "MNEMON_CONTROL_TOKEN")
-	if tokenFile := envValue(env, "MNEMON_CONTROL_TOKEN_FILE"); tokenFile != "" {
+	token := multicasurface.RuntimeEnvValue(env, "MNEMON_CONTROL_TOKEN")
+	if tokenFile := multicasurface.RuntimeEnvValue(env, "MNEMON_CONTROL_TOKEN_FILE"); tokenFile != "" {
 		data, err := os.ReadFile(tokenFile)
 		if err != nil {
 			return "", fmt.Errorf("read MNEMON_CONTROL_TOKEN_FILE: %w", err)
@@ -828,7 +827,7 @@ func runtimeControlToken(env []string) (string, error) {
 }
 
 func runtimeManagedTurnClient(env []string, cwd, runtimeName string) (driver.ManagedTurnClient, string, error) {
-	workspace := envDefault(env, "MNEMON_MANAGED_WORKSPACE", cwd)
+	workspace := multicasurface.RuntimeEnvDefault(env, "MNEMON_MANAGED_WORKSPACE", cwd)
 	if strings.TrimSpace(workspace) == "" {
 		workspace = "."
 	}
@@ -838,10 +837,10 @@ func runtimeManagedTurnClient(env []string, cwd, runtimeName string) (driver.Man
 	case "codex-appserver":
 		return driver.CodexAppServerTurnClient{
 			Principal:   resolveRuntimePrincipal(env, cwd),
-			Command:     envDefault(env, "MNEMON_MANAGED_COMMAND", "codex"),
+			Command:     multicasurface.RuntimeEnvDefault(env, "MNEMON_MANAGED_COMMAND", "codex"),
 			Workspace:   workspace,
 			Env:         append([]string(nil), env...),
-			TurnTimeout: runtimeManagedTurnTimeout(env),
+			TurnTimeout: multicasurface.RuntimeManagedTurnTimeout(env),
 			ClientName:  "mnemon-multica-runtime",
 		}, workspace, nil
 	default:
@@ -859,12 +858,12 @@ func (runtimeNoopTurnClient) StartTurn(_ context.Context, query string) (driver.
 }
 
 func resolveRuntimePrincipal(env []string, cwd string) string {
-	agentID := envValue(env, "MULTICA_AGENT_ID")
-	agentName := envValue(env, "MULTICA_AGENT_NAME")
+	agentID := multicasurface.RuntimeEnvValue(env, "MULTICA_AGENT_ID")
+	agentName := multicasurface.RuntimeEnvValue(env, "MULTICA_AGENT_NAME")
 	if principal := principalFromRegistry(env, cwd, agentID, agentName); principal != "" {
 		return principal
 	}
-	if principal := envValue(env, "MNEMON_CONTROL_PRINCIPAL"); principal != "" {
+	if principal := multicasurface.RuntimeEnvValue(env, "MNEMON_CONTROL_PRINCIPAL"); principal != "" {
 		return principal
 	}
 	if agentName != "" {
@@ -875,7 +874,7 @@ func resolveRuntimePrincipal(env []string, cwd string) string {
 
 func principalFromRegistry(env []string, cwd, agentID, agentName string) string {
 	paths := []string{}
-	if explicit := envValue(env, "MNEMON_MULTICA_REGISTRY"); explicit != "" {
+	if explicit := multicasurface.RuntimeEnvValue(env, "MNEMON_MULTICA_REGISTRY"); explicit != "" {
 		paths = append(paths, explicit)
 	}
 	if strings.TrimSpace(cwd) != "" {
@@ -1268,24 +1267,6 @@ func stringParam(params map[string]any, key string) string {
 	return strings.TrimSpace(value)
 }
 
-func envValue(env []string, key string) string {
-	prefix := key + "="
-	for i := len(env) - 1; i >= 0; i-- {
-		item := env[i]
-		if strings.HasPrefix(item, prefix) {
-			return strings.TrimSpace(strings.TrimPrefix(item, prefix))
-		}
-	}
-	return ""
-}
-
-func envDefault(env []string, key, fallback string) string {
-	if value := envValue(env, key); value != "" {
-		return value
-	}
-	return fallback
-}
-
 func firstNonEmpty(values ...string) string {
 	for _, value := range values {
 		if strings.TrimSpace(value) != "" {
@@ -1306,66 +1287,6 @@ func runtimeID(prefix string, now time.Time) string {
 		prefix = "id"
 	}
 	return fmt.Sprintf("%s-%d", prefix, now.UTC().UnixNano())
-}
-
-func runtimeTimeout(env []string) time.Duration {
-	raw := envValue(env, "MNEMON_MULTICA_RUNTIME_TIMEOUT")
-	if raw == "" {
-		raw = envValue(env, "MULTICA_HTTP_TIMEOUT")
-	}
-	if raw == "" {
-		return 30 * time.Second
-	}
-	d, err := time.ParseDuration(raw)
-	if err != nil || d <= 0 {
-		return 30 * time.Second
-	}
-	return d
-}
-
-func runtimeManagedTurnTimeout(env []string) time.Duration {
-	raw := envValue(env, "MNEMON_MANAGED_TURN_TIMEOUT")
-	if raw == "" {
-		return 5 * time.Minute
-	}
-	d, err := time.ParseDuration(raw)
-	if err != nil || d <= 0 {
-		return 5 * time.Minute
-	}
-	return d
-}
-
-func runtimeHubProjectionInterval(env []string) time.Duration {
-	raw := envValue(env, "MNEMON_MULTICA_HUB_PROJECT_INTERVAL")
-	if raw == "" {
-		return 5 * time.Second
-	}
-	d, err := time.ParseDuration(raw)
-	if err != nil || d <= 0 {
-		return 5 * time.Second
-	}
-	return d
-}
-
-func runtimeManagedLedgerPath(env []string, workspace string) string {
-	if explicit := envValue(env, "MNEMON_MANAGED_LEDGER"); explicit != "" {
-		return explicit
-	}
-	root := strings.TrimSpace(workspace)
-	if root == "" {
-		root = "."
-	}
-	return filepath.Join(root, ".mnemon", "harness", "local", "managed-agent", "wake-ledger.jsonl")
-}
-
-func runtimeProjectionEnabled(env []string) bool {
-	value := strings.ToLower(envDefault(env, "MNEMON_MULTICA_PROJECT_COMMENTS", "true"))
-	switch value {
-	case "0", "false", "no", "off":
-		return false
-	default:
-		return true
-	}
 }
 
 func sanitizePrincipal(value string) string {

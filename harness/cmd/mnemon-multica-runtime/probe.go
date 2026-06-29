@@ -10,6 +10,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	multicasurface "github.com/mnemon-dev/mnemon/harness/internal/surface/multica"
 )
 
 type probeRecorder struct {
@@ -306,9 +308,9 @@ func extractProbeInput(params map[string]any) string {
 }
 
 func newProbeRecorder(env []string, cwd string, now func() time.Time) (*probeRecorder, error) {
-	path := envValue(env, "MNEMON_MULTICA_PROBE_LOG")
+	path := multicasurface.RuntimeEnvValue(env, "MNEMON_MULTICA_PROBE_LOG")
 	if path == "" {
-		dir := envValue(env, "MNEMON_MULTICA_PROBE_DIR")
+		dir := multicasurface.RuntimeEnvValue(env, "MNEMON_MULTICA_PROBE_DIR")
 		if dir == "" {
 			home, err := os.UserHomeDir()
 			if err != nil || strings.TrimSpace(home) == "" {

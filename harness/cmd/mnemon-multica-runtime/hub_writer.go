@@ -23,7 +23,7 @@ func (s *runtimeRPCState) writeMulticaHubArtifacts(ctx context.Context, cli driv
 	if result == nil {
 		return
 	}
-	if !runtimeMulticaHubWriteEnabled(s.Env) {
+	if !multicasurface.RuntimeHubWriteEnabled(s.Env) {
 		result.HubWriteStatus = "skipped"
 		return
 	}
@@ -607,25 +607,12 @@ func runtimeMulticaScopeRefMatches(ref string, result *runtimeImportResult, extr
 	return true, false
 }
 
-func runtimeMulticaHubWriteEnabled(env []string) bool {
-	value := strings.TrimSpace(envValue(env, "MNEMON_MULTICA_HUB_WRITE"))
-	if value == "" {
-		return true
-	}
-	switch strings.ToLower(value) {
-	case "0", "false", "off", "disabled", "no":
-		return false
-	default:
-		return true
-	}
-}
-
 func runtimeMulticaRegistry(env []string, cwd string) (driver.MulticaRegistry, bool, error) {
 	paths := []string{}
-	if explicit := envValue(env, "MNEMON_MULTICA_REGISTRY"); explicit != "" {
+	if explicit := multicasurface.RuntimeEnvValue(env, "MNEMON_MULTICA_REGISTRY"); explicit != "" {
 		paths = append(paths, explicit)
 	}
-	if workspace := envValue(env, "MNEMON_MANAGED_WORKSPACE"); workspace != "" {
+	if workspace := multicasurface.RuntimeEnvValue(env, "MNEMON_MANAGED_WORKSPACE"); workspace != "" {
 		paths = append(paths, driver.MulticaRegistryPath(workspace, ""))
 	}
 	if strings.TrimSpace(cwd) != "" {
@@ -641,10 +628,10 @@ func runtimeMulticaRegistry(env []string, cwd string) (driver.MulticaRegistry, b
 }
 
 func runtimeMulticaHubLedgerPath(env []string, cwd string) string {
-	if explicit := envValue(env, "MNEMON_MULTICA_HUB_LEDGER"); explicit != "" {
+	if explicit := multicasurface.RuntimeEnvValue(env, "MNEMON_MULTICA_HUB_LEDGER"); explicit != "" {
 		return driver.MulticaHubLedgerPath("", explicit)
 	}
-	if workspace := envValue(env, "MNEMON_MANAGED_WORKSPACE"); workspace != "" {
+	if workspace := multicasurface.RuntimeEnvValue(env, "MNEMON_MANAGED_WORKSPACE"); workspace != "" {
 		return driver.MulticaHubLedgerPath(workspace, "")
 	}
 	return driver.MulticaHubLedgerPath(cwd, "")
