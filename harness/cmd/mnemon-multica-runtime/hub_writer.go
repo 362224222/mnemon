@@ -473,7 +473,7 @@ func findExistingMulticaAssignmentIssueInChildren(ctx context.Context, cli drive
 			if err != nil {
 				return driver.MulticaIssue{}, false, err
 			}
-			meta = driver.ParseMulticaHubMetadata(stringMapToAny(listed))
+			meta = multicasurface.ParseMulticaHubListedMetadata(listed)
 		}
 		if !meta.IsAssignmentMailbox() {
 			continue
@@ -512,7 +512,7 @@ func findAssignmentTargetFromMulticaHub(ctx context.Context, cli driver.MulticaC
 			if err != nil {
 				return "", false, err
 			}
-			meta = driver.ParseMulticaHubMetadata(stringMapToAny(listed))
+			meta = multicasurface.ParseMulticaHubListedMetadata(listed)
 		}
 		if !meta.IsAssignmentMailbox() {
 			continue
@@ -538,7 +538,7 @@ func allMulticaAssignmentChildrenDone(ctx context.Context, cli driver.MulticaCLI
 			if err != nil {
 				return false, err
 			}
-			meta = driver.ParseMulticaHubMetadata(stringMapToAny(listed))
+			meta = multicasurface.ParseMulticaHubListedMetadata(listed)
 		}
 		if !meta.IsAssignmentMailbox() || meta.SessionID != sessionID {
 			continue
@@ -553,12 +553,4 @@ func allMulticaAssignmentChildrenDone(ctx context.Context, cli driver.MulticaCLI
 		return false, nil
 	}
 	return seen, nil
-}
-
-func stringMapToAny(in map[string]string) map[string]any {
-	out := make(map[string]any, len(in))
-	for key, value := range in {
-		out[key] = value
-	}
-	return out
 }

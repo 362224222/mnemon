@@ -342,7 +342,14 @@ func multicaHubLedgerKey(kind string, source MulticaHubLedgerSource) string {
 }
 
 func ParseMulticaHubMetadata(raw map[string]any) MulticaHubMetadata {
-	meta := NormalizeMulticaMetadata(raw)
+	return multicaHubMetadataFromMap(NormalizeMulticaMetadata(raw))
+}
+
+func ParseMulticaHubListedMetadata(raw map[string]string) MulticaHubMetadata {
+	return multicaHubMetadataFromMap(NormalizeMulticaMetadata(raw))
+}
+
+func multicaHubMetadataFromMap(meta map[string]string) MulticaHubMetadata {
 	return MulticaHubMetadata{
 		SchemaVersion:         meta[MulticaMetadataSchemaVersion],
 		HubBackend:            meta[MulticaMetadataHubBackend],

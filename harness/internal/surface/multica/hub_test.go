@@ -29,6 +29,24 @@ func TestHubMetadataDetectsAssignmentMailbox(t *testing.T) {
 	}
 }
 
+func TestParseMulticaHubListedMetadata(t *testing.T) {
+	meta := ParseMulticaHubListedMetadata(map[string]string{
+		MulticaMetadataHubBackend:            MulticaHubBackend,
+		MulticaMetadataKind:                  MulticaHubKindAssignmentMailbox,
+		MulticaMetadataSessionID:             "session-1",
+		MulticaMetadataAssignmentID:          "asg-1",
+		MulticaMetadataAssignmentFingerprint: "sha256:abc",
+		MulticaMetadataPrincipal:             "worker@team",
+	})
+	if !meta.IsAssignmentMailbox() ||
+		meta.SessionID != "session-1" ||
+		meta.AssignmentID != "asg-1" ||
+		meta.AssignmentFingerprint != "sha256:abc" ||
+		meta.Principal != "worker@team" {
+		t.Fatalf("listed metadata mismatch: %+v", meta)
+	}
+}
+
 func TestAssignmentFingerprintStable(t *testing.T) {
 	left := MulticaAssignmentFingerprint(MulticaAssignmentFingerprintInput{
 		AssignmentID:     " assignment-1 ",
