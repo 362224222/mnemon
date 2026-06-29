@@ -75,45 +75,6 @@ func TestManagedWakeMatchTermsPreferStableIssueIdentity(t *testing.T) {
 	}
 }
 
-func TestRuntimeManagedWakeScopeIDPrefersAssignmentThenRoot(t *testing.T) {
-	if got := runtimeManagedWakeScopeID(runtimeImportResult{
-		AssignmentID: "asg-1",
-		RootIssueID:  "root-1",
-		IssueID:      "child-1",
-	}); got != "asg-1" {
-		t.Fatalf("assignment mailbox scope = %q, want asg-1", got)
-	}
-	if got := runtimeManagedWakeScopeID(runtimeImportResult{
-		RootIssueID: "root-1",
-		IssueID:     "root-1",
-	}); got != "root-1" {
-		t.Fatalf("root session scope = %q, want root-1", got)
-	}
-}
-
-func TestRuntimeManagedTurnEnvInjectsRenderScope(t *testing.T) {
-	env := runtimeManagedTurnEnv([]string{"EXISTING=1"}, runtimeImportResult{
-		SessionID:    "multica:session:root-1",
-		RootIssueID:  "root-1",
-		AssignmentID: "asg-1",
-	})
-	joined := strings.Join(env, "\n")
-	for _, want := range []string{
-		"MNEMON_RENDER_HOST=multica",
-		"MNEMON_RENDER_SESSION_ID=multica:session:root-1",
-		"MNEMON_RENDER_INPUT_ID=asg-1",
-	} {
-		if !strings.Contains(joined, want) {
-			t.Fatalf("managed env missing %q: %v", want, env)
-		}
-	}
-
-	preserved := runtimeManagedTurnEnv([]string{"MNEMON_RENDER_HOST=custom"}, runtimeImportResult{SessionID: "session-1", RootIssueID: "root-1"})
-	if got := multicasurface.RuntimeEnvValue(preserved, "MNEMON_RENDER_HOST"); got != "custom" {
-		t.Fatalf("managed env should preserve explicit host, got %q", got)
-	}
-}
-
 func runtimeTestEnv(values ...string) []string {
 	env := make([]string, 0, len(os.Environ())+len(values))
 	for _, item := range os.Environ() {

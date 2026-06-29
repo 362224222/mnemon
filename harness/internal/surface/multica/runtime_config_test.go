@@ -55,3 +55,41 @@ func TestRuntimeManagedLedgerPath(t *testing.T) {
 		t.Fatalf("explicit RuntimeManagedLedgerPath = %q, want %q", got, explicit)
 	}
 }
+
+func TestRuntimeManagedWakeScopeIDPrefersAssignmentThenRoot(t *testing.T) {
+	if got := RuntimeManagedWakeScopeID(RuntimeManagedWakeMaterial{
+		AssignmentID: "asg-1",
+		RootIssueID:  "root-1",
+		IssueID:      "child-1",
+	}); got != "asg-1" {
+		t.Fatalf("assignment mailbox scope = %q, want asg-1", got)
+	}
+	if got := RuntimeManagedWakeScopeID(RuntimeManagedWakeMaterial{
+		RootIssueID: "root-1",
+		IssueID:     "root-1",
+	}); got != "root-1" {
+		t.Fatalf("root session scope = %q, want root-1", got)
+	}
+}
+
+func TestRuntimeManagedTurnEnvInjectsRenderScope(t *testing.T) {
+	env := RuntimeManagedTurnEnv([]string{"EXISTING=1"}, RuntimeManagedWakeMaterial{
+		SessionID:    "multica:session:root-1",
+		RootIssueID:  "root-1",
+		AssignmentID: "asg-1",
+	})
+	if got := RuntimeEnvValue(env, "MNEMON_RENDER_HOST"); got != "multica" {
+		t.Fatalf("render host = %q", got)
+	}
+	if got := RuntimeEnvValue(env, "MNEMON_RENDER_SESSION_ID"); got != "multica:session:root-1" {
+		t.Fatalf("render session = %q", got)
+	}
+	if got := RuntimeEnvValue(env, "MNEMON_RENDER_INPUT_ID"); got != "asg-1" {
+		t.Fatalf("render input = %q", got)
+	}
+
+	preserved := RuntimeManagedTurnEnv([]string{"MNEMON_RENDER_HOST=custom"}, RuntimeManagedWakeMaterial{SessionID: "session-1", RootIssueID: "root-1"})
+	if got := RuntimeEnvValue(preserved, "MNEMON_RENDER_HOST"); got != "custom" {
+		t.Fatalf("managed env should preserve explicit host, got %q", got)
+	}
+}

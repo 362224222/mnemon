@@ -6,6 +6,13 @@ import (
 	"time"
 )
 
+type RuntimeManagedWakeMaterial struct {
+	IssueID      string
+	RootIssueID  string
+	AssignmentID string
+	SessionID    string
+}
+
 func RuntimeEnvValue(env []string, key string) string {
 	prefix := key + "="
 	for i := len(env) - 1; i >= 0; i-- {
@@ -47,6 +54,25 @@ func RuntimeManagedLedgerPath(env []string, workspace string) string {
 	return filepath.Join(root, ".mnemon", "harness", "local", "managed-agent", "wake-ledger.jsonl")
 }
 
+func RuntimeManagedWakeScopeID(material RuntimeManagedWakeMaterial) string {
+	return firstNonEmptyRuntimeString(material.AssignmentID, material.RootIssueID, material.IssueID)
+}
+
+func RuntimeManagedTurnEnv(env []string, material RuntimeManagedWakeMaterial) []string {
+	out := append([]string(nil), env...)
+	add := func(key, value string) {
+		value = strings.TrimSpace(value)
+		if value == "" || RuntimeEnvValue(out, key) != "" {
+			return
+		}
+		out = append(out, key+"="+value)
+	}
+	add("MNEMON_RENDER_HOST", "multica")
+	add("MNEMON_RENDER_SESSION_ID", material.SessionID)
+	add("MNEMON_RENDER_INPUT_ID", RuntimeManagedWakeScopeID(material))
+	return out
+}
+
 func RuntimeProjectionCommentsEnabled(env []string) bool {
 	value := strings.ToLower(RuntimeEnvDefault(env, "MNEMON_MULTICA_PROJECT_COMMENTS", "true"))
 	switch value {
@@ -68,6 +94,15 @@ func RuntimeHubWriteEnabled(env []string) bool {
 	default:
 		return true
 	}
+}
+
+func firstNonEmptyRuntimeString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func runtimeDuration(env []string, keys []string, fallback time.Duration) time.Duration {

@@ -543,6 +543,15 @@ func runtimeManagedWakeMatchMaterial(result runtimeImportResult) drive.ManagedWa
 	}
 }
 
+func runtimeManagedWakeMaterial(result runtimeImportResult) multicasurface.RuntimeManagedWakeMaterial {
+	return multicasurface.RuntimeManagedWakeMaterial{
+		IssueID:      result.IssueID,
+		RootIssueID:  result.RootIssueID,
+		AssignmentID: result.AssignmentID,
+		SessionID:    result.SessionID,
+	}
+}
+
 func (s *runtimeRPCState) wakeManagedAgent(result *runtimeImportResult, progress runtimeProgressSink) {
 	if result == nil {
 		return
@@ -578,7 +587,7 @@ func (s *runtimeRPCState) wakeManagedAgent(result *runtimeImportResult, progress
 		Surface:       "runtime",
 		RenderIntent:  presentation.IntentTeamworkEvents,
 		SessionID:     result.SessionID,
-		InputDigest:   runtimeManagedWakeScopeID(*result),
+		InputDigest:   multicasurface.RuntimeManagedWakeScopeID(runtimeManagedWakeMaterial(*result)),
 	})
 	if err != nil {
 		result.WakeStatus = "failed"
@@ -591,7 +600,7 @@ func (s *runtimeRPCState) wakeManagedAgent(result *runtimeImportResult, progress
 		result.WakeErr = fmt.Errorf("no managed wake candidate in rendered context")
 		return
 	}
-	managedEnv := runtimeManagedTurnEnv(s.Env, *result)
+	managedEnv := multicasurface.RuntimeManagedTurnEnv(s.Env, runtimeManagedWakeMaterial(*result))
 	client, workspace, err := runtimeManagedTurnClient(managedEnv, s.CWD, runtimeName)
 	if err != nil {
 		result.WakeStatus = "failed"
@@ -621,25 +630,6 @@ func (s *runtimeRPCState) wakeManagedAgent(result *runtimeImportResult, progress
 	if result.WakeStatus == "" {
 		result.WakeStatus = "completed"
 	}
-}
-
-func runtimeManagedWakeScopeID(result runtimeImportResult) string {
-	return firstNonEmpty(result.AssignmentID, result.RootIssueID, result.IssueID)
-}
-
-func runtimeManagedTurnEnv(env []string, result runtimeImportResult) []string {
-	out := append([]string(nil), env...)
-	add := func(key, value string) {
-		value = strings.TrimSpace(value)
-		if value == "" || multicasurface.RuntimeEnvValue(out, key) != "" {
-			return
-		}
-		out = append(out, key+"="+value)
-	}
-	add("MNEMON_RENDER_HOST", "multica")
-	add("MNEMON_RENDER_SESSION_ID", result.SessionID)
-	add("MNEMON_RENDER_INPUT_ID", runtimeManagedWakeScopeID(result))
-	return out
 }
 
 type runtimeHubProjectionDelta struct {
