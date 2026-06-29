@@ -4,7 +4,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/mnemon-dev/mnemon/harness/internal/daemon"
 	"github.com/mnemon-dev/mnemon/harness/internal/productconfig"
 	multicasurface "github.com/mnemon-dev/mnemon/harness/internal/surface/multica"
 )
@@ -132,6 +134,56 @@ func TestDaemonStatusShowsLegacyMulticaRoleSummary(t *testing.T) {
 	}
 	got := out.String()
 	for _, want := range []string{"Harness config: legacy bridge", "Harness daemon roles: watchers=1 drive=1 surfaces=1"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("daemon status missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestDaemonStatusShowsWorkerSnapshot(t *testing.T) {
+	root := t.TempDir()
+	cfg := productconfig.Default()
+	cfg.Connections.Multica = productconfig.MulticaConnection{Enabled: true, Workspace: "ws-multica", RuntimeBinary: "mnemon-multica-runtime"}
+	cfg.Daemon.InteractionWatchers = []string{productconfig.ConnectionMultica}
+	cfg.Daemon.DriveSources = []string{productconfig.DriveManagedLocal}
+	if err := productconfig.Save(productconfig.DefaultPath(root, ""), cfg); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Date(2026, 6, 29, 8, 0, 0, 0, time.UTC)
+	updated := started.Add(time.Minute)
+	if err := daemon.NewFileSnapshotStore(daemon.StatusSnapshotPath(root, "")).Save(daemon.Snapshot{
+		StartedAt: started,
+		Workers: map[string]daemon.WorkerSnapshot{
+			"managed-drive": {
+				Kind:      daemon.WorkerDrive,
+				Status:    "idle",
+				Message:   "wake ledger clean",
+				UpdatedAt: updated,
+			},
+			"multica-watch": {
+				Kind:   daemon.WorkerInteraction,
+				Status: "failed",
+				Error:  "metadata cursor rejected",
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	oldRoot := daemonRoot
+	daemonRoot = root
+	t.Cleanup(func() { daemonRoot = oldRoot })
+
+	cmd, out := testCommand()
+	if err := runDaemonStatus(cmd, nil); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	for _, want := range []string{
+		"Harness daemon snapshot: workers=2 started=2026-06-29T08:00:00Z",
+		"managed-drive [drive]: idle (wake ledger clean) updated=2026-06-29T08:01:00Z",
+		"multica-watch [interaction]: failed error=metadata cursor rejected",
+		"Harness daemon: not running",
+	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("daemon status missing %q:\n%s", want, got)
 		}

@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/app"
+	"github.com/mnemon-dev/mnemon/harness/internal/daemon"
 	"github.com/mnemon-dev/mnemon/harness/internal/productconfig"
 	"github.com/spf13/cobra"
 )
@@ -98,6 +100,7 @@ func runDaemonStatus(cmd *cobra.Command, args []string) error {
 	} else {
 		fmt.Fprintln(cmd.OutOrStdout(), "Harness config: not configured")
 	}
+	writeDaemonSnapshotSummary(cmd.OutOrStdout(), root)
 	if cfg, err := app.ReadLocalConfig(root); err == nil {
 		if _, ok := localServiceStatus(root, cfg, cfg.Principal); ok {
 			fmt.Fprintln(cmd.OutOrStdout(), "Harness daemon: ready")
@@ -110,6 +113,44 @@ func runDaemonStatus(cmd *cobra.Command, args []string) error {
 
 func writeDaemonRoleSummary(out io.Writer, cfg productconfig.Config) {
 	fmt.Fprintf(out, "Harness daemon roles: watchers=%d drive=%d surfaces=%d\n", len(cfg.Daemon.InteractionWatchers), len(cfg.Daemon.DriveSources), len(cfg.Daemon.ProjectionSurfaces))
+}
+
+func writeDaemonSnapshotSummary(out io.Writer, root string) {
+	snapshot, ok, err := daemon.NewFileSnapshotStore(daemon.StatusSnapshotPath(root, "")).Load()
+	if err != nil {
+		fmt.Fprintf(out, "Harness daemon snapshot: unavailable (%v)\n", err)
+		return
+	}
+	if !ok {
+		return
+	}
+	fmt.Fprintf(out, "Harness daemon snapshot: workers=%d started=%s\n", len(snapshot.Workers), formatDaemonTime(snapshot.StartedAt))
+	names := make([]string, 0, len(snapshot.Workers))
+	for name := range snapshot.Workers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		worker := snapshot.Workers[name]
+		fmt.Fprintf(out, "  - %s [%s]: %s", name, worker.Kind, worker.Status)
+		if worker.Message != "" {
+			fmt.Fprintf(out, " (%s)", worker.Message)
+		}
+		if worker.Error != "" {
+			fmt.Fprintf(out, " error=%s", worker.Error)
+		}
+		if !worker.UpdatedAt.IsZero() {
+			fmt.Fprintf(out, " updated=%s", formatDaemonTime(worker.UpdatedAt))
+		}
+		fmt.Fprintln(out)
+	}
+}
+
+func formatDaemonTime(ts time.Time) string {
+	if ts.IsZero() {
+		return "unknown"
+	}
+	return ts.UTC().Format(time.RFC3339)
 }
 
 func daemonProjectRoot() string {
