@@ -2,11 +2,19 @@ package runtime
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
+)
+
+const (
+	syncTickMaxAttempts = 4
+	syncTickMaxCycles   = 8
 )
 
 // NewRuntimeHandler is the Local Mnemon HTTP channel endpoint over a Runtime.
@@ -42,7 +50,7 @@ func NewRuntimeHandler(rt *Runtime, auth access.Authenticator) http.Handler {
 		rec := access.IngestReceipt{Seq: seq, Dup: dup}
 		if !dup {
 			rec.Ticked = true
-			if _, terr := rt.Tick(); terr != nil {
+			if terr := tickRuntimeWithRetry(rt); terr != nil {
 				rec.ProcessingError = terr.Error()
 			}
 		}
@@ -71,7 +79,7 @@ func NewRuntimeHandler(rt *Runtime, auth access.Authenticator) http.Handler {
 		// already processed on its first ingest, so it is not re-ticked.
 		if !dup {
 			rec.Ticked = true
-			if _, terr := rt.Tick(); terr != nil {
+			if terr := tickRuntimeWithRetry(rt); terr != nil {
 				rec.ProcessingError = terr.Error()
 			}
 		}
@@ -164,4 +172,50 @@ func NewRuntimeHandler(rt *Runtime, auth access.Authenticator) http.Handler {
 		_ = json.NewEncoder(w).Encode(resp)
 	})
 	return mux
+}
+
+func tickRuntimeWithRetry(rt *Runtime) error {
+	var lastErr error
+	for cycle := 0; cycle < syncTickMaxCycles; cycle++ {
+		for attempt := 0; attempt < syncTickMaxAttempts; attempt++ {
+			decisions, err := rt.Tick()
+			if err == nil {
+				if len(decisions) == 0 {
+					return nil
+				}
+				lastErr = nil
+				break
+			}
+			lastErr = err
+			if !retryableRuntimeTickError(err) || attempt == syncTickMaxAttempts-1 {
+				return err
+			}
+			time.Sleep(time.Duration(25*(1<<attempt)) * time.Millisecond)
+		}
+	}
+	if lastErr != nil {
+		return lastErr
+	}
+	return fmt.Errorf("synchronous tick did not settle after %d cycles", syncTickMaxCycles)
+}
+
+func retryableRuntimeTickError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, marker := range []string{
+		string(contract.ReadStale),
+		"read stale",
+		"stale read",
+		"version conflict",
+		"resource version",
+		"optimistic",
+		"conflict",
+	} {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
 }
