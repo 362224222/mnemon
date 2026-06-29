@@ -3,8 +3,10 @@ package main
 import (
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/app"
@@ -78,6 +80,9 @@ func runDaemonStart(cmd *cobra.Command, args []string) error {
 	if err := app.ValidateListenAddr(addr, daemonAllowNonLoopback); err != nil {
 		return err
 	}
+	if err := writeConfiguredDaemonSnapshot(root, time.Now().UTC()); err != nil {
+		return err
+	}
 	fmt.Fprintln(cmd.OutOrStdout(), "Harness daemon: ready")
 	fmt.Fprintln(cmd.OutOrStdout(), "Remote Workspace: "+app.RemoteWorkspaceStatus(root))
 	return app.RunLocalHTTPServerWithBindings(cmd.Context(), addr, boot.StorePath, boot.Loaded, app.ServeOptions{
@@ -113,6 +118,87 @@ func runDaemonStatus(cmd *cobra.Command, args []string) error {
 
 func writeDaemonRoleSummary(out io.Writer, cfg productconfig.Config) {
 	fmt.Fprintf(out, "Harness daemon roles: watchers=%d drive=%d surfaces=%d\n", len(cfg.Daemon.InteractionWatchers), len(cfg.Daemon.DriveSources), len(cfg.Daemon.ProjectionSurfaces))
+}
+
+func writeConfiguredDaemonSnapshot(root string, now time.Time) error {
+	cfg, ok, err := loadDaemonSnapshotConfig(root)
+	if err != nil || !ok {
+		return err
+	}
+	snapshot := configuredDaemonSnapshot(cfg, now)
+	if len(snapshot.Workers) == 0 {
+		return nil
+	}
+	return daemon.NewFileSnapshotStore(daemon.StatusSnapshotPath(root, "")).Save(snapshot)
+}
+
+func loadDaemonSnapshotConfig(root string) (productconfig.Config, bool, error) {
+	configPath := productconfig.DefaultPath(root, "")
+	if cfg, err := productconfig.Load(configPath); err == nil {
+		return cfg, true, nil
+	} else if !os.IsNotExist(err) {
+		return productconfig.Config{}, false, err
+	} else if legacy, found, legacyErr := productconfig.FromLegacy(root); legacyErr == nil && found {
+		return legacy, true, nil
+	} else if legacyErr != nil {
+		return productconfig.Config{}, false, legacyErr
+	}
+	return productconfig.Config{}, false, nil
+}
+
+func configuredDaemonSnapshot(cfg productconfig.Config, now time.Time) daemon.Snapshot {
+	snapshot := daemon.Snapshot{StartedAt: now.UTC(), Workers: map[string]daemon.WorkerSnapshot{}}
+	add := func(name string, kind daemon.WorkerKind, message string) {
+		name = daemonWorkerName(name)
+		if name == "" {
+			return
+		}
+		snapshot.Workers[name] = daemon.WorkerSnapshot{
+			Kind:      kind,
+			Status:    "configured",
+			Message:   strings.TrimSpace(message),
+			StartedAt: snapshot.StartedAt,
+			UpdatedAt: snapshot.StartedAt,
+		}
+	}
+	for _, watcher := range cfg.Daemon.InteractionWatchers {
+		watcher = strings.TrimSpace(watcher)
+		if watcher == "" {
+			continue
+		}
+		add(watcher+"-watch", daemon.WorkerInteraction, "watcher="+watcher)
+	}
+	for _, source := range cfg.Daemon.DriveSources {
+		source = strings.TrimSpace(source)
+		if source == "" {
+			continue
+		}
+		name := source + "-drive"
+		if source == productconfig.DriveManagedLocal {
+			name = "managed-drive"
+		}
+		add(name, daemon.WorkerDrive, "drive="+source)
+	}
+	for _, surface := range cfg.Daemon.ProjectionSurfaces {
+		surface = strings.TrimSpace(surface)
+		if surface == "" {
+			continue
+		}
+		add(surface+"-project", daemon.WorkerProjection, "surface="+surface)
+	}
+	if len(snapshot.Workers) > 0 {
+		add("status-readiness", daemon.WorkerStatus, "daemon status snapshot")
+	}
+	return snapshot
+}
+
+func daemonWorkerName(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	replacer := strings.NewReplacer(" ", "-", "/", "-", "\\", "-", ":", "-")
+	return replacer.Replace(value)
 }
 
 func writeDaemonSnapshotSummary(out io.Writer, root string) {

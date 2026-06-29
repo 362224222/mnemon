@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -187,6 +188,70 @@ func TestDaemonStatusShowsWorkerSnapshot(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("daemon status missing %q:\n%s", want, got)
 		}
+	}
+}
+
+func TestConfiguredDaemonSnapshotIncludesConfiguredRoles(t *testing.T) {
+	now := time.Date(2026, 6, 29, 9, 50, 0, 0, time.UTC)
+	cfg := productconfig.Default()
+	cfg.Daemon.InteractionWatchers = []string{" ", productconfig.ConnectionMultica}
+	cfg.Daemon.DriveSources = []string{"", productconfig.DriveManagedLocal}
+	cfg.Daemon.ProjectionSurfaces = []string{"\t", productconfig.ConnectionMultica}
+
+	snapshot := configuredDaemonSnapshot(cfg, now)
+	for name, want := range map[string]daemon.WorkerKind{
+		"multica-watch":    daemon.WorkerInteraction,
+		"managed-drive":    daemon.WorkerDrive,
+		"multica-project":  daemon.WorkerProjection,
+		"status-readiness": daemon.WorkerStatus,
+	} {
+		worker, ok := snapshot.Workers[name]
+		if !ok {
+			t.Fatalf("snapshot missing worker %q: %+v", name, snapshot.Workers)
+		}
+		if worker.Kind != want || worker.Status != "configured" || !worker.StartedAt.Equal(now) || !worker.UpdatedAt.Equal(now) {
+			t.Fatalf("worker %q mismatch: %+v", name, worker)
+		}
+	}
+	for _, name := range []string{"-watch", "-drive", "-project"} {
+		if _, ok := snapshot.Workers[name]; ok {
+			t.Fatalf("snapshot should skip empty worker name %q: %+v", name, snapshot.Workers)
+		}
+	}
+}
+
+func TestLoadDaemonSnapshotConfigRejectsInvalidProductConfig(t *testing.T) {
+	root := t.TempDir()
+	reg := multicasurface.MulticaRegistry{
+		SchemaVersion: 1,
+		WorkspaceID:   "ws-multica",
+		Participants: []multicasurface.MulticaParticipantRecord{{
+			Principal: "planner@team",
+			AgentName: "mnemon-planner",
+			AgentID:   "agent-planner",
+			Role:      "planner",
+		}},
+	}
+	if err := multicasurface.SaveMulticaRegistry(multicasurface.MulticaRegistryPath(root, ""), reg); err != nil {
+		t.Fatal(err)
+	}
+	configPath := productconfig.DefaultPath(root, "")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, []byte(`{"schema_version":99}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, ok, err := loadDaemonSnapshotConfig(root)
+	if err == nil {
+		t.Fatal("expected invalid product config error")
+	}
+	if ok {
+		t.Fatal("invalid product config should not load through legacy fallback")
+	}
+	if !strings.Contains(err.Error(), "unsupported") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
