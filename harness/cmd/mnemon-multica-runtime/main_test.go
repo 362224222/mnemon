@@ -796,6 +796,8 @@ esac
 		"issue children root-2 --output json",
 		"issue create --title TEA-10: check release notes --output json --description-stdin --parent root-2 --status in_progress --priority medium",
 		"issue metadata set child-2 --key mnemon.kind --value assignment_mailbox --type string --output json",
+		"issue metadata set child-2 --key mnemon.event_type --value assignment.accepted --type string --output json",
+		"issue metadata set child-2 --key mnemon.event_phase --value accepted --type string --output json",
 		"issue metadata set child-2 --key mnemon.assignment_id --value asg-writer --type string --output json",
 		"issue metadata set child-2 --key mnemon.principal --value worker@team --type string --output json",
 		"issue assign child-2 --to-id agent-worker --output json",
@@ -815,6 +817,11 @@ esac
 	assignIdx := strings.Index(args, "issue assign child-2 --to-id agent-worker")
 	if createIdx < 0 || metaIdx < 0 || assignIdx < 0 || !(createIdx < metaIdx && metaIdx < assignIdx) {
 		t.Fatalf("assignment mailbox must be created, tagged, then assigned; args:\n%s", args)
+	}
+	eventTypeIdx := strings.Index(args, "issue metadata set child-2 --key mnemon.event_type")
+	eventPhaseIdx := strings.Index(args, "issue metadata set child-2 --key mnemon.event_phase")
+	if eventTypeIdx < 0 || eventPhaseIdx < 0 || !(eventTypeIdx < assignIdx && eventPhaseIdx < assignIdx) {
+		t.Fatalf("assignment mailbox dispatch metadata must include event type/phase before assignment; args:\n%s", args)
 	}
 	supplementalIdx := strings.Index(args, "issue metadata set child-2 --key mnemon.projection_owner")
 	if supplementalIdx < 0 || !(assignIdx < supplementalIdx) {

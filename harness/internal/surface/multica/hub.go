@@ -384,6 +384,8 @@ func AssignmentMailboxDispatchMetadata(full map[string]string) map[string]string
 		MulticaMetadataSessionID,
 		MulticaMetadataCorrelationID,
 		MulticaMetadataEventID,
+		MulticaMetadataEventType,
+		MulticaMetadataEventPhase,
 		MulticaMetadataAssignmentID,
 		MulticaMetadataAssignmentFingerprint,
 		MulticaMetadataPrincipal,
