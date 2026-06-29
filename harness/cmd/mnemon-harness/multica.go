@@ -13,6 +13,7 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/driver"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/projection"
+	multicasurface "github.com/mnemon-dev/mnemon/harness/internal/surface/multica"
 	"github.com/spf13/cobra"
 )
 
@@ -250,7 +251,12 @@ func runMulticaImportIssue(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	draft, err := driver.BuildMulticaIssueTeamworkSignal(issue, driver.MulticaIssueSignalOptions{
+	draft, err := multicasurface.BuildIssueTeamworkSignal(multicasurface.IssueSignalMaterial{
+		ID:          issue.ID,
+		Identifier:  issue.Identifier,
+		Title:       issue.Title,
+		Description: issue.Description,
+	}, multicasurface.IssueSignalOptions{
 		Scope:        multicaScope,
 		TTL:          multicaTTL,
 		WhyTeamwork:  multicaWhyTeamwork,

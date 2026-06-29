@@ -348,7 +348,12 @@ func (s *runtimeRPCState) importIssue(input string, progress runtimeProgressSink
 	if taskID != "" {
 		externalID = "multica-task-" + taskID
 	}
-	draft, err := driver.BuildMulticaIssueTeamworkSignal(issue, driver.MulticaIssueSignalOptions{
+	draft, err := multicasurface.BuildIssueTeamworkSignal(multicasurface.IssueSignalMaterial{
+		ID:          issue.ID,
+		Identifier:  issue.Identifier,
+		Title:       issue.Title,
+		Description: issue.Description,
+	}, multicasurface.IssueSignalOptions{
 		Scope:       envDefault(s.Env, "MNEMON_MULTICA_SCOPE", "multica/teamwork"),
 		TTL:         envDefault(s.Env, "MNEMON_MULTICA_TTL", "30m"),
 		WhyTeamwork: "Multica assigned this issue to a Mnemon participant, so Mnemon should admit it through the teamwork protocol.",

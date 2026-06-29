@@ -842,19 +842,6 @@ func (c MulticaCLI) globalArgs(args []string) []string {
 	return append(out, args...)
 }
 
-type MulticaIssueSignalOptions = multicasurface.IssueSignalOptions
-
-type MulticaObservedDraft = multicasurface.ObservedDraft
-
-func BuildMulticaIssueTeamworkSignal(issue MulticaIssue, opts MulticaIssueSignalOptions) (MulticaObservedDraft, error) {
-	return multicasurface.BuildIssueTeamworkSignal(multicasurface.IssueSignalMaterial{
-		ID:          issue.ID,
-		Identifier:  issue.Identifier,
-		Title:       issue.Title,
-		Description: issue.Description,
-	}, opts)
-}
-
 func DecodeMulticaIssue(r io.Reader) (MulticaIssue, error) {
 	var issue MulticaIssue
 	if err := json.NewDecoder(r).Decode(&issue); err != nil {
