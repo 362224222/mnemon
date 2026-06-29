@@ -438,7 +438,7 @@ func (s *runtimeRPCState) importIssue(input multicasurface.RuntimeInput, progres
 	emitRuntimeProgress(progress, multicasurface.RuntimeWakeProgress(runtimeResultSummary(result)))
 	s.writeMulticaHubArtifacts(multicaCtx, cli, client, issue, &result)
 	mergeRuntimeHubProjectionDeltas(&result, earlyHubDeltas)
-	emitRuntimeCommand(progress, "mnemon multica hub project --issue "+issue.ID, multicasurface.RuntimeHubWriteProgress(runtimeResultSummary(result)), runtimeExitCode(result.HubWriteErr))
+	emitRuntimeCommand(progress, "mnemon-multica-runtime hub-write --issue "+issue.ID, multicasurface.RuntimeHubWriteProgress(runtimeResultSummary(result)), runtimeExitCode(result.HubWriteErr))
 	emitRuntimeProgress(progress, multicasurface.RuntimeHubWriteProgress(runtimeResultSummary(result)))
 	s.projectImportComment(multicaCtx, cli, issue, draft.ExternalID, draft.EventType, &result)
 	emitRuntimeCommand(progress, "multica issue comment add "+issue.ID, multicasurface.RuntimeProjectionProgress(runtimeResultSummary(result)), runtimeExitCode(result.ProjectionErr))
@@ -471,7 +471,7 @@ func (s *runtimeRPCState) correlateAssignmentMailbox(ctx context.Context, cli dr
 		string(eventmodel.Subject("assignment", result.AssignmentID)),
 	)
 	correlationProgress := multicasurface.RuntimeAssignmentCorrelationProgress()
-	emitRuntimeCommand(progress, "mnemon multica assignment correlate --issue "+issue.ID, correlationProgress, 0)
+	emitRuntimeCommand(progress, "mnemon-multica-runtime assignment-correlate --issue "+issue.ID, correlationProgress, 0)
 	emitRuntimeProgress(progress, correlationProgress)
 	addr := strings.TrimSpace(multicasurface.RuntimeEnvValue(s.Env, "MNEMON_CONTROL_ADDR"))
 	var client *access.Client
@@ -492,7 +492,7 @@ func (s *runtimeRPCState) correlateAssignmentMailbox(ctx context.Context, cli dr
 			emitRuntimeCommand(progress, "mnemond managed wake --principal "+result.Principal+" [mnemon:wake]", multicasurface.RuntimeWakeProgress(runtimeResultSummary(*result)), runtimeExitCode(result.WakeErr))
 			emitRuntimeProgress(progress, multicasurface.RuntimeWakeProgress(runtimeResultSummary(*result)))
 			s.writeMulticaHubArtifacts(ctx, cli, client, issue, result)
-			emitRuntimeCommand(progress, "mnemon multica hub project --issue "+issue.ID, multicasurface.RuntimeHubWriteProgress(runtimeResultSummary(*result)), runtimeExitCode(result.HubWriteErr))
+			emitRuntimeCommand(progress, "mnemon-multica-runtime hub-write --issue "+issue.ID, multicasurface.RuntimeHubWriteProgress(runtimeResultSummary(*result)), runtimeExitCode(result.HubWriteErr))
 			emitRuntimeProgress(progress, multicasurface.RuntimeHubWriteProgress(runtimeResultSummary(*result)))
 		}
 	}
