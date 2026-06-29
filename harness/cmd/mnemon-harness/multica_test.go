@@ -200,6 +200,17 @@ esac
 		t.Fatal(err)
 	}
 	registryPath := filepath.Join(tmp, "registry.json")
+	credentialsDir := filepath.Join(tmp, ".mnemon", "harness", "channel", "credentials")
+	if err := os.MkdirAll(credentialsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	plannerTokenFile := filepath.Join(credentialsDir, "planner-team.token")
+	implementerTokenFile := filepath.Join(credentialsDir, "implementer-team.token")
+	for _, path := range []string{plannerTokenFile, implementerTokenFile} {
+		if err := os.WriteFile(path, []byte("token\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	multicaBin = bin
 	multicaProfile = "desktop-api.multica.ai"
 	multicaWorkspaceID = "ws-1"
@@ -261,6 +272,8 @@ esac
 		`"MNEMON_MULTICA_WORKSPACE_ID":"ws-1"`,
 		`"MNEMON_CONTROL_ADDR":"http://127.0.0.1:8787"`,
 		`"MNEMON_CONTROL_PRINCIPAL":"planner@team"`,
+		`"MNEMON_CONTROL_TOKEN_FILE":"` + plannerTokenFile + `"`,
+		`"MNEMON_CONTROL_TOKEN_FILE":"` + implementerTokenFile + `"`,
 		`"MNEMON_HARNESS_BIN":"/abs/mnemon-harness"`,
 		`"MNEMON_MANAGED_RUNTIME":"noop"`,
 		`"MNEMON_MANAGED_WORKSPACE":"` + tmp + `"`,

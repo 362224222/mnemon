@@ -99,6 +99,9 @@ func (s *runtimeRPCState) writeAssignmentMailboxes(ctx context.Context, cli driv
 		if !hubItemAfterRootIngest(item.IngestSeq, result) {
 			continue
 		}
+		if !runtimeAssignmentMatchesCurrentMulticaScope(item, result) {
+			continue
+		}
 		participant, ok := multicaParticipantForPrincipal(reg, item.Assignee)
 		if !ok || strings.TrimSpace(participant.AgentID) == "" {
 			return fmt.Errorf("no Multica agent mapping for assignment assignee %q", item.Assignee)
@@ -317,12 +320,12 @@ func (s *runtimeRPCState) writeProgressComments(ctx context.Context, cli driver.
 			child := strings.TrimSpace(rec.Target.ChildIssueID)
 			if child == "" {
 				var found bool
-				child, found, err = findAssignmentTargetFromLedger(ledger, result.SessionID, item.AssignmentRef)
+				child, found, err = findAssignmentTargetFromLedger(ledger, result.SessionID, item.AssignmentRef, item.Actor)
 				if err != nil {
 					return err
 				}
 				if !found {
-					child, found, err = findAssignmentTargetFromMulticaHub(ctx, cli, result.RootIssueID, result.SessionID, item.AssignmentRef)
+					child, found, err = findAssignmentTargetFromMulticaHub(ctx, cli, result.RootIssueID, result.SessionID, item.AssignmentRef, item.Actor)
 					if err != nil {
 						return err
 					}
@@ -331,22 +334,28 @@ func (s *runtimeRPCState) writeProgressComments(ctx context.Context, cli driver.
 					continue
 				}
 			}
+			if !runtimeProgressMatchesCurrentMulticaScope(item, result, child) {
+				continue
+			}
 			if err := s.ensureProgressIssueStatuses(ctx, cli, result, child, material); err != nil {
 				return err
 			}
 			continue
 		}
-		child, ok, err := findAssignmentTargetFromLedger(ledger, result.SessionID, item.AssignmentRef)
+		child, ok, err := findAssignmentTargetFromLedger(ledger, result.SessionID, item.AssignmentRef, item.Actor)
 		if err != nil {
 			return err
 		}
 		if !ok {
-			child, ok, err = findAssignmentTargetFromMulticaHub(ctx, cli, result.RootIssueID, result.SessionID, item.AssignmentRef)
+			child, ok, err = findAssignmentTargetFromMulticaHub(ctx, cli, result.RootIssueID, result.SessionID, item.AssignmentRef, item.Actor)
 			if err != nil {
 				return err
 			}
 		}
 		if !ok {
+			continue
+		}
+		if !runtimeProgressMatchesCurrentMulticaScope(item, result, child) {
 			continue
 		}
 		commentBody := projection.FormatComment(projection.CommentMaterial{
@@ -413,6 +422,8 @@ type runtimeAssignment struct {
 	ID               string
 	EventID          string
 	IngestSeq        int64
+	SessionID        string
+	RootIssueID      string
 	Actor            string
 	Assignee         string
 	Scope            string
@@ -429,6 +440,8 @@ type runtimeProgress struct {
 	ID            string
 	EventID       string
 	IngestSeq     int64
+	SessionID     string
+	RootIssueID   string
 	Actor         string
 	AssignmentRef string
 	Scope         string
@@ -436,6 +449,7 @@ type runtimeProgress struct {
 	Summary       string
 	Result        string
 	Blocker       string
+	ContextRefs   []string
 	ArtifactRefs  []string
 	EvidenceRefs  []string
 }
@@ -449,6 +463,8 @@ func runtimeAssignmentItem(item map[string]any) runtimeAssignment {
 		ID:               id,
 		EventID:          hubItemFirstString(item, "event_id", "id", "declaration_id", "assignment_id"),
 		IngestSeq:        hubItemInt64(item, "ingest_seq"),
+		SessionID:        hubItemString(item, "session_id"),
+		RootIssueID:      hubItemString(item, "root_issue_id"),
 		Actor:            hubItemString(item, "actor"),
 		Assignee:         hubItemString(item, "assignee"),
 		Scope:            hubItemString(item, "scope"),
@@ -468,6 +484,8 @@ func runtimeProgressItem(item map[string]any) runtimeProgress {
 		ID:            id,
 		EventID:       hubItemFirstString(item, "event_id", "id", "declaration_id"),
 		IngestSeq:     hubItemInt64(item, "ingest_seq"),
+		SessionID:     hubItemString(item, "session_id"),
+		RootIssueID:   hubItemString(item, "root_issue_id"),
 		Actor:         hubItemString(item, "actor"),
 		AssignmentRef: hubItemString(item, "assignment_ref"),
 		Scope:         hubItemString(item, "scope"),
@@ -475,9 +493,118 @@ func runtimeProgressItem(item map[string]any) runtimeProgress {
 		Summary:       hubItemString(item, "summary"),
 		Result:        hubItemString(item, "result"),
 		Blocker:       hubItemString(item, "blocker"),
+		ContextRefs:   hubItemStringList(item, "context_refs"),
 		ArtifactRefs:  hubItemStringList(item, "artifact_refs"),
 		EvidenceRefs:  hubItemStringList(item, "evidence_refs"),
 	}
+}
+
+func runtimeAssignmentMatchesCurrentMulticaScope(item runtimeAssignment, result *runtimeImportResult) bool {
+	if !runtimeExplicitMulticaScopeMatches(item.SessionID, item.RootIssueID, result) {
+		return false
+	}
+	refs := append([]string{}, item.ContextRefs...)
+	refs = append(refs, item.EvidenceRefs...)
+	return runtimeRefsMatchCurrentMulticaScope(refs, result)
+}
+
+func runtimeProgressMatchesCurrentMulticaScope(item runtimeProgress, result *runtimeImportResult, childIssueID string) bool {
+	if !runtimeExplicitMulticaScopeMatches(item.SessionID, item.RootIssueID, result) {
+		return false
+	}
+	refs := append([]string{}, item.ContextRefs...)
+	refs = append(refs, item.EvidenceRefs...)
+	refs = append(refs, item.ArtifactRefs...)
+	return runtimeRefsMatchCurrentMulticaScope(refs, result, childIssueID)
+}
+
+func runtimeExplicitMulticaScopeMatches(sessionID, rootIssueID string, result *runtimeImportResult) bool {
+	if result == nil {
+		return true
+	}
+	if sessionID = strings.TrimSpace(sessionID); sessionID != "" && strings.TrimSpace(result.SessionID) != "" && sessionID != strings.TrimSpace(result.SessionID) {
+		return false
+	}
+	if rootIssueID = strings.TrimSpace(rootIssueID); rootIssueID != "" && strings.TrimSpace(result.RootIssueID) != "" && rootIssueID != strings.TrimSpace(result.RootIssueID) {
+		return false
+	}
+	return true
+}
+
+func runtimeRefsMatchCurrentMulticaScope(refs []string, result *runtimeImportResult, extraIssueIDs ...string) bool {
+	scoped := false
+	for _, ref := range refs {
+		isScoped, matches := runtimeMulticaScopeRefMatches(ref, result, extraIssueIDs...)
+		if !isScoped {
+			continue
+		}
+		scoped = true
+		if matches {
+			return true
+		}
+	}
+	return !scoped
+}
+
+func runtimeMulticaScopeRefMatches(ref string, result *runtimeImportResult, extraIssueIDs ...string) (bool, bool) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return false, false
+	}
+	lower := strings.ToLower(ref)
+	prefixes := []string{"multica:issue:", "multica:issue/", "mention://issue/", "multica:session:", "multica:session/", "multica:task:", "multica:task/"}
+	scoped := false
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(lower, prefix) {
+			scoped = true
+			break
+		}
+	}
+	if !scoped {
+		return false, false
+	}
+	candidates := []string{}
+	if result != nil {
+		root := strings.TrimSpace(result.RootIssueID)
+		if root != "" {
+			candidates = append(candidates,
+				"multica:issue:"+root,
+				"multica:issue/"+root,
+				"mention://issue/"+root,
+				"multica:session:"+root,
+				"multica:session/"+root,
+			)
+		}
+		if session := strings.TrimSpace(result.SessionID); session != "" {
+			candidates = append(candidates, session)
+		}
+		if correlation := strings.TrimSpace(result.CorrelationID); correlation != "" {
+			candidates = append(candidates, correlation)
+		}
+		if task := strings.TrimSpace(result.TaskID); task != "" {
+			candidates = append(candidates,
+				"multica:task:"+task,
+				"multica:task/"+task,
+			)
+		}
+	}
+	for _, issueID := range extraIssueIDs {
+		issueID = strings.TrimSpace(issueID)
+		if issueID == "" {
+			continue
+		}
+		candidates = append(candidates,
+			"multica:issue:"+issueID,
+			"multica:issue/"+issueID,
+			"mention://issue/"+issueID,
+		)
+	}
+	for _, candidate := range candidates {
+		if ref == candidate {
+			return true, true
+		}
+	}
+	return true, false
 }
 
 func runtimeMulticaHubWriteEnabled(env []string) bool {
@@ -735,28 +862,44 @@ func findExistingMulticaAssignmentIssueInChildren(ctx context.Context, cli drive
 	return driver.MulticaIssue{}, false, nil
 }
 
-func findAssignmentTargetFromLedger(ledger *driver.FileMulticaHubLedger, sessionID, assignmentID string) (string, bool, error) {
+func findAssignmentTargetFromLedger(ledger *driver.FileMulticaHubLedger, sessionID, assignmentID, principal string) (string, bool, error) {
 	records, err := ledger.Records()
 	if err != nil {
 		return "", false, err
 	}
+	var fallback string
+	matches := 0
+	principal = strings.TrimSpace(principal)
 	for i := len(records) - 1; i >= 0; i-- {
 		record := records[i]
 		if record.Kind != driver.MulticaHubKindAssignmentMailbox {
 			continue
 		}
-		if record.Source.SessionID == sessionID && record.Source.AssignmentID == assignmentID && strings.TrimSpace(record.Target.ChildIssueID) != "" {
+		if record.Source.SessionID != sessionID || record.Source.AssignmentID != assignmentID || strings.TrimSpace(record.Target.ChildIssueID) == "" {
+			continue
+		}
+		matches++
+		if principal != "" && record.Source.Principal == principal {
 			return record.Target.ChildIssueID, true, nil
 		}
+		if fallback == "" {
+			fallback = record.Target.ChildIssueID
+		}
+	}
+	if principal == "" || matches == 1 {
+		return fallback, fallback != "", nil
 	}
 	return "", false, nil
 }
 
-func findAssignmentTargetFromMulticaHub(ctx context.Context, cli driver.MulticaCLI, rootIssueID, sessionID, assignmentID string) (string, bool, error) {
+func findAssignmentTargetFromMulticaHub(ctx context.Context, cli driver.MulticaCLI, rootIssueID, sessionID, assignmentID, principal string) (string, bool, error) {
 	children, err := cli.ListIssueChildren(ctx, rootIssueID)
 	if err != nil {
 		return "", false, err
 	}
+	var fallback string
+	matches := 0
+	principal = strings.TrimSpace(principal)
 	for _, child := range children {
 		meta := driver.MulticaIssueHubMetadata(child)
 		if !meta.IsAssignmentMailbox() {
@@ -769,9 +912,19 @@ func findAssignmentTargetFromMulticaHub(ctx context.Context, cli driver.MulticaC
 		if !meta.IsAssignmentMailbox() {
 			continue
 		}
-		if meta.SessionID == sessionID && meta.AssignmentID == assignmentID && strings.TrimSpace(child.ID) != "" {
+		if meta.SessionID != sessionID || meta.AssignmentID != assignmentID || strings.TrimSpace(child.ID) == "" {
+			continue
+		}
+		matches++
+		if principal != "" && meta.Principal == principal {
 			return child.ID, true, nil
 		}
+		if fallback == "" {
+			fallback = child.ID
+		}
+	}
+	if principal == "" || matches == 1 {
+		return fallback, fallback != "", nil
 	}
 	return "", false, nil
 }

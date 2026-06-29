@@ -200,6 +200,82 @@ esac
 	}
 }
 
+func TestMulticaRuntimeProdSimHubFlowAllowsDeferredRunMessages(t *testing.T) {
+	tmp := t.TempDir()
+	registryPath := filepath.Join(tmp, "registry.json")
+	var participants []driver.MulticaParticipantRecord
+	for _, role := range []string{"planner", "researcher", "implementer", "reviewer", "integrator"} {
+		participants = append(participants, driver.MulticaParticipantRecord{
+			Principal: role + "@team",
+			AgentName: "mnemon-" + role,
+			AgentID:   "agent-" + role,
+			Role:      role,
+		})
+	}
+	if err := driver.SaveMulticaRegistry(registryPath, driver.MulticaRegistry{
+		SchemaVersion:    1,
+		WorkspaceID:      "ws-1",
+		RuntimeProfileID: "profile-1",
+		RuntimeID:        "runtime-1",
+		Participants:     participants,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	argsPath := filepath.Join(tmp, "args.txt")
+	stdinPath := filepath.Join(tmp, "stdin.txt")
+	bin := filepath.Join(tmp, "multica")
+	script := `#!/usr/bin/env sh
+printf '%s\n' "$*" >> "$MULTICA_ARGS_PATH"
+cat >> "$MULTICA_STDIN_PATH"
+case "$*" in
+  *"issue create"*) printf '{"id":"root-deferred","identifier":"TEA-20","title":"Deferred run messages","description":"Teamwork acceptance","status":"todo"}\n' ;;
+  *"issue get root-deferred"*) printf '{"id":"root-deferred","identifier":"TEA-20","title":"Deferred run messages","description":"Teamwork acceptance","status":"done"}\n' ;;
+  *"issue get child-a"*) printf '%s\n' '{"id":"child-a","identifier":"TEA-21","title":"TEA-20: routing","description":"## Assignment\n\nCheck routing.\n\n## Context\n\n- Root issue: [TEA-20](mention://issue/root-deferred) - Deferred run messages\n- Assignee: researcher@team (mnemon-researcher)\n- Scope: routing\n\n## Feedback\n\n- Expected feedback: result","status":"done"}' ;;
+  *"issue get child-b"*) printf '%s\n' '{"id":"child-b","identifier":"TEA-22","title":"TEA-20: status","description":"## Assignment\n\nCheck status.\n\n## Context\n\n- Root issue: [TEA-20](mention://issue/root-deferred) - Deferred run messages\n- Assignee: implementer@team (mnemon-implementer)\n- Scope: status\n\n## Feedback\n\n- Expected feedback: result","status":"done"}' ;;
+  *"issue metadata list root-deferred"*) printf '[{"key":"mnemon.hub_backend","value":"multica"},{"key":"mnemon.kind","value":"session_mailbox"},{"key":"mnemon.session_id","value":"multica:session:root-deferred"}]\n' ;;
+  *"issue children root-deferred"*) printf '{"children":[{"id":"child-a","identifier":"TEA-21","title":"TEA-20: routing","status":"done","metadata":{"mnemon.hub_backend":"multica","mnemon.kind":"assignment_mailbox","mnemon.session_id":"multica:session:root-deferred","mnemon.assignment_id":"asg-a","mnemon.principal":"researcher@team"}},{"id":"child-b","identifier":"TEA-22","title":"TEA-20: status","status":"done","metadata":{"mnemon.hub_backend":"multica","mnemon.kind":"assignment_mailbox","mnemon.session_id":"multica:session:root-deferred","mnemon.assignment_id":"asg-b","mnemon.principal":"implementer@team"}}]}\n' ;;
+  *"issue comment list root-deferred"*) printf '[]\n' ;;
+  *"issue comment list child-a"*) printf '[{"id":"comment-a","issue_id":"child-a","content":"Mnemon update: assignment feedback\\n\\nmnemon:event=pg-a"}]\n' ;;
+  *"issue comment list child-b"*) printf '[{"id":"comment-b","issue_id":"child-b","content":"Mnemon update: assignment feedback\\n\\nmnemon:event=pg-b"}]\n' ;;
+  *"issue runs root-deferred"*) printf '[{"id":"task-root","issue_id":"root-deferred","agent_id":"agent-planner","status":"running","workspace_id":"ws-1"}]\n' ;;
+  *"issue runs child-a"*) printf '[{"id":"task-a","issue_id":"child-a","agent_id":"agent-researcher","status":"running","workspace_id":"ws-1"}]\n' ;;
+  *"issue runs child-b"*) printf '[{"id":"task-b","issue_id":"child-b","agent_id":"agent-implementer","status":"running","workspace_id":"ws-1"}]\n' ;;
+  *) printf '{}\n' ;;
+esac
+`
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MULTICA_ARGS_PATH", argsPath)
+	t.Setenv("MULTICA_STDIN_PATH", stdinPath)
+
+	report, err := runMulticaRuntimeProdSimAcceptance(context.Background(), multicaRuntimeProdSimOptions{
+		RunRoot:            filepath.Join(tmp, ".testdata", "multica-hub-deferred"),
+		MulticaBin:         bin,
+		WorkspaceID:        "ws-1",
+		RegistryPath:       registryPath,
+		AssigneePrincipal:  "planner@team",
+		IssueTitle:         "Deferred run messages",
+		IssueDescription:   "Teamwork acceptance",
+		Wait:               time.Millisecond,
+		Poll:               time.Millisecond,
+		RequireIngest:      true,
+		RequireManagedWake: true,
+		RequireHubFlow:     true,
+		MinParticipants:    5,
+		MinActiveAgents:    3,
+	})
+	if err != nil {
+		t.Fatalf("acceptance: %v report=%+v", err, report)
+	}
+	if report.Status != "ok" || len(report.RunMessages) != 0 || len(report.ActiveAgents) != 3 || report.FinalRoot.Status != "done" {
+		t.Fatalf("deferred hub report mismatch: %+v", report)
+	}
+	if !multicaProdSimAssertionsPassed(report) {
+		t.Fatalf("deferred hub assertions failed: %+v", report.Assertions)
+	}
+}
+
 func TestMulticaRuntimeProdSimAcceptanceReportsPrerequisitesTogether(t *testing.T) {
 	tmp := t.TempDir()
 	report, err := runMulticaRuntimeProdSimAcceptance(context.Background(), multicaRuntimeProdSimOptions{

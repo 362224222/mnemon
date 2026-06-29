@@ -779,6 +779,23 @@ esac
 							"context_refs":  []any{"multica:issue:root-2"},
 							"evidence_refs": []any{"multica:issue:root-2"},
 						},
+					}, map[string]any{
+						"id":         "asg-cross-session",
+						"ingest_seq": float64(34),
+						"actor":      "planner@team",
+						"rule": map[string]any{
+							"assignment_id": "asg-cross-session",
+							"assignee":      "worker@team",
+							"scope":         "other session child routing",
+							"ttl":           "30m",
+						},
+						"narrative": map[string]any{
+							"expected_work":     "cross-session assignment from a different Multica root",
+							"expected_feedback": "progress_digest with result or blocker",
+						},
+						"refs": map[string]any{
+							"context_refs": []any{"multica:issue:root-other"},
+						},
 					}}},
 				}, {
 					Ref: contract.ResourceRef{Kind: "progress_digest", ID: "project"},
@@ -791,6 +808,17 @@ esac
 						"feedback_kind":  "progress",
 						"summary":        "Checked release notes against the public changelog.",
 						"artifact_refs":  []any{"multica:issue:root-2"},
+					}, map[string]any{
+						"id":             "pg-cross-session",
+						"event_id":       "pg-cross-session",
+						"ingest_seq":     float64(35),
+						"actor":          "worker@team",
+						"assignment_ref": "asg-writer",
+						"feedback_kind":  "progress",
+						"summary":        "Cross-session progress must not attach to the current child.",
+						"refs": map[string]any{
+							"evidence_refs": []any{"multica:issue:root-other"},
+						},
 					}}},
 				}},
 			})
@@ -850,6 +878,9 @@ esac
 	if strings.Contains(args, "asg-stale") {
 		t.Fatalf("stale pre-root assignment must not be projected into current root session:\n%s", args)
 	}
+	if strings.Contains(args, "other session child routing") || strings.Contains(args, "asg-cross-session") {
+		t.Fatalf("cross-session assignment must not be projected into current root session:\n%s", args)
+	}
 	createIdx := strings.Index(args, "issue create --title TEA-10: check release notes")
 	metaIdx := strings.Index(args, "issue metadata set child-2 --key mnemon.kind")
 	assignIdx := strings.Index(args, "issue assign child-2 --to-id agent-worker")
@@ -906,6 +937,9 @@ esac
 		}
 	}
 	childComment := mustReadRuntimeTestFile(t, childCommentPath)
+	if strings.Contains(childComment, "Cross-session progress") {
+		t.Fatalf("cross-session progress must not be projected into current assignment child:\n%s", childComment)
+	}
 	for _, want := range []string{
 		"Mnemon update: assignment feedback",
 		"## Feedback",
@@ -925,6 +959,176 @@ esac
 		if strings.Contains(childComment, blocked) {
 			t.Fatalf("child comment must not expose machine field %q:\n%s", blocked, childComment)
 		}
+	}
+}
+
+func TestRuntimeRoutesDuplicateAssignmentIDProgressByPrincipal(t *testing.T) {
+	tmp := t.TempDir()
+	argsPath := filepath.Join(tmp, "multica.args")
+	rootCommentPath := filepath.Join(tmp, "root-comment.txt")
+	routingCommentPath := filepath.Join(tmp, "routing-comment.txt")
+	metadataCommentPath := filepath.Join(tmp, "metadata-comment.txt")
+	bin := filepath.Join(tmp, "multica")
+	script := `#!/usr/bin/env sh
+printf '%s\n' "$*" >> "$MULTICA_ARGS_PATH"
+case "$*" in
+  *"issue get root-dupe"*) printf '{"id":"root-dupe","identifier":"TEA-30","title":"Duplicate assignment id routing","description":"Validate duplicate assignment ids do not cross-route feedback.","status":"todo","priority":"medium"}\n' ;;
+  *"issue metadata set root-dupe"*) printf '{}\n' ;;
+  *"issue children root-dupe"*) printf '{"children":[]}\n' ;;
+  *"issue create --title TEA-30: child routing isolation"*) printf '{"id":"child-routing","identifier":"TEA-31","title":"TEA-30: child routing isolation","status":"todo","metadata":{}}\n' ;;
+  *"issue create --title TEA-30: root metadata run visibility"*) printf '{"id":"child-metadata","identifier":"TEA-32","title":"TEA-30: root metadata run visibility","status":"todo","metadata":{}}\n' ;;
+  *"issue metadata set child-routing"*) printf '{}\n' ;;
+  *"issue metadata set child-metadata"*) printf '{}\n' ;;
+  *"issue assign child-routing --to-id agent-impl"*) printf '{"id":"child-routing","status":"in_progress"}\n' ;;
+  *"issue assign child-metadata --to-id agent-researcher"*) printf '{"id":"child-metadata","status":"in_progress"}\n' ;;
+  *"issue comment add child-routing"*) cat > "$MULTICA_ROUTING_COMMENT_PATH"; printf '{"id":"comment-routing","issue_id":"child-routing","content":"ok","type":"comment"}\n' ;;
+  *"issue comment add child-metadata"*) cat > "$MULTICA_METADATA_COMMENT_PATH"; printf '{"id":"comment-metadata","issue_id":"child-metadata","content":"ok","type":"comment"}\n' ;;
+  *"issue comment add root-dupe"*) cat > "$MULTICA_ROOT_COMMENT_PATH"; printf '{"id":"comment-root","issue_id":"root-dupe","content":"ok","type":"comment"}\n' ;;
+  *"issue status child-routing"*) printf '{"id":"child-routing","status":"done"}\n' ;;
+  *"issue status child-metadata"*) printf '{"id":"child-metadata","status":"done"}\n' ;;
+  *"issue status root-dupe"*) printf '{"id":"root-dupe","status":"in_review"}\n' ;;
+  *) printf '{}\n' ;;
+esac
+`
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	registryPath := filepath.Join(tmp, "registry.json")
+	if err := driver.SaveMulticaRegistry(registryPath, driver.MulticaRegistry{
+		SchemaVersion: 1,
+		WorkspaceID:   "ws-1",
+		Participants: []driver.MulticaParticipantRecord{
+			{Principal: "implementer@team", AgentName: "mnemon-implementer", AgentID: "agent-impl", Role: "implementer"},
+			{Principal: "researcher@team", AgentName: "mnemon-researcher", AgentID: "agent-researcher", Role: "researcher"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/ingest":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(access.IngestReceipt{Seq: 31, Dup: false, Ticked: true})
+		case "/presentation-view":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(pview.View{
+				Ref:    "view-duplicate-assignment-ids",
+				Digest: "digest-duplicate-assignment-ids",
+				Content: []pview.ResourceContent{{
+					Ref: contract.ResourceRef{Kind: "assignment", ID: "project"},
+					Fields: map[string]any{"items": []any{
+						map[string]any{
+							"id":         "local/planner-team/3",
+							"ingest_seq": float64(32),
+							"actor":      "planner@team",
+							"rule": map[string]any{
+								"assignment_id": "assignment-tea30-root-runtime",
+								"assignee":      "implementer@team",
+								"scope":         "multica-hub-readiness-drill/TEA-30/stage1/child-routing-isolation",
+								"ttl":           "30m",
+							},
+							"narrative": map[string]any{
+								"expected_work":     "Validate child routing isolation.",
+								"expected_feedback": "progress_digest with result or blocker",
+							},
+							"refs": map[string]any{"context_refs": []any{"multica:issue:root-dupe"}},
+						},
+						map[string]any{
+							"id":         "local/planner-team/5",
+							"ingest_seq": float64(33),
+							"actor":      "planner@team",
+							"rule": map[string]any{
+								"assignment_id": "assignment-tea30-root-runtime",
+								"assignee":      "researcher@team",
+								"scope":         "multica-hub-readiness-drill/TEA-30/stage1/root-metadata-run-visibility",
+								"ttl":           "30m",
+							},
+							"narrative": map[string]any{
+								"expected_work":     "Validate root metadata visibility.",
+								"expected_feedback": "progress_digest with result or blocker",
+							},
+							"refs": map[string]any{"context_refs": []any{"multica:issue:root-dupe"}},
+						},
+					}},
+				}, {
+					Ref: contract.ResourceRef{Kind: "progress_digest", ID: "project"},
+					Fields: map[string]any{"items": []any{
+						map[string]any{
+							"id":             "pg-routing",
+							"event_id":       "pg-routing",
+							"ingest_seq":     float64(34),
+							"actor":          "implementer@team",
+							"assignment_ref": "assignment-tea30-root-runtime",
+							"feedback_kind":  "result",
+							"summary":        "Routing slice completed by implementer.",
+							"result":         "Child routing isolation passed.",
+						},
+						map[string]any{
+							"id":             "pg-metadata",
+							"event_id":       "pg-metadata",
+							"ingest_seq":     float64(35),
+							"actor":          "researcher@team",
+							"assignment_ref": "assignment-tea30-root-runtime",
+							"feedback_kind":  "result",
+							"summary":        "Metadata slice completed by researcher.",
+							"result":         "Root metadata visibility passed.",
+						},
+					}},
+				}},
+			})
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	input := `{"jsonrpc":"2.0","id":3,"method":"turn/start","params":{"input":[{"type":"text","text":"Your assigned issue ID is: root-dupe"}]}}` + "\n"
+	var out bytes.Buffer
+	err := runRuntime(runtimeConfig{
+		Args: []string{"app-server", "--listen", "stdio://"},
+		Env: runtimeTestEnv(
+			"MNEMON_MULTICA_BIN="+bin,
+			"MNEMON_HUB_BACKEND=multica",
+			"MNEMON_CONTROL_ADDR="+srv.URL,
+			"MNEMON_CONTROL_PRINCIPAL=planner@team",
+			"MNEMON_MULTICA_REGISTRY="+registryPath,
+			"MNEMON_MULTICA_HUB_LEDGER="+filepath.Join(tmp, "hub-ledger.jsonl"),
+			"MULTICA_ARGS_PATH="+argsPath,
+			"MULTICA_ROOT_COMMENT_PATH="+rootCommentPath,
+			"MULTICA_ROUTING_COMMENT_PATH="+routingCommentPath,
+			"MULTICA_METADATA_COMMENT_PATH="+metadataCommentPath,
+			"MULTICA_TASK_ID=task-root-dupe",
+			"MULTICA_AGENT_ID=agent-planner",
+		),
+		CWD:    tmp,
+		Stdin:  strings.NewReader(input),
+		Stdout: &out,
+		Now:    fixedRuntimeTime,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Multica hub write: updated child_issues=2 feedback_comments=2") {
+		t.Fatalf("runtime output missing duplicate-id hub write evidence:\n%s", out.String())
+	}
+	args := mustReadRuntimeTestFile(t, argsPath)
+	for _, want := range []string{
+		"issue create --title TEA-30: child routing isolation --output json --description-stdin --parent root-dupe --status in_progress --priority medium",
+		"issue create --title TEA-30: root metadata run visibility --output json --description-stdin --parent root-dupe --status in_progress --priority medium",
+		"issue comment add child-routing --content-stdin --output json",
+		"issue comment add child-metadata --content-stdin --output json",
+	} {
+		if !strings.Contains(args, want) {
+			t.Fatalf("args missing %q:\n%s", want, args)
+		}
+	}
+	routingComment := mustReadRuntimeTestFile(t, routingCommentPath)
+	if !strings.Contains(routingComment, "Routing slice completed by implementer.") || strings.Contains(routingComment, "Metadata slice completed by researcher.") {
+		t.Fatalf("routing child received wrong feedback:\n%s", routingComment)
+	}
+	metadataComment := mustReadRuntimeTestFile(t, metadataCommentPath)
+	if !strings.Contains(metadataComment, "Metadata slice completed by researcher.") || strings.Contains(metadataComment, "Routing slice completed by implementer.") {
+		t.Fatalf("metadata child received wrong feedback:\n%s", metadataComment)
 	}
 }
 

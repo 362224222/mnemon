@@ -65,6 +65,42 @@ func TestAssignmentMailboxTitleUsesAssignmentIDForBroadDrillScope(t *testing.T) 
 	}
 }
 
+func TestAssignmentMailboxTitleUsesPathScopeTopicBeforeBroadIDFallback(t *testing.T) {
+	item := AssignmentMailboxMaterial{
+		ID:             "assignment-tea88-root-runtime",
+		Scope:          "multica-hub-readiness-drill/TEA-88/stage1/root-metadata-run-visibility",
+		RootIssueLabel: "TEA-88",
+		ExpectedWork:   "Validate root session metadata and run visibility.",
+	}
+	if got := AssignmentMailboxTitle(item); got != "TEA-88: root metadata run visibility" {
+		t.Fatalf("title = %q", got)
+	}
+}
+
+func TestAssignmentMailboxTitleUsesAssignmentIDForReadinessScope(t *testing.T) {
+	item := AssignmentMailboxMaterial{
+		ID:             "r2-drill-child-routing-isolation",
+		Scope:          "mnemon-r2-multica-hub-flow-readiness",
+		RootIssueLabel: "TEA-95",
+		ExpectedWork:   "Validate child routing isolation.",
+	}
+	if got := AssignmentMailboxTitle(item); got != "TEA-95: child routing isolation" {
+		t.Fatalf("title = %q", got)
+	}
+}
+
+func TestAssignmentMailboxTitleDropsRootIdentifierTokensFromAssignmentID(t *testing.T) {
+	item := AssignmentMailboxMaterial{
+		ID:             "tea-104-root-visibility",
+		Scope:          "mnemon-r2-multica-hub-flow-readiness",
+		RootIssueLabel: "TEA-104",
+		ExpectedWork:   "Validate root session visibility.",
+	}
+	if got := AssignmentMailboxTitle(item); got != "TEA-104: root visibility" {
+		t.Fatalf("title = %q", got)
+	}
+}
+
 func TestAssignmentMailboxTitleUsesAssignmentIDForMachineReferenceScope(t *testing.T) {
 	item := AssignmentMailboxMaterial{
 		ID:             "assignment-tea84-root-runtime",
@@ -88,6 +124,22 @@ func TestAssignmentMailboxDescriptionNormalizesProtocolFeedback(t *testing.T) {
 	}
 	if strings.Contains(body, "progress_digest") {
 		t.Fatalf("description should keep protocol event type out of visible text:\n%s", body)
+	}
+}
+
+func TestAssignmentMailboxDescriptionNormalizesFeedbackKindProtocolWording(t *testing.T) {
+	body := AssignmentMailboxDescription(AssignmentMailboxMaterial{
+		ID:               "asg-1",
+		Scope:            "release validation",
+		ExpectedFeedback: "progress_digest feedback_kind=result or blocker with exact Multica evidence",
+	})
+	for _, blocked := range []string{"progress_digest", "feedback_kind"} {
+		if strings.Contains(body, blocked) {
+			t.Fatalf("description should keep protocol word %q out of visible text:\n%s", blocked, body)
+		}
+	}
+	if !strings.Contains(body, "runtime feedback status=result or blocker") {
+		t.Fatalf("description missing readable feedback wording:\n%s", body)
 	}
 }
 

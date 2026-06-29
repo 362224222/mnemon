@@ -229,6 +229,9 @@ func IssueStatusDone(status string) bool {
 
 func assignmentTitleTopic(item AssignmentMailboxMaterial) string {
 	scope := firstSentence(item.Scope)
+	if topic := scopePathTitleTopic(scope, item.RootIssueLabel); topic != "" {
+		return topic
+	}
 	idTopic := assignmentIDTitleTopic(item.ID, item.RootIssueLabel)
 	if idTopic != "" && (broadAssignmentScope(scope) || machineReferenceScope(scope)) {
 		return idTopic
@@ -242,9 +245,60 @@ func assignmentTitleTopic(item AssignmentMailboxMaterial) string {
 	return ""
 }
 
+func scopePathTitleTopic(scope, rootLabel string) string {
+	scope = strings.TrimSpace(scope)
+	if scope == "" || !strings.Contains(scope, "/") || strings.Contains(scope, "://") {
+		return ""
+	}
+	parts := strings.Split(scope, "/")
+	if len(parts) < 3 {
+		return ""
+	}
+	for i := len(parts) - 1; i >= 0; i-- {
+		part := strings.TrimSpace(parts[i])
+		if part == "" {
+			continue
+		}
+		part = stripTitleRootLabel(part, rootLabel)
+		part = strings.Trim(strings.ReplaceAll(strings.ReplaceAll(part, "_", " "), "-", " "), " ")
+		if part == "" || stageLikeTitlePart(part) {
+			continue
+		}
+		return part
+	}
+	return ""
+}
+
+func stageLikeTitlePart(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" || value == "stage" || value == "phase" {
+		return true
+	}
+	if strings.HasPrefix(value, "stage") && len(value) > len("stage") {
+		for _, r := range value[len("stage"):] {
+			if r < '0' || r > '9' {
+				return false
+			}
+		}
+		return true
+	}
+	if strings.HasPrefix(value, "phase") && len(value) > len("phase") {
+		for _, r := range value[len("phase"):] {
+			if r < '0' || r > '9' {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
 func broadAssignmentScope(scope string) bool {
 	lower := strings.ToLower(strings.TrimSpace(scope))
-	return strings.Contains(lower, "drill") || strings.Contains(lower, "validation")
+	return strings.Contains(lower, "drill") ||
+		strings.Contains(lower, "validation") ||
+		strings.Contains(lower, "readiness") ||
+		strings.Contains(lower, "hub-flow")
 }
 
 func machineReferenceScope(scope string) bool {
@@ -261,13 +315,19 @@ func assignmentIDTitleTopic(id, rootLabel string) string {
 		return ""
 	}
 	root := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(rootLabel), "-", ""))
+	rootParts := titleRootParts(rootLabel)
 	parts := strings.FieldsFunc(strings.ToLower(id), func(r rune) bool {
 		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9')
 	})
 	var out []string
-	for _, part := range parts {
+	for i := 0; i < len(parts); i++ {
+		part := parts[i]
+		if len(rootParts) > 0 && titlePartsMatch(parts[i:], rootParts) {
+			i += len(rootParts) - 1
+			continue
+		}
 		switch part {
-		case "", "assignment", "asg", root:
+		case "", "assignment", "asg", "r1", "r2", "drill", "readiness", root:
 			continue
 		}
 		if root != "" && strings.TrimPrefix(part, root) == "" {
@@ -280,6 +340,24 @@ func assignmentIDTitleTopic(id, rootLabel string) string {
 		return ""
 	}
 	return joined
+}
+
+func titleRootParts(rootLabel string) []string {
+	return strings.FieldsFunc(strings.ToLower(strings.TrimSpace(rootLabel)), func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9')
+	})
+}
+
+func titlePartsMatch(parts, want []string) bool {
+	if len(want) == 0 || len(parts) < len(want) {
+		return false
+	}
+	for i, part := range want {
+		if parts[i] != part {
+			return false
+		}
+	}
+	return true
 }
 
 func stripTitleRootLabel(value, label string) string {
@@ -330,13 +408,17 @@ func visibleExpectedFeedback(value string) string {
 	if value == "" {
 		return ""
 	}
+	value = strings.ReplaceAll(value, "progress_digest", "runtime feedback")
+	value = strings.ReplaceAll(value, "progress digest", "runtime feedback")
+	value = strings.ReplaceAll(value, "feedback_kind=", "status=")
+	value = strings.ReplaceAll(value, "feedback_kind", "status")
 	lower := strings.ToLower(value)
-	for _, prefix := range []string{"progress_digest with ", "progress digest with "} {
+	for _, prefix := range []string{"runtime feedback with "} {
 		if strings.HasPrefix(lower, prefix) {
 			return strings.TrimSpace(value[len(prefix):])
 		}
 	}
-	if lower == "progress_digest" || lower == "progress digest" {
+	if lower == "runtime feedback" {
 		return "progress, result, or blocker"
 	}
 	return value

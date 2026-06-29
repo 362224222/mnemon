@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -707,6 +708,10 @@ func ensureMulticaParticipantEnv(ctx context.Context, cli driver.MulticaCLI, par
 
 func multicaParticipantRuntimeEnv(cli driver.MulticaCLI, participant driver.MulticaParticipantRecord, registryPath, workspaceID string, opts multicaParticipantEnvOptions) map[string]string {
 	env := map[string]string{}
+	controlTokenFile := strings.TrimSpace(opts.ControlTokenFile)
+	if controlTokenFile == "" && strings.TrimSpace(opts.ControlToken) == "" {
+		controlTokenFile = defaultMulticaParticipantControlTokenFile(opts.ManagedWorkspace, participant.Principal)
+	}
 	addStringEnv(env, "MNEMON_HUB_BACKEND", driver.MulticaHubBackend)
 	addStringEnv(env, "MNEMON_MULTICA_REGISTRY", registryPath)
 	addStringEnv(env, "MNEMON_MULTICA_WORKSPACE_ID", workspaceID)
@@ -715,7 +720,7 @@ func multicaParticipantRuntimeEnv(cli driver.MulticaCLI, participant driver.Mult
 	addStringEnv(env, "MNEMON_MULTICA_SERVER_URL", multicaServerURL)
 	addStringEnv(env, "MNEMON_CONTROL_ADDR", opts.ControlAddr)
 	addStringEnv(env, "MNEMON_CONTROL_TOKEN", opts.ControlToken)
-	addStringEnv(env, "MNEMON_CONTROL_TOKEN_FILE", opts.ControlTokenFile)
+	addStringEnv(env, "MNEMON_CONTROL_TOKEN_FILE", controlTokenFile)
 	addStringEnv(env, "MNEMON_CONTROL_PRINCIPAL", participant.Principal)
 	addStringEnv(env, "MNEMON_HARNESS_BIN", opts.HarnessBin)
 	addStringEnv(env, "MNEMON_MANAGED_RUNTIME", opts.ManagedRuntime)
@@ -725,6 +730,24 @@ func multicaParticipantRuntimeEnv(cli driver.MulticaCLI, participant driver.Mult
 		env["MNEMON_MANAGED_TURN_TIMEOUT"] = opts.ManagedTimeout.String()
 	}
 	return env
+}
+
+func defaultMulticaParticipantControlTokenFile(workspace, principal string) string {
+	workspace = strings.TrimSpace(workspace)
+	principal = strings.TrimSpace(principal)
+	if workspace == "" || principal == "" {
+		return ""
+	}
+	path := filepath.Join(workspace, ".mnemon", "harness", "channel", "credentials", sanitizeMulticaPrincipal(principal)+".token")
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return ""
+	}
+	return path
+}
+
+func sanitizeMulticaPrincipal(principal string) string {
+	return strings.NewReplacer("@", "-", "/", "-", ":", "-").Replace(principal)
 }
 
 func multicaProvisionEnvOptionsFromFlags() multicaParticipantEnvOptions {
