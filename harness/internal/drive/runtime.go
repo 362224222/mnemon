@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -228,11 +229,18 @@ func (c CodexAppServerTurnClient) StartTurnWithTrace(ctx context.Context, query 
 	}, requestTimeout); err != nil {
 		return ManagedTurnResult{}, fmt.Errorf("initialize: %w", err)
 	}
+	developerInstructions, err := CodexAppServerDeveloperInstructions(ctx, workspace, c.Env, ManagedWakeQuery)
+	if err != nil {
+		return ManagedTurnResult{}, fmt.Errorf("load hook context: %w", err)
+	}
 	threadParams := map[string]any{
 		"cwd":            workspace,
 		"approvalPolicy": "never",
 		"sandbox":        "danger-full-access",
 		"ephemeral":      true,
+	}
+	if developerInstructions != "" {
+		threadParams["developerInstructions"] = developerInstructions
 	}
 	thread, err := server.Request("thread/start", threadParams, requestTimeout)
 	if err != nil {
@@ -242,19 +250,12 @@ func (c CodexAppServerTurnClient) StartTurnWithTrace(ctx context.Context, query 
 	if threadID == "" {
 		return ManagedTurnResult{}, fmt.Errorf("thread/start returned no thread id")
 	}
-	additionalContext, err := CodexAppServerAdditionalContext(ctx, workspace, c.Env, ManagedWakeQuery)
-	if err != nil {
-		return ManagedTurnResult{}, fmt.Errorf("load hook context: %w", err)
-	}
 	turnParams := map[string]any{
 		"threadId":       threadID,
 		"input":          []map[string]any{{"type": "text", "text": ManagedWakeQuery}},
 		"cwd":            workspace,
 		"approvalPolicy": "never",
 		"sandboxPolicy":  map[string]any{"type": "dangerFullAccess"},
-	}
-	if len(additionalContext) > 0 {
-		turnParams["additionalContext"] = additionalContext
 	}
 	before := server.NotificationCount()
 	if _, err := server.Request("turn/start", turnParams, requestTimeout); err != nil {
@@ -280,6 +281,14 @@ func (c CodexAppServerTurnClient) StartTurnWithTrace(ctx context.Context, query 
 	return ManagedTurnResult{TurnID: threadID, Status: "completed", FinalAnswer: answer}, nil
 }
 
+func CodexAppServerDeveloperInstructions(ctx context.Context, workspace string, env []string, query string) (string, error) {
+	additionalContext, err := CodexAppServerAdditionalContext(ctx, workspace, env, query)
+	if err != nil {
+		return "", err
+	}
+	return formatCodexAppServerDeveloperInstructions(additionalContext), nil
+}
+
 func CodexAppServerAdditionalContext(ctx context.Context, workspace string, env []string, query string) (map[string]any, error) {
 	out := map[string]any{}
 	for _, lifecycle := range []string{"prime", "remind"} {
@@ -296,6 +305,44 @@ func CodexAppServerAdditionalContext(ctx context.Context, workspace string, env 
 		}
 	}
 	return out, nil
+}
+
+func formatCodexAppServerDeveloperInstructions(entries map[string]any) string {
+	if len(entries) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(entries))
+	for key := range entries {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	b.WriteString("Mnemon managed wake context.\n")
+	b.WriteString("The user input for this turn is only the local wake sentinel `[mnemon:wake]`. Use the application context below as the governed Mnemon context for deciding whether to read or record state. If a teamwork signal says assignment or self-assignment may be useful, act through the Mnemon commands described in the guide instead of answering that no task was supplied.\n")
+	for _, key := range keys {
+		value := additionalContextEntryValue(entries[key])
+		if value == "" {
+			continue
+		}
+		b.WriteString("\n## ")
+		b.WriteString(key)
+		b.WriteString("\n")
+		b.WriteString(value)
+		b.WriteString("\n")
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func additionalContextEntryValue(entry any) string {
+	switch v := entry.(type) {
+	case string:
+		return strings.TrimSpace(v)
+	case map[string]any:
+		if value, ok := v["value"].(string); ok {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func runCodexLifecycleHook(ctx context.Context, workspace string, env []string, lifecycle string, query string) (string, error) {
