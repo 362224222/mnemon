@@ -27,6 +27,17 @@ var rootCLIForbiddenCommands = map[string]bool{
 	"multica-runtime-prod-sim": true,
 }
 
+var rootCLIForbiddenSurfaceStrings = []string{
+	"mnemond",
+	"mnemon-acceptance",
+	"mnemon-harness",
+	"mnemon-hub",
+	"mnemon-multica-runtime",
+	"mnemon-runtime-multica",
+	"mnemonhub",
+	"multica-runtime-prod-sim",
+}
+
 func TestRootMnemonCLIDoesNotImportHarnessCluster(t *testing.T) {
 	for _, file := range rootCLIGoFiles(t) {
 		fset := token.NewFileSet()
@@ -40,6 +51,33 @@ func TestRootMnemonCLIDoesNotImportHarnessCluster(t *testing.T) {
 				t.Errorf("root mnemon CLI imports R2 harness cluster package %q in %s", importPath, file)
 			}
 		}
+	}
+}
+
+func TestRootMnemonCLIDoesNotNameR2ClusterSurfaces(t *testing.T) {
+	for _, file := range rootCLIGoFiles(t) {
+		fset := token.NewFileSet()
+		parsed, err := parser.ParseFile(fset, file, nil, 0)
+		if err != nil {
+			t.Fatalf("parse file %s: %v", file, err)
+		}
+		ast.Inspect(parsed, func(node ast.Node) bool {
+			lit, ok := node.(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING {
+				return true
+			}
+			value, err := strconv.Unquote(lit.Value)
+			if err != nil {
+				t.Errorf("unquote string literal in %s: %v", file, err)
+				return true
+			}
+			for _, forbidden := range rootCLIForbiddenSurfaceStrings {
+				if strings.Contains(value, forbidden) {
+					t.Errorf("root mnemon CLI names R2 cluster surface %q in %s; keep this phase under harness/cmd", forbidden, file)
+				}
+			}
+			return true
+		})
 	}
 }
 
@@ -83,11 +121,25 @@ func TestRootCLIBoundaryGuardLogicIsNotVacuous(t *testing.T) {
 			t.Fatalf("root CLI boundary guard must forbid %q", command)
 		}
 	}
+	for _, surface := range []string{"mnemond", "mnemon-harness", "mnemon-multica-runtime"} {
+		if !containsRootCLIForbiddenSurface(surface) {
+			t.Fatalf("root CLI surface guard must forbid %q", surface)
+		}
+	}
 	for _, command := range []string{"remember", "recall", "search", "setup"} {
 		if rootCLIForbiddenCommands[command] {
 			t.Fatalf("root CLI boundary guard must allow existing memory command %q", command)
 		}
 	}
+}
+
+func containsRootCLIForbiddenSurface(surface string) bool {
+	for _, forbidden := range rootCLIForbiddenSurfaceStrings {
+		if forbidden == surface {
+			return true
+		}
+	}
+	return false
 }
 
 func rootCLIGoFiles(t *testing.T) []string {
