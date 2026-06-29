@@ -220,6 +220,25 @@ func TestConfiguredDaemonSnapshotIncludesConfiguredRoles(t *testing.T) {
 	}
 }
 
+func TestConfiguredDaemonSnapshotKeepsMnemonhubAsExchangeWatcher(t *testing.T) {
+	now := time.Date(2026, 6, 29, 10, 5, 0, 0, time.UTC)
+	cfg := productconfig.Default()
+	cfg.Connections.Mnemonhub = productconfig.MnemonhubConnection{Enabled: true, Endpoint: "https://hub.example.invalid"}
+	cfg.Daemon.InteractionWatchers = []string{productconfig.ConnectionMnemonhub}
+
+	snapshot := configuredDaemonSnapshot(cfg, now)
+	worker, ok := snapshot.Workers["mnemonhub-watch"]
+	if !ok {
+		t.Fatalf("snapshot missing mnemonhub watcher: %+v", snapshot.Workers)
+	}
+	if worker.Kind != daemon.WorkerInteraction || worker.Status != "configured" || worker.Message != "watcher=mnemonhub" {
+		t.Fatalf("mnemonhub watcher mismatch: %+v", worker)
+	}
+	if _, ok := snapshot.Workers["mnemonhub-project"]; ok {
+		t.Fatalf("mnemonhub must remain a remote exchange watcher, not projection worker: %+v", snapshot.Workers)
+	}
+}
+
 func TestLoadDaemonSnapshotConfigRejectsInvalidProductConfig(t *testing.T) {
 	root := t.TempDir()
 	reg := multicasurface.MulticaRegistry{
