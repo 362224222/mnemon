@@ -209,11 +209,11 @@ func validateDaemonCarriers(label string, values []string, cfg Config) error {
 	seen := map[string]bool{}
 	for _, value := range values {
 		carrier := strings.TrimSpace(value)
+		if carrier == "" {
+			return fmt.Errorf("%s cannot be empty", label)
+		}
 		if err := validateCarrier(label, carrier, cfg); err != nil {
 			return err
-		}
-		if carrier == "" {
-			continue
 		}
 		if seen[carrier] {
 			return fmt.Errorf("duplicate %s %q", label, carrier)

@@ -86,11 +86,25 @@ func TestConfigValidateRejectsDuplicateDaemonRoles(t *testing.T) {
 			want: "duplicate interaction watcher",
 		},
 		{
+			name: "empty watcher",
+			edit: func(cfg *Config) {
+				cfg.Daemon.InteractionWatchers = []string{" "}
+			},
+			want: "interaction watcher cannot be empty",
+		},
+		{
 			name: "surface",
 			edit: func(cfg *Config) {
 				cfg.Daemon.ProjectionSurfaces = []string{ConnectionMultica, " " + ConnectionMultica}
 			},
 			want: "duplicate projection surface",
+		},
+		{
+			name: "empty surface",
+			edit: func(cfg *Config) {
+				cfg.Daemon.ProjectionSurfaces = []string{""}
+			},
+			want: "projection surface cannot be empty",
 		},
 		{
 			name: "drive",
