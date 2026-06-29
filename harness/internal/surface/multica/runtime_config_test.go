@@ -19,6 +19,12 @@ func TestRuntimeEnvValueUsesLastValue(t *testing.T) {
 	}
 }
 
+func TestMulticaRuntimeCommandNamePinned(t *testing.T) {
+	if MulticaRuntimeCommandName != "mnemon-multica-runtime" {
+		t.Fatalf("MulticaRuntimeCommandName = %q", MulticaRuntimeCommandName)
+	}
+}
+
 func TestRuntimeTimeoutUsesMulticaHTTPFallback(t *testing.T) {
 	if got := RuntimeTimeout([]string{"MULTICA_HTTP_TIMEOUT=2m"}); got != 2*time.Minute {
 		t.Fatalf("RuntimeTimeout fallback = %s, want 2m", got)

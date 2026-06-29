@@ -135,7 +135,7 @@ func runRuntime(cfg runtimeConfig) error {
 		return runRuntimeProbe(cfg)
 	}
 	if wantsVersion(cfg.Args) {
-		fmt.Fprintf(cfg.Stdout, "mnemon-multica-runtime %s\n", runtimeVersion)
+		fmt.Fprintf(cfg.Stdout, "%s %s\n", multicasurface.MulticaRuntimeCommandName, runtimeVersion)
 		return nil
 	}
 	return runRuntimeRPC(cfg, cwd)
@@ -152,7 +152,7 @@ func runRuntimeRPC(cfg runtimeConfig, cwd string) error {
 		}
 		var msg rpcMessage
 		if err := json.Unmarshal([]byte(line), &msg); err != nil {
-			fmt.Fprintf(cfg.Stderr, "mnemon-multica-runtime: ignoring invalid rpc line: %v\n", err)
+			fmt.Fprintf(cfg.Stderr, "%s: ignoring invalid rpc line: %v\n", multicasurface.MulticaRuntimeCommandName, err)
 			continue
 		}
 		if err := state.handle(msg, func(response rpcMessage) error {
@@ -178,7 +178,7 @@ func (s *runtimeRPCState) handle(msg rpcMessage, emit func(rpcMessage) error) er
 		return emitAll(rpcMessage{
 			ID: msg.ID,
 			Result: map[string]any{
-				"userAgent":      "mnemon-multica-runtime/" + runtimeVersion,
+				"userAgent":      multicasurface.MulticaRuntimeCommandName + "/" + runtimeVersion,
 				"codexHome":      multicasurface.RuntimeEnvValue(s.Env, "CODEX_HOME"),
 				"platformFamily": "unix",
 				"platformOs":     runtime.GOOS,
@@ -193,8 +193,8 @@ func (s *runtimeRPCState) handle(msg rpcMessage, emit func(rpcMessage) error) er
 				Method: "remoteControl/status/changed",
 				Params: map[string]any{
 					"status":         "disabled",
-					"serverName":     "mnemon-multica-runtime",
-					"installationId": "mnemon-multica-runtime",
+					"serverName":     multicasurface.MulticaRuntimeCommandName,
+					"installationId": multicasurface.MulticaRuntimeCommandName,
 				},
 			},
 			rpcMessage{
@@ -826,7 +826,7 @@ func runtimeManagedTurnClient(env []string, cwd, runtimeName string) (driver.Man
 			Workspace:   workspace,
 			Env:         append([]string(nil), env...),
 			TurnTimeout: multicasurface.RuntimeManagedTurnTimeout(env),
-			ClientName:  "mnemon-multica-runtime",
+			ClientName:  multicasurface.MulticaRuntimeCommandName,
 		}, workspace, nil
 	default:
 		return nil, workspace, fmt.Errorf("unsupported MNEMON_MANAGED_RUNTIME %q", runtimeName)
@@ -991,7 +991,7 @@ func markIssueInProgress(ctx context.Context, cli driver.MulticaCLI, issueID str
 }
 
 func wantsVersion(args []string) bool {
-	fs := flag.NewFlagSet("mnemon-multica-runtime", flag.ContinueOnError)
+	fs := flag.NewFlagSet(multicasurface.MulticaRuntimeCommandName, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	version := fs.Bool("version", false, "")
 	_ = fs.Parse(args)

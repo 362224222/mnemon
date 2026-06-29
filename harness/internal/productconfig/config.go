@@ -27,6 +27,8 @@ const (
 	ConnectionGitHub    = "github"
 	ConnectionMnemonhub = "mnemonhub"
 
+	DefaultMulticaRuntimeBinary = multicasurface.MulticaRuntimeCommandName
+
 	DriveManagedLocal = "managed-local"
 
 	DuplicateActivationSuppress = "suppress"
@@ -394,7 +396,7 @@ func bridgeMulticaRegistry(cfg *Config, reg multicasurface.MulticaRegistry) erro
 		cfg.Connections.Multica.Workspace = strings.TrimSpace(reg.WorkspaceID)
 	}
 	if strings.TrimSpace(cfg.Connections.Multica.RuntimeBinary) == "" {
-		cfg.Connections.Multica.RuntimeBinary = "mnemon-multica-runtime"
+		cfg.Connections.Multica.RuntimeBinary = DefaultMulticaRuntimeBinary
 	}
 	cfg.Daemon.InteractionWatchers = appendCarrier(cfg.Daemon.InteractionWatchers, ConnectionMultica)
 	cfg.Daemon.ProjectionSurfaces = appendCarrier(cfg.Daemon.ProjectionSurfaces, ConnectionMultica)

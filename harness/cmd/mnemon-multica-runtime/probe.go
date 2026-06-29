@@ -66,7 +66,7 @@ func runRuntimeProbe(cfg runtimeConfig) error {
 		return err
 	}
 	if wantsVersion(cfg.Args) {
-		fmt.Fprintf(cfg.Stdout, "mnemon-multica-runtime %s (probe mode)\n", runtimeVersion)
+		fmt.Fprintf(cfg.Stdout, "%s %s (probe mode)\n", multicasurface.MulticaRuntimeCommandName, runtimeVersion)
 		return rec.record(probeEvent{Kind: "version"})
 	}
 	return runProbeRPC(cfg, rec, cwd)
@@ -122,7 +122,7 @@ func (s *probeRPCState) handle(msg rpcMessage) []rpcMessage {
 		return []rpcMessage{{
 			ID: msg.ID,
 			Result: map[string]any{
-				"userAgent":      "mnemon-multica-runtime/" + runtimeVersion + " probe",
+				"userAgent":      multicasurface.MulticaRuntimeCommandName + "/" + runtimeVersion + " probe",
 				"codexHome":      os.Getenv("CODEX_HOME"),
 				"platformFamily": "unix",
 				"platformOs":     runtime.GOOS,
@@ -135,7 +135,7 @@ func (s *probeRPCState) handle(msg rpcMessage) []rpcMessage {
 				Method: "remoteControl/status/changed",
 				Params: map[string]any{
 					"status":         "disabled",
-					"serverName":     "mnemon-multica-runtime",
+					"serverName":     multicasurface.MulticaRuntimeCommandName,
 					"installationId": "mnemon-runtime-probe",
 				},
 			},

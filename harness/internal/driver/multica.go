@@ -17,8 +17,9 @@ import (
 )
 
 const (
-	MulticaDefaultCommand = "multica"
-	MulticaExternalSource = multicasurface.MulticaExternalSource
+	MulticaDefaultCommand     = "multica"
+	MulticaRuntimeCommandName = multicasurface.MulticaRuntimeCommandName
+	MulticaExternalSource     = multicasurface.MulticaExternalSource
 )
 
 type MulticaCLI struct {

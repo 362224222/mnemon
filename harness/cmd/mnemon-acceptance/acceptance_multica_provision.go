@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mnemon-dev/mnemon/harness/internal/driver"
 	"github.com/spf13/cobra"
 )
 
@@ -69,7 +70,7 @@ func init() {
 	acceptanceMulticaProvisionCmd.Flags().StringVar(&acceptanceMulticaProvisionRegistry, "registry", "", "Multica participant registry path")
 	acceptanceMulticaProvisionCmd.Flags().StringVar(&acceptanceMulticaProvisionProjectRoot, "project-root", ".", "project root for the default registry path")
 	acceptanceMulticaProvisionCmd.Flags().StringVar(&acceptanceMulticaProvisionProfileName, "runtime-profile-name", "mnemon-runtime", "Multica runtime profile display name")
-	acceptanceMulticaProvisionCmd.Flags().StringVar(&acceptanceMulticaProvisionRuntimeCommand, "runtime-command", "mnemon-multica-runtime", "runtime executable name registered with Multica")
+	acceptanceMulticaProvisionCmd.Flags().StringVar(&acceptanceMulticaProvisionRuntimeCommand, "runtime-command", driver.MulticaRuntimeCommandName, "runtime executable name registered with Multica")
 	acceptanceMulticaProvisionCmd.Flags().StringVar(&acceptanceMulticaProvisionRuntimePath, "runtime-path", "", "absolute local executable path for the runtime profile")
 	acceptanceMulticaProvisionCmd.Flags().StringVar(&acceptanceMulticaProvisionAgentPrefix, "agent-prefix", "mnemon", "Multica participant agent name prefix")
 	acceptanceMulticaProvisionCmd.Flags().BoolVar(&acceptanceMulticaProvisionRestartDaemon, "restart-daemon", false, "restart the local Multica daemon after setting the runtime path")

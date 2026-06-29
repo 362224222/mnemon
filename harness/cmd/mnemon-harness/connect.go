@@ -46,7 +46,7 @@ func init() {
 	connectCmd.PersistentFlags().StringVar(&connectConfigPath, "config", "", "harness product config path")
 	_ = connectCmd.PersistentFlags().MarkHidden("config")
 	connectMulticaCmd.Flags().StringVar(&connectMulticaWS, "workspace", "", "Multica workspace")
-	connectMulticaCmd.Flags().StringVar(&connectMulticaRuntime, "runtime-binary", "mnemon-multica-runtime", "Multica runtime binary")
+	connectMulticaCmd.Flags().StringVar(&connectMulticaRuntime, "runtime-binary", productconfig.DefaultMulticaRuntimeBinary, "Multica runtime binary")
 	_ = connectMulticaCmd.Flags().MarkHidden("runtime-binary")
 	connectGitHubCmd.Flags().StringVar(&connectGitHubRepo, "repo", "", "GitHub repository owner/name")
 	connectGitHubCmd.Flags().StringVar(&connectGitHubBranch, "branch", "", "GitHub publication branch")
