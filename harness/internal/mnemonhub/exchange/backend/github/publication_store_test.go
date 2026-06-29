@@ -1,6 +1,7 @@
 package githubbackend
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -106,6 +107,39 @@ func TestGitHubPublicationStoreListEventsUsesBranchHeadCursor(t *testing.T) {
 	}
 	if len(again.Events) != 0 || again.NextCursor != "head-2" {
 		t.Fatalf("list after head cursor = %+v, want empty", again)
+	}
+}
+
+func TestGitHubPublicationStoreListEventsUsesCompareAfterCursor(t *testing.T) {
+	fake := newFakeGitHubPublicationAPI(t)
+	fake.head = "head-2"
+	oldPath := exchange.PublicationEventRoot + "/replica-b/progress_digest/project/000000000001-dec-b.json"
+	newPath := exchange.PublicationEventRoot + "/replica-b/progress_digest/project/000000000002-dec-b.json"
+	fake.files["head-1:"+oldPath] = fakeGitHubFile{body: []byte(`{"id":"old"}`), sha: "sha-old"}
+	fake.files["head-2:"+oldPath] = fakeGitHubFile{body: []byte(`{"id":"old"}`), sha: "sha-old"}
+	fake.files["head-2:"+newPath] = fakeGitHubFile{body: []byte(`{"id":"new"}`), sha: "sha-new"}
+	fake.files["head-2:README.md"] = fakeGitHubFile{body: []byte(`# ignored`), sha: "sha-readme"}
+	store, err := NewPublicationStore(PublicationStoreConfig{
+		Repo:       "mnemon-dev/mnemon-teamwork-example",
+		BaseURL:    fake.server.URL,
+		HTTPClient: fake.server.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	list, err := store.ListEvents(context.Background(), "mnemon/mnemond-b", exchange.PublicationEventRoot, "head-1")
+	if err != nil {
+		t.Fatalf("list events after cursor: %v", err)
+	}
+	if len(list.Events) != 1 || list.Events[0].Path != newPath || string(list.Events[0].Body) != `{"id":"new"}` || list.NextCursor != "head-2" {
+		t.Fatalf("list after cursor = %+v, want only changed publication event", list)
+	}
+	if len(fake.compareRefs) != 1 || fake.compareRefs[0] != "head-1...head-2" {
+		t.Fatalf("compare refs = %v, want head-1...head-2", fake.compareRefs)
+	}
+	if fake.dirLists != 0 {
+		t.Fatalf("incremental list should not scan directories, dirLists=%d", fake.dirLists)
 	}
 }
 
@@ -251,7 +285,9 @@ type fakeGitHubPublicationAPI struct {
 	missingRefs map[string]bool
 	refReads    map[string]int
 	contentRefs []string
+	compareRefs []string
 	head        string
+	dirLists    int
 	puts        int
 	creates     int
 	lastSHA     string
@@ -318,6 +354,15 @@ func (f *fakeGitHubPublicationAPI) handle(w http.ResponseWriter, r *http.Request
 		f.refs[branch] = req.SHA
 		f.creates++
 		writeJSON(w, http.StatusCreated, map[string]any{"ref": req.Ref, "object": map[string]any{"sha": req.SHA}})
+	case r.Method == http.MethodGet && strings.HasPrefix(tail, "compare/"):
+		ref := strings.TrimPrefix(tail, "compare/")
+		f.compareRefs = append(f.compareRefs, ref)
+		base, head, ok := strings.Cut(ref, "...")
+		if !ok || base == "" || head == "" {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"message": "invalid compare"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"files": f.compareFiles(base, head)})
 	case strings.HasPrefix(tail, "contents/"):
 		path := strings.TrimPrefix(tail, "contents/")
 		branch := r.URL.Query().Get("ref")
@@ -353,6 +398,7 @@ func (f *fakeGitHubPublicationAPI) handleContents(w http.ResponseWriter, r *http
 		}
 		entries := f.dirEntries(branch, path)
 		if len(entries) > 0 {
+			f.dirLists++
 			writeJSON(w, http.StatusOK, entries)
 			return
 		}
@@ -391,6 +437,26 @@ func (f *fakeGitHubPublicationAPI) handleContents(w http.ResponseWriter, r *http
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+func (f *fakeGitHubPublicationAPI) compareFiles(base, head string) []map[string]any {
+	prefix := head + ":"
+	var out []map[string]any
+	for key, file := range f.files {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		path := strings.TrimPrefix(key, prefix)
+		status := "added"
+		if previous, ok := f.files[base+":"+path]; ok {
+			if bytes.Equal(previous.body, file.body) {
+				continue
+			}
+			status = "modified"
+		}
+		out = append(out, map[string]any{"filename": path, "status": status})
+	}
+	return out
 }
 
 func (f *fakeGitHubPublicationAPI) dirEntries(branch, dir string) []map[string]any {
