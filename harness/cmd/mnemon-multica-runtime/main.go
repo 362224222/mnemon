@@ -213,9 +213,9 @@ func (s *runtimeRPCState) handle(msg rpcMessage, emit func(rpcMessage) error) er
 		return emitAll(rpcMessage{ID: msg.ID, Result: map[string]any{}})
 	case "turn/start":
 		s.TurnID = runtimeID("turn", s.now())
-		input := multicasurface.RuntimeTextInput(msg.Params)
+		input := multicasurface.RuntimeInputMaterial(msg.Params)
 		nowMs := s.now().UnixMilli()
-		userItem := multicasurface.RuntimeUserMessage(input)
+		userItem := multicasurface.RuntimeUserMessage(input.Text)
 		if err := emitAll(
 			rpcMessage{
 				ID: msg.ID,
@@ -299,14 +299,14 @@ func (s *runtimeRPCState) nextItemID(prefix string) string {
 	return fmt.Sprintf("%s-%d-%d", prefix, s.now().UTC().UnixNano(), s.ItemSeq)
 }
 
-func (s *runtimeRPCState) runTurn(input string, progress runtimeProgressSink) string {
+func (s *runtimeRPCState) runTurn(input multicasurface.RuntimeInput, progress runtimeProgressSink) string {
 	result := s.importIssue(input, progress)
 	return formatRuntimeFinalAnswer(result)
 }
 
-func (s *runtimeRPCState) importIssue(input string, progress runtimeProgressSink) runtimeImportResult {
+func (s *runtimeRPCState) importIssue(input multicasurface.RuntimeInput, progress runtimeProgressSink) runtimeImportResult {
 	taskID := envValue(s.Env, "MULTICA_TASK_ID")
-	issueID := firstNonEmpty(envValue(s.Env, "MULTICA_ISSUE_ID"), multicasurface.ExtractIssueIdentity(input))
+	issueID := firstNonEmpty(envValue(s.Env, "MULTICA_ISSUE_ID"), input.IssueIdentity, multicasurface.ExtractIssueIdentity(input.Text))
 	result := runtimeImportResult{
 		IssueID:   issueID,
 		Principal: resolveRuntimePrincipal(s.Env, s.CWD),

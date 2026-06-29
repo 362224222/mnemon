@@ -148,6 +148,48 @@ func runtimeTestEnv(values ...string) []string {
 	return append(env, values...)
 }
 
+func TestRuntimeImportUsesStructuredIssueIdentity(t *testing.T) {
+	tmp := t.TempDir()
+	argsPath := filepath.Join(tmp, "multica.args")
+	bin := filepath.Join(tmp, "multica")
+	script := `#!/usr/bin/env sh
+printf '%s\n' "$*" >> "$MULTICA_ARGS_PATH"
+case "$*" in
+  *"issue get iss-structured"*) printf '{"id":"iss-structured","identifier":"TEA-77","title":"Structured issue mention","description":"Use structured Multica input metadata instead of prompt text.","status":"todo","priority":"medium"}\n' ;;
+  *"issue metadata list iss-structured"*) printf '[]\n' ;;
+  *) printf '{}\n' ;;
+esac
+`
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	state := runtimeRPCState{
+		CWD: tmp,
+		Env: runtimeTestEnv(
+			"MNEMON_MULTICA_BIN="+bin,
+			"MULTICA_ARGS_PATH="+argsPath,
+			"MULTICA_TASK_ID=task-structured",
+		),
+		Now: fixedRuntimeTime,
+	}
+
+	result := state.importIssue(multicasurface.RuntimeInput{
+		Text:          "Please use the linked issue, not a copied issue id.",
+		IssueIdentity: "iss-structured",
+	}, nil)
+
+	if result.IssueID != "iss-structured" || result.Identifier != "TEA-77" {
+		t.Fatalf("structured issue import mismatch: %+v", result)
+	}
+	if result.Status != "skipped" {
+		t.Fatalf("runtime without control addr should skip ingest after loading issue, got %+v", result)
+	}
+	args := mustReadRuntimeTestFile(t, argsPath)
+	if !strings.Contains(args, "issue get iss-structured --output json") {
+		t.Fatalf("structured issue identity was not used for issue get:\n%s", args)
+	}
+}
+
 func TestRuntimeImportsAssignedIssueIntoMnemon(t *testing.T) {
 	tmp := t.TempDir()
 	argsPath := filepath.Join(tmp, "multica.args")

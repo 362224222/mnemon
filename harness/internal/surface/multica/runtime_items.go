@@ -22,6 +22,11 @@ type RuntimeCommandExecutionMaterial struct {
 	DurationMs int64
 }
 
+type RuntimeInput struct {
+	Text          string
+	IssueIdentity string
+}
+
 func RuntimeManagedTraceMessages(threadID, turnID string, event activationtrace.Event, now time.Time) []RuntimeRPCMessage {
 	switch event.Method {
 	case "item/started":
@@ -137,21 +142,36 @@ func RuntimeUserMessage(text string) map[string]any {
 }
 
 func RuntimeTextInput(params map[string]any) string {
+	return RuntimeInputMaterial(params).Text
+}
+
+func RuntimeInputMaterial(params map[string]any) RuntimeInput {
 	input, ok := params["input"].([]any)
 	if !ok {
-		return ""
+		return RuntimeInput{}
 	}
 	var parts []string
+	structuredIssue := ""
+	textIssue := ""
 	for _, item := range input {
 		obj, ok := item.(map[string]any)
 		if !ok {
 			continue
 		}
+		if structuredIssue == "" {
+			structuredIssue = runtimeStructuredIssueIdentity(obj)
+		}
 		if text, _ := obj["text"].(string); strings.TrimSpace(text) != "" {
 			parts = append(parts, text)
+			if textIssue == "" {
+				textIssue = ExtractIssueIdentity(text)
+			}
 		}
 	}
-	return strings.Join(parts, "\n")
+	return RuntimeInput{
+		Text:          strings.Join(parts, "\n"),
+		IssueIdentity: firstNonEmptyString(structuredIssue, textIssue),
+	}
 }
 
 func RuntimeRef(kind, id string) string {
@@ -161,6 +181,88 @@ func RuntimeRef(kind, id string) string {
 		return ""
 	}
 	return "multica:" + kind + ":" + id
+}
+
+func runtimeStructuredIssueIdentity(raw any) string {
+	switch value := raw.(type) {
+	case nil:
+		return ""
+	case string:
+		return ExtractIssueIdentity(value)
+	case []any:
+		for _, item := range value {
+			if issue := runtimeStructuredIssueIdentity(item); issue != "" {
+				return issue
+			}
+		}
+	case map[string]any:
+		for _, key := range []string{"issue_id", "issueId", "issueID", "target_issue_id", "targetIssueId"} {
+			if issue := cleanIssueIdentity(anyString(value[key])); issue != "" {
+				return issue
+			}
+		}
+		for _, key := range []string{"url", "href", "uri", "ref", "reference"} {
+			if issue := ExtractIssueIdentity(anyString(value[key])); issue != "" {
+				return issue
+			}
+		}
+		if runtimeMapLooksLikeIssueRef(value) {
+			for _, key := range []string{"id", "target_id", "targetId", "resource_id", "resourceId"} {
+				if issue := cleanIssueIdentity(anyString(value[key])); issue != "" {
+					return issue
+				}
+			}
+		}
+		for _, key := range []string{"identifier", "issue_identifier", "issueIdentifier", "label", "tag"} {
+			if issue := runtimeIssueIdentifierTag(anyString(value[key])); issue != "" {
+				return issue
+			}
+		}
+		for _, key := range []string{"issue", "target", "resource", "mention", "mentions", "entities", "text_elements", "references", "tags"} {
+			if issue := runtimeStructuredIssueIdentity(value[key]); issue != "" {
+				return issue
+			}
+		}
+		for _, item := range value {
+			switch item.(type) {
+			case map[string]any, []any:
+				if issue := runtimeStructuredIssueIdentity(item); issue != "" {
+					return issue
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func runtimeMapLooksLikeIssueRef(value map[string]any) bool {
+	for _, key := range []string{"type", "kind", "resource", "resource_type", "resourceType", "entity", "entity_type", "entityType", "target_type", "targetType"} {
+		if strings.Contains(strings.ToLower(anyString(value[key])), "issue") {
+			return true
+		}
+	}
+	if _, ok := value["issue"]; ok {
+		return true
+	}
+	if issue := runtimeIssueIdentifierTag(anyString(value["identifier"])); issue != "" {
+		return true
+	}
+	return false
+}
+
+func runtimeIssueIdentifierTag(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if issue := ExtractIssueIdentity(value); issue != "" {
+		return issue
+	}
+	value = strings.TrimLeft(value, "@#")
+	if value == "" {
+		return ""
+	}
+	return ExtractIssueIdentity("@" + value)
 }
 
 func runtimeManagedTraceItem(event activationtrace.Event) map[string]any {

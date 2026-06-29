@@ -142,6 +142,77 @@ func TestRuntimeTextInputExtractsOnlyTextItems(t *testing.T) {
 	}
 }
 
+func TestRuntimeInputMaterialExtractsStructuredIssueIdentity(t *testing.T) {
+	got := RuntimeInputMaterial(map[string]any{
+		"input": []any{
+			map[string]any{
+				"type": "text",
+				"id":   "item-1",
+				"text": "Please review the linked issue.",
+				"text_elements": []any{
+					map[string]any{
+						"type":        "mention",
+						"target_type": "issue",
+						"target_id":   "iss-49",
+						"text":        "@TEA-49",
+					},
+				},
+			},
+		},
+	})
+	if got.Text != "Please review the linked issue." {
+		t.Fatalf("visible text changed: %+v", got)
+	}
+	if got.IssueIdentity != "iss-49" {
+		t.Fatalf("structured issue identity = %q, want iss-49", got.IssueIdentity)
+	}
+}
+
+func TestRuntimeInputMaterialFallsBackToVisibleIssueTag(t *testing.T) {
+	got := RuntimeInputMaterial(map[string]any{
+		"input": []any{
+			map[string]any{"type": "text", "id": "item-1", "text": "Please handle @TEA-50 next."},
+		},
+	})
+	if got.IssueIdentity != "TEA-50" {
+		t.Fatalf("visible issue tag identity = %q, want TEA-50", got.IssueIdentity)
+	}
+}
+
+func TestRuntimeInputMaterialPrefersStructuredIssueOverVisibleTag(t *testing.T) {
+	got := RuntimeInputMaterial(map[string]any{
+		"input": []any{
+			map[string]any{"type": "text", "text": "Ignore the stale copied tag @TEA-1."},
+			map[string]any{
+				"type": "text",
+				"text": "Use the selected Multica issue tag.",
+				"text_elements": []any{
+					map[string]any{
+						"type":        "mention",
+						"target_type": "issue",
+						"target_id":   "iss-selected",
+						"text":        "@TEA-99",
+					},
+				},
+			},
+		},
+	})
+	if got.IssueIdentity != "iss-selected" {
+		t.Fatalf("structured issue identity should win over visible tag, got %q", got.IssueIdentity)
+	}
+}
+
+func TestRuntimeInputMaterialIgnoresNonIssueItemID(t *testing.T) {
+	got := RuntimeInputMaterial(map[string]any{
+		"input": []any{
+			map[string]any{"type": "text", "id": "item-1", "text": "Coordinate with @team."},
+		},
+	})
+	if got.IssueIdentity != "" {
+		t.Fatalf("non-issue item id should be ignored, got %q", got.IssueIdentity)
+	}
+}
+
 func TestRuntimeRefNormalizesMulticaRefs(t *testing.T) {
 	if got := RuntimeRef(" issue ", " iss-1 "); got != "multica:issue:iss-1" {
 		t.Fatalf("RuntimeRef() = %q", got)
