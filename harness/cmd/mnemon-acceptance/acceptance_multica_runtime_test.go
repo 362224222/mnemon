@@ -124,8 +124,8 @@ cat >> "$MULTICA_STDIN_PATH"
 case "$*" in
   *"issue create"*) printf '{"id":"root-9","identifier":"TEA-9","title":"Runtime hub flow","description":"Teamwork acceptance","status":"todo"}\n' ;;
   *"issue get root-9"*) printf '{"id":"root-9","identifier":"TEA-9","title":"Runtime hub flow","description":"Teamwork acceptance","status":"done"}\n' ;;
-  *"issue get child-2"*) printf '{"id":"child-2","identifier":"TEA-10","title":"Assignment 2","status":"done"}\n' ;;
-  *"issue get child-3"*) printf '{"id":"child-3","identifier":"TEA-11","title":"Assignment 3","status":"done"}\n' ;;
+  *"issue get child-2"*) printf '%s\n' '{"id":"child-2","identifier":"TEA-10","title":"TEA-9: routing check","description":"## Assignment\n\nCheck routing.\n\n## Context\n\n- Root issue: [TEA-9](mention://issue/root-9) - Runtime hub flow\n- Assignee: researcher@team (mnemon-researcher)\n- Scope: routing check\n\n## Feedback\n\n- Expected feedback: result or blocker\n- Progress path: Mnemon runtime progress, result, or blocker feedback","status":"done"}' ;;
+  *"issue get child-3"*) printf '%s\n' '{"id":"child-3","identifier":"TEA-11","title":"TEA-9: runtime display","description":"## Assignment\n\nCheck runtime display.\n\n## Context\n\n- Root issue: [TEA-9](mention://issue/root-9) - Runtime hub flow\n- Assignee: implementer@team (mnemon-implementer)\n- Scope: runtime display\n\n## Feedback\n\n- Expected feedback: result or blocker\n- Progress path: Mnemon runtime progress, result, or blocker feedback","status":"done"}' ;;
   *"issue metadata list root-9"*) printf '[{"key":"mnemon.hub_backend","value":"multica"},{"key":"mnemon.kind","value":"session_mailbox"},{"key":"mnemon.session_id","value":"multica:session:root-9"}]\n' ;;
   *"issue children root-9"*) printf '{"children":[{"id":"child-2","identifier":"TEA-10","title":"Assignment 2","status":"done","metadata":{"mnemon.hub_backend":"multica","mnemon.kind":"assignment_mailbox","mnemon.session_id":"multica:session:root-9","mnemon.assignment_id":"asg-2","mnemon.principal":"researcher@team"}},{"id":"child-3","identifier":"TEA-11","title":"Assignment 3","status":"done","metadata":{"mnemon.hub_backend":"multica","mnemon.kind":"assignment_mailbox","mnemon.session_id":"multica:session:root-9","mnemon.assignment_id":"asg-3","mnemon.principal":"implementer@team"}}]}\n' ;;
   *"issue comment list root-9"*) printf '[{"id":"comment-root","issue_id":"root-9","content":"Mnemon update: issue admitted\\n\\nmnemon:event=multica-task-root"}]\n' ;;
@@ -173,6 +173,16 @@ esac
 	}
 	if !multicaProdSimAssertionsPassed(report) {
 		t.Fatalf("hub assertions failed: %+v", report.Assertions)
+	}
+	var visibleTextAssertion bool
+	for _, assertion := range report.Assertions {
+		if assertion.Name == "assignment child issue visible text is structured" {
+			visibleTextAssertion = assertion.Passed
+			break
+		}
+	}
+	if !visibleTextAssertion {
+		t.Fatalf("missing or failed visible text assertion: %+v", report.Assertions)
 	}
 	args, err := os.ReadFile(argsPath)
 	if err != nil {

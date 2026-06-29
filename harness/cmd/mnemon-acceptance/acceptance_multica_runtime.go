@@ -372,6 +372,8 @@ func collectMulticaHubFlowEvidence(ctx context.Context, cli driver.MulticaCLI, o
 		return err
 	}
 	addMulticaProdSimAssertion(report, "hub-flow projects feedback comments and completion statuses", multicaHubProjectionComplete(finalRoot, finalChildren, childComments), fmt.Sprintf("root=%s children=%v comments=%d", finalRoot.Status, multicaIssueStatuses(finalChildren), multicaCommentCount(childComments)))
+	visibleOK, visibleDetail := multicaAssignmentChildrenUseStructuredVisibleText(finalChildren)
+	addMulticaProdSimAssertion(report, "assignment child issue visible text is structured", visibleOK, visibleDetail)
 	return nil
 }
 
@@ -657,6 +659,47 @@ func multicaHubProjectionComplete(root driver.MulticaIssue, children []driver.Mu
 		}
 	}
 	return true
+}
+
+func multicaAssignmentChildrenUseStructuredVisibleText(children []driver.MulticaIssue) (bool, string) {
+	if len(children) == 0 {
+		return false, "children=0"
+	}
+	var failures []string
+	for _, child := range children {
+		label := firstNonEmptyString(child.Identifier, child.ID)
+		body := child.Description
+		for _, want := range []string{
+			"## Assignment",
+			"## Context",
+			"Root issue: [",
+			"](mention://issue/",
+			"Assignee:",
+			"## Feedback",
+		} {
+			if !strings.Contains(body, want) {
+				failures = append(failures, fmt.Sprintf("%s missing %q", label, want))
+			}
+		}
+		lower := strings.ToLower(body)
+		for _, blocked := range []string{
+			"mnemon.",
+			"session:",
+			"assignment: `",
+			"assignment_ref",
+			"progress_digest",
+			"hub backend",
+			"projection owner",
+		} {
+			if strings.Contains(lower, blocked) {
+				failures = append(failures, fmt.Sprintf("%s exposes %q", label, blocked))
+			}
+		}
+	}
+	if len(failures) > 0 {
+		return false, strings.Join(failures, "; ")
+	}
+	return true, fmt.Sprintf("children=%d", len(children))
 }
 
 func multicaCommentsContainFeedbackMarker(comments []driver.MulticaComment) bool {
