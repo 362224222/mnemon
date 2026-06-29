@@ -189,3 +189,45 @@ esac
 		}
 	}
 }
+
+func TestMulticaRuntimeProdSimAcceptanceReportsPrerequisitesTogether(t *testing.T) {
+	tmp := t.TempDir()
+	report, err := runMulticaRuntimeProdSimAcceptance(context.Background(), multicaRuntimeProdSimOptions{
+		RunRoot:      filepath.Join(tmp, ".testdata", "multica-readiness"),
+		MulticaBin:   filepath.Join(tmp, "missing-multica"),
+		RegistryPath: filepath.Join(tmp, "missing-registry.json"),
+		Wait:         time.Millisecond,
+		Poll:         time.Millisecond,
+	})
+	if err == nil {
+		t.Fatal("expected prerequisite error")
+	}
+	if report.Status != "failed" || report.ReportPath == "" {
+		t.Fatalf("report mismatch: %+v", report)
+	}
+	if !strings.Contains(err.Error(), "prerequisites failed") ||
+		!strings.Contains(err.Error(), "Multica CLI not executable") ||
+		!strings.Contains(err.Error(), "Multica registry not found") {
+		t.Fatalf("error did not report both prerequisites: %v", err)
+	}
+	assertionByName := map[string]multicaRuntimeProdSimAssertion{}
+	for _, assertion := range report.Assertions {
+		assertionByName[assertion.Name] = assertion
+	}
+	for _, name := range []string{"Multica CLI available", "Multica registry available"} {
+		assertion, ok := assertionByName[name]
+		if !ok {
+			t.Fatalf("missing assertion %q in %+v", name, report.Assertions)
+		}
+		if assertion.Passed {
+			t.Fatalf("assertion %q unexpectedly passed: %+v", name, assertion)
+		}
+	}
+	data, err := os.ReadFile(report.ReportPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "Multica CLI available") || !strings.Contains(string(data), "Multica registry available") {
+		t.Fatalf("written report missing prerequisite assertions:\n%s", data)
+	}
+}

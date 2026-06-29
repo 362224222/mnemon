@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -188,16 +189,31 @@ func runMulticaRuntimeProdSimAcceptance(ctx context.Context, opts multicaRuntime
 	if err := prepareR1AcceptanceRunRoot(runRoot); err != nil {
 		return finishMulticaRuntimeProdSimReport(report, err)
 	}
+	var prereqErrs []error
+	if cliPath, err := resolveMulticaAcceptanceCLI(opts.MulticaBin); err != nil {
+		addMulticaProdSimAssertion(&report, "Multica CLI available", false, err.Error())
+		prereqErrs = append(prereqErrs, err)
+	} else {
+		opts.MulticaBin = cliPath
+		addMulticaProdSimAssertion(&report, "Multica CLI available", true, cliPath)
+	}
 	registryPath := strings.TrimSpace(opts.RegistryPath)
 	if registryPath == "" {
 		registryPath = filepath.Join(".", driver.MulticaDefaultRegistryRelPath)
 	}
 	registry, ok, err := driver.LoadMulticaRegistry(registryPath)
 	if err != nil {
-		return finishMulticaRuntimeProdSimReport(report, err)
+		addMulticaProdSimAssertion(&report, "Multica registry available", false, err.Error())
+		prereqErrs = append(prereqErrs, err)
+	} else if !ok {
+		err := fmt.Errorf("Multica registry not found: %s", registryPath)
+		addMulticaProdSimAssertion(&report, "Multica registry available", false, err.Error())
+		prereqErrs = append(prereqErrs, err)
+	} else {
+		addMulticaProdSimAssertion(&report, "Multica registry available", true, registryPath)
 	}
-	if !ok {
-		return finishMulticaRuntimeProdSimReport(report, fmt.Errorf("Multica registry not found: %s", registryPath))
+	if err := multicaProdSimPrerequisiteError(prereqErrs); err != nil {
+		return finishMulticaRuntimeProdSimReport(report, err)
 	}
 	report.RegistryPath = registryPath
 	report.Participants = registry.Participants
@@ -699,6 +715,34 @@ func sortedMulticaActiveAgents(active map[string]bool) []string {
 
 func addMulticaProdSimAssertion(report *multicaRuntimeProdSimReport, name string, passed bool, detail string) {
 	report.Assertions = append(report.Assertions, multicaRuntimeProdSimAssertion{Name: name, Passed: passed, Detail: detail})
+}
+
+func resolveMulticaAcceptanceCLI(command string) (string, error) {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		command = "multica"
+	}
+	path, err := exec.LookPath(command)
+	if err != nil {
+		if command == "multica" {
+			return "", fmt.Errorf("Multica CLI not found in PATH; pass --multica-bin or set MNEMON_MULTICA_BIN")
+		}
+		return "", fmt.Errorf("Multica CLI not executable %q: %w", command, err)
+	}
+	return path, nil
+}
+
+func multicaProdSimPrerequisiteError(errs []error) error {
+	var messages []string
+	for _, err := range errs {
+		if err != nil {
+			messages = append(messages, err.Error())
+		}
+	}
+	if len(messages) == 0 {
+		return nil
+	}
+	return fmt.Errorf("Multica runtime prod-sim prerequisites failed: %s", strings.Join(messages, "; "))
 }
 
 func multicaProdSimAssertionsPassed(report multicaRuntimeProdSimReport) bool {
