@@ -161,6 +161,11 @@ func runR1GitHubMeshAcceptance(ctx context.Context, opts r1GitHubMeshAcceptanceO
 		report.Status = "blocked"
 		return report, err
 	}
+	if err := validateR1GitHubMeshSyncInterval(opts); err != nil {
+		addR1Error(&report, err)
+		report.Status = "blocked"
+		return report, err
+	}
 	if opts.TokenFile == "" {
 		err := fmt.Errorf("--github-token-file is required")
 		addR1Error(&report, err)
@@ -1398,6 +1403,16 @@ func r1GitHubMeshBranchPrefix(prefix string, started time.Time) string {
 		return prefix
 	}
 	return "mnemon/mnemond-" + started.UTC().Format("20060102T150405Z") + "-"
+}
+
+func validateR1GitHubMeshSyncInterval(opts r1GitHubMeshAcceptanceOptions) error {
+	if !opts.AgentTurns {
+		return nil
+	}
+	if opts.SyncInterval < 30*time.Second {
+		return fmt.Errorf("github mesh agent-turns require --sync-interval >= 30s to protect GitHub API quota (got %s)", opts.SyncInterval)
+	}
+	return nil
 }
 
 func ensureR1GitHubMeshBranches(ctx context.Context, repo, tokenFile string, branches []string) error {

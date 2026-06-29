@@ -102,6 +102,25 @@ func TestPreflightR1GitHubMeshRateLimitBlocksLowRemaining(t *testing.T) {
 	}
 }
 
+func TestValidateR1GitHubMeshSyncIntervalProtectsAgentTurns(t *testing.T) {
+	err := validateR1GitHubMeshSyncInterval(r1GitHubMeshAcceptanceOptions{
+		r1CodexAcceptanceOptions: r1CodexAcceptanceOptions{AgentTurns: true},
+		SyncInterval:             10 * time.Second,
+	})
+	if err == nil || !strings.Contains(err.Error(), ">= 30s") {
+		t.Fatalf("expected short sync interval guard, got %v", err)
+	}
+	if err := validateR1GitHubMeshSyncInterval(r1GitHubMeshAcceptanceOptions{
+		r1CodexAcceptanceOptions: r1CodexAcceptanceOptions{AgentTurns: true},
+		SyncInterval:             30 * time.Second,
+	}); err != nil {
+		t.Fatalf("30s sync interval should be allowed: %v", err)
+	}
+	if err := validateR1GitHubMeshSyncInterval(r1GitHubMeshAcceptanceOptions{SyncInterval: 10 * time.Second}); err != nil {
+		t.Fatalf("short non-agent-turn sync interval should be allowed: %v", err)
+	}
+}
+
 func TestWriteR1GitHubMeshRemotesCreatesPublishAndSubscribePlan(t *testing.T) {
 	root := t.TempDir()
 	tokenFile := filepath.Join(root, "github.token")
