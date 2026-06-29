@@ -3,6 +3,8 @@ package multica
 import (
 	"fmt"
 	"strings"
+
+	commentprojection "github.com/mnemon-dev/mnemon/harness/internal/projection"
 )
 
 type AssignmentMailboxMaterial struct {
@@ -58,6 +60,18 @@ type RuntimeProjectionMaterial struct {
 	HubWriteStatus     string
 	HubChildIssues     int
 	HubFeedbackComment int
+}
+
+type ProgressFeedbackProjectionMaterial struct {
+	Item          RuntimeProgressItem
+	SessionID     string
+	CorrelationID string
+}
+
+type ProgressFeedbackProjection struct {
+	Source      MulticaHubLedgerSource
+	Feedback    ProgressFeedbackMaterial
+	CommentBody string
 }
 
 func AssignmentMailboxTitle(item AssignmentMailboxMaterial) string {
@@ -132,6 +146,42 @@ func AssignmentMailboxDescription(item AssignmentMailboxMaterial) string {
 		writeBullet(&b, "Progress path", "Mnemon runtime progress, result, or blocker feedback")
 	}
 	return strings.TrimSpace(b.String())
+}
+
+func ProgressFeedbackProjectionForRuntimeItem(material ProgressFeedbackProjectionMaterial) ProgressFeedbackProjection {
+	item := material.Item
+	feedback := ProgressFeedbackMaterialForRuntimeItem(item)
+	return ProgressFeedbackProjection{
+		Source: MulticaHubLedgerSource{
+			SessionID:      material.SessionID,
+			CorrelationID:  material.CorrelationID,
+			EventID:        item.EventID,
+			AssignmentID:   item.AssignmentRef,
+			Principal:      item.Actor,
+			ProjectionKind: "progress",
+		},
+		Feedback: feedback,
+		CommentBody: commentprojection.FormatComment(commentprojection.CommentMaterial{
+			Title:        "assignment feedback",
+			Body:         ProgressCommentBody(feedback),
+			EventIDs:     []string{item.EventID},
+			EventType:    "progress_digest.accepted",
+			SessionID:    material.SessionID,
+			AssignmentID: item.AssignmentRef,
+		}),
+	}
+}
+
+func ProgressFeedbackMaterialForRuntimeItem(item RuntimeProgressItem) ProgressFeedbackMaterial {
+	return ProgressFeedbackMaterial{
+		AssignmentRef: item.AssignmentRef,
+		FeedbackKind:  item.FeedbackKind,
+		Summary:       item.Summary,
+		Result:        item.Result,
+		Blocker:       item.Blocker,
+		ArtifactRefs:  item.ArtifactRefs,
+		EvidenceRefs:  item.EvidenceRefs,
+	}
 }
 
 func ProgressCommentBody(item ProgressFeedbackMaterial) string {

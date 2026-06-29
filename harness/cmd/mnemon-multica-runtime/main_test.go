@@ -1646,7 +1646,7 @@ func TestMulticaStatusForProgressIsRuleBased(t *testing.T) {
 		{name: "result narrative fallback", item: multicasurface.RuntimeProgressItem{Result: "validated"}, want: "done"},
 		{name: "unknown", item: multicasurface.RuntimeProgressItem{Summary: "not enough signal"}, want: ""},
 	} {
-		if got := multicasurface.ProgressIssueStatus(progressFeedbackMaterial(tc.item)); got != tc.want {
+		if got := multicasurface.ProgressIssueStatus(multicasurface.ProgressFeedbackMaterialForRuntimeItem(tc.item)); got != tc.want {
 			t.Fatalf("%s: status = %q, want %q", tc.name, got, tc.want)
 		}
 	}

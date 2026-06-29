@@ -246,6 +246,48 @@ func TestProgressFeedbackMaterial(t *testing.T) {
 	}
 }
 
+func TestProgressFeedbackProjectionForRuntimeItem(t *testing.T) {
+	projection := ProgressFeedbackProjectionForRuntimeItem(ProgressFeedbackProjectionMaterial{
+		Item: RuntimeProgressItem{
+			EventID:       "pg-1",
+			Actor:         "worker@team",
+			AssignmentRef: "asg-1",
+			FeedbackKind:  "result",
+			Summary:       "Validated the assignment mailbox.",
+			Result:        "Comment projection is visible in Multica.",
+			ArtifactRefs:  []string{"run-1"},
+			EvidenceRefs:  []string{"comment-1"},
+		},
+		SessionID:     "multica:session:root-1",
+		CorrelationID: "multica:issue:root-1",
+	})
+	if projection.Source.SessionID != "multica:session:root-1" ||
+		projection.Source.CorrelationID != "multica:issue:root-1" ||
+		projection.Source.EventID != "pg-1" ||
+		projection.Source.AssignmentID != "asg-1" ||
+		projection.Source.Principal != "worker@team" ||
+		projection.Source.ProjectionKind != "progress" {
+		t.Fatalf("progress source mismatch: %+v", projection.Source)
+	}
+	if projection.Feedback.AssignmentRef != "asg-1" || projection.Feedback.FeedbackKind != "result" {
+		t.Fatalf("feedback material mismatch: %+v", projection.Feedback)
+	}
+	for _, want := range []string{
+		"Mnemon update: assignment feedback",
+		"Status: result",
+		"Validated the assignment mailbox.",
+		"Comment projection is visible in Multica.",
+		"mnemon:event=pg-1",
+		"mnemon:type=progress_digest.accepted",
+		"mnemon:session=multica:session:root-1",
+		"mnemon:assignment=asg-1",
+	} {
+		if !strings.Contains(projection.CommentBody, want) {
+			t.Fatalf("comment body missing %q:\n%s", want, projection.CommentBody)
+		}
+	}
+}
+
 func TestRuntimeProjectionCommentBodyForIntake(t *testing.T) {
 	body := RuntimeProjectionCommentBody(RuntimeProjectionMaterial{
 		Status:             "recorded",

@@ -12,7 +12,6 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/driver"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	pview "github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation/view"
-	"github.com/mnemon-dev/mnemon/harness/internal/projection"
 	multicasurface "github.com/mnemon-dev/mnemon/harness/internal/surface/multica"
 )
 
@@ -275,16 +274,12 @@ func (s *runtimeRPCState) writeProgressComments(ctx context.Context, cli driver.
 		if !runtimeItemAfterRootIngest(item.IngestSeq, result) {
 			continue
 		}
-		source := driver.MulticaHubLedgerSource{
-			SessionID:      result.SessionID,
-			CorrelationID:  result.CorrelationID,
-			EventID:        item.EventID,
-			AssignmentID:   item.AssignmentRef,
-			Principal:      item.Actor,
-			ProjectionKind: "progress",
-		}
-		material := progressFeedbackMaterial(item)
-		if rec, ok, err := ledger.Find(driver.MulticaHubKindFeedbackCarrier, source); err != nil {
+		progressProjection := multicasurface.ProgressFeedbackProjectionForRuntimeItem(multicasurface.ProgressFeedbackProjectionMaterial{
+			Item:          item,
+			SessionID:     result.SessionID,
+			CorrelationID: result.CorrelationID,
+		})
+		if rec, ok, err := ledger.Find(driver.MulticaHubKindFeedbackCarrier, progressProjection.Source); err != nil {
 			return err
 		} else if ok {
 			child := strings.TrimSpace(rec.Target.ChildIssueID)
@@ -307,7 +302,7 @@ func (s *runtimeRPCState) writeProgressComments(ctx context.Context, cli driver.
 			if !runtimeProgressMatchesCurrentMulticaScope(item, result, child) {
 				continue
 			}
-			if err := s.ensureProgressIssueStatuses(ctx, cli, result, child, material); err != nil {
+			if err := s.ensureProgressIssueStatuses(ctx, cli, result, child, progressProjection.Feedback); err != nil {
 				return err
 			}
 			continue
@@ -328,24 +323,16 @@ func (s *runtimeRPCState) writeProgressComments(ctx context.Context, cli driver.
 		if !runtimeProgressMatchesCurrentMulticaScope(item, result, child) {
 			continue
 		}
-		commentBody := projection.FormatComment(projection.CommentMaterial{
-			Title:        "assignment feedback",
-			Body:         multicasurface.ProgressCommentBody(material),
-			EventIDs:     []string{item.EventID},
-			EventType:    "progress_digest.accepted",
-			SessionID:    result.SessionID,
-			AssignmentID: item.AssignmentRef,
-		})
-		comment, err := cli.AddIssueComment(ctx, child, commentBody)
+		comment, err := cli.AddIssueComment(ctx, child, progressProjection.CommentBody)
 		if err != nil {
 			return err
 		}
-		if err := s.ensureProgressIssueStatuses(ctx, cli, result, child, material); err != nil {
+		if err := s.ensureProgressIssueStatuses(ctx, cli, result, child, progressProjection.Feedback); err != nil {
 			return err
 		}
 		if err := ledger.Record(driver.MulticaHubLedgerRecord{
 			Kind:   driver.MulticaHubKindFeedbackCarrier,
-			Source: source,
+			Source: progressProjection.Source,
 			Target: driver.MulticaHubLedgerTarget{
 				RootIssueID:  result.RootIssueID,
 				ChildIssueID: child,
@@ -472,18 +459,6 @@ func assignmentMailboxMaterial(item multicasurface.RuntimeAssignmentItem, result
 		material.RootIssueID = firstNonEmpty(material.RootIssueID, result.RootIssueID)
 	}
 	return material
-}
-
-func progressFeedbackMaterial(item multicasurface.RuntimeProgressItem) multicasurface.ProgressFeedbackMaterial {
-	return multicasurface.ProgressFeedbackMaterial{
-		AssignmentRef: item.AssignmentRef,
-		FeedbackKind:  item.FeedbackKind,
-		Summary:       item.Summary,
-		Result:        item.Result,
-		Blocker:       item.Blocker,
-		ArtifactRefs:  item.ArtifactRefs,
-		EvidenceRefs:  item.EvidenceRefs,
-	}
 }
 
 func findExistingMulticaAssignmentIssue(ctx context.Context, cli driver.MulticaCLI, rootIssueID string, source driver.MulticaHubLedgerSource) (driver.MulticaIssue, bool, error) {
