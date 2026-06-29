@@ -369,6 +369,7 @@ func collectMulticaHubFlowEvidence(ctx context.Context, cli driver.MulticaCLI, o
 	report.ChildMetadata = childMeta
 	if err != nil {
 		addMulticaProdSimAssertion(report, "assignment child issue mailboxes created", false, err.Error())
+		collectMulticaHubFlowPartialSnapshot(ctx, cli, opts, report, children, err)
 		return err
 	}
 	addMulticaProdSimAssertion(report, "assignment child issue mailboxes created", len(children) > 0, fmt.Sprintf("children=%d", len(children)))
@@ -388,6 +389,7 @@ func collectMulticaHubFlowEvidence(ctx context.Context, cli driver.MulticaCLI, o
 	report.ActiveAgents = activeAgents
 	if err != nil {
 		addMulticaProdSimAssertion(report, "hub-flow activates multiple Multica agents", false, err.Error())
+		collectMulticaHubFlowPartialSnapshot(ctx, cli, opts, report, children, err)
 		return err
 	}
 	addMulticaProdSimAssertion(report, "hub-flow activates multiple Multica agents", len(activeAgents) >= opts.MinActiveAgents, fmt.Sprintf("active_agents=%v min=%d", activeAgents, opts.MinActiveAgents))
@@ -424,6 +426,58 @@ func collectMulticaHubFlowEvidence(ctx context.Context, cli driver.MulticaCLI, o
 	visibleOK, visibleDetail := multicaAssignmentChildrenUseStructuredVisibleText(finalChildren)
 	addMulticaProdSimAssertion(report, "assignment child issue visible text is structured", visibleOK, visibleDetail)
 	return nil
+}
+
+func collectMulticaHubFlowPartialSnapshot(ctx context.Context, cli driver.MulticaCLI, opts multicaRuntimeProdSimOptions, report *multicaRuntimeProdSimReport, children []driver.MulticaIssue, reason error) {
+	if len(children) == 0 || strings.TrimSpace(report.Issue.ID) == "" {
+		return
+	}
+	snapshotCtx, cancel := multicaProdSimSnapshotContext(ctx)
+	defer cancel()
+	snapshotCLI := cli
+	if snapshotCLI.Timeout <= 0 || snapshotCLI.Timeout > 5*time.Second {
+		snapshotCLI.Timeout = 5 * time.Second
+	}
+	var runErr error
+	if len(report.ChildRuns) == 0 {
+		childRuns, childMessages, activeAgents, err := waitMulticaChildRunEvidence(snapshotCtx, snapshotCLI, report.Issue.ID, report.Runs, children, 0, opts.Poll, opts.MinActiveAgents)
+		report.ChildRuns = childRuns
+		report.ChildMessages = childMessages
+		report.ChildMessageTypes = multicaChildRunMessageTypeCounts(childMessages)
+		report.ActiveAgents = activeAgents
+		runErr = err
+	}
+	finalRoot, finalChildren, rootComments, childComments, projectionErr := waitMulticaHubProjectionCompletion(snapshotCtx, snapshotCLI, report.Issue.ID, children, 0, opts.Poll)
+	report.FinalRoot = finalRoot
+	report.FinalChildren = finalChildren
+	report.RootComments = rootComments
+	report.ChildComments = childComments
+	captured := len(report.ChildRuns) > 0 || len(report.FinalChildren) > 0 || multicaCommentCount(report.ChildComments) > 0
+	addMulticaProdSimAssertion(report, "hub-flow partial evidence snapshot captured", captured, multicaProdSimPartialSnapshotDetail(reason, runErr, projectionErr, report))
+}
+
+func multicaProdSimSnapshotContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil || ctx.Err() != nil {
+		return context.WithTimeout(context.Background(), 15*time.Second)
+	}
+	return ctx, func() {}
+}
+
+func multicaProdSimPartialSnapshotDetail(reason, runErr, projectionErr error, report *multicaRuntimeProdSimReport) string {
+	parts := []string{fmt.Sprintf("reason=%v", reason)}
+	if runErr != nil {
+		parts = append(parts, "child_runs="+runErr.Error())
+	}
+	if projectionErr != nil {
+		parts = append(parts, "projection="+projectionErr.Error())
+	}
+	parts = append(parts,
+		fmt.Sprintf("child_runs=%d", len(report.ChildRuns)),
+		fmt.Sprintf("active_agents=%v", report.ActiveAgents),
+		fmt.Sprintf("final_children=%d", len(report.FinalChildren)),
+		fmt.Sprintf("comments=%d", multicaCommentCount(report.ChildComments)),
+	)
+	return strings.Join(parts, "; ")
 }
 
 func waitMulticaRuntimeEvidence(ctx context.Context, cli driver.MulticaCLI, issueID string, wait, poll time.Duration) ([]driver.MulticaIssueRun, []driver.MulticaRunMessage, error) {

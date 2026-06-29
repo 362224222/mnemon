@@ -227,6 +227,105 @@ esac
 	}
 }
 
+func TestMulticaRuntimeProdSimHubFlowWritesPartialSnapshotWhenMailboxExpectationMisses(t *testing.T) {
+	tmp := t.TempDir()
+	registryPath := filepath.Join(tmp, "registry.json")
+	var participants []driver.MulticaParticipantRecord
+	for _, role := range []string{"planner", "researcher", "implementer", "reviewer", "integrator"} {
+		participants = append(participants, driver.MulticaParticipantRecord{
+			Principal: role + "@team",
+			AgentName: "mnemon-" + role,
+			AgentID:   "agent-" + role,
+			Role:      role,
+		})
+	}
+	if err := driver.SaveMulticaRegistry(registryPath, driver.MulticaRegistry{
+		SchemaVersion:    1,
+		WorkspaceID:      "ws-1",
+		RuntimeProfileID: "profile-1",
+		RuntimeID:        "runtime-1",
+		Participants:     participants,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	argsPath := filepath.Join(tmp, "args.txt")
+	stdinPath := filepath.Join(tmp, "stdin.txt")
+	bin := filepath.Join(tmp, "multica")
+	script := `#!/usr/bin/env sh
+printf '%s\n' "$*" >> "$MULTICA_ARGS_PATH"
+cat >> "$MULTICA_STDIN_PATH"
+case "$*" in
+  *"issue create"*) printf '{"id":"root-partial","identifier":"TEA-30","title":"Partial hub evidence","description":"Teamwork acceptance","status":"todo"}\n' ;;
+  *"issue get root-partial"*) printf '{"id":"root-partial","identifier":"TEA-30","title":"Partial hub evidence","description":"Teamwork acceptance","status":"in_progress"}\n' ;;
+  *"issue get child-partial"*) printf '%s\n' '{"id":"child-partial","identifier":"TEA-31","title":"TEA-30: routing","description":"## Assignment\n\nCheck routing.\n\n## Context\n\n- Root issue: [TEA-30](mention://issue/root-partial) - Partial hub evidence\n- Assignee: researcher@team (mnemon-researcher)\n- Scope: routing\n\n## Feedback\n\n- Expected feedback: result","status":"done"}' ;;
+  *"issue metadata list root-partial"*) printf '[{"key":"mnemon.hub_backend","value":"multica"},{"key":"mnemon.kind","value":"session_mailbox"},{"key":"mnemon.session_id","value":"multica:session:root-partial"}]\n' ;;
+  *"issue children root-partial"*) printf '{"children":[{"id":"child-partial","identifier":"TEA-31","title":"TEA-30: routing","status":"done","metadata":{"mnemon.hub_backend":"multica","mnemon.kind":"assignment_mailbox","mnemon.root_issue_id":"root-partial","mnemon.session_id":"multica:session:root-partial","mnemon.assignment_id":"asg-partial","mnemon.principal":"researcher@team"}}]}\n' ;;
+  *"issue comment list root-partial"*) printf '[{"id":"root-comment","issue_id":"root-partial","content":"Mnemon update: issue admitted\\n\\nmnemon:event=root"}]\n' ;;
+  *"issue comment list child-partial"*) printf '[{"id":"child-comment","issue_id":"child-partial","content":"Mnemon update: assignment feedback\\n\\nSummary: partial evidence exists.\\n\\nmnemon:event=pg-partial"}]\n' ;;
+  *"issue runs root-partial"*) printf '[{"id":"task-root","issue_id":"root-partial","agent_id":"agent-planner","status":"completed","completed_at":"2026-06-30T09:00:00Z","workspace_id":"ws-1"}]\n' ;;
+  *"issue run-messages task-root"*) printf '[{"task_id":"task-root","issue_id":"root-partial","seq":1,"type":"text","content":"Mnemon Multica runtime handled issue TEA-30. Mnemon ingest: recorded.","created_at":"2026-06-30T09:00:01Z"},{"task_id":"task-root","issue_id":"root-partial","seq":2,"type":"tool_use","content":"mnemond ingest observe","created_at":"2026-06-30T09:00:02Z"},{"task_id":"task-root","issue_id":"root-partial","seq":3,"type":"tool_result","content":"recorded","created_at":"2026-06-30T09:00:03Z"}]\n' ;;
+  *"issue runs child-partial"*) printf '[{"id":"task-child","issue_id":"child-partial","agent_id":"agent-researcher","status":"completed","completed_at":"2026-06-30T09:01:00Z","workspace_id":"ws-1"}]\n' ;;
+  *"issue run-messages task-child"*) printf '[{"task_id":"task-child","issue_id":"child-partial","seq":1,"type":"text","content":"Mnemon Multica runtime handled issue TEA-31. Mnemon assignment mailbox: correlated.","created_at":"2026-06-30T09:01:01Z"}]\n' ;;
+  *) printf '{}\n' ;;
+esac
+`
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MULTICA_ARGS_PATH", argsPath)
+	t.Setenv("MULTICA_STDIN_PATH", stdinPath)
+
+	report, err := runMulticaRuntimeProdSimAcceptance(context.Background(), multicaRuntimeProdSimOptions{
+		RunRoot:           filepath.Join(tmp, ".testdata", "multica-hub-partial"),
+		MulticaBin:        bin,
+		WorkspaceID:       "ws-1",
+		RegistryPath:      registryPath,
+		AssigneePrincipal: "planner@team",
+		TaskCase:          multicaAcceptanceTaskCaseParallelPoc,
+		IssueTitle:        "Partial hub evidence",
+		IssueDescription:  "Teamwork acceptance",
+		Wait:              time.Millisecond,
+		Poll:              time.Millisecond,
+		RequireIngest:     true,
+		RequireHubFlow:    true,
+		MinParticipants:   5,
+		MinActiveAgents:   5,
+	})
+	if err == nil {
+		t.Fatalf("expected mailbox expectation failure: %+v", report)
+	}
+	if report.Status != "failed" || report.ReportPath == "" {
+		t.Fatalf("report mismatch: %+v", report)
+	}
+	if len(report.ChildIssues) != 1 || len(report.ChildRuns["child-partial"]) != 1 || len(report.ChildMessages["child-partial"]) != 1 {
+		t.Fatalf("partial child run evidence missing: %+v", report)
+	}
+	if len(report.FinalChildren) != 1 || multicaCommentCount(report.ChildComments) != 1 {
+		t.Fatalf("partial projection evidence missing: %+v", report)
+	}
+	var snapshotAssertion bool
+	for _, assertion := range report.Assertions {
+		if assertion.Name == "hub-flow partial evidence snapshot captured" {
+			snapshotAssertion = assertion.Passed
+			break
+		}
+	}
+	if !snapshotAssertion {
+		t.Fatalf("missing partial snapshot assertion: %+v", report.Assertions)
+	}
+	data, err := os.ReadFile(report.ReportPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var written multicaRuntimeProdSimReport
+	if err := json.Unmarshal(data, &written); err != nil {
+		t.Fatalf("report JSON: %v\n%s", err, data)
+	}
+	if len(written.ChildRuns["child-partial"]) != 1 || multicaCommentCount(written.ChildComments) != 1 {
+		t.Fatalf("written report missing partial evidence: %+v", written)
+	}
+}
+
 func TestMulticaRuntimeProdSimHubFlowAllowsDeferredRunMessages(t *testing.T) {
 	tmp := t.TempDir()
 	registryPath := filepath.Join(tmp, "registry.json")
