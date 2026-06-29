@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	multicasurface "github.com/mnemon-dev/mnemon/harness/internal/surface/multica"
 )
 
 func TestConfigRoundTrip(t *testing.T) {
@@ -119,4 +121,91 @@ func TestFromLegacyBridgesLocalAndRemoteConfigs(t *testing.T) {
 	if len(cfg.Daemon.DriveSources) != 1 || cfg.Daemon.DriveSources[0] != DriveManagedLocal {
 		t.Fatalf("drive sources mismatch: %+v", cfg.Daemon.DriveSources)
 	}
+}
+
+func TestFromLegacyBridgesMulticaRegistry(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".mnemon", "harness", "local"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	local := `{
+  "schema_version": 1,
+  "principal": "planner@team",
+  "loops": ["assignment"]
+}`
+	if err := os.WriteFile(filepath.Join(root, ".mnemon", "harness", "local", "config.json"), []byte(local), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reg := multicasurface.MulticaRegistry{
+		SchemaVersion:    1,
+		WorkspaceID:      "ws-multica",
+		RuntimeProfileID: "profile-1",
+		RuntimeID:        "runtime-1",
+		Participants: []multicasurface.MulticaParticipantRecord{
+			{
+				Principal: "planner@team",
+				AgentName: "mnemon-planner",
+				AgentID:   "agent-planner",
+				Role:      "planner",
+			},
+			{
+				Principal: "reviewer@team",
+				AgentName: "mnemon-reviewer",
+				AgentID:   "agent-reviewer",
+				Role:      "reviewer",
+			},
+		},
+	}
+	if err := multicasurface.SaveMulticaRegistry(multicasurface.MulticaRegistryPath(root, ""), reg); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, found, err := FromLegacy(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found {
+		t.Fatal("legacy multica registry should be found")
+	}
+	if !cfg.Connections.Multica.Enabled || cfg.Connections.Multica.Workspace != "ws-multica" || cfg.Connections.Multica.RuntimeBinary != "mnemon-multica-runtime" {
+		t.Fatalf("multica bridge mismatch: %+v", cfg.Connections.Multica)
+	}
+	if cfg.Sessions.PrimaryActivationCarrier != ConnectionMultica {
+		t.Fatalf("primary carrier = %q", cfg.Sessions.PrimaryActivationCarrier)
+	}
+	if !stringSliceContains(cfg.Daemon.InteractionWatchers, ConnectionMultica) || !stringSliceContains(cfg.Daemon.ProjectionSurfaces, ConnectionMultica) {
+		t.Fatalf("daemon multica roles missing: %+v", cfg.Daemon)
+	}
+	planner := participantByPrincipal(cfg.Participants, "planner@team")
+	if planner.HostRuntime.Kind != RuntimeKindConfigured || planner.HostRuntime.Mode != RuntimeModeAttached {
+		t.Fatalf("planner host runtime should come from legacy local config: %+v", planner)
+	}
+	if planner.DisplayName != "mnemon-planner" || planner.Role != "planner" {
+		t.Fatalf("planner multica display fields not merged: %+v", planner)
+	}
+	reviewer := participantByPrincipal(cfg.Participants, "reviewer@team")
+	if reviewer.HostRuntime.Kind != RuntimeKindCodex || reviewer.HostRuntime.Mode != RuntimeModeManagedOrHost || reviewer.DisplayName != "mnemon-reviewer" {
+		t.Fatalf("reviewer participant mismatch: %+v", reviewer)
+	}
+	if !stringSliceContains(cfg.Daemon.DriveSources, DriveManagedLocal) {
+		t.Fatalf("drive source missing: %+v", cfg.Daemon.DriveSources)
+	}
+}
+
+func participantByPrincipal(participants []Participant, principal string) Participant {
+	for _, participant := range participants {
+		if participant.Principal == principal {
+			return participant
+		}
+	}
+	return Participant{}
+}
+
+func stringSliceContains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }

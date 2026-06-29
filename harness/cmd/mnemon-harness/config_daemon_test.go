@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/productconfig"
+	multicasurface "github.com/mnemon-dev/mnemon/harness/internal/surface/multica"
 )
 
 func TestConfigValidateReadsProductConfig(t *testing.T) {
@@ -30,6 +31,34 @@ func TestConfigValidateReadsProductConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := out.String(); !strings.Contains(got, "Harness config: valid") || !strings.Contains(got, "Participants: 1") {
+		t.Fatalf("unexpected config validate output:\n%s", got)
+	}
+}
+
+func TestConfigValidateReadsLegacyMulticaRegistry(t *testing.T) {
+	root := t.TempDir()
+	reg := multicasurface.MulticaRegistry{
+		SchemaVersion: 1,
+		WorkspaceID:   "ws-multica",
+		Participants: []multicasurface.MulticaParticipantRecord{{
+			Principal: "planner@team",
+			AgentName: "mnemon-planner",
+			AgentID:   "agent-planner",
+			Role:      "planner",
+		}},
+	}
+	if err := multicasurface.SaveMulticaRegistry(multicasurface.MulticaRegistryPath(root, ""), reg); err != nil {
+		t.Fatal(err)
+	}
+	oldRoot, oldPath := configRoot, configPath
+	configRoot, configPath = root, ""
+	t.Cleanup(func() { configRoot, configPath = oldRoot, oldPath })
+
+	cmd, out := testCommand()
+	if err := runConfigValidate(cmd, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := out.String(); !strings.Contains(got, "Harness config: valid legacy bridge") || !strings.Contains(got, "Participants: 1") {
 		t.Fatalf("unexpected config validate output:\n%s", got)
 	}
 }

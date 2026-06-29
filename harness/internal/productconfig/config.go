@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	multicasurface "github.com/mnemon-dev/mnemon/harness/internal/surface/multica"
 )
 
 const (
@@ -304,6 +306,16 @@ func FromLegacy(root string) (Config, bool, error) {
 			}
 		}
 	}
+	multicaRegistry, ok, err := loadLegacyMulticaRegistry(root)
+	if err != nil {
+		return Config{}, false, err
+	}
+	if ok {
+		found = true
+		if err := bridgeMulticaRegistry(&cfg, multicaRegistry); err != nil {
+			return Config{}, false, err
+		}
+	}
 	if cfg.Connections.Mnemonhub.Enabled {
 		cfg.Daemon.InteractionWatchers = appendCarrier(cfg.Daemon.InteractionWatchers, ConnectionMnemonhub)
 		cfg.Daemon.ProjectionSurfaces = appendCarrier(cfg.Daemon.ProjectionSurfaces, ConnectionMnemonhub)
@@ -319,6 +331,74 @@ func FromLegacy(root string) (Config, bool, error) {
 		return Config{}, false, err
 	}
 	return cfg, found, nil
+}
+
+func bridgeMulticaRegistry(cfg *Config, reg multicasurface.MulticaRegistry) error {
+	cfg.Connections.Multica.Enabled = true
+	if strings.TrimSpace(cfg.Connections.Multica.Workspace) == "" {
+		cfg.Connections.Multica.Workspace = strings.TrimSpace(reg.WorkspaceID)
+	}
+	if strings.TrimSpace(cfg.Connections.Multica.RuntimeBinary) == "" {
+		cfg.Connections.Multica.RuntimeBinary = "mnemon-multica-runtime"
+	}
+	cfg.Daemon.InteractionWatchers = appendCarrier(cfg.Daemon.InteractionWatchers, ConnectionMultica)
+	cfg.Daemon.ProjectionSurfaces = appendCarrier(cfg.Daemon.ProjectionSurfaces, ConnectionMultica)
+	if strings.TrimSpace(cfg.Sessions.PrimaryActivationCarrier) == "" {
+		cfg.Sessions.PrimaryActivationCarrier = ConnectionMultica
+	}
+	for _, record := range reg.Participants {
+		participant, err := participantFromMulticaRegistryRecord(record)
+		if err != nil {
+			return err
+		}
+		cfg.Participants = mergeParticipant(cfg.Participants, participant)
+	}
+	if len(cfg.Participants) > 0 {
+		cfg.Daemon.DriveSources = appendCarrier(cfg.Daemon.DriveSources, DriveManagedLocal)
+	}
+	return nil
+}
+
+func participantFromMulticaRegistryRecord(record multicasurface.MulticaParticipantRecord) (Participant, error) {
+	principal := strings.TrimSpace(record.Principal)
+	if principal == "" {
+		return Participant{}, fmt.Errorf("multica registry participant principal is required")
+	}
+	displayName := strings.TrimSpace(record.AgentName)
+	if displayName == "" {
+		displayName = strings.TrimSpace(record.AgentID)
+	}
+	return Participant{
+		Principal:   principal,
+		DisplayName: displayName,
+		Role:        strings.TrimSpace(record.Role),
+		HostRuntime: HostRuntime{
+			Kind: RuntimeKindCodex,
+			Mode: RuntimeModeManagedOrHost,
+		},
+	}, nil
+}
+
+func mergeParticipant(participants []Participant, next Participant) []Participant {
+	for i := range participants {
+		if participants[i].Principal != next.Principal {
+			continue
+		}
+		if strings.TrimSpace(participants[i].DisplayName) == "" {
+			participants[i].DisplayName = next.DisplayName
+		}
+		if strings.TrimSpace(participants[i].Role) == "" {
+			participants[i].Role = next.Role
+		}
+		if strings.TrimSpace(participants[i].HostRuntime.Kind) == "" {
+			participants[i].HostRuntime.Kind = next.HostRuntime.Kind
+		}
+		if strings.TrimSpace(participants[i].HostRuntime.Mode) == "" {
+			participants[i].HostRuntime.Mode = next.HostRuntime.Mode
+		}
+		return participants
+	}
+	return append(participants, next)
 }
 
 func loadLegacyLocal(root string) (legacyLocalConfig, bool, error) {
@@ -357,6 +437,10 @@ func loadLegacyRemotes(root string) (legacyRemotesDoc, bool, error) {
 		return legacyRemotesDoc{}, false, fmt.Errorf("legacy remote config schema_version %d unsupported (want 1)", doc.SchemaVersion)
 	}
 	return doc, true, nil
+}
+
+func loadLegacyMulticaRegistry(root string) (multicasurface.MulticaRegistry, bool, error) {
+	return multicasurface.LoadMulticaRegistry(multicasurface.MulticaRegistryPath(root, ""))
 }
 
 func appendCarrier(values []string, value string) []string {
