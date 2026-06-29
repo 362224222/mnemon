@@ -656,6 +656,7 @@ func TestRuntimeWritesAssignmentMailboxChildIssueFromView(t *testing.T) {
 	tmp := t.TempDir()
 	argsPath := filepath.Join(tmp, "multica.args")
 	commentPath := filepath.Join(tmp, "comment.txt")
+	childCommentPath := filepath.Join(tmp, "child-comment.txt")
 	createDescriptionPath := filepath.Join(tmp, "child-description.txt")
 	bin := filepath.Join(tmp, "multica")
 	script := `#!/usr/bin/env sh
@@ -667,6 +668,8 @@ case "$*" in
   *"issue create"*) cat > "$MULTICA_CREATE_DESCRIPTION_PATH"; printf '{"id":"child-2","identifier":"TEA-11","title":"Mnemon assignment asg-writer","status":"todo","metadata":{}}\n' ;;
   *"issue metadata set child-2"*) printf '{}\n' ;;
   *"issue comment add root-2"*) cat > "$MULTICA_COMMENT_PATH"; printf '{"id":"comment-root-2","issue_id":"root-2","content":"ok","type":"comment"}\n' ;;
+  *"issue comment add child-2"*) cat > "$MULTICA_CHILD_COMMENT_PATH"; printf '{"id":"comment-child-2","issue_id":"child-2","content":"ok","type":"comment"}\n' ;;
+  *"issue status child-2"*) printf '{"id":"child-2","status":"in_progress"}\n' ;;
   *) printf '{}\n' ;;
 esac
 `
@@ -739,6 +742,18 @@ esac
 							"evidence_refs": []any{"multica:issue:root-2"},
 						},
 					}}},
+				}, {
+					Ref: contract.ResourceRef{Kind: "progress_digest", ID: "project"},
+					Fields: map[string]any{"items": []any{map[string]any{
+						"id":             "pg-writer",
+						"event_id":       "pg-writer",
+						"ingest_seq":     float64(33),
+						"actor":          "worker@team",
+						"assignment_ref": "asg-writer",
+						"feedback_kind":  "progress",
+						"summary":        "Checked release notes against the public changelog.",
+						"artifact_refs":  []any{"multica:issue:root-2"},
+					}}},
 				}},
 			})
 		default:
@@ -760,6 +775,7 @@ esac
 			"MNEMON_MULTICA_HUB_LEDGER="+filepath.Join(tmp, "hub-ledger.jsonl"),
 			"MULTICA_ARGS_PATH="+argsPath,
 			"MULTICA_COMMENT_PATH="+commentPath,
+			"MULTICA_CHILD_COMMENT_PATH="+childCommentPath,
 			"MULTICA_CREATE_DESCRIPTION_PATH="+createDescriptionPath,
 			"MULTICA_TASK_ID=task-root-2",
 			"MULTICA_AGENT_ID=agent-planner",
@@ -772,7 +788,7 @@ esac
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "Multica hub write: created child_issues=1") {
+	if !strings.Contains(out.String(), "Multica hub write: updated child_issues=1 feedback_comments=1") {
 		t.Fatalf("runtime output missing hub write evidence:\n%s", out.String())
 	}
 	args := mustReadRuntimeTestFile(t, argsPath)
@@ -804,8 +820,10 @@ esac
 	if supplementalIdx < 0 || !(assignIdx < supplementalIdx) {
 		t.Fatalf("non-dispatch metadata must not block child assignment; args:\n%s", args)
 	}
-	if strings.Contains(args, "issue status child-2 in_progress") {
-		t.Fatalf("assignment mailbox should be created in progress without a separate status call:\n%s", args)
+	childCommentIdx := strings.Index(args, "issue comment add child-2")
+	childStatusIdx := strings.Index(args, "issue status child-2 in_progress")
+	if childCommentIdx < 0 || childStatusIdx < 0 || !(childCommentIdx < childStatusIdx) {
+		t.Fatalf("progress feedback should comment before updating child status; args:\n%s", args)
 	}
 	description := mustReadRuntimeTestFile(t, createDescriptionPath)
 	for _, want := range []string{
@@ -829,8 +847,9 @@ esac
 	}
 	comment := mustReadRuntimeTestFile(t, commentPath)
 	for _, want := range []string{
-		"Projection status: updates created",
+		"Projection status: updates synced",
 		"Assignments created: 1",
+		"Feedback comments added: 1",
 	} {
 		if !strings.Contains(comment, want) {
 			t.Fatalf("root comment missing %q:\n%s", want, comment)
@@ -839,6 +858,27 @@ esac
 	for _, blocked := range []string{"Multica hub write", "child_issues", "feedback_comments"} {
 		if strings.Contains(comment, blocked) {
 			t.Fatalf("root comment must not expose machine field %q:\n%s", blocked, comment)
+		}
+	}
+	childComment := mustReadRuntimeTestFile(t, childCommentPath)
+	for _, want := range []string{
+		"Mnemon update: assignment feedback",
+		"## Feedback",
+		"Status: progress update",
+		"## Summary",
+		"Checked release notes against the public changelog.",
+		"mnemon:event=pg-writer",
+		"mnemon:type=progress_digest.accepted",
+		"mnemon:session=multica:session:root-2",
+		"mnemon:assignment=asg-writer",
+	} {
+		if !strings.Contains(childComment, want) {
+			t.Fatalf("child comment missing %q:\n%s", want, childComment)
+		}
+	}
+	for _, blocked := range []string{"Assignment: `asg-writer`", "Feedback: `progress`", "assignment_ref"} {
+		if strings.Contains(childComment, blocked) {
+			t.Fatalf("child comment must not expose machine field %q:\n%s", blocked, childComment)
 		}
 	}
 }
