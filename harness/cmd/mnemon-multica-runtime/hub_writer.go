@@ -45,9 +45,9 @@ func (s *runtimeRPCState) writeMulticaHubArtifacts(ctx context.Context, cli driv
 		result.HubWriteErr = fmt.Errorf("pull teamwork view for Multica hub write: %w", err)
 		return
 	}
-	ledger := driver.NewFileMulticaHubLedger(runtimeMulticaHubLedgerPath(s.Env, s.CWD))
+	ledger := driver.NewFileMulticaHubLedger(multicasurface.RuntimeMulticaHubLedgerPath(s.Env, s.CWD))
 	if result.HubKind == driver.MulticaHubKindSession {
-		reg, ok, err := runtimeMulticaRegistry(s.Env, s.CWD)
+		reg, ok, err := multicasurface.RuntimeMulticaRegistry(s.Env, s.CWD)
 		if err != nil {
 			result.HubWriteStatus = "failed"
 			result.HubWriteErr = err
@@ -98,7 +98,7 @@ func (s *runtimeRPCState) writeAssignmentMailboxes(ctx context.Context, cli driv
 		if !runtimeAssignmentMatchesCurrentMulticaScope(item, result) {
 			continue
 		}
-		participant, ok := multicaParticipantForPrincipal(reg, item.Assignee)
+		participant, ok := multicasurface.MulticaParticipantForPrincipal(reg, item.Assignee)
 		if !ok || strings.TrimSpace(participant.AgentID) == "" {
 			return fmt.Errorf("no Multica agent mapping for assignment assignee %q", item.Assignee)
 		}
@@ -393,45 +393,6 @@ func runtimeMulticaScopeMaterial(result *runtimeImportResult) multicasurface.Run
 		CorrelationID: result.CorrelationID,
 		TaskID:        result.TaskID,
 	}
-}
-
-func runtimeMulticaRegistry(env []string, cwd string) (driver.MulticaRegistry, bool, error) {
-	paths := []string{}
-	if explicit := multicasurface.RuntimeEnvValue(env, "MNEMON_MULTICA_REGISTRY"); explicit != "" {
-		paths = append(paths, explicit)
-	}
-	if workspace := multicasurface.RuntimeEnvValue(env, "MNEMON_MANAGED_WORKSPACE"); workspace != "" {
-		paths = append(paths, driver.MulticaRegistryPath(workspace, ""))
-	}
-	if strings.TrimSpace(cwd) != "" {
-		paths = append(paths, driver.MulticaRegistryPath(cwd, ""))
-	}
-	for _, path := range paths {
-		reg, ok, err := driver.LoadMulticaRegistry(path)
-		if err != nil || ok {
-			return reg, ok, err
-		}
-	}
-	return driver.MulticaRegistry{}, false, nil
-}
-
-func runtimeMulticaHubLedgerPath(env []string, cwd string) string {
-	if explicit := multicasurface.RuntimeEnvValue(env, "MNEMON_MULTICA_HUB_LEDGER"); explicit != "" {
-		return driver.MulticaHubLedgerPath("", explicit)
-	}
-	if workspace := multicasurface.RuntimeEnvValue(env, "MNEMON_MANAGED_WORKSPACE"); workspace != "" {
-		return driver.MulticaHubLedgerPath(workspace, "")
-	}
-	return driver.MulticaHubLedgerPath(cwd, "")
-}
-
-func multicaParticipantForPrincipal(reg driver.MulticaRegistry, principal string) (driver.MulticaParticipantRecord, bool) {
-	for _, participant := range reg.Participants {
-		if strings.TrimSpace(participant.Principal) == strings.TrimSpace(principal) {
-			return participant, true
-		}
-	}
-	return driver.MulticaParticipantRecord{}, false
 }
 
 func runtimeItemAfterRootIngest(ingestSeq int64, result *runtimeImportResult) bool {

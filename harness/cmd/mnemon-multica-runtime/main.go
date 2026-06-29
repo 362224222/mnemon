@@ -846,7 +846,7 @@ func (runtimeNoopTurnClient) StartTurn(_ context.Context, query string) (driver.
 func resolveRuntimePrincipal(env []string, cwd string) string {
 	agentID := multicasurface.RuntimeEnvValue(env, "MULTICA_AGENT_ID")
 	agentName := multicasurface.RuntimeEnvValue(env, "MULTICA_AGENT_NAME")
-	if principal := principalFromRegistry(env, cwd, agentID, agentName); principal != "" {
+	if principal := multicasurface.RuntimeMulticaRegistryPrincipal(env, cwd, agentID, agentName); principal != "" {
 		return principal
 	}
 	if principal := multicasurface.RuntimeEnvValue(env, "MNEMON_CONTROL_PRINCIPAL"); principal != "" {
@@ -856,31 +856,6 @@ func resolveRuntimePrincipal(env []string, cwd string) string {
 		return sanitizePrincipal(agentName) + "@multica"
 	}
 	return "multica@runtime"
-}
-
-func principalFromRegistry(env []string, cwd, agentID, agentName string) string {
-	paths := []string{}
-	if explicit := multicasurface.RuntimeEnvValue(env, "MNEMON_MULTICA_REGISTRY"); explicit != "" {
-		paths = append(paths, explicit)
-	}
-	if strings.TrimSpace(cwd) != "" {
-		paths = append(paths, driver.MulticaRegistryPath(cwd, ""))
-	}
-	for _, path := range paths {
-		reg, ok, err := driver.LoadMulticaRegistry(path)
-		if err != nil || !ok {
-			continue
-		}
-		for _, participant := range reg.Participants {
-			if agentID != "" && participant.AgentID == agentID && strings.TrimSpace(participant.Principal) != "" {
-				return strings.TrimSpace(participant.Principal)
-			}
-			if agentName != "" && participant.AgentName == agentName && strings.TrimSpace(participant.Principal) != "" {
-				return strings.TrimSpace(participant.Principal)
-			}
-		}
-	}
-	return ""
 }
 
 func runtimeResultSummary(result runtimeImportResult) multicasurface.RuntimeResultSummary {

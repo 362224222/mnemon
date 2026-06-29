@@ -54,6 +54,52 @@ func RuntimeManagedLedgerPath(env []string, workspace string) string {
 	return filepath.Join(root, ".mnemon", "harness", "local", "managed-agent", "wake-ledger.jsonl")
 }
 
+func RuntimeMulticaHubLedgerPath(env []string, cwd string) string {
+	if explicit := RuntimeEnvValue(env, "MNEMON_MULTICA_HUB_LEDGER"); explicit != "" {
+		return MulticaHubLedgerPath("", explicit)
+	}
+	if workspace := RuntimeEnvValue(env, "MNEMON_MANAGED_WORKSPACE"); workspace != "" {
+		return MulticaHubLedgerPath(workspace, "")
+	}
+	return MulticaHubLedgerPath(cwd, "")
+}
+
+func RuntimeMulticaRegistryPaths(env []string, cwd string) []string {
+	paths := []string{}
+	add := func(path string) {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			return
+		}
+		for _, existing := range paths {
+			if existing == path {
+				return
+			}
+		}
+		paths = append(paths, path)
+	}
+	if explicit := RuntimeEnvValue(env, "MNEMON_MULTICA_REGISTRY"); explicit != "" {
+		add(explicit)
+	}
+	if workspace := RuntimeEnvValue(env, "MNEMON_MANAGED_WORKSPACE"); workspace != "" {
+		add(MulticaRegistryPath(workspace, ""))
+	}
+	if strings.TrimSpace(cwd) != "" {
+		add(MulticaRegistryPath(cwd, ""))
+	}
+	return paths
+}
+
+func RuntimeMulticaRegistry(env []string, cwd string) (MulticaRegistry, bool, error) {
+	for _, path := range RuntimeMulticaRegistryPaths(env, cwd) {
+		reg, ok, err := LoadMulticaRegistry(path)
+		if err != nil || ok {
+			return reg, ok, err
+		}
+	}
+	return MulticaRegistry{}, false, nil
+}
+
 func RuntimeManagedWakeScopeID(material RuntimeManagedWakeMaterial) string {
 	return firstNonEmptyRuntimeString(material.AssignmentID, material.RootIssueID, material.IssueID)
 }

@@ -21,25 +21,6 @@ import (
 	multicasurface "github.com/mnemon-dev/mnemon/harness/internal/surface/multica"
 )
 
-func TestRuntimeMulticaHubLedgerPathDefaultsToManagedWorkspace(t *testing.T) {
-	tmp := t.TempDir()
-	workspace := filepath.Join(tmp, "managed-workspace")
-	cwd := filepath.Join(tmp, "task-workdir")
-	got := runtimeMulticaHubLedgerPath([]string{"MNEMON_MANAGED_WORKSPACE=" + workspace}, cwd)
-	want := filepath.Join(workspace, driver.MulticaDefaultHubLedgerRelPath)
-	if got != want {
-		t.Fatalf("hub ledger path = %q, want %q", got, want)
-	}
-	explicit := filepath.Join(tmp, "explicit.jsonl")
-	got = runtimeMulticaHubLedgerPath([]string{
-		"MNEMON_MANAGED_WORKSPACE=" + workspace,
-		"MNEMON_MULTICA_HUB_LEDGER=" + explicit,
-	}, cwd)
-	if got != explicit {
-		t.Fatalf("explicit hub ledger path = %q, want %q", got, explicit)
-	}
-}
-
 func TestMergeRuntimeHubProjectionDeltasPreservesEarlyDispatchCounts(t *testing.T) {
 	result := runtimeImportResult{HubWriteStatus: "noop"}
 	mergeRuntimeHubProjectionDeltas(&result, []runtimeHubProjectionDelta{

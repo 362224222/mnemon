@@ -58,3 +58,39 @@ func TestRegistryRoundTrip(t *testing.T) {
 		t.Fatalf("registry mismatch: %+v", got)
 	}
 }
+
+func TestMulticaParticipantLookups(t *testing.T) {
+	reg := MulticaRegistry{Participants: []MulticaParticipantRecord{{
+		Principal: "planner@team",
+		AgentName: "mnemon-planner",
+		AgentID:   "agent-planner",
+	}}}
+	participant, ok := MulticaParticipantForPrincipal(reg, " planner@team ")
+	if !ok || participant.AgentID != "agent-planner" {
+		t.Fatalf("participant lookup = ok:%v %+v", ok, participant)
+	}
+	if got := MulticaPrincipalForAgent(reg, " agent-planner ", ""); got != "planner@team" {
+		t.Fatalf("principal by agent id = %q", got)
+	}
+	if got := MulticaPrincipalForAgent(reg, "", " mnemon-planner "); got != "planner@team" {
+		t.Fatalf("principal by agent name = %q", got)
+	}
+}
+
+func TestRuntimeMulticaRegistryPrincipalUsesManagedWorkspace(t *testing.T) {
+	tmp := t.TempDir()
+	workspace := filepath.Join(tmp, "managed-workspace")
+	if err := SaveMulticaRegistry(MulticaRegistryPath(workspace, ""), MulticaRegistry{
+		Participants: []MulticaParticipantRecord{{
+			Principal: "reviewer@team",
+			AgentName: "mnemon-reviewer",
+			AgentID:   "agent-reviewer",
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got := RuntimeMulticaRegistryPrincipal([]string{"MNEMON_MANAGED_WORKSPACE=" + workspace}, tmp, "agent-reviewer", "")
+	if got != "reviewer@team" {
+		t.Fatalf("runtime registry principal = %q", got)
+	}
+}

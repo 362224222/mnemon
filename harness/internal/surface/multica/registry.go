@@ -92,3 +92,44 @@ func UpsertMulticaParticipantRecord(records []MulticaParticipantRecord, next Mul
 	}
 	return append(records, next)
 }
+
+func MulticaParticipantForPrincipal(reg MulticaRegistry, principal string) (MulticaParticipantRecord, bool) {
+	principal = strings.TrimSpace(principal)
+	for _, participant := range reg.Participants {
+		if strings.TrimSpace(participant.Principal) == principal {
+			return participant, true
+		}
+	}
+	return MulticaParticipantRecord{}, false
+}
+
+func MulticaPrincipalForAgent(reg MulticaRegistry, agentID, agentName string) string {
+	agentID = strings.TrimSpace(agentID)
+	agentName = strings.TrimSpace(agentName)
+	for _, participant := range reg.Participants {
+		principal := strings.TrimSpace(participant.Principal)
+		if principal == "" {
+			continue
+		}
+		if agentID != "" && strings.TrimSpace(participant.AgentID) == agentID {
+			return principal
+		}
+		if agentName != "" && strings.TrimSpace(participant.AgentName) == agentName {
+			return principal
+		}
+	}
+	return ""
+}
+
+func RuntimeMulticaRegistryPrincipal(env []string, cwd, agentID, agentName string) string {
+	for _, path := range RuntimeMulticaRegistryPaths(env, cwd) {
+		reg, ok, err := LoadMulticaRegistry(path)
+		if err != nil || !ok {
+			continue
+		}
+		if principal := MulticaPrincipalForAgent(reg, agentID, agentName); principal != "" {
+			return principal
+		}
+	}
+	return ""
+}

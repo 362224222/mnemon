@@ -56,6 +56,72 @@ func TestRuntimeManagedLedgerPath(t *testing.T) {
 	}
 }
 
+func TestRuntimeMulticaHubLedgerPath(t *testing.T) {
+	tmp := t.TempDir()
+	workspace := filepath.Join(tmp, "managed-workspace")
+	cwd := filepath.Join(tmp, "task-workdir")
+	got := RuntimeMulticaHubLedgerPath([]string{"MNEMON_MANAGED_WORKSPACE=" + workspace}, cwd)
+	want := filepath.Join(workspace, MulticaDefaultHubLedgerRelPath)
+	if got != want {
+		t.Fatalf("hub ledger path = %q, want %q", got, want)
+	}
+	explicit := filepath.Join(tmp, "explicit.jsonl")
+	got = RuntimeMulticaHubLedgerPath([]string{
+		"MNEMON_MANAGED_WORKSPACE=" + workspace,
+		"MNEMON_MULTICA_HUB_LEDGER=" + explicit,
+	}, cwd)
+	if got != explicit {
+		t.Fatalf("explicit hub ledger path = %q, want %q", got, explicit)
+	}
+}
+
+func TestRuntimeMulticaRegistryPaths(t *testing.T) {
+	tmp := t.TempDir()
+	explicit := filepath.Join(tmp, "explicit-registry.json")
+	workspace := filepath.Join(tmp, "managed-workspace")
+	cwd := filepath.Join(tmp, "task-workdir")
+	got := RuntimeMulticaRegistryPaths([]string{
+		"MNEMON_MULTICA_REGISTRY=" + explicit,
+		"MNEMON_MANAGED_WORKSPACE=" + workspace,
+	}, cwd)
+	want := []string{
+		explicit,
+		MulticaRegistryPath(workspace, ""),
+		MulticaRegistryPath(cwd, ""),
+	}
+	if len(got) != len(want) {
+		t.Fatalf("registry paths len = %d, want %d: %+v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("registry path %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestRuntimeMulticaRegistryLoadsManagedWorkspace(t *testing.T) {
+	tmp := t.TempDir()
+	workspace := filepath.Join(tmp, "managed-workspace")
+	path := MulticaRegistryPath(workspace, "")
+	if err := SaveMulticaRegistry(path, MulticaRegistry{
+		WorkspaceID: "ws-1",
+		Participants: []MulticaParticipantRecord{{
+			Principal: "planner@team",
+			AgentName: "mnemon-planner",
+			AgentID:   "agent-planner",
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reg, ok, err := RuntimeMulticaRegistry([]string{"MNEMON_MANAGED_WORKSPACE=" + workspace}, tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || reg.WorkspaceID != "ws-1" {
+		t.Fatalf("registry = ok:%v %+v", ok, reg)
+	}
+}
+
 func TestRuntimeManagedWakeScopeIDPrefersAssignmentThenRoot(t *testing.T) {
 	if got := RuntimeManagedWakeScopeID(RuntimeManagedWakeMaterial{
 		AssignmentID: "asg-1",
