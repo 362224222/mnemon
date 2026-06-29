@@ -300,7 +300,7 @@ func (s *runtimeRPCState) nextItemID(prefix string) string {
 
 func (s *runtimeRPCState) runTurn(input multicasurface.RuntimeInput, progress runtimeProgressSink) string {
 	result := s.importIssue(input, progress)
-	return formatRuntimeFinalAnswer(result)
+	return multicasurface.FormatRuntimeFinalAnswer(runtimeResultSummary(result))
 }
 
 func (s *runtimeRPCState) importIssue(input multicasurface.RuntimeInput, progress runtimeProgressSink) runtimeImportResult {
@@ -311,7 +311,7 @@ func (s *runtimeRPCState) importIssue(input multicasurface.RuntimeInput, progres
 		Principal: resolveRuntimePrincipal(s.Env, s.CWD),
 		TaskID:    taskID,
 	}
-	emitRuntimeProgress(progress, "Mnemon runtime accepted the Multica task for "+displayRuntimePrincipal(result.Principal)+".")
+	emitRuntimeProgress(progress, "Mnemon runtime accepted the Multica task for "+multicasurface.RuntimePrincipalLabel(result.Principal)+".")
 	if issueID == "" {
 		result.Status = "skipped"
 		result.Err = fmt.Errorf("no Multica issue id was available in task environment or runtime input")
@@ -434,15 +434,15 @@ func (s *runtimeRPCState) importIssue(input multicasurface.RuntimeInput, progres
 	emitRuntimeProgress(progress, fmt.Sprintf("Mnemon recorded the issue observation at seq=%d.", rec.Seq))
 	emitRuntimeProgress(progress, "Waking the managed local agent with [mnemon:wake].")
 	earlyHubDeltas := s.wakeManagedAgentWithHubProjection(multicaCtx, cli, client, issue, &result, progress)
-	emitRuntimeCommand(progress, "mnemond managed wake --principal "+result.Principal+" [mnemon:wake]", runtimeWakeProgress(result), runtimeExitCode(result.WakeErr))
-	emitRuntimeProgress(progress, runtimeWakeProgress(result))
+	emitRuntimeCommand(progress, "mnemond managed wake --principal "+result.Principal+" [mnemon:wake]", multicasurface.RuntimeWakeProgress(runtimeResultSummary(result)), runtimeExitCode(result.WakeErr))
+	emitRuntimeProgress(progress, multicasurface.RuntimeWakeProgress(runtimeResultSummary(result)))
 	s.writeMulticaHubArtifacts(multicaCtx, cli, client, issue, &result)
 	mergeRuntimeHubProjectionDeltas(&result, earlyHubDeltas)
-	emitRuntimeCommand(progress, "mnemon multica hub project --issue "+issue.ID, runtimeHubWriteProgress(result), runtimeExitCode(result.HubWriteErr))
-	emitRuntimeProgress(progress, runtimeHubWriteProgress(result))
+	emitRuntimeCommand(progress, "mnemon multica hub project --issue "+issue.ID, multicasurface.RuntimeHubWriteProgress(runtimeResultSummary(result)), runtimeExitCode(result.HubWriteErr))
+	emitRuntimeProgress(progress, multicasurface.RuntimeHubWriteProgress(runtimeResultSummary(result)))
 	s.projectImportComment(multicaCtx, cli, issue, draft.ExternalID, draft.EventType, &result)
-	emitRuntimeCommand(progress, "multica issue comment add "+issue.ID, runtimeProjectionProgress(result), runtimeExitCode(result.ProjectionErr))
-	emitRuntimeProgress(progress, runtimeProjectionProgress(result))
+	emitRuntimeCommand(progress, "multica issue comment add "+issue.ID, multicasurface.RuntimeProjectionProgress(runtimeResultSummary(result)), runtimeExitCode(result.ProjectionErr))
+	emitRuntimeProgress(progress, multicasurface.RuntimeProjectionProgress(runtimeResultSummary(result)))
 	return result
 }
 
@@ -471,7 +471,7 @@ func (s *runtimeRPCState) correlateAssignmentMailbox(ctx context.Context, cli dr
 		result.HubMetadata.EventID,
 		string(eventmodel.Subject("assignment", result.AssignmentID)),
 	)
-	correlationProgress := runtimeAssignmentCorrelationProgress(*result)
+	correlationProgress := multicasurface.RuntimeAssignmentCorrelationProgress()
 	emitRuntimeCommand(progress, "mnemon multica assignment correlate --issue "+issue.ID, correlationProgress, 0)
 	emitRuntimeProgress(progress, correlationProgress)
 	addr := strings.TrimSpace(multicasurface.RuntimeEnvValue(s.Env, "MNEMON_CONTROL_ADDR"))
@@ -490,21 +490,17 @@ func (s *runtimeRPCState) correlateAssignmentMailbox(ctx context.Context, cli dr
 		} else {
 			emitRuntimeProgress(progress, "Waking assigned local agent with [mnemon:wake].")
 			s.wakeManagedAgent(result, progress)
-			emitRuntimeCommand(progress, "mnemond managed wake --principal "+result.Principal+" [mnemon:wake]", runtimeWakeProgress(*result), runtimeExitCode(result.WakeErr))
-			emitRuntimeProgress(progress, runtimeWakeProgress(*result))
+			emitRuntimeCommand(progress, "mnemond managed wake --principal "+result.Principal+" [mnemon:wake]", multicasurface.RuntimeWakeProgress(runtimeResultSummary(*result)), runtimeExitCode(result.WakeErr))
+			emitRuntimeProgress(progress, multicasurface.RuntimeWakeProgress(runtimeResultSummary(*result)))
 			s.writeMulticaHubArtifacts(ctx, cli, client, issue, result)
-			emitRuntimeCommand(progress, "mnemon multica hub project --issue "+issue.ID, runtimeHubWriteProgress(*result), runtimeExitCode(result.HubWriteErr))
-			emitRuntimeProgress(progress, runtimeHubWriteProgress(*result))
+			emitRuntimeCommand(progress, "mnemon multica hub project --issue "+issue.ID, multicasurface.RuntimeHubWriteProgress(runtimeResultSummary(*result)), runtimeExitCode(result.HubWriteErr))
+			emitRuntimeProgress(progress, multicasurface.RuntimeHubWriteProgress(runtimeResultSummary(*result)))
 		}
 	}
 	s.projectImportComment(ctx, cli, issue, multicasurface.AssignmentMailboxMarker(result.HubMetadata, result.IssueID), result.HubMetadata.EventType, result)
-	emitRuntimeCommand(progress, "multica issue comment add "+issue.ID, runtimeProjectionProgress(*result), runtimeExitCode(result.ProjectionErr))
-	emitRuntimeProgress(progress, runtimeProjectionProgress(*result))
+	emitRuntimeCommand(progress, "multica issue comment add "+issue.ID, multicasurface.RuntimeProjectionProgress(runtimeResultSummary(*result)), runtimeExitCode(result.ProjectionErr))
+	emitRuntimeProgress(progress, multicasurface.RuntimeProjectionProgress(runtimeResultSummary(*result)))
 	return *result
-}
-
-func runtimeAssignmentCorrelationProgress(result runtimeImportResult) string {
-	return "Mnemon assignment mailbox: correlated."
 }
 
 func applyMulticaHubMetadata(result *runtimeImportResult, meta driver.MulticaHubMetadata) {
@@ -897,115 +893,34 @@ func principalFromRegistry(env []string, cwd, agentID, agentName string) string 
 	return ""
 }
 
-func formatRuntimeFinalAnswer(result runtimeImportResult) string {
-	var b strings.Builder
-	if result.IssueID == "" {
-		b.WriteString("Mnemon Multica runtime did not receive a Multica issue id.")
-	} else {
-		label := strings.TrimSpace(result.Identifier)
-		if label == "" {
-			label = result.IssueID
-		}
-		b.WriteString("Mnemon Multica runtime handled issue ")
-		b.WriteString(label)
-		if title := strings.TrimSpace(result.Title); title != "" {
-			b.WriteString(" (")
-			b.WriteString(title)
-			b.WriteString(")")
-		}
-		b.WriteString(".")
+func runtimeResultSummary(result runtimeImportResult) multicasurface.RuntimeResultSummary {
+	summary := multicasurface.RuntimeResultSummary{
+		IssueID:             result.IssueID,
+		Identifier:          result.Identifier,
+		Title:               result.Title,
+		Principal:           result.Principal,
+		Status:              result.Status,
+		ProjectionStatus:    result.ProjectionStatus,
+		ProjectionCommentID: result.ProjectionCommentID,
+		WakeStatus:          result.WakeStatus,
+		WakeTurnID:          result.WakeTurnID,
+		HubWriteStatus:      result.HubWriteStatus,
+		HubChildIssues:      result.HubChildIssues,
+		HubFeedbackComments: result.HubFeedbackComments,
 	}
-	if principal := strings.TrimSpace(result.Principal); principal != "" {
-		b.WriteString(" Principal: ")
-		b.WriteString(principal)
-		b.WriteString(".")
+	if result.Err != nil {
+		summary.Err = result.Err.Error()
 	}
-	switch result.Status {
-	case "recorded":
-		b.WriteString(" Mnemon ingest: recorded.")
-	case "correlated":
-		b.WriteString(" Mnemon assignment mailbox: correlated.")
-	case "skipped":
-		b.WriteString(" Mnemon ingest: skipped")
-		if result.Err != nil {
-			b.WriteString(" (")
-			b.WriteString(result.Err.Error())
-			b.WriteString(")")
-		} else {
-			b.WriteString(" because MNEMON_CONTROL_ADDR is not set")
-		}
-		b.WriteString(".")
-	case "failed":
-		b.WriteString(" Mnemon ingest: failed")
-		if result.Err != nil {
-			b.WriteString(" (")
-			b.WriteString(result.Err.Error())
-			b.WriteString(")")
-		}
-		b.WriteString(".")
-	default:
-		if result.Err != nil {
-			b.WriteString(" Mnemon ingest: failed (")
-			b.WriteString(result.Err.Error())
-			b.WriteString(").")
-		}
+	if result.ProjectionErr != nil {
+		summary.ProjectionErr = result.ProjectionErr.Error()
 	}
-	switch result.ProjectionStatus {
-	case "commented":
-		b.WriteString(" Multica projection: comment posted.")
-	case "skipped":
-		b.WriteString(" Multica projection: skipped.")
-	case "failed":
-		b.WriteString(" Multica projection: failed")
-		if result.ProjectionErr != nil {
-			b.WriteString(" (")
-			b.WriteString(result.ProjectionErr.Error())
-			b.WriteString(")")
-		}
-		b.WriteString(".")
+	if result.WakeErr != nil {
+		summary.WakeErr = result.WakeErr.Error()
 	}
-	switch result.WakeStatus {
-	case "completed":
-		b.WriteString(" Managed wake: completed.")
-	case "skipped":
-		b.WriteString(" Managed wake: skipped")
-		if result.WakeErr != nil {
-			b.WriteString(" (")
-			b.WriteString(result.WakeErr.Error())
-			b.WriteString(")")
-		}
-		b.WriteString(".")
-	case "failed":
-		b.WriteString(" Managed wake: failed")
-		if result.WakeErr != nil {
-			b.WriteString(" (")
-			b.WriteString(result.WakeErr.Error())
-			b.WriteString(")")
-		}
-		b.WriteString(".")
-	default:
-		if result.WakeStatus != "" {
-			b.WriteString(" Managed wake: ")
-			b.WriteString(result.WakeStatus)
-			b.WriteString(".")
-		}
+	if result.HubWriteErr != nil {
+		summary.HubWriteErr = result.HubWriteErr.Error()
 	}
-	switch result.HubWriteStatus {
-	case "created", "commented", "updated", "noop":
-		b.WriteString(" Multica updates: ")
-		b.WriteString(runtimeHubWriteSummary(result))
-	case "skipped":
-		b.WriteString(" Multica updates: skipped.")
-	case "failed":
-		b.WriteString(" Multica updates: failed")
-		if result.HubWriteErr != nil {
-			b.WriteString(" (")
-			b.WriteString(result.HubWriteErr.Error())
-			b.WriteString(")")
-		}
-		b.WriteString(".")
-	}
-	return strings.TrimSpace(b.String())
+	return summary
 }
 
 func (s *runtimeRPCState) threadStartResult(params map[string]any) map[string]any {
@@ -1103,129 +1018,8 @@ func runtimeExitCode(err error) int {
 	return 0
 }
 
-func displayRuntimePrincipal(principal string) string {
-	principal = strings.TrimSpace(principal)
-	if principal == "" {
-		return "the resolved principal"
-	}
-	return principal
-}
-
 func runtimeIssueLabel(issue driver.MulticaIssue) string {
-	if strings.TrimSpace(issue.Identifier) != "" && strings.TrimSpace(issue.Title) != "" {
-		return issue.Identifier + " (" + issue.Title + ")"
-	}
-	if strings.TrimSpace(issue.Identifier) != "" {
-		return issue.Identifier
-	}
-	if strings.TrimSpace(issue.ID) != "" {
-		return issue.ID
-	}
-	return "the Multica issue"
-}
-
-func runtimeAssignmentLabel(result runtimeImportResult) string {
-	if strings.TrimSpace(result.AssignmentID) != "" {
-		return result.AssignmentID
-	}
-	if strings.TrimSpace(result.AssignmentFingerprint) != "" {
-		return result.AssignmentFingerprint
-	}
-	return "assignment mailbox"
-}
-
-func runtimeWakeProgress(result runtimeImportResult) string {
-	switch strings.TrimSpace(result.WakeStatus) {
-	case "":
-		if result.WakeErr != nil {
-			return "Managed wake failed: " + result.WakeErr.Error()
-		}
-		return "Managed wake did not run."
-	case "completed":
-		if strings.TrimSpace(result.WakeTurnID) != "" {
-			return "Managed wake completed: turn=" + result.WakeTurnID + "."
-		}
-		return "Managed wake completed."
-	case "skipped":
-		if result.WakeErr != nil {
-			return "Managed wake skipped: " + result.WakeErr.Error()
-		}
-		return "Managed wake skipped."
-	case "failed":
-		if result.WakeErr != nil {
-			return "Managed wake failed: " + result.WakeErr.Error()
-		}
-		return "Managed wake failed."
-	default:
-		return "Managed wake status: " + result.WakeStatus + "."
-	}
-}
-
-func runtimeHubWriteProgress(result runtimeImportResult) string {
-	switch strings.TrimSpace(result.HubWriteStatus) {
-	case "":
-		return ""
-	case "failed":
-		if result.HubWriteErr != nil {
-			return "Multica updates failed: " + result.HubWriteErr.Error()
-		}
-		return "Multica updates failed."
-	case "skipped":
-		return "Multica updates skipped."
-	default:
-		return "Multica updates: " + runtimeHubWriteSummary(result)
-	}
-}
-
-func runtimeHubWriteSummary(result runtimeImportResult) string {
-	status := strings.TrimSpace(result.HubWriteStatus)
-	var parts []string
-	if result.HubChildIssues > 0 {
-		parts = append(parts, fmt.Sprintf("%d %s", result.HubChildIssues, pluralize(result.HubChildIssues, "assignment mailbox", "assignment mailboxes")))
-	}
-	if result.HubFeedbackComments > 0 {
-		parts = append(parts, fmt.Sprintf("%d %s", result.HubFeedbackComments, pluralize(result.HubFeedbackComments, "feedback comment", "feedback comments")))
-	}
-	switch {
-	case len(parts) > 0 && status == "created":
-		return strings.Join(parts, " and ") + " created."
-	case len(parts) > 0 && status == "commented":
-		return strings.Join(parts, " and ") + " posted."
-	case len(parts) > 0:
-		return strings.Join(parts, " and ") + " synced."
-	case status == "noop":
-		return "no visible updates needed."
-	case status != "":
-		return strings.ReplaceAll(status, "_", " ") + "."
-	default:
-		return "no visible updates needed."
-	}
-}
-
-func pluralize(n int, singular, plural string) string {
-	if n == 1 {
-		return singular
-	}
-	return plural
-}
-
-func runtimeProjectionProgress(result runtimeImportResult) string {
-	switch strings.TrimSpace(result.ProjectionStatus) {
-	case "":
-		return ""
-	case "failed":
-		if result.ProjectionErr != nil {
-			return "Multica comment projection failed: " + result.ProjectionErr.Error()
-		}
-		return "Multica comment projection failed."
-	case "skipped":
-		return "Multica comment projection skipped."
-	default:
-		if strings.TrimSpace(result.ProjectionCommentID) != "" {
-			return "Multica comment projection completed: comment=" + result.ProjectionCommentID + "."
-		}
-		return "Multica comment projection completed."
-	}
+	return multicasurface.RuntimeIssueLabel(issue.ID, issue.Identifier, issue.Title)
 }
 
 func markIssueInProgress(ctx context.Context, cli driver.MulticaCLI, issueID string) {
