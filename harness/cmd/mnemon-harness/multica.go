@@ -390,7 +390,7 @@ func runMulticaProvision(cmd *cobra.Command, args []string) error {
 	}
 	profileName := strings.TrimSpace(multicaProvisionProfileName)
 	if profileName == "" {
-		profileName = "mnemon-runtime"
+		profileName = driver.MulticaRuntimeProfileName
 	}
 	runtimeCommand := strings.TrimSpace(multicaProvisionRuntimeCommand)
 	if runtimeCommand == "" {
@@ -991,7 +991,7 @@ func init() {
 
 	multicaProvisionCmd.Flags().StringVar(&multicaProvisionRegistry, "registry", "", "Multica registry path")
 	multicaProvisionCmd.Flags().StringVar(&multicaProvisionProjectRoot, "project-root", ".", "project root for the default registry path")
-	multicaProvisionCmd.Flags().StringVar(&multicaProvisionProfileName, "runtime-profile-name", "mnemon-runtime", "Multica runtime profile display name")
+	multicaProvisionCmd.Flags().StringVar(&multicaProvisionProfileName, "runtime-profile-name", driver.MulticaRuntimeProfileName, "Multica runtime profile display name")
 	multicaProvisionCmd.Flags().StringVar(&multicaProvisionRuntimeCommand, "runtime-command", driver.MulticaRuntimeCommandName, "runtime executable name registered with Multica")
 	multicaProvisionCmd.Flags().StringVar(&multicaProvisionRuntimePath, "runtime-path", "", "absolute local executable path for the runtime profile")
 	multicaProvisionCmd.Flags().StringVar(&multicaProvisionAgentPrefix, "agent-prefix", "mnemon", "Multica participant agent name prefix")

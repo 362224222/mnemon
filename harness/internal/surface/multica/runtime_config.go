@@ -6,7 +6,10 @@ import (
 	"time"
 )
 
-const MulticaRuntimeCommandName = "mnemon-multica-runtime"
+const (
+	MulticaRuntimeCommandName = "mnemon-multica-runtime"
+	MulticaRuntimeProfileName = "mnemon-runtime"
+)
 
 type RuntimeManagedWakeMaterial struct {
 	IssueID      string

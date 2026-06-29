@@ -19,6 +19,7 @@ import (
 const (
 	MulticaDefaultCommand     = "multica"
 	MulticaRuntimeCommandName = multicasurface.MulticaRuntimeCommandName
+	MulticaRuntimeProfileName = multicasurface.MulticaRuntimeProfileName
 	MulticaExternalSource     = multicasurface.MulticaExternalSource
 )
 

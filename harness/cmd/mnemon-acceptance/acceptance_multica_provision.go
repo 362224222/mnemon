@@ -69,7 +69,7 @@ func init() {
 	acceptanceMulticaProvisionCmd.Flags().StringVar(&acceptanceMulticaProvisionWorkspaceID, "multica-workspace-id", multicaAcceptanceEnvDefault("MNEMON_MULTICA_WORKSPACE_ID", ""), "Multica workspace ID")
 	acceptanceMulticaProvisionCmd.Flags().StringVar(&acceptanceMulticaProvisionRegistry, "registry", "", "Multica participant registry path")
 	acceptanceMulticaProvisionCmd.Flags().StringVar(&acceptanceMulticaProvisionProjectRoot, "project-root", ".", "project root for the default registry path")
-	acceptanceMulticaProvisionCmd.Flags().StringVar(&acceptanceMulticaProvisionProfileName, "runtime-profile-name", "mnemon-runtime", "Multica runtime profile display name")
+	acceptanceMulticaProvisionCmd.Flags().StringVar(&acceptanceMulticaProvisionProfileName, "runtime-profile-name", driver.MulticaRuntimeProfileName, "Multica runtime profile display name")
 	acceptanceMulticaProvisionCmd.Flags().StringVar(&acceptanceMulticaProvisionRuntimeCommand, "runtime-command", driver.MulticaRuntimeCommandName, "runtime executable name registered with Multica")
 	acceptanceMulticaProvisionCmd.Flags().StringVar(&acceptanceMulticaProvisionRuntimePath, "runtime-path", "", "absolute local executable path for the runtime profile")
 	acceptanceMulticaProvisionCmd.Flags().StringVar(&acceptanceMulticaProvisionAgentPrefix, "agent-prefix", "mnemon", "Multica participant agent name prefix")

@@ -23,6 +23,9 @@ func TestMulticaRuntimeCommandNamePinned(t *testing.T) {
 	if MulticaRuntimeCommandName != "mnemon-multica-runtime" {
 		t.Fatalf("MulticaRuntimeCommandName = %q", MulticaRuntimeCommandName)
 	}
+	if MulticaRuntimeProfileName != "mnemon-runtime" {
+		t.Fatalf("MulticaRuntimeProfileName = %q", MulticaRuntimeProfileName)
+	}
 }
 
 func TestRuntimeTimeoutUsesMulticaHTTPFallback(t *testing.T) {
