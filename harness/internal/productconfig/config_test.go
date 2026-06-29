@@ -70,6 +70,48 @@ func TestConfigValidateRejectsDuplicateParticipants(t *testing.T) {
 	}
 }
 
+func TestConfigValidateRejectsDuplicateDaemonRoles(t *testing.T) {
+	base := Default()
+	base.Connections.Multica = MulticaConnection{Enabled: true, Workspace: "ws-multica"}
+	cases := []struct {
+		name string
+		edit func(*Config)
+		want string
+	}{
+		{
+			name: "watcher",
+			edit: func(cfg *Config) {
+				cfg.Daemon.InteractionWatchers = []string{ConnectionMultica, " " + ConnectionMultica + " "}
+			},
+			want: "duplicate interaction watcher",
+		},
+		{
+			name: "surface",
+			edit: func(cfg *Config) {
+				cfg.Daemon.ProjectionSurfaces = []string{ConnectionMultica, " " + ConnectionMultica}
+			},
+			want: "duplicate projection surface",
+		},
+		{
+			name: "drive",
+			edit: func(cfg *Config) {
+				cfg.Daemon.DriveSources = []string{DriveManagedLocal, " " + DriveManagedLocal}
+			},
+			want: "duplicate drive source",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := base
+			tc.edit(&cfg)
+			err := cfg.Validate()
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("expected %q error, got %v", tc.want, err)
+			}
+		})
+	}
+}
+
 func TestFromLegacyBridgesLocalAndRemoteConfigs(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, ".mnemon", "harness", "local"), 0o755); err != nil {

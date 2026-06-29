@@ -193,17 +193,39 @@ func (cfg Config) Validate() error {
 	default:
 		return fmt.Errorf("duplicate_activation_policy must be %q or %q", DuplicateActivationSuppress, DuplicateActivationAllow)
 	}
-	for _, watcher := range cfg.Daemon.InteractionWatchers {
-		if err := validateCarrier("interaction watcher", watcher, cfg); err != nil {
+	if err := validateDaemonCarriers("interaction watcher", cfg.Daemon.InteractionWatchers, cfg); err != nil {
+		return err
+	}
+	if err := validateDaemonCarriers("projection surface", cfg.Daemon.ProjectionSurfaces, cfg); err != nil {
+		return err
+	}
+	if err := validateDaemonDriveSources(cfg.Daemon.DriveSources); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateDaemonCarriers(label string, values []string, cfg Config) error {
+	seen := map[string]bool{}
+	for _, value := range values {
+		carrier := strings.TrimSpace(value)
+		if err := validateCarrier(label, carrier, cfg); err != nil {
 			return err
 		}
-	}
-	for _, surface := range cfg.Daemon.ProjectionSurfaces {
-		if err := validateCarrier("projection surface", surface, cfg); err != nil {
-			return err
+		if carrier == "" {
+			continue
 		}
+		if seen[carrier] {
+			return fmt.Errorf("duplicate %s %q", label, carrier)
+		}
+		seen[carrier] = true
 	}
-	for _, source := range cfg.Daemon.DriveSources {
+	return nil
+}
+
+func validateDaemonDriveSources(values []string) error {
+	seen := map[string]bool{}
+	for _, source := range values {
 		source = strings.TrimSpace(source)
 		if source == "" {
 			return fmt.Errorf("drive source cannot be empty")
@@ -211,6 +233,10 @@ func (cfg Config) Validate() error {
 		if source != DriveManagedLocal {
 			return fmt.Errorf("unsupported drive source %q", source)
 		}
+		if seen[source] {
+			return fmt.Errorf("duplicate drive source %q", source)
+		}
+		seen[source] = true
 	}
 	return nil
 }
