@@ -22,7 +22,7 @@ func TestRootHelpUsesLocalFirstProductSurface(t *testing.T) {
 		t.Fatalf("root help returned error: %v", err)
 	}
 	got := out.String()
-	for _, want := range []string{"event-driven", "collaboration substrate", "Teamwork is a profile", "Agent Integration", "Local Mnemon", "setup", "local", "config", "daemon", "doctor", "session", "agent", "connect"} {
+	for _, want := range []string{"event-driven", "collaboration substrate", "Teamwork is a profile", "Agent Integration", "Local Mnemon", "setup", "config", "daemon", "doctor", "session", "agent", "connect"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("expected root help to contain %q:\n%s", want, got)
 		}
@@ -32,7 +32,7 @@ func TestRootHelpUsesLocalFirstProductSurface(t *testing.T) {
 			t.Fatalf("root help leaked unsupported product term %q:\n%s", blocked, got)
 		}
 	}
-	for _, blocked := range []string{"  multica", "  tower", "  token"} {
+	for _, blocked := range []string{"  local", "  multica", "  sync", "  tower", "  token"} {
 		if strings.Contains(got, blocked) {
 			t.Fatalf("root help leaked debug command %q:\n%s", strings.TrimSpace(blocked), got)
 		}
@@ -80,11 +80,13 @@ func TestInternalCommandsStayHidden(t *testing.T) {
 	for _, path := range [][]string{
 		{"control"},
 		{"loop"},
+		{"local"},
 		{"multica"},
 		{"multica", "import-issue"},
 		{"multica", "participant"},
 		{"multica", "project-comment"},
 		{"multica", "provision"},
+		{"sync"},
 		{"token"},
 		{"tower"},
 	} {
