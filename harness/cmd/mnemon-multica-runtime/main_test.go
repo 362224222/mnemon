@@ -30,6 +30,37 @@ func TestRuntimeEnvValueUsesLastValue(t *testing.T) {
 	}
 }
 
+func TestRuntimeTimeoutUsesMulticaHTTPFallback(t *testing.T) {
+	if got := runtimeTimeout([]string{"MULTICA_HTTP_TIMEOUT=2m"}); got != 2*time.Minute {
+		t.Fatalf("runtimeTimeout fallback = %s, want 2m", got)
+	}
+	if got := runtimeTimeout([]string{"MULTICA_HTTP_TIMEOUT=2m", "MNEMON_MULTICA_RUNTIME_TIMEOUT=15s"}); got != 15*time.Second {
+		t.Fatalf("runtimeTimeout override = %s, want 15s", got)
+	}
+}
+
+func TestExtractAssignedIssueIDAcceptsMulticaIssueMentionsAndTags(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "explicit assigned issue", input: "Your assigned issue ID is: iss-7\nPlease work on it.", want: "iss-7"},
+		{name: "multica mention", input: "Open [TEA-51](mention://issue/issue-51) for the current task.", want: "issue-51"},
+		{name: "mention beats legacy text", input: "Your assigned issue ID is: stale\nOpen [TEA-52](mention://issue/issue-52).", want: "issue-52"},
+		{name: "at identifier tag", input: "Please handle @TEA-49 next.", want: "TEA-49"},
+		{name: "hash identifier tag", input: "Review #TEA-50.", want: "TEA-50"},
+		{name: "non issue tag", input: "Please coordinate with @team.", want: ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := extractAssignedIssueID(tc.input); got != tc.want {
+				t.Fatalf("extractAssignedIssueID = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestRuntimeMulticaHubLedgerPathDefaultsToManagedWorkspace(t *testing.T) {
 	tmp := t.TempDir()
 	workspace := filepath.Join(tmp, "managed-workspace")
@@ -518,6 +549,99 @@ esac
 	}
 	if !strings.Contains(out.String(), "Mnemon ingest: recorded seq=21") {
 		t.Fatalf("runtime output missing ingest evidence:\n%s", out.String())
+	}
+}
+
+func TestRuntimeContinuesWhenRootSessionMetadataWriteFails(t *testing.T) {
+	tmp := t.TempDir()
+	argsPath := filepath.Join(tmp, "multica.args")
+	commentPath := filepath.Join(tmp, "comment.txt")
+	bin := filepath.Join(tmp, "multica")
+	script := `#!/usr/bin/env sh
+printf '%s\n' "$*" >> "$MULTICA_ARGS_PATH"
+case "$*" in
+  *"issue get TEA-9"*) printf '{"id":"iss-9","identifier":"TEA-9","title":"Metadata retry tolerance","description":"Admit the teamwork issue even when Multica metadata projection is temporarily unavailable.","status":"todo","priority":"medium"}\n' ;;
+  *"issue metadata set iss-9"*) printf 'metadata timeout\n' >&2; exit 42 ;;
+  *"issue comment add iss-9"*) cat > "$MULTICA_COMMENT_PATH"; printf '{"id":"comment-9","issue_id":"iss-9","content":"ok","type":"comment"}\n' ;;
+  *) printf '{}\n' ;;
+esac
+`
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var gotPrincipal string
+	var got contract.ObservationEnvelope
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/ingest":
+			gotPrincipal = r.Header.Get(access.PrincipalHeader)
+			if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+				t.Fatal(err)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(access.IngestReceipt{Seq: 29, Dup: false, Ticked: true})
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	input := `{"jsonrpc":"2.0","id":3,"method":"turn/start","params":{"input":[{"type":"text","text":"Please coordinate @TEA-9."}]}}` + "\n"
+	var out bytes.Buffer
+	err := runRuntime(runtimeConfig{
+		Args: []string{"app-server", "--listen", "stdio://"},
+		Env: runtimeTestEnv(
+			"MNEMON_MULTICA_BIN="+bin,
+			"MNEMON_HUB_BACKEND=multica",
+			"MNEMON_MULTICA_HUB_WRITE=off",
+			"MNEMON_CONTROL_ADDR="+srv.URL,
+			"MNEMON_CONTROL_PRINCIPAL=planner@team",
+			"MULTICA_ARGS_PATH="+argsPath,
+			"MULTICA_COMMENT_PATH="+commentPath,
+			"MULTICA_TASK_ID=task-9",
+			"MULTICA_AGENT_ID=agent-planner",
+		),
+		CWD:    tmp,
+		Stdin:  strings.NewReader(input),
+		Stdout: &out,
+		Now:    fixedRuntimeTime,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPrincipal != "planner@team" {
+		t.Fatalf("principal header = %q", gotPrincipal)
+	}
+	if got.Event.Type != "teamwork_signal.write_candidate.observed" {
+		t.Fatalf("event type = %q", got.Event.Type)
+	}
+	rule := got.Event.Payload["rule"].(map[string]any)
+	if rule["root_issue_id"] != "iss-9" || rule["session_id"] != driver.MulticaSessionID("iss-9") {
+		t.Fatalf("root hub rule mismatch after metadata failure: %+v", rule)
+	}
+	output := out.String()
+	for _, want := range []string{
+		"Root session metadata write failed; continuing with Mnemon ingest from issue context.",
+		"Mnemon ingest: recorded seq=29",
+		"Multica projection: comment=comment-9",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("runtime output missing %q:\n%s", want, output)
+		}
+	}
+	if strings.Contains(output, "Mnemon ingest: failed") || strings.Contains(output, "Multica hub write: failed") {
+		t.Fatalf("metadata projection failure polluted protocol result:\n%s", output)
+	}
+	comment := mustReadRuntimeTestFile(t, commentPath)
+	for _, want := range []string{"Mnemon update: issue admitted", "Mnemon ingest: seq=29", "Hub backend: multica"} {
+		if !strings.Contains(comment, want) {
+			t.Fatalf("comment missing %q:\n%s", want, comment)
+		}
+	}
+	args := mustReadRuntimeTestFile(t, argsPath)
+	if !strings.Contains(args, "issue metadata set iss-9 --key mnemon.hub_backend") || !strings.Contains(args, "issue comment add iss-9 --content-stdin --output json") {
+		t.Fatalf("runtime should attempt metadata projection then continue to comment projection:\n%s", args)
 	}
 }
 

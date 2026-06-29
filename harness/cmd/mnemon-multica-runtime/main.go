@@ -26,7 +26,11 @@ import (
 
 const runtimeVersion = "dev"
 
-var assignedIssuePattern = regexp.MustCompile(`(?i)(?:assigned\s+issue\s+id\s+is|issue[_\s-]*id)\s*[:：]\s*([A-Za-z0-9][A-Za-z0-9._:-]*)`)
+var (
+	assignedIssuePattern       = regexp.MustCompile(`(?i)(?:assigned\s+issue\s+id\s+is|issue[_\s-]*id)\s*[:：]\s*([A-Za-z0-9][A-Za-z0-9._:-]*)`)
+	multicaIssueMentionPattern = regexp.MustCompile(`(?i)mention://issue/([A-Za-z0-9][A-Za-z0-9._:-]*)`)
+	multicaTaggedIssuePattern  = regexp.MustCompile(`(?i)(?:^|[\s([{"'])[@#]([A-Z][A-Z0-9]+-\d+)(?:$|[\s\])}.,;:'"])`)
+)
 
 type runtimeConfig struct {
 	Args   []string
@@ -371,14 +375,13 @@ func (s *runtimeRPCState) importIssue(input string, progress runtimeProgressSink
 		addPayloadRuleString(draft.Payload, "session_id", result.SessionID)
 		addPayloadRuleString(draft.Payload, "source_issue_id", issue.ID)
 		if err := cli.SetIssueMetadataMap(multicaCtx, issue.ID, rootSessionMetadata(result, draft, s.now())); err != nil {
-			result.Status = "failed"
-			result.Err = fmt.Errorf("set Multica root session metadata: %w", err)
-			emitRuntimeCommand(progress, "multica issue metadata set "+issue.ID+" mnemon.root-session", result.Err.Error(), 1)
-			emitRuntimeProgress(progress, "Failed to write Mnemon root session metadata.")
-			return result
+			metadataErr := fmt.Errorf("set Multica root session metadata: %w", err)
+			emitRuntimeCommand(progress, "multica issue metadata set "+issue.ID+" mnemon.root-session", metadataErr.Error(), 1)
+			emitRuntimeProgress(progress, "Root session metadata write failed; continuing with Mnemon ingest from issue context.")
+		} else {
+			emitRuntimeCommand(progress, "multica issue metadata set "+issue.ID+" mnemon.root-session", "Root session metadata written for "+runtimeIssueLabel(issue)+".", 0)
+			emitRuntimeProgress(progress, "Root session metadata written for "+runtimeIssueLabel(issue)+".")
 		}
-		emitRuntimeCommand(progress, "multica issue metadata set "+issue.ID+" mnemon.root-session", "Root session metadata written for "+runtimeIssueLabel(issue)+".", 0)
-		emitRuntimeProgress(progress, "Root session metadata written for "+runtimeIssueLabel(issue)+".")
 	}
 	addr := strings.TrimSpace(envValue(s.Env, "MNEMON_CONTROL_ADDR"))
 	if addr == "" {
@@ -1540,7 +1543,15 @@ func extractRuntimeInput(params map[string]any) string {
 }
 
 func extractAssignedIssueID(input string) string {
-	match := assignedIssuePattern.FindStringSubmatch(input)
+	match := multicaIssueMentionPattern.FindStringSubmatch(input)
+	if len(match) >= 2 {
+		return strings.Trim(match[1], " \t\r\n.,;)")
+	}
+	match = assignedIssuePattern.FindStringSubmatch(input)
+	if len(match) >= 2 {
+		return strings.Trim(match[1], " \t\r\n.,;)")
+	}
+	match = multicaTaggedIssuePattern.FindStringSubmatch(input)
 	if len(match) >= 2 {
 		return strings.Trim(match[1], " \t\r\n.,;)")
 	}
@@ -1624,6 +1635,9 @@ func runtimeID(prefix string, now time.Time) string {
 
 func runtimeTimeout(env []string) time.Duration {
 	raw := envValue(env, "MNEMON_MULTICA_RUNTIME_TIMEOUT")
+	if raw == "" {
+		raw = envValue(env, "MULTICA_HTTP_TIMEOUT")
+	}
 	if raw == "" {
 		return 30 * time.Second
 	}
