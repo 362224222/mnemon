@@ -23,8 +23,9 @@ type RuntimeCommandExecutionMaterial struct {
 }
 
 type RuntimeInput struct {
-	Text          string
-	IssueIdentity string
+	Text                string
+	IssueIdentity       string
+	IssueIdentitySource string
 }
 
 func RuntimeManagedTraceMessages(threadID, turnID string, event activationtrace.Event, now time.Time) []RuntimeRPCMessage {
@@ -152,7 +153,9 @@ func RuntimeInputMaterial(params map[string]any) RuntimeInput {
 	}
 	var parts []string
 	structuredIssue := ""
+	structuredSource := ""
 	textIssue := ""
+	textSource := ""
 	for _, item := range input {
 		obj, ok := item.(map[string]any)
 		if !ok {
@@ -160,17 +163,32 @@ func RuntimeInputMaterial(params map[string]any) RuntimeInput {
 		}
 		if structuredIssue == "" {
 			structuredIssue = runtimeStructuredIssueIdentity(obj)
+			if structuredIssue != "" {
+				structuredSource = RuntimeIssueSourceInput
+			}
 		}
 		if text, _ := obj["text"].(string); strings.TrimSpace(text) != "" {
 			parts = append(parts, text)
 			if textIssue == "" {
 				textIssue = ExtractIssueIdentity(text)
+				if textIssue != "" {
+					textSource = RuntimeIssueSourceInputText
+				}
 			}
 		}
 	}
+	issueIdentity := firstNonEmptyString(structuredIssue, textIssue)
+	issueSource := ""
+	switch issueIdentity {
+	case structuredIssue:
+		issueSource = structuredSource
+	case textIssue:
+		issueSource = textSource
+	}
 	return RuntimeInput{
-		Text:          strings.Join(parts, "\n"),
-		IssueIdentity: firstNonEmptyString(structuredIssue, textIssue),
+		Text:                strings.Join(parts, "\n"),
+		IssueIdentity:       issueIdentity,
+		IssueIdentitySource: issueSource,
 	}
 }
 

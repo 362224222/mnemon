@@ -166,6 +166,9 @@ func TestRuntimeInputMaterialExtractsStructuredIssueIdentity(t *testing.T) {
 	if got.IssueIdentity != "iss-49" {
 		t.Fatalf("structured issue identity = %q, want iss-49", got.IssueIdentity)
 	}
+	if got.IssueIdentitySource != RuntimeIssueSourceInput {
+		t.Fatalf("structured issue source = %q, want %q", got.IssueIdentitySource, RuntimeIssueSourceInput)
+	}
 }
 
 func TestRuntimeInputMaterialFallsBackToVisibleIssueTag(t *testing.T) {
@@ -176,6 +179,9 @@ func TestRuntimeInputMaterialFallsBackToVisibleIssueTag(t *testing.T) {
 	})
 	if got.IssueIdentity != "TEA-50" {
 		t.Fatalf("visible issue tag identity = %q, want TEA-50", got.IssueIdentity)
+	}
+	if got.IssueIdentitySource != RuntimeIssueSourceInputText {
+		t.Fatalf("visible issue source = %q, want %q", got.IssueIdentitySource, RuntimeIssueSourceInputText)
 	}
 }
 

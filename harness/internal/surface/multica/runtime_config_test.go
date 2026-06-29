@@ -19,6 +19,56 @@ func TestRuntimeEnvValueUsesLastValue(t *testing.T) {
 	}
 }
 
+func TestRuntimeContextFromActivationNormalizesDaemonAndRuntimeMetadata(t *testing.T) {
+	ctx := RuntimeContextFromActivation([]string{
+		"MULTICA_TASK_ID=task-1",
+		"MULTICA_ISSUE_ID=iss-env",
+		"MULTICA_AGENT_ID=agent-1",
+		"MULTICA_AGENT_NAME=mnemon-planner",
+		"MULTICA_WORKSPACE_ID=ws-daemon",
+		"MNEMON_MULTICA_WORKSPACE_ID=ws-mnemon",
+		"MULTICA_SERVER_URL=https://api.multica.ai",
+		"MNEMON_MULTICA_SERVER_URL=https://desktop-api.multica.ai",
+		"MNEMON_HUB_BACKEND=multica",
+		"MNEMON_CONTROL_ADDR=http://127.0.0.1:8787",
+		"MNEMON_CONTROL_PRINCIPAL=planner@team",
+	}, "/repo", RuntimeInput{
+		Text:                "Ignore copied @TEA-1.",
+		IssueIdentity:       "iss-input",
+		IssueIdentitySource: RuntimeIssueSourceInput,
+	})
+	if ctx.IssueIdentity != "iss-env" || ctx.IssueIdentitySource != RuntimeIssueSourceEnv {
+		t.Fatalf("issue identity/source = %q/%q", ctx.IssueIdentity, ctx.IssueIdentitySource)
+	}
+	if ctx.TaskID != "task-1" || ctx.AgentID != "agent-1" || ctx.AgentName != "mnemon-planner" {
+		t.Fatalf("task/agent metadata mismatch: %+v", ctx)
+	}
+	if ctx.WorkspaceID != "ws-mnemon" || ctx.ServerURL != "https://desktop-api.multica.ai" {
+		t.Fatalf("workspace/server metadata mismatch: %+v", ctx)
+	}
+	if ctx.HubBackend != "multica" || ctx.ControlAddr != "http://127.0.0.1:8787" || ctx.ControlPrincipal != "planner@team" {
+		t.Fatalf("Mnemon control metadata mismatch: %+v", ctx)
+	}
+}
+
+func TestRuntimeContextFromActivationFallsBackToStructuredInput(t *testing.T) {
+	ctx := RuntimeContextFromActivation(nil, "", RuntimeInput{
+		Text:                "Please review the linked issue.",
+		IssueIdentity:       "iss-selected",
+		IssueIdentitySource: RuntimeIssueSourceInput,
+	})
+	if ctx.IssueIdentity != "iss-selected" || ctx.IssueIdentitySource != RuntimeIssueSourceInput {
+		t.Fatalf("structured input issue mismatch: %+v", ctx)
+	}
+}
+
+func TestRuntimeContextFromActivationFallsBackToVisibleIssueTag(t *testing.T) {
+	ctx := RuntimeContextFromActivation(nil, "", RuntimeInput{Text: "Please handle @TEA-50 next."})
+	if ctx.IssueIdentity != "TEA-50" || ctx.IssueIdentitySource != RuntimeIssueSourceInputText {
+		t.Fatalf("visible tag issue mismatch: %+v", ctx)
+	}
+}
+
 func TestMulticaRuntimeCommandNamePinned(t *testing.T) {
 	if MulticaRuntimeCommandName != "mnemon-multica-runtime" {
 		t.Fatalf("MulticaRuntimeCommandName = %q", MulticaRuntimeCommandName)

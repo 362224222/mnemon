@@ -312,11 +312,12 @@ func (s *runtimeRPCState) runTurn(input multicasurface.RuntimeInput, progress ru
 }
 
 func (s *runtimeRPCState) importIssue(input multicasurface.RuntimeInput, progress runtimeProgressSink) runtimeImportResult {
-	taskID := multicasurface.RuntimeEnvValue(s.Env, "MULTICA_TASK_ID")
-	issueID := firstNonEmpty(multicasurface.RuntimeEnvValue(s.Env, "MULTICA_ISSUE_ID"), input.IssueIdentity, multicasurface.ExtractIssueIdentity(input.Text))
+	activation := multicasurface.RuntimeContextFromActivation(s.Env, s.CWD, input)
+	taskID := activation.TaskID
+	issueID := activation.IssueIdentity
 	result := runtimeImportResult{
 		IssueID:   issueID,
-		Principal: resolveRuntimePrincipal(s.Env, s.CWD),
+		Principal: resolveRuntimePrincipalFromContext(s.Env, s.CWD, activation),
 		TaskID:    taskID,
 	}
 	emitRuntimeProgress(progress, "Mnemon runtime accepted the Multica task for "+multicasurface.RuntimePrincipalLabel(result.Principal)+".")
@@ -326,7 +327,7 @@ func (s *runtimeRPCState) importIssue(input multicasurface.RuntimeInput, progres
 		emitRuntimeProgress(progress, "No assigned Multica issue id was available; Mnemon skipped this turn.")
 		return result
 	}
-	cli := runtimeMulticaCLI(s.Env)
+	cli := runtimeMulticaCLI(s.Env, activation)
 	multicaCtx := context.Background()
 	emitRuntimeProgress(progress, "Loading Multica issue "+issueID+".")
 	issue, err := cli.GetIssue(multicaCtx, issueID)
@@ -345,11 +346,11 @@ func (s *runtimeRPCState) importIssue(input multicasurface.RuntimeInput, progres
 	result.Statement = issue.Description
 	result.HubMetadata = driver.MulticaIssueHubMetadata(issue)
 	applyMulticaHubMetadata(&result, result.HubMetadata)
-	result.HubBackend = firstNonEmpty(result.HubBackend, multicasurface.RuntimeEnvValue(s.Env, "MNEMON_HUB_BACKEND"))
+	result.HubBackend = firstNonEmpty(result.HubBackend, activation.HubBackend)
 	emitRuntimeProgress(progress, "Loaded "+runtimeIssueLabel(issue)+"; classifying Mnemon hub metadata.")
 	markIssueInProgress(multicaCtx, cli, issue.ID)
 	if result.HubMetadata.IsAssignmentMailbox() {
-		return s.correlateAssignmentMailbox(multicaCtx, cli, issue, &result, progress)
+		return s.correlateAssignmentMailbox(multicaCtx, cli, issue, &result, activation, progress)
 	}
 	externalID := ""
 	if taskID != "" {
@@ -364,14 +365,14 @@ func (s *runtimeRPCState) importIssue(input multicasurface.RuntimeInput, progres
 		Scope:       multicasurface.RuntimeEnvDefault(s.Env, "MNEMON_MULTICA_SCOPE", "multica/teamwork"),
 		TTL:         multicasurface.RuntimeEnvDefault(s.Env, "MNEMON_MULTICA_TTL", "30m"),
 		WhyTeamwork: "Multica assigned this issue to a Mnemon participant, so Mnemon should admit it through the teamwork protocol.",
-		WorkspaceID: firstNonEmpty(multicasurface.RuntimeEnvValue(s.Env, "MNEMON_MULTICA_WORKSPACE_ID"), multicasurface.RuntimeEnvValue(s.Env, "MULTICA_WORKSPACE_ID")),
+		WorkspaceID: activation.WorkspaceID,
 		TaskID:      taskID,
-		AgentID:     multicasurface.RuntimeEnvValue(s.Env, "MULTICA_AGENT_ID"),
+		AgentID:     activation.AgentID,
 		Principal:   result.Principal,
 		ContextRefs: []string{
 			multicasurface.RuntimeRef("issue", issue.ID),
 			multicasurface.RuntimeRef("task", taskID),
-			multicasurface.RuntimeRef("agent", multicasurface.RuntimeEnvValue(s.Env, "MULTICA_AGENT_ID")),
+			multicasurface.RuntimeRef("agent", activation.AgentID),
 		},
 		EvidenceRefs: []string{multicasurface.RuntimeRef("issue", issue.ID)},
 		ExternalID:   externalID,
@@ -407,7 +408,7 @@ func (s *runtimeRPCState) importIssue(input multicasurface.RuntimeInput, progres
 			emitRuntimeProgress(progress, "Root session metadata written for "+runtimeIssueLabel(issue)+".")
 		}
 	}
-	addr := strings.TrimSpace(multicasurface.RuntimeEnvValue(s.Env, "MNEMON_CONTROL_ADDR"))
+	addr := strings.TrimSpace(activation.ControlAddr)
 	if addr == "" {
 		result.Status = "skipped"
 		emitRuntimeProgress(progress, "Local Mnemon control address is not configured; skipping protocol ingest.")
@@ -468,7 +469,7 @@ func loadRuntimeIssueMetadata(ctx context.Context, cli driver.MulticaCLI, issue 
 	return loaded
 }
 
-func (s *runtimeRPCState) correlateAssignmentMailbox(ctx context.Context, cli driver.MulticaCLI, issue driver.MulticaIssue, result *runtimeImportResult, progress runtimeProgressSink) runtimeImportResult {
+func (s *runtimeRPCState) correlateAssignmentMailbox(ctx context.Context, cli driver.MulticaCLI, issue driver.MulticaIssue, result *runtimeImportResult, activation multicasurface.RuntimeContext, progress runtimeProgressSink) runtimeImportResult {
 	result.HubMetadata = multicasurface.AssignmentMailboxHubMetadata(result.HubMetadata, issue.ID)
 	applyMulticaHubMetadata(result, result.HubMetadata)
 	result.Status = "correlated"
@@ -481,7 +482,7 @@ func (s *runtimeRPCState) correlateAssignmentMailbox(ctx context.Context, cli dr
 	correlationProgress := multicasurface.RuntimeAssignmentCorrelationProgress()
 	emitRuntimeCommand(progress, "mnemon-multica-runtime assignment-correlate --issue "+issue.ID, correlationProgress, 0)
 	emitRuntimeProgress(progress, correlationProgress)
-	addr := strings.TrimSpace(multicasurface.RuntimeEnvValue(s.Env, "MNEMON_CONTROL_ADDR"))
+	addr := strings.TrimSpace(activation.ControlAddr)
 	var client *access.Client
 	if addr == "" {
 		result.WakeStatus = "skipped"
@@ -782,12 +783,12 @@ func runtimeProjectionMaterial(issue driver.MulticaIssue, result runtimeImportRe
 	return material
 }
 
-func runtimeMulticaCLI(env []string) driver.MulticaCLI {
+func runtimeMulticaCLI(env []string, activation multicasurface.RuntimeContext) driver.MulticaCLI {
 	return driver.MulticaCLI{
 		Command:     multicasurface.RuntimeEnvValue(env, "MNEMON_MULTICA_BIN"),
 		Profile:     multicasurface.RuntimeEnvValue(env, "MNEMON_MULTICA_PROFILE"),
-		ServerURL:   firstNonEmpty(multicasurface.RuntimeEnvValue(env, "MNEMON_MULTICA_SERVER_URL"), multicasurface.RuntimeEnvValue(env, "MULTICA_SERVER_URL")),
-		WorkspaceID: firstNonEmpty(multicasurface.RuntimeEnvValue(env, "MNEMON_MULTICA_WORKSPACE_ID"), multicasurface.RuntimeEnvValue(env, "MULTICA_WORKSPACE_ID")),
+		ServerURL:   activation.ServerURL,
+		WorkspaceID: activation.WorkspaceID,
 		Env:         append([]string(nil), env...),
 		Timeout:     multicasurface.RuntimeTimeout(env),
 	}
@@ -851,12 +852,16 @@ func (runtimeNoopTurnClient) StartTurn(_ context.Context, query string) (driver.
 }
 
 func resolveRuntimePrincipal(env []string, cwd string) string {
-	agentID := multicasurface.RuntimeEnvValue(env, "MULTICA_AGENT_ID")
-	agentName := multicasurface.RuntimeEnvValue(env, "MULTICA_AGENT_NAME")
+	return resolveRuntimePrincipalFromContext(env, cwd, multicasurface.RuntimeContextFromActivation(env, cwd, multicasurface.RuntimeInput{}))
+}
+
+func resolveRuntimePrincipalFromContext(env []string, cwd string, activation multicasurface.RuntimeContext) string {
+	agentID := activation.AgentID
+	agentName := activation.AgentName
 	if principal := multicasurface.RuntimeMulticaRegistryPrincipal(env, cwd, agentID, agentName); principal != "" {
 		return principal
 	}
-	if principal := multicasurface.RuntimeEnvValue(env, "MNEMON_CONTROL_PRINCIPAL"); principal != "" {
+	if principal := activation.ControlPrincipal; principal != "" {
 		return principal
 	}
 	if agentName != "" {
