@@ -21,6 +21,17 @@ type AssignmentMailboxMaterial struct {
 	Rationale        string
 }
 
+type AssignmentMailboxRuntimeMaterial struct {
+	Item                RuntimeAssignmentItem
+	SessionID           string
+	RootIssueID         string
+	FallbackRootIssueID string
+	RootIssueIdentifier string
+	RootIssueTitle      string
+	AssigneeAgentName   string
+	AssigneeAgentID     string
+}
+
 type RootSessionMaterial struct {
 	Request    string
 	WorkMode   string
@@ -84,6 +95,24 @@ func AssignmentMailboxTitle(item AssignmentMailboxMaterial) string {
 		topic = "assignment"
 	}
 	return trimTitle("Assignment: " + topic)
+}
+
+func AssignmentMailboxMaterialForRuntimeItem(material AssignmentMailboxRuntimeMaterial) AssignmentMailboxMaterial {
+	item := material.Item
+	rootIssueID := firstNonEmptyString(material.RootIssueID, material.FallbackRootIssueID)
+	return AssignmentMailboxMaterial{
+		ID:               item.ID,
+		SessionID:        material.SessionID,
+		Scope:            item.Scope,
+		Assignee:         item.Assignee,
+		AssigneeDisplay:  firstNonEmptyString(material.AssigneeAgentName, material.AssigneeAgentID),
+		RootIssueID:      rootIssueID,
+		RootIssueLabel:   firstNonEmptyString(material.RootIssueIdentifier, rootIssueID),
+		RootIssueTitle:   material.RootIssueTitle,
+		ExpectedWork:     item.ExpectedWork,
+		ExpectedFeedback: item.ExpectedFeedback,
+		Rationale:        item.Rationale,
+	}
 }
 
 func RootSessionDescription(item RootSessionMaterial) string {

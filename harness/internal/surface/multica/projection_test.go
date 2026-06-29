@@ -81,6 +81,38 @@ func TestAssignmentMailboxMaterial(t *testing.T) {
 	}
 }
 
+func TestAssignmentMailboxMaterialForRuntimeItem(t *testing.T) {
+	item := AssignmentMailboxMaterialForRuntimeItem(AssignmentMailboxRuntimeMaterial{
+		Item: RuntimeAssignmentItem{
+			ID:               "asg-1",
+			Scope:            "runtime/readiness",
+			Assignee:         "researcher@team",
+			ExpectedWork:     "Check runtime output.",
+			ExpectedFeedback: "Brief result.",
+			Rationale:        "Route to the researcher mailbox.",
+		},
+		SessionID:           "multica:session:root-1",
+		RootIssueID:         "root-1",
+		FallbackRootIssueID: "fallback-root",
+		RootIssueIdentifier: "TEA-1",
+		RootIssueTitle:      "Validate runtime",
+		AssigneeAgentName:   "mnemon-researcher",
+		AssigneeAgentID:     "agent-researcher",
+	})
+	if item.ID != "asg-1" ||
+		item.SessionID != "multica:session:root-1" ||
+		item.RootIssueID != "root-1" ||
+		item.RootIssueLabel != "TEA-1" ||
+		item.RootIssueTitle != "Validate runtime" ||
+		item.Assignee != "researcher@team" ||
+		item.AssigneeDisplay != "mnemon-researcher" ||
+		item.ExpectedWork != "Check runtime output." ||
+		item.ExpectedFeedback != "Brief result." ||
+		item.Rationale != "Route to the researcher mailbox." {
+		t.Fatalf("assignment mailbox material mismatch: %+v", item)
+	}
+}
+
 func TestAssignmentMailboxTitleStripsRootLabelFromScope(t *testing.T) {
 	item := AssignmentMailboxMaterial{
 		ID:             "asg-1",

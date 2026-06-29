@@ -442,23 +442,19 @@ func runtimeItemAfterRootIngest(ingestSeq int64, result *runtimeImportResult) bo
 }
 
 func assignmentMailboxMaterial(item multicasurface.RuntimeAssignmentItem, result *runtimeImportResult, rootIssue driver.MulticaIssue, participant driver.MulticaParticipantRecord) multicasurface.AssignmentMailboxMaterial {
-	material := multicasurface.AssignmentMailboxMaterial{
-		ID:               item.ID,
-		Scope:            item.Scope,
-		Assignee:         item.Assignee,
-		AssigneeDisplay:  firstNonEmpty(participant.AgentName, participant.AgentID),
-		RootIssueID:      rootIssue.ID,
-		RootIssueLabel:   firstNonEmpty(rootIssue.Identifier, rootIssue.ID),
-		RootIssueTitle:   rootIssue.Title,
-		ExpectedWork:     item.ExpectedWork,
-		ExpectedFeedback: item.ExpectedFeedback,
-		Rationale:        item.Rationale,
+	material := multicasurface.AssignmentMailboxRuntimeMaterial{
+		Item:                item,
+		RootIssueID:         rootIssue.ID,
+		RootIssueIdentifier: rootIssue.Identifier,
+		RootIssueTitle:      rootIssue.Title,
+		AssigneeAgentName:   participant.AgentName,
+		AssigneeAgentID:     participant.AgentID,
 	}
 	if result != nil {
 		material.SessionID = result.SessionID
-		material.RootIssueID = firstNonEmpty(material.RootIssueID, result.RootIssueID)
+		material.FallbackRootIssueID = result.RootIssueID
 	}
-	return material
+	return multicasurface.AssignmentMailboxMaterialForRuntimeItem(material)
 }
 
 func findExistingMulticaAssignmentIssue(ctx context.Context, cli driver.MulticaCLI, rootIssueID string, source driver.MulticaHubLedgerSource) (driver.MulticaIssue, bool, error) {
