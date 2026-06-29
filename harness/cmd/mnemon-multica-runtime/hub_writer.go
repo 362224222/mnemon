@@ -14,6 +14,7 @@ import (
 	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	pview "github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation/view"
+	"github.com/mnemon-dev/mnemon/harness/internal/projection"
 )
 
 func (s *runtimeRPCState) writeMulticaHubArtifacts(ctx context.Context, cli driver.MulticaCLI, client *access.Client, rootIssue driver.MulticaIssue, result *runtimeImportResult) {
@@ -306,7 +307,11 @@ func (s *runtimeRPCState) writeProgressComments(ctx context.Context, cli driver.
 		if !ok {
 			continue
 		}
-		commentBody := driver.FormatMulticaProjectionComment("assignment feedback", progressCommentBody(item), []string{item.EventID})
+		commentBody := projection.FormatComment(projection.CommentMaterial{
+			Title:    "assignment feedback",
+			Body:     progressCommentBody(item),
+			EventIDs: []string{item.EventID},
+		})
 		comment, err := cli.AddIssueComment(ctx, child, commentBody)
 		if err != nil {
 			return err

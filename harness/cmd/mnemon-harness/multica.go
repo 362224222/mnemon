@@ -12,6 +12,7 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/driver"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
+	"github.com/mnemon-dev/mnemon/harness/internal/projection"
 	"github.com/spf13/cobra"
 )
 
@@ -298,7 +299,11 @@ func runMulticaProjectComment(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	body := driver.FormatMulticaProjectionComment(multicaCommentTitle, content, multicaCommentEvents)
+	body := projection.FormatComment(projection.CommentMaterial{
+		Title:    multicaCommentTitle,
+		Body:     content,
+		EventIDs: multicaCommentEvents,
+	})
 	comment, err := multicaCLI().AddIssueComment(multicaCommandContext(cmd), multicaIssueID, body)
 	if err != nil {
 		return err

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/interaction"
+	"github.com/mnemon-dev/mnemon/harness/internal/projection"
 )
 
 const (
@@ -917,29 +918,11 @@ func BuildMulticaIssueTeamworkSignal(issue MulticaIssue, opts MulticaIssueSignal
 }
 
 func FormatMulticaProjectionComment(title string, body string, eventIDs []string) string {
-	title = strings.TrimSpace(title)
-	body = strings.TrimSpace(body)
-	var b strings.Builder
-	if title != "" {
-		b.WriteString("Mnemon update: ")
-		b.WriteString(title)
-		b.WriteString("\n\n")
-	} else {
-		b.WriteString("Mnemon update\n\n")
-	}
-	if body != "" {
-		b.WriteString(body)
-		b.WriteString("\n")
-	}
-	if ids := cleanMulticaRefs(eventIDs); len(ids) > 0 {
-		b.WriteString("\n")
-		for _, id := range ids {
-			b.WriteString("mnemon:event=")
-			b.WriteString(id)
-			b.WriteString("\n")
-		}
-	}
-	return strings.TrimSpace(b.String())
+	return projection.FormatComment(projection.CommentMaterial{
+		Title:    title,
+		Body:     body,
+		EventIDs: eventIDs,
+	})
 }
 
 func DecodeMulticaIssue(r io.Reader) (MulticaIssue, error) {

@@ -21,6 +21,7 @@ import (
 	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation"
+	"github.com/mnemon-dev/mnemon/harness/internal/projection"
 )
 
 const runtimeVersion = "dev"
@@ -823,7 +824,11 @@ func (s *runtimeRPCState) projectImportComment(ctx context.Context, cli driver.M
 	if result.HubWriteStatus != "" {
 		body += fmt.Sprintf("\nMultica hub write: %s child_issues=%d feedback_comments=%d", result.HubWriteStatus, result.HubChildIssues, result.HubFeedbackComments)
 	}
-	commentBody := driver.FormatMulticaProjectionComment(title, body, []string{externalID})
+	commentBody := projection.FormatComment(projection.CommentMaterial{
+		Title:    title,
+		Body:     body,
+		EventIDs: []string{externalID},
+	})
 	comment, err := cli.AddIssueComment(ctx, issue.ID, commentBody)
 	if err != nil {
 		result.ProjectionStatus = "failed"
