@@ -448,16 +448,7 @@ func loadRuntimeIssueMetadata(ctx context.Context, cli driver.MulticaCLI, issue 
 		emitRuntimeProgress(progress, "Multica issue metadata list failed; falling back to metadata returned by issue get.")
 		return issue
 	}
-	merged := map[string]any{}
-	for key, value := range issue.Metadata {
-		merged[key] = value
-	}
-	for key, value := range listed {
-		if strings.TrimSpace(key) != "" {
-			merged[key] = value
-		}
-	}
-	issue.Metadata = merged
+	issue.Metadata = multicasurface.MergeIssueMetadata(issue.Metadata, listed)
 	emitRuntimeCommand(progress, "multica issue metadata list "+issue.ID, fmt.Sprintf("Loaded %d Multica issue metadata keys.", len(listed)), 0)
 	return issue
 }
