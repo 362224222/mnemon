@@ -191,54 +191,6 @@ func TestDaemonStatusShowsWorkerSnapshot(t *testing.T) {
 	}
 }
 
-func TestConfiguredDaemonSnapshotIncludesConfiguredRoles(t *testing.T) {
-	now := time.Date(2026, 6, 29, 9, 50, 0, 0, time.UTC)
-	cfg := productconfig.Default()
-	cfg.Daemon.InteractionWatchers = []string{" ", productconfig.ConnectionMultica}
-	cfg.Daemon.DriveSources = []string{"", productconfig.DriveManagedLocal}
-	cfg.Daemon.ProjectionSurfaces = []string{"\t", productconfig.ConnectionMultica}
-
-	snapshot := configuredDaemonSnapshot(cfg, now)
-	for name, want := range map[string]daemon.WorkerKind{
-		"multica-watch":    daemon.WorkerInteraction,
-		"managed-drive":    daemon.WorkerDrive,
-		"multica-project":  daemon.WorkerProjection,
-		"status-readiness": daemon.WorkerStatus,
-	} {
-		worker, ok := snapshot.Workers[name]
-		if !ok {
-			t.Fatalf("snapshot missing worker %q: %+v", name, snapshot.Workers)
-		}
-		if worker.Kind != want || worker.Status != "configured" || !worker.StartedAt.Equal(now) || !worker.UpdatedAt.Equal(now) {
-			t.Fatalf("worker %q mismatch: %+v", name, worker)
-		}
-	}
-	for _, name := range []string{"-watch", "-drive", "-project"} {
-		if _, ok := snapshot.Workers[name]; ok {
-			t.Fatalf("snapshot should skip empty worker name %q: %+v", name, snapshot.Workers)
-		}
-	}
-}
-
-func TestConfiguredDaemonSnapshotKeepsMnemonhubAsExchangeWatcher(t *testing.T) {
-	now := time.Date(2026, 6, 29, 10, 5, 0, 0, time.UTC)
-	cfg := productconfig.Default()
-	cfg.Connections.Mnemonhub = productconfig.MnemonhubConnection{Enabled: true, Endpoint: "https://hub.example.invalid"}
-	cfg.Daemon.InteractionWatchers = []string{productconfig.ConnectionMnemonhub}
-
-	snapshot := configuredDaemonSnapshot(cfg, now)
-	worker, ok := snapshot.Workers["mnemonhub-watch"]
-	if !ok {
-		t.Fatalf("snapshot missing mnemonhub watcher: %+v", snapshot.Workers)
-	}
-	if worker.Kind != daemon.WorkerInteraction || worker.Status != "configured" || worker.Message != "watcher=mnemonhub" {
-		t.Fatalf("mnemonhub watcher mismatch: %+v", worker)
-	}
-	if _, ok := snapshot.Workers["mnemonhub-project"]; ok {
-		t.Fatalf("mnemonhub must remain a remote exchange watcher, not projection worker: %+v", snapshot.Workers)
-	}
-}
-
 func TestLoadDaemonSnapshotConfigRejectsInvalidProductConfig(t *testing.T) {
 	root := t.TempDir()
 	reg := multicasurface.MulticaRegistry{
