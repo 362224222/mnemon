@@ -97,9 +97,10 @@ func AssignmentMailboxDescription(item AssignmentMailboxMaterial) string {
 
 func ProgressCommentBody(item ProgressFeedbackMaterial) string {
 	var b strings.Builder
-	b.WriteString("## Assignment Feedback\n\n")
-	writeBullet(&b, "Assignment", codeSpan(item.AssignmentRef))
-	writeBullet(&b, "Feedback", codeSpan(item.FeedbackKind))
+	b.WriteString("## Feedback\n\n")
+	if status := visibleFeedbackStatus(item.FeedbackKind); status != "" {
+		writeBullet(&b, "Status", status)
+	}
 	if summary := strings.TrimSpace(item.Summary); summary != "" {
 		b.WriteString("\n## Summary\n\n")
 		b.WriteString(summary)
@@ -146,7 +147,13 @@ func RuntimeProjectionCommentBody(item RuntimeProjectionMaterial) string {
 		writeBullet(&b, "Managed wake", codeSpan(item.WakeStatus))
 		writeBullet(&b, "Managed turn", codeSpan(item.WakeTurnID))
 		if item.HubWriteStatus != "" {
-			writeBullet(&b, "Multica hub write", fmt.Sprintf("%s child_issues=%d feedback_comments=%d", item.HubWriteStatus, item.HubChildIssues, item.HubFeedbackComment))
+			writeBullet(&b, "Projection status", visibleProjectionStatus(item.HubWriteStatus))
+			if item.HubChildIssues > 0 {
+				writeBullet(&b, "Assignments created", fmt.Sprintf("%d", item.HubChildIssues))
+			}
+			if item.HubFeedbackComment > 0 {
+				writeBullet(&b, "Feedback comments added", fmt.Sprintf("%d", item.HubFeedbackComment))
+			}
 		}
 	}
 	return strings.TrimSpace(b.String())
@@ -288,6 +295,46 @@ func visibleExpectedFeedback(value string) string {
 		return "progress, result, or blocker"
 	}
 	return value
+}
+
+func visibleFeedbackStatus(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "":
+		return ""
+	case "progress":
+		return "progress update"
+	case "result":
+		return "result"
+	case "blocker":
+		return "blocked"
+	case "review":
+		return "ready for review"
+	case "waiting":
+		return "waiting"
+	case "cancelled", "canceled":
+		return "cancelled"
+	default:
+		return strings.ReplaceAll(strings.TrimSpace(value), "_", " ")
+	}
+}
+
+func visibleProjectionStatus(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "":
+		return ""
+	case "created":
+		return "updates created"
+	case "updated":
+		return "updates synced"
+	case "commented":
+		return "feedback posted"
+	case "skipped":
+		return "no visible updates needed"
+	case "failed":
+		return "update failed"
+	default:
+		return strings.ReplaceAll(strings.TrimSpace(value), "_", " ")
+	}
 }
 
 func writeBullet(b *strings.Builder, label, value string) {

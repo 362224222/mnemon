@@ -828,8 +828,18 @@ esac
 		}
 	}
 	comment := mustReadRuntimeTestFile(t, commentPath)
-	if !strings.Contains(comment, "Multica hub write: created child_issues=1") {
-		t.Fatalf("root comment missing hub write summary:\n%s", comment)
+	for _, want := range []string{
+		"Projection status: updates created",
+		"Assignments created: 1",
+	} {
+		if !strings.Contains(comment, want) {
+			t.Fatalf("root comment missing %q:\n%s", want, comment)
+		}
+	}
+	for _, blocked := range []string{"Multica hub write", "child_issues", "feedback_comments"} {
+		if strings.Contains(comment, blocked) {
+			t.Fatalf("root comment must not expose machine field %q:\n%s", blocked, comment)
+		}
 	}
 }
 

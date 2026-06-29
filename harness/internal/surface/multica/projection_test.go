@@ -78,9 +78,12 @@ func TestProgressFeedbackMaterial(t *testing.T) {
 	}
 	body := ProgressCommentBody(item)
 	for _, want := range []string{
-		"## Assignment Feedback",
-		"Assignment: `asg-1`",
-		"Feedback: `result`",
+		"## Feedback",
+		"Status: result",
+		"## Summary",
+		"Done",
+		"## Result",
+		"Validated",
 		"## Artifacts",
 		"- run-1",
 		"## Evidence",
@@ -88,6 +91,11 @@ func TestProgressFeedbackMaterial(t *testing.T) {
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("progress body missing %q:\n%s", want, body)
+		}
+	}
+	for _, blocked := range []string{"Assignment: `asg-1`", "Feedback: `result`", "progress_digest", "assignment_ref", "mnemon."} {
+		if strings.Contains(body, blocked) {
+			t.Fatalf("progress body must keep machine field %q in metadata/markers, not visible text:\n%s", blocked, body)
 		}
 	}
 	if got := ProgressIssueStatus(item); got != "done" {
@@ -127,10 +135,17 @@ func TestRuntimeProjectionCommentBodyForIntake(t *testing.T) {
 		"Mnemond ingest: seq=42 duplicate=false ticked=true",
 		"Managed wake: `completed`",
 		"Managed turn: `turn-1`",
-		"Multica hub write: created child_issues=2 feedback_comments=1",
+		"Projection status: updates created",
+		"Assignments created: 2",
+		"Feedback comments added: 1",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("runtime projection body missing %q:\n%s", want, body)
+		}
+	}
+	for _, blocked := range []string{"Hub backend:", "Multica hub write", "child_issues", "feedback_comments"} {
+		if strings.Contains(body, blocked) {
+			t.Fatalf("runtime projection body must not expose machine field %q:\n%s", blocked, body)
 		}
 	}
 }
