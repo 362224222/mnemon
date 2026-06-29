@@ -122,3 +122,34 @@ func TestRuntimeAgentMessageMessagesUsePhaseAndDelta(t *testing.T) {
 		t.Fatalf("unexpected delta message: %+v", messages[1])
 	}
 }
+
+func TestRuntimeTextInputExtractsOnlyTextItems(t *testing.T) {
+	got := RuntimeTextInput(map[string]any{
+		"input": []any{
+			map[string]any{"type": "text", "text": "Open [TEA-1](mention://issue/iss-1)."},
+			map[string]any{"type": "image", "url": "ignored"},
+			map[string]any{"type": "text", "text": "  "},
+			map[string]any{"type": "text", "text": "Then summarize."},
+			"ignored",
+		},
+	})
+	want := "Open [TEA-1](mention://issue/iss-1).\nThen summarize."
+	if got != want {
+		t.Fatalf("RuntimeTextInput() = %q, want %q", got, want)
+	}
+	if got := RuntimeTextInput(map[string]any{"input": "not-list"}); got != "" {
+		t.Fatalf("non-list input should be ignored, got %q", got)
+	}
+}
+
+func TestRuntimeRefNormalizesMulticaRefs(t *testing.T) {
+	if got := RuntimeRef(" issue ", " iss-1 "); got != "multica:issue:iss-1" {
+		t.Fatalf("RuntimeRef() = %q", got)
+	}
+	if got := RuntimeRef("", "iss-1"); got != "" {
+		t.Fatalf("empty kind should produce no ref, got %q", got)
+	}
+	if got := RuntimeRef("issue", ""); got != "" {
+		t.Fatalf("empty id should produce no ref, got %q", got)
+	}
+}

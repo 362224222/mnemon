@@ -136,6 +136,33 @@ func RuntimeUserMessage(text string) map[string]any {
 	}
 }
 
+func RuntimeTextInput(params map[string]any) string {
+	input, ok := params["input"].([]any)
+	if !ok {
+		return ""
+	}
+	var parts []string
+	for _, item := range input {
+		obj, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if text, _ := obj["text"].(string); strings.TrimSpace(text) != "" {
+			parts = append(parts, text)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+func RuntimeRef(kind, id string) string {
+	kind = strings.TrimSpace(kind)
+	id = strings.TrimSpace(id)
+	if kind == "" || id == "" {
+		return ""
+	}
+	return "multica:" + kind + ":" + id
+}
+
 func runtimeManagedTraceItem(event activationtrace.Event) map[string]any {
 	if len(event.Item) == 0 {
 		return nil

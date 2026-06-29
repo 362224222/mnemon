@@ -213,7 +213,7 @@ func (s *runtimeRPCState) handle(msg rpcMessage, emit func(rpcMessage) error) er
 		return emitAll(rpcMessage{ID: msg.ID, Result: map[string]any{}})
 	case "turn/start":
 		s.TurnID = runtimeID("turn", s.now())
-		input := extractRuntimeInput(msg.Params)
+		input := multicasurface.RuntimeTextInput(msg.Params)
 		nowMs := s.now().UnixMilli()
 		userItem := multicasurface.RuntimeUserMessage(input)
 		if err := emitAll(
@@ -357,11 +357,11 @@ func (s *runtimeRPCState) importIssue(input string, progress runtimeProgressSink
 		AgentID:     envValue(s.Env, "MULTICA_AGENT_ID"),
 		Principal:   result.Principal,
 		ContextRefs: []string{
-			runtimeRef("issue", issue.ID),
-			runtimeRef("task", taskID),
-			runtimeRef("agent", envValue(s.Env, "MULTICA_AGENT_ID")),
+			multicasurface.RuntimeRef("issue", issue.ID),
+			multicasurface.RuntimeRef("task", taskID),
+			multicasurface.RuntimeRef("agent", envValue(s.Env, "MULTICA_AGENT_ID")),
 		},
-		EvidenceRefs: []string{runtimeRef("issue", issue.ID)},
+		EvidenceRefs: []string{multicasurface.RuntimeRef("issue", issue.ID)},
 		ExternalID:   externalID,
 	})
 	if err != nil {
@@ -863,15 +863,6 @@ func principalFromRegistry(env []string, cwd, agentID, agentName string) string 
 	return ""
 }
 
-func runtimeRef(kind, id string) string {
-	kind = strings.TrimSpace(kind)
-	id = strings.TrimSpace(id)
-	if kind == "" || id == "" {
-		return ""
-	}
-	return "multica:" + kind + ":" + id
-}
-
 func formatRuntimeFinalAnswer(result runtimeImportResult) string {
 	var b strings.Builder
 	if result.IssueID == "" {
@@ -1208,24 +1199,6 @@ func runtimeProjectionProgress(result runtimeImportResult) string {
 
 func markIssueInProgress(ctx context.Context, cli driver.MulticaCLI, issueID string) {
 	_, _ = cli.SetIssueStatus(ctx, issueID, "in_progress")
-}
-
-func extractRuntimeInput(params map[string]any) string {
-	input, ok := params["input"].([]any)
-	if !ok {
-		return ""
-	}
-	var parts []string
-	for _, item := range input {
-		obj, ok := item.(map[string]any)
-		if !ok {
-			continue
-		}
-		if text, _ := obj["text"].(string); strings.TrimSpace(text) != "" {
-			parts = append(parts, text)
-		}
-	}
-	return strings.Join(parts, "\n")
 }
 
 func wantsVersion(args []string) bool {
