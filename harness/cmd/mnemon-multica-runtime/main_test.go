@@ -434,7 +434,7 @@ func TestRuntimeForwardsManagedCodexTraceItemsOnOuterTurn(t *testing.T) {
 		"phase": "commentary",
 	}
 	for _, event := range []driver.ManagedTurnTraceEvent{traceStarted, traceDelta, traceCompleted} {
-		if err := emitRuntimeManagedTraceEvent(emit, "outer-thread", "outer-turn", event, fixedRuntimeTime()); err != nil {
+		if err := emitRuntimeMessages(emit, multicasurface.RuntimeManagedTraceMessages("outer-thread", "outer-turn", event, fixedRuntimeTime())); err != nil {
 			t.Fatal(err)
 		}
 	}

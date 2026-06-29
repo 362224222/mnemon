@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -222,7 +221,7 @@ func (s *runtimeRPCState) handle(msg rpcMessage, emit func(rpcMessage) error) er
 		s.TurnID = runtimeID("turn", s.now())
 		input := extractRuntimeInput(msg.Params)
 		nowMs := s.now().UnixMilli()
-		userItem := runtimeUserMessage(input)
+		userItem := multicasurface.RuntimeUserMessage(input)
 		if err := emitAll(
 			rpcMessage{
 				ID: msg.ID,
@@ -240,11 +239,11 @@ func (s *runtimeRPCState) handle(msg rpcMessage, emit func(rpcMessage) error) er
 			},
 			rpcMessage{
 				Method: "item/started",
-				Params: runtimeItemParams(s.ThreadID, s.TurnID, userItem, "startedAtMs", nowMs),
+				Params: multicasurface.RuntimeItemParams(s.ThreadID, s.TurnID, userItem, "startedAtMs", nowMs),
 			},
 			rpcMessage{
 				Method: "item/completed",
-				Params: runtimeItemParams(s.ThreadID, s.TurnID, userItem, "completedAtMs", nowMs),
+				Params: multicasurface.RuntimeItemParams(s.ThreadID, s.TurnID, userItem, "completedAtMs", nowMs),
 			},
 		); err != nil {
 			return err
@@ -255,23 +254,29 @@ func (s *runtimeRPCState) handle(msg rpcMessage, emit func(rpcMessage) error) er
 				return
 			}
 			if event.Trace != nil {
-				progressErr = emitRuntimeManagedTraceEvent(emit, s.ThreadID, s.TurnID, *event.Trace, s.now())
+				progressErr = emitRuntimeMessages(emit, multicasurface.RuntimeManagedTraceMessages(s.ThreadID, s.TurnID, *event.Trace, s.now()))
 				return
 			}
 			if strings.TrimSpace(event.Command) != "" {
-				progressErr = emitRuntimeCommandExecution(emit, s.ThreadID, s.TurnID, s.nextItemID("call"), s.CWD, event, s.now())
+				progressErr = emitRuntimeMessages(emit, multicasurface.RuntimeCommandExecutionMessages(s.ThreadID, s.TurnID, s.nextItemID("call"), s.CWD, multicasurface.RuntimeCommandExecutionMaterial{
+					Command:    event.Command,
+					CWD:        event.CWD,
+					Output:     event.Output,
+					ExitCode:   event.ExitCode,
+					DurationMs: event.DurationMs,
+				}, s.now()))
 				return
 			}
 			text := strings.TrimSpace(event.Text)
 			if text != "" {
-				progressErr = emitRuntimeAgentMessage(emit, s.ThreadID, s.TurnID, s.nextItemID("msg"), text, "commentary", s.now())
+				progressErr = emitRuntimeMessages(emit, multicasurface.RuntimeAgentMessageMessages(s.ThreadID, s.TurnID, s.nextItemID("msg"), text, "commentary", s.now()))
 			}
 		}
 		finalAnswer := s.runTurn(input, progress)
 		if progressErr != nil {
 			return progressErr
 		}
-		if err := emitRuntimeAgentMessage(emit, s.ThreadID, s.TurnID, s.nextItemID("msg"), finalAnswer, "final_answer", s.now()); err != nil {
+		if err := emitRuntimeMessages(emit, multicasurface.RuntimeAgentMessageMessages(s.ThreadID, s.TurnID, s.nextItemID("msg"), finalAnswer, "final_answer", s.now())); err != nil {
 			return err
 		}
 		return emitAll(
@@ -1197,240 +1202,13 @@ func writeRuntimeRPC(w io.Writer, msg rpcMessage) error {
 	return err
 }
 
-func emitRuntimeManagedTraceEvent(emit func(rpcMessage) error, threadID, turnID string, event driver.ManagedTurnTraceEvent, now time.Time) error {
-	switch event.Method {
-	case "item/started":
-		item := runtimeManagedTraceItem(event)
-		if len(item) == 0 {
-			return nil
-		}
-		return emit(rpcMessage{
-			Method: "item/started",
-			Params: runtimeItemParams(threadID, turnID, item, "startedAtMs", now.UTC().UnixMilli()),
-		})
-	case "item/completed":
-		item := runtimeManagedTraceItem(event)
-		if len(item) == 0 {
-			return nil
-		}
-		return emit(rpcMessage{
-			Method: "item/completed",
-			Params: runtimeItemParams(threadID, turnID, item, "completedAtMs", now.UTC().UnixMilli()),
-		})
-	case "item/agentMessage/delta":
-		text := strings.TrimSpace(event.Text)
-		if text == "" {
-			return nil
-		}
-		return emit(runtimeAgentDelta(threadID, turnID, runtimeManagedTraceItemID(event), text))
-	default:
-		return nil
-	}
-}
-
-func runtimeManagedTraceItem(event driver.ManagedTurnTraceEvent) map[string]any {
-	if len(event.Item) == 0 {
-		return nil
-	}
-	item, _ := cloneRuntimeAny(event.Item).(map[string]any)
-	if item == nil {
-		return nil
-	}
-	item["id"] = runtimeManagedTraceItemID(event)
-	if _, ok := item["source"]; !ok {
-		item["source"] = "managedCodexAppServer"
-	}
-	if strings.TrimSpace(event.SourceRuntime) != "" {
-		item["mnemonSourceRuntime"] = event.SourceRuntime
-	}
-	if strings.TrimSpace(event.Principal) != "" {
-		item["mnemonPrincipal"] = event.Principal
-	}
-	if strings.TrimSpace(event.TurnID) != "" {
-		item["mnemonManagedTurnId"] = event.TurnID
-	}
-	return item
-}
-
-func runtimeManagedTraceItemID(event driver.ManagedTurnTraceEvent) string {
-	key := firstNonEmpty(event.ItemID, event.Command, event.Text, event.Kind, event.Method)
-	return runtimeTextDigestID("managed", event.SourceRuntime+"\n"+event.TurnID+"\n"+key)
-}
-
-func cloneRuntimeAny(value any) any {
-	switch typed := value.(type) {
-	case map[string]any:
-		out := map[string]any{}
-		for key, item := range typed {
-			out[key] = cloneRuntimeAny(item)
-		}
-		return out
-	case []any:
-		out := make([]any, 0, len(typed))
-		for _, item := range typed {
-			out = append(out, cloneRuntimeAny(item))
-		}
-		return out
-	default:
-		return typed
-	}
-}
-
-func emitRuntimeCommandExecution(emit func(rpcMessage) error, threadID, turnID, itemID, fallbackCWD string, event runtimeProgressEvent, now time.Time) error {
-	command := strings.TrimSpace(event.Command)
-	if command == "" {
-		return nil
-	}
-	if strings.TrimSpace(itemID) == "" {
-		itemID = runtimeTextDigestID("call", command+"\n"+event.Output)
-	}
-	cwd := strings.TrimSpace(event.CWD)
-	if cwd == "" {
-		cwd = fallbackCWD
-	}
-	output := strings.TrimSpace(event.Output)
-	durationMs := event.DurationMs
-	if durationMs < 0 {
-		durationMs = 0
-	}
-	nowMs := now.UTC().UnixMilli()
-	started := runtimeCommandExecution(itemID, command, cwd, "inProgress", "", nil, nil)
-	completed := runtimeCommandExecution(itemID, command, cwd, "completed", output, event.ExitCode, durationMs)
-	messages := []rpcMessage{
-		{
-			Method: "item/started",
-			Params: runtimeItemParams(threadID, turnID, started, "startedAtMs", nowMs),
-		},
-		{
-			Method: "item/completed",
-			Params: runtimeItemParams(threadID, turnID, completed, "completedAtMs", nowMs),
-		},
-	}
+func emitRuntimeMessages(emit func(rpcMessage) error, messages []multicasurface.RuntimeRPCMessage) error {
 	for _, message := range messages {
-		if err := emit(message); err != nil {
+		if err := emit(rpcMessage{Method: message.Method, Params: message.Params}); err != nil {
 			return err
 		}
 	}
 	return nil
-}
-
-func runtimeCommandExecution(id, command, cwd, status, output string, exitCode any, durationMs any) map[string]any {
-	item := map[string]any{
-		"type":             "commandExecution",
-		"id":               id,
-		"command":          command,
-		"cwd":              cwd,
-		"processId":        "mnemon-runtime",
-		"source":           "mnemonRuntime",
-		"status":           status,
-		"commandActions":   []any{map[string]any{"type": "unknown", "command": command}},
-		"aggregatedOutput": nil,
-		"exitCode":         nil,
-		"durationMs":       nil,
-	}
-	if status == "completed" {
-		item["aggregatedOutput"] = output
-		item["exitCode"] = exitCode
-		item["durationMs"] = durationMs
-	}
-	return item
-}
-
-func emitRuntimeAgentMessage(emit func(rpcMessage) error, threadID, turnID, itemID, text, phase string, now time.Time) error {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return nil
-	}
-	phase = strings.TrimSpace(phase)
-	if phase == "" {
-		phase = "commentary"
-	}
-	if strings.TrimSpace(itemID) == "" {
-		itemID = runtimeTextDigestID("msg", text)
-	}
-	nowMs := now.UTC().UnixMilli()
-	messages := []rpcMessage{
-		{
-			Method: "item/started",
-			Params: runtimeItemParams(threadID, turnID, runtimeAgentMessage(itemID, "", phase), "startedAtMs", nowMs),
-		},
-		runtimeAgentDelta(threadID, turnID, itemID, text),
-		{
-			Method: "item/completed",
-			Params: runtimeItemParams(threadID, turnID, runtimeAgentMessage(itemID, text, phase), "completedAtMs", nowMs),
-		},
-	}
-	for _, message := range messages {
-		if err := emit(message); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func runtimeAgentDelta(threadID, turnID, itemID, delta string) rpcMessage {
-	return rpcMessage{
-		Method: "item/agentMessage/delta",
-		Params: map[string]any{
-			"threadId": threadID,
-			"turnId":   turnID,
-			"itemId":   itemID,
-			"delta":    delta,
-		},
-	}
-}
-
-func runtimeItemParams(threadID, turnID string, item map[string]any, timeKey string, timestampMs int64) map[string]any {
-	params := map[string]any{
-		"threadId": threadID,
-		"turnId":   turnID,
-		"item":     item,
-	}
-	if timeKey != "" && timestampMs > 0 {
-		params[timeKey] = timestampMs
-	}
-	return params
-}
-
-func runtimeUserMessage(text string) map[string]any {
-	return map[string]any{
-		"type":     "userMessage",
-		"id":       runtimeTextDigestID("user", text),
-		"clientId": nil,
-		"content": []any{map[string]any{
-			"type":          "text",
-			"text":          text,
-			"text_elements": []any{},
-		}},
-	}
-}
-
-func runtimeAgentMessage(id, text, phase string) map[string]any {
-	id = strings.TrimSpace(id)
-	if id == "" {
-		id = runtimeTextDigestID("msg", text)
-	}
-	phase = strings.TrimSpace(phase)
-	if phase == "" {
-		phase = "commentary"
-	}
-	return map[string]any{
-		"type":           "agentMessage",
-		"id":             id,
-		"text":           text,
-		"phase":          phase,
-		"memoryCitation": nil,
-	}
-}
-
-func runtimeTextDigestID(prefix, text string) string {
-	prefix = strings.TrimSpace(prefix)
-	if prefix == "" {
-		prefix = "item"
-	}
-	sum := sha256.Sum256([]byte(text))
-	digest := fmt.Sprintf("%x", sum[:])[:24]
-	return prefix + "_" + digest
 }
 
 func emitRuntimeProgress(progress runtimeProgressSink, text string) {
