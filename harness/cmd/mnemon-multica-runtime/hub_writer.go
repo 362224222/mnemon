@@ -313,9 +313,12 @@ func (s *runtimeRPCState) writeProgressComments(ctx context.Context, cli driver.
 		}
 		material := progressFeedbackMaterial(item)
 		commentBody := projection.FormatComment(projection.CommentMaterial{
-			Title:    "assignment feedback",
-			Body:     multicasurface.ProgressCommentBody(material),
-			EventIDs: []string{item.EventID},
+			Title:        "assignment feedback",
+			Body:         multicasurface.ProgressCommentBody(material),
+			EventIDs:     []string{item.EventID},
+			EventType:    "progress_digest.accepted",
+			SessionID:    result.SessionID,
+			AssignmentID: item.AssignmentRef,
 		})
 		comment, err := cli.AddIssueComment(ctx, child, commentBody)
 		if err != nil {

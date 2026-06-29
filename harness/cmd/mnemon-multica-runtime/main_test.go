@@ -279,6 +279,7 @@ esac
 		"Principal: `planner@team`",
 		"Managed wake: `completed`",
 		"mnemon:event=multica-task-task-1",
+		"mnemon:type=teamwork_signal.write_candidate.observed",
 	} {
 		if !strings.Contains(string(comment), want) {
 			t.Fatalf("comment missing %s:\n%s", want, comment)
@@ -532,6 +533,8 @@ esac
 		"Mnemon update: issue admitted",
 		"## Mnemon Runtime",
 		"Issue: [TEA-1](mention://issue/root-1)",
+		"mnemon:type=teamwork_signal.write_candidate.observed",
+		"mnemon:session=multica:session:root-1",
 	} {
 		if !strings.Contains(comment, want) {
 			t.Fatalf("comment missing %q:\n%s", want, comment)
@@ -633,6 +636,8 @@ esac
 		"Mnemon update: issue admitted",
 		"Mnemond ingest: seq=29",
 		"## Mnemon Runtime",
+		"mnemon:type=teamwork_signal.write_candidate.observed",
+		"mnemon:session=multica:session:iss-9",
 	} {
 		if !strings.Contains(comment, want) {
 			t.Fatalf("comment missing %q:\n%s", want, comment)
@@ -837,7 +842,7 @@ func TestRuntimeCorrelatesAssignmentMailboxWithoutNewIngest(t *testing.T) {
 printf '%s\n' "$*" >> "$MULTICA_ARGS_PATH"
 case "$*" in
   *"issue get child-1"*) printf '{"id":"child-1","identifier":"TEA-2","title":"Assignment mailbox","description":"Visible assignment summary only.","status":"todo","metadata":{}}\n' ;;
-  *"issue metadata list child-1"*) printf '[{"key":"mnemon.hub_backend","value":"multica"},{"key":"mnemon.kind","value":"assignment_mailbox"},{"key":"mnemon.session_id","value":"multica:session:root-1"},{"key":"mnemon.root_issue_id","value":"root-1"},{"key":"mnemon.assignment_id","value":"asg-1"},{"key":"mnemon.assignment_fingerprint","value":"sha256:abc"},{"key":"mnemon.event_id","value":"event-assignment-1"},{"key":"mnemon.principal","value":"worker@team"}]\n' ;;
+  *"issue metadata list child-1"*) printf '[{"key":"mnemon.hub_backend","value":"multica"},{"key":"mnemon.kind","value":"assignment_mailbox"},{"key":"mnemon.session_id","value":"multica:session:root-1"},{"key":"mnemon.root_issue_id","value":"root-1"},{"key":"mnemon.assignment_id","value":"asg-1"},{"key":"mnemon.assignment_fingerprint","value":"sha256:abc"},{"key":"mnemon.event_id","value":"event-assignment-1"},{"key":"mnemon.event_type","value":"assignment.accepted"},{"key":"mnemon.principal","value":"worker@team"}]\n' ;;
   *"issue comment add child-1"*) cat > "$MULTICA_COMMENT_PATH"; printf '{"id":"comment-child","issue_id":"child-1","content":"ok","type":"comment"}\n' ;;
   *) printf '{}\n' ;;
 esac
@@ -931,6 +936,9 @@ esac
 		"## Mnemon Runtime",
 		"Root issue: [root-1](mention://issue/root-1)",
 		"mnemon:event=event-assignment-1",
+		"mnemon:type=assignment.accepted",
+		"mnemon:session=multica:session:root-1",
+		"mnemon:assignment=asg-1",
 		"Managed wake: `completed`",
 	} {
 		if !strings.Contains(comment, want) {

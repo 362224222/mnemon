@@ -441,7 +441,7 @@ func (s *runtimeRPCState) importIssue(input string, progress runtimeProgressSink
 	mergeRuntimeHubProjectionDeltas(&result, earlyHubDeltas)
 	emitRuntimeCommand(progress, "mnemon multica hub project --issue "+issue.ID, runtimeHubWriteProgress(result), runtimeExitCode(result.HubWriteErr))
 	emitRuntimeProgress(progress, runtimeHubWriteProgress(result))
-	s.projectImportComment(multicaCtx, cli, issue, draft.ExternalID, &result)
+	s.projectImportComment(multicaCtx, cli, issue, draft.ExternalID, draft.EventType, &result)
 	emitRuntimeCommand(progress, "multica issue comment add "+issue.ID, runtimeProjectionProgress(result), runtimeExitCode(result.ProjectionErr))
 	emitRuntimeProgress(progress, runtimeProjectionProgress(result))
 	return result
@@ -497,7 +497,7 @@ func (s *runtimeRPCState) correlateAssignmentMailbox(ctx context.Context, cli dr
 			emitRuntimeProgress(progress, runtimeHubWriteProgress(*result))
 		}
 	}
-	s.projectImportComment(ctx, cli, issue, multicasurface.AssignmentMailboxMarker(result.HubMetadata, result.IssueID), result)
+	s.projectImportComment(ctx, cli, issue, multicasurface.AssignmentMailboxMarker(result.HubMetadata, result.IssueID), result.HubMetadata.EventType, result)
 	emitRuntimeCommand(progress, "multica issue comment add "+issue.ID, runtimeProjectionProgress(*result), runtimeExitCode(result.ProjectionErr))
 	emitRuntimeProgress(progress, runtimeProjectionProgress(*result))
 	return *result
@@ -705,7 +705,7 @@ func mergeRuntimeHubProjectionDeltas(result *runtimeImportResult, deltas []runti
 	}
 }
 
-func (s *runtimeRPCState) projectImportComment(ctx context.Context, cli driver.MulticaCLI, issue driver.MulticaIssue, externalID string, result *runtimeImportResult) {
+func (s *runtimeRPCState) projectImportComment(ctx context.Context, cli driver.MulticaCLI, issue driver.MulticaIssue, externalID, eventType string, result *runtimeImportResult) {
 	if result == nil {
 		return
 	}
@@ -718,9 +718,12 @@ func (s *runtimeRPCState) projectImportComment(ctx context.Context, cli driver.M
 		title = "assignment mailbox correlated"
 	}
 	commentBody := projection.FormatComment(projection.CommentMaterial{
-		Title:    title,
-		Body:     multicasurface.RuntimeProjectionCommentBody(runtimeProjectionMaterial(issue, *result)),
-		EventIDs: []string{externalID},
+		Title:        title,
+		Body:         multicasurface.RuntimeProjectionCommentBody(runtimeProjectionMaterial(issue, *result)),
+		EventIDs:     []string{externalID},
+		EventType:    eventType,
+		SessionID:    result.SessionID,
+		AssignmentID: result.AssignmentID,
 	})
 	comment, err := cli.AddIssueComment(ctx, issue.ID, commentBody)
 	if err != nil {

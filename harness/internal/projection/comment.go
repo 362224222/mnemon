@@ -5,9 +5,12 @@ import (
 )
 
 type CommentMaterial struct {
-	Title    string
-	Body     string
-	EventIDs []string
+	Title        string
+	Body         string
+	EventIDs     []string
+	EventType    string
+	SessionID    string
+	AssignmentID string
 }
 
 func FormatComment(material CommentMaterial) string {
@@ -28,12 +31,26 @@ func FormatComment(material CommentMaterial) string {
 	if ids := cleanStrings(material.EventIDs); len(ids) > 0 {
 		b.WriteString("\n")
 		for _, id := range ids {
-			b.WriteString("mnemon:event=")
-			b.WriteString(id)
-			b.WriteString("\n")
+			writeMarker(&b, "event", id)
 		}
+		writeMarker(&b, "type", material.EventType)
+		writeMarker(&b, "session", material.SessionID)
+		writeMarker(&b, "assignment", material.AssignmentID)
 	}
 	return strings.TrimSpace(b.String())
+}
+
+func writeMarker(b *strings.Builder, key, value string) {
+	key = strings.TrimSpace(key)
+	value = strings.TrimSpace(value)
+	if key == "" || value == "" {
+		return
+	}
+	b.WriteString("mnemon:")
+	b.WriteString(key)
+	b.WriteString("=")
+	b.WriteString(value)
+	b.WriteString("\n")
 }
 
 func cleanStrings(values []string) []string {
