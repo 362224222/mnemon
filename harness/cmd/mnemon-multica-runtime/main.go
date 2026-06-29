@@ -132,10 +132,18 @@ func runRuntime(cfg runtimeConfig) error {
 		}
 	}
 	if runtimeProbeModeEnabled(cfg.Args) {
+		if wantsRuntimeHelp(cfg.Args) {
+			writeRuntimeHelp(cfg.Stdout)
+			return nil
+		}
 		return runRuntimeProbe(cfg)
 	}
 	if wantsVersion(cfg.Args) {
 		fmt.Fprintf(cfg.Stdout, "%s %s\n", multicasurface.MulticaRuntimeCommandName, runtimeVersion)
+		return nil
+	}
+	if wantsRuntimeHelp(cfg.Args) {
+		writeRuntimeHelp(cfg.Stdout)
 		return nil
 	}
 	return runRuntimeRPC(cfg, cwd)
@@ -1005,6 +1013,27 @@ func wantsVersion(args []string) bool {
 		}
 	}
 	return false
+}
+
+func wantsRuntimeHelp(args []string) bool {
+	for _, arg := range args {
+		switch strings.TrimSpace(arg) {
+		case "help", "--help", "-help", "-h":
+			return true
+		}
+	}
+	return false
+}
+
+func writeRuntimeHelp(w io.Writer) {
+	fmt.Fprintf(w, "%s is an external Multica runtime adapter for the Mnemon event system.\n", multicasurface.MulticaRuntimeCommandName)
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Usage:")
+	fmt.Fprintf(w, "  %s app-server --listen stdio://\n", multicasurface.MulticaRuntimeCommandName)
+	fmt.Fprintf(w, "  %s --version\n", multicasurface.MulticaRuntimeCommandName)
+	fmt.Fprintf(w, "  %s --probe app-server --listen stdio://\n", multicasurface.MulticaRuntimeCommandName)
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "The adapter receives Multica runtime RPC on stdin/stdout, loads issue context through the Multica CLI, submits structured EventMaterial to mnemond when configured, wakes only the locally owned managed agent with [mnemon:wake], streams activation trace, and projects accepted state back to Multica.")
 }
 
 func runtimeProbeModeEnabled(args []string) bool {

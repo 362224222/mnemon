@@ -71,6 +71,40 @@ func runtimeTestEnv(values ...string) []string {
 	return append(env, values...)
 }
 
+func TestRuntimeHelpDescribesIndependentAdapter(t *testing.T) {
+	for _, args := range [][]string{{"--help"}, {"--probe", "--help"}} {
+		var out bytes.Buffer
+		err := runRuntime(runtimeConfig{
+			Args:   args,
+			CWD:    t.TempDir(),
+			Stdin:  strings.NewReader(""),
+			Stdout: &out,
+		})
+		if err != nil {
+			t.Fatalf("%v help should exit successfully, got %v", args, err)
+		}
+		got := out.String()
+		for _, want := range []string{
+			"external Multica runtime adapter",
+			"Mnemon event system",
+			"stdin/stdout",
+			"structured EventMaterial",
+			"mnemond",
+			"[mnemon:wake]",
+			"projects accepted state back to Multica",
+		} {
+			if !strings.Contains(got, want) {
+				t.Fatalf("%v runtime help missing %q:\n%s", args, want, got)
+			}
+		}
+		for _, blocked := range []string{"mnemon multica", "mnemon-harness multica", "global planner"} {
+			if strings.Contains(got, blocked) {
+				t.Fatalf("%v runtime help leaked forbidden command/role wording %q:\n%s", args, blocked, got)
+			}
+		}
+	}
+}
+
 func TestRuntimeImportUsesStructuredIssueIdentity(t *testing.T) {
 	tmp := t.TempDir()
 	argsPath := filepath.Join(tmp, "multica.args")
