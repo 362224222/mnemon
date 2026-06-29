@@ -309,6 +309,12 @@ func (s *runtimeRPCState) writeProgressComments(ctx context.Context, cli driver.
 			return err
 		}
 		if !ok {
+			child, ok, err = findAssignmentTargetFromMulticaHub(ctx, cli, result.RootIssueID, result.SessionID, item.AssignmentRef)
+			if err != nil {
+				return err
+			}
+		}
+		if !ok {
 			continue
 		}
 		material := progressFeedbackMaterial(item)
@@ -689,6 +695,30 @@ func findAssignmentTargetFromLedger(ledger *driver.FileMulticaHubLedger, session
 		}
 		if record.Source.SessionID == sessionID && record.Source.AssignmentID == assignmentID && strings.TrimSpace(record.Target.ChildIssueID) != "" {
 			return record.Target.ChildIssueID, true, nil
+		}
+	}
+	return "", false, nil
+}
+
+func findAssignmentTargetFromMulticaHub(ctx context.Context, cli driver.MulticaCLI, rootIssueID, sessionID, assignmentID string) (string, bool, error) {
+	children, err := cli.ListIssueChildren(ctx, rootIssueID)
+	if err != nil {
+		return "", false, err
+	}
+	for _, child := range children {
+		meta := driver.MulticaIssueHubMetadata(child)
+		if !meta.IsAssignmentMailbox() {
+			listed, err := cli.ListIssueMetadata(ctx, child.ID)
+			if err != nil {
+				return "", false, err
+			}
+			meta = driver.ParseMulticaHubMetadata(stringMapToAny(listed))
+		}
+		if !meta.IsAssignmentMailbox() {
+			continue
+		}
+		if meta.SessionID == sessionID && meta.AssignmentID == assignmentID && strings.TrimSpace(child.ID) != "" {
+			return child.ID, true, nil
 		}
 	}
 	return "", false, nil
