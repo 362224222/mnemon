@@ -1,6 +1,8 @@
 package driver
 
 import (
+	"context"
+
 	multicasurface "github.com/mnemon-dev/mnemon/harness/internal/surface/multica"
 )
 
@@ -53,6 +55,18 @@ func ParseMulticaHubMetadata(raw map[string]any) MulticaHubMetadata {
 
 func MulticaIssueHubMetadata(issue MulticaIssue) MulticaHubMetadata {
 	return ParseMulticaHubMetadata(issue.Metadata)
+}
+
+func (c MulticaCLI) ResolveIssueHubMetadata(ctx context.Context, issue MulticaIssue) (MulticaHubMetadata, error) {
+	meta := MulticaIssueHubMetadata(issue)
+	if meta.IsAssignmentMailbox() {
+		return meta, nil
+	}
+	listed, err := c.ListIssueMetadata(ctx, issue.ID)
+	if err != nil {
+		return MulticaHubMetadata{}, err
+	}
+	return multicasurface.ParseMulticaHubListedMetadata(listed), nil
 }
 
 func IsMulticaAssignmentMailboxIssue(issue MulticaIssue) bool {

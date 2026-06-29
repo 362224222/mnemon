@@ -428,13 +428,9 @@ func findExistingMulticaAssignmentIssue(ctx context.Context, cli driver.MulticaC
 
 func findExistingMulticaAssignmentIssueInChildren(ctx context.Context, cli driver.MulticaCLI, children []driver.MulticaIssue, source driver.MulticaHubLedgerSource) (driver.MulticaIssue, bool, error) {
 	for _, child := range children {
-		meta := driver.MulticaIssueHubMetadata(child)
-		if !meta.IsAssignmentMailbox() {
-			listed, err := cli.ListIssueMetadata(ctx, child.ID)
-			if err != nil {
-				return driver.MulticaIssue{}, false, err
-			}
-			meta = multicasurface.ParseMulticaHubListedMetadata(listed)
+		meta, err := cli.ResolveIssueHubMetadata(ctx, child)
+		if err != nil {
+			return driver.MulticaIssue{}, false, err
 		}
 		if !meta.IsAssignmentMailbox() {
 			continue
@@ -467,13 +463,9 @@ func findAssignmentTargetFromMulticaHub(ctx context.Context, cli driver.MulticaC
 	}
 	candidates := []multicasurface.AssignmentTargetCandidate{}
 	for _, child := range children {
-		meta := driver.MulticaIssueHubMetadata(child)
-		if !meta.IsAssignmentMailbox() {
-			listed, err := cli.ListIssueMetadata(ctx, child.ID)
-			if err != nil {
-				return "", false, err
-			}
-			meta = multicasurface.ParseMulticaHubListedMetadata(listed)
+		meta, err := cli.ResolveIssueHubMetadata(ctx, child)
+		if err != nil {
+			return "", false, err
 		}
 		if !meta.IsAssignmentMailbox() {
 			continue
@@ -493,13 +485,9 @@ func allMulticaAssignmentChildrenDone(ctx context.Context, cli driver.MulticaCLI
 	}
 	seen := false
 	for _, child := range children {
-		meta := driver.MulticaIssueHubMetadata(child)
-		if !meta.IsAssignmentMailbox() {
-			listed, err := cli.ListIssueMetadata(ctx, child.ID)
-			if err != nil {
-				return false, err
-			}
-			meta = multicasurface.ParseMulticaHubListedMetadata(listed)
+		meta, err := cli.ResolveIssueHubMetadata(ctx, child)
+		if err != nil {
+			return false, err
 		}
 		if !meta.IsAssignmentMailbox() || meta.SessionID != sessionID {
 			continue

@@ -286,6 +286,54 @@ func TestMulticaHubMetadataDetectsAssignmentMailbox(t *testing.T) {
 	}
 }
 
+func TestMulticaCLIResolveIssueHubMetadata(t *testing.T) {
+	tmp := t.TempDir()
+	argsPath := filepath.Join(tmp, "args.txt")
+	bin := filepath.Join(tmp, "multica")
+	script := `#!/usr/bin/env sh
+printf '%s\n' "$*" >> "$MULTICA_ARGS_PATH"
+case "$*" in
+  *"issue metadata list child-listed"*) printf '[{"key":"mnemon.hub_backend","value":"multica"},{"key":"mnemon.kind","value":"assignment_mailbox"},{"key":"mnemon.assignment_id","value":"assignment-listed"},{"key":"mnemon.principal","value":"worker@team"}]\n' ;;
+  *"issue metadata list child-embedded"*) printf 'embedded metadata should not be listed\n' >&2; exit 42 ;;
+  *) printf '{}\n' ;;
+esac
+`
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cli := MulticaCLI{
+		Command: bin,
+		Env: append(os.Environ(),
+			"MULTICA_ARGS_PATH="+argsPath,
+		),
+	}
+	listed, err := cli.ResolveIssueHubMetadata(context.Background(), MulticaIssue{ID: "child-listed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !listed.IsAssignmentMailbox() || listed.AssignmentID != "assignment-listed" || listed.Principal != "worker@team" {
+		t.Fatalf("listed metadata = %+v", listed)
+	}
+	embedded, err := cli.ResolveIssueHubMetadata(context.Background(), MulticaIssue{
+		ID: "child-embedded",
+		Metadata: map[string]any{
+			MulticaMetadataHubBackend:   MulticaHubBackend,
+			MulticaMetadataKind:         MulticaHubKindAssignmentMailbox,
+			MulticaMetadataAssignmentID: "assignment-embedded",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if embedded.AssignmentID != "assignment-embedded" {
+		t.Fatalf("embedded metadata = %+v", embedded)
+	}
+	args := mustReadDriverTestFile(t, argsPath)
+	if strings.Contains(args, "child-embedded") {
+		t.Fatalf("embedded assignment metadata should avoid metadata list fallback:\n%s", args)
+	}
+}
+
 func TestMulticaAssignmentFingerprintStable(t *testing.T) {
 	left := MulticaAssignmentFingerprint(MulticaAssignmentFingerprintInput{
 		AssignmentID:     " assignment-1 ",
