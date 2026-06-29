@@ -88,7 +88,8 @@ func TestDaemonStatusShowsConfiguredRoleSummary(t *testing.T) {
 	cfg := productconfig.Default()
 	cfg.Connections.Multica = productconfig.MulticaConnection{Enabled: true, Workspace: "ws-multica", RuntimeBinary: "mnemon-multica-runtime"}
 	cfg.Connections.GitHub = productconfig.GitHubConnection{Enabled: true, Repo: "mnemon-dev/mnemon-teamwork-example"}
-	cfg.Daemon.InteractionWatchers = []string{productconfig.ConnectionMultica, productconfig.ConnectionGitHub}
+	cfg.Connections.Mnemonhub = productconfig.MnemonhubConnection{Enabled: true, Endpoint: "https://hub.example.invalid"}
+	cfg.Daemon.InteractionWatchers = []string{productconfig.ConnectionMultica, productconfig.ConnectionGitHub, productconfig.ConnectionMnemonhub}
 	cfg.Daemon.DriveSources = []string{productconfig.DriveManagedLocal}
 	cfg.Daemon.ProjectionSurfaces = []string{productconfig.ConnectionMultica}
 	if err := productconfig.Save(productconfig.DefaultPath(root, ""), cfg); err != nil {
@@ -103,7 +104,17 @@ func TestDaemonStatusShowsConfiguredRoleSummary(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := out.String()
-	for _, want := range []string{"Harness config: configured", "Harness daemon roles: watchers=2 drive=1 surfaces=1", "Harness daemon: not running"} {
+	for _, want := range []string{
+		"Harness config: configured",
+		"Harness daemon roles: watchers=3 drive=1 surfaces=1",
+		"Harness daemon role details:",
+		"multica-watch [interaction]: watcher=multica boundary=activation-carrier",
+		"github-watch [interaction]: watcher=github boundary=external-interaction",
+		"mnemonhub-watch [interaction]: watcher=mnemonhub boundary=remote-exchange",
+		"managed-drive [drive]: drive=managed-local boundary=managed-runtime",
+		"multica-project [projection]: surface=multica boundary=projection-surface",
+		"Harness daemon: not running",
+	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("daemon status missing %q:\n%s", want, got)
 		}

@@ -118,6 +118,14 @@ func runDaemonStatus(cmd *cobra.Command, args []string) error {
 func writeDaemonRoleSummary(out io.Writer, cfg productconfig.Config) {
 	summary := daemon.RoleSummary(cfg)
 	fmt.Fprintf(out, "Harness daemon roles: watchers=%d drive=%d surfaces=%d\n", summary.InteractionWatchers, summary.DriveSources, summary.ProjectionSurfaces)
+	details := daemon.RoleDetails(cfg)
+	if len(details) == 0 {
+		return
+	}
+	fmt.Fprintln(out, "Harness daemon role details:")
+	for _, role := range details {
+		fmt.Fprintf(out, "  - %s [%s]: %s=%s boundary=%s\n", role.WorkerName, role.Kind, role.Label, role.Value, role.Boundary)
+	}
 }
 
 func writeConfiguredDaemonSnapshot(root string, now time.Time) error {

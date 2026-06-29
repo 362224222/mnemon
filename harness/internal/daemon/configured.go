@@ -13,12 +13,82 @@ type ConfiguredRoleSummary struct {
 	ProjectionSurfaces  int
 }
 
+type ConfiguredRoleDetail struct {
+	WorkerName string
+	Kind       WorkerKind
+	Label      string
+	Value      string
+	Boundary   string
+}
+
 func RoleSummary(cfg productconfig.Config) ConfiguredRoleSummary {
-	return ConfiguredRoleSummary{
-		InteractionWatchers: len(cfg.Daemon.InteractionWatchers),
-		DriveSources:        len(cfg.Daemon.DriveSources),
-		ProjectionSurfaces:  len(cfg.Daemon.ProjectionSurfaces),
+	var summary ConfiguredRoleSummary
+	for _, role := range RoleDetails(cfg) {
+		switch role.Label {
+		case "watcher":
+			summary.InteractionWatchers++
+		case "drive":
+			summary.DriveSources++
+		case "surface":
+			summary.ProjectionSurfaces++
+		}
 	}
+	return summary
+}
+
+func RoleDetails(cfg productconfig.Config) []ConfiguredRoleDetail {
+	var details []ConfiguredRoleDetail
+	for _, watcher := range cfg.Daemon.InteractionWatchers {
+		watcher = strings.TrimSpace(watcher)
+		if watcher == "" {
+			continue
+		}
+		boundary := "external-interaction"
+		if watcher == productconfig.ConnectionMultica {
+			boundary = "activation-carrier"
+		}
+		if watcher == productconfig.ConnectionMnemonhub {
+			boundary = "remote-exchange"
+		}
+		details = append(details, ConfiguredRoleDetail{
+			WorkerName: workerName(watcher + "-watch"),
+			Kind:       WorkerInteraction,
+			Label:      "watcher",
+			Value:      watcher,
+			Boundary:   boundary,
+		})
+	}
+	for _, source := range cfg.Daemon.DriveSources {
+		source = strings.TrimSpace(source)
+		if source == "" {
+			continue
+		}
+		name := source + "-drive"
+		if source == productconfig.DriveManagedLocal {
+			name = "managed-drive"
+		}
+		details = append(details, ConfiguredRoleDetail{
+			WorkerName: workerName(name),
+			Kind:       WorkerDrive,
+			Label:      "drive",
+			Value:      source,
+			Boundary:   "managed-runtime",
+		})
+	}
+	for _, surface := range cfg.Daemon.ProjectionSurfaces {
+		surface = strings.TrimSpace(surface)
+		if surface == "" {
+			continue
+		}
+		details = append(details, ConfiguredRoleDetail{
+			WorkerName: workerName(surface + "-project"),
+			Kind:       WorkerProjection,
+			Label:      "surface",
+			Value:      surface,
+			Boundary:   "projection-surface",
+		})
+	}
+	return details
 }
 
 func ConfiguredSnapshot(cfg productconfig.Config, now time.Time) Snapshot {
@@ -36,30 +106,8 @@ func ConfiguredSnapshot(cfg productconfig.Config, now time.Time) Snapshot {
 			UpdatedAt: snapshot.StartedAt,
 		}
 	}
-	for _, watcher := range cfg.Daemon.InteractionWatchers {
-		watcher = strings.TrimSpace(watcher)
-		if watcher == "" {
-			continue
-		}
-		add(watcher+"-watch", WorkerInteraction, "watcher="+watcher)
-	}
-	for _, source := range cfg.Daemon.DriveSources {
-		source = strings.TrimSpace(source)
-		if source == "" {
-			continue
-		}
-		name := source + "-drive"
-		if source == productconfig.DriveManagedLocal {
-			name = "managed-drive"
-		}
-		add(name, WorkerDrive, "drive="+source)
-	}
-	for _, surface := range cfg.Daemon.ProjectionSurfaces {
-		surface = strings.TrimSpace(surface)
-		if surface == "" {
-			continue
-		}
-		add(surface+"-project", WorkerProjection, "surface="+surface)
+	for _, role := range RoleDetails(cfg) {
+		add(role.WorkerName, role.Kind, role.Label+"="+role.Value)
 	}
 	if len(snapshot.Workers) > 0 {
 		add("status-readiness", WorkerStatus, "daemon status snapshot")
