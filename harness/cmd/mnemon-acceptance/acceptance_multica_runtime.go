@@ -246,6 +246,8 @@ func runMulticaRuntimeProdSimAcceptance(ctx context.Context, opts multicaRuntime
 
 Coordinate this as teamwork rather than solo work. Use Mnemon teamwork handoffs when delegating validation slices; the Multica runtime should project accepted assignments into child assignment mailboxes and route them to the target agents.
 
+Stage the handoffs: first assign root metadata/run visibility and child routing/isolation to separate teammates. After both teammate result digests are visible and their Multica feedback comments/statuses have projected, assign an integrator to verify feedback projection and final status completion.
+
 The validation should cover root session metadata, assignment child issue routing, assignment feedback comments, agent run activity visibility, stale or cross-session assignment isolation, and final Multica status completion.`)
 	}
 	issue, err := cli.CreateIssue(ctx, driver.MulticaCreateIssueRequest{
