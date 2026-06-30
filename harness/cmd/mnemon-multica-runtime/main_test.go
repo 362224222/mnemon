@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -34,6 +35,81 @@ func TestMergeRuntimeHubProjectionDeltasPreservesEarlyDispatchCounts(t *testing.
 	mergeRuntimeHubProjectionDeltas(&failed, []runtimeHubProjectionDelta{{ChildIssues: 1}})
 	if failed.HubWriteStatus != "failed" || failed.HubChildIssues != 1 {
 		t.Fatalf("failed projection merge should preserve final failure while carrying counts: %+v", failed)
+	}
+}
+
+func TestRuntimeItemAfterRootIngestFiltersHistoricalAssignments(t *testing.T) {
+	receipt := &access.IngestReceipt{Seq: 50}
+	if runtimeItemAfterRootIngest(49, &runtimeImportResult{Receipt: receipt, HubKind: driver.MulticaHubKindSession}) {
+		t.Fatal("session hub write should ignore assignments older than the root ingest receipt")
+	}
+	if !runtimeItemAfterRootIngest(51, &runtimeImportResult{Receipt: receipt, HubKind: driver.MulticaHubKindSession}) {
+		t.Fatal("session hub write should project assignments after the root ingest receipt")
+	}
+}
+
+func TestRuntimeManagedWakeHubProjectionIncludesAssignmentMailboxes(t *testing.T) {
+	for _, kind := range []string{driver.MulticaHubKindSession, driver.MulticaHubKindAssignmentMailbox} {
+		if !runtimeManagedWakeHubProjectionKind(kind) {
+			t.Fatalf("hub projection should run during managed wake for %s", kind)
+		}
+	}
+	if runtimeManagedWakeHubProjectionKind(driver.MulticaHubKindFeedbackCarrier) {
+		t.Fatal("feedback carriers are projected artifacts, not managed wake issue kinds")
+	}
+}
+
+func TestProjectAssignmentMailboxesSkipsExistingReservation(t *testing.T) {
+	ledger := driver.NewFileMulticaHubLedger(filepath.Join(t.TempDir(), "hub-ledger.jsonl"))
+	source := driver.MulticaHubLedgerSource{
+		SessionID:             "session-1",
+		CorrelationID:         "corr-1",
+		EventID:               "event-1",
+		AssignmentID:          "assignment-1",
+		AssignmentFingerprint: "sha256:abc",
+		Principal:             "worker@team",
+		ProjectionKind:        "assignment",
+	}
+	if _, ok, err := ledger.Reserve(driver.MulticaHubLedgerRecord{
+		Kind:   driver.MulticaHubKindAssignmentMailbox,
+		Source: source,
+		Target: driver.MulticaHubLedgerTarget{
+			RootIssueID: "root-1",
+			Status:      "reserved",
+		},
+	}); err != nil || !ok {
+		t.Fatalf("reserve: ok=%v err=%v", ok, err)
+	}
+	created, err := (&runtimeRPCState{}).projectAssignmentMailboxes(context.Background(), driver.MulticaCLI{
+		Command: filepath.Join(t.TempDir(), "missing-multica"),
+	}, ledger, []runtimeAssignmentProjection{{
+		Item: multicasurface.RuntimeAssignmentItem{
+			ID:               "assignment-1",
+			Assignee:         "worker@team",
+			ExpectedWork:     "check routing",
+			ExpectedFeedback: "progress digest",
+		},
+		Participant: driver.MulticaParticipantRecord{
+			Principal: "worker@team",
+			AgentID:   "agent-1",
+			AgentName: "worker",
+		},
+		Source: source,
+		Metadata: multicasurface.MulticaHubMetadata{
+			Kind: driver.MulticaHubKindAssignmentMailbox,
+		},
+		RootIssue: driver.MulticaIssue{ID: "root-1", Identifier: "TEA-1", Title: "Root"},
+		Result: &runtimeImportResult{
+			RootIssueID: "root-1",
+			SessionID:   "session-1",
+			Principal:   "planner@team",
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created != 0 {
+		t.Fatalf("created = %d, want 0", created)
 	}
 }
 
@@ -685,7 +761,9 @@ esac
 		t.Fatalf("runtime comment must not expose hub backend routing details:\n%s", comment)
 	}
 	args := mustReadRuntimeTestFile(t, argsPath)
-	if !strings.Contains(args, "issue metadata set iss-9 --key mnemon.hub_backend") || !strings.Contains(args, "issue comment add iss-9 --content-stdin --output json") {
+	metadataAttempt := strings.Index(args, "issue metadata set iss-9 --key mnemon.")
+	commentProjection := strings.Index(args, "issue comment add iss-9 --content-stdin --output json")
+	if metadataAttempt < 0 || commentProjection < 0 || metadataAttempt > commentProjection {
 		t.Fatalf("runtime should attempt metadata projection then continue to comment projection:\n%s", args)
 	}
 }
@@ -799,6 +877,15 @@ esac
 				}, {
 					Ref: contract.ResourceRef{Kind: "progress_digest", ID: "project"},
 					Fields: map[string]any{"items": []any{map[string]any{
+						"id":             "pg-old-writer",
+						"event_id":       "pg-old-writer",
+						"ingest_seq":     float64(31),
+						"actor":          "worker@team",
+						"assignment_ref": "asg-writer",
+						"feedback_kind":  "progress",
+						"summary":        "Old writer progress must not attach to the new mailbox.",
+						"artifact_refs":  []any{"multica:issue:root-2"},
+					}, map[string]any{
 						"id":             "pg-writer",
 						"event_id":       "pg-writer",
 						"ingest_seq":     float64(33),
@@ -958,6 +1045,9 @@ esac
 		if strings.Contains(childComment, blocked) {
 			t.Fatalf("child comment must not expose machine field %q:\n%s", blocked, childComment)
 		}
+	}
+	if strings.Contains(childComment, "Old writer progress") {
+		t.Fatalf("old progress attached to new assignment mailbox:\n%s", childComment)
 	}
 }
 

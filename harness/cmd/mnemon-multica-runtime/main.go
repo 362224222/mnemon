@@ -654,7 +654,7 @@ func (d runtimeHubProjectionDelta) active() bool {
 func (s *runtimeRPCState) wakeManagedAgentWithHubProjection(ctx context.Context, cli driver.MulticaCLI, client *access.Client, rootIssue driver.MulticaIssue, result *runtimeImportResult, progress runtimeProgressSink) []runtimeHubProjectionDelta {
 	if result == nil || client == nil ||
 		!strings.EqualFold(result.HubBackend, driver.MulticaHubBackend) ||
-		result.HubKind != driver.MulticaHubKindSession ||
+		!runtimeManagedWakeHubProjectionKind(result.HubKind) ||
 		!multicasurface.RuntimeHubWriteEnabled(s.Env) {
 		s.wakeManagedAgent(result, progress)
 		return nil
@@ -687,6 +687,15 @@ func (s *runtimeRPCState) wakeManagedAgentWithHubProjection(ctx context.Context,
 		out = append(out, delta)
 	}
 	return out
+}
+
+func runtimeManagedWakeHubProjectionKind(kind string) bool {
+	switch strings.TrimSpace(kind) {
+	case driver.MulticaHubKindSession, driver.MulticaHubKindAssignmentMailbox:
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *runtimeRPCState) writeMulticaHubArtifactsDelta(ctx context.Context, cli driver.MulticaCLI, client *access.Client, rootIssue driver.MulticaIssue, base runtimeImportResult) runtimeHubProjectionDelta {

@@ -323,7 +323,7 @@ func runMulticaRuntimeProdSimAcceptance(ctx context.Context, opts multicaRuntime
 			addMulticaProdSimAssertion(&report, "runtime recorded Mnemon ingest", strings.Contains(combined, "Mnemon ingest: recorded"), combined)
 		}
 		if opts.RequireManagedWake {
-			addMulticaProdSimAssertion(&report, "runtime completed managed wake", strings.Contains(combined, "Managed wake: completed"), combined)
+			addMulticaProdSimAssertion(&report, "runtime completed managed wake", multicaMessagesContainManagedWakeCompleted(combined), combined)
 		}
 	}
 	if opts.RequireHubFlow {
@@ -375,19 +375,40 @@ func multicaHubFlowManagedRuntimeReady(ctx context.Context, cli driver.MulticaCL
 		if err != nil {
 			return false, strings.Join(details, "; "), fmt.Errorf("read Multica agent env for %s: %w", principal, err)
 		}
-		runtimeName := strings.TrimSpace(env["MNEMON_MANAGED_RUNTIME"])
-		ready := multicaManagedRuntimeCanDriveTeamwork(runtimeName)
+		ready, label := multicaHubFlowParticipantReady(env)
 		if ready {
 			active++
 		}
 		if principal == requiredPrincipal {
 			requiredActive = ready
 		}
-		details = append(details, fmt.Sprintf("%s=%s", principal, multicaManagedRuntimeReadinessLabel(runtimeName, ready)))
+		details = append(details, fmt.Sprintf("%s=%s", principal, label))
 	}
 	ok := active >= minActive && requiredActive
 	details = append(details, fmt.Sprintf("active=%d min=%d root_ready=%v", active, minActive, requiredActive))
 	return ok, strings.Join(details, "; "), nil
+}
+
+func multicaHubFlowParticipantReady(env map[string]string) (bool, string) {
+	runtimeName := strings.TrimSpace(env["MNEMON_MANAGED_RUNTIME"])
+	runtimeReady := multicaManagedRuntimeCanDriveTeamwork(runtimeName)
+	if !runtimeReady {
+		return false, multicaManagedRuntimeReadinessLabel(runtimeName, false)
+	}
+	var missing []string
+	if strings.TrimSpace(env["MNEMON_CONTROL_ADDR"]) == "" {
+		missing = append(missing, "MNEMON_CONTROL_ADDR")
+	}
+	if tokenFile := strings.TrimSpace(env["MNEMON_CONTROL_TOKEN_FILE"]); tokenFile != "" {
+		if info, err := os.Stat(tokenFile); err != nil || info.IsDir() {
+			missing = append(missing, "MNEMON_CONTROL_TOKEN_FILE")
+		}
+	}
+	label := multicaManagedRuntimeReadinessLabel(runtimeName, true)
+	if len(missing) > 0 {
+		return false, label + " (missing " + strings.Join(missing, ", ") + ")"
+	}
+	return true, label
 }
 
 func multicaManagedRuntimeCanDriveTeamwork(runtimeName string) bool {
@@ -424,7 +445,9 @@ func collectMulticaHubFlowEvidence(ctx context.Context, cli driver.MulticaCLI, o
 	if minAssignmentChildren < 1 {
 		minAssignmentChildren = 1
 	}
-	if report.TaskExpectations.MinChildMailboxes > minAssignmentChildren {
+	if report.TaskExpectations.InitialChildMailboxes > 0 {
+		minAssignmentChildren = report.TaskExpectations.InitialChildMailboxes
+	} else if report.TaskExpectations.MinChildMailboxes > minAssignmentChildren {
 		minAssignmentChildren = report.TaskExpectations.MinChildMailboxes
 	}
 	children, childMeta, err := waitMulticaAssignmentChildren(ctx, cli, report.Issue.ID, opts.Wait, opts.Poll, minAssignmentChildren)
@@ -450,6 +473,13 @@ func collectMulticaHubFlowEvidence(ctx context.Context, cli driver.MulticaCLI, o
 	report.ChildMessages = childMessages
 	report.ChildMessageTypes = multicaChildRunMessageTypeCounts(childMessages)
 	report.ActiveAgents = activeAgents
+	if refreshedChildren, refreshedMeta, refreshErr := listMulticaAssignmentChildren(ctx, cli, report.Issue.ID); refreshErr == nil && len(refreshedChildren) > len(children) {
+		children = refreshedChildren
+		report.ChildIssues = refreshedChildren
+		for issueID, meta := range refreshedMeta {
+			report.ChildMetadata[issueID] = meta
+		}
+	}
 	if err != nil {
 		addMulticaProdSimAssertion(report, "hub-flow activates multiple Multica agents", false, err.Error())
 		collectMulticaHubFlowPartialSnapshot(ctx, cli, opts, report, children, err)
@@ -462,7 +492,7 @@ func collectMulticaHubFlowEvidence(ctx context.Context, cli driver.MulticaCLI, o
 	if strings.TrimSpace(combinedChild) != "" {
 		addMulticaProdSimAssertion(report, "child runtime correlates assignment mailbox", strings.Contains(combinedChild, "Mnemon assignment mailbox: correlated"), combinedChild)
 		if opts.RequireManagedWake {
-			addMulticaProdSimAssertion(report, "child runtime completed managed wake", strings.Contains(combinedChild, "Managed wake: completed"), combinedChild)
+			addMulticaProdSimAssertion(report, "child runtime completed managed wake", multicaMessagesContainManagedWakeCompleted(combinedChild), combinedChild)
 		}
 	} else {
 		addMulticaProdSimAssertion(report, "child runtime correlates assignment mailbox", len(activeAgents) >= opts.MinActiveAgents, fmt.Sprintf("active_agents=%v messages deferred by Multica run state", activeAgents))
@@ -633,13 +663,21 @@ func listMulticaChildrenWithMetadata(ctx context.Context, cli driver.MulticaCLI,
 
 func waitMulticaChildRunEvidence(ctx context.Context, cli driver.MulticaCLI, rootIssueID string, rootRuns []driver.MulticaIssueRun, children []driver.MulticaIssue, wait, poll time.Duration, minActive int) (map[string][]driver.MulticaIssueRun, map[string][]driver.MulticaRunMessage, []string, error) {
 	deadline := time.Now().Add(wait)
+	currentChildren := append([]driver.MulticaIssue(nil), children...)
 	var lastRuns map[string][]driver.MulticaIssueRun
 	var lastMessages map[string][]driver.MulticaRunMessage
 	for {
+		refreshedChildren, _, err := listMulticaAssignmentChildren(ctx, cli, rootIssueID)
+		if err != nil {
+			return lastRuns, lastMessages, nil, err
+		}
+		if len(refreshedChildren) > len(currentChildren) {
+			currentChildren = refreshedChildren
+		}
 		childRuns := map[string][]driver.MulticaIssueRun{}
 		childMessages := map[string][]driver.MulticaRunMessage{}
 		active := multicaActiveAgentIDs(rootRuns)
-		for _, child := range children {
+		for _, child := range currentChildren {
 			runs, err := cli.ListIssueRuns(ctx, child.ID)
 			if err != nil {
 				return childRuns, childMessages, sortedMulticaActiveAgents(active), err
@@ -664,11 +702,11 @@ func waitMulticaChildRunEvidence(ctx context.Context, cli driver.MulticaCLI, roo
 		lastRuns = childRuns
 		lastMessages = childMessages
 		activeList := sortedMulticaActiveAgents(active)
-		if len(activeList) >= minActive && multicaEveryChildHasRun(childRuns, children) {
+		if len(activeList) >= minActive && multicaEveryChildHasRun(childRuns, currentChildren) {
 			return childRuns, childMessages, activeList, nil
 		}
 		if wait <= 0 || time.Now().After(deadline) {
-			return lastRuns, lastMessages, activeList, fmt.Errorf("timed out waiting for child run evidence on root %s active_agents=%v child_messages=%d", rootIssueID, activeList, len(childMessages))
+			return lastRuns, lastMessages, activeList, fmt.Errorf("timed out waiting for child run evidence on root %s children=%d active_agents=%v child_messages=%d", rootIssueID, len(currentChildren), activeList, len(childMessages))
 		}
 		select {
 		case <-ctx.Done():
@@ -722,6 +760,12 @@ func combinedMulticaChildMessages(messages map[string][]driver.MulticaRunMessage
 		}
 	}
 	return strings.Join(parts, "\n")
+}
+
+func multicaMessagesContainManagedWakeCompleted(text string) bool {
+	lower := strings.ToLower(text)
+	return strings.Contains(lower, "managed wake: completed") ||
+		strings.Contains(lower, "managed wake completed")
 }
 
 func multicaRunMessageTypeCounts(messages []driver.MulticaRunMessage) map[string]int {

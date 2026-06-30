@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -114,6 +116,7 @@ type MulticaHubLedgerSource struct {
 	SessionID             string `json:"session_id,omitempty"`
 	CorrelationID         string `json:"correlation_id,omitempty"`
 	EventID               string `json:"event_id,omitempty"`
+	IngestSeq             int64  `json:"ingest_seq,omitempty"`
 	AssignmentID          string `json:"assignment_id,omitempty"`
 	AssignmentFingerprint string `json:"assignment_fingerprint,omitempty"`
 	Principal             string `json:"principal,omitempty"`
@@ -157,30 +160,61 @@ func NewFileMulticaHubLedger(path string) *FileMulticaHubLedger {
 }
 
 func (l *FileMulticaHubLedger) Records() ([]MulticaHubLedgerRecord, error) {
-	if err := l.load(); err != nil {
-		return nil, err
-	}
-	return append([]MulticaHubLedgerRecord(nil), l.records...), nil
+	var records []MulticaHubLedgerRecord
+	err := l.withLockedLoad(func() error {
+		records = append([]MulticaHubLedgerRecord(nil), l.records...)
+		return nil
+	})
+	return records, err
 }
 
 func (l *FileMulticaHubLedger) Find(kind string, source MulticaHubLedgerSource) (MulticaHubLedgerRecord, bool, error) {
-	if err := l.load(); err != nil {
-		return MulticaHubLedgerRecord{}, false, err
-	}
-	want := multicaHubLedgerKey(kind, source)
-	for i := len(l.records) - 1; i >= 0; i-- {
-		rec := l.records[i]
-		if multicaHubLedgerKey(rec.Kind, rec.Source) == want {
-			return rec, true, nil
+	var found MulticaHubLedgerRecord
+	var ok bool
+	err := l.withLockedLoad(func() error {
+		want := multicaHubLedgerKey(kind, source)
+		for i := len(l.records) - 1; i >= 0; i-- {
+			rec := l.records[i]
+			if multicaHubLedgerKey(rec.Kind, rec.Source) == want {
+				found = rec
+				ok = true
+				return nil
+			}
 		}
-	}
-	return MulticaHubLedgerRecord{}, false, nil
+		return nil
+	})
+	return found, ok, err
 }
 
 func (l *FileMulticaHubLedger) Record(record MulticaHubLedgerRecord) error {
-	if err := l.load(); err != nil {
-		return err
-	}
+	return l.withLockedLoad(func() error {
+		return l.recordLoaded(record)
+	})
+}
+
+func (l *FileMulticaHubLedger) Reserve(record MulticaHubLedgerRecord) (MulticaHubLedgerRecord, bool, error) {
+	var reserved MulticaHubLedgerRecord
+	var created bool
+	err := l.withLockedLoad(func() error {
+		key := multicaHubLedgerKey(record.Kind, record.Source)
+		for i := len(l.records) - 1; i >= 0; i-- {
+			rec := l.records[i]
+			if multicaHubLedgerKey(rec.Kind, rec.Source) == key {
+				reserved = rec
+				return nil
+			}
+		}
+		if err := l.recordLoaded(record); err != nil {
+			return err
+		}
+		reserved = record
+		created = true
+		return nil
+	})
+	return reserved, created, err
+}
+
+func (l *FileMulticaHubLedger) recordLoaded(record MulticaHubLedgerRecord) error {
 	if strings.TrimSpace(l.path) == "" {
 		return fmt.Errorf("multica hub ledger path is required")
 	}
@@ -204,6 +238,14 @@ func (l *FileMulticaHubLedger) Record(record MulticaHubLedgerRecord) error {
 			break
 		}
 	}
+	if err := l.appendRecord(record); err != nil {
+		return err
+	}
+	l.upsertLoaded(record)
+	return nil
+}
+
+func (l *FileMulticaHubLedger) appendRecord(record MulticaHubLedgerRecord) error {
 	if err := os.MkdirAll(filepath.Dir(l.path), 0o755); err != nil {
 		return err
 	}
@@ -216,11 +258,32 @@ func (l *FileMulticaHubLedger) Record(record MulticaHubLedgerRecord) error {
 		_ = f.Close()
 		return err
 	}
-	if err := f.Close(); err != nil {
+	return f.Close()
+}
+
+func (l *FileMulticaHubLedger) withLockedLoad(fn func() error) error {
+	if strings.TrimSpace(l.path) == "" {
+		return fmt.Errorf("multica hub ledger path is required")
+	}
+	if err := os.MkdirAll(filepath.Dir(l.path), 0o755); err != nil {
 		return err
 	}
-	l.upsertLoaded(record)
-	return nil
+	lock, err := os.OpenFile(l.path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	if err := unix.Flock(int(lock.Fd()), unix.LOCK_EX); err != nil {
+		return err
+	}
+	defer unix.Flock(int(lock.Fd()), unix.LOCK_UN)
+	l.loaded = false
+	l.loadErr = nil
+	l.records = nil
+	if err := l.load(); err != nil {
+		return err
+	}
+	return fn()
 }
 
 func (l *FileMulticaHubLedger) load() error {
@@ -488,6 +551,7 @@ func AssignmentMailboxProjectionForRuntimeItem(material AssignmentMailboxProject
 		SessionID:             material.SessionID,
 		CorrelationID:         material.CorrelationID,
 		EventID:               item.EventID,
+		IngestSeq:             item.IngestSeq,
 		AssignmentID:          item.ID,
 		AssignmentFingerprint: fingerprint,
 		Principal:             item.Assignee,

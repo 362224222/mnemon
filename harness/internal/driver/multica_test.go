@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -52,6 +54,21 @@ printf '{"id":"comment-1","issue_id":"iss-1","content":"ok","type":"comment"}\n'
 	}
 	if string(stdin) != "progress with sensitive details" {
 		t.Fatalf("stdin = %q", string(stdin))
+	}
+}
+
+func TestDecodeMulticaCommentListOutputDedupesNestedComments(t *testing.T) {
+	comments, err := decodeMulticaCommentListOutput([]byte(`{
+		"comments": [
+			{"id":"comment-1","issue_id":"issue-1","content":"ok","type":"comment"},
+			{"id":"comment-1","issue_id":"issue-1","content":"ok","type":"comment"}
+		]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(comments) != 1 || comments[0].ID != "comment-1" {
+		t.Fatalf("comments = %+v", comments)
 	}
 }
 
@@ -444,6 +461,53 @@ func TestFileMulticaHubLedgerDedupesRecords(t *testing.T) {
 	}
 	if !ok || found.Target.ChildIssueID != "child-1" {
 		t.Fatalf("ledger find mismatch: ok=%v record=%+v", ok, found)
+	}
+}
+
+func TestFileMulticaHubLedgerReserveIsAtomicAcrossInstances(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "hub-ledger.jsonl")
+	source := MulticaHubLedgerSource{
+		SessionID:      "session-1",
+		EventID:        "progress-1",
+		AssignmentID:   "assignment-1",
+		Principal:      "worker@team",
+		ProjectionKind: "progress",
+	}
+	record := MulticaHubLedgerRecord{
+		Kind:   MulticaHubKindFeedbackCarrier,
+		Source: source,
+		Target: MulticaHubLedgerTarget{
+			RootIssueID:  "root-1",
+			ChildIssueID: "child-1",
+			Status:       "reserved",
+		},
+	}
+	var created int64
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, ok, err := NewFileMulticaHubLedger(path).Reserve(record)
+			if err != nil {
+				t.Errorf("reserve: %v", err)
+				return
+			}
+			if ok {
+				atomic.AddInt64(&created, 1)
+			}
+		}()
+	}
+	wg.Wait()
+	if created != 1 {
+		t.Fatalf("reserve winners = %d, want 1", created)
+	}
+	records, err := NewFileMulticaHubLedger(path).Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].Target.Status != "reserved" {
+		t.Fatalf("reservation records = %+v", records)
 	}
 }
 

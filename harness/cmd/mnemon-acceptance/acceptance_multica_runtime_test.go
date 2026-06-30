@@ -147,7 +147,7 @@ func TestMulticaRuntimeProdSimAcceptanceRequiresHubFlow(t *testing.T) {
 printf '%s\n' "$*" >> "$MULTICA_ARGS_PATH"
 cat >> "$MULTICA_STDIN_PATH"
 case "$*" in
-  *"agent env get agent-"*) agent="${4:-}"; printf '{"agent_id":"%s","custom_env":{"MNEMON_MANAGED_RUNTIME":"codex-appserver"}}\n' "$agent" ;;
+  *"agent env get agent-"*) agent="${4:-}"; printf '{"agent_id":"%s","custom_env":{"MNEMON_MANAGED_RUNTIME":"codex-appserver","MNEMON_CONTROL_ADDR":"http://127.0.0.1:8787"}}\n' "$agent" ;;
   *"issue create"*) printf '{"id":"root-9","identifier":"TEA-9","title":"Runtime hub flow","description":"Teamwork acceptance","status":"todo"}\n' ;;
   *"issue get root-9"*) printf '{"id":"root-9","identifier":"TEA-9","title":"Runtime hub flow","description":"Teamwork acceptance","status":"done"}\n' ;;
   *"issue get child-2"*) printf '%s\n' '{"id":"child-2","identifier":"TEA-10","title":"TEA-9: routing check","description":"## Assignment\n\nCheck routing.\n\n## Context\n\n- Root issue: [TEA-9](mention://issue/root-9) - Runtime hub flow\n- Assignee: researcher@team (mnemon-researcher)\n- Scope: routing check\n\n## Feedback\n\n- Expected feedback: result or blocker\n- Progress path: Mnemon runtime progress, result, or blocker feedback","status":"done"}' ;;
@@ -225,6 +225,61 @@ esac
 		if !strings.Contains(string(args), want) {
 			t.Fatalf("args missing %q:\n%s", want, args)
 		}
+	}
+}
+
+func TestWaitMulticaChildRunEvidenceRefreshesFollowupChildren(t *testing.T) {
+	tmp := t.TempDir()
+	argsPath := filepath.Join(tmp, "args.txt")
+	bin := filepath.Join(tmp, "multica")
+	script := `#!/usr/bin/env sh
+printf '%s\n' "$*" >> "$MULTICA_ARGS_PATH"
+case "$*" in
+  *"issue children root-1"*) printf '{"children":[{"id":"child-1","identifier":"TEA-2","title":"TEA-1: runtime","status":"done","metadata":{"mnemon.hub_backend":"multica","mnemon.kind":"assignment_mailbox","mnemon.root_issue_id":"root-1","mnemon.session_id":"multica:session:root-1","mnemon.assignment_id":"asg-1","mnemon.principal":"researcher@team"}},{"id":"child-2","identifier":"TEA-3","title":"TEA-1: runbook","status":"done","metadata":{"mnemon.hub_backend":"multica","mnemon.kind":"assignment_mailbox","mnemon.root_issue_id":"root-1","mnemon.session_id":"multica:session:root-1","mnemon.assignment_id":"asg-2","mnemon.principal":"implementer@team"}},{"id":"child-3","identifier":"TEA-4","title":"TEA-1: release","status":"done","metadata":{"mnemon.hub_backend":"multica","mnemon.kind":"assignment_mailbox","mnemon.root_issue_id":"root-1","mnemon.session_id":"multica:session:root-1","mnemon.assignment_id":"asg-3","mnemon.principal":"reviewer@team"}},{"id":"child-4","identifier":"TEA-5","title":"TEA-1: followup","status":"done","metadata":{"mnemon.hub_backend":"multica","mnemon.kind":"assignment_mailbox","mnemon.root_issue_id":"root-1","mnemon.session_id":"multica:session:root-1","mnemon.assignment_id":"asg-4","mnemon.principal":"integrator@team"}}]}\n' ;;
+  *"issue metadata list child-1"*) printf '[{"key":"mnemon.hub_backend","value":"multica"},{"key":"mnemon.kind","value":"assignment_mailbox"},{"key":"mnemon.root_issue_id","value":"root-1"},{"key":"mnemon.session_id","value":"multica:session:root-1"},{"key":"mnemon.assignment_id","value":"asg-1"},{"key":"mnemon.principal","value":"researcher@team"}]\n' ;;
+  *"issue metadata list child-2"*) printf '[{"key":"mnemon.hub_backend","value":"multica"},{"key":"mnemon.kind","value":"assignment_mailbox"},{"key":"mnemon.root_issue_id","value":"root-1"},{"key":"mnemon.session_id","value":"multica:session:root-1"},{"key":"mnemon.assignment_id","value":"asg-2"},{"key":"mnemon.principal","value":"implementer@team"}]\n' ;;
+  *"issue metadata list child-3"*) printf '[{"key":"mnemon.hub_backend","value":"multica"},{"key":"mnemon.kind","value":"assignment_mailbox"},{"key":"mnemon.root_issue_id","value":"root-1"},{"key":"mnemon.session_id","value":"multica:session:root-1"},{"key":"mnemon.assignment_id","value":"asg-3"},{"key":"mnemon.principal","value":"reviewer@team"}]\n' ;;
+  *"issue metadata list child-4"*) printf '[{"key":"mnemon.hub_backend","value":"multica"},{"key":"mnemon.kind","value":"assignment_mailbox"},{"key":"mnemon.root_issue_id","value":"root-1"},{"key":"mnemon.session_id","value":"multica:session:root-1"},{"key":"mnemon.assignment_id","value":"asg-4"},{"key":"mnemon.principal","value":"integrator@team"}]\n' ;;
+  *"issue runs child-1"*) printf '[{"id":"task-child-1","issue_id":"child-1","agent_id":"agent-researcher","status":"completed","completed_at":"2026-06-30T09:01:00Z"}]\n' ;;
+  *"issue runs child-2"*) printf '[{"id":"task-child-2","issue_id":"child-2","agent_id":"agent-implementer","status":"completed","completed_at":"2026-06-30T09:02:00Z"}]\n' ;;
+  *"issue runs child-3"*) printf '[{"id":"task-child-3","issue_id":"child-3","agent_id":"agent-reviewer","status":"completed","completed_at":"2026-06-30T09:03:00Z"}]\n' ;;
+  *"issue runs child-4"*) printf '[{"id":"task-child-4","issue_id":"child-4","agent_id":"agent-integrator","status":"completed","completed_at":"2026-06-30T09:04:00Z"}]\n' ;;
+  *"issue run-messages task-child-"*) printf '[{"seq":1,"type":"text","content":"Mnemon assignment mailbox: correlated. Managed wake: completed.","created_at":"2026-06-30T09:05:00Z"}]\n' ;;
+  *) printf '{}\n' ;;
+esac
+`
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MULTICA_ARGS_PATH", argsPath)
+
+	initialChildren := []driver.MulticaIssue{
+		{ID: "child-1"},
+		{ID: "child-2"},
+		{ID: "child-3"},
+	}
+	childRuns, _, activeAgents, err := waitMulticaChildRunEvidence(
+		context.Background(),
+		driver.MulticaCLI{Command: bin, WorkspaceID: "ws-1"},
+		"root-1",
+		[]driver.MulticaIssueRun{{ID: "task-root", IssueID: "root-1", AgentID: "agent-planner", Status: "completed", CompletedAt: "2026-06-30T09:00:00Z"}},
+		initialChildren,
+		time.Second,
+		time.Millisecond,
+		5,
+	)
+	if err != nil {
+		t.Fatalf("wait child run evidence: %v", err)
+	}
+	if len(activeAgents) != 5 || len(childRuns["child-4"]) != 1 {
+		t.Fatalf("expected refreshed follow-up child evidence, active=%v runs=%+v", activeAgents, childRuns)
+	}
+	args, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(args), "issue children root-1 --output json") || !strings.Contains(string(args), "issue runs child-4 --output json") {
+		t.Fatalf("expected child refresh and follow-up run lookup:\n%s", args)
 	}
 }
 
@@ -308,7 +363,7 @@ esac
 	}
 }
 
-func TestMulticaRuntimeProdSimHubFlowWritesPartialSnapshotWhenMailboxExpectationMisses(t *testing.T) {
+func TestMulticaRuntimeProdSimHubFlowRejectsMissingControlAddrBeforeCreatingIssue(t *testing.T) {
 	tmp := t.TempDir()
 	registryPath := filepath.Join(tmp, "registry.json")
 	var participants []driver.MulticaParticipantRecord
@@ -337,6 +392,86 @@ printf '%s\n' "$*" >> "$MULTICA_ARGS_PATH"
 cat >> "$MULTICA_STDIN_PATH"
 case "$*" in
   *"agent env get agent-"*) agent="${4:-}"; printf '{"agent_id":"%s","custom_env":{"MNEMON_MANAGED_RUNTIME":"codex-appserver"}}\n' "$agent" ;;
+  *"issue create"*) printf 'issue create should not be reached\n' >&2; exit 99 ;;
+  *) printf '{}\n' ;;
+esac
+`
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MULTICA_ARGS_PATH", argsPath)
+	t.Setenv("MULTICA_STDIN_PATH", stdinPath)
+
+	report, err := runMulticaRuntimeProdSimAcceptance(context.Background(), multicaRuntimeProdSimOptions{
+		RunRoot:           filepath.Join(tmp, ".testdata", "multica-hub-no-control"),
+		MulticaBin:        bin,
+		WorkspaceID:       "ws-1",
+		RegistryPath:      registryPath,
+		AssigneePrincipal: "planner@team",
+		IssueTitle:        "No control hub flow",
+		IssueDescription:  "Teamwork acceptance",
+		Wait:              time.Millisecond,
+		Poll:              time.Millisecond,
+		RequireIngest:     true,
+		RequireHubFlow:    true,
+		MinParticipants:   5,
+		MinActiveAgents:   3,
+	})
+	if err == nil || !strings.Contains(err.Error(), "managed runtime participants") {
+		t.Fatalf("expected control prerequisite error, got err=%v report=%+v", err, report)
+	}
+	if report.Status != "failed" || report.Issue.ID != "" {
+		t.Fatalf("hub-flow prerequisite should fail before issue create: %+v", report)
+	}
+	var readinessAssertion *multicaRuntimeProdSimAssertion
+	for i := range report.Assertions {
+		if report.Assertions[i].Name == "hub-flow agents expose managed runtime" {
+			readinessAssertion = &report.Assertions[i]
+			break
+		}
+	}
+	if readinessAssertion == nil || readinessAssertion.Passed || !strings.Contains(readinessAssertion.Detail, "missing MNEMON_CONTROL_ADDR") {
+		t.Fatalf("unexpected readiness assertion: %+v all=%+v", readinessAssertion, report.Assertions)
+	}
+	rawArgs, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := string(rawArgs)
+	if strings.Contains(args, "issue create") {
+		t.Fatalf("issue create must not run when hub-flow control addr is missing:\n%s", args)
+	}
+}
+
+func TestMulticaRuntimeProdSimHubFlowWritesPartialSnapshotWhenMailboxExpectationMisses(t *testing.T) {
+	tmp := t.TempDir()
+	registryPath := filepath.Join(tmp, "registry.json")
+	var participants []driver.MulticaParticipantRecord
+	for _, role := range []string{"planner", "researcher", "implementer", "reviewer", "integrator"} {
+		participants = append(participants, driver.MulticaParticipantRecord{
+			Principal: role + "@team",
+			AgentName: "mnemon-" + role,
+			AgentID:   "agent-" + role,
+			Role:      role,
+		})
+	}
+	if err := driver.SaveMulticaRegistry(registryPath, driver.MulticaRegistry{
+		SchemaVersion:    1,
+		WorkspaceID:      "ws-1",
+		RuntimeProfileID: "profile-1",
+		RuntimeID:        "runtime-1",
+		Participants:     participants,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	argsPath := filepath.Join(tmp, "args.txt")
+	stdinPath := filepath.Join(tmp, "stdin.txt")
+	bin := filepath.Join(tmp, "multica")
+	script := `#!/usr/bin/env sh
+printf '%s\n' "$*" >> "$MULTICA_ARGS_PATH"
+cat >> "$MULTICA_STDIN_PATH"
+case "$*" in
+  *"agent env get agent-"*) agent="${4:-}"; printf '{"agent_id":"%s","custom_env":{"MNEMON_MANAGED_RUNTIME":"codex-appserver","MNEMON_CONTROL_ADDR":"http://127.0.0.1:8787"}}\n' "$agent" ;;
   *"issue create"*) printf '{"id":"root-partial","identifier":"TEA-30","title":"Partial hub evidence","description":"Teamwork acceptance","status":"todo"}\n' ;;
   *"issue get root-partial"*) printf '{"id":"root-partial","identifier":"TEA-30","title":"Partial hub evidence","description":"Teamwork acceptance","status":"in_progress"}\n' ;;
   *"issue get child-partial"*) printf '%s\n' '{"id":"child-partial","identifier":"TEA-31","title":"TEA-30: routing","description":"## Assignment\n\nCheck routing.\n\n## Context\n\n- Root issue: [TEA-30](mention://issue/root-partial) - Partial hub evidence\n- Assignee: researcher@team (mnemon-researcher)\n- Scope: routing\n\n## Feedback\n\n- Expected feedback: result","status":"done"}' ;;
@@ -436,7 +571,7 @@ func TestMulticaRuntimeProdSimHubFlowAllowsDeferredRunMessages(t *testing.T) {
 printf '%s\n' "$*" >> "$MULTICA_ARGS_PATH"
 cat >> "$MULTICA_STDIN_PATH"
 case "$*" in
-  *"agent env get agent-"*) agent="${4:-}"; printf '{"agent_id":"%s","custom_env":{"MNEMON_MANAGED_RUNTIME":"codex-appserver"}}\n' "$agent" ;;
+  *"agent env get agent-"*) agent="${4:-}"; printf '{"agent_id":"%s","custom_env":{"MNEMON_MANAGED_RUNTIME":"codex-appserver","MNEMON_CONTROL_ADDR":"http://127.0.0.1:8787"}}\n' "$agent" ;;
   *"issue create"*) printf '{"id":"root-deferred","identifier":"TEA-20","title":"Deferred run messages","description":"Teamwork acceptance","status":"todo"}\n' ;;
   *"issue get root-deferred"*) printf '{"id":"root-deferred","identifier":"TEA-20","title":"Deferred run messages","description":"Teamwork acceptance","status":"done"}\n' ;;
   *"issue get child-a"*) printf '%s\n' '{"id":"child-a","identifier":"TEA-21","title":"TEA-20: routing","description":"## Assignment\n\nCheck routing.\n\n## Context\n\n- Root issue: [TEA-20](mention://issue/root-deferred) - Deferred run messages\n- Assignee: researcher@team (mnemon-researcher)\n- Scope: routing\n\n## Feedback\n\n- Expected feedback: result","status":"done"}' ;;
@@ -482,6 +617,21 @@ esac
 	}
 	if !multicaProdSimAssertionsPassed(report) {
 		t.Fatalf("deferred hub assertions failed: %+v", report.Assertions)
+	}
+}
+
+func TestMulticaMessagesContainManagedWakeCompleted(t *testing.T) {
+	cases := []string{
+		"Managed wake: completed.",
+		"Managed wake completed: turn=turn-1.",
+	}
+	for _, text := range cases {
+		if !multicaMessagesContainManagedWakeCompleted(text) {
+			t.Fatalf("expected managed wake completion in %q", text)
+		}
+	}
+	if multicaMessagesContainManagedWakeCompleted("Managed wake failed: no candidate.") {
+		t.Fatal("failed wake should not be accepted as completed")
 	}
 }
 

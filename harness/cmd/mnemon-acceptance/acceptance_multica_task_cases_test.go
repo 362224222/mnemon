@@ -143,6 +143,8 @@ esac
 	}
 	if report.TaskCase != multicaAcceptanceTaskCaseParallelPoc ||
 		report.TaskExpectations.MinActiveAgents != 5 ||
+		report.TaskExpectations.InitialChildMailboxes != 3 ||
+		report.TaskExpectations.MinChildMailboxes != 4 ||
 		len(report.ExecutionPlan.Workstreams) != 3 {
 		t.Fatalf("task case report mismatch: %+v", report)
 	}
@@ -161,6 +163,9 @@ esac
 		"## Execution Plan",
 		"## Parallel PoCs",
 		"## Context Reuse Checks",
+		"Do not call Multica issue create",
+		"finish rather than waiting for their own Multica comment projection",
+		"Direct Multica issue fan-out is invalid",
 		"poc-runtime-routing",
 		"poc-operator-runbook",
 		"poc-release-risk",

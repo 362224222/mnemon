@@ -33,10 +33,11 @@ type multicaAcceptanceTaskCaseMaterial struct {
 }
 
 type multicaAcceptanceTaskCaseExpectations struct {
-	MinActiveAgents     int      `json:"min_active_agents,omitempty"`
-	MinChildMailboxes   int      `json:"min_child_mailboxes,omitempty"`
-	MinFeedbackComments int      `json:"min_feedback_comments,omitempty"`
-	TeamworkRounds      []string `json:"teamwork_rounds,omitempty"`
+	MinActiveAgents       int      `json:"min_active_agents,omitempty"`
+	InitialChildMailboxes int      `json:"initial_child_mailboxes,omitempty"`
+	MinChildMailboxes     int      `json:"min_child_mailboxes,omitempty"`
+	MinFeedbackComments   int      `json:"min_feedback_comments,omitempty"`
+	TeamworkRounds        []string `json:"teamwork_rounds,omitempty"`
 }
 
 type multicaAcceptanceExecutionPlan struct {
@@ -394,7 +395,7 @@ var multicaAcceptanceTaskCases = map[string]func(time.Time) multicaAcceptanceTas
 			Title: "Parallel PoC overlap drill " + started.Format("150405"),
 			Description: multicasurface.RootSessionDescription(multicasurface.RootSessionMaterial{
 				Request:  "Run a production-like Mnemon-on-Multica collaboration case with three overlapping PoCs running in parallel. The goal is to validate Multica as the primary hub backend for assignment activation, feedback projection, and context reuse across related workstreams.",
-				WorkMode: "Use Multica root and child issues as the visible teamwork hub. The planner should split the case into parallel child assignment mailboxes, require shared context references in every feedback item, and create at least one follow-up assignment after reading first-round results.",
+				WorkMode: "Use Multica root and child issues as the visible teamwork hub, but create work only through Mnemon assignment events. Do not call Multica issue create, assign, rerun, or cancel commands to fan out work; the runtime projection creates child assignment mailboxes from accepted assignments. After recording Mnemon result or blocker feedback, workers should finish rather than waiting for their own Multica comment projection. The planner should split the case into parallel child assignment mailboxes, require shared context references in every feedback item, and create at least one follow-up assignment after reading first-round results.",
 				Handoffs: []string{
 					"Round 1 - Observe: launch three parallel PoCs for runtime routing, operator runbook readiness, and release risk. Each PoC must name the shared context it consumed and the evidence it produced.",
 					"Round 2 - Act: create a follow-up assignment for the highest disagreement or missing evidence across PoCs. The follow-up owner must reuse at least two shared contexts and cite prior child feedback.",
@@ -410,9 +411,10 @@ var multicaAcceptanceTaskCases = map[string]func(time.Time) multicaAcceptanceTas
 				Completion: "Finish only after the follow-up assignment feedback is visible, all three PoCs have result or blocker comments, and the root issue records an integrated decision that explains context reuse.",
 			}),
 			Expectations: multicaAcceptanceTaskCaseExpectations{
-				MinActiveAgents:     5,
-				MinChildMailboxes:   4,
-				MinFeedbackComments: 4,
+				MinActiveAgents:       5,
+				InitialChildMailboxes: 3,
+				MinChildMailboxes:     4,
+				MinFeedbackComments:   4,
 				TeamworkRounds: []string{
 					"Round 1 - Observe: three parallel PoCs split runtime, runbook, and release risk",
 					"Round 2 - Act: follow up on disagreement or missing evidence across PoCs",
@@ -526,6 +528,7 @@ var multicaAcceptanceTaskCases = map[string]func(time.Time) multicaAcceptanceTas
 				"Every first-round feedback comment names at least one shared context and one evidence artifact.",
 				"The follow-up assignment cites two prior child comments or artifacts before adding new work.",
 				"The final root comment names which shared contexts were reused and where disagreement was resolved.",
+				"Direct Multica issue fan-out is invalid; all child work must originate from Mnemon assignment events and runtime mailbox projection.",
 				"No visible issue text should expose session ids, assignment ids, assignment fingerprints, or projection-owner keys.",
 			},
 		}

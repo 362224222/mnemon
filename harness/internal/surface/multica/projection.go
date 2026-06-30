@@ -185,6 +185,7 @@ func ProgressFeedbackProjectionForRuntimeItem(material ProgressFeedbackProjectio
 			SessionID:      material.SessionID,
 			CorrelationID:  material.CorrelationID,
 			EventID:        item.EventID,
+			IngestSeq:      item.IngestSeq,
 			AssignmentID:   item.AssignmentRef,
 			Principal:      item.Actor,
 			ProjectionKind: "progress",
