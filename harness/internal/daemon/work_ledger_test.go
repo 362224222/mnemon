@@ -10,11 +10,11 @@ func TestFileWorkLedgerPersistsProjectionAndWakeRecords(t *testing.T) {
 	now := time.Unix(100, 0).UTC()
 	path := filepath.Join(t.TempDir(), "daemon", "work-ledger.json")
 	ledger := NewFileWorkLedger(path, func() time.Time { return now })
-	if seen, err := ledger.Seen(WorkKindProjection, "multica:comment:root-1"); err != nil || seen {
+	if seen, err := ledger.Seen(WorkKindSurface, "multica:comment:root-1"); err != nil || seen {
 		t.Fatalf("initial seen = %v err=%v", seen, err)
 	}
 	if err := ledger.Record(WorkLedgerRecord{
-		Kind:    WorkKindProjection,
+		Kind:    WorkKindSurface,
 		Key:     "multica:comment:root-1",
 		Status:  "completed",
 		Message: "comment=comment-1",
@@ -32,7 +32,7 @@ func TestFileWorkLedgerPersistsProjectionAndWakeRecords(t *testing.T) {
 	}
 
 	resumed := NewFileWorkLedger(path, func() time.Time { return now.Add(time.Hour) })
-	projection, ok, err := resumed.Load(WorkKindProjection, "multica:comment:root-1")
+	projection, ok, err := resumed.Load(WorkKindSurface, "multica:comment:root-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,14 +54,14 @@ func TestFileWorkLedgerDedupesByKindAndKey(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "work-ledger.json")
 	clock := now
 	ledger := NewFileWorkLedger(path, func() time.Time { return clock })
-	if err := ledger.Record(WorkLedgerRecord{Kind: WorkKindProjection, Key: "target-1", Status: "started"}); err != nil {
+	if err := ledger.Record(WorkLedgerRecord{Kind: WorkKindSurface, Key: "target-1", Status: "started"}); err != nil {
 		t.Fatal(err)
 	}
 	clock = later
-	if err := ledger.Record(WorkLedgerRecord{Kind: WorkKindProjection, Key: "target-1", Status: "completed"}); err != nil {
+	if err := ledger.Record(WorkLedgerRecord{Kind: WorkKindSurface, Key: "target-1", Status: "completed"}); err != nil {
 		t.Fatal(err)
 	}
-	records, err := NewFileWorkLedger(path, nil).Records(WorkKindProjection)
+	records, err := NewFileWorkLedger(path, nil).Records(WorkKindSurface)
 	if err != nil {
 		t.Fatal(err)
 	}

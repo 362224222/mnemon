@@ -91,7 +91,7 @@ func TestDaemonStatusShowsConfiguredRoleSummary(t *testing.T) {
 	cfg.Connections.Mnemonhub = productconfig.MnemonhubConnection{Enabled: true, Endpoint: "https://hub.example.invalid"}
 	cfg.Daemon.InteractionWatchers = []string{productconfig.ConnectionMultica, productconfig.ConnectionGitHub, productconfig.ConnectionMnemonhub}
 	cfg.Daemon.DriveSources = []string{productconfig.DriveManagedLocal}
-	cfg.Daemon.ProjectionSurfaces = []string{productconfig.ConnectionMultica}
+	cfg.Daemon.DisplaySurfaces = []string{productconfig.ConnectionMultica}
 	if err := productconfig.Save(productconfig.DefaultPath(root, ""), cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +112,7 @@ func TestDaemonStatusShowsConfiguredRoleSummary(t *testing.T) {
 		"github-watch [interaction]: watcher=github boundary=external-interaction",
 		"mnemonhub-watch [interaction]: watcher=mnemonhub boundary=remote-exchange",
 		"managed-drive [drive]: drive=managed-local boundary=managed-runtime",
-		"multica-project [projection]: surface=multica boundary=projection-surface",
+		"multica-display [surface]: surface=multica boundary=display-surface",
 		"Harness daemon: not running",
 	} {
 		if !strings.Contains(got, want) {
@@ -332,12 +332,12 @@ func TestConnectCommandsWriteProductConfig(t *testing.T) {
 		}
 	}
 	for _, want := range []string{productconfig.ConnectionMultica, productconfig.ConnectionGitHub} {
-		if !containsString(cfg.Daemon.ProjectionSurfaces, want) {
-			t.Fatalf("projection surface %q missing: %+v", want, cfg.Daemon.ProjectionSurfaces)
+		if !containsString(cfg.Daemon.DisplaySurfaces, want) {
+			t.Fatalf("display surface %q missing: %+v", want, cfg.Daemon.DisplaySurfaces)
 		}
 	}
-	if containsString(cfg.Daemon.ProjectionSurfaces, productconfig.ConnectionMnemonhub) {
-		t.Fatalf("mnemonhub must remain an exchange backend, not projection surface: %+v", cfg.Daemon.ProjectionSurfaces)
+	if containsString(cfg.Daemon.DisplaySurfaces, productconfig.ConnectionMnemonhub) {
+		t.Fatalf("mnemonhub must remain an exchange backend, not display surface: %+v", cfg.Daemon.DisplaySurfaces)
 	}
 	if got := cfg.Sessions.PrimaryActivationCarrier; got != productconfig.ConnectionMultica {
 		t.Fatalf("unexpected primary activation carrier: %q", got)
@@ -368,8 +368,8 @@ func TestConnectMnemonhubKeepsExchangeOutOfActivationAndProjection(t *testing.T)
 	if !containsString(cfg.Daemon.InteractionWatchers, productconfig.ConnectionMnemonhub) {
 		t.Fatalf("mnemonhub watcher missing: %+v", cfg.Daemon.InteractionWatchers)
 	}
-	if containsString(cfg.Daemon.ProjectionSurfaces, productconfig.ConnectionMnemonhub) {
-		t.Fatalf("mnemonhub must remain an exchange backend, not projection surface: %+v", cfg.Daemon.ProjectionSurfaces)
+	if containsString(cfg.Daemon.DisplaySurfaces, productconfig.ConnectionMnemonhub) {
+		t.Fatalf("mnemonhub must remain an exchange backend, not display surface: %+v", cfg.Daemon.DisplaySurfaces)
 	}
 	if got := cfg.Sessions.PrimaryActivationCarrier; got != "" {
 		t.Fatalf("mnemonhub must not become primary activation carrier, got %q", got)

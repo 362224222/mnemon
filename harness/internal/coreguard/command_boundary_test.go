@@ -25,7 +25,7 @@ var commandImportBoundaries = []commandImportBoundary{
 			"harness/internal/surface/",
 			"harness/cmd/",
 		},
-		rationale: "mnemond is the local event node, not a remote exchange backend or external projection surface",
+		rationale: "mnemond is the local event node, not a remote exchange backend or external display surface",
 	},
 	{
 		dir: "mnemon-hub",

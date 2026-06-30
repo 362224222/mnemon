@@ -10,7 +10,7 @@ import (
 type ConfiguredRoleSummary struct {
 	InteractionWatchers int
 	DriveSources        int
-	ProjectionSurfaces  int
+	DisplaySurfaces     int
 }
 
 type ConfiguredRoleDetail struct {
@@ -30,7 +30,7 @@ func RoleSummary(cfg productconfig.Config) ConfiguredRoleSummary {
 		case "drive":
 			summary.DriveSources++
 		case "surface":
-			summary.ProjectionSurfaces++
+			summary.DisplaySurfaces++
 		}
 	}
 	return summary
@@ -75,17 +75,17 @@ func RoleDetails(cfg productconfig.Config) []ConfiguredRoleDetail {
 			Boundary:   "managed-runtime",
 		})
 	}
-	for _, surface := range cfg.Daemon.ProjectionSurfaces {
+	for _, surface := range cfg.Daemon.DisplaySurfaces {
 		surface = strings.TrimSpace(surface)
 		if surface == "" {
 			continue
 		}
 		details = append(details, ConfiguredRoleDetail{
-			WorkerName: workerName(surface + "-project"),
-			Kind:       WorkerProjection,
+			WorkerName: workerName(surface + "-display"),
+			Kind:       WorkerSurface,
 			Label:      "surface",
 			Value:      surface,
-			Boundary:   "projection-surface",
+			Boundary:   "display-surface",
 		})
 	}
 	return details

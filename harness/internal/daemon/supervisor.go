@@ -12,7 +12,7 @@ type WorkerKind string
 const (
 	WorkerInteraction WorkerKind = "interaction"
 	WorkerDrive       WorkerKind = "drive"
-	WorkerProjection  WorkerKind = "projection"
+	WorkerSurface     WorkerKind = "surface"
 	WorkerStatus      WorkerKind = "status"
 )
 

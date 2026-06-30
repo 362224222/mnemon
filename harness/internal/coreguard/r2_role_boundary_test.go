@@ -11,7 +11,7 @@ type roleImportBoundary struct {
 	rationale string
 }
 
-var projectionSurfaceImportBoundaries = []roleImportBoundary{
+var displaySurfaceImportBoundaries = []roleImportBoundary{
 	{
 		pkg: "projection",
 		forbids: []string{
@@ -36,7 +36,7 @@ var projectionSurfaceImportBoundaries = []roleImportBoundary{
 			"harness/internal/app",
 			"harness/internal/assembler",
 		},
-		rationale: "the Multica surface is a projection/adapter boundary, not a local mnemond write path",
+		rationale: "the Multica surface is a display/adapter boundary, not a local mnemond write path",
 	},
 }
 
@@ -61,22 +61,22 @@ var driverProjectionImportBoundary = roleImportBoundary{
 }
 
 func TestR2RoleBoundaryGuardLogicIsNotVacuous(t *testing.T) {
-	if !roleImportForbidden("github.com/mnemon-dev/mnemon/harness/internal/mnemond/access", projectionSurfaceImportBoundaries[0].forbids) {
-		t.Fatal("projection boundary guard must flag mnemond access imports")
+	if !roleImportForbidden("github.com/mnemon-dev/mnemon/harness/internal/mnemond/access", displaySurfaceImportBoundaries[0].forbids) {
+		t.Fatal("display boundary guard must flag mnemond access imports")
 	}
-	if roleImportForbidden("github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation/view", projectionSurfaceImportBoundaries[0].forbids) {
-		t.Fatal("projection boundary guard must allow read-only presentation view imports")
+	if roleImportForbidden("github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation/view", displaySurfaceImportBoundaries[0].forbids) {
+		t.Fatal("display boundary guard must allow read-only presentation view imports")
 	}
 	if !roleImportForbidden("github.com/mnemon-dev/mnemon/harness/internal/event", activationTraceImportBoundary.forbids) {
 		t.Fatal("activation trace boundary guard must flag event model imports")
 	}
 	if !roleImportForbidden("github.com/mnemon-dev/mnemon/harness/internal/projection", driverProjectionImportBoundary.forbids) {
-		t.Fatal("driver projection boundary guard must flag projection imports")
+		t.Fatal("driver display boundary guard must flag projection imports")
 	}
 }
 
-func TestProjectionSurfacesDoNotIngestGovernedEvents(t *testing.T) {
-	for _, boundary := range projectionSurfaceImportBoundaries {
+func TestDisplaySurfacesDoNotIngestGovernedEvents(t *testing.T) {
+	for _, boundary := range displaySurfaceImportBoundaries {
 		assertPackageAvoidsForbiddenImports(t, boundary)
 	}
 }

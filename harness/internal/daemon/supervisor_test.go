@@ -47,7 +47,7 @@ func TestSupervisorCapturesWorkerFailure(t *testing.T) {
 	supervisor := NewSupervisor([]Worker{
 		workerFunc{
 			name: "project-multica",
-			kind: WorkerProjection,
+			kind: WorkerSurface,
 			run: func(context.Context, Reporter) error {
 				return errors.New("projection failed")
 			},

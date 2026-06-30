@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	WorkKindProjection = "projection"
-	WorkKindWake       = "wake"
+	WorkKindSurface = "surface"
+	WorkKindWake    = "wake"
 )
 
 type WorkLedgerRecord struct {

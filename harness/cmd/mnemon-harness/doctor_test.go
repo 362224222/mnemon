@@ -46,7 +46,7 @@ func TestDoctorReportsConfiguredProductSurface(t *testing.T) {
 	}}
 	cfg.Daemon.InteractionWatchers = []string{productconfig.ConnectionMultica}
 	cfg.Daemon.DriveSources = []string{productconfig.DriveManagedLocal}
-	cfg.Daemon.ProjectionSurfaces = []string{productconfig.ConnectionMultica}
+	cfg.Daemon.DisplaySurfaces = []string{productconfig.ConnectionMultica}
 	if err := productconfig.Save(productconfig.DefaultPath(root, ""), cfg); err != nil {
 		t.Fatal(err)
 	}

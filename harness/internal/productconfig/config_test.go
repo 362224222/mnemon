@@ -25,7 +25,7 @@ func TestConfigRoundTrip(t *testing.T) {
 		RuntimeBinary: "mnemon-multica-runtime",
 	}
 	cfg.Daemon.InteractionWatchers = []string{ConnectionMultica}
-	cfg.Daemon.ProjectionSurfaces = []string{ConnectionMultica}
+	cfg.Daemon.DisplaySurfaces = []string{ConnectionMultica}
 	cfg.Daemon.DriveSources = []string{DriveManagedLocal}
 	cfg.Sessions.PrimaryActivationCarrier = ConnectionMultica
 
@@ -51,18 +51,18 @@ func TestConfigValidateRejectsCrossLayerLeaks(t *testing.T) {
 			Mode: RuntimeModeManaged,
 		},
 	}}
-	cfg.Daemon.ProjectionSurfaces = []string{ConnectionMultica}
+	cfg.Daemon.DisplaySurfaces = []string{ConnectionMultica}
 	err := cfg.Validate()
 	if err == nil || !strings.Contains(err.Error(), "not enabled") {
-		t.Fatalf("expected disabled projection surface error, got %v", err)
+		t.Fatalf("expected disabled display surface error, got %v", err)
 	}
 
 	cfg = Default()
 	cfg.Connections.Mnemonhub = MnemonhubConnection{Enabled: true, Endpoint: "https://hub.example"}
-	cfg.Daemon.ProjectionSurfaces = []string{ConnectionMnemonhub}
+	cfg.Daemon.DisplaySurfaces = []string{ConnectionMnemonhub}
 	err = cfg.Validate()
 	if err == nil || !strings.Contains(err.Error(), "remote exchange backend") {
-		t.Fatalf("expected mnemonhub projection surface error, got %v", err)
+		t.Fatalf("expected mnemonhub display surface error, got %v", err)
 	}
 
 	cfg = Default()
@@ -111,16 +111,16 @@ func TestConfigValidateRejectsDuplicateDaemonRoles(t *testing.T) {
 		{
 			name: "surface",
 			edit: func(cfg *Config) {
-				cfg.Daemon.ProjectionSurfaces = []string{ConnectionMultica, " " + ConnectionMultica}
+				cfg.Daemon.DisplaySurfaces = []string{ConnectionMultica, " " + ConnectionMultica}
 			},
-			want: "duplicate projection surface",
+			want: "duplicate display surface",
 		},
 		{
 			name: "empty surface",
 			edit: func(cfg *Config) {
-				cfg.Daemon.ProjectionSurfaces = []string{""}
+				cfg.Daemon.DisplaySurfaces = []string{""}
 			},
-			want: "projection surface cannot be empty",
+			want: "display surface cannot be empty",
 		},
 		{
 			name: "drive",
@@ -193,8 +193,8 @@ func TestFromLegacyBridgesLocalAndRemoteConfigs(t *testing.T) {
 	if !stringSliceContains(cfg.Daemon.InteractionWatchers, ConnectionMnemonhub) {
 		t.Fatalf("mnemonhub watcher missing: %+v", cfg.Daemon.InteractionWatchers)
 	}
-	if stringSliceContains(cfg.Daemon.ProjectionSurfaces, ConnectionMnemonhub) {
-		t.Fatalf("mnemonhub must not be bridged as a projection surface: %+v", cfg.Daemon.ProjectionSurfaces)
+	if stringSliceContains(cfg.Daemon.DisplaySurfaces, ConnectionMnemonhub) {
+		t.Fatalf("mnemonhub must not be bridged as a display surface: %+v", cfg.Daemon.DisplaySurfaces)
 	}
 	if len(cfg.Daemon.DriveSources) != 1 || cfg.Daemon.DriveSources[0] != DriveManagedLocal {
 		t.Fatalf("drive sources mismatch: %+v", cfg.Daemon.DriveSources)
@@ -251,7 +251,7 @@ func TestFromLegacyBridgesMulticaRegistry(t *testing.T) {
 	if cfg.Sessions.PrimaryActivationCarrier != ConnectionMultica {
 		t.Fatalf("primary carrier = %q", cfg.Sessions.PrimaryActivationCarrier)
 	}
-	if !stringSliceContains(cfg.Daemon.InteractionWatchers, ConnectionMultica) || !stringSliceContains(cfg.Daemon.ProjectionSurfaces, ConnectionMultica) {
+	if !stringSliceContains(cfg.Daemon.InteractionWatchers, ConnectionMultica) || !stringSliceContains(cfg.Daemon.DisplaySurfaces, ConnectionMultica) {
 		t.Fatalf("daemon multica roles missing: %+v", cfg.Daemon)
 	}
 	planner := participantByPrincipal(cfg.Participants, "planner@team")

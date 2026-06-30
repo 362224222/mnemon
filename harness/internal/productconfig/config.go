@@ -87,7 +87,7 @@ type MnemonhubConnection struct {
 type Daemon struct {
 	InteractionWatchers []string `json:"interaction_watchers,omitempty"`
 	DriveSources        []string `json:"drive_sources,omitempty"`
-	ProjectionSurfaces  []string `json:"projection_surfaces,omitempty"`
+	DisplaySurfaces     []string `json:"display_surfaces,omitempty"`
 }
 
 type SessionDefaults struct {
@@ -198,7 +198,7 @@ func (cfg Config) Validate() error {
 	if err := validateDaemonCarriers("interaction watcher", cfg.Daemon.InteractionWatchers, cfg); err != nil {
 		return err
 	}
-	if err := validateProjectionSurfaces(cfg.Daemon.ProjectionSurfaces, cfg); err != nil {
+	if err := validateDisplaySurfaces(cfg.Daemon.DisplaySurfaces, cfg); err != nil {
 		return err
 	}
 	if err := validateDaemonDriveSources(cfg.Daemon.DriveSources); err != nil {
@@ -236,21 +236,21 @@ func validatePrimaryActivationCarrier(carrier string, cfg Config) error {
 	return validateCarrier("primary activation carrier", carrier, cfg)
 }
 
-func validateProjectionSurfaces(values []string, cfg Config) error {
+func validateDisplaySurfaces(values []string, cfg Config) error {
 	seen := map[string]bool{}
 	for _, value := range values {
 		surface := strings.TrimSpace(value)
 		if surface == "" {
-			return fmt.Errorf("projection surface cannot be empty")
+			return fmt.Errorf("display surface cannot be empty")
 		}
 		if surface == ConnectionMnemonhub {
-			return fmt.Errorf("projection surface %q is unsupported; mnemonhub is a remote exchange backend", surface)
+			return fmt.Errorf("display surface %q is unsupported; mnemonhub is a remote exchange backend", surface)
 		}
-		if err := validateCarrier("projection surface", surface, cfg); err != nil {
+		if err := validateCarrier("display surface", surface, cfg); err != nil {
 			return err
 		}
 		if seen[surface] {
-			return fmt.Errorf("duplicate projection surface %q", surface)
+			return fmt.Errorf("duplicate display surface %q", surface)
 		}
 		seen[surface] = true
 	}
@@ -379,7 +379,7 @@ func FromLegacy(root string) (Config, bool, error) {
 	}
 	if cfg.Connections.GitHub.Enabled {
 		cfg.Daemon.InteractionWatchers = appendCarrier(cfg.Daemon.InteractionWatchers, ConnectionGitHub)
-		cfg.Daemon.ProjectionSurfaces = appendCarrier(cfg.Daemon.ProjectionSurfaces, ConnectionGitHub)
+		cfg.Daemon.DisplaySurfaces = appendCarrier(cfg.Daemon.DisplaySurfaces, ConnectionGitHub)
 	}
 	if len(cfg.Participants) > 0 {
 		cfg.Daemon.DriveSources = appendCarrier(cfg.Daemon.DriveSources, DriveManagedLocal)
@@ -399,7 +399,7 @@ func bridgeMulticaRegistry(cfg *Config, reg multicasurface.MulticaRegistry) erro
 		cfg.Connections.Multica.RuntimeBinary = DefaultMulticaRuntimeBinary
 	}
 	cfg.Daemon.InteractionWatchers = appendCarrier(cfg.Daemon.InteractionWatchers, ConnectionMultica)
-	cfg.Daemon.ProjectionSurfaces = appendCarrier(cfg.Daemon.ProjectionSurfaces, ConnectionMultica)
+	cfg.Daemon.DisplaySurfaces = appendCarrier(cfg.Daemon.DisplaySurfaces, ConnectionMultica)
 	if strings.TrimSpace(cfg.Sessions.PrimaryActivationCarrier) == "" {
 		cfg.Sessions.PrimaryActivationCarrier = ConnectionMultica
 	}
