@@ -21,33 +21,45 @@ var multicaRuntimeProjectionForbiddenImports = []string{
 	"harness/internal/runtime",
 }
 
-func TestMulticaRuntimeProjectionWriterDoesNotOwnIngestOrDrive(t *testing.T) {
-	path := filepath.Join("..", "..", "cmd", "mnemon-multica-runtime", "hub_writer.go")
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, path, nil, 0)
-	if err != nil {
-		t.Fatalf("parse %s: %v", path, err)
-	}
-	for _, imp := range file.Imports {
-		importPath := strings.Trim(imp.Path.Value, `"`)
-		if roleImportForbidden(importPath, multicaRuntimeProjectionForbiddenImports) {
-			t.Errorf("Multica hub projection writer imports forbidden package %q; projection may read views and write Multica artifacts, but must not own local ingest, drive, product config, or hub exchange", importPath)
+func TestMulticaRuntimeDoesNotOwnManagedWakeOrDisplayWriteback(t *testing.T) {
+	root := filepath.Join("..", "..", "cmd", "mnemon-multica-runtime")
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
 		}
-	}
-	ast.Inspect(file, func(node ast.Node) bool {
-		switch n := node.(type) {
-		case *ast.SelectorExpr:
-			switch n.Sel.Name {
-			case "IngestObserve", "IngestObservedEnvelope", "Observe", "Wake":
-				t.Errorf("Multica hub projection writer calls %s at %s; projection must not ingest governed events or drive managed turns", n.Sel.Name, fset.Position(n.Pos()))
-			}
-		case *ast.CompositeLit:
-			if selectorName(n.Type) == "ManagedAgentDriver" {
-				t.Errorf("Multica hub projection writer constructs ManagedAgentDriver at %s; managed drive belongs outside projection", fset.Position(n.Pos()))
+		if entry.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			return err
+		}
+		for _, imp := range file.Imports {
+			importPath := strings.Trim(imp.Path.Value, `"`)
+			if roleImportForbidden(importPath, multicaRuntimeProjectionForbiddenImports) {
+				t.Errorf("Multica runtime imports forbidden package %q; runtime may import surface input and call mnemond access, but must not own product config, state, runtime core, or hub exchange", importPath)
 			}
 		}
-		return true
+		ast.Inspect(file, func(node ast.Node) bool {
+			switch n := node.(type) {
+			case *ast.SelectorExpr:
+				switch n.Sel.Name {
+				case "Wake", "SetIssueStatus", "AssignIssue", "AddIssueComment", "SetIssueMetadata", "SetIssueMetadataMap":
+					t.Errorf("Multica runtime calls %s at %s; R3 runtime input import must not own managed wake or display writeback", n.Sel.Name, fset.Position(n.Pos()))
+				}
+			case *ast.CompositeLit:
+				if selectorName(n.Type) == "ManagedAgentDriver" {
+					t.Errorf("Multica runtime constructs ManagedAgentDriver at %s; managed wake belongs to mnemond-managed source", fset.Position(n.Pos()))
+				}
+			}
+			return true
+		})
+		return nil
 	})
+	if err != nil {
+		t.Fatalf("walk Multica runtime command: %v", err)
+	}
 }
 
 func TestMulticaRuntimeRoleBoundaryGuardLogicIsNotVacuous(t *testing.T) {
@@ -55,10 +67,26 @@ func TestMulticaRuntimeRoleBoundaryGuardLogicIsNotVacuous(t *testing.T) {
 		t.Fatal("Multica projection writer guard must flag mnemonhub imports")
 	}
 	if roleImportForbidden("github.com/mnemon-dev/mnemon/harness/internal/mnemond/access", multicaRuntimeProjectionForbiddenImports) {
-		t.Fatal("Multica projection writer guard must allow read-only mnemond access")
+		t.Fatal("Multica runtime guard must allow mnemond access")
 	}
 	if selectorName(&ast.SelectorExpr{Sel: ast.NewIdent("ManagedAgentDriver")}) != "ManagedAgentDriver" {
 		t.Fatal("selectorName helper must identify selector names")
+	}
+}
+
+func TestMnemondAndMnemonHubDoNotDependOnMulticaSurface(t *testing.T) {
+	for _, pkg := range []string{"mnemond/access", "mnemond/admission", "mnemond/state", "mnemond/presentation", "mnemonhub"} {
+		_, files := packageFiles(t, pkg)
+		for _, file := range files {
+			for _, imp := range file.Imports {
+				importPath := strings.Trim(imp.Path.Value, `"`)
+				for _, forbidden := range []string{"harness/internal/surface/multica", "harness/internal/driver"} {
+					if strings.Contains(importPath, forbidden) {
+						t.Errorf("package %q imports Multica-facing package %q; mnemond/MnemonHub must stay product-surface agnostic", pkg, importPath)
+					}
+				}
+			}
+		}
 	}
 }
 

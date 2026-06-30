@@ -567,10 +567,6 @@ func runtimeIssueLabel(issue driver.MulticaIssue) string {
 	return multicasurface.RuntimeIssueLabel(issue.ID, issue.Identifier, issue.Title)
 }
 
-func markIssueInProgress(ctx context.Context, cli driver.MulticaCLI, issueID string) {
-	_, _ = cli.SetIssueStatus(ctx, issueID, "in_progress")
-}
-
 func wantsVersion(args []string) bool {
 	fs := flag.NewFlagSet(multicasurface.MulticaRuntimeCommandName, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
