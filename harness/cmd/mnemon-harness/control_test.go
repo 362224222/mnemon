@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -200,6 +201,9 @@ func TestControlRenderPrintsDerivedEventPresentationBody(t *testing.T) {
 	oldIntent := controlRenderIntent
 	oldLifecycle := controlRenderLifecycle
 	oldSurface := controlRenderSurface
+	oldHost := controlRenderHost
+	oldSessionID := controlRenderSessionID
+	oldInputID := controlRenderInputID
 	oldMaxChars := controlRenderMaxChars
 	oldJSON := controlRenderJSON
 	t.Cleanup(func() {
@@ -210,6 +214,9 @@ func TestControlRenderPrintsDerivedEventPresentationBody(t *testing.T) {
 		controlRenderIntent = oldIntent
 		controlRenderLifecycle = oldLifecycle
 		controlRenderSurface = oldSurface
+		controlRenderHost = oldHost
+		controlRenderSessionID = oldSessionID
+		controlRenderInputID = oldInputID
 		controlRenderMaxChars = oldMaxChars
 		controlRenderJSON = oldJSON
 	})
@@ -220,6 +227,9 @@ func TestControlRenderPrintsDerivedEventPresentationBody(t *testing.T) {
 	controlRenderIntent = presentation.IntentTeamworkEvents
 	controlRenderLifecycle = "remind"
 	controlRenderSurface = "hook"
+	controlRenderHost = ""
+	controlRenderSessionID = ""
+	controlRenderInputID = ""
 	controlRenderMaxChars = 6000
 	controlRenderJSON = false
 
@@ -230,6 +240,51 @@ func TestControlRenderPrintsDerivedEventPresentationBody(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "[mnemon:work]") || strings.Contains(buf.String(), `"body"`) {
 		t.Fatalf("control render must print presentation body only, got:\n%s", buf.String())
+	}
+}
+
+func TestControlRenderCarriesHostSessionScope(t *testing.T) {
+	var got presentation.Request
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(presentation.Response{
+			SchemaVersion: 1,
+			Status:        presentation.StatusOK,
+			Body:          "ok",
+		})
+	}))
+	defer srv.Close()
+
+	oldAddr := controlAddr
+	oldPrincipal := controlPrincipal
+	oldToken := controlToken
+	oldTokenFile := controlTokenFile
+	t.Cleanup(func() {
+		controlAddr = oldAddr
+		controlPrincipal = oldPrincipal
+		controlToken = oldToken
+		controlTokenFile = oldTokenFile
+	})
+	controlAddr = srv.URL
+	controlPrincipal = "planner@team"
+	controlToken = ""
+	controlTokenFile = ""
+
+	_, err := controlRender(presentation.Request{
+		RenderIntent: presentation.IntentTeamworkEvents,
+		Lifecycle:    "remind",
+		Surface:      "hook",
+		Host:         "multica",
+		SessionID:    "multica:session:root-1",
+		InputDigest:  "root-1",
+	})
+	if err != nil {
+		t.Fatalf("control render: %v", err)
+	}
+	if got.Host != "multica" || got.SessionID != "multica:session:root-1" || got.InputDigest != "root-1" {
+		t.Fatalf("render scope not carried: %+v", got)
 	}
 }
 
@@ -374,6 +429,129 @@ func TestControlShortCommandsEmitR2Payloads(t *testing.T) {
 	}
 	if got := shortItemSection(t, profile, "narrative")["focus"]; got != controlProfileFocus {
 		t.Fatalf("profile focus = %v", got)
+	}
+}
+
+func TestControlShortObserveRetriesRetryableProcessingError(t *testing.T) {
+	var attempts int
+	var externalIDs []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/ingest" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+		if got := r.Header.Get(access.PrincipalHeader); got != "codex-a@project" {
+			t.Errorf("principal header = %q", got)
+		}
+		var env contract.ObservationEnvelope
+		if err := json.NewDecoder(r.Body).Decode(&env); err != nil {
+			t.Errorf("decode envelope: %v", err)
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		attempts++
+		externalIDs = append(externalIDs, env.ExternalID)
+		w.Header().Set("Content-Type", "application/json")
+		if attempts == 1 {
+			_ = json.NewEncoder(w).Encode(access.IngestReceipt{
+				Seq:             41,
+				Ticked:          true,
+				ProcessingError: "read_stale: resource version advanced",
+			})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(access.IngestReceipt{Seq: 42, Ticked: true})
+	}))
+	defer srv.Close()
+
+	oldAddr := controlAddr
+	oldPrincipal := controlPrincipal
+	oldToken := controlToken
+	oldTokenFile := controlTokenFile
+	oldExtID := controlExtID
+	t.Cleanup(func() {
+		controlAddr = oldAddr
+		controlPrincipal = oldPrincipal
+		controlToken = oldToken
+		controlTokenFile = oldTokenFile
+		controlExtID = oldExtID
+	})
+	controlAddr = srv.URL
+	controlPrincipal = "codex-a@project"
+	controlToken = ""
+	controlTokenFile = ""
+	controlExtID = "short-retry"
+
+	var buf bytes.Buffer
+	controlTeamworkSignalCmd.SetOut(&buf)
+	err := controlShortObserve(controlTeamworkSignalCmd, "teamwork_signal.write_candidate.observed", "teamwork-signal", map[string]any{"rule": map[string]any{"scope": "r2/retry"}})
+	if err != nil {
+		t.Fatalf("short observe retry: %v; output=%q", err, buf.String())
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2; output=%q", attempts, buf.String())
+	}
+	if got, want := strings.Join(externalIDs, ","), "short-retry,short-retry-retry-1"; got != want {
+		t.Fatalf("external ids = %s, want %s", got, want)
+	}
+	if !strings.Contains(buf.String(), "retrying after processing error") || !strings.Contains(buf.String(), "observed seq=42") {
+		t.Fatalf("missing retry/success output: %q", buf.String())
+	}
+}
+
+func TestControlTeamworkAssignDefaultsStructuredAssignmentID(t *testing.T) {
+	var got contract.ObservationEnvelope
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Errorf("decode envelope: %v", err)
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(access.IngestReceipt{Seq: 7, Ticked: true})
+	}))
+	defer srv.Close()
+
+	oldAddr := controlAddr
+	oldPrincipal := controlPrincipal
+	oldToken := controlToken
+	oldTokenFile := controlTokenFile
+	oldExtID := controlExtID
+	resetControlShortCommandVars()
+	t.Cleanup(func() {
+		controlAddr = oldAddr
+		controlPrincipal = oldPrincipal
+		controlToken = oldToken
+		controlTokenFile = oldTokenFile
+		controlExtID = oldExtID
+		resetControlShortCommandVars()
+	})
+	controlAddr = srv.URL
+	controlPrincipal = "planner@team"
+	controlToken = ""
+	controlTokenFile = ""
+	controlExtID = "assign-default-id"
+	controlTeamworkAssignID = ""
+	controlTeamworkAssignAssignee = "researcher@team"
+	controlTeamworkAssignScope = "TEA-74 Mnemon R2 hub-flow readiness drill"
+	controlTeamworkAssignTTL = "20m"
+	controlTeamworkAssignReportOn = []string{"root session metadata", "agent run visibility"}
+	controlTeamworkAssignWork = "Validate TEA-74 root session metadata and run visibility."
+	controlTeamworkAssignFeedback = "progress_digest with PASS/FAIL evidence"
+	controlTeamworkAssignEvidence = []string{"TEA-74 root issue is current session mailbox"}
+
+	var buf bytes.Buffer
+	controlTeamworkAssignCmd.SetOut(&buf)
+	if err := controlTeamworkAssignCmd.RunE(controlTeamworkAssignCmd, nil); err != nil {
+		t.Fatalf("teamwork assign: %v", err)
+	}
+	rule, ok := got.Event.Payload["rule"].(map[string]any)
+	if !ok {
+		t.Fatalf("payload missing rule: %+v", got.Event.Payload)
+	}
+	if got := rule["assignment_id"]; got != "assignment-tea74-root-runtime" {
+		t.Fatalf("assignment_id = %v, want assignment-tea74-root-runtime", got)
 	}
 }
 

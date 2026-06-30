@@ -37,8 +37,9 @@ var (
 )
 
 var syncCmd = &cobra.Command{
-	Use:   "sync",
-	Short: "Sync Local Mnemon with Remote Workspace",
+	Use:    "sync",
+	Short:  "Sync Local Mnemon with Remote Workspace",
+	Hidden: true,
 }
 
 var syncConnectCmd = &cobra.Command{
@@ -88,7 +89,7 @@ func init() {
 	syncRunCmd.Flags().BoolVar(&syncBackground, "background", false, "run until interrupted")
 	syncRunCmd.Flags().DurationVar(&syncInterval, "interval", 30*time.Second, "background sync interval")
 	syncCmd.AddCommand(syncConnectCmd, syncPushCmd, syncPullCmd, syncRunCmd)
-	syncCmd.GroupID = groupSpine
+	syncCmd.GroupID = groupAdvanced
 	rootCmd.AddCommand(syncCmd)
 }
 

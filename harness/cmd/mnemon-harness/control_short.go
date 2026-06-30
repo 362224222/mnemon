@@ -2,13 +2,18 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
+	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/spf13/cobra"
 )
+
+const controlShortObserveMaxAttempts = 4
 
 var (
 	controlTeamworkSignalID          string
@@ -117,7 +122,11 @@ var controlTeamworkAssignCmd = &cobra.Command{
 			"scope":    controlTeamworkAssignScope,
 			"ttl":      controlTeamworkAssignTTL,
 		}
-		putString(rule, "assignment_id", controlTeamworkAssignID)
+		assignmentID := strings.TrimSpace(controlTeamworkAssignID)
+		if assignmentID == "" {
+			assignmentID = defaultShortAssignmentID(controlTeamworkAssignScope, controlTeamworkAssignAssignee, controlTeamworkAssignReportOn, controlTeamworkAssignWork)
+		}
+		putString(rule, "assignment_id", assignmentID)
 		putString(rule, "signal_ref", controlTeamworkAssignSignalRef)
 		putStrings(rule, "report_on", controlTeamworkAssignReportOn)
 		narrative := map[string]any{
@@ -217,18 +226,85 @@ func controlShortObserve(cmd *cobra.Command, eventType, fallbackIDPrefix string,
 	if err != nil {
 		return err
 	}
-	rec, err := client.IngestObserve(contract.ActorID(controlPrincipal), contract.ObservationEnvelope{
-		ExternalID: shortExternalID(fallbackIDPrefix),
-		Event:      contract.Event{Type: eventType, Payload: payload},
+	return withControlShortObserveLock(func() error {
+		return controlShortObserveLocked(cmd, client, eventType, fallbackIDPrefix, payload)
 	})
-	if err != nil {
-		return fmt.Errorf("channel observe failed (service unreachable or rejected): %w", err)
-	}
-	fmt.Fprintf(cmd.OutOrStdout(), "observed seq=%d dup=%v ticked=%v\n", rec.Seq, rec.Dup, rec.Ticked)
-	if rec.ProcessingError != "" {
+}
+
+func controlShortObserveLocked(cmd *cobra.Command, client *access.Client, eventType, fallbackIDPrefix string, payload map[string]any) error {
+	externalID := shortExternalID(fallbackIDPrefix)
+	for attempt := 0; attempt < controlShortObserveMaxAttempts; attempt++ {
+		attemptExternalID := retryExternalID(externalID, attempt)
+		rec, err := client.IngestObserve(contract.ActorID(controlPrincipal), contract.ObservationEnvelope{
+			ExternalID: attemptExternalID,
+			Event:      contract.Event{Type: eventType, Payload: payload},
+		})
+		if err != nil {
+			return fmt.Errorf("channel observe failed (service unreachable or rejected): %w", err)
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "observed seq=%d dup=%v ticked=%v\n", rec.Seq, rec.Dup, rec.Ticked)
+		if rec.ProcessingError == "" {
+			return nil
+		}
 		fmt.Fprintf(cmd.OutOrStdout(), "processing error: %s\n", rec.ProcessingError)
+		if !retryableShortObserveProcessingError(rec.ProcessingError) || attempt == controlShortObserveMaxAttempts-1 {
+			return fmt.Errorf("channel observe processing failed: %s", rec.ProcessingError)
+		}
+		nextExternalID := retryExternalID(externalID, attempt+1)
+		fmt.Fprintf(cmd.OutOrStdout(), "retrying after processing error: attempt=%d external_id=%s\n", attempt+2, nextExternalID)
+		time.Sleep(time.Duration(100*(1<<attempt)) * time.Millisecond)
 	}
-	return nil
+	return fmt.Errorf("channel observe processing failed after %d attempts", controlShortObserveMaxAttempts)
+}
+
+func withControlShortObserveLock(fn func() error) error {
+	lockName := sanitizeAssignmentToken(controlAddr)
+	if lockName == "" {
+		lockName = "default"
+	}
+	lockPath := filepath.Join(os.TempDir(), "mnemon-control-short-"+lockName+".lock")
+	for attempt := 0; attempt < 200; attempt++ {
+		f, err := os.OpenFile(lockPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if err == nil {
+			_, _ = fmt.Fprintf(f, "%d\n", os.Getpid())
+			_ = f.Close()
+			defer os.Remove(lockPath)
+			return fn()
+		}
+		if !os.IsExist(err) {
+			return fmt.Errorf("create short observe lock: %w", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return fmt.Errorf("timed out waiting for short observe lock %s", lockPath)
+}
+
+func retryExternalID(externalID string, attempt int) string {
+	if attempt <= 0 {
+		return externalID
+	}
+	return fmt.Sprintf("%s-retry-%d", externalID, attempt)
+}
+
+func retryableShortObserveProcessingError(msg string) bool {
+	msg = strings.ToLower(strings.TrimSpace(msg))
+	if msg == "" {
+		return false
+	}
+	for _, marker := range []string{
+		"read_stale",
+		"read stale",
+		"stale read",
+		"version conflict",
+		"resource version",
+		"optimistic",
+		"conflict",
+	} {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func shortExternalID(prefix string) string {
@@ -240,6 +316,87 @@ func shortExternalID(prefix string) string {
 		prefix = "event"
 	}
 	return fmt.Sprintf("%s-%d", prefix, time.Now().UTC().UnixNano())
+}
+
+func defaultShortAssignmentID(scope, assignee string, reportOn []string, work string) string {
+	base := issueToken(scope, work)
+	if base == "" {
+		base = sanitizeAssignmentToken(strings.TrimSuffix(assignee, "@team"))
+	}
+	if base == "" {
+		base = "work"
+	}
+	topic := assignmentTopic(reportOn, work)
+	if topic == "" {
+		topic = "task"
+	}
+	return "assignment-" + base + "-" + topic
+}
+
+func issueToken(values ...string) string {
+	for _, value := range values {
+		lower := strings.ToLower(value)
+		for pos := 0; pos < len(lower); {
+			idx := strings.Index(lower[pos:], "tea-")
+			if idx < 0 {
+				break
+			}
+			idx += pos
+			start := idx + len("tea-")
+			end := start
+			for end < len(lower) && lower[end] >= '0' && lower[end] <= '9' {
+				end++
+			}
+			if end > start {
+				return "tea" + lower[start:end]
+			}
+			pos = idx + 1
+		}
+	}
+	return ""
+}
+
+func assignmentTopic(reportOn []string, work string) string {
+	combined := strings.ToLower(strings.Join(reportOn, " ") + " " + work)
+	switch {
+	case strings.Contains(combined, "root") || strings.Contains(combined, "metadata") || strings.Contains(combined, "run visibility"):
+		return "root-runtime"
+	case strings.Contains(combined, "routing") || strings.Contains(combined, "isolation"):
+		return "routing-isolation"
+	case strings.Contains(combined, "feedback") || strings.Contains(combined, "status") || strings.Contains(combined, "completion"):
+		return "feedback-status"
+	default:
+		return sanitizeAssignmentToken(combined)
+	}
+}
+
+func sanitizeAssignmentToken(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	var b strings.Builder
+	lastDash := false
+	words := 0
+	inWord := false
+	for _, r := range value {
+		ok := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
+		if ok {
+			if !inWord {
+				words++
+				inWord = true
+			}
+			if words > 4 {
+				break
+			}
+			b.WriteRune(r)
+			lastDash = false
+			continue
+		}
+		inWord = false
+		if b.Len() > 0 && !lastDash {
+			b.WriteByte('-')
+			lastDash = true
+		}
+	}
+	return strings.Trim(b.String(), "-")
 }
 
 func requireShortFields(fields map[string]string) error {

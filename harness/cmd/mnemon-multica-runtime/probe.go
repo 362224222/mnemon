@@ -10,6 +10,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	multicasurface "github.com/mnemon-dev/mnemon/harness/internal/surface/multica"
 )
 
 type probeRecorder struct {
@@ -64,7 +66,7 @@ func runRuntimeProbe(cfg runtimeConfig) error {
 		return err
 	}
 	if wantsVersion(cfg.Args) {
-		fmt.Fprintf(cfg.Stdout, "mnemon-multica-runtime %s (probe mode)\n", runtimeVersion)
+		fmt.Fprintf(cfg.Stdout, "%s %s (probe mode)\n", multicasurface.MulticaRuntimeCommandName, runtimeVersion)
 		return rec.record(probeEvent{Kind: "version"})
 	}
 	return runProbeRPC(cfg, rec, cwd)
@@ -120,7 +122,7 @@ func (s *probeRPCState) handle(msg rpcMessage) []rpcMessage {
 		return []rpcMessage{{
 			ID: msg.ID,
 			Result: map[string]any{
-				"userAgent":      "mnemon-multica-runtime/" + runtimeVersion + " probe",
+				"userAgent":      multicasurface.MulticaRuntimeCommandName + "/" + runtimeVersion + " probe",
 				"codexHome":      os.Getenv("CODEX_HOME"),
 				"platformFamily": "unix",
 				"platformOs":     runtime.GOOS,
@@ -133,7 +135,7 @@ func (s *probeRPCState) handle(msg rpcMessage) []rpcMessage {
 				Method: "remoteControl/status/changed",
 				Params: map[string]any{
 					"status":         "disabled",
-					"serverName":     "mnemon-multica-runtime",
+					"serverName":     multicasurface.MulticaRuntimeCommandName,
 					"installationId": "mnemon-runtime-probe",
 				},
 			},
@@ -306,9 +308,9 @@ func extractProbeInput(params map[string]any) string {
 }
 
 func newProbeRecorder(env []string, cwd string, now func() time.Time) (*probeRecorder, error) {
-	path := envValue(env, "MNEMON_MULTICA_PROBE_LOG")
+	path := multicasurface.RuntimeEnvValue(env, "MNEMON_MULTICA_PROBE_LOG")
 	if path == "" {
-		dir := envValue(env, "MNEMON_MULTICA_PROBE_DIR")
+		dir := multicasurface.RuntimeEnvValue(env, "MNEMON_MULTICA_PROBE_DIR")
 		if dir == "" {
 			home, err := os.UserHomeDir()
 			if err != nil || strings.TrimSpace(home) == "" {

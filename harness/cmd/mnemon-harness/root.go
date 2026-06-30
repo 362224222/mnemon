@@ -12,10 +12,10 @@ var version = "dev"
 var rootCmd = &cobra.Command{
 	Use:               "mnemon-harness",
 	Version:           version,
-	Short:             "Mnemon Agent Integration setup",
+	Short:             "Experimental Mnemon event-system harness",
 	CompletionOptions: cobra.CompletionOptions{DisableDefaultCmd: true},
-	Long: "Install Agent Integration for standard events, connect it to Local Mnemon, " +
-		"and keep Remote Workspace sync as a background concern.",
+	Long: "Configure the experimental Mnemon event-driven collaboration substrate: Agent Integration, " +
+		"Local Mnemon, external connections, and daemon workers. Teamwork is a profile on top of this substrate.",
 }
 
 // Command groups are help-only: they change how `--help` lists verbs, never a

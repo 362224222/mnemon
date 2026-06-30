@@ -15,8 +15,9 @@ import (
 var tokenPrincipal string
 
 var tokenCmd = &cobra.Command{
-	Use:   "token",
-	Short: "Manage channel credentials",
+	Use:    "token",
+	Short:  "Manage local access credentials",
+	Hidden: true,
 }
 
 var tokenRotateCmd = &cobra.Command{
@@ -39,7 +40,7 @@ var tokenRotateCmd = &cobra.Command{
 func init() {
 	tokenRotateCmd.Flags().StringVar(&tokenPrincipal, "principal", "", "principal whose token to rotate")
 	tokenCmd.AddCommand(tokenRotateCmd)
-	tokenCmd.GroupID = groupSpine
+	tokenCmd.GroupID = groupAdvanced
 	rootCmd.AddCommand(tokenCmd)
 }
 

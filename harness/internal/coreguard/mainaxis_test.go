@@ -10,11 +10,16 @@ import (
 type mainAxisOwner string
 
 const (
-	ownerEvent     mainAxisOwner = "event"
-	ownerHostAgent mainAxisOwner = "hostagent"
-	ownerMnemond   mainAxisOwner = "mnemond"
-	ownerMnemonhub mainAxisOwner = "mnemonhub"
-	ownerGuard     mainAxisOwner = "guard"
+	ownerEvent             mainAxisOwner = "event"
+	ownerHostAgent         mainAxisOwner = "hostagent"
+	ownerMnemond           mainAxisOwner = "mnemond"
+	ownerMnemonhub         mainAxisOwner = "mnemonhub"
+	ownerParticipant       mainAxisOwner = "participant"
+	ownerInteractionPoint  mainAxisOwner = "interaction-point"
+	ownerDriveSource       mainAxisOwner = "drive-source"
+	ownerProjectionSurface mainAxisOwner = "projection-surface"
+	ownerProductConfig     mainAxisOwner = "product-config"
+	ownerGuard             mainAxisOwner = "guard"
 )
 
 type packageMainAxis struct {
@@ -25,23 +30,31 @@ type packageMainAxis struct {
 
 // packageMainAxisInventory is the executable inventory for the main-axis convergence goal. It does
 // not claim the current package names are final; it prevents new top-level implementation concepts
-// from appearing without an explicit owner under hostagent, mnemond, mnemonhub, or event.
+// from appearing without an explicit owner under the R2 architecture layers.
 var packageMainAxisInventory = map[string]packageMainAxis{
-	"app":        {owner: ownerMnemond, role: "daemon wiring and local mnemond boot", target: "mnemond"},
-	"assembler":  {owner: ownerMnemond, role: "mnemond policy/runtime assembly", target: "mnemond"},
-	"assets":     {owner: ownerHostAgent, role: "hostagent integration and event-policy assets", target: "hostagent/assets"},
-	"codexapp":   {owner: ownerHostAgent, role: "Codex hostagent appserver adapter", target: "hostagent/codexapp"},
-	"config":     {owner: ownerMnemond, role: "mnemond local configuration", target: "mnemond/config"},
-	"contract":   {owner: ownerEvent, role: "event and mnemond boundary DTOs", target: "event/contract"},
-	"coreguard":  {owner: ownerGuard, role: "architecture guard tests", target: "coreguard"},
-	"driver":     {owner: ownerMnemond, role: "mnemond tick driver", target: "mnemond/daemon"},
-	"event":      {owner: ownerEvent, role: "canonical event and envelope model", target: "event"},
-	"eventstore": {owner: ownerEvent, role: "event envelope append/read facade", target: "event/store"},
-	"hostagent":  {owner: ownerHostAgent, role: "hostagent setup and thin shims", target: "hostagent"},
-	"mnemonhub":  {owner: ownerMnemonhub, role: "remote accepted event exchange server and exchange mechanics", target: "mnemonhub"},
-	"replay":     {owner: ownerMnemond, role: "mnemond determinism verification", target: "mnemond/replay"},
-	"runtime":    {owner: ownerMnemond, role: "local mnemond event runtime", target: "mnemond"},
-	"ui":         {owner: ownerMnemond, role: "read-only mnemond operator observability", target: "mnemond/observe"},
+	"activationtrace": {owner: ownerProjectionSurface, role: "runtime activation trace material for external run displays", target: "projection/activationtrace"},
+	"app":             {owner: ownerMnemond, role: "daemon wiring and local mnemond boot", target: "mnemond"},
+	"assembler":       {owner: ownerMnemond, role: "mnemond policy/runtime assembly", target: "mnemond"},
+	"assets":          {owner: ownerHostAgent, role: "hostagent integration and event-policy assets", target: "hostagent/assets"},
+	"codexapp":        {owner: ownerHostAgent, role: "Codex hostagent appserver adapter", target: "hostagent/codexapp"},
+	"config":          {owner: ownerMnemond, role: "mnemond local configuration", target: "mnemond/config"},
+	"contract":        {owner: ownerEvent, role: "event and mnemond boundary DTOs", target: "event/contract"},
+	"coreguard":       {owner: ownerGuard, role: "architecture guard tests", target: "coreguard"},
+	"daemon":          {owner: ownerMnemond, role: "harness daemon worker supervision for local event node operation", target: "mnemond/daemon"},
+	"drive":           {owner: ownerDriveSource, role: "managed local agent drive source and wake loop primitives", target: "drive/managed-local"},
+	"driver":          {owner: ownerMnemond, role: "legacy facade for mnemond and adapter helper code during R2 cleanup", target: "mnemond/daemon"},
+	"event":           {owner: ownerEvent, role: "canonical event and envelope model", target: "event"},
+	"eventstore":      {owner: ownerEvent, role: "event envelope append/read facade", target: "event/store"},
+	"hostagent":       {owner: ownerHostAgent, role: "hostagent setup and thin shims", target: "hostagent"},
+	"interaction":     {owner: ownerInteractionPoint, role: "external stimulus material separated into rule/narrative/refs", target: "interaction/event-material"},
+	"mnemonhub":       {owner: ownerMnemonhub, role: "remote accepted event exchange server and exchange mechanics", target: "mnemonhub"},
+	"participant":     {owner: ownerParticipant, role: "principal identity and participant list helpers shared by product config and adapters", target: "participant"},
+	"productconfig":   {owner: ownerProductConfig, role: "harness product configuration for agents, connections, daemon workers, and surfaces", target: "product/config"},
+	"projection":      {owner: ownerProjectionSurface, role: "accepted/derived state material prepared for external projection surfaces", target: "projection"},
+	"replay":          {owner: ownerMnemond, role: "mnemond determinism verification", target: "mnemond/replay"},
+	"runtime":         {owner: ownerMnemond, role: "local mnemond event runtime", target: "mnemond"},
+	"session":         {owner: ownerProductConfig, role: "harness session records and external attachment policy", target: "product/session"},
+	"ui":              {owner: ownerMnemond, role: "read-only mnemond operator observability", target: "mnemond/observe"},
 }
 
 var demotedMainAxisPackages = map[string]bool{}
@@ -58,6 +71,7 @@ var nestedMainAxisInventory = map[string]packageMainAxis{
 	},
 	"mnemond/state":      {owner: ownerMnemond, role: "local event/state store and materialized-state applier", target: "mnemond/state"},
 	"mnemonhub/exchange": {owner: ownerMnemonhub, role: "mnemonhub event exchange client, cursors, and local ledger acknowledgements", target: "mnemonhub/exchange"},
+	"surface/multica":    {owner: ownerProjectionSurface, role: "Multica surface registry, metadata, and projection ledger primitives", target: "projection/surface/multica"},
 }
 
 var retiredTopLevelImplementationPackages = []string{
@@ -77,7 +91,7 @@ func TestInternalPackagesHaveMainAxisOwner(t *testing.T) {
 	for _, pkg := range topLevelInternalPackages(t) {
 		inv, ok := packageMainAxisInventory[pkg]
 		if !ok {
-			t.Errorf("harness/internal/%s has no main-axis owner; classify it under hostagent, mnemond, mnemonhub, or event before adding a new top-level concept", pkg)
+			t.Errorf("harness/internal/%s has no main-axis owner; classify it under an accepted R2 layer before adding a new top-level concept", pkg)
 			continue
 		}
 		if inv.owner == "" || strings.TrimSpace(inv.role) == "" || strings.TrimSpace(inv.target) == "" {

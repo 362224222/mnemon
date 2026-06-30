@@ -200,6 +200,17 @@ esac
 		t.Fatal(err)
 	}
 	registryPath := filepath.Join(tmp, "registry.json")
+	credentialsDir := filepath.Join(tmp, ".mnemon", "harness", "channel", "credentials")
+	if err := os.MkdirAll(credentialsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	plannerTokenFile := filepath.Join(credentialsDir, "planner-team.token")
+	implementerTokenFile := filepath.Join(credentialsDir, "implementer-team.token")
+	for _, path := range []string{plannerTokenFile, implementerTokenFile} {
+		if err := os.WriteFile(path, []byte("token\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	multicaBin = bin
 	multicaProfile = "desktop-api.multica.ai"
 	multicaWorkspaceID = "ws-1"
@@ -215,6 +226,7 @@ esac
 	multicaProvisionHarnessBin = "/abs/mnemon-harness"
 	multicaProvisionManagedRuntime = "noop"
 	multicaProvisionManagedWorkspace = tmp
+	multicaProvisionAcceptanceBridge = true
 	multicaJSON = true
 	t.Setenv("MULTICA_ENV_STDIN_PATH", envStdinPath)
 
@@ -261,6 +273,8 @@ esac
 		`"MNEMON_MULTICA_WORKSPACE_ID":"ws-1"`,
 		`"MNEMON_CONTROL_ADDR":"http://127.0.0.1:8787"`,
 		`"MNEMON_CONTROL_PRINCIPAL":"planner@team"`,
+		`"MNEMON_CONTROL_TOKEN_FILE":"` + plannerTokenFile + `"`,
+		`"MNEMON_CONTROL_TOKEN_FILE":"` + implementerTokenFile + `"`,
 		`"MNEMON_HARNESS_BIN":"/abs/mnemon-harness"`,
 		`"MNEMON_MANAGED_RUNTIME":"noop"`,
 		`"MNEMON_MANAGED_WORKSPACE":"` + tmp + `"`,
@@ -268,6 +282,80 @@ esac
 		if !strings.Contains(string(envStdin), want) {
 			t.Fatalf("agent env stdin missing %s:\n%s", want, envStdin)
 		}
+	}
+}
+
+func TestMulticaProvisionRejectsDirectHarnessUse(t *testing.T) {
+	restoreMulticaFlags(t)
+
+	multicaProvisionAcceptanceBridge = false
+	err := runMulticaProvision(multicaProvisionCmd, nil)
+	if err == nil {
+		t.Fatal("direct hidden harness provision should be rejected")
+	}
+	if !strings.Contains(err.Error(), "mnemon-acceptance multica-provision") {
+		t.Fatalf("unexpected direct provision error: %v", err)
+	}
+}
+
+func TestMergeMulticaParticipantRuntimeEnvPrunesStaleManagedKeys(t *testing.T) {
+	merged := mergeMulticaParticipantRuntimeEnv(map[string]string{
+		"MNEMON_CONTROL_TOKEN":      "old-token",
+		"MNEMON_CONTROL_TOKEN_FILE": "/old/token",
+		"MNEMON_MANAGED_RUNTIME":    "codex-appserver",
+		"MNEMON_HUB_BACKEND":        "old",
+		"CUSTOM_USER_ENV":           "keep",
+	}, map[string]string{
+		"MNEMON_HUB_BACKEND":          "multica",
+		"MNEMON_CONTROL_ADDR":         "http://127.0.0.1:8791",
+		"MNEMON_CONTROL_PRINCIPAL":    "planner@team",
+		"MNEMON_MANAGED_WORKSPACE":    "/workspace",
+		"MNEMON_MULTICA_REGISTRY":     "/registry.json",
+		"MNEMON_MULTICA_WORKSPACE_ID": "ws-1",
+	})
+	for _, stale := range []string{"MNEMON_CONTROL_TOKEN", "MNEMON_CONTROL_TOKEN_FILE", "MNEMON_MANAGED_RUNTIME"} {
+		if _, ok := merged[stale]; ok {
+			t.Fatalf("stale managed key %s should be pruned: %+v", stale, merged)
+		}
+	}
+	if merged["CUSTOM_USER_ENV"] != "keep" {
+		t.Fatalf("unmanaged env should be preserved: %+v", merged)
+	}
+	if merged["MNEMON_HUB_BACKEND"] != "multica" || merged["MNEMON_CONTROL_PRINCIPAL"] != "planner@team" {
+		t.Fatalf("desired managed env not applied: %+v", merged)
+	}
+}
+
+func TestMulticaParticipantRuntimeEnvUsesAbsoluteLocalPaths(t *testing.T) {
+	restoreMulticaFlags(t)
+
+	tmp := t.TempDir()
+	t.Chdir(tmp)
+	workspace := "managed-workspace"
+	tokenDir := filepath.Join(workspace, ".mnemon", "harness", "channel", "credentials")
+	if err := os.MkdirAll(tokenDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tokenDir, "planner-team.token"), []byte("token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	multicaProfile = "desktop-api.multica.ai"
+	env := multicaParticipantRuntimeEnv(driver.MulticaCLI{Command: "multica"}, driver.MulticaParticipantRecord{
+		Principal: "planner@team",
+		AgentName: "mnemon-planner",
+		AgentID:   "agent-planner",
+	}, filepath.Join("state", "registry.json"), "ws-1", multicaParticipantEnvOptions{
+		ManagedWorkspace: workspace,
+	})
+
+	for _, key := range []string{"MNEMON_MULTICA_REGISTRY", "MNEMON_MANAGED_WORKSPACE", "MNEMON_CONTROL_TOKEN_FILE"} {
+		value := env[key]
+		if value == "" || !filepath.IsAbs(value) {
+			t.Fatalf("%s should be absolute, got %q in %+v", key, value, env)
+		}
+	}
+	if want := filepath.Join(tmp, workspace, ".mnemon", "harness", "channel", "credentials", "planner-team.token"); env["MNEMON_CONTROL_TOKEN_FILE"] != want {
+		t.Fatalf("token file = %q, want %q", env["MNEMON_CONTROL_TOKEN_FILE"], want)
 	}
 }
 
@@ -312,6 +400,7 @@ func restoreMulticaFlags(t *testing.T) {
 	oldProvisionManagedCommand := multicaProvisionManagedCommand
 	oldProvisionManagedWorkspace := multicaProvisionManagedWorkspace
 	oldProvisionManagedTimeout := multicaProvisionManagedTimeout
+	oldProvisionAcceptanceBridge := multicaProvisionAcceptanceBridge
 	oldParticipantRegistry := multicaParticipantRegistry
 	oldParticipantProjectRoot := multicaParticipantProjectRoot
 	oldParticipantAgentID := multicaParticipantAgentID
@@ -369,6 +458,7 @@ func restoreMulticaFlags(t *testing.T) {
 		multicaProvisionManagedCommand = oldProvisionManagedCommand
 		multicaProvisionManagedWorkspace = oldProvisionManagedWorkspace
 		multicaProvisionManagedTimeout = oldProvisionManagedTimeout
+		multicaProvisionAcceptanceBridge = oldProvisionAcceptanceBridge
 		multicaParticipantRegistry = oldParticipantRegistry
 		multicaParticipantProjectRoot = oldParticipantProjectRoot
 		multicaParticipantAgentID = oldParticipantAgentID
@@ -424,6 +514,7 @@ func restoreMulticaFlags(t *testing.T) {
 	multicaProvisionManagedCommand = ""
 	multicaProvisionManagedWorkspace = ""
 	multicaProvisionManagedTimeout = 0
+	multicaProvisionAcceptanceBridge = false
 	multicaParticipantRegistry = ""
 	multicaParticipantProjectRoot = "."
 	multicaParticipantAgentID = ""

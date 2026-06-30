@@ -85,6 +85,130 @@ func TestTeamworkSignalPresentationCarriesContextRefs(t *testing.T) {
 	}
 }
 
+func TestMulticaTeamworkSignalPresentationKeepsHandoffInMnemonProtocol(t *testing.T) {
+	now := mustTime(t, "2026-06-24T10:00:00Z")
+	proj := view.View{Ref: "proj_multica_signal", Digest: "digest_multica_signal", Content: []view.ResourceContent{
+		content("agent_profile", "project", []any{map[string]any{"id": "p1", "actor": "planner@team", "freshness": "fresh", "summary": "A profile"}}),
+		content("teamwork_signal", "project", []any{map[string]any{
+			"id":        "sig1",
+			"statement": "Validate the Multica hub flow",
+		}}),
+	}}
+	resp, err := (Renderer{Now: func() time.Time { return now }}).RenderPresentation(context.Background(),
+		Request{Principal: "planner@team", Host: "multica", Lifecycle: "remind", RenderIntent: IntentTeamworkEvents}, proj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"For Multica-backed teamwork",
+		"Mnemon assignment events",
+		"runtime projects Multica assignment mailboxes",
+	} {
+		if !strings.Contains(resp.Body, want) {
+			t.Fatalf("Multica teamwork cue missing %q:\n%s", want, resp.Body)
+		}
+	}
+
+	plain, err := (Renderer{Now: func() time.Time { return now }}).RenderPresentation(context.Background(),
+		Request{Principal: "planner@team", Host: "codex", Lifecycle: "remind", RenderIntent: IntentTeamworkEvents}, proj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(plain.Body, "Multica-backed teamwork") {
+		t.Fatalf("non-Multica cue should stay host-neutral:\n%s", plain.Body)
+	}
+}
+
+func TestMulticaTeamworkPresentationFiltersOtherSessions(t *testing.T) {
+	now := mustTime(t, "2026-06-24T10:00:00Z")
+	proj := view.View{Ref: "proj_multica_scope", Digest: "digest_multica_scope", Content: []view.ResourceContent{
+		content("agent_profile", "project", []any{map[string]any{"id": "p1", "actor": "planner@team", "freshness": "fresh", "summary": "A profile"}}),
+		content("teamwork_signal", "project", []any{
+			map[string]any{
+				"id":            "sig-current",
+				"statement":     "Current Multica validation",
+				"session_id":    "multica:session:root-current",
+				"root_issue_id": "root-current",
+			},
+		}),
+		content("assignment", "project", []any{
+			map[string]any{
+				"id":            "asg-stale",
+				"actor":         "planner@team",
+				"assignee":      "planner@team",
+				"scope":         "old Multica validation",
+				"expected_work": "work on stale child issue",
+				"session_id":    "multica:session:root-stale",
+				"root_issue_id": "root-stale",
+				"ttl":           "30m",
+				"created_at":    "2026-06-24T09:45:00Z",
+			},
+		}),
+	}}
+	resp, err := (Renderer{Now: func() time.Time { return now }}).RenderPresentation(context.Background(),
+		Request{
+			Principal:    "planner@team",
+			Host:         "multica",
+			Lifecycle:    "remind",
+			RenderIntent: IntentTeamworkEvents,
+			SessionID:    "multica:session:root-current",
+			InputDigest:  "root-current",
+		}, proj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(resp.Body, "Current Multica validation") {
+		t.Fatalf("current signal should remain visible:\n%s", resp.Body)
+	}
+	if strings.Contains(resp.Body, "stale child issue") || strings.Contains(resp.Body, "asg-stale") {
+		t.Fatalf("Multica render must not leak stale session assignment:\n%s", resp.Body)
+	}
+}
+
+func TestMulticaAssignmentMailboxPresentationKeepsCurrentAssignment(t *testing.T) {
+	now := mustTime(t, "2026-06-24T10:00:00Z")
+	proj := view.View{Ref: "proj_multica_assignment_scope", Digest: "digest_multica_assignment_scope", Content: []view.ResourceContent{
+		content("assignment", "project", []any{
+			map[string]any{
+				"id":            "asg-current",
+				"actor":         "planner@team",
+				"assignee":      "worker@team",
+				"scope":         "current mailbox work",
+				"expected_work": "inspect current mailbox",
+				"ttl":           "30m",
+				"created_at":    "2026-06-24T09:45:00Z",
+			},
+			map[string]any{
+				"id":            "asg-stale",
+				"actor":         "planner@team",
+				"assignee":      "worker@team",
+				"scope":         "stale mailbox work",
+				"expected_work": "inspect stale mailbox",
+				"ttl":           "30m",
+				"created_at":    "2026-06-24T09:45:00Z",
+			},
+		}),
+	}}
+	resp, err := (Renderer{Now: func() time.Time { return now }}).RenderPresentation(context.Background(),
+		Request{
+			Principal:    "worker@team",
+			Host:         "multica",
+			Lifecycle:    "remind",
+			RenderIntent: IntentTeamworkEvents,
+			SessionID:    "multica:session:root-current",
+			InputDigest:  "asg-current",
+		}, proj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(resp.Body, "inspect current mailbox") {
+		t.Fatalf("current assignment should remain visible:\n%s", resp.Body)
+	}
+	if strings.Contains(resp.Body, "inspect stale mailbox") || strings.Contains(resp.Body, "asg-stale") {
+		t.Fatalf("Multica assignment render must not leak stale assignment:\n%s", resp.Body)
+	}
+}
+
 func TestRenderPresentationScopeAndAssignmentState(t *testing.T) {
 	now := mustTime(t, "2026-06-24T10:00:00Z")
 	reqB := Request{Principal: "codex-b@project", Host: "codex", Lifecycle: "nudge", RenderIntent: IntentTeamworkEvents}

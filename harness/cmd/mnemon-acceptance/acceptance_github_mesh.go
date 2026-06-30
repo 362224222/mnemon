@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -28,6 +29,12 @@ var (
 	acceptanceGitHubBranchPrefix string
 	acceptanceGitHubScenarios    []string
 	acceptanceGitHubSyncInterval time.Duration
+)
+
+var (
+	r1GitHubMeshRateLimitAPIURL = "https://api.github.com/rate_limit"
+	r1GitHubMeshAPIBaseURL      = "https://api.github.com"
+	r1GitHubMeshHTTPClient      = &http.Client{Timeout: 10 * time.Second}
 )
 
 var acceptanceR1GitHubMeshCmd = &cobra.Command{
@@ -155,6 +162,11 @@ func runR1GitHubMeshAcceptance(ctx context.Context, opts r1GitHubMeshAcceptanceO
 		report.Status = "blocked"
 		return report, err
 	}
+	if err := validateR1GitHubMeshSyncInterval(opts); err != nil {
+		addR1Error(&report, err)
+		report.Status = "blocked"
+		return report, err
+	}
 	if opts.TokenFile == "" {
 		err := fmt.Errorf("--github-token-file is required")
 		addR1Error(&report, err)
@@ -173,6 +185,24 @@ func runR1GitHubMeshAcceptance(ctx context.Context, opts r1GitHubMeshAcceptanceO
 		report.Status = "blocked"
 		return report, err
 	}
+	report.Artifacts["github_repo"] = opts.Repo
+	report.Artifacts["github_token_file"] = tokenFile
+	rateLimit, err := preflightR1GitHubMeshRateLimit(ctx, tokenFile, r1GitHubMeshMinimumRateLimitRemaining(opts))
+	if rateLimit.Limit > 0 || !rateLimit.ResetAt.IsZero() {
+		report.Artifacts["github_rate_limit_remaining"] = fmt.Sprintf("%d", rateLimit.Remaining)
+		report.Artifacts["github_rate_limit_limit"] = fmt.Sprintf("%d", rateLimit.Limit)
+		report.Artifacts["github_rate_limit_reset"] = rateLimit.ResetAt.UTC().Format(time.RFC3339)
+	}
+	if err != nil {
+		addR1Error(&report, err)
+		report.Status = "blocked"
+		return report, err
+	}
+	if err := preflightR1GitHubMeshRepositoryAccess(ctx, opts.Repo, tokenFile); err != nil {
+		addR1Error(&report, err)
+		report.Status = "blocked"
+		return report, err
+	}
 	branches := r1GitHubMeshBranches(branchPrefix, opts.Agents)
 	if err := ensureR1GitHubMeshBranches(ctx, opts.Repo, tokenFile, branches); err != nil {
 		addR1Error(&report, err)
@@ -187,8 +217,6 @@ func runR1GitHubMeshAcceptance(ctx context.Context, opts r1GitHubMeshAcceptanceO
 	}
 	sourceCodexHome := resolveSourceCodexHome(opts.CodexHome)
 	report.Artifacts["codex_home_source"] = sourceCodexHome
-	report.Artifacts["github_repo"] = opts.Repo
-	report.Artifacts["github_token_file"] = tokenFile
 	report.Artifacts["github_branch_prefix"] = branchPrefix
 	report.Artifacts["github_sync_interval"] = opts.SyncInterval.String()
 	initialOnline := opts.Agents
@@ -1383,6 +1411,16 @@ func r1GitHubMeshBranchPrefix(prefix string, started time.Time) string {
 	return "mnemon/mnemond-" + started.UTC().Format("20060102T150405Z") + "-"
 }
 
+func validateR1GitHubMeshSyncInterval(opts r1GitHubMeshAcceptanceOptions) error {
+	if !opts.AgentTurns {
+		return nil
+	}
+	if opts.SyncInterval < 30*time.Second {
+		return fmt.Errorf("github mesh agent-turns require --sync-interval >= 30s to protect GitHub API quota (got %s)", opts.SyncInterval)
+	}
+	return nil
+}
+
 func ensureR1GitHubMeshBranches(ctx context.Context, repo, tokenFile string, branches []string) error {
 	token, err := readR1GitHubMeshToken(tokenFile)
 	if err != nil {
@@ -1400,6 +1438,139 @@ func ensureR1GitHubMeshBranches(ctx context.Context, repo, tokenFile string, bra
 		return fmt.Errorf("ensure GitHub branches: %w", err)
 	}
 	return nil
+}
+
+type r1GitHubMeshRateLimit struct {
+	Limit     int
+	Remaining int
+	Used      int
+	ResetAt   time.Time
+}
+
+func r1GitHubMeshMinimumRateLimitRemaining(opts r1GitHubMeshAcceptanceOptions) int {
+	scenarios := len(r1GitHubMeshScenarioNames(opts.Scenarios))
+	if scenarios == 0 {
+		scenarios = 1
+	}
+	agents := opts.Agents
+	if agents < 5 {
+		agents = 5
+	}
+	min := 500 + agents*scenarios*150
+	if min < 1500 {
+		return 1500
+	}
+	return min
+}
+
+func preflightR1GitHubMeshRateLimit(ctx context.Context, tokenFile string, minRemaining int) (r1GitHubMeshRateLimit, error) {
+	token, err := readR1GitHubMeshToken(tokenFile)
+	if err != nil {
+		return r1GitHubMeshRateLimit{}, err
+	}
+	limit, err := fetchR1GitHubMeshRateLimit(ctx, token)
+	if err != nil {
+		return r1GitHubMeshRateLimit{}, err
+	}
+	if limit.Remaining < minRemaining {
+		return limit, fmt.Errorf("github core API rate limit remaining %d below required %d; reset=%s", limit.Remaining, minRemaining, limit.ResetAt.UTC().Format(time.RFC3339))
+	}
+	return limit, nil
+}
+
+func preflightR1GitHubMeshRepositoryAccess(ctx context.Context, repo, tokenFile string) error {
+	token, err := readR1GitHubMeshToken(tokenFile)
+	if err != nil {
+		return err
+	}
+	return fetchR1GitHubMeshRepositoryAccess(ctx, repo, token)
+}
+
+func fetchR1GitHubMeshRepositoryAccess(ctx context.Context, repo, token string) error {
+	repo, err := exchange.NormalizeGitHubRepo(repo)
+	if err != nil {
+		return err
+	}
+	baseURL := strings.TrimRight(strings.TrimSpace(r1GitHubMeshAPIBaseURL), "/")
+	if baseURL == "" {
+		baseURL = "https://api.github.com"
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/repos/"+repo, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	req.Header.Set("User-Agent", "mnemon-acceptance")
+	if strings.TrimSpace(token) != "" {
+		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
+	}
+	client := r1GitHubMeshHTTPClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("github repo access status %d for %s: %s", resp.StatusCode, repo, strings.TrimSpace(string(body)))
+	}
+	return nil
+}
+
+func fetchR1GitHubMeshRateLimit(ctx context.Context, token string) (r1GitHubMeshRateLimit, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r1GitHubMeshRateLimitAPIURL, nil)
+	if err != nil {
+		return r1GitHubMeshRateLimit{}, err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	req.Header.Set("User-Agent", "mnemon-acceptance")
+	if strings.TrimSpace(token) != "" {
+		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
+	}
+	client := r1GitHubMeshHTTPClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return r1GitHubMeshRateLimit{}, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return r1GitHubMeshRateLimit{}, err
+	}
+	if resp.StatusCode >= 300 {
+		return r1GitHubMeshRateLimit{}, fmt.Errorf("github rate_limit status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var doc struct {
+		Resources struct {
+			Core struct {
+				Limit     int   `json:"limit"`
+				Remaining int   `json:"remaining"`
+				Reset     int64 `json:"reset"`
+				Used      int   `json:"used"`
+			} `json:"core"`
+		} `json:"resources"`
+	}
+	if err := json.Unmarshal(body, &doc); err != nil {
+		return r1GitHubMeshRateLimit{}, fmt.Errorf("parse github rate_limit response: %w", err)
+	}
+	core := doc.Resources.Core
+	return r1GitHubMeshRateLimit{
+		Limit:     core.Limit,
+		Remaining: core.Remaining,
+		Used:      core.Used,
+		ResetAt:   time.Unix(core.Reset, 0).UTC(),
+	}, nil
 }
 
 func readR1GitHubMeshToken(tokenFile string) (string, error) {

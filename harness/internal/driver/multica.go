@@ -13,12 +13,14 @@ import (
 	"sync"
 	"time"
 
-	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
+	multicasurface "github.com/mnemon-dev/mnemon/harness/internal/surface/multica"
 )
 
 const (
-	MulticaDefaultCommand = "multica"
-	MulticaExternalSource = "multica"
+	MulticaDefaultCommand     = "multica"
+	MulticaRuntimeCommandName = multicasurface.MulticaRuntimeCommandName
+	MulticaRuntimeProfileName = multicasurface.MulticaRuntimeProfileName
+	MulticaExternalSource     = multicasurface.MulticaExternalSource
 )
 
 type MulticaCLI struct {
@@ -741,6 +743,18 @@ func (c MulticaCLI) ListIssueMetadata(ctx context.Context, issueID string) (map[
 	return decodeMulticaMetadataOutput([]byte(out.Stdout))
 }
 
+func (c MulticaCLI) LoadIssueMetadata(ctx context.Context, issue MulticaIssue) (MulticaIssue, int, error) {
+	if strings.TrimSpace(issue.ID) == "" {
+		return issue, 0, nil
+	}
+	listed, err := c.ListIssueMetadata(ctx, issue.ID)
+	if err != nil {
+		return issue, 0, err
+	}
+	issue.Metadata = multicasurface.MergeIssueMetadata(issue.Metadata, listed)
+	return issue, len(listed), nil
+}
+
 func (c MulticaCLI) ListIssueChildren(ctx context.Context, parentID string) ([]MulticaIssue, error) {
 	parentID = strings.TrimSpace(parentID)
 	if parentID == "" {
@@ -840,110 +854,6 @@ func (c MulticaCLI) globalArgs(args []string) []string {
 		out = append(out, "--workspace-id", strings.TrimSpace(c.WorkspaceID))
 	}
 	return append(out, args...)
-}
-
-type MulticaIssueSignalOptions struct {
-	Scope        string
-	TTL          string
-	WhyTeamwork  string
-	WorkspaceID  string
-	TaskID       string
-	AgentID      string
-	Principal    string
-	EvidenceRefs []string
-	ContextRefs  []string
-	ExternalID   string
-}
-
-type MulticaObservedDraft struct {
-	EventType  string         `json:"event_type"`
-	ExternalID string         `json:"external_id"`
-	Payload    map[string]any `json:"payload"`
-}
-
-func BuildMulticaIssueTeamworkSignal(issue MulticaIssue, opts MulticaIssueSignalOptions) (MulticaObservedDraft, error) {
-	if strings.TrimSpace(issue.ID) == "" {
-		return MulticaObservedDraft{}, fmt.Errorf("multica issue id is required")
-	}
-	title := strings.TrimSpace(issue.Title)
-	if title == "" {
-		title = strings.TrimSpace(issue.Identifier)
-	}
-	if title == "" {
-		title = issue.ID
-	}
-	scope := strings.TrimSpace(opts.Scope)
-	if scope == "" {
-		scope = "multica/teamwork"
-	}
-	ttl := strings.TrimSpace(opts.TTL)
-	if ttl == "" {
-		ttl = "30m"
-	}
-	correlation := "multica:issue:" + issue.ID
-	rule := map[string]any{
-		"external_source":           MulticaExternalSource,
-		"external_issue_id":         issue.ID,
-		"external_issue_identifier": strings.TrimSpace(issue.Identifier),
-		"correlation_id":            correlation,
-		"scope":                     scope,
-		"ttl":                       ttl,
-	}
-	addMulticaRuleString(rule, "external_workspace_id", opts.WorkspaceID)
-	addMulticaRuleString(rule, "external_task_id", opts.TaskID)
-	addMulticaRuleString(rule, "external_agent_id", opts.AgentID)
-	addMulticaRuleString(rule, "principal", opts.Principal)
-	narrative := map[string]any{
-		"title":        title,
-		"statement":    multicaIssueStatement(issue, title),
-		"why_teamwork": strings.TrimSpace(opts.WhyTeamwork),
-	}
-	if narrative["why_teamwork"] == "" {
-		narrative["why_teamwork"] = "The Multica issue is being bridged into Mnemon so local agents can decide whether and how to coordinate."
-	}
-	refs := map[string]any{
-		"context_refs": append([]string{correlation}, cleanMulticaRefs(opts.ContextRefs)...),
-	}
-	if evidence := cleanMulticaRefs(opts.EvidenceRefs); len(evidence) > 0 {
-		refs["evidence_refs"] = evidence
-	} else {
-		refs["evidence_refs"] = []string{correlation}
-	}
-	externalID := strings.TrimSpace(opts.ExternalID)
-	if externalID == "" {
-		externalID = "multica-issue-" + issue.ID
-	}
-	return MulticaObservedDraft{
-		EventType:  "teamwork_signal.write_candidate.observed",
-		ExternalID: externalID,
-		Payload:    eventmodel.BuildPayload(rule, narrative, refs),
-	}, nil
-}
-
-func FormatMulticaProjectionComment(title string, body string, eventIDs []string) string {
-	title = strings.TrimSpace(title)
-	body = strings.TrimSpace(body)
-	var b strings.Builder
-	if title != "" {
-		b.WriteString("Mnemon update: ")
-		b.WriteString(title)
-		b.WriteString("\n\n")
-	} else {
-		b.WriteString("Mnemon update\n\n")
-	}
-	if body != "" {
-		b.WriteString(body)
-		b.WriteString("\n")
-	}
-	if ids := cleanMulticaRefs(eventIDs); len(ids) > 0 {
-		b.WriteString("\n")
-		for _, id := range ids {
-			b.WriteString("mnemon:event=")
-			b.WriteString(id)
-			b.WriteString("\n")
-		}
-	}
-	return strings.TrimSpace(b.String())
 }
 
 func DecodeMulticaIssue(r io.Reader) (MulticaIssue, error) {
@@ -1113,32 +1023,4 @@ func decodeMulticaStringMap(data []byte) (map[string]string, error) {
 		}
 	}
 	return out, nil
-}
-
-func multicaIssueStatement(issue MulticaIssue, fallback string) string {
-	if strings.TrimSpace(issue.Description) != "" {
-		return strings.TrimSpace(issue.Description)
-	}
-	return fallback
-}
-
-func cleanMulticaRefs(values []string) []string {
-	var out []string
-	seen := map[string]bool{}
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value == "" || seen[value] {
-			continue
-		}
-		seen[value] = true
-		out = append(out, value)
-	}
-	return out
-}
-
-func addMulticaRuleString(rule map[string]any, key, value string) {
-	value = strings.TrimSpace(value)
-	if value != "" {
-		rule[key] = value
-	}
 }

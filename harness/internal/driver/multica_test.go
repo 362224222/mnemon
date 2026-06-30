@@ -8,51 +8,6 @@ import (
 	"testing"
 )
 
-func TestBuildMulticaIssueTeamworkSignalSeparatesRuleAndNarrative(t *testing.T) {
-	draft, err := BuildMulticaIssueTeamworkSignal(MulticaIssue{
-		ID:          "iss-123",
-		Identifier:  "MUL-123",
-		Title:       "Validate bridge",
-		Description: "Check that Multica issue context can start Mnemon teamwork.",
-	}, MulticaIssueSignalOptions{
-		Scope:        "multica/poc",
-		TTL:          "45m",
-		WhyTeamwork:  "The task needs more than one local agent.",
-		WorkspaceID:  "workspace-1",
-		TaskID:       "task-1",
-		AgentID:      "agent-1",
-		Principal:    "planner@team",
-		EvidenceRefs: []string{"multica:issue/iss-123"},
-		ExternalID:   "multica-task-task-1",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if draft.EventType != "teamwork_signal.write_candidate.observed" {
-		t.Fatalf("event type = %q", draft.EventType)
-	}
-	rule := draft.Payload["rule"].(map[string]any)
-	if rule["external_source"] != MulticaExternalSource || rule["external_issue_id"] != "iss-123" || rule["scope"] != "multica/poc" {
-		t.Fatalf("rule mapping mismatch: %+v", rule)
-	}
-	if rule["external_workspace_id"] != "workspace-1" || rule["external_task_id"] != "task-1" || rule["external_agent_id"] != "agent-1" || rule["principal"] != "planner@team" {
-		t.Fatalf("runtime rule mapping mismatch: %+v", rule)
-	}
-	if draft.ExternalID != "multica-task-task-1" {
-		t.Fatalf("external id = %q", draft.ExternalID)
-	}
-	narrative := draft.Payload["narrative"].(map[string]any)
-	if narrative["statement"] != "Check that Multica issue context can start Mnemon teamwork." {
-		t.Fatalf("narrative statement mismatch: %+v", narrative)
-	}
-	if _, ok := narrative["external_issue_id"]; ok {
-		t.Fatalf("narrative must not carry rule ids: %+v", narrative)
-	}
-	if _, ok := narrative["external_task_id"]; ok {
-		t.Fatalf("narrative must not carry runtime ids: %+v", narrative)
-	}
-}
-
 func TestMulticaCLIAddCommentUsesStdin(t *testing.T) {
 	tmp := t.TempDir()
 	argsPath := filepath.Join(tmp, "args.txt")
@@ -305,23 +260,6 @@ printf '{"id":"issue-1","identifier":"TEA-9","title":"Run teamwork","status":"to
 	}
 }
 
-func TestFormatMulticaProjectionCommentCarriesStableMarkers(t *testing.T) {
-	got := FormatMulticaProjectionComment("assignment finished", "Worker reported passing evidence.", []string{"ev-1", "ev-1", "ev-2"})
-	for _, want := range []string{
-		"Mnemon update: assignment finished",
-		"Worker reported passing evidence.",
-		"mnemon:event=ev-1",
-		"mnemon:event=ev-2",
-	} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("projection comment missing %q:\n%s", want, got)
-		}
-	}
-	if strings.Count(got, "mnemon:event=ev-1") != 1 {
-		t.Fatalf("projection comment should dedupe markers:\n%s", got)
-	}
-}
-
 func TestMulticaHubMetadataDetectsAssignmentMailbox(t *testing.T) {
 	issue := MulticaIssue{
 		ID: "issue-2",
@@ -345,6 +283,97 @@ func TestMulticaHubMetadataDetectsAssignmentMailbox(t *testing.T) {
 	back := meta.Map()
 	if back[MulticaMetadataHubBackend] != MulticaHubBackend {
 		t.Fatalf("metadata map missing backend: %+v", back)
+	}
+}
+
+func TestMulticaCLIResolveIssueHubMetadata(t *testing.T) {
+	tmp := t.TempDir()
+	argsPath := filepath.Join(tmp, "args.txt")
+	bin := filepath.Join(tmp, "multica")
+	script := `#!/usr/bin/env sh
+printf '%s\n' "$*" >> "$MULTICA_ARGS_PATH"
+case "$*" in
+  *"issue metadata list child-listed"*) printf '[{"key":"mnemon.hub_backend","value":"multica"},{"key":"mnemon.kind","value":"assignment_mailbox"},{"key":"mnemon.assignment_id","value":"assignment-listed"},{"key":"mnemon.principal","value":"worker@team"}]\n' ;;
+  *"issue metadata list child-embedded"*) printf 'embedded metadata should not be listed\n' >&2; exit 42 ;;
+  *) printf '{}\n' ;;
+esac
+`
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cli := MulticaCLI{
+		Command: bin,
+		Env: append(os.Environ(),
+			"MULTICA_ARGS_PATH="+argsPath,
+		),
+	}
+	listed, err := cli.ResolveIssueHubMetadata(context.Background(), MulticaIssue{ID: "child-listed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !listed.IsAssignmentMailbox() || listed.AssignmentID != "assignment-listed" || listed.Principal != "worker@team" {
+		t.Fatalf("listed metadata = %+v", listed)
+	}
+	embedded, err := cli.ResolveIssueHubMetadata(context.Background(), MulticaIssue{
+		ID: "child-embedded",
+		Metadata: map[string]any{
+			MulticaMetadataHubBackend:   MulticaHubBackend,
+			MulticaMetadataKind:         MulticaHubKindAssignmentMailbox,
+			MulticaMetadataAssignmentID: "assignment-embedded",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if embedded.AssignmentID != "assignment-embedded" {
+		t.Fatalf("embedded metadata = %+v", embedded)
+	}
+	args := mustReadDriverTestFile(t, argsPath)
+	if strings.Contains(args, "child-embedded") {
+		t.Fatalf("embedded assignment metadata should avoid metadata list fallback:\n%s", args)
+	}
+}
+
+func TestMulticaCLILoadIssueMetadataMergesListedMetadata(t *testing.T) {
+	tmp := t.TempDir()
+	argsPath := filepath.Join(tmp, "args.txt")
+	bin := filepath.Join(tmp, "multica")
+	script := `#!/usr/bin/env sh
+printf '%s\n' "$*" >> "$MULTICA_ARGS_PATH"
+case "$*" in
+  *"issue metadata list issue-1"*) printf '[{"key":"mnemon.kind","value":"session_mailbox"},{"key":"listed","value":"yes"}]\n' ;;
+  *) printf '{}\n' ;;
+esac
+`
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cli := MulticaCLI{
+		Command: bin,
+		Env: append(os.Environ(),
+			"MULTICA_ARGS_PATH="+argsPath,
+		),
+	}
+	loaded, count, err := cli.LoadIssueMetadata(context.Background(), MulticaIssue{
+		ID: "issue-1",
+		Metadata: map[string]any{
+			MulticaMetadataKind: "stale",
+			"base":              "kept",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 || loaded.Metadata[MulticaMetadataKind] != MulticaHubKindSession || loaded.Metadata["base"] != "kept" || loaded.Metadata["listed"] != "yes" {
+		t.Fatalf("loaded metadata count=%d metadata=%+v", count, loaded.Metadata)
+	}
+	empty, count, err := cli.LoadIssueMetadata(context.Background(), MulticaIssue{Title: "missing id"})
+	if err != nil || count != 0 || empty.Title != "missing id" {
+		t.Fatalf("empty metadata load = count:%d issue:%+v err:%v", count, empty, err)
+	}
+	args := mustReadDriverTestFile(t, argsPath)
+	if !strings.Contains(args, "issue metadata list issue-1 --output json") || strings.Contains(args, "missing id") {
+		t.Fatalf("metadata load args mismatch:\n%s", args)
 	}
 }
 

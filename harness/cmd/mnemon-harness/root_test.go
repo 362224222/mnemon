@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"os"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -22,15 +23,29 @@ func TestRootHelpUsesLocalFirstProductSurface(t *testing.T) {
 		t.Fatalf("root help returned error: %v", err)
 	}
 	got := out.String()
-	for _, want := range []string{"Agent Integration", "Local Mnemon", "Remote Workspace", "standard events", "setup", "local"} {
+	for _, want := range []string{"event-driven", "collaboration substrate", "Teamwork is a profile", "Agent Integration", "Local Mnemon", "setup", "config", "daemon", "doctor", "status", "session", "agent", "connect"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("expected root help to contain %q:\n%s", want, got)
 		}
 	}
-	for _, blocked := range []string{"completion", "eval", "goal", "coordination", "runner", "supervisor", "daemon", "proposal"} {
+	for _, blocked := range []string{"completion", "eval", "goal", "coordination", "runner", "supervisor", "proposal"} {
 		if strings.Contains(got, blocked) {
 			t.Fatalf("root help leaked unsupported product term %q:\n%s", blocked, got)
 		}
+	}
+	for _, blocked := range []string{"  local", "  multica", "  sync", "  tower", "  token"} {
+		if strings.Contains(got, blocked) {
+			t.Fatalf("root help leaked debug command %q:\n%s", strings.TrimSpace(blocked), got)
+		}
+	}
+}
+
+func TestPublicRootCommandsMatchProductSurface(t *testing.T) {
+	got := publicRootCommandNames()
+	want := []string{"agent", "config", "connect", "daemon", "doctor", "session", "setup", "status"}
+	sort.Strings(want)
+	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("public root commands mismatch:\ngot:  %v\nwant: %v", got, want)
 	}
 }
 
@@ -53,14 +68,61 @@ func TestProductHelpDoesNotExposeInternalVocabulary(t *testing.T) {
 		{"status", "--help"},
 		{"sync", "--help"},
 		{"sync", "connect", "--help"},
+		{"agent", "--help"},
+		{"agent", "add", "--help"},
+		{"connect", "--help"},
+		{"connect", "multica", "--help"},
+		{"session", "--help"},
+		{"session", "start", "--help"},
+		{"session", "attach", "--help"},
+		{"multica", "--help"},
 	} {
 		got := executeRootForHelp(t, args...)
-		for _, blocked := range []string{"binding", "channel", "projection", "kernel", "runtime", "sync cursor", "token file", "control-agent"} {
+		for _, blocked := range []string{"binding", "channel", "projection", "kernel", "runtime", "sync cursor", "token file", "control-agent", "import-issue", "project-comment", "provision", "participant"} {
 			if strings.Contains(strings.ToLower(got), blocked) {
 				t.Fatalf("%q help leaked internal term %q:\n%s", strings.Join(args, " "), blocked, got)
 			}
 		}
 	}
+}
+
+func TestInternalCommandsStayHidden(t *testing.T) {
+	for _, path := range [][]string{
+		{"control"},
+		{"loop"},
+		{"local"},
+		{"multica"},
+		{"multica", "import-issue"},
+		{"multica", "participant"},
+		{"multica", "project-comment"},
+		{"multica", "provision"},
+		{"sync"},
+		{"token"},
+		{"tower"},
+	} {
+		cmd, _, err := rootCmd.Find(path)
+		if err != nil {
+			t.Fatalf("find command %q: %v", strings.Join(path, " "), err)
+		}
+		if cmd == nil || cmd.Name() != path[len(path)-1] {
+			t.Fatalf("command %q resolved to %+v", strings.Join(path, " "), cmd)
+		}
+		if !cmd.Hidden {
+			t.Fatalf("internal/debug command %q must remain hidden from public help", strings.Join(path, " "))
+		}
+	}
+}
+
+func publicRootCommandNames() []string {
+	var names []string
+	for _, cmd := range rootCmd.Commands() {
+		if cmd.Hidden || cmd.Name() == "help" {
+			continue
+		}
+		names = append(names, cmd.Name())
+	}
+	sort.Strings(names)
+	return names
 }
 
 func executeRootForHelp(t *testing.T, args ...string) string {

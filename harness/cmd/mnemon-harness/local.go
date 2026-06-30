@@ -22,8 +22,9 @@ var (
 )
 
 var localCmd = &cobra.Command{
-	Use:   "local",
-	Short: "Run and inspect Local Mnemon",
+	Use:    "local",
+	Short:  "Run and inspect Local Mnemon",
+	Hidden: true,
 }
 
 var localRunCmd = &cobra.Command{
@@ -81,7 +82,7 @@ func init() {
 	localRunCmd.Flags().BoolVar(&localAllowInsecureRemote, "allow-insecure-remote", false, "let the background sync worker use a plaintext http:// Remote Workspace endpoint with a non-loopback host (T2: fail-closed by default)")
 	_ = localRunCmd.Flags().MarkHidden("bindings")
 	localCmd.AddCommand(localRunCmd, localStatusCmd, localStopCmd)
-	localCmd.GroupID = groupSpine
+	localCmd.GroupID = groupAdvanced
 	rootCmd.AddCommand(localCmd)
 }
 

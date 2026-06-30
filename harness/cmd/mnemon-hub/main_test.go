@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -36,6 +37,27 @@ func writeToken(t *testing.T, dir, name, token string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(token+"\n"), 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestHelpDescribesRemoteExchangeBackend(t *testing.T) {
+	for _, args := range [][]string{{"--help"}, {"help"}, {"serve", "--help"}} {
+		var errw bytes.Buffer
+		err := run(context.Background(), args, io.Discard, &errw)
+		if err != nil {
+			t.Fatalf("%v help should exit successfully, got %v", args, err)
+		}
+		got := errw.String()
+		for _, want := range []string{"remote event exchange backend", "replica push", "pull", "status", "cursors", "tenant boundaries", "Commands:", "serve"} {
+			if !strings.Contains(got, want) {
+				t.Fatalf("%v mnemon-hub help missing %q:\n%s", args, want, got)
+			}
+		}
+		for _, blocked := range []string{"managed runtime", "Multica projection", "local drive source"} {
+			if strings.Contains(got, blocked) {
+				t.Fatalf("%v mnemon-hub help leaked non-exchange wording %q:\n%s", args, blocked, got)
+			}
+		}
 	}
 }
 
@@ -139,6 +161,9 @@ func TestRunFlagValidation(t *testing.T) {
 	}
 	if err := run(context.Background(), []string{"--store", "x.db", "--replicas", "r.json", "--tls-cert", "c.pem"}, &out, &out); err == nil || !strings.Contains(err.Error(), "set together") {
 		t.Fatalf("lone --tls-cert must fail: %v", err)
+	}
+	if err := run(context.Background(), []string{"serve", "--store", "x.db", "--replicas", "r.json", "--tls-cert", "c.pem"}, &out, &out); err == nil || !strings.Contains(err.Error(), "set together") {
+		t.Fatalf("serve alias must parse service flags: %v", err)
 	}
 }
 

@@ -75,12 +75,14 @@ func TestManagedAgentDriverDedupesAndCoolsDown(t *testing.T) {
 
 func TestManagedAgentDriverRecordsFailureWithoutChangingQuery(t *testing.T) {
 	ledger := NewMemoryManagedWakeLedger()
+	attempts := 0
 	driver := &ManagedAgentDriver{
 		Principal: "codex-a@project",
 		Client: managedTurnClientFunc(func(_ context.Context, query string) (ManagedTurnResult, error) {
 			if query != ManagedWakeQuery {
 				t.Fatalf("query = %q, want %q", query, ManagedWakeQuery)
 			}
+			attempts++
 			return ManagedTurnResult{}, errors.New("runtime unavailable")
 		}),
 		Ledger: ledger,
@@ -93,8 +95,14 @@ func TestManagedAgentDriverRecordsFailureWithoutChangingQuery(t *testing.T) {
 	if record.Status != "failed" || record.Query != ManagedWakeQuery {
 		t.Fatalf("failed record mismatch: %+v", record)
 	}
-	if !ledger.Seen(candidate) {
-		t.Fatal("failure should be recorded locally for audit/idempotence")
+	if ledger.Seen(candidate) {
+		t.Fatal("failed wake should be audited but remain retryable")
+	}
+	if _, err := driver.Wake(context.Background(), candidate); err == nil {
+		t.Fatal("retry should still surface runtime failure")
+	}
+	if attempts != 2 {
+		t.Fatalf("failed wake should retry same candidate, attempts=%d", attempts)
 	}
 }
 

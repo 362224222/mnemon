@@ -3,29 +3,27 @@ package main
 import (
 	"bufio"
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
-	"regexp"
 	"runtime"
 	"strings"
 	"time"
 	"unicode"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	"github.com/mnemon-dev/mnemon/harness/internal/drive"
 	"github.com/mnemon-dev/mnemon/harness/internal/driver"
 	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation"
+	"github.com/mnemon-dev/mnemon/harness/internal/projection"
+	multicasurface "github.com/mnemon-dev/mnemon/harness/internal/surface/multica"
 )
 
 const runtimeVersion = "dev"
-
-var assignedIssuePattern = regexp.MustCompile(`(?i)(?:assigned\s+issue\s+id\s+is|issue[_\s-]*id)\s*[:：]\s*([A-Za-z0-9][A-Za-z0-9._:-]*)`)
 
 type runtimeConfig struct {
 	Args   []string
@@ -134,10 +132,18 @@ func runRuntime(cfg runtimeConfig) error {
 		}
 	}
 	if runtimeProbeModeEnabled(cfg.Args) {
+		if wantsRuntimeHelp(cfg.Args) {
+			writeRuntimeHelp(cfg.Stdout)
+			return nil
+		}
 		return runRuntimeProbe(cfg)
 	}
 	if wantsVersion(cfg.Args) {
-		fmt.Fprintf(cfg.Stdout, "mnemon-multica-runtime %s\n", runtimeVersion)
+		fmt.Fprintf(cfg.Stdout, "%s %s\n", multicasurface.MulticaRuntimeCommandName, runtimeVersion)
+		return nil
+	}
+	if wantsRuntimeHelp(cfg.Args) {
+		writeRuntimeHelp(cfg.Stdout)
 		return nil
 	}
 	return runRuntimeRPC(cfg, cwd)
@@ -154,7 +160,7 @@ func runRuntimeRPC(cfg runtimeConfig, cwd string) error {
 		}
 		var msg rpcMessage
 		if err := json.Unmarshal([]byte(line), &msg); err != nil {
-			fmt.Fprintf(cfg.Stderr, "mnemon-multica-runtime: ignoring invalid rpc line: %v\n", err)
+			fmt.Fprintf(cfg.Stderr, "%s: ignoring invalid rpc line: %v\n", multicasurface.MulticaRuntimeCommandName, err)
 			continue
 		}
 		if err := state.handle(msg, func(response rpcMessage) error {
@@ -180,8 +186,8 @@ func (s *runtimeRPCState) handle(msg rpcMessage, emit func(rpcMessage) error) er
 		return emitAll(rpcMessage{
 			ID: msg.ID,
 			Result: map[string]any{
-				"userAgent":      "mnemon-multica-runtime/" + runtimeVersion,
-				"codexHome":      envValue(s.Env, "CODEX_HOME"),
+				"userAgent":      multicasurface.MulticaRuntimeCommandName + "/" + runtimeVersion,
+				"codexHome":      multicasurface.RuntimeEnvValue(s.Env, "CODEX_HOME"),
 				"platformFamily": "unix",
 				"platformOs":     runtime.GOOS,
 			},
@@ -195,8 +201,8 @@ func (s *runtimeRPCState) handle(msg rpcMessage, emit func(rpcMessage) error) er
 				Method: "remoteControl/status/changed",
 				Params: map[string]any{
 					"status":         "disabled",
-					"serverName":     "mnemon-multica-runtime",
-					"installationId": "mnemon-multica-runtime",
+					"serverName":     multicasurface.MulticaRuntimeCommandName,
+					"installationId": multicasurface.MulticaRuntimeCommandName,
 				},
 			},
 			rpcMessage{
@@ -214,9 +220,9 @@ func (s *runtimeRPCState) handle(msg rpcMessage, emit func(rpcMessage) error) er
 		return emitAll(rpcMessage{ID: msg.ID, Result: map[string]any{}})
 	case "turn/start":
 		s.TurnID = runtimeID("turn", s.now())
-		input := extractRuntimeInput(msg.Params)
+		input := multicasurface.RuntimeInputMaterial(msg.Params)
 		nowMs := s.now().UnixMilli()
-		userItem := runtimeUserMessage(input)
+		userItem := multicasurface.RuntimeUserMessage(input.Text)
 		if err := emitAll(
 			rpcMessage{
 				ID: msg.ID,
@@ -234,11 +240,11 @@ func (s *runtimeRPCState) handle(msg rpcMessage, emit func(rpcMessage) error) er
 			},
 			rpcMessage{
 				Method: "item/started",
-				Params: runtimeItemParams(s.ThreadID, s.TurnID, userItem, "startedAtMs", nowMs),
+				Params: multicasurface.RuntimeItemParams(s.ThreadID, s.TurnID, userItem, "startedAtMs", nowMs),
 			},
 			rpcMessage{
 				Method: "item/completed",
-				Params: runtimeItemParams(s.ThreadID, s.TurnID, userItem, "completedAtMs", nowMs),
+				Params: multicasurface.RuntimeItemParams(s.ThreadID, s.TurnID, userItem, "completedAtMs", nowMs),
 			},
 		); err != nil {
 			return err
@@ -249,23 +255,29 @@ func (s *runtimeRPCState) handle(msg rpcMessage, emit func(rpcMessage) error) er
 				return
 			}
 			if event.Trace != nil {
-				progressErr = emitRuntimeManagedTraceEvent(emit, s.ThreadID, s.TurnID, *event.Trace, s.now())
+				progressErr = emitRuntimeMessages(emit, multicasurface.RuntimeManagedTraceMessages(s.ThreadID, s.TurnID, *event.Trace, s.now()))
 				return
 			}
 			if strings.TrimSpace(event.Command) != "" {
-				progressErr = emitRuntimeCommandExecution(emit, s.ThreadID, s.TurnID, s.nextItemID("call"), s.CWD, event, s.now())
+				progressErr = emitRuntimeMessages(emit, multicasurface.RuntimeCommandExecutionMessages(s.ThreadID, s.TurnID, s.nextItemID("call"), s.CWD, multicasurface.RuntimeCommandExecutionMaterial{
+					Command:    event.Command,
+					CWD:        event.CWD,
+					Output:     event.Output,
+					ExitCode:   event.ExitCode,
+					DurationMs: event.DurationMs,
+				}, s.now()))
 				return
 			}
 			text := strings.TrimSpace(event.Text)
 			if text != "" {
-				progressErr = emitRuntimeAgentMessage(emit, s.ThreadID, s.TurnID, s.nextItemID("msg"), text, "commentary", s.now())
+				progressErr = emitRuntimeMessages(emit, multicasurface.RuntimeAgentMessageMessages(s.ThreadID, s.TurnID, s.nextItemID("msg"), text, "commentary", s.now()))
 			}
 		}
 		finalAnswer := s.runTurn(input, progress)
 		if progressErr != nil {
 			return progressErr
 		}
-		if err := emitRuntimeAgentMessage(emit, s.ThreadID, s.TurnID, s.nextItemID("msg"), finalAnswer, "final_answer", s.now()); err != nil {
+		if err := emitRuntimeMessages(emit, multicasurface.RuntimeAgentMessageMessages(s.ThreadID, s.TurnID, s.nextItemID("msg"), finalAnswer, "final_answer", s.now())); err != nil {
 			return err
 		}
 		return emitAll(
@@ -294,27 +306,28 @@ func (s *runtimeRPCState) nextItemID(prefix string) string {
 	return fmt.Sprintf("%s-%d-%d", prefix, s.now().UTC().UnixNano(), s.ItemSeq)
 }
 
-func (s *runtimeRPCState) runTurn(input string, progress runtimeProgressSink) string {
+func (s *runtimeRPCState) runTurn(input multicasurface.RuntimeInput, progress runtimeProgressSink) string {
 	result := s.importIssue(input, progress)
-	return formatRuntimeFinalAnswer(result)
+	return multicasurface.FormatRuntimeFinalAnswer(runtimeResultSummary(result))
 }
 
-func (s *runtimeRPCState) importIssue(input string, progress runtimeProgressSink) runtimeImportResult {
-	taskID := envValue(s.Env, "MULTICA_TASK_ID")
-	issueID := firstNonEmpty(envValue(s.Env, "MULTICA_ISSUE_ID"), extractAssignedIssueID(input))
+func (s *runtimeRPCState) importIssue(input multicasurface.RuntimeInput, progress runtimeProgressSink) runtimeImportResult {
+	activation := multicasurface.RuntimeContextFromActivation(s.Env, s.CWD, input)
+	taskID := activation.TaskID
+	issueID := activation.IssueIdentity
 	result := runtimeImportResult{
 		IssueID:   issueID,
-		Principal: resolveRuntimePrincipal(s.Env, s.CWD),
+		Principal: resolveRuntimePrincipalFromContext(s.Env, s.CWD, activation),
 		TaskID:    taskID,
 	}
-	emitRuntimeProgress(progress, "Mnemon runtime accepted the Multica task for "+displayRuntimePrincipal(result.Principal)+".")
+	emitRuntimeProgress(progress, "Mnemon runtime accepted the Multica task for "+multicasurface.RuntimePrincipalLabel(result.Principal)+".")
 	if issueID == "" {
 		result.Status = "skipped"
 		result.Err = fmt.Errorf("no Multica issue id was available in task environment or runtime input")
 		emitRuntimeProgress(progress, "No assigned Multica issue id was available; Mnemon skipped this turn.")
 		return result
 	}
-	cli := runtimeMulticaCLI(s.Env)
+	cli := runtimeMulticaCLI(s.Env, activation)
 	multicaCtx := context.Background()
 	emitRuntimeProgress(progress, "Loading Multica issue "+issueID+".")
 	issue, err := cli.GetIssue(multicaCtx, issueID)
@@ -326,36 +339,42 @@ func (s *runtimeRPCState) importIssue(input string, progress runtimeProgressSink
 		return result
 	}
 	emitRuntimeCommand(progress, "multica issue get "+issueID, "Loaded "+runtimeIssueLabel(issue)+".", 0)
+	issue = loadRuntimeIssueMetadata(multicaCtx, cli, issue, progress)
 	result.IssueID = issue.ID
 	result.Identifier = issue.Identifier
 	result.Title = issue.Title
 	result.Statement = issue.Description
 	result.HubMetadata = driver.MulticaIssueHubMetadata(issue)
-	applyMulticaHubMetadata(&result, issue)
-	result.HubBackend = firstNonEmpty(result.HubBackend, envValue(s.Env, "MNEMON_HUB_BACKEND"))
+	applyMulticaHubMetadata(&result, result.HubMetadata)
+	result.HubBackend = firstNonEmpty(result.HubBackend, activation.HubBackend)
 	emitRuntimeProgress(progress, "Loaded "+runtimeIssueLabel(issue)+"; classifying Mnemon hub metadata.")
 	markIssueInProgress(multicaCtx, cli, issue.ID)
 	if result.HubMetadata.IsAssignmentMailbox() {
-		return s.correlateAssignmentMailbox(multicaCtx, cli, issue, &result, progress)
+		return s.correlateAssignmentMailbox(multicaCtx, cli, issue, &result, activation, progress)
 	}
 	externalID := ""
 	if taskID != "" {
 		externalID = "multica-task-" + taskID
 	}
-	draft, err := driver.BuildMulticaIssueTeamworkSignal(issue, driver.MulticaIssueSignalOptions{
-		Scope:       envDefault(s.Env, "MNEMON_MULTICA_SCOPE", "multica/teamwork"),
-		TTL:         envDefault(s.Env, "MNEMON_MULTICA_TTL", "30m"),
+	draft, err := multicasurface.BuildIssueTeamworkSignal(multicasurface.IssueSignalMaterial{
+		ID:          issue.ID,
+		Identifier:  issue.Identifier,
+		Title:       issue.Title,
+		Description: issue.Description,
+	}, multicasurface.IssueSignalOptions{
+		Scope:       multicasurface.RuntimeEnvDefault(s.Env, "MNEMON_MULTICA_SCOPE", "multica/teamwork"),
+		TTL:         multicasurface.RuntimeEnvDefault(s.Env, "MNEMON_MULTICA_TTL", "30m"),
 		WhyTeamwork: "Multica assigned this issue to a Mnemon participant, so Mnemon should admit it through the teamwork protocol.",
-		WorkspaceID: firstNonEmpty(envValue(s.Env, "MNEMON_MULTICA_WORKSPACE_ID"), envValue(s.Env, "MULTICA_WORKSPACE_ID")),
+		WorkspaceID: activation.WorkspaceID,
 		TaskID:      taskID,
-		AgentID:     envValue(s.Env, "MULTICA_AGENT_ID"),
+		AgentID:     activation.AgentID,
 		Principal:   result.Principal,
 		ContextRefs: []string{
-			runtimeRef("issue", issue.ID),
-			runtimeRef("task", taskID),
-			runtimeRef("agent", envValue(s.Env, "MULTICA_AGENT_ID")),
+			multicasurface.RuntimeRef("issue", issue.ID),
+			multicasurface.RuntimeRef("task", taskID),
+			multicasurface.RuntimeRef("agent", activation.AgentID),
 		},
-		EvidenceRefs: []string{runtimeRef("issue", issue.ID)},
+		EvidenceRefs: []string{multicasurface.RuntimeRef("issue", issue.ID)},
 		ExternalID:   externalID,
 	})
 	if err != nil {
@@ -364,22 +383,32 @@ func (s *runtimeRPCState) importIssue(input string, progress runtimeProgressSink
 		return result
 	}
 	if strings.EqualFold(result.HubBackend, driver.MulticaHubBackend) {
-		ensureRootSessionHubFields(&result, issue)
+		result.HubMetadata = multicasurface.RootSessionHubMetadata(result.HubMetadata, issue.ID)
+		applyMulticaHubMetadata(&result, result.HubMetadata)
 		addPayloadRuleString(draft.Payload, "hub_backend", driver.MulticaHubBackend)
 		addPayloadRuleString(draft.Payload, "root_issue_id", result.RootIssueID)
 		addPayloadRuleString(draft.Payload, "session_id", result.SessionID)
 		addPayloadRuleString(draft.Payload, "source_issue_id", issue.ID)
-		if err := cli.SetIssueMetadataMap(multicaCtx, issue.ID, rootSessionMetadata(result, draft, s.now())); err != nil {
-			result.Status = "failed"
-			result.Err = fmt.Errorf("set Multica root session metadata: %w", err)
-			emitRuntimeCommand(progress, "multica issue metadata set "+issue.ID+" mnemon.root-session", result.Err.Error(), 1)
-			emitRuntimeProgress(progress, "Failed to write Mnemon root session metadata.")
-			return result
+		rootSessionMaterial := multicasurface.RootSessionMetadataMaterial{
+			HubMetadata:     result.HubMetadata,
+			EventID:         draft.ExternalID,
+			EventType:       draft.EventType,
+			EventPhase:      string(eventmodel.PhaseObserved),
+			Principal:       result.Principal,
+			SourceIssueID:   result.IssueID,
+			ProjectionOwner: result.Principal,
+			ProjectedAt:     s.now(),
 		}
-		emitRuntimeCommand(progress, "multica issue metadata set "+issue.ID+" mnemon.root-session", "Root session metadata written for "+runtimeIssueLabel(issue)+".", 0)
-		emitRuntimeProgress(progress, "Root session metadata written for "+runtimeIssueLabel(issue)+".")
+		if err := cli.SetIssueMetadataMap(multicaCtx, issue.ID, multicasurface.RootSessionMetadataMap(rootSessionMaterial)); err != nil {
+			metadataErr := fmt.Errorf("set Multica root session metadata: %w", err)
+			emitRuntimeCommand(progress, "multica issue metadata set "+issue.ID+" mnemon.root-session", metadataErr.Error(), 1)
+			emitRuntimeProgress(progress, "Root session metadata write failed; continuing with Mnemon ingest from issue context.")
+		} else {
+			emitRuntimeCommand(progress, "multica issue metadata set "+issue.ID+" mnemon.root-session", "Root session metadata written for "+runtimeIssueLabel(issue)+".", 0)
+			emitRuntimeProgress(progress, "Root session metadata written for "+runtimeIssueLabel(issue)+".")
+		}
 	}
-	addr := strings.TrimSpace(envValue(s.Env, "MNEMON_CONTROL_ADDR"))
+	addr := strings.TrimSpace(activation.ControlAddr)
 	if addr == "" {
 		result.Status = "skipped"
 		emitRuntimeProgress(progress, "Local Mnemon control address is not configured; skipping protocol ingest.")
@@ -414,30 +443,46 @@ func (s *runtimeRPCState) importIssue(input string, progress runtimeProgressSink
 	emitRuntimeProgress(progress, fmt.Sprintf("Mnemon recorded the issue observation at seq=%d.", rec.Seq))
 	emitRuntimeProgress(progress, "Waking the managed local agent with [mnemon:wake].")
 	earlyHubDeltas := s.wakeManagedAgentWithHubProjection(multicaCtx, cli, client, issue, &result, progress)
-	emitRuntimeCommand(progress, "mnemond managed wake --principal "+result.Principal+" [mnemon:wake]", runtimeWakeProgress(result), runtimeExitCode(result.WakeErr))
-	emitRuntimeProgress(progress, runtimeWakeProgress(result))
+	emitRuntimeCommand(progress, "mnemond managed wake --principal "+result.Principal+" [mnemon:wake]", multicasurface.RuntimeWakeProgress(runtimeResultSummary(result)), runtimeExitCode(result.WakeErr))
+	emitRuntimeProgress(progress, multicasurface.RuntimeWakeProgress(runtimeResultSummary(result)))
 	s.writeMulticaHubArtifacts(multicaCtx, cli, client, issue, &result)
 	mergeRuntimeHubProjectionDeltas(&result, earlyHubDeltas)
-	emitRuntimeCommand(progress, "mnemon multica hub project --issue "+issue.ID, runtimeHubWriteProgress(result), runtimeExitCode(result.HubWriteErr))
-	emitRuntimeProgress(progress, runtimeHubWriteProgress(result))
-	s.projectImportComment(multicaCtx, cli, issue, draft.ExternalID, &result)
-	emitRuntimeCommand(progress, "multica issue comment add "+issue.ID, runtimeProjectionProgress(result), runtimeExitCode(result.ProjectionErr))
-	emitRuntimeProgress(progress, runtimeProjectionProgress(result))
+	emitRuntimeCommand(progress, "mnemon-multica-runtime hub-write --issue "+issue.ID, multicasurface.RuntimeHubWriteProgress(runtimeResultSummary(result)), runtimeExitCode(result.HubWriteErr))
+	emitRuntimeProgress(progress, multicasurface.RuntimeHubWriteProgress(runtimeResultSummary(result)))
+	s.projectImportComment(multicaCtx, cli, issue, draft.ExternalID, draft.EventType, &result)
+	emitRuntimeCommand(progress, "multica issue comment add "+issue.ID, multicasurface.RuntimeProjectionProgress(runtimeResultSummary(result)), runtimeExitCode(result.ProjectionErr))
+	emitRuntimeProgress(progress, multicasurface.RuntimeProjectionProgress(runtimeResultSummary(result)))
 	return result
 }
 
-func (s *runtimeRPCState) correlateAssignmentMailbox(ctx context.Context, cli driver.MulticaCLI, issue driver.MulticaIssue, result *runtimeImportResult, progress runtimeProgressSink) runtimeImportResult {
-	ensureAssignmentHubFields(result, issue)
+func loadRuntimeIssueMetadata(ctx context.Context, cli driver.MulticaCLI, issue driver.MulticaIssue, progress runtimeProgressSink) driver.MulticaIssue {
+	if strings.TrimSpace(issue.ID) == "" {
+		return issue
+	}
+	loaded, count, err := cli.LoadIssueMetadata(ctx, issue)
+	if err != nil {
+		emitRuntimeCommand(progress, "multica issue metadata list "+issue.ID, err.Error(), 1)
+		emitRuntimeProgress(progress, "Multica issue metadata list failed; falling back to metadata returned by issue get.")
+		return issue
+	}
+	emitRuntimeCommand(progress, "multica issue metadata list "+issue.ID, fmt.Sprintf("Loaded %d Multica issue metadata keys.", count), 0)
+	return loaded
+}
+
+func (s *runtimeRPCState) correlateAssignmentMailbox(ctx context.Context, cli driver.MulticaCLI, issue driver.MulticaIssue, result *runtimeImportResult, activation multicasurface.RuntimeContext, progress runtimeProgressSink) runtimeImportResult {
+	result.HubMetadata = multicasurface.AssignmentMailboxHubMetadata(result.HubMetadata, issue.ID)
+	applyMulticaHubMetadata(result, result.HubMetadata)
 	result.Status = "correlated"
-	result.MatchTerms = cleanRuntimeTerms(
+	result.MatchTerms = drive.CleanManagedWakeMatchTerms(
 		result.AssignmentID,
 		result.AssignmentFingerprint,
 		result.HubMetadata.EventID,
 		string(eventmodel.Subject("assignment", result.AssignmentID)),
 	)
-	emitRuntimeCommand(progress, "mnemon multica assignment correlate --issue "+issue.ID, "Assignment mailbox correlated: "+runtimeAssignmentLabel(*result)+".", 0)
-	emitRuntimeProgress(progress, "Assignment mailbox correlated: "+runtimeAssignmentLabel(*result)+".")
-	addr := strings.TrimSpace(envValue(s.Env, "MNEMON_CONTROL_ADDR"))
+	correlationProgress := multicasurface.RuntimeAssignmentCorrelationProgress()
+	emitRuntimeCommand(progress, "mnemon-multica-runtime assignment-correlate --issue "+issue.ID, correlationProgress, 0)
+	emitRuntimeProgress(progress, correlationProgress)
+	addr := strings.TrimSpace(activation.ControlAddr)
 	var client *access.Client
 	if addr == "" {
 		result.WakeStatus = "skipped"
@@ -453,24 +498,23 @@ func (s *runtimeRPCState) correlateAssignmentMailbox(ctx context.Context, cli dr
 		} else {
 			emitRuntimeProgress(progress, "Waking assigned local agent with [mnemon:wake].")
 			s.wakeManagedAgent(result, progress)
-			emitRuntimeCommand(progress, "mnemond managed wake --principal "+result.Principal+" [mnemon:wake]", runtimeWakeProgress(*result), runtimeExitCode(result.WakeErr))
-			emitRuntimeProgress(progress, runtimeWakeProgress(*result))
+			emitRuntimeCommand(progress, "mnemond managed wake --principal "+result.Principal+" [mnemon:wake]", multicasurface.RuntimeWakeProgress(runtimeResultSummary(*result)), runtimeExitCode(result.WakeErr))
+			emitRuntimeProgress(progress, multicasurface.RuntimeWakeProgress(runtimeResultSummary(*result)))
 			s.writeMulticaHubArtifacts(ctx, cli, client, issue, result)
-			emitRuntimeCommand(progress, "mnemon multica hub project --issue "+issue.ID, runtimeHubWriteProgress(*result), runtimeExitCode(result.HubWriteErr))
-			emitRuntimeProgress(progress, runtimeHubWriteProgress(*result))
+			emitRuntimeCommand(progress, "mnemon-multica-runtime hub-write --issue "+issue.ID, multicasurface.RuntimeHubWriteProgress(runtimeResultSummary(*result)), runtimeExitCode(result.HubWriteErr))
+			emitRuntimeProgress(progress, multicasurface.RuntimeHubWriteProgress(runtimeResultSummary(*result)))
 		}
 	}
-	s.projectImportComment(ctx, cli, issue, assignmentMailboxMarker(*result), result)
-	emitRuntimeCommand(progress, "multica issue comment add "+issue.ID, runtimeProjectionProgress(*result), runtimeExitCode(result.ProjectionErr))
-	emitRuntimeProgress(progress, runtimeProjectionProgress(*result))
+	s.projectImportComment(ctx, cli, issue, multicasurface.AssignmentMailboxMarker(result.HubMetadata, result.IssueID), result.HubMetadata.EventType, result)
+	emitRuntimeCommand(progress, "multica issue comment add "+issue.ID, multicasurface.RuntimeProjectionProgress(runtimeResultSummary(*result)), runtimeExitCode(result.ProjectionErr))
+	emitRuntimeProgress(progress, multicasurface.RuntimeProjectionProgress(runtimeResultSummary(*result)))
 	return *result
 }
 
-func applyMulticaHubMetadata(result *runtimeImportResult, issue driver.MulticaIssue) {
+func applyMulticaHubMetadata(result *runtimeImportResult, meta driver.MulticaHubMetadata) {
 	if result == nil {
 		return
 	}
-	meta := result.HubMetadata
 	result.HubBackend = firstNonEmpty(meta.HubBackend, result.HubBackend)
 	result.HubKind = firstNonEmpty(meta.Kind, result.HubKind)
 	result.SessionID = firstNonEmpty(meta.SessionID, result.SessionID)
@@ -478,50 +522,6 @@ func applyMulticaHubMetadata(result *runtimeImportResult, issue driver.MulticaIs
 	result.RootIssueID = firstNonEmpty(meta.RootIssueID, result.RootIssueID)
 	result.AssignmentID = firstNonEmpty(meta.AssignmentID, result.AssignmentID)
 	result.AssignmentFingerprint = firstNonEmpty(meta.AssignmentFingerprint, result.AssignmentFingerprint)
-	if result.RootIssueID == "" && meta.IsAssignmentMailbox() {
-		result.RootIssueID = firstNonEmpty(meta.SourceIssueID, issue.ID)
-	}
-}
-
-func ensureRootSessionHubFields(result *runtimeImportResult, issue driver.MulticaIssue) {
-	if result == nil {
-		return
-	}
-	result.HubBackend = driver.MulticaHubBackend
-	result.HubKind = firstNonEmpty(result.HubKind, driver.MulticaHubKindSession)
-	result.RootIssueID = firstNonEmpty(result.RootIssueID, issue.ID)
-	result.SessionID = firstNonEmpty(result.SessionID, driver.MulticaSessionID(result.RootIssueID))
-	result.CorrelationID = firstNonEmpty(result.CorrelationID, "multica:issue:"+issue.ID)
-}
-
-func ensureAssignmentHubFields(result *runtimeImportResult, issue driver.MulticaIssue) {
-	if result == nil {
-		return
-	}
-	result.HubBackend = firstNonEmpty(result.HubBackend, driver.MulticaHubBackend)
-	result.HubKind = firstNonEmpty(result.HubKind, driver.MulticaHubKindAssignmentMailbox)
-	result.RootIssueID = firstNonEmpty(result.RootIssueID, result.HubMetadata.SourceIssueID)
-	result.SessionID = firstNonEmpty(result.SessionID, driver.MulticaSessionID(result.RootIssueID))
-	result.CorrelationID = firstNonEmpty(result.CorrelationID, "multica:issue:"+issue.ID)
-}
-
-func rootSessionMetadata(result runtimeImportResult, draft driver.MulticaObservedDraft, now time.Time) map[string]string {
-	meta := driver.MulticaHubMetadata{
-		SchemaVersion:   "1",
-		HubBackend:      driver.MulticaHubBackend,
-		Kind:            driver.MulticaHubKindSession,
-		SessionID:       result.SessionID,
-		CorrelationID:   result.CorrelationID,
-		EventID:         draft.ExternalID,
-		EventType:       draft.EventType,
-		EventPhase:      string(eventmodel.PhaseObserved),
-		Principal:       result.Principal,
-		SourceIssueID:   result.IssueID,
-		RootIssueID:     result.RootIssueID,
-		ProjectionOwner: result.Principal,
-		ProjectedAt:     now.UTC().Format(time.RFC3339),
-	}
-	return meta.Map()
 }
 
 func addPayloadRuleString(payload map[string]any, key, value string) {
@@ -538,40 +538,38 @@ func addPayloadRuleString(payload map[string]any, key, value string) {
 	rule[key] = value
 }
 
-func cleanRuntimeTerms(values ...string) []string {
-	seen := map[string]bool{}
-	var out []string
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if len(value) < 3 || seen[value] {
-			continue
-		}
-		seen[value] = true
-		out = append(out, value)
+func runtimeManagedWakeMatchMaterial(result runtimeImportResult) drive.ManagedWakeMatchMaterial {
+	return drive.ManagedWakeMatchMaterial{
+		MatchTerms:            result.MatchTerms,
+		AssignmentID:          result.AssignmentID,
+		AssignmentFingerprint: result.AssignmentFingerprint,
+		IssueID:               result.IssueID,
+		Identifier:            result.Identifier,
+		Title:                 result.Title,
+		Statement:             result.Statement,
+		TaskID:                result.TaskID,
 	}
-	return out
 }
 
-func assignmentMailboxMarker(result runtimeImportResult) string {
-	if result.HubMetadata.EventID != "" {
-		return result.HubMetadata.EventID
+func runtimeManagedWakeMaterial(result runtimeImportResult) multicasurface.RuntimeManagedWakeMaterial {
+	return multicasurface.RuntimeManagedWakeMaterial{
+		IssueID:      result.IssueID,
+		RootIssueID:  result.RootIssueID,
+		AssignmentID: result.AssignmentID,
+		SessionID:    result.SessionID,
 	}
-	if result.AssignmentID != "" {
-		return "multica-assignment-" + result.AssignmentID
-	}
-	return "multica-issue-" + result.IssueID
 }
 
 func (s *runtimeRPCState) wakeManagedAgent(result *runtimeImportResult, progress runtimeProgressSink) {
 	if result == nil {
 		return
 	}
-	runtimeName := strings.TrimSpace(envValue(s.Env, "MNEMON_MANAGED_RUNTIME"))
+	runtimeName := strings.TrimSpace(multicasurface.RuntimeEnvValue(s.Env, "MNEMON_MANAGED_RUNTIME"))
 	if runtimeName == "" || strings.EqualFold(runtimeName, "off") || strings.EqualFold(runtimeName, "disabled") || strings.EqualFold(runtimeName, "none") {
 		result.WakeStatus = "skipped"
 		return
 	}
-	addr := strings.TrimSpace(envValue(s.Env, "MNEMON_CONTROL_ADDR"))
+	addr := strings.TrimSpace(multicasurface.RuntimeEnvValue(s.Env, "MNEMON_CONTROL_ADDR"))
 	if addr == "" {
 		result.WakeStatus = "skipped"
 		result.WakeErr = fmt.Errorf("MNEMON_CONTROL_ADDR is not set")
@@ -583,7 +581,7 @@ func (s *runtimeRPCState) wakeManagedAgent(result *runtimeImportResult, progress
 		result.WakeErr = err
 		return
 	}
-	renderCtx, cancel := context.WithTimeout(context.Background(), runtimeTimeout(s.Env))
+	renderCtx, cancel := context.WithTimeout(context.Background(), multicasurface.RuntimeTimeout(s.Env))
 	defer cancel()
 	resp, err := (driver.HTTPRenderClient{
 		BaseURL:   addr,
@@ -593,33 +591,36 @@ func (s *runtimeRPCState) wakeManagedAgent(result *runtimeImportResult, progress
 		SchemaVersion: 1,
 		Principal:     contract.ActorID(result.Principal),
 		Host:          "multica",
-		Lifecycle:     envDefault(s.Env, "MNEMON_MANAGED_RENDER_LIFECYCLE", "remind"),
+		Lifecycle:     multicasurface.RuntimeEnvDefault(s.Env, "MNEMON_MANAGED_RENDER_LIFECYCLE", "remind"),
 		Surface:       "runtime",
 		RenderIntent:  presentation.IntentTeamworkEvents,
+		SessionID:     result.SessionID,
+		InputDigest:   multicasurface.RuntimeManagedWakeScopeID(runtimeManagedWakeMaterial(*result)),
 	})
 	if err != nil {
 		result.WakeStatus = "failed"
 		result.WakeErr = fmt.Errorf("render managed wake candidates: %w", err)
 		return
 	}
-	candidate, ok := managedWakeCandidateForResult(result.Principal, resp, *result)
+	candidate, ok := drive.ManagedWakeCandidateForRender(result.Principal, resp, runtimeManagedWakeMatchMaterial(*result))
 	if !ok {
 		result.WakeStatus = "skipped"
 		result.WakeErr = fmt.Errorf("no managed wake candidate in rendered context")
 		return
 	}
-	client, workspace, err := runtimeManagedTurnClient(s.Env, s.CWD, runtimeName)
+	managedEnv := multicasurface.RuntimeManagedTurnEnv(s.Env, runtimeManagedWakeMaterial(*result))
+	client, workspace, err := runtimeManagedTurnClient(managedEnv, s.CWD, runtimeName)
 	if err != nil {
 		result.WakeStatus = "failed"
 		result.WakeErr = err
 		return
 	}
-	wakeCtx, cancel := context.WithTimeout(context.Background(), runtimeManagedTurnTimeout(s.Env))
+	wakeCtx, cancel := context.WithTimeout(context.Background(), multicasurface.RuntimeManagedTurnTimeout(s.Env))
 	defer cancel()
 	record, err := (&driver.ManagedAgentDriver{
 		Principal: result.Principal,
 		Client:    client,
-		Ledger:    driver.NewFileManagedWakeLedger(runtimeManagedLedgerPath(s.Env, workspace)),
+		Ledger:    driver.NewFileManagedWakeLedger(multicasurface.RuntimeManagedLedgerPath(s.Env, workspace)),
 		TraceSink: driver.ManagedTurnTraceSinkFunc(func(event driver.ManagedTurnTraceEvent) {
 			if progress != nil {
 				progress(runtimeProgressEvent{Trace: &event})
@@ -647,14 +648,14 @@ type runtimeHubProjectionDelta struct {
 }
 
 func (d runtimeHubProjectionDelta) active() bool {
-	return d.ChildIssues > 0 || d.FeedbackComments > 0
+	return d.ChildIssues > 0 || d.FeedbackComments > 0 || d.Err != nil
 }
 
 func (s *runtimeRPCState) wakeManagedAgentWithHubProjection(ctx context.Context, cli driver.MulticaCLI, client *access.Client, rootIssue driver.MulticaIssue, result *runtimeImportResult, progress runtimeProgressSink) []runtimeHubProjectionDelta {
 	if result == nil || client == nil ||
 		!strings.EqualFold(result.HubBackend, driver.MulticaHubBackend) ||
 		result.HubKind != driver.MulticaHubKindSession ||
-		!runtimeMulticaHubWriteEnabled(s.Env) {
+		!multicasurface.RuntimeHubWriteEnabled(s.Env) {
 		s.wakeManagedAgent(result, progress)
 		return nil
 	}
@@ -662,7 +663,7 @@ func (s *runtimeRPCState) wakeManagedAgentWithHubProjection(ctx context.Context,
 	deltas := make(chan runtimeHubProjectionDelta, 16)
 	go func(snapshot runtimeImportResult) {
 		defer close(deltas)
-		ticker := time.NewTicker(runtimeHubProjectionInterval(s.Env))
+		ticker := time.NewTicker(multicasurface.RuntimeHubProjectionInterval(s.Env))
 		defer ticker.Stop()
 		for {
 			select {
@@ -724,106 +725,26 @@ func mergeRuntimeHubProjectionDeltas(result *runtimeImportResult, deltas []runti
 	}
 }
 
-func managedWakeCandidateForResult(principal string, resp presentation.Response, result runtimeImportResult) (driver.ManagedWakeCandidate, bool) {
-	terms := managedWakeMatchTerms(result)
-	var fallback driver.ManagedWakeCandidate
-	for _, env := range resp.Events {
-		candidates := driver.ManagedWakeCandidatesFromEvents(principal, []eventmodel.EventEnvelope{env})
-		if len(candidates) == 0 {
-			continue
-		}
-		candidates[0].RenderAuditID = resp.AuditID
-		candidates[0].RenderBodyDigest = resp.BodyDigest
-		if fallback.Principal == "" {
-			fallback = candidates[0]
-		}
-		if len(terms) == 0 || eventNarrativeContainsAny(env, terms) {
-			return candidates[0], true
-		}
-	}
-	if len(terms) == 0 && fallback.Principal != "" {
-		return fallback, true
-	}
-	return driver.ManagedWakeCandidate{}, false
-}
-
-func managedWakeMatchTerms(result runtimeImportResult) []string {
-	if len(result.MatchTerms) > 0 {
-		return cleanRuntimeTerms(result.MatchTerms...)
-	}
-	if result.AssignmentID != "" || result.AssignmentFingerprint != "" {
-		return cleanRuntimeTerms(result.AssignmentID, result.AssignmentFingerprint)
-	}
-	raw := []string{result.IssueID, result.Identifier, result.Title, result.TaskID}
-	var out []string
-	for _, value := range raw {
-		value = strings.TrimSpace(value)
-		if len(value) >= 3 {
-			out = append(out, value)
-		}
-	}
-	if len(out) > 0 {
-		return out
-	}
-	if value := strings.TrimSpace(result.Statement); len(value) >= 3 {
-		out = append(out, value)
-	}
-	return out
-}
-
-func eventNarrativeContainsAny(env eventmodel.EventEnvelope, terms []string) bool {
-	body, _ := eventmodel.PayloadNarrative(env.Event.Payload)["body"].(string)
-	body = strings.ToLower(strings.Join([]string{body, string(env.Event.Subject), env.Event.ID, env.Event.Type}, "\n"))
-	for _, term := range terms {
-		if strings.Contains(body, strings.ToLower(term)) {
-			return true
-		}
-	}
-	return false
-}
-
-func (s *runtimeRPCState) projectImportComment(ctx context.Context, cli driver.MulticaCLI, issue driver.MulticaIssue, externalID string, result *runtimeImportResult) {
+func (s *runtimeRPCState) projectImportComment(ctx context.Context, cli driver.MulticaCLI, issue driver.MulticaIssue, externalID, eventType string, result *runtimeImportResult) {
 	if result == nil {
 		return
 	}
-	if !runtimeProjectionEnabled(s.Env) {
+	if !multicasurface.RuntimeProjectionCommentsEnabled(s.Env) {
 		result.ProjectionStatus = "skipped"
 		return
 	}
 	title := "issue admitted"
-	body := "Issue admitted into Mnemon teamwork."
 	if result.HubKind == driver.MulticaHubKindAssignmentMailbox || result.Status == "correlated" {
 		title = "assignment mailbox correlated"
-		body = "Assignment mailbox correlated with Mnemon teamwork."
 	}
-	if result.Principal != "" {
-		body += "\nPrincipal: " + result.Principal
-	}
-	if result.TaskID != "" {
-		body += "\nMultica task: " + result.TaskID
-	}
-	if result.HubBackend != "" {
-		body += "\nHub backend: " + result.HubBackend
-	}
-	if result.SessionID != "" {
-		body += "\nSession: " + result.SessionID
-	}
-	if result.RootIssueID != "" {
-		body += "\nRoot issue: " + result.RootIssueID
-	}
-	if result.AssignmentID != "" {
-		body += "\nAssignment: " + result.AssignmentID
-	}
-	if result.Receipt != nil {
-		body += fmt.Sprintf("\nMnemon ingest: seq=%d duplicate=%v ticked=%v", result.Receipt.Seq, result.Receipt.Dup, result.Receipt.Ticked)
-	}
-	if result.WakeStatus != "" {
-		body += "\nManaged wake: " + result.WakeStatus
-	}
-	if result.HubWriteStatus != "" {
-		body += fmt.Sprintf("\nMultica hub write: %s child_issues=%d feedback_comments=%d", result.HubWriteStatus, result.HubChildIssues, result.HubFeedbackComments)
-	}
-	commentBody := driver.FormatMulticaProjectionComment(title, body, []string{externalID})
+	commentBody := projection.FormatComment(projection.CommentMaterial{
+		Title:        title,
+		Body:         multicasurface.RuntimeProjectionCommentBody(runtimeProjectionMaterial(issue, *result)),
+		EventIDs:     []string{externalID},
+		EventType:    eventType,
+		SessionID:    result.SessionID,
+		AssignmentID: result.AssignmentID,
+	})
 	comment, err := cli.AddIssueComment(ctx, issue.ID, commentBody)
 	if err != nil {
 		result.ProjectionStatus = "failed"
@@ -834,14 +755,42 @@ func (s *runtimeRPCState) projectImportComment(ctx context.Context, cli driver.M
 	result.ProjectionCommentID = comment.ID
 }
 
-func runtimeMulticaCLI(env []string) driver.MulticaCLI {
+func runtimeProjectionMaterial(issue driver.MulticaIssue, result runtimeImportResult) multicasurface.RuntimeProjectionMaterial {
+	material := multicasurface.RuntimeProjectionMaterial{
+		AssignmentMailbox:  result.HubKind == driver.MulticaHubKindAssignmentMailbox || result.Status == "correlated",
+		Status:             result.Status,
+		IssueID:            issue.ID,
+		IssueLabel:         firstNonEmpty(issue.Identifier, issue.ID),
+		Principal:          result.Principal,
+		TaskID:             result.TaskID,
+		HubBackend:         result.HubBackend,
+		SessionID:          result.SessionID,
+		RootIssueID:        result.RootIssueID,
+		RootIssueLabel:     firstNonEmpty(result.RootIssueID, issue.Identifier),
+		AssignmentID:       result.AssignmentID,
+		WakeStatus:         result.WakeStatus,
+		WakeTurnID:         result.WakeTurnID,
+		HubWriteStatus:     result.HubWriteStatus,
+		HubChildIssues:     result.HubChildIssues,
+		HubFeedbackComment: result.HubFeedbackComments,
+	}
+	if result.Receipt != nil {
+		material.HasIngestReceipt = true
+		material.IngestSeq = result.Receipt.Seq
+		material.IngestDuplicate = result.Receipt.Dup
+		material.IngestTicked = result.Receipt.Ticked
+	}
+	return material
+}
+
+func runtimeMulticaCLI(env []string, activation multicasurface.RuntimeContext) driver.MulticaCLI {
 	return driver.MulticaCLI{
-		Command:     envValue(env, "MNEMON_MULTICA_BIN"),
-		Profile:     envValue(env, "MNEMON_MULTICA_PROFILE"),
-		ServerURL:   firstNonEmpty(envValue(env, "MNEMON_MULTICA_SERVER_URL"), envValue(env, "MULTICA_SERVER_URL")),
-		WorkspaceID: firstNonEmpty(envValue(env, "MNEMON_MULTICA_WORKSPACE_ID"), envValue(env, "MULTICA_WORKSPACE_ID")),
+		Command:     multicasurface.RuntimeEnvValue(env, "MNEMON_MULTICA_BIN"),
+		Profile:     multicasurface.RuntimeEnvValue(env, "MNEMON_MULTICA_PROFILE"),
+		ServerURL:   activation.ServerURL,
+		WorkspaceID: activation.WorkspaceID,
 		Env:         append([]string(nil), env...),
-		Timeout:     runtimeTimeout(env),
+		Timeout:     multicasurface.RuntimeTimeout(env),
 	}
 }
 
@@ -860,8 +809,8 @@ func runtimeControlClient(env []string, addr, principal string) (*access.Client,
 }
 
 func runtimeControlToken(env []string) (string, error) {
-	token := envValue(env, "MNEMON_CONTROL_TOKEN")
-	if tokenFile := envValue(env, "MNEMON_CONTROL_TOKEN_FILE"); tokenFile != "" {
+	token := multicasurface.RuntimeEnvValue(env, "MNEMON_CONTROL_TOKEN")
+	if tokenFile := multicasurface.RuntimeEnvValue(env, "MNEMON_CONTROL_TOKEN_FILE"); tokenFile != "" {
 		data, err := os.ReadFile(tokenFile)
 		if err != nil {
 			return "", fmt.Errorf("read MNEMON_CONTROL_TOKEN_FILE: %w", err)
@@ -872,7 +821,7 @@ func runtimeControlToken(env []string) (string, error) {
 }
 
 func runtimeManagedTurnClient(env []string, cwd, runtimeName string) (driver.ManagedTurnClient, string, error) {
-	workspace := envDefault(env, "MNEMON_MANAGED_WORKSPACE", cwd)
+	workspace := multicasurface.RuntimeEnvDefault(env, "MNEMON_MANAGED_WORKSPACE", cwd)
 	if strings.TrimSpace(workspace) == "" {
 		workspace = "."
 	}
@@ -882,11 +831,11 @@ func runtimeManagedTurnClient(env []string, cwd, runtimeName string) (driver.Man
 	case "codex-appserver":
 		return driver.CodexAppServerTurnClient{
 			Principal:   resolveRuntimePrincipal(env, cwd),
-			Command:     envDefault(env, "MNEMON_MANAGED_COMMAND", "codex"),
+			Command:     multicasurface.RuntimeEnvDefault(env, "MNEMON_MANAGED_COMMAND", "codex"),
 			Workspace:   workspace,
 			Env:         append([]string(nil), env...),
-			TurnTimeout: runtimeManagedTurnTimeout(env),
-			ClientName:  "mnemon-multica-runtime",
+			TurnTimeout: multicasurface.RuntimeManagedTurnTimeout(env),
+			ClientName:  multicasurface.MulticaRuntimeCommandName,
 		}, workspace, nil
 	default:
 		return nil, workspace, fmt.Errorf("unsupported MNEMON_MANAGED_RUNTIME %q", runtimeName)
@@ -903,12 +852,16 @@ func (runtimeNoopTurnClient) StartTurn(_ context.Context, query string) (driver.
 }
 
 func resolveRuntimePrincipal(env []string, cwd string) string {
-	agentID := envValue(env, "MULTICA_AGENT_ID")
-	agentName := envValue(env, "MULTICA_AGENT_NAME")
-	if principal := principalFromRegistry(env, cwd, agentID, agentName); principal != "" {
+	return resolveRuntimePrincipalFromContext(env, cwd, multicasurface.RuntimeContextFromActivation(env, cwd, multicasurface.RuntimeInput{}))
+}
+
+func resolveRuntimePrincipalFromContext(env []string, cwd string, activation multicasurface.RuntimeContext) string {
+	agentID := activation.AgentID
+	agentName := activation.AgentName
+	if principal := multicasurface.RuntimeMulticaRegistryPrincipal(env, cwd, agentID, agentName); principal != "" {
 		return principal
 	}
-	if principal := envValue(env, "MNEMON_CONTROL_PRINCIPAL"); principal != "" {
+	if principal := activation.ControlPrincipal; principal != "" {
 		return principal
 	}
 	if agentName != "" {
@@ -917,184 +870,34 @@ func resolveRuntimePrincipal(env []string, cwd string) string {
 	return "multica@runtime"
 }
 
-func principalFromRegistry(env []string, cwd, agentID, agentName string) string {
-	paths := []string{}
-	if explicit := envValue(env, "MNEMON_MULTICA_REGISTRY"); explicit != "" {
-		paths = append(paths, explicit)
+func runtimeResultSummary(result runtimeImportResult) multicasurface.RuntimeResultSummary {
+	summary := multicasurface.RuntimeResultSummary{
+		IssueID:             result.IssueID,
+		Identifier:          result.Identifier,
+		Title:               result.Title,
+		Principal:           result.Principal,
+		Status:              result.Status,
+		ProjectionStatus:    result.ProjectionStatus,
+		ProjectionCommentID: result.ProjectionCommentID,
+		WakeStatus:          result.WakeStatus,
+		WakeTurnID:          result.WakeTurnID,
+		HubWriteStatus:      result.HubWriteStatus,
+		HubChildIssues:      result.HubChildIssues,
+		HubFeedbackComments: result.HubFeedbackComments,
 	}
-	if strings.TrimSpace(cwd) != "" {
-		paths = append(paths, driver.MulticaRegistryPath(cwd, ""))
+	if result.Err != nil {
+		summary.Err = result.Err.Error()
 	}
-	for _, path := range paths {
-		reg, ok, err := driver.LoadMulticaRegistry(path)
-		if err != nil || !ok {
-			continue
-		}
-		for _, participant := range reg.Participants {
-			if agentID != "" && participant.AgentID == agentID && strings.TrimSpace(participant.Principal) != "" {
-				return strings.TrimSpace(participant.Principal)
-			}
-			if agentName != "" && participant.AgentName == agentName && strings.TrimSpace(participant.Principal) != "" {
-				return strings.TrimSpace(participant.Principal)
-			}
-		}
+	if result.ProjectionErr != nil {
+		summary.ProjectionErr = result.ProjectionErr.Error()
 	}
-	return ""
-}
-
-func runtimeRef(kind, id string) string {
-	kind = strings.TrimSpace(kind)
-	id = strings.TrimSpace(id)
-	if kind == "" || id == "" {
-		return ""
+	if result.WakeErr != nil {
+		summary.WakeErr = result.WakeErr.Error()
 	}
-	return "multica:" + kind + ":" + id
-}
-
-func formatRuntimeFinalAnswer(result runtimeImportResult) string {
-	var b strings.Builder
-	if result.IssueID == "" {
-		b.WriteString("Mnemon Multica runtime did not receive a Multica issue id.")
-	} else {
-		label := strings.TrimSpace(result.Identifier)
-		if label == "" {
-			label = result.IssueID
-		}
-		b.WriteString("Mnemon Multica runtime handled issue ")
-		b.WriteString(label)
-		if title := strings.TrimSpace(result.Title); title != "" {
-			b.WriteString(" (")
-			b.WriteString(title)
-			b.WriteString(")")
-		}
-		b.WriteString(".")
+	if result.HubWriteErr != nil {
+		summary.HubWriteErr = result.HubWriteErr.Error()
 	}
-	if principal := strings.TrimSpace(result.Principal); principal != "" {
-		b.WriteString(" Principal: ")
-		b.WriteString(principal)
-		b.WriteString(".")
-	}
-	if taskID := strings.TrimSpace(result.TaskID); taskID != "" {
-		b.WriteString(" Multica task: ")
-		b.WriteString(taskID)
-		b.WriteString(".")
-	}
-	switch result.Status {
-	case "recorded":
-		b.WriteString(" Mnemon ingest: recorded")
-		if result.Receipt != nil {
-			b.WriteString(fmt.Sprintf(" seq=%d duplicate=%v ticked=%v", result.Receipt.Seq, result.Receipt.Dup, result.Receipt.Ticked))
-		}
-		b.WriteString(".")
-	case "correlated":
-		b.WriteString(" Mnemon assignment mailbox: correlated")
-		if result.AssignmentID != "" {
-			b.WriteString(" assignment=")
-			b.WriteString(result.AssignmentID)
-		}
-		if result.SessionID != "" {
-			b.WriteString(" session=")
-			b.WriteString(result.SessionID)
-		}
-		b.WriteString(".")
-	case "skipped":
-		b.WriteString(" Mnemon ingest: skipped")
-		if result.Err != nil {
-			b.WriteString(" (")
-			b.WriteString(result.Err.Error())
-			b.WriteString(")")
-		} else {
-			b.WriteString(" because MNEMON_CONTROL_ADDR is not set")
-		}
-		b.WriteString(".")
-	case "failed":
-		b.WriteString(" Mnemon ingest: failed")
-		if result.Err != nil {
-			b.WriteString(" (")
-			b.WriteString(result.Err.Error())
-			b.WriteString(")")
-		}
-		b.WriteString(".")
-	default:
-		if result.Err != nil {
-			b.WriteString(" Mnemon ingest: failed (")
-			b.WriteString(result.Err.Error())
-			b.WriteString(").")
-		}
-	}
-	switch result.ProjectionStatus {
-	case "commented":
-		b.WriteString(" Multica projection: comment")
-		if result.ProjectionCommentID != "" {
-			b.WriteString("=")
-			b.WriteString(result.ProjectionCommentID)
-		}
-		b.WriteString(".")
-	case "skipped":
-		b.WriteString(" Multica projection: skipped.")
-	case "failed":
-		b.WriteString(" Multica projection: failed")
-		if result.ProjectionErr != nil {
-			b.WriteString(" (")
-			b.WriteString(result.ProjectionErr.Error())
-			b.WriteString(")")
-		}
-		b.WriteString(".")
-	}
-	switch result.WakeStatus {
-	case "completed":
-		b.WriteString(" Managed wake: completed")
-		if result.WakeTurnID != "" {
-			b.WriteString(" turn=")
-			b.WriteString(result.WakeTurnID)
-		}
-		b.WriteString(".")
-	case "skipped":
-		b.WriteString(" Managed wake: skipped")
-		if result.WakeErr != nil {
-			b.WriteString(" (")
-			b.WriteString(result.WakeErr.Error())
-			b.WriteString(")")
-		}
-		b.WriteString(".")
-	case "failed":
-		b.WriteString(" Managed wake: failed")
-		if result.WakeErr != nil {
-			b.WriteString(" (")
-			b.WriteString(result.WakeErr.Error())
-			b.WriteString(")")
-		}
-		b.WriteString(".")
-	default:
-		if result.WakeStatus != "" {
-			b.WriteString(" Managed wake: ")
-			b.WriteString(result.WakeStatus)
-			b.WriteString(".")
-		}
-	}
-	switch result.HubWriteStatus {
-	case "created", "commented", "updated", "noop":
-		b.WriteString(" Multica hub write: ")
-		b.WriteString(result.HubWriteStatus)
-		if result.HubChildIssues > 0 {
-			b.WriteString(fmt.Sprintf(" child_issues=%d", result.HubChildIssues))
-		}
-		if result.HubFeedbackComments > 0 {
-			b.WriteString(fmt.Sprintf(" feedback_comments=%d", result.HubFeedbackComments))
-		}
-		b.WriteString(".")
-	case "skipped":
-		b.WriteString(" Multica hub write: skipped.")
-	case "failed":
-		b.WriteString(" Multica hub write: failed")
-		if result.HubWriteErr != nil {
-			b.WriteString(" (")
-			b.WriteString(result.HubWriteErr.Error())
-			b.WriteString(")")
-		}
-		b.WriteString(".")
-	}
-	return strings.TrimSpace(b.String())
+	return summary
 }
 
 func (s *runtimeRPCState) threadStartResult(params map[string]any) map[string]any {
@@ -1164,240 +967,13 @@ func writeRuntimeRPC(w io.Writer, msg rpcMessage) error {
 	return err
 }
 
-func emitRuntimeManagedTraceEvent(emit func(rpcMessage) error, threadID, turnID string, event driver.ManagedTurnTraceEvent, now time.Time) error {
-	switch event.Method {
-	case "item/started":
-		item := runtimeManagedTraceItem(event)
-		if len(item) == 0 {
-			return nil
-		}
-		return emit(rpcMessage{
-			Method: "item/started",
-			Params: runtimeItemParams(threadID, turnID, item, "startedAtMs", now.UTC().UnixMilli()),
-		})
-	case "item/completed":
-		item := runtimeManagedTraceItem(event)
-		if len(item) == 0 {
-			return nil
-		}
-		return emit(rpcMessage{
-			Method: "item/completed",
-			Params: runtimeItemParams(threadID, turnID, item, "completedAtMs", now.UTC().UnixMilli()),
-		})
-	case "item/agentMessage/delta":
-		text := strings.TrimSpace(event.Text)
-		if text == "" {
-			return nil
-		}
-		return emit(runtimeAgentDelta(threadID, turnID, runtimeManagedTraceItemID(event), text))
-	default:
-		return nil
-	}
-}
-
-func runtimeManagedTraceItem(event driver.ManagedTurnTraceEvent) map[string]any {
-	if len(event.Item) == 0 {
-		return nil
-	}
-	item, _ := cloneRuntimeAny(event.Item).(map[string]any)
-	if item == nil {
-		return nil
-	}
-	item["id"] = runtimeManagedTraceItemID(event)
-	if _, ok := item["source"]; !ok {
-		item["source"] = "managedCodexAppServer"
-	}
-	if strings.TrimSpace(event.SourceRuntime) != "" {
-		item["mnemonSourceRuntime"] = event.SourceRuntime
-	}
-	if strings.TrimSpace(event.Principal) != "" {
-		item["mnemonPrincipal"] = event.Principal
-	}
-	if strings.TrimSpace(event.TurnID) != "" {
-		item["mnemonManagedTurnId"] = event.TurnID
-	}
-	return item
-}
-
-func runtimeManagedTraceItemID(event driver.ManagedTurnTraceEvent) string {
-	key := firstNonEmpty(event.ItemID, event.Command, event.Text, event.Kind, event.Method)
-	return runtimeTextDigestID("managed", event.SourceRuntime+"\n"+event.TurnID+"\n"+key)
-}
-
-func cloneRuntimeAny(value any) any {
-	switch typed := value.(type) {
-	case map[string]any:
-		out := map[string]any{}
-		for key, item := range typed {
-			out[key] = cloneRuntimeAny(item)
-		}
-		return out
-	case []any:
-		out := make([]any, 0, len(typed))
-		for _, item := range typed {
-			out = append(out, cloneRuntimeAny(item))
-		}
-		return out
-	default:
-		return typed
-	}
-}
-
-func emitRuntimeCommandExecution(emit func(rpcMessage) error, threadID, turnID, itemID, fallbackCWD string, event runtimeProgressEvent, now time.Time) error {
-	command := strings.TrimSpace(event.Command)
-	if command == "" {
-		return nil
-	}
-	if strings.TrimSpace(itemID) == "" {
-		itemID = runtimeTextDigestID("call", command+"\n"+event.Output)
-	}
-	cwd := strings.TrimSpace(event.CWD)
-	if cwd == "" {
-		cwd = fallbackCWD
-	}
-	output := strings.TrimSpace(event.Output)
-	durationMs := event.DurationMs
-	if durationMs < 0 {
-		durationMs = 0
-	}
-	nowMs := now.UTC().UnixMilli()
-	started := runtimeCommandExecution(itemID, command, cwd, "inProgress", "", nil, nil)
-	completed := runtimeCommandExecution(itemID, command, cwd, "completed", output, event.ExitCode, durationMs)
-	messages := []rpcMessage{
-		{
-			Method: "item/started",
-			Params: runtimeItemParams(threadID, turnID, started, "startedAtMs", nowMs),
-		},
-		{
-			Method: "item/completed",
-			Params: runtimeItemParams(threadID, turnID, completed, "completedAtMs", nowMs),
-		},
-	}
+func emitRuntimeMessages(emit func(rpcMessage) error, messages []multicasurface.RuntimeRPCMessage) error {
 	for _, message := range messages {
-		if err := emit(message); err != nil {
+		if err := emit(rpcMessage{Method: message.Method, Params: message.Params}); err != nil {
 			return err
 		}
 	}
 	return nil
-}
-
-func runtimeCommandExecution(id, command, cwd, status, output string, exitCode any, durationMs any) map[string]any {
-	item := map[string]any{
-		"type":             "commandExecution",
-		"id":               id,
-		"command":          command,
-		"cwd":              cwd,
-		"processId":        "mnemon-runtime",
-		"source":           "mnemonRuntime",
-		"status":           status,
-		"commandActions":   []any{map[string]any{"type": "unknown", "command": command}},
-		"aggregatedOutput": nil,
-		"exitCode":         nil,
-		"durationMs":       nil,
-	}
-	if status == "completed" {
-		item["aggregatedOutput"] = output
-		item["exitCode"] = exitCode
-		item["durationMs"] = durationMs
-	}
-	return item
-}
-
-func emitRuntimeAgentMessage(emit func(rpcMessage) error, threadID, turnID, itemID, text, phase string, now time.Time) error {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return nil
-	}
-	phase = strings.TrimSpace(phase)
-	if phase == "" {
-		phase = "commentary"
-	}
-	if strings.TrimSpace(itemID) == "" {
-		itemID = runtimeTextDigestID("msg", text)
-	}
-	nowMs := now.UTC().UnixMilli()
-	messages := []rpcMessage{
-		{
-			Method: "item/started",
-			Params: runtimeItemParams(threadID, turnID, runtimeAgentMessage(itemID, "", phase), "startedAtMs", nowMs),
-		},
-		runtimeAgentDelta(threadID, turnID, itemID, text),
-		{
-			Method: "item/completed",
-			Params: runtimeItemParams(threadID, turnID, runtimeAgentMessage(itemID, text, phase), "completedAtMs", nowMs),
-		},
-	}
-	for _, message := range messages {
-		if err := emit(message); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func runtimeAgentDelta(threadID, turnID, itemID, delta string) rpcMessage {
-	return rpcMessage{
-		Method: "item/agentMessage/delta",
-		Params: map[string]any{
-			"threadId": threadID,
-			"turnId":   turnID,
-			"itemId":   itemID,
-			"delta":    delta,
-		},
-	}
-}
-
-func runtimeItemParams(threadID, turnID string, item map[string]any, timeKey string, timestampMs int64) map[string]any {
-	params := map[string]any{
-		"threadId": threadID,
-		"turnId":   turnID,
-		"item":     item,
-	}
-	if timeKey != "" && timestampMs > 0 {
-		params[timeKey] = timestampMs
-	}
-	return params
-}
-
-func runtimeUserMessage(text string) map[string]any {
-	return map[string]any{
-		"type":     "userMessage",
-		"id":       runtimeTextDigestID("user", text),
-		"clientId": nil,
-		"content": []any{map[string]any{
-			"type":          "text",
-			"text":          text,
-			"text_elements": []any{},
-		}},
-	}
-}
-
-func runtimeAgentMessage(id, text, phase string) map[string]any {
-	id = strings.TrimSpace(id)
-	if id == "" {
-		id = runtimeTextDigestID("msg", text)
-	}
-	phase = strings.TrimSpace(phase)
-	if phase == "" {
-		phase = "commentary"
-	}
-	return map[string]any{
-		"type":           "agentMessage",
-		"id":             id,
-		"text":           text,
-		"phase":          phase,
-		"memoryCitation": nil,
-	}
-}
-
-func runtimeTextDigestID(prefix, text string) string {
-	prefix = strings.TrimSpace(prefix)
-	if prefix == "" {
-		prefix = "item"
-	}
-	sum := sha256.Sum256([]byte(text))
-	digest := fmt.Sprintf("%x", sum[:])[:24]
-	return prefix + "_" + digest
 }
 
 func emitRuntimeProgress(progress runtimeProgressSink, text string) {
@@ -1419,131 +995,16 @@ func runtimeExitCode(err error) int {
 	return 0
 }
 
-func displayRuntimePrincipal(principal string) string {
-	principal = strings.TrimSpace(principal)
-	if principal == "" {
-		return "the resolved principal"
-	}
-	return principal
-}
-
 func runtimeIssueLabel(issue driver.MulticaIssue) string {
-	if strings.TrimSpace(issue.Identifier) != "" && strings.TrimSpace(issue.Title) != "" {
-		return issue.Identifier + " (" + issue.Title + ")"
-	}
-	if strings.TrimSpace(issue.Identifier) != "" {
-		return issue.Identifier
-	}
-	if strings.TrimSpace(issue.ID) != "" {
-		return issue.ID
-	}
-	return "the Multica issue"
-}
-
-func runtimeAssignmentLabel(result runtimeImportResult) string {
-	if strings.TrimSpace(result.AssignmentID) != "" {
-		return result.AssignmentID
-	}
-	if strings.TrimSpace(result.AssignmentFingerprint) != "" {
-		return result.AssignmentFingerprint
-	}
-	return "assignment mailbox"
-}
-
-func runtimeWakeProgress(result runtimeImportResult) string {
-	switch strings.TrimSpace(result.WakeStatus) {
-	case "":
-		if result.WakeErr != nil {
-			return "Managed wake failed: " + result.WakeErr.Error()
-		}
-		return "Managed wake did not run."
-	case "completed":
-		if strings.TrimSpace(result.WakeTurnID) != "" {
-			return "Managed wake completed: turn=" + result.WakeTurnID + "."
-		}
-		return "Managed wake completed."
-	case "skipped":
-		if result.WakeErr != nil {
-			return "Managed wake skipped: " + result.WakeErr.Error()
-		}
-		return "Managed wake skipped."
-	case "failed":
-		if result.WakeErr != nil {
-			return "Managed wake failed: " + result.WakeErr.Error()
-		}
-		return "Managed wake failed."
-	default:
-		return "Managed wake status: " + result.WakeStatus + "."
-	}
-}
-
-func runtimeHubWriteProgress(result runtimeImportResult) string {
-	switch strings.TrimSpace(result.HubWriteStatus) {
-	case "":
-		return ""
-	case "failed":
-		if result.HubWriteErr != nil {
-			return "Multica hub projection failed: " + result.HubWriteErr.Error()
-		}
-		return "Multica hub projection failed."
-	case "skipped":
-		return "Multica hub projection skipped."
-	default:
-		return fmt.Sprintf("Multica hub projection %s: child issues=%d, feedback comments=%d.", result.HubWriteStatus, result.HubChildIssues, result.HubFeedbackComments)
-	}
-}
-
-func runtimeProjectionProgress(result runtimeImportResult) string {
-	switch strings.TrimSpace(result.ProjectionStatus) {
-	case "":
-		return ""
-	case "failed":
-		if result.ProjectionErr != nil {
-			return "Multica comment projection failed: " + result.ProjectionErr.Error()
-		}
-		return "Multica comment projection failed."
-	case "skipped":
-		return "Multica comment projection skipped."
-	default:
-		if strings.TrimSpace(result.ProjectionCommentID) != "" {
-			return "Multica comment projection completed: comment=" + result.ProjectionCommentID + "."
-		}
-		return "Multica comment projection completed."
-	}
+	return multicasurface.RuntimeIssueLabel(issue.ID, issue.Identifier, issue.Title)
 }
 
 func markIssueInProgress(ctx context.Context, cli driver.MulticaCLI, issueID string) {
 	_, _ = cli.SetIssueStatus(ctx, issueID, "in_progress")
 }
 
-func extractRuntimeInput(params map[string]any) string {
-	input, ok := params["input"].([]any)
-	if !ok {
-		return ""
-	}
-	var parts []string
-	for _, item := range input {
-		obj, ok := item.(map[string]any)
-		if !ok {
-			continue
-		}
-		if text, _ := obj["text"].(string); strings.TrimSpace(text) != "" {
-			parts = append(parts, text)
-		}
-	}
-	return strings.Join(parts, "\n")
-}
-
-func extractAssignedIssueID(input string) string {
-	match := assignedIssuePattern.FindStringSubmatch(input)
-	if len(match) >= 2 {
-		return strings.Trim(match[1], " \t\r\n.,;)")
-	}
-	return ""
-}
-
 func wantsVersion(args []string) bool {
-	fs := flag.NewFlagSet("mnemon-multica-runtime", flag.ContinueOnError)
+	fs := flag.NewFlagSet(multicasurface.MulticaRuntimeCommandName, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	version := fs.Bool("version", false, "")
 	_ = fs.Parse(args)
@@ -1557,6 +1018,27 @@ func wantsVersion(args []string) bool {
 		}
 	}
 	return false
+}
+
+func wantsRuntimeHelp(args []string) bool {
+	for _, arg := range args {
+		switch strings.TrimSpace(arg) {
+		case "help", "--help", "-help", "-h":
+			return true
+		}
+	}
+	return false
+}
+
+func writeRuntimeHelp(w io.Writer) {
+	fmt.Fprintf(w, "%s is an external Multica runtime adapter for the Mnemon event system.\n", multicasurface.MulticaRuntimeCommandName)
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Usage:")
+	fmt.Fprintf(w, "  %s app-server --listen stdio://\n", multicasurface.MulticaRuntimeCommandName)
+	fmt.Fprintf(w, "  %s --version\n", multicasurface.MulticaRuntimeCommandName)
+	fmt.Fprintf(w, "  %s --probe app-server --listen stdio://\n", multicasurface.MulticaRuntimeCommandName)
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "The adapter receives Multica runtime RPC on stdin/stdout, loads issue context through the Multica CLI, submits structured EventMaterial to mnemond when configured, wakes only the locally owned managed agent with [mnemon:wake], streams activation trace, and projects accepted state back to Multica.")
 }
 
 func runtimeProbeModeEnabled(args []string) bool {
@@ -1575,24 +1057,6 @@ func stringParam(params map[string]any, key string) string {
 	}
 	value, _ := params[key].(string)
 	return strings.TrimSpace(value)
-}
-
-func envValue(env []string, key string) string {
-	prefix := key + "="
-	for i := len(env) - 1; i >= 0; i-- {
-		item := env[i]
-		if strings.HasPrefix(item, prefix) {
-			return strings.TrimSpace(strings.TrimPrefix(item, prefix))
-		}
-	}
-	return ""
-}
-
-func envDefault(env []string, key, fallback string) string {
-	if value := envValue(env, key); value != "" {
-		return value
-	}
-	return fallback
 }
 
 func firstNonEmpty(values ...string) string {
@@ -1615,63 +1079,6 @@ func runtimeID(prefix string, now time.Time) string {
 		prefix = "id"
 	}
 	return fmt.Sprintf("%s-%d", prefix, now.UTC().UnixNano())
-}
-
-func runtimeTimeout(env []string) time.Duration {
-	raw := envValue(env, "MNEMON_MULTICA_RUNTIME_TIMEOUT")
-	if raw == "" {
-		return 30 * time.Second
-	}
-	d, err := time.ParseDuration(raw)
-	if err != nil || d <= 0 {
-		return 30 * time.Second
-	}
-	return d
-}
-
-func runtimeManagedTurnTimeout(env []string) time.Duration {
-	raw := envValue(env, "MNEMON_MANAGED_TURN_TIMEOUT")
-	if raw == "" {
-		return 5 * time.Minute
-	}
-	d, err := time.ParseDuration(raw)
-	if err != nil || d <= 0 {
-		return 5 * time.Minute
-	}
-	return d
-}
-
-func runtimeHubProjectionInterval(env []string) time.Duration {
-	raw := envValue(env, "MNEMON_MULTICA_HUB_PROJECT_INTERVAL")
-	if raw == "" {
-		return 5 * time.Second
-	}
-	d, err := time.ParseDuration(raw)
-	if err != nil || d <= 0 {
-		return 5 * time.Second
-	}
-	return d
-}
-
-func runtimeManagedLedgerPath(env []string, workspace string) string {
-	if explicit := envValue(env, "MNEMON_MANAGED_LEDGER"); explicit != "" {
-		return explicit
-	}
-	root := strings.TrimSpace(workspace)
-	if root == "" {
-		root = "."
-	}
-	return filepath.Join(root, ".mnemon", "harness", "local", "managed-agent", "wake-ledger.jsonl")
-}
-
-func runtimeProjectionEnabled(env []string) bool {
-	value := strings.ToLower(envDefault(env, "MNEMON_MULTICA_PROJECT_COMMENTS", "true"))
-	switch value {
-	case "0", "false", "no", "off":
-		return false
-	default:
-		return true
-	}
 }
 
 func sanitizePrincipal(value string) string {

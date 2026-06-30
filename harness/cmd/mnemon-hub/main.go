@@ -35,6 +35,7 @@ func main() {
 // generator exit, load replicas.json (fail-closed), take the hub store's single-writer lock, and
 // serve the three sync verbs (TLS when both cert+key are set) until ctx cancels.
 func run(ctx context.Context, args []string, out, errw io.Writer) error {
+	args = normalizeHubArgs(args)
 	fs := flag.NewFlagSet("mnemon-hub", flag.ContinueOnError)
 	fs.SetOutput(errw)
 	addr := fs.String("addr", "127.0.0.1:9787", "listen address")
@@ -43,7 +44,13 @@ func run(ctx context.Context, args []string, out, errw io.Writer) error {
 	tlsCert := fs.String("tls-cert", "", "TLS certificate file (TLS is served when --tls-cert and --tls-key are both set)")
 	tlsKey := fs.String("tls-key", "", "TLS private key file")
 	devSelfsigned := fs.String("dev-selfsigned", "", "generate a self-signed dev/e2e cert+key pair into this directory, print their paths, and exit")
+	fs.Usage = func() {
+		writeHubHelp(errw, fs)
+	}
 	if err := fs.Parse(args); err != nil {
+		if err == flag.ErrHelp {
+			return nil
+		}
 		return err
 	}
 	if *devSelfsigned != "" {
@@ -80,6 +87,37 @@ func run(ctx context.Context, args []string, out, errw io.Writer) error {
 	// Audit goes to out (stdout in main): one line per request — ts, principal, verb, result.
 	handler := mnemonhub.NewHTTPHandler(mnemonhub.New(st, grants, now), mnemonhub.BearerAuthenticator{Tokens: tokens}, out)
 	return serveHub(ctx, *addr, handler, *tlsCert, *tlsKey, *storePath, out)
+}
+
+func normalizeHubArgs(args []string) []string {
+	if len(args) == 0 {
+		return args
+	}
+	switch args[0] {
+	case "serve":
+		return args[1:]
+	case "help":
+		return []string{"--help"}
+	default:
+		return args
+	}
+}
+
+func writeHubHelp(errw io.Writer, fs *flag.FlagSet) {
+	fmt.Fprintln(errw, "mnemon-hub is the remote event exchange backend: it handles authenticated replica push, pull, status, cursors, and tenant boundaries.")
+	fmt.Fprintln(errw)
+	fmt.Fprintln(errw, "Usage:")
+	fmt.Fprintln(errw, "  mnemon-hub serve --store PATH --replicas PATH [flags]")
+	fmt.Fprintln(errw, "  mnemon-hub --dev-selfsigned DIR")
+	fmt.Fprintln(errw)
+	fmt.Fprintln(errw, "Commands:")
+	fmt.Fprintln(errw, "  serve   Run the authenticated remote event exchange backend")
+	fmt.Fprintln(errw, "  help    Show this help")
+	fmt.Fprintln(errw)
+	fmt.Fprintln(errw, "Flags:")
+	if fs != nil {
+		fs.PrintDefaults()
+	}
 }
 
 // serveHub listens (so the bound address is printable before any request) and serves until ctx

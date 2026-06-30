@@ -44,6 +44,7 @@ func DeriveEventEnvelopes(req Request, proj view.View, now time.Time) []eventmod
 	}
 	derivedAt, expiresAt := derivedTimes(now)
 	items := teamworkItems(proj)
+	items = scopeTeamworkItemsForRequest(req, items)
 	var events []eventmodel.EventEnvelope
 	appendDerived := func(eventType, subject string, causedBy []string, body string, suggested []string) {
 		model := eventmodel.Event{
@@ -78,6 +79,9 @@ func DeriveEventEnvelopes(req Request, proj view.View, now time.Time) []eventmod
 		id := teamworkItemID(signal)
 		subject := "teamwork_signal/" + id
 		body := fmt.Sprintf("Teamwork signal is open: %s. Assignment or self-assignment may be useful when you choose to act.", statement)
+		if multicaHubRender(req) {
+			body += " For Multica-backed teamwork, create handoffs as Mnemon assignment events; the runtime projects Multica assignment mailboxes from accepted assignments."
+		}
 		if refs := signalContextRefs(signal); len(refs) > 0 {
 			body = fmt.Sprintf("%s Context refs: %s.", body, strings.Join(refs, ", "))
 		}
@@ -142,6 +146,68 @@ func DeriveEventEnvelopes(req Request, proj view.View, now time.Time) []eventmod
 	}
 
 	return events
+}
+
+func multicaHubRender(req Request) bool {
+	return strings.EqualFold(strings.TrimSpace(req.Host), "multica")
+}
+
+func scopeTeamworkItemsForRequest(req Request, items map[string][]map[string]any) map[string][]map[string]any {
+	if !multicaHubRender(req) {
+		return items
+	}
+	sessionID := strings.TrimSpace(req.SessionID)
+	currentID := strings.TrimSpace(req.InputDigest)
+	if sessionID == "" && currentID == "" {
+		return items
+	}
+	out := map[string][]map[string]any{}
+	for kind, list := range items {
+		switch kind {
+		case "agent_profile":
+			out[kind] = append(out[kind], list...)
+			continue
+		}
+		for _, item := range list {
+			if multicaTeamworkItemInScope(kind, item, sessionID, currentID) {
+				out[kind] = append(out[kind], item)
+			}
+		}
+	}
+	return out
+}
+
+func multicaTeamworkItemInScope(kind string, item map[string]any, sessionID, currentID string) bool {
+	for _, key := range []string{"session_id", "root_issue_id", "source_issue_id", "assignment_id", "assignment_ref", "id", "declaration_id"} {
+		value := itemString(item, key)
+		if value != "" && (value == sessionID || value == currentID) {
+			return true
+		}
+	}
+	if kind == "assignment" && teamworkItemID(item) == currentID {
+		return true
+	}
+	for _, key := range []string{"context_refs", "evidence_refs", "artifact_refs"} {
+		for _, ref := range itemStringList(item, key) {
+			if multicaRefMatchesScope(ref, sessionID, currentID) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func multicaRefMatchesScope(ref, sessionID, currentID string) bool {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return false
+	}
+	for _, want := range []string{sessionID, currentID} {
+		if want != "" && strings.Contains(ref, want) {
+			return true
+		}
+	}
+	return false
 }
 
 func DeriveProfileEventEnvelopes(req Request, proj view.View) []eventmodel.EventEnvelope {

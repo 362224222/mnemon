@@ -36,6 +36,9 @@ var (
 	controlRenderIntent    string
 	controlRenderLifecycle string
 	controlRenderSurface   string
+	controlRenderHost      string
+	controlRenderSessionID string
+	controlRenderInputID   string
 	controlRenderMaxChars  int
 	controlRenderJSON      bool
 )
@@ -168,6 +171,9 @@ var controlRenderCmd = &cobra.Command{
 			RenderIntent: controlRenderIntent,
 			Lifecycle:    controlRenderLifecycle,
 			Surface:      controlRenderSurface,
+			Host:         controlRenderHost,
+			SessionID:    controlRenderSessionID,
+			InputDigest:  controlRenderInputID,
 			Budget:       presentation.Budget{MaxChars: controlRenderMaxChars},
 		})
 		if err != nil {
@@ -280,6 +286,9 @@ func init() {
 	controlRenderCmd.Flags().StringVar(&controlRenderIntent, "intent", presentation.IntentTeamworkEvents, "render intent")
 	controlRenderCmd.Flags().StringVar(&controlRenderLifecycle, "lifecycle", "remind", "host lifecycle")
 	controlRenderCmd.Flags().StringVar(&controlRenderSurface, "surface", "hook", "host surface")
+	controlRenderCmd.Flags().StringVar(&controlRenderHost, "host", envDefault("MNEMON_RENDER_HOST", ""), "host integration name")
+	controlRenderCmd.Flags().StringVar(&controlRenderSessionID, "session-id", envDefault("MNEMON_RENDER_SESSION_ID", ""), "render session scope")
+	controlRenderCmd.Flags().StringVar(&controlRenderInputID, "input-id", envDefault("MNEMON_RENDER_INPUT_ID", ""), "render input or assignment scope")
 	controlRenderCmd.Flags().IntVar(&controlRenderMaxChars, "max-chars", 6000, "maximum rendered body chars")
 	controlRenderCmd.Flags().BoolVar(&controlRenderJSON, "json", false, "emit full render response as JSON")
 	controlCmd.AddCommand(controlObserveCmd, controlPullCmd, controlStatusCmd, controlRenderCmd, controlTeamworkCmd, controlProfileCmd)

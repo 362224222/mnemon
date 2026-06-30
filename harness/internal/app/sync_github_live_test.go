@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -25,6 +26,9 @@ func TestGitHubLivePublishPullImport(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("github publication store: %v", err)
+	}
+	if err := store.EnsureBranches(context.Background(), []string{cfg.branchA, cfg.branchB}, "main"); err != nil {
+		t.Fatalf("ensure live GitHub branches: %v", err)
 	}
 	remoteA := liveGitHubRemote(t, store, cfg.repo, cfg.branchA)
 	remoteB := liveGitHubRemote(t, store, cfg.repo, cfg.branchB)
@@ -103,11 +107,11 @@ func liveGitHubTestConfig(t *testing.T) liveGitHubConfig {
 	}
 	branchA := strings.TrimSpace(os.Getenv("MNEMON_GITHUB_BRANCH_A"))
 	if branchA == "" {
-		branchA = "mnemon/agent-a"
+		branchA = "mnemon/live/" + time.Now().UTC().Format("20060102T150405.000000000Z") + "/a"
 	}
 	branchB := strings.TrimSpace(os.Getenv("MNEMON_GITHUB_BRANCH_B"))
 	if branchB == "" {
-		branchB = "mnemon/agent-b"
+		branchB = strings.TrimSuffix(branchA, "/a") + "/b"
 	}
 	return liveGitHubConfig{repo: repo, branchA: branchA, branchB: branchB, token: token}
 }

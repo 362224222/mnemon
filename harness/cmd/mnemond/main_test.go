@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"strings"
@@ -39,5 +40,73 @@ func TestRunRefusesNonLoopbackAddr(t *testing.T) {
 	err := run(context.Background(), []string{"--root", root, "--addr", "0.0.0.0:0"}, io.Discard, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "loopback") {
 		t.Fatalf("non-loopback --addr must be refused (T1), got: %v", err)
+	}
+}
+
+func TestHelpDescribesLocalEventNode(t *testing.T) {
+	for _, args := range [][]string{{"--help"}, {"help"}} {
+		var errw bytes.Buffer
+		err := run(context.Background(), args, io.Discard, &errw)
+		if err != nil {
+			t.Fatalf("%v help should exit successfully, got %v", args, err)
+		}
+		got := errw.String()
+		for _, want := range []string{"Local Mnemon event node", "local event API", "admission", "state", "presentation", "drive candidates", "Commands:", "serve", "status", "agent run"} {
+			if !strings.Contains(got, want) {
+				t.Fatalf("%v mnemond help missing %q:\n%s", args, want, got)
+			}
+		}
+	}
+}
+
+func TestAgentHelpListsLocalDriveSourceCommand(t *testing.T) {
+	var errw bytes.Buffer
+	err := run(context.Background(), []string{"agent", "--help"}, io.Discard, &errw)
+	if err != nil {
+		t.Fatalf("agent help should exit successfully, got %v", err)
+	}
+	got := errw.String()
+	for _, want := range []string{"local managed-agent drive sources", "mnemond agent run", "[mnemon:wake]", "managed runtime"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("agent help missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestLifecycleHelpExitsSuccessfully(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"serve", "--help"}, "Local Mnemon event node"},
+		{[]string{"up", "--help"}, "Local Mnemon event node"},
+		{[]string{"reload", "--help"}, "Local Mnemon event node"},
+		{[]string{"down", "--help"}, "Usage of mnemond down"},
+		{[]string{"status", "--help"}, "Usage of mnemond status"},
+		{[]string{"logs", "--help"}, "Usage of mnemond logs"},
+		{[]string{"doctor", "--help"}, "Usage of mnemond doctor"},
+	} {
+		var errw bytes.Buffer
+		err := run(context.Background(), tc.args, io.Discard, &errw)
+		if err != nil {
+			t.Fatalf("%v help should exit successfully, got %v", tc.args, err)
+		}
+		if got := errw.String(); !strings.Contains(got, tc.want) {
+			t.Fatalf("%v help missing %q:\n%s", tc.args, tc.want, got)
+		}
+	}
+}
+
+func TestAgentRunHelpFramesLocalDriveSource(t *testing.T) {
+	var errw bytes.Buffer
+	err := run(context.Background(), []string{"agent", "run", "--help"}, io.Discard, &errw)
+	if err != nil {
+		t.Fatalf("agent run help should exit successfully, got %v", err)
+	}
+	got := errw.String()
+	for _, want := range []string{"local drive source", "[mnemon:wake]", "managed runtime"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("agent run help missing %q:\n%s", want, got)
+		}
 	}
 }

@@ -22,10 +22,11 @@ deps: ## Download Go dependencies
 build: ## Build the mnemon binary
 	go build -ldflags "$(LDFLAGS)" -o $(BINARY) .
 
-harness-build: ## Build the harness binaries (mnemon-harness local plane + mnemon-hub remote hub + mnemond local governance daemon + test-only acceptance runner)
+harness-build: ## Build the harness binaries (mnemon-harness, mnemond, mnemonhub, Multica runtime adapter, and test-only acceptance runner)
 	go build -ldflags "$(LDFLAGS)" -o mnemon-harness ./harness/cmd/mnemon-harness
 	go build -ldflags "$(LDFLAGS)" -o mnemon-hub ./harness/cmd/mnemon-hub
 	go build -ldflags "$(LDFLAGS)" -o mnemond ./harness/cmd/mnemond
+	go build -ldflags "$(LDFLAGS)" -o mnemon-multica-runtime ./harness/cmd/mnemon-multica-runtime
 	go build -ldflags "$(LDFLAGS)" -o mnemon-acceptance ./harness/cmd/mnemon-acceptance
 
 # ── Install / Uninstall ─────────────────────────────────────────────

@@ -12,41 +12,14 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
+	"github.com/mnemon-dev/mnemon/harness/internal/drive"
 	"github.com/mnemon-dev/mnemon/harness/internal/driver"
 	eventmodel "github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation"
 	pview "github.com/mnemon-dev/mnemon/harness/internal/mnemond/presentation/view"
+	multicasurface "github.com/mnemon-dev/mnemon/harness/internal/surface/multica"
 )
-
-func TestRuntimeEnvValueUsesLastValue(t *testing.T) {
-	env := []string{
-		"MNEMON_MANAGED_RUNTIME=codex-appserver",
-		"MNEMON_MANAGED_RUNTIME=off",
-	}
-	if got := envValue(env, "MNEMON_MANAGED_RUNTIME"); got != "off" {
-		t.Fatalf("envValue = %q, want off", got)
-	}
-}
-
-func TestRuntimeMulticaHubLedgerPathDefaultsToManagedWorkspace(t *testing.T) {
-	tmp := t.TempDir()
-	workspace := filepath.Join(tmp, "managed-workspace")
-	cwd := filepath.Join(tmp, "task-workdir")
-	got := runtimeMulticaHubLedgerPath([]string{"MNEMON_MANAGED_WORKSPACE=" + workspace}, cwd)
-	want := filepath.Join(workspace, driver.MulticaDefaultHubLedgerRelPath)
-	if got != want {
-		t.Fatalf("hub ledger path = %q, want %q", got, want)
-	}
-	explicit := filepath.Join(tmp, "explicit.jsonl")
-	got = runtimeMulticaHubLedgerPath([]string{
-		"MNEMON_MANAGED_WORKSPACE=" + workspace,
-		"MNEMON_MULTICA_HUB_LEDGER=" + explicit,
-	}, cwd)
-	if got != explicit {
-		t.Fatalf("explicit hub ledger path = %q, want %q", got, explicit)
-	}
-}
 
 func TestMergeRuntimeHubProjectionDeltasPreservesEarlyDispatchCounts(t *testing.T) {
 	result := runtimeImportResult{HubWriteStatus: "noop"}
@@ -65,13 +38,13 @@ func TestMergeRuntimeHubProjectionDeltasPreservesEarlyDispatchCounts(t *testing.
 }
 
 func TestManagedWakeMatchTermsPreferStableIssueIdentity(t *testing.T) {
-	got := managedWakeMatchTerms(runtimeImportResult{
+	got := drive.ManagedWakeMatchTerms(runtimeManagedWakeMatchMaterial(runtimeImportResult{
 		IssueID:    "issue-123",
 		Identifier: "TEA-27",
 		Title:      "Mnemon R2 hub-flow completion drill",
 		Statement:  "Run a small hub-flow readiness drill.",
 		TaskID:     "task-123",
-	})
+	}))
 	joined := strings.Join(got, "\n")
 	for _, want := range []string{"issue-123", "TEA-27", "Mnemon R2 hub-flow completion drill", "task-123"} {
 		if !strings.Contains(joined, want) {
@@ -96,6 +69,82 @@ func runtimeTestEnv(values ...string) []string {
 		env = append(env, item)
 	}
 	return append(env, values...)
+}
+
+func TestRuntimeHelpDescribesIndependentAdapter(t *testing.T) {
+	for _, args := range [][]string{{"--help"}, {"--probe", "--help"}} {
+		var out bytes.Buffer
+		err := runRuntime(runtimeConfig{
+			Args:   args,
+			CWD:    t.TempDir(),
+			Stdin:  strings.NewReader(""),
+			Stdout: &out,
+		})
+		if err != nil {
+			t.Fatalf("%v help should exit successfully, got %v", args, err)
+		}
+		got := out.String()
+		for _, want := range []string{
+			"external Multica runtime adapter",
+			"Mnemon event system",
+			"stdin/stdout",
+			"structured EventMaterial",
+			"mnemond",
+			"[mnemon:wake]",
+			"projects accepted state back to Multica",
+		} {
+			if !strings.Contains(got, want) {
+				t.Fatalf("%v runtime help missing %q:\n%s", args, want, got)
+			}
+		}
+		for _, blocked := range []string{"mnemon multica", "mnemon-harness multica", "global planner"} {
+			if strings.Contains(got, blocked) {
+				t.Fatalf("%v runtime help leaked forbidden command/role wording %q:\n%s", args, blocked, got)
+			}
+		}
+	}
+}
+
+func TestRuntimeImportUsesStructuredIssueIdentity(t *testing.T) {
+	tmp := t.TempDir()
+	argsPath := filepath.Join(tmp, "multica.args")
+	bin := filepath.Join(tmp, "multica")
+	script := `#!/usr/bin/env sh
+printf '%s\n' "$*" >> "$MULTICA_ARGS_PATH"
+case "$*" in
+  *"issue get iss-structured"*) printf '{"id":"iss-structured","identifier":"TEA-77","title":"Structured issue mention","description":"Use structured Multica input metadata instead of prompt text.","status":"todo","priority":"medium"}\n' ;;
+  *"issue metadata list iss-structured"*) printf '[]\n' ;;
+  *) printf '{}\n' ;;
+esac
+`
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	state := runtimeRPCState{
+		CWD: tmp,
+		Env: runtimeTestEnv(
+			"MNEMON_MULTICA_BIN="+bin,
+			"MULTICA_ARGS_PATH="+argsPath,
+			"MULTICA_TASK_ID=task-structured",
+		),
+		Now: fixedRuntimeTime,
+	}
+
+	result := state.importIssue(multicasurface.RuntimeInput{
+		Text:          "Please use the linked issue, not a copied issue id.",
+		IssueIdentity: "iss-structured",
+	}, nil)
+
+	if result.IssueID != "iss-structured" || result.Identifier != "TEA-77" {
+		t.Fatalf("structured issue import mismatch: %+v", result)
+	}
+	if result.Status != "skipped" {
+		t.Fatalf("runtime without control addr should skip ingest after loading issue, got %+v", result)
+	}
+	args := mustReadRuntimeTestFile(t, argsPath)
+	if !strings.Contains(args, "issue get iss-structured --output json") {
+		t.Fatalf("structured issue identity was not used for issue get:\n%s", args)
+	}
 }
 
 func TestRuntimeImportsAssignedIssueIntoMnemon(t *testing.T) {
@@ -261,7 +310,15 @@ esac
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Mnemon update: issue admitted", "Principal: planner@team", "Managed wake: completed", "mnemon:event=multica-task-task-1"} {
+	for _, want := range []string{
+		"Mnemon update: issue admitted",
+		"## Mnemon Runtime",
+		"Issue: [TEA-7](mention://issue/iss-7)",
+		"Principal: `planner@team`",
+		"Managed wake: `completed`",
+		"mnemon:event=multica-task-task-1",
+		"mnemon:type=teamwork_signal.write_candidate.observed",
+	} {
 		if !strings.Contains(string(comment), want) {
 			t.Fatalf("comment missing %s:\n%s", want, comment)
 		}
@@ -315,7 +372,7 @@ esac
 				if strings.Contains(text, "Loading Multica issue iss-7") && phase == "commentary" {
 					sawCommentaryProgress = true
 				}
-				if strings.Contains(text, "Mnemon ingest: recorded seq=17") && phase == "final_answer" {
+				if strings.Contains(text, "Mnemon ingest: recorded") && phase == "final_answer" {
 					sawFinalPhaseAnswer = true
 				}
 			}
@@ -334,7 +391,7 @@ esac
 				progressItemIDs[itemID] = true
 			}
 		}
-		if msg["method"] == "item/agentMessage/delta" && strings.Contains(line, "Mnemon ingest: recorded seq=17") && strings.Contains(line, "Multica projection: comment=comment-1") && strings.Contains(line, "Managed wake: completed turn=noop-turn") {
+		if msg["method"] == "item/agentMessage/delta" && strings.Contains(line, "Mnemon ingest: recorded") && strings.Contains(line, "Multica projection: comment posted") && strings.Contains(line, "Managed wake: completed") {
 			sawAnswer = true
 			params, _ := msg["params"].(map[string]any)
 			answerItemID, _ = params["itemId"].(string)
@@ -395,7 +452,7 @@ func TestRuntimeForwardsManagedCodexTraceItemsOnOuterTurn(t *testing.T) {
 		"phase": "commentary",
 	}
 	for _, event := range []driver.ManagedTurnTraceEvent{traceStarted, traceDelta, traceCompleted} {
-		if err := emitRuntimeManagedTraceEvent(emit, "outer-thread", "outer-turn", event, fixedRuntimeTime()); err != nil {
+		if err := emitRuntimeMessages(emit, multicasurface.RuntimeManagedTraceMessages("outer-thread", "outer-turn", event, fixedRuntimeTime())); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -510,13 +567,126 @@ esac
 		}
 	}
 	comment := mustReadRuntimeTestFile(t, commentPath)
-	for _, want := range []string{"Mnemon update: issue admitted", "Hub backend: multica", "Session: multica:session:root-1"} {
+	for _, want := range []string{
+		"Mnemon update: issue admitted",
+		"## Mnemon Runtime",
+		"Issue: [TEA-1](mention://issue/root-1)",
+		"mnemon:type=teamwork_signal.write_candidate.observed",
+		"mnemon:session=multica:session:root-1",
+	} {
 		if !strings.Contains(comment, want) {
 			t.Fatalf("comment missing %q:\n%s", want, comment)
 		}
 	}
-	if !strings.Contains(out.String(), "Mnemon ingest: recorded seq=21") {
+	for _, blocked := range []string{"Hub backend:", "Session: `multica:session:root-1`"} {
+		if strings.Contains(comment, blocked) {
+			t.Fatalf("runtime comment must not expose machine field %q:\n%s", blocked, comment)
+		}
+	}
+	if !strings.Contains(out.String(), "Mnemon ingest: recorded") {
 		t.Fatalf("runtime output missing ingest evidence:\n%s", out.String())
+	}
+}
+
+func TestRuntimeContinuesWhenRootSessionMetadataWriteFails(t *testing.T) {
+	tmp := t.TempDir()
+	argsPath := filepath.Join(tmp, "multica.args")
+	commentPath := filepath.Join(tmp, "comment.txt")
+	bin := filepath.Join(tmp, "multica")
+	script := `#!/usr/bin/env sh
+printf '%s\n' "$*" >> "$MULTICA_ARGS_PATH"
+case "$*" in
+  *"issue get TEA-9"*) printf '{"id":"iss-9","identifier":"TEA-9","title":"Metadata retry tolerance","description":"Admit the teamwork issue even when Multica metadata projection is temporarily unavailable.","status":"todo","priority":"medium"}\n' ;;
+  *"issue metadata set iss-9"*) printf 'metadata timeout\n' >&2; exit 42 ;;
+  *"issue comment add iss-9"*) cat > "$MULTICA_COMMENT_PATH"; printf '{"id":"comment-9","issue_id":"iss-9","content":"ok","type":"comment"}\n' ;;
+  *) printf '{}\n' ;;
+esac
+`
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var gotPrincipal string
+	var got contract.ObservationEnvelope
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/ingest":
+			gotPrincipal = r.Header.Get(access.PrincipalHeader)
+			if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+				t.Fatal(err)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(access.IngestReceipt{Seq: 29, Dup: false, Ticked: true})
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	input := `{"jsonrpc":"2.0","id":3,"method":"turn/start","params":{"input":[{"type":"text","text":"Please coordinate @TEA-9."}]}}` + "\n"
+	var out bytes.Buffer
+	err := runRuntime(runtimeConfig{
+		Args: []string{"app-server", "--listen", "stdio://"},
+		Env: runtimeTestEnv(
+			"MNEMON_MULTICA_BIN="+bin,
+			"MNEMON_HUB_BACKEND=multica",
+			"MNEMON_MULTICA_HUB_WRITE=off",
+			"MNEMON_CONTROL_ADDR="+srv.URL,
+			"MNEMON_CONTROL_PRINCIPAL=planner@team",
+			"MULTICA_ARGS_PATH="+argsPath,
+			"MULTICA_COMMENT_PATH="+commentPath,
+			"MULTICA_TASK_ID=task-9",
+			"MULTICA_AGENT_ID=agent-planner",
+		),
+		CWD:    tmp,
+		Stdin:  strings.NewReader(input),
+		Stdout: &out,
+		Now:    fixedRuntimeTime,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPrincipal != "planner@team" {
+		t.Fatalf("principal header = %q", gotPrincipal)
+	}
+	if got.Event.Type != "teamwork_signal.write_candidate.observed" {
+		t.Fatalf("event type = %q", got.Event.Type)
+	}
+	rule := got.Event.Payload["rule"].(map[string]any)
+	if rule["root_issue_id"] != "iss-9" || rule["session_id"] != driver.MulticaSessionID("iss-9") {
+		t.Fatalf("root hub rule mismatch after metadata failure: %+v", rule)
+	}
+	output := out.String()
+	for _, want := range []string{
+		"Root session metadata write failed; continuing with Mnemon ingest from issue context.",
+		"Mnemon ingest: recorded",
+		"Multica projection: comment posted",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("runtime output missing %q:\n%s", want, output)
+		}
+	}
+	if strings.Contains(output, "Mnemon ingest: failed") || strings.Contains(output, "Multica updates: failed") {
+		t.Fatalf("metadata projection failure polluted protocol result:\n%s", output)
+	}
+	comment := mustReadRuntimeTestFile(t, commentPath)
+	for _, want := range []string{
+		"Mnemon update: issue admitted",
+		"Mnemond ingest: seq=29",
+		"## Mnemon Runtime",
+		"mnemon:type=teamwork_signal.write_candidate.observed",
+		"mnemon:session=multica:session:iss-9",
+	} {
+		if !strings.Contains(comment, want) {
+			t.Fatalf("comment missing %q:\n%s", want, comment)
+		}
+	}
+	if strings.Contains(comment, "Hub backend:") {
+		t.Fatalf("runtime comment must not expose hub backend routing details:\n%s", comment)
+	}
+	args := mustReadRuntimeTestFile(t, argsPath)
+	if !strings.Contains(args, "issue metadata set iss-9 --key mnemon.hub_backend") || !strings.Contains(args, "issue comment add iss-9 --content-stdin --output json") {
+		t.Fatalf("runtime should attempt metadata projection then continue to comment projection:\n%s", args)
 	}
 }
 
@@ -524,6 +694,7 @@ func TestRuntimeWritesAssignmentMailboxChildIssueFromView(t *testing.T) {
 	tmp := t.TempDir()
 	argsPath := filepath.Join(tmp, "multica.args")
 	commentPath := filepath.Join(tmp, "comment.txt")
+	childCommentPath := filepath.Join(tmp, "child-comment.txt")
 	createDescriptionPath := filepath.Join(tmp, "child-description.txt")
 	bin := filepath.Join(tmp, "multica")
 	script := `#!/usr/bin/env sh
@@ -535,6 +706,8 @@ case "$*" in
   *"issue create"*) cat > "$MULTICA_CREATE_DESCRIPTION_PATH"; printf '{"id":"child-2","identifier":"TEA-11","title":"Mnemon assignment asg-writer","status":"todo","metadata":{}}\n' ;;
   *"issue metadata set child-2"*) printf '{}\n' ;;
   *"issue comment add root-2"*) cat > "$MULTICA_COMMENT_PATH"; printf '{"id":"comment-root-2","issue_id":"root-2","content":"ok","type":"comment"}\n' ;;
+  *"issue comment add child-2"*) cat > "$MULTICA_CHILD_COMMENT_PATH"; printf '{"id":"comment-child-2","issue_id":"child-2","content":"ok","type":"comment"}\n' ;;
+  *"issue status child-2"*) printf '{"id":"child-2","status":"in_progress"}\n' ;;
   *) printf '{}\n' ;;
 esac
 `
@@ -554,7 +727,6 @@ esac
 	}); err != nil {
 		t.Fatal(err)
 	}
-
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/ingest":
@@ -606,6 +778,46 @@ esac
 							"context_refs":  []any{"multica:issue:root-2"},
 							"evidence_refs": []any{"multica:issue:root-2"},
 						},
+					}, map[string]any{
+						"id":         "asg-cross-session",
+						"ingest_seq": float64(34),
+						"actor":      "planner@team",
+						"rule": map[string]any{
+							"assignment_id": "asg-cross-session",
+							"assignee":      "worker@team",
+							"scope":         "other session child routing",
+							"ttl":           "30m",
+						},
+						"narrative": map[string]any{
+							"expected_work":     "cross-session assignment from a different Multica root",
+							"expected_feedback": "progress_digest with result or blocker",
+						},
+						"refs": map[string]any{
+							"context_refs": []any{"multica:issue:root-other"},
+						},
+					}}},
+				}, {
+					Ref: contract.ResourceRef{Kind: "progress_digest", ID: "project"},
+					Fields: map[string]any{"items": []any{map[string]any{
+						"id":             "pg-writer",
+						"event_id":       "pg-writer",
+						"ingest_seq":     float64(33),
+						"actor":          "worker@team",
+						"assignment_ref": "asg-writer",
+						"feedback_kind":  "progress",
+						"summary":        "Checked release notes against the public changelog.",
+						"artifact_refs":  []any{"multica:issue:root-2"},
+					}, map[string]any{
+						"id":             "pg-cross-session",
+						"event_id":       "pg-cross-session",
+						"ingest_seq":     float64(35),
+						"actor":          "worker@team",
+						"assignment_ref": "asg-writer",
+						"feedback_kind":  "progress",
+						"summary":        "Cross-session progress must not attach to the current child.",
+						"refs": map[string]any{
+							"evidence_refs": []any{"multica:issue:root-other"},
+						},
 					}}},
 				}},
 			})
@@ -628,6 +840,7 @@ esac
 			"MNEMON_MULTICA_HUB_LEDGER="+filepath.Join(tmp, "hub-ledger.jsonl"),
 			"MULTICA_ARGS_PATH="+argsPath,
 			"MULTICA_COMMENT_PATH="+commentPath,
+			"MULTICA_CHILD_COMMENT_PATH="+childCommentPath,
 			"MULTICA_CREATE_DESCRIPTION_PATH="+createDescriptionPath,
 			"MULTICA_TASK_ID=task-root-2",
 			"MULTICA_AGENT_ID=agent-planner",
@@ -640,14 +853,16 @@ esac
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "Multica hub write: created child_issues=1") {
+	if !strings.Contains(out.String(), "Multica updates: 1 assignment mailbox and 1 feedback comment synced") {
 		t.Fatalf("runtime output missing hub write evidence:\n%s", out.String())
 	}
 	args := mustReadRuntimeTestFile(t, argsPath)
 	for _, want := range []string{
 		"issue children root-2 --output json",
-		"issue create --title Mnemon assignment asg-writer: check release notes --output json --description-stdin --parent root-2 --status in_progress --priority medium",
+		"issue create --title TEA-10: check release notes --output json --description-stdin --parent root-2 --status in_progress --priority medium",
 		"issue metadata set child-2 --key mnemon.kind --value assignment_mailbox --type string --output json",
+		"issue metadata set child-2 --key mnemon.event_type --value assignment.accepted --type string --output json",
+		"issue metadata set child-2 --key mnemon.event_phase --value accepted --type string --output json",
 		"issue metadata set child-2 --key mnemon.assignment_id --value asg-writer --type string --output json",
 		"issue metadata set child-2 --key mnemon.principal --value worker@team --type string --output json",
 		"issue assign child-2 --to-id agent-worker --output json",
@@ -662,28 +877,652 @@ esac
 	if strings.Contains(args, "asg-stale") {
 		t.Fatalf("stale pre-root assignment must not be projected into current root session:\n%s", args)
 	}
-	createIdx := strings.Index(args, "issue create --title Mnemon assignment asg-writer")
+	if strings.Contains(args, "other session child routing") || strings.Contains(args, "asg-cross-session") {
+		t.Fatalf("cross-session assignment must not be projected into current root session:\n%s", args)
+	}
+	createIdx := strings.Index(args, "issue create --title TEA-10: check release notes")
 	metaIdx := strings.Index(args, "issue metadata set child-2 --key mnemon.kind")
 	assignIdx := strings.Index(args, "issue assign child-2 --to-id agent-worker")
 	if createIdx < 0 || metaIdx < 0 || assignIdx < 0 || !(createIdx < metaIdx && metaIdx < assignIdx) {
 		t.Fatalf("assignment mailbox must be created, tagged, then assigned; args:\n%s", args)
 	}
+	eventTypeIdx := strings.Index(args, "issue metadata set child-2 --key mnemon.event_type")
+	eventPhaseIdx := strings.Index(args, "issue metadata set child-2 --key mnemon.event_phase")
+	if eventTypeIdx < 0 || eventPhaseIdx < 0 || !(eventTypeIdx < assignIdx && eventPhaseIdx < assignIdx) {
+		t.Fatalf("assignment mailbox dispatch metadata must include event type/phase before assignment; args:\n%s", args)
+	}
 	supplementalIdx := strings.Index(args, "issue metadata set child-2 --key mnemon.projection_owner")
 	if supplementalIdx < 0 || !(assignIdx < supplementalIdx) {
 		t.Fatalf("non-dispatch metadata must not block child assignment; args:\n%s", args)
 	}
-	if strings.Contains(args, "issue status child-2 in_progress") {
-		t.Fatalf("assignment mailbox should be created in progress without a separate status call:\n%s", args)
+	childCommentIdx := strings.Index(args, "issue comment add child-2")
+	childStatusIdx := strings.Index(args, "issue status child-2 in_progress")
+	if childCommentIdx < 0 || childStatusIdx < 0 || !(childCommentIdx < childStatusIdx) {
+		t.Fatalf("progress feedback should comment before updating child status; args:\n%s", args)
 	}
 	description := mustReadRuntimeTestFile(t, createDescriptionPath)
-	for _, want := range []string{"Mnemon assignment mailbox", "Expected work: check release notes against the public changelog", "Expected feedback: progress_digest with result or blocker"} {
+	for _, want := range []string{
+		"## Assignment",
+		"check release notes against the public changelog",
+		"Root issue: [TEA-10](mention://issue/root-2) - Coordinate docs release",
+		"Assignee: `worker@team` (mnemon-worker)",
+		"Scope: check release notes",
+		"## Feedback",
+		"Expected feedback: result or blocker",
+		"Progress path: Mnemon runtime progress, result, or blocker feedback",
+	} {
 		if !strings.Contains(description, want) {
 			t.Fatalf("description missing %q:\n%s", want, description)
 		}
 	}
+	for _, blocked := range []string{"mnemon.", "Session:", "Assignment: `asg-writer`", "assignment_ref", "progress_digest"} {
+		if strings.Contains(description, blocked) {
+			t.Fatalf("description must not expose machine field %q:\n%s", blocked, description)
+		}
+	}
 	comment := mustReadRuntimeTestFile(t, commentPath)
-	if !strings.Contains(comment, "Multica hub write: created child_issues=1") {
-		t.Fatalf("root comment missing hub write summary:\n%s", comment)
+	for _, want := range []string{
+		"Projection status: updates synced",
+		"Assignments created: 1",
+		"Feedback comments added: 1",
+	} {
+		if !strings.Contains(comment, want) {
+			t.Fatalf("root comment missing %q:\n%s", want, comment)
+		}
+	}
+	for _, blocked := range []string{"Multica hub write", "child_issues", "feedback_comments"} {
+		if strings.Contains(comment, blocked) {
+			t.Fatalf("root comment must not expose machine field %q:\n%s", blocked, comment)
+		}
+	}
+	childComment := mustReadRuntimeTestFile(t, childCommentPath)
+	if strings.Contains(childComment, "Cross-session progress") {
+		t.Fatalf("cross-session progress must not be projected into current assignment child:\n%s", childComment)
+	}
+	for _, want := range []string{
+		"Mnemon update: assignment feedback",
+		"## Feedback",
+		"Status: progress update",
+		"## Summary",
+		"Checked release notes against the public changelog.",
+		"mnemon:event=pg-writer",
+		"mnemon:type=progress_digest.accepted",
+		"mnemon:session=multica:session:root-2",
+		"mnemon:assignment=asg-writer",
+	} {
+		if !strings.Contains(childComment, want) {
+			t.Fatalf("child comment missing %q:\n%s", want, childComment)
+		}
+	}
+	for _, blocked := range []string{"Assignment: `asg-writer`", "Feedback: `progress`", "assignment_ref"} {
+		if strings.Contains(childComment, blocked) {
+			t.Fatalf("child comment must not expose machine field %q:\n%s", blocked, childComment)
+		}
+	}
+}
+
+func TestRuntimeRoutesDuplicateAssignmentIDProgressByPrincipal(t *testing.T) {
+	tmp := t.TempDir()
+	argsPath := filepath.Join(tmp, "multica.args")
+	rootCommentPath := filepath.Join(tmp, "root-comment.txt")
+	routingCommentPath := filepath.Join(tmp, "routing-comment.txt")
+	metadataCommentPath := filepath.Join(tmp, "metadata-comment.txt")
+	bin := filepath.Join(tmp, "multica")
+	script := `#!/usr/bin/env sh
+printf '%s\n' "$*" >> "$MULTICA_ARGS_PATH"
+case "$*" in
+  *"issue get root-dupe"*) printf '{"id":"root-dupe","identifier":"TEA-30","title":"Duplicate assignment id routing","description":"Validate duplicate assignment ids do not cross-route feedback.","status":"todo","priority":"medium"}\n' ;;
+  *"issue metadata set root-dupe"*) printf '{}\n' ;;
+  *"issue children root-dupe"*) printf '{"children":[]}\n' ;;
+  *"issue create --title TEA-30: child routing isolation"*) printf '{"id":"child-routing","identifier":"TEA-31","title":"TEA-30: child routing isolation","status":"todo","metadata":{}}\n' ;;
+  *"issue create --title TEA-30: root metadata run visibility"*) printf '{"id":"child-metadata","identifier":"TEA-32","title":"TEA-30: root metadata run visibility","status":"todo","metadata":{}}\n' ;;
+  *"issue metadata set child-routing"*) printf '{}\n' ;;
+  *"issue metadata set child-metadata"*) printf '{}\n' ;;
+  *"issue assign child-routing --to-id agent-impl"*) printf '{"id":"child-routing","status":"in_progress"}\n' ;;
+  *"issue assign child-metadata --to-id agent-researcher"*) printf '{"id":"child-metadata","status":"in_progress"}\n' ;;
+  *"issue comment add child-routing"*) cat > "$MULTICA_ROUTING_COMMENT_PATH"; printf '{"id":"comment-routing","issue_id":"child-routing","content":"ok","type":"comment"}\n' ;;
+  *"issue comment add child-metadata"*) cat > "$MULTICA_METADATA_COMMENT_PATH"; printf '{"id":"comment-metadata","issue_id":"child-metadata","content":"ok","type":"comment"}\n' ;;
+  *"issue comment add root-dupe"*) cat > "$MULTICA_ROOT_COMMENT_PATH"; printf '{"id":"comment-root","issue_id":"root-dupe","content":"ok","type":"comment"}\n' ;;
+  *"issue status child-routing"*) printf '{"id":"child-routing","status":"done"}\n' ;;
+  *"issue status child-metadata"*) printf '{"id":"child-metadata","status":"done"}\n' ;;
+  *"issue status root-dupe"*) printf '{"id":"root-dupe","status":"in_review"}\n' ;;
+  *) printf '{}\n' ;;
+esac
+`
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	registryPath := filepath.Join(tmp, "registry.json")
+	if err := driver.SaveMulticaRegistry(registryPath, driver.MulticaRegistry{
+		SchemaVersion: 1,
+		WorkspaceID:   "ws-1",
+		Participants: []driver.MulticaParticipantRecord{
+			{Principal: "implementer@team", AgentName: "mnemon-implementer", AgentID: "agent-impl", Role: "implementer"},
+			{Principal: "researcher@team", AgentName: "mnemon-researcher", AgentID: "agent-researcher", Role: "researcher"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/ingest":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(access.IngestReceipt{Seq: 31, Dup: false, Ticked: true})
+		case "/presentation-view":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(pview.View{
+				Ref:    "view-duplicate-assignment-ids",
+				Digest: "digest-duplicate-assignment-ids",
+				Content: []pview.ResourceContent{{
+					Ref: contract.ResourceRef{Kind: "assignment", ID: "project"},
+					Fields: map[string]any{"items": []any{
+						map[string]any{
+							"id":         "local/planner-team/3",
+							"ingest_seq": float64(32),
+							"actor":      "planner@team",
+							"rule": map[string]any{
+								"assignment_id": "assignment-tea30-root-runtime",
+								"assignee":      "implementer@team",
+								"scope":         "multica-hub-readiness-drill/TEA-30/stage1/child-routing-isolation",
+								"ttl":           "30m",
+							},
+							"narrative": map[string]any{
+								"expected_work":     "Validate child routing isolation.",
+								"expected_feedback": "progress_digest with result or blocker",
+							},
+							"refs": map[string]any{"context_refs": []any{"multica:issue:root-dupe"}},
+						},
+						map[string]any{
+							"id":         "local/planner-team/5",
+							"ingest_seq": float64(33),
+							"actor":      "planner@team",
+							"rule": map[string]any{
+								"assignment_id": "assignment-tea30-root-runtime",
+								"assignee":      "researcher@team",
+								"scope":         "multica-hub-readiness-drill/TEA-30/stage1/root-metadata-run-visibility",
+								"ttl":           "30m",
+							},
+							"narrative": map[string]any{
+								"expected_work":     "Validate root metadata visibility.",
+								"expected_feedback": "progress_digest with result or blocker",
+							},
+							"refs": map[string]any{"context_refs": []any{"multica:issue:root-dupe"}},
+						},
+					}},
+				}, {
+					Ref: contract.ResourceRef{Kind: "progress_digest", ID: "project"},
+					Fields: map[string]any{"items": []any{
+						map[string]any{
+							"id":             "pg-routing",
+							"event_id":       "pg-routing",
+							"ingest_seq":     float64(34),
+							"actor":          "implementer@team",
+							"assignment_ref": "assignment-tea30-root-runtime",
+							"feedback_kind":  "result",
+							"summary":        "Routing slice completed by implementer.",
+							"result":         "Child routing isolation passed.",
+						},
+						map[string]any{
+							"id":             "pg-metadata",
+							"event_id":       "pg-metadata",
+							"ingest_seq":     float64(35),
+							"actor":          "researcher@team",
+							"assignment_ref": "assignment-tea30-root-runtime",
+							"feedback_kind":  "result",
+							"summary":        "Metadata slice completed by researcher.",
+							"result":         "Root metadata visibility passed.",
+						},
+					}},
+				}},
+			})
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	input := `{"jsonrpc":"2.0","id":3,"method":"turn/start","params":{"input":[{"type":"text","text":"Your assigned issue ID is: root-dupe"}]}}` + "\n"
+	var out bytes.Buffer
+	err := runRuntime(runtimeConfig{
+		Args: []string{"app-server", "--listen", "stdio://"},
+		Env: runtimeTestEnv(
+			"MNEMON_MULTICA_BIN="+bin,
+			"MNEMON_HUB_BACKEND=multica",
+			"MNEMON_CONTROL_ADDR="+srv.URL,
+			"MNEMON_CONTROL_PRINCIPAL=planner@team",
+			"MNEMON_MULTICA_REGISTRY="+registryPath,
+			"MNEMON_MULTICA_HUB_LEDGER="+filepath.Join(tmp, "hub-ledger.jsonl"),
+			"MULTICA_ARGS_PATH="+argsPath,
+			"MULTICA_ROOT_COMMENT_PATH="+rootCommentPath,
+			"MULTICA_ROUTING_COMMENT_PATH="+routingCommentPath,
+			"MULTICA_METADATA_COMMENT_PATH="+metadataCommentPath,
+			"MULTICA_TASK_ID=task-root-dupe",
+			"MULTICA_AGENT_ID=agent-planner",
+		),
+		CWD:    tmp,
+		Stdin:  strings.NewReader(input),
+		Stdout: &out,
+		Now:    fixedRuntimeTime,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Multica updates: 2 assignment mailboxes and 2 feedback comments synced") {
+		t.Fatalf("runtime output missing duplicate-id hub write evidence:\n%s", out.String())
+	}
+	args := mustReadRuntimeTestFile(t, argsPath)
+	for _, want := range []string{
+		"issue create --title TEA-30: child routing isolation --output json --description-stdin --parent root-dupe --status in_progress --priority medium",
+		"issue create --title TEA-30: root metadata run visibility --output json --description-stdin --parent root-dupe --status in_progress --priority medium",
+		"issue comment add child-routing --content-stdin --output json",
+		"issue comment add child-metadata --content-stdin --output json",
+	} {
+		if !strings.Contains(args, want) {
+			t.Fatalf("args missing %q:\n%s", want, args)
+		}
+	}
+	routingComment := mustReadRuntimeTestFile(t, routingCommentPath)
+	if !strings.Contains(routingComment, "Routing slice completed by implementer.") || strings.Contains(routingComment, "Metadata slice completed by researcher.") {
+		t.Fatalf("routing child received wrong feedback:\n%s", routingComment)
+	}
+	metadataComment := mustReadRuntimeTestFile(t, metadataCommentPath)
+	if !strings.Contains(metadataComment, "Metadata slice completed by researcher.") || strings.Contains(metadataComment, "Routing slice completed by implementer.") {
+		t.Fatalf("metadata child received wrong feedback:\n%s", metadataComment)
+	}
+}
+
+func TestRuntimeContinuesProjectingAssignmentMailboxesAfterSupplementalMetadataFailure(t *testing.T) {
+	tmp := t.TempDir()
+	argsPath := filepath.Join(tmp, "multica.args")
+	commentPath := filepath.Join(tmp, "comment.txt")
+	createDescriptionPath := filepath.Join(tmp, "child-description.txt")
+	bin := filepath.Join(tmp, "multica")
+	script := `#!/usr/bin/env sh
+printf '%s\n' "$*" >> "$MULTICA_ARGS_PATH"
+case "$*" in
+  *"issue get root-retry"*) printf '{"id":"root-retry","identifier":"TEA-12","title":"Retry child projection","description":"Split retry validation across two assignees.","status":"todo","priority":"medium"}\n' ;;
+  *"issue metadata set root-retry"*) printf '{}\n' ;;
+  *"issue children root-retry"*) printf '{"children":[]}\n' ;;
+  *"issue create --title TEA-12: first slice"*) cat > "$MULTICA_CREATE_DESCRIPTION_PATH"; printf '{"id":"child-one","identifier":"TEA-13","title":"TEA-12: first slice","status":"todo","metadata":{}}\n' ;;
+  *"issue create --title TEA-12: second slice"*) cat > "$MULTICA_CREATE_DESCRIPTION_PATH"; printf '{"id":"child-two","identifier":"TEA-14","title":"TEA-12: second slice","status":"todo","metadata":{}}\n' ;;
+  *"issue metadata set child-one --key mnemon.projection_owner"*) printf 'metadata conflict\n' >&2; exit 42 ;;
+  *"issue metadata set child-one"*) printf '{}\n' ;;
+  *"issue metadata set child-two"*) printf '{}\n' ;;
+  *"issue assign child-one"*) printf '{"id":"child-one","status":"in_progress"}\n' ;;
+  *"issue assign child-two"*) printf '{"id":"child-two","status":"in_progress"}\n' ;;
+  *"issue comment add root-retry"*) cat > "$MULTICA_COMMENT_PATH"; printf '{"id":"comment-root-retry","issue_id":"root-retry","content":"ok","type":"comment"}\n' ;;
+  *) printf '{}\n' ;;
+esac
+`
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	registryPath := filepath.Join(tmp, "registry.json")
+	if err := driver.SaveMulticaRegistry(registryPath, driver.MulticaRegistry{
+		SchemaVersion: 1,
+		WorkspaceID:   "ws-1",
+		Participants: []driver.MulticaParticipantRecord{{
+			Principal: "worker@team",
+			AgentName: "mnemon-worker",
+			AgentID:   "agent-worker",
+			Role:      "implementer",
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/ingest":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(access.IngestReceipt{Seq: 31, Dup: false, Ticked: true})
+		case "/presentation-view":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(pview.View{
+				Ref:    "view-retry-assignments",
+				Digest: "digest-retry-assignments",
+				Content: []pview.ResourceContent{{
+					Ref: contract.ResourceRef{Kind: "assignment", ID: "project"},
+					Fields: map[string]any{"items": []any{
+						map[string]any{
+							"id":         "asg-one",
+							"ingest_seq": float64(32),
+							"actor":      "planner@team",
+							"rule": map[string]any{
+								"assignment_id": "asg-one",
+								"assignee":      "worker@team",
+								"scope":         "first slice",
+								"ttl":           "30m",
+							},
+							"narrative": map[string]any{
+								"expected_work":     "check the first projection slice",
+								"expected_feedback": "progress_digest with result or blocker",
+							},
+							"refs": map[string]any{"context_refs": []any{"multica:issue:root-retry"}},
+						},
+						map[string]any{
+							"id":         "asg-two",
+							"ingest_seq": float64(33),
+							"actor":      "planner@team",
+							"rule": map[string]any{
+								"assignment_id": "asg-two",
+								"assignee":      "worker@team",
+								"scope":         "second slice",
+								"ttl":           "30m",
+							},
+							"narrative": map[string]any{
+								"expected_work":     "check the second projection slice",
+								"expected_feedback": "progress_digest with result or blocker",
+							},
+							"refs": map[string]any{"context_refs": []any{"multica:issue:root-retry"}},
+						},
+					}},
+				}},
+			})
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	input := `{"jsonrpc":"2.0","id":3,"method":"turn/start","params":{"input":[{"type":"text","text":"Your assigned issue ID is: root-retry"}]}}` + "\n"
+	var out bytes.Buffer
+	err := runRuntime(runtimeConfig{
+		Args: []string{"app-server", "--listen", "stdio://"},
+		Env: runtimeTestEnv(
+			"MNEMON_MULTICA_BIN="+bin,
+			"MNEMON_HUB_BACKEND=multica",
+			"MNEMON_CONTROL_ADDR="+srv.URL,
+			"MNEMON_CONTROL_PRINCIPAL=planner@team",
+			"MNEMON_MULTICA_REGISTRY="+registryPath,
+			"MNEMON_MULTICA_HUB_LEDGER="+filepath.Join(tmp, "hub-ledger.jsonl"),
+			"MULTICA_ARGS_PATH="+argsPath,
+			"MULTICA_COMMENT_PATH="+commentPath,
+			"MULTICA_CREATE_DESCRIPTION_PATH="+createDescriptionPath,
+			"MULTICA_TASK_ID=task-root-retry",
+			"MULTICA_AGENT_ID=agent-planner",
+		),
+		CWD:    tmp,
+		Stdin:  strings.NewReader(input),
+		Stdout: &out,
+		Now:    fixedRuntimeTime,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := out.String()
+	if !strings.Contains(output, "Multica updates: failed") {
+		t.Fatalf("runtime should surface the partial metadata failure:\n%s", output)
+	}
+	args := mustReadRuntimeTestFile(t, argsPath)
+	for _, want := range []string{
+		"issue create --title TEA-12: first slice --output json --description-stdin --parent root-retry --status in_progress --priority medium",
+		"issue assign child-one --to-id agent-worker --output json",
+		"issue create --title TEA-12: second slice --output json --description-stdin --parent root-retry --status in_progress --priority medium",
+		"issue assign child-two --to-id agent-worker --output json",
+	} {
+		if !strings.Contains(args, want) {
+			t.Fatalf("args missing %q:\n%s", want, args)
+		}
+	}
+	if got := strings.Count(args, "issue metadata set child-one --key mnemon.projection_owner"); got != 3 {
+		t.Fatalf("supplemental metadata should be retried three times, got %d:\n%s", got, args)
+	}
+}
+
+func TestRuntimeProjectsProgressToExistingAssignmentMailboxFromHubMetadata(t *testing.T) {
+	tmp := t.TempDir()
+	argsPath := filepath.Join(tmp, "multica.args")
+	rootCommentPath := filepath.Join(tmp, "root-comment.txt")
+	childCommentPath := filepath.Join(tmp, "child-comment.txt")
+	bin := filepath.Join(tmp, "multica")
+	script := `#!/usr/bin/env sh
+printf '%s\n' "$*" >> "$MULTICA_ARGS_PATH"
+case "$*" in
+  *"issue get root-existing"*) printf '{"id":"root-existing","identifier":"TEA-20","title":"Existing assignment mailbox","description":"Project progress after runtime restart.","status":"todo","priority":"medium"}\n' ;;
+  *"issue metadata set root-existing"*) printf '{}\n' ;;
+  *"issue children root-existing"*) printf '{"children":[{"id":"child-existing","identifier":"TEA-21","title":"TEA-20: existing mailbox","status":"todo","metadata":{"mnemon.hub_backend":"multica","mnemon.kind":"assignment_mailbox","mnemon.session_id":"multica:session:root-existing","mnemon.assignment_id":"asg-existing","mnemon.principal":"worker@team","mnemon.root_issue_id":"root-existing"}}]}\n' ;;
+  *"issue comment add child-existing"*) cat > "$MULTICA_CHILD_COMMENT_PATH"; printf '{"id":"comment-child-existing","issue_id":"child-existing","content":"ok","type":"comment"}\n' ;;
+  *"issue comment add root-existing"*) cat > "$MULTICA_ROOT_COMMENT_PATH"; printf '{"id":"comment-root-existing","issue_id":"root-existing","content":"ok","type":"comment"}\n' ;;
+  *"issue status child-existing"*) printf '{"id":"child-existing","status":"done"}\n' ;;
+  *"issue status root-existing"*) printf '{"id":"root-existing","status":"done"}\n' ;;
+  *) printf '{}\n' ;;
+esac
+`
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	registryPath := filepath.Join(tmp, "registry.json")
+	if err := driver.SaveMulticaRegistry(registryPath, driver.MulticaRegistry{
+		SchemaVersion: 1,
+		WorkspaceID:   "ws-1",
+		Participants: []driver.MulticaParticipantRecord{{
+			Principal: "worker@team",
+			AgentName: "mnemon-worker",
+			AgentID:   "agent-worker",
+			Role:      "implementer",
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/ingest":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(access.IngestReceipt{Seq: 41, Dup: false, Ticked: true})
+		case "/presentation-view":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(pview.View{
+				Ref:    "view-existing-progress",
+				Digest: "digest-existing-progress",
+				Content: []pview.ResourceContent{{
+					Ref: contract.ResourceRef{Kind: "progress_digest", ID: "project"},
+					Fields: map[string]any{"items": []any{map[string]any{
+						"id":             "pg-existing",
+						"event_id":       "pg-existing",
+						"ingest_seq":     float64(42),
+						"actor":          "worker@team",
+						"assignment_ref": "asg-existing",
+						"feedback_kind":  "result",
+						"summary":        "Validated the existing assignment mailbox after restart.",
+						"result":         "Existing Multica child issue received feedback without a local assignment ledger entry.",
+					}}},
+				}},
+			})
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	input := `{"jsonrpc":"2.0","id":3,"method":"turn/start","params":{"input":[{"type":"text","text":"Your assigned issue ID is: root-existing"}]}}` + "\n"
+	var out bytes.Buffer
+	err := runRuntime(runtimeConfig{
+		Args: []string{"app-server", "--listen", "stdio://"},
+		Env: runtimeTestEnv(
+			"MNEMON_MULTICA_BIN="+bin,
+			"MNEMON_HUB_BACKEND=multica",
+			"MNEMON_CONTROL_ADDR="+srv.URL,
+			"MNEMON_CONTROL_PRINCIPAL=planner@team",
+			"MNEMON_MULTICA_REGISTRY="+registryPath,
+			"MNEMON_MULTICA_HUB_LEDGER="+filepath.Join(tmp, "empty-hub-ledger.jsonl"),
+			"MULTICA_ARGS_PATH="+argsPath,
+			"MULTICA_ROOT_COMMENT_PATH="+rootCommentPath,
+			"MULTICA_CHILD_COMMENT_PATH="+childCommentPath,
+			"MULTICA_TASK_ID=task-root-existing",
+			"MULTICA_AGENT_ID=agent-planner",
+		),
+		CWD:    tmp,
+		Stdin:  strings.NewReader(input),
+		Stdout: &out,
+		Now:    fixedRuntimeTime,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Multica updates: 1 feedback comment posted") {
+		t.Fatalf("runtime output missing recovered feedback projection:\n%s", out.String())
+	}
+	args := mustReadRuntimeTestFile(t, argsPath)
+	if strings.Contains(args, "issue create") || strings.Contains(args, "issue assign child-existing") {
+		t.Fatalf("existing assignment mailbox should be reused, not recreated or reassigned:\n%s", args)
+	}
+	for _, want := range []string{
+		"issue children root-existing --output json",
+		"issue comment add child-existing --content-stdin --output json",
+		"issue status child-existing done --output json",
+		"issue status root-existing done --output json",
+	} {
+		if !strings.Contains(args, want) {
+			t.Fatalf("args missing %q:\n%s", want, args)
+		}
+	}
+	childComment := mustReadRuntimeTestFile(t, childCommentPath)
+	for _, want := range []string{
+		"Mnemon update: assignment feedback",
+		"Status: result",
+		"Existing Multica child issue received feedback without a local assignment ledger entry.",
+		"mnemon:event=pg-existing",
+		"mnemon:type=progress_digest.accepted",
+		"mnemon:session=multica:session:root-existing",
+		"mnemon:assignment=asg-existing",
+	} {
+		if !strings.Contains(childComment, want) {
+			t.Fatalf("child comment missing %q:\n%s", want, childComment)
+		}
+	}
+	rootComment := mustReadRuntimeTestFile(t, rootCommentPath)
+	for _, want := range []string{
+		"Projection status: feedback posted",
+		"Feedback comments added: 1",
+	} {
+		if !strings.Contains(rootComment, want) {
+			t.Fatalf("root comment missing %q:\n%s", want, rootComment)
+		}
+	}
+}
+
+func TestRuntimeRepairsProgressStatusWhenFeedbackLedgerAlreadyExists(t *testing.T) {
+	tmp := t.TempDir()
+	argsPath := filepath.Join(tmp, "multica.args")
+	rootCommentPath := filepath.Join(tmp, "root-comment.txt")
+	bin := filepath.Join(tmp, "multica")
+	script := `#!/usr/bin/env sh
+printf '%s\n' "$*" >> "$MULTICA_ARGS_PATH"
+case "$*" in
+  *"issue get root-existing"*) printf '{"id":"root-existing","identifier":"TEA-20","title":"Existing assignment mailbox","description":"Repair status after restart.","status":"in_review","priority":"medium"}\n' ;;
+  *"issue metadata set root-existing"*) printf '{}\n' ;;
+  *"issue children root-existing"*) printf '{"children":[{"id":"child-existing","identifier":"TEA-21","title":"TEA-20: existing mailbox","status":"in_progress","metadata":{"mnemon.hub_backend":"multica","mnemon.kind":"assignment_mailbox","mnemon.session_id":"multica:session:root-existing","mnemon.assignment_id":"asg-existing","mnemon.principal":"worker@team","mnemon.root_issue_id":"root-existing"}}]}\n' ;;
+  *"issue comment add child-existing"*) printf 'unexpected duplicate child comment\n' >&2; exit 7 ;;
+  *"issue comment add root-existing"*) cat > "$MULTICA_ROOT_COMMENT_PATH"; printf '{"id":"comment-root-existing","issue_id":"root-existing","content":"ok","type":"comment"}\n' ;;
+  *"issue status child-existing"*) printf '{"id":"child-existing","status":"done"}\n' ;;
+  *"issue status root-existing"*) printf '{"id":"root-existing","status":"done"}\n' ;;
+  *) printf '{}\n' ;;
+esac
+`
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ledgerPath := filepath.Join(tmp, "hub-ledger.jsonl")
+	ledger := driver.NewFileMulticaHubLedger(ledgerPath)
+	if err := ledger.Record(driver.MulticaHubLedgerRecord{
+		Kind: driver.MulticaHubKindFeedbackCarrier,
+		Source: driver.MulticaHubLedgerSource{
+			SessionID:      "multica:session:root-existing",
+			CorrelationID:  "multica:issue:root-existing",
+			EventID:        "pg-existing",
+			AssignmentID:   "asg-existing",
+			Principal:      "worker@team",
+			ProjectionKind: "progress",
+		},
+		Target: driver.MulticaHubLedgerTarget{
+			RootIssueID:  "root-existing",
+			ChildIssueID: "child-existing",
+			CommentID:    "comment-already-projected",
+			Status:       "commented",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	registryPath := filepath.Join(tmp, "registry.json")
+	if err := driver.SaveMulticaRegistry(registryPath, driver.MulticaRegistry{
+		SchemaVersion: 1,
+		WorkspaceID:   "ws-1",
+		Participants: []driver.MulticaParticipantRecord{{
+			Principal: "worker@team",
+			AgentName: "mnemon-worker",
+			AgentID:   "agent-worker",
+			Role:      "implementer",
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/ingest":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(access.IngestReceipt{Seq: 41, Dup: false, Ticked: true})
+		case "/presentation-view":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(pview.View{
+				Ref:    "view-existing-progress",
+				Digest: "digest-existing-progress",
+				Content: []pview.ResourceContent{{
+					Ref: contract.ResourceRef{Kind: "progress_digest", ID: "project"},
+					Fields: map[string]any{"items": []any{map[string]any{
+						"id":             "pg-existing",
+						"event_id":       "pg-existing",
+						"ingest_seq":     float64(42),
+						"actor":          "worker@team",
+						"assignment_ref": "asg-existing",
+						"feedback_kind":  "result",
+						"summary":        "Validated the existing assignment mailbox after restart.",
+						"result":         "Existing Multica child issue received feedback without a local assignment ledger entry.",
+					}}},
+				}},
+			})
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	input := `{"jsonrpc":"2.0","id":3,"method":"turn/start","params":{"input":[{"type":"text","text":"Your assigned issue ID is: root-existing"}]}}` + "\n"
+	var out bytes.Buffer
+	err := runRuntime(runtimeConfig{
+		Args: []string{"app-server", "--listen", "stdio://"},
+		Env: runtimeTestEnv(
+			"MNEMON_MULTICA_BIN="+bin,
+			"MNEMON_HUB_BACKEND=multica",
+			"MNEMON_CONTROL_ADDR="+srv.URL,
+			"MNEMON_CONTROL_PRINCIPAL=planner@team",
+			"MNEMON_MULTICA_REGISTRY="+registryPath,
+			"MNEMON_MULTICA_HUB_LEDGER="+ledgerPath,
+			"MULTICA_ARGS_PATH="+argsPath,
+			"MULTICA_ROOT_COMMENT_PATH="+rootCommentPath,
+			"MULTICA_TASK_ID=task-root-existing",
+			"MULTICA_AGENT_ID=agent-planner",
+		),
+		CWD:    tmp,
+		Stdin:  strings.NewReader(input),
+		Stdout: &out,
+		Now:    fixedRuntimeTime,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := mustReadRuntimeTestFile(t, argsPath)
+	if strings.Contains(args, "issue comment add child-existing") {
+		t.Fatalf("existing feedback ledger should suppress duplicate child comment:\n%s", args)
+	}
+	for _, want := range []string{
+		"issue status child-existing done --output json",
+		"issue status root-existing done --output json",
+	} {
+		if !strings.Contains(args, want) {
+			t.Fatalf("args missing status repair %q:\n%s", want, args)
+		}
 	}
 }
 
@@ -695,7 +1534,8 @@ func TestRuntimeCorrelatesAssignmentMailboxWithoutNewIngest(t *testing.T) {
 	script := `#!/usr/bin/env sh
 printf '%s\n' "$*" >> "$MULTICA_ARGS_PATH"
 case "$*" in
-  *"issue get child-1"*) printf '{"id":"child-1","identifier":"TEA-2","title":"Assignment mailbox","description":"Visible assignment summary only.","status":"todo","metadata":{"mnemon.hub_backend":"multica","mnemon.kind":"assignment_mailbox","mnemon.session_id":"multica:session:root-1","mnemon.root_issue_id":"root-1","mnemon.assignment_id":"asg-1","mnemon.assignment_fingerprint":"sha256:abc","mnemon.event_id":"event-assignment-1","mnemon.principal":"worker@team"}}\n' ;;
+  *"issue get child-1"*) printf '{"id":"child-1","identifier":"TEA-2","title":"Assignment mailbox","description":"Visible assignment summary only.","status":"todo","metadata":{}}\n' ;;
+  *"issue metadata list child-1"*) printf '[{"key":"mnemon.hub_backend","value":"multica"},{"key":"mnemon.kind","value":"assignment_mailbox"},{"key":"mnemon.session_id","value":"multica:session:root-1"},{"key":"mnemon.root_issue_id","value":"root-1"},{"key":"mnemon.assignment_id","value":"asg-1"},{"key":"mnemon.assignment_fingerprint","value":"sha256:abc"},{"key":"mnemon.event_id","value":"event-assignment-1"},{"key":"mnemon.event_type","value":"assignment.accepted"},{"key":"mnemon.principal","value":"worker@team"}]\n' ;;
   *"issue comment add child-1"*) cat > "$MULTICA_COMMENT_PATH"; printf '{"id":"comment-child","issue_id":"child-1","content":"ok","type":"comment"}\n' ;;
   *) printf '{}\n' ;;
 esac
@@ -776,18 +1616,31 @@ esac
 	if ingestCalled {
 		t.Fatal("assignment mailbox dispatch must not ingest a new teamwork signal")
 	}
-	if !strings.Contains(out.String(), "Mnemon assignment mailbox: correlated assignment=asg-1") || !strings.Contains(out.String(), "Managed wake: completed turn=noop-turn") {
+	if !strings.Contains(out.String(), "Mnemon assignment mailbox: correlated") || !strings.Contains(out.String(), "Managed wake: completed") {
 		t.Fatalf("runtime output missing correlation/wake evidence:\n%s", out.String())
+	}
+	args := mustReadRuntimeTestFile(t, argsPath)
+	if !strings.Contains(args, "issue metadata list child-1 --output json") {
+		t.Fatalf("assignment mailbox classification must query Multica issue metadata:\n%s", args)
 	}
 	comment := mustReadRuntimeTestFile(t, commentPath)
 	for _, want := range []string{
 		"Mnemon update: assignment mailbox correlated",
-		"Assignment: asg-1",
+		"## Mnemon Runtime",
+		"Root issue: [root-1](mention://issue/root-1)",
 		"mnemon:event=event-assignment-1",
-		"Managed wake: completed",
+		"mnemon:type=assignment.accepted",
+		"mnemon:session=multica:session:root-1",
+		"mnemon:assignment=asg-1",
+		"Managed wake: `completed`",
 	} {
 		if !strings.Contains(comment, want) {
 			t.Fatalf("comment missing %q:\n%s", want, comment)
+		}
+	}
+	for _, blocked := range []string{"Assignment: `asg-1`", "Session: `multica:session:root-1`"} {
+		if strings.Contains(comment, blocked) {
+			t.Fatalf("assignment mailbox comment must not expose machine field %q:\n%s", blocked, comment)
 		}
 	}
 }
@@ -795,17 +1648,20 @@ esac
 func TestMulticaStatusForProgressIsRuleBased(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		item runtimeProgress
+		item multicasurface.RuntimeProgressItem
 		want string
 	}{
-		{name: "progress", item: runtimeProgress{FeedbackKind: "progress"}, want: "in_progress"},
-		{name: "result", item: runtimeProgress{FeedbackKind: "result"}, want: "done"},
-		{name: "blocker", item: runtimeProgress{FeedbackKind: "blocker"}, want: "blocked"},
-		{name: "blocker narrative fallback", item: runtimeProgress{Blocker: "waiting on access"}, want: "blocked"},
-		{name: "result narrative fallback", item: runtimeProgress{Result: "validated"}, want: "done"},
-		{name: "unknown", item: runtimeProgress{Summary: "not enough signal"}, want: ""},
+		{name: "progress", item: multicasurface.RuntimeProgressItem{FeedbackKind: "progress"}, want: "in_progress"},
+		{name: "waiting", item: multicasurface.RuntimeProgressItem{FeedbackKind: "waiting"}, want: "todo"},
+		{name: "review", item: multicasurface.RuntimeProgressItem{FeedbackKind: "review"}, want: "in_review"},
+		{name: "result", item: multicasurface.RuntimeProgressItem{FeedbackKind: "result"}, want: "done"},
+		{name: "blocker", item: multicasurface.RuntimeProgressItem{FeedbackKind: "blocker"}, want: "blocked"},
+		{name: "canceled", item: multicasurface.RuntimeProgressItem{FeedbackKind: "canceled"}, want: "cancelled"},
+		{name: "blocker narrative fallback", item: multicasurface.RuntimeProgressItem{Blocker: "waiting on access"}, want: "blocked"},
+		{name: "result narrative fallback", item: multicasurface.RuntimeProgressItem{Result: "validated"}, want: "done"},
+		{name: "unknown", item: multicasurface.RuntimeProgressItem{Summary: "not enough signal"}, want: ""},
 	} {
-		if got := multicaStatusForProgress(tc.item); got != tc.want {
+		if got := multicasurface.ProgressIssueStatus(multicasurface.ProgressFeedbackMaterialForRuntimeItem(tc.item)); got != tc.want {
 			t.Fatalf("%s: status = %q, want %q", tc.name, got, tc.want)
 		}
 	}

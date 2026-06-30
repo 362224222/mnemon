@@ -116,13 +116,13 @@ func (s *GitHubPublicationStore) ListEvents(ctx context.Context, branch string, 
 	if strings.TrimSpace(cursor) == head {
 		return exchange.PublicationListResult{NextCursor: head}, nil
 	}
-	paths, err := s.listEventPaths(ctx, branch, prefix)
+	paths, err := s.listChangedEventPaths(ctx, head, prefix, cursor)
 	if err != nil {
 		return exchange.PublicationListResult{}, err
 	}
 	events := make([]exchange.PublicationStoredEvent, 0, len(paths))
 	for _, path := range paths {
-		file, found, err := s.readFileWithSHA(ctx, branch, path)
+		file, found, err := s.readFileWithSHA(ctx, head, path)
 		if err != nil {
 			return exchange.PublicationListResult{}, err
 		}
@@ -268,6 +268,13 @@ type githubContentEntry struct {
 	Path string `json:"path"`
 }
 
+type githubCompareResponse struct {
+	Files []struct {
+		Filename string `json:"filename"`
+		Status   string `json:"status"`
+	} `json:"files"`
+}
+
 type githubPutFileRequest struct {
 	Message string `json:"message"`
 	Content string `json:"content"`
@@ -363,6 +370,53 @@ func (s *GitHubPublicationStore) branchHead(ctx context.Context, branch string) 
 		return "", fmt.Errorf("github branch ref %q returned status %d without sha", branch, status)
 	}
 	return strings.TrimSpace(out.Object.SHA), nil
+}
+
+func (s *GitHubPublicationStore) listChangedEventPaths(ctx context.Context, head, prefix, cursor string) ([]string, error) {
+	cursor = strings.TrimSpace(cursor)
+	if cursor != "" {
+		paths, ok, err := s.compareEventPaths(ctx, cursor, head, prefix)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			return paths, nil
+		}
+	}
+	return s.listEventPaths(ctx, head, prefix)
+}
+
+func (s *GitHubPublicationStore) compareEventPaths(ctx context.Context, base, head, prefix string) ([]string, bool, error) {
+	if strings.TrimSpace(base) == "" || strings.TrimSpace(head) == "" || base == head {
+		return nil, true, nil
+	}
+	var out githubCompareResponse
+	status, err := s.do(ctx, http.MethodGet, "/repos/"+s.owner+"/"+s.repo+"/compare/"+escapeGitHubPath(base)+"..."+escapeGitHubPath(head), nil, nil, &out)
+	if err != nil {
+		if apiErr, ok := err.(*githubAPIError); ok && (apiErr.Status == http.StatusNotFound || apiErr.Status == http.StatusUnprocessableEntity) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	if status != http.StatusOK {
+		return nil, false, fmt.Errorf("github compare returned status %d", status)
+	}
+	seen := map[string]bool{}
+	var paths []string
+	for _, file := range out.Files {
+		path := strings.TrimSpace(file.Filename)
+		if path == "" || !strings.HasPrefix(path, prefix) || seen[path] {
+			continue
+		}
+		switch strings.TrimSpace(file.Status) {
+		case "removed", "deleted":
+			continue
+		}
+		seen[path] = true
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	return paths, true, nil
 }
 
 func (s *GitHubPublicationStore) listEventPaths(ctx context.Context, branch, prefix string) ([]string, error) {
