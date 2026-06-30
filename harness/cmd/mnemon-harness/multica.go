@@ -716,7 +716,6 @@ func multicaParticipantRuntimeEnv(cli driver.MulticaCLI, participant driver.Mult
 		controlTokenFile = defaultMulticaParticipantControlTokenFile(managedWorkspace, participant.Principal)
 	}
 	controlTokenFile = multicaLocalEnvPath(controlTokenFile)
-	addStringEnv(env, "MNEMON_HUB_BACKEND", driver.MulticaHubBackend)
 	addStringEnv(env, "MNEMON_MULTICA_REGISTRY", registryPath)
 	addStringEnv(env, "MNEMON_MULTICA_WORKSPACE_ID", workspaceID)
 	addStringEnv(env, "MNEMON_MULTICA_BIN", multicaCLICommand(cli))

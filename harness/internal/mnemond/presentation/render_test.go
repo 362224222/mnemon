@@ -100,9 +100,9 @@ func TestMulticaTeamworkSignalPresentationKeepsHandoffInMnemonProtocol(t *testin
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		"For Multica-backed teamwork",
+		"For Multica-hosted teamwork",
 		"Mnemon assignment events",
-		"runtime projects Multica assignment mailboxes",
+		"not canonical assignment mailboxes",
 	} {
 		if !strings.Contains(resp.Body, want) {
 			t.Fatalf("Multica teamwork cue missing %q:\n%s", want, resp.Body)
@@ -114,7 +114,7 @@ func TestMulticaTeamworkSignalPresentationKeepsHandoffInMnemonProtocol(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(plain.Body, "Multica-backed teamwork") {
+	if strings.Contains(plain.Body, "Multica-hosted teamwork") {
 		t.Fatalf("non-Multica cue should stay host-neutral:\n%s", plain.Body)
 	}
 }

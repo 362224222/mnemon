@@ -156,7 +156,6 @@ esac
 	}
 	for _, want := range []string{
 		`"MNEMON_CONTROL_PRINCIPAL":"reviewer@team"`,
-		`"MNEMON_HUB_BACKEND":"multica"`,
 		`"MNEMON_MULTICA_REGISTRY":"` + registryPath + `"`,
 		`"MNEMON_MANAGED_RUNTIME":"codex-appserver"`,
 		`"MNEMON_MANAGED_COMMAND":"codex"`,
@@ -164,6 +163,9 @@ esac
 		if !strings.Contains(string(envStdin), want) {
 			t.Fatalf("agent env stdin missing %s:\n%s", want, envStdin)
 		}
+	}
+	if strings.Contains(string(envStdin), "MNEMON_HUB_BACKEND") {
+		t.Fatalf("R3 runtime env must not configure Multica as hub backend:\n%s", envStdin)
 	}
 	argsLog, err := os.ReadFile(argsPath)
 	if err != nil {
@@ -268,7 +270,6 @@ esac
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		`"MNEMON_HUB_BACKEND":"multica"`,
 		`"MNEMON_MULTICA_REGISTRY":"` + registryPath + `"`,
 		`"MNEMON_MULTICA_WORKSPACE_ID":"ws-1"`,
 		`"MNEMON_CONTROL_ADDR":"http://127.0.0.1:8787"`,
@@ -282,6 +283,9 @@ esac
 		if !strings.Contains(string(envStdin), want) {
 			t.Fatalf("agent env stdin missing %s:\n%s", want, envStdin)
 		}
+	}
+	if strings.Contains(string(envStdin), "MNEMON_HUB_BACKEND") {
+		t.Fatalf("R3 provision env must not configure Multica as hub backend:\n%s", envStdin)
 	}
 }
 
@@ -306,14 +310,13 @@ func TestMergeMulticaParticipantRuntimeEnvPrunesStaleManagedKeys(t *testing.T) {
 		"MNEMON_HUB_BACKEND":        "old",
 		"CUSTOM_USER_ENV":           "keep",
 	}, map[string]string{
-		"MNEMON_HUB_BACKEND":          "multica",
 		"MNEMON_CONTROL_ADDR":         "http://127.0.0.1:8791",
 		"MNEMON_CONTROL_PRINCIPAL":    "planner@team",
 		"MNEMON_MANAGED_WORKSPACE":    "/workspace",
 		"MNEMON_MULTICA_REGISTRY":     "/registry.json",
 		"MNEMON_MULTICA_WORKSPACE_ID": "ws-1",
 	})
-	for _, stale := range []string{"MNEMON_CONTROL_TOKEN", "MNEMON_CONTROL_TOKEN_FILE", "MNEMON_MANAGED_RUNTIME"} {
+	for _, stale := range []string{"MNEMON_CONTROL_TOKEN", "MNEMON_CONTROL_TOKEN_FILE", "MNEMON_MANAGED_RUNTIME", "MNEMON_HUB_BACKEND"} {
 		if _, ok := merged[stale]; ok {
 			t.Fatalf("stale managed key %s should be pruned: %+v", stale, merged)
 		}
@@ -321,7 +324,7 @@ func TestMergeMulticaParticipantRuntimeEnvPrunesStaleManagedKeys(t *testing.T) {
 	if merged["CUSTOM_USER_ENV"] != "keep" {
 		t.Fatalf("unmanaged env should be preserved: %+v", merged)
 	}
-	if merged["MNEMON_HUB_BACKEND"] != "multica" || merged["MNEMON_CONTROL_PRINCIPAL"] != "planner@team" {
+	if merged["MNEMON_CONTROL_PRINCIPAL"] != "planner@team" {
 		t.Fatalf("desired managed env not applied: %+v", merged)
 	}
 }
