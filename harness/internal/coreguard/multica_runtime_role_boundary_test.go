@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-var multicaRuntimeProjectionForbiddenImports = []string{
+var multicaRuntimeSurfaceForbiddenImports = []string{
 	"harness/internal/app",
 	"harness/internal/hostagent",
 	"harness/internal/mnemond/admission",
@@ -37,7 +37,7 @@ func TestMulticaRuntimeDoesNotOwnManagedWakeOrDisplayWriteback(t *testing.T) {
 		}
 		for _, imp := range file.Imports {
 			importPath := strings.Trim(imp.Path.Value, `"`)
-			if roleImportForbidden(importPath, multicaRuntimeProjectionForbiddenImports) {
+			if roleImportForbidden(importPath, multicaRuntimeSurfaceForbiddenImports) {
 				t.Errorf("Multica runtime imports forbidden package %q; runtime may import surface input and call mnemond access, but must not own product config, state, runtime core, or hub exchange", importPath)
 			}
 		}
@@ -63,10 +63,10 @@ func TestMulticaRuntimeDoesNotOwnManagedWakeOrDisplayWriteback(t *testing.T) {
 }
 
 func TestMulticaRuntimeRoleBoundaryGuardLogicIsNotVacuous(t *testing.T) {
-	if !roleImportForbidden("github.com/mnemon-dev/mnemon/harness/internal/mnemonhub", multicaRuntimeProjectionForbiddenImports) {
-		t.Fatal("Multica projection writer guard must flag mnemonhub imports")
+	if !roleImportForbidden("github.com/mnemon-dev/mnemon/harness/internal/mnemonhub", multicaRuntimeSurfaceForbiddenImports) {
+		t.Fatal("Multica surface adapter guard must flag mnemonhub imports")
 	}
-	if roleImportForbidden("github.com/mnemon-dev/mnemon/harness/internal/mnemond/access", multicaRuntimeProjectionForbiddenImports) {
+	if roleImportForbidden("github.com/mnemon-dev/mnemon/harness/internal/mnemond/access", multicaRuntimeSurfaceForbiddenImports) {
 		t.Fatal("Multica runtime guard must allow mnemond access")
 	}
 	if selectorName(&ast.SelectorExpr{Sel: ast.NewIdent("ManagedAgentDriver")}) != "ManagedAgentDriver" {
