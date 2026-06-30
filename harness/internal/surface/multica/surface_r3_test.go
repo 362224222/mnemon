@@ -46,7 +46,7 @@ func TestBuildDisplayWritebackPlanIsDisplaySafe(t *testing.T) {
 		Refs: SurfaceRefs{
 			EventRef:          "event-progress-1",
 			ResourceRef:       "progress_digest/prog-1",
-			ProjectionRef:     "projection-1",
+			SurfaceRef:        "surface-1",
 			SourceArtifactRef: "multica.comment:comment-1",
 		},
 		Title:              "进展",
@@ -155,33 +155,33 @@ func TestClassifyHumanInteractionKeepsCanonicalBoundary(t *testing.T) {
 	}
 }
 
-func TestProjectionLedgerDedupesByEventRoleAndTarget(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "projection-ledger.jsonl")
-	ledger := NewFileProjectionLedger(path)
-	record := ProjectionLedgerRecord{
-		EventRef:      "event-1",
-		ResourceRef:   "progress_digest/prog-1",
-		ProjectionRef: "projection-1",
-		SurfaceRole:   SurfaceRoleDisplay,
-		TargetKind:    "comment",
-		TargetID:      "comment-1",
-		Status:        "reserved",
+func TestSurfaceWriteLedgerDedupesByEventRoleAndTarget(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "surface-write-ledger.jsonl")
+	ledger := NewFileSurfaceWriteLedger(path)
+	record := SurfaceWriteLedgerRecord{
+		EventRef:    "event-1",
+		ResourceRef: "progress_digest/prog-1",
+		SurfaceRef:  "surface-1",
+		SurfaceRole: SurfaceRoleDisplay,
+		TargetKind:  "comment",
+		TargetID:    "comment-1",
+		Status:      "reserved",
 	}
 	if _, ok, err := ledger.Reserve(record); err != nil || !ok {
 		t.Fatalf("reserve failed ok=%v err=%v", ok, err)
 	}
-	if _, ok, err := NewFileProjectionLedger(path).Reserve(record); err != nil || ok {
+	if _, ok, err := NewFileSurfaceWriteLedger(path).Reserve(record); err != nil || ok {
 		t.Fatalf("duplicate reserve ok=%v err=%v", ok, err)
 	}
 	record.Status = "written"
-	if err := NewFileProjectionLedger(path).Record(record); err != nil {
+	if err := NewFileSurfaceWriteLedger(path).Record(record); err != nil {
 		t.Fatal(err)
 	}
-	found, ok, err := NewFileProjectionLedger(path).Find("event-1", SurfaceRoleDisplay, ProjectionLedgerTarget{Kind: "comment", ID: "comment-1"})
+	found, ok, err := NewFileSurfaceWriteLedger(path).Find("event-1", SurfaceRoleDisplay, SurfaceWriteLedgerTarget{Kind: "comment", ID: "comment-1"})
 	if err != nil || !ok {
 		t.Fatalf("find failed ok=%v err=%v", ok, err)
 	}
-	if found.Status != "written" || found.ProjectionRef != "projection-1" {
+	if found.Status != "written" || found.SurfaceRef != "surface-1" {
 		t.Fatalf("ledger record mismatch: %+v", found)
 	}
 }

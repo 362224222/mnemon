@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"runtime"
 	"strings"
 	"time"
@@ -69,6 +70,17 @@ type runtimeImportResult struct {
 	TaskID     string
 	Status     string
 	Receipt    *access.IngestReceipt
+	Err        error
+}
+
+type providerTurnResult struct {
+	Configured bool
+	Runtime    string
+	Command    string
+	CWD        string
+	Output     string
+	ExitCode   int
+	DurationMs int64
 	Err        error
 }
 
@@ -280,6 +292,13 @@ func (s *runtimeRPCState) nextItemID(prefix string) string {
 
 func (s *runtimeRPCState) runTurn(input multicasurface.RuntimeInput, progress runtimeProgressSink) string {
 	result := s.importIssue(input, progress)
+	provider := s.runProviderTurn(input, result, progress)
+	if provider.Configured {
+		if strings.TrimSpace(provider.Output) != "" && provider.Err == nil {
+			return strings.TrimSpace(provider.Output)
+		}
+		return formatProviderFailureAnswer(provider, result)
+	}
 	return multicasurface.FormatRuntimeFinalAnswer(runtimeResultSummary(result))
 }
 
@@ -382,6 +401,97 @@ func (s *runtimeRPCState) importIssue(input multicasurface.RuntimeInput, progres
 	emitRuntimeProgress(progress, fmt.Sprintf("Mnemon recorded the issue observation at seq=%d.", rec.Seq))
 	emitRuntimeProgress(progress, "Multica surface input was imported; accepted-state writeback is handled only by explicit Mnemon report commands.")
 	return result
+}
+
+func (s *runtimeRPCState) runProviderTurn(input multicasurface.RuntimeInput, imported runtimeImportResult, progress runtimeProgressSink) providerTurnResult {
+	command := multicasurface.RuntimeEnvValue(s.Env, "MNEMON_MULTICA_PROVIDER_COMMAND")
+	if command == "" {
+		return providerTurnResult{}
+	}
+	provider := multicasurface.RuntimeEnvDefault(s.Env, "MNEMON_MULTICA_PROVIDER_RUNTIME", "provider")
+	cwd := multicasurface.RuntimeEnvDefault(s.Env, "MNEMON_MULTICA_PROVIDER_WORKSPACE", s.CWD)
+	prompt := providerPrompt(input, imported)
+	timeout := multicasurface.RuntimeProviderTurnTimeout(s.Env)
+	result := providerTurnResult{
+		Configured: true,
+		Runtime:    provider,
+		Command:    command,
+		CWD:        cwd,
+	}
+	emitRuntimeProgress(progress, "Starting Multica-hosted provider turn through "+provider+".")
+	started := s.now()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", command)
+	cmd.Dir = cwd
+	cmd.Env = append([]string(nil), s.Env...)
+	cmd.Stdin = strings.NewReader(prompt)
+	out, err := cmd.CombinedOutput()
+	result.DurationMs = s.now().Sub(started).Milliseconds()
+	result.Output = strings.TrimSpace(string(out))
+	if err != nil {
+		result.Err = err
+		result.ExitCode = runtimeExitCode(err)
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			result.ExitCode = exitErr.ExitCode()
+		}
+		if ctx.Err() == context.DeadlineExceeded {
+			result.Err = fmt.Errorf("provider turn timed out after %s", timeout)
+		}
+		emitRuntimeCommandCWD(progress, command, cwd, result.Output, result.ExitCode, result.DurationMs)
+		emitRuntimeProgress(progress, "Provider turn failed; Mnemon surface import remains separate from provider execution.")
+		return result
+	}
+	result.ExitCode = 0
+	emitRuntimeCommandCWD(progress, command, cwd, result.Output, result.ExitCode, result.DurationMs)
+	emitRuntimeProgress(progress, "Provider turn completed; Mnemon did not rewrite provider output.")
+	return result
+}
+
+func providerPrompt(input multicasurface.RuntimeInput, imported runtimeImportResult) string {
+	if text := strings.TrimSpace(input.Text); text != "" {
+		return text + "\n"
+	}
+	var b strings.Builder
+	label := firstNonEmpty(imported.Identifier, imported.IssueID)
+	if label != "" || strings.TrimSpace(imported.Title) != "" {
+		b.WriteString("Multica issue")
+		if label != "" {
+			b.WriteByte(' ')
+			b.WriteString(label)
+		}
+		if strings.TrimSpace(imported.Title) != "" {
+			b.WriteString(": ")
+			b.WriteString(strings.TrimSpace(imported.Title))
+		}
+		b.WriteString("\n\n")
+	}
+	if strings.TrimSpace(imported.Statement) != "" {
+		b.WriteString(strings.TrimSpace(imported.Statement))
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+func formatProviderFailureAnswer(provider providerTurnResult, imported runtimeImportResult) string {
+	var b strings.Builder
+	b.WriteString("Provider turn failed")
+	if provider.Runtime != "" {
+		b.WriteString(" (")
+		b.WriteString(provider.Runtime)
+		b.WriteString(")")
+	}
+	if provider.Err != nil {
+		b.WriteString(": ")
+		b.WriteString(provider.Err.Error())
+	}
+	if strings.TrimSpace(provider.Output) != "" {
+		b.WriteString("\n\n")
+		b.WriteString(strings.TrimSpace(provider.Output))
+	}
+	b.WriteString("\n\n")
+	b.WriteString(multicasurface.FormatRuntimeFinalAnswer(runtimeResultSummary(imported)))
+	return strings.TrimSpace(b.String())
 }
 
 func loadRuntimeIssueMetadata(ctx context.Context, cli driver.MulticaCLI, issue driver.MulticaIssue, progress runtimeProgressSink) driver.MulticaIssue {
@@ -553,6 +663,12 @@ func emitRuntimeProgress(progress runtimeProgressSink, text string) {
 func emitRuntimeCommand(progress runtimeProgressSink, command, output string, exitCode int) {
 	if progress != nil {
 		progress(runtimeProgressEvent{Command: command, Output: output, ExitCode: exitCode})
+	}
+}
+
+func emitRuntimeCommandCWD(progress runtimeProgressSink, command, cwd, output string, exitCode int, durationMs int64) {
+	if progress != nil {
+		progress(runtimeProgressEvent{Command: command, CWD: cwd, Output: output, ExitCode: exitCode, DurationMs: durationMs})
 	}
 }
 

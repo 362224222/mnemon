@@ -30,7 +30,6 @@ var (
 	acceptanceMulticaWait               time.Duration
 	acceptanceMulticaPoll               time.Duration
 	acceptanceMulticaRequireIngest      bool
-	acceptanceMulticaRequireManagedWake bool
 	acceptanceMulticaRequireSurfaceFlow bool
 	acceptanceMulticaMinParticipants    int
 	acceptanceMulticaMinActiveAgents    int
@@ -54,7 +53,6 @@ var acceptanceMulticaRuntimeCmd = &cobra.Command{
 			Wait:               acceptanceMulticaWait,
 			Poll:               acceptanceMulticaPoll,
 			RequireIngest:      acceptanceMulticaRequireIngest,
-			RequireManagedWake: acceptanceMulticaRequireManagedWake,
 			RequireSurfaceFlow: acceptanceMulticaRequireSurfaceFlow,
 			MinParticipants:    acceptanceMulticaMinParticipants,
 			MinActiveAgents:    acceptanceMulticaMinActiveAgents,
@@ -82,13 +80,12 @@ func init() {
 	acceptanceMulticaRuntimeCmd.Flags().StringVar(&acceptanceMulticaWorkspaceID, "multica-workspace-id", multicaAcceptanceEnvDefault("MNEMON_MULTICA_WORKSPACE_ID", ""), "Multica workspace ID")
 	acceptanceMulticaRuntimeCmd.Flags().StringVar(&acceptanceMulticaRegistry, "registry", "", "Multica participant registry path")
 	acceptanceMulticaRuntimeCmd.Flags().StringVar(&acceptanceMulticaAssigneePrincipal, "assignee-principal", "planner@team", "Mnemon principal whose Multica agent receives the issue")
-	acceptanceMulticaRuntimeCmd.Flags().StringVar(&acceptanceMulticaTaskCase, "task-case", multicaAcceptanceTaskCaseR2Readiness, "real Multica task case to create ("+strings.Join(multicaAcceptanceTaskCaseNames(), ", ")+")")
+	acceptanceMulticaRuntimeCmd.Flags().StringVar(&acceptanceMulticaTaskCase, "task-case", multicaAcceptanceTaskCaseR3Surface, "real Multica task case to create ("+strings.Join(multicaAcceptanceTaskCaseNames(), ", ")+")")
 	acceptanceMulticaRuntimeCmd.Flags().StringVar(&acceptanceMulticaIssueTitle, "issue-title", "", "Multica issue title")
 	acceptanceMulticaRuntimeCmd.Flags().StringVar(&acceptanceMulticaIssueDescription, "issue-description", "", "Multica issue description")
 	acceptanceMulticaRuntimeCmd.Flags().DurationVar(&acceptanceMulticaWait, "wait", 10*time.Minute, "time to wait for Multica runtime evidence")
 	acceptanceMulticaRuntimeCmd.Flags().DurationVar(&acceptanceMulticaPoll, "poll", 5*time.Second, "poll interval for Multica runs")
 	acceptanceMulticaRuntimeCmd.Flags().BoolVar(&acceptanceMulticaRequireIngest, "require-mnemon-ingest", true, "require run output to show recorded Mnemon ingest")
-	acceptanceMulticaRuntimeCmd.Flags().BoolVar(&acceptanceMulticaRequireManagedWake, "require-managed-wake", false, "require run output to show a completed managed wake")
 	acceptanceMulticaRuntimeCmd.Flags().BoolVar(&acceptanceMulticaRequireSurfaceFlow, "require-surface-flow", false, "require R3 Multica surface evidence: provider-wrapper env, root run, readable metadata, and visible OA state")
 	acceptanceMulticaRuntimeCmd.Flags().IntVar(&acceptanceMulticaMinParticipants, "min-participants", 5, "minimum Multica participant agents required for surface-flow acceptance")
 	acceptanceMulticaRuntimeCmd.Flags().IntVar(&acceptanceMulticaMinActiveAgents, "min-active-agents", 3, "minimum distinct Multica agents with provider-wrapper readiness for surface-flow acceptance")
@@ -109,7 +106,6 @@ type multicaRuntimeProdSimOptions struct {
 	Wait               time.Duration
 	Poll               time.Duration
 	RequireIngest      bool
-	RequireManagedWake bool
 	RequireSurfaceFlow bool
 	MinParticipants    int
 	MinActiveAgents    int
@@ -178,7 +174,7 @@ func runMulticaRuntimeProdSimAcceptance(ctx context.Context, opts multicaRuntime
 	}
 	requestedTaskCase := strings.TrimSpace(opts.TaskCase)
 	if requestedTaskCase == "" {
-		requestedTaskCase = multicaAcceptanceTaskCaseR2Readiness
+		requestedTaskCase = multicaAcceptanceTaskCaseR3Surface
 	}
 	taskCase, taskCaseErr := multicaAcceptanceTaskCase(requestedTaskCase, started)
 	runRoot := strings.TrimSpace(opts.RunRoot)
@@ -322,9 +318,6 @@ func runMulticaRuntimeProdSimAcceptance(ctx context.Context, opts multicaRuntime
 		if opts.RequireIngest {
 			addMulticaProdSimAssertion(&report, "runtime observed Multica surface input", strings.Contains(combined, "Multica surface input: observed"), combined)
 		}
-		if opts.RequireManagedWake {
-			addMulticaProdSimAssertion(&report, "runtime completed managed wake", multicaMessagesContainManagedWakeCompleted(combined), combined)
-		}
 	}
 	if opts.RequireSurfaceFlow {
 		rootRuntimeActivity := multicaMessagesExposeRuntimeActivity(report.MessageTypes) || len(runs) > 0
@@ -465,13 +458,13 @@ func multicaProdSimSnapshotContext(ctx context.Context) (context.Context, contex
 	return ctx, func() {}
 }
 
-func multicaProdSimPartialSnapshotDetail(reason, runErr, projectionErr error, report *multicaRuntimeProdSimReport) string {
+func multicaProdSimPartialSnapshotDetail(reason, runErr, surfaceErr error, report *multicaRuntimeProdSimReport) string {
 	parts := []string{fmt.Sprintf("reason=%v", reason)}
 	if runErr != nil {
 		parts = append(parts, "child_runs="+runErr.Error())
 	}
-	if projectionErr != nil {
-		parts = append(parts, "projection="+projectionErr.Error())
+	if surfaceErr != nil {
+		parts = append(parts, "surface="+surfaceErr.Error())
 	}
 	parts = append(parts,
 		fmt.Sprintf("child_runs=%d", len(report.ChildRuns)),
@@ -577,12 +570,6 @@ func combinedMulticaRunMessages(messages []driver.MulticaRunMessage) string {
 		}
 	}
 	return strings.Join(parts, "\n")
-}
-
-func multicaMessagesContainManagedWakeCompleted(text string) bool {
-	lower := strings.ToLower(text)
-	return strings.Contains(lower, "managed wake: completed") ||
-		strings.Contains(lower, "managed wake completed")
 }
 
 func multicaRunMessageTypeCounts(messages []driver.MulticaRunMessage) map[string]int {

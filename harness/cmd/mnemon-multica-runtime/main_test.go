@@ -115,6 +115,87 @@ func TestRuntimeTreatsLegacyMailboxMetadataAsSurfaceInputOnly(t *testing.T) {
 	}
 }
 
+func TestRuntimeRunsProviderCommandWithOriginalTurnInput(t *testing.T) {
+	tmp := t.TempDir()
+	logPath := filepath.Join(tmp, "multica-args.log")
+	multicaBin := writeFakeMulticaCLI(t, logPath, fakeMulticaScript{
+		IssueJSON:    `{"id":"issue-provider","identifier":"TEA-9","title":"中文验收-多角色决策","description":"请协调多角色完成退款策略复盘。","status":"todo","priority":"high"}`,
+		MetadataJSON: `[]`,
+	})
+	server, received := fakeIngestServer(t)
+	defer server.Close()
+	providerInputPath := filepath.Join(tmp, "provider.stdin")
+	providerOutput := "原生 provider 输出：已读取中文 turn"
+	providerBin := writeFakeProvider(t)
+	progress := []runtimeProgressEvent{}
+
+	final := (&runtimeRPCState{
+		Env: []string{
+			"MULTICA_ISSUE_ID=issue-provider",
+			"MULTICA_TASK_ID=task-provider",
+			"MULTICA_AGENT_ID=agent-1",
+			"MULTICA_AGENT_NAME=Reviewer",
+			"MNEMON_MULTICA_BIN=" + multicaBin,
+			"MNEMON_CONTROL_ADDR=" + server.URL,
+			"MNEMON_CONTROL_PRINCIPAL=reviewer@team",
+			"MNEMON_MULTICA_PROVIDER_RUNTIME=codex",
+			"MNEMON_MULTICA_PROVIDER_COMMAND=" + providerBin,
+			"MNEMON_MULTICA_PROVIDER_WORKSPACE=" + tmp,
+			"MNEMON_MULTICA_PROVIDER_TURN_TIMEOUT=5s",
+			"FAKE_PROVIDER_INPUT=" + providerInputPath,
+			"FAKE_PROVIDER_OUTPUT=" + providerOutput,
+			"FAKE_MULTICA_LOG=" + logPath,
+		},
+		CWD: tmp,
+		Now: fixedRuntimeTime,
+	}).runTurn(multicasurface.RuntimeInput{Text: "请基于当前 issue 继续推进中文 ReAct 协作。"}, func(event runtimeProgressEvent) {
+		progress = append(progress, event)
+	})
+
+	if final != providerOutput {
+		t.Fatalf("final answer = %q", final)
+	}
+	if got := readFile(t, providerInputPath); got != "请基于当前 issue 继续推进中文 ReAct 协作。\n" {
+		t.Fatalf("provider input = %q", got)
+	}
+	env := <-received
+	if env.ExternalID != "multica-task-task-provider" {
+		t.Fatalf("unexpected ingest external id: %+v", env)
+	}
+	foundProviderCommand := false
+	for _, event := range progress {
+		if event.Command == providerBin {
+			foundProviderCommand = true
+			if event.CWD != tmp {
+				t.Fatalf("provider cwd = %q, want %q", event.CWD, tmp)
+			}
+		}
+	}
+	if !foundProviderCommand {
+		t.Fatalf("provider command was not emitted in progress: %+v", progress)
+	}
+	argsLog := readFile(t, logPath)
+	if strings.Contains(argsLog, "issue comment add") ||
+		strings.Contains(argsLog, "issue status set") ||
+		strings.Contains(argsLog, "[mnemon:wake]") {
+		t.Fatalf("provider wrapper performed forbidden R2 side effect:\n%s", argsLog)
+	}
+}
+
+func TestProviderPromptFallsBackToIssueWhenTurnInputIsEmpty(t *testing.T) {
+	got := providerPrompt(multicasurface.RuntimeInput{}, runtimeImportResult{
+		IssueID:    "issue-1",
+		Identifier: "TEA-1",
+		Title:      "中文复用上下文评审",
+		Statement:  "请复用上一轮风险结论，并给出下一步。",
+	})
+	for _, want := range []string{"TEA-1", "中文复用上下文评审", "请复用上一轮风险结论"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("provider prompt missing %q:\n%s", want, got)
+		}
+	}
+}
+
 type fakeMulticaScript struct {
 	IssueJSON    string
 	MetadataJSON string
@@ -143,6 +224,20 @@ esac
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(logPath, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func writeFakeProvider(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "provider")
+	body := `#!/bin/sh
+set -eu
+cat > "$FAKE_PROVIDER_INPUT"
+printf '%s\n' "$FAKE_PROVIDER_OUTPUT"
+`
+	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return path

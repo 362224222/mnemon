@@ -25,7 +25,7 @@ const (
 const (
 	MulticaMetadataEventRef          = "mnemon.event_ref"
 	MulticaMetadataResourceRef       = "mnemon.resource_ref"
-	MulticaMetadataProjectionRef     = "mnemon.projection_ref"
+	MulticaMetadataSurfaceRef        = "mnemon.surface_ref"
 	MulticaMetadataSourceArtifactRef = "mnemon.source_artifact_ref"
 	MulticaMetadataSurfaceRole       = "mnemon.surface_role"
 	MulticaMetadataNoAutoDispatch    = "mnemon.no_auto_dispatch"
@@ -37,7 +37,7 @@ const (
 type SurfaceRefs struct {
 	EventRef          string
 	ResourceRef       string
-	ProjectionRef     string
+	SurfaceRef        string
 	SourceArtifactRef string
 }
 
@@ -45,7 +45,7 @@ func (r SurfaceRefs) Metadata(role SurfaceRole) map[string]string {
 	meta := map[string]string{}
 	addSurfaceMetadata(meta, MulticaMetadataEventRef, r.EventRef)
 	addSurfaceMetadata(meta, MulticaMetadataResourceRef, r.ResourceRef)
-	addSurfaceMetadata(meta, MulticaMetadataProjectionRef, r.ProjectionRef)
+	addSurfaceMetadata(meta, MulticaMetadataSurfaceRef, r.SurfaceRef)
 	addSurfaceMetadata(meta, MulticaMetadataSourceArtifactRef, r.SourceArtifactRef)
 	if role != "" {
 		meta[MulticaMetadataSurfaceRole] = string(role)
@@ -60,7 +60,7 @@ func ParseSurfaceRefs(meta map[string]any) SurfaceRefs {
 	return SurfaceRefs{
 		EventRef:          surfaceAnyString(meta[MulticaMetadataEventRef]),
 		ResourceRef:       surfaceAnyString(meta[MulticaMetadataResourceRef]),
-		ProjectionRef:     surfaceAnyString(meta[MulticaMetadataProjectionRef]),
+		SurfaceRef:        surfaceAnyString(meta[MulticaMetadataSurfaceRef]),
 		SourceArtifactRef: surfaceAnyString(meta[MulticaMetadataSourceArtifactRef]),
 	}
 }
@@ -72,7 +72,7 @@ func ParseListedSurfaceRefs(meta map[string]string) SurfaceRefs {
 	return SurfaceRefs{
 		EventRef:          strings.TrimSpace(meta[MulticaMetadataEventRef]),
 		ResourceRef:       strings.TrimSpace(meta[MulticaMetadataResourceRef]),
-		ProjectionRef:     strings.TrimSpace(meta[MulticaMetadataProjectionRef]),
+		SurfaceRef:        strings.TrimSpace(meta[MulticaMetadataSurfaceRef]),
 		SourceArtifactRef: strings.TrimSpace(meta[MulticaMetadataSourceArtifactRef]),
 	}
 }

@@ -29,7 +29,7 @@ func TestMulticaTaskCaseProtocolReActIsMultiRound(t *testing.T) {
 		}
 	}
 	if material.Expectations.MinActiveAgents != 4 ||
-		material.Expectations.MinChildMailboxes != 3 ||
+		material.Expectations.MinChildSurfaces != 3 ||
 		material.Expectations.MinFeedbackComments != 3 ||
 		len(material.Expectations.TeamworkRounds) != 3 {
 		t.Fatalf("unexpected expectations: %+v", material.Expectations)
@@ -143,8 +143,8 @@ esac
 	}
 	if report.TaskCase != multicaAcceptanceTaskCaseParallelPoc ||
 		report.TaskExpectations.MinActiveAgents != 5 ||
-		report.TaskExpectations.InitialChildMailboxes != 3 ||
-		report.TaskExpectations.MinChildMailboxes != 4 ||
+		report.TaskExpectations.InitialChildSurfaces != 3 ||
+		report.TaskExpectations.MinChildSurfaces != 4 ||
 		len(report.ExecutionPlan.Workstreams) != 3 {
 		t.Fatalf("task case report mismatch: %+v", report)
 	}
@@ -163,9 +163,9 @@ esac
 		"## Execution Plan",
 		"## Parallel PoCs",
 		"## Context Reuse Checks",
-		"不要把 Multica 当 canonical hub backend",
-		"explicit surface writeback commands",
-		"Direct Multica issue fan-out is invalid",
+		"不要把 Multica 当 canonical state store",
+		"activation carrier",
+		"activation-carrier commands",
 		"poc-runtime-routing",
 		"poc-operator-runbook",
 		"poc-release-risk",

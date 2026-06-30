@@ -5,7 +5,7 @@ import multicasurface "github.com/mnemon-dev/mnemon/harness/internal/surface/mul
 const (
 	MulticaMetadataEventRef          = multicasurface.MulticaMetadataEventRef
 	MulticaMetadataResourceRef       = multicasurface.MulticaMetadataResourceRef
-	MulticaMetadataProjectionRef     = multicasurface.MulticaMetadataProjectionRef
+	MulticaMetadataSurfaceRef        = multicasurface.MulticaMetadataSurfaceRef
 	MulticaMetadataSourceArtifactRef = multicasurface.MulticaMetadataSourceArtifactRef
 	MulticaMetadataSurfaceRole       = multicasurface.MulticaMetadataSurfaceRole
 	MulticaMetadataNoAutoDispatch    = multicasurface.MulticaMetadataNoAutoDispatch

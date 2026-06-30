@@ -10,12 +10,12 @@ import (
 	"sync"
 )
 
-const MulticaDefaultProjectionLedgerRelPath = ".mnemon/multica/projection-ledger.jsonl"
+const MulticaDefaultSurfaceWriteLedgerRelPath = ".mnemon/multica/surface-write-ledger.jsonl"
 
-type ProjectionLedgerRecord struct {
+type SurfaceWriteLedgerRecord struct {
 	EventRef          string      `json:"event_ref"`
 	ResourceRef       string      `json:"resource_ref,omitempty"`
-	ProjectionRef     string      `json:"projection_ref,omitempty"`
+	SurfaceRef        string      `json:"surface_ref,omitempty"`
 	SourceArtifactRef string      `json:"source_artifact_ref,omitempty"`
 	SurfaceRole       SurfaceRole `json:"surface_role"`
 	TargetKind        string      `json:"target_kind"`
@@ -23,19 +23,19 @@ type ProjectionLedgerRecord struct {
 	Status            string      `json:"status"`
 }
 
-type ProjectionLedgerTarget struct {
+type SurfaceWriteLedgerTarget struct {
 	Kind string
 	ID   string
 }
 
-type FileProjectionLedger struct {
+type FileSurfaceWriteLedger struct {
 	mu      sync.Mutex
 	path    string
-	records []ProjectionLedgerRecord
+	records []SurfaceWriteLedgerRecord
 	loaded  bool
 }
 
-func ProjectionLedgerPath(root, explicit string) string {
+func SurfaceWriteLedgerPath(root, explicit string) string {
 	if strings.TrimSpace(explicit) != "" {
 		return filepath.Clean(explicit)
 	}
@@ -43,53 +43,53 @@ func ProjectionLedgerPath(root, explicit string) string {
 	if root == "" {
 		root = "."
 	}
-	return filepath.Join(root, MulticaDefaultProjectionLedgerRelPath)
+	return filepath.Join(root, MulticaDefaultSurfaceWriteLedgerRelPath)
 }
 
-func NewFileProjectionLedger(path string) *FileProjectionLedger {
-	return &FileProjectionLedger{path: strings.TrimSpace(path)}
+func NewFileSurfaceWriteLedger(path string) *FileSurfaceWriteLedger {
+	return &FileSurfaceWriteLedger{path: strings.TrimSpace(path)}
 }
 
-func (l *FileProjectionLedger) Records() ([]ProjectionLedgerRecord, error) {
+func (l *FileSurfaceWriteLedger) Records() ([]SurfaceWriteLedgerRecord, error) {
 	if err := l.withLockedLoad(func() error { return nil }); err != nil {
 		return nil, err
 	}
-	out := append([]ProjectionLedgerRecord(nil), l.records...)
+	out := append([]SurfaceWriteLedgerRecord(nil), l.records...)
 	return out, nil
 }
 
-func (l *FileProjectionLedger) Find(eventRef string, role SurfaceRole, target ProjectionLedgerTarget) (ProjectionLedgerRecord, bool, error) {
+func (l *FileSurfaceWriteLedger) Find(eventRef string, role SurfaceRole, target SurfaceWriteLedgerTarget) (SurfaceWriteLedgerRecord, bool, error) {
 	eventRef = strings.TrimSpace(eventRef)
 	target.Kind = strings.TrimSpace(target.Kind)
 	target.ID = strings.TrimSpace(target.ID)
 	if eventRef == "" || role == "" || target.Kind == "" || target.ID == "" {
-		return ProjectionLedgerRecord{}, false, nil
+		return SurfaceWriteLedgerRecord{}, false, nil
 	}
-	var found ProjectionLedgerRecord
+	var found SurfaceWriteLedgerRecord
 	err := l.withLockedLoad(func() error {
 		for _, record := range l.records {
-			if projectionLedgerRecordMatches(record, eventRef, role, target) {
+			if surfaceWriteLedgerRecordMatches(record, eventRef, role, target) {
 				found = record
 			}
 		}
 		return nil
 	})
 	if err != nil {
-		return ProjectionLedgerRecord{}, false, err
+		return SurfaceWriteLedgerRecord{}, false, err
 	}
 	return found, strings.TrimSpace(found.EventRef) != "", nil
 }
 
-func (l *FileProjectionLedger) Reserve(record ProjectionLedgerRecord) (ProjectionLedgerRecord, bool, error) {
-	record = normalizeProjectionLedgerRecord(record)
-	if err := validateProjectionLedgerRecord(record); err != nil {
-		return ProjectionLedgerRecord{}, false, err
+func (l *FileSurfaceWriteLedger) Reserve(record SurfaceWriteLedgerRecord) (SurfaceWriteLedgerRecord, bool, error) {
+	record = normalizeSurfaceWriteLedgerRecord(record)
+	if err := validateSurfaceWriteLedgerRecord(record); err != nil {
+		return SurfaceWriteLedgerRecord{}, false, err
 	}
-	var reserved ProjectionLedgerRecord
+	var reserved SurfaceWriteLedgerRecord
 	ok := false
 	err := l.withLockedLoad(func() error {
 		for _, existing := range l.records {
-			if projectionLedgerRecordMatches(existing, record.EventRef, record.SurfaceRole, ProjectionLedgerTarget{Kind: record.TargetKind, ID: record.TargetID}) {
+			if surfaceWriteLedgerRecordMatches(existing, record.EventRef, record.SurfaceRole, SurfaceWriteLedgerTarget{Kind: record.TargetKind, ID: record.TargetID}) {
 				reserved = existing
 				return nil
 			}
@@ -105,15 +105,15 @@ func (l *FileProjectionLedger) Reserve(record ProjectionLedgerRecord) (Projectio
 	return reserved, ok, err
 }
 
-func (l *FileProjectionLedger) Record(record ProjectionLedgerRecord) error {
-	record = normalizeProjectionLedgerRecord(record)
-	if err := validateProjectionLedgerRecord(record); err != nil {
+func (l *FileSurfaceWriteLedger) Record(record SurfaceWriteLedgerRecord) error {
+	record = normalizeSurfaceWriteLedgerRecord(record)
+	if err := validateSurfaceWriteLedgerRecord(record); err != nil {
 		return err
 	}
 	return l.withLockedLoad(func() error {
 		replaced := false
 		for i, existing := range l.records {
-			if projectionLedgerRecordMatches(existing, record.EventRef, record.SurfaceRole, ProjectionLedgerTarget{Kind: record.TargetKind, ID: record.TargetID}) {
+			if surfaceWriteLedgerRecordMatches(existing, record.EventRef, record.SurfaceRole, SurfaceWriteLedgerTarget{Kind: record.TargetKind, ID: record.TargetID}) {
 				l.records[i] = record
 				replaced = true
 			}
@@ -125,7 +125,7 @@ func (l *FileProjectionLedger) Record(record ProjectionLedgerRecord) error {
 	})
 }
 
-func (l *FileProjectionLedger) withLockedLoad(fn func() error) error {
+func (l *FileSurfaceWriteLedger) withLockedLoad(fn func() error) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if !l.loaded {
@@ -137,7 +137,7 @@ func (l *FileProjectionLedger) withLockedLoad(fn func() error) error {
 	return fn()
 }
 
-func (l *FileProjectionLedger) load() error {
+func (l *FileSurfaceWriteLedger) load() error {
 	if l.path == "" {
 		return nil
 	}
@@ -149,18 +149,18 @@ func (l *FileProjectionLedger) load() error {
 		return err
 	}
 	defer file.Close()
-	var records []ProjectionLedgerRecord
+	var records []SurfaceWriteLedgerRecord
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
 			continue
 		}
-		var record ProjectionLedgerRecord
+		var record SurfaceWriteLedgerRecord
 		if err := json.Unmarshal([]byte(line), &record); err != nil {
-			return fmt.Errorf("decode projection ledger %s: %w", l.path, err)
+			return fmt.Errorf("decode surface write ledger %s: %w", l.path, err)
 		}
-		records = upsertProjectionLedgerRecord(records, normalizeProjectionLedgerRecord(record))
+		records = upsertSurfaceWriteLedgerRecord(records, normalizeSurfaceWriteLedgerRecord(record))
 	}
 	if err := scanner.Err(); err != nil {
 		return err
@@ -169,7 +169,7 @@ func (l *FileProjectionLedger) load() error {
 	return nil
 }
 
-func (l *FileProjectionLedger) appendRecord(record ProjectionLedgerRecord) error {
+func (l *FileSurfaceWriteLedger) appendRecord(record SurfaceWriteLedgerRecord) error {
 	if l.path == "" {
 		return nil
 	}
@@ -191,7 +191,7 @@ func (l *FileProjectionLedger) appendRecord(record ProjectionLedgerRecord) error
 	return nil
 }
 
-func (l *FileProjectionLedger) rewrite() error {
+func (l *FileSurfaceWriteLedger) rewrite() error {
 	if l.path == "" {
 		return nil
 	}
@@ -215,10 +215,10 @@ func (l *FileProjectionLedger) rewrite() error {
 	return nil
 }
 
-func normalizeProjectionLedgerRecord(record ProjectionLedgerRecord) ProjectionLedgerRecord {
+func normalizeSurfaceWriteLedgerRecord(record SurfaceWriteLedgerRecord) SurfaceWriteLedgerRecord {
 	record.EventRef = strings.TrimSpace(record.EventRef)
 	record.ResourceRef = strings.TrimSpace(record.ResourceRef)
-	record.ProjectionRef = strings.TrimSpace(record.ProjectionRef)
+	record.SurfaceRef = strings.TrimSpace(record.SurfaceRef)
 	record.SourceArtifactRef = strings.TrimSpace(record.SourceArtifactRef)
 	record.TargetKind = strings.TrimSpace(record.TargetKind)
 	record.TargetID = strings.TrimSpace(record.TargetID)
@@ -226,7 +226,7 @@ func normalizeProjectionLedgerRecord(record ProjectionLedgerRecord) ProjectionLe
 	return record
 }
 
-func validateProjectionLedgerRecord(record ProjectionLedgerRecord) error {
+func validateSurfaceWriteLedgerRecord(record SurfaceWriteLedgerRecord) error {
 	if strings.TrimSpace(record.EventRef) == "" {
 		return fmt.Errorf("event_ref is required")
 	}
@@ -234,21 +234,21 @@ func validateProjectionLedgerRecord(record ProjectionLedgerRecord) error {
 		return fmt.Errorf("surface_role is required")
 	}
 	if strings.TrimSpace(record.TargetKind) == "" || strings.TrimSpace(record.TargetID) == "" {
-		return fmt.Errorf("projection ledger target is required")
+		return fmt.Errorf("surface write ledger target is required")
 	}
 	return nil
 }
 
-func projectionLedgerRecordMatches(record ProjectionLedgerRecord, eventRef string, role SurfaceRole, target ProjectionLedgerTarget) bool {
+func surfaceWriteLedgerRecordMatches(record SurfaceWriteLedgerRecord, eventRef string, role SurfaceRole, target SurfaceWriteLedgerTarget) bool {
 	return record.EventRef == strings.TrimSpace(eventRef) &&
 		record.SurfaceRole == role &&
 		record.TargetKind == strings.TrimSpace(target.Kind) &&
 		record.TargetID == strings.TrimSpace(target.ID)
 }
 
-func upsertProjectionLedgerRecord(records []ProjectionLedgerRecord, next ProjectionLedgerRecord) []ProjectionLedgerRecord {
+func upsertSurfaceWriteLedgerRecord(records []SurfaceWriteLedgerRecord, next SurfaceWriteLedgerRecord) []SurfaceWriteLedgerRecord {
 	for i, record := range records {
-		if projectionLedgerRecordMatches(record, next.EventRef, next.SurfaceRole, ProjectionLedgerTarget{Kind: next.TargetKind, ID: next.TargetID}) {
+		if surfaceWriteLedgerRecordMatches(record, next.EventRef, next.SurfaceRole, SurfaceWriteLedgerTarget{Kind: next.TargetKind, ID: next.TargetID}) {
 			records[i] = next
 			return records
 		}
