@@ -8,10 +8,10 @@ import (
 
 func TestRuntimeEnvValueUsesLastValue(t *testing.T) {
 	env := []string{
-		"MNEMON_MANAGED_RUNTIME=codex-appserver",
-		"MNEMON_MANAGED_RUNTIME=off",
+		"MNEMON_MULTICA_PROVIDER_RUNTIME=codex",
+		"MNEMON_MULTICA_PROVIDER_RUNTIME=off",
 	}
-	if got := RuntimeEnvValue(env, "MNEMON_MANAGED_RUNTIME"); got != "off" {
+	if got := RuntimeEnvValue(env, "MNEMON_MULTICA_PROVIDER_RUNTIME"); got != "off" {
 		t.Fatalf("RuntimeEnvValue = %q, want off", got)
 	}
 	if got := RuntimeEnvDefault(env, "MISSING", "fallback"); got != "fallback" {
@@ -29,7 +29,6 @@ func TestRuntimeContextFromActivationNormalizesDaemonAndRuntimeMetadata(t *testi
 		"MNEMON_MULTICA_WORKSPACE_ID=ws-mnemon",
 		"MULTICA_SERVER_URL=https://api.multica.ai",
 		"MNEMON_MULTICA_SERVER_URL=https://desktop-api.multica.ai",
-		"MNEMON_HUB_BACKEND=multica",
 		"MNEMON_CONTROL_ADDR=http://127.0.0.1:8787",
 		"MNEMON_CONTROL_PRINCIPAL=planner@team",
 	}, "/repo", RuntimeInput{
@@ -46,7 +45,7 @@ func TestRuntimeContextFromActivationNormalizesDaemonAndRuntimeMetadata(t *testi
 	if ctx.WorkspaceID != "ws-mnemon" || ctx.ServerURL != "https://desktop-api.multica.ai" {
 		t.Fatalf("workspace/server metadata mismatch: %+v", ctx)
 	}
-	if ctx.HubBackend != "multica" || ctx.ControlAddr != "http://127.0.0.1:8787" || ctx.ControlPrincipal != "planner@team" {
+	if ctx.ControlAddr != "http://127.0.0.1:8787" || ctx.ControlPrincipal != "planner@team" {
 		t.Fatalf("Mnemon control metadata mismatch: %+v", ctx)
 	}
 }
@@ -90,58 +89,14 @@ func TestRuntimeTimeoutUsesMulticaHTTPFallback(t *testing.T) {
 	}
 }
 
-func TestRuntimeAdapterSwitches(t *testing.T) {
-	if !RuntimeProjectionCommentsEnabled(nil) || !RuntimeHubWriteEnabled(nil) {
-		t.Fatal("runtime switches should default on")
-	}
-	if RuntimeProjectionCommentsEnabled([]string{"MNEMON_MULTICA_PROJECT_COMMENTS=off"}) {
-		t.Fatal("projection comments should honor off")
-	}
-	if RuntimeHubWriteEnabled([]string{"MNEMON_MULTICA_HUB_WRITE=disabled"}) {
-		t.Fatal("hub write should honor disabled")
-	}
-}
-
-func TestRuntimeManagedLedgerPath(t *testing.T) {
-	tmp := t.TempDir()
-	workspace := filepath.Join(tmp, "managed-workspace")
-	want := filepath.Join(workspace, ".mnemon", "harness", "local", "managed-agent", "wake-ledger.jsonl")
-	if got := RuntimeManagedLedgerPath(nil, workspace); got != want {
-		t.Fatalf("RuntimeManagedLedgerPath = %q, want %q", got, want)
-	}
-	explicit := filepath.Join(tmp, "explicit.jsonl")
-	if got := RuntimeManagedLedgerPath([]string{"MNEMON_MANAGED_LEDGER=" + explicit}, workspace); got != explicit {
-		t.Fatalf("explicit RuntimeManagedLedgerPath = %q, want %q", got, explicit)
-	}
-}
-
-func TestRuntimeMulticaHubLedgerPath(t *testing.T) {
-	tmp := t.TempDir()
-	workspace := filepath.Join(tmp, "managed-workspace")
-	cwd := filepath.Join(tmp, "task-workdir")
-	got := RuntimeMulticaHubLedgerPath([]string{"MNEMON_MANAGED_WORKSPACE=" + workspace}, cwd)
-	want := filepath.Join(workspace, MulticaDefaultHubLedgerRelPath)
-	if got != want {
-		t.Fatalf("hub ledger path = %q, want %q", got, want)
-	}
-	explicit := filepath.Join(tmp, "explicit.jsonl")
-	got = RuntimeMulticaHubLedgerPath([]string{
-		"MNEMON_MANAGED_WORKSPACE=" + workspace,
-		"MNEMON_MULTICA_HUB_LEDGER=" + explicit,
-	}, cwd)
-	if got != explicit {
-		t.Fatalf("explicit hub ledger path = %q, want %q", got, explicit)
-	}
-}
-
 func TestRuntimeMulticaRegistryPaths(t *testing.T) {
 	tmp := t.TempDir()
 	explicit := filepath.Join(tmp, "explicit-registry.json")
-	workspace := filepath.Join(tmp, "managed-workspace")
+	workspace := filepath.Join(tmp, "provider-workspace")
 	cwd := filepath.Join(tmp, "task-workdir")
 	got := RuntimeMulticaRegistryPaths([]string{
 		"MNEMON_MULTICA_REGISTRY=" + explicit,
-		"MNEMON_MANAGED_WORKSPACE=" + workspace,
+		"MNEMON_MULTICA_PROVIDER_WORKSPACE=" + workspace,
 	}, cwd)
 	want := []string{
 		explicit,
@@ -158,9 +113,9 @@ func TestRuntimeMulticaRegistryPaths(t *testing.T) {
 	}
 }
 
-func TestRuntimeMulticaRegistryLoadsManagedWorkspace(t *testing.T) {
+func TestRuntimeMulticaRegistryLoadsProviderWorkspace(t *testing.T) {
 	tmp := t.TempDir()
-	workspace := filepath.Join(tmp, "managed-workspace")
+	workspace := filepath.Join(tmp, "provider-workspace")
 	path := MulticaRegistryPath(workspace, "")
 	if err := SaveMulticaRegistry(path, MulticaRegistry{
 		WorkspaceID: "ws-1",
@@ -172,49 +127,11 @@ func TestRuntimeMulticaRegistryLoadsManagedWorkspace(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	reg, ok, err := RuntimeMulticaRegistry([]string{"MNEMON_MANAGED_WORKSPACE=" + workspace}, tmp)
+	reg, ok, err := RuntimeMulticaRegistry([]string{"MNEMON_MULTICA_PROVIDER_WORKSPACE=" + workspace}, tmp)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !ok || reg.WorkspaceID != "ws-1" {
 		t.Fatalf("registry = ok:%v %+v", ok, reg)
-	}
-}
-
-func TestRuntimeManagedWakeScopeIDPrefersAssignmentThenRoot(t *testing.T) {
-	if got := RuntimeManagedWakeScopeID(RuntimeManagedWakeMaterial{
-		AssignmentID: "asg-1",
-		RootIssueID:  "root-1",
-		IssueID:      "child-1",
-	}); got != "asg-1" {
-		t.Fatalf("assignment mailbox scope = %q, want asg-1", got)
-	}
-	if got := RuntimeManagedWakeScopeID(RuntimeManagedWakeMaterial{
-		RootIssueID: "root-1",
-		IssueID:     "root-1",
-	}); got != "root-1" {
-		t.Fatalf("root session scope = %q, want root-1", got)
-	}
-}
-
-func TestRuntimeManagedTurnEnvInjectsRenderScope(t *testing.T) {
-	env := RuntimeManagedTurnEnv([]string{"EXISTING=1"}, RuntimeManagedWakeMaterial{
-		SessionID:    "multica:session:root-1",
-		RootIssueID:  "root-1",
-		AssignmentID: "asg-1",
-	})
-	if got := RuntimeEnvValue(env, "MNEMON_RENDER_HOST"); got != "multica" {
-		t.Fatalf("render host = %q", got)
-	}
-	if got := RuntimeEnvValue(env, "MNEMON_RENDER_SESSION_ID"); got != "multica:session:root-1" {
-		t.Fatalf("render session = %q", got)
-	}
-	if got := RuntimeEnvValue(env, "MNEMON_RENDER_INPUT_ID"); got != "asg-1" {
-		t.Fatalf("render input = %q", got)
-	}
-
-	preserved := RuntimeManagedTurnEnv([]string{"MNEMON_RENDER_HOST=custom"}, RuntimeManagedWakeMaterial{SessionID: "session-1", RootIssueID: "root-1"})
-	if got := RuntimeEnvValue(preserved, "MNEMON_RENDER_HOST"); got != "custom" {
-		t.Fatalf("managed env should preserve explicit host, got %q", got)
 	}
 }

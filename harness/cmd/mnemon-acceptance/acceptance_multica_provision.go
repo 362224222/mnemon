@@ -30,10 +30,10 @@ var (
 	acceptanceMulticaProvisionControlToken       string
 	acceptanceMulticaProvisionControlTokenFile   string
 	acceptanceMulticaProvisionInjectedHarnessBin string
-	acceptanceMulticaProvisionManagedRuntime     string
-	acceptanceMulticaProvisionManagedCommand     string
-	acceptanceMulticaProvisionManagedWorkspace   string
-	acceptanceMulticaProvisionManagedTimeout     time.Duration
+	acceptanceMulticaProvisionProviderRuntime    string
+	acceptanceMulticaProvisionProviderCommand    string
+	acceptanceMulticaProvisionProviderWorkspace  string
+	acceptanceMulticaProvisionProviderTimeout    time.Duration
 )
 
 type acceptanceCommandRunner func(ctx context.Context, command string, args []string, stdout, stderr io.Writer) error
@@ -79,10 +79,10 @@ func init() {
 	acceptanceMulticaProvisionCmd.Flags().StringVar(&acceptanceMulticaProvisionControlToken, "mnemon-control-token", multicaAcceptanceEnvDefault("MNEMON_CONTROL_TOKEN", ""), "Local Mnemon bearer token injected into participant runtime env")
 	acceptanceMulticaProvisionCmd.Flags().StringVar(&acceptanceMulticaProvisionControlTokenFile, "mnemon-control-token-file", multicaAcceptanceEnvDefault("MNEMON_CONTROL_TOKEN_FILE", ""), "Local Mnemon bearer token file injected into participant runtime env")
 	acceptanceMulticaProvisionCmd.Flags().StringVar(&acceptanceMulticaProvisionInjectedHarnessBin, "harness-bin", multicaAcceptanceEnvDefault("MNEMON_HARNESS_BIN", ""), "mnemon-harness executable injected into participant runtime env")
-	acceptanceMulticaProvisionCmd.Flags().StringVar(&acceptanceMulticaProvisionManagedRuntime, "managed-runtime", multicaAcceptanceEnvDefault("MNEMON_MANAGED_RUNTIME", ""), "managed agent runtime injected into participant env")
-	acceptanceMulticaProvisionCmd.Flags().StringVar(&acceptanceMulticaProvisionManagedCommand, "managed-command", multicaAcceptanceEnvDefault("MNEMON_MANAGED_COMMAND", ""), "managed runtime command injected into participant env")
-	acceptanceMulticaProvisionCmd.Flags().StringVar(&acceptanceMulticaProvisionManagedWorkspace, "managed-workspace", multicaAcceptanceEnvDefault("MNEMON_MANAGED_WORKSPACE", ""), "managed runtime workspace injected into participant env")
-	acceptanceMulticaProvisionCmd.Flags().DurationVar(&acceptanceMulticaProvisionManagedTimeout, "managed-turn-timeout", 0, "managed runtime turn timeout injected into participant env")
+	acceptanceMulticaProvisionCmd.Flags().StringVar(&acceptanceMulticaProvisionProviderRuntime, "provider-runtime", multicaAcceptanceEnvDefault("MNEMON_MULTICA_PROVIDER_RUNTIME", ""), "provider runtime kind wrapped by mnemon-multica-runtime")
+	acceptanceMulticaProvisionCmd.Flags().StringVar(&acceptanceMulticaProvisionProviderCommand, "provider-command", multicaAcceptanceEnvDefault("MNEMON_MULTICA_PROVIDER_COMMAND", ""), "provider command wrapped by mnemon-multica-runtime")
+	acceptanceMulticaProvisionCmd.Flags().StringVar(&acceptanceMulticaProvisionProviderWorkspace, "provider-workspace", multicaAcceptanceEnvDefault("MNEMON_MULTICA_PROVIDER_WORKSPACE", ""), "provider workspace injected into participant runtime env")
+	acceptanceMulticaProvisionCmd.Flags().DurationVar(&acceptanceMulticaProvisionProviderTimeout, "provider-turn-timeout", 0, "provider turn timeout injected into participant runtime env")
 	rootCmd.AddCommand(acceptanceMulticaProvisionCmd)
 }
 
@@ -109,11 +109,11 @@ func buildAcceptanceMulticaProvisionArgs() []string {
 	args = appendFlag(args, "--mnemon-control-token", acceptanceMulticaProvisionControlToken)
 	args = appendFlag(args, "--mnemon-control-token-file", acceptanceMulticaProvisionControlTokenFile)
 	args = appendFlag(args, "--harness-bin", acceptanceMulticaProvisionInjectedHarnessBin)
-	args = appendFlag(args, "--managed-runtime", acceptanceMulticaProvisionManagedRuntime)
-	args = appendFlag(args, "--managed-command", acceptanceMulticaProvisionManagedCommand)
-	args = appendFlag(args, "--managed-workspace", acceptanceMulticaProvisionManagedWorkspace)
-	if acceptanceMulticaProvisionManagedTimeout > 0 {
-		args = appendFlag(args, "--managed-turn-timeout", acceptanceMulticaProvisionManagedTimeout.String())
+	args = appendFlag(args, "--provider-runtime", acceptanceMulticaProvisionProviderRuntime)
+	args = appendFlag(args, "--provider-command", acceptanceMulticaProvisionProviderCommand)
+	args = appendFlag(args, "--provider-workspace", acceptanceMulticaProvisionProviderWorkspace)
+	if acceptanceMulticaProvisionProviderTimeout > 0 {
+		args = appendFlag(args, "--provider-turn-timeout", acceptanceMulticaProvisionProviderTimeout.String())
 	}
 	return args
 }
