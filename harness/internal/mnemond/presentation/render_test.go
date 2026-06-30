@@ -102,7 +102,7 @@ func TestMulticaTeamworkSignalPresentationKeepsHandoffInMnemonProtocol(t *testin
 	for _, want := range []string{
 		"For Multica-hosted teamwork",
 		"Mnemon assignment events",
-		"not canonical assignment mailboxes",
+		"not canonical assignment state",
 	} {
 		if !strings.Contains(resp.Body, want) {
 			t.Fatalf("Multica teamwork cue missing %q:\n%s", want, resp.Body)
@@ -165,7 +165,7 @@ func TestMulticaTeamworkPresentationFiltersOtherSessions(t *testing.T) {
 	}
 }
 
-func TestMulticaAssignmentMailboxPresentationKeepsCurrentAssignment(t *testing.T) {
+func TestMulticaSurfacePresentationKeepsCurrentAssignment(t *testing.T) {
 	now := mustTime(t, "2026-06-24T10:00:00Z")
 	proj := view.View{Ref: "proj_multica_assignment_scope", Digest: "digest_multica_assignment_scope", Content: []view.ResourceContent{
 		content("assignment", "project", []any{
@@ -173,8 +173,8 @@ func TestMulticaAssignmentMailboxPresentationKeepsCurrentAssignment(t *testing.T
 				"id":            "asg-current",
 				"actor":         "planner@team",
 				"assignee":      "worker@team",
-				"scope":         "current mailbox work",
-				"expected_work": "inspect current mailbox",
+				"scope":         "current surface work",
+				"expected_work": "inspect current surface",
 				"ttl":           "30m",
 				"created_at":    "2026-06-24T09:45:00Z",
 			},
@@ -182,8 +182,8 @@ func TestMulticaAssignmentMailboxPresentationKeepsCurrentAssignment(t *testing.T
 				"id":            "asg-stale",
 				"actor":         "planner@team",
 				"assignee":      "worker@team",
-				"scope":         "stale mailbox work",
-				"expected_work": "inspect stale mailbox",
+				"scope":         "stale surface work",
+				"expected_work": "inspect stale surface",
 				"ttl":           "30m",
 				"created_at":    "2026-06-24T09:45:00Z",
 			},
@@ -201,10 +201,10 @@ func TestMulticaAssignmentMailboxPresentationKeepsCurrentAssignment(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(resp.Body, "inspect current mailbox") {
+	if !strings.Contains(resp.Body, "inspect current surface") {
 		t.Fatalf("current assignment should remain visible:\n%s", resp.Body)
 	}
-	if strings.Contains(resp.Body, "inspect stale mailbox") || strings.Contains(resp.Body, "asg-stale") {
+	if strings.Contains(resp.Body, "inspect stale surface") || strings.Contains(resp.Body, "asg-stale") {
 		t.Fatalf("Multica assignment render must not leak stale assignment:\n%s", resp.Body)
 	}
 }

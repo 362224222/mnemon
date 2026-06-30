@@ -117,7 +117,7 @@ cat >> "$MULTICA_STDIN_PATH"
 case "$*" in
   *"issue create"*) printf '{"id":"iss-poc","identifier":"TEA-50","title":"Parallel PoC overlap drill","description":"Teamwork acceptance","status":"todo"}\n' ;;
   *"issue runs iss-poc"*) printf '[{"id":"task-poc","issue_id":"iss-poc","agent_id":"agent-1","status":"completed","completed_at":"2026-06-30T09:00:00Z","workspace_id":"ws-1"}]\n' ;;
-  *"issue run-messages task-poc"*) printf '[{"task_id":"task-poc","issue_id":"iss-poc","seq":1,"type":"assistant","content":"Mnemon Multica runtime handled issue TEA-50. Mnemon ingest: recorded.","created_at":"2026-06-30T09:00:01Z"}]\n' ;;
+  *"issue run-messages task-poc"*) printf '[{"task_id":"task-poc","issue_id":"iss-poc","seq":1,"type":"assistant","content":"Mnemon Multica runtime handled issue TEA-50. Multica surface input: observed.","created_at":"2026-06-30T09:00:01Z"}]\n' ;;
   *) printf '{}\n' ;;
 esac
 `
@@ -163,8 +163,8 @@ esac
 		"## Execution Plan",
 		"## Parallel PoCs",
 		"## Context Reuse Checks",
-		"Do not call Multica issue create",
-		"finish rather than waiting for their own Multica comment projection",
+		"不要把 Multica 当 canonical hub backend",
+		"explicit surface writeback commands",
 		"Direct Multica issue fan-out is invalid",
 		"poc-runtime-routing",
 		"poc-operator-runbook",

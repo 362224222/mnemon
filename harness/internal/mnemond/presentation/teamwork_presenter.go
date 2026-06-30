@@ -80,7 +80,7 @@ func DeriveEventEnvelopes(req Request, proj view.View, now time.Time) []eventmod
 		subject := "teamwork_signal/" + id
 		body := fmt.Sprintf("Teamwork signal is open: %s. Assignment or self-assignment may be useful when you choose to act.", statement)
 		if multicaHubRender(req) {
-			body += " For Multica-hosted teamwork, create handoffs as Mnemon assignment events; Multica issues are OA and activation surfaces, not canonical assignment mailboxes."
+			body += " For Multica-hosted teamwork, create handoffs as Mnemon assignment events; Multica issues are OA and activation surfaces, not canonical assignment state."
 		}
 		if refs := signalContextRefs(signal); len(refs) > 0 {
 			body = fmt.Sprintf("%s Context refs: %s.", body, strings.Join(refs, ", "))
