@@ -13,4 +13,6 @@ python3 "$SCRIPT_DIR/run.py" \
   --out-dir "$PHASE_DIR" \
   --profile "${MNEMON_MULTICA_PROFILE:-desktop-api.multica.ai}" \
   --workspace-id "${MNEMON_MULTICA_WORKSPACE_ID:-}" \
+  --multica-mode "${MNEMON_R3_ZH_MULTICA_MODE:-docker}" \
+  --multica-source "${MNEMON_MULTICA_SOURCE_DIR:-/Users/grivn/go/src/github.com/multica-ai/multica/server}" \
   --run-id "${MNEMON_R3_RUN_ID:-manual}"

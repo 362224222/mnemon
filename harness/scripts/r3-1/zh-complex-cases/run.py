@@ -2,6 +2,7 @@
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -23,10 +24,15 @@ def now():
 
 
 class Runner:
-    def __init__(self, out_dir, profile, workspace_id):
+    def __init__(self, out_dir, profile, workspace_id, multica_mode, multica_source):
         self.out_dir = Path(out_dir)
         self.profile = profile
         self.workspace_id = workspace_id
+        self.multica_mode = multica_mode
+        self.multica_source = Path(multica_source) if multica_source else Path("")
+        self.docker_image = os.environ.get("MNEMON_R3_ZH_MULTICA_DOCKER_IMAGE", "golang:1.24")
+        self.go_mod_cache = self.out_dir / "go-mod-cache"
+        self.go_build_cache = self.out_dir / "go-build-cache"
         self.commands = []
         self.seq = 0
 
@@ -44,10 +50,45 @@ class Runner:
         return proc, log
 
     def multica(self, label, *args, stdin=""):
-        base = ["multica", "--profile", self.profile]
+        base = self.multica_base()
+        base += ["--profile", self.profile]
         if self.workspace_id:
             base += ["--workspace-id", self.workspace_id]
         return self.run(label, base + list(args), stdin=stdin)
+
+    def multica_base(self):
+        if self.multica_mode == "host":
+            return ["multica"]
+        self.go_mod_cache.mkdir(parents=True, exist_ok=True)
+        self.go_build_cache.mkdir(parents=True, exist_ok=True)
+        return [
+            "docker", "run", "--rm", "-i",
+            "-e", "GOTOOLCHAIN=auto",
+            "-v", f"{self.multica_source}:/multica-server:ro",
+            "-v", f"{Path.home() / '.multica'}:/root/.multica:ro",
+            "-v", f"{self.go_mod_cache}:/go/pkg/mod",
+            "-v", f"{self.go_build_cache}:/root/.cache/go-build",
+            "-w", "/multica-server",
+            self.docker_image,
+            "go", "run", "./cmd/multica",
+        ]
+
+    def readiness_error(self):
+        if self.multica_mode == "host":
+            if not shutil.which("multica"):
+                return "multica CLI is unavailable"
+            return ""
+        if self.multica_mode != "docker":
+            return f"unsupported multica mode: {self.multica_mode}"
+        if not shutil.which("docker"):
+            return "docker CLI is unavailable"
+        if not self.multica_source.exists():
+            return f"Multica source directory is unavailable: {self.multica_source}"
+        if not (self.multica_source / "go.mod").exists():
+            return f"Multica source directory does not contain go.mod: {self.multica_source}"
+        if not (Path.home() / ".multica").exists():
+            return "~/.multica profile directory is unavailable"
+        return ""
 
 
 def redact_args(args):
@@ -135,6 +176,8 @@ def main():
     parser.add_argument("--out-dir", required=True)
     parser.add_argument("--profile", required=True)
     parser.add_argument("--workspace-id", default="")
+    parser.add_argument("--multica-mode", choices=["docker", "host"], default="docker")
+    parser.add_argument("--multica-source", default="")
     parser.add_argument("--run-id", required=True)
     args = parser.parse_args()
 
@@ -149,8 +192,11 @@ def main():
     if not workspace_id:
         return write_summary(args, commands, [], [], [], skipped="Multica workspace id is unavailable")
 
-    runner = Runner(out_dir, args.profile, workspace_id)
+    runner = Runner(out_dir, args.profile, workspace_id, args.multica_mode, args.multica_source)
     runner.commands.extend(commands)
+    readiness_error = runner.readiness_error()
+    if readiness_error:
+        return write_summary(args, runner.commands, [], [], [], skipped=readiness_error)
     agents_proc, _ = runner.multica("agent-list", "agent", "list", "--output", "json")
     if agents_proc.returncode != 0:
         return write_summary(args, runner.commands, [], [], [], failed="agent list failed")
@@ -262,12 +308,14 @@ accepted 后通过 Mnemon display writeback 写 Multica comment/metadata。"""
 
 def write_summary(args, commands, created, run_targets, run_ids, skipped="", failed=""):
     logs = "\n".join(Path(cmd["log"]).read_text(encoding="utf-8", errors="replace") for cmd in commands if Path(cmd["log"]).exists())
+    docker_mode = args.multica_mode == "docker"
     assertions = [
         {"name": "created session root plus three PoC roots", "passed": len([x for x in created if x.get("kind") == "session"]) == 1 and len([x for x in created if x.get("kind") == "poc-root"]) == 3},
         {"name": "created at least six role assignments", "passed": len([x for x in created if x.get("kind") == "assignment"]) >= 6},
         {"name": "created follow-up issue for second round", "passed": any(x.get("kind") == "follow-up" for x in created)},
         {"name": "at least three assigned issues produced runs", "passed": len(run_ids) >= 3},
         {"name": "multiple PoCs share context comments", "passed": "ctx:发布窗口" in logs and "ctx:风险登记" in logs},
+        {"name": "Dockerized Multica CLI executed visible case", "passed": (not docker_mode) or any((cmd.get("name") or "").startswith("docker run") for cmd in commands)},
         {"name": "logs do not expose Multica token literal", "passed": "mul_" not in logs},
     ]
     failures = []
@@ -289,6 +337,10 @@ def write_summary(args, commands, created, run_targets, run_ids, skipped="", fai
         "assertions": assertions,
         "skipped": skipped_items,
         "failures": failures,
+        "metadata": {
+            "multica_mode": args.multica_mode,
+            "multica_source": args.multica_source,
+        },
         "created": created,
         "run_targets": run_targets,
         "runs": run_ids,
