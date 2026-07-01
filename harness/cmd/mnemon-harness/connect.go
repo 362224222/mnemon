@@ -13,8 +13,6 @@ var (
 	connectConfigPath     string
 	connectMulticaWS      string
 	connectMulticaRuntime string
-	connectGitHubRepo     string
-	connectGitHubBranch   string
 	connectMnemonhubURL   string
 )
 
@@ -27,12 +25,6 @@ var connectMulticaCmd = &cobra.Command{
 	Use:   "multica --workspace WORKSPACE",
 	Short: "Connect Multica as a harness connection",
 	RunE:  runConnectMultica,
-}
-
-var connectGitHubCmd = &cobra.Command{
-	Use:   "github --repo OWNER/REPO",
-	Short: "Connect GitHub as a harness connection",
-	RunE:  runConnectGitHub,
 }
 
 var connectMnemonhubCmd = &cobra.Command{
@@ -48,10 +40,8 @@ func init() {
 	connectMulticaCmd.Flags().StringVar(&connectMulticaWS, "workspace", "", "Multica workspace")
 	connectMulticaCmd.Flags().StringVar(&connectMulticaRuntime, "runtime-binary", productconfig.DefaultMulticaRuntimeBinary, "Multica runtime binary")
 	_ = connectMulticaCmd.Flags().MarkHidden("runtime-binary")
-	connectGitHubCmd.Flags().StringVar(&connectGitHubRepo, "repo", "", "GitHub repository owner/name")
-	connectGitHubCmd.Flags().StringVar(&connectGitHubBranch, "branch", "", "GitHub publication branch")
 	connectMnemonhubCmd.Flags().StringVar(&connectMnemonhubURL, "endpoint", "", "mnemonhub endpoint")
-	connectCmd.AddCommand(connectMulticaCmd, connectGitHubCmd, connectMnemonhubCmd)
+	connectCmd.AddCommand(connectMulticaCmd, connectMnemonhubCmd)
 	connectCmd.GroupID = groupSpine
 	rootCmd.AddCommand(connectCmd)
 }
@@ -79,30 +69,6 @@ func runConnectMultica(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	fmt.Fprintln(cmd.OutOrStdout(), "Connection: multica ready")
-	fmt.Fprintf(cmd.OutOrStdout(), "Harness config: %s\n", path)
-	return nil
-}
-
-func runConnectGitHub(cmd *cobra.Command, args []string) error {
-	if strings.TrimSpace(connectGitHubRepo) == "" {
-		return fmt.Errorf("connect github requires --repo")
-	}
-	cfg, _, err := loadHarnessProductConfig(connectRoot, connectConfigPath)
-	if err != nil {
-		return err
-	}
-	cfg.Connections.GitHub = productconfig.GitHubConnection{
-		Enabled: true,
-		Repo:    strings.TrimSpace(connectGitHubRepo),
-		Branch:  strings.TrimSpace(connectGitHubBranch),
-	}
-	cfg.Daemon.InteractionWatchers = appendUniqueString(cfg.Daemon.InteractionWatchers, productconfig.ConnectionGitHub)
-	cfg.Daemon.DisplaySurfaces = appendUniqueString(cfg.Daemon.DisplaySurfaces, productconfig.ConnectionGitHub)
-	path, err := saveHarnessProductConfig(connectRoot, connectConfigPath, cfg)
-	if err != nil {
-		return err
-	}
-	fmt.Fprintln(cmd.OutOrStdout(), "Connection: github ready")
 	fmt.Fprintf(cmd.OutOrStdout(), "Harness config: %s\n", path)
 	return nil
 }

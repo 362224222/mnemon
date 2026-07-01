@@ -52,7 +52,7 @@ func TestLoadRemoteEntryRejectsUnsupportedBackend(t *testing.T) {
 	}
 }
 
-func TestLoadRemoteEntryAcceptsGitHubPublicationConfig(t *testing.T) {
+func TestLoadRemoteEntryRejectsGitHubBackend(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "remotes.json")
 	if err := os.WriteFile(path, []byte(`{
 	  "schema_version": 1,
@@ -69,60 +69,9 @@ func TestLoadRemoteEntryAcceptsGitHubPublicationConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	remote, err := LoadRemoteEntry(path, "default")
-	if err != nil {
-		t.Fatalf("load github remote: %v", err)
-	}
-	if remote.Backend != RemoteBackendGitHub || remote.Direction != RemoteDirectionPublish ||
-		remote.Repo != "mnemon-dev/mnemon-teamwork-example" || remote.Branch != "mnemon/agent-a" {
-		t.Fatalf("github remote not normalized: %+v", remote)
-	}
-}
-
-func TestLoadRemoteEntryRejectsInvalidGitHubPublicationConfig(t *testing.T) {
-	cases := []struct {
-		name string
-		body string
-		want string
-	}{{
-		name: "missing repo",
-		body: `{
-		  "schema_version": 1,
-		  "remotes": [{
-		    "id": "self",
-		    "backend": "github",
-		    "direction": "publish",
-		    "branch": "mnemon/agent-a",
-		    "credential_ref": ".mnemon/harness/sync/credentials/self.token"
-		  }]
-		}`,
-		want: "github repo is required",
-	}, {
-		name: "bad branch",
-		body: `{
-		  "schema_version": 1,
-		  "remotes": [{
-		    "id": "self",
-		    "backend": "github",
-		    "direction": "publish",
-		    "repo": "mnemon-dev/mnemon-teamwork-example",
-		    "branch": "main",
-		    "credential_ref": ".mnemon/harness/sync/credentials/self.token"
-		  }]
-		}`,
-		want: "outside the mnemon namespace",
-	}}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "remotes.json")
-			if err := os.WriteFile(path, []byte(tc.body+"\n"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			_, err := LoadRemoteEntry(path, "self")
-			if err == nil || !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("invalid github remote must fail with %q, got %v", tc.want, err)
-			}
-		})
+	_, err := LoadRemoteEntry(path, "default")
+	if err == nil || !strings.Contains(err.Error(), "unsupported Remote Workspace backend") {
+		t.Fatalf("github backend must fail closed, got %v", err)
 	}
 }
 

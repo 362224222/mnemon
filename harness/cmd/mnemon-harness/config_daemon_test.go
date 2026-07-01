@@ -87,9 +87,8 @@ func TestDaemonStatusShowsConfiguredRoleSummary(t *testing.T) {
 	root := t.TempDir()
 	cfg := productconfig.Default()
 	cfg.Connections.Multica = productconfig.MulticaConnection{Enabled: true, Workspace: "ws-multica", RuntimeBinary: "mnemon-multica-runtime"}
-	cfg.Connections.GitHub = productconfig.GitHubConnection{Enabled: true, Repo: "mnemon-dev/mnemon-teamwork-example"}
 	cfg.Connections.Mnemonhub = productconfig.MnemonhubConnection{Enabled: true, Endpoint: "https://hub.example.invalid"}
-	cfg.Daemon.InteractionWatchers = []string{productconfig.ConnectionMultica, productconfig.ConnectionGitHub, productconfig.ConnectionMnemonhub}
+	cfg.Daemon.InteractionWatchers = []string{productconfig.ConnectionMultica, productconfig.ConnectionMnemonhub}
 	cfg.Daemon.DriveSources = []string{productconfig.DriveManagedLocal}
 	cfg.Daemon.DisplaySurfaces = []string{productconfig.ConnectionMultica}
 	if err := productconfig.Save(productconfig.DefaultPath(root, ""), cfg); err != nil {
@@ -106,10 +105,9 @@ func TestDaemonStatusShowsConfiguredRoleSummary(t *testing.T) {
 	got := out.String()
 	for _, want := range []string{
 		"Harness config: configured",
-		"Harness daemon roles: watchers=3 drive=1 surfaces=1",
+		"Harness daemon roles: watchers=2 drive=1 surfaces=1",
 		"Harness daemon role details:",
 		"multica-watch [interaction]: watcher=multica boundary=activation-carrier",
-		"github-watch [interaction]: watcher=github boundary=external-interaction",
 		"mnemonhub-watch [interaction]: watcher=mnemonhub boundary=remote-exchange",
 		"managed-drive [drive]: drive=managed-local boundary=managed-runtime",
 		"multica-display [surface]: surface=multica boundary=display-surface",
@@ -286,27 +284,20 @@ func TestConnectCommandsWriteProductConfig(t *testing.T) {
 	root := t.TempDir()
 	oldRoot, oldPath := connectRoot, connectConfigPath
 	oldWorkspace, oldRuntime := connectMulticaWS, connectMulticaRuntime
-	oldRepo, oldBranch := connectGitHubRepo, connectGitHubBranch
 	oldEndpoint := connectMnemonhubURL
 	connectRoot = root
 	connectConfigPath = ""
 	connectMulticaWS = "teamwork-grivn"
 	connectMulticaRuntime = "mnemon-multica-runtime"
-	connectGitHubRepo = "mnemon-dev/mnemon-teamwork-example"
-	connectGitHubBranch = "mnemond-planner"
 	connectMnemonhubURL = "https://hub.example.invalid"
 	t.Cleanup(func() {
 		connectRoot, connectConfigPath = oldRoot, oldPath
 		connectMulticaWS, connectMulticaRuntime = oldWorkspace, oldRuntime
-		connectGitHubRepo, connectGitHubBranch = oldRepo, oldBranch
 		connectMnemonhubURL = oldEndpoint
 	})
 
 	cmd, _ := testCommand()
 	if err := runConnectMultica(cmd, nil); err != nil {
-		t.Fatal(err)
-	}
-	if err := runConnectGitHub(cmd, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := runConnectMnemonhub(cmd, nil); err != nil {
@@ -320,18 +311,15 @@ func TestConnectCommandsWriteProductConfig(t *testing.T) {
 	if got := cfg.Connections.Multica.RuntimeBinary; got != "mnemon-multica-runtime" {
 		t.Fatalf("unexpected runtime binary: %q", got)
 	}
-	if !cfg.Connections.GitHub.Enabled || cfg.Connections.GitHub.Repo != "mnemon-dev/mnemon-teamwork-example" {
-		t.Fatalf("github connection not written: %+v", cfg.Connections.GitHub)
-	}
 	if !cfg.Connections.Mnemonhub.Enabled || cfg.Connections.Mnemonhub.Endpoint != "https://hub.example.invalid" {
 		t.Fatalf("mnemonhub connection not written: %+v", cfg.Connections.Mnemonhub)
 	}
-	for _, want := range []string{productconfig.ConnectionMultica, productconfig.ConnectionGitHub, productconfig.ConnectionMnemonhub} {
+	for _, want := range []string{productconfig.ConnectionMultica, productconfig.ConnectionMnemonhub} {
 		if !containsString(cfg.Daemon.InteractionWatchers, want) {
 			t.Fatalf("interaction watcher %q missing: %+v", want, cfg.Daemon.InteractionWatchers)
 		}
 	}
-	for _, want := range []string{productconfig.ConnectionMultica, productconfig.ConnectionGitHub} {
+	for _, want := range []string{productconfig.ConnectionMultica} {
 		if !containsString(cfg.Daemon.DisplaySurfaces, want) {
 			t.Fatalf("display surface %q missing: %+v", want, cfg.Daemon.DisplaySurfaces)
 		}

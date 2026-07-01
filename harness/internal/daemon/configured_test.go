@@ -82,7 +82,7 @@ func TestRoleDetailsDescribeDaemonBoundaries(t *testing.T) {
 
 func TestRoleSummaryReflectsConfiguredDaemonRoles(t *testing.T) {
 	cfg := productconfig.Default()
-	cfg.Daemon.InteractionWatchers = []string{productconfig.ConnectionMultica, productconfig.ConnectionGitHub}
+	cfg.Daemon.InteractionWatchers = []string{productconfig.ConnectionMultica, productconfig.ConnectionMnemonhub}
 	cfg.Daemon.DriveSources = []string{productconfig.DriveManagedLocal}
 	cfg.Daemon.DisplaySurfaces = []string{productconfig.ConnectionMultica}
 

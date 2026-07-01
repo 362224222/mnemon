@@ -12,7 +12,6 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemonhub/exchange"
-	githubbackend "github.com/mnemon-dev/mnemon/harness/internal/mnemonhub/exchange/backend/github"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 	"github.com/spf13/cobra"
 )
@@ -28,8 +27,6 @@ var (
 	syncRemoteToken     string
 	syncRemoteTokenFile string
 	syncCAFile          string
-	syncGitHubRepo      string
-	syncGitHubBranch    string
 	syncAllowInsecure   bool
 	syncOnce            bool
 	syncBackground      bool
@@ -72,14 +69,12 @@ func init() {
 	syncCmd.PersistentFlags().StringVar(&syncStorePath, "store", "", "Local Mnemon store path")
 	syncCmd.PersistentFlags().StringVar(&syncRemotesPath, "remotes", "", "Remote Workspace config path")
 	syncCmd.PersistentFlags().StringVar(&syncRemoteID, "remote", "default", "Remote Workspace id")
-	syncCmd.PersistentFlags().StringVar(&syncRemoteBackend, "backend", "", "Remote Workspace backend (http or github)")
+	syncCmd.PersistentFlags().StringVar(&syncRemoteBackend, "backend", "", "Remote Workspace backend (http)")
 	syncCmd.PersistentFlags().StringVar(&syncRemoteDirection, "direction", "", "Remote Workspace direction (bidirectional, publish, or subscribe)")
 	syncCmd.PersistentFlags().StringVar(&syncRemoteURL, "remote-url", "", "Remote Workspace sync endpoint")
 	syncCmd.PersistentFlags().StringVar(&syncRemoteToken, "token", "", "Remote Workspace sync token")
 	syncCmd.PersistentFlags().StringVar(&syncRemoteTokenFile, "token-file", "", "Remote Workspace sync token file")
 	syncCmd.PersistentFlags().StringVar(&syncCAFile, "ca-file", "", "PEM bundle pinning the Remote Workspace TLS root (e.g. the mnemon-hub --dev-selfsigned cert)")
-	syncCmd.PersistentFlags().StringVar(&syncGitHubRepo, "github-repo", "", "GitHub Remote Workspace repository (owner/name)")
-	syncCmd.PersistentFlags().StringVar(&syncGitHubBranch, "github-branch", "", "GitHub Remote Workspace publication branch")
 	syncCmd.PersistentFlags().BoolVar(&syncAllowInsecure, "allow-insecure-remote", false, "explicitly allow a plaintext http:// Remote Workspace endpoint with a non-loopback host (T2: fail-closed by default)")
 	_ = syncCmd.PersistentFlags().MarkHidden("store")
 	_ = syncCmd.PersistentFlags().MarkHidden("remotes")
@@ -110,7 +105,6 @@ func runSyncConnect(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	repo, branch := "", ""
 	switch backend {
 	case exchange.RemoteBackendHTTP:
 		if endpoint == "" {
@@ -120,15 +114,6 @@ func runSyncConnect(cmd *cobra.Command, args []string) error {
 		// remotes.json unless explicitly overridden — the worker and the manual verbs then re-validate
 		// at client construction.
 		if err := access.ValidateSyncEndpoint(endpoint, syncAllowInsecure); err != nil {
-			return err
-		}
-	case exchange.RemoteBackendGitHub:
-		repo, err = exchange.NormalizeGitHubRepo(syncGitHubRepo)
-		if err != nil {
-			return err
-		}
-		branch, err = exchange.NormalizePublicationBranch(syncGitHubBranch)
-		if err != nil {
 			return err
 		}
 	default:
@@ -141,7 +126,7 @@ func runSyncConnect(cmd *cobra.Command, args []string) error {
 	if backend == exchange.RemoteBackendHTTP && direction == exchange.RemoteDirectionBidirectional {
 		directionForWrite = ""
 	}
-	if err := upsertSyncRemote(resolvedSyncRemotesPath(), syncProjectRoot(), workspace, backend, directionForWrite, endpoint, repo, branch, syncRemoteToken, syncRemoteTokenFile, syncCAFile); err != nil {
+	if err := upsertSyncRemote(resolvedSyncRemotesPath(), syncProjectRoot(), workspace, backend, directionForWrite, endpoint, syncRemoteToken, syncRemoteTokenFile, syncCAFile); err != nil {
 		return err
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "Remote Workspace: connected %s\n", workspace)
@@ -307,8 +292,6 @@ type syncRemoteConfig struct {
 	ID       string
 	Backend  string
 	Endpoint string
-	Repo     string
-	Branch   string
 	Token    string
 	CAFile   string
 }
@@ -332,19 +315,6 @@ func syncRemoteWorkspaceFor(remote syncRemoteConfig) (exchange.RemoteWorkspace, 
 			Token:         remote.Token,
 			CAFile:        remote.CAFile,
 			AllowInsecure: syncAllowInsecure,
-		})
-	case exchange.RemoteBackendGitHub:
-		store, err := githubbackend.NewPublicationStore(githubbackend.PublicationStoreConfig{
-			Repo:  remote.Repo,
-			Token: remote.Token,
-		})
-		if err != nil {
-			return nil, err
-		}
-		return githubbackend.New(githubbackend.Config{
-			Store:  store,
-			Repo:   remote.Repo,
-			Branch: remote.Branch,
 		})
 	default:
 		return nil, fmt.Errorf("Remote Workspace %q: unsupported backend %q", remote.ID, backend)
@@ -414,7 +384,7 @@ func resolveSyncRemoteEntry(entry exchange.RemoteEntry) (syncRemoteConfig, error
 	if err != nil {
 		return syncRemoteConfig{}, err
 	}
-	return syncRemoteConfig{ID: entry.ID, Backend: entry.NormalizedBackend(), Endpoint: entry.Endpoint, Repo: entry.Repo, Branch: entry.Branch, Token: token, CAFile: resolvedSyncCAFile(entry.CAFile)}, nil
+	return syncRemoteConfig{ID: entry.ID, Backend: entry.NormalizedBackend(), Endpoint: entry.Endpoint, Token: token, CAFile: resolvedSyncCAFile(entry.CAFile)}, nil
 }
 
 // resolvedSyncCAFile picks the pinned-root file: the --ca-file flag overrides the remotes.json
@@ -430,7 +400,7 @@ func resolvedSyncCAFile(entryCAFile string) string {
 	return resolveSyncPath(caFile)
 }
 
-func upsertSyncRemote(path, root, id, backend, direction, endpoint, repo, branch, token, tokenFile, caFile string) error {
+func upsertSyncRemote(path, root, id, backend, direction, endpoint, token, tokenFile, caFile string) error {
 	doc := exchange.RemotesDoc{SchemaVersion: 1}
 	if raw, err := os.ReadFile(path); err == nil && len(strings.TrimSpace(string(raw))) > 0 {
 		if err := json.Unmarshal(raw, &doc); err != nil {
@@ -446,7 +416,7 @@ func upsertSyncRemote(path, root, id, backend, direction, endpoint, repo, branch
 	if err != nil {
 		return err
 	}
-	entry := exchange.RemoteEntry{Backend: backend, Direction: direction, ID: id, Endpoint: endpoint, Repo: repo, Branch: branch, CredentialRef: credentialRef, CAFile: normalizeSyncFileRef(caFile)}
+	entry := exchange.RemoteEntry{Backend: backend, Direction: direction, ID: id, Endpoint: endpoint, CredentialRef: credentialRef, CAFile: normalizeSyncFileRef(caFile)}
 	replaced := false
 	for i := range doc.Remotes {
 		if doc.Remotes[i].ID == id {

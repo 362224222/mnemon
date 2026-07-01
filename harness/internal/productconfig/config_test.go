@@ -184,9 +184,6 @@ func TestFromLegacyBridgesLocalAndRemoteConfigs(t *testing.T) {
 	if len(cfg.Participants) != 1 || cfg.Participants[0].Principal != "planner@team" {
 		t.Fatalf("participant bridge mismatch: %+v", cfg.Participants)
 	}
-	if !cfg.Connections.GitHub.Enabled || cfg.Connections.GitHub.Repo != "mnemon-dev/mnemon-teamwork-example" {
-		t.Fatalf("github bridge mismatch: %+v", cfg.Connections.GitHub)
-	}
 	if !cfg.Connections.Mnemonhub.Enabled || cfg.Connections.Mnemonhub.Endpoint != "https://hub.example" {
 		t.Fatalf("mnemonhub bridge mismatch: %+v", cfg.Connections.Mnemonhub)
 	}
@@ -195,6 +192,9 @@ func TestFromLegacyBridgesLocalAndRemoteConfigs(t *testing.T) {
 	}
 	if stringSliceContains(cfg.Daemon.DisplaySurfaces, ConnectionMnemonhub) {
 		t.Fatalf("mnemonhub must not be bridged as a display surface: %+v", cfg.Daemon.DisplaySurfaces)
+	}
+	if stringSliceContains(cfg.Daemon.InteractionWatchers, "github") || stringSliceContains(cfg.Daemon.DisplaySurfaces, "github") {
+		t.Fatalf("legacy github remotes must not bridge into product config: %+v", cfg.Daemon)
 	}
 	if len(cfg.Daemon.DriveSources) != 1 || cfg.Daemon.DriveSources[0] != DriveManagedLocal {
 		t.Fatalf("drive sources mismatch: %+v", cfg.Daemon.DriveSources)

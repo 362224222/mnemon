@@ -13,7 +13,6 @@ func TestRootExposesAcceptanceScenarioCommands(t *testing.T) {
 		"r1-prod-sim",
 		"r1-task-sim",
 		"r1-cluster-single-entrypoint",
-		"r1-github-mesh-task-suite",
 		"multica-provision",
 		"multica-runtime-prod-sim",
 	} {

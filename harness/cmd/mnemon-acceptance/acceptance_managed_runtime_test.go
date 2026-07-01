@@ -67,7 +67,7 @@ func TestManagedRuntimeAcceptanceRejectsNonSentinelWake(t *testing.T) {
 	}
 }
 
-func TestManagedRuntimeGitHubRequiresTokenFile(t *testing.T) {
+func TestManagedRuntimeRejectsGitHubExchange(t *testing.T) {
 	report, err := runManagedRuntimeAcceptance(context.Background(), managedRuntimeAcceptanceOptions{
 		RunRoot:  t.TempDir(),
 		Agents:   1,
@@ -77,10 +77,10 @@ func TestManagedRuntimeGitHubRequiresTokenFile(t *testing.T) {
 		},
 	})
 	if err == nil {
-		t.Fatal("github managed acceptance without token file should return an explicit blocker")
+		t.Fatal("github managed acceptance should be unsupported")
 	}
-	if report.Status != "blocked" || !strings.Contains(err.Error(), "--github-token-file") {
-		t.Fatalf("github blocker mismatch: status=%s err=%v report=%+v", report.Status, err, report)
+	if report.Status != "blocked" || !strings.Contains(err.Error(), "exchange must be mnemonhub") {
+		t.Fatalf("github exchange blocker mismatch: status=%s err=%v report=%+v", report.Status, err, report)
 	}
 }
 

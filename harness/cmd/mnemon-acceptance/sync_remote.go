@@ -10,7 +10,7 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemonhub/exchange"
 )
 
-func upsertSyncRemote(path, root, id, backend, direction, endpoint, repo, branch, token, tokenFile, caFile string) error {
+func upsertSyncRemote(path, root, id, backend, direction, endpoint, token, tokenFile, caFile string) error {
 	doc := exchange.RemotesDoc{SchemaVersion: 1}
 	if raw, err := os.ReadFile(path); err == nil && len(strings.TrimSpace(string(raw))) > 0 {
 		if err := json.Unmarshal(raw, &doc); err != nil {
@@ -31,8 +31,6 @@ func upsertSyncRemote(path, root, id, backend, direction, endpoint, repo, branch
 		Direction:     direction,
 		ID:            id,
 		Endpoint:      endpoint,
-		Repo:          repo,
-		Branch:        branch,
 		CredentialRef: credentialRef,
 		CAFile:        normalizeSyncFileRef(caFile),
 	}

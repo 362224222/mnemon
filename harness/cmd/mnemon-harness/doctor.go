@@ -66,9 +66,6 @@ func doctorConnections(cfg productconfig.Config) string {
 	if cfg.Connections.Multica.Enabled {
 		out = append(out, "multica")
 	}
-	if cfg.Connections.GitHub.Enabled {
-		out = append(out, "github")
-	}
 	if cfg.Connections.Mnemonhub.Enabled {
 		out = append(out, "mnemonhub")
 	}
