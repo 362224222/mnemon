@@ -73,17 +73,6 @@ type runtimeImportResult struct {
 	Err        error
 }
 
-type providerTurnResult struct {
-	Configured bool
-	Runtime    string
-	Command    string
-	CWD        string
-	Output     string
-	ExitCode   int
-	DurationMs int64
-	Err        error
-}
-
 func main() {
 	if err := runRuntime(runtimeConfig{
 		Args:   os.Args[1:],
@@ -138,17 +127,47 @@ func runRuntime(cfg runtimeConfig) error {
 }
 
 func runRuntimeRPC(cfg runtimeConfig, cwd string) error {
-	scanner := bufio.NewScanner(cfg.Stdin)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	state := runtimeRPCState{CWD: cwd, Env: cfg.Env, Now: cfg.Now}
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
+	reader := bufio.NewReaderSize(cfg.Stdin, 1024*1024)
+	if runtimeHasIssueActivation(cfg.Env, cwd, multicasurface.RuntimeInput{}) {
+		return runManagedRuntimeRPC(cfg, cwd, nil, reader)
+	}
+
+	var buffered []string
+	for {
+		raw, err := reader.ReadString('\n')
+		if raw != "" {
+			buffered = append(buffered, raw)
+			msg, ok := decodeRuntimeRPCLine(raw, cfg.Stderr)
+			if ok && msg.Method == "turn/start" {
+				input := multicasurface.RuntimeInputMaterial(msg.Params)
+				if runtimeHasIssueActivation(cfg.Env, cwd, input) {
+					return runManagedRuntimeRPC(cfg, cwd, buffered, reader)
+				}
+				proxyCfg := cfg
+				proxyCfg.Stdin = io.MultiReader(strings.NewReader(strings.Join(buffered, "")), reader)
+				return runProviderStdioProxy(proxyCfg, cwd)
+			}
+		}
+		if err == nil {
 			continue
 		}
-		var msg rpcMessage
-		if err := json.Unmarshal([]byte(line), &msg); err != nil {
-			fmt.Fprintf(cfg.Stderr, "%s: ignoring invalid rpc line: %v\n", multicasurface.MulticaRuntimeCommandName, err)
+		if err == io.EOF {
+			if len(buffered) == 0 {
+				return nil
+			}
+			proxyCfg := cfg
+			proxyCfg.Stdin = strings.NewReader(strings.Join(buffered, ""))
+			return runProviderStdioProxy(proxyCfg, cwd)
+		}
+		return err
+	}
+}
+
+func runManagedRuntimeRPC(cfg runtimeConfig, cwd string, prelude []string, reader *bufio.Reader) error {
+	state := runtimeRPCState{CWD: cwd, Env: cfg.Env, Now: cfg.Now}
+	for _, raw := range prelude {
+		msg, ok := decodeRuntimeRPCLine(raw, cfg.Stderr)
+		if !ok {
 			continue
 		}
 		if err := state.handle(msg, func(response rpcMessage) error {
@@ -157,7 +176,39 @@ func runRuntimeRPC(cfg runtimeConfig, cwd string) error {
 			return err
 		}
 	}
-	return scanner.Err()
+	for {
+		raw, err := reader.ReadString('\n')
+		if raw != "" {
+			msg, ok := decodeRuntimeRPCLine(raw, cfg.Stderr)
+			if ok {
+				if handleErr := state.handle(msg, func(response rpcMessage) error {
+					return writeRuntimeRPC(cfg.Stdout, response)
+				}); handleErr != nil {
+					return handleErr
+				}
+			}
+		}
+		if err == nil {
+			continue
+		}
+		if err == io.EOF {
+			return nil
+		}
+		return err
+	}
+}
+
+func decodeRuntimeRPCLine(raw string, stderr io.Writer) (rpcMessage, bool) {
+	line := strings.TrimSpace(raw)
+	if line == "" {
+		return rpcMessage{}, false
+	}
+	var msg rpcMessage
+	if err := json.Unmarshal([]byte(line), &msg); err != nil {
+		fmt.Fprintf(stderr, "%s: ignoring invalid rpc line: %v\n", multicasurface.MulticaRuntimeCommandName, err)
+		return rpcMessage{}, false
+	}
+	return msg, true
 }
 
 func (s *runtimeRPCState) handle(msg rpcMessage, emit func(rpcMessage) error) error {
@@ -292,14 +343,74 @@ func (s *runtimeRPCState) nextItemID(prefix string) string {
 
 func (s *runtimeRPCState) runTurn(input multicasurface.RuntimeInput, progress runtimeProgressSink) string {
 	result := s.importIssue(input, progress)
-	provider := s.runProviderTurn(input, result, progress)
-	if provider.Configured {
-		if strings.TrimSpace(provider.Output) != "" && provider.Err == nil {
-			return strings.TrimSpace(provider.Output)
-		}
-		return formatProviderFailureAnswer(provider, result)
-	}
 	return multicasurface.FormatRuntimeFinalAnswer(runtimeResultSummary(result))
+}
+
+func runtimeHasIssueActivation(env []string, cwd string, input multicasurface.RuntimeInput) bool {
+	activation := multicasurface.RuntimeContextFromActivation(env, cwd, multicasurface.RuntimeInput{})
+	if strings.TrimSpace(activation.IssueIdentity) != "" {
+		return true
+	}
+	activation = multicasurface.RuntimeContextFromActivation(env, cwd, input)
+	return strings.TrimSpace(activation.IssueIdentity) != ""
+}
+
+func runProviderStdioProxy(cfg runtimeConfig, cwd string) error {
+	command := runtimeProviderCommand(cfg.Env)
+	if command == "" {
+		return fmt.Errorf("no provider command configured")
+	}
+	ctx := context.Background()
+	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", command)
+	cmd.Dir = cwd
+	cmd.Env = append([]string(nil), cfg.Env...)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return fmt.Errorf("provider stdin pipe: %w", err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("provider stdout pipe: %w", err)
+	}
+	cmd.Stderr = cfg.Stderr
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start provider app-server: %w", err)
+	}
+	copyErr := make(chan error, 2)
+	go func() {
+		_, err := io.Copy(stdin, cfg.Stdin)
+		_ = stdin.Close()
+		copyErr <- err
+	}()
+	go func() {
+		_, err := io.Copy(cfg.Stdout, stdout)
+		copyErr <- err
+	}()
+	stdinErr := <-copyErr
+	stdoutErr := <-copyErr
+	waitErr := cmd.Wait()
+	if stdinErr != nil {
+		return fmt.Errorf("copy runtime input to provider: %w", stdinErr)
+	}
+	if stdoutErr != nil {
+		return fmt.Errorf("copy provider output to runtime: %w", stdoutErr)
+	}
+	if waitErr != nil {
+		return fmt.Errorf("provider app-server exited: %w", waitErr)
+	}
+	return nil
+}
+
+func runtimeProviderCommand(env []string) string {
+	if command := multicasurface.RuntimeEnvValue(env, "MNEMON_MULTICA_PROVIDER_COMMAND"); command != "" {
+		return command
+	}
+	switch strings.ToLower(multicasurface.RuntimeEnvDefault(env, "MNEMON_MULTICA_PROVIDER_RUNTIME", "codex")) {
+	case "codex", "codex-jsonrpc":
+		return "codex app-server --listen stdio://"
+	default:
+		return ""
+	}
 }
 
 func (s *runtimeRPCState) importIssue(input multicasurface.RuntimeInput, progress runtimeProgressSink) runtimeImportResult {
@@ -401,126 +512,6 @@ func (s *runtimeRPCState) importIssue(input multicasurface.RuntimeInput, progres
 	emitRuntimeProgress(progress, fmt.Sprintf("Mnemon recorded the issue observation at seq=%d.", rec.Seq))
 	emitRuntimeProgress(progress, "Multica surface input was imported; accepted-state writeback is handled only by explicit Mnemon report commands.")
 	return result
-}
-
-func (s *runtimeRPCState) runProviderTurn(input multicasurface.RuntimeInput, imported runtimeImportResult, progress runtimeProgressSink) providerTurnResult {
-	command := multicasurface.RuntimeEnvValue(s.Env, "MNEMON_MULTICA_PROVIDER_COMMAND")
-	if command == "" {
-		return providerTurnResult{}
-	}
-	provider := multicasurface.RuntimeEnvDefault(s.Env, "MNEMON_MULTICA_PROVIDER_RUNTIME", "provider")
-	cwd := multicasurface.RuntimeEnvDefault(s.Env, "MNEMON_MULTICA_PROVIDER_WORKSPACE", s.CWD)
-	prompt := providerPrompt(input, imported)
-	timeout := multicasurface.RuntimeProviderTurnTimeout(s.Env)
-	result := providerTurnResult{
-		Configured: true,
-		Runtime:    provider,
-		Command:    command,
-		CWD:        cwd,
-	}
-	emitRuntimeProgress(progress, "Starting Multica-hosted provider turn through "+provider+".")
-	started := s.now()
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", command)
-	cmd.Dir = cwd
-	cmd.Env = runtimeProviderEnv(s.Env, imported)
-	cmd.Stdin = strings.NewReader(prompt)
-	out, err := cmd.CombinedOutput()
-	result.DurationMs = s.now().Sub(started).Milliseconds()
-	result.Output = strings.TrimSpace(string(out))
-	if err != nil {
-		result.Err = err
-		result.ExitCode = runtimeExitCode(err)
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			result.ExitCode = exitErr.ExitCode()
-		}
-		if ctx.Err() == context.DeadlineExceeded {
-			result.Err = fmt.Errorf("provider turn timed out after %s", timeout)
-		}
-		emitRuntimeCommandCWD(progress, command, cwd, result.Output, result.ExitCode, result.DurationMs)
-		emitRuntimeProgress(progress, "Provider turn failed; Mnemon surface import remains separate from provider execution.")
-		return result
-	}
-	result.ExitCode = 0
-	emitRuntimeCommandCWD(progress, command, cwd, result.Output, result.ExitCode, result.DurationMs)
-	emitRuntimeProgress(progress, "Provider turn completed; Mnemon did not rewrite provider output.")
-	return result
-}
-
-func runtimeProviderEnv(env []string, imported runtimeImportResult) []string {
-	out := append([]string(nil), env...)
-	out = setRuntimeProviderEnv(out, "MULTICA_ISSUE_ID", imported.IssueID)
-	out = setRuntimeProviderEnv(out, "MULTICA_TASK_ID", imported.TaskID)
-	out = setRuntimeProviderEnv(out, "MNEMON_MULTICA_ISSUE_ID", imported.IssueID)
-	out = setRuntimeProviderEnv(out, "MNEMON_MULTICA_ISSUE_IDENTIFIER", imported.Identifier)
-	out = setRuntimeProviderEnv(out, "MNEMON_MULTICA_ISSUE_TITLE", imported.Title)
-	out = setRuntimeProviderEnv(out, "MNEMON_MULTICA_ISSUE_STATUS", imported.Status)
-	out = setRuntimeProviderEnv(out, "MNEMON_MULTICA_PRINCIPAL", imported.Principal)
-	return out
-}
-
-func setRuntimeProviderEnv(env []string, key, value string) []string {
-	key = strings.TrimSpace(key)
-	value = strings.TrimSpace(value)
-	if key == "" || value == "" {
-		return env
-	}
-	next := make([]string, 0, len(env)+1)
-	prefix := key + "="
-	for _, entry := range env {
-		if strings.HasPrefix(entry, prefix) {
-			continue
-		}
-		next = append(next, entry)
-	}
-	return append(next, key+"="+value)
-}
-
-func providerPrompt(input multicasurface.RuntimeInput, imported runtimeImportResult) string {
-	if text := strings.TrimSpace(input.Text); text != "" {
-		return text + "\n"
-	}
-	var b strings.Builder
-	label := firstNonEmpty(imported.Identifier, imported.IssueID)
-	if label != "" || strings.TrimSpace(imported.Title) != "" {
-		b.WriteString("Multica issue")
-		if label != "" {
-			b.WriteByte(' ')
-			b.WriteString(label)
-		}
-		if strings.TrimSpace(imported.Title) != "" {
-			b.WriteString(": ")
-			b.WriteString(strings.TrimSpace(imported.Title))
-		}
-		b.WriteString("\n\n")
-	}
-	if strings.TrimSpace(imported.Statement) != "" {
-		b.WriteString(strings.TrimSpace(imported.Statement))
-		b.WriteByte('\n')
-	}
-	return b.String()
-}
-
-func formatProviderFailureAnswer(provider providerTurnResult, imported runtimeImportResult) string {
-	var b strings.Builder
-	b.WriteString("Provider turn failed")
-	if provider.Runtime != "" {
-		b.WriteString(" (")
-		b.WriteString(provider.Runtime)
-		b.WriteString(")")
-	}
-	if provider.Err != nil {
-		b.WriteString(": ")
-		b.WriteString(provider.Err.Error())
-	}
-	if strings.TrimSpace(provider.Output) != "" {
-		b.WriteString("\n\n")
-		b.WriteString(strings.TrimSpace(provider.Output))
-	}
-	b.WriteString("\n\n")
-	b.WriteString(multicasurface.FormatRuntimeFinalAnswer(runtimeResultSummary(imported)))
-	return strings.TrimSpace(b.String())
 }
 
 func loadRuntimeIssueMetadata(ctx context.Context, cli driver.MulticaCLI, issue driver.MulticaIssue, progress runtimeProgressSink) driver.MulticaIssue {
