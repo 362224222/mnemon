@@ -9,6 +9,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -34,6 +36,7 @@ var (
 	hubConfigPath           string
 	hubCloudflareEnvFile    string
 	hubCloudflareWorkerName string
+	hubCloudflareSubdomain  string
 	hubCloudflareAccountID  string
 	hubCloudflarePrincipal  string
 	hubCloudflareReplicaID  string
@@ -67,6 +70,10 @@ var hubDoctorCmd = &cobra.Command{
 
 type commandRunner func(context.Context, commandInvocation) (commandResult, error)
 
+type httpDoer interface {
+	Do(*http.Request) (*http.Response, error)
+}
+
 type commandInvocation struct {
 	Dir    string
 	Env    []string
@@ -88,6 +95,7 @@ type cloudflareBootstrapPlan struct {
 	APIToken      string
 	AccountID     string
 	WorkerName    string
+	Subdomain     string
 	Principal     string
 	ReplicaID     string
 	ReplicaToken  string
@@ -98,6 +106,8 @@ type cloudflareBootstrapPlan struct {
 	Timeout       time.Duration
 	NoDeploy      bool
 	CommandRunner commandRunner
+	HTTPClient    httpDoer
+	APIBaseURL    string
 }
 
 type cloudflareBootstrapResult struct {
@@ -118,6 +128,7 @@ func init() {
 	_ = hubCmd.PersistentFlags().MarkHidden("config")
 	hubBootstrapCloudflareCmd.Flags().StringVar(&hubCloudflareEnvFile, "env-file", "", "Cloudflare bootstrap env file")
 	hubBootstrapCloudflareCmd.Flags().StringVar(&hubCloudflareWorkerName, "worker-name", "", "Cloudflare Worker name")
+	hubBootstrapCloudflareCmd.Flags().StringVar(&hubCloudflareSubdomain, "subdomain", "", "Cloudflare account workers.dev subdomain; empty reuses existing or creates a deterministic Mnemon subdomain")
 	hubBootstrapCloudflareCmd.Flags().StringVar(&hubCloudflareAccountID, "account-id", "", "Cloudflare account id")
 	hubBootstrapCloudflareCmd.Flags().StringVar(&hubCloudflarePrincipal, "principal", "mnemon-replica@team", "local replica principal for MnemonHub sync")
 	hubBootstrapCloudflareCmd.Flags().StringVar(&hubCloudflareReplicaID, "replica-id", "", "local replica id; empty generates one")
@@ -198,6 +209,12 @@ func buildCloudflareBootstrapPlan(root, configPath string) (cloudflareBootstrapP
 	if err := validateCloudflareWorkerName(workerName); err != nil {
 		return cloudflareBootstrapPlan{}, err
 	}
+	subdomain := firstNonEmpty(hubCloudflareSubdomain, env["MNEMON_CLOUDFLARE_SUBDOMAIN"])
+	if subdomain != "" {
+		if err := validateCloudflareWorkersSubdomain(subdomain); err != nil {
+			return cloudflareBootstrapPlan{}, err
+		}
+	}
 	replicaID := strings.TrimSpace(hubCloudflareReplicaID)
 	if replicaID == "" {
 		replicaID = "local-" + randomSuffix(6)
@@ -217,6 +234,7 @@ func buildCloudflareBootstrapPlan(root, configPath string) (cloudflareBootstrapP
 		APIToken:      apiToken,
 		AccountID:     strings.TrimSpace(accountID),
 		WorkerName:    workerName,
+		Subdomain:     subdomain,
 		Principal:     strings.TrimSpace(hubCloudflarePrincipal),
 		ReplicaID:     replicaID,
 		ReplicaToken:  replicaToken,
@@ -226,6 +244,8 @@ func buildCloudflareBootstrapPlan(root, configPath string) (cloudflareBootstrapP
 		Timeout:       hubCloudflareTimeout,
 		NoDeploy:      hubCloudflareNoDeploy,
 		CommandRunner: defaultCommandRunner,
+		HTTPClient:    http.DefaultClient,
+		APIBaseURL:    "https://api.cloudflare.com/client/v4",
 	}, nil
 }
 
@@ -239,6 +259,12 @@ func bootstrapCloudflareHub(ctx context.Context, plan cloudflareBootstrapPlan) (
 	if plan.CommandRunner == nil {
 		plan.CommandRunner = defaultCommandRunner
 	}
+	if plan.HTTPClient == nil {
+		plan.HTTPClient = http.DefaultClient
+	}
+	if strings.TrimSpace(plan.APIBaseURL) == "" {
+		plan.APIBaseURL = "https://api.cloudflare.com/client/v4"
+	}
 	endpoint := plan.Endpoint
 	if !plan.NoDeploy {
 		deployCtx := ctx
@@ -246,6 +272,9 @@ func bootstrapCloudflareHub(ctx context.Context, plan cloudflareBootstrapPlan) (
 		if plan.Timeout > 0 {
 			deployCtx, cancel = context.WithTimeout(ctx, plan.Timeout)
 			defer cancel()
+		}
+		if _, err := ensureCloudflareWorkersSubdomain(deployCtx, plan); err != nil {
+			return cloudflareBootstrapResult{}, err
 		}
 		out, err := deployCloudflareWorker(deployCtx, plan)
 		if err != nil {
@@ -299,15 +328,143 @@ func deployCloudflareWorker(ctx context.Context, plan cloudflareBootstrapPlan) (
 	return plan.CommandRunner(ctx, cloudflareWranglerCommand(ctx, plan, "deploy", "--name", plan.WorkerName))
 }
 
+func ensureCloudflareWorkersSubdomain(ctx context.Context, plan cloudflareBootstrapPlan) (string, error) {
+	existing, err := getCloudflareWorkersSubdomain(ctx, plan)
+	if err != nil {
+		return "", err
+	}
+	if existing != "" {
+		return existing, nil
+	}
+	subdomain := strings.TrimSpace(plan.Subdomain)
+	if subdomain == "" {
+		subdomain = defaultCloudflareWorkersSubdomain(plan)
+	}
+	if err := validateCloudflareWorkersSubdomain(subdomain); err != nil {
+		return "", err
+	}
+	created, err := putCloudflareWorkersSubdomain(ctx, plan, subdomain)
+	if err != nil {
+		return "", err
+	}
+	return created, nil
+}
+
+func getCloudflareWorkersSubdomain(ctx context.Context, plan cloudflareBootstrapPlan) (string, error) {
+	var resp struct {
+		Success bool `json:"success"`
+		Result  struct {
+			Subdomain string `json:"subdomain"`
+		} `json:"result"`
+		Errors []cloudflareAPIError `json:"errors"`
+	}
+	status, err := doCloudflareAPI(ctx, plan, http.MethodGet, "/accounts/"+url.PathEscape(plan.AccountID)+"/workers/subdomain", nil, &resp)
+	if err != nil {
+		return "", err
+	}
+	if status == http.StatusNotFound {
+		return "", nil
+	}
+	if !resp.Success {
+		return "", fmt.Errorf("Cloudflare workers.dev subdomain lookup failed: %s", cloudflareErrorSummary(resp.Errors))
+	}
+	return strings.TrimSpace(resp.Result.Subdomain), nil
+}
+
+func putCloudflareWorkersSubdomain(ctx context.Context, plan cloudflareBootstrapPlan, subdomain string) (string, error) {
+	body, _ := json.Marshal(map[string]string{"subdomain": subdomain})
+	var resp struct {
+		Success bool `json:"success"`
+		Result  struct {
+			Subdomain string `json:"subdomain"`
+		} `json:"result"`
+		Errors []cloudflareAPIError `json:"errors"`
+	}
+	_, err := doCloudflareAPI(ctx, plan, http.MethodPut, "/accounts/"+url.PathEscape(plan.AccountID)+"/workers/subdomain", body, &resp)
+	if err != nil {
+		return "", err
+	}
+	if !resp.Success {
+		return "", fmt.Errorf("Cloudflare workers.dev subdomain create failed for %q: %s; choose another --subdomain or MNEMON_CLOUDFLARE_SUBDOMAIN", subdomain, cloudflareErrorSummary(resp.Errors))
+	}
+	if strings.TrimSpace(resp.Result.Subdomain) == "" {
+		return "", fmt.Errorf("Cloudflare workers.dev subdomain create returned empty subdomain")
+	}
+	return strings.TrimSpace(resp.Result.Subdomain), nil
+}
+
+type cloudflareAPIError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
+func doCloudflareAPI(ctx context.Context, plan cloudflareBootstrapPlan, method, path string, body []byte, out any) (int, error) {
+	base := strings.TrimRight(plan.APIBaseURL, "/")
+	req, err := http.NewRequestWithContext(ctx, method, base+path, bytes.NewReader(body))
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Authorization", "Bearer "+plan.APIToken)
+	req.Header.Set("Accept", "application/json")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := plan.HTTPClient.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return resp.StatusCode, err
+	}
+	if len(data) > 0 && out != nil {
+		if err := json.Unmarshal(data, out); err != nil {
+			return resp.StatusCode, fmt.Errorf("decode Cloudflare API response: %w", err)
+		}
+	}
+	if resp.StatusCode >= 500 {
+		return resp.StatusCode, fmt.Errorf("Cloudflare API %s %s returned HTTP %d", method, path, resp.StatusCode)
+	}
+	return resp.StatusCode, nil
+}
+
+func cloudflareErrorSummary(errors []cloudflareAPIError) string {
+	if len(errors) == 0 {
+		return "unknown error"
+	}
+	parts := make([]string, 0, len(errors))
+	for _, item := range errors {
+		if item.Code != 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", item.Code, strings.TrimSpace(item.Message)))
+			continue
+		}
+		parts = append(parts, strings.TrimSpace(item.Message))
+	}
+	return strings.Join(parts, "; ")
+}
+
+func defaultCloudflareWorkersSubdomain(plan cloudflareBootstrapPlan) string {
+	account := strings.ToLower(strings.TrimSpace(plan.AccountID))
+	if len(account) > 8 {
+		account = account[:8]
+	}
+	return "mnemon-" + sanitizeCloudflareLabel(account)
+}
+
 func smokeCloudflareHub(ctx context.Context, endpoint string, plan cloudflareBootstrapPlan) error {
+	if err := waitCloudflareEndpointReady(ctx, endpoint); err != nil {
+		return err
+	}
 	client := access.NewClientWithToken(endpoint, plan.ReplicaToken)
+	smokeID := "cloudflare-smoke-" + randomSuffix(6)
 	ref := contract.ResourceRef{Kind: "memory", ID: "project"}
-	fields := map[string]any{"content": "cloudflare smoke"}
+	fields := map[string]any{"content": smokeID}
 	fieldsJSON, _ := json.Marshal(fields)
 	sum := sha256.Sum256(fieldsJSON)
 	env, err := contract.SyncedEventEnvelopeFromMaterial(contract.SyncedEventMaterial{
 		OriginReplicaID: plan.ReplicaID,
-		LocalDecisionID: "cloudflare-smoke",
+		LocalDecisionID: smokeID,
 		LocalIngestSeq:  1,
 		Actor:           contract.ActorID(plan.Principal),
 		ResourceRef:     ref,
@@ -321,11 +478,11 @@ func smokeCloudflareHub(ctx context.Context, endpoint string, plan cloudflareBoo
 		return err
 	}
 	var lastErr error
-	for i := 0; i < 6; i++ {
+	for i := 0; i < 10; i++ {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		push, err := client.SyncPush(contract.SyncPushRequest{ReplicaID: plan.ReplicaID, BatchID: "cloudflare-smoke", Events: []eventmodel.EventEnvelope{env}})
+		push, err := client.SyncPush(contract.SyncPushRequest{ReplicaID: plan.ReplicaID, BatchID: smokeID, Events: []eventmodel.EventEnvelope{env}})
 		if err == nil && len(push.Accepted) == 1 {
 			if _, err = client.SyncPull(contract.SyncPullRequest{ReplicaID: plan.ReplicaID}); err != nil {
 				return err
@@ -338,11 +495,49 @@ func smokeCloudflareHub(ctx context.Context, endpoint string, plan cloudflareBoo
 		if err != nil {
 			lastErr = err
 		} else {
-			lastErr = fmt.Errorf("smoke push accepted %d events", len(push.Accepted))
+			lastErr = fmt.Errorf("smoke push %s", syncPushDiagnostic(push))
 		}
 		time.Sleep(time.Duration(i+1) * time.Second)
 	}
 	return fmt.Errorf("cloudflare smoke failed: %w", lastErr)
+}
+
+func syncPushDiagnostic(push contract.SyncPushResponse) string {
+	parts := []string{fmt.Sprintf("accepted=%d rejected=%d conflicts=%d", len(push.Accepted), len(push.Rejected), len(push.Conflicts))}
+	for _, item := range push.Rejected {
+		parts = append(parts, fmt.Sprintf("rejected event=%s subject=%s diagnostic=%q", item.EventID, item.Subject, item.Diagnostic))
+	}
+	for _, item := range push.Conflicts {
+		parts = append(parts, fmt.Sprintf("conflict event=%s subject=%s diagnostic=%q", item.EventID, item.Subject, item.Diagnostic))
+	}
+	return strings.Join(parts, "; ")
+}
+
+func waitCloudflareEndpointReady(ctx context.Context, endpoint string) error {
+	client := &http.Client{Timeout: 20 * time.Second}
+	var lastErr error
+	for i := 0; i < 10; i++ {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(endpoint, "/")+"/", nil)
+		if err != nil {
+			return err
+		}
+		resp, err := client.Do(req)
+		if err == nil {
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+			_ = resp.Body.Close()
+			if resp.StatusCode < 500 {
+				return nil
+			}
+			lastErr = fmt.Errorf("endpoint returned HTTP %d", resp.StatusCode)
+		} else {
+			lastErr = err
+		}
+		time.Sleep(time.Duration(i+1) * time.Second)
+	}
+	return fmt.Errorf("cloudflare endpoint readiness failed: %w", lastErr)
 }
 
 func writeCloudflareLocalSyncConfig(plan cloudflareBootstrapPlan, endpoint string) (string, error) {
@@ -436,7 +631,7 @@ func cloudflareEndpointFromWranglerOutput(text string) string {
 
 func loadCloudflareBootstrapEnv(explicit string) (map[string]string, string, error) {
 	out := map[string]string{}
-	for _, key := range []string{"CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID", "MNEMON_CLOUDFLARE_WORKER_NAME"} {
+	for _, key := range []string{"CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID", "MNEMON_CLOUDFLARE_WORKER_NAME", "MNEMON_CLOUDFLARE_SUBDOMAIN"} {
 		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
 			out[key] = value
 		}
@@ -479,7 +674,7 @@ func readCloudflareEnvFile(path string) (map[string]string, bool, error) {
 		return nil, false, err
 	}
 	defer f.Close()
-	allowed := map[string]bool{"CLOUDFLARE_API_TOKEN": true, "CLOUDFLARE_ACCOUNT_ID": true, "MNEMON_CLOUDFLARE_WORKER_NAME": true}
+	allowed := map[string]bool{"CLOUDFLARE_API_TOKEN": true, "CLOUDFLARE_ACCOUNT_ID": true, "MNEMON_CLOUDFLARE_WORKER_NAME": true, "MNEMON_CLOUDFLARE_SUBDOMAIN": true}
 	values := map[string]string{}
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
@@ -539,6 +734,55 @@ func validateCloudflareWorkerName(name string) error {
 		return fmt.Errorf("Cloudflare worker name %q must use lowercase letters, numbers, or dash", name)
 	}
 	return nil
+}
+
+func validateCloudflareWorkersSubdomain(name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("Cloudflare workers.dev subdomain is required")
+	}
+	if len(name) > 63 {
+		return fmt.Errorf("Cloudflare workers.dev subdomain must be at most 63 characters")
+	}
+	if strings.HasPrefix(name, "-") || strings.HasSuffix(name, "-") {
+		return fmt.Errorf("Cloudflare workers.dev subdomain must not start or end with dash")
+	}
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+			continue
+		}
+		return fmt.Errorf("Cloudflare workers.dev subdomain %q must use lowercase letters, numbers, or dash", name)
+	}
+	return nil
+}
+
+func sanitizeCloudflareLabel(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	var b strings.Builder
+	lastDash := false
+	for _, r := range value {
+		ok := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
+		if ok {
+			b.WriteRune(r)
+			lastDash = false
+			continue
+		}
+		if !lastDash {
+			b.WriteByte('-')
+			lastDash = true
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	if out == "" {
+		out = "hub"
+	}
+	if len(out) > 56 {
+		out = strings.Trim(out[:56], "-")
+	}
+	if out == "" {
+		out = "hub"
+	}
+	return out
 }
 
 func randomHex(bytesLen int) (string, error) {

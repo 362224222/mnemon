@@ -7,8 +7,8 @@ type ResourceKind string // "memory", "goal", "skill"
 type ResourceID string
 type Version int64 // per-resource; 1 on create; +1 each accepted write. NEVER global.
 type ResourceRef struct {
-	Kind ResourceKind
-	ID   ResourceID
+	Kind ResourceKind `json:"kind"`
+	ID   ResourceID   `json:"id"`
 }
 type ResourceVersion struct {
 	Ref     ResourceRef

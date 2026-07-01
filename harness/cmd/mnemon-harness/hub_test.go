@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,7 +16,7 @@ import (
 func TestCloudflareEnvFileMergesWithoutOverridingProcessEnv(t *testing.T) {
 	t.Setenv("CLOUDFLARE_API_TOKEN", "process-token")
 	path := filepath.Join(t.TempDir(), "cloudflare.env")
-	if err := os.WriteFile(path, []byte("CLOUDFLARE_API_TOKEN=file-token\nCLOUDFLARE_ACCOUNT_ID=account-1\nMNEMON_CLOUDFLARE_WORKER_NAME=mnemon-r3\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("CLOUDFLARE_API_TOKEN=file-token\nCLOUDFLARE_ACCOUNT_ID=account-1\nMNEMON_CLOUDFLARE_WORKER_NAME=mnemon-r3\nMNEMON_CLOUDFLARE_SUBDOMAIN=mnemon-test\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	env, used, err := loadCloudflareBootstrapEnv(path)
@@ -27,7 +29,7 @@ func TestCloudflareEnvFileMergesWithoutOverridingProcessEnv(t *testing.T) {
 	if env["CLOUDFLARE_API_TOKEN"] != "process-token" {
 		t.Fatalf("process env must win, got %q", env["CLOUDFLARE_API_TOKEN"])
 	}
-	if env["CLOUDFLARE_ACCOUNT_ID"] != "account-1" || env["MNEMON_CLOUDFLARE_WORKER_NAME"] != "mnemon-r3" {
+	if env["CLOUDFLARE_ACCOUNT_ID"] != "account-1" || env["MNEMON_CLOUDFLARE_WORKER_NAME"] != "mnemon-r3" || env["MNEMON_CLOUDFLARE_SUBDOMAIN"] != "mnemon-test" {
 		t.Fatalf("file values not loaded: %+v", env)
 	}
 }
@@ -47,6 +49,78 @@ func TestCloudflareEndpointFromWranglerOutput(t *testing.T) {
 	out := "Uploaded mnemon\nPublished mnemon-r3 (1.2 sec)\n  https://mnemon-r3.example.workers.dev\n"
 	if got := cloudflareEndpointFromWranglerOutput(out); got != "https://mnemon-r3.example.workers.dev" {
 		t.Fatalf("endpoint = %q", got)
+	}
+}
+
+func TestEnsureCloudflareWorkersSubdomainCreatesWhenMissing(t *testing.T) {
+	var requests []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer cf-token" {
+			t.Fatalf("authorization header = %q", got)
+		}
+		requests = append(requests, r.Method+" "+r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method {
+		case http.MethodGet:
+			_, _ = w.Write([]byte(`{"success":true,"result":{"subdomain":""},"errors":[]}`))
+		case http.MethodPut:
+			var body map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if body["subdomain"] != "mnemon-0ff22127" {
+				t.Fatalf("subdomain body = %+v", body)
+			}
+			_, _ = w.Write([]byte(`{"success":true,"result":{"subdomain":"mnemon-0ff22127"},"errors":[]}`))
+		default:
+			http.Error(w, "unexpected method", http.StatusMethodNotAllowed)
+		}
+	}))
+	defer server.Close()
+
+	got, err := ensureCloudflareWorkersSubdomain(context.Background(), cloudflareBootstrapPlan{
+		APIToken:   "cf-token",
+		AccountID:  "0ff22127f3f11976dfea078f13f4c056",
+		HTTPClient: server.Client(),
+		APIBaseURL: server.URL,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "mnemon-0ff22127" {
+		t.Fatalf("subdomain = %q", got)
+	}
+	want := []string{
+		"GET /accounts/0ff22127f3f11976dfea078f13f4c056/workers/subdomain",
+		"PUT /accounts/0ff22127f3f11976dfea078f13f4c056/workers/subdomain",
+	}
+	if strings.Join(requests, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("requests = %#v, want %#v", requests, want)
+	}
+}
+
+func TestEnsureCloudflareWorkersSubdomainReusesExisting(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Fatalf("existing subdomain should not be overwritten, got %s", r.Method)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"success":true,"result":{"subdomain":"existing-subdomain"},"errors":[]}`))
+	}))
+	defer server.Close()
+
+	got, err := ensureCloudflareWorkersSubdomain(context.Background(), cloudflareBootstrapPlan{
+		APIToken:   "cf-token",
+		AccountID:  "acct-1",
+		Subdomain:  "ignored-when-existing",
+		HTTPClient: server.Client(),
+		APIBaseURL: server.URL,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "existing-subdomain" {
+		t.Fatalf("subdomain = %q", got)
 	}
 }
 
@@ -71,6 +145,17 @@ func TestCloudflareGrantAndTokenJSONDoNotExposeCloudflareToken(t *testing.T) {
 	}
 	if decoded["planner@team"]["principal"] != "planner@team" {
 		t.Fatalf("grant principal mismatch: %+v", decoded)
+	}
+	scopes, ok := decoded["planner@team"]["scopes"].([]any)
+	if !ok || len(scopes) != 1 {
+		t.Fatalf("grant scopes missing: %+v", decoded["planner@team"]["scopes"])
+	}
+	scope, ok := scopes[0].(map[string]any)
+	if !ok || scope["kind"] != "memory" || scope["id"] != "project" {
+		t.Fatalf("grant scopes must use lower-case ABI keys, got %+v", scopes[0])
+	}
+	if _, hasUpperKind := scope["Kind"]; hasUpperKind {
+		t.Fatalf("grant scopes leaked Go field name Kind: %+v", scope)
 	}
 }
 

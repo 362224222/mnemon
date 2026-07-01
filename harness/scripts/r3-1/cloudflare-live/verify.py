@@ -20,7 +20,7 @@ def main():
 
     log_text = Path(args.log).read_text(encoding="utf-8", errors="replace")
     failures = []
-    missing_workers_dev = "workers.dev subdomain" in log_text or "code: 10063" in log_text
+    missing_workers_dev = "code: 10063" in log_text or "You need a workers.dev subdomain" in log_text
     if args.exit_code != 0 and not missing_workers_dev:
         failures.append({
             "category": "environment_failure",

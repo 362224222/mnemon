@@ -12,5 +12,3 @@ new_sqlite_classes = ["MnemonHubDO"]
 
 [vars]
 MNEMON_HUB_WORKSPACE = "default"
-MNEMON_HUB_TOKENS_JSON = "{}"
-MNEMON_HUB_GRANTS_JSON = "{}"
