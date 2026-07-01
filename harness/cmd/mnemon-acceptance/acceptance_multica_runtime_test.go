@@ -113,10 +113,17 @@ case "$*" in
   *"agent env get agent-"*) agent="${4:-}"; printf '{"agent_id":"%s","custom_env":{"MNEMON_MULTICA_PROVIDER_RUNTIME":"codex","MNEMON_MULTICA_PROVIDER_COMMAND":"codex","MNEMON_CONTROL_ADDR":"http://127.0.0.1:8787"}}\n' "$agent" ;;
   *"issue create"*) printf '{"id":"root-9","identifier":"TEA-9","title":"Runtime surface flow","description":"Teamwork acceptance","status":"todo"}\n' ;;
   *"issue runs root-9"*) printf '[{"id":"task-root","issue_id":"root-9","agent_id":"agent-planner","status":"completed","completed_at":"2026-06-28T09:00:00Z","workspace_id":"ws-1"}]\n' ;;
-  *"issue run-messages task-root"*) printf '[{"task_id":"task-root","issue_id":"root-9","seq":1,"type":"text","content":"Mnemon Multica runtime handled issue TEA-9. Multica surface input: observed.","created_at":"2026-06-28T09:00:01Z"},{"task_id":"task-root","issue_id":"root-9","seq":2,"type":"tool_use","content":"mnemon observe --principal planner@team","created_at":"2026-06-28T09:00:02Z"}]\n' ;;
+  *"issue run-messages task-root"*) printf '[{"task_id":"task-root","issue_id":"root-9","seq":1,"type":"text","content":"Mnemon Multica runtime handled issue TEA-9. Multica surface input: observed.","created_at":"2026-06-28T09:00:01Z"},{"task_id":"task-root","issue_id":"root-9","seq":2,"type":"tool_use","content":"mnemon observe --principal planner@team","created_at":"2026-06-28T09:00:02Z"},{"task_id":"task-root","issue_id":"root-9","seq":3,"type":"tool_result","content":"recorded seq=1","created_at":"2026-06-28T09:00:03Z"}]\n' ;;
   *"issue metadata list root-9"*) printf '[{"key":"mnemon.surface_role","value":"display"},{"key":"mnemon.event_ref","value":"event-root-9"},{"key":"mnemon.no_auto_dispatch","value":"true"}]\n' ;;
+  *"issue children root-9"*) printf '{"issues":[{"id":"child-a","identifier":"TEA-10","title":"子任务 A","status":"done"},{"id":"child-b","identifier":"TEA-11","title":"子任务 B","status":"done"}]}\n' ;;
   *"issue get root-9"*) printf '{"id":"root-9","identifier":"TEA-9","title":"Runtime surface flow","description":"Teamwork acceptance","status":"in_progress"}\n' ;;
   *"issue comment list root-9"*) printf '[{"id":"comment-root","issue_id":"root-9","content":"Mnemon 更新: 进展\\n\\n事件引用: event-root-9"}]\n' ;;
+  *"issue comment list child-a"*) printf '[{"id":"comment-a","issue_id":"child-a","content":"Mnemon update: assignment feedback\\nmnemon:event=event-a"}]\n' ;;
+  *"issue comment list child-b"*) printf '[{"id":"comment-b","issue_id":"child-b","content":"Mnemon update: assignment feedback\\nmnemon:event=event-b"}]\n' ;;
+  *"issue runs child-a"*) printf '[{"id":"task-a","issue_id":"child-a","agent_id":"agent-researcher","status":"completed","completed_at":"2026-06-28T09:01:00Z","workspace_id":"ws-1"}]\n' ;;
+  *"issue runs child-b"*) printf '[{"id":"task-b","issue_id":"child-b","agent_id":"agent-reviewer","status":"completed","completed_at":"2026-06-28T09:02:00Z","workspace_id":"ws-1"}]\n' ;;
+  *"issue run-messages task-a"*) printf '[{"task_id":"task-a","issue_id":"child-a","seq":1,"type":"tool_use","content":"surface-report","created_at":"2026-06-28T09:01:01Z"},{"task_id":"task-a","issue_id":"child-a","seq":2,"type":"tool_result","content":"reported","created_at":"2026-06-28T09:01:02Z"}]\n' ;;
+  *"issue run-messages task-b"*) printf '[{"task_id":"task-b","issue_id":"child-b","seq":1,"type":"tool_use","content":"surface-report","created_at":"2026-06-28T09:02:01Z"},{"task_id":"task-b","issue_id":"child-b","seq":2,"type":"tool_result","content":"reported","created_at":"2026-06-28T09:02:02Z"}]\n' ;;
   *) printf '{}\n' ;;
 esac
 `

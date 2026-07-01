@@ -152,6 +152,18 @@ type multicaRuntimeProdSimAssertion struct {
 	Detail string `json:"detail,omitempty"`
 }
 
+type multicaChildSurfaceSnapshot struct {
+	Children         []driver.MulticaIssue
+	Comments         map[string][]driver.MulticaComment
+	Runs             map[string][]driver.MulticaIssueRun
+	Messages         map[string][]driver.MulticaRunMessage
+	MessageTypes     map[string]int
+	ActiveAgents     []string
+	FeedbackCount    int
+	TerminalRunCount int
+	MessageCount     int
+}
+
 func runMulticaRuntimeProdSimAcceptance(ctx context.Context, opts multicaRuntimeProdSimOptions) (multicaRuntimeProdSimReport, error) {
 	started := time.Now().UTC()
 	if opts.Stdout == nil {
@@ -295,24 +307,16 @@ func runMulticaRuntimeProdSimAcceptance(ctx context.Context, opts multicaRuntime
 	addMulticaProdSimAssertion(&report, "issue created through Multica", issue.ID != "", issue.ID)
 	addMulticaProdSimAssertion(&report, "issue assigned to Mnemon participant", assignee.AgentID != "", assignee.Principal)
 	runtimeEvidenceWait := opts.Wait
-	if opts.RequireSurfaceFlow && runtimeEvidenceWait > 2*time.Minute {
-		runtimeEvidenceWait = 2 * time.Minute
-	}
 	runs, messages, err := waitMulticaRuntimeEvidence(ctx, cli, issue.ID, runtimeEvidenceWait, opts.Poll)
 	report.Runs = runs
 	report.RunMessages = messages
 	report.MessageTypes = multicaRunMessageTypeCounts(messages)
 	if err != nil {
-		if !opts.RequireSurfaceFlow || len(runs) == 0 {
-			addMulticaProdSimAssertion(&report, "Multica runtime produced run evidence", false, err.Error())
-			return finishMulticaRuntimeProdSimReport(report, err)
-		}
-		addMulticaProdSimAssertion(&report, "Multica runtime produced run evidence", true, fmt.Sprintf("runs=%d messages=%d deferred_messages=%v", len(runs), len(messages), err))
+		addMulticaProdSimAssertion(&report, "Multica runtime produced run evidence", false, fmt.Sprintf("runs=%d messages=%d error=%v", len(runs), len(messages), err))
+		return finishMulticaRuntimeProdSimReport(report, err)
 	}
 	combined := combinedMulticaRunMessages(messages)
-	if err == nil {
-		addMulticaProdSimAssertion(&report, "Multica runtime produced run evidence", len(runs) > 0 && len(messages) > 0, fmt.Sprintf("runs=%d messages=%d", len(runs), len(messages)))
-	}
+	addMulticaProdSimAssertion(&report, "Multica runtime produced run evidence", len(runs) > 0 && len(messages) > 0, fmt.Sprintf("runs=%d messages=%d", len(runs), len(messages)))
 	if strings.TrimSpace(combined) != "" {
 		addMulticaProdSimAssertion(&report, "runtime output names Mnemon runtime", strings.Contains(combined, "Mnemon Multica runtime handled issue"), combined)
 		if opts.RequireIngest {
@@ -320,7 +324,7 @@ func runMulticaRuntimeProdSimAcceptance(ctx context.Context, opts multicaRuntime
 		}
 	}
 	if opts.RequireSurfaceFlow {
-		rootRuntimeActivity := multicaMessagesExposeRuntimeActivity(report.MessageTypes) || len(runs) > 0
+		rootRuntimeActivity := multicaMessagesExposeRuntimeActivity(report.MessageTypes)
 		addMulticaProdSimAssertion(&report, "root run exposes rich Multica activity", rootRuntimeActivity, fmt.Sprintf("types=%+v runs=%d", report.MessageTypes, len(runs)))
 		if err := collectMulticaSurfaceFlowEvidence(ctx, cli, opts, &report); err != nil {
 			return finishMulticaRuntimeProdSimReport(report, err)
@@ -445,8 +449,25 @@ func collectMulticaSurfaceFlowEvidence(ctx context.Context, cli driver.MulticaCL
 		return err
 	}
 	addMulticaProdSimAssertion(report, "surface-flow root visibility readable", latest.ID != "", fmt.Sprintf("status=%s comments=%d", latest.Status, len(comments)))
-	if len(comments) > 0 {
-		addMulticaProdSimAssertion(report, "surface-flow comments carry OA output", multicaCommentsContainFeedbackMarker(comments) || multicaCommentsContainMnemonUpdate(comments), fmt.Sprintf("comments=%d", len(comments)))
+	visibleOA := multicaCommentsContainFeedbackMarker(comments) ||
+		multicaCommentsContainMnemonUpdate(comments) ||
+		(len(report.RunMessages) > 0 && multicaCommentsContainVisibleOAOutput(comments))
+	addMulticaProdSimAssertion(report, "surface-flow comments carry OA output", visibleOA, fmt.Sprintf("comments=%d run_messages=%d", len(comments), len(report.RunMessages)))
+	if report.TaskExpectations.MinChildSurfaces > 0 || report.TaskExpectations.MinFeedbackComments > 0 || report.TaskExpectations.MinActiveAgents > 0 {
+		child, err := waitMulticaChildSurfaceEvidence(ctx, cli, report.Issue.ID, report.Runs, report.TaskExpectations, opts.Wait, opts.Poll)
+		report.ChildIssues = child.Children
+		report.ChildComments = child.Comments
+		report.ChildRuns = child.Runs
+		report.ChildMessages = child.Messages
+		report.ChildMessageTypes = child.MessageTypes
+		report.ActiveAgents = child.ActiveAgents
+		addMulticaProdSimAssertion(report, "surface-flow child issues match teamwork plan", len(child.Children) >= report.TaskExpectations.MinChildSurfaces, fmt.Sprintf("children=%d min=%d", len(child.Children), report.TaskExpectations.MinChildSurfaces))
+		addMulticaProdSimAssertion(report, "surface-flow child runs reached terminal feedback", child.TerminalRunCount >= report.TaskExpectations.MinChildSurfaces && child.MessageCount >= report.TaskExpectations.MinChildSurfaces, fmt.Sprintf("terminal_runs=%d messages=%d min=%d", child.TerminalRunCount, child.MessageCount, report.TaskExpectations.MinChildSurfaces))
+		addMulticaProdSimAssertion(report, "surface-flow feedback comments meet case expectation", child.FeedbackCount >= report.TaskExpectations.MinFeedbackComments, fmt.Sprintf("comments=%d min=%d", child.FeedbackCount, report.TaskExpectations.MinFeedbackComments))
+		addMulticaProdSimAssertion(report, "surface-flow active agents meet case expectation", len(child.ActiveAgents) >= report.TaskExpectations.MinActiveAgents, fmt.Sprintf("active_agents=%v min=%d", child.ActiveAgents, report.TaskExpectations.MinActiveAgents))
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -473,6 +494,89 @@ func multicaProdSimPartialSnapshotDetail(reason, runErr, surfaceErr error, repor
 		fmt.Sprintf("comments=%d", multicaCommentCount(report.ChildComments)),
 	)
 	return strings.Join(parts, "; ")
+}
+
+func waitMulticaChildSurfaceEvidence(ctx context.Context, cli driver.MulticaCLI, rootIssueID string, rootRuns []driver.MulticaIssueRun, expect multicaAcceptanceTaskCaseExpectations, wait, poll time.Duration) (multicaChildSurfaceSnapshot, error) {
+	deadline := time.Now().Add(wait)
+	var last multicaChildSurfaceSnapshot
+	for {
+		snapshot, err := collectMulticaChildSurfaceSnapshot(ctx, cli, rootIssueID, rootRuns)
+		if err != nil {
+			return snapshot, err
+		}
+		last = snapshot
+		childOK := len(snapshot.Children) >= expect.MinChildSurfaces
+		feedbackOK := snapshot.FeedbackCount >= expect.MinFeedbackComments
+		activeOK := len(snapshot.ActiveAgents) >= expect.MinActiveAgents
+		runOK := snapshot.TerminalRunCount >= expect.MinChildSurfaces && snapshot.MessageCount >= expect.MinChildSurfaces
+		if childOK && feedbackOK && activeOK && runOK {
+			return snapshot, nil
+		}
+		if wait <= 0 || time.Now().After(deadline) {
+			return last, fmt.Errorf("timed out waiting for Multica child surface evidence: children=%d/%d comments=%d/%d active=%d/%d terminal_runs=%d messages=%d",
+				len(snapshot.Children), expect.MinChildSurfaces,
+				snapshot.FeedbackCount, expect.MinFeedbackComments,
+				len(snapshot.ActiveAgents), expect.MinActiveAgents,
+				snapshot.TerminalRunCount, snapshot.MessageCount)
+		}
+		select {
+		case <-ctx.Done():
+			return last, ctx.Err()
+		case <-time.After(poll):
+		}
+	}
+}
+
+func collectMulticaChildSurfaceSnapshot(ctx context.Context, cli driver.MulticaCLI, rootIssueID string, rootRuns []driver.MulticaIssueRun) (multicaChildSurfaceSnapshot, error) {
+	children, err := cli.ListIssueChildren(ctx, rootIssueID)
+	if err != nil {
+		return multicaChildSurfaceSnapshot{}, err
+	}
+	snapshot := multicaChildSurfaceSnapshot{
+		Children:     children,
+		Comments:     map[string][]driver.MulticaComment{},
+		Runs:         map[string][]driver.MulticaIssueRun{},
+		Messages:     map[string][]driver.MulticaRunMessage{},
+		MessageTypes: map[string]int{},
+	}
+	active := multicaActiveAgentIDs(rootRuns)
+	for _, child := range children {
+		childID := strings.TrimSpace(child.ID)
+		if childID == "" {
+			continue
+		}
+		comments, err := cli.ListIssueComments(ctx, childID)
+		if err != nil {
+			return snapshot, err
+		}
+		snapshot.Comments[childID] = comments
+		snapshot.FeedbackCount += len(comments)
+		runs, err := cli.ListIssueRuns(ctx, childID)
+		if err != nil {
+			return snapshot, err
+		}
+		snapshot.Runs[childID] = runs
+		for _, run := range runs {
+			if strings.TrimSpace(run.AgentID) != "" {
+				active[run.AgentID] = true
+			}
+			if !multicaRunTerminal(run) {
+				continue
+			}
+			snapshot.TerminalRunCount++
+			messages, err := cli.ListRunMessages(ctx, run.ID, childID)
+			if err != nil {
+				return snapshot, err
+			}
+			snapshot.Messages[childID] = append(snapshot.Messages[childID], messages...)
+			snapshot.MessageCount += len(messages)
+			for typ, count := range multicaRunMessageTypeCounts(messages) {
+				snapshot.MessageTypes[typ] += count
+			}
+		}
+	}
+	snapshot.ActiveAgents = sortedMulticaActiveAgents(active)
+	return snapshot, nil
 }
 
 func waitMulticaRuntimeEvidence(ctx context.Context, cli driver.MulticaCLI, issueID string, wait, poll time.Duration) ([]driver.MulticaIssueRun, []driver.MulticaRunMessage, error) {
@@ -608,6 +712,15 @@ func multicaCommentsContainFeedbackMarker(comments []driver.MulticaComment) bool
 	for _, comment := range comments {
 		content := strings.ToLower(comment.Content)
 		if strings.Contains(content, "mnemon update: assignment feedback") && strings.Contains(content, "mnemon:event=") {
+			return true
+		}
+	}
+	return false
+}
+
+func multicaCommentsContainVisibleOAOutput(comments []driver.MulticaComment) bool {
+	for _, comment := range comments {
+		if strings.TrimSpace(comment.Content) != "" {
 			return true
 		}
 	}

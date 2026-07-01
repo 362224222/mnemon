@@ -182,6 +182,44 @@ func TestRuntimeRunsProviderCommandWithOriginalTurnInput(t *testing.T) {
 	}
 }
 
+func TestRuntimeProviderEnvAddsImportedIssueContext(t *testing.T) {
+	env := runtimeProviderEnv([]string{
+		"MULTICA_TASK_ID=daemon-task",
+		"MULTICA_AGENT_ID=agent-1",
+	}, runtimeImportResult{
+		IssueID:    "issue-imported",
+		Identifier: "TEA-42",
+		Title:      "中文协作验收",
+		Principal:  "planner@team",
+		TaskID:     "task-imported",
+		Status:     "recorded",
+	})
+	got := map[string]string{}
+	counts := map[string]int{}
+	for _, entry := range env {
+		key, value, ok := strings.Cut(entry, "=")
+		if ok {
+			got[key] = value
+			counts[key]++
+		}
+	}
+	for key, want := range map[string]string{
+		"MULTICA_ISSUE_ID":                "issue-imported",
+		"MULTICA_TASK_ID":                 "task-imported",
+		"MNEMON_MULTICA_ISSUE_IDENTIFIER": "TEA-42",
+		"MNEMON_MULTICA_ISSUE_TITLE":      "中文协作验收",
+		"MNEMON_MULTICA_ISSUE_STATUS":     "recorded",
+		"MNEMON_MULTICA_PRINCIPAL":        "planner@team",
+	} {
+		if got[key] != want {
+			t.Fatalf("%s = %q, want %q (env=%v)", key, got[key], want, env)
+		}
+		if counts[key] != 1 {
+			t.Fatalf("%s appears %d times in env=%v", key, counts[key], env)
+		}
+	}
+}
+
 func TestProviderPromptFallsBackToIssueWhenTurnInputIsEmpty(t *testing.T) {
 	got := providerPrompt(multicasurface.RuntimeInput{}, runtimeImportResult{
 		IssueID:    "issue-1",

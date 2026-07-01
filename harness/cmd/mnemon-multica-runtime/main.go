@@ -424,7 +424,7 @@ func (s *runtimeRPCState) runProviderTurn(input multicasurface.RuntimeInput, imp
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", command)
 	cmd.Dir = cwd
-	cmd.Env = append([]string(nil), s.Env...)
+	cmd.Env = runtimeProviderEnv(s.Env, imported)
 	cmd.Stdin = strings.NewReader(prompt)
 	out, err := cmd.CombinedOutput()
 	result.DurationMs = s.now().Sub(started).Milliseconds()
@@ -446,6 +446,35 @@ func (s *runtimeRPCState) runProviderTurn(input multicasurface.RuntimeInput, imp
 	emitRuntimeCommandCWD(progress, command, cwd, result.Output, result.ExitCode, result.DurationMs)
 	emitRuntimeProgress(progress, "Provider turn completed; Mnemon did not rewrite provider output.")
 	return result
+}
+
+func runtimeProviderEnv(env []string, imported runtimeImportResult) []string {
+	out := append([]string(nil), env...)
+	out = setRuntimeProviderEnv(out, "MULTICA_ISSUE_ID", imported.IssueID)
+	out = setRuntimeProviderEnv(out, "MULTICA_TASK_ID", imported.TaskID)
+	out = setRuntimeProviderEnv(out, "MNEMON_MULTICA_ISSUE_ID", imported.IssueID)
+	out = setRuntimeProviderEnv(out, "MNEMON_MULTICA_ISSUE_IDENTIFIER", imported.Identifier)
+	out = setRuntimeProviderEnv(out, "MNEMON_MULTICA_ISSUE_TITLE", imported.Title)
+	out = setRuntimeProviderEnv(out, "MNEMON_MULTICA_ISSUE_STATUS", imported.Status)
+	out = setRuntimeProviderEnv(out, "MNEMON_MULTICA_PRINCIPAL", imported.Principal)
+	return out
+}
+
+func setRuntimeProviderEnv(env []string, key, value string) []string {
+	key = strings.TrimSpace(key)
+	value = strings.TrimSpace(value)
+	if key == "" || value == "" {
+		return env
+	}
+	next := make([]string, 0, len(env)+1)
+	prefix := key + "="
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			continue
+		}
+		next = append(next, entry)
+	}
+	return append(next, key+"="+value)
 }
 
 func providerPrompt(input multicasurface.RuntimeInput, imported runtimeImportResult) string {
