@@ -10,16 +10,16 @@ import (
 type mainAxisOwner string
 
 const (
-	ownerEvent             mainAxisOwner = "event"
-	ownerHostAgent         mainAxisOwner = "hostagent"
-	ownerMnemond           mainAxisOwner = "mnemond"
-	ownerMnemonhub         mainAxisOwner = "mnemonhub"
-	ownerParticipant       mainAxisOwner = "participant"
-	ownerInteractionPoint  mainAxisOwner = "interaction-point"
-	ownerDriveSource       mainAxisOwner = "drive-source"
-	ownerProjectionSurface mainAxisOwner = "projection-surface"
-	ownerProductConfig     mainAxisOwner = "product-config"
-	ownerGuard             mainAxisOwner = "guard"
+	ownerEvent            mainAxisOwner = "event"
+	ownerHostAgent        mainAxisOwner = "hostagent"
+	ownerMnemond          mainAxisOwner = "mnemond"
+	ownerMnemonhub        mainAxisOwner = "mnemonhub"
+	ownerParticipant      mainAxisOwner = "participant"
+	ownerInteractionPoint mainAxisOwner = "interaction-point"
+	ownerDriveSource      mainAxisOwner = "drive-source"
+	ownerDisplaySurface   mainAxisOwner = "display-surface"
+	ownerProductConfig    mainAxisOwner = "product-config"
+	ownerGuard            mainAxisOwner = "guard"
 )
 
 type packageMainAxis struct {
@@ -32,7 +32,7 @@ type packageMainAxis struct {
 // not claim the current package names are final; it prevents new top-level implementation concepts
 // from appearing without an explicit owner under the R2 architecture layers.
 var packageMainAxisInventory = map[string]packageMainAxis{
-	"activationtrace": {owner: ownerProjectionSurface, role: "runtime activation trace material for external run displays", target: "projection/activationtrace"},
+	"activationtrace": {owner: ownerDisplaySurface, role: "runtime activation trace material for external run displays", target: "display/activationtrace"},
 	"app":             {owner: ownerMnemond, role: "daemon wiring and local mnemond boot", target: "mnemond"},
 	"assembler":       {owner: ownerMnemond, role: "mnemond policy/runtime assembly", target: "mnemond"},
 	"assets":          {owner: ownerHostAgent, role: "hostagent integration and event-policy assets", target: "hostagent/assets"},
@@ -50,7 +50,7 @@ var packageMainAxisInventory = map[string]packageMainAxis{
 	"mnemonhub":       {owner: ownerMnemonhub, role: "remote accepted event exchange server and exchange mechanics", target: "mnemonhub"},
 	"participant":     {owner: ownerParticipant, role: "principal identity and participant list helpers shared by product config and adapters", target: "participant"},
 	"productconfig":   {owner: ownerProductConfig, role: "harness product configuration for agents, connections, daemon workers, and surfaces", target: "product/config"},
-	"projection":      {owner: ownerProjectionSurface, role: "accepted/derived state material prepared for external projection surfaces", target: "projection"},
+	"projection":      {owner: ownerDisplaySurface, role: "accepted/derived state material prepared for external display surfaces", target: "projection"},
 	"replay":          {owner: ownerMnemond, role: "mnemond determinism verification", target: "mnemond/replay"},
 	"runtime":         {owner: ownerMnemond, role: "local mnemond event runtime", target: "mnemond"},
 	"session":         {owner: ownerProductConfig, role: "harness session records and external attachment policy", target: "product/session"},
@@ -71,7 +71,7 @@ var nestedMainAxisInventory = map[string]packageMainAxis{
 	},
 	"mnemond/state":      {owner: ownerMnemond, role: "local event/state store and materialized-state applier", target: "mnemond/state"},
 	"mnemonhub/exchange": {owner: ownerMnemonhub, role: "mnemonhub event exchange client, cursors, and local ledger acknowledgements", target: "mnemonhub/exchange"},
-	"surface/multica":    {owner: ownerProjectionSurface, role: "Multica surface registry, metadata, and projection ledger primitives", target: "projection/surface/multica"},
+	"surface/multica":    {owner: ownerDisplaySurface, role: "Multica surface registry, metadata, and surface write ledger primitives", target: "display/surface/multica"},
 }
 
 var retiredTopLevelImplementationPackages = []string{

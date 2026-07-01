@@ -19,7 +19,6 @@ type RuntimeContext struct {
 	AgentName           string
 	WorkspaceID         string
 	ServerURL           string
-	HubBackend          string
 	ControlAddr         string
 	ControlPrincipal    string
 }
@@ -36,7 +35,6 @@ func RuntimeContextFromActivation(env []string, cwd string, input RuntimeInput) 
 		AgentName:           RuntimeEnvValue(env, "MULTICA_AGENT_NAME"),
 		WorkspaceID:         firstNonEmptyRuntimeString(RuntimeEnvValue(env, "MNEMON_MULTICA_WORKSPACE_ID"), RuntimeEnvValue(env, "MULTICA_WORKSPACE_ID")),
 		ServerURL:           firstNonEmptyRuntimeString(RuntimeEnvValue(env, "MNEMON_MULTICA_SERVER_URL"), RuntimeEnvValue(env, "MULTICA_SERVER_URL")),
-		HubBackend:          RuntimeEnvValue(env, "MNEMON_HUB_BACKEND"),
 		ControlAddr:         RuntimeEnvValue(env, "MNEMON_CONTROL_ADDR"),
 		ControlPrincipal:    RuntimeEnvValue(env, "MNEMON_CONTROL_PRINCIPAL"),
 	}

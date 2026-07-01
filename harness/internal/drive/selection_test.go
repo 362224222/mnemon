@@ -14,13 +14,13 @@ func TestManagedWakeCandidateForRenderMatchesStableIssueIdentity(t *testing.T) {
 		BodyDigest: "sha256:render",
 		Events: []eventmodel.EventEnvelope{
 			renderedWakeEnvelope("derived:first", "assignment/asg-other", "Assignment ASG-OTHER is available."),
-			renderedWakeEnvelope("derived:second", "assignment/asg-27", "Please handle TEA-27 for the Mnemon R2 hub-flow completion drill."),
+			renderedWakeEnvelope("derived:second", "assignment/asg-27", "Please handle TEA-27 for the Mnemon surface-flow completion drill."),
 		},
 	}
 	candidate, ok := ManagedWakeCandidateForRender("planner@team", resp, ManagedWakeMatchMaterial{
 		IssueID:    "issue-123",
 		Identifier: "TEA-27",
-		Title:      "Mnemon R2 hub-flow completion drill",
+		Title:      "Mnemon surface-flow completion drill",
 		TaskID:     "task-123",
 	})
 	if !ok {
@@ -39,7 +39,7 @@ func TestManagedWakeCandidateForRenderRequiresStrongRootIdentity(t *testing.T) {
 		AuditID:    "audit-1",
 		BodyDigest: "sha256:render",
 		Events: []eventmodel.EventEnvelope{
-			renderedWakeEnvelope("derived:stale", "assignment/asg-stale", "Assignment asg-stale is yours: Mnemon R2 Multica hub live validation. Expected work: inspect an older mailbox."),
+			renderedWakeEnvelope("derived:stale", "assignment/asg-stale", "Assignment asg-stale is yours: Mnemon Multica surface validation. Expected work: inspect an older surface task."),
 			renderedWakeEnvelopeOfType("derived:current", "teamwork.signal_open", "teamwork_signal/sig-current", "Teamwork signal is open: Mnemon R2 Multica hub live validation. Context refs: multica:issue:issue-current, multica:task:task-current."),
 		},
 	}
@@ -75,29 +75,29 @@ func TestManagedWakeMatchTermsPreferStableIssueIdentity(t *testing.T) {
 	got := ManagedWakeMatchTerms(ManagedWakeMatchMaterial{
 		IssueID:    "issue-123",
 		Identifier: "TEA-27",
-		Title:      "Mnemon R2 hub-flow completion drill",
-		Statement:  "Run a small hub-flow readiness drill.",
+		Title:      "Mnemon surface-flow completion drill",
+		Statement:  "Run a small surface-flow readiness drill.",
 		TaskID:     "task-123",
 	})
 	joined := strings.Join(got, "\n")
-	for _, want := range []string{"issue-123", "TEA-27", "Mnemon R2 hub-flow completion drill", "task-123"} {
+	for _, want := range []string{"issue-123", "TEA-27", "Mnemon surface-flow completion drill", "task-123"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("match terms missing %q: %+v", want, got)
 		}
 	}
-	if strings.Contains(joined, "Run a small hub-flow readiness drill.") {
+	if strings.Contains(joined, "Run a small surface-flow readiness drill.") {
 		t.Fatalf("root issue matching must not prefer reusable statement text: %+v", got)
 	}
 }
 
-func TestManagedWakeMatchTermsPreferAssignmentMailboxIdentity(t *testing.T) {
+func TestManagedWakeMatchTermsPreferAssignmentIdentity(t *testing.T) {
 	got := ManagedWakeMatchTerms(ManagedWakeMatchMaterial{
-		AssignmentID:          "assignment-final-routing-mailbox",
+		AssignmentID:          "assignment-final-routing-surface",
 		AssignmentFingerprint: "fp-1",
 		IssueID:               "child-issue",
 		Identifier:            "TEA-16",
 	})
-	if strings.Join(got, "\n") != "assignment-final-routing-mailbox\nfp-1" {
+	if strings.Join(got, "\n") != "assignment-final-routing-surface\nfp-1" {
 		t.Fatalf("assignment terms = %+v", got)
 	}
 }

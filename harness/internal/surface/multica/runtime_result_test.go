@@ -7,48 +7,36 @@ import (
 
 func TestFormatRuntimeFinalAnswerSummarizesRuntimeOutcome(t *testing.T) {
 	got := FormatRuntimeFinalAnswer(RuntimeResultSummary{
-		IssueID:             "iss-1",
-		Identifier:          "TEA-1",
-		Title:               "Runtime adapter cleanup",
-		Principal:           "planner@team",
-		Status:              "recorded",
-		ProjectionStatus:    "commented",
-		WakeStatus:          "completed",
-		HubWriteStatus:      "updated",
-		HubChildIssues:      1,
-		HubFeedbackComments: 2,
+		IssueID:    "iss-1",
+		Identifier: "TEA-1",
+		Title:      "Runtime adapter cleanup",
+		Principal:  "planner@team",
+		Status:     "recorded",
 	})
 	for _, want := range []string{
 		"Mnemon Multica runtime handled issue TEA-1 (Runtime adapter cleanup).",
 		"Principal: planner@team.",
-		"Mnemon ingest: recorded.",
-		"Multica projection: comment posted.",
-		"Managed wake: completed.",
-		"Multica updates: 1 assignment mailbox and 2 feedback comments synced.",
+		"Multica surface input: observed.",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("final answer missing %q:\n%s", want, got)
+		}
+	}
+	for _, old := range []string{"assignment mailbox", "Managed wake", "Multica projection", "Multica updates"} {
+		if strings.Contains(got, old) {
+			t.Fatalf("final answer contains old R2 wording %q:\n%s", old, got)
 		}
 	}
 }
 
 func TestRuntimeFinalAnswerCarriesFailures(t *testing.T) {
 	got := FormatRuntimeFinalAnswer(RuntimeResultSummary{
-		IssueID:          "iss-2",
-		Status:           "failed",
-		Err:              "ingest refused",
-		ProjectionStatus: "failed",
-		ProjectionErr:    "comment rejected",
-		WakeStatus:       "failed",
-		WakeErr:          "render unavailable",
-		HubWriteStatus:   "failed",
-		HubWriteErr:      "metadata timeout",
+		IssueID: "iss-2",
+		Status:  "failed",
+		Err:     "ingest refused",
 	})
 	for _, want := range []string{
-		"Mnemon ingest: failed (ingest refused).",
-		"Multica projection: failed (comment rejected).",
-		"Managed wake: failed (render unavailable).",
-		"Multica updates: failed (metadata timeout).",
+		"Multica surface input: failed (ingest refused).",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("failure answer missing %q:\n%s", want, got)
@@ -56,18 +44,14 @@ func TestRuntimeFinalAnswerCarriesFailures(t *testing.T) {
 	}
 }
 
-func TestRuntimeProgressSummaries(t *testing.T) {
-	if got := RuntimeWakeProgress(RuntimeResultSummary{WakeStatus: "completed", WakeTurnID: "turn-1"}); got != "Managed wake completed: turn=turn-1." {
-		t.Fatalf("wake progress = %q", got)
-	}
-	if got := RuntimeHubWriteProgress(RuntimeResultSummary{HubWriteStatus: "commented", HubFeedbackComments: 1}); got != "Multica updates: 1 feedback comment posted." {
-		t.Fatalf("hub progress = %q", got)
-	}
-	if got := RuntimeProjectionProgress(RuntimeResultSummary{ProjectionStatus: "commented", ProjectionCommentID: "comment-1"}); got != "Multica comment projection completed: comment=comment-1." {
-		t.Fatalf("projection progress = %q", got)
-	}
-	if got := RuntimeAssignmentCorrelationProgress(); got != "Mnemon assignment mailbox: correlated." {
-		t.Fatalf("assignment correlation progress = %q", got)
+func TestRuntimeFinalAnswerSummarizesSkippedSurfaceInput(t *testing.T) {
+	got := FormatRuntimeFinalAnswer(RuntimeResultSummary{
+		IssueID: "iss-3",
+		Status:  "skipped",
+		Err:     "MNEMON_CONTROL_ADDR is not set",
+	})
+	if !strings.Contains(got, "Multica surface input: skipped (MNEMON_CONTROL_ADDR is not set).") {
+		t.Fatalf("skipped answer mismatch:\n%s", got)
 	}
 }
 

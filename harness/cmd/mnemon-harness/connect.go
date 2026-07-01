@@ -70,7 +70,7 @@ func runConnectMultica(cmd *cobra.Command, args []string) error {
 		RuntimeBinary: strings.TrimSpace(connectMulticaRuntime),
 	}
 	cfg.Daemon.InteractionWatchers = appendUniqueString(cfg.Daemon.InteractionWatchers, productconfig.ConnectionMultica)
-	cfg.Daemon.ProjectionSurfaces = appendUniqueString(cfg.Daemon.ProjectionSurfaces, productconfig.ConnectionMultica)
+	cfg.Daemon.DisplaySurfaces = appendUniqueString(cfg.Daemon.DisplaySurfaces, productconfig.ConnectionMultica)
 	if cfg.Sessions.PrimaryActivationCarrier == "" {
 		cfg.Sessions.PrimaryActivationCarrier = productconfig.ConnectionMultica
 	}
@@ -97,7 +97,7 @@ func runConnectGitHub(cmd *cobra.Command, args []string) error {
 		Branch:  strings.TrimSpace(connectGitHubBranch),
 	}
 	cfg.Daemon.InteractionWatchers = appendUniqueString(cfg.Daemon.InteractionWatchers, productconfig.ConnectionGitHub)
-	cfg.Daemon.ProjectionSurfaces = appendUniqueString(cfg.Daemon.ProjectionSurfaces, productconfig.ConnectionGitHub)
+	cfg.Daemon.DisplaySurfaces = appendUniqueString(cfg.Daemon.DisplaySurfaces, productconfig.ConnectionGitHub)
 	path, err := saveHarnessProductConfig(connectRoot, connectConfigPath, cfg)
 	if err != nil {
 		return err

@@ -52,6 +52,10 @@ go build -o mnemon-harness ./harness/cmd/mnemon-harness
 
 更多命令示例见 [USAGE.md](USAGE.md)。
 
+维护者验证 Multica R3 live 接入时，可以参考
+[multica-r3-live-validation.md](multica-r3-live-validation.md)。该文档记录
+源码校准、验收脚本和中文复杂 case，不属于普通用户产品契约。
+
 ## 5. 发布边界
 
 这个 beta 只发布最小公开文档。内部计划、实验命令面、生成站点 HTML 和未来

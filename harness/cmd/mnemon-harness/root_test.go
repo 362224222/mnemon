@@ -78,7 +78,7 @@ func TestProductHelpDoesNotExposeInternalVocabulary(t *testing.T) {
 		{"multica", "--help"},
 	} {
 		got := executeRootForHelp(t, args...)
-		for _, blocked := range []string{"binding", "channel", "projection", "kernel", "runtime", "sync cursor", "token file", "control-agent", "import-issue", "project-comment", "provision", "participant"} {
+		for _, blocked := range []string{"binding", "channel", "projection", "kernel", "runtime", "sync cursor", "token file", "control-agent", "import-issue", "project-comment", "surface-report", "activation-carrier", "provision", "participant"} {
 			if strings.Contains(strings.ToLower(got), blocked) {
 				t.Fatalf("%q help leaked internal term %q:\n%s", strings.Join(args, " "), blocked, got)
 			}
@@ -92,10 +92,11 @@ func TestInternalCommandsStayHidden(t *testing.T) {
 		{"loop"},
 		{"local"},
 		{"multica"},
+		{"multica", "activation-carrier"},
 		{"multica", "import-issue"},
 		{"multica", "participant"},
-		{"multica", "project-comment"},
 		{"multica", "provision"},
+		{"multica", "surface-report"},
 		{"sync"},
 		{"token"},
 		{"tower"},

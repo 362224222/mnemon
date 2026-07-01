@@ -87,9 +87,9 @@ func TestMulticaParticipantLookups(t *testing.T) {
 	}
 }
 
-func TestRuntimeMulticaRegistryPrincipalUsesManagedWorkspace(t *testing.T) {
+func TestRuntimeMulticaRegistryPrincipalUsesProviderWorkspace(t *testing.T) {
 	tmp := t.TempDir()
-	workspace := filepath.Join(tmp, "managed-workspace")
+	workspace := filepath.Join(tmp, "provider-workspace")
 	if err := SaveMulticaRegistry(MulticaRegistryPath(workspace, ""), MulticaRegistry{
 		Participants: []MulticaParticipantRecord{{
 			Principal: "reviewer@team",
@@ -99,7 +99,7 @@ func TestRuntimeMulticaRegistryPrincipalUsesManagedWorkspace(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	got := RuntimeMulticaRegistryPrincipal([]string{"MNEMON_MANAGED_WORKSPACE=" + workspace}, tmp, "agent-reviewer", "")
+	got := RuntimeMulticaRegistryPrincipal([]string{"MNEMON_MULTICA_PROVIDER_WORKSPACE=" + workspace}, tmp, "agent-reviewer", "")
 	if got != "reviewer@team" {
 		t.Fatalf("runtime registry principal = %q", got)
 	}

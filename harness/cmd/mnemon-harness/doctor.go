@@ -38,7 +38,7 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	fmt.Fprintln(cmd.OutOrStdout())
 	if cfgStatus == "configured" || cfgStatus == "legacy bridge" {
 		fmt.Fprintf(cmd.OutOrStdout(), "- Participants: %d\n", len(cfg.Participants))
-		fmt.Fprintf(cmd.OutOrStdout(), "- Daemon roles: watchers=%d drive=%d surfaces=%d\n", len(cfg.Daemon.InteractionWatchers), len(cfg.Daemon.DriveSources), len(cfg.Daemon.ProjectionSurfaces))
+		fmt.Fprintf(cmd.OutOrStdout(), "- Daemon roles: watchers=%d drive=%d surfaces=%d\n", len(cfg.Daemon.InteractionWatchers), len(cfg.Daemon.DriveSources), len(cfg.Daemon.DisplaySurfaces))
 		fmt.Fprintf(cmd.OutOrStdout(), "- Connections: %s\n", doctorConnections(cfg))
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "- Local Mnemon config: %s\n", doctorLocalConfig(root))

@@ -12,6 +12,7 @@ import (
 
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/driver"
+	multicasurface "github.com/mnemon-dev/mnemon/harness/internal/surface/multica"
 )
 
 func TestMulticaImportIssueWritesObservedDraftToLocalIngest(t *testing.T) {
@@ -85,6 +86,147 @@ func TestMulticaImportIssueWritesObservedDraftToLocalIngest(t *testing.T) {
 	}
 }
 
+func TestMulticaSurfaceReportWritesDisplayOnlyState(t *testing.T) {
+	restoreMulticaFlags(t)
+
+	tmp := t.TempDir()
+	bin := filepath.Join(tmp, "multica")
+	argsPath := filepath.Join(tmp, "args.log")
+	commentPath := filepath.Join(tmp, "comment.md")
+	script := `#!/usr/bin/env sh
+set -eu
+printf '%s\n' "$*" >> "$MULTICA_ARGS_PATH"
+case "$*" in
+  *"issue comment add iss-report"*) cat > "$MULTICA_COMMENT_PATH"; printf '{"id":"comment-1","issue_id":"iss-report","content":"ok"}\n' ;;
+  *"issue metadata set iss-report"*) printf '{}\n' ;;
+  *"issue status iss-report done"*) printf '{"id":"iss-report","status":"done"}\n' ;;
+  *) printf 'unexpected multica args: %s\n' "$*" >&2; exit 42 ;;
+esac
+`
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	multicaBin = bin
+	multicaProfile = "desktop-api.multica.ai"
+	multicaIssueID = "iss-report"
+	multicaCommentTitle = "中文进展报告"
+	multicaSurfaceStatusLabel = "已完成第一轮"
+	multicaSurfaceSummary = "完成退款规则和客服话术复盘。"
+	multicaCommentContent = "结论：需要补充异常退款审批人。"
+	multicaSurfaceDesiredStatus = "done"
+	multicaSurfaceEventRef = "event:accepted-1"
+	multicaSurfaceResourceRef = "assignment:refund-review"
+	multicaSurfaceRef = "multica:iss-report:comment"
+	multicaSurfaceSourceArtifactRef = "artifact:refund.md"
+	multicaSurfaceEvidenceRefs = []string{"evidence:log-1"}
+	multicaSurfaceArtifactRefs = []string{"artifact:refund.md"}
+	multicaJSON = true
+	t.Setenv("MULTICA_ARGS_PATH", argsPath)
+	t.Setenv("MULTICA_COMMENT_PATH", commentPath)
+
+	var out bytes.Buffer
+	multicaSurfaceReportCmd.SetOut(&out)
+	t.Cleanup(func() {
+		multicaSurfaceReportCmd.SetOut(os.Stdout)
+	})
+	if err := runMulticaSurfaceReport(multicaSurfaceReportCmd, nil); err != nil {
+		t.Fatalf("surface report: %v", err)
+	}
+	comment := readTestFile(t, commentPath)
+	for _, want := range []string{"Mnemon 更新: 中文进展报告", "## 摘要", "完成退款规则", "## 事件引用", "event:accepted-1"} {
+		if !strings.Contains(comment, want) {
+			t.Fatalf("surface report comment missing %q:\n%s", want, comment)
+		}
+	}
+	argsLog := readTestFile(t, argsPath)
+	for _, want := range []string{
+		"issue comment add iss-report --content-stdin --output json",
+		"issue metadata set iss-report --key " + multicasurface.MulticaMetadataEventRef + " --value event:accepted-1",
+		"issue metadata set iss-report --key " + multicasurface.MulticaMetadataNoAutoDispatch + " --value true",
+		"issue status iss-report done --output json",
+	} {
+		if !strings.Contains(argsLog, want) {
+			t.Fatalf("surface report args missing %q:\n%s", want, argsLog)
+		}
+	}
+	for _, forbidden := range []string{"issue assign", "[mnemon:wake]"} {
+		if strings.Contains(argsLog, forbidden) {
+			t.Fatalf("display report must not trigger execution via %q:\n%s", forbidden, argsLog)
+		}
+	}
+	var report multicaSurfaceReport
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatalf("surface report output must be JSON: %v\n%s", err, out.String())
+	}
+	if report.Status != "done" || !report.NoAutoDispatch || report.Metadata[multicasurface.MulticaMetadataSurfaceRole] != string(multicasurface.SurfaceRoleDisplay) {
+		t.Fatalf("surface report mismatch: %+v", report)
+	}
+}
+
+func TestMulticaActivationCarrierCreatesTriggerIssue(t *testing.T) {
+	restoreMulticaFlags(t)
+
+	tmp := t.TempDir()
+	bin := filepath.Join(tmp, "multica")
+	argsPath := filepath.Join(tmp, "args.log")
+	descriptionPath := filepath.Join(tmp, "activation.md")
+	script := `#!/usr/bin/env sh
+set -eu
+printf '%s\n' "$*" >> "$MULTICA_ARGS_PATH"
+case "$*" in
+  *"issue create"*) cat > "$MULTICA_DESCRIPTION_PATH"; printf '{"id":"iss-activation","identifier":"ACT-1","title":"激活下一轮协作","status":"todo"}\n' ;;
+  *"issue metadata set iss-activation"*) printf '{}\n' ;;
+  *) printf 'unexpected multica args: %s\n' "$*" >&2; exit 42 ;;
+esac
+`
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	multicaBin = bin
+	multicaProfile = "desktop-api.multica.ai"
+	multicaIssueID = "iss-parent"
+	multicaCommentTitle = "激活下一轮协作"
+	multicaCommentContent = "请根据已接受事件继续处理客户退款争议。"
+	multicaSurfaceEventRef = "event:accepted-2"
+	multicaSurfaceResourceRef = "assignment:refund-follow-up"
+	multicaSurfaceTargetAgentID = "agent-reviewer"
+	multicaJSON = true
+	t.Setenv("MULTICA_ARGS_PATH", argsPath)
+	t.Setenv("MULTICA_DESCRIPTION_PATH", descriptionPath)
+
+	var out bytes.Buffer
+	multicaActivationCarrierCmd.SetOut(&out)
+	t.Cleanup(func() {
+		multicaActivationCarrierCmd.SetOut(os.Stdout)
+	})
+	if err := runMulticaActivationCarrier(multicaActivationCarrierCmd, nil); err != nil {
+		t.Fatalf("activation carrier: %v", err)
+	}
+	argsLog := readTestFile(t, argsPath)
+	for _, want := range []string{
+		"issue create --title 激活下一轮协作 --output json --description-stdin --assignee-id agent-reviewer --parent iss-parent --status todo --priority medium --allow-duplicate",
+		"issue metadata set iss-activation --key " + multicasurface.MulticaMetadataEventRef + " --value event:accepted-2",
+		"issue metadata set iss-activation --key " + multicasurface.MulticaMetadataSurfaceRole + " --value activate",
+	} {
+		if !strings.Contains(argsLog, want) {
+			t.Fatalf("activation carrier args missing %q:\n%s", want, argsLog)
+		}
+	}
+	description := readTestFile(t, descriptionPath)
+	for _, want := range []string{"请根据已接受事件继续处理客户退款争议", "Mnemon 激活载体", "event:accepted-2"} {
+		if !strings.Contains(description, want) {
+			t.Fatalf("activation description missing %q:\n%s", want, description)
+		}
+	}
+	var report multicaActivationCarrierReport
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatalf("activation carrier output must be JSON: %v\n%s", err, out.String())
+	}
+	if report.ParentIssueID != "iss-parent" || report.Issue.ID != "iss-activation" || report.Metadata[multicasurface.MulticaMetadataSurfaceRole] != string(multicasurface.SurfaceRoleActivate) {
+		t.Fatalf("activation report mismatch: %+v", report)
+	}
+}
+
 func TestMulticaParticipantRegisterAdoptsExistingUIAgent(t *testing.T) {
 	restoreMulticaFlags(t)
 
@@ -118,9 +260,9 @@ esac
 	multicaParticipantRole = "reviewer"
 	multicaParticipantControlAddr = "http://127.0.0.1:8791"
 	multicaParticipantHarnessBin = "/abs/mnemon-harness"
-	multicaParticipantManagedRuntime = "codex-appserver"
-	multicaParticipantManagedCommand = "codex"
-	multicaParticipantManagedWorkspace = tmp
+	multicaParticipantProviderRuntime = "codex"
+	multicaParticipantProviderCommand = "codex"
+	multicaParticipantProviderWorkspace = tmp
 	multicaJSON = true
 	t.Setenv("MULTICA_ARGS_PATH", argsPath)
 	t.Setenv("MULTICA_ENV_STDIN_PATH", envStdinPath)
@@ -156,14 +298,16 @@ esac
 	}
 	for _, want := range []string{
 		`"MNEMON_CONTROL_PRINCIPAL":"reviewer@team"`,
-		`"MNEMON_HUB_BACKEND":"multica"`,
 		`"MNEMON_MULTICA_REGISTRY":"` + registryPath + `"`,
-		`"MNEMON_MANAGED_RUNTIME":"codex-appserver"`,
-		`"MNEMON_MANAGED_COMMAND":"codex"`,
+		`"MNEMON_MULTICA_PROVIDER_RUNTIME":"codex"`,
+		`"MNEMON_MULTICA_PROVIDER_COMMAND":"codex"`,
 	} {
 		if !strings.Contains(string(envStdin), want) {
 			t.Fatalf("agent env stdin missing %s:\n%s", want, envStdin)
 		}
+	}
+	if strings.Contains(string(envStdin), "MNEMON_HUB_BACKEND") {
+		t.Fatalf("R3 runtime env must not configure Multica as hub backend:\n%s", envStdin)
 	}
 	argsLog, err := os.ReadFile(argsPath)
 	if err != nil {
@@ -224,8 +368,8 @@ esac
 	multicaProvisionWait = 0
 	multicaProvisionControlAddr = "http://127.0.0.1:8787"
 	multicaProvisionHarnessBin = "/abs/mnemon-harness"
-	multicaProvisionManagedRuntime = "noop"
-	multicaProvisionManagedWorkspace = tmp
+	multicaProvisionProviderRuntime = "noop"
+	multicaProvisionProviderWorkspace = tmp
 	multicaProvisionAcceptanceBridge = true
 	multicaJSON = true
 	t.Setenv("MULTICA_ENV_STDIN_PATH", envStdinPath)
@@ -268,7 +412,6 @@ esac
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		`"MNEMON_HUB_BACKEND":"multica"`,
 		`"MNEMON_MULTICA_REGISTRY":"` + registryPath + `"`,
 		`"MNEMON_MULTICA_WORKSPACE_ID":"ws-1"`,
 		`"MNEMON_CONTROL_ADDR":"http://127.0.0.1:8787"`,
@@ -276,12 +419,15 @@ esac
 		`"MNEMON_CONTROL_TOKEN_FILE":"` + plannerTokenFile + `"`,
 		`"MNEMON_CONTROL_TOKEN_FILE":"` + implementerTokenFile + `"`,
 		`"MNEMON_HARNESS_BIN":"/abs/mnemon-harness"`,
-		`"MNEMON_MANAGED_RUNTIME":"noop"`,
-		`"MNEMON_MANAGED_WORKSPACE":"` + tmp + `"`,
+		`"MNEMON_MULTICA_PROVIDER_RUNTIME":"noop"`,
+		`"MNEMON_MULTICA_PROVIDER_WORKSPACE":"` + tmp + `"`,
 	} {
 		if !strings.Contains(string(envStdin), want) {
 			t.Fatalf("agent env stdin missing %s:\n%s", want, envStdin)
 		}
+	}
+	if strings.Contains(string(envStdin), "MNEMON_HUB_BACKEND") {
+		t.Fatalf("R3 provision env must not configure Multica as hub backend:\n%s", envStdin)
 	}
 }
 
@@ -300,28 +446,28 @@ func TestMulticaProvisionRejectsDirectHarnessUse(t *testing.T) {
 
 func TestMergeMulticaParticipantRuntimeEnvPrunesStaleManagedKeys(t *testing.T) {
 	merged := mergeMulticaParticipantRuntimeEnv(map[string]string{
-		"MNEMON_CONTROL_TOKEN":      "old-token",
-		"MNEMON_CONTROL_TOKEN_FILE": "/old/token",
-		"MNEMON_MANAGED_RUNTIME":    "codex-appserver",
-		"MNEMON_HUB_BACKEND":        "old",
-		"CUSTOM_USER_ENV":           "keep",
+		"MNEMON_CONTROL_TOKEN":            "old-token",
+		"MNEMON_CONTROL_TOKEN_FILE":       "/old/token",
+		"MNEMON_MANAGED_RUNTIME":          "codex-appserver",
+		"MNEMON_MULTICA_PROVIDER_RUNTIME": "old-provider",
+		"MNEMON_HUB_BACKEND":              "old",
+		"CUSTOM_USER_ENV":                 "keep",
 	}, map[string]string{
-		"MNEMON_HUB_BACKEND":          "multica",
-		"MNEMON_CONTROL_ADDR":         "http://127.0.0.1:8791",
-		"MNEMON_CONTROL_PRINCIPAL":    "planner@team",
-		"MNEMON_MANAGED_WORKSPACE":    "/workspace",
-		"MNEMON_MULTICA_REGISTRY":     "/registry.json",
-		"MNEMON_MULTICA_WORKSPACE_ID": "ws-1",
+		"MNEMON_CONTROL_ADDR":               "http://127.0.0.1:8791",
+		"MNEMON_CONTROL_PRINCIPAL":          "planner@team",
+		"MNEMON_MULTICA_PROVIDER_WORKSPACE": "/workspace",
+		"MNEMON_MULTICA_REGISTRY":           "/registry.json",
+		"MNEMON_MULTICA_WORKSPACE_ID":       "ws-1",
 	})
-	for _, stale := range []string{"MNEMON_CONTROL_TOKEN", "MNEMON_CONTROL_TOKEN_FILE", "MNEMON_MANAGED_RUNTIME"} {
+	for _, stale := range []string{"MNEMON_CONTROL_TOKEN", "MNEMON_CONTROL_TOKEN_FILE", "MNEMON_MANAGED_RUNTIME", "MNEMON_HUB_BACKEND", "MNEMON_MULTICA_PROVIDER_RUNTIME"} {
 		if _, ok := merged[stale]; ok {
-			t.Fatalf("stale managed key %s should be pruned: %+v", stale, merged)
+			t.Fatalf("stale runtime env key %s should be pruned: %+v", stale, merged)
 		}
 	}
 	if merged["CUSTOM_USER_ENV"] != "keep" {
 		t.Fatalf("unmanaged env should be preserved: %+v", merged)
 	}
-	if merged["MNEMON_HUB_BACKEND"] != "multica" || merged["MNEMON_CONTROL_PRINCIPAL"] != "planner@team" {
+	if merged["MNEMON_CONTROL_PRINCIPAL"] != "planner@team" {
 		t.Fatalf("desired managed env not applied: %+v", merged)
 	}
 }
@@ -331,7 +477,7 @@ func TestMulticaParticipantRuntimeEnvUsesAbsoluteLocalPaths(t *testing.T) {
 
 	tmp := t.TempDir()
 	t.Chdir(tmp)
-	workspace := "managed-workspace"
+	workspace := "provider-workspace"
 	tokenDir := filepath.Join(workspace, ".mnemon", "harness", "channel", "credentials")
 	if err := os.MkdirAll(tokenDir, 0o700); err != nil {
 		t.Fatal(err)
@@ -345,10 +491,10 @@ func TestMulticaParticipantRuntimeEnvUsesAbsoluteLocalPaths(t *testing.T) {
 		AgentName: "mnemon-planner",
 		AgentID:   "agent-planner",
 	}, filepath.Join("state", "registry.json"), "ws-1", multicaParticipantEnvOptions{
-		ManagedWorkspace: workspace,
+		ProviderWorkspace: workspace,
 	})
 
-	for _, key := range []string{"MNEMON_MULTICA_REGISTRY", "MNEMON_MANAGED_WORKSPACE", "MNEMON_CONTROL_TOKEN_FILE"} {
+	for _, key := range []string{"MNEMON_MULTICA_REGISTRY", "MNEMON_MULTICA_PROVIDER_WORKSPACE", "MNEMON_CONTROL_TOKEN_FILE"} {
 		value := env[key]
 		if value == "" || !filepath.IsAbs(value) {
 			t.Fatalf("%s should be absolute, got %q in %+v", key, value, env)
@@ -383,7 +529,18 @@ func restoreMulticaFlags(t *testing.T) {
 	oldFile := multicaCommentFile
 	oldStdin := multicaCommentStdin
 	oldTitle := multicaCommentTitle
-	oldEvents := multicaCommentEvents
+	oldStatusLabel := multicaSurfaceStatusLabel
+	oldSurfaceSummary := multicaSurfaceSummary
+	oldDesiredStatus := multicaSurfaceDesiredStatus
+	oldEventRef := multicaSurfaceEventRef
+	oldResourceRef := multicaSurfaceResourceRef
+	oldSurfaceRef := multicaSurfaceRef
+	oldSourceArtifactRef := multicaSurfaceSourceArtifactRef
+	oldSurfaceEvidence := multicaSurfaceEvidenceRefs
+	oldSurfaceArtifacts := multicaSurfaceArtifactRefs
+	oldAssigneeAgentID := multicaSurfaceAssigneeAgentID
+	oldAssignedToProvider := multicaSurfaceAssignedToProvider
+	oldTargetAgentID := multicaSurfaceTargetAgentID
 	oldProvisionRegistry := multicaProvisionRegistry
 	oldProvisionProjectRoot := multicaProvisionProjectRoot
 	oldProvisionProfileName := multicaProvisionProfileName
@@ -396,10 +553,10 @@ func restoreMulticaFlags(t *testing.T) {
 	oldProvisionControlToken := multicaProvisionControlToken
 	oldProvisionControlTokenFile := multicaProvisionControlTokenFile
 	oldProvisionHarnessBin := multicaProvisionHarnessBin
-	oldProvisionManagedRuntime := multicaProvisionManagedRuntime
-	oldProvisionManagedCommand := multicaProvisionManagedCommand
-	oldProvisionManagedWorkspace := multicaProvisionManagedWorkspace
-	oldProvisionManagedTimeout := multicaProvisionManagedTimeout
+	oldProvisionProviderRuntime := multicaProvisionProviderRuntime
+	oldProvisionProviderCommand := multicaProvisionProviderCommand
+	oldProvisionProviderWorkspace := multicaProvisionProviderWorkspace
+	oldProvisionProviderTimeout := multicaProvisionProviderTimeout
 	oldProvisionAcceptanceBridge := multicaProvisionAcceptanceBridge
 	oldParticipantRegistry := multicaParticipantRegistry
 	oldParticipantProjectRoot := multicaParticipantProjectRoot
@@ -414,10 +571,10 @@ func restoreMulticaFlags(t *testing.T) {
 	oldParticipantControlToken := multicaParticipantControlToken
 	oldParticipantControlTokenFile := multicaParticipantControlTokenFile
 	oldParticipantHarnessBin := multicaParticipantHarnessBin
-	oldParticipantManagedRuntime := multicaParticipantManagedRuntime
-	oldParticipantManagedCommand := multicaParticipantManagedCommand
-	oldParticipantManagedWorkspace := multicaParticipantManagedWorkspace
-	oldParticipantManagedTimeout := multicaParticipantManagedTimeout
+	oldParticipantProviderRuntime := multicaParticipantProviderRuntime
+	oldParticipantProviderCommand := multicaParticipantProviderCommand
+	oldParticipantProviderWorkspace := multicaParticipantProviderWorkspace
+	oldParticipantProviderTimeout := multicaParticipantProviderTimeout
 	t.Cleanup(func() {
 		multicaBin = oldBin
 		multicaProfile = oldProfile
@@ -441,7 +598,18 @@ func restoreMulticaFlags(t *testing.T) {
 		multicaCommentFile = oldFile
 		multicaCommentStdin = oldStdin
 		multicaCommentTitle = oldTitle
-		multicaCommentEvents = oldEvents
+		multicaSurfaceStatusLabel = oldStatusLabel
+		multicaSurfaceSummary = oldSurfaceSummary
+		multicaSurfaceDesiredStatus = oldDesiredStatus
+		multicaSurfaceEventRef = oldEventRef
+		multicaSurfaceResourceRef = oldResourceRef
+		multicaSurfaceRef = oldSurfaceRef
+		multicaSurfaceSourceArtifactRef = oldSourceArtifactRef
+		multicaSurfaceEvidenceRefs = oldSurfaceEvidence
+		multicaSurfaceArtifactRefs = oldSurfaceArtifacts
+		multicaSurfaceAssigneeAgentID = oldAssigneeAgentID
+		multicaSurfaceAssignedToProvider = oldAssignedToProvider
+		multicaSurfaceTargetAgentID = oldTargetAgentID
 		multicaProvisionRegistry = oldProvisionRegistry
 		multicaProvisionProjectRoot = oldProvisionProjectRoot
 		multicaProvisionProfileName = oldProvisionProfileName
@@ -454,10 +622,10 @@ func restoreMulticaFlags(t *testing.T) {
 		multicaProvisionControlToken = oldProvisionControlToken
 		multicaProvisionControlTokenFile = oldProvisionControlTokenFile
 		multicaProvisionHarnessBin = oldProvisionHarnessBin
-		multicaProvisionManagedRuntime = oldProvisionManagedRuntime
-		multicaProvisionManagedCommand = oldProvisionManagedCommand
-		multicaProvisionManagedWorkspace = oldProvisionManagedWorkspace
-		multicaProvisionManagedTimeout = oldProvisionManagedTimeout
+		multicaProvisionProviderRuntime = oldProvisionProviderRuntime
+		multicaProvisionProviderCommand = oldProvisionProviderCommand
+		multicaProvisionProviderWorkspace = oldProvisionProviderWorkspace
+		multicaProvisionProviderTimeout = oldProvisionProviderTimeout
 		multicaProvisionAcceptanceBridge = oldProvisionAcceptanceBridge
 		multicaParticipantRegistry = oldParticipantRegistry
 		multicaParticipantProjectRoot = oldParticipantProjectRoot
@@ -472,10 +640,10 @@ func restoreMulticaFlags(t *testing.T) {
 		multicaParticipantControlToken = oldParticipantControlToken
 		multicaParticipantControlTokenFile = oldParticipantControlTokenFile
 		multicaParticipantHarnessBin = oldParticipantHarnessBin
-		multicaParticipantManagedRuntime = oldParticipantManagedRuntime
-		multicaParticipantManagedCommand = oldParticipantManagedCommand
-		multicaParticipantManagedWorkspace = oldParticipantManagedWorkspace
-		multicaParticipantManagedTimeout = oldParticipantManagedTimeout
+		multicaParticipantProviderRuntime = oldParticipantProviderRuntime
+		multicaParticipantProviderCommand = oldParticipantProviderCommand
+		multicaParticipantProviderWorkspace = oldParticipantProviderWorkspace
+		multicaParticipantProviderTimeout = oldParticipantProviderTimeout
 	})
 	multicaBin = ""
 	multicaProfile = ""
@@ -498,7 +666,18 @@ func restoreMulticaFlags(t *testing.T) {
 	multicaCommentFile = ""
 	multicaCommentStdin = false
 	multicaCommentTitle = ""
-	multicaCommentEvents = nil
+	multicaSurfaceStatusLabel = ""
+	multicaSurfaceSummary = ""
+	multicaSurfaceDesiredStatus = ""
+	multicaSurfaceEventRef = ""
+	multicaSurfaceResourceRef = ""
+	multicaSurfaceRef = ""
+	multicaSurfaceSourceArtifactRef = ""
+	multicaSurfaceEvidenceRefs = nil
+	multicaSurfaceArtifactRefs = nil
+	multicaSurfaceAssigneeAgentID = ""
+	multicaSurfaceAssignedToProvider = false
+	multicaSurfaceTargetAgentID = ""
 	multicaProvisionRegistry = ""
 	multicaProvisionProjectRoot = "."
 	multicaProvisionProfileName = "mnemon-runtime"
@@ -510,10 +689,10 @@ func restoreMulticaFlags(t *testing.T) {
 	multicaProvisionControlAddr = ""
 	multicaProvisionControlToken = ""
 	multicaProvisionControlTokenFile = ""
-	multicaProvisionManagedRuntime = ""
-	multicaProvisionManagedCommand = ""
-	multicaProvisionManagedWorkspace = ""
-	multicaProvisionManagedTimeout = 0
+	multicaProvisionProviderRuntime = ""
+	multicaProvisionProviderCommand = ""
+	multicaProvisionProviderWorkspace = ""
+	multicaProvisionProviderTimeout = 0
 	multicaProvisionAcceptanceBridge = false
 	multicaParticipantRegistry = ""
 	multicaParticipantProjectRoot = "."
@@ -528,8 +707,17 @@ func restoreMulticaFlags(t *testing.T) {
 	multicaParticipantControlToken = ""
 	multicaParticipantControlTokenFile = ""
 	multicaParticipantHarnessBin = ""
-	multicaParticipantManagedRuntime = ""
-	multicaParticipantManagedCommand = ""
-	multicaParticipantManagedWorkspace = ""
-	multicaParticipantManagedTimeout = 0
+	multicaParticipantProviderRuntime = ""
+	multicaParticipantProviderCommand = ""
+	multicaParticipantProviderWorkspace = ""
+	multicaParticipantProviderTimeout = 0
+}
+
+func readTestFile(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
 }

@@ -13,7 +13,6 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/contract"
 	"github.com/mnemon-dev/mnemon/harness/internal/driver"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
-	"github.com/mnemon-dev/mnemon/harness/internal/projection"
 	multicasurface "github.com/mnemon-dev/mnemon/harness/internal/surface/multica"
 	"github.com/spf13/cobra"
 )
@@ -40,47 +39,58 @@ var (
 	multicaLocalToken     string
 	multicaLocalTokenFile string
 
-	multicaCommentContent string
-	multicaCommentFile    string
-	multicaCommentStdin   bool
-	multicaCommentTitle   string
-	multicaCommentEvents  []string
+	multicaCommentContent            string
+	multicaCommentFile               string
+	multicaCommentStdin              bool
+	multicaCommentTitle              string
+	multicaSurfaceStatusLabel        string
+	multicaSurfaceSummary            string
+	multicaSurfaceDesiredStatus      string
+	multicaSurfaceEventRef           string
+	multicaSurfaceResourceRef        string
+	multicaSurfaceRef                string
+	multicaSurfaceSourceArtifactRef  string
+	multicaSurfaceEvidenceRefs       []string
+	multicaSurfaceArtifactRefs       []string
+	multicaSurfaceAssigneeAgentID    string
+	multicaSurfaceAssignedToProvider bool
+	multicaSurfaceTargetAgentID      string
 
-	multicaProvisionRegistry         string
-	multicaProvisionProjectRoot      string
-	multicaProvisionProfileName      string
-	multicaProvisionRuntimeCommand   string
-	multicaProvisionRuntimePath      string
-	multicaProvisionAgentPrefix      string
-	multicaProvisionRestartDaemon    bool
-	multicaProvisionWait             time.Duration
-	multicaProvisionControlAddr      string
-	multicaProvisionControlToken     string
-	multicaProvisionControlTokenFile string
-	multicaProvisionHarnessBin       string
-	multicaProvisionManagedRuntime   string
-	multicaProvisionManagedCommand   string
-	multicaProvisionManagedWorkspace string
-	multicaProvisionManagedTimeout   time.Duration
-	multicaProvisionAcceptanceBridge bool
+	multicaProvisionRegistry          string
+	multicaProvisionProjectRoot       string
+	multicaProvisionProfileName       string
+	multicaProvisionRuntimeCommand    string
+	multicaProvisionRuntimePath       string
+	multicaProvisionAgentPrefix       string
+	multicaProvisionRestartDaemon     bool
+	multicaProvisionWait              time.Duration
+	multicaProvisionControlAddr       string
+	multicaProvisionControlToken      string
+	multicaProvisionControlTokenFile  string
+	multicaProvisionHarnessBin        string
+	multicaProvisionProviderRuntime   string
+	multicaProvisionProviderCommand   string
+	multicaProvisionProviderWorkspace string
+	multicaProvisionProviderTimeout   time.Duration
+	multicaProvisionAcceptanceBridge  bool
 
-	multicaParticipantRegistry         string
-	multicaParticipantProjectRoot      string
-	multicaParticipantAgentID          string
-	multicaParticipantAgentName        string
-	multicaParticipantPrincipal        string
-	multicaParticipantRole             string
-	multicaParticipantRuntimeID        string
-	multicaParticipantCreateIfMissing  bool
-	multicaParticipantSyncAgent        bool
-	multicaParticipantControlAddr      string
-	multicaParticipantControlToken     string
-	multicaParticipantControlTokenFile string
-	multicaParticipantHarnessBin       string
-	multicaParticipantManagedRuntime   string
-	multicaParticipantManagedCommand   string
-	multicaParticipantManagedWorkspace string
-	multicaParticipantManagedTimeout   time.Duration
+	multicaParticipantRegistry          string
+	multicaParticipantProjectRoot       string
+	multicaParticipantAgentID           string
+	multicaParticipantAgentName         string
+	multicaParticipantPrincipal         string
+	multicaParticipantRole              string
+	multicaParticipantRuntimeID         string
+	multicaParticipantCreateIfMissing   bool
+	multicaParticipantSyncAgent         bool
+	multicaParticipantControlAddr       string
+	multicaParticipantControlToken      string
+	multicaParticipantControlTokenFile  string
+	multicaParticipantHarnessBin        string
+	multicaParticipantProviderRuntime   string
+	multicaParticipantProviderCommand   string
+	multicaParticipantProviderWorkspace string
+	multicaParticipantProviderTimeout   time.Duration
 )
 
 var multicaCmd = &cobra.Command{
@@ -102,11 +112,18 @@ var multicaImportIssueCmd = &cobra.Command{
 	RunE:   runMulticaImportIssue,
 }
 
-var multicaProjectCommentCmd = &cobra.Command{
-	Use:    "project-comment",
-	Short:  "Write a Mnemon update as a Multica issue comment",
+var multicaSurfaceReportCmd = &cobra.Command{
+	Use:    "surface-report",
+	Short:  "Write accepted Mnemon state to a Multica display surface",
 	Hidden: true,
-	RunE:   runMulticaProjectComment,
+	RunE:   runMulticaSurfaceReport,
+}
+
+var multicaActivationCarrierCmd = &cobra.Command{
+	Use:    "activation-carrier",
+	Short:  "Create a Multica activation carrier for an accepted Mnemon event",
+	Hidden: true,
+	RunE:   runMulticaActivationCarrier,
 }
 
 var multicaProvisionCmd = &cobra.Command{
@@ -169,14 +186,14 @@ type multicaParticipantRegisterReport struct {
 }
 
 type multicaParticipantEnvOptions struct {
-	ControlAddr      string
-	ControlToken     string
-	ControlTokenFile string
-	HarnessBin       string
-	ManagedRuntime   string
-	ManagedCommand   string
-	ManagedWorkspace string
-	ManagedTimeout   time.Duration
+	ControlAddr       string
+	ControlToken      string
+	ControlTokenFile  string
+	HarnessBin        string
+	ProviderRuntime   string
+	ProviderCommand   string
+	ProviderWorkspace string
+	ProviderTimeout   time.Duration
 }
 
 type multicaParticipantRegisterOptions struct {
@@ -300,7 +317,25 @@ func runMulticaImportIssue(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func runMulticaProjectComment(cmd *cobra.Command, args []string) error {
+type multicaSurfaceReport struct {
+	IssueID             string                `json:"issue_id"`
+	Comment             driver.MulticaComment `json:"comment"`
+	Metadata            map[string]string     `json:"metadata"`
+	Status              string                `json:"status,omitempty"`
+	SkippedStatusReason string                `json:"skipped_status_reason,omitempty"`
+	StatusIssue         *driver.MulticaIssue  `json:"status_issue,omitempty"`
+	NoAutoDispatch      bool                  `json:"no_auto_dispatch"`
+	SourceArtifact      string                `json:"source_artifact,omitempty"`
+}
+
+type multicaActivationCarrierReport struct {
+	ParentIssueID string              `json:"parent_issue_id"`
+	Issue         driver.MulticaIssue `json:"issue"`
+	Metadata      map[string]string   `json:"metadata"`
+	TargetAgentID string              `json:"target_agent_id,omitempty"`
+}
+
+func runMulticaSurfaceReport(cmd *cobra.Command, args []string) error {
 	if strings.TrimSpace(multicaIssueID) == "" {
 		return fmt.Errorf("--issue-id is required")
 	}
@@ -308,22 +343,167 @@ func runMulticaProjectComment(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	body := projection.FormatComment(projection.CommentMaterial{
-		Title:    multicaCommentTitle,
-		Body:     content,
-		EventIDs: multicaCommentEvents,
+	plan, err := multicasurface.BuildDisplayWritebackPlan(multicasurface.DisplayWritebackRequest{
+		IssueID: strings.TrimSpace(multicaIssueID),
+		Refs: multicasurface.SurfaceRefs{
+			EventRef:          multicaSurfaceEventRef,
+			ResourceRef:       multicaSurfaceResourceRef,
+			SurfaceRef:        multicaSurfaceRef,
+			SourceArtifactRef: multicaSurfaceSourceArtifactRef,
+		},
+		Title:              multicaCommentTitle,
+		StatusLabel:        multicaSurfaceStatusLabel,
+		Summary:            multicaSurfaceSummary,
+		Result:             content,
+		EvidenceRefs:       multicaSurfaceEvidenceRefs,
+		ArtifactRefs:       multicaSurfaceArtifactRefs,
+		DesiredStatus:      multicaSurfaceDesiredStatus,
+		AssigneeAgentID:    multicaSurfaceAssigneeAgentID,
+		AssignedToProvider: multicaSurfaceAssignedToProvider,
 	})
-	comment, err := multicaCLI().AddIssueComment(multicaCommandContext(cmd), multicaIssueID, body)
 	if err != nil {
 		return err
+	}
+	ctx := multicaCommandContext(cmd)
+	cli := multicaCLI()
+	comment, err := cli.AddIssueComment(ctx, plan.IssueID, plan.CommentBody)
+	if err != nil {
+		return err
+	}
+	if err := cli.SetIssueMetadataMap(ctx, plan.IssueID, plan.Metadata); err != nil {
+		return err
+	}
+	report := multicaSurfaceReport{
+		IssueID:             plan.IssueID,
+		Comment:             comment,
+		Metadata:            plan.Metadata,
+		Status:              plan.Status,
+		SkippedStatusReason: plan.SkippedStatusReason,
+		NoAutoDispatch:      plan.NoAutoDispatch,
+		SourceArtifact:      plan.Metadata[multicasurface.MulticaMetadataSourceArtifactRef],
+	}
+	if plan.Status != "" {
+		issue, err := cli.SetIssueStatus(ctx, plan.IssueID, plan.Status)
+		if err != nil {
+			return err
+		}
+		report.StatusIssue = &issue
 	}
 	if multicaJSON {
 		enc := json.NewEncoder(cmd.OutOrStdout())
 		enc.SetIndent("", "  ")
-		return enc.Encode(comment)
+		return enc.Encode(report)
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "commented issue %s comment=%s\n", multicaIssueID, comment.ID)
+	fmt.Fprintf(cmd.OutOrStdout(), "reported issue %s comment=%s", plan.IssueID, comment.ID)
+	if plan.Status != "" {
+		fmt.Fprintf(cmd.OutOrStdout(), " status=%s", plan.Status)
+	}
+	if plan.SkippedStatusReason != "" {
+		fmt.Fprintf(cmd.OutOrStdout(), " status-skipped=%q", plan.SkippedStatusReason)
+	}
+	fmt.Fprintln(cmd.OutOrStdout())
 	return nil
+}
+
+func runMulticaActivationCarrier(cmd *cobra.Command, args []string) error {
+	if strings.TrimSpace(multicaIssueID) == "" {
+		return fmt.Errorf("--issue-id is required")
+	}
+	content, err := readMulticaTextInput(cmd.InOrStdin(), multicaCommentContent, multicaCommentFile, multicaCommentStdin)
+	if err != nil {
+		return err
+	}
+	carrier, err := multicasurface.BuildActivationCarrier(multicasurface.ActivationCarrierRequest{
+		IssueID:       multicaIssueID,
+		EventRef:      multicaSurfaceEventRef,
+		ResourceRef:   multicaSurfaceResourceRef,
+		CarrierTitle:  multicaCommentTitle,
+		TargetAgentID: multicaSurfaceTargetAgentID,
+	})
+	if err != nil {
+		return err
+	}
+	description := formatActivationCarrierDescription(content, carrier.Metadata)
+	ctx := multicaCommandContext(cmd)
+	cli := multicaCLI()
+	issue, err := cli.CreateIssue(ctx, driver.MulticaCreateIssueRequest{
+		Title:          carrier.Title,
+		Description:    description,
+		ParentID:       carrier.IssueID,
+		AssigneeID:     strings.TrimSpace(multicaSurfaceTargetAgentID),
+		Status:         multicasurface.StatusTodo,
+		Priority:       "medium",
+		AllowDuplicate: true,
+	})
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(issue.ID) == "" {
+		return fmt.Errorf("created Multica activation carrier did not return an issue id")
+	}
+	if err := cli.SetIssueMetadataMap(ctx, issue.ID, carrier.Metadata); err != nil {
+		return err
+	}
+	report := multicaActivationCarrierReport{
+		ParentIssueID: carrier.IssueID,
+		Issue:         issue,
+		Metadata:      carrier.Metadata,
+		TargetAgentID: strings.TrimSpace(multicaSurfaceTargetAgentID),
+	}
+	if multicaJSON {
+		enc := json.NewEncoder(cmd.OutOrStdout())
+		enc.SetIndent("", "  ")
+		return enc.Encode(report)
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "created activation carrier parent=%s issue=%s\n", carrier.IssueID, issue.ID)
+	return nil
+}
+
+func formatActivationCarrierDescription(body string, metadata map[string]string) string {
+	var b strings.Builder
+	if text := strings.TrimSpace(body); text != "" {
+		b.WriteString(text)
+		b.WriteString("\n\n")
+	}
+	b.WriteString("Mnemon 激活载体\n\n")
+	b.WriteString("- 事件引用: ")
+	b.WriteString(metadata[multicasurface.MulticaMetadataEventRef])
+	b.WriteString("\n")
+	b.WriteString("- 资源引用: ")
+	b.WriteString(metadata[multicasurface.MulticaMetadataResourceRef])
+	b.WriteString("\n\n")
+	b.WriteString("该 issue 用于通过 Multica 原生调度触发 provider runtime；canonical state 仍由 mnemond 的 accepted event 决定。")
+	return strings.TrimSpace(b.String())
+}
+
+func addMulticaSurfaceReportFlags(cmd *cobra.Command) {
+	cmd.Flags().StringVar(&multicaIssueID, "issue-id", "", "Multica issue ID")
+	cmd.Flags().StringVar(&multicaCommentContent, "content", "", "comment result body")
+	cmd.Flags().StringVar(&multicaCommentFile, "content-file", "", "read result body from a file")
+	cmd.Flags().BoolVar(&multicaCommentStdin, "content-stdin", false, "read result body from stdin")
+	cmd.Flags().StringVar(&multicaCommentTitle, "title", "", "short Mnemon update title")
+	cmd.Flags().StringVar(&multicaSurfaceStatusLabel, "status-label", "", "human-readable status label")
+	cmd.Flags().StringVar(&multicaSurfaceSummary, "summary", "", "short display summary")
+	cmd.Flags().StringVar(&multicaSurfaceDesiredStatus, "desired-status", "", "optional Multica issue status")
+	cmd.Flags().StringVar(&multicaSurfaceEventRef, "event-ref", "", "accepted Mnemon event reference")
+	cmd.Flags().StringVar(&multicaSurfaceResourceRef, "resource-ref", "", "accepted Mnemon resource reference")
+	cmd.Flags().StringVar(&multicaSurfaceRef, "surface-ref", "", "surface writeback reference")
+	cmd.Flags().StringVar(&multicaSurfaceSourceArtifactRef, "source-artifact-ref", "", "source artifact reference")
+	cmd.Flags().StringArrayVar(&multicaSurfaceEvidenceRefs, "evidence", nil, "evidence reference; may be repeated")
+	cmd.Flags().StringArrayVar(&multicaSurfaceArtifactRefs, "artifact", nil, "artifact reference; may be repeated")
+	cmd.Flags().StringVar(&multicaSurfaceAssigneeAgentID, "assignee-agent-id", "", "current Multica assignee agent id")
+	cmd.Flags().BoolVar(&multicaSurfaceAssignedToProvider, "assigned-to-provider", false, "treat current assignee as provider-backed")
+}
+
+func addMulticaActivationCarrierFlags(cmd *cobra.Command) {
+	cmd.Flags().StringVar(&multicaIssueID, "issue-id", "", "parent Multica issue ID")
+	cmd.Flags().StringVar(&multicaCommentContent, "content", "", "activation carrier description")
+	cmd.Flags().StringVar(&multicaCommentFile, "content-file", "", "read activation carrier description from a file")
+	cmd.Flags().BoolVar(&multicaCommentStdin, "content-stdin", false, "read activation carrier description from stdin")
+	cmd.Flags().StringVar(&multicaCommentTitle, "title", "", "activation carrier title")
+	cmd.Flags().StringVar(&multicaSurfaceEventRef, "event-ref", "", "accepted Mnemon event reference")
+	cmd.Flags().StringVar(&multicaSurfaceResourceRef, "resource-ref", "", "accepted Mnemon resource reference")
+	cmd.Flags().StringVar(&multicaSurfaceTargetAgentID, "target-agent-id", "", "Multica agent id to assign the activation carrier to")
 }
 
 func runMulticaParticipantRegister(cmd *cobra.Command, args []string) error {
@@ -710,13 +890,12 @@ func ensureMulticaParticipantEnv(ctx context.Context, cli driver.MulticaCLI, par
 func multicaParticipantRuntimeEnv(cli driver.MulticaCLI, participant driver.MulticaParticipantRecord, registryPath, workspaceID string, opts multicaParticipantEnvOptions) map[string]string {
 	env := map[string]string{}
 	registryPath = multicaLocalEnvPath(registryPath)
-	managedWorkspace := multicaLocalEnvPath(opts.ManagedWorkspace)
+	providerWorkspace := multicaLocalEnvPath(opts.ProviderWorkspace)
 	controlTokenFile := strings.TrimSpace(opts.ControlTokenFile)
 	if controlTokenFile == "" && strings.TrimSpace(opts.ControlToken) == "" {
-		controlTokenFile = defaultMulticaParticipantControlTokenFile(managedWorkspace, participant.Principal)
+		controlTokenFile = defaultMulticaParticipantControlTokenFile(providerWorkspace, participant.Principal)
 	}
 	controlTokenFile = multicaLocalEnvPath(controlTokenFile)
-	addStringEnv(env, "MNEMON_HUB_BACKEND", driver.MulticaHubBackend)
 	addStringEnv(env, "MNEMON_MULTICA_REGISTRY", registryPath)
 	addStringEnv(env, "MNEMON_MULTICA_WORKSPACE_ID", workspaceID)
 	addStringEnv(env, "MNEMON_MULTICA_BIN", multicaCLICommand(cli))
@@ -727,11 +906,11 @@ func multicaParticipantRuntimeEnv(cli driver.MulticaCLI, participant driver.Mult
 	addStringEnv(env, "MNEMON_CONTROL_TOKEN_FILE", controlTokenFile)
 	addStringEnv(env, "MNEMON_CONTROL_PRINCIPAL", participant.Principal)
 	addStringEnv(env, "MNEMON_HARNESS_BIN", opts.HarnessBin)
-	addStringEnv(env, "MNEMON_MANAGED_RUNTIME", opts.ManagedRuntime)
-	addStringEnv(env, "MNEMON_MANAGED_COMMAND", opts.ManagedCommand)
-	addStringEnv(env, "MNEMON_MANAGED_WORKSPACE", managedWorkspace)
-	if opts.ManagedTimeout > 0 {
-		env["MNEMON_MANAGED_TURN_TIMEOUT"] = opts.ManagedTimeout.String()
+	addStringEnv(env, "MNEMON_MULTICA_PROVIDER_RUNTIME", opts.ProviderRuntime)
+	addStringEnv(env, "MNEMON_MULTICA_PROVIDER_COMMAND", opts.ProviderCommand)
+	addStringEnv(env, "MNEMON_MULTICA_PROVIDER_WORKSPACE", providerWorkspace)
+	if opts.ProviderTimeout > 0 {
+		env["MNEMON_MULTICA_PROVIDER_TURN_TIMEOUT"] = opts.ProviderTimeout.String()
 	}
 	return env
 }
@@ -776,6 +955,10 @@ var multicaParticipantRuntimeEnvKeys = []string{
 	"MNEMON_CONTROL_TOKEN_FILE",
 	"MNEMON_CONTROL_PRINCIPAL",
 	"MNEMON_HARNESS_BIN",
+	"MNEMON_MULTICA_PROVIDER_RUNTIME",
+	"MNEMON_MULTICA_PROVIDER_COMMAND",
+	"MNEMON_MULTICA_PROVIDER_WORKSPACE",
+	"MNEMON_MULTICA_PROVIDER_TURN_TIMEOUT",
 	"MNEMON_MANAGED_RUNTIME",
 	"MNEMON_MANAGED_COMMAND",
 	"MNEMON_MANAGED_WORKSPACE",
@@ -802,27 +985,27 @@ func sanitizeMulticaPrincipal(principal string) string {
 
 func multicaProvisionEnvOptionsFromFlags() multicaParticipantEnvOptions {
 	return multicaParticipantEnvOptions{
-		ControlAddr:      multicaProvisionControlAddr,
-		ControlToken:     multicaProvisionControlToken,
-		ControlTokenFile: multicaProvisionControlTokenFile,
-		HarnessBin:       multicaProvisionHarnessBin,
-		ManagedRuntime:   multicaProvisionManagedRuntime,
-		ManagedCommand:   multicaProvisionManagedCommand,
-		ManagedWorkspace: multicaProvisionManagedWorkspace,
-		ManagedTimeout:   multicaProvisionManagedTimeout,
+		ControlAddr:       multicaProvisionControlAddr,
+		ControlToken:      multicaProvisionControlToken,
+		ControlTokenFile:  multicaProvisionControlTokenFile,
+		HarnessBin:        multicaProvisionHarnessBin,
+		ProviderRuntime:   multicaProvisionProviderRuntime,
+		ProviderCommand:   multicaProvisionProviderCommand,
+		ProviderWorkspace: multicaProvisionProviderWorkspace,
+		ProviderTimeout:   multicaProvisionProviderTimeout,
 	}
 }
 
 func multicaParticipantEnvOptionsFromFlags() multicaParticipantEnvOptions {
 	return multicaParticipantEnvOptions{
-		ControlAddr:      multicaParticipantControlAddr,
-		ControlToken:     multicaParticipantControlToken,
-		ControlTokenFile: multicaParticipantControlTokenFile,
-		HarnessBin:       multicaParticipantHarnessBin,
-		ManagedRuntime:   multicaParticipantManagedRuntime,
-		ManagedCommand:   multicaParticipantManagedCommand,
-		ManagedWorkspace: multicaParticipantManagedWorkspace,
-		ManagedTimeout:   multicaParticipantManagedTimeout,
+		ControlAddr:       multicaParticipantControlAddr,
+		ControlToken:      multicaParticipantControlToken,
+		ControlTokenFile:  multicaParticipantControlTokenFile,
+		HarnessBin:        multicaParticipantHarnessBin,
+		ProviderRuntime:   multicaParticipantProviderRuntime,
+		ProviderCommand:   multicaParticipantProviderCommand,
+		ProviderWorkspace: multicaParticipantProviderWorkspace,
+		ProviderTimeout:   multicaParticipantProviderTimeout,
 	}
 }
 
@@ -1000,12 +1183,8 @@ func init() {
 	multicaImportIssueCmd.Flags().StringVar(&multicaLocalTokenFile, "token-file", envDefault("MNEMON_CONTROL_TOKEN_FILE", ""), "read Local Mnemon bearer token from a file")
 	multicaImportIssueCmd.Flags().BoolVar(&multicaDryRun, "dry-run", false, "print the Mnemon observed draft without writing")
 
-	multicaProjectCommentCmd.Flags().StringVar(&multicaIssueID, "issue-id", "", "Multica issue ID")
-	multicaProjectCommentCmd.Flags().StringVar(&multicaCommentContent, "content", "", "comment body")
-	multicaProjectCommentCmd.Flags().StringVar(&multicaCommentFile, "content-file", "", "read comment body from a file")
-	multicaProjectCommentCmd.Flags().BoolVar(&multicaCommentStdin, "content-stdin", false, "read comment body from stdin")
-	multicaProjectCommentCmd.Flags().StringVar(&multicaCommentTitle, "title", "", "short Mnemon update title")
-	multicaProjectCommentCmd.Flags().StringArrayVar(&multicaCommentEvents, "event", nil, "Mnemon event marker; may be repeated")
+	addMulticaSurfaceReportFlags(multicaSurfaceReportCmd)
+	addMulticaActivationCarrierFlags(multicaActivationCarrierCmd)
 
 	multicaProvisionCmd.Flags().StringVar(&multicaProvisionRegistry, "registry", "", "Multica registry path")
 	multicaProvisionCmd.Flags().StringVar(&multicaProvisionProjectRoot, "project-root", ".", "project root for the default registry path")
@@ -1019,10 +1198,10 @@ func init() {
 	multicaProvisionCmd.Flags().StringVar(&multicaProvisionControlToken, "mnemon-control-token", envDefault("MNEMON_CONTROL_TOKEN", ""), "Local Mnemon bearer token injected into participant runtime env")
 	multicaProvisionCmd.Flags().StringVar(&multicaProvisionControlTokenFile, "mnemon-control-token-file", envDefault("MNEMON_CONTROL_TOKEN_FILE", ""), "Local Mnemon bearer token file injected into participant runtime env")
 	multicaProvisionCmd.Flags().StringVar(&multicaProvisionHarnessBin, "harness-bin", envDefault("MNEMON_HARNESS_BIN", ""), "mnemon-harness executable injected into participant runtime env")
-	multicaProvisionCmd.Flags().StringVar(&multicaProvisionManagedRuntime, "managed-runtime", envDefault("MNEMON_MANAGED_RUNTIME", ""), "managed agent runtime injected into participant env (noop or codex-appserver)")
-	multicaProvisionCmd.Flags().StringVar(&multicaProvisionManagedCommand, "managed-command", envDefault("MNEMON_MANAGED_COMMAND", ""), "managed runtime command injected into participant env")
-	multicaProvisionCmd.Flags().StringVar(&multicaProvisionManagedWorkspace, "managed-workspace", envDefault("MNEMON_MANAGED_WORKSPACE", ""), "managed runtime workspace injected into participant env")
-	multicaProvisionCmd.Flags().DurationVar(&multicaProvisionManagedTimeout, "managed-turn-timeout", 0, "managed runtime turn timeout injected into participant env")
+	multicaProvisionCmd.Flags().StringVar(&multicaProvisionProviderRuntime, "provider-runtime", envDefault("MNEMON_MULTICA_PROVIDER_RUNTIME", ""), "provider runtime kind wrapped by mnemon-multica-runtime")
+	multicaProvisionCmd.Flags().StringVar(&multicaProvisionProviderCommand, "provider-command", envDefault("MNEMON_MULTICA_PROVIDER_COMMAND", ""), "provider command wrapped by mnemon-multica-runtime")
+	multicaProvisionCmd.Flags().StringVar(&multicaProvisionProviderWorkspace, "provider-workspace", envDefault("MNEMON_MULTICA_PROVIDER_WORKSPACE", ""), "provider workspace injected into participant runtime env")
+	multicaProvisionCmd.Flags().DurationVar(&multicaProvisionProviderTimeout, "provider-turn-timeout", 0, "provider turn timeout injected into participant runtime env")
 	multicaProvisionCmd.Flags().BoolVar(&multicaProvisionAcceptanceBridge, "acceptance-bridge", false, "allow mnemon-acceptance to invoke hidden Multica provisioning bridge")
 	_ = multicaProvisionCmd.Flags().MarkHidden("acceptance-bridge")
 
@@ -1039,13 +1218,13 @@ func init() {
 	multicaParticipantRegisterCmd.Flags().StringVar(&multicaParticipantControlToken, "mnemon-control-token", envDefault("MNEMON_CONTROL_TOKEN", ""), "Local Mnemon bearer token injected into participant runtime env")
 	multicaParticipantRegisterCmd.Flags().StringVar(&multicaParticipantControlTokenFile, "mnemon-control-token-file", envDefault("MNEMON_CONTROL_TOKEN_FILE", ""), "Local Mnemon bearer token file injected into participant runtime env")
 	multicaParticipantRegisterCmd.Flags().StringVar(&multicaParticipantHarnessBin, "harness-bin", envDefault("MNEMON_HARNESS_BIN", ""), "mnemon-harness executable injected into participant runtime env")
-	multicaParticipantRegisterCmd.Flags().StringVar(&multicaParticipantManagedRuntime, "managed-runtime", envDefault("MNEMON_MANAGED_RUNTIME", ""), "managed agent runtime injected into participant env (noop or codex-appserver)")
-	multicaParticipantRegisterCmd.Flags().StringVar(&multicaParticipantManagedCommand, "managed-command", envDefault("MNEMON_MANAGED_COMMAND", ""), "managed runtime command injected into participant env")
-	multicaParticipantRegisterCmd.Flags().StringVar(&multicaParticipantManagedWorkspace, "managed-workspace", envDefault("MNEMON_MANAGED_WORKSPACE", ""), "managed runtime workspace injected into participant env")
-	multicaParticipantRegisterCmd.Flags().DurationVar(&multicaParticipantManagedTimeout, "managed-turn-timeout", 0, "managed runtime turn timeout injected into participant env")
+	multicaParticipantRegisterCmd.Flags().StringVar(&multicaParticipantProviderRuntime, "provider-runtime", envDefault("MNEMON_MULTICA_PROVIDER_RUNTIME", ""), "provider runtime kind wrapped by mnemon-multica-runtime")
+	multicaParticipantRegisterCmd.Flags().StringVar(&multicaParticipantProviderCommand, "provider-command", envDefault("MNEMON_MULTICA_PROVIDER_COMMAND", ""), "provider command wrapped by mnemon-multica-runtime")
+	multicaParticipantRegisterCmd.Flags().StringVar(&multicaParticipantProviderWorkspace, "provider-workspace", envDefault("MNEMON_MULTICA_PROVIDER_WORKSPACE", ""), "provider workspace injected into participant runtime env")
+	multicaParticipantRegisterCmd.Flags().DurationVar(&multicaParticipantProviderTimeout, "provider-turn-timeout", 0, "provider turn timeout injected into participant runtime env")
 
 	multicaParticipantCmd.AddCommand(multicaParticipantRegisterCmd)
-	multicaCmd.AddCommand(multicaProbeCmd, multicaParticipantCmd, multicaProvisionCmd, multicaImportIssueCmd, multicaProjectCommentCmd)
+	multicaCmd.AddCommand(multicaProbeCmd, multicaParticipantCmd, multicaProvisionCmd, multicaImportIssueCmd, multicaSurfaceReportCmd, multicaActivationCarrierCmd)
 	multicaCmd.GroupID = groupAdvanced
 	rootCmd.AddCommand(multicaCmd)
 }

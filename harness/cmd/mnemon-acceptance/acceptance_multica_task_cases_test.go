@@ -29,7 +29,7 @@ func TestMulticaTaskCaseProtocolReActIsMultiRound(t *testing.T) {
 		}
 	}
 	if material.Expectations.MinActiveAgents != 4 ||
-		material.Expectations.MinChildMailboxes != 3 ||
+		material.Expectations.MinChildSurfaces != 3 ||
 		material.Expectations.MinFeedbackComments != 3 ||
 		len(material.Expectations.TeamworkRounds) != 3 {
 		t.Fatalf("unexpected expectations: %+v", material.Expectations)
@@ -117,7 +117,7 @@ cat >> "$MULTICA_STDIN_PATH"
 case "$*" in
   *"issue create"*) printf '{"id":"iss-poc","identifier":"TEA-50","title":"Parallel PoC overlap drill","description":"Teamwork acceptance","status":"todo"}\n' ;;
   *"issue runs iss-poc"*) printf '[{"id":"task-poc","issue_id":"iss-poc","agent_id":"agent-1","status":"completed","completed_at":"2026-06-30T09:00:00Z","workspace_id":"ws-1"}]\n' ;;
-  *"issue run-messages task-poc"*) printf '[{"task_id":"task-poc","issue_id":"iss-poc","seq":1,"type":"assistant","content":"Mnemon Multica runtime handled issue TEA-50. Mnemon ingest: recorded.","created_at":"2026-06-30T09:00:01Z"}]\n' ;;
+  *"issue run-messages task-poc"*) printf '[{"task_id":"task-poc","issue_id":"iss-poc","seq":1,"type":"assistant","content":"Mnemon Multica runtime handled issue TEA-50. Multica surface input: observed.","created_at":"2026-06-30T09:00:01Z"}]\n' ;;
   *) printf '{}\n' ;;
 esac
 `
@@ -143,8 +143,8 @@ esac
 	}
 	if report.TaskCase != multicaAcceptanceTaskCaseParallelPoc ||
 		report.TaskExpectations.MinActiveAgents != 5 ||
-		report.TaskExpectations.InitialChildMailboxes != 3 ||
-		report.TaskExpectations.MinChildMailboxes != 4 ||
+		report.TaskExpectations.InitialChildSurfaces != 3 ||
+		report.TaskExpectations.MinChildSurfaces != 4 ||
 		len(report.ExecutionPlan.Workstreams) != 3 {
 		t.Fatalf("task case report mismatch: %+v", report)
 	}
@@ -163,9 +163,9 @@ esac
 		"## Execution Plan",
 		"## Parallel PoCs",
 		"## Context Reuse Checks",
-		"Do not call Multica issue create",
-		"finish rather than waiting for their own Multica comment projection",
-		"Direct Multica issue fan-out is invalid",
+		"不要把 Multica 当 canonical state store",
+		"activation carrier",
+		"activation-carrier commands",
 		"poc-runtime-routing",
 		"poc-operator-runbook",
 		"poc-release-risk",

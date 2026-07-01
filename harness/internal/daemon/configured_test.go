@@ -12,13 +12,13 @@ func TestConfiguredSnapshotIncludesConfiguredRoles(t *testing.T) {
 	cfg := productconfig.Default()
 	cfg.Daemon.InteractionWatchers = []string{" ", productconfig.ConnectionMultica}
 	cfg.Daemon.DriveSources = []string{"", productconfig.DriveManagedLocal}
-	cfg.Daemon.ProjectionSurfaces = []string{"\t", productconfig.ConnectionMultica}
+	cfg.Daemon.DisplaySurfaces = []string{"\t", productconfig.ConnectionMultica}
 
 	snapshot := ConfiguredSnapshot(cfg, now)
 	for name, want := range map[string]WorkerKind{
 		"multica-watch":    WorkerInteraction,
 		"managed-drive":    WorkerDrive,
-		"multica-project":  WorkerProjection,
+		"multica-display":  WorkerSurface,
 		"status-readiness": WorkerStatus,
 	} {
 		worker, ok := snapshot.Workers[name]
@@ -29,7 +29,7 @@ func TestConfiguredSnapshotIncludesConfiguredRoles(t *testing.T) {
 			t.Fatalf("worker %q mismatch: %+v", name, worker)
 		}
 	}
-	for _, name := range []string{"-watch", "-drive", "-project"} {
+	for _, name := range []string{"-watch", "-drive", "-display"} {
 		if _, ok := snapshot.Workers[name]; ok {
 			t.Fatalf("snapshot should skip empty worker name %q: %+v", name, snapshot.Workers)
 		}
@@ -50,7 +50,7 @@ func TestConfiguredSnapshotKeepsMnemonhubAsExchangeWatcher(t *testing.T) {
 	if worker.Kind != WorkerInteraction || worker.Status != "configured" || worker.Message != "watcher=mnemonhub" {
 		t.Fatalf("mnemonhub watcher mismatch: %+v", worker)
 	}
-	if _, ok := snapshot.Workers["mnemonhub-project"]; ok {
+	if _, ok := snapshot.Workers["mnemonhub-display"]; ok {
 		t.Fatalf("mnemonhub must remain a remote exchange watcher, not projection worker: %+v", snapshot.Workers)
 	}
 }
@@ -62,7 +62,7 @@ func TestRoleDetailsDescribeDaemonBoundaries(t *testing.T) {
 		productconfig.ConnectionMnemonhub,
 	}
 	cfg.Daemon.DriveSources = []string{productconfig.DriveManagedLocal}
-	cfg.Daemon.ProjectionSurfaces = []string{productconfig.ConnectionMultica}
+	cfg.Daemon.DisplaySurfaces = []string{productconfig.ConnectionMultica}
 
 	details := RoleDetails(cfg)
 	if len(details) != 4 {
@@ -72,7 +72,7 @@ func TestRoleDetailsDescribeDaemonBoundaries(t *testing.T) {
 		{WorkerName: "multica-watch", Kind: WorkerInteraction, Label: "watcher", Value: productconfig.ConnectionMultica, Boundary: "activation-carrier"},
 		{WorkerName: "mnemonhub-watch", Kind: WorkerInteraction, Label: "watcher", Value: productconfig.ConnectionMnemonhub, Boundary: "remote-exchange"},
 		{WorkerName: "managed-drive", Kind: WorkerDrive, Label: "drive", Value: productconfig.DriveManagedLocal, Boundary: "managed-runtime"},
-		{WorkerName: "multica-project", Kind: WorkerProjection, Label: "surface", Value: productconfig.ConnectionMultica, Boundary: "projection-surface"},
+		{WorkerName: "multica-display", Kind: WorkerSurface, Label: "surface", Value: productconfig.ConnectionMultica, Boundary: "display-surface"},
 	} {
 		if !hasRoleDetail(details, want) {
 			t.Fatalf("missing role detail %+v in %+v", want, details)
@@ -84,10 +84,10 @@ func TestRoleSummaryReflectsConfiguredDaemonRoles(t *testing.T) {
 	cfg := productconfig.Default()
 	cfg.Daemon.InteractionWatchers = []string{productconfig.ConnectionMultica, productconfig.ConnectionGitHub}
 	cfg.Daemon.DriveSources = []string{productconfig.DriveManagedLocal}
-	cfg.Daemon.ProjectionSurfaces = []string{productconfig.ConnectionMultica}
+	cfg.Daemon.DisplaySurfaces = []string{productconfig.ConnectionMultica}
 
 	got := RoleSummary(cfg)
-	if got.InteractionWatchers != 2 || got.DriveSources != 1 || got.ProjectionSurfaces != 1 {
+	if got.InteractionWatchers != 2 || got.DriveSources != 1 || got.DisplaySurfaces != 1 {
 		t.Fatalf("role summary mismatch: %+v", got)
 	}
 }

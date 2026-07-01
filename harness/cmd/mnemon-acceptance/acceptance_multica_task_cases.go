@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	multicaAcceptanceTaskCaseR2Readiness      = "r2-readiness"
+	multicaAcceptanceTaskCaseR3Surface        = "r3-surface-readiness"
 	multicaAcceptanceTaskCaseProtocolReAct    = "protocol-react-drill"
 	multicaAcceptanceTaskCaseParallelPoc      = "parallel-poc-overlap"
 	multicaAcceptanceTaskCaseReleaseReadiness = "release-readiness"
@@ -33,11 +33,11 @@ type multicaAcceptanceTaskCaseMaterial struct {
 }
 
 type multicaAcceptanceTaskCaseExpectations struct {
-	MinActiveAgents       int      `json:"min_active_agents,omitempty"`
-	InitialChildMailboxes int      `json:"initial_child_mailboxes,omitempty"`
-	MinChildMailboxes     int      `json:"min_child_mailboxes,omitempty"`
-	MinFeedbackComments   int      `json:"min_feedback_comments,omitempty"`
-	TeamworkRounds        []string `json:"teamwork_rounds,omitempty"`
+	MinActiveAgents      int      `json:"min_active_agents,omitempty"`
+	InitialChildSurfaces int      `json:"initial_child_surfaces,omitempty"`
+	MinChildSurfaces     int      `json:"min_child_surfaces,omitempty"`
+	MinFeedbackComments  int      `json:"min_feedback_comments,omitempty"`
+	TeamworkRounds       []string `json:"teamwork_rounds,omitempty"`
 }
 
 type multicaAcceptanceExecutionPlan struct {
@@ -89,7 +89,7 @@ func multicaAcceptanceTaskCaseNames() []string {
 func multicaAcceptanceTaskCase(id string, started time.Time) (multicaAcceptanceTaskCaseMaterial, error) {
 	id = strings.TrimSpace(id)
 	if id == "" {
-		id = multicaAcceptanceTaskCaseR2Readiness
+		id = multicaAcceptanceTaskCaseR3Surface
 	}
 	build, ok := multicaAcceptanceTaskCases[id]
 	if !ok {
@@ -327,33 +327,33 @@ func multicaAcceptancePathSegment(value, fallback string) string {
 }
 
 var multicaAcceptanceTaskCases = map[string]func(time.Time) multicaAcceptanceTaskCaseMaterial{
-	multicaAcceptanceTaskCaseR2Readiness: func(started time.Time) multicaAcceptanceTaskCaseMaterial {
+	multicaAcceptanceTaskCaseR3Surface: func(started time.Time) multicaAcceptanceTaskCaseMaterial {
 		return multicaAcceptanceTaskCaseMaterial{
-			Title: "Mnemon Multica runtime prod-sim " + started.Format("150405"),
-			Description: multicasurface.RootSessionDescription(multicasurface.RootSessionMaterial{
-				Request:  "Run a small Mnemon R2 Multica readiness drill.",
-				WorkMode: "Use Mnemon teamwork; Multica shows issues, runs, comments, and statuses.",
+			Title: "Mnemon R3 Multica surface readiness " + started.Format("150405"),
+			Description: multicasurface.IssueSurfaceDescription(multicasurface.IssueSurfaceDescriptionMaterial{
+				Request:  "运行一次小型 Mnemon R3 Multica surface readiness 演练，验证 Multica 作为 OA/runtime 体验层时，provider wrapper、surface ingest、显式 report 写回和 activation carrier 的边界是否清晰。",
+				WorkMode: "Mnemon EventEnvelope 和 mnemond accepted state 保持 canonical；Multica 只展示 issue、run、comment、status，并通过明确的 surface-report 或 activation-carrier 命令参与交互。",
 				Handoffs: []string{
-					"Route root session visibility and child issue routing checks to separate teammates.",
-					"After teammate feedback is visible, route a final integration check.",
+					"第一轮让两个 teammate 分别检查 provider wrapper run visibility 和 root surface metadata。",
+					"在第一轮反馈可见后，由 integrator 创建或要求一个 activation carrier 来验证下一轮调度入口。",
 				},
 				Validation: []string{
-					"Root issue carries session metadata and shows run activity.",
-					"Accepted assignments become child issue mailboxes assigned to target agents.",
-					"Feedback comments and statuses are projected back to Multica.",
-					"Stale or cross-session assignment material is ignored.",
-					"Final root status reflects completion.",
+					"Root issue shows Multica run activity and readable R3 surface metadata, without legacy hub/mailbox keys.",
+					"Accepted Mnemon events are exposed through display-only report writeback without triggering provider work.",
+					"需要执行时使用 activation carrier，并携带 event_ref/resource_ref，而不是靠 display comment 触发。",
+					"显式写回的 comment/status 对运营人员可读，machine-only 字段只在 metadata 或 stable marker 中出现。",
+					"Final root status reflects the accepted integration decision rather than raw Multica task state.",
 				},
-				Completion: "Finish when child feedback comments are visible and the root issue reaches a terminal status.",
+				Completion: "当第一轮反馈、activation carrier 证据、最终 surface-report comment 和 root terminal status 都可见时完成。",
 			}),
 			Expectations: multicaAcceptanceTaskCaseExpectations{
 				MinActiveAgents:     3,
-				MinChildMailboxes:   2,
+				MinChildSurfaces:    2,
 				MinFeedbackComments: 2,
 				TeamworkRounds: []string{
-					"Round 1: root issue intake and first assignment split",
-					"Round 2: child mailbox feedback",
-					"Round 3: integration and final status projection",
+					"Round 1: root surface intake and first provider-wrapper visibility split",
+					"Round 2: activation carrier check for an accepted event",
+					"Round 3: integration and display-only surface-report status",
 				},
 			},
 		}
@@ -361,16 +361,16 @@ var multicaAcceptanceTaskCases = map[string]func(time.Time) multicaAcceptanceTas
 	multicaAcceptanceTaskCaseProtocolReAct: func(started time.Time) multicaAcceptanceTaskCaseMaterial {
 		return multicaAcceptanceTaskCaseMaterial{
 			Title: "Protocol ReAct collaboration drill " + started.Format("150405"),
-			Description: multicasurface.RootSessionDescription(multicasurface.RootSessionMaterial{
-				Request:  "Run a complex Mnemon-on-Multica collaboration drill that forces observe-act-reflect cycles across assignment routing, mailbox correlation, feedback projection, and integration. Treat the task as an operator-facing acceptance investigation, not a simple happy-path flow check.",
-				WorkMode: "Use Multica as the visible teamwork hub. Mnemon should create child assignment mailboxes, collect teammate feedback, integrate results, and create at least one follow-up slice when the first round leaves an unresolved risk.",
+			Description: multicasurface.IssueSurfaceDescription(multicasurface.IssueSurfaceDescriptionMaterial{
+				Request:  "运行一个复杂的 Mnemon-on-Multica 协作演练，强制经历 observe-act-reflect 循环，覆盖事件接入、provider wrapper 调度、OA 状态回写和最终集成。把它当作面向运营人员的验收调查，而不是简单 happy path。",
+				WorkMode: "Multica 作为可见 OA 协作界面；Mnemon EventEnvelope 和 mnemond accepted state 保持 canonical。协作者通过 Mnemon 事件拆分工作，通过显式命令把必要状态写回 Multica，并在第一轮发现风险后创建至少一个 follow-up slice。",
 				Handoffs: []string{
-					"Round 1 - Observe: assign separate teammates to inspect root session metadata, child mailbox routing, and runtime run visibility. Each teammate must report concrete issue IDs, agent IDs, statuses, and evidence.",
+					"Round 1 - Observe: 分别让 teammate 检查根 issue 的 surface metadata、provider wrapper run visibility、以及 OA 状态可读性。每个 teammate 必须报告具体 issue ID、agent ID、状态和证据。",
 					"Round 2 - Act: the planner/integrator must read first-round feedback, identify the highest-risk gap, and create a follow-up assignment for a different teammate to verify or falsify that gap.",
 					"Round 3 - Reflect: after the follow-up result appears, the integrator must reconcile all feedback into a final decision that names residual risks, owner, and next validation step.",
 				},
 				Validation: []string{
-					"At least three child assignment mailboxes are created across the initial and follow-up rounds.",
+					"至少三个独立工作切片通过 Mnemon assignment event 表达，并在 Multica 中留下可追踪的 surface/评论/状态证据。",
 					"At least four distinct Multica agents participate through root or child runs.",
 					"Feedback comments include evidence from both the initial observation round and the follow-up action round.",
 					"The final root result distinguishes observed facts, actions taken, reflection, and any remaining risk.",
@@ -380,7 +380,7 @@ var multicaAcceptanceTaskCases = map[string]func(time.Time) multicaAcceptanceTas
 			}),
 			Expectations: multicaAcceptanceTaskCaseExpectations{
 				MinActiveAgents:     4,
-				MinChildMailboxes:   3,
+				MinChildSurfaces:    3,
 				MinFeedbackComments: 3,
 				TeamworkRounds: []string{
 					"Round 1 - Observe: split root metadata, routing, and run-visibility checks",
@@ -393,16 +393,16 @@ var multicaAcceptanceTaskCases = map[string]func(time.Time) multicaAcceptanceTas
 	multicaAcceptanceTaskCaseParallelPoc: func(started time.Time) multicaAcceptanceTaskCaseMaterial {
 		return multicaAcceptanceTaskCaseMaterial{
 			Title: "Parallel PoC overlap drill " + started.Format("150405"),
-			Description: multicasurface.RootSessionDescription(multicasurface.RootSessionMaterial{
-				Request:  "Run a production-like Mnemon-on-Multica collaboration case with three overlapping PoCs running in parallel. The goal is to validate Multica as the primary hub backend for assignment activation, feedback projection, and context reuse across related workstreams.",
-				WorkMode: "Use Multica root and child issues as the visible teamwork hub, but create work only through Mnemon assignment events. Do not call Multica issue create, assign, rerun, or cancel commands to fan out work; the runtime projection creates child assignment mailboxes from accepted assignments. After recording Mnemon result or blocker feedback, workers should finish rather than waiting for their own Multica comment projection. The planner should split the case into parallel child assignment mailboxes, require shared context references in every feedback item, and create at least one follow-up assignment after reading first-round results.",
+			Description: multicasurface.IssueSurfaceDescription(multicasurface.IssueSurfaceDescriptionMaterial{
+				Request:  "运行一个接近真实业务的 Mnemon-on-Multica 协作 case：三个有重叠上下文的 PoC 并发推进。目标是验证 Multica 作为 OA/runtime 体验层时，provider wrapper 调度、显式状态回写、以及跨 workstream 上下文复用是否清晰可靠。",
+				WorkMode: "Multica 只承担可见 issue、run、comment、status 的 OA 体验；工作拆分必须先进入 Mnemon assignment/progress/integration 事件。不要把 Multica 当 canonical state store，也不要用普通 display issue 替代 activation carrier。planner 需要把 case 拆成三个并行 PoC，要求每个反馈引用 shared context，并在第一轮后创建至少一个 follow-up event。",
 				Handoffs: []string{
 					"Round 1 - Observe: launch three parallel PoCs for runtime routing, operator runbook readiness, and release risk. Each PoC must name the shared context it consumed and the evidence it produced.",
 					"Round 2 - Act: create a follow-up assignment for the highest disagreement or missing evidence across PoCs. The follow-up owner must reuse at least two shared contexts and cite prior child feedback.",
 					"Round 3 - Reflect: the integrator reconciles all PoC outputs into one operator-facing decision with residual risks, context reuse evidence, and the next validation signal.",
 				},
 				Validation: []string{
-					"At least three initial child assignment mailboxes are created, followed by at least one follow-up mailbox after first-round feedback is visible.",
+					"至少三个初始 PoC 切片被表达为 Mnemon assignment event，并在第一轮反馈后追加至少一个 follow-up event。",
 					"At least five distinct Multica agents participate through root or child runs when a five-agent registry is available.",
 					"Every PoC feedback comment references a shared context and an evidence artifact, not only a local conclusion.",
 					"At least one shared context is reused by two or more PoCs, and the final integration comment names that reuse explicitly.",
@@ -411,10 +411,10 @@ var multicaAcceptanceTaskCases = map[string]func(time.Time) multicaAcceptanceTas
 				Completion: "Finish only after the follow-up assignment feedback is visible, all three PoCs have result or blocker comments, and the root issue records an integrated decision that explains context reuse.",
 			}),
 			Expectations: multicaAcceptanceTaskCaseExpectations{
-				MinActiveAgents:       5,
-				InitialChildMailboxes: 3,
-				MinChildMailboxes:     4,
-				MinFeedbackComments:   4,
+				MinActiveAgents:      5,
+				InitialChildSurfaces: 3,
+				MinChildSurfaces:     4,
+				MinFeedbackComments:  4,
 				TeamworkRounds: []string{
 					"Round 1 - Observe: three parallel PoCs split runtime, runbook, and release risk",
 					"Round 2 - Act: follow up on disagreement or missing evidence across PoCs",
@@ -424,24 +424,24 @@ var multicaAcceptanceTaskCases = map[string]func(time.Time) multicaAcceptanceTas
 			Workstreams: []multicaAcceptanceWorkstream{
 				{
 					ID:                "poc-runtime-routing",
-					Title:             "Runtime routing and assignment mailbox correlation",
+					Title:             "Provider wrapper routing and surface correlation",
 					PrimaryRoles:      []string{"planner@team", "researcher@team", "implementer@team"},
-					SharedContextRefs: []string{"session-map", "mailbox-contract", "evidence-ledger"},
-					ExpectedArtifacts: []string{"routing-evidence.md", "assignment-mailbox-map.json", "runtime-run-summary.md"},
+					SharedContextRefs: []string{"surface-map", "provider-contract", "evidence-ledger"},
+					ExpectedArtifacts: []string{"routing-evidence.md", "surface-correlation-map.json", "runtime-run-summary.md"},
 				},
 				{
 					ID:                "poc-operator-runbook",
 					Title:             "Operator runbook and rollback readiness",
 					PrimaryRoles:      []string{"implementer@team", "reviewer@team"},
-					SharedContextRefs: []string{"mailbox-contract", "risk-register", "evidence-ledger"},
+					SharedContextRefs: []string{"provider-contract", "risk-register", "evidence-ledger"},
 					ExpectedArtifacts: []string{"runbook-gap-list.md", "rollback-checklist.md", "operator-risk-notes.md"},
 				},
 				{
 					ID:                "poc-release-risk",
-					Title:             "Release decision and product status projection",
+					Title:             "Release decision and product status writeback",
 					PrimaryRoles:      []string{"researcher@team", "reviewer@team", "integrator@team"},
 					SharedContextRefs: []string{"session-map", "risk-register", "evidence-ledger"},
-					ExpectedArtifacts: []string{"release-risk-matrix.md", "status-projection-evidence.md", "ship-hold-decision.md"},
+					ExpectedArtifacts: []string{"release-risk-matrix.md", "status-writeback-evidence.md", "ship-hold-decision.md"},
 				},
 			},
 			Roles: []multicaAcceptanceRolePlan{
@@ -451,7 +451,7 @@ var multicaAcceptanceTaskCases = map[string]func(time.Time) multicaAcceptanceTas
 					Primary:   []string{"poc-runtime-routing"},
 					Overlaps:  []string{"poc-release-risk"},
 					Responsibilities: []string{
-						"Seed the root teamwork signal and create the three first-round assignment mailboxes.",
+						"Seed root teamwork signal，并创建三个第一轮 Mnemon assignment event。",
 						"Read first-round feedback before creating the follow-up assignment.",
 					},
 				},
@@ -471,7 +471,7 @@ var multicaAcceptanceTaskCases = map[string]func(time.Time) multicaAcceptanceTas
 					Primary:   []string{"poc-operator-runbook"},
 					Overlaps:  []string{"poc-runtime-routing"},
 					Responsibilities: []string{
-						"Verify the mailbox contract against the operator runbook and runtime behavior.",
+						"Verify provider wrapper contract against the operator runbook and runtime behavior.",
 						"Name the smallest code or runbook change that would reduce operator ambiguity.",
 					},
 				},
@@ -481,7 +481,7 @@ var multicaAcceptanceTaskCases = map[string]func(time.Time) multicaAcceptanceTas
 					Primary:   []string{"poc-release-risk"},
 					Overlaps:  []string{"poc-operator-runbook"},
 					Responsibilities: []string{
-						"Challenge release readiness with rollback and status-projection evidence.",
+						"Challenge release readiness with rollback and status-writeback evidence.",
 						"Identify disagreement between PoC outputs before final integration.",
 					},
 				},
@@ -500,12 +500,12 @@ var multicaAcceptanceTaskCases = map[string]func(time.Time) multicaAcceptanceTas
 				{
 					ID:      "session-map",
 					UsedBy:  []string{"poc-runtime-routing", "poc-release-risk"},
-					Purpose: "Root issue, session mailbox, child issue, and agent run map used to correlate visible Multica artifacts.",
+					Purpose: "Root issue、surface metadata、runtime run 和 agent trace 的对应表，用于关联 Multica 可见产物。",
 				},
 				{
-					ID:      "mailbox-contract",
+					ID:      "provider-contract",
 					UsedBy:  []string{"poc-runtime-routing", "poc-operator-runbook"},
-					Purpose: "Human-readable assignment mailbox contract plus hidden metadata boundary for routing, dedupe, and correlation.",
+					Purpose: "Provider wrapper 输入输出、Mnemon event emission channel、以及 Multica surface metadata 的边界约定。",
 				},
 				{
 					ID:      "risk-register",
@@ -520,7 +520,7 @@ var multicaAcceptanceTaskCases = map[string]func(time.Time) multicaAcceptanceTas
 			},
 			RoleOverlaps: []string{
 				"researcher@team carries runtime routing evidence into poc-release-risk through session-map.",
-				"implementer@team reuses mailbox-contract across poc-runtime-routing and poc-operator-runbook.",
+				"implementer@team reuses provider-contract across poc-runtime-routing and poc-operator-runbook.",
 				"reviewer@team connects rollback concerns from poc-operator-runbook to poc-release-risk.",
 				"integrator@team consumes all PoCs but must wait for follow-up feedback before closing the root issue.",
 			},
@@ -528,16 +528,16 @@ var multicaAcceptanceTaskCases = map[string]func(time.Time) multicaAcceptanceTas
 				"Every first-round feedback comment names at least one shared context and one evidence artifact.",
 				"The follow-up assignment cites two prior child comments or artifacts before adding new work.",
 				"The final root comment names which shared contexts were reused and where disagreement was resolved.",
-				"Direct Multica issue fan-out is invalid; all child work must originate from Mnemon assignment events and runtime mailbox projection.",
-				"No visible issue text should expose session ids, assignment ids, assignment fingerprints, or projection-owner keys.",
+				"Ordinary Multica display issues must not trigger execution; execution carriers must originate from accepted Mnemon events and explicit activation-carrier commands.",
+				"No visible issue text should expose session ids, assignment ids, assignment fingerprints, or surface owner keys.",
 			},
 		}
 	},
 	multicaAcceptanceTaskCaseReleaseReadiness: func(started time.Time) multicaAcceptanceTaskCaseMaterial {
 		return multicaAcceptanceTaskCaseMaterial{
 			Title: "Release readiness handoff " + started.Format("150405"),
-			Description: multicasurface.RootSessionDescription(multicasurface.RootSessionMaterial{
-				Request:  "Prepare a release readiness decision for a Mnemon Multica runtime update that affects assignment routing, mailbox metadata, and visible status projection.",
+			Description: multicasurface.IssueSurfaceDescription(multicasurface.IssueSurfaceDescriptionMaterial{
+				Request:  "Prepare a release readiness decision for a Mnemon Multica runtime update that affects provider wrapper routing, R3 surface metadata, and visible status writeback.",
 				WorkMode: "Use Multica as the visible coordination hub while Mnemon keeps the canonical event state.",
 				Handoffs: []string{
 					"Ask one teammate to verify release risk: registry coverage, runtime activation evidence, and stale-session isolation.",
@@ -546,15 +546,15 @@ var multicaAcceptanceTaskCases = map[string]func(time.Time) multicaAcceptanceTas
 				},
 				Validation: []string{
 					"Release decision references concrete root and child issue evidence.",
-					"Assignment mailboxes route to the intended Multica agents.",
+					"Provider wrapper turns route to the intended Multica-visible agents.",
 					"Feedback comments distinguish release blockers from ordinary progress.",
 					"Final status makes the release decision visible without exposing machine-only protocol fields.",
 				},
-				Completion: "Finish when the root issue contains an explicit release decision and every child mailbox has result or blocker feedback.",
+				Completion: "Finish when the root issue contains an explicit release decision and every work slice has result or blocker feedback recorded through Mnemon events.",
 			}),
 			Expectations: multicaAcceptanceTaskCaseExpectations{
 				MinActiveAgents:     4,
-				MinChildMailboxes:   3,
+				MinChildSurfaces:    3,
 				MinFeedbackComments: 3,
 				TeamworkRounds: []string{
 					"Round 1: risk and operator-path review",
@@ -567,27 +567,27 @@ var multicaAcceptanceTaskCases = map[string]func(time.Time) multicaAcceptanceTas
 	multicaAcceptanceTaskCaseIncidentTriage: func(started time.Time) multicaAcceptanceTaskCaseMaterial {
 		return multicaAcceptanceTaskCaseMaterial{
 			Title: "Runtime regression triage " + started.Format("150405"),
-			Description: multicasurface.RootSessionDescription(multicasurface.RootSessionMaterial{
-				Request:  "Triage a production-style regression report where Multica child assignment mailboxes may be created but feedback comments or completion statuses appear late.",
+			Description: multicasurface.IssueSurfaceDescription(multicasurface.IssueSurfaceDescriptionMaterial{
+				Request:  "Triage a production-style regression report where Multica run activity appears, but Mnemon event observation or explicit surface writeback appears late.",
 				WorkMode: "Use Mnemon teamwork to split diagnosis, mitigation, and verification while Multica remains the operator-facing hub.",
 				Handoffs: []string{
-					"Assign one teammate to inspect routing evidence and identify whether assignment metadata is complete enough for correlation.",
-					"Assign one teammate to inspect feedback projection and status mapping for delayed or missing updates.",
+					"Assign one teammate to inspect routing evidence and identify whether surface metadata is complete enough for correlation.",
+					"Assign one teammate to inspect display report and status-writeback mapping for delayed or missing updates.",
 					"Ask the integrator to propose the smallest mitigation and the follow-up acceptance signal needed before closing the incident.",
 				},
 				Validation: []string{
-					"The triage identifies whether the problem is intake, routing, wake, feedback projection, or Multica run visibility.",
-					"Each child mailbox reports evidence with issue IDs, agent IDs, and observed status.",
+					"The triage identifies whether the problem is intake, provider-wrapper routing, activation carrier, display report, status writeback, or Multica run visibility.",
+					"Each work slice reports evidence with issue IDs, agent IDs, run IDs, and observed status.",
 					"The root issue records a mitigation decision rather than only stating that the flow completed.",
 				},
 				Completion: "Finish when the root issue has a triage decision, mitigation summary, and clear next verification step.",
 			}),
 			Expectations: multicaAcceptanceTaskCaseExpectations{
 				MinActiveAgents:     4,
-				MinChildMailboxes:   3,
+				MinChildSurfaces:    3,
 				MinFeedbackComments: 3,
 				TeamworkRounds: []string{
-					"Round 1: diagnose intake, routing, and feedback projection",
+					"Round 1: diagnose intake, provider routing, and display report writeback",
 					"Round 2: act on the leading failure mode with a mitigation check",
 					"Round 3: reflect into incident decision and next verification",
 				},
@@ -597,12 +597,12 @@ var multicaAcceptanceTaskCases = map[string]func(time.Time) multicaAcceptanceTas
 	multicaAcceptanceTaskCaseRunbookReview: func(started time.Time) multicaAcceptanceTaskCaseMaterial {
 		return multicaAcceptanceTaskCaseMaterial{
 			Title: "Operator runbook review " + started.Format("150405"),
-			Description: multicasurface.RootSessionDescription(multicasurface.RootSessionMaterial{
+			Description: multicasurface.IssueSurfaceDescription(multicasurface.IssueSurfaceDescriptionMaterial{
 				Request:  "Review the operator runbook for installing, provisioning, and validating the Mnemon Multica runtime in a workspace with multiple participant agents.",
-				WorkMode: "Use Multica child issues to split documentation review, command validation, and operator risk notes.",
+				WorkMode: "Use Mnemon assignments to split documentation review, command validation, and operator risk notes; use Multica to show issue/run/comment/status evidence.",
 				Handoffs: []string{
 					"Ask one teammate to verify the install/provisioning commands and identify missing prerequisites.",
-					"Ask another teammate to verify the validation section covers root metadata, child mailbox routing, feedback comments, and final statuses.",
+					"Ask another teammate to verify the validation section covers R3 surface metadata, provider wrapper routing, feedback comments, and final statuses.",
 					"Have the integrator produce a concise runbook change list with priority and owner.",
 				},
 				Validation: []string{
@@ -614,7 +614,7 @@ var multicaAcceptanceTaskCases = map[string]func(time.Time) multicaAcceptanceTas
 			}),
 			Expectations: multicaAcceptanceTaskCaseExpectations{
 				MinActiveAgents:     4,
-				MinChildMailboxes:   3,
+				MinChildSurfaces:    3,
 				MinFeedbackComments: 3,
 				TeamworkRounds: []string{
 					"Round 1: install, validation, and risk review",

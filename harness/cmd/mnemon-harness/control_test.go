@@ -534,12 +534,12 @@ func TestControlTeamworkAssignDefaultsStructuredAssignmentID(t *testing.T) {
 	controlExtID = "assign-default-id"
 	controlTeamworkAssignID = ""
 	controlTeamworkAssignAssignee = "researcher@team"
-	controlTeamworkAssignScope = "TEA-74 Mnemon R2 hub-flow readiness drill"
+	controlTeamworkAssignScope = "TEA-74 Mnemon surface-flow readiness drill"
 	controlTeamworkAssignTTL = "20m"
 	controlTeamworkAssignReportOn = []string{"root session metadata", "agent run visibility"}
 	controlTeamworkAssignWork = "Validate TEA-74 root session metadata and run visibility."
 	controlTeamworkAssignFeedback = "progress_digest with PASS/FAIL evidence"
-	controlTeamworkAssignEvidence = []string{"TEA-74 root issue is current session mailbox"}
+	controlTeamworkAssignEvidence = []string{"TEA-74 root issue is current Multica surface"}
 
 	var buf bytes.Buffer
 	controlTeamworkAssignCmd.SetOut(&buf)

@@ -7,7 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/url"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -288,15 +292,31 @@ func (c MulticaCLI) ListIssueComments(ctx context.Context, issueID string) ([]Mu
 	if issueID == "" {
 		return nil, fmt.Errorf("multica issue id is required")
 	}
-	out, err := c.Run(ctx, []string{"issue", "comment", "list", issueID, "--full", "--output", "json"}, "")
+	out, err := c.Run(ctx, []string{"issue", "comment", "list", issueID, "--output", "json"}, "")
 	if err != nil {
-		return nil, err
+		comments, apiErr := c.listIssueCommentsViaAPI(ctx, issueID)
+		if apiErr == nil {
+			return comments, nil
+		}
+		return nil, fmt.Errorf("%w; fallback Multica API issue comment list failed: %v", err, apiErr)
 	}
 	comments, err := decodeMulticaCommentListOutput([]byte(out.Stdout))
 	if err != nil {
 		return nil, err
 	}
 	return comments, nil
+}
+
+func (c MulticaCLI) listIssueCommentsViaAPI(ctx context.Context, issueID string) ([]MulticaComment, error) {
+	var raw any
+	if err := c.multicaAPIJSON(ctx, http.MethodGet, "/api/issues/"+issueID+"/comments", nil, &raw); err != nil {
+		return nil, err
+	}
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return nil, err
+	}
+	return decodeMulticaCommentListOutput(data)
 }
 
 func (c MulticaCLI) ListRuntimeProfiles(ctx context.Context) ([]MulticaRuntimeProfile, error) {
@@ -526,7 +546,11 @@ func (c MulticaCLI) GetAgentEnv(ctx context.Context, agentID string) (map[string
 	}
 	out, err := c.Run(ctx, []string{"agent", "env", "get", agentID, "--output", "json"}, "")
 	if err != nil {
-		return nil, err
+		env, apiErr := c.getAgentEnvViaAPI(ctx, agentID)
+		if apiErr == nil {
+			return env, nil
+		}
+		return nil, fmt.Errorf("%w; fallback Multica API agent env get failed: %v", err, apiErr)
 	}
 	env, err := decodeMulticaAgentEnv([]byte(out.Stdout))
 	if err != nil {
@@ -549,7 +573,11 @@ func (c MulticaCLI) SetAgentEnv(ctx context.Context, agentID string, env map[str
 	}
 	out, err := c.Run(ctx, []string{"agent", "env", "set", agentID, "--custom-env-stdin", "--output", "json"}, string(data))
 	if err != nil {
-		return nil, err
+		updated, apiErr := c.setAgentEnvViaAPI(ctx, agentID, env)
+		if apiErr == nil {
+			return updated, nil
+		}
+		return nil, fmt.Errorf("%w; fallback Multica API agent env set failed: %v", err, apiErr)
 	}
 	if strings.TrimSpace(out.Stdout) == "" {
 		return env, nil
@@ -559,6 +587,156 @@ func (c MulticaCLI) SetAgentEnv(ctx context.Context, agentID string, env map[str
 		return nil, fmt.Errorf("decode updated multica agent env: %w", err)
 	}
 	return updated, nil
+}
+
+type multicaCLIProfileConfig struct {
+	ServerURL   string `json:"server_url"`
+	WorkspaceID string `json:"workspace_id"`
+	Token       string `json:"token"`
+}
+
+type multicaAgentEnvAPIResponse struct {
+	CustomEnv         map[string]string `json:"custom_env"`
+	CustomEnvRedacted bool              `json:"custom_env_redacted"`
+}
+
+func (c MulticaCLI) getAgentEnvViaAPI(ctx context.Context, agentID string) (map[string]string, error) {
+	var agent multicaAgentEnvAPIResponse
+	if err := c.multicaAPIJSON(ctx, http.MethodGet, "/api/agents/"+agentID+"/env", nil, &agent); err == nil {
+		if agent.CustomEnv == nil {
+			return map[string]string{}, nil
+		}
+		return agent.CustomEnv, nil
+	}
+	if err := c.multicaAPIJSON(ctx, http.MethodGet, "/api/agents/"+agentID, nil, &agent); err != nil {
+		return nil, err
+	}
+	if agent.CustomEnv == nil {
+		return map[string]string{}, nil
+	}
+	return agent.CustomEnv, nil
+}
+
+func (c MulticaCLI) setAgentEnvViaAPI(ctx context.Context, agentID string, env map[string]string) (map[string]string, error) {
+	var agent multicaAgentEnvAPIResponse
+	body := map[string]any{"custom_env": env}
+	if err := c.multicaAPIJSON(ctx, http.MethodPut, "/api/agents/"+agentID+"/env", body, &agent); err != nil {
+		if rawErr := c.multicaAPIJSON(ctx, http.MethodPut, "/api/agents/"+agentID+"/env", env, &agent); rawErr != nil {
+			return nil, err
+		}
+	}
+	if agent.CustomEnv == nil {
+		return map[string]string{}, nil
+	}
+	return agent.CustomEnv, nil
+}
+
+func (c MulticaCLI) multicaAPIJSON(ctx context.Context, method, path string, body any, out any) error {
+	cfg, err := c.multicaAPIConfig()
+	if err != nil {
+		return err
+	}
+	if cfg.ServerURL == "" {
+		return fmt.Errorf("Multica server URL not configured")
+	}
+	if cfg.Token == "" {
+		return fmt.Errorf("Multica token not configured")
+	}
+	var reader io.Reader
+	if body != nil {
+		data, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		reader = bytes.NewReader(data)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(cfg.ServerURL, "/")+path, reader)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+cfg.Token)
+	if cfg.WorkspaceID != "" {
+		req.Header.Set("X-Workspace-ID", cfg.WorkspaceID)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	timeout := c.Timeout
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	client := &http.Client{Timeout: timeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		data, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("%s %s returned %d: %s", method, path, resp.StatusCode, strings.TrimSpace(string(data)))
+	}
+	if out == nil {
+		return nil
+	}
+	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+func (c MulticaCLI) multicaAPIConfig() (multicaCLIProfileConfig, error) {
+	cfg, err := loadMulticaCLIProfileConfig(strings.TrimSpace(c.Profile))
+	if err != nil {
+		return multicaCLIProfileConfig{}, err
+	}
+	if value := strings.TrimSpace(c.ServerURL); value != "" {
+		cfg.ServerURL = value
+	} else if value := multicaEnvValue(c.Env, "MULTICA_SERVER_URL"); value != "" {
+		cfg.ServerURL = value
+	}
+	if value := strings.TrimSpace(c.WorkspaceID); value != "" {
+		cfg.WorkspaceID = value
+	} else if value := multicaEnvValue(c.Env, "MULTICA_WORKSPACE_ID"); value != "" {
+		cfg.WorkspaceID = value
+	}
+	if value := multicaEnvValue(c.Env, "MULTICA_TOKEN"); value != "" {
+		cfg.Token = value
+	}
+	return cfg, nil
+}
+
+func loadMulticaCLIProfileConfig(profile string) (multicaCLIProfileConfig, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return multicaCLIProfileConfig{}, err
+	}
+	path := filepath.Join(home, ".multica", "config.json")
+	if profile != "" {
+		path = filepath.Join(home, ".multica", "profiles", profile, "config.json")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return multicaCLIProfileConfig{}, nil
+		}
+		return multicaCLIProfileConfig{}, fmt.Errorf("read Multica profile config: %w", err)
+	}
+	var cfg multicaCLIProfileConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return multicaCLIProfileConfig{}, fmt.Errorf("parse Multica profile config: %w", err)
+	}
+	return cfg, nil
+}
+
+func multicaEnvValue(env []string, key string) string {
+	if len(env) == 0 {
+		return strings.TrimSpace(os.Getenv(key))
+	}
+	prefix := key + "="
+	var value string
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			value = strings.TrimPrefix(entry, prefix)
+		}
+	}
+	return strings.TrimSpace(value)
 }
 
 func (c MulticaCLI) CreateIssue(ctx context.Context, req MulticaCreateIssueRequest) (MulticaIssue, error) {
@@ -591,11 +769,45 @@ func (c MulticaCLI) CreateIssue(ctx context.Context, req MulticaCreateIssueReque
 	}
 	out, err := c.Run(ctx, args, stdin)
 	if err != nil {
-		return MulticaIssue{}, err
+		issue, apiErr := c.createIssueViaAPI(ctx, req)
+		if apiErr == nil {
+			return issue, nil
+		}
+		return MulticaIssue{}, fmt.Errorf("%w; fallback Multica API issue create failed: %v", err, apiErr)
 	}
 	var issue MulticaIssue
 	if err := json.Unmarshal([]byte(out.Stdout), &issue); err != nil {
 		return MulticaIssue{}, fmt.Errorf("decode created multica issue: %w", err)
+	}
+	return issue, nil
+}
+
+func (c MulticaCLI) createIssueViaAPI(ctx context.Context, req MulticaCreateIssueRequest) (MulticaIssue, error) {
+	body := map[string]any{
+		"title": strings.TrimSpace(req.Title),
+	}
+	if strings.TrimSpace(req.Description) != "" {
+		description := req.Description
+		body["description"] = description
+	}
+	if strings.TrimSpace(req.AssigneeID) != "" {
+		assigneeType := "agent"
+		assigneeID := strings.TrimSpace(req.AssigneeID)
+		body["assignee_type"] = assigneeType
+		body["assignee_id"] = assigneeID
+	}
+	if strings.TrimSpace(req.ParentID) != "" {
+		body["parent_issue_id"] = strings.TrimSpace(req.ParentID)
+	}
+	if strings.TrimSpace(req.Status) != "" {
+		body["status"] = strings.TrimSpace(req.Status)
+	}
+	if strings.TrimSpace(req.Priority) != "" {
+		body["priority"] = strings.TrimSpace(req.Priority)
+	}
+	var issue MulticaIssue
+	if err := c.multicaAPIJSON(ctx, http.MethodPost, "/api/issues", body, &issue); err != nil {
+		return MulticaIssue{}, err
 	}
 	return issue, nil
 }
@@ -656,7 +868,14 @@ func (c MulticaCLI) SetIssueMetadata(ctx context.Context, issueID, key, value, v
 	}
 	args = append(args, "--output", "json")
 	_, err := c.Run(ctx, args, "")
-	return err
+	if err != nil {
+		if apiErr := c.setIssueMetadataViaAPI(ctx, issueID, key, value, valueType); apiErr == nil {
+			return nil
+		} else {
+			return fmt.Errorf("%w; fallback Multica API issue metadata set failed: %v", err, apiErr)
+		}
+	}
+	return nil
 }
 
 func (c MulticaCLI) SetIssueMetadataMap(ctx context.Context, issueID string, values map[string]string) error {
@@ -721,7 +940,12 @@ func (c MulticaCLI) GetIssueMetadata(ctx context.Context, issueID, key string) (
 	}
 	out, err := c.Run(ctx, []string{"issue", "metadata", "get", issueID, "--key", key, "--output", "json"}, "")
 	if err != nil {
-		return "", false, err
+		meta, apiErr := c.ListIssueMetadata(ctx, issueID)
+		if apiErr != nil {
+			return "", false, fmt.Errorf("%w; fallback Multica API issue metadata get failed: %v", err, apiErr)
+		}
+		value, ok := meta[key]
+		return value, ok, nil
 	}
 	meta, err := decodeMulticaMetadataOutput([]byte(out.Stdout))
 	if err != nil {
@@ -738,9 +962,47 @@ func (c MulticaCLI) ListIssueMetadata(ctx context.Context, issueID string) (map[
 	}
 	out, err := c.Run(ctx, []string{"issue", "metadata", "list", issueID, "--output", "json"}, "")
 	if err != nil {
-		return nil, err
+		meta, apiErr := c.listIssueMetadataViaAPI(ctx, issueID)
+		if apiErr == nil {
+			return meta, nil
+		}
+		return nil, fmt.Errorf("%w; fallback Multica API issue metadata list failed: %v", err, apiErr)
 	}
 	return decodeMulticaMetadataOutput([]byte(out.Stdout))
+}
+
+func (c MulticaCLI) listIssueMetadataViaAPI(ctx context.Context, issueID string) (map[string]string, error) {
+	var raw any
+	if err := c.multicaAPIJSON(ctx, http.MethodGet, "/api/issues/"+issueID+"/metadata", nil, &raw); err == nil {
+		return NormalizeMulticaMetadata(raw), nil
+	}
+	issue, err := c.GetIssue(ctx, issueID)
+	if err != nil {
+		return nil, err
+	}
+	return NormalizeMulticaMetadata(issue.Metadata), nil
+}
+
+func (c MulticaCLI) setIssueMetadataViaAPI(ctx context.Context, issueID, key, value, valueType string) error {
+	body := map[string]any{
+		"key":   key,
+		"value": value,
+	}
+	if strings.TrimSpace(valueType) != "" {
+		body["type"] = strings.TrimSpace(valueType)
+	}
+	if err := c.multicaAPIJSON(ctx, http.MethodPut, "/api/issues/"+issueID+"/metadata", body, nil); err == nil {
+		return nil
+	}
+	if err := c.multicaAPIJSON(ctx, http.MethodPost, "/api/issues/"+issueID+"/metadata", body, nil); err == nil {
+		return nil
+	}
+	keyPath := url.PathEscape(key)
+	valueBody := map[string]any{"value": value}
+	if strings.TrimSpace(valueType) != "" {
+		valueBody["type"] = strings.TrimSpace(valueType)
+	}
+	return c.multicaAPIJSON(ctx, http.MethodPut, "/api/issues/"+issueID+"/metadata/"+keyPath, valueBody, nil)
 }
 
 func (c MulticaCLI) LoadIssueMetadata(ctx context.Context, issue MulticaIssue) (MulticaIssue, int, error) {
@@ -762,13 +1024,29 @@ func (c MulticaCLI) ListIssueChildren(ctx context.Context, parentID string) ([]M
 	}
 	out, err := c.Run(ctx, []string{"issue", "children", parentID, "--output", "json"}, "")
 	if err != nil {
-		return nil, err
+		issues, apiErr := c.listIssueChildrenViaAPI(ctx, parentID)
+		if apiErr == nil {
+			return issues, nil
+		}
+		return nil, fmt.Errorf("%w; fallback Multica API issue children failed: %v", err, apiErr)
 	}
 	issues, err := decodeMulticaIssueListOutput([]byte(out.Stdout))
 	if err != nil {
 		return nil, err
 	}
 	return issues, nil
+}
+
+func (c MulticaCLI) listIssueChildrenViaAPI(ctx context.Context, parentID string) ([]MulticaIssue, error) {
+	var raw any
+	if err := c.multicaAPIJSON(ctx, http.MethodGet, "/api/issues/"+parentID+"/children", nil, &raw); err != nil {
+		return nil, err
+	}
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return nil, err
+	}
+	return decodeMulticaIssueListOutput(data)
 }
 
 func (c MulticaCLI) ListIssueRuns(ctx context.Context, issueID string) ([]MulticaIssueRun, error) {
@@ -793,9 +1071,6 @@ func (c MulticaCLI) ListRunMessages(ctx context.Context, taskID, issueID string)
 		return nil, fmt.Errorf("multica task id is required")
 	}
 	args := []string{"issue", "run-messages", taskID, "--output", "json"}
-	if strings.TrimSpace(issueID) != "" {
-		args = append(args, "--issue", strings.TrimSpace(issueID))
-	}
 	out, err := c.Run(ctx, args, "")
 	if err != nil {
 		return nil, err
