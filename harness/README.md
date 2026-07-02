@@ -10,7 +10,7 @@ The current product surface is intentionally small:
 - `status` reports Agent Integration, Local Mnemon, and sync status.
 - `sync` connects Local Mnemon to a Remote Workspace and pushes/pulls governed
   commits with attribution preserved. The first-party backend is `mnemon-hub`;
-  the experimental GitHub backend uses repo-mediated publication branches.
+  future backends must preserve the same EventEnvelope sync contract.
 - `loop validate` remains hidden and is used by `make harness-validate`.
 
 Host directories such as `.codex` and `.claude` are projection surfaces. Runtime
@@ -49,40 +49,3 @@ Remove projected assets for a principal:
 ```
 
 More command examples are in `docs/harness/USAGE.md`.
-
-## Experimental GitHub Remote Workspace
-
-GitHub can be used as a bootstrap Remote Workspace backend for a decentralized
-publication mesh. Each Local Mnemon publishes accepted synced events to its own
-configured branch and subscribes to explicitly configured peer branches.
-
-This is not P2P networking or GitHub Issues/PR-based teamwork. GitHub is only the
-publication substrate; every imported event still enters through the receiving
-Local Mnemon's Event Intake.
-
-Example shape:
-
-```sh
-./mnemon-harness sync connect self \
-  --backend github \
-  --direction publish \
-  --github-repo mnemon-dev/mnemon-teamwork-example \
-  --github-branch mnemon/agent-a \
-  --token-file ~/.config/mnemon/github.token
-
-./mnemon-harness sync connect agent-b \
-  --backend github \
-  --direction subscribe \
-  --github-repo mnemon-dev/mnemon-teamwork-example \
-  --github-branch mnemon/agent-b \
-  --token-file ~/.config/mnemon/github.token
-```
-
-Live validation is opt-in:
-
-```sh
-MNEMON_GITHUB_LIVE=1 \
-MNEMON_GITHUB_REPO=mnemon-dev/mnemon-teamwork-example \
-MNEMON_GITHUB_TOKEN_FILE=~/.config/mnemon/github.token \
-go test ./harness/internal/app -run TestGitHubLivePublishPullImport -count=1 -v
-```

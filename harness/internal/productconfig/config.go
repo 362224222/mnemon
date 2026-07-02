@@ -24,7 +24,6 @@ const (
 	RuntimeModeManagedOrHost = "managed-or-attached"
 
 	ConnectionMultica   = "multica"
-	ConnectionGitHub    = "github"
 	ConnectionMnemonhub = "mnemonhub"
 
 	DefaultMulticaRuntimeBinary = multicasurface.MulticaRuntimeCommandName
@@ -63,7 +62,6 @@ type HostRuntime struct {
 
 type Connections struct {
 	Multica   MulticaConnection   `json:"multica,omitempty"`
-	GitHub    GitHubConnection    `json:"github,omitempty"`
 	Mnemonhub MnemonhubConnection `json:"mnemonhub,omitempty"`
 }
 
@@ -71,12 +69,6 @@ type MulticaConnection struct {
 	Enabled       bool   `json:"enabled,omitempty"`
 	Workspace     string `json:"workspace,omitempty"`
 	RuntimeBinary string `json:"runtime_binary,omitempty"`
-}
-
-type GitHubConnection struct {
-	Enabled bool   `json:"enabled,omitempty"`
-	Repo    string `json:"repo,omitempty"`
-	Branch  string `json:"branch,omitempty"`
 }
 
 type MnemonhubConnection struct {
@@ -175,11 +167,6 @@ func (cfg Config) Validate() error {
 	if cfg.Connections.Multica.Enabled {
 		if strings.TrimSpace(cfg.Connections.Multica.Workspace) == "" {
 			return fmt.Errorf("multica connection workspace is required when enabled")
-		}
-	}
-	if cfg.Connections.GitHub.Enabled {
-		if strings.TrimSpace(cfg.Connections.GitHub.Repo) == "" {
-			return fmt.Errorf("github connection repo is required when enabled")
 		}
 	}
 	if cfg.Connections.Mnemonhub.Enabled {
@@ -285,10 +272,6 @@ func validateCarrier(label, carrier string, cfg Config) error {
 		if !cfg.Connections.Multica.Enabled {
 			return fmt.Errorf("%s %q is not enabled", label, carrier)
 		}
-	case ConnectionGitHub:
-		if !cfg.Connections.GitHub.Enabled {
-			return fmt.Errorf("%s %q is not enabled", label, carrier)
-		}
 	case ConnectionMnemonhub:
 		if !cfg.Connections.Mnemonhub.Enabled {
 			return fmt.Errorf("%s %q is not enabled", label, carrier)
@@ -315,8 +298,6 @@ type legacyRemoteEntry struct {
 	Backend  string `json:"backend,omitempty"`
 	ID       string `json:"id"`
 	Endpoint string `json:"endpoint,omitempty"`
-	Repo     string `json:"repo,omitempty"`
-	Branch   string `json:"branch,omitempty"`
 }
 
 func FromLegacy(root string) (Config, bool, error) {
@@ -355,12 +336,6 @@ func FromLegacy(root string) (Config, bool, error) {
 				if strings.TrimSpace(cfg.Connections.Mnemonhub.Endpoint) == "" {
 					cfg.Connections.Mnemonhub.Endpoint = strings.TrimSpace(remote.Endpoint)
 				}
-			case ConnectionGitHub:
-				cfg.Connections.GitHub.Enabled = true
-				if strings.TrimSpace(cfg.Connections.GitHub.Repo) == "" {
-					cfg.Connections.GitHub.Repo = strings.TrimSpace(remote.Repo)
-					cfg.Connections.GitHub.Branch = strings.TrimSpace(remote.Branch)
-				}
 			}
 		}
 	}
@@ -376,10 +351,6 @@ func FromLegacy(root string) (Config, bool, error) {
 	}
 	if cfg.Connections.Mnemonhub.Enabled {
 		cfg.Daemon.InteractionWatchers = appendCarrier(cfg.Daemon.InteractionWatchers, ConnectionMnemonhub)
-	}
-	if cfg.Connections.GitHub.Enabled {
-		cfg.Daemon.InteractionWatchers = appendCarrier(cfg.Daemon.InteractionWatchers, ConnectionGitHub)
-		cfg.Daemon.DisplaySurfaces = appendCarrier(cfg.Daemon.DisplaySurfaces, ConnectionGitHub)
 	}
 	if len(cfg.Participants) > 0 {
 		cfg.Daemon.DriveSources = appendCarrier(cfg.Daemon.DriveSources, DriveManagedLocal)

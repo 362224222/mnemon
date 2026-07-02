@@ -36,7 +36,6 @@ func TestDoctorReportsConfiguredProductSurface(t *testing.T) {
 	root := t.TempDir()
 	cfg := productconfig.Default()
 	cfg.Connections.Multica = productconfig.MulticaConnection{Enabled: true, Workspace: "ws-multica", RuntimeBinary: "mnemon-multica-runtime"}
-	cfg.Connections.GitHub = productconfig.GitHubConnection{Enabled: true, Repo: "mnemon-dev/mnemon-teamwork-example"}
 	cfg.Participants = []productconfig.Participant{{
 		Principal: "planner@team",
 		HostRuntime: productconfig.HostRuntime{
@@ -72,7 +71,7 @@ func TestDoctorReportsConfiguredProductSurface(t *testing.T) {
 		"- Product config: configured",
 		"- Participants: 1",
 		"- Daemon roles: watchers=1 drive=1 surfaces=1",
-		"- Connections: multica,github",
+		"- Connections: multica",
 		"- Local Mnemon config: missing",
 		"- Daemon snapshot: workers=2",
 	} {

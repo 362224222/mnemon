@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -15,7 +14,6 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/access"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemond/policy"
 	"github.com/mnemon-dev/mnemon/harness/internal/mnemonhub/exchange"
-	githubbackend "github.com/mnemon-dev/mnemon/harness/internal/mnemonhub/exchange/backend/github"
 	"github.com/mnemon-dev/mnemon/harness/internal/runtime"
 )
 
@@ -150,15 +148,12 @@ func syncWorkerPass(rt *runtime.Runtime, opts SyncWorkerOptions) error {
 	return nil
 }
 
-// syncWorkerRemote builds the selected Remote Workspace backend from the remote entry. Today only
-// the first-party HTTP mnemon-hub backend is implemented; the sync loop above depends only on the
-// exchange.RemoteWorkspace ABI so a future GitHub publication mesh does not touch runtime import.
+// syncWorkerRemote builds the selected Remote Workspace backend from the remote entry. The
+// first-party backend is the HTTP MnemonHub wire; product surfaces must not bypass local import.
 func syncWorkerRemote(entry exchange.RemoteEntry, opts SyncWorkerOptions) (exchange.RemoteWorkspace, error) {
 	switch entry.NormalizedBackend() {
 	case exchange.RemoteBackendHTTP:
 		return syncWorkerHTTPRemote(entry, opts)
-	case exchange.RemoteBackendGitHub:
-		return syncWorkerGitHubRemote(entry, opts)
 	default:
 		return nil, fmt.Errorf("Remote Workspace %q: unsupported backend %q", entry.ID, entry.NormalizedBackend())
 	}
@@ -193,49 +188,6 @@ func syncWorkerHTTPRemote(entry exchange.RemoteEntry, opts SyncWorkerOptions) (e
 		CAFile:        caFile,
 		AllowInsecure: opts.AllowInsecureRemote,
 	})
-}
-
-func syncWorkerGitHubRemote(entry exchange.RemoteEntry, opts SyncWorkerOptions) (exchange.RemoteWorkspace, error) {
-	token, err := syncWorkerRemoteToken(entry, opts)
-	if err != nil {
-		return nil, err
-	}
-	timeout := opts.Timeout
-	if timeout <= 0 {
-		timeout = access.DefaultSyncTimeout
-	}
-	store, err := githubbackend.NewPublicationStore(githubbackend.PublicationStoreConfig{
-		Repo:       entry.Repo,
-		Token:      token,
-		HTTPClient: &http.Client{Timeout: timeout},
-	})
-	if err != nil {
-		return nil, err
-	}
-	return githubbackend.New(githubbackend.Config{
-		Store:  store,
-		Repo:   entry.Repo,
-		Branch: entry.Branch,
-	})
-}
-
-func syncWorkerRemoteToken(entry exchange.RemoteEntry, opts SyncWorkerOptions) (string, error) {
-	if strings.TrimSpace(entry.CredentialRef) == "" {
-		return "", fmt.Errorf("Remote Workspace %q has no credential_ref", entry.ID)
-	}
-	tokPath := entry.CredentialRef
-	if !filepath.IsAbs(tokPath) {
-		tokPath = filepath.Join(opts.ProjectRoot, tokPath)
-	}
-	raw, err := os.ReadFile(tokPath)
-	if err != nil {
-		return "", fmt.Errorf("read Remote Workspace token file: %w", err)
-	}
-	token := strings.TrimSpace(string(raw))
-	if token == "" {
-		return "", fmt.Errorf("Remote Workspace token file %s is empty", entry.CredentialRef)
-	}
-	return token, nil
 }
 
 // syncWorkerPush pushes the pending batch (if any) and mirrors the hub's per-event verdicts into

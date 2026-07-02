@@ -6,8 +6,8 @@ import "github.com/mnemon-dev/mnemon/harness/internal/contract"
 //
 // The method names intentionally match the existing wire verbs so the current
 // HTTP mnemon-hub client satisfies this interface without a wrapper. Future
-// backends, such as a GitHub publication mesh, must present the same accepted
-// synced-envelope behavior to the local sync loop.
+// backends must present the same accepted synced-envelope behavior to the local
+// sync loop.
 type RemoteWorkspace interface {
 	SyncPush(contract.SyncPushRequest) (contract.SyncPushResponse, error)
 	SyncPull(contract.SyncPullRequest) (contract.SyncPullResponse, error)

@@ -19,11 +19,9 @@ import (
 )
 
 var (
-	acceptanceManagedExchange        string
-	acceptanceManagedMnemondBin      string
-	acceptanceManagedRuntimeAdapter  string
-	acceptanceManagedGitHubRepo      string
-	acceptanceManagedGitHubTokenFile string
+	acceptanceManagedExchange       string
+	acceptanceManagedMnemondBin     string
+	acceptanceManagedRuntimeAdapter string
 )
 
 var acceptanceManagedRuntimeCmd = &cobra.Command{
@@ -31,19 +29,17 @@ var acceptanceManagedRuntimeCmd = &cobra.Command{
 	Short: "Run managed-runtime seed-and-observe acceptance",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		report, err := runManagedRuntimeAcceptance(cmd.Context(), managedRuntimeAcceptanceOptions{
-			RunRoot:         acceptanceRunRoot,
-			Command:         acceptanceCommand,
-			CodexHome:       acceptanceCodexHome,
-			Agents:          acceptanceAgents,
-			AgentTurns:      acceptanceAgentTurns,
-			Exchange:        acceptanceManagedExchange,
-			MnemondBin:      acceptanceManagedMnemondBin,
-			Runtime:         acceptanceManagedRuntimeAdapter,
-			GitHubRepo:      acceptanceManagedGitHubRepo,
-			GitHubTokenFile: acceptanceManagedGitHubTokenFile,
-			TurnTimeout:     acceptanceTurnTimeout,
-			Stdout:          cmd.OutOrStdout(),
-			Stderr:          cmd.ErrOrStderr(),
+			RunRoot:     acceptanceRunRoot,
+			Command:     acceptanceCommand,
+			CodexHome:   acceptanceCodexHome,
+			Agents:      acceptanceAgents,
+			AgentTurns:  acceptanceAgentTurns,
+			Exchange:    acceptanceManagedExchange,
+			MnemondBin:  acceptanceManagedMnemondBin,
+			Runtime:     acceptanceManagedRuntimeAdapter,
+			TurnTimeout: acceptanceTurnTimeout,
+			Stdout:      cmd.OutOrStdout(),
+			Stderr:      cmd.ErrOrStderr(),
 		})
 		if report.ReportPath != "" {
 			fmt.Fprintf(cmd.OutOrStdout(), "acceptance report: %s\n", report.ReportPath)
@@ -64,30 +60,26 @@ func init() {
 	acceptanceManagedRuntimeCmd.Flags().StringVar(&acceptanceCodexHome, "codex-home-source", "", "source CODEX_HOME to copy auth/config from")
 	acceptanceManagedRuntimeCmd.Flags().IntVar(&acceptanceAgents, "agents", 5, "number of managed agent nodes")
 	acceptanceManagedRuntimeCmd.Flags().BoolVar(&acceptanceAgentTurns, "agent-turns", false, "run real managed Codex turns after the seed")
-	acceptanceManagedRuntimeCmd.Flags().StringVar(&acceptanceManagedExchange, "exchange", "mnemonhub", "exchange mode: mnemonhub or github")
+	acceptanceManagedRuntimeCmd.Flags().StringVar(&acceptanceManagedExchange, "exchange", "mnemonhub", "exchange mode: mnemonhub")
 	acceptanceManagedRuntimeCmd.Flags().StringVar(&acceptanceManagedMnemondBin, "mnemond-bin", "mnemond", "mnemond binary used for product-path wake checks")
 	acceptanceManagedRuntimeCmd.Flags().StringVar(&acceptanceManagedRuntimeAdapter, "runtime", "codex-appserver", "managed runtime adapter: codex-appserver or noop")
-	acceptanceManagedRuntimeCmd.Flags().StringVar(&acceptanceManagedGitHubRepo, "github-repo", "mnemon-dev/mnemon-teamwork-example", "GitHub Remote Workspace repository (owner/name)")
-	acceptanceManagedRuntimeCmd.Flags().StringVar(&acceptanceManagedGitHubTokenFile, "github-token-file", "", "GitHub token file for real GitHub exchange validation")
 	acceptanceManagedRuntimeCmd.Flags().DurationVar(&acceptanceTurnTimeout, "turn-timeout", 5*time.Minute, "timeout per managed wake check")
 	rootCmd.AddCommand(acceptanceManagedRuntimeCmd)
 }
 
 type managedRuntimeAcceptanceOptions struct {
-	RunRoot         string
-	Command         string
-	CodexHome       string
-	Agents          int
-	AgentTurns      bool
-	Exchange        string
-	MnemondBin      string
-	Runtime         string
-	GitHubRepo      string
-	GitHubTokenFile string
-	TurnTimeout     time.Duration
-	Stdout          io.Writer
-	Stderr          io.Writer
-	Wake            managedRuntimeWakeFunc
+	RunRoot     string
+	Command     string
+	CodexHome   string
+	Agents      int
+	AgentTurns  bool
+	Exchange    string
+	MnemondBin  string
+	Runtime     string
+	TurnTimeout time.Duration
+	Stdout      io.Writer
+	Stderr      io.Writer
+	Wake        managedRuntimeWakeFunc
 }
 
 type managedRuntimeWakeFunc func(context.Context, managedRuntimeAcceptanceOptions, string) (string, error)
@@ -98,7 +90,6 @@ type managedRuntimeAcceptanceReport struct {
 	Layer         string                           `json:"layer"`
 	RunnerRole    string                           `json:"runner_role"`
 	Exchange      string                           `json:"exchange"`
-	GitHubRepo    string                           `json:"github_repo,omitempty"`
 	Runtime       string                           `json:"runtime"`
 	StartedAt     string                           `json:"started_at"`
 	FinishedAt    string                           `json:"finished_at"`
@@ -152,9 +143,6 @@ func runManagedRuntimeAcceptance(ctx context.Context, opts managedRuntimeAccepta
 	if opts.TurnTimeout <= 0 {
 		opts.TurnTimeout = 5 * time.Minute
 	}
-	if strings.TrimSpace(opts.GitHubRepo) == "" {
-		opts.GitHubRepo = "mnemon-dev/mnemon-teamwork-example"
-	}
 	exchangeMode := strings.TrimSpace(opts.Exchange)
 	if exchangeMode == "" {
 		exchangeMode = "mnemonhub"
@@ -178,7 +166,6 @@ func runManagedRuntimeAcceptance(ctx context.Context, opts managedRuntimeAccepta
 		Layer:         "managed_runtime_acceptance",
 		RunnerRole:    "seed_and_observe",
 		Exchange:      exchangeMode,
-		GitHubRepo:    strings.TrimSpace(opts.GitHubRepo),
 		Runtime:       runtimeName,
 		StartedAt:     started.Format(time.RFC3339),
 		RunRoot:       runRoot,
@@ -189,8 +176,8 @@ func runManagedRuntimeAcceptance(ctx context.Context, opts managedRuntimeAccepta
 		report.Errors = append(report.Errors, err.Error())
 		return finishManagedRuntimeReport(report), err
 	}
-	if exchangeMode != "mnemonhub" && exchangeMode != "github" {
-		err := fmt.Errorf("managed-runtime acceptance exchange must be mnemonhub or github, got %q", exchangeMode)
+	if exchangeMode != "mnemonhub" {
+		err := fmt.Errorf("managed-runtime acceptance exchange must be mnemonhub, got %q", exchangeMode)
 		report.Status = "blocked"
 		report.Errors = append(report.Errors, err.Error())
 		written, writeErr := finishAndWriteManagedRuntimeReport(report)
@@ -203,17 +190,6 @@ func runManagedRuntimeAcceptance(ctx context.Context, opts managedRuntimeAccepta
 		report.Status = "blocked"
 		report.Errors = append(report.Errors, err.Error())
 		return finishManagedRuntimeReport(report), err
-	}
-	if exchangeMode == "github" && strings.TrimSpace(opts.GitHubTokenFile) == "" {
-		err := fmt.Errorf("managed-runtime github acceptance requires --github-token-file for real GitHub access")
-		report.Status = "blocked"
-		report.Errors = append(report.Errors, err.Error())
-		addManagedAssertion(&report, "github token file provided", false, err.Error())
-		written, writeErr := finishAndWriteManagedRuntimeReport(report)
-		if writeErr != nil {
-			return written, writeErr
-		}
-		return written, err
 	}
 	if opts.Wake != nil {
 		return runManagedRuntimeInjectedWakeAcceptance(ctx, opts, report)
@@ -229,14 +205,7 @@ func runManagedRuntimeAcceptance(ctx context.Context, opts managedRuntimeAccepta
 		}
 		return written, err
 	}
-	switch exchangeMode {
-	case "mnemonhub":
-		return runManagedRuntimeMnemonhubAcceptance(ctx, opts, report)
-	case "github":
-		return runManagedRuntimeGitHubAcceptance(ctx, opts, report)
-	default:
-		panic("validated exchange mode escaped switch")
-	}
+	return runManagedRuntimeMnemonhubAcceptance(ctx, opts, report)
 }
 
 func runManagedRuntimeInjectedWakeAcceptance(ctx context.Context, opts managedRuntimeAcceptanceOptions, report managedRuntimeAcceptanceReport) (managedRuntimeAcceptanceReport, error) {
@@ -286,45 +255,6 @@ func runManagedRuntimeMnemonhubAcceptance(ctx context.Context, opts managedRunti
 	defer stopR1CodexSyncAgents(agents)
 	report.Topology = buildR1ProdSimTopology(agents)
 	addManagedAssertion(&report, "managed-runtime strict per-hostagent mnemond topology", prodSimStrictTopology(report.Topology), fmt.Sprintf("%+v", report.Topology))
-	for _, agent := range agents {
-		report.Artifacts["mnemond:"+agent.principal] = prodSimMnemondPath(agent)
-		report.Artifacts["render_audit:"+agent.principal] = agent.renderAuditPath
-	}
-	return runManagedRuntimeRealScenario(ctx, opts, report, agents)
-}
-
-func runManagedRuntimeGitHubAcceptance(ctx context.Context, opts managedRuntimeAcceptanceOptions, report managedRuntimeAcceptanceReport) (managedRuntimeAcceptanceReport, error) {
-	tokenFile, err := filepath.Abs(opts.GitHubTokenFile)
-	if err != nil {
-		return managedRuntimeBlocked(report, err)
-	}
-	if _, err := os.Stat(tokenFile); err != nil {
-		return managedRuntimeBlocked(report, fmt.Errorf("github token file: %w", err))
-	}
-	binDir, err := installAcceptanceHarnessBinary(report.RunRoot)
-	if err != nil {
-		return managedRuntimeBlocked(report, err)
-	}
-	started, _ := time.Parse(time.RFC3339, report.StartedAt)
-	branchPrefix := r1GitHubMeshBranchPrefix("", started)
-	branches := r1GitHubMeshBranches(branchPrefix, opts.Agents)
-	if err := ensureR1GitHubMeshBranches(ctx, report.GitHubRepo, tokenFile, branches); err != nil {
-		return managedRuntimeBlocked(report, err)
-	}
-	sourceCodexHome := resolveSourceCodexHome(opts.CodexHome)
-	report.Artifacts["codex_home_source"] = sourceCodexHome
-	report.Artifacts["github_repo"] = report.GitHubRepo
-	report.Artifacts["github_token_file"] = tokenFile
-	report.Artifacts["github_branch_prefix"] = branchPrefix
-	agents, err := setupR1CodexGitHubMeshAgents(ctx, report.RunRoot, binDir, report.GitHubRepo, tokenFile, branchPrefix, opts.Agents, sourceCodexHome, 30*time.Second, opts.Agents)
-	if err != nil {
-		return managedRuntimeBlocked(report, err)
-	}
-	defer stopR1CodexSyncAgents(agents)
-	report.Topology = buildR1ProdSimTopology(agents)
-	report.Topology.MnemonhubInstances = 0
-	addManagedAssertion(&report, "managed-runtime github per-hostagent mnemond topology", r1GitHubMeshStrictTopology(report.Topology), fmt.Sprintf("%+v", report.Topology))
-	addManagedAssertion(&report, "managed-runtime github has no central hub", report.Topology.MnemonhubInstances == 0, "backend=github")
 	for _, agent := range agents {
 		report.Artifacts["mnemond:"+agent.principal] = prodSimMnemondPath(agent)
 		report.Artifacts["render_audit:"+agent.principal] = agent.renderAuditPath

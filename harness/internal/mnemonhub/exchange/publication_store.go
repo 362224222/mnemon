@@ -17,8 +17,8 @@ import (
 const PublicationEventRoot = "mnemon-publications/v1/events"
 
 // PublicationStore is the storage seam under a Remote Workspace publication backend. It is
-// intentionally repository-shaped but not tied to any GitHub client, so exchange semantics can be
-// tested against a deterministic fake before a real API adapter exists.
+// intentionally repository-shaped but not tied to any specific repository host, so exchange
+// semantics can be tested against a deterministic fake before a real API adapter exists.
 type PublicationStore interface {
 	PutEvent(ctx context.Context, branch string, path string, body []byte) (PublicationPutResult, error)
 	ListEvents(ctx context.Context, branch string, prefix string, cursor string) (PublicationListResult, error)

@@ -115,19 +115,55 @@ func TestRuntimeTreatsLegacyMailboxMetadataAsSurfaceInputOnly(t *testing.T) {
 	}
 }
 
-func TestRuntimeRunsProviderCommandWithOriginalTurnInput(t *testing.T) {
+func TestRuntimeProxiesProviderAppServerWhenNoIssueGateIsPresent(t *testing.T) {
+	tmp := t.TempDir()
+	providerLogPath := filepath.Join(tmp, "provider-rpc.jsonl")
+	providerBin := writeFakeCodexAppServer(t, providerLogPath)
+	input := strings.Join([]string{
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"multica","version":"test"}}}`,
+		`{"jsonrpc":"2.0","method":"initialized"}`,
+		`{"jsonrpc":"2.0","id":2,"method":"thread/start","params":{"cwd":"` + tmp + `","ephemeral":true}}`,
+		`{"jsonrpc":"2.0","id":3,"method":"turn/start","params":{"threadId":"thread-fake","input":[{"type":"text","text":"你好，请保持原生 Codex 流。"}]}}`,
+	}, "\n") + "\n"
+	var out strings.Builder
+	err := runRuntime(runtimeConfig{
+		Env: []string{
+			"MNEMON_MULTICA_PROVIDER_RUNTIME=codex",
+			"MNEMON_MULTICA_PROVIDER_COMMAND=" + providerBin,
+			"FAKE_CODEX_APP_SERVER_LOG=" + providerLogPath,
+		},
+		CWD:    tmp,
+		Stdin:  strings.NewReader(input),
+		Stdout: &out,
+		Now:    fixedRuntimeTime,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	providerLog := readFile(t, providerLogPath)
+	for _, want := range []string{`"method":"initialize"`, `"method":"thread/start"`, `"method":"turn/start"`, "你好，请保持原生 Codex 流。"} {
+		if !strings.Contains(providerLog, want) {
+			t.Fatalf("provider did not receive %q:\n%s", want, providerLog)
+		}
+	}
+	for _, want := range []string{`"provider":"fake-codex"`, `"method":"item/agentMessage/delta"`, "原生 provider 输出：已读取中文 turn"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("runtime did not proxy provider output %q:\n%s", want, out.String())
+		}
+	}
+}
+
+func TestRuntimeGateDoesNotStartProviderForIssueActivation(t *testing.T) {
 	tmp := t.TempDir()
 	logPath := filepath.Join(tmp, "multica-args.log")
+	providerLogPath := filepath.Join(tmp, "provider-rpc.jsonl")
 	multicaBin := writeFakeMulticaCLI(t, logPath, fakeMulticaScript{
 		IssueJSON:    `{"id":"issue-provider","identifier":"TEA-9","title":"中文验收-多角色决策","description":"请协调多角色完成退款策略复盘。","status":"todo","priority":"high"}`,
 		MetadataJSON: `[]`,
 	})
 	server, received := fakeIngestServer(t)
 	defer server.Close()
-	providerInputPath := filepath.Join(tmp, "provider.stdin")
-	providerOutput := "原生 provider 输出：已读取中文 turn"
-	providerBin := writeFakeProvider(t)
-	progress := []runtimeProgressEvent{}
+	providerBin := writeFakeCodexAppServer(t, providerLogPath)
 
 	final := (&runtimeRPCState{
 		Env: []string{
@@ -140,97 +176,85 @@ func TestRuntimeRunsProviderCommandWithOriginalTurnInput(t *testing.T) {
 			"MNEMON_CONTROL_PRINCIPAL=reviewer@team",
 			"MNEMON_MULTICA_PROVIDER_RUNTIME=codex",
 			"MNEMON_MULTICA_PROVIDER_COMMAND=" + providerBin,
-			"MNEMON_MULTICA_PROVIDER_WORKSPACE=" + tmp,
-			"MNEMON_MULTICA_PROVIDER_TURN_TIMEOUT=5s",
-			"FAKE_PROVIDER_INPUT=" + providerInputPath,
-			"FAKE_PROVIDER_OUTPUT=" + providerOutput,
+			"FAKE_CODEX_APP_SERVER_LOG=" + providerLogPath,
 			"FAKE_MULTICA_LOG=" + logPath,
 		},
 		CWD: tmp,
 		Now: fixedRuntimeTime,
-	}).runTurn(multicasurface.RuntimeInput{Text: "请基于当前 issue 继续推进中文 ReAct 协作。"}, func(event runtimeProgressEvent) {
-		progress = append(progress, event)
-	})
+	}).runTurn(multicasurface.RuntimeInput{Text: "请基于当前 issue 继续推进中文 ReAct 协作。"}, nil)
 
-	if final != providerOutput {
+	if !strings.Contains(final, "Mnemon Multica runtime handled issue") {
 		t.Fatalf("final answer = %q", final)
-	}
-	if got := readFile(t, providerInputPath); got != "请基于当前 issue 继续推进中文 ReAct 协作。\n" {
-		t.Fatalf("provider input = %q", got)
 	}
 	env := <-received
 	if env.ExternalID != "multica-task-task-provider" {
 		t.Fatalf("unexpected ingest external id: %+v", env)
 	}
-	foundProviderCommand := false
-	for _, event := range progress {
-		if event.Command == providerBin {
-			foundProviderCommand = true
-			if event.CWD != tmp {
-				t.Fatalf("provider cwd = %q, want %q", event.CWD, tmp)
-			}
-		}
-	}
-	if !foundProviderCommand {
-		t.Fatalf("provider command was not emitted in progress: %+v", progress)
-	}
-	argsLog := readFile(t, logPath)
-	if strings.Contains(argsLog, "issue comment add") ||
-		strings.Contains(argsLog, "issue status set") ||
-		strings.Contains(argsLog, "[mnemon:wake]") {
-		t.Fatalf("provider wrapper performed forbidden R2 side effect:\n%s", argsLog)
+	if got := readFile(t, providerLogPath); strings.TrimSpace(got) != "" {
+		t.Fatalf("issue activation bypassed gate and started provider:\n%s", got)
 	}
 }
 
-func TestRuntimeProviderEnvAddsImportedIssueContext(t *testing.T) {
-	env := runtimeProviderEnv([]string{
-		"MULTICA_TASK_ID=daemon-task",
-		"MULTICA_AGENT_ID=agent-1",
-	}, runtimeImportResult{
-		IssueID:    "issue-imported",
-		Identifier: "TEA-42",
-		Title:      "中文协作验收",
-		Principal:  "planner@team",
-		TaskID:     "task-imported",
-		Status:     "recorded",
+func TestRuntimeGateUsesTurnIssueTagBeforeStartingProvider(t *testing.T) {
+	tmp := t.TempDir()
+	logPath := filepath.Join(tmp, "multica-args.log")
+	providerLogPath := filepath.Join(tmp, "provider-rpc.jsonl")
+	multicaBin := writeFakeMulticaCLI(t, logPath, fakeMulticaScript{
+		IssueJSON:    `{"id":"issue-tagged","identifier":"TEA-9","title":"中文验收-由 @tag 触发","description":"请根据 @TEA-9 进入 Mnemon gate。","status":"todo","priority":"high"}`,
+		MetadataJSON: `[]`,
 	})
-	got := map[string]string{}
-	counts := map[string]int{}
-	for _, entry := range env {
-		key, value, ok := strings.Cut(entry, "=")
-		if ok {
-			got[key] = value
-			counts[key]++
-		}
+	server, received := fakeIngestServer(t)
+	defer server.Close()
+	providerBin := writeFakeCodexAppServer(t, providerLogPath)
+	input := strings.Join([]string{
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"multica","version":"test"}}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"thread/start","params":{"cwd":"` + tmp + `","ephemeral":true}}`,
+		`{"jsonrpc":"2.0","id":3,"method":"turn/start","params":{"threadId":"thread-fake","input":[{"type":"text","text":"请处理 @TEA-9 并进入 Mnemon 协作流程。"}]}}`,
+	}, "\n") + "\n"
+	var out strings.Builder
+
+	err := runRuntime(runtimeConfig{
+		Env: []string{
+			"MULTICA_TASK_ID=task-tagged",
+			"MULTICA_AGENT_ID=agent-1",
+			"MULTICA_AGENT_NAME=Reviewer",
+			"MNEMON_MULTICA_BIN=" + multicaBin,
+			"MNEMON_CONTROL_ADDR=" + server.URL,
+			"MNEMON_CONTROL_PRINCIPAL=reviewer@team",
+			"MNEMON_MULTICA_PROVIDER_RUNTIME=codex",
+			"MNEMON_MULTICA_PROVIDER_COMMAND=" + providerBin,
+			"FAKE_CODEX_APP_SERVER_LOG=" + providerLogPath,
+			"FAKE_MULTICA_LOG=" + logPath,
+		},
+		CWD:    tmp,
+		Stdin:  strings.NewReader(input),
+		Stdout: &out,
+		Now:    fixedRuntimeTime,
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	for key, want := range map[string]string{
-		"MULTICA_ISSUE_ID":                "issue-imported",
-		"MULTICA_TASK_ID":                 "task-imported",
-		"MNEMON_MULTICA_ISSUE_IDENTIFIER": "TEA-42",
-		"MNEMON_MULTICA_ISSUE_TITLE":      "中文协作验收",
-		"MNEMON_MULTICA_ISSUE_STATUS":     "recorded",
-		"MNEMON_MULTICA_PRINCIPAL":        "planner@team",
-	} {
-		if got[key] != want {
-			t.Fatalf("%s = %q, want %q (env=%v)", key, got[key], want, env)
-		}
-		if counts[key] != 1 {
-			t.Fatalf("%s appears %d times in env=%v", key, counts[key], env)
-		}
+	env := <-received
+	if env.ExternalID != "multica-task-task-tagged" {
+		t.Fatalf("unexpected ingest external id: %+v", env)
+	}
+	if got := readFile(t, providerLogPath); strings.TrimSpace(got) != "" {
+		t.Fatalf("turn issue gate started provider before mnemond import:\n%s", got)
+	}
+	if !strings.Contains(out.String(), "Mnemon Multica runtime handled issue") {
+		t.Fatalf("runtime output did not include Mnemon result:\n%s", out.String())
 	}
 }
 
-func TestProviderPromptFallsBackToIssueWhenTurnInputIsEmpty(t *testing.T) {
-	got := providerPrompt(multicasurface.RuntimeInput{}, runtimeImportResult{
-		IssueID:    "issue-1",
-		Identifier: "TEA-1",
-		Title:      "中文复用上下文评审",
-		Statement:  "请复用上一轮风险结论，并给出下一步。",
-	})
-	for _, want := range []string{"TEA-1", "中文复用上下文评审", "请复用上一轮风险结论"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("provider prompt missing %q:\n%s", want, got)
-		}
+func TestRuntimeProviderCommandDefaultsToCodexJSONRPC(t *testing.T) {
+	if got := runtimeProviderCommand(nil); got != "codex app-server --listen stdio://" {
+		t.Fatalf("default provider command = %q", got)
+	}
+	if got := runtimeProviderCommand([]string{"MNEMON_MULTICA_PROVIDER_RUNTIME=codex-jsonrpc"}); got != "codex app-server --listen stdio://" {
+		t.Fatalf("codex-jsonrpc provider command = %q", got)
+	}
+	if got := runtimeProviderCommand([]string{"MNEMON_MULTICA_PROVIDER_RUNTIME=unknown"}); got != "" {
+		t.Fatalf("unknown provider command = %q", got)
 	}
 }
 
@@ -267,17 +291,39 @@ esac
 	return path
 }
 
-func writeFakeProvider(t *testing.T) string {
+func writeFakeCodexAppServer(t *testing.T, logPath string) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "provider")
+	path := filepath.Join(t.TempDir(), "fake-codex-app-server")
 	body := `#!/bin/sh
 set -eu
-cat > "$FAKE_PROVIDER_INPUT"
-printf '%s\n' "$FAKE_PROVIDER_OUTPUT"
+: > "$FAKE_CODEX_APP_SERVER_LOG"
+while IFS= read -r line; do
+  printf '%s\n' "$line" >> "$FAKE_CODEX_APP_SERVER_LOG"
+  case "$line" in
+    *'"method":"initialize"'*)
+      printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"provider":"fake-codex","userAgent":"fake-codex/0.1"}}'
+      ;;
+    *'"method":"thread/start"'*)
+      printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"thread":{"id":"thread-fake","sessionId":"thread-fake","status":{"type":"idle"}}}}'
+      printf '%s\n' '{"jsonrpc":"2.0","method":"thread/started","params":{"thread":{"id":"thread-fake","sessionId":"thread-fake","status":{"type":"idle"}}}}'
+      ;;
+    *'"method":"turn/start"'*)
+      printf '%s\n' '{"jsonrpc":"2.0","id":3,"result":{"turn":{"id":"turn-fake","status":"inProgress","items":[]}}}'
+      printf '%s\n' '{"jsonrpc":"2.0","method":"turn/started","params":{"threadId":"thread-fake","turn":{"id":"turn-fake","status":"inProgress","items":[]}}}'
+      printf '%s\n' '{"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"threadId":"thread-fake","turnId":"turn-fake","itemId":"msg-fake","delta":"原生 provider 输出：已读取中文 turn"}}'
+      printf '%s\n' '{"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":"thread-fake","turn":{"id":"turn-fake","status":"completed","items":[]}}}'
+      exit 0
+      ;;
+  esac
+done
 `
 	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(logPath, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FAKE_CODEX_APP_SERVER_LOG", logPath)
 	return path
 }
 

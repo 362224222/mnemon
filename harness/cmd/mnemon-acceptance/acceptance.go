@@ -1185,7 +1185,7 @@ func setupR1CodexSyncAgents(ctx context.Context, runRoot, binDir string, hub r1S
 		if i-1 >= len(hub.Tokens) {
 			return nil, fmt.Errorf("hub token missing for agent %d", i)
 		}
-		if err := upsertSyncRemote(filepath.Join(workspace, ".mnemon", "harness", "sync", "remotes.json"), workspace, "hub", exchange.RemoteBackendHTTP, "", hub.URL, "", "", hub.Tokens[i-1], "", ""); err != nil {
+		if err := upsertSyncRemote(filepath.Join(workspace, ".mnemon", "harness", "sync", "remotes.json"), workspace, "hub", exchange.RemoteBackendHTTP, "", hub.URL, hub.Tokens[i-1], "", ""); err != nil {
 			return nil, err
 		}
 		loaded, err := access.LoadBindingFile(workspace, filepath.Join(workspace, access.DefaultBindingFile))

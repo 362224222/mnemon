@@ -434,53 +434,24 @@ func TestSyncConnectWritesRemoteConfigWithoutLeakingToken(t *testing.T) {
 	}
 }
 
-func TestSyncConnectWritesGitHubRemoteConfigWithoutLeakingToken(t *testing.T) {
+func TestSyncConnectRejectsGitHubBackend(t *testing.T) {
 	restoreSyncFlags(t)
 	root := t.TempDir()
 	syncRoot = root
-	syncRemoteBackend = exchange.RemoteBackendGitHub
-	syncRemoteDirection = exchange.RemoteDirectionPublish
-	syncGitHubRepo = "mnemon-dev/mnemon-teamwork-example"
-	syncGitHubBranch = "mnemon/mnemond-a"
-	syncRemoteToken = "secret-github-token"
+	syncRemoteBackend = "github"
+	syncRemoteToken = "secret-remote-token"
 	var out bytes.Buffer
 	cmd := mustTestCommand(t)
 	cmd.SetOut(&out)
-	if err := runSyncConnect(cmd, []string{"self"}); err != nil {
-		t.Fatalf("sync connect github: %v", err)
+	err := runSyncConnect(cmd, []string{"self"})
+	if err == nil || !strings.Contains(err.Error(), "unsupported Remote Workspace backend") {
+		t.Fatalf("sync connect github backend must fail closed, got %v", err)
 	}
-	if strings.Contains(out.String(), "secret-github-token") {
+	if strings.Contains(out.String(), "secret-remote-token") {
 		t.Fatalf("sync connect output must not expose token:\n%s", out.String())
 	}
-	config := string(mustReadCmd(t, filepath.Join(root, ".mnemon", "harness", "sync", "remotes.json")))
-	for _, want := range []string{
-		`"backend": "github"`,
-		`"direction": "publish"`,
-		`"id": "self"`,
-		`"repo": "mnemon-dev/mnemon-teamwork-example"`,
-		`"branch": "mnemon/mnemond-a"`,
-		`"credential_ref": ".mnemon/harness/sync/credentials/self.token"`,
-	} {
-		if !strings.Contains(config, want) {
-			t.Fatalf("sync connect github config missing %q:\n%s", want, config)
-		}
-	}
-	if strings.Contains(config, "secret-github-token") || strings.Contains(config, "endpoint") {
-		t.Fatalf("github remote config must not leak token or write an endpoint:\n%s", config)
-	}
-	syncRemoteBackend = ""
-	syncRemoteDirection = ""
-	syncGitHubRepo = ""
-	syncGitHubBranch = ""
-	syncRemoteToken = ""
-	remote, err := resolveSyncRemote()
-	if err != nil {
-		t.Fatalf("resolve github remote: %v", err)
-	}
-	if remote.ID != "self" || remote.Backend != exchange.RemoteBackendGitHub ||
-		remote.Repo != "mnemon-dev/mnemon-teamwork-example" || remote.Branch != "mnemon/mnemond-a" ||
-		remote.Token != "secret-github-token" {
-		t.Fatalf("github remote not resolved: %+v", remote)
+	if _, err := os.Stat(filepath.Join(root, ".mnemon", "harness", "sync", "remotes.json")); !os.IsNotExist(err) {
+		t.Fatalf("unsupported backend must not write remotes.json, err=%v", err)
 	}
 }
 
@@ -580,8 +551,6 @@ func restoreSyncFlags(t *testing.T) {
 	oldRemoteToken := syncRemoteToken
 	oldRemoteTokenFile := syncRemoteTokenFile
 	oldCAFile := syncCAFile
-	oldGitHubRepo := syncGitHubRepo
-	oldGitHubBranch := syncGitHubBranch
 	oldAllowInsecure := syncAllowInsecure
 	t.Cleanup(func() {
 		syncRoot = oldRoot
@@ -594,8 +563,6 @@ func restoreSyncFlags(t *testing.T) {
 		syncRemoteToken = oldRemoteToken
 		syncRemoteTokenFile = oldRemoteTokenFile
 		syncCAFile = oldCAFile
-		syncGitHubRepo = oldGitHubRepo
-		syncGitHubBranch = oldGitHubBranch
 		syncAllowInsecure = oldAllowInsecure
 	})
 	syncRoot = "."
@@ -608,8 +575,6 @@ func restoreSyncFlags(t *testing.T) {
 	syncRemoteToken = ""
 	syncRemoteTokenFile = ""
 	syncCAFile = ""
-	syncGitHubRepo = ""
-	syncGitHubBranch = ""
 	syncAllowInsecure = false
 }
 

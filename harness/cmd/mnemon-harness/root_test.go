@@ -23,7 +23,7 @@ func TestRootHelpUsesLocalFirstProductSurface(t *testing.T) {
 		t.Fatalf("root help returned error: %v", err)
 	}
 	got := out.String()
-	for _, want := range []string{"event-driven", "collaboration substrate", "Teamwork is a profile", "Agent Integration", "Local Mnemon", "setup", "config", "daemon", "doctor", "status", "session", "agent", "connect"} {
+	for _, want := range []string{"event-driven", "collaboration substrate", "Teamwork is a profile", "Agent Integration", "Local Mnemon", "setup", "config", "daemon", "doctor", "status", "session", "agent", "connect", "hub"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("expected root help to contain %q:\n%s", want, got)
 		}
@@ -42,7 +42,7 @@ func TestRootHelpUsesLocalFirstProductSurface(t *testing.T) {
 
 func TestPublicRootCommandsMatchProductSurface(t *testing.T) {
 	got := publicRootCommandNames()
-	want := []string{"agent", "config", "connect", "daemon", "doctor", "session", "setup", "status"}
+	want := []string{"agent", "config", "connect", "daemon", "doctor", "hub", "session", "setup", "status"}
 	sort.Strings(want)
 	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("public root commands mismatch:\ngot:  %v\nwant: %v", got, want)
