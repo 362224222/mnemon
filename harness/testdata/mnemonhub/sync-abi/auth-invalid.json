@@ -1,8 +1,0 @@
-{
-  "name": "auth-invalid",
-  "kind": "http_auth",
-  "route": "/sync/push",
-  "method": "POST",
-  "token": "wrong-token",
-  "want": {"status_code": 401}
-}

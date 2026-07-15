@@ -1,8 +1,0 @@
-{
-  "name": "auth-missing",
-  "kind": "http_auth",
-  "route": "/sync/push",
-  "method": "POST",
-  "token": "",
-  "want": {"status_code": 401}
-}

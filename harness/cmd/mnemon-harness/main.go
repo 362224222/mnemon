@@ -11,14 +11,12 @@ import (
 
 var version = "dev"
 
-const helpText = `mnemond is the sole local controller for an R5 managed Agent.
-
-It owns Node, Event, Work, Handling, and Artifact state.
+const helpText = `mnemon-harness is the project-local client for mnemond-managed Teamwork.
 
 Usage:
-  mnemond
-  mnemond --help
-  mnemond --version
+  mnemon-harness
+  mnemon-harness --help
+  mnemon-harness --version
 
 This clean-cut R5 build currently exposes lifecycle probes only.
 `
@@ -28,7 +26,7 @@ func main() {
 	defer stop()
 
 	if err := run(ctx, os.Args[1:], os.Stdout, os.Stderr); err != nil {
-		fmt.Fprintf(os.Stderr, "mnemond: %v\n", err)
+		fmt.Fprintf(os.Stderr, "mnemon-harness: %v\n", err)
 		os.Exit(1)
 	}
 }
@@ -50,7 +48,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		_, err := io.WriteString(stdout, helpText)
 		return err
 	case "--version", "version":
-		_, err := fmt.Fprintf(stdout, "mnemond version %s\n", version)
+		_, err := fmt.Fprintf(stdout, "mnemon-harness version %s\n", version)
 		return err
 	default:
 		return fmt.Errorf("unsupported command %q", args[0])

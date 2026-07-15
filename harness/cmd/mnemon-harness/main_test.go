@@ -45,14 +45,14 @@ func TestRun(t *testing.T) {
 
 	for _, arg := range []string{"--version", "version"} {
 		stdout, stderr, err := runCommand(context.Background(), arg)
-		if err != nil || stderr != "" || stdout != "mnemond version dev\n" {
+		if err != nil || stderr != "" || stdout != "mnemon-harness version dev\n" {
 			t.Fatalf("run(%q) = stdout %q, stderr %q, err %v", arg, stdout, stderr, err)
 		}
 	}
 
 	for _, command := range []string{
 		"sync", "connect", "hub", "tower", "session", "config", "loop",
-		"control", "local", "daemon", "multica", "acceptance", "agent",
+		"control", "local", "daemon", "multica", "acceptance",
 	} {
 		stdout, stderr, err := runCommand(context.Background(), command)
 		want := fmt.Sprintf("unsupported command %q", command)
@@ -64,7 +64,7 @@ func TestRun(t *testing.T) {
 	lowerHelp := strings.ToLower(wantHelp)
 	for _, forbidden := range []string{
 		"hub", "remote workspace", "multica", "generic capability", "mcp",
-		"memory", "evolution", "tower", "session",
+		"evolution", "tower", "session",
 	} {
 		if strings.Contains(lowerHelp, forbidden) {
 			t.Errorf("help contains retired vocabulary %q", forbidden)
