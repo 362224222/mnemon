@@ -133,6 +133,57 @@ func TestIdentityConcurrentCreateConvergesWithoutClobber(t *testing.T) {
 	assertOnlyIdentityKey(t, nodeState)
 }
 
+func TestIdentityRestartCleansReservedCrashStaging(t *testing.T) {
+	t.Run("before canonical publication", func(t *testing.T) {
+		nodeState := newIdentityNodeState(t)
+		staged := filepath.Join(nodeState, ".identity-00000000000000000000000000000000.tmp")
+		if err := os.WriteFile(staged, validIdentityEncoding(t), identityKeyMode); err != nil {
+			t.Fatal(err)
+		}
+		identity, err := EnsureIdentity(nodeState)
+		if err != nil || identity.PeerID().IsZero() {
+			t.Fatalf("EnsureIdentity() = (%v, %v)", identity, err)
+		}
+		assertOnlyIdentityKey(t, nodeState)
+	})
+	t.Run("after canonical publication", func(t *testing.T) {
+		nodeState := newIdentityNodeState(t)
+		identity, err := EnsureIdentity(nodeState)
+		if err != nil {
+			t.Fatal(err)
+		}
+		staged := filepath.Join(nodeState, ".identity-11111111111111111111111111111111.tmp")
+		if err := os.Link(filepath.Join(nodeState, identityKeyName), staged); err != nil {
+			t.Fatal(err)
+		}
+		restarted, err := LoadIdentity(nodeState)
+		if err != nil || restarted.PeerID() != identity.PeerID() {
+			t.Fatalf("LoadIdentity() = (%v, %v)", restarted, err)
+		}
+		assertOnlyIdentityKey(t, nodeState)
+	})
+	t.Run("unsafe staging fails closed", func(t *testing.T) {
+		nodeState := newIdentityNodeState(t)
+		target := filepath.Join(t.TempDir(), "outside.key")
+		if err := os.WriteFile(target, []byte("do not follow"), identityKeyMode); err != nil {
+			t.Fatal(err)
+		}
+		staged := filepath.Join(nodeState, ".identity-22222222222222222222222222222222.tmp")
+		if err := os.Symlink(target, staged); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := EnsureIdentity(nodeState); !errors.Is(err, ErrIdentity) {
+			t.Fatalf("EnsureIdentity() error = %v", err)
+		}
+		if raw, err := os.ReadFile(target); err != nil || string(raw) != "do not follow" {
+			t.Fatalf("unsafe staging target changed: %q, %v", raw, err)
+		}
+		if _, err := os.Lstat(filepath.Join(nodeState, identityKeyName)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("unsafe staging created an identity: %v", err)
+		}
+	})
+}
+
 func TestIdentityRejectsUnsafeStateAndKeyPaths(t *testing.T) {
 	t.Run("relative Node state", func(t *testing.T) {
 		if _, err := EnsureIdentity("relative/node"); !errors.Is(err, ErrIdentity) {

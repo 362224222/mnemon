@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"syscall"
 
 	libp2pcrypto "github.com/libp2p/go-libp2p/core/crypto"
@@ -28,6 +29,8 @@ const (
 )
 
 var ErrIdentity = errors.New("mnemond Node identity")
+
+var identityProcessMu sync.Mutex
 
 // Identity is the one persistent cryptographic identity of an R5 Node. The
 // libp2p PeerID and Event publication signer are deliberately derived from the
@@ -76,6 +79,13 @@ func EnsureIdentity(nodeState string) (*Identity, error) {
 		return nil, err
 	}
 	defer handle.close()
+	if err := handle.lock(); err != nil {
+		return nil, err
+	}
+	defer handle.unlock()
+	if err := handle.cleanupStaging(); err != nil {
+		return nil, err
+	}
 
 	identity, err := handle.load()
 	if err == nil {
@@ -108,6 +118,13 @@ func LoadIdentity(nodeState string) (*Identity, error) {
 		return nil, err
 	}
 	defer handle.close()
+	if err := handle.lock(); err != nil {
+		return nil, err
+	}
+	defer handle.unlock()
+	if err := handle.cleanupStaging(); err != nil {
+		return nil, err
+	}
 	return handle.load()
 }
 
@@ -117,6 +134,7 @@ type identityNodeState struct {
 	root     *os.Root
 	dir      *os.File
 	ownerUID uint32
+	locked   bool
 }
 
 func openIdentityNodeState(path string) (*identityNodeState, error) {
@@ -165,6 +183,93 @@ func (state *identityNodeState) close() {
 	if state.root != nil {
 		_ = state.root.Close()
 	}
+}
+
+func (state *identityNodeState) lock() error {
+	if state == nil || state.dir == nil {
+		return identityError("lock Node state", errors.New("directory is unavailable"))
+	}
+	identityProcessMu.Lock()
+	if err := unix.Flock(int(state.dir.Fd()), unix.LOCK_EX); err != nil {
+		identityProcessMu.Unlock()
+		return identityError("lock Node state", err)
+	}
+	if err := state.validateLive(); err != nil {
+		_ = unix.Flock(int(state.dir.Fd()), unix.LOCK_UN)
+		identityProcessMu.Unlock()
+		return err
+	}
+	state.locked = true
+	return nil
+}
+
+func (state *identityNodeState) unlock() {
+	if state != nil && state.dir != nil && state.locked {
+		state.locked = false
+		_ = unix.Flock(int(state.dir.Fd()), unix.LOCK_UN)
+		identityProcessMu.Unlock()
+	}
+}
+
+// cleanupStaging makes identity publication crash-convergent. The staging
+// namespace is private to this module; the directory lock prevents removing a
+// live concurrent creator's file. Unsafe entries fail closed instead of being
+// followed or silently discarded.
+func (state *identityNodeState) cleanupStaging() error {
+	if err := state.validateLive(); err != nil {
+		return err
+	}
+	directory, err := state.root.Open(".")
+	if err != nil {
+		return identityError("scan staged keys", err)
+	}
+	entries, err := directory.ReadDir(-1)
+	closeErr := directory.Close()
+	if err != nil {
+		return identityError("scan staged keys", err)
+	}
+	if closeErr != nil {
+		return identityError("scan staged keys", closeErr)
+	}
+	removed := false
+	for _, entry := range entries {
+		if !isIdentityTempName(entry.Name()) {
+			continue
+		}
+		info, err := state.root.Lstat(entry.Name())
+		if err != nil {
+			return identityError("inspect staged key", err)
+		}
+		ownerUID, err := validateIdentityOwnerPath(info, identityKeyMode, false)
+		if err != nil || ownerUID != state.ownerUID {
+			if err == nil {
+				err = errors.New("staged key owner differs from Node state owner")
+			}
+			return identityError("inspect staged key", err)
+		}
+		if err := state.root.Remove(entry.Name()); err != nil {
+			return identityError("remove staged key", err)
+		}
+		removed = true
+	}
+	if removed {
+		if err := state.dir.Sync(); err != nil {
+			return identityError("sync staged key cleanup", err)
+		}
+	}
+	return state.validateLive()
+}
+
+func isIdentityTempName(name string) bool {
+	const prefix = ".identity-"
+	const suffix = ".tmp"
+	if len(name) != len(prefix)+32+len(suffix) || name[:len(prefix)] != prefix ||
+		name[len(name)-len(suffix):] != suffix {
+		return false
+	}
+	hexValue := name[len(prefix) : len(name)-len(suffix)]
+	decoded, err := hex.DecodeString(hexValue)
+	return err == nil && hex.EncodeToString(decoded) == hexValue
 }
 
 func (state *identityNodeState) load() (*Identity, error) {
