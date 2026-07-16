@@ -172,7 +172,11 @@ func (controller *Controller) Serve(ctx context.Context) error {
 	controller.served = true
 	controller.serveMu.Unlock()
 
-	listener, err := localapi.ListenOwnerUnix(filepath.Join(controller.nodeState, "control.sock"))
+	socketPath := filepath.Join(controller.nodeState, "control.sock")
+	if _, err := localapi.RemoveStaleOwnerUnix(ctx, socketPath); err != nil {
+		return err
+	}
+	listener, err := localapi.ListenOwnerUnix(socketPath)
 	if err != nil {
 		return err
 	}
