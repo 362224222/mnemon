@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"sync"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 )
@@ -14,6 +15,7 @@ import (
 const (
 	RouteHealth         = "/v1/health"
 	RouteAuthority      = "/v1/authority"
+	RouteShutdown       = "/v1/shutdown"
 	RouteHookCheck      = "/v1/hook/check"
 	RouteAgentCurrent   = "/v1/agent/current"
 	RouteTeamworkAction = "/v1/teamwork/action"
@@ -32,6 +34,8 @@ type Server struct {
 	service       Service
 	health        HealthProvider
 	authority     AuthorityProvider
+	lifecycle     LifecycleFunc
+	shutdownOnce  sync.Once
 	handler       http.Handler
 }
 
@@ -45,7 +49,7 @@ func NewServer(authenticator Authenticator, service Service,
 	if len(healthProviders) == 1 {
 		health = healthProviders[0]
 	}
-	return newServer(authenticator, service, health, nil)
+	return newServer(authenticator, service, health, nil, nil)
 }
 
 // NewServerWithAuthority composes the controller-only observation route while
@@ -56,11 +60,22 @@ func NewServerWithAuthority(authenticator Authenticator, service Service,
 	if health == nil || authority == nil {
 		return nil, errors.New("local API: health and authority providers are required")
 	}
-	return newServer(authenticator, service, health, authority)
+	return newServer(authenticator, service, health, authority, nil)
+}
+
+// NewServerWithLifecycle composes all owner-only controller routes without
+// changing the smaller NewServer and NewServerWithAuthority boundaries.
+func NewServerWithLifecycle(authenticator Authenticator, service Service,
+	health HealthProvider, authority AuthorityProvider, lifecycle LifecycleFunc,
+) (*Server, error) {
+	if health == nil || authority == nil || lifecycle == nil {
+		return nil, errors.New("local API: health, authority and lifecycle providers are required")
+	}
+	return newServer(authenticator, service, health, authority, lifecycle)
 }
 
 func newServer(authenticator Authenticator, service Service, health HealthProvider,
-	authority AuthorityProvider,
+	authority AuthorityProvider, lifecycle LifecycleFunc,
 ) (*Server, error) {
 	if authenticator == nil || service == nil {
 		return nil, errors.New("local API: authenticator and service are required")
@@ -71,10 +86,11 @@ func newServer(authenticator Authenticator, service Service, health HealthProvid
 		}
 	}
 	server := &Server{authenticator: authenticator, service: service, health: health,
-		authority: authority}
+		authority: authority, lifecycle: lifecycle}
 	mux := http.NewServeMux()
 	mux.HandleFunc(RouteHealth, server.handleHealth)
 	mux.HandleFunc(RouteAuthority, server.handleAuthority)
+	mux.HandleFunc(RouteShutdown, server.handleShutdown)
 	mux.HandleFunc(RouteHookCheck, server.handleHookCheck)
 	mux.HandleFunc(RouteAgentCurrent, server.handleAgentCurrent)
 	mux.HandleFunc(RouteTeamworkAction, server.handleTeamworkAction)
@@ -88,6 +104,45 @@ func newServer(authenticator Authenticator, service Service, health HealthProvid
 		mux.ServeHTTP(writer, request)
 	})
 	return server, nil
+}
+
+func (s *Server) handleShutdown(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		writer.Header().Set("Allow", http.MethodPost)
+		writeErrorStatus(writer, http.StatusMethodNotAllowed,
+			NewAPIError(CodeInvalidArgument, "method is not allowed"))
+		return
+	}
+	if request.ContentLength != 0 || len(request.TransferEncoding) != 0 ||
+		request.Header.Get("Content-Type") != "" {
+		writeError(writer, NewAPIError(CodeInvalidArgument,
+			"shutdown request must not contain content"))
+		return
+	}
+	if request.URL.RawQuery != "" {
+		writeError(writer, NewAPIError(CodeInvalidArgument,
+			"shutdown request must not contain a query"))
+		return
+	}
+	if request.Body != nil {
+		raw, err := io.ReadAll(io.LimitReader(request.Body, 1))
+		if err != nil || len(raw) != 0 {
+			writeError(writer, NewAPIError(CodeInvalidArgument,
+				"shutdown request must not contain content"))
+			return
+		}
+	}
+	if _, apiErr := authenticateRequest(request.Context(), request, s.authenticator,
+		headerPolicy{}); apiErr != nil {
+		writeError(writer, apiErr)
+		return
+	}
+	if s.lifecycle == nil {
+		writeError(writer, NewAPIError(CodeInternal, "lifecycle provider is unavailable"))
+		return
+	}
+	writeResponse(writer, http.StatusOK, newShutdownResponse())
+	s.shutdownOnce.Do(s.lifecycle)
 }
 
 func (s *Server) Handler() http.Handler { return s.handler }
@@ -373,7 +428,7 @@ func IsAgentRoute(path string) bool {
 }
 
 func IsControlRoute(path string) bool {
-	return path == RouteHealth || path == RouteAuthority || IsAgentRoute(path)
+	return path == RouteHealth || path == RouteAuthority || path == RouteShutdown || IsAgentRoute(path)
 }
 
 func validTeamworkAction(action string) bool {

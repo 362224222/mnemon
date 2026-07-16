@@ -298,6 +298,77 @@ func TestClientProbeHealthUsesGETAuthenticationAndNoCapabilities(t *testing.T) {
 	}
 }
 
+func TestClientShutdownUsesEmptyAuthenticatedPOSTAndCanonicalResponse(t *testing.T) {
+	t.Parallel()
+	nodeState := newClientNodeState(t)
+	credential := repeatedOpaqueBytes(0x8a)
+	installClientCredential(t, nodeState, credential)
+	requestSeen := make(chan error, 1)
+	stop := serveRawClientControl(t, nodeState, http.HandlerFunc(func(writer http.ResponseWriter,
+		request *http.Request,
+	) {
+		body, err := io.ReadAll(request.Body)
+		if err == nil && (request.Method != http.MethodPost || request.URL.Path != RouteShutdown ||
+			request.URL.RawQuery != "" || request.ContentLength != 0 || len(request.TransferEncoding) != 0 ||
+			len(body) != 0 || request.Header.Get("Content-Type") != "" ||
+			request.Header.Get(operationKeyHeader) != "" || request.Header.Get(claimContextHeader) != "" ||
+			request.Header.Get(runAttachmentHeader) != "" ||
+			request.Header.Get(authorizationHeader) != profileScheme+encodeSecret(credential)) {
+			err = errors.New("shutdown request violates the closed lifecycle transport")
+		}
+		requestSeen <- err
+		writeResponse(writer, http.StatusOK, newShutdownResponse())
+	}))
+	defer stop()
+	client, err := NewClient(nodeState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, apiErr := client.Shutdown(context.Background())
+	if apiErr != nil || response != newShutdownResponse() {
+		t.Fatalf("Shutdown() = %#v, %#v", response, apiErr)
+	}
+	if err := <-requestSeen; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestClientShutdownRejectsNoncanonicalOrOpenResponses(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "unknown field", body: `{"peer_id":"secret","schema_version":1,"status":"stopping"}` + "\n"},
+		{name: "unsupported schema", body: `{"schema_version":2,"status":"stopping"}` + "\n"},
+		{name: "invalid status", body: `{"schema_version":1,"status":"stopped"}` + "\n"},
+		{name: "noncanonical", body: `{ "schema_version":1,"status":"stopping"}` + "\n"},
+		{name: "oversize", body: `{"padding":"` + strings.Repeat("x", MaxShutdownResponseBytes) + `"}` + "\n"},
+	}
+	for index, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			nodeState := newClientNodeState(t)
+			credential := repeatedOpaqueBytes(byte(0x8b + index))
+			installClientCredential(t, nodeState, credential)
+			stop := serveRawClientControl(t, nodeState, http.HandlerFunc(func(writer http.ResponseWriter,
+				_ *http.Request,
+			) {
+				writer.Header().Set("Content-Type", "application/json")
+				_, _ = writer.Write([]byte(test.body))
+			}))
+			defer stop()
+			client, err := NewClient(nodeState)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, apiErr := client.Shutdown(context.Background()); apiErr == nil ||
+				apiErr.Code != CodeInternal {
+				t.Fatalf("invalid shutdown response error = %#v", apiErr)
+			}
+		})
+	}
+}
+
 func TestVerifyProfileCredentialBindsTokenToDurableDigest(t *testing.T) {
 	t.Parallel()
 	nodeState := newClientNodeState(t)

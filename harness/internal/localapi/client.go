@@ -158,6 +158,30 @@ func (c *Client) ReadAuthority(ctx context.Context) (AuthorityResponse, *APIErro
 	return response, nil
 }
 
+// Shutdown asks the authenticated controller to stop gracefully. The request
+// deliberately carries no JSON body, content type, operation key, managed
+// context, or Run attachment.
+func (c *Client) Shutdown(ctx context.Context) (ShutdownResponse, *APIError) {
+	var response ShutdownResponse
+	if c == nil || c.http == nil || ctx == nil {
+		return ShutdownResponse{}, invalidControlResponse("local control client is unavailable")
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		"http://mnemond"+RouteShutdown, nil)
+	if err != nil {
+		return ShutdownResponse{}, invalidControlResponse("local control request cannot be created")
+	}
+	request.Header.Set(authorizationHeader,
+		profileScheme+base64.RawURLEncoding.EncodeToString(c.token[:]))
+	if apiErr := c.send(request, &response, MaxShutdownResponseBytes); apiErr != nil {
+		return ShutdownResponse{}, apiErr
+	}
+	if apiErr := validateShutdownResponse(response); apiErr != nil {
+		return ShutdownResponse{}, apiErr
+	}
+	return response, nil
+}
+
 func (c *Client) HookCheck(ctx context.Context) (HookCheckResponse, *APIError) {
 	attachment, apiErr := c.runtimeAttachment()
 	if apiErr != nil {

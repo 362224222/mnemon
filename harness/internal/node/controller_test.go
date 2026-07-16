@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -171,6 +172,73 @@ func TestControllerServesOwnerOnlyManagedRoutesFromOneStore(t *testing.T) {
 	if _, err := os.Lstat(filepath.Join(nodeState, "control.sock")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("control socket remained after shutdown: %v", err)
 	}
+}
+
+func TestControllerAuthenticatedShutdownCompletesResponseThenReturnsAndCleansSocket(t *testing.T) {
+	fixture := newDaemonFixture(t, true)
+	daemon, err := OpenDaemon(context.Background(), DaemonOptions{Workspace: fixture.workspace,
+		Clock: controllerTestClock{fixture.profile.UpdatedAt()}, Install: fixture.install})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer daemon.Close()
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- daemon.Serve(context.Background()) }()
+	socketPath := filepath.Join(fixture.nodeState, "control.sock")
+	waitControllerSocket(t, socketPath, serveDone)
+	client, err := localapi.NewClient(fixture.nodeState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, apiErr := client.Shutdown(context.Background())
+	if apiErr != nil || response.SchemaVersion != localapi.SchemaVersion || response.Status != "stopping" {
+		t.Fatalf("Shutdown() = (%#v, %#v)", response, apiErr)
+	}
+	select {
+	case err := <-serveDone:
+		if err != nil {
+			t.Fatalf("Serve() after authenticated shutdown = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Controller did not stop after authenticated shutdown")
+	}
+	if _, err := os.Lstat(socketPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("control socket remained after authenticated shutdown: %v", err)
+	}
+	if err := daemon.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := store.OpenExisting(context.Background(), filepath.Join(fixture.nodeState, "node.db"))
+	if err != nil {
+		t.Fatalf("daemon shutdown retained Store writer: %v", err)
+	}
+	if err := reopened.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestControllerShutdownSignalIsConcurrentAndIdempotent(t *testing.T) {
+	t.Parallel()
+	controller := &Controller{shutdownRequested: make(chan struct{})}
+	const callers = 64
+	var wait sync.WaitGroup
+	start := make(chan struct{})
+	for range callers {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			<-start
+			controller.requestShutdown()
+		}()
+	}
+	close(start)
+	wait.Wait()
+	select {
+	case <-controller.shutdownRequested:
+	default:
+		t.Fatal("concurrent lifecycle requests did not close the shutdown signal")
+	}
+	controller.requestShutdown()
 }
 
 func testInstallationVerifier(workspace, nodeState string, bundle assets.Bundle) InstallationVerifier {

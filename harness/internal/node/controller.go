@@ -56,10 +56,12 @@ type ControllerOptions struct {
 // traffic. It owns no second domain state: every route reaches the one Store,
 // while CAS and readonly views stay beneath the same Node state directory.
 type Controller struct {
-	nodeState string
-	server    *localapi.Server
-	serveMu   sync.Mutex
-	served    bool
+	nodeState         string
+	server            *localapi.Server
+	shutdownRequested chan struct{}
+	shutdownOnce      sync.Once
+	serveMu           sync.Mutex
+	served            bool
 }
 
 func NewController(options ControllerOptions) (*Controller, error) {
@@ -144,11 +146,21 @@ func NewController(options ControllerOptions) (*Controller, error) {
 		}
 		return authoritySnapshot(current), nil
 	})
-	server, err := localapi.NewServerWithAuthority(options.Store, service, health, authority)
+	controller := &Controller{nodeState: options.NodeState, shutdownRequested: make(chan struct{})}
+	server, err := localapi.NewServerWithLifecycle(options.Store, service, health, authority,
+		localapi.LifecycleFunc(controller.requestShutdown))
 	if err != nil {
 		return nil, err
 	}
-	return &Controller{nodeState: options.NodeState, server: server}, nil
+	controller.server = server
+	return controller, nil
+}
+
+func (controller *Controller) requestShutdown() {
+	if controller == nil || controller.shutdownRequested == nil {
+		return
+	}
+	controller.shutdownOnce.Do(func() { close(controller.shutdownRequested) })
 }
 
 type controllerActivationGate struct {
@@ -202,6 +214,10 @@ func (controller *Controller) Serve(ctx context.Context) error {
 		defer close(shutdownDone)
 		select {
 		case <-ctx.Done():
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = server.Shutdown(shutdownCtx)
+		case <-controller.shutdownRequested:
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			_ = server.Shutdown(shutdownCtx)
