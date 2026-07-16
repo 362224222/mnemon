@@ -128,6 +128,10 @@ func (s *Store) FinalizeAgentCurrentRead(ctx context.Context,
 	if err != nil {
 		return AgentCurrentReadResult{}, err
 	}
+	brief, err := readCurrentWorkBrief(ctx, tx, work)
+	if err != nil {
+		return AgentCurrentReadResult{}, err
+	}
 	if sourceEvent.Source() == model.EventSourceImported && !sourceEvent.Audience().Contains(node.PeerID()) {
 		return AgentCurrentReadResult{}, fmt.Errorf("%w: imported source Event does not address the local Node", ErrCurrentReadInvariant)
 	}
@@ -164,7 +168,8 @@ func (s *Store) FinalizeAgentCurrentRead(ctx context.Context,
 	}
 	currentWork, err := model.NewCurrentWork(model.CurrentWorkSpec{
 		Ref: work.Ref(), Version: work.Version(), Iteration: work.Iteration(),
-		DeadlineUnixNano: work.DeadlineUnixNano(), State: work.State(), StateData: work.StateData(), LocalRole: role,
+		DeadlineUnixNano: work.DeadlineUnixNano(), State: work.State(), StateData: work.StateData(),
+		LocalRole: role, Brief: brief,
 	})
 	if err != nil {
 		return AgentCurrentReadResult{}, fmt.Errorf("%w: Work projection: %v", ErrCurrentReadInvariant, err)
@@ -181,6 +186,10 @@ func (s *Store) FinalizeAgentCurrentRead(ctx context.Context,
 	if len(projection.CanonicalJSON().Bytes()) > budget.Spec().MaxCurrentJSONBytes {
 		return AgentCurrentReadResult{}, fmt.Errorf("%w: projection has %d bytes, Profile budget is %d",
 			ErrCurrentReadTooLarge, len(projection.CanonicalJSON().Bytes()), budget.Spec().MaxCurrentJSONBytes)
+	}
+	if len(projection.ArtifactRefs()) > budget.Spec().MaxCurrentArtifactRefs {
+		return AgentCurrentReadResult{}, fmt.Errorf("%w: projection has %d Artifact refs, Profile budget is %d",
+			ErrCurrentReadTooLarge, len(projection.ArtifactRefs()), budget.Spec().MaxCurrentArtifactRefs)
 	}
 	receipt, err := model.NewCurrentReadReceipt(model.CurrentReadReceiptSpec{
 		RunID: run.ID(), ProfileID: run.ProfileID(), HandlingID: handling.ID(),
@@ -284,6 +293,71 @@ func localCurrentRole(local model.PeerID, work model.ReviewWork) (model.CurrentR
 	}
 }
 
+func readCurrentWorkBrief(ctx context.Context, q rowQuerier,
+	work model.ReviewWork,
+) (model.CurrentBrief, error) {
+	var count int
+	var eventText sql.NullString
+	err := q.QueryRowContext(ctx, `SELECT COUNT(*),MIN(event_id) FROM events
+		WHERE work_home_peer_id=? AND work_id=? AND origin_peer_id=? AND event_type='review.offered'`,
+		work.Ref().HomePeerID().String(), work.Ref().WorkID().String(), work.Ref().HomePeerID().String()).
+		Scan(&count, &eventText)
+	if err != nil {
+		return model.CurrentBrief{}, fmt.Errorf("%w: locate offered Work brief: %v", ErrCurrentReadInvariant, err)
+	}
+	if count != 1 || !eventText.Valid {
+		return model.CurrentBrief{}, fmt.Errorf("%w: Work has %d immutable review.offered Events, want exactly 1",
+			ErrCurrentReadInvariant, count)
+	}
+	eventID, err := model.ParseEventID(eventText.String)
+	if err != nil {
+		return model.CurrentBrief{}, fmt.Errorf("%w: offered Event identity: %v", ErrCurrentReadInvariant, err)
+	}
+	offered, err := readCurrentSourceEvent(ctx, q, eventID)
+	if err != nil {
+		return model.CurrentBrief{}, fmt.Errorf("%w: offered Event evidence: %v", ErrCurrentReadInvariant, err)
+	}
+	participants := work.Participants()
+	if offered.Type() != model.EventReviewOffered || offered.Scope().WorkRef() != work.Ref() ||
+		offered.Scope().ChannelID() != work.ChannelID() ||
+		offered.Scope().PublicationRoster().Revision() != participants.RosterRevision() ||
+		participants.InitiatorPeerID() != work.Ref().HomePeerID() || offered.Audience().Len() != 1 ||
+		!offered.Audience().Contains(participants.ReviewerPeerID()) || offered.AcceptedAt().After(work.UpdatedAt()) {
+		return model.CurrentBrief{}, fmt.Errorf("%w: offered Event does not bind Work participant/history",
+			ErrCurrentReadInvariant)
+	}
+	facts, err := decodeClosedEventPayload(offered)
+	if err != nil || facts.WorkVersion != 1 || facts.Iteration != 1 ||
+		facts.DeadlineUnixNano != work.DeadlineUnixNano() {
+		return model.CurrentBrief{}, fmt.Errorf("%w: offered Event does not bind Work deadline/version/iteration",
+			ErrCurrentReadInvariant)
+	}
+	var payload struct {
+		Content  string `json:"content"`
+		Deadline string `json:"deadline"`
+		versionPayload
+	}
+	if err := decodeExactPayload(offered, &payload); err != nil || payload.Content == "" {
+		return model.CurrentBrief{}, fmt.Errorf("%w: offered Event content is unavailable", ErrCurrentReadInvariant)
+	}
+	if err := requireCurrentArtifacts(ctx, q, offered); err != nil {
+		return model.CurrentBrief{}, err
+	}
+	artifacts := make([]model.CurrentArtifactRef, len(offered.Artifacts()))
+	for index, ref := range offered.Artifacts() {
+		artifacts[index], err = model.NewCurrentArtifactRef(ref.RootDigest())
+		if err != nil {
+			return model.CurrentBrief{}, fmt.Errorf("%w: offered Artifact ref: %v", ErrCurrentReadInvariant, err)
+		}
+	}
+	brief, err := model.NewCurrentBrief(model.CurrentBriefSpec{Content: payload.Content,
+		DeadlineUnixNano: work.DeadlineUnixNano(), ArtifactRefs: artifacts})
+	if err != nil {
+		return model.CurrentBrief{}, fmt.Errorf("%w: offered Work brief: %v", ErrCurrentReadInvariant, err)
+	}
+	return brief, nil
+}
+
 func deriveCurrentActions(role model.CurrentRole, event model.Event, work model.ReviewWork,
 	exactUpdate bool,
 ) []model.OperationKind {
@@ -333,6 +407,44 @@ func requireCurrentArtifacts(ctx context.Context, q rowQuerier, event model.Even
 			return fmt.Errorf("%w: source Event Artifact %s is not pinned by the Event",
 				ErrCurrentReadInvariant, ref.RootDigest().String())
 		}
+		if err := requireCurrentArtifactProvenance(ctx, q, event, ref); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func requireCurrentArtifactProvenance(ctx context.Context, q rowQuerier, event model.Event,
+	ref model.ArtifactRef,
+) error {
+	if ref.Role() == model.ArtifactReferenced {
+		if err := requireReusableArtifactRoot(ctx, q, ref.RootDigest()); err != nil {
+			return fmt.Errorf("%w: referenced Artifact %s has no producer provenance: %v",
+				ErrCurrentReadInvariant, ref.RootDigest().String(), err)
+		}
+		return nil
+	}
+	if ref.Role() != model.ArtifactProduced {
+		return fmt.Errorf("%w: source Event Artifact has invalid role", ErrCurrentReadInvariant)
+	}
+	var origin, relation string
+	var localRun, operation sql.NullString
+	err := q.QueryRowContext(ctx, `SELECT producer_origin_peer_id,relation,local_agent_run_id,operation_id
+		FROM artifact_provenance WHERE root_digest=? AND producer_event_id=?`,
+		ref.RootDigest().String(), event.ID().String()).Scan(&origin, &relation, &localRun, &operation)
+	if err != nil {
+		return fmt.Errorf("%w: produced Artifact %s provenance is unavailable: %v",
+			ErrCurrentReadInvariant, ref.RootDigest().String(), err)
+	}
+	expectedRelation := string(model.ProvenanceReplica)
+	validAuthority := !localRun.Valid && !operation.Valid
+	if event.Source() == model.EventSourceLocal {
+		expectedRelation = string(model.ProvenanceLocalCapture)
+		validAuthority = localRun.Valid && operation.Valid
+	}
+	if origin != event.Scope().OriginPeerID().String() || relation != expectedRelation || !validAuthority {
+		return fmt.Errorf("%w: produced Artifact %s provenance differs from source Event",
+			ErrCurrentReadInvariant, ref.RootDigest().String())
 	}
 	return nil
 }

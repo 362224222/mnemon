@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"strings"
 	"sync"
@@ -29,6 +30,11 @@ func TestFinalizeAgentCurrentReadDerivesAndReplaysDurableProjection(t *testing.T
 		result.Projection.ActionWork().Version() != 1 ||
 		result.Projection.ActionWork().LocalRole() != model.CurrentInitiator {
 		t.Fatalf("current binding = %#v", result.Receipt)
+	}
+	brief, ok := result.Projection.ActionWork().Brief()
+	if !ok || brief.Content() != "Review the production change" ||
+		brief.DeadlineUnixNano() != result.Projection.ActionWork().DeadlineUnixNano() {
+		t.Fatalf("durable offered brief = (%#v, %t)", brief, ok)
 	}
 	wantActions := []model.OperationKind{model.OperationTeamworkCancel, model.OperationResolveRetry}
 	if !sameOperationKinds(result.Projection.AllowedActions(), wantActions) {
@@ -201,6 +207,155 @@ func TestFinalizeAgentCurrentReadIncludesOnlyVerifiedEventPinnedArtifacts(t *tes
 			t.Fatalf("missing Event pin error = %v", err)
 		}
 	})
+}
+
+func TestFinalizeAgentCurrentReadKeepsOfferedBriefAfterAcceptedTransition(t *testing.T) {
+	fixture := newAcceptanceFixture(t, 1)
+	operation, authority := fixture.reserveOffer(t, "current-accepted-brief", nil)
+	root := verifiedRoot(t, "current-accepted-brief-root",
+		`{"entries":[],"kind":"brief","total_bytes":0}`, 0)
+	if _, err := fixture.store.CheckpointVerifiedArtifactRoot(context.Background(), root); err != nil {
+		t.Fatal(err)
+	}
+	checkpointOperationRoot(t, fixture, operation, authority.LeaseOwner, root)
+	artifact, _ := model.NewArtifactRef(root.RootDigest, model.ArtifactProduced)
+	offerSpec := fixture.offer(t, authority, "current-accepted-brief", fixture.reviewers,
+		[]model.ArtifactRef{artifact}, nil)
+	offered := offerSpec.Items[0].Publication.Event()
+	if _, err := fixture.store.CommitLocalAcceptance(context.Background(), offerSpec,
+		fixture.now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	current, err := fixture.store.GetReviewWork(context.Background(), offered.Scope().WorkRef())
+	if err != nil {
+		t.Fatal(err)
+	}
+	acceptedAt := fixture.now.Add(3 * time.Second)
+	scope, publication := controllerAcceptance(t, fixture, current, offered, acceptedAt)
+	nextSpec := current.Spec()
+	nextSpec.Version++
+	nextSpec.State = model.WorkActive
+	nextSpec.StateData = publication.Event().Payload()
+	nextSpec.UpdatedBy = publication.Event().ID()
+	nextSpec.UpdatedAt = acceptedAt
+	next, err := model.NewReviewWork(nextSpec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutation, err := NewWorkTransition(next, current.Version(), current.State())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.CommitLocalAcceptance(context.Background(), LocalAcceptanceSpec{
+		Scope: scope, Controller: true,
+		Items: []LocalAcceptanceItem{{Publication: publication, Work: &mutation}},
+	}, acceptedAt.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	claimAt := acceptedAt.Add(2 * time.Second)
+	insertClaimHandling(t, fixture.store, "handling-current-accepted-brief", publication.Event().ID(),
+		1, claimAt, claimAt, 0)
+	claim := claimCurrent(t, fixture, "owner-current-accepted-brief", "token-current-accepted-brief", claimAt)
+	result, err := fixture.store.FinalizeAgentCurrentRead(context.Background(),
+		currentReadSpec(fixture, claim.Run.ID(), "token-current-accepted-brief", claimAt.Add(time.Second)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	brief, ok := result.Projection.ActionWork().Brief()
+	if !ok || result.Projection.SourceEvent().Type() != model.EventReviewAccepted ||
+		brief.Content() != "Review the production change" || len(brief.ArtifactRefs()) != 1 ||
+		brief.ArtifactRefs()[0].RootDigest() != root.RootDigest || len(result.Receipt.ArtifactRefs()) != 1 ||
+		result.Receipt.ArtifactRefs()[0].RootDigest() != root.RootDigest {
+		t.Fatalf("accepted fresh turn brief/roots = (%#v, %v)", brief, result.Receipt.ArtifactRefs())
+	}
+}
+
+func TestFinalizeAgentCurrentReadKeepsBriefForDerivedRework(t *testing.T) {
+	fixture := newAcceptanceFixture(t, 2)
+	parent, source := seedDerivationParent(t, fixture)
+	contextHash := model.Sum([]byte("current-derived-rework-context"))
+	_, authority := fixture.reserveOffer(t, "current-derived-rework", &contextHash)
+	offerSpec := fixture.offer(t, authority, "current-derived-rework", fixture.reviewers, nil,
+		[]model.EventKey{source})
+	offerSpec.Derivation = &LocalDerivationParent{ChannelID: parent.ChannelID(), WorkRef: parent.Ref(),
+		ExpectedVersion: parent.Version(), UpdatedByEvent: parent.UpdatedBy()}
+	if _, err := fixture.store.CommitLocalAcceptance(context.Background(), offerSpec,
+		fixture.now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	offered := offerSpec.Items[0].Publication.Event()
+	work, err := fixture.store.GetReviewWork(context.Background(), offered.Scope().WorkRef())
+	if err != nil {
+		t.Fatal(err)
+	}
+	node, err := readNode(context.Background(), fixture.store.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var channelHead uint64
+	if err := fixture.store.db.QueryRow(`SELECT source_head_channel_seq FROM publication_epochs
+		WHERE channel_id=? AND origin_peer_id=? AND origin_epoch=?`, fixture.channel.String(),
+		node.PeerID().String(), node.OriginEpoch().String()).Scan(&channelHead); err != nil {
+		t.Fatal(err)
+	}
+	reworkID, _ := model.ParseEventID("event-current-derived-rework-transition")
+	reworkScope, _ := model.NewEventScope(fixture.channel, node.PeerID(), node.OriginEpoch(),
+		node.NextOriginSequence(), channelHead+1, offered.Scope().OriginMember(),
+		offered.Scope().PublicationRoster(), work.Ref())
+	payload, _ := model.NewJSON([]byte(`{"content":"apply the correction","iteration":1,"work_version":4}`))
+	reworkAt := fixture.now.Add(3 * time.Second)
+	rework, err := model.NewEvent(model.EventSpec{ID: reworkID, Scope: reworkScope,
+		Source: model.EventSourceLocal, ActorPrincipal: fixture.profile.Principal(),
+		Type: model.EventReviewReworkRequested, Audience: offered.Audience(), Summary: "Review rework requested",
+		Payload: payload, CausedBy: []model.EventKey{offered.Key()}, CreatedAt: reworkAt, AcceptedAt: reworkAt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := model.NewPublicationBody(rework)
+	publication, err := model.AttachSignature(body, make([]byte, ed25519.SignatureSize))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := fixture.store.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if err := insertAcceptedEvent(context.Background(), tx, publication); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(`UPDATE works SET version=5,iteration=2,state='REWORK',state_json=?,
+		updated_by_event=?,updated_at=? WHERE home_peer_id=? AND work_id=?`, payload.Bytes(), rework.ID().String(),
+		storeTime(reworkAt), work.Ref().HomePeerID().String(), work.Ref().WorkID().String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(`UPDATE node SET next_origin_seq=?,updated_at=? WHERE singleton=1`,
+		node.NextOriginSequence()+1, storeTime(reworkAt)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(`UPDATE publication_epochs SET source_head_channel_seq=?,updated_at=?
+		WHERE channel_id=? AND origin_peer_id=? AND origin_epoch=?`, channelHead+1, storeTime(reworkAt),
+		fixture.channel.String(), node.PeerID().String(), node.OriginEpoch().String()); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	claimAt := reworkAt.Add(time.Second)
+	insertClaimHandling(t, fixture.store, "handling-current-derived-rework", rework.ID(), 1,
+		claimAt, claimAt, 0)
+	claim := claimCurrent(t, fixture, "owner-current-derived-rework", "token-current-derived-rework", claimAt)
+	result, err := fixture.store.FinalizeAgentCurrentRead(context.Background(),
+		currentReadSpec(fixture, claim.Run.ID(), "token-current-derived-rework", claimAt.Add(time.Second)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	brief, ok := result.Projection.ActionWork().Brief()
+	if !ok || brief.Content() != "Review the production change" ||
+		result.Projection.ActionWork().State() != model.WorkRework ||
+		result.Projection.ActionWork().Iteration() != 2 || result.Projection.SourceEvent().Type() != model.EventReviewReworkRequested {
+		t.Fatalf("derived rework fresh turn = (%#v, %#v)", brief, result.Projection.ActionWork())
+	}
 }
 
 func TestDeriveCurrentActionsUsesExactParticipantStateAndSourceEvent(t *testing.T) {

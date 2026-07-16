@@ -45,6 +45,43 @@ func (r CurrentArtifactRef) MarshalJSON() ([]byte, error) {
 	}{r.rootDigest})
 }
 
+type CurrentBriefSpec struct {
+	Content          string
+	DeadlineUnixNano int64
+	ArtifactRefs     []CurrentArtifactRef
+}
+
+// CurrentBrief is the persistent goal/constraints frozen by the Work's one
+// immutable review.offered Event. It survives later state-transition Events.
+type CurrentBrief struct {
+	content          string
+	deadlineUnixNano int64
+	artifacts        []CurrentArtifactRef
+}
+
+func NewCurrentBrief(spec CurrentBriefSpec) (CurrentBrief, error) {
+	if err := validateText("current Work brief", spec.Content, MaxContentBytes, false); err != nil {
+		return CurrentBrief{}, err
+	}
+	if spec.DeadlineUnixNano <= 0 {
+		return CurrentBrief{}, invalid("current Work brief", "positive deadline is required")
+	}
+	artifacts, err := normalizeCurrentArtifactRefs(spec.ArtifactRefs, MaxArtifactRefs)
+	if err != nil {
+		return CurrentBrief{}, err
+	}
+	return CurrentBrief{content: spec.Content, deadlineUnixNano: spec.DeadlineUnixNano,
+		artifacts: artifacts}, nil
+}
+
+func (b CurrentBrief) IsZero() bool            { return b.content == "" || b.deadlineUnixNano <= 0 }
+func (b CurrentBrief) Content() string         { return b.content }
+func (b CurrentBrief) DeadlineUnixNano() int64 { return b.deadlineUnixNano }
+func (b CurrentBrief) Deadline() time.Time     { return time.Unix(0, b.deadlineUnixNano).UTC() }
+func (b CurrentBrief) ArtifactRefs() []CurrentArtifactRef {
+	return append([]CurrentArtifactRef{}, b.artifacts...)
+}
+
 type CurrentEventSpec struct {
 	Key          EventKey
 	Digest       Digest
@@ -73,7 +110,7 @@ func NewCurrentEvent(spec CurrentEventSpec) (CurrentEvent, error) {
 	if spec.Payload.IsZero() || spec.Payload.String()[0] != '{' {
 		return CurrentEvent{}, invalid("current Event payload", "must be a canonical JSON object")
 	}
-	artifacts, err := normalizeCurrentArtifactRefs(spec.ArtifactRefs)
+	artifacts, err := normalizeCurrentArtifactRefs(spec.ArtifactRefs, MaxCurrentArtifactRefs)
 	if err != nil {
 		return CurrentEvent{}, err
 	}
@@ -105,13 +142,16 @@ type CurrentWorkSpec struct {
 	State            WorkState
 	StateData        JSON
 	LocalRole        CurrentRole
+	Brief            CurrentBrief
 }
 
 // CurrentWork is the exact Work version against which an Agent action is
 // admitted. Participant identities stay in the Store; only the derived local
 // role is projected.
 type CurrentWork struct {
-	spec CurrentWorkSpec
+	spec     CurrentWorkSpec
+	brief    CurrentBrief
+	hasBrief bool
 }
 
 func NewCurrentWork(spec CurrentWorkSpec) (CurrentWork, error) {
@@ -136,7 +176,15 @@ func NewCurrentWork(spec CurrentWorkSpec) (CurrentWork, error) {
 	if (spec.State == WorkActive || spec.State == WorkDeclined) && spec.Iteration != 1 {
 		return CurrentWork{}, invariant("current ACTIVE and DECLINED Work must be iteration 1")
 	}
-	return CurrentWork{spec: spec}, nil
+	result := CurrentWork{spec: spec}
+	result.spec.Brief = CurrentBrief{}
+	if !spec.Brief.IsZero() {
+		if spec.Brief.DeadlineUnixNano() != spec.DeadlineUnixNano {
+			return CurrentWork{}, invariant("current Work brief deadline differs from Work deadline")
+		}
+		result.brief, result.hasBrief = spec.Brief, true
+	}
+	return result, nil
 }
 
 func (w CurrentWork) Ref() WorkRef            { return w.spec.Ref }
@@ -147,6 +195,9 @@ func (w CurrentWork) Deadline() time.Time     { return time.Unix(0, w.spec.Deadl
 func (w CurrentWork) State() WorkState        { return w.spec.State }
 func (w CurrentWork) StateData() JSON         { return w.spec.StateData }
 func (w CurrentWork) LocalRole() CurrentRole  { return w.spec.LocalRole }
+func (w CurrentWork) Brief() (CurrentBrief, bool) {
+	return w.brief, w.hasBrief
+}
 
 type CurrentProjectionSpec struct {
 	SourceEvent    CurrentEvent
@@ -161,6 +212,7 @@ type CurrentProjection struct {
 	sourceEvent CurrentEvent
 	actionWork  CurrentWork
 	actions     []OperationKind
+	artifacts   []CurrentArtifactRef
 	canonical   JSON
 	digest      Digest
 }
@@ -172,6 +224,15 @@ func NewCurrentProjection(spec CurrentProjectionSpec) (CurrentProjection, error)
 	if spec.SourceEvent.WorkRef() != spec.ActionWork.Ref() {
 		return CurrentProjection{}, invariant("base current source Event and action Work differ")
 	}
+	brief, hasBrief := spec.ActionWork.Brief()
+	if !hasBrief {
+		var err error
+		brief, err = currentBriefFromOfferedSource(spec.SourceEvent, spec.ActionWork)
+		if err != nil {
+			return CurrentProjection{}, err
+		}
+		spec.ActionWork.brief, spec.ActionWork.hasBrief = brief, true
+	}
 	actions, err := normalizeCurrentActions(spec.AllowedActions)
 	if err != nil {
 		return CurrentProjection{}, err
@@ -179,7 +240,12 @@ func NewCurrentProjection(spec CurrentProjectionSpec) (CurrentProjection, error)
 	if len(actions) == 0 {
 		return CurrentProjection{}, invariant("current projection must allow an action or explicit resolution")
 	}
-	result := CurrentProjection{sourceEvent: spec.SourceEvent, actionWork: spec.ActionWork, actions: actions}
+	authorized, err := mergeCurrentArtifactRefs(brief.ArtifactRefs(), spec.SourceEvent.ArtifactRefs())
+	if err != nil {
+		return CurrentProjection{}, err
+	}
+	result := CurrentProjection{sourceEvent: spec.SourceEvent, actionWork: spec.ActionWork,
+		actions: actions, artifacts: authorized}
 	canonical, err := JSONFrom(currentProjectionWireFrom(result))
 	if err != nil {
 		return CurrentProjection{}, fmt.Errorf("current projection: %w", err)
@@ -195,6 +261,9 @@ func (p CurrentProjection) SourceEvent() CurrentEvent { return p.sourceEvent }
 func (p CurrentProjection) ActionWork() CurrentWork   { return p.actionWork }
 func (p CurrentProjection) AllowedActions() []OperationKind {
 	return append([]OperationKind{}, p.actions...)
+}
+func (p CurrentProjection) ArtifactRefs() []CurrentArtifactRef {
+	return append([]CurrentArtifactRef{}, p.artifacts...)
 }
 func (p CurrentProjection) CanonicalJSON() JSON { return p.canonical }
 func (p CurrentProjection) Digest() Digest      { return p.digest }
@@ -259,7 +328,7 @@ func (r CurrentReadReceipt) ActionWork() WorkRef             { return r.projecti
 func (r CurrentReadReceipt) ActionWorkVersion() uint64       { return r.projection.ActionWork().Version() }
 func (r CurrentReadReceipt) AllowedActions() []OperationKind { return r.projection.AllowedActions() }
 func (r CurrentReadReceipt) ArtifactRefs() []CurrentArtifactRef {
-	return r.projection.SourceEvent().ArtifactRefs()
+	return r.projection.ArtifactRefs()
 }
 func (r CurrentReadReceipt) Projection() CurrentProjection { return r.projection }
 func (r CurrentReadReceipt) ProjectionDigest() Digest      { return r.projection.Digest() }
@@ -270,6 +339,33 @@ func (r CurrentReadReceipt) MarshalJSON() ([]byte, error) {
 		return nil, invalid("current-read receipt", "zero receipt")
 	}
 	return r.canonical.MarshalJSON()
+}
+
+func currentBriefFromOfferedSource(event CurrentEvent, work CurrentWork) (CurrentBrief, error) {
+	if event.Type() != EventReviewOffered || event.WorkRef() != work.Ref() {
+		return CurrentBrief{}, invariant("current Work has no durable offered brief")
+	}
+	var payload struct {
+		Content     string `json:"content"`
+		Deadline    string `json:"deadline"`
+		Iteration   uint8  `json:"iteration"`
+		WorkVersion uint64 `json:"work_version"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(event.Payload().Bytes()))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&payload); err != nil {
+		return CurrentBrief{}, invalid("current offered brief", "payload does not match review.offered")
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return CurrentBrief{}, invalid("current offered brief", "payload contains trailing data")
+	}
+	deadline, err := time.Parse(time.RFC3339Nano, payload.Deadline)
+	if err != nil || deadline.UTC().Format(time.RFC3339Nano) != payload.Deadline ||
+		deadline.UnixNano() != work.DeadlineUnixNano() || payload.WorkVersion != 1 || payload.Iteration != 1 {
+		return CurrentBrief{}, invariant("current offered brief does not bind Work deadline/version/iteration")
+	}
+	return NewCurrentBrief(CurrentBriefSpec{Content: payload.Content,
+		DeadlineUnixNano: work.DeadlineUnixNano(), ArtifactRefs: event.ArtifactRefs()})
 }
 
 func normalizeCurrentActions(actions []OperationKind) ([]OperationKind, error) {
@@ -348,7 +444,14 @@ type currentEventWire struct {
 	WorkRef     currentWorkRefWire    `json:"work_ref"`
 }
 
+type currentBriefWire struct {
+	ArtifactRefs     []currentArtifactWire `json:"offer_artifact_refs"`
+	Content          string                `json:"content"`
+	DeadlineUnixNano int64                 `json:"deadline_unix_nano"`
+}
+
 type currentWorkWire struct {
+	Brief            currentBriefWire   `json:"brief"`
 	DeadlineUnixNano int64              `json:"deadline_unix_nano"`
 	Iteration        uint8              `json:"iteration"`
 	LocalRole        CurrentRole        `json:"local_role"`
@@ -359,10 +462,11 @@ type currentWorkWire struct {
 }
 
 type currentProjectionWire struct {
-	ActionWork     currentWorkWire  `json:"action_work"`
-	AllowedActions []OperationKind  `json:"allowed_actions"`
-	SchemaVersion  int              `json:"schema_version"`
-	SourceEvent    currentEventWire `json:"source_event"`
+	ActionWork     currentWorkWire       `json:"action_work"`
+	AllowedActions []OperationKind       `json:"allowed_actions"`
+	ArtifactRefs   []currentArtifactWire `json:"artifact_refs"`
+	SchemaVersion  int                   `json:"schema_version"`
+	SourceEvent    currentEventWire      `json:"source_event"`
 }
 
 type currentReceiptWire struct {
@@ -384,6 +488,7 @@ type currentReceiptWire struct {
 func currentProjectionWireFrom(projection CurrentProjection) currentProjectionWire {
 	event := projection.SourceEvent()
 	work := projection.ActionWork()
+	brief, _ := work.Brief()
 	return currentProjectionWire{
 		SchemaVersion: SchemaVersion,
 		SourceEvent: currentEventWire{
@@ -394,11 +499,13 @@ func currentProjectionWireFrom(projection CurrentProjection) currentProjectionWi
 			ArtifactRef: artifactWires(event.ArtifactRefs()), AcceptedAt: formatTime(event.AcceptedAt()),
 		},
 		ActionWork: currentWorkWire{
+			Brief: currentBriefWire{ArtifactRefs: artifactWires(brief.ArtifactRefs()),
+				Content: brief.Content(), DeadlineUnixNano: brief.DeadlineUnixNano()},
 			Ref:     currentWorkRefWire{work.Ref().HomePeerID().String(), work.Ref().WorkID().String()},
 			Version: work.Version(), Iteration: work.Iteration(), DeadlineUnixNano: work.DeadlineUnixNano(),
 			State: work.State(), StateData: work.StateData().Bytes(), LocalRole: work.LocalRole(),
 		},
-		AllowedActions: projection.AllowedActions(),
+		AllowedActions: projection.AllowedActions(), ArtifactRefs: artifactWires(projection.ArtifactRefs()),
 	}
 }
 
@@ -478,7 +585,7 @@ func ParseCurrentReadReceipt(raw []byte) (CurrentReadReceipt, error) {
 	if err != nil {
 		return CurrentReadReceipt{}, err
 	}
-	artifacts, err := artifactRefsFromWire(wire.ArtifactRefs)
+	artifacts, err := artifactRefsFromWire(wire.ArtifactRefs, MaxCurrentArtifactRefs)
 	if err != nil {
 		return CurrentReadReceipt{}, err
 	}
@@ -517,7 +624,7 @@ func currentProjectionFromWire(wire currentProjectionWire) (CurrentProjection, e
 	if err != nil {
 		return CurrentProjection{}, err
 	}
-	artifacts, err := artifactRefsFromWire(wire.SourceEvent.ArtifactRef)
+	artifacts, err := artifactRefsFromWire(wire.SourceEvent.ArtifactRef, MaxCurrentArtifactRefs)
 	if err != nil {
 		return CurrentProjection{}, err
 	}
@@ -539,14 +646,34 @@ func currentProjectionFromWire(wire currentProjectionWire) (CurrentProjection, e
 	if err != nil {
 		return CurrentProjection{}, err
 	}
-	work, err := NewCurrentWork(CurrentWorkSpec{Ref: workRef, Version: wire.ActionWork.Version,
-		Iteration: wire.ActionWork.Iteration, DeadlineUnixNano: wire.ActionWork.DeadlineUnixNano,
-		State: wire.ActionWork.State, StateData: state, LocalRole: wire.ActionWork.LocalRole})
+	briefArtifacts, err := artifactRefsFromWire(wire.ActionWork.Brief.ArtifactRefs, MaxArtifactRefs)
 	if err != nil {
 		return CurrentProjection{}, err
 	}
-	return NewCurrentProjection(CurrentProjectionSpec{SourceEvent: event, ActionWork: work,
+	brief, err := NewCurrentBrief(CurrentBriefSpec{Content: wire.ActionWork.Brief.Content,
+		DeadlineUnixNano: wire.ActionWork.Brief.DeadlineUnixNano, ArtifactRefs: briefArtifacts})
+	if err != nil {
+		return CurrentProjection{}, err
+	}
+	work, err := NewCurrentWork(CurrentWorkSpec{Ref: workRef, Version: wire.ActionWork.Version,
+		Iteration: wire.ActionWork.Iteration, DeadlineUnixNano: wire.ActionWork.DeadlineUnixNano,
+		State: wire.ActionWork.State, StateData: state, LocalRole: wire.ActionWork.LocalRole, Brief: brief})
+	if err != nil {
+		return CurrentProjection{}, err
+	}
+	projection, err := NewCurrentProjection(CurrentProjectionSpec{SourceEvent: event, ActionWork: work,
 		AllowedActions: wire.AllowedActions})
+	if err != nil {
+		return CurrentProjection{}, err
+	}
+	authorized, err := artifactRefsFromWire(wire.ArtifactRefs, MaxCurrentArtifactRefs)
+	if err != nil {
+		return CurrentProjection{}, err
+	}
+	if !equalArtifactRefs(authorized, projection.ArtifactRefs()) {
+		return CurrentProjection{}, invariant("current projection Artifact authority differs from brief/Event roots")
+	}
+	return projection, nil
 }
 
 func decodeCurrentWire(raw []byte, destination any) error {
@@ -589,7 +716,7 @@ func workRefFromWire(wire currentWorkRefWire) (WorkRef, error) {
 	return NewWorkRef(peer, workID)
 }
 
-func artifactRefsFromWire(wires []currentArtifactWire) ([]CurrentArtifactRef, error) {
+func artifactRefsFromWire(wires []currentArtifactWire, max int) ([]CurrentArtifactRef, error) {
 	result := make([]CurrentArtifactRef, len(wires))
 	for index, wire := range wires {
 		digest, err := ParseDigest(wire.RootDigest)
@@ -601,7 +728,7 @@ func artifactRefsFromWire(wires []currentArtifactWire) ([]CurrentArtifactRef, er
 			return nil, err
 		}
 	}
-	return normalizeCurrentArtifactRefs(result)
+	return normalizeCurrentArtifactRefs(result, max)
 }
 
 func equalCurrentActions(left, right []OperationKind) bool {
@@ -628,9 +755,9 @@ func equalArtifactRefs(left, right []CurrentArtifactRef) bool {
 	return true
 }
 
-func normalizeCurrentArtifactRefs(refs []CurrentArtifactRef) ([]CurrentArtifactRef, error) {
-	if len(refs) > MaxCurrentArtifactRefs {
-		return nil, limit("current Artifact refs", len(refs), MaxCurrentArtifactRefs)
+func normalizeCurrentArtifactRefs(refs []CurrentArtifactRef, max int) ([]CurrentArtifactRef, error) {
+	if len(refs) > max {
+		return nil, limit("current Artifact refs", len(refs), max)
 	}
 	result := append([]CurrentArtifactRef{}, refs...)
 	for _, ref := range result {
@@ -649,4 +776,20 @@ func normalizeCurrentArtifactRefs(refs []CurrentArtifactRef) ([]CurrentArtifactR
 		}
 	}
 	return result, nil
+}
+
+func mergeCurrentArtifactRefs(left, right []CurrentArtifactRef) ([]CurrentArtifactRef, error) {
+	merged := append([]CurrentArtifactRef{}, left...)
+	seen := make(map[Digest]struct{}, len(merged))
+	for _, ref := range merged {
+		seen[ref.RootDigest()] = struct{}{}
+	}
+	for _, ref := range right {
+		if _, exists := seen[ref.RootDigest()]; exists {
+			continue
+		}
+		seen[ref.RootDigest()] = struct{}{}
+		merged = append(merged, ref)
+	}
+	return normalizeCurrentArtifactRefs(merged, MaxCurrentArtifactRefs)
 }

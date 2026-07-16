@@ -362,7 +362,13 @@ func writeManagedCurrentReceipt(t *testing.T, st *Store, claim AgentClaimResult,
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload, _ := model.NewJSON([]byte(`{"content":"managed current"}`))
+	deadline := claim.Run.StartedAt().Add(24 * time.Hour)
+	payload, _ := model.JSONFrom(struct {
+		Content     string `json:"content"`
+		Deadline    string `json:"deadline"`
+		Iteration   uint8  `json:"iteration"`
+		WorkVersion uint64 `json:"work_version"`
+	}{"managed current", deadline.UTC().Format(time.RFC3339Nano), 1, 1})
 	event, err := model.NewCurrentEvent(model.CurrentEventSpec{Key: eventKey,
 		Digest: model.Sum([]byte("event-" + claim.Handling.EventID().String())),
 		Type:   model.EventReviewOffered, WorkRef: workRef, Summary: "Managed current",
@@ -370,10 +376,9 @@ func writeManagedCurrentReceipt(t *testing.T, st *Store, claim AgentClaimResult,
 	if err != nil {
 		t.Fatal(err)
 	}
-	state, _ := model.NewJSON([]byte(`{"content":"managed current"}`))
 	work, err := model.NewCurrentWork(model.CurrentWorkSpec{Ref: workRef, Version: 1, Iteration: 1,
-		DeadlineUnixNano: claim.Run.StartedAt().Add(24 * time.Hour).UnixNano(), State: model.WorkOffered,
-		StateData: state, LocalRole: model.CurrentReviewer})
+		DeadlineUnixNano: deadline.UnixNano(), State: model.WorkOffered,
+		StateData: payload, LocalRole: model.CurrentReviewer})
 	if err != nil {
 		t.Fatal(err)
 	}
