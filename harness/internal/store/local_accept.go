@@ -63,6 +63,12 @@ type LocalAcceptanceResult struct {
 func (s *Store) CommitLocalAcceptance(ctx context.Context, spec LocalAcceptanceSpec,
 	trustedNow time.Time,
 ) (LocalAcceptanceResult, error) {
+	return s.commitLocalAcceptance(ctx, spec, trustedNow, false)
+}
+
+func (s *Store) commitLocalAcceptance(ctx context.Context, spec LocalAcceptanceSpec,
+	trustedNow time.Time, managed bool,
+) (LocalAcceptanceResult, error) {
 	if s == nil || s.db == nil || ctx == nil {
 		return LocalAcceptanceResult{}, errors.New("commit local acceptance: nil store or context")
 	}
@@ -90,6 +96,11 @@ func (s *Store) CommitLocalAcceptance(ctx context.Context, spec LocalAcceptanceS
 			if !ok {
 				return LocalAcceptanceResult{}, ErrOperationTerminal
 			}
+			if managed {
+				if err := validateManagedTerminalAcceptance(ctx, tx, operation, receipt); err != nil {
+					return LocalAcceptanceResult{}, err
+				}
+			}
 			if err := tx.Commit(); err != nil {
 				return LocalAcceptanceResult{}, fmt.Errorf("commit local acceptance: replay read: %w", err)
 			}
@@ -115,6 +126,13 @@ func (s *Store) CommitLocalAcceptance(ctx context.Context, spec LocalAcceptanceS
 	originPublicKey, err := validateAdmissionAuthority(ctx, tx, spec, operation, acceptedAt)
 	if err != nil {
 		return LocalAcceptanceResult{}, err
+	}
+	managedAuthority := managedAcceptanceState{}
+	if managed {
+		managedAuthority, err = prepareManagedAcceptance(ctx, tx, spec, operation, trustedNow)
+		if err != nil {
+			return LocalAcceptanceResult{}, err
+		}
 	}
 
 	events := make([]model.Event, len(spec.Items))
@@ -150,6 +168,13 @@ func (s *Store) CommitLocalAcceptance(ctx context.Context, spec LocalAcceptanceS
 	if err := validateOperationEvents(spec.Operation, events); err != nil {
 		return LocalAcceptanceResult{}, err
 	}
+	if managed {
+		if err := validateManagedAcceptanceEvents(managedAuthority, operation, events); err != nil {
+			return LocalAcceptanceResult{}, err
+		}
+		spec.AuthorizedReferences = managedAuthority.authorizedReferences
+		spec.Derivation = managedAuthority.derivation
+	}
 	capture, err := validateAcceptanceArtifacts(ctx, tx, operation, spec, events)
 	if err != nil {
 		return LocalAcceptanceResult{}, err
@@ -158,7 +183,7 @@ func (s *Store) CommitLocalAcceptance(ctx context.Context, spec LocalAcceptanceS
 	if err != nil {
 		return LocalAcceptanceResult{}, err
 	}
-	receipt, err := buildAcceptanceReceipt(operation.ID(), events, capture)
+	receipt, err := buildAcceptanceReceipt(ctx, tx, operation.ID(), events, spec.Items, capture)
 	if err != nil {
 		return LocalAcceptanceResult{}, fmt.Errorf("commit local acceptance: receipt: %w", err)
 	}
@@ -211,6 +236,12 @@ func (s *Store) CommitLocalAcceptance(ctx context.Context, spec LocalAcceptanceS
 		}
 		if err := insertLocalDerivations(ctx, tx, committed, parent, derivations); err != nil {
 			return LocalAcceptanceResult{}, err
+		}
+		if managed {
+			if err := completeManagedAcceptance(ctx, tx, committed, managedAuthority,
+				receipt, events, trustedNow); err != nil {
+				return LocalAcceptanceResult{}, err
+			}
 		}
 	}
 	if err := tx.Commit(); err != nil {

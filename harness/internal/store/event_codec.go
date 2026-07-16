@@ -195,20 +195,43 @@ func requireJSONEOF(decoder *json.Decoder) error {
 	return nil
 }
 
-func buildAcceptanceReceipt(operation model.OperationID, events []model.Event, capture []captureRoot) (model.JSON, error) {
+func buildAcceptanceReceipt(ctx context.Context, q rowQuerier, operation model.OperationID,
+	events []model.Event, items []LocalAcceptanceItem, capture []captureRoot,
+) (model.JSON, error) {
 	type eventReceipt struct {
 		ArtifactRoots []model.ArtifactRef `json:"artifact_roots"`
 		EventDigest   model.Digest        `json:"event_digest"`
 		EventID       model.EventID       `json:"event_id"`
-		WorkRef       model.WorkRef       `json:"work_ref"`
+		EventType     model.EventType     `json:"event_type"`
+		Work          struct {
+			Ref     model.WorkRef   `json:"ref"`
+			State   model.WorkState `json:"state"`
+			Version uint64          `json:"version"`
+		} `json:"work"`
 	}
 	type captureReceipt struct {
 		ManifestDigest model.Digest `json:"manifest_digest"`
 		RootDigest     model.Digest `json:"root_digest"`
 	}
+	if ctx == nil || q == nil || len(events) == 0 || len(events) != len(items) {
+		return model.JSON{}, errors.New("acceptance receipt requires matching Events and items")
+	}
 	eventRows := make([]eventReceipt, len(events))
 	for index, event := range events {
-		eventRows[index] = eventReceipt{event.Artifacts(), event.Digest(), event.ID(), event.Scope().WorkRef()}
+		work := model.ReviewWork{}
+		if items[index].Work != nil {
+			work = items[index].Work.Work
+		} else {
+			var err error
+			work, err = readReviewWork(ctx, q, event.Scope().WorkRef())
+			if err != nil {
+				return model.JSON{}, fmt.Errorf("acceptance receipt Work %d: %w", index, err)
+			}
+		}
+		row := eventReceipt{ArtifactRoots: event.Artifacts(), EventDigest: event.Digest(),
+			EventID: event.ID(), EventType: event.Type()}
+		row.Work.Ref, row.Work.Version, row.Work.State = work.Ref(), work.Version(), work.State()
+		eventRows[index] = row
 	}
 	captureRows := make([]captureReceipt, len(capture))
 	for index, root := range capture {
