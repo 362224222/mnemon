@@ -388,29 +388,9 @@ func buildManagedResolutionReceipt(operation model.Operation, current model.Curr
 	source model.Event, content string, transition managedResolutionTransition,
 	at time.Time,
 ) (model.JSON, error) {
-	var retryAt *string
-	if transition.hasRetryAt {
-		value := storeTime(transition.retryAt)
-		retryAt = &value
-	}
-	evidence, err := model.JSONFrom(struct {
-		ActionWork        model.WorkRef        `json:"action_work"`
-		ActionWorkVersion uint64               `json:"action_work_version"`
-		Content           string               `json:"content"`
-		HandlingStatus    model.HandlingStatus `json:"handling_status"`
-		OperationID       string               `json:"operation_id"`
-		ProjectionDigest  model.Digest         `json:"projection_digest"`
-		RequestDigest     model.Digest         `json:"request_digest"`
-		ResolvedAt        string               `json:"resolved_at"`
-		RetryAt           *string              `json:"retry_at"`
-		SchemaVersion     int                  `json:"schema_version"`
-		SourceEvent       model.EventKey       `json:"source_event"`
-		SourceEventDigest model.Digest         `json:"source_event_digest"`
-	}{current.ActionWork(), current.ActionWorkVersion(), content, transition.handlingStatus,
-		operation.ID().String(), current.ProjectionDigest(), operation.RequestDigest(), storeTime(at), retryAt,
-		model.SchemaVersion, source.Key(), source.Digest()})
+	evidence, err := buildManagedResolutionEvidence(operation, current, source, content, transition, at)
 	if err != nil {
-		return model.JSON{}, fmt.Errorf("%w: resolution evidence: %v", ErrManagedResolutionInvariant, err)
+		return model.JSON{}, err
 	}
 	emptyResults := make([]struct{}, 0)
 	handlingReceiptStatus := ""
@@ -437,12 +417,43 @@ func buildManagedResolutionReceipt(operation model.Operation, current model.Curr
 		Status        string     `json:"status"`
 	}{Action: operation.Kind(), Handling: struct {
 		Status string `json:"status"`
-	}{handlingReceiptStatus}, OperationID: operation.ID().String(), Receipt: evidence.String(),
+	}{handlingReceiptStatus}, OperationID: operation.ID().String(), Receipt: model.Sum(evidence.Bytes()).String(),
 		Results: emptyResults, SchemaVersion: model.SchemaVersion, Status: "resolved"})
 	if err != nil {
 		return model.JSON{}, fmt.Errorf("%w: resolution receipt: %v", ErrManagedResolutionInvariant, err)
 	}
 	return receipt, nil
+}
+
+func buildManagedResolutionEvidence(operation model.Operation, current model.CurrentReadReceipt,
+	source model.Event, content string, transition managedResolutionTransition,
+	at time.Time,
+) (model.JSON, error) {
+	var retryAt *string
+	if transition.hasRetryAt {
+		value := storeTime(transition.retryAt)
+		retryAt = &value
+	}
+	evidence, err := model.JSONFrom(struct {
+		ActionWork        model.WorkRef        `json:"action_work"`
+		ActionWorkVersion uint64               `json:"action_work_version"`
+		Content           string               `json:"content"`
+		HandlingStatus    model.HandlingStatus `json:"handling_status"`
+		OperationID       string               `json:"operation_id"`
+		ProjectionDigest  model.Digest         `json:"projection_digest"`
+		RequestDigest     model.Digest         `json:"request_digest"`
+		ResolvedAt        string               `json:"resolved_at"`
+		RetryAt           *string              `json:"retry_at"`
+		SchemaVersion     int                  `json:"schema_version"`
+		SourceEvent       model.EventKey       `json:"source_event"`
+		SourceEventDigest model.Digest         `json:"source_event_digest"`
+	}{current.ActionWork(), current.ActionWorkVersion(), content, transition.handlingStatus,
+		operation.ID().String(), current.ProjectionDigest(), operation.RequestDigest(), storeTime(at), retryAt,
+		model.SchemaVersion, source.Key(), source.Digest()})
+	if err != nil {
+		return model.JSON{}, fmt.Errorf("%w: resolution evidence: %v", ErrManagedResolutionInvariant, err)
+	}
+	return evidence, nil
 }
 
 func updateManagedResolutionHandling(ctx context.Context, tx *sql.Tx, handling model.Handling,

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 )
 
@@ -379,10 +380,28 @@ func assertManagedResolutionReceipt(t *testing.T, receipt model.JSON,
 		envelope.Status != "resolved" || len(envelope.Results) != 0 {
 		t.Fatalf("resolution envelope = %#v", envelope)
 	}
-	if !strings.Contains(envelope.Receipt, fixture.content) ||
-		!strings.Contains(envelope.Receipt, fixture.current.SourceEvent().EventID().String()) ||
-		!strings.Contains(envelope.Receipt, `"action_work_version":1`) {
-		t.Fatalf("resolution evidence does not bind content/current: %s", envelope.Receipt)
+	source, err := readCurrentSourceEvent(context.Background(), fixture.store.db,
+		fixture.current.SourceEvent().EventID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentHandling, err := fixture.store.GetAgentHandling(context.Background(), fixture.claim.Handling.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	transition, err := managedResolutionTransitionFor(fixture.profile, currentHandling,
+		fixture.reservation.Operation.Kind(), fixture.resolveAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence, err := buildManagedResolutionEvidence(fixture.reservation.Operation, fixture.current,
+		source, fixture.content, transition, fixture.resolveAt)
+	if err != nil || envelope.Receipt != model.Sum(evidence.Bytes()).String() {
+		t.Fatalf("resolution evidence digest = %s, error %v", envelope.Receipt, err)
+	}
+	if len(envelope.Receipt) > localapi.MaxDiagnosticBytes || strings.Contains(envelope.Receipt, fixture.content) ||
+		strings.Contains(envelope.Receipt, fixture.current.SourceEvent().EventID().String()) {
+		t.Fatalf("resolution receipt exposed unbounded evidence: %s", envelope.Receipt)
 	}
 	for _, forbidden := range []string{fixture.claim.Handling.ID().String(),
 		fixture.claim.Run.ID().String(), "token-resolution"} {
