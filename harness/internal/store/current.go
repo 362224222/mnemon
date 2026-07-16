@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
@@ -31,6 +33,10 @@ type AgentCurrentReadSpec struct {
 	RunID                 model.RunID
 	ClaimTokenHash        model.Digest
 	At                    time.Time
+	// ArtifactViews is populated only by the trusted server after it has
+	// materialized every item returned by PlanAgentCurrentRead. It is never
+	// accepted from the Agent or the local transport request.
+	ArtifactViews []model.CurrentArtifactRef
 }
 
 type AgentCurrentReadResult struct {
@@ -39,123 +45,263 @@ type AgentCurrentReadResult struct {
 	Replayed   bool
 }
 
-// FinalizeAgentCurrentRead creates the exact bounded projection and persists
-// it as write-once AgentRun evidence in one transaction. Replay returns that
-// stored projection rather than rendering a newer Work version.
+// AgentCurrentArtifactMaterialization is the immutable CAS authority for one
+// Run-local readonly view. Ordinals are dense and assigned from the canonical
+// semantic root union, never from caller order.
+type AgentCurrentArtifactMaterialization struct {
+	Ordinal        uint32
+	RootDigest     model.Digest
+	ManifestDigest model.Digest
+}
+
+// AgentCurrentReadPlan is a read-only checkpoint between Store authority and
+// filesystem materialization. Replay is evidence only: callers must still
+// re-materialize/reverify every Artifact and call FinalizeAgentCurrentRead.
+type AgentCurrentReadPlan struct {
+	RunID     model.RunID
+	Artifacts []AgentCurrentArtifactMaterialization
+	Replay    *AgentCurrentReadResult
+}
+
+type currentReadAuthority struct {
+	budget     model.HandlingBudget
+	run        model.AgentRun
+	handling   model.Handling
+	projection model.CurrentProjection
+	receipt    model.CurrentReadReceipt
+	hasReceipt bool
+	artifacts  []AgentCurrentArtifactMaterialization
+}
+
+// PlanAgentCurrentRead derives the exact semantic Artifact union and returns
+// only verified manifest identities. It never writes current-read evidence.
+// The final transaction repeats every authority check after filesystem work.
+func (s *Store) PlanAgentCurrentRead(ctx context.Context,
+	spec AgentCurrentReadSpec,
+) (AgentCurrentReadPlan, error) {
+	if len(spec.ArtifactViews) != 0 {
+		return AgentCurrentReadPlan{}, fmt.Errorf("%w: materialized views are not plan input", ErrCurrentReadInput)
+	}
+	at, err := validateAgentCurrentReadInput(s, ctx, spec)
+	if err != nil {
+		return AgentCurrentReadPlan{}, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return AgentCurrentReadPlan{}, fmt.Errorf("plan Agent current read: begin: %w", err)
+	}
+	defer tx.Rollback()
+	authority, err := deriveCurrentReadAuthority(ctx, tx, spec, at)
+	if err != nil {
+		return AgentCurrentReadPlan{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return AgentCurrentReadPlan{}, fmt.Errorf("plan Agent current read: commit: %w", err)
+	}
+	plan := AgentCurrentReadPlan{RunID: authority.run.ID(),
+		Artifacts: append([]AgentCurrentArtifactMaterialization{}, authority.artifacts...)}
+	if authority.hasReceipt {
+		replay := AgentCurrentReadResult{Projection: authority.receipt.Projection(),
+			Receipt: authority.receipt, Replayed: true}
+		plan.Replay = &replay
+	}
+	return plan, nil
+}
+
+// FinalizeAgentCurrentRead repeats the complete Store derivation after the
+// server materializer returns, validates its exact Run/ordinal/root paths and
+// only then persists write-once current-read evidence. Receipt replay also
+// requires the exact already-stored mapping to be re-materialized.
 func (s *Store) FinalizeAgentCurrentRead(ctx context.Context,
 	spec AgentCurrentReadSpec,
 ) (AgentCurrentReadResult, error) {
-	if s == nil || s.db == nil || ctx == nil || spec.ProfileID != model.TeamworkProfileID() ||
-		spec.ExpectedAssetRevision == "" || spec.RunID.IsZero() || spec.ClaimTokenHash.IsZero() {
-		return AgentCurrentReadResult{}, ErrCurrentReadInput
-	}
-	at, err := canonicalClaimTime(spec.At)
+	at, err := validateAgentCurrentReadInput(s, ctx, spec)
 	if err != nil {
-		return AgentCurrentReadResult{}, fmt.Errorf("%w: %v", ErrCurrentReadInput, err)
+		return AgentCurrentReadResult{}, err
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return AgentCurrentReadResult{}, fmt.Errorf("finalize Agent current read: begin: %w", err)
 	}
 	defer tx.Rollback()
-
-	profile, budget, err := requireAgentClaimAuthority(ctx, tx, spec.ProfileID, spec.ExpectedAssetRevision)
+	authority, err := deriveCurrentReadAuthority(ctx, tx, spec, at)
 	if err != nil {
 		return AgentCurrentReadResult{}, err
+	}
+	views, err := requireExactCurrentArtifactViews(authority.run.ID(), authority.artifacts,
+		spec.ArtifactViews, authority.budget.Spec().MaxCurrentPathBytes)
+	if err != nil {
+		return AgentCurrentReadResult{}, err
+	}
+	if authority.hasReceipt {
+		if !sameCurrentArtifactViews(views, authority.receipt.ArtifactRefs()) {
+			return AgentCurrentReadResult{}, fmt.Errorf("%w: replayed Artifact view mapping differs from stored receipt",
+				ErrCurrentReadInvariant)
+		}
+		if err := tx.Commit(); err != nil {
+			return AgentCurrentReadResult{}, fmt.Errorf("finalize Agent current read: commit replay: %w", err)
+		}
+		return AgentCurrentReadResult{Projection: authority.receipt.Projection(),
+			Receipt: authority.receipt, Replayed: true}, nil
+	}
+
+	projection, err := model.NewCurrentProjection(model.CurrentProjectionSpec{
+		SourceEvent: authority.projection.SourceEvent(), ActionWork: authority.projection.ActionWork(),
+		AllowedActions: authority.projection.AllowedActions(), ArtifactViews: views,
+	})
+	if errors.Is(err, model.ErrLimit) {
+		return AgentCurrentReadResult{}, fmt.Errorf("%w: %v", ErrCurrentReadTooLarge, err)
+	}
+	if err != nil {
+		return AgentCurrentReadResult{}, fmt.Errorf("%w: bind Artifact views: %v", ErrCurrentReadInvariant, err)
+	}
+	if err := requireCurrentProjectionBudget(projection, authority.budget); err != nil {
+		return AgentCurrentReadResult{}, err
+	}
+	receipt, err := model.NewCurrentReadReceipt(model.CurrentReadReceiptSpec{
+		RunID: authority.run.ID(), ProfileID: authority.run.ProfileID(), HandlingID: authority.handling.ID(),
+		HandlingAttempt: authority.run.HandlingAttempt(), Projection: projection, ReadAt: at,
+	})
+	if err != nil {
+		return AgentCurrentReadResult{}, fmt.Errorf("%w: receipt: %v", ErrCurrentReadInvariant, err)
+	}
+	if err := writeCurrentReadEvidence(ctx, tx, authority.run, authority.handling,
+		spec.ClaimTokenHash, receipt); err != nil {
+		return AgentCurrentReadResult{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return AgentCurrentReadResult{}, fmt.Errorf("finalize Agent current read: commit: %w", err)
+	}
+	return AgentCurrentReadResult{Projection: projection, Receipt: receipt}, nil
+}
+
+func validateAgentCurrentReadInput(s *Store, ctx context.Context,
+	spec AgentCurrentReadSpec,
+) (time.Time, error) {
+	if s == nil || s.db == nil || ctx == nil || spec.ProfileID != model.TeamworkProfileID() ||
+		spec.ExpectedAssetRevision == "" || spec.RunID.IsZero() || spec.ClaimTokenHash.IsZero() {
+		return time.Time{}, ErrCurrentReadInput
+	}
+	at, err := canonicalClaimTime(spec.At)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("%w: %v", ErrCurrentReadInput, err)
+	}
+	return at, nil
+}
+
+func deriveCurrentReadAuthority(ctx context.Context, tx *sql.Tx, spec AgentCurrentReadSpec,
+	at time.Time,
+) (currentReadAuthority, error) {
+	profile, budget, err := requireAgentClaimAuthority(ctx, tx, spec.ProfileID, spec.ExpectedAssetRevision)
+	if err != nil {
+		return currentReadAuthority{}, err
 	}
 	run, err := readAgentRun(ctx, tx, spec.RunID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return AgentCurrentReadResult{}, ErrCurrentReadStale
+		return currentReadAuthority{}, ErrCurrentReadStale
 	}
 	if err != nil {
-		return AgentCurrentReadResult{}, fmt.Errorf("%w: read AgentRun: %v", ErrCurrentReadInvariant, err)
+		return currentReadAuthority{}, fmt.Errorf("%w: read AgentRun: %v", ErrCurrentReadInvariant, err)
 	}
 	handlingID, hasHandling := run.HandlingID()
 	if !hasHandling || run.ProfileID() != profile.ID() || run.Runtime() != profile.Runtime() {
-		return AgentCurrentReadResult{}, fmt.Errorf("%w: Run is not bound to the authenticated current Profile", ErrCurrentReadStale)
+		return currentReadAuthority{}, fmt.Errorf("%w: Run is not bound to the authenticated current Profile", ErrCurrentReadStale)
 	}
 	handling, err := readAgentHandling(ctx, tx, handlingID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return AgentCurrentReadResult{}, ErrCurrentReadStale
+		return currentReadAuthority{}, ErrCurrentReadStale
 	}
 	if err != nil {
-		return AgentCurrentReadResult{}, fmt.Errorf("%w: read Handling: %v", ErrCurrentReadInvariant, err)
+		return currentReadAuthority{}, fmt.Errorf("%w: read Handling: %v", ErrCurrentReadInvariant, err)
 	}
 	if err := requireExactCurrentClaim(run, handling, spec.ClaimTokenHash, at); err != nil {
-		return AgentCurrentReadResult{}, err
+		return currentReadAuthority{}, err
 	}
 
 	if stored, ok := run.CurrentReadReceipt(); ok {
 		receipt, err := model.ParseCurrentReadReceipt(stored.Bytes())
 		if err != nil {
-			return AgentCurrentReadResult{}, fmt.Errorf("%w: parse stored receipt: %v", ErrCurrentReadInvariant, err)
+			return currentReadAuthority{}, fmt.Errorf("%w: parse stored receipt: %v", ErrCurrentReadInvariant, err)
 		}
 		if err := requireCurrentReceiptBinding(receipt, run, handling); err != nil {
-			return AgentCurrentReadResult{}, err
+			return currentReadAuthority{}, err
 		}
-		if err := tx.Commit(); err != nil {
-			return AgentCurrentReadResult{}, fmt.Errorf("finalize Agent current read: commit replay: %w", err)
+		artifacts, err := validateStoredCurrentAuthority(ctx, tx, receipt, run, handling, budget)
+		if err != nil {
+			return currentReadAuthority{}, err
 		}
-		return AgentCurrentReadResult{Projection: receipt.Projection(), Receipt: receipt, Replayed: true}, nil
+		return currentReadAuthority{budget: budget, run: run, handling: handling,
+			projection: receipt.Projection(), receipt: receipt, hasReceipt: true,
+			artifacts: artifacts}, nil
 	}
+	projection, artifacts, err := deriveFreshCurrentProjection(ctx, tx, handling, budget, at)
+	if err != nil {
+		return currentReadAuthority{}, err
+	}
+	return currentReadAuthority{budget: budget, run: run, handling: handling,
+		projection: projection, artifacts: artifacts}, nil
+}
 
+func deriveFreshCurrentProjection(ctx context.Context, tx *sql.Tx, handling model.Handling,
+	budget model.HandlingBudget, at time.Time,
+) (model.CurrentProjection, []AgentCurrentArtifactMaterialization, error) {
 	sourceEvent, err := readCurrentSourceEvent(ctx, tx, handling.EventID())
 	if err != nil {
-		return AgentCurrentReadResult{}, fmt.Errorf("%w: source Event: %v", ErrCurrentReadInvariant, err)
+		return model.CurrentProjection{}, nil, fmt.Errorf("%w: source Event: %v", ErrCurrentReadInvariant, err)
 	}
 	parentResume, err := handlingIsParentResume(ctx, tx, handling, sourceEvent)
 	if err != nil {
-		return AgentCurrentReadResult{}, fmt.Errorf("%w: inspect derivation: %v", ErrCurrentReadInvariant, err)
+		return model.CurrentProjection{}, nil, fmt.Errorf("%w: inspect derivation: %v", ErrCurrentReadInvariant, err)
 	}
 	if parentResume {
-		return AgentCurrentReadResult{}, fmt.Errorf("%w: parent-resume requires bounded child_results", ErrCurrentReadUnsupported)
+		return model.CurrentProjection{}, nil, fmt.Errorf("%w: parent-resume requires bounded child_results", ErrCurrentReadUnsupported)
 	}
 	work, err := readReviewWork(ctx, tx, sourceEvent.Scope().WorkRef())
 	if err != nil {
-		return AgentCurrentReadResult{}, fmt.Errorf("%w: action Work: %v", ErrCurrentReadInvariant, err)
+		return model.CurrentProjection{}, nil, fmt.Errorf("%w: action Work: %v", ErrCurrentReadInvariant, err)
 	}
 	if work.ChannelID() != sourceEvent.Scope().ChannelID() {
-		return AgentCurrentReadResult{}, fmt.Errorf("%w: source Event and action Work Channels differ", ErrCurrentReadInvariant)
+		return model.CurrentProjection{}, nil, fmt.Errorf("%w: source Event and action Work Channels differ", ErrCurrentReadInvariant)
 	}
 	if at.Before(sourceEvent.AcceptedAt()) || at.Before(work.UpdatedAt()) {
-		return AgentCurrentReadResult{}, fmt.Errorf("%w: trusted time precedes projected Event or Work evidence", ErrCurrentReadInvariant)
+		return model.CurrentProjection{}, nil, fmt.Errorf("%w: trusted time precedes projected Event or Work evidence", ErrCurrentReadInvariant)
 	}
 	node, err := readNode(ctx, tx)
 	if err != nil {
-		return AgentCurrentReadResult{}, fmt.Errorf("%w: local Node: %v", ErrCurrentReadInvariant, err)
+		return model.CurrentProjection{}, nil, fmt.Errorf("%w: local Node: %v", ErrCurrentReadInvariant, err)
 	}
 	role, err := localCurrentRole(node.PeerID(), work)
 	if err != nil {
-		return AgentCurrentReadResult{}, err
+		return model.CurrentProjection{}, nil, err
 	}
 	brief, err := readCurrentWorkBrief(ctx, tx, work)
 	if err != nil {
-		return AgentCurrentReadResult{}, err
+		return model.CurrentProjection{}, nil, err
 	}
 	if sourceEvent.Source() == model.EventSourceImported && !sourceEvent.Audience().Contains(node.PeerID()) {
-		return AgentCurrentReadResult{}, fmt.Errorf("%w: imported source Event does not address the local Node", ErrCurrentReadInvariant)
+		return model.CurrentProjection{}, nil, fmt.Errorf("%w: imported source Event does not address the local Node", ErrCurrentReadInvariant)
 	}
 	if len(sourceEvent.Artifacts()) > budget.Spec().MaxCurrentArtifactRefs {
-		return AgentCurrentReadResult{}, fmt.Errorf("%w: source Event has %d Artifact refs, Profile budget is %d",
+		return model.CurrentProjection{}, nil, fmt.Errorf("%w: source Event has %d Artifact refs, Profile budget is %d",
 			ErrCurrentReadTooLarge, len(sourceEvent.Artifacts()), budget.Spec().MaxCurrentArtifactRefs)
 	}
 	if err := requireCurrentArtifacts(ctx, tx, sourceEvent); err != nil {
-		return AgentCurrentReadResult{}, err
+		return model.CurrentProjection{}, nil, err
 	}
 	facts, err := decodeClosedEventPayload(sourceEvent)
 	if err != nil {
-		return AgentCurrentReadResult{}, fmt.Errorf("%w: %v", ErrCurrentReadInvariant, err)
+		return model.CurrentProjection{}, nil, fmt.Errorf("%w: %v", ErrCurrentReadInvariant, err)
 	}
 	exactUpdate, err := currentWorkIsExactSource(sourceEvent, work, facts)
 	if err != nil {
-		return AgentCurrentReadResult{}, err
+		return model.CurrentProjection{}, nil, err
 	}
 	actions := deriveCurrentActions(role, sourceEvent, work, exactUpdate)
 	currentArtifacts := make([]model.CurrentArtifactRef, len(sourceEvent.Artifacts()))
 	for index, ref := range sourceEvent.Artifacts() {
 		currentArtifacts[index], err = model.NewCurrentArtifactRef(ref.RootDigest())
 		if err != nil {
-			return AgentCurrentReadResult{}, fmt.Errorf("%w: Artifact projection: %v", ErrCurrentReadInvariant, err)
+			return model.CurrentProjection{}, nil, fmt.Errorf("%w: Artifact projection: %v", ErrCurrentReadInvariant, err)
 		}
 	}
 	currentEvent, err := model.NewCurrentEvent(model.CurrentEventSpec{
@@ -164,7 +310,7 @@ func (s *Store) FinalizeAgentCurrentRead(ctx context.Context,
 		ArtifactRefs: currentArtifacts, AcceptedAt: sourceEvent.AcceptedAt(),
 	})
 	if err != nil {
-		return AgentCurrentReadResult{}, fmt.Errorf("%w: Event projection: %v", ErrCurrentReadInvariant, err)
+		return model.CurrentProjection{}, nil, fmt.Errorf("%w: Event projection: %v", ErrCurrentReadInvariant, err)
 	}
 	currentWork, err := model.NewCurrentWork(model.CurrentWorkSpec{
 		Ref: work.Ref(), Version: work.Version(), Iteration: work.Iteration(),
@@ -172,39 +318,215 @@ func (s *Store) FinalizeAgentCurrentRead(ctx context.Context,
 		LocalRole: role, Brief: brief,
 	})
 	if err != nil {
-		return AgentCurrentReadResult{}, fmt.Errorf("%w: Work projection: %v", ErrCurrentReadInvariant, err)
+		return model.CurrentProjection{}, nil, fmt.Errorf("%w: Work projection: %v", ErrCurrentReadInvariant, err)
 	}
 	projection, err := model.NewCurrentProjection(model.CurrentProjectionSpec{
 		SourceEvent: currentEvent, ActionWork: currentWork, AllowedActions: actions,
 	})
 	if errors.Is(err, model.ErrLimit) {
-		return AgentCurrentReadResult{}, fmt.Errorf("%w: %v", ErrCurrentReadTooLarge, err)
+		return model.CurrentProjection{}, nil, fmt.Errorf("%w: %v", ErrCurrentReadTooLarge, err)
 	}
 	if err != nil {
-		return AgentCurrentReadResult{}, fmt.Errorf("%w: projection: %v", ErrCurrentReadInvariant, err)
+		return model.CurrentProjection{}, nil, fmt.Errorf("%w: projection: %v", ErrCurrentReadInvariant, err)
 	}
+	if err := requireCurrentProjectionBudget(projection, budget); err != nil {
+		return model.CurrentProjection{}, nil, err
+	}
+	artifacts, err := currentArtifactMaterializationPlan(ctx, tx, projection.ArtifactRefs())
+	if err != nil {
+		return model.CurrentProjection{}, nil, err
+	}
+	return projection, artifacts, nil
+}
+
+func validateStoredCurrentAuthority(ctx context.Context, tx *sql.Tx,
+	receipt model.CurrentReadReceipt, run model.AgentRun, handling model.Handling,
+	budget model.HandlingBudget,
+) ([]AgentCurrentArtifactMaterialization, error) {
+	sourceEvent, err := readCurrentSourceEvent(ctx, tx, handling.EventID())
+	if err != nil {
+		return nil, fmt.Errorf("%w: replay source Event: %v", ErrCurrentReadInvariant, err)
+	}
+	if parentResume, err := handlingIsParentResume(ctx, tx, handling, sourceEvent); err != nil {
+		return nil, fmt.Errorf("%w: inspect replay derivation: %v", ErrCurrentReadInvariant, err)
+	} else if parentResume {
+		return nil, fmt.Errorf("%w: parent-resume receipt used the base projection", ErrCurrentReadInvariant)
+	}
+	projection := receipt.Projection()
+	projectedEvent := projection.SourceEvent()
+	if projectedEvent.Key() != sourceEvent.Key() || projectedEvent.Digest() != sourceEvent.Digest() ||
+		projectedEvent.Type() != sourceEvent.Type() || projectedEvent.WorkRef() != sourceEvent.Scope().WorkRef() ||
+		projectedEvent.Summary() != sourceEvent.Summary() ||
+		!bytes.Equal(projectedEvent.Payload().Bytes(), sourceEvent.Payload().Bytes()) ||
+		!projectedEvent.AcceptedAt().Equal(sourceEvent.AcceptedAt()) ||
+		!sameCurrentEventArtifactRoots(projectedEvent.ArtifactRefs(), sourceEvent.Artifacts()) {
+		return nil, fmt.Errorf("%w: stored projection source Event differs from durable Event",
+			ErrCurrentReadInvariant)
+	}
+	if err := requireCurrentArtifacts(ctx, tx, sourceEvent); err != nil {
+		return nil, err
+	}
+	work, err := readReviewWork(ctx, tx, receipt.ActionWork())
+	if err != nil {
+		return nil, fmt.Errorf("%w: replay action Work: %v", ErrCurrentReadInvariant, err)
+	}
+	if work.ChannelID() != sourceEvent.Scope().ChannelID() || work.Ref() != sourceEvent.Scope().WorkRef() {
+		return nil, fmt.Errorf("%w: replay source Event and Work authority differ", ErrCurrentReadInvariant)
+	}
+	node, err := readNode(ctx, tx)
+	if err != nil {
+		return nil, fmt.Errorf("%w: replay local Node: %v", ErrCurrentReadInvariant, err)
+	}
+	if sourceEvent.Source() == model.EventSourceImported && !sourceEvent.Audience().Contains(node.PeerID()) {
+		return nil, fmt.Errorf("%w: replay imported Event does not address the local Node",
+			ErrCurrentReadInvariant)
+	}
+	role, err := localCurrentRole(node.PeerID(), work)
+	if err != nil {
+		return nil, err
+	}
+	durableBrief, err := readCurrentWorkBrief(ctx, tx, work)
+	if err != nil {
+		return nil, err
+	}
+	projectedWork := projection.ActionWork()
+	projectedBrief, ok := projectedWork.Brief()
+	if !ok || projectedWork.Ref() != work.Ref() ||
+		projectedWork.DeadlineUnixNano() != work.DeadlineUnixNano() || projectedWork.LocalRole() != role ||
+		projectedBrief.Content() != durableBrief.Content() ||
+		projectedBrief.DeadlineUnixNano() != durableBrief.DeadlineUnixNano() ||
+		!sameCurrentArtifactRoots(projectedBrief.ArtifactRefs(), durableBrief.ArtifactRefs()) {
+		return nil, fmt.Errorf("%w: stored projection Work brief differs from durable authority",
+			ErrCurrentReadInvariant)
+	}
+	if err := requireCurrentProjectionBudget(projection, budget); err != nil {
+		return nil, err
+	}
+	artifacts, err := currentArtifactMaterializationPlan(ctx, tx, projection.ArtifactRefs())
+	if err != nil {
+		return nil, err
+	}
+	storedViews, err := requireExactCurrentArtifactViews(run.ID(), artifacts, receipt.ArtifactRefs(),
+		budget.Spec().MaxCurrentPathBytes)
+	if err != nil {
+		return nil, fmt.Errorf("%w: stored receipt Artifact mapping: %v", ErrCurrentReadInvariant, err)
+	}
+	if !sameCurrentArtifactViews(storedViews, receipt.ArtifactRefs()) {
+		return nil, fmt.Errorf("%w: stored receipt Artifact mapping is not exact", ErrCurrentReadInvariant)
+	}
+	return artifacts, nil
+}
+
+func sameCurrentEventArtifactRoots(current []model.CurrentArtifactRef,
+	durable []model.ArtifactRef,
+) bool {
+	if len(current) != len(durable) {
+		return false
+	}
+	for index := range current {
+		if current[index].RootDigest() != durable[index].RootDigest() {
+			return false
+		}
+		if _, hasPath := current[index].ViewPath(); hasPath {
+			return false
+		}
+	}
+	return true
+}
+
+func sameCurrentArtifactRoots(left, right []model.CurrentArtifactRef) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index].RootDigest() != right[index].RootDigest() {
+			return false
+		}
+	}
+	return true
+}
+
+func currentArtifactMaterializationPlan(ctx context.Context, q rowQuerier,
+	refs []model.CurrentArtifactRef,
+) ([]AgentCurrentArtifactMaterialization, error) {
+	result := make([]AgentCurrentArtifactMaterialization, len(refs))
+	for index, ref := range refs {
+		verified, err := requireVerifiedArtifactRoot(ctx, q, ref.RootDigest())
+		if err != nil {
+			return nil, fmt.Errorf("%w: materialization root %s is not verified: %v",
+				ErrCurrentReadInvariant, ref.RootDigest().String(), err)
+		}
+		result[index] = AgentCurrentArtifactMaterialization{Ordinal: uint32(index),
+			RootDigest: ref.RootDigest(), ManifestDigest: verified.ManifestDigest}
+	}
+	return result, nil
+}
+
+func requireExactCurrentArtifactViews(run model.RunID,
+	plan []AgentCurrentArtifactMaterialization, supplied []model.CurrentArtifactRef, pathLimit int,
+) ([]model.CurrentArtifactRef, error) {
+	if pathLimit < 1 || pathLimit > model.DefaultCurrentPathBytes {
+		return nil, fmt.Errorf("%w: invalid Profile Artifact path budget", ErrCurrentReadInvariant)
+	}
+	if len(supplied) != len(plan) {
+		return nil, fmt.Errorf("%w: materializer returned %d views for %d authorized roots",
+			ErrCurrentReadInvariant, len(supplied), len(plan))
+	}
+	result := append([]model.CurrentArtifactRef{}, supplied...)
+	for index := range plan {
+		item := plan[index]
+		if item.Ordinal != uint32(index) || item.RootDigest.IsZero() || item.ManifestDigest.IsZero() ||
+			result[index].RootDigest() != item.RootDigest {
+			return nil, fmt.Errorf("%w: materialized Artifact root/ordinal differs from Store plan",
+				ErrCurrentReadInvariant)
+		}
+		path, ok := result[index].ViewPath()
+		if !ok {
+			return nil, fmt.Errorf("%w: every authorized Artifact requires a readonly view",
+				ErrCurrentReadInvariant)
+		}
+		if len(path) > pathLimit {
+			return nil, fmt.Errorf("%w: Artifact view path has %d bytes, limit is %d",
+				ErrCurrentReadTooLarge, len(path), pathLimit)
+		}
+		components := strings.Split(path, "/")
+		if len(components) < 6 || components[0] != ".mnemon" || components[1] != "harness" ||
+			components[2] != "node" || components[3] != "views" || components[4] != run.String() ||
+			components[5] != strconv.FormatUint(uint64(item.Ordinal), 10) {
+			return nil, fmt.Errorf("%w: Artifact view is outside the exact Run/ordinal namespace",
+				ErrCurrentReadInvariant)
+		}
+	}
+	return result, nil
+}
+
+func sameCurrentArtifactViews(left, right []model.CurrentArtifactRef) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		leftPath, leftOK := left[index].ViewPath()
+		rightPath, rightOK := right[index].ViewPath()
+		if left[index].RootDigest() != right[index].RootDigest() || leftOK != rightOK ||
+			leftPath != rightPath {
+			return false
+		}
+	}
+	return true
+}
+
+func requireCurrentProjectionBudget(projection model.CurrentProjection,
+	budget model.HandlingBudget,
+) error {
 	if len(projection.CanonicalJSON().Bytes()) > budget.Spec().MaxCurrentJSONBytes {
-		return AgentCurrentReadResult{}, fmt.Errorf("%w: projection has %d bytes, Profile budget is %d",
+		return fmt.Errorf("%w: projection has %d bytes, Profile budget is %d",
 			ErrCurrentReadTooLarge, len(projection.CanonicalJSON().Bytes()), budget.Spec().MaxCurrentJSONBytes)
 	}
 	if len(projection.ArtifactRefs()) > budget.Spec().MaxCurrentArtifactRefs {
-		return AgentCurrentReadResult{}, fmt.Errorf("%w: projection has %d Artifact refs, Profile budget is %d",
+		return fmt.Errorf("%w: projection has %d Artifact refs, Profile budget is %d",
 			ErrCurrentReadTooLarge, len(projection.ArtifactRefs()), budget.Spec().MaxCurrentArtifactRefs)
 	}
-	receipt, err := model.NewCurrentReadReceipt(model.CurrentReadReceiptSpec{
-		RunID: run.ID(), ProfileID: run.ProfileID(), HandlingID: handling.ID(),
-		HandlingAttempt: run.HandlingAttempt(), Projection: projection, ReadAt: at,
-	})
-	if err != nil {
-		return AgentCurrentReadResult{}, fmt.Errorf("%w: receipt: %v", ErrCurrentReadInvariant, err)
-	}
-	if err := writeCurrentReadEvidence(ctx, tx, run, handling, spec.ClaimTokenHash, receipt); err != nil {
-		return AgentCurrentReadResult{}, err
-	}
-	if err := tx.Commit(); err != nil {
-		return AgentCurrentReadResult{}, fmt.Errorf("finalize Agent current read: commit: %w", err)
-	}
-	return AgentCurrentReadResult{Projection: projection, Receipt: receipt}, nil
+	return nil
 }
 
 func currentWorkIsExactSource(event model.Event, work model.ReviewWork,

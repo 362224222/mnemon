@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -183,8 +184,9 @@ func TestFinalizeAgentCurrentReadIsFencedAndConcurrentReplaySafe(t *testing.T) {
 func TestFinalizeAgentCurrentReadIncludesOnlyVerifiedEventPinnedArtifacts(t *testing.T) {
 	t.Run("verified and pinned", func(t *testing.T) {
 		fixture, eventID, root, claim, claimAt := currentArtifactReadFixture(t, "valid")
-		result, err := fixture.store.FinalizeAgentCurrentRead(context.Background(),
-			currentReadSpec(fixture, claim.Run.ID(), "token-current-artifact-valid", claimAt.Add(time.Second)))
+		spec := plannedCurrentReadSpec(t, fixture.store, currentReadSpec(fixture, claim.Run.ID(),
+			"token-current-artifact-valid", claimAt.Add(time.Second)))
+		result, err := fixture.store.FinalizeAgentCurrentRead(context.Background(), spec)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -197,16 +199,167 @@ func TestFinalizeAgentCurrentReadIncludesOnlyVerifiedEventPinnedArtifacts(t *tes
 
 	t.Run("missing Event pin", func(t *testing.T) {
 		fixture, eventID, root, claim, claimAt := currentArtifactReadFixture(t, "unpinned")
+		spec := plannedCurrentReadSpec(t, fixture.store, currentReadSpec(fixture, claim.Run.ID(),
+			"token-current-artifact-unpinned", claimAt.Add(time.Second)))
 		if _, err := fixture.store.db.Exec(`DELETE FROM artifact_pins
 			WHERE root_digest=? AND owner_kind='event' AND owner_id=?`, root.RootDigest.String(), eventID.String()); err != nil {
 			t.Fatal(err)
 		}
-		_, err := fixture.store.FinalizeAgentCurrentRead(context.Background(),
-			currentReadSpec(fixture, claim.Run.ID(), "token-current-artifact-unpinned", claimAt.Add(time.Second)))
+		_, err := fixture.store.FinalizeAgentCurrentRead(context.Background(), spec)
 		if !errors.Is(err, ErrCurrentReadInvariant) {
 			t.Fatalf("missing Event pin error = %v", err)
 		}
+		assertNoCurrentReadReceipt(t, fixture.store, claim.Run.ID())
 	})
+}
+
+func TestAgentCurrentArtifactPlanRequiresExactViewsAndReverifiesReplay(t *testing.T) {
+	fixture, eventID, root, claim, claimAt := currentArtifactReadFixture(t, "exact-view")
+	base := currentReadSpec(fixture, claim.Run.ID(), "token-current-artifact-exact-view",
+		claimAt.Add(time.Second))
+	plan, err := fixture.store.PlanAgentCurrentRead(context.Background(), base)
+	if err != nil || plan.Replay != nil || plan.RunID != claim.Run.ID() || len(plan.Artifacts) != 1 ||
+		plan.Artifacts[0].Ordinal != 0 || plan.Artifacts[0].RootDigest != root.RootDigest ||
+		plan.Artifacts[0].ManifestDigest != root.ManifestDigest {
+		t.Fatalf("fresh materialization plan = (%#v, %v)", plan, err)
+	}
+
+	rootOnly, _ := model.NewCurrentArtifactRef(root.RootDigest)
+	wrongRoot, _ := model.NewCurrentArtifactView(model.Sum([]byte("wrong-current-view-root")),
+		fmt.Sprintf(".mnemon/harness/node/views/%s/0/root", claim.Run.ID().String()))
+	otherRun, _ := model.ParseRunID("run-current-view-other")
+	wrongRun, _ := model.NewCurrentArtifactView(root.RootDigest,
+		fmt.Sprintf(".mnemon/harness/node/views/%s/0/root", otherRun.String()))
+	wrongOrdinal, _ := model.NewCurrentArtifactView(root.RootDigest,
+		fmt.Sprintf(".mnemon/harness/node/views/%s/1/root", claim.Run.ID().String()))
+	for name, views := range map[string][]model.CurrentArtifactRef{
+		"missing": nil, "unmaterialized": {rootOnly}, "wrong root": {wrongRoot},
+		"wrong Run": {wrongRun}, "wrong ordinal": {wrongOrdinal},
+	} {
+		t.Run(name, func(t *testing.T) {
+			spec := base
+			spec.ArtifactViews = views
+			if _, err := fixture.store.FinalizeAgentCurrentRead(context.Background(), spec); !errors.Is(err, ErrCurrentReadInvariant) {
+				t.Fatalf("mapping error = %v", err)
+			}
+			assertNoCurrentReadReceipt(t, fixture.store, claim.Run.ID())
+		})
+	}
+
+	freshSpec := plannedCurrentReadSpec(t, fixture.store, base)
+	fresh, err := fixture.store.FinalizeAgentCurrentRead(context.Background(), freshSpec)
+	if err != nil || fresh.Replayed || len(fresh.Receipt.ArtifactRefs()) != 1 {
+		t.Fatalf("fresh finalization = (%#v, %v)", fresh, err)
+	}
+	storedPath, ok := fresh.Receipt.ArtifactRefs()[0].ViewPath()
+	if !ok || !strings.Contains(storedPath, claim.Run.ID().String()+"/0/") {
+		t.Fatalf("stored readonly mapping = %q, %t", storedPath, ok)
+	}
+
+	replayBase := base
+	replayBase.At = base.At.Add(time.Second)
+	replayPlan, err := fixture.store.PlanAgentCurrentRead(context.Background(), replayBase)
+	if err != nil || replayPlan.Replay == nil || !replayPlan.Replay.Replayed ||
+		len(replayPlan.Artifacts) != 1 || replayPlan.Artifacts[0] != plan.Artifacts[0] {
+		t.Fatalf("replay materialization plan = (%#v, %v)", replayPlan, err)
+	}
+	replayBase.ArtifactViews = fresh.Receipt.ArtifactRefs()
+	replayed, err := fixture.store.FinalizeAgentCurrentRead(context.Background(), replayBase)
+	if err != nil || !replayed.Replayed ||
+		replayed.Receipt.CanonicalJSON().String() != fresh.Receipt.CanonicalJSON().String() {
+		t.Fatalf("exact mapping replay = (%#v, %v)", replayed, err)
+	}
+
+	drift, _ := model.NewCurrentArtifactView(root.RootDigest,
+		fmt.Sprintf(".mnemon/harness/node/views/%s/0/other", claim.Run.ID().String()))
+	replayBase.ArtifactViews = []model.CurrentArtifactRef{drift}
+	if _, err := fixture.store.FinalizeAgentCurrentRead(context.Background(), replayBase); !errors.Is(err, ErrCurrentReadInvariant) {
+		t.Fatalf("stored mapping drift error = %v", err)
+	}
+	if _, err := fixture.store.db.Exec(`DELETE FROM artifact_pins
+		WHERE root_digest=? AND owner_kind='event' AND owner_id=?`, root.RootDigest.String(), eventID.String()); err != nil {
+		t.Fatal(err)
+	}
+	replayBase.ArtifactViews = nil
+	if _, err := fixture.store.PlanAgentCurrentRead(context.Background(), replayBase); !errors.Is(err, ErrCurrentReadInvariant) {
+		t.Fatalf("replay missing pin error = %v", err)
+	}
+}
+
+func TestAgentCurrentArtifactFinalizeHonorsProfilePathBudget(t *testing.T) {
+	fixture, _, _, claim, claimAt := currentArtifactReadFixture(t, "path-budget")
+	base := currentReadSpec(fixture, claim.Run.ID(), "token-current-artifact-path-budget",
+		claimAt.Add(time.Second))
+	plan, err := fixture.store.PlanAgentCurrentRead(context.Background(), base)
+	if err != nil || len(plan.Artifacts) != 1 {
+		t.Fatalf("PlanAgentCurrentRead() = (%#v, %v)", plan, err)
+	}
+	budgetSpec := model.DefaultHandlingBudget().Spec()
+	budgetSpec.MaxCurrentPathBytes = 80
+	budget, err := model.NewHandlingBudget(budgetSpec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.db.Exec(`UPDATE profiles SET handling_budget_json=? WHERE profile_id=?`,
+		budget.JSON().Bytes(), fixture.profile.ID().String()); err != nil {
+		t.Fatal(err)
+	}
+	path := fmt.Sprintf(".mnemon/harness/node/views/%s/0/%s", claim.Run.ID().String(),
+		strings.Repeat("x", 40))
+	if len(path) <= budgetSpec.MaxCurrentPathBytes {
+		t.Fatalf("test path length = %d, budget = %d", len(path), budgetSpec.MaxCurrentPathBytes)
+	}
+	view, err := model.NewCurrentArtifactView(plan.Artifacts[0].RootDigest, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base.ArtifactViews = []model.CurrentArtifactRef{view}
+	if _, err := fixture.store.FinalizeAgentCurrentRead(context.Background(), base); !errors.Is(err, ErrCurrentReadTooLarge) {
+		t.Fatalf("Profile path budget error = %v", err)
+	}
+	assertNoCurrentReadReceipt(t, fixture.store, claim.Run.ID())
+}
+
+func TestAgentCurrentArtifactFinalizeIsConcurrentReplaySafe(t *testing.T) {
+	fixture, _, _, claim, claimAt := currentArtifactReadFixture(t, "concurrent-view")
+	spec := plannedCurrentReadSpec(t, fixture.store, currentReadSpec(fixture, claim.Run.ID(),
+		"token-current-artifact-concurrent-view", claimAt.Add(time.Second)))
+	start := make(chan struct{})
+	results := make(chan AgentCurrentReadResult, 2)
+	errs := make(chan error, 2)
+	var wait sync.WaitGroup
+	for index := 0; index < 2; index++ {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			<-start
+			result, err := fixture.store.FinalizeAgentCurrentRead(context.Background(), spec)
+			results <- result
+			errs <- err
+		}()
+	}
+	close(start)
+	wait.Wait()
+	close(results)
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent Artifact finalize error = %v", err)
+		}
+	}
+	replays := map[bool]int{}
+	var canonical string
+	for result := range results {
+		replays[result.Replayed]++
+		if canonical == "" {
+			canonical = result.Receipt.CanonicalJSON().String()
+		} else if canonical != result.Receipt.CanonicalJSON().String() {
+			t.Fatal("concurrent Artifact finalizers returned different receipts")
+		}
+	}
+	if replays[false] != 1 || replays[true] != 1 {
+		t.Fatalf("concurrent Artifact replay states = %#v", replays)
+	}
 }
 
 func TestFinalizeAgentCurrentReadKeepsOfferedBriefAfterAcceptedTransition(t *testing.T) {
@@ -256,8 +409,9 @@ func TestFinalizeAgentCurrentReadKeepsOfferedBriefAfterAcceptedTransition(t *tes
 	insertClaimHandling(t, fixture.store, "handling-current-accepted-brief", publication.Event().ID(),
 		1, claimAt, claimAt, 0)
 	claim := claimCurrent(t, fixture, "owner-current-accepted-brief", "token-current-accepted-brief", claimAt)
-	result, err := fixture.store.FinalizeAgentCurrentRead(context.Background(),
-		currentReadSpec(fixture, claim.Run.ID(), "token-current-accepted-brief", claimAt.Add(time.Second)))
+	spec := plannedCurrentReadSpec(t, fixture.store, currentReadSpec(fixture, claim.Run.ID(),
+		"token-current-accepted-brief", claimAt.Add(time.Second)))
+	result, err := fixture.store.FinalizeAgentCurrentRead(context.Background(), spec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -460,6 +614,43 @@ func currentReadSpec(fixture *acceptanceFixture, run model.RunID, token string,
 	return AgentCurrentReadSpec{ProfileID: fixture.profile.ID(),
 		ExpectedAssetRevision: fixture.profile.ActiveAssetRevision(), RunID: run,
 		ClaimTokenHash: model.Sum([]byte(token)), At: at}
+}
+
+func plannedCurrentReadSpec(t *testing.T, st *Store,
+	spec AgentCurrentReadSpec,
+) AgentCurrentReadSpec {
+	t.Helper()
+	plan, err := st.PlanAgentCurrentRead(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("PlanAgentCurrentRead() error = %v", err)
+	}
+	if plan.RunID != spec.RunID {
+		t.Fatalf("materialization Run = %s, want %s", plan.RunID, spec.RunID)
+	}
+	spec.ArtifactViews = make([]model.CurrentArtifactRef, len(plan.Artifacts))
+	for index, item := range plan.Artifacts {
+		if item.Ordinal != uint32(index) || item.RootDigest.IsZero() || item.ManifestDigest.IsZero() {
+			t.Fatalf("materialization item %d = %#v", index, item)
+		}
+		path := fmt.Sprintf(".mnemon/harness/node/views/%s/%d/root", spec.RunID.String(), item.Ordinal)
+		spec.ArtifactViews[index], err = model.NewCurrentArtifactView(item.RootDigest, path)
+		if err != nil {
+			t.Fatalf("NewCurrentArtifactView() error = %v", err)
+		}
+	}
+	return spec
+}
+
+func assertNoCurrentReadReceipt(t *testing.T, st *Store, run model.RunID) {
+	t.Helper()
+	var count int
+	if err := st.db.QueryRow(`SELECT COUNT(*) FROM agent_runs
+		WHERE run_id=? AND current_read_receipt_json IS NOT NULL`, run.String()).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("AgentRun %s has %d current-read receipts", run, count)
+	}
 }
 
 func currentArtifactReadFixture(t *testing.T, suffix string) (*acceptanceFixture,
