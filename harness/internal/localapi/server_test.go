@@ -79,6 +79,141 @@ func TestServerRoutesAuthenticatedClosedRequests(t *testing.T) {
 	}
 }
 
+func TestServerHealthIsAuthenticatedClosedAndIdentityFree(t *testing.T) {
+	t.Parallel()
+	credential := repeatedOpaqueBytes(0x31)
+	revision := model.Sum([]byte("health-assets")).String()
+	called := 0
+	provider := HealthProviderFunc(func(_ context.Context,
+		metadata RequestMetadata,
+	) (HealthSnapshot, *APIError) {
+		called++
+		if metadata.Profile.ID() != model.TeamworkProfileID() || metadata.HasOperationKey ||
+			metadata.HasClaimContext || metadata.HasRunAttachment {
+			t.Fatalf("health metadata = %#v", metadata)
+		}
+		return HealthSnapshot{AssetRevision: revision, WorkersReady: true}, nil
+	})
+	server, err := NewServer(&fakeAuthenticator{want: modelDigest(credential)}, &fakeService{}, provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, RouteHealth, nil)
+	request.Header.Set(authorizationHeader, profileScheme+encodeSecret(credential))
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+	want := `{"asset_revision":"` + revision +
+		`","schema_version":1,"status":"ready"}` + "\n"
+	if recorder.Code != http.StatusOK || recorder.Body.String() != want || called != 1 ||
+		recorder.Header().Get("Cache-Control") != "no-store" ||
+		IsAgentRoute(RouteHealth) || !IsControlRoute(RouteHealth) {
+		t.Fatalf("health response = %d %q headers=%v called=%d", recorder.Code,
+			recorder.Body.String(), recorder.Header(), called)
+	}
+}
+
+func TestServerHealthRejectsMethodsBodiesCapabilitiesAndBadAuth(t *testing.T) {
+	t.Parallel()
+	credential := repeatedOpaqueBytes(0x32)
+	secret := encodeSecret(repeatedOpaqueBytes(0x33))
+	called := 0
+	provider := HealthProviderFunc(func(context.Context,
+		RequestMetadata,
+	) (HealthSnapshot, *APIError) {
+		called++
+		return HealthSnapshot{AssetRevision: model.Sum([]byte("health-assets")).String(),
+			WorkersReady: true}, nil
+	})
+	server, _ := NewServer(&fakeAuthenticator{want: modelDigest(credential)}, &fakeService{}, provider)
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+		mutate func(*http.Request)
+		status int
+		allow  string
+	}{
+		{name: "method", method: http.MethodPost, path: RouteHealth, status: http.StatusMethodNotAllowed, allow: http.MethodGet},
+		{name: "body", method: http.MethodGet, path: RouteHealth, body: `{}`, status: http.StatusBadRequest},
+		{name: "query", method: http.MethodGet, path: RouteHealth + "?detail=1", status: http.StatusBadRequest},
+		{name: "operation", method: http.MethodGet, mutate: func(request *http.Request) {
+			request.Header.Set(operationKeyHeader, secret)
+		}, status: http.StatusBadRequest},
+		{name: "claim", method: http.MethodGet, mutate: func(request *http.Request) {
+			request.Header.Set(claimContextHeader, secret)
+		}, status: http.StatusBadRequest},
+		{name: "attachment", method: http.MethodGet, mutate: func(request *http.Request) {
+			request.Header.Set(runAttachmentHeader, secret)
+		}, status: http.StatusBadRequest},
+		{name: "authentication", method: http.MethodGet, mutate: func(request *http.Request) {
+			request.Header.Set(authorizationHeader, profileScheme+encodeSecret(repeatedOpaqueBytes(0x34)))
+		}, status: http.StatusUnauthorized},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := test.path
+			if path == "" {
+				path = RouteHealth
+			}
+			request := httptest.NewRequest(test.method, path, strings.NewReader(test.body))
+			request.Header.Set(authorizationHeader, profileScheme+encodeSecret(credential))
+			if test.mutate != nil {
+				test.mutate(request)
+			}
+			recorder := httptest.NewRecorder()
+			server.Handler().ServeHTTP(recorder, request)
+			if recorder.Code != test.status || recorder.Header().Get("Allow") != test.allow {
+				t.Fatalf("health rejection = %d %s Allow=%q", recorder.Code,
+					recorder.Body.String(), recorder.Header().Get("Allow"))
+			}
+		})
+	}
+	if called != 0 {
+		t.Fatalf("rejected requests called health provider %d times", called)
+	}
+}
+
+func TestServerHealthProviderFailureIsClosed(t *testing.T) {
+	t.Parallel()
+	credential := repeatedOpaqueBytes(0x35)
+	tests := []struct {
+		name     string
+		provider []HealthProvider
+		status   int
+		code     ErrorCode
+	}{
+		{name: "missing", status: http.StatusInternalServerError, code: CodeInternal},
+		{name: "invalid snapshot", provider: []HealthProvider{HealthProviderFunc(func(context.Context,
+			RequestMetadata,
+		) (HealthSnapshot, *APIError) {
+			return HealthSnapshot{AssetRevision: "peer-secret", WorkersReady: true}, nil
+		})}, status: http.StatusInternalServerError, code: CodeInternal},
+		{name: "provider error", provider: []HealthProvider{HealthProviderFunc(func(context.Context,
+			RequestMetadata,
+		) (HealthSnapshot, *APIError) {
+			return HealthSnapshot{}, NewAPIError(CodeAssetRevisionMismatch, "managed asset revision differs")
+		})}, status: http.StatusBadRequest, code: CodeAssetRevisionMismatch},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server, err := NewServer(&fakeAuthenticator{want: modelDigest(credential)}, &fakeService{}, test.provider...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := httptest.NewRequest(http.MethodGet, RouteHealth, nil)
+			request.Header.Set(authorizationHeader, profileScheme+encodeSecret(credential))
+			recorder := httptest.NewRecorder()
+			server.Handler().ServeHTTP(recorder, request)
+			var envelope APIError
+			if err := json.Unmarshal(recorder.Body.Bytes(), &envelope); err != nil ||
+				recorder.Code != test.status || envelope.Code != test.code {
+				t.Fatalf("health failure = %d %s (%v)", recorder.Code, recorder.Body.String(), err)
+			}
+		})
+	}
+}
+
 func TestServerRejectsAuthorityFieldsDuplicateKeysAndOversize(t *testing.T) {
 	t.Parallel()
 	credential := make([]byte, opaqueSecretBytes)

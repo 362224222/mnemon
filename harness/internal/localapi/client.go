@@ -84,6 +84,30 @@ func NewClient(nodeState string) (*Client, error) {
 	return client, nil
 }
 
+// ProbeHealth performs the authenticated, identity-free daemon readiness
+// probe. A valid not_ready response is returned to the caller as health state,
+// not rewritten into a transport error.
+func (c *Client) ProbeHealth(ctx context.Context) (HealthResponse, *APIError) {
+	var response HealthResponse
+	if c == nil || c.http == nil || ctx == nil {
+		return HealthResponse{}, invalidControlResponse("local control client is unavailable")
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		"http://mnemond"+RouteHealth, nil)
+	if err != nil {
+		return HealthResponse{}, invalidControlResponse("local control request cannot be created")
+	}
+	request.Header.Set(authorizationHeader,
+		profileScheme+base64.RawURLEncoding.EncodeToString(c.token[:]))
+	if apiErr := c.send(request, &response, MaxHealthResponseBytes); apiErr != nil {
+		return HealthResponse{}, apiErr
+	}
+	if apiErr := validateHealthResponse(response); apiErr != nil {
+		return HealthResponse{}, apiErr
+	}
+	return response, nil
+}
+
 func (c *Client) HookCheck(ctx context.Context) (HookCheckResponse, *APIError) {
 	var response HookCheckResponse
 	if apiErr := c.post(ctx, RouteHookCheck, HookCheckRequest{}, clientHeaders{}, &response); apiErr != nil {
@@ -259,13 +283,20 @@ func (c *Client) post(ctx context.Context, route string, input any, headers clie
 		request.Header.Set(claimContextHeader, headers.claim)
 	}
 
+	return c.send(request, response, maxControlResponse)
+}
+
+func (c *Client) send(request *http.Request, response any, maxResponse int64) *APIError {
+	if c == nil || c.http == nil || request == nil || response == nil || maxResponse <= 0 {
+		return invalidControlResponse("local control client is unavailable")
+	}
 	httpResponse, err := c.http.Do(request)
 	if err != nil {
 		return NewAPIError(CodeMnemondUnavailable, "mnemond local control is unavailable")
 	}
 	defer httpResponse.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(httpResponse.Body, maxControlResponse+1))
-	if err != nil || len(raw) == 0 || len(raw) > maxControlResponse {
+	raw, err := io.ReadAll(io.LimitReader(httpResponse.Body, maxResponse+1))
+	if err != nil || len(raw) == 0 || int64(len(raw)) > maxResponse {
 		return invalidControlResponse("local control response exceeds its closed bound")
 	}
 	if httpResponse.Header.Get("Content-Type") != "application/json" {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -134,6 +135,79 @@ func TestClientUsesOnlyOwnerUnixControlAndOpaqueHeaders(t *testing.T) {
 			metadata.ClaimContextHash != model.Sum(repeatedOpaqueBytes(0x82))) {
 			t.Fatalf("operation metadata[%d] = %#v", index, metadata)
 		}
+	}
+}
+
+func TestClientProbeHealthUsesGETAuthenticationAndNoCapabilities(t *testing.T) {
+	t.Parallel()
+	nodeState := newClientNodeState(t)
+	credential := repeatedOpaqueBytes(0x88)
+	installClientCredential(t, nodeState, credential)
+	revision := model.Sum([]byte("client-health-assets")).String()
+	requestSeen := make(chan error, 1)
+	stop := serveRawClientControl(t, nodeState, http.HandlerFunc(func(writer http.ResponseWriter,
+		request *http.Request,
+	) {
+		body, err := io.ReadAll(request.Body)
+		if err == nil && (request.Method != http.MethodGet || request.URL.Path != RouteHealth ||
+			request.ContentLength != 0 || len(body) != 0 || request.Header.Get("Content-Type") != "" ||
+			request.Header.Get(operationKeyHeader) != "" || request.Header.Get(claimContextHeader) != "" ||
+			request.Header.Get(runAttachmentHeader) != "" ||
+			request.Header.Get(authorizationHeader) != profileScheme+encodeSecret(credential)) {
+			err = errors.New("probe request violates the closed health transport")
+		}
+		requestSeen <- err
+		writeResponse(writer, http.StatusOK, HealthResponse{AssetRevision: revision,
+			SchemaVersion: SchemaVersion, Status: "not_ready"})
+	}))
+	defer stop()
+	client, err := NewClient(nodeState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, apiErr := client.ProbeHealth(context.Background())
+	if apiErr != nil || response.Status != "not_ready" || response.AssetRevision != revision {
+		t.Fatalf("ProbeHealth() = %#v, %#v", response, apiErr)
+	}
+	if err := <-requestSeen; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestClientProbeHealthRejectsNonclosedAndOversizeResponses(t *testing.T) {
+	t.Parallel()
+	revision := model.Sum([]byte("client-health-assets")).String()
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "unknown field", body: `{"asset_revision":"` + revision +
+			`","peer_id":"secret","schema_version":1,"status":"ready"}` + "\n"},
+		{name: "invalid status", body: `{"asset_revision":"` + revision +
+			`","schema_version":1,"status":"starting"}` + "\n"},
+		{name: "oversize", body: `{"padding":"` + strings.Repeat("x", MaxHealthResponseBytes) + `"}` + "\n"},
+	}
+	for index, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			nodeState := newClientNodeState(t)
+			credential := repeatedOpaqueBytes(byte(0x89 + index))
+			installClientCredential(t, nodeState, credential)
+			stop := serveRawClientControl(t, nodeState, http.HandlerFunc(func(writer http.ResponseWriter,
+				_ *http.Request,
+			) {
+				writer.Header().Set("Content-Type", "application/json")
+				_, _ = writer.Write([]byte(test.body))
+			}))
+			defer stop()
+			client, err := NewClient(nodeState)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, apiErr := client.ProbeHealth(context.Background()); apiErr == nil ||
+				apiErr.Code != CodeInternal {
+				t.Fatalf("invalid health error = %#v", apiErr)
+			}
+		})
 	}
 }
 

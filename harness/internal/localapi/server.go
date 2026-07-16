@@ -12,6 +12,7 @@ import (
 )
 
 const (
+	RouteHealth         = "/v1/health"
 	RouteHookCheck      = "/v1/hook/check"
 	RouteAgentCurrent   = "/v1/agent/current"
 	RouteTeamworkAction = "/v1/teamwork/action"
@@ -28,21 +29,34 @@ type Service interface {
 type Server struct {
 	authenticator Authenticator
 	service       Service
+	health        HealthProvider
 	handler       http.Handler
 }
 
-func NewServer(authenticator Authenticator, service Service) (*Server, error) {
+func NewServer(authenticator Authenticator, service Service,
+	healthProviders ...HealthProvider,
+) (*Server, error) {
 	if authenticator == nil || service == nil {
 		return nil, errors.New("local API: authenticator and service are required")
 	}
-	server := &Server{authenticator: authenticator, service: service}
+	if len(healthProviders) > 1 || len(healthProviders) == 1 && healthProviders[0] == nil {
+		return nil, errors.New("local API: at most one health provider is allowed")
+	}
+	var health HealthProvider
+	if len(healthProviders) == 1 {
+		health = healthProviders[0]
+	} else if provided, ok := service.(HealthProvider); ok {
+		health = provided
+	}
+	server := &Server{authenticator: authenticator, service: service, health: health}
 	mux := http.NewServeMux()
+	mux.HandleFunc(RouteHealth, server.handleHealth)
 	mux.HandleFunc(RouteHookCheck, server.handleHookCheck)
 	mux.HandleFunc(RouteAgentCurrent, server.handleAgentCurrent)
 	mux.HandleFunc(RouteTeamworkAction, server.handleTeamworkAction)
 	mux.HandleFunc(RouteAgentResolve, server.handleAgentResolve)
 	server.handler = http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if !IsAgentRoute(request.URL.Path) {
+		if !IsControlRoute(request.URL.Path) {
 			writeErrorStatus(writer, http.StatusNotFound,
 				NewAPIError(CodeInvalidArgument, "local control route does not exist"))
 			return
@@ -53,6 +67,50 @@ func NewServer(authenticator Authenticator, service Service) (*Server, error) {
 }
 
 func (s *Server) Handler() http.Handler { return s.handler }
+
+func (s *Server) handleHealth(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet {
+		writer.Header().Set("Allow", http.MethodGet)
+		writeErrorStatus(writer, http.StatusMethodNotAllowed,
+			NewAPIError(CodeInvalidArgument, "method is not allowed"))
+		return
+	}
+	if request.ContentLength != 0 || len(request.TransferEncoding) != 0 {
+		writeError(writer, NewAPIError(CodeInvalidArgument, "health request must not contain a body"))
+		return
+	}
+	if request.URL.RawQuery != "" {
+		writeError(writer, NewAPIError(CodeInvalidArgument, "health request must not contain a query"))
+		return
+	}
+	if request.Body != nil {
+		raw, err := io.ReadAll(io.LimitReader(request.Body, 1))
+		if err != nil || len(raw) != 0 {
+			writeError(writer, NewAPIError(CodeInvalidArgument, "health request must not contain a body"))
+			return
+		}
+	}
+	metadata, apiErr := authenticateRequest(request.Context(), request, s.authenticator, headerPolicy{})
+	if apiErr != nil {
+		writeError(writer, apiErr)
+		return
+	}
+	if s.health == nil {
+		writeError(writer, NewAPIError(CodeInternal, "health provider is unavailable"))
+		return
+	}
+	snapshot, apiErr := s.health.Health(request.Context(), metadata)
+	if apiErr != nil {
+		writeError(writer, apiErr)
+		return
+	}
+	response, err := healthResponse(snapshot)
+	if err != nil {
+		writeError(writer, NewAPIError(CodeInternal, "health provider returned invalid state"))
+		return
+	}
+	writeResponse(writer, http.StatusOK, response)
+}
 
 func (s *Server) handleHookCheck(writer http.ResponseWriter, request *http.Request) {
 	metadata, ok := s.prepare(writer, request, headerPolicy{attachmentAllowed: true})
@@ -241,6 +299,8 @@ func IsAgentRoute(path string) bool {
 	return path == RouteHookCheck || path == RouteAgentCurrent ||
 		path == RouteTeamworkAction || path == RouteAgentResolve
 }
+
+func IsControlRoute(path string) bool { return path == RouteHealth || IsAgentRoute(path) }
 
 func validTeamworkAction(action string) bool {
 	return action == "offer" || action == "accept" || action == "decline" ||
