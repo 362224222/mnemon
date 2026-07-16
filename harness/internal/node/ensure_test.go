@@ -32,6 +32,33 @@ func TestEnsureDaemonReturnsExactReadyHealthWithoutLockOrLaunch(t *testing.T) {
 	}
 }
 
+func TestEnsureDaemonRunsCallerReadyGateWithoutCreatingAnotherAuthority(t *testing.T) {
+	nodeState := newEnsureNodeState(t)
+	revision := ensureTestRevision("ready-gate")
+	health := readyEnsureHealth(revision)
+	failed := errors.New("projected Hook self-check failed")
+	var gates atomic.Int32
+	_, err := EnsureDaemon(context.Background(), DaemonEnsureOptions{
+		NodeState: nodeState, AssetRevision: revision,
+		Probe: ensureProbeFunc(func(context.Context) (localapi.HealthResponse, *localapi.APIError) {
+			return health, nil
+		}),
+		ReadyGate: DaemonReadyGateFunc(func(_ context.Context, received localapi.HealthResponse) error {
+			gates.Add(1)
+			if received != health {
+				t.Fatalf("ready gate health = %#v", received)
+			}
+			return failed
+		}),
+	})
+	if !errors.Is(err, ErrDaemonEnsure) || !errors.Is(err, failed) || gates.Load() != 1 {
+		t.Fatalf("EnsureDaemon() = %v, gates=%d", err, gates.Load())
+	}
+	if _, err := os.Lstat(filepath.Join(nodeState, ensureLockName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("existing ready gate created launch lock: %v", err)
+	}
+}
+
 func TestEnsureDaemonFailsClosedForEveryReachableNonreadyState(t *testing.T) {
 	wanted := ensureTestRevision("wanted")
 	other := ensureTestRevision("other")
@@ -154,6 +181,36 @@ func TestEnsureDaemonRunsStrictPreflightThenOneLaunchAndWaitsForReady(t *testing
 			handle.releases.Load(), handle.terminations.Load())
 	}
 	assertEnsureLock(t, nodeState)
+}
+
+func TestEnsureDaemonTerminatesNewChildWhenReadyGateFails(t *testing.T) {
+	nodeState := newEnsureNodeState(t)
+	revision := ensureTestRevision("launched-ready-gate")
+	failed := errors.New("actual Hook failed")
+	var launched atomic.Bool
+	handle := newRecordingDaemonLaunch()
+	_, err := EnsureDaemon(context.Background(), DaemonEnsureOptions{
+		NodeState: nodeState, AssetRevision: revision,
+		Probe: ensureProbeFunc(func(context.Context) (localapi.HealthResponse, *localapi.APIError) {
+			if !launched.Load() {
+				return unavailableEnsureHealth()
+			}
+			return readyEnsureHealth(revision), nil
+		}),
+		Preflight: DaemonEnsurePreflightFunc(func(context.Context) error { return nil }),
+		Launcher: DaemonLauncherFunc(func(context.Context) (DaemonLaunch, error) {
+			launched.Store(true)
+			return handle, nil
+		}),
+		ReadyGate: DaemonReadyGateFunc(func(context.Context, localapi.HealthResponse) error {
+			return failed
+		}),
+	})
+	if !errors.Is(err, ErrDaemonEnsure) || !errors.Is(err, failed) ||
+		handle.releases.Load() != 0 || handle.terminations.Load() != 1 {
+		t.Fatalf("EnsureDaemon() = %v, releases=%d terminations=%d", err,
+			handle.releases.Load(), handle.terminations.Load())
+	}
 }
 
 func TestEnsureDaemonConcurrentCallersLaunchExactlyOnce(t *testing.T) {

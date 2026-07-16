@@ -47,6 +47,24 @@ func (verify DaemonEnsurePreflightFunc) Verify(ctx context.Context) error {
 	return verify(ctx)
 }
 
+// DaemonReadyGate performs an optional caller-specific post-health check while
+// Ensure still owns a newly launched child. Setup uses it for the actual
+// projected Hook self-check; ordinary Agent ensure leaves it nil.
+type DaemonReadyGate interface {
+	VerifyReady(context.Context, localapi.HealthResponse) error
+}
+
+type DaemonReadyGateFunc func(context.Context, localapi.HealthResponse) error
+
+func (verify DaemonReadyGateFunc) VerifyReady(ctx context.Context,
+	health localapi.HealthResponse,
+) error {
+	if verify == nil {
+		return errors.New("daemon ready gate is unavailable")
+	}
+	return verify(ctx, health)
+}
+
 // DaemonLaunch is the unique child process ownership returned by one launch.
 // Release detaches that exact child only after authenticated exact-ready
 // health. Terminate stops that exact child and removes its launch-owned process
@@ -80,6 +98,7 @@ type DaemonEnsureOptions struct {
 	Probe         DaemonHealthProbe
 	Preflight     DaemonEnsurePreflight
 	Launcher      DaemonLauncher
+	ReadyGate     DaemonReadyGate
 }
 
 type DaemonEnsureResult struct {
@@ -128,6 +147,9 @@ func ensureDaemon(ctx context.Context, options DaemonEnsureOptions,
 		if probeErr != nil {
 			return DaemonEnsureResult{}, probeErr
 		}
+		if gateErr := verifyDaemonReadyGate(bounded, options.ReadyGate, health); gateErr != nil {
+			return DaemonEnsureResult{}, gateErr
+		}
 		return DaemonEnsureResult{Health: health}, nil
 	}
 	if options.Preflight == nil || options.Launcher == nil {
@@ -161,6 +183,9 @@ func ensureDaemon(ctx context.Context, options DaemonEnsureOptions,
 		if probeErr != nil {
 			return DaemonEnsureResult{}, probeErr
 		}
+		if gateErr := verifyDaemonReadyGate(bounded, options.ReadyGate, health); gateErr != nil {
+			return DaemonEnsureResult{}, gateErr
+		}
 		return DaemonEnsureResult{Health: health}, nil
 	}
 	if verifyErr := options.Preflight.Verify(bounded); verifyErr != nil {
@@ -187,6 +212,9 @@ func ensureDaemon(ctx context.Context, options DaemonEnsureOptions,
 			if probeErr != nil {
 				return DaemonEnsureResult{}, probeErr
 			}
+			if gateErr := verifyDaemonReadyGate(bounded, options.ReadyGate, health); gateErr != nil {
+				return DaemonEnsureResult{}, gateErr
+			}
 			if releaseErr := launched.Release(); releaseErr != nil {
 				return DaemonEnsureResult{}, fmt.Errorf("%w: release ready mnemond: %w",
 					ErrDaemonEnsure, releaseErr)
@@ -199,6 +227,21 @@ func ensureDaemon(ctx context.Context, options DaemonEnsureOptions,
 				ErrDaemonEnsure, waitErr)
 		}
 	}
+}
+
+func verifyDaemonReadyGate(ctx context.Context, gate DaemonReadyGate,
+	health localapi.HealthResponse,
+) error {
+	if gate == nil {
+		return nil
+	}
+	if err := gate.VerifyReady(ctx, health); err != nil {
+		return fmt.Errorf("%w: daemon post-ready gate: %w", ErrDaemonEnsure, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("%w: daemon post-ready gate exceeded its bound: %w", ErrDaemonEnsure, err)
+	}
+	return nil
 }
 
 func probeDaemonHealth(ctx context.Context, probe DaemonHealthProbe,
