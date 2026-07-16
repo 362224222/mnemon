@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
+	peerprotocol "github.com/mnemon-dev/mnemon/harness/internal/peer"
 )
 
 func validateAdmissionAuthority(ctx context.Context, tx *sql.Tx, spec LocalAcceptanceSpec,
@@ -184,15 +185,21 @@ func validateOperationEvents(authority *LocalOperationAuthority, events []model.
 	if len(events) > 1 && want != model.EventReviewOffered {
 		return errors.New("commit local acceptance: only teamwork.offer may expand a batch")
 	}
-	previousReviewer := ""
+	var previousReviewer model.PeerID
 	for index, event := range events {
 		if event.Type() != want {
 			return fmt.Errorf("commit local acceptance: operation %s cannot emit %s", authority.Kind, event.Type())
 		}
 		if want == model.EventReviewOffered {
-			reviewer := event.Audience().Peers()[0].String()
-			if event.Audience().Len() != 1 || (index > 0 && reviewer <= previousReviewer) {
+			if event.Audience().Len() != 1 {
 				return errors.New("commit local acceptance: offer batch must use canonical unique reviewer order")
+			}
+			reviewer := event.Audience().Peers()[0]
+			if index > 0 {
+				comparison, err := peerprotocol.CompareCanonicalIDs(previousReviewer, reviewer)
+				if err != nil || comparison >= 0 {
+					return errors.New("commit local acceptance: offer batch must use canonical unique reviewer order")
+				}
 			}
 			previousReviewer = reviewer
 			if index > 0 && !sameExpandedOfferSemantics(events[0], event) {

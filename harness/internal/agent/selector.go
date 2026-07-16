@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -10,8 +9,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	libp2ppeer "github.com/libp2p/go-libp2p/core/peer"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
+	peerprotocol "github.com/mnemon-dev/mnemon/harness/internal/peer"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
 
@@ -227,19 +226,12 @@ func decodeAgentOfferReviewers(candidates []store.AgentOfferCandidateReviewer) (
 
 func sortAgentOfferReviewers(reviewers []decodedAgentOfferReviewer) {
 	sort.Slice(reviewers, func(left, right int) bool {
-		return bytes.Compare(reviewers[left].canonicalPeer, reviewers[right].canonicalPeer) < 0
+		return string(reviewers[left].canonicalPeer) < string(reviewers[right].canonicalPeer)
 	})
 }
 
 func canonicalAgentPeerBytes(id model.PeerID) ([]byte, error) {
-	decoded, err := libp2ppeer.Decode(id.String())
-	if err != nil {
-		return nil, err
-	}
-	if decoded.String() != id.String() {
-		return nil, errors.New("PeerID text is not canonical")
-	}
-	return append([]byte(nil), []byte(decoded)...), nil
+	return peerprotocol.CanonicalIDBytes(id)
 }
 
 func validateAgentSelectionAlias(field, value string, emptyOK bool) error {

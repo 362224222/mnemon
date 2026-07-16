@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
+	peerprotocol "github.com/mnemon-dev/mnemon/harness/internal/peer"
 )
 
 const (
@@ -89,20 +90,27 @@ func PlanOffer(spec OfferPlanSpec) (OfferPlan, error) {
 	}
 	deadlineUnixNano := acceptedUnixNano + int64(deadline)
 
-	reviewers := append([]model.PeerID(nil), spec.ReviewerPeerIDs...)
-	sort.Slice(reviewers, func(i, j int) bool {
-		return reviewers[i].String() < reviewers[j].String()
-	})
+	type orderedReviewer struct {
+		id  model.PeerID
+		key string
+	}
+	reviewers := make([]orderedReviewer, len(spec.ReviewerPeerIDs))
+	for index, reviewer := range spec.ReviewerPeerIDs {
+		canonical, err := peerprotocol.CanonicalIDBytes(reviewer)
+		if err != nil {
+			return OfferPlan{}, fmt.Errorf("%w: reviewer PeerID: %v", ErrInvalidOffer, err)
+		}
+		reviewers[index] = orderedReviewer{id: reviewer, key: string(canonical)}
+	}
+	sort.Slice(reviewers, func(i, j int) bool { return reviewers[i].key < reviewers[j].key })
 
 	offers := make([]PlannedOffer, len(reviewers))
-	for index, reviewer := range reviewers {
-		if reviewer.IsZero() {
-			return OfferPlan{}, fmt.Errorf("%w: reviewer %d has a zero PeerID", ErrInvalidOffer, index)
-		}
+	for index, ordered := range reviewers {
+		reviewer := ordered.id
 		if reviewer == spec.HomePeerID {
 			return OfferPlan{}, fmt.Errorf("%w: self review is forbidden", ErrInvalidOffer)
 		}
-		if index > 0 && reviewer == reviewers[index-1] {
+		if index > 0 && ordered.key == reviewers[index-1].key {
 			return OfferPlan{}, fmt.Errorf("%w: duplicate reviewer %q", ErrInvalidOffer, reviewer.String())
 		}
 		participants, err := model.NewParticipantSnapshot(

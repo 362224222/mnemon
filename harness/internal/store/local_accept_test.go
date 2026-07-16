@@ -3,14 +3,19 @@ package store
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
 
+	libp2pcrypto "github.com/libp2p/go-libp2p/core/crypto"
+	libp2ppeer "github.com/libp2p/go-libp2p/core/peer"
 	eventpkg "github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
+	peerprotocol "github.com/mnemon-dev/mnemon/harness/internal/peer"
 )
 
 func TestCommitLocalAcceptancePersistsCompleteEvidenceAndReplaysAfterRestart(t *testing.T) {
@@ -119,11 +124,37 @@ func newAcceptanceFixture(t *testing.T, reviewerCount int) *acceptanceFixture {
 	publicKey, privateKey, _ := ed25519.GenerateKey(nil)
 	fixture.privateKey = privateKey
 	for index := 0; index < reviewerCount; index++ {
-		peer, _ := model.ParsePeerID(fmt.Sprintf("peer-accept-reviewer-%c", 'a'+index))
-		fixture.reviewers = append(fixture.reviewers, peer)
+		fixture.reviewers = append(fixture.reviewers,
+			acceptancePeerID(t, fmt.Sprintf("peer-accept-reviewer-%c", 'a'+index)))
 	}
+	sort.Slice(fixture.reviewers, func(left, right int) bool {
+		comparison, err := peerprotocol.CompareCanonicalIDs(fixture.reviewers[left], fixture.reviewers[right])
+		if err != nil {
+			t.Fatal(err)
+		}
+		return comparison < 0
+	})
 	installAcceptanceChannel(t, fixture, publicKey)
 	return fixture
+}
+
+func acceptancePeerID(t *testing.T, label string) model.PeerID {
+	t.Helper()
+	seed := sha256.Sum256([]byte(label))
+	standardPrivate := ed25519.NewKeyFromSeed(seed[:])
+	privateKey, err := libp2pcrypto.UnmarshalEd25519PrivateKey(standardPrivate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := libp2ppeer.IDFromPrivateKey(privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := model.ParsePeerID(id.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result
 }
 
 func installAcceptanceChannel(t *testing.T, fixture *acceptanceFixture, publicKey ed25519.PublicKey) {
