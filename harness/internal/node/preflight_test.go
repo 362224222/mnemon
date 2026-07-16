@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
@@ -224,6 +225,39 @@ func TestDaemonPreflightVerifiesInstallationAndReleasesWriterAuthority(t *testin
 		if called {
 			t.Fatal("cancelled preflight reached installation verifier")
 		}
+	})
+
+	t.Run("stalled installation verifier", func(t *testing.T) {
+		fixture := newDaemonFixture(t, true)
+		started := make(chan struct{})
+		release := make(chan struct{})
+		defer close(release)
+		install := InstallationVerifierFunc(func(model.Profile) error {
+			close(started)
+			<-release
+			return nil
+		})
+		preflight := newFixtureDaemonPreflight(t, fixture, install, fixture.revision)
+		ctx, cancel := context.WithCancel(context.Background())
+		result := make(chan error, 1)
+		go func() { result <- preflight.Verify(ctx) }()
+		select {
+		case <-started:
+		case <-time.After(2 * time.Second):
+			cancel()
+			t.Fatal("installation verifier did not start")
+		}
+		cancel()
+		var err error
+		select {
+		case err = <-result:
+		case <-time.After(2 * time.Second):
+			t.Fatal("cancelled installation verifier retained preflight")
+		}
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Verify(stalled installation) error = %v", err)
+		}
+		assertDaemonPreflightWriterReleased(t, fixture.nodeState)
 	})
 }
 

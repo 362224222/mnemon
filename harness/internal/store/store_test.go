@@ -422,6 +422,40 @@ func TestOpenExistingRejectsUnsafeWriterLockWithoutFollowingOrRepairingIt(t *tes
 	})
 }
 
+func TestOpenExistingRejectsUnsafeSQLiteSidecarsBeforeOpeningThem(t *testing.T) {
+	for _, suffix := range []string{"-wal", "-shm"} {
+		t.Run(suffix, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "node", "node.db")
+			st, err := Open(context.Background(), path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := st.Close(); err != nil {
+				t.Fatal(err)
+			}
+			_ = os.Remove(path + suffix)
+			target := filepath.Join(filepath.Dir(path), "outside"+suffix)
+			contents := []byte("must-not-be-opened")
+			if err := os.WriteFile(target, contents, privateFileMode); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(target, path+suffix); err != nil {
+				t.Fatal(err)
+			}
+			if opened, err := OpenExisting(context.Background(), path); err == nil || opened != nil {
+				if opened != nil {
+					_ = opened.Close()
+				}
+				t.Fatalf("OpenExisting(unsafe %s) = (%v, %v)", suffix, opened, err)
+			}
+			got, err := os.ReadFile(target)
+			if err != nil || !bytes.Equal(got, contents) {
+				t.Fatalf("unsafe %s target changed: bytes=%q error=%v", suffix, got, err)
+			}
+		})
+	}
+}
+
 func assertMode(t *testing.T, path string, want os.FileMode) {
 	t.Helper()
 	info, err := os.Lstat(path)

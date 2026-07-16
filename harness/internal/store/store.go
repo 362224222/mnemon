@@ -117,6 +117,19 @@ func OpenExisting(ctx context.Context, dbPath string) (_ *Store, err error) {
 	if err = verifyPrivateFileIdentity(path, databaseIdentity); err != nil {
 		return nil, err
 	}
+	lockIdentity, err := lockFile.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("open existing node store: inspect held writer lock: %w", err)
+	}
+	if err = verifyPrivateFileIdentity(path+".writer.lock", lockIdentity); err != nil {
+		return nil, err
+	}
+	// Reject static unsafe WAL state before SQLite gets an opportunity to
+	// open a sidecar path. The same exact checks run again after SQLite has
+	// opened so newly created legitimate sidecars are also frozen.
+	if err = verifyPrivateDatabaseFiles(path); err != nil {
+		return nil, err
+	}
 
 	db, err := sql.Open("sqlite", existingSQLiteDSN(path))
 	if err != nil {
@@ -140,6 +153,9 @@ func OpenExisting(ctx context.Context, dbPath string) (_ *Store, err error) {
 		return nil, err
 	}
 	if err = verifyPrivateFileIdentity(path, databaseIdentity); err != nil {
+		return nil, err
+	}
+	if err = verifyPrivateFileIdentity(path+".writer.lock", lockIdentity); err != nil {
 		return nil, err
 	}
 
