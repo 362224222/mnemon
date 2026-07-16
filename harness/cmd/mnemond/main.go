@@ -39,6 +39,7 @@ type daemonRuntime interface {
 }
 
 type daemonOpener func(context.Context, node.DaemonOptions) (daemonRuntime, error)
+type nodeProvisioner func(context.Context, node.ProvisionOptions) (node.ProvisionResult, error)
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -51,7 +52,7 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	return runWithDaemon(ctx, args, stdout, stderr, func(ctx context.Context,
+	return runWithNode(ctx, args, stdout, stderr, func(ctx context.Context,
 		options node.DaemonOptions,
 	) (daemonRuntime, error) {
 		verify, err := managedInstallationVerifier(options.Workspace)
@@ -60,7 +61,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		}
 		options.Install = verify
 		return node.OpenDaemon(ctx, options)
-	})
+	}, node.Provision)
 }
 
 func managedInstallationVerifier(workspace string) (node.InstallationVerifier, error) {
@@ -80,6 +81,12 @@ func managedInstallationVerifier(workspace string) (node.InstallationVerifier, e
 
 func runWithDaemon(ctx context.Context, args []string, stdout, stderr io.Writer,
 	open daemonOpener,
+) error {
+	return runWithNode(ctx, args, stdout, stderr, open, node.Provision)
+}
+
+func runWithNode(ctx context.Context, args []string, stdout, stderr io.Writer,
+	open daemonOpener, provision nodeProvisioner,
 ) error {
 	_ = stderr
 
@@ -114,12 +121,70 @@ func runWithDaemon(ctx context.Context, args []string, stdout, stderr io.Writer,
 		}
 		serveErr := daemon.Serve(ctx)
 		return errors.Join(serveErr, daemon.Close())
+	case "initialize":
+		options, err := parseInitializeOptions(args[1:])
+		if err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		result, err := provision(ctx, options)
+		if err != nil {
+			return err
+		}
+		receipt := initializeReceipt{AssetRevision: options.AssetRevision, Created: result.Created,
+			Host: string(options.Host), SchemaVersion: model.SchemaVersion, Status: "initialized"}
+		raw, err := model.CanonicalMarshal(receipt)
+		if err != nil {
+			return fmt.Errorf("encode initialization receipt: %w", err)
+		}
+		_, err = stdout.Write(append(raw, '\n'))
+		return err
 	default:
 		if len(args) != 1 {
 			return fmt.Errorf("unsupported command %q", strings.Join(args, " "))
 		}
 		return fmt.Errorf("unsupported command %q", args[0])
 	}
+}
+
+type initializeReceipt struct {
+	AssetRevision string `json:"asset_revision"`
+	Created       bool   `json:"created"`
+	Host          string `json:"host"`
+	SchemaVersion int    `json:"schema_version"`
+	Status        string `json:"status"`
+}
+
+func parseInitializeOptions(args []string) (node.ProvisionOptions, error) {
+	values := make(map[string]string, 3)
+	for len(args) != 0 {
+		if len(args) < 2 || (args[0] != "--project-root" && args[0] != "--host" && args[0] != "--asset-revision") {
+			return node.ProvisionOptions{}, errors.New("initialize requires --project-root, --host and --asset-revision")
+		}
+		if _, duplicate := values[args[0]]; duplicate || strings.TrimSpace(args[1]) == "" {
+			return node.ProvisionOptions{}, errors.New("initialize options must occur exactly once with nonempty values")
+		}
+		values[args[0]] = args[1]
+		args = args[2:]
+	}
+	if len(values) != 3 {
+		return node.ProvisionOptions{}, errors.New("initialize requires --project-root, --host and --asset-revision")
+	}
+	workspace, err := resolveProjectRoot(values["--project-root"])
+	if err != nil {
+		return node.ProvisionOptions{}, err
+	}
+	host := model.HostKind(values["--host"])
+	if _, ok := model.RuntimeForHost(host); !ok {
+		return node.ProvisionOptions{}, errors.New("initialize Host must be codex or claude-code")
+	}
+	if _, err := model.ParseDigest(values["--asset-revision"]); err != nil {
+		return node.ProvisionOptions{}, errors.New("initialize asset revision must be a sha256 digest")
+	}
+	return node.ProvisionOptions{Workspace: workspace, Host: host,
+		AssetRevision: values["--asset-revision"]}, nil
 }
 
 func parseServeProjectRoot(args []string) (string, error) {
@@ -138,8 +203,12 @@ func parseServeProjectRoot(args []string) (string, error) {
 	default:
 		return "", errors.New("serve accepts only --project-root DIR")
 	}
+	return resolveProjectRoot(requested)
+}
+
+func resolveProjectRoot(requested string) (string, error) {
 	if strings.TrimSpace(requested) == "" {
-		return "", errors.New("serve project root is empty")
+		return "", errors.New("project root is empty")
 	}
 	absolute, err := filepath.Abs(requested)
 	if err != nil {

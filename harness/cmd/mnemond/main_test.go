@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/node"
 )
 
@@ -136,5 +137,58 @@ func TestRunServeRejectsMalformedArgumentsBeforeOpening(t *testing.T) {
 	}
 	if opened != 0 {
 		t.Fatalf("malformed serve opened %d daemons", opened)
+	}
+}
+
+func TestRunInitializeCallsTheNodeWriterAndEmitsClosedReceipt(t *testing.T) {
+	project := t.TempDir()
+	resolved, err := filepath.EvalSymlinks(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision := model.Sum([]byte("initialize-assets")).String()
+	var received node.ProvisionOptions
+	provision := func(_ context.Context, options node.ProvisionOptions) (node.ProvisionResult, error) {
+		received = options
+		return node.ProvisionResult{Created: true}, nil
+	}
+	open := func(context.Context, node.DaemonOptions) (daemonRuntime, error) {
+		t.Fatal("initialize opened the daemon")
+		return nil, nil
+	}
+	args := []string{"initialize", "--asset-revision", revision, "--project-root", project,
+		"--host", "codex"}
+	var stdout, stderr bytes.Buffer
+	if err := runWithNode(context.Background(), args, &stdout, &stderr, open, provision); err != nil {
+		t.Fatal(err)
+	}
+	want := `{"asset_revision":"` + revision +
+		`","created":true,"host":"codex","schema_version":1,"status":"initialized"}` + "\n"
+	if stdout.String() != want || stderr.Len() != 0 || received.Workspace != resolved ||
+		received.Host != model.HostCodex || received.AssetRevision != revision || received.Clock != nil {
+		t.Fatalf("initialize = stdout %q stderr %q options %#v", stdout.String(), stderr.String(), received)
+	}
+}
+
+func TestRunInitializeRejectsMalformedAuthorityBeforeProvision(t *testing.T) {
+	project := t.TempDir()
+	revision := model.Sum([]byte("initialize-assets")).String()
+	called := 0
+	provision := func(context.Context, node.ProvisionOptions) (node.ProvisionResult, error) {
+		called++
+		return node.ProvisionResult{}, nil
+	}
+	for _, args := range [][]string{
+		{"initialize"},
+		{"initialize", "--project-root", project, "--host", "unknown", "--asset-revision", revision},
+		{"initialize", "--project-root", project, "--host", "codex", "--asset-revision", "asset-r5"},
+		{"initialize", "--project-root", project, "--project-root", project, "--host", "codex", "--asset-revision", revision},
+	} {
+		if err := runWithNode(context.Background(), args, io.Discard, io.Discard, nil, provision); err == nil {
+			t.Fatalf("runWithNode(%v) succeeded", args)
+		}
+	}
+	if called != 0 {
+		t.Fatalf("malformed initialize provisioned %d Nodes", called)
 	}
 }
