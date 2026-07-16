@@ -31,7 +31,7 @@ func TestMain(main *testing.M) {
 func TestDaemonProcessLauncherStartsExactDetachedChildAndTerminatesIt(t *testing.T) {
 	fixture := newDaemonProcessFixture(t)
 	launcher := fixture.launcher(t)
-	handle, err := launcher.Launch(context.Background())
+	handle, err := fixture.launch(t, launcher, context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,11 +77,34 @@ func TestDaemonProcessLauncherStartsExactDetachedChildAndTerminatesIt(t *testing
 	}
 }
 
+func TestDaemonProcessLauncherRejectsMissingOrWrongLaunchPermitBeforeStarting(t *testing.T) {
+	fixture := newDaemonProcessFixture(t)
+	launcher := fixture.launcher(t)
+	if handle, err := launcher.Launch(context.Background(), DaemonLaunchPermit{}); handle != nil ||
+		!errors.Is(err, ErrDaemonProcess) {
+		t.Fatalf("missing permit Launch() = (%#v, %v)", handle, err)
+	}
+	other := newDaemonProcessFixture(t)
+	otherLock := acquirePermitTestEnsureLock(t, other.nodeState)
+	defer otherLock.close()
+	if handle, err := launcher.Launch(context.Background(),
+		DaemonLaunchPermit{lock: otherLock}); handle != nil || !errors.Is(err, ErrDaemonProcess) {
+		t.Fatalf("wrong Node permit Launch() = (%#v, %v)", handle, err)
+	}
+	for _, path := range []string{fixture.marker,
+		filepath.Join(fixture.nodeState, daemonPIDName),
+		filepath.Join(fixture.nodeState, daemonLogName)} {
+		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("invalid permit created %s: %v", path, err)
+		}
+	}
+}
+
 func TestDaemonProcessLauncherReleaseDetachesAndPreservesDiagnostics(t *testing.T) {
 	fixture := newDaemonProcessFixture(t)
 	launcher := fixture.launcher(t)
 	launchContext, cancelLaunch := context.WithCancel(context.Background())
-	handle, err := launcher.Launch(launchContext)
+	handle, err := fixture.launch(t, launcher, launchContext)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +134,7 @@ func TestDaemonProcessLauncherReleaseDetachesAndPreservesDiagnostics(t *testing.
 func TestDaemonProcessLauncherReplacesOnlyItsCanonicalStalePID(t *testing.T) {
 	fixture := newDaemonProcessFixture(t)
 	first := fixture.launcher(t)
-	firstHandle, err := first.Launch(context.Background())
+	firstHandle, err := fixture.launch(t, first, context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +151,7 @@ func TestDaemonProcessLauncherReplacesOnlyItsCanonicalStalePID(t *testing.T) {
 	fixture.marker = filepath.Join(fixture.workspace, "second.marker")
 	t.Setenv(daemonProcessHelperMarker, fixture.marker)
 	second := fixture.launcher(t)
-	secondHandle, err := second.Launch(context.Background())
+	secondHandle, err := fixture.launch(t, second, context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,14 +168,14 @@ func TestDaemonProcessLauncherReplacesOnlyItsCanonicalStalePID(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(fixture.nodeState, daemonPIDName), unknown, daemonProcessFileMode); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := fixture.launcher(t).Launch(context.Background()); !errors.Is(err, ErrDaemonProcess) {
+	if _, err := fixture.launch(t, fixture.launcher(t), context.Background()); !errors.Is(err, ErrDaemonProcess) {
 		t.Fatalf("unmanaged stale PID error = %v", err)
 	}
 }
 
 func TestDaemonProcessTerminatePreservesPIDReplacementEvenWithIdenticalBytes(t *testing.T) {
 	fixture := newDaemonProcessFixture(t)
-	handle, err := fixture.launcher(t).Launch(context.Background())
+	handle, err := fixture.launch(t, fixture.launcher(t), context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,7 +290,7 @@ func TestDaemonProcessLauncherFailsClosedForUnsafeExecutableAndProcessFiles(t *t
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newDaemonProcessFixture(t)
 			test.prepare(t, fixture)
-			if _, err := fixture.launcher(t).Launch(context.Background()); !errors.Is(err, ErrDaemonProcess) {
+			if _, err := fixture.launch(t, fixture.launcher(t), context.Background()); !errors.Is(err, ErrDaemonProcess) {
 				t.Fatalf("Launch() error = %v", err)
 			}
 			if _, err := os.Lstat(fixture.marker); !errors.Is(err, os.ErrNotExist) {
@@ -288,7 +311,7 @@ func TestDaemonProcessLauncherAppendsLogAndConvergesSafeStaging(t *testing.T) {
 	if err := os.WriteFile(stage, []byte("crashed stage"), daemonProcessFileMode); err != nil {
 		t.Fatal(err)
 	}
-	handle, err := fixture.launcher(t).Launch(context.Background())
+	handle, err := fixture.launch(t, fixture.launcher(t), context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,7 +338,7 @@ func TestDaemonProcessLauncherKillsChildWhenPIDPublicationFailsOrContextCancels(
 				t.Fatal(err)
 			}
 		}
-		if handle, err := launcher.Launch(context.Background()); handle != nil ||
+		if handle, err := fixture.launch(t, launcher, context.Background()); handle != nil ||
 			!errors.Is(err, ErrDaemonProcess) {
 			t.Fatalf("Launch() = (%#v, %v)", handle, err)
 		}
@@ -333,7 +356,7 @@ func TestDaemonProcessLauncherKillsChildWhenPIDPublicationFailsOrContextCancels(
 			_ = waitDaemonProcessMarker(t, fixture.marker)
 			cancel()
 		}
-		if handle, err := launcher.Launch(ctx); handle != nil ||
+		if handle, err := fixture.launch(t, launcher, ctx); handle != nil ||
 			!errors.Is(err, context.Canceled) {
 			t.Fatalf("Launch() = (%#v, %v)", handle, err)
 		}
@@ -363,7 +386,7 @@ func TestDaemonProcessLauncherNodeLockContentionHonorsDeadlineWithoutStartingChi
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	started := time.Now()
-	handle, err := launcher.Launch(ctx)
+	handle, err := fixture.launch(t, launcher, ctx)
 	if handle != nil || !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("Launch() = (%#v, %v)", handle, err)
 	}
@@ -383,7 +406,7 @@ func TestDaemonProcessLauncherNodeLockContentionHonorsDeadlineWithoutStartingChi
 
 func TestDaemonProcessTerminateHonorsDeadlineWhilePIDCleanupLockIsHeld(t *testing.T) {
 	fixture := newDaemonProcessFixture(t)
-	handle, err := fixture.launcher(t).Launch(context.Background())
+	handle, err := fixture.launch(t, fixture.launcher(t), context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -461,10 +484,38 @@ func (fixture daemonProcessFixture) launcher(t *testing.T) *DaemonProcessLaunche
 	if err != nil {
 		t.Fatal(err)
 	}
+	launcher.testEnvironment = []string{
+		daemonProcessHelperEnvironment + "=1",
+		daemonProcessHelperMarker + "=" + fixture.marker,
+	}
 	return launcher
 }
 
+func (fixture daemonProcessFixture) launch(t *testing.T, launcher *DaemonProcessLauncher,
+	ctx context.Context,
+) (DaemonLaunch, error) {
+	t.Helper()
+	lock, err := acquireEnsureLock(ctx, fixture.nodeState, daemonEnsurePoll)
+	if err != nil {
+		return nil, err
+	}
+	handle, launchErr := launcher.Launch(ctx, DaemonLaunchPermit{lock: lock})
+	closeErr := lock.close()
+	return handle, errors.Join(launchErr, closeErr)
+}
+
 func runDaemonProcessHelper(args []string) int {
+	if len(args) != 3 || args[0] != "serve" || args[1] != "--project-root" {
+		return 69
+	}
+	permit, err := openInheritedDaemonLaunchPermit(
+		filepath.Join(args[2], ".mnemon", "harness", "node"))
+	if err != nil {
+		return 69
+	}
+	if err := permit.close(); err != nil {
+		return 69
+	}
 	marker := os.Getenv(daemonProcessHelperMarker)
 	if marker == "" {
 		return 70

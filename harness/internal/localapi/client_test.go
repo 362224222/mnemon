@@ -303,6 +303,11 @@ func TestClientShutdownUsesEmptyAuthenticatedPOSTAndCanonicalResponse(t *testing
 	nodeState := newClientNodeState(t)
 	credential := repeatedOpaqueBytes(0x8a)
 	installClientCredential(t, nodeState, credential)
+	authority := testShutdownAuthority(t)
+	authorityDigest, err := AuthorityDigest(authority)
+	if err != nil {
+		t.Fatal(err)
+	}
 	requestSeen := make(chan error, 1)
 	stop := serveRawClientControl(t, nodeState, http.HandlerFunc(func(writer http.ResponseWriter,
 		request *http.Request,
@@ -313,19 +318,20 @@ func TestClientShutdownUsesEmptyAuthenticatedPOSTAndCanonicalResponse(t *testing
 			len(body) != 0 || request.Header.Get("Content-Type") != "" ||
 			request.Header.Get(operationKeyHeader) != "" || request.Header.Get(claimContextHeader) != "" ||
 			request.Header.Get(runAttachmentHeader) != "" ||
+			request.Header.Get(authorityDigestHeader) != authorityDigest.String() ||
 			request.Header.Get(authorizationHeader) != profileScheme+encodeSecret(credential)) {
 			err = errors.New("shutdown request violates the closed lifecycle transport")
 		}
 		requestSeen <- err
-		writeResponse(writer, http.StatusOK, newShutdownResponse())
+		writeResponse(writer, http.StatusOK, newShutdownResponse(authorityDigest))
 	}))
 	defer stop()
 	client, err := NewClient(nodeState)
 	if err != nil {
 		t.Fatal(err)
 	}
-	response, apiErr := client.Shutdown(context.Background())
-	if apiErr != nil || response != newShutdownResponse() {
+	response, apiErr := client.Shutdown(context.Background(), authority)
+	if apiErr != nil || response != newShutdownResponse(authorityDigest) {
 		t.Fatalf("Shutdown() = %#v, %#v", response, apiErr)
 	}
 	if err := <-requestSeen; err != nil {
@@ -335,14 +341,26 @@ func TestClientShutdownUsesEmptyAuthenticatedPOSTAndCanonicalResponse(t *testing
 
 func TestClientShutdownRejectsNoncanonicalOrOpenResponses(t *testing.T) {
 	t.Parallel()
+	authority := testShutdownAuthority(t)
+	authorityDigest, err := AuthorityDigest(authority)
+	if err != nil {
+		t.Fatal(err)
+	}
 	tests := []struct {
 		name string
 		body string
 	}{
-		{name: "unknown field", body: `{"peer_id":"secret","schema_version":1,"status":"stopping"}` + "\n"},
-		{name: "unsupported schema", body: `{"schema_version":2,"status":"stopping"}` + "\n"},
-		{name: "invalid status", body: `{"schema_version":1,"status":"stopped"}` + "\n"},
-		{name: "noncanonical", body: `{ "schema_version":1,"status":"stopping"}` + "\n"},
+		{name: "unknown field", body: `{"authority_digest":"` + authorityDigest.String() +
+			`","peer_id":"secret","schema_version":1,"status":"stopping"}` + "\n"},
+		{name: "unsupported schema", body: `{"authority_digest":"` + authorityDigest.String() +
+			`","schema_version":2,"status":"stopping"}` + "\n"},
+		{name: "invalid status", body: `{"authority_digest":"` + authorityDigest.String() +
+			`","schema_version":1,"status":"stopped"}` + "\n"},
+		{name: "mismatched authority", body: `{"authority_digest":"` +
+			model.Sum([]byte("different authority")).String() +
+			`","schema_version":1,"status":"stopping"}` + "\n"},
+		{name: "noncanonical", body: `{ "authority_digest":"` + authorityDigest.String() +
+			`","schema_version":1,"status":"stopping"}` + "\n"},
 		{name: "oversize", body: `{"padding":"` + strings.Repeat("x", MaxShutdownResponseBytes) + `"}` + "\n"},
 	}
 	for index, test := range tests {
@@ -361,11 +379,26 @@ func TestClientShutdownRejectsNoncanonicalOrOpenResponses(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, apiErr := client.Shutdown(context.Background()); apiErr == nil ||
+			if _, apiErr := client.Shutdown(context.Background(), authority); apiErr == nil ||
 				apiErr.Code != CodeInternal {
 				t.Fatalf("invalid shutdown response error = %#v", apiErr)
 			}
 		})
+	}
+}
+
+func TestClientShutdownRejectsInvalidExpectedAuthorityBeforeDial(t *testing.T) {
+	t.Parallel()
+	nodeState := newClientNodeState(t)
+	credential := repeatedOpaqueBytes(0x8f)
+	installClientCredential(t, nodeState, credential)
+	client, err := NewClient(nodeState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, apiErr := client.Shutdown(context.Background(), AuthorityResponse{}); apiErr == nil ||
+		apiErr.Code != CodeInternal {
+		t.Fatalf("invalid shutdown authority error = %#v", apiErr)
 	}
 }
 

@@ -91,7 +91,9 @@ type lazyAgentDaemonLauncher struct {
 	newLauncher       func(node.DaemonProcessOptions) (node.DaemonLauncher, error)
 }
 
-func (launcher *lazyAgentDaemonLauncher) Launch(ctx context.Context) (node.DaemonLaunch, error) {
+func (launcher *lazyAgentDaemonLauncher) Launch(ctx context.Context,
+	permit node.DaemonLaunchPermit,
+) (node.DaemonLaunch, error) {
 	if launcher == nil || ctx == nil || launcher.currentExecutable == nil || launcher.newLauncher == nil {
 		return nil, errors.New("managed daemon launcher is unavailable")
 	}
@@ -108,7 +110,7 @@ func (launcher *lazyAgentDaemonLauncher) Launch(ctx context.Context) (node.Daemo
 	if err != nil {
 		return nil, err
 	}
-	return production.Launch(ctx)
+	return production.Launch(ctx, permit)
 }
 
 func resolveMnemondCompanion(currentExecutable string) (string, error) {

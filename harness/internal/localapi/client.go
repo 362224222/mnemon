@@ -158,13 +158,18 @@ func (c *Client) ReadAuthority(ctx context.Context) (AuthorityResponse, *APIErro
 	return response, nil
 }
 
-// Shutdown asks the authenticated controller to stop gracefully. The request
-// deliberately carries no JSON body, content type, operation key, managed
-// context, or Run attachment.
-func (c *Client) Shutdown(ctx context.Context) (ShutdownResponse, *APIError) {
+// Shutdown asks the authenticated controller to stop gracefully only while its
+// current durable authority exactly matches expected. The request deliberately
+// carries no JSON body, content type, operation key, managed context, or Run
+// attachment.
+func (c *Client) Shutdown(ctx context.Context, expected AuthorityResponse) (ShutdownResponse, *APIError) {
 	var response ShutdownResponse
 	if c == nil || c.http == nil || ctx == nil {
 		return ShutdownResponse{}, invalidControlResponse("local control client is unavailable")
+	}
+	authorityDigest, err := AuthorityDigest(expected)
+	if err != nil {
+		return ShutdownResponse{}, invalidControlResponse("shutdown authority is invalid")
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		"http://mnemond"+RouteShutdown, nil)
@@ -173,10 +178,11 @@ func (c *Client) Shutdown(ctx context.Context) (ShutdownResponse, *APIError) {
 	}
 	request.Header.Set(authorizationHeader,
 		profileScheme+base64.RawURLEncoding.EncodeToString(c.token[:]))
+	request.Header.Set(authorityDigestHeader, authorityDigest.String())
 	if apiErr := c.send(request, &response, MaxShutdownResponseBytes); apiErr != nil {
 		return ShutdownResponse{}, apiErr
 	}
-	if apiErr := validateShutdownResponse(response); apiErr != nil {
+	if apiErr := validateShutdownResponse(response, authorityDigest); apiErr != nil {
 		return ShutdownResponse{}, apiErr
 	}
 	return response, nil

@@ -35,6 +35,34 @@ type Daemon struct {
 }
 
 func OpenDaemon(ctx context.Context, options DaemonOptions) (*Daemon, error) {
+	return openDaemon(ctx, options, nil)
+}
+
+// OpenManagedDaemon is the production serve boundary. Unlike OpenDaemon's
+// in-process composition surface, it requires the exact ensure.lock descriptor
+// inherited by DaemonProcessLauncher and consumes that descriptor before the
+// controller begins accepting requests.
+func OpenManagedDaemon(ctx context.Context, options DaemonOptions) (*Daemon, error) {
+	workspace, err := validateDaemonWorkspace(options.Workspace)
+	if err != nil {
+		return nil, err
+	}
+	options.Workspace = workspace
+	nodeState := filepath.Join(workspace, ".mnemon", "harness", "node")
+	permit, err := openInheritedDaemonLaunchPermit(nodeState)
+	if err != nil {
+		return nil, err
+	}
+	daemon, openErr := openDaemon(ctx, options, permit.close)
+	if openErr != nil {
+		return nil, errors.Join(openErr, permit.close())
+	}
+	return daemon, nil
+}
+
+func openDaemon(ctx context.Context, options DaemonOptions,
+	beforeAccept func() error,
+) (*Daemon, error) {
 	nodeState := filepath.Join(options.Workspace, ".mnemon", "harness", "node")
 	authority, err := openExistingDaemonAuthority(ctx, options.Workspace, nodeState)
 	if err != nil {
@@ -49,7 +77,7 @@ func OpenDaemon(ctx context.Context, options DaemonOptions) (*Daemon, error) {
 	}
 	controller, err := NewController(ControllerOptions{NodeState: nodeState, Workspace: workspace,
 		Store: st, Profile: authority.authority.Profile, Signer: identity.PublicationSigner(), Clock: options.Clock,
-		Install: options.Install})
+		Install: options.Install, BeforeAccept: beforeAccept})
 	if err != nil {
 		return fail(fmt.Errorf("%w: compose controller: %v", ErrDaemonAuthority, err))
 	}
@@ -69,8 +97,11 @@ func (daemon *Daemon) Close() error {
 		return nil
 	}
 	daemon.closeOnce.Do(func() {
+		if daemon.controller != nil {
+			daemon.closeErr = daemon.controller.releaseBeforeAccept()
+		}
 		if daemon.store != nil {
-			daemon.closeErr = daemon.store.Close()
+			daemon.closeErr = errors.Join(daemon.closeErr, daemon.store.Close())
 		}
 	})
 	return daemon.closeErr

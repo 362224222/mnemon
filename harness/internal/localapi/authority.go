@@ -111,6 +111,20 @@ func validateAuthorityResponse(response AuthorityResponse) *APIError {
 	return nil
 }
 
+// AuthorityDigest binds a closed authority response to its canonical wire
+// representation. Conditional controller operations use this digest instead
+// of accepting an authority snapshot in request content.
+func AuthorityDigest(response AuthorityResponse) (model.Digest, error) {
+	if apiErr := validateAuthorityResponse(response); apiErr != nil {
+		return model.Digest{}, errors.New("local API: authority response is invalid")
+	}
+	raw, err := model.CanonicalMarshal(response)
+	if err != nil || len(raw)+1 > MaxAuthorityResponseBytes {
+		return model.Digest{}, errors.New("local API: authority response is not canonical")
+	}
+	return model.Sum(raw), nil
+}
+
 func canonicalAuthorityTime(value time.Time) (string, error) {
 	if value.IsZero() {
 		return "", errors.New("local API: authority update time is invalid")

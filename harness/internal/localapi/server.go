@@ -132,16 +132,52 @@ func (s *Server) handleShutdown(writer http.ResponseWriter, request *http.Reques
 			return
 		}
 	}
-	if _, apiErr := authenticateRequest(request.Context(), request, s.authenticator,
-		headerPolicy{}); apiErr != nil {
+	metadata, apiErr := authenticateRequest(request.Context(), request, s.authenticator,
+		headerPolicy{})
+	if apiErr != nil {
 		writeError(writer, apiErr)
 		return
 	}
-	if s.lifecycle == nil {
-		writeError(writer, NewAPIError(CodeInternal, "lifecycle provider is unavailable"))
+	digestValue, err := singleHeader(request.Header, authorityDigestHeader)
+	if err != nil {
+		writeError(writer, NewAPIError(CodeInvalidArgument,
+			"shutdown authority digest is required exactly once"))
 		return
 	}
-	writeResponse(writer, http.StatusOK, newShutdownResponse())
+	expectedDigest, err := parseAuthorityDigest(digestValue)
+	if err != nil {
+		writeError(writer, NewAPIError(CodeInvalidArgument,
+			"shutdown authority digest is invalid"))
+		return
+	}
+	if s.lifecycle == nil || s.authority == nil {
+		writeError(writer, NewAPIError(CodeInternal,
+			"lifecycle authority provider is unavailable"))
+		return
+	}
+	snapshot, apiErr := s.authority.Authority(request.Context(), metadata)
+	if apiErr != nil {
+		writeError(writer, apiErr)
+		return
+	}
+	current, err := NewAuthorityResponse(snapshot)
+	if err != nil {
+		writeError(writer, NewAPIError(CodeInternal,
+			"authority provider returned invalid state"))
+		return
+	}
+	currentDigest, err := AuthorityDigest(current)
+	if err != nil {
+		writeError(writer, NewAPIError(CodeInternal,
+			"authority provider returned invalid state"))
+		return
+	}
+	if !sameAuthorityDigest(currentDigest, expectedDigest) {
+		writeError(writer, NewAPIError(CodeOperationMismatch,
+			"durable authority does not match the shutdown precondition"))
+		return
+	}
+	writeResponse(writer, http.StatusOK, newShutdownResponse(currentDigest))
 	s.shutdownOnce.Do(s.lifecycle)
 }
 

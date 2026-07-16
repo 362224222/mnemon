@@ -1,16 +1,21 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
+	"github.com/mnemon-dev/mnemon/harness/internal/node"
+	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
 
 func TestCompanionRunnerDiscoversExactPairAndFreezesLifecycleCommands(t *testing.T) {
@@ -37,6 +42,10 @@ func TestCompanionRunnerDiscoversExactPairAndFreezesLifecycleCommands(t *testing
 		authority.AssetRevision != fixture.revision {
 		t.Fatalf("Inspect() = (%#v, %v)", authority, err)
 	}
+	confirmed, err := runner.ConfirmOffline(context.Background(), authority)
+	if err != nil || confirmed != authority {
+		t.Fatalf("ConfirmOffline() = (%#v, %v)", confirmed, err)
+	}
 	activated, err := runner.Activate(context.Background(), model.HostCodex, fixture.revision, generation)
 	if err != nil || !activated.Changed || activated.Status != "active" ||
 		activated.UpdatedAt != generation.Add(time.Second).Format(time.RFC3339Nano) {
@@ -56,6 +65,8 @@ func TestCompanionRunnerDiscoversExactPairAndFreezesLifecycleCommands(t *testing
 		fixture.workspace + "|initialize --project-root " + fixture.workspace +
 			" --host codex --asset-revision " + fixture.revision,
 		fixture.workspace + "|inspect --project-root " + fixture.workspace,
+		fixture.workspace + "|confirm-offline --project-root " + fixture.workspace +
+			" --expected-authority-digest " + mustCompanionAuthorityDigest(t, authority),
 		fixture.workspace + "|activate --project-root " + fixture.workspace +
 			" --host codex --asset-revision " + fixture.revision +
 			" --expected-updated-at 2026-07-17T00:00:00Z",
@@ -76,6 +87,106 @@ func TestCompanionRunnerDiscoversExactPairAndFreezesLifecycleCommands(t *testing
 			t.Fatalf("subprocess confinement = cwd %q stdin %#v wait %s", command.Dir,
 				command.Stdin, command.WaitDelay)
 		}
+	}
+}
+
+func TestCompanionRunnerClassifiesOnlyClosedOfflineWriterContention(t *testing.T) {
+	fixture := newCompanionFixture(t)
+	runner, err := newCompanionRunnerWith(context.Background(), fixture.workspace,
+		"r5-test", fixture.dependencies())
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected, err := runner.Inspect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MNEMON_COMPANION_TEST_MODE", "confirm-writer-active")
+	if response, err := runner.ConfirmOffline(context.Background(), expected); !errors.Is(err,
+		node.ErrOfflineAuthorityActive) || response != (localapi.AuthorityResponse{}) {
+		t.Fatalf("writer-active ConfirmOffline() = (%#v, %v)", response, err)
+	}
+	for _, mode := range []string{"confirm-wrong", "confirm-secret", "confirm-exit"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Setenv("MNEMON_COMPANION_TEST_MODE", mode)
+			response, err := runner.ConfirmOffline(context.Background(), expected)
+			if err == nil || errors.Is(err, node.ErrOfflineAuthorityActive) ||
+				!errors.Is(err, errManagedCompanion) ||
+				response != (localapi.AuthorityResponse{}) || strings.Contains(err.Error(), "raw-secret") {
+				t.Fatalf("permanent ConfirmOffline() = (%#v, %v)", response, err)
+			}
+		})
+	}
+	if response, err := runner.ConfirmOffline(context.Background(), localapi.AuthorityResponse{}); err == nil ||
+		!errors.Is(err, errManagedCompanion) || response != (localapi.AuthorityResponse{}) {
+		t.Fatalf("invalid expected ConfirmOffline() = (%#v, %v)", response, err)
+	}
+}
+
+func TestCompanionRunnerMapsRealMnemondWriterActiveExitAndOfflineReceipt(t *testing.T) {
+	directory := physicalTempDir(t)
+	workspace := physicalTempDir(t)
+	harnessExecutable := filepath.Join(directory, "mnemon-harness")
+	mnemondExecutable := filepath.Join(directory, "mnemond")
+	writeExecutable(t, harnessExecutable, "#!/bin/sh\nexit 0\n", 0o700)
+	buildContext, cancelBuild := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancelBuild()
+	buildOutput := newBoundedCompanionBuffer(64 << 10)
+	defer buildOutput.clear()
+	build := exec.CommandContext(buildContext, "go", "build", "-trimpath", "-ldflags",
+		"-X main.version=r5-test", "-o", mnemondExecutable, "./harness/cmd/mnemond")
+	build.Dir = companionTestRepositoryRoot(t)
+	build.Stdin = nil
+	build.Stdout = buildOutput
+	build.Stderr = buildOutput
+	build.WaitDelay = companionWaitDelay
+	if err := build.Run(); err != nil || buildOutput.overflowed() {
+		t.Fatalf("build real mnemond = %v, output bytes=%d overflow=%t", err,
+			buildOutput.len(), buildOutput.overflowed())
+	}
+	if err := os.Chmod(mnemondExecutable, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	revision := model.Sum([]byte("real-companion-offline-assets")).String()
+	if _, err := node.Provision(context.Background(), node.ProvisionOptions{
+		Workspace: workspace, Host: model.HostCodex, AssetRevision: revision,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := node.InspectAuthority(context.Background(), workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected, err := localapi.NewAuthorityResponse(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner, err := newCompanionRunnerWith(context.Background(), workspace, "r5-test",
+		companionRunnerDependencies{
+			currentExecutable: func() (string, error) { return harnessExecutable, nil },
+			lookPath:          func(string) (string, error) { return harnessExecutable, nil },
+			commandContext:    exec.CommandContext,
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.OpenExisting(context.Background(),
+		filepath.Join(workspace, ".mnemon", "harness", "node", "node.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response, err := runner.ConfirmOffline(context.Background(), expected); !errors.Is(err,
+		node.ErrOfflineAuthorityActive) || response != (localapi.AuthorityResponse{}) {
+		_ = st.Close()
+		t.Fatalf("real writer-active ConfirmOffline() = (%#v, %v)", response, err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	response, err := runner.ConfirmOffline(context.Background(), expected)
+	if err != nil || response != expected {
+		t.Fatalf("real offline ConfirmOffline() = (%#v, %v)", response, err)
 	}
 }
 
@@ -418,6 +529,15 @@ case "$1" in
       *) printf '{"active_asset_revision":"@REVISION@","asset_revision":"@REVISION@","enabled":true,"host":"codex","peer_id":"peer-companion-test","runtime":"codex-app-server","schema_version":1,"updated_at":"2026-07-17T00:00:00Z"}\n';;
     esac
     ;;
+  confirm-offline)
+    case "$mode" in
+      confirm-writer-active) exit 75;;
+      confirm-wrong) printf '{"active_asset_revision":"@REVISION@","asset_revision":"@REVISION@","enabled":false,"host":"codex","peer_id":"peer-companion-test","runtime":"codex-app-server","schema_version":1,"updated_at":"2026-07-17T00:00:00Z"}\n';;
+      confirm-secret) printf 'raw-secret\n' >&2; exit 9;;
+      confirm-exit) exit 9;;
+      *) printf '{"active_asset_revision":"@REVISION@","asset_revision":"@REVISION@","enabled":true,"host":"codex","peer_id":"peer-companion-test","runtime":"codex-app-server","schema_version":1,"updated_at":"2026-07-17T00:00:00Z"}\n';;
+    esac
+    ;;
   activate)
     case "$mode" in
       activate-missing-time) printf '{"asset_revision":"@REVISION@","changed":true,"host":"codex","schema_version":1,"status":"active"}\n';;
@@ -436,4 +556,36 @@ esac
 	template = strings.ReplaceAll(template, "@REVISION@", revision)
 	return strings.ReplaceAll(template, "@REPLAY_REVISION@",
 		model.Sum([]byte("durable-replay-assets")).String())
+}
+
+func mustCompanionAuthorityDigest(t *testing.T, response localapi.AuthorityResponse) string {
+	t.Helper()
+	digest, err := localapi.AuthorityDigest(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return digest.String()
+}
+
+func companionTestRepositoryRoot(t *testing.T) string {
+	t.Helper()
+	_, source, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve companion test source")
+	}
+	for directory := filepath.Dir(source); ; directory = filepath.Dir(directory) {
+		raw, err := os.ReadFile(filepath.Join(directory, "go.mod"))
+		if err == nil && bytes.Contains(raw,
+			[]byte("module github.com/mnemon-dev/mnemon\n")) {
+			physical, err := filepath.EvalSymlinks(directory)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return physical
+		}
+		parent := filepath.Dir(directory)
+		if parent == directory {
+			t.Fatal("repository root is unavailable")
+		}
+	}
 }

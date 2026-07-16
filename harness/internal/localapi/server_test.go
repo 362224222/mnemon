@@ -96,6 +96,13 @@ func TestServerRoutesAuthenticatedClosedRequests(t *testing.T) {
 func TestServerShutdownIsAuthenticatedClosedAndSignalsAfterResponse(t *testing.T) {
 	t.Parallel()
 	credential := repeatedOpaqueBytes(0x21)
+	authority := testShutdownAuthority(t)
+	digest, err := AuthorityDigest(authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"authority_digest":"` + digest.String() +
+		`","schema_version":1,"status":"stopping"}` + "\n"
 	responseWritten := false
 	called := 0
 	recorder := httptest.NewRecorder()
@@ -103,12 +110,12 @@ func TestServerShutdownIsAuthenticatedClosedAndSignalsAfterResponse(t *testing.T
 		LifecycleFunc(func() {
 			called++
 			responseWritten = recorder.Code == http.StatusOK &&
-				recorder.Body.String() == `{"schema_version":1,"status":"stopping"}`+"\n"
+				recorder.Body.String() == want
 		}))
 	request := httptest.NewRequest(http.MethodPost, RouteShutdown, nil)
 	request.Header.Set(authorizationHeader, profileScheme+encodeSecret(credential))
+	setShutdownAuthorityDigest(t, request, authority)
 	server.Handler().ServeHTTP(recorder, request)
-	want := `{"schema_version":1,"status":"stopping"}` + "\n"
 	if recorder.Code != http.StatusOK || recorder.Body.String() != want || called != 1 ||
 		!responseWritten || recorder.Header().Get("Cache-Control") != "no-store" ||
 		IsAgentRoute(RouteShutdown) || !IsControlRoute(RouteShutdown) {
@@ -145,6 +152,15 @@ func TestServerShutdownRejectsMethodContentCapabilitiesAndAuthenticationWithoutS
 		{name: "attachment", method: http.MethodPost, mutate: func(request *http.Request) {
 			request.Header.Set(runAttachmentHeader, secret)
 		}, status: http.StatusBadRequest},
+		{name: "authority missing", method: http.MethodPost, mutate: func(request *http.Request) {
+			request.Header.Del(authorityDigestHeader)
+		}, status: http.StatusBadRequest},
+		{name: "authority duplicate", method: http.MethodPost, mutate: func(request *http.Request) {
+			request.Header.Add(authorityDigestHeader, model.Sum([]byte("duplicate")).String())
+		}, status: http.StatusBadRequest},
+		{name: "authority invalid", method: http.MethodPost, mutate: func(request *http.Request) {
+			request.Header.Set(authorityDigestHeader, "sha256:INVALID")
+		}, status: http.StatusBadRequest},
 		{name: "authentication", method: http.MethodPost, mutate: func(request *http.Request) {
 			request.Header.Set(authorizationHeader,
 				profileScheme+encodeSecret(repeatedOpaqueBytes(0x24)))
@@ -161,6 +177,7 @@ func TestServerShutdownRejectsMethodContentCapabilitiesAndAuthenticationWithoutS
 			}
 			request := httptest.NewRequest(test.method, path, strings.NewReader(test.body))
 			request.Header.Set(authorizationHeader, profileScheme+encodeSecret(credential))
+			setShutdownAuthorityDigest(t, request, testShutdownAuthority(t))
 			if test.mutate != nil {
 				test.mutate(request)
 			}
@@ -177,6 +194,13 @@ func TestServerShutdownRejectsMethodContentCapabilitiesAndAuthenticationWithoutS
 func TestServerShutdownSignalsLifecycleOnceAcrossConcurrentReplay(t *testing.T) {
 	t.Parallel()
 	credential := repeatedOpaqueBytes(0x25)
+	authority := testShutdownAuthority(t)
+	digest, err := AuthorityDigest(authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"authority_digest":"` + digest.String() +
+		`","schema_version":1,"status":"stopping"}` + "\n"
 	var called atomic.Int32
 	server := newLifecycleTestServer(t, fixedAuthenticator{want: model.Sum(credential)},
 		LifecycleFunc(func() { called.Add(1) }))
@@ -191,10 +215,11 @@ func TestServerShutdownSignalsLifecycleOnceAcrossConcurrentReplay(t *testing.T) 
 			<-start
 			request := httptest.NewRequest(http.MethodPost, RouteShutdown, nil)
 			request.Header.Set(authorizationHeader, profileScheme+encodeSecret(credential))
+			request.Header.Set(authorityDigestHeader, digest.String())
 			recorder := httptest.NewRecorder()
 			server.Handler().ServeHTTP(recorder, request)
 			if recorder.Code != http.StatusOK ||
-				recorder.Body.String() != `{"schema_version":1,"status":"stopping"}`+"\n" {
+				recorder.Body.String() != want {
 				errorsSeen <- recorder.Body.String()
 			}
 		}()
@@ -219,6 +244,7 @@ func TestServerShutdownWithoutLifecycleFailsClosedAfterAuthentication(t *testing
 	}
 	request := httptest.NewRequest(http.MethodPost, RouteShutdown, nil)
 	request.Header.Set(authorizationHeader, profileScheme+encodeSecret(credential))
+	setShutdownAuthorityDigest(t, request, testShutdownAuthority(t))
 	recorder := httptest.NewRecorder()
 	server.Handler().ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusInternalServerError ||
@@ -232,17 +258,72 @@ func newLifecycleTestServer(t *testing.T, authenticator Authenticator,
 ) *Server {
 	t.Helper()
 	revision := model.Sum([]byte("lifecycle-test-assets")).String()
+	authority := testShutdownAuthoritySnapshot(t)
 	server, err := NewServerWithLifecycle(authenticator, &fakeService{},
 		HealthProviderFunc(func(context.Context, RequestMetadata) (HealthSnapshot, *APIError) {
 			return HealthSnapshot{AssetRevision: revision, WorkersReady: true}, nil
 		}),
 		AuthorityProviderFunc(func(context.Context, RequestMetadata) (AuthoritySnapshot, *APIError) {
-			return AuthoritySnapshot{}, NewAPIError(CodeInternal, "unexpected authority read")
+			return authority, nil
 		}), lifecycle)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return server
+}
+
+func TestServerShutdownRejectsAuthorityDriftWithoutConsumingLifecycle(t *testing.T) {
+	t.Parallel()
+	credential := repeatedOpaqueBytes(0x27)
+	current := testShutdownAuthoritySnapshot(t)
+	requested := current
+	requested.Enabled = false
+	requestedResponse, err := NewAuthorityResponse(requested)
+	if err != nil {
+		t.Fatal(err)
+	}
+	providerCalls := 0
+	lifecycleCalls := 0
+	revision := current.AssetRevision
+	server, err := NewServerWithLifecycle(fixedAuthenticator{want: model.Sum(credential)},
+		&fakeService{},
+		HealthProviderFunc(func(context.Context, RequestMetadata) (HealthSnapshot, *APIError) {
+			return HealthSnapshot{AssetRevision: revision, WorkersReady: true}, nil
+		}),
+		AuthorityProviderFunc(func(context.Context, RequestMetadata) (AuthoritySnapshot, *APIError) {
+			providerCalls++
+			return current, nil
+		}), LifecycleFunc(func() { lifecycleCalls++ }))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodPost, RouteShutdown, nil)
+	request.Header.Set(authorizationHeader, profileScheme+encodeSecret(credential))
+	setShutdownAuthorityDigest(t, request, requestedResponse)
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+	var mismatch APIError
+	if unmarshalErr := json.Unmarshal(recorder.Body.Bytes(), &mismatch); unmarshalErr != nil ||
+		recorder.Code != http.StatusConflict || mismatch.Code != CodeOperationMismatch ||
+		providerCalls != 1 || lifecycleCalls != 0 {
+		t.Fatalf("authority mismatch = %d %s provider=%d lifecycle=%d (%v)", recorder.Code,
+			recorder.Body.String(), providerCalls, lifecycleCalls, unmarshalErr)
+	}
+
+	currentResponse, err := NewAuthorityResponse(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request = httptest.NewRequest(http.MethodPost, RouteShutdown, nil)
+	request.Header.Set(authorizationHeader, profileScheme+encodeSecret(credential))
+	setShutdownAuthorityDigest(t, request, currentResponse)
+	recorder = httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || providerCalls != 2 || lifecycleCalls != 1 {
+		t.Fatalf("matched authority = %d %s provider=%d lifecycle=%d", recorder.Code,
+			recorder.Body.String(), providerCalls, lifecycleCalls)
+	}
 }
 
 func TestServerHealthIsAuthenticatedClosedAndIdentityFree(t *testing.T) {

@@ -50,6 +50,10 @@ type ControllerOptions struct {
 	Signer    event.PublicationSigner
 	Clock     Clock
 	Install   InstallationVerifier
+	// BeforeAccept is reserved for production mnemond composition. It releases
+	// the inherited ensure.lock duplicate after the control socket exists and
+	// immediately before the first HTTP accept.
+	BeforeAccept func() error
 }
 
 // Controller is the single local composition root for mnemond-managed Agent
@@ -62,6 +66,9 @@ type Controller struct {
 	shutdownOnce      sync.Once
 	serveMu           sync.Mutex
 	served            bool
+	beforeAccept      func() error
+	beforeAcceptOnce  sync.Once
+	beforeAcceptErr   error
 }
 
 func NewController(options ControllerOptions) (*Controller, error) {
@@ -146,7 +153,8 @@ func NewController(options ControllerOptions) (*Controller, error) {
 		}
 		return authoritySnapshot(current), nil
 	})
-	controller := &Controller{nodeState: options.NodeState, shutdownRequested: make(chan struct{})}
+	controller := &Controller{nodeState: options.NodeState, shutdownRequested: make(chan struct{}),
+		beforeAccept: options.BeforeAccept}
 	server, err := localapi.NewServerWithLifecycle(options.Store, service, health, authority,
 		localapi.LifecycleFunc(controller.requestShutdown))
 	if err != nil {
@@ -201,11 +209,14 @@ func (controller *Controller) Serve(ctx context.Context) error {
 
 	socketPath := filepath.Join(controller.nodeState, "control.sock")
 	if _, err := localapi.RemoveStaleOwnerUnix(ctx, socketPath); err != nil {
-		return err
+		return errors.Join(err, controller.releaseBeforeAccept())
 	}
 	listener, err := localapi.ListenOwnerUnix(socketPath)
 	if err != nil {
-		return err
+		return errors.Join(err, controller.releaseBeforeAccept())
+	}
+	if err := controller.releaseBeforeAccept(); err != nil {
+		return errors.Join(err, listener.Close())
 	}
 	server := &http.Server{Handler: controller.server.Handler(), ReadHeaderTimeout: 5 * time.Second}
 	shutdownDone := make(chan struct{})
@@ -231,4 +242,17 @@ func (controller *Controller) Serve(ctx context.Context) error {
 		return nil
 	}
 	return serveErr
+}
+
+func (controller *Controller) releaseBeforeAccept() error {
+	if controller == nil {
+		return nil
+	}
+	controller.beforeAcceptOnce.Do(func() {
+		if controller.beforeAccept != nil {
+			controller.beforeAcceptErr = controller.beforeAccept()
+		}
+		controller.beforeAccept = nil
+	})
+	return controller.beforeAcceptErr
 }

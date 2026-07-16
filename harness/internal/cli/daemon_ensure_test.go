@@ -86,19 +86,19 @@ func TestLazyAgentDaemonLauncherResolvesPhysicalSiblingOnlyWhenLaunched(t *testi
 				options.NodeState != nodeState {
 				t.Fatalf("launcher options = %#v", options)
 			}
-			return node.DaemonLauncherFunc(func(context.Context) (node.DaemonLaunch, error) {
+			return node.DaemonLauncherFunc(func(context.Context, node.DaemonLaunchPermit) (node.DaemonLaunch, error) {
 				launched++
 				return wantHandle, nil
 			}), nil
 		}}
-	got, err := lazy.Launch(context.Background())
+	got, err := lazy.Launch(context.Background(), node.DaemonLaunchPermit{})
 	if err != nil || got != wantHandle || launched != 1 {
 		t.Fatalf("Launch() = (%#v, %v), launches=%d", got, err, launched)
 	}
 	if err := os.Remove(companionPath); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := lazy.Launch(context.Background()); err == nil || got != nil || launched != 1 {
+	if got, err := lazy.Launch(context.Background(), node.DaemonLaunchPermit{}); err == nil || got != nil || launched != 1 {
 		t.Fatalf("missing companion Launch() = (%#v, %v), launches=%d", got, err, launched)
 	}
 	target := filepath.Join(t.TempDir(), "mnemond-target")
@@ -108,7 +108,7 @@ func TestLazyAgentDaemonLauncherResolvesPhysicalSiblingOnlyWhenLaunched(t *testi
 	if err := os.Symlink(target, companionPath); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := lazy.Launch(context.Background()); err == nil || got != nil || launched != 1 {
+	if got, err := lazy.Launch(context.Background(), node.DaemonLaunchPermit{}); err == nil || got != nil || launched != 1 {
 		t.Fatalf("symlink companion Launch() = (%#v, %v), launches=%d", got, err, launched)
 	}
 }

@@ -18,6 +18,7 @@ import (
 
 	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
+	"github.com/mnemon-dev/mnemon/harness/internal/node"
 )
 
 var errManagedCompanion = errors.New("managed mnemond companion")
@@ -29,6 +30,7 @@ const (
 	companionVersionBytes   = 256
 	companionResponseBytes  = localapi.MaxAuthorityResponseBytes
 	companionStderrBytes    = 2048
+	companionWriterActive   = node.OfflineAuthorityActiveExitCode
 )
 
 type companionInitializeReceipt struct {
@@ -158,6 +160,35 @@ func (runner *companionRunner) Inspect(ctx context.Context) (localapi.AuthorityR
 	return response, nil
 }
 
+// ConfirmOffline asks the closed companion command to acquire the existing
+// Store writer, compare the complete expected authority, and recover only an
+// unreachable owner control socket while that writer remains held. Exit 75 is
+// the sole retryable process result and maps back to the Node lifecycle's
+// writer-active sentinel without exposing daemon diagnostics.
+func (runner *companionRunner) ConfirmOffline(ctx context.Context,
+	expected localapi.AuthorityResponse,
+) (localapi.AuthorityResponse, error) {
+	if runner == nil {
+		return localapi.AuthorityResponse{}, companionError("confirm-offline request", nil)
+	}
+	digest, err := localapi.AuthorityDigest(expected)
+	if err != nil {
+		return localapi.AuthorityResponse{}, companionError("confirm-offline request", nil)
+	}
+	raw, err := runner.executeClassified(ctx, "confirm-offline", companionCommandTimeout,
+		companionResponseBytes, companionWriterActive, "confirm-offline", "--project-root",
+		runner.workspace, "--expected-authority-digest", digest.String())
+	if err != nil {
+		return localapi.AuthorityResponse{}, err
+	}
+	var response localapi.AuthorityResponse
+	if decodeErr := decodeCanonicalCompanionLine(raw, &response); decodeErr != nil ||
+		validateCompanionAuthorityResponse(response) != nil || response != expected {
+		return localapi.AuthorityResponse{}, companionError("confirm-offline response", nil)
+	}
+	return response, nil
+}
+
 func (runner *companionRunner) Activate(ctx context.Context, host model.HostKind,
 	assetRevision string, expectedUpdatedAt time.Time,
 ) (companionLifecycleReceipt, error) {
@@ -196,6 +227,12 @@ func (runner *companionRunner) lifecycle(ctx context.Context, command, status st
 func (runner *companionRunner) execute(ctx context.Context, operation string, timeout time.Duration,
 	stdoutLimit int, args ...string,
 ) ([]byte, error) {
+	return runner.executeClassified(ctx, operation, timeout, stdoutLimit, 0, args...)
+}
+
+func (runner *companionRunner) executeClassified(ctx context.Context, operation string,
+	timeout time.Duration, stdoutLimit, retryableExit int, args ...string,
+) ([]byte, error) {
 	if runner == nil || ctx == nil || runner.commandContext == nil || timeout <= 0 ||
 		stdoutLimit <= 0 || len(args) == 0 {
 		return nil, companionError(operation, nil)
@@ -231,6 +268,13 @@ func (runner *companionRunner) execute(ctx context.Context, operation string, ti
 	pathErr := runner.validateFrozenPaths()
 	if contextErr != nil {
 		return nil, companionError(operation, contextErr)
+	}
+	if runErr != nil && retryableExit > 0 && pathErr == nil && !stdout.overflowed() &&
+		!stderr.overflowed() && stdout.len() == 0 && stderr.len() == 0 {
+		var exitErr *exec.ExitError
+		if errors.As(runErr, &exitErr) && exitErr.ExitCode() == retryableExit {
+			return nil, node.ErrOfflineAuthorityActive
+		}
 	}
 	if runErr != nil || pathErr != nil || stdout.overflowed() || stderr.overflowed() || stderr.len() != 0 {
 		return nil, companionError(operation, nil)

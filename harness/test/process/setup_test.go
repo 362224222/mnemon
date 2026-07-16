@@ -17,10 +17,12 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -28,6 +30,7 @@ const (
 	commandOutputMax = 16 << 10
 	buildOutputMax   = 64 << 10
 	runAttachmentEnv = "MNEMON_HARNESS_RUN_ATTACHMENT"
+	launchPermitEnv  = "MNEMON_HARNESS_INTERNAL_MNEMOND_ENSURE_FD"
 )
 
 type setupProcessReceipt struct {
@@ -63,12 +66,13 @@ type setupProcessPIDSnapshot struct {
 }
 
 type setupProcessCleanup struct {
-	root        string
-	nodeState   string
-	client      *localapi.Client
-	autoMayRun  bool
-	directChild *exec.Cmd
-	offline     setupProcessOfflineProbe
+	root         string
+	nodeState    string
+	client       *localapi.Client
+	autoMayRun   bool
+	directChild  *exec.Cmd
+	directPermit *os.File
+	offline      setupProcessOfflineProbe
 }
 
 type setupProcessOfflineProbe struct {
@@ -185,10 +189,16 @@ func TestPublicSetupSerializesProcessesAndRecoversAKilledDaemon(t *testing.T) {
 		t.Fatalf("graceful shutdown changed released lifecycle diagnostics: %v", err)
 	}
 
+	directPermit, err := setupProcessAcquireLaunchPermit(nodeState)
+	if err != nil {
+		t.Fatalf("acquire owned direct launch permit: %v", err)
+	}
+	cleanup.directPermit = directPermit
 	directOutput := newSetupProcessOutput(commandOutputMax)
 	direct := exec.Command(mnemondExecutable, "serve", "--project-root", workspace)
 	direct.Dir = workspace
-	direct.Env = environment
+	direct.Env = append(append([]string(nil), environment...), launchPermitEnv+"=3")
+	direct.ExtraFiles = []*os.File{directPermit}
 	direct.Stdin = nil
 	direct.Stdout = directOutput
 	direct.Stderr = directOutput
@@ -203,6 +213,10 @@ func TestPublicSetupSerializesProcessesAndRecoversAKilledDaemon(t *testing.T) {
 		t.Fatalf("owned direct mnemond did not become ready: %v", err)
 	}
 	cancelDirectReady()
+	if err := directPermit.Close(); err != nil {
+		t.Fatalf("release owned direct launch permit after ready: %v", err)
+	}
+	cleanup.directPermit = nil
 	crashErr := setupProcessCrashOwnedChild(direct)
 	if direct.ProcessState != nil {
 		cleanup.directChild = nil
@@ -474,11 +488,17 @@ func setupProcessShutdown(ctx context.Context, client *localapi.Client, nodeStat
 	}
 	_, apiErr := client.ProbeHealth(ctx)
 	if apiErr == nil {
-		response, shutdownErr := client.Shutdown(ctx)
+		authority, authorityErr := client.ReadAuthority(ctx)
+		if authorityErr != nil {
+			return fmt.Errorf("read shutdown authority failed with code %s", authorityErr.Code)
+		}
+		response, shutdownErr := client.Shutdown(ctx, authority)
 		if shutdownErr != nil {
 			return fmt.Errorf("shutdown failed with code %s", shutdownErr.Code)
 		}
-		if response.SchemaVersion != 1 || response.Status != "stopping" {
+		digest, digestErr := localapi.AuthorityDigest(authority)
+		if digestErr != nil || response.SchemaVersion != 1 || response.Status != "stopping" ||
+			response.AuthorityDigest != digest.String() {
 			return errors.New("shutdown returned an invalid lifecycle response")
 		}
 	} else if apiErr.Code != localapi.CodeMnemondUnavailable {
@@ -599,6 +619,43 @@ func setupProcessCrashOwnedChild(command *exec.Cmd) error {
 	return nil
 }
 
+func setupProcessAcquireLaunchPermit(nodeState string) (*os.File, error) {
+	path := filepath.Join(nodeState, "ensure.lock")
+	before, err := os.Lstat(path)
+	if err != nil || !before.Mode().IsRegular() || before.Mode().Perm() != 0o600 {
+		return nil, errors.New("managed ensure lock is unavailable")
+	}
+	stat, ok := before.Sys().(*syscall.Stat_t)
+	if !ok || uint32(stat.Uid) != uint32(os.Geteuid()) || stat.Nlink != 1 {
+		return nil, errors.New("managed ensure lock authority is unsafe")
+	}
+	fd, err := unix.Open(path, unix.O_RDWR|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, err
+	}
+	file := os.NewFile(uintptr(fd), path)
+	if file == nil {
+		_ = unix.Close(fd)
+		return nil, errors.New("managed ensure lock descriptor is unavailable")
+	}
+	fail := func(cause error) (*os.File, error) {
+		_ = file.Close()
+		return nil, cause
+	}
+	opened, err := file.Stat()
+	if err != nil || !os.SameFile(before, opened) {
+		return fail(errors.New("managed ensure lock identity changed"))
+	}
+	if err := unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		return fail(fmt.Errorf("managed ensure lock is busy: %w", err))
+	}
+	current, err := os.Lstat(path)
+	if err != nil || !os.SameFile(opened, current) {
+		return fail(errors.New("managed ensure lock identity changed after acquisition"))
+	}
+	return file, nil
+}
+
 func setupProcessStopOwnedChild(command *exec.Cmd) error {
 	if command == nil || command.ProcessState != nil {
 		return nil
@@ -620,6 +677,13 @@ func (cleanup *setupProcessCleanup) run(t *testing.T) {
 	if err := setupProcessStopOwnedChild(cleanup.directChild); err != nil {
 		t.Errorf("stop owned direct child: %v", err)
 		stopped = false
+	}
+	if cleanup.directPermit != nil {
+		if err := cleanup.directPermit.Close(); err != nil {
+			t.Errorf("release owned direct launch permit: %v", err)
+			stopped = false
+		}
+		cleanup.directPermit = nil
 	}
 	if cleanup.autoMayRun {
 		client := cleanup.client

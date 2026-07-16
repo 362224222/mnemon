@@ -83,16 +83,26 @@ type DaemonLaunch interface {
 // cancellation until it returns a non-nil ownership handle. Readiness remains
 // the authority of the authenticated health probe.
 type DaemonLauncher interface {
-	Launch(context.Context) (DaemonLaunch, error)
+	Launch(context.Context, DaemonLaunchPermit) (DaemonLaunch, error)
 }
 
-type DaemonLauncherFunc func(context.Context) (DaemonLaunch, error)
+// DaemonLaunchPermit is an opaque capability for the exact ensure.lock held by
+// the caller. Only EnsureDaemon or a Node lifecycle lease can construct one.
+// Launchers must pass it through unchanged; the production process launcher
+// inherits its descriptor into mnemond.
+type DaemonLaunchPermit struct {
+	lock *ensureLock
+}
 
-func (launch DaemonLauncherFunc) Launch(ctx context.Context) (DaemonLaunch, error) {
+type DaemonLauncherFunc func(context.Context, DaemonLaunchPermit) (DaemonLaunch, error)
+
+func (launch DaemonLauncherFunc) Launch(ctx context.Context,
+	permit DaemonLaunchPermit,
+) (DaemonLaunch, error) {
 	if launch == nil {
 		return nil, errors.New("daemon launcher is unavailable")
 	}
-	return launch(ctx)
+	return launch(ctx, permit)
 }
 
 type DaemonEnsureOptions struct {
@@ -148,32 +158,20 @@ func EnsureDaemon(ctx context.Context, options DaemonEnsureOptions) (DaemonEnsur
 func ensureDaemon(ctx context.Context, options DaemonEnsureOptions,
 	timing daemonEnsureTiming,
 ) (result DaemonEnsureResult, err error) {
-	compensationFenced := false
 	defer func() {
 		if err == nil {
 			result.FailureOutcome = DaemonEnsureFailureNone
 			return
 		}
 		if result.FailureOutcome == DaemonEnsureFailureNone {
-			if compensationFenced {
-				result.FailureOutcome = DaemonEnsureFailureCompensationFenced
-			} else {
-				result.FailureOutcome = DaemonEnsureFailureUnproven
-			}
+			result.FailureOutcome = DaemonEnsureFailureUnproven
 		}
 	}()
-	if ctx == nil || options.Probe == nil {
-		return DaemonEnsureResult{}, fmt.Errorf("%w: health boundary is unavailable", ErrDaemonEnsure)
+	if validateErr := validateDaemonEnsure(options, timing); validateErr != nil {
+		return DaemonEnsureResult{}, validateErr
 	}
-	if options.NodeState == "" || !filepath.IsAbs(options.NodeState) ||
-		filepath.Clean(options.NodeState) != options.NodeState {
-		return DaemonEnsureResult{}, fmt.Errorf("%w: Node state path is invalid", ErrDaemonEnsure)
-	}
-	if _, parseErr := model.ParseDigest(options.AssetRevision); parseErr != nil {
-		return DaemonEnsureResult{}, fmt.Errorf("%w: asset revision is invalid", ErrDaemonEnsure)
-	}
-	if timing.deadline <= 0 || timing.poll <= 0 || timing.poll > timing.deadline {
-		return DaemonEnsureResult{}, fmt.Errorf("%w: bounded timing is invalid", ErrDaemonEnsure)
+	if ctx == nil {
+		return DaemonEnsureResult{}, fmt.Errorf("%w: context is unavailable", ErrDaemonEnsure)
 	}
 
 	bounded, cancel := context.WithTimeout(ctx, timing.deadline)
@@ -202,6 +200,32 @@ func ensureDaemon(ctx context.Context, options DaemonEnsureOptions,
 			err = errors.Join(err, fmt.Errorf("%w: release launch lock: %v", ErrDaemonEnsure, closeErr))
 		}
 	}()
+	return ensureDaemonLocked(bounded, options, lock, timing.poll)
+}
+
+// ensureDaemonLocked is the single launch core shared by ordinary Ensure and
+// a caller that already owns the Node lifecycle lease. It never acquires or
+// releases ensure.lock itself.
+func ensureDaemonLocked(ctx context.Context, options DaemonEnsureOptions,
+	lock *ensureLock, poll time.Duration,
+) (result DaemonEnsureResult, err error) {
+	compensationFenced := false
+	defer func() {
+		if err == nil {
+			result.FailureOutcome = DaemonEnsureFailureNone
+			return
+		}
+		if result.FailureOutcome == DaemonEnsureFailureNone {
+			if compensationFenced {
+				result.FailureOutcome = DaemonEnsureFailureCompensationFenced
+			} else {
+				result.FailureOutcome = DaemonEnsureFailureUnproven
+			}
+		}
+	}()
+	if lockErr := validateHeldEnsureLock(lock, options.NodeState); lockErr != nil {
+		return DaemonEnsureResult{}, fmt.Errorf("%w: launch permit: %w", ErrDaemonEnsure, lockErr)
+	}
 	var launched DaemonLaunch
 	defer func() {
 		if launched == nil {
@@ -218,12 +242,12 @@ func ensureDaemon(ctx context.Context, options DaemonEnsureOptions,
 		result.FailureOutcome = DaemonEnsureFailureOwnedChildCleaned
 	}()
 
-	if health, unavailable, probeErr := probeDaemonHealth(bounded, options.Probe,
+	if health, unavailable, probeErr := probeDaemonHealth(ctx, options.Probe,
 		options.AssetRevision); !unavailable {
 		if probeErr != nil {
 			return DaemonEnsureResult{}, probeErr
 		}
-		if gateErr := verifyDaemonReadyGate(bounded, options.ReadyGate, health); gateErr != nil {
+		if gateErr := verifyDaemonReadyGate(ctx, options.ReadyGate, health); gateErr != nil {
 			return DaemonEnsureResult{}, gateErr
 		}
 		return DaemonEnsureResult{Health: health}, nil
@@ -232,13 +256,20 @@ func ensureDaemon(ctx context.Context, options DaemonEnsureOptions,
 	// managed launch lock. From here until a child is returned, exact Store-side
 	// compensation is permitted to make the final writer/busy decision.
 	compensationFenced = true
-	if verifyErr := options.Preflight.Verify(bounded); verifyErr != nil {
+	if options.Preflight == nil || options.Launcher == nil {
+		return DaemonEnsureResult{}, fmt.Errorf("%w: launch boundary is unavailable", ErrDaemonEnsure)
+	}
+	if verifyErr := options.Preflight.Verify(ctx); verifyErr != nil {
 		return DaemonEnsureResult{}, fmt.Errorf("%w: strict preflight: %w", ErrDaemonEnsure, verifyErr)
 	}
-	if err := bounded.Err(); err != nil {
+	if err := ctx.Err(); err != nil {
 		return DaemonEnsureResult{}, fmt.Errorf("%w: bounded deadline: %w", ErrDaemonEnsure, err)
 	}
-	launch, launchErr := options.Launcher.Launch(bounded)
+	if lockErr := validateHeldEnsureLock(lock, options.NodeState); lockErr != nil {
+		return DaemonEnsureResult{}, fmt.Errorf("%w: revalidate launch permit: %w",
+			ErrDaemonEnsure, lockErr)
+	}
+	launch, launchErr := options.Launcher.Launch(ctx, DaemonLaunchPermit{lock: lock})
 	if launch != nil {
 		launched = launch
 		result.Started = true
@@ -251,14 +282,14 @@ func ensureDaemon(ctx context.Context, options DaemonEnsureOptions,
 	}
 
 	for {
-		health, unavailable, probeErr := probeDaemonHealth(bounded, options.Probe,
+		health, unavailable, probeErr := probeDaemonHealth(ctx, options.Probe,
 			options.AssetRevision)
 		if !unavailable {
 			if probeErr != nil {
 				return result, probeErr
 			}
 			result.Health = health
-			if gateErr := verifyDaemonReadyGate(bounded, options.ReadyGate, health); gateErr != nil {
+			if gateErr := verifyDaemonReadyGate(ctx, options.ReadyGate, health); gateErr != nil {
 				return result, gateErr
 			}
 			if releaseErr := launched.Release(); releaseErr != nil {
@@ -269,11 +300,28 @@ func ensureDaemon(ctx context.Context, options DaemonEnsureOptions,
 			compensationFenced = false
 			return result, nil
 		}
-		if waitErr := waitEnsurePoll(bounded, timing.poll); waitErr != nil {
+		if waitErr := waitEnsurePoll(ctx, poll); waitErr != nil {
 			return result, fmt.Errorf("%w: daemon did not become ready: %w",
 				ErrDaemonEnsure, waitErr)
 		}
 	}
+}
+
+func validateDaemonEnsure(options DaemonEnsureOptions, timing daemonEnsureTiming) error {
+	if options.Probe == nil {
+		return fmt.Errorf("%w: health boundary is unavailable", ErrDaemonEnsure)
+	}
+	if options.NodeState == "" || !filepath.IsAbs(options.NodeState) ||
+		filepath.Clean(options.NodeState) != options.NodeState {
+		return fmt.Errorf("%w: Node state path is invalid", ErrDaemonEnsure)
+	}
+	if _, parseErr := model.ParseDigest(options.AssetRevision); parseErr != nil {
+		return fmt.Errorf("%w: asset revision is invalid", ErrDaemonEnsure)
+	}
+	if timing.deadline <= 0 || timing.poll <= 0 || timing.poll > timing.deadline {
+		return fmt.Errorf("%w: bounded timing is invalid", ErrDaemonEnsure)
+	}
+	return nil
 }
 
 func verifyDaemonReadyGate(ctx context.Context, gate DaemonReadyGate,
@@ -333,6 +381,7 @@ func probeDaemonHealth(ctx context.Context, probe DaemonHealthProbe,
 type ensureLock struct {
 	state *identityNodeState
 	file  *os.File
+	held  bool
 }
 
 func acquireEnsureLock(ctx context.Context, nodeState string,
@@ -350,6 +399,7 @@ func acquireEnsureLock(ctx context.Context, nodeState string,
 	lock := &ensureLock{state: state, file: file}
 	for {
 		if err := unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB); err == nil {
+			lock.held = true
 			if err := validateEnsureLockFile(lock); err != nil {
 				_ = lock.close()
 				return nil, err
@@ -364,6 +414,19 @@ func acquireEnsureLock(ctx context.Context, nodeState string,
 			return nil, err
 		}
 	}
+}
+
+func validateHeldEnsureLock(lock *ensureLock, nodeState string) error {
+	if lock == nil || !lock.held || lock.state == nil || lock.state.path != nodeState {
+		return errors.New("ensure lock is not held for this Node")
+	}
+	if err := validateEnsureLockFile(lock); err != nil {
+		return err
+	}
+	if err := unix.Flock(int(lock.file.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		return fmt.Errorf("reassert exclusive ensure lock: %w", err)
+	}
+	return validateEnsureLockFile(lock)
 }
 
 func openEnsureLockFile(state *identityNodeState) (*os.File, error) {
@@ -440,7 +503,11 @@ func (lock *ensureLock) close() error {
 		err = validateEnsureLockFile(lock)
 	}
 	if lock.file != nil {
-		err = errors.Join(err, unix.Flock(int(lock.file.Fd()), unix.LOCK_UN), lock.file.Close())
+		if lock.held {
+			err = errors.Join(err, unix.Flock(int(lock.file.Fd()), unix.LOCK_UN))
+			lock.held = false
+		}
+		err = errors.Join(err, lock.file.Close())
 		lock.file = nil
 	}
 	if lock.state != nil {

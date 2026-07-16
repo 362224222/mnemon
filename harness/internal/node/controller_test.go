@@ -191,8 +191,17 @@ func TestControllerAuthenticatedShutdownCompletesResponseThenReturnsAndCleansSoc
 	if err != nil {
 		t.Fatal(err)
 	}
-	response, apiErr := client.Shutdown(context.Background())
-	if apiErr != nil || response.SchemaVersion != localapi.SchemaVersion || response.Status != "stopping" {
+	authority, apiErr := client.ReadAuthority(context.Background())
+	if apiErr != nil {
+		t.Fatalf("ReadAuthority() before shutdown = %#v", apiErr)
+	}
+	expectedDigest, err := localapi.AuthorityDigest(authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, apiErr := client.Shutdown(context.Background(), authority)
+	if apiErr != nil || response.SchemaVersion != localapi.SchemaVersion || response.Status != "stopping" ||
+		response.AuthorityDigest != expectedDigest.String() {
 		t.Fatalf("Shutdown() = (%#v, %#v)", response, apiErr)
 	}
 	select {

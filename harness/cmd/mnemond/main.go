@@ -51,6 +51,9 @@ func main() {
 	defer stop()
 
 	if err := run(ctx, os.Args[1:], os.Stdout, os.Stderr); err != nil {
+		if errors.Is(err, node.ErrOfflineAuthorityActive) {
+			os.Exit(node.OfflineAuthorityActiveExitCode)
+		}
 		fmt.Fprintf(os.Stderr, "mnemond: %v\n", err)
 		os.Exit(1)
 	}
@@ -65,7 +68,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 			return nil, err
 		}
 		options.Install = verify
-		return node.OpenDaemon(ctx, options)
+		return node.OpenManagedDaemon(ctx, options)
 	}, node.Provision, activateManagedNode, node.Deactivate)
 }
 
@@ -227,6 +230,24 @@ func runWithNode(ctx context.Context, args []string, stdout, stderr io.Writer,
 		}
 		_, err = stdout.Write(append(raw, '\n'))
 		return err
+	case "confirm-offline":
+		projectRoot, expected, err := parseConfirmOfflineOptions(args[1:])
+		if err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		receipt, err := node.ConfirmOfflineAuthority(ctx, projectRoot, expected)
+		if err != nil {
+			return err
+		}
+		raw, err := model.CanonicalMarshal(receipt)
+		if err != nil {
+			return fmt.Errorf("encode offline authority receipt: %w", err)
+		}
+		_, err = stdout.Write(append(raw, '\n'))
+		return err
 	default:
 		if len(args) != 1 {
 			return fmt.Errorf("unsupported command %q", strings.Join(args, " "))
@@ -240,6 +261,25 @@ func parseInspectProjectRoot(args []string) (string, error) {
 		return "", errors.New("inspect requires exactly --project-root DIR")
 	}
 	return resolveProjectRoot(args[1])
+}
+
+func parseConfirmOfflineOptions(args []string) (string, model.Digest, error) {
+	expectedWire, remaining, err := takeRequiredManagedOption("confirm-offline",
+		"--expected-authority-digest", args)
+	if err != nil {
+		return "", model.Digest{}, err
+	}
+	workspace, err := parseInspectProjectRoot(remaining)
+	if err != nil {
+		return "", model.Digest{}, errors.New(
+			"confirm-offline requires --project-root and --expected-authority-digest")
+	}
+	expected, err := model.ParseDigest(expectedWire)
+	if err != nil || expected.IsZero() || expected.String() != expectedWire {
+		return "", model.Digest{}, errors.New(
+			"confirm-offline expected authority digest must be canonical sha256")
+	}
+	return workspace, expected, nil
 }
 
 type initializeReceipt struct {

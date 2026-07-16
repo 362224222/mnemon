@@ -91,7 +91,7 @@ func TestEnsureDaemonFailsClosedForEveryReachableNonreadyState(t *testing.T) {
 					preflights.Add(1)
 					return nil
 				}),
-				Launcher: DaemonLauncherFunc(func(context.Context) (DaemonLaunch, error) {
+				Launcher: DaemonLauncherFunc(func(context.Context, DaemonLaunchPermit) (DaemonLaunch, error) {
 					launches.Add(1)
 					return newRecordingDaemonLaunch(), nil
 				}),
@@ -131,7 +131,7 @@ func TestEnsureDaemonRechecksUnderLockBeforeStrictPreflight(t *testing.T) {
 			preflights.Add(1)
 			return nil
 		}),
-		Launcher: DaemonLauncherFunc(func(context.Context) (DaemonLaunch, error) {
+		Launcher: DaemonLauncherFunc(func(context.Context, DaemonLaunchPermit) (DaemonLaunch, error) {
 			launches.Add(1)
 			return newRecordingDaemonLaunch(), nil
 		}),
@@ -153,6 +153,7 @@ func TestEnsureDaemonRunsStrictPreflightThenOneLaunchAndWaitsForReady(t *testing
 	var preflights atomic.Int32
 	var launches atomic.Int32
 	var launched atomic.Bool
+	var receivedPermit DaemonLaunchPermit
 	handle := newRecordingDaemonLaunch()
 	result, err := EnsureDaemon(context.Background(), DaemonEnsureOptions{
 		NodeState: nodeState, AssetRevision: revision,
@@ -167,10 +168,21 @@ func TestEnsureDaemonRunsStrictPreflightThenOneLaunchAndWaitsForReady(t *testing
 			preflights.Add(1)
 			return nil
 		}),
-		Launcher: DaemonLauncherFunc(func(context.Context) (DaemonLaunch, error) {
+		Launcher: DaemonLauncherFunc(func(_ context.Context, permit DaemonLaunchPermit) (DaemonLaunch, error) {
 			launches.Add(1)
+			receivedPermit = permit
+			if err := validateHeldEnsureLock(permit.lock, nodeState); err != nil {
+				t.Fatalf("launcher received invalid permit: %v", err)
+			}
 			launched.Store(true)
 			return handle, nil
+		}),
+		ReadyGate: DaemonReadyGateFunc(func(context.Context, localapi.HealthResponse) error {
+			if err := validateHeldEnsureLock(receivedPermit.lock, nodeState); err != nil {
+				t.Fatalf("ready gate observed released launch permit: %v", err)
+			}
+			assertEnsureLockContended(t, nodeState)
+			return nil
 		}),
 	})
 	if err != nil || result.Health != readyEnsureHealth(revision) || !result.Started {
@@ -202,7 +214,7 @@ func TestEnsureDaemonTerminatesNewChildWhenReadyGateFails(t *testing.T) {
 			return readyEnsureHealth(revision), nil
 		}),
 		Preflight: DaemonEnsurePreflightFunc(func(context.Context) error { return nil }),
-		Launcher: DaemonLauncherFunc(func(context.Context) (DaemonLaunch, error) {
+		Launcher: DaemonLauncherFunc(func(context.Context, DaemonLaunchPermit) (DaemonLaunch, error) {
 			launched.Store(true)
 			return handle, nil
 		}),
@@ -233,7 +245,7 @@ func TestEnsureDaemonConcurrentCallersLaunchExactlyOnce(t *testing.T) {
 			preflights.Add(1)
 			return nil
 		}),
-		Launcher: DaemonLauncherFunc(func(context.Context) (DaemonLaunch, error) {
+		Launcher: DaemonLauncherFunc(func(context.Context, DaemonLaunchPermit) (DaemonLaunch, error) {
 			launches.Add(1)
 			probe.ready.Store(true)
 			return handle, nil
@@ -294,7 +306,7 @@ func TestEnsureDaemonPreflightLaunchAndDeadlineFailuresStayClosed(t *testing.T) 
 				return unavailableEnsureHealth()
 			}),
 			Preflight: DaemonEnsurePreflightFunc(func(context.Context) error { return failed }),
-			Launcher: DaemonLauncherFunc(func(context.Context) (DaemonLaunch, error) {
+			Launcher: DaemonLauncherFunc(func(context.Context, DaemonLaunchPermit) (DaemonLaunch, error) {
 				launches.Add(1)
 				return newRecordingDaemonLaunch(), nil
 			}),
@@ -315,7 +327,7 @@ func TestEnsureDaemonPreflightLaunchAndDeadlineFailuresStayClosed(t *testing.T) 
 				return unavailableEnsureHealth()
 			}),
 			Preflight: DaemonEnsurePreflightFunc(func(context.Context) error { return nil }),
-			Launcher: DaemonLauncherFunc(func(context.Context) (DaemonLaunch, error) {
+			Launcher: DaemonLauncherFunc(func(context.Context, DaemonLaunchPermit) (DaemonLaunch, error) {
 				return nil, failed
 			}),
 		})
@@ -338,7 +350,7 @@ func TestEnsureDaemonPreflightLaunchAndDeadlineFailuresStayClosed(t *testing.T) 
 				return unavailableEnsureHealth()
 			}),
 			Preflight: DaemonEnsurePreflightFunc(func(context.Context) error { return nil }),
-			Launcher: DaemonLauncherFunc(func(context.Context) (DaemonLaunch, error) {
+			Launcher: DaemonLauncherFunc(func(context.Context, DaemonLaunchPermit) (DaemonLaunch, error) {
 				launches.Add(1)
 				return handle, nil
 			}),
@@ -394,7 +406,7 @@ func TestEnsureDaemonTerminatesOnlyItsOwnedChildAfterPostLaunchFailures(t *testi
 				return readyEnsureHealth(revision), nil
 			}),
 			Preflight: DaemonEnsurePreflightFunc(func(context.Context) error { return nil }),
-			Launcher: DaemonLauncherFunc(func(context.Context) (DaemonLaunch, error) {
+			Launcher: DaemonLauncherFunc(func(context.Context, DaemonLaunchPermit) (DaemonLaunch, error) {
 				launched.Store(true)
 				return handle, nil
 			}),
@@ -425,7 +437,7 @@ func TestEnsureDaemonTerminatesOnlyItsOwnedChildAfterPostLaunchFailures(t *testi
 					SchemaVersion: localapi.SchemaVersion, Status: "not_ready"}, nil
 			}),
 			Preflight: DaemonEnsurePreflightFunc(func(context.Context) error { return nil }),
-			Launcher: DaemonLauncherFunc(func(context.Context) (DaemonLaunch, error) {
+			Launcher: DaemonLauncherFunc(func(context.Context, DaemonLaunchPermit) (DaemonLaunch, error) {
 				launched.Store(true)
 				return handle, nil
 			}),
@@ -452,7 +464,7 @@ func TestEnsureDaemonTerminatesOnlyItsOwnedChildAfterPostLaunchFailures(t *testi
 				return readyEnsureHealth(revision), nil
 			}),
 			Preflight: DaemonEnsurePreflightFunc(func(context.Context) error { return nil }),
-			Launcher: DaemonLauncherFunc(func(context.Context) (DaemonLaunch, error) {
+			Launcher: DaemonLauncherFunc(func(context.Context, DaemonLaunchPermit) (DaemonLaunch, error) {
 				launched.Store(true)
 				return handle, nil
 			}),
@@ -474,7 +486,7 @@ func TestEnsureDaemonTerminatesOnlyItsOwnedChildAfterPostLaunchFailures(t *testi
 				return unavailableEnsureHealth()
 			}),
 			Preflight: DaemonEnsurePreflightFunc(func(context.Context) error { return nil }),
-			Launcher: DaemonLauncherFunc(func(context.Context) (DaemonLaunch, error) {
+			Launcher: DaemonLauncherFunc(func(context.Context, DaemonLaunchPermit) (DaemonLaunch, error) {
 				return handle, failed
 			}),
 		})
@@ -509,7 +521,7 @@ func TestEnsureDaemonWithholdsCompensationWhenLockCloseFailsAfterChildRelease(t 
 			return readyEnsureHealth(revision), nil
 		}),
 		Preflight: DaemonEnsurePreflightFunc(func(context.Context) error { return nil }),
-		Launcher: DaemonLauncherFunc(func(context.Context) (DaemonLaunch, error) {
+		Launcher: DaemonLauncherFunc(func(context.Context, DaemonLaunchPermit) (DaemonLaunch, error) {
 			launched.Store(true)
 			return handle, nil
 		}),
@@ -669,7 +681,7 @@ func unavailableEnsureOptions(nodeState, revision string,
 			return unavailableEnsureHealth()
 		}),
 		Preflight: DaemonEnsurePreflightFunc(func(context.Context) error { return nil }),
-		Launcher: DaemonLauncherFunc(func(context.Context) (DaemonLaunch, error) {
+		Launcher: DaemonLauncherFunc(func(context.Context, DaemonLaunchPermit) (DaemonLaunch, error) {
 			launches.Add(1)
 			return newRecordingDaemonLaunch(), nil
 		}),

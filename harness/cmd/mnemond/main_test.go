@@ -15,6 +15,7 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/node"
+	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
 
 func TestRun(t *testing.T) {
@@ -146,6 +147,18 @@ func TestRunServeRejectsMalformedArgumentsBeforeOpening(t *testing.T) {
 	}
 	if opened != 0 {
 		t.Fatalf("malformed serve opened %d daemons", opened)
+	}
+}
+
+func TestProductionRunServeRequiresManagedLaunchPermit(t *testing.T) {
+	project := t.TempDir()
+	t.Setenv("MNEMON_HARNESS_INTERNAL_MNEMOND_ENSURE_FD", "")
+	if err := run(context.Background(), []string{"serve", "--project-root", project},
+		io.Discard, io.Discard); !errors.Is(err, node.ErrDaemonLaunchPermit) {
+		t.Fatalf("production serve without launch permit error = %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(project, ".mnemon", "harness", "node", "node.db")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("permit-free serve touched Store authority: %v", err)
 	}
 }
 
@@ -444,6 +457,87 @@ func TestRunInspectRejectsMalformedOrCancelledInvocationBeforeReading(t *testing
 	}
 	if called != 0 {
 		t.Fatalf("rejected inspect called reader %d times", called)
+	}
+}
+
+func TestRunConfirmOfflineEmitsExactAuthorityAndClassifiesActiveWriter(t *testing.T) {
+	project, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision := model.Sum([]byte("confirm-offline-command-assets")).String()
+	if _, err := node.Provision(context.Background(), node.ProvisionOptions{
+		Workspace: project, Host: model.HostCodex, AssetRevision: revision,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := node.InspectAuthority(context.Background(), project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected, err := localapi.NewAuthorityResponse(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, err := localapi.AuthorityDigest(expected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"confirm-offline", "--expected-authority-digest", digest.String(),
+		"--project-root", project}
+	var stdout bytes.Buffer
+	if err := runWithNode(context.Background(), args, &stdout, io.Discard,
+		nil, nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	want, err := model.CanonicalMarshal(expected)
+	if err != nil || stdout.String() != string(append(want, '\n')) {
+		t.Fatalf("confirm-offline stdout = %q, marshal=%v", stdout.String(), err)
+	}
+
+	st, err := store.OpenExisting(context.Background(),
+		filepath.Join(project, ".mnemon", "harness", "node", "node.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	stdout.Reset()
+	if err := runWithNode(context.Background(), args, &stdout, io.Discard,
+		nil, nil, nil, nil); !errors.Is(err, node.ErrOfflineAuthorityActive) ||
+		stdout.Len() != 0 {
+		t.Fatalf("writer-active confirm-offline = stdout %q error %v", stdout.String(), err)
+	}
+}
+
+func TestRunConfirmOfflineRejectsMalformedAndMismatchedAuthority(t *testing.T) {
+	project, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision := model.Sum([]byte("confirm-offline-mismatch-assets")).String()
+	if _, err := node.Provision(context.Background(), node.ProvisionOptions{
+		Workspace: project, Host: model.HostCodex, AssetRevision: revision,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"confirm-offline"},
+		{"confirm-offline", "--project-root", project},
+		{"confirm-offline", "--expected-authority-digest", revision},
+		{"confirm-offline", "--project-root", project, "--expected-authority-digest", "bad"},
+		{"confirm-offline", "--project-root", project, "--project-root", project,
+			"--expected-authority-digest", revision},
+	} {
+		if err := runWithNode(context.Background(), args, io.Discard, io.Discard,
+			nil, nil, nil, nil); err == nil {
+			t.Fatalf("malformed confirm-offline %v succeeded", args)
+		}
+	}
+	other := model.Sum([]byte("different-authority")).String()
+	if err := runWithNode(context.Background(), []string{"confirm-offline", "--project-root", project,
+		"--expected-authority-digest", other}, io.Discard, io.Discard,
+		nil, nil, nil, nil); !errors.Is(err, node.ErrOfflineAuthority) {
+		t.Fatalf("mismatched confirm-offline error = %v", err)
 	}
 }
 

@@ -55,6 +55,7 @@ type DaemonProcessLauncher struct {
 	// to make the otherwise tiny post-Start/pre-publication failure window
 	// deterministic without a package-global failpoint.
 	testBeforePIDPublication func()
+	testEnvironment          []string
 }
 
 // NewDaemonProcessLauncher constructs a strict launcher. Disk identities are
@@ -101,9 +102,14 @@ func NewDaemonProcessLauncher(options DaemonProcessOptions) (*DaemonProcessLaunc
 // Context cancellation is observed through PID publication, but no
 // CommandContext is used: cancellation after Release must not kill a healthy
 // detached daemon.
-func (launcher *DaemonProcessLauncher) Launch(ctx context.Context) (DaemonLaunch, error) {
+func (launcher *DaemonProcessLauncher) Launch(ctx context.Context,
+	permit DaemonLaunchPermit,
+) (DaemonLaunch, error) {
 	if launcher == nil || ctx == nil {
 		return nil, daemonProcessError("start", errors.New("launcher or context is unavailable"))
+	}
+	if err := validateHeldEnsureLock(permit.lock, launcher.nodeState); err != nil {
+		return nil, daemonProcessError("validate launch permit", err)
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, daemonProcessError("start", err)
@@ -146,12 +152,19 @@ func (launcher *DaemonProcessLauncher) Launch(ctx context.Context) (DaemonLaunch
 	if err := ctx.Err(); err != nil {
 		return nil, daemonProcessError("start", err)
 	}
+	if err := validateHeldEnsureLock(permit.lock, launcher.nodeState); err != nil {
+		return nil, daemonProcessError("revalidate launch permit", err)
+	}
 
 	command := exec.Command(launcher.executable, "serve", "--project-root", launcher.workspace)
 	command.Dir = launcher.workspace
 	command.Stdin = nullFile
 	command.Stdout = logFile
 	command.Stderr = logFile
+	command.ExtraFiles = []*os.File{permit.lock.file}
+	command.Env = append([]string{
+		daemonLaunchPermitEnvironment + "=" + fmt.Sprintf("%d", daemonLaunchPermitChildFD),
+	}, launcher.testEnvironment...)
 	command.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := command.Start(); err != nil {
 		return nil, daemonProcessError("start child", err)
