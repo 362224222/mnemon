@@ -203,7 +203,7 @@ func newDaemonFixture(t *testing.T, enabled bool) daemonFixture {
 		if err != nil {
 			t.Fatal(err)
 		}
-		activated, err := st.ActivateProfile(context.Background(), profile, profile.UpdatedAt())
+		activated, err := st.ActivateProfile(context.Background(), profile, at, profile.UpdatedAt())
 		if err != nil {
 			t.Fatal(err)
 		}

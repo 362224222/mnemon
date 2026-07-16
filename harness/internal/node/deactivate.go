@@ -16,10 +16,11 @@ import (
 var ErrDeactivate = errors.New("deactivate mnemond Profile")
 
 type DeactivateOptions struct {
-	Workspace     string
-	Host          model.HostKind
-	AssetRevision string
-	Clock         Clock
+	Workspace         string
+	Host              model.HostKind
+	AssetRevision     string
+	ExpectedUpdatedAt time.Time
+	Clock             Clock
 }
 
 type DeactivateResult struct {
@@ -42,6 +43,11 @@ func Deactivate(ctx context.Context, options DeactivateOptions) (result Deactiva
 	runtimeKind, hostOK := model.RuntimeForHost(options.Host)
 	if _, digestErr := model.ParseDigest(options.AssetRevision); !hostOK || digestErr != nil {
 		return DeactivateResult{}, fmt.Errorf("%w: Host or asset revision is invalid", ErrDeactivate)
+	}
+	expectedUpdatedAt := options.ExpectedUpdatedAt.Round(0).UTC()
+	if expectedUpdatedAt.IsZero() || expectedUpdatedAt.UnixNano() <= 0 ||
+		!time.Unix(0, expectedUpdatedAt.UnixNano()).UTC().Equal(expectedUpdatedAt) {
+		return DeactivateResult{}, fmt.Errorf("%w: expected authority update time is invalid", ErrDeactivate)
 	}
 	if options.Clock == nil {
 		options.Clock = wallClock{}
@@ -84,10 +90,19 @@ func Deactivate(ctx context.Context, options DeactivateOptions) (result Deactiva
 		authority.Node.ActiveAssetRevision() != options.AssetRevision {
 		return DeactivateResult{}, fmt.Errorf("%w: requested authority differs from durable Profile", ErrDeactivate)
 	}
+	if !authority.Profile.UpdatedAt().Equal(expectedUpdatedAt) {
+		return DeactivateResult{}, fmt.Errorf("%w: requested authority generation differs from durable Profile", ErrDeactivate)
+	}
 	if err := localapi.VerifyProfileCredential(nodeState, authority.Profile.CredentialHash()); err != nil {
 		return DeactivateResult{}, fmt.Errorf("%w: %v", ErrDeactivate, err)
 	}
-	deactivated, err := st.DeactivateProfile(ctx, authority.Profile, at)
+	expectedSpec := authority.Profile.Spec()
+	expectedSpec.UpdatedAt = expectedUpdatedAt
+	expected, err := model.NewProfile(expectedSpec)
+	if err != nil {
+		return DeactivateResult{}, fmt.Errorf("%w: expected durable Profile: %v", ErrDeactivate, err)
+	}
+	deactivated, err := st.DeactivateProfile(ctx, expected, at)
 	if err != nil {
 		return DeactivateResult{}, fmt.Errorf("%w: %v", ErrDeactivate, err)
 	}

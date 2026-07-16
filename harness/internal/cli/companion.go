@@ -45,6 +45,7 @@ type companionLifecycleReceipt struct {
 	Host          string `json:"host"`
 	SchemaVersion int    `json:"schema_version"`
 	Status        string `json:"status"`
+	UpdatedAt     string `json:"updated_at"`
 }
 
 type companionRunner struct {
@@ -158,33 +159,35 @@ func (runner *companionRunner) Inspect(ctx context.Context) (localapi.AuthorityR
 }
 
 func (runner *companionRunner) Activate(ctx context.Context, host model.HostKind,
-	assetRevision string,
+	assetRevision string, expectedUpdatedAt time.Time,
 ) (companionLifecycleReceipt, error) {
-	return runner.lifecycle(ctx, "activate", "active", host, assetRevision)
+	return runner.lifecycle(ctx, "activate", "active", host, assetRevision, expectedUpdatedAt)
 }
 
 func (runner *companionRunner) Deactivate(ctx context.Context, host model.HostKind,
-	assetRevision string,
+	assetRevision string, expectedUpdatedAt time.Time,
 ) (companionLifecycleReceipt, error) {
-	return runner.lifecycle(ctx, "deactivate", "inactive", host, assetRevision)
+	return runner.lifecycle(ctx, "deactivate", "inactive", host, assetRevision, expectedUpdatedAt)
 }
 
 func (runner *companionRunner) lifecycle(ctx context.Context, command, status string,
-	host model.HostKind, assetRevision string,
+	host model.HostKind, assetRevision string, expectedUpdatedAt time.Time,
 ) (companionLifecycleReceipt, error) {
+	expectedWire, timeErr := canonicalCompanionTime(expectedUpdatedAt)
 	if runner == nil || command != "activate" && command != "deactivate" ||
-		!validCompanionAuthority(host, assetRevision) {
+		!validCompanionAuthority(host, assetRevision) || timeErr != nil {
 		return companionLifecycleReceipt{}, companionError(command+" request", nil)
 	}
 	raw, err := runner.execute(ctx, command, companionCommandTimeout,
 		companionResponseBytes, command, "--project-root", runner.workspace,
-		"--host", string(host), "--asset-revision", assetRevision)
+		"--host", string(host), "--asset-revision", assetRevision,
+		"--expected-updated-at", expectedWire)
 	if err != nil {
 		return companionLifecycleReceipt{}, err
 	}
 	var receipt companionLifecycleReceipt
 	if decodeErr := decodeCanonicalCompanionLine(raw, &receipt); decodeErr != nil ||
-		validateLifecycleReceipt(receipt, status, host, assetRevision) != nil {
+		validateLifecycleReceipt(receipt, status, host, assetRevision, expectedUpdatedAt) != nil {
 		return companionLifecycleReceipt{}, companionError(command+" response", nil)
 	}
 	return receipt, nil
@@ -335,14 +338,39 @@ func validateInitializeReceipt(receipt companionInitializeReceipt, expectedHost 
 }
 
 func validateLifecycleReceipt(receipt companionLifecycleReceipt, expectedStatus string,
-	expectedHost model.HostKind, expectedRevision string,
+	expectedHost model.HostKind, expectedRevision string, expectedUpdatedAt time.Time,
 ) error {
+	updatedAt, timeErr := parseCanonicalCompanionTime(receipt.UpdatedAt)
+	expectedWire, expectedErr := canonicalCompanionTime(expectedUpdatedAt)
 	if receipt.SchemaVersion != model.SchemaVersion || receipt.Status != expectedStatus ||
 		model.HostKind(receipt.Host) != expectedHost || receipt.AssetRevision != expectedRevision ||
-		!validCompanionAuthority(model.HostKind(receipt.Host), receipt.AssetRevision) {
+		!validCompanionAuthority(model.HostKind(receipt.Host), receipt.AssetRevision) || timeErr != nil ||
+		expectedErr != nil {
 		return errors.New("invalid lifecycle receipt")
 	}
+	expected, _ := parseCanonicalCompanionTime(expectedWire)
+	if receipt.Changed && !updatedAt.After(expected) || !receipt.Changed && !updatedAt.Equal(expected) {
+		return errors.New("invalid lifecycle receipt generation")
+	}
 	return nil
+}
+
+func canonicalCompanionTime(value time.Time) (string, error) {
+	canonical := value.Round(0).UTC()
+	if canonical.IsZero() || canonical.UnixNano() <= 0 ||
+		!time.Unix(0, canonical.UnixNano()).UTC().Equal(canonical) {
+		return "", errors.New("invalid companion authority time")
+	}
+	return canonical.Format(time.RFC3339Nano), nil
+}
+
+func parseCanonicalCompanionTime(value string) (time.Time, error) {
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil || parsed.UnixNano() <= 0 || parsed.UTC().Format(time.RFC3339Nano) != value ||
+		!time.Unix(0, parsed.UnixNano()).UTC().Equal(parsed.UTC()) {
+		return time.Time{}, errors.New("invalid companion authority time")
+	}
+	return parsed.UTC(), nil
 }
 
 func validateCompanionAuthorityResponse(response localapi.AuthorityResponse) error {

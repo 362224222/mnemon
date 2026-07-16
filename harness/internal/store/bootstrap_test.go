@@ -199,7 +199,7 @@ func activateTestNode(t *testing.T, st *Store, node model.Node, profile model.Pr
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := st.ActivateProfile(context.Background(), desired, spec.UpdatedAt)
+	result, err := st.ActivateProfile(context.Background(), desired, profile.UpdatedAt(), spec.UpdatedAt)
 	if err != nil {
 		t.Fatal(err)
 	}

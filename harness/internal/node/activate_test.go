@@ -36,7 +36,8 @@ func TestActivatePublishesOnlyVerifiedInstallationAndReplaysExactly(t *testing.T
 	}
 	at := provisioned.Profile.UpdatedAt().Add(time.Second)
 	options := ActivateOptions{Workspace: workspace, Host: model.HostCodex,
-		AssetRevision: bundle.Manifest().AssetRevision, Clock: controllerTestClock{at},
+		AssetRevision: bundle.Manifest().AssetRevision, ExpectedUpdatedAt: provisioned.Profile.UpdatedAt(),
+		Clock:   controllerTestClock{at},
 		Install: testInstallationVerifier(workspace, provisioned.NodeState, bundle)}
 	first, err := Activate(context.Background(), options)
 	if err != nil || !first.Changed || !first.Profile.Enabled() || first.Profile.Host() != model.HostCodex ||
@@ -44,6 +45,7 @@ func TestActivatePublishesOnlyVerifiedInstallationAndReplaysExactly(t *testing.T
 		t.Fatalf("first Activate() = (%#v, %v)", first, err)
 	}
 	options.Clock = controllerTestClock{at.Add(time.Hour)}
+	options.ExpectedUpdatedAt = first.Profile.UpdatedAt()
 	second, err := Activate(context.Background(), options)
 	if err != nil || second.Changed || !second.Profile.UpdatedAt().Equal(first.Profile.UpdatedAt()) ||
 		!second.Node.UpdatedAt().Equal(first.Node.UpdatedAt()) {
@@ -62,9 +64,10 @@ func TestActivateFailureLeavesProfileDisabled(t *testing.T) {
 	}
 	failed := errors.New("Host projection is not installed")
 	options := ActivateOptions{Workspace: workspace, Host: model.HostCodex,
-		AssetRevision: bundle.Manifest().AssetRevision,
-		Clock:         controllerTestClock{provisioned.Profile.UpdatedAt().Add(time.Second)},
-		Install:       InstallationVerifierFunc(func(model.Profile) error { return failed })}
+		AssetRevision:     bundle.Manifest().AssetRevision,
+		ExpectedUpdatedAt: provisioned.Profile.UpdatedAt(),
+		Clock:             controllerTestClock{provisioned.Profile.UpdatedAt().Add(time.Second)},
+		Install:           InstallationVerifierFunc(func(model.Profile) error { return failed })}
 	if _, err := Activate(context.Background(), options); !errors.Is(err, ErrActivate) || !errors.Is(err, failed) {
 		t.Fatalf("Activate() error = %v", err)
 	}
@@ -146,7 +149,40 @@ func activeTestOptions(workspace string, provisioned ProvisionResult, bundle ass
 	host model.HostKind,
 ) ActivateOptions {
 	return ActivateOptions{Workspace: workspace, Host: host,
-		AssetRevision: bundle.Manifest().AssetRevision,
-		Clock:         controllerTestClock{provisioned.Profile.UpdatedAt().Add(time.Second)},
-		Install:       testInstallationVerifier(workspace, provisioned.NodeState, bundle)}
+		AssetRevision:     bundle.Manifest().AssetRevision,
+		ExpectedUpdatedAt: provisioned.Profile.UpdatedAt(),
+		Clock:             controllerTestClock{provisioned.Profile.UpdatedAt().Add(time.Second)},
+		Install:           testInstallationVerifier(workspace, provisioned.NodeState, bundle)}
+}
+
+func TestActivateRejectsStaleOrInvalidExpectedGenerationBeforeMutation(t *testing.T) {
+	workspace, provisioned, bundle := activeTestProvision(t)
+	for name, expected := range map[string]time.Time{
+		"stale": provisioned.Profile.UpdatedAt().Add(-time.Nanosecond),
+		"zero":  {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			options := activeTestOptions(workspace, provisioned, bundle, model.HostCodex)
+			options.ExpectedUpdatedAt = expected
+			if _, err := Activate(context.Background(), options); !errors.Is(err, ErrActivate) {
+				t.Fatalf("Activate() error = %v", err)
+			}
+		})
+	}
+	equalClock := activeTestOptions(workspace, provisioned, bundle, model.HostCodex)
+	equalClock.Clock = controllerTestClock{provisioned.Profile.UpdatedAt()}
+	if _, err := Activate(context.Background(), equalClock); !errors.Is(err, ErrActivate) {
+		t.Fatalf("equal-clock Activate() error = %v", err)
+	}
+	st, err := store.Open(context.Background(), filepath.Join(provisioned.NodeState, "node.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority, readErr := st.ReadLocalAuthority(context.Background())
+	closeErr := st.Close()
+	if readErr != nil || closeErr != nil || authority.Profile.Enabled() ||
+		!authority.Profile.UpdatedAt().Equal(provisioned.Profile.UpdatedAt()) {
+		t.Fatalf("failed generation fences changed authority = (%#v, %v, close %v)",
+			authority, readErr, closeErr)
+	}
 }

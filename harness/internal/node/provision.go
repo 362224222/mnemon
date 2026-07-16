@@ -32,6 +32,23 @@ type ProvisionResult struct {
 	CredentialCreated bool
 }
 
+// PrepareNodeState creates and validates only the owner-controlled directory
+// skeleton required to serialize first setup. It deliberately does not create
+// or open identity keys, Profile credentials, node.db, projections or any
+// other canonical Node authority. Provision remains the sole initializer for
+// those objects after the caller has acquired its setup transaction lock.
+func PrepareNodeState(workspace string) (string, error) {
+	validated, err := validateDaemonWorkspace(workspace)
+	if err != nil {
+		return "", fmt.Errorf("%w: prepare Node state: %v", ErrProvision, err)
+	}
+	nodeState, err := ensureProvisionState(validated)
+	if err != nil {
+		return "", fmt.Errorf("%w: prepare Node state: %v", ErrProvision, err)
+	}
+	return nodeState, nil
+}
+
 // Provision initializes only durable inactive Node authority. Host projection,
 // adapter checks, activation and daemon launch are separate setup gates, so a
 // failure after this call cannot accidentally grant managed Agent authority.

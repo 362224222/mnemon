@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,6 +14,64 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
+
+func TestPrepareNodeStateCreatesOnlyASerializableOwnerDirectorySkeleton(t *testing.T) {
+	workspace := newProvisionWorkspace(t)
+	const callers = 20
+	results := make(chan string, callers)
+	errorsFound := make(chan error, callers)
+	var wait sync.WaitGroup
+	wait.Add(callers)
+	for range callers {
+		go func() {
+			defer wait.Done()
+			nodeState, err := PrepareNodeState(workspace)
+			if err != nil {
+				errorsFound <- err
+				return
+			}
+			results <- nodeState
+		}()
+	}
+	wait.Wait()
+	close(results)
+	close(errorsFound)
+	for err := range errorsFound {
+		t.Errorf("PrepareNodeState() error = %v", err)
+	}
+	want := filepath.Join(workspace, ".mnemon", "harness", "node")
+	for result := range results {
+		if result != want {
+			t.Errorf("PrepareNodeState() = %q, want %q", result, want)
+		}
+	}
+	for _, path := range []string{filepath.Join(workspace, ".mnemon", "harness"), want} {
+		info, err := os.Lstat(path)
+		if err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 {
+			t.Fatalf("prepared directory %s = (%v, %v)", path, info, err)
+		}
+	}
+	entries, err := os.ReadDir(want)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("prepared Node authority entries = (%v, %v)", entries, err)
+	}
+}
+
+func TestPrepareNodeStateRejectsUnsafeParentsWithoutCreatingAuthority(t *testing.T) {
+	workspace := newProvisionWorkspace(t)
+	if err := os.Mkdir(filepath.Join(workspace, ".mnemon"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(t.TempDir(), filepath.Join(workspace, ".mnemon", "harness")); err != nil {
+		t.Fatal(err)
+	}
+	if nodeState, err := PrepareNodeState(workspace); nodeState != "" || !errors.Is(err, ErrProvision) {
+		t.Fatalf("PrepareNodeState() = (%q, %v)", nodeState, err)
+	}
+	if _, err := os.Lstat(filepath.Join(workspace, ".mnemon", "harness", "node.db")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unsafe prepare created authority: %v", err)
+	}
+}
 
 func TestProvisionCreatesAndReplaysOneDisabledWorkspaceAuthority(t *testing.T) {
 	workspace := newProvisionWorkspace(t)
@@ -101,7 +160,8 @@ func TestProvisionRejectsProjectionAndHostAuthorityDrift(t *testing.T) {
 		spec.Enabled = true
 		spec.UpdatedAt = first.Profile.UpdatedAt().Add(time.Second)
 		enabled, _ := model.NewProfile(spec)
-		if _, err := st.ActivateProfile(context.Background(), enabled, enabled.UpdatedAt()); err != nil {
+		if _, err := st.ActivateProfile(context.Background(), enabled,
+			first.Profile.UpdatedAt(), enabled.UpdatedAt()); err != nil {
 			t.Fatal(err)
 		}
 		if err := st.Close(); err != nil {

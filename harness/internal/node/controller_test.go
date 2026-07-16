@@ -78,7 +78,7 @@ func TestControllerServesOwnerOnlyManagedRoutesFromOneStore(t *testing.T) {
 	enabledSpec.Enabled = true
 	enabledSpec.UpdatedAt = at.Add(time.Second)
 	enabled, _ := model.NewProfile(enabledSpec)
-	if _, err := st.ActivateProfile(ctx, enabled, enabled.UpdatedAt()); err != nil {
+	if _, err := st.ActivateProfile(ctx, enabled, disabled.UpdatedAt(), enabled.UpdatedAt()); err != nil {
 		t.Fatal(err)
 	}
 	_, privateKey, err := ed25519.GenerateKey(nil)
@@ -139,7 +139,8 @@ func TestControllerServesOwnerOnlyManagedRoutesFromOneStore(t *testing.T) {
 		authority.UpdatedAt != deactivated.Profile.UpdatedAt().Format(time.RFC3339Nano) {
 		t.Fatalf("disabled ReadAuthority() = (%#v, %v)", authority, apiErr)
 	}
-	reactivated, err := st.ActivateProfile(context.Background(), enabled, at.Add(3*time.Second))
+	reactivated, err := st.ActivateProfile(context.Background(), enabled,
+		deactivated.Profile.UpdatedAt(), at.Add(3*time.Second))
 	if err != nil || !reactivated.Profile.Enabled() {
 		t.Fatalf("reactivate controller authority = (%#v, %v)", reactivated, err)
 	}

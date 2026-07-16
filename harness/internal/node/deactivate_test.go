@@ -22,7 +22,8 @@ func TestDeactivateWithdrawsExactAuthorityAndReplays(t *testing.T) {
 	}
 	at := active.Profile.UpdatedAt().Add(time.Second)
 	options := DeactivateOptions{Workspace: workspace, Host: model.HostCodex,
-		AssetRevision: bundle.Manifest().AssetRevision, Clock: controllerTestClock{at}}
+		AssetRevision: bundle.Manifest().AssetRevision, ExpectedUpdatedAt: active.Profile.UpdatedAt(),
+		Clock: controllerTestClock{at}}
 
 	first, err := Deactivate(context.Background(), options)
 	if err != nil || !first.Changed || first.Profile.Enabled() ||
@@ -31,6 +32,7 @@ func TestDeactivateWithdrawsExactAuthorityAndReplays(t *testing.T) {
 		t.Fatalf("Deactivate() = (%#v, %v)", first, err)
 	}
 	options.Clock = controllerTestClock{at.Add(time.Hour)}
+	options.ExpectedUpdatedAt = first.Profile.UpdatedAt()
 	second, err := Deactivate(context.Background(), options)
 	if err != nil || second.Changed || second.Profile.Enabled() ||
 		!second.Profile.UpdatedAt().Equal(first.Profile.UpdatedAt()) ||
@@ -51,8 +53,9 @@ func TestDeactivateAllowsDriftedProjectionButRejectsAuthorityDrift(t *testing.T)
 		t.Fatal(err)
 	}
 	options := DeactivateOptions{Workspace: workspace, Host: model.HostCodex,
-		AssetRevision: bundle.Manifest().AssetRevision,
-		Clock:         controllerTestClock{active.Profile.UpdatedAt().Add(time.Second)}}
+		AssetRevision:     bundle.Manifest().AssetRevision,
+		ExpectedUpdatedAt: active.Profile.UpdatedAt(),
+		Clock:             controllerTestClock{active.Profile.UpdatedAt().Add(time.Second)}}
 	if result, err := Deactivate(context.Background(), options); err != nil || !result.Changed || result.Profile.Enabled() {
 		t.Fatalf("projection-drift Deactivate() = (%#v, %v)", result, err)
 	}
@@ -66,11 +69,15 @@ func TestDeactivateAllowsDriftedProjectionButRejectsAuthorityDrift(t *testing.T)
 	for name, mutate := range map[string]func(*DeactivateOptions){
 		"Host":     func(value *DeactivateOptions) { value.Host = model.HostClaudeCode },
 		"revision": func(value *DeactivateOptions) { value.AssetRevision = model.Sum([]byte("other-assets")).String() },
+		"generation": func(value *DeactivateOptions) {
+			value.ExpectedUpdatedAt = value.ExpectedUpdatedAt.Add(-time.Nanosecond)
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			options := DeactivateOptions{Workspace: workspace, Host: model.HostCodex,
-				AssetRevision: bundle.Manifest().AssetRevision,
-				Clock:         controllerTestClock{active.Profile.UpdatedAt().Add(time.Second)}}
+				AssetRevision:     bundle.Manifest().AssetRevision,
+				ExpectedUpdatedAt: active.Profile.UpdatedAt(),
+				Clock:             controllerTestClock{active.Profile.UpdatedAt().Add(time.Second)}}
 			mutate(&options)
 			if _, err := Deactivate(context.Background(), options); !errors.Is(err, ErrDeactivate) {
 				t.Fatalf("Deactivate() error = %v", err)
@@ -110,11 +117,69 @@ func TestDeactivateRejectsIdentityAndCredentialDrift(t *testing.T) {
 			}
 			test.drift(t, provisioned.NodeState)
 			options := DeactivateOptions{Workspace: workspace, Host: model.HostCodex,
-				AssetRevision: bundle.Manifest().AssetRevision,
-				Clock:         controllerTestClock{active.Profile.UpdatedAt().Add(time.Second)}}
+				AssetRevision:     bundle.Manifest().AssetRevision,
+				ExpectedUpdatedAt: active.Profile.UpdatedAt(),
+				Clock:             controllerTestClock{active.Profile.UpdatedAt().Add(time.Second)}}
 			if _, err := Deactivate(context.Background(), options); !errors.Is(err, ErrDeactivate) {
 				t.Fatalf("Deactivate() error = %v", err)
 			}
 		})
+	}
+}
+
+func TestDeactivateRejectsInvalidExpectedGeneration(t *testing.T) {
+	workspace, provisioned, bundle := activeTestProvision(t)
+	active, err := Activate(context.Background(), activeTestOptions(workspace, provisioned, bundle,
+		model.HostCodex))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, expected := range map[string]time.Time{
+		"zero":              {},
+		"before Unix epoch": time.Unix(-1, 0),
+	} {
+		t.Run(name, func(t *testing.T) {
+			options := DeactivateOptions{Workspace: workspace, Host: model.HostCodex,
+				AssetRevision: bundle.Manifest().AssetRevision, ExpectedUpdatedAt: expected,
+				Clock: controllerTestClock{active.Profile.UpdatedAt().Add(time.Second)}}
+			if _, err := Deactivate(context.Background(), options); !errors.Is(err, ErrDeactivate) {
+				t.Fatalf("Deactivate() error = %v", err)
+			}
+		})
+	}
+	equalClock := DeactivateOptions{Workspace: workspace, Host: model.HostCodex,
+		AssetRevision: bundle.Manifest().AssetRevision, ExpectedUpdatedAt: active.Profile.UpdatedAt(),
+		Clock: controllerTestClock{active.Profile.UpdatedAt()}}
+	if _, err := Deactivate(context.Background(), equalClock); !errors.Is(err, ErrDeactivate) {
+		t.Fatalf("equal-clock Deactivate() error = %v", err)
+	}
+}
+
+func TestDeactivateRejectsReactivatedAuthorityABA(t *testing.T) {
+	workspace, provisioned, bundle := activeTestProvision(t)
+	active, err := Activate(context.Background(), activeTestOptions(workspace, provisioned, bundle,
+		model.HostCodex))
+	if err != nil {
+		t.Fatal(err)
+	}
+	deactivated, err := Deactivate(context.Background(), DeactivateOptions{Workspace: workspace,
+		Host: model.HostCodex, AssetRevision: bundle.Manifest().AssetRevision,
+		ExpectedUpdatedAt: active.Profile.UpdatedAt(),
+		Clock:             controllerTestClock{active.Profile.UpdatedAt().Add(time.Second)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reactivate := activeTestOptions(workspace, provisioned, bundle, model.HostCodex)
+	reactivate.ExpectedUpdatedAt = deactivated.Profile.UpdatedAt()
+	reactivate.Clock = controllerTestClock{deactivated.Profile.UpdatedAt().Add(time.Second)}
+	reactivated, err := Activate(context.Background(), reactivate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := DeactivateOptions{Workspace: workspace, Host: model.HostCodex,
+		AssetRevision: bundle.Manifest().AssetRevision, ExpectedUpdatedAt: active.Profile.UpdatedAt(),
+		Clock: controllerTestClock{reactivated.Profile.UpdatedAt().Add(time.Second)}}
+	if _, err := Deactivate(context.Background(), stale); !errors.Is(err, ErrDeactivate) {
+		t.Fatalf("stale ABA Deactivate() error = %v", err)
 	}
 }

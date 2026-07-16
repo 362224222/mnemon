@@ -252,17 +252,22 @@ func TestRunActivateCallsTheNodeWriterAndEmitsClosedReceipt(t *testing.T) {
 				t.Fatal("activate provisioned the Node")
 				return node.ProvisionResult{}, nil
 			}
+			expected := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+			if changed {
+				expected = expected.Add(-time.Second)
+			}
 			args := []string{"activate", "--host", "claude-code", "--asset-revision", revision,
-				"--project-root", project}
+				"--project-root", project, "--expected-updated-at", expected.Format(time.RFC3339Nano)}
 			var stdout, stderr bytes.Buffer
 			if err := runWithNode(context.Background(), args, &stdout, &stderr, open, provision, activate, nil); err != nil {
 				t.Fatal(err)
 			}
 			want := `{"asset_revision":"` + revision + `","changed":` + fmt.Sprint(changed) +
-				`,"host":"claude-code","schema_version":1,"status":"active"}` + "\n"
+				`,"host":"claude-code","schema_version":1,"status":"active",` +
+				`"updated_at":"2026-07-17T12:00:00Z"}` + "\n"
 			if stdout.String() != want || stderr.Len() != 0 || received.Workspace != resolved ||
 				received.Host != model.HostClaudeCode || received.AssetRevision != revision ||
-				received.Clock != nil || received.Install != nil {
+				!received.ExpectedUpdatedAt.Equal(expected) || received.Clock != nil || received.Install != nil {
 				t.Fatalf("activate = stdout %q stderr %q options %#v", stdout.String(), stderr.String(), received)
 			}
 		})
@@ -272,6 +277,7 @@ func TestRunActivateCallsTheNodeWriterAndEmitsClosedReceipt(t *testing.T) {
 func TestRunActivateRejectsMalformedAuthorityBeforeActivation(t *testing.T) {
 	project := t.TempDir()
 	revision := model.Sum([]byte("active-assets")).String()
+	generation := "2026-07-17T11:59:59Z"
 	called := 0
 	activate := func(context.Context, node.ActivateOptions) (node.ActivateResult, error) {
 		called++
@@ -279,10 +285,14 @@ func TestRunActivateRejectsMalformedAuthorityBeforeActivation(t *testing.T) {
 	}
 	for _, args := range [][]string{
 		{"activate"},
-		{"activate", "--project-root", project, "--host", "unknown", "--asset-revision", revision},
-		{"activate", "--project-root", project, "--host", "codex", "--asset-revision", "asset-r5"},
-		{"activate", "--project-root", project, "--project-root", project, "--host", "codex", "--asset-revision", revision},
-		{"activate", "--project-root", project, "--host", "codex", "--asset-revision", revision, "trailing"},
+		{"activate", "--expected-updated-at"},
+		{"activate", "--project-root", project, "--host", "unknown", "--asset-revision", revision, "--expected-updated-at", generation},
+		{"activate", "--project-root", project, "--host", "codex", "--asset-revision", "asset-r5", "--expected-updated-at", generation},
+		{"activate", "--project-root", project, "--project-root", project, "--host", "codex", "--asset-revision", revision, "--expected-updated-at", generation},
+		{"activate", "--project-root", project, "--host", "codex", "--asset-revision", revision, "--expected-updated-at", generation, "trailing"},
+		{"activate", "--project-root", project, "--host", "codex", "--asset-revision", revision, "--expected-updated-at", "2026-07-16T20:00:00-04:00"},
+		{"activate", "--project-root", project, "--host", "codex", "--asset-revision", revision, "--expected-updated-at", "9999-12-31T23:59:59Z"},
+		{"activate", "--project-root", project, "--host", "codex", "--asset-revision", revision, "--expected-updated-at", generation, "--expected-updated-at", generation},
 	} {
 		if err := runWithNode(context.Background(), args, io.Discard, io.Discard, nil, nil, activate, nil); err == nil {
 			t.Fatalf("runWithNode(%v) succeeded", args)
@@ -303,7 +313,8 @@ func TestRunActivateHonorsCancellationBeforeActivation(t *testing.T) {
 		called++
 		return node.ActivateResult{}, nil
 	}
-	args := []string{"activate", "--project-root", project, "--host", "codex", "--asset-revision", revision}
+	args := []string{"activate", "--project-root", project, "--host", "codex", "--asset-revision", revision,
+		"--expected-updated-at", "2026-07-17T11:59:59Z"}
 	if err := runWithNode(ctx, args, io.Discard, io.Discard, nil, nil, activate, nil); err != context.Canceled {
 		t.Fatalf("canceled activate error = %v", err)
 	}
@@ -328,16 +339,22 @@ func TestRunDeactivateCallsTheNodeWriterAndEmitsClosedReceipt(t *testing.T) {
 				return node.DeactivateResult{Changed: changed,
 					Profile: commandTestProfile(t, resolved, model.HostCodex, revision, false)}, nil
 			}
+			expected := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+			if changed {
+				expected = expected.Add(-time.Second)
+			}
 			args := []string{"deactivate", "--asset-revision", revision, "--project-root", project,
-				"--host", "codex"}
+				"--host", "codex", "--expected-updated-at", expected.Format(time.RFC3339Nano)}
 			var stdout, stderr bytes.Buffer
 			if err := runWithNode(context.Background(), args, &stdout, &stderr, nil, nil, nil, deactivate); err != nil {
 				t.Fatal(err)
 			}
 			want := `{"asset_revision":"` + revision + `","changed":` + fmt.Sprint(changed) +
-				`,"host":"codex","schema_version":1,"status":"inactive"}` + "\n"
+				`,"host":"codex","schema_version":1,"status":"inactive",` +
+				`"updated_at":"2026-07-17T12:00:00Z"}` + "\n"
 			if stdout.String() != want || stderr.Len() != 0 || received.Workspace != resolved ||
-				received.Host != model.HostCodex || received.AssetRevision != revision || received.Clock != nil {
+				received.Host != model.HostCodex || received.AssetRevision != revision ||
+				!received.ExpectedUpdatedAt.Equal(expected) || received.Clock != nil {
 				t.Fatalf("deactivate = stdout %q stderr %q options %#v", stdout.String(), stderr.String(), received)
 			}
 		})
@@ -347,6 +364,7 @@ func TestRunDeactivateCallsTheNodeWriterAndEmitsClosedReceipt(t *testing.T) {
 func TestRunDeactivateRejectsMalformedAuthorityBeforeDeactivation(t *testing.T) {
 	project := t.TempDir()
 	revision := model.Sum([]byte("inactive-assets")).String()
+	generation := "2026-07-17T11:59:59Z"
 	called := 0
 	deactivate := func(context.Context, node.DeactivateOptions) (node.DeactivateResult, error) {
 		called++
@@ -354,10 +372,13 @@ func TestRunDeactivateRejectsMalformedAuthorityBeforeDeactivation(t *testing.T) 
 	}
 	for _, args := range [][]string{
 		{"deactivate"},
-		{"deactivate", "--project-root", project, "--host", "unknown", "--asset-revision", revision},
-		{"deactivate", "--project-root", project, "--host", "codex", "--asset-revision", "asset-r5"},
-		{"deactivate", "--project-root", project, "--host", "codex", "--host", "codex", "--asset-revision", revision},
-		{"deactivate", "--project-root", project, "--host", "codex", "--asset-revision", revision, "trailing"},
+		{"deactivate", "--expected-updated-at"},
+		{"deactivate", "--project-root", project, "--host", "unknown", "--asset-revision", revision, "--expected-updated-at", generation},
+		{"deactivate", "--project-root", project, "--host", "codex", "--asset-revision", "asset-r5", "--expected-updated-at", generation},
+		{"deactivate", "--project-root", project, "--host", "codex", "--host", "codex", "--asset-revision", revision, "--expected-updated-at", generation},
+		{"deactivate", "--project-root", project, "--host", "codex", "--asset-revision", revision, "--expected-updated-at", generation, "trailing"},
+		{"deactivate", "--project-root", project, "--host", "codex", "--asset-revision", revision, "--expected-updated-at", "not-a-time"},
+		{"deactivate", "--project-root", project, "--host", "codex", "--asset-revision", revision, "--expected-updated-at", "9999-12-31T23:59:59Z"},
 	} {
 		if err := runWithNode(context.Background(), args, io.Discard, io.Discard, nil, nil, nil, deactivate); err == nil {
 			t.Fatalf("runWithNode(%v) succeeded", args)

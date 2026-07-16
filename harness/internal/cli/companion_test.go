@@ -27,6 +27,7 @@ func TestCompanionRunnerDiscoversExactPairAndFreezesLifecycleCommands(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
+	generation := time.Date(2026, 7, 17, 0, 0, 0, 0, time.UTC)
 	initialized, err := runner.Initialize(context.Background(), model.HostCodex, fixture.revision)
 	if err != nil || !initialized.Created || initialized.Status != "initialized" {
 		t.Fatalf("Initialize() = (%#v, %v)", initialized, err)
@@ -36,12 +37,14 @@ func TestCompanionRunnerDiscoversExactPairAndFreezesLifecycleCommands(t *testing
 		authority.AssetRevision != fixture.revision {
 		t.Fatalf("Inspect() = (%#v, %v)", authority, err)
 	}
-	activated, err := runner.Activate(context.Background(), model.HostCodex, fixture.revision)
-	if err != nil || !activated.Changed || activated.Status != "active" {
+	activated, err := runner.Activate(context.Background(), model.HostCodex, fixture.revision, generation)
+	if err != nil || !activated.Changed || activated.Status != "active" ||
+		activated.UpdatedAt != generation.Add(time.Second).Format(time.RFC3339Nano) {
 		t.Fatalf("Activate() = (%#v, %v)", activated, err)
 	}
-	deactivated, err := runner.Deactivate(context.Background(), model.HostCodex, fixture.revision)
-	if err != nil || !deactivated.Changed || deactivated.Status != "inactive" {
+	deactivated, err := runner.Deactivate(context.Background(), model.HostCodex, fixture.revision, generation)
+	if err != nil || !deactivated.Changed || deactivated.Status != "inactive" ||
+		deactivated.UpdatedAt != generation.Add(time.Second).Format(time.RFC3339Nano) {
 		t.Fatalf("Deactivate() = (%#v, %v)", deactivated, err)
 	}
 	rawLog, err := os.ReadFile(fixture.log)
@@ -54,9 +57,11 @@ func TestCompanionRunnerDiscoversExactPairAndFreezesLifecycleCommands(t *testing
 			" --host codex --asset-revision " + fixture.revision,
 		fixture.workspace + "|inspect --project-root " + fixture.workspace,
 		fixture.workspace + "|activate --project-root " + fixture.workspace +
-			" --host codex --asset-revision " + fixture.revision,
+			" --host codex --asset-revision " + fixture.revision +
+			" --expected-updated-at 2026-07-17T00:00:00Z",
 		fixture.workspace + "|deactivate --project-root " + fixture.workspace +
-			" --host codex --asset-revision " + fixture.revision,
+			" --host codex --asset-revision " + fixture.revision +
+			" --expected-updated-at 2026-07-17T00:00:00Z",
 	}
 	if got := strings.Split(strings.TrimSuffix(string(rawLog), "\n"), "\n"); strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("command log = %#v, want %#v", got, want)
@@ -271,6 +276,43 @@ func TestCompanionRunnerRejectsOpenNoncanonicalAndUnknownReceipts(t *testing.T) 
 	}
 }
 
+func TestCompanionRunnerRejectsInvalidLifecycleGenerations(t *testing.T) {
+	fixture := newCompanionFixture(t)
+	runner, err := newCompanionRunnerWith(context.Background(), fixture.workspace,
+		"r5-test", fixture.dependencies())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, expected := range map[string]time.Time{
+		"zero request":      {},
+		"pre-epoch request": time.Unix(-1, 0),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := runner.Activate(context.Background(), model.HostCodex,
+				fixture.revision, expected); err == nil || !errors.Is(err, errManagedCompanion) {
+				t.Fatalf("Activate() error = %v", err)
+			}
+		})
+	}
+	for _, mode := range []string{"activate-missing-time", "activate-noncanonical-time",
+		"activate-out-of-range-time", "activate-equal-change", "activate-replay-drift"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Setenv("MNEMON_COMPANION_TEST_MODE", mode)
+			if _, err := runner.Activate(context.Background(), model.HostCodex, fixture.revision,
+				time.Date(2026, 7, 17, 0, 0, 0, 0, time.UTC)); err == nil ||
+				!errors.Is(err, errManagedCompanion) {
+				t.Fatalf("Activate() error = %v", err)
+			}
+		})
+	}
+	t.Setenv("MNEMON_COMPANION_TEST_MODE", "activate-replay")
+	replayed, err := runner.Activate(context.Background(), model.HostCodex, fixture.revision,
+		time.Date(2026, 7, 17, 0, 0, 0, 0, time.UTC))
+	if err != nil || replayed.Changed || replayed.UpdatedAt != "2026-07-17T00:00:00Z" {
+		t.Fatalf("replayed Activate() = (%#v, %v)", replayed, err)
+	}
+}
+
 func TestCompanionRunnerReportsDurableInitializeReplayForSetupToDecide(t *testing.T) {
 	fixture := newCompanionFixture(t)
 	runner, err := newCompanionRunnerWith(context.Background(), fixture.workspace,
@@ -376,8 +418,18 @@ case "$1" in
       *) printf '{"active_asset_revision":"@REVISION@","asset_revision":"@REVISION@","enabled":true,"host":"codex","peer_id":"peer-companion-test","runtime":"codex-app-server","schema_version":1,"updated_at":"2026-07-17T00:00:00Z"}\n';;
     esac
     ;;
-  activate) printf '{"asset_revision":"@REVISION@","changed":true,"host":"codex","schema_version":1,"status":"active"}\n';;
-  deactivate) printf '{"asset_revision":"@REVISION@","changed":true,"host":"codex","schema_version":1,"status":"inactive"}\n';;
+  activate)
+    case "$mode" in
+      activate-missing-time) printf '{"asset_revision":"@REVISION@","changed":true,"host":"codex","schema_version":1,"status":"active"}\n';;
+      activate-noncanonical-time) printf '{"asset_revision":"@REVISION@","changed":true,"host":"codex","schema_version":1,"status":"active","updated_at":"2026-07-16T20:00:00-04:00"}\n';;
+      activate-out-of-range-time) printf '{"asset_revision":"@REVISION@","changed":true,"host":"codex","schema_version":1,"status":"active","updated_at":"9999-12-31T23:59:59Z"}\n';;
+      activate-equal-change) printf '{"asset_revision":"@REVISION@","changed":true,"host":"codex","schema_version":1,"status":"active","updated_at":"2026-07-17T00:00:00Z"}\n';;
+      activate-replay) printf '{"asset_revision":"@REVISION@","changed":false,"host":"codex","schema_version":1,"status":"active","updated_at":"2026-07-17T00:00:00Z"}\n';;
+      activate-replay-drift) printf '{"asset_revision":"@REVISION@","changed":false,"host":"codex","schema_version":1,"status":"active","updated_at":"2026-07-17T00:00:01Z"}\n';;
+      *) printf '{"asset_revision":"@REVISION@","changed":true,"host":"codex","schema_version":1,"status":"active","updated_at":"2026-07-17T00:00:01Z"}\n';;
+    esac
+    ;;
+  deactivate) printf '{"asset_revision":"@REVISION@","changed":true,"host":"codex","schema_version":1,"status":"inactive","updated_at":"2026-07-17T00:00:01Z"}\n';;
   *) exit 8;;
 esac
 `

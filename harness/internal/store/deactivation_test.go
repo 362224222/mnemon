@@ -25,12 +25,12 @@ func TestDeactivateProfileWithdrawsExactAuthorityAndReplays(t *testing.T) {
 		t.Fatalf("DeactivateProfile() = (%#v, %v)", first, err)
 	}
 
-	second, err := st.DeactivateProfile(context.Background(), active, at.Add(time.Hour))
+	second, err := st.DeactivateProfile(context.Background(), first.Profile, at.Add(time.Hour))
 	if err != nil || second.Changed || second.Profile.Enabled() ||
 		!second.Node.UpdatedAt().Equal(at) || !second.Profile.UpdatedAt().Equal(at) {
 		t.Fatalf("replayed DeactivateProfile() = (%#v, %v)", second, err)
 	}
-	staged, err := st.ActivateProfile(context.Background(), active, at.Add(time.Hour))
+	staged, err := st.ActivateProfile(context.Background(), active, first.Profile.UpdatedAt(), at.Add(time.Hour))
 	if err != nil || !staged.Changed || !staged.Profile.Enabled() ||
 		staged.Profile.Host() != active.Host() || staged.Node.ActiveAssetRevision() != node.ActiveAssetRevision() {
 		t.Fatalf("reactivation = (%#v, %v)", staged, err)
@@ -54,9 +54,23 @@ func TestDeactivateProfileRejectsDriftAndRegressedTime(t *testing.T) {
 		active.UpdatedAt().Add(time.Minute)); !errors.Is(err, ErrProfileDeactivationConflict) {
 		t.Fatalf("authority drift error = %v", err)
 	}
+	staleSpec := active.Spec()
+	staleSpec.UpdatedAt = staleSpec.UpdatedAt.Add(-time.Nanosecond)
+	stale, err := model.NewProfile(staleSpec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DeactivateProfile(context.Background(), stale,
+		active.UpdatedAt().Add(time.Minute)); !errors.Is(err, ErrProfileDeactivationConflict) {
+		t.Fatalf("generation drift error = %v", err)
+	}
 	if _, err := st.DeactivateProfile(context.Background(), active,
 		active.UpdatedAt().Add(-time.Second)); !errors.Is(err, ErrProfileDeactivationConflict) {
 		t.Fatalf("regressed time error = %v", err)
+	}
+	if _, err := st.DeactivateProfile(context.Background(), active,
+		active.UpdatedAt()); !errors.Is(err, ErrProfileDeactivationConflict) {
+		t.Fatalf("equal-time deactivation error = %v", err)
 	}
 	read, err := st.ReadLocalAuthority(context.Background())
 	if err != nil || !read.Profile.Enabled() || read.Profile.ActiveAssetRevision() != active.ActiveAssetRevision() {

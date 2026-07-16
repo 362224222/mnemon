@@ -27,8 +27,11 @@ type ActivationResult struct {
 // ActivateProfile publishes a successfully staged and self-checked Profile.
 // Identity and credentials remain immutable. An enabled Host adapter cannot be
 // switched in place; setup must first eject/disable it. Asset and budget
-// changes are allowed only while no Agent authority is live.
-func (s *Store) ActivateProfile(ctx context.Context, desired model.Profile, at time.Time) (ActivationResult, error) {
+// changes are allowed only while no Agent authority is live. expectedUpdatedAt
+// fences the exact durable generation observed by the caller.
+func (s *Store) ActivateProfile(ctx context.Context, desired model.Profile, expectedUpdatedAt,
+	at time.Time,
+) (ActivationResult, error) {
 	if s == nil || s.db == nil {
 		return ActivationResult{}, errors.New("activate Profile: nil store")
 	}
@@ -66,6 +69,11 @@ func (s *Store) ActivateProfile(ctx context.Context, desired model.Profile, at t
 	if profile.Enabled() && (profile.Host() != desired.Host() || profile.Runtime() != desired.Runtime()) {
 		return ActivationResult{}, ErrProfileHostMismatch
 	}
+	expectedUpdatedAt = expectedUpdatedAt.Round(0).UTC()
+	if expectedUpdatedAt.IsZero() || !profile.UpdatedAt().Equal(expectedUpdatedAt) {
+		return ActivationResult{}, fmt.Errorf("%w: expected Teamwork Profile generation differs",
+			ErrProfileActivationConflict)
+	}
 
 	// Enabling a disabled Profile grants Agent authority even when all adapter
 	// fields are byte-equivalent, so it requires the same quiescence gate as an
@@ -83,8 +91,8 @@ func (s *Store) ActivateProfile(ctx context.Context, desired model.Profile, at t
 			return ActivationResult{}, ErrProfileActivationBusy
 		}
 	}
-	if at.Before(node.UpdatedAt()) || at.Before(profile.UpdatedAt()) {
-		return ActivationResult{}, fmt.Errorf("%w: activation time precedes durable update time", ErrProfileActivationConflict)
+	if !at.After(node.UpdatedAt()) || !at.After(profile.UpdatedAt()) {
+		return ActivationResult{}, fmt.Errorf("%w: activation time does not advance durable update time", ErrProfileActivationConflict)
 	}
 
 	nodeSpec := node.Spec()

@@ -20,7 +20,7 @@ func TestActivateProfilePublishesAuthorityAtomicallyAndReplays(t *testing.T) {
 		"asset-r5", disabled.HandlingBudget(), disabled.UpdatedAt().Add(time.Minute))
 	at := disabled.UpdatedAt().Add(2 * time.Minute)
 
-	first, err := st.ActivateProfile(context.Background(), desired, at)
+	first, err := st.ActivateProfile(context.Background(), desired, disabled.UpdatedAt(), at)
 	if err != nil {
 		t.Fatalf("ActivateProfile() error = %v", err)
 	}
@@ -37,7 +37,7 @@ func TestActivateProfilePublishesAuthorityAtomicallyAndReplays(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := st.ActivateProfile(context.Background(), replay, at.Add(time.Hour))
+	second, err := st.ActivateProfile(context.Background(), replay, first.Profile.UpdatedAt(), at.Add(time.Hour))
 	if err != nil || second.Changed || !second.Profile.UpdatedAt().Equal(at) || !second.Node.UpdatedAt().Equal(at) {
 		t.Fatalf("replayed ActivateProfile() = (%#v, %v)", second, err)
 	}
@@ -68,7 +68,7 @@ func TestActivateProfileHostSwitchAndAuthorityUpgradeRules(t *testing.T) {
 	claude := activationProfile(t, disabled, model.HostClaudeCode, model.RuntimeClaudeCLI,
 		"asset-claude", changedBudget, disabled.UpdatedAt().Add(time.Minute))
 	activatedAt := disabled.UpdatedAt().Add(2 * time.Minute)
-	result, err := st.ActivateProfile(context.Background(), claude, activatedAt)
+	result, err := st.ActivateProfile(context.Background(), claude, disabled.UpdatedAt(), activatedAt)
 	if err != nil || result.Profile.Host() != model.HostClaudeCode ||
 		result.Node.ActiveAssetRevision() != "asset-claude" || !result.Profile.Enabled() {
 		t.Fatalf("disabled Host switch = (%#v, %v)", result, err)
@@ -76,14 +76,14 @@ func TestActivateProfileHostSwitchAndAuthorityUpgradeRules(t *testing.T) {
 
 	codex := activationProfile(t, result.Profile, model.HostCodex, model.RuntimeCodexAppServer,
 		"asset-codex", changedBudget, activatedAt.Add(time.Minute))
-	if _, err := st.ActivateProfile(context.Background(), codex, activatedAt.Add(time.Minute)); !errors.Is(err, ErrProfileHostMismatch) {
+	if _, err := st.ActivateProfile(context.Background(), codex, result.Profile.UpdatedAt(), activatedAt.Add(time.Minute)); !errors.Is(err, ErrProfileHostMismatch) {
 		t.Fatalf("enabled Host switch error = %v", err)
 	}
 
 	upgradedBudget := model.DefaultHandlingBudget().JSON()
 	upgrade := activationProfile(t, result.Profile, model.HostClaudeCode, model.RuntimeClaudeCLI,
 		"asset-claude-next", upgradedBudget, activatedAt.Add(time.Minute))
-	upgraded, err := st.ActivateProfile(context.Background(), upgrade, activatedAt.Add(time.Minute))
+	upgraded, err := st.ActivateProfile(context.Background(), upgrade, result.Profile.UpdatedAt(), activatedAt.Add(time.Minute))
 	if err != nil || !upgraded.Changed || upgraded.Node.ActiveAssetRevision() != "asset-claude-next" ||
 		upgraded.Profile.HandlingBudget().String() != upgradedBudget.String() {
 		t.Fatalf("idle authority upgrade = (%#v, %v)", upgraded, err)
@@ -96,7 +96,7 @@ func TestActivateProfileRejectsIncompleteOrChangedIdentity(t *testing.T) {
 	_, disabled := bootstrapValues(t, "peer-identity", "principal-identity", "/workspace/identity")
 	desired := activationProfile(t, disabled, model.HostCodex, model.RuntimeCodexAppServer,
 		"asset-r5", disabled.HandlingBudget(), disabled.UpdatedAt().Add(time.Minute))
-	if _, err := st.ActivateProfile(context.Background(), desired, desired.UpdatedAt()); !errors.Is(err, ErrProfileActivationConflict) {
+	if _, err := st.ActivateProfile(context.Background(), desired, disabled.UpdatedAt(), desired.UpdatedAt()); !errors.Is(err, ErrProfileActivationConflict) {
 		t.Fatalf("uninitialized activation error = %v", err)
 	}
 
@@ -110,10 +110,18 @@ func TestActivateProfileRejectsIncompleteOrChangedIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.ActivateProfile(context.Background(), drifted, desired.UpdatedAt()); !errors.Is(err, ErrProfileActivationConflict) {
+	if _, err := st.ActivateProfile(context.Background(), drifted, disabled.UpdatedAt(), desired.UpdatedAt()); !errors.Is(err, ErrProfileActivationConflict) {
 		t.Fatalf("identity drift error = %v", err)
 	}
-	if _, err := st.ActivateProfile(context.Background(), desired, disabled.UpdatedAt().Add(-time.Second)); !errors.Is(err, ErrProfileActivationConflict) {
+	if _, err := st.ActivateProfile(context.Background(), desired,
+		disabled.UpdatedAt().Add(-time.Nanosecond), desired.UpdatedAt()); !errors.Is(err, ErrProfileActivationConflict) {
+		t.Fatalf("generation drift error = %v", err)
+	}
+	if _, err := st.ActivateProfile(context.Background(), desired,
+		disabled.UpdatedAt(), disabled.UpdatedAt()); !errors.Is(err, ErrProfileActivationConflict) {
+		t.Fatalf("equal-time activation error = %v", err)
+	}
+	if _, err := st.ActivateProfile(context.Background(), desired, disabled.UpdatedAt(), disabled.UpdatedAt().Add(-time.Second)); !errors.Is(err, ErrProfileActivationConflict) {
 		t.Fatalf("regressed activation time error = %v", err)
 	}
 }
@@ -138,13 +146,13 @@ func TestActivateProfileBusyAuthorityFailsWithoutPartialUpdate(t *testing.T) {
 			node, active := activateTestNode(t, st, node, disabled)
 			tc.busy(t, st, node, active)
 
-			exact, err := st.ActivateProfile(context.Background(), active, active.UpdatedAt().Add(time.Minute))
+			exact, err := st.ActivateProfile(context.Background(), active, active.UpdatedAt(), active.UpdatedAt().Add(time.Minute))
 			if err != nil || exact.Changed {
 				t.Fatalf("exact busy replay = (%#v, %v)", exact, err)
 			}
 			upgrade := activationProfile(t, active, active.Host(), active.Runtime(),
 				"asset-blocked", changedHandlingBudget(t), active.UpdatedAt().Add(time.Minute))
-			if _, err := st.ActivateProfile(context.Background(), upgrade, upgrade.UpdatedAt()); !errors.Is(err, ErrProfileActivationBusy) {
+			if _, err := st.ActivateProfile(context.Background(), upgrade, active.UpdatedAt(), upgrade.UpdatedAt()); !errors.Is(err, ErrProfileActivationBusy) {
 				t.Fatalf("busy upgrade error = %v", err)
 			}
 			durableNode, err := readNode(context.Background(), st.db)
@@ -178,7 +186,7 @@ func TestActivateProfileDisabledButBusyRemainsDisabled(t *testing.T) {
 			tc.busy(t, st, node, disabled)
 			desired := activationProfile(t, disabled, disabled.Host(), disabled.Runtime(),
 				disabled.ActiveAssetRevision(), disabled.HandlingBudget(), disabled.UpdatedAt().Add(time.Minute))
-			if _, err := st.ActivateProfile(context.Background(), desired, desired.UpdatedAt()); !errors.Is(err, ErrProfileActivationBusy) {
+			if _, err := st.ActivateProfile(context.Background(), desired, disabled.UpdatedAt(), desired.UpdatedAt()); !errors.Is(err, ErrProfileActivationBusy) {
 				t.Fatalf("disabled busy activation error = %v", err)
 			}
 			var enabled int

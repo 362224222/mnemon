@@ -105,8 +105,27 @@ type DaemonEnsureOptions struct {
 }
 
 type DaemonEnsureResult struct {
-	Health  localapi.HealthResponse
-	Started bool
+	Health         localapi.HealthResponse
+	Started        bool
+	FailureOutcome DaemonEnsureFailureOutcome
+}
+
+// DaemonEnsureFailureOutcome is the closed compensation proof returned with
+// every failed ensure. Setup may attempt exact authority compensation only for
+// the two fenced outcomes; Unproven includes reachable existing/concurrent
+// daemons, lock acquisition failures and failed child cleanup.
+type DaemonEnsureFailureOutcome string
+
+const (
+	DaemonEnsureFailureNone               DaemonEnsureFailureOutcome = ""
+	DaemonEnsureFailureUnproven           DaemonEnsureFailureOutcome = "unproven"
+	DaemonEnsureFailureCompensationFenced DaemonEnsureFailureOutcome = "compensation_fenced"
+	DaemonEnsureFailureOwnedChildCleaned  DaemonEnsureFailureOutcome = "owned_child_cleaned"
+)
+
+func (outcome DaemonEnsureFailureOutcome) AllowsCompensation() bool {
+	return outcome == DaemonEnsureFailureCompensationFenced ||
+		outcome == DaemonEnsureFailureOwnedChildCleaned
 }
 
 type daemonEnsureTiming struct {
@@ -129,6 +148,20 @@ func EnsureDaemon(ctx context.Context, options DaemonEnsureOptions) (DaemonEnsur
 func ensureDaemon(ctx context.Context, options DaemonEnsureOptions,
 	timing daemonEnsureTiming,
 ) (result DaemonEnsureResult, err error) {
+	compensationFenced := false
+	defer func() {
+		if err == nil {
+			result.FailureOutcome = DaemonEnsureFailureNone
+			return
+		}
+		if result.FailureOutcome == DaemonEnsureFailureNone {
+			if compensationFenced {
+				result.FailureOutcome = DaemonEnsureFailureCompensationFenced
+			} else {
+				result.FailureOutcome = DaemonEnsureFailureUnproven
+			}
+		}
+	}()
 	if ctx == nil || options.Probe == nil {
 		return DaemonEnsureResult{}, fmt.Errorf("%w: health boundary is unavailable", ErrDaemonEnsure)
 	}
@@ -165,6 +198,7 @@ func ensureDaemon(ctx context.Context, options DaemonEnsureOptions,
 	}
 	defer func() {
 		if closeErr := lock.close(); closeErr != nil {
+			result.FailureOutcome = DaemonEnsureFailureUnproven
 			err = errors.Join(err, fmt.Errorf("%w: release launch lock: %v", ErrDaemonEnsure, closeErr))
 		}
 	}()
@@ -176,9 +210,12 @@ func ensureDaemon(ctx context.Context, options DaemonEnsureOptions,
 		cleanup, cancelCleanup := context.WithTimeout(context.WithoutCancel(ctx), daemonCleanupDeadline)
 		defer cancelCleanup()
 		if terminateErr := launched.Terminate(cleanup); terminateErr != nil {
+			result.FailureOutcome = DaemonEnsureFailureUnproven
 			err = errors.Join(err,
 				fmt.Errorf("%w: terminate launched mnemond: %w", ErrDaemonEnsure, terminateErr))
+			return
 		}
+		result.FailureOutcome = DaemonEnsureFailureOwnedChildCleaned
 	}()
 
 	if health, unavailable, probeErr := probeDaemonHealth(bounded, options.Probe,
@@ -191,6 +228,10 @@ func ensureDaemon(ctx context.Context, options DaemonEnsureOptions,
 		}
 		return DaemonEnsureResult{Health: health}, nil
 	}
+	// The second authenticated probe is unavailable while this caller owns the
+	// managed launch lock. From here until a child is returned, exact Store-side
+	// compensation is permitted to make the final writer/busy decision.
+	compensationFenced = true
 	if verifyErr := options.Preflight.Verify(bounded); verifyErr != nil {
 		return DaemonEnsureResult{}, fmt.Errorf("%w: strict preflight: %w", ErrDaemonEnsure, verifyErr)
 	}
@@ -225,6 +266,7 @@ func ensureDaemon(ctx context.Context, options DaemonEnsureOptions,
 					ErrDaemonEnsure, releaseErr)
 			}
 			launched = nil
+			compensationFenced = false
 			return result, nil
 		}
 		if waitErr := waitEnsurePoll(bounded, timing.poll); waitErr != nil {
@@ -394,8 +436,11 @@ func (lock *ensureLock) close() error {
 		return nil
 	}
 	var err error
+	if lock.file != nil && lock.state != nil {
+		err = validateEnsureLockFile(lock)
+	}
 	if lock.file != nil {
-		err = errors.Join(unix.Flock(int(lock.file.Fd()), unix.LOCK_UN), lock.file.Close())
+		err = errors.Join(err, unix.Flock(int(lock.file.Fd()), unix.LOCK_UN), lock.file.Close())
 		lock.file = nil
 	}
 	if lock.state != nil {

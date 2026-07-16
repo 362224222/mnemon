@@ -16,11 +16,12 @@ import (
 var ErrActivate = errors.New("activate mnemond Profile")
 
 type ActivateOptions struct {
-	Workspace     string
-	Host          model.HostKind
-	AssetRevision string
-	Clock         Clock
-	Install       InstallationVerifier
+	Workspace         string
+	Host              model.HostKind
+	AssetRevision     string
+	ExpectedUpdatedAt time.Time
+	Clock             Clock
+	Install           InstallationVerifier
 }
 
 type ActivateResult struct {
@@ -43,6 +44,11 @@ func Activate(ctx context.Context, options ActivateOptions) (result ActivateResu
 	runtimeKind, hostOK := model.RuntimeForHost(options.Host)
 	if _, digestErr := model.ParseDigest(options.AssetRevision); !hostOK || digestErr != nil {
 		return ActivateResult{}, fmt.Errorf("%w: Host or asset revision is invalid", ErrActivate)
+	}
+	expectedUpdatedAt := options.ExpectedUpdatedAt.Round(0).UTC()
+	if expectedUpdatedAt.IsZero() || expectedUpdatedAt.UnixNano() <= 0 ||
+		!time.Unix(0, expectedUpdatedAt.UnixNano()).UTC().Equal(expectedUpdatedAt) {
+		return ActivateResult{}, fmt.Errorf("%w: expected authority update time is invalid", ErrActivate)
 	}
 	if options.Clock == nil {
 		options.Clock = wallClock{}
@@ -97,7 +103,10 @@ func Activate(ctx context.Context, options ActivateOptions) (result ActivateResu
 	if err := options.Install.Verify(desired); err != nil {
 		return ActivateResult{}, fmt.Errorf("%w: managed installation: %w", ErrActivate, err)
 	}
-	activated, err := st.ActivateProfile(ctx, desired, at)
+	if !authority.Profile.UpdatedAt().Equal(expectedUpdatedAt) {
+		return ActivateResult{}, fmt.Errorf("%w: requested authority generation differs from durable Profile", ErrActivate)
+	}
+	activated, err := st.ActivateProfile(ctx, desired, expectedUpdatedAt, at)
 	if err != nil {
 		return ActivateResult{}, fmt.Errorf("%w: %v", ErrActivate, err)
 	}

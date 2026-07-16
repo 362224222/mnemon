@@ -26,7 +26,8 @@ type DeactivationResult struct {
 
 // DeactivateProfile atomically withdraws one exact Profile authority. It is a
 // setup/eject recovery boundary, not a force stop: live claims, Agent runs or
-// operations must first quiesce under mnemond ownership.
+// operations must first quiesce under mnemond ownership. The expected Profile
+// carries the exact durable update generation as an ABA fence.
 func (s *Store) DeactivateProfile(ctx context.Context, expected model.Profile,
 	at time.Time,
 ) (DeactivationResult, error) {
@@ -64,6 +65,10 @@ func (s *Store) DeactivateProfile(ctx context.Context, expected model.Profile,
 		return DeactivationResult{}, fmt.Errorf("%w: expected Teamwork Profile authority differs",
 			ErrProfileDeactivationConflict)
 	}
+	if !profile.UpdatedAt().Equal(expected.UpdatedAt()) {
+		return DeactivationResult{}, fmt.Errorf("%w: expected Teamwork Profile generation differs",
+			ErrProfileDeactivationConflict)
+	}
 	if node.ActiveAssetRevision() != profile.ActiveAssetRevision() {
 		return DeactivationResult{}, fmt.Errorf("%w: durable Node/Profile authority is inconsistent",
 			ErrProfileDeactivationConflict)
@@ -78,8 +83,8 @@ func (s *Store) DeactivateProfile(ctx context.Context, expected model.Profile,
 	if busy {
 		return DeactivationResult{}, ErrProfileDeactivationBusy
 	}
-	if at.Before(node.UpdatedAt()) || at.Before(profile.UpdatedAt()) {
-		return DeactivationResult{}, fmt.Errorf("%w: deactivation time precedes durable update time",
+	if !at.After(node.UpdatedAt()) || !at.After(profile.UpdatedAt()) {
+		return DeactivationResult{}, fmt.Errorf("%w: deactivation time does not advance durable update time",
 			ErrProfileDeactivationConflict)
 	}
 

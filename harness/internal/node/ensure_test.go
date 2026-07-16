@@ -52,7 +52,7 @@ func TestEnsureDaemonRunsCallerReadyGateWithoutCreatingAnotherAuthority(t *testi
 		}),
 	})
 	if !errors.Is(err, ErrDaemonEnsure) || !errors.Is(err, failed) || gates.Load() != 1 ||
-		result.Started {
+		result.Started || result.FailureOutcome != DaemonEnsureFailureUnproven {
 		t.Fatalf("EnsureDaemon() = (%#v, %v), gates=%d", result, err, gates.Load())
 	}
 	if _, err := os.Lstat(filepath.Join(nodeState, ensureLockName)); !errors.Is(err, os.ErrNotExist) {
@@ -212,6 +212,7 @@ func TestEnsureDaemonTerminatesNewChildWhenReadyGateFails(t *testing.T) {
 	})
 	if !errors.Is(err, ErrDaemonEnsure) || !errors.Is(err, failed) || !result.Started ||
 		result.Health != readyEnsureHealth(revision) ||
+		result.FailureOutcome != DaemonEnsureFailureOwnedChildCleaned ||
 		handle.releases.Load() != 0 || handle.terminations.Load() != 1 {
 		t.Fatalf("EnsureDaemon() = (%#v, %v), releases=%d terminations=%d", result, err,
 			handle.releases.Load(), handle.terminations.Load())
@@ -287,7 +288,7 @@ func TestEnsureDaemonPreflightLaunchAndDeadlineFailuresStayClosed(t *testing.T) 
 		revision := ensureTestRevision("preflight-failure")
 		failed := errors.New("preflight rejected authority")
 		var launches atomic.Int32
-		_, err := EnsureDaemon(context.Background(), DaemonEnsureOptions{
+		result, err := EnsureDaemon(context.Background(), DaemonEnsureOptions{
 			NodeState: nodeState, AssetRevision: revision,
 			Probe: ensureProbeFunc(func(context.Context) (localapi.HealthResponse, *localapi.APIError) {
 				return unavailableEnsureHealth()
@@ -298,8 +299,9 @@ func TestEnsureDaemonPreflightLaunchAndDeadlineFailuresStayClosed(t *testing.T) 
 				return newRecordingDaemonLaunch(), nil
 			}),
 		})
-		if !errors.Is(err, ErrDaemonEnsure) || !errors.Is(err, failed) || launches.Load() != 0 {
-			t.Fatalf("EnsureDaemon() = %v, launches=%d", err, launches.Load())
+		if !errors.Is(err, ErrDaemonEnsure) || !errors.Is(err, failed) || launches.Load() != 0 ||
+			result.FailureOutcome != DaemonEnsureFailureCompensationFenced {
+			t.Fatalf("EnsureDaemon() = (%#v, %v), launches=%d", result, err, launches.Load())
 		}
 	})
 	t.Run("launcher", func(t *testing.T) {
@@ -307,7 +309,7 @@ func TestEnsureDaemonPreflightLaunchAndDeadlineFailuresStayClosed(t *testing.T) 
 		revision := ensureTestRevision("launcher-failure")
 		failed := errors.New("launcher failed")
 		handle := newRecordingDaemonLaunch()
-		_, err := EnsureDaemon(context.Background(), DaemonEnsureOptions{
+		result, err := EnsureDaemon(context.Background(), DaemonEnsureOptions{
 			NodeState: nodeState, AssetRevision: revision,
 			Probe: ensureProbeFunc(func(context.Context) (localapi.HealthResponse, *localapi.APIError) {
 				return unavailableEnsureHealth()
@@ -317,8 +319,9 @@ func TestEnsureDaemonPreflightLaunchAndDeadlineFailuresStayClosed(t *testing.T) 
 				return nil, failed
 			}),
 		})
-		if !errors.Is(err, ErrDaemonEnsure) || !errors.Is(err, failed) {
-			t.Fatalf("EnsureDaemon() error = %v", err)
+		if !errors.Is(err, ErrDaemonEnsure) || !errors.Is(err, failed) ||
+			result.FailureOutcome != DaemonEnsureFailureCompensationFenced {
+			t.Fatalf("EnsureDaemon() = (%#v, %v)", result, err)
 		}
 		if handle.terminations.Load() != 0 {
 			t.Fatalf("prelaunch failure terminated an unowned child %d times", handle.terminations.Load())
@@ -374,6 +377,39 @@ func TestEnsureDaemonPreflightLaunchAndDeadlineFailuresStayClosed(t *testing.T) 
 }
 
 func TestEnsureDaemonTerminatesOnlyItsOwnedChildAfterPostLaunchFailures(t *testing.T) {
+	t.Run("failed termination withholds compensation proof", func(t *testing.T) {
+		nodeState := newEnsureNodeState(t)
+		revision := ensureTestRevision("termination-failure")
+		gateFailure := errors.New("projected Hook failed")
+		terminateFailure := errors.New("child did not stop")
+		handle := newRecordingDaemonLaunch()
+		handle.terminateErr = terminateFailure
+		var launched atomic.Bool
+		result, err := EnsureDaemon(context.Background(), DaemonEnsureOptions{
+			NodeState: nodeState, AssetRevision: revision,
+			Probe: ensureProbeFunc(func(context.Context) (localapi.HealthResponse, *localapi.APIError) {
+				if !launched.Load() {
+					return unavailableEnsureHealth()
+				}
+				return readyEnsureHealth(revision), nil
+			}),
+			Preflight: DaemonEnsurePreflightFunc(func(context.Context) error { return nil }),
+			Launcher: DaemonLauncherFunc(func(context.Context) (DaemonLaunch, error) {
+				launched.Store(true)
+				return handle, nil
+			}),
+			ReadyGate: DaemonReadyGateFunc(func(context.Context, localapi.HealthResponse) error {
+				return gateFailure
+			}),
+		})
+		if !errors.Is(err, gateFailure) || !errors.Is(err, terminateFailure) ||
+			result.FailureOutcome != DaemonEnsureFailureUnproven || !result.Started ||
+			handle.terminations.Load() != 1 {
+			t.Fatalf("EnsureDaemon() = (%#v, %v), terminations=%d", result, err,
+				handle.terminations.Load())
+		}
+	})
+
 	t.Run("reachable not ready", func(t *testing.T) {
 		nodeState := newEnsureNodeState(t)
 		revision := ensureTestRevision("post-launch-not-ready")
@@ -450,6 +486,41 @@ func TestEnsureDaemonTerminatesOnlyItsOwnedChildAfterPostLaunchFailures(t *testi
 	})
 }
 
+func TestEnsureDaemonWithholdsCompensationWhenLockCloseFailsAfterChildRelease(t *testing.T) {
+	nodeState := newEnsureNodeState(t)
+	revision := ensureTestRevision("release-then-lock-drift")
+	handle := newRecordingDaemonLaunch()
+	var launched atomic.Bool
+	handle.releaseHook = func() {
+		path := filepath.Join(nodeState, ensureLockName)
+		if err := os.Rename(path, filepath.Join(nodeState, "displaced.ensure.lock")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, nil, ensureLockMode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result, err := EnsureDaemon(context.Background(), DaemonEnsureOptions{
+		NodeState: nodeState, AssetRevision: revision,
+		Probe: ensureProbeFunc(func(context.Context) (localapi.HealthResponse, *localapi.APIError) {
+			if !launched.Load() {
+				return unavailableEnsureHealth()
+			}
+			return readyEnsureHealth(revision), nil
+		}),
+		Preflight: DaemonEnsurePreflightFunc(func(context.Context) error { return nil }),
+		Launcher: DaemonLauncherFunc(func(context.Context) (DaemonLaunch, error) {
+			launched.Store(true)
+			return handle, nil
+		}),
+	})
+	if !errors.Is(err, ErrDaemonEnsure) || result.FailureOutcome != DaemonEnsureFailureUnproven ||
+		!result.Started || handle.releases.Load() != 1 || handle.terminations.Load() != 0 {
+		t.Fatalf("EnsureDaemon() = (%#v, %v), releases=%d terminations=%d", result, err,
+			handle.releases.Load(), handle.terminations.Load())
+	}
+}
+
 func TestEnsureDaemonRejectsUnsafeLockAndInvalidInputWithoutLaunch(t *testing.T) {
 	tests := map[string]func(*testing.T, string){
 		"symlink lock": func(t *testing.T, nodeState string) {
@@ -505,6 +576,7 @@ type recordingDaemonLaunch struct {
 	releases     atomic.Int32
 	terminations atomic.Int32
 	releaseErr   error
+	releaseHook  func()
 	terminateErr error
 }
 
@@ -514,6 +586,9 @@ func newRecordingDaemonLaunch() *recordingDaemonLaunch {
 
 func (launch *recordingDaemonLaunch) Release() error {
 	launch.releases.Add(1)
+	if launch.releaseHook != nil {
+		launch.releaseHook()
+	}
 	return launch.releaseErr
 }
 
