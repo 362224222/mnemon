@@ -501,9 +501,10 @@ func (app *App) presentTerminalOperation(nodeState string, journals journalStore
 	}
 	presented, err := journals.MarkPresented(terminal)
 	if err != nil {
-		// The terminal handle remains replayable, so a caller retry cannot create
-		// a second domain operation after this ambiguous presentation boundary.
-		return 1
+		// The validated success envelope is already visible. Preserve its frozen
+		// exit contract and leave the terminal handle for replay/doctor repair;
+		// a second envelope or a contradictory exit would be less truthful.
+		return 0
 	}
 	app.removePresentedHandles(nodeState, journals, presented, contextFile)
 	return 0
@@ -523,7 +524,9 @@ func (app *App) presentTerminalError(journals journalStore, pending localapi.Pen
 	}
 	presented, err := journals.MarkPresented(terminal)
 	if err != nil {
-		return 1
+		// The validated rejection envelope is already visible, so its domain exit
+		// remains authoritative even if the local presentation marker needs repair.
+		return exit
 	}
 	// A rejected action leaves its claim context available for a corrected
 	// action. Only the exact operation replay handle has become terminal.

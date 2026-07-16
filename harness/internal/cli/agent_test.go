@@ -218,6 +218,46 @@ func TestAgentAppRejectedActionRetainsContextAfterPresentation(t *testing.T) {
 	assertNoPendingJournals(t, nodeState)
 }
 
+func TestAgentAppPresentedEnvelopeKeepsItsExitWhenMarkerFails(t *testing.T) {
+	tests := []struct {
+		name     string
+		response localapi.OperationResponse
+		remote   *localapi.APIError
+		wantExit int
+		wantCode string
+	}{
+		{name: "success", response: acceptedCLIResponse("offer"), wantExit: 0,
+			wantCode: `"status":"accepted"`},
+		{name: "domain rejection", wantExit: 4, wantCode: `"code":"action_not_allowed"`},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			workspace, nodeState := cliWorkspace(t)
+			fake := &fakeControlClient{teamworkResponse: test.response}
+			if test.name == "domain rejection" {
+				operationID := "operation-cli-marker-rejected"
+				fake.teamworkError = localapi.NewAPIError(localapi.CodeActionNotAllowed,
+					"action is not allowed by current")
+				fake.teamworkError.OperationID = &operationID
+			}
+			stdout, stderr, app := cliTestApp(t, workspace, fake, bytes.NewBufferString("review once"))
+			app.deps.newJournals = func(state string) (journalStore, error) {
+				store, err := localapi.NewPendingJournalStore(state)
+				if err != nil {
+					return nil, err
+				}
+				return markerFailingJournalStore{journalStore: store}, nil
+			}
+			exit := app.Run(context.Background(), []string{"teamwork", "offer", "--content-file", "-", "--json"})
+			if exit != test.wantExit || stderr.Len() != 0 || !strings.Contains(stdout.String(), test.wantCode) {
+				t.Fatalf("marker failure = exit %d stdout %q stderr %q", exit, stdout.String(), stderr.String())
+			}
+			assertJournalSuffixes(t, nodeState, []string{".terminal"})
+		})
+	}
+}
+
 func TestAgentAppResolveAndInputConfinement(t *testing.T) {
 	workspace, nodeState := cliWorkspace(t)
 	contextFile, err := localapi.WriteContextFile(nodeState, mustRunID(t, "run-cli-resolve"),
@@ -315,6 +355,12 @@ type ioReader interface{ Read([]byte) (int, error) }
 type failingWriter struct{}
 
 func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("injected write failure") }
+
+type markerFailingJournalStore struct{ journalStore }
+
+func (store markerFailingJournalStore) MarkPresented(localapi.PendingJournal) (localapi.PendingJournal, error) {
+	return localapi.PendingJournal{}, errors.New("injected marker failure")
+}
 
 func cliWorkspace(t *testing.T) (string, string) {
 	t.Helper()
