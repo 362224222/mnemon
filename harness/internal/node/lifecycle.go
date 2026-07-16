@@ -48,7 +48,9 @@ type DaemonLifecycleLease struct {
 // DaemonLifecycleClient is the authenticated online control boundary required
 // by Quiesce. A localapi.Client satisfies it directly.
 type DaemonLifecycleClient interface {
-	Shutdown(context.Context, localapi.AuthorityResponse) (localapi.ShutdownResponse, *localapi.APIError)
+	ShutdownForMutation(context.Context, localapi.AuthorityResponse) (
+		localapi.ShutdownResponse, *localapi.APIError,
+	)
 }
 
 // DaemonOfflineConfirmer is the companion-owned offline writer proof. It must
@@ -188,7 +190,7 @@ func (lease *DaemonLifecycleLease) quiesce(ctx context.Context, client DaemonLif
 		return localapi.AuthorityResponse{}, lifecycleError("quiesce control socket", socketErr)
 	}
 	if socketPresent {
-		response, shutdownErr := client.Shutdown(bounded, expected)
+		response, shutdownErr := client.ShutdownForMutation(bounded, expected)
 		if err := bounded.Err(); err != nil {
 			return localapi.AuthorityResponse{}, lifecycleError("request graceful shutdown", err)
 		}

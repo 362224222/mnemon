@@ -318,6 +318,7 @@ func TestClientShutdownUsesEmptyAuthenticatedPOSTAndCanonicalResponse(t *testing
 			len(body) != 0 || request.Header.Get("Content-Type") != "" ||
 			request.Header.Get(operationKeyHeader) != "" || request.Header.Get(claimContextHeader) != "" ||
 			request.Header.Get(runAttachmentHeader) != "" ||
+			request.Header.Get(mutationShutdownHeader) != "" ||
 			request.Header.Get(authorityDigestHeader) != authorityDigest.String() ||
 			request.Header.Get(authorizationHeader) != profileScheme+encodeSecret(credential)) {
 			err = errors.New("shutdown request violates the closed lifecycle transport")
@@ -333,6 +334,48 @@ func TestClientShutdownUsesEmptyAuthenticatedPOSTAndCanonicalResponse(t *testing
 	response, apiErr := client.Shutdown(context.Background(), authority)
 	if apiErr != nil || response != newShutdownResponse(authorityDigest) {
 		t.Fatalf("Shutdown() = %#v, %#v", response, apiErr)
+	}
+	if err := <-requestSeen; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestClientShutdownForMutationAddsOnlyTheFixedFenceHeader(t *testing.T) {
+	t.Parallel()
+	nodeState := newClientNodeState(t)
+	credential := repeatedOpaqueBytes(0x89)
+	installClientCredential(t, nodeState, credential)
+	authority := testShutdownAuthority(t)
+	authorityDigest, err := AuthorityDigest(authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestSeen := make(chan error, 1)
+	stop := serveRawClientControl(t, nodeState, http.HandlerFunc(func(writer http.ResponseWriter,
+		request *http.Request,
+	) {
+		body, err := io.ReadAll(request.Body)
+		if err == nil && (request.Method != http.MethodPost || request.URL.Path != RouteShutdown ||
+			request.URL.RawQuery != "" || request.ContentLength != 0 || len(request.TransferEncoding) != 0 ||
+			len(body) != 0 || request.Header.Get("Content-Type") != "" ||
+			request.Header.Get(operationKeyHeader) != "" || request.Header.Get(claimContextHeader) != "" ||
+			request.Header.Get(runAttachmentHeader) != "" ||
+			request.Header.Get(mutationShutdownHeader) != mutationShutdownHeaderValue ||
+			request.Header.Get(authorityDigestHeader) != authorityDigest.String() ||
+			request.Header.Get(authorizationHeader) != profileScheme+encodeSecret(credential)) {
+			err = errors.New("mutation shutdown request violates the closed lifecycle transport")
+		}
+		requestSeen <- err
+		writeResponse(writer, http.StatusOK, newShutdownResponse(authorityDigest))
+	}))
+	defer stop()
+	client, err := NewClient(nodeState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, apiErr := client.ShutdownForMutation(context.Background(), authority)
+	if apiErr != nil || response != newShutdownResponse(authorityDigest) {
+		t.Fatalf("ShutdownForMutation() = %#v, %#v", response, apiErr)
 	}
 	if err := <-requestSeen; err != nil {
 		t.Fatal(err)

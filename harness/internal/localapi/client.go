@@ -163,6 +163,22 @@ func (c *Client) ReadAuthority(ctx context.Context) (AuthorityResponse, *APIErro
 // carries no JSON body, content type, operation key, managed context, or Run
 // attachment.
 func (c *Client) Shutdown(ctx context.Context, expected AuthorityResponse) (ShutdownResponse, *APIError) {
+	return c.shutdown(ctx, expected, false)
+}
+
+// ShutdownForMutation requests the admission-fenced lifecycle path used before
+// offline authority mutation. It differs from ordinary diagnostic/process
+// shutdown by one fixed header; the route and empty-body response contract are
+// otherwise identical.
+func (c *Client) ShutdownForMutation(ctx context.Context,
+	expected AuthorityResponse,
+) (ShutdownResponse, *APIError) {
+	return c.shutdown(ctx, expected, true)
+}
+
+func (c *Client) shutdown(ctx context.Context, expected AuthorityResponse,
+	mutation bool,
+) (ShutdownResponse, *APIError) {
 	var response ShutdownResponse
 	if c == nil || c.http == nil || ctx == nil {
 		return ShutdownResponse{}, invalidControlResponse("local control client is unavailable")
@@ -179,6 +195,9 @@ func (c *Client) Shutdown(ctx context.Context, expected AuthorityResponse) (Shut
 	request.Header.Set(authorizationHeader,
 		profileScheme+base64.RawURLEncoding.EncodeToString(c.token[:]))
 	request.Header.Set(authorityDigestHeader, authorityDigest.String())
+	if mutation {
+		request.Header.Set(mutationShutdownHeader, mutationShutdownHeaderValue)
+	}
 	if apiErr := c.send(request, &response, MaxShutdownResponseBytes); apiErr != nil {
 		return ShutdownResponse{}, apiErr
 	}

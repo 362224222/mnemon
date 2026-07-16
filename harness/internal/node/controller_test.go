@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"database/sql"
 	"encoding/base64"
 	"errors"
 	"os"
@@ -223,6 +224,109 @@ func TestControllerAuthenticatedShutdownCompletesResponseThenReturnsAndCleansSoc
 		t.Fatalf("daemon shutdown retained Store writer: %v", err)
 	}
 	if err := reopened.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestControllerMutationShutdownBusyKeepsDaemonReadyAndReopensAdmission(t *testing.T) {
+	fixture := newDaemonFixture(t, true)
+	insertControllerBusyRun(t, fixture)
+	daemon, err := OpenDaemon(context.Background(), DaemonOptions{Workspace: fixture.workspace,
+		Clock: controllerTestClock{fixture.profile.UpdatedAt()}, Install: fixture.install})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer daemon.Close()
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- daemon.Serve(context.Background()) }()
+	waitControllerSocket(t, filepath.Join(fixture.nodeState, "control.sock"), serveDone)
+	client, err := localapi.NewClient(fixture.nodeState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority, apiErr := client.ReadAuthority(context.Background())
+	if apiErr != nil {
+		t.Fatal(apiErr)
+	}
+	if response, apiErr := client.ShutdownForMutation(context.Background(), authority); apiErr == nil ||
+		apiErr.Code != localapi.CodeOperationPending || response != (localapi.ShutdownResponse{}) {
+		t.Fatalf("busy ShutdownForMutation() = (%#v, %#v)", response, apiErr)
+	}
+	select {
+	case err := <-serveDone:
+		t.Fatalf("busy mutation shutdown stopped daemon: %v", err)
+	default:
+	}
+	if health, apiErr := client.ProbeHealth(context.Background()); apiErr != nil ||
+		health.Status != "ready" {
+		t.Fatalf("health after busy mutation shutdown = (%#v, %#v)", health, apiErr)
+	}
+	if hook, apiErr := client.HookCheck(context.Background()); apiErr != nil || hook.Pending {
+		t.Fatalf("HookCheck after busy mutation shutdown = (%#v, %#v)", hook, apiErr)
+	}
+	if _, apiErr := client.Shutdown(context.Background(), authority); apiErr != nil {
+		t.Fatalf("ordinary cleanup Shutdown() = %#v", apiErr)
+	}
+	if err := <-serveDone; err != nil {
+		t.Fatalf("Serve() after ordinary cleanup = %v", err)
+	}
+}
+
+func TestControllerMutationShutdownGenerationMismatchReopensAdmission(t *testing.T) {
+	fixture := newDaemonFixture(t, true)
+	daemon, err := OpenDaemon(context.Background(), DaemonOptions{Workspace: fixture.workspace,
+		Clock: controllerTestClock{fixture.profile.UpdatedAt()}, Install: fixture.install})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer daemon.Close()
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- daemon.Serve(context.Background()) }()
+	waitControllerSocket(t, filepath.Join(fixture.nodeState, "control.sock"), serveDone)
+	client, err := localapi.NewClient(fixture.nodeState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority, apiErr := client.ReadAuthority(context.Background())
+	if apiErr != nil {
+		t.Fatal(apiErr)
+	}
+	drifted := authority
+	generation, err := time.Parse(time.RFC3339Nano, authority.UpdatedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	drifted.UpdatedAt = generation.Add(time.Nanosecond).Format(time.RFC3339Nano)
+	if _, apiErr := client.ShutdownForMutation(context.Background(), drifted); apiErr == nil ||
+		apiErr.Code != localapi.CodeOperationMismatch {
+		t.Fatalf("drifted ShutdownForMutation() error = %#v", apiErr)
+	}
+	if hook, apiErr := client.HookCheck(context.Background()); apiErr != nil || hook.Pending {
+		t.Fatalf("HookCheck after mutation mismatch = (%#v, %#v)", hook, apiErr)
+	}
+	if _, apiErr := client.Shutdown(context.Background(), authority); apiErr != nil {
+		t.Fatal(apiErr)
+	}
+	if err := <-serveDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func insertControllerBusyRun(t *testing.T, fixture daemonFixture) {
+	t.Helper()
+	database, err := sql.Open("sqlite", "file:"+filepath.Join(fixture.nodeState, "node.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if _, err := database.Exec("PRAGMA foreign_keys = ON"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO agent_runs(run_id, profile_id, cause_json, launcher,
+		runtime_kind, launcher_diagnostic_json, runtime_ids_json, status, started_at)
+		VALUES('run-controller-mutation-busy', ?, '{}', 'test', ?, '{}', '{}', 'starting', ?)`,
+		fixture.profile.ID().String(), string(fixture.profile.Runtime()),
+		fixture.profile.UpdatedAt().Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)
 	}
 }

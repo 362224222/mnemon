@@ -35,6 +35,7 @@ type Server struct {
 	health        HealthProvider
 	authority     AuthorityProvider
 	lifecycle     LifecycleFunc
+	mutation      MutationShutdownPreparer
 	shutdownOnce  sync.Once
 	handler       http.Handler
 }
@@ -49,7 +50,7 @@ func NewServer(authenticator Authenticator, service Service,
 	if len(healthProviders) == 1 {
 		health = healthProviders[0]
 	}
-	return newServer(authenticator, service, health, nil, nil)
+	return newServer(authenticator, service, health, nil, nil, nil)
 }
 
 // NewServerWithAuthority composes the controller-only observation route while
@@ -60,22 +61,28 @@ func NewServerWithAuthority(authenticator Authenticator, service Service,
 	if health == nil || authority == nil {
 		return nil, errors.New("local API: health and authority providers are required")
 	}
-	return newServer(authenticator, service, health, authority, nil)
+	return newServer(authenticator, service, health, authority, nil, nil)
 }
 
 // NewServerWithLifecycle composes all owner-only controller routes without
 // changing the smaller NewServer and NewServerWithAuthority boundaries.
 func NewServerWithLifecycle(authenticator Authenticator, service Service,
 	health HealthProvider, authority AuthorityProvider, lifecycle LifecycleFunc,
+	mutation ...MutationShutdownPreparer,
 ) (*Server, error) {
-	if health == nil || authority == nil || lifecycle == nil {
+	if health == nil || authority == nil || lifecycle == nil || len(mutation) > 1 ||
+		len(mutation) == 1 && mutation[0] == nil {
 		return nil, errors.New("local API: health, authority and lifecycle providers are required")
 	}
-	return newServer(authenticator, service, health, authority, lifecycle)
+	var preparer MutationShutdownPreparer
+	if len(mutation) == 1 {
+		preparer = mutation[0]
+	}
+	return newServer(authenticator, service, health, authority, lifecycle, preparer)
 }
 
 func newServer(authenticator Authenticator, service Service, health HealthProvider,
-	authority AuthorityProvider, lifecycle LifecycleFunc,
+	authority AuthorityProvider, lifecycle LifecycleFunc, mutation MutationShutdownPreparer,
 ) (*Server, error) {
 	if authenticator == nil || service == nil {
 		return nil, errors.New("local API: authenticator and service are required")
@@ -86,7 +93,7 @@ func newServer(authenticator Authenticator, service Service, health HealthProvid
 		}
 	}
 	server := &Server{authenticator: authenticator, service: service, health: health,
-		authority: authority, lifecycle: lifecycle}
+		authority: authority, lifecycle: lifecycle, mutation: mutation}
 	mux := http.NewServeMux()
 	mux.HandleFunc(RouteHealth, server.handleHealth)
 	mux.HandleFunc(RouteAuthority, server.handleAuthority)
@@ -124,6 +131,12 @@ func (s *Server) handleShutdown(writer http.ResponseWriter, request *http.Reques
 			"shutdown request must not contain a query"))
 		return
 	}
+	mutation, err := parseMutationShutdownHeader(request.Header)
+	if err != nil {
+		writeError(writer, NewAPIError(CodeInvalidArgument,
+			"mutation shutdown header is invalid"))
+		return
+	}
 	if request.Body != nil {
 		raw, err := io.ReadAll(io.LimitReader(request.Body, 1))
 		if err != nil || len(raw) != 0 {
@@ -155,6 +168,10 @@ func (s *Server) handleShutdown(writer http.ResponseWriter, request *http.Reques
 			"lifecycle authority provider is unavailable"))
 		return
 	}
+	if mutation {
+		s.handleMutationShutdown(writer, request, metadata, expectedDigest)
+		return
+	}
 	snapshot, apiErr := s.authority.Authority(request.Context(), metadata)
 	if apiErr != nil {
 		writeError(writer, apiErr)
@@ -179,6 +196,66 @@ func (s *Server) handleShutdown(writer http.ResponseWriter, request *http.Reques
 	}
 	writeResponse(writer, http.StatusOK, newShutdownResponse(currentDigest))
 	s.shutdownOnce.Do(s.lifecycle)
+}
+
+func (s *Server) handleMutationShutdown(writer http.ResponseWriter, request *http.Request,
+	metadata RequestMetadata, expectedDigest model.Digest,
+) {
+	if s.mutation == nil {
+		writeError(writer, NewAPIError(CodeInternal,
+			"mutation shutdown preparation is unavailable"))
+		return
+	}
+	snapshot, release, apiErr := s.mutation.PrepareMutationShutdown(request.Context(), metadata)
+	if apiErr != nil {
+		if release != nil {
+			release()
+		}
+		writeError(writer, apiErr)
+		return
+	}
+	if release == nil {
+		writeError(writer, NewAPIError(CodeInternal,
+			"mutation shutdown admission release is unavailable"))
+		return
+	}
+	retainSeal := false
+	defer func() {
+		if !retainSeal {
+			release()
+		}
+	}()
+	current, err := NewAuthorityResponse(snapshot)
+	if err != nil {
+		writeError(writer, NewAPIError(CodeInternal,
+			"mutation shutdown authority is invalid"))
+		return
+	}
+	currentDigest, err := AuthorityDigest(current)
+	if err != nil {
+		writeError(writer, NewAPIError(CodeInternal,
+			"mutation shutdown authority is invalid"))
+		return
+	}
+	if !sameAuthorityDigest(currentDigest, expectedDigest) {
+		writeError(writer, NewAPIError(CodeOperationMismatch,
+			"durable authority does not match the mutation shutdown precondition"))
+		return
+	}
+	retainSeal = true
+	writeResponse(writer, http.StatusOK, newShutdownResponse(currentDigest))
+	s.shutdownOnce.Do(s.lifecycle)
+}
+
+func parseMutationShutdownHeader(header http.Header) (bool, error) {
+	values := header.Values(mutationShutdownHeader)
+	if len(values) == 0 {
+		return false, nil
+	}
+	if len(values) != 1 || values[0] != mutationShutdownHeaderValue {
+		return false, errors.New("mutation shutdown header must have its fixed value")
+	}
+	return true, nil
 }
 
 func (s *Server) Handler() http.Handler { return s.handler }

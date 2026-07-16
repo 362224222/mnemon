@@ -61,7 +61,9 @@ type ControllerOptions struct {
 // while CAS and readonly views stay beneath the same Node state directory.
 type Controller struct {
 	nodeState         string
+	store             *store.Store
 	server            *localapi.Server
+	admission         *controllerAdmissionGate
 	shutdownRequested chan struct{}
 	shutdownOnce      sync.Once
 	serveMu           sync.Mutex
@@ -153,15 +155,59 @@ func NewController(options ControllerOptions) (*Controller, error) {
 		}
 		return authoritySnapshot(current), nil
 	})
-	controller := &Controller{nodeState: options.NodeState, shutdownRequested: make(chan struct{}),
+	admission := newControllerAdmissionGate()
+	controller := &Controller{nodeState: options.NodeState, store: options.Store,
+		admission: admission, shutdownRequested: make(chan struct{}),
 		beforeAccept: options.BeforeAccept}
-	server, err := localapi.NewServerWithLifecycle(options.Store, service, health, authority,
-		localapi.LifecycleFunc(controller.requestShutdown))
+	managedService := controllerAdmissionService{gate: admission, next: service}
+	server, err := localapi.NewServerWithLifecycle(options.Store, managedService, health, authority,
+		localapi.LifecycleFunc(controller.requestShutdown), controller)
 	if err != nil {
 		return nil, err
 	}
 	controller.server = server
 	return controller, nil
+}
+
+// PrepareMutationShutdown seals every Store-facing Agent admission path,
+// drains calls that entered before the seal, and then asks Store to prove the
+// authenticated Profile generation is exact and idle. Failure always reopens
+// admission; success returns a release callback for later server validation
+// failures, while the accepted shutdown deliberately retains the seal.
+func (controller *Controller) PrepareMutationShutdown(ctx context.Context,
+	metadata localapi.RequestMetadata,
+) (localapi.AuthoritySnapshot, localapi.AdmissionReleaseFunc, *localapi.APIError) {
+	if controller == nil || controller.admission == nil || controller.store == nil || ctx == nil {
+		return localapi.AuthoritySnapshot{}, nil, localapi.NewAPIError(localapi.CodeInternal,
+			"mutation shutdown controller is unavailable")
+	}
+	generation, err := controller.admission.seal(ctx)
+	if err != nil {
+		return localapi.AuthoritySnapshot{}, nil, localapi.NewAPIError(
+			localapi.CodeMnemondUnavailable, "managed admission could not be sealed")
+	}
+	release := localapi.AdmissionReleaseFunc(func() {
+		controller.admission.reopen(generation)
+	})
+	authority, err := controller.store.PreflightProfileDeactivation(ctx, metadata.Profile)
+	if err != nil {
+		release()
+		switch {
+		case errors.Is(err, store.ErrProfileDeactivationBusy):
+			return localapi.AuthoritySnapshot{}, nil, localapi.NewAPIError(
+				localapi.CodeOperationPending, "managed Agent authority is still active")
+		case errors.Is(err, store.ErrProfileDeactivationConflict):
+			return localapi.AuthoritySnapshot{}, nil, localapi.NewAPIError(
+				localapi.CodeOperationMismatch, "managed Profile authority changed")
+		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+			return localapi.AuthoritySnapshot{}, nil, localapi.NewAPIError(
+				localapi.CodeMnemondUnavailable, "mutation shutdown was cancelled")
+		default:
+			return localapi.AuthoritySnapshot{}, nil, localapi.NewAPIError(
+				localapi.CodeInternal, "managed Profile idleness could not be proved")
+		}
+	}
+	return authoritySnapshot(authority), release, nil
 }
 
 func (controller *Controller) requestShutdown() {

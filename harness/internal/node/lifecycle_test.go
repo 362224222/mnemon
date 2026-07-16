@@ -107,6 +107,56 @@ func TestDaemonLifecycleQuiesceWaitsPastShutdownResponseForWriterRelease(t *test
 	}
 }
 
+func TestDaemonLifecycleQuiesceBusyMutationLeavesDaemonOnline(t *testing.T) {
+	fixture := newDaemonFixture(t, true)
+	insertControllerBusyRun(t, fixture)
+	daemon, err := OpenDaemon(context.Background(), DaemonOptions{Workspace: fixture.workspace,
+		Install: fixture.install})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer daemon.Close()
+	served := make(chan error, 1)
+	go func() { served <- daemon.Serve(context.Background()) }()
+	waitControllerSocket(t, filepath.Join(fixture.nodeState, controlSocketName), served)
+	client, err := localapi.NewClient(fixture.nodeState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected, apiErr := client.ReadAuthority(context.Background())
+	if apiErr != nil {
+		t.Fatal(apiErr)
+	}
+	lease := acquireTestDaemonLifecycle(t, fixture)
+	var confirmations atomic.Int32
+	confirmer := DaemonOfflineConfirmerFunc(func(context.Context,
+		localapi.AuthorityResponse,
+	) (localapi.AuthorityResponse, error) {
+		confirmations.Add(1)
+		return localapi.AuthorityResponse{}, errors.New("offline confirmation must not run")
+	})
+	_, err = lease.Quiesce(context.Background(), client, confirmer, expected)
+	var mutationErr *localapi.APIError
+	if !errors.Is(err, ErrDaemonLifecycle) || !errors.As(err, &mutationErr) ||
+		mutationErr.Code != localapi.CodeOperationPending || confirmations.Load() != 0 {
+		t.Fatalf("busy Quiesce() = %v, API=%#v confirmations=%d", err, mutationErr,
+			confirmations.Load())
+	}
+	if err := lease.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if health, apiErr := client.ProbeHealth(context.Background()); apiErr != nil ||
+		health.Status != "ready" {
+		t.Fatalf("busy Quiesce health = (%#v, %#v)", health, apiErr)
+	}
+	if _, apiErr := client.Shutdown(context.Background(), expected); apiErr != nil {
+		t.Fatal(apiErr)
+	}
+	if err := <-served; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestDaemonLifecycleLeaseBlocksConcurrentEnsureLaunch(t *testing.T) {
 	fixture := newDaemonFixture(t, false)
 	lease := acquireTestDaemonLifecycle(t, fixture)
@@ -446,7 +496,7 @@ type lifecycleClientStub struct {
 	)
 }
 
-func (client lifecycleClientStub) Shutdown(ctx context.Context,
+func (client lifecycleClientStub) ShutdownForMutation(ctx context.Context,
 	expected localapi.AuthorityResponse,
 ) (
 	localapi.ShutdownResponse, *localapi.APIError,

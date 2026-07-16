@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 )
@@ -324,6 +325,217 @@ func TestServerShutdownRejectsAuthorityDriftWithoutConsumingLifecycle(t *testing
 		t.Fatalf("matched authority = %d %s provider=%d lifecycle=%d", recorder.Code,
 			recorder.Body.String(), providerCalls, lifecycleCalls)
 	}
+}
+
+func TestServerMutationShutdownRetainsSealOnlyForExactIdleAuthority(t *testing.T) {
+	t.Parallel()
+	credential := repeatedOpaqueBytes(0x28)
+	current := testShutdownAuthoritySnapshot(t)
+	currentResponse, err := NewAuthorityResponse(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requested := current
+	requested.UpdatedAt = requested.UpdatedAt.Add(time.Nanosecond)
+	requestedResponse, err := NewAuthorityResponse(requested)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var prepares atomic.Int32
+	var releases atomic.Int32
+	var lifecycle atomic.Int32
+	server := newMutationLifecycleTestServer(t,
+		fixedAuthenticator{want: model.Sum(credential)}, current,
+		MutationShutdownPreparerFunc(func(_ context.Context,
+			metadata RequestMetadata,
+		) (AuthoritySnapshot, AdmissionReleaseFunc, *APIError) {
+			prepares.Add(1)
+			if metadata.Profile.ID() != model.TeamworkProfileID() {
+				t.Fatalf("mutation metadata = %#v", metadata)
+			}
+			return current, func() { releases.Add(1) }, nil
+		}), LifecycleFunc(func() { lifecycle.Add(1) }))
+
+	request := mutationShutdownRequest(t, credential, requestedResponse)
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+	var mismatch APIError
+	if err := json.Unmarshal(recorder.Body.Bytes(), &mismatch); err != nil ||
+		recorder.Code != http.StatusConflict || mismatch.Code != CodeOperationMismatch ||
+		prepares.Load() != 1 || releases.Load() != 1 || lifecycle.Load() != 0 {
+		t.Fatalf("mutation mismatch = %d %s prepares=%d releases=%d lifecycle=%d (%v)",
+			recorder.Code, recorder.Body.String(), prepares.Load(), releases.Load(), lifecycle.Load(), err)
+	}
+
+	request = mutationShutdownRequest(t, credential, currentResponse)
+	recorder = httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || prepares.Load() != 2 || releases.Load() != 1 ||
+		lifecycle.Load() != 1 {
+		t.Fatalf("exact mutation shutdown = %d %s prepares=%d releases=%d lifecycle=%d",
+			recorder.Code, recorder.Body.String(), prepares.Load(), releases.Load(), lifecycle.Load())
+	}
+}
+
+func TestServerMutationShutdownFailuresNeverConsumeLifecycle(t *testing.T) {
+	t.Parallel()
+	credential := repeatedOpaqueBytes(0x29)
+	current := testShutdownAuthoritySnapshot(t)
+	currentResponse, err := NewAuthorityResponse(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var invalidSnapshotReleases atomic.Int32
+	tests := []struct {
+		name     string
+		prepare  MutationShutdownPreparer
+		mutate   func(*http.Request)
+		wantCode ErrorCode
+		status   int
+	}{
+		{name: "busy", prepare: MutationShutdownPreparerFunc(func(context.Context,
+			RequestMetadata,
+		) (AuthoritySnapshot, AdmissionReleaseFunc, *APIError) {
+			return AuthoritySnapshot{}, nil, NewAPIError(CodeOperationPending,
+				"managed Agent authority is still active")
+		}), wantCode: CodeOperationPending, status: http.StatusServiceUnavailable},
+		{name: "cancelled seal", prepare: MutationShutdownPreparerFunc(func(context.Context,
+			RequestMetadata,
+		) (AuthoritySnapshot, AdmissionReleaseFunc, *APIError) {
+			return AuthoritySnapshot{}, nil, NewAPIError(CodeMnemondUnavailable,
+				"managed admission could not be sealed")
+		}), wantCode: CodeMnemondUnavailable, status: http.StatusServiceUnavailable},
+		{name: "invalid snapshot", prepare: MutationShutdownPreparerFunc(func(context.Context,
+			RequestMetadata,
+		) (AuthoritySnapshot, AdmissionReleaseFunc, *APIError) {
+			return AuthoritySnapshot{}, func() { invalidSnapshotReleases.Add(1) }, nil
+		}), wantCode: CodeInternal, status: http.StatusInternalServerError},
+		{name: "invalid header", prepare: MutationShutdownPreparerFunc(func(context.Context,
+			RequestMetadata,
+		) (AuthoritySnapshot, AdmissionReleaseFunc, *APIError) {
+			t.Fatal("invalid mutation header reached preparation")
+			return AuthoritySnapshot{}, nil, nil
+		}), mutate: func(request *http.Request) {
+			request.Header.Set(mutationShutdownHeader, "optional")
+		}, wantCode: CodeInvalidArgument, status: http.StatusBadRequest},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var lifecycle atomic.Int32
+			server := newMutationLifecycleTestServer(t,
+				fixedAuthenticator{want: model.Sum(credential)}, current, test.prepare,
+				LifecycleFunc(func() { lifecycle.Add(1) }))
+			request := mutationShutdownRequest(t, credential, currentResponse)
+			if test.mutate != nil {
+				test.mutate(request)
+			}
+			recorder := httptest.NewRecorder()
+			server.Handler().ServeHTTP(recorder, request)
+			var envelope APIError
+			if err := json.Unmarshal(recorder.Body.Bytes(), &envelope); err != nil ||
+				recorder.Code != test.status || envelope.Code != test.wantCode || lifecycle.Load() != 0 {
+				t.Fatalf("mutation failure = %d %s lifecycle=%d (%v)", recorder.Code,
+					recorder.Body.String(), lifecycle.Load(), err)
+			}
+			if test.name == "invalid snapshot" && invalidSnapshotReleases.Load() != 1 {
+				t.Fatalf("invalid snapshot releases = %d, want 1",
+					invalidSnapshotReleases.Load())
+			}
+		})
+	}
+}
+
+func TestServerConcurrentMutationShutdownSignalsExactlyOnce(t *testing.T) {
+	t.Parallel()
+	credential := repeatedOpaqueBytes(0x2a)
+	current := testShutdownAuthoritySnapshot(t)
+	currentResponse, err := NewAuthorityResponse(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	sealed := false
+	var lifecycle atomic.Int32
+	preparer := MutationShutdownPreparerFunc(func(context.Context,
+		RequestMetadata,
+	) (AuthoritySnapshot, AdmissionReleaseFunc, *APIError) {
+		mu.Lock()
+		defer mu.Unlock()
+		if sealed {
+			return AuthoritySnapshot{}, nil, NewAPIError(CodeMnemondUnavailable,
+				"managed admission is already sealed")
+		}
+		sealed = true
+		return current, func() {
+			mu.Lock()
+			sealed = false
+			mu.Unlock()
+		}, nil
+	})
+	server := newMutationLifecycleTestServer(t,
+		fixedAuthenticator{want: model.Sum(credential)}, current, preparer,
+		LifecycleFunc(func() { lifecycle.Add(1) }))
+
+	const requests = 32
+	start := make(chan struct{})
+	responses := make(chan int, requests)
+	var wait sync.WaitGroup
+	for range requests {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			<-start
+			recorder := httptest.NewRecorder()
+			server.Handler().ServeHTTP(recorder,
+				mutationShutdownRequest(t, credential, currentResponse))
+			responses <- recorder.Code
+		}()
+	}
+	close(start)
+	wait.Wait()
+	close(responses)
+	successes := 0
+	for status := range responses {
+		switch status {
+		case http.StatusOK:
+			successes++
+		case http.StatusServiceUnavailable:
+		default:
+			t.Fatalf("concurrent mutation shutdown status = %d", status)
+		}
+	}
+	if successes != 1 || lifecycle.Load() != 1 {
+		t.Fatalf("concurrent mutation successes=%d lifecycle=%d", successes, lifecycle.Load())
+	}
+}
+
+func newMutationLifecycleTestServer(t *testing.T, authenticator Authenticator,
+	authority AuthoritySnapshot, mutation MutationShutdownPreparer, lifecycle LifecycleFunc,
+) *Server {
+	t.Helper()
+	server, err := NewServerWithLifecycle(authenticator, &fakeService{},
+		HealthProviderFunc(func(context.Context, RequestMetadata) (HealthSnapshot, *APIError) {
+			return HealthSnapshot{AssetRevision: authority.AssetRevision, WorkersReady: true}, nil
+		}), AuthorityProviderFunc(func(context.Context,
+			RequestMetadata,
+		) (AuthoritySnapshot, *APIError) {
+			return authority, nil
+		}), lifecycle, mutation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return server
+}
+
+func mutationShutdownRequest(t *testing.T, credential []byte,
+	authority AuthorityResponse,
+) *http.Request {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodPost, RouteShutdown, nil)
+	request.Header.Set(authorizationHeader, profileScheme+encodeSecret(credential))
+	request.Header.Set(mutationShutdownHeader, mutationShutdownHeaderValue)
+	setShutdownAuthorityDigest(t, request, authority)
+	return request
 }
 
 func TestServerHealthIsAuthenticatedClosedAndIdentityFree(t *testing.T) {

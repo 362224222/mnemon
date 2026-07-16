@@ -16,6 +16,11 @@ func TestDeactivateProfileWithdrawsExactAuthorityAndReplays(t *testing.T) {
 	node, active := activateTestNode(t, st, node, disabled)
 	at := active.UpdatedAt().Add(time.Minute)
 
+	preflight, err := st.PreflightProfileDeactivation(context.Background(), active)
+	if err != nil || preflight.Node != node || preflight.Profile != active {
+		t.Fatalf("PreflightProfileDeactivation() = (%#v, %v)", preflight, err)
+	}
+
 	first, err := st.DeactivateProfile(context.Background(), active, at)
 	if err != nil || !first.Changed || first.Profile.Enabled() ||
 		first.Profile.Host() != active.Host() || first.Profile.Runtime() != active.Runtime() ||
@@ -54,6 +59,10 @@ func TestDeactivateProfileRejectsDriftAndRegressedTime(t *testing.T) {
 		active.UpdatedAt().Add(time.Minute)); !errors.Is(err, ErrProfileDeactivationConflict) {
 		t.Fatalf("authority drift error = %v", err)
 	}
+	if _, err := st.PreflightProfileDeactivation(context.Background(), drifted); !errors.Is(err,
+		ErrProfileDeactivationConflict) {
+		t.Fatalf("authority drift preflight error = %v", err)
+	}
 	staleSpec := active.Spec()
 	staleSpec.UpdatedAt = staleSpec.UpdatedAt.Add(-time.Nanosecond)
 	stale, err := model.NewProfile(staleSpec)
@@ -63,6 +72,10 @@ func TestDeactivateProfileRejectsDriftAndRegressedTime(t *testing.T) {
 	if _, err := st.DeactivateProfile(context.Background(), stale,
 		active.UpdatedAt().Add(time.Minute)); !errors.Is(err, ErrProfileDeactivationConflict) {
 		t.Fatalf("generation drift error = %v", err)
+	}
+	if _, err := st.PreflightProfileDeactivation(context.Background(), stale); !errors.Is(err,
+		ErrProfileDeactivationConflict) {
+		t.Fatalf("generation drift preflight error = %v", err)
 	}
 	if _, err := st.DeactivateProfile(context.Background(), active,
 		active.UpdatedAt().Add(-time.Second)); !errors.Is(err, ErrProfileDeactivationConflict) {
@@ -75,6 +88,12 @@ func TestDeactivateProfileRejectsDriftAndRegressedTime(t *testing.T) {
 	read, err := st.ReadLocalAuthority(context.Background())
 	if err != nil || !read.Profile.Enabled() || read.Profile.ActiveAssetRevision() != active.ActiveAssetRevision() {
 		t.Fatalf("failed deactivation changed authority = (%#v, %v)", read, err)
+	}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := st.PreflightProfileDeactivation(cancelled, active); !errors.Is(err,
+		context.Canceled) {
+		t.Fatalf("cancelled preflight error = %v", err)
 	}
 }
 
@@ -98,6 +117,12 @@ func TestDeactivateProfileRequiresQuiescentAgentAuthority(t *testing.T) {
 				"/workspace/"+test.id)
 			node, active := activateTestNode(t, st, node, disabled)
 			test.busy(t, st, node, active)
+
+			preflight, err := st.PreflightProfileDeactivation(context.Background(), active)
+			if !errors.Is(err, ErrProfileDeactivationBusy) || preflight.Node != node ||
+				preflight.Profile != active {
+				t.Fatalf("busy preflight = (%#v, %v)", preflight, err)
+			}
 
 			if _, err := st.DeactivateProfile(context.Background(), active,
 				active.UpdatedAt().Add(time.Minute)); !errors.Is(err, ErrProfileDeactivationBusy) {
