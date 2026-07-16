@@ -25,6 +25,7 @@ const (
 var errContentTooLarge = errors.New("content exceeds its closed byte bound")
 
 type controlClient interface {
+	ProbeHealth(context.Context) (localapi.HealthResponse, *localapi.APIError)
 	HookCheck(context.Context) (localapi.HookCheckResponse, *localapi.APIError)
 	AgentCurrent(context.Context) (localapi.AgentCurrentResponse, *localapi.APIError)
 	TeamworkAction(context.Context, localapi.TeamworkActionRequest, *localapi.ContextFile,
@@ -43,6 +44,7 @@ type journalStore interface {
 type dependencies struct {
 	workingDirectory func() (string, error)
 	newClient        func(string) (controlClient, error)
+	ensureDaemon     func(context.Context, string, string, controlClient) *localapi.APIError
 	newJournals      func(string) (journalStore, error)
 	readContext      func(string, string) (localapi.ContextFile, error)
 	writeContext     func(string, model.RunID, string) (localapi.ContextFile, error)
@@ -62,6 +64,7 @@ func New(stdin io.Reader, stdout, stderr io.Writer) *App {
 		newClient: func(nodeState string) (controlClient, error) {
 			return localapi.NewClient(nodeState)
 		},
+		ensureDaemon: ensureAgentDaemon,
 		newJournals: func(nodeState string) (journalStore, error) {
 			return localapi.NewPendingJournalStore(nodeState)
 		},
@@ -94,6 +97,13 @@ func (app *App) Run(ctx context.Context, args []string) int {
 			code, message = localapi.CodeMnemondUnavailable, "mnemond local control is unavailable"
 		}
 		return app.writeError(command.jsonOutput, localapi.NewAPIError(code, message))
+	}
+	if app.deps.ensureDaemon == nil {
+		return app.writeError(command.jsonOutput,
+			localapi.NewAPIError(localapi.CodeInternal, "managed daemon ensure is unavailable"))
+	}
+	if apiErr := app.deps.ensureDaemon(ctx, projectRoot, nodeState, client); apiErr != nil {
+		return app.writeError(command.jsonOutput, apiErr)
 	}
 
 	switch command.kind {

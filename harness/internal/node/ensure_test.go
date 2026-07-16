@@ -98,6 +98,9 @@ func TestEnsureDaemonFailsClosedForEveryReachableNonreadyState(t *testing.T) {
 			if !errors.Is(err, ErrDaemonEnsure) {
 				t.Fatalf("EnsureDaemon() error = %v", err)
 			}
+			if name != "authentication failure" && !errors.Is(err, ErrDaemonHealthAuthority) {
+				t.Fatalf("reachable authority error = %v, want ErrDaemonHealthAuthority", err)
+			}
 			if preflights.Load() != 0 || launches.Load() != 0 {
 				t.Fatalf("reachable failure ran preflight=%d launch=%d",
 					preflights.Load(), launches.Load())

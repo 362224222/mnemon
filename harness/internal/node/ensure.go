@@ -22,7 +22,10 @@ const (
 	daemonCleanupDeadline = time.Second
 )
 
-var ErrDaemonEnsure = errors.New("ensure mnemond readiness")
+var (
+	ErrDaemonEnsure          = errors.New("ensure mnemond readiness")
+	ErrDaemonHealthAuthority = errors.New("authenticated mnemond health authority is invalid")
+)
 
 // DaemonHealthProbe is the authenticated local health boundary used by the
 // zero-touch ensure path. A localapi.Client satisfies this interface directly.
@@ -262,19 +265,23 @@ func probeDaemonHealth(ctx context.Context, probe DaemonHealthProbe,
 	if health.SchemaVersion != localapi.SchemaVersion ||
 		(health.Status != "ready" && health.Status != "not_ready") {
 		return localapi.HealthResponse{}, false,
-			fmt.Errorf("%w: authenticated health is noncanonical", ErrDaemonEnsure)
+			fmt.Errorf("%w: %w: response is noncanonical", ErrDaemonEnsure,
+				ErrDaemonHealthAuthority)
 	}
 	if _, err := model.ParseDigest(health.AssetRevision); err != nil {
 		return localapi.HealthResponse{}, false,
-			fmt.Errorf("%w: authenticated health has an invalid revision", ErrDaemonEnsure)
+			fmt.Errorf("%w: %w: revision is invalid", ErrDaemonEnsure,
+				ErrDaemonHealthAuthority)
 	}
 	if health.AssetRevision != expectedRevision {
 		return localapi.HealthResponse{}, false,
-			fmt.Errorf("%w: authenticated health has a different asset revision", ErrDaemonEnsure)
+			fmt.Errorf("%w: %w: revision differs", ErrDaemonEnsure,
+				ErrDaemonHealthAuthority)
 	}
 	if health.Status != "ready" {
 		return localapi.HealthResponse{}, false,
-			fmt.Errorf("%w: authenticated daemon is not ready", ErrDaemonEnsure)
+			fmt.Errorf("%w: %w: daemon is not ready", ErrDaemonEnsure,
+				ErrDaemonHealthAuthority)
 	}
 	return health, false, nil
 }

@@ -104,6 +104,32 @@ func TestAgentAppHookAndCurrentExposeOnlyFixedCueAndContextPath(t *testing.T) {
 	}
 }
 
+func TestAgentAppFailsClosedBeforeEveryManagedCommandWhenDaemonEnsureFails(t *testing.T) {
+	workspace, nodeState := cliWorkspace(t)
+	fake := &fakeControlClient{hook: localapi.HookCheckResponse{
+		SchemaVersion: localapi.SchemaVersion, Pending: true,
+	}}
+	stdout, stderr, app := cliTestApp(t, workspace, fake, nil)
+	called := 0
+	app.deps.ensureDaemon = func(_ context.Context, gotWorkspace, gotNodeState string,
+		gotClient controlClient,
+	) *localapi.APIError {
+		called++
+		if gotWorkspace != workspace || gotNodeState != nodeState || gotClient != fake {
+			t.Fatalf("ensure authority = workspace %q Node %q client %#v", gotWorkspace,
+				gotNodeState, gotClient)
+		}
+		return localapi.NewAPIError(localapi.CodeMnemondUnavailable,
+			"mnemond could not be made ready")
+	}
+	if exit := app.Run(context.Background(), []string{"hook", "check"}); exit != 5 ||
+		called != 1 || stdout.Len() != 0 ||
+		stderr.String() != "mnemond_unavailable: mnemond could not be made ready\n" {
+		t.Fatalf("failed ensure = exit %d calls %d stdout %q stderr %q", exit, called,
+			stdout.String(), stderr.String())
+	}
+}
+
 func TestAgentAppTeamworkUsesContentContextAndTerminalJournal(t *testing.T) {
 	workspace, nodeState := cliWorkspace(t)
 	if err := os.WriteFile(filepath.Join(workspace, "reason.txt"), []byte("review accepted"), 0o600); err != nil {
@@ -387,6 +413,11 @@ func (client *barrierControlClient) HookCheck(context.Context) (localapi.HookChe
 	return localapi.HookCheckResponse{}, localapi.NewAPIError(localapi.CodeInternal, "unexpected Hook call")
 }
 
+func (client *barrierControlClient) ProbeHealth(context.Context) (localapi.HealthResponse, *localapi.APIError) {
+	return localapi.HealthResponse{}, localapi.NewAPIError(localapi.CodeMnemondUnavailable,
+		"mnemond local control is unavailable")
+}
+
 func (client *barrierControlClient) AgentCurrent(context.Context) (localapi.AgentCurrentResponse, *localapi.APIError) {
 	return localapi.AgentCurrentResponse{}, localapi.NewAPIError(localapi.CodeInternal, "unexpected current call")
 }
@@ -420,6 +451,11 @@ func (fake *fakeControlClient) HookCheck(context.Context) (localapi.HookCheckRes
 	return fake.hook, fake.hookError
 }
 
+func (fake *fakeControlClient) ProbeHealth(context.Context) (localapi.HealthResponse, *localapi.APIError) {
+	return localapi.HealthResponse{}, localapi.NewAPIError(localapi.CodeMnemondUnavailable,
+		"mnemond local control is unavailable")
+}
+
 func (fake *fakeControlClient) AgentCurrent(context.Context) (localapi.AgentCurrentResponse, *localapi.APIError) {
 	return fake.current, fake.currentError
 }
@@ -447,6 +483,9 @@ func cliTestApp(t *testing.T, workspace string, fake controlClient, stdin ioRead
 	app := New(stdin, stdout, stderr)
 	app.deps.workingDirectory = func() (string, error) { return filepath.Join(workspace, "nested"), nil }
 	app.deps.newClient = func(string) (controlClient, error) { return fake, nil }
+	app.deps.ensureDaemon = func(context.Context, string, string, controlClient) *localapi.APIError {
+		return nil
+	}
 	return stdout, stderr, app
 }
 
