@@ -41,6 +41,7 @@ type daemonRuntime interface {
 type daemonOpener func(context.Context, node.DaemonOptions) (daemonRuntime, error)
 type nodeProvisioner func(context.Context, node.ProvisionOptions) (node.ProvisionResult, error)
 type nodeActivator func(context.Context, node.ActivateOptions) (node.ActivateResult, error)
+type nodeDeactivator func(context.Context, node.DeactivateOptions) (node.DeactivateResult, error)
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -62,7 +63,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		}
 		options.Install = verify
 		return node.OpenDaemon(ctx, options)
-	}, node.Provision, activateManagedNode)
+	}, node.Provision, activateManagedNode, node.Deactivate)
 }
 
 func activateManagedNode(ctx context.Context, options node.ActivateOptions) (node.ActivateResult, error) {
@@ -92,11 +93,11 @@ func managedInstallationVerifier(workspace string) (node.InstallationVerifier, e
 func runWithDaemon(ctx context.Context, args []string, stdout, stderr io.Writer,
 	open daemonOpener,
 ) error {
-	return runWithNode(ctx, args, stdout, stderr, open, node.Provision, activateManagedNode)
+	return runWithNode(ctx, args, stdout, stderr, open, node.Provision, activateManagedNode, node.Deactivate)
 }
 
 func runWithNode(ctx context.Context, args []string, stdout, stderr io.Writer,
-	open daemonOpener, provision nodeProvisioner, activate nodeActivator,
+	open daemonOpener, provision nodeProvisioner, activate nodeActivator, deactivate nodeDeactivator,
 ) error {
 	_ = stderr
 
@@ -171,6 +172,26 @@ func runWithNode(ctx context.Context, args []string, stdout, stderr io.Writer,
 		}
 		_, err = stdout.Write(append(raw, '\n'))
 		return err
+	case "deactivate":
+		options, err := parseDeactivateOptions(args[1:])
+		if err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		result, err := deactivate(ctx, options)
+		if err != nil {
+			return err
+		}
+		receipt := deactivateReceipt{AssetRevision: options.AssetRevision, Changed: result.Changed,
+			Host: string(options.Host), SchemaVersion: model.SchemaVersion, Status: "inactive"}
+		raw, err := model.CanonicalMarshal(receipt)
+		if err != nil {
+			return fmt.Errorf("encode deactivation receipt: %w", err)
+		}
+		_, err = stdout.Write(append(raw, '\n'))
+		return err
 	default:
 		if len(args) != 1 {
 			return fmt.Errorf("unsupported command %q", strings.Join(args, " "))
@@ -195,6 +216,14 @@ type activateReceipt struct {
 	Status        string `json:"status"`
 }
 
+type deactivateReceipt struct {
+	AssetRevision string `json:"asset_revision"`
+	Changed       bool   `json:"changed"`
+	Host          string `json:"host"`
+	SchemaVersion int    `json:"schema_version"`
+	Status        string `json:"status"`
+}
+
 func parseInitializeOptions(args []string) (node.ProvisionOptions, error) {
 	workspace, host, revision, err := parseManagedAuthorityOptions("initialize", args)
 	if err != nil {
@@ -209,6 +238,14 @@ func parseActivateOptions(args []string) (node.ActivateOptions, error) {
 		return node.ActivateOptions{}, err
 	}
 	return node.ActivateOptions{Workspace: workspace, Host: host, AssetRevision: revision}, nil
+}
+
+func parseDeactivateOptions(args []string) (node.DeactivateOptions, error) {
+	workspace, host, revision, err := parseManagedAuthorityOptions("deactivate", args)
+	if err != nil {
+		return node.DeactivateOptions{}, err
+	}
+	return node.DeactivateOptions{Workspace: workspace, Host: host, AssetRevision: revision}, nil
 }
 
 func parseManagedAuthorityOptions(command string, args []string) (string, model.HostKind, string, error) {
