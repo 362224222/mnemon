@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/node"
 )
@@ -79,6 +81,9 @@ func TestRun(t *testing.T) {
 	}
 	if strings.Contains(lowerHelp, "activate") || strings.Contains(lowerHelp, "deactivate") {
 		t.Error("help exposes a managed activation command")
+	}
+	if strings.Contains(lowerHelp, "inspect") {
+		t.Error("help exposes the offline authority inspector")
 	}
 }
 
@@ -360,6 +365,64 @@ func TestRunDeactivateRejectsMalformedAuthorityBeforeDeactivation(t *testing.T) 
 	}
 	if called != 0 {
 		t.Fatalf("malformed deactivate called writer %d times", called)
+	}
+}
+
+func TestRunInspectCallsExistingOnlyReaderAndEmitsCanonicalReceipt(t *testing.T) {
+	project := t.TempDir()
+	resolved, err := filepath.EvalSymlinks(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision := model.Sum([]byte("inspect-assets")).String()
+	peerID, _ := model.ParsePeerID("peer-command-inspect")
+	at := time.Date(2026, 7, 17, 6, 7, 8, 9, time.UTC)
+	called := 0
+	inspect := func(ctx context.Context, workspace string) (localapi.AuthoritySnapshot, error) {
+		called++
+		if ctx == nil || workspace != resolved {
+			t.Fatalf("inspect input = (%v, %q)", ctx, workspace)
+		}
+		return localapi.AuthoritySnapshot{Host: model.HostClaudeCode, Runtime: model.RuntimeClaudeCLI,
+			Enabled: false, AssetRevision: revision, UpdatedAt: at, PeerID: peerID,
+			ActiveAssetRevision: revision}, nil
+	}
+	var stdout, stderr bytes.Buffer
+	if err := runWithNode(context.Background(), []string{"inspect", "--project-root", project},
+		&stdout, &stderr, nil, nil, nil, nil, inspect); err != nil {
+		t.Fatal(err)
+	}
+	want := `{"active_asset_revision":"` + revision + `","asset_revision":"` + revision +
+		`","enabled":false,"host":"claude-code","peer_id":"peer-command-inspect",` +
+		`"runtime":"claude-cli","schema_version":1,"updated_at":"2026-07-17T06:07:08.000000009Z"}` + "\n"
+	if stdout.String() != want || stderr.Len() != 0 || called != 1 {
+		t.Fatalf("inspect = stdout %q stderr %q called=%d", stdout.String(), stderr.String(), called)
+	}
+}
+
+func TestRunInspectRejectsMalformedOrCancelledInvocationBeforeReading(t *testing.T) {
+	project := t.TempDir()
+	called := 0
+	inspect := func(context.Context, string) (localapi.AuthoritySnapshot, error) {
+		called++
+		return localapi.AuthoritySnapshot{}, nil
+	}
+	for _, args := range [][]string{{"inspect"}, {"inspect", "--project-root"},
+		{"inspect", "--project-root=" + project}, {"inspect", "--project-root", project, "trailing"},
+		{"inspect", "--project-root", ""}} {
+		if err := runWithNode(context.Background(), args, io.Discard, io.Discard,
+			nil, nil, nil, nil, inspect); err == nil {
+			t.Fatalf("runWithNode(%v) succeeded", args)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := runWithNode(ctx, []string{"inspect", "--project-root", project}, io.Discard, io.Discard,
+		nil, nil, nil, nil, inspect); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled inspect error = %v", err)
+	}
+	if called != 0 {
+		t.Fatalf("rejected inspect called reader %d times", called)
 	}
 }
 

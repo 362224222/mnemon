@@ -13,6 +13,7 @@ import (
 
 	"github.com/mnemon-dev/mnemon/harness/internal/assets"
 	"github.com/mnemon-dev/mnemon/harness/internal/integration"
+	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/node"
 )
@@ -42,6 +43,7 @@ type daemonOpener func(context.Context, node.DaemonOptions) (daemonRuntime, erro
 type nodeProvisioner func(context.Context, node.ProvisionOptions) (node.ProvisionResult, error)
 type nodeActivator func(context.Context, node.ActivateOptions) (node.ActivateResult, error)
 type nodeDeactivator func(context.Context, node.DeactivateOptions) (node.DeactivateResult, error)
+type nodeInspector func(context.Context, string) (localapi.AuthoritySnapshot, error)
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -98,8 +100,16 @@ func runWithDaemon(ctx context.Context, args []string, stdout, stderr io.Writer,
 
 func runWithNode(ctx context.Context, args []string, stdout, stderr io.Writer,
 	open daemonOpener, provision nodeProvisioner, activate nodeActivator, deactivate nodeDeactivator,
+	inspectors ...nodeInspector,
 ) error {
 	_ = stderr
+	if len(inspectors) > 1 || len(inspectors) == 1 && inspectors[0] == nil {
+		return errors.New("mnemond command has invalid authority inspector composition")
+	}
+	inspect := node.InspectAuthority
+	if len(inspectors) == 1 {
+		inspect = inspectors[0]
+	}
 
 	if len(args) == 0 {
 		_, err := io.WriteString(stdout, helpText)
@@ -192,12 +202,41 @@ func runWithNode(ctx context.Context, args []string, stdout, stderr io.Writer,
 		}
 		_, err = stdout.Write(append(raw, '\n'))
 		return err
+	case "inspect":
+		projectRoot, err := parseInspectProjectRoot(args[1:])
+		if err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		snapshot, err := inspect(ctx, projectRoot)
+		if err != nil {
+			return err
+		}
+		receipt, err := localapi.NewAuthorityResponse(snapshot)
+		if err != nil {
+			return fmt.Errorf("encode authority inspection receipt: %w", err)
+		}
+		raw, err := model.CanonicalMarshal(receipt)
+		if err != nil {
+			return fmt.Errorf("encode authority inspection receipt: %w", err)
+		}
+		_, err = stdout.Write(append(raw, '\n'))
+		return err
 	default:
 		if len(args) != 1 {
 			return fmt.Errorf("unsupported command %q", strings.Join(args, " "))
 		}
 		return fmt.Errorf("unsupported command %q", args[0])
 	}
+}
+
+func parseInspectProjectRoot(args []string) (string, error) {
+	if len(args) != 2 || args[0] != "--project-root" || strings.TrimSpace(args[1]) == "" {
+		return "", errors.New("inspect requires exactly --project-root DIR")
+	}
+	return resolveProjectRoot(args[1])
 }
 
 type initializeReceipt struct {

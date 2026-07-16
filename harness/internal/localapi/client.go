@@ -134,6 +134,30 @@ func (c *Client) ProbeHealth(ctx context.Context) (HealthResponse, *APIError) {
 	return response, nil
 }
 
+// ReadAuthority observes the current durable setup authority through the
+// authenticated owner-only controller. It carries no Agent capability header
+// and accepts only the closed canonical authority envelope.
+func (c *Client) ReadAuthority(ctx context.Context) (AuthorityResponse, *APIError) {
+	var response AuthorityResponse
+	if c == nil || c.http == nil || ctx == nil {
+		return AuthorityResponse{}, invalidControlResponse("local control client is unavailable")
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		"http://mnemond"+RouteAuthority, nil)
+	if err != nil {
+		return AuthorityResponse{}, invalidControlResponse("local control request cannot be created")
+	}
+	request.Header.Set(authorizationHeader,
+		profileScheme+base64.RawURLEncoding.EncodeToString(c.token[:]))
+	if apiErr := c.send(request, &response, MaxAuthorityResponseBytes); apiErr != nil {
+		return AuthorityResponse{}, apiErr
+	}
+	if apiErr := validateAuthorityResponse(response); apiErr != nil {
+		return AuthorityResponse{}, apiErr
+	}
+	return response, nil
+}
+
 func (c *Client) HookCheck(ctx context.Context) (HookCheckResponse, *APIError) {
 	attachment, apiErr := c.runtimeAttachment()
 	if apiErr != nil {
@@ -396,6 +420,10 @@ func (c *Client) send(request *http.Request, response any, maxResponse int64) *A
 	}
 	if err := decodeClosedObject(object, response); err != nil {
 		return invalidControlResponse("mnemond returned an invalid success envelope")
+	}
+	closed, err := model.CanonicalMarshal(response)
+	if err != nil || !bytes.Equal(closed, object) {
+		return invalidControlResponse("mnemond returned an incomplete success envelope")
 	}
 	return nil
 }

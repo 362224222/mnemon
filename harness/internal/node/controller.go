@@ -129,7 +129,22 @@ func NewController(options ControllerOptions) (*Controller, error) {
 		ready := gate.Check(healthCtx, metadata.Profile) == nil
 		return localapi.HealthSnapshot{AssetRevision: assetRevision, WorkersReady: ready}, nil
 	})
-	server, err := localapi.NewServer(options.Store, service, health)
+	authority := localapi.AuthorityProviderFunc(func(authorityCtx context.Context,
+		metadata localapi.RequestMetadata,
+	) (localapi.AuthoritySnapshot, *localapi.APIError) {
+		if authorityCtx == nil || authorityCtx.Err() != nil ||
+			metadata.Profile.ID() != model.TeamworkProfileID() {
+			return localapi.AuthoritySnapshot{}, localapi.NewAPIError(localapi.CodeInternal,
+				"durable authority observation was cancelled")
+		}
+		current, readErr := options.Store.ReadLocalAuthority(authorityCtx)
+		if readErr != nil {
+			return localapi.AuthoritySnapshot{}, localapi.NewAPIError(localapi.CodeInternal,
+				"durable authority is unavailable")
+		}
+		return authoritySnapshot(current), nil
+	})
+	server, err := localapi.NewServerWithAuthority(options.Store, service, health, authority)
 	if err != nil {
 		return nil, err
 	}

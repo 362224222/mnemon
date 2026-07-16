@@ -13,6 +13,7 @@ import (
 
 const (
 	RouteHealth         = "/v1/health"
+	RouteAuthority      = "/v1/authority"
 	RouteHookCheck      = "/v1/hook/check"
 	RouteAgentCurrent   = "/v1/agent/current"
 	RouteTeamworkAction = "/v1/teamwork/action"
@@ -30,27 +31,50 @@ type Server struct {
 	authenticator Authenticator
 	service       Service
 	health        HealthProvider
+	authority     AuthorityProvider
 	handler       http.Handler
 }
 
 func NewServer(authenticator Authenticator, service Service,
 	healthProviders ...HealthProvider,
 ) (*Server, error) {
-	if authenticator == nil || service == nil {
-		return nil, errors.New("local API: authenticator and service are required")
-	}
 	if len(healthProviders) > 1 || len(healthProviders) == 1 && healthProviders[0] == nil {
 		return nil, errors.New("local API: at most one health provider is allowed")
 	}
 	var health HealthProvider
 	if len(healthProviders) == 1 {
 		health = healthProviders[0]
-	} else if provided, ok := service.(HealthProvider); ok {
-		health = provided
 	}
-	server := &Server{authenticator: authenticator, service: service, health: health}
+	return newServer(authenticator, service, health, nil)
+}
+
+// NewServerWithAuthority composes the controller-only observation route while
+// retaining NewServer as the smaller test and service boundary.
+func NewServerWithAuthority(authenticator Authenticator, service Service,
+	health HealthProvider, authority AuthorityProvider,
+) (*Server, error) {
+	if health == nil || authority == nil {
+		return nil, errors.New("local API: health and authority providers are required")
+	}
+	return newServer(authenticator, service, health, authority)
+}
+
+func newServer(authenticator Authenticator, service Service, health HealthProvider,
+	authority AuthorityProvider,
+) (*Server, error) {
+	if authenticator == nil || service == nil {
+		return nil, errors.New("local API: authenticator and service are required")
+	}
+	if health == nil {
+		if provided, ok := service.(HealthProvider); ok {
+			health = provided
+		}
+	}
+	server := &Server{authenticator: authenticator, service: service, health: health,
+		authority: authority}
 	mux := http.NewServeMux()
 	mux.HandleFunc(RouteHealth, server.handleHealth)
+	mux.HandleFunc(RouteAuthority, server.handleAuthority)
 	mux.HandleFunc(RouteHookCheck, server.handleHookCheck)
 	mux.HandleFunc(RouteAgentCurrent, server.handleAgentCurrent)
 	mux.HandleFunc(RouteTeamworkAction, server.handleTeamworkAction)
@@ -107,6 +131,54 @@ func (s *Server) handleHealth(writer http.ResponseWriter, request *http.Request)
 	response, err := healthResponse(snapshot)
 	if err != nil {
 		writeError(writer, NewAPIError(CodeInternal, "health provider returned invalid state"))
+		return
+	}
+	writeResponse(writer, http.StatusOK, response)
+}
+
+func (s *Server) handleAuthority(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet {
+		writer.Header().Set("Allow", http.MethodGet)
+		writeErrorStatus(writer, http.StatusMethodNotAllowed,
+			NewAPIError(CodeInvalidArgument, "method is not allowed"))
+		return
+	}
+	if request.ContentLength != 0 || len(request.TransferEncoding) != 0 ||
+		request.Header.Get("Content-Type") != "" {
+		writeError(writer, NewAPIError(CodeInvalidArgument,
+			"authority request must not contain content"))
+		return
+	}
+	if request.URL.RawQuery != "" {
+		writeError(writer, NewAPIError(CodeInvalidArgument,
+			"authority request must not contain a query"))
+		return
+	}
+	if request.Body != nil {
+		raw, err := io.ReadAll(io.LimitReader(request.Body, 1))
+		if err != nil || len(raw) != 0 {
+			writeError(writer, NewAPIError(CodeInvalidArgument,
+				"authority request must not contain content"))
+			return
+		}
+	}
+	metadata, apiErr := authenticateRequest(request.Context(), request, s.authenticator, headerPolicy{})
+	if apiErr != nil {
+		writeError(writer, apiErr)
+		return
+	}
+	if s.authority == nil {
+		writeError(writer, NewAPIError(CodeInternal, "authority provider is unavailable"))
+		return
+	}
+	snapshot, apiErr := s.authority.Authority(request.Context(), metadata)
+	if apiErr != nil {
+		writeError(writer, apiErr)
+		return
+	}
+	response, err := NewAuthorityResponse(snapshot)
+	if err != nil {
+		writeError(writer, NewAPIError(CodeInternal, "authority provider returned invalid state"))
 		return
 	}
 	writeResponse(writer, http.StatusOK, response)
@@ -300,7 +372,9 @@ func IsAgentRoute(path string) bool {
 		path == RouteTeamworkAction || path == RouteAgentResolve
 }
 
-func IsControlRoute(path string) bool { return path == RouteHealth || IsAgentRoute(path) }
+func IsControlRoute(path string) bool {
+	return path == RouteHealth || path == RouteAuthority || IsAgentRoute(path)
+}
 
 func validTeamworkAction(action string) bool {
 	return action == "offer" || action == "accept" || action == "decline" ||

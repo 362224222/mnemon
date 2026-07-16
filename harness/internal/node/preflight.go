@@ -115,6 +115,16 @@ type existingDaemonAuthority struct {
 }
 
 func openExistingDaemonAuthority(ctx context.Context, workspace, nodeState string) (existingDaemonAuthority, error) {
+	return openExistingStoredAuthority(ctx, workspace, nodeState, false)
+}
+
+// openExistingStoredAuthority is the strict existing-only reader shared by
+// daemon startup and offline observation. allowDisabled is reserved for the
+// latter; all filesystem, identity, credential, schema and workspace bindings
+// remain identical.
+func openExistingStoredAuthority(ctx context.Context, workspace, nodeState string,
+	allowDisabled bool,
+) (existingDaemonAuthority, error) {
 	if ctx == nil {
 		return existingDaemonAuthority{}, fmt.Errorf("%w: context is unavailable", ErrDaemonAuthority)
 	}
@@ -155,7 +165,8 @@ func openExistingDaemonAuthority(ctx context.Context, workspace, nodeState strin
 	if err != nil {
 		return fail(fmt.Errorf("%w: %w", ErrDaemonAuthority, err))
 	}
-	if authority.Profile.ID() != model.TeamworkProfileID() || !authority.Profile.Enabled() {
+	if authority.Profile.ID() != model.TeamworkProfileID() ||
+		(!allowDisabled && !authority.Profile.Enabled()) {
 		return fail(fmt.Errorf("%w: the unique Teamwork Profile is disabled or unavailable", ErrDaemonAuthority))
 	}
 	if authority.Node.PeerID() != identity.PeerID() {

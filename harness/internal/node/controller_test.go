@@ -108,6 +108,15 @@ func TestControllerServesOwnerOnlyManagedRoutesFromOneStore(t *testing.T) {
 		health.AssetRevision != bundle.Manifest().AssetRevision {
 		t.Fatalf("ProbeHealth() = (%#v, %v)", health, apiErr)
 	}
+	authority, apiErr := client.ReadAuthority(context.Background())
+	if apiErr != nil || !authority.Enabled || authority.Host != string(model.HostCodex) ||
+		authority.Runtime != string(model.RuntimeCodexAppServer) ||
+		authority.AssetRevision != bundle.Manifest().AssetRevision ||
+		authority.ActiveAssetRevision != bundle.Manifest().AssetRevision ||
+		authority.PeerID != peerID.String() ||
+		authority.UpdatedAt != enabled.UpdatedAt().Format(time.RFC3339Nano) {
+		t.Fatalf("ReadAuthority() = (%#v, %v)", authority, apiErr)
+	}
 	hook, apiErr := client.HookCheck(context.Background())
 	if apiErr != nil || hook.Pending {
 		t.Fatalf("HookCheck() = (%#v, %v)", hook, apiErr)
@@ -119,6 +128,24 @@ func TestControllerServesOwnerOnlyManagedRoutesFromOneStore(t *testing.T) {
 	projection, err := localapi.ParseInitiationProjection(current.Projection)
 	if err != nil || len(projection.InitiationContext.Channels) != 0 {
 		t.Fatalf("initiation projection = %s, %v", current.Projection, err)
+	}
+	deactivated, err := st.DeactivateProfile(context.Background(), enabled, at.Add(2*time.Second))
+	if err != nil || deactivated.Profile.Enabled() {
+		t.Fatalf("deactivate controller authority = (%#v, %v)", deactivated, err)
+	}
+	authority, apiErr = client.ReadAuthority(context.Background())
+	if apiErr != nil || authority.Enabled ||
+		authority.UpdatedAt != deactivated.Profile.UpdatedAt().Format(time.RFC3339Nano) {
+		t.Fatalf("disabled ReadAuthority() = (%#v, %v)", authority, apiErr)
+	}
+	reactivated, err := st.ActivateProfile(context.Background(), enabled, at.Add(3*time.Second))
+	if err != nil || !reactivated.Profile.Enabled() {
+		t.Fatalf("reactivate controller authority = (%#v, %v)", reactivated, err)
+	}
+	authority, apiErr = client.ReadAuthority(context.Background())
+	if apiErr != nil || !authority.Enabled ||
+		authority.UpdatedAt != reactivated.Profile.UpdatedAt().Format(time.RFC3339Nano) {
+		t.Fatalf("reactivated ReadAuthority() = (%#v, %v)", authority, apiErr)
 	}
 	guidePath := filepath.Join(workspace, ".codex", "skills", "mnemon-harness", "guides", "teamwork", "GUIDE.md")
 	if err := os.Remove(guidePath); err != nil {

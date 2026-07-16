@@ -214,6 +214,22 @@ func TestServerHealthProviderFailureIsClosed(t *testing.T) {
 	}
 }
 
+func TestNewServerRetainsStrictOptionalHealthComposition(t *testing.T) {
+	t.Parallel()
+	if _, err := NewServer(&fakeAuthenticator{}, &fakeService{}, HealthProvider(nil)); err == nil {
+		t.Fatal("NewServer accepted one explicit nil health provider")
+	}
+	if _, err := NewServer(&fakeAuthenticator{}, &fakeService{},
+		HealthProviderFunc(func(context.Context, RequestMetadata) (HealthSnapshot, *APIError) {
+			return HealthSnapshot{}, nil
+		}),
+		HealthProviderFunc(func(context.Context, RequestMetadata) (HealthSnapshot, *APIError) {
+			return HealthSnapshot{}, nil
+		})); err == nil {
+		t.Fatal("NewServer accepted multiple health providers")
+	}
+}
+
 func TestServerRejectsAuthorityFieldsDuplicateKeysAndOversize(t *testing.T) {
 	t.Parallel()
 	credential := make([]byte, opaqueSecretBytes)
