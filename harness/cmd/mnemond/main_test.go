@@ -4,8 +4,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/mnemon-dev/mnemon/harness/internal/node"
 )
 
 func TestRun(t *testing.T) {
@@ -69,5 +74,67 @@ func TestRun(t *testing.T) {
 		if strings.Contains(lowerHelp, forbidden) {
 			t.Errorf("help contains retired vocabulary %q", forbidden)
 		}
+	}
+}
+
+type fakeDaemonRuntime struct {
+	served bool
+	closed bool
+	err    error
+}
+
+func (daemon *fakeDaemonRuntime) Serve(ctx context.Context) error {
+	daemon.served = ctx != nil
+	return daemon.err
+}
+
+func (daemon *fakeDaemonRuntime) Close() error {
+	daemon.closed = true
+	return nil
+}
+
+func TestRunServeResolvesOneCanonicalProjectRoot(t *testing.T) {
+	project := t.TempDir()
+	resolvedProject, err := filepath.EvalSymlinks(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "project-link")
+	if err := os.Symlink(project, link); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"serve", "--project-root", link}, {"serve", "--project-root=" + link}} {
+		daemon := &fakeDaemonRuntime{}
+		var opened node.DaemonOptions
+		open := func(_ context.Context, options node.DaemonOptions) (daemonRuntime, error) {
+			opened = options
+			return daemon, nil
+		}
+		var stdout, stderr bytes.Buffer
+		if err := runWithDaemon(context.Background(), args, &stdout, &stderr, open); err != nil {
+			t.Fatalf("runWithDaemon(%v) error = %v", args, err)
+		}
+		if opened.Workspace != resolvedProject || opened.Clock != nil || !daemon.served || !daemon.closed ||
+			stdout.Len() != 0 || stderr.Len() != 0 {
+			t.Fatalf("serve state = options %#v daemon %#v stdout=%q stderr=%q",
+				opened, daemon, stdout.String(), stderr.String())
+		}
+	}
+}
+
+func TestRunServeRejectsMalformedArgumentsBeforeOpening(t *testing.T) {
+	opened := 0
+	open := func(context.Context, node.DaemonOptions) (daemonRuntime, error) {
+		opened++
+		return &fakeDaemonRuntime{}, nil
+	}
+	for _, args := range [][]string{{"serve", "--unknown"}, {"serve", "--project-root"},
+		{"serve", "--project-root="}, {"serve", "one", "two"}} {
+		if err := runWithDaemon(context.Background(), args, io.Discard, io.Discard, open); err == nil {
+			t.Fatalf("runWithDaemon(%v) succeeded", args)
+		}
+	}
+	if opened != 0 {
+		t.Fatalf("malformed serve opened %d daemons", opened)
 	}
 }
