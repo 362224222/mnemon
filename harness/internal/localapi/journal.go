@@ -19,9 +19,35 @@ import (
 
 const (
 	pendingJournalSuffix   = ".pending"
+	terminalJournalSuffix  = ".terminal"
+	presentedJournalSuffix = ".presented"
 	maxPendingJournalBytes = 1024
 	maxEntropyAttempts     = 32
 )
+
+type journalState uint8
+
+const (
+	journalStateInvalid journalState = iota
+	journalStatePending
+	journalStateTerminal
+	journalStatePresented
+)
+
+func (state journalState) suffix() string {
+	switch state {
+	case journalStatePending:
+		return pendingJournalSuffix
+	case journalStateTerminal:
+		return terminalJournalSuffix
+	case journalStatePresented:
+		return presentedJournalSuffix
+	default:
+		return ""
+	}
+}
+
+func (state journalState) valid() bool { return state.suffix() != "" }
 
 type PendingJournalOptions struct {
 	Random io.Reader
@@ -42,6 +68,8 @@ type PendingJournalStore struct {
 // is deliberately exposed only as a request-header value.
 type PendingJournal struct {
 	path              string
+	locator           [opaqueSecretBytes]byte
+	state             journalState
 	operationKey      [opaqueSecretBytes]byte
 	requestDigest     model.Digest
 	contextFileDigest model.Digest
@@ -91,9 +119,11 @@ func NewPendingJournalStore(nodeState string, supplied ...PendingJournalOptions)
 	}, nil
 }
 
-// FindOrCreate returns the unique pending operation for an exact canonical
-// request and optional context-file digest. reused is true after response loss
-// or another retry has already established the same pending operation.
+// FindOrCreate returns the unique replayable operation for an exact canonical
+// request and optional context-file digest. Pending and terminal journals keep
+// the same operation key across transport or presentation loss. A presented
+// journal proves stdout was accepted by the caller; it is removed before an
+// intentionally identical operation receives a fresh key.
 func (s *PendingJournalStore) FindOrCreate(requestDigest model.Digest,
 	contextFileDigest *model.Digest,
 ) (journal PendingJournal, reused bool, err error) {
@@ -116,20 +146,28 @@ func (s *PendingJournalStore) FindOrCreate(requestDigest model.Digest,
 		if err != nil {
 			return err
 		}
-		var match *PendingJournal
+		matchIndex := -1
 		for index := range journals {
 			candidate := journals[index]
 			if candidate.requestDigest == requestDigest && sameContextDigest(candidate, contextDigest, hasContext) {
-				if match != nil {
+				if matchIndex >= 0 {
 					return unsafeClientState("duplicate pending journals exist for one operation input")
 				}
-				copy := candidate
-				match = &copy
+				matchIndex = index
 			}
 		}
-		if match != nil {
-			journal, reused = *match, true
-			return nil
+		if matchIndex >= 0 {
+			match := journals[matchIndex]
+			if match.state != journalStatePresented {
+				journal, reused = match, true
+				return nil
+			}
+			if err := s.removeJournalLocked(match); err != nil {
+				return err
+			}
+			// Keep the removed presented identity in the in-memory exclusion set so
+			// even deterministic or faulty entropy cannot immediately reuse its key
+			// or locator for the intentionally identical next operation.
 		}
 
 		createdAt, createdAtWire, err := canonicalJournalTime(s.clock())
@@ -166,6 +204,8 @@ func (s *PendingJournalStore) FindOrCreate(requestDigest model.Digest,
 		}
 		if created.requestDigest != requestDigest || !sameContextDigest(created, contextDigest, hasContext) ||
 			created.createdAt != createdAt || subtle.ConstantTimeCompare(created.operationKey[:], key[:]) != 1 ||
+			created.state != journalStatePending ||
+			subtle.ConstantTimeCompare(created.locator[:], locator[:]) != 1 ||
 			base64.RawURLEncoding.EncodeToString(locator[:])+pendingJournalSuffix != filepath.Base(path) {
 			return unsafeClientState("published pending journal changed identity")
 		}
@@ -178,41 +218,206 @@ func (s *PendingJournalStore) FindOrCreate(requestDigest model.Digest,
 	return journal, reused, nil
 }
 
-// RemoveTerminal removes only the exact journal inode and operation identity
-// that produced a validated terminal accepted or rejected receipt.
+// MarkTerminal records that mnemond returned a validated terminal accepted or
+// rejected receipt. Repeating the transition with the returned terminal
+// handle is idempotent. A retry after rename but before the first call returned
+// can also recover the exact transitioned inode.
+func (s *PendingJournalStore) MarkTerminal(expected PendingJournal) (PendingJournal, error) {
+	return s.transitionJournal(expected, journalStatePending, journalStateTerminal)
+}
+
+// MarkPresented records that the validated terminal receipt was successfully
+// written to stdout. Presented journals are no longer replay handles: the next
+// exact FindOrCreate safely removes one before allocating a fresh operation.
+func (s *PendingJournalStore) MarkPresented(expected PendingJournal) (PendingJournal, error) {
+	return s.transitionJournal(expected, journalStateTerminal, journalStatePresented)
+}
+
+// RemoveTerminal removes only the exact terminal or presented journal inode
+// and operation identity. A pending replay handle is never removable through
+// this terminal acknowledgement path.
 func (s *PendingJournalStore) RemoveTerminal(expected PendingJournal) error {
 	if s == nil {
 		return errors.New("local API: pending journal store is unavailable")
 	}
-	if expected.identity == nil || expected.fileDigest.IsZero() || expected.requestDigest.IsZero() ||
-		expected.createdAt.IsZero() {
-		return unsafeClientState("pending journal removal lacks an expected identity")
+	if err := s.validateJournalHandle(expected); err != nil {
+		return err
+	}
+	if expected.state != journalStateTerminal && expected.state != journalStatePresented {
+		return unsafeClientState("pending journal is not terminal or presented")
 	}
 	if err := s.validateLayout(); err != nil {
 		return err
 	}
-	if _, err := parsePendingJournalPath(s.operationsDir, expected.path); err != nil {
-		return err
-	}
 	return withOwnerDirectoryLock(s.operationsDir, s.ownerUID, func() error {
-		current, err := readPendingJournalFile(s.operationsDir, expected.path, s.ownerUID)
-		if err != nil {
-			return err
+		return s.removeJournalLocked(expected)
+	})
+}
+
+func (s *PendingJournalStore) transitionJournal(expected PendingJournal,
+	from, to journalState,
+) (journal PendingJournal, err error) {
+	if s == nil {
+		return PendingJournal{}, errors.New("local API: pending journal store is unavailable")
+	}
+	if !from.valid() || !to.valid() || from == to {
+		return PendingJournal{}, unsafeClientState("pending journal transition is invalid")
+	}
+	if err := s.validateJournalHandle(expected); err != nil {
+		return PendingJournal{}, err
+	}
+	if expected.state != from && expected.state != to {
+		return PendingJournal{}, unsafeClientState("pending journal is in the wrong transition state")
+	}
+	if err := s.validateLayout(); err != nil {
+		return PendingJournal{}, err
+	}
+	err = withOwnerDirectoryLock(s.operationsDir, s.ownerUID, func() error {
+		if expected.state == to {
+			current, readErr := s.readExactJournalLocked(expected)
+			if readErr != nil {
+				return readErr
+			}
+			if syncErr := syncOwnerDirectory(s.operationsDir); syncErr != nil {
+				return fmt.Errorf("persist pending journal transition: %w", syncErr)
+			}
+			verified, verifyErr := readPendingJournalFile(s.operationsDir, expected.path, s.ownerUID)
+			if verifyErr != nil || !sameJournalExact(current, verified) {
+				return unsafeClientState("pending journal changed while confirming transition")
+			}
+			journal = verified
+			return nil
 		}
-		if !os.SameFile(current.identity, expected.identity) || current.fileDigest != expected.fileDigest ||
-			current.requestDigest != expected.requestDigest || current.createdAt != expected.createdAt ||
-			!sameContextDigest(current, expected.contextFileDigest, expected.hasContext) ||
-			subtle.ConstantTimeCompare(current.operationKey[:], expected.operationKey[:]) != 1 {
-			return unsafeClientState("pending journal identity changed before removal")
+
+		destination := journalPath(s.operationsDir, expected.locator, to)
+		if _, statErr := os.Lstat(expected.path); errors.Is(statErr, os.ErrNotExist) {
+			recovered, recoverErr := readPendingJournalFile(s.operationsDir, destination, s.ownerUID)
+			if recoverErr != nil || !sameJournalTransition(expected, recovered, to) {
+				return unsafeClientState("pending journal transition cannot be recovered")
+			}
+			if _, sourceErr := os.Lstat(expected.path); !errors.Is(sourceErr, os.ErrNotExist) {
+				return unsafeClientState("pending journal source reappeared after transition")
+			}
+			if syncErr := syncOwnerDirectory(s.operationsDir); syncErr != nil {
+				return fmt.Errorf("persist pending journal transition: %w", syncErr)
+			}
+			verified, verifyErr := readPendingJournalFile(s.operationsDir, destination, s.ownerUID)
+			if verifyErr != nil || !sameJournalExact(recovered, verified) {
+				return unsafeClientState("pending journal changed while recovering transition")
+			}
+			journal = verified
+			return nil
+		} else if statErr != nil {
+			return fmt.Errorf("%w: inspect pending journal transition source", ErrUnsafeClientState)
 		}
-		if err := os.Remove(expected.path); err != nil {
-			return fmt.Errorf("remove terminal pending journal: %w", err)
+
+		current, readErr := s.readExactJournalLocked(expected)
+		if readErr != nil {
+			return readErr
 		}
-		if err := syncOwnerDirectory(s.operationsDir); err != nil {
-			return fmt.Errorf("persist terminal pending removal: %w", err)
+		if _, destinationErr := os.Lstat(destination); destinationErr == nil {
+			return unsafeClientState("pending journal transition destination already exists")
+		} else if !errors.Is(destinationErr, os.ErrNotExist) {
+			return fmt.Errorf("%w: inspect pending journal transition destination", ErrUnsafeClientState)
 		}
+		sourceInfo, statErr := os.Lstat(expected.path)
+		if statErr != nil || !os.SameFile(current.identity, sourceInfo) ||
+			validateOwnerRegularFile(sourceInfo, s.ownerUID) != nil {
+			return unsafeClientState("pending journal changed before transition")
+		}
+		if renameErr := os.Rename(expected.path, destination); renameErr != nil {
+			return fmt.Errorf("transition pending journal: %w", renameErr)
+		}
+		transitioned, readErr := readPendingJournalFile(s.operationsDir, destination, s.ownerUID)
+		if readErr != nil || !sameJournalTransition(current, transitioned, to) {
+			return unsafeClientState("pending journal changed during transition")
+		}
+		if _, sourceErr := os.Lstat(expected.path); !errors.Is(sourceErr, os.ErrNotExist) {
+			return unsafeClientState("pending journal source remained after transition")
+		}
+		if syncErr := syncOwnerDirectory(s.operationsDir); syncErr != nil {
+			return fmt.Errorf("persist pending journal transition: %w", syncErr)
+		}
+		verified, verifyErr := readPendingJournalFile(s.operationsDir, destination, s.ownerUID)
+		if verifyErr != nil || !sameJournalExact(transitioned, verified) {
+			return unsafeClientState("pending journal changed after transition")
+		}
+		journal = verified
 		return nil
 	})
+	if err != nil {
+		return PendingJournal{}, err
+	}
+	return journal, nil
+}
+
+func (s *PendingJournalStore) readExactJournalLocked(expected PendingJournal) (PendingJournal, error) {
+	current, err := readPendingJournalFile(s.operationsDir, expected.path, s.ownerUID)
+	if err != nil {
+		return PendingJournal{}, err
+	}
+	if !sameJournalExact(current, expected) {
+		return PendingJournal{}, unsafeClientState("pending journal identity changed")
+	}
+	return current, nil
+}
+
+func (s *PendingJournalStore) removeJournalLocked(expected PendingJournal) error {
+	if err := s.validateJournalHandle(expected); err != nil {
+		return err
+	}
+	if expected.state != journalStateTerminal && expected.state != journalStatePresented {
+		return unsafeClientState("pending journal is not terminal or presented")
+	}
+	current, err := s.readExactJournalLocked(expected)
+	if err != nil {
+		return err
+	}
+	before, err := os.Lstat(expected.path)
+	if err != nil || !os.SameFile(current.identity, before) ||
+		validateOwnerRegularFile(before, s.ownerUID) != nil {
+		return unsafeClientState("pending journal changed before removal")
+	}
+	if err := os.Remove(expected.path); err != nil {
+		return fmt.Errorf("remove terminal pending journal: %w", err)
+	}
+	if _, err := os.Lstat(expected.path); !errors.Is(err, os.ErrNotExist) {
+		return unsafeClientState("pending journal path remained after removal")
+	}
+	if err := syncOwnerDirectory(s.operationsDir); err != nil {
+		return fmt.Errorf("persist terminal pending removal: %w", err)
+	}
+	return nil
+}
+
+func (s *PendingJournalStore) validateJournalHandle(journal PendingJournal) error {
+	if journal.identity == nil || journal.fileDigest.IsZero() || journal.requestDigest.IsZero() ||
+		journal.createdAt.IsZero() || !journal.state.valid() {
+		return unsafeClientState("pending journal handle lacks a verified identity")
+	}
+	if s == nil || s.operationsDir == "" {
+		return unsafeClientState("pending journal store identity is unavailable")
+	}
+	locator, state, err := parsePendingJournalStatePath(s.operationsDir, journal.path)
+	if err != nil || state != journal.state ||
+		subtle.ConstantTimeCompare(locator[:], journal.locator[:]) != 1 {
+		return unsafeClientState("pending journal handle path differs from its identity")
+	}
+	return nil
+}
+
+func sameJournalExact(left, right PendingJournal) bool {
+	return left.path == right.path && left.state == right.state &&
+		sameJournalTransition(left, right, left.state)
+}
+
+func sameJournalTransition(expected, actual PendingJournal, state journalState) bool {
+	return actual.state == state && expected.identity != nil && actual.identity != nil &&
+		os.SameFile(expected.identity, actual.identity) && expected.fileDigest == actual.fileDigest &&
+		expected.requestDigest == actual.requestDigest && expected.createdAt == actual.createdAt &&
+		sameContextDigest(actual, expected.contextFileDigest, expected.hasContext) &&
+		subtle.ConstantTimeCompare(expected.locator[:], actual.locator[:]) == 1 &&
+		subtle.ConstantTimeCompare(expected.operationKey[:], actual.operationKey[:]) == 1
 }
 
 func (s *PendingJournalStore) validateLayout() error {
@@ -242,7 +447,11 @@ func (s *PendingJournalStore) readAllLocked() ([]PendingJournal, error) {
 	}
 	result := make([]PendingJournal, 0, len(entries))
 	for _, entry := range entries {
-		if !strings.HasSuffix(entry.Name(), pendingJournalSuffix) {
+		_, recognized, classifyErr := classifyJournalFilename(entry.Name())
+		if classifyErr != nil {
+			return nil, classifyErr
+		}
+		if !recognized {
 			continue
 		}
 		path := filepath.Join(s.operationsDir, entry.Name())
@@ -254,6 +463,9 @@ func (s *PendingJournalStore) readAllLocked() ([]PendingJournal, error) {
 			if subtle.ConstantTimeCompare(result[index].operationKey[:], journal.operationKey[:]) == 1 {
 				return nil, unsafeClientState("multiple pending journals reuse one operation key")
 			}
+			if subtle.ConstantTimeCompare(result[index].locator[:], journal.locator[:]) == 1 {
+				return nil, unsafeClientState("multiple pending journal states reuse one locator")
+			}
 		}
 		result = append(result, journal)
 	}
@@ -261,7 +473,7 @@ func (s *PendingJournalStore) readAllLocked() ([]PendingJournal, error) {
 }
 
 func readPendingJournalFile(operationsDir, path string, ownerUID uint32) (PendingJournal, error) {
-	locator, err := parsePendingJournalPath(operationsDir, path)
+	locator, state, err := parsePendingJournalStatePath(operationsDir, path)
 	if err != nil {
 		return PendingJournal{}, err
 	}
@@ -314,6 +526,8 @@ func readPendingJournalFile(operationsDir, path string, ownerUID uint32) (Pendin
 	}
 	result := PendingJournal{
 		path:              path,
+		locator:           locator,
+		state:             state,
 		requestDigest:     requestDigest,
 		contextFileDigest: contextDigest,
 		hasContext:        hasContext,
@@ -350,35 +564,103 @@ func (s *PendingJournalStore) drawIndependentIdentityLocked(existing []PendingJo
 		if subtle.ConstantTimeCompare(key[:], locator[:]) == 1 {
 			continue
 		}
-		path = filepath.Join(s.operationsDir,
-			base64.RawURLEncoding.EncodeToString(locator[:])+pendingJournalSuffix)
-		if _, statErr := os.Lstat(path); errors.Is(statErr, os.ErrNotExist) {
+		duplicateLocator := false
+		for index := range existing {
+			if subtle.ConstantTimeCompare(existing[index].locator[:], locator[:]) == 1 {
+				duplicateLocator = true
+				break
+			}
+		}
+		if duplicateLocator {
+			continue
+		}
+		available := true
+		for _, state := range []journalState{journalStatePending, journalStateTerminal, journalStatePresented} {
+			candidate := journalPath(s.operationsDir, locator, state)
+			if _, statErr := os.Lstat(candidate); statErr == nil {
+				available = false
+				break
+			} else if !errors.Is(statErr, os.ErrNotExist) {
+				return key, locator, "", fmt.Errorf("%w: inspect pending journal destination", ErrUnsafeClientState)
+			}
+		}
+		if available {
+			path = journalPath(s.operationsDir, locator, journalStatePending)
 			return key, locator, path, nil
-		} else if statErr != nil {
-			return key, locator, "", fmt.Errorf("%w: inspect pending journal destination", ErrUnsafeClientState)
 		}
 	}
 	return key, locator, "", errors.New("local API: cannot allocate an independent pending operation identity")
 }
 
 func parsePendingJournalPath(operationsDir, path string) ([opaqueSecretBytes]byte, error) {
+	locator, state, err := parsePendingJournalStatePath(operationsDir, path)
+	if err == nil && state == journalStatePresented {
+		return [opaqueSecretBytes]byte{},
+			unsafeClientState("presented journal is not an operation replay handle")
+	}
+	return locator, err
+}
+
+func parsePendingJournalStatePath(operationsDir, path string) ([opaqueSecretBytes]byte, journalState, error) {
 	var locator [opaqueSecretBytes]byte
 	if path == "" || !filepath.IsAbs(path) || filepath.Clean(path) != path || filepath.Dir(path) != operationsDir {
-		return locator, unsafeClientState("pending journal path escaped its operations directory")
+		return locator, journalStateInvalid,
+			unsafeClientState("pending journal path escaped its operations directory")
 	}
 	base := filepath.Base(path)
-	if !strings.HasSuffix(base, pendingJournalSuffix) {
-		return locator, unsafeClientState("pending journal path has the wrong suffix")
+	state, recognized, err := classifyJournalFilename(base)
+	if err != nil {
+		return locator, journalStateInvalid, err
 	}
-	encoded := strings.TrimSuffix(base, pendingJournalSuffix)
+	if !recognized {
+		return locator, journalStateInvalid, unsafeClientState("pending journal path has the wrong suffix")
+	}
+	encoded := strings.TrimSuffix(base, state.suffix())
 	raw, err := decodeOpaqueSecret(encoded)
 	if err != nil || base64.RawURLEncoding.EncodeToString(raw) != encoded {
 		clear(raw)
-		return locator, unsafeClientState("pending journal locator is not canonical")
+		return locator, journalStateInvalid,
+			unsafeClientState("pending journal locator is not canonical")
 	}
 	copy(locator[:], raw)
 	clear(raw)
-	return locator, nil
+	return locator, state, nil
+}
+
+func classifyJournalFilename(base string) (journalState, bool, error) {
+	states := []journalState{journalStatePending, journalStateTerminal, journalStatePresented}
+	for _, state := range states {
+		if strings.HasSuffix(base, state.suffix()) {
+			return state, true, nil
+		}
+	}
+	for _, state := range states {
+		if len(base) >= len(state.suffix()) &&
+			strings.EqualFold(base[len(base)-len(state.suffix()):], state.suffix()) {
+			return journalStateInvalid, false,
+				unsafeClientState("pending journal state suffix is not canonical")
+		}
+	}
+	separator := strings.IndexByte(base, '.')
+	if separator != 0 {
+		encoded := base
+		if separator > 0 {
+			encoded = base[:separator]
+		}
+		raw, err := decodeOpaqueSecret(encoded)
+		canonical := err == nil && base64.RawURLEncoding.EncodeToString(raw) == encoded
+		clear(raw)
+		if canonical {
+			return journalStateInvalid, false,
+				unsafeClientState("pending journal path has an unknown state suffix")
+		}
+	}
+	return journalStateInvalid, false, nil
+}
+
+func journalPath(operationsDir string, locator [opaqueSecretBytes]byte, state journalState) string {
+	return filepath.Join(operationsDir,
+		base64.RawURLEncoding.EncodeToString(locator[:])+state.suffix())
 }
 
 func validateOptionalContextDigest(value *model.Digest) (model.Digest, bool, error) {
