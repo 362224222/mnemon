@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"strings"
 	"testing"
@@ -20,6 +21,21 @@ type artifactResolverCheckpointer struct {
 	paths       []string
 }
 
+type artifactResolverViewValidator struct {
+	err     error
+	calls   int
+	current model.CurrentReadReceipt
+	ref     model.CurrentArtifactRef
+}
+
+func (stub *artifactResolverViewValidator) Validate(_ context.Context,
+	current model.CurrentReadReceipt, ref model.CurrentArtifactRef,
+) error {
+	stub.calls++
+	stub.current, stub.ref = current, ref
+	return stub.err
+}
+
 func (stub *artifactResolverCheckpointer) Checkpoint(_ context.Context,
 	reservation store.ManagedOperationReservation, paths []string,
 ) (ArtifactCaptureResult, *localapi.APIError) {
@@ -34,7 +50,7 @@ func TestArtifactResolverCapturesOrdinaryPathsAsCanonicalProducedRefs(t *testing
 	operation := artifactResolverOperation(t, "produced", model.OperationTeamworkOffer, nil)
 	roots := artifactResolverRoots("produced-a", "produced-b")
 	stub := &artifactResolverCheckpointer{result: artifactResolverCaptureResult(t, roots, false)}
-	resolver, err := NewArtifactResolver(stub)
+	resolver, err := NewArtifactResolver(stub, &artifactResolverViewValidator{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +82,7 @@ func TestArtifactResolverCapturesOrdinaryPathsAsCanonicalProducedRefs(t *testing
 func TestArtifactResolverZeroPathsStillCreatesEmptyDurableCheckpoint(t *testing.T) {
 	operation := artifactResolverOperation(t, "empty", model.OperationTeamworkOffer, nil)
 	stub := &artifactResolverCheckpointer{result: artifactResolverCaptureResult(t, nil, false)}
-	resolver, _ := NewArtifactResolver(stub)
+	resolver, _ := NewArtifactResolver(stub, &artifactResolverViewValidator{})
 	result, apiErr := resolver.Coordinate(context.Background(), ArtifactCoordinationSpec{
 		Reservation: store.ManagedOperationReservation{Operation: operation, Acquired: true},
 		Action:      operation.Kind(), Paths: nil,
@@ -78,6 +94,48 @@ func TestArtifactResolverZeroPathsStillCreatesEmptyDurableCheckpoint(t *testing.
 	}
 }
 
+func TestArtifactResolverMapsExactCurrentViewsAsReferencedWithoutRecapture(t *testing.T) {
+	operation := artifactResolverOperation(t, "referenced", model.OperationTeamworkDeliver, nil)
+	current, currentRef := artifactResolverCurrent(t, operation)
+	viewPath, _ := currentRef.ViewPath()
+	producedRoots := artifactResolverRoots("new-output")
+	capture := &artifactResolverCheckpointer{result: artifactResolverCaptureResult(t, producedRoots, false)}
+	views := &artifactResolverViewValidator{}
+	resolver, err := NewArtifactResolver(capture, views)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, apiErr := resolver.Coordinate(context.Background(), ArtifactCoordinationSpec{
+		Reservation: store.ManagedOperationReservation{Operation: operation, Acquired: true},
+		Action:      operation.Kind(), Paths: []string{viewPath, "new-output"}, Current: current, HasCurrent: true,
+	})
+	if apiErr != nil {
+		t.Fatal(apiErr)
+	}
+	if views.calls != 1 || views.current.CanonicalJSON().String() != current.CanonicalJSON().String() ||
+		views.ref.RootDigest() != currentRef.RootDigest() || capture.calls != 1 ||
+		strings.Join(capture.paths, ",") != "new-output" || len(result.References) != 2 {
+		t.Fatalf("referenced coordination = views %#v capture %#v refs %#v", views, capture, result.References)
+	}
+	roles := make(map[model.Digest]model.ArtifactRole)
+	for _, ref := range result.References {
+		roles[ref.RootDigest()] = ref.Role()
+	}
+	if roles[currentRef.RootDigest()] != model.ArtifactReferenced ||
+		roles[producedRoots[0].RootDigest] != model.ArtifactProduced {
+		t.Fatalf("resolved Artifact roles = %#v", roles)
+	}
+
+	views.err = errors.New("injected view mode drift")
+	capture.calls = 0
+	if _, apiErr := resolver.Coordinate(context.Background(), ArtifactCoordinationSpec{
+		Reservation: store.ManagedOperationReservation{Operation: operation, Acquired: true},
+		Action:      operation.Kind(), Paths: []string{viewPath}, Current: current, HasCurrent: true,
+	}); apiErr == nil || apiErr.Code != localapi.CodeArtifactInvalid || capture.calls != 0 {
+		t.Fatalf("drifted view = %#v capture calls=%d", apiErr, capture.calls)
+	}
+}
+
 func TestArtifactResolverDurableReplayDoesNotInspectMissingWorkspacePath(t *testing.T) {
 	checkpointRoots := artifactResolverRoots("replay")
 	checkpoint, err := buildArtifactCaptureCheckpoint(checkpointRoots)
@@ -86,7 +144,7 @@ func TestArtifactResolverDurableReplayDoesNotInspectMissingWorkspacePath(t *test
 	}
 	operation := artifactResolverOperation(t, "replay", model.OperationTeamworkOffer, &checkpoint)
 	stub := &artifactResolverCheckpointer{result: artifactResolverCaptureResult(t, checkpointRoots, true)}
-	resolver, _ := NewArtifactResolver(stub)
+	resolver, _ := NewArtifactResolver(stub, &artifactResolverViewValidator{})
 	result, apiErr := resolver.Coordinate(context.Background(), ArtifactCoordinationSpec{
 		Reservation: store.ManagedOperationReservation{Operation: operation, Replayed: true, Acquired: true},
 		Action:      operation.Kind(), Paths: []string{"workspace-file-that-no-longer-exists"},
@@ -109,16 +167,16 @@ func TestArtifactResolverRejectsInternalReadonlyAndEscapingPathsBeforeCapture(t 
 	for _, requested := range tests {
 		t.Run(strings.ReplaceAll(requested, "/", "_"), func(t *testing.T) {
 			stub := &artifactResolverCheckpointer{}
-			resolver, _ := NewArtifactResolver(stub)
+			resolver, _ := NewArtifactResolver(stub, &artifactResolverViewValidator{})
 			_, apiErr := resolver.Coordinate(context.Background(), ArtifactCoordinationSpec{
 				Reservation: store.ManagedOperationReservation{Operation: operation, Acquired: true},
-				Action:      operation.Kind(), Paths: []string{requested}, HasCurrent: true,
+				Action:      operation.Kind(), Paths: []string{requested},
 			})
 			if apiErr == nil || apiErr.Code != localapi.CodeArtifactInvalid || stub.calls != 0 ||
 				apiErr.OperationID == nil || *apiErr.OperationID != operation.ID().String() {
 				t.Fatalf("path %q resolution = %#v, capture calls=%d", requested, apiErr, stub.calls)
 			}
-			if requested == ".mnemon/harness" && !strings.Contains(apiErr.Message, "view mapping") {
+			if requested == ".mnemon/harness" && !strings.Contains(apiErr.Message, "current receipt") {
 				t.Fatalf("readonly path diagnostic = %q", apiErr.Message)
 			}
 		})
@@ -129,7 +187,7 @@ func TestArtifactResolverDoesNotOvermatchOrdinaryNearInternalPath(t *testing.T) 
 	operation := artifactResolverOperation(t, "near-internal", model.OperationTeamworkOffer, nil)
 	roots := artifactResolverRoots("near-internal")
 	stub := &artifactResolverCheckpointer{result: artifactResolverCaptureResult(t, roots, false)}
-	resolver, _ := NewArtifactResolver(stub)
+	resolver, _ := NewArtifactResolver(stub, &artifactResolverViewValidator{})
 	result, apiErr := resolver.Coordinate(context.Background(), ArtifactCoordinationSpec{
 		Reservation: store.ManagedOperationReservation{Operation: operation, Acquired: true},
 		Action:      operation.Kind(), Paths: []string{".mnemon/harness-output/result.txt"},
@@ -147,7 +205,7 @@ func TestArtifactResolverPropagatesStableCaptureErrorsAndRejectsDrift(t *testing
 	pending := localapi.NewAPIError(localapi.CodeOperationPending, "capture remains pending")
 	pending.OperationID = &operationID
 	stub := &artifactResolverCheckpointer{apiErr: pending}
-	resolver, _ := NewArtifactResolver(stub)
+	resolver, _ := NewArtifactResolver(stub, &artifactResolverViewValidator{})
 	_, apiErr := resolver.Coordinate(context.Background(), ArtifactCoordinationSpec{
 		Reservation: store.ManagedOperationReservation{Operation: operation, Acquired: true},
 		Action:      operation.Kind(), Paths: []string{"result"},
@@ -158,7 +216,7 @@ func TestArtifactResolverPropagatesStableCaptureErrorsAndRejectsDrift(t *testing
 
 	t.Run("action mismatch", func(t *testing.T) {
 		mismatch := &artifactResolverCheckpointer{}
-		resolver, _ := NewArtifactResolver(mismatch)
+		resolver, _ := NewArtifactResolver(mismatch, &artifactResolverViewValidator{})
 		_, apiErr := resolver.Coordinate(context.Background(), ArtifactCoordinationSpec{
 			Reservation: store.ManagedOperationReservation{Operation: operation, Acquired: true},
 			Action:      model.OperationTeamworkDeliver,
@@ -171,7 +229,7 @@ func TestArtifactResolverPropagatesStableCaptureErrorsAndRejectsDrift(t *testing
 	t.Run("forbidden artifacts", func(t *testing.T) {
 		closeOperation := artifactResolverOperation(t, "forbidden", model.OperationTeamworkClose, nil)
 		forbidden := &artifactResolverCheckpointer{}
-		resolver, _ := NewArtifactResolver(forbidden)
+		resolver, _ := NewArtifactResolver(forbidden, &artifactResolverViewValidator{})
 		_, apiErr := resolver.Coordinate(context.Background(), ArtifactCoordinationSpec{
 			Reservation: store.ManagedOperationReservation{Operation: closeOperation, Acquired: true},
 			Action:      closeOperation.Kind(), Paths: []string{"result"},
@@ -187,7 +245,7 @@ func TestArtifactResolverPropagatesStableCaptureErrorsAndRejectsDrift(t *testing
 		drifted := &artifactResolverCheckpointer{result: ArtifactCaptureResult{
 			Checkpoint: artifactResolverCheckpoint(t, roots), Roots: drift,
 		}}
-		resolver, _ := NewArtifactResolver(drifted)
+		resolver, _ := NewArtifactResolver(drifted, &artifactResolverViewValidator{})
 		_, apiErr := resolver.Coordinate(context.Background(), ArtifactCoordinationSpec{
 			Reservation: store.ManagedOperationReservation{Operation: operation, Acquired: true},
 			Action:      operation.Kind(), Paths: []string{"result"},
@@ -253,4 +311,62 @@ func artifactResolverOperation(t *testing.T, suffix string, kind model.Operation
 	return operation
 }
 
+func artifactResolverCurrent(t *testing.T,
+	operation model.Operation,
+) (model.CurrentReadReceipt, model.CurrentArtifactRef) {
+	t.Helper()
+	root := model.Sum([]byte("current-resolver-root"))
+	viewPath := ".mnemon/harness/node/views/" + operation.AgentRunID().String() + "/0/input.txt"
+	view, err := model.NewCurrentArtifactView(root, viewPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	semantic, _ := model.NewCurrentArtifactRef(root)
+	home, _ := model.ParsePeerID("peer-resolver-home")
+	origin, _ := model.ParsePeerID("peer-resolver-origin")
+	epoch, _ := model.ParseOriginEpoch("epoch-resolver-origin")
+	eventID, _ := model.ParseEventID("event-resolver-current")
+	key, _ := model.NewEventKey(origin, epoch, eventID)
+	workID, _ := model.ParseWorkID("work-resolver-current")
+	workRef, _ := model.NewWorkRef(home, workID)
+	acceptedAt := time.Date(2026, 7, 17, 0, 0, 0, 0, time.UTC)
+	deadline := acceptedAt.Add(24 * time.Hour)
+	payload, _ := model.NewJSON([]byte(`{"content":"review","deadline":"2026-07-18T00:00:00Z","iteration":1,"work_version":1}`))
+	event, err := model.NewCurrentEvent(model.CurrentEventSpec{Key: key,
+		Digest: model.Sum([]byte("event-resolver-current")), Type: model.EventReviewOffered,
+		WorkRef: workRef, Summary: "Review", Payload: payload,
+		ArtifactRefs: []model.CurrentArtifactRef{semantic}, AcceptedAt: acceptedAt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	brief, err := model.NewCurrentBrief(model.CurrentBriefSpec{Content: "review",
+		DeadlineUnixNano: deadline.UnixNano(), ArtifactRefs: []model.CurrentArtifactRef{semantic}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, _ := model.NewJSON([]byte(`{"content":"review"}`))
+	work, err := model.NewCurrentWork(model.CurrentWorkSpec{Ref: workRef, Version: 1, Iteration: 1,
+		DeadlineUnixNano: deadline.UnixNano(), State: model.WorkOffered, StateData: state,
+		LocalRole: model.CurrentReviewer, Brief: brief})
+	if err != nil {
+		t.Fatal(err)
+	}
+	projection, err := model.NewCurrentProjection(model.CurrentProjectionSpec{SourceEvent: event,
+		ActionWork: work, AllowedActions: []model.OperationKind{model.OperationTeamworkDeliver},
+		ArtifactViews: []model.CurrentArtifactRef{view}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handlingID, _ := model.ParseHandlingID("handling-resolver-current")
+	receipt, err := model.NewCurrentReadReceipt(model.CurrentReadReceiptSpec{RunID: operation.AgentRunID(),
+		ProfileID: model.TeamworkProfileID(), HandlingID: handlingID, HandlingAttempt: 1,
+		Projection: projection, ReadAt: acceptedAt.Add(time.Second)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return receipt, view
+}
+
 var _ ArtifactCaptureCheckpointer = (*artifactResolverCheckpointer)(nil)
+
+var _ ArtifactViewValidator = (*artifactResolverViewValidator)(nil)

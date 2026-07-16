@@ -21,26 +21,32 @@ type ArtifactCaptureCheckpointer interface {
 		ArtifactCaptureResult, *localapi.APIError)
 }
 
-// ArtifactResolver implements the executor's ArtifactCoordinator for the T0
-// produced-only path. Readonly Artifact views cannot be inferred from a path:
-// until current carries a durable path/root mapping, every managed internal
-// path is rejected rather than silently recaptured as produced bytes.
-type ArtifactResolver struct {
-	capture ArtifactCaptureCheckpointer
+// ArtifactViewValidator checks only the exact receipt-bound filesystem view.
+// It must not derive authority from the materialized bytes; durable root,
+// provenance, and pin checks remain in the Store acceptance transaction.
+type ArtifactViewValidator interface {
+	Validate(context.Context, model.CurrentReadReceipt, model.CurrentArtifactRef) error
 }
 
-func NewArtifactResolver(capture ArtifactCaptureCheckpointer) (*ArtifactResolver, error) {
-	if capture == nil {
-		return nil, errors.New("Artifact resolver requires capture coordinator")
+type ArtifactResolver struct {
+	capture ArtifactCaptureCheckpointer
+	views   ArtifactViewValidator
+}
+
+func NewArtifactResolver(capture ArtifactCaptureCheckpointer,
+	views ArtifactViewValidator,
+) (*ArtifactResolver, error) {
+	if capture == nil || views == nil {
+		return nil, errors.New("Artifact resolver requires capture coordinator and view validator")
 	}
-	return &ArtifactResolver{capture: capture}, nil
+	return &ArtifactResolver{capture: capture, views: views}, nil
 }
 
 func (resolver *ArtifactResolver) Coordinate(ctx context.Context,
 	spec ArtifactCoordinationSpec,
 ) (ArtifactCoordinationResult, *localapi.APIError) {
 	operation := spec.Reservation.Operation
-	if resolver == nil || resolver.capture == nil || ctx == nil || operation.ID().IsZero() {
+	if resolver == nil || resolver.capture == nil || resolver.views == nil || ctx == nil || operation.ID().IsZero() {
 		return ArtifactCoordinationResult{}, captureAPIError(localapi.CodeInternal,
 			"Artifact resolver input is invalid", operation.ID())
 	}
@@ -55,47 +61,89 @@ func (resolver *ArtifactResolver) Coordinate(ctx context.Context,
 			"this Teamwork action forbids Artifacts", operation.ID())
 	}
 
-	paths := make([]string, len(spec.Paths))
-	for index, requested := range spec.Paths {
+	viewAuthority := make(map[string]model.CurrentArtifactRef)
+	if !spec.HasCurrent && !spec.Current.RunID().IsZero() {
+		return ArtifactCoordinationResult{}, captureAPIError(localapi.CodeContextStale,
+			"unexpected managed current Artifact authority", operation.ID())
+	}
+	if spec.HasCurrent {
+		if spec.Current.RunID() != operation.AgentRunID() ||
+			!spec.Current.Projection().HasMaterializedArtifactViews() {
+			return ArtifactCoordinationResult{}, captureAPIError(localapi.CodeContextStale,
+				"managed current Artifact authority is stale", operation.ID())
+		}
+		for _, ref := range spec.Current.ArtifactRefs() {
+			path, ok := ref.ViewPath()
+			if !ok {
+				return ArtifactCoordinationResult{}, captureAPIError(localapi.CodeContextStale,
+					"managed current Artifact authority is incomplete", operation.ID())
+			}
+			if _, duplicate := viewAuthority[path]; duplicate {
+				return ArtifactCoordinationResult{}, captureAPIError(localapi.CodeContextStale,
+					"managed current Artifact paths are ambiguous", operation.ID())
+			}
+			viewAuthority[path] = ref
+		}
+	}
+
+	producedPaths := make([]string, 0, len(spec.Paths))
+	referenced := make([]model.ArtifactRef, 0, len(spec.Paths))
+	for _, requested := range spec.Paths {
 		normalized, internal, err := normalizeProducedArtifactPath(requested)
+		if err == nil {
+			if currentRef, ok := viewAuthority[normalized]; ok {
+				if err := resolver.views.Validate(ctx, spec.Current, currentRef); err != nil {
+					return ArtifactCoordinationResult{}, captureAPIError(localapi.CodeArtifactInvalid,
+						"readonly Artifact view is unavailable or changed", operation.ID())
+				}
+				ref, err := model.NewArtifactRef(currentRef.RootDigest(), model.ArtifactReferenced)
+				if err != nil {
+					return ArtifactCoordinationResult{}, captureAPIError(localapi.CodeInternal,
+						"current Artifact root is invalid", operation.ID())
+				}
+				referenced = append(referenced, ref)
+				continue
+			}
+		}
 		if internal {
 			return ArtifactCoordinationResult{}, captureAPIError(localapi.CodeArtifactInvalid,
-				"readonly Artifact path has no durable current view mapping", operation.ID())
+				"readonly Artifact path is not bound by this current receipt", operation.ID())
 		}
 		if err != nil {
 			return ArtifactCoordinationResult{}, captureAPIError(localapi.CodeArtifactInvalid,
 				"Artifact path is outside produced workspace scope", operation.ID())
 		}
-		paths[index] = normalized
+		producedPaths = append(producedPaths, normalized)
 	}
 
-	captured, apiErr := resolver.capture.Checkpoint(ctx, spec.Reservation, paths)
+	captured, apiErr := resolver.capture.Checkpoint(ctx, spec.Reservation, producedPaths)
 	if apiErr != nil {
 		return ArtifactCoordinationResult{}, apiErr
 	}
 	checkpointRoots, err := parseArtifactCaptureCheckpoint(captured.Checkpoint)
 	if err != nil || !sameArtifactCaptureRoots(checkpointRoots, captured.Roots) ||
-		len(captured.Roots) != len(paths) {
+		len(captured.Roots) != len(producedPaths) {
 		return ArtifactCoordinationResult{}, captureAPIError(localapi.CodeInternal,
 			"Artifact capture result differs from durable checkpoint", operation.ID())
 	}
 
-	refs := make([]model.ArtifactRef, len(captured.Roots))
-	for index, root := range captured.Roots {
+	refs := make([]model.ArtifactRef, 0, len(captured.Roots)+len(referenced))
+	for _, root := range captured.Roots {
 		ref, err := model.NewArtifactRef(root.RootDigest, model.ArtifactProduced)
 		if err != nil {
 			return ArtifactCoordinationResult{}, captureAPIError(localapi.CodeInternal,
 				"Artifact capture returned an invalid root", operation.ID())
 		}
-		refs[index] = ref
+		refs = append(refs, ref)
 	}
+	refs = append(refs, referenced...)
 	sort.Slice(refs, func(left, right int) bool {
 		return refs[left].RootDigest().String() < refs[right].RootDigest().String()
 	})
 	for index := 1; index < len(refs); index++ {
 		if refs[index-1].RootDigest() == refs[index].RootDigest() {
-			return ArtifactCoordinationResult{}, captureAPIError(localapi.CodeInternal,
-				"Artifact capture returned duplicate roots", operation.ID())
+			return ArtifactCoordinationResult{}, captureAPIError(localapi.CodeArtifactInvalid,
+				"Artifact paths resolve to a duplicate or ambiguous root", operation.ID())
 		}
 	}
 	return ArtifactCoordinationResult{References: refs}, nil
@@ -125,11 +173,15 @@ func normalizeProducedArtifactPath(value string) (normalized string, internal bo
 	}
 	// A requested directory may not be an ancestor of Node state: recursively
 	// capturing "." or ".mnemon" would otherwise ingest credentials and CAS.
-	if len(components) == 0 || strings.EqualFold(components[0], ".mnemon") &&
-		(len(components) == 1 || strings.EqualFold(components[1], "harness")) {
+	if len(components) == 0 {
 		return "", true, nil
 	}
-	return strings.Join(components, "/"), false, nil
+	normalized = strings.Join(components, "/")
+	if strings.EqualFold(components[0], ".mnemon") &&
+		(len(components) == 1 || strings.EqualFold(components[1], "harness")) {
+		return normalized, true, nil
+	}
+	return normalized, false, nil
 }
 
 func sameArtifactCaptureRoots(left, right []ArtifactCaptureRoot) bool {
