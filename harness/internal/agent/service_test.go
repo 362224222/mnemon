@@ -45,11 +45,31 @@ func (random *countingServiceRandom) Read(_ []byte) (int, error) {
 type fakeControlStore struct {
 	probe    func(context.Context, store.AgentClaimProbeSpec) (store.AgentClaimStatus, error)
 	claim    func(context.Context, store.AgentClaimSpec) (store.AgentClaimResult, error)
+	peek     func(context.Context, store.AgentAttachmentSpec) error
+	consume  func(context.Context, store.AgentAttachmentSpec) (store.AgentClaimResult, error)
 	plan     func(context.Context, store.AgentCurrentReadSpec) (store.AgentCurrentReadPlan, error)
 	current  func(context.Context, store.AgentCurrentReadSpec) (store.AgentCurrentReadResult, error)
 	initiate func(context.Context, model.Profile, time.Time) (store.AgentInitiationContext, error)
 	reserve  func(context.Context, store.ManagedOperationSpec) (store.ManagedOperationReservation, error)
 	resolve  func(context.Context, store.ManagedResolutionSpec) (store.ManagedResolutionResult, error)
+}
+
+func (fake *fakeControlStore) PeekAgentRunAttachment(ctx context.Context,
+	spec store.AgentAttachmentSpec,
+) error {
+	if fake.peek == nil {
+		return errors.New("unexpected PeekAgentRunAttachment")
+	}
+	return fake.peek(ctx, spec)
+}
+
+func (fake *fakeControlStore) ConsumeAgentRunAttachment(ctx context.Context,
+	spec store.AgentAttachmentSpec,
+) (store.AgentClaimResult, error) {
+	if fake.consume == nil {
+		return store.AgentClaimResult{}, errors.New("unexpected ConsumeAgentRunAttachment")
+	}
+	return fake.consume(ctx, spec)
 }
 
 func (fake *fakeControlStore) PlanAgentCurrentRead(ctx context.Context,
@@ -343,10 +363,82 @@ func TestServiceHookAndCurrentKeepClaimCapabilityPrivate(t *testing.T) {
 		readSpec.ArtifactViews == nil || len(views.plans) != 1 {
 		t.Fatalf("current read spec = %#v", readSpec)
 	}
-	metadata.HasRunAttachment = true
-	if _, apiErr := service.HookCheck(context.Background(), metadata, localapi.HookCheckRequest{}); apiErr == nil ||
-		apiErr.Code != localapi.CodeContextInvalid {
-		t.Fatalf("attached HookCheck error = %v", apiErr)
+}
+
+func TestServiceAttachmentHookPeeksAndCurrentConsumesExactPreclaim(t *testing.T) {
+	at := time.Date(2026, 7, 16, 15, 0, 0, 0, time.UTC)
+	profile := serviceTestProfile(t, at)
+	tokenHash := model.Sum([]byte("service-attachment"))
+	runID, _ := model.ParseRunID("run-service-attachment")
+	handlingID, _ := model.ParseHandlingID("handling-service-attachment")
+	lease := at.Add(5 * time.Minute)
+	projection := serviceTestProjection(t, at)
+	makeRun := func(attached bool) model.AgentRun {
+		var attachedAt *time.Time
+		status := model.AgentRunStarting
+		if attached {
+			attachedAt, status = &at, model.AgentRunRunning
+		}
+		run, err := model.NewAgentRun(model.AgentRunSpec{ID: runID, ProfileID: profile.ID(),
+			HandlingID: &handlingID, Cause: mustServiceJSON(t, `{"kind":"wake"}`), HandlingAttempt: 1,
+			ClaimFenceHash: &tokenHash, LeaseUntil: &lease, AttachmentTokenHash: &tokenHash,
+			AttachmentExpiresAt: &lease, AttachedAt: attachedAt, Launcher: "mnemond-wake",
+			Runtime: profile.Runtime(), LauncherDiagnostic: mustServiceJSON(t, `{}`),
+			RuntimeIDs: mustServiceJSON(t, `{}`), Status: status, StartedAt: at})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return run
+	}
+	peekCalls, consumeCalls := 0, 0
+	fake := &fakeControlStore{
+		peek: func(_ context.Context, spec store.AgentAttachmentSpec) error {
+			peekCalls++
+			if spec.ProfileID != profile.ID() || spec.ExpectedAssetRevision != "asset-service" ||
+				spec.AttachmentTokenHash != tokenHash || !spec.At.Equal(at) {
+				t.Fatalf("peek attachment spec = %#v", spec)
+			}
+			return nil
+		},
+		consume: func(_ context.Context, spec store.AgentAttachmentSpec) (store.AgentClaimResult, error) {
+			consumeCalls++
+			if spec.AttachmentTokenHash != tokenHash {
+				t.Fatalf("consume attachment spec = %#v", spec)
+			}
+			return store.AgentClaimResult{Status: store.AgentClaimActionable, Run: makeRun(true)}, nil
+		},
+		plan: func(_ context.Context, spec store.AgentCurrentReadSpec) (store.AgentCurrentReadPlan, error) {
+			if spec.RunID != runID || spec.ClaimTokenHash != tokenHash {
+				t.Fatalf("attached current plan spec = %#v", spec)
+			}
+			return store.AgentCurrentReadPlan{RunID: runID,
+				Artifacts: []store.AgentCurrentArtifactMaterialization{}}, nil
+		},
+		current: func(_ context.Context, spec store.AgentCurrentReadSpec) (store.AgentCurrentReadResult, error) {
+			if spec.RunID != runID || spec.ClaimTokenHash != tokenHash {
+				t.Fatalf("attached current finalize spec = %#v", spec)
+			}
+			return store.AgentCurrentReadResult{Projection: projection}, nil
+		},
+	}
+	random := &countingServiceRandom{}
+	service, err := NewService(fake, ServiceOptions{AssetRevision: "asset-service",
+		Clock: serviceTestClock{at}, Random: random, CurrentViews: &fakeAgentCurrentViews{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata := localapi.RequestMetadata{Profile: profile, HasRunAttachment: true,
+		RunAttachmentHash: tokenHash}
+	hook, apiErr := service.HookCheck(context.Background(), metadata, localapi.HookCheckRequest{})
+	if apiErr != nil || !hook.Pending || peekCalls != 1 {
+		t.Fatalf("attached HookCheck() = (%#v, %v), peeks=%d", hook, apiErr, peekCalls)
+	}
+	current, apiErr := service.AgentCurrent(context.Background(), metadata, localapi.AgentCurrentRequest{})
+	if apiErr != nil || current.Status != "actionable" || current.RunID != runID.String() ||
+		current.ClaimSecret != "" || !bytes.Equal(current.Projection, projection.CanonicalJSON().Bytes()) ||
+		consumeCalls != 1 || random.calls != 0 {
+		t.Fatalf("attached AgentCurrent() = (%#v, %v), consumes=%d entropy=%d",
+			current, apiErr, consumeCalls, random.calls)
 	}
 }
 

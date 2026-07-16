@@ -1,6 +1,7 @@
 package localapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -20,6 +21,47 @@ type clientRoundtripService struct {
 	called   []string
 	metadata []RequestMetadata
 	secret   string
+}
+
+type clientAttachmentService struct {
+	mu       sync.Mutex
+	runID    model.RunID
+	metadata []RequestMetadata
+	stale    bool
+}
+
+func (s *clientAttachmentService) HookCheck(_ context.Context, metadata RequestMetadata,
+	_ HookCheckRequest,
+) (HookCheckResponse, *APIError) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.metadata = append(s.metadata, metadata)
+	if s.stale {
+		return HookCheckResponse{}, NewAPIError(CodeContextStale, "managed Run attachment is stale")
+	}
+	return HookCheckResponse{Pending: true}, nil
+}
+
+func (s *clientAttachmentService) AgentCurrent(_ context.Context, metadata RequestMetadata,
+	_ AgentCurrentRequest,
+) (AgentCurrentResponse, *APIError) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.metadata = append(s.metadata, metadata)
+	return AgentCurrentResponse{Status: "actionable", RunID: s.runID.String(),
+		Projection: []byte(`{"allowed_actions":["teamwork.deliver"],"schema_version":1,"status":"actionable"}`)}, nil
+}
+
+func (*clientAttachmentService) TeamworkAction(context.Context, RequestMetadata,
+	TeamworkActionRequest,
+) (OperationResponse, *APIError) {
+	return OperationResponse{}, NewAPIError(CodeInternal, "unexpected action")
+}
+
+func (*clientAttachmentService) AgentResolve(context.Context, RequestMetadata,
+	AgentResolveRequest,
+) (OperationResponse, *APIError) {
+	return OperationResponse{}, NewAPIError(CodeInternal, "unexpected resolution")
 }
 
 func (s *clientRoundtripService) record(name string, metadata RequestMetadata) {
@@ -135,6 +177,88 @@ func TestClientUsesOnlyOwnerUnixControlAndOpaqueHeaders(t *testing.T) {
 			metadata.ClaimContextHash != model.Sum(repeatedOpaqueBytes(0x82))) {
 			t.Fatalf("operation metadata[%d] = %#v", index, metadata)
 		}
+	}
+}
+
+func TestClientRunAttachmentEnvPeeksThenConsumesWithoutLeakingToken(t *testing.T) {
+	nodeState := newClientNodeState(t)
+	credential := repeatedOpaqueBytes(0x83)
+	installClientCredential(t, nodeState, credential)
+	attachmentToken := repeatedOpaqueBytes(0x84)
+	stageID := bytes.Repeat([]byte{0x85}, runAttachmentStageIDBytes)
+	staged, err := StageRunAttachment(nodeState, bytes.NewReader(append(attachmentToken, stageID...)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runID, _ := model.ParseRunID("run-client-attachment")
+	attachment, err := staged.Publish(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := &clientAttachmentService{runID: runID}
+	stop := serveClientControl(t, nodeState, model.Sum(credential), service)
+	defer stop()
+	t.Setenv(RunAttachmentEnv, attachment.Path())
+	client, err := NewClient(nodeState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hook, apiErr := client.HookCheck(context.Background())
+	if apiErr != nil || !hook.Pending {
+		t.Fatalf("attached HookCheck() = (%#v, %#v)", hook, apiErr)
+	}
+	if _, err := os.Lstat(attachment.Path()); err != nil {
+		t.Fatalf("Hook consumed attachment: %v", err)
+	}
+	current, apiErr := client.AgentCurrent(context.Background())
+	if apiErr != nil || current.RunID != runID.String() ||
+		current.ClaimSecret != base64.RawURLEncoding.EncodeToString(attachmentToken) {
+		t.Fatalf("attached AgentCurrent() = (%#v, %#v)", current, apiErr)
+	}
+	if _, err := os.Lstat(attachment.Path()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("consumed attachment remains: %v", err)
+	}
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	if len(service.metadata) != 2 {
+		t.Fatalf("attached metadata calls = %d", len(service.metadata))
+	}
+	wantHash := model.Sum(attachmentToken)
+	for index, metadata := range service.metadata {
+		if !metadata.HasRunAttachment || metadata.RunAttachmentHash != wantHash ||
+			metadata.HasClaimContext || metadata.HasOperationKey {
+			t.Fatalf("attached metadata[%d] = %#v", index, metadata)
+		}
+	}
+}
+
+func TestClientPreservesStaleRunAttachmentForAuthoritativeExpiryCleanup(t *testing.T) {
+	nodeState := newClientNodeState(t)
+	credential := repeatedOpaqueBytes(0x86)
+	installClientCredential(t, nodeState, credential)
+	staged, err := StageRunAttachment(nodeState, bytes.NewReader(bytes.Repeat([]byte{0x87},
+		opaqueSecretBytes+runAttachmentStageIDBytes)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runID, _ := model.ParseRunID("run-client-stale-attachment")
+	attachment, err := staged.Publish(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := &clientAttachmentService{runID: runID, stale: true}
+	stop := serveClientControl(t, nodeState, model.Sum(credential), service)
+	defer stop()
+	client, err := NewClient(nodeState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.attachmentPath = attachment.Path()
+	if _, apiErr := client.HookCheck(context.Background()); apiErr == nil || apiErr.Code != CodeContextStale {
+		t.Fatalf("stale attachment error = %#v", apiErr)
+	}
+	if _, err := os.Lstat(attachment.Path()); err != nil {
+		t.Fatalf("stale request removed attachment before authoritative cleanup: %v", err)
 	}
 }
 

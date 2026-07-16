@@ -50,6 +50,8 @@ type ActivationGate interface {
 type ControlStore interface {
 	ProbeAgentClaim(context.Context, store.AgentClaimProbeSpec) (store.AgentClaimStatus, error)
 	ClaimAgentCurrent(context.Context, store.AgentClaimSpec) (store.AgentClaimResult, error)
+	PeekAgentRunAttachment(context.Context, store.AgentAttachmentSpec) error
+	ConsumeAgentRunAttachment(context.Context, store.AgentAttachmentSpec) (store.AgentClaimResult, error)
 	PlanAgentCurrentRead(context.Context, store.AgentCurrentReadSpec) (store.AgentCurrentReadPlan, error)
 	FinalizeAgentCurrentRead(context.Context, store.AgentCurrentReadSpec) (store.AgentCurrentReadResult, error)
 	ReadAgentInitiationContext(context.Context, model.Profile, time.Time) (store.AgentInitiationContext, error)
@@ -111,13 +113,19 @@ func (s *Service) HookCheck(ctx context.Context, metadata localapi.RequestMetada
 	if apiErr := s.checkActivation(ctx, metadata.Profile); apiErr != nil {
 		return localapi.HookCheckResponse{}, apiErr
 	}
-	if metadata.HasRunAttachment {
-		return localapi.HookCheckResponse{}, localapi.NewAPIError(localapi.CodeContextInvalid,
-			"managed Run attachment is not available")
-	}
 	at, apiErr := s.trustedNow()
 	if apiErr != nil {
 		return localapi.HookCheckResponse{}, apiErr
+	}
+	if metadata.HasRunAttachment {
+		err := s.store.PeekAgentRunAttachment(ctx, store.AgentAttachmentSpec{
+			ProfileID: metadata.Profile.ID(), ExpectedAssetRevision: s.assetRevision,
+			AttachmentTokenHash: metadata.RunAttachmentHash, At: at,
+		})
+		if err != nil {
+			return localapi.HookCheckResponse{}, mapControlError(err)
+		}
+		return localapi.HookCheckResponse{Pending: true}, nil
 	}
 	status, err := s.store.ProbeAgentClaim(ctx, store.AgentClaimProbeSpec{
 		ProfileID: metadata.Profile.ID(), ExpectedAssetRevision: s.assetRevision, At: at,
@@ -137,41 +145,50 @@ func (s *Service) AgentCurrent(ctx context.Context, metadata localapi.RequestMet
 	if apiErr := s.checkActivation(ctx, metadata.Profile); apiErr != nil {
 		return localapi.AgentCurrentResponse{}, apiErr
 	}
-	if metadata.HasRunAttachment {
-		return localapi.AgentCurrentResponse{}, localapi.NewAPIError(localapi.CodeContextInvalid,
-			"managed Run attachment is not available")
-	}
 	at, apiErr := s.trustedNow()
 	if apiErr != nil {
 		return localapi.AgentCurrentResponse{}, apiErr
 	}
-	budget, err := model.ParseHandlingBudget(metadata.Profile.HandlingBudget())
-	if err != nil {
-		return localapi.AgentCurrentResponse{}, localapi.NewAPIError(localapi.CodeInternal,
-			"Profile handling budget is invalid")
+	var claimed store.AgentClaimResult
+	var claimHash model.Digest
+	var claimSecret []byte
+	var err error
+	if metadata.HasRunAttachment {
+		claimed, err = s.store.ConsumeAgentRunAttachment(ctx, store.AgentAttachmentSpec{
+			ProfileID: metadata.Profile.ID(), ExpectedAssetRevision: s.assetRevision,
+			AttachmentTokenHash: metadata.RunAttachmentHash, At: at,
+		})
+		claimHash, _ = claimed.Run.ClaimFenceHash()
+	} else {
+		budget, budgetErr := model.ParseHandlingBudget(metadata.Profile.HandlingBudget())
+		if budgetErr != nil {
+			return localapi.AgentCurrentResponse{}, localapi.NewAPIError(localapi.CodeInternal,
+				"Profile handling budget is invalid")
+		}
+		leaseUntil := at.Add(time.Duration(budget.Spec().ClaimLeaseSeconds) * time.Second)
+		if !leaseUntil.After(at) {
+			return localapi.AgentCurrentResponse{}, localapi.NewAPIError(localapi.CodeInternal,
+				"managed claim lease cannot be represented")
+		}
+		claimSecret, err = s.drawSecret()
+		if err != nil {
+			return localapi.AgentCurrentResponse{}, localapi.NewAPIError(localapi.CodeInternal,
+				"managed claim capability cannot be generated")
+		}
+		defer clear(claimSecret)
+		claimOwnerBytes, ownerErr := s.drawSecret()
+		if ownerErr != nil {
+			return localapi.AgentCurrentResponse{}, localapi.NewAPIError(localapi.CodeInternal,
+				"managed claim owner cannot be generated")
+		}
+		claimOwner := "claim-" + base64.RawURLEncoding.EncodeToString(claimOwnerBytes)
+		clear(claimOwnerBytes)
+		claimHash = model.Sum(claimSecret)
+		claimed, err = s.store.ClaimAgentCurrent(ctx, store.AgentClaimSpec{
+			ProfileID: metadata.Profile.ID(), ExpectedAssetRevision: s.assetRevision,
+			ClaimOwner: claimOwner, ClaimTokenHash: claimHash, At: at, LeaseUntil: leaseUntil,
+		})
 	}
-	leaseUntil := at.Add(time.Duration(budget.Spec().ClaimLeaseSeconds) * time.Second)
-	if !leaseUntil.After(at) {
-		return localapi.AgentCurrentResponse{}, localapi.NewAPIError(localapi.CodeInternal,
-			"managed claim lease cannot be represented")
-	}
-	claimSecret, err := s.drawSecret()
-	if err != nil {
-		return localapi.AgentCurrentResponse{}, localapi.NewAPIError(localapi.CodeInternal,
-			"managed claim capability cannot be generated")
-	}
-	defer clear(claimSecret)
-	claimOwnerBytes, err := s.drawSecret()
-	if err != nil {
-		return localapi.AgentCurrentResponse{}, localapi.NewAPIError(localapi.CodeInternal,
-			"managed claim owner cannot be generated")
-	}
-	claimOwner := "claim-" + base64.RawURLEncoding.EncodeToString(claimOwnerBytes)
-	clear(claimOwnerBytes)
-	claimed, err := s.store.ClaimAgentCurrent(ctx, store.AgentClaimSpec{
-		ProfileID: metadata.Profile.ID(), ExpectedAssetRevision: s.assetRevision,
-		ClaimOwner: claimOwner, ClaimTokenHash: model.Sum(claimSecret), At: at, LeaseUntil: leaseUntil,
-	})
 	if err != nil {
 		return localapi.AgentCurrentResponse{}, mapControlError(err)
 	}
@@ -193,7 +210,7 @@ func (s *Service) AgentCurrent(ctx context.Context, metadata localapi.RequestMet
 	}
 	readSpec := store.AgentCurrentReadSpec{
 		ProfileID: metadata.Profile.ID(), ExpectedAssetRevision: s.assetRevision,
-		RunID: claimed.Run.ID(), ClaimTokenHash: model.Sum(claimSecret), At: at,
+		RunID: claimed.Run.ID(), ClaimTokenHash: claimHash, At: at,
 	}
 	plan, err := s.store.PlanAgentCurrentRead(ctx, readSpec)
 	if err != nil {
@@ -219,9 +236,12 @@ func (s *Service) AgentCurrent(ctx context.Context, metadata localapi.RequestMet
 		s.cleanupCurrentViews(claimed.Run.ID())
 		return localapi.AgentCurrentResponse{}, mapControlError(err)
 	}
-	return localapi.AgentCurrentResponse{Status: string(store.AgentClaimActionable),
-		RunID: claimed.Run.ID().String(), ClaimSecret: base64.RawURLEncoding.EncodeToString(claimSecret),
-		Projection: current.Projection.CanonicalJSON().Bytes()}, nil
+	response := localapi.AgentCurrentResponse{Status: string(store.AgentClaimActionable),
+		RunID: claimed.Run.ID().String(), Projection: current.Projection.CanonicalJSON().Bytes()}
+	if !metadata.HasRunAttachment {
+		response.ClaimSecret = base64.RawURLEncoding.EncodeToString(claimSecret)
+	}
+	return response, nil
 }
 
 func (s *Service) TeamworkAction(ctx context.Context, metadata localapi.RequestMetadata,
@@ -459,6 +479,10 @@ func mapControlError(err error) *localapi.APIError {
 		return localapi.NewAPIError(localapi.CodeCurrentTooLarge, "current projection exceeds its bound")
 	case errors.Is(err, store.ErrCurrentReadStale), errors.Is(err, store.ErrManagedContextStale):
 		return localapi.NewAPIError(localapi.CodeContextStale, "managed context is stale")
+	case errors.Is(err, store.ErrAgentAttachmentStale):
+		return localapi.NewAPIError(localapi.CodeContextStale, "managed Run attachment is stale")
+	case errors.Is(err, store.ErrAgentAttachmentInput):
+		return localapi.NewAPIError(localapi.CodeContextInvalid, "managed Run attachment is invalid")
 	case errors.Is(err, store.ErrManagedContextRequired):
 		return localapi.NewAPIError(localapi.CodeContextRequired, "managed context is required")
 	case errors.Is(err, store.ErrManagedActionNotAllowed):

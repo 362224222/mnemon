@@ -27,12 +27,13 @@ const (
 // Client is the only Agent-side transport to mnemond. It can dial only the
 // owner-only Unix socket inside one Node state directory.
 type Client struct {
-	nodeState string
-	socket    string
-	ownerUID  uint32
-	profile   model.ProfileID
-	token     [opaqueSecretBytes]byte
-	http      *http.Client
+	nodeState      string
+	socket         string
+	attachmentPath string
+	ownerUID       uint32
+	profile        model.ProfileID
+	token          [opaqueSecretBytes]byte
+	http           *http.Client
 }
 
 // NewClient loads the fixed Teamwork Profile credential from owner-only Node
@@ -62,10 +63,11 @@ func NewClient(nodeState string) (*Client, error) {
 		return nil, unsafeClientState("Profile credential has noncanonical bytes")
 	}
 	client := &Client{
-		nodeState: nodeState,
-		socket:    filepath.Join(nodeState, "control.sock"),
-		ownerUID:  ownerUID,
-		profile:   profile,
+		nodeState:      nodeState,
+		socket:         filepath.Join(nodeState, "control.sock"),
+		attachmentPath: os.Getenv(RunAttachmentEnv),
+		ownerUID:       ownerUID,
+		profile:        profile,
 	}
 	copy(client.token[:], decoded)
 	clear(decoded)
@@ -133,23 +135,57 @@ func (c *Client) ProbeHealth(ctx context.Context) (HealthResponse, *APIError) {
 }
 
 func (c *Client) HookCheck(ctx context.Context) (HookCheckResponse, *APIError) {
+	attachment, apiErr := c.runtimeAttachment()
+	if apiErr != nil {
+		return HookCheckResponse{}, apiErr
+	}
+	headers := clientHeaders{}
+	if attachment != nil {
+		headers.attachment = attachment.HeaderValue()
+	}
 	var response HookCheckResponse
-	if apiErr := c.post(ctx, RouteHookCheck, HookCheckRequest{}, clientHeaders{}, &response); apiErr != nil {
+	if apiErr := c.post(ctx, RouteHookCheck, HookCheckRequest{}, headers, &response); apiErr != nil {
 		return HookCheckResponse{}, apiErr
 	}
 	if response.SchemaVersion != SchemaVersion {
 		return HookCheckResponse{}, invalidControlResponse("hook response schema is unsupported")
 	}
+	if attachment != nil && !response.Pending {
+		return HookCheckResponse{}, invalidControlResponse("attached Hook did not confirm its preclaim")
+	}
 	return response, nil
 }
 
 func (c *Client) AgentCurrent(ctx context.Context) (AgentCurrentResponse, *APIError) {
-	var response AgentCurrentResponse
-	if apiErr := c.post(ctx, RouteAgentCurrent, AgentCurrentRequest{}, clientHeaders{}, &response); apiErr != nil {
+	attachment, apiErr := c.runtimeAttachment()
+	if apiErr != nil {
 		return AgentCurrentResponse{}, apiErr
+	}
+	headers := clientHeaders{}
+	if attachment != nil {
+		headers.attachment = attachment.HeaderValue()
+	}
+	var response AgentCurrentResponse
+	if apiErr := c.post(ctx, RouteAgentCurrent, AgentCurrentRequest{}, headers, &response); apiErr != nil {
+		return AgentCurrentResponse{}, apiErr
+	}
+	if attachment != nil {
+		runID, err := model.ParseRunID(response.RunID)
+		if response.Status != "actionable" || err != nil || runID != attachment.RunID() ||
+			response.ClaimSecret != "" {
+			return AgentCurrentResponse{}, invalidControlResponse(
+				"attached current response differs from its preclaimed Run")
+		}
+		response.ClaimSecret = attachment.HeaderValue()
 	}
 	if apiErr := validateCurrentResponse(response); apiErr != nil {
 		return AgentCurrentResponse{}, apiErr
+	}
+	if attachment != nil {
+		if err := RemoveRunAttachment(c.nodeState, *attachment); err != nil {
+			return AgentCurrentResponse{}, NewAPIError(CodeContextInvalid,
+				"consumed Run attachment could not be removed safely")
+		}
 	}
 	return response, nil
 }
@@ -211,8 +247,9 @@ func (c *Client) AgentResolve(ctx context.Context, request AgentResolveRequest,
 }
 
 type clientHeaders struct {
-	operation string
-	claim     string
+	operation  string
+	claim      string
+	attachment string
 }
 
 func (c *Client) operationHeaders(request any, contextFile *ContextFile,
@@ -306,8 +343,22 @@ func (c *Client) post(ctx context.Context, route string, input any, headers clie
 	if headers.claim != "" {
 		request.Header.Set(claimContextHeader, headers.claim)
 	}
+	if headers.attachment != "" {
+		request.Header.Set(runAttachmentHeader, headers.attachment)
+	}
 
 	return c.send(request, response, maxControlResponse)
+}
+
+func (c *Client) runtimeAttachment() (*RunAttachment, *APIError) {
+	if c == nil || c.attachmentPath == "" {
+		return nil, nil
+	}
+	attachment, err := ReadRunAttachment(c.nodeState, c.attachmentPath)
+	if err != nil {
+		return nil, NewAPIError(CodeContextInvalid, "managed Run attachment is unavailable")
+	}
+	return &attachment, nil
 }
 
 func (c *Client) send(request *http.Request, response any, maxResponse int64) *APIError {
