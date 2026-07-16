@@ -11,6 +11,7 @@ import (
 	"sync"
 	"syscall"
 	"testing"
+	"time"
 
 	libp2pcrypto "github.com/libp2p/go-libp2p/core/crypto"
 	libp2ppeer "github.com/libp2p/go-libp2p/core/peer"
@@ -318,6 +319,34 @@ func TestIdentityRejectsInvalidOrReplacedKeyMaterialWithoutOverwrite(t *testing.
 			}
 			assertOnlyIdentityKey(t, nodeState)
 		})
+	}
+}
+
+func TestIdentityNodeStateLockContextHonorsCancellation(t *testing.T) {
+	nodeState := newIdentityNodeState(t)
+	first, err := openIdentityNodeState(nodeState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.close()
+	if err := first.lock(); err != nil {
+		t.Fatal(err)
+	}
+	defer first.unlock()
+
+	second, err := openIdentityNodeState(nodeState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.close()
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	if err := second.lockContext(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("lockContext() error = %v, want deadline", err)
+	}
+	if elapsed := time.Since(started); elapsed > 250*time.Millisecond {
+		t.Fatalf("lockContext() ignored deadline for %v", elapsed)
 	}
 }
 

@@ -2,6 +2,7 @@ package node
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/hex"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"sync"
 	"syscall"
+	"time"
 
 	libp2pcrypto "github.com/libp2p/go-libp2p/core/crypto"
 	libp2ppeer "github.com/libp2p/go-libp2p/core/peer"
@@ -26,6 +28,7 @@ const (
 	identityKeyMode       = os.FileMode(0o600)
 	maxIdentityKeyBytes   = int64(256)
 	identityTempAttempts  = 32
+	identityLockPoll      = 10 * time.Millisecond
 )
 
 var ErrIdentity = errors.New("mnemond Node identity")
@@ -186,21 +189,51 @@ func (state *identityNodeState) close() {
 }
 
 func (state *identityNodeState) lock() error {
+	return state.lockContext(context.Background())
+}
+
+// lockContext preserves the identity module's process-plus-filesystem lock
+// while allowing bounded daemon startup paths to honor cancellation.
+func (state *identityNodeState) lockContext(ctx context.Context) error {
 	if state == nil || state.dir == nil {
 		return identityError("lock Node state", errors.New("directory is unavailable"))
 	}
-	identityProcessMu.Lock()
-	if err := unix.Flock(int(state.dir.Fd()), unix.LOCK_EX); err != nil {
-		identityProcessMu.Unlock()
-		return identityError("lock Node state", err)
+	if ctx == nil {
+		return identityError("lock Node state", errors.New("context is unavailable"))
 	}
-	if err := state.validateLive(); err != nil {
-		_ = unix.Flock(int(state.dir.Fd()), unix.LOCK_UN)
-		identityProcessMu.Unlock()
-		return err
+	for {
+		if err := ctx.Err(); err != nil {
+			return identityError("lock Node state", err)
+		}
+		if identityProcessMu.TryLock() {
+			err := unix.Flock(int(state.dir.Fd()), unix.LOCK_EX|unix.LOCK_NB)
+			if err == nil {
+				if err := ctx.Err(); err != nil {
+					_ = unix.Flock(int(state.dir.Fd()), unix.LOCK_UN)
+					identityProcessMu.Unlock()
+					return identityError("lock Node state", err)
+				}
+				if err := state.validateLive(); err != nil {
+					_ = unix.Flock(int(state.dir.Fd()), unix.LOCK_UN)
+					identityProcessMu.Unlock()
+					return err
+				}
+				state.locked = true
+				return nil
+			}
+			identityProcessMu.Unlock()
+			if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EAGAIN) {
+				return identityError("lock Node state", err)
+			}
+		}
+		timer := time.NewTimer(identityLockPoll)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return identityError("lock Node state", ctx.Err())
+		case <-timer.C:
+		}
 	}
-	state.locked = true
-	return nil
 }
 
 func (state *identityNodeState) unlock() {

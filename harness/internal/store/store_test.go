@@ -1,7 +1,9 @@
 package store
 
 import (
+	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"os/exec"
@@ -210,6 +212,214 @@ func TestOpenRejectsInvalidPaths(t *testing.T) {
 		}
 		t.Fatalf("Open(symlink) = (%v, %v), want error", st, err)
 	}
+}
+
+func TestOpenExistingNeverInitializesOrRepairsNodeDatabase(t *testing.T) {
+	t.Run("missing", func(t *testing.T) {
+		directory := filepath.Join(t.TempDir(), "node")
+		if err := os.Mkdir(directory, directoryMode); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(directory, "node.db")
+		if st, err := OpenExisting(context.Background(), path); err == nil || st != nil {
+			if st != nil {
+				_ = st.Close()
+			}
+			t.Fatalf("OpenExisting(missing) = (%v, %v)", st, err)
+		}
+		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("OpenExisting created missing node.db: %v", err)
+		}
+	})
+
+	t.Run("empty", func(t *testing.T) {
+		directory := filepath.Join(t.TempDir(), "node")
+		if err := os.Mkdir(directory, directoryMode); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(directory, "node.db")
+		if err := os.WriteFile(path, nil, privateFileMode); err != nil {
+			t.Fatal(err)
+		}
+		if st, err := OpenExisting(context.Background(), path); st != nil || !errors.Is(err, ErrUnsupportedSchema) {
+			if st != nil {
+				_ = st.Close()
+			}
+			t.Fatalf("OpenExisting(empty) = (%v, %v)", st, err)
+		}
+		info, err := os.Stat(path)
+		if err != nil || info.Size() != 0 {
+			t.Fatalf("empty node.db changed: (%v, %v)", info, err)
+		}
+		if _, err := os.Lstat(path + ".writer.lock"); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("empty rejection created writer state: %v", err)
+		}
+	})
+
+	t.Run("unknown schema", func(t *testing.T) {
+		directory := filepath.Join(t.TempDir(), "node")
+		if err := os.Mkdir(directory, directoryMode); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(directory, "node.db")
+		db, err := sql.Open("sqlite", path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec("CREATE TABLE legacy(id INTEGER PRIMARY KEY)"); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(path, privateFileMode); err != nil {
+			t.Fatal(err)
+		}
+		before, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st, err := OpenExisting(context.Background(), path); st != nil || !errors.Is(err, ErrUnsupportedSchema) {
+			if st != nil {
+				_ = st.Close()
+			}
+			t.Fatalf("OpenExisting(unknown) = (%v, %v)", st, err)
+		}
+		after, err := os.ReadFile(path)
+		if err != nil || !bytes.Equal(after, before) {
+			t.Fatalf("unknown node.db was rewritten: equal=%t error=%v", bytes.Equal(after, before), err)
+		}
+	})
+
+	t.Run("unsafe mode", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "node", "node.db")
+		st, err := Open(context.Background(), path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := st.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(path, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if st, err := OpenExisting(context.Background(), path); err == nil || st != nil {
+			if st != nil {
+				_ = st.Close()
+			}
+			t.Fatalf("OpenExisting(unsafe mode) = (%v, %v)", st, err)
+		}
+		assertMode(t, path, 0o644)
+	})
+}
+
+func TestOpenExistingOwnsAndReleasesTheWriterGuard(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "node", "node.db")
+	initialized, err := Open(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := initialized.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := OpenExisting(context.Background(), path)
+	if err != nil {
+		t.Fatalf("OpenExisting() error = %v", err)
+	}
+	second, err := OpenExisting(context.Background(), path)
+	if second != nil {
+		_ = second.Close()
+		t.Fatal("second OpenExisting returned a Store")
+	}
+	if !errors.Is(err, ErrWriterActive) {
+		t.Fatalf("second OpenExisting error = %v, want ErrWriterActive", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := OpenExisting(context.Background(), path)
+	if err != nil {
+		t.Fatalf("OpenExisting after Close error = %v", err)
+	}
+	if err := reopened.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOpenExistingRejectsUnsafeWriterLockWithoutFollowingOrRepairingIt(t *testing.T) {
+	newDatabase := func(t *testing.T) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "node", "node.db")
+		st, err := Open(context.Background(), path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := st.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(path + ".writer.lock"); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+
+	t.Run("symlink", func(t *testing.T) {
+		path := newDatabase(t)
+		target := filepath.Join(filepath.Dir(path), "target.lock")
+		contents := []byte("do-not-follow")
+		if err := os.WriteFile(target, contents, privateFileMode); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, path+".writer.lock"); err != nil {
+			t.Fatal(err)
+		}
+		if st, err := OpenExisting(context.Background(), path); err == nil || st != nil {
+			if st != nil {
+				_ = st.Close()
+			}
+			t.Fatalf("OpenExisting(symlink lock) = (%v, %v)", st, err)
+		}
+		got, err := os.ReadFile(target)
+		if err != nil || !bytes.Equal(got, contents) {
+			t.Fatalf("writer lock symlink target changed: bytes=%q error=%v", got, err)
+		}
+	})
+
+	t.Run("hard link", func(t *testing.T) {
+		path := newDatabase(t)
+		lock := path + ".writer.lock"
+		if err := os.WriteFile(lock, nil, privateFileMode); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Link(lock, filepath.Join(filepath.Dir(path), "alias.lock")); err != nil {
+			t.Fatal(err)
+		}
+		if st, err := OpenExisting(context.Background(), path); err == nil || st != nil {
+			if st != nil {
+				_ = st.Close()
+			}
+			t.Fatalf("OpenExisting(hard-linked lock) = (%v, %v)", st, err)
+		}
+	})
+
+	t.Run("mode", func(t *testing.T) {
+		path := newDatabase(t)
+		lock := path + ".writer.lock"
+		if err := os.WriteFile(lock, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(lock, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if st, err := OpenExisting(context.Background(), path); err == nil || st != nil {
+			if st != nil {
+				_ = st.Close()
+			}
+			t.Fatalf("OpenExisting(wide lock) = (%v, %v)", st, err)
+		}
+		assertMode(t, lock, 0o644)
+	})
 }
 
 func assertMode(t *testing.T, path string, want os.FileMode) {

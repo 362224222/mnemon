@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
@@ -36,52 +35,20 @@ type Daemon struct {
 }
 
 func OpenDaemon(ctx context.Context, options DaemonOptions) (*Daemon, error) {
-	if ctx == nil {
-		return nil, fmt.Errorf("%w: context is unavailable", ErrDaemonAuthority)
-	}
-	workspace, err := validateDaemonWorkspace(options.Workspace)
+	nodeState := filepath.Join(options.Workspace, ".mnemon", "harness", "node")
+	authority, err := openExistingDaemonAuthority(ctx, options.Workspace, nodeState)
 	if err != nil {
 		return nil, err
 	}
-	nodeState := filepath.Join(workspace, ".mnemon", "harness", "node")
-	identity, err := LoadIdentity(nodeState)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrDaemonAuthority, err)
-	}
-	databasePath := filepath.Join(nodeState, "node.db")
-	databaseInfo, err := os.Lstat(databasePath)
-	if err != nil {
-		return nil, fmt.Errorf("%w: inspect node.db: %v", ErrDaemonAuthority, err)
-	}
-	if _, err := validateIdentityOwnerPath(databaseInfo, 0o600, false); err != nil {
-		return nil, fmt.Errorf("%w: node.db: %v", ErrDaemonAuthority, err)
-	}
-	st, err := store.Open(ctx, databasePath)
-	if err != nil {
-		return nil, fmt.Errorf("%w: open Store: %v", ErrDaemonAuthority, err)
-	}
+	workspace := options.Workspace
+	identity := authority.identity
+	st := authority.store
 	fail := func(cause error) (*Daemon, error) {
 		_ = st.Close()
 		return nil, cause
 	}
-	authority, err := st.ReadLocalAuthority(ctx)
-	if err != nil {
-		return fail(fmt.Errorf("%w: %v", ErrDaemonAuthority, err))
-	}
-	if authority.Node.PeerID() != identity.PeerID() {
-		return fail(fmt.Errorf("%w: identity key and Store PeerID differ", ErrDaemonAuthority))
-	}
-	if authority.Profile.WorkspaceRoot() != workspace {
-		return fail(fmt.Errorf("%w: Profile belongs to another workspace", ErrDaemonAuthority))
-	}
-	if !authority.Profile.Enabled() {
-		return fail(fmt.Errorf("%w: Teamwork Profile is disabled", ErrDaemonAuthority))
-	}
-	if err := localapi.VerifyProfileCredential(nodeState, authority.Profile.CredentialHash()); err != nil {
-		return fail(fmt.Errorf("%w: %v", ErrDaemonAuthority, err))
-	}
 	controller, err := NewController(ControllerOptions{NodeState: nodeState, Workspace: workspace,
-		Store: st, Profile: authority.Profile, Signer: identity.PublicationSigner(), Clock: options.Clock,
+		Store: st, Profile: authority.authority.Profile, Signer: identity.PublicationSigner(), Clock: options.Clock,
 		Install: options.Install})
 	if err != nil {
 		return fail(fmt.Errorf("%w: compose controller: %v", ErrDaemonAuthority, err))

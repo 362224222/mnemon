@@ -14,7 +14,6 @@ import (
 	"path/filepath"
 	"sync"
 	"syscall"
-	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -30,7 +29,6 @@ const (
 	daemonPIDInstanceBytes = 16
 	daemonPIDStagePrefix   = ".mnemond-pid-"
 	daemonPIDStageSuffix   = ".tmp"
-	daemonProcessLockPoll  = 10 * time.Millisecond
 )
 
 var ErrDaemonProcess = errors.New("launch mnemond process")
@@ -124,7 +122,7 @@ func (launcher *DaemonProcessLauncher) Launch(ctx context.Context) (DaemonLaunch
 		return nil, daemonProcessError("open Node state", err)
 	}
 	defer state.close()
-	if err := lockDaemonProcessNodeState(ctx, state); err != nil {
+	if err := state.lockContext(ctx); err != nil {
 		return nil, daemonProcessError("lock Node state", err)
 	}
 	defer state.unlock()
@@ -504,49 +502,6 @@ func validateDaemonProcessFile(info os.FileInfo, ownerUID uint32) error {
 	return nil
 }
 
-// lockDaemonProcessNodeState is the context-aware equivalent of the identity
-// module's blocking lock. Bounded ensure and bounded cleanup must never lose
-// their hard deadline while waiting for either an in-process identity writer
-// or a writer in another process.
-func lockDaemonProcessNodeState(ctx context.Context, state *identityNodeState) error {
-	if ctx == nil || state == nil || state.dir == nil {
-		return errors.New("Node state lock is unavailable")
-	}
-	for {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if identityProcessMu.TryLock() {
-			err := unix.Flock(int(state.dir.Fd()), unix.LOCK_EX|unix.LOCK_NB)
-			if err == nil {
-				if err := ctx.Err(); err != nil {
-					_ = unix.Flock(int(state.dir.Fd()), unix.LOCK_UN)
-					identityProcessMu.Unlock()
-					return err
-				}
-				if err := state.validateLive(); err != nil {
-					_ = unix.Flock(int(state.dir.Fd()), unix.LOCK_UN)
-					identityProcessMu.Unlock()
-					return err
-				}
-				state.locked = true
-				return nil
-			}
-			identityProcessMu.Unlock()
-			if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EAGAIN) {
-				return err
-			}
-		}
-		timer := time.NewTimer(daemonProcessLockPoll)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return ctx.Err()
-		case <-timer.C:
-		}
-	}
-}
-
 func cleanupDaemonPIDStages(state *identityNodeState) error {
 	directory, err := state.root.Open(".")
 	if err != nil {
@@ -849,7 +804,7 @@ func cleanupPublishedDaemonPID(ctx context.Context, nodeState string,
 		return daemonProcessError("clean PID", err)
 	}
 	defer state.close()
-	if err := lockDaemonProcessNodeState(ctx, state); err != nil {
+	if err := state.lockContext(ctx); err != nil {
 		return daemonProcessError("clean PID", err)
 	}
 	defer state.unlock()

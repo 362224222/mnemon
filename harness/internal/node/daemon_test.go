@@ -113,6 +113,24 @@ func TestOpenDaemonRejectsAuthorityDriftAndNeverCreatesMissingDatabase(t *testin
 			t.Fatalf("strict restart created node.db: %v", err)
 		}
 	})
+	t.Run("empty database", func(t *testing.T) {
+		fixture := newDaemonFixture(t, true)
+		path := filepath.Join(fixture.nodeState, "node.db")
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if daemon, err := OpenDaemon(context.Background(), DaemonOptions{Workspace: fixture.workspace,
+			Install: fixture.install}); daemon != nil || !errors.Is(err, store.ErrUnsupportedSchema) {
+			t.Fatalf("OpenDaemon(empty node.db) = (%v, %v)", daemon, err)
+		}
+		info, err := os.Stat(path)
+		if err != nil || info.Size() != 0 {
+			t.Fatalf("strict restart initialized empty node.db: (%v, %v)", info, err)
+		}
+	})
 	t.Run("relative workspace", func(t *testing.T) {
 		if daemon, err := OpenDaemon(context.Background(), DaemonOptions{Workspace: "."}); daemon != nil || !errors.Is(err, ErrDaemonAuthority) {
 			t.Fatalf("OpenDaemon() = (%v, %v)", daemon, err)

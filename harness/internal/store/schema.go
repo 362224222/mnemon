@@ -86,6 +86,23 @@ func openSchema(ctx context.Context, db *sql.DB) error {
 		return unsupportedSchema(version, "R5 does not migrate node databases")
 	}
 
+	return validateExistingSchema(ctx, db)
+}
+
+// openExistingSchema is deliberately separate from openSchema: version zero
+// is never a bootstrap signal on daemon restart.
+func openExistingSchema(ctx context.Context, db *sql.DB) error {
+	var version int
+	if err := db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
+		return fmt.Errorf("open existing node store: read user_version: %w", err)
+	}
+	if version != SchemaVersion {
+		return unsupportedSchema(version, "daemon restart does not initialize or migrate node databases")
+	}
+	return validateExistingSchema(ctx, db)
+}
+
+func validateExistingSchema(ctx context.Context, db *sql.DB) error {
 	if err := validateSchemaObjects(ctx, db); err != nil {
 		return err
 	}
@@ -98,6 +115,43 @@ func openSchema(ctx context.Context, db *sql.DB) error {
 	}
 	if err := validateForeignKeys(ctx, db); err != nil {
 		return err
+	}
+	return nil
+}
+
+func configureExistingDatabase(ctx context.Context, db *sql.DB) error {
+	if err := db.PingContext(ctx); err != nil {
+		return fmt.Errorf("open existing node store: connect SQLite: %w", err)
+	}
+	var journalMode string
+	if err := db.QueryRowContext(ctx, "PRAGMA journal_mode").Scan(&journalMode); err != nil {
+		return fmt.Errorf("open existing node store: read journal_mode: %w", err)
+	}
+	if !strings.EqualFold(journalMode, "wal") {
+		return fmt.Errorf("open existing node store: journal_mode is %q, want WAL", journalMode)
+	}
+	for _, statement := range []string{
+		"PRAGMA synchronous = FULL",
+		"PRAGMA foreign_keys = ON",
+		fmt.Sprintf("PRAGMA busy_timeout = %d", busyTimeoutMS),
+	} {
+		if _, err := db.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("open existing node store: configure SQLite: %w", err)
+		}
+	}
+	var synchronous, foreignKeys, busyTimeout int
+	if err := db.QueryRowContext(ctx, "PRAGMA synchronous").Scan(&synchronous); err != nil {
+		return fmt.Errorf("open existing node store: read synchronous: %w", err)
+	}
+	if err := db.QueryRowContext(ctx, "PRAGMA foreign_keys").Scan(&foreignKeys); err != nil {
+		return fmt.Errorf("open existing node store: read foreign_keys: %w", err)
+	}
+	if err := db.QueryRowContext(ctx, "PRAGMA busy_timeout").Scan(&busyTimeout); err != nil {
+		return fmt.Errorf("open existing node store: read busy_timeout: %w", err)
+	}
+	if synchronous != 2 || foreignKeys != 1 || busyTimeout != busyTimeoutMS {
+		return fmt.Errorf("open existing node store: unsafe SQLite configuration: synchronous=%d foreign_keys=%d busy_timeout=%d",
+			synchronous, foreignKeys, busyTimeout)
 	}
 	return nil
 }
