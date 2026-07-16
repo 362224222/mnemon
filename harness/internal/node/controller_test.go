@@ -49,6 +49,9 @@ func TestControllerServesOwnerOnlyManagedRoutesFromOneStore(t *testing.T) {
 	if _, err := integration.InstallNodeBundle(nodeState, bundle); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := integration.InstallHostProjection(workspace, nodeState, assets.HostCodex, bundle); err != nil {
+		t.Fatal(err)
+	}
 	at := time.Date(2026, 7, 17, 3, 0, 0, 0, time.UTC)
 	peerID, _ := model.ParsePeerID("peer-controller-local")
 	epoch, _ := model.ParseOriginEpoch("epoch-controller-local")
@@ -86,7 +89,8 @@ func TestControllerServesOwnerOnlyManagedRoutesFromOneStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	controller, err := NewController(ControllerOptions{NodeState: nodeState, Workspace: workspace,
-		Store: st, Profile: enabled, Signer: signer, Clock: controllerTestClock{enabled.UpdatedAt()}})
+		Store: st, Profile: enabled, Signer: signer, Clock: controllerTestClock{enabled.UpdatedAt()},
+		Install: testInstallationVerifier(workspace, nodeState, bundle)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,6 +120,18 @@ func TestControllerServesOwnerOnlyManagedRoutesFromOneStore(t *testing.T) {
 	if err != nil || len(projection.InitiationContext.Channels) != 0 {
 		t.Fatalf("initiation projection = %s, %v", current.Projection, err)
 	}
+	guidePath := filepath.Join(workspace, ".codex", "skills", "mnemon-harness", "guides", "teamwork", "GUIDE.md")
+	if err := os.Remove(guidePath); err != nil {
+		t.Fatal(err)
+	}
+	health, apiErr = client.ProbeHealth(context.Background())
+	if apiErr != nil || health.Status != "not_ready" {
+		t.Fatalf("drifted ProbeHealth() = (%#v, %v)", health, apiErr)
+	}
+	if _, apiErr := client.HookCheck(context.Background()); apiErr == nil ||
+		apiErr.Code != localapi.CodeAssetRevisionMismatch {
+		t.Fatalf("drifted HookCheck() error = %v", apiErr)
+	}
 	cancel()
 	select {
 	case err := <-served:
@@ -128,6 +144,19 @@ func TestControllerServesOwnerOnlyManagedRoutesFromOneStore(t *testing.T) {
 	if _, err := os.Lstat(filepath.Join(nodeState, "control.sock")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("control socket remained after shutdown: %v", err)
 	}
+}
+
+func testInstallationVerifier(workspace, nodeState string, bundle assets.Bundle) InstallationVerifier {
+	return InstallationVerifierFunc(func(profile model.Profile) error {
+		host := assets.Host(profile.Host())
+		if !host.Valid() || profile.ActiveAssetRevision() != bundle.Manifest().AssetRevision {
+			return errors.New("Profile does not select the canonical Host assets")
+		}
+		if err := integration.VerifyNodeBundle(nodeState, bundle); err != nil {
+			return err
+		}
+		return integration.VerifyHostProjection(workspace, nodeState, host, bundle)
+	})
 }
 
 func writeControllerProfileToken(t *testing.T, nodeState string, credential []byte) {

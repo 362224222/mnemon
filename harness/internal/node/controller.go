@@ -12,9 +12,7 @@ import (
 
 	"github.com/mnemon-dev/mnemon/harness/internal/agent"
 	"github.com/mnemon-dev/mnemon/harness/internal/artifact"
-	"github.com/mnemon-dev/mnemon/harness/internal/assets"
 	"github.com/mnemon-dev/mnemon/harness/internal/event"
-	"github.com/mnemon-dev/mnemon/harness/internal/integration"
 	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
@@ -28,6 +26,22 @@ type wallClock struct{}
 
 func (wallClock) Now() time.Time { return time.Now() }
 
+// InstallationVerifier is supplied by the outer composition layer. Node does
+// not import Host integration; it only requires a current Profile to remain
+// bound to its canonical Node bundle and Host projection.
+type InstallationVerifier interface {
+	Verify(model.Profile) error
+}
+
+type InstallationVerifierFunc func(model.Profile) error
+
+func (verify InstallationVerifierFunc) Verify(profile model.Profile) error {
+	if verify == nil {
+		return errors.New("managed installation verifier is unavailable")
+	}
+	return verify(profile)
+}
+
 type ControllerOptions struct {
 	NodeState string
 	Workspace string
@@ -35,6 +49,7 @@ type ControllerOptions struct {
 	Profile   model.Profile
 	Signer    event.PublicationSigner
 	Clock     Clock
+	Install   InstallationVerifier
 }
 
 // Controller is the single local composition root for mnemond-managed Agent
@@ -51,7 +66,8 @@ func NewController(options ControllerOptions) (*Controller, error) {
 	if options.Clock == nil {
 		options.Clock = wallClock{}
 	}
-	if options.Store == nil || options.Signer == nil || options.Profile.ID() != model.TeamworkProfileID() ||
+	if options.Store == nil || options.Signer == nil || options.Install == nil ||
+		options.Profile.ID() != model.TeamworkProfileID() ||
 		!options.Profile.Enabled() || options.NodeState == "" || options.Workspace == "" ||
 		!filepath.IsAbs(options.NodeState) || filepath.Clean(options.NodeState) != options.NodeState ||
 		!filepath.IsAbs(options.Workspace) || filepath.Clean(options.Workspace) != options.Workspace ||
@@ -63,16 +79,9 @@ func NewController(options ControllerOptions) (*Controller, error) {
 		stateInfo.Mode().Perm() != 0o700 || options.Store.Path() != filepath.Join(options.NodeState, "node.db") {
 		return nil, errors.New("mnemond controller Store is outside its owner-only Node state")
 	}
-	bundle, err := assets.Load()
-	if err != nil {
-		return nil, fmt.Errorf("mnemond controller managed assets: %w", err)
-	}
-	assetRevision := bundle.Manifest().AssetRevision
-	if options.Profile.ActiveAssetRevision() != assetRevision {
-		return nil, errors.New("mnemond controller Profile asset revision is not canonical")
-	}
-	if err := integration.VerifyNodeBundle(options.NodeState, bundle); err != nil {
-		return nil, fmt.Errorf("mnemond controller Node asset bundle: %w", err)
+	assetRevision := options.Profile.ActiveAssetRevision()
+	if err := options.Install.Verify(options.Profile); err != nil {
+		return nil, fmt.Errorf("mnemond controller managed installation: %w", err)
 	}
 	cas, err := artifact.NewCAS(filepath.Join(options.NodeState, "objects", "sha256"))
 	if err != nil {
@@ -108,18 +117,16 @@ func NewController(options ControllerOptions) (*Controller, error) {
 	if err != nil {
 		return nil, err
 	}
+	gate := controllerActivationGate{expected: options.Profile, install: options.Install}
 	service, err := agent.NewService(options.Store, agent.ServiceOptions{AssetRevision: assetRevision,
-		Clock: options.Clock, Executor: executor, CurrentViews: currentViews})
+		Clock: options.Clock, Executor: executor, CurrentViews: currentViews, ActivationGate: gate})
 	if err != nil {
 		return nil, err
 	}
-	health := localapi.HealthProviderFunc(func(_ context.Context,
+	health := localapi.HealthProviderFunc(func(healthCtx context.Context,
 		metadata localapi.RequestMetadata,
 	) (localapi.HealthSnapshot, *localapi.APIError) {
-		ready := sameControllerProfile(metadata.Profile, options.Profile)
-		if ready {
-			ready = integration.VerifyNodeBundle(options.NodeState, bundle) == nil
-		}
+		ready := gate.Check(healthCtx, metadata.Profile) == nil
 		return localapi.HealthSnapshot{AssetRevision: assetRevision, WorkersReady: ready}, nil
 	})
 	server, err := localapi.NewServer(options.Store, service, health)
@@ -127,6 +134,22 @@ func NewController(options ControllerOptions) (*Controller, error) {
 		return nil, err
 	}
 	return &Controller{nodeState: options.NodeState, server: server}, nil
+}
+
+type controllerActivationGate struct {
+	expected model.Profile
+	install  InstallationVerifier
+}
+
+func (gate controllerActivationGate) Check(ctx context.Context, profile model.Profile) *localapi.APIError {
+	if ctx == nil || ctx.Err() != nil {
+		return localapi.NewAPIError(localapi.CodeInternal, "managed activation check was cancelled")
+	}
+	if gate.install == nil || !sameControllerProfile(profile, gate.expected) || gate.install.Verify(profile) != nil {
+		return localapi.NewAPIError(localapi.CodeAssetRevisionMismatch,
+			"managed Node assets or Host projection differ from the active Profile")
+	}
+	return nil
 }
 
 func sameControllerProfile(got, want model.Profile) bool {

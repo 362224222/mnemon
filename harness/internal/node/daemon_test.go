@@ -20,7 +20,7 @@ import (
 func TestOpenDaemonBindsIdentityStoreCredentialAssetsAndSocket(t *testing.T) {
 	fixture := newDaemonFixture(t, true)
 	daemon, err := OpenDaemon(context.Background(), DaemonOptions{Workspace: fixture.workspace,
-		Clock: controllerTestClock{fixture.profile.UpdatedAt()}})
+		Clock: controllerTestClock{fixture.profile.UpdatedAt()}, Install: fixture.install})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,20 +66,31 @@ func TestOpenDaemonRejectsAuthorityDriftAndNeverCreatesMissingDatabase(t *testin
 		if _, err := EnsureIdentity(fixture.nodeState); err != nil {
 			t.Fatal(err)
 		}
-		if daemon, err := OpenDaemon(context.Background(), DaemonOptions{Workspace: fixture.workspace}); daemon != nil || !errors.Is(err, ErrDaemonAuthority) {
+		if daemon, err := OpenDaemon(context.Background(), DaemonOptions{Workspace: fixture.workspace, Install: fixture.install}); daemon != nil || !errors.Is(err, ErrDaemonAuthority) {
 			t.Fatalf("OpenDaemon() = (%v, %v)", daemon, err)
 		}
 	})
 	t.Run("credential replacement", func(t *testing.T) {
 		fixture := newDaemonFixture(t, true)
 		writeDaemonToken(t, fixture.nodeState, bytes.Repeat([]byte{0x99}, 32), true)
-		if daemon, err := OpenDaemon(context.Background(), DaemonOptions{Workspace: fixture.workspace}); daemon != nil || !errors.Is(err, ErrDaemonAuthority) {
+		if daemon, err := OpenDaemon(context.Background(), DaemonOptions{Workspace: fixture.workspace, Install: fixture.install}); daemon != nil || !errors.Is(err, ErrDaemonAuthority) {
 			t.Fatalf("OpenDaemon() = (%v, %v)", daemon, err)
 		}
 	})
 	t.Run("disabled Profile", func(t *testing.T) {
 		fixture := newDaemonFixture(t, false)
-		if daemon, err := OpenDaemon(context.Background(), DaemonOptions{Workspace: fixture.workspace}); daemon != nil || !errors.Is(err, ErrDaemonAuthority) {
+		if daemon, err := OpenDaemon(context.Background(), DaemonOptions{Workspace: fixture.workspace, Install: fixture.install}); daemon != nil || !errors.Is(err, ErrDaemonAuthority) {
+			t.Fatalf("OpenDaemon() = (%v, %v)", daemon, err)
+		}
+	})
+	t.Run("Host projection drift", func(t *testing.T) {
+		fixture := newDaemonFixture(t, true)
+		path := filepath.Join(fixture.workspace, ".codex", "skills", "mnemon-harness", "SKILL.md")
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+		if daemon, err := OpenDaemon(context.Background(), DaemonOptions{Workspace: fixture.workspace,
+			Install: fixture.install}); daemon != nil || !errors.Is(err, ErrDaemonAuthority) {
 			t.Fatalf("OpenDaemon() = (%v, %v)", daemon, err)
 		}
 	})
@@ -115,6 +126,7 @@ type daemonFixture struct {
 	identity  *Identity
 	profile   model.Profile
 	revision  string
+	install   InstallationVerifier
 }
 
 func newDaemonFixture(t *testing.T, enabled bool) daemonFixture {
@@ -136,6 +148,9 @@ func newDaemonFixture(t *testing.T, enabled bool) daemonFixture {
 		t.Fatal(err)
 	}
 	if _, err := integration.InstallNodeBundle(nodeState, bundle); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := integration.InstallHostProjection(workspace, nodeState, assets.HostCodex, bundle); err != nil {
 		t.Fatal(err)
 	}
 	at := time.Date(2026, 7, 17, 5, 0, 0, 0, time.UTC)
@@ -181,7 +196,8 @@ func newDaemonFixture(t *testing.T, enabled bool) daemonFixture {
 	}
 	writeDaemonToken(t, nodeState, credential, false)
 	return daemonFixture{workspace: workspace, nodeState: nodeState, identity: identity,
-		profile: profile, revision: bundle.Manifest().AssetRevision}
+		profile: profile, revision: bundle.Manifest().AssetRevision,
+		install: testInstallationVerifier(workspace, nodeState, bundle)}
 }
 
 func newDaemonWorkspace(t *testing.T) string {

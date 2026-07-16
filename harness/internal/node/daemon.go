@@ -18,6 +18,7 @@ var ErrDaemonAuthority = errors.New("mnemond durable authority is invalid")
 type DaemonOptions struct {
 	Workspace string
 	Clock     Clock
+	Install   InstallationVerifier
 }
 
 // Daemon owns the strict restart path for one workspace-local Node. It binds
@@ -80,7 +81,8 @@ func OpenDaemon(ctx context.Context, options DaemonOptions) (*Daemon, error) {
 		return fail(fmt.Errorf("%w: %v", ErrDaemonAuthority, err))
 	}
 	controller, err := NewController(ControllerOptions{NodeState: nodeState, Workspace: workspace,
-		Store: st, Profile: authority.Profile, Signer: identity.PublicationSigner(), Clock: options.Clock})
+		Store: st, Profile: authority.Profile, Signer: identity.PublicationSigner(), Clock: options.Clock,
+		Install: options.Install})
 	if err != nil {
 		return fail(fmt.Errorf("%w: compose controller: %v", ErrDaemonAuthority, err))
 	}

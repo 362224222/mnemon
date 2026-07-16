@@ -11,6 +11,9 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/mnemon-dev/mnemon/harness/internal/assets"
+	"github.com/mnemon-dev/mnemon/harness/internal/integration"
+	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/node"
 )
 
@@ -51,8 +54,28 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	return runWithDaemon(ctx, args, stdout, stderr, func(ctx context.Context,
 		options node.DaemonOptions,
 	) (daemonRuntime, error) {
+		verify, err := managedInstallationVerifier(options.Workspace)
+		if err != nil {
+			return nil, err
+		}
+		options.Install = verify
 		return node.OpenDaemon(ctx, options)
 	})
+}
+
+func managedInstallationVerifier(workspace string) (node.InstallationVerifier, error) {
+	bundle, err := assets.Load()
+	if err != nil {
+		return nil, fmt.Errorf("load canonical managed assets: %w", err)
+	}
+	nodeState := filepath.Join(workspace, ".mnemon", "harness", "node")
+	return node.InstallationVerifierFunc(func(profile model.Profile) error {
+		host := assets.Host(profile.Host())
+		if !host.Valid() || profile.ActiveAssetRevision() != bundle.Manifest().AssetRevision {
+			return errors.New("active Profile does not select this canonical asset bundle")
+		}
+		return integration.VerifyHostProjection(workspace, nodeState, host, bundle)
+	}), nil
 }
 
 func runWithDaemon(ctx context.Context, args []string, stdout, stderr io.Writer,
