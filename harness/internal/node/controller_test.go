@@ -13,6 +13,7 @@ import (
 
 	"github.com/mnemon-dev/mnemon/harness/internal/assets"
 	"github.com/mnemon-dev/mnemon/harness/internal/event"
+	"github.com/mnemon-dev/mnemon/harness/internal/integration"
 	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
@@ -43,6 +44,9 @@ func TestControllerServesOwnerOnlyManagedRoutesFromOneStore(t *testing.T) {
 	defer st.Close()
 	bundle, err := assets.Load()
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := integration.InstallNodeBundle(nodeState, bundle); err != nil {
 		t.Fatal(err)
 	}
 	at := time.Date(2026, 7, 17, 3, 0, 0, 0, time.UTC)
@@ -94,6 +98,11 @@ func TestControllerServesOwnerOnlyManagedRoutesFromOneStore(t *testing.T) {
 	client, err := localapi.NewClient(nodeState)
 	if err != nil {
 		t.Fatal(err)
+	}
+	health, apiErr := client.ProbeHealth(context.Background())
+	if apiErr != nil || health.Status != "ready" ||
+		health.AssetRevision != bundle.Manifest().AssetRevision {
+		t.Fatalf("ProbeHealth() = (%#v, %v)", health, apiErr)
 	}
 	hook, apiErr := client.HookCheck(context.Background())
 	if apiErr != nil || hook.Pending {

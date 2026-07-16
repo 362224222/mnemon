@@ -14,6 +14,7 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/artifact"
 	"github.com/mnemon-dev/mnemon/harness/internal/assets"
 	"github.com/mnemon-dev/mnemon/harness/internal/event"
+	"github.com/mnemon-dev/mnemon/harness/internal/integration"
 	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
@@ -70,6 +71,9 @@ func NewController(options ControllerOptions) (*Controller, error) {
 	if options.Profile.ActiveAssetRevision() != assetRevision {
 		return nil, errors.New("mnemond controller Profile asset revision is not canonical")
 	}
+	if err := integration.VerifyNodeBundle(options.NodeState, bundle); err != nil {
+		return nil, fmt.Errorf("mnemond controller Node asset bundle: %w", err)
+	}
 	cas, err := artifact.NewCAS(filepath.Join(options.NodeState, "objects", "sha256"))
 	if err != nil {
 		return nil, err
@@ -109,11 +113,28 @@ func NewController(options ControllerOptions) (*Controller, error) {
 	if err != nil {
 		return nil, err
 	}
-	server, err := localapi.NewServer(options.Store, service)
+	health := localapi.HealthProviderFunc(func(_ context.Context,
+		metadata localapi.RequestMetadata,
+	) (localapi.HealthSnapshot, *localapi.APIError) {
+		ready := sameControllerProfile(metadata.Profile, options.Profile)
+		if ready {
+			ready = integration.VerifyNodeBundle(options.NodeState, bundle) == nil
+		}
+		return localapi.HealthSnapshot{AssetRevision: assetRevision, WorkersReady: ready}, nil
+	})
+	server, err := localapi.NewServer(options.Store, service, health)
 	if err != nil {
 		return nil, err
 	}
 	return &Controller{nodeState: options.NodeState, server: server}, nil
+}
+
+func sameControllerProfile(got, want model.Profile) bool {
+	return got.ID() == want.ID() && got.Principal() == want.Principal() &&
+		got.WorkspaceRoot() == want.WorkspaceRoot() && got.Host() == want.Host() &&
+		got.Runtime() == want.Runtime() && got.CredentialHash() == want.CredentialHash() &&
+		got.ActiveAssetRevision() == want.ActiveAssetRevision() &&
+		got.HandlingBudget().String() == want.HandlingBudget().String() && got.Enabled() && want.Enabled()
 }
 
 func (controller *Controller) Serve(ctx context.Context) error {
