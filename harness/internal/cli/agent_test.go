@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -129,7 +130,7 @@ func TestAgentAppTeamworkUsesContentContextAndTerminalJournal(t *testing.T) {
 	if _, err := os.Lstat(contextFile.Path()); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("terminal context still exists: %v", err)
 	}
-	assertNoPendingJournals(t, nodeState)
+	assertJournalSuffixes(t, nodeState, []string{".presented"})
 }
 
 func TestAgentAppResponseLossReusesJournalAndStableJSONError(t *testing.T) {
@@ -162,7 +163,7 @@ func TestAgentAppResponseLossReusesJournalAndStableJSONError(t *testing.T) {
 		t.Fatalf("replay = exit %d key %s output %q", exit,
 			fake.teamworkJournal.OperationKeyHash().String(), stdout.String())
 	}
-	assertNoPendingJournals(t, nodeState)
+	assertJournalSuffixes(t, nodeState, []string{".presented"})
 
 	app.stdin = bytes.NewBufferString("review this\n")
 	stdout.Reset()
@@ -171,7 +172,7 @@ func TestAgentAppResponseLossReusesJournalAndStableJSONError(t *testing.T) {
 		t.Fatalf("new intentional offer = exit %d key %s output %q", exit,
 			fake.teamworkJournal.OperationKeyHash().String(), stdout.String())
 	}
-	assertNoPendingJournals(t, nodeState)
+	assertJournalSuffixes(t, nodeState, []string{".presented", ".presented"})
 }
 
 func TestAgentAppTerminalReceiptSurvivesStdoutFailure(t *testing.T) {
@@ -193,7 +194,50 @@ func TestAgentAppTerminalReceiptSurvivesStdoutFailure(t *testing.T) {
 		t.Fatalf("terminal replay = exit %d key %s output %q", exit,
 			fake.teamworkJournal.OperationKeyHash().String(), stdout.String())
 	}
-	assertNoPendingJournals(t, nodeState)
+	assertJournalSuffixes(t, nodeState, []string{".presented"})
+}
+
+func TestAgentAppConcurrentPresentationKeepsOldIdentityAndNextCallGetsFreshKey(t *testing.T) {
+	workspace, nodeState := cliWorkspace(t)
+	client := newBarrierControlClient(2, acceptedCLIResponse("offer"))
+	stdoutA, stderrA, appA := cliTestApp(t, workspace, client, bytes.NewBufferString("same offer"))
+	stdoutB, stderrB, appB := cliTestApp(t, workspace, client, bytes.NewBufferString("same offer"))
+	args := []string{"teamwork", "offer", "--content-file", "-", "--json"}
+	exits := make(chan int, 2)
+	go func() { exits <- appA.Run(context.Background(), args) }()
+	go func() { exits <- appB.Run(context.Background(), args) }()
+	for index := 0; index < 2; index++ {
+		<-client.entered
+	}
+	close(client.releases[0])
+	if exit := <-exits; exit != 0 {
+		t.Fatalf("first concurrent presentation exit = %d", exit)
+	}
+	assertJournalSuffixes(t, nodeState, []string{".presented"})
+	close(client.releases[1])
+	if exit := <-exits; exit != 0 {
+		t.Fatalf("second concurrent presentation exit = %d", exit)
+	}
+	if stderrA.Len() != 0 || stderrB.Len() != 0 ||
+		!strings.Contains(stdoutA.String(), `"status":"accepted"`) ||
+		!strings.Contains(stdoutB.String(), `"status":"accepted"`) {
+		t.Fatalf("concurrent output = A(%q,%q) B(%q,%q)", stdoutA.String(), stderrA.String(),
+			stdoutB.String(), stderrB.String())
+	}
+	keys := client.operationKeys()
+	if len(keys) != 2 || keys[0] != keys[1] {
+		t.Fatalf("concurrent operation keys = %v", keys)
+	}
+	assertJournalSuffixes(t, nodeState, []string{".presented"})
+
+	fresh := &fakeControlClient{teamworkResponse: acceptedCLIResponse("offer")}
+	_, freshStderr, freshApp := cliTestApp(t, workspace, fresh, bytes.NewBufferString("same offer"))
+	if exit := freshApp.Run(context.Background(), args); exit != 0 || freshStderr.Len() != 0 ||
+		fresh.teamworkJournal.OperationKeyHash() == keys[0] {
+		t.Fatalf("fresh identical offer = exit %d key %s stderr %q", exit,
+			fresh.teamworkJournal.OperationKeyHash().String(), freshStderr.String())
+	}
+	assertJournalSuffixes(t, nodeState, []string{".presented", ".presented"})
 }
 
 func TestAgentAppRejectedActionRetainsContextAfterPresentation(t *testing.T) {
@@ -215,7 +259,7 @@ func TestAgentAppRejectedActionRetainsContextAfterPresentation(t *testing.T) {
 	if info, err := os.Lstat(contextFile.Path()); err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("rejected action context = %#v, %v", info, err)
 	}
-	assertNoPendingJournals(t, nodeState)
+	assertJournalSuffixes(t, nodeState, []string{".presented"})
 }
 
 func TestAgentAppPresentedEnvelopeKeepsItsExitWhenMarkerFails(t *testing.T) {
@@ -274,7 +318,7 @@ func TestAgentAppResolveAndInputConfinement(t *testing.T) {
 	if fake.resolveRequest.Decision != "retry" || fake.resolveRequest.Content != "try later" {
 		t.Fatalf("resolve request = %#v", fake.resolveRequest)
 	}
-	assertNoPendingJournals(t, nodeState)
+	assertJournalSuffixes(t, nodeState, []string{".presented"})
 
 	outside := filepath.Join(t.TempDir(), "outside.txt")
 	if err := os.WriteFile(outside, []byte("secret"), 0o600); err != nil {
@@ -297,6 +341,11 @@ func TestAgentAppResolveAndInputConfinement(t *testing.T) {
 			t.Fatalf("unsafe Artifact path %q error = %v", path, apiErr)
 		}
 	}
+	viewPath := ".mnemon/harness/node/views/run-cli-current/0/result.txt"
+	if normalized, apiErr := normalizeArtifactArguments([]string{viewPath}); apiErr != nil ||
+		len(normalized) != 1 || normalized[0] != viewPath {
+		t.Fatalf("managed readonly view normalization = (%v, %v)", normalized, apiErr)
+	}
 }
 
 type fakeControlClient struct {
@@ -314,6 +363,57 @@ type fakeControlClient struct {
 	resolveJournal   localapi.PendingJournal
 	resolveResponse  localapi.OperationResponse
 	resolveError     *localapi.APIError
+}
+
+type barrierControlClient struct {
+	mu        sync.Mutex
+	entered   chan int
+	releases  []chan struct{}
+	keys      []model.Digest
+	response  localapi.OperationResponse
+	nextIndex int
+}
+
+func newBarrierControlClient(callers int, response localapi.OperationResponse) *barrierControlClient {
+	releases := make([]chan struct{}, callers)
+	for index := range releases {
+		releases[index] = make(chan struct{})
+	}
+	return &barrierControlClient{entered: make(chan int, callers), releases: releases,
+		response: response}
+}
+
+func (client *barrierControlClient) HookCheck(context.Context) (localapi.HookCheckResponse, *localapi.APIError) {
+	return localapi.HookCheckResponse{}, localapi.NewAPIError(localapi.CodeInternal, "unexpected Hook call")
+}
+
+func (client *barrierControlClient) AgentCurrent(context.Context) (localapi.AgentCurrentResponse, *localapi.APIError) {
+	return localapi.AgentCurrentResponse{}, localapi.NewAPIError(localapi.CodeInternal, "unexpected current call")
+}
+
+func (client *barrierControlClient) TeamworkAction(_ context.Context, _ localapi.TeamworkActionRequest,
+	_ *localapi.ContextFile, journal localapi.PendingJournal,
+) (localapi.OperationResponse, *localapi.APIError) {
+	client.mu.Lock()
+	index := client.nextIndex
+	client.nextIndex++
+	client.keys = append(client.keys, journal.OperationKeyHash())
+	client.mu.Unlock()
+	client.entered <- index
+	<-client.releases[index]
+	return client.response, nil
+}
+
+func (client *barrierControlClient) AgentResolve(context.Context, localapi.AgentResolveRequest,
+	localapi.ContextFile, localapi.PendingJournal,
+) (localapi.OperationResponse, *localapi.APIError) {
+	return localapi.OperationResponse{}, localapi.NewAPIError(localapi.CodeInternal, "unexpected resolve call")
+}
+
+func (client *barrierControlClient) operationKeys() []model.Digest {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	return append([]model.Digest(nil), client.keys...)
 }
 
 func (fake *fakeControlClient) HookCheck(context.Context) (localapi.HookCheckResponse, *localapi.APIError) {
@@ -433,11 +533,6 @@ func resolvedCLIResponse(decision string) localapi.OperationResponse {
 	return localapi.OperationResponse{SchemaVersion: 1, Status: "resolved", Action: "agent.resolve." + decision,
 		OperationID: "operation-cli-resolve-" + decision, Results: []localapi.OperationResult{},
 		Handling: &localapi.HandlingReceipt{Status: "requeued"}, Receipt: "receipt"}
-}
-
-func assertNoPendingJournals(t *testing.T, nodeState string) {
-	t.Helper()
-	assertJournalSuffixes(t, nodeState, nil)
 }
 
 func assertJournalSuffixes(t *testing.T, nodeState string, want []string) {

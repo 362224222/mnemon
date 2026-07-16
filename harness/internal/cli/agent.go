@@ -499,14 +499,14 @@ func (app *App) presentTerminalOperation(nodeState string, journals journalStore
 	if exit := app.writeOperation(response, jsonOutput); exit != 0 {
 		return exit
 	}
-	presented, err := journals.MarkPresented(terminal)
+	_, err = journals.MarkPresented(terminal)
 	if err != nil {
 		// The validated success envelope is already visible. Preserve its frozen
 		// exit contract and leave the terminal handle for replay/doctor repair;
 		// a second envelope or a contradictory exit would be less truthful.
 		return 0
 	}
-	app.removePresentedHandles(nodeState, journals, presented, contextFile)
+	app.removePresentedContext(nodeState, contextFile)
 	return 0
 }
 
@@ -522,15 +522,15 @@ func (app *App) presentTerminalError(journals journalStore, pending localapi.Pen
 	if !written {
 		return exit
 	}
-	presented, err := journals.MarkPresented(terminal)
+	_, err = journals.MarkPresented(terminal)
 	if err != nil {
 		// The validated rejection envelope is already visible, so its domain exit
 		// remains authoritative even if the local presentation marker needs repair.
 		return exit
 	}
 	// A rejected action leaves its claim context available for a corrected
-	// action. Only the exact operation replay handle has become terminal.
-	_ = journals.RemoveTerminal(presented)
+	// action. The presented tombstone remains so an already in-flight caller
+	// can still prove the old operation identity while a new call gets a new key.
 	return exit
 }
 
@@ -543,9 +543,7 @@ func canonicalRequestDigest(request any) (model.Digest, *localapi.APIError) {
 	return model.Sum(raw), nil
 }
 
-func (app *App) removePresentedHandles(nodeState string, journals journalStore,
-	journal localapi.PendingJournal, contextFile *localapi.ContextFile,
-) {
+func (app *App) removePresentedContext(nodeState string, contextFile *localapi.ContextFile) {
 	if contextFile != nil {
 		if err := app.deps.removeContext(nodeState, *contextFile); err != nil {
 			// The validated domain receipt remains the authority. A tampered or
@@ -553,7 +551,6 @@ func (app *App) removePresentedHandles(nodeState string, journals journalStore,
 			return
 		}
 	}
-	_ = journals.RemoveTerminal(journal)
 }
 
 func (app *App) readContent(projectRoot, source string) (string, *localapi.APIError) {
@@ -595,9 +592,9 @@ func normalizeArtifactArguments(values []string) ([]string, *localapi.APIError) 
 	seen := make(map[string]struct{}, len(values))
 	for index, value := range values {
 		logical, err := normalizeWorkspaceRelative(value)
-		if err != nil || isHarnessInternal(logical) {
+		if err != nil || isHarnessInternal(logical) && !isManagedReadonlyViewPath(logical) {
 			return nil, localapi.NewAPIError(localapi.CodeArtifactInvalid,
-				"Artifact path must be workspace-relative and outside Harness state")
+				"Artifact path must be workspace-relative, produced, or an exact managed readonly view")
 		}
 		if _, exists := seen[logical]; exists {
 			return nil, localapi.NewAPIError(localapi.CodeArtifactInvalid,
@@ -635,6 +632,11 @@ func isHarnessInternal(logical string) bool {
 	components := strings.Split(filepath.ToSlash(logical), "/")
 	return len(components) >= 2 && strings.EqualFold(components[0], ".mnemon") &&
 		strings.EqualFold(components[1], "harness")
+}
+
+func isManagedReadonlyViewPath(logical string) bool {
+	_, err := model.NewCurrentArtifactView(model.Sum([]byte("mnemon/cli/view-path-validation/v1")), logical)
+	return err == nil
 }
 
 func readBoundedWorkspaceFile(projectRoot, requested string, maximum int) ([]byte, error) {
