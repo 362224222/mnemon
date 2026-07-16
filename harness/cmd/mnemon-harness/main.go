@@ -16,13 +16,15 @@ var version = "dev"
 const helpText = `mnemon-harness is the project-local client for mnemond-managed Teamwork.
 
 Usage:
+  mnemon-harness setup [--host auto|codex|claude-code] [--project-root DIR]
   mnemon-harness --help
   mnemon-harness --version
 
-Setup and Channel operator commands will appear here only when their complete
-user path is available. Managed Agent commands are installed through the
-canonical Skill and Guide and are intentionally absent from ordinary help.
+Managed Agent commands are installed through the canonical Skill and Guide
+and are intentionally absent from ordinary help.
 `
+
+type setupRunner func(context.Context, []string, io.Writer, io.Writer, string) int
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -34,6 +36,12 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	return runWithSetup(ctx, args, stdin, stdout, stderr, cli.RunSetup)
+}
+
+func runWithSetup(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer,
+	setup setupRunner,
+) int {
 	if len(args) == 0 {
 		if _, err := io.WriteString(stdout, helpText); err != nil {
 			return 1
@@ -60,6 +68,11 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			return 1
 		}
 		return 0
+	case "setup":
+		if setup == nil {
+			return 1
+		}
+		return setup(ctx, args[1:], stdout, stderr, version)
 	case "hook", "agent", "teamwork":
 		return cli.New(stdin, stdout, stderr).Run(ctx, args)
 	default:

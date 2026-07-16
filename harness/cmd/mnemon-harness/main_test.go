@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -65,6 +67,10 @@ func TestRun(t *testing.T) {
 	}
 
 	lowerHelp := strings.ToLower(wantHelp)
+	if !strings.Contains(wantHelp,
+		"mnemon-harness setup [--host auto|codex|claude-code] [--project-root DIR]") {
+		t.Error("ordinary help does not expose the complete setup entrypoint")
+	}
 	for _, forbidden := range []string{
 		"hub", "remote workspace", "multica", "generic capability", "mcp",
 		"evolution", "tower", "session", "hook check", "agent current", "teamwork offer",
@@ -72,5 +78,28 @@ func TestRun(t *testing.T) {
 		if strings.Contains(lowerHelp, forbidden) {
 			t.Errorf("help contains retired vocabulary %q", forbidden)
 		}
+	}
+}
+
+func TestRunRoutesSetupAndOnlyPassesCommandArgumentsAndVersion(t *testing.T) {
+	var received []string
+	setup := func(ctx context.Context, args []string, stdout, stderr io.Writer,
+		gotVersion string,
+	) int {
+		if ctx == nil || gotVersion != version {
+			t.Fatalf("setup composition = context %v version %q", ctx, gotVersion)
+		}
+		received = append([]string(nil), args...)
+		_, _ = io.WriteString(stdout, "setup receipt\n")
+		return 7
+	}
+	var stdout, stderr bytes.Buffer
+	exit := runWithSetup(context.Background(), []string{"setup", "--host", "codex",
+		"--project-root", "."}, strings.NewReader("unrelated stdin"), &stdout, &stderr, setup)
+	if exit != 7 || !reflect.DeepEqual(received,
+		[]string{"--host", "codex", "--project-root", "."}) ||
+		stdout.String() != "setup receipt\n" || stderr.Len() != 0 {
+		t.Fatalf("setup route = exit %d args %v stdout %q stderr %q", exit, received,
+			stdout.String(), stderr.String())
 	}
 }
