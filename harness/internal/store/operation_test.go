@@ -221,10 +221,14 @@ func startedOperation(t *testing.T, idText, keyText, requestText, runText, owner
 
 func insertOperationAgentRun(t *testing.T, st *Store, profile model.Profile, runText, status string, startedAt time.Time) {
 	t.Helper()
+	finishedAt := any(nil)
+	if status != "starting" && status != "running" {
+		finishedAt = storeTime(startedAt)
+	}
 	_, err := st.db.Exec(`INSERT INTO agent_runs(run_id, profile_id, cause_json, launcher, runtime_kind,
-		launcher_diagnostic_json, runtime_ids_json, status, started_at)
-		VALUES(?, ?, '{}', 'test', ?, '{}', '{}', ?, ?)`, runText, profile.ID().String(),
-		string(profile.Runtime()), status, storeTime(startedAt))
+		launcher_diagnostic_json, runtime_ids_json, status, started_at, finished_at)
+		VALUES(?, ?, '{}', 'test', ?, '{}', '{}', ?, ?, ?)`, runText, profile.ID().String(),
+		string(profile.Runtime()), status, storeTime(startedAt), finishedAt)
 	if err != nil {
 		t.Fatal(err)
 	}

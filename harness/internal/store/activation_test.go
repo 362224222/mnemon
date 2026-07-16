@@ -255,10 +255,14 @@ func insertActivationStartedOperation(t *testing.T, st *Store, _ model.Node, pro
 
 func insertActivationRunWithStatus(t *testing.T, st *Store, profile model.Profile, runID, status string) {
 	t.Helper()
+	finishedAt := any(nil)
+	if status != "starting" && status != "running" {
+		finishedAt = storeTime(profile.UpdatedAt())
+	}
 	_, err := st.db.Exec(`INSERT INTO agent_runs(run_id,profile_id,cause_json,launcher,runtime_kind,
-		launcher_diagnostic_json,runtime_ids_json,status,started_at)
-		VALUES(?,?,'{}','test',?,'{}','{}',?,?)`, runID, profile.ID().String(), string(profile.Runtime()),
-		status, storeTime(profile.UpdatedAt()))
+		launcher_diagnostic_json,runtime_ids_json,status,started_at,finished_at)
+		VALUES(?,?,'{}','test',?,'{}','{}',?,?,?)`, runID, profile.ID().String(), string(profile.Runtime()),
+		status, storeTime(profile.UpdatedAt()), finishedAt)
 	if err != nil {
 		t.Fatal(err)
 	}

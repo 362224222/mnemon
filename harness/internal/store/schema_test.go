@@ -28,7 +28,8 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 		),
 		"index": strings.Fields(
 			"profiles_one_enabled_teamwork_idx operations_reclaim_idx operations_one_started_context_idx " +
-				"works_due_idx agent_handlings_ready_idx enrollment_grants_one_open_idx " +
+				"works_due_idx agent_handlings_ready_idx agent_handlings_one_claimed_profile_idx " +
+				"agent_runs_handling_attempt_idx enrollment_grants_one_open_idx " +
 				"channel_leave_requests_one_open_idx gossip_publications_ready_idx peer_inbox_work_idx",
 		),
 		"trigger": strings.Fields(
@@ -92,8 +93,8 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 	if !reflect.DeepEqual(actual, expected) {
 		t.Fatalf("schema object set mismatch\nactual: %#v\nexpected: %#v", actual, expected)
 	}
-	if got := len(actual["table"]) + len(actual["index"]) + len(actual["trigger"]); got != 123 {
-		t.Fatalf("explicit object count = %d, want 123", got)
+	if got := len(actual["table"]) + len(actual["index"]) + len(actual["trigger"]); got != 125 {
+		t.Fatalf("explicit object count = %d, want 125", got)
 	}
 }
 
@@ -294,6 +295,40 @@ func TestSchemaEnforcesOperationStateShape(t *testing.T) {
 	if status != "committed" || leaseOwner.Valid || leaseUntil.Valid || string(result) != `{}` || !finishedAt.Valid {
 		t.Fatalf("valid committed shape = status %q lease (%#v, %#v) result %q finished %#v",
 			status, leaseOwner, leaseUntil, result, finishedAt)
+	}
+}
+
+func TestSchemaEnforcesAgentRunFinishShape(t *testing.T) {
+	t.Parallel()
+	st := openTestStore(t)
+	insertNode(t, st.db)
+	insertProfile(t, st.db)
+	started := "2026-01-01T00:00:00.000000000Z"
+	finished := "2026-01-01T00:01:00.000000000Z"
+
+	for _, status := range []string{"starting", "running"} {
+		_, err := st.db.Exec(`INSERT INTO agent_runs(run_id,profile_id,cause_json,launcher,runtime_kind,
+			launcher_diagnostic_json,runtime_ids_json,status,started_at,finished_at)
+			VALUES(?, 'teamwork-default','{}','test','codex-app-server','{}','{}',?,?,?)`,
+			"run-active-finished-"+status, status, started, finished)
+		if err == nil || !strings.Contains(err.Error(), "CHECK constraint failed") {
+			t.Fatalf("active AgentRun %q with finished_at error = %v, want CHECK failure", status, err)
+		}
+	}
+	for _, status := range []string{"runtime_finished", "outcome_accepted", "requeued", "rejected", "failed", "dead"} {
+		_, err := st.db.Exec(`INSERT INTO agent_runs(run_id,profile_id,cause_json,launcher,runtime_kind,
+			launcher_diagnostic_json,runtime_ids_json,status,started_at)
+			VALUES(?, 'teamwork-default','{}','test','codex-app-server','{}','{}',?,?)`,
+			"run-finished-missing-"+status, status, started)
+		if err == nil || !strings.Contains(err.Error(), "CHECK constraint failed") {
+			t.Fatalf("finished AgentRun %q without finished_at error = %v, want CHECK failure", status, err)
+		}
+	}
+	if _, err := st.db.Exec(`INSERT INTO agent_runs(run_id,profile_id,cause_json,launcher,runtime_kind,
+		launcher_diagnostic_json,runtime_ids_json,status,started_at,finished_at)
+		VALUES('run-runtime-finished-valid','teamwork-default','{}','test','codex-app-server','{}','{}',
+		'runtime_finished',?,?)`, started, finished); err != nil {
+		t.Fatalf("valid runtime_finished AgentRun error = %v", err)
 	}
 }
 

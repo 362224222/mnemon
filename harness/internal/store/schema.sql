@@ -356,11 +356,15 @@ CREATE TABLE agent_handlings (
   dead_at            TEXT,
   created_at         TEXT NOT NULL,
   updated_at         TEXT NOT NULL,
-  UNIQUE (profile_id, event_id)
+  UNIQUE (profile_id, event_id),
+  UNIQUE (handling_id, profile_id)
 );
 
 CREATE INDEX agent_handlings_ready_idx
   ON agent_handlings(profile_id, status, available_at, priority DESC, created_at);
+
+CREATE UNIQUE INDEX agent_handlings_one_claimed_profile_idx
+  ON agent_handlings(profile_id) WHERE status = 'claimed';
 
 CREATE TRIGGER agent_handlings_identity_immutable
 BEFORE UPDATE OF handling_id, profile_id, event_id, priority, created_at ON agent_handlings
@@ -374,7 +378,7 @@ BEGIN SELECT RAISE(ABORT, 'handling creation identity is immutable'); END;
 CREATE TABLE agent_runs (
   run_id             TEXT PRIMARY KEY,
   profile_id         TEXT NOT NULL REFERENCES profiles(profile_id),
-  handling_id        TEXT REFERENCES agent_handlings(handling_id),
+  handling_id        TEXT,
   cause_json         BLOB NOT NULL,
   handling_attempt   INTEGER CHECK (handling_attempt > 0),
   claim_fence_hash   BLOB,
@@ -400,6 +404,8 @@ CREATE TABLE agent_runs (
   completion_receipt_json BLOB,
   error              TEXT,
   UNIQUE (run_id, profile_id),
+  FOREIGN KEY (handling_id, profile_id)
+    REFERENCES agent_handlings(handling_id, profile_id),
   CHECK (
     (handling_id IS NULL AND handling_attempt IS NULL
       AND claim_fence_hash IS NULL AND lease_until IS NULL)
@@ -410,8 +416,17 @@ CREATE TABLE agent_runs (
   CHECK (
     (attachment_token_hash IS NULL AND attachment_expires_at IS NULL AND attached_at IS NULL)
     OR (attachment_token_hash IS NOT NULL AND attachment_expires_at IS NOT NULL)
+  ),
+  CHECK (
+    (status IN ('starting','running') AND finished_at IS NULL)
+    OR
+    (status IN ('runtime_finished','outcome_accepted','requeued','rejected','failed','dead')
+      AND finished_at IS NOT NULL)
   )
 );
+
+CREATE UNIQUE INDEX agent_runs_handling_attempt_idx
+  ON agent_runs(handling_id, handling_attempt) WHERE handling_id IS NOT NULL;
 
 CREATE TRIGGER agent_runs_claim_snapshot_immutable
 BEFORE UPDATE OF handling_id, handling_attempt, claim_fence_hash, lease_until ON agent_runs

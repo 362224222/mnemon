@@ -79,8 +79,8 @@ func TestCommitLocalAcceptanceDoesNotSubstituteUnrelatedActiveRun(t *testing.T) 
 		launcher_diagnostic_json,runtime_ids_json,status,started_at)
 		VALUES(?,?,'{}','test',?,'{}','{}','running',?)`, unrelated.String(),
 		model.TeamworkProfileID().String(), string(fixture.profile.Runtime()), storeTime(fixture.now.Add(-time.Minute)))
-	mustExec(t, fixture.store, "UPDATE agent_runs SET status='failed' WHERE run_id=?",
-		operation.AgentRunID().String())
+	mustExec(t, fixture.store, "UPDATE agent_runs SET status='failed',finished_at=? WHERE run_id=?",
+		storeTime(fixture.now), operation.AgentRunID().String())
 
 	if _, err := fixture.store.CommitLocalAcceptance(context.Background(), spec,
 		fixture.now.Add(time.Second)); !errors.Is(err, ErrAdmissionConflict) {
