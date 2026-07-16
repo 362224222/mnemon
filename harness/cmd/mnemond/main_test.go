@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/node"
@@ -153,7 +154,8 @@ func TestRunInitializeCallsTheNodeWriterAndEmitsClosedReceipt(t *testing.T) {
 	var received node.ProvisionOptions
 	provision := func(_ context.Context, options node.ProvisionOptions) (node.ProvisionResult, error) {
 		received = options
-		return node.ProvisionResult{Created: true}, nil
+		return node.ProvisionResult{Created: true,
+			Profile: commandTestProfile(t, resolved, model.HostCodex, revision, false)}, nil
 	}
 	open := func(context.Context, node.DaemonOptions) (daemonRuntime, error) {
 		t.Fatal("initialize opened the daemon")
@@ -196,6 +198,31 @@ func TestRunInitializeRejectsMalformedAuthorityBeforeProvision(t *testing.T) {
 	}
 }
 
+func TestRunInitializeReceiptReportsDurableReplayAuthority(t *testing.T) {
+	project := t.TempDir()
+	resolved, err := filepath.EvalSymlinks(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requested := model.Sum([]byte("requested-initialize-assets")).String()
+	durable := model.Sum([]byte("durable-initialize-assets")).String()
+	provision := func(context.Context, node.ProvisionOptions) (node.ProvisionResult, error) {
+		return node.ProvisionResult{Profile: commandTestProfile(t, resolved,
+			model.HostClaudeCode, durable, false)}, nil
+	}
+	args := []string{"initialize", "--project-root", project, "--host", "codex",
+		"--asset-revision", requested}
+	var stdout bytes.Buffer
+	if err := runWithNode(context.Background(), args, &stdout, io.Discard, nil, provision, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	want := `{"asset_revision":"` + durable +
+		`","created":false,"host":"claude-code","schema_version":1,"status":"initialized"}` + "\n"
+	if stdout.String() != want {
+		t.Fatalf("replay receipt = %q, want %q", stdout.String(), want)
+	}
+}
+
 func TestRunActivateCallsTheNodeWriterAndEmitsClosedReceipt(t *testing.T) {
 	project := t.TempDir()
 	resolved, err := filepath.EvalSymlinks(project)
@@ -209,7 +236,8 @@ func TestRunActivateCallsTheNodeWriterAndEmitsClosedReceipt(t *testing.T) {
 			var received node.ActivateOptions
 			activate := func(_ context.Context, options node.ActivateOptions) (node.ActivateResult, error) {
 				received = options
-				return node.ActivateResult{Changed: changed}, nil
+				return node.ActivateResult{Changed: changed,
+					Profile: commandTestProfile(t, resolved, model.HostClaudeCode, revision, true)}, nil
 			}
 			open := func(context.Context, node.DaemonOptions) (daemonRuntime, error) {
 				t.Fatal("activate opened the daemon")
@@ -292,7 +320,8 @@ func TestRunDeactivateCallsTheNodeWriterAndEmitsClosedReceipt(t *testing.T) {
 			var received node.DeactivateOptions
 			deactivate := func(_ context.Context, options node.DeactivateOptions) (node.DeactivateResult, error) {
 				received = options
-				return node.DeactivateResult{Changed: changed}, nil
+				return node.DeactivateResult{Changed: changed,
+					Profile: commandTestProfile(t, resolved, model.HostCodex, revision, false)}, nil
 			}
 			args := []string{"deactivate", "--asset-revision", revision, "--project-root", project,
 				"--host", "codex"}
@@ -332,4 +361,23 @@ func TestRunDeactivateRejectsMalformedAuthorityBeforeDeactivation(t *testing.T) 
 	if called != 0 {
 		t.Fatalf("malformed deactivate called writer %d times", called)
 	}
+}
+
+func commandTestProfile(t *testing.T, workspace string, host model.HostKind,
+	revision string, enabled bool,
+) model.Profile {
+	t.Helper()
+	runtimeKind, ok := model.RuntimeForHost(host)
+	if !ok {
+		t.Fatalf("invalid command test Host %q", host)
+	}
+	at := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+	profile, err := model.NewProfile(model.ProfileSpec{ID: model.TeamworkProfileID(),
+		Principal: "principal-command", WorkspaceRoot: workspace, Host: host, Runtime: runtimeKind,
+		CredentialHash: model.Sum([]byte("command-profile-credential")), ActiveAssetRevision: revision,
+		HandlingBudget: model.DefaultHandlingBudget().JSON(), Enabled: enabled, CreatedAt: at, UpdatedAt: at})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return profile
 }

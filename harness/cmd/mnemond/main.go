@@ -144,8 +144,8 @@ func runWithNode(ctx context.Context, args []string, stdout, stderr io.Writer,
 		if err != nil {
 			return err
 		}
-		receipt := initializeReceipt{AssetRevision: options.AssetRevision, Created: result.Created,
-			Host: string(options.Host), SchemaVersion: model.SchemaVersion, Status: "initialized"}
+		receipt := initializeReceipt{AssetRevision: result.Profile.ActiveAssetRevision(), Created: result.Created,
+			Host: string(result.Profile.Host()), SchemaVersion: model.SchemaVersion, Status: "initialized"}
 		raw, err := model.CanonicalMarshal(receipt)
 		if err != nil {
 			return fmt.Errorf("encode initialization receipt: %w", err)
@@ -164,8 +164,8 @@ func runWithNode(ctx context.Context, args []string, stdout, stderr io.Writer,
 		if err != nil {
 			return err
 		}
-		receipt := activateReceipt{AssetRevision: options.AssetRevision, Changed: result.Changed,
-			Host: string(options.Host), SchemaVersion: model.SchemaVersion, Status: "active"}
+		receipt := activateReceipt{AssetRevision: result.Profile.ActiveAssetRevision(), Changed: result.Changed,
+			Host: string(result.Profile.Host()), SchemaVersion: model.SchemaVersion, Status: "active"}
 		raw, err := model.CanonicalMarshal(receipt)
 		if err != nil {
 			return fmt.Errorf("encode activation receipt: %w", err)
@@ -184,8 +184,8 @@ func runWithNode(ctx context.Context, args []string, stdout, stderr io.Writer,
 		if err != nil {
 			return err
 		}
-		receipt := deactivateReceipt{AssetRevision: options.AssetRevision, Changed: result.Changed,
-			Host: string(options.Host), SchemaVersion: model.SchemaVersion, Status: "inactive"}
+		receipt := deactivateReceipt{AssetRevision: result.Profile.ActiveAssetRevision(), Changed: result.Changed,
+			Host: string(result.Profile.Host()), SchemaVersion: model.SchemaVersion, Status: "inactive"}
 		raw, err := model.CanonicalMarshal(receipt)
 		if err != nil {
 			return fmt.Errorf("encode deactivation receipt: %w", err)
