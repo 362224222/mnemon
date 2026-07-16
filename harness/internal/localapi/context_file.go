@@ -413,7 +413,7 @@ func syncOwnerDirectory(dir string) error {
 
 func safeManagedFilename(value string) bool {
 	return value != "" && value != "." && value != ".." && filepath.Base(value) == value &&
-		!strings.ContainsAny(value, `/\\\x00`)
+		!strings.ContainsAny(value, "/\\\x00")
 }
 
 func unsafeClientState(detail string) error {

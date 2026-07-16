@@ -279,3 +279,17 @@ func TestContextFileErrorsNeverExposeCapability(t *testing.T) {
 		t.Fatalf("invalid context error leaks capability: %v", err)
 	}
 }
+
+func TestManagedFilenameAllowsIdentifierCharactersAndRejectsPathBytes(t *testing.T) {
+	t.Parallel()
+	for _, value := range []string{"run-000", "context-x0", "base64_X-9"} {
+		if !safeManagedFilename(value) {
+			t.Errorf("safeManagedFilename(%q) = false", value)
+		}
+	}
+	for _, value := range []string{"", ".", "..", "nested/path", `nested\\path`, "nul\x00byte"} {
+		if safeManagedFilename(value) {
+			t.Errorf("safeManagedFilename(%q) = true", value)
+		}
+	}
+}
