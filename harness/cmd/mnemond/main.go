@@ -40,6 +40,7 @@ type daemonRuntime interface {
 
 type daemonOpener func(context.Context, node.DaemonOptions) (daemonRuntime, error)
 type nodeProvisioner func(context.Context, node.ProvisionOptions) (node.ProvisionResult, error)
+type nodeActivator func(context.Context, node.ActivateOptions) (node.ActivateResult, error)
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -61,7 +62,16 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		}
 		options.Install = verify
 		return node.OpenDaemon(ctx, options)
-	}, node.Provision)
+	}, node.Provision, activateManagedNode)
+}
+
+func activateManagedNode(ctx context.Context, options node.ActivateOptions) (node.ActivateResult, error) {
+	verify, err := managedInstallationVerifier(options.Workspace)
+	if err != nil {
+		return node.ActivateResult{}, err
+	}
+	options.Install = verify
+	return node.Activate(ctx, options)
 }
 
 func managedInstallationVerifier(workspace string) (node.InstallationVerifier, error) {
@@ -82,11 +92,11 @@ func managedInstallationVerifier(workspace string) (node.InstallationVerifier, e
 func runWithDaemon(ctx context.Context, args []string, stdout, stderr io.Writer,
 	open daemonOpener,
 ) error {
-	return runWithNode(ctx, args, stdout, stderr, open, node.Provision)
+	return runWithNode(ctx, args, stdout, stderr, open, node.Provision, activateManagedNode)
 }
 
 func runWithNode(ctx context.Context, args []string, stdout, stderr io.Writer,
-	open daemonOpener, provision nodeProvisioner,
+	open daemonOpener, provision nodeProvisioner, activate nodeActivator,
 ) error {
 	_ = stderr
 
@@ -141,6 +151,26 @@ func runWithNode(ctx context.Context, args []string, stdout, stderr io.Writer,
 		}
 		_, err = stdout.Write(append(raw, '\n'))
 		return err
+	case "activate":
+		options, err := parseActivateOptions(args[1:])
+		if err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		result, err := activate(ctx, options)
+		if err != nil {
+			return err
+		}
+		receipt := activateReceipt{AssetRevision: options.AssetRevision, Changed: result.Changed,
+			Host: string(options.Host), SchemaVersion: model.SchemaVersion, Status: "active"}
+		raw, err := model.CanonicalMarshal(receipt)
+		if err != nil {
+			return fmt.Errorf("encode activation receipt: %w", err)
+		}
+		_, err = stdout.Write(append(raw, '\n'))
+		return err
 	default:
 		if len(args) != 1 {
 			return fmt.Errorf("unsupported command %q", strings.Join(args, " "))
@@ -157,34 +187,57 @@ type initializeReceipt struct {
 	Status        string `json:"status"`
 }
 
+type activateReceipt struct {
+	AssetRevision string `json:"asset_revision"`
+	Changed       bool   `json:"changed"`
+	Host          string `json:"host"`
+	SchemaVersion int    `json:"schema_version"`
+	Status        string `json:"status"`
+}
+
 func parseInitializeOptions(args []string) (node.ProvisionOptions, error) {
+	workspace, host, revision, err := parseManagedAuthorityOptions("initialize", args)
+	if err != nil {
+		return node.ProvisionOptions{}, err
+	}
+	return node.ProvisionOptions{Workspace: workspace, Host: host, AssetRevision: revision}, nil
+}
+
+func parseActivateOptions(args []string) (node.ActivateOptions, error) {
+	workspace, host, revision, err := parseManagedAuthorityOptions("activate", args)
+	if err != nil {
+		return node.ActivateOptions{}, err
+	}
+	return node.ActivateOptions{Workspace: workspace, Host: host, AssetRevision: revision}, nil
+}
+
+func parseManagedAuthorityOptions(command string, args []string) (string, model.HostKind, string, error) {
 	values := make(map[string]string, 3)
 	for len(args) != 0 {
 		if len(args) < 2 || (args[0] != "--project-root" && args[0] != "--host" && args[0] != "--asset-revision") {
-			return node.ProvisionOptions{}, errors.New("initialize requires --project-root, --host and --asset-revision")
+			return "", "", "", fmt.Errorf("%s requires --project-root, --host and --asset-revision", command)
 		}
 		if _, duplicate := values[args[0]]; duplicate || strings.TrimSpace(args[1]) == "" {
-			return node.ProvisionOptions{}, errors.New("initialize options must occur exactly once with nonempty values")
+			return "", "", "", fmt.Errorf("%s options must occur exactly once with nonempty values", command)
 		}
 		values[args[0]] = args[1]
 		args = args[2:]
 	}
 	if len(values) != 3 {
-		return node.ProvisionOptions{}, errors.New("initialize requires --project-root, --host and --asset-revision")
+		return "", "", "", fmt.Errorf("%s requires --project-root, --host and --asset-revision", command)
 	}
 	workspace, err := resolveProjectRoot(values["--project-root"])
 	if err != nil {
-		return node.ProvisionOptions{}, err
+		return "", "", "", err
 	}
 	host := model.HostKind(values["--host"])
 	if _, ok := model.RuntimeForHost(host); !ok {
-		return node.ProvisionOptions{}, errors.New("initialize Host must be codex or claude-code")
+		return "", "", "", fmt.Errorf("%s Host must be codex or claude-code", command)
 	}
 	if _, err := model.ParseDigest(values["--asset-revision"]); err != nil {
-		return node.ProvisionOptions{}, errors.New("initialize asset revision must be a sha256 digest")
+		return "", "", "", fmt.Errorf("%s asset revision must be a sha256 digest", command)
 	}
-	return node.ProvisionOptions{Workspace: workspace, Host: host,
-		AssetRevision: values["--asset-revision"]}, nil
+	return workspace, host, values["--asset-revision"], nil
 }
 
 func parseServeProjectRoot(args []string) (string, error) {

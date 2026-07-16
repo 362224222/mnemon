@@ -76,6 +76,9 @@ func TestRun(t *testing.T) {
 			t.Errorf("help contains retired vocabulary %q", forbidden)
 		}
 	}
+	if strings.Contains(lowerHelp, "activate") {
+		t.Error("help exposes the managed activate command")
+	}
 }
 
 type fakeDaemonRuntime struct {
@@ -159,7 +162,7 @@ func TestRunInitializeCallsTheNodeWriterAndEmitsClosedReceipt(t *testing.T) {
 	args := []string{"initialize", "--asset-revision", revision, "--project-root", project,
 		"--host", "codex"}
 	var stdout, stderr bytes.Buffer
-	if err := runWithNode(context.Background(), args, &stdout, &stderr, open, provision); err != nil {
+	if err := runWithNode(context.Background(), args, &stdout, &stderr, open, provision, nil); err != nil {
 		t.Fatal(err)
 	}
 	want := `{"asset_revision":"` + revision +
@@ -184,11 +187,94 @@ func TestRunInitializeRejectsMalformedAuthorityBeforeProvision(t *testing.T) {
 		{"initialize", "--project-root", project, "--host", "codex", "--asset-revision", "asset-r5"},
 		{"initialize", "--project-root", project, "--project-root", project, "--host", "codex", "--asset-revision", revision},
 	} {
-		if err := runWithNode(context.Background(), args, io.Discard, io.Discard, nil, provision); err == nil {
+		if err := runWithNode(context.Background(), args, io.Discard, io.Discard, nil, provision, nil); err == nil {
 			t.Fatalf("runWithNode(%v) succeeded", args)
 		}
 	}
 	if called != 0 {
 		t.Fatalf("malformed initialize provisioned %d Nodes", called)
+	}
+}
+
+func TestRunActivateCallsTheNodeWriterAndEmitsClosedReceipt(t *testing.T) {
+	project := t.TempDir()
+	resolved, err := filepath.EvalSymlinks(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision := model.Sum([]byte("active-assets")).String()
+	for _, changed := range []bool{true, false} {
+		changed := changed
+		t.Run(fmt.Sprintf("changed_%t", changed), func(t *testing.T) {
+			var received node.ActivateOptions
+			activate := func(_ context.Context, options node.ActivateOptions) (node.ActivateResult, error) {
+				received = options
+				return node.ActivateResult{Changed: changed}, nil
+			}
+			open := func(context.Context, node.DaemonOptions) (daemonRuntime, error) {
+				t.Fatal("activate opened the daemon")
+				return nil, nil
+			}
+			provision := func(context.Context, node.ProvisionOptions) (node.ProvisionResult, error) {
+				t.Fatal("activate provisioned the Node")
+				return node.ProvisionResult{}, nil
+			}
+			args := []string{"activate", "--host", "claude-code", "--asset-revision", revision,
+				"--project-root", project}
+			var stdout, stderr bytes.Buffer
+			if err := runWithNode(context.Background(), args, &stdout, &stderr, open, provision, activate); err != nil {
+				t.Fatal(err)
+			}
+			want := `{"asset_revision":"` + revision + `","changed":` + fmt.Sprint(changed) +
+				`,"host":"claude-code","schema_version":1,"status":"active"}` + "\n"
+			if stdout.String() != want || stderr.Len() != 0 || received.Workspace != resolved ||
+				received.Host != model.HostClaudeCode || received.AssetRevision != revision ||
+				received.Clock != nil || received.Install != nil {
+				t.Fatalf("activate = stdout %q stderr %q options %#v", stdout.String(), stderr.String(), received)
+			}
+		})
+	}
+}
+
+func TestRunActivateRejectsMalformedAuthorityBeforeActivation(t *testing.T) {
+	project := t.TempDir()
+	revision := model.Sum([]byte("active-assets")).String()
+	called := 0
+	activate := func(context.Context, node.ActivateOptions) (node.ActivateResult, error) {
+		called++
+		return node.ActivateResult{}, nil
+	}
+	for _, args := range [][]string{
+		{"activate"},
+		{"activate", "--project-root", project, "--host", "unknown", "--asset-revision", revision},
+		{"activate", "--project-root", project, "--host", "codex", "--asset-revision", "asset-r5"},
+		{"activate", "--project-root", project, "--project-root", project, "--host", "codex", "--asset-revision", revision},
+		{"activate", "--project-root", project, "--host", "codex", "--asset-revision", revision, "trailing"},
+	} {
+		if err := runWithNode(context.Background(), args, io.Discard, io.Discard, nil, nil, activate); err == nil {
+			t.Fatalf("runWithNode(%v) succeeded", args)
+		}
+	}
+	if called != 0 {
+		t.Fatalf("malformed activate activated %d Nodes", called)
+	}
+}
+
+func TestRunActivateHonorsCancellationBeforeActivation(t *testing.T) {
+	project := t.TempDir()
+	revision := model.Sum([]byte("active-assets")).String()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	called := 0
+	activate := func(context.Context, node.ActivateOptions) (node.ActivateResult, error) {
+		called++
+		return node.ActivateResult{}, nil
+	}
+	args := []string{"activate", "--project-root", project, "--host", "codex", "--asset-revision", revision}
+	if err := runWithNode(ctx, args, io.Discard, io.Discard, nil, nil, activate); err != context.Canceled {
+		t.Fatalf("canceled activate error = %v", err)
+	}
+	if called != 0 {
+		t.Fatalf("canceled activate called writer %d times", called)
 	}
 }
