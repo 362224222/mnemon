@@ -69,6 +69,15 @@ func TestManagedBundleSelectsHostVariantAndServesExactBytes(t *testing.T) {
 	if _, err := bundle.Read("manifest.json"); err == nil {
 		t.Fatal("manifest was treated as a listed projection file")
 	}
+	manifestBytes := bundle.ManifestBytes()
+	sourceManifest, err := os.ReadFile(filepath.Join("managed", "manifest.json"))
+	if err != nil || !bytes.Equal(manifestBytes, sourceManifest) {
+		t.Fatalf("ManifestBytes() did not preserve source bytes: %v", err)
+	}
+	manifestBytes[0] ^= 0xff
+	if bytes.Equal(manifestBytes, bundle.ManifestBytes()) {
+		t.Fatal("ManifestBytes() returned mutable bundle state")
+	}
 }
 
 func TestManagedSourceModesAndSkillGuideResponsibilities(t *testing.T) {

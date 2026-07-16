@@ -112,6 +112,7 @@ type RegistrationHook struct {
 // integration package.
 type Bundle struct {
 	manifest     Manifest
+	manifestRaw  []byte
 	actions      map[string]ActionSchema
 	registration map[Host]Registration
 }
@@ -128,7 +129,8 @@ func Load() (Bundle, error) {
 	if err := validateManifest(manifest); err != nil {
 		return Bundle{}, err
 	}
-	bundle := Bundle{manifest: cloneManifest(manifest), actions: make(map[string]ActionSchema),
+	bundle := Bundle{manifest: cloneManifest(manifest), manifestRaw: append([]byte(nil), raw...),
+		actions:      make(map[string]ActionSchema),
 		registration: make(map[Host]Registration)}
 	listed := make(map[string]struct{}, len(manifest.Files))
 	for _, record := range manifest.Files {
@@ -182,6 +184,11 @@ func Load() (Bundle, error) {
 }
 
 func (bundle Bundle) Manifest() Manifest { return cloneManifest(bundle.manifest) }
+
+// ManifestBytes returns the exact validated source bytes. Node bundle
+// installation must not re-encode the manifest and accidentally create a
+// second representation of the canonical asset revision.
+func (bundle Bundle) ManifestBytes() []byte { return append([]byte(nil), bundle.manifestRaw...) }
 
 func (bundle Bundle) Read(path string) ([]byte, error) {
 	if _, ok := bundle.record(path); !ok {
