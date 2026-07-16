@@ -174,6 +174,22 @@ func TestClientProbeHealthUsesGETAuthenticationAndNoCapabilities(t *testing.T) {
 	}
 }
 
+func TestVerifyProfileCredentialBindsTokenToDurableDigest(t *testing.T) {
+	t.Parallel()
+	nodeState := newClientNodeState(t)
+	credential := repeatedOpaqueBytes(0x87)
+	installClientCredential(t, nodeState, credential)
+	if err := VerifyProfileCredential(nodeState, model.Sum(credential)); err != nil {
+		t.Fatalf("VerifyProfileCredential() error = %v", err)
+	}
+	if err := VerifyProfileCredential(nodeState, model.Sum([]byte("different credential"))); !errors.Is(err, ErrUnsafeClientState) {
+		t.Fatalf("wrong credential binding error = %v", err)
+	}
+	if err := VerifyProfileCredential(nodeState, model.Digest{}); !errors.Is(err, ErrUnsafeClientState) {
+		t.Fatalf("zero credential binding error = %v", err)
+	}
+}
+
 func TestClientProbeHealthRejectsNonclosedAndOversizeResponses(t *testing.T) {
 	t.Parallel()
 	revision := model.Sum([]byte("client-health-assets")).String()

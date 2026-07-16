@@ -84,6 +84,30 @@ func NewClient(nodeState string) (*Client, error) {
 	return client, nil
 }
 
+// VerifyProfileCredential binds the owner-only token projection back to the
+// immutable Profile digest in the Store without exposing the raw credential.
+// Daemon startup uses it before opening the local control socket.
+func VerifyProfileCredential(nodeState string, expected model.Digest) error {
+	if expected.IsZero() {
+		return unsafeClientState("Profile credential binding is unavailable")
+	}
+	client, err := NewClient(nodeState)
+	if err != nil {
+		return err
+	}
+	defer clear(client.token[:])
+	actual := model.Sum(client.token[:])
+	wantBytes := expected.Bytes()
+	actualBytes := actual.Bytes()
+	matched := subtle.ConstantTimeCompare(wantBytes, actualBytes)
+	clear(wantBytes)
+	clear(actualBytes)
+	if matched != 1 {
+		return unsafeClientState("Profile credential differs from durable authority")
+	}
+	return nil
+}
+
 // ProbeHealth performs the authenticated, identity-free daemon readiness
 // probe. A valid not_ready response is returned to the caller as health state,
 // not rewritten into a transport error.
