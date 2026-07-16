@@ -16,16 +16,12 @@ var version = "dev"
 const helpText = `mnemon-harness is the project-local client for mnemond-managed Teamwork.
 
 Usage:
-  mnemon-harness setup [--host auto|codex|claude-code]
-  mnemon-harness status|doctor|eject
-  mnemon-harness channel create|join|invite|status|remove|leave
-  mnemon-harness hook check
-  mnemon-harness agent current --json
-  mnemon-harness agent resolve no-action|retry|reject --context PATH
-  mnemon-harness teamwork offer|accept|decline|deliver|rework|close|cancel
+  mnemon-harness --help
+  mnemon-harness --version
 
-Natural-language content is accepted only through --content-file PATH or stdin
-with --content-file -. Use --help for this closed command catalog.
+Setup and Channel operator commands will appear here only when their complete
+user path is available. Managed Agent commands are installed through the
+canonical Skill and Guide and are intentionally absent from ordinary help.
 `
 
 func main() {
