@@ -18,6 +18,7 @@ import (
 )
 
 type setupCompanion interface {
+	node.DaemonOfflineConfirmer
 	Initialize(context.Context, model.HostKind, string) (companionInitializeReceipt, error)
 	Inspect(context.Context) (localapi.AuthorityResponse, error)
 	Activate(context.Context, model.HostKind, string, time.Time) (companionLifecycleReceipt, error)
@@ -26,7 +27,15 @@ type setupCompanion interface {
 
 type setupAuthorityClient interface {
 	node.DaemonHealthProbe
+	node.DaemonLifecycleClient
 	ReadAuthority(context.Context) (localapi.AuthorityResponse, *localapi.APIError)
+}
+
+type setupDaemonLifecycle interface {
+	Quiesce(context.Context, node.DaemonLifecycleClient, node.DaemonOfflineConfirmer,
+		localapi.AuthorityResponse) (localapi.AuthorityResponse, error)
+	Ensure(context.Context, node.DaemonEnsureOptions) (node.DaemonEnsureResult, error)
+	Close() error
 }
 
 type setupDependencies struct {
@@ -42,11 +51,14 @@ type setupDependencies struct {
 	installBundle     func(string, assets.Bundle) error
 	installProjection func(string, string, assets.Host, assets.Bundle) error
 	verifyProjection  func(string, string, assets.Host, assets.Bundle) error
+	preflightUpgrade  func(string, string, assets.Host, string,
+		assets.Bundle) (integration.HostProjectionUpgradePreflight, error)
 	newPreflight      func(node.DaemonPreflightOptions) (node.DaemonEnsurePreflight, error)
 	currentExecutable func() (string, error)
 	newLauncher       func(node.DaemonProcessOptions) (node.DaemonLauncher, error)
 	newHookGate       func(string, assets.Host) (node.DaemonReadyGate, error)
 	ensure            func(context.Context, node.DaemonEnsureOptions) (node.DaemonEnsureResult, error)
+	acquireLifecycle  func(context.Context, node.DaemonLifecycleOptions) (setupDaemonLifecycle, error)
 }
 
 type setupApp struct {
@@ -107,6 +119,7 @@ func productionSetupDependencies() setupDependencies {
 			return err
 		},
 		verifyProjection: integration.VerifyHostProjection,
+		preflightUpgrade: integration.PreflightHostProjectionUpgrade,
 		newPreflight: func(options node.DaemonPreflightOptions) (node.DaemonEnsurePreflight, error) {
 			return node.NewDaemonPreflight(options)
 		},
@@ -118,6 +131,11 @@ func productionSetupDependencies() setupDependencies {
 			return newSetupHookGate(workspace, host)
 		},
 		ensure: node.EnsureDaemon,
+		acquireLifecycle: func(ctx context.Context,
+			options node.DaemonLifecycleOptions,
+		) (setupDaemonLifecycle, error) {
+			return node.AcquireDaemonLifecycle(ctx, options)
+		},
 	}
 }
 
@@ -237,13 +255,12 @@ func (app *setupApp) executeLocked(ctx context.Context, request setupRequest,
 		return setupReceipt{}, setupError(localapi.CodeProfileHostMismatch,
 			"managed Profile is bound to another Host; eject is required before switching")
 	}
-	if authority.Enabled && authority.AssetRevision != revision {
-		return setupReceipt{}, setupError(localapi.CodeAssetRevisionMismatch,
-			"enabled managed Profile requires an explicit revision upgrade")
-	}
-
 	if err := app.deps.installBundle(nodeState, bundle); err != nil {
 		return setupReceipt{}, setupAssetsError()
+	}
+	if authority.Enabled && authority.AssetRevision != revision {
+		return app.upgradeActive(ctx, workspace, nodeState, revision, bundle, targetHost,
+			authority, authorityUpdatedAt, observed.client, companion)
 	}
 	if err := app.deps.installProjection(workspace, nodeState, targetHost, bundle); err != nil {
 		return setupReceipt{}, setupAssetsError()
@@ -263,25 +280,11 @@ func (app *setupApp) executeLocked(ctx context.Context, request setupRequest,
 			return setupReceipt{}, setupAuthError("managed Profile credential is unavailable")
 		}
 	}
-	install := node.InstallationVerifierFunc(func(profile model.Profile) error {
-		if profile.Host() != model.HostKind(targetHost) ||
-			profile.ActiveAssetRevision() != revision {
-			return errors.New("active Profile differs from setup authority")
-		}
-		return app.deps.verifyProjection(workspace, nodeState, targetHost, bundle)
-	})
-	preflight, err := app.deps.newPreflight(node.DaemonPreflightOptions{
-		Workspace: workspace, NodeState: nodeState, AssetRevision: revision, Install: install,
-	})
-	if err != nil {
-		return setupReceipt{}, setupAssetsError()
+	ensureOptions, apiErr := app.ensureOptions(workspace, nodeState, revision, bundle,
+		targetHost, client)
+	if apiErr != nil {
+		return setupReceipt{}, apiErr
 	}
-	gate, err := app.deps.newHookGate(workspace, targetHost)
-	if err != nil {
-		return setupReceipt{}, setupAssetsError()
-	}
-	launcher := &lazyAgentDaemonLauncher{workspace: workspace, nodeState: nodeState,
-		currentExecutable: app.deps.currentExecutable, newLauncher: app.deps.newLauncher}
 
 	activationChanged := false
 	activationUpdatedAt := authorityUpdatedAt
@@ -302,9 +305,7 @@ func (app *setupApp) executeLocked(ctx context.Context, request setupRequest,
 		}
 		activationChanged = true
 	}
-	ensured, err := app.deps.ensure(ctx, node.DaemonEnsureOptions{NodeState: nodeState,
-		AssetRevision: revision, Probe: client, Preflight: preflight, Launcher: launcher,
-		ReadyGate: gate})
+	ensured, err := app.deps.ensure(ctx, ensureOptions)
 	if err != nil {
 		return setupReceipt{}, app.rollbackActivation(ctx, companion, targetHost, revision,
 			activationUpdatedAt, activationChanged, ensured.FailureOutcome, setupEnsureError(err))
@@ -312,6 +313,123 @@ func (app *setupApp) executeLocked(ctx context.Context, request setupRequest,
 	return setupReceipt{AssetRevision: revision, Host: string(targetHost), PeerID: authority.PeerID,
 		Replayed: authority.Enabled, SchemaVersion: localapi.SchemaVersion, Started: ensured.Started,
 		Status: "ready"}, nil
+}
+
+func (app *setupApp) upgradeActive(ctx context.Context, workspace, nodeState,
+	revision string, bundle assets.Bundle, host assets.Host,
+	authority localapi.AuthorityResponse, authorityUpdatedAt time.Time,
+	client setupAuthorityClient, companion setupCompanion,
+) (setupReceipt, *localapi.APIError) {
+	previousRevision := authority.AssetRevision
+	preflight, err := app.deps.preflightUpgrade(workspace, nodeState, host,
+		previousRevision, bundle)
+	if err != nil || preflight.Host != host ||
+		preflight.PreviousRevision != previousRevision || preflight.Revision != revision {
+		return setupReceipt{}, setupAssetsError()
+	}
+	if _, err := app.deps.inspectHost(ctx, host); err != nil {
+		return setupReceipt{}, setupUnavailableError("selected Host adapter failed preflight")
+	}
+	if client == nil {
+		client, err = app.deps.newClient(nodeState)
+		if err != nil {
+			return setupReceipt{}, setupAuthError("managed Profile credential is unavailable")
+		}
+	}
+	lease, err := app.deps.acquireLifecycle(ctx, node.DaemonLifecycleOptions{
+		Workspace: workspace, NodeState: nodeState,
+	})
+	if err != nil || lease == nil {
+		return setupReceipt{}, setupUnavailableError("managed daemon lifecycle is unavailable")
+	}
+	receipt, apiErr := app.upgradeActiveLeased(ctx, workspace, nodeState, revision,
+		bundle, host, authority, authorityUpdatedAt, client, companion, lease)
+	if closeErr := lease.Close(); closeErr != nil {
+		return setupReceipt{}, setupAuthError("managed daemon lifecycle changed during setup")
+	}
+	return receipt, apiErr
+}
+
+func (app *setupApp) upgradeActiveLeased(ctx context.Context, workspace, nodeState,
+	revision string, bundle assets.Bundle, host assets.Host,
+	authority localapi.AuthorityResponse, authorityUpdatedAt time.Time,
+	client setupAuthorityClient, companion setupCompanion, lease setupDaemonLifecycle,
+) (setupReceipt, *localapi.APIError) {
+	quiesced, err := lease.Quiesce(ctx, client, companion, authority)
+	if err != nil {
+		return setupReceipt{}, setupLifecycleError(err)
+	}
+	if quiesced != authority {
+		return setupReceipt{}, setupAuthError("managed authority changed while stopping mnemond")
+	}
+	deactivated, err := companion.Deactivate(ctx, model.HostKind(host),
+		authority.AssetRevision, authorityUpdatedAt)
+	if err != nil {
+		return setupReceipt{}, setupLifecycleError(err)
+	}
+	deactivatedAt, generationErr := parseSetupAuthorityTime(deactivated.UpdatedAt)
+	if !deactivated.Changed || generationErr != nil ||
+		!deactivatedAt.After(authorityUpdatedAt) {
+		return setupReceipt{}, setupError(localapi.CodeInternal,
+			"managed revision upgrade returned an invalid deactivation generation")
+	}
+
+	// From this point onward the projection journal is a forward-only recovery
+	// authority. Setup must never restore the old shared Host registration or
+	// reactivate the old revision after a partial failure.
+	if err := app.deps.installProjection(workspace, nodeState, host, bundle); err != nil {
+		return setupReceipt{}, setupAssetsError()
+	}
+	if err := app.deps.verifyProjection(workspace, nodeState, host, bundle); err != nil {
+		return setupReceipt{}, setupAssetsError()
+	}
+	ensureOptions, apiErr := app.ensureOptions(workspace, nodeState, revision, bundle,
+		host, client)
+	if apiErr != nil {
+		return setupReceipt{}, apiErr
+	}
+	activated, err := companion.Activate(ctx, model.HostKind(host), revision, deactivatedAt)
+	if err != nil {
+		return setupReceipt{}, setupLifecycleError(err)
+	}
+	activatedAt, generationErr := parseSetupAuthorityTime(activated.UpdatedAt)
+	if !activated.Changed || generationErr != nil || !activatedAt.After(deactivatedAt) {
+		return setupReceipt{}, setupError(localapi.CodeInternal,
+			"managed revision upgrade returned an invalid activation generation")
+	}
+	ensured, err := lease.Ensure(ctx, ensureOptions)
+	if err != nil {
+		return setupReceipt{}, setupEnsureError(err)
+	}
+	return setupReceipt{AssetRevision: revision, Host: string(host), PeerID: authority.PeerID,
+		Replayed: false, SchemaVersion: localapi.SchemaVersion, Started: ensured.Started,
+		Status: "ready"}, nil
+}
+
+func (app *setupApp) ensureOptions(workspace, nodeState, revision string,
+	bundle assets.Bundle, host assets.Host, client setupAuthorityClient,
+) (node.DaemonEnsureOptions, *localapi.APIError) {
+	install := node.InstallationVerifierFunc(func(profile model.Profile) error {
+		if profile.Host() != model.HostKind(host) ||
+			profile.ActiveAssetRevision() != revision {
+			return errors.New("active Profile differs from setup authority")
+		}
+		return app.deps.verifyProjection(workspace, nodeState, host, bundle)
+	})
+	preflight, err := app.deps.newPreflight(node.DaemonPreflightOptions{
+		Workspace: workspace, NodeState: nodeState, AssetRevision: revision, Install: install,
+	})
+	if err != nil {
+		return node.DaemonEnsureOptions{}, setupAssetsError()
+	}
+	gate, err := app.deps.newHookGate(workspace, host)
+	if err != nil {
+		return node.DaemonEnsureOptions{}, setupAssetsError()
+	}
+	launcher := &lazyAgentDaemonLauncher{workspace: workspace, nodeState: nodeState,
+		currentExecutable: app.deps.currentExecutable, newLauncher: app.deps.newLauncher}
+	return node.DaemonEnsureOptions{NodeState: nodeState, AssetRevision: revision,
+		Probe: client, Preflight: preflight, Launcher: launcher, ReadyGate: gate}, nil
 }
 
 func (app *setupApp) observeAuthority(ctx context.Context, nodeState string,
@@ -477,6 +595,7 @@ func validSetupDependencies(dependencies setupDependencies) bool {
 		dependencies.canInitialize != nil && dependencies.acquireLock != nil &&
 		dependencies.newClient != nil && dependencies.installBundle != nil &&
 		dependencies.installProjection != nil && dependencies.verifyProjection != nil &&
+		dependencies.preflightUpgrade != nil && dependencies.acquireLifecycle != nil &&
 		dependencies.newPreflight != nil && dependencies.currentExecutable != nil &&
 		dependencies.newLauncher != nil && dependencies.newHookGate != nil &&
 		dependencies.ensure != nil
@@ -512,6 +631,19 @@ func setupEnsureError(err error) *localapi.APIError {
 		return setupAssetsError()
 	}
 	return setupUnavailableError("mnemond could not be made ready")
+}
+
+func setupLifecycleError(err error) *localapi.APIError {
+	var apiErr *localapi.APIError
+	if errors.As(err, &apiErr) && apiErr.Code == localapi.CodeOperationPending {
+		return setupError(localapi.CodeOperationPending,
+			"managed Profile has active Agent work; retry setup after it becomes idle")
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, node.ErrDaemonLifecycle) || errors.Is(err, node.ErrOfflineAuthorityActive) {
+		return setupUnavailableError("managed daemon could not be stopped safely")
+	}
+	return setupError(localapi.CodeInternal, "managed revision upgrade could not be completed safely")
 }
 
 func setupError(code localapi.ErrorCode, message string) *localapi.APIError {

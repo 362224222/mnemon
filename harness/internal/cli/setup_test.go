@@ -129,21 +129,148 @@ func TestSetupExistingAuthorityFreezesAutoAndFailsBeforeActiveMutations(t *testi
 			"lock", "new-client", "read-authority", "unlock")
 	})
 
-	t.Run("different active revision requires explicit upgrade before projection", func(t *testing.T) {
+	t.Run("different active revision performs one forward lifecycle upgrade", func(t *testing.T) {
 		fixture := newSetupFixture(t, assets.HostCodex, true)
 		fixture.authority = setupTestAuthority(t, assets.HostCodex, true,
 			model.Sum([]byte("previous managed revision")).String())
+		fixture.ensureResult.Started = true
 		exit, stdout, stderr := fixture.run()
-		if exit != 3 || stdout != "" || stderr !=
-			"asset_revision_mismatch: enabled managed Profile requires an explicit revision upgrade\n" {
-			t.Fatalf("upgrade gate = exit %d stdout %q stderr %q", exit, stdout, stderr)
+		if exit != 0 || stderr != "" || !strings.Contains(stdout,
+			`"asset_revision":"`+fixture.revision+`"`) ||
+			!strings.Contains(stdout, `"replayed":false`) ||
+			!strings.Contains(stdout, `"started":true`) {
+			t.Fatalf("upgrade = exit %d stdout %q stderr %q", exit, stdout, stderr)
 		}
 		fixture.wantOrder(t, "cwd", "load-bundle", "new-companion", "bootstrap",
-			"lock", "new-client", "read-authority", "unlock")
+			"lock", "new-client", "read-authority", "install-bundle",
+			"preflight-upgrade:codex", "inspect-host:codex", "acquire-lifecycle",
+			"quiesce", "deactivate:codex", "install-projection:codex",
+			"verify-projection:codex", "new-preflight", "new-gate", "activate:codex",
+			"lifecycle-ensure", "close-lifecycle", "unlock")
 	})
 }
 
+func TestSetupActiveRevisionUpgradeFailuresPreserveARecoverableForwardState(t *testing.T) {
+	tests := []struct {
+		name              string
+		failure           string
+		ensureFailure     bool
+		wantLifecycle     bool
+		wantDeactivations int
+		wantEnabled       bool
+		wantNewRevision   bool
+	}{
+		{name: "read-only projection preflight", failure: "preflight-upgrade", wantEnabled: true},
+		{name: "Host adapter preflight", failure: "inspect-host", wantEnabled: true},
+		{name: "lifecycle acquisition", failure: "acquire-lifecycle", wantEnabled: true},
+		{name: "admission-fenced quiescence", failure: "quiesce", wantLifecycle: true,
+			wantEnabled: true},
+		{name: "offline deactivation", failure: "deactivate", wantLifecycle: true,
+			wantDeactivations: 1, wantEnabled: true},
+		{name: "deactivation response loss", failure: "deactivate-after-commit",
+			wantLifecycle: true, wantDeactivations: 1},
+		{name: "projection convergence", failure: "install-projection", wantLifecycle: true,
+			wantDeactivations: 1},
+		{name: "projection verification", failure: "verify-projection", wantLifecycle: true,
+			wantDeactivations: 1},
+		{name: "daemon preflight construction", failure: "new-preflight", wantLifecycle: true,
+			wantDeactivations: 1},
+		{name: "projected Hook gate", failure: "new-gate", wantLifecycle: true,
+			wantDeactivations: 1},
+		{name: "new authority activation", failure: "activate", wantLifecycle: true,
+			wantDeactivations: 1},
+		{name: "activation response loss", failure: "activate-after-commit", wantLifecycle: true,
+			wantDeactivations: 1, wantEnabled: true, wantNewRevision: true},
+		{name: "post gate", ensureFailure: true, wantLifecycle: true,
+			wantDeactivations: 1, wantEnabled: true, wantNewRevision: true},
+		{name: "lifecycle close proof", failure: "close-lifecycle", wantLifecycle: true,
+			wantDeactivations: 1, wantEnabled: true, wantNewRevision: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newSetupFixture(t, assets.HostCodex, true)
+			oldRevision := model.Sum([]byte("previous managed revision")).String()
+			fixture.authority = setupTestAuthority(t, assets.HostCodex, true, oldRevision)
+			if test.failure != "" {
+				fixture.fail[test.failure] = errors.New("injected upgrade boundary failure")
+			}
+			if test.ensureFailure {
+				fixture.ensureError = fmt.Errorf("%w: injected post gate failure",
+					node.ErrDaemonPreflight)
+			}
+			exit, stdout, stderr := fixture.run()
+			if exit == 0 || stdout != "" || stderr == "" {
+				t.Fatalf("failed upgrade = exit %d stdout %q stderr %q", exit, stdout, stderr)
+			}
+			if fixture.count("deactivate:codex") != test.wantDeactivations {
+				t.Fatalf("deactivations = %d, want %d; order %v",
+					fixture.count("deactivate:codex"), test.wantDeactivations, fixture.order)
+			}
+			if fixture.called("ensure") || fixture.count("activate:codex") > 1 ||
+				fixture.order[len(fixture.order)-1] != "unlock" {
+				t.Fatalf("upgrade escaped its closed lifecycle: %v", fixture.order)
+			}
+			if got := fixture.count("close-lifecycle") == 1; got != test.wantLifecycle {
+				t.Fatalf("lifecycle close = %t, want %t; order %v", got, test.wantLifecycle,
+					fixture.order)
+			}
+			if fixture.authority.Enabled != test.wantEnabled {
+				t.Fatalf("forward authority enabled = %t, want %t; authority %#v order %v",
+					fixture.authority.Enabled, test.wantEnabled, fixture.authority, fixture.order)
+			}
+			wantRevision := oldRevision
+			if test.wantNewRevision {
+				wantRevision = fixture.revision
+			}
+			if fixture.authority.AssetRevision != wantRevision {
+				t.Fatalf("forward authority revision = %q, want %q; order %v",
+					fixture.authority.AssetRevision, wantRevision, fixture.order)
+			}
+		})
+	}
+}
+
+func TestSetupActiveRevisionUpgradeBusyPreservesRetryableErrorAndOldAuthority(t *testing.T) {
+	fixture := newSetupFixture(t, assets.HostCodex, true)
+	oldRevision := model.Sum([]byte("busy previous managed revision")).String()
+	fixture.authority = setupTestAuthority(t, assets.HostCodex, true, oldRevision)
+	fixture.fail["quiesce"] = fmt.Errorf("%w: %w", node.ErrDaemonLifecycle,
+		localapi.NewAPIError(localapi.CodeOperationPending, "managed Agent authority is active"))
+
+	exit, stdout, stderr := fixture.run()
+	if exit != 5 || stdout != "" || stderr !=
+		"operation_pending: managed Profile has active Agent work; retry setup after it becomes idle\n" {
+		t.Fatalf("busy upgrade = exit %d stdout %q stderr %q", exit, stdout, stderr)
+	}
+	if !fixture.authority.Enabled || fixture.authority.AssetRevision != oldRevision ||
+		fixture.called("deactivate:codex") || fixture.called("install-projection:codex") ||
+		fixture.count("close-lifecycle") != 1 {
+		t.Fatalf("busy upgrade changed authority or escaped lifecycle: authority=%#v order=%v",
+			fixture.authority, fixture.order)
+	}
+}
+
 func TestSetupRepairsDisabledAuthorityAndPartialInitialization(t *testing.T) {
+	t.Run("disabled previous revision resumes the forward projection journal", func(t *testing.T) {
+		fixture := newSetupFixture(t, assets.HostCodex, false)
+		fixture.authority = setupTestAuthority(t, assets.HostCodex, false,
+			model.Sum([]byte("disabled previous managed revision")).String())
+		exit, stdout, stderr := fixture.run()
+		if exit != 0 || stderr != "" || !strings.Contains(stdout,
+			`"asset_revision":"`+fixture.revision+`"`) ||
+			!strings.Contains(stdout, `"replayed":false`) {
+			t.Fatalf("disabled upgrade recovery = exit %d stdout %q stderr %q",
+				exit, stdout, stderr)
+		}
+		fixture.wantOrder(t, "cwd", "load-bundle", "new-companion", "bootstrap",
+			"lock", "new-client", "read-authority", "install-bundle",
+			"install-projection:codex", "verify-projection:codex", "inspect-host:codex",
+			"new-preflight", "new-gate", "activate:codex", "ensure", "unlock")
+		if fixture.called("preflight-upgrade:codex") || fixture.called("acquire-lifecycle") {
+			t.Fatalf("disabled recovery entered active upgrade lifecycle: %v", fixture.order)
+		}
+	})
+
 	t.Run("disabled Profile still requires eject evidence before Host switch", func(t *testing.T) {
 		fixture := newSetupFixture(t, assets.HostCodex, false)
 		exit, stdout, stderr := fixture.run("--host", "claude-code")
@@ -409,6 +536,12 @@ func (*concurrentFreshSetupCompanion) Deactivate(context.Context, model.HostKind
 	return companionLifecycleReceipt{}, errors.New("concurrent happy path cannot deactivate")
 }
 
+func (*concurrentFreshSetupCompanion) ConfirmOffline(context.Context,
+	localapi.AuthorityResponse,
+) (localapi.AuthorityResponse, error) {
+	return localapi.AuthorityResponse{}, errors.New("concurrent happy path cannot stop mnemond")
+}
+
 type concurrentFreshSetupClient struct{ state *concurrentFreshSetupState }
 
 func (client *concurrentFreshSetupClient) ReadAuthority(context.Context) (localapi.AuthorityResponse,
@@ -423,6 +556,20 @@ func (client *concurrentFreshSetupClient) ProbeHealth(context.Context) (localapi
 	*localapi.APIError,
 ) {
 	return localapi.HealthResponse{}, nil
+}
+
+func (*concurrentFreshSetupClient) Shutdown(context.Context,
+	localapi.AuthorityResponse,
+) (localapi.ShutdownResponse, *localapi.APIError) {
+	return localapi.ShutdownResponse{}, localapi.NewAPIError(localapi.CodeInternal,
+		"concurrent happy path cannot stop mnemond")
+}
+
+func (*concurrentFreshSetupClient) ShutdownForMutation(context.Context,
+	localapi.AuthorityResponse,
+) (localapi.ShutdownResponse, *localapi.APIError) {
+	return localapi.ShutdownResponse{}, localapi.NewAPIError(localapi.CodeInternal,
+		"concurrent happy path cannot stop mnemond")
 }
 
 func concurrentFreshSetupDependencies(workspace string, bundle assets.Bundle,
@@ -461,6 +608,12 @@ func concurrentFreshSetupDependencies(workspace string, bundle assets.Bundle,
 		installBundle:     func(string, assets.Bundle) error { return nil },
 		installProjection: func(string, string, assets.Host, assets.Bundle) error { return nil },
 		verifyProjection:  func(string, string, assets.Host, assets.Bundle) error { return nil },
+		preflightUpgrade: func(string, string, assets.Host, string,
+			assets.Bundle,
+		) (integration.HostProjectionUpgradePreflight, error) {
+			return integration.HostProjectionUpgradePreflight{},
+				errors.New("concurrent fresh setup cannot upgrade")
+		},
 		newPreflight: func(node.DaemonPreflightOptions) (node.DaemonEnsurePreflight, error) {
 			return node.DaemonEnsurePreflightFunc(func(context.Context) error { return nil }), nil
 		},
@@ -476,6 +629,11 @@ func concurrentFreshSetupDependencies(workspace string, bundle assets.Bundle,
 		ensure: func(context.Context, node.DaemonEnsureOptions) (node.DaemonEnsureResult, error) {
 			return node.DaemonEnsureResult{Health: localapi.HealthResponse{AssetRevision: revision,
 				SchemaVersion: localapi.SchemaVersion, Status: "ready"}}, nil
+		},
+		acquireLifecycle: func(context.Context,
+			node.DaemonLifecycleOptions,
+		) (setupDaemonLifecycle, error) {
+			return nil, errors.New("concurrent fresh setup cannot acquire a lifecycle")
 		},
 	}
 }
@@ -598,6 +756,21 @@ func (fixture *setupFixture) app() *setupApp {
 			fixture.wantWorkspace(t, workspace, nodeState)
 			return fixture.fail["verify-projection"]
 		},
+		preflightUpgrade: func(workspace, nodeState string, host assets.Host,
+			previousRevision string, bundle assets.Bundle,
+		) (integration.HostProjectionUpgradePreflight, error) {
+			fixture.record("preflight-upgrade:" + string(host))
+			fixture.wantWorkspace(t, workspace, nodeState)
+			if previousRevision != fixture.authority.AssetRevision {
+				t.Fatalf("upgrade previous revision = %q, want %q",
+					previousRevision, fixture.authority.AssetRevision)
+			}
+			if err := fixture.fail["preflight-upgrade"]; err != nil {
+				return integration.HostProjectionUpgradePreflight{}, err
+			}
+			return integration.HostProjectionUpgradePreflight{Host: host,
+				PreviousRevision: previousRevision, Revision: fixture.revision}, nil
+		},
 		newPreflight: func(options node.DaemonPreflightOptions) (node.DaemonEnsurePreflight, error) {
 			fixture.record("new-preflight")
 			fixture.wantWorkspace(t, options.Workspace, options.NodeState)
@@ -638,6 +811,19 @@ func (fixture *setupFixture) app() *setupApp {
 			}
 			return fixture.ensureResult, fixture.ensureError
 		},
+		acquireLifecycle: func(ctx context.Context,
+			options node.DaemonLifecycleOptions,
+		) (setupDaemonLifecycle, error) {
+			fixture.record("acquire-lifecycle")
+			fixture.wantWorkspace(t, options.Workspace, options.NodeState)
+			if ctx == nil {
+				t.Fatal("nil lifecycle acquisition context")
+			}
+			if err := fixture.fail["acquire-lifecycle"]; err != nil {
+				return nil, err
+			}
+			return &fakeSetupDaemonLifecycle{fixture: fixture}, nil
+		},
 	}
 	return &setupApp{stdout: &fixture.stdout, stderr: &fixture.stderr, version: "test-r5",
 		deps: dependencies}
@@ -665,6 +851,16 @@ func (fixture *setupFixture) called(stage string) bool {
 		}
 	}
 	return false
+}
+
+func (fixture *setupFixture) count(stage string) int {
+	count := 0
+	for _, value := range fixture.order {
+		if value == stage {
+			count++
+		}
+	}
+	return count
 }
 
 func (fixture *setupFixture) wantNodeState(t *testing.T, path string) {
@@ -705,6 +901,15 @@ func (companion *fakeSetupCompanion) Inspect(context.Context) (localapi.Authorit
 	return companion.fixture.authority, nil
 }
 
+func (companion *fakeSetupCompanion) ConfirmOffline(_ context.Context,
+	expected localapi.AuthorityResponse,
+) (localapi.AuthorityResponse, error) {
+	if expected != companion.fixture.authority {
+		return localapi.AuthorityResponse{}, errors.New("offline authority mismatch")
+	}
+	return expected, companion.fixture.fail["confirm-offline"]
+}
+
 func (companion *fakeSetupCompanion) Activate(_ context.Context, host model.HostKind,
 	revision string, expectedUpdatedAt time.Time,
 ) (companionLifecycleReceipt, error) {
@@ -718,6 +923,9 @@ func (companion *fakeSetupCompanion) Activate(_ context.Context, host model.Host
 	}
 	companion.fixture.authority = setupTestAuthorityAt(companion.fixture.t, assets.Host(host), true,
 		revision, setupTestActivationTime())
+	if err := companion.fixture.fail["activate-after-commit"]; err != nil {
+		return companionLifecycleReceipt{}, err
+	}
 	return companionLifecycleReceipt{AssetRevision: revision, Changed: true, Host: string(host),
 		SchemaVersion: model.SchemaVersion, Status: "active",
 		UpdatedAt: setupTestActivationTime().Format(time.RFC3339Nano)}, nil
@@ -730,12 +938,17 @@ func (companion *fakeSetupCompanion) Deactivate(_ context.Context, host model.Ho
 	if err := companion.fixture.fail["deactivate"]; err != nil {
 		return companionLifecycleReceipt{}, err
 	}
-	if !expectedUpdatedAt.Equal(setupTestActivationTime()) {
+	wantExpected, generationErr := parseSetupAuthorityTime(companion.fixture.authority.UpdatedAt)
+	if generationErr != nil || !expectedUpdatedAt.Equal(wantExpected) ||
+		revision != companion.fixture.authority.AssetRevision {
 		return companionLifecycleReceipt{}, errors.New("deactivation generation mismatch")
 	}
-	deactivatedAt := setupTestActivationTime().Add(time.Second)
+	deactivatedAt := expectedUpdatedAt.Add(time.Second)
 	companion.fixture.authority = setupTestAuthorityAt(companion.fixture.t, assets.Host(host), false,
 		revision, deactivatedAt)
+	if err := companion.fixture.fail["deactivate-after-commit"]; err != nil {
+		return companionLifecycleReceipt{}, err
+	}
 	return companionLifecycleReceipt{AssetRevision: revision, Changed: true, Host: string(host),
 		SchemaVersion: model.SchemaVersion, Status: "inactive",
 		UpdatedAt: deactivatedAt.Format(time.RFC3339Nano)}, nil
@@ -754,6 +967,61 @@ func (client *fakeSetupAuthorityClient) ProbeHealth(context.Context) (localapi.H
 	*localapi.APIError,
 ) {
 	return client.fixture.ensureResult.Health, nil
+}
+
+func (client *fakeSetupAuthorityClient) Shutdown(context.Context,
+	localapi.AuthorityResponse,
+) (localapi.ShutdownResponse, *localapi.APIError) {
+	return localapi.ShutdownResponse{}, localapi.NewAPIError(localapi.CodeInternal,
+		"fake lifecycle owns shutdown")
+}
+
+func (client *fakeSetupAuthorityClient) ShutdownForMutation(context.Context,
+	localapi.AuthorityResponse,
+) (localapi.ShutdownResponse, *localapi.APIError) {
+	return localapi.ShutdownResponse{}, localapi.NewAPIError(localapi.CodeInternal,
+		"fake lifecycle owns mutation shutdown")
+}
+
+type fakeSetupDaemonLifecycle struct {
+	fixture *setupFixture
+	closed  bool
+}
+
+func (lifecycle *fakeSetupDaemonLifecycle) Quiesce(ctx context.Context,
+	client node.DaemonLifecycleClient, confirmer node.DaemonOfflineConfirmer,
+	expected localapi.AuthorityResponse,
+) (localapi.AuthorityResponse, error) {
+	lifecycle.fixture.record("quiesce")
+	if lifecycle.closed || ctx == nil || client == nil || confirmer == nil ||
+		expected != lifecycle.fixture.authority {
+		return localapi.AuthorityResponse{}, errors.New("invalid fake lifecycle quiescence")
+	}
+	if err := lifecycle.fixture.fail["quiesce"]; err != nil {
+		return localapi.AuthorityResponse{}, err
+	}
+	return expected, nil
+}
+
+func (lifecycle *fakeSetupDaemonLifecycle) Ensure(ctx context.Context,
+	options node.DaemonEnsureOptions,
+) (node.DaemonEnsureResult, error) {
+	lifecycle.fixture.record("lifecycle-ensure")
+	if lifecycle.closed || ctx == nil || options.NodeState == "" ||
+		options.AssetRevision != lifecycle.fixture.revision || options.Probe == nil ||
+		options.Preflight == nil || options.Launcher == nil || options.ReadyGate == nil {
+		return node.DaemonEnsureResult{}, errors.New("invalid fake lifecycle ensure")
+	}
+	return lifecycle.fixture.ensureResult, lifecycle.fixture.ensureError
+}
+
+func (lifecycle *fakeSetupDaemonLifecycle) Close() error {
+	lifecycle.fixture.record("close-lifecycle")
+	if lifecycle.closed {
+		return nil
+	}
+	lifecycle.closed = true
+	return lifecycle.fixture.fail["close-lifecycle"]
 }
 
 type fakeSetupCloser struct{ fixture *setupFixture }
