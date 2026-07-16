@@ -18,11 +18,13 @@ import (
 )
 
 const (
-	pendingJournalSuffix   = ".pending"
-	terminalJournalSuffix  = ".terminal"
-	presentedJournalSuffix = ".presented"
-	maxPendingJournalBytes = 1024
-	maxEntropyAttempts     = 32
+	pendingJournalSuffix           = ".pending"
+	terminalJournalSuffix          = ".terminal"
+	presentedJournalSuffix         = ".presented"
+	maxPendingJournalBytes         = 1024
+	maxEntropyAttempts             = 32
+	maxPresentedJournalTombstones  = 4096
+	presentedJournalRetentionGrace = 24 * time.Hour
 )
 
 type journalState uint8
@@ -52,16 +54,25 @@ func (state journalState) valid() bool { return state.suffix() != "" }
 type PendingJournalOptions struct {
 	Random io.Reader
 	Clock  func() time.Time
+
+	// The retention controls are deliberately private test seams. Production
+	// always retains presented evidence for the conservative defaults above.
+	retentionClock     func() time.Time
+	presentedRetention time.Duration
+	maxPresented       int
 }
 
 // PendingJournalStore owns the model-invisible response-loss journal beneath
 // one Node state directory. A store contains no canonical domain state.
 type PendingJournalStore struct {
-	nodeState     string
-	operationsDir string
-	ownerUID      uint32
-	random        io.Reader
-	clock         func() time.Time
+	nodeState          string
+	operationsDir      string
+	ownerUID           uint32
+	random             io.Reader
+	clock              func() time.Time
+	retentionClock     func() time.Time
+	presentedRetention time.Duration
+	maxPresented       int
 }
 
 // PendingJournal is one verified operation replay handle. The operation key
@@ -106,28 +117,44 @@ func NewPendingJournalStore(nodeState string, supplied ...PendingJournalOptions)
 	if options.Clock == nil {
 		options.Clock = time.Now
 	}
+	if options.retentionClock == nil {
+		options.retentionClock = time.Now
+	}
+	if options.presentedRetention < 0 || options.maxPresented < 0 {
+		return nil, errors.New("local API: pending journal retention options are invalid")
+	}
+	if options.presentedRetention == 0 {
+		options.presentedRetention = presentedJournalRetentionGrace
+	}
+	if options.maxPresented == 0 {
+		options.maxPresented = maxPresentedJournalTombstones
+	}
 	operationsDir, ownerUID, err := ensureOwnerSubdirectory(nodeState, "operations")
 	if err != nil {
 		return nil, err
 	}
 	return &PendingJournalStore{
-		nodeState:     nodeState,
-		operationsDir: operationsDir,
-		ownerUID:      ownerUID,
-		random:        options.Random,
-		clock:         options.Clock,
+		nodeState:          nodeState,
+		operationsDir:      operationsDir,
+		ownerUID:           ownerUID,
+		random:             options.Random,
+		clock:              options.Clock,
+		retentionClock:     options.retentionClock,
+		presentedRetention: options.presentedRetention,
+		maxPresented:       options.maxPresented,
 	}, nil
 }
 
 // FindOrCreate returns the unique replayable operation for an exact canonical
 // request and optional context-file digest. Pending and terminal journals keep
-// the same operation key across transport or presentation loss. A presented
-// journal proves stdout was accepted by the caller; it is removed before an
-// intentionally identical operation receives a fresh key.
+// the same operation key across transport or presentation loss. Presented
+// journals are bounded tombstones: they are ignored as replay candidates but
+// retained long enough for an already-running client to recover their inode.
 func (s *PendingJournalStore) FindOrCreate(requestDigest model.Digest,
 	contextFileDigest *model.Digest,
 ) (journal PendingJournal, reused bool, err error) {
-	if s == nil || s.random == nil || s.clock == nil {
+	if s == nil || s.random == nil || s.clock == nil || s.retentionClock == nil ||
+		s.presentedRetention <= 0 || s.maxPresented <= 0 {
 		return PendingJournal{}, false, errors.New("local API: pending journal store is unavailable")
 	}
 	if requestDigest.IsZero() {
@@ -146,35 +173,58 @@ func (s *PendingJournalStore) FindOrCreate(requestDigest model.Digest,
 		if err != nil {
 			return err
 		}
+		// Tombstones collected in this critical section still exclude their old
+		// operation key and locator from the identity drawn immediately after GC.
+		// This turns faulty/repeating entropy into a retry instead of key reuse.
+		identityExclusions := append([]PendingJournal(nil), journals...)
+		presentedCount := countJournalState(journals, journalStatePresented)
+		var createdAt time.Time
+		var createdAtWire string
+		if presentedCount > s.maxPresented {
+			createdAt, createdAtWire, err = canonicalJournalTime(s.clock())
+			if err != nil {
+				return err
+			}
+			journals, err = s.collectPresentedLocked(journals, createdAt)
+			if err != nil {
+				return err
+			}
+			if countJournalState(journals, journalStatePresented) > s.maxPresented {
+				return unsafeClientState("presented journal retention bound is exceeded")
+			}
+		}
+
 		matchIndex := -1
 		for index := range journals {
 			candidate := journals[index]
-			if candidate.requestDigest == requestDigest && sameContextDigest(candidate, contextDigest, hasContext) {
-				if matchIndex >= 0 {
-					return unsafeClientState("duplicate pending journals exist for one operation input")
-				}
-				matchIndex = index
+			if candidate.state == journalStatePresented || candidate.requestDigest != requestDigest ||
+				!sameContextDigest(candidate, contextDigest, hasContext) {
+				continue
 			}
+			if matchIndex >= 0 {
+				return unsafeClientState("duplicate replayable journals exist for one operation input")
+			}
+			matchIndex = index
 		}
 		if matchIndex >= 0 {
-			match := journals[matchIndex]
-			if match.state != journalStatePresented {
-				journal, reused = match, true
-				return nil
-			}
-			if err := s.removeJournalLocked(match); err != nil {
-				return err
-			}
-			// Keep the removed presented identity in the in-memory exclusion set so
-			// even deterministic or faulty entropy cannot immediately reuse its key
-			// or locator for the intentionally identical next operation.
+			journal, reused = journals[matchIndex], true
+			return nil
 		}
 
-		createdAt, createdAtWire, err := canonicalJournalTime(s.clock())
+		if createdAt.IsZero() {
+			createdAt, createdAtWire, err = canonicalJournalTime(s.clock())
+			if err != nil {
+				return err
+			}
+		}
+		journals, err = s.collectPresentedLocked(journals, createdAt)
 		if err != nil {
 			return err
 		}
-		key, locator, path, err := s.drawIndependentIdentityLocked(journals)
+		if countJournalState(journals, journalStatePresented) >= s.maxPresented {
+			return unsafeClientState("presented journal retention bound has no safe capacity")
+		}
+		key, locator, path, err := s.drawIndependentIdentityLocked(identityExclusions)
 		if err != nil {
 			return err
 		}
@@ -227,8 +277,9 @@ func (s *PendingJournalStore) MarkTerminal(expected PendingJournal) (PendingJour
 }
 
 // MarkPresented records that the validated terminal receipt was successfully
-// written to stdout. Presented journals are no longer replay handles: the next
-// exact FindOrCreate safely removes one before allocating a fresh operation.
+// written to stdout. Presented journals are no longer replay handles, but stay
+// as bounded tombstones so concurrent holders of older handles can recover the
+// exact inode while a new identical operation receives a fresh key.
 func (s *PendingJournalStore) MarkPresented(expected PendingJournal) (PendingJournal, error) {
 	return s.transitionJournal(expected, journalStateTerminal, journalStatePresented)
 }
@@ -250,14 +301,29 @@ func (s *PendingJournalStore) RemoveTerminal(expected PendingJournal) error {
 		return err
 	}
 	return withOwnerDirectoryLock(s.operationsDir, s.ownerUID, func() error {
-		return s.removeJournalLocked(expected)
+		states, err := s.readLocatorStatesLocked(expected.locator)
+		if err != nil {
+			return err
+		}
+		if len(states) == 0 {
+			return unsafeClientState("terminal journal removal has no inode evidence")
+		}
+		if len(states) != 1 {
+			return unsafeClientState("terminal journal removal has conflicting state paths")
+		}
+		current := states[0]
+		if current.state < expected.state || current.state == journalStatePending ||
+			!sameJournalTransition(expected, current, current.state) {
+			return unsafeClientState("terminal journal removal identity changed")
+		}
+		return s.removeJournalLocked(current)
 	})
 }
 
 func (s *PendingJournalStore) transitionJournal(expected PendingJournal,
 	from, to journalState,
 ) (journal PendingJournal, err error) {
-	if s == nil {
+	if s == nil || s.retentionClock == nil {
 		return PendingJournal{}, errors.New("local API: pending journal store is unavailable")
 	}
 	if !from.valid() || !to.valid() || from == to {
@@ -273,74 +339,77 @@ func (s *PendingJournalStore) transitionJournal(expected PendingJournal,
 		return PendingJournal{}, err
 	}
 	err = withOwnerDirectoryLock(s.operationsDir, s.ownerUID, func() error {
-		if expected.state == to {
-			current, readErr := s.readExactJournalLocked(expected)
-			if readErr != nil {
-				return readErr
-			}
-			if syncErr := syncOwnerDirectory(s.operationsDir); syncErr != nil {
-				return fmt.Errorf("persist pending journal transition: %w", syncErr)
-			}
-			verified, verifyErr := readPendingJournalFile(s.operationsDir, expected.path, s.ownerUID)
-			if verifyErr != nil || !sameJournalExact(current, verified) {
-				return unsafeClientState("pending journal changed while confirming transition")
-			}
-			journal = verified
-			return nil
-		}
-
-		destination := journalPath(s.operationsDir, expected.locator, to)
-		if _, statErr := os.Lstat(expected.path); errors.Is(statErr, os.ErrNotExist) {
-			recovered, recoverErr := readPendingJournalFile(s.operationsDir, destination, s.ownerUID)
-			if recoverErr != nil || !sameJournalTransition(expected, recovered, to) {
-				return unsafeClientState("pending journal transition cannot be recovered")
-			}
-			if _, sourceErr := os.Lstat(expected.path); !errors.Is(sourceErr, os.ErrNotExist) {
-				return unsafeClientState("pending journal source reappeared after transition")
-			}
-			if syncErr := syncOwnerDirectory(s.operationsDir); syncErr != nil {
-				return fmt.Errorf("persist pending journal transition: %w", syncErr)
-			}
-			verified, verifyErr := readPendingJournalFile(s.operationsDir, destination, s.ownerUID)
-			if verifyErr != nil || !sameJournalExact(recovered, verified) {
-				return unsafeClientState("pending journal changed while recovering transition")
-			}
-			journal = verified
-			return nil
-		} else if statErr != nil {
-			return fmt.Errorf("%w: inspect pending journal transition source", ErrUnsafeClientState)
-		}
-
-		current, readErr := s.readExactJournalLocked(expected)
+		states, readErr := s.readLocatorStatesLocked(expected.locator)
 		if readErr != nil {
 			return readErr
 		}
+		if len(states) == 0 {
+			return unsafeClientState("pending journal transition has no recoverable inode evidence")
+		}
+		if len(states) != 1 {
+			return unsafeClientState("pending journal transition has conflicting state paths")
+		}
+		current := states[0]
+		if !sameJournalTransition(expected, current, current.state) {
+			return unsafeClientState("pending journal transition identity changed")
+		}
+
+		if current.state != from {
+			if current.state < to || current.state < expected.state {
+				return unsafeClientState("pending journal transition regressed or has the wrong state")
+			}
+			if syncErr := syncOwnerDirectory(s.operationsDir); syncErr != nil {
+				return fmt.Errorf("persist pending journal transition: %w", syncErr)
+			}
+			verified, verifyErr := s.confirmOnlyLocatorStateLocked(current)
+			if verifyErr != nil {
+				return verifyErr
+			}
+			journal = verified
+			return nil
+		}
+
+		if expected.state != from {
+			return unsafeClientState("pending journal transition regressed behind its handle")
+		}
+		if to == journalStatePresented {
+			presentationTime, _, clockErr := canonicalJournalTime(s.retentionClock())
+			if clockErr != nil {
+				return clockErr
+			}
+			current, readErr = s.stampPresentedJournalLocked(current, presentationTime)
+			if readErr != nil {
+				return readErr
+			}
+		}
+
+		destination := journalPath(s.operationsDir, expected.locator, to)
 		if _, destinationErr := os.Lstat(destination); destinationErr == nil {
 			return unsafeClientState("pending journal transition destination already exists")
 		} else if !errors.Is(destinationErr, os.ErrNotExist) {
 			return fmt.Errorf("%w: inspect pending journal transition destination", ErrUnsafeClientState)
 		}
-		sourceInfo, statErr := os.Lstat(expected.path)
+		sourceInfo, statErr := os.Lstat(current.path)
 		if statErr != nil || !os.SameFile(current.identity, sourceInfo) ||
 			validateOwnerRegularFile(sourceInfo, s.ownerUID) != nil {
 			return unsafeClientState("pending journal changed before transition")
 		}
-		if renameErr := os.Rename(expected.path, destination); renameErr != nil {
+		if renameErr := os.Rename(current.path, destination); renameErr != nil {
 			return fmt.Errorf("transition pending journal: %w", renameErr)
 		}
 		transitioned, readErr := readPendingJournalFile(s.operationsDir, destination, s.ownerUID)
 		if readErr != nil || !sameJournalTransition(current, transitioned, to) {
 			return unsafeClientState("pending journal changed during transition")
 		}
-		if _, sourceErr := os.Lstat(expected.path); !errors.Is(sourceErr, os.ErrNotExist) {
+		if _, sourceErr := os.Lstat(current.path); !errors.Is(sourceErr, os.ErrNotExist) {
 			return unsafeClientState("pending journal source remained after transition")
 		}
 		if syncErr := syncOwnerDirectory(s.operationsDir); syncErr != nil {
 			return fmt.Errorf("persist pending journal transition: %w", syncErr)
 		}
-		verified, verifyErr := readPendingJournalFile(s.operationsDir, destination, s.ownerUID)
-		if verifyErr != nil || !sameJournalExact(transitioned, verified) {
-			return unsafeClientState("pending journal changed after transition")
+		verified, verifyErr := s.confirmOnlyLocatorStateLocked(transitioned)
+		if verifyErr != nil {
+			return verifyErr
 		}
 		journal = verified
 		return nil
@@ -360,6 +429,76 @@ func (s *PendingJournalStore) readExactJournalLocked(expected PendingJournal) (P
 		return PendingJournal{}, unsafeClientState("pending journal identity changed")
 	}
 	return current, nil
+}
+
+func (s *PendingJournalStore) readLocatorStatesLocked(
+	locator [opaqueSecretBytes]byte,
+) ([]PendingJournal, error) {
+	states := make([]PendingJournal, 0, 1)
+	for _, state := range []journalState{journalStatePending, journalStateTerminal, journalStatePresented} {
+		path := journalPath(s.operationsDir, locator, state)
+		if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
+			continue
+		} else if err != nil {
+			return nil, fmt.Errorf("%w: inspect pending journal state path", ErrUnsafeClientState)
+		}
+		journal, err := readPendingJournalFile(s.operationsDir, path, s.ownerUID)
+		if err != nil {
+			return nil, err
+		}
+		states = append(states, journal)
+	}
+	return states, nil
+}
+
+func (s *PendingJournalStore) confirmOnlyLocatorStateLocked(
+	expected PendingJournal,
+) (PendingJournal, error) {
+	states, err := s.readLocatorStatesLocked(expected.locator)
+	if err != nil {
+		return PendingJournal{}, err
+	}
+	if len(states) != 1 || !sameJournalExact(expected, states[0]) {
+		return PendingJournal{}, unsafeClientState("pending journal changed while confirming state")
+	}
+	return states[0], nil
+}
+
+func (s *PendingJournalStore) stampPresentedJournalLocked(
+	expected PendingJournal, presentedAt time.Time,
+) (PendingJournal, error) {
+	if expected.state != journalStateTerminal {
+		return PendingJournal{}, unsafeClientState("only a terminal journal can be stamped for presentation")
+	}
+	current, err := s.readExactJournalLocked(expected)
+	if err != nil {
+		return PendingJournal{}, err
+	}
+	if err := os.Chtimes(current.path, presentedAt, presentedAt); err != nil {
+		return PendingJournal{}, fmt.Errorf("stamp presented journal retention: %w", err)
+	}
+	file, err := os.Open(current.path)
+	if err != nil {
+		return PendingJournal{}, fmt.Errorf("%w: open stamped presented journal", ErrUnsafeClientState)
+	}
+	opened, statErr := file.Stat()
+	if statErr != nil || !os.SameFile(current.identity, opened) ||
+		validateOwnerRegularFile(opened, s.ownerUID) != nil {
+		_ = file.Close()
+		return PendingJournal{}, unsafeClientState("presented journal changed while stamping retention")
+	}
+	if syncErr := file.Sync(); syncErr != nil {
+		_ = file.Close()
+		return PendingJournal{}, fmt.Errorf("persist presented journal retention stamp: %w", syncErr)
+	}
+	if closeErr := file.Close(); closeErr != nil {
+		return PendingJournal{}, fmt.Errorf("close presented journal retention stamp: %w", closeErr)
+	}
+	stamped, err := readPendingJournalFile(s.operationsDir, current.path, s.ownerUID)
+	if err != nil || !sameJournalTransition(current, stamped, journalStateTerminal) {
+		return PendingJournal{}, unsafeClientState("presented journal changed after retention stamp")
+	}
+	return stamped, nil
 }
 
 func (s *PendingJournalStore) removeJournalLocked(expected PendingJournal) error {
@@ -388,6 +527,42 @@ func (s *PendingJournalStore) removeJournalLocked(expected PendingJournal) error
 		return fmt.Errorf("persist terminal pending removal: %w", err)
 	}
 	return nil
+}
+
+func (s *PendingJournalStore) collectPresentedLocked(
+	journals []PendingJournal, now time.Time,
+) ([]PendingJournal, error) {
+	retained := make([]PendingJournal, 0, len(journals))
+	for index := range journals {
+		journal := journals[index]
+		if journal.state != journalStatePresented ||
+			!retentionElapsed(now, journal.createdAt, s.presentedRetention) ||
+			!retentionElapsed(now, journal.identity.ModTime(), s.presentedRetention) {
+			retained = append(retained, journal)
+			continue
+		}
+		if err := s.removeJournalLocked(journal); err != nil {
+			return nil, err
+		}
+	}
+	return retained, nil
+}
+
+func retentionElapsed(now, since time.Time, grace time.Duration) bool {
+	if now.IsZero() || since.IsZero() || grace <= 0 || now.Before(since) {
+		return false
+	}
+	return now.Sub(since) >= grace
+}
+
+func countJournalState(journals []PendingJournal, state journalState) int {
+	count := 0
+	for index := range journals {
+		if journals[index].state == state {
+			count++
+		}
+	}
+	return count
 }
 
 func (s *PendingJournalStore) validateJournalHandle(journal PendingJournal) error {

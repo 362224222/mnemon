@@ -160,8 +160,8 @@ func TestPendingJournalResponseLossReuseAndConfirmedIdenticalOffer(t *testing.T)
 		filepath.Base(second.Path()) != base64.RawURLEncoding.EncodeToString(secondLocator)+pendingJournalSuffix {
 		t.Fatalf("second identity = %q, %q", second.OperationKeyHeader(), second.Path())
 	}
-	if _, err := os.Lstat(presented.Path()); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("presented journal was not safely cleaned before the new key: %v", err)
+	if retained, err := readPendingJournalFile(filepath.Dir(presented.Path()), presented.Path(), store.ownerUID); err != nil || !sameJournalExact(retained, presented) {
+		t.Fatalf("presented concurrency tombstone = %#v, %v", retained, err)
 	}
 }
 
@@ -212,7 +212,7 @@ func TestPendingJournalReusesAcrossClientRestartWithoutEntropy(t *testing.T) {
 	}
 }
 
-func TestPendingJournalPresentedCleanupAcrossRestartCreatesFreshIdentity(t *testing.T) {
+func TestPendingJournalPresentedTombstoneAcrossRestartCreatesFreshIdentity(t *testing.T) {
 	t.Parallel()
 	nodeState := newClientNodeState(t)
 	requestDigest := model.Sum([]byte("stdout confirmed before restart"))
@@ -262,8 +262,8 @@ func TestPendingJournalPresentedCleanupAcrossRestartCreatesFreshIdentity(t *test
 		filepath.Base(fresh.Path()) != base64.RawURLEncoding.EncodeToString(secondLocator)+pendingJournalSuffix {
 		t.Fatalf("fresh restart identity = %q, %q", fresh.OperationKeyHeader(), fresh.Path())
 	}
-	if _, err := os.Lstat(presented.Path()); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("presented restart journal remains: %v", err)
+	if retained, err := readPendingJournalFile(filepath.Dir(presented.Path()), presented.Path(), restarted.ownerUID); err != nil || !sameJournalExact(retained, presented) {
+		t.Fatalf("presented restart tombstone = %#v, %v", retained, err)
 	}
 }
 
@@ -423,6 +423,271 @@ func TestPendingJournalConcurrentTransitionsAndPresentedReplacement(t *testing.T
 		fresh.Path() == presented.Path() {
 		t.Fatalf("post-presentation creators=%d fresh=%#v old=%#v", creators, fresh, presented)
 	}
+}
+
+func TestPendingJournalOldHandlesRecoverAcrossPresentedTombstoneAndFreshKey(t *testing.T) {
+	t.Parallel()
+	nodeState := newClientNodeState(t)
+	entropy := make([]byte, 0, 6*opaqueSecretBytes)
+	for fill := byte(0x81); fill <= 0x86; fill++ {
+		entropy = append(entropy, repeatedOpaqueBytes(fill)...)
+	}
+	now := time.Date(2026, 7, 16, 9, 0, 0, 0, time.UTC)
+	store, err := NewPendingJournalStore(nodeState, PendingJournalOptions{
+		Random:         bytes.NewReader(entropy),
+		Clock:          func() time.Time { return now },
+		retentionClock: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := model.Sum([]byte("concurrent presentation recovery"))
+	pending, _, err := store.FindOrCreate(request, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	terminal, err := store.MarkTerminal(pending)
+	if err != nil {
+		t.Fatal(err)
+	}
+	presented, err := store.MarkPresented(terminal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Minute)
+	fresh, reused, err := store.FindOrCreate(request, nil)
+	if err != nil || reused || fresh.OperationKeyHeader() == pending.OperationKeyHeader() {
+		t.Fatalf("fresh identical operation = %#v, reused=%v, %v", fresh, reused, err)
+	}
+
+	const callers = 24
+	type result struct {
+		journal PendingJournal
+		err     error
+	}
+	results := make(chan result, callers)
+	var start sync.WaitGroup
+	start.Add(1)
+	for index := 0; index < callers; index++ {
+		index := index
+		go func() {
+			start.Wait()
+			var recovered PendingJournal
+			var recoverErr error
+			switch index % 4 {
+			case 0:
+				recovered, recoverErr = store.MarkTerminal(pending)
+			case 1:
+				recovered, recoverErr = store.MarkTerminal(terminal)
+			case 2:
+				recovered, recoverErr = store.MarkPresented(terminal)
+			default:
+				recovered, recoverErr = store.MarkPresented(presented)
+			}
+			results <- result{journal: recovered, err: recoverErr}
+		}()
+	}
+	start.Done()
+	for index := 0; index < callers; index++ {
+		result := <-results
+		if result.err != nil || result.journal.Path() != presented.Path() ||
+			!os.SameFile(result.journal.identity, presented.identity) ||
+			result.journal.fileDigest != presented.fileDigest {
+			t.Fatalf("old handle recovery = %#v, %v", result.journal, result.err)
+		}
+	}
+	replay, reused, err := store.FindOrCreate(request, nil)
+	if err != nil || !reused || replay.Path() != fresh.Path() {
+		t.Fatalf("fresh replayable identity = %#v, reused=%v, %v", replay, reused, err)
+	}
+	freshTerminal, err := store.MarkTerminal(fresh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	freshPresented, err := store.MarkPresented(freshTerminal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Minute)
+	third, reused, err := store.FindOrCreate(request, nil)
+	if err != nil || reused || third.OperationKeyHeader() == fresh.OperationKeyHeader() {
+		t.Fatalf("third identical operation = %#v, reused=%v, %v", third, reused, err)
+	}
+	journals, err := store.readAllLocked()
+	if err != nil || len(journals) != 3 || countJournalState(journals, journalStatePresented) != 2 ||
+		countJournalState(journals, journalStatePending) != 1 {
+		t.Fatalf("concurrent journal states = %#v, %v", journals, err)
+	}
+	if _, err := os.Lstat(presented.Path()); err != nil {
+		t.Fatalf("first presented tombstone disappeared: %v", err)
+	}
+	if _, err := os.Lstat(freshPresented.Path()); err != nil {
+		t.Fatalf("second presented tombstone disappeared: %v", err)
+	}
+}
+
+func TestPendingJournalPresentedRetentionIsBoundedAndConservative(t *testing.T) {
+	t.Parallel()
+	nodeState := newClientNodeState(t)
+	entropyFills := []byte{0x91, 0x92, 0x93, 0x94, 0x91, 0x95, 0x92, 0x96, 0x97}
+	entropy := make([]byte, 0, len(entropyFills)*opaqueSecretBytes)
+	for _, fill := range entropyFills {
+		entropy = append(entropy, repeatedOpaqueBytes(fill)...)
+	}
+	base := time.Date(2026, 7, 16, 10, 0, 0, 0, time.UTC)
+	now := base
+	store, err := NewPendingJournalStore(nodeState, PendingJournalOptions{
+		Random:             bytes.NewReader(entropy),
+		Clock:              func() time.Time { return now },
+		retentionClock:     func() time.Time { return now },
+		presentedRetention: time.Hour,
+		maxPresented:       2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	present := func(label string) PendingJournal {
+		t.Helper()
+		pending, reused, createErr := store.FindOrCreate(model.Sum([]byte(label)), nil)
+		if createErr != nil || reused {
+			t.Fatalf("create %s = %#v, reused=%v, %v", label, pending, reused, createErr)
+		}
+		terminal, transitionErr := store.MarkTerminal(pending)
+		if transitionErr != nil {
+			t.Fatal(transitionErr)
+		}
+		presented, transitionErr := store.MarkPresented(terminal)
+		if transitionErr != nil {
+			t.Fatal(transitionErr)
+		}
+		return presented
+	}
+	first := present("first retained receipt")
+	now = base.Add(30 * time.Minute)
+	second := present("second retained receipt")
+
+	now = base.Add(31 * time.Minute)
+	if _, _, err := store.FindOrCreate(model.Sum([]byte("capacity blocked")), nil); !errors.Is(err, ErrUnsafeClientState) {
+		t.Fatalf("grace-protected overflow error = %v", err)
+	}
+	for _, protected := range []PendingJournal{first, second} {
+		if current, err := readPendingJournalFile(store.operationsDir, protected.Path(), store.ownerUID); err != nil || !sameJournalExact(current, protected) {
+			t.Fatalf("grace-protected tombstone = %#v, %v", current, err)
+		}
+	}
+
+	now = base.Add(70 * time.Minute)
+	fresh, reused, err := store.FindOrCreate(model.Sum([]byte("capacity blocked")), nil)
+	if err != nil || reused {
+		t.Fatalf("post-GC operation = %#v, reused=%v, %v", fresh, reused, err)
+	}
+	if fresh.OperationKeyHeader() != testOpaqueValue(0x96) ||
+		filepath.Base(fresh.Path()) != testOpaqueValue(0x97)+pendingJournalSuffix {
+		t.Fatalf("post-GC identity reused a tombstone = %q, %q", fresh.OperationKeyHeader(), fresh.Path())
+	}
+	if _, err := os.Lstat(first.Path()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expired tombstone was not collected: %v", err)
+	}
+	if current, err := readPendingJournalFile(store.operationsDir, second.Path(), store.ownerUID); err != nil || !sameJournalExact(current, second) {
+		t.Fatalf("younger tombstone was collected = %#v, %v", current, err)
+	}
+}
+
+func TestPendingJournalMissingOrTamperedPresentedEvidenceFailsClosed(t *testing.T) {
+	t.Parallel()
+	t.Run("missing", func(t *testing.T) {
+		nodeState := newClientNodeState(t)
+		store, err := NewPendingJournalStore(nodeState)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pending, _, err := store.FindOrCreate(model.Sum([]byte("missing evidence")), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(pending.Path()); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.MarkTerminal(pending); !errors.Is(err, ErrUnsafeClientState) {
+			t.Fatalf("missing transition evidence error = %v", err)
+		}
+		second, _, err := store.FindOrCreate(model.Sum([]byte("missing terminal evidence")), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		terminal, err := store.MarkTerminal(second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(terminal.Path()); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.MarkPresented(terminal); !errors.Is(err, ErrUnsafeClientState) {
+			t.Fatalf("missing presentation evidence error = %v", err)
+		}
+		if err := store.RemoveTerminal(terminal); !errors.Is(err, ErrUnsafeClientState) {
+			t.Fatalf("missing removal evidence error = %v", err)
+		}
+	})
+
+	t.Run("replacement", func(t *testing.T) {
+		nodeState := newClientNodeState(t)
+		store, err := NewPendingJournalStore(nodeState)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pending, _, err := store.FindOrCreate(model.Sum([]byte("replaced evidence")), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		terminal, err := store.MarkTerminal(pending)
+		if err != nil {
+			t.Fatal(err)
+		}
+		presented, err := store.MarkPresented(terminal)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := os.ReadFile(presented.Path())
+		if err != nil {
+			t.Fatal(err)
+		}
+		saved := presented.Path() + ".saved"
+		if err := os.Rename(presented.Path(), saved); err != nil {
+			t.Fatal(err)
+		}
+		mustWrite(t, presented.Path(), raw, ownerRegularFileMode)
+		if _, err := store.MarkTerminal(pending); !errors.Is(err, ErrUnsafeClientState) {
+			t.Fatalf("replacement recovery error = %v", err)
+		}
+		if current, err := os.ReadFile(presented.Path()); err != nil || !bytes.Equal(current, raw) {
+			t.Fatalf("replacement evidence was mutated = %q, %v", current, err)
+		}
+	})
+
+	t.Run("mode", func(t *testing.T) {
+		nodeState := newClientNodeState(t)
+		store, err := NewPendingJournalStore(nodeState)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pending, _, err := store.FindOrCreate(model.Sum([]byte("mode evidence")), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		terminal, err := store.MarkTerminal(pending)
+		if err != nil {
+			t.Fatal(err)
+		}
+		presented, err := store.MarkPresented(terminal)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustChmod(t, presented.Path(), 0o644)
+		if _, err := store.MarkPresented(terminal); !errors.Is(err, ErrUnsafeClientState) {
+			t.Fatalf("unsafe presented mode recovery error = %v", err)
+		}
+	})
 }
 
 func TestPendingJournalRejectsNoncanonicalUntrustedFiles(t *testing.T) {
