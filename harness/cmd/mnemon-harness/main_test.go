@@ -15,8 +15,11 @@ func TestRun(t *testing.T) {
 		t.Helper()
 		var stdout bytes.Buffer
 		var stderr bytes.Buffer
-		err := run(ctx, args, &stdout, &stderr)
-		return stdout.String(), stderr.String(), err
+		exit := run(ctx, args, strings.NewReader(""), &stdout, &stderr)
+		if exit != 0 {
+			return stdout.String(), stderr.String(), fmt.Errorf("exit %d", exit)
+		}
+		return stdout.String(), stderr.String(), nil
 	}
 
 	wantHelp, wantStderr, err := runCommand(context.Background())
@@ -55,8 +58,8 @@ func TestRun(t *testing.T) {
 		"control", "local", "daemon", "multica", "acceptance",
 	} {
 		stdout, stderr, err := runCommand(context.Background(), command)
-		want := fmt.Sprintf("unsupported command %q", command)
-		if stdout != "" || stderr != "" || err == nil || err.Error() != want {
+		want := fmt.Sprintf("mnemon-harness: unknown command %q\n", command)
+		if stdout != "" || stderr != want || err == nil || err.Error() != "exit 2" {
 			t.Errorf("run(%q) = stdout %q, stderr %q, err %v; want %q", command, stdout, stderr, err, want)
 		}
 	}
