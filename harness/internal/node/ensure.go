@@ -200,12 +200,13 @@ func ensureDaemon(ctx context.Context, options DaemonEnsureOptions,
 	launch, launchErr := options.Launcher.Launch(bounded)
 	if launch != nil {
 		launched = launch
+		result.Started = true
 	}
 	if launchErr != nil {
-		return DaemonEnsureResult{}, fmt.Errorf("%w: launch mnemond: %w", ErrDaemonEnsure, launchErr)
+		return result, fmt.Errorf("%w: launch mnemond: %w", ErrDaemonEnsure, launchErr)
 	}
 	if launched == nil {
-		return DaemonEnsureResult{}, fmt.Errorf("%w: launcher returned no child ownership", ErrDaemonEnsure)
+		return result, fmt.Errorf("%w: launcher returned no child ownership", ErrDaemonEnsure)
 	}
 
 	for {
@@ -213,20 +214,21 @@ func ensureDaemon(ctx context.Context, options DaemonEnsureOptions,
 			options.AssetRevision)
 		if !unavailable {
 			if probeErr != nil {
-				return DaemonEnsureResult{}, probeErr
+				return result, probeErr
 			}
+			result.Health = health
 			if gateErr := verifyDaemonReadyGate(bounded, options.ReadyGate, health); gateErr != nil {
-				return DaemonEnsureResult{}, gateErr
+				return result, gateErr
 			}
 			if releaseErr := launched.Release(); releaseErr != nil {
-				return DaemonEnsureResult{}, fmt.Errorf("%w: release ready mnemond: %w",
+				return result, fmt.Errorf("%w: release ready mnemond: %w",
 					ErrDaemonEnsure, releaseErr)
 			}
 			launched = nil
-			return DaemonEnsureResult{Health: health, Started: true}, nil
+			return result, nil
 		}
 		if waitErr := waitEnsurePoll(bounded, timing.poll); waitErr != nil {
-			return DaemonEnsureResult{}, fmt.Errorf("%w: daemon did not become ready: %w",
+			return result, fmt.Errorf("%w: daemon did not become ready: %w",
 				ErrDaemonEnsure, waitErr)
 		}
 	}

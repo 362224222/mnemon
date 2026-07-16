@@ -38,7 +38,7 @@ func TestEnsureDaemonRunsCallerReadyGateWithoutCreatingAnotherAuthority(t *testi
 	health := readyEnsureHealth(revision)
 	failed := errors.New("projected Hook self-check failed")
 	var gates atomic.Int32
-	_, err := EnsureDaemon(context.Background(), DaemonEnsureOptions{
+	result, err := EnsureDaemon(context.Background(), DaemonEnsureOptions{
 		NodeState: nodeState, AssetRevision: revision,
 		Probe: ensureProbeFunc(func(context.Context) (localapi.HealthResponse, *localapi.APIError) {
 			return health, nil
@@ -51,8 +51,9 @@ func TestEnsureDaemonRunsCallerReadyGateWithoutCreatingAnotherAuthority(t *testi
 			return failed
 		}),
 	})
-	if !errors.Is(err, ErrDaemonEnsure) || !errors.Is(err, failed) || gates.Load() != 1 {
-		t.Fatalf("EnsureDaemon() = %v, gates=%d", err, gates.Load())
+	if !errors.Is(err, ErrDaemonEnsure) || !errors.Is(err, failed) || gates.Load() != 1 ||
+		result.Started {
+		t.Fatalf("EnsureDaemon() = (%#v, %v), gates=%d", result, err, gates.Load())
 	}
 	if _, err := os.Lstat(filepath.Join(nodeState, ensureLockName)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("existing ready gate created launch lock: %v", err)
@@ -192,7 +193,7 @@ func TestEnsureDaemonTerminatesNewChildWhenReadyGateFails(t *testing.T) {
 	failed := errors.New("actual Hook failed")
 	var launched atomic.Bool
 	handle := newRecordingDaemonLaunch()
-	_, err := EnsureDaemon(context.Background(), DaemonEnsureOptions{
+	result, err := EnsureDaemon(context.Background(), DaemonEnsureOptions{
 		NodeState: nodeState, AssetRevision: revision,
 		Probe: ensureProbeFunc(func(context.Context) (localapi.HealthResponse, *localapi.APIError) {
 			if !launched.Load() {
@@ -209,9 +210,10 @@ func TestEnsureDaemonTerminatesNewChildWhenReadyGateFails(t *testing.T) {
 			return failed
 		}),
 	})
-	if !errors.Is(err, ErrDaemonEnsure) || !errors.Is(err, failed) ||
+	if !errors.Is(err, ErrDaemonEnsure) || !errors.Is(err, failed) || !result.Started ||
+		result.Health != readyEnsureHealth(revision) ||
 		handle.releases.Load() != 0 || handle.terminations.Load() != 1 {
-		t.Fatalf("EnsureDaemon() = %v, releases=%d terminations=%d", err,
+		t.Fatalf("EnsureDaemon() = (%#v, %v), releases=%d terminations=%d", result, err,
 			handle.releases.Load(), handle.terminations.Load())
 	}
 }
