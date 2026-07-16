@@ -44,7 +44,8 @@ func TestSetupFreshRunsTheLockedStateMachineAndEmitsCanonicalReceipt(t *testing.
 	fixture.wantOrder(t,
 		"cwd", "load-bundle", "new-companion", "bootstrap", "lock", "new-client",
 		"can-initialize", "detect:auto", "initialize:codex", "inspect",
-		"install-bundle", "install-projection:codex", "verify-projection:codex",
+		"install-bundle", "verify-absent:claude-code", "install-projection:codex",
+		"verify-projection:codex",
 		"inspect-host:codex", "new-client", "new-preflight", "new-gate", "activate:codex",
 		"ensure", "unlock")
 }
@@ -264,22 +265,38 @@ func TestSetupRepairsDisabledAuthorityAndPartialInitialization(t *testing.T) {
 		}
 		fixture.wantOrder(t, "cwd", "load-bundle", "new-companion", "bootstrap",
 			"lock", "new-client", "read-authority", "install-bundle",
-			"install-projection:codex", "verify-projection:codex", "inspect-host:codex",
+			"verify-absent:claude-code", "install-projection:codex",
+			"verify-projection:codex", "inspect-host:codex",
 			"new-preflight", "new-gate", "activate:codex", "ensure", "unlock")
 		if fixture.called("preflight-upgrade:codex") || fixture.called("acquire-lifecycle") {
 			t.Fatalf("disabled recovery entered active upgrade lifecycle: %v", fixture.order)
 		}
 	})
 
-	t.Run("disabled Profile still requires eject evidence before Host switch", func(t *testing.T) {
+	t.Run("disabled Profile switches Host only after exact eject evidence", func(t *testing.T) {
 		fixture := newSetupFixture(t, assets.HostCodex, false)
 		exit, stdout, stderr := fixture.run("--host", "claude-code")
-		if exit != 4 || stdout != "" || stderr !=
-			"profile_host_mismatch: managed Profile is bound to another Host; eject is required before switching\n" {
+		if exit != 0 || stderr != "" || !strings.Contains(stdout, `"host":"claude-code"`) ||
+			!strings.Contains(stdout, `"replayed":false`) {
 			t.Fatalf("disabled switch = exit %d stdout %q stderr %q", exit, stdout, stderr)
 		}
 		fixture.wantOrder(t, "cwd", "load-bundle", "new-companion", "bootstrap", "lock",
-			"new-client", "read-authority", "unlock")
+			"new-client", "read-authority", "install-bundle", "verify-absent:codex",
+			"install-projection:claude-code", "verify-projection:claude-code",
+			"inspect-host:claude-code", "new-preflight", "new-gate", "activate:claude-code",
+			"ensure", "unlock")
+	})
+
+	t.Run("disabled Profile cannot switch while previous Host residue remains", func(t *testing.T) {
+		fixture := newSetupFixture(t, assets.HostCodex, false)
+		fixture.fail["verify-absent"] = errors.New("injected previous Host residue")
+		exit, stdout, stderr := fixture.run("--host", "claude-code")
+		if exit != 4 || stdout != "" || stderr !=
+			"profile_host_mismatch: previous Host projection is not fully ejected; complete eject before switching\n" {
+			t.Fatalf("residual switch = exit %d stdout %q stderr %q", exit, stdout, stderr)
+		}
+		fixture.wantOrder(t, "cwd", "load-bundle", "new-companion", "bootstrap", "lock",
+			"new-client", "read-authority", "install-bundle", "verify-absent:codex", "unlock")
 	})
 
 	t.Run("safe partial Node initializes only after taking setup lock", func(t *testing.T) {
@@ -293,7 +310,8 @@ func TestSetupRepairsDisabledAuthorityAndPartialInitialization(t *testing.T) {
 		fixture.wantOrder(t,
 			"cwd", "load-bundle", "new-companion", "bootstrap", "lock",
 			"new-client", "can-initialize", "detect:auto", "initialize:codex", "inspect",
-			"install-bundle", "install-projection:codex", "verify-projection:codex",
+			"install-bundle", "verify-absent:claude-code", "install-projection:codex",
+			"verify-projection:codex",
 			"inspect-host:codex", "new-client", "new-preflight", "new-gate",
 			"activate:codex", "ensure", "unlock")
 	})
@@ -310,6 +328,44 @@ func TestSetupRepairsDisabledAuthorityAndPartialInitialization(t *testing.T) {
 		fixture.wantOrder(t, "cwd", "load-bundle", "new-companion", "bootstrap",
 			"lock", "new-client", "can-initialize", "unlock")
 	})
+}
+
+func TestSetupHostSwitchCrashNeverFallsBackToASecondProjection(t *testing.T) {
+	for _, failure := range []string{
+		"install-projection-after-commit", "verify-projection", "inspect-host",
+		"new-preflight", "new-gate", "activate",
+	} {
+		t.Run(failure, func(t *testing.T) {
+			fixture := newSetupFixture(t, assets.HostCodex, false)
+			fixture.fail[failure] = errors.New("injected Host-switch crash boundary")
+			exit, stdout, stderr := fixture.run("--host", "claude-code")
+			if exit == 0 || stdout != "" || stderr == "" ||
+				!fixture.projectionPresent[assets.HostClaudeCode] || fixture.authority.Enabled ||
+				fixture.authority.Host != string(assets.HostCodex) {
+				t.Fatalf("failed Host switch = exit %d stdout %q stderr %q authority=%#v projections=%v order=%v",
+					exit, stdout, stderr, fixture.authority, fixture.projectionPresent, fixture.order)
+			}
+
+			delete(fixture.fail, failure)
+			fixture.resetInvocation()
+			exit, stdout, stderr = fixture.run()
+			if exit != 4 || stdout != "" || stderr !=
+				"profile_host_mismatch: another managed Host projection remains; select that Host explicitly to resume switching\n" ||
+				fixture.projectionPresent[assets.HostCodex] || fixture.authority.Enabled {
+				t.Fatalf("auto fallback = exit %d stdout %q stderr %q authority=%#v projections=%v order=%v",
+					exit, stdout, stderr, fixture.authority, fixture.projectionPresent, fixture.order)
+			}
+
+			fixture.resetInvocation()
+			exit, stdout, stderr = fixture.run("--host", "claude-code")
+			if exit != 0 || stderr != "" || !strings.Contains(stdout, `"host":"claude-code"`) ||
+				!fixture.authority.Enabled || fixture.authority.Host != string(assets.HostClaudeCode) ||
+				fixture.projectionPresent[assets.HostCodex] {
+				t.Fatalf("explicit Host recovery = exit %d stdout %q stderr %q authority=%#v projections=%v order=%v",
+					exit, stdout, stderr, fixture.authority, fixture.projectionPresent, fixture.order)
+			}
+		})
+	}
 }
 
 func TestSetupStaticAndHostGatesFailBeforeActivation(t *testing.T) {
@@ -608,6 +664,7 @@ func concurrentFreshSetupDependencies(workspace string, bundle assets.Bundle,
 		installBundle:     func(string, assets.Bundle) error { return nil },
 		installProjection: func(string, string, assets.Host, assets.Bundle) error { return nil },
 		verifyProjection:  func(string, string, assets.Host, assets.Bundle) error { return nil },
+		verifyAbsent:      func(string, string, assets.Host, assets.Bundle) error { return nil },
 		preflightUpgrade: func(string, string, assets.Host, string,
 			assets.Bundle,
 		) (integration.HostProjectionUpgradePreflight, error) {
@@ -639,22 +696,23 @@ func concurrentFreshSetupDependencies(workspace string, bundle assets.Bundle,
 }
 
 type setupFixture struct {
-	t              *testing.T
-	workspace      string
-	revision       string
-	bundle         assets.Bundle
-	authority      localapi.AuthorityResponse
-	detectedHost   assets.Host
-	canInitialize  bool
-	clientFailures int
-	clientCalls    int
-	readError      *localapi.APIError
-	ensureResult   node.DaemonEnsureResult
-	ensureError    error
-	fail           map[string]error
-	order          []string
-	stdout         bytes.Buffer
-	stderr         bytes.Buffer
+	t                 *testing.T
+	workspace         string
+	revision          string
+	bundle            assets.Bundle
+	authority         localapi.AuthorityResponse
+	detectedHost      assets.Host
+	canInitialize     bool
+	clientFailures    int
+	clientCalls       int
+	readError         *localapi.APIError
+	ensureResult      node.DaemonEnsureResult
+	ensureError       error
+	fail              map[string]error
+	projectionPresent map[assets.Host]bool
+	order             []string
+	stdout            bytes.Buffer
+	stderr            bytes.Buffer
 }
 
 func newSetupFixture(t *testing.T, host assets.Host, enabled bool) *setupFixture {
@@ -671,6 +729,7 @@ func newSetupFixture(t *testing.T, host assets.Host, enabled bool) *setupFixture
 	return &setupFixture{t: t, workspace: workspace, revision: revision, bundle: bundle,
 		authority: setupTestAuthority(t, host, enabled, revision), detectedHost: assets.HostCodex,
 		canInitialize: true, fail: make(map[string]error),
+		projectionPresent: make(map[assets.Host]bool),
 		ensureResult: node.DaemonEnsureResult{Health: localapi.HealthResponse{
 			SchemaVersion: localapi.SchemaVersion, Status: "ready", AssetRevision: revision}}}
 }
@@ -747,7 +806,11 @@ func (fixture *setupFixture) app() *setupApp {
 		) error {
 			fixture.record("install-projection:" + string(host))
 			fixture.wantWorkspace(t, workspace, nodeState)
-			return fixture.fail["install-projection"]
+			if err := fixture.fail["install-projection"]; err != nil {
+				return err
+			}
+			fixture.projectionPresent[host] = true
+			return fixture.fail["install-projection-after-commit"]
 		},
 		verifyProjection: func(workspace, nodeState string, host assets.Host,
 			bundle assets.Bundle,
@@ -755,6 +818,16 @@ func (fixture *setupFixture) app() *setupApp {
 			fixture.record("verify-projection:" + string(host))
 			fixture.wantWorkspace(t, workspace, nodeState)
 			return fixture.fail["verify-projection"]
+		},
+		verifyAbsent: func(workspace, nodeState string, host assets.Host,
+			bundle assets.Bundle,
+		) error {
+			fixture.record("verify-absent:" + string(host))
+			fixture.wantWorkspace(t, workspace, nodeState)
+			if fixture.projectionPresent[host] {
+				return errors.New("managed Host projection remains")
+			}
+			return fixture.fail["verify-absent"]
 		},
 		preflightUpgrade: func(workspace, nodeState string, host assets.Host,
 			previousRevision string, bundle assets.Bundle,
@@ -833,6 +906,12 @@ func (fixture *setupFixture) run(args ...string) (int, string, string) {
 	fixture.t.Helper()
 	exit := fixture.app().run(context.Background(), args)
 	return exit, fixture.stdout.String(), fixture.stderr.String()
+}
+
+func (fixture *setupFixture) resetInvocation() {
+	fixture.order = nil
+	fixture.stdout.Reset()
+	fixture.stderr.Reset()
 }
 
 func (fixture *setupFixture) record(stage string) { fixture.order = append(fixture.order, stage) }

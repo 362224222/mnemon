@@ -51,6 +51,7 @@ type setupDependencies struct {
 	installBundle     func(string, assets.Bundle) error
 	installProjection func(string, string, assets.Host, assets.Bundle) error
 	verifyProjection  func(string, string, assets.Host, assets.Bundle) error
+	verifyAbsent      func(string, string, assets.Host, assets.Bundle) error
 	preflightUpgrade  func(string, string, assets.Host, string,
 		assets.Bundle) (integration.HostProjectionUpgradePreflight, error)
 	newPreflight      func(node.DaemonPreflightOptions) (node.DaemonEnsurePreflight, error)
@@ -119,6 +120,7 @@ func productionSetupDependencies() setupDependencies {
 			return err
 		},
 		verifyProjection: integration.VerifyHostProjection,
+		verifyAbsent:     integration.VerifyHostProjectionAbsent,
 		preflightUpgrade: integration.PreflightHostProjectionUpgrade,
 		newPreflight: func(options node.DaemonPreflightOptions) (node.DaemonEnsurePreflight, error) {
 			return node.NewDaemonPreflight(options)
@@ -251,12 +253,26 @@ func (app *setupApp) executeLocked(ctx context.Context, request setupRequest,
 	if request.host != "auto" {
 		targetHost = assets.Host(request.host)
 	}
-	if targetHost != durableHost {
+	if targetHost != durableHost && authority.Enabled {
 		return setupReceipt{}, setupError(localapi.CodeProfileHostMismatch,
 			"managed Profile is bound to another Host; eject is required before switching")
 	}
 	if err := app.deps.installBundle(nodeState, bundle); err != nil {
 		return setupReceipt{}, setupAssetsError()
+	}
+	if !authority.Enabled {
+		otherHost, ok := otherSetupHost(targetHost)
+		if !ok {
+			return setupReceipt{}, setupAuthError("managed Host selection is invalid")
+		}
+		if err := app.deps.verifyAbsent(workspace, nodeState, otherHost, bundle); err != nil {
+			if targetHost != durableHost {
+				return setupReceipt{}, setupError(localapi.CodeProfileHostMismatch,
+					"previous Host projection is not fully ejected; complete eject before switching")
+			}
+			return setupReceipt{}, setupError(localapi.CodeProfileHostMismatch,
+				"another managed Host projection remains; select that Host explicitly to resume switching")
+		}
 	}
 	if authority.Enabled && authority.AssetRevision != revision {
 		return app.upgradeActive(ctx, workspace, nodeState, revision, bundle, targetHost,
@@ -313,6 +329,17 @@ func (app *setupApp) executeLocked(ctx context.Context, request setupRequest,
 	return setupReceipt{AssetRevision: revision, Host: string(targetHost), PeerID: authority.PeerID,
 		Replayed: authority.Enabled, SchemaVersion: localapi.SchemaVersion, Started: ensured.Started,
 		Status: "ready"}, nil
+}
+
+func otherSetupHost(host assets.Host) (assets.Host, bool) {
+	switch host {
+	case assets.HostCodex:
+		return assets.HostClaudeCode, true
+	case assets.HostClaudeCode:
+		return assets.HostCodex, true
+	default:
+		return "", false
+	}
 }
 
 func (app *setupApp) upgradeActive(ctx context.Context, workspace, nodeState,
@@ -595,6 +622,7 @@ func validSetupDependencies(dependencies setupDependencies) bool {
 		dependencies.canInitialize != nil && dependencies.acquireLock != nil &&
 		dependencies.newClient != nil && dependencies.installBundle != nil &&
 		dependencies.installProjection != nil && dependencies.verifyProjection != nil &&
+		dependencies.verifyAbsent != nil &&
 		dependencies.preflightUpgrade != nil && dependencies.acquireLifecycle != nil &&
 		dependencies.newPreflight != nil && dependencies.currentExecutable != nil &&
 		dependencies.newLauncher != nil && dependencies.newHookGate != nil &&
