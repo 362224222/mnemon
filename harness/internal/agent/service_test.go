@@ -18,11 +18,12 @@ type serviceTestClock struct{ now time.Time }
 func (clock serviceTestClock) Now() time.Time { return clock.now }
 
 type fakeControlStore struct {
-	probe   func(context.Context, store.AgentClaimProbeSpec) (store.AgentClaimStatus, error)
-	claim   func(context.Context, store.AgentClaimSpec) (store.AgentClaimResult, error)
-	current func(context.Context, store.AgentCurrentReadSpec) (store.AgentCurrentReadResult, error)
-	reserve func(context.Context, store.ManagedOperationSpec) (store.ManagedOperationReservation, error)
-	resolve func(context.Context, store.ManagedResolutionSpec) (store.ManagedResolutionResult, error)
+	probe    func(context.Context, store.AgentClaimProbeSpec) (store.AgentClaimStatus, error)
+	claim    func(context.Context, store.AgentClaimSpec) (store.AgentClaimResult, error)
+	current  func(context.Context, store.AgentCurrentReadSpec) (store.AgentCurrentReadResult, error)
+	initiate func(context.Context, model.Profile, time.Time) (store.AgentInitiationContext, error)
+	reserve  func(context.Context, store.ManagedOperationSpec) (store.ManagedOperationReservation, error)
+	resolve  func(context.Context, store.ManagedResolutionSpec) (store.ManagedResolutionResult, error)
 }
 
 func (fake *fakeControlStore) ProbeAgentClaim(ctx context.Context,
@@ -50,6 +51,15 @@ func (fake *fakeControlStore) FinalizeAgentCurrentRead(ctx context.Context,
 		return store.AgentCurrentReadResult{}, errors.New("unexpected FinalizeAgentCurrentRead")
 	}
 	return fake.current(ctx, spec)
+}
+
+func (fake *fakeControlStore) ReadAgentInitiationContext(ctx context.Context, profile model.Profile,
+	at time.Time,
+) (store.AgentInitiationContext, error) {
+	if fake.initiate == nil {
+		return store.AgentInitiationContext{}, errors.New("unexpected ReadAgentInitiationContext")
+	}
+	return fake.initiate(ctx, profile, at)
 }
 
 func (fake *fakeControlStore) ReserveManagedOperation(ctx context.Context,
@@ -149,6 +159,40 @@ func TestServiceHookAndCurrentKeepClaimCapabilityPrivate(t *testing.T) {
 	if _, apiErr := service.HookCheck(context.Background(), metadata, localapi.HookCheckRequest{}); apiErr == nil ||
 		apiErr.Code != localapi.CodeContextInvalid {
 		t.Fatalf("attached HookCheck error = %v", apiErr)
+	}
+}
+
+func TestServiceCurrentNoneCarriesOnlyIdentityFreeInitiationContext(t *testing.T) {
+	at := time.Date(2026, 7, 17, 2, 0, 0, 0, time.UTC)
+	profile := serviceTestProfile(t, at)
+	fake := &fakeControlStore{
+		claim: func(_ context.Context, spec store.AgentClaimSpec) (store.AgentClaimResult, error) {
+			if spec.ProfileID != profile.ID() || !spec.At.Equal(at) {
+				t.Fatalf("claim probe spec = %#v", spec)
+			}
+			return store.AgentClaimResult{Status: store.AgentClaimNone}, nil
+		},
+		initiate: func(_ context.Context, got model.Profile, gotAt time.Time) (store.AgentInitiationContext, error) {
+			if got.ID() != profile.ID() || !gotAt.Equal(at) {
+				t.Fatalf("initiation authority = %s at %s", got.ID(), gotAt)
+			}
+			return store.AgentInitiationContext{}, nil
+		},
+	}
+	service, err := NewService(fake, ServiceOptions{AssetRevision: "asset-service",
+		Clock: serviceTestClock{at}, Random: bytes.NewReader(bytes.Repeat([]byte{0x62}, 2*managedSecretBytes))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, apiErr := service.AgentCurrent(context.Background(),
+		localapi.RequestMetadata{Profile: profile}, localapi.AgentCurrentRequest{})
+	if apiErr != nil || response.Status != "none" || response.RunID != "" || response.ClaimSecret != "" {
+		t.Fatalf("none current = (%#v, %v)", response, apiErr)
+	}
+	projection, err := localapi.ParseInitiationProjection(response.Projection)
+	if err != nil || len(projection.InitiationContext.Channels) != 0 ||
+		bytes.Contains(response.Projection, []byte("peer_id")) {
+		t.Fatalf("none initiation projection = %s, %v", response.Projection, err)
 	}
 }
 

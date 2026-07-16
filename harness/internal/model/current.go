@@ -509,6 +509,32 @@ func currentProjectionWireFrom(projection CurrentProjection) currentProjectionWi
 	}
 }
 
+// ParseCurrentProjection accepts only the exact canonical schema-v1 public
+// projection. It is used by the Agent-side CLI before adding its local
+// context-file reference, so unknown or authority-bearing fields can never be
+// reflected into the model prompt.
+func ParseCurrentProjection(raw []byte) (CurrentProjection, error) {
+	canonical, err := NewJSON(raw)
+	if err != nil || !bytes.Equal(canonical.Bytes(), raw) {
+		return CurrentProjection{}, invalid("current projection", "must use exact canonical JSON")
+	}
+	var wire currentProjectionWire
+	if err := decodeCurrentWire(raw, &wire); err != nil {
+		return CurrentProjection{}, err
+	}
+	if wire.SchemaVersion != SchemaVersion {
+		return CurrentProjection{}, invalid("current projection", "unsupported schema version")
+	}
+	projection, err := currentProjectionFromWire(wire)
+	if err != nil {
+		return CurrentProjection{}, err
+	}
+	if !bytes.Equal(projection.CanonicalJSON().Bytes(), raw) {
+		return CurrentProjection{}, invalid("current projection", "omits or changes a schema-v1 field")
+	}
+	return projection, nil
+}
+
 func currentReceiptWireFrom(receipt CurrentReadReceipt) currentReceiptWire {
 	projection := receipt.Projection()
 	return currentReceiptWire{

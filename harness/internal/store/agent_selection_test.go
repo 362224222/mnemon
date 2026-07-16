@@ -235,6 +235,13 @@ func TestReadAgentInitiationContextIsBoundedToActiveBindings(t *testing.T) {
 			t.Fatalf("channel[%d] = alias %q allow_team=%v", index, channel.LocalAlias(), channel.AllowTeam())
 		}
 	}
+	projection, err := contextView.CanonicalJSON()
+	if err != nil || strings.Contains(projection.String(), "peer_id") ||
+		strings.Contains(projection.String(), remotes[0].peer.String()) ||
+		!strings.Contains(projection.String(), `"initiation_context"`) ||
+		!strings.Contains(projection.String(), `"effective_alias":"reviewer-0"`) {
+		t.Fatalf("identity-free initiation projection = %s, %v", projection.String(), err)
+	}
 
 	mustExec(t, fixture.store, "UPDATE peer_bindings SET state='pending' WHERE channel_id=? AND peer_id=?",
 		"channel-channel-0", remotes[0].peer.String())

@@ -101,6 +101,40 @@ func (c AgentInitiationContext) Channels() []AgentInitiationChannel {
 	return append([]AgentInitiationChannel(nil), c.channels...)
 }
 
+// CanonicalJSON returns the closed, identity-free initiation projection used
+// by an explicit Agent current call when no Handling is claimed.
+func (c AgentInitiationContext) CanonicalJSON() (model.JSON, error) {
+	type participantWire struct {
+		EffectiveAlias string `json:"effective_alias"`
+		Eligible       bool   `json:"eligible"`
+		Reachable      bool   `json:"reachable"`
+	}
+	type channelWire struct {
+		AllowTeam    bool              `json:"allow_team"`
+		LocalAlias   string            `json:"local_alias"`
+		Participants []participantWire `json:"participants"`
+	}
+	channels := make([]channelWire, len(c.channels))
+	for index, channel := range c.channels {
+		participants := channel.Participants()
+		rows := make([]participantWire, len(participants))
+		for participantIndex, participant := range participants {
+			rows[participantIndex] = participantWire{EffectiveAlias: participant.EffectiveAlias(),
+				Eligible: participant.Eligible(), Reachable: participant.Reachable()}
+		}
+		channels[index] = channelWire{AllowTeam: channel.AllowTeam(), LocalAlias: channel.LocalAlias(),
+			Participants: rows}
+	}
+	return model.JSONFrom(struct {
+		InitiationContext struct {
+			Channels []channelWire `json:"channels"`
+		} `json:"initiation_context"`
+		SchemaVersion int `json:"schema_version"`
+	}{InitiationContext: struct {
+		Channels []channelWire `json:"channels"`
+	}{Channels: channels}, SchemaVersion: model.SchemaVersion})
+}
+
 // ReadAgentOfferCandidates returns one authoritative SQLite snapshot for the
 // Agent layer to resolve. It performs no selector interpretation and no
 // transport-specific identity decoding or ordering.

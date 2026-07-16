@@ -58,6 +58,26 @@ func TestCurrentProjectionAndReceiptAreCanonicalImmutableBindings(t *testing.T) 
 	}
 }
 
+func TestParseCurrentProjectionRejectsUnknownOrAuthorityFields(t *testing.T) {
+	projection := currentTestProjection(t, []OperationKind{OperationTeamworkAccept, OperationResolveRetry})
+	parsed, err := ParseCurrentProjection(projection.CanonicalJSON().Bytes())
+	if err != nil || parsed.Digest() != projection.Digest() {
+		t.Fatalf("ParseCurrentProjection() = (%#v, %v)", parsed, err)
+	}
+	for _, raw := range []string{
+		`{}`,
+		strings.Replace(projection.CanonicalJSON().String(), `"schema_version":1`,
+			`"claim_secret":"secret","schema_version":1`, 1),
+		strings.Replace(projection.CanonicalJSON().String(), `"schema_version":1`,
+			`"schema_version":2`, 1),
+		" " + projection.CanonicalJSON().String(),
+	} {
+		if _, err := ParseCurrentProjection([]byte(raw)); err == nil {
+			t.Fatalf("ParseCurrentProjection accepted %s", raw)
+		}
+	}
+}
+
 func TestCurrentProjectionCarriesOfferedBriefAcrossFreshTransitionTurns(t *testing.T) {
 	offered := currentTestProjection(t, []OperationKind{OperationTeamworkAccept})
 	brief, _ := offered.ActionWork().Brief()

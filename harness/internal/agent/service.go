@@ -44,6 +44,7 @@ type ControlStore interface {
 	ProbeAgentClaim(context.Context, store.AgentClaimProbeSpec) (store.AgentClaimStatus, error)
 	ClaimAgentCurrent(context.Context, store.AgentClaimSpec) (store.AgentClaimResult, error)
 	FinalizeAgentCurrentRead(context.Context, store.AgentCurrentReadSpec) (store.AgentCurrentReadResult, error)
+	ReadAgentInitiationContext(context.Context, model.Profile, time.Time) (store.AgentInitiationContext, error)
 	ReserveManagedOperation(context.Context, store.ManagedOperationSpec) (store.ManagedOperationReservation, error)
 	CommitManagedResolution(context.Context, store.ManagedResolutionSpec) (store.ManagedResolutionResult, error)
 }
@@ -156,7 +157,20 @@ func (s *Service) AgentCurrent(ctx context.Context, metadata localapi.RequestMet
 		return localapi.AgentCurrentResponse{}, mapControlError(err)
 	}
 	if claimed.Status != store.AgentClaimActionable {
-		return localapi.AgentCurrentResponse{Status: string(claimed.Status)}, nil
+		response := localapi.AgentCurrentResponse{Status: string(claimed.Status)}
+		if claimed.Status == store.AgentClaimNone {
+			initiation, err := s.store.ReadAgentInitiationContext(ctx, metadata.Profile, at)
+			if err != nil {
+				return localapi.AgentCurrentResponse{}, mapControlError(err)
+			}
+			projection, err := initiation.CanonicalJSON()
+			if err != nil {
+				return localapi.AgentCurrentResponse{}, localapi.NewAPIError(localapi.CodeInternal,
+					"initiation context cannot be projected")
+			}
+			response.Projection = projection.Bytes()
+		}
+		return response, nil
 	}
 	current, err := s.store.FinalizeAgentCurrentRead(ctx, store.AgentCurrentReadSpec{
 		ProfileID: metadata.Profile.ID(), ExpectedAssetRevision: s.assetRevision,
