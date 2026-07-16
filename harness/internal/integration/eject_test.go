@@ -251,6 +251,17 @@ func TestEjectHostProjectionPreservesDriftWithoutPartialRemoval(t *testing.T) {
 			hook["timeout"] = float64(77)
 			writeTestJSON(t, path, document)
 		}},
+		{name: "registration managed status only", tamper: func(t *testing.T, workspace string,
+			_ assets.Bundle,
+		) {
+			path := hostConfigPath(workspace, assets.HostCodex)
+			document := readTestJSON(t, path)
+			entries := document["hooks"].(map[string]any)["UserPromptSubmit"].([]any)
+			hook := entries[0].(map[string]any)["hooks"].([]any)[0].(map[string]any)
+			hook["command"] = "user-changed-command"
+			hook["timeout"] = float64(77)
+			writeTestJSON(t, path, document)
+		}},
 	} {
 		test := test
 		t.Run(test.name, func(t *testing.T) {

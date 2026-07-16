@@ -198,10 +198,12 @@ func preflightEjectRegistration(plan projectionPlan, record ownershipRegistratio
 	if err != nil {
 		return nil, fileSnapshot{}, 0, false, err
 	}
-	if digestMatches == 0 && commandMatches == 0 {
+	statusMatches := managedStatusCount(entries, plan.entry.Hooks[0].StatusMessage)
+	if digestMatches == 0 && commandMatches == 0 && statusMatches == 0 {
 		return document, snapshot, 0, false, nil
 	}
 	if digestMatches != 1 || commandMatches != 1 || index < 0 ||
+		statusMatches != 1 ||
 		!entryUsesExactCommand(entries[index], plan.entry.Hooks[0].Command) {
 		return nil, fileSnapshot{}, 0, false,
 			projectionConflict("managed Host registration differs from eject ownership", nil)
@@ -252,7 +254,8 @@ func verifyEjectedProjection(plan projectionPlan, registration ownershipRegistra
 	}
 	digests, commands, _, err := registrationDigestAndCommandCounts(entries,
 		registration.InstalledDigest, plan.entry.Hooks[0].Command)
-	if err != nil || digests != 0 || commands != 0 {
+	statuses := managedStatusCount(entries, plan.entry.Hooks[0].StatusMessage)
+	if err != nil || digests != 0 || commands != 0 || statuses != 0 {
 		return projectionConflict("managed Host registration remains after eject", err)
 	}
 	return nil
