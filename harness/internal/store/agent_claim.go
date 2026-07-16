@@ -525,17 +525,27 @@ func newExternalCurrentAgentRun(id model.RunID, profile model.Profile, handling 
 
 func insertAgentRun(ctx context.Context, tx *sql.Tx, run model.AgentRun) error {
 	handlingID, handlingAttempt, fence, lease := any(nil), any(nil), any(nil), any(nil)
+	attachmentHash, attachmentExpires, attachedAt := any(nil), any(nil), any(nil)
 	if id, ok := run.HandlingID(); ok {
 		handlingID, handlingAttempt = id.String(), run.HandlingAttempt()
 		value, _ := run.ClaimFenceHash()
 		until, _ := run.LeaseUntil()
 		fence, lease = value.Bytes(), storeTime(until)
 	}
+	if value, ok := run.AttachmentTokenHash(); ok {
+		expires, _ := run.AttachmentExpiresAt()
+		attachmentHash, attachmentExpires = value.Bytes(), storeTime(expires)
+		if attached, present := run.AttachedAt(); present {
+			attachedAt = storeTime(attached)
+		}
+	}
 	_, err := tx.ExecContext(ctx, `INSERT INTO agent_runs(run_id,profile_id,handling_id,cause_json,
-		handling_attempt,claim_fence_hash,lease_until,launcher,runtime_kind,
+		handling_attempt,claim_fence_hash,lease_until,attachment_token_hash,attachment_expires_at,
+		attached_at,launcher,runtime_kind,
 		launcher_diagnostic_json,runtime_ids_json,status,started_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, run.ID().String(), run.ProfileID().String(), handlingID,
-		run.Cause().Bytes(), handlingAttempt, fence, lease, run.Launcher(), string(run.Runtime()),
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, run.ID().String(), run.ProfileID().String(), handlingID,
+		run.Cause().Bytes(), handlingAttempt, fence, lease, attachmentHash, attachmentExpires, attachedAt,
+		run.Launcher(), string(run.Runtime()),
 		run.LauncherDiagnostic().Bytes(), run.RuntimeIDs().Bytes(), string(run.Status()), storeTime(run.StartedAt()))
 	if err != nil {
 		return fmt.Errorf("claim Agent current: insert AgentRun: %w", err)
