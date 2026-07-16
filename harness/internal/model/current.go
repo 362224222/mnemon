@@ -6,7 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
+	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // CurrentRole is the local Node's authority in the action Work. It is derived
@@ -22,10 +25,11 @@ func (r CurrentRole) Valid() bool { return r == CurrentInitiator || r == Current
 
 // CurrentArtifactRef is a verified local root made visible by current. It
 // intentionally carries no produced/referenced role: Agents never choose that
-// authority. Readonly view paths are added with the materialization contract,
-// not fabricated by this base projection.
+// authority. Event and brief refs contain only a root; the top-level current
+// authority may bind that root to one exact readonly materialized path.
 type CurrentArtifactRef struct {
 	rootDigest Digest
+	viewPath   string
 }
 
 func NewCurrentArtifactRef(root Digest) (CurrentArtifactRef, error) {
@@ -35,14 +39,51 @@ func NewCurrentArtifactRef(root Digest) (CurrentArtifactRef, error) {
 	return CurrentArtifactRef{rootDigest: root}, nil
 }
 
+func NewCurrentArtifactView(root Digest, viewPath string) (CurrentArtifactRef, error) {
+	if root.IsZero() {
+		return CurrentArtifactRef{}, invalid("current Artifact view", "root digest is required")
+	}
+	path, err := validateCurrentArtifactViewPath(viewPath)
+	if err != nil {
+		return CurrentArtifactRef{}, err
+	}
+	return CurrentArtifactRef{rootDigest: root, viewPath: path}, nil
+}
+
 func (r CurrentArtifactRef) RootDigest() Digest { return r.rootDigest }
+func (r CurrentArtifactRef) ViewPath() (string, bool) {
+	return r.viewPath, r.viewPath != ""
+}
 func (r CurrentArtifactRef) MarshalJSON() ([]byte, error) {
 	if r.rootDigest.IsZero() {
 		return nil, invalid("current Artifact ref", "zero root")
 	}
-	return CanonicalMarshal(struct {
-		RootDigest Digest `json:"root_digest"`
-	}{r.rootDigest})
+	return CanonicalMarshal(currentArtifactWire{RootDigest: r.rootDigest.String(), Path: r.viewPath})
+}
+
+func validateCurrentArtifactViewPath(value string) (string, error) {
+	if value == "" || !utf8.ValidString(value) || len(value) > DefaultCurrentPathBytes ||
+		strings.IndexByte(value, 0) >= 0 || strings.Contains(value, `\`) || strings.HasPrefix(value, "/") {
+		return "", invalid("current Artifact view path", "must be bounded canonical workspace-relative UTF-8")
+	}
+	components := strings.Split(value, "/")
+	if len(components) < 6 || components[0] != ".mnemon" || components[1] != "harness" ||
+		components[2] != "node" || components[3] != "views" {
+		return "", invalid("current Artifact view path", "must use the managed readonly view namespace")
+	}
+	for _, component := range components {
+		if component == "" || component == "." || component == ".." {
+			return "", invalid("current Artifact view path", "contains an invalid component")
+		}
+	}
+	if _, err := ParseRunID(components[4]); err != nil {
+		return "", invalid("current Artifact view path", "contains an invalid Run identity")
+	}
+	ordinal, err := strconv.ParseUint(components[5], 10, 32)
+	if err != nil || strconv.FormatUint(ordinal, 10) != components[5] {
+		return "", invalid("current Artifact view path", "contains a noncanonical ordinal")
+	}
+	return value, nil
 }
 
 type CurrentBriefSpec struct {
@@ -66,7 +107,7 @@ func NewCurrentBrief(spec CurrentBriefSpec) (CurrentBrief, error) {
 	if spec.DeadlineUnixNano <= 0 {
 		return CurrentBrief{}, invalid("current Work brief", "positive deadline is required")
 	}
-	artifacts, err := normalizeCurrentArtifactRefs(spec.ArtifactRefs, MaxArtifactRefs)
+	artifacts, err := normalizeCurrentArtifactRoots(spec.ArtifactRefs, MaxArtifactRefs)
 	if err != nil {
 		return CurrentBrief{}, err
 	}
@@ -110,7 +151,7 @@ func NewCurrentEvent(spec CurrentEventSpec) (CurrentEvent, error) {
 	if spec.Payload.IsZero() || spec.Payload.String()[0] != '{' {
 		return CurrentEvent{}, invalid("current Event payload", "must be a canonical JSON object")
 	}
-	artifacts, err := normalizeCurrentArtifactRefs(spec.ArtifactRefs, MaxCurrentArtifactRefs)
+	artifacts, err := normalizeCurrentArtifactRoots(spec.ArtifactRefs, MaxCurrentArtifactRefs)
 	if err != nil {
 		return CurrentEvent{}, err
 	}
@@ -203,6 +244,7 @@ type CurrentProjectionSpec struct {
 	SourceEvent    CurrentEvent
 	ActionWork     CurrentWork
 	AllowedActions []OperationKind
+	ArtifactViews  []CurrentArtifactRef
 }
 
 // CurrentProjection is the public, bounded read model. The current schema has
@@ -240,7 +282,11 @@ func NewCurrentProjection(spec CurrentProjectionSpec) (CurrentProjection, error)
 	if len(actions) == 0 {
 		return CurrentProjection{}, invariant("current projection must allow an action or explicit resolution")
 	}
-	authorized, err := mergeCurrentArtifactRefs(brief.ArtifactRefs(), spec.SourceEvent.ArtifactRefs())
+	authorizedRoots, err := mergeCurrentArtifactRefs(brief.ArtifactRefs(), spec.SourceEvent.ArtifactRefs())
+	if err != nil {
+		return CurrentProjection{}, err
+	}
+	authorized, err := bindCurrentArtifactViews(authorizedRoots, spec.ArtifactViews)
 	if err != nil {
 		return CurrentProjection{}, err
 	}
@@ -264,6 +310,14 @@ func (p CurrentProjection) AllowedActions() []OperationKind {
 }
 func (p CurrentProjection) ArtifactRefs() []CurrentArtifactRef {
 	return append([]CurrentArtifactRef{}, p.artifacts...)
+}
+func (p CurrentProjection) HasMaterializedArtifactViews() bool {
+	for _, ref := range p.artifacts {
+		if _, ok := ref.ViewPath(); !ok {
+			return false
+		}
+	}
+	return true
 }
 func (p CurrentProjection) CanonicalJSON() JSON { return p.canonical }
 func (p CurrentProjection) Digest() Digest      { return p.digest }
@@ -431,6 +485,7 @@ type currentEventKeyWire struct {
 
 type currentArtifactWire struct {
 	RootDigest string `json:"root_digest"`
+	Path       string `json:"path,omitempty"`
 }
 
 type currentEventWire struct {
@@ -551,7 +606,8 @@ func currentReceiptWireFrom(receipt CurrentReadReceipt) currentReceiptWire {
 func artifactWires(refs []CurrentArtifactRef) []currentArtifactWire {
 	result := make([]currentArtifactWire, len(refs))
 	for index, ref := range refs {
-		result[index] = currentArtifactWire{ref.RootDigest().String()}
+		path, _ := ref.ViewPath()
+		result[index] = currentArtifactWire{RootDigest: ref.RootDigest().String(), Path: path}
 	}
 	return result
 }
@@ -687,17 +743,14 @@ func currentProjectionFromWire(wire currentProjectionWire) (CurrentProjection, e
 	if err != nil {
 		return CurrentProjection{}, err
 	}
-	projection, err := NewCurrentProjection(CurrentProjectionSpec{SourceEvent: event, ActionWork: work,
-		AllowedActions: wire.AllowedActions})
-	if err != nil {
-		return CurrentProjection{}, err
-	}
 	authorized, err := artifactRefsFromWire(wire.ArtifactRefs, MaxCurrentArtifactRefs)
 	if err != nil {
 		return CurrentProjection{}, err
 	}
-	if !equalArtifactRefs(authorized, projection.ArtifactRefs()) {
-		return CurrentProjection{}, invariant("current projection Artifact authority differs from brief/Event roots")
+	projection, err := NewCurrentProjection(CurrentProjectionSpec{SourceEvent: event, ActionWork: work,
+		AllowedActions: wire.AllowedActions, ArtifactViews: authorized})
+	if err != nil {
+		return CurrentProjection{}, err
 	}
 	return projection, nil
 }
@@ -749,7 +802,11 @@ func artifactRefsFromWire(wires []currentArtifactWire, max int) ([]CurrentArtifa
 		if err != nil {
 			return nil, err
 		}
-		result[index], err = NewCurrentArtifactRef(digest)
+		if wire.Path == "" {
+			result[index], err = NewCurrentArtifactRef(digest)
+		} else {
+			result[index], err = NewCurrentArtifactView(digest, wire.Path)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -774,7 +831,8 @@ func equalArtifactRefs(left, right []CurrentArtifactRef) bool {
 		return false
 	}
 	for index := range left {
-		if left[index].RootDigest() != right[index].RootDigest() {
+		if left[index].RootDigest() != right[index].RootDigest() ||
+			left[index].viewPath != right[index].viewPath {
 			return false
 		}
 	}
@@ -790,6 +848,11 @@ func normalizeCurrentArtifactRefs(refs []CurrentArtifactRef, max int) ([]Current
 		if ref.rootDigest.IsZero() {
 			return nil, invalid("current Artifact refs", "contains a zero root")
 		}
+		if ref.viewPath != "" {
+			if _, err := validateCurrentArtifactViewPath(ref.viewPath); err != nil {
+				return nil, err
+			}
+		}
 	}
 	for i := 1; i < len(result); i++ {
 		for j := i; j > 0 && result[j].rootDigest.String() < result[j-1].rootDigest.String(); j-- {
@@ -802,6 +865,46 @@ func normalizeCurrentArtifactRefs(refs []CurrentArtifactRef, max int) ([]Current
 		}
 	}
 	return result, nil
+}
+
+func normalizeCurrentArtifactRoots(refs []CurrentArtifactRef, max int) ([]CurrentArtifactRef, error) {
+	result, err := normalizeCurrentArtifactRefs(refs, max)
+	if err != nil {
+		return nil, err
+	}
+	for _, ref := range result {
+		if ref.viewPath != "" {
+			return nil, invalid("current Artifact semantic refs", "must not contain a materialized path")
+		}
+	}
+	return result, nil
+}
+
+func bindCurrentArtifactViews(roots, supplied []CurrentArtifactRef) ([]CurrentArtifactRef, error) {
+	if supplied == nil {
+		return append([]CurrentArtifactRef{}, roots...), nil
+	}
+	views, err := normalizeCurrentArtifactRefs(supplied, MaxCurrentArtifactRefs)
+	if err != nil {
+		return nil, err
+	}
+	if len(views) != len(roots) {
+		return nil, invariant("current projection Artifact views differ from authorized roots")
+	}
+	withPath := false
+	withoutPath := false
+	for index := range roots {
+		if roots[index].RootDigest() != views[index].RootDigest() {
+			return nil, invariant("current projection Artifact views differ from authorized roots")
+		}
+		_, ok := views[index].ViewPath()
+		withPath = withPath || ok
+		withoutPath = withoutPath || !ok
+	}
+	if withPath && withoutPath {
+		return nil, invalid("current projection Artifact views", "must bind every authorized root or none")
+	}
+	return views, nil
 }
 
 func mergeCurrentArtifactRefs(left, right []CurrentArtifactRef) ([]CurrentArtifactRef, error) {
