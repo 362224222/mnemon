@@ -11,6 +11,159 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/assets"
 )
 
+func TestVerifyHostProjectionAbsentAcceptsUnrelatedConfigurationReadOnly(t *testing.T) {
+	for _, host := range []assets.Host{assets.HostCodex, assets.HostClaudeCode} {
+		host := host
+		t.Run(string(host), func(t *testing.T) {
+			workspace, nodeState, bundle := newProjectionWorkspace(t)
+			plan, err := prepareProjection(workspace, nodeState, host, bundle)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Dir(plan.configPath), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			unrelated := map[string]any{
+				"theme": "dark",
+				"hooks": map[string]any{
+					"Stop": []any{map[string]any{"hooks": []any{map[string]any{
+						"command": "user-stop", "statusMessage": "user status", "type": "command",
+					}}}},
+					plan.registration.Value.Event: []any{map[string]any{"hooks": []any{map[string]any{
+						"command": "user-prompt-hook", "statusMessage": "unrelated prompt hook",
+						"timeout": float64(7), "type": "command",
+					}}}},
+				},
+			}
+			writeTestJSON(t, plan.configPath, unrelated)
+			before, err := os.ReadFile(plan.configPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			beforeInfo, err := os.Stat(plan.configPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			for attempt := 0; attempt < 2; attempt++ {
+				if err := VerifyHostProjectionAbsent(workspace, nodeState, host, bundle); err != nil {
+					t.Fatalf("VerifyHostProjectionAbsent() error = %v", err)
+				}
+			}
+			after, err := os.ReadFile(plan.configPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			afterInfo, err := os.Stat(plan.configPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(after, before) || !os.SameFile(beforeInfo, afterInfo) ||
+				!beforeInfo.ModTime().Equal(afterInfo.ModTime()) {
+				t.Fatal("absence verification rewrote unrelated Host configuration")
+			}
+			if _, err := os.Lstat(filepath.Join(workspace, ".mnemon", "harness", "integrations")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("absence verification created ownership directories: %v", err)
+			}
+			if err := VerifyNodeBundle(nodeState, bundle); err != nil {
+				t.Fatalf("absence verification changed canonical Node bundle: %v", err)
+			}
+		})
+	}
+}
+
+func TestVerifyHostProjectionAbsentRejectsManagedResidueAndUnsafePaths(t *testing.T) {
+	tests := []struct {
+		name  string
+		want  error
+		setup func(*testing.T, string, string, assets.Bundle, projectionPlan)
+	}{
+		{name: "ownership journal", want: ErrProjectionConflict,
+			setup: func(t *testing.T, workspace, nodeState string, bundle assets.Bundle, _ projectionPlan) {
+				if _, err := InstallHostProjection(workspace, nodeState, assets.HostCodex, bundle); err != nil {
+					t.Fatal(err)
+				}
+			}},
+		{name: "partial eject", want: ErrProjectionConflict,
+			setup: func(t *testing.T, workspace, nodeState string, bundle assets.Bundle, plan projectionPlan) {
+				receipt, err := InstallHostProjection(workspace, nodeState, assets.HostCodex, bundle)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Remove(receipt.OwnershipPath); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Remove(plan.files[0].path); err != nil {
+					t.Fatal(err)
+				}
+			}},
+		{name: "user drift at managed path", want: ErrProjectionConflict,
+			setup: func(t *testing.T, _, _ string, _ assets.Bundle, plan projectionPlan) {
+				if err := os.MkdirAll(filepath.Dir(plan.files[0].path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(plan.files[0].path, []byte("user-owned drift\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}},
+		{name: "exact registration", want: ErrProjectionConflict,
+			setup: func(t *testing.T, _, _ string, _ assets.Bundle, plan projectionPlan) {
+				writeResidualRegistration(t, plan, plan.entry)
+			}},
+		{name: "managed command registration", want: ErrProjectionConflict,
+			setup: func(t *testing.T, _, _ string, _ assets.Bundle, plan projectionPlan) {
+				writeResidualRegistration(t, plan, map[string]any{"hooks": []any{map[string]any{
+					"command": plan.entry.Hooks[0].Command, "statusMessage": "changed status",
+					"timeout": float64(77), "type": "command",
+				}}})
+			}},
+		{name: "managed status registration", want: ErrProjectionConflict,
+			setup: func(t *testing.T, _, _ string, _ assets.Bundle, plan projectionPlan) {
+				writeResidualRegistration(t, plan, map[string]any{"hooks": []any{map[string]any{
+					"command": "user-command", "statusMessage": plan.entry.Hooks[0].StatusMessage,
+					"timeout": float64(77), "type": "command",
+				}}})
+			}},
+		{name: "Host directory symlink", want: ErrUnsafeProjection,
+			setup: func(t *testing.T, workspace, _ string, _ assets.Bundle, _ projectionPlan) {
+				if err := os.Symlink(t.TempDir(), filepath.Join(workspace, ".codex")); err != nil {
+					t.Fatal(err)
+				}
+			}},
+		{name: "ownership directory symlink", want: ErrUnsafeProjection,
+			setup: func(t *testing.T, workspace, _ string, _ assets.Bundle, _ projectionPlan) {
+				path := filepath.Join(workspace, ".mnemon", "harness", "integrations")
+				if err := os.Symlink(t.TempDir(), path); err != nil {
+					t.Fatal(err)
+				}
+			}},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			workspace, nodeState, bundle := newProjectionWorkspace(t)
+			plan, err := prepareProjection(workspace, nodeState, assets.HostCodex, bundle)
+			if err != nil {
+				t.Fatal(err)
+			}
+			test.setup(t, workspace, nodeState, bundle, plan)
+			if err := VerifyHostProjectionAbsent(workspace, nodeState, assets.HostCodex, bundle); !errors.Is(err, test.want) {
+				t.Fatalf("VerifyHostProjectionAbsent() error = %v, want %v", err, test.want)
+			}
+		})
+	}
+}
+
+func writeResidualRegistration(t *testing.T, plan projectionPlan, entry any) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(plan.configPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestJSON(t, plan.configPath, map[string]any{"hooks": map[string]any{
+		plan.registration.Value.Event: []any{entry},
+	}})
+}
+
 func TestEjectHostProjectionRemovesOnlyManagedAssetsAndReplays(t *testing.T) {
 	workspace, nodeState, bundle := newProjectionWorkspace(t)
 	configPath := hostConfigPath(workspace, assets.HostCodex)

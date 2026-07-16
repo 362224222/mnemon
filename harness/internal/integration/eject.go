@@ -19,6 +19,20 @@ type EjectHostProjectionReceipt struct {
 	Replayed            bool
 }
 
+// VerifyHostProjectionAbsent proves that one Host has no remaining managed
+// projection. It accepts unrelated Host configuration, but rejects any
+// ownership journal, frozen managed file, exact registration, or registration
+// that retains the managed command or status. The proof is strictly read-only.
+func VerifyHostProjectionAbsent(workspace, nodeState string, host assets.Host,
+	bundle assets.Bundle,
+) error {
+	plan, err := prepareProjection(workspace, nodeState, host, bundle)
+	if err != nil {
+		return err
+	}
+	return verifyHostProjectionAbsent(plan)
+}
+
 // EjectHostProjection removes one fully authenticated managed projection. It
 // never removes the immutable Node bundle or shared Host configuration. Any
 // user/content drift fails before deletion; missing managed entries are safe
@@ -32,7 +46,7 @@ func EjectHostProjection(workspace, nodeState string, host assets.Host,
 	}
 	receipt := EjectHostProjectionReceipt{Host: host, Revision: bundle.Manifest().AssetRevision}
 	if _, err := os.Lstat(plan.ownershipPath); errors.Is(err, os.ErrNotExist) {
-		if _, _, err := inspectFreshProjection(plan); err != nil {
+		if err := verifyHostProjectionAbsent(plan); err != nil {
 			return EjectHostProjectionReceipt{}, err
 		}
 		receipt.Replayed = true
@@ -93,6 +107,26 @@ func EjectHostProjection(workspace, nodeState string, host assets.Host,
 		return EjectHostProjectionReceipt{}, err
 	}
 	return receipt, nil
+}
+
+func verifyHostProjectionAbsent(plan projectionPlan) error {
+	if err := validateExistingProjectionParents(plan); err != nil {
+		return err
+	}
+	relative, err := filepath.Rel(plan.workspace, filepath.Dir(plan.ownershipPath))
+	if err != nil {
+		return projectionConflict("resolve ownership journal directory", err)
+	}
+	if err := requireExistingOwnedDirectoryChain(plan.workspace, relative); err != nil {
+		return err
+	}
+	if _, err := os.Lstat(plan.ownershipPath); err == nil {
+		return projectionConflict("managed Host ownership journal remains", nil)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return projectionConflict("inspect ownership journal", err)
+	}
+	_, _, err = inspectFreshProjection(plan)
+	return err
 }
 
 func ejectRecords(plan projectionPlan, ownership projectionOwnership) ([]ownershipFile,
