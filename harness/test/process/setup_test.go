@@ -21,7 +21,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mnemon-dev/mnemon/harness/internal/assets"
+	"github.com/mnemon-dev/mnemon/harness/internal/integration"
 	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
+	"github.com/mnemon-dev/mnemon/harness/internal/model"
+	"github.com/mnemon-dev/mnemon/harness/internal/node"
 	"golang.org/x/sys/unix"
 )
 
@@ -266,6 +270,143 @@ func TestPublicSetupSerializesProcessesAndRecoversAKilledDaemon(t *testing.T) {
 	cancelRecoveredHealth()
 }
 
+// TestPublicSetupUpgradesAnActiveRevisionUnderLifecycleLease composes a real
+// old-authority Store, controller, Unix socket and applied Host projection,
+// then invokes only the public setup command for the desired embedded bundle.
+// The old daemon uses the current controller protocol with an injected old
+// installation verifier; setup must still perform the real companion-owned
+// offline mutations and launch a new managed daemon before returning.
+func TestPublicSetupUpgradesAnActiveRevisionUnderLifecycleLease(t *testing.T) {
+	repository := setupProcessRepositoryRoot(t)
+	root := setupProcessPhysicalTempDir(t)
+	bin := filepath.Join(root, "bin")
+	workspace := filepath.Join(root, "work")
+	harnessExecutable := filepath.Join(bin, "mnemon-harness")
+	mnemondExecutable := filepath.Join(bin, "mnemond")
+	nodeState := filepath.Join(workspace, ".mnemon", "harness", "node")
+	cleanup := &setupProcessCleanup{root: root, nodeState: nodeState}
+	t.Cleanup(func() { cleanup.run(t) })
+	for _, path := range []string{bin, workspace} {
+		if err := os.Mkdir(path, 0o700); err != nil {
+			t.Fatalf("create revision-upgrade directory: %v", err)
+		}
+	}
+
+	buildCtx, cancelBuild := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancelBuild()
+	setupProcessBuild(t, buildCtx, repository, harnessExecutable,
+		"./harness/cmd/mnemon-harness")
+	setupProcessBuild(t, buildCtx, repository, mnemondExecutable,
+		"./harness/cmd/mnemond")
+	setupProcessFakeCodex(t, filepath.Join(bin, "codex"))
+	environment := setupProcessEnvironment(bin, workspace, root)
+	cleanup.offline = setupProcessOfflineProbe{executable: mnemondExecutable,
+		workspace: workspace, environment: append([]string(nil), environment...)}
+
+	bundle, err := assets.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	newRevision := bundle.Manifest().AssetRevision
+	oldRevision := model.Sum([]byte("process active revision before upgrade")).String()
+	createdAt := time.Date(2020, time.January, 2, 8, 0, 0, 0, time.UTC)
+	provisioned, err := node.Provision(context.Background(), node.ProvisionOptions{
+		Workspace: workspace, Host: model.HostCodex, AssetRevision: oldRevision,
+		Clock: setupProcessClock{at: createdAt},
+	})
+	if err != nil || provisioned.NodeState != nodeState || provisioned.Profile.Enabled() {
+		t.Fatalf("provision old revision = (%#v, %v)", provisioned, err)
+	}
+	if _, err := integration.InstallNodeBundle(nodeState, bundle); err != nil {
+		t.Fatal(err)
+	}
+	projection, err := integration.InstallHostProjection(workspace, nodeState,
+		assets.HostCodex, bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	setupProcessRewriteAppliedProjectionRevision(t, projection.OwnershipPath,
+		newRevision, oldRevision)
+	oldInstall := node.InstallationVerifierFunc(func(profile model.Profile) error {
+		if profile.Host() != model.HostCodex || profile.ActiveAssetRevision() != oldRevision {
+			return errors.New("old process fixture installation authority differs")
+		}
+		return nil
+	})
+	activated, err := node.Activate(context.Background(), node.ActivateOptions{
+		Workspace: workspace, Host: model.HostCodex, AssetRevision: oldRevision,
+		ExpectedUpdatedAt: provisioned.Profile.UpdatedAt(),
+		Clock:             setupProcessClock{at: createdAt.Add(time.Second)},
+		Install:           oldInstall,
+	})
+	if err != nil || !activated.Changed || !activated.Profile.Enabled() {
+		t.Fatalf("activate old revision = (%#v, %v)", activated, err)
+	}
+
+	oldDaemon, err := node.OpenDaemon(context.Background(), node.DaemonOptions{
+		Workspace: workspace, Install: oldInstall,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldServeCtx, cancelOldServe := context.WithCancel(context.Background())
+	defer cancelOldServe()
+	defer oldDaemon.Close()
+	oldDone := make(chan error, 1)
+	go func() {
+		oldDone <- errors.Join(oldDaemon.Serve(oldServeCtx), oldDaemon.Close())
+	}()
+	client, err := localapi.NewClient(nodeState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanup.client = client
+	cleanup.autoMayRun = true
+	oldReadyCtx, cancelOldReady := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := setupProcessWaitReady(oldReadyCtx, client, oldRevision); err != nil {
+		cancelOldReady()
+		t.Fatalf("old revision daemon did not become ready: %v", err)
+	}
+	cancelOldReady()
+
+	upgradeCtx, cancelUpgrade := context.WithTimeout(context.Background(), 30*time.Second)
+	result := setupProcessRunSetup(upgradeCtx, harnessExecutable, workspace, environment)
+	cancelUpgrade()
+	receipt, err := setupProcessParseReceipt(result)
+	if err != nil {
+		t.Fatalf("public active revision upgrade failed: %v", err)
+	}
+	if receipt.AssetRevision != newRevision || receipt.Host != "codex" ||
+		receipt.PeerID != provisioned.Node.PeerID().String() || receipt.Replayed ||
+		!receipt.Started || receipt.Status != "ready" {
+		t.Fatalf("active revision upgrade receipt = %#v", receipt)
+	}
+	select {
+	case err := <-oldDone:
+		if err != nil {
+			t.Fatalf("old daemon lifecycle completion = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("old daemon did not release its Store writer")
+	}
+	if err := integration.VerifyHostProjection(workspace, nodeState,
+		assets.HostCodex, bundle); err != nil {
+		t.Fatalf("new projection did not converge: %v", err)
+	}
+	newReadyCtx, cancelNewReady := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := setupProcessWaitReady(newReadyCtx, client, newRevision); err != nil {
+		cancelNewReady()
+		t.Fatalf("new revision daemon did not become ready: %v", err)
+	}
+	cancelNewReady()
+	authority, apiErr := client.ReadAuthority(context.Background())
+	if apiErr != nil || authority.AssetRevision != newRevision ||
+		authority.ActiveAssetRevision != newRevision || !authority.Enabled ||
+		authority.PeerID != receipt.PeerID {
+		t.Fatalf("new durable authority = (%#v, %#v)", authority, apiErr)
+	}
+}
+
 func setupProcessAssertConcurrentReceipts(t *testing.T, receipts []setupProcessReceipt) {
 	t.Helper()
 	if len(receipts) != concurrentSetups {
@@ -428,6 +569,52 @@ func setupProcessFakeCodex(t *testing.T, path string) {
 		t.Fatalf("protect fake Codex executable: %v", err)
 	}
 }
+
+func setupProcessRewriteAppliedProjectionRevision(t *testing.T, ownershipPath,
+	currentRevision, previousRevision string,
+) {
+	t.Helper()
+	raw, err := os.ReadFile(ownershipPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := []byte(`"asset_revision":"` + currentRevision + `"`)
+	previous := []byte(`"asset_revision":"` + previousRevision + `"`)
+	if len(current) != len(previous) || bytes.Count(raw, current) != 1 {
+		t.Fatal("applied projection has no unique replaceable revision authority")
+	}
+	rewritten := bytes.Replace(raw, current, previous, 1)
+	file, err := os.OpenFile(ownershipPath, os.O_WRONLY|os.O_TRUNC, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Write(rewritten); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	directory, err := os.Open(filepath.Dir(ownershipPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := directory.Sync(); err != nil {
+		_ = directory.Close()
+		t.Fatal(err)
+	}
+	if err := directory.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type setupProcessClock struct{ at time.Time }
+
+func (clock setupProcessClock) Now() time.Time { return clock.at }
 
 func setupProcessEnvironment(bin, workspace, temporaryRoot string) []string {
 	// Construct from nothing: in particular, never copy
