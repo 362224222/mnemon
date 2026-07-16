@@ -71,6 +71,10 @@ func TestRun(t *testing.T) {
 		"mnemon-harness setup [--host auto|codex|claude-code] [--project-root DIR]") {
 		t.Error("ordinary help does not expose the complete setup entrypoint")
 	}
+	if !strings.Contains(wantHelp,
+		"mnemon-harness eject [--host auto|codex|claude-code] [--project-root DIR]") {
+		t.Error("ordinary help does not expose the complete eject entrypoint")
+	}
 	for _, forbidden := range []string{
 		"hub", "remote workspace", "multica", "generic capability", "mcp",
 		"evolution", "tower", "session", "hook check", "agent current", "teamwork offer",
@@ -78,6 +82,38 @@ func TestRun(t *testing.T) {
 		if strings.Contains(lowerHelp, forbidden) {
 			t.Errorf("help contains retired vocabulary %q", forbidden)
 		}
+	}
+}
+
+func TestRunRoutesEjectThroughThePublicLifecycleBoundary(t *testing.T) {
+	var received []string
+	eject := func(ctx context.Context, args []string, stdout, stderr io.Writer,
+		gotVersion string,
+	) int {
+		if ctx == nil || gotVersion != version {
+			t.Fatalf("eject composition = context %v version %q", ctx, gotVersion)
+		}
+		received = append([]string(nil), args...)
+		_, _ = io.WriteString(stdout, "eject receipt\n")
+		return 6
+	}
+	var stdout, stderr bytes.Buffer
+	exit := runWithRunners(context.Background(), []string{"eject", "--host", "codex",
+		"--project-root", "."}, strings.NewReader("unrelated stdin"), &stdout, &stderr,
+		cliSetupMustNotRun(t), eject)
+	if exit != 6 || !reflect.DeepEqual(received,
+		[]string{"--host", "codex", "--project-root", "."}) ||
+		stdout.String() != "eject receipt\n" || stderr.Len() != 0 {
+		t.Fatalf("eject route = exit %d args %v stdout %q stderr %q", exit, received,
+			stdout.String(), stderr.String())
+	}
+}
+
+func cliSetupMustNotRun(t *testing.T) setupRunner {
+	t.Helper()
+	return func(context.Context, []string, io.Writer, io.Writer, string) int {
+		t.Fatal("eject route invoked setup")
+		return 1
 	}
 }
 

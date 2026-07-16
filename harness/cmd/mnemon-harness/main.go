@@ -17,6 +17,7 @@ const helpText = `mnemon-harness is the project-local client for mnemond-managed
 
 Usage:
   mnemon-harness setup [--host auto|codex|claude-code] [--project-root DIR]
+  mnemon-harness eject [--host auto|codex|claude-code] [--project-root DIR]
   mnemon-harness --help
   mnemon-harness --version
 
@@ -25,6 +26,7 @@ and are intentionally absent from ordinary help.
 `
 
 type setupRunner func(context.Context, []string, io.Writer, io.Writer, string) int
+type ejectRunner func(context.Context, []string, io.Writer, io.Writer, string) int
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -36,11 +38,17 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	return runWithSetup(ctx, args, stdin, stdout, stderr, cli.RunSetup)
+	return runWithRunners(ctx, args, stdin, stdout, stderr, cli.RunSetup, cli.RunEject)
 }
 
 func runWithSetup(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer,
 	setup setupRunner,
+) int {
+	return runWithRunners(ctx, args, stdin, stdout, stderr, setup, cli.RunEject)
+}
+
+func runWithRunners(ctx context.Context, args []string, stdin io.Reader,
+	stdout, stderr io.Writer, setup setupRunner, eject ejectRunner,
 ) int {
 	if len(args) == 0 {
 		if _, err := io.WriteString(stdout, helpText); err != nil {
@@ -73,6 +81,11 @@ func runWithSetup(ctx context.Context, args []string, stdin io.Reader, stdout, s
 			return 1
 		}
 		return setup(ctx, args[1:], stdout, stderr, version)
+	case "eject":
+		if eject == nil {
+			return 1
+		}
+		return eject(ctx, args[1:], stdout, stderr, version)
 	case "hook", "agent", "teamwork":
 		return cli.New(stdin, stdout, stderr).Run(ctx, args)
 	default:
