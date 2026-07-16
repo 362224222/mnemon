@@ -43,6 +43,7 @@ type TeamworkExecutor interface {
 type ControlStore interface {
 	ProbeAgentClaim(context.Context, store.AgentClaimProbeSpec) (store.AgentClaimStatus, error)
 	ClaimAgentCurrent(context.Context, store.AgentClaimSpec) (store.AgentClaimResult, error)
+	PlanAgentCurrentRead(context.Context, store.AgentCurrentReadSpec) (store.AgentCurrentReadPlan, error)
 	FinalizeAgentCurrentRead(context.Context, store.AgentCurrentReadSpec) (store.AgentCurrentReadResult, error)
 	ReadAgentInitiationContext(context.Context, model.Profile, time.Time) (store.AgentInitiationContext, error)
 	ReserveManagedOperation(context.Context, store.ManagedOperationSpec) (store.ManagedOperationReservation, error)
@@ -55,6 +56,7 @@ type ServiceOptions struct {
 	Random         io.Reader
 	OperationLease time.Duration
 	Executor       TeamworkExecutor
+	CurrentViews   AgentCurrentViews
 }
 
 // Service implements the four closed Agent routes. It owns only orchestration;
@@ -67,11 +69,12 @@ type Service struct {
 	randomMu       sync.Mutex
 	operationLease time.Duration
 	executor       TeamworkExecutor
+	currentViews   AgentCurrentViews
 }
 
 func NewService(st ControlStore, options ServiceOptions) (*Service, error) {
-	if st == nil || options.AssetRevision == "" {
-		return nil, errors.New("Agent service requires Store and asset revision")
+	if st == nil || options.AssetRevision == "" || options.CurrentViews == nil {
+		return nil, errors.New("Agent service requires Store, asset revision and current view coordinator")
 	}
 	if options.Clock == nil {
 		options.Clock = wallServiceClock{}
@@ -86,7 +89,8 @@ func NewService(st ControlStore, options ServiceOptions) (*Service, error) {
 		return nil, errors.New("Agent service operation lease must be 5s..10m")
 	}
 	return &Service{store: st, assetRevision: options.AssetRevision, clock: options.Clock,
-		random: options.Random, operationLease: options.OperationLease, executor: options.Executor}, nil
+		random: options.Random, operationLease: options.OperationLease, executor: options.Executor,
+		currentViews: options.CurrentViews}, nil
 }
 
 func (s *Service) HookCheck(ctx context.Context, metadata localapi.RequestMetadata,
@@ -172,11 +176,32 @@ func (s *Service) AgentCurrent(ctx context.Context, metadata localapi.RequestMet
 		}
 		return response, nil
 	}
-	current, err := s.store.FinalizeAgentCurrentRead(ctx, store.AgentCurrentReadSpec{
+	readSpec := store.AgentCurrentReadSpec{
 		ProfileID: metadata.Profile.ID(), ExpectedAssetRevision: s.assetRevision,
 		RunID: claimed.Run.ID(), ClaimTokenHash: model.Sum(claimSecret), At: at,
-	})
+	}
+	plan, err := s.store.PlanAgentCurrentRead(ctx, readSpec)
 	if err != nil {
+		return localapi.AgentCurrentResponse{}, mapControlError(err)
+	}
+	if plan.RunID != claimed.Run.ID() {
+		return localapi.AgentCurrentResponse{}, localapi.NewAPIError(localapi.CodeInternal,
+			"managed current view plan differs from its Run")
+	}
+	views, err := s.currentViews.Materialize(ctx, plan)
+	if err != nil {
+		return localapi.AgentCurrentResponse{}, localapi.NewAPIError(localapi.CodeInternal,
+			"managed current Artifact views cannot be materialized safely")
+	}
+	finalAt, apiErr := s.trustedNow()
+	if apiErr != nil {
+		s.cleanupCurrentViews(claimed.Run.ID())
+		return localapi.AgentCurrentResponse{}, apiErr
+	}
+	readSpec.At, readSpec.ArtifactViews = finalAt, views
+	current, err := s.store.FinalizeAgentCurrentRead(ctx, readSpec)
+	if err != nil {
+		s.cleanupCurrentViews(claimed.Run.ID())
 		return localapi.AgentCurrentResponse{}, mapControlError(err)
 	}
 	return localapi.AgentCurrentResponse{Status: string(store.AgentClaimActionable),
@@ -223,9 +248,13 @@ func (s *Service) TeamworkAction(ctx context.Context, metadata localapi.RequestM
 	if err != nil {
 		return localapi.OperationResponse{}, mapControlError(err)
 	}
-	return s.executor.ExecuteTeamwork(ctx, TeamworkExecutionSpec{
+	response, executionErr := s.executor.ExecuteTeamwork(ctx, TeamworkExecutionSpec{
 		Request: request, Action: validated, Reservation: reservation, At: at,
 	})
+	if executionErr == nil {
+		s.cleanupCurrentViews(reservation.Operation.AgentRunID())
+	}
+	return response, executionErr
 }
 
 func (s *Service) AgentResolve(ctx context.Context, metadata localapi.RequestMetadata,
@@ -267,6 +296,7 @@ func (s *Service) AgentResolve(ctx context.Context, metadata localapi.RequestMet
 	if err != nil {
 		return localapi.OperationResponse{}, mapControlError(err)
 	}
+	s.cleanupCurrentViews(reservation.Operation.AgentRunID())
 	response, err := decodeResolutionResponse(resolved.Receipt, resolved.Operation)
 	if err != nil {
 		return localapi.OperationResponse{}, localapi.NewAPIError(localapi.CodeInternal,
@@ -274,6 +304,15 @@ func (s *Service) AgentResolve(ctx context.Context, metadata localapi.RequestMet
 	}
 	response.Replayed = resolved.Replayed
 	return response, nil
+}
+
+func (s *Service) cleanupCurrentViews(runID model.RunID) {
+	if s == nil || s.currentViews == nil || runID.IsZero() {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = s.currentViews.CleanupRun(ctx, runID)
 }
 
 func (s *Service) requireMetadata(metadata localapi.RequestMetadata) *localapi.APIError {

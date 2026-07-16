@@ -20,10 +20,20 @@ func (clock serviceTestClock) Now() time.Time { return clock.now }
 type fakeControlStore struct {
 	probe    func(context.Context, store.AgentClaimProbeSpec) (store.AgentClaimStatus, error)
 	claim    func(context.Context, store.AgentClaimSpec) (store.AgentClaimResult, error)
+	plan     func(context.Context, store.AgentCurrentReadSpec) (store.AgentCurrentReadPlan, error)
 	current  func(context.Context, store.AgentCurrentReadSpec) (store.AgentCurrentReadResult, error)
 	initiate func(context.Context, model.Profile, time.Time) (store.AgentInitiationContext, error)
 	reserve  func(context.Context, store.ManagedOperationSpec) (store.ManagedOperationReservation, error)
 	resolve  func(context.Context, store.ManagedResolutionSpec) (store.ManagedResolutionResult, error)
+}
+
+func (fake *fakeControlStore) PlanAgentCurrentRead(ctx context.Context,
+	spec store.AgentCurrentReadSpec,
+) (store.AgentCurrentReadPlan, error) {
+	if fake.plan == nil {
+		return store.AgentCurrentReadPlan{}, errors.New("unexpected PlanAgentCurrentRead")
+	}
+	return fake.plan(ctx, spec)
 }
 
 func (fake *fakeControlStore) ProbeAgentClaim(ctx context.Context,
@@ -84,6 +94,27 @@ type fakeTeamworkExecutor struct {
 	execute func(context.Context, TeamworkExecutionSpec) (localapi.OperationResponse, *localapi.APIError)
 }
 
+type fakeAgentCurrentViews struct {
+	materialize func(context.Context, store.AgentCurrentReadPlan) ([]model.CurrentArtifactRef, error)
+	plans       []store.AgentCurrentReadPlan
+	cleanups    []model.RunID
+}
+
+func (fake *fakeAgentCurrentViews) Materialize(ctx context.Context,
+	plan store.AgentCurrentReadPlan,
+) ([]model.CurrentArtifactRef, error) {
+	fake.plans = append(fake.plans, plan)
+	if fake.materialize != nil {
+		return fake.materialize(ctx, plan)
+	}
+	return []model.CurrentArtifactRef{}, nil
+}
+
+func (fake *fakeAgentCurrentViews) CleanupRun(_ context.Context, run model.RunID) error {
+	fake.cleanups = append(fake.cleanups, run)
+	return nil
+}
+
 func (fake fakeTeamworkExecutor) ExecuteTeamwork(ctx context.Context,
 	spec TeamworkExecutionSpec,
 ) (localapi.OperationResponse, *localapi.APIError) {
@@ -101,7 +132,9 @@ func TestServiceHookAndCurrentKeepClaimCapabilityPrivate(t *testing.T) {
 	handlingID, _ := model.ParseHandlingID("handling-service-current")
 
 	var claimSpec store.AgentClaimSpec
+	var planSpec store.AgentCurrentReadSpec
 	var readSpec store.AgentCurrentReadSpec
+	views := &fakeAgentCurrentViews{}
 	fake := &fakeControlStore{
 		probe: func(_ context.Context, spec store.AgentClaimProbeSpec) (store.AgentClaimStatus, error) {
 			if spec.ProfileID != profile.ID() || spec.ExpectedAssetRevision != "asset-service" || !spec.At.Equal(at) {
@@ -123,13 +156,18 @@ func TestServiceHookAndCurrentKeepClaimCapabilityPrivate(t *testing.T) {
 			}
 			return store.AgentClaimResult{Status: store.AgentClaimActionable, Run: run}, nil
 		},
+		plan: func(_ context.Context, spec store.AgentCurrentReadSpec) (store.AgentCurrentReadPlan, error) {
+			planSpec = spec
+			return store.AgentCurrentReadPlan{RunID: runID,
+				Artifacts: []store.AgentCurrentArtifactMaterialization{}}, nil
+		},
 		current: func(_ context.Context, spec store.AgentCurrentReadSpec) (store.AgentCurrentReadResult, error) {
 			readSpec = spec
 			return store.AgentCurrentReadResult{Projection: projection}, nil
 		},
 	}
 	service, err := NewService(fake, ServiceOptions{AssetRevision: "asset-service",
-		Clock: serviceTestClock{at}, Random: bytes.NewReader(entropy)})
+		Clock: serviceTestClock{at}, Random: bytes.NewReader(entropy), CurrentViews: views})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +190,10 @@ func TestServiceHookAndCurrentKeepClaimCapabilityPrivate(t *testing.T) {
 		!claimSpec.LeaseUntil.Equal(at.Add(5*time.Minute)) {
 		t.Fatalf("claim spec = %#v", claimSpec)
 	}
-	if readSpec.RunID != runID || readSpec.ClaimTokenHash != model.Sum(secret) || !readSpec.At.Equal(at) {
+	if planSpec.RunID != runID || planSpec.ClaimTokenHash != model.Sum(secret) ||
+		len(planSpec.ArtifactViews) != 0 || readSpec.RunID != runID ||
+		readSpec.ClaimTokenHash != model.Sum(secret) || !readSpec.At.Equal(at) ||
+		readSpec.ArtifactViews == nil || len(views.plans) != 1 {
 		t.Fatalf("current read spec = %#v", readSpec)
 	}
 	metadata.HasRunAttachment = true
@@ -180,7 +221,8 @@ func TestServiceCurrentNoneCarriesOnlyIdentityFreeInitiationContext(t *testing.T
 		},
 	}
 	service, err := NewService(fake, ServiceOptions{AssetRevision: "asset-service",
-		Clock: serviceTestClock{at}, Random: bytes.NewReader(bytes.Repeat([]byte{0x62}, 2*managedSecretBytes))})
+		Clock: serviceTestClock{at}, Random: bytes.NewReader(bytes.Repeat([]byte{0x62}, 2*managedSecretBytes)),
+		CurrentViews: &fakeAgentCurrentViews{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,11 +246,22 @@ func TestServiceTeamworkActionReservesServerOwnedOperation(t *testing.T) {
 		To: "auto", Deadline: "30m", Content: "Review the architecture"}
 	var reserved store.ManagedOperationSpec
 	var executed TeamworkExecutionSpec
+	views := &fakeAgentCurrentViews{}
 	fake := &fakeControlStore{reserve: func(_ context.Context,
 		spec store.ManagedOperationSpec,
 	) (store.ManagedOperationReservation, error) {
 		reserved = spec
-		return store.ManagedOperationReservation{Acquired: true}, nil
+		operationID, _ := model.ParseOperationID("operation-service-offer")
+		runID, _ := model.ParseRunID("run-service-offer")
+		lease := spec.LeaseUntil
+		operation, err := model.NewOperation(model.OperationSpec{ID: operationID, ProfileID: profile.ID(),
+			AgentRunID: runID, ClientKeyHash: spec.ClientKeyHash, Kind: spec.Kind,
+			RequestDigest: spec.RequestDigest, Status: model.OperationStarted,
+			LeaseOwner: spec.LeaseOwner, LeaseUntil: &lease, CreatedAt: spec.At})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return store.ManagedOperationReservation{Operation: operation, Acquired: true}, nil
 	}}
 	wantResponse := localapi.OperationResponse{Status: "accepted", Action: "teamwork.offer",
 		OperationID: "operation-service-offer", Results: []localapi.OperationResult{}, Receipt: `{}`}
@@ -220,7 +273,7 @@ func TestServiceTeamworkActionReservesServerOwnedOperation(t *testing.T) {
 	}}
 	service, err := NewService(fake, ServiceOptions{AssetRevision: "asset-service",
 		Clock: serviceTestClock{at}, Random: bytes.NewReader(bytes.Repeat([]byte{0x33}, managedSecretBytes)),
-		OperationLease: time.Minute, Executor: executor})
+		OperationLease: time.Minute, Executor: executor, CurrentViews: views})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,6 +295,10 @@ func TestServiceTeamworkActionReservesServerOwnedOperation(t *testing.T) {
 	}
 	if _, err := model.ParseRunID(reserved.LeaseOwner); err != nil {
 		t.Fatalf("server lease owner = %q: %v", reserved.LeaseOwner, err)
+	}
+	wantCleanup, _ := model.ParseRunID("run-service-offer")
+	if len(views.cleanups) != 1 || views.cleanups[0] != wantCleanup {
+		t.Fatalf("accepted action view cleanups = %v", views.cleanups)
 	}
 
 	request.Action = "accept"
@@ -293,8 +350,10 @@ func TestServiceResolveBindsDigestAndValidatesDurableReceipt(t *testing.T) {
 		}
 		return store.ManagedResolutionResult{Operation: committed, Receipt: receipt, Replayed: true}, nil
 	}
+	views := &fakeAgentCurrentViews{}
 	service, err := NewService(fake, ServiceOptions{AssetRevision: "asset-service",
-		Clock: serviceTestClock{at}, Random: bytes.NewReader(bytes.Repeat([]byte{0x44}, managedSecretBytes))})
+		Clock: serviceTestClock{at}, Random: bytes.NewReader(bytes.Repeat([]byte{0x44}, managedSecretBytes)),
+		CurrentViews: views})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -314,6 +373,10 @@ func TestServiceResolveBindsDigestAndValidatesDurableReceipt(t *testing.T) {
 	if response.Action != string(model.OperationResolveRetry) || response.Handling.Status != "requeued" ||
 		!response.Replayed {
 		t.Fatalf("resolution response = %#v", response)
+	}
+	wantCleanup, _ := model.ParseRunID("run-service-resolve")
+	if len(views.cleanups) != 1 || views.cleanups[0] != wantCleanup {
+		t.Fatalf("resolution view cleanups = %v", views.cleanups)
 	}
 }
 
