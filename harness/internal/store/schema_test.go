@@ -40,8 +40,8 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 				"work_derivations_no_update work_derivations_no_delete agent_handlings_identity_immutable " +
 				"agent_runs_claim_snapshot_immutable " +
 				"agent_runs_attachment_identity_immutable agent_runs_evidence_once artifact_roots_content_immutable " +
-				"artifact_roots_no_unverify artifact_blocks_no_update artifact_root_blocks_no_update " +
-				"artifact_root_blocks_verified_insert " +
+				"artifact_roots_no_unverify artifact_roots_verified_at_immutable artifact_blocks_no_update artifact_root_blocks_no_update " +
+				"artifact_root_blocks_verified_insert artifact_root_blocks_verified_delete " +
 				"artifact_root_blocks_provenance_delete artifact_provenance_event_insert " +
 				"artifact_provenance_no_update artifact_provenance_no_delete channels_nonterminal_limit_insert " +
 				"channels_terminal_status_update channels_conflicted_status_update channels_leaving_status_update " +
@@ -92,8 +92,8 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 	if !reflect.DeepEqual(actual, expected) {
 		t.Fatalf("schema object set mismatch\nactual: %#v\nexpected: %#v", actual, expected)
 	}
-	if got := len(actual["table"]) + len(actual["index"]) + len(actual["trigger"]); got != 121 {
-		t.Fatalf("explicit object count = %d, want 121", got)
+	if got := len(actual["table"]) + len(actual["index"]) + len(actual["trigger"]); got != 123 {
+		t.Fatalf("explicit object count = %d, want 123", got)
 	}
 }
 
@@ -331,10 +331,26 @@ func TestSchemaSealsVerifiedArtifactRootBlockMap(t *testing.T) {
 		root.String(), blockB.String()); err == nil || !strings.Contains(err.Error(), "block map is sealed") {
 		t.Fatalf("verified block map append error = %v", err)
 	}
+	if _, err := st.db.Exec(`DELETE FROM artifact_root_blocks WHERE root_digest=? AND ordinal=0`,
+		root.String()); err == nil || !strings.Contains(err.Error(), "block map is sealed") {
+		t.Fatalf("verified block map delete error = %v", err)
+	}
+	if _, err := st.db.Exec(`UPDATE artifact_roots SET verified_at=? WHERE root_digest=?`,
+		"2026-07-16T13:00:02.000000000Z", root.String()); err == nil ||
+		!strings.Contains(err.Error(), "verification time is immutable") {
+		t.Fatalf("verified timestamp rewrite error = %v", err)
+	}
 	var count int
 	if err := st.db.QueryRow("SELECT COUNT(*) FROM artifact_root_blocks WHERE root_digest=?",
 		root.String()).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("sealed block map count = %d, err=%v", count, err)
+	}
+	if _, err := st.db.Exec(`DELETE FROM artifact_roots WHERE root_digest=?`, root.String()); err != nil {
+		t.Fatalf("whole unprovenanced root cleanup: %v", err)
+	}
+	if err := st.db.QueryRow(`SELECT COUNT(*) FROM artifact_root_blocks WHERE root_digest=?`,
+		root.String()).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("block map after whole-root cleanup = %d, err=%v", count, err)
 	}
 }
 

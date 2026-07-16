@@ -479,6 +479,11 @@ CREATE TRIGGER artifact_roots_no_unverify BEFORE UPDATE OF state ON artifact_roo
 WHEN OLD.state = 'verified' AND NEW.state <> 'verified'
 BEGIN SELECT RAISE(ABORT, 'verified artifact root cannot regress'); END;
 
+CREATE TRIGGER artifact_roots_verified_at_immutable
+BEFORE UPDATE OF verified_at ON artifact_roots
+WHEN OLD.verified_at IS NOT NULL AND NEW.verified_at IS NOT OLD.verified_at
+BEGIN SELECT RAISE(ABORT, 'artifact verification time is immutable'); END;
+
 CREATE TABLE artifact_blocks (
   block_digest       TEXT PRIMARY KEY,
   size_bytes         INTEGER NOT NULL CHECK (size_bytes >= 0),
@@ -495,7 +500,7 @@ CREATE TRIGGER artifact_blocks_no_update BEFORE UPDATE ON artifact_blocks
 BEGIN SELECT RAISE(ABORT, 'artifact blocks are immutable'); END;
 
 CREATE TABLE artifact_root_blocks (
-  root_digest        TEXT NOT NULL REFERENCES artifact_roots(root_digest),
+  root_digest        TEXT NOT NULL REFERENCES artifact_roots(root_digest) ON DELETE CASCADE,
   ordinal            INTEGER NOT NULL,
   logical_path       TEXT NOT NULL,
   offset_bytes       INTEGER NOT NULL CHECK (offset_bytes >= 0),
@@ -514,6 +519,14 @@ BEFORE INSERT ON artifact_root_blocks
 WHEN EXISTS (
   SELECT 1 FROM artifact_roots
   WHERE root_digest = NEW.root_digest AND state = 'verified'
+)
+BEGIN SELECT RAISE(ABORT, 'verified artifact root block map is sealed'); END;
+
+CREATE TRIGGER artifact_root_blocks_verified_delete
+BEFORE DELETE ON artifact_root_blocks
+WHEN EXISTS (
+  SELECT 1 FROM artifact_roots
+  WHERE root_digest = OLD.root_digest AND state = 'verified'
 )
 BEGIN SELECT RAISE(ABORT, 'verified artifact root block map is sealed'); END;
 

@@ -313,6 +313,10 @@ func TestArtifactPinsAndLocalReplicaProvenance(t *testing.T) {
 	if _, err := st.db.Exec("DELETE FROM artifact_provenance WHERE producer_event_id = 'event-produced'"); err == nil || !strings.Contains(err.Error(), "artifact provenance is immutable") {
 		t.Fatalf("provenance delete error = %v", err)
 	}
+	if _, err := st.db.Exec("DELETE FROM artifact_roots WHERE root_digest = ?", root.RootDigest.String()); err == nil ||
+		!strings.Contains(err.Error(), "FOREIGN KEY constraint failed") {
+		t.Fatalf("accepted Artifact root delete error = %v", err)
+	}
 }
 
 func verifiedRoot(t *testing.T, identity, manifest string, total uint64) VerifiedArtifactRoot {
