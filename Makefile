@@ -52,6 +52,7 @@ vet: ## Run go vet static analysis
 
 harness-validate: ## Validate the experimental R5 harness layout
 	bash harness/scripts/check_test_pairs.sh
+	go test ./harness/internal/assets
 
 # ── Containers / Deployment ──────────────────────────────────────────
 
