@@ -17,6 +17,31 @@ type serviceTestClock struct{ now time.Time }
 
 func (clock serviceTestClock) Now() time.Time { return clock.now }
 
+type serviceActivationGateFunc func(context.Context, model.Profile) *localapi.APIError
+
+func (check serviceActivationGateFunc) Check(ctx context.Context,
+	profile model.Profile,
+) *localapi.APIError {
+	return check(ctx, profile)
+}
+
+type countingServiceClock struct {
+	now   time.Time
+	calls int
+}
+
+func (clock *countingServiceClock) Now() time.Time {
+	clock.calls++
+	return clock.now
+}
+
+type countingServiceRandom struct{ calls int }
+
+func (random *countingServiceRandom) Read(_ []byte) (int, error) {
+	random.calls++
+	return 0, errors.New("unexpected entropy read")
+}
+
 type fakeControlStore struct {
 	probe    func(context.Context, store.AgentClaimProbeSpec) (store.AgentClaimStatus, error)
 	claim    func(context.Context, store.AgentClaimSpec) (store.AgentClaimResult, error)
@@ -119,6 +144,128 @@ func (fake fakeTeamworkExecutor) ExecuteTeamwork(ctx context.Context,
 	spec TeamworkExecutionSpec,
 ) (localapi.OperationResponse, *localapi.APIError) {
 	return fake.execute(ctx, spec)
+}
+
+func TestServiceActivationGateBlocksAllAgentRoutesBeforeSideEffects(t *testing.T) {
+	at := time.Date(2026, 7, 17, 4, 0, 0, 0, time.UTC)
+	profile := serviceTestProfile(t, at)
+	gateErr := localapi.NewAPIError(localapi.CodeAssetRevisionMismatch,
+		"managed projection is not active")
+	gateCalls := 0
+	gate := serviceActivationGateFunc(func(ctx context.Context,
+		got model.Profile,
+	) *localapi.APIError {
+		gateCalls++
+		if ctx == nil || got.ID() != profile.ID() {
+			t.Fatalf("activation gate authority = (%v, %s)", ctx, got.ID())
+		}
+		return gateErr
+	})
+	storeCalls := 0
+	called := func() { storeCalls++ }
+	fake := &fakeControlStore{
+		probe: func(context.Context, store.AgentClaimProbeSpec) (store.AgentClaimStatus, error) {
+			called()
+			return store.AgentClaimNone, nil
+		},
+		claim: func(context.Context, store.AgentClaimSpec) (store.AgentClaimResult, error) {
+			called()
+			return store.AgentClaimResult{}, nil
+		},
+		plan: func(context.Context, store.AgentCurrentReadSpec) (store.AgentCurrentReadPlan, error) {
+			called()
+			return store.AgentCurrentReadPlan{}, nil
+		},
+		current: func(context.Context, store.AgentCurrentReadSpec) (store.AgentCurrentReadResult, error) {
+			called()
+			return store.AgentCurrentReadResult{}, nil
+		},
+		initiate: func(context.Context, model.Profile, time.Time) (store.AgentInitiationContext, error) {
+			called()
+			return store.AgentInitiationContext{}, nil
+		},
+		reserve: func(context.Context, store.ManagedOperationSpec) (store.ManagedOperationReservation, error) {
+			called()
+			return store.ManagedOperationReservation{}, nil
+		},
+		resolve: func(context.Context, store.ManagedResolutionSpec) (store.ManagedResolutionResult, error) {
+			called()
+			return store.ManagedResolutionResult{}, nil
+		},
+	}
+	executorCalls := 0
+	executor := fakeTeamworkExecutor{execute: func(context.Context,
+		TeamworkExecutionSpec,
+	) (localapi.OperationResponse, *localapi.APIError) {
+		executorCalls++
+		return localapi.OperationResponse{}, nil
+	}}
+	clock := &countingServiceClock{now: at}
+	random := &countingServiceRandom{}
+	service, err := NewService(fake, ServiceOptions{AssetRevision: "asset-service",
+		Clock: clock, Random: random, Executor: executor, CurrentViews: &fakeAgentCurrentViews{},
+		ActivationGate: gate})
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata := localapi.RequestMetadata{Profile: profile, HasOperationKey: true,
+		OperationKeyHash: model.Sum([]byte("blocked-operation")), HasClaimContext: true,
+		ClaimContextHash: model.Sum([]byte("blocked-context"))}
+	assertGateError := func(name string, apiErr *localapi.APIError) {
+		t.Helper()
+		if apiErr != gateErr {
+			t.Fatalf("%s error = %p %v, want original gate error %p", name, apiErr, apiErr, gateErr)
+		}
+	}
+	_, apiErr := service.HookCheck(context.Background(), metadata, localapi.HookCheckRequest{})
+	assertGateError("HookCheck", apiErr)
+	_, apiErr = service.AgentCurrent(context.Background(), metadata, localapi.AgentCurrentRequest{})
+	assertGateError("AgentCurrent", apiErr)
+	_, apiErr = service.TeamworkAction(context.Background(), metadata,
+		localapi.TeamworkActionRequest{Action: "not-an-action"})
+	assertGateError("TeamworkAction", apiErr)
+	_, apiErr = service.AgentResolve(context.Background(), metadata,
+		localapi.AgentResolveRequest{Decision: "not-a-decision"})
+	assertGateError("AgentResolve", apiErr)
+	if gateCalls != 4 || storeCalls != 0 || executorCalls != 0 || clock.calls != 0 || random.calls != 0 {
+		t.Fatalf("blocked calls: gate=%d Store=%d executor=%d clock=%d random=%d",
+			gateCalls, storeCalls, executorCalls, clock.calls, random.calls)
+	}
+}
+
+func TestServiceActivationGateIsOptionalAndDisabledProfileFailsClosed(t *testing.T) {
+	at := time.Date(2026, 7, 17, 4, 30, 0, 0, time.UTC)
+	profile := serviceTestProfile(t, at)
+	probeCalls := 0
+	fake := &fakeControlStore{probe: func(context.Context,
+		store.AgentClaimProbeSpec,
+	) (store.AgentClaimStatus, error) {
+		probeCalls++
+		return store.AgentClaimNone, nil
+	}}
+	service, err := NewService(fake, ServiceOptions{AssetRevision: "asset-service",
+		Clock: serviceTestClock{now: at}, CurrentViews: &fakeAgentCurrentViews{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, apiErr := service.HookCheck(context.Background(),
+		localapi.RequestMetadata{Profile: profile}, localapi.HookCheckRequest{})
+	if apiErr != nil || response.Pending || probeCalls != 1 {
+		t.Fatalf("nil-gate HookCheck = (%#v, %v), probes=%d", response, apiErr, probeCalls)
+	}
+	disabled, err := model.NewProfile(model.ProfileSpec{ID: model.TeamworkProfileID(),
+		Principal: profile.Principal(), WorkspaceRoot: profile.WorkspaceRoot(), Host: profile.Host(),
+		Runtime: profile.Runtime(), CredentialHash: profile.CredentialHash(),
+		ActiveAssetRevision: profile.ActiveAssetRevision(), HandlingBudget: profile.HandlingBudget(),
+		Enabled: false, CreatedAt: at, UpdatedAt: at})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, apiErr = service.HookCheck(context.Background(),
+		localapi.RequestMetadata{Profile: disabled}, localapi.HookCheckRequest{})
+	if apiErr == nil || apiErr.Code != localapi.CodeAssetRevisionMismatch || probeCalls != 1 {
+		t.Fatalf("disabled Profile error = %v, probes=%d", apiErr, probeCalls)
+	}
 }
 
 func TestServiceHookAndCurrentKeepClaimCapabilityPrivate(t *testing.T) {

@@ -37,6 +37,13 @@ type TeamworkExecutor interface {
 	ExecuteTeamwork(context.Context, TeamworkExecutionSpec) (localapi.OperationResponse, *localapi.APIError)
 }
 
+// ActivationGate verifies the mutable, disk-backed authority that cannot be
+// frozen safely into a long-lived Service. A nil gate is intentionally
+// supported for low-level composition and unit tests.
+type ActivationGate interface {
+	Check(context.Context, model.Profile) *localapi.APIError
+}
+
 // ControlStore is the narrow durable authority surface used by the local Agent
 // routes. Keeping this boundary explicit makes it impossible for route
 // orchestration to reach around the Store's managed transactions.
@@ -57,6 +64,7 @@ type ServiceOptions struct {
 	OperationLease time.Duration
 	Executor       TeamworkExecutor
 	CurrentViews   AgentCurrentViews
+	ActivationGate ActivationGate
 }
 
 // Service implements the four closed Agent routes. It owns only orchestration;
@@ -70,6 +78,7 @@ type Service struct {
 	operationLease time.Duration
 	executor       TeamworkExecutor
 	currentViews   AgentCurrentViews
+	activationGate ActivationGate
 }
 
 func NewService(st ControlStore, options ServiceOptions) (*Service, error) {
@@ -90,13 +99,16 @@ func NewService(st ControlStore, options ServiceOptions) (*Service, error) {
 	}
 	return &Service{store: st, assetRevision: options.AssetRevision, clock: options.Clock,
 		random: options.Random, operationLease: options.OperationLease, executor: options.Executor,
-		currentViews: options.CurrentViews}, nil
+		currentViews: options.CurrentViews, activationGate: options.ActivationGate}, nil
 }
 
 func (s *Service) HookCheck(ctx context.Context, metadata localapi.RequestMetadata,
 	_ localapi.HookCheckRequest,
 ) (localapi.HookCheckResponse, *localapi.APIError) {
 	if apiErr := s.requireMetadata(metadata); apiErr != nil {
+		return localapi.HookCheckResponse{}, apiErr
+	}
+	if apiErr := s.checkActivation(ctx, metadata.Profile); apiErr != nil {
 		return localapi.HookCheckResponse{}, apiErr
 	}
 	if metadata.HasRunAttachment {
@@ -120,6 +132,9 @@ func (s *Service) AgentCurrent(ctx context.Context, metadata localapi.RequestMet
 	_ localapi.AgentCurrentRequest,
 ) (localapi.AgentCurrentResponse, *localapi.APIError) {
 	if apiErr := s.requireMetadata(metadata); apiErr != nil {
+		return localapi.AgentCurrentResponse{}, apiErr
+	}
+	if apiErr := s.checkActivation(ctx, metadata.Profile); apiErr != nil {
 		return localapi.AgentCurrentResponse{}, apiErr
 	}
 	if metadata.HasRunAttachment {
@@ -212,7 +227,13 @@ func (s *Service) AgentCurrent(ctx context.Context, metadata localapi.RequestMet
 func (s *Service) TeamworkAction(ctx context.Context, metadata localapi.RequestMetadata,
 	request localapi.TeamworkActionRequest,
 ) (localapi.OperationResponse, *localapi.APIError) {
-	if apiErr := s.requireOperationMetadata(metadata, request.Action != "offer"); apiErr != nil {
+	if apiErr := s.requireMetadata(metadata); apiErr != nil {
+		return localapi.OperationResponse{}, apiErr
+	}
+	if apiErr := s.checkActivation(ctx, metadata.Profile); apiErr != nil {
+		return localapi.OperationResponse{}, apiErr
+	}
+	if apiErr := requireOperationCapabilities(metadata, request.Action != "offer"); apiErr != nil {
 		return localapi.OperationResponse{}, apiErr
 	}
 	validated, apiErr := ValidateAction(ActionInput{Action: request.Action,
@@ -260,7 +281,13 @@ func (s *Service) TeamworkAction(ctx context.Context, metadata localapi.RequestM
 func (s *Service) AgentResolve(ctx context.Context, metadata localapi.RequestMetadata,
 	request localapi.AgentResolveRequest,
 ) (localapi.OperationResponse, *localapi.APIError) {
-	if apiErr := s.requireOperationMetadata(metadata, true); apiErr != nil {
+	if apiErr := s.requireMetadata(metadata); apiErr != nil {
+		return localapi.OperationResponse{}, apiErr
+	}
+	if apiErr := s.checkActivation(ctx, metadata.Profile); apiErr != nil {
+		return localapi.OperationResponse{}, apiErr
+	}
+	if apiErr := requireOperationCapabilities(metadata, true); apiErr != nil {
 		return localapi.OperationResponse{}, apiErr
 	}
 	validated, apiErr := ValidateResolve(ResolveInput{Decision: request.Decision,
@@ -319,19 +346,23 @@ func (s *Service) requireMetadata(metadata localapi.RequestMetadata) *localapi.A
 	if s == nil || s.store == nil || metadata.Profile.ID() != model.TeamworkProfileID() {
 		return localapi.NewAPIError(localapi.CodeAuthenticationFailed, "profile authentication failed")
 	}
-	if metadata.Profile.ActiveAssetRevision() != s.assetRevision {
+	if !metadata.Profile.Enabled() || metadata.Profile.ActiveAssetRevision() != s.assetRevision {
 		return localapi.NewAPIError(localapi.CodeAssetRevisionMismatch,
-			"managed asset revision differs from the active Profile")
+			"managed Profile activation differs from the active asset revision")
 	}
 	return nil
 }
 
-func (s *Service) requireOperationMetadata(metadata localapi.RequestMetadata,
+func (s *Service) checkActivation(ctx context.Context, profile model.Profile) *localapi.APIError {
+	if s == nil || s.activationGate == nil {
+		return nil
+	}
+	return s.activationGate.Check(ctx, profile)
+}
+
+func requireOperationCapabilities(metadata localapi.RequestMetadata,
 	contextRequired bool,
 ) *localapi.APIError {
-	if apiErr := s.requireMetadata(metadata); apiErr != nil {
-		return apiErr
-	}
 	if !metadata.HasOperationKey || metadata.OperationKeyHash.IsZero() {
 		return localapi.NewAPIError(localapi.CodeInvalidArgument, "operation key is required")
 	}
