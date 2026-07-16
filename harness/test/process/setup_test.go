@@ -47,6 +47,17 @@ type setupProcessReceipt struct {
 	Status        string `json:"status"`
 }
 
+type ejectProcessReceipt struct {
+	AssetRevision       string `json:"asset_revision"`
+	Host                string `json:"host"`
+	PeerID              string `json:"peer_id"`
+	RegistrationRemoved bool   `json:"registration_removed"`
+	RemovedFiles        int    `json:"removed_files"`
+	Replayed            bool   `json:"replayed"`
+	SchemaVersion       int    `json:"schema_version"`
+	Status              string `json:"status"`
+}
+
 type setupProcessPID struct {
 	SchemaVersion int    `json:"schema_version"`
 	Instance      string `json:"instance"`
@@ -407,6 +418,135 @@ func TestPublicSetupUpgradesAnActiveRevisionUnderLifecycleLease(t *testing.T) {
 	}
 }
 
+func TestPublicEjectPreservesNodeAndAuthorizesOneExplicitHostSwitch(t *testing.T) {
+	repository := setupProcessRepositoryRoot(t)
+	root := setupProcessPhysicalTempDir(t)
+	bin := filepath.Join(root, "bin")
+	workspace := filepath.Join(root, "work")
+	harnessExecutable := filepath.Join(bin, "mnemon-harness")
+	mnemondExecutable := filepath.Join(bin, "mnemond")
+	nodeState := filepath.Join(workspace, ".mnemon", "harness", "node")
+	cleanup := &setupProcessCleanup{root: root, nodeState: nodeState}
+	t.Cleanup(func() { cleanup.run(t) })
+	for _, path := range []string{bin, workspace} {
+		if err := os.Mkdir(path, 0o700); err != nil {
+			t.Fatalf("create eject process-test directory: %v", err)
+		}
+	}
+
+	buildCtx, cancelBuild := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancelBuild()
+	setupProcessBuild(t, buildCtx, repository, harnessExecutable,
+		"./harness/cmd/mnemon-harness")
+	setupProcessBuild(t, buildCtx, repository, mnemondExecutable,
+		"./harness/cmd/mnemond")
+	setupProcessFakeCodex(t, filepath.Join(bin, "codex"))
+	setupProcessFakeClaude(t, filepath.Join(bin, "claude"))
+	environment := setupProcessEnvironment(bin, workspace, root)
+	cleanup.offline = setupProcessOfflineProbe{executable: mnemondExecutable,
+		workspace: workspace, environment: append([]string(nil), environment...)}
+
+	setupCtx, cancelSetup := context.WithTimeout(context.Background(), 20*time.Second)
+	cleanup.autoMayRun = true
+	installed := setupProcessRunSetup(setupCtx, harnessExecutable, workspace, environment)
+	cancelSetup()
+	setupReceipt, err := setupProcessParseReceipt(installed)
+	if err != nil || setupReceipt.Host != "codex" || setupReceipt.Replayed {
+		t.Fatalf("initial public setup = (%#v, %v)", setupReceipt, err)
+	}
+	client, err := localapi.NewClient(nodeState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanup.client = client
+	readyCtx, cancelReady := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := setupProcessWaitReady(readyCtx, client, setupReceipt.AssetRevision); err != nil {
+		cancelReady()
+		t.Fatalf("initial setup readiness: %v", err)
+	}
+	cancelReady()
+	databaseInfo, _ := setupProcessSnapshotFile(t, filepath.Join(nodeState, "node.db"), 0)
+	identityInfo, identityRaw := setupProcessSnapshotFile(t,
+		filepath.Join(nodeState, "identity.key"), 4096)
+	credentialInfo, credentialRaw := setupProcessSnapshotFile(t,
+		filepath.Join(nodeState, "profiles", model.TeamworkProfileID().String()+".token"), 4096)
+
+	ejectCtx, cancelEject := context.WithTimeout(context.Background(), 20*time.Second)
+	ejected := setupProcessRunEject(ejectCtx, harnessExecutable, workspace, environment)
+	cancelEject()
+	ejectReceipt, err := setupProcessParseEjectReceipt(ejected)
+	if err != nil || ejectReceipt.AssetRevision != setupReceipt.AssetRevision ||
+		ejectReceipt.Host != "codex" || ejectReceipt.PeerID != setupReceipt.PeerID ||
+		ejectReceipt.RemovedFiles != 3 || !ejectReceipt.RegistrationRemoved ||
+		ejectReceipt.Replayed || ejectReceipt.Status != "ejected" {
+		t.Fatalf("public eject receipt = (%#v, %v)", ejectReceipt, err)
+	}
+	offlineCtx, cancelOffline := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := setupProcessWaitOffline(offlineCtx, client, nodeState, cleanup.offline); err != nil {
+		cancelOffline()
+		t.Fatalf("eject did not leave the Node offline: %v", err)
+	}
+	cancelOffline()
+	cleanup.autoMayRun = false
+	bundle, err := assets.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := integration.VerifyHostProjectionAbsent(workspace, nodeState,
+		assets.HostCodex, bundle); err != nil {
+		t.Fatalf("Codex projection remains after eject: %v", err)
+	}
+	if err := integration.VerifyNodeBundle(nodeState, bundle); err != nil {
+		t.Fatalf("eject removed the immutable Node bundle: %v", err)
+	}
+	setupProcessAssertPreservedFile(t, filepath.Join(nodeState, "node.db"), databaseInfo, nil)
+	setupProcessAssertPreservedFile(t, filepath.Join(nodeState, "identity.key"),
+		identityInfo, identityRaw)
+	setupProcessAssertPreservedFile(t, filepath.Join(nodeState, "profiles",
+		model.TeamworkProfileID().String()+".token"), credentialInfo, credentialRaw)
+
+	replayCtx, cancelReplay := context.WithTimeout(context.Background(), 15*time.Second)
+	replayed := setupProcessRunEject(replayCtx, harnessExecutable, workspace, environment)
+	cancelReplay()
+	replayReceipt, err := setupProcessParseEjectReceipt(replayed)
+	if err != nil || !replayReceipt.Replayed || replayReceipt.RemovedFiles != 0 ||
+		replayReceipt.RegistrationRemoved || replayReceipt.PeerID != setupReceipt.PeerID {
+		t.Fatalf("replayed public eject = (%#v, %v)", replayReceipt, err)
+	}
+
+	switchCtx, cancelSwitch := context.WithTimeout(context.Background(), 20*time.Second)
+	cleanup.autoMayRun = true
+	switched := setupProcessRunHarness(switchCtx, harnessExecutable, workspace, environment,
+		"setup", "--host", "claude-code", "--project-root", workspace)
+	cancelSwitch()
+	switchReceipt, err := setupProcessParseReceipt(switched)
+	if err != nil || switchReceipt.Host != "claude-code" || switchReceipt.Replayed ||
+		!switchReceipt.Started || switchReceipt.PeerID != setupReceipt.PeerID ||
+		switchReceipt.AssetRevision != setupReceipt.AssetRevision {
+		t.Fatalf("explicit Host switch setup = (%#v, %v)", switchReceipt, err)
+	}
+	switchedReadyCtx, cancelSwitchedReady := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := setupProcessWaitReady(switchedReadyCtx, client,
+		switchReceipt.AssetRevision); err != nil {
+		cancelSwitchedReady()
+		t.Fatalf("switched Host daemon did not become ready: %v", err)
+	}
+	cancelSwitchedReady()
+	if err := integration.VerifyHostProjectionAbsent(workspace, nodeState,
+		assets.HostCodex, bundle); err != nil {
+		t.Fatalf("Host switch recreated the old Codex projection: %v", err)
+	}
+	if err := integration.VerifyHostProjection(workspace, nodeState,
+		assets.HostClaudeCode, bundle); err != nil {
+		t.Fatalf("Host switch did not install the Claude projection: %v", err)
+	}
+	setupProcessAssertPreservedFile(t, filepath.Join(nodeState, "node.db"), databaseInfo, nil)
+	setupProcessAssertPreservedFile(t, filepath.Join(nodeState, "identity.key"),
+		identityInfo, identityRaw)
+	setupProcessAssertPreservedFile(t, filepath.Join(nodeState, "profiles",
+		model.TeamworkProfileID().String()+".token"), credentialInfo, credentialRaw)
+}
+
 func setupProcessAssertConcurrentReceipts(t *testing.T, receipts []setupProcessReceipt) {
 	t.Helper()
 	if len(receipts) != concurrentSetups {
@@ -442,9 +582,23 @@ func setupProcessAssertConcurrentReceipts(t *testing.T, receipts []setupProcessR
 func setupProcessRunSetup(ctx context.Context, executable, workspace string,
 	environment []string,
 ) setupProcessResult {
+	return setupProcessRunHarness(ctx, executable, workspace, environment,
+		"setup", "--project-root", workspace)
+}
+
+func setupProcessRunEject(ctx context.Context, executable, workspace string,
+	environment []string,
+) setupProcessResult {
+	return setupProcessRunHarness(ctx, executable, workspace, environment,
+		"eject", "--project-root", workspace)
+}
+
+func setupProcessRunHarness(ctx context.Context, executable, workspace string,
+	environment []string, args ...string,
+) setupProcessResult {
 	stdout := newSetupProcessOutput(commandOutputMax)
 	stderr := newSetupProcessOutput(commandOutputMax)
-	command := exec.CommandContext(ctx, executable, "setup", "--project-root", workspace)
+	command := exec.CommandContext(ctx, executable, args...)
 	command.Dir = workspace
 	command.Env = environment
 	command.Stdin = nil
@@ -486,6 +640,39 @@ func setupProcessParseReceipt(result setupProcessResult) (setupProcessReceipt, e
 	canonical, err := json.Marshal(receipt)
 	if err != nil || !bytes.Equal(result.stdout, append(canonical, '\n')) {
 		return setupProcessReceipt{}, errors.New("setup receipt is not one canonical JSON line")
+	}
+	return receipt, nil
+}
+
+func setupProcessParseEjectReceipt(result setupProcessResult) (ejectProcessReceipt, error) {
+	if result.err != nil {
+		return ejectProcessReceipt{}, fmt.Errorf("exit=%v stderr=%s stdout=%s", result.err,
+			setupProcessFingerprint(result.stderr), setupProcessFingerprint(result.stdout))
+	}
+	if result.overflow || len(result.stderr) != 0 ||
+		bytes.Contains(bytes.ToLower(result.stdout), []byte("token")) ||
+		bytes.Contains(bytes.ToLower(result.stdout), []byte("credential")) ||
+		bytes.Contains(bytes.ToLower(result.stdout), []byte("secret")) {
+		return ejectProcessReceipt{}, errors.New("eject returned an invalid or secret-bearing envelope")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(result.stdout))
+	decoder.DisallowUnknownFields()
+	var receipt ejectProcessReceipt
+	if err := decoder.Decode(&receipt); err != nil {
+		return ejectProcessReceipt{}, fmt.Errorf("decode eject receipt %s: %v",
+			setupProcessFingerprint(result.stdout), err)
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return ejectProcessReceipt{}, errors.New("eject receipt has trailing content")
+	}
+	canonical, err := json.Marshal(receipt)
+	if err != nil || !bytes.Equal(result.stdout, append(canonical, '\n')) {
+		return ejectProcessReceipt{}, errors.New("eject receipt is not one canonical JSON line")
+	}
+	if receipt.SchemaVersion != 1 || receipt.Status != "ejected" ||
+		!setupProcessDigest(receipt.AssetRevision) || receipt.Host == "" || receipt.PeerID == "" ||
+		receipt.RemovedFiles < 0 || receipt.RemovedFiles > 3 {
+		return ejectProcessReceipt{}, errors.New("eject receipt has invalid public authority")
 	}
 	return receipt, nil
 }
@@ -570,6 +757,22 @@ func setupProcessFakeCodex(t *testing.T, path string) {
 	}
 }
 
+func setupProcessFakeClaude(t *testing.T, path string) {
+	t.Helper()
+	contents := []byte("#!/bin/sh\nset -eu\n" +
+		"case \"$*\" in\n" +
+		"  --version) printf '%s\\n' 'claude process-test' ;;\n" +
+		"  --help) printf '%s\\n' 'Usage: claude' ;;\n" +
+		"  *) exit 64 ;;\n" +
+		"esac\n")
+	if err := os.WriteFile(path, contents, 0o700); err != nil {
+		t.Fatalf("write fake Claude executable: %v", err)
+	}
+	if err := os.Chmod(path, 0o700); err != nil {
+		t.Fatalf("protect fake Claude executable: %v", err)
+	}
+}
+
 func setupProcessRewriteAppliedProjectionRevision(t *testing.T, ownershipPath,
 	currentRevision, previousRevision string,
 ) {
@@ -615,6 +818,44 @@ func setupProcessRewriteAppliedProjectionRevision(t *testing.T, ownershipPath,
 type setupProcessClock struct{ at time.Time }
 
 func (clock setupProcessClock) Now() time.Time { return clock.at }
+
+func setupProcessSnapshotFile(t *testing.T, path string,
+	maxBytes int64,
+) (os.FileInfo, []byte) {
+	t.Helper()
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("snapshot managed file %s: %v", filepath.Base(path), err)
+	}
+	var raw []byte
+	if maxBytes > 0 {
+		if info.Size() <= 0 || info.Size() > maxBytes {
+			t.Fatalf("managed file %s size is outside its test bound", filepath.Base(path))
+		}
+		raw, err = os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read managed file %s: %v", filepath.Base(path), err)
+		}
+	}
+	return info, raw
+}
+
+func setupProcessAssertPreservedFile(t *testing.T, path string, before os.FileInfo,
+	wantRaw []byte,
+) {
+	t.Helper()
+	after, err := os.Lstat(path)
+	if err != nil || before == nil || !os.SameFile(before, after) ||
+		!after.Mode().IsRegular() || after.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("managed file %s was replaced or removed: %v", filepath.Base(path), err)
+	}
+	if wantRaw != nil {
+		raw, err := os.ReadFile(path)
+		if err != nil || !bytes.Equal(raw, wantRaw) {
+			t.Fatalf("managed file %s content changed: %v", filepath.Base(path), err)
+		}
+	}
+}
 
 func setupProcessEnvironment(bin, workspace, temporaryRoot string) []string {
 	// Construct from nothing: in particular, never copy
