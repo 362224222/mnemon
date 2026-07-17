@@ -56,7 +56,9 @@ type AgentRunSpec struct {
 	LauncherDiagnostic  JSON
 	RuntimeIDs          JSON
 	Status              AgentRunStatus
+	RuntimeStartedAt    *time.Time
 	WakeDeliveredAt     *time.Time
+	WakeReceipt         *JSON
 	StartedAt           time.Time
 	FinishedAt          *time.Time
 	CompletionAt        *time.Time
@@ -80,8 +82,12 @@ type AgentRun struct {
 	hasAttachment         bool
 	attachedAt            time.Time
 	hasAttachedAt         bool
+	runtimeStartedAt      time.Time
+	hasRuntimeStartedAt   bool
 	wakeDeliveredAt       time.Time
 	hasWakeDeliveredAt    bool
+	wakeReceipt           JSON
+	hasWakeReceipt        bool
 	finishedAt            time.Time
 	hasFinishedAt         bool
 	completionAt          time.Time
@@ -125,7 +131,8 @@ func NewAgentRun(spec AgentRunSpec) (AgentRun, error) {
 	result.spec.StartedAt = startedAt
 	result.spec.HandlingID, result.spec.ClaimFenceHash, result.spec.LeaseUntil = nil, nil, nil
 	result.spec.AttachmentTokenHash, result.spec.AttachmentExpiresAt, result.spec.AttachedAt = nil, nil, nil
-	result.spec.WakeDeliveredAt, result.spec.FinishedAt, result.spec.CompletionAt = nil, nil, nil
+	result.spec.RuntimeStartedAt, result.spec.WakeDeliveredAt, result.spec.WakeReceipt = nil, nil, nil
+	result.spec.FinishedAt, result.spec.CompletionAt = nil, nil
 	result.spec.CurrentReadReceipt, result.spec.OutcomeReceipt, result.spec.CompletionReceipt = nil, nil, nil
 
 	if spec.HandlingID != nil {
@@ -172,10 +179,41 @@ func NewAgentRun(spec AgentRunSpec) (AgentRun, error) {
 		}
 	}
 
+	if spec.RuntimeStartedAt != nil {
+		value, err := canonicalAgentRunEvidenceTime("Runtime start", *spec.RuntimeStartedAt, startedAt)
+		if err != nil {
+			return AgentRun{}, err
+		}
+		if spec.Launcher == "mnemond-wake" &&
+			(spec.LauncherDiagnostic.String() == `{}` || spec.RuntimeIDs.String() == `{}`) {
+			return AgentRun{}, invariant("managed AgentRun Runtime start requires launcher evidence")
+		}
+		result.runtimeStartedAt, result.hasRuntimeStartedAt = value, true
+	}
+	if spec.Launcher == "mnemond-wake" {
+		if spec.Status == AgentRunStarting && result.hasRuntimeStartedAt {
+			return AgentRun{}, invariant("starting managed AgentRun cannot have Runtime start evidence")
+		}
+		if spec.Status == AgentRunRunning && !result.hasRuntimeStartedAt {
+			return AgentRun{}, invariant("running managed AgentRun requires Runtime start evidence")
+		}
+		if result.hasAttachedAt && !result.hasRuntimeStartedAt {
+			return AgentRun{}, invariant("managed AgentRun attachment requires Runtime start evidence")
+		}
+	}
+	if result.hasAttachedAt && result.hasRuntimeStartedAt && result.attachedAt.Before(result.runtimeStartedAt) {
+		return AgentRun{}, invariant("AgentRun attachment precedes Runtime start")
+	}
 	if spec.WakeDeliveredAt != nil {
 		value, err := canonicalAgentRunEvidenceTime("wake delivery", *spec.WakeDeliveredAt, startedAt)
 		if err != nil {
 			return AgentRun{}, err
+		}
+		if spec.Launcher == "mnemond-wake" && !result.hasRuntimeStartedAt {
+			return AgentRun{}, invariant("managed AgentRun wake delivery requires Runtime start evidence")
+		}
+		if result.hasRuntimeStartedAt && value.Before(result.runtimeStartedAt) {
+			return AgentRun{}, invariant("AgentRun wake delivery precedes Runtime start")
 		}
 		result.wakeDeliveredAt, result.hasWakeDeliveredAt = value, true
 	}
@@ -183,6 +221,9 @@ func NewAgentRun(spec AgentRunSpec) (AgentRun, error) {
 		value, err := canonicalAgentRunEvidenceTime("finish", *spec.FinishedAt, startedAt)
 		if err != nil {
 			return AgentRun{}, err
+		}
+		if result.hasRuntimeStartedAt && value.Before(result.runtimeStartedAt) {
+			return AgentRun{}, invariant("AgentRun finish precedes Runtime start")
 		}
 		result.finishedAt, result.hasFinishedAt = value, true
 	}
@@ -220,6 +261,17 @@ func NewAgentRun(spec AgentRunSpec) (AgentRun, error) {
 		"AgentRun outcome receipt", spec.OutcomeReceipt)
 	if receiptErr != nil {
 		return AgentRun{}, receiptErr
+	}
+	result.wakeReceipt, result.hasWakeReceipt, receiptErr = optionalAgentRunObject(
+		"AgentRun wake receipt", spec.WakeReceipt)
+	if receiptErr != nil {
+		return AgentRun{}, receiptErr
+	}
+	if result.hasWakeReceipt && result.wakeReceipt.String() == `{}` {
+		return AgentRun{}, invariant("AgentRun wake receipt must contain Hook proof")
+	}
+	if result.hasWakeDeliveredAt != result.hasWakeReceipt {
+		return AgentRun{}, invariant("AgentRun wake delivery time and receipt must be recorded together")
 	}
 	result.completionReceipt, result.hasCompletionReceipt, receiptErr = optionalAgentRunObject(
 		"AgentRun completion receipt", spec.CompletionReceipt)
@@ -279,13 +331,17 @@ func (r AgentRun) AttachmentTokenHash() (Digest, bool) { return r.attachmentToke
 func (r AgentRun) AttachmentExpiresAt() (time.Time, bool) {
 	return r.attachmentExpiresAt, r.hasAttachment
 }
-func (r AgentRun) AttachedAt() (time.Time, bool)      { return r.attachedAt, r.hasAttachedAt }
-func (r AgentRun) Launcher() string                   { return r.spec.Launcher }
-func (r AgentRun) Runtime() RuntimeKind               { return r.spec.Runtime }
-func (r AgentRun) LauncherDiagnostic() JSON           { return r.spec.LauncherDiagnostic }
-func (r AgentRun) RuntimeIDs() JSON                   { return r.spec.RuntimeIDs }
-func (r AgentRun) Status() AgentRunStatus             { return r.spec.Status }
+func (r AgentRun) AttachedAt() (time.Time, bool) { return r.attachedAt, r.hasAttachedAt }
+func (r AgentRun) Launcher() string              { return r.spec.Launcher }
+func (r AgentRun) Runtime() RuntimeKind          { return r.spec.Runtime }
+func (r AgentRun) LauncherDiagnostic() JSON      { return r.spec.LauncherDiagnostic }
+func (r AgentRun) RuntimeIDs() JSON              { return r.spec.RuntimeIDs }
+func (r AgentRun) Status() AgentRunStatus        { return r.spec.Status }
+func (r AgentRun) RuntimeStartedAt() (time.Time, bool) {
+	return r.runtimeStartedAt, r.hasRuntimeStartedAt
+}
 func (r AgentRun) WakeDeliveredAt() (time.Time, bool) { return r.wakeDeliveredAt, r.hasWakeDeliveredAt }
+func (r AgentRun) WakeReceipt() (JSON, bool)          { return r.wakeReceipt, r.hasWakeReceipt }
 func (r AgentRun) StartedAt() time.Time               { return r.spec.StartedAt }
 func (r AgentRun) FinishedAt() (time.Time, bool)      { return r.finishedAt, r.hasFinishedAt }
 func (r AgentRun) CompletionAt() (time.Time, bool)    { return r.completionAt, r.hasCompletionAt }

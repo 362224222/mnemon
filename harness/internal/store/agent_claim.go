@@ -563,20 +563,21 @@ func readAgentRun(ctx context.Context, q rowQuerier, id model.RunID) (model.Agen
 
 const agentRunSelect = `SELECT run_id,profile_id,handling_id,cause_json,handling_attempt,handling_recovery,
 	claim_fence_hash,lease_until,attachment_token_hash,attachment_expires_at,attached_at,
-	launcher,runtime_kind,launcher_diagnostic_json,runtime_ids_json,status,wake_delivered_at,
+	launcher,runtime_kind,launcher_diagnostic_json,runtime_ids_json,status,runtime_started_at,wake_delivered_at,wake_receipt_json,
 	started_at,finished_at,completion_at,current_read_receipt_json,outcome_receipt_json,completion_receipt_json,error
 	FROM agent_runs`
 
 func scanAgentRun(row *sql.Row) (model.AgentRun, error) {
 	var runText, profileText, launcher, runtimeText, statusText, startedText string
-	var handlingText, leaseText, attachmentExpiresText, attachedText, wakeText, finishedText, completionText, errorText sql.NullString
+	var handlingText, leaseText, attachmentExpiresText, attachedText, runtimeStartedText sql.NullString
+	var wakeText, finishedText, completionText, errorText sql.NullString
 	var attempt sql.NullInt64
 	var recovery int64
 	var causeBytes, fenceBytes, attachmentHashBytes, diagnosticBytes, runtimeIDsBytes []byte
-	var currentBytes, outcomeBytes, completionBytes []byte
+	var wakeBytes, currentBytes, outcomeBytes, completionBytes []byte
 	if err := row.Scan(&runText, &profileText, &handlingText, &causeBytes, &attempt, &recovery, &fenceBytes,
 		&leaseText, &attachmentHashBytes, &attachmentExpiresText, &attachedText, &launcher,
-		&runtimeText, &diagnosticBytes, &runtimeIDsBytes, &statusText, &wakeText, &startedText,
+		&runtimeText, &diagnosticBytes, &runtimeIDsBytes, &statusText, &runtimeStartedText, &wakeText, &wakeBytes, &startedText,
 		&finishedText, &completionText, &currentBytes, &outcomeBytes, &completionBytes, &errorText); err != nil {
 		return model.AgentRun{}, err
 	}
@@ -644,7 +645,13 @@ func scanAgentRun(row *sql.Row) (model.AgentRun, error) {
 		}
 		spec.AttachmentTokenHash, spec.AttachmentExpiresAt, spec.AttachedAt = &hash, expires, attached
 	}
+	if spec.RuntimeStartedAt, err = parseOptionalStoreTime(runtimeStartedText); err != nil {
+		return model.AgentRun{}, err
+	}
 	if spec.WakeDeliveredAt, err = parseOptionalStoreTime(wakeText); err != nil {
+		return model.AgentRun{}, err
+	}
+	if spec.WakeReceipt, err = optionalExactCanonicalJSON(wakeBytes); err != nil {
 		return model.AgentRun{}, err
 	}
 	if spec.FinishedAt, err = parseOptionalStoreTime(finishedText); err != nil {

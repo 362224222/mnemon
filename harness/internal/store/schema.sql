@@ -397,7 +397,18 @@ CREATE TABLE agent_runs (
       'requeued','rejected','failed','dead'
     )
   ),
+  runtime_started_at TEXT CHECK (
+    runtime_started_at IS NULL OR (
+      length(runtime_started_at) = 30
+      AND runtime_started_at GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]Z'
+      AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(runtime_started_at, 1, 19) || 'Z')) IS NOT NULL
+      AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(runtime_started_at, 1, 19) || 'Z')) = substr(runtime_started_at, 1, 19)
+      AND runtime_started_at >= '1677-09-21T00:12:43.145224192Z'
+      AND runtime_started_at <= '2262-04-11T23:47:16.854775807Z'
+    )
+  ),
   wake_delivered_at  TEXT,
+  wake_receipt_json  BLOB,
   started_at         TEXT NOT NULL,
   finished_at        TEXT,
   completion_at      TEXT CHECK (
@@ -439,6 +450,11 @@ CREATE TABLE agent_runs (
     OR (completion_at IS NOT NULL AND completion_receipt_json IS NOT NULL)
   ),
   CHECK (
+    (wake_delivered_at IS NULL AND wake_receipt_json IS NULL)
+    OR (wake_delivered_at IS NOT NULL AND wake_receipt_json IS NOT NULL
+      AND length(wake_receipt_json) > 2)
+  ),
+  CHECK (
     completion_at IS NULL OR (
       completion_at >= started_at
       AND (wake_delivered_at IS NULL OR completion_at >= wake_delivered_at)
@@ -446,7 +462,35 @@ CREATE TABLE agent_runs (
     )
   ),
   CHECK (
-    wake_delivered_at IS NULL OR finished_at IS NULL OR wake_delivered_at <= finished_at
+    runtime_started_at IS NULL OR (
+      runtime_started_at >= started_at
+      AND (finished_at IS NULL OR runtime_started_at <= finished_at)
+      AND length(launcher_diagnostic_json) > 2
+      AND length(runtime_ids_json) > 2
+    )
+  ),
+  CHECK (
+    attached_at IS NULL OR (
+      launcher <> 'mnemond-wake'
+      OR (runtime_started_at IS NOT NULL AND attached_at >= runtime_started_at)
+    )
+  ),
+  CHECK (
+    launcher <> 'mnemond-wake'
+    OR status <> 'starting'
+    OR runtime_started_at IS NULL
+  ),
+  CHECK (
+    launcher <> 'mnemond-wake'
+    OR status <> 'running'
+    OR runtime_started_at IS NOT NULL
+  ),
+  CHECK (
+    wake_delivered_at IS NULL OR (
+      (launcher <> 'mnemond-wake' OR runtime_started_at IS NOT NULL)
+      AND (runtime_started_at IS NULL OR wake_delivered_at >= runtime_started_at)
+      AND (finished_at IS NULL OR wake_delivered_at <= finished_at)
+    )
   ),
   CHECK (
     status <> 'runtime_finished'
@@ -474,11 +518,13 @@ WHEN NEW.attachment_token_hash IS NOT OLD.attachment_token_hash
 BEGIN SELECT RAISE(ABORT, 'agent run attachment identity is immutable'); END;
 
 CREATE TRIGGER agent_runs_evidence_once
-BEFORE UPDATE OF attached_at, wake_delivered_at, current_read_receipt_json,
+BEFORE UPDATE OF attached_at, runtime_started_at, wake_delivered_at, wake_receipt_json, current_read_receipt_json,
   outcome_receipt_json, completion_at, completion_receipt_json, launcher_diagnostic_json,
   runtime_ids_json, error ON agent_runs
 WHEN (OLD.attached_at IS NOT NULL AND NEW.attached_at IS NOT OLD.attached_at)
+  OR (OLD.runtime_started_at IS NOT NULL AND NEW.runtime_started_at IS NOT OLD.runtime_started_at)
   OR (OLD.wake_delivered_at IS NOT NULL AND NEW.wake_delivered_at IS NOT OLD.wake_delivered_at)
+  OR (OLD.wake_receipt_json IS NOT NULL AND NEW.wake_receipt_json IS NOT OLD.wake_receipt_json)
   OR (OLD.current_read_receipt_json IS NOT NULL
       AND NEW.current_read_receipt_json IS NOT OLD.current_read_receipt_json)
   OR (OLD.outcome_receipt_json IS NOT NULL
@@ -489,6 +535,10 @@ WHEN (OLD.attached_at IS NOT NULL AND NEW.attached_at IS NOT OLD.attached_at)
   OR ((OLD.wake_delivered_at IS NOT NULL OR OLD.completion_receipt_json IS NOT NULL)
       AND NEW.launcher_diagnostic_json IS NOT OLD.launcher_diagnostic_json)
   OR ((OLD.wake_delivered_at IS NOT NULL OR OLD.completion_receipt_json IS NOT NULL)
+      AND NEW.runtime_ids_json IS NOT OLD.runtime_ids_json)
+  OR (OLD.launcher = 'mnemond-wake' AND OLD.runtime_started_at IS NOT NULL
+      AND NEW.launcher_diagnostic_json IS NOT OLD.launcher_diagnostic_json)
+  OR (OLD.launcher = 'mnemond-wake' AND OLD.runtime_started_at IS NOT NULL
       AND NEW.runtime_ids_json IS NOT OLD.runtime_ids_json)
   OR (OLD.completion_receipt_json IS NOT NULL AND NEW.error IS NOT OLD.error)
 BEGIN SELECT RAISE(ABORT, 'agent run evidence is write-once'); END;

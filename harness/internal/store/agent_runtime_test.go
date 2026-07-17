@@ -11,9 +11,58 @@ import (
 
 func TestAgentRuntimeWakeDeliveryIsExactAndReplayable(t *testing.T) {
 	fixture, claim, token, claimAt := newWakeRuntimeFixture(t, "wake-evidence", 0)
-	diagnostic := runtimeTestJSON(t, `{"adapter":"codex-app-server","phase":"cue"}`)
-	runtimeIDs := runtimeTestJSON(t, `{"process":"process-wake-evidence","turn":"turn-wake-evidence"}`)
-	spec := wakeDeliverySpec(fixture, claim, token, diagnostic, runtimeIDs, claimAt.Add(time.Second))
+	diagnostic := runtimeTestJSON(t, `{"adapter":"codex-app-server","phase":"initialized"}`)
+	runtimeIDs := runtimeTestJSON(t, `{"process":"process-wake-evidence"}`)
+	wakeReceipt := runtimeTestJSON(t, `{"hook_id":"hook-wake-evidence","thread_id":"thread-wake-evidence","turn_id":"turn-wake-evidence"}`)
+	spec := wakeDeliverySpec(fixture, claim, token, wakeReceipt, claimAt.Add(time.Second))
+	emptyWake := spec
+	emptyWake.WakeReceipt = runtimeTestJSON(t, `{}`)
+	if _, err := fixture.store.RecordAgentWakeDelivery(context.Background(), emptyWake); !errors.Is(err,
+		ErrAgentRuntimeInput) {
+		t.Fatalf("empty wake receipt error = %v", err)
+	}
+	if _, err := fixture.store.RecordAgentWakeDelivery(context.Background(), spec); !errors.Is(err,
+		ErrAgentRuntimeInvariant) {
+		t.Fatalf("wake before Runtime launch error = %v", err)
+	}
+	launchSpec := runtimeLaunchSpec(fixture, claim, token, diagnostic, runtimeIDs,
+		claimAt.Add(500*time.Millisecond))
+	emptyLaunch := launchSpec
+	emptyLaunch.RuntimeIDs = runtimeTestJSON(t, `{}`)
+	if _, err := fixture.store.RecordAgentRuntimeLaunch(context.Background(), emptyLaunch); !errors.Is(err,
+		ErrAgentRuntimeInput) {
+		t.Fatalf("empty Runtime launch IDs error = %v", err)
+	}
+	launched, err := fixture.store.RecordAgentRuntimeLaunch(context.Background(), launchSpec)
+	if err != nil || launched.Status != AgentRuntimeApplied || launched.Run.Status() != model.AgentRunRunning {
+		t.Fatalf("RecordAgentRuntimeLaunch() = (%#v, %v)", launched, err)
+	}
+	runtimeStartedAt, runtimeStarted := launched.Run.RuntimeStartedAt()
+	if !runtimeStarted || !runtimeStartedAt.Equal(launchSpec.At) {
+		t.Fatalf("Runtime start evidence = (%s, %v)", runtimeStartedAt, runtimeStarted)
+	}
+	launchReplay := launchSpec
+	launchReplay.At = launchSpec.At.Add(time.Millisecond)
+	if replay, err := fixture.store.RecordAgentRuntimeLaunch(context.Background(), launchReplay); err != nil ||
+		replay.Status != AgentRuntimeReplayed {
+		t.Fatalf("launch replay = (%#v, %v)", replay, err)
+	}
+	launchMismatch := launchReplay
+	launchMismatch.RuntimeIDs = runtimeTestJSON(t, `{"process":"other"}`)
+	if _, err := fixture.store.RecordAgentRuntimeLaunch(context.Background(), launchMismatch); !errors.Is(err,
+		ErrAgentRuntimeInvariant) {
+		t.Fatalf("changed launch replay error = %v", err)
+	}
+	launchRegressed := launchSpec
+	launchRegressed.At = launchSpec.At.Add(-time.Nanosecond)
+	if _, err := fixture.store.RecordAgentRuntimeLaunch(context.Background(), launchRegressed); !errors.Is(err,
+		ErrAgentRuntimeInvariant) {
+		t.Fatalf("regressed launch replay error = %v", err)
+	}
+	if _, err := fixture.store.db.Exec(`UPDATE agent_runs SET runtime_ids_json=? WHERE run_id=?`,
+		runtimeTestJSON(t, `{"process":"overwritten"}`).Bytes(), claim.Run.ID().String()); err == nil {
+		t.Fatal("schema allowed launched Runtime IDs to be overwritten")
+	}
 
 	first, err := fixture.store.RecordAgentWakeDelivery(context.Background(), spec)
 	if err != nil || first.Status != AgentRuntimeApplied {
@@ -25,9 +74,16 @@ func TestAgentRuntimeWakeDeliveryIsExactAndReplayable(t *testing.T) {
 		first.Run.RuntimeIDs().String() != runtimeIDs.String() {
 		t.Fatalf("wake evidence = %#v", first.Run)
 	}
-	if _, err := fixture.store.db.Exec(`UPDATE agent_runs SET runtime_ids_json=? WHERE run_id=?`,
-		runtimeTestJSON(t, `{"process":"overwritten"}`).Bytes(), claim.Run.ID().String()); err == nil {
-		t.Fatal("schema allowed delivered Runtime IDs to be overwritten")
+	if receipt, ok := first.Run.WakeReceipt(); !ok || receipt.String() != wakeReceipt.String() {
+		t.Fatalf("wake receipt = (%s, %v)", receipt, ok)
+	}
+	if _, err := fixture.store.db.Exec(`UPDATE agent_runs SET runtime_started_at=? WHERE run_id=?`,
+		storeTime(spec.At), claim.Run.ID().String()); err == nil {
+		t.Fatal("schema allowed Runtime start evidence to be overwritten")
+	}
+	if _, err := fixture.store.db.Exec(`UPDATE agent_runs SET wake_receipt_json=? WHERE run_id=?`,
+		runtimeTestJSON(t, `{"hook_id":"overwritten"}`).Bytes(), claim.Run.ID().String()); err == nil {
+		t.Fatal("schema allowed wake receipt evidence to be overwritten")
 	}
 
 	if err := fixture.store.Close(); err != nil {
@@ -41,6 +97,11 @@ func TestAgentRuntimeWakeDeliveryIsExactAndReplayable(t *testing.T) {
 	fixture.store = restarted
 	replaySpec := spec
 	replaySpec.At = spec.At.Add(time.Second)
+	launchReplay.At = launchSpec.At
+	if replay, err := restarted.RecordAgentRuntimeLaunch(context.Background(), launchReplay); err != nil ||
+		replay.Status != AgentRuntimeReplayed {
+		t.Fatalf("restart launch replay = (%#v, %v)", replay, err)
+	}
 	replay, err := restarted.RecordAgentWakeDelivery(context.Background(), replaySpec)
 	if err != nil || replay.Status != AgentRuntimeReplayed {
 		t.Fatalf("restart wake replay = (%#v, %v)", replay, err)
@@ -51,14 +112,14 @@ func TestAgentRuntimeWakeDeliveryIsExactAndReplayable(t *testing.T) {
 	}
 
 	mismatch := replaySpec
-	mismatch.LauncherDiagnostic = runtimeTestJSON(t, `{"adapter":"different"}`)
+	mismatch.WakeReceipt = runtimeTestJSON(t, `{"hook_id":"different"}`)
 	if _, err := restarted.RecordAgentWakeDelivery(context.Background(), mismatch); !errors.Is(err, ErrAgentRuntimeInvariant) {
 		t.Fatalf("changed wake replay error = %v", err)
 	}
 	array := replaySpec
-	array.RuntimeIDs = runtimeTestJSON(t, `[]`)
+	array.WakeReceipt = runtimeTestJSON(t, `[]`)
 	if _, err := restarted.RecordAgentWakeDelivery(context.Background(), array); !errors.Is(err, ErrAgentRuntimeInput) {
-		t.Fatalf("array Runtime IDs error = %v", err)
+		t.Fatalf("array wake receipt error = %v", err)
 	}
 
 	external, events := newAgentClaimFixture(t, 1, "wake-external")
@@ -67,13 +128,25 @@ func TestAgentRuntimeWakeDeliveryIsExactAndReplayable(t *testing.T) {
 		externalAt, externalAt, 0)
 	externalClaim := claimCurrent(t, external, "owner-wake-external", "token-wake-external", externalAt)
 	externalSpec := wakeDeliverySpec(external, externalClaim, model.Sum([]byte("token-wake-external")),
-		diagnostic, runtimeIDs, externalAt.Add(time.Second))
+		wakeReceipt, externalAt.Add(time.Second))
+	externalLaunch := runtimeLaunchSpec(external, externalClaim,
+		model.Sum([]byte("token-wake-external")), diagnostic, runtimeIDs,
+		externalAt.Add(500*time.Millisecond))
+	if _, err := external.store.RecordAgentRuntimeLaunch(context.Background(), externalLaunch); !errors.Is(err,
+		ErrAgentRuntimeStale) {
+		t.Fatalf("external Runtime launch attribution error = %v", err)
+	}
 	if _, err := external.store.RecordAgentWakeDelivery(context.Background(), externalSpec); !errors.Is(err, ErrAgentRuntimeStale) {
 		t.Fatalf("external wake attribution error = %v", err)
 	}
 
 	lateFixture, lateClaim, lateToken, _ := newWakeRuntimeFixture(t, "wake-after-expiry", 0)
 	lease, _ := lateClaim.Run.LeaseUntil()
+	if result, err := lateFixture.store.RecordAgentRuntimeLaunch(context.Background(),
+		runtimeLaunchSpec(lateFixture, lateClaim, lateToken, diagnostic, runtimeIDs,
+			lateClaim.Run.StartedAt().Add(500*time.Millisecond))); err != nil || result.Status != AgentRuntimeApplied {
+		t.Fatalf("late fixture launch = (%#v, %v)", result, err)
+	}
 	if _, err := lateFixture.store.ProbeAgentClaim(context.Background(), AgentClaimProbeSpec{
 		ProfileID: lateFixture.profile.ID(), ExpectedAssetRevision: lateFixture.profile.ActiveAssetRevision(),
 		At: lease}); err != nil {
@@ -85,7 +158,7 @@ func TestAgentRuntimeWakeDeliveryIsExactAndReplayable(t *testing.T) {
 		ErrAgentRuntimeInvariant) {
 		t.Fatalf("late normal completion without wake error = %v", err)
 	}
-	lateSpec := wakeDeliverySpec(lateFixture, lateClaim, lateToken, diagnostic, runtimeIDs,
+	lateSpec := wakeDeliverySpec(lateFixture, lateClaim, lateToken, wakeReceipt,
 		lease.Add(-time.Second))
 	late, err := lateFixture.store.RecordAgentWakeDelivery(context.Background(), lateSpec)
 	if err != nil || late.Status != AgentRuntimeApplied || late.Run.Status() != model.AgentRunRequeued {
@@ -196,10 +269,16 @@ func TestAgentRuntimeFinishThenLateStartedOutcomePreservesIndependentReceipts(t 
 
 func TestAgentRuntimeFinishedEvidenceSurvivesLaterClaimExpiry(t *testing.T) {
 	fixture, claim, token, claimAt := newWakeRuntimeFixture(t, "finish-before-expiry", 0)
-	diagnostic := runtimeTestJSON(t, `{"adapter":"codex-app-server","phase":"cue"}`)
+	diagnostic := runtimeTestJSON(t, `{"adapter":"codex-app-server","phase":"initialized"}`)
 	runtimeIDs := runtimeTestJSON(t, `{"process":"process-finish-before-expiry"}`)
+	wakeReceipt := runtimeTestJSON(t, `{"hook_id":"hook-finish-before-expiry","turn_id":"turn-finish-before-expiry"}`)
+	if _, err := fixture.store.RecordAgentRuntimeLaunch(context.Background(),
+		runtimeLaunchSpec(fixture, claim, token, diagnostic, runtimeIDs,
+			claimAt.Add(250*time.Millisecond))); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := fixture.store.RecordAgentWakeDelivery(context.Background(),
-		wakeDeliverySpec(fixture, claim, token, diagnostic, runtimeIDs,
+		wakeDeliverySpec(fixture, claim, token, wakeReceipt,
 			claimAt.Add(500*time.Millisecond))); err != nil {
 		t.Fatal(err)
 	}
@@ -231,6 +310,53 @@ func TestAgentRuntimeFinishedEvidenceSurvivesLaterClaimExpiry(t *testing.T) {
 	}
 }
 
+func TestAgentRuntimeLateLaunchSurvivesLeaseSettlement(t *testing.T) {
+	fixture, claim, token, _ := newWakeRuntimeFixture(t, "launch-after-expiry", 0)
+	diagnostic := runtimeTestJSON(t, `{"adapter":"codex-app-server","phase":"initialized"}`)
+	runtimeIDs := runtimeTestJSON(t, `{"process":"process-launch-after-expiry"}`)
+	lease, _ := claim.Run.LeaseUntil()
+	if status, err := fixture.store.ProbeAgentClaim(context.Background(), AgentClaimProbeSpec{
+		ProfileID: fixture.profile.ID(), ExpectedAssetRevision: fixture.profile.ActiveAssetRevision(),
+		At: lease,
+	}); err != nil || status != AgentClaimWaiting {
+		t.Fatalf("settle claim before launch callback = (%q, %v)", status, err)
+	}
+	launch := runtimeLaunchSpec(fixture, claim, token, diagnostic, runtimeIDs, lease.Add(-time.Second))
+	late, err := fixture.store.RecordAgentRuntimeLaunch(context.Background(), launch)
+	if err != nil || late.Status != AgentRuntimeApplied || late.Run.Status() != model.AgentRunRequeued ||
+		late.Handling.Status() != model.HandlingPending {
+		t.Fatalf("late RecordAgentRuntimeLaunch() = (%#v, %v)", late, err)
+	}
+	if startedAt, ok := late.Run.RuntimeStartedAt(); !ok || !startedAt.Equal(launch.At) {
+		t.Fatalf("late Runtime start evidence = (%s, %v)", startedAt, ok)
+	}
+	if replay, err := fixture.store.RecordAgentRuntimeLaunch(context.Background(), launch); err != nil ||
+		replay.Status != AgentRuntimeReplayed {
+		t.Fatalf("late launch replay = (%#v, %v)", replay, err)
+	}
+	mismatch := launch
+	mismatch.RuntimeIDs = runtimeTestJSON(t, `{"process":"other"}`)
+	if _, err := fixture.store.RecordAgentRuntimeLaunch(context.Background(), mismatch); !errors.Is(err,
+		ErrAgentRuntimeInvariant) {
+		t.Fatalf("late launch mismatch error = %v", err)
+	}
+
+	tooLateFixture, tooLateClaim, tooLateToken, _ := newWakeRuntimeFixture(t, "launch-too-late", 0)
+	tooLateLease, _ := tooLateClaim.Run.LeaseUntil()
+	if _, err := tooLateFixture.store.ProbeAgentClaim(context.Background(), AgentClaimProbeSpec{
+		ProfileID:             tooLateFixture.profile.ID(),
+		ExpectedAssetRevision: tooLateFixture.profile.ActiveAssetRevision(), At: tooLateLease,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	tooLate := runtimeLaunchSpec(tooLateFixture, tooLateClaim, tooLateToken, diagnostic, runtimeIDs,
+		tooLateLease.Add(time.Nanosecond))
+	if _, err := tooLateFixture.store.RecordAgentRuntimeLaunch(context.Background(), tooLate); !errors.Is(err,
+		ErrAgentRuntimeInvariant) {
+		t.Fatalf("launch after settled finish error = %v", err)
+	}
+}
+
 func TestAgentRuntimeOutcomeFirstStillAcceptsWakeAndCompletionEvidence(t *testing.T) {
 	t.Run("normal completion", func(t *testing.T) {
 		fixture := newManagedWakeRuntimeFixture(t, "outcome-first-finish", false,
@@ -255,7 +381,7 @@ func TestAgentRuntimeOutcomeFirstStillAcceptsWakeAndCompletionEvidence(t *testin
 
 		wakeAt := fixture.claim.Run.StartedAt().Add(500 * time.Millisecond)
 		wake := wakeDeliverySpec(fixture.acceptanceFixture, fixture.claim, fixture.token,
-			fixture.diagnostic, fixture.runtimeIDs, wakeAt)
+			fixture.wakeReceipt, wakeAt)
 		wakeResult, err := fixture.store.RecordAgentWakeDelivery(context.Background(), wake)
 		if err != nil || wakeResult.Status != AgentRuntimeApplied ||
 			wakeResult.Run.Status() != model.AgentRunOutcomeAccepted {
@@ -317,22 +443,22 @@ func TestAgentRuntimeOutcomeFirstStillAcceptsWakeAndCompletionEvidence(t *testin
 		}
 
 		wakeAt := fixture.claim.Run.StartedAt().Add(500 * time.Millisecond)
-		mismatchedWake := wakeDeliverySpec(fixture.acceptanceFixture, fixture.claim, fixture.token,
-			runtimeTestJSON(t, `{"adapter":"different"}`), fixture.runtimeIDs,
-			wakeAt)
-		if _, err := fixture.store.RecordAgentWakeDelivery(context.Background(), mismatchedWake); !errors.Is(err, ErrAgentRuntimeInvariant) {
-			t.Fatalf("late wake launcher mismatch error = %v", err)
-		}
-		afterMismatch, _ := fixture.store.GetAgentRun(context.Background(), fixture.claim.Run.ID())
-		if _, delivered := afterMismatch.WakeDeliveredAt(); delivered ||
-			afterMismatch.LauncherDiagnostic().String() != fixture.diagnostic.String() {
-			t.Fatalf("mismatched late wake overwrote evidence: %#v", afterMismatch)
-		}
-
 		wake := wakeDeliverySpec(fixture.acceptanceFixture, fixture.claim, fixture.token,
-			fixture.diagnostic, fixture.runtimeIDs, wakeAt)
+			fixture.wakeReceipt, wakeAt)
 		if delivered, err := fixture.store.RecordAgentWakeDelivery(context.Background(), wake); err != nil || delivered.Status != AgentRuntimeApplied {
 			t.Fatalf("wake after settled failure = (%#v, %v)", delivered, err)
+		}
+		mismatchedWake := wake
+		mismatchedWake.WakeReceipt = runtimeTestJSON(t, `{"hook_id":"different"}`)
+		if _, err := fixture.store.RecordAgentWakeDelivery(context.Background(), mismatchedWake); !errors.Is(err,
+			ErrAgentRuntimeInvariant) {
+			t.Fatalf("late wake receipt mismatch error = %v", err)
+		}
+		afterMismatch, _ := fixture.store.GetAgentRun(context.Background(), fixture.claim.Run.ID())
+		storedWake, hasWake := afterMismatch.WakeReceipt()
+		if !hasWake || storedWake.String() != fixture.wakeReceipt.String() ||
+			afterMismatch.LauncherDiagnostic().String() != fixture.diagnostic.String() {
+			t.Fatalf("mismatched late wake overwrote evidence: %#v", afterMismatch)
 		}
 		failure.At = resolveAt.Add(3 * time.Second)
 		if replay, err := fixture.store.FailAgentRuntime(context.Background(), failure); err != nil || replay.Status != AgentRuntimeReplayed {
@@ -408,12 +534,12 @@ func TestAgentRuntimeFinalFailureDeadRecoveryStartsNewGeneration(t *testing.T) {
 	if deadAt, ok := dead.Handling.DeadAt(); !ok || !deadAt.Equal(failureAt) {
 		t.Fatalf("dead evidence = (%s, %v)", deadAt, ok)
 	}
-	lateWake := wakeDeliverySpec(fixture, first, token, diagnostic, runtimeIDs,
+	lateWake := wakeDeliverySpec(fixture, first, token,
+		runtimeTestJSON(t, `{"hook_id":"impossible-prelaunch-hook"}`),
 		claimAt.Add(500*time.Millisecond))
-	lateDelivered, err := fixture.store.RecordAgentWakeDelivery(context.Background(), lateWake)
-	if err != nil || lateDelivered.Status != AgentRuntimeApplied ||
-		lateDelivered.Run.Status() != model.AgentRunDead {
-		t.Fatalf("wake evidence after failed Run = (%#v, %v)", lateDelivered, err)
+	if _, err := fixture.store.RecordAgentWakeDelivery(context.Background(), lateWake); !errors.Is(err,
+		ErrAgentRuntimeInvariant) {
+		t.Fatalf("wake after pre-launch failure error = %v", err)
 	}
 
 	authority, err := fixture.store.ReadLocalAuthority(context.Background())
@@ -629,6 +755,7 @@ type managedWakeRuntimeFixture struct {
 	token       model.Digest
 	diagnostic  model.JSON
 	runtimeIDs  model.JSON
+	wakeReceipt model.JSON
 	reservation ManagedOperationReservation
 	reserveSpec ManagedOperationSpec
 	content     string
@@ -639,10 +766,17 @@ func newManagedWakeRuntimeFixture(t *testing.T, suffix string, recordWake bool,
 ) *managedWakeRuntimeFixture {
 	t.Helper()
 	fixture, claim, token, claimAt := newWakeRuntimeFixture(t, suffix, 0)
-	diagnostic := runtimeTestJSON(t, `{"adapter":"codex-app-server","phase":"cue"}`)
-	runtimeIDs := runtimeTestJSON(t, `{"process":"process-`+suffix+`","turn":"turn-`+suffix+`"}`)
+	diagnostic := runtimeTestJSON(t, `{"adapter":"codex-app-server","phase":"initialized"}`)
+	runtimeIDs := runtimeTestJSON(t, `{"process":"process-`+suffix+`"}`)
+	wakeReceipt := runtimeTestJSON(t, `{"hook_id":"hook-`+suffix+`","thread_id":"thread-`+suffix+`","turn_id":"turn-`+suffix+`"}`)
+	launch := runtimeLaunchSpec(fixture, claim, token, diagnostic, runtimeIDs,
+		claimAt.Add(250*time.Millisecond))
+	if result, err := fixture.store.RecordAgentRuntimeLaunch(context.Background(), launch); err != nil ||
+		result.Status != AgentRuntimeApplied {
+		t.Fatalf("prepare Runtime launch = (%#v, %v)", result, err)
+	}
 	if recordWake {
-		wake := wakeDeliverySpec(fixture, claim, token, diagnostic, runtimeIDs,
+		wake := wakeDeliverySpec(fixture, claim, token, wakeReceipt,
 			claimAt.Add(500*time.Millisecond))
 		if result, err := fixture.store.RecordAgentWakeDelivery(context.Background(), wake); err != nil || result.Status != AgentRuntimeApplied {
 			t.Fatalf("prepare wake delivery = (%#v, %v)", result, err)
@@ -670,7 +804,7 @@ func newManagedWakeRuntimeFixture(t *testing.T, suffix string, recordWake bool,
 		t.Fatal(err)
 	}
 	return &managedWakeRuntimeFixture{acceptanceFixture: fixture, claim: consumed, token: token,
-		diagnostic: diagnostic, runtimeIDs: runtimeIDs, reservation: reservation,
+		diagnostic: diagnostic, runtimeIDs: runtimeIDs, wakeReceipt: wakeReceipt, reservation: reservation,
 		reserveSpec: reserveSpec, content: content}
 }
 
@@ -696,9 +830,18 @@ func newWakeRuntimeFixture(t *testing.T, suffix string,
 }
 
 func wakeDeliverySpec(fixture *acceptanceFixture, claim AgentClaimResult, token model.Digest,
-	diagnostic, runtimeIDs model.JSON, at time.Time,
+	receipt model.JSON, at time.Time,
 ) AgentWakeDeliverySpec {
 	return AgentWakeDeliverySpec{ProfileID: fixture.profile.ID(),
+		ExpectedAssetRevision: fixture.profile.ActiveAssetRevision(), RunID: claim.Run.ID(),
+		ClaimFenceHash: token, HandlingRecovery: claim.Run.HandlingRecovery(),
+		WakeReceipt: receipt, At: at}
+}
+
+func runtimeLaunchSpec(fixture *acceptanceFixture, claim AgentClaimResult, token model.Digest,
+	diagnostic, runtimeIDs model.JSON, at time.Time,
+) AgentRuntimeLaunchSpec {
+	return AgentRuntimeLaunchSpec{ProfileID: fixture.profile.ID(),
 		ExpectedAssetRevision: fixture.profile.ActiveAssetRevision(), RunID: claim.Run.ID(),
 		ClaimFenceHash: token, HandlingRecovery: claim.Run.HandlingRecovery(),
 		LauncherDiagnostic: diagnostic, RuntimeIDs: runtimeIDs, At: at}

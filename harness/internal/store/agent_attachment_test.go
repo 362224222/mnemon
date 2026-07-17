@@ -43,6 +43,29 @@ func TestAgentWakePreclaimPeekConsumeAndExpiry(t *testing.T) {
 	if _, consumed := peeked.AttachedAt(); consumed || peeked.Status() != model.AgentRunStarting {
 		t.Fatalf("peek consumed attachment: %#v", peeked)
 	}
+	prelaunch := spec
+	prelaunch.At = at.Add(250 * time.Millisecond)
+	if _, err := fixture.store.ConsumeAgentRunAttachment(context.Background(), prelaunch); !errors.Is(err,
+		ErrAgentAttachmentStale) {
+		t.Fatalf("pre-launch attachment consume error = %v", err)
+	}
+	diagnostic := runtimeTestJSON(t, `{"adapter":"codex-app-server","phase":"initialized"}`)
+	runtimeIDs := runtimeTestJSON(t, `{"process":"attachment-running"}`)
+	launched, err := fixture.store.RecordAgentRuntimeLaunch(context.Background(), AgentRuntimeLaunchSpec{
+		ProfileID: fixture.profile.ID(), ExpectedAssetRevision: fixture.profile.ActiveAssetRevision(),
+		RunID: claim.Run.ID(), ClaimFenceHash: token, HandlingRecovery: claim.Run.HandlingRecovery(),
+		LauncherDiagnostic: diagnostic, RuntimeIDs: runtimeIDs, At: at.Add(500 * time.Millisecond)})
+	if err != nil || launched.Status != AgentRuntimeApplied || launched.Run.Status() != model.AgentRunRunning {
+		t.Fatalf("launch before attachment consume = (%#v, %v)", launched, err)
+	}
+	if _, err := fixture.store.ConsumeAgentRunAttachment(context.Background(), prelaunch); !errors.Is(err,
+		ErrAgentAttachmentStale) {
+		t.Fatalf("attachment consume before durable Runtime start error = %v", err)
+	}
+	if _, err := fixture.store.db.Exec(`UPDATE agent_runs SET attached_at=? WHERE run_id=?`,
+		storeTime(prelaunch.At), claim.Run.ID().String()); err == nil {
+		t.Fatal("schema allowed attachment evidence before Runtime start")
+	}
 	consumedAt := at.Add(time.Second)
 	spec.At = consumedAt
 	consumed, err := fixture.store.ConsumeAgentRunAttachment(context.Background(), spec)
@@ -155,6 +178,15 @@ func TestAgentAttachmentCleanupExcludesActiveConsumedRun(t *testing.T) {
 	insertClaimHandling(t, fixture.store, "handling-attachment-cleanup-active", events[0], 1, at, at, 0)
 	token := model.Sum([]byte("attachment-cleanup-active"))
 	claim := preclaimWake(t, fixture, token, at)
+	diagnostic := runtimeTestJSON(t, `{"adapter":"codex-app-server","phase":"initialized"}`)
+	runtimeIDs := runtimeTestJSON(t, `{"process":"attachment-cleanup-active"}`)
+	if result, err := fixture.store.RecordAgentRuntimeLaunch(context.Background(), AgentRuntimeLaunchSpec{
+		ProfileID: fixture.profile.ID(), ExpectedAssetRevision: fixture.profile.ActiveAssetRevision(),
+		RunID: claim.Run.ID(), ClaimFenceHash: token, HandlingRecovery: claim.Run.HandlingRecovery(),
+		LauncherDiagnostic: diagnostic, RuntimeIDs: runtimeIDs, At: at.Add(500 * time.Millisecond),
+	}); err != nil || result.Status != AgentRuntimeApplied {
+		t.Fatalf("launch cleanup fixture = (%#v, %v)", result, err)
+	}
 	if _, err := fixture.store.ConsumeAgentRunAttachment(context.Background(), AgentAttachmentSpec{
 		ProfileID: fixture.profile.ID(), ExpectedAssetRevision: fixture.profile.ActiveAssetRevision(),
 		AttachmentTokenHash: token, At: at.Add(time.Second)}); err != nil {

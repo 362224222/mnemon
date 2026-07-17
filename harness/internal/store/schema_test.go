@@ -366,12 +366,37 @@ func TestSchemaEnforcesAgentRunFinishShape(t *testing.T) {
 		'starting',?,?,'{}')`, started, finished); err == nil || !strings.Contains(err.Error(), "CHECK constraint failed") {
 		t.Fatalf("active completion evidence error = %v, want CHECK failure", err)
 	}
+	wakeAt := "2026-01-01T00:00:30.000000000Z"
+	for _, test := range []struct {
+		name    string
+		at      any
+		receipt any
+	}{
+		{name: "time without receipt", at: wakeAt},
+		{name: "receipt without time", receipt: []byte(`{"hook_id":"hook-only"}`)},
+		{name: "empty receipt", at: wakeAt, receipt: []byte(`{}`)},
+	} {
+		_, err := st.db.Exec(`INSERT INTO agent_runs(run_id,profile_id,cause_json,launcher,runtime_kind,
+			launcher_diagnostic_json,runtime_ids_json,status,wake_delivered_at,wake_receipt_json,
+			started_at,finished_at) VALUES(?, 'teamwork-default','{}','test','codex-app-server',
+			'{}','{}','outcome_accepted',?,?,?,?)`, "run-wake-invalid-"+test.name,
+			test.at, test.receipt, started, finished)
+		if err == nil || !strings.Contains(err.Error(), "CHECK constraint failed") {
+			t.Fatalf("wake %s error = %v, want CHECK failure", test.name, err)
+		}
+	}
+	if _, err := st.db.Exec(`INSERT INTO agent_runs(run_id,profile_id,cause_json,launcher,runtime_kind,
+		launcher_diagnostic_json,runtime_ids_json,status,wake_delivered_at,wake_receipt_json,
+		started_at,finished_at) VALUES('run-wake-valid','teamwork-default','{}','test','codex-app-server',
+		'{}','{}','outcome_accepted',?,'{"hook_id":"hook-valid"}',?,?)`, wakeAt, started, finished); err != nil {
+		t.Fatalf("valid wake receipt error = %v", err)
+	}
 	wakeAfterFinish := "2026-01-01T00:02:00.000000000Z"
 	completion := "2026-01-01T00:03:00.000000000Z"
 	if _, err := st.db.Exec(`INSERT INTO agent_runs(run_id,profile_id,cause_json,launcher,runtime_kind,
-		launcher_diagnostic_json,runtime_ids_json,status,wake_delivered_at,started_at,finished_at,
+		launcher_diagnostic_json,runtime_ids_json,status,wake_delivered_at,wake_receipt_json,started_at,finished_at,
 		completion_at,completion_receipt_json) VALUES('run-wake-after-finish','teamwork-default','{}',
-		'test','codex-app-server','{}','{}','outcome_accepted',?,?,?,?,'{}')`, wakeAfterFinish,
+		'test','codex-app-server','{}','{}','outcome_accepted',?,'{}',?,?,?,'{}')`, wakeAfterFinish,
 		started, finished, completion); err == nil || !strings.Contains(err.Error(), "CHECK constraint failed") {
 		t.Fatalf("wake after finish error = %v, want CHECK failure", err)
 	}

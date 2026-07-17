@@ -288,11 +288,20 @@ func (s *Store) withAgentRunAttachment(ctx context.Context, spec AgentAttachment
 		return AgentClaimResult{}, err
 	}
 	if consume {
+		if run.Status() != model.AgentRunRunning {
+			return AgentClaimResult{}, ErrAgentAttachmentStale
+		}
+		runtimeStartedAt, launched := run.RuntimeStartedAt()
+		if !launched || at.Before(runtimeStartedAt) {
+			return AgentClaimResult{}, ErrAgentAttachmentStale
+		}
 		expiresAt, _ := run.AttachmentExpiresAt()
-		result, err := tx.ExecContext(ctx, `UPDATE agent_runs SET attached_at=?,status='running'
+		result, err := tx.ExecContext(ctx, `UPDATE agent_runs SET attached_at=?
 			WHERE run_id=? AND profile_id=? AND attachment_token_hash=? AND attachment_expires_at=?
-			AND attached_at IS NULL AND status IN ('starting','running')`, storeTime(at), run.ID().String(),
-			profile.ID().String(), spec.AttachmentTokenHash.Bytes(), storeTime(expiresAt))
+			AND attached_at IS NULL AND status='running' AND runtime_started_at IS NOT NULL
+			AND runtime_started_at<=?`,
+			storeTime(at), run.ID().String(),
+			profile.ID().String(), spec.AttachmentTokenHash.Bytes(), storeTime(expiresAt), storeTime(at))
 		if err != nil {
 			return AgentClaimResult{}, fmt.Errorf("consume Agent Run attachment: %w", err)
 		}
@@ -354,7 +363,8 @@ func readExactAgentRunAttachment(ctx context.Context, tx *sql.Tx, profile model.
 	lease, hasLease := run.LeaseUntil()
 	if !hasAttachment || !hasExpiry || !hasClaim || !hasLease || run.ProfileID() != profile.ID() ||
 		run.Runtime() != profile.Runtime() || run.Launcher() != "mnemond-wake" ||
-		run.Status() != model.AgentRunStarting || !sameAttachmentDigest(attachmentHash, token) ||
+		(run.Status() != model.AgentRunStarting && run.Status() != model.AgentRunRunning) ||
+		!sameAttachmentDigest(attachmentHash, token) ||
 		!sameAttachmentDigest(claimHash, token) || !expiresAt.Equal(lease) || !expiresAt.After(at) {
 		return model.AgentRun{}, model.Handling{}, ErrAgentAttachmentStale
 	}

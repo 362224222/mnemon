@@ -98,16 +98,20 @@ func TestAgentRunTerminalEvidenceIsCanonical(t *testing.T) {
 func TestAgentRunCompletionEvidenceIsPairedAndCausal(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
+	runtimeStarted := now.Add(500 * time.Millisecond)
 	wake := now.Add(time.Second)
 	finished := wake.Add(time.Second)
 	completed := finished
 	runID, _ := ParseRunID("run-completion-evidence")
 	cause, _ := NewJSON([]byte(`{"kind":"managed"}`))
-	empty, _ := NewJSON([]byte(`{}`))
+	diagnostic, _ := NewJSON([]byte(`{"adapter":"codex-app-server"}`))
+	runtimeIDs, _ := NewJSON([]byte(`{"process_id":42}`))
+	wakeReceipt, _ := NewJSON([]byte(`{"hook_id":"hook-completion-evidence"}`))
 	receipt, _ := NewJSON([]byte(`{"result":"finished"}`))
 	base := AgentRunSpec{ID: runID, ProfileID: TeamworkProfileID(), Cause: cause,
-		Launcher: "mnemond-wake", Runtime: RuntimeCodexAppServer, LauncherDiagnostic: empty,
-		RuntimeIDs: empty, Status: AgentRunRuntimeFinished, WakeDeliveredAt: &wake,
+		Launcher: "mnemond-wake", Runtime: RuntimeCodexAppServer, LauncherDiagnostic: diagnostic,
+		RuntimeIDs: runtimeIDs, Status: AgentRunRuntimeFinished, RuntimeStartedAt: &runtimeStarted,
+		WakeDeliveredAt: &wake, WakeReceipt: &wakeReceipt,
 		StartedAt: now, FinishedAt: &finished, CompletionAt: &completed, CompletionReceipt: &receipt}
 	if _, err := NewAgentRun(base); err != nil {
 		t.Fatalf("NewAgentRun() error = %v", err)
@@ -146,5 +150,79 @@ func TestAgentRunCompletionEvidenceIsPairedAndCausal(t *testing.T) {
 	finishBeforeWake.FinishedAt = &value
 	if _, err := NewAgentRun(finishBeforeWake); !errors.Is(err, ErrInvariant) {
 		t.Fatalf("finish before wake error = %v, want ErrInvariant", err)
+	}
+}
+
+func TestAgentRunManagedRuntimeStartEvidenceIsExplicitAndCausal(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
+	runtimeStarted := now.Add(time.Second)
+	wake := runtimeStarted.Add(time.Second)
+	runID, _ := ParseRunID("run-managed-launch-evidence")
+	cause, _ := NewJSON([]byte(`{"kind":"managed"}`))
+	empty, _ := NewJSON([]byte(`{}`))
+	diagnostic, _ := NewJSON([]byte(`{"adapter":"codex-app-server"}`))
+	runtimeIDs, _ := NewJSON([]byte(`{"process_id":42}`))
+	wakeReceipt, _ := NewJSON([]byte(`{"hook_id":"hook-managed-launch"}`))
+	base := AgentRunSpec{ID: runID, ProfileID: TeamworkProfileID(), Cause: cause,
+		Launcher: "mnemond-wake", Runtime: RuntimeCodexAppServer, LauncherDiagnostic: diagnostic,
+		RuntimeIDs: runtimeIDs, Status: AgentRunRunning, RuntimeStartedAt: &runtimeStarted,
+		WakeDeliveredAt: &wake, WakeReceipt: &wakeReceipt, StartedAt: now}
+	run, err := NewAgentRun(base)
+	if err != nil {
+		t.Fatalf("NewAgentRun() error = %v", err)
+	}
+	if got, ok := run.RuntimeStartedAt(); !ok || !got.Equal(runtimeStarted) {
+		t.Fatalf("Runtime start = (%s, %v)", got, ok)
+	}
+
+	missingStart := base
+	missingStart.RuntimeStartedAt = nil
+	if _, err := NewAgentRun(missingStart); !errors.Is(err, ErrInvariant) {
+		t.Fatalf("running without Runtime start error = %v, want ErrInvariant", err)
+	}
+	starting := base
+	starting.Status = AgentRunStarting
+	starting.WakeDeliveredAt = nil
+	starting.WakeReceipt = nil
+	if _, err := NewAgentRun(starting); !errors.Is(err, ErrInvariant) {
+		t.Fatalf("starting with Runtime start error = %v, want ErrInvariant", err)
+	}
+	missingEvidence := base
+	missingEvidence.LauncherDiagnostic = empty
+	if _, err := NewAgentRun(missingEvidence); !errors.Is(err, ErrInvariant) {
+		t.Fatalf("Runtime start without evidence error = %v, want ErrInvariant", err)
+	}
+	beforeRun := base
+	value := now.Add(-time.Nanosecond)
+	beforeRun.RuntimeStartedAt = &value
+	if _, err := NewAgentRun(beforeRun); !errors.Is(err, ErrInvariant) {
+		t.Fatalf("Runtime start before Run error = %v, want ErrInvariant", err)
+	}
+	wakeBeforeStart := base
+	value = runtimeStarted.Add(-time.Nanosecond)
+	wakeBeforeStart.WakeDeliveredAt = &value
+	if _, err := NewAgentRun(wakeBeforeStart); !errors.Is(err, ErrInvariant) {
+		t.Fatalf("wake before Runtime start error = %v, want ErrInvariant", err)
+	}
+	missingWakeReceipt := base
+	missingWakeReceipt.WakeReceipt = nil
+	if _, err := NewAgentRun(missingWakeReceipt); !errors.Is(err, ErrInvariant) {
+		t.Fatalf("wake without receipt error = %v, want ErrInvariant", err)
+	}
+	receiptWithoutWake := base
+	receiptWithoutWake.WakeDeliveredAt = nil
+	if _, err := NewAgentRun(receiptWithoutWake); !errors.Is(err, ErrInvariant) {
+		t.Fatalf("wake receipt without time error = %v, want ErrInvariant", err)
+	}
+	attachedBeforeStart := base
+	attachmentHash := Sum([]byte("attachment"))
+	attachedBeforeStart.AttachmentTokenHash = &attachmentHash
+	expires := wake.Add(time.Minute)
+	attachedBeforeStart.AttachmentExpiresAt = &expires
+	value = runtimeStarted.Add(-time.Nanosecond)
+	attachedBeforeStart.AttachedAt = &value
+	if _, err := NewAgentRun(attachedBeforeStart); !errors.Is(err, ErrInvariant) {
+		t.Fatalf("attachment before Runtime start error = %v, want ErrInvariant", err)
 	}
 }

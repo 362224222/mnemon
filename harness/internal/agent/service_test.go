@@ -375,16 +375,22 @@ func TestServiceAttachmentHookPeeksAndCurrentConsumesExactPreclaim(t *testing.T)
 	projection := serviceTestProjection(t, at)
 	makeRun := func(attached bool) model.AgentRun {
 		var attachedAt *time.Time
+		var runtimeStartedAt *time.Time
 		status := model.AgentRunStarting
+		diagnostic := mustServiceJSON(t, `{}`)
+		runtimeIDs := mustServiceJSON(t, `{}`)
 		if attached {
 			attachedAt, status = &at, model.AgentRunRunning
+			runtimeStartedAt = &at
+			diagnostic = mustServiceJSON(t, `{"adapter":"codex-app-server"}`)
+			runtimeIDs = mustServiceJSON(t, `{"process_id":42}`)
 		}
 		run, err := model.NewAgentRun(model.AgentRunSpec{ID: runID, ProfileID: profile.ID(),
 			HandlingID: &handlingID, Cause: mustServiceJSON(t, `{"kind":"wake"}`), HandlingAttempt: 1,
 			ClaimFenceHash: &tokenHash, LeaseUntil: &lease, AttachmentTokenHash: &tokenHash,
 			AttachmentExpiresAt: &lease, AttachedAt: attachedAt, Launcher: "mnemond-wake",
-			Runtime: profile.Runtime(), LauncherDiagnostic: mustServiceJSON(t, `{}`),
-			RuntimeIDs: mustServiceJSON(t, `{}`), Status: status, StartedAt: at})
+			Runtime: profile.Runtime(), LauncherDiagnostic: diagnostic,
+			RuntimeIDs: runtimeIDs, Status: status, RuntimeStartedAt: runtimeStartedAt, StartedAt: at})
 		if err != nil {
 			t.Fatal(err)
 		}

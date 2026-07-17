@@ -43,11 +43,23 @@ type AgentRuntimeTransitionResult struct {
 	Handling model.Handling
 }
 
-// AgentWakeDeliverySpec carries only adapter-observed evidence plus the exact
-// durable authority returned by PreclaimAgentWake. JSON values must already be
-// canonical objects; the Store applies a tighter diagnostic bound than the
-// general canonical JSON model.
+// AgentWakeDeliverySpec carries the adapter-proven Hook receipt plus the exact
+// durable authority returned by PreclaimAgentWake. Launch identity is already
+// durable and intentionally cannot be replaced with later Thread/Turn data.
 type AgentWakeDeliverySpec struct {
+	ProfileID             model.ProfileID
+	ExpectedAssetRevision string
+	RunID                 model.RunID
+	ClaimFenceHash        model.Digest
+	HandlingRecovery      uint32
+	WakeReceipt           model.JSON
+	At                    time.Time
+}
+
+// AgentRuntimeLaunchSpec records the process identity after app-server
+// initialization and before any turn can start. This closes the restart
+// recovery gap without treating process launch as wake delivery.
+type AgentRuntimeLaunchSpec struct {
 	ProfileID             model.ProfileID
 	ExpectedAssetRevision string
 	RunID                 model.RunID
@@ -109,17 +121,179 @@ type agentRuntimeAuthoritySpec struct {
 	at                    time.Time
 }
 
-// RecordAgentWakeDelivery records only a cue emitted for an existing
-// mnemond-wake preclaim. It can never attribute an external Hook to a later
-// Run. An exact replay preserves the first timestamp and evidence bytes.
-func (s *Store) RecordAgentWakeDelivery(ctx context.Context,
-	spec AgentWakeDeliverySpec,
+// RecordAgentRuntimeLaunch makes the exact initialized Runtime identity
+// durable before turn/start. A response-loss replay may observe later Run
+// states, but it can never replace the original launcher evidence.
+func (s *Store) RecordAgentRuntimeLaunch(ctx context.Context,
+	spec AgentRuntimeLaunchSpec,
 ) (AgentRuntimeTransitionResult, error) {
 	if err := validateAgentRuntimeObject("launcher diagnostic", spec.LauncherDiagnostic); err != nil {
 		return AgentRuntimeTransitionResult{}, err
 	}
 	if err := validateAgentRuntimeObject("Runtime IDs", spec.RuntimeIDs); err != nil {
 		return AgentRuntimeTransitionResult{}, err
+	}
+	if spec.LauncherDiagnostic.String() == `{}` || spec.RuntimeIDs.String() == `{}` {
+		return AgentRuntimeTransitionResult{}, fmt.Errorf(
+			"%w: launch evidence must be non-empty objects", ErrAgentRuntimeInput)
+	}
+	authoritySpec := agentRuntimeAuthoritySpec{profileID: spec.ProfileID,
+		expectedAssetRevision: spec.ExpectedAssetRevision, runID: spec.RunID,
+		claimFenceHash: spec.ClaimFenceHash, handlingRecovery: spec.HandlingRecovery, at: spec.At}
+	at, err := validateAgentRuntimeAuthorityInput(s, ctx, authoritySpec)
+	if err != nil {
+		return AgentRuntimeTransitionResult{}, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return AgentRuntimeTransitionResult{}, fmt.Errorf("record Agent Runtime launch: begin: %w", err)
+	}
+	defer tx.Rollback()
+	authority, err := readAgentRuntimeAuthority(ctx, tx, authoritySpec, at)
+	if err != nil {
+		return AgentRuntimeTransitionResult{}, err
+	}
+	diagnosticSet := authority.run.LauncherDiagnostic().String() != `{}`
+	runtimeIDsSet := authority.run.RuntimeIDs().String() != `{}`
+	if diagnosticSet != runtimeIDsSet {
+		return AgentRuntimeTransitionResult{}, fmt.Errorf(
+			"%w: launch evidence is partial", ErrAgentRuntimeInvariant)
+	}
+	runtimeStartedAt, launched := authority.run.RuntimeStartedAt()
+	if launched {
+		if !diagnosticSet {
+			return AgentRuntimeTransitionResult{}, fmt.Errorf(
+				"%w: Runtime start has no launch evidence", ErrAgentRuntimeInvariant)
+		}
+		if authority.run.LauncherDiagnostic().String() != spec.LauncherDiagnostic.String() ||
+			authority.run.RuntimeIDs().String() != spec.RuntimeIDs.String() {
+			return AgentRuntimeTransitionResult{}, fmt.Errorf(
+				"%w: launch replay evidence differs", ErrAgentRuntimeInvariant)
+		}
+		if authority.run.Status() == model.AgentRunStarting {
+			return AgentRuntimeTransitionResult{}, fmt.Errorf(
+				"%w: launch evidence retained starting status", ErrAgentRuntimeInvariant)
+		}
+		if runtimeStartedAt.After(at) {
+			return AgentRuntimeTransitionResult{}, fmt.Errorf(
+				"%w: launch replay time precedes Runtime start", ErrAgentRuntimeInvariant)
+		}
+		return commitAgentRuntimeResult(tx, authority, AgentRuntimeReplayed,
+			"record Agent Runtime launch: replay")
+	}
+	if authority.run.Status() != model.AgentRunStarting {
+		if !authority.run.Status().Terminal() {
+			return commitAgentRuntimeResult(tx, authority, AgentRuntimeAlreadySettled,
+				"record Agent Runtime launch: settled")
+		}
+		finishedAt, hasFinished := authority.run.FinishedAt()
+		if !hasFinished || at.After(finishedAt) {
+			return AgentRuntimeTransitionResult{}, fmt.Errorf(
+				"%w: late launch time follows Run finish", ErrAgentRuntimeInvariant)
+		}
+		if completionAt, completed := authority.run.CompletionAt(); completed && at.After(completionAt) {
+			return AgentRuntimeTransitionResult{}, fmt.Errorf(
+				"%w: late launch time follows Runtime completion", ErrAgentRuntimeInvariant)
+		}
+		if diagnosticSet && (authority.run.LauncherDiagnostic().String() != spec.LauncherDiagnostic.String() ||
+			authority.run.RuntimeIDs().String() != spec.RuntimeIDs.String()) {
+			return AgentRuntimeTransitionResult{}, fmt.Errorf(
+				"%w: late launch changed terminal evidence", ErrAgentRuntimeInvariant)
+		}
+		if _, completed := authority.run.CompletionReceipt(); completed && !diagnosticSet {
+			return AgentRuntimeTransitionResult{}, fmt.Errorf(
+				"%w: completed Run lacks exact launch evidence", ErrAgentRuntimeInvariant)
+		}
+		handlingID, _ := authority.run.HandlingID()
+		lease, _ := authority.run.LeaseUntil()
+		var result sql.Result
+		if diagnosticSet {
+			result, err = tx.ExecContext(ctx, `UPDATE agent_runs SET runtime_started_at=?
+				WHERE run_id=? AND profile_id=? AND handling_id=? AND handling_attempt=?
+				AND handling_recovery=? AND claim_fence_hash=? AND lease_until=?
+				AND launcher='mnemond-wake' AND runtime_kind=? AND status=? AND finished_at=?
+				AND launcher_diagnostic_json=? AND runtime_ids_json=? AND runtime_started_at IS NULL
+				AND finished_at>=? AND (completion_at IS NULL OR completion_at>=?)`, storeTime(at),
+				authority.run.ID().String(), authority.profile.ID().String(), handlingID.String(),
+				authority.run.HandlingAttempt(), authority.run.HandlingRecovery(), spec.ClaimFenceHash.Bytes(),
+				storeTime(lease), string(authority.profile.Runtime()), string(authority.run.Status()),
+				storeTime(finishedAt), spec.LauncherDiagnostic.Bytes(), spec.RuntimeIDs.Bytes(),
+				storeTime(at), storeTime(at))
+		} else {
+			result, err = tx.ExecContext(ctx, `UPDATE agent_runs SET runtime_started_at=?,
+				launcher_diagnostic_json=?,runtime_ids_json=?
+				WHERE run_id=? AND profile_id=? AND handling_id=? AND handling_attempt=?
+				AND handling_recovery=? AND claim_fence_hash=? AND lease_until=?
+				AND launcher='mnemond-wake' AND runtime_kind=? AND status=? AND finished_at=?
+				AND launcher_diagnostic_json=? AND runtime_ids_json=? AND runtime_started_at IS NULL
+				AND completion_receipt_json IS NULL AND finished_at>=?`, storeTime(at),
+				spec.LauncherDiagnostic.Bytes(), spec.RuntimeIDs.Bytes(), authority.run.ID().String(),
+				authority.profile.ID().String(), handlingID.String(), authority.run.HandlingAttempt(),
+				authority.run.HandlingRecovery(), spec.ClaimFenceHash.Bytes(), storeTime(lease),
+				string(authority.profile.Runtime()), string(authority.run.Status()), storeTime(finishedAt),
+				[]byte(`{}`), []byte(`{}`), storeTime(at))
+		}
+		if err != nil {
+			return AgentRuntimeTransitionResult{}, fmt.Errorf("record late Agent Runtime launch: update: %w", err)
+		}
+		if err := requireExactlyOneRow(result, "record late Agent Runtime launch: AgentRun fence"); err != nil {
+			return AgentRuntimeTransitionResult{}, fmt.Errorf("%w: %v", ErrAgentRuntimeStale, err)
+		}
+		authority.run, err = readAgentRun(ctx, tx, authority.run.ID())
+		if err != nil {
+			return AgentRuntimeTransitionResult{}, fmt.Errorf(
+				"%w: late launched AgentRun cannot be read", ErrAgentRuntimeInvariant)
+		}
+		return commitAgentRuntimeResult(tx, authority, AgentRuntimeApplied,
+			"record late Agent Runtime launch: commit")
+	}
+	if diagnosticSet {
+		return AgentRuntimeTransitionResult{}, fmt.Errorf(
+			"%w: starting Run contains launch evidence without Runtime start", ErrAgentRuntimeInvariant)
+	}
+	if err := requireLiveAgentRuntimeAuthority(authority, spec.ClaimFenceHash, at); err != nil {
+		return AgentRuntimeTransitionResult{}, err
+	}
+	handlingID, _ := authority.run.HandlingID()
+	lease, _ := authority.run.LeaseUntil()
+	result, err := tx.ExecContext(ctx, `UPDATE agent_runs SET status='running',runtime_started_at=?,
+		launcher_diagnostic_json=?,runtime_ids_json=? WHERE run_id=? AND profile_id=?
+		AND handling_id=? AND handling_attempt=? AND handling_recovery=? AND claim_fence_hash=?
+		AND lease_until=? AND launcher='mnemond-wake' AND runtime_kind=? AND status='starting'
+		AND launcher_diagnostic_json=? AND runtime_ids_json=? AND finished_at IS NULL
+		AND runtime_started_at IS NULL AND completion_at IS NULL AND completion_receipt_json IS NULL`,
+		storeTime(at), spec.LauncherDiagnostic.Bytes(), spec.RuntimeIDs.Bytes(),
+		authority.run.ID().String(), authority.profile.ID().String(),
+		handlingID.String(), authority.run.HandlingAttempt(), authority.run.HandlingRecovery(),
+		spec.ClaimFenceHash.Bytes(), storeTime(lease), string(authority.profile.Runtime()),
+		[]byte(`{}`), []byte(`{}`))
+	if err != nil {
+		return AgentRuntimeTransitionResult{}, fmt.Errorf("record Agent Runtime launch: update: %w", err)
+	}
+	if err := requireExactlyOneRow(result, "record Agent Runtime launch: AgentRun fence"); err != nil {
+		return AgentRuntimeTransitionResult{}, fmt.Errorf("%w: %v", ErrAgentRuntimeStale, err)
+	}
+	authority.run, err = readAgentRun(ctx, tx, authority.run.ID())
+	if err != nil {
+		return AgentRuntimeTransitionResult{}, fmt.Errorf(
+			"%w: launched AgentRun cannot be read", ErrAgentRuntimeInvariant)
+	}
+	return commitAgentRuntimeResult(tx, authority, AgentRuntimeApplied,
+		"record Agent Runtime launch: commit")
+}
+
+// RecordAgentWakeDelivery records only a cue emitted for an existing
+// mnemond-wake preclaim. It can never attribute an external Hook to a later
+// Run. An exact replay preserves the first timestamp and evidence bytes.
+func (s *Store) RecordAgentWakeDelivery(ctx context.Context,
+	spec AgentWakeDeliverySpec,
+) (AgentRuntimeTransitionResult, error) {
+	if err := validateAgentRuntimeObject("wake receipt", spec.WakeReceipt); err != nil {
+		return AgentRuntimeTransitionResult{}, err
+	}
+	if spec.WakeReceipt.String() == `{}` {
+		return AgentRuntimeTransitionResult{}, fmt.Errorf(
+			"%w: wake receipt must be a non-empty object", ErrAgentRuntimeInput)
 	}
 	authoritySpec := agentRuntimeAuthoritySpec{profileID: spec.ProfileID,
 		expectedAssetRevision: spec.ExpectedAssetRevision, runID: spec.RunID,
@@ -138,18 +312,31 @@ func (s *Store) RecordAgentWakeDelivery(ctx context.Context,
 		return AgentRuntimeTransitionResult{}, err
 	}
 	if deliveredAt, delivered := authority.run.WakeDeliveredAt(); delivered {
-		if deliveredAt.After(at) || authority.run.LauncherDiagnostic().String() != spec.LauncherDiagnostic.String() ||
-			authority.run.RuntimeIDs().String() != spec.RuntimeIDs.String() {
+		receipt, hasReceipt := authority.run.WakeReceipt()
+		if deliveredAt.After(at) || !hasReceipt || receipt.String() != spec.WakeReceipt.String() {
 			return AgentRuntimeTransitionResult{}, fmt.Errorf("%w: wake replay evidence differs",
 				ErrAgentRuntimeInvariant)
 		}
 		return commitAgentRuntimeResult(tx, authority, AgentRuntimeReplayed,
 			"record Agent wake delivery: replay")
 	}
-	active := authority.run.Status() == model.AgentRunStarting || authority.run.Status() == model.AgentRunRunning
-	_, hasCompletion := authority.run.CompletionReceipt()
-	launcherEvidenceSet := hasCompletion || authority.run.LauncherDiagnostic().String() != `{}` ||
-		authority.run.RuntimeIDs().String() != `{}`
+	active := authority.run.Status() == model.AgentRunRunning
+	diagnosticSet := authority.run.LauncherDiagnostic().String() != `{}`
+	runtimeIDsSet := authority.run.RuntimeIDs().String() != `{}`
+	if diagnosticSet != runtimeIDsSet {
+		return AgentRuntimeTransitionResult{}, fmt.Errorf(
+			"%w: wake launch evidence is partial", ErrAgentRuntimeInvariant)
+	}
+	launcherEvidenceSet := diagnosticSet && runtimeIDsSet
+	if !launcherEvidenceSet {
+		return AgentRuntimeTransitionResult{}, fmt.Errorf(
+			"%w: wake delivery precedes durable Runtime launch", ErrAgentRuntimeInvariant)
+	}
+	runtimeStartedAt, launched := authority.run.RuntimeStartedAt()
+	if !launched || at.Before(runtimeStartedAt) {
+		return AgentRuntimeTransitionResult{}, fmt.Errorf(
+			"%w: wake delivery precedes durable Runtime start", ErrAgentRuntimeInvariant)
+	}
 	lateTerminalEvidence := authority.run.Status().Terminal()
 	if lateTerminalEvidence {
 		finishedAt, hasFinished := authority.run.FinishedAt()
@@ -173,41 +360,20 @@ func (s *Store) RecordAgentWakeDelivery(ctx context.Context,
 	}
 	handlingID, _ := authority.run.HandlingID()
 	lease, _ := authority.run.LeaseUntil()
-	var result sql.Result
-	if launcherEvidenceSet {
-		if authority.run.LauncherDiagnostic().String() != spec.LauncherDiagnostic.String() ||
-			authority.run.RuntimeIDs().String() != spec.RuntimeIDs.String() {
-			return AgentRuntimeTransitionResult{}, fmt.Errorf("%w: late wake changed launcher evidence",
-				ErrAgentRuntimeInvariant)
-		}
-		result, err = tx.ExecContext(ctx, `UPDATE agent_runs SET wake_delivered_at=?
-			WHERE run_id=? AND profile_id=? AND handling_id=? AND handling_attempt=?
-			AND handling_recovery=? AND claim_fence_hash=? AND lease_until=?
-			AND launcher='mnemond-wake' AND runtime_kind=?
-			AND launcher_diagnostic_json=? AND runtime_ids_json=?
-			AND (status IN ('starting','running') OR
-				(status IN ('outcome_accepted','requeued','rejected','failed','dead')
-					AND finished_at>=? AND (completion_at IS NULL OR completion_at>=?)))
-			AND wake_delivered_at IS NULL`, storeTime(at), authority.run.ID().String(),
-			authority.profile.ID().String(), handlingID.String(), authority.run.HandlingAttempt(),
-			authority.run.HandlingRecovery(), spec.ClaimFenceHash.Bytes(), storeTime(lease),
-			string(authority.profile.Runtime()), spec.LauncherDiagnostic.Bytes(), spec.RuntimeIDs.Bytes(),
-			storeTime(at), storeTime(at))
-	} else {
-		result, err = tx.ExecContext(ctx, `UPDATE agent_runs SET launcher_diagnostic_json=?,
-			runtime_ids_json=?,wake_delivered_at=? WHERE run_id=? AND profile_id=? AND handling_id=?
-			AND handling_attempt=? AND handling_recovery=? AND claim_fence_hash=? AND lease_until=?
-			AND launcher='mnemond-wake' AND runtime_kind=?
-			AND launcher_diagnostic_json=? AND runtime_ids_json=?
-			AND (status IN ('starting','running') OR
-				(status IN ('outcome_accepted','requeued','rejected','failed','dead')
-					AND finished_at>=? AND (completion_at IS NULL OR completion_at>=?)))
-			AND wake_delivered_at IS NULL`, spec.LauncherDiagnostic.Bytes(),
-			spec.RuntimeIDs.Bytes(), storeTime(at), authority.run.ID().String(), authority.profile.ID().String(),
-			handlingID.String(), authority.run.HandlingAttempt(), authority.run.HandlingRecovery(),
-			spec.ClaimFenceHash.Bytes(), storeTime(lease), string(authority.profile.Runtime()), []byte(`{}`),
-			[]byte(`{}`), storeTime(at), storeTime(at))
-	}
+	result, err := tx.ExecContext(ctx, `UPDATE agent_runs SET wake_delivered_at=?,wake_receipt_json=?
+		WHERE run_id=? AND profile_id=? AND handling_id=? AND handling_attempt=?
+		AND handling_recovery=? AND claim_fence_hash=? AND lease_until=?
+		AND launcher='mnemond-wake' AND runtime_kind=?
+		AND launcher_diagnostic_json=? AND runtime_ids_json=? AND runtime_started_at<=?
+		AND (status='running' OR
+			(status IN ('outcome_accepted','requeued','rejected','failed','dead')
+				AND finished_at>=? AND (completion_at IS NULL OR completion_at>=?)))
+		AND wake_delivered_at IS NULL AND wake_receipt_json IS NULL`, storeTime(at),
+		spec.WakeReceipt.Bytes(), authority.run.ID().String(),
+		authority.profile.ID().String(), handlingID.String(), authority.run.HandlingAttempt(),
+		authority.run.HandlingRecovery(), spec.ClaimFenceHash.Bytes(), storeTime(lease),
+		string(authority.profile.Runtime()), authority.run.LauncherDiagnostic().Bytes(),
+		authority.run.RuntimeIDs().Bytes(), storeTime(at), storeTime(at), storeTime(at))
 	if err != nil {
 		return AgentRuntimeTransitionResult{}, fmt.Errorf("record Agent wake delivery: update: %w", err)
 	}
@@ -376,10 +542,10 @@ func (s *Store) FailAgentRuntime(ctx context.Context,
 			"fail Agent Runtime: replay")
 	}
 	if agentRuntimeSemanticSettled(authority.run) {
-		if _, delivered := authority.run.WakeDeliveredAt(); delivered &&
+		if _, launched := authority.run.RuntimeStartedAt(); launched &&
 			(authority.run.LauncherDiagnostic().String() != spec.LauncherDiagnostic.String() ||
 				authority.run.RuntimeIDs().String() != spec.RuntimeIDs.String()) {
-			return AgentRuntimeTransitionResult{}, fmt.Errorf("%w: failure changed delivered launcher evidence",
+			return AgentRuntimeTransitionResult{}, fmt.Errorf("%w: failure changed launched Runtime evidence",
 				ErrAgentRuntimeInvariant)
 		}
 		handlingID, _ := authority.run.HandlingID()
@@ -412,10 +578,10 @@ func (s *Store) FailAgentRuntime(ctx context.Context,
 			"fail Agent Runtime: append settled evidence")
 	}
 	if agentRuntimeLeaseSettled(authority.run) {
-		if _, delivered := authority.run.WakeDeliveredAt(); delivered &&
+		if _, launched := authority.run.RuntimeStartedAt(); launched &&
 			(authority.run.LauncherDiagnostic().String() != spec.LauncherDiagnostic.String() ||
 				authority.run.RuntimeIDs().String() != spec.RuntimeIDs.String()) {
-			return AgentRuntimeTransitionResult{}, fmt.Errorf("%w: late failure changed delivered launcher evidence",
+			return AgentRuntimeTransitionResult{}, fmt.Errorf("%w: late failure changed launched Runtime evidence",
 				ErrAgentRuntimeInvariant)
 		}
 		if wakeDeliveredAt, delivered := authority.run.WakeDeliveredAt(); delivered && wakeDeliveredAt.After(at) {
@@ -460,10 +626,10 @@ func (s *Store) FailAgentRuntime(ctx context.Context,
 	if err := requireLiveAgentRuntimeAuthority(authority, spec.ClaimFenceHash, at); err != nil {
 		return AgentRuntimeTransitionResult{}, err
 	}
-	if _, delivered := authority.run.WakeDeliveredAt(); delivered &&
+	if _, launched := authority.run.RuntimeStartedAt(); launched &&
 		(authority.run.LauncherDiagnostic().String() != spec.LauncherDiagnostic.String() ||
 			authority.run.RuntimeIDs().String() != spec.RuntimeIDs.String()) {
-		return AgentRuntimeTransitionResult{}, fmt.Errorf("%w: failure changed delivered launcher evidence",
+		return AgentRuntimeTransitionResult{}, fmt.Errorf("%w: failure changed launched Runtime evidence",
 			ErrAgentRuntimeInvariant)
 	}
 	if wakeDeliveredAt, delivered := authority.run.WakeDeliveredAt(); delivered && wakeDeliveredAt.After(at) {
