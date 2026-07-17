@@ -63,7 +63,7 @@ func (s *Store) ReserveOperation(ctx context.Context, requested model.Operation,
 		if err := requireEnabledProfile(ctx, tx, requested.ProfileID()); err != nil {
 			return OperationReservation{}, err
 		}
-		if err := requireOperationAgentRun(ctx, tx, existing); err != nil {
+		if err := requireOperationAgentRun(ctx, tx, existing, true); err != nil {
 			return OperationReservation{}, err
 		}
 		existingLease, _ := existing.LeaseUntil()
@@ -103,7 +103,7 @@ func (s *Store) ReserveOperation(ctx context.Context, requested model.Operation,
 	if err := requireEnabledProfile(ctx, tx, requested.ProfileID()); err != nil {
 		return OperationReservation{}, err
 	}
-	if err := requireOperationAgentRun(ctx, tx, requested); err != nil {
+	if err := requireOperationAgentRun(ctx, tx, requested, false); err != nil {
 		return OperationReservation{}, err
 	}
 	if contextHash, hasContext := requested.ContextHash(); hasContext {
@@ -260,7 +260,9 @@ func requireEnabledProfile(ctx context.Context, q rowQuerier, id model.ProfileID
 	return nil
 }
 
-func requireOperationAgentRun(ctx context.Context, q rowQuerier, operation model.Operation) error {
+func requireOperationAgentRun(ctx context.Context, q rowQuerier, operation model.Operation,
+	allowRuntimeFinished bool,
+) error {
 	var runProfile, runRuntime, profileRuntime, status string
 	err := q.QueryRowContext(ctx, `SELECT r.profile_id,r.runtime_kind,p.runtime_kind,r.status
 		FROM agent_runs r JOIN profiles p ON p.profile_id=r.profile_id WHERE r.run_id=?`,
@@ -268,8 +270,9 @@ func requireOperationAgentRun(ctx context.Context, q rowQuerier, operation model
 	if err != nil {
 		return fmt.Errorf("operation AgentRun: %w", err)
 	}
-	if runProfile != operation.ProfileID().String() || runRuntime != profileRuntime ||
-		(status != "starting" && status != "running" && status != "runtime_finished") {
+	active := status == "starting" || status == "running" ||
+		(allowRuntimeFinished && status == "runtime_finished")
+	if runProfile != operation.ProfileID().String() || runRuntime != profileRuntime || !active {
 		return errors.New("operation AgentRun is not active authority for its Profile/runtime")
 	}
 	return nil

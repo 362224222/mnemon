@@ -107,6 +107,84 @@ func TestCommitManagedResolutionTerminalReplaySurvivesRestart(t *testing.T) {
 	}
 }
 
+func TestCommitManagedResolutionRetryReplaySurvivesSuccessorClaim(t *testing.T) {
+	fixture := newManagedResolutionFixture(t, "retry-successor", model.OperationResolveRetry,
+		"retry after a later claim")
+	spec := fixture.resolveSpec()
+	first, err := fixture.store.CommitManagedResolution(context.Background(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handling, err := fixture.store.GetAgentHandling(context.Background(), fixture.claim.Handling.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	successor := claimCurrent(t, fixture.acceptanceFixture, "owner-retry-successor-2",
+		"token-retry-successor-2", handling.AvailableAt())
+	if successor.Run.HandlingAttempt() != fixture.claim.Run.HandlingAttempt()+1 {
+		t.Fatalf("successor attempt = %d", successor.Run.HandlingAttempt())
+	}
+	replaySpec := spec
+	replaySpec.At = handling.AvailableAt().Add(time.Second)
+	replay, err := fixture.store.CommitManagedResolution(context.Background(), replaySpec)
+	if err != nil || !replay.Replayed || replay.Receipt.String() != first.Receipt.String() {
+		t.Fatalf("retry replay after successor claim = (%#v, %v)", replay, err)
+	}
+}
+
+func TestCommitManagedResolutionFinalRetryAtomicallyDies(t *testing.T) {
+	fixture := newManagedResolutionFixture(t, "final-retry", model.OperationResolveRetry,
+		"retry cannot proceed in this repaired generation")
+	setClaimBudget(t, fixture.store, 1)
+	authority, err := fixture.store.ReadLocalAuthority(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.profile = authority.Profile
+
+	result, err := fixture.store.CommitManagedResolution(context.Background(), fixture.resolveSpec())
+	if err != nil || result.Replayed {
+		t.Fatalf("final retry resolution = (%#v, %v)", result, err)
+	}
+	assertManagedResolutionReceipt(t, result.Receipt, fixture, model.HandlingDead)
+	assertManagedResolutionRows(t, fixture, result, model.HandlingDead,
+		"attempt_budget_exhausted", model.AgentRunDead)
+	handling, err := fixture.store.GetAgentHandling(context.Background(), fixture.claim.Handling.ID())
+	deadAt, hasDeadAt := handling.DeadAt()
+	if err != nil || !hasDeadAt || !deadAt.Equal(fixture.resolveAt) ||
+		handling.LastError() != "explicit retry exhausted maximum handling attempts" {
+		t.Fatalf("final retry dead evidence = (%#v, %v)", handling, err)
+	}
+	var envelope struct {
+		Handling struct {
+			Status string `json:"status"`
+		} `json:"handling"`
+	}
+	if err := json.Unmarshal(result.Receipt.Bytes(), &envelope); err != nil ||
+		envelope.Handling.Status != "dead" {
+		t.Fatalf("final retry receipt = (%#v, %v)", envelope, err)
+	}
+	replay, err := fixture.store.CommitManagedResolution(context.Background(), fixture.resolveSpec())
+	if err != nil || !replay.Replayed || replay.Receipt.String() != result.Receipt.String() {
+		t.Fatalf("final retry replay = (%#v, %v)", replay, err)
+	}
+	authority, err = fixture.store.ReadLocalAuthority(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	recoveryAt := fixture.resolveAt.Add(time.Second)
+	if recovered, err := fixture.store.RecoverDeadAgentHandlings(context.Background(), AgentDeadRecoverySpec{
+		Profile: authority.Profile, At: recoveryAt}); err != nil || recovered.Recovered != 1 {
+		t.Fatalf("recover final retry generation = (%#v, %v)", recovered, err)
+	}
+	replaySpec := fixture.resolveSpec()
+	replaySpec.At = recoveryAt.Add(time.Second)
+	replay, err = fixture.store.CommitManagedResolution(context.Background(), replaySpec)
+	if err != nil || !replay.Replayed || replay.Receipt.String() != result.Receipt.String() {
+		t.Fatalf("final retry replay after setup recovery = (%#v, %v)", replay, err)
+	}
+}
+
 func TestCommitManagedResolutionTerminalReplayRejectsLifecycleDrift(t *testing.T) {
 	fixture := newManagedResolutionFixture(t, "terminal-drift", model.OperationResolveNoAction,
 		"nothing remains actionable")
@@ -373,7 +451,7 @@ func assertManagedResolutionReceipt(t *testing.T, receipt model.JSON,
 	}
 	wantReceiptStatus := map[model.HandlingStatus]string{
 		model.HandlingCompleted: "completed", model.HandlingPending: "requeued",
-		model.HandlingRejected: "rejected",
+		model.HandlingRejected: "rejected", model.HandlingDead: "dead",
 	}[handling]
 	if envelope.Action != fixture.reservation.Operation.Kind() || envelope.Handling.Status != wantReceiptStatus ||
 		envelope.OperationID != fixture.reservation.Operation.ID().String() || envelope.Replayed ||
@@ -428,10 +506,10 @@ func assertManagedResolutionRows(t *testing.T, fixture *managedResolutionFixture
 		t.Fatalf("durable AgentRun = (%#v, %v)", run, err)
 	}
 	outcome, hasOutcome := run.OutcomeReceipt()
-	completion, hasCompletion := run.CompletionReceipt()
+	_, hasCompletion := run.CompletionReceipt()
 	finished, hasFinished := run.FinishedAt()
-	if !hasOutcome || !hasCompletion || outcome.String() != result.Receipt.String() ||
-		completion.String() != result.Receipt.String() || !hasFinished || finished.After(fixture.resolveAt) {
+	if !hasOutcome || hasCompletion || outcome.String() != result.Receipt.String() ||
+		!hasFinished || finished.After(fixture.resolveAt) {
 		t.Fatalf("AgentRun resolution evidence = outcome %t completion %t finished %s",
 			hasOutcome, hasCompletion, finished)
 	}

@@ -381,6 +381,7 @@ CREATE TABLE agent_runs (
   handling_id        TEXT,
   cause_json         BLOB NOT NULL,
   handling_attempt   INTEGER CHECK (handling_attempt > 0),
+  handling_recovery  INTEGER NOT NULL DEFAULT 0 CHECK (handling_recovery >= 0),
   claim_fence_hash   BLOB,
   lease_until        TEXT,
   attachment_token_hash BLOB,
@@ -399,6 +400,16 @@ CREATE TABLE agent_runs (
   wake_delivered_at  TEXT,
   started_at         TEXT NOT NULL,
   finished_at        TEXT,
+  completion_at      TEXT CHECK (
+    completion_at IS NULL OR (
+      length(completion_at) = 30
+      AND completion_at GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]Z'
+      AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(completion_at, 1, 19) || 'Z')) IS NOT NULL
+      AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(completion_at, 1, 19) || 'Z')) = substr(completion_at, 1, 19)
+      AND completion_at >= '1677-09-21T00:12:43.145224192Z'
+      AND completion_at <= '2262-04-11T23:47:16.854775807Z'
+    )
+  ),
   current_read_receipt_json BLOB,
   outcome_receipt_json BLOB,
   completion_receipt_json BLOB,
@@ -407,7 +418,7 @@ CREATE TABLE agent_runs (
   FOREIGN KEY (handling_id, profile_id)
     REFERENCES agent_handlings(handling_id, profile_id),
   CHECK (
-    (handling_id IS NULL AND handling_attempt IS NULL
+    (handling_id IS NULL AND handling_attempt IS NULL AND handling_recovery = 0
       AND claim_fence_hash IS NULL AND lease_until IS NULL)
     OR
     (handling_id IS NOT NULL AND handling_attempt IS NOT NULL
@@ -418,20 +429,40 @@ CREATE TABLE agent_runs (
     OR (attachment_token_hash IS NOT NULL AND attachment_expires_at IS NOT NULL)
   ),
   CHECK (
-    (status IN ('starting','running') AND finished_at IS NULL)
+    (status IN ('starting','running') AND finished_at IS NULL AND completion_at IS NULL)
     OR
     (status IN ('runtime_finished','outcome_accepted','requeued','rejected','failed','dead')
       AND finished_at IS NOT NULL)
+  ),
+  CHECK (
+    (completion_at IS NULL AND completion_receipt_json IS NULL)
+    OR (completion_at IS NOT NULL AND completion_receipt_json IS NOT NULL)
+  ),
+  CHECK (
+    completion_at IS NULL OR (
+      completion_at >= started_at
+      AND (wake_delivered_at IS NULL OR completion_at >= wake_delivered_at)
+      AND (finished_at IS NULL OR completion_at >= finished_at)
+    )
+  ),
+  CHECK (
+    wake_delivered_at IS NULL OR finished_at IS NULL OR wake_delivered_at <= finished_at
+  ),
+  CHECK (
+    status <> 'runtime_finished'
+    OR (completion_at IS NOT NULL AND completion_at = finished_at)
   )
 );
 
-CREATE UNIQUE INDEX agent_runs_handling_attempt_idx
-  ON agent_runs(handling_id, handling_attempt) WHERE handling_id IS NOT NULL;
+CREATE UNIQUE INDEX agent_runs_handling_generation_attempt_idx
+  ON agent_runs(handling_id, handling_recovery, handling_attempt)
+  WHERE handling_id IS NOT NULL;
 
 CREATE TRIGGER agent_runs_claim_snapshot_immutable
-BEFORE UPDATE OF handling_id, handling_attempt, claim_fence_hash, lease_until ON agent_runs
+BEFORE UPDATE OF handling_id, handling_attempt, handling_recovery, claim_fence_hash, lease_until ON agent_runs
 WHEN NEW.handling_id IS NOT OLD.handling_id
   OR NEW.handling_attempt IS NOT OLD.handling_attempt
+  OR NEW.handling_recovery IS NOT OLD.handling_recovery
   OR NEW.claim_fence_hash IS NOT OLD.claim_fence_hash
   OR NEW.lease_until IS NOT OLD.lease_until
 BEGIN SELECT RAISE(ABORT, 'agent run claim snapshot is immutable'); END;
@@ -444,15 +475,22 @@ BEGIN SELECT RAISE(ABORT, 'agent run attachment identity is immutable'); END;
 
 CREATE TRIGGER agent_runs_evidence_once
 BEFORE UPDATE OF attached_at, wake_delivered_at, current_read_receipt_json,
-  outcome_receipt_json, completion_receipt_json ON agent_runs
+  outcome_receipt_json, completion_at, completion_receipt_json, launcher_diagnostic_json,
+  runtime_ids_json, error ON agent_runs
 WHEN (OLD.attached_at IS NOT NULL AND NEW.attached_at IS NOT OLD.attached_at)
   OR (OLD.wake_delivered_at IS NOT NULL AND NEW.wake_delivered_at IS NOT OLD.wake_delivered_at)
   OR (OLD.current_read_receipt_json IS NOT NULL
       AND NEW.current_read_receipt_json IS NOT OLD.current_read_receipt_json)
   OR (OLD.outcome_receipt_json IS NOT NULL
       AND NEW.outcome_receipt_json IS NOT OLD.outcome_receipt_json)
+  OR (OLD.completion_at IS NOT NULL AND NEW.completion_at IS NOT OLD.completion_at)
   OR (OLD.completion_receipt_json IS NOT NULL
       AND NEW.completion_receipt_json IS NOT OLD.completion_receipt_json)
+  OR ((OLD.wake_delivered_at IS NOT NULL OR OLD.completion_receipt_json IS NOT NULL)
+      AND NEW.launcher_diagnostic_json IS NOT OLD.launcher_diagnostic_json)
+  OR ((OLD.wake_delivered_at IS NOT NULL OR OLD.completion_receipt_json IS NOT NULL)
+      AND NEW.runtime_ids_json IS NOT OLD.runtime_ids_json)
+  OR (OLD.completion_receipt_json IS NOT NULL AND NEW.error IS NOT OLD.error)
 BEGIN SELECT RAISE(ABORT, 'agent run evidence is write-once'); END;
 
 CREATE TABLE artifact_roots (

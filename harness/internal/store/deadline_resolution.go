@@ -88,7 +88,7 @@ func (s *Store) ResolveDeadlineWinner(ctx context.Context, spec DeadlineResoluti
 	if err := requireOperationFence(operation, spec.Action.LeaseOwner, trustedNow); err != nil {
 		return DeadlineResolutionResult{}, err
 	}
-	if err := requireOperationAgentRun(ctx, tx, operation); err != nil {
+	if err := requireOperationAgentRun(ctx, tx, operation, true); err != nil {
 		return DeadlineResolutionResult{}, err
 	}
 

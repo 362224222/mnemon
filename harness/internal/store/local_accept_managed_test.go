@@ -239,10 +239,9 @@ func assertManagedAcceptanceRun(t *testing.T, st *Store, runID model.RunID, rece
 		t.Fatalf("completed managed Run = (%#v, %v)", run, err)
 	}
 	outcome, outcomeOK := run.OutcomeReceipt()
-	completion, completionOK := run.CompletionReceipt()
-	if !outcomeOK || !completionOK || outcome.String() != receipt.String() ||
-		completion.String() != receipt.String() {
-		t.Fatalf("managed Run receipts = (%s,%v) (%s,%v), want %s",
-			outcome, outcomeOK, completion, completionOK, receipt)
+	_, completionOK := run.CompletionReceipt()
+	if !outcomeOK || completionOK || outcome.String() != receipt.String() {
+		t.Fatalf("managed Run receipts = outcome (%s,%v) completion present %v, want independent outcome %s",
+			outcome, outcomeOK, completionOK, receipt)
 	}
 }

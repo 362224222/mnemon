@@ -202,6 +202,47 @@ func TestActivateProfileDisabledButBusyRemainsDisabled(t *testing.T) {
 	}
 }
 
+func TestProfileAuthorityBusyTracksOnlyUnfinishedManagedTerminalRuntime(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		launcher string
+		wantBusy bool
+	}{
+		{name: "managed", launcher: "mnemond-wake", wantBusy: true},
+		{name: "external", launcher: "external", wantBusy: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			st := openTestStore(t)
+			node, disabled := bootstrapValues(t, "peer-terminal-"+test.name,
+				"principal-terminal-"+test.name, "/workspace/terminal/"+test.name)
+			_, active := activateTestNode(t, st, node, disabled)
+			finished := active.UpdatedAt().Add(time.Second)
+			if _, err := st.db.Exec(`INSERT INTO agent_runs(run_id,profile_id,cause_json,launcher,
+				runtime_kind,launcher_diagnostic_json,runtime_ids_json,status,started_at,finished_at,
+				outcome_receipt_json) VALUES(?,?, '{}',?,?,'{}','{}','outcome_accepted',?,?, '{}')`,
+				"run-terminal-"+test.name, active.ID().String(), test.launcher,
+				string(active.Runtime()), storeTime(active.UpdatedAt()), storeTime(finished)); err != nil {
+				t.Fatal(err)
+			}
+			busy, err := profileAuthorityBusy(context.Background(), st.db, active.ID())
+			if err != nil || busy != test.wantBusy {
+				t.Fatalf("profileAuthorityBusy() = (%v, %v), want %v", busy, err, test.wantBusy)
+			}
+			if test.launcher == "mnemond-wake" {
+				completed := finished.Add(time.Second)
+				if _, err := st.db.Exec(`UPDATE agent_runs SET completion_at=?,completion_receipt_json='{}'
+					WHERE run_id=?`, storeTime(completed), "run-terminal-"+test.name); err != nil {
+					t.Fatal(err)
+				}
+				busy, err = profileAuthorityBusy(context.Background(), st.db, active.ID())
+				if err != nil || busy {
+					t.Fatalf("completed managed profileAuthorityBusy() = (%v, %v)", busy, err)
+				}
+			}
+		})
+	}
+}
+
 func activationProfile(t *testing.T, base model.Profile, host model.HostKind, runtime model.RuntimeKind,
 	asset string, budget model.JSON, updated time.Time,
 ) model.Profile {
@@ -264,13 +305,18 @@ func insertActivationStartedOperation(t *testing.T, st *Store, _ model.Node, pro
 func insertActivationRunWithStatus(t *testing.T, st *Store, profile model.Profile, runID, status string) {
 	t.Helper()
 	finishedAt := any(nil)
+	completionAt, completionReceipt := any(nil), any(nil)
 	if status != "starting" && status != "running" {
 		finishedAt = storeTime(profile.UpdatedAt())
 	}
+	if status == "runtime_finished" {
+		completionAt, completionReceipt = finishedAt, []byte(`{}`)
+	}
 	_, err := st.db.Exec(`INSERT INTO agent_runs(run_id,profile_id,cause_json,launcher,runtime_kind,
-		launcher_diagnostic_json,runtime_ids_json,status,started_at,finished_at)
-		VALUES(?,?,'{}','test',?,'{}','{}',?,?,?)`, runID, profile.ID().String(), string(profile.Runtime()),
-		status, storeTime(profile.UpdatedAt()), finishedAt)
+		launcher_diagnostic_json,runtime_ids_json,status,started_at,finished_at,completion_at,
+		completion_receipt_json)
+		VALUES(?,?,'{}','test',?,'{}','{}',?,?,?,?,?)`, runID, profile.ID().String(), string(profile.Runtime()),
+		status, storeTime(profile.UpdatedAt()), finishedAt, completionAt, completionReceipt)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -388,7 +388,8 @@ func newWakeAgentRun(id model.RunID, profile model.Profile, handling model.Handl
 	handlingID := handling.ID()
 	return model.NewAgentRun(model.AgentRunSpec{
 		ID: id, ProfileID: profile.ID(), HandlingID: &handlingID, Cause: cause,
-		HandlingAttempt: handling.Attempts(), ClaimFenceHash: &token, LeaseUntil: &leaseUntil,
+		HandlingAttempt: handling.Attempts(), HandlingRecovery: handling.RecoveryCount(),
+		ClaimFenceHash: &token, LeaseUntil: &leaseUntil,
 		AttachmentTokenHash: &token, AttachmentExpiresAt: &leaseUntil,
 		Launcher: "mnemond-wake", Runtime: profile.Runtime(), LauncherDiagnostic: empty,
 		RuntimeIDs: empty, Status: model.AgentRunStarting, StartedAt: at,

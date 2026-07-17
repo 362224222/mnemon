@@ -365,9 +365,9 @@ func requireActiveAgentRunForClaim(ctx context.Context, tx *sql.Tx, profile mode
 	}
 	var runText string
 	err := tx.QueryRowContext(ctx, `SELECT run_id FROM agent_runs WHERE profile_id=? AND handling_id=?
-		AND handling_attempt=? AND claim_fence_hash=? AND lease_until=? AND runtime_kind=?
+		AND handling_attempt=? AND handling_recovery=? AND claim_fence_hash=? AND lease_until=? AND runtime_kind=?
 		AND status IN ('starting','running','runtime_finished')`, profile.ID().String(), handling.ID().String(),
-		handling.Attempts(), fence.Bytes(), storeTime(lease), string(profile.Runtime())).Scan(&runText)
+		handling.Attempts(), handling.RecoveryCount(), fence.Bytes(), storeTime(lease), string(profile.Runtime())).Scan(&runText)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.RunID{}, fmt.Errorf("%w: claimed Handling has no exact active AgentRun", ErrAgentClaimInvariant)
 	}
@@ -387,6 +387,7 @@ func requireActiveAgentRunForClaim(ctx context.Context, tx *sql.Tx, profile mode
 	runLease, hasLease := run.LeaseUntil()
 	if run.ProfileID() != profile.ID() || run.Runtime() != profile.Runtime() || !run.Status().OperationAuthority() ||
 		!hasHandling || runHandling != handling.ID() || run.HandlingAttempt() != handling.Attempts() ||
+		run.HandlingRecovery() != handling.RecoveryCount() ||
 		!hasFence || runFence != fence || !hasLease || !runLease.Equal(lease) {
 		return model.RunID{}, fmt.Errorf("%w: active AgentRun snapshot differs from Handling", ErrAgentClaimInvariant)
 	}
@@ -426,10 +427,12 @@ func finishExpiredAgentRun(ctx context.Context, tx *sql.Tx, runID model.RunID, h
 	fence, _ := handling.ClaimTokenHash()
 	lease, _ := handling.LeaseUntil()
 	result, err := tx.ExecContext(ctx, `UPDATE agent_runs SET status=?, finished_at=COALESCE(finished_at,?),
-		error=COALESCE(error,?) WHERE run_id=? AND profile_id=? AND handling_id=? AND handling_attempt=?
-		AND claim_fence_hash=? AND lease_until=? AND status IN ('starting','running','runtime_finished')`,
+		error=CASE WHEN completion_receipt_json IS NULL THEN COALESCE(error,?) ELSE error END
+		WHERE run_id=? AND profile_id=? AND handling_id=? AND handling_attempt=?
+		AND handling_recovery=? AND claim_fence_hash=? AND lease_until=?
+		AND status IN ('starting','running','runtime_finished')`,
 		string(status), storeTime(at), message, runID.String(), handling.ProfileID().String(), handling.ID().String(),
-		handling.Attempts(), fence.Bytes(), storeTime(lease))
+		handling.Attempts(), handling.RecoveryCount(), fence.Bytes(), storeTime(lease))
 	if err != nil {
 		return fmt.Errorf("claim Agent current: finish expired AgentRun: %w", err)
 	}
@@ -517,7 +520,8 @@ func newExternalCurrentAgentRun(id model.RunID, profile model.Profile, handling 
 	handlingID := handling.ID()
 	return model.NewAgentRun(model.AgentRunSpec{
 		ID: id, ProfileID: profile.ID(), HandlingID: &handlingID, Cause: cause,
-		HandlingAttempt: handling.Attempts(), ClaimFenceHash: &fence, LeaseUntil: &leaseUntil,
+		HandlingAttempt: handling.Attempts(), HandlingRecovery: handling.RecoveryCount(),
+		ClaimFenceHash: &fence, LeaseUntil: &leaseUntil,
 		Launcher: "external", Runtime: profile.Runtime(), LauncherDiagnostic: empty,
 		RuntimeIDs: empty, Status: model.AgentRunRunning, StartedAt: at,
 	})
@@ -540,11 +544,11 @@ func insertAgentRun(ctx context.Context, tx *sql.Tx, run model.AgentRun) error {
 		}
 	}
 	_, err := tx.ExecContext(ctx, `INSERT INTO agent_runs(run_id,profile_id,handling_id,cause_json,
-		handling_attempt,claim_fence_hash,lease_until,attachment_token_hash,attachment_expires_at,
+		handling_attempt,handling_recovery,claim_fence_hash,lease_until,attachment_token_hash,attachment_expires_at,
 		attached_at,launcher,runtime_kind,
 		launcher_diagnostic_json,runtime_ids_json,status,started_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, run.ID().String(), run.ProfileID().String(), handlingID,
-		run.Cause().Bytes(), handlingAttempt, fence, lease, attachmentHash, attachmentExpires, attachedAt,
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, run.ID().String(), run.ProfileID().String(), handlingID,
+		run.Cause().Bytes(), handlingAttempt, run.HandlingRecovery(), fence, lease, attachmentHash, attachmentExpires, attachedAt,
 		run.Launcher(), string(run.Runtime()),
 		run.LauncherDiagnostic().Bytes(), run.RuntimeIDs().Bytes(), string(run.Status()), storeTime(run.StartedAt()))
 	if err != nil {
@@ -557,22 +561,23 @@ func readAgentRun(ctx context.Context, q rowQuerier, id model.RunID) (model.Agen
 	return scanAgentRun(q.QueryRowContext(ctx, agentRunSelect+" WHERE run_id=?", id.String()))
 }
 
-const agentRunSelect = `SELECT run_id,profile_id,handling_id,cause_json,handling_attempt,
+const agentRunSelect = `SELECT run_id,profile_id,handling_id,cause_json,handling_attempt,handling_recovery,
 	claim_fence_hash,lease_until,attachment_token_hash,attachment_expires_at,attached_at,
 	launcher,runtime_kind,launcher_diagnostic_json,runtime_ids_json,status,wake_delivered_at,
-	started_at,finished_at,current_read_receipt_json,outcome_receipt_json,completion_receipt_json,error
+	started_at,finished_at,completion_at,current_read_receipt_json,outcome_receipt_json,completion_receipt_json,error
 	FROM agent_runs`
 
 func scanAgentRun(row *sql.Row) (model.AgentRun, error) {
 	var runText, profileText, launcher, runtimeText, statusText, startedText string
-	var handlingText, leaseText, attachmentExpiresText, attachedText, wakeText, finishedText, errorText sql.NullString
+	var handlingText, leaseText, attachmentExpiresText, attachedText, wakeText, finishedText, completionText, errorText sql.NullString
 	var attempt sql.NullInt64
+	var recovery int64
 	var causeBytes, fenceBytes, attachmentHashBytes, diagnosticBytes, runtimeIDsBytes []byte
 	var currentBytes, outcomeBytes, completionBytes []byte
-	if err := row.Scan(&runText, &profileText, &handlingText, &causeBytes, &attempt, &fenceBytes,
+	if err := row.Scan(&runText, &profileText, &handlingText, &causeBytes, &attempt, &recovery, &fenceBytes,
 		&leaseText, &attachmentHashBytes, &attachmentExpiresText, &attachedText, &launcher,
 		&runtimeText, &diagnosticBytes, &runtimeIDsBytes, &statusText, &wakeText, &startedText,
-		&finishedText, &currentBytes, &outcomeBytes, &completionBytes, &errorText); err != nil {
+		&finishedText, &completionText, &currentBytes, &outcomeBytes, &completionBytes, &errorText); err != nil {
 		return model.AgentRun{}, err
 	}
 	runID, err := model.ParseRunID(runText)
@@ -607,7 +612,8 @@ func scanAgentRun(row *sql.Row) (model.AgentRun, error) {
 		if err != nil {
 			return model.AgentRun{}, err
 		}
-		if !attempt.Valid || attempt.Int64 <= 0 || attempt.Int64 > int64(^uint32(0)) {
+		if !attempt.Valid || attempt.Int64 <= 0 || attempt.Int64 > int64(^uint32(0)) ||
+			recovery < 0 || recovery > int64(^uint32(0)) {
 			return model.AgentRun{}, errors.New("AgentRun has invalid handling attempt")
 		}
 		fence, err := model.DigestFromBytes(fenceBytes)
@@ -618,9 +624,9 @@ func scanAgentRun(row *sql.Row) (model.AgentRun, error) {
 		if err != nil || lease == nil {
 			return model.AgentRun{}, errors.New("AgentRun has invalid claim lease")
 		}
-		spec.HandlingID, spec.HandlingAttempt, spec.ClaimFenceHash, spec.LeaseUntil =
-			&handlingID, uint32(attempt.Int64), &fence, lease
-	} else if attempt.Valid || len(fenceBytes) != 0 || leaseText.Valid {
+		spec.HandlingID, spec.HandlingAttempt, spec.HandlingRecovery, spec.ClaimFenceHash, spec.LeaseUntil =
+			&handlingID, uint32(attempt.Int64), uint32(recovery), &fence, lease
+	} else if attempt.Valid || recovery != 0 || len(fenceBytes) != 0 || leaseText.Valid {
 		return model.AgentRun{}, errors.New("AgentRun has partial claim snapshot")
 	}
 	if len(attachmentHashBytes) != 0 || attachmentExpiresText.Valid || attachedText.Valid {
@@ -642,6 +648,9 @@ func scanAgentRun(row *sql.Row) (model.AgentRun, error) {
 		return model.AgentRun{}, err
 	}
 	if spec.FinishedAt, err = parseOptionalStoreTime(finishedText); err != nil {
+		return model.AgentRun{}, err
+	}
+	if spec.CompletionAt, err = parseOptionalStoreTime(completionText); err != nil {
 		return model.AgentRun{}, err
 	}
 	if spec.CurrentReadReceipt, err = optionalExactCanonicalJSON(currentBytes); err != nil {

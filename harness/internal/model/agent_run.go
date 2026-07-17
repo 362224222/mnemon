@@ -45,6 +45,7 @@ type AgentRunSpec struct {
 	HandlingID          *HandlingID
 	Cause               JSON
 	HandlingAttempt     uint32
+	HandlingRecovery    uint32
 	ClaimFenceHash      *Digest
 	LeaseUntil          *time.Time
 	AttachmentTokenHash *Digest
@@ -58,6 +59,7 @@ type AgentRunSpec struct {
 	WakeDeliveredAt     *time.Time
 	StartedAt           time.Time
 	FinishedAt          *time.Time
+	CompletionAt        *time.Time
 	CurrentReadReceipt  *JSON
 	OutcomeReceipt      *JSON
 	CompletionReceipt   *JSON
@@ -82,6 +84,8 @@ type AgentRun struct {
 	hasWakeDeliveredAt    bool
 	finishedAt            time.Time
 	hasFinishedAt         bool
+	completionAt          time.Time
+	hasCompletionAt       bool
 	currentReadReceipt    JSON
 	hasCurrentReadReceipt bool
 	outcomeReceipt        JSON
@@ -121,7 +125,7 @@ func NewAgentRun(spec AgentRunSpec) (AgentRun, error) {
 	result.spec.StartedAt = startedAt
 	result.spec.HandlingID, result.spec.ClaimFenceHash, result.spec.LeaseUntil = nil, nil, nil
 	result.spec.AttachmentTokenHash, result.spec.AttachmentExpiresAt, result.spec.AttachedAt = nil, nil, nil
-	result.spec.WakeDeliveredAt, result.spec.FinishedAt = nil, nil
+	result.spec.WakeDeliveredAt, result.spec.FinishedAt, result.spec.CompletionAt = nil, nil, nil
 	result.spec.CurrentReadReceipt, result.spec.OutcomeReceipt, result.spec.CompletionReceipt = nil, nil, nil
 
 	if spec.HandlingID != nil {
@@ -138,7 +142,8 @@ func NewAgentRun(spec AgentRunSpec) (AgentRun, error) {
 		}
 		result.handlingID, result.hasHandling = *spec.HandlingID, true
 		result.claimFenceHash, result.leaseUntil = *spec.ClaimFenceHash, leaseUntil
-	} else if spec.HandlingAttempt != 0 || spec.ClaimFenceHash != nil || spec.LeaseUntil != nil {
+	} else if spec.HandlingAttempt != 0 || spec.HandlingRecovery != 0 ||
+		spec.ClaimFenceHash != nil || spec.LeaseUntil != nil {
 		return AgentRun{}, invariant("operation-scoped AgentRun cannot carry a handling claim snapshot")
 	}
 
@@ -181,6 +186,22 @@ func NewAgentRun(spec AgentRunSpec) (AgentRun, error) {
 		}
 		result.finishedAt, result.hasFinishedAt = value, true
 	}
+	if result.hasWakeDeliveredAt && result.hasFinishedAt && result.finishedAt.Before(result.wakeDeliveredAt) {
+		return AgentRun{}, invariant("AgentRun finish precedes wake delivery")
+	}
+	if spec.CompletionAt != nil {
+		value, err := canonicalAgentRunEvidenceTime("Runtime completion", *spec.CompletionAt, startedAt)
+		if err != nil {
+			return AgentRun{}, err
+		}
+		if result.hasWakeDeliveredAt && value.Before(result.wakeDeliveredAt) {
+			return AgentRun{}, invariant("AgentRun Runtime completion precedes wake delivery")
+		}
+		if result.hasFinishedAt && value.Before(result.finishedAt) {
+			return AgentRun{}, invariant("AgentRun Runtime completion precedes finish")
+		}
+		result.completionAt, result.hasCompletionAt = value, true
+	}
 	if spec.Status == AgentRunStarting || spec.Status == AgentRunRunning {
 		if result.hasFinishedAt {
 			return AgentRun{}, invariant("active AgentRun cannot have a finish time")
@@ -204,6 +225,16 @@ func NewAgentRun(spec AgentRunSpec) (AgentRun, error) {
 		"AgentRun completion receipt", spec.CompletionReceipt)
 	if receiptErr != nil {
 		return AgentRun{}, receiptErr
+	}
+	if result.hasCompletionAt != result.hasCompletionReceipt {
+		return AgentRun{}, invariant("AgentRun Runtime completion time and receipt must be recorded together")
+	}
+	if (spec.Status == AgentRunStarting || spec.Status == AgentRunRunning) && result.hasCompletionAt {
+		return AgentRun{}, invariant("active AgentRun cannot have Runtime completion evidence")
+	}
+	if spec.Status == AgentRunRuntimeFinished &&
+		(!result.hasCompletionAt || !result.completionAt.Equal(result.finishedAt)) {
+		return AgentRun{}, invariant("runtime_finished AgentRun requires completion at its finish time")
 	}
 	return result, nil
 }
@@ -241,6 +272,7 @@ func (r AgentRun) ProfileID() ProfileID                { return r.spec.ProfileID
 func (r AgentRun) Cause() JSON                         { return r.spec.Cause }
 func (r AgentRun) HandlingID() (HandlingID, bool)      { return r.handlingID, r.hasHandling }
 func (r AgentRun) HandlingAttempt() uint32             { return r.spec.HandlingAttempt }
+func (r AgentRun) HandlingRecovery() uint32            { return r.spec.HandlingRecovery }
 func (r AgentRun) ClaimFenceHash() (Digest, bool)      { return r.claimFenceHash, r.hasHandling }
 func (r AgentRun) LeaseUntil() (time.Time, bool)       { return r.leaseUntil, r.hasHandling }
 func (r AgentRun) AttachmentTokenHash() (Digest, bool) { return r.attachmentTokenHash, r.hasAttachment }
@@ -256,6 +288,7 @@ func (r AgentRun) Status() AgentRunStatus             { return r.spec.Status }
 func (r AgentRun) WakeDeliveredAt() (time.Time, bool) { return r.wakeDeliveredAt, r.hasWakeDeliveredAt }
 func (r AgentRun) StartedAt() time.Time               { return r.spec.StartedAt }
 func (r AgentRun) FinishedAt() (time.Time, bool)      { return r.finishedAt, r.hasFinishedAt }
+func (r AgentRun) CompletionAt() (time.Time, bool)    { return r.completionAt, r.hasCompletionAt }
 func (r AgentRun) CurrentReadReceipt() (JSON, bool) {
 	return r.currentReadReceipt, r.hasCurrentReadReceipt
 }

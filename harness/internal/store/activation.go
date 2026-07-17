@@ -148,7 +148,10 @@ func profileAuthorityBusy(ctx context.Context, q rowQuerier, id model.ProfileID)
 	err := q.QueryRowContext(ctx, `SELECT EXISTS(
 		SELECT 1 FROM agent_handlings WHERE profile_id = ? AND status = 'claimed'
 		UNION ALL
-		SELECT 1 FROM agent_runs WHERE profile_id = ? AND status IN ('starting','running','runtime_finished')
+		SELECT 1 FROM agent_runs WHERE profile_id = ? AND (
+			status IN ('starting','running','runtime_finished')
+			OR (launcher='mnemond-wake' AND completion_receipt_json IS NULL)
+		)
 		UNION ALL
 		SELECT 1 FROM operations WHERE profile_id = ? AND status = 'started'
 	)`, id.String(), id.String(), id.String()).Scan(&busy)

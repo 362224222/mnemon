@@ -180,6 +180,34 @@ func TestReserveOperationRequiresActiveAgentRunAuthority(t *testing.T) {
 	}
 }
 
+func TestReserveOperationRuntimeFinishedAllowsOnlyExistingIdentity(t *testing.T) {
+	st := openTestStore(t)
+	node, profile := bootstrapValues(t, "peer-operation-finished", "principal-operation-finished",
+		"/workspace/operation-finished")
+	_, _ = activateTestNode(t, st, node, profile)
+	now := time.Date(2026, 7, 16, 13, 0, 0, 0, time.UTC)
+	insertOperationAgentRun(t, st, profile, "run-operation-finished", "running", now)
+	started := startedOperation(t, "operation-before-finish", "key-before-finish", "request-before-finish",
+		"run-operation-finished", "owner-before-finish", now, nil)
+	if _, err := st.ReserveOperation(context.Background(), started, now); err != nil {
+		t.Fatal(err)
+	}
+	finishedAt := now.Add(time.Second)
+	if _, err := st.db.Exec(`UPDATE agent_runs SET status='runtime_finished',finished_at=?,
+		completion_at=?,completion_receipt_json='{}' WHERE run_id=?`,
+		storeTime(finishedAt), storeTime(finishedAt), started.AgentRunID().String()); err != nil {
+		t.Fatal(err)
+	}
+	if replay, err := st.ReserveOperation(context.Background(), started, finishedAt); err != nil || !replay.Replayed || !replay.Acquired {
+		t.Fatalf("existing operation at runtime_finished = (%#v, %v)", replay, err)
+	}
+	fresh := startedOperation(t, "operation-after-finish", "key-after-finish", "request-after-finish",
+		"run-operation-finished", "owner-after-finish", finishedAt, nil)
+	if _, err := st.ReserveOperation(context.Background(), fresh, finishedAt); err == nil {
+		t.Fatal("fresh generic operation was admitted after runtime_finished")
+	}
+}
+
 func TestReserveOperationRejectsActiveAssetAuthorityDrift(t *testing.T) {
 	t.Parallel()
 	st := openTestStore(t)

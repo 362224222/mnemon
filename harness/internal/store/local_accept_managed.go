@@ -170,27 +170,29 @@ func completeManagedAcceptance(ctx context.Context, tx *sql.Tx, operation model.
 			claim_owner=NULL,claim_token_hash=NULL,lease_until=NULL,last_disposition='teamwork_action',
 			outcome_event_id=?,last_error=NULL,updated_at=? WHERE handling_id=? AND profile_id=?
 			AND event_id=? AND status='claimed' AND claim_owner=? AND claim_token_hash=?
-			AND lease_until=? AND attempts=? AND updated_at<=?`, events[0].ID().String(), storeTime(trustedNow),
+			AND lease_until=? AND attempts=? AND recovery_count=? AND updated_at<=?`, events[0].ID().String(), storeTime(trustedNow),
 			authority.handling.ID().String(), authority.handling.ProfileID().String(),
 			authority.handling.EventID().String(), authority.handling.ClaimOwner(), fence.Bytes(),
-			storeTime(lease), authority.handling.Attempts(), storeTime(trustedNow))
+			storeTime(lease), authority.handling.Attempts(), authority.handling.RecoveryCount(), storeTime(trustedNow))
 		if err != nil || exactlyOne(result) != nil {
 			return fmt.Errorf("%w: Handling completion fence failed", ErrManagedAcceptanceInvariant)
 		}
 	}
 	query := `UPDATE agent_runs SET status='outcome_accepted',finished_at=COALESCE(finished_at,?),
-		outcome_receipt_json=?,completion_receipt_json=?,error=NULL WHERE run_id=? AND profile_id=?
+		outcome_receipt_json=?,error=NULL
+		WHERE run_id=? AND profile_id=?
 		AND status IN ('starting','running','runtime_finished') AND outcome_receipt_json IS NULL
-		AND completion_receipt_json IS NULL`
-	args := []any{storeTime(trustedNow), receipt.Bytes(), receipt.Bytes(), authority.run.ID().String(),
+		`
+	args := []any{storeTime(trustedNow), receipt.Bytes(), authority.run.ID().String(),
 		authority.run.ProfileID().String()}
 	if authority.hasHandling {
 		fence, _ := authority.run.ClaimFenceHash()
 		lease, _ := authority.run.LeaseUntil()
-		query += ` AND handling_id=? AND handling_attempt=? AND claim_fence_hash=? AND lease_until=?
+		query += ` AND handling_id=? AND handling_attempt=? AND handling_recovery=?
+			AND claim_fence_hash=? AND lease_until=?
 			AND current_read_receipt_json IS NOT NULL`
 		args = append(args, authority.handling.ID().String(), authority.run.HandlingAttempt(),
-			fence.Bytes(), storeTime(lease))
+			authority.run.HandlingRecovery(), fence.Bytes(), storeTime(lease))
 	} else {
 		query += ` AND handling_id IS NULL AND current_read_receipt_json IS NULL`
 	}
@@ -209,9 +211,7 @@ func validateManagedTerminalAcceptance(ctx context.Context, tx *sql.Tx, operatio
 		return fmt.Errorf("%w: committed operation lacks completed AgentRun", ErrManagedAcceptanceInvariant)
 	}
 	outcome, hasOutcome := run.OutcomeReceipt()
-	completion, hasCompletion := run.CompletionReceipt()
-	if !hasOutcome || !hasCompletion || outcome.String() != receipt.String() ||
-		completion.String() != receipt.String() {
+	if !hasOutcome || outcome.String() != receipt.String() {
 		return fmt.Errorf("%w: AgentRun receipts differ from operation", ErrManagedAcceptanceInvariant)
 	}
 	contextHash, hasContext := operation.ContextHash()
@@ -227,6 +227,10 @@ func validateManagedTerminalAcceptance(ctx context.Context, tx *sql.Tx, operatio
 	if err != nil || handling.Status() != model.HandlingCompleted ||
 		handling.LastDisposition() != "teamwork_action" || handling.Attempts() != run.HandlingAttempt() {
 		return fmt.Errorf("%w: committed operation lacks completed Handling",
+			ErrManagedAcceptanceInvariant)
+	}
+	if handling.RecoveryCount() != run.HandlingRecovery() {
+		return fmt.Errorf("%w: committed Handling recovery generation differs",
 			ErrManagedAcceptanceInvariant)
 	}
 	if fence, ok := run.ClaimFenceHash(); !ok || fence != contextHash {

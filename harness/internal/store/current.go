@@ -573,7 +573,8 @@ func requireExactCurrentClaim(run model.AgentRun, handling model.Handling, token
 		(run.Status() != model.AgentRunStarting && run.Status() != model.AgentRunRunning) ||
 		handling.Status() != model.HandlingClaimed ||
 		run.ProfileID() != handling.ProfileID() || handlingID != handling.ID() ||
-		run.HandlingAttempt() != handling.Attempts() || !sameCurrentDigest(runFence, token) ||
+		run.HandlingAttempt() != handling.Attempts() ||
+		run.HandlingRecovery() != handling.RecoveryCount() || !sameCurrentDigest(runFence, token) ||
 		!sameCurrentDigest(handlingFence, token) ||
 		!runLease.Equal(handlingLease) || !runLease.After(at) {
 		return ErrCurrentReadStale
@@ -803,9 +804,10 @@ func writeCurrentReadEvidence(ctx context.Context, tx *sql.Tx, run model.AgentRu
 	lease, _ := run.LeaseUntil()
 	result, err := tx.ExecContext(ctx, `UPDATE agent_handlings SET last_disposition='read',updated_at=?
 		WHERE handling_id=? AND profile_id=? AND event_id=? AND status='claimed'
-		AND claim_token_hash=? AND lease_until=? AND attempts=? AND updated_at<=?`,
+		AND claim_token_hash=? AND lease_until=? AND attempts=? AND recovery_count=? AND updated_at<=?`,
 		storeTime(receipt.ReadAt()), handling.ID().String(), handling.ProfileID().String(),
-		handling.EventID().String(), token.Bytes(), storeTime(lease), handling.Attempts(), storeTime(receipt.ReadAt()))
+		handling.EventID().String(), token.Bytes(), storeTime(lease), handling.Attempts(),
+		handling.RecoveryCount(), storeTime(receipt.ReadAt()))
 	if err != nil {
 		return fmt.Errorf("finalize Agent current read: mark Handling read: %w", err)
 	}
@@ -814,9 +816,10 @@ func writeCurrentReadEvidence(ctx context.Context, tx *sql.Tx, run model.AgentRu
 	}
 	result, err = tx.ExecContext(ctx, `UPDATE agent_runs SET current_read_receipt_json=?
 		WHERE run_id=? AND profile_id=? AND handling_id=? AND handling_attempt=?
-		AND claim_fence_hash=? AND lease_until=? AND status IN ('starting','running')
+		AND handling_recovery=? AND claim_fence_hash=? AND lease_until=? AND status IN ('starting','running')
 		AND current_read_receipt_json IS NULL`, receipt.CanonicalJSON().Bytes(), run.ID().String(),
-		run.ProfileID().String(), handling.ID().String(), run.HandlingAttempt(), fence.Bytes(), storeTime(lease))
+		run.ProfileID().String(), handling.ID().String(), run.HandlingAttempt(), run.HandlingRecovery(),
+		fence.Bytes(), storeTime(lease))
 	if err != nil {
 		return fmt.Errorf("finalize Agent current read: persist receipt: %w", err)
 	}

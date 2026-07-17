@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -209,12 +210,25 @@ func validateManagedTerminalResolution(ctx context.Context, tx *sql.Tx, operatio
 			ErrManagedResolutionInvariant)
 	}
 	handling, err := readAgentHandling(ctx, tx, handlingID)
-	if err != nil || handling.Attempts() != run.HandlingAttempt() {
+	if err != nil || handling.ProfileID() != run.ProfileID() {
 		return fmt.Errorf("%w: terminal resolution Handling is unavailable",
 			ErrManagedResolutionInvariant)
 	}
+	outcome, hasOutcome := run.OutcomeReceipt()
+	if !hasOutcome || outcome.String() != receipt.String() {
+		return fmt.Errorf("%w: terminal resolution receipts differ",
+			ErrManagedResolutionInvariant)
+	}
+	if operation.Kind() == model.OperationResolveRetry {
+		if err := validateManagedRetryHistory(ctx, tx, operation, run, handling, receipt); err != nil {
+			return err
+		}
+		return nil
+	}
 	want, err := managedResolutionTerminalShape(operation.Kind())
-	if err != nil || handling.Status() != want.handlingStatus ||
+	if err != nil || handling.Attempts() != run.HandlingAttempt() ||
+		handling.RecoveryCount() != run.HandlingRecovery() ||
+		handling.Status() != want.handlingStatus ||
 		handling.LastDisposition() != want.handlingDisposition || run.Status() != want.runStatus {
 		return fmt.Errorf("%w: terminal resolution lifecycle differs",
 			ErrManagedResolutionInvariant)
@@ -223,11 +237,85 @@ func validateManagedTerminalResolution(ctx context.Context, tx *sql.Tx, operatio
 		return fmt.Errorf("%w: terminal resolution retained claim authority",
 			ErrManagedResolutionInvariant)
 	}
-	outcome, hasOutcome := run.OutcomeReceipt()
-	completion, hasCompletion := run.CompletionReceipt()
-	if !hasOutcome || !hasCompletion || outcome.String() != receipt.String() ||
-		completion.String() != receipt.String() {
-		return fmt.Errorf("%w: terminal resolution receipts differ",
+	return nil
+}
+
+func validateManagedRetryHistory(ctx context.Context, tx *sql.Tx, operation model.Operation,
+	run model.AgentRun, handling model.Handling, receipt model.JSON,
+) error {
+	var envelope struct {
+		Action   model.OperationKind `json:"action"`
+		Handling struct {
+			Status string `json:"status"`
+		} `json:"handling"`
+		OperationID string `json:"operation_id"`
+		Status      string `json:"status"`
+	}
+	if err := json.Unmarshal(receipt.Bytes(), &envelope); err != nil ||
+		envelope.Action != model.OperationResolveRetry || envelope.OperationID != operation.ID().String() ||
+		envelope.Status != "resolved" {
+		return fmt.Errorf("%w: terminal retry receipt is invalid", ErrManagedResolutionInvariant)
+	}
+	want := managedResolutionTransition{}
+	switch envelope.Handling.Status {
+	case "requeued":
+		want = managedResolutionTransition{handlingStatus: model.HandlingPending,
+			handlingDisposition: "retry", runStatus: model.AgentRunRequeued}
+	case "dead":
+		want = managedResolutionTransition{handlingStatus: model.HandlingDead,
+			handlingDisposition: "attempt_budget_exhausted", runStatus: model.AgentRunDead}
+	default:
+		return fmt.Errorf("%w: terminal retry receipt has an unknown lifecycle",
+			ErrManagedResolutionInvariant)
+	}
+	if run.Status() != want.runStatus || handling.RecoveryCount() < run.HandlingRecovery() ||
+		(handling.RecoveryCount() == run.HandlingRecovery() &&
+			handling.Attempts() < run.HandlingAttempt()) {
+		return fmt.Errorf("%w: terminal retry lifecycle regressed",
+			ErrManagedResolutionInvariant)
+	}
+	if handling.RecoveryCount() == run.HandlingRecovery() &&
+		handling.Attempts() == run.HandlingAttempt() {
+		// Lowering the active attempt budget may monotonically reseal an
+		// already-requeued Handling without rewriting the historical Run or
+		// its committed retry receipt. That successor state remains valid
+		// replay evidence for the original operation.
+		budgetResealed := envelope.Handling.Status == "requeued" &&
+			handling.Status() == model.HandlingDead &&
+			handling.LastDisposition() == "attempt_budget_exhausted" &&
+			handling.LastError() == "maximum handling attempts exhausted"
+		if budgetResealed {
+			if _, claimed := handling.ClaimTokenHash(); claimed {
+				return fmt.Errorf("%w: terminal retry retained claim authority",
+					ErrManagedResolutionInvariant)
+			}
+			return nil
+		}
+		if handling.Status() != want.handlingStatus ||
+			handling.LastDisposition() != want.handlingDisposition {
+			return fmt.Errorf("%w: terminal retry lifecycle differs",
+				ErrManagedResolutionInvariant)
+		}
+		if _, claimed := handling.ClaimTokenHash(); claimed {
+			return fmt.Errorf("%w: terminal retry retained claim authority",
+				ErrManagedResolutionInvariant)
+		}
+		return nil
+	}
+	if handling.Attempts() == 0 {
+		if handling.Status() != model.HandlingPending ||
+			handling.LastDisposition() != "setup_recovered" {
+			return fmt.Errorf("%w: terminal retry recovery has no setup evidence",
+				ErrManagedResolutionInvariant)
+		}
+		return nil
+	}
+	var successor int
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM agent_runs
+		WHERE profile_id=? AND handling_id=? AND handling_recovery=? AND handling_attempt=?)`,
+		handling.ProfileID().String(), handling.ID().String(), handling.RecoveryCount(),
+		handling.Attempts()).Scan(&successor); err != nil || successor != 1 {
+		return fmt.Errorf("%w: terminal retry successor Run is unavailable",
 			ErrManagedResolutionInvariant)
 	}
 	return nil
@@ -355,6 +443,9 @@ type managedResolutionTransition struct {
 	runStatus           model.AgentRunStatus
 	retryAt             time.Time
 	hasRetryAt          bool
+	deadAt              time.Time
+	hasDeadAt           bool
+	lastError           string
 }
 
 func managedResolutionTransitionFor(profile model.Profile, handling model.Handling,
@@ -371,6 +462,12 @@ func managedResolutionTransitionFor(profile model.Profile, handling model.Handli
 		budget, err := model.ParseHandlingBudget(profile.HandlingBudget())
 		if err != nil {
 			return managedResolutionTransition{}, fmt.Errorf("%w: Profile retry budget: %v", ErrManagedResolutionInvariant, err)
+		}
+		if handling.Attempts() >= uint32(budget.Spec().MaxAttempts) {
+			return managedResolutionTransition{handlingStatus: model.HandlingDead,
+				handlingDisposition: "attempt_budget_exhausted", runStatus: model.AgentRunDead,
+				deadAt: at, hasDeadAt: true,
+				lastError: "explicit retry exhausted maximum handling attempts"}, nil
 		}
 		retryAt, err := agentClaimRetryAt(at, handling.Attempts(), budget)
 		if err != nil {
@@ -394,13 +491,15 @@ func buildManagedResolutionReceipt(operation model.Operation, current model.Curr
 	}
 	emptyResults := make([]struct{}, 0)
 	handlingReceiptStatus := ""
-	switch operation.Kind() {
-	case model.OperationResolveNoAction:
+	switch transition.handlingStatus {
+	case model.HandlingCompleted:
 		handlingReceiptStatus = "completed"
-	case model.OperationResolveRetry:
+	case model.HandlingPending:
 		handlingReceiptStatus = "requeued"
-	case model.OperationResolveReject:
+	case model.HandlingRejected:
 		handlingReceiptStatus = "rejected"
+	case model.HandlingDead:
+		handlingReceiptStatus = "dead"
 	default:
 		return model.JSON{}, fmt.Errorf("%w: unknown resolution receipt kind", ErrManagedResolutionInvariant)
 	}
@@ -465,17 +564,25 @@ func updateManagedResolutionHandling(ctx context.Context, tx *sql.Tx, handling m
 	if transition.hasRetryAt {
 		availableAt = transition.retryAt
 	}
+	deadAt := any(nil)
+	if transition.hasDeadAt {
+		deadAt = storeTime(transition.deadAt)
+	}
+	lastError := any(nil)
+	if transition.lastError != "" {
+		lastError = transition.lastError
+	}
 	result, err := tx.ExecContext(ctx, `UPDATE agent_handlings SET status=?,available_at=?,
 		claim_owner=NULL,claim_token_hash=NULL,lease_until=NULL,last_disposition=?,
-		outcome_event_id=NULL,last_error=NULL,dead_at=NULL,updated_at=?
+		outcome_event_id=NULL,last_error=?,dead_at=?,updated_at=?
 		WHERE handling_id=? AND profile_id=? AND event_id=? AND status='claimed'
 		AND available_at=? AND claim_owner=? AND claim_token_hash=? AND lease_until=?
-		AND attempts=? AND last_disposition='read' AND outcome_event_id IS NULL
+		AND attempts=? AND recovery_count=? AND last_disposition='read' AND outcome_event_id IS NULL
 		AND last_error IS NULL AND dead_at IS NULL AND updated_at=?`,
 		string(transition.handlingStatus), storeTime(availableAt), transition.handlingDisposition,
-		storeTime(at), handling.ID().String(), handling.ProfileID().String(), handling.EventID().String(),
+		lastError, deadAt, storeTime(at), handling.ID().String(), handling.ProfileID().String(), handling.EventID().String(),
 		storeTime(handling.AvailableAt()), handling.ClaimOwner(), contextHash.Bytes(), storeTime(lease),
-		handling.Attempts(), storeTime(current.ReadAt()))
+		handling.Attempts(), handling.RecoveryCount(), storeTime(current.ReadAt()))
 	if err != nil {
 		return fmt.Errorf("commit managed resolution: update Handling: %w", err)
 	}
@@ -495,13 +602,13 @@ func updateManagedResolutionRun(ctx context.Context, tx *sql.Tx, run model.Agent
 	}
 	currentJSON, _ := run.CurrentReadReceipt()
 	result, err := tx.ExecContext(ctx, `UPDATE agent_runs SET status=?,finished_at=COALESCE(finished_at,?),
-		outcome_receipt_json=?,completion_receipt_json=?,error=NULL
+		outcome_receipt_json=?,error=NULL
 		WHERE run_id=? AND profile_id=? AND handling_id=? AND handling_attempt=?
-		AND claim_fence_hash=? AND lease_until=? AND runtime_kind=? AND status=?
+		AND handling_recovery=? AND claim_fence_hash=? AND lease_until=? AND runtime_kind=? AND status=?
 		AND current_read_receipt_json=? AND outcome_receipt_json IS NULL
-		AND completion_receipt_json IS NULL`, string(transition.runStatus), storeTime(at),
-		receipt.Bytes(), receipt.Bytes(), run.ID().String(), run.ProfileID().String(), handling.ID().String(),
-		run.HandlingAttempt(), contextHash.Bytes(), storeTime(lease), string(run.Runtime()),
+		`, string(transition.runStatus), storeTime(at),
+		receipt.Bytes(), run.ID().String(), run.ProfileID().String(), handling.ID().String(),
+		run.HandlingAttempt(), run.HandlingRecovery(), contextHash.Bytes(), storeTime(lease), string(run.Runtime()),
 		string(run.Status()), currentJSON.Bytes())
 	if err != nil {
 		return fmt.Errorf("commit managed resolution: update AgentRun: %w", err)
@@ -557,14 +664,19 @@ func verifyManagedResolutionRows(ctx context.Context, tx *sql.Tx, operation mode
 	if transition.hasRetryAt && !durableHandling.AvailableAt().Equal(transition.retryAt) {
 		return fmt.Errorf("%w: retry Handling backoff differs", ErrManagedResolutionInvariant)
 	}
+	if transition.hasDeadAt {
+		deadAt, hasDeadAt := durableHandling.DeadAt()
+		if !hasDeadAt || !deadAt.Equal(transition.deadAt) ||
+			durableHandling.LastError() != transition.lastError {
+			return fmt.Errorf("%w: dead Handling evidence differs", ErrManagedResolutionInvariant)
+		}
+	}
 	durableRun, err := readAgentRun(ctx, tx, previousRun.ID())
 	if err != nil || durableRun.Status() != transition.runStatus {
 		return fmt.Errorf("%w: resolved AgentRun cannot be read", ErrManagedResolutionInvariant)
 	}
 	outcome, hasOutcome := durableRun.OutcomeReceipt()
-	completion, hasCompletion := durableRun.CompletionReceipt()
-	if !hasOutcome || !hasCompletion || outcome.String() != receipt.String() ||
-		completion.String() != receipt.String() {
+	if !hasOutcome || outcome.String() != receipt.String() {
 		return fmt.Errorf("%w: AgentRun resolution receipts differ", ErrManagedResolutionInvariant)
 	}
 	return nil

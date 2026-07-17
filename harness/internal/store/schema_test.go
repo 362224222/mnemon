@@ -29,7 +29,7 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 		"index": strings.Fields(
 			"profiles_one_enabled_teamwork_idx operations_reclaim_idx operations_one_started_context_idx " +
 				"works_due_idx agent_handlings_ready_idx agent_handlings_one_claimed_profile_idx " +
-				"agent_runs_handling_attempt_idx enrollment_grants_one_open_idx " +
+				"agent_runs_handling_generation_attempt_idx enrollment_grants_one_open_idx " +
 				"channel_leave_requests_one_open_idx gossip_publications_ready_idx peer_inbox_work_idx",
 		),
 		"trigger": strings.Fields(
@@ -325,10 +325,63 @@ func TestSchemaEnforcesAgentRunFinishShape(t *testing.T) {
 		}
 	}
 	if _, err := st.db.Exec(`INSERT INTO agent_runs(run_id,profile_id,cause_json,launcher,runtime_kind,
-		launcher_diagnostic_json,runtime_ids_json,status,started_at,finished_at)
+		launcher_diagnostic_json,runtime_ids_json,status,started_at,finished_at,completion_at,
+		completion_receipt_json)
 		VALUES('run-runtime-finished-valid','teamwork-default','{}','test','codex-app-server','{}','{}',
-		'runtime_finished',?,?)`, started, finished); err != nil {
+		'runtime_finished',?,?,?,'{}')`, started, finished, finished); err != nil {
 		t.Fatalf("valid runtime_finished AgentRun error = %v", err)
+	}
+	if _, err := st.db.Exec(`INSERT INTO agent_runs(run_id,profile_id,cause_json,launcher,runtime_kind,
+		launcher_diagnostic_json,runtime_ids_json,status,started_at,finished_at)
+		VALUES('run-runtime-finished-without-completion','teamwork-default','{}','test',
+		'codex-app-server','{}','{}','runtime_finished',?,?)`, started, finished); err == nil ||
+		!strings.Contains(err.Error(), "CHECK constraint failed") {
+		t.Fatalf("runtime_finished missing completion evidence error = %v, want CHECK failure", err)
+	}
+	for _, test := range []struct {
+		name         string
+		completionAt any
+		receipt      any
+	}{
+		{name: "time without receipt", completionAt: finished},
+		{name: "receipt without time", receipt: []byte(`{}`)},
+		{name: "noncanonical time", completionAt: "2026-01-01T00:01:00Z", receipt: []byte(`{}`)},
+		{name: "normalized invalid date", completionAt: "2026-02-30T00:01:00.000000000Z", receipt: []byte(`{}`)},
+		{name: "below UnixNano range", completionAt: "1677-09-21T00:12:43.145224191Z", receipt: []byte(`{}`)},
+		{name: "above UnixNano range", completionAt: "2262-04-11T23:47:16.854775808Z", receipt: []byte(`{}`)},
+		{name: "completion before finish", completionAt: started, receipt: []byte(`{}`)},
+	} {
+		_, err := st.db.Exec(`INSERT INTO agent_runs(run_id,profile_id,cause_json,launcher,runtime_kind,
+			launcher_diagnostic_json,runtime_ids_json,status,started_at,finished_at,completion_at,
+			completion_receipt_json) VALUES(?, 'teamwork-default','{}','test','codex-app-server',
+			'{}','{}','outcome_accepted',?,?,?,?)`, "run-completion-invalid-"+test.name,
+			started, finished, test.completionAt, test.receipt)
+		if err == nil || !strings.Contains(err.Error(), "CHECK constraint failed") {
+			t.Fatalf("%s error = %v, want CHECK failure", test.name, err)
+		}
+	}
+	if _, err := st.db.Exec(`INSERT INTO agent_runs(run_id,profile_id,cause_json,launcher,runtime_kind,
+		launcher_diagnostic_json,runtime_ids_json,status,started_at,completion_at,completion_receipt_json)
+		VALUES('run-active-completed','teamwork-default','{}','test','codex-app-server','{}','{}',
+		'starting',?,?,'{}')`, started, finished); err == nil || !strings.Contains(err.Error(), "CHECK constraint failed") {
+		t.Fatalf("active completion evidence error = %v, want CHECK failure", err)
+	}
+	wakeAfterFinish := "2026-01-01T00:02:00.000000000Z"
+	completion := "2026-01-01T00:03:00.000000000Z"
+	if _, err := st.db.Exec(`INSERT INTO agent_runs(run_id,profile_id,cause_json,launcher,runtime_kind,
+		launcher_diagnostic_json,runtime_ids_json,status,wake_delivered_at,started_at,finished_at,
+		completion_at,completion_receipt_json) VALUES('run-wake-after-finish','teamwork-default','{}',
+		'test','codex-app-server','{}','{}','outcome_accepted',?,?,?,?,'{}')`, wakeAfterFinish,
+		started, finished, completion); err == nil || !strings.Contains(err.Error(), "CHECK constraint failed") {
+		t.Fatalf("wake after finish error = %v, want CHECK failure", err)
+	}
+	unequalRuntimeCompletion := "2026-01-01T00:02:00.000000000Z"
+	if _, err := st.db.Exec(`INSERT INTO agent_runs(run_id,profile_id,cause_json,launcher,runtime_kind,
+		launcher_diagnostic_json,runtime_ids_json,status,started_at,finished_at,completion_at,
+		completion_receipt_json) VALUES('run-runtime-finished-unequal','teamwork-default','{}','test',
+		'codex-app-server','{}','{}','runtime_finished',?,?,?,'{}')`, started, finished,
+		unequalRuntimeCompletion); err == nil || !strings.Contains(err.Error(), "CHECK constraint failed") {
+		t.Fatalf("runtime_finished unequal completion error = %v, want CHECK failure", err)
 	}
 }
 

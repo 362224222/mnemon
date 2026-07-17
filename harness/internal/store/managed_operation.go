@@ -108,6 +108,12 @@ func (s *Store) ReserveManagedOperation(ctx context.Context,
 		if err != nil {
 			return ManagedOperationReservation{}, err
 		}
+		// runtime_finished retains authority only for an Operation that was
+		// durably started before the Runtime completion boundary. A fresh key
+		// after that boundary cannot turn a finished turn into new work.
+		if run.Status() == model.AgentRunRuntimeFinished {
+			return ManagedOperationReservation{}, ErrManagedContextStale
+		}
 		if err := requireNoStartedManagedContext(ctx, tx, profile.ID(), spec.ClaimContextHash); err != nil {
 			return ManagedOperationReservation{}, err
 		}
@@ -295,6 +301,7 @@ func requireManagedClaimContext(ctx context.Context, tx *sql.Tx, profile model.P
 	}
 	if current.RunID() != run.ID() || current.ProfileID() != profile.ID() ||
 		current.HandlingID() != handling.ID() || current.HandlingAttempt() != handling.Attempts() ||
+		run.HandlingRecovery() != handling.RecoveryCount() ||
 		current.SourceEvent().EventID() != handling.EventID() || current.ReadAt().Before(run.StartedAt()) ||
 		current.ReadAt().After(at) || !current.ReadAt().Before(lease) {
 		return model.AgentRun{}, model.Handling{}, fmt.Errorf("%w: current-read binding differs", ErrManagedContextStale)
