@@ -282,12 +282,12 @@ func ensureDaemonLocked(ctx context.Context, options DaemonEnsureOptions,
 	}
 
 	for {
-		health, unavailable, probeErr := probeDaemonHealth(ctx, options.Probe,
+		health, observation, probeErr := observeDaemonHealth(ctx, options.Probe,
 			options.AssetRevision)
-		if !unavailable {
-			if probeErr != nil {
-				return result, probeErr
-			}
+		if probeErr != nil {
+			return result, probeErr
+		}
+		if observation == daemonHealthReady {
 			result.Health = health
 			if gateErr := verifyDaemonReadyGate(ctx, options.ReadyGate, health); gateErr != nil {
 				return result, gateErr
@@ -300,12 +300,25 @@ func ensureDaemonLocked(ctx context.Context, options DaemonEnsureOptions,
 			compensationFenced = false
 			return result, nil
 		}
+		// Only the exact child owned by this call may expose a transient,
+		// authenticated not_ready state. Existing/concurrent daemons were
+		// checked through the strict probe above and still fail closed rather
+		// than being shadowed. Unavailable and exact-revision not_ready are
+		// both bounded by the one outer ensure deadline.
 		if waitErr := waitEnsurePoll(ctx, poll); waitErr != nil {
 			return result, fmt.Errorf("%w: daemon did not become ready: %w",
 				ErrDaemonEnsure, waitErr)
 		}
 	}
 }
+
+type daemonHealthObservation uint8
+
+const (
+	daemonHealthUnavailable daemonHealthObservation = iota + 1
+	daemonHealthNotReady
+	daemonHealthReady
+)
 
 func validateDaemonEnsure(options DaemonEnsureOptions, timing daemonEnsureTiming) error {
 	if options.Probe == nil {
@@ -342,40 +355,61 @@ func verifyDaemonReadyGate(ctx context.Context, gate DaemonReadyGate,
 func probeDaemonHealth(ctx context.Context, probe DaemonHealthProbe,
 	expectedRevision string,
 ) (localapi.HealthResponse, bool, error) {
-	if err := ctx.Err(); err != nil {
+	health, observation, err := observeDaemonHealth(ctx, probe, expectedRevision)
+	if err != nil {
+		return localapi.HealthResponse{}, false, err
+	}
+	switch observation {
+	case daemonHealthUnavailable:
+		return localapi.HealthResponse{}, true, nil
+	case daemonHealthReady:
+		return health, false, nil
+	case daemonHealthNotReady:
 		return localapi.HealthResponse{}, false,
+			fmt.Errorf("%w: %w: daemon is not ready", ErrDaemonEnsure,
+				ErrDaemonHealthAuthority)
+	default:
+		return localapi.HealthResponse{}, false,
+			fmt.Errorf("%w: %w: health observation is invalid", ErrDaemonEnsure,
+				ErrDaemonHealthAuthority)
+	}
+}
+
+func observeDaemonHealth(ctx context.Context, probe DaemonHealthProbe,
+	expectedRevision string,
+) (localapi.HealthResponse, daemonHealthObservation, error) {
+	if err := ctx.Err(); err != nil {
+		return localapi.HealthResponse{}, 0,
 			fmt.Errorf("%w: bounded deadline: %w", ErrDaemonEnsure, err)
 	}
 	health, apiErr := probe.ProbeHealth(ctx)
 	if apiErr != nil {
 		if apiErr.Code == localapi.CodeMnemondUnavailable {
-			return localapi.HealthResponse{}, true, nil
+			return localapi.HealthResponse{}, daemonHealthUnavailable, nil
 		}
-		return localapi.HealthResponse{}, false,
+		return localapi.HealthResponse{}, 0,
 			fmt.Errorf("%w: authenticated health failed: %w", ErrDaemonEnsure, apiErr)
 	}
 	if health.SchemaVersion != localapi.SchemaVersion ||
 		(health.Status != "ready" && health.Status != "not_ready") {
-		return localapi.HealthResponse{}, false,
+		return localapi.HealthResponse{}, 0,
 			fmt.Errorf("%w: %w: response is noncanonical", ErrDaemonEnsure,
 				ErrDaemonHealthAuthority)
 	}
 	if _, err := model.ParseDigest(health.AssetRevision); err != nil {
-		return localapi.HealthResponse{}, false,
+		return localapi.HealthResponse{}, 0,
 			fmt.Errorf("%w: %w: revision is invalid", ErrDaemonEnsure,
 				ErrDaemonHealthAuthority)
 	}
 	if health.AssetRevision != expectedRevision {
-		return localapi.HealthResponse{}, false,
+		return localapi.HealthResponse{}, 0,
 			fmt.Errorf("%w: %w: revision differs", ErrDaemonEnsure,
 				ErrDaemonHealthAuthority)
 	}
-	if health.Status != "ready" {
-		return localapi.HealthResponse{}, false,
-			fmt.Errorf("%w: %w: daemon is not ready", ErrDaemonEnsure,
-				ErrDaemonHealthAuthority)
+	if health.Status == "not_ready" {
+		return health, daemonHealthNotReady, nil
 	}
-	return health, false, nil
+	return health, daemonHealthReady, nil
 }
 
 type ensureLock struct {

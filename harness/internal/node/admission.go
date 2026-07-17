@@ -11,10 +11,13 @@ import (
 var ErrManagedAdmission = errors.New("managed Agent admission is sealed")
 
 // ManagedAdmission is the narrow fence surface shared by controller routes
-// and future managed workers. A successful Enter must be paired with exactly
-// one release call around the complete Store-facing operation.
+// and managed workers. Route admission rejects a sealed gate immediately,
+// while worker admission waits for the observed seal generation to reopen.
+// Every successful entry must be paired with exactly one release call around
+// the complete Store-facing operation.
 type ManagedAdmission interface {
 	Enter(context.Context) (release func(), err error)
+	EnterWorker(context.Context) (release func(), err error)
 }
 
 type controllerAdmissionGate struct {
@@ -22,6 +25,7 @@ type controllerAdmissionGate struct {
 	active     uint64
 	drained    chan struct{}
 	generation uint64
+	reopened   chan struct{}
 	sealed     bool
 }
 
@@ -43,21 +47,64 @@ func (gate *controllerAdmissionGate) Enter(ctx context.Context) (func(), error) 
 		gate.mu.Unlock()
 		return nil, ErrManagedAdmission
 	}
-	if gate.active == 0 {
-		gate.drained = make(chan struct{})
-	}
-	gate.active++
+	release := gate.enterLocked()
 	gate.mu.Unlock()
 
-	var once sync.Once
-	release := func() {
-		once.Do(gate.leave)
-	}
 	if err := ctx.Err(); err != nil {
 		release()
 		return nil, fmtAdmissionError(err)
 	}
 	return release, nil
+}
+
+// EnterWorker waits while mutation admission is sealed. Waiting is tied to
+// the exact seal generation observed under gate.mu, so an unrelated reopen
+// cannot admit work and an exact reopen cannot be missed between observation
+// and waiting. A new seal established before the worker acquires admission is
+// observed in the next loop iteration.
+func (gate *controllerAdmissionGate) EnterWorker(ctx context.Context) (func(), error) {
+	if gate == nil || ctx == nil {
+		return nil, fmtAdmissionError(errors.New("gate or context is unavailable"))
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, fmtAdmissionError(err)
+		}
+
+		gate.mu.Lock()
+		if !gate.sealed {
+			release := gate.enterLocked()
+			gate.mu.Unlock()
+			if err := ctx.Err(); err != nil {
+				release()
+				return nil, fmtAdmissionError(err)
+			}
+			return release, nil
+		}
+		reopened := gate.reopened
+		gate.mu.Unlock()
+
+		select {
+		case <-reopened:
+			continue
+		case <-ctx.Done():
+			return nil, fmtAdmissionError(ctx.Err())
+		}
+	}
+}
+
+// enterLocked records one admitted operation. gate.mu must be held and the
+// caller must have established that the gate is open.
+func (gate *controllerAdmissionGate) enterLocked() func() {
+	if gate.active == 0 {
+		gate.drained = make(chan struct{})
+	}
+	gate.active++
+
+	var once sync.Once
+	return func() {
+		once.Do(gate.leave)
+	}
 }
 
 func (gate *controllerAdmissionGate) leave() {
@@ -87,6 +134,7 @@ func (gate *controllerAdmissionGate) seal(ctx context.Context) (uint64, error) {
 	gate.sealed = true
 	gate.generation++
 	generation := gate.generation
+	gate.reopened = make(chan struct{})
 	drained := gate.drained
 	gate.mu.Unlock()
 
@@ -106,6 +154,9 @@ func (gate *controllerAdmissionGate) reopen(generation uint64) {
 	gate.mu.Lock()
 	if gate.sealed && gate.generation == generation {
 		gate.sealed = false
+		reopened := gate.reopened
+		gate.reopened = nil
+		close(reopened)
 	}
 	gate.mu.Unlock()
 }

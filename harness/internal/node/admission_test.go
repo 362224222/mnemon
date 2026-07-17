@@ -93,6 +93,126 @@ func TestControllerAdmissionGateCancellationReopensWithoutStealingAnotherSeal(t 
 	gate.reopen(generation)
 }
 
+func TestControllerAdmissionGateWorkerWaitsForExactGenerationReopen(t *testing.T) {
+	gate := newControllerAdmissionGate()
+	generation, err := gate.seal(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	workerEntered := make(chan func(), 1)
+	workerFailed := make(chan error, 1)
+	go func() {
+		release, err := gate.EnterWorker(context.Background())
+		if err != nil {
+			workerFailed <- err
+			return
+		}
+		workerEntered <- release
+	}()
+	assertWorkerAdmissionWaiting(t, workerEntered, workerFailed)
+
+	gate.reopen(generation + 1)
+	assertWorkerAdmissionWaiting(t, workerEntered, workerFailed)
+	if entered, err := gate.Enter(context.Background()); entered != nil ||
+		!errors.Is(err, ErrManagedAdmission) {
+		t.Fatalf("route Enter() after wrong-generation reopen = (present=%t, %v)",
+			entered != nil, err)
+	}
+
+	gate.reopen(generation)
+	var release func()
+	select {
+	case release = <-workerEntered:
+	case err := <-workerFailed:
+		t.Fatalf("EnterWorker() after exact reopen error = %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("worker did not enter after exact generation reopened")
+	}
+
+	type sealResult struct {
+		generation uint64
+		err        error
+	}
+	sealed := make(chan sealResult, 1)
+	go func() {
+		nextGeneration, err := gate.seal(context.Background())
+		sealed <- sealResult{generation: nextGeneration, err: err}
+	}()
+	waitAdmissionSealed(t, gate)
+	select {
+	case result := <-sealed:
+		t.Fatalf("seal returned before worker admission drained: %#v", result)
+	default:
+	}
+	release()
+	result := <-sealed
+	if result.err != nil || result.generation == generation {
+		t.Fatalf("next seal() = (%d, %v)", result.generation, result.err)
+	}
+	gate.reopen(result.generation)
+}
+
+func TestControllerAdmissionGateWorkerCancellationLeavesRetainedSeal(t *testing.T) {
+	gate := newControllerAdmissionGate()
+	generation, err := gate.seal(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		release, err := gate.EnterWorker(ctx)
+		if release != nil {
+			release()
+			t.Errorf("cancelled EnterWorker() returned a release function")
+		}
+		result <- err
+	}()
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) || !errors.Is(err, ErrManagedAdmission) {
+			t.Fatalf("cancelled EnterWorker() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancelled worker remained blocked by retained seal")
+	}
+	if entered, err := gate.Enter(context.Background()); entered != nil ||
+		!errors.Is(err, ErrManagedAdmission) {
+		t.Fatalf("cancelled worker changed retained seal = (present=%t, %v)",
+			entered != nil, err)
+	}
+	gate.reopen(generation)
+}
+
+func TestControllerAdmissionGateWorkerDoesNotMissConcurrentReopen(t *testing.T) {
+	for iteration := 0; iteration < 100; iteration++ {
+		gate := newControllerAdmissionGate()
+		generation, err := gate.seal(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		result := make(chan error, 1)
+		go func() {
+			release, err := gate.EnterWorker(context.Background())
+			if release != nil {
+				release()
+			}
+			result <- err
+		}()
+		gate.reopen(generation)
+		select {
+		case err := <-result:
+			if err != nil {
+				t.Fatalf("iteration %d EnterWorker() error = %v", iteration, err)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("iteration %d worker missed concurrent reopen", iteration)
+		}
+	}
+}
+
 func TestControllerAdmissionServiceWrapsEveryManagedRoute(t *testing.T) {
 	gate := newControllerAdmissionGate()
 	next := &recordingAdmissionService{}
@@ -204,6 +324,20 @@ func waitAdmissionSealed(t *testing.T, gate *controllerAdmissionGate) {
 		default:
 			runtime.Gosched()
 		}
+	}
+}
+
+func assertWorkerAdmissionWaiting(t *testing.T, entered <-chan func(), failed <-chan error) {
+	t.Helper()
+	select {
+	case release := <-entered:
+		if release != nil {
+			release()
+		}
+		t.Fatal("worker entered while admission remained sealed")
+	case err := <-failed:
+		t.Fatalf("worker admission failed while waiting: %v", err)
+	case <-time.After(20 * time.Millisecond):
 	}
 }
 

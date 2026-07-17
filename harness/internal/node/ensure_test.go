@@ -199,6 +199,49 @@ func TestEnsureDaemonRunsStrictPreflightThenOneLaunchAndWaitsForReady(t *testing
 	assertEnsureLock(t, nodeState)
 }
 
+func TestEnsureDaemonWaitsForOwnedChildExactNotReadyThenReleasesReady(t *testing.T) {
+	nodeState := newEnsureNodeState(t)
+	revision := ensureTestRevision("owned-not-ready")
+	var probes atomic.Int32
+	var launched atomic.Bool
+	var readyGates atomic.Int32
+	handle := newRecordingDaemonLaunch()
+	options := DaemonEnsureOptions{NodeState: nodeState, AssetRevision: revision,
+		Probe: ensureProbeFunc(func(context.Context) (localapi.HealthResponse, *localapi.APIError) {
+			call := probes.Add(1)
+			if !launched.Load() {
+				return unavailableEnsureHealth()
+			}
+			if call == 3 {
+				return localapi.HealthResponse{AssetRevision: revision,
+					SchemaVersion: localapi.SchemaVersion, Status: "not_ready"}, nil
+			}
+			return readyEnsureHealth(revision), nil
+		}),
+		Preflight: DaemonEnsurePreflightFunc(func(context.Context) error { return nil }),
+		Launcher: DaemonLauncherFunc(func(context.Context, DaemonLaunchPermit) (DaemonLaunch, error) {
+			launched.Store(true)
+			return handle, nil
+		}),
+		ReadyGate: DaemonReadyGateFunc(func(_ context.Context, health localapi.HealthResponse) error {
+			readyGates.Add(1)
+			if health != readyEnsureHealth(revision) {
+				t.Fatalf("ready gate health = %#v", health)
+			}
+			return nil
+		}),
+	}
+	result, err := ensureDaemon(context.Background(), options,
+		daemonEnsureTiming{deadline: 200 * time.Millisecond, poll: time.Millisecond})
+	if err != nil || !result.Started || result.Health != readyEnsureHealth(revision) ||
+		probes.Load() != 4 || readyGates.Load() != 1 || handle.releases.Load() != 1 ||
+		handle.terminations.Load() != 0 {
+		t.Fatalf("ensureDaemon() = (%#v, %v), probes=%d gates=%d releases=%d terminations=%d",
+			result, err, probes.Load(), readyGates.Load(), handle.releases.Load(),
+			handle.terminations.Load())
+	}
+}
+
 func TestEnsureDaemonTerminatesNewChildWhenReadyGateFails(t *testing.T) {
 	nodeState := newEnsureNodeState(t)
 	revision := ensureTestRevision("launched-ready-gate")
@@ -422,12 +465,12 @@ func TestEnsureDaemonTerminatesOnlyItsOwnedChildAfterPostLaunchFailures(t *testi
 		}
 	})
 
-	t.Run("reachable not ready", func(t *testing.T) {
+	t.Run("owned child stays not ready until deadline", func(t *testing.T) {
 		nodeState := newEnsureNodeState(t)
 		revision := ensureTestRevision("post-launch-not-ready")
 		handle := newRecordingDaemonLaunch()
 		var launched atomic.Bool
-		_, err := EnsureDaemon(context.Background(), DaemonEnsureOptions{
+		options := DaemonEnsureOptions{
 			NodeState: nodeState, AssetRevision: revision,
 			Probe: ensureProbeFunc(func(context.Context) (localapi.HealthResponse, *localapi.APIError) {
 				if !launched.Load() {
@@ -441,11 +484,42 @@ func TestEnsureDaemonTerminatesOnlyItsOwnedChildAfterPostLaunchFailures(t *testi
 				launched.Store(true)
 				return handle, nil
 			}),
-		})
-		if !errors.Is(err, ErrDaemonEnsure) || handle.releases.Load() != 0 ||
+		}
+		_, err := ensureDaemon(context.Background(), options,
+			daemonEnsureTiming{deadline: 50 * time.Millisecond, poll: 5 * time.Millisecond})
+		if !errors.Is(err, ErrDaemonEnsure) || !errors.Is(err, context.DeadlineExceeded) ||
+			handle.releases.Load() != 0 ||
 			handle.terminations.Load() != 1 {
 			t.Fatalf("EnsureDaemon() = %v, releases=%d terminations=%d", err,
 				handle.releases.Load(), handle.terminations.Load())
+		}
+	})
+	t.Run("owned child revision drift fails immediately", func(t *testing.T) {
+		nodeState := newEnsureNodeState(t)
+		revision := ensureTestRevision("post-launch-revision")
+		other := ensureTestRevision("post-launch-revision-other")
+		handle := newRecordingDaemonLaunch()
+		var launched atomic.Bool
+		var probes atomic.Int32
+		_, err := EnsureDaemon(context.Background(), DaemonEnsureOptions{
+			NodeState: nodeState, AssetRevision: revision,
+			Probe: ensureProbeFunc(func(context.Context) (localapi.HealthResponse, *localapi.APIError) {
+				probes.Add(1)
+				if !launched.Load() {
+					return unavailableEnsureHealth()
+				}
+				return readyEnsureHealth(other), nil
+			}),
+			Preflight: DaemonEnsurePreflightFunc(func(context.Context) error { return nil }),
+			Launcher: DaemonLauncherFunc(func(context.Context, DaemonLaunchPermit) (DaemonLaunch, error) {
+				launched.Store(true)
+				return handle, nil
+			}),
+		})
+		if !errors.Is(err, ErrDaemonEnsure) || !errors.Is(err, ErrDaemonHealthAuthority) ||
+			probes.Load() != 3 || handle.releases.Load() != 0 || handle.terminations.Load() != 1 {
+			t.Fatalf("EnsureDaemon() = %v, probes=%d releases=%d terminations=%d", err,
+				probes.Load(), handle.releases.Load(), handle.terminations.Load())
 		}
 	})
 	t.Run("ready release failure", func(t *testing.T) {
