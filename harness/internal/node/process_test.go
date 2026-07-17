@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -74,6 +75,22 @@ func TestDaemonProcessLauncherStartsExactDetachedChildAndTerminatesIt(t *testing
 	}
 	if pidInfo == nil || len(encoded) == 0 {
 		t.Fatal("PID publication did not expose a stable inode and canonical bytes")
+	}
+}
+
+func TestDaemonProcessEnvironmentIsClosedForManagedRuntimeBootstrap(t *testing.T) {
+	input := []string{
+		"PATH=/managed/bin", "HOME=/home/agent", "CODEX_HOME=/home/agent/.codex",
+		"XDG_CACHE_HOME=/home/agent/.cache", "LC_ALL=C.UTF-8", "LANG=en_US.UTF-8",
+		"OPENAI_API_KEY=secret", "MNEMON_HARNESS_RUN_ATTACHMENT=/stale.attach",
+		"MNEMON_EVENT_BODY=private", daemonLaunchPermitEnvironment + "=99", "MALFORMED",
+	}
+	want := []string{
+		"PATH=/managed/bin", "HOME=/home/agent", "CODEX_HOME=/home/agent/.codex",
+		"XDG_CACHE_HOME=/home/agent/.cache", "LC_ALL=C.UTF-8", "LANG=en_US.UTF-8",
+	}
+	if got := daemonProcessEnvironment(input); !slices.Equal(got, want) {
+		t.Fatalf("daemonProcessEnvironment() = %q, want %q", got, want)
 	}
 }
 

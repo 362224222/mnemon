@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 
@@ -162,9 +163,10 @@ func (launcher *DaemonProcessLauncher) Launch(ctx context.Context,
 	command.Stdout = logFile
 	command.Stderr = logFile
 	command.ExtraFiles = []*os.File{permit.lock.file}
-	command.Env = append([]string{
-		daemonLaunchPermitEnvironment + "=" + fmt.Sprintf("%d", daemonLaunchPermitChildFD),
-	}, launcher.testEnvironment...)
+	command.Env = daemonProcessEnvironment(os.Environ())
+	command.Env = append(command.Env,
+		daemonLaunchPermitEnvironment+"="+fmt.Sprintf("%d", daemonLaunchPermitChildFD))
+	command.Env = append(command.Env, launcher.testEnvironment...)
 	command.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := command.Start(); err != nil {
 		return nil, daemonProcessError("start child", err)
@@ -204,6 +206,27 @@ func (launcher *DaemonProcessLauncher) Launch(ctx context.Context,
 		return abort(err)
 	}
 	return launch, nil
+}
+
+// daemonProcessEnvironment keeps the detached controller usable with the
+// already-selected Codex installation and home while preventing arbitrary
+// caller credentials, Event data, or stale Run capabilities from becoming
+// ambient daemon authority. Runtime children narrow this closed set again and
+// add only their exact attachment reference.
+func daemonProcessEnvironment(environment []string) []string {
+	allowed := map[string]bool{
+		"CODEX_HOME": true, "HOME": true, "LANG": true, "LOGNAME": true,
+		"PATH": true, "TEMP": true, "TMP": true, "TMPDIR": true, "USER": true,
+		"XDG_CACHE_HOME": true, "XDG_CONFIG_HOME": true, "XDG_DATA_HOME": true,
+	}
+	result := make([]string, 0, len(allowed)+4)
+	for _, entry := range environment {
+		name, _, ok := strings.Cut(entry, "=")
+		if ok && (allowed[name] || strings.HasPrefix(name, "LC_")) {
+			result = append(result, entry)
+		}
+	}
+	return result
 }
 
 func (launcher *DaemonProcessLauncher) openExecutable() (*os.File, error) {
