@@ -21,29 +21,30 @@ const (
 type ErrorCode string
 
 const (
-	CodeInvalidArgument       ErrorCode = "invalid_argument"
-	CodeContentRequired       ErrorCode = "content_required"
-	CodeContentTooLarge       ErrorCode = "content_too_large"
-	CodeArtifactInvalid       ErrorCode = "artifact_invalid"
-	CodeArtifactTooLarge      ErrorCode = "artifact_too_large"
-	CodeAmbiguousChannel      ErrorCode = "ambiguous_channel"
-	CodeAmbiguousParticipant  ErrorCode = "ambiguous_participant"
-	CodeUnknownAction         ErrorCode = "unknown_action"
-	CodeAuthenticationFailed  ErrorCode = "authentication_failed"
-	CodeContextRequired       ErrorCode = "context_required"
-	CodeContextInvalid        ErrorCode = "context_invalid"
-	CodeContextStale          ErrorCode = "context_stale"
-	CodeAssetRevisionMismatch ErrorCode = "asset_revision_mismatch"
-	CodeActionNotAllowed      ErrorCode = "action_not_allowed"
-	CodeCurrentTooLarge       ErrorCode = "current_too_large"
-	CodeOperationMismatch     ErrorCode = "operation_mismatch"
-	CodeWorkConflict          ErrorCode = "work_conflict"
-	CodeWorkExpired           ErrorCode = "work_expired"
-	CodeProfileHostMismatch   ErrorCode = "profile_host_mismatch"
-	CodeOperationPending      ErrorCode = "operation_pending"
-	CodePeerUnavailable       ErrorCode = "peer_unavailable"
-	CodeMnemondUnavailable    ErrorCode = "mnemond_unavailable"
-	CodeInternal              ErrorCode = "internal"
+	CodeInvalidArgument        ErrorCode = "invalid_argument"
+	CodeContentRequired        ErrorCode = "content_required"
+	CodeContentTooLarge        ErrorCode = "content_too_large"
+	CodeArtifactInvalid        ErrorCode = "artifact_invalid"
+	CodeArtifactTooLarge       ErrorCode = "artifact_too_large"
+	CodeAmbiguousChannel       ErrorCode = "ambiguous_channel"
+	CodeAmbiguousParticipant   ErrorCode = "ambiguous_participant"
+	CodeUnknownAction          ErrorCode = "unknown_action"
+	CodeAuthenticationFailed   ErrorCode = "authentication_failed"
+	CodeContextRequired        ErrorCode = "context_required"
+	CodeContextInvalid         ErrorCode = "context_invalid"
+	CodeContextStale           ErrorCode = "context_stale"
+	CodeAssetRevisionMismatch  ErrorCode = "asset_revision_mismatch"
+	CodeActionNotAllowed       ErrorCode = "action_not_allowed"
+	CodeCurrentTooLarge        ErrorCode = "current_too_large"
+	CodeOperationMismatch      ErrorCode = "operation_mismatch"
+	CodeWorkConflict           ErrorCode = "work_conflict"
+	CodeWorkExpired            ErrorCode = "work_expired"
+	CodeProfileHostMismatch    ErrorCode = "profile_host_mismatch"
+	CodeHostActivationRequired ErrorCode = "host_activation_required"
+	CodeOperationPending       ErrorCode = "operation_pending"
+	CodePeerUnavailable        ErrorCode = "peer_unavailable"
+	CodeMnemondUnavailable     ErrorCode = "mnemond_unavailable"
+	CodeInternal               ErrorCode = "internal"
 )
 
 func (c ErrorCode) Valid() bool {
@@ -54,7 +55,7 @@ func (c ErrorCode) Valid() bool {
 		CodeContextRequired, CodeContextInvalid, CodeContextStale,
 		CodeAssetRevisionMismatch, CodeActionNotAllowed, CodeCurrentTooLarge,
 		CodeOperationMismatch, CodeWorkConflict, CodeWorkExpired,
-		CodeProfileHostMismatch, CodeOperationPending, CodePeerUnavailable,
+		CodeProfileHostMismatch, CodeHostActivationRequired, CodeOperationPending, CodePeerUnavailable,
 		CodeMnemondUnavailable, CodeInternal:
 		return true
 	default:
@@ -72,7 +73,7 @@ func (c ErrorCode) ExitStatus() int {
 		CodeContextStale, CodeAssetRevisionMismatch:
 		return 3
 	case CodeActionNotAllowed, CodeCurrentTooLarge, CodeOperationMismatch,
-		CodeWorkConflict, CodeWorkExpired, CodeProfileHostMismatch:
+		CodeWorkConflict, CodeWorkExpired, CodeProfileHostMismatch, CodeHostActivationRequired:
 		return 4
 	case CodeOperationPending, CodePeerUnavailable, CodeMnemondUnavailable:
 		return 5

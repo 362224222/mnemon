@@ -282,6 +282,96 @@ func TestPublicSetupSerializesProcessesAndRecoversAKilledDaemon(t *testing.T) {
 	cancelRecoveredHealth()
 }
 
+func TestPublicSetupWaitsForExactCodexHookTrustThenConverges(t *testing.T) {
+	repository := setupProcessRepositoryRoot(t)
+	root := setupProcessPhysicalTempDir(t)
+	bin := filepath.Join(root, "bin")
+	workspace := filepath.Join(root, "work")
+	harnessExecutable := filepath.Join(bin, "mnemon-harness")
+	mnemondExecutable := filepath.Join(bin, "mnemond")
+	nodeState := filepath.Join(workspace, ".mnemon", "harness", "node")
+	cleanup := &setupProcessCleanup{root: root, nodeState: nodeState}
+	t.Cleanup(func() { cleanup.run(t) })
+	for _, path := range []string{bin, workspace} {
+		if err := os.Mkdir(path, 0o700); err != nil {
+			t.Fatalf("create trust process-test directory: %v", err)
+		}
+	}
+
+	buildCtx, cancelBuild := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancelBuild()
+	setupProcessBuild(t, buildCtx, repository, harnessExecutable,
+		"./harness/cmd/mnemon-harness")
+	setupProcessBuild(t, buildCtx, repository, mnemondExecutable,
+		"./harness/cmd/mnemond")
+	setupProcessFakeCodex(t, filepath.Join(bin, "codex"))
+	environment := setupProcessEnvironment(bin, workspace, root)
+	cleanup.offline = setupProcessOfflineProbe{executable: mnemondExecutable,
+		workspace: workspace, environment: append([]string(nil), environment...)}
+	trustPath := filepath.Join(workspace, ".codex", "fake-trust-status")
+	if err := os.MkdirAll(filepath.Dir(trustPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(trustPath, []byte("untrusted\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	untrustedCtx, cancelUntrusted := context.WithTimeout(context.Background(), 20*time.Second)
+	untrusted := setupProcessRunSetup(untrustedCtx, harnessExecutable, workspace, environment)
+	cancelUntrusted()
+	var untrustedExit *exec.ExitError
+	if !errors.As(untrusted.err, &untrustedExit) || untrustedExit.ExitCode() != 4 ||
+		len(untrusted.stdout) != 0 || string(untrusted.stderr) !=
+		"host_activation_required: Codex has not loaded the exact trusted Mnemon Hook and Skill; trust this project and the current Hook with /hooks, then rerun setup\n" {
+		t.Fatalf("untrusted setup = exit=%v stdout=%s stderr=%s", untrusted.err,
+			setupProcessFingerprint(untrusted.stdout), setupProcessFingerprint(untrusted.stderr))
+	}
+	bundle, err := assets.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := integration.VerifyHostProjection(workspace, nodeState,
+		assets.HostCodex, bundle); err != nil {
+		t.Fatalf("untrusted setup did not stage the exact projection: %v", err)
+	}
+	setupProcessAssertCodexProjectionLayout(t, workspace, true)
+	client, err := localapi.NewClient(nodeState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanup.client = client
+	if _, apiErr := client.ProbeHealth(context.Background()); apiErr == nil ||
+		apiErr.Code != localapi.CodeMnemondUnavailable {
+		t.Fatalf("untrusted setup started managed authority: %v", apiErr)
+	}
+	if _, err := os.Lstat(filepath.Join(nodeState, "mnemond.pid")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("untrusted setup published daemon lifecycle state: %v", err)
+	}
+
+	if err := os.WriteFile(trustPath, []byte("trusted\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	trustedCtx, cancelTrusted := context.WithTimeout(context.Background(), 20*time.Second)
+	cleanup.autoMayRun = true
+	trusted := setupProcessRunSetup(trustedCtx, harnessExecutable, workspace, environment)
+	cancelTrusted()
+	receipt, err := setupProcessParseReceipt(trusted)
+	if err != nil || receipt.Host != "codex" || receipt.Replayed || !receipt.Started ||
+		receipt.AssetRevision != bundle.Manifest().AssetRevision {
+		t.Fatalf("trusted setup = (%#v, %v)", receipt, err)
+	}
+	readyCtx, cancelReady := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := setupProcessWaitReady(readyCtx, client, receipt.AssetRevision); err != nil {
+		cancelReady()
+		t.Fatalf("trusted setup did not become ready: %v", err)
+	}
+	cancelReady()
+	trust, err := os.ReadFile(trustPath)
+	if err != nil || string(trust) != "trusted\n" {
+		t.Fatalf("setup changed adjacent Host trust fixture: (%q, %v)", trust, err)
+	}
+}
+
 // TestPublicSetupUpgradesAnActiveRevisionUnderLifecycleLease composes a real
 // old-authority Store, controller, Unix socket and applied Host projection,
 // then invokes only the public setup command for the desired embedded bundle.
@@ -380,18 +470,20 @@ func TestPublicSetupUpgradesAnActiveRevisionUnderLifecycleLease(t *testing.T) {
 		t.Fatalf("old revision daemon did not become ready: %v", err)
 	}
 	cancelOldReady()
+	trustPath := filepath.Join(workspace, ".codex", "fake-trust-status")
+	if err := os.WriteFile(trustPath, []byte("modified\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	upgradeCtx, cancelUpgrade := context.WithTimeout(context.Background(), 30*time.Second)
 	result := setupProcessRunSetup(upgradeCtx, harnessExecutable, workspace, environment)
 	cancelUpgrade()
-	receipt, err := setupProcessParseReceipt(result)
-	if err != nil {
-		t.Fatalf("public active revision upgrade failed: %v", err)
-	}
-	if receipt.AssetRevision != newRevision || receipt.Host != "codex" ||
-		receipt.PeerID != provisioned.Node.PeerID().String() || receipt.Replayed ||
-		!receipt.Started || receipt.Status != "ready" {
-		t.Fatalf("active revision upgrade receipt = %#v", receipt)
+	var modifiedExit *exec.ExitError
+	if !errors.As(result.err, &modifiedExit) || modifiedExit.ExitCode() != 4 ||
+		len(result.stdout) != 0 || string(result.stderr) !=
+		"host_activation_required: Codex has not loaded the exact trusted Mnemon Hook and Skill; trust this project and the current Hook with /hooks, then rerun setup\n" {
+		t.Fatalf("modified upgrade = exit=%v stdout=%s stderr=%s", result.err,
+			setupProcessFingerprint(result.stdout), setupProcessFingerprint(result.stderr))
 	}
 	select {
 	case err := <-oldDone:
@@ -406,6 +498,30 @@ func TestPublicSetupUpgradesAnActiveRevisionUnderLifecycleLease(t *testing.T) {
 		t.Fatalf("new projection did not converge: %v", err)
 	}
 	setupProcessAssertCodexProjectionLayout(t, workspace, true)
+	offlineCtx, cancelOffline := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := setupProcessWaitOffline(offlineCtx, client, nodeState, cleanup.offline); err != nil {
+		cancelOffline()
+		t.Fatalf("modified upgrade did not remain offline: %v", err)
+	}
+	cancelOffline()
+	disabled, err := node.InspectAuthority(context.Background(), workspace)
+	if err != nil || disabled.Enabled || disabled.PeerID != provisioned.Node.PeerID() ||
+		disabled.Host != model.HostCodex || disabled.AssetRevision != oldRevision ||
+		disabled.ActiveAssetRevision != oldRevision {
+		t.Fatalf("modified upgrade durable authority = (%#v, %v)", disabled, err)
+	}
+	if err := os.WriteFile(trustPath, []byte("trusted\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	recoveryCtx, cancelRecovery := context.WithTimeout(context.Background(), 30*time.Second)
+	recovered := setupProcessRunSetup(recoveryCtx, harnessExecutable, workspace, environment)
+	cancelRecovery()
+	receipt, err := setupProcessParseReceipt(recovered)
+	if err != nil || receipt.AssetRevision != newRevision || receipt.Host != "codex" ||
+		receipt.PeerID != provisioned.Node.PeerID().String() || receipt.Replayed ||
+		!receipt.Started || receipt.Status != "ready" {
+		t.Fatalf("trusted upgrade recovery = (%#v, %v)", receipt, err)
+	}
 	newReadyCtx, cancelNewReady := context.WithTimeout(context.Background(), 5*time.Second)
 	if err := setupProcessWaitReady(newReadyCtx, client, newRevision); err != nil {
 		cancelNewReady()
@@ -420,7 +536,7 @@ func TestPublicSetupUpgradesAnActiveRevisionUnderLifecycleLease(t *testing.T) {
 	}
 }
 
-func TestPublicEjectPreservesNodeAndAuthorizesOneExplicitHostSwitch(t *testing.T) {
+func TestPublicEjectPreservesNodeAndRejectsUnobservableHostSwitch(t *testing.T) {
 	repository := setupProcessRepositoryRoot(t)
 	root := setupProcessPhysicalTempDir(t)
 	bin := filepath.Join(root, "bin")
@@ -522,28 +638,45 @@ func TestPublicEjectPreservesNodeAndAuthorizesOneExplicitHostSwitch(t *testing.T
 	switched := setupProcessRunHarness(switchCtx, harnessExecutable, workspace, environment,
 		"setup", "--host", "claude-code", "--project-root", workspace)
 	cancelSwitch()
-	switchReceipt, err := setupProcessParseReceipt(switched)
-	if err != nil || switchReceipt.Host != "claude-code" || switchReceipt.Replayed ||
-		!switchReceipt.Started || switchReceipt.PeerID != setupReceipt.PeerID ||
-		switchReceipt.AssetRevision != setupReceipt.AssetRevision {
-		t.Fatalf("explicit Host switch setup = (%#v, %v)", switchReceipt, err)
+	var switchExit *exec.ExitError
+	if !errors.As(switched.err, &switchExit) || switchExit.ExitCode() != 4 ||
+		len(switched.stdout) != 0 || string(switched.stderr) !=
+		"host_activation_required: selected Host has no verifiable managed Hook activation surface; use codex\n" {
+		t.Fatalf("unobservable Host switch = exit=%v stdout=%s stderr=%s", switched.err,
+			setupProcessFingerprint(switched.stdout), setupProcessFingerprint(switched.stderr))
 	}
-	switchedReadyCtx, cancelSwitchedReady := context.WithTimeout(context.Background(), 5*time.Second)
-	if err := setupProcessWaitReady(switchedReadyCtx, client,
-		switchReceipt.AssetRevision); err != nil {
-		cancelSwitchedReady()
-		t.Fatalf("switched Host daemon did not become ready: %v", err)
+	if err := integration.VerifyHostProjectionAbsent(workspace, nodeState,
+		assets.HostClaudeCode, bundle); err != nil {
+		t.Fatalf("unsupported Host switch staged a Claude projection: %v", err)
 	}
-	cancelSwitchedReady()
 	if err := integration.VerifyHostProjectionAbsent(workspace, nodeState,
 		assets.HostCodex, bundle); err != nil {
-		t.Fatalf("Host switch recreated the old Codex projection: %v", err)
+		t.Fatalf("unsupported Host switch recreated the Codex projection: %v", err)
 	}
 	setupProcessAssertCodexProjectionLayout(t, workspace, false)
-	if err := integration.VerifyHostProjection(workspace, nodeState,
-		assets.HostClaudeCode, bundle); err != nil {
-		t.Fatalf("Host switch did not install the Claude projection: %v", err)
+
+	reactivateCtx, cancelReactivate := context.WithTimeout(context.Background(), 20*time.Second)
+	reactivated := setupProcessRunHarness(reactivateCtx, harnessExecutable, workspace, environment,
+		"setup", "--host", "codex", "--project-root", workspace)
+	cancelReactivate()
+	reactivateReceipt, err := setupProcessParseReceipt(reactivated)
+	if err != nil || reactivateReceipt.Host != "codex" || reactivateReceipt.Replayed ||
+		!reactivateReceipt.Started || reactivateReceipt.PeerID != setupReceipt.PeerID ||
+		reactivateReceipt.AssetRevision != setupReceipt.AssetRevision {
+		t.Fatalf("explicit Codex reactivation = (%#v, %v)", reactivateReceipt, err)
 	}
+	reactivatedReadyCtx, cancelReactivatedReady := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := setupProcessWaitReady(reactivatedReadyCtx, client,
+		reactivateReceipt.AssetRevision); err != nil {
+		cancelReactivatedReady()
+		t.Fatalf("reactivated Codex daemon did not become ready: %v", err)
+	}
+	cancelReactivatedReady()
+	if err := integration.VerifyHostProjection(workspace, nodeState,
+		assets.HostCodex, bundle); err != nil {
+		t.Fatalf("Codex reactivation did not restore its projection: %v", err)
+	}
+	setupProcessAssertCodexProjectionLayout(t, workspace, true)
 	setupProcessAssertPreservedFile(t, filepath.Join(nodeState, "node.db"), databaseInfo, nil)
 	setupProcessAssertPreservedFile(t, filepath.Join(nodeState, "identity.key"),
 		identityInfo, identityRaw)
@@ -775,6 +908,22 @@ func setupProcessFakeCodex(t *testing.T, path string) {
 		"case \"$*\" in\n" +
 		"  --version) printf '%s\\n' 'codex process-test' ;;\n" +
 		"  'app-server --help') printf '%s\\n' 'Usage: codex app-server' ;;\n" +
+		"  'app-server --stdio')\n" +
+		"    IFS= read -r initialize\n" +
+		"    case \"$initialize\" in *'\"method\":\"initialize\"'*) ;; *) exit 65 ;; esac\n" +
+		"    printf '%s\\n' '{\"id\":1,\"result\":{\"codexHome\":\"/bounded\",\"platformFamily\":\"unix\",\"platformOs\":\"test\",\"userAgent\":\"process-test\"}}'\n" +
+		"    IFS= read -r initialized\n" +
+		"    test \"$initialized\" = '{\"method\":\"initialized\"}'\n" +
+		"    IFS= read -r list\n" +
+		"    case \"$list\" in *'\"method\":\"hooks/list\"'*) ;; *) exit 66 ;; esac\n" +
+		"    trust=trusted\n" +
+		"    if test -f \"$HOME/.codex/fake-trust-status\"; then IFS= read -r trust < \"$HOME/.codex/fake-trust-status\"; fi\n" +
+		"    case \"$trust\" in trusted|untrusted|modified) ;; *) exit 67 ;; esac\n" +
+		"    printf '{\"id\":2,\"result\":{\"data\":[{\"cwd\":\"%s\",\"errors\":[],\"hooks\":[{\"command\":\"%s/.codex/hooks/mnemon-harness/hook.sh\",\"currentHash\":\"sha256:process-test\",\"displayOrder\":1,\"enabled\":true,\"eventName\":\"userPromptSubmit\",\"handlerType\":\"command\",\"isManaged\":false,\"key\":\"project:userPromptSubmit:1\",\"matcher\":null,\"pluginId\":null,\"source\":\"project\",\"sourcePath\":\"%s/.codex/hooks.json\",\"statusMessage\":\"Checking Mnemon Teamwork\",\"timeoutSec\":3,\"trustStatus\":\"%s\"}],\"warnings\":[]}]}}\\n' \"$PWD\" \"$PWD\" \"$PWD\" \"$trust\"\n" +
+		"    IFS= read -r skills\n" +
+		"    case \"$skills\" in *'\"method\":\"skills/list\"'*'\"forceReload\":true'*) ;; *) exit 68 ;; esac\n" +
+		"    printf '{\"id\":3,\"result\":{\"data\":[{\"cwd\":\"%s\",\"errors\":[],\"skills\":[{\"dependencies\":null,\"description\":\"Process one mnemond-managed Teamwork event.\",\"enabled\":true,\"interface\":null,\"name\":\"mnemon-harness\",\"path\":\"%s/.agents/skills/mnemon-harness/SKILL.md\",\"scope\":\"repo\",\"shortDescription\":null}]}]}}\\n' \"$PWD\" \"$PWD\"\n" +
+		"    ;;\n" +
 		"  *) exit 64 ;;\n" +
 		"esac\n")
 	if err := os.WriteFile(path, contents, 0o700); err != nil {

@@ -39,20 +39,23 @@ type setupDaemonLifecycle interface {
 }
 
 type setupDependencies struct {
-	workingDirectory  func() (string, error)
-	loadBundle        func() (assets.Bundle, error)
-	newCompanion      func(context.Context, string, string) (setupCompanion, error)
-	detectHost        func(context.Context, string) (integration.HostObservation, error)
-	inspectHost       func(context.Context, assets.Host) (integration.HostObservation, error)
-	prepareNode       func(string) (string, error)
-	canInitialize     func(string) (bool, error)
-	acquireLock       func(context.Context, string) (io.Closer, error)
-	newClient         func(string) (setupAuthorityClient, error)
-	installBundle     func(string, assets.Bundle) error
-	installProjection func(string, string, assets.Host, assets.Bundle) error
-	verifyProjection  func(string, string, assets.Host, assets.Bundle) error
-	verifyAbsent      func(string, string, assets.Host, assets.Bundle) error
-	preflightUpgrade  func(string, string, assets.Host, string,
+	workingDirectory    func() (string, error)
+	loadBundle          func() (assets.Bundle, error)
+	newCompanion        func(context.Context, string, string) (setupCompanion, error)
+	detectHost          func(context.Context, string) (integration.HostObservation, error)
+	inspectHost         func(context.Context, assets.Host) (integration.HostObservation, error)
+	activationSupported func(integration.HostObservation) bool
+	prepareNode         func(string) (string, error)
+	canInitialize       func(string) (bool, error)
+	acquireLock         func(context.Context, string) (io.Closer, error)
+	newClient           func(string) (setupAuthorityClient, error)
+	installBundle       func(string, assets.Bundle) error
+	installProjection   func(string, string, assets.Host, assets.Bundle) error
+	verifyProjection    func(string, string, assets.Host, assets.Bundle) error
+	verifyActivation    func(context.Context, string, string, integration.HostObservation,
+		assets.Bundle) error
+	verifyAbsent     func(string, string, assets.Host, assets.Bundle) error
+	preflightUpgrade func(string, string, assets.Host, string,
 		assets.Bundle) (integration.HostProjectionUpgradePreflight, error)
 	newPreflight      func(node.DaemonPreflightOptions) (node.DaemonEnsurePreflight, error)
 	currentExecutable func() (string, error)
@@ -99,8 +102,11 @@ func productionSetupDependencies() setupDependencies {
 		newCompanion: func(ctx context.Context, workspace, version string) (setupCompanion, error) {
 			return newCompanionRunner(ctx, workspace, version)
 		},
-		detectHost:    integration.DetectHost,
-		inspectHost:   integration.InspectHost,
+		detectHost:  integration.DetectHost,
+		inspectHost: integration.InspectHost,
+		activationSupported: func(observation integration.HostObservation) bool {
+			return observation.Host == assets.HostCodex
+		},
 		prepareNode:   node.PrepareNodeState,
 		canInitialize: setupCanInitialize,
 		acquireLock: func(ctx context.Context, nodeState string) (io.Closer, error) {
@@ -120,6 +126,7 @@ func productionSetupDependencies() setupDependencies {
 			return err
 		},
 		verifyProjection: integration.VerifyHostProjection,
+		verifyActivation: integration.VerifyHostActivation,
 		verifyAbsent:     integration.VerifyHostProjectionAbsent,
 		preflightUpgrade: integration.PreflightHostProjectionUpgrade,
 		newPreflight: func(options node.DaemonPreflightOptions) (node.DaemonEnsurePreflight, error) {
@@ -230,6 +237,9 @@ func (app *setupApp) executeLocked(ctx context.Context, request setupRequest,
 		if err != nil || !selected.Host.Valid() {
 			return setupReceipt{}, setupUnavailableError("no requested Host adapter passed preflight")
 		}
+		if !app.deps.activationSupported(selected) {
+			return setupReceipt{}, setupUnsupportedActivationError()
+		}
 		if _, err := companion.Initialize(ctx, model.HostKind(selected.Host), revision); err != nil {
 			return setupReceipt{}, setupAuthError("managed Node initialization failed")
 		}
@@ -257,6 +267,13 @@ func (app *setupApp) executeLocked(ctx context.Context, request setupRequest,
 		return setupReceipt{}, setupError(localapi.CodeProfileHostMismatch,
 			"managed Profile is bound to another Host; eject is required before switching")
 	}
+	hostObservation, err := app.deps.inspectHost(ctx, targetHost)
+	if err != nil {
+		return setupReceipt{}, setupUnavailableError("selected Host adapter failed preflight")
+	}
+	if !app.deps.activationSupported(hostObservation) {
+		return setupReceipt{}, setupUnsupportedActivationError()
+	}
 	if err := app.deps.installBundle(nodeState, bundle); err != nil {
 		return setupReceipt{}, setupAssetsError()
 	}
@@ -276,7 +293,7 @@ func (app *setupApp) executeLocked(ctx context.Context, request setupRequest,
 	}
 	if authority.Enabled && authority.AssetRevision != revision {
 		return app.upgradeActive(ctx, workspace, nodeState, revision, bundle, targetHost,
-			authority, authorityUpdatedAt, observed.client, companion)
+			hostObservation, authority, authorityUpdatedAt, observed.client, companion)
 	}
 	if err := app.deps.installProjection(workspace, nodeState, targetHost, bundle); err != nil {
 		return setupReceipt{}, setupAssetsError()
@@ -284,8 +301,9 @@ func (app *setupApp) executeLocked(ctx context.Context, request setupRequest,
 	if err := app.deps.verifyProjection(workspace, nodeState, targetHost, bundle); err != nil {
 		return setupReceipt{}, setupAssetsError()
 	}
-	if _, err := app.deps.inspectHost(ctx, targetHost); err != nil {
-		return setupReceipt{}, setupUnavailableError("selected Host adapter failed preflight")
+	if err := app.deps.verifyActivation(ctx, workspace, nodeState, hostObservation,
+		bundle); err != nil {
+		return setupReceipt{}, setupHostActivationError(err)
 	}
 
 	client := observed.client
@@ -344,6 +362,7 @@ func otherSetupHost(host assets.Host) (assets.Host, bool) {
 
 func (app *setupApp) upgradeActive(ctx context.Context, workspace, nodeState,
 	revision string, bundle assets.Bundle, host assets.Host,
+	hostObservation integration.HostObservation,
 	authority localapi.AuthorityResponse, authorityUpdatedAt time.Time,
 	client setupAuthorityClient, companion setupCompanion,
 ) (setupReceipt, *localapi.APIError) {
@@ -353,9 +372,6 @@ func (app *setupApp) upgradeActive(ctx context.Context, workspace, nodeState,
 	if err != nil || preflight.Host != host ||
 		preflight.PreviousRevision != previousRevision || preflight.Revision != revision {
 		return setupReceipt{}, setupAssetsError()
-	}
-	if _, err := app.deps.inspectHost(ctx, host); err != nil {
-		return setupReceipt{}, setupUnavailableError("selected Host adapter failed preflight")
 	}
 	if client == nil {
 		client, err = app.deps.newClient(nodeState)
@@ -370,7 +386,7 @@ func (app *setupApp) upgradeActive(ctx context.Context, workspace, nodeState,
 		return setupReceipt{}, setupUnavailableError("managed daemon lifecycle is unavailable")
 	}
 	receipt, apiErr := app.upgradeActiveLeased(ctx, workspace, nodeState, revision,
-		bundle, host, authority, authorityUpdatedAt, client, companion, lease)
+		bundle, host, hostObservation, authority, authorityUpdatedAt, client, companion, lease)
 	if closeErr := lease.Close(); closeErr != nil {
 		return setupReceipt{}, setupAuthError("managed daemon lifecycle changed during setup")
 	}
@@ -379,6 +395,7 @@ func (app *setupApp) upgradeActive(ctx context.Context, workspace, nodeState,
 
 func (app *setupApp) upgradeActiveLeased(ctx context.Context, workspace, nodeState,
 	revision string, bundle assets.Bundle, host assets.Host,
+	hostObservation integration.HostObservation,
 	authority localapi.AuthorityResponse, authorityUpdatedAt time.Time,
 	client setupAuthorityClient, companion setupCompanion, lease setupDaemonLifecycle,
 ) (setupReceipt, *localapi.APIError) {
@@ -409,6 +426,10 @@ func (app *setupApp) upgradeActiveLeased(ctx context.Context, workspace, nodeSta
 	}
 	if err := app.deps.verifyProjection(workspace, nodeState, host, bundle); err != nil {
 		return setupReceipt{}, setupAssetsError()
+	}
+	if err := app.deps.verifyActivation(ctx, workspace, nodeState, hostObservation,
+		bundle); err != nil {
+		return setupReceipt{}, setupHostActivationError(err)
 	}
 	ensureOptions, apiErr := app.ensureOptions(workspace, nodeState, revision, bundle,
 		host, client)
@@ -618,11 +639,12 @@ func setupCanInitialize(nodeState string) (bool, error) {
 func validSetupDependencies(dependencies setupDependencies) bool {
 	return dependencies.workingDirectory != nil && dependencies.loadBundle != nil &&
 		dependencies.newCompanion != nil && dependencies.detectHost != nil &&
-		dependencies.inspectHost != nil && dependencies.prepareNode != nil &&
+		dependencies.inspectHost != nil && dependencies.activationSupported != nil &&
+		dependencies.prepareNode != nil &&
 		dependencies.canInitialize != nil && dependencies.acquireLock != nil &&
 		dependencies.newClient != nil && dependencies.installBundle != nil &&
 		dependencies.installProjection != nil && dependencies.verifyProjection != nil &&
-		dependencies.verifyAbsent != nil &&
+		dependencies.verifyActivation != nil && dependencies.verifyAbsent != nil &&
 		dependencies.preflightUpgrade != nil && dependencies.acquireLifecycle != nil &&
 		dependencies.newPreflight != nil && dependencies.currentExecutable != nil &&
 		dependencies.newLauncher != nil && dependencies.newHookGate != nil &&
@@ -685,6 +707,23 @@ func setupAuthError(message string) *localapi.APIError {
 func setupAssetsError() *localapi.APIError {
 	return setupError(localapi.CodeAssetRevisionMismatch,
 		"canonical managed assets or projection are invalid")
+}
+
+func setupHostActivationError(err error) *localapi.APIError {
+	if errors.Is(err, integration.ErrHostActivationRequired) {
+		return setupError(localapi.CodeHostActivationRequired,
+			"Codex has not loaded the exact trusted Mnemon Hook and Skill; trust this project and the current Hook with /hooks, then rerun setup")
+	}
+	if errors.Is(err, integration.ErrProjectionConflict) ||
+		errors.Is(err, integration.ErrUnsafeProjection) {
+		return setupAssetsError()
+	}
+	return setupUnavailableError("selected Host activation could not be observed")
+}
+
+func setupUnsupportedActivationError() *localapi.APIError {
+	return setupError(localapi.CodeHostActivationRequired,
+		"selected Host has no verifiable managed Hook activation surface; use codex")
 }
 
 func setupUnavailableError(message string) *localapi.APIError {

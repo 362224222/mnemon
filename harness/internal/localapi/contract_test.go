@@ -16,6 +16,7 @@ func TestErrorCodeContract(t *testing.T) {
 		{CodeInvalidArgument, 2, false}, {CodeArtifactInvalid, 2, false},
 		{CodeAuthenticationFailed, 3, false}, {CodeContextStale, 3, false},
 		{CodeActionNotAllowed, 4, false}, {CodeWorkExpired, 4, false},
+		{CodeHostActivationRequired, 4, false},
 		{CodeOperationPending, 5, true}, {CodePeerUnavailable, 5, true},
 		{CodeInternal, 1, false},
 	}
