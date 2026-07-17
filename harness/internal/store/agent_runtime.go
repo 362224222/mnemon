@@ -153,6 +153,10 @@ func (s *Store) RecordAgentRuntimeLaunch(ctx context.Context,
 	if err != nil {
 		return AgentRuntimeTransitionResult{}, err
 	}
+	authority, err = settleExpiredAgentRuntimeAuthority(ctx, tx, authority, at)
+	if err != nil {
+		return AgentRuntimeTransitionResult{}, err
+	}
 	diagnosticSet := authority.run.LauncherDiagnostic().String() != `{}`
 	runtimeIDsSet := authority.run.RuntimeIDs().String() != `{}`
 	if diagnosticSet != runtimeIDsSet {
@@ -327,6 +331,10 @@ func (s *Store) RecordAgentWakeDelivery(ctx context.Context,
 	if err != nil {
 		return AgentRuntimeTransitionResult{}, err
 	}
+	authority, err = settleExpiredAgentRuntimeAuthority(ctx, tx, authority, at)
+	if err != nil {
+		return AgentRuntimeTransitionResult{}, err
+	}
 	if deliveredAt, delivered := authority.run.WakeDeliveredAt(); delivered {
 		receipt, hasReceipt := authority.run.WakeReceipt()
 		if deliveredAt.After(at) || !hasReceipt || receipt.String() != spec.WakeReceipt.String() {
@@ -446,6 +454,10 @@ func (s *Store) FinishAgentRuntime(ctx context.Context,
 	if err != nil {
 		return AgentRuntimeTransitionResult{}, err
 	}
+	authority, err = settleExpiredAgentRuntimeAuthority(ctx, tx, authority, at)
+	if err != nil {
+		return AgentRuntimeTransitionResult{}, err
+	}
 	if receipt, finished := authority.run.CompletionReceipt(); finished {
 		completionAt, hasCompletionAt := authority.run.CompletionAt()
 		if hasCompletionAt && !completionAt.After(at) && authority.run.Error() == "" &&
@@ -559,6 +571,10 @@ func (s *Store) FailAgentRuntime(ctx context.Context,
 	}
 	defer tx.Rollback()
 	authority, err := readAgentRuntimeAuthority(ctx, tx, authoritySpec, at)
+	if err != nil {
+		return AgentRuntimeTransitionResult{}, err
+	}
+	authority, err = settleExpiredAgentRuntimeAuthority(ctx, tx, authority, at)
 	if err != nil {
 		return AgentRuntimeTransitionResult{}, err
 	}
@@ -892,6 +908,57 @@ func requireLiveAgentRuntimeAuthority(authority agentRuntimeAuthority, fence mod
 		return fmt.Errorf("%w: %v", ErrAgentRuntimeInvariant, err)
 	}
 	return nil
+}
+
+// settleExpiredAgentRuntimeAuthority makes every managed Runtime evidence
+// boundary self-sufficient at the claim lease edge. A Runtime callback or
+// completion may be the first Store call after expiry; in that case the same
+// transaction first records the lease winner and then lets the caller append
+// only the late evidence its transition permits. No second worker, readiness
+// probe, or restart is required to make the historical Run consistent.
+func settleExpiredAgentRuntimeAuthority(ctx context.Context, tx *sql.Tx,
+	authority agentRuntimeAuthority, at time.Time,
+) (agentRuntimeAuthority, error) {
+	if !authority.run.Status().OperationAuthority() {
+		return authority, nil
+	}
+	lease, hasLease := authority.run.LeaseUntil()
+	if !hasLease {
+		return agentRuntimeAuthority{}, fmt.Errorf(
+			"%w: active managed Run has no claim lease", ErrAgentRuntimeInvariant)
+	}
+	if lease.After(at) {
+		return authority, nil
+	}
+	fence, hasFence := authority.run.ClaimFenceHash()
+	if !hasFence || fence.IsZero() {
+		return agentRuntimeAuthority{}, fmt.Errorf(
+			"%w: expired managed Run has no claim fence", ErrAgentRuntimeInvariant)
+	}
+	if err := requireExactActiveOrphan(authority, fence, at); err != nil {
+		return agentRuntimeAuthority{}, fmt.Errorf(
+			"%w: expired managed Run is not the current claim: %v", ErrAgentRuntimeInvariant, err)
+	}
+	busy, err := recoverExpiredAgentClaim(ctx, tx, authority.profile, authority.budget, at)
+	if err != nil {
+		return agentRuntimeAuthority{}, fmt.Errorf(
+			"%w: settle expired claim: %v", ErrAgentRuntimeInvariant, err)
+	}
+	if busy {
+		return agentRuntimeAuthority{}, fmt.Errorf(
+			"%w: expired managed claim remained active", ErrAgentRuntimeInvariant)
+	}
+	authority.run, err = readAgentRun(ctx, tx, authority.run.ID())
+	if err != nil {
+		return agentRuntimeAuthority{}, fmt.Errorf(
+			"%w: expired Run cannot be read", ErrAgentRuntimeInvariant)
+	}
+	authority.handling, err = readAgentHandling(ctx, tx, authority.handling.ID())
+	if err != nil {
+		return agentRuntimeAuthority{}, fmt.Errorf(
+			"%w: expired Handling cannot be read", ErrAgentRuntimeInvariant)
+	}
+	return authority, nil
 }
 
 func agentRuntimeSemanticSettled(run model.AgentRun) bool {

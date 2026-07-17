@@ -371,6 +371,206 @@ func TestAgentRuntimeLateLaunchSurvivesLeaseSettlement(t *testing.T) {
 	}
 }
 
+func TestAgentRuntimeEvidenceAtomicallySettlesExpiredClaim(t *testing.T) {
+	diagnostic := runtimeTestJSON(t, `{"adapter":"codex-app-server","phase":"initialized"}`)
+	runtimeIDs := runtimeTestJSON(t, `{"process":"process-runtime-lease-edge"}`)
+	wakeReceipt := runtimeTestJSON(t, `{"hook_id":"hook-runtime-lease-edge","turn_id":"turn-runtime-lease-edge"}`)
+
+	t.Run("launch at lease cannot regain authority", func(t *testing.T) {
+		fixture, claim, token, _ := newWakeRuntimeFixture(t, "runtime-lease-launch", 0)
+		lease, _ := claim.Run.LeaseUntil()
+		launch := runtimeLaunchSpec(fixture, claim, token, diagnostic, runtimeIDs, lease)
+		settled, err := fixture.store.RecordAgentRuntimeLaunch(context.Background(), launch)
+		if err != nil || settled.Status != AgentRuntimeAlreadySettled ||
+			settled.Run.Status() != model.AgentRunRequeued ||
+			settled.Handling.Status() != model.HandlingPending ||
+			settled.Handling.LastDisposition() != "lease_expired" {
+			t.Fatalf("launch at expired lease = (%#v, %v)", settled, err)
+		}
+		startedAt, started := settled.Run.RuntimeStartedAt()
+		finishedAt, finished := settled.Run.FinishedAt()
+		if !started || !startedAt.Equal(lease) || !finished || !finishedAt.Equal(lease) ||
+			settled.Run.LauncherDiagnostic().String() != diagnostic.String() ||
+			settled.Run.RuntimeIDs().String() != runtimeIDs.String() {
+			t.Fatalf("late launch evidence = %#v", settled.Run)
+		}
+		if _, completed := settled.Run.CompletionReceipt(); completed {
+			t.Fatal("lease-edge launch fabricated Runtime completion")
+		}
+		wantRetry := lease.Add(time.Duration(model.DefaultRetryInitialSeconds) * time.Second)
+		if !settled.Handling.AvailableAt().Equal(wantRetry) {
+			t.Fatalf("lease-edge retry = %s, want %s", settled.Handling.AvailableAt(), wantRetry)
+		}
+	})
+
+	t.Run("wake at lease records proof but stops authority", func(t *testing.T) {
+		fixture, claim, token, claimAt := newWakeRuntimeFixture(t, "runtime-lease-wake", 0)
+		if _, err := fixture.store.RecordAgentRuntimeLaunch(context.Background(),
+			runtimeLaunchSpec(fixture, claim, token, diagnostic, runtimeIDs,
+				claimAt.Add(250*time.Millisecond))); err != nil {
+			t.Fatal(err)
+		}
+		lease, _ := claim.Run.LeaseUntil()
+		wake := wakeDeliverySpec(fixture, claim, token, wakeReceipt, lease)
+		settled, err := fixture.store.RecordAgentWakeDelivery(context.Background(), wake)
+		if err != nil || settled.Status != AgentRuntimeAlreadySettled ||
+			settled.Run.Status() != model.AgentRunRequeued ||
+			settled.Handling.LastDisposition() != "lease_expired" {
+			t.Fatalf("wake at expired lease = (%#v, %v)", settled, err)
+		}
+		wakeAt, delivered := settled.Run.WakeDeliveredAt()
+		stored, hasReceipt := settled.Run.WakeReceipt()
+		if !delivered || !wakeAt.Equal(lease) || !hasReceipt || stored.String() != wakeReceipt.String() {
+			t.Fatalf("lease-edge wake evidence = %#v", settled.Run)
+		}
+	})
+
+	t.Run("normal completion at lease preserves lease winner", func(t *testing.T) {
+		fixture, claim, token, claimAt := newWakeRuntimeFixture(t, "runtime-lease-finish", 0)
+		if _, err := fixture.store.RecordAgentRuntimeLaunch(context.Background(),
+			runtimeLaunchSpec(fixture, claim, token, diagnostic, runtimeIDs,
+				claimAt.Add(250*time.Millisecond))); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fixture.store.RecordAgentWakeDelivery(context.Background(),
+			wakeDeliverySpec(fixture, claim, token, wakeReceipt,
+				claimAt.Add(500*time.Millisecond))); err != nil {
+			t.Fatal(err)
+		}
+		lease, _ := claim.Run.LeaseUntil()
+		completion := runtimeTestJSON(t, `{"kind":"runtime_completion","result":"normal_exit"}`)
+		finished, err := fixture.store.FinishAgentRuntime(context.Background(),
+			runtimeFinishSpec(fixture, claim, token, completion, lease))
+		if err != nil || finished.Status != AgentRuntimeApplied ||
+			finished.Run.Status() != model.AgentRunRequeued || finished.Run.Error() != "" ||
+			finished.Handling.Status() != model.HandlingPending ||
+			finished.Handling.LastDisposition() != "lease_expired" ||
+			finished.Handling.LastError() != "claim lease expired" {
+			t.Fatalf("completion at expired lease = (%#v, %v)", finished, err)
+		}
+		completionAt, hasCompletion := finished.Run.CompletionAt()
+		stored, hasReceipt := finished.Run.CompletionReceipt()
+		if !hasCompletion || !completionAt.Equal(lease) || !hasReceipt ||
+			stored.String() != completion.String() {
+			t.Fatalf("lease-edge completion evidence = %#v", finished.Run)
+		}
+	})
+
+	t.Run("completion response loss replay settles expired claim", func(t *testing.T) {
+		fixture := newManagedWakeRuntimeFixture(t, "runtime-lease-finish-replay", true,
+			model.OperationResolveNoAction, "completion succeeds before its response is lost")
+		lease, _ := fixture.claim.Run.LeaseUntil()
+		finishAt := fixture.reserveSpec.At.Add(time.Second)
+		completion := runtimeTestJSON(t, `{"kind":"runtime_completion","result":"normal_exit"}`)
+		finishSpec := runtimeFinishSpec(fixture.acceptanceFixture, fixture.claim, fixture.token,
+			completion, finishAt)
+		finished, err := fixture.store.FinishAgentRuntime(context.Background(), finishSpec)
+		if err != nil || finished.Status != AgentRuntimeApplied ||
+			finished.Run.Status() != model.AgentRunRuntimeFinished ||
+			finished.Handling.Status() != model.HandlingClaimed {
+			t.Fatalf("initial completion before lease = (%#v, %v)", finished, err)
+		}
+
+		finishSpec.At = lease
+		replayed, err := fixture.store.FinishAgentRuntime(context.Background(), finishSpec)
+		if err != nil || replayed.Status != AgentRuntimeReplayed ||
+			replayed.Run.Status() != model.AgentRunRequeued ||
+			replayed.Handling.Status() != model.HandlingPending ||
+			replayed.Handling.LastDisposition() != "lease_expired" ||
+			replayed.Handling.LastError() != "claim lease expired" {
+			t.Fatalf("completion replay at expired lease = (%#v, %v)", replayed, err)
+		}
+		completionAt, hasCompletion := replayed.Run.CompletionAt()
+		stored, hasReceipt := replayed.Run.CompletionReceipt()
+		if !hasCompletion || !completionAt.Equal(finishAt) || !hasReceipt ||
+			stored.String() != completion.String() {
+			t.Fatalf("completion replay changed receipt = %#v", replayed.Run)
+		}
+		wantRetry := lease.Add(time.Duration(model.DefaultRetryInitialSeconds) * time.Second)
+		if !replayed.Handling.AvailableAt().Equal(wantRetry) {
+			t.Fatalf("completion replay retry = %s, want lease-derived %s",
+				replayed.Handling.AvailableAt(), wantRetry)
+		}
+		operation, err := readOperationByID(context.Background(), fixture.store.db,
+			fixture.reservation.Operation.ID())
+		if err != nil || operation.Status() != model.OperationRejected {
+			t.Fatalf("completion replay Operation = (%#v, %v)", operation, err)
+		}
+		result, hasResult := operation.Result()
+		if !hasResult || result.String() != `{"code":"claim_lease_expired","status":"rejected"}` {
+			t.Fatalf("completion replay Operation receipt = (%s, %v)", result, hasResult)
+		}
+	})
+
+	t.Run("failure after lease rejects operation without moving backoff", func(t *testing.T) {
+		fixture := newManagedWakeRuntimeFixture(t, "runtime-lease-failure", true,
+			model.OperationResolveNoAction, "operation expires before Runtime failure")
+		lease, _ := fixture.claim.Run.LeaseUntil()
+		failureAt := lease.Add(time.Second)
+		completion := runtimeTestJSON(t, `{"kind":"runtime_completion","result":"provider_failed"}`)
+		failure := runtimeFailureSpec(fixture.acceptanceFixture, fixture.claim, fixture.token,
+			fixture.diagnostic, fixture.runtimeIDs, completion, "provider failed after claim lease", failureAt)
+		failed, err := fixture.store.FailAgentRuntime(context.Background(), failure)
+		if err != nil || failed.Status != AgentRuntimeApplied ||
+			failed.Run.Status() != model.AgentRunRequeued || failed.Run.Error() != failure.Error ||
+			failed.Handling.Status() != model.HandlingPending ||
+			failed.Handling.LastDisposition() != "lease_expired" ||
+			failed.Handling.LastError() != "claim lease expired" {
+			t.Fatalf("failure after expired lease = (%#v, %v)", failed, err)
+		}
+		wantRetry := lease.Add(time.Duration(model.DefaultRetryInitialSeconds) * time.Second)
+		if !failed.Handling.AvailableAt().Equal(wantRetry) {
+			t.Fatalf("late failure retry = %s, want lease-derived %s",
+				failed.Handling.AvailableAt(), wantRetry)
+		}
+		operation, err := readOperationByID(context.Background(), fixture.store.db,
+			fixture.reservation.Operation.ID())
+		if err != nil || operation.Status() != model.OperationRejected {
+			t.Fatalf("expired Runtime Operation = (%#v, %v)", operation, err)
+		}
+		result, hasResult := operation.Result()
+		if !hasResult || result.String() != `{"code":"claim_lease_expired","status":"rejected"}` {
+			t.Fatalf("expired Runtime Operation receipt = (%s, %v)", result, hasResult)
+		}
+		completionAt, completed := failed.Run.CompletionAt()
+		if !completed || !completionAt.Equal(failureAt) {
+			t.Fatalf("late failure completion = (%s, %v)", completionAt, completed)
+		}
+	})
+
+	t.Run("final attempt completion is recoverable without restart", func(t *testing.T) {
+		fixture, claim, token, claimAt := newWakeRuntimeFixture(t, "runtime-lease-dead", 1)
+		if _, err := fixture.store.RecordAgentRuntimeLaunch(context.Background(),
+			runtimeLaunchSpec(fixture, claim, token, diagnostic, runtimeIDs,
+				claimAt.Add(250*time.Millisecond))); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fixture.store.RecordAgentWakeDelivery(context.Background(),
+			wakeDeliverySpec(fixture, claim, token, wakeReceipt,
+				claimAt.Add(500*time.Millisecond))); err != nil {
+			t.Fatal(err)
+		}
+		lease, _ := claim.Run.LeaseUntil()
+		completion := runtimeTestJSON(t, `{"kind":"runtime_completion","result":"normal_exit"}`)
+		finished, err := fixture.store.FinishAgentRuntime(context.Background(),
+			runtimeFinishSpec(fixture, claim, token, completion, lease))
+		if err != nil || finished.Run.Status() != model.AgentRunDead ||
+			finished.Handling.Status() != model.HandlingDead ||
+			finished.Handling.LastDisposition() != "attempt_budget_exhausted" {
+			t.Fatalf("final lease-edge completion = (%#v, %v)", finished, err)
+		}
+		authority, err := fixture.store.ReadLocalAuthority(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		recovered, err := fixture.store.RecoverDeadAgentHandlings(context.Background(),
+			AgentDeadRecoverySpec{Profile: authority.Profile, At: lease.Add(time.Second)})
+		if err != nil || recovered.Recovered != 1 {
+			t.Fatalf("recover completed final lease attempt = (%#v, %v)", recovered, err)
+		}
+	})
+}
+
 func TestAgentRuntimeOutcomeFirstStillAcceptsWakeAndCompletionEvidence(t *testing.T) {
 	t.Run("normal completion", func(t *testing.T) {
 		fixture := newManagedWakeRuntimeFixture(t, "outcome-first-finish", false,
