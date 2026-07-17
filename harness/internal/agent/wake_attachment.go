@@ -148,7 +148,13 @@ func (p *WakeAttachmentPreparer) Prepare(ctx context.Context,
 	}
 	attachment, err := staged.Publish(claimed.Run.ID())
 	if err != nil {
-		return PreparedWake{}, fmt.Errorf("%w: publish capability: %v", ErrWakeAttachment, err)
+		// The preclaim transaction already committed the Run. Preserve that
+		// durable authority for the worker so it can record an immediate
+		// launch failure; the empty attachment still makes this result
+		// impossible to launch.
+		return PreparedWake{status: claimed.Status, run: claimed.Run,
+				nodeState: p.nodeState}, fmt.Errorf("%w: publish capability: %v",
+				ErrWakeAttachment, err)
 	}
 	discard = false
 	return PreparedWake{status: claimed.Status, run: claimed.Run, attachment: attachment,

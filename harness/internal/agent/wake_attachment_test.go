@@ -159,7 +159,8 @@ func TestWakeAttachmentPublishFailureNeverReturnsLaunchableRuntime(t *testing.T)
 		t.Fatal(err)
 	}
 	prepared, err := preparer.Prepare(context.Background(), profile)
-	if !errors.Is(err, ErrWakeAttachment) || prepared.AttachmentPath() != "" || prepared.Environment() != "" {
+	if !errors.Is(err, ErrWakeAttachment) || prepared.Status() != store.AgentClaimActionable ||
+		prepared.Run().ID() != runID || prepared.AttachmentPath() != "" || prepared.Environment() != "" {
 		t.Fatalf("publish collision Prepare() = (%#v, %v)", prepared, err)
 	}
 	entries, readErr := os.ReadDir(filepath.Join(nodeState, "runs"))
