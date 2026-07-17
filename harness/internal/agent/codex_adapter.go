@@ -411,11 +411,17 @@ func (adapter *CodexWakeAdapter) Run(ctx context.Context,
 				return false, codexAdapterError("wake evidence", err)
 			}
 			result.WakeAt, result.WakeReceipt = wakeAt, receipt
+			// WakeDelivered describes the observed managed Hook cue, not the
+			// transport result of its durable callback. Set it before the
+			// callback so a commit-response loss cannot later produce a
+			// completion receipt that contradicts an already-durable wake.
+			// The worker independently replays an ambiguous callback before it
+			// is allowed to persist this completion evidence.
+			result.WakeDelivered = true
 			if err := request.Callbacks.RecordWake(ctx, CodexWakeEvidence{At: wakeAt,
 				Receipt: receipt}); err != nil {
 				return false, codexAdapterError("record wake", err)
 			}
-			result.WakeDelivered = true
 			return false, nil
 		case "turn/completed":
 			status, err := decodeCodexTurnCompleted(envelope.Params, threadID, turnID)

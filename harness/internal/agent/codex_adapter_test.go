@@ -241,7 +241,8 @@ func TestCodexWakeAdapterPreservesObservedEvidenceAcrossCallbackFailures(t *test
 		if !errors.Is(err, ErrCodexWakeAdapter) || strings.Contains(err.Error(), "store wake unavailable") ||
 			!result.ProcessExited ||
 			result.LaunchAt.IsZero() || result.WakeAt.IsZero() || result.Diagnostic.IsZero() ||
-			result.RuntimeIDs.IsZero() || result.WakeReceipt.IsZero() || result.WakeDelivered {
+			result.RuntimeIDs.IsZero() || result.WakeReceipt.IsZero() || !result.WakeDelivered ||
+			!strings.Contains(result.CompletionReceipt.String(), `"wake_delivered":true`) {
 			t.Fatalf("Run() = (%#v, %v)", result, err)
 		}
 		if fixture.starter.process.waitCount.Load() != 1 {
