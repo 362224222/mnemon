@@ -7,21 +7,21 @@ import (
 )
 
 func TestClassifySuggestion_Add(t *testing.T) {
-	got := classifySuggestion(0.3, "completely new content", "existing different content")
+	got := classifySuggestion(0.3, 0.3, "completely new content", "existing different content")
 	if got != DiffAdd {
 		t.Errorf("low similarity: want ADD, got %s", got)
 	}
 }
 
 func TestClassifySuggestion_Duplicate(t *testing.T) {
-	got := classifySuggestion(0.95, "very similar content here", "very similar content here indeed")
+	got := classifySuggestion(0.95, 0.95, "very similar content here", "very similar content here indeed")
 	if got != DiffDuplicate {
 		t.Errorf("high similarity: want DUPLICATE, got %s", got)
 	}
 }
 
 func TestClassifySuggestion_Update(t *testing.T) {
-	got := classifySuggestion(0.7, "Go uses SQLite for storage", "Go uses PostgreSQL for storage")
+	got := classifySuggestion(0.7, 0.7, "Go uses SQLite for storage", "Go uses PostgreSQL for storage")
 	if got != DiffUpdate {
 		t.Errorf("medium similarity: want UPDATE, got %s", got)
 	}
@@ -40,7 +40,7 @@ func TestClassifySuggestion_ConflictNegation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Similarity >= 0.7 so negation check is active.
-			got := classifySuggestion(0.7, tt.newText, tt.existing)
+			got := classifySuggestion(0.7, 0.7, tt.newText, tt.existing)
 			if got != DiffConflict {
 				t.Errorf("want CONFLICT, got %s", got)
 			}
@@ -52,7 +52,7 @@ func TestClassifySuggestion_NotWordNoConflict(t *testing.T) {
 	// "not" alone must NOT trigger CONFLICT — it appears constantly in
 	// scientific text ("species not previously recorded") and would cause
 	// false replacements of distinct survey records.
-	got := classifySuggestion(0.7, "species not recorded at this site", "species recorded at Kinabalu")
+	got := classifySuggestion(0.7, 0.7, "species not recorded at this site", "species recorded at Kinabalu")
 	if got == DiffConflict {
 		t.Error("bare 'not' should not trigger CONFLICT")
 	}
@@ -62,7 +62,7 @@ func TestClassifySuggestion_ConflictBelowThreshold(t *testing.T) {
 	// Negation words must NOT trigger CONFLICT when similarity < 0.7.
 	// Two survey records from different locations may share domain vocabulary
 	// and contain "no longer" or "replaced" in unrelated sentences.
-	got := classifySuggestion(0.6, "no longer present at Raub site", "butterfly survey Kinabalu")
+	got := classifySuggestion(0.6, 0.6, "no longer present at Raub site", "butterfly survey Kinabalu")
 	if got == DiffConflict {
 		t.Error("negation below similarity 0.7 should not trigger CONFLICT")
 	}
@@ -70,13 +70,13 @@ func TestClassifySuggestion_ConflictBelowThreshold(t *testing.T) {
 
 func TestClassifySuggestion_Boundary(t *testing.T) {
 	// Exactly 0.5 should not be ADD (it's >= 0.5)
-	got := classifySuggestion(0.5, "some content here", "other content here")
+	got := classifySuggestion(0.5, 0.5, "some content here", "other content here")
 	if got == DiffAdd {
 		t.Error("similarity=0.5: should not be ADD (threshold is < 0.5)")
 	}
 
 	// Exactly 0.9 should not be DUPLICATE (threshold is > 0.9)
-	got = classifySuggestion(0.9, "some content here", "other content here")
+	got = classifySuggestion(0.9, 0.9, "some content here", "other content here")
 	if got == DiffDuplicate {
 		t.Error("similarity=0.9: should not be DUPLICATE (threshold is > 0.9)")
 	}
