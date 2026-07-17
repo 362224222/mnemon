@@ -178,8 +178,19 @@ func (s *Store) RecordAgentRuntimeLaunch(ctx context.Context,
 			return AgentRuntimeTransitionResult{}, fmt.Errorf(
 				"%w: launch replay time precedes Runtime start", ErrAgentRuntimeInvariant)
 		}
+		if authority.run.Status() == model.AgentRunRuntimeFinished || authority.run.Status().Terminal() {
+			return commitAgentRuntimeResult(tx, authority, AgentRuntimeAlreadySettled,
+				"record Agent Runtime launch: terminal replay")
+		}
+		if authority.run.Status() != model.AgentRunRunning {
+			return AgentRuntimeTransitionResult{}, fmt.Errorf(
+				"%w: launched Run has invalid active status", ErrAgentRuntimeInvariant)
+		}
+		if err := requireLiveAgentRuntimeAuthority(authority, spec.ClaimFenceHash, at); err != nil {
+			return AgentRuntimeTransitionResult{}, err
+		}
 		return commitAgentRuntimeResult(tx, authority, AgentRuntimeReplayed,
-			"record Agent Runtime launch: replay")
+			"record Agent Runtime launch: active replay")
 	}
 	if authority.run.Status() != model.AgentRunStarting {
 		if !authority.run.Status().Terminal() {
@@ -244,7 +255,12 @@ func (s *Store) RecordAgentRuntimeLaunch(ctx context.Context,
 			return AgentRuntimeTransitionResult{}, fmt.Errorf(
 				"%w: late launched AgentRun cannot be read", ErrAgentRuntimeInvariant)
 		}
-		return commitAgentRuntimeResult(tx, authority, AgentRuntimeApplied,
+		// The launch evidence is still durable process identity, but a terminal
+		// Run no longer grants managed-work authority. In particular, an
+		// abandonment or lease settlement may have won while this callback was
+		// in flight. Report that winner so the adapter stops before sending any
+		// protocol bytes while startup recovery can still observe the process.
+		return commitAgentRuntimeResult(tx, authority, AgentRuntimeAlreadySettled,
 			"record late Agent Runtime launch: commit")
 	}
 	if diagnosticSet {
@@ -317,8 +333,19 @@ func (s *Store) RecordAgentWakeDelivery(ctx context.Context,
 			return AgentRuntimeTransitionResult{}, fmt.Errorf("%w: wake replay evidence differs",
 				ErrAgentRuntimeInvariant)
 		}
+		if authority.run.Status() == model.AgentRunRuntimeFinished || authority.run.Status().Terminal() {
+			return commitAgentRuntimeResult(tx, authority, AgentRuntimeAlreadySettled,
+				"record Agent wake delivery: terminal replay")
+		}
+		if authority.run.Status() != model.AgentRunRunning {
+			return AgentRuntimeTransitionResult{}, fmt.Errorf(
+				"%w: delivered wake has invalid active status", ErrAgentRuntimeInvariant)
+		}
+		if err := requireLiveAgentRuntimeAuthority(authority, spec.ClaimFenceHash, at); err != nil {
+			return AgentRuntimeTransitionResult{}, err
+		}
 		return commitAgentRuntimeResult(tx, authority, AgentRuntimeReplayed,
-			"record Agent wake delivery: replay")
+			"record Agent wake delivery: active replay")
 	}
 	active := authority.run.Status() == model.AgentRunRunning
 	diagnosticSet := authority.run.LauncherDiagnostic().String() != `{}`
@@ -350,8 +377,8 @@ func (s *Store) RecordAgentWakeDelivery(ctx context.Context,
 		}
 	}
 	if !active && !lateTerminalEvidence {
-		return commitAgentRuntimeResult(tx, authority, AgentRuntimeAlreadySettled,
-			"record Agent wake delivery: settled")
+		return AgentRuntimeTransitionResult{}, fmt.Errorf(
+			"%w: missing wake evidence has invalid Run status", ErrAgentRuntimeInvariant)
 	}
 	if active {
 		if err := requireLiveAgentRuntimeAuthority(authority, spec.ClaimFenceHash, at); err != nil {
@@ -385,8 +412,13 @@ func (s *Store) RecordAgentWakeDelivery(ctx context.Context,
 		return AgentRuntimeTransitionResult{}, fmt.Errorf("%w: delivered AgentRun cannot be read",
 			ErrAgentRuntimeInvariant)
 	}
-	return commitAgentRuntimeResult(tx, authority, AgentRuntimeApplied,
-		"record Agent wake delivery: commit")
+	status := AgentRuntimeApplied
+	operation := "record Agent wake delivery: active commit"
+	if lateTerminalEvidence {
+		status = AgentRuntimeAlreadySettled
+		operation = "record Agent wake delivery: terminal commit"
+	}
+	return commitAgentRuntimeResult(tx, authority, status, operation)
 }
 
 // FinishAgentRuntime records normal Runtime completion without releasing or
@@ -761,7 +793,14 @@ func (s *Store) RecoverDeadAgentHandlings(ctx context.Context,
 					AND r.status IN ('requeued','failed'))
 			)
 			OR (r.launcher='mnemond-wake' AND (
-				r.completion_at IS NULL OR r.completion_receipt_json IS NULL OR r.completion_at>?
+				NOT (r.completion_at IS NOT NULL AND r.completion_receipt_json IS NOT NULL
+					AND r.completion_at<=?)
+				AND NOT (r.runtime_started_at IS NULL
+					AND r.launcher_diagnostic_json=X'7B7D' AND r.runtime_ids_json=X'7B7D'
+					AND r.attached_at IS NULL AND r.wake_delivered_at IS NULL
+					AND r.wake_receipt_json IS NULL AND r.current_read_receipt_json IS NULL
+					AND r.outcome_receipt_json IS NULL AND r.completion_at IS NULL
+					AND r.completion_receipt_json IS NULL)
 			))
 		)
 	)`, profile.ID().String(), storeTime(at)).Scan(&invalidRun); err != nil {

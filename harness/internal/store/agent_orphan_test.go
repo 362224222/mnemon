@@ -57,6 +57,11 @@ func TestListIncompleteManagedAgentRunsIsBoundedStableAndIndexed(t *testing.T) {
 		var plan string
 		rows, err := fixture.store.db.Query(`EXPLAIN QUERY PLAN SELECT run_id FROM agent_runs
 			WHERE launcher='mnemond-wake' AND completion_receipt_json IS NULL
+			AND (status IN ('starting','running') OR runtime_started_at IS NOT NULL
+				OR launcher_diagnostic_json<>X'7B7D' OR runtime_ids_json<>X'7B7D'
+				OR attached_at IS NOT NULL OR wake_delivered_at IS NOT NULL
+				OR wake_receipt_json IS NOT NULL OR current_read_receipt_json IS NOT NULL
+				OR outcome_receipt_json IS NOT NULL)
 			ORDER BY started_at,run_id LIMIT ?`, MaxIncompleteManagedAgentRuns+1)
 		if err != nil {
 			t.Fatal(err)

@@ -161,8 +161,14 @@ func TestAgentRuntimeWakeDeliveryIsExactAndReplayable(t *testing.T) {
 	lateSpec := wakeDeliverySpec(lateFixture, lateClaim, lateToken, wakeReceipt,
 		lease.Add(-time.Second))
 	late, err := lateFixture.store.RecordAgentWakeDelivery(context.Background(), lateSpec)
-	if err != nil || late.Status != AgentRuntimeApplied || late.Run.Status() != model.AgentRunRequeued {
+	if err != nil || late.Status != AgentRuntimeAlreadySettled || late.Run.Status() != model.AgentRunRequeued {
 		t.Fatalf("wake after lease settlement = (%#v, %v)", late, err)
+	}
+	lateReplay := lateSpec
+	lateReplay.At = lease
+	if replay, err := lateFixture.store.RecordAgentWakeDelivery(context.Background(), lateReplay); err != nil ||
+		replay.Status != AgentRuntimeAlreadySettled || replay.Run.Status() != model.AgentRunRequeued {
+		t.Fatalf("wake replay after lease settlement = (%#v, %v)", replay, err)
 	}
 	completed, err := lateFixture.store.FinishAgentRuntime(context.Background(), finish)
 	if err != nil || completed.Status != AgentRuntimeApplied ||
@@ -272,14 +278,14 @@ func TestAgentRuntimeFinishedEvidenceSurvivesLaterClaimExpiry(t *testing.T) {
 	diagnostic := runtimeTestJSON(t, `{"adapter":"codex-app-server","phase":"initialized"}`)
 	runtimeIDs := runtimeTestJSON(t, `{"process":"process-finish-before-expiry"}`)
 	wakeReceipt := runtimeTestJSON(t, `{"hook_id":"hook-finish-before-expiry","turn_id":"turn-finish-before-expiry"}`)
-	if _, err := fixture.store.RecordAgentRuntimeLaunch(context.Background(),
-		runtimeLaunchSpec(fixture, claim, token, diagnostic, runtimeIDs,
-			claimAt.Add(250*time.Millisecond))); err != nil {
+	launch := runtimeLaunchSpec(fixture, claim, token, diagnostic, runtimeIDs,
+		claimAt.Add(250*time.Millisecond))
+	if _, err := fixture.store.RecordAgentRuntimeLaunch(context.Background(), launch); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := fixture.store.RecordAgentWakeDelivery(context.Background(),
-		wakeDeliverySpec(fixture, claim, token, wakeReceipt,
-			claimAt.Add(500*time.Millisecond))); err != nil {
+	wake := wakeDeliverySpec(fixture, claim, token, wakeReceipt,
+		claimAt.Add(500*time.Millisecond))
+	if _, err := fixture.store.RecordAgentWakeDelivery(context.Background(), wake); err != nil {
 		t.Fatal(err)
 	}
 	receipt := runtimeTestJSON(t, `{"kind":"runtime_completion","result":"normal_exit"}`)
@@ -288,6 +294,14 @@ func TestAgentRuntimeFinishedEvidenceSurvivesLaterClaimExpiry(t *testing.T) {
 	if result, err := fixture.store.FinishAgentRuntime(context.Background(), finish); err != nil ||
 		result.Status != AgentRuntimeApplied || result.Run.Status() != model.AgentRunRuntimeFinished {
 		t.Fatalf("finish before expiry = (%#v, %v)", result, err)
+	}
+	if replay, err := fixture.store.RecordAgentRuntimeLaunch(context.Background(), launch); err != nil ||
+		replay.Status != AgentRuntimeAlreadySettled || replay.Run.Status() != model.AgentRunRuntimeFinished {
+		t.Fatalf("launch replay after Runtime finish = (%#v, %v)", replay, err)
+	}
+	if replay, err := fixture.store.RecordAgentWakeDelivery(context.Background(), wake); err != nil ||
+		replay.Status != AgentRuntimeAlreadySettled || replay.Run.Status() != model.AgentRunRuntimeFinished {
+		t.Fatalf("wake replay after Runtime finish = (%#v, %v)", replay, err)
 	}
 	lease, _ := claim.Run.LeaseUntil()
 	if _, err := fixture.store.ProbeAgentClaim(context.Background(), AgentClaimProbeSpec{
@@ -323,7 +337,7 @@ func TestAgentRuntimeLateLaunchSurvivesLeaseSettlement(t *testing.T) {
 	}
 	launch := runtimeLaunchSpec(fixture, claim, token, diagnostic, runtimeIDs, lease.Add(-time.Second))
 	late, err := fixture.store.RecordAgentRuntimeLaunch(context.Background(), launch)
-	if err != nil || late.Status != AgentRuntimeApplied || late.Run.Status() != model.AgentRunRequeued ||
+	if err != nil || late.Status != AgentRuntimeAlreadySettled || late.Run.Status() != model.AgentRunRequeued ||
 		late.Handling.Status() != model.HandlingPending {
 		t.Fatalf("late RecordAgentRuntimeLaunch() = (%#v, %v)", late, err)
 	}
@@ -331,7 +345,7 @@ func TestAgentRuntimeLateLaunchSurvivesLeaseSettlement(t *testing.T) {
 		t.Fatalf("late Runtime start evidence = (%s, %v)", startedAt, ok)
 	}
 	if replay, err := fixture.store.RecordAgentRuntimeLaunch(context.Background(), launch); err != nil ||
-		replay.Status != AgentRuntimeReplayed {
+		replay.Status != AgentRuntimeAlreadySettled {
 		t.Fatalf("late launch replay = (%#v, %v)", replay, err)
 	}
 	mismatch := launch
@@ -383,9 +397,13 @@ func TestAgentRuntimeOutcomeFirstStillAcceptsWakeAndCompletionEvidence(t *testin
 		wake := wakeDeliverySpec(fixture.acceptanceFixture, fixture.claim, fixture.token,
 			fixture.wakeReceipt, wakeAt)
 		wakeResult, err := fixture.store.RecordAgentWakeDelivery(context.Background(), wake)
-		if err != nil || wakeResult.Status != AgentRuntimeApplied ||
+		if err != nil || wakeResult.Status != AgentRuntimeAlreadySettled ||
 			wakeResult.Run.Status() != model.AgentRunOutcomeAccepted {
 			t.Fatalf("settled wake evidence = (%#v, %v)", wakeResult, err)
+		}
+		if replay, err := fixture.store.RecordAgentWakeDelivery(context.Background(), wake); err != nil ||
+			replay.Status != AgentRuntimeAlreadySettled || replay.Run.Status() != model.AgentRunOutcomeAccepted {
+			t.Fatalf("settled wake replay = (%#v, %v)", replay, err)
 		}
 		completion := runtimeTestJSON(t, `{"kind":"runtime_completion","result":"outcome_then_exit"}`)
 		finish := runtimeFinishSpec(fixture.acceptanceFixture, fixture.claim, fixture.token,
@@ -445,8 +463,13 @@ func TestAgentRuntimeOutcomeFirstStillAcceptsWakeAndCompletionEvidence(t *testin
 		wakeAt := fixture.claim.Run.StartedAt().Add(500 * time.Millisecond)
 		wake := wakeDeliverySpec(fixture.acceptanceFixture, fixture.claim, fixture.token,
 			fixture.wakeReceipt, wakeAt)
-		if delivered, err := fixture.store.RecordAgentWakeDelivery(context.Background(), wake); err != nil || delivered.Status != AgentRuntimeApplied {
+		if delivered, err := fixture.store.RecordAgentWakeDelivery(context.Background(), wake); err != nil ||
+			delivered.Status != AgentRuntimeAlreadySettled {
 			t.Fatalf("wake after settled failure = (%#v, %v)", delivered, err)
+		}
+		if replay, err := fixture.store.RecordAgentWakeDelivery(context.Background(), wake); err != nil ||
+			replay.Status != AgentRuntimeAlreadySettled {
+			t.Fatalf("wake replay after settled failure = (%#v, %v)", replay, err)
 		}
 		mismatchedWake := wake
 		mismatchedWake.WakeReceipt = runtimeTestJSON(t, `{"hook_id":"different"}`)
@@ -654,7 +677,10 @@ func TestAgentDeadRecoveryWaitsForManagedRuntimeCompletion(t *testing.T) {
 	if _, err := fixture.store.CommitManagedResolution(context.Background(), fixture.resolveSpec()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := fixture.store.db.Exec(`UPDATE agent_runs SET launcher='mnemond-wake' WHERE run_id=?`,
+	runtimeStartedAt := fixture.claim.Run.StartedAt().Add(time.Millisecond)
+	if _, err := fixture.store.db.Exec(`UPDATE agent_runs SET launcher='mnemond-wake',
+		runtime_started_at=?,launcher_diagnostic_json=?,runtime_ids_json=? WHERE run_id=?`,
+		storeTime(runtimeStartedAt), []byte(`{"adapter":"codex"}`), []byte(`{"pid":4501}`),
 		fixture.claim.Run.ID().String()); err != nil {
 		t.Fatal(err)
 	}
