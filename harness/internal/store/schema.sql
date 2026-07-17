@@ -502,6 +502,10 @@ CREATE UNIQUE INDEX agent_runs_handling_generation_attempt_idx
   ON agent_runs(handling_id, handling_recovery, handling_attempt)
   WHERE handling_id IS NOT NULL;
 
+CREATE INDEX agent_runs_incomplete_managed_idx
+  ON agent_runs(started_at, run_id)
+  WHERE launcher = 'mnemond-wake' AND completion_receipt_json IS NULL;
+
 CREATE TRIGGER agent_runs_claim_snapshot_immutable
 BEFORE UPDATE OF handling_id, handling_attempt, handling_recovery, claim_fence_hash, lease_until ON agent_runs
 WHEN NEW.handling_id IS NOT OLD.handling_id

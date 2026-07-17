@@ -29,7 +29,7 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 		"index": strings.Fields(
 			"profiles_one_enabled_teamwork_idx operations_reclaim_idx operations_one_started_context_idx " +
 				"works_due_idx agent_handlings_ready_idx agent_handlings_one_claimed_profile_idx " +
-				"agent_runs_handling_generation_attempt_idx enrollment_grants_one_open_idx " +
+				"agent_runs_handling_generation_attempt_idx agent_runs_incomplete_managed_idx enrollment_grants_one_open_idx " +
 				"channel_leave_requests_one_open_idx gossip_publications_ready_idx peer_inbox_work_idx",
 		),
 		"trigger": strings.Fields(
@@ -93,8 +93,8 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 	if !reflect.DeepEqual(actual, expected) {
 		t.Fatalf("schema object set mismatch\nactual: %#v\nexpected: %#v", actual, expected)
 	}
-	if got := len(actual["table"]) + len(actual["index"]) + len(actual["trigger"]); got != 125 {
-		t.Fatalf("explicit object count = %d, want 125", got)
+	if got := len(actual["table"]) + len(actual["index"]) + len(actual["trigger"]); got != 126 {
+		t.Fatalf("explicit object count = %d, want 126", got)
 	}
 }
 
