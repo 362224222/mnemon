@@ -3,6 +3,7 @@ package assets
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -122,4 +123,89 @@ func TestManagedSourceModesAndSkillGuideResponsibilities(t *testing.T) {
 			t.Fatalf("managed documents teach model-owned authority flag %q", forbidden)
 		}
 	}
+}
+
+func TestManagedHooksPreserveCueAndMapFailureToBlockingExit(t *testing.T) {
+	const cue = "[mnemon:wake] Managed work is pending. Use the Mnemon Harness skill to process one Event.\n"
+	for _, host := range []Host{HostCodex, HostClaudeCode} {
+		host := host
+		t.Run(string(host), func(t *testing.T) {
+			hookPath, err := filepath.Abs(filepath.Join("managed", "hosts", string(host), "hook.sh"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			fakePath := filepath.Join(t.TempDir(), "mnemon-harness")
+			if err := os.WriteFile(fakePath, []byte("#!/bin/sh\nprintf '%s\\n' '"+
+				strings.TrimSuffix(cue, "\n")+"'\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			stdout, stderr, exitCode := runManagedHook(t, hookPath, filepath.Dir(fakePath))
+			if stdout != cue || stderr != "" || exitCode != 0 {
+				t.Fatalf("successful Hook = (stdout %q, stderr %q, exit %d)", stdout, stderr, exitCode)
+			}
+
+			if err := os.WriteFile(fakePath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			stdout, stderr, exitCode = runManagedHook(t, hookPath, filepath.Dir(fakePath))
+			if stdout != "" || stderr != "" || exitCode != 0 {
+				t.Fatalf("empty successful Hook = (stdout %q, stderr %q, exit %d)", stdout, stderr, exitCode)
+			}
+
+			if err := os.WriteFile(fakePath, []byte("#!/bin/sh\nprintf '%s\\n' 'failure stdout must be discarded'\nexit 17\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			stdout, stderr, exitCode = runManagedHook(t, hookPath, filepath.Dir(fakePath))
+			if stdout != "" || stderr == "" || exitCode != 2 {
+				t.Fatalf("failed Hook = (stdout %q, stderr %q, exit %d)", stdout, stderr, exitCode)
+			}
+			if stderr != "mnemon-harness hook check failed; managed Agent execution is blocked\n" {
+				t.Fatalf("failed Hook stderr = %q", stderr)
+			}
+
+			if err := os.WriteFile(fakePath, []byte("#!/bin/sh\nprintf '%s\\n' 'signal stdout must be discarded'\nkill -TERM $$\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			stdout, stderr, exitCode = runManagedHook(t, hookPath, filepath.Dir(fakePath))
+			if stdout != "" || stderr == "" || exitCode != 2 {
+				t.Fatalf("signaled Hook = (stdout %q, stderr %q, exit %d)", stdout, stderr, exitCode)
+			}
+		})
+	}
+}
+
+func TestValidateHookRequiresExactFailClosedWrapper(t *testing.T) {
+	if err := validateHook([]byte(hookBody)); err != nil {
+		t.Fatalf("validateHook(canonical) error = %v", err)
+	}
+	for name, content := range map[string]string{
+		"direct exec":    "#!/bin/sh\nset -eu\nexec mnemon-harness hook check\n",
+		"wrong exit":     strings.Replace(hookBody, "exit 2\n", "exit 1\n", 1),
+		"missing stderr": strings.Replace(hookBody, " >&2\n", "\n", 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := validateHook([]byte(content)); err == nil {
+				t.Fatal("validateHook() accepted a noncanonical wrapper")
+			}
+		})
+	}
+}
+
+func runManagedHook(t *testing.T, hookPath, path string) (string, string, int) {
+	t.Helper()
+	command := exec.Command(hookPath)
+	command.Env = []string{"PATH=" + path}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	err := command.Run()
+	if err == nil {
+		return stdout.String(), stderr.String(), 0
+	}
+	exitError, ok := err.(*exec.ExitError)
+	if !ok {
+		t.Fatalf("run Hook: %v", err)
+	}
+	return stdout.String(), stderr.String(), exitError.ExitCode()
 }

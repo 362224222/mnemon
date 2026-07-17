@@ -15,8 +15,22 @@ import (
 )
 
 const (
-	managedRoot  = "managed"
-	manifestPath = managedRoot + "/manifest.json"
+	managedRoot        = "managed"
+	manifestPath       = managedRoot + "/manifest.json"
+	hookTimeoutSeconds = 10
+	hookBody           = `#!/bin/sh
+set -eu
+
+if cue=$(mnemon-harness hook check); then
+	if [ -n "$cue" ]; then
+		printf '%s\n' "$cue"
+	fi
+	exit 0
+fi
+
+printf '%s\n' 'mnemon-harness hook check failed; managed Agent execution is blocked' >&2
+exit 2
+`
 )
 
 //go:embed managed
@@ -319,7 +333,7 @@ func validateRegistration(registration Registration) error {
 		registration.ManagedKey != "mnemon-harness" || registration.SkillTarget != wantSkillTarget ||
 		registration.Target != wantTarget ||
 		registration.Value.Event != "UserPromptSubmit" || registration.Value.Hook.Command != "{{HOOK_PATH}}" ||
-		registration.Value.Hook.Type != "command" || registration.Value.Hook.Timeout != 3 ||
+		registration.Value.Hook.Type != "command" || registration.Value.Hook.Timeout != hookTimeoutSeconds ||
 		registration.Value.Hook.StatusMessage == "" {
 		return errors.New("Host registration differs from the mandatory bounded Hook contract")
 	}
@@ -327,12 +341,8 @@ func validateRegistration(registration Registration) error {
 }
 
 func validateHook(content []byte) error {
-	if len(content) == 0 || len(content) > 256 || !bytes.HasPrefix(content, []byte("#!/bin/sh\n")) {
-		return errors.New("Hook body is absent, oversized, or has the wrong interpreter")
-	}
-	lines := strings.Split(strings.TrimSuffix(string(content), "\n"), "\n")
-	if len(lines) != 3 || lines[1] != "set -eu" || lines[2] != "exec mnemon-harness hook check" {
-		return errors.New("Hook may only fail closed and execute the bounded check")
+	if !bytes.Equal(content, []byte(hookBody)) {
+		return errors.New("Hook differs from the exact fail-closed bounded check")
 	}
 	return nil
 }
