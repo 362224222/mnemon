@@ -91,6 +91,7 @@ type Registration struct {
 	Host          Host              `json:"host"`
 	ManagedKey    string            `json:"managed_key"`
 	SchemaVersion int               `json:"schema_version"`
+	SkillTarget   string            `json:"skill_target"`
 	Target        string            `json:"target"`
 	Value         RegistrationValue `json:"value"`
 }
@@ -311,8 +312,12 @@ func validateActionSchema(schema ActionSchema) error {
 
 func validateRegistration(registration Registration) error {
 	wantTarget := map[Host]string{HostCodex: "hooks.json", HostClaudeCode: "settings.json"}[registration.Host]
+	wantSkillTarget := map[Host]string{
+		HostCodex: ".agents/skills/mnemon-harness", HostClaudeCode: ".claude/skills/mnemon-harness",
+	}[registration.Host]
 	if !registration.Host.Valid() || registration.SchemaVersion != 1 ||
-		registration.ManagedKey != "mnemon-harness" || registration.Target != wantTarget ||
+		registration.ManagedKey != "mnemon-harness" || registration.SkillTarget != wantSkillTarget ||
+		registration.Target != wantTarget ||
 		registration.Value.Event != "UserPromptSubmit" || registration.Value.Hook.Command != "{{HOOK_PATH}}" ||
 		registration.Value.Hook.Type != "command" || registration.Value.Hook.Timeout != 3 ||
 		registration.Value.Hook.StatusMessage == "" {

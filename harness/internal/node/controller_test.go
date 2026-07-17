@@ -150,7 +150,7 @@ func TestControllerServesOwnerOnlyManagedRoutesFromOneStore(t *testing.T) {
 		authority.UpdatedAt != reactivated.Profile.UpdatedAt().Format(time.RFC3339Nano) {
 		t.Fatalf("reactivated ReadAuthority() = (%#v, %v)", authority, apiErr)
 	}
-	guidePath := filepath.Join(workspace, ".codex", "skills", "mnemon-harness", "guides", "teamwork", "GUIDE.md")
+	guidePath := filepath.Join(workspace, ".agents", "skills", "mnemon-harness", "guides", "teamwork", "GUIDE.md")
 	if err := os.Remove(guidePath); err != nil {
 		t.Fatal(err)
 	}

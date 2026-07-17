@@ -130,6 +130,12 @@ func TestVerifyHostProjectionAbsentRejectsManagedResidueAndUnsafePaths(t *testin
 					t.Fatal(err)
 				}
 			}},
+		{name: "Skill directory symlink", want: ErrUnsafeProjection,
+			setup: func(t *testing.T, workspace, _ string, _ assets.Bundle, _ projectionPlan) {
+				if err := os.Symlink(t.TempDir(), filepath.Join(workspace, ".agents")); err != nil {
+					t.Fatal(err)
+				}
+			}},
 		{name: "ownership directory symlink", want: ErrUnsafeProjection,
 			setup: func(t *testing.T, workspace, _ string, _ assets.Bundle, _ projectionPlan) {
 				path := filepath.Join(workspace, ".mnemon", "harness", "integrations")
@@ -186,8 +192,8 @@ func TestEjectHostProjectionRemovesOnlyManagedAssetsAndReplays(t *testing.T) {
 		t.Fatalf("EjectHostProjection() = (%#v, %v)", receipt, err)
 	}
 	for _, path := range []string{
-		filepath.Join(workspace, ".codex", "skills", "mnemon-harness", "SKILL.md"),
-		filepath.Join(workspace, ".codex", "skills", "mnemon-harness", "guides", "teamwork", "GUIDE.md"),
+		filepath.Join(workspace, ".agents", "skills", "mnemon-harness", "SKILL.md"),
+		filepath.Join(workspace, ".agents", "skills", "mnemon-harness", "guides", "teamwork", "GUIDE.md"),
 		filepath.Join(workspace, ".codex", "hooks", "mnemon-harness", "hook.sh"),
 		installed.OwnershipPath,
 	} {
@@ -238,7 +244,7 @@ func TestEjectHostProjectionPreservesDriftWithoutPartialRemoval(t *testing.T) {
 		tamper func(*testing.T, string, assets.Bundle)
 	}{
 		{name: "file", tamper: func(t *testing.T, workspace string, _ assets.Bundle) {
-			path := filepath.Join(workspace, ".codex", "skills", "mnemon-harness", "SKILL.md")
+			path := filepath.Join(workspace, ".agents", "skills", "mnemon-harness", "SKILL.md")
 			if err := os.WriteFile(path, []byte("user-modified\n"), 0o644); err != nil {
 				t.Fatal(err)
 			}

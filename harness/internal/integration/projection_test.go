@@ -45,6 +45,25 @@ func TestInstallHostProjectionUsesFrozenPathsAndPreservesAdjacentConfiguration(t
 				t.Fatalf("VerifyHostProjection() error = %v", err)
 			}
 			assertProjectedFiles(t, workspace, host, bundle)
+			if host == assets.HostCodex {
+				if _, err := os.Lstat(filepath.Join(workspace, ".codex", "skills")); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("Codex legacy Skill surface exists: %v", err)
+				}
+				manifest, _ := readOwnershipManifest(t, receipt.OwnershipPath)
+				wantPaths := []string{
+					".agents/skills/mnemon-harness/SKILL.md",
+					".agents/skills/mnemon-harness/guides/teamwork/GUIDE.md",
+					".codex/hooks/mnemon-harness/hook.sh",
+				}
+				for index, want := range wantPaths {
+					if manifest.Files[index].Path != want {
+						t.Fatalf("ownership file %d path = %q, want %q", index, manifest.Files[index].Path, want)
+					}
+				}
+				if manifest.Registrations[0].Path != ".codex/hooks.json" {
+					t.Fatalf("ownership registration path = %q", manifest.Registrations[0].Path)
+				}
+			}
 
 			installed := readTestJSON(t, configPath)
 			if !reflect.DeepEqual(installed["features"], original["features"]) || installed["theme"] != "dark" {
@@ -109,7 +128,7 @@ func TestInstallHostProjectionExactReplayDoesNotRewriteFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	paths := []string{first.ConfigPath, first.OwnershipPath,
-		filepath.Join(workspace, ".codex", "skills", "mnemon-harness", "SKILL.md"),
+		filepath.Join(workspace, ".agents", "skills", "mnemon-harness", "SKILL.md"),
 		filepath.Join(workspace, ".codex", "hooks", "mnemon-harness", "hook.sh")}
 	before := make(map[string]time.Time, len(paths))
 	for _, path := range paths {
@@ -143,9 +162,9 @@ func TestInstallHostProjectionExactReplayDoesNotRewriteFiles(t *testing.T) {
 func TestInstallHostProjectionResumesInstallingJournalAtEveryDurableBoundary(t *testing.T) {
 	stages := []string{
 		"after_journal",
-		"after_file:hooks/mnemon-harness/hook.sh",
-		"after_file:skills/mnemon-harness/SKILL.md",
-		"after_file:skills/mnemon-harness/guides/teamwork/GUIDE.md",
+		"after_file:.agents/skills/mnemon-harness/SKILL.md",
+		"after_file:.agents/skills/mnemon-harness/guides/teamwork/GUIDE.md",
+		"after_file:.codex/hooks/mnemon-harness/hook.sh",
 		"after_config",
 		"before_applied",
 	}
@@ -173,8 +192,10 @@ func TestInstallHostProjectionResumesInstallingJournalAtEveryDurableBoundary(t *
 				t.Fatalf("interrupted ownership = (%#v, %04o)", manifest, info.Mode().Perm())
 			}
 			if stage == "after_journal" {
-				if _, err := os.Lstat(filepath.Join(workspace, ".codex")); !errors.Is(err, os.ErrNotExist) {
-					t.Fatalf("Host surface changed before desired journal: %v", err)
+				for _, root := range []string{".agents", ".codex"} {
+					if _, err := os.Lstat(filepath.Join(workspace, root)); !errors.Is(err, os.ErrNotExist) {
+						t.Fatalf("Host surface %s changed before desired journal: %v", root, err)
+					}
 				}
 			}
 			if err := VerifyHostProjection(workspace, nodeState, assets.HostCodex, bundle); !errors.Is(err, ErrProjectionConflict) {
@@ -202,7 +223,7 @@ func TestInstallHostProjectionRepairsOnlyMissingAppliedObjects(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		path := filepath.Join(workspace, ".codex", "skills", "mnemon-harness", "SKILL.md")
+		path := filepath.Join(workspace, ".agents", "skills", "mnemon-harness", "SKILL.md")
 		if err := os.Remove(path); err != nil {
 			t.Fatal(err)
 		}
@@ -275,7 +296,7 @@ func TestInstallingJournalNeverAdoptsDrift(t *testing.T) {
 	workspace, nodeState, bundle := newProjectionWorkspace(t)
 	interrupted := errors.New("interrupt after first file")
 	boundary := func(stage string) error {
-		if stage == "after_file:hooks/mnemon-harness/hook.sh" {
+		if stage == "after_file:.codex/hooks/mnemon-harness/hook.sh" {
 			return interrupted
 		}
 		return nil
@@ -342,9 +363,9 @@ func TestInstallHostProjectionSafelyUpgradesPreviousAppliedRevision(t *testing.T
 func TestHostProjectionUpgradeResumesAtEveryDurableBoundary(t *testing.T) {
 	stages := []string{
 		"after_upgrade_journal",
-		"after_file:hooks/mnemon-harness/hook.sh",
-		"after_file:skills/mnemon-harness/SKILL.md",
-		"after_file:skills/mnemon-harness/guides/teamwork/GUIDE.md",
+		"after_file:.claude/hooks/mnemon-harness/hook.sh",
+		"after_file:.claude/skills/mnemon-harness/SKILL.md",
+		"after_file:.claude/skills/mnemon-harness/guides/teamwork/GUIDE.md",
 		"after_config",
 		"before_applied",
 	}
@@ -501,7 +522,7 @@ func TestHostProjectionUpgradeJournalAcceptsOnlyPreviousOrDesired(t *testing.T) 
 	previous := installSyntheticPreviousProjection(t, workspace, nodeState, assets.HostCodex, bundle)
 	interrupted := errors.New("stop after first upgrade file")
 	boundary := func(stage string) error {
-		if stage == "after_file:hooks/mnemon-harness/hook.sh" {
+		if stage == "after_file:.codex/hooks/mnemon-harness/hook.sh" {
 			return interrupted
 		}
 		return nil
@@ -525,7 +546,7 @@ func TestHostProjectionUpgradeJournalAcceptsOnlyPreviousOrDesired(t *testing.T) 
 func TestInstallHostProjectionNeverAdoptsUnownedFilesOrRegistrations(t *testing.T) {
 	t.Run("exact canonical file", func(t *testing.T) {
 		workspace, nodeState, bundle := newProjectionWorkspace(t)
-		path := filepath.Join(workspace, ".codex", "skills", "mnemon-harness", "SKILL.md")
+		path := filepath.Join(workspace, ".agents", "skills", "mnemon-harness", "SKILL.md")
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -570,7 +591,7 @@ func TestHostProjectionDriftFailsClosedWithoutRepair(t *testing.T) {
 		tamper func(t *testing.T, workspace string, receipt HostProjectionReceipt)
 	}{
 		{name: "managed file content", tamper: func(t *testing.T, workspace string, _ HostProjectionReceipt) {
-			path := filepath.Join(workspace, ".codex", "skills", "mnemon-harness", "SKILL.md")
+			path := filepath.Join(workspace, ".agents", "skills", "mnemon-harness", "SKILL.md")
 			if err := os.WriteFile(path, []byte("user changed this\n"), 0o644); err != nil {
 				t.Fatal(err)
 			}
@@ -653,22 +674,27 @@ func TestHostProjectionRequiresExactCanonicalNodeBundleAndFrozenStatePath(t *tes
 	if _, err := InstallHostProjection(workspace, nodeState, assets.HostCodex, bundle); !errors.Is(err, ErrProjectionConflict) {
 		t.Fatalf("drifted Node bundle error = %v", err)
 	}
-	if _, err := os.Lstat(filepath.Join(workspace, ".codex")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("Host changed before Node verification: %v", err)
+	for _, root := range []string{".agents", ".codex"} {
+		if _, err := os.Lstat(filepath.Join(workspace, root)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("Host surface %s changed before Node verification: %v", root, err)
+		}
 	}
 }
 
 func TestHostProjectionRejectsUnsafeHostSurfaces(t *testing.T) {
-	workspace, nodeState, bundle := newProjectionWorkspace(t)
-	t.Run("Host directory symlink", func(t *testing.T) {
-		outside := t.TempDir()
-		if err := os.Symlink(outside, filepath.Join(workspace, ".codex")); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := InstallHostProjection(workspace, nodeState, assets.HostCodex, bundle); !errors.Is(err, ErrUnsafeProjection) {
-			t.Fatalf("InstallHostProjection() error = %v", err)
-		}
-	})
+	for _, root := range []string{".agents", ".codex"} {
+		root := root
+		t.Run(root+" symlink", func(t *testing.T) {
+			workspace, nodeState, bundle := newProjectionWorkspace(t)
+			outside := t.TempDir()
+			if err := os.Symlink(outside, filepath.Join(workspace, root)); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := InstallHostProjection(workspace, nodeState, assets.HostCodex, bundle); !errors.Is(err, ErrUnsafeProjection) {
+				t.Fatalf("InstallHostProjection() error = %v", err)
+			}
+		})
+	}
 }
 
 func newProjectionWorkspace(t *testing.T) (string, string, assets.Bundle) {
@@ -718,12 +744,12 @@ func hostConfigPath(workspace string, host assets.Host) string {
 func assertProjectedFiles(t *testing.T, workspace string, host assets.Host, bundle assets.Bundle) {
 	t.Helper()
 	wants := map[string]string{
-		filepath.Join("skills", "mnemon-harness", "SKILL.md"):                       "SKILL.md",
-		filepath.Join("skills", "mnemon-harness", "guides", "teamwork", "GUIDE.md"): "guides/teamwork/GUIDE.md",
-		filepath.Join("hooks", "mnemon-harness", "hook.sh"):                         "hosts/" + string(host) + "/hook.sh",
+		filepath.Join(skillDirectory(host), "SKILL.md"):                          "SKILL.md",
+		filepath.Join(skillDirectory(host), "guides", "teamwork", "GUIDE.md"):    "guides/teamwork/GUIDE.md",
+		filepath.Join(hostDirectory(host), "hooks", "mnemon-harness", "hook.sh"): "hosts/" + string(host) + "/hook.sh",
 	}
 	for relative, source := range wants {
-		path := filepath.Join(workspace, hostDirectory(host), relative)
+		path := filepath.Join(workspace, relative)
 		got, err := os.ReadFile(path)
 		want, sourceErr := bundle.Read(source)
 		info, statErr := os.Stat(path)
@@ -735,6 +761,13 @@ func assertProjectedFiles(t *testing.T, workspace string, host assets.Host, bund
 			t.Fatalf("projected %s differs: %v, %v, %v, mode %04o", relative, err, sourceErr, statErr, info.Mode().Perm())
 		}
 	}
+}
+
+func skillDirectory(host assets.Host) string {
+	if host == assets.HostCodex {
+		return filepath.Join(".agents", "skills", "mnemon-harness")
+	}
+	return filepath.Join(".claude", "skills", "mnemon-harness")
 }
 
 func writeTestJSON(t *testing.T, path string, value any) {

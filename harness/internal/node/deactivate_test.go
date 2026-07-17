@@ -48,7 +48,7 @@ func TestDeactivateAllowsDriftedProjectionButRejectsAuthorityDrift(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	guide := filepath.Join(workspace, ".codex", "skills", "mnemon-harness", "guides", "teamwork", "GUIDE.md")
+	guide := filepath.Join(workspace, ".agents", "skills", "mnemon-harness", "guides", "teamwork", "GUIDE.md")
 	if err := os.Remove(guide); err != nil {
 		t.Fatal(err)
 	}

@@ -85,7 +85,7 @@ func TestOpenDaemonRejectsAuthorityDriftAndNeverCreatesMissingDatabase(t *testin
 	})
 	t.Run("Host projection drift", func(t *testing.T) {
 		fixture := newDaemonFixture(t, true)
-		path := filepath.Join(fixture.workspace, ".codex", "skills", "mnemon-harness", "SKILL.md")
+		path := filepath.Join(fixture.workspace, ".agents", "skills", "mnemon-harness", "SKILL.md")
 		if err := os.Remove(path); err != nil {
 			t.Fatal(err)
 		}

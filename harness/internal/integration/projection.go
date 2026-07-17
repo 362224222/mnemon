@@ -215,8 +215,8 @@ func prepareProjection(workspace, nodeState string, host assets.Host, bundle ass
 	}
 	hostDir := map[assets.Host]string{assets.HostCodex: ".codex", assets.HostClaudeCode: ".claude"}[host]
 	hostRoot := filepath.Join(workspace, hostDir)
-	hookRelative := filepath.Join("hooks", "mnemon-harness", "hook.sh")
-	hookPath := filepath.Join(hostRoot, hookRelative)
+	hookRelative := filepath.Join(hostDir, "hooks", "mnemon-harness", "hook.sh")
+	hookPath := filepath.Join(workspace, hookRelative)
 	if !filepath.IsAbs(hookPath) || filepath.Clean(hookPath) != hookPath {
 		return projectionPlan{}, fmt.Errorf("%w: projected Hook path is not absolute and clean", ErrUnsafeProjection)
 	}
@@ -233,8 +233,8 @@ func prepareProjection(workspace, nodeState string, host assets.Host, bundle ass
 		destination string
 		source      string
 	}{
-		{destination: filepath.Join("skills", "mnemon-harness", "SKILL.md"), source: "SKILL.md"},
-		{destination: filepath.Join("skills", "mnemon-harness", "guides", "teamwork", "GUIDE.md"), source: "guides/teamwork/GUIDE.md"},
+		{destination: filepath.Join(filepath.FromSlash(registration.SkillTarget), "SKILL.md"), source: "SKILL.md"},
+		{destination: filepath.Join(filepath.FromSlash(registration.SkillTarget), "guides", "teamwork", "GUIDE.md"), source: "guides/teamwork/GUIDE.md"},
 		{destination: hookRelative, source: "hosts/" + string(host) + "/hook.sh"},
 	}
 	files := make([]projectedFile, 0, len(sources))
@@ -252,13 +252,14 @@ func prepareProjection(workspace, nodeState string, host assets.Host, bundle ass
 		record := ownershipFile{Path: filepath.ToSlash(source.destination), Source: filepath.ToSlash(source.source),
 			InstalledDigest: digest(content), Mode: modeText}
 		files = append(files, projectedFile{content: content, mode: mode,
-			path: filepath.Join(hostRoot, source.destination), record: record})
+			path: filepath.Join(workspace, source.destination), record: record})
 		manifestFiles = append(manifestFiles, record)
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].record.Path < files[j].record.Path })
 	sort.Slice(manifestFiles, func(i, j int) bool { return manifestFiles[i].Path < manifestFiles[j].Path })
 	configPath := filepath.Join(hostRoot, registration.Target)
-	registrationRecord := ownershipRegistration{Path: registration.Target, ManagedKey: registration.ManagedKey,
+	registrationRecord := ownershipRegistration{Path: filepath.ToSlash(filepath.Join(hostDir, registration.Target)),
+		ManagedKey:      registration.ManagedKey,
 		InstalledDigest: digest(entryCanonical)}
 	applied := ownershipManifest{Schema: projectionSchemaVersion, State: projectionApplied, Host: host,
 		AssetRevision: bundle.Manifest().AssetRevision, Files: manifestFiles,

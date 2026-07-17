@@ -53,7 +53,11 @@ func TestManagedBundleSelectsHostVariantAndServesExactBytes(t *testing.T) {
 			t.Fatalf("FilesFor(%s) = (%v, %v)", host, files, err)
 		}
 		registration, ok := bundle.Registration(host)
-		if !ok || registration.Host != host || registration.Value.Hook.Command != "{{HOOK_PATH}}" {
+		wantSkillTarget := map[Host]string{
+			HostCodex: ".agents/skills/mnemon-harness", HostClaudeCode: ".claude/skills/mnemon-harness",
+		}[host]
+		if !ok || registration.Host != host || registration.SkillTarget != wantSkillTarget ||
+			registration.Value.Hook.Command != "{{HOOK_PATH}}" {
 			t.Fatalf("Registration(%s) = (%#v, %t)", host, registration, ok)
 		}
 		hookPath := "hosts/" + string(host) + "/hook.sh"

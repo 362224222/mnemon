@@ -189,6 +189,7 @@ func TestPublicSetupSerializesProcessesAndRecoversAKilledDaemon(t *testing.T) {
 		t.Fatalf("concurrent setup did not leave authenticated ready health: %v", err)
 	}
 	cancelHealth()
+	setupProcessAssertCodexProjectionLayout(t, workspace, true)
 
 	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 5*time.Second)
 	if err := setupProcessShutdown(shutdownCtx, client, nodeState, cleanup.offline); err != nil {
@@ -404,6 +405,7 @@ func TestPublicSetupUpgradesAnActiveRevisionUnderLifecycleLease(t *testing.T) {
 		assets.HostCodex, bundle); err != nil {
 		t.Fatalf("new projection did not converge: %v", err)
 	}
+	setupProcessAssertCodexProjectionLayout(t, workspace, true)
 	newReadyCtx, cancelNewReady := context.WithTimeout(context.Background(), 5*time.Second)
 	if err := setupProcessWaitReady(newReadyCtx, client, newRevision); err != nil {
 		cancelNewReady()
@@ -496,6 +498,7 @@ func TestPublicEjectPreservesNodeAndAuthorizesOneExplicitHostSwitch(t *testing.T
 		assets.HostCodex, bundle); err != nil {
 		t.Fatalf("Codex projection remains after eject: %v", err)
 	}
+	setupProcessAssertCodexProjectionLayout(t, workspace, false)
 	if err := integration.VerifyNodeBundle(nodeState, bundle); err != nil {
 		t.Fatalf("eject removed the immutable Node bundle: %v", err)
 	}
@@ -536,6 +539,7 @@ func TestPublicEjectPreservesNodeAndAuthorizesOneExplicitHostSwitch(t *testing.T
 		assets.HostCodex, bundle); err != nil {
 		t.Fatalf("Host switch recreated the old Codex projection: %v", err)
 	}
+	setupProcessAssertCodexProjectionLayout(t, workspace, false)
 	if err := integration.VerifyHostProjection(workspace, nodeState,
 		assets.HostClaudeCode, bundle); err != nil {
 		t.Fatalf("Host switch did not install the Claude projection: %v", err)
@@ -576,6 +580,30 @@ func setupProcessAssertConcurrentReceipts(t *testing.T, receipts []setupProcessR
 	}
 	if started != 1 || fresh != 1 {
 		t.Errorf("concurrent setup published started=%d fresh=%d, want one of each", started, fresh)
+	}
+}
+
+func setupProcessAssertCodexProjectionLayout(t *testing.T, workspace string, present bool) {
+	t.Helper()
+	paths := []string{
+		filepath.Join(workspace, ".agents", "skills", "mnemon-harness", "SKILL.md"),
+		filepath.Join(workspace, ".agents", "skills", "mnemon-harness", "guides", "teamwork", "GUIDE.md"),
+		filepath.Join(workspace, ".codex", "hooks", "mnemon-harness", "hook.sh"),
+	}
+	for _, path := range paths {
+		info, err := os.Lstat(path)
+		if present {
+			if err != nil || !info.Mode().IsRegular() {
+				t.Fatalf("required Codex projection %s = (%#v, %v)", path, info, err)
+			}
+			continue
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("ejected Codex projection %s remains: %v", path, err)
+		}
+	}
+	if _, err := os.Lstat(filepath.Join(workspace, ".codex", "skills")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("legacy Codex Skill surface exists: %v", err)
 	}
 }
 
