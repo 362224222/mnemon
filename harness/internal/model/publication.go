@@ -34,21 +34,8 @@ func PublicationSigningMessage(channelID ChannelID, publicationDigest Digest) ([
 // identities use Ed25519 libp2p keys and MemberRecord stores the raw 32-byte
 // public key; transport-level Gossip signing remains a separate proof.
 func VerifyPublication(publicKey []byte, publication SignedPublication) error {
-	if len(publicKey) != ed25519.PublicKeySize {
-		return fmt.Errorf("publication signature: public key has %d bytes, want %d", len(publicKey), ed25519.PublicKeySize)
-	}
-	signature := publication.OriginSignature()
-	if len(signature) != ed25519.SignatureSize {
-		return fmt.Errorf("publication signature: signature has %d bytes, want %d", len(signature), ed25519.SignatureSize)
-	}
-	message, err := PublicationSigningMessage(publication.Key().ChannelID(), publication.Digest())
-	if err != nil {
-		return err
-	}
-	if !ed25519.Verify(ed25519.PublicKey(publicKey), message, signature) {
-		return fmt.Errorf("publication signature: Ed25519 verification failed")
-	}
-	return nil
+	return verifyPublicationSignature(publicKey, publication.Key().ChannelID(),
+		publication.Digest(), publication.OriginSignature())
 }
 
 type PublicationBody struct {
@@ -190,6 +177,322 @@ type signedPublicationWire struct {
 	PublicationDigest string          `json:"publication_digest"`
 }
 
+// PublicationEvidence is the bounded, authenticatable-header projection of one
+// exact signed publication wire. It deliberately does not expose a generic
+// envelope or partially decoded Event: a future or permanently unsupported
+// publication can be retained as evidence without being admitted as a domain
+// Event.
+type PublicationEvidence struct {
+	schemaVersion     uint64
+	channelID         ChannelID
+	originPeerID      PeerID
+	originEpoch       OriginEpoch
+	originSequence    uint64
+	channelSequence   uint64
+	eventID           EventID
+	eventDigest       Digest
+	originMember      RecordHead
+	publicationRoster RecordHead
+	audience          Audience
+	publicationDigest Digest
+	originSignature   string
+	publicationBody   JSON
+	wire              JSON
+	supported         bool
+}
+
+func (e PublicationEvidence) SchemaVersion() uint64         { return e.schemaVersion }
+func (e PublicationEvidence) ChannelID() ChannelID          { return e.channelID }
+func (e PublicationEvidence) OriginPeerID() PeerID          { return e.originPeerID }
+func (e PublicationEvidence) OriginEpoch() OriginEpoch      { return e.originEpoch }
+func (e PublicationEvidence) OriginSequence() uint64        { return e.originSequence }
+func (e PublicationEvidence) ChannelSequence() uint64       { return e.channelSequence }
+func (e PublicationEvidence) EventID() EventID              { return e.eventID }
+func (e PublicationEvidence) EventDigest() Digest           { return e.eventDigest }
+func (e PublicationEvidence) OriginMember() RecordHead      { return e.originMember }
+func (e PublicationEvidence) PublicationRoster() RecordHead { return e.publicationRoster }
+func (e PublicationEvidence) Audience() Audience            { return e.audience }
+func (e PublicationEvidence) Digest() Digest                { return e.publicationDigest }
+func (e PublicationEvidence) OriginSignature() []byte {
+	return append([]byte(nil), e.originSignature...)
+}
+func (e PublicationEvidence) WireJSON() JSON { return e.wire }
+func (e PublicationEvidence) IsZero() bool {
+	return e.wire.IsZero() || e.channelID.IsZero() || e.originPeerID.IsZero() ||
+		e.originEpoch.IsZero() || e.eventID.IsZero() || e.publicationDigest.IsZero()
+}
+
+// IsSupported reports whether the complete wire passed the current strict
+// SignedPublication decoder. Schema v1 with an unknown field, Event type or
+// inconsistent embedded Event remains valid evidence but is not supported.
+func (e PublicationEvidence) IsSupported() bool { return !e.IsZero() && e.supported }
+
+type publicationEvidenceHeader struct {
+	audience          []string
+	channelID         string
+	channelSequence   uint64
+	eventDigest       string
+	eventID           string
+	originEpoch       string
+	originMember      RecordHead
+	originPeerID      string
+	originSequence    uint64
+	publicationRoster RecordHead
+	schemaVersion     uint64
+}
+
+// ParsePublicationEvidence validates the exact outer signed-publication shape
+// and the stable routing/identity header while allowing unknown fields inside
+// the publication body. The claimed digest always covers the complete exact
+// canonical body, including every unknown field.
+func ParsePublicationEvidence(raw []byte) (PublicationEvidence, error) {
+	evidence, err := parsePublicationEvidenceHeader(raw)
+	if err != nil {
+		return PublicationEvidence{}, err
+	}
+	_, strictErr := signedPublicationFromEvidence(evidence)
+	evidence.supported = strictErr == nil
+	return evidence, nil
+}
+
+func parsePublicationEvidenceHeader(raw []byte) (PublicationEvidence, error) {
+	if len(raw) > MaxPublicationBytes {
+		return PublicationEvidence{}, limit("publication evidence", len(raw), MaxPublicationBytes)
+	}
+	canonical, err := NewJSON(raw)
+	if err != nil {
+		return PublicationEvidence{}, fmt.Errorf("parse publication evidence: %w", err)
+	}
+	if !bytes.Equal(canonical.Bytes(), raw) {
+		return PublicationEvidence{}, invalid("publication evidence", "must use exact canonical JSON")
+	}
+
+	wire, err := decodePublicationEvidenceOuter(raw)
+	if err != nil {
+		return PublicationEvidence{}, err
+	}
+	rebuiltOuter, err := JSONFrom(wire)
+	if err != nil || !bytes.Equal(rebuiltOuter.Bytes(), raw) {
+		return PublicationEvidence{}, invalid("publication evidence outer envelope", "must use the exact signed publication shape")
+	}
+	if len(wire.OriginSignature) != ed25519.SignatureSize {
+		return PublicationEvidence{}, invalid("publication evidence signature", "must contain exactly 64 bytes")
+	}
+	body, err := NewJSON(wire.Publication)
+	if err != nil || !bytes.Equal(body.Bytes(), wire.Publication) {
+		return PublicationEvidence{}, invalid("publication evidence body", "must be exact canonical JSON")
+	}
+	header, err := decodePublicationEvidenceHeader(body.Bytes())
+	if err != nil {
+		return PublicationEvidence{}, err
+	}
+	if err := validateSQLitePositive("publication schema version", header.schemaVersion); err != nil {
+		return PublicationEvidence{}, err
+	}
+	if err := validateSQLitePositive("publication origin sequence", header.originSequence); err != nil {
+		return PublicationEvidence{}, err
+	}
+	if err := validateSQLitePositive("publication Channel sequence", header.channelSequence); err != nil {
+		return PublicationEvidence{}, err
+	}
+	channelID, err := ParseChannelID(header.channelID)
+	if err != nil {
+		return PublicationEvidence{}, err
+	}
+	originPeerID, err := ParsePeerID(header.originPeerID)
+	if err != nil {
+		return PublicationEvidence{}, err
+	}
+	originEpoch, err := ParseOriginEpoch(header.originEpoch)
+	if err != nil {
+		return PublicationEvidence{}, err
+	}
+	eventID, err := ParseEventID(header.eventID)
+	if err != nil {
+		return PublicationEvidence{}, err
+	}
+	eventDigest, err := ParseDigest(header.eventDigest)
+	if err != nil {
+		return PublicationEvidence{}, err
+	}
+	audience, err := publicationEvidenceAudience(header.audience)
+	if err != nil {
+		return PublicationEvidence{}, err
+	}
+	if audience.Contains(originPeerID) {
+		return PublicationEvidence{}, invalid("publication evidence audience", "must exclude its origin")
+	}
+	claimedDigest, err := ParseDigest(wire.PublicationDigest)
+	if err != nil {
+		return PublicationEvidence{}, err
+	}
+	if claimedDigest != Sum(body.Bytes()) {
+		return PublicationEvidence{}, invariant("publication evidence digest does not cover its complete canonical body")
+	}
+
+	return PublicationEvidence{schemaVersion: header.schemaVersion, channelID: channelID,
+		originPeerID: originPeerID, originEpoch: originEpoch, originSequence: header.originSequence,
+		channelSequence: header.channelSequence, eventID: eventID, eventDigest: eventDigest,
+		originMember: header.originMember, publicationRoster: header.publicationRoster, audience: audience,
+		publicationDigest: claimedDigest, originSignature: string(wire.OriginSignature),
+		publicationBody: body, wire: canonical}, nil
+}
+
+func decodePublicationEvidenceOuter(raw []byte) (signedPublicationWire, error) {
+	fields, err := publicationEvidenceObject(raw, "outer envelope")
+	if err != nil {
+		return signedPublicationWire{}, err
+	}
+	if len(fields) != 3 {
+		return signedPublicationWire{}, invalid("publication evidence outer envelope", "must contain exactly three fields")
+	}
+	var wire signedPublicationWire
+	if err := publicationEvidenceField(fields, "origin_signature", &wire.OriginSignature); err != nil {
+		return signedPublicationWire{}, err
+	}
+	if err := publicationEvidenceField(fields, "publication", &wire.Publication); err != nil {
+		return signedPublicationWire{}, err
+	}
+	if err := publicationEvidenceField(fields, "publication_digest", &wire.PublicationDigest); err != nil {
+		return signedPublicationWire{}, err
+	}
+	return wire, nil
+}
+
+func decodePublicationEvidenceHeader(raw []byte) (publicationEvidenceHeader, error) {
+	fields, err := publicationEvidenceObject(raw, "body")
+	if err != nil {
+		return publicationEvidenceHeader{}, err
+	}
+	var header publicationEvidenceHeader
+	for _, field := range []struct {
+		name        string
+		destination any
+	}{
+		{"audience", &header.audience},
+		{"channel_id", &header.channelID},
+		{"channel_seq", &header.channelSequence},
+		{"event_digest", &header.eventDigest},
+		{"event_id", &header.eventID},
+		{"origin_epoch", &header.originEpoch},
+		{"origin_peer_id", &header.originPeerID},
+		{"origin_seq", &header.originSequence},
+		{"schema_version", &header.schemaVersion},
+	} {
+		if err := publicationEvidenceField(fields, field.name, field.destination); err != nil {
+			return publicationEvidenceHeader{}, err
+		}
+	}
+	header.originMember, err = publicationEvidenceRecordHead(fields, "origin_member")
+	if err != nil {
+		return publicationEvidenceHeader{}, err
+	}
+	header.publicationRoster, err = publicationEvidenceRecordHead(fields, "publication_roster")
+	if err != nil {
+		return publicationEvidenceHeader{}, err
+	}
+	return header, nil
+}
+
+func publicationEvidenceRecordHead(fields map[string]json.RawMessage,
+	name string,
+) (RecordHead, error) {
+	raw, ok := fields[name]
+	if !ok {
+		return RecordHead{}, invalid("publication evidence header", "missing exact "+name)
+	}
+	headFields, err := publicationEvidenceObject(raw, name)
+	if err != nil {
+		return RecordHead{}, err
+	}
+	var revision uint64
+	var digestText string
+	if err := publicationEvidenceField(headFields, "revision", &revision); err != nil {
+		return RecordHead{}, err
+	}
+	if err := publicationEvidenceField(headFields, "digest", &digestText); err != nil {
+		return RecordHead{}, err
+	}
+	digest, err := ParseDigest(digestText)
+	if err != nil {
+		return RecordHead{}, err
+	}
+	return NewRecordHead(revision, digest)
+}
+
+func publicationEvidenceObject(raw []byte, field string) (map[string]json.RawMessage, error) {
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &object); err != nil || object == nil {
+		return nil, invalid("publication evidence "+field, "must be a canonical JSON object")
+	}
+	return object, nil
+}
+
+func publicationEvidenceField(fields map[string]json.RawMessage, name string,
+	destination any,
+) error {
+	raw, ok := fields[name]
+	if !ok {
+		return invalid("publication evidence header", "missing exact "+name)
+	}
+	if err := json.Unmarshal(raw, destination); err != nil {
+		return fmt.Errorf("parse publication evidence %s: %w", name, err)
+	}
+	return nil
+}
+
+func publicationEvidenceAudience(wire []string) (Audience, error) {
+	peers := make([]PeerID, len(wire))
+	for index, value := range wire {
+		peerID, err := ParsePeerID(value)
+		if err != nil {
+			return Audience{}, err
+		}
+		peers[index] = peerID
+	}
+	audience, err := NewAudience(peers)
+	if err != nil {
+		return Audience{}, err
+	}
+	canonical := audience.Peers()
+	for index := range peers {
+		if peers[index] != canonical[index] {
+			return Audience{}, invalid("publication evidence audience", "must use canonical PeerID order")
+		}
+	}
+	return audience, nil
+}
+
+// VerifyPublicationEvidence authenticates even an unsupported body without
+// interpreting it as a current Event. Callers must separately verify the
+// origin member and publication roster heads before retaining peer evidence.
+func VerifyPublicationEvidence(publicKey []byte, evidence PublicationEvidence) error {
+	if evidence.IsZero() {
+		return invalid("publication evidence", "complete evidence is required")
+	}
+	return verifyPublicationSignature(publicKey, evidence.ChannelID(), evidence.Digest(),
+		evidence.OriginSignature())
+}
+
+func verifyPublicationSignature(publicKey []byte, channelID ChannelID, digest Digest,
+	signature []byte,
+) error {
+	if len(publicKey) != ed25519.PublicKeySize {
+		return fmt.Errorf("publication signature: public key has %d bytes, want %d", len(publicKey), ed25519.PublicKeySize)
+	}
+	if len(signature) != ed25519.SignatureSize {
+		return fmt.Errorf("publication signature: signature has %d bytes, want %d", len(signature), ed25519.SignatureSize)
+	}
+	message, err := PublicationSigningMessage(channelID, digest)
+	if err != nil {
+		return err
+	}
+	if !ed25519.Verify(ed25519.PublicKey(publicKey), message, signature) {
+		return fmt.Errorf("publication signature: Ed25519 verification failed")
+	}
+	return nil
+}
+
 // ParseSignedPublication is the sole decoder for canonical bytes received by
 // Gossip and direct Pull. It rebuilds every value through the domain
 // constructors, so duplicated binding fields, collection order, digests and
@@ -199,23 +502,19 @@ type signedPublicationWire struct {
 // source is deliberately absent from the wire identity. Inbox admission may
 // later create an imported local projection without changing these bytes.
 func ParseSignedPublication(raw []byte) (SignedPublication, error) {
-	if len(raw) > MaxPublicationBytes {
-		return SignedPublication{}, limit("signed publication", len(raw), MaxPublicationBytes)
-	}
-	canonical, err := NewJSON(raw)
+	evidence, err := parsePublicationEvidenceHeader(raw)
 	if err != nil {
-		return SignedPublication{}, fmt.Errorf("parse signed publication: %w", err)
-	}
-	if !bytes.Equal(canonical.Bytes(), raw) {
-		return SignedPublication{}, invalid("signed publication", "must use exact canonical JSON")
-	}
-
-	var wire signedPublicationWire
-	if err := decodePublicationWire(raw, &wire); err != nil {
 		return SignedPublication{}, err
 	}
+	return signedPublicationFromEvidence(evidence)
+}
+
+func signedPublicationFromEvidence(evidence PublicationEvidence) (SignedPublication, error) {
+	if evidence.SchemaVersion() != SchemaVersion {
+		return SignedPublication{}, invalid("signed publication", "unsupported schema version")
+	}
 	var bodyWire publicationBodyWire
-	if err := decodePublicationWire(wire.Publication, &bodyWire); err != nil {
+	if err := decodePublicationWire(evidence.publicationBody.Bytes(), &bodyWire); err != nil {
 		return SignedPublication{}, err
 	}
 	if bodyWire.SchemaVersion != SchemaVersion {
@@ -230,18 +529,15 @@ func ParseSignedPublication(raw []byte) (SignedPublication, error) {
 	if err != nil {
 		return SignedPublication{}, err
 	}
-	claimedDigest, err := ParseDigest(wire.PublicationDigest)
-	if err != nil {
-		return SignedPublication{}, err
-	}
-	if claimedDigest != body.Digest() || !bytes.Equal(body.CanonicalJSON().Bytes(), wire.Publication) {
+	if evidence.Digest() != body.Digest() ||
+		!bytes.Equal(body.CanonicalJSON().Bytes(), evidence.publicationBody.Bytes()) {
 		return SignedPublication{}, invariant("publication body or digest differs from its embedded Event")
 	}
-	publication, err := AttachSignature(body, wire.OriginSignature)
+	publication, err := AttachSignature(body, evidence.OriginSignature())
 	if err != nil {
 		return SignedPublication{}, err
 	}
-	if !bytes.Equal(publication.WireJSON().Bytes(), raw) {
+	if !bytes.Equal(publication.WireJSON().Bytes(), evidence.WireJSON().Bytes()) {
 		return SignedPublication{}, invalid("signed publication", "omits, reorders or changes a schema-v1 field")
 	}
 	return publication, nil

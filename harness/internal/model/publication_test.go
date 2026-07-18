@@ -101,6 +101,262 @@ func TestParseSignedPublicationRoundTrip(t *testing.T) {
 	}
 }
 
+func TestParsePublicationEvidenceRoundTripAndVerification(t *testing.T) {
+	t.Parallel()
+
+	home, reviewer := mustPeer(t, "peer-evidence-home"), mustPeer(t, "peer-evidence-reviewer")
+	event := mustWorkEvent(t, home, home, reviewer, EventReviewOffered)
+	body, err := NewPublicationBody(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicKey, privateKey, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, err := PublicationSigningMessage(body.Key().ChannelID(), body.Digest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	publication, err := AttachSignature(body, ed25519.Sign(privateKey, message))
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence, err := ParsePublicationEvidence(publication.WireJSON().Bytes())
+	if err != nil {
+		t.Fatalf("ParsePublicationEvidence() error = %v", err)
+	}
+	scope := event.Scope()
+	if evidence.IsZero() || !evidence.IsSupported() || evidence.SchemaVersion() != SchemaVersion ||
+		evidence.ChannelID() != scope.ChannelID() || evidence.OriginPeerID() != scope.OriginPeerID() ||
+		evidence.OriginEpoch() != scope.OriginEpoch() ||
+		evidence.OriginSequence() != scope.OriginSequence() ||
+		evidence.ChannelSequence() != scope.ChannelSequence() || evidence.EventID() != event.ID() ||
+		evidence.EventDigest() != event.Digest() || evidence.OriginMember() != scope.OriginMember() ||
+		evidence.PublicationRoster() != scope.PublicationRoster() || evidence.Digest() != publication.Digest() ||
+		evidence.Audience().Len() != event.Audience().Len() ||
+		!evidence.Audience().Contains(reviewer) ||
+		!bytes.Equal(evidence.WireJSON().Bytes(), publication.WireJSON().Bytes()) ||
+		!bytes.Equal(evidence.OriginSignature(), publication.OriginSignature()) {
+		t.Fatalf("publication evidence lost stable identity: %#v", evidence)
+	}
+	if err := VerifyPublicationEvidence(publicKey, evidence); err != nil {
+		t.Fatalf("VerifyPublicationEvidence() error = %v", err)
+	}
+	wrongKey, _, _ := ed25519.GenerateKey(nil)
+	if err := VerifyPublicationEvidence(wrongKey, evidence); err == nil {
+		t.Fatal("wrong publication evidence key was accepted")
+	}
+	if err := VerifyPublicationEvidence(publicKey, PublicationEvidence{}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("zero publication evidence error = %v", err)
+	}
+
+	signature := evidence.OriginSignature()
+	signature[0] ^= 0xff
+	wire := evidence.WireJSON().Bytes()
+	wire[0] = 'x'
+	if !bytes.Equal(evidence.OriginSignature(), publication.OriginSignature()) ||
+		!bytes.Equal(evidence.WireJSON().Bytes(), publication.WireJSON().Bytes()) {
+		t.Fatal("PublicationEvidence accessors exposed mutable bytes")
+	}
+}
+
+func TestParsePublicationEvidenceRetainsSignedUnsupportedBodies(t *testing.T) {
+	t.Parallel()
+
+	home, reviewer := mustPeer(t, "peer-unsupported-home"), mustPeer(t, "peer-unsupported-reviewer")
+	event := mustWorkEvent(t, home, home, reviewer, EventReviewOffered)
+	body, _ := NewPublicationBody(event)
+	publicKey, privateKey, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _ := PublicationSigningMessage(body.Key().ChannelID(), body.Digest())
+	base, err := AttachSignature(body, ed25519.Sign(privateKey, message))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name       string
+		mutate     func(map[string]any)
+		wantSchema uint64
+	}{
+		{name: "future schema and unknown body field", wantSchema: SchemaVersion + 1,
+			mutate: func(body map[string]any) {
+				body["schema_version"] = float64(SchemaVersion + 1)
+				body["future_semantics"] = map[string]any{"mode": "opaque"}
+			}},
+		{name: "current schema unknown Event type", wantSchema: SchemaVersion,
+			mutate: func(body map[string]any) {
+				body["event"].(map[string]any)["event_type"] = "review.future"
+			}},
+		{name: "current schema unknown inner field", wantSchema: SchemaVersion,
+			mutate: func(body map[string]any) {
+				body["future_extension"] = true
+			}},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			raw := resignPublicationBody(t, base.WireJSON().Bytes(), privateKey, test.mutate)
+			evidence, err := ParsePublicationEvidence(raw)
+			if err != nil {
+				t.Fatalf("ParsePublicationEvidence() error = %v", err)
+			}
+			if evidence.IsSupported() || evidence.SchemaVersion() != test.wantSchema ||
+				evidence.ChannelID() != event.Scope().ChannelID() ||
+				evidence.OriginPeerID() != event.Scope().OriginPeerID() ||
+				evidence.Audience().Len() != event.Audience().Len() ||
+				!bytes.Equal(evidence.WireJSON().Bytes(), raw) {
+				t.Fatalf("unsupported evidence projection = %#v", evidence)
+			}
+			if err := VerifyPublicationEvidence(publicKey, evidence); err != nil {
+				t.Fatalf("unsupported evidence signature error = %v", err)
+			}
+			if _, err := ParseSignedPublication(raw); err == nil {
+				t.Fatal("strict SignedPublication parser accepted an unsupported body")
+			}
+		})
+	}
+}
+
+func TestParsePublicationEvidenceRejectsMalformedStableEnvelope(t *testing.T) {
+	t.Parallel()
+
+	home, reviewer := mustPeer(t, "peer-evidence-malformed-home"),
+		mustPeer(t, "peer-evidence-malformed-reviewer")
+	event := mustWorkEvent(t, home, home, reviewer, EventReviewOffered)
+	body, _ := NewPublicationBody(event)
+	publicKey, privateKey, _ := ed25519.GenerateKey(nil)
+	message, _ := PublicationSigningMessage(body.Key().ChannelID(), body.Digest())
+	publication, _ := AttachSignature(body, ed25519.Sign(privateKey, message))
+	raw := publication.WireJSON().Bytes()
+
+	otherA := mustPeer(t, "peer-evidence-order-z")
+	otherB := mustPeer(t, "peer-evidence-order-a")
+	overAudience := make([]any, MaxChildWorks+1)
+	for index := range overAudience {
+		overAudience[index] = reviewer.String()
+	}
+	tests := []struct {
+		name string
+		raw  func() []byte
+	}{
+		{name: "unknown outer field", raw: func() []byte {
+			return mutateCanonicalPublication(t, raw, func(outer map[string]any) {
+				outer["extension"] = true
+			})
+		}},
+		{name: "wrong-case outer field", raw: func() []byte {
+			return mutateCanonicalPublication(t, raw, func(outer map[string]any) {
+				outer["Origin_Signature"] = outer["origin_signature"]
+				delete(outer, "origin_signature")
+			})
+		}},
+		{name: "missing outer digest", raw: func() []byte {
+			return mutateCanonicalPublication(t, raw, func(outer map[string]any) {
+				delete(outer, "publication_digest")
+			})
+		}},
+		{name: "wrong claimed digest", raw: func() []byte {
+			return mutateCanonicalPublication(t, raw, func(outer map[string]any) {
+				outer["publication_digest"] = Sum([]byte("wrong evidence body")).String()
+			})
+		}},
+		{name: "short signature", raw: func() []byte {
+			return mutateCanonicalPublication(t, raw, func(outer map[string]any) {
+				outer["origin_signature"] = "c2hvcnQ="
+			})
+		}},
+		{name: "missing stable Channel", raw: func() []byte {
+			return resignPublicationBody(t, raw, privateKey, func(body map[string]any) {
+				delete(body, "channel_id")
+			})
+		}},
+		{name: "wrong-case stable Channel", raw: func() []byte {
+			return resignPublicationBody(t, raw, privateKey, func(body map[string]any) {
+				body["Channel_ID"] = body["channel_id"]
+				delete(body, "channel_id")
+			})
+		}},
+		{name: "zero stable sequence", raw: func() []byte {
+			return resignPublicationBody(t, raw, privateKey, func(body map[string]any) {
+				body["channel_seq"] = float64(0)
+			})
+		}},
+		{name: "invalid Event digest", raw: func() []byte {
+			return resignPublicationBody(t, raw, privateKey, func(body map[string]any) {
+				body["event_digest"] = "sha256:not-a-digest"
+			})
+		}},
+		{name: "zero origin member revision", raw: func() []byte {
+			return resignPublicationBody(t, raw, privateKey, func(body map[string]any) {
+				body["origin_member"].(map[string]any)["revision"] = float64(0)
+			})
+		}},
+		{name: "empty audience", raw: func() []byte {
+			return resignPublicationBody(t, raw, privateKey, func(body map[string]any) {
+				body["audience"] = []any{}
+			})
+		}},
+		{name: "oversized audience", raw: func() []byte {
+			return resignPublicationBody(t, raw, privateKey, func(body map[string]any) {
+				body["audience"] = overAudience
+			})
+		}},
+		{name: "unsorted audience", raw: func() []byte {
+			return resignPublicationBody(t, raw, privateKey, func(body map[string]any) {
+				body["audience"] = []any{otherA.String(), otherB.String()}
+			})
+		}},
+		{name: "origin in audience", raw: func() []byte {
+			return resignPublicationBody(t, raw, privateKey, func(body map[string]any) {
+				body["audience"] = []any{event.Scope().OriginPeerID().String()}
+			})
+		}},
+		{name: "duplicate outer key", raw: func() []byte {
+			end := bytes.IndexByte(raw, ',')
+			result := append([]byte{'{'}, raw[1:end]...)
+			result = append(result, ',')
+			return append(result, raw[1:]...)
+		}},
+		{name: "noncanonical outer", raw: func() []byte {
+			return append([]byte{' '}, raw...)
+		}},
+		{name: "wire limit", raw: func() []byte {
+			return bytes.Repeat([]byte{'x'}, MaxPublicationBytes+1)
+		}},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if _, err := ParsePublicationEvidence(test.raw()); err == nil {
+				t.Fatal("malformed stable publication evidence was accepted")
+			}
+		})
+	}
+
+	var wire signedPublicationWire
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		t.Fatal(err)
+	}
+	wire.OriginSignature[0] ^= 0xff
+	tampered, err := JSONFrom(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence, err := ParsePublicationEvidence(tampered.Bytes())
+	if err != nil {
+		t.Fatalf("opaque 64-byte signature should reach authority verification: %v", err)
+	}
+	if err := VerifyPublicationEvidence(publicKey, evidence); err == nil {
+		t.Fatal("tampered 64-byte publication signature was authenticated")
+	}
+}
+
 func TestParseSignedPublicationRejectsSchemaAndBindingTampering(t *testing.T) {
 	t.Parallel()
 
@@ -248,4 +504,44 @@ func mutateCanonicalPublication(t *testing.T, raw []byte, mutate func(map[string
 		t.Fatal(err)
 	}
 	return canonical.Bytes()
+}
+
+func resignPublicationBody(t *testing.T, raw []byte, privateKey ed25519.PrivateKey,
+	mutate func(map[string]any),
+) []byte {
+	t.Helper()
+	var wire signedPublicationWire
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(wire.Publication, &body); err != nil {
+		t.Fatal(err)
+	}
+	originalChannel, err := ParseChannelID(body["channel_id"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutate(body)
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := NewJSON(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := Sum(canonical.Bytes())
+	message, err := PublicationSigningMessage(originalChannel, digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire.Publication = canonical.Bytes()
+	wire.PublicationDigest = digest.String()
+	wire.OriginSignature = ed25519.Sign(privateKey, message)
+	result, err := JSONFrom(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result.Bytes()
 }
