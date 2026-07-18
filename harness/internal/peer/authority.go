@@ -322,7 +322,7 @@ func verifyMemberPeerID(peerID libp2ppeer.ID, publicKey []byte) error {
 }
 
 func canonicalLibp2pID(value model.PeerID) (libp2ppeer.ID, error) {
-	if _, err := CanonicalIDBytes(value); err != nil {
+	if _, err := model.CanonicalPeerIDBytes(value); err != nil {
 		return "", err
 	}
 	return libp2ppeer.Decode(value.String())

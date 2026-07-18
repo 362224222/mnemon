@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
-	peerprotocol "github.com/mnemon-dev/mnemon/harness/internal/peer"
 )
 
 func validateAdmissionAuthority(ctx context.Context, tx *sql.Tx, spec LocalAcceptanceSpec,
@@ -196,7 +195,7 @@ func validateOperationEvents(authority *LocalOperationAuthority, events []model.
 			}
 			reviewer := event.Audience().Peers()[0]
 			if index > 0 {
-				comparison, err := peerprotocol.CompareCanonicalIDs(previousReviewer, reviewer)
+				comparison, err := model.ComparePeerIDs(previousReviewer, reviewer)
 				if err != nil || comparison >= 0 {
 					return errors.New("commit local acceptance: offer batch must use canonical unique reviewer order")
 				}

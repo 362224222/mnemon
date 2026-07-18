@@ -15,7 +15,6 @@ import (
 	libp2ppeer "github.com/libp2p/go-libp2p/core/peer"
 	eventpkg "github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
-	peerprotocol "github.com/mnemon-dev/mnemon/harness/internal/peer"
 )
 
 func TestCommitLocalAcceptancePersistsCompleteEvidenceAndReplaysAfterRestart(t *testing.T) {
@@ -128,7 +127,7 @@ func newAcceptanceFixture(t *testing.T, reviewerCount int) *acceptanceFixture {
 			acceptancePeerID(t, fmt.Sprintf("peer-accept-reviewer-%c", 'a'+index)))
 	}
 	sort.Slice(fixture.reviewers, func(left, right int) bool {
-		comparison, err := peerprotocol.CompareCanonicalIDs(fixture.reviewers[left], fixture.reviewers[right])
+		comparison, err := model.ComparePeerIDs(fixture.reviewers[left], fixture.reviewers[right])
 		if err != nil {
 			t.Fatal(err)
 		}

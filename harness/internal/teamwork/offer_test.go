@@ -12,7 +12,6 @@ import (
 	libp2pcrypto "github.com/libp2p/go-libp2p/core/crypto"
 	libp2ppeer "github.com/libp2p/go-libp2p/core/peer"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
-	peerprotocol "github.com/mnemon-dev/mnemon/harness/internal/peer"
 )
 
 func TestPlanOfferCanonicalSingleReviewerExpansion(t *testing.T) {
@@ -22,7 +21,7 @@ func TestPlanOfferCanonicalSingleReviewerExpansion(t *testing.T) {
 	reviewers := []model.PeerID{canonicalOfferPeer(t, "peer-z"), canonicalOfferPeer(t, "peer-a"), canonicalOfferPeer(t, "peer-m")}
 	wantReviewers := append([]model.PeerID(nil), reviewers...)
 	sort.Slice(wantReviewers, func(left, right int) bool {
-		comparison, err := peerprotocol.CompareCanonicalIDs(wantReviewers[left], wantReviewers[right])
+		comparison, err := model.ComparePeerIDs(wantReviewers[left], wantReviewers[right])
 		if err != nil {
 			t.Fatal(err)
 		}

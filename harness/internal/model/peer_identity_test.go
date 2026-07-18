@@ -1,4 +1,4 @@
-package peer
+package model
 
 import (
 	"bytes"
@@ -9,41 +9,40 @@ import (
 
 	libp2pcrypto "github.com/libp2p/go-libp2p/core/crypto"
 	libp2ppeer "github.com/libp2p/go-libp2p/core/peer"
-	"github.com/mnemon-dev/mnemon/harness/internal/model"
 )
 
-func TestCanonicalIDBytesAndComparison(t *testing.T) {
+func TestCanonicalPeerIDBytesAndComparison(t *testing.T) {
 	t.Parallel()
-	left := testCanonicalPeerID(t, "left")
-	right := testCanonicalPeerID(t, "right")
-	leftBytes, err := CanonicalIDBytes(left)
+	left := canonicalModelPeerID(t, "left")
+	right := canonicalModelPeerID(t, "right")
+	leftBytes, err := CanonicalPeerIDBytes(left)
 	if err != nil {
 		t.Fatal(err)
 	}
-	rightBytes, err := CanonicalIDBytes(right)
+	rightBytes, err := CanonicalPeerIDBytes(right)
 	if err != nil {
 		t.Fatal(err)
 	}
-	comparison, err := CompareCanonicalIDs(left, right)
+	comparison, err := ComparePeerIDs(left, right)
 	if err != nil || comparison != bytes.Compare(leftBytes, rightBytes) {
-		t.Fatalf("CompareCanonicalIDs() = (%d, %v)", comparison, err)
+		t.Fatalf("ComparePeerIDs() = (%d, %v)", comparison, err)
 	}
 	leftBytes[0] ^= 0xff
-	reloaded, err := CanonicalIDBytes(left)
+	reloaded, err := CanonicalPeerIDBytes(left)
 	if err != nil || bytes.Equal(leftBytes, reloaded) {
-		t.Fatal("CanonicalIDBytes exposed mutable storage")
+		t.Fatal("CanonicalPeerIDBytes exposed mutable storage")
 	}
 
-	invalid, _ := model.ParsePeerID("not-a-libp2p-peer")
-	if _, err := CanonicalIDBytes(invalid); !errors.Is(err, ErrPeerIDEncoding) {
+	invalid, _ := ParsePeerID("not-a-libp2p-peer")
+	if _, err := CanonicalPeerIDBytes(invalid); !errors.Is(err, ErrPeerIDEncoding) {
 		t.Fatalf("invalid PeerID error = %v", err)
 	}
-	if _, err := CompareCanonicalIDs(left, invalid); !errors.Is(err, ErrPeerIDEncoding) {
+	if _, err := ComparePeerIDs(left, invalid); !errors.Is(err, ErrPeerIDEncoding) {
 		t.Fatalf("invalid comparison error = %v", err)
 	}
 }
 
-func testCanonicalPeerID(t *testing.T, label string) model.PeerID {
+func canonicalModelPeerID(t *testing.T, label string) PeerID {
 	t.Helper()
 	seed := sha256.Sum256([]byte(label))
 	standardPrivate := ed25519.NewKeyFromSeed(seed[:])
@@ -55,7 +54,7 @@ func testCanonicalPeerID(t *testing.T, label string) model.PeerID {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := model.ParsePeerID(id.String())
+	result, err := ParsePeerID(id.String())
 	if err != nil {
 		t.Fatal(err)
 	}

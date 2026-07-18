@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
-	peerprotocol "github.com/mnemon-dev/mnemon/harness/internal/peer"
 )
 
 const (
@@ -96,7 +95,7 @@ func PlanOffer(spec OfferPlanSpec) (OfferPlan, error) {
 	}
 	reviewers := make([]orderedReviewer, len(spec.ReviewerPeerIDs))
 	for index, reviewer := range spec.ReviewerPeerIDs {
-		canonical, err := peerprotocol.CanonicalIDBytes(reviewer)
+		canonical, err := model.CanonicalPeerIDBytes(reviewer)
 		if err != nil {
 			return OfferPlan{}, fmt.Errorf("%w: reviewer PeerID: %v", ErrInvalidOffer, err)
 		}

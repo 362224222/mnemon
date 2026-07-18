@@ -10,7 +10,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
-	peerprotocol "github.com/mnemon-dev/mnemon/harness/internal/peer"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
 
@@ -231,7 +230,7 @@ func sortAgentOfferReviewers(reviewers []decodedAgentOfferReviewer) {
 }
 
 func canonicalAgentPeerBytes(id model.PeerID) ([]byte, error) {
-	return peerprotocol.CanonicalIDBytes(id)
+	return model.CanonicalPeerIDBytes(id)
 }
 
 func validateAgentSelectionAlias(field, value string, emptyOK bool) error {
