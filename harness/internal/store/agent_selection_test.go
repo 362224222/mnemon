@@ -109,6 +109,9 @@ func TestReadAgentOfferCandidatesRereadsEligibility(t *testing.T) {
 	}{
 		{name: "active binding missing inbound baseline", want: ErrAgentOfferCandidatesInvariant,
 			mutate: func(t *testing.T, fixture *agentCandidateFixture, peer model.PeerID) {
+				mustExec(t, fixture.store, "DROP TRIGGER peer_repairs_no_delete")
+				mustExec(t, fixture.store, "DELETE FROM peer_repairs WHERE channel_id=? AND origin_peer_id=?",
+					fixture.channelID("alpha").String(), peer.String())
 				mustExec(t, fixture.store, "DROP TRIGGER peer_cursors_no_delete")
 				mustExec(t, fixture.store, "DELETE FROM peer_cursors WHERE channel_id=? AND origin_peer_id=?",
 					fixture.channelID("alpha").String(), peer.String())

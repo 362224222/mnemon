@@ -27,7 +27,7 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 				"artifact_pins artifact_provenance channels channel_members channel_conflicts " +
 				"enrollment_grants enrollment_grant_uses enrollment_receipts channel_join_reservations channel_leave_requests " +
 				"peer_bindings gossip_publications peer_deliveries peer_inbox peer_inbox_pressure peer_inbox_node_pressure publication_conflicts " +
-				"origin_quarantines peer_cursors publication_epochs peer_pull_acks",
+				"origin_quarantines peer_cursors peer_repairs publication_epochs peer_pull_acks",
 		),
 		"index": strings.Fields(
 			"profiles_one_enabled_teamwork_idx operations_reclaim_idx operations_one_started_context_idx " +
@@ -71,7 +71,11 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 				"publication_conflicts_no_delete publication_conflicts_existing_scope_insert " +
 				"origin_quarantines_no_update origin_quarantines_no_delete peer_cursors_binding_epoch_insert " +
 				"peer_cursors_initial_baseline_insert peer_cursors_binding_epoch_update peer_cursors_identity_baseline_immutable " +
-				"peer_cursors_monotonic_update peer_cursors_no_delete peer_bindings_no_active_insert " +
+				"peer_cursors_monotonic_update peer_cursors_no_delete " +
+				"peer_repairs_from_cursor_insert peer_repairs_initial_projection_insert " +
+				"peer_repairs_identity_immutable peer_repairs_generation_monotonic " +
+				"peer_repairs_source_monotonic peer_repairs_time_monotonic " +
+				"peer_repairs_terminal_immutable peer_repairs_no_delete peer_bindings_no_active_insert " +
 				"peer_bindings_activate_requires_cursor publication_epochs_local_origin_insert " +
 				"publication_epochs_identity_immutable publication_epochs_monotonic_update " +
 				"publication_epochs_no_delete peer_pull_acks_initial_baseline_insert peer_pull_acks_identity_baseline_immutable " +
@@ -105,8 +109,8 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 	if !reflect.DeepEqual(actual, expected) {
 		t.Fatalf("schema object set mismatch\nactual: %#v\nexpected: %#v", actual, expected)
 	}
-	if got := len(actual["table"]) + len(actual["index"]) + len(actual["trigger"]); got != 168 {
-		t.Fatalf("explicit object count = %d, want 168", got)
+	if got := len(actual["table"]) + len(actual["index"]) + len(actual["trigger"]); got != 177 {
+		t.Fatalf("explicit object count = %d, want 177", got)
 	}
 }
 
@@ -1266,6 +1270,30 @@ func TestOpenRejectsForeignKeyCorruption(t *testing.T) {
 	}
 	if err == nil || !strings.Contains(err.Error(), "foreign key violation") {
 		t.Fatalf("Open() error = %v, want foreign key violation", err)
+	}
+}
+
+func TestSchemaProtectsPeerRepairCheckpoint(t *testing.T) {
+	t.Parallel()
+	fixture := newPeerInboxFixture(t, "schema-peer-repair", 4)
+	var baseline, head, generation, retryCount uint64
+	var status, nextAttempt, updatedAt string
+	if err := fixture.store.db.QueryRow(`SELECT baseline_channel_seq,source_head_channel_seq,
+		generation,retry_count,status,next_attempt_at,updated_at FROM peer_repairs`).
+		Scan(&baseline, &head, &generation, &retryCount, &status, &nextAttempt, &updatedAt); err != nil ||
+		baseline != 4 || head != 4 || generation != 0 || retryCount != 0 || status != "ready" ||
+		nextAttempt != updatedAt {
+		t.Fatalf("cursor-derived repair checkpoint = (%d,%d,%d,%d,%q,%q,%q,%v)", baseline,
+			head, generation, retryCount, status, nextAttempt, updatedAt, err)
+	}
+	for name, statement := range map[string]string{
+		"identity":   "UPDATE peer_repairs SET origin_epoch='epoch-forged'",
+		"generation": "UPDATE peer_repairs SET generation=2",
+		"delete":     "DELETE FROM peer_repairs",
+	} {
+		if _, err := fixture.store.db.Exec(statement); err == nil {
+			t.Errorf("%s mutation unexpectedly succeeded", name)
+		}
 	}
 }
 

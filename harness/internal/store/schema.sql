@@ -1761,6 +1761,146 @@ BEGIN SELECT RAISE(ABORT, 'cursor cannot move backward'); END;
 CREATE TRIGGER peer_cursors_no_delete BEFORE DELETE ON peer_cursors
 BEGIN SELECT RAISE(ABORT, 'peer cursor baseline evidence is durable'); END;
 
+-- peer_repairs is the restart-safe anti-entropy checkpoint for one inbound
+-- origin log. It is deliberately not a task queue: the current Channel,
+-- binding and cursor remain the authority from which due work is derived.
+CREATE TABLE peer_repairs (
+  channel_id         TEXT NOT NULL,
+  origin_peer_id     TEXT NOT NULL,
+  origin_epoch       TEXT NOT NULL,
+  baseline_channel_seq INTEGER NOT NULL CHECK (baseline_channel_seq >= 0),
+  status             TEXT NOT NULL CHECK (
+    status IN ('ready','progress','caught_up','retry','paused','terminal')
+  ),
+  generation         INTEGER NOT NULL DEFAULT 0 CHECK (generation >= 0),
+  retry_count        INTEGER NOT NULL DEFAULT 0 CHECK (retry_count >= 0),
+  source_floor_channel_seq INTEGER CHECK (source_floor_channel_seq > 0),
+  source_head_channel_seq INTEGER CHECK (source_head_channel_seq >= 0),
+  diagnostic_code    TEXT CHECK (diagnostic_code IN (
+    'busy','transport_unavailable','protocol_invalid','history_gap',
+    'not_origin','not_member','member_revoked','channel_closed',
+    'origin_epoch_mismatch'
+  )),
+  paused_authority_digest BLOB CHECK (
+    paused_authority_digest IS NULL OR length(paused_authority_digest) = 32
+  ),
+  next_attempt_at    TEXT,
+  updated_at         TEXT NOT NULL,
+  PRIMARY KEY (channel_id, origin_peer_id, origin_epoch),
+  FOREIGN KEY (channel_id, origin_peer_id, origin_epoch)
+    REFERENCES peer_cursors(channel_id, origin_peer_id, origin_epoch),
+  CHECK (retry_count <= generation),
+  CHECK (
+    (status = 'ready'
+      AND generation = 0
+      AND retry_count = 0
+      AND source_floor_channel_seq IS NULL
+      AND source_head_channel_seq = baseline_channel_seq
+      AND diagnostic_code IS NULL
+      AND paused_authority_digest IS NULL
+      AND next_attempt_at IS NOT NULL)
+    OR (status IN ('progress','caught_up')
+      AND source_floor_channel_seq IS NOT NULL
+      AND source_head_channel_seq IS NOT NULL
+      AND diagnostic_code IS NULL
+      AND paused_authority_digest IS NULL
+      AND next_attempt_at IS NOT NULL)
+    OR (status = 'retry'
+      AND diagnostic_code IN ('busy','transport_unavailable')
+      AND paused_authority_digest IS NULL
+      AND next_attempt_at IS NOT NULL)
+    OR (status = 'paused'
+      AND diagnostic_code IN (
+        'not_origin','not_member','member_revoked','channel_closed'
+      )
+      AND paused_authority_digest IS NOT NULL
+      AND next_attempt_at IS NOT NULL)
+    OR (status = 'terminal'
+      AND diagnostic_code IN (
+        'protocol_invalid','history_gap','origin_epoch_mismatch'
+      )
+      AND paused_authority_digest IS NULL
+      AND next_attempt_at IS NULL)
+  ),
+  CHECK (
+    diagnostic_code <> 'history_gap'
+    OR source_floor_channel_seq IS NOT NULL
+  )
+);
+
+CREATE TRIGGER peer_repairs_from_cursor_insert
+AFTER INSERT ON peer_cursors
+BEGIN
+  INSERT INTO peer_repairs(
+    channel_id,origin_peer_id,origin_epoch,baseline_channel_seq,status,
+    generation,retry_count,source_head_channel_seq,next_attempt_at,updated_at
+  ) VALUES(
+    NEW.channel_id,NEW.origin_peer_id,NEW.origin_epoch,
+    NEW.baseline_channel_seq,'ready',0,0,NEW.baseline_channel_seq,
+    NEW.updated_at,NEW.updated_at
+  );
+END;
+
+CREATE TRIGGER peer_repairs_initial_projection_insert
+BEFORE INSERT ON peer_repairs
+WHEN NEW.status <> 'ready'
+  OR NEW.generation <> 0
+  OR NEW.retry_count <> 0
+  OR NEW.source_floor_channel_seq IS NOT NULL
+  OR NEW.source_head_channel_seq <> NEW.baseline_channel_seq
+  OR NEW.diagnostic_code IS NOT NULL
+  OR NEW.paused_authority_digest IS NOT NULL
+  OR NEW.next_attempt_at <> NEW.updated_at
+  OR NOT EXISTS (
+    SELECT 1 FROM peer_cursors cursor
+    WHERE cursor.channel_id = NEW.channel_id
+      AND cursor.origin_peer_id = NEW.origin_peer_id
+      AND cursor.origin_epoch = NEW.origin_epoch
+      AND cursor.baseline_channel_seq = NEW.baseline_channel_seq
+      AND cursor.updated_at = NEW.updated_at
+  )
+BEGIN SELECT RAISE(ABORT, 'repair must initialize from exact inbound cursor'); END;
+
+CREATE TRIGGER peer_repairs_identity_immutable
+BEFORE UPDATE OF channel_id,origin_peer_id,origin_epoch,baseline_channel_seq ON peer_repairs
+WHEN NEW.channel_id <> OLD.channel_id
+  OR NEW.origin_peer_id <> OLD.origin_peer_id
+  OR NEW.origin_epoch <> OLD.origin_epoch
+  OR NEW.baseline_channel_seq <> OLD.baseline_channel_seq
+BEGIN SELECT RAISE(ABORT, 'repair identity and baseline are immutable'); END;
+
+CREATE TRIGGER peer_repairs_generation_monotonic
+BEFORE UPDATE ON peer_repairs
+WHEN NEW.generation <> OLD.generation + 1
+  OR NEW.retry_count < OLD.retry_count
+  OR NEW.retry_count > OLD.retry_count + 1
+BEGIN SELECT RAISE(ABORT, 'repair generation or retry evidence is invalid'); END;
+
+CREATE TRIGGER peer_repairs_source_monotonic
+BEFORE UPDATE OF source_floor_channel_seq,source_head_channel_seq ON peer_repairs
+WHEN (OLD.source_floor_channel_seq IS NOT NULL AND (
+    NEW.source_floor_channel_seq IS NULL
+    OR NEW.source_floor_channel_seq < OLD.source_floor_channel_seq
+  ))
+  OR (OLD.source_head_channel_seq IS NOT NULL AND (
+    NEW.source_head_channel_seq IS NULL
+    OR NEW.source_head_channel_seq < OLD.source_head_channel_seq
+  ))
+BEGIN SELECT RAISE(ABORT, 'repair source floor or head cannot regress'); END;
+
+CREATE TRIGGER peer_repairs_time_monotonic
+BEFORE UPDATE OF updated_at,next_attempt_at ON peer_repairs
+WHEN NEW.updated_at < OLD.updated_at
+  OR (NEW.next_attempt_at IS NOT NULL AND NEW.next_attempt_at < NEW.updated_at)
+BEGIN SELECT RAISE(ABORT, 'repair time cannot regress'); END;
+
+CREATE TRIGGER peer_repairs_terminal_immutable BEFORE UPDATE ON peer_repairs
+WHEN OLD.status = 'terminal'
+BEGIN SELECT RAISE(ABORT, 'terminal repair evidence is immutable'); END;
+
+CREATE TRIGGER peer_repairs_no_delete BEFORE DELETE ON peer_repairs
+BEGIN SELECT RAISE(ABORT, 'repair evidence is durable'); END;
+
 CREATE TRIGGER peer_bindings_no_active_insert BEFORE INSERT ON peer_bindings
 WHEN NEW.state = 'active'
 BEGIN SELECT RAISE(ABORT, 'binding must activate through baseline transaction'); END;
