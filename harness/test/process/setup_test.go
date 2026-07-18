@@ -98,7 +98,7 @@ type setupProcessOfflineProbe struct {
 
 // TestPublicSetupSerializesProcessesAndRecoversAKilledDaemon is deliberately
 // black-box at the setup boundary: it builds the two public commands and
-// invokes only mnemon-harness setup. The automatically managed daemon is
+// invokes mnemon-harness setup plus its read-only status observation. The automatically managed daemon is
 // stopped only through authenticated local control. The crash target is a
 // separate mnemond child whose exact exec.Cmd ownership remains with the test.
 func TestPublicSetupSerializesProcessesAndRecoversAKilledDaemon(t *testing.T) {
@@ -189,6 +189,16 @@ func TestPublicSetupSerializesProcessesAndRecoversAKilledDaemon(t *testing.T) {
 		t.Fatalf("concurrent setup did not leave authenticated ready health: %v", err)
 	}
 	cancelHealth()
+	statusCtx, cancelStatus := context.WithTimeout(context.Background(), 5*time.Second)
+	statusResult := setupProcessRunHarness(statusCtx, harnessExecutable, workspace, environment, "status")
+	cancelStatus()
+	status, err := setupProcessParseStatus(statusResult)
+	if err != nil || status.SchemaVersion != localapi.SchemaVersion || status.Scope != "managed_agent" ||
+		status.Status != "ready" || status.AssetRevision != baseline.AssetRevision ||
+		status.Activation.State != "ready" || status.Activation.Issue != "none" ||
+		status.Runtime.State != "ready" || status.Runtime.Issue != "none" {
+		t.Fatalf("public status after setup = (%#v, %v)", status, err)
+	}
 	setupProcessAssertCodexProjectionLayout(t, workspace, true)
 
 	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 5*time.Second)
@@ -803,6 +813,26 @@ func setupProcessParseReceipt(result setupProcessResult) (setupProcessReceipt, e
 		return setupProcessReceipt{}, errors.New("setup receipt is not one canonical JSON line")
 	}
 	return receipt, nil
+}
+
+func setupProcessParseStatus(result setupProcessResult) (localapi.StatusResponse, error) {
+	if result.err != nil {
+		return localapi.StatusResponse{}, fmt.Errorf("exit=%v stderr=%s stdout=%s", result.err,
+			setupProcessFingerprint(result.stderr), setupProcessFingerprint(result.stdout))
+	}
+	if result.overflow || len(result.stderr) != 0 || len(result.stdout) < 2 ||
+		result.stdout[len(result.stdout)-1] != '\n' {
+		return localapi.StatusResponse{}, errors.New("status output is not one bounded stdout line")
+	}
+	var response localapi.StatusResponse
+	if err := json.Unmarshal(result.stdout, &response); err != nil {
+		return localapi.StatusResponse{}, err
+	}
+	canonical, err := model.CanonicalMarshal(response)
+	if err != nil || !bytes.Equal(result.stdout, append(canonical, '\n')) {
+		return localapi.StatusResponse{}, errors.New("status output is not the closed canonical response")
+	}
+	return response, nil
 }
 
 func setupProcessParseEjectReceipt(result setupProcessResult) (ejectProcessReceipt, error) {

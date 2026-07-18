@@ -75,6 +75,9 @@ func TestRun(t *testing.T) {
 		"mnemon-harness eject [--host auto|codex|claude-code] [--project-root DIR]") {
 		t.Error("ordinary help does not expose the complete eject entrypoint")
 	}
+	if !strings.Contains(wantHelp, "mnemon-harness status") {
+		t.Error("ordinary help does not expose status")
+	}
 	for _, forbidden := range []string{
 		"hub", "remote workspace", "multica", "generic capability", "mcp",
 		"evolution", "tower", "session", "hook check", "agent current", "teamwork offer",
@@ -82,6 +85,34 @@ func TestRun(t *testing.T) {
 		if strings.Contains(lowerHelp, forbidden) {
 			t.Errorf("help contains retired vocabulary %q", forbidden)
 		}
+	}
+}
+
+func TestRunRoutesStatusThroughThePublicObservationBoundary(t *testing.T) {
+	var received []string
+	status := func(ctx context.Context, args []string, stdout, stderr io.Writer,
+		gotVersion string,
+	) int {
+		if ctx == nil || gotVersion != version {
+			t.Fatalf("status composition = context %v version %q", ctx, gotVersion)
+		}
+		received = append([]string(nil), args...)
+		_, _ = io.WriteString(stdout, "status receipt\n")
+		return 5
+	}
+	var stdout, stderr bytes.Buffer
+	exit := runWithCommandRunners(context.Background(), []string{"status"},
+		strings.NewReader("unrelated stdin"), &stdout, &stderr,
+		commandRunners{setup: cliSetupMustNotRun(t), eject: func(context.Context, []string,
+			io.Writer, io.Writer, string,
+		) int {
+			t.Fatal("status route invoked eject")
+			return 1
+		}, status: status})
+	if exit != 5 || len(received) != 0 || stdout.String() != "status receipt\n" ||
+		stderr.Len() != 0 {
+		t.Fatalf("status route = exit %d args %v stdout %q stderr %q", exit, received,
+			stdout.String(), stderr.String())
 	}
 }
 

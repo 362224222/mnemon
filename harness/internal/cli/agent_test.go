@@ -112,7 +112,7 @@ func TestAgentAppFailsClosedBeforeEveryManagedCommandWhenDaemonEnsureFails(t *te
 	stdout, stderr, app := cliTestApp(t, workspace, fake, nil)
 	called := 0
 	app.deps.ensureDaemon = func(_ context.Context, gotWorkspace, gotNodeState string,
-		gotClient controlClient,
+		gotClient daemonHealthClient,
 	) *localapi.APIError {
 		called++
 		if gotWorkspace != workspace || gotNodeState != nodeState || gotClient != fake {
@@ -483,7 +483,7 @@ func cliTestApp(t *testing.T, workspace string, fake controlClient, stdin ioRead
 	app := New(stdin, stdout, stderr)
 	app.deps.workingDirectory = func() (string, error) { return filepath.Join(workspace, "nested"), nil }
 	app.deps.newClient = func(string) (controlClient, error) { return fake, nil }
-	app.deps.ensureDaemon = func(context.Context, string, string, controlClient) *localapi.APIError {
+	app.deps.ensureDaemon = func(context.Context, string, string, daemonHealthClient) *localapi.APIError {
 		return nil
 	}
 	return stdout, stderr, app

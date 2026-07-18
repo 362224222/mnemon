@@ -13,35 +13,38 @@ func TestStatusResponseReportsOnlyTruthfulClosedActivationAndRuntimeState(t *tes
 		name        string
 		snapshot    StatusSnapshot
 		wantStatus  string
+		wantExit    int
 		wantActive  StatusCheck
 		wantRuntime StatusCheck
 	}{
 		{name: "ready", snapshot: StatusSnapshot{AssetRevision: revision, ActivationReady: true,
 			Runtime: RuntimeStatusSnapshot{Running: true, Ready: true, Healthy: true}},
-			wantStatus: statusReady, wantActive: StatusCheck{Issue: statusIssueNone, State: activationReady},
+			wantStatus: statusReady, wantExit: 0,
+			wantActive:  StatusCheck{Issue: statusIssueNone, State: activationReady},
 			wantRuntime: StatusCheck{Issue: statusIssueNone, State: runtimeReady}},
 		{name: "activation drift", snapshot: StatusSnapshot{AssetRevision: revision,
 			ActivationIssue: statusIssueAssetMismatch,
 			Runtime:         RuntimeStatusSnapshot{Running: true, Ready: true, Healthy: true}},
-			wantStatus:  statusDegraded,
+			wantStatus: statusDegraded, wantExit: 3,
 			wantActive:  StatusCheck{Issue: statusIssueAssetMismatch, State: activationFailed},
 			wantRuntime: StatusCheck{Issue: statusIssueNone, State: runtimeReady}},
 		{name: "starting", snapshot: StatusSnapshot{AssetRevision: revision, ActivationReady: true,
-			Runtime: RuntimeStatusSnapshot{Healthy: true}}, wantStatus: statusDegraded,
+			Runtime: RuntimeStatusSnapshot{Healthy: true}}, wantStatus: statusDegraded, wantExit: 5,
 			wantActive:  StatusCheck{Issue: statusIssueNone, State: activationReady},
 			wantRuntime: StatusCheck{Issue: statusIssueNone, State: runtimeStarting}},
 		{name: "recovering", snapshot: StatusSnapshot{AssetRevision: revision, ActivationReady: true,
 			Runtime: RuntimeStatusSnapshot{Running: true, Healthy: true, Recovering: true,
-				Issue: statusIssueRecoveryLive}}, wantStatus: statusDegraded,
+				Issue: statusIssueRecoveryLive}}, wantStatus: statusDegraded, wantExit: 5,
 			wantActive:  StatusCheck{Issue: statusIssueNone, State: activationReady},
 			wantRuntime: StatusCheck{Issue: statusIssueRecoveryLive, State: runtimeRecovering}},
 		{name: "retrying", snapshot: StatusSnapshot{AssetRevision: revision, ActivationReady: true,
 			Runtime: RuntimeStatusSnapshot{Running: true, Healthy: true, Issue: statusIssueWakePrepare}},
-			wantStatus:  statusDegraded,
+			wantStatus: statusDegraded, wantExit: 5,
 			wantActive:  StatusCheck{Issue: statusIssueNone, State: activationReady},
 			wantRuntime: StatusCheck{Issue: statusIssueWakePrepare, State: runtimeRetrying}},
 		{name: "failed", snapshot: StatusSnapshot{AssetRevision: revision, ActivationReady: true,
 			Runtime: RuntimeStatusSnapshot{Issue: statusIssueDurableRuntime}}, wantStatus: statusDegraded,
+			wantExit:    1,
 			wantActive:  StatusCheck{Issue: statusIssueNone, State: activationReady},
 			wantRuntime: StatusCheck{Issue: statusIssueDurableRuntime, State: runtimeFailed}},
 	}
@@ -58,6 +61,9 @@ func TestStatusResponseReportsOnlyTruthfulClosedActivationAndRuntimeState(t *tes
 			}
 			if apiErr := validateStatusResponse(response); apiErr != nil {
 				t.Fatalf("validateStatusResponse() = %v", apiErr)
+			}
+			if exit := response.ExitStatus(); exit != test.wantExit {
+				t.Fatalf("StatusResponse.ExitStatus() = %d, want %d", exit, test.wantExit)
 			}
 		})
 	}
@@ -115,6 +121,9 @@ func TestStatusResponseValidationIsClosedAndBounded(t *testing.T) {
 	for _, mutation := range mutations {
 		if apiErr := validateStatusResponse(mutation); apiErr == nil {
 			t.Fatalf("invalid status response accepted: %#v", mutation)
+		}
+		if exit := mutation.ExitStatus(); exit != 1 {
+			t.Fatalf("invalid status response exit = %d", exit)
 		}
 	}
 	if raw, err := model.CanonicalMarshal(response); err != nil || len(raw)+1 > MaxStatusResponseBytes {

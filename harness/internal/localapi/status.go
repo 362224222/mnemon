@@ -100,6 +100,26 @@ type StatusResponse struct {
 	Status        string      `json:"status"`
 }
 
+// ExitStatus maps one already-validated observation to the existing CLI exit
+// classes. A trusted degraded report remains printable even when its exit is
+// non-zero.
+func (response StatusResponse) ExitStatus() int {
+	if validateStatusResponse(response) != nil {
+		return CodeInternal.ExitStatus()
+	}
+	if response.Status == statusReady {
+		return 0
+	}
+	if response.Activation.State == activationFailed {
+		return CodeAssetRevisionMismatch.ExitStatus()
+	}
+	if response.Runtime.State == runtimeStarting || response.Runtime.State == runtimeRecovering ||
+		response.Runtime.State == runtimeRetrying {
+		return CodeMnemondUnavailable.ExitStatus()
+	}
+	return CodeInternal.ExitStatus()
+}
+
 // NewStatusResponse validates and closes a controller snapshot for the wire.
 func NewStatusResponse(snapshot StatusSnapshot) (StatusResponse, error) {
 	if _, err := model.ParseDigest(snapshot.AssetRevision); err != nil {

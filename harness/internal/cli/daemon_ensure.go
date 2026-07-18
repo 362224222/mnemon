@@ -40,14 +40,14 @@ func productionAgentDaemonEnsureDependencies() agentDaemonEnsureDependencies {
 // resolving or validating a launch executable; companion discovery is lazy
 // and occurs only after authenticated unavailability and strict preflight.
 func ensureAgentDaemon(ctx context.Context, workspace, nodeState string,
-	client controlClient,
+	client daemonHealthClient,
 ) *localapi.APIError {
 	return ensureAgentDaemonWith(ctx, workspace, nodeState, client,
 		productionAgentDaemonEnsureDependencies())
 }
 
 func ensureAgentDaemonWith(ctx context.Context, workspace, nodeState string,
-	client controlClient, dependencies agentDaemonEnsureDependencies,
+	client daemonHealthClient, dependencies agentDaemonEnsureDependencies,
 ) *localapi.APIError {
 	if ctx == nil || client == nil || dependencies.loadBundle == nil ||
 		dependencies.currentExecutable == nil || dependencies.newPreflight == nil ||

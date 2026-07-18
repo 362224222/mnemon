@@ -25,13 +25,17 @@ const (
 var errContentTooLarge = errors.New("content exceeds its closed byte bound")
 
 type controlClient interface {
-	ProbeHealth(context.Context) (localapi.HealthResponse, *localapi.APIError)
+	daemonHealthClient
 	HookCheck(context.Context) (localapi.HookCheckResponse, *localapi.APIError)
 	AgentCurrent(context.Context) (localapi.AgentCurrentResponse, *localapi.APIError)
 	TeamworkAction(context.Context, localapi.TeamworkActionRequest, *localapi.ContextFile,
 		localapi.PendingJournal) (localapi.OperationResponse, *localapi.APIError)
 	AgentResolve(context.Context, localapi.AgentResolveRequest, localapi.ContextFile,
 		localapi.PendingJournal) (localapi.OperationResponse, *localapi.APIError)
+}
+
+type daemonHealthClient interface {
+	ProbeHealth(context.Context) (localapi.HealthResponse, *localapi.APIError)
 }
 
 type journalStore interface {
@@ -44,7 +48,7 @@ type journalStore interface {
 type dependencies struct {
 	workingDirectory func() (string, error)
 	newClient        func(string) (controlClient, error)
-	ensureDaemon     func(context.Context, string, string, controlClient) *localapi.APIError
+	ensureDaemon     func(context.Context, string, string, daemonHealthClient) *localapi.APIError
 	newJournals      func(string) (journalStore, error)
 	readContext      func(string, string) (localapi.ContextFile, error)
 	writeContext     func(string, model.RunID, string) (localapi.ContextFile, error)
@@ -749,30 +753,7 @@ func (app *App) resolveWorkspace() (string, string, error) {
 		app.deps.readContext == nil || app.deps.writeContext == nil || app.deps.removeContext == nil {
 		return "", "", errors.New("Agent CLI dependencies are incomplete")
 	}
-	cwd, err := app.deps.workingDirectory()
-	if err != nil {
-		return "", "", err
-	}
-	resolved, err := filepath.EvalSymlinks(cwd)
-	if err != nil {
-		return "", "", err
-	}
-	current, err := filepath.Abs(resolved)
-	if err != nil {
-		return "", "", err
-	}
-	for {
-		nodeState := filepath.Join(current, ".mnemon", "harness", "node")
-		info, statErr := os.Lstat(nodeState)
-		if statErr == nil && info.IsDir() && info.Mode()&os.ModeSymlink == 0 {
-			return current, nodeState, nil
-		}
-		parent := filepath.Dir(current)
-		if parent == current {
-			return "", "", errors.New("no configured Mnemon Harness workspace")
-		}
-		current = parent
-	}
+	return resolveManagedWorkspace(app.deps.workingDirectory)
 }
 
 func (app *App) writeOperation(response localapi.OperationResponse, jsonOutput bool) int {

@@ -17,6 +17,7 @@ const helpText = `mnemon-harness is the project-local client for mnemond-managed
 
 Usage:
   mnemon-harness setup [--host auto|codex|claude-code] [--project-root DIR]
+  mnemon-harness status
   mnemon-harness eject [--host auto|codex|claude-code] [--project-root DIR]
   mnemon-harness --help
   mnemon-harness --version
@@ -27,6 +28,13 @@ and are intentionally absent from ordinary help.
 
 type setupRunner func(context.Context, []string, io.Writer, io.Writer, string) int
 type ejectRunner func(context.Context, []string, io.Writer, io.Writer, string) int
+type statusRunner func(context.Context, []string, io.Writer, io.Writer, string) int
+
+type commandRunners struct {
+	setup  setupRunner
+	eject  ejectRunner
+	status statusRunner
+}
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -38,7 +46,8 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	return runWithRunners(ctx, args, stdin, stdout, stderr, cli.RunSetup, cli.RunEject)
+	return runWithCommandRunners(ctx, args, stdin, stdout, stderr,
+		commandRunners{setup: cli.RunSetup, eject: cli.RunEject, status: cli.RunStatus})
 }
 
 func runWithSetup(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer,
@@ -49,6 +58,13 @@ func runWithSetup(ctx context.Context, args []string, stdin io.Reader, stdout, s
 
 func runWithRunners(ctx context.Context, args []string, stdin io.Reader,
 	stdout, stderr io.Writer, setup setupRunner, eject ejectRunner,
+) int {
+	return runWithCommandRunners(ctx, args, stdin, stdout, stderr,
+		commandRunners{setup: setup, eject: eject, status: cli.RunStatus})
+}
+
+func runWithCommandRunners(ctx context.Context, args []string, stdin io.Reader,
+	stdout, stderr io.Writer, runners commandRunners,
 ) int {
 	if len(args) == 0 {
 		if _, err := io.WriteString(stdout, helpText); err != nil {
@@ -77,15 +93,20 @@ func runWithRunners(ctx context.Context, args []string, stdin io.Reader,
 		}
 		return 0
 	case "setup":
-		if setup == nil {
+		if runners.setup == nil {
 			return 1
 		}
-		return setup(ctx, args[1:], stdout, stderr, version)
+		return runners.setup(ctx, args[1:], stdout, stderr, version)
+	case "status":
+		if runners.status == nil {
+			return 1
+		}
+		return runners.status(ctx, args[1:], stdout, stderr, version)
 	case "eject":
-		if eject == nil {
+		if runners.eject == nil {
 			return 1
 		}
-		return eject(ctx, args[1:], stdout, stderr, version)
+		return runners.eject(ctx, args[1:], stdout, stderr, version)
 	case "hook", "agent", "teamwork":
 		return cli.New(stdin, stdout, stderr).Run(ctx, args)
 	default:
