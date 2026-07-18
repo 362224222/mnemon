@@ -122,7 +122,7 @@ func TestEventFrameCanonicalTypedRoundTripAndCopies(t *testing.T) {
 	}
 
 	gotPublications := page.Publications()
-	gotPublications[0] = model.SignedPublication{}
+	gotPublications[0] = model.PublicationEvidence{}
 	wireCopy := page.Publications()[0].WireJSON().Bytes()
 	wireCopy[0] = 'x'
 	if page.Publications()[0].Digest() != publications[0].Digest() ||
@@ -136,6 +136,137 @@ func TestEventFrameCanonicalTypedRoundTripAndCopies(t *testing.T) {
 		cursor.ContiguousChannelSequence() != 2 || historyGap.SourceFloor() != 2 ||
 		historyGap.Retryable() || busy.RetryAfter() != 250*time.Millisecond {
 		t.Fatal("typed Events payload accessors changed their frozen values")
+	}
+}
+
+func TestPullPageRetainsUnsupportedPublicationEvidence(t *testing.T) {
+	t.Parallel()
+
+	channelID, _ := model.ParseChannelID("channel-events-evidence")
+	originPeerID, _ := model.ParsePeerID("peer-events-evidence")
+	originEpoch, _ := model.ParseOriginEpoch("epoch-events-evidence")
+	base := newEventFramePublication(t, channelID, originPeerID, originEpoch, 1, 8)
+	privateKey := eventFramePublicationPrivateKey()
+	publicKey := privateKey.Public().(ed25519.PublicKey)
+
+	tests := []struct {
+		name       string
+		wantSchema uint64
+		mutate     func(map[string]any)
+	}{
+		{name: "schema v2", wantSchema: model.SchemaVersion + 1, mutate: func(body map[string]any) {
+			body["schema_version"] = json.Number("2")
+			body["future_semantics"] = map[string]any{"mode": "opaque"}
+		}},
+		{name: "schema v1 unknown Event type", wantSchema: model.SchemaVersion, mutate: func(body map[string]any) {
+			body["event"].(map[string]any)["event_type"] = "review.future"
+		}},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			rawPublication := resignEventFramePublication(t, base.WireJSON().Bytes(),
+				privateKey, test.mutate)
+			rawFrame := eventFramePullPage(t, originEpoch, 1, 1, 1, rawPublication)
+			frame, err := ParseEventFrame(rawFrame)
+			if err != nil {
+				t.Fatalf("ParseEventFrame() error = %v", err)
+			}
+			page, ok := frame.Payload().(PullPage)
+			if !ok || frame.Type() != EventFramePullPage ||
+				!bytes.Equal(frame.CanonicalJSON().Bytes(), rawFrame) {
+				t.Fatalf("unsupported PullPage frame = %#v", frame)
+			}
+			publications := page.Publications()
+			if len(publications) != 1 {
+				t.Fatalf("PublicationEvidence count = %d", len(publications))
+			}
+			evidence := publications[0]
+			if evidence.IsZero() || evidence.IsSupported() || evidence.SchemaVersion() != test.wantSchema ||
+				evidence.ChannelID() != channelID || evidence.OriginPeerID() != originPeerID ||
+				evidence.OriginEpoch() != originEpoch || evidence.ChannelSequence() != 1 ||
+				!bytes.Equal(evidence.WireJSON().Bytes(), rawPublication) {
+				t.Fatalf("unsupported PublicationEvidence = %#v", evidence)
+			}
+			if err := model.VerifyPublicationEvidence(publicKey, evidence); err != nil {
+				t.Fatalf("VerifyPublicationEvidence() error = %v", err)
+			}
+			if _, err := model.ParseSignedPublication(rawPublication); err == nil {
+				t.Fatal("strict Gossip publication parser accepted unsupported evidence")
+			}
+
+			publications[0] = model.PublicationEvidence{}
+			wireCopy := evidence.WireJSON().Bytes()
+			wireCopy[0] = 'x'
+			if page.Publications()[0].IsZero() || page.Publications()[0].WireJSON().Bytes()[0] != '{' {
+				t.Fatal("PullPage exposed mutable PublicationEvidence state")
+			}
+		})
+	}
+}
+
+func TestPullPageRejectsMalformedEvidenceAsACompleteFrame(t *testing.T) {
+	t.Parallel()
+
+	channelID, _ := model.ParseChannelID("channel-events-evidence-reject")
+	otherChannelID, _ := model.ParseChannelID("channel-events-evidence-other")
+	originPeerID, _ := model.ParsePeerID("peer-events-evidence-reject")
+	otherPeerID, _ := model.ParsePeerID("peer-events-evidence-other")
+	originEpoch, _ := model.ParseOriginEpoch("epoch-events-evidence-reject")
+	otherEpoch, _ := model.ParseOriginEpoch("epoch-events-evidence-other")
+	privateKey := eventFramePublicationPrivateKey()
+	first := newEventFramePublication(t, channelID, originPeerID, originEpoch, 1, 8)
+	second := newEventFramePublication(t, channelID, originPeerID, originEpoch, 2, 8)
+	third := newEventFramePublication(t, channelID, originPeerID, originEpoch, 3, 8)
+	otherChannel := newEventFramePublication(t, otherChannelID, originPeerID, originEpoch, 2, 8)
+	otherOrigin := newEventFramePublication(t, channelID, otherPeerID, originEpoch, 2, 8)
+	otherOriginEpoch := newEventFramePublication(t, channelID, originPeerID, otherEpoch, 2, 8)
+
+	wrongDigest := eventFrameCanonicalMutation(t, first.WireJSON().String(), func(value map[string]any) {
+		value["publication_digest"] = model.Sum([]byte("wrong PullPage evidence body")).String()
+	})
+	missingStableHeader := resignEventFramePublication(t, first.WireJSON().Bytes(), privateKey,
+		func(body map[string]any) { delete(body, "channel_id") })
+	validFrame := eventFramePullPage(t, originEpoch, 1, 1, 1, first.WireJSON().Bytes())
+	noncanonical := bytes.Replace(validFrame, []byte(`"publications":[{`),
+		[]byte(`"publications":[ {`), 1)
+	if bytes.Equal(noncanonical, validFrame) {
+		t.Fatal("could not construct a noncanonical nested publication frame")
+	}
+	oversizedPublication := append([]byte{'"'}, bytes.Repeat([]byte{'x'}, model.MaxPublicationBytes)...)
+	oversizedPublication = append(oversizedPublication, '"')
+
+	tests := []struct {
+		name string
+		raw  []byte
+	}{
+		{name: "wrong digest", raw: eventFramePullPage(t, originEpoch, 1, 1, 1, wrongDigest)},
+		{name: "noncanonical", raw: noncanonical},
+		{name: "missing stable header", raw: eventFramePullPage(t, originEpoch, 1, 1, 1, missingStableHeader)},
+		{name: "sparse sequence", raw: eventFramePullPage(t, originEpoch, 3, 1, 3,
+			first.WireJSON().Bytes(), third.WireJSON().Bytes())},
+		{name: "cross Channel", raw: eventFramePullPage(t, originEpoch, 2, 1, 2,
+			first.WireJSON().Bytes(), otherChannel.WireJSON().Bytes())},
+		{name: "cross origin", raw: eventFramePullPage(t, originEpoch, 2, 1, 2,
+			first.WireJSON().Bytes(), otherOrigin.WireJSON().Bytes())},
+		{name: "cross origin epoch", raw: eventFramePullPage(t, originEpoch, 2, 1, 2,
+			first.WireJSON().Bytes(), otherOriginEpoch.WireJSON().Bytes())},
+		{name: "oversized publication", raw: eventFramePullPage(t, originEpoch, 1, 1, 1,
+			oversizedPublication)},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := ParseEventFrame(test.raw); !errors.Is(err, ErrEventFrame) {
+				t.Fatalf("ParseEventFrame() error = %v", err)
+			}
+		})
+	}
+
+	valid := eventFramePullPage(t, originEpoch, 2, 1, 2,
+		first.WireJSON().Bytes(), second.WireJSON().Bytes())
+	if _, err := ParseEventFrame(valid); err != nil {
+		t.Fatalf("valid complete PullPage frame error = %v", err)
 	}
 }
 
@@ -535,14 +666,84 @@ func newEventFramePublication(t testing.TB, channelID model.ChannelID,
 	if err != nil {
 		t.Fatal(err)
 	}
-	seed := sha256.Sum256([]byte("mnemon/events/frame/test-signing-key"))
-	privateKey := ed25519.NewKeyFromSeed(seed[:])
+	privateKey := eventFramePublicationPrivateKey()
 	message, _ := model.PublicationSigningMessage(channelID, body.Digest())
 	publication, err := model.AttachSignature(body, ed25519.Sign(privateKey, message))
 	if err != nil {
 		t.Fatal(err)
 	}
 	return publication
+}
+
+type eventFrameSignedPublicationWire struct {
+	OriginSignature   []byte          `json:"origin_signature"`
+	Publication       json.RawMessage `json:"publication"`
+	PublicationDigest string          `json:"publication_digest"`
+}
+
+func eventFramePublicationPrivateKey() ed25519.PrivateKey {
+	seed := sha256.Sum256([]byte("mnemon/events/frame/test-signing-key"))
+	return ed25519.NewKeyFromSeed(seed[:])
+}
+
+func resignEventFramePublication(t testing.TB, raw []byte, privateKey ed25519.PrivateKey,
+	mutate func(map[string]any),
+) []byte {
+	t.Helper()
+	var wire eventFrameSignedPublicationWire
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		t.Fatal(err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(wire.Publication))
+	decoder.UseNumber()
+	var body map[string]any
+	if err := decoder.Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	channelID, err := model.ParseChannelID(body["channel_id"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutate(body)
+	canonical, err := model.JSONFrom(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := model.Sum(canonical.Bytes())
+	message, err := model.PublicationSigningMessage(channelID, digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire.Publication = canonical.Bytes()
+	wire.PublicationDigest = digest.String()
+	wire.OriginSignature = ed25519.Sign(privateKey, message)
+	result, err := model.JSONFrom(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result.Bytes()
+}
+
+func eventFramePullPage(t testing.TB, originEpoch model.OriginEpoch,
+	scannedChannelSequence, sourceFloor, sourceHead uint64, publications ...[]byte,
+) []byte {
+	t.Helper()
+	wirePublications := make([]json.RawMessage, len(publications))
+	for index, publication := range publications {
+		wirePublications[index] = append(json.RawMessage(nil), publication...)
+	}
+	payload, err := model.JSONFrom(pullPageWire{OriginEpoch: originEpoch.String(),
+		Publications: wirePublications, ScannedChannelSequence: scannedChannelSequence,
+		SourceFloor: sourceFloor, SourceHead: sourceHead})
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame, err := model.JSONFrom(eventFrameWire{Payload: payload.Bytes(),
+		Type: EventFramePullPage, Version: EventFrameVersion})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return frame.Bytes()
 }
 
 func eventFrameCanonicalMutation(t testing.TB, raw string,

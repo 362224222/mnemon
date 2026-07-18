@@ -402,7 +402,7 @@ type PullPageSpec struct {
 }
 
 type PullPage struct {
-	publications           []model.SignedPublication
+	publications           []model.PublicationEvidence
 	scannedChannelSequence uint64
 	sourceFloor            uint64
 	sourceHead             uint64
@@ -419,56 +419,73 @@ type pullPageWire struct {
 }
 
 func NewPullPage(spec PullPageSpec) (PullPage, error) {
-	if spec.OriginEpoch.IsZero() || spec.SourceFloor == 0 ||
-		spec.SourceFloor > model.MaxSQLiteInteger || spec.SourceHead > model.MaxSQLiteInteger ||
-		spec.ScannedChannelSequence > model.MaxSQLiteInteger ||
-		spec.SourceFloor-1 > spec.SourceHead ||
-		spec.ScannedChannelSequence < spec.SourceFloor-1 ||
-		spec.ScannedChannelSequence > spec.SourceHead ||
-		len(spec.Publications) > eventPullPageLimit {
-		return PullPage{}, eventFrameError("PullPage floor, scanned head or publication count is invalid", nil)
-	}
-	publications := make([]model.SignedPublication, len(spec.Publications))
-	wirePublications := make([]json.RawMessage, len(spec.Publications))
-	var channelID model.ChannelID
-	var originPeerID model.PeerID
-	var previousSequence uint64
-	totalPublicationBytes := 0
+	publications := make([]model.PublicationEvidence, len(spec.Publications))
 	for index, candidate := range spec.Publications {
 		raw := candidate.WireJSON().Bytes()
 		if len(raw) == 0 || len(raw) > model.MaxPublicationBytes {
 			return PullPage{}, eventFrameError(fmt.Sprintf("PullPage publication %d exceeds its wire bound", index+1), nil)
 		}
-		publication, err := model.ParseSignedPublication(raw)
-		if err != nil {
-			return PullPage{}, eventFrameError(fmt.Sprintf("parse PullPage publication %d", index+1), err)
+		publication, err := model.ParsePublicationEvidence(raw)
+		if err != nil || !publication.IsSupported() {
+			return PullPage{}, eventFrameError(fmt.Sprintf("parse supported PullPage publication %d", index+1), err)
 		}
-		key := publication.Key()
+		publications[index] = publication
+	}
+	return newPullPageFromEvidence(publications, spec.ScannedChannelSequence, spec.SourceFloor,
+		spec.SourceHead, spec.OriginEpoch)
+}
+
+func newPullPageFromEvidence(publications []model.PublicationEvidence, scannedChannelSequence,
+	sourceFloor, sourceHead uint64, originEpoch model.OriginEpoch,
+) (PullPage, error) {
+	if originEpoch.IsZero() || sourceFloor == 0 ||
+		sourceFloor > model.MaxSQLiteInteger || sourceHead > model.MaxSQLiteInteger ||
+		scannedChannelSequence > model.MaxSQLiteInteger ||
+		sourceFloor-1 > sourceHead ||
+		scannedChannelSequence < sourceFloor-1 ||
+		scannedChannelSequence > sourceHead ||
+		len(publications) > eventPullPageLimit {
+		return PullPage{}, eventFrameError("PullPage floor, scanned head or publication count is invalid", nil)
+	}
+	retained := make([]model.PublicationEvidence, len(publications))
+	wirePublications := make([]json.RawMessage, len(publications))
+	var channelID model.ChannelID
+	var originPeerID model.PeerID
+	var previousSequence uint64
+	totalPublicationBytes := 0
+	for index, publication := range publications {
+		raw := publication.WireJSON().Bytes()
+		if len(raw) == 0 || len(raw) > model.MaxPublicationBytes {
+			return PullPage{}, eventFrameError(fmt.Sprintf("PullPage publication %d exceeds its wire bound", index+1), nil)
+		}
+		if publication.IsZero() {
+			return PullPage{}, eventFrameError(fmt.Sprintf("PullPage publication %d is incomplete", index+1), nil)
+		}
 		if index == 0 {
-			channelID, originPeerID = key.ChannelID(), key.OriginPeerID()
-		} else if key.ChannelID() != channelID || key.OriginPeerID() != originPeerID {
+			channelID, originPeerID = publication.ChannelID(), publication.OriginPeerID()
+		} else if publication.ChannelID() != channelID || publication.OriginPeerID() != originPeerID {
 			return PullPage{}, eventFrameError("PullPage publications cross Channel or origin", nil)
 		}
-		sequence := key.ChannelSequence()
-		if key.OriginEpoch() != spec.OriginEpoch || sequence < spec.SourceFloor ||
-			(index > 0 && sequence != previousSequence+1) || sequence > spec.ScannedChannelSequence ||
-			sequence > spec.SourceHead {
+		sequence := publication.ChannelSequence()
+		if publication.OriginEpoch() != originEpoch || sequence < sourceFloor ||
+			(index > 0 && sequence != previousSequence+1) || sequence > scannedChannelSequence ||
+			sequence > sourceHead {
 			return PullPage{}, eventFrameError("PullPage publication tuple or sequence is inconsistent", nil)
 		}
 		if totalPublicationBytes > eventPullPageFrameBytes-len(raw) {
 			return PullPage{}, eventFrameError("PullPage publication bytes exceed page bound", nil)
 		}
 		totalPublicationBytes += len(raw)
-		publications[index] = publication
+		retained[index] = publication
 		wirePublications[index] = raw
 		previousSequence = sequence
 	}
-	if len(publications) > 0 && previousSequence != spec.ScannedChannelSequence {
+	if len(retained) > 0 && previousSequence != scannedChannelSequence {
 		return PullPage{}, eventFrameError("PullPage publications do not reach the scanned cursor", nil)
 	}
-	canonical, err := model.JSONFrom(pullPageWire{OriginEpoch: spec.OriginEpoch.String(),
-		Publications: wirePublications, ScannedChannelSequence: spec.ScannedChannelSequence,
-		SourceFloor: spec.SourceFloor, SourceHead: spec.SourceHead})
+	canonical, err := model.JSONFrom(pullPageWire{OriginEpoch: originEpoch.String(),
+		Publications: wirePublications, ScannedChannelSequence: scannedChannelSequence,
+		SourceFloor: sourceFloor, SourceHead: sourceHead})
 	if err != nil {
 		return PullPage{}, eventFrameError("encode PullPage", err)
 	}
@@ -480,9 +497,9 @@ func NewPullPage(spec PullPageSpec) (PullPage, error) {
 	if len(envelope.Bytes()) > eventPullPageFrameBytes {
 		return PullPage{}, eventFrameError("PullPage canonical envelope exceeds page bound", nil)
 	}
-	return PullPage{publications: publications,
-		scannedChannelSequence: spec.ScannedChannelSequence, sourceFloor: spec.SourceFloor,
-		sourceHead: spec.SourceHead, originEpoch: spec.OriginEpoch, canonical: canonical}, nil
+	return PullPage{publications: retained,
+		scannedChannelSequence: scannedChannelSequence, sourceFloor: sourceFloor,
+		sourceHead: sourceHead, originEpoch: originEpoch, canonical: canonical}, nil
 }
 
 func parsePullPage(raw []byte) (PullPage, error) {
@@ -497,7 +514,7 @@ func parsePullPage(raw []byte) (PullPage, error) {
 	if err != nil {
 		return PullPage{}, eventFrameError("invalid PullPage origin epoch", err)
 	}
-	publications := make([]model.SignedPublication, len(wire.Publications))
+	publications := make([]model.PublicationEvidence, len(wire.Publications))
 	totalPublicationBytes := 0
 	for index, publicationWire := range wire.Publications {
 		if len(publicationWire) == 0 || len(publicationWire) > model.MaxPublicationBytes ||
@@ -505,15 +522,14 @@ func parsePullPage(raw []byte) (PullPage, error) {
 			return PullPage{}, eventFrameError(fmt.Sprintf("PullPage publication %d exceeds page bounds", index+1), nil)
 		}
 		totalPublicationBytes += len(publicationWire)
-		publication, parseErr := model.ParseSignedPublication(publicationWire)
+		publication, parseErr := model.ParsePublicationEvidence(publicationWire)
 		if parseErr != nil {
 			return PullPage{}, eventFrameError(fmt.Sprintf("parse PullPage publication %d", index+1), parseErr)
 		}
 		publications[index] = publication
 	}
-	payload, err := NewPullPage(PullPageSpec{Publications: publications,
-		ScannedChannelSequence: wire.ScannedChannelSequence, SourceFloor: wire.SourceFloor,
-		SourceHead: wire.SourceHead, OriginEpoch: originEpoch})
+	payload, err := newPullPageFromEvidence(publications, wire.ScannedChannelSequence, wire.SourceFloor,
+		wire.SourceHead, originEpoch)
 	if err != nil {
 		return PullPage{}, err
 	}
@@ -523,8 +539,8 @@ func parsePullPage(raw []byte) (PullPage, error) {
 	return payload, nil
 }
 
-func (payload PullPage) Publications() []model.SignedPublication {
-	return append([]model.SignedPublication(nil), payload.publications...)
+func (payload PullPage) Publications() []model.PublicationEvidence {
+	return append([]model.PublicationEvidence(nil), payload.publications...)
 }
 func (payload PullPage) ScannedChannelSequence() uint64 {
 	return payload.scannedChannelSequence
