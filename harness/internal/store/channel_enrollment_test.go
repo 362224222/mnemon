@@ -25,7 +25,7 @@ func TestAcceptChannelEnrollmentCommitsAndReplaysAfterGrantClosure(t *testing.T)
 	}
 	assertEnrollmentTableCounts(t, fixture.ownerStore, map[string]int{
 		"channel_members": 2, "enrollment_grant_uses": 1, "enrollment_receipts": 1,
-		"peer_bindings": 0,
+		"peer_bindings": 1,
 	})
 	if _, err := fixture.ownerStore.CloseChannelInvite(context.Background(), fixture.channel.Channel().ID(),
 		fixture.grantID, fixture.acceptedAt.Add(time.Second)); err != nil {
@@ -145,22 +145,13 @@ func TestAcceptChannelEnrollmentTerminalReplayReturnsOriginalReceiptAndLatestRos
 	terminalAt := closedAt.Add(time.Second)
 	terminalMember, terminalRoster := appendRosterTerminal(t, fixture.channel.Descriptor(), fixture.signer,
 		accepted.Roster, fixture.joiner.PeerID(), model.MemberRevoked, terminalAt)
-	tx, err := fixture.ownerStore.db.BeginTx(context.Background(), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := insertChannelMember(context.Background(), tx, terminalMember); err != nil {
-		_ = tx.Rollback()
-		t.Fatal(err)
-	}
-	if _, err := tx.Exec(`UPDATE channels SET roster_head_revision=?,roster_head_hash=?,updated_at=?
-		WHERE channel_id=?`, terminalRoster.Head().Revision(), terminalRoster.Head().Digest().Bytes(),
-		storeTime(terminalAt), fixture.channel.Channel().ID().String()); err != nil {
-		_ = tx.Rollback()
-		t.Fatal(err)
-	}
-	if err := tx.Commit(); err != nil {
-		t.Fatal(err)
+	merged, err := fixture.ownerStore.MergeChannelRoster(context.Background(), MergeChannelRosterSpec{
+		ChannelID:                    fixture.channel.Channel().ID(),
+		AuthenticatedTransportPeerID: fixture.channel.Owner().PeerID(),
+		Records:                      []model.Member{terminalMember}, At: terminalAt,
+	})
+	if err != nil || merged.Status != ChannelRosterApplied || merged.Roster.Head() != terminalRoster.Head() {
+		t.Fatalf("terminal roster merge = (%#v,%v)", merged, err)
 	}
 	replayAt := terminalAt.Add(time.Second)
 	prepared, err := fixture.ownerStore.PrepareChannelEnrollment(context.Background(),
@@ -452,22 +443,14 @@ func TestAcceptChannelEnrollmentPreservesClosedAndExpiredReasonsAcrossChallengeR
 		closeAt := challengeAt.Add(time.Second)
 		ownerLeft, closedRoster := appendRosterTerminal(t, fixture.channel.Descriptor(), fixture.signer,
 			accepted.Roster, fixture.channel.Owner().PeerID(), model.MemberLeft, closeAt)
-		tx, err := fixture.ownerStore.db.BeginTx(context.Background(), nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := insertChannelMember(context.Background(), tx, ownerLeft); err != nil {
-			_ = tx.Rollback()
-			t.Fatal(err)
-		}
-		if _, err := tx.Exec(`UPDATE channels SET roster_head_revision=?,roster_head_hash=?,status='closed',
-			topic_state='left',updated_at=? WHERE channel_id=?`, closedRoster.Head().Revision(),
-			closedRoster.Head().Digest().Bytes(), storeTime(closeAt), fixture.channel.Channel().ID().String()); err != nil {
-			_ = tx.Rollback()
-			t.Fatal(err)
-		}
-		if err := tx.Commit(); err != nil {
-			t.Fatal(err)
+		merged, err := fixture.ownerStore.MergeChannelRoster(context.Background(), MergeChannelRosterSpec{
+			ChannelID:                    fixture.channel.Channel().ID(),
+			AuthenticatedTransportPeerID: fixture.channel.Owner().PeerID(),
+			Records:                      []model.Member{ownerLeft}, At: closeAt,
+		})
+		if err != nil || merged.Status != ChannelRosterApplied ||
+			merged.Roster.Head() != closedRoster.Head() || merged.Channel.Status() != model.ChannelClosed {
+			t.Fatalf("owner-close roster merge = (%#v,%v)", merged, err)
 		}
 		proof := enrollmentTestProof(t, fixture.token, transcript)
 		_, err = fixture.ownerStore.AcceptChannelEnrollment(context.Background(), AcceptChannelEnrollmentSpec{

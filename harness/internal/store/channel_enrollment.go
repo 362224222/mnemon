@@ -309,9 +309,13 @@ func (s *Store) AcceptChannelEnrollment(ctx context.Context,
 	if err != nil {
 		return AcceptChannelEnrollmentResult{}, ErrChannelEnrollmentOwner
 	}
+	topic := authority.channel.TopicState()
+	if topic == model.TopicJoined {
+		topic = model.TopicJoining
+	}
 	channel, err := model.NewChannel(model.ChannelSpec{Descriptor: authority.channel.Descriptor(),
 		LocalAlias: authority.channel.LocalAlias(), RosterHead: roster.Head(), Status: model.ChannelActive,
-		TopicState: authority.channel.TopicState(), UpdatedAt: at})
+		TopicState: topic, UpdatedAt: at})
 	if err != nil {
 		return AcceptChannelEnrollmentResult{}, mapChannelEnrollmentError(err)
 	}
@@ -361,6 +365,10 @@ func (s *Store) AcceptChannelEnrollment(ctx context.Context,
 	}
 	if changed, changedErr := updated.RowsAffected(); changedErr != nil || changed != 1 {
 		return AcceptChannelEnrollmentResult{}, ErrChannelEnrollmentStale
+	}
+	if err := syncChannelRosterBindings(ctx, tx, node.PeerID(), channel, roster,
+		authority.bindings, at); err != nil {
+		return AcceptChannelEnrollmentResult{}, mapChannelEnrollmentError(err)
 	}
 	if err := insertEnrollmentReceipt(ctx, tx, receipt, useID.String()); err != nil {
 		return AcceptChannelEnrollmentResult{}, mapChannelEnrollmentError(err)
@@ -737,7 +745,7 @@ func replayJoinedChannel(ctx context.Context, tx *sql.Tx, node model.Node,
 		if changed, changedErr := updated.RowsAffected(); changedErr != nil || changed != 1 {
 			return InstallJoinedChannelResult{}, ErrChannelJoinConflict
 		}
-		if err := syncJoinedRosterBindings(ctx, tx, node.PeerID(), channel, incoming,
+		if err := syncChannelRosterBindings(ctx, tx, node.PeerID(), channel, incoming,
 			authority.bindings, spec.At); err != nil {
 			return InstallJoinedChannelResult{}, mapChannelJoinError(err)
 		}
@@ -762,7 +770,7 @@ func replayJoinedChannel(ctx context.Context, tx *sql.Tx, node model.Node,
 		Roster: authority.roster}, nil
 }
 
-func syncJoinedRosterBindings(ctx context.Context, tx *sql.Tx, localPeer model.PeerID,
+func syncChannelRosterBindings(ctx context.Context, tx *sql.Tx, localPeer model.PeerID,
 	channel model.Channel, roster model.VerifiedRoster, existing []model.PeerBinding, at time.Time,
 ) error {
 	aliases, active, err := deriveEffectiveAliases(localPeer, roster)
