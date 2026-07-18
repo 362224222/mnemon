@@ -319,6 +319,63 @@ func TestPullPageRejectsAggregatePublicationLimit(t *testing.T) {
 	}
 }
 
+func TestPullPageRejectsEnvelopeOverheadBeyondPageLimit(t *testing.T) {
+	channelID, _ := model.ParseChannelID("channel-events-envelope-limit")
+	originPeerID, _ := model.ParsePeerID("peer-events-envelope-limit")
+	originEpoch, _ := model.ParseOriginEpoch("epoch-events-envelope-limit")
+	publications := make([]model.SignedPublication, 0, eventPullPageLimit)
+	total := 0
+	for sequence := uint64(1); sequence <= 16; sequence++ {
+		publication := newEventFramePublication(t, channelID, originPeerID, originEpoch,
+			sequence, 60<<10)
+		publications = append(publications, publication)
+		total += len(publication.WireJSON().Bytes())
+	}
+	if total >= eventPullPageFrameBytes {
+		t.Fatalf("fixed publication prefix unexpectedly consumes %d bytes", total)
+	}
+	low, high := 0, 60<<10
+	var last model.SignedPublication
+	for low <= high {
+		middle := low + (high-low)/2
+		candidate := newEventFramePublication(t, channelID, originPeerID, originEpoch, 17, middle)
+		if total+len(candidate.WireJSON().Bytes()) <= eventPullPageFrameBytes {
+			last = candidate
+			low = middle + 1
+		} else {
+			high = middle - 1
+		}
+	}
+	if last.Digest().IsZero() {
+		t.Fatal("could not construct an aggregate just below the publication-byte limit")
+	}
+	publications = append(publications, last)
+	wirePublications := make([]json.RawMessage, len(publications))
+	total = 0
+	for index, publication := range publications {
+		wirePublications[index] = publication.WireJSON().Bytes()
+		total += len(wirePublications[index])
+	}
+	payload, err := model.JSONFrom(pullPageWire{OriginEpoch: originEpoch.String(),
+		Publications: wirePublications, ScannedChannelSequence: 17, SourceFloor: 1, SourceHead: 17})
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope, err := model.JSONFrom(eventFrameWire{Payload: payload.Bytes(),
+		Type: EventFramePullPage, Version: EventFrameVersion})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total > eventPullPageFrameBytes || len(envelope.Bytes()) <= eventPullPageFrameBytes {
+		t.Fatalf("boundary construction = publications %d, envelope %d", total, len(envelope.Bytes()))
+	}
+	if _, err := NewPullPage(PullPageSpec{OriginEpoch: originEpoch, SourceFloor: 1,
+		SourceHead: 17, ScannedChannelSequence: 17,
+		Publications: publications}); !errors.Is(err, ErrEventFrame) {
+		t.Fatalf("envelope overhead limit error = %v", err)
+	}
+}
+
 func TestEventProtocolErrorStableRetryPolicy(t *testing.T) {
 	t.Parallel()
 

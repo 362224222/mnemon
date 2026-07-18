@@ -472,6 +472,14 @@ func NewPullPage(spec PullPageSpec) (PullPage, error) {
 	if err != nil {
 		return PullPage{}, eventFrameError("encode PullPage", err)
 	}
+	envelope, err := model.JSONFrom(eventFrameWire{Payload: canonical.Bytes(),
+		Type: EventFramePullPage, Version: EventFrameVersion})
+	if err != nil {
+		return PullPage{}, eventFrameError("encode PullPage envelope", err)
+	}
+	if len(envelope.Bytes()) > eventPullPageFrameBytes {
+		return PullPage{}, eventFrameError("PullPage canonical envelope exceeds page bound", nil)
+	}
 	return PullPage{publications: publications,
 		scannedChannelSequence: spec.ScannedChannelSequence, sourceFloor: spec.SourceFloor,
 		sourceHead: spec.SourceHead, originEpoch: spec.OriginEpoch, canonical: canonical}, nil
