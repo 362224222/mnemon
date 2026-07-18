@@ -174,6 +174,147 @@ func TestPeerInboxArtifactClaimSkipsUnavailableChannelAuthority(t *testing.T) {
 	}
 }
 
+func TestProbePeerInboxArtifactAuthorityIsFenceBoundAndChannelScoped(t *testing.T) {
+	t.Parallel()
+
+	t.Run("active authority is read only", func(t *testing.T) {
+		fixture := newPeerInboxFixture(t, "artifact-authority-probe-active", 0)
+		fixture.put(t, fixture.publication(t, 1, 1, "artifact-authority-probe-active", true), fixture.at)
+		claimAt := fixture.at.Add(time.Second)
+		claim := mustClaimPeerInboxArtifact(t, fixture.store, "artifact-authority-probe-active-worker", claimAt)
+		var beforeLease, beforeUpdated string
+		if err := fixture.store.db.QueryRow(`SELECT lease_until,updated_at FROM peer_inbox
+			WHERE inbox_id=?`, claim.InboxID().String()).Scan(&beforeLease, &beforeUpdated); err != nil {
+			t.Fatal(err)
+		}
+		if err := fixture.store.ProbePeerInboxArtifactAuthority(context.Background(),
+			ProbePeerInboxArtifactAuthoritySpec{Fence: claim.Fence(), At: claimAt.Add(time.Second)}); err != nil {
+			t.Fatalf("active authority probe error = %v", err)
+		}
+		var afterLease, afterUpdated string
+		if err := fixture.store.db.QueryRow(`SELECT lease_until,updated_at FROM peer_inbox
+			WHERE inbox_id=?`, claim.InboxID().String()).Scan(&afterLease, &afterUpdated); err != nil {
+			t.Fatal(err)
+		}
+		if afterLease != beforeLease || afterUpdated != beforeUpdated {
+			t.Fatalf("authority probe mutated lease: before=(%q,%q) after=(%q,%q)",
+				beforeLease, beforeUpdated, afterLease, afterUpdated)
+		}
+	})
+
+	for _, test := range []struct {
+		name   string
+		mutate func(*testing.T, peerInboxFixture, time.Time)
+	}{
+		{name: "Channel topic lost", mutate: func(t *testing.T, fixture peerInboxFixture, _ time.Time) {
+			mustExec(t, fixture.store, `UPDATE channels SET topic_state='not_joined'
+				WHERE channel_id=?`, fixture.channel.Channel().ID().String())
+		}},
+		{name: "origin binding revoked", mutate: func(t *testing.T, fixture peerInboxFixture, at time.Time) {
+			terminal := fixture.channel.AppendTerminal(t, fixture.remote.Identity().PeerID(), model.MemberRevoked)
+			result, err := fixture.store.MergeChannelRoster(context.Background(), MergeChannelRosterSpec{
+				ChannelID:                    fixture.channel.Channel().ID(),
+				AuthenticatedTransportPeerID: fixture.remote.Identity().PeerID(),
+				Records:                      []model.Member{terminal.Member()}, At: at})
+			if err != nil || result.Status != ChannelRosterApplied {
+				t.Fatalf("revoke origin = (%#v,%v)", result, err)
+			}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newPeerInboxFixture(t, "artifact-authority-probe-"+strings.ReplaceAll(test.name, " ", "-"), 0)
+			fixture.put(t, fixture.publication(t, 1, 1, "artifact-authority-probe-loss", true), fixture.at)
+			claimAt := fixture.at.Add(time.Second)
+			claim := mustClaimPeerInboxArtifact(t, fixture.store, "artifact-authority-probe-loss-worker", claimAt)
+			mutationAt := claimAt.Add(time.Second)
+			test.mutate(t, fixture, mutationAt)
+			if err := fixture.store.ProbePeerInboxArtifactAuthority(context.Background(),
+				ProbePeerInboxArtifactAuthoritySpec{Fence: claim.Fence(), At: mutationAt}); !errors.Is(err, ErrPeerInboxArtifactAuthority) {
+				t.Fatalf("authority loss probe error = %v", err)
+			}
+		})
+	}
+
+	t.Run("expired and changed fences are stale", func(t *testing.T) {
+		fixture := newPeerInboxFixture(t, "artifact-authority-probe-stale", 0)
+		fixture.put(t, fixture.publication(t, 1, 1, "artifact-authority-probe-stale", true), fixture.at)
+		claimAt := fixture.at.Add(time.Second)
+		claim := mustClaimPeerInboxArtifact(t, fixture.store, "artifact-authority-probe-stale-worker", claimAt)
+		renewAt := claimAt.Add(time.Minute)
+		renewed, err := fixture.store.RenewPeerInboxArtifactLease(context.Background(),
+			RenewPeerInboxArtifactSpec{Fence: claim.Fence(), At: renewAt})
+		if err != nil || !renewed.Changed() {
+			t.Fatalf("renew before changed-fence probe = (%#v,%v)", renewed, err)
+		}
+		if err := fixture.store.ProbePeerInboxArtifactAuthority(context.Background(),
+			ProbePeerInboxArtifactAuthoritySpec{Fence: claim.Fence(), At: renewAt.Add(time.Second)}); !errors.Is(err, ErrPeerInboxArtifactStale) {
+			t.Fatalf("changed fence probe error = %v", err)
+		}
+		if err := fixture.store.ProbePeerInboxArtifactAuthority(context.Background(),
+			ProbePeerInboxArtifactAuthoritySpec{Fence: renewed.Fence(), At: renewAt.Add(time.Second)}); err != nil {
+			t.Fatalf("renewed fence probe error = %v", err)
+		}
+		if err := fixture.store.ProbePeerInboxArtifactAuthority(context.Background(),
+			ProbePeerInboxArtifactAuthoritySpec{Fence: renewed.Fence(), At: renewed.Fence().LeaseUntil()}); !errors.Is(err, ErrPeerInboxArtifactStale) {
+			t.Fatalf("expired fence probe error = %v", err)
+		}
+	})
+
+	t.Run("overlapping Channel authority loss does not bleed", func(t *testing.T) {
+		fixture := newPeerInboxFixture(t, "artifact-authority-probe-overlap", 0)
+		fixture.put(t, fixture.publication(t, 1, 1, "artifact-authority-probe-overlap", true), fixture.at)
+		claimAt := fixture.at.Add(time.Second)
+		claim := mustClaimPeerInboxArtifact(t, fixture.store, "artifact-authority-probe-overlap-worker", claimAt)
+
+		overlap := testkit.NewSignedChannelForOwnerAt(t, "artifact-authority-probe-other-channel",
+			fixture.channel.Owner(), fixture.at)
+		overlapRemote := overlap.AppendActiveIdentity(t, fixture.remote.Identity())
+		insertSignedChannelFixture(t, fixture.store.db, overlap, model.TopicJoined)
+		insertSignedPeerBinding(t, fixture.store.db, overlap.Channel().ID(), overlapRemote,
+			"artifact-authority-probe-shared-peer", model.BindingPending,
+			model.ReachabilityUnknown, overlapRemote.Member().CreatedAt())
+		mustExec(t, fixture.store, `UPDATE channels SET topic_state='not_joined'
+			WHERE channel_id=?`, overlap.Channel().ID().String())
+		if err := fixture.store.ProbePeerInboxArtifactAuthority(context.Background(),
+			ProbePeerInboxArtifactAuthoritySpec{Fence: claim.Fence(), At: claimAt.Add(time.Second)}); err != nil {
+			t.Fatalf("probe after overlapping Channel loss error = %v", err)
+		}
+	})
+}
+
+func TestRenewPeerInboxArtifactLeaseRevalidatesAuthority(t *testing.T) {
+	t.Parallel()
+	fixture := newPeerInboxFixture(t, "artifact-renew-authority", 0)
+	fixture.put(t, fixture.publication(t, 1, 1, "artifact-renew-authority", true), fixture.at)
+	claimAt := fixture.at.Add(time.Second)
+	claim := mustClaimPeerInboxArtifact(t, fixture.store, "artifact-renew-authority-worker", claimAt)
+	revokeAt := claimAt.Add(time.Second)
+	terminal := fixture.channel.AppendTerminal(t, fixture.remote.Identity().PeerID(), model.MemberRevoked)
+	merged, err := fixture.store.MergeChannelRoster(context.Background(), MergeChannelRosterSpec{
+		ChannelID:                    fixture.channel.Channel().ID(),
+		AuthenticatedTransportPeerID: fixture.remote.Identity().PeerID(),
+		Records:                      []model.Member{terminal.Member()}, At: revokeAt})
+	if err != nil || merged.Status != ChannelRosterApplied {
+		t.Fatalf("revoke before renewal = (%#v,%v)", merged, err)
+	}
+	result, err := fixture.store.RenewPeerInboxArtifactLease(context.Background(),
+		RenewPeerInboxArtifactSpec{Fence: claim.Fence(), At: revokeAt.Add(time.Second)})
+	if !errors.Is(err, ErrPeerInboxArtifactAuthority) || result.Changed() || result.Replayed() {
+		t.Fatalf("renew after authority loss = (%#v,%v)", result, err)
+	}
+	assertPeerInboxArtifactState(t, fixture.store, "waiting_artifact", 1,
+		"artifact-renew-authority-worker", true)
+	var leaseUntil string
+	if err := fixture.store.db.QueryRow(`SELECT lease_until FROM peer_inbox
+		WHERE inbox_id=?`, claim.InboxID().String()).Scan(&leaseUntil); err != nil {
+		t.Fatal(err)
+	}
+	if leaseUntil != storeTime(claim.Fence().LeaseUntil()) {
+		t.Fatalf("failed authority renewal changed lease_until = %q, want %q",
+			leaseUntil, storeTime(claim.Fence().LeaseUntil()))
+	}
+}
+
 func TestPeerInboxArtifactRenewRetryAndFenceReplay(t *testing.T) {
 	t.Parallel()
 	fixture := newPeerInboxFixture(t, "artifact-renew-retry", 0)

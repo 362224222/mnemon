@@ -131,6 +131,11 @@ type RenewPeerInboxArtifactSpec struct {
 	At    time.Time
 }
 
+type ProbePeerInboxArtifactAuthoritySpec struct {
+	Fence PeerInboxArtifactFence
+	At    time.Time
+}
+
 type RetryPeerInboxArtifactSpec struct {
 	Fence      PeerInboxArtifactFence
 	Diagnostic PeerInboxArtifactRetryDiagnostic
@@ -288,6 +293,41 @@ func (s *Store) ClaimPeerInboxArtifact(ctx context.Context,
 	return PeerInboxArtifactClaimResult{claim: claim, found: true}, nil
 }
 
+// ProbePeerInboxArtifactAuthority is the receiver's read-only, fence-bound
+// authority gate for work performed outside SQLite. It neither extends nor
+// settles the lease: the exact claim generation must still be live and its
+// Channel, origin binding, quarantine and signed publication authority must
+// all remain current at trusted At.
+func (s *Store) ProbePeerInboxArtifactAuthority(ctx context.Context,
+	spec ProbePeerInboxArtifactAuthoritySpec,
+) error {
+	at, err := validatePeerInboxArtifactSettlementCall(s, ctx, spec.Fence, spec.At)
+	if err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return fmt.Errorf("%w: probe authority begin: %v",
+			ErrPeerInboxArtifactInvariant, err)
+	}
+	defer tx.Rollback()
+	row, err := readPeerInboxArtifactRow(ctx, tx, spec.Fence.inboxID)
+	if err != nil {
+		return err
+	}
+	if err := requireLivePeerInboxArtifactFence(row, spec.Fence, at); err != nil {
+		return err
+	}
+	if err := requirePeerInboxArtifactAuthority(ctx, tx, row, at); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("%w: probe authority commit: %v",
+			ErrPeerInboxArtifactInvariant, err)
+	}
+	return nil
+}
+
 // RenewPeerInboxArtifactLease extends one still-live fence to trusted At+120s.
 // Repeating the same renewal after response loss returns the already installed
 // fence without another write.
@@ -320,6 +360,9 @@ func (s *Store) RenewPeerInboxArtifactLease(ctx context.Context,
 			leaseOwner: row.leaseOwner, leaseUntil: row.leaseUntil, attempt: row.attempts}, replayed: true}, nil
 	}
 	if err := requireLivePeerInboxArtifactFence(row, spec.Fence, at); err != nil {
+		return PeerInboxArtifactRenewal{}, err
+	}
+	if err := requirePeerInboxArtifactAuthority(ctx, tx, row, at); err != nil {
 		return PeerInboxArtifactRenewal{}, err
 	}
 	if leaseUntil.Equal(row.leaseUntil) {
