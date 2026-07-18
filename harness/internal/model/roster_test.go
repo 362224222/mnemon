@@ -120,6 +120,28 @@ func TestVerifiedRosterRequiresOwnerLeaveToBeFinal(t *testing.T) {
 	}
 }
 
+func TestVerifiedRosterBoundsAppendOnlyHistory(t *testing.T) {
+	owner, ownerKey, ownerPrivate := canonicalDescriptorIdentity(t, "bounded-roster-owner")
+	channelID, _ := ParseChannelID("bounded-roster-history")
+	descriptor := signedRecordDescriptor(t, channelID, owner, ownerKey, ownerPrivate)
+	epoch, _ := ParseOriginEpoch("epoch-bounded-roster-owner")
+	genesis := signedRosterMember(t, descriptor, ownerPrivate, MemberRecordSpec{ChannelID: channelID,
+		DescriptorDigest: descriptor.Descriptor().Digest(), Revision: 1, PeerID: owner,
+		OriginEpoch: epoch, DisplayLabel: "owner", PublicKey: ownerKey,
+		Multiaddrs: []string{"/ip4/127.0.0.1/tcp/4301"}, Protocols: RequiredMemberProtocols(),
+		Limits: DefaultMemberLimits(), Status: MemberActive, CreatedAt: descriptor.Descriptor().CreatedAt()})
+	members := []Member{genesis}
+	for len(members) < MaxMemberRecordsPerChannel+1 {
+		// Repeating bytes cannot form a valid chain, but the history fence must
+		// reject the oversized allocation before inspecting attacker-controlled
+		// record structure.
+		members = append(members, members[0])
+	}
+	if _, err := NewVerifiedRoster(descriptor, members); !errors.Is(err, ErrLimit) {
+		t.Fatalf("oversized verified roster error = %v", err)
+	}
+}
+
 func signedRosterMember(t *testing.T, descriptor SignedChannelDescriptor, owner ed25519.PrivateKey,
 	spec MemberRecordSpec,
 ) Member {

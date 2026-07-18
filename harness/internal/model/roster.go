@@ -24,6 +24,9 @@ func NewVerifiedRoster(descriptor SignedChannelDescriptor, members []Member) (Ve
 	if err := VerifyChannelDescriptor(descriptor); err != nil || len(members) == 0 {
 		return VerifiedRoster{}, invalid("verified roster", "descriptor and a non-empty roster are required")
 	}
+	if len(members) > MaxMemberRecordsPerChannel {
+		return VerifiedRoster{}, limit("verified roster records", len(members), MaxMemberRecordsPerChannel)
+	}
 	current := make(map[PeerID]Member, descriptor.Descriptor().MemberLimit())
 	active := make(map[PeerID]struct{}, descriptor.Descriptor().MemberLimit())
 	verified := make([]Member, len(members))

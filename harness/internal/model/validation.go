@@ -22,9 +22,14 @@ const (
 	MaxChannelsPerNode     = 8
 	MaxMemberMultiaddrs    = 8
 	MaxMemberProtocols     = 3
-	MaxChannelRecordBytes  = 32 << 10
-	MaxPublicationBytes    = 64 << 10
-	MaxCanonicalJSONBytes  = 4 << 20
+	// MaxMemberRecordsPerChannel bounds the append-only signed roster so a
+	// complete enrollment snapshot always fits comfortably inside canonical
+	// JSON and the direct Channel frame. T0 membership churn beyond this point
+	// requires creating a new Channel instead of producing unrecoverable joins.
+	MaxMemberRecordsPerChannel = 64
+	MaxChannelRecordBytes      = 32 << 10
+	MaxPublicationBytes        = 64 << 10
+	MaxCanonicalJSONBytes      = 4 << 20
 )
 
 var (
