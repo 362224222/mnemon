@@ -707,7 +707,7 @@ CREATE TABLE channels (
   descriptor_digest  BLOB NOT NULL UNIQUE,
   descriptor_signature BLOB NOT NULL,
   member_limit       INTEGER NOT NULL DEFAULT 8 CHECK (member_limit BETWEEN 2 AND 8),
-  roster_head_revision INTEGER NOT NULL CHECK (roster_head_revision > 0),
+  roster_head_revision INTEGER NOT NULL CHECK (roster_head_revision BETWEEN 1 AND 64),
   roster_head_hash   BLOB NOT NULL,
   status             TEXT NOT NULL CHECK (
     status IN ('active','leaving','conflicted','left','closed','abandoned')
@@ -733,7 +733,7 @@ WHEN NEW.status IN ('active','leaving','conflicted')
  AND (
    SELECT COUNT(*) FROM channels
    WHERE status IN ('active','leaving','conflicted')
- ) >= 8
+ ) + (SELECT COUNT(*) FROM channel_join_reservations) >= 8
 BEGIN SELECT RAISE(ABORT, 'node_channel_limit'); END;
 
 CREATE TRIGGER channels_descriptor_immutable
@@ -780,7 +780,7 @@ BEGIN SELECT RAISE(ABORT, 'leaving channel cannot reactivate'); END;
 
 CREATE TABLE channel_members (
   channel_id         TEXT NOT NULL REFERENCES channels(channel_id),
-  revision           INTEGER NOT NULL CHECK (revision > 0),
+  revision           INTEGER NOT NULL CHECK (revision BETWEEN 1 AND 64),
   record_hash        BLOB NOT NULL,
   previous_hash      BLOB,
   member_peer_id     TEXT NOT NULL,
@@ -1072,6 +1072,75 @@ CREATE TRIGGER enrollment_receipts_no_update BEFORE UPDATE ON enrollment_receipt
 BEGIN SELECT RAISE(ABORT, 'enrollment receipt evidence is immutable'); END;
 CREATE TRIGGER enrollment_receipts_no_delete BEFORE DELETE ON enrollment_receipts
 BEGIN SELECT RAISE(ABORT, 'enrollment receipt evidence is permanent'); END;
+
+-- A joiner reserves one local Channel slot before sending EnrollInit. The row
+-- contains no bearer material and survives response loss/restart until the
+-- signed replica is installed or a verified remote rejection releases it.
+CREATE TABLE channel_join_reservations (
+  request_id          TEXT PRIMARY KEY,
+  channel_id          TEXT NOT NULL UNIQUE,
+  grant_id            TEXT NOT NULL,
+  join_identity_digest BLOB NOT NULL UNIQUE,
+  descriptor_digest   BLOB NOT NULL,
+  local_peer_id       TEXT NOT NULL,
+  origin_epoch        TEXT NOT NULL,
+  local_alias         TEXT NOT NULL UNIQUE,
+  attempt             INTEGER NOT NULL CHECK (attempt BETWEEN 1 AND 9223372036854775807),
+  state               TEXT NOT NULL CHECK (state IN ('reserved','commit_unknown')),
+  created_at          TEXT NOT NULL,
+  updated_at          TEXT NOT NULL,
+  CHECK (updated_at >= created_at)
+);
+
+CREATE TRIGGER channel_join_reservations_limit_insert
+BEFORE INSERT ON channel_join_reservations
+WHEN (
+  SELECT COUNT(*) FROM channels
+  WHERE status IN ('active','leaving','conflicted')
+) + (SELECT COUNT(*) FROM channel_join_reservations) >= 8
+BEGIN SELECT RAISE(ABORT, 'node_channel_limit'); END;
+
+CREATE TRIGGER channel_join_reservations_scope_insert
+BEFORE INSERT ON channel_join_reservations
+WHEN EXISTS (
+  SELECT 1 FROM channels
+  WHERE channel_id = NEW.channel_id OR local_alias = NEW.local_alias
+)
+BEGIN SELECT RAISE(ABORT, 'channel join reservation conflicts with installed Channel'); END;
+
+CREATE TRIGGER channel_join_reservations_identity_immutable
+BEFORE UPDATE OF request_id,channel_id,grant_id,join_identity_digest,
+  descriptor_digest,local_peer_id,origin_epoch,local_alias,created_at
+ON channel_join_reservations
+WHEN NEW.request_id <> OLD.request_id
+  OR NEW.channel_id <> OLD.channel_id
+  OR NEW.grant_id <> OLD.grant_id
+  OR NEW.join_identity_digest <> OLD.join_identity_digest
+  OR NEW.descriptor_digest <> OLD.descriptor_digest
+  OR NEW.local_peer_id <> OLD.local_peer_id
+  OR NEW.origin_epoch <> OLD.origin_epoch
+  OR NEW.local_alias <> OLD.local_alias
+  OR NEW.created_at <> OLD.created_at
+BEGIN SELECT RAISE(ABORT, 'channel join reservation identity is immutable'); END;
+
+CREATE TRIGGER channel_join_reservations_attempt_monotonic
+BEFORE UPDATE OF attempt ON channel_join_reservations
+WHEN NEW.attempt <> OLD.attempt + 1
+BEGIN SELECT RAISE(ABORT, 'channel join reservation attempt must advance once'); END;
+
+CREATE TRIGGER channel_join_reservations_state_time_monotonic
+BEFORE UPDATE OF state,updated_at ON channel_join_reservations
+WHEN (OLD.state = 'commit_unknown' AND NEW.state <> 'commit_unknown')
+  OR NEW.updated_at < OLD.updated_at
+BEGIN SELECT RAISE(ABORT, 'channel join reservation state or time regressed'); END;
+
+CREATE TRIGGER channels_join_reservation_insert
+BEFORE INSERT ON channels
+WHEN EXISTS (
+  SELECT 1 FROM channel_join_reservations
+  WHERE channel_id = NEW.channel_id OR local_alias = NEW.local_alias
+)
+BEGIN SELECT RAISE(ABORT, 'Channel conflicts with reserved join'); END;
 
 CREATE TABLE channel_leave_requests (
   request_id         TEXT PRIMARY KEY,

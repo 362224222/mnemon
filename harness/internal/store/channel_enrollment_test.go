@@ -66,6 +66,16 @@ func TestAcceptChannelEnrollmentCommitsAndReplaysAfterGrantClosure(t *testing.T)
 	if _, err := fixture.ownerStore.PrepareChannelEnrollment(context.Background(), epochSpec); !errors.Is(err, ErrChannelEnrollmentProof) {
 		t.Fatalf("changed replay epoch error = %v", err)
 	}
+	wrongPredecessor := fixture.transcript(t, 0x35, 0x36, accepted.Roster.Head())
+	_, err = fixture.ownerStore.AcceptChannelEnrollment(context.Background(), AcceptChannelEnrollmentSpec{
+		AuthenticatedPeerID: fixture.joiner.PeerID(), Transcript: wrongPredecessor,
+		AdvertisedMultiaddrs: fixture.joiner.Multiaddrs(),
+		Proof:                enrollmentTestProof(t, fixture.token, wrongPredecessor), Signer: fixture.signer,
+		At: fixture.acceptedAt.Add(3 * time.Second),
+	})
+	if !errors.Is(err, ErrChannelEnrollmentProof) {
+		t.Fatalf("changed replay predecessor error = %v", err)
+	}
 	assertEnrollmentTableCounts(t, fixture.ownerStore, map[string]int{
 		"channel_members": 2, "enrollment_grant_uses": 1, "enrollment_receipts": 1,
 	})
@@ -76,7 +86,8 @@ func TestAcceptChannelEnrollmentUsesOneGrantForMultipleAuthenticatedPeers(t *tes
 	fixture := newChannelEnrollmentFixture(t, "multi-use")
 	first := fixture.accept(t, fixture.transcript(t, 0x33, 0x34, fixture.head))
 	secondPeer := testkit.NewIdentity(t, "multi-use-second-peer")
-	secondRequest, _ := model.ParseEnrollmentRequestID("request-multi-use-second")
+	secondRequest := stableEnrollmentRequest(t, fixture.channel.Channel().ID(), fixture.grantID,
+		secondPeer)
 	secondAt := fixture.acceptedAt.Add(time.Second)
 	prepared, err := fixture.ownerStore.PrepareChannelEnrollment(context.Background(),
 		PrepareChannelEnrollmentSpec{ChannelID: fixture.channel.Channel().ID(), GrantID: fixture.grantID,
@@ -106,10 +117,12 @@ func TestAcceptChannelEnrollmentUsesOneGrantForMultipleAuthenticatedPeers(t *tes
 	}
 	secondStore := openTestStore(t)
 	insertChannelTestNode(t, secondStore.db, secondPeer, fixture.channel.Channel().CreatedAt())
-	installed, err := secondStore.InstallJoinedChannel(context.Background(), InstallJoinedChannelSpec{
+	installSpec := InstallJoinedChannelSpec{
 		AuthenticatedOwnerPeerID: fixture.channel.Owner().PeerID(), LocalAlias: "multi-use-team",
 		Descriptor: fixture.channel.Descriptor(), Transcript: transcript, Receipt: second.Receipt,
-		Members: second.Roster.Members(), At: secondAt.Add(time.Second)})
+		Members: second.Roster.Members(), At: secondAt.Add(time.Second)}
+	reserveJoinedChannelTest(t, secondStore, installSpec)
+	installed, err := secondStore.InstallJoinedChannel(context.Background(), installSpec)
 	if err != nil || !installed.Installed || len(installed.Roster.Members()) != 3 {
 		t.Fatalf("multi-member initial install = (%#v,%v)", installed, err)
 	}
@@ -176,6 +189,24 @@ func TestAcceptChannelEnrollmentTerminalReplayReturnsOriginalReceiptAndLatestRos
 
 func TestAcceptChannelEnrollmentRejectsBadProofStaleHeadAndRollsBackSignerFailure(t *testing.T) {
 	t.Parallel()
+	t.Run("noncanonical request ID", func(t *testing.T) {
+		fixture := newChannelEnrollmentFixture(t, "noncanonical-request")
+		requestID, _ := model.ParseEnrollmentRequestID("request-noncanonical-owner-input")
+		transcript := enrollmentTestTranscript(t, fixture.channel.Descriptor(), fixture.grantID,
+			requestID, fixture.joiner, fixture.head, 0x3d, 0x3e)
+		_, err := fixture.ownerStore.AcceptChannelEnrollment(context.Background(), AcceptChannelEnrollmentSpec{
+			AuthenticatedPeerID: fixture.joiner.PeerID(), Transcript: transcript,
+			AdvertisedMultiaddrs: fixture.joiner.Multiaddrs(),
+			Proof:                enrollmentTestProof(t, fixture.token, transcript), Signer: fixture.signer,
+			At: fixture.acceptedAt,
+		})
+		if !errors.Is(err, ErrChannelEnrollmentProof) {
+			t.Fatalf("noncanonical request error = %v", err)
+		}
+		assertEnrollmentTableCounts(t, fixture.ownerStore, map[string]int{
+			"channel_members": 1, "enrollment_grant_uses": 0, "enrollment_receipts": 0,
+		})
+	})
 	t.Run("bad proof", func(t *testing.T) {
 		fixture := newChannelEnrollmentFixture(t, "bad-proof")
 		transcript := fixture.transcript(t, 0x41, 0x42, fixture.head)
@@ -227,7 +258,8 @@ func TestAcceptChannelEnrollmentRejectsBadProofStaleHeadAndRollsBackSignerFailur
 	t.Run("stale challenge", func(t *testing.T) {
 		fixture := newChannelEnrollmentFixture(t, "stale-head")
 		other := testkit.NewIdentity(t, "stale-head-other")
-		otherRequest, _ := model.ParseEnrollmentRequestID("request-stale-other")
+		otherRequest := stableEnrollmentRequest(t, fixture.channel.Channel().ID(), fixture.grantID,
+			other)
 		otherPrepare := PrepareChannelEnrollmentSpec{ChannelID: fixture.channel.Channel().ID(),
 			GrantID: fixture.grantID, RequestID: otherRequest, AuthenticatedPeerID: other.PeerID(),
 			JoinerOriginEpoch: other.OriginEpoch(), JoinerPublicKey: other.PublicKey(), At: fixture.acceptedAt}
@@ -374,7 +406,8 @@ func TestAcceptChannelEnrollmentPreservesClosedAndExpiredReasonsAcrossChallengeR
 		}
 		fixture.grantID = rotatedID
 		fixture.token = rotatedToken
-		fixture.requestID, _ = model.ParseEnrollmentRequestID("request-exhausted-after-use-rotation")
+		fixture.requestID = stableEnrollmentRequest(t, fixture.channel.Channel().ID(), rotatedID,
+			fixture.joiner)
 		prepared, err := fixture.ownerStore.PrepareChannelEnrollment(context.Background(),
 			fixture.prepareSpec(fixture.acceptedAt))
 		if err != nil {
@@ -382,7 +415,7 @@ func TestAcceptChannelEnrollmentPreservesClosedAndExpiredReasonsAcrossChallengeR
 		}
 		fixture.accept(t, fixture.transcript(t, 0x69, 0x6a, prepared.RosterHead))
 		other := testkit.NewIdentity(t, "exhausted-after-use-other")
-		otherRequest, _ := model.ParseEnrollmentRequestID("request-exhausted-after-use-other")
+		otherRequest := stableEnrollmentRequest(t, fixture.channel.Channel().ID(), rotatedID, other)
 		_, err = fixture.ownerStore.PrepareChannelEnrollment(context.Background(),
 			PrepareChannelEnrollmentSpec{ChannelID: fixture.channel.Channel().ID(), GrantID: rotatedID,
 				RequestID: otherRequest, AuthenticatedPeerID: other.PeerID(),
@@ -404,7 +437,8 @@ func TestAcceptChannelEnrollmentPreservesClosedAndExpiredReasonsAcrossChallengeR
 		fixture := newChannelEnrollmentFixture(t, "owner-closed-after-challenge")
 		accepted := fixture.accept(t, fixture.transcript(t, 0x6b, 0x6c, fixture.head))
 		other := testkit.NewIdentity(t, "owner-closed-after-challenge-other")
-		requestID, _ := model.ParseEnrollmentRequestID("request-owner-closed-after-challenge-other")
+		requestID := stableEnrollmentRequest(t, fixture.channel.Channel().ID(), fixture.grantID,
+			other)
 		challengeAt := fixture.acceptedAt.Add(time.Second)
 		prepared, err := fixture.ownerStore.PrepareChannelEnrollment(context.Background(),
 			PrepareChannelEnrollmentSpec{ChannelID: fixture.channel.Channel().ID(), GrantID: fixture.grantID,
@@ -473,10 +507,17 @@ func TestInstallJoinedChannelCommitsReplicaBindingsAndReplays(t *testing.T) {
 	if _, err := joinerStore.InstallJoinedChannel(context.Background(), wrongSpec); !errors.Is(err, ErrChannelJoinInput) {
 		t.Fatalf("wrong secure owner error = %v", err)
 	}
+	wrongHeadSpec := spec
+	wrongHeadSpec.Transcript = enrollmentTestTranscript(t, owner.channel.Descriptor(), owner.grantID,
+		owner.requestID, owner.joiner, accepted.Roster.Head(), 0x6f, 0x70)
+	if _, err := joinerStore.InstallJoinedChannel(context.Background(), wrongHeadSpec); !errors.Is(err, ErrChannelJoinInput) {
+		t.Fatalf("wrong historical predecessor error = %v", err)
+	}
 	assertEnrollmentTableCounts(t, joinerStore, map[string]int{
 		"channels": 0, "channel_members": 0, "enrollment_receipts": 0,
 		"publication_epochs": 0, "peer_bindings": 0,
 	})
+	reserveJoinedChannelTest(t, joinerStore, spec)
 	installed, err := joinerStore.InstallJoinedChannel(context.Background(), spec)
 	if err != nil || !installed.Installed || installed.Status != ChannelEnrollmentAccepted ||
 		installed.Channel.LocalAlias() != "project-team" {
@@ -525,7 +566,8 @@ func TestInstallJoinedChannelRejectsNinthNonterminalReplicaWithoutPartialState(t
 		seed := "join-channel-limit-" + string(rune('a'+index))
 		owner := newChannelEnrollmentFixture(t, seed)
 		owner.joiner = sharedJoiner
-		owner.requestID, _ = model.ParseEnrollmentRequestID("request-" + seed + "-shared")
+		owner.requestID = stableEnrollmentRequest(t, owner.channel.Channel().ID(), owner.grantID,
+			sharedJoiner)
 		prepared, err := owner.ownerStore.PrepareChannelEnrollment(context.Background(),
 			owner.prepareSpec(owner.acceptedAt))
 		if err != nil {
@@ -533,19 +575,26 @@ func TestInstallJoinedChannelRejectsNinthNonterminalReplicaWithoutPartialState(t
 		}
 		transcript := owner.transcript(t, byte(0x80+index), byte(0x90+index), prepared.RosterHead)
 		accepted := owner.accept(t, transcript)
-		result, err := joinerStore.InstallJoinedChannel(context.Background(), InstallJoinedChannelSpec{
+		installSpec := InstallJoinedChannelSpec{
 			AuthenticatedOwnerPeerID: owner.channel.Owner().PeerID(),
 			LocalAlias:               "joined-" + string(rune('a'+index)),
 			Descriptor:               owner.channel.Descriptor(), Transcript: transcript,
-			Receipt: accepted.Receipt, Members: accepted.Roster.Members(), At: owner.acceptedAt.Add(time.Second)})
-		if index < model.MaxChannelsPerNode && (err != nil || !result.Installed) {
-			t.Fatalf("install Channel %d = (%#v,%v)", index+1, result, err)
-		}
+			Receipt: accepted.Receipt, Members: accepted.Roster.Members(), At: owner.acceptedAt.Add(time.Second)}
 		if index == model.MaxChannelsPerNode {
 			rejectedChannel = owner.channel.Channel().ID()
-			if !errors.Is(err, ErrNodeChannelLimit) || result.Installed {
-				t.Fatalf("ninth joined Channel = (%#v,%v)", result, err)
+			_, err := joinerStore.PrepareJoinedChannel(context.Background(), PrepareJoinedChannelSpec{
+				AuthenticatedLocalPeerID: sharedJoiner.PeerID(), LocalPublicKey: sharedJoiner.PublicKey(),
+				Descriptor: owner.channel.Descriptor(), GrantID: owner.grantID,
+				LocalAlias: installSpec.LocalAlias, At: installSpec.At})
+			if !errors.Is(err, ErrNodeChannelLimit) {
+				t.Fatalf("ninth joined Channel preflight error = %v", err)
 			}
+			continue
+		}
+		reserveJoinedChannelTest(t, joinerStore, installSpec)
+		result, err := joinerStore.InstallJoinedChannel(context.Background(), installSpec)
+		if err != nil || !result.Installed {
+			t.Fatalf("install Channel %d = (%#v,%v)", index+1, result, err)
 		}
 	}
 	assertEnrollmentTableCounts(t, joinerStore, map[string]int{
@@ -574,16 +623,18 @@ func TestInstallJoinedChannelFinalBindingFailureRollsBackEverything(t *testing.T
 		BEGIN SELECT RAISE(ABORT, 'test reject binding'); END`); err != nil {
 		t.Fatal(err)
 	}
-	_, err := joinerStore.InstallJoinedChannel(context.Background(), InstallJoinedChannelSpec{
+	installSpec := InstallJoinedChannelSpec{
 		AuthenticatedOwnerPeerID: owner.channel.Owner().PeerID(), LocalAlias: "rollback-team",
 		Descriptor: owner.channel.Descriptor(), Transcript: transcript, Receipt: accepted.Receipt,
-		Members: accepted.Roster.Members(), At: owner.acceptedAt.Add(time.Second)})
+		Members: accepted.Roster.Members(), At: owner.acceptedAt.Add(time.Second)}
+	reserveJoinedChannelTest(t, joinerStore, installSpec)
+	_, err := joinerStore.InstallJoinedChannel(context.Background(), installSpec)
 	if err == nil {
 		t.Fatal("binding failure did not reject join install")
 	}
 	assertEnrollmentTableCounts(t, joinerStore, map[string]int{
 		"channels": 0, "channel_members": 0, "enrollment_receipts": 0,
-		"publication_epochs": 0, "peer_bindings": 0,
+		"publication_epochs": 0, "peer_bindings": 0, "channel_join_reservations": 1,
 	})
 }
 
@@ -598,6 +649,7 @@ func TestInstallJoinedChannelAppliesTerminalReplaySuffixButFreshJoinStaysEmpty(t
 		Receipt: accepted.Receipt, Members: accepted.Roster.Members(), At: initialAt}
 	joinerStore := openTestStore(t)
 	insertChannelTestNode(t, joinerStore.db, owner.joiner, owner.channel.Channel().CreatedAt())
+	reserveJoinedChannelTest(t, joinerStore, baseSpec)
 	if result, err := joinerStore.InstallJoinedChannel(context.Background(), baseSpec); err != nil || !result.Installed {
 		t.Fatalf("initial InstallJoinedChannel() = (%#v,%v)", result, err)
 	}
@@ -623,6 +675,7 @@ func TestInstallJoinedChannelAppliesTerminalReplaySuffixButFreshJoinStaysEmpty(t
 
 	fresh := openTestStore(t)
 	insertChannelTestNode(t, fresh.db, owner.joiner, owner.channel.Channel().CreatedAt())
+	reserveJoinedChannelTest(t, fresh, replaySpec)
 	freshResult, err := fresh.InstallJoinedChannel(context.Background(), replaySpec)
 	if err != nil || freshResult.Installed || freshResult.Status != ChannelEnrollmentMemberRevoked {
 		t.Fatalf("fresh terminal install = (%#v,%v)", freshResult, err)
@@ -660,6 +713,7 @@ func TestInstallJoinedChannelSuffixFailureRollsBackHeadMembersBindingsAndAliases
 	baseSpec := InstallJoinedChannelSpec{AuthenticatedOwnerPeerID: owner.channel.Owner().PeerID(),
 		LocalAlias: "suffix-rollback-team", Descriptor: owner.channel.Descriptor(), Transcript: transcript,
 		Receipt: accepted.Receipt, Members: accepted.Roster.Members(), At: baseAt}
+	reserveJoinedChannelTest(t, joinerStore, baseSpec)
 	if result, err := joinerStore.InstallJoinedChannel(context.Background(), baseSpec); err != nil || !result.Installed {
 		t.Fatalf("initial install = (%#v,%v)", result, err)
 	}
@@ -709,6 +763,7 @@ func TestInstallJoinedChannelOwnerCloseSuffixClosesReplicaAndFreshJoinStaysEmpty
 		Receipt: accepted.Receipt, Members: accepted.Roster.Members(), At: baseAt}
 	joinerStore := openTestStore(t)
 	insertChannelTestNode(t, joinerStore.db, owner.joiner, owner.channel.Channel().CreatedAt())
+	reserveJoinedChannelTest(t, joinerStore, baseSpec)
 	if result, err := joinerStore.InstallJoinedChannel(context.Background(), baseSpec); err != nil || !result.Installed {
 		t.Fatalf("initial install = (%#v,%v)", result, err)
 	}
@@ -726,6 +781,7 @@ func TestInstallJoinedChannelOwnerCloseSuffixClosesReplicaAndFreshJoinStaysEmpty
 
 	fresh := openTestStore(t)
 	insertChannelTestNode(t, fresh.db, owner.joiner, owner.channel.Channel().CreatedAt())
+	reserveJoinedChannelTest(t, fresh, closeSpec)
 	freshResult, err := fresh.InstallJoinedChannel(context.Background(), closeSpec)
 	if err != nil || freshResult.Installed || freshResult.Status != ChannelEnrollmentChannelClosed {
 		t.Fatalf("fresh owner-close install = (%#v,%v)", freshResult, err)
@@ -747,6 +803,7 @@ func TestInstallJoinedChannelKeepsTerminalAliasAndDisambiguatesReplacementPeer(t
 	baseSpec := InstallJoinedChannelSpec{AuthenticatedOwnerPeerID: owner.channel.Owner().PeerID(),
 		LocalAlias: "alias-churn-team", Descriptor: owner.channel.Descriptor(), Transcript: transcript,
 		Receipt: accepted.Receipt, Members: accepted.Roster.Members(), At: baseAt}
+	reserveJoinedChannelTest(t, joinerStore, baseSpec)
 	if result, err := joinerStore.InstallJoinedChannel(context.Background(), baseSpec); err != nil || !result.Installed {
 		t.Fatalf("initial install = (%#v,%v)", result, err)
 	}
@@ -863,8 +920,8 @@ func newChannelEnrollmentFixture(t *testing.T, seed string) channelEnrollmentFix
 		Genesis: channel.OwnerMember().Member(), Token: token}); err != nil {
 		t.Fatalf("CreateChannel() error = %v", err)
 	}
-	requestID, _ := model.ParseEnrollmentRequestID("request-" + seed)
 	joiner := testkit.NewIdentity(t, "joiner-"+seed)
+	requestID := stableEnrollmentRequest(t, channel.Channel().ID(), grantID, joiner)
 	signer := enrollmentTestSigner(t, channel.Owner())
 	acceptedAt := channel.Channel().CreatedAt().Add(10 * time.Second)
 	fixture := channelEnrollmentFixture{ownerStore: st, channel: channel, joiner: joiner,
@@ -875,6 +932,38 @@ func newChannelEnrollmentFixture(t *testing.T, seed string) channelEnrollmentFix
 		t.Fatalf("PrepareChannelEnrollment() = (%#v, %v)", prepared, err)
 	}
 	return fixture
+}
+
+func stableEnrollmentRequest(t testing.TB, channelID model.ChannelID, grantID model.GrantID,
+	identity testkit.Identity,
+) model.EnrollmentRequestID {
+	t.Helper()
+	joinIdentity, err := model.EnrollmentJoinIdentityDigest(channelID, grantID, identity.PeerID(),
+		identity.PublicKey(), identity.OriginEpoch())
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestID, err := model.EnrollmentRequestIDForJoinIdentity(joinIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return requestID
+}
+
+func reserveJoinedChannelTest(t testing.TB, st *Store, spec InstallJoinedChannelSpec) {
+	t.Helper()
+	prepared, err := st.PrepareJoinedChannel(context.Background(), PrepareJoinedChannelSpec{
+		AuthenticatedLocalPeerID: spec.Transcript.JoinerPeerID(),
+		LocalPublicKey:           spec.Transcript.JoinerPublicKey(),
+		Descriptor:               spec.Descriptor,
+		GrantID:                  spec.Transcript.GrantID(),
+		LocalAlias:               spec.LocalAlias,
+		At:                       spec.At,
+	})
+	if err != nil || prepared.RequestID != spec.Transcript.RequestID() ||
+		prepared.OriginEpoch != spec.Transcript.JoinerOriginEpoch() || !prepared.Reserved {
+		t.Fatalf("PrepareJoinedChannel() = (%#v, %v)", prepared, err)
+	}
 }
 
 func (fixture channelEnrollmentFixture) prepareSpec(at time.Time) PrepareChannelEnrollmentSpec {

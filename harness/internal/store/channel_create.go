@@ -236,7 +236,9 @@ func mapChannelCreateError(err error) error {
 	if strings.Contains(message, "node_channel_limit") {
 		return fmt.Errorf("%w: %v", ErrNodeChannelLimit, err)
 	}
-	if strings.Contains(message, "UNIQUE constraint failed") || strings.Contains(message, "FOREIGN KEY constraint failed") {
+	if strings.Contains(message, "UNIQUE constraint failed") ||
+		strings.Contains(message, "FOREIGN KEY constraint failed") ||
+		strings.Contains(message, "conflicts with reserved join") {
 		return fmt.Errorf("%w: %v", ErrChannelCreateConflict, err)
 	}
 	return fmt.Errorf("create Channel: %w", err)

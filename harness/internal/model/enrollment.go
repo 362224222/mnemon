@@ -21,6 +21,7 @@ const (
 	EnrollmentVerifierDomain               = "mnemon/r5/enrollment-verifier/1"
 	EnrollmentProofDomain                  = "mnemon/r5/enrollment-proof/1"
 	EnrollmentJoinIdentityDomain           = "mnemon/r5/enrollment-join-identity/1"
+	EnrollmentRequestIDDomain              = "mnemon/r5/enrollment-request-id/1"
 	EnrollmentUseIDDomain                  = "mnemon/r5/enrollment-use-id/1"
 	EnrollmentReceiptIDDomain              = "mnemon/r5/enrollment-receipt-id/1"
 	EnrollmentReceiptSignatureDomain       = "mnemon/r5/enrollment-receipt/1"
@@ -790,6 +791,21 @@ func EnrollmentEvidenceIDs(joinIdentity Digest) (EnrollmentUseID, EnrollmentRece
 		return EnrollmentUseID{}, EnrollmentReceiptID{}, err
 	}
 	return useID, receiptID, nil
+}
+
+// EnrollmentRequestIDForJoinIdentity derives the stable request correlation
+// used across response loss and process restart. It contains no bearer secret;
+// the stable join identity already binds Channel, grant, authenticated PeerID,
+// public key, and origin epoch.
+func EnrollmentRequestIDForJoinIdentity(joinIdentity Digest) (EnrollmentRequestID, error) {
+	if joinIdentity.IsZero() {
+		return EnrollmentRequestID{}, invalid("enrollment request ID", "stable join identity is required")
+	}
+	message, err := lengthSafeDomainMessage(EnrollmentRequestIDDomain, joinIdentity.Bytes())
+	if err != nil {
+		return EnrollmentRequestID{}, err
+	}
+	return ParseEnrollmentRequestID("enrollment-request-" + hex.EncodeToString(Sum(message).Bytes()))
 }
 
 func enrollmentEvidenceID(prefix, domain string, joinIdentity Digest) (string, error) {

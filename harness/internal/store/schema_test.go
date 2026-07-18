@@ -23,7 +23,7 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 			"node profiles operations events works work_members work_derivations " +
 				"agent_handlings agent_runs artifact_roots artifact_blocks artifact_root_blocks " +
 				"artifact_pins artifact_provenance channels channel_members channel_conflicts " +
-				"enrollment_grants enrollment_grant_uses enrollment_receipts channel_leave_requests " +
+				"enrollment_grants enrollment_grant_uses enrollment_receipts channel_join_reservations channel_leave_requests " +
 				"peer_bindings gossip_publications peer_deliveries peer_inbox publication_conflicts " +
 				"origin_quarantines peer_cursors publication_epochs peer_pull_acks",
 		),
@@ -54,6 +54,7 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 				"enrollment_grant_uses_validate_insert enrollment_grant_uses_account_insert " +
 				"enrollment_grant_uses_no_update enrollment_grant_uses_no_delete " +
 				"enrollment_receipts_owner_evidence_insert enrollment_receipts_no_update enrollment_receipts_no_delete " +
+				"channel_join_reservations_limit_insert channel_join_reservations_scope_insert channel_join_reservations_identity_immutable channel_join_reservations_attempt_monotonic channel_join_reservations_state_time_monotonic channels_join_reservation_insert " +
 				"peer_bindings_no_self_insert peer_bindings_member_state_insert peer_bindings_member_state_update peer_bindings_no_self_update " +
 				"peer_bindings_identity_epoch_immutable peer_bindings_revoked_terminal peer_bindings_active_no_pending events_imported_binding_insert " +
 				"gossip_publications_event_scope_insert gossip_publications_identity_immutable " +
@@ -99,8 +100,8 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 	if !reflect.DeepEqual(actual, expected) {
 		t.Fatalf("schema object set mismatch\nactual: %#v\nexpected: %#v", actual, expected)
 	}
-	if got := len(actual["table"]) + len(actual["index"]) + len(actual["trigger"]); got != 147 {
-		t.Fatalf("explicit object count = %d, want 147", got)
+	if got := len(actual["table"]) + len(actual["index"]) + len(actual["trigger"]); got != 154 {
+		t.Fatalf("explicit object count = %d, want 154", got)
 	}
 }
 

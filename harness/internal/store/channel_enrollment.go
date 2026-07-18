@@ -23,6 +23,7 @@ var (
 	ErrChannelEnrollmentTokenClosed    = errors.New("Channel enrollment token closed")
 	ErrChannelEnrollmentTokenExhausted = errors.New("Channel enrollment token exhausted")
 	ErrChannelEnrollmentChannelClosed  = errors.New("Channel is closed")
+	ErrChannelEnrollmentMemberRevoked  = errors.New("Channel member is revoked")
 	ErrChannelEnrollmentConflict       = errors.New("Channel enrollment conflicts with durable state")
 	ErrChannelEnrollmentStale          = errors.New("Channel enrollment challenge is stale")
 	ErrChannelJoinInput                = errors.New("invalid joined Channel input")
@@ -77,6 +78,10 @@ func (s *Store) PrepareChannelEnrollment(ctx context.Context,
 		return PrepareChannelEnrollmentResult{}, fmt.Errorf("%w: identity or challenge time",
 			ErrChannelEnrollmentInput)
 	}
+	expectedRequest, requestErr := model.EnrollmentRequestIDForJoinIdentity(identity)
+	if requestErr != nil || expectedRequest != spec.RequestID {
+		return PrepareChannelEnrollmentResult{}, ErrChannelEnrollmentProof
+	}
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return PrepareChannelEnrollmentResult{}, fmt.Errorf("prepare Channel enrollment: begin: %w", err)
@@ -125,7 +130,7 @@ func (s *Store) PrepareChannelEnrollment(ctx context.Context,
 	}
 	if current, ok := authority.roster.CurrentMember(spec.AuthenticatedPeerID); ok {
 		if current.Status().Terminal() {
-			return PrepareChannelEnrollmentResult{}, ErrChannelEnrollmentUnavailable
+			return PrepareChannelEnrollmentResult{}, ErrChannelEnrollmentMemberRevoked
 		}
 		return PrepareChannelEnrollmentResult{}, ErrChannelEnrollmentConflict
 	}
@@ -174,9 +179,15 @@ func (s *Store) AcceptChannelEnrollment(ctx context.Context,
 	}
 	at, err := canonicalStoreTime(spec.At)
 	addressDigest, addressErr := model.AdvertisedAddressDigest(spec.AdvertisedMultiaddrs)
-	if err != nil || addressErr != nil || addressDigest != transcript.AdvertisedAddressDigest() {
+	joinIdentity, identityErr := transcript.JoinIdentityDigest()
+	expectedRequest, requestErr := model.EnrollmentRequestIDForJoinIdentity(joinIdentity)
+	if err != nil || addressErr != nil || identityErr != nil ||
+		addressDigest != transcript.AdvertisedAddressDigest() {
 		return AcceptChannelEnrollmentResult{}, fmt.Errorf("%w: advertised address transcript mismatch",
 			ErrChannelEnrollmentInput)
+	}
+	if requestErr != nil || expectedRequest != transcript.RequestID() {
+		return AcceptChannelEnrollmentResult{}, ErrChannelEnrollmentProof
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -215,11 +226,12 @@ func (s *Store) AcceptChannelEnrollment(ctx context.Context,
 		if model.VerifyEnrollmentProof(grant.verifier, transcript, spec.Proof) != nil {
 			return AcceptChannelEnrollmentResult{}, ErrChannelEnrollmentProof
 		}
-		identity, identityErr := transcript.JoinIdentityDigest()
-		if identityErr != nil || identity != existing.joinIdentity ||
+		predecessor, predecessorErr := enrollmentPredecessor(existing.member)
+		if joinIdentity != existing.joinIdentity ||
 			existing.receipt.RequestID() != transcript.RequestID() ||
-			model.VerifyEnrollmentReceipt(authority.channel.Descriptor(), existing.member,
-				transcript, existing.receipt) != nil {
+			predecessorErr != nil || predecessor != transcript.RosterHead() ||
+			model.VerifyEnrollmentReceiptEvidence(authority.channel.Descriptor(), existing.member,
+				existing.receipt) != nil {
 			return AcceptChannelEnrollmentResult{}, ErrChannelEnrollmentProof
 		}
 		status := ChannelEnrollmentReplayed
@@ -245,7 +257,7 @@ func (s *Store) AcceptChannelEnrollment(ctx context.Context,
 
 	if current, ok := authority.roster.CurrentMember(spec.AuthenticatedPeerID); ok {
 		if current.Status().Terminal() {
-			return AcceptChannelEnrollmentResult{}, ErrChannelEnrollmentUnavailable
+			return AcceptChannelEnrollmentResult{}, ErrChannelEnrollmentMemberRevoked
 		}
 		return AcceptChannelEnrollmentResult{}, ErrChannelEnrollmentConflict
 	}
@@ -289,6 +301,9 @@ func (s *Store) AcceptChannelEnrollment(ctx context.Context,
 		return AcceptChannelEnrollmentResult{}, ErrChannelEnrollmentOwner
 	}
 	candidateMembers := authority.roster.Members()
+	if len(candidateMembers) >= model.MaxMemberRecordsPerChannel {
+		return AcceptChannelEnrollmentResult{}, ErrChannelFull
+	}
 	candidateMembers = append(candidateMembers, member)
 	roster, err := model.NewVerifiedRoster(authority.channel.Descriptor(), candidateMembers)
 	if err != nil {
@@ -299,10 +314,6 @@ func (s *Store) AcceptChannelEnrollment(ctx context.Context,
 		TopicState: authority.channel.TopicState(), UpdatedAt: at})
 	if err != nil {
 		return AcceptChannelEnrollmentResult{}, mapChannelEnrollmentError(err)
-	}
-	joinIdentity, err := transcript.JoinIdentityDigest()
-	if err != nil {
-		return AcceptChannelEnrollmentResult{}, ErrChannelEnrollmentInput
 	}
 	useID, receiptID, err := model.EnrollmentEvidenceIDs(joinIdentity)
 	if err != nil {
@@ -406,9 +417,16 @@ func (s *Store) InstallJoinedChannel(ctx context.Context,
 		return InstallJoinedChannelResult{}, ErrChannelJoinInput
 	}
 	member, ok := memberAtHead(roster, spec.Receipt.MemberHead())
+	joinIdentity, identityErr := spec.Transcript.JoinIdentityDigest()
+	previous, hasPrevious := member.PreviousDigest()
 	if !ok || !firstRosterAuthorityForPeer(roster, member) ||
 		member.PeerID() != spec.Transcript.JoinerPeerID() ||
-		model.VerifyEnrollmentReceipt(spec.Descriptor, member, spec.Transcript, spec.Receipt) != nil {
+		identityErr != nil || spec.Receipt.RequestID() != spec.Transcript.RequestID() ||
+		spec.Receipt.GrantID() != spec.Transcript.GrantID() ||
+		spec.Receipt.JoinIdentityDigest() != joinIdentity ||
+		!hasPrevious || member.Head().Revision() != spec.Transcript.RosterHead().Revision()+1 ||
+		previous != spec.Transcript.RosterHead().Digest() ||
+		model.VerifyEnrollmentReceiptEvidence(spec.Descriptor, member, spec.Receipt) != nil {
 		return InstallJoinedChannelResult{}, ErrChannelJoinInput
 	}
 	latestMembers := roster.Members()
@@ -445,11 +463,17 @@ func (s *Store) InstallJoinedChannel(ctx context.Context,
 		}
 		return result, nil
 	}
+	if err := verifyJoinedChannelReservation(ctx, tx, node, spec); err != nil {
+		return InstallJoinedChannelResult{}, err
+	}
 	currentOwner, ownerExists := roster.CurrentMember(spec.Descriptor.Descriptor().OwnerPeerID())
 	if !ownerExists {
 		return InstallJoinedChannelResult{}, ErrChannelJoinInput
 	}
 	if currentOwner.Status().Terminal() || currentLocal.Status().Terminal() {
+		if err := consumeJoinedChannelReservation(ctx, tx, spec.Transcript.RequestID()); err != nil {
+			return InstallJoinedChannelResult{}, err
+		}
 		if err := tx.Commit(); err != nil {
 			return InstallJoinedChannelResult{}, mapChannelJoinError(err)
 		}
@@ -458,6 +482,9 @@ func (s *Store) InstallJoinedChannel(ctx context.Context,
 			status = ChannelEnrollmentMemberRevoked
 		}
 		return InstallJoinedChannelResult{Status: status, Roster: roster}, nil
+	}
+	if err := consumeJoinedChannelReservation(ctx, tx, spec.Transcript.RequestID()); err != nil {
+		return InstallJoinedChannelResult{}, err
 	}
 	channel, err := model.NewChannel(model.ChannelSpec{Descriptor: spec.Descriptor,
 		LocalAlias: spec.LocalAlias, RosterHead: roster.Head(), Status: model.ChannelActive,
@@ -1068,7 +1095,8 @@ func mapChannelEnrollmentError(err error) error {
 		errors.Is(err, ErrChannelEnrollmentTokenExpired) ||
 		errors.Is(err, ErrChannelEnrollmentTokenClosed) ||
 		errors.Is(err, ErrChannelEnrollmentTokenExhausted) ||
-		errors.Is(err, ErrChannelEnrollmentChannelClosed) {
+		errors.Is(err, ErrChannelEnrollmentChannelClosed) ||
+		errors.Is(err, ErrChannelEnrollmentMemberRevoked) {
 		return err
 	}
 	message := err.Error()
@@ -1086,11 +1114,14 @@ func mapChannelEnrollmentError(err error) error {
 func freshEnrollmentAvailability(authority verifiedChannelAuthority, grant durableEnrollmentGrant,
 	at time.Time,
 ) error {
-	if authority.channel.Status() == model.ChannelClosed {
+	switch authority.channel.Status() {
+	case model.ChannelClosed, model.ChannelLeaving, model.ChannelLeft, model.ChannelAbandoned:
 		return ErrChannelEnrollmentChannelClosed
-	}
-	if authority.channel.Status() != model.ChannelActive {
-		return ErrChannelEnrollmentUnavailable
+	case model.ChannelConflicted:
+		return ErrChannelEnrollmentConflict
+	case model.ChannelActive:
+	default:
+		return ErrChannelEnrollmentConflict
 	}
 	if at.Before(grant.createdAt) {
 		return fmt.Errorf("%w: acceptance predates grant", ErrChannelEnrollmentInput)
@@ -1125,6 +1156,10 @@ func mapChannelJoinError(err error) error {
 	}
 	if strings.Contains(message, "UNIQUE constraint failed") ||
 		strings.Contains(message, "FOREIGN KEY constraint failed") ||
+		strings.Contains(message, "join reservation conflicts") ||
+		strings.Contains(message, "conflicts with reserved join") ||
+		strings.Contains(message, "join reservation attempt") ||
+		strings.Contains(message, "join reservation state or time") ||
 		errors.Is(err, ErrChannelAuthorityInvariant) || errors.Is(err, ErrChannelEnrollmentConflict) {
 		return fmt.Errorf("%w: %v", ErrChannelJoinConflict, err)
 	}

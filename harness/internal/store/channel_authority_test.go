@@ -90,7 +90,7 @@ func TestReadVerifiedChannelAuthorityRejectsActiveReplicaWithoutLocalMembership(
 	}
 }
 
-func TestReadVerifiedChannelAuthorityRejectsHugeSparseRosterHeadWithoutAllocation(t *testing.T) {
+func TestChannelSchemaRejectsHugeSparseRosterHeadWithoutAllocation(t *testing.T) {
 	t.Parallel()
 	st := openTestStore(t)
 	fixture := testkit.NewSignedChannel(t, "authority-huge-sparse-head")
@@ -110,26 +110,8 @@ func TestReadVerifiedChannelAuthorityRejectsHugeSparseRosterHeadWithoutAllocatio
 		fixture.OwnerMember().Member().Head().Digest().Bytes(), genesis.MemberPeerID, genesis.OriginEpoch,
 		genesis.DisplayLabel, genesis.PublicKey, genesis.MultiaddrsJSON, genesis.ProtocolsJSON,
 		genesis.LimitsJSON, genesis.Status, genesis.SignedRecordJSON, genesis.OwnerSignature,
-		storeTime(createdAt)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := tx.Exec(`UPDATE channels SET roster_head_revision=?,roster_head_hash=?,updated_at=?
-		WHERE channel_id=?`, model.MaxSQLiteInteger, forgedDigest.Bytes(), storeTime(createdAt),
-		fixture.Channel().ID().String()); err != nil {
-		t.Fatal(err)
-	}
-	if err := tx.Commit(); err != nil {
-		t.Fatal(err)
-	}
-	readTx, err := st.db.BeginTx(context.Background(), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer readTx.Rollback()
-	_, err = readVerifiedChannelAuthority(context.Background(), readTx,
-		fixture.Owner().PeerID(), fixture.Channel().ID())
-	if !errors.Is(err, ErrChannelAuthorityInvariant) {
-		t.Fatalf("huge sparse roster error = %v", err)
+		storeTime(createdAt)); err == nil {
+		t.Fatal("schema accepted a roster revision beyond the complete snapshot bound")
 	}
 }
 

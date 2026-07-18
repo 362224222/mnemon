@@ -423,6 +423,26 @@ func TestEnrollmentTranscriptRoundTripProofFreshnessAndInputBounds(t *testing.T)
 	}
 }
 
+func TestEnrollmentRequestIDIsStableAndDomainSeparated(t *testing.T) {
+	identity := Sum([]byte("stable enrollment join identity"))
+	request, err := EnrollmentRequestIDForJoinIdentity(identity)
+	if err != nil || request.IsZero() {
+		t.Fatalf("EnrollmentRequestIDForJoinIdentity() = (%q,%v)", request.String(), err)
+	}
+	replayed, err := EnrollmentRequestIDForJoinIdentity(identity)
+	if err != nil || replayed != request {
+		t.Fatalf("stable request replay = (%q,%v), want %q", replayed.String(), err, request.String())
+	}
+	use, receipt, err := EnrollmentEvidenceIDs(identity)
+	if err != nil || request.String() == use.String() || request.String() == receipt.String() {
+		t.Fatalf("domain-separated evidence IDs = request %q use %q receipt %q err %v",
+			request.String(), use.String(), receipt.String(), err)
+	}
+	if _, err := EnrollmentRequestIDForJoinIdentity(Digest{}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("zero join identity request error = %v", err)
+	}
+}
+
 func TestEnrollmentReceiptV1GoldenVectorAndVerification(t *testing.T) {
 	t.Parallel()
 	descriptor, ownerPrivate := enrollmentDescriptorFixture(t, "receipt-golden-owner", "channel-receipt-golden")
