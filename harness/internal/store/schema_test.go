@@ -64,6 +64,7 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 				"peer_deliveries_scanned_requires_cursor peer_inbox_event_scope_insert " +
 				"peer_inbox_binding_epoch_insert peer_inbox_transport_binding_insert " +
 				"peer_inbox_publication_member_insert peer_inbox_identity_immutable peer_inbox_event_scope_update " +
+				"peer_inbox_semantic_nonce_immutable " +
 				"peer_inbox_receipt_scope_insert peer_inbox_receipt_scope_update peer_inbox_no_delete peer_inbox_terminal_status_immutable " +
 				"peer_inbox_pressure_insert_limit peer_inbox_pressure_insert_account " +
 				"peer_inbox_pressure_status_leave_account peer_inbox_pressure_no_delete peer_inbox_pressure_identity_immutable " +
@@ -109,8 +110,8 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 	if !reflect.DeepEqual(actual, expected) {
 		t.Fatalf("schema object set mismatch\nactual: %#v\nexpected: %#v", actual, expected)
 	}
-	if got := len(actual["table"]) + len(actual["index"]) + len(actual["trigger"]); got != 177 {
-		t.Fatalf("explicit object count = %d, want 177", got)
+	if got := len(actual["table"]) + len(actual["index"]) + len(actual["trigger"]); got != 178 {
+		t.Fatalf("explicit object count = %d, want 178", got)
 	}
 }
 
@@ -398,6 +399,56 @@ func TestSchemaV1PeerInboxAttemptAndLeaseInvariants(t *testing.T) {
 	if _, err := fixture.store.db.Exec(`UPDATE peer_inbox SET status='retry',lease_owner=NULL,
 		lease_until=NULL WHERE inbox_id='schema-pressure-inbox-1'`); err != nil {
 		t.Fatalf("retry clears processing lease: %v", err)
+	}
+}
+
+func TestSchemaV1PeerInboxSemanticNonceInvariant(t *testing.T) {
+	fixture := newChannelBaselineFixture(t, "schema-inbox-semantic-nonce", model.TopicJoined)
+	if _, err := fixture.store.InstallInboundChannelBaseline(context.Background(),
+		InstallInboundChannelBaselineSpec{
+			AuthenticatedPeerID: fixture.remote.Identity().PeerID(),
+			Baseline:            fixture.remoteBaseline(0),
+			At:                  fixture.at,
+		}); err != nil {
+		t.Fatal(err)
+	}
+	publication, requiredRoots := []byte("publication"), []byte("[]")
+	invalid := []any{
+		nil,
+		"01234567890123456789012345678901",
+		make([]byte, 31),
+		make([]byte, 33),
+	}
+	for index, nonce := range invalid {
+		if err := insertSchemaPeerInboxWithNonce(fixture, int64(index+1), "stored",
+			publication, requiredRoots, nonce); err == nil ||
+			!strings.Contains(err.Error(), "CHECK constraint failed") {
+			t.Fatalf("invalid semantic nonce %d error = %v", index, err)
+		}
+	}
+	if err := insertSchemaPeerInboxWithNonce(fixture, 10, "stored", publication,
+		requiredRoots, make([]byte, 32)); err != nil {
+		t.Fatalf("insert valid semantic nonce: %v", err)
+	}
+	mustExec(t, fixture.store, `DROP TRIGGER peer_inbox_identity_immutable`)
+	if _, err := fixture.store.db.Exec(`UPDATE peer_inbox SET is_audience=0,status='ignored'
+		WHERE inbox_id='schema-pressure-inbox-10'`); err == nil ||
+		!strings.Contains(err.Error(), "CHECK constraint failed") {
+		t.Fatalf("non-audience semantic nonce error = %v", err)
+	}
+	if _, err := fixture.store.db.Exec(`UPDATE peer_inbox SET semantic_nonce=semantic_nonce
+		WHERE inbox_id='schema-pressure-inbox-10'`); err == nil ||
+		!strings.Contains(err.Error(), "peer inbox semantic nonce is immutable") {
+		t.Fatalf("semantic nonce rewrite error = %v", err)
+	}
+	if err := insertSchemaPeerInboxWithNonce(fixture, 11, "quarantined", publication,
+		requiredRoots, nil); err != nil {
+		t.Fatalf("insert unsupported/quarantined Inbox without semantic nonce: %v", err)
+	}
+	var nonceIsNull int
+	if err := fixture.store.db.QueryRow(`SELECT semantic_nonce IS NULL FROM peer_inbox
+		WHERE inbox_id='schema-pressure-inbox-11'`).Scan(&nonceIsNull); err != nil || nonceIsNull != 1 {
+		t.Fatalf("quarantined semantic nonce NULL = (%d,%v)", nonceIsNull, err)
 	}
 }
 
@@ -1423,6 +1474,18 @@ func insertSchemaPeerInbox(
 	publication []byte,
 	requiredRoots []byte,
 ) error {
+	return insertSchemaPeerInboxWithNonce(fixture, sequence, status, publication,
+		requiredRoots, make([]byte, 32))
+}
+
+func insertSchemaPeerInboxWithNonce(
+	fixture channelBaselineFixture,
+	sequence int64,
+	status string,
+	publication []byte,
+	requiredRoots []byte,
+	semanticNonce any,
+) error {
 	channelID := fixture.channel.Channel().ID().String()
 	originPeerID := fixture.remote.Identity().PeerID().String()
 	var originMemberRevision, rosterRevision int64
@@ -1440,16 +1503,16 @@ func insertSchemaPeerInbox(
 		inbox_id,channel_id,transport_peer_id,origin_peer_id,origin_epoch,origin_seq,
 		channel_seq,event_id,event_digest,origin_member_revision,origin_member_record_hash,
 		publication_roster_revision,publication_roster_hash,publication_digest,
-		origin_signature,publication_json,arrival_source,is_audience,
+		origin_signature,publication_json,arrival_source,is_audience,semantic_nonce,
 		required_artifact_roots_json,status,next_attempt_at,received_at,updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pull',1,?,?,?,?,?)`,
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pull',1,?,?,?,?,?,?)`,
 		fmt.Sprintf("schema-pressure-inbox-%d", sequence), channelID, originPeerID, originPeerID,
 		fixture.remote.Identity().OriginEpoch().String(), sequence, sequence,
 		fmt.Sprintf("schema-pressure-event-%d", sequence),
 		[]byte(fmt.Sprintf("schema-pressure-event-digest-%d", sequence)),
 		originMemberRevision, originMemberHash, rosterRevision, rosterHash,
 		[]byte(fmt.Sprintf("schema-pressure-publication-digest-%d", sequence)),
-		[]byte(fmt.Sprintf("schema-pressure-signature-%d", sequence)), publication,
+		[]byte(fmt.Sprintf("schema-pressure-signature-%d", sequence)), publication, semanticNonce,
 		requiredRoots, status, storeTime(fixture.at), storeTime(fixture.at), storeTime(fixture.at))
 	return err
 }

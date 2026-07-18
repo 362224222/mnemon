@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"database/sql"
@@ -26,11 +27,14 @@ func TestPutPeerInboxCommitsPublicationAndCursorBeforeSemanticApplication(t *tes
 		t.Fatalf("PutPeerInbox() = (%#v,%v)", result, err)
 	}
 	var status, source string
+	var semanticNonce []byte
 	var audience, inboxCount, eventCount int
-	if err := fixture.store.db.QueryRow(`SELECT status,arrival_source,is_audience FROM peer_inbox
-		WHERE inbox_id=?`, result.InboxID.String()).Scan(&status, &source, &audience); err != nil ||
-		status != "stored" || source != "pull" || audience != 1 {
-		t.Fatalf("durable Inbox = (%q,%q,%d,%v)", status, source, audience, err)
+	if err := fixture.store.db.QueryRow(`SELECT status,arrival_source,is_audience,semantic_nonce
+		FROM peer_inbox WHERE inbox_id=?`, result.InboxID.String()).
+		Scan(&status, &source, &audience, &semanticNonce); err != nil ||
+		status != "stored" || source != "pull" || audience != 1 || len(semanticNonce) != 32 {
+		t.Fatalf("durable Inbox = (%q,%q,%d,%d bytes,%v)",
+			status, source, audience, len(semanticNonce), err)
 	}
 	if err := fixture.store.db.QueryRow(`SELECT COUNT(*) FROM peer_inbox`).Scan(&inboxCount); err != nil || inboxCount != 1 {
 		t.Fatalf("Inbox count = (%d,%v)", inboxCount, err)
@@ -46,10 +50,20 @@ func TestPutPeerInboxReplayAndGapRepairAreMonotonic(t *testing.T) {
 	fixture := newPeerInboxFixture(t, "repair", 0)
 	first := fixture.publication(t, 1, 1, "first", true)
 	firstResult := fixture.put(t, first, fixture.at)
+	var firstNonce []byte
+	if err := fixture.store.db.QueryRow(`SELECT semantic_nonce FROM peer_inbox WHERE inbox_id=?`,
+		firstResult.InboxID.String()).Scan(&firstNonce); err != nil {
+		t.Fatal(err)
+	}
 	replay := fixture.put(t, first, fixture.at.Add(time.Second))
 	if replay.Disposition != PeerInboxDuplicate || replay.InboxID != firstResult.InboxID ||
 		replay.Cursor.ContiguousChannelSequence != 1 {
 		t.Fatalf("replay = %#v, first %#v", replay, firstResult)
+	}
+	var replayNonce []byte
+	if err := fixture.store.db.QueryRow(`SELECT semantic_nonce FROM peer_inbox WHERE inbox_id=?`,
+		firstResult.InboxID.String()).Scan(&replayNonce); err != nil || !bytes.Equal(replayNonce, firstNonce) {
+		t.Fatalf("replay semantic nonce changed: equal=%t error=%v", bytes.Equal(replayNonce, firstNonce), err)
 	}
 	third := fixture.publication(t, 3, 3, "third", true)
 	gap := fixture.put(t, third, fixture.at.Add(2*time.Second))
@@ -64,6 +78,26 @@ func TestPutPeerInboxReplayAndGapRepairAreMonotonic(t *testing.T) {
 	var count int
 	if err := fixture.store.db.QueryRow(`SELECT COUNT(*) FROM peer_inbox`).Scan(&count); err != nil || count != 3 {
 		t.Fatalf("Inbox count = (%d,%v)", count, err)
+	}
+	rows, err := fixture.store.db.Query(`SELECT semantic_nonce FROM peer_inbox ORDER BY inbox_id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var nonces [][]byte
+	for rows.Next() {
+		var nonce []byte
+		if err := rows.Scan(&nonce); err != nil {
+			t.Fatal(err)
+		}
+		nonces = append(nonces, nonce)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(nonces) != 3 || bytes.Equal(nonces[0], nonces[1]) || bytes.Equal(nonces[0], nonces[2]) ||
+		bytes.Equal(nonces[1], nonces[2]) {
+		t.Fatalf("audience semantic nonces are not pairwise distinct: %x", nonces)
 	}
 }
 
@@ -121,10 +155,11 @@ func TestPutPeerInboxPersistsIgnoredNonaudienceWithoutDomainEffect(t *testing.T)
 		t.Fatalf("ignored result = %#v", result)
 	}
 	var status string
-	var audience int
-	if err := fixture.store.db.QueryRow(`SELECT status,is_audience FROM peer_inbox`).Scan(
-		&status, &audience); err != nil || status != "ignored" || audience != 0 {
-		t.Fatalf("ignored Inbox = (%q,%d,%v)", status, audience, err)
+	var audience, nonceIsNull int
+	if err := fixture.store.db.QueryRow(`SELECT status,is_audience,semantic_nonce IS NULL
+		FROM peer_inbox`).Scan(&status, &audience, &nonceIsNull); err != nil ||
+		status != "ignored" || audience != 0 || nonceIsNull != 1 {
+		t.Fatalf("ignored Inbox = (%q,%d,nonce NULL %d,%v)", status, audience, nonceIsNull, err)
 	}
 }
 

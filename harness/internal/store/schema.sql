@@ -1413,6 +1413,7 @@ CREATE TABLE peer_inbox (
   publication_json   BLOB NOT NULL,
   arrival_source     TEXT NOT NULL CHECK (arrival_source IN ('gossip','pull')),
   is_audience        INTEGER NOT NULL CHECK (is_audience IN (0,1)),
+  semantic_nonce     BLOB,
   required_artifact_roots_json BLOB NOT NULL,
   status             TEXT NOT NULL CHECK (
     status IN (
@@ -1446,6 +1447,12 @@ CREATE TABLE peer_inbox (
   FOREIGN KEY (channel_id, publication_roster_revision, publication_roster_hash)
     REFERENCES channel_members(channel_id, revision, record_hash),
   CHECK (arrival_source <> 'pull' OR transport_peer_id = origin_peer_id),
+  CHECK (
+    semantic_nonce IS NULL
+    OR (typeof(semantic_nonce) = 'blob' AND length(semantic_nonce) = 32)
+  ),
+  CHECK (is_audience = 1 OR semantic_nonce IS NULL),
+  CHECK (is_audience = 0 OR status = 'quarantined' OR semantic_nonce IS NOT NULL),
   CHECK (
     (is_audience = 0 AND status IN ('ignored','quarantined')
       AND local_event_id IS NULL AND receipt_event_id IS NULL)
@@ -1623,6 +1630,10 @@ WHEN NEW.channel_id <> OLD.channel_id
   OR NEW.is_audience <> OLD.is_audience
   OR NEW.required_artifact_roots_json <> OLD.required_artifact_roots_json
 BEGIN SELECT RAISE(ABORT, 'peer inbox publication identity is immutable'); END;
+
+CREATE TRIGGER peer_inbox_semantic_nonce_immutable
+BEFORE UPDATE OF semantic_nonce ON peer_inbox
+BEGIN SELECT RAISE(ABORT, 'peer inbox semantic nonce is immutable'); END;
 
 CREATE TRIGGER peer_inbox_event_scope_update
 BEFORE UPDATE OF local_event_id ON peer_inbox

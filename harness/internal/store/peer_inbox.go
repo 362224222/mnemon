@@ -3,6 +3,7 @@ package store
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -275,7 +276,14 @@ func putPeerInboxTx(ctx context.Context, tx *sql.Tx, spec PutPeerInboxSpec,
 	if err != nil {
 		return PutPeerInboxResult{}, fmt.Errorf("%w: Artifact roots: %v", ErrPeerInboxInput, err)
 	}
-	if err := insertPeerInbox(ctx, tx, inbox, rootJSON); err != nil {
+	var semanticNonce []byte
+	if inbox.IsAudience() {
+		semanticNonce = make([]byte, 32)
+		if _, err := rand.Read(semanticNonce); err != nil {
+			return PutPeerInboxResult{}, fmt.Errorf("put Peer Inbox: generate semantic nonce: %w", err)
+		}
+	}
+	if err := insertPeerInbox(ctx, tx, inbox, semanticNonce, rootJSON); err != nil {
 		return PutPeerInboxResult{}, err
 	}
 	return PutPeerInboxResult{InboxID: inboxID, Disposition: disposition}, nil
@@ -583,7 +591,7 @@ func peerInboxArtifactRoots(event model.Event) []model.Digest {
 }
 
 func insertPeerInbox(ctx context.Context, tx *sql.Tx, inbox model.PeerInbox,
-	requiredRoots model.JSON,
+	semanticNonce []byte, requiredRoots model.JSON,
 ) error {
 	publication, event := inbox.Publication(), inbox.Publication().Event()
 	scope := event.Scope()
@@ -591,16 +599,16 @@ func insertPeerInbox(ctx context.Context, tx *sql.Tx, inbox model.PeerInbox,
 		origin_peer_id,origin_epoch,origin_seq,channel_seq,event_id,event_digest,
 		origin_member_revision,origin_member_record_hash,publication_roster_revision,
 		publication_roster_hash,publication_digest,origin_signature,publication_json,arrival_source,
-		is_audience,required_artifact_roots_json,status,attempts,next_attempt_at,lease_owner,
+		is_audience,semantic_nonce,required_artifact_roots_json,status,attempts,next_attempt_at,lease_owner,
 		lease_until,local_event_id,decision_json,receipt_event_id,diagnostic,received_at,updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,NULL,NULL,NULL,NULL,NULL,?,?,?)`,
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,NULL,NULL,NULL,NULL,NULL,?,?,?)`,
 		inbox.ID().String(), scope.ChannelID().String(), inbox.TransportPeerID().String(),
 		scope.OriginPeerID().String(), scope.OriginEpoch().String(), scope.OriginSequence(),
 		scope.ChannelSequence(), event.ID().String(), event.Digest().Bytes(),
 		scope.OriginMember().Revision(), scope.OriginMember().Digest().Bytes(),
 		scope.PublicationRoster().Revision(), scope.PublicationRoster().Digest().Bytes(),
 		publication.Digest().Bytes(), publication.OriginSignature(), publication.WireJSON().Bytes(),
-		string(inbox.ArrivalSource()), boolInt(inbox.IsAudience()), requiredRoots.Bytes(),
+		string(inbox.ArrivalSource()), boolInt(inbox.IsAudience()), semanticNonce, requiredRoots.Bytes(),
 		string(inbox.Status()), storeTime(inbox.NextAttemptAt()), nullText(inbox.Diagnostic()),
 		storeTime(inbox.ReceivedAt()), storeTime(inbox.UpdatedAt()))
 	if err != nil {
@@ -625,9 +633,9 @@ func insertUnsupportedPeerInbox(ctx context.Context, tx *sql.Tx, inboxID model.I
 		origin_peer_id,origin_epoch,origin_seq,channel_seq,event_id,event_digest,
 		origin_member_revision,origin_member_record_hash,publication_roster_revision,
 		publication_roster_hash,publication_digest,origin_signature,publication_json,arrival_source,
-		is_audience,required_artifact_roots_json,status,attempts,next_attempt_at,lease_owner,
+		is_audience,semantic_nonce,required_artifact_roots_json,status,attempts,next_attempt_at,lease_owner,
 		lease_until,local_event_id,decision_json,receipt_event_id,diagnostic,received_at,updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'quarantined',0,?,NULL,NULL,NULL,NULL,NULL,?,?,?)`,
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,?,'quarantined',0,?,NULL,NULL,NULL,NULL,NULL,?,?,?)`,
 		inboxID.String(), evidence.ChannelID().String(), transportPeerID.String(),
 		evidence.OriginPeerID().String(), evidence.OriginEpoch().String(), evidence.OriginSequence(),
 		evidence.ChannelSequence(), evidence.EventID().String(), evidence.EventDigest().Bytes(),
