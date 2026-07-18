@@ -315,9 +315,11 @@ func (fixture *agentCandidateFixture) addChannel(t *testing.T, alias string,
 		if !remote.omitOutboundBaseline {
 			mustExec(t, fixture.store, `INSERT INTO peer_pull_acks(channel_id,target_peer_id,origin_peer_id,
 				origin_epoch,baseline_channel_seq,acknowledged_channel_seq,baseline_confirmed_at,updated_at)
-				VALUES(?,?,?,?,0,0,?,?)`, signed.Channel().ID().String(), remote.peer.String(),
-				fixture.node.PeerID().String(),
-				fixture.node.OriginEpoch().String(), createdText, createdText)
+				VALUES(?,?,?,?,0,0,NULL,?)`, signed.Channel().ID().String(), remote.peer.String(),
+				fixture.node.PeerID().String(), fixture.node.OriginEpoch().String(), createdText)
+			mustExec(t, fixture.store, `UPDATE peer_pull_acks SET baseline_confirmed_at=?
+				WHERE channel_id=? AND target_peer_id=?`, createdText, signed.Channel().ID().String(),
+				remote.peer.String())
 		}
 	}
 }

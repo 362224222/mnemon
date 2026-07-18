@@ -162,8 +162,10 @@ func installAcceptanceChannel(t *testing.T, fixture *acceptanceFixture, signed *
 	for _, peer := range fixture.reviewers {
 		mustExec(t, fixture.store, `INSERT INTO peer_pull_acks(channel_id,target_peer_id,origin_peer_id,
 			origin_epoch,baseline_channel_seq,acknowledged_channel_seq,baseline_confirmed_at,updated_at)
-			VALUES(?,?,?,?,0,0,?,?)`, fixture.channel.String(), peer.String(), fixture.node.PeerID().String(),
-			fixture.node.OriginEpoch().String(), storeTime(at), storeTime(at))
+			VALUES(?,?,?,?,0,0,NULL,?)`, fixture.channel.String(), peer.String(), fixture.node.PeerID().String(),
+			fixture.node.OriginEpoch().String(), storeTime(at))
+		mustExec(t, fixture.store, `UPDATE peer_pull_acks SET baseline_confirmed_at=?
+			WHERE channel_id=? AND target_peer_id=?`, storeTime(at), fixture.channel.String(), peer.String())
 	}
 }
 

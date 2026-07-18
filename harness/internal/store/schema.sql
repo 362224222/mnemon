@@ -1600,6 +1600,11 @@ WHEN NOT EXISTS (
 )
 BEGIN SELECT RAISE(ABORT, 'cursor binding epoch mismatch'); END;
 
+CREATE TRIGGER peer_cursors_initial_baseline_insert BEFORE INSERT ON peer_cursors
+WHEN NEW.contiguous_channel_seq <> NEW.baseline_channel_seq
+  OR NEW.observed_channel_seq <> NEW.baseline_channel_seq
+BEGIN SELECT RAISE(ABORT, 'cursor must start at its exact binding baseline'); END;
+
 CREATE TRIGGER peer_cursors_binding_epoch_update
 BEFORE UPDATE OF channel_id, origin_peer_id, origin_epoch ON peer_cursors
 WHEN NOT EXISTS (
@@ -1700,6 +1705,11 @@ CREATE TABLE peer_pull_acks (
     REFERENCES publication_epochs(channel_id, origin_peer_id, origin_epoch),
   CHECK (acknowledged_channel_seq >= baseline_channel_seq)
 );
+
+CREATE TRIGGER peer_pull_acks_initial_baseline_insert BEFORE INSERT ON peer_pull_acks
+WHEN NEW.acknowledged_channel_seq <> NEW.baseline_channel_seq
+  OR NEW.baseline_confirmed_at IS NOT NULL
+BEGIN SELECT RAISE(ABORT, 'pull ack must start at an unconfirmed exact binding baseline'); END;
 
 CREATE TRIGGER peer_pull_acks_identity_baseline_immutable
 BEFORE UPDATE OF channel_id, target_peer_id, origin_peer_id, origin_epoch,

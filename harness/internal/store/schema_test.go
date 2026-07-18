@@ -65,11 +65,11 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 				"peer_inbox_receipt_scope_insert peer_inbox_receipt_scope_update publication_conflicts_no_update " +
 				"publication_conflicts_no_delete publication_conflicts_existing_scope_insert " +
 				"origin_quarantines_no_update origin_quarantines_no_delete peer_cursors_binding_epoch_insert " +
-				"peer_cursors_binding_epoch_update peer_cursors_identity_baseline_immutable " +
+				"peer_cursors_initial_baseline_insert peer_cursors_binding_epoch_update peer_cursors_identity_baseline_immutable " +
 				"peer_cursors_monotonic_update peer_cursors_no_delete peer_bindings_no_active_insert " +
 				"peer_bindings_activate_requires_cursor publication_epochs_local_origin_insert " +
 				"publication_epochs_identity_immutable publication_epochs_monotonic_update " +
-				"publication_epochs_no_delete peer_pull_acks_identity_baseline_immutable " +
+				"publication_epochs_no_delete peer_pull_acks_initial_baseline_insert peer_pull_acks_identity_baseline_immutable " +
 				"peer_pull_acks_monotonic_update peer_pull_acks_confirmation_immutable peer_pull_acks_no_delete " +
 				"peer_deliveries_binding_ready_insert peer_deliveries_binding_ready_update",
 		),
@@ -100,8 +100,8 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 	if !reflect.DeepEqual(actual, expected) {
 		t.Fatalf("schema object set mismatch\nactual: %#v\nexpected: %#v", actual, expected)
 	}
-	if got := len(actual["table"]) + len(actual["index"]) + len(actual["trigger"]); got != 154 {
-		t.Fatalf("explicit object count = %d, want 154", got)
+	if got := len(actual["table"]) + len(actual["index"]) + len(actual["trigger"]); got != 156 {
+		t.Fatalf("explicit object count = %d, want 156", got)
 	}
 }
 
@@ -489,6 +489,12 @@ func TestSchemaChannelAuthorityEvidenceConstraints(t *testing.T) {
 	}
 	if _, err := st.db.Exec(`INSERT INTO peer_cursors(channel_id,origin_peer_id,origin_epoch,
 		baseline_channel_seq,contiguous_channel_seq,observed_channel_seq,updated_at)
+		VALUES('channel-one','peer-remote','epoch-remote',0,1,1,'2026-01-01T00:03:00Z')`); err == nil ||
+		!strings.Contains(err.Error(), "cursor must start at its exact binding baseline") {
+		t.Fatalf("advanced initial cursor error = %v, want exact baseline trigger", err)
+	}
+	if _, err := st.db.Exec(`INSERT INTO peer_cursors(channel_id,origin_peer_id,origin_epoch,
+		baseline_channel_seq,contiguous_channel_seq,observed_channel_seq,updated_at)
 		VALUES('channel-one','peer-remote','epoch-remote',0,0,0,'2026-01-01T00:03:00Z')`); err != nil {
 		t.Fatalf("insert binding cursor: %v", err)
 	}
@@ -509,8 +515,19 @@ func TestSchemaChannelAuthorityEvidenceConstraints(t *testing.T) {
 	if _, err := st.db.Exec(`INSERT INTO peer_pull_acks(channel_id,target_peer_id,origin_peer_id,
 		origin_epoch,baseline_channel_seq,acknowledged_channel_seq,baseline_confirmed_at,updated_at)
 		VALUES('channel-one','peer-remote','peer-home','epoch-one',0,0,
-		'2026-01-01T00:03:00Z','2026-01-01T00:03:00Z')`); err != nil {
+		'2026-01-01T00:03:00Z','2026-01-01T00:03:00Z')`); err == nil ||
+		!strings.Contains(err.Error(), "pull ack must start at an unconfirmed exact binding baseline") {
+		t.Fatalf("preconfirmed pull ack error = %v, want exact baseline trigger", err)
+	}
+	if _, err := st.db.Exec(`INSERT INTO peer_pull_acks(channel_id,target_peer_id,origin_peer_id,
+		origin_epoch,baseline_channel_seq,acknowledged_channel_seq,baseline_confirmed_at,updated_at)
+		VALUES('channel-one','peer-remote','peer-home','epoch-one',0,0,NULL,
+		'2026-01-01T00:03:00Z')`); err != nil {
 		t.Fatalf("insert pull ack baseline: %v", err)
+	}
+	if _, err := st.db.Exec(`UPDATE peer_pull_acks SET baseline_confirmed_at='2026-01-01T00:03:00Z'
+		WHERE channel_id='channel-one' AND target_peer_id='peer-remote'`); err != nil {
+		t.Fatalf("confirm pull ack baseline: %v", err)
 	}
 	if _, err := st.db.Exec(`DELETE FROM peer_pull_acks
 		WHERE channel_id='channel-one' AND target_peer_id='peer-remote'`); err == nil ||

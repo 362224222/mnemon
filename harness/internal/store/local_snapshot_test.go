@@ -57,8 +57,12 @@ func TestPrepareLocalAdmissionRequiresReadyTopicAndOutboundBaseline(t *testing.T
 	if err := st.db.QueryRow("SELECT peer_id, origin_epoch FROM node WHERE singleton=1").Scan(&localPeer, &localEpoch); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.db.Exec("INSERT INTO peer_pull_acks(channel_id,target_peer_id,origin_peer_id,origin_epoch,baseline_channel_seq,acknowledged_channel_seq,baseline_confirmed_at,updated_at) VALUES(?,?,?,?,0,0,?,?)",
-		channel.String(), remote.String(), localPeer, localEpoch, "2026-07-16T12:00:00Z", "2026-07-16T12:00:00Z"); err != nil {
+	if _, err := st.db.Exec("INSERT INTO peer_pull_acks(channel_id,target_peer_id,origin_peer_id,origin_epoch,baseline_channel_seq,acknowledged_channel_seq,baseline_confirmed_at,updated_at) VALUES(?,?,?,?,0,0,NULL,?)",
+		channel.String(), remote.String(), localPeer, localEpoch, "2026-07-16T12:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.db.Exec("UPDATE peer_pull_acks SET baseline_confirmed_at=? WHERE channel_id=? AND target_peer_id=?",
+		"2026-07-16T12:00:00Z", channel.String(), remote.String()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.db.Exec("UPDATE channels SET topic_state = 'not_joined'"); err != nil {
@@ -114,7 +118,9 @@ func localAdmissionFixture(t *testing.T) (*Store, model.ChannelID, model.PeerID,
 		channel.String(), remote.String())
 	mustExec(t, st, `INSERT INTO peer_pull_acks(channel_id,target_peer_id,origin_peer_id,origin_epoch,
 		baseline_channel_seq,acknowledged_channel_seq,baseline_confirmed_at,updated_at)
-		VALUES(?,?,?,?,?,?,?,?)`, channel.String(), remote.String(), node.PeerID().String(),
-		node.OriginEpoch().String(), 0, 0, now, now)
+		VALUES(?,?,?,?,?,?,NULL,?)`, channel.String(), remote.String(), node.PeerID().String(),
+		node.OriginEpoch().String(), 0, 0, now)
+	mustExec(t, st, `UPDATE peer_pull_acks SET baseline_confirmed_at=?
+		WHERE channel_id=? AND target_peer_id=?`, now, channel.String(), remote.String())
 	return st, channel, node.PeerID(), remote
 }

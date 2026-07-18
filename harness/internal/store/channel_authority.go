@@ -331,7 +331,8 @@ func readVerifiedChannelBindings(ctx context.Context, tx *sql.Tx, localPeer mode
 			!bytes.Equal(binding.PublicKey(), publicKey) || !equalAgentStrings(binding.Multiaddrs(), multiaddrs) ||
 			!equalAgentStrings(binding.Protocols(), protocols) || binding.Limits().String() != limits.String() ||
 			(binding.State() == model.BindingActive &&
-				(!cursorEpochText.Valid || cursorEpochText.String != binding.OriginEpoch().String())) {
+				(!cursorEpochText.Valid || cursorEpochText.String != binding.OriginEpoch().String())) ||
+			(binding.State() == model.BindingPending && cursorEpochText.Valid) {
 			return nil, fmt.Errorf("%w: PeerBinding %q is not current signed authority: %v",
 				ErrChannelAuthorityInvariant, peerText, err)
 		}
