@@ -66,6 +66,76 @@ func TestWakeWorkerGatesBeforePrepareAndUsesBoundedPolling(t *testing.T) {
 	}
 }
 
+func TestWakeWorkerKeepsReadinessLatchedAcrossHealthyPoll(t *testing.T) {
+	at := time.Date(2026, 7, 18, 9, 10, 0, 0, time.UTC)
+	profile := wakeWorkerTestProfile(t, at)
+	st := newWakeWorkerTestStore()
+	timer := newWakeWorkerTestTimer()
+	secondPrepare := make(chan struct{})
+	releasePrepare := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var calls atomic.Int32
+	worker := newWakeWorkerForTest(t, profile, st,
+		wakeWorkerPreparerFunc(func(context.Context, model.Profile) (PreparedWake, error) {
+			if calls.Add(1) == 2 {
+				close(secondPrepare)
+				<-releasePrepare
+				cancel()
+			}
+			return PreparedWake{status: store.AgentClaimNone}, nil
+		}), wakeWorkerAdapterFunc(func(context.Context, CodexWakeRequest) (CodexWakeResult, error) {
+			t.Fatal("adapter ran without actionable work")
+			return CodexWakeResult{}, nil
+		}), WakeWorkerGateFunc(func(context.Context, model.Profile) error { return nil }), timer)
+	done := make(chan error, 1)
+	go func() { done <- worker.Run(ctx) }()
+	if delay := <-timer.calls; delay != worker.pollInterval {
+		t.Fatalf("first delay = %s", delay)
+	}
+	if snapshot := worker.Snapshot(); !snapshot.Running || !snapshot.Ready || !snapshot.Healthy {
+		t.Fatalf("first healthy poll snapshot = %#v", snapshot)
+	}
+	timer.tick()
+	select {
+	case <-secondPrepare:
+	case <-time.After(5 * time.Second):
+		t.Fatal("second healthy poll did not start")
+	}
+	if snapshot := worker.Snapshot(); !snapshot.Running || !snapshot.Ready || !snapshot.Healthy {
+		t.Fatalf("in-flight healthy poll dropped readiness = %#v", snapshot)
+	}
+	close(releasePrepare)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWakeWorkerSkipsAmbiguityRecoveryWhenStoreWasNotInvoked(t *testing.T) {
+	at := time.Date(2026, 7, 18, 9, 20, 0, 0, time.UTC)
+	profile := wakeWorkerTestProfile(t, at)
+	st := newWakeWorkerTestStore()
+	var listCalls atomic.Int32
+	st.onList = func() { listCalls.Add(1) }
+	ctx, cancel := context.WithCancel(context.Background())
+	worker := newWakeWorkerForTest(t, profile, st,
+		wakeWorkerPreparerFunc(func(context.Context, model.Profile) (PreparedWake, error) {
+			cancel()
+			return PreparedWake{}, errors.Join(ErrWakeAttachment, ErrWakeStoreNotInvoked)
+		}), wakeWorkerAdapterFunc(func(context.Context, CodexWakeRequest) (CodexWakeResult, error) {
+			t.Fatal("adapter ran after rejected Store admission")
+			return CodexWakeResult{}, nil
+		}), WakeWorkerGateFunc(func(context.Context, model.Profile) error { return nil }),
+		newWakeWorkerTestTimer())
+	worker.setState(true, false, "")
+	if delay, issue := worker.tick(ctx); delay != worker.backoffInterval || issue != "" {
+		t.Fatalf("tick() = (%s, %q)", delay, issue)
+	}
+	if listCalls.Load() != 0 {
+		t.Fatalf("ambiguous recovery Store scans = %d", listCalls.Load())
+	}
+}
+
 func TestWakeWorkerTransitionValidatorFixture(t *testing.T) {
 	at := time.Date(2026, 7, 18, 9, 30, 0, 0, time.UTC)
 	profile := wakeWorkerTestProfile(t, at)

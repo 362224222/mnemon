@@ -50,10 +50,22 @@ type ControllerOptions struct {
 	Signer    event.PublicationSigner
 	Clock     Clock
 	Install   InstallationVerifier
+	// WakeAdapter enables the managed Runtime worker. It is optional only for
+	// low-level controller and daemon composition; OpenManagedDaemon requires
+	// the production composition layer to supply one.
+	WakeAdapter agent.WakeWorkerAdapter
 	// BeforeAccept is reserved for production mnemond composition. It releases
 	// the inherited ensure.lock duplicate after the control socket exists and
 	// immediately before the first HTTP accept.
 	BeforeAccept func() error
+	// wakeWorker is a same-package test seam for lifecycle and readiness
+	// verification. Production composition always uses WakeAdapter.
+	wakeWorker managedWakeWorker
+}
+
+type managedWakeWorker interface {
+	Run(context.Context) error
+	Snapshot() agent.WakeWorkerSnapshot
 }
 
 // Controller is the single local composition root for mnemond-managed Agent
@@ -61,9 +73,11 @@ type ControllerOptions struct {
 // while CAS and readonly views stay beneath the same Node state directory.
 type Controller struct {
 	nodeState         string
+	assetRevision     string
 	store             *store.Store
 	server            *localapi.Server
 	admission         *controllerAdmissionGate
+	wakeWorker        managedWakeWorker
 	shutdownRequested chan struct{}
 	shutdownOnce      sync.Once
 	serveMu           sync.Mutex
@@ -128,7 +142,20 @@ func NewController(options ControllerOptions) (*Controller, error) {
 	if err != nil {
 		return nil, err
 	}
-	gate := controllerActivationGate{expected: options.Profile, install: options.Install}
+	installGate := controllerActivationGate{expected: options.Profile, install: options.Install}
+	admission := newControllerAdmissionGate()
+	wakeWorker := options.wakeWorker
+	if wakeWorker != nil && options.WakeAdapter != nil {
+		return nil, errors.New("mnemond controller accepts only one managed wake worker")
+	}
+	if wakeWorker == nil && options.WakeAdapter != nil {
+		wakeWorker, err = newManagedWakeWorker(options.Store, options.NodeState, options.Profile,
+			options.Clock, options.Install, options.WakeAdapter, admission)
+		if err != nil {
+			return nil, fmt.Errorf("mnemond controller managed wake worker: %w", err)
+		}
+	}
+	gate := controllerManagedActivationGate{install: installGate, worker: wakeWorker}
 	service, err := agent.NewService(options.Store, agent.ServiceOptions{AssetRevision: assetRevision,
 		Clock: options.Clock, Executor: executor, CurrentViews: currentViews, ActivationGate: gate})
 	if err != nil {
@@ -155,9 +182,8 @@ func NewController(options ControllerOptions) (*Controller, error) {
 		}
 		return authoritySnapshot(current), nil
 	})
-	admission := newControllerAdmissionGate()
-	controller := &Controller{nodeState: options.NodeState, store: options.Store,
-		admission: admission, shutdownRequested: make(chan struct{}),
+	controller := &Controller{nodeState: options.NodeState, assetRevision: assetRevision, store: options.Store,
+		admission: admission, wakeWorker: wakeWorker, shutdownRequested: make(chan struct{}),
 		beforeAccept: options.BeforeAccept}
 	managedService := controllerAdmissionService{gate: admission, next: service}
 	server, err := localapi.NewServerWithLifecycle(options.Store, managedService, health, authority,
@@ -222,6 +248,31 @@ type controllerActivationGate struct {
 	install  InstallationVerifier
 }
 
+// controllerManagedActivationGate keeps the four Agent routes closed until
+// both the canonical installation and the single managed Runtime worker are
+// ready. A nil worker preserves the explicit low-level composition seam.
+type controllerManagedActivationGate struct {
+	install controllerActivationGate
+	worker  managedWakeWorker
+}
+
+func (gate controllerManagedActivationGate) Check(ctx context.Context,
+	profile model.Profile,
+) *localapi.APIError {
+	if apiErr := gate.install.Check(ctx, profile); apiErr != nil {
+		return apiErr
+	}
+	if gate.worker == nil {
+		return nil
+	}
+	snapshot := gate.worker.Snapshot()
+	if !snapshot.Running || !snapshot.Ready || !snapshot.Healthy || snapshot.Recovering {
+		return localapi.NewAPIError(localapi.CodeMnemondUnavailable,
+			"managed Runtime worker is not ready")
+	}
+	return nil
+}
+
 func (gate controllerActivationGate) Check(ctx context.Context, profile model.Profile) *localapi.APIError {
 	if ctx == nil || ctx.Err() != nil {
 		return localapi.NewAPIError(localapi.CodeInternal, "managed activation check was cancelled")
@@ -264,30 +315,169 @@ func (controller *Controller) Serve(ctx context.Context) error {
 	if err := controller.releaseBeforeAccept(); err != nil {
 		return errors.Join(err, listener.Close())
 	}
-	server := &http.Server{Handler: controller.server.Handler(), ReadHeaderTimeout: 5 * time.Second}
-	shutdownDone := make(chan struct{})
-	serveDone := make(chan struct{})
+	requests := newControllerRequestTracker(controller.server.Handler())
+	server := &http.Server{Handler: requests, ReadHeaderTimeout: 5 * time.Second}
+	serveDone := make(chan error, 1)
 	go func() {
-		defer close(shutdownDone)
-		select {
-		case <-ctx.Done():
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			_ = server.Shutdown(shutdownCtx)
-		case <-controller.shutdownRequested:
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			_ = server.Shutdown(shutdownCtx)
-		case <-serveDone:
-		}
+		serveDone <- server.Serve(listener)
 	}()
-	serveErr := server.Serve(listener)
-	close(serveDone)
-	<-shutdownDone
-	if errors.Is(serveErr, http.ErrServerClosed) || ctx.Err() != nil && errors.Is(serveErr, os.ErrClosed) {
+
+	// The worker may launch a Runtime whose Hook immediately reconnects to this
+	// socket. A successful authenticated health round-trip proves more than a
+	// bind or an entered Accept call: the owner socket, HTTP server, credential,
+	// schema and exact asset revision are all serving. not_ready is expected
+	// until the worker starts.
+	if err := proveControllerHTTP(ctx, controller.nodeState, controller.assetRevision); err != nil {
+		stopErr := shutdownControllerServer(server, requests, serveDone, ctx)
+		if ctx.Err() != nil {
+			return stopErr
+		}
+		return errors.Join(err, stopErr)
+	}
+	select {
+	case <-ctx.Done():
+		return shutdownControllerServer(server, requests, serveDone, ctx)
+	case <-controller.shutdownRequested:
+		return shutdownControllerServer(server, requests, serveDone, nil)
+	default:
+	}
+
+	var cancelWorker context.CancelFunc
+	var workerDone <-chan error
+	if controller.wakeWorker != nil {
+		workerCtx, cancel := context.WithCancel(ctx)
+		cancelWorker = cancel
+		done := make(chan error, 1)
+		workerDone = done
+		go func() { done <- controller.wakeWorker.Run(workerCtx) }()
+	}
+
+	select {
+	case serveErr := <-serveDone:
+		if cancelWorker != nil {
+			cancelWorker()
+			<-workerDone
+		}
+		return drainControllerServer(server, requests, ctx, serveErr)
+	case <-ctx.Done():
+	case <-controller.shutdownRequested:
+	}
+
+	// Keep HTTP reachable until the worker has stopped its adapter and settled
+	// any exit evidence. Runtime callbacks and recovery therefore cannot race a
+	// closed local API during orderly shutdown.
+	if cancelWorker != nil {
+		cancelWorker()
+		<-workerDone
+	}
+	return shutdownControllerServer(server, requests, serveDone, ctx)
+}
+
+type controllerRequestTracker struct {
+	next      http.Handler
+	mu        sync.Mutex
+	accepting bool
+	active    uint64
+	drained   chan struct{}
+}
+
+func newControllerRequestTracker(next http.Handler) *controllerRequestTracker {
+	return &controllerRequestTracker{next: next, accepting: true, drained: make(chan struct{})}
+}
+
+func (tracker *controllerRequestTracker) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	tracker.mu.Lock()
+	if !tracker.accepting {
+		tracker.mu.Unlock()
+		http.Error(writer, "mnemond is stopping", http.StatusServiceUnavailable)
+		return
+	}
+	tracker.active++
+	tracker.mu.Unlock()
+
+	defer func() {
+		tracker.mu.Lock()
+		tracker.active--
+		if !tracker.accepting && tracker.active == 0 {
+			close(tracker.drained)
+		}
+		tracker.mu.Unlock()
+	}()
+	tracker.next.ServeHTTP(writer, request)
+}
+
+func (tracker *controllerRequestTracker) seal() <-chan struct{} {
+	tracker.mu.Lock()
+	if tracker.accepting {
+		tracker.accepting = false
+		if tracker.active == 0 {
+			close(tracker.drained)
+		}
+	}
+	drained := tracker.drained
+	tracker.mu.Unlock()
+	return drained
+}
+
+func proveControllerHTTP(ctx context.Context, nodeState, assetRevision string) error {
+	if ctx == nil || ctx.Err() != nil {
+		return errors.New("mnemond controller startup was cancelled")
+	}
+	client, err := localapi.NewClient(nodeState)
+	if err != nil {
+		return errors.New("mnemond controller startup authority is unavailable")
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	health, apiErr := client.ProbeHealth(probeCtx)
+	if apiErr != nil || health.SchemaVersion != localapi.SchemaVersion ||
+		health.AssetRevision != assetRevision ||
+		(health.Status != "ready" && health.Status != "not_ready") {
+		return errors.New("mnemond controller HTTP startup proof failed")
+	}
+	return nil
+}
+
+func shutdownControllerServer(server *http.Server, requests *controllerRequestTracker,
+	serveDone <-chan error, caller context.Context,
+) error {
+	shutdownErr := closeControllerHTTP(server, requests)
+	serveErr := <-serveDone
+	return errors.Join(shutdownErr, normalizeControllerServeError(caller, serveErr))
+}
+
+func drainControllerServer(server *http.Server, requests *controllerRequestTracker,
+	caller context.Context, serveErr error,
+) error {
+	shutdownErr := closeControllerHTTP(server, requests)
+	return errors.Join(shutdownErr, normalizeControllerServeError(caller, serveErr))
+}
+
+func closeControllerHTTP(server *http.Server, requests *controllerRequestTracker) error {
+	if server == nil || requests == nil {
+		return errors.New("mnemond controller HTTP lifecycle is unavailable")
+	}
+	drained := requests.seal()
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	shutdownErr := server.Shutdown(shutdownCtx)
+	cancel()
+	if shutdownErr != nil {
+		closeErr := server.Close()
+		if errors.Is(closeErr, http.ErrServerClosed) {
+			closeErr = nil
+		}
+		<-drained
+		return errors.Join(shutdownErr, closeErr)
+	}
+	<-drained
+	return nil
+}
+
+func normalizeControllerServeError(ctx context.Context, err error) error {
+	if errors.Is(err, http.ErrServerClosed) || ctx != nil && ctx.Err() != nil && errors.Is(err, os.ErrClosed) {
 		return nil
 	}
-	return serveErr
+	return err
 }
 
 func (controller *Controller) releaseBeforeAccept() error {

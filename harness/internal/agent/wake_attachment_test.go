@@ -137,6 +137,50 @@ func TestWakeAttachmentPrepareDiscardsStagesOnNoWorkAndFailure(t *testing.T) {
 	}
 }
 
+func TestWakeAttachmentPreservesProofThatStoreWasNotInvoked(t *testing.T) {
+	at := time.Date(2026, 7, 17, 9, 45, 0, 0, time.UTC)
+	profile := serviceTestProfile(t, at)
+
+	for _, test := range []struct {
+		name  string
+		store WakePreclaimStore
+	}{
+		{name: "cleanup admission", store: wakeCleanupStore{
+			wakePreclaimStoreFunc: func(context.Context,
+				store.AgentWakePreclaimSpec,
+			) (store.AgentClaimResult, error) {
+				t.Fatal("preclaim called after cleanup admission rejection")
+				return store.AgentClaimResult{}, nil
+			},
+			cleanup: func(context.Context,
+				store.AgentAttachmentCleanupSpec,
+			) ([]store.ReapableAgentRunAttachment, error) {
+				return nil, ErrWakeStoreNotInvoked
+			},
+		}},
+		{name: "preclaim admission", store: wakePreclaimStoreFunc(func(context.Context,
+			store.AgentWakePreclaimSpec,
+		) (store.AgentClaimResult, error) {
+			return store.AgentClaimResult{}, ErrWakeStoreNotInvoked
+		})},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			preparer, err := NewWakeAttachmentPreparer(test.store, WakeAttachmentOptions{
+				NodeState: wakeTestNodeState(t), AssetRevision: profile.ActiveAssetRevision(),
+				Clock: serviceTestClock{at}, Random: bytes.NewReader(bytes.Repeat([]byte{0xc2}, 80)),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			prepared, err := preparer.Prepare(context.Background(), profile)
+			if prepared != (PreparedWake{}) || !errors.Is(err, ErrWakeAttachment) ||
+				!errors.Is(err, ErrWakeStoreNotInvoked) {
+				t.Fatalf("Prepare() = (%#v, %v)", prepared, err)
+			}
+		})
+	}
+}
+
 func TestWakeAttachmentPublishFailureNeverReturnsLaunchableRuntime(t *testing.T) {
 	at := time.Date(2026, 7, 17, 10, 0, 0, 0, time.UTC)
 	nodeState := wakeTestNodeState(t)

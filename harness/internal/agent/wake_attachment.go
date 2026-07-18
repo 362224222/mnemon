@@ -15,7 +15,10 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
 
-var ErrWakeAttachment = errors.New("prepare managed wake attachment")
+var (
+	ErrWakeAttachment      = errors.New("prepare managed wake attachment")
+	ErrWakeStoreNotInvoked = errors.New("managed wake Store operation was not invoked")
+)
 
 type WakePreclaimStore interface {
 	PreclaimAgentWake(context.Context, store.AgentWakePreclaimSpec) (store.AgentClaimResult, error)
@@ -102,6 +105,9 @@ func (p *WakeAttachmentPreparer) Prepare(ctx context.Context,
 		Candidates: candidates,
 	})
 	if err != nil {
+		if errors.Is(err, ErrWakeStoreNotInvoked) {
+			return PreparedWake{}, errors.Join(ErrWakeAttachment, ErrWakeStoreNotInvoked)
+		}
 		return PreparedWake{}, fmt.Errorf("%w: list expired capabilities: %v", ErrWakeAttachment, err)
 	}
 	for _, target := range reapable {
@@ -137,6 +143,9 @@ func (p *WakeAttachmentPreparer) Prepare(ctx context.Context,
 		AttachmentTokenHash: staged.TokenHash(), At: at, LeaseUntil: leaseUntil,
 	})
 	if err != nil {
+		if errors.Is(err, ErrWakeStoreNotInvoked) {
+			return PreparedWake{}, errors.Join(ErrWakeAttachment, ErrWakeStoreNotInvoked)
+		}
 		return PreparedWake{}, fmt.Errorf("%w: Store preclaim: %v", ErrWakeAttachment, err)
 	}
 	if claimed.Status != store.AgentClaimActionable {

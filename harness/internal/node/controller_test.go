@@ -7,12 +7,15 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/mnemon-dev/mnemon/harness/internal/agent"
 	"github.com/mnemon-dev/mnemon/harness/internal/assets"
 	"github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/integration"
@@ -353,6 +356,245 @@ func TestControllerShutdownSignalIsConcurrentAndIdempotent(t *testing.T) {
 		t.Fatal("concurrent lifecycle requests did not close the shutdown signal")
 	}
 	controller.requestShutdown()
+}
+
+func TestControllerManagedWorkerGatesReadinessAndStopsBeforeHTTP(t *testing.T) {
+	fixture := newDaemonFixture(t, true)
+	worker := newControllerTestWakeWorker()
+	controller, closeStore := newControllerWithTestWakeWorker(t, fixture, worker)
+	defer closeStore()
+
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- controller.Serve(context.Background()) }()
+	select {
+	case <-worker.started:
+	case err := <-serveDone:
+		t.Fatalf("Controller exited before worker startup: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Controller did not start managed worker")
+	}
+	client, err := localapi.NewClient(fixture.nodeState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if health, apiErr := client.ProbeHealth(context.Background()); apiErr != nil ||
+		health.Status != "not_ready" {
+		t.Fatalf("recovering worker health = (%#v, %#v)", health, apiErr)
+	}
+	close(worker.allowReady)
+	waitControllerHealth(t, client, "ready")
+
+	controller.requestShutdown()
+	select {
+	case <-worker.cancelling:
+	case err := <-serveDone:
+		t.Fatalf("Controller stopped HTTP before worker cleanup: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("worker did not observe shutdown")
+	}
+	if _, err := os.Lstat(filepath.Join(fixture.nodeState, "control.sock")); err != nil {
+		t.Fatalf("control socket closed before worker cleanup: %v", err)
+	}
+	select {
+	case err := <-serveDone:
+		t.Fatalf("Controller returned before worker cleanup: %v", err)
+	default:
+	}
+	close(worker.allowStop)
+	select {
+	case err := <-serveDone:
+		if err != nil {
+			t.Fatalf("Controller shutdown = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Controller did not stop after worker cleanup")
+	}
+	if _, err := os.Lstat(filepath.Join(fixture.nodeState, "control.sock")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("control socket remained after worker cleanup: %v", err)
+	}
+}
+
+func TestControllerManagedWorkerFailureStaysReachableAndFailsClosed(t *testing.T) {
+	fixture := newDaemonFixture(t, true)
+	worker := newControllerTestWakeWorker()
+	controller, closeStore := newControllerWithTestWakeWorker(t, fixture, worker)
+	defer closeStore()
+
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- controller.Serve(context.Background()) }()
+	select {
+	case <-worker.started:
+	case err := <-serveDone:
+		t.Fatalf("Controller exited before worker startup: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Controller did not start managed worker")
+	}
+	client, err := localapi.NewClient(fixture.nodeState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	close(worker.allowReady)
+	waitControllerHealth(t, client, "ready")
+	close(worker.fail)
+	select {
+	case <-worker.stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("failed worker did not return")
+	}
+	waitControllerHealth(t, client, "not_ready")
+	if _, apiErr := client.HookCheck(context.Background()); apiErr == nil ||
+		apiErr.Code != localapi.CodeMnemondUnavailable {
+		t.Fatalf("HookCheck after worker failure = %#v", apiErr)
+	}
+	select {
+	case err := <-serveDone:
+		t.Fatalf("worker failure stopped Controller: %v", err)
+	default:
+	}
+	controller.requestShutdown()
+	select {
+	case err := <-serveDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Controller did not stop after explicit shutdown")
+	}
+}
+
+func TestControllerRequestTrackerRejectsNewHandlersAndDrainsEnteredHandler(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	tracker := newControllerRequestTracker(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		close(entered)
+		<-release
+	}))
+	requestDone := make(chan struct{})
+	go func() {
+		defer close(requestDone)
+		tracker.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("tracked handler did not start")
+	}
+	drained := tracker.seal()
+	select {
+	case <-drained:
+		t.Fatal("tracker drained while entered handler was active")
+	default:
+	}
+	rejected := httptest.NewRecorder()
+	tracker.ServeHTTP(rejected, httptest.NewRequest(http.MethodGet, "/", nil))
+	if rejected.Code != http.StatusServiceUnavailable {
+		t.Fatalf("post-seal status = %d", rejected.Code)
+	}
+	close(release)
+	select {
+	case <-requestDone:
+	case <-time.After(time.Second):
+		t.Fatal("entered handler did not return")
+	}
+	select {
+	case <-drained:
+	case <-time.After(time.Second):
+		t.Fatal("tracker did not publish complete drain")
+	}
+}
+
+type controllerTestWakeWorker struct {
+	mu         sync.Mutex
+	snapshot   agent.WakeWorkerSnapshot
+	started    chan struct{}
+	allowReady chan struct{}
+	fail       chan struct{}
+	cancelling chan struct{}
+	allowStop  chan struct{}
+	stopped    chan struct{}
+}
+
+func newControllerTestWakeWorker() *controllerTestWakeWorker {
+	return &controllerTestWakeWorker{snapshot: agent.WakeWorkerSnapshot{Healthy: true},
+		started: make(chan struct{}), allowReady: make(chan struct{}), fail: make(chan struct{}),
+		cancelling: make(chan struct{}), allowStop: make(chan struct{}), stopped: make(chan struct{})}
+}
+
+func (worker *controllerTestWakeWorker) Run(ctx context.Context) error {
+	worker.setSnapshot(agent.WakeWorkerSnapshot{Running: true, Healthy: true, Recovering: true})
+	close(worker.started)
+	select {
+	case <-worker.allowReady:
+		worker.setSnapshot(agent.WakeWorkerSnapshot{Running: true, Ready: true, Healthy: true})
+	case <-ctx.Done():
+		close(worker.cancelling)
+		<-worker.allowStop
+		worker.setSnapshot(agent.WakeWorkerSnapshot{Healthy: true})
+		close(worker.stopped)
+		return nil
+	}
+	select {
+	case <-worker.fail:
+		worker.setSnapshot(agent.WakeWorkerSnapshot{Healthy: false,
+			LastError: "durable_runtime_transition_failed"})
+		close(worker.stopped)
+		return errors.New("managed wake worker failed")
+	case <-ctx.Done():
+		close(worker.cancelling)
+		<-worker.allowStop
+		worker.setSnapshot(agent.WakeWorkerSnapshot{Healthy: true})
+		close(worker.stopped)
+		return nil
+	}
+}
+
+func (worker *controllerTestWakeWorker) Snapshot() agent.WakeWorkerSnapshot {
+	worker.mu.Lock()
+	defer worker.mu.Unlock()
+	return worker.snapshot
+}
+
+func (worker *controllerTestWakeWorker) setSnapshot(snapshot agent.WakeWorkerSnapshot) {
+	worker.mu.Lock()
+	worker.snapshot = snapshot
+	worker.mu.Unlock()
+}
+
+func newControllerWithTestWakeWorker(t *testing.T, fixture daemonFixture,
+	worker managedWakeWorker,
+) (*Controller, func()) {
+	t.Helper()
+	authority, err := openExistingDaemonAuthority(context.Background(), fixture.workspace,
+		fixture.nodeState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller, err := NewController(ControllerOptions{NodeState: fixture.nodeState,
+		Workspace: fixture.workspace, Store: authority.store, Profile: authority.authority.Profile,
+		Signer: authority.identity.PublicationSigner(), Clock: controllerTestClock{fixture.profile.UpdatedAt()},
+		Install: fixture.install, wakeWorker: worker})
+	if err != nil {
+		_ = authority.store.Close()
+		t.Fatal(err)
+	}
+	return controller, func() {
+		if err := authority.store.Close(); err != nil {
+			t.Errorf("close Controller Store: %v", err)
+		}
+	}
+}
+
+func waitControllerHealth(t *testing.T, client *localapi.Client, status string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		health, apiErr := client.ProbeHealth(context.Background())
+		if apiErr == nil && health.Status == status {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("Controller health did not become %q", status)
 }
 
 func testInstallationVerifier(workspace, nodeState string, bundle assets.Bundle) InstallationVerifier {

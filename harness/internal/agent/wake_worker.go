@@ -426,7 +426,6 @@ func (worker *WakeWorker) recoverPrepareAmbiguity() (bool, string) {
 }
 
 func (worker *WakeWorker) tick(ctx context.Context) (time.Duration, string) {
-	worker.setState(false, false, "")
 	if err := worker.gate.Check(ctx, worker.profile); err != nil {
 		if ctx.Err() == nil {
 			worker.setState(false, false, wakeWorkerIssueGate)
@@ -435,6 +434,15 @@ func (worker *WakeWorker) tick(ctx context.Context) (time.Duration, string) {
 	}
 	prepared, prepareErr := worker.preparer.Prepare(ctx, worker.profile)
 	if prepareErr != nil {
+		// Admission can prove that a retained mutation seal rejected this
+		// operation before Store was invoked. That is not an ambiguous preclaim
+		// commit and must not start an independent rescan through the same seal.
+		if errors.Is(prepareErr, ErrWakeStoreNotInvoked) {
+			if ctx.Err() == nil {
+				worker.setState(false, false, wakeWorkerIssuePrepare)
+			}
+			return worker.backoffInterval, ""
+		}
 		if prepared.Status() == store.AgentClaimActionable && !prepared.Run().ID().IsZero() {
 			if issue := worker.failPreparedRun(prepared); issue != "" {
 				return worker.backoffInterval, issue
