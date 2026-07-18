@@ -11,8 +11,10 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
+	"github.com/mnemon-dev/mnemon/harness/internal/testkit"
 )
 
 func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
@@ -24,7 +26,7 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 				"agent_handlings agent_runs artifact_roots artifact_blocks artifact_root_blocks " +
 				"artifact_pins artifact_provenance channels channel_members channel_conflicts " +
 				"enrollment_grants enrollment_grant_uses enrollment_receipts channel_join_reservations channel_leave_requests " +
-				"peer_bindings gossip_publications peer_deliveries peer_inbox publication_conflicts " +
+				"peer_bindings gossip_publications peer_deliveries peer_inbox peer_inbox_pressure peer_inbox_node_pressure publication_conflicts " +
 				"origin_quarantines peer_cursors publication_epochs peer_pull_acks",
 		),
 		"index": strings.Fields(
@@ -62,7 +64,10 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 				"peer_deliveries_scanned_requires_cursor peer_inbox_event_scope_insert " +
 				"peer_inbox_binding_epoch_insert peer_inbox_transport_binding_insert " +
 				"peer_inbox_publication_member_insert peer_inbox_identity_immutable peer_inbox_event_scope_update " +
-				"peer_inbox_receipt_scope_insert peer_inbox_receipt_scope_update publication_conflicts_no_update " +
+				"peer_inbox_receipt_scope_insert peer_inbox_receipt_scope_update peer_inbox_no_delete peer_inbox_terminal_status_immutable " +
+				"peer_inbox_pressure_insert_limit peer_inbox_pressure_insert_account " +
+				"peer_inbox_pressure_status_leave_account peer_inbox_pressure_no_delete peer_inbox_pressure_identity_immutable " +
+				"peer_inbox_node_pressure_no_delete peer_inbox_node_pressure_identity_immutable publication_conflicts_no_update " +
 				"publication_conflicts_no_delete publication_conflicts_existing_scope_insert " +
 				"origin_quarantines_no_update origin_quarantines_no_delete peer_cursors_binding_epoch_insert " +
 				"peer_cursors_initial_baseline_insert peer_cursors_binding_epoch_update peer_cursors_identity_baseline_immutable " +
@@ -100,9 +105,223 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 	if !reflect.DeepEqual(actual, expected) {
 		t.Fatalf("schema object set mismatch\nactual: %#v\nexpected: %#v", actual, expected)
 	}
-	if got := len(actual["table"]) + len(actual["index"]) + len(actual["trigger"]); got != 157 {
-		t.Fatalf("explicit object count = %d, want 157", got)
+	if got := len(actual["table"]) + len(actual["index"]) + len(actual["trigger"]); got != 168 {
+		t.Fatalf("explicit object count = %d, want 168", got)
 	}
+}
+
+func TestSchemaV1PeerInboxPendingPressure(t *testing.T) {
+	const (
+		channelBudget = int64(64 * 1024 * 1024)
+		nodeBudget    = int64(256 * 1024 * 1024)
+	)
+	publication := []byte("p")
+	requiredRoots := []byte("r")
+	itemBytes := int64(len(publication) + len(requiredRoots))
+
+	t.Run("channel accounting and permanent evidence", func(t *testing.T) {
+		fixture := newChannelBaselineFixture(t, "schema-pressure-channel", model.TopicJoined)
+		if _, err := fixture.store.InstallInboundChannelBaseline(context.Background(),
+			InstallInboundChannelBaselineSpec{
+				AuthenticatedPeerID: fixture.remote.Identity().PeerID(),
+				Baseline:            fixture.remoteBaseline(0),
+				At:                  fixture.at,
+			}); err != nil {
+			t.Fatal(err)
+		}
+		if err := insertSchemaPeerInbox(fixture, 1, "stored", publication, requiredRoots); err != nil {
+			t.Fatalf("insert pending Inbox: %v", err)
+		}
+		assertSchemaPeerInboxPressure(t, fixture.store.db, fixture.channel.Channel().ID().String(), itemBytes)
+		assertSchemaPeerInboxNodePressure(t, fixture.store.db, itemBytes)
+
+		for _, status := range []string{"waiting_artifact", "ready", "processing", "retry"} {
+			if _, err := fixture.store.db.Exec(`UPDATE peer_inbox SET status=?,updated_at=?
+				WHERE inbox_id='schema-pressure-inbox-1'`, status, storeTime(fixture.at)); err != nil {
+				t.Fatalf("enter pending status %q: %v", status, err)
+			}
+			assertSchemaPeerInboxPressure(t, fixture.store.db,
+				fixture.channel.Channel().ID().String(), itemBytes)
+		}
+		if _, err := fixture.store.db.Exec(`UPDATE peer_inbox SET status='accepted',updated_at=?
+			WHERE inbox_id='schema-pressure-inbox-1'`, storeTime(fixture.at)); err != nil {
+			t.Fatalf("leave pending statuses: %v", err)
+		}
+		assertSchemaPeerInboxPressure(t, fixture.store.db, fixture.channel.Channel().ID().String(), 0)
+		assertSchemaPeerInboxNodePressure(t, fixture.store.db, 0)
+		if _, err := fixture.store.db.Exec(`UPDATE peer_inbox SET required_artifact_roots_json='changed'
+			WHERE inbox_id='schema-pressure-inbox-1'`); err == nil ||
+			!strings.Contains(err.Error(), "peer inbox publication identity is immutable") {
+			t.Fatalf("required roots rewrite error = %v, want immutable identity", err)
+		}
+		if _, err := fixture.store.db.Exec(
+			`DELETE FROM peer_inbox WHERE inbox_id='schema-pressure-inbox-1'`); err == nil ||
+			!strings.Contains(err.Error(), "peer inbox evidence is permanent") {
+			t.Fatalf("Inbox delete error = %v, want permanent evidence", err)
+		}
+		if _, err := fixture.store.db.Exec(`DELETE FROM peer_inbox_node_pressure`); err == nil ||
+			!strings.Contains(err.Error(), "peer inbox node pressure is permanent") {
+			t.Fatalf("Node pressure delete error = %v", err)
+		}
+		if _, err := fixture.store.db.Exec(`UPDATE peer_inbox_node_pressure SET singleton_id=2`); err == nil ||
+			!strings.Contains(err.Error(), "peer inbox node pressure identity is immutable") {
+			t.Fatalf("Node pressure identity error = %v", err)
+		}
+		if _, err := fixture.store.db.Exec(`DELETE FROM peer_inbox_pressure`); err == nil ||
+			!strings.Contains(err.Error(), "peer inbox channel pressure is permanent") {
+			t.Fatalf("Channel pressure delete error = %v", err)
+		}
+		if _, err := fixture.store.db.Exec(`UPDATE peer_inbox_pressure SET channel_id='channel-other'`); err == nil ||
+			!strings.Contains(err.Error(), "peer inbox channel pressure identity is immutable") {
+			t.Fatalf("Channel pressure identity error = %v", err)
+		}
+
+		if _, err := fixture.store.db.Exec(`UPDATE peer_inbox_pressure SET pending_bytes=?
+			WHERE channel_id=?`, channelBudget-itemBytes,
+			fixture.channel.Channel().ID().String()); err != nil {
+			t.Fatal(err)
+		}
+		if err := insertSchemaPeerInbox(fixture, 2, "stored", publication, requiredRoots); err != nil {
+			t.Fatalf("insert at exact Channel budget: %v", err)
+		}
+		assertSchemaPeerInboxPressure(t, fixture.store.db,
+			fixture.channel.Channel().ID().String(), channelBudget)
+		if err := insertSchemaPeerInbox(fixture, 3, "stored", publication, requiredRoots); err == nil ||
+			!strings.Contains(err.Error(), "peer inbox pending budget exceeded") {
+			t.Fatalf("over-Channel-budget error = %v", err)
+		}
+		if _, err := fixture.store.db.Exec(`UPDATE peer_inbox SET status='retry',updated_at=?
+			WHERE inbox_id='schema-pressure-inbox-1'`, storeTime(fixture.at)); err == nil ||
+			!strings.Contains(err.Error(), "terminal peer inbox status is immutable") {
+			t.Fatalf("terminal status transition error = %v", err)
+		}
+		if _, err := fixture.store.db.Exec(`UPDATE peer_inbox SET status='accepted',updated_at=?
+			WHERE inbox_id='schema-pressure-inbox-2'`, storeTime(fixture.at)); err != nil {
+			t.Fatalf("release pending budget: %v", err)
+		}
+		assertSchemaPeerInboxPressure(t, fixture.store.db,
+			fixture.channel.Channel().ID().String(), channelBudget-itemBytes)
+	})
+
+	t.Run("node budget", func(t *testing.T) {
+		fixture := newChannelBaselineFixture(t, "schema-pressure-node", model.TopicJoined)
+		if _, err := fixture.store.InstallInboundChannelBaseline(context.Background(),
+			InstallInboundChannelBaselineSpec{
+				AuthenticatedPeerID: fixture.remote.Identity().PeerID(),
+				Baseline:            fixture.remoteBaseline(0),
+				At:                  fixture.at,
+			}); err != nil {
+			t.Fatal(err)
+		}
+		for index := 0; index < 4; index++ {
+			channelID := fmt.Sprintf("schema-pressure-reserve-%d", index)
+			alias := fmt.Sprintf("pressure-reserve-%d", index)
+			insertChannelAuthority(t, fixture.store.db, channelID, alias,
+				"peer-"+alias, "epoch-"+alias, "record-"+alias)
+			pendingBytes := channelBudget
+			if index == 3 {
+				pendingBytes -= itemBytes
+			}
+			if _, err := fixture.store.db.Exec(`INSERT INTO peer_inbox_pressure(channel_id,pending_bytes)
+				VALUES(?,?)`, channelID, pendingBytes); err != nil {
+				t.Fatalf("reserve node pressure %d: %v", index, err)
+			}
+		}
+		if _, err := fixture.store.db.Exec(`UPDATE peer_inbox_node_pressure SET pending_bytes=?
+			WHERE singleton_id=1`, nodeBudget-itemBytes); err != nil {
+			t.Fatal(err)
+		}
+		if err := insertSchemaPeerInbox(fixture, 1, "stored", publication, requiredRoots); err != nil {
+			t.Fatalf("insert at exact node budget: %v", err)
+		}
+		var gotNodeBytes int64
+		if err := fixture.store.db.QueryRow(`SELECT pending_bytes FROM peer_inbox_node_pressure
+			WHERE singleton_id=1`).
+			Scan(&gotNodeBytes); err != nil || gotNodeBytes != nodeBudget {
+			t.Fatalf("node pressure = (%d,%v), want %d", gotNodeBytes, err, nodeBudget)
+		}
+		if err := insertSchemaPeerInbox(fixture, 2, "stored", publication, requiredRoots); err == nil ||
+			!strings.Contains(err.Error(), "peer inbox pending budget exceeded") {
+			t.Fatalf("over-node-budget error = %v", err)
+		}
+		assertSchemaPeerInboxPressure(t, fixture.store.db,
+			fixture.channel.Channel().ID().String(), itemBytes)
+	})
+
+	t.Run("node counter equals real Channel counters", func(t *testing.T) {
+		fixture := newChannelBaselineFixture(t, "schema-pressure-multi", model.TopicJoined)
+		if _, err := fixture.store.InstallInboundChannelBaseline(context.Background(),
+			InstallInboundChannelBaselineSpec{
+				AuthenticatedPeerID: fixture.remote.Identity().PeerID(),
+				Baseline:            fixture.remoteBaseline(0),
+				At:                  fixture.at,
+			}); err != nil {
+			t.Fatal(err)
+		}
+
+		second := testkit.NewSignedChannelForOwnerAt(t, "schema-pressure-multi-second",
+			fixture.channel.Owner(), fixture.at.Add(time.Second))
+		secondRemote := second.AppendActive(t, "schema-pressure-multi-second-remote")
+		insertSignedChannelFixture(t, fixture.store.db, second, model.TopicJoined)
+		insertSignedPeerBinding(t, fixture.store.db, second.Channel().ID(), secondRemote,
+			"pressure-multi-second", model.BindingPending, model.ReachabilityUnknown,
+			secondRemote.Member().CreatedAt())
+		mustExec(t, fixture.store, `INSERT INTO publication_epochs(channel_id,origin_peer_id,
+			origin_epoch,source_floor_channel_seq,source_head_channel_seq,updated_at)
+			VALUES(?,?,?,1,0,?)`, second.Channel().ID().String(), second.Owner().PeerID().String(),
+			second.Owner().OriginEpoch().String(), storeTime(second.Channel().UpdatedAt()))
+		secondFixture := channelBaselineFixture{store: fixture.store, channel: second,
+			remote: secondRemote, at: second.Channel().UpdatedAt().Add(time.Second)}
+		if _, err := fixture.store.InstallInboundChannelBaseline(context.Background(),
+			InstallInboundChannelBaselineSpec{
+				AuthenticatedPeerID: secondRemote.Identity().PeerID(),
+				Baseline:            secondFixture.remoteBaseline(0),
+				At:                  secondFixture.at,
+			}); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := insertSchemaPeerInbox(fixture, 1, "stored", publication, requiredRoots); err != nil {
+			t.Fatalf("insert first Channel Inbox: %v", err)
+		}
+		if err := insertSchemaPeerInbox(secondFixture, 2, "stored", publication, requiredRoots); err != nil {
+			t.Fatalf("insert second Channel Inbox: %v", err)
+		}
+		assertSchemaPeerInboxNodeEqualsChannelSum(t, fixture.store.db, itemBytes*2)
+
+		if _, err := fixture.store.db.Exec(`UPDATE peer_inbox SET status='accepted',updated_at=?
+			WHERE inbox_id='schema-pressure-inbox-1'`, storeTime(fixture.at.Add(2*time.Second))); err != nil {
+			t.Fatalf("terminalize first Channel Inbox: %v", err)
+		}
+		assertSchemaPeerInboxNodeEqualsChannelSum(t, fixture.store.db, itemBytes)
+	})
+
+	t.Run("missing node singleton fails closed", func(t *testing.T) {
+		fixture := newChannelBaselineFixture(t, "schema-pressure-missing-node", model.TopicJoined)
+		if _, err := fixture.store.InstallInboundChannelBaseline(context.Background(),
+			InstallInboundChannelBaselineSpec{
+				AuthenticatedPeerID: fixture.remote.Identity().PeerID(),
+				Baseline:            fixture.remoteBaseline(0),
+				At:                  fixture.at,
+			}); err != nil {
+			t.Fatal(err)
+		}
+		mustExec(t, fixture.store, `DROP TRIGGER peer_inbox_node_pressure_no_delete`)
+		mustExec(t, fixture.store, `DELETE FROM peer_inbox_node_pressure WHERE singleton_id=1`)
+
+		if err := insertSchemaPeerInbox(fixture, 1, "stored", publication, requiredRoots); err == nil ||
+			!strings.Contains(err.Error(), "peer inbox pending budget exceeded") {
+			t.Fatalf("missing node pressure singleton error = %v", err)
+		}
+		var inboxes, channelCounters int
+		if err := fixture.store.db.QueryRow(`SELECT COUNT(*) FROM peer_inbox`).Scan(&inboxes); err != nil || inboxes != 0 {
+			t.Fatalf("Inbox count after fail-closed rejection = (%d,%v)", inboxes, err)
+		}
+		if err := fixture.store.db.QueryRow(`SELECT COUNT(*) FROM peer_inbox_pressure`).
+			Scan(&channelCounters); err != nil || channelCounters != 0 {
+			t.Fatalf("Channel pressure rows after fail-closed rejection = (%d,%v)", channelCounters, err)
+		}
+	})
 }
 
 func TestSchemaV1KeyConstraintsAndTriggers(t *testing.T) {
@@ -1093,6 +1312,79 @@ func insertNode(t *testing.T, db *sql.DB) {
 		"2026-01-01T00:00:00Z",
 	); err != nil {
 		t.Fatalf("insert node: %v", err)
+	}
+}
+
+func insertSchemaPeerInbox(
+	fixture channelBaselineFixture,
+	sequence int64,
+	status string,
+	publication []byte,
+	requiredRoots []byte,
+) error {
+	channelID := fixture.channel.Channel().ID().String()
+	originPeerID := fixture.remote.Identity().PeerID().String()
+	var originMemberRevision, rosterRevision int64
+	var originMemberHash, rosterHash []byte
+	if err := fixture.store.db.QueryRow(`SELECT member_revision,member_record_hash
+		FROM peer_bindings WHERE channel_id=? AND peer_id=?`, channelID, originPeerID).
+		Scan(&originMemberRevision, &originMemberHash); err != nil {
+		return fmt.Errorf("read Inbox origin authority: %w", err)
+	}
+	if err := fixture.store.db.QueryRow(`SELECT roster_head_revision,roster_head_hash
+		FROM channels WHERE channel_id=?`, channelID).Scan(&rosterRevision, &rosterHash); err != nil {
+		return fmt.Errorf("read Inbox publication authority: %w", err)
+	}
+	_, err := fixture.store.db.Exec(`INSERT INTO peer_inbox(
+		inbox_id,channel_id,transport_peer_id,origin_peer_id,origin_epoch,origin_seq,
+		channel_seq,event_id,event_digest,origin_member_revision,origin_member_record_hash,
+		publication_roster_revision,publication_roster_hash,publication_digest,
+		origin_signature,publication_json,arrival_source,is_audience,
+		required_artifact_roots_json,status,next_attempt_at,received_at,updated_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pull',1,?,?,?,?,?)`,
+		fmt.Sprintf("schema-pressure-inbox-%d", sequence), channelID, originPeerID, originPeerID,
+		fixture.remote.Identity().OriginEpoch().String(), sequence, sequence,
+		fmt.Sprintf("schema-pressure-event-%d", sequence),
+		[]byte(fmt.Sprintf("schema-pressure-event-digest-%d", sequence)),
+		originMemberRevision, originMemberHash, rosterRevision, rosterHash,
+		[]byte(fmt.Sprintf("schema-pressure-publication-digest-%d", sequence)),
+		[]byte(fmt.Sprintf("schema-pressure-signature-%d", sequence)), publication,
+		requiredRoots, status, storeTime(fixture.at), storeTime(fixture.at), storeTime(fixture.at))
+	return err
+}
+
+func assertSchemaPeerInboxPressure(t *testing.T, db *sql.DB, channelID string, want int64) {
+	t.Helper()
+	var got int64
+	if err := db.QueryRow(`SELECT pending_bytes FROM peer_inbox_pressure WHERE channel_id=?`,
+		channelID).Scan(&got); err != nil || got != want {
+		t.Fatalf("peer Inbox pressure = (%d,%v), want %d", got, err, want)
+	}
+}
+
+func assertSchemaPeerInboxNodePressure(t *testing.T, db *sql.DB, want int64) {
+	t.Helper()
+	var got int64
+	if err := db.QueryRow(`SELECT pending_bytes FROM peer_inbox_node_pressure WHERE singleton_id=1`).
+		Scan(&got); err != nil || got != want {
+		t.Fatalf("peer Inbox Node pressure = (%d,%v), want %d", got, err, want)
+	}
+}
+
+func assertSchemaPeerInboxNodeEqualsChannelSum(t *testing.T, db *sql.DB, want int64) {
+	t.Helper()
+	var nodeBytes, channelBytes int64
+	if err := db.QueryRow(`SELECT pending_bytes FROM peer_inbox_node_pressure WHERE singleton_id=1`).
+		Scan(&nodeBytes); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COALESCE(SUM(pending_bytes),0) FROM peer_inbox_pressure`).
+		Scan(&channelBytes); err != nil {
+		t.Fatal(err)
+	}
+	if nodeBytes != want || channelBytes != want || nodeBytes != channelBytes {
+		t.Fatalf("peer Inbox pressure closure = node %d Channel sum %d, want %d",
+			nodeBytes, channelBytes, want)
 	}
 }
 

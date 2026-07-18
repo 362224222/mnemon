@@ -1432,7 +1432,7 @@ CREATE TABLE peer_inbox (
   updated_at         TEXT NOT NULL,
   UNIQUE (origin_peer_id, origin_epoch, origin_seq),
   UNIQUE (channel_id, origin_peer_id, origin_epoch, channel_seq),
-  UNIQUE (channel_id, event_id),
+  UNIQUE (event_id),
   UNIQUE (origin_peer_id, origin_epoch, event_id),
   FOREIGN KEY (local_event_id) REFERENCES events(event_id),
   FOREIGN KEY (channel_id, transport_peer_id)
@@ -1445,11 +1445,103 @@ CREATE TABLE peer_inbox (
     REFERENCES channel_members(channel_id, revision, record_hash),
   CHECK (arrival_source <> 'pull' OR transport_peer_id = origin_peer_id),
   CHECK (
-    (is_audience = 0 AND status = 'ignored'
+    (is_audience = 0 AND status IN ('ignored','quarantined')
       AND local_event_id IS NULL AND receipt_event_id IS NULL)
     OR (is_audience = 1 AND status <> 'ignored')
   )
 );
+
+-- Pending Inbox pressure is materialized at both scopes so admission never
+-- scans permanent Inbox or historical Channel evidence.
+CREATE TABLE peer_inbox_pressure (
+  channel_id         TEXT PRIMARY KEY REFERENCES channels(channel_id),
+  pending_bytes      INTEGER NOT NULL CHECK (
+    typeof(pending_bytes) = 'integer'
+    AND pending_bytes BETWEEN 0 AND 67108864
+  )
+);
+
+CREATE TRIGGER peer_inbox_pressure_no_delete
+BEFORE DELETE ON peer_inbox_pressure
+BEGIN SELECT RAISE(ABORT, 'peer inbox channel pressure is permanent'); END;
+
+CREATE TRIGGER peer_inbox_pressure_identity_immutable
+BEFORE UPDATE OF channel_id ON peer_inbox_pressure
+WHEN NEW.channel_id <> OLD.channel_id
+BEGIN SELECT RAISE(ABORT, 'peer inbox channel pressure identity is immutable'); END;
+
+CREATE TABLE peer_inbox_node_pressure (
+  singleton_id       INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+  pending_bytes      INTEGER NOT NULL CHECK (
+    typeof(pending_bytes) = 'integer'
+    AND pending_bytes BETWEEN 0 AND 268435456
+  )
+);
+
+INSERT INTO peer_inbox_node_pressure(singleton_id, pending_bytes) VALUES(1, 0);
+
+CREATE TRIGGER peer_inbox_node_pressure_no_delete
+BEFORE DELETE ON peer_inbox_node_pressure
+BEGIN SELECT RAISE(ABORT, 'peer inbox node pressure is permanent'); END;
+
+CREATE TRIGGER peer_inbox_node_pressure_identity_immutable
+BEFORE UPDATE OF singleton_id ON peer_inbox_node_pressure
+WHEN NEW.singleton_id <> OLD.singleton_id
+BEGIN SELECT RAISE(ABORT, 'peer inbox node pressure identity is immutable'); END;
+
+CREATE TRIGGER peer_inbox_pressure_insert_limit
+BEFORE INSERT ON peer_inbox
+WHEN NEW.status IN ('stored','waiting_artifact','ready','processing','retry')
+ AND (
+   COALESCE((
+     SELECT pending_bytes FROM peer_inbox_pressure WHERE channel_id = NEW.channel_id
+   ), 0) + length(NEW.publication_json) + length(NEW.required_artifact_roots_json) > 67108864
+   OR COALESCE((SELECT pending_bytes FROM peer_inbox_node_pressure WHERE singleton_id = 1),
+      268435457) + length(NEW.publication_json)
+      + length(NEW.required_artifact_roots_json) > 268435456
+ )
+BEGIN SELECT RAISE(ABORT, 'peer inbox pending budget exceeded'); END;
+
+CREATE TRIGGER peer_inbox_pressure_insert_account
+AFTER INSERT ON peer_inbox
+WHEN NEW.status IN ('stored','waiting_artifact','ready','processing','retry')
+BEGIN
+  INSERT INTO peer_inbox_pressure(channel_id, pending_bytes)
+  VALUES (
+    NEW.channel_id,
+    length(NEW.publication_json) + length(NEW.required_artifact_roots_json)
+  )
+  ON CONFLICT(channel_id) DO UPDATE SET
+    pending_bytes = pending_bytes + excluded.pending_bytes;
+  UPDATE peer_inbox_node_pressure
+  SET pending_bytes = pending_bytes
+    + length(NEW.publication_json) + length(NEW.required_artifact_roots_json)
+  WHERE singleton_id = 1;
+END;
+
+CREATE TRIGGER peer_inbox_pressure_status_leave_account
+AFTER UPDATE OF status ON peer_inbox
+WHEN OLD.status IN ('stored','waiting_artifact','ready','processing','retry')
+ AND NEW.status NOT IN ('stored','waiting_artifact','ready','processing','retry')
+BEGIN
+  UPDATE peer_inbox_pressure
+  SET pending_bytes = pending_bytes
+    - length(OLD.publication_json) - length(OLD.required_artifact_roots_json)
+  WHERE channel_id = OLD.channel_id;
+  UPDATE peer_inbox_node_pressure
+  SET pending_bytes = pending_bytes
+    - length(OLD.publication_json) - length(OLD.required_artifact_roots_json)
+  WHERE singleton_id = 1;
+END;
+
+CREATE TRIGGER peer_inbox_terminal_status_immutable
+BEFORE UPDATE OF status ON peer_inbox
+WHEN OLD.status IN ('accepted','rejected','conflicted','quarantined','ignored')
+ AND NEW.status <> OLD.status
+BEGIN SELECT RAISE(ABORT, 'terminal peer inbox status is immutable'); END;
+
+CREATE TRIGGER peer_inbox_no_delete BEFORE DELETE ON peer_inbox
+BEGIN SELECT RAISE(ABORT, 'peer inbox evidence is permanent'); END;
 
 CREATE TRIGGER peer_inbox_event_scope_insert
 BEFORE INSERT ON peer_inbox
@@ -1501,7 +1593,8 @@ CREATE TRIGGER peer_inbox_identity_immutable
 BEFORE UPDATE OF channel_id, transport_peer_id, origin_peer_id, origin_epoch,
   origin_seq, channel_seq, event_id, event_digest, origin_member_revision,
   origin_member_record_hash, publication_roster_revision, publication_roster_hash,
-  publication_digest, origin_signature, publication_json, arrival_source, is_audience
+  publication_digest, origin_signature, publication_json, arrival_source, is_audience,
+  required_artifact_roots_json
 ON peer_inbox
 WHEN NEW.channel_id <> OLD.channel_id
   OR NEW.transport_peer_id <> OLD.transport_peer_id
@@ -1520,6 +1613,7 @@ WHEN NEW.channel_id <> OLD.channel_id
   OR NEW.publication_json <> OLD.publication_json
   OR NEW.arrival_source <> OLD.arrival_source
   OR NEW.is_audience <> OLD.is_audience
+  OR NEW.required_artifact_roots_json <> OLD.required_artifact_roots_json
 BEGIN SELECT RAISE(ABORT, 'peer inbox publication identity is immutable'); END;
 
 CREATE TRIGGER peer_inbox_event_scope_update
