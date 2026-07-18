@@ -124,41 +124,16 @@ func NewChannelEnrollmentOwner(options ChannelEnrollmentOwnerOptions) (*ChannelE
 		budget: make(chan struct{}, HermeticLimits().UnknownEnrollmentConnections)}, nil
 }
 
-// Handler binds every call to the supplied daemon lifetime. A handler always
-// owns the one-shot stream: it closes after a final frame and resets on any
-// malformed, truncated, timed-out, or internally incomplete exchange.
-func (owner *ChannelEnrollmentOwner) Handler(lifetime context.Context) network.StreamHandler {
-	return func(stream network.Stream) {
-		if owner == nil || lifetime == nil || stream == nil {
-			if stream != nil {
-				_ = stream.Reset()
-			}
-			return
-		}
-		if err := owner.serve(lifetime, stream); err != nil {
-			_ = stream.Reset()
-			return
-		}
-		_ = stream.Close()
-	}
-}
-
-func (owner *ChannelEnrollmentOwner) serve(lifetime context.Context, stream network.Stream) error {
-	if stream.Protocol() != ChannelProtocol || stream.Conn() == nil {
+// HandleChannelRequest serves an EnrollInit already admitted by the sole
+// ChannelDispatcher. The dispatcher, not this sub-handler, owns the stream
+// deadline, cancellation, first-frame reservation and final Close/Reset.
+func (owner *ChannelEnrollmentOwner) HandleChannelRequest(ctx context.Context,
+	stream network.Stream, initFrame ChannelFrame,
+) error {
+	if owner == nil || ctx == nil || stream == nil || stream.Protocol() != ChannelProtocol ||
+		stream.Conn() == nil || initFrame.Type() != ChannelFrameEnrollInit {
 		return ErrChannelEnrollmentProtocol
 	}
-	deadline := time.Now().Add(HermeticLimits().ChannelRequestTimeout)
-	if parentDeadline, ok := lifetime.Deadline(); ok && parentDeadline.Before(deadline) {
-		deadline = parentDeadline
-	}
-	if err := stream.SetDeadline(deadline); err != nil {
-		return err
-	}
-	ctx, cancel := context.WithDeadline(lifetime, deadline)
-	defer cancel()
-	stopCancellation := context.AfterFunc(ctx, func() { _ = stream.SetDeadline(time.Now()) })
-	defer stopCancellation()
-
 	ownerPeerID, _, err := secureChannelPeer(stream.Conn().LocalPeer())
 	if err != nil {
 		return err
@@ -168,14 +143,6 @@ func (owner *ChannelEnrollmentOwner) serve(lifetime context.Context, stream netw
 		return ErrChannelEnrollmentProtocol
 	}
 
-	initFrame, releaseInit, err := readChannelStreamFrame(stream, model.MaxChannelRecordBytes)
-	if err != nil {
-		return ErrChannelEnrollmentProtocol
-	}
-	defer releaseInit()
-	if initFrame.Type() != ChannelFrameEnrollInit {
-		return ErrChannelEnrollmentProtocol
-	}
 	init, ok := initFrame.Payload().(EnrollInit)
 	if !ok {
 		return ErrChannelEnrollmentProtocol

@@ -57,7 +57,7 @@ func TestChannelEnrollmentHandshakeCommitsResponseLossReplayAndAtomicInstall(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	ownerHost.SetStreamHandler(ChannelProtocol, ownerProtocol.Handler(ctx))
+	registerEnrollmentTestDispatcher(t, ctx, ownerHost, ownerProtocol)
 	spec := JoinChannelSpec{Token: token, DisplayLabel: joinerIdentity.DisplayName(),
 		AdvertisedMultiaddrs: joinerIdentity.Multiaddrs(),
 		LocalAlias:           "review-team"}
@@ -146,7 +146,7 @@ func TestChannelEnrollmentRecoversOwnerCommitAfterAcceptedResponseLoss(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	ownerHost.SetStreamHandler(ChannelProtocol, ownerProtocol.Handler(ctx))
+	registerEnrollmentTestDispatcher(t, ctx, ownerHost, ownerProtocol)
 	firstClient, err := NewChannelEnrollmentClient(ChannelEnrollmentClientOptions{
 		Store: joinerStore, Clock: fixedEnrollmentClock{at: acceptedAt.Add(time.Second)},
 		Random: bytes.NewReader(bytes.Repeat([]byte{0x43}, model.EnrollmentNonceBytes+channelRequestIDBytes)),
@@ -279,7 +279,7 @@ func TestChannelEnrollmentOwnerRejectsUnsupportedVersionBeforeStore(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	ownerHost.SetStreamHandler(ChannelProtocol, ownerProtocol.Handler(ctx))
+	registerEnrollmentTestDispatcher(t, ctx, ownerHost, ownerProtocol)
 	grantID, _ := model.ParseGrantID("grant-peer-enrollment-version")
 	identity, err := model.EnrollmentJoinIdentityDigest(fixture.Channel().ID(), grantID,
 		joiner.PeerID(), joiner.PublicKey(), joiner.OriginEpoch())
@@ -595,6 +595,22 @@ func newEnrollmentTestHost(t *testing.T, identity testkit.Identity) host.Host {
 		t.Fatal(err)
 	}
 	return nodeHost
+}
+
+func registerEnrollmentTestDispatcher(t *testing.T, ctx context.Context, ownerHost host.Host,
+	owner *ChannelEnrollmentOwner,
+) {
+	t.Helper()
+	dispatcher, err := NewChannelDispatcher(ctx, ownerHost,
+		ChannelDispatcherOptions{Enrollment: owner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := dispatcher.Close(); err != nil {
+			t.Errorf("close Channel dispatcher: %v", err)
+		}
+	})
 }
 
 func openEnrollmentTestStream(t *testing.T, ctx context.Context, local host.Host,
