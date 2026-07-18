@@ -776,5 +776,5 @@ func eventFrameError(detail string, cause error) error {
 	if cause == nil {
 		return fmt.Errorf("%w: %s", ErrEventFrame, detail)
 	}
-	return fmt.Errorf("%w: %s: %v", ErrEventFrame, detail, cause)
+	return fmt.Errorf("%w: %s: %w", ErrEventFrame, detail, cause)
 }
