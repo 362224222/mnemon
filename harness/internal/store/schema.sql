@@ -906,6 +906,18 @@ BEFORE INSERT ON enrollment_grants
 WHEN NEW.used_uses <> 0 OR NEW.status <> 'open' OR NEW.closed_at IS NOT NULL
 BEGIN SELECT RAISE(ABORT, 'enrollment grant must begin open and unused'); END;
 
+CREATE TRIGGER enrollment_grants_lifecycle_insert
+BEFORE INSERT ON enrollment_grants
+WHEN EXISTS (
+  SELECT 1 FROM enrollment_grants prior
+  WHERE prior.channel_id = NEW.channel_id
+    AND (
+      NEW.created_at <= prior.created_at
+      OR (prior.closed_at IS NOT NULL AND NEW.created_at < prior.closed_at)
+    )
+)
+BEGIN SELECT RAISE(ABORT, 'enrollment grant lifecycle cannot regress'); END;
+
 CREATE TRIGGER enrollment_grants_identity_immutable
 BEFORE UPDATE OF grant_id, channel_id, verifier, expires_at, max_uses, created_at ON enrollment_grants
 WHEN NEW.grant_id <> OLD.grant_id
@@ -935,6 +947,26 @@ WHEN NEW.used_uses < OLD.used_uses
     )
   )
   OR (OLD.closed_at IS NOT NULL AND NEW.closed_at IS NOT OLD.closed_at)
+  OR (
+    NEW.closed_at IS NOT NULL
+    AND EXISTS (
+      SELECT 1 FROM enrollment_grant_uses use_record
+      WHERE use_record.grant_id = NEW.grant_id
+        AND use_record.used_at > NEW.closed_at
+    )
+  )
+  OR (NEW.status = 'closed' AND (NEW.used_uses = NEW.max_uses OR NEW.closed_at >= NEW.expires_at))
+  OR (NEW.status = 'expired' AND (NEW.used_uses = NEW.max_uses OR NEW.closed_at < NEW.expires_at))
+  OR (
+    NEW.status = 'exhausted'
+    AND (
+      NEW.used_uses <> NEW.max_uses
+      OR NEW.closed_at IS NOT (
+        SELECT MAX(use_record.used_at) FROM enrollment_grant_uses use_record
+        WHERE use_record.grant_id = NEW.grant_id
+      )
+    )
+  )
 BEGIN SELECT RAISE(ABORT, 'enrollment grant state is monotonic and terminal'); END;
 
 CREATE TABLE enrollment_grant_uses (
@@ -980,6 +1012,7 @@ WHEN NOT EXISTS (
     )
     AND member.status = 'active'
     AND member.revision > 1
+    AND member.created_at >= grant_state.created_at
     AND NEW.used_at >= grant_state.created_at
     AND NEW.used_at < grant_state.expires_at
     AND NEW.used_at >= member.created_at

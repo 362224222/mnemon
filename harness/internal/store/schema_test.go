@@ -50,7 +50,7 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 				"channels_terminal_status_update channels_conflicted_status_update channels_leaving_status_update " +
 				"channel_members_no_update channel_members_no_delete channel_conflicts_no_update " +
 				"channel_conflicts_no_delete channel_conflicts_limit_insert channels_conflicted_requires_evidence channel_members_no_reactivate " +
-				"channel_members_capacity_insert enrollment_grants_initial_state_insert enrollment_grants_identity_immutable enrollment_grants_no_delete enrollment_grants_state_update " +
+				"channel_members_capacity_insert enrollment_grants_initial_state_insert enrollment_grants_lifecycle_insert enrollment_grants_identity_immutable enrollment_grants_no_delete enrollment_grants_state_update " +
 				"enrollment_grant_uses_validate_insert enrollment_grant_uses_account_insert " +
 				"enrollment_grant_uses_no_update enrollment_grant_uses_no_delete " +
 				"enrollment_receipts_owner_evidence_insert enrollment_receipts_no_update enrollment_receipts_no_delete " +
@@ -99,8 +99,8 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 	if !reflect.DeepEqual(actual, expected) {
 		t.Fatalf("schema object set mismatch\nactual: %#v\nexpected: %#v", actual, expected)
 	}
-	if got := len(actual["table"]) + len(actual["index"]) + len(actual["trigger"]); got != 146 {
-		t.Fatalf("explicit object count = %d, want 146", got)
+	if got := len(actual["table"]) + len(actual["index"]) + len(actual["trigger"]); got != 147 {
+		t.Fatalf("explicit object count = %d, want 147", got)
 	}
 }
 
@@ -308,6 +308,12 @@ func TestSchemaChannelAuthorityEvidenceConstraints(t *testing.T) {
 		t.Fatalf("insert enrollment grant: %v", err)
 	}
 	if _, err := st.db.Exec(`INSERT INTO enrollment_grants(grant_id,channel_id,verifier,
+		expires_at,max_uses,status,created_at) VALUES('grant-same-time','channel-one',x'15',
+		'2026-01-02T00:00:00Z',1,'open','2026-01-01T00:00:00Z')`); err == nil ||
+		!strings.Contains(err.Error(), "enrollment grant lifecycle cannot regress") {
+		t.Fatalf("same-time replacement error = %v, want strict lifecycle trigger", err)
+	}
+	if _, err := st.db.Exec(`INSERT INTO enrollment_grants(grant_id,channel_id,verifier,
 		expires_at,max_uses,used_uses,status,created_at,closed_at)
 		VALUES('grant-forged-history','channel-two',x'10','2026-01-02T00:00:00Z',2,1,
 		'closed','2026-01-01T00:00:00Z','2026-01-01T00:01:00Z')`); err == nil ||
@@ -334,12 +340,38 @@ func TestSchemaChannelAuthorityEvidenceConstraints(t *testing.T) {
 		!strings.Contains(err.Error(), "enrollment grant state is monotonic and terminal") {
 		t.Fatalf("grant counter without use ledger error = %v, want ledger consistency", err)
 	}
+	if _, err := st.db.Exec("UPDATE enrollment_grants SET status='closed',closed_at='2026-01-02T00:00:00Z' WHERE grant_id='grant-state'"); err == nil ||
+		!strings.Contains(err.Error(), "enrollment grant state is monotonic and terminal") {
+		t.Fatalf("closed grant at expiry error = %v, want terminal-cause fence", err)
+	}
+	if _, err := st.db.Exec("UPDATE enrollment_grants SET status='expired',closed_at='2026-01-01T00:02:00Z' WHERE grant_id='grant-state'"); err == nil ||
+		!strings.Contains(err.Error(), "enrollment grant state is monotonic and terminal") {
+		t.Fatalf("early expired grant error = %v, want terminal-cause fence", err)
+	}
 	if _, err := st.db.Exec("UPDATE enrollment_grants SET status='closed',closed_at='2026-01-01T00:02:00Z' WHERE grant_id='grant-state'"); err != nil {
 		t.Fatalf("close enrollment grant: %v", err)
 	}
 	if _, err := st.db.Exec("UPDATE enrollment_grants SET status='expired' WHERE grant_id='grant-state'"); err == nil ||
 		!strings.Contains(err.Error(), "enrollment grant state is monotonic and terminal") {
 		t.Fatalf("terminal grant rewrite error = %v, want terminal-state trigger", err)
+	}
+	if _, err := st.db.Exec(`INSERT INTO enrollment_grants(grant_id,channel_id,verifier,
+		expires_at,max_uses,status,created_at) VALUES('grant-retroactive','channel-two',x'16',
+		'2026-01-02T00:00:00Z',1,'open','2026-01-01T00:04:00Z')`); err != nil {
+		t.Fatalf("insert later enrollment grant: %v", err)
+	}
+	if _, err := st.db.Exec(`INSERT INTO enrollment_grant_uses(use_id,grant_id,channel_id,
+		member_peer_id,join_identity_digest,member_revision,member_record_hash,used_at)
+		VALUES('retroactive-use','grant-retroactive','channel-two','peer-joiner-two',x'24',2,?,
+		'2026-01-01T00:05:00Z')`, []byte("record-joiner-two")); err == nil ||
+		!strings.Contains(err.Error(), "grant use requires open consistent grant") {
+		t.Fatalf("retroactive member attribution error = %v, want join transaction fence", err)
+	}
+	if _, err := st.db.Exec(`INSERT INTO enrollment_grants(grant_id,channel_id,verifier,
+		expires_at,max_uses,status,created_at) VALUES('grant-backdated','channel-two',x'14',
+		'2026-01-02T00:00:00Z',1,'open','2026-01-01T00:01:59Z')`); err == nil ||
+		!strings.Contains(err.Error(), "enrollment grant lifecycle cannot regress") {
+		t.Fatalf("backdated replacement error = %v, want lifecycle trigger", err)
 	}
 
 	if _, err := st.db.Exec(`INSERT INTO enrollment_grant_uses(use_id,grant_id,channel_id,
@@ -366,6 +398,11 @@ func TestSchemaChannelAuthorityEvidenceConstraints(t *testing.T) {
 	if err := st.db.QueryRow("SELECT used_uses FROM enrollment_grants WHERE grant_id='grant-one'").
 		Scan(&usedUses); err != nil || usedUses != 1 {
 		t.Fatalf("grant use accounting = %d, %v, want 1", usedUses, err)
+	}
+	if _, err := st.db.Exec(`UPDATE enrollment_grants SET status='closed',
+		closed_at='2026-01-01T00:03:59Z' WHERE grant_id='grant-one'`); err == nil ||
+		!strings.Contains(err.Error(), "enrollment grant state is monotonic and terminal") {
+		t.Fatalf("close before durable use error = %v, want lifecycle fence", err)
 	}
 	if _, err := st.db.Exec(`INSERT INTO enrollment_receipts(receipt_id,owner_use_id,channel_id,
 		member_peer_id,roster_head_revision,roster_head_hash,receipt_json,owner_signature,created_at)
@@ -406,8 +443,8 @@ func TestSchemaChannelAuthorityEvidenceConstraints(t *testing.T) {
 		member_peer_id,join_identity_digest,member_revision,member_record_hash,used_at)
 		VALUES('use-rotated','grant-rotated','channel-one','peer-remote',x'42',2,?,
 		'2026-01-01T00:05:30Z')`, []byte("record-remote")); err == nil ||
-		!strings.Contains(err.Error(), "UNIQUE constraint failed") {
-		t.Fatalf("rotated grant same-peer use error = %v, want one enrollment per Channel", err)
+		!strings.Contains(err.Error(), "grant use requires open consistent grant") {
+		t.Fatalf("rotated grant old-member use error = %v, want same-transaction join fence", err)
 	}
 	var rotatedUses int
 	if err := st.db.QueryRow("SELECT used_uses FROM enrollment_grants WHERE grant_id='grant-rotated'").

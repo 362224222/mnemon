@@ -21,7 +21,7 @@ var (
 type CreateChannelSpec struct {
 	Channel model.Channel
 	Genesis model.Member
-	Grant   model.OpenEnrollmentGrant
+	Token   model.EnrollmentToken
 }
 
 type CreateChannelResult struct {
@@ -31,17 +31,24 @@ type CreateChannelResult struct {
 }
 
 // CreateChannel atomically persists the signed descriptor, owner genesis,
-// local publication epoch and first secret-free enrollment verifier. The
-// plaintext invite token is intentionally absent from this boundary.
+// local publication epoch and first bearer-secret-free enrollment verifier.
+// The signed token crosses this transient boundary so its exact grant can be
+// derived, but only the verifier is written to SQLite.
 func (s *Store) CreateChannel(ctx context.Context, spec CreateChannelSpec) (CreateChannelResult, error) {
-	if s == nil || s.db == nil || ctx == nil || spec.Genesis.IsZero() || spec.Grant.IsZero() {
+	if s == nil || s.db == nil || ctx == nil || spec.Genesis.IsZero() || spec.Token.IsZero() {
 		return CreateChannelResult{}, ErrChannelCreateInput
 	}
 	channel := spec.Channel
+	grant, grantErr := model.NewOpenEnrollmentGrantForToken(spec.Token, channel.CreatedAt())
+	genesisAddresses, genesisAddressErr := model.AdvertisedAddressDigest(spec.Genesis.Multiaddrs())
+	tokenAddresses, tokenAddressErr := model.AdvertisedAddressDigest(spec.Token.Payload().OwnerMultiaddrs())
 	if channel.ID().IsZero() || channel.Status() != model.ChannelActive ||
-		channel.TopicState() != model.TopicNotJoined || spec.Grant.ChannelID() != channel.ID() ||
-		channel.UpdatedAt() != channel.CreatedAt() || spec.Grant.CreatedAt() != channel.CreatedAt() ||
-		spec.Grant.MaxUses() != channel.MemberLimit()-1 {
+		channel.TopicState() != model.TopicNotJoined || grantErr != nil || grant.ChannelID() != channel.ID() ||
+		!bytes.Equal(spec.Token.Payload().Descriptor().WireJSON().Bytes(),
+			channel.Descriptor().WireJSON().Bytes()) ||
+		genesisAddressErr != nil || tokenAddressErr != nil || genesisAddresses != tokenAddresses ||
+		channel.UpdatedAt() != channel.CreatedAt() || grant.CreatedAt() != channel.CreatedAt() ||
+		grant.MaxUses() != channel.MemberLimit()-1 {
 		return CreateChannelResult{}, fmt.Errorf("%w: inconsistent Channel, topic or grant", ErrChannelCreateInput)
 	}
 	roster, err := model.NewVerifiedRoster(channel.Descriptor(), []model.Member{spec.Genesis})
@@ -67,7 +74,7 @@ func (s *Store) CreateChannel(ctx context.Context, spec CreateChannelSpec) (Crea
 		return CreateChannelResult{}, fmt.Errorf("create Channel: inspect replay: %w", err)
 	}
 	if exists != 0 {
-		result, err := replayCreateChannel(ctx, tx, node.PeerID(), spec)
+		result, err := replayCreateChannel(ctx, tx, node.PeerID(), spec, grant)
 		if err != nil {
 			return CreateChannelResult{}, err
 		}
@@ -100,8 +107,8 @@ func (s *Store) CreateChannel(ctx context.Context, spec CreateChannelSpec) (Crea
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO enrollment_grants(grant_id,channel_id,verifier,expires_at,
 		max_uses,used_uses,status,created_at,closed_at) VALUES(?,?,?,?,?,0,'open',?,NULL)`,
-		spec.Grant.ID().String(), channel.ID().String(), spec.Grant.Verifier().Bytes(),
-		storeTime(spec.Grant.ExpiresAt()), spec.Grant.MaxUses(), storeTime(spec.Grant.CreatedAt()))
+		grant.ID().String(), channel.ID().String(), grant.Verifier().Bytes(),
+		storeTime(grant.ExpiresAt()), grant.MaxUses(), storeTime(grant.CreatedAt()))
 	if err != nil {
 		return CreateChannelResult{}, mapChannelCreateError(
 			fmt.Errorf("insert enrollment grant: %w", err))
@@ -109,7 +116,7 @@ func (s *Store) CreateChannel(ctx context.Context, spec CreateChannelSpec) (Crea
 	if err := tx.Commit(); err != nil {
 		return CreateChannelResult{}, mapChannelCreateError(err)
 	}
-	return CreateChannelResult{Created: true, Channel: channel, GrantID: spec.Grant.ID()}, nil
+	return CreateChannelResult{Created: true, Channel: channel, GrantID: grant.ID()}, nil
 }
 
 func insertChannelMember(ctx context.Context, tx *sql.Tx, member model.Member) error {
@@ -139,7 +146,7 @@ func insertChannelMember(ctx context.Context, tx *sql.Tx, member model.Member) e
 }
 
 func replayCreateChannel(ctx context.Context, tx *sql.Tx, localPeer model.PeerID,
-	spec CreateChannelSpec,
+	spec CreateChannelSpec, grant model.OpenEnrollmentGrant,
 ) (CreateChannelResult, error) {
 	authority, err := readVerifiedChannelAuthority(ctx, tx, localPeer, spec.Channel.ID())
 	if err != nil {
@@ -151,35 +158,53 @@ func replayCreateChannel(ctx context.Context, tx *sql.Tx, localPeer model.PeerID
 		!bytes.Equal(members[0].WireJSON().Bytes(), spec.Genesis.WireJSON().Bytes()) {
 		return CreateChannelResult{}, ErrChannelCreateConflict
 	}
+	if err := verifyOwnedChannelEnrollmentLedger(ctx, tx, authority); err != nil {
+		return CreateChannelResult{}, fmt.Errorf("%w: %v", ErrChannelCreateConflict, err)
+	}
 	var channelText, expiryText, createdText, status string
 	var verifier []byte
 	var maxUses, usedUses uint8
 	var closedText sql.NullString
 	err = tx.QueryRowContext(ctx, `SELECT channel_id,verifier,expires_at,max_uses,used_uses,status,
-		created_at,closed_at FROM enrollment_grants WHERE grant_id=?`, spec.Grant.ID().String()).
+		created_at,closed_at FROM enrollment_grants WHERE grant_id=?`, grant.ID().String()).
 		Scan(&channelText, &verifier, &expiryText, &maxUses, &usedUses, &status, &createdText, &closedText)
 	if err != nil || channelText != spec.Channel.ID().String() ||
-		!bytes.Equal(verifier, spec.Grant.Verifier().Bytes()) || expiryText != storeTime(spec.Grant.ExpiresAt()) ||
-		maxUses != spec.Grant.MaxUses() ||
-		createdText != storeTime(spec.Grant.CreatedAt()) {
+		!bytes.Equal(verifier, grant.Verifier().Bytes()) || expiryText != storeTime(grant.ExpiresAt()) ||
+		maxUses != grant.MaxUses() ||
+		createdText != storeTime(grant.CreatedAt()) {
 		return CreateChannelResult{}, fmt.Errorf("%w: enrollment grant replay differs: %v",
 			ErrChannelCreateConflict, err)
 	}
 	var useCount uint8
+	var lastUseText sql.NullString
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM enrollment_grant_uses WHERE grant_id=?`,
-		spec.Grant.ID().String()).Scan(&useCount); err != nil || useCount != usedUses ||
-		!validEnrollmentGrantState(status, usedUses, maxUses, closedText, spec.Grant.CreatedAt()) {
+		grant.ID().String()).Scan(&useCount); err != nil {
 		return CreateChannelResult{}, fmt.Errorf("%w: enrollment grant ledger is inconsistent: %v",
 			ErrChannelCreateConflict, err)
 	}
-	return CreateChannelResult{Channel: authority.channel, GrantID: spec.Grant.ID()}, nil
+	if err := tx.QueryRowContext(ctx, `SELECT MAX(used_at) FROM enrollment_grant_uses WHERE grant_id=?`,
+		grant.ID().String()).Scan(&lastUseText); err != nil || useCount != usedUses ||
+		!validEnrollmentGrantState(status, usedUses, maxUses, closedText, grant.CreatedAt(),
+			grant.ExpiresAt(), lastUseText) {
+		return CreateChannelResult{}, fmt.Errorf("%w: enrollment grant ledger is inconsistent: %v",
+			ErrChannelCreateConflict, err)
+	}
+	return CreateChannelResult{Channel: authority.channel, GrantID: grant.ID()}, nil
 }
 
 func validEnrollmentGrantState(status string, usedUses, maxUses uint8, closedText sql.NullString,
-	createdAt time.Time,
+	createdAt, expiresAt time.Time, lastUseText sql.NullString,
 ) bool {
-	if usedUses > maxUses {
+	if usedUses > maxUses || !expiresAt.After(createdAt) || (usedUses == 0) != !lastUseText.Valid {
 		return false
+	}
+	var lastUse time.Time
+	if lastUseText.Valid {
+		var err error
+		lastUse, err = parseCanonicalStoreTime(lastUseText.String)
+		if err != nil || lastUse.Before(createdAt) || !lastUse.Before(expiresAt) {
+			return false
+		}
 	}
 	if status == "open" {
 		return usedUses < maxUses && !closedText.Valid
@@ -188,14 +213,16 @@ func validEnrollmentGrantState(status string, usedUses, maxUses uint8, closedTex
 		return false
 	}
 	closedAt, err := parseCanonicalStoreTime(closedText.String)
-	if err != nil || closedAt.Before(createdAt) {
+	if err != nil || closedAt.Before(createdAt) || (lastUseText.Valid && closedAt.Before(lastUse)) {
 		return false
 	}
 	switch status {
 	case "exhausted":
-		return usedUses == maxUses
-	case "closed", "expired":
-		return true
+		return usedUses == maxUses && lastUseText.Valid && closedAt.Equal(lastUse)
+	case "closed":
+		return usedUses < maxUses && closedAt.Before(expiresAt)
+	case "expired":
+		return usedUses < maxUses && !closedAt.Before(expiresAt)
 	default:
 		return false
 	}
