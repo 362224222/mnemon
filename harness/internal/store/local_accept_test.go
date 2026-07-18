@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"crypto/ed25519"
-	"crypto/sha256"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -11,10 +10,9 @@ import (
 	"testing"
 	"time"
 
-	libp2pcrypto "github.com/libp2p/go-libp2p/core/crypto"
-	libp2ppeer "github.com/libp2p/go-libp2p/core/peer"
 	eventpkg "github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
+	"github.com/mnemon-dev/mnemon/harness/internal/testkit"
 )
 
 func TestCommitLocalAcceptancePersistsCompleteEvidenceAndReplaysAfterRestart(t *testing.T) {
@@ -117,90 +115,55 @@ func newAcceptanceFixture(t *testing.T, reviewerCount int) *acceptanceFixture {
 			_ = fixture.store.Close()
 		}
 	})
-	node, profile := bootstrapValues(t, "peer-accept-home", "principal-accept", "/workspace/accept")
+	base := fixture.now.Add(-time.Hour)
+	signed := testkit.NewSignedChannelAt(t, "accept-"+t.Name(), base.Add(time.Minute))
+	node, profile := signedBootstrapValues(t, signed.Owner(), "principal-accept", "/workspace/accept", base)
 	fixture.node, fixture.profile = activateTestNode(t, st, node, profile)
-	fixture.channel, _ = model.ParseChannelID("channel-accept")
-	publicKey, privateKey, _ := ed25519.GenerateKey(nil)
-	fixture.privateKey = privateKey
+	fixture.channel = signed.Channel().ID()
+	fixture.privateKey = ed25519Private(signed.Owner())
+	identities := make([]testkit.Identity, reviewerCount)
 	for index := 0; index < reviewerCount; index++ {
-		fixture.reviewers = append(fixture.reviewers,
-			acceptancePeerID(t, fmt.Sprintf("peer-accept-reviewer-%c", 'a'+index)))
+		identities[index] = testkit.NewIdentity(t, fmt.Sprintf("peer-accept-reviewer-%c", 'a'+index))
 	}
-	sort.Slice(fixture.reviewers, func(left, right int) bool {
-		comparison, err := model.ComparePeerIDs(fixture.reviewers[left], fixture.reviewers[right])
+	sort.Slice(identities, func(left, right int) bool {
+		comparison, err := model.ComparePeerIDs(identities[left].PeerID(), identities[right].PeerID())
 		if err != nil {
 			t.Fatal(err)
 		}
 		return comparison < 0
 	})
-	installAcceptanceChannel(t, fixture, publicKey)
+	for _, identity := range identities {
+		signed.AppendActiveIdentity(t, identity)
+		fixture.reviewers = append(fixture.reviewers, identity.PeerID())
+	}
+	installAcceptanceChannel(t, fixture, signed)
 	return fixture
 }
 
-func acceptancePeerID(t *testing.T, label string) model.PeerID {
+func installAcceptanceChannel(t *testing.T, fixture *acceptanceFixture, signed *testkit.SignedChannel) {
 	t.Helper()
-	seed := sha256.Sum256([]byte(label))
-	standardPrivate := ed25519.NewKeyFromSeed(seed[:])
-	privateKey, err := libp2pcrypto.UnmarshalEd25519PrivateKey(standardPrivate)
-	if err != nil {
-		t.Fatal(err)
-	}
-	id, err := libp2ppeer.IDFromPrivateKey(privateKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	result, err := model.ParsePeerID(id.String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	return result
-}
-
-func installAcceptanceChannel(t *testing.T, fixture *acceptanceFixture, publicKey ed25519.PublicKey) {
-	t.Helper()
-	localHash := model.Sum([]byte("accept-member-local"))
-	hashes := []model.Digest{localHash}
-	for index := range fixture.reviewers {
-		hashes = append(hashes, model.Sum([]byte(fmt.Sprintf("accept-member-%d", index))))
-	}
-	at := storeTime(fixture.now.Add(-time.Hour))
-	last := hashes[len(hashes)-1]
-	mustExec(t, fixture.store, `INSERT INTO channels(channel_id,name,local_alias,owner_peer_id,owner_public_key,
-		member_limit,roster_head_revision,roster_head_hash,status,topic_state,created_at,updated_at)
-		VALUES(?,?,?,?,?,8,?,?,'active','joined',?,?)`, fixture.channel.String(), "Accept", "accept",
-		fixture.node.PeerID().String(), publicKey, len(hashes), last.Bytes(), at, at)
-	mustExec(t, fixture.store, `INSERT INTO channel_members(channel_id,revision,record_hash,previous_hash,
-		member_peer_id,origin_epoch,display_label,public_key,multiaddrs_json,status,signed_record_json,
-		owner_signature,created_at) VALUES(?,1,?,NULL,?,?,?,?,?,'active',?,?,?)`, fixture.channel.String(),
-		localHash.Bytes(), fixture.node.PeerID().String(), fixture.node.OriginEpoch().String(), "local", publicKey,
-		[]byte(`[]`), []byte(`{}`), []byte("owner-signature"), at)
+	insertSignedChannelFixture(t, fixture.store.db, signed, model.TopicJoined)
+	at := signed.Channel().UpdatedAt()
+	members := signed.Members()
 	for index, peer := range fixture.reviewers {
-		revision := index + 2
-		epoch := "epoch-" + peer.String()
-		mustExec(t, fixture.store, `INSERT INTO channel_members(channel_id,revision,record_hash,previous_hash,
-			member_peer_id,origin_epoch,display_label,public_key,multiaddrs_json,status,signed_record_json,
-			owner_signature,created_at) VALUES(?,?,?,?,?,?,?,?,?,'active',?,?,?)`, fixture.channel.String(), revision,
-			hashes[index+1].Bytes(), hashes[index].Bytes(), peer.String(), epoch, peer.String(), []byte("remote-key"),
-			[]byte(`[]`), []byte(`{}`), []byte("owner-signature"), at)
-		mustExec(t, fixture.store, `INSERT INTO peer_bindings(channel_id,peer_id,origin_epoch,effective_alias,
-			public_key,multiaddrs_json,protocols_json,limits_json,member_revision,member_record_hash,state,
-			reachability,joined_at) VALUES(?,?,?,?,?,?,?,?,?,?,'pending','unknown',?)`, fixture.channel.String(),
-			peer.String(), epoch, fmt.Sprintf("reviewer-%d", index), []byte("remote-key"), []byte(`[]`),
-			[]byte(`[]`), []byte(`{}`), revision, hashes[index+1].Bytes(), at)
+		member := members[index+1]
+		insertSignedPeerBinding(t, fixture.store.db, fixture.channel, member,
+			fmt.Sprintf("reviewer-%d", index), model.BindingPending, model.ReachabilityUnknown, at)
+		epoch := member.Identity().OriginEpoch().String()
 		mustExec(t, fixture.store, `INSERT INTO peer_cursors(channel_id,origin_peer_id,origin_epoch,
 			baseline_channel_seq,contiguous_channel_seq,observed_channel_seq,updated_at) VALUES(?,?,?,0,0,0,?)`,
-			fixture.channel.String(), peer.String(), epoch, at)
+			fixture.channel.String(), peer.String(), epoch, storeTime(at))
 		mustExec(t, fixture.store, `UPDATE peer_bindings SET state='active' WHERE channel_id=? AND peer_id=?`,
 			fixture.channel.String(), peer.String())
 	}
 	mustExec(t, fixture.store, `INSERT INTO publication_epochs(channel_id,origin_peer_id,origin_epoch,
 		source_floor_channel_seq,source_head_channel_seq,updated_at) VALUES(?,?,?,1,0,?)`, fixture.channel.String(),
-		fixture.node.PeerID().String(), fixture.node.OriginEpoch().String(), at)
+		fixture.node.PeerID().String(), fixture.node.OriginEpoch().String(), storeTime(at))
 	for _, peer := range fixture.reviewers {
 		mustExec(t, fixture.store, `INSERT INTO peer_pull_acks(channel_id,target_peer_id,origin_peer_id,
 			origin_epoch,baseline_channel_seq,acknowledged_channel_seq,baseline_confirmed_at,updated_at)
 			VALUES(?,?,?,?,0,0,?,?)`, fixture.channel.String(), peer.String(), fixture.node.PeerID().String(),
-			fixture.node.OriginEpoch().String(), at, at)
+			fixture.node.OriginEpoch().String(), storeTime(at), storeTime(at))
 	}
 }
 

@@ -9,7 +9,7 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 )
 
-const HermeticProfileName = "r5-hermetic-v1"
+const HermeticProfileName = model.HermeticNetworkProfileName
 
 // NetworkLimits is the one production and Hermetic resource profile. Keeping
 // it as a value (rather than test-only knobs) makes every transport boundary

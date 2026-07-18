@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -45,11 +46,16 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 				"artifact_root_blocks_verified_insert artifact_root_blocks_verified_delete " +
 				"artifact_root_blocks_provenance_delete artifact_provenance_event_insert " +
 				"artifact_provenance_no_update artifact_provenance_no_delete channels_nonterminal_limit_insert " +
+				"channels_descriptor_immutable channels_no_delete channels_roster_head_monotonic " +
 				"channels_terminal_status_update channels_conflicted_status_update channels_leaving_status_update " +
 				"channel_members_no_update channel_members_no_delete channel_conflicts_no_update " +
-				"channel_conflicts_no_delete channels_conflicted_requires_evidence channel_members_no_reactivate " +
-				"channel_members_capacity_insert peer_bindings_no_self_insert peer_bindings_no_self_update " +
-				"peer_bindings_identity_epoch_immutable peer_bindings_revoked_terminal events_imported_binding_insert " +
+				"channel_conflicts_no_delete channel_conflicts_limit_insert channels_conflicted_requires_evidence channel_members_no_reactivate " +
+				"channel_members_capacity_insert enrollment_grants_initial_state_insert enrollment_grants_identity_immutable enrollment_grants_no_delete enrollment_grants_state_update " +
+				"enrollment_grant_uses_validate_insert enrollment_grant_uses_account_insert " +
+				"enrollment_grant_uses_no_update enrollment_grant_uses_no_delete " +
+				"enrollment_receipts_owner_evidence_insert enrollment_receipts_no_update enrollment_receipts_no_delete " +
+				"peer_bindings_no_self_insert peer_bindings_member_state_insert peer_bindings_member_state_update peer_bindings_no_self_update " +
+				"peer_bindings_identity_epoch_immutable peer_bindings_revoked_terminal peer_bindings_active_no_pending events_imported_binding_insert " +
 				"gossip_publications_event_scope_insert gossip_publications_identity_immutable " +
 				"peer_deliveries_event_scope_insert peer_deliveries_identity_immutable " +
 				"peer_deliveries_scanned_requires_cursor peer_inbox_event_scope_insert " +
@@ -59,11 +65,11 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 				"publication_conflicts_no_delete publication_conflicts_existing_scope_insert " +
 				"origin_quarantines_no_update origin_quarantines_no_delete peer_cursors_binding_epoch_insert " +
 				"peer_cursors_binding_epoch_update peer_cursors_identity_baseline_immutable " +
-				"peer_cursors_monotonic_update peer_bindings_no_active_insert " +
+				"peer_cursors_monotonic_update peer_cursors_no_delete peer_bindings_no_active_insert " +
 				"peer_bindings_activate_requires_cursor publication_epochs_local_origin_insert " +
 				"publication_epochs_identity_immutable publication_epochs_monotonic_update " +
 				"publication_epochs_no_delete peer_pull_acks_identity_baseline_immutable " +
-				"peer_pull_acks_monotonic_update peer_pull_acks_confirmation_immutable " +
+				"peer_pull_acks_monotonic_update peer_pull_acks_confirmation_immutable peer_pull_acks_no_delete " +
 				"peer_deliveries_binding_ready_insert peer_deliveries_binding_ready_update",
 		),
 	}
@@ -93,8 +99,8 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 	if !reflect.DeepEqual(actual, expected) {
 		t.Fatalf("schema object set mismatch\nactual: %#v\nexpected: %#v", actual, expected)
 	}
-	if got := len(actual["table"]) + len(actual["index"]) + len(actual["trigger"]); got != 126 {
-		t.Fatalf("explicit object count = %d, want 126", got)
+	if got := len(actual["table"]) + len(actual["index"]) + len(actual["trigger"]); got != 146 {
+		t.Fatalf("explicit object count = %d, want 146", got)
 	}
 }
 
@@ -209,6 +215,316 @@ func TestSchemaV1KeyConstraintsAndTriggers(t *testing.T) {
 		"UPDATE works SET deadline_unix_nano = deadline_unix_nano + 1 WHERE home_peer_id = 'peer-home' AND work_id = 'work-one'",
 	); err == nil || !strings.Contains(err.Error(), "work deadline is immutable") {
 		t.Fatalf("deadline update error = %v, want immutable trigger", err)
+	}
+}
+
+func TestSchemaChannelAuthorityEvidenceConstraints(t *testing.T) {
+	t.Parallel()
+	st := openTestStore(t)
+	insertNode(t, st.db)
+	insertChannelAuthority(t, st.db, "channel-one", "alpha", "peer-home", "epoch-one", "record-one")
+	insertChannelAuthority(t, st.db, "channel-two", "beta", "peer-two", "epoch-two", "record-two")
+
+	if _, err := st.db.Exec(
+		"UPDATE channels SET descriptor_json=? WHERE channel_id='channel-one'",
+		[]byte("forged-descriptor"),
+	); err == nil || !strings.Contains(err.Error(), "channel descriptor evidence is immutable") {
+		t.Fatalf("descriptor update error = %v, want immutable trigger", err)
+	}
+	if _, err := st.db.Exec("DELETE FROM channels WHERE channel_id='channel-one'"); err == nil ||
+		!strings.Contains(err.Error(), "channel descriptor evidence is permanent") {
+		t.Fatalf("channel delete error = %v, want permanent evidence trigger", err)
+	}
+	if _, err := st.db.Exec(
+		"UPDATE channel_members SET signed_record_json=? WHERE channel_id='channel-one' AND revision=1",
+		[]byte("forged-member"),
+	); err == nil || !strings.Contains(err.Error(), "channel member records are append-only") {
+		t.Fatalf("member evidence update error = %v, want append-only trigger", err)
+	}
+	if _, err := st.db.Exec(
+		"DELETE FROM channel_members WHERE channel_id='channel-one' AND revision=1",
+	); err == nil || !strings.Contains(err.Error(), "channel member records are append-only") {
+		t.Fatalf("member evidence delete error = %v, want append-only trigger", err)
+	}
+	if _, err := st.db.Exec(`UPDATE channels SET roster_head_hash=x'ff'
+		WHERE channel_id='channel-one'`); err == nil ||
+		!strings.Contains(err.Error(), "channel roster head cannot regress or fork in place") {
+		t.Fatalf("same-revision roster fork error = %v, want monotonic-head trigger", err)
+	}
+
+	orphanTx, err := st.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := orphanTx.Exec(`INSERT INTO channels(channel_id,name,local_alias,owner_peer_id,
+		owner_public_key,descriptor_json,descriptor_digest,descriptor_signature,member_limit,
+		roster_head_revision,roster_head_hash,status,topic_state,created_at,updated_at)
+		VALUES('channel-orphan','Orphan','orphan','peer-orphan',x'01',x'02',x'03',x'04',8,
+		1,x'05','active','joined','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`); err != nil {
+		_ = orphanTx.Rollback()
+		t.Fatalf("insert deferred orphan channel: %v", err)
+	}
+	commitErr := orphanTx.Commit()
+	if commitErr == nil || !strings.Contains(commitErr.Error(), "FOREIGN KEY constraint failed") {
+		t.Fatalf("orphan roster head commit error = %v, want foreign-key failure", commitErr)
+	}
+	// mattn/go-sqlite3 leaves the underlying SQL transaction open after a
+	// deferred-FK COMMIT failure even though database/sql marks sql.Tx done.
+	if _, err := st.db.Exec("ROLLBACK"); err != nil && !strings.Contains(err.Error(), "no transaction") {
+		t.Fatalf("rollback failed deferred-FK transaction: %v", err)
+	}
+
+	remoteOneArgs := []any{
+		"channel-one", 2, []byte("record-remote"), []byte("record-one"), "peer-remote",
+		"epoch-remote", "remote", []byte("remote-key"), []byte(`["/ip4/127.0.0.1/tcp/4002"]`),
+		[]byte(`["/mnemon/artifacts/1","/mnemon/channel/1","/mnemon/events/1"]`),
+		[]byte(`{"profile":"r5-hermetic-v1"}`), "active", []byte("member-remote"),
+		[]byte("member-remote-signature"), "2026-01-01T00:03:00Z",
+	}
+	remoteTwoArgs := []any{
+		"channel-two", 2, []byte("record-joiner-two"), []byte("record-two"), "peer-joiner-two",
+		"epoch-joiner-two", "joiner-two", []byte("joiner-two-key"),
+		[]byte(`["/ip4/127.0.0.1/tcp/4003"]`),
+		[]byte(`["/mnemon/artifacts/1","/mnemon/channel/1","/mnemon/events/1"]`),
+		[]byte(`{"profile":"r5-hermetic-v1"}`), "active", []byte("member-joiner-two"),
+		[]byte("member-joiner-two-signature"), "2026-01-01T00:03:00Z",
+	}
+	for _, memberArgs := range [][]any{remoteOneArgs, remoteTwoArgs} {
+		if _, err := st.db.Exec(`INSERT INTO channel_members(channel_id,revision,record_hash,
+			previous_hash,member_peer_id,origin_epoch,display_label,public_key,multiaddrs_json,
+			protocols_json,limits_json,status,signed_record_json,owner_signature,created_at)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, memberArgs...); err != nil {
+			t.Fatalf("insert remote member record: %v", err)
+		}
+		if _, err := st.db.Exec(`UPDATE channels SET roster_head_revision=2,roster_head_hash=?,
+			updated_at='2026-01-01T00:03:00Z' WHERE channel_id=?`, memberArgs[2], memberArgs[0]); err != nil {
+			t.Fatalf("advance remote roster head: %v", err)
+		}
+	}
+
+	if _, err := st.db.Exec(`INSERT INTO enrollment_grants(grant_id,channel_id,verifier,
+		expires_at,max_uses,status,created_at) VALUES('grant-one','channel-one',x'11',
+		'2026-01-02T00:00:00Z',2,'open','2026-01-01T00:00:00Z')`); err != nil {
+		t.Fatalf("insert enrollment grant: %v", err)
+	}
+	if _, err := st.db.Exec(`INSERT INTO enrollment_grants(grant_id,channel_id,verifier,
+		expires_at,max_uses,used_uses,status,created_at,closed_at)
+		VALUES('grant-forged-history','channel-two',x'10','2026-01-02T00:00:00Z',2,1,
+		'closed','2026-01-01T00:00:00Z','2026-01-01T00:01:00Z')`); err == nil ||
+		!strings.Contains(err.Error(), "enrollment grant must begin open and unused") {
+		t.Fatalf("forged initial grant state error = %v, want initial-state trigger", err)
+	}
+	if _, err := st.db.Exec("UPDATE enrollment_grants SET verifier=x'12' WHERE grant_id='grant-one'"); err == nil || !strings.Contains(err.Error(), "enrollment grant identity is immutable") {
+		t.Fatalf("grant identity update error = %v, want immutable trigger", err)
+	}
+	if _, err := st.db.Exec("DELETE FROM enrollment_grants WHERE grant_id='grant-one'"); err == nil ||
+		!strings.Contains(err.Error(), "enrollment grant evidence is permanent") {
+		t.Fatalf("grant delete error = %v, want permanent evidence trigger", err)
+	}
+	if _, err := st.db.Exec(`INSERT INTO enrollment_grants(grant_id,channel_id,verifier,
+		expires_at,max_uses,status,created_at) VALUES('grant-state','channel-two',x'13',
+		'2026-01-02T00:00:00Z',2,'open','2026-01-01T00:00:00Z')`); err != nil {
+		t.Fatalf("insert stateful enrollment grant: %v", err)
+	}
+	if _, err := st.db.Exec("UPDATE enrollment_grants SET used_uses=2,status='exhausted',closed_at='2026-01-01T00:01:00Z' WHERE grant_id='grant-state'"); err == nil ||
+		!strings.Contains(err.Error(), "enrollment grant state is monotonic and terminal") {
+		t.Fatalf("grant use jump error = %v, want monotonic-state trigger", err)
+	}
+	if _, err := st.db.Exec("UPDATE enrollment_grants SET used_uses=1 WHERE grant_id='grant-state'"); err == nil ||
+		!strings.Contains(err.Error(), "enrollment grant state is monotonic and terminal") {
+		t.Fatalf("grant counter without use ledger error = %v, want ledger consistency", err)
+	}
+	if _, err := st.db.Exec("UPDATE enrollment_grants SET status='closed',closed_at='2026-01-01T00:02:00Z' WHERE grant_id='grant-state'"); err != nil {
+		t.Fatalf("close enrollment grant: %v", err)
+	}
+	if _, err := st.db.Exec("UPDATE enrollment_grants SET status='expired' WHERE grant_id='grant-state'"); err == nil ||
+		!strings.Contains(err.Error(), "enrollment grant state is monotonic and terminal") {
+		t.Fatalf("terminal grant rewrite error = %v, want terminal-state trigger", err)
+	}
+
+	if _, err := st.db.Exec(`INSERT INTO enrollment_grant_uses(use_id,grant_id,channel_id,
+		member_peer_id,join_identity_digest,member_revision,member_record_hash,used_at)
+		VALUES('cross-channel-use','grant-one','channel-two','peer-joiner-two',x'21',2,?,
+		'2026-01-01T00:04:00Z')`, []byte("record-joiner-two")); err == nil ||
+		!strings.Contains(err.Error(), "grant use requires open consistent grant") {
+		t.Fatalf("cross-channel grant use error = %v, want authority failure", err)
+	}
+	if _, err := st.db.Exec(`INSERT INTO enrollment_grant_uses(use_id,grant_id,channel_id,
+		member_peer_id,join_identity_digest,member_revision,member_record_hash,used_at)
+		VALUES('cross-peer-use','grant-one','channel-one','peer-forged',x'22',2,?,
+		'2026-01-01T00:04:00Z')`, []byte("record-remote")); err == nil ||
+		!strings.Contains(err.Error(), "grant use requires open consistent grant") {
+		t.Fatalf("cross-peer grant use error = %v, want authority failure", err)
+	}
+	if _, err := st.db.Exec(`INSERT INTO enrollment_grant_uses(use_id,grant_id,channel_id,
+		member_peer_id,join_identity_digest,member_revision,member_record_hash,used_at)
+		VALUES('use-one','grant-one','channel-one','peer-remote',x'23',2,?,
+		'2026-01-01T00:04:00Z')`, []byte("record-remote")); err != nil {
+		t.Fatalf("insert valid grant use: %v", err)
+	}
+	var usedUses int
+	if err := st.db.QueryRow("SELECT used_uses FROM enrollment_grants WHERE grant_id='grant-one'").
+		Scan(&usedUses); err != nil || usedUses != 1 {
+		t.Fatalf("grant use accounting = %d, %v, want 1", usedUses, err)
+	}
+	if _, err := st.db.Exec(`INSERT INTO enrollment_receipts(receipt_id,owner_use_id,channel_id,
+		member_peer_id,roster_head_revision,roster_head_hash,receipt_json,owner_signature,created_at)
+		VALUES('cross-receipt','use-one','channel-two','peer-joiner-two',2,?,x'31',x'32',
+		'2026-01-01T00:05:00Z')`, []byte("record-joiner-two")); err == nil ||
+		!strings.Contains(err.Error(), "owner receipt must match its grant use evidence") {
+		t.Fatalf("cross-channel receipt error = %v, want owner-use failure", err)
+	}
+	if _, err := st.db.Exec(`INSERT INTO enrollment_receipts(receipt_id,owner_use_id,channel_id,
+		member_peer_id,roster_head_revision,roster_head_hash,receipt_json,owner_signature,created_at)
+		VALUES('early-receipt','use-one','channel-one','peer-remote',2,?,x'31',x'32',
+		'2026-01-01T00:03:59Z')`, []byte("record-remote")); err == nil ||
+		!strings.Contains(err.Error(), "owner receipt must match its grant use evidence") {
+		t.Fatalf("early owner receipt error = %v, want temporal evidence failure", err)
+	}
+	if _, err := st.db.Exec(`INSERT INTO enrollment_receipts(receipt_id,owner_use_id,channel_id,
+		member_peer_id,roster_head_revision,roster_head_hash,receipt_json,owner_signature,created_at)
+		VALUES('receipt-one','use-one','channel-one','peer-remote',2,?,x'33',x'34',
+		'2026-01-01T00:05:00Z')`, []byte("record-remote")); err != nil {
+		t.Fatalf("insert valid enrollment receipt: %v", err)
+	}
+	if _, err := st.db.Exec(`INSERT INTO enrollment_receipts(receipt_id,owner_use_id,channel_id,
+		member_peer_id,roster_head_revision,roster_head_hash,receipt_json,owner_signature,created_at)
+		VALUES('receipt-replica',NULL,'channel-two','peer-joiner-two',2,?,x'35',x'36',
+		'2026-01-01T00:05:00Z')`, []byte("record-joiner-two")); err != nil {
+		t.Fatalf("insert joiner receipt replica without owner grant use: %v", err)
+	}
+	if _, err := st.db.Exec(`UPDATE enrollment_grants SET status='closed',
+		closed_at='2026-01-01T00:05:00Z' WHERE grant_id='grant-one'`); err != nil {
+		t.Fatalf("close consumed enrollment grant: %v", err)
+	}
+	if _, err := st.db.Exec(`INSERT INTO enrollment_grants(grant_id,channel_id,verifier,
+		expires_at,max_uses,status,created_at) VALUES('grant-rotated','channel-one',x'41',
+		'2026-01-02T00:00:00Z',2,'open','2026-01-01T00:05:00Z')`); err != nil {
+		t.Fatalf("insert rotated enrollment grant: %v", err)
+	}
+	if _, err := st.db.Exec(`INSERT INTO enrollment_grant_uses(use_id,grant_id,channel_id,
+		member_peer_id,join_identity_digest,member_revision,member_record_hash,used_at)
+		VALUES('use-rotated','grant-rotated','channel-one','peer-remote',x'42',2,?,
+		'2026-01-01T00:05:30Z')`, []byte("record-remote")); err == nil ||
+		!strings.Contains(err.Error(), "UNIQUE constraint failed") {
+		t.Fatalf("rotated grant same-peer use error = %v, want one enrollment per Channel", err)
+	}
+	var rotatedUses int
+	if err := st.db.QueryRow("SELECT used_uses FROM enrollment_grants WHERE grant_id='grant-rotated'").
+		Scan(&rotatedUses); err != nil || rotatedUses != 0 {
+		t.Fatalf("rejected rotated grant accounting = %d, %v, want 0", rotatedUses, err)
+	}
+	if _, err := st.db.Exec("UPDATE enrollment_grant_uses SET used_at='2026-01-01T00:03:00Z' WHERE use_id='use-one'"); err == nil || !strings.Contains(err.Error(), "enrollment grant use evidence is immutable") {
+		t.Fatalf("grant use update error = %v, want immutable trigger", err)
+	}
+	if _, err := st.db.Exec("DELETE FROM enrollment_grant_uses WHERE use_id='use-one'"); err == nil ||
+		!strings.Contains(err.Error(), "enrollment grant use evidence is permanent") {
+		t.Fatalf("grant use delete error = %v, want permanent evidence trigger", err)
+	}
+	if _, err := st.db.Exec("UPDATE enrollment_receipts SET receipt_json=x'35' WHERE receipt_id='receipt-one'"); err == nil || !strings.Contains(err.Error(), "enrollment receipt evidence is immutable") {
+		t.Fatalf("receipt update error = %v, want immutable trigger", err)
+	}
+	if _, err := st.db.Exec("DELETE FROM enrollment_receipts WHERE receipt_id='receipt-one'"); err == nil ||
+		!strings.Contains(err.Error(), "enrollment receipt evidence is permanent") {
+		t.Fatalf("receipt delete error = %v, want permanent evidence trigger", err)
+	}
+
+	if _, err := st.db.Exec(`INSERT INTO peer_bindings(channel_id,peer_id,origin_epoch,
+		effective_alias,public_key,multiaddrs_json,protocols_json,limits_json,member_revision,
+		member_record_hash,state,joined_at) VALUES('channel-one','peer-remote','epoch-remote',
+		'remote',x'00',?,?,?,2,?,'pending','2026-01-01T00:03:00Z')`,
+		remoteOneArgs[8], remoteOneArgs[9], remoteOneArgs[10], []byte("record-remote")); err == nil ||
+		!strings.Contains(err.Error(), "FOREIGN KEY constraint failed") {
+		t.Fatalf("forged binding key error = %v, want foreign-key failure", err)
+	}
+	if _, err := st.db.Exec(`INSERT INTO peer_bindings(channel_id,peer_id,origin_epoch,
+		effective_alias,public_key,multiaddrs_json,protocols_json,limits_json,member_revision,
+		member_record_hash,state,joined_at) VALUES('channel-one','peer-remote','epoch-remote',
+		'remote',?,?,?,?,2,?,'pending','2026-01-01T00:03:00Z')`, remoteOneArgs[7],
+		remoteOneArgs[8], remoteOneArgs[9], remoteOneArgs[10], []byte("record-remote")); err != nil {
+		t.Fatalf("insert valid pending binding: %v", err)
+	}
+	if _, err := st.db.Exec(`UPDATE peer_bindings SET protocols_json='[]'
+		WHERE channel_id='channel-one' AND peer_id='peer-remote'`); err == nil ||
+		!strings.Contains(err.Error(), "FOREIGN KEY constraint failed") {
+		t.Fatalf("forged binding protocols error = %v, want foreign-key failure", err)
+	}
+	if _, err := st.db.Exec(`INSERT INTO peer_cursors(channel_id,origin_peer_id,origin_epoch,
+		baseline_channel_seq,contiguous_channel_seq,observed_channel_seq,updated_at)
+		VALUES('channel-one','peer-remote','epoch-remote',0,0,0,'2026-01-01T00:03:00Z')`); err != nil {
+		t.Fatalf("insert binding cursor: %v", err)
+	}
+	if _, err := st.db.Exec(`UPDATE peer_bindings SET state='active'
+		WHERE channel_id='channel-one' AND peer_id='peer-remote'`); err != nil {
+		t.Fatalf("activate binding: %v", err)
+	}
+	if _, err := st.db.Exec(`DELETE FROM peer_cursors
+		WHERE channel_id='channel-one' AND origin_peer_id='peer-remote'`); err == nil ||
+		!strings.Contains(err.Error(), "peer cursor baseline evidence is durable") {
+		t.Fatalf("peer cursor delete error = %v, want durable evidence trigger", err)
+	}
+	if _, err := st.db.Exec(`INSERT INTO publication_epochs(channel_id,origin_peer_id,origin_epoch,
+		source_floor_channel_seq,source_head_channel_seq,updated_at)
+		VALUES('channel-one','peer-home','epoch-one',1,0,'2026-01-01T00:03:00Z')`); err != nil {
+		t.Fatalf("insert publication epoch for pull ack: %v", err)
+	}
+	if _, err := st.db.Exec(`INSERT INTO peer_pull_acks(channel_id,target_peer_id,origin_peer_id,
+		origin_epoch,baseline_channel_seq,acknowledged_channel_seq,baseline_confirmed_at,updated_at)
+		VALUES('channel-one','peer-remote','peer-home','epoch-one',0,0,
+		'2026-01-01T00:03:00Z','2026-01-01T00:03:00Z')`); err != nil {
+		t.Fatalf("insert pull ack baseline: %v", err)
+	}
+	if _, err := st.db.Exec(`DELETE FROM peer_pull_acks
+		WHERE channel_id='channel-one' AND target_peer_id='peer-remote'`); err == nil ||
+		!strings.Contains(err.Error(), "pull ack baseline evidence is durable") {
+		t.Fatalf("pull ack delete error = %v, want durable evidence trigger", err)
+	}
+	if _, err := st.db.Exec(`UPDATE peer_bindings SET state='pending'
+		WHERE channel_id='channel-one' AND peer_id='peer-remote'`); err == nil ||
+		!strings.Contains(err.Error(), "active binding cannot return to pending") {
+		t.Fatalf("active-to-pending error = %v, want monotonic-state trigger", err)
+	}
+	remoteOneArgs[1] = 3
+	remoteOneArgs[2] = []byte("record-remote-revoked")
+	remoteOneArgs[3] = []byte("record-remote")
+	remoteOneArgs[11] = "revoked"
+	remoteOneArgs[12] = []byte("member-remote-revoked")
+	remoteOneArgs[13] = []byte("member-remote-revoked-signature")
+	remoteOneArgs[14] = "2026-01-01T00:06:00Z"
+	if _, err := st.db.Exec(`INSERT INTO channel_members(channel_id,revision,record_hash,
+		previous_hash,member_peer_id,origin_epoch,display_label,public_key,multiaddrs_json,
+		protocols_json,limits_json,status,signed_record_json,owner_signature,created_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, remoteOneArgs...); err != nil {
+		t.Fatalf("insert revoked member record: %v", err)
+	}
+	if _, err := st.db.Exec(`UPDATE channels SET roster_head_revision=3,roster_head_hash=?,
+		updated_at='2026-01-01T00:06:00Z' WHERE channel_id='channel-one'`, remoteOneArgs[2]); err != nil {
+		t.Fatalf("advance revoked roster head: %v", err)
+	}
+	if _, err := st.db.Exec(`UPDATE peer_bindings SET member_revision=3,member_record_hash=?,
+		state='revoked' WHERE channel_id='channel-one' AND peer_id='peer-remote'`, remoteOneArgs[2]); err != nil {
+		t.Fatalf("revoke binding against terminal member record: %v", err)
+	}
+	if _, err := st.db.Exec(`UPDATE peer_bindings SET state='pending'
+		WHERE channel_id='channel-one' AND peer_id='peer-remote'`); err == nil ||
+		!strings.Contains(err.Error(), "revoked binding is terminal") {
+		t.Fatalf("revoked binding update error = %v, want terminal trigger", err)
+	}
+	for index := 0; index <= 8; index++ {
+		_, err := st.db.Exec(`INSERT INTO channel_conflicts(conflict_id,channel_id,revision,
+			incumbent_record_hash,incumbent_signed_record_json,incumbent_owner_signature,
+			challenger_record_hash,challenger_signed_record_json,challenger_owner_signature,
+			transport_peer_id,detected_at) VALUES(?,?,3,?,?,?,?,?,?,?,?)`,
+			fmt.Sprintf("conflict-limit-%d", index), "channel-one", remoteOneArgs[2], remoteOneArgs[12],
+			remoteOneArgs[13], []byte(fmt.Sprintf("challenger-%d", index)), []byte("challenger-record"),
+			[]byte("challenger-signature"), "peer-home", "2026-01-01T00:07:00Z")
+		if index < 8 && err != nil {
+			t.Fatalf("insert bounded conflict evidence %d: %v", index, err)
+		}
+		if index == 8 && (err == nil || !strings.Contains(err.Error(),
+			"channel conflict evidence limit reached")) {
+			t.Fatalf("ninth conflict evidence error = %v, want bounded trigger", err)
+		}
 	}
 }
 
@@ -663,6 +979,45 @@ func insertProfile(t *testing.T, db *sql.DB) {
 	}
 }
 
+func insertChannelAuthority(
+	t *testing.T,
+	db *sql.DB,
+	channelID string,
+	alias string,
+	ownerPeer string,
+	originEpoch string,
+	recordHash string,
+) {
+	t.Helper()
+	tx, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("begin channel authority fixture: %v", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(`INSERT INTO channels(channel_id,name,local_alias,owner_peer_id,
+		owner_public_key,descriptor_json,descriptor_digest,descriptor_signature,member_limit,
+		roster_head_revision,roster_head_hash,status,topic_state,created_at,updated_at)
+		VALUES(?,?,?,?,?,?,?,?,8,1,?,'active','joined',?,?)`, channelID, strings.ToUpper(alias),
+		alias, ownerPeer, []byte("key-"+ownerPeer), []byte("descriptor-"+channelID),
+		[]byte("descriptor-digest-"+channelID), []byte("descriptor-signature-"+channelID),
+		[]byte(recordHash), "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"); err != nil {
+		t.Fatalf("insert channel authority: %v", err)
+	}
+	if _, err := tx.Exec(`INSERT INTO channel_members(channel_id,revision,record_hash,
+		previous_hash,member_peer_id,origin_epoch,display_label,public_key,multiaddrs_json,
+		protocols_json,limits_json,status,signed_record_json,owner_signature,created_at)
+		VALUES(?,1,?,NULL,?,?,?,?,?,?,?,'active',?,?,?)`, channelID, []byte(recordHash), ownerPeer,
+		originEpoch, alias, []byte("key-"+ownerPeer), []byte(`["/ip4/127.0.0.1/tcp/4001"]`),
+		[]byte(`["/mnemon/artifacts/1","/mnemon/channel/1","/mnemon/events/1"]`),
+		[]byte(`{"profile":"r5-hermetic-v1"}`), []byte("member-"+channelID),
+		[]byte("member-signature-"+channelID), "2026-01-01T00:00:00Z"); err != nil {
+		t.Fatalf("insert channel owner member: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit channel authority fixture: %v", err)
+	}
+}
+
 func insertReviewFixture(t *testing.T, db *sql.DB) {
 	t.Helper()
 	insertChannelAndEvent(t, db)
@@ -686,13 +1041,21 @@ func insertReviewFixture(t *testing.T, db *sql.DB) {
 
 func insertChannelAndEvent(t *testing.T, db *sql.DB) {
 	t.Helper()
-	if _, err := db.Exec(
-		"INSERT INTO channels(channel_id, name, local_alias, owner_peer_id, owner_public_key, member_limit, roster_head_revision, roster_head_hash, status, topic_state, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+	tx, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("begin channel fixture: %v", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(
+		"INSERT INTO channels(channel_id, name, local_alias, owner_peer_id, owner_public_key, descriptor_json, descriptor_digest, descriptor_signature, member_limit, roster_head_revision, roster_head_hash, status, topic_state, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 		"channel-one",
 		"Alpha",
 		"alpha",
 		"peer-home",
 		[]byte("owner-key"),
+		[]byte("descriptor-one"),
+		[]byte("descriptor-digest-one"),
+		[]byte("descriptor-signature-one"),
 		8,
 		1,
 		[]byte("record-one"),
@@ -703,8 +1066,8 @@ func insertChannelAndEvent(t *testing.T, db *sql.DB) {
 	); err != nil {
 		t.Fatalf("insert channel: %v", err)
 	}
-	if _, err := db.Exec(
-		"INSERT INTO channel_members(channel_id, revision, record_hash, previous_hash, member_peer_id, origin_epoch, display_label, public_key, multiaddrs_json, status, signed_record_json, owner_signature, created_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+	if _, err := tx.Exec(
+		"INSERT INTO channel_members(channel_id, revision, record_hash, previous_hash, member_peer_id, origin_epoch, display_label, public_key, multiaddrs_json, protocols_json, limits_json, status, signed_record_json, owner_signature, created_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 		"channel-one",
 		1,
 		[]byte("record-one"),
@@ -712,8 +1075,10 @@ func insertChannelAndEvent(t *testing.T, db *sql.DB) {
 		"peer-home",
 		"epoch-one",
 		"home",
-		[]byte("member-key"),
+		[]byte("owner-key"),
 		[]byte("[]"),
+		[]byte("[]"),
+		[]byte("{}"),
 		"active",
 		[]byte("{}"),
 		[]byte("signature"),
@@ -721,7 +1086,7 @@ func insertChannelAndEvent(t *testing.T, db *sql.DB) {
 	); err != nil {
 		t.Fatalf("insert channel member: %v", err)
 	}
-	if _, err := db.Exec(
+	if _, err := tx.Exec(
 		"INSERT INTO events(event_id, schema_version, channel_id, origin_peer_id, origin_epoch, origin_seq, channel_seq, origin_member_revision, origin_member_record_hash, publication_roster_revision, publication_roster_hash, source, actor_principal, event_type, audience_json, resource_json, work_home_peer_id, work_id, summary, payload_json, artifact_roots_json, caused_by_json, canonical_event_json, event_digest, canonical_publication_json, publication_digest, origin_signature, created_at, accepted_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 		"event-one",
 		1,
@@ -754,5 +1119,8 @@ func insertChannelAndEvent(t *testing.T, db *sql.DB) {
 		"2026-01-01T00:00:00Z",
 	); err != nil {
 		t.Fatalf("insert event: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit channel fixture: %v", err)
 	}
 }

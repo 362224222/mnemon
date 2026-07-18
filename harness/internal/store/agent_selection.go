@@ -295,6 +295,11 @@ func readAgentOfferCandidateChannel(ctx context.Context, tx *sql.Tx, node model.
 		return AgentOfferCandidateChannel{}, fmt.Errorf("%w: Channel %q ID: %v",
 			ErrAgentOfferCandidatesInvariant, alias, err)
 	}
+	authority, err := readVerifiedChannelAuthority(ctx, tx, node.PeerID(), channelID)
+	if err != nil {
+		return AgentOfferCandidateChannel{}, fmt.Errorf("%w: Channel %q signed authority: %v",
+			ErrAgentOfferCandidatesInvariant, alias, err)
+	}
 	digest, err := model.DigestFromBytes(rosterHash)
 	if err != nil {
 		return AgentOfferCandidateChannel{}, fmt.Errorf("%w: Channel %q roster digest: %v",
@@ -304,6 +309,11 @@ func readAgentOfferCandidateChannel(ctx context.Context, tx *sql.Tx, node model.
 	if err != nil {
 		return AgentOfferCandidateChannel{}, fmt.Errorf("%w: Channel %q roster head: %v",
 			ErrAgentOfferCandidatesInvariant, alias, err)
+	}
+	if authority.channel.LocalAlias() != alias || authority.channel.MemberLimit() != uint8(memberLimit) ||
+		authority.channel.RosterHead() != rosterHead {
+		return AgentOfferCandidateChannel{}, fmt.Errorf("%w: Channel %q query projection changed",
+			ErrAgentOfferCandidatesInvariant, alias)
 	}
 	createdAt, err := parseCanonicalStoreTime(createdText)
 	if err != nil {
@@ -371,7 +381,8 @@ func readAgentOfferCandidateChannel(ctx context.Context, tx *sql.Tx, node model.
 			ErrAgentOfferCandidatesInvariant, alias)
 	}
 
-	reviewers, err := readAgentOfferCandidateReviewers(ctx, tx, node, channelID, rosterHead, at)
+	reviewers, err := readAgentOfferCandidateReviewers(ctx, tx, node, channelID,
+		authority.channel, authority.roster, rosterHead, at)
 	if err != nil {
 		return AgentOfferCandidateChannel{}, fmt.Errorf("Channel %q: %w", alias, err)
 	}
@@ -380,7 +391,8 @@ func readAgentOfferCandidateChannel(ctx context.Context, tx *sql.Tx, node model.
 }
 
 func readAgentOfferCandidateReviewers(ctx context.Context, tx *sql.Tx, node model.Node,
-	channel model.ChannelID, roster model.RecordHead, at time.Time,
+	channelID model.ChannelID, channel model.Channel, verifiedRoster model.VerifiedRoster,
+	roster model.RecordHead, at time.Time,
 ) ([]AgentOfferCandidateReviewer, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT m.member_peer_id,m.origin_epoch,m.revision,m.record_hash,
 		m.public_key,m.created_at,b.effective_alias,b.multiaddrs_json,b.protocols_json,b.limits_json,
@@ -397,7 +409,7 @@ func readAgentOfferCandidateReviewers(ctx context.Context, tx *sql.Tx, node mode
 	WHERE m.channel_id=? AND m.member_peer_id<>? AND m.status='active'
 		AND m.revision=(SELECT MAX(latest.revision) FROM channel_members latest
 			WHERE latest.channel_id=m.channel_id AND latest.member_peer_id=m.member_peer_id)`,
-		node.PeerID().String(), node.OriginEpoch().String(), channel.String(), node.PeerID().String())
+		node.PeerID().String(), node.OriginEpoch().String(), channelID.String(), node.PeerID().String())
 	if err != nil {
 		return nil, fmt.Errorf("%w: read active reviewer bindings: %v", ErrAgentOfferCandidatesInvariant, err)
 	}
@@ -480,13 +492,15 @@ func readAgentOfferCandidateReviewers(ctx context.Context, tx *sql.Tx, node mode
 			lastSeen = &parsed
 		}
 		binding, err := model.NewPeerBinding(node.PeerID(), model.PeerBindingSpec{
-			ChannelID: channel, PeerID: peerID, OriginEpoch: epoch, EffectiveAlias: alias,
-			PublicKey: publicKey, Multiaddrs: multiaddrs, Protocols: protocols, Limits: limits,
-			MemberHead: memberHead, State: model.BindingActive,
+			Channel: channel, Roster: verifiedRoster,
+			PeerID: peerID, EffectiveAlias: alias,
+			State:        model.BindingActive,
 			Reachability: model.Reachability(reachabilityText), JoinedAt: joinedAt, LastSeenAt: lastSeen,
 		})
-		if err != nil || !equalAgentStrings(binding.Multiaddrs(), multiaddrs) ||
-			!equalAgentStrings(binding.Protocols(), protocols) {
+		if err != nil || binding.OriginEpoch() != epoch || binding.MemberHead() != memberHead ||
+			!bytes.Equal(binding.PublicKey(), publicKey) || !equalAgentStrings(binding.Multiaddrs(), multiaddrs) ||
+			!equalAgentStrings(binding.Protocols(), protocols) || binding.Limits().String() != limits.String() ||
+			binding.RosterHead() != roster {
 			return nil, fmt.Errorf("%w: active PeerBinding is not canonical: %v",
 				ErrAgentOfferCandidatesInvariant, err)
 		}

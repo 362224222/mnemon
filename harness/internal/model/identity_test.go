@@ -40,6 +40,10 @@ func TestIdentityReferences(t *testing.T) {
 	epoch, _ := ParseOriginEpoch("epoch-a")
 	eventID, _ := ParseEventID("event-a")
 	workID, _ := ParseWorkID("work-a")
+	grantID, err := ParseGrantID("grant-a")
+	if err != nil || grantID.String() != "grant-a" {
+		t.Fatalf("ParseGrantID() = %#v, %v", grantID, err)
+	}
 
 	work, err := NewWorkRef(peer, workID)
 	if err != nil || work.HomePeerID() != peer || work.WorkID() != workID {

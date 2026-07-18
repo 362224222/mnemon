@@ -326,16 +326,27 @@ func insertActivationClaimedHandling(t *testing.T, st *Store, node model.Node, p
 	t.Helper()
 	now := storeTime(profile.UpdatedAt())
 	recordHash := model.Sum([]byte("activation-member")).Bytes()
-	if _, err := st.db.Exec(`INSERT INTO channels(channel_id,name,local_alias,owner_peer_id,owner_public_key,
-		member_limit,roster_head_revision,roster_head_hash,status,topic_state,created_at,updated_at)
-		VALUES('channel-activation','Activation','activation',?,'key',2,1,?,'active','joined',?,?)`,
-		node.PeerID().String(), recordHash, now, now); err != nil {
+	tx, err := st.db.Begin()
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.db.Exec(`INSERT INTO channel_members(channel_id,revision,record_hash,member_peer_id,
-		origin_epoch,display_label,public_key,multiaddrs_json,status,signed_record_json,owner_signature,created_at)
-		VALUES('channel-activation',1,?,?,?,'local','key','[]','active','{}','sig',?)`,
+	defer tx.Rollback()
+	if _, err := tx.Exec(`INSERT INTO channels(channel_id,name,local_alias,owner_peer_id,owner_public_key,
+		descriptor_json,descriptor_digest,descriptor_signature,member_limit,roster_head_revision,
+		roster_head_hash,status,topic_state,created_at,updated_at)
+		VALUES('channel-activation','Activation','activation',?,'key','descriptor','descriptor-digest',
+		'descriptor-signature',2,1,?,'active','joined',?,?)`, node.PeerID().String(), recordHash,
+		now, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(`INSERT INTO channel_members(channel_id,revision,record_hash,member_peer_id,
+		origin_epoch,display_label,public_key,multiaddrs_json,protocols_json,limits_json,status,
+		signed_record_json,owner_signature,created_at)
+		VALUES('channel-activation',1,?,?,?,'local','key','[]','[]','{}','active','{}','sig',?)`,
 		recordHash, node.PeerID().String(), node.OriginEpoch().String(), now); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.db.Exec(`INSERT INTO events(event_id,schema_version,channel_id,origin_peer_id,origin_epoch,

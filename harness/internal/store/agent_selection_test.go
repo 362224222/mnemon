@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"strings"
@@ -10,15 +9,16 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
+	"github.com/mnemon-dev/mnemon/harness/internal/testkit"
 )
 
 func TestReadAgentOfferCandidatesFreezesVerifiedSnapshot(t *testing.T) {
 	t.Parallel()
 	fixture := newAgentCandidateFixture(t)
 	fixture.addChannel(t, "production", []agentCandidateRemote{
-		{peer: agentCandidatePeer(t, "candidate-a"), alias: "zulu", reachability: model.ReachabilityUnreachable},
-		{peer: agentCandidatePeer(t, "candidate-b"), alias: "alpha", reachability: model.ReachabilityReachable},
-		{peer: agentCandidatePeer(t, "candidate-c"), alias: "middle", reachability: model.ReachabilityUnknown},
+		fixture.remote(t, "candidate-a", "zulu", model.ReachabilityUnreachable),
+		fixture.remote(t, "candidate-b", "alpha", model.ReachabilityReachable),
+		fixture.remote(t, "candidate-c", "middle", model.ReachabilityUnknown),
 	})
 
 	snapshot, err := fixture.read()
@@ -27,7 +27,7 @@ func TestReadAgentOfferCandidatesFreezesVerifiedSnapshot(t *testing.T) {
 	}
 	channels := snapshot.Channels()
 	if len(channels) != 1 || channels[0].LocalAlias() != "production" ||
-		channels[0].ChannelID().String() != "channel-production" || channels[0].RosterHead().Revision() != 4 {
+		channels[0].ChannelID() != fixture.channelID("production") || channels[0].RosterHead().Revision() != 4 {
 		t.Fatalf("candidate Channel = %#v", channels)
 	}
 	reviewers := channels[0].Reviewers()
@@ -60,14 +60,12 @@ func TestReadAgentOfferCandidatesRereadsEligibility(t *testing.T) {
 
 	t.Run("outbound baseline and reachability are independent", func(t *testing.T) {
 		fixture := newAgentCandidateFixture(t)
-		first := agentCandidatePeer(t, "baseline-first")
-		second := agentCandidatePeer(t, "baseline-second")
+		firstRemote := fixture.remote(t, "baseline-first", "first", model.ReachabilityUnreachable)
+		secondRemote := fixture.remote(t, "baseline-second", "second", model.ReachabilityReachable)
+		firstRemote.omitOutboundBaseline = true
 		fixture.addChannel(t, "alpha", []agentCandidateRemote{
-			{peer: first, alias: "first", reachability: model.ReachabilityUnreachable},
-			{peer: second, alias: "second", reachability: model.ReachabilityReachable},
+			firstRemote, secondRemote,
 		})
-		mustExec(t, fixture.store, "DELETE FROM peer_pull_acks WHERE channel_id=? AND target_peer_id=?",
-			"channel-alpha", first.String())
 		snapshot, err := fixture.read()
 		if err != nil {
 			t.Fatal(err)
@@ -89,11 +87,11 @@ func TestReadAgentOfferCandidatesRereadsEligibility(t *testing.T) {
 	})
 	t.Run("reserved alias stays internal and never enters initiation context", func(t *testing.T) {
 		fixture := newAgentCandidateFixture(t)
-		peer := agentCandidatePeer(t, "reserved-alias")
-		fixture.addChannel(t, "alpha", []agentCandidateRemote{{peer: peer, alias: "reviewer",
-			reachability: model.ReachabilityReachable}})
+		remote := fixture.remote(t, "reserved-alias", "reviewer", model.ReachabilityReachable)
+		peer := remote.peer
+		fixture.addChannel(t, "alpha", []agentCandidateRemote{remote})
 		mustExec(t, fixture.store, "UPDATE peer_bindings SET effective_alias='team' WHERE channel_id=? AND peer_id=?",
-			"channel-alpha", peer.String())
+			fixture.channelID("alpha").String(), peer.String())
 		snapshot, err := fixture.read()
 		if err != nil || snapshot.Channels()[0].Reviewers()[0].EffectiveAlias() != "team" {
 			t.Fatalf("trusted candidate snapshot = (%#v, %v)", snapshot.Channels(), err)
@@ -109,37 +107,27 @@ func TestReadAgentOfferCandidatesRereadsEligibility(t *testing.T) {
 		want      error
 		wantCount int
 	}{
-		{name: "missing inbound baseline", wantCount: 1,
+		{name: "active binding missing inbound baseline", want: ErrAgentOfferCandidatesInvariant,
 			mutate: func(t *testing.T, fixture *agentCandidateFixture, peer model.PeerID) {
+				mustExec(t, fixture.store, "DROP TRIGGER peer_cursors_no_delete")
 				mustExec(t, fixture.store, "DELETE FROM peer_cursors WHERE channel_id=? AND origin_peer_id=?",
-					"channel-alpha", peer.String())
-			}},
-		{name: "selected protocol missing", wantCount: 1,
-			mutate: func(t *testing.T, fixture *agentCandidateFixture, peer model.PeerID) {
-				mustExec(t, fixture.store, `UPDATE peer_bindings SET protocols_json=?
-					WHERE channel_id=? AND peer_id=?`, []byte(`["/mnemon/channel/1","/mnemon/events/1"]`),
-					"channel-alpha", peer.String())
+					fixture.channelID("alpha").String(), peer.String())
 			}},
 		{name: "binding no longer active", wantCount: 0,
 			mutate: func(t *testing.T, fixture *agentCandidateFixture, peer model.PeerID) {
-				mustExec(t, fixture.store, "UPDATE peer_bindings SET state='pending' WHERE channel_id=? AND peer_id=?",
-					"channel-alpha", peer.String())
+				fixture.revokeMember(t, "alpha", peer)
 			}},
-		{name: "binding stale against latest member", wantCount: 0,
+		{name: "binding stale against latest member", want: ErrAgentOfferCandidatesInvariant,
 			mutate: func(t *testing.T, fixture *agentCandidateFixture, peer model.PeerID) {
 				fixture.appendActiveMember(t, "alpha", peer)
-			}},
-		{name: "roster head digest drift", want: ErrAgentOfferCandidatesInvariant,
-			mutate: func(t *testing.T, fixture *agentCandidateFixture, _ model.PeerID) {
-				mustExec(t, fixture.store, "UPDATE channels SET roster_head_hash=? WHERE channel_id=?",
-					model.Sum([]byte("drifted-roster-head")).Bytes(), "channel-alpha")
 			}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newAgentCandidateFixture(t)
-			peer := agentCandidatePeer(t, "mutated-"+strings.ReplaceAll(test.name, " ", "-"))
-			fixture.addChannel(t, "alpha", []agentCandidateRemote{{peer: peer, alias: "reviewer",
-				reachability: model.ReachabilityUnreachable}})
+			remote := fixture.remote(t, "mutated-"+strings.ReplaceAll(test.name, " ", "-"),
+				"reviewer", model.ReachabilityUnreachable)
+			peer := remote.peer
+			fixture.addChannel(t, "alpha", []agentCandidateRemote{remote})
 			test.mutate(t, fixture, peer)
 			snapshot, err := fixture.read()
 			if test.want != nil {
@@ -165,8 +153,8 @@ func TestReadAgentOfferCandidatesRereadsEligibility(t *testing.T) {
 func TestReadAgentOfferCandidatesRejectsInactiveAuthorityAndUntrustedTime(t *testing.T) {
 	t.Parallel()
 	fixture := newAgentCandidateFixture(t)
-	fixture.addChannel(t, "alpha", []agentCandidateRemote{{peer: agentCandidatePeer(t, "authority-reviewer"),
-		alias: "reviewer", reachability: model.ReachabilityReachable}})
+	fixture.addChannel(t, "alpha", []agentCandidateRemote{
+		fixture.remote(t, "authority-reviewer", "reviewer", model.ReachabilityReachable)})
 
 	staleSpec := fixture.profile.Spec()
 	staleSpec.ActiveAssetRevision = "asset-stale"
@@ -204,8 +192,8 @@ func TestReadAgentInitiationContextIsBoundedToActiveBindings(t *testing.T) {
 	fixture := newAgentCandidateFixture(t)
 	remotes := make([]agentCandidateRemote, model.MaxChildWorks)
 	for index := range remotes {
-		remotes[index] = agentCandidateRemote{peer: agentCandidatePeer(t, fmt.Sprintf("wide-%d", index)),
-			alias: fmt.Sprintf("reviewer-%d", index), reachability: model.ReachabilityUnknown}
+		remotes[index] = fixture.remote(t, fmt.Sprintf("wide-%d", index),
+			fmt.Sprintf("reviewer-%d", index), model.ReachabilityUnknown)
 		switch index % 3 {
 		case 1:
 			remotes[index].reachability = model.ReachabilityReachable
@@ -215,10 +203,8 @@ func TestReadAgentInitiationContextIsBoundedToActiveBindings(t *testing.T) {
 	}
 	fixture.addChannel(t, "channel-0", remotes)
 	for index := 1; index < model.MaxChannelsPerNode; index++ {
-		fixture.addChannel(t, fmt.Sprintf("channel-%d", index), []agentCandidateRemote{{
-			peer: agentCandidatePeer(t, fmt.Sprintf("narrow-%d", index)), alias: "reviewer",
-			reachability: model.ReachabilityUnknown,
-		}})
+		fixture.addChannel(t, fmt.Sprintf("channel-%d", index), []agentCandidateRemote{
+			fixture.remote(t, fmt.Sprintf("narrow-%d", index), "reviewer", model.ReachabilityUnknown)})
 	}
 
 	contextView, err := fixture.store.ReadAgentInitiationContext(context.Background(), fixture.profile, fixture.now)
@@ -243,8 +229,7 @@ func TestReadAgentInitiationContextIsBoundedToActiveBindings(t *testing.T) {
 		t.Fatalf("identity-free initiation projection = %s, %v", projection.String(), err)
 	}
 
-	mustExec(t, fixture.store, "UPDATE peer_bindings SET state='pending' WHERE channel_id=? AND peer_id=?",
-		"channel-channel-0", remotes[0].peer.String())
+	fixture.revokeMember(t, "channel-0", remotes[0].peer)
 	contextView, err = fixture.store.ReadAgentInitiationContext(context.Background(), fixture.profile, fixture.now)
 	if err != nil {
 		t.Fatal(err)
@@ -255,27 +240,35 @@ func TestReadAgentInitiationContextIsBoundedToActiveBindings(t *testing.T) {
 }
 
 type agentCandidateRemote struct {
-	peer         model.PeerID
-	alias        string
-	reachability model.Reachability
+	peer                 model.PeerID
+	alias                string
+	reachability         model.Reachability
+	omitOutboundBaseline bool
 }
 
 type agentCandidateFixture struct {
-	store   *Store
-	node    model.Node
-	profile model.Profile
-	now     time.Time
+	store      *Store
+	node       model.Node
+	profile    model.Profile
+	now        time.Time
+	local      testkit.Identity
+	identities map[model.PeerID]testkit.Identity
+	channels   map[string]*testkit.SignedChannel
 }
 
 func newAgentCandidateFixture(t *testing.T) *agentCandidateFixture {
 	t.Helper()
 	store := openTestStore(t)
-	local := agentCandidatePeer(t, "local-"+t.Name())
-	node, profile := bootstrapValues(t, local.String(), "principal-agent-candidate-"+agentCandidateSlug(t.Name()),
-		"/workspace/agent-candidate/"+agentCandidateSlug(t.Name()))
+	local := testkit.NewIdentity(t, "local-"+t.Name())
+	createdAt := time.Date(2026, 7, 16, 12, 0, 0, 123, time.UTC)
+	node, profile := signedBootstrapValues(t, local,
+		"principal-agent-candidate-"+agentCandidateSlug(t.Name()),
+		"/workspace/agent-candidate/"+agentCandidateSlug(t.Name()), createdAt)
 	node, profile = activateTestNode(t, store, node, profile)
 	return &agentCandidateFixture{store: store, node: node, profile: profile,
-		now: profile.UpdatedAt().Add(time.Hour)}
+		now: profile.UpdatedAt().Add(time.Hour), local: local,
+		identities: map[model.PeerID]testkit.Identity{local.PeerID(): local},
+		channels:   make(map[string]*testkit.SignedChannel)}
 }
 
 func (fixture *agentCandidateFixture) read() (AgentOfferCandidates, error) {
@@ -289,90 +282,91 @@ func (fixture *agentCandidateFixture) addChannel(t *testing.T, alias string,
 	if len(remotes) == 0 || len(remotes) > model.MaxChildWorks {
 		t.Fatalf("invalid remote fixture count %d", len(remotes))
 	}
-	channelID := "channel-" + alias
 	created := fixture.profile.UpdatedAt().Add(time.Minute)
-	createdText := storeTime(created)
-	localKey := []byte("local-public-key-" + alias)
-	hashes := make([]model.Digest, len(remotes)+1)
-	for index := range hashes {
-		hashes[index] = model.Sum([]byte(fmt.Sprintf("%s-member-%d", alias, index)))
+	signed := testkit.NewSignedChannelForOwnerAt(t, "agent-candidate-"+alias, fixture.local, created)
+	for _, remote := range remotes {
+		identity, ok := fixture.identities[remote.peer]
+		if !ok {
+			t.Fatalf("remote %s has no deterministic identity", remote.peer.String())
+		}
+		signed.AppendActiveIdentity(t, identity)
 	}
-	mustExec(t, fixture.store, `INSERT INTO channels(channel_id,name,local_alias,owner_peer_id,owner_public_key,
-		member_limit,roster_head_revision,roster_head_hash,status,topic_state,created_at,updated_at)
-		VALUES(?,?,?,?,?,8,?,?,'active','joined',?,?)`, channelID, "Channel "+alias, alias,
-		fixture.node.PeerID().String(), localKey, len(hashes), hashes[len(hashes)-1].Bytes(), createdText, createdText)
-	mustExec(t, fixture.store, `INSERT INTO channel_members(channel_id,revision,record_hash,previous_hash,
-		member_peer_id,origin_epoch,display_label,public_key,multiaddrs_json,status,signed_record_json,
-		owner_signature,created_at) VALUES(?,1,?,NULL,?,?,?,?,?,'active',?,?,?)`, channelID,
-		hashes[0].Bytes(), fixture.node.PeerID().String(), fixture.node.OriginEpoch().String(), "local", localKey,
-		[]byte(`[]`), []byte(`{}`), []byte("owner-signature"), createdText)
+	fixture.channels[alias] = signed
+	insertSignedChannelFixture(t, fixture.store.db, signed, model.TopicJoined)
+	mustExec(t, fixture.store, "UPDATE channels SET local_alias=? WHERE channel_id=?", alias,
+		signed.Channel().ID().String())
+	createdText := storeTime(signed.Channel().UpdatedAt())
 	mustExec(t, fixture.store, `INSERT INTO publication_epochs(channel_id,origin_peer_id,origin_epoch,
-		source_floor_channel_seq,source_head_channel_seq,updated_at) VALUES(?,?,?,1,0,?)`, channelID,
+		source_floor_channel_seq,source_head_channel_seq,updated_at) VALUES(?,?,?,1,0,?)`,
+		signed.Channel().ID().String(),
 		fixture.node.PeerID().String(), fixture.node.OriginEpoch().String(), createdText)
 
+	members := signed.Members()
 	for index, remote := range remotes {
-		revision := index + 2
-		epoch := "epoch-" + remote.peer.String()
-		publicKey := []byte("remote-public-key-" + remote.peer.String())
-		mustExec(t, fixture.store, `INSERT INTO channel_members(channel_id,revision,record_hash,previous_hash,
-			member_peer_id,origin_epoch,display_label,public_key,multiaddrs_json,status,signed_record_json,
-			owner_signature,created_at) VALUES(?,?,?,?,?,?,?,?,?,'active',?,?,?)`, channelID, revision,
-			hashes[index+1].Bytes(), hashes[index].Bytes(), remote.peer.String(), epoch, remote.alias,
-			publicKey, []byte(`[]`), []byte(`{}`), []byte("owner-signature"), createdText)
-		mustExec(t, fixture.store, `INSERT INTO peer_bindings(channel_id,peer_id,origin_epoch,effective_alias,
-			public_key,multiaddrs_json,protocols_json,limits_json,member_revision,member_record_hash,state,
-			reachability,joined_at) VALUES(?,?,?,?,?,?,?,?,?,?,'pending',?,?)`, channelID, remote.peer.String(),
-			epoch, remote.alias, publicKey, []byte(`[]`), agentCandidateProtocols(),
-			[]byte(`{"frame_bytes":65536}`), revision, hashes[index+1].Bytes(),
-			string(remote.reachability), createdText)
+		member := members[index+1]
+		insertSignedPeerBinding(t, fixture.store.db, signed.Channel().ID(), member, remote.alias,
+			model.BindingPending, remote.reachability, signed.Channel().UpdatedAt())
+		epoch := member.Identity().OriginEpoch().String()
 		mustExec(t, fixture.store, `INSERT INTO peer_cursors(channel_id,origin_peer_id,origin_epoch,
 			baseline_channel_seq,contiguous_channel_seq,observed_channel_seq,updated_at) VALUES(?,?,?,0,0,0,?)`,
-			channelID, remote.peer.String(), epoch, createdText)
+			signed.Channel().ID().String(), remote.peer.String(), epoch, createdText)
 		mustExec(t, fixture.store, "UPDATE peer_bindings SET state='active' WHERE channel_id=? AND peer_id=?",
-			channelID, remote.peer.String())
-		mustExec(t, fixture.store, `INSERT INTO peer_pull_acks(channel_id,target_peer_id,origin_peer_id,
-			origin_epoch,baseline_channel_seq,acknowledged_channel_seq,baseline_confirmed_at,updated_at)
-			VALUES(?,?,?,?,0,0,?,?)`, channelID, remote.peer.String(), fixture.node.PeerID().String(),
-			fixture.node.OriginEpoch().String(), createdText, createdText)
+			signed.Channel().ID().String(), remote.peer.String())
+		if !remote.omitOutboundBaseline {
+			mustExec(t, fixture.store, `INSERT INTO peer_pull_acks(channel_id,target_peer_id,origin_peer_id,
+				origin_epoch,baseline_channel_seq,acknowledged_channel_seq,baseline_confirmed_at,updated_at)
+				VALUES(?,?,?,?,0,0,?,?)`, signed.Channel().ID().String(), remote.peer.String(),
+				fixture.node.PeerID().String(),
+				fixture.node.OriginEpoch().String(), createdText, createdText)
+		}
 	}
 }
 
 func (fixture *agentCandidateFixture) appendActiveMember(t *testing.T, alias string, peer model.PeerID) {
 	t.Helper()
-	channelID := "channel-" + alias
-	var revision uint64
-	var previousHash, publicKey []byte
-	var epoch, displayLabel string
-	if err := fixture.store.db.QueryRow(`SELECT c.roster_head_revision,c.roster_head_hash,m.origin_epoch,
-		m.display_label,m.public_key FROM channels c JOIN channel_members m ON m.channel_id=c.channel_id
-		AND m.member_peer_id=? WHERE c.channel_id=? ORDER BY m.revision DESC LIMIT 1`, peer.String(), channelID).
-		Scan(&revision, &previousHash, &epoch, &displayLabel, &publicKey); err != nil {
-		t.Fatal(err)
-	}
-	revision++
-	hash := model.Sum([]byte(fmt.Sprintf("%s-latest-%d", alias, revision)))
-	created := fixture.now.Add(-time.Minute)
+	signed := fixture.channels[alias]
+	memberFixture := signed.AppendActiveUpdate(t, peer)
+	member := memberFixture.Projection()
+	memberCreatedAt := storeTime(memberFixture.Member().CreatedAt())
 	mustExec(t, fixture.store, `INSERT INTO channel_members(channel_id,revision,record_hash,previous_hash,
-		member_peer_id,origin_epoch,display_label,public_key,multiaddrs_json,status,signed_record_json,
-		owner_signature,created_at) VALUES(?,?,?,?,?,?,?,?,?,'active',?,?,?)`, channelID, revision,
-		hash.Bytes(), previousHash, peer.String(), epoch, displayLabel, publicKey, []byte(`[]`), []byte(`{}`),
-		[]byte("owner-signature"), storeTime(created))
+		member_peer_id,origin_epoch,display_label,public_key,multiaddrs_json,protocols_json,limits_json,
+		status,signed_record_json,owner_signature,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		member.ChannelID, member.Revision, member.RecordHash, member.PreviousHash, member.MemberPeerID,
+		member.OriginEpoch, member.DisplayLabel, member.PublicKey, member.MultiaddrsJSON, member.ProtocolsJSON,
+		member.LimitsJSON, member.Status, member.SignedRecordJSON, member.OwnerSignature, memberCreatedAt)
 	mustExec(t, fixture.store, `UPDATE channels SET roster_head_revision=?,roster_head_hash=?,updated_at=?
-		WHERE channel_id=?`, revision, hash.Bytes(), storeTime(created), channelID)
+		WHERE channel_id=?`, member.Revision, member.RecordHash, memberCreatedAt, member.ChannelID)
 }
 
-func agentCandidateProtocols() []byte {
-	return []byte(`["/mnemon/artifacts/1","/mnemon/channel/1","/mnemon/events/1"]`)
-}
-
-func agentCandidatePeer(t *testing.T, label string) model.PeerID {
+func (fixture *agentCandidateFixture) revokeMember(t *testing.T, alias string, peer model.PeerID) {
 	t.Helper()
-	digest := sha256.Sum256([]byte(label))
-	peerID, err := model.ParsePeerID(fmt.Sprintf("peer-%x", digest[:]))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return peerID
+	signed := fixture.channels[alias]
+	memberFixture := signed.AppendTerminal(t, peer, model.MemberRevoked)
+	member := memberFixture.Projection()
+	memberCreatedAt := storeTime(memberFixture.Member().CreatedAt())
+	mustExec(t, fixture.store, `INSERT INTO channel_members(channel_id,revision,record_hash,previous_hash,
+		member_peer_id,origin_epoch,display_label,public_key,multiaddrs_json,protocols_json,limits_json,
+		status,signed_record_json,owner_signature,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		member.ChannelID, member.Revision, member.RecordHash, member.PreviousHash, member.MemberPeerID,
+		member.OriginEpoch, member.DisplayLabel, member.PublicKey, member.MultiaddrsJSON, member.ProtocolsJSON,
+		member.LimitsJSON, member.Status, member.SignedRecordJSON, member.OwnerSignature, memberCreatedAt)
+	mustExec(t, fixture.store, `UPDATE channels SET roster_head_revision=?,roster_head_hash=?,updated_at=?
+		WHERE channel_id=?`, member.Revision, member.RecordHash, memberCreatedAt, member.ChannelID)
+	mustExec(t, fixture.store, `UPDATE peer_bindings SET member_revision=?,member_record_hash=?,state='revoked'
+		WHERE channel_id=? AND peer_id=?`, member.Revision, member.RecordHash, member.ChannelID, peer.String())
+}
+
+func (fixture *agentCandidateFixture) remote(t *testing.T, seed, alias string,
+	reachability model.Reachability,
+) agentCandidateRemote {
+	t.Helper()
+	identity := testkit.NewIdentity(t, seed)
+	fixture.identities[identity.PeerID()] = identity
+	return agentCandidateRemote{peer: identity.PeerID(), alias: alias, reachability: reachability}
+}
+
+func (fixture *agentCandidateFixture) channelID(alias string) model.ChannelID {
+	return fixture.channels[alias].Channel().ID()
 }
 
 func agentCandidateSlug(value string) string {

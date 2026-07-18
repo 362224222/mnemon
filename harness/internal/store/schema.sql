@@ -703,6 +703,9 @@ CREATE TABLE channels (
   local_alias        TEXT NOT NULL UNIQUE,
   owner_peer_id      TEXT NOT NULL,
   owner_public_key   BLOB NOT NULL,
+  descriptor_json    BLOB NOT NULL,
+  descriptor_digest  BLOB NOT NULL UNIQUE,
+  descriptor_signature BLOB NOT NULL,
   member_limit       INTEGER NOT NULL DEFAULT 8 CHECK (member_limit BETWEEN 2 AND 8),
   roster_head_revision INTEGER NOT NULL CHECK (roster_head_revision > 0),
   roster_head_hash   BLOB NOT NULL,
@@ -714,6 +717,9 @@ CREATE TABLE channels (
   ),
   created_at         TEXT NOT NULL,
   updated_at         TEXT NOT NULL,
+  FOREIGN KEY (channel_id, roster_head_revision, roster_head_hash)
+    REFERENCES channel_members(channel_id, revision, record_hash)
+    DEFERRABLE INITIALLY DEFERRED,
   CHECK (
     status = 'active'
     OR (status = 'conflicted' AND topic_state IN ('blocked','left'))
@@ -729,6 +735,32 @@ WHEN NEW.status IN ('active','leaving','conflicted')
    WHERE status IN ('active','leaving','conflicted')
  ) >= 8
 BEGIN SELECT RAISE(ABORT, 'node_channel_limit'); END;
+
+CREATE TRIGGER channels_descriptor_immutable
+BEFORE UPDATE OF channel_id, name, owner_peer_id, owner_public_key, descriptor_json,
+  descriptor_digest, descriptor_signature, member_limit, created_at ON channels
+WHEN NEW.channel_id <> OLD.channel_id
+  OR NEW.name <> OLD.name
+  OR NEW.owner_peer_id <> OLD.owner_peer_id
+  OR NEW.owner_public_key <> OLD.owner_public_key
+  OR NEW.descriptor_json <> OLD.descriptor_json
+  OR NEW.descriptor_digest <> OLD.descriptor_digest
+  OR NEW.descriptor_signature <> OLD.descriptor_signature
+  OR NEW.member_limit <> OLD.member_limit
+  OR NEW.created_at <> OLD.created_at
+BEGIN SELECT RAISE(ABORT, 'channel descriptor evidence is immutable'); END;
+
+CREATE TRIGGER channels_no_delete BEFORE DELETE ON channels
+BEGIN SELECT RAISE(ABORT, 'channel descriptor evidence is permanent'); END;
+
+CREATE TRIGGER channels_roster_head_monotonic
+BEFORE UPDATE OF roster_head_revision, roster_head_hash ON channels
+WHEN NEW.roster_head_revision < OLD.roster_head_revision
+  OR (
+    NEW.roster_head_revision = OLD.roster_head_revision
+    AND NEW.roster_head_hash <> OLD.roster_head_hash
+  )
+BEGIN SELECT RAISE(ABORT, 'channel roster head cannot regress or fork in place'); END;
 
 CREATE TRIGGER channels_terminal_status_update
 BEFORE UPDATE OF status ON channels
@@ -755,13 +787,23 @@ CREATE TABLE channel_members (
   display_label      TEXT NOT NULL,
   public_key         BLOB NOT NULL,
   multiaddrs_json    BLOB NOT NULL,
+  protocols_json     BLOB NOT NULL,
+  limits_json        BLOB NOT NULL,
   status             TEXT NOT NULL CHECK (status IN ('active','left','revoked')),
   signed_record_json BLOB NOT NULL,
   owner_signature    BLOB NOT NULL,
   created_at         TEXT NOT NULL,
   PRIMARY KEY (channel_id, revision),
   UNIQUE (channel_id, record_hash),
-  UNIQUE (channel_id, revision, record_hash)
+  UNIQUE (channel_id, revision, record_hash),
+  UNIQUE (channel_id, revision, record_hash, member_peer_id),
+  UNIQUE (
+    channel_id, revision, record_hash, member_peer_id, origin_epoch, public_key,
+    multiaddrs_json, protocols_json, limits_json
+  ),
+  FOREIGN KEY (channel_id, previous_hash)
+    REFERENCES channel_members(channel_id, record_hash)
+    DEFERRABLE INITIALLY DEFERRED
 );
 
 CREATE TRIGGER channel_members_no_update BEFORE UPDATE ON channel_members
@@ -791,6 +833,10 @@ CREATE TRIGGER channel_conflicts_no_update BEFORE UPDATE ON channel_conflicts
 BEGIN SELECT RAISE(ABORT, 'channel conflict evidence is immutable'); END;
 CREATE TRIGGER channel_conflicts_no_delete BEFORE DELETE ON channel_conflicts
 BEGIN SELECT RAISE(ABORT, 'channel conflict evidence is permanent'); END;
+
+CREATE TRIGGER channel_conflicts_limit_insert BEFORE INSERT ON channel_conflicts
+WHEN (SELECT COUNT(*) FROM channel_conflicts WHERE channel_id = NEW.channel_id) >= 8
+BEGIN SELECT RAISE(ABORT, 'channel conflict evidence limit reached'); END;
 
 CREATE TRIGGER channels_conflicted_requires_evidence
 BEFORE UPDATE OF status ON channels
@@ -837,34 +883,127 @@ CREATE TABLE enrollment_grants (
   channel_id         TEXT NOT NULL REFERENCES channels(channel_id),
   verifier           BLOB NOT NULL,
   expires_at         TEXT NOT NULL,
-  max_uses           INTEGER NOT NULL CHECK (max_uses > 0),
+  max_uses           INTEGER NOT NULL CHECK (max_uses BETWEEN 1 AND 7),
   used_uses          INTEGER NOT NULL DEFAULT 0 CHECK (used_uses >= 0 AND used_uses <= max_uses),
   status             TEXT NOT NULL CHECK (status IN ('open','closed','expired','exhausted')),
   created_at         TEXT NOT NULL,
-  closed_at          TEXT
+  closed_at          TEXT,
+  UNIQUE (grant_id, channel_id),
+  CHECK (expires_at > created_at),
+  CHECK (closed_at IS NULL OR closed_at >= created_at),
+  CHECK (
+    (status = 'open' AND used_uses < max_uses AND closed_at IS NULL)
+    OR (status = 'exhausted' AND used_uses = max_uses AND closed_at IS NOT NULL)
+    OR (status IN ('closed','expired') AND closed_at IS NOT NULL)
+  )
 );
 
 CREATE UNIQUE INDEX enrollment_grants_one_open_idx
   ON enrollment_grants(channel_id) WHERE status = 'open';
+
+CREATE TRIGGER enrollment_grants_initial_state_insert
+BEFORE INSERT ON enrollment_grants
+WHEN NEW.used_uses <> 0 OR NEW.status <> 'open' OR NEW.closed_at IS NOT NULL
+BEGIN SELECT RAISE(ABORT, 'enrollment grant must begin open and unused'); END;
+
+CREATE TRIGGER enrollment_grants_identity_immutable
+BEFORE UPDATE OF grant_id, channel_id, verifier, expires_at, max_uses, created_at ON enrollment_grants
+WHEN NEW.grant_id <> OLD.grant_id
+  OR NEW.channel_id <> OLD.channel_id
+  OR NEW.verifier <> OLD.verifier
+  OR NEW.expires_at <> OLD.expires_at
+  OR NEW.max_uses <> OLD.max_uses
+  OR NEW.created_at <> OLD.created_at
+BEGIN SELECT RAISE(ABORT, 'enrollment grant identity is immutable'); END;
+
+CREATE TRIGGER enrollment_grants_no_delete BEFORE DELETE ON enrollment_grants
+BEGIN SELECT RAISE(ABORT, 'enrollment grant evidence is permanent'); END;
+
+CREATE TRIGGER enrollment_grants_state_update
+BEFORE UPDATE OF used_uses, status, closed_at ON enrollment_grants
+WHEN NEW.used_uses < OLD.used_uses
+  OR NEW.used_uses > OLD.used_uses + 1
+  OR NEW.used_uses <> (
+    SELECT COUNT(*) FROM enrollment_grant_uses WHERE grant_id = NEW.grant_id
+  )
+  OR (
+    OLD.status <> 'open'
+    AND (
+      NEW.used_uses <> OLD.used_uses
+      OR NEW.status <> OLD.status
+      OR NEW.closed_at IS NOT OLD.closed_at
+    )
+  )
+  OR (OLD.closed_at IS NOT NULL AND NEW.closed_at IS NOT OLD.closed_at)
+BEGIN SELECT RAISE(ABORT, 'enrollment grant state is monotonic and terminal'); END;
 
 CREATE TABLE enrollment_grant_uses (
   use_id             TEXT PRIMARY KEY,
   grant_id           TEXT NOT NULL REFERENCES enrollment_grants(grant_id),
   channel_id         TEXT NOT NULL,
   member_peer_id     TEXT NOT NULL,
-  request_digest     BLOB NOT NULL,
+  join_identity_digest BLOB NOT NULL,
   member_revision    INTEGER NOT NULL,
   member_record_hash BLOB NOT NULL,
   used_at            TEXT NOT NULL,
+  CHECK (member_revision > 1),
   UNIQUE (grant_id, member_peer_id),
-  UNIQUE (grant_id, request_digest),
-  FOREIGN KEY (channel_id, member_revision, member_record_hash)
-    REFERENCES channel_members(channel_id, revision, record_hash)
+  UNIQUE (grant_id, join_identity_digest),
+  UNIQUE (channel_id, member_peer_id),
+  UNIQUE (use_id, channel_id, member_peer_id),
+  UNIQUE (
+    use_id, channel_id, member_peer_id, member_revision, member_record_hash
+  ),
+  FOREIGN KEY (grant_id, channel_id)
+    REFERENCES enrollment_grants(grant_id, channel_id),
+  FOREIGN KEY (channel_id, member_revision, member_record_hash, member_peer_id)
+    REFERENCES channel_members(channel_id, revision, record_hash, member_peer_id)
 );
+
+CREATE TRIGGER enrollment_grant_uses_validate_insert
+BEFORE INSERT ON enrollment_grant_uses
+WHEN NOT EXISTS (
+  SELECT 1
+  FROM enrollment_grants grant_state
+  JOIN channel_members member
+    ON member.channel_id = NEW.channel_id
+    AND member.revision = NEW.member_revision
+    AND member.record_hash = NEW.member_record_hash
+    AND member.member_peer_id = NEW.member_peer_id
+  WHERE grant_state.grant_id = NEW.grant_id
+    AND grant_state.channel_id = NEW.channel_id
+    AND grant_state.status = 'open'
+    AND grant_state.used_uses < grant_state.max_uses
+    AND grant_state.used_uses = (
+      SELECT COUNT(*) FROM enrollment_grant_uses prior
+      WHERE prior.grant_id = NEW.grant_id
+    )
+    AND member.status = 'active'
+    AND member.revision > 1
+    AND NEW.used_at >= grant_state.created_at
+    AND NEW.used_at < grant_state.expires_at
+    AND NEW.used_at >= member.created_at
+)
+BEGIN SELECT RAISE(ABORT, 'grant use requires open consistent grant and active join record'); END;
+
+CREATE TRIGGER enrollment_grant_uses_account_insert
+AFTER INSERT ON enrollment_grant_uses
+BEGIN
+  UPDATE enrollment_grants
+  SET used_uses = used_uses + 1,
+      status = CASE WHEN used_uses + 1 = max_uses THEN 'exhausted' ELSE 'open' END,
+      closed_at = CASE WHEN used_uses + 1 = max_uses THEN NEW.used_at ELSE NULL END
+  WHERE grant_id = NEW.grant_id;
+END;
+
+CREATE TRIGGER enrollment_grant_uses_no_update BEFORE UPDATE ON enrollment_grant_uses
+BEGIN SELECT RAISE(ABORT, 'enrollment grant use evidence is immutable'); END;
+CREATE TRIGGER enrollment_grant_uses_no_delete BEFORE DELETE ON enrollment_grant_uses
+BEGIN SELECT RAISE(ABORT, 'enrollment grant use evidence is permanent'); END;
 
 CREATE TABLE enrollment_receipts (
   receipt_id         TEXT PRIMARY KEY,
-  owner_use_id       TEXT UNIQUE REFERENCES enrollment_grant_uses(use_id),
+  owner_use_id       TEXT UNIQUE,
   channel_id         TEXT NOT NULL REFERENCES channels(channel_id),
   member_peer_id     TEXT NOT NULL,
   roster_head_revision INTEGER NOT NULL,
@@ -872,9 +1011,33 @@ CREATE TABLE enrollment_receipts (
   receipt_json       BLOB NOT NULL,
   owner_signature    BLOB NOT NULL,
   created_at         TEXT NOT NULL,
-  FOREIGN KEY (channel_id, roster_head_revision, roster_head_hash)
-    REFERENCES channel_members(channel_id, revision, record_hash)
+  CHECK (roster_head_revision > 1),
+  FOREIGN KEY (channel_id, roster_head_revision, roster_head_hash, member_peer_id)
+    REFERENCES channel_members(channel_id, revision, record_hash, member_peer_id),
+  FOREIGN KEY (
+    owner_use_id, channel_id, member_peer_id, roster_head_revision, roster_head_hash
+  ) REFERENCES enrollment_grant_uses(
+    use_id, channel_id, member_peer_id, member_revision, member_record_hash
+  )
 );
+
+CREATE TRIGGER enrollment_receipts_owner_evidence_insert
+BEFORE INSERT ON enrollment_receipts
+WHEN NEW.owner_use_id IS NOT NULL AND NOT EXISTS (
+  SELECT 1 FROM enrollment_grant_uses
+  WHERE use_id = NEW.owner_use_id
+    AND channel_id = NEW.channel_id
+    AND member_peer_id = NEW.member_peer_id
+    AND member_revision = NEW.roster_head_revision
+    AND member_record_hash = NEW.roster_head_hash
+    AND used_at <= NEW.created_at
+)
+BEGIN SELECT RAISE(ABORT, 'owner receipt must match its grant use evidence'); END;
+
+CREATE TRIGGER enrollment_receipts_no_update BEFORE UPDATE ON enrollment_receipts
+BEGIN SELECT RAISE(ABORT, 'enrollment receipt evidence is immutable'); END;
+CREATE TRIGGER enrollment_receipts_no_delete BEFORE DELETE ON enrollment_receipts
+BEGIN SELECT RAISE(ABORT, 'enrollment receipt evidence is permanent'); END;
 
 CREATE TABLE channel_leave_requests (
   request_id         TEXT PRIMARY KEY,
@@ -914,13 +1077,47 @@ CREATE TABLE peer_bindings (
   last_seen_at       TEXT,
   PRIMARY KEY (channel_id, peer_id),
   UNIQUE (channel_id, effective_alias),
-  FOREIGN KEY (channel_id, member_revision, member_record_hash)
-    REFERENCES channel_members(channel_id, revision, record_hash)
+  FOREIGN KEY (
+    channel_id, member_revision, member_record_hash, peer_id, origin_epoch, public_key,
+    multiaddrs_json, protocols_json, limits_json
+  ) REFERENCES channel_members(
+    channel_id, revision, record_hash, member_peer_id, origin_epoch, public_key,
+    multiaddrs_json, protocols_json, limits_json
+  )
 );
 
 CREATE TRIGGER peer_bindings_no_self_insert BEFORE INSERT ON peer_bindings
 WHEN EXISTS (SELECT 1 FROM node WHERE peer_id = NEW.peer_id)
 BEGIN SELECT RAISE(ABORT, 'self peer binding forbidden'); END;
+
+CREATE TRIGGER peer_bindings_member_state_insert BEFORE INSERT ON peer_bindings
+WHEN NOT EXISTS (
+  SELECT 1 FROM channel_members
+  WHERE channel_id = NEW.channel_id
+    AND revision = NEW.member_revision
+    AND record_hash = NEW.member_record_hash
+    AND member_peer_id = NEW.peer_id
+    AND (
+      (NEW.state IN ('pending','active') AND status = 'active')
+      OR (NEW.state = 'revoked' AND status IN ('left','revoked'))
+    )
+)
+BEGIN SELECT RAISE(ABORT, 'binding state must match member record'); END;
+
+CREATE TRIGGER peer_bindings_member_state_update
+BEFORE UPDATE OF channel_id, peer_id, member_revision, member_record_hash, state ON peer_bindings
+WHEN NOT EXISTS (
+  SELECT 1 FROM channel_members
+  WHERE channel_id = NEW.channel_id
+    AND revision = NEW.member_revision
+    AND record_hash = NEW.member_record_hash
+    AND member_peer_id = NEW.peer_id
+    AND (
+      (NEW.state IN ('pending','active') AND status = 'active')
+      OR (NEW.state = 'revoked' AND status IN ('left','revoked'))
+    )
+)
+BEGIN SELECT RAISE(ABORT, 'binding state must match member record'); END;
 
 CREATE TRIGGER peer_bindings_no_self_update
 BEFORE UPDATE OF peer_id ON peer_bindings
@@ -938,6 +1135,11 @@ CREATE TRIGGER peer_bindings_revoked_terminal
 BEFORE UPDATE OF state ON peer_bindings
 WHEN OLD.state = 'revoked' AND NEW.state <> 'revoked'
 BEGIN SELECT RAISE(ABORT, 'revoked binding is terminal'); END;
+
+CREATE TRIGGER peer_bindings_active_no_pending
+BEFORE UPDATE OF state ON peer_bindings
+WHEN OLD.state = 'active' AND NEW.state = 'pending'
+BEGIN SELECT RAISE(ABORT, 'active binding cannot return to pending'); END;
 
 CREATE TRIGGER events_imported_binding_insert
 BEFORE INSERT ON events
@@ -1318,6 +1520,9 @@ WHEN NEW.contiguous_channel_seq < OLD.contiguous_channel_seq
   OR NEW.observed_channel_seq < OLD.observed_channel_seq
 BEGIN SELECT RAISE(ABORT, 'cursor cannot move backward'); END;
 
+CREATE TRIGGER peer_cursors_no_delete BEFORE DELETE ON peer_cursors
+BEGIN SELECT RAISE(ABORT, 'peer cursor baseline evidence is durable'); END;
+
 CREATE TRIGGER peer_bindings_no_active_insert BEFORE INSERT ON peer_bindings
 WHEN NEW.state = 'active'
 BEGIN SELECT RAISE(ABORT, 'binding must activate through baseline transaction'); END;
@@ -1412,6 +1617,9 @@ BEFORE UPDATE OF baseline_confirmed_at ON peer_pull_acks
 WHEN OLD.baseline_confirmed_at IS NOT NULL
   AND NEW.baseline_confirmed_at IS NOT OLD.baseline_confirmed_at
 BEGIN SELECT RAISE(ABORT, 'baseline confirmation is immutable'); END;
+
+CREATE TRIGGER peer_pull_acks_no_delete BEFORE DELETE ON peer_pull_acks
+BEGIN SELECT RAISE(ABORT, 'pull ack baseline evidence is durable'); END;
 
 CREATE TRIGGER peer_deliveries_binding_ready_insert BEFORE INSERT ON peer_deliveries
 WHEN NOT EXISTS (

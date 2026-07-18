@@ -1,6 +1,7 @@
 package model
 
 import (
+	"crypto/ed25519"
 	"errors"
 	"testing"
 	"time"
@@ -24,10 +25,20 @@ func TestChannelStatusTopicMatrixAndCopies(t *testing.T) {
 
 	now := time.Date(2026, 7, 16, 0, 0, 0, 0, time.UTC)
 	channelID, _ := ParseChannelID("channel-a")
+	owner, key, privateKey := canonicalDescriptorIdentity(t, "channel-owner")
+	descriptor, err := NewChannelDescriptor(ChannelDescriptorSpec{ID: channelID, Name: "Review Team",
+		OwnerPeerID: owner, OwnerPublicKey: key, MemberLimit: 8, CreatedAt: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _ := ChannelDescriptorSigningMessage(channelID, descriptor.Digest())
+	signed, err := AttachChannelDescriptorSignature(descriptor, ed25519.Sign(privateKey, message))
+	if err != nil {
+		t.Fatal(err)
+	}
 	head, _ := NewRecordHead(1, Sum([]byte("roster")))
-	key := []byte("owner-public-key")
-	spec := ChannelSpec{channelID, "Review Team", "review-team", mustPeer(t, "peer-owner"), key,
-		8, head, ChannelActive, TopicJoined, now, now}
+	spec := ChannelSpec{Descriptor: signed, LocalAlias: "review-team", RosterHead: head,
+		Status: ChannelActive, TopicState: TopicJoined, UpdatedAt: now}
 	channel, err := NewChannel(spec)
 	if err != nil {
 		t.Fatalf("NewChannel() error = %v", err)
@@ -35,7 +46,7 @@ func TestChannelStatusTopicMatrixAndCopies(t *testing.T) {
 	key[0] = 'x'
 	got := channel.OwnerPublicKey()
 	got[0] = 'y'
-	if string(channel.OwnerPublicKey()) != "owner-public-key" {
+	if !ed25519.PublicKey(channel.OwnerPublicKey()).Equal(privateKey.Public()) {
 		t.Fatalf("Channel public key is mutable")
 	}
 
@@ -46,31 +57,5 @@ func TestChannelStatusTopicMatrixAndCopies(t *testing.T) {
 	spec.Status, spec.TopicState = ChannelLeft, TopicLeft
 	if _, err := NewChannel(spec); err != nil {
 		t.Fatalf("left/left error = %v", err)
-	}
-}
-
-func TestMemberChainInvariants(t *testing.T) {
-	t.Parallel()
-
-	now := time.Date(2026, 7, 16, 0, 0, 0, 0, time.UTC)
-	channelID, _ := ParseChannelID("channel-a")
-	epoch, _ := ParseOriginEpoch("epoch-a")
-	head, _ := NewRecordHead(1, Sum([]byte("member")))
-	record, _ := NewJSON([]byte(`{"revision":1}`))
-	spec := MemberSpec{channelID, head, nil, mustPeer(t, "peer-a"), epoch, "Agent A", []byte("key"),
-		[]string{"/ip4/127.0.0.1/tcp/4001"}, MemberActive, record, []byte("signature"), now}
-	member, err := NewMember(spec)
-	if err != nil || member.PeerID() != spec.PeerID {
-		t.Fatalf("NewMember() = %#v, %v", member, err)
-	}
-	previous := Sum([]byte("previous"))
-	spec.PreviousDigest = &previous
-	if _, err := NewMember(spec); !errors.Is(err, ErrInvariant) {
-		t.Fatalf("genesis previous digest error = %v", err)
-	}
-	head, _ = NewRecordHead(2, Sum([]byte("member-2")))
-	spec.Head, spec.PreviousDigest = head, nil
-	if _, err := NewMember(spec); !errors.Is(err, ErrInvariant) {
-		t.Fatalf("non-genesis missing previous error = %v", err)
 	}
 }

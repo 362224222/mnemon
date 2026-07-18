@@ -20,6 +20,9 @@ const (
 	MaxChildWorks          = 7
 	MaxMembersPerChannel   = 8
 	MaxChannelsPerNode     = 8
+	MaxMemberMultiaddrs    = 8
+	MaxMemberProtocols     = 3
+	MaxChannelRecordBytes  = 32 << 10
 	MaxPublicationBytes    = 64 << 10
 	MaxCanonicalJSONBytes  = 4 << 20
 )

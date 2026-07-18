@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	libp2pcrypto "github.com/libp2p/go-libp2p/core/crypto"
 	libp2ppeer "github.com/libp2p/go-libp2p/core/peer"
 )
 
@@ -38,4 +39,19 @@ func ComparePeerIDs(left, right PeerID) (int, error) {
 		return 0, err
 	}
 	return bytes.Compare(leftBytes, rightBytes), nil
+}
+
+func validatePeerPublicKey(peerID PeerID, publicKey []byte) error {
+	if _, err := CanonicalPeerIDBytes(peerID); err != nil {
+		return err
+	}
+	key, err := libp2pcrypto.UnmarshalEd25519PublicKey(publicKey)
+	if err != nil {
+		return fmt.Errorf("%w: invalid Ed25519 public key", ErrPeerIDEncoding)
+	}
+	derived, err := libp2ppeer.IDFromPublicKey(key)
+	if err != nil || derived.String() != peerID.String() {
+		return fmt.Errorf("%w: public key does not derive PeerID", ErrPeerIDEncoding)
+	}
+	return nil
 }

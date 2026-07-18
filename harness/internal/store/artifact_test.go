@@ -446,9 +446,10 @@ func replicaProvenance(t *testing.T, root model.Digest) model.ArtifactProvenance
 func installRemoteBinding(t *testing.T, db *sql.DB) {
 	t.Helper()
 	if _, err := db.Exec(`INSERT INTO channel_members(channel_id, revision, record_hash, previous_hash,
-		member_peer_id, origin_epoch, display_label, public_key, multiaddrs_json, status,
-		signed_record_json, owner_signature, created_at) VALUES('channel-one', 2, ?, ?, 'peer-remote',
-		'epoch-remote', 'remote', 'remote-key', '[]', 'active', '{}', 'signature', '2026-07-16T12:00:00Z')`,
+		member_peer_id, origin_epoch, display_label, public_key, multiaddrs_json, protocols_json,
+		limits_json, status, signed_record_json, owner_signature, created_at)
+		VALUES('channel-one', 2, ?, ?, 'peer-remote', 'epoch-remote', 'remote', 'remote-key',
+		'[]', '[]', '{}', 'active', '{}', 'signature', '2026-07-16T12:00:00Z')`,
 		[]byte("record-two"), []byte("record-one")); err != nil {
 		t.Fatal(err)
 	}
@@ -459,7 +460,7 @@ func installRemoteBinding(t *testing.T, db *sql.DB) {
 	if _, err := db.Exec(`INSERT INTO peer_bindings(channel_id, peer_id, origin_epoch, effective_alias,
 		public_key, multiaddrs_json, protocols_json, limits_json, member_revision, member_record_hash,
 		state, joined_at) VALUES('channel-one', 'peer-remote', 'epoch-remote', 'remote', 'remote-key',
-		'[]', '{}', '{}', 2, ?, 'pending', '2026-07-16T12:00:00Z')`, []byte("record-two")); err != nil {
+		'[]', '[]', '{}', 2, ?, 'pending', '2026-07-16T12:00:00Z')`, []byte("record-two")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`INSERT INTO peer_cursors(channel_id, origin_peer_id, origin_epoch,

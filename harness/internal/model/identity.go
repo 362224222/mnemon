@@ -26,6 +26,7 @@ func (i identifier) MarshalJSON() ([]byte, error) {
 type PeerID struct{ identifier }
 type OriginEpoch struct{ identifier }
 type ChannelID struct{ identifier }
+type GrantID struct{ identifier }
 type EventID struct{ identifier }
 type WorkID struct{ identifier }
 type ProfileID struct{ identifier }
@@ -47,6 +48,11 @@ func ParseOriginEpoch(value string) (OriginEpoch, error) {
 func ParseChannelID(value string) (ChannelID, error) {
 	id, err := newIdentifier("channel_id", value)
 	return ChannelID{id}, err
+}
+
+func ParseGrantID(value string) (GrantID, error) {
+	id, err := newIdentifier("grant_id", value)
+	return GrantID{id}, err
 }
 
 func ParseEventID(value string) (EventID, error) {

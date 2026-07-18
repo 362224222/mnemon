@@ -1,64 +1,67 @@
 package model
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 type PeerBindingSpec struct {
-	ChannelID      ChannelID
+	Channel        Channel
+	Roster         VerifiedRoster
 	PeerID         PeerID
-	OriginEpoch    OriginEpoch
 	EffectiveAlias string
-	PublicKey      []byte
-	Multiaddrs     []string
-	Protocols      []string
-	Limits         JSON
-	MemberHead     RecordHead
 	State          BindingState
 	Reachability   Reachability
 	JoinedAt       time.Time
 	LastSeenAt     *time.Time
 }
 
+// PeerBinding is derived authority, never an independently asserted peer
+// descriptor. Its identity, epoch, key, addresses, protocols, limits and
+// roster head all come from one descriptor-bound owner-signed MemberRecord.
 type PeerBinding struct {
 	spec        PeerBindingSpec
-	publicKey   string
+	member      Member
+	rosterHead  RecordHead
 	lastSeenAt  time.Time
 	hasLastSeen bool
 }
 
 func NewPeerBinding(localPeer PeerID, spec PeerBindingSpec) (PeerBinding, error) {
-	if localPeer.IsZero() || spec.ChannelID.IsZero() || spec.PeerID.IsZero() ||
-		spec.OriginEpoch.IsZero() || spec.MemberHead.IsZero() {
-		return PeerBinding{}, invalid("peer binding", "local/remote identity, Channel and member head are required")
+	if localPeer.IsZero() || spec.Channel.ID().IsZero() || spec.Roster.IsZero() || spec.PeerID.IsZero() {
+		return PeerBinding{}, invalid("peer binding",
+			"local identity, committed Channel, verified roster and remote PeerID are required")
 	}
-	if localPeer == spec.PeerID {
+	if spec.Channel.RosterHead() != spec.Roster.Head() ||
+		spec.Channel.Descriptor().WireJSON().String() != spec.Roster.Descriptor().WireJSON().String() {
+		return PeerBinding{}, invariant("PeerBinding roster does not equal the committed Channel head")
+	}
+	member, ok := spec.Roster.CurrentMember(spec.PeerID)
+	if !ok {
+		return PeerBinding{}, fmt.Errorf("peer binding member authority: %w", ErrInvariant)
+	}
+	if localPeer == member.PeerID() {
 		return PeerBinding{}, invariant("self PeerBinding is forbidden")
 	}
 	if err := validateIdentifier("effective alias", spec.EffectiveAlias); err != nil {
 		return PeerBinding{}, err
 	}
-	if len(spec.PublicKey) == 0 {
-		return PeerBinding{}, invalid("peer public key", "must not be empty")
-	}
 	if !spec.State.Valid() || !spec.Reachability.Valid() {
 		return PeerBinding{}, invalid("peer binding", "unknown state or reachability")
 	}
-	if spec.Limits.IsZero() || spec.Limits.raw[0] != '{' {
-		return PeerBinding{}, invalid("peer limits", "must be a canonical JSON object")
-	}
-	multiaddrs, err := normalizeRuleStrings("multiaddrs", spec.Multiaddrs)
-	if err != nil {
-		return PeerBinding{}, err
-	}
-	protocols, err := normalizeRuleStrings("protocols", spec.Protocols)
-	if err != nil {
-		return PeerBinding{}, err
+	if member.Status() == MemberActive && spec.State == BindingRevoked ||
+		member.Status().Terminal() && spec.State != BindingRevoked {
+		return PeerBinding{}, invariant("PeerBinding authority must match latest MemberRecord status")
 	}
 	joinedAt, err := canonicalTime(spec.JoinedAt)
 	if err != nil {
 		return PeerBinding{}, err
 	}
-	result := PeerBinding{spec: spec, publicKey: string(append([]byte(nil), spec.PublicKey...))}
-	result.spec.PublicKey, result.spec.Multiaddrs, result.spec.Protocols = nil, multiaddrs, protocols
+	if joinedAt.Before(spec.Roster.Descriptor().Descriptor().CreatedAt()) {
+		return PeerBinding{}, invariant("PeerBinding join time precedes Channel creation")
+	}
+	result := PeerBinding{spec: spec, member: member, rosterHead: spec.Roster.Head()}
+	result.spec.Channel, result.spec.Roster, result.spec.PeerID = Channel{}, VerifiedRoster{}, PeerID{}
 	result.spec.JoinedAt, result.spec.LastSeenAt = joinedAt, nil
 	if spec.LastSeenAt != nil {
 		lastSeen, err := canonicalTime(*spec.LastSeenAt)
@@ -73,16 +76,19 @@ func NewPeerBinding(localPeer PeerID, spec PeerBindingSpec) (PeerBinding, error)
 	return result, nil
 }
 
-func (b PeerBinding) ChannelID() ChannelID          { return b.spec.ChannelID }
-func (b PeerBinding) PeerID() PeerID                { return b.spec.PeerID }
-func (b PeerBinding) OriginEpoch() OriginEpoch      { return b.spec.OriginEpoch }
-func (b PeerBinding) EffectiveAlias() string        { return b.spec.EffectiveAlias }
-func (b PeerBinding) PublicKey() []byte             { return append([]byte(nil), b.publicKey...) }
-func (b PeerBinding) Multiaddrs() []string          { return append([]string(nil), b.spec.Multiaddrs...) }
-func (b PeerBinding) Protocols() []string           { return append([]string(nil), b.spec.Protocols...) }
-func (b PeerBinding) Limits() JSON                  { return b.spec.Limits }
-func (b PeerBinding) MemberHead() RecordHead        { return b.spec.MemberHead }
-func (b PeerBinding) State() BindingState           { return b.spec.State }
-func (b PeerBinding) Reachability() Reachability    { return b.spec.Reachability }
-func (b PeerBinding) JoinedAt() time.Time           { return b.spec.JoinedAt }
-func (b PeerBinding) LastSeenAt() (time.Time, bool) { return b.lastSeenAt, b.hasLastSeen }
+func (binding PeerBinding) ChannelID() ChannelID       { return binding.member.ChannelID() }
+func (binding PeerBinding) PeerID() PeerID             { return binding.member.PeerID() }
+func (binding PeerBinding) OriginEpoch() OriginEpoch   { return binding.member.OriginEpoch() }
+func (binding PeerBinding) EffectiveAlias() string     { return binding.spec.EffectiveAlias }
+func (binding PeerBinding) PublicKey() []byte          { return binding.member.PublicKey() }
+func (binding PeerBinding) Multiaddrs() []string       { return binding.member.Multiaddrs() }
+func (binding PeerBinding) Protocols() []string        { return binding.member.Protocols() }
+func (binding PeerBinding) Limits() JSON               { return binding.member.Limits() }
+func (binding PeerBinding) MemberHead() RecordHead     { return binding.member.Head() }
+func (binding PeerBinding) RosterHead() RecordHead     { return binding.rosterHead }
+func (binding PeerBinding) State() BindingState        { return binding.spec.State }
+func (binding PeerBinding) Reachability() Reachability { return binding.spec.Reachability }
+func (binding PeerBinding) JoinedAt() time.Time        { return binding.spec.JoinedAt }
+func (binding PeerBinding) LastSeenAt() (time.Time, bool) {
+	return binding.lastSeenAt, binding.hasLastSeen
+}

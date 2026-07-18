@@ -95,6 +95,7 @@ func TestCommitLocalAcceptanceRejectsInvalidEvidenceWithoutWrites(t *testing.T) 
 		fixture := newAcceptanceFixture(t, 1)
 		operation, authority := fixture.reserveOffer(t, "missing-baseline", nil)
 		spec := fixture.offer(t, authority, "missing-baseline", fixture.reviewers, nil, nil)
+		mustExec(t, fixture.store, "DROP TRIGGER peer_pull_acks_no_delete")
 		mustExec(t, fixture.store, "DELETE FROM peer_pull_acks WHERE channel_id=?", fixture.channel.String())
 		if _, err := fixture.store.CommitLocalAcceptance(context.Background(), spec,
 			fixture.now.Add(time.Second)); !errors.Is(err, ErrAudienceUnavailable) {
