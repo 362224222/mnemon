@@ -1,0 +1,349 @@
+package peer
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+	"time"
+
+	libp2ppeer "github.com/libp2p/go-libp2p/core/peer"
+	"github.com/mnemon-dev/mnemon/harness/internal/model"
+	"github.com/mnemon-dev/mnemon/harness/internal/store"
+)
+
+var ErrGossipIngress = errors.New("Mnemon Gossip ingress")
+
+const (
+	gossipIngressFastRetry  = 250 * time.Millisecond
+	gossipIngressStoreRetry = time.Second
+)
+
+// GossipIngressDiagnosticCode is a closed operational result. It deliberately
+// carries no Store error, publication body or transport address: callers can
+// make retry/readiness decisions without leaking untrusted or durable bytes.
+type GossipIngressDiagnosticCode string
+
+const (
+	GossipIngressDiagnosticPressure    GossipIngressDiagnosticCode = "pressure"
+	GossipIngressDiagnosticAuthority   GossipIngressDiagnosticCode = "authority"
+	GossipIngressDiagnosticQuarantine  GossipIngressDiagnosticCode = "quarantine"
+	GossipIngressDiagnosticConflict    GossipIngressDiagnosticCode = "conflict"
+	GossipIngressDiagnosticPublication GossipIngressDiagnosticCode = "invalid_publication"
+	GossipIngressDiagnosticSession     GossipIngressDiagnosticCode = "session_unavailable"
+	GossipIngressDiagnosticStore       GossipIngressDiagnosticCode = "store_unavailable"
+)
+
+func (code GossipIngressDiagnosticCode) Valid() bool {
+	switch code {
+	case GossipIngressDiagnosticPressure, GossipIngressDiagnosticAuthority,
+		GossipIngressDiagnosticQuarantine, GossipIngressDiagnosticConflict,
+		GossipIngressDiagnosticPublication, GossipIngressDiagnosticSession,
+		GossipIngressDiagnosticStore:
+		return true
+	default:
+		return false
+	}
+}
+
+type GossipIngressDiagnostic struct {
+	code       GossipIngressDiagnosticCode
+	retryable  bool
+	retryAfter time.Duration
+}
+
+func (diagnostic GossipIngressDiagnostic) Code() GossipIngressDiagnosticCode {
+	return diagnostic.code
+}
+func (diagnostic GossipIngressDiagnostic) Retryable() bool { return diagnostic.retryable }
+func (diagnostic GossipIngressDiagnostic) RetryAfter() time.Duration {
+	return diagnostic.retryAfter
+}
+
+// GossipIngressFailure is returned only when the serial receive loop must be
+// restarted or retired. Quarantine and a durably recorded conflict are exposed
+// through Snapshot and do not stop unrelated origins on the same Channel.
+type GossipIngressFailure struct{ diagnostic GossipIngressDiagnostic }
+
+func (failure *GossipIngressFailure) Error() string {
+	if failure == nil {
+		return ErrGossipIngress.Error()
+	}
+	return fmt.Sprintf("%s: %s", ErrGossipIngress, failure.diagnostic.code)
+}
+
+func (failure *GossipIngressFailure) Unwrap() error { return ErrGossipIngress }
+
+func (failure *GossipIngressFailure) Code() GossipIngressDiagnosticCode {
+	if failure == nil {
+		return ""
+	}
+	return failure.diagnostic.Code()
+}
+func (failure *GossipIngressFailure) Retryable() bool {
+	return failure != nil && failure.diagnostic.Retryable()
+}
+func (failure *GossipIngressFailure) RetryAfter() time.Duration {
+	if failure == nil {
+		return 0
+	}
+	return failure.diagnostic.RetryAfter()
+}
+
+type GossipIngressStore interface {
+	PutPeerInbox(context.Context, store.PutPeerInboxSpec) (store.PutPeerInboxResult, error)
+}
+
+type GossipIngressClock interface{ Now() time.Time }
+
+type wallGossipIngressClock struct{}
+
+func (wallGossipIngressClock) Now() time.Time { return time.Now() }
+
+type GossipIngressOptions struct {
+	Session *TopicSession
+	Store   GossipIngressStore
+	Clock   GossipIngressClock
+}
+
+type GossipIngressSnapshot struct {
+	Running        bool
+	Received       uint64
+	Stored         uint64
+	Ignored        uint64
+	Duplicates     uint64
+	Covered        uint64
+	Conflicted     uint64
+	Quarantined    uint64
+	LastDiagnostic GossipIngressDiagnostic
+}
+
+type gossipIngressSession interface {
+	ChannelID() model.ChannelID
+	IsCurrent() bool
+	Next(context.Context) (ReceivedPublication, error)
+	gossipIngressLocalPeerID() libp2ppeer.ID
+}
+
+// GossipIngress is one synchronous, bounded admission loop for one current
+// TopicSession. It owns no queue and starts no goroutine: at most one validated
+// live publication can be inside PutPeerInbox, while subscription overflow is
+// repaired later from the signed origin log.
+type GossipIngress struct {
+	session gossipIngressSession
+	store   GossipIngressStore
+	clock   GossipIngressClock
+
+	mu       sync.Mutex
+	snapshot GossipIngressSnapshot
+}
+
+func NewGossipIngress(options GossipIngressOptions) (*GossipIngress, error) {
+	if options.Session == nil {
+		return nil, fmt.Errorf("%w: TopicSession is required", ErrGossipIngress)
+	}
+	return newGossipIngress(options.Session, options.Store, options.Clock)
+}
+
+func newGossipIngress(session gossipIngressSession, durable GossipIngressStore,
+	clock GossipIngressClock,
+) (*GossipIngress, error) {
+	if session == nil || durable == nil || session.ChannelID().IsZero() ||
+		session.gossipIngressLocalPeerID() == "" {
+		return nil, fmt.Errorf("%w: session, Store and local identity are required", ErrGossipIngress)
+	}
+	if clock == nil {
+		clock = wallGossipIngressClock{}
+	}
+	return &GossipIngress{session: session, store: durable, clock: clock}, nil
+}
+
+func (session *TopicSession) gossipIngressLocalPeerID() libp2ppeer.ID {
+	if session == nil || session.gossip == nil || session.gossip.authority == nil {
+		return ""
+	}
+	return session.gossip.authority.LocalPeerID()
+}
+
+func (ingress *GossipIngress) Snapshot() GossipIngressSnapshot {
+	if ingress == nil {
+		return GossipIngressSnapshot{}
+	}
+	ingress.mu.Lock()
+	defer ingress.mu.Unlock()
+	return ingress.snapshot
+}
+
+// Run drains exactly one TopicSession generation. Context cancellation and a
+// retired generation are clean lifecycle exits. Pressure stops consumption so
+// later live copies remain explicitly unclaimed and are recovered by Pull;
+// there is no Gossip ACK path in this worker or its narrow Store surface.
+func (ingress *GossipIngress) Run(ctx context.Context) error {
+	if ingress == nil || ingress.session == nil || ingress.store == nil || ctx == nil {
+		return newGossipIngressFailure(GossipIngressDiagnosticPublication)
+	}
+	if ctx.Err() != nil || !ingress.session.IsCurrent() {
+		return nil
+	}
+	if !ingress.beginRun() {
+		return newGossipIngressFailure(GossipIngressDiagnosticSession)
+	}
+	defer ingress.finishRun()
+
+	for {
+		if ctx.Err() != nil || !ingress.session.IsCurrent() {
+			return nil
+		}
+		received, err := ingress.session.Next(ctx)
+		if err != nil {
+			if ctx.Err() != nil || !ingress.session.IsCurrent() {
+				return nil
+			}
+			return ingress.stop(GossipIngressDiagnosticSession)
+		}
+		ingress.recordReceived()
+		// Reconciliation may retire the generation after Next unblocks. Never
+		// let a formerly authorized callback cross that lifecycle boundary.
+		if ctx.Err() != nil || !ingress.session.IsCurrent() {
+			return nil
+		}
+		spec, ok := ingress.admit(received)
+		if !ok {
+			return ingress.stop(GossipIngressDiagnosticPublication)
+		}
+		result, err := ingress.store.PutPeerInbox(ctx, spec)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			switch {
+			case errors.Is(err, store.ErrPeerInboxQuarantined):
+				ingress.recordQuarantine()
+				continue
+			case errors.Is(err, store.ErrPeerInboxPressure):
+				return ingress.stop(GossipIngressDiagnosticPressure)
+			case errors.Is(err, store.ErrPeerInboxAuthority):
+				return ingress.stop(GossipIngressDiagnosticAuthority)
+			case errors.Is(err, store.ErrPeerInboxConflict):
+				return ingress.stop(GossipIngressDiagnosticConflict)
+			case errors.Is(err, store.ErrPeerInboxInput):
+				return ingress.stop(GossipIngressDiagnosticPublication)
+			default:
+				return ingress.stop(GossipIngressDiagnosticStore)
+			}
+		}
+		if !ingress.recordDisposition(result.Disposition) {
+			return ingress.stop(GossipIngressDiagnosticStore)
+		}
+	}
+}
+
+func (ingress *GossipIngress) admit(received ReceivedPublication) (store.PutPeerInboxSpec, bool) {
+	publication := received.Publication()
+	projected, err := model.ProjectImportedPublication(&publication)
+	if err != nil {
+		return store.PutPeerInboxSpec{}, false
+	}
+	local := ingress.session.gossipIngressLocalPeerID()
+	transport, author := received.ReceivedFrom(), received.OriginalAuthor()
+	scope := projected.Event().Scope()
+	if received.Local() || local == "" || transport == "" || author == "" ||
+		transport == local || author == local || scope.ChannelID() != ingress.session.ChannelID() ||
+		author.String() != scope.OriginPeerID().String() {
+		return store.PutPeerInboxSpec{}, false
+	}
+	transportID, transportErr := model.ParsePeerID(transport.String())
+	authorID, authorErr := model.ParsePeerID(author.String())
+	localID, localErr := model.ParsePeerID(local.String())
+	if transportErr != nil || authorErr != nil || localErr != nil ||
+		authorID != scope.OriginPeerID() || transportID == localID {
+		return store.PutPeerInboxSpec{}, false
+	}
+	receivedAt := ingress.clock.Now().Round(0).UTC()
+	if receivedAt.IsZero() {
+		return store.PutPeerInboxSpec{}, false
+	}
+	return store.PutPeerInboxSpec{Publication: projected, TransportPeerID: transportID,
+		ArrivalSource: model.ArrivalGossip, ReceivedAt: receivedAt}, true
+}
+
+func newGossipIngressDiagnostic(code GossipIngressDiagnosticCode) GossipIngressDiagnostic {
+	switch code {
+	case GossipIngressDiagnosticPressure, GossipIngressDiagnosticAuthority,
+		GossipIngressDiagnosticSession:
+		return GossipIngressDiagnostic{code: code, retryable: true,
+			retryAfter: gossipIngressFastRetry}
+	case GossipIngressDiagnosticStore:
+		return GossipIngressDiagnostic{code: code, retryable: true,
+			retryAfter: gossipIngressStoreRetry}
+	case GossipIngressDiagnosticQuarantine, GossipIngressDiagnosticConflict,
+		GossipIngressDiagnosticPublication:
+		return GossipIngressDiagnostic{code: code}
+	default:
+		return GossipIngressDiagnostic{code: GossipIngressDiagnosticStore,
+			retryable: true, retryAfter: gossipIngressStoreRetry}
+	}
+}
+
+func newGossipIngressFailure(code GossipIngressDiagnosticCode) *GossipIngressFailure {
+	return &GossipIngressFailure{diagnostic: newGossipIngressDiagnostic(code)}
+}
+
+func (ingress *GossipIngress) beginRun() bool {
+	ingress.mu.Lock()
+	defer ingress.mu.Unlock()
+	if ingress.snapshot.Running {
+		return false
+	}
+	ingress.snapshot.Running = true
+	return true
+}
+
+func (ingress *GossipIngress) finishRun() {
+	ingress.mu.Lock()
+	ingress.snapshot.Running = false
+	ingress.mu.Unlock()
+}
+
+func (ingress *GossipIngress) stop(code GossipIngressDiagnosticCode) error {
+	diagnostic := newGossipIngressDiagnostic(code)
+	ingress.mu.Lock()
+	ingress.snapshot.LastDiagnostic = diagnostic
+	ingress.mu.Unlock()
+	return &GossipIngressFailure{diagnostic: diagnostic}
+}
+
+func (ingress *GossipIngress) recordReceived() {
+	ingress.mu.Lock()
+	ingress.snapshot.Received++
+	ingress.mu.Unlock()
+}
+
+func (ingress *GossipIngress) recordQuarantine() {
+	diagnostic := newGossipIngressDiagnostic(GossipIngressDiagnosticQuarantine)
+	ingress.mu.Lock()
+	ingress.snapshot.Quarantined++
+	ingress.snapshot.LastDiagnostic = diagnostic
+	ingress.mu.Unlock()
+}
+
+func (ingress *GossipIngress) recordDisposition(disposition store.PeerInboxDisposition) bool {
+	ingress.mu.Lock()
+	defer ingress.mu.Unlock()
+	switch disposition {
+	case store.PeerInboxStored:
+		ingress.snapshot.Stored++
+	case store.PeerInboxIgnored:
+		ingress.snapshot.Ignored++
+	case store.PeerInboxDuplicate:
+		ingress.snapshot.Duplicates++
+	case store.PeerInboxCovered:
+		ingress.snapshot.Covered++
+	case store.PeerInboxConflicted:
+		ingress.snapshot.Conflicted++
+		ingress.snapshot.LastDiagnostic = newGossipIngressDiagnostic(GossipIngressDiagnosticConflict)
+	default:
+		return false
+	}
+	return true
+}

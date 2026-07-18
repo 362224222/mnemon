@@ -79,6 +79,59 @@ func TestPublicationMessageIDUsesBoundedValidTupleAndInvalidFallback(t *testing.
 	}
 }
 
+func TestGossipMessageIDBindsUnsupportedHeaderBeforeStrictRejection(t *testing.T) {
+	t.Parallel()
+
+	local := testAuthorityPeer(t, "message-id-unsupported-local")
+	author := testAuthorityPeer(t, "message-id-unsupported-author")
+	relay := testAuthorityPeer(t, "message-id-unsupported-relay")
+	channel := testThreePeerAuthorityChannel(t, "message-id-unsupported-channel",
+		local, author, relay)
+	authority, _ := NewAuthority(local.modelID)
+	if err := authority.Replace(NetworkAuthoritySnapshot{LocalPeerID: local.modelID,
+		Channels: []ChannelAuthoritySnapshot{channel}}); err != nil {
+		t.Fatal(err)
+	}
+	gossip := &Gossip{authority: authority}
+	topic, _ := TopicName(channel.ChannelID)
+	publication := testPeerPublication(t, channel, author, local, "valid-after-unsupported")
+	unsupportedRaw := resignEventFramePublication(t, publication.WireJSON().Bytes(),
+		author.privateKey, func(body map[string]any) {
+			body["schema_version"] = json.Number("2")
+			body["future_semantics"] = map[string]any{"mode": "opaque"}
+		})
+	evidence, err := model.ParsePublicationEvidence(unsupportedRaw)
+	if err != nil || evidence.IsSupported() {
+		t.Fatalf("unsupported stable evidence = (%#v, %v)", evidence, err)
+	}
+
+	unsupportedWire := &pb.Message{From: []byte(author.libp2pID), Topic: stringPointer(topic),
+		Data: unsupportedRaw}
+	unsupportedID := PublicationMessageID(unsupportedWire)
+	reauthored := *unsupportedWire
+	reauthored.From = []byte(relay.libp2pID)
+	if PublicationMessageID(&reauthored) == unsupportedID {
+		t.Fatal("unsupported stable header fell back to an author-free raw MessageID")
+	}
+
+	gate := &channelGate{}
+	gate.deliverable.Store(true)
+	session := &TopicSession{gossip: gossip, channelID: channel.ChannelID, name: topic, gate: gate}
+	validator := gossip.validator(session)
+	unsupported := &pubsub.Message{Message: unsupportedWire, ReceivedFrom: relay.libp2pID}
+	if result := validator(context.Background(), relay.libp2pID, unsupported); result != pubsub.ValidationReject {
+		t.Fatalf("unsupported live publication result = %v, want reject", result)
+	}
+
+	valid := testPubSubMessage(topic, publication, author.libp2pID, relay.libp2pID)
+	if PublicationMessageID(valid.Message) == unsupportedID {
+		t.Fatal("later supported publication shared the unsupported seen-cache identity")
+	}
+	if result := validator(context.Background(), relay.libp2pID, valid); result != pubsub.ValidationAccept {
+		t.Fatalf("valid publication after unsupported challenger result = %v", result)
+	}
+}
+
 func TestAuthoritySubscriptionFilterIsChannelScopedAndBounded(t *testing.T) {
 	t.Parallel()
 
@@ -344,7 +397,7 @@ func TestGossipTopicsDeliverOnceAndPreserveConflictChallenger(t *testing.T) {
 		t.Fatal(err)
 	}
 	received := nextTopicPublication(t, sessionB, 5*time.Second)
-	if received.Publication.Digest() != original.Digest() || received.OriginalAuthor != hostA.ID() {
+	if received.Publication().Digest() != original.Digest() || received.OriginalAuthor() != hostA.ID() {
 		t.Fatalf("received publication = %#v", received)
 	}
 	if err := sessionA.Publish(ctx, original); err != nil {
@@ -364,7 +417,7 @@ func TestGossipTopicsDeliverOnceAndPreserveConflictChallenger(t *testing.T) {
 		t.Fatal(err)
 	}
 	received = nextTopicPublication(t, sessionB, 5*time.Second)
-	if received.Publication.Digest() != challenger.Digest() {
+	if received.Publication().Digest() != challenger.Digest() {
 		t.Fatal("changed publication bytes were hidden by Gossip dedupe")
 	}
 
@@ -407,7 +460,7 @@ func TestGossipTopicsDeliverOnceAndPreserveConflictChallenger(t *testing.T) {
 		t.Fatal(err)
 	}
 	received = nextTopicPublication(t, sessionB, 5*time.Second)
-	if received.Publication.Digest() != boundary.Digest() {
+	if received.Publication().Digest() != boundary.Digest() {
 		t.Fatal("old validator handoff lost a seen-cache-marked publication")
 	}
 	if err := sessionB.Close(); err != nil {
@@ -510,9 +563,9 @@ func TestNewGossipRejectsDuplicateWithoutReplacingStreamHandler(t *testing.T) {
 	}
 	localCopy := nextTopicPublication(t, sessionB, 5*time.Second)
 	remoteCopy := nextTopicPublication(t, sessionA, 5*time.Second)
-	if localCopy.Publication.Digest() != publication.Digest() ||
-		remoteCopy.Publication.Digest() != publication.Digest() ||
-		remoteCopy.OriginalAuthor != hostB.ID() {
+	if localCopy.Publication().Digest() != publication.Digest() ||
+		remoteCopy.Publication().Digest() != publication.Digest() ||
+		remoteCopy.OriginalAuthor() != hostB.ID() {
 		t.Fatal("live Gossip router stopped delivering after a rejected duplicate constructor")
 	}
 }
@@ -685,7 +738,7 @@ func TestGossipPendingToActiveRefreshesExistingPhysicalConnection(t *testing.T) 
 		t.Fatal(err)
 	}
 	received := nextTopicPublication(t, sessionB, 5*time.Second)
-	if received.Publication.Digest() != publication.Digest() {
+	if received.Publication().Digest() != publication.Digest() {
 		t.Fatal("promoted physical connection never entered the Gossip data plane")
 	}
 }
@@ -973,7 +1026,7 @@ func TestGossipReconcileRevokesOneChannelAndPreservesOverlap(t *testing.T) {
 		t.Fatal("Alpha reconciliation did not reach its Channel write gate")
 	}
 	if betaPublishErr != nil || betaReceiveErr != nil ||
-		betaReceived.Publication.Digest() != betaDuringRotation.Digest() {
+		betaReceived.Publication().Digest() != betaDuringRotation.Digest() {
 		t.Fatalf("unaffected Beta stopped during Alpha rotation: publish=%v receive=%v", betaPublishErr, betaReceiveErr)
 	}
 	if reconcileErr != nil {
@@ -1010,7 +1063,7 @@ func TestGossipReconcileRevokesOneChannelAndPreservesOverlap(t *testing.T) {
 	alphaContext, alphaCancel := context.WithTimeout(ctx, 1200*time.Millisecond)
 	defer alphaCancel()
 	if received, err := alphaSessionC.Next(alphaContext); err == nil {
-		t.Fatalf("revoked Alpha Peer received publication %s", received.Publication.Digest().String())
+		t.Fatalf("revoked Alpha Peer received publication %s", received.Publication().Digest().String())
 	}
 
 	betaPublication := testPeerPublication(t, betaA, local, remote, "active-beta")
@@ -1018,7 +1071,7 @@ func TestGossipReconcileRevokesOneChannelAndPreservesOverlap(t *testing.T) {
 		t.Fatal(err)
 	}
 	received := nextTopicPublication(t, betaSessionC, 5*time.Second)
-	if received.Publication.Digest() != betaPublication.Digest() {
+	if received.Publication().Digest() != betaPublication.Digest() {
 		t.Fatal("overlapping Beta Channel stopped after scoped Alpha revoke")
 	}
 }

@@ -37,7 +37,10 @@ var gossipConstructorMu sync.Mutex
 // and poisoning the seen cache before validation rejects it. ReceivedFrom and
 // transport seqno are deliberately excluded so relays and retries are stable.
 //
-// A structurally invalid frame uses a separate topic+raw fallback. Parsing is
+// Only a frame whose stable publication header cannot be parsed and validated
+// uses a separate topic+raw fallback. Current-semantic support belongs to the
+// strict validator, not this seen-cache key: an unsupported but stable header must
+// still bind From and the complete publication identity tuple. Parsing is
 // bounded by the publication cap, performs no I/O and is total for every frame
 // admitted by GossipSub's outer wire limit.
 func PublicationMessageID(message *pb.Message) string {
@@ -46,26 +49,25 @@ func PublicationMessageID(message *pb.Message) string {
 		writeMessageIDFields(hash, []byte(publicationMessageIDDomain), []byte("invalid"), nil, nil)
 		return "r5:" + hex.EncodeToString(hash.Sum(nil))
 	}
-	publication, err := model.ParseSignedPublication(message.GetData())
+	publication, err := model.ParsePublicationEvidence(message.GetData())
 	if err != nil {
 		writeMessageIDFields(hash, []byte(publicationMessageIDDomain), []byte("invalid"),
 			[]byte(message.GetTopic()), message.GetData())
 		return "r5:" + hex.EncodeToString(hash.Sum(nil))
 	}
-	scope := publication.Event().Scope()
 	sequence := make([]byte, 8)
-	binary.BigEndian.PutUint64(sequence, scope.ChannelSequence())
+	binary.BigEndian.PutUint64(sequence, publication.ChannelSequence())
 	writeMessageIDFields(hash,
 		[]byte(publicationMessageIDDomain),
 		[]byte("valid"),
 		[]byte(message.GetTopic()),
 		message.GetFrom(),
-		[]byte(scope.ChannelID().String()),
-		[]byte(scope.OriginPeerID().String()),
-		[]byte(scope.OriginEpoch().String()),
+		[]byte(publication.ChannelID().String()),
+		[]byte(publication.OriginPeerID().String()),
+		[]byte(publication.OriginEpoch().String()),
 		sequence,
-		[]byte(publication.Event().ID().String()),
-		publication.Event().Digest().Bytes(),
+		[]byte(publication.EventID().String()),
+		publication.EventDigest().Bytes(),
 		publication.Digest().Bytes(),
 	)
 	return "r5:" + hex.EncodeToString(hash.Sum(nil))
@@ -758,11 +760,29 @@ func (gossip *Gossip) sortedSessionsLocked() []*TopicSession {
 }
 
 type ReceivedPublication struct {
-	Publication    model.SignedPublication
-	ReceivedFrom   libp2ppeer.ID
-	OriginalAuthor libp2ppeer.ID
-	Local          bool
+	publication    model.SignedPublication
+	receivedFrom   libp2ppeer.ID
+	originalAuthor libp2ppeer.ID
+	local          bool
 }
+
+// Publication returns the exact application bytes authenticated by the topic
+// validator and rechecked against the current TopicSession generation.
+func (received ReceivedPublication) Publication() model.SignedPublication {
+	return received.publication
+}
+
+// ReceivedFrom is the authenticated immediate Gossip transport Peer. It can
+// be a same-Channel relay and therefore must not be treated as Event origin.
+func (received ReceivedPublication) ReceivedFrom() libp2ppeer.ID { return received.receivedFrom }
+
+// OriginalAuthor is the strict-signed PubSub author that TopicSession proved
+// equal to the application publication origin.
+func (received ReceivedPublication) OriginalAuthor() libp2ppeer.ID {
+	return received.originalAuthor
+}
+
+func (received ReceivedPublication) Local() bool { return received.local }
 
 type TopicSession struct {
 	gossip         *Gossip
@@ -859,8 +879,8 @@ func (session *TopicSession) Next(ctx context.Context) (ReceivedPublication, err
 	if !authorized || model.VerifyPublication(publicKey, publication) != nil {
 		return ReceivedPublication{}, fmt.Errorf("%w: received publication authority is no longer current", ErrGossipTopic)
 	}
-	return ReceivedPublication{Publication: publication, ReceivedFrom: message.ReceivedFrom,
-		OriginalAuthor: message.GetFrom(), Local: message.Local}, nil
+	return ReceivedPublication{publication: publication, receivedFrom: message.ReceivedFrom,
+		originalAuthor: message.GetFrom(), local: message.Local}, nil
 }
 
 func (session *TopicSession) Peers() []libp2ppeer.ID {
