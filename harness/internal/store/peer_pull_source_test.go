@@ -156,7 +156,7 @@ func TestPeerPullSourceEnforcesBaselineFloorAndRequestBounds(t *testing.T) {
 			AuthenticatedPeerID: fixture.reviewers[0], ChannelID: fixture.channel,
 			OriginEpoch: fixture.node.OriginEpoch(), AfterChannelSequence: 2, Limit: 1,
 			At: at.Add(2 * time.Second)})
-		if !errors.Is(err, ErrPeerPullAuthority) {
+		if !errors.Is(err, ErrPeerPullNotMember) || !errors.Is(err, ErrPeerPullAuthority) {
 			t.Fatalf("unconfirmed outbound baseline error = %v", err)
 		}
 	})
@@ -228,7 +228,7 @@ func TestPeerPullSourceRejectsWrongPeerEpochRevocationAndDurableCorruption(t *te
 					At: at}
 				mutate(&spec)
 				_, err := fixture.store.ReadPeerPullPage(context.Background(), spec)
-				want := ErrPeerPullAuthority
+				want := ErrPeerPullNotMember
 				if name == "epoch" {
 					want = ErrPeerPullEpochMismatch
 				}
@@ -259,7 +259,7 @@ func TestPeerPullSourceRejectsWrongPeerEpochRevocationAndDurableCorruption(t *te
 		_, err := fixture.store.ReadPeerPullPage(context.Background(), ReadPeerPullPageSpec{
 			AuthenticatedPeerID: fixture.reviewers[0], ChannelID: fixture.channel,
 			OriginEpoch: fixture.node.OriginEpoch(), Limit: 1, At: at.Add(time.Second)})
-		if !errors.Is(err, ErrPeerPullAuthority) {
+		if !errors.Is(err, ErrPeerPullMemberRevoked) || !errors.Is(err, ErrPeerPullAuthority) {
 			t.Fatalf("revoked requester error = %v", err)
 		}
 	})
@@ -283,6 +283,81 @@ func TestPeerPullSourceRejectsWrongPeerEpochRevocationAndDurableCorruption(t *te
 			t.Fatalf("failed page committed ACK = (%d,%v)", acknowledged, scanErr)
 		}
 		assertPeerPullDeliveryStates(t, fixture, 0, 2)
+	})
+
+	t.Run("corrupt authority is not downgraded to not origin", func(t *testing.T) {
+		fixture, _ := newPeerPullSourceFixture(t, 1)
+		mustExec(t, fixture.store, `DROP TRIGGER channels_descriptor_immutable`)
+		mustExec(t, fixture.store, `UPDATE channels SET descriptor_json='{}' WHERE channel_id=?`,
+			fixture.channel.String())
+		_, err := fixture.store.ReadPeerPullPage(context.Background(), ReadPeerPullPageSpec{
+			AuthenticatedPeerID: fixture.reviewers[0], ChannelID: fixture.channel,
+			OriginEpoch: fixture.node.OriginEpoch(), Limit: 1, At: peerPullTestAt(fixture)})
+		if !errors.Is(err, ErrPeerPullInvariant) || errors.Is(err, ErrPeerPullNotOrigin) ||
+			errors.Is(err, ErrPeerPullAuthority) {
+			t.Fatalf("corrupt authority error = %v", err)
+		}
+	})
+}
+
+func TestPeerPullSourceReturnsClosedAuthorityFailures(t *testing.T) {
+	t.Run("not origin", func(t *testing.T) {
+		fixture := newAcceptanceFixture(t, 1)
+		otherChannel, err := model.ParseChannelID("channel-peer-pull-other-origin")
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertPeerPullAuthorityFailure(t, fixture, otherChannel, fixture.reviewers[0],
+			ErrPeerPullNotOrigin, peerPullTestAt(fixture))
+	})
+
+	t.Run("not member", func(t *testing.T) {
+		fixture := newAcceptanceFixture(t, 1)
+		assertPeerPullAuthorityFailure(t, fixture, fixture.channel, fixture.node.PeerID(),
+			ErrPeerPullNotMember, peerPullTestAt(fixture))
+	})
+
+	t.Run("member revoked", func(t *testing.T) {
+		fixture := newAcceptanceFixture(t, 1)
+		at := peerPullTestAt(fixture)
+		signed := acceptanceSignedChannel(t, fixture)
+		revoked := signed.AppendTerminal(t, fixture.reviewers[0], model.MemberRevoked)
+		if _, err := fixture.store.MergeChannelRoster(context.Background(), MergeChannelRosterSpec{
+			ChannelID: fixture.channel, AuthenticatedTransportPeerID: fixture.reviewers[0],
+			Records: []model.Member{revoked.Member()}, At: at}); err != nil {
+			t.Fatal(err)
+		}
+		assertPeerPullAuthorityFailure(t, fixture, fixture.channel, fixture.reviewers[0],
+			ErrPeerPullMemberRevoked, at.Add(time.Second))
+	})
+
+	t.Run("channel closed", func(t *testing.T) {
+		fixture := newAcceptanceFixture(t, 1)
+		at := peerPullTestAt(fixture)
+		signed := acceptanceSignedChannel(t, fixture)
+		left := signed.AppendTerminal(t, fixture.node.PeerID(), model.MemberLeft)
+		if _, err := fixture.store.MergeChannelRoster(context.Background(), MergeChannelRosterSpec{
+			ChannelID: fixture.channel, AuthenticatedTransportPeerID: fixture.reviewers[0],
+			Records: []model.Member{left.Member()}, At: at}); err != nil {
+			t.Fatal(err)
+		}
+		assertPeerPullAuthorityFailure(t, fixture, fixture.channel, fixture.reviewers[0],
+			ErrPeerPullChannelClosed, at.Add(time.Second))
+	})
+
+	t.Run("requester terminal precedes channel closed", func(t *testing.T) {
+		fixture := newAcceptanceFixture(t, 1)
+		at := peerPullTestAt(fixture)
+		signed := acceptanceSignedChannel(t, fixture)
+		revoked := signed.AppendTerminal(t, fixture.reviewers[0], model.MemberRevoked)
+		left := signed.AppendTerminal(t, fixture.node.PeerID(), model.MemberLeft)
+		if _, err := fixture.store.MergeChannelRoster(context.Background(), MergeChannelRosterSpec{
+			ChannelID: fixture.channel, AuthenticatedTransportPeerID: fixture.reviewers[0],
+			Records: []model.Member{revoked.Member(), left.Member()}, At: at}); err != nil {
+			t.Fatal(err)
+		}
+		assertPeerPullAuthorityFailure(t, fixture, fixture.channel, fixture.reviewers[0],
+			ErrPeerPullMemberRevoked, at.Add(time.Second))
 	})
 }
 
@@ -327,6 +402,39 @@ func newPeerPullSourceFixture(t *testing.T, count int) (*acceptanceFixture, []mo
 
 func peerPullTestAt(fixture *acceptanceFixture) time.Time {
 	return fixture.now.Add(24 * time.Hour)
+}
+
+func assertPeerPullAuthorityFailure(t *testing.T, fixture *acceptanceFixture,
+	channelID model.ChannelID, requester model.PeerID, want error, at time.Time,
+) {
+	t.Helper()
+	operations := map[string]func() error{
+		"Pull": func() error {
+			_, err := fixture.store.ReadPeerPullPage(context.Background(), ReadPeerPullPageSpec{
+				AuthenticatedPeerID: requester, ChannelID: channelID,
+				OriginEpoch: fixture.node.OriginEpoch(), Limit: 1, At: at})
+			return err
+		},
+		"CursorAck": func() error {
+			_, err := fixture.store.CommitPeerPullCursorAck(context.Background(), CommitPeerPullCursorAckSpec{
+				AuthenticatedPeerID: requester, ChannelID: channelID,
+				OriginEpoch: fixture.node.OriginEpoch(), At: at})
+			return err
+		},
+	}
+	closed := []error{ErrPeerPullNotOrigin, ErrPeerPullNotMember, ErrPeerPullMemberRevoked,
+		ErrPeerPullChannelClosed}
+	for name, operation := range operations {
+		err := operation()
+		if !errors.Is(err, want) || !errors.Is(err, ErrPeerPullAuthority) {
+			t.Fatalf("%s error = %v, want %v and parent authority", name, err, want)
+		}
+		for _, other := range closed {
+			if other != want && errors.Is(err, other) {
+				t.Fatalf("%s error = %v also matched distinct failure %v", name, err, other)
+			}
+		}
+	}
 }
 
 func readPeerPullPage(t *testing.T, fixture *acceptanceFixture, after uint64, limit uint8,

@@ -22,6 +22,10 @@ const (
 var (
 	ErrPeerPullInput         = errors.New("invalid Peer Pull source input")
 	ErrPeerPullAuthority     = errors.New("Peer Pull source authority is unavailable")
+	ErrPeerPullNotOrigin     = fmt.Errorf("%w: local Node is not the requested origin", ErrPeerPullAuthority)
+	ErrPeerPullNotMember     = fmt.Errorf("%w: requester is not an active member", ErrPeerPullAuthority)
+	ErrPeerPullMemberRevoked = fmt.Errorf("%w: requester membership is terminal", ErrPeerPullAuthority)
+	ErrPeerPullChannelClosed = fmt.Errorf("%w: Channel is closed", ErrPeerPullAuthority)
 	ErrPeerPullEpochMismatch = errors.New("Peer Pull source origin epoch mismatch")
 	ErrPeerPullCursor        = errors.New("Peer Pull source cursor is invalid")
 	ErrPeerPullHistoryGap    = errors.New("Peer Pull source history gap")
@@ -197,22 +201,41 @@ func readPeerPullSourceState(ctx context.Context, tx *sql.Tx, requester model.Pe
 ) (peerPullSourceState, error) {
 	node, err := readNode(ctx, tx)
 	if err != nil {
-		return peerPullSourceState{}, fmt.Errorf("%w: Node: %v", ErrPeerPullAuthority, err)
+		return peerPullSourceState{}, fmt.Errorf("%w: Node: %v", ErrPeerPullInvariant, err)
 	}
 	if node.OriginEpoch() != requestedEpoch {
 		return peerPullSourceState{}, ErrPeerPullEpochMismatch
 	}
+	var channelPresent int
+	err = tx.QueryRowContext(ctx, `SELECT 1 FROM channels WHERE channel_id=?`, channelID.String()).
+		Scan(&channelPresent)
+	if errors.Is(err, sql.ErrNoRows) {
+		return peerPullSourceState{}, ErrPeerPullNotOrigin
+	}
+	if err != nil || channelPresent != 1 {
+		return peerPullSourceState{}, fmt.Errorf("%w: locate Channel: %v", ErrPeerPullInvariant, err)
+	}
 	authority, err := readVerifiedChannelAuthority(ctx, tx, node.PeerID(), channelID)
 	if err != nil {
-		return peerPullSourceState{}, fmt.Errorf("%w: %v", ErrPeerPullAuthority, err)
+		return peerPullSourceState{}, fmt.Errorf("%w: Channel authority: %v", ErrPeerPullInvariant, err)
+	}
+	// A terminal requester remains terminal even after the owner closes the
+	// Channel. This stable precedence prevents an old member from treating a
+	// global closure as authority to reactivate its own revoked membership.
+	requesterMember, requesterKnown := authority.roster.CurrentMember(requester)
+	if requesterKnown && requesterMember.Status().Terminal() {
+		return peerPullSourceState{}, ErrPeerPullMemberRevoked
+	}
+	if authority.channel.Status() == model.ChannelClosed {
+		return peerPullSourceState{}, ErrPeerPullChannelClosed
 	}
 	if authority.channel.Status() != model.ChannelActive ||
 		authority.channel.TopicState() != model.TopicJoined {
-		return peerPullSourceState{}, ErrPeerPullAuthority
+		return peerPullSourceState{}, ErrPeerPullNotOrigin
 	}
 	local, ok := authority.roster.CurrentMember(node.PeerID())
 	if !ok || local.Status() != model.MemberActive || local.OriginEpoch() != node.OriginEpoch() {
-		return peerPullSourceState{}, ErrPeerPullAuthority
+		return peerPullSourceState{}, ErrPeerPullNotOrigin
 	}
 	var binding model.PeerBinding
 	for _, candidate := range authority.bindings {
@@ -222,13 +245,12 @@ func readPeerPullSourceState(ctx context.Context, tx *sql.Tx, requester model.Pe
 		}
 	}
 	if binding.PeerID().IsZero() || binding.State() != model.BindingActive {
-		return peerPullSourceState{}, ErrPeerPullAuthority
+		return peerPullSourceState{}, ErrPeerPullNotMember
 	}
-	requesterMember, ok := authority.roster.CurrentMember(requester)
-	if !ok || requesterMember.Status() != model.MemberActive ||
+	if !requesterKnown || requesterMember.Status() != model.MemberActive ||
 		requesterMember.OriginEpoch() != binding.OriginEpoch() ||
 		requesterMember.Head() != binding.MemberHead() {
-		return peerPullSourceState{}, ErrPeerPullAuthority
+		return peerPullSourceState{}, ErrPeerPullNotMember
 	}
 
 	var floor, head uint64
@@ -255,14 +277,14 @@ func readPeerPullSourceState(ctx context.Context, tx *sql.Tx, requester model.Pe
 		node.PeerID().String(), node.OriginEpoch().String()).
 		Scan(&baseline, &acknowledged, &confirmedText, &ackUpdatedText)
 	if errors.Is(err, sql.ErrNoRows) {
-		return peerPullSourceState{}, ErrPeerPullAuthority
+		return peerPullSourceState{}, ErrPeerPullNotMember
 	}
 	if err != nil {
 		return peerPullSourceState{}, fmt.Errorf("read Peer Pull acknowledgement: %w", err)
 	}
 	ackUpdatedAt, parseErr := parseCanonicalStoreTime(ackUpdatedText)
 	if !confirmedText.Valid {
-		return peerPullSourceState{}, ErrPeerPullAuthority
+		return peerPullSourceState{}, ErrPeerPullNotMember
 	}
 	if parseErr != nil || baseline > model.MaxSQLiteInteger ||
 		acknowledged < baseline || acknowledged > head || ackUpdatedAt.Before(authority.channel.CreatedAt()) {
