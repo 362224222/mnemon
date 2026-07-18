@@ -26,6 +26,7 @@ var errManagedCompanion = errors.New("managed mnemond companion")
 const (
 	companionVersionTimeout = 2 * time.Second
 	companionCommandTimeout = 15 * time.Second
+	companionStartTimeout   = 15 * time.Second
 	companionWaitDelay      = 250 * time.Millisecond
 	companionVersionBytes   = 256
 	companionResponseBytes  = localapi.MaxAuthorityResponseBytes
@@ -248,13 +249,19 @@ func (runner *companionRunner) executeClassified(ctx context.Context, operation 
 		return nil, companionError(operation+" stdin", nil)
 	}
 	defer stdin.Close()
-	runCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
 	stdout := newBoundedCompanionBuffer(stdoutLimit)
 	stderr := newBoundedCompanionBuffer(companionStderrBytes)
 	defer stdout.clear()
 	defer stderr.clear()
-	command := runner.commandContext(runCtx, runner.executable, args...)
+	// The fixed execution budget starts only after the OS has successfully
+	// created the child. Starting it before Command.Start makes scheduler and
+	// fork/exec admission time consume a protocol budget even though there is
+	// no companion process to terminate yet. The caller context remains bound
+	// from entry through construction and Start, so explicit cancellation is
+	// never deferred.
+	commandCtx, cancelCommand := context.WithCancel(ctx)
+	defer cancelCommand()
+	command := runner.commandContext(commandCtx, runner.executable, args...)
 	if command == nil {
 		return nil, companionError(operation, nil)
 	}
@@ -263,9 +270,41 @@ func (runner *companionRunner) executeClassified(ctx context.Context, operation 
 	command.Stdin = stdin
 	command.Stdout = stdout
 	command.Stderr = stderr
-	runErr := command.Run()
-	contextErr := runCtx.Err()
+	if err := ctx.Err(); err != nil {
+		return nil, companionError(operation, err)
+	}
+	// Process admission is distinct from protocol execution. It has its own
+	// rejection deadline so full-system fork/exec pressure cannot consume the
+	// shorter version protocol budget, while a child returned by Start after
+	// that deadline is killed and never accepted. os.StartProcess itself has no
+	// asynchronous interruption primitive, so this boundary is checked as soon
+	// as Start returns.
+	startDeadline := time.Now().Add(companionStartTimeout)
+	if startErr := command.Start(); startErr != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return nil, companionError(operation, contextErr)
+		}
+		if !time.Now().Before(startDeadline) {
+			return nil, companionError(operation, context.DeadlineExceeded)
+		}
+		return nil, companionError(operation, nil)
+	}
+	executionDeadline := time.Now().Add(timeout)
+	if contextErr := ctx.Err(); contextErr != nil {
+		cancelCommand()
+		_ = command.Wait()
+		return nil, companionError(operation, contextErr)
+	}
+	if !time.Now().Before(startDeadline) {
+		cancelCommand()
+		_ = command.Wait()
+		return nil, companionError(operation, context.DeadlineExceeded)
+	}
+	runErr, contextErr := waitCompanionCommand(ctx, cancelCommand, command, executionDeadline)
 	pathErr := runner.validateFrozenPaths()
+	if contextErr == nil {
+		contextErr = ctx.Err()
+	}
 	if contextErr != nil {
 		return nil, companionError(operation, contextErr)
 	}
@@ -280,6 +319,50 @@ func (runner *companionRunner) executeClassified(ctx context.Context, operation 
 		return nil, companionError(operation, nil)
 	}
 	return stdout.copyBytes(), nil
+}
+
+// waitCompanionCommand is the one completion arbiter for an already-started
+// child. Wait, caller cancellation, and the fixed execution deadline compete
+// explicitly. Cancellation always terminates the Cmd and drains Wait; a Wait
+// result is accepted only while both caller authority and the monotonic
+// absolute deadline remain live, so delayed timer delivery cannot extend the
+// protocol budget.
+func waitCompanionCommand(ctx context.Context, cancelCommand context.CancelFunc,
+	command *exec.Cmd, executionDeadline time.Time,
+) (error, error) {
+	if ctx == nil || cancelCommand == nil || command == nil || executionDeadline.IsZero() ||
+		command.Process == nil {
+		return errors.New("companion command is unavailable"), nil
+	}
+	remaining := time.Until(executionDeadline)
+	if remaining < 0 {
+		remaining = 0
+	}
+	timer := time.NewTimer(remaining)
+	defer timer.Stop()
+	waited := make(chan error, 1)
+	go func() { waited <- command.Wait() }()
+
+	select {
+	case runErr := <-waited:
+		if err := ctx.Err(); err != nil {
+			return runErr, err
+		}
+		if !time.Now().Before(executionDeadline) {
+			return runErr, context.DeadlineExceeded
+		}
+		return runErr, nil
+	case <-ctx.Done():
+		cancelCommand()
+		return <-waited, ctx.Err()
+	case <-timer.C:
+		cancelCommand()
+		runErr := <-waited
+		if err := ctx.Err(); err != nil {
+			return runErr, err
+		}
+		return runErr, context.DeadlineExceeded
+	}
 }
 
 func (runner *companionRunner) validateFrozenPaths() error {

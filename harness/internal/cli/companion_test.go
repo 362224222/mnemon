@@ -90,6 +90,62 @@ func TestCompanionRunnerDiscoversExactPairAndFreezesLifecycleCommands(t *testing
 	}
 }
 
+func TestCompanionRunnerStartsFixedExecutionBudgetAfterProcessStart(t *testing.T) {
+	fixture := newCompanionFixture(t)
+	dependencies := fixture.dependencies()
+	type observedContext struct {
+		deadline time.Time
+		has      bool
+	}
+	var observed []observedContext
+	dependencies.commandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		deadline, has := ctx.Deadline()
+		observed = append(observed, observedContext{deadline: deadline, has: has})
+		return exec.CommandContext(ctx, name, args...)
+	}
+	callerCtx, cancelCaller := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelCaller()
+	callerDeadline, _ := callerCtx.Deadline()
+	runner, err := newCompanionRunnerWith(callerCtx, fixture.workspace, "r5-test", dependencies)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(observed) != 1 || !observed[0].has || !observed[0].deadline.Equal(callerDeadline) {
+		t.Fatalf("version construction context = %#v, want only caller deadline %s",
+			observed, callerDeadline)
+	}
+
+	// A caller without a deadline gives command construction no hidden fixed
+	// deadline, while the post-Start execution is still terminated by the
+	// supplied operation budget.
+	t.Setenv("MNEMON_COMPANION_TEST_MODE", "inspect-sleep")
+	if _, err := runner.execute(context.Background(), "inspect", 40*time.Millisecond,
+		companionResponseBytes, "inspect", "--project-root", fixture.workspace); err == nil ||
+		!errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("post-Start execution timeout error = %v", err)
+	}
+	if len(observed) != 2 || observed[1].has {
+		t.Fatalf("background construction context = %#v, want no pre-Start deadline", observed)
+	}
+}
+
+func TestWaitCompanionCommandRejectsExpiredAbsoluteDeadlineAndDrainsChild(t *testing.T) {
+	commandCtx, cancelCommand := context.WithCancel(context.Background())
+	defer cancelCommand()
+	command := exec.CommandContext(commandCtx, "/bin/sh", "-c", "exec sleep 5")
+	command.WaitDelay = companionWaitDelay
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	runErr, contextErr := waitCompanionCommand(context.Background(), cancelCommand,
+		command, time.Now().Add(-time.Nanosecond))
+	if runErr == nil || !errors.Is(contextErr, context.DeadlineExceeded) ||
+		command.ProcessState == nil || command.ProcessState.Success() {
+		t.Fatalf("expired deadline result = run=%v context=%v state=%#v",
+			runErr, contextErr, command.ProcessState)
+	}
+}
+
 func TestCompanionRunnerClassifiesOnlyClosedOfflineWriterContention(t *testing.T) {
 	fixture := newCompanionFixture(t)
 	runner, err := newCompanionRunnerWith(context.Background(), fixture.workspace,
