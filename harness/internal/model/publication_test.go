@@ -3,6 +3,7 @@ package model
 import (
 	"bytes"
 	"crypto/ed25519"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -66,6 +67,87 @@ func TestSignedPublicationCanonicalIdentityAndCopies(t *testing.T) {
 	}
 	if _, err := AttachSignature(body, []byte("short")); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("short Ed25519 signature error = %v", err)
+	}
+}
+
+func TestParseSignedPublicationRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	home, reviewer := mustPeer(t, "peer-wire-home"), mustPeer(t, "peer-wire-reviewer")
+	event := mustWorkEvent(t, home, home, reviewer, EventReviewOffered)
+	body, err := NewPublicationBody(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := AttachSignature(body, testPublicationSignature())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ParseSignedPublication(want.WireJSON().Bytes())
+	if err != nil {
+		t.Fatalf("ParseSignedPublication() error = %v", err)
+	}
+	if got.Digest() != want.Digest() || got.Key() != want.Key() ||
+		got.Event().Digest() != want.Event().Digest() || got.Event().Source() != EventSourceLocal ||
+		!bytes.Equal(got.WireJSON().Bytes(), want.WireJSON().Bytes()) ||
+		!bytes.Equal(got.OriginSignature(), want.OriginSignature()) {
+		t.Fatal("parsed publication did not preserve its immutable wire identity")
+	}
+
+	noncanonical := append([]byte{' '}, want.WireJSON().Bytes()...)
+	if _, err := ParseSignedPublication(noncanonical); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("noncanonical publication error = %v, want ErrInvalid", err)
+	}
+}
+
+func TestParseSignedPublicationRejectsSchemaAndBindingTampering(t *testing.T) {
+	t.Parallel()
+
+	home, reviewer := mustPeer(t, "peer-tamper-home"), mustPeer(t, "peer-tamper-reviewer")
+	event := mustWorkEvent(t, home, home, reviewer, EventReviewOffered)
+	body, _ := NewPublicationBody(event)
+	publication, _ := AttachSignature(body, testPublicationSignature())
+	raw := publication.WireJSON().Bytes()
+
+	tests := map[string]func(map[string]any){
+		"unknown outer field": func(outer map[string]any) {
+			outer["authority"] = "forged"
+		},
+		"unsupported body schema": func(outer map[string]any) {
+			outer["publication"].(map[string]any)["schema_version"] = float64(2)
+		},
+		"claimed digest": func(outer map[string]any) {
+			outer["publication_digest"] = Sum([]byte("tampered")).String()
+		},
+		"duplicated Channel": func(outer map[string]any) {
+			outer["publication"].(map[string]any)["channel_id"] = "channel-forged"
+		},
+		"embedded Event": func(outer map[string]any) {
+			body := outer["publication"].(map[string]any)
+			body["event"].(map[string]any)["summary"] = "tampered"
+		},
+		"short signature": func(outer map[string]any) {
+			outer["origin_signature"] = "c2hvcnQ="
+		},
+	}
+	for name, mutate := range tests {
+		name, mutate := name, mutate
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if _, err := ParseSignedPublication(mutateCanonicalPublication(t, raw, mutate)); err == nil {
+				t.Fatal("tampered publication was accepted")
+			}
+		})
+	}
+}
+
+func TestParseSignedPublicationAppliesWireLimitBeforeDecode(t *testing.T) {
+	t.Parallel()
+
+	raw := bytes.Repeat([]byte{'x'}, MaxPublicationBytes+1)
+	if _, err := ParseSignedPublication(raw); !errors.Is(err, ErrLimit) {
+		t.Fatalf("oversized publication error = %v, want ErrLimit", err)
 	}
 }
 
@@ -148,4 +230,22 @@ func TestPublicationRecordLeaseAndSource(t *testing.T) {
 
 func testPublicationSignature() []byte {
 	return bytes.Repeat([]byte{'s'}, ed25519.SignatureSize)
+}
+
+func mutateCanonicalPublication(t *testing.T, raw []byte, mutate func(map[string]any)) []byte {
+	t.Helper()
+	var value map[string]any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		t.Fatal(err)
+	}
+	mutate(value)
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := NewJSON(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return canonical.Bytes()
 }

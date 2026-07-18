@@ -1,8 +1,12 @@
 package model
 
 import (
+	"bytes"
 	"crypto/ed25519"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"time"
 )
 
@@ -121,6 +125,287 @@ func (p SignedPublication) CanonicalJSON() JSON     { return p.body.CanonicalJSO
 func (p SignedPublication) Digest() Digest          { return p.body.Digest() }
 func (p SignedPublication) OriginSignature() []byte { return append([]byte(nil), p.originSignature...) }
 func (p SignedPublication) WireJSON() JSON          { return p.wire }
+
+type publicationRecordHeadWire struct {
+	Digest   string `json:"digest"`
+	Revision uint64 `json:"revision"`
+}
+
+type publicationWorkRefWire struct {
+	HomePeerID string `json:"home_peer_id"`
+	WorkID     string `json:"work_id"`
+}
+
+type publicationEventKeyWire struct {
+	EventID      string `json:"event_id"`
+	OriginEpoch  string `json:"origin_epoch"`
+	OriginPeerID string `json:"origin_peer_id"`
+}
+
+type publicationArtifactRefWire struct {
+	Role       ArtifactRole `json:"role"`
+	RootDigest string       `json:"root_digest"`
+}
+
+type publicationEventWire struct {
+	AcceptedAt        string                       `json:"accepted_at"`
+	ActorPrincipal    string                       `json:"actor_principal"`
+	ArtifactRoots     []publicationArtifactRefWire `json:"artifact_roots"`
+	Audience          []string                     `json:"audience"`
+	CausedBy          []publicationEventKeyWire    `json:"caused_by"`
+	ChannelID         string                       `json:"channel_id"`
+	ChannelSeq        uint64                       `json:"channel_seq"`
+	CreatedAt         string                       `json:"created_at"`
+	EventID           string                       `json:"event_id"`
+	EventType         EventType                    `json:"event_type"`
+	OriginEpoch       string                       `json:"origin_epoch"`
+	OriginMember      publicationRecordHeadWire    `json:"origin_member"`
+	OriginPeerID      string                       `json:"origin_peer_id"`
+	OriginSeq         uint64                       `json:"origin_seq"`
+	Payload           json.RawMessage              `json:"payload"`
+	PublicationRoster publicationRecordHeadWire    `json:"publication_roster"`
+	Resource          publicationWorkRefWire       `json:"resource"`
+	SchemaVersion     int                          `json:"schema_version"`
+	Summary           string                       `json:"summary"`
+}
+
+type publicationBodyWire struct {
+	Audience          []string                  `json:"audience"`
+	ChannelID         string                    `json:"channel_id"`
+	ChannelSeq        uint64                    `json:"channel_seq"`
+	Event             json.RawMessage           `json:"event"`
+	EventDigest       string                    `json:"event_digest"`
+	EventID           string                    `json:"event_id"`
+	OriginEpoch       string                    `json:"origin_epoch"`
+	OriginMember      publicationRecordHeadWire `json:"origin_member"`
+	OriginPeerID      string                    `json:"origin_peer_id"`
+	OriginSeq         uint64                    `json:"origin_seq"`
+	PublicationRoster publicationRecordHeadWire `json:"publication_roster"`
+	SchemaVersion     int                       `json:"schema_version"`
+}
+
+type signedPublicationWire struct {
+	OriginSignature   []byte          `json:"origin_signature"`
+	Publication       json.RawMessage `json:"publication"`
+	PublicationDigest string          `json:"publication_digest"`
+}
+
+// ParseSignedPublication is the sole decoder for canonical bytes received by
+// Gossip and direct Pull. It rebuilds every value through the domain
+// constructors, so duplicated binding fields, collection order, digests and
+// the exact schema-v1 shape cannot disagree with the embedded Event.
+//
+// The immutable origin Event is reconstructed with local source projection:
+// source is deliberately absent from the wire identity. Inbox admission may
+// later create an imported local projection without changing these bytes.
+func ParseSignedPublication(raw []byte) (SignedPublication, error) {
+	if len(raw) > MaxPublicationBytes {
+		return SignedPublication{}, limit("signed publication", len(raw), MaxPublicationBytes)
+	}
+	canonical, err := NewJSON(raw)
+	if err != nil {
+		return SignedPublication{}, fmt.Errorf("parse signed publication: %w", err)
+	}
+	if !bytes.Equal(canonical.Bytes(), raw) {
+		return SignedPublication{}, invalid("signed publication", "must use exact canonical JSON")
+	}
+
+	var wire signedPublicationWire
+	if err := decodePublicationWire(raw, &wire); err != nil {
+		return SignedPublication{}, err
+	}
+	var bodyWire publicationBodyWire
+	if err := decodePublicationWire(wire.Publication, &bodyWire); err != nil {
+		return SignedPublication{}, err
+	}
+	if bodyWire.SchemaVersion != SchemaVersion {
+		return SignedPublication{}, invalid("signed publication", "unsupported schema version")
+	}
+
+	event, err := eventFromPublicationWire(bodyWire.Event)
+	if err != nil {
+		return SignedPublication{}, err
+	}
+	body, err := NewPublicationBody(event)
+	if err != nil {
+		return SignedPublication{}, err
+	}
+	claimedDigest, err := ParseDigest(wire.PublicationDigest)
+	if err != nil {
+		return SignedPublication{}, err
+	}
+	if claimedDigest != body.Digest() || !bytes.Equal(body.CanonicalJSON().Bytes(), wire.Publication) {
+		return SignedPublication{}, invariant("publication body or digest differs from its embedded Event")
+	}
+	publication, err := AttachSignature(body, wire.OriginSignature)
+	if err != nil {
+		return SignedPublication{}, err
+	}
+	if !bytes.Equal(publication.WireJSON().Bytes(), raw) {
+		return SignedPublication{}, invalid("signed publication", "omits, reorders or changes a schema-v1 field")
+	}
+	return publication, nil
+}
+
+func eventFromPublicationWire(raw []byte) (Event, error) {
+	var wire publicationEventWire
+	if err := decodePublicationWire(raw, &wire); err != nil {
+		return Event{}, err
+	}
+	if wire.SchemaVersion != SchemaVersion {
+		return Event{}, invalid("publication Event", "unsupported schema version")
+	}
+	channelID, err := ParseChannelID(wire.ChannelID)
+	if err != nil {
+		return Event{}, err
+	}
+	originPeerID, err := ParsePeerID(wire.OriginPeerID)
+	if err != nil {
+		return Event{}, err
+	}
+	originEpoch, err := ParseOriginEpoch(wire.OriginEpoch)
+	if err != nil {
+		return Event{}, err
+	}
+	originMember, err := recordHeadFromPublicationWire(wire.OriginMember)
+	if err != nil {
+		return Event{}, err
+	}
+	rosterHead, err := recordHeadFromPublicationWire(wire.PublicationRoster)
+	if err != nil {
+		return Event{}, err
+	}
+	workRef, err := workRefFromPublicationWire(wire.Resource)
+	if err != nil {
+		return Event{}, err
+	}
+	scope, err := NewEventScope(channelID, originPeerID, originEpoch, wire.OriginSeq,
+		wire.ChannelSeq, originMember, rosterHead, workRef)
+	if err != nil {
+		return Event{}, err
+	}
+	eventID, err := ParseEventID(wire.EventID)
+	if err != nil {
+		return Event{}, err
+	}
+	audience, err := audienceFromPublicationWire(wire.Audience)
+	if err != nil {
+		return Event{}, err
+	}
+	payload, err := NewJSON(wire.Payload)
+	if err != nil {
+		return Event{}, err
+	}
+	artifacts, err := artifactRefsFromPublicationWire(wire.ArtifactRoots)
+	if err != nil {
+		return Event{}, err
+	}
+	causedBy, err := eventKeysFromPublicationWire(wire.CausedBy)
+	if err != nil {
+		return Event{}, err
+	}
+	createdAt, err := time.Parse(time.RFC3339Nano, wire.CreatedAt)
+	if err != nil {
+		return Event{}, invalid("publication Event created_at", "must be RFC3339Nano")
+	}
+	acceptedAt, err := time.Parse(time.RFC3339Nano, wire.AcceptedAt)
+	if err != nil {
+		return Event{}, invalid("publication Event accepted_at", "must be RFC3339Nano")
+	}
+	event, err := NewEvent(EventSpec{ID: eventID, Scope: scope, Source: EventSourceLocal,
+		ActorPrincipal: wire.ActorPrincipal, Type: wire.EventType, Audience: audience,
+		Summary: wire.Summary, Payload: payload, Artifacts: artifacts, CausedBy: causedBy,
+		CreatedAt: createdAt, AcceptedAt: acceptedAt})
+	if err != nil {
+		return Event{}, err
+	}
+	if !bytes.Equal(event.CanonicalJSON().Bytes(), raw) {
+		return Event{}, invalid("publication Event", "omits, reorders or changes a schema-v1 field")
+	}
+	return event, nil
+}
+
+func decodePublicationWire(raw []byte, destination any) error {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(destination); err != nil {
+		return fmt.Errorf("parse signed publication: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return invalid("signed publication", "unexpected trailing JSON value")
+	}
+	return nil
+}
+
+func recordHeadFromPublicationWire(wire publicationRecordHeadWire) (RecordHead, error) {
+	digest, err := ParseDigest(wire.Digest)
+	if err != nil {
+		return RecordHead{}, err
+	}
+	return NewRecordHead(wire.Revision, digest)
+}
+
+func workRefFromPublicationWire(wire publicationWorkRefWire) (WorkRef, error) {
+	peerID, err := ParsePeerID(wire.HomePeerID)
+	if err != nil {
+		return WorkRef{}, err
+	}
+	workID, err := ParseWorkID(wire.WorkID)
+	if err != nil {
+		return WorkRef{}, err
+	}
+	return NewWorkRef(peerID, workID)
+}
+
+func audienceFromPublicationWire(wire []string) (Audience, error) {
+	peers := make([]PeerID, len(wire))
+	for index, value := range wire {
+		peerID, err := ParsePeerID(value)
+		if err != nil {
+			return Audience{}, err
+		}
+		peers[index] = peerID
+	}
+	return NewAudience(peers)
+}
+
+func artifactRefsFromPublicationWire(wire []publicationArtifactRefWire) ([]ArtifactRef, error) {
+	refs := make([]ArtifactRef, len(wire))
+	for index, value := range wire {
+		digest, err := ParseDigest(value.RootDigest)
+		if err != nil {
+			return nil, err
+		}
+		refs[index], err = NewArtifactRef(digest, value.Role)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return refs, nil
+}
+
+func eventKeysFromPublicationWire(wire []publicationEventKeyWire) ([]EventKey, error) {
+	keys := make([]EventKey, len(wire))
+	for index, value := range wire {
+		peerID, err := ParsePeerID(value.OriginPeerID)
+		if err != nil {
+			return nil, err
+		}
+		epoch, err := ParseOriginEpoch(value.OriginEpoch)
+		if err != nil {
+			return nil, err
+		}
+		eventID, err := ParseEventID(value.EventID)
+		if err != nil {
+			return nil, err
+		}
+		keys[index], err = NewEventKey(peerID, epoch, eventID)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return keys, nil
+}
 
 type PublicationStatus string
 
