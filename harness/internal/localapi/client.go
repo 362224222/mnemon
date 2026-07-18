@@ -134,6 +134,30 @@ func (c *Client) ProbeHealth(ctx context.Context) (HealthResponse, *APIError) {
 	return response, nil
 }
 
+// ReadStatus observes activation and the live managed Runtime worker even
+// while aggregate health is not_ready. It carries no Agent capability header
+// and accepts only the closed, identity-free status envelope.
+func (c *Client) ReadStatus(ctx context.Context) (StatusResponse, *APIError) {
+	var response StatusResponse
+	if c == nil || c.http == nil || ctx == nil {
+		return StatusResponse{}, invalidControlResponse("local control client is unavailable")
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		"http://mnemond"+RouteStatus, nil)
+	if err != nil {
+		return StatusResponse{}, invalidControlResponse("local control request cannot be created")
+	}
+	request.Header.Set(authorizationHeader,
+		profileScheme+base64.RawURLEncoding.EncodeToString(c.token[:]))
+	if apiErr := c.send(request, &response, MaxStatusResponseBytes); apiErr != nil {
+		return StatusResponse{}, apiErr
+	}
+	if apiErr := validateStatusResponse(response); apiErr != nil {
+		return StatusResponse{}, apiErr
+	}
+	return response, nil
+}
+
 // ReadAuthority observes the current durable setup authority through the
 // authenticated owner-only controller. It carries no Agent capability header
 // and accepts only the closed canonical authority envelope.

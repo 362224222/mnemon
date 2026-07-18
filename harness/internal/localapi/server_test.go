@@ -673,6 +673,172 @@ func TestServerHealthProviderFailureIsClosed(t *testing.T) {
 	}
 }
 
+func TestServerStatusIsAuthenticatedClosedAndAvailableWhileDegraded(t *testing.T) {
+	t.Parallel()
+	credential := repeatedOpaqueBytes(0x36)
+	revision := model.Sum([]byte("status-route-assets")).String()
+	called := 0
+	provider := StatusProviderFunc(func(_ context.Context,
+		metadata RequestMetadata,
+	) (StatusSnapshot, *APIError) {
+		called++
+		if metadata.Profile.ID() != model.TeamworkProfileID() || metadata.HasOperationKey ||
+			metadata.HasClaimContext || metadata.HasRunAttachment {
+			t.Fatalf("status metadata = %#v", metadata)
+		}
+		return StatusSnapshot{AssetRevision: revision, ActivationReady: true,
+			Runtime: RuntimeStatusSnapshot{Running: true, Healthy: true,
+				Issue: statusIssueWakePrepare}}, nil
+	})
+	server := newStatusTestServer(t, &fakeAuthenticator{want: modelDigest(credential)}, provider)
+	request := httptest.NewRequest(http.MethodGet, RouteStatus, nil)
+	request.Header.Set(authorizationHeader, profileScheme+encodeSecret(credential))
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+	want := `{"activation":{"issue":"none","state":"ready"},"asset_revision":"` + revision +
+		`","runtime":{"issue":"wake_preparation_unavailable","state":"retrying"},` +
+		`"schema_version":1,"scope":"managed_agent","status":"degraded"}` + "\n"
+	if recorder.Code != http.StatusOK || recorder.Body.String() != want || called != 1 ||
+		recorder.Header().Get("Cache-Control") != "no-store" ||
+		recorder.Header().Get("X-Content-Type-Options") != "nosniff" ||
+		IsAgentRoute(RouteStatus) || !IsControlRoute(RouteStatus) {
+		t.Fatalf("status response = %d %q headers=%v called=%d", recorder.Code,
+			recorder.Body.String(), recorder.Header(), called)
+	}
+}
+
+func TestServerStatusRejectsMethodsContentCapabilitiesAndBadAuthBeforeProvider(t *testing.T) {
+	t.Parallel()
+	credential := repeatedOpaqueBytes(0x37)
+	secret := encodeSecret(repeatedOpaqueBytes(0x38))
+	called := 0
+	server := newStatusTestServer(t, &fakeAuthenticator{want: modelDigest(credential)},
+		StatusProviderFunc(func(context.Context, RequestMetadata) (StatusSnapshot, *APIError) {
+			called++
+			return StatusSnapshot{AssetRevision: model.Sum([]byte("status-assets")).String(),
+				ActivationReady: true,
+				Runtime:         RuntimeStatusSnapshot{Running: true, Ready: true, Healthy: true}}, nil
+		}))
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+		mutate func(*http.Request)
+		status int
+		allow  string
+	}{
+		{name: "method", method: http.MethodPost, path: RouteStatus,
+			status: http.StatusMethodNotAllowed, allow: http.MethodGet},
+		{name: "body", method: http.MethodGet, path: RouteStatus, body: `{}`,
+			status: http.StatusBadRequest},
+		{name: "content type", method: http.MethodGet, path: RouteStatus,
+			mutate: func(request *http.Request) { request.Header.Set("Content-Type", "application/json") },
+			status: http.StatusBadRequest},
+		{name: "query", method: http.MethodGet, path: RouteStatus + "?detail=1",
+			status: http.StatusBadRequest},
+		{name: "operation", method: http.MethodGet, mutate: func(request *http.Request) {
+			request.Header.Set(operationKeyHeader, secret)
+		}, status: http.StatusBadRequest},
+		{name: "claim", method: http.MethodGet, mutate: func(request *http.Request) {
+			request.Header.Set(claimContextHeader, secret)
+		}, status: http.StatusBadRequest},
+		{name: "attachment", method: http.MethodGet, mutate: func(request *http.Request) {
+			request.Header.Set(runAttachmentHeader, secret)
+		}, status: http.StatusBadRequest},
+		{name: "authentication", method: http.MethodGet, mutate: func(request *http.Request) {
+			request.Header.Set(authorizationHeader,
+				profileScheme+encodeSecret(repeatedOpaqueBytes(0x39)))
+		}, status: http.StatusUnauthorized},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := test.path
+			if path == "" {
+				path = RouteStatus
+			}
+			request := httptest.NewRequest(test.method, path, strings.NewReader(test.body))
+			request.Header.Set(authorizationHeader, profileScheme+encodeSecret(credential))
+			if test.mutate != nil {
+				test.mutate(request)
+			}
+			recorder := httptest.NewRecorder()
+			server.Handler().ServeHTTP(recorder, request)
+			if recorder.Code != test.status || recorder.Header().Get("Allow") != test.allow {
+				t.Fatalf("status rejection = %d %s Allow=%q", recorder.Code,
+					recorder.Body.String(), recorder.Header().Get("Allow"))
+			}
+		})
+	}
+	if called != 0 {
+		t.Fatalf("rejected requests called status provider %d times", called)
+	}
+}
+
+func TestServerStatusProviderFailureIsClosedAndRedacted(t *testing.T) {
+	t.Parallel()
+	credential := repeatedOpaqueBytes(0x3a)
+	secret := "provider-key=must-not-escape"
+	tests := []struct {
+		name     string
+		server   func(*testing.T) *Server
+		wantCode ErrorCode
+	}{
+		{name: "missing", server: func(t *testing.T) *Server {
+			server, err := NewServer(&fakeAuthenticator{want: modelDigest(credential)}, &fakeService{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			return server
+		}, wantCode: CodeInternal},
+		{name: "invalid snapshot", server: func(t *testing.T) *Server {
+			return newStatusTestServer(t, &fakeAuthenticator{want: modelDigest(credential)},
+				StatusProviderFunc(func(context.Context, RequestMetadata) (StatusSnapshot, *APIError) {
+					return StatusSnapshot{AssetRevision: secret}, nil
+				}))
+		}, wantCode: CodeInternal},
+		{name: "provider error", server: func(t *testing.T) *Server {
+			return newStatusTestServer(t, &fakeAuthenticator{want: modelDigest(credential)},
+				StatusProviderFunc(func(context.Context, RequestMetadata) (StatusSnapshot, *APIError) {
+					return StatusSnapshot{}, NewAPIError(CodeMnemondUnavailable, secret)
+				}))
+		}, wantCode: CodeMnemondUnavailable},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, RouteStatus, nil)
+			request.Header.Set(authorizationHeader, profileScheme+encodeSecret(credential))
+			recorder := httptest.NewRecorder()
+			test.server(t).Handler().ServeHTTP(recorder, request)
+			var envelope APIError
+			if err := json.Unmarshal(recorder.Body.Bytes(), &envelope); err != nil ||
+				envelope.Code != test.wantCode || strings.Contains(recorder.Body.String(), secret) {
+				t.Fatalf("status failure = %d %s (%v)", recorder.Code,
+					recorder.Body.String(), err)
+			}
+		})
+	}
+}
+
+func newStatusTestServer(t *testing.T, authenticator Authenticator,
+	status StatusProvider,
+) *Server {
+	t.Helper()
+	revision := model.Sum([]byte("status-composition-assets")).String()
+	authority := testShutdownAuthoritySnapshot(t)
+	server, err := NewServerWithStatusLifecycle(authenticator, &fakeService{},
+		HealthProviderFunc(func(context.Context, RequestMetadata) (HealthSnapshot, *APIError) {
+			return HealthSnapshot{AssetRevision: revision}, nil
+		}), status,
+		AuthorityProviderFunc(func(context.Context, RequestMetadata) (AuthoritySnapshot, *APIError) {
+			return authority, nil
+		}), LifecycleFunc(func() {}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return server
+}
+
 func TestNewServerRetainsStrictOptionalHealthComposition(t *testing.T) {
 	t.Parallel()
 	if _, err := NewServer(&fakeAuthenticator{}, &fakeService{}, HealthProvider(nil)); err == nil {
@@ -698,6 +864,17 @@ func TestNewServerRetainsStrictOptionalHealthComposition(t *testing.T) {
 	if _, err := NewServerWithLifecycle(&fakeAuthenticator{}, &fakeService{},
 		health, authority, nil); err == nil {
 		t.Fatal("NewServerWithLifecycle accepted a nil lifecycle signal")
+	}
+	status := StatusProviderFunc(func(context.Context, RequestMetadata) (StatusSnapshot, *APIError) {
+		return StatusSnapshot{}, nil
+	})
+	if _, err := NewServerWithStatusLifecycle(&fakeAuthenticator{}, &fakeService{}, health,
+		status, authority, nil); err == nil {
+		t.Fatal("NewServerWithStatusLifecycle accepted a nil lifecycle signal")
+	}
+	if _, err := NewServerWithStatusLifecycle(&fakeAuthenticator{}, &fakeService{}, health,
+		nil, authority, LifecycleFunc(func() {})); err == nil {
+		t.Fatal("NewServerWithStatusLifecycle accepted a nil status provider")
 	}
 }
 

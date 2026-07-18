@@ -167,6 +167,35 @@ func NewController(options ControllerOptions) (*Controller, error) {
 		ready := gate.Check(healthCtx, metadata.Profile) == nil
 		return localapi.HealthSnapshot{AssetRevision: assetRevision, WorkersReady: ready}, nil
 	})
+	status := localapi.StatusProviderFunc(func(statusCtx context.Context,
+		metadata localapi.RequestMetadata,
+	) (localapi.StatusSnapshot, *localapi.APIError) {
+		if statusCtx == nil || statusCtx.Err() != nil ||
+			metadata.Profile.ID() != model.TeamworkProfileID() {
+			return localapi.StatusSnapshot{}, localapi.NewAPIError(localapi.CodeInternal,
+				"operational status observation was cancelled")
+		}
+		current, readErr := options.Store.ReadLocalAuthority(statusCtx)
+		if readErr != nil {
+			return localapi.StatusSnapshot{}, localapi.NewAPIError(localapi.CodeInternal,
+				"durable operational status is unavailable")
+		}
+		activationIssue := ""
+		if !sameControllerProfile(current.Profile, options.Profile) {
+			activationIssue = "durable_authority_mismatch"
+		} else if current.Node.ActiveAssetRevision() != assetRevision ||
+			options.Install.Verify(options.Profile) != nil {
+			activationIssue = "asset_revision_mismatch"
+		}
+		worker := agent.WakeWorkerSnapshot{Healthy: true}
+		if wakeWorker != nil {
+			worker = wakeWorker.Snapshot()
+		}
+		return localapi.StatusSnapshot{AssetRevision: assetRevision,
+			ActivationReady: activationIssue == "", ActivationIssue: activationIssue,
+			Runtime: localapi.RuntimeStatusSnapshot{Running: worker.Running, Ready: worker.Ready,
+				Healthy: worker.Healthy, Recovering: worker.Recovering, Issue: worker.LastError}}, nil
+	})
 	authority := localapi.AuthorityProviderFunc(func(authorityCtx context.Context,
 		metadata localapi.RequestMetadata,
 	) (localapi.AuthoritySnapshot, *localapi.APIError) {
@@ -186,8 +215,8 @@ func NewController(options ControllerOptions) (*Controller, error) {
 		admission: admission, wakeWorker: wakeWorker, shutdownRequested: make(chan struct{}),
 		beforeAccept: options.BeforeAccept}
 	managedService := controllerAdmissionService{gate: admission, next: service}
-	server, err := localapi.NewServerWithLifecycle(options.Store, managedService, health, authority,
-		localapi.LifecycleFunc(controller.requestShutdown), controller)
+	server, err := localapi.NewServerWithStatusLifecycle(options.Store, managedService, health, status,
+		authority, localapi.LifecycleFunc(controller.requestShutdown), controller)
 	if err != nil {
 		return nil, err
 	}
@@ -288,7 +317,7 @@ func sameControllerProfile(got, want model.Profile) bool {
 	return got.ID() == want.ID() && got.Principal() == want.Principal() &&
 		got.WorkspaceRoot() == want.WorkspaceRoot() && got.Host() == want.Host() &&
 		got.Runtime() == want.Runtime() && got.CredentialHash() == want.CredentialHash() &&
-		got.ActiveAssetRevision() == want.ActiveAssetRevision() &&
+		got.ActiveAssetRevision() == want.ActiveAssetRevision() && got.UpdatedAt().Equal(want.UpdatedAt()) &&
 		got.HandlingBudget().String() == want.HandlingBudget().String() && got.Enabled() && want.Enabled()
 }
 

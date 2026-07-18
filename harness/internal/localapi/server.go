@@ -14,6 +14,7 @@ import (
 
 const (
 	RouteHealth         = "/v1/health"
+	RouteStatus         = "/v1/status"
 	RouteAuthority      = "/v1/authority"
 	RouteShutdown       = "/v1/shutdown"
 	RouteHookCheck      = "/v1/hook/check"
@@ -33,6 +34,7 @@ type Server struct {
 	authenticator Authenticator
 	service       Service
 	health        HealthProvider
+	status        StatusProvider
 	authority     AuthorityProvider
 	lifecycle     LifecycleFunc
 	mutation      MutationShutdownPreparer
@@ -50,7 +52,7 @@ func NewServer(authenticator Authenticator, service Service,
 	if len(healthProviders) == 1 {
 		health = healthProviders[0]
 	}
-	return newServer(authenticator, service, health, nil, nil, nil)
+	return newServer(authenticator, service, health, nil, nil, nil, nil)
 }
 
 // NewServerWithAuthority composes the controller-only observation route while
@@ -61,7 +63,7 @@ func NewServerWithAuthority(authenticator Authenticator, service Service,
 	if health == nil || authority == nil {
 		return nil, errors.New("local API: health and authority providers are required")
 	}
-	return newServer(authenticator, service, health, authority, nil, nil)
+	return newServer(authenticator, service, health, nil, authority, nil, nil)
 }
 
 // NewServerWithLifecycle composes all owner-only controller routes without
@@ -78,11 +80,30 @@ func NewServerWithLifecycle(authenticator Authenticator, service Service,
 	if len(mutation) == 1 {
 		preparer = mutation[0]
 	}
-	return newServer(authenticator, service, health, authority, lifecycle, preparer)
+	return newServer(authenticator, service, health, nil, authority, lifecycle, preparer)
+}
+
+// NewServerWithStatusLifecycle composes the complete controller observation
+// and lifecycle surface. The smaller constructors remain available to unit
+// tests and domain services that do not claim operational status support.
+func NewServerWithStatusLifecycle(authenticator Authenticator, service Service,
+	health HealthProvider, status StatusProvider, authority AuthorityProvider,
+	lifecycle LifecycleFunc, mutation ...MutationShutdownPreparer,
+) (*Server, error) {
+	if health == nil || status == nil || authority == nil || lifecycle == nil || len(mutation) > 1 ||
+		len(mutation) == 1 && mutation[0] == nil {
+		return nil, errors.New("local API: health, status, authority and lifecycle providers are required")
+	}
+	var preparer MutationShutdownPreparer
+	if len(mutation) == 1 {
+		preparer = mutation[0]
+	}
+	return newServer(authenticator, service, health, status, authority, lifecycle, preparer)
 }
 
 func newServer(authenticator Authenticator, service Service, health HealthProvider,
-	authority AuthorityProvider, lifecycle LifecycleFunc, mutation MutationShutdownPreparer,
+	status StatusProvider, authority AuthorityProvider, lifecycle LifecycleFunc,
+	mutation MutationShutdownPreparer,
 ) (*Server, error) {
 	if authenticator == nil || service == nil {
 		return nil, errors.New("local API: authenticator and service are required")
@@ -92,10 +113,11 @@ func newServer(authenticator Authenticator, service Service, health HealthProvid
 			health = provided
 		}
 	}
-	server := &Server{authenticator: authenticator, service: service, health: health,
+	server := &Server{authenticator: authenticator, service: service, health: health, status: status,
 		authority: authority, lifecycle: lifecycle, mutation: mutation}
 	mux := http.NewServeMux()
 	mux.HandleFunc(RouteHealth, server.handleHealth)
+	mux.HandleFunc(RouteStatus, server.handleStatus)
 	mux.HandleFunc(RouteAuthority, server.handleAuthority)
 	mux.HandleFunc(RouteShutdown, server.handleShutdown)
 	mux.HandleFunc(RouteHookCheck, server.handleHookCheck)
@@ -302,6 +324,62 @@ func (s *Server) handleHealth(writer http.ResponseWriter, request *http.Request)
 		return
 	}
 	writeResponse(writer, http.StatusOK, response)
+}
+
+func (s *Server) handleStatus(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet {
+		writer.Header().Set("Allow", http.MethodGet)
+		writeErrorStatus(writer, http.StatusMethodNotAllowed,
+			NewAPIError(CodeInvalidArgument, "method is not allowed"))
+		return
+	}
+	if request.ContentLength != 0 || len(request.TransferEncoding) != 0 ||
+		request.Header.Get("Content-Type") != "" {
+		writeError(writer, NewAPIError(CodeInvalidArgument,
+			"status request must not contain content"))
+		return
+	}
+	if request.URL.RawQuery != "" {
+		writeError(writer, NewAPIError(CodeInvalidArgument,
+			"status request must not contain a query"))
+		return
+	}
+	if request.Body != nil {
+		raw, err := io.ReadAll(io.LimitReader(request.Body, 1))
+		if err != nil || len(raw) != 0 {
+			writeError(writer, NewAPIError(CodeInvalidArgument,
+				"status request must not contain content"))
+			return
+		}
+	}
+	metadata, apiErr := authenticateRequest(request.Context(), request, s.authenticator, headerPolicy{})
+	if apiErr != nil {
+		writeError(writer, apiErr)
+		return
+	}
+	if s.status == nil {
+		writeError(writer, NewAPIError(CodeInternal, "status provider is unavailable"))
+		return
+	}
+	snapshot, apiErr := s.status.Status(request.Context(), metadata)
+	if apiErr != nil {
+		writeError(writer, publicStatusProviderError(apiErr))
+		return
+	}
+	response, err := NewStatusResponse(snapshot)
+	if err != nil {
+		writeError(writer, NewAPIError(CodeInternal, "status provider returned invalid state"))
+		return
+	}
+	writeResponse(writer, http.StatusOK, response)
+}
+
+func publicStatusProviderError(apiErr *APIError) *APIError {
+	if apiErr != nil && apiErr.Code == CodeMnemondUnavailable {
+		return NewAPIError(CodeMnemondUnavailable,
+			"operational status is temporarily unavailable")
+	}
+	return NewAPIError(CodeInternal, "operational status observation failed")
 }
 
 func (s *Server) handleAuthority(writer http.ResponseWriter, request *http.Request) {
@@ -541,7 +619,8 @@ func IsAgentRoute(path string) bool {
 }
 
 func IsControlRoute(path string) bool {
-	return path == RouteHealth || path == RouteAuthority || path == RouteShutdown || IsAgentRoute(path)
+	return path == RouteHealth || path == RouteStatus || path == RouteAuthority ||
+		path == RouteShutdown || IsAgentRoute(path)
 }
 
 func validTeamworkAction(action string) bool {

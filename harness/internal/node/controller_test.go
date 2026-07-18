@@ -113,6 +113,12 @@ func TestControllerServesOwnerOnlyManagedRoutesFromOneStore(t *testing.T) {
 		health.AssetRevision != bundle.Manifest().AssetRevision {
 		t.Fatalf("ProbeHealth() = (%#v, %v)", health, apiErr)
 	}
+	status, apiErr := client.ReadStatus(context.Background())
+	if apiErr != nil || status.Status != "degraded" || status.Activation.State != "ready" ||
+		status.Activation.Issue != "none" || status.Runtime.State != "starting" ||
+		status.Runtime.Issue != "none" || status.AssetRevision != bundle.Manifest().AssetRevision {
+		t.Fatalf("ReadStatus() = (%#v, %v)", status, apiErr)
+	}
 	authority, apiErr := client.ReadAuthority(context.Background())
 	if apiErr != nil || !authority.Enabled || authority.Host != string(model.HostCodex) ||
 		authority.Runtime != string(model.RuntimeCodexAppServer) ||
@@ -160,6 +166,11 @@ func TestControllerServesOwnerOnlyManagedRoutesFromOneStore(t *testing.T) {
 	health, apiErr = client.ProbeHealth(context.Background())
 	if apiErr != nil || health.Status != "not_ready" {
 		t.Fatalf("drifted ProbeHealth() = (%#v, %v)", health, apiErr)
+	}
+	status, apiErr = client.ReadStatus(context.Background())
+	if apiErr != nil || status.Status != "degraded" || status.Activation.State != "failed" ||
+		status.Activation.Issue != "durable_authority_mismatch" || status.Runtime.State != "starting" {
+		t.Fatalf("drifted ReadStatus() = (%#v, %v)", status, apiErr)
 	}
 	if _, apiErr := client.HookCheck(context.Background()); apiErr == nil ||
 		apiErr.Code != localapi.CodeAssetRevisionMismatch {
@@ -381,8 +392,18 @@ func TestControllerManagedWorkerGatesReadinessAndStopsBeforeHTTP(t *testing.T) {
 		health.Status != "not_ready" {
 		t.Fatalf("recovering worker health = (%#v, %#v)", health, apiErr)
 	}
+	if status, apiErr := client.ReadStatus(context.Background()); apiErr != nil ||
+		status.Status != "degraded" || status.Activation.State != "ready" ||
+		status.Runtime.State != "recovering" || status.Runtime.Issue != "none" {
+		t.Fatalf("recovering worker status = (%#v, %#v)", status, apiErr)
+	}
 	close(worker.allowReady)
 	waitControllerHealth(t, client, "ready")
+	if status, apiErr := client.ReadStatus(context.Background()); apiErr != nil ||
+		status.Status != "ready" || status.Activation.State != "ready" ||
+		status.Runtime.State != "ready" || status.Runtime.Issue != "none" {
+		t.Fatalf("ready worker status = (%#v, %#v)", status, apiErr)
+	}
 
 	controller.requestShutdown()
 	select {
@@ -414,6 +435,61 @@ func TestControllerManagedWorkerGatesReadinessAndStopsBeforeHTTP(t *testing.T) {
 	}
 }
 
+func TestControllerStatusDistinguishesInstallationDriftFromRuntimeHealth(t *testing.T) {
+	fixture := newDaemonFixture(t, true)
+	worker := newControllerTestWakeWorker()
+	controller, closeStore := newControllerWithTestWakeWorker(t, fixture, worker)
+	defer closeStore()
+
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- controller.Serve(context.Background()) }()
+	select {
+	case <-worker.started:
+	case err := <-serveDone:
+		t.Fatalf("Controller exited before worker startup: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Controller did not start managed worker")
+	}
+	client, err := localapi.NewClient(fixture.nodeState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	close(worker.allowReady)
+	waitControllerHealth(t, client, "ready")
+	guide := filepath.Join(fixture.workspace, ".agents", "skills", "mnemon-harness",
+		"guides", "teamwork", "GUIDE.md")
+	if err := os.Remove(guide); err != nil {
+		t.Fatal(err)
+	}
+	if status, apiErr := client.ReadStatus(context.Background()); apiErr != nil ||
+		status.Status != "degraded" || status.Activation.State != "failed" ||
+		status.Activation.Issue != "asset_revision_mismatch" || status.Runtime.State != "ready" ||
+		status.Runtime.Issue != "none" {
+		t.Fatalf("installation-drift status = (%#v, %#v)", status, apiErr)
+	}
+	if health, apiErr := client.ProbeHealth(context.Background()); apiErr != nil ||
+		health.Status != "not_ready" {
+		t.Fatalf("installation-drift health = (%#v, %#v)", health, apiErr)
+	}
+	controller.requestShutdown()
+	select {
+	case <-worker.cancelling:
+	case err := <-serveDone:
+		t.Fatalf("Controller stopped before worker cancellation: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("worker did not observe shutdown")
+	}
+	close(worker.allowStop)
+	select {
+	case err := <-serveDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Controller did not stop after worker cleanup")
+	}
+}
+
 func TestControllerManagedWorkerFailureStaysReachableAndFailsClosed(t *testing.T) {
 	fixture := newDaemonFixture(t, true)
 	worker := newControllerTestWakeWorker()
@@ -442,6 +518,12 @@ func TestControllerManagedWorkerFailureStaysReachableAndFailsClosed(t *testing.T
 		t.Fatal("failed worker did not return")
 	}
 	waitControllerHealth(t, client, "not_ready")
+	if status, apiErr := client.ReadStatus(context.Background()); apiErr != nil ||
+		status.Status != "degraded" || status.Activation.State != "ready" ||
+		status.Runtime.State != "failed" ||
+		status.Runtime.Issue != "durable_runtime_transition_failed" {
+		t.Fatalf("failed worker status = (%#v, %#v)", status, apiErr)
+	}
 	if _, apiErr := client.HookCheck(context.Background()); apiErr == nil ||
 		apiErr.Code != localapi.CodeMnemondUnavailable {
 		t.Fatalf("HookCheck after worker failure = %#v", apiErr)

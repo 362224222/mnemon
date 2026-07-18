@@ -498,6 +498,89 @@ func TestClientProbeHealthRejectsNonclosedAndOversizeResponses(t *testing.T) {
 	}
 }
 
+func TestClientReadsOnlyClosedStatusOverOwnerControl(t *testing.T) {
+	t.Parallel()
+	nodeState := newClientNodeState(t)
+	credential := repeatedOpaqueBytes(0x84)
+	installClientCredential(t, nodeState, credential)
+	revision := model.Sum([]byte("client-status-assets")).String()
+	called := 0
+	stop := serveRawClientControl(t, nodeState, http.HandlerFunc(func(writer http.ResponseWriter,
+		request *http.Request,
+	) {
+		called++
+		if request.Method != http.MethodGet || request.URL.Path != RouteStatus ||
+			request.URL.RawQuery != "" || request.ContentLength != 0 || request.Header.Get("Content-Type") != "" ||
+			request.Header.Get(operationKeyHeader) != "" || request.Header.Get(claimContextHeader) != "" ||
+			request.Header.Get(runAttachmentHeader) != "" ||
+			request.Header.Get(authorizationHeader) != profileScheme+encodeSecret(credential) {
+			t.Errorf("status request = %s %s headers=%v length=%d", request.Method,
+				request.URL.String(), request.Header, request.ContentLength)
+		}
+		response, err := NewStatusResponse(StatusSnapshot{AssetRevision: revision,
+			ActivationReady: true,
+			Runtime: RuntimeStatusSnapshot{Running: true, Healthy: true,
+				Issue: statusIssueWakePrepare}})
+		if err != nil {
+			t.Errorf("status response: %v", err)
+			return
+		}
+		writeResponse(writer, http.StatusOK, response)
+	}))
+	defer stop()
+	client, err := NewClient(nodeState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, apiErr := client.ReadStatus(context.Background())
+	if apiErr != nil || response.Status != statusDegraded ||
+		response.Activation != (StatusCheck{Issue: statusIssueNone, State: activationReady}) ||
+		response.Runtime != (StatusCheck{Issue: statusIssueWakePrepare, State: runtimeRetrying}) ||
+		response.Scope != statusScopeManagedAgent || response.AssetRevision != revision || called != 1 {
+		t.Fatalf("ReadStatus() = (%#v, %#v), calls=%d", response, apiErr, called)
+	}
+}
+
+func TestClientStatusResponseValidationFailsClosed(t *testing.T) {
+	t.Parallel()
+	revision := model.Sum([]byte("client-status-validation")).String()
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "unknown field", body: `{"activation":{"issue":"none","state":"ready"},` +
+			`"asset_revision":"` + revision + `","private_runtime_id":"turn-secret",` +
+			`"runtime":{"issue":"none","state":"ready"},"schema_version":1,` +
+			`"scope":"managed_agent","status":"ready"}` + "\n"},
+		{name: "inconsistent", body: `{"activation":{"issue":"none","state":"ready"},` +
+			`"asset_revision":"` + revision + `","runtime":{"issue":"internal_runtime_issue",` +
+			`"state":"ready"},"schema_version":1,"scope":"managed_agent","status":"ready"}` + "\n"},
+		{name: "oversize", body: `{"padding":"` + strings.Repeat("x", MaxStatusResponseBytes) + `"}` + "\n"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			nodeState := newClientNodeState(t)
+			credential := repeatedOpaqueBytes(0x85)
+			installClientCredential(t, nodeState, credential)
+			stop := serveRawClientControl(t, nodeState, http.HandlerFunc(func(writer http.ResponseWriter,
+				_ *http.Request,
+			) {
+				writer.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(writer, test.body)
+			}))
+			defer stop()
+			client, err := NewClient(nodeState)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if response, apiErr := client.ReadStatus(context.Background()); apiErr == nil ||
+				apiErr.Code != CodeInternal || response != (StatusResponse{}) {
+				t.Fatalf("invalid ReadStatus() = (%#v, %#v)", response, apiErr)
+			}
+		})
+	}
+}
+
 func TestClientContextlessOfferAndStableRemoteError(t *testing.T) {
 	t.Parallel()
 	nodeState := newClientNodeState(t)
