@@ -74,6 +74,21 @@ type setupProcessResult struct {
 	err      error
 }
 
+type setupProcessDoctorCheck struct {
+	Issue  string `json:"issue"`
+	Name   string `json:"name"`
+	Remedy string `json:"remedy"`
+	Status string `json:"status"`
+}
+
+type setupProcessDoctorReport struct {
+	Checks        []setupProcessDoctorCheck `json:"checks"`
+	Mode          string                    `json:"mode"`
+	SchemaVersion int                       `json:"schema_version"`
+	Scope         string                    `json:"scope"`
+	Status        string                    `json:"status"`
+}
+
 type setupProcessPIDSnapshot struct {
 	record setupProcessPID
 	raw    []byte
@@ -198,6 +213,24 @@ func TestPublicSetupSerializesProcessesAndRecoversAKilledDaemon(t *testing.T) {
 		status.Activation.State != "ready" || status.Activation.Issue != "none" ||
 		status.Runtime.State != "ready" || status.Runtime.Issue != "none" {
 		t.Fatalf("public status after setup = (%#v, %v)", status, err)
+	}
+	doctorCtx, cancelDoctor := context.WithTimeout(context.Background(), 10*time.Second)
+	doctorResult := setupProcessRunHarness(doctorCtx, harnessExecutable, workspace, environment,
+		"doctor")
+	cancelDoctor()
+	doctor, err := setupProcessParseDoctor(doctorResult)
+	if err != nil || doctor.SchemaVersion != localapi.SchemaVersion ||
+		doctor.Scope != "managed_agent" || doctor.Mode != "online" || doctor.Status != "healthy" ||
+		len(doctor.Checks) != 6 {
+		t.Fatalf("public doctor after setup = (%#v, %v)", doctor, err)
+	}
+	for index, name := range []string{"node_authority", "canonical_assets", "host_projection",
+		"host_registration", "daemon", "managed_runtime"} {
+		check := doctor.Checks[index]
+		if check.Name != name || check.Status != "pass" || check.Issue != "none" ||
+			check.Remedy != "none" {
+			t.Fatalf("public doctor check %d = %#v", index, check)
+		}
 	}
 	setupProcessAssertCodexProjectionLayout(t, workspace, true)
 
@@ -835,6 +868,34 @@ func setupProcessParseStatus(result setupProcessResult) (localapi.StatusResponse
 	return response, nil
 }
 
+func setupProcessParseDoctor(result setupProcessResult) (setupProcessDoctorReport, error) {
+	if result.err != nil {
+		return setupProcessDoctorReport{}, fmt.Errorf("exit=%v stderr=%s stdout=%s", result.err,
+			setupProcessFingerprint(result.stderr), setupProcessFingerprint(result.stdout))
+	}
+	if result.overflow || len(result.stderr) != 0 || len(result.stdout) < 2 ||
+		result.stdout[len(result.stdout)-1] != '\n' ||
+		bytes.Contains(bytes.ToLower(result.stdout), []byte("secret")) ||
+		bytes.Contains(bytes.ToLower(result.stdout), []byte("credential")) ||
+		bytes.Contains(bytes.ToLower(result.stdout), []byte("token")) {
+		return setupProcessDoctorReport{}, errors.New("doctor output is not one safe bounded line")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(result.stdout))
+	decoder.DisallowUnknownFields()
+	var report setupProcessDoctorReport
+	if err := decoder.Decode(&report); err != nil {
+		return setupProcessDoctorReport{}, err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return setupProcessDoctorReport{}, errors.New("doctor output has trailing content")
+	}
+	canonical, err := model.CanonicalMarshal(report)
+	if err != nil || !bytes.Equal(result.stdout, append(canonical, '\n')) {
+		return setupProcessDoctorReport{}, errors.New("doctor output is not the closed canonical report")
+	}
+	return report, nil
+}
+
 func setupProcessParseEjectReceipt(result setupProcessResult) (ejectProcessReceipt, error) {
 	if result.err != nil {
 		return ejectProcessReceipt{}, fmt.Errorf("exit=%v stderr=%s stdout=%s", result.err,
@@ -1100,11 +1161,17 @@ func setupProcessWaitReady(ctx context.Context, client *localapi.Client,
 	for {
 		health, apiErr := client.ProbeHealth(ctx)
 		if apiErr == nil {
-			if health.SchemaVersion != 1 || health.Status != "ready" ||
-				health.AssetRevision != assetRevision {
+			if health.SchemaVersion != 1 || health.AssetRevision != assetRevision ||
+				(health.Status != "ready" && health.Status != "not_ready") {
 				return errors.New("authenticated health authority differs from setup")
 			}
-			return nil
+			if health.Status == "ready" {
+				return nil
+			}
+			if err := setupProcessPoll(ctx); err != nil {
+				return err
+			}
+			continue
 		}
 		if apiErr.Code != localapi.CodeMnemondUnavailable {
 			return fmt.Errorf("authenticated health failed with code %s", apiErr.Code)

@@ -78,6 +78,9 @@ func TestRun(t *testing.T) {
 	if !strings.Contains(wantHelp, "mnemon-harness status") {
 		t.Error("ordinary help does not expose status")
 	}
+	if !strings.Contains(wantHelp, "mnemon-harness doctor") {
+		t.Error("ordinary help does not expose doctor")
+	}
 	for _, forbidden := range []string{
 		"hub", "remote workspace", "multica", "generic capability", "mcp",
 		"evolution", "tower", "session", "hook check", "agent current", "teamwork offer",
@@ -85,6 +88,37 @@ func TestRun(t *testing.T) {
 		if strings.Contains(lowerHelp, forbidden) {
 			t.Errorf("help contains retired vocabulary %q", forbidden)
 		}
+	}
+}
+
+func TestRunRoutesDoctorThroughThePublicDiagnosticBoundary(t *testing.T) {
+	var received []string
+	doctor := func(ctx context.Context, args []string, stdout, stderr io.Writer,
+		gotVersion string,
+	) int {
+		if ctx == nil || gotVersion != version {
+			t.Fatalf("doctor composition = context %v version %q", ctx, gotVersion)
+		}
+		received = append([]string(nil), args...)
+		_, _ = io.WriteString(stdout, "doctor receipt\n")
+		return 3
+	}
+	var stdout, stderr bytes.Buffer
+	exit := runWithCommandRunners(context.Background(), []string{"doctor"},
+		strings.NewReader("unrelated stdin"), &stdout, &stderr,
+		commandRunners{setup: cliSetupMustNotRun(t), eject: func(context.Context, []string,
+			io.Writer, io.Writer, string,
+		) int {
+			t.Fatal("doctor route invoked eject")
+			return 1
+		}, status: func(context.Context, []string, io.Writer, io.Writer, string) int {
+			t.Fatal("doctor route invoked status")
+			return 1
+		}, doctor: doctor})
+	if exit != 3 || len(received) != 0 || stdout.String() != "doctor receipt\n" ||
+		stderr.Len() != 0 {
+		t.Fatalf("doctor route = exit %d args %v stdout %q stderr %q", exit, received,
+			stdout.String(), stderr.String())
 	}
 }
 

@@ -18,6 +18,7 @@ const helpText = `mnemon-harness is the project-local client for mnemond-managed
 Usage:
   mnemon-harness setup [--host auto|codex|claude-code] [--project-root DIR]
   mnemon-harness status
+  mnemon-harness doctor
   mnemon-harness eject [--host auto|codex|claude-code] [--project-root DIR]
   mnemon-harness --help
   mnemon-harness --version
@@ -29,11 +30,13 @@ and are intentionally absent from ordinary help.
 type setupRunner func(context.Context, []string, io.Writer, io.Writer, string) int
 type ejectRunner func(context.Context, []string, io.Writer, io.Writer, string) int
 type statusRunner func(context.Context, []string, io.Writer, io.Writer, string) int
+type doctorRunner func(context.Context, []string, io.Writer, io.Writer, string) int
 
 type commandRunners struct {
 	setup  setupRunner
 	eject  ejectRunner
 	status statusRunner
+	doctor doctorRunner
 }
 
 func main() {
@@ -47,7 +50,8 @@ func main() {
 
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	return runWithCommandRunners(ctx, args, stdin, stdout, stderr,
-		commandRunners{setup: cli.RunSetup, eject: cli.RunEject, status: cli.RunStatus})
+		commandRunners{setup: cli.RunSetup, eject: cli.RunEject, status: cli.RunStatus,
+			doctor: cli.RunDoctor})
 }
 
 func runWithSetup(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer,
@@ -60,7 +64,7 @@ func runWithRunners(ctx context.Context, args []string, stdin io.Reader,
 	stdout, stderr io.Writer, setup setupRunner, eject ejectRunner,
 ) int {
 	return runWithCommandRunners(ctx, args, stdin, stdout, stderr,
-		commandRunners{setup: setup, eject: eject, status: cli.RunStatus})
+		commandRunners{setup: setup, eject: eject, status: cli.RunStatus, doctor: cli.RunDoctor})
 }
 
 func runWithCommandRunners(ctx context.Context, args []string, stdin io.Reader,
@@ -102,6 +106,11 @@ func runWithCommandRunners(ctx context.Context, args []string, stdin io.Reader,
 			return 1
 		}
 		return runners.status(ctx, args[1:], stdout, stderr, version)
+	case "doctor":
+		if runners.doctor == nil {
+			return 1
+		}
+		return runners.doctor(ctx, args[1:], stdout, stderr, version)
 	case "eject":
 		if runners.eject == nil {
 			return 1
