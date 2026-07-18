@@ -93,11 +93,20 @@ func TestMergeChannelRosterBlocksOnlyAffectedPendingEgress(t *testing.T) {
 	})
 
 	t.Run("fork", func(t *testing.T) {
-		fixture, _ := newAgentClaimFixture(t, 1, "roster-fork-egress")
+		fixture, events := newAgentClaimFixture(t, 1, "roster-fork-egress")
 		signed := acceptanceSignedChannel(t, fixture)
 		challenger := ownerConflictChallenger(t, signed, fixture.now.Add(time.Second))
+		leaseUntil := fixture.now.Add(time.Minute)
+		fence, err := canonicalGossipPublicationFence(GossipPublicationFence{
+			EventID: events[0], ChannelID: fixture.channel, LeaseOwner: "roster-test",
+			Attempt: 1, LeaseUntil: leaseUntil, RosterHead: signed.Roster().Head(),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
 		mustExec(t, fixture.store, `UPDATE gossip_publications SET status='leased',
-			lease_owner='roster-test',lease_until=?`, storeTime(fixture.now.Add(time.Minute)))
+			attempts=1,lease_owner='roster-test',lease_until=?,lease_fence_json=?`,
+			storeTime(leaseUntil), fence.Bytes())
 		result, err := fixture.store.MergeChannelRoster(context.Background(), MergeChannelRosterSpec{
 			ChannelID: fixture.channel, AuthenticatedTransportPeerID: fixture.reviewers[0],
 			Records: []model.Member{challenger}, At: fixture.now.Add(2 * time.Second),
@@ -126,17 +135,18 @@ func assertRosterEgressState(t *testing.T, st *Store, publication, delivery stri
 	t.Helper()
 	var publicationState, deliveryState string
 	var leaseOwner, leaseUntil any
-	if err := st.db.QueryRow(`SELECT status,lease_owner,lease_until FROM gossip_publications`).Scan(
-		&publicationState, &leaseOwner, &leaseUntil); err != nil {
+	var leaseFence []byte
+	if err := st.db.QueryRow(`SELECT status,lease_owner,lease_until,lease_fence_json
+		FROM gossip_publications`).Scan(&publicationState, &leaseOwner, &leaseUntil, &leaseFence); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.db.QueryRow(`SELECT status FROM peer_deliveries`).Scan(&deliveryState); err != nil {
 		t.Fatal(err)
 	}
 	if publicationState != publication || deliveryState != delivery ||
-		(leaseCleared && (leaseOwner != nil || leaseUntil != nil)) {
-		t.Fatalf("egress = publication %q delivery %q lease (%v,%v)",
-			publicationState, deliveryState, leaseOwner, leaseUntil)
+		(leaseCleared && (leaseOwner != nil || leaseUntil != nil || len(leaseFence) == 0)) {
+		t.Fatalf("egress = publication %q delivery %q lease (%v,%v) fence=%d bytes",
+			publicationState, deliveryState, leaseOwner, leaseUntil, len(leaseFence))
 	}
 }
 

@@ -57,7 +57,7 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 				"channel_join_reservations_limit_insert channel_join_reservations_scope_insert channel_join_reservations_identity_immutable channel_join_reservations_attempt_monotonic channel_join_reservations_state_time_monotonic channels_join_reservation_insert " +
 				"peer_bindings_no_self_insert peer_bindings_member_state_insert peer_bindings_member_state_update peer_bindings_no_self_update " +
 				"peer_bindings_identity_epoch_immutable peer_bindings_revoked_terminal peer_bindings_active_no_pending events_imported_binding_insert " +
-				"gossip_publications_event_scope_insert gossip_publications_identity_immutable " +
+				"gossip_publications_event_scope_insert gossip_publications_identity_immutable gossip_publications_lease_fence_update " +
 				"peer_deliveries_event_scope_insert peer_deliveries_identity_immutable " +
 				"peer_deliveries_scanned_requires_cursor peer_inbox_event_scope_insert " +
 				"peer_inbox_binding_epoch_insert peer_inbox_transport_binding_insert " +
@@ -100,8 +100,8 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 	if !reflect.DeepEqual(actual, expected) {
 		t.Fatalf("schema object set mismatch\nactual: %#v\nexpected: %#v", actual, expected)
 	}
-	if got := len(actual["table"]) + len(actual["index"]) + len(actual["trigger"]); got != 156 {
-		t.Fatalf("explicit object count = %d, want 156", got)
+	if got := len(actual["table"]) + len(actual["index"]) + len(actual["trigger"]); got != 157 {
+		t.Fatalf("explicit object count = %d, want 157", got)
 	}
 }
 
@@ -890,6 +890,56 @@ func TestSchemaV1RejectsWrongSQLiteTypes(t *testing.T) {
 	)
 	if err == nil || !strings.Contains(err.Error(), "CHECK constraint failed") {
 		t.Fatalf("REAL deadline error = %v, want typeof(integer) rejection", err)
+	}
+}
+
+func TestSchemaV1GossipPublicationLeaseFenceTransitions(t *testing.T) {
+	st := openTestStore(t)
+	insertNode(t, st.db)
+	insertChannelAndEvent(t, st.db)
+	created := "2026-01-01T00:00:00Z"
+	if _, err := st.db.Exec(`INSERT INTO gossip_publications(event_id,channel_id,origin_peer_id,
+		origin_epoch,channel_seq,status,attempts,next_attempt_at,created_at,updated_at)
+		VALUES('event-one','channel-one','peer-home','epoch-one',1,'queued',0,?,?,?)`,
+		created, created, created); err != nil {
+		t.Fatal(err)
+	}
+	leaseUntil := "2026-01-01T00:01:00Z"
+	if _, err := st.db.Exec(`UPDATE gossip_publications SET status='leased',attempts=1,
+		lease_owner='worker-one',lease_until=? WHERE event_id='event-one'`, leaseUntil); err == nil ||
+		!strings.Contains(err.Error(), "publication lease fence") {
+		t.Fatalf("lease without fence error = %v", err)
+	}
+	fenceOne := []byte(`{"attempt":1,"channel_id":"channel-one","event_id":"event-one","lease_owner":"worker-one","lease_until":"2026-01-01T00:01:00Z","roster_head":{"digest":"sha256:one","revision":1}}`)
+	if _, err := st.db.Exec(`UPDATE gossip_publications SET status='leased',attempts=1,
+		lease_owner='worker-one',lease_until=?,lease_fence_json=? WHERE event_id='event-one'`,
+		leaseUntil, fenceOne); err != nil {
+		t.Fatalf("valid first lease transition: %v", err)
+	}
+	if _, err := st.db.Exec(`UPDATE gossip_publications SET lease_fence_json=?
+		WHERE event_id='event-one'`, []byte(`{"forged":true}`)); err == nil ||
+		!strings.Contains(err.Error(), "publication lease fence") {
+		t.Fatalf("leased fence rewrite error = %v", err)
+	}
+	if _, err := st.db.Exec(`UPDATE gossip_publications SET status='queued',lease_owner=NULL,
+		lease_until=NULL,lease_fence_json=? WHERE event_id='event-one'`, []byte(`{"forged":true}`)); err == nil || !strings.Contains(err.Error(), "publication lease fence") {
+		t.Fatalf("settlement fence rewrite error = %v", err)
+	}
+	if _, err := st.db.Exec(`UPDATE gossip_publications SET status='queued',lease_owner=NULL,
+		lease_until=NULL WHERE event_id='event-one'`); err != nil {
+		t.Fatalf("valid settlement retaining fence: %v", err)
+	}
+	if _, err := st.db.Exec(`UPDATE gossip_publications SET status='leased',attempts=2,
+		lease_owner='worker-two',lease_until=?,lease_fence_json=? WHERE event_id='event-one'`,
+		"2026-01-01T00:02:00Z", fenceOne); err == nil ||
+		!strings.Contains(err.Error(), "publication lease fence") {
+		t.Fatalf("new generation reused prior fence error = %v", err)
+	}
+	fenceTwo := []byte(`{"attempt":2,"channel_id":"channel-one","event_id":"event-one","lease_owner":"worker-two","lease_until":"2026-01-01T00:02:00Z","roster_head":{"digest":"sha256:two","revision":2}}`)
+	if _, err := st.db.Exec(`UPDATE gossip_publications SET status='leased',attempts=2,
+		lease_owner='worker-two',lease_until=?,lease_fence_json=? WHERE event_id='event-one'`,
+		"2026-01-01T00:02:00Z", fenceTwo); err != nil {
+		t.Fatalf("valid next lease generation: %v", err)
 	}
 }
 

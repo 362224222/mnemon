@@ -1267,10 +1267,13 @@ CREATE TABLE gossip_publications (
   status             TEXT NOT NULL CHECK (
     status IN ('queued','leased','published','blocked','abandoned')
   ),
-  attempts           INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+  attempts           INTEGER NOT NULL DEFAULT 0 CHECK (
+    attempts BETWEEN 0 AND 4294967295
+  ),
   next_attempt_at    TEXT NOT NULL,
   lease_owner        TEXT,
   lease_until        TEXT,
+  lease_fence_json   BLOB,
   published_at       TEXT,
   last_error         TEXT,
   created_at         TEXT NOT NULL,
@@ -1279,6 +1282,14 @@ CREATE TABLE gossip_publications (
   CHECK (
     (status = 'leased' AND lease_owner IS NOT NULL AND lease_until IS NOT NULL)
     OR (status <> 'leased' AND lease_owner IS NULL AND lease_until IS NULL)
+  ),
+  CHECK (
+    (attempts = 0 AND lease_fence_json IS NULL)
+    OR (
+      attempts > 0
+      AND typeof(lease_fence_json) = 'blob'
+      AND length(lease_fence_json) BETWEEN 1 AND 4096
+    )
   ),
   CHECK ((status = 'published') = (published_at IS NOT NULL))
 );
@@ -1305,6 +1316,30 @@ WHEN NEW.event_id <> OLD.event_id
   OR NEW.origin_epoch <> OLD.origin_epoch
   OR NEW.channel_seq <> OLD.channel_seq
 BEGIN SELECT RAISE(ABORT, 'gossip publication identity is immutable'); END;
+
+-- A claim is the only transition allowed to advance attempts and replace the
+-- canonical capability. Recovery, retry, publish and authority blocking must
+-- retain the exact last capability so a response-loss replay can be checked
+-- byte-for-byte after lease_owner/lease_until have been cleared.
+CREATE TRIGGER gossip_publications_lease_fence_update
+BEFORE UPDATE OF status, attempts, lease_owner, lease_until, lease_fence_json
+ON gossip_publications
+WHEN (
+  NEW.status = 'leased'
+  AND (
+    OLD.status <> 'queued'
+    OR NEW.attempts <> OLD.attempts + 1
+    OR NEW.lease_fence_json IS NULL
+    OR NEW.lease_fence_json IS OLD.lease_fence_json
+  )
+) OR (
+  NEW.status <> 'leased'
+  AND (
+    NEW.attempts <> OLD.attempts
+    OR NEW.lease_fence_json IS NOT OLD.lease_fence_json
+  )
+)
+BEGIN SELECT RAISE(ABORT, 'publication lease fence transition is invalid'); END;
 
 CREATE INDEX gossip_publications_ready_idx
   ON gossip_publications(status, next_attempt_at);
