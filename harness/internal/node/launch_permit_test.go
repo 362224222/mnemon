@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mnemon-dev/mnemon/harness/internal/agent"
 	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 	"golang.org/x/sys/unix"
@@ -98,7 +99,8 @@ func TestOpenManagedDaemonRetainsInheritedPermitUntilSocketReadyWithoutSelfDeadl
 	}
 	t.Setenv(daemonLaunchPermitEnvironment, strconv.Itoa(childFD))
 	daemon, err := OpenManagedDaemon(context.Background(), DaemonOptions{Workspace: fixture.workspace,
-		Clock: controllerTestClock{fixture.profile.UpdatedAt()}, Install: fixture.install})
+		Clock: controllerTestClock{fixture.profile.UpdatedAt()}, Install: fixture.install,
+		WakeAdapterFactory: permitTestWakeFactory()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,10 +120,7 @@ func TestOpenManagedDaemonRetainsInheritedPermitUntilSocketReadyWithoutSelfDeadl
 	if err != nil {
 		t.Fatal(err)
 	}
-	health, apiErr := client.ProbeHealth(context.Background())
-	if apiErr != nil || health.Status != "ready" {
-		t.Fatalf("ProbeHealth() = (%#v, %v)", health, apiErr)
-	}
+	waitControllerHealth(t, client, "ready")
 	assertClosedDescriptor(t, childFD)
 	if err := validateHeldEnsureLock(parent, fixture.nodeState); err != nil {
 		t.Fatalf("child release dropped parent launch fence: %v", err)
@@ -144,6 +143,22 @@ func TestOpenManagedDaemonRetainsInheritedPermitUntilSocketReadyWithoutSelfDeadl
 	case <-time.After(5 * time.Second):
 		t.Fatal("managed daemon did not stop")
 	}
+}
+
+type permitTestWakeAdapter struct{}
+
+func (permitTestWakeAdapter) Run(context.Context,
+	agent.CodexWakeRequest,
+) (agent.CodexWakeResult, error) {
+	return agent.CodexWakeResult{}, errors.New("permit test wake adapter was unexpectedly invoked")
+}
+
+func permitTestWakeFactory() WakeAdapterFactory {
+	return WakeAdapterFactoryFunc(func(context.Context,
+		WakeAdapterFactoryOptions,
+	) (agent.WakeWorkerAdapter, error) {
+		return permitTestWakeAdapter{}, nil
+	})
 }
 
 func acquirePermitTestEnsureLock(t *testing.T, nodeState string) *ensureLock {

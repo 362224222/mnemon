@@ -7,14 +7,18 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/mnemon-dev/mnemon/harness/internal/agent"
 	"github.com/mnemon-dev/mnemon/harness/internal/assets"
 	"github.com/mnemon-dev/mnemon/harness/internal/integration"
 	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
+	"golang.org/x/sys/unix"
 )
 
 func TestOpenDaemonBindsIdentityStoreCredentialAssetsAndSocket(t *testing.T) {
@@ -136,6 +140,298 @@ func TestOpenDaemonRejectsAuthorityDriftAndNeverCreatesMissingDatabase(t *testin
 			t.Fatalf("OpenDaemon() = (%v, %v)", daemon, err)
 		}
 	})
+}
+
+func TestOpenDaemonComposesWakeAdapterFromExactDurableAuthority(t *testing.T) {
+	fixture := newDaemonFixture(t, true)
+	var captured WakeAdapterFactoryOptions
+	called := 0
+	daemon, err := OpenDaemon(context.Background(), DaemonOptions{
+		Workspace: fixture.workspace,
+		Clock:     controllerTestClock{fixture.profile.UpdatedAt()},
+		Install:   fixture.install,
+		WakeAdapterFactory: WakeAdapterFactoryFunc(func(_ context.Context,
+			options WakeAdapterFactoryOptions,
+		) (agent.WakeWorkerAdapter, error) {
+			called++
+			captured = options
+			return daemonTestWakeAdapter{}, nil
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer daemon.Close()
+	if called != 1 {
+		t.Fatalf("NewWakeAdapter() calls = %d, want 1", called)
+	}
+	if captured.Workspace != fixture.workspace || captured.NodeState != fixture.nodeState ||
+		!sameControllerProfile(captured.Profile, fixture.profile) {
+		t.Fatalf("NewWakeAdapter() options = %#v", captured)
+	}
+	if daemon.controller.wakeWorker == nil {
+		t.Fatal("OpenDaemon() did not compose the managed wake worker")
+	}
+}
+
+func TestOpenDaemonFactoryFailureAndNilAdapterReleaseStoreAuthority(t *testing.T) {
+	tests := []struct {
+		name        string
+		factory     WakeAdapterFactory
+		wantFactory error
+	}{
+		{
+			name: "factory error",
+			factory: WakeAdapterFactoryFunc(func(context.Context,
+				WakeAdapterFactoryOptions,
+			) (agent.WakeWorkerAdapter, error) {
+				return nil, errDaemonTestFactory
+			}),
+			wantFactory: errDaemonTestFactory,
+		},
+		{
+			name: "nil adapter",
+			factory: WakeAdapterFactoryFunc(func(context.Context,
+				WakeAdapterFactoryOptions,
+			) (agent.WakeWorkerAdapter, error) {
+				return nil, nil
+			}),
+		},
+		{
+			name: "typed nil adapter",
+			factory: WakeAdapterFactoryFunc(func(context.Context,
+				WakeAdapterFactoryOptions,
+			) (agent.WakeWorkerAdapter, error) {
+				var adapter *daemonTestWakeAdapter
+				return adapter, nil
+			}),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newDaemonFixture(t, true)
+			daemon, err := OpenDaemon(context.Background(), DaemonOptions{
+				Workspace:          fixture.workspace,
+				Install:            fixture.install,
+				WakeAdapterFactory: test.factory,
+			})
+			if daemon != nil || !errors.Is(err, ErrDaemonAuthority) ||
+				test.wantFactory != nil && !errors.Is(err, test.wantFactory) {
+				t.Fatalf("OpenDaemon() = (%v, %v)", daemon, err)
+			}
+			assertDaemonStoreReopenable(t, fixture.nodeState)
+		})
+	}
+}
+
+func TestOpenManagedDaemonRejectsMissingFactoryAfterConsumingValidPermit(t *testing.T) {
+	fixture := newDaemonFixture(t, true)
+	parent := acquirePermitTestEnsureLock(t, fixture.nodeState)
+	defer parent.close()
+	childFD, err := unix.Dup(int(parent.file.Fd()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(daemonLaunchPermitEnvironment, strconv.Itoa(childFD))
+
+	daemon, err := OpenManagedDaemon(context.Background(), DaemonOptions{
+		Workspace: fixture.workspace,
+		Install:   fixture.install,
+	})
+	if daemon != nil || !errors.Is(err, ErrDaemonAuthority) {
+		t.Fatalf("OpenManagedDaemon() = (%v, %v)", daemon, err)
+	}
+	assertClosedDescriptor(t, childFD)
+	if err := validateHeldEnsureLock(parent, fixture.nodeState); err != nil {
+		t.Fatalf("missing factory disturbed parent permit: %v", err)
+	}
+}
+
+func TestManagedDaemonCloseBeforeServeReleasesPermitAndStore(t *testing.T) {
+	fixture := newDaemonFixture(t, true)
+	parent := acquirePermitTestEnsureLock(t, fixture.nodeState)
+	defer parent.close()
+	childFD, err := unix.Dup(int(parent.file.Fd()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(daemonLaunchPermitEnvironment, strconv.Itoa(childFD))
+	daemon, err := OpenManagedDaemon(context.Background(), DaemonOptions{
+		Workspace: fixture.workspace,
+		Clock:     controllerTestClock{fixture.profile.UpdatedAt()},
+		Install:   fixture.install,
+		WakeAdapterFactory: WakeAdapterFactoryFunc(func(context.Context,
+			WakeAdapterFactoryOptions,
+		) (agent.WakeWorkerAdapter, error) {
+			return daemonTestWakeAdapter{}, nil
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertOpenDescriptor(t, childFD)
+	if err := daemon.Serve(nil); !errors.Is(err, ErrDaemonAuthority) {
+		t.Fatalf("Serve(nil) = %v", err)
+	}
+	assertOpenDescriptor(t, childFD)
+	if err := daemon.Close(); err != nil {
+		t.Fatal(err)
+	}
+	assertClosedDescriptor(t, childFD)
+	if err := daemon.Close(); err != nil {
+		t.Fatalf("repeated Close() = %v", err)
+	}
+	if err := daemon.Serve(context.Background()); !errors.Is(err, ErrDaemonAuthority) {
+		t.Fatalf("Serve() after Close-before-Serve = %v", err)
+	}
+	assertDaemonStoreReopenable(t, fixture.nodeState)
+}
+
+func TestDaemonCloseWaitsForServeAndWorkerSettlementBeforeStoreClose(t *testing.T) {
+	fixture := newDaemonFixture(t, true)
+	daemon, err := OpenDaemon(context.Background(), DaemonOptions{
+		Workspace: fixture.workspace,
+		Clock:     controllerTestClock{fixture.profile.UpdatedAt()},
+		Install:   fixture.install,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker := newDaemonCloseWorker()
+	daemon.controller.wakeWorker = worker
+	served := make(chan error, 1)
+	go func() { served <- daemon.Serve(context.Background()) }()
+	waitControllerSocket(t, filepath.Join(fixture.nodeState, controlSocketName), served)
+	select {
+	case <-worker.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("managed worker did not start")
+	}
+
+	closed := make(chan error, 1)
+	go func() { closed <- daemon.Close() }()
+	select {
+	case <-worker.stopping:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close() did not cancel managed worker")
+	}
+	select {
+	case err := <-closed:
+		t.Fatalf("Close() returned before worker settlement: %v", err)
+	default:
+	}
+	writer, writerErr := store.OpenExisting(context.Background(),
+		filepath.Join(fixture.nodeState, "node.db"))
+	if writer != nil || !errors.Is(writerErr, store.ErrWriterActive) {
+		t.Fatalf("Store authority during settlement = (%v, %v)", writer, writerErr)
+	}
+
+	close(worker.release)
+	if err := <-served; err != nil {
+		t.Fatalf("Serve() error = %v", err)
+	}
+	if err := <-closed; err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	assertDaemonStoreReopenable(t, fixture.nodeState)
+}
+
+func TestDaemonConcurrentCloseAndServeReuseFailClosed(t *testing.T) {
+	fixture := newDaemonFixture(t, true)
+	daemon, err := OpenDaemon(context.Background(), DaemonOptions{
+		Workspace: fixture.workspace,
+		Clock:     controllerTestClock{fixture.profile.UpdatedAt()},
+		Install:   fixture.install,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	served := make(chan error, 1)
+	go func() { served <- daemon.Serve(context.Background()) }()
+	waitControllerSocket(t, filepath.Join(fixture.nodeState, controlSocketName), served)
+	client, err := localapi.NewClient(fixture.nodeState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if health, apiErr := client.ProbeHealth(context.Background()); apiErr != nil || health.Status != "ready" {
+		t.Fatalf("ProbeHealth() = (%#v, %v)", health, apiErr)
+	}
+	if err := daemon.Serve(context.Background()); !errors.Is(err, ErrDaemonAuthority) {
+		t.Fatalf("concurrent second Serve() = %v", err)
+	}
+
+	const closers = 16
+	start := make(chan struct{})
+	results := make(chan error, closers)
+	var group sync.WaitGroup
+	for range closers {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			<-start
+			results <- daemon.Close()
+		}()
+	}
+	close(start)
+	group.Wait()
+	close(results)
+	for closeErr := range results {
+		if closeErr != nil {
+			t.Fatalf("concurrent Close() error = %v", closeErr)
+		}
+	}
+	if err := <-served; err != nil {
+		t.Fatalf("Serve() error = %v", err)
+	}
+	if err := daemon.Serve(context.Background()); !errors.Is(err, ErrDaemonAuthority) {
+		t.Fatalf("Serve() after Close = %v", err)
+	}
+	assertDaemonStoreReopenable(t, fixture.nodeState)
+}
+
+var errDaemonTestFactory = errors.New("wake adapter factory failed")
+
+type daemonTestWakeAdapter struct{}
+
+func (daemonTestWakeAdapter) Run(context.Context,
+	agent.CodexWakeRequest,
+) (agent.CodexWakeResult, error) {
+	return agent.CodexWakeResult{}, nil
+}
+
+type daemonCloseWorker struct {
+	started  chan struct{}
+	stopping chan struct{}
+	release  chan struct{}
+	once     sync.Once
+}
+
+func newDaemonCloseWorker() *daemonCloseWorker {
+	return &daemonCloseWorker{started: make(chan struct{}), stopping: make(chan struct{}),
+		release: make(chan struct{})}
+}
+
+func (worker *daemonCloseWorker) Run(ctx context.Context) error {
+	worker.once.Do(func() { close(worker.started) })
+	<-ctx.Done()
+	close(worker.stopping)
+	<-worker.release
+	return nil
+}
+
+func (*daemonCloseWorker) Snapshot() agent.WakeWorkerSnapshot {
+	return agent.WakeWorkerSnapshot{Running: true, Ready: true, Healthy: true}
+}
+
+func assertDaemonStoreReopenable(t *testing.T, nodeState string) {
+	t.Helper()
+	reopened, err := store.OpenExisting(context.Background(), filepath.Join(nodeState, "node.db"))
+	if err != nil {
+		t.Fatalf("daemon retained Store writer authority: %v", err)
+	}
+	if err := reopened.Close(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 type daemonFixture struct {
