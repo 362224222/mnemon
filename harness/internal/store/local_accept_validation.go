@@ -126,7 +126,15 @@ func validateParticipantBinding(ctx context.Context, tx *sql.Tx, item LocalAccep
 	if err != nil {
 		return fmt.Errorf("commit local acceptance: current Work: %w", err)
 	}
-	if current.ChannelID() != scope.ChannelID() || payload.WorkVersion != current.Version() || payload.Iteration != current.Iteration() {
+	if current.ChannelID() != scope.ChannelID() {
+		return errors.New("commit local acceptance: Event payload does not bind current Work")
+	}
+	receiptOnly := event.Type() == model.EventReviewAcceptRejected || event.Type() == model.EventReviewOutcome
+	if receiptOnly {
+		if !receiptVersionAtOrBeforeCurrent(current, payload.WorkVersion, payload.Iteration) {
+			return errors.New("commit local acceptance: receipt payload is ahead of or inconsistent with current Work")
+		}
+	} else if payload.WorkVersion != current.Version() || payload.Iteration != current.Iteration() {
 		return errors.New("commit local acceptance: Event payload does not bind current Work")
 	}
 	home, reviewer := current.Ref().HomePeerID(), current.Participants().ReviewerPeerID()

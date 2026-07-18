@@ -14,6 +14,7 @@ type closedPayloadFacts struct {
 	WorkVersion      uint64
 	Iteration        uint8
 	DeadlineUnixNano int64
+	DecisionRef      string
 }
 
 type versionPayload struct {
@@ -23,7 +24,7 @@ type versionPayload struct {
 
 func decodeClosedEventPayload(event model.Event) (closedPayloadFacts, error) {
 	var version versionPayload
-	var deadline string
+	var deadline, decisionRef string
 	switch event.Type() {
 	case model.EventReviewOffered:
 		value := struct {
@@ -89,13 +90,16 @@ func decodeClosedEventPayload(event model.Event) (closedPayloadFacts, error) {
 			return closedPayloadFacts{}, closedPayloadError(err)
 		}
 		version = value.versionPayload
+		decisionRef = value.DecisionRef
 	default:
 		return closedPayloadFacts{}, errors.New("commit local acceptance: Event payload type is outside closed Teamwork schema")
 	}
 	if version.WorkVersion == 0 || version.Iteration < 1 || version.Iteration > 2 {
 		return closedPayloadFacts{}, errors.New("commit local acceptance: payload lacks frozen Work version/iteration")
 	}
-	facts := closedPayloadFacts{WorkVersion: version.WorkVersion, Iteration: version.Iteration}
+	facts := closedPayloadFacts{
+		WorkVersion: version.WorkVersion, Iteration: version.Iteration, DecisionRef: decisionRef,
+	}
 	if deadline != "" {
 		parsed, err := time.Parse(time.RFC3339Nano, deadline)
 		if err != nil || parsed.UnixNano() <= 0 || parsed.UTC().Format(time.RFC3339Nano) != deadline {

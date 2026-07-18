@@ -54,3 +54,17 @@ func TestDecodeClosedEventPayloadRejectsWrongShapeAndContent(t *testing.T) {
 		}
 	}
 }
+
+func TestDecodeClosedEventPayloadPreservesOutcomeDecisionRef(t *testing.T) {
+	t.Parallel()
+	event := newCodecEvent(t, model.EventReviewOutcome,
+		`{"decision_ref":"event-source","diagnostic_code":"conflict","iteration":1,"status":"rejected","work_version":1}`,
+		time.Date(2026, 7, 16, 13, 0, 0, 0, time.UTC))
+	facts, err := decodeClosedEventPayload(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if facts.DecisionRef != "event-source" {
+		t.Fatalf("decision ref = %q, want event-source", facts.DecisionRef)
+	}
+}

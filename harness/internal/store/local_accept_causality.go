@@ -122,8 +122,11 @@ func requireControllerRequestCause(ctx context.Context, tx *sql.Tx, event model.
 	home := current.Ref().HomePeerID()
 	if source.channelID != current.ChannelID() || source.workRef != current.Ref() ||
 		source.source != model.EventSourceImported || source.origin != current.Participants().ReviewerPeerID() ||
-		source.eventType != want || !containsPeer(source.audience, home) {
+		source.eventType != want || !isExactPeerAudience(source.audience, home) {
 		return causalConflict("controller decision does not cite its exact imported participant request")
+	}
+	if event.Type() == model.EventReviewAcceptRejected {
+		return requireReceiptSourceEcho(event, source, current)
 	}
 	version, iteration, err := decodeCausalVersion(source.payloadJSON)
 	if err != nil || version != current.Version() || iteration != current.Iteration() {
@@ -146,10 +149,67 @@ func requireFallbackOutcomeCause(ctx context.Context, tx *sql.Tx, event model.Ev
 	}
 	if source.channelID != current.ChannelID() || source.workRef != current.Ref() ||
 		source.source != model.EventSourceImported || source.origin != remote ||
-		source.eventType == model.EventReviewOutcome || !containsPeer(source.audience, local) {
+		source.eventType == model.EventReviewOutcome || !isExactPeerAudience(source.audience, local) {
 		return causalConflict("fallback outcome does not cite one exact imported peer Event")
 	}
+	return requireReceiptSourceEcho(event, source, current)
+}
+
+// requireReceiptSourceEcho is the only path that permits a local controller
+// Event to carry an older Work version. Receipt-only Events must echo the
+// exact imported source request/fact they decide; the durable Work is used
+// only as a monotonic upper bound, never as caller-selected stale authority.
+func requireReceiptSourceEcho(event model.Event, source durableCausalEvent,
+	current model.ReviewWork,
+) error {
+	receipt, err := decodeClosedEventPayload(event)
+	if err != nil {
+		return causalConflict("receipt Event payload is outside the closed Teamwork schema")
+	}
+	sourceVersion, sourceIteration, err := decodeCausalVersion(source.payloadJSON)
+	if err != nil {
+		return causalConflict("receipt source lacks a valid Work version and iteration")
+	}
+	if receipt.WorkVersion != sourceVersion || receipt.Iteration != sourceIteration {
+		return causalConflict("receipt payload does not echo its exact imported source version and iteration")
+	}
+	if event.Type() == model.EventReviewOutcome && receipt.DecisionRef != source.key.EventID().String() {
+		return causalConflict("outcome decision_ref does not identify its exact imported source Event")
+	}
+	if event.Type() == model.EventReviewAcceptRejected && (sourceVersion != 1 || sourceIteration != 1) {
+		return causalConflict("accept rejection does not decide an initial offered Work request")
+	}
+	if !receiptVersionAtOrBeforeCurrent(current, sourceVersion, sourceIteration) {
+		return causalConflict("receipt source is ahead of or inconsistent with current Work")
+	}
 	return nil
+}
+
+func receiptVersionAtOrBeforeCurrent(current model.ReviewWork, version uint64, iteration uint8) bool {
+	if current.Ref().IsZero() || !validReceiptSourceTuple(version, iteration) ||
+		version > current.Version() {
+		return false
+	}
+	if version == current.Version() {
+		return iteration == current.Iteration()
+	}
+	return true
+}
+
+// A receipt source describes the Work before an Event is applied. In the
+// closed two-iteration state machine, iteration one can source Events only at
+// versions 1..3 and iteration two only at versions 4..5. Versions 4/i1 and
+// 6/i2 can be terminal result Works, but can never authorize a later source
+// Event from that Work.
+func validReceiptSourceTuple(version uint64, iteration uint8) bool {
+	switch iteration {
+	case 1:
+		return version >= 1 && version <= 3
+	case 2:
+		return version >= 4 && version <= 5
+	default:
+		return false
+	}
 }
 
 func readSingleDurableCause(ctx context.Context, tx *sql.Tx, event model.Event) (durableCausalEvent, error) {
@@ -249,13 +309,8 @@ func decodeCausalVersion(raw []byte) (uint64, uint8, error) {
 	return value.WorkVersion, value.Iteration, nil
 }
 
-func containsPeer(peers []model.PeerID, peer model.PeerID) bool {
-	for _, candidate := range peers {
-		if candidate == peer {
-			return true
-		}
-	}
-	return false
+func isExactPeerAudience(peers []model.PeerID, peer model.PeerID) bool {
+	return len(peers) == 1 && peers[0] == peer
 }
 
 func updateEventType(state model.WorkState) model.EventType {

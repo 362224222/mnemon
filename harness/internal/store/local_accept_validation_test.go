@@ -44,6 +44,60 @@ func TestValidateOperationEventsClosesControllerBypass(t *testing.T) {
 	}
 }
 
+func TestValidateParticipantBindingBoundsReceiptOnlyVersions(t *testing.T) {
+	fixture := newAcceptanceFixture(t, 1)
+	offered, current := commitCausalOffer(t, fixture, "participant-receipt-version")
+	current = commitCausalAcceptedWork(t, fixture, offered, current, fixture.now.Add(3*time.Second))
+	if current.Version() != 2 || current.Iteration() != 1 {
+		t.Fatalf("current Work = version %d iteration %d", current.Version(), current.Iteration())
+	}
+
+	tests := []struct {
+		name      string
+		eventType model.EventType
+		payload   string
+		wantErr   bool
+	}{
+		{"stale accept rejected", model.EventReviewAcceptRejected,
+			`{"diagnostic_code":"stale","iteration":1,"work_version":1}`, false},
+		{"stale outcome", model.EventReviewOutcome,
+			`{"decision_ref":"decision-stale","diagnostic_code":"stale","iteration":1,"status":"rejected","work_version":1}`, false},
+		{"current outcome", model.EventReviewOutcome,
+			`{"decision_ref":"decision-current","diagnostic_code":"current","iteration":1,"status":"accepted","work_version":2}`, false},
+		{"future receipt version", model.EventReviewOutcome,
+			`{"decision_ref":"decision-future","diagnostic_code":"future","iteration":1,"status":"rejected","work_version":3}`, true},
+		{"same version wrong iteration", model.EventReviewOutcome,
+			`{"decision_ref":"decision-wrong-iteration","diagnostic_code":"wrong-iteration","iteration":2,"status":"rejected","work_version":2}`, true},
+		{"older version future iteration", model.EventReviewOutcome,
+			`{"decision_ref":"decision-future-iteration","diagnostic_code":"future-iteration","iteration":2,"status":"rejected","work_version":1}`, true},
+		{"stale accepted state change", model.EventReviewAccepted,
+			`{"iteration":1,"work_version":1}`, true},
+		{"stale delivered state change", model.EventReviewDelivered,
+			`{"iteration":1,"work_version":1}`, true},
+		{"stale declined state change", model.EventReviewDeclined,
+			`{"iteration":1,"work_version":1}`, true},
+	}
+	tx, err := fixture.store.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	for index, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			event := causalSuccessorEvent(t, offered, test.eventType,
+				"event-participant-binding-"+string(rune('a'+index)), test.payload, offered.Key(),
+				fixture.now.Add(4*time.Second))
+			err := validateParticipantBinding(context.Background(), tx, LocalAcceptanceItem{}, event)
+			if test.wantErr && err == nil {
+				t.Fatal("binding was accepted")
+			}
+			if !test.wantErr && err != nil {
+				t.Fatalf("binding error = %v", err)
+			}
+		})
+	}
+}
+
 func TestRequireExactDeliveredArtifactClosureRejectsReusableSubstitution(t *testing.T) {
 	fixture := newAcceptanceFixture(t, 1)
 	_, authority := fixture.reserveOffer(t, "delivered-closure", nil)
