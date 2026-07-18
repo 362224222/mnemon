@@ -765,6 +765,7 @@ BEGIN SELECT RAISE(ABORT, 'channel roster head cannot regress or fork in place')
 CREATE TRIGGER channels_terminal_status_update
 BEFORE UPDATE OF status ON channels
 WHEN OLD.status IN ('left','closed','abandoned') AND NEW.status <> OLD.status
+  AND NOT (OLD.status = 'left' AND NEW.status = 'closed')
 BEGIN SELECT RAISE(ABORT, 'terminal channel cannot reactivate'); END;
 
 CREATE TRIGGER channels_conflicted_status_update
@@ -774,7 +775,7 @@ BEGIN SELECT RAISE(ABORT, 'conflicted channel can only be abandoned'); END;
 
 CREATE TRIGGER channels_leaving_status_update
 BEFORE UPDATE OF status ON channels
-WHEN OLD.status = 'leaving' AND NEW.status NOT IN ('leaving','left','abandoned')
+WHEN OLD.status = 'leaving' AND NEW.status NOT IN ('leaving','left','closed','abandoned')
 BEGIN SELECT RAISE(ABORT, 'leaving channel cannot reactivate'); END;
 
 CREATE TABLE channel_members (

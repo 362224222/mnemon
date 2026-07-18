@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -20,6 +21,8 @@ const (
 	EnrollmentVerifierDomain               = "mnemon/r5/enrollment-verifier/1"
 	EnrollmentProofDomain                  = "mnemon/r5/enrollment-proof/1"
 	EnrollmentJoinIdentityDomain           = "mnemon/r5/enrollment-join-identity/1"
+	EnrollmentUseIDDomain                  = "mnemon/r5/enrollment-use-id/1"
+	EnrollmentReceiptIDDomain              = "mnemon/r5/enrollment-receipt-id/1"
 	EnrollmentReceiptSignatureDomain       = "mnemon/r5/enrollment-receipt/1"
 	EnrollmentProtocolMinVersion     uint8 = 1
 	EnrollmentProtocolMaxVersion     uint8 = 1
@@ -743,8 +746,14 @@ func (transcript EnrollmentTranscript) JoinIdentityDigest() (Digest, error) {
 		transcript.JoinerPeerID(), transcript.JoinerPublicKey(), transcript.JoinerOriginEpoch())
 }
 
+type EnrollmentUseID struct{ identifier }
 type EnrollmentReceiptID struct{ identifier }
 type EnrollmentRequestID struct{ identifier }
+
+func ParseEnrollmentUseID(value string) (EnrollmentUseID, error) {
+	id, err := newIdentifier("enrollment_use_id", value)
+	return EnrollmentUseID{id}, err
+}
 
 func ParseEnrollmentReceiptID(value string) (EnrollmentReceiptID, error) {
 	id, err := newIdentifier("enrollment_receipt_id", value)
@@ -754,6 +763,42 @@ func ParseEnrollmentReceiptID(value string) (EnrollmentReceiptID, error) {
 func ParseEnrollmentRequestID(value string) (EnrollmentRequestID, error) {
 	id, err := newIdentifier("enrollment_request_id", value)
 	return EnrollmentRequestID{id}, err
+}
+
+// EnrollmentEvidenceIDs derives durable evidence identifiers from the stable
+// join identity. Retries with fresh nonces therefore address the same use and
+// receipt without accepting caller-selected durable keys.
+func EnrollmentEvidenceIDs(joinIdentity Digest) (EnrollmentUseID, EnrollmentReceiptID, error) {
+	if joinIdentity.IsZero() {
+		return EnrollmentUseID{}, EnrollmentReceiptID{},
+			invalid("enrollment evidence IDs", "stable join identity is required")
+	}
+	useValue, err := enrollmentEvidenceID("enrollment-use-", EnrollmentUseIDDomain, joinIdentity)
+	if err != nil {
+		return EnrollmentUseID{}, EnrollmentReceiptID{}, err
+	}
+	receiptValue, err := enrollmentEvidenceID("enrollment-receipt-", EnrollmentReceiptIDDomain, joinIdentity)
+	if err != nil {
+		return EnrollmentUseID{}, EnrollmentReceiptID{}, err
+	}
+	useID, err := ParseEnrollmentUseID(useValue)
+	if err != nil {
+		return EnrollmentUseID{}, EnrollmentReceiptID{}, err
+	}
+	receiptID, err := ParseEnrollmentReceiptID(receiptValue)
+	if err != nil {
+		return EnrollmentUseID{}, EnrollmentReceiptID{}, err
+	}
+	return useID, receiptID, nil
+}
+
+func enrollmentEvidenceID(prefix, domain string, joinIdentity Digest) (string, error) {
+	message, err := lengthSafeDomainMessage(domain, joinIdentity.Bytes())
+	if err != nil {
+		return "", err
+	}
+	digest := Sum(message)
+	return prefix + hex.EncodeToString(digest.Bytes()), nil
 }
 
 type EnrollmentReceiptRecordSpec struct {

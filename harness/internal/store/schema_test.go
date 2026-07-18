@@ -565,6 +565,37 @@ func TestSchemaChannelAuthorityEvidenceConstraints(t *testing.T) {
 	}
 }
 
+func TestSchemaAllowsOwnerCloseToOvertakeLocalLeavingState(t *testing.T) {
+	t.Parallel()
+	st := openTestStore(t)
+	insertNode(t, st.db)
+	insertChannelAuthority(t, st.db, "channel-owner-close", "owner-close", "peer-home",
+		"epoch-owner-close", "record-owner-close")
+	if _, err := st.db.Exec(`UPDATE channels SET status='leaving',topic_state='left'
+		WHERE channel_id='channel-owner-close'`); err != nil {
+		t.Fatalf("enter leaving state: %v", err)
+	}
+	if _, err := st.db.Exec(`UPDATE channels SET status='closed'
+		WHERE channel_id='channel-owner-close'`); err != nil {
+		t.Fatalf("owner close did not overtake leaving: %v", err)
+	}
+	if _, err := st.db.Exec(`UPDATE channels SET status='active',topic_state='joined'
+		WHERE channel_id='channel-owner-close'`); err == nil ||
+		!strings.Contains(err.Error(), "terminal channel cannot reactivate") {
+		t.Fatalf("closed Channel reactivation error = %v", err)
+	}
+	insertChannelAuthority(t, st.db, "channel-owner-close-after-left", "owner-close-left",
+		"peer-home", "epoch-owner-close-left", "record-owner-close-left")
+	if _, err := st.db.Exec(`UPDATE channels SET status='left',topic_state='left'
+		WHERE channel_id='channel-owner-close-after-left'`); err != nil {
+		t.Fatalf("enter local left state: %v", err)
+	}
+	if _, err := st.db.Exec(`UPDATE channels SET status='closed'
+		WHERE channel_id='channel-owner-close-after-left'`); err != nil {
+		t.Fatalf("owner close did not refine local left: %v", err)
+	}
+}
+
 func TestSchemaEnforcesOperationStateShape(t *testing.T) {
 	t.Parallel()
 	st := openTestStore(t)

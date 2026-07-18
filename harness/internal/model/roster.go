@@ -29,10 +29,21 @@ func NewVerifiedRoster(descriptor SignedChannelDescriptor, members []Member) (Ve
 	verified := make([]Member, len(members))
 	var previous Member
 	var lastCreatedAt time.Time
+	ownerClosed := false
 	for index, member := range members {
 		expectedRevision := uint64(index + 1)
+		if ownerClosed {
+			return VerifiedRoster{}, invariant("Channel owner leave must be the final roster record")
+		}
 		if err := VerifyMember(descriptor, member); err != nil {
 			return VerifiedRoster{}, fmt.Errorf("verified roster revision %d: %w", expectedRevision, err)
+		}
+		if member.PeerID() == descriptor.Descriptor().OwnerPeerID() &&
+			member.Status() == MemberRevoked {
+			return VerifiedRoster{}, invariant("Channel owner may leave but cannot revoke itself")
+		}
+		if member.PeerID() == descriptor.Descriptor().OwnerPeerID() && member.Status() == MemberLeft {
+			ownerClosed = true
 		}
 		if member.Head().Revision() != expectedRevision {
 			return VerifiedRoster{}, invariant("verified roster revisions must be contiguous and ordered")

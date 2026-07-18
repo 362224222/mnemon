@@ -5,9 +5,23 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 )
+
+func TestRequiredMemberProtocolsReturnsDefensiveCanonicalCopy(t *testing.T) {
+	t.Parallel()
+	first := RequiredMemberProtocols()
+	second := RequiredMemberProtocols()
+	if len(first) != MaxMemberProtocols || !slices.Equal(first, second) {
+		t.Fatalf("RequiredMemberProtocols() = %#v, %#v", first, second)
+	}
+	first[0] = "/tampered/1"
+	if slices.Equal(first, RequiredMemberProtocols()) {
+		t.Fatal("RequiredMemberProtocols exposed mutable canonical storage")
+	}
+}
 
 func TestMemberRecordV1GoldenVector(t *testing.T) {
 	t.Parallel()

@@ -21,6 +21,12 @@ var requiredMemberProtocols = []string{
 	"/mnemon/events/1",
 }
 
+// RequiredMemberProtocols returns the closed direct-protocol set embedded in
+// every R5 MemberRecord. Callers receive a copy of the canonical model data.
+func RequiredMemberProtocols() []string {
+	return append([]string(nil), requiredMemberProtocols...)
+}
+
 type MemberRecordSpec struct {
 	ChannelID        ChannelID
 	DescriptorDigest Digest

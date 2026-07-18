@@ -689,3 +689,24 @@ func TestEnrollmentWireRejectsUnknownAndNoncanonicalFields(t *testing.T) {
 		t.Fatal("unknown receipt field was accepted")
 	}
 }
+
+func TestEnrollmentEvidenceIDsAreStableSeparatedAndValidated(t *testing.T) {
+	t.Parallel()
+	identity := Sum([]byte("stable enrollment identity"))
+	useID, receiptID, err := EnrollmentEvidenceIDs(identity)
+	if err != nil {
+		t.Fatalf("EnrollmentEvidenceIDs() error = %v", err)
+	}
+	secondUse, secondReceipt, err := EnrollmentEvidenceIDs(identity)
+	if err != nil || secondUse != useID || secondReceipt != receiptID {
+		t.Fatalf("stable IDs = (%v, %v), want (%v, %v), err=%v",
+			secondUse, secondReceipt, useID, receiptID, err)
+	}
+	if useID.String() == receiptID.String() || !strings.HasPrefix(useID.String(), "enrollment-use-") ||
+		!strings.HasPrefix(receiptID.String(), "enrollment-receipt-") {
+		t.Fatalf("domain-separated IDs = %q, %q", useID.String(), receiptID.String())
+	}
+	if _, _, err := EnrollmentEvidenceIDs(Digest{}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("zero join identity error = %v", err)
+	}
+}
