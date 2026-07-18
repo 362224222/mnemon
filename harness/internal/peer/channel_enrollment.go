@@ -193,7 +193,7 @@ func (owner *ChannelEnrollmentOwner) serve(lifetime context.Context, stream netw
 	}
 
 	prepared, err := owner.store.PrepareChannelEnrollment(ctx, store.PrepareChannelEnrollmentSpec{
-		ChannelID: init.ChannelID(), GrantID: init.GrantID(), RequestID: initFrame.RequestID(),
+		ChannelID: init.ChannelID(), GrantID: init.GrantID(), RequestID: init.EnrollmentRequestID(),
 		AuthenticatedPeerID: joinerPeerID, JoinerOriginEpoch: init.OriginEpoch(),
 		JoinerPublicKey: joinerPublicKey, At: owner.clock.Now(),
 	})
@@ -229,7 +229,7 @@ func (owner *ChannelEnrollmentOwner) serve(lifetime context.Context, stream netw
 		return ErrChannelEnrollmentProtocol
 	}
 	transcript, err := model.NewEnrollmentTranscript(model.EnrollmentTranscriptSpec{
-		ChannelID: init.ChannelID(), GrantID: init.GrantID(), RequestID: initFrame.RequestID(),
+		ChannelID: init.ChannelID(), GrantID: init.GrantID(), RequestID: init.EnrollmentRequestID(),
 		OwnerPeerID: ownerPeerID, JoinerPeerID: joinerPeerID, OwnerNonce: challenge.OwnerNonce(),
 		JoinerNonce: init.JoinerNonce(), SelectedVersion: challenge.SelectedVersion(),
 		Limits: challenge.Limits(), JoinerOriginEpoch: init.OriginEpoch(),
@@ -271,7 +271,7 @@ func (owner *ChannelEnrollmentOwner) serve(lifetime context.Context, stream netw
 }
 
 func (owner *ChannelEnrollmentOwner) writeStoreFailure(stream network.Stream,
-	requestID model.EnrollmentRequestID, cause error,
+	requestID ChannelRequestID, cause error,
 ) error {
 	code, retryAfter, ok := channelStoreFailure(cause)
 	if !ok {
@@ -281,7 +281,7 @@ func (owner *ChannelEnrollmentOwner) writeStoreFailure(stream network.Stream,
 }
 
 func (owner *ChannelEnrollmentOwner) writeFailure(stream network.Stream,
-	requestID model.EnrollmentRequestID, code ChannelProtocolErrorCode,
+	requestID ChannelRequestID, code ChannelProtocolErrorCode,
 	retryAfter time.Duration,
 ) error {
 	payload, err := NewProtocolError(ProtocolErrorSpec{Code: code,
@@ -450,7 +450,7 @@ func (client *ChannelEnrollmentClient) Join(ctx context.Context, stream network.
 	if err != nil {
 		return store.InstallJoinedChannelResult{}, joinedChannelStoreFailure(err)
 	}
-	requestID := prepared.RequestID
+	enrollmentRequestID := prepared.RequestID
 	reservationActive := prepared.Reserved
 	releaseReservation := prepared.Reserved && !prepared.CommitUnknown
 	defer func() {
@@ -459,7 +459,7 @@ func (client *ChannelEnrollmentClient) Join(ctx context.Context, stream network.
 		}
 		releaseCtx, releaseCancel := context.WithTimeout(context.Background(), time.Second)
 		defer releaseCancel()
-		_ = client.store.ReleaseJoinedChannelReservation(releaseCtx, requestID, joinerPeerID,
+		_ = client.store.ReleaseJoinedChannelReservation(releaseCtx, enrollmentRequestID, joinerPeerID,
 			prepared.Attempt)
 	}()
 
@@ -468,14 +468,19 @@ func (client *ChannelEnrollmentClient) Join(ctx context.Context, stream network.
 		return store.InstallJoinedChannelResult{}, fmt.Errorf("%w: joiner nonce unavailable",
 			ErrChannelEnrollmentProtocol)
 	}
+	frameRequestID, err := NewChannelRequestID(client.random)
+	if err != nil {
+		return store.InstallJoinedChannelResult{}, fmt.Errorf("%w: Channel request ID unavailable",
+			ErrChannelEnrollmentProtocol)
+	}
 	init, err := NewEnrollInit(EnrollInitSpec{ChannelID: descriptor.Descriptor().ID(),
-		GrantID: payload.GrantID(), JoinerNonce: joinerNonce,
+		GrantID: payload.GrantID(), EnrollmentRequestID: enrollmentRequestID, JoinerNonce: joinerNonce,
 		SupportedVersions: []uint8{ChannelFrameVersion}, OriginEpoch: prepared.OriginEpoch,
 		DisplayLabel: spec.DisplayLabel, AdvertisedMultiaddrs: spec.AdvertisedMultiaddrs})
 	if err != nil {
 		return store.InstallJoinedChannelResult{}, newChannelProtocolFailure(ChannelErrorInvalidToken, 0)
 	}
-	initFrame, err := NewChannelFrame(requestID, init)
+	initFrame, err := NewChannelFrame(frameRequestID, init)
 	if err != nil {
 		return store.InstallJoinedChannelResult{}, fmt.Errorf("%w: invalid local enrollment frame",
 			ErrChannelEnrollmentProtocol)
@@ -489,14 +494,14 @@ func (client *ChannelEnrollmentClient) Join(ctx context.Context, stream network.
 		return store.InstallJoinedChannelResult{}, enrollmentPrecommitTransportFailure(requestCtx, err)
 	}
 	defer releaseChallenge()
-	if failure := receivedChannelFailure(requestID, challengeFrame); failure != nil {
+	if failure := receivedChannelFailure(frameRequestID, challengeFrame); failure != nil {
 		completed = true
 		if reservationActive && !prepared.CommitUnknown {
 			releaseReservation = true
 		}
 		return store.InstallJoinedChannelResult{}, failure
 	}
-	if challengeFrame.RequestID() != requestID ||
+	if challengeFrame.RequestID() != frameRequestID ||
 		challengeFrame.Type() != ChannelFrameEnrollChallenge {
 		return store.InstallJoinedChannelResult{}, newChannelProtocolFailure(ChannelErrorRosterConflict, 0)
 	}
@@ -505,7 +510,7 @@ func (client *ChannelEnrollmentClient) Join(ctx context.Context, stream network.
 		return store.InstallJoinedChannelResult{}, newChannelProtocolFailure(ChannelErrorRosterConflict, 0)
 	}
 	transcript, err := model.NewEnrollmentTranscript(model.EnrollmentTranscriptSpec{
-		ChannelID: descriptor.Descriptor().ID(), GrantID: payload.GrantID(), RequestID: requestID,
+		ChannelID: descriptor.Descriptor().ID(), GrantID: payload.GrantID(), RequestID: enrollmentRequestID,
 		OwnerPeerID: ownerPeerID, JoinerPeerID: joinerPeerID, OwnerNonce: challenge.OwnerNonce(),
 		JoinerNonce: joinerNonce, SelectedVersion: challenge.SelectedVersion(), Limits: challenge.Limits(),
 		JoinerOriginEpoch: prepared.OriginEpoch, JoinerDisplayLabel: spec.DisplayLabel,
@@ -530,7 +535,7 @@ func (client *ChannelEnrollmentClient) Join(ctx context.Context, stream network.
 	if err != nil {
 		return store.InstallJoinedChannelResult{}, newChannelProtocolFailure(ChannelErrorInvalidToken, 0)
 	}
-	proofFrame, err := NewChannelFrame(requestID, proofPayload)
+	proofFrame, err := NewChannelFrame(frameRequestID, proofPayload)
 	if err != nil {
 		return store.InstallJoinedChannelResult{}, fmt.Errorf("%w: invalid local enrollment proof frame",
 			ErrChannelEnrollmentProtocol)
@@ -539,7 +544,7 @@ func (client *ChannelEnrollmentClient) Join(ctx context.Context, stream network.
 		return store.InstallJoinedChannelResult{}, enrollmentTransportFailure(err)
 	}
 	if reservationActive {
-		if err := client.store.MarkJoinedChannelCommitUnknown(requestCtx, requestID,
+		if err := client.store.MarkJoinedChannelCommitUnknown(requestCtx, enrollmentRequestID,
 			joinerPeerID, prepared.Attempt, client.clock.Now()); err != nil {
 			return store.InstallJoinedChannelResult{}, joinedChannelStoreFailure(err)
 		}
@@ -549,19 +554,20 @@ func (client *ChannelEnrollmentClient) Join(ctx context.Context, stream network.
 		return store.InstallJoinedChannelResult{}, enrollmentOutcomeUnknown(err)
 	}
 
-	acceptedFrame, releaseAccepted, err := readChannelStreamFrame(stream, maxChannelFrameBytes())
+	acceptedFrame, releaseAccepted, err := readChannelStreamFrame(stream,
+		channelFrameMaximum(ChannelFrameEnrollAccepted))
 	if err != nil {
 		return store.InstallJoinedChannelResult{}, enrollmentOutcomeUnknown(err)
 	}
 	defer releaseAccepted()
-	if failure := receivedChannelFailure(requestID, acceptedFrame); failure != nil {
+	if failure := receivedChannelFailure(frameRequestID, acceptedFrame); failure != nil {
 		completed = true
 		if reservationActive && !prepared.CommitUnknown {
 			releaseReservation = true
 		}
 		return store.InstallJoinedChannelResult{}, failure
 	}
-	if acceptedFrame.RequestID() != requestID ||
+	if acceptedFrame.RequestID() != frameRequestID ||
 		acceptedFrame.Type() != ChannelFrameEnrollAccepted {
 		return store.InstallJoinedChannelResult{}, newChannelProtocolFailure(ChannelErrorRosterConflict, 0)
 	}
@@ -594,7 +600,7 @@ func (client *ChannelEnrollmentClient) Join(ctx context.Context, stream network.
 	return installed, nil
 }
 
-func receivedChannelFailure(requestID model.EnrollmentRequestID, frame ChannelFrame) error {
+func receivedChannelFailure(requestID ChannelRequestID, frame ChannelFrame) error {
 	if frame.Type() != ChannelFrameProtocolError {
 		return nil
 	}
@@ -694,7 +700,7 @@ func enrollmentOutcomeUnknown(_ error) error { return ErrChannelEnrollmentOutcom
 
 // readChannelStreamFrame applies the domain size fence before allocation and
 // accounts the declared buffer against the libp2p stream scope for the entire
-// decode. Small handshake messages never receive the 8 MiB accepted-roster
+// decode. Small handshake messages never receive the 4 MiB roster-frame
 // allowance merely because they share the same direct protocol.
 func readChannelStreamFrame(stream network.Stream, maximum int) (ChannelFrame, func(), error) {
 	if stream == nil || maximum <= 0 || maximum > maxChannelFrameBytes() {

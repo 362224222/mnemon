@@ -68,7 +68,7 @@ func TestChannelEnrollmentHandshakeCommitsResponseLossReplayAndAtomicInstall(t *
 		Store: failingEnrollmentInstallStore{delegate: joinerStore,
 			err: errors.New("injected response loss before install")},
 		Clock:  fixedEnrollmentClock{at: acceptedAt.Add(time.Second)},
-		Random: bytes.NewReader(bytes.Repeat([]byte{0x41}, model.EnrollmentNonceBytes)),
+		Random: bytes.NewReader(bytes.Repeat([]byte{0x41}, model.EnrollmentNonceBytes+channelRequestIDBytes)),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -79,8 +79,9 @@ func TestChannelEnrollmentHandshakeCommitsResponseLossReplayAndAtomicInstall(t *
 	}
 
 	retryClient, err := NewChannelEnrollmentClient(ChannelEnrollmentClientOptions{Store: joinerStore,
-		Clock:  fixedEnrollmentClock{at: acceptedAt.Add(2 * time.Second)},
-		Random: bytes.NewReader(bytes.Repeat([]byte{0x42}, model.EnrollmentNonceBytes*2))})
+		Clock: fixedEnrollmentClock{at: acceptedAt.Add(2 * time.Second)},
+		Random: bytes.NewReader(bytes.Repeat([]byte{0x42},
+			(model.EnrollmentNonceBytes+channelRequestIDBytes)*2))})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +149,7 @@ func TestChannelEnrollmentRecoversOwnerCommitAfterAcceptedResponseLoss(t *testin
 	ownerHost.SetStreamHandler(ChannelProtocol, ownerProtocol.Handler(ctx))
 	firstClient, err := NewChannelEnrollmentClient(ChannelEnrollmentClientOptions{
 		Store: joinerStore, Clock: fixedEnrollmentClock{at: acceptedAt.Add(time.Second)},
-		Random: bytes.NewReader(bytes.Repeat([]byte{0x43}, model.EnrollmentNonceBytes)),
+		Random: bytes.NewReader(bytes.Repeat([]byte{0x43}, model.EnrollmentNonceBytes+channelRequestIDBytes)),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -202,7 +203,7 @@ func TestChannelEnrollmentRecoversOwnerCommitAfterAcceptedResponseLoss(t *testin
 	defer reopened.Close()
 	retryClient, err := NewChannelEnrollmentClient(ChannelEnrollmentClientOptions{
 		Store: reopened, Clock: fixedEnrollmentClock{at: acceptedAt.Add(2 * time.Second)},
-		Random: bytes.NewReader(bytes.Repeat([]byte{0x44}, model.EnrollmentNonceBytes)),
+		Random: bytes.NewReader(bytes.Repeat([]byte{0x44}, model.EnrollmentNonceBytes+channelRequestIDBytes)),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -290,13 +291,18 @@ func TestChannelEnrollmentOwnerRejectsUnsupportedVersionBeforeStore(t *testing.T
 		t.Fatal(err)
 	}
 	init, err := NewEnrollInit(EnrollInitSpec{ChannelID: fixture.Channel().ID(), GrantID: grantID,
-		JoinerNonce:       bytes.Repeat([]byte{0x55}, model.EnrollmentNonceBytes),
-		SupportedVersions: []uint8{2}, OriginEpoch: joiner.OriginEpoch(),
+		EnrollmentRequestID: requestID,
+		JoinerNonce:         bytes.Repeat([]byte{0x55}, model.EnrollmentNonceBytes),
+		SupportedVersions:   []uint8{2}, OriginEpoch: joiner.OriginEpoch(),
 		DisplayLabel: joiner.DisplayName(), AdvertisedMultiaddrs: joiner.Multiaddrs()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	frame, err := NewChannelFrame(requestID, init)
+	frameRequestID, err := ParseChannelRequestID("channel-request-303132333435363738393a3b3c3d3e3f")
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame, err := NewChannelFrame(frameRequestID, init)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -310,7 +316,7 @@ func TestChannelEnrollmentOwnerRejectsUnsupportedVersionBeforeStore(t *testing.T
 		t.Fatal(err)
 	}
 	failure, ok := response.Payload().(ProtocolError)
-	if response.RequestID() != requestID || !ok || failure.Code() != ChannelErrorIncompatibleProtocol ||
+	if response.RequestID() != frameRequestID || !ok || failure.Code() != ChannelErrorIncompatibleProtocol ||
 		failure.Retryable() {
 		t.Fatalf("unsupported-version response = %#v", response)
 	}

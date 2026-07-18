@@ -19,7 +19,8 @@ func TestChannelFrameCanonicalTypedRoundTrip(t *testing.T) {
 
 	fixture := newChannelFrameFixture(t)
 	init, err := NewEnrollInit(EnrollInitSpec{ChannelID: fixture.channelID,
-		GrantID: fixture.grantID, JoinerNonce: bytes.Repeat([]byte{0x11}, model.EnrollmentNonceBytes),
+		GrantID: fixture.grantID, EnrollmentRequestID: fixture.requestID,
+		JoinerNonce:       bytes.Repeat([]byte{0x11}, model.EnrollmentNonceBytes),
 		SupportedVersions: []uint8{ChannelFrameVersion}, OriginEpoch: fixture.joinerEpoch,
 		DisplayLabel: "joiner", AdvertisedMultiaddrs: []string{
 			"/ip4/127.0.0.2/tcp/4002", "/ip4/127.0.0.1/tcp/4001",
@@ -27,8 +28,8 @@ func TestChannelFrameCanonicalTypedRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantInitFrame := `{"payload":{"advertised_addrs":["/ip4/127.0.0.1/tcp/4001","/ip4/127.0.0.2/tcp/4002"],"channel_id":"channel-frame-codec","display_label":"joiner","grant_id":"grant-frame-codec","joiner_nonce":"ERERERERERERERERERERERERERERERERERERERERERE=","origin_epoch":"epoch-frame-joiner","supported_versions":[1]},"request_id":"request-frame-codec","type":"enroll_init","version":1}`
-	initFrame, err := NewChannelFrame(fixture.requestID, init)
+	wantInitFrame := `{"payload":{"advertised_addrs":["/ip4/127.0.0.1/tcp/4001","/ip4/127.0.0.2/tcp/4002"],"channel_id":"channel-frame-codec","display_label":"joiner","enrollment_request_id":"request-frame-codec","grant_id":"grant-frame-codec","joiner_nonce":"ERERERERERERERERERERERERERERERERERERERERERE=","origin_epoch":"epoch-frame-joiner","supported_versions":[1]},"request_id":"channel-request-000102030405060708090a0b0c0d0e0f","type":"enroll_init","version":1}`
+	initFrame, err := NewChannelFrame(fixture.frameRequestID, init)
 	if err != nil || initFrame.CanonicalJSON().String() != wantInitFrame {
 		t.Fatalf("NewChannelFrame(EnrollInit) = (%s, %v)", initFrame.CanonicalJSON().String(), err)
 	}
@@ -68,13 +69,13 @@ func TestChannelFrameCanonicalTypedRoundTrip(t *testing.T) {
 	}
 	var stream bytes.Buffer
 	for _, test := range payloads {
-		frame, err := NewChannelFrame(fixture.requestID, test.payload)
+		frame, err := NewChannelFrame(fixture.frameRequestID, test.payload)
 		if err != nil {
 			t.Fatalf("NewChannelFrame(%s): %v", test.wantType, err)
 		}
 		parsed, err := ParseChannelFrame(frame.CanonicalJSON().Bytes())
 		if err != nil || parsed.Version() != ChannelFrameVersion || parsed.Type() != test.wantType ||
-			parsed.RequestID() != fixture.requestID ||
+			parsed.RequestID() != fixture.frameRequestID ||
 			parsed.Payload().CanonicalJSON().String() != test.payload.CanonicalJSON().String() || parsed.IsZero() {
 			t.Fatalf("ParseChannelFrame(%s) = (%#v, %v)", test.wantType, parsed, err)
 		}
@@ -100,7 +101,8 @@ func TestChannelFrameCanonicalTypedRoundTrip(t *testing.T) {
 	versions[0] = 99
 	addresses[0] = "changed"
 	if parsedInit.JoinerNonce()[0] != 0x11 || parsedInit.SupportedVersions()[0] != 1 ||
-		parsedInit.AdvertisedMultiaddrs()[0] == "changed" || parsedInit.ChannelID() != fixture.channelID {
+		parsedInit.AdvertisedMultiaddrs()[0] == "changed" || parsedInit.ChannelID() != fixture.channelID ||
+		parsedInit.EnrollmentRequestID() != fixture.requestID {
 		t.Fatal("EnrollInit exposed mutable canonical input")
 	}
 	acceptedRoster := accepted.RosterSnapshot()
@@ -120,12 +122,221 @@ func TestChannelFrameCanonicalTypedRoundTrip(t *testing.T) {
 	}
 }
 
+func TestChannelControlFramesCanonicalTypedRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	fixture := newChannelFrameFixture(t)
+	hello, err := NewMemberHello(MemberHelloSpec{ChannelID: fixture.channelID,
+		ActiveMemberRecord: fixture.joiningMember, KnownRosterHead: fixture.joiningMember.Head(),
+		OwnerSignedProofChain: fixture.roster})
+	if err != nil {
+		t.Fatal(err)
+	}
+	helloAck, err := NewMemberHelloAck(MemberHelloAckSpec{ChannelID: fixture.channelID,
+		MissingRecords: fixture.roster[1:], RosterHead: fixture.joiningMember.Head()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	syncRequest, err := NewSyncRequest(SyncRequestSpec{ChannelID: fixture.channelID,
+		AfterHead: fixture.ownerMember.Head()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	syncPage, err := NewSyncPage(SyncPageSpec{ChannelID: fixture.channelID,
+		OwnerSignedRecords: fixture.roster[1:], RosterHead: fixture.joiningMember.Head()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	baselineSpec := DataBaselineSpec{ChannelID: fixture.channelID,
+		OriginPeerID: fixture.joiner.modelID, OriginEpoch: fixture.joinerEpoch,
+		BaselineChannelSequence: 42}
+	baseline, err := NewDataBaseline(baselineSpec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baselineAck, err := NewDataBaselineAck(baselineSpec)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	payloads := []struct {
+		frameType ChannelFrameType
+		payload   ChannelFramePayload
+	}{
+		{ChannelFrameMemberHello, hello},
+		{ChannelFrameMemberHelloAck, helloAck},
+		{ChannelFrameSyncRequest, syncRequest},
+		{ChannelFrameSyncPage, syncPage},
+		{ChannelFrameDataBaseline, baseline},
+		{ChannelFrameDataBaselineAck, baselineAck},
+	}
+	for _, test := range payloads {
+		frame, err := NewChannelFrame(fixture.frameRequestID, test.payload)
+		if err != nil {
+			t.Fatalf("NewChannelFrame(%s): %v", test.frameType, err)
+		}
+		parsed, err := ParseChannelFrame(frame.CanonicalJSON().Bytes())
+		if err != nil || parsed.Type() != test.frameType ||
+			parsed.RequestID() != fixture.frameRequestID ||
+			parsed.Payload().CanonicalJSON().String() != test.payload.CanonicalJSON().String() {
+			t.Fatalf("ParseChannelFrame(%s) = (%#v,%v)", test.frameType, parsed, err)
+		}
+
+		var envelope map[string]any
+		if err := json.Unmarshal(frame.CanonicalJSON().Bytes(), &envelope); err != nil {
+			t.Fatal(err)
+		}
+		envelope["payload"].(map[string]any)["unknown"] = true
+		unknown, err := model.CanonicalMarshal(envelope)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ParseChannelFrame(unknown); !errors.Is(err, ErrChannelFrame) {
+			t.Fatalf("%s unknown payload field error = %v", test.frameType, err)
+		}
+	}
+
+	proof := hello.OwnerSignedProofChain()
+	missing := helloAck.MissingRecords()
+	records := syncPage.OwnerSignedRecords()
+	proof[0] = model.Member{}
+	missing[0] = model.Member{}
+	records[0] = model.Member{}
+	if hello.OwnerSignedProofChain()[0].IsZero() || helloAck.MissingRecords()[0].IsZero() ||
+		syncPage.OwnerSignedRecords()[0].IsZero() ||
+		hello.KnownRosterHead() != fixture.joiningMember.Head() ||
+		syncRequest.AfterRevision() != 1 || syncRequest.KnownHeadDigest() != fixture.ownerMember.Head().Digest() ||
+		baseline.BaselineChannelSequence() != 42 || baselineAck.BaselineChannelSequence() != 42 {
+		t.Fatal("Channel control payload exposed mutable or inconsistent evidence")
+	}
+}
+
+func TestChannelFrameTransportRequestIdentityIsIndependentOfEnrollmentReplay(t *testing.T) {
+	t.Parallel()
+
+	fixture := newChannelFrameFixture(t)
+	firstRequest, err := NewChannelRequestID(bytes.NewReader(bytes.Repeat([]byte{0x61}, channelRequestIDBytes)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondRequest, err := NewChannelRequestID(bytes.NewReader(bytes.Repeat([]byte{0x62}, channelRequestIDBytes)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	init, err := NewEnrollInit(EnrollInitSpec{ChannelID: fixture.channelID, GrantID: fixture.grantID,
+		EnrollmentRequestID: fixture.requestID,
+		JoinerNonce:         bytes.Repeat([]byte{0x63}, model.EnrollmentNonceBytes),
+		SupportedVersions:   []uint8{ChannelFrameVersion}, OriginEpoch: fixture.joinerEpoch,
+		DisplayLabel: "joiner", AdvertisedMultiaddrs: fixture.joiningMember.Multiaddrs()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted, err := NewEnrollAccepted(ChannelEnrollmentReplayed, fixture.joiningMember,
+		fixture.roster, fixture.receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstInit, err := NewChannelFrame(firstRequest, init)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retryInit, err := NewChannelFrame(secondRequest, init)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retryAccepted, err := NewChannelFrame(secondRequest, accepted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstInit.RequestID() == retryInit.RequestID() || retryInit.RequestID() != retryAccepted.RequestID() ||
+		firstInit.Payload().(EnrollInit).EnrollmentRequestID() != fixture.requestID ||
+		retryInit.Payload().(EnrollInit).EnrollmentRequestID() != fixture.requestID ||
+		retryAccepted.Payload().(EnrollAccepted).JoinReceipt().RequestID() != fixture.requestID {
+		t.Fatal("transport retry changed stable enrollment identity or reused request correlation")
+	}
+	if firstInit.CanonicalJSON().String() == retryInit.CanonicalJSON().String() ||
+		firstInit.Payload().CanonicalJSON().String() != retryInit.Payload().CanonicalJSON().String() {
+		t.Fatal("transport retry did not change only the generic envelope request ID")
+	}
+}
+
+func TestChannelControlFrameBoundsAndStructuralRules(t *testing.T) {
+	t.Parallel()
+
+	fixture := newChannelFrameFixture(t)
+	if maxChannelFrameBytes() != model.MaxCanonicalJSONBytes ||
+		channelFrameMaximum(ChannelFrameEnrollInit) != model.MaxChannelRecordBytes ||
+		channelFrameMaximum(ChannelFrameSyncPage) != 1<<20 ||
+		channelFrameMaximum(ChannelFrameMemberHello) != model.MaxCanonicalJSONBytes {
+		t.Fatal("Channel frame bounds diverged from the frozen hermetic profile")
+	}
+	if _, err := ParseChannelRequestID(fixture.requestID.String()); !errors.Is(err, ErrChannelFrame) {
+		t.Fatalf("durable enrollment ID admitted as transport ID: %v", err)
+	}
+	if _, err := ParseChannelRequestID("channel-request-000102030405060708090A0B0C0D0E0F"); !errors.Is(err, ErrChannelFrame) {
+		t.Fatalf("uppercase transport ID error = %v", err)
+	}
+
+	terminal := fixture.terminalJoiningMember(t)
+	if _, err := NewMemberHello(MemberHelloSpec{ChannelID: fixture.channelID,
+		ActiveMemberRecord: terminal, KnownRosterHead: terminal.Head(),
+		OwnerSignedProofChain: append(append([]model.Member{}, fixture.roster...), terminal)}); !errors.Is(err, ErrChannelFrame) {
+		t.Fatalf("terminal MemberHello error = %v", err)
+	}
+	if _, err := NewMemberHello(MemberHelloSpec{ChannelID: fixture.channelID,
+		ActiveMemberRecord: fixture.joiningMember, KnownRosterHead: fixture.joiningMember.Head(),
+		OwnerSignedProofChain: []model.Member{fixture.ownerMember, fixture.ownerMember}}); !errors.Is(err, ErrChannelFrame) {
+		t.Fatalf("discontinuous MemberHello proof error = %v", err)
+	}
+	if _, err := NewMemberHelloAck(MemberHelloAckSpec{ChannelID: fixture.channelID,
+		MissingRecords: fixture.roster[:1], RosterHead: fixture.joiningMember.Head()}); !errors.Is(err, ErrChannelFrame) {
+		t.Fatalf("incomplete MemberHelloAck suffix error = %v", err)
+	}
+	tooMany := make([]model.Member, channelSyncPageRecordLimit+1)
+	for index := range tooMany {
+		tooMany[index] = fixture.joiningMember
+	}
+	if _, err := NewSyncPage(SyncPageSpec{ChannelID: fixture.channelID,
+		OwnerSignedRecords: tooMany, RosterHead: fixture.joiningMember.Head()}); !errors.Is(err, ErrChannelFrame) {
+		t.Fatalf("oversized SyncPage record count error = %v", err)
+	}
+	if _, err := NewSyncPage(SyncPageSpec{ChannelID: fixture.channelID, More: true,
+		RosterHead: fixture.joiningMember.Head()}); !errors.Is(err, ErrChannelFrame) {
+		t.Fatalf("empty continued SyncPage error = %v", err)
+	}
+	if _, err := NewDataBaseline(DataBaselineSpec{ChannelID: fixture.channelID,
+		OriginPeerID: fixture.joiner.modelID, OriginEpoch: fixture.joinerEpoch,
+		BaselineChannelSequence: model.MaxSQLiteInteger + 1}); !errors.Is(err, ErrChannelFrame) {
+		t.Fatalf("oversized baseline sequence error = %v", err)
+	}
+
+	oversizedPayload, err := model.CanonicalMarshal(map[string]any{
+		"proof":   model.Sum([]byte("oversized small frame")).String(),
+		"padding": strings.Repeat("x", channelSmallFrameBytes),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oversizedEnvelope, err := model.CanonicalMarshal(channelFrameWire{Payload: oversizedPayload,
+		RequestID: fixture.frameRequestID.String(), Type: ChannelFrameEnrollProof,
+		Version: ChannelFrameVersion})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(oversizedEnvelope) <= channelSmallFrameBytes {
+		t.Fatal("test did not exceed the typed small-frame fence")
+	}
+	if _, err := ParseChannelFrame(oversizedEnvelope); !errors.Is(err, ErrChannelFrame) {
+		t.Fatalf("typed small-frame fence error = %v", err)
+	}
+}
+
 func TestChannelFrameRejectsUnknownNoncanonicalAndMismatchedValues(t *testing.T) {
 	t.Parallel()
 
 	fixture := newChannelFrameFixture(t)
 	proof, _ := NewEnrollProof(model.Sum([]byte("proof")))
-	frame, _ := NewChannelFrame(fixture.requestID, proof)
+	frame, _ := NewChannelFrame(fixture.frameRequestID, proof)
 	valid := frame.CanonicalJSON().Bytes()
 
 	var envelope map[string]any
@@ -165,13 +376,15 @@ func TestChannelFrameRejectsUnknownNoncanonicalAndMismatchedValues(t *testing.T)
 		t.Fatalf("oversized envelope error = %v", err)
 	}
 
-	otherRequest, _ := model.ParseEnrollmentRequestID("request-frame-codec-other")
+	otherRequest, _ := ParseChannelRequestID("channel-request-101112131415161718191a1b1c1d1e1f")
 	accepted, _ := NewEnrollAccepted(ChannelEnrollmentAccepted, fixture.joiningMember,
 		fixture.roster, fixture.receipt)
-	if _, err := NewChannelFrame(otherRequest, accepted); !errors.Is(err, ErrChannelFrame) {
-		t.Fatalf("accepted request substitution error = %v", err)
+	if replayFrame, err := NewChannelFrame(otherRequest, accepted); err != nil ||
+		replayFrame.RequestID() == fixture.frameRequestID ||
+		replayFrame.Payload().(EnrollAccepted).JoinReceipt().RequestID() != fixture.requestID {
+		t.Fatalf("accepted transport recorrelation = (%#v,%v)", replayFrame, err)
 	}
-	if _, err := NewChannelFrame(fixture.requestID, nil); !errors.Is(err, ErrChannelFrame) {
+	if _, err := NewChannelFrame(fixture.frameRequestID, nil); !errors.Is(err, ErrChannelFrame) {
 		t.Fatalf("nil payload error = %v", err)
 	}
 }
@@ -179,7 +392,7 @@ func TestChannelFrameRejectsUnknownNoncanonicalAndMismatchedValues(t *testing.T)
 func TestChannelFrameLengthPrefixIsBoundedAndFailClosed(t *testing.T) {
 	t.Parallel()
 
-	requestID, _ := model.ParseEnrollmentRequestID("request-frame-length")
+	requestID, _ := ParseChannelRequestID("channel-request-202122232425262728292a2b2c2d2e2f")
 	payload, _ := NewEnrollProof(model.Sum([]byte("length-bound proof")))
 	frame, _ := NewChannelFrame(requestID, payload)
 
@@ -229,7 +442,8 @@ func TestChannelFramePayloadRulesAndTerminalEnrollmentEvidence(t *testing.T) {
 
 	fixture := newChannelFrameFixture(t)
 	baseInit := EnrollInitSpec{ChannelID: fixture.channelID, GrantID: fixture.grantID,
-		JoinerNonce: bytes.Repeat([]byte{1}, model.EnrollmentNonceBytes), SupportedVersions: []uint8{1},
+		EnrollmentRequestID: fixture.requestID,
+		JoinerNonce:         bytes.Repeat([]byte{1}, model.EnrollmentNonceBytes), SupportedVersions: []uint8{1},
 		OriginEpoch: fixture.joinerEpoch, DisplayLabel: "joiner",
 		AdvertisedMultiaddrs: []string{"/ip4/127.0.0.1/tcp/4001"}}
 	badInit := baseInit
@@ -292,18 +506,19 @@ func TestChannelFramePayloadRulesAndTerminalEnrollmentEvidence(t *testing.T) {
 }
 
 type channelFrameFixture struct {
-	requestID     model.EnrollmentRequestID
-	channelID     model.ChannelID
-	grantID       model.GrantID
-	descriptor    model.SignedChannelDescriptor
-	owner         authorityTestPeer
-	joiner        authorityTestPeer
-	ownerMember   model.Member
-	joiningMember model.Member
-	joinerEpoch   model.OriginEpoch
-	roster        []model.Member
-	receipt       model.EnrollmentReceipt
-	createdAt     time.Time
+	requestID      model.EnrollmentRequestID
+	frameRequestID ChannelRequestID
+	channelID      model.ChannelID
+	grantID        model.GrantID
+	descriptor     model.SignedChannelDescriptor
+	owner          authorityTestPeer
+	joiner         authorityTestPeer
+	ownerMember    model.Member
+	joiningMember  model.Member
+	joinerEpoch    model.OriginEpoch
+	roster         []model.Member
+	receipt        model.EnrollmentReceipt
+	createdAt      time.Time
 }
 
 func newChannelFrameFixture(t *testing.T) channelFrameFixture {
@@ -313,6 +528,7 @@ func newChannelFrameFixture(t *testing.T) channelFrameFixture {
 	channelID, _ := model.ParseChannelID("channel-frame-codec")
 	grantID, _ := model.ParseGrantID("grant-frame-codec")
 	requestID, _ := model.ParseEnrollmentRequestID("request-frame-codec")
+	frameRequestID, _ := ParseChannelRequestID("channel-request-000102030405060708090a0b0c0d0e0f")
 	ownerEpoch, _ := model.ParseOriginEpoch("epoch-frame-owner")
 	joinerEpoch, _ := model.ParseOriginEpoch("epoch-frame-joiner")
 	createdAt := time.Date(2026, 7, 18, 8, 9, 10, 11, time.UTC)
@@ -384,7 +600,8 @@ func newChannelFrameFixture(t *testing.T) channelFrameFixture {
 	if err := model.VerifyEnrollmentReceiptEvidence(descriptor, joiningMember, receipt); err != nil {
 		t.Fatal(err)
 	}
-	return channelFrameFixture{requestID: requestID, channelID: channelID, grantID: grantID,
+	return channelFrameFixture{requestID: requestID, frameRequestID: frameRequestID,
+		channelID: channelID, grantID: grantID,
 		descriptor: descriptor, owner: owner, joiner: joiner, ownerMember: ownerMember,
 		joiningMember: joiningMember, joinerEpoch: joinerEpoch, roster: roster,
 		receipt: receipt, createdAt: createdAt}
