@@ -265,7 +265,8 @@ func (gossip *Gossip) joinLocked(channelID model.ChannelID,
 		gate = &channelGate{}
 		gossip.gates[channelID] = gate
 	}
-	session := &TopicSession{gossip: gossip, channelID: channelID, name: topicName, gate: gate}
+	session := &TopicSession{gossip: gossip, channelID: channelID, name: topicName, gate: gate,
+		generation: gossip.authority.topicGeneration(channelID)}
 	validator := gossip.validator(session)
 	if err := gossip.pubsub.RegisterTopicValidator(topicName, validator,
 		pubsub.WithValidatorInline(true)); err != nil {
@@ -297,6 +298,24 @@ func (gossip *Gossip) joinLocked(channelID model.ChannelID,
 // Callers reacquire rotated sessions with Join; blocked Next calls on an old
 // session are cancelled and must be restarted by the owning worker.
 func (gossip *Gossip) Reconcile(snapshot NetworkAuthoritySnapshot) error {
+	return gossip.reconcile(snapshot, nil)
+}
+
+// ReconcileWithCommit validates the complete post-commit authority before it
+// drains affected Channel gates. The callback then performs exactly one
+// bounded durable CAS while those gates remain closed; a callback failure
+// leaves the old runtime authority and TopicSessions untouched. The callback
+// must not perform network I/O or call back into Gossip.
+func (gossip *Gossip) ReconcileWithCommit(snapshot NetworkAuthoritySnapshot,
+	commit func() error,
+) error {
+	if commit == nil {
+		return fmt.Errorf("%w: durable authority commit callback is required", ErrGossipTopic)
+	}
+	return gossip.reconcile(snapshot, commit)
+}
+
+func (gossip *Gossip) reconcile(snapshot NetworkAuthoritySnapshot, commit func() error) error {
 	if gossip == nil || gossip.pubsub == nil || gossip.authority == nil {
 		return fmt.Errorf("%w: router is unavailable", ErrGossipTopic)
 	}
@@ -310,6 +329,12 @@ func (gossip *Gossip) Reconcile(snapshot NetworkAuthoritySnapshot) error {
 		return fmt.Errorf("%w: prepare authority: %v", ErrGossipTopic, err)
 	}
 	gossip.authority.beginUpdate()
+	updateHeld := true
+	defer func() {
+		if updateHeld {
+			gossip.authority.finishUpdate()
+		}
+	}()
 	current := gossip.authority.state.Load()
 	promotedPeers := dataPlanePromotions(current, candidate)
 	// Every Channel ever joined keeps one stable gate for this router's full
@@ -346,11 +371,6 @@ func (gossip *Gossip) Reconcile(snapshot NetworkAuthoritySnapshot) error {
 			oldSessions[channelID] = session
 		}
 	}
-	// Every affected Channel is now drained at the application boundary. The
-	// immutable authority pointer swap is the revision linearization point;
-	// unrelated Channel sessions never take these gates and keep running.
-	gossip.authority.install(candidate)
-	gossip.authority.finishUpdate()
 	unlockGates := func() {
 		for index := len(locked) - 1; index >= 0; index-- {
 			locked[index].Unlock()
@@ -358,6 +378,17 @@ func (gossip *Gossip) Reconcile(snapshot NetworkAuthoritySnapshot) error {
 		locked = nil
 	}
 	defer unlockGates()
+	// Every affected Channel is now drained at the application boundary. The
+	// durable CAS runs before the immutable authority pointer swap while
+	// unrelated Channel sessions keep running on independent gates.
+	if commit != nil {
+		if err := commit(); err != nil {
+			return fmt.Errorf("%w: durable authority commit: %w", ErrGossipTopic, err)
+		}
+	}
+	gossip.authority.install(candidate)
+	gossip.authority.finishUpdate()
+	updateHeld = false
 
 	var reconcileErrors []error
 	for _, channelID := range affected {
@@ -740,6 +771,7 @@ type TopicSession struct {
 	topic          *pubsub.Topic
 	subscription   *pubsub.Subscription
 	gate           *channelGate
+	generation     topicAuthorityGeneration
 	localPublishes atomic.Int64
 	closed         atomic.Bool
 	handoff        atomic.Bool
@@ -749,6 +781,31 @@ type TopicSession struct {
 
 func (session *TopicSession) ChannelID() model.ChannelID { return session.channelID }
 func (session *TopicSession) Name() string               { return session.name }
+
+// IsCurrent proves that this live subscription was created for the exact
+// authority generation currently installed in Gossip. Durable topic_state is
+// a separate Store projection and must also be checked by readiness callers.
+func (session *TopicSession) IsCurrent() bool {
+	if session == nil || session.gossip == nil || session.gate == nil {
+		return false
+	}
+	session.gate.RLock()
+	defer session.gate.RUnlock()
+	return !session.closed.Load() && session.gate.deliverable.Load() &&
+		session.generation == session.gossip.authority.topicGeneration(session.channelID)
+}
+
+// HasCurrentSession reports only live runtime subscription authority. It does
+// not treat a durable joined marker from a previous process as readiness.
+func (gossip *Gossip) HasCurrentSession(channelID model.ChannelID) bool {
+	if gossip == nil || channelID.IsZero() {
+		return false
+	}
+	gossip.mu.Lock()
+	session := gossip.sessions[channelID]
+	gossip.mu.Unlock()
+	return session != nil && session.IsCurrent()
+}
 
 func (session *TopicSession) Publish(ctx context.Context,
 	publication model.SignedPublication,

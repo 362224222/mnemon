@@ -1049,6 +1049,9 @@ func TestGossipSessionCloseSerializesValidatorRecreation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !session.IsCurrent() || !gossip.HasCurrentSession(channel.ChannelID) {
+		t.Fatal("new TopicSession is not bound to the current authority generation")
+	}
 	for iteration := 0; iteration < 32; iteration++ {
 		closed := make(chan error, 1)
 		go func(current *TopicSession) { closed <- current.Close() }(session)
@@ -1115,12 +1118,18 @@ func TestGossipSessionCloseSerializesValidatorRecreation(t *testing.T) {
 	if !session.closed.Load() {
 		t.Fatal("roster-head-only authority change did not rotate the Channel session")
 	}
+	if firstGeneration.IsCurrent() {
+		t.Fatal("retired TopicSession still reports current authority")
+	}
 	session, err = gossip.Join(channel.ChannelID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if session.gate != stableGate || !firstGeneration.handoff.Load() {
 		t.Fatal("successful authority rotation did not preserve the Channel gate and validator handoff")
+	}
+	if !session.IsCurrent() || !gossip.HasCurrentSession(channel.ChannelID) {
+		t.Fatal("rotated TopicSession is not current")
 	}
 	conflicted := rosterChanged
 	conflicted.Status = model.ChannelConflicted
@@ -1136,6 +1145,9 @@ func TestGossipSessionCloseSerializesValidatorRecreation(t *testing.T) {
 	}
 	if stableGate.deliverable.Load() {
 		t.Fatal("Channel without a current subscription remained deliverable")
+	}
+	if gossip.HasCurrentSession(channel.ChannelID) {
+		t.Fatal("conflicted Channel retained a current TopicSession")
 	}
 
 	// A Channel with no current session still has validator closures from
@@ -1246,6 +1258,96 @@ func TestGossipSessionCloseSerializesValidatorRecreation(t *testing.T) {
 	if session.gate != stableGate {
 		t.Fatal("multi-rotation successor replaced its lifetime validator gate")
 	}
+}
+
+func TestGossipReconcileWithCommitDrainsBeforeDurableMutation(t *testing.T) {
+	local := testAuthorityPeer(t, "gossip-commit-local")
+	remote := testAuthorityPeer(t, "gossip-commit-remote")
+	channel := testAuthorityChannel(t, "gossip-commit-channel", model.BindingActive, local, remote)
+	authority, _ := NewAuthority(local.modelID)
+	if err := authority.Replace(NetworkAuthoritySnapshot{LocalPeerID: local.modelID,
+		Channels: []ChannelAuthoritySnapshot{channel}}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	nodeHost, err := libp2p.New(libp2p.Identity(local.libp2pPrivate),
+		libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nodeHost.Close()
+	gossip, err := NewGossip(ctx, nodeHost, authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gossip.Close()
+	session, err := gossip.Join(channel.ChannelID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := nextTopicAuthorityGeneration(t, channel, "gossip-commit-roster-3")
+	snapshot := NetworkAuthoritySnapshot{LocalPeerID: local.modelID,
+		Channels: []ChannelAuthoritySnapshot{candidate}}
+
+	commitFailure := errors.New("injected durable CAS failure")
+	entered := make(chan struct{})
+	completed := make(chan error, 1)
+	session.gate.RLock()
+	go func() {
+		completed <- gossip.ReconcileWithCommit(snapshot, func() error {
+			close(entered)
+			return commitFailure
+		})
+	}()
+	select {
+	case <-entered:
+		session.gate.RUnlock()
+		t.Fatal("durable commit ran before the existing Channel gate drained")
+	case <-time.After(100 * time.Millisecond):
+	}
+	session.gate.RUnlock()
+	if err := <-completed; !errors.Is(err, commitFailure) {
+		t.Fatalf("failed commit error = %v", err)
+	}
+	if session.closed.Load() || !session.IsCurrent() || !gossip.HasCurrentSession(channel.ChannelID) {
+		t.Fatal("failed durable commit changed the old runtime authority")
+	}
+
+	commits := 0
+	if err := gossip.ReconcileWithCommit(snapshot, func() error {
+		commits++
+		if session.gate.TryRLock() {
+			session.gate.RUnlock()
+			return errors.New("commit callback observed an open Channel gate")
+		}
+		return nil
+	}); err != nil || commits != 1 {
+		t.Fatalf("successful gated commit = commits %d, error %v", commits, err)
+	}
+	if !session.closed.Load() || session.IsCurrent() {
+		t.Fatal("successful durable authority commit did not retire the old session")
+	}
+	replacement, err := gossip.Join(channel.ChannelID)
+	if err != nil || replacement == session || !replacement.IsCurrent() ||
+		!gossip.HasCurrentSession(channel.ChannelID) {
+		t.Fatalf("post-commit TopicSession = (%p,%v), previous %p", replacement, err, session)
+	}
+}
+
+func nextTopicAuthorityGeneration(t *testing.T, channel ChannelAuthoritySnapshot,
+	seed string,
+) ChannelAuthoritySnapshot {
+	t.Helper()
+	head, _ := model.NewRecordHead(channel.RosterHead.Revision()+1, model.Sum([]byte(seed)))
+	candidate := channel
+	candidate.RosterHead = head
+	candidate.VerifiedRosterHeads = append(
+		append([]model.RecordHead(nil), channel.VerifiedRosterHeads...), head)
+	member := channel.Members[len(channel.Members)-1]
+	member.Head = head
+	candidate.Members = append(append([]MemberAuthoritySnapshot(nil), channel.Members...), member)
+	return candidate
 }
 
 func testThreePeerAuthorityChannel(t *testing.T, id string,
