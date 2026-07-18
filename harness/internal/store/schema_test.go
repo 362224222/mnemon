@@ -140,8 +140,13 @@ func TestSchemaV1PeerInboxPendingPressure(t *testing.T) {
 		assertSchemaPeerInboxNodePressure(t, fixture.store.db, itemBytes)
 
 		for _, status := range []string{"waiting_artifact", "ready", "processing", "retry"} {
-			if _, err := fixture.store.db.Exec(`UPDATE peer_inbox SET status=?,updated_at=?
-				WHERE inbox_id='schema-pressure-inbox-1'`, status, storeTime(fixture.at)); err != nil {
+			var owner, lease any
+			if status == "waiting_artifact" || status == "processing" {
+				owner, lease = "schema-pressure-worker", storeTime(fixture.at.Add(time.Minute))
+			}
+			if _, err := fixture.store.db.Exec(`UPDATE peer_inbox SET status=?,lease_owner=?,
+				lease_until=?,updated_at=? WHERE inbox_id='schema-pressure-inbox-1'`,
+				status, owner, lease, storeTime(fixture.at)); err != nil {
 				t.Fatalf("enter pending status %q: %v", status, err)
 			}
 			assertSchemaPeerInboxPressure(t, fixture.store.db,
@@ -326,6 +331,74 @@ func TestSchemaV1PeerInboxPendingPressure(t *testing.T) {
 			t.Fatalf("Channel pressure rows after fail-closed rejection = (%d,%v)", channelCounters, err)
 		}
 	})
+}
+
+func TestSchemaV1PeerInboxAttemptAndLeaseInvariants(t *testing.T) {
+	fixture := newChannelBaselineFixture(t, "schema-inbox-lease", model.TopicJoined)
+	if _, err := fixture.store.InstallInboundChannelBaseline(context.Background(),
+		InstallInboundChannelBaselineSpec{
+			AuthenticatedPeerID: fixture.remote.Identity().PeerID(),
+			Baseline:            fixture.remoteBaseline(0),
+			At:                  fixture.at,
+		}); err != nil {
+		t.Fatal(err)
+	}
+	if err := insertSchemaPeerInbox(fixture, 1, "stored", []byte("publication"), []byte("[]")); err != nil {
+		t.Fatal(err)
+	}
+	for _, attempt := range []int64{-1, 4294967296} {
+		if _, err := fixture.store.db.Exec(`UPDATE peer_inbox SET attempts=?
+			WHERE inbox_id='schema-pressure-inbox-1'`, attempt); err == nil ||
+			!strings.Contains(err.Error(), "CHECK constraint failed") {
+			t.Fatalf("attempt %d error = %v", attempt, err)
+		}
+	}
+	if _, err := fixture.store.db.Exec(`UPDATE peer_inbox SET attempts=4294967295
+		WHERE inbox_id='schema-pressure-inbox-1'`); err != nil {
+		t.Fatalf("max uint32 attempt: %v", err)
+	}
+	if _, err := fixture.store.db.Exec(`UPDATE peer_inbox SET status='waiting_artifact'
+		WHERE inbox_id='schema-pressure-inbox-1'`); err == nil ||
+		!strings.Contains(err.Error(), "CHECK constraint failed") {
+		t.Fatalf("waiting without lease error = %v", err)
+	}
+	lease := storeTime(fixture.at.Add(time.Minute))
+	if _, err := fixture.store.db.Exec(`UPDATE peer_inbox SET lease_owner='worker'
+		WHERE inbox_id='schema-pressure-inbox-1'`); err == nil ||
+		!strings.Contains(err.Error(), "CHECK constraint failed") {
+		t.Fatalf("stored partial lease error = %v", err)
+	}
+	if _, err := fixture.store.db.Exec(`UPDATE peer_inbox SET status='waiting_artifact',
+		lease_owner='worker',lease_until=? WHERE inbox_id='schema-pressure-inbox-1'`, lease); err != nil {
+		t.Fatalf("complete Artifact lease: %v", err)
+	}
+	if _, err := fixture.store.db.Exec(`UPDATE peer_inbox SET lease_until=NULL
+		WHERE inbox_id='schema-pressure-inbox-1'`); err == nil ||
+		!strings.Contains(err.Error(), "CHECK constraint failed") {
+		t.Fatalf("partial waiting lease error = %v", err)
+	}
+	if _, err := fixture.store.db.Exec(`UPDATE peer_inbox SET status='ready'
+		WHERE inbox_id='schema-pressure-inbox-1'`); err == nil ||
+		!strings.Contains(err.Error(), "CHECK constraint failed") {
+		t.Fatalf("ready retaining lease error = %v", err)
+	}
+	if _, err := fixture.store.db.Exec(`UPDATE peer_inbox SET status='ready',lease_owner=NULL,
+		lease_until=NULL WHERE inbox_id='schema-pressure-inbox-1'`); err != nil {
+		t.Fatalf("ready clear lease: %v", err)
+	}
+	if _, err := fixture.store.db.Exec(`UPDATE peer_inbox SET status='processing'
+		WHERE inbox_id='schema-pressure-inbox-1'`); err == nil ||
+		!strings.Contains(err.Error(), "CHECK constraint failed") {
+		t.Fatalf("processing without lease error = %v", err)
+	}
+	if _, err := fixture.store.db.Exec(`UPDATE peer_inbox SET status='processing',
+		lease_owner='apply-worker',lease_until=? WHERE inbox_id='schema-pressure-inbox-1'`, lease); err != nil {
+		t.Fatalf("complete processing lease: %v", err)
+	}
+	if _, err := fixture.store.db.Exec(`UPDATE peer_inbox SET status='retry',lease_owner=NULL,
+		lease_until=NULL WHERE inbox_id='schema-pressure-inbox-1'`); err != nil {
+		t.Fatalf("retry clears processing lease: %v", err)
+	}
 }
 
 func TestSchemaV1KeyConstraintsAndTriggers(t *testing.T) {

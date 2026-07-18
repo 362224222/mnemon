@@ -135,9 +135,9 @@ func NewPeerInbox(localPeer PeerID, spec PeerInboxSpec) (PeerInbox, error) {
 	result.spec.NextAttemptAt, result.spec.ReceivedAt, result.spec.UpdatedAt = nextAttempt, receivedAt, updatedAt
 	result.spec.LeaseUntil, result.spec.LocalEventID = nil, nil
 	result.spec.Decision, result.spec.ReceiptEventID = nil, nil
-	if spec.Status == InboxProcessing {
+	if spec.Status == InboxWaitingArtifact || spec.Status == InboxProcessing {
 		if spec.LeaseOwner == "" || spec.LeaseUntil == nil {
-			return PeerInbox{}, invariant("processing Inbox row requires owner and lease")
+			return PeerInbox{}, invariant("leased Inbox phase requires owner and lease")
 		}
 		if err := validateIdentifier("Inbox lease owner", spec.LeaseOwner); err != nil {
 			return PeerInbox{}, err
@@ -147,11 +147,11 @@ func NewPeerInbox(localPeer PeerID, spec PeerInboxSpec) (PeerInbox, error) {
 			return PeerInbox{}, err
 		}
 		if !leaseUntil.After(updatedAt) {
-			return PeerInbox{}, invariant("Inbox processing lease must end after update time")
+			return PeerInbox{}, invariant("Inbox lease must end after update time")
 		}
 		result.leaseUntil, result.hasLease = leaseUntil, true
 	} else if spec.LeaseOwner != "" || spec.LeaseUntil != nil {
-		return PeerInbox{}, invariant("non-processing Inbox row cannot retain lease authority")
+		return PeerInbox{}, invariant("unleased Inbox phase cannot retain lease authority")
 	}
 	if spec.LocalEventID != nil {
 		if spec.LocalEventID.IsZero() || *spec.LocalEventID != event.ID() {

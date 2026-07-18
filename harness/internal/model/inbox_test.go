@@ -79,6 +79,15 @@ func TestPeerInboxArtifactAndLeaseInvariants(t *testing.T) {
 	if _, err := NewPeerInbox(reviewer, spec); err != nil {
 		t.Fatalf("NewPeerInbox(processing) error = %v", err)
 	}
+	spec.Status = InboxWaitingArtifact
+	if _, err := NewPeerInbox(reviewer, spec); err != nil {
+		t.Fatalf("NewPeerInbox(waiting Artifact) error = %v", err)
+	}
+	spec.LeaseOwner, spec.LeaseUntil = "", nil
+	if _, err := NewPeerInbox(reviewer, spec); !errors.Is(err, ErrInvariant) {
+		t.Fatalf("waiting Artifact without lease error = %v", err)
+	}
+	spec.LeaseOwner, spec.LeaseUntil = "worker-a", &lease
 	spec.RequiredArtifactRoots = nil
 	if _, err := NewPeerInbox(reviewer, spec); !errors.Is(err, ErrInvariant) {
 		t.Fatalf("Artifact mismatch error = %v", err)

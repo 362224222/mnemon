@@ -1420,7 +1420,9 @@ CREATE TABLE peer_inbox (
       'conflicted','retry','quarantined','ignored'
     )
   ),
-  attempts           INTEGER NOT NULL DEFAULT 0,
+  attempts           INTEGER NOT NULL DEFAULT 0 CHECK (
+    attempts BETWEEN 0 AND 4294967295
+  ),
   next_attempt_at    TEXT NOT NULL,
   lease_owner        TEXT,
   lease_until        TEXT,
@@ -1448,6 +1450,12 @@ CREATE TABLE peer_inbox (
     (is_audience = 0 AND status IN ('ignored','quarantined')
       AND local_event_id IS NULL AND receipt_event_id IS NULL)
     OR (is_audience = 1 AND status <> 'ignored')
+  ),
+  CHECK (
+    (status IN ('waiting_artifact','processing')
+      AND lease_owner IS NOT NULL AND lease_until IS NOT NULL)
+    OR (status NOT IN ('waiting_artifact','processing')
+      AND lease_owner IS NULL AND lease_until IS NULL)
   )
 );
 
