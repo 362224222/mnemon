@@ -96,14 +96,20 @@ type GossipIngressStore interface {
 
 type GossipIngressClock interface{ Now() time.Time }
 
+// GossipRepairTrigger is the intentionally tiny bridge from best-effort live
+// delivery to durable origin repair. Trigger must be non-blocking and
+// coalescing; Gossip ingress never waits for, or acknowledges, repair work.
+type GossipRepairTrigger interface{ Trigger() }
+
 type wallGossipIngressClock struct{}
 
 func (wallGossipIngressClock) Now() time.Time { return time.Now() }
 
 type GossipIngressOptions struct {
-	Session *TopicSession
-	Store   GossipIngressStore
-	Clock   GossipIngressClock
+	Session       *TopicSession
+	Store         GossipIngressStore
+	Clock         GossipIngressClock
+	RepairTrigger GossipRepairTrigger
 }
 
 type GossipIngressSnapshot struct {
@@ -133,6 +139,7 @@ type GossipIngress struct {
 	session gossipIngressSession
 	store   GossipIngressStore
 	clock   GossipIngressClock
+	repair  GossipRepairTrigger
 
 	mu       sync.Mutex
 	snapshot GossipIngressSnapshot
@@ -142,11 +149,11 @@ func NewGossipIngress(options GossipIngressOptions) (*GossipIngress, error) {
 	if options.Session == nil {
 		return nil, fmt.Errorf("%w: TopicSession is required", ErrGossipIngress)
 	}
-	return newGossipIngress(options.Session, options.Store, options.Clock)
+	return newGossipIngress(options.Session, options.Store, options.Clock, options.RepairTrigger)
 }
 
 func newGossipIngress(session gossipIngressSession, durable GossipIngressStore,
-	clock GossipIngressClock,
+	clock GossipIngressClock, repair ...GossipRepairTrigger,
 ) (*GossipIngress, error) {
 	if session == nil || durable == nil || session.ChannelID().IsZero() ||
 		session.gossipIngressLocalPeerID() == "" {
@@ -155,7 +162,14 @@ func newGossipIngress(session gossipIngressSession, durable GossipIngressStore,
 	if clock == nil {
 		clock = wallGossipIngressClock{}
 	}
-	return &GossipIngress{session: session, store: durable, clock: clock}, nil
+	var trigger GossipRepairTrigger
+	if len(repair) > 1 {
+		return nil, fmt.Errorf("%w: at most one repair trigger is allowed", ErrGossipIngress)
+	}
+	if len(repair) == 1 {
+		trigger = repair[0]
+	}
+	return &GossipIngress{session: session, store: durable, clock: clock, repair: trigger}, nil
 }
 
 func (session *TopicSession) gossipIngressLocalPeerID() libp2ppeer.ID {
@@ -199,6 +213,7 @@ func (ingress *GossipIngress) Run(ctx context.Context) error {
 			if ctx.Err() != nil || !ingress.session.IsCurrent() {
 				return nil
 			}
+			ingress.signalRepair()
 			return ingress.stop(GossipIngressDiagnosticSession)
 		}
 		ingress.recordReceived()
@@ -221,6 +236,7 @@ func (ingress *GossipIngress) Run(ctx context.Context) error {
 				ingress.recordQuarantine()
 				continue
 			case errors.Is(err, store.ErrPeerInboxPressure):
+				ingress.signalRepair()
 				return ingress.stop(GossipIngressDiagnosticPressure)
 			case errors.Is(err, store.ErrPeerInboxAuthority):
 				return ingress.stop(GossipIngressDiagnosticAuthority)
@@ -235,6 +251,16 @@ func (ingress *GossipIngress) Run(ctx context.Context) error {
 		if !ingress.recordDisposition(result.Disposition) {
 			return ingress.stop(GossipIngressDiagnosticStore)
 		}
+		if result.Disposition != store.PeerInboxConflicted &&
+			result.Cursor.ObservedChannelSequence > result.Cursor.ContiguousChannelSequence {
+			ingress.signalRepair()
+		}
+	}
+}
+
+func (ingress *GossipIngress) signalRepair() {
+	if ingress != nil && ingress.repair != nil {
+		ingress.repair.Trigger()
 	}
 }
 

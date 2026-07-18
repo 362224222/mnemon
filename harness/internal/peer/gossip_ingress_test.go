@@ -126,6 +126,51 @@ func TestGossipIngressPressurePausesWithoutAckUntilExplicitRetry(t *testing.T) {
 	}
 }
 
+func TestGossipIngressSignalsDurableRepairForGapAndPressure(t *testing.T) {
+	t.Parallel()
+	fixture := newGossipIngressFixture(t, "repair-signal")
+
+	t.Run("durable cursor gap", func(t *testing.T) {
+		source := newGossipIngressTestSession(fixture.channel.ChannelID, fixture.local.libp2pID,
+			fixture.received(fixture.origin.libp2pID))
+		ctx, cancel := context.WithCancel(context.Background())
+		trigger := &gossipIngressTestRepairTrigger{}
+		durable := &gossipIngressTestStore{outcomes: []gossipIngressStoreOutcome{{
+			result: store.PutPeerInboxResult{Disposition: store.PeerInboxStored,
+				Cursor: store.PeerCursorProjection{ContiguousChannelSequence: 1,
+					ObservedChannelSequence: 3}}, after: cancel,
+		}}}
+		ingress, err := newGossipIngress(source, durable,
+			fixedGossipIngressClock{at: fixture.at}, trigger)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := ingress.Run(ctx); err != nil || trigger.Calls() != 1 || durable.AckCalls() != 0 {
+			t.Fatalf("gap repair signal = Run %v, signals %d, ACK %d",
+				err, trigger.Calls(), durable.AckCalls())
+		}
+	})
+
+	t.Run("pressure", func(t *testing.T) {
+		source := newGossipIngressTestSession(fixture.channel.ChannelID, fixture.local.libp2pID,
+			fixture.received(fixture.relay.libp2pID))
+		trigger := &gossipIngressTestRepairTrigger{}
+		durable := &gossipIngressTestStore{outcomes: []gossipIngressStoreOutcome{{
+			err: store.ErrPeerInboxPressure,
+		}}}
+		ingress, err := newGossipIngress(source, durable,
+			fixedGossipIngressClock{at: fixture.at}, trigger)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = ingress.Run(context.Background())
+		assertGossipIngressFailure(t, err, GossipIngressDiagnosticPressure, true)
+		if trigger.Calls() != 1 || durable.AckCalls() != 0 {
+			t.Fatalf("pressure repair signal = %d, ACK %d", trigger.Calls(), durable.AckCalls())
+		}
+	})
+}
+
 func TestGossipIngressQuarantineAndDurableConflictDoNotStarveOtherOrigins(t *testing.T) {
 	t.Parallel()
 	fixture := newGossipIngressFixture(t, "origin-isolation")
@@ -387,6 +432,23 @@ type gossipIngressTestStore struct {
 	outcomes []gossipIngressStoreOutcome
 	specs    []store.PutPeerInboxSpec
 	ackCalls int
+}
+
+type gossipIngressTestRepairTrigger struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (trigger *gossipIngressTestRepairTrigger) Trigger() {
+	trigger.mu.Lock()
+	trigger.calls++
+	trigger.mu.Unlock()
+}
+
+func (trigger *gossipIngressTestRepairTrigger) Calls() int {
+	trigger.mu.Lock()
+	defer trigger.mu.Unlock()
+	return trigger.calls
 }
 
 func (durable *gossipIngressTestStore) PutPeerInbox(_ context.Context,
