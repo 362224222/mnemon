@@ -9,7 +9,6 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/assets"
 	"github.com/mnemon-dev/mnemon/harness/internal/integration"
 	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
-	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/node"
 )
 
@@ -60,22 +59,12 @@ func ensureAgentDaemonWith(ctx context.Context, workspace, nodeState string,
 		return localapi.NewAPIError(localapi.CodeInternal,
 			"canonical managed assets are unavailable")
 	}
-	revision := bundle.Manifest().AssetRevision
-	install := node.InstallationVerifierFunc(func(verifyCtx context.Context,
-		profile model.Profile,
-	) error {
-		if verifyCtx == nil {
-			return errors.New("managed installation verification context is unavailable")
-		}
-		host := assets.Host(profile.Host())
-		if !host.Valid() || profile.ActiveAssetRevision() != revision {
-			return errors.New("active Profile differs from the canonical managed assets")
-		}
-		if err := integration.VerifyHostProjection(workspace, nodeState, host, bundle); err != nil {
-			return err
-		}
-		return verifyCtx.Err()
-	})
+	install, err := integration.NewManagedInstallationFromBundle(workspace, bundle)
+	if err != nil {
+		return localapi.NewAPIError(localapi.CodeInternal,
+			"canonical managed assets are unavailable")
+	}
+	revision := install.Revision()
 	preflight, err := dependencies.newPreflight(node.DaemonPreflightOptions{
 		Workspace: workspace, NodeState: nodeState, AssetRevision: revision, Install: install,
 	})

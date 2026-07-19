@@ -180,46 +180,8 @@ func (app *setupApp) run(ctx context.Context, args []string) int {
 	return 0
 }
 
-func (app *setupApp) execute(ctx context.Context,
-	request setupRequest,
-) (setupReceipt, *localapi.APIError) {
-	workspace, err := resolveSetupWorkspace(request.projectRoot, app.deps.workingDirectory)
-	if err != nil {
-		return setupReceipt{}, setupError(localapi.CodeInvalidArgument,
-			"project root must be an existing physical directory")
-	}
-	bundle, err := app.deps.loadBundle()
-	if err != nil {
-		return setupReceipt{}, setupAssetsError()
-	}
-	revision := bundle.Manifest().AssetRevision
-	if _, err := model.ParseDigest(revision); err != nil {
-		return setupReceipt{}, setupAssetsError()
-	}
-	companion, err := app.deps.newCompanion(ctx, workspace, app.version)
-	if err != nil {
-		return setupReceipt{}, setupUnavailableError("mnemond companion is unavailable")
-	}
-	nodeState := filepath.Join(workspace, ".mnemon", "harness", "node")
-	preparedNodeState, err := app.deps.prepareNode(workspace)
-	if err != nil || preparedNodeState != nodeState {
-		return setupReceipt{}, setupAuthError("managed Node state is unsafe")
-	}
-
-	lock, err := app.deps.acquireLock(ctx, nodeState)
-	if err != nil || lock == nil {
-		return setupReceipt{}, setupUnavailableError("managed setup lock is unavailable")
-	}
-	receipt, apiErr := app.executeLocked(ctx, request, workspace, nodeState, revision,
-		bundle, companion)
-	if closeErr := lock.Close(); closeErr != nil {
-		return setupReceipt{}, setupAuthError("managed setup lock changed during setup")
-	}
-	return receipt, apiErr
-}
-
 func (app *setupApp) executeLocked(ctx context.Context, request setupRequest,
-	workspace, nodeState, revision string, bundle assets.Bundle, companion setupCompanion,
+	workspace, nodeState, revision string, bundle assets.Bundle, preflight node.DaemonEnsurePreflight, companion setupCompanion,
 ) (setupReceipt, *localapi.APIError) {
 	observed := app.observeAuthority(ctx, nodeState, companion)
 	if observed.terminal != nil {
@@ -292,7 +254,7 @@ func (app *setupApp) executeLocked(ctx context.Context, request setupRequest,
 		}
 	}
 	if authority.Enabled && authority.AssetRevision != revision {
-		return app.upgradeActive(ctx, workspace, nodeState, revision, bundle, targetHost,
+		return app.upgradeActive(ctx, workspace, nodeState, revision, bundle, preflight, targetHost,
 			hostObservation, authority, authorityUpdatedAt, observed.client, companion)
 	}
 	if err := app.deps.installProjection(workspace, nodeState, targetHost, bundle); err != nil {
@@ -314,7 +276,7 @@ func (app *setupApp) executeLocked(ctx context.Context, request setupRequest,
 			return setupReceipt{}, setupAuthError("managed Profile credential is unavailable")
 		}
 	}
-	ensureOptions, apiErr := app.ensureOptions(workspace, nodeState, revision, bundle,
+	ensureOptions, apiErr := app.ensureOptions(workspace, nodeState, revision, preflight,
 		targetHost, client)
 	if apiErr != nil {
 		return setupReceipt{}, apiErr
@@ -361,7 +323,7 @@ func otherSetupHost(host assets.Host) (assets.Host, bool) {
 }
 
 func (app *setupApp) upgradeActive(ctx context.Context, workspace, nodeState,
-	revision string, bundle assets.Bundle, host assets.Host,
+	revision string, bundle assets.Bundle, daemonPreflight node.DaemonEnsurePreflight, host assets.Host,
 	hostObservation integration.HostObservation,
 	authority localapi.AuthorityResponse, authorityUpdatedAt time.Time,
 	client setupAuthorityClient, companion setupCompanion,
@@ -386,7 +348,7 @@ func (app *setupApp) upgradeActive(ctx context.Context, workspace, nodeState,
 		return setupReceipt{}, setupUnavailableError("managed daemon lifecycle is unavailable")
 	}
 	receipt, apiErr := app.upgradeActiveLeased(ctx, workspace, nodeState, revision,
-		bundle, host, hostObservation, authority, authorityUpdatedAt, client, companion, lease)
+		bundle, daemonPreflight, host, hostObservation, authority, authorityUpdatedAt, client, companion, lease)
 	if closeErr := lease.Close(); closeErr != nil {
 		return setupReceipt{}, setupAuthError("managed daemon lifecycle changed during setup")
 	}
@@ -394,7 +356,7 @@ func (app *setupApp) upgradeActive(ctx context.Context, workspace, nodeState,
 }
 
 func (app *setupApp) upgradeActiveLeased(ctx context.Context, workspace, nodeState,
-	revision string, bundle assets.Bundle, host assets.Host,
+	revision string, bundle assets.Bundle, daemonPreflight node.DaemonEnsurePreflight, host assets.Host,
 	hostObservation integration.HostObservation,
 	authority localapi.AuthorityResponse, authorityUpdatedAt time.Time,
 	client setupAuthorityClient, companion setupCompanion, lease setupDaemonLifecycle,
@@ -431,7 +393,7 @@ func (app *setupApp) upgradeActiveLeased(ctx context.Context, workspace, nodeSta
 		bundle); err != nil {
 		return setupReceipt{}, setupHostActivationError(err)
 	}
-	ensureOptions, apiErr := app.ensureOptions(workspace, nodeState, revision, bundle,
+	ensureOptions, apiErr := app.ensureOptions(workspace, nodeState, revision, daemonPreflight,
 		host, client)
 	if apiErr != nil {
 		return setupReceipt{}, apiErr

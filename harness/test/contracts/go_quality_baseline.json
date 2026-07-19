@@ -7095,7 +7095,7 @@
       "rule": "paired_test_file_lines",
       "identity": "paired_test_file_lines:harness/internal/cli/setup_test.go",
       "path": "harness/internal/cli/setup_test.go",
-      "ceiling": 1229
+      "ceiling": 1227
     },
     {
       "rule": "paired_test_file_lines",
@@ -7287,7 +7287,7 @@
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/cli/setup.go",
       "path": "harness/internal/cli/setup.go",
-      "ceiling": 715
+      "ceiling": 677
     },
     {
       "rule": "production_file_lines",
@@ -7359,7 +7359,7 @@
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/node/controller.go",
       "path": "harness/internal/node/controller.go",
-      "ceiling": 489
+      "ceiling": 483
     },
     {
       "rule": "production_file_lines",

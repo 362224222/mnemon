@@ -35,6 +35,13 @@ func NewManagedInstallation(workspace string) (*ManagedInstallation, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: load canonical assets: %v", ErrManagedInstallation, err)
 	}
+	return NewManagedInstallationFromBundle(workspace, bundle)
+}
+
+// NewManagedInstallationFromBundle binds the caller's already validated
+// canonical bundle to one physical workspace. Setup uses this constructor so
+// installation, semantic validation, and daemon preflight share one snapshot.
+func NewManagedInstallationFromBundle(workspace string, bundle assets.Bundle) (*ManagedInstallation, error) {
 	return newManagedInstallation(workspace, bundle, InspectHost)
 }
 

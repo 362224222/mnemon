@@ -472,7 +472,7 @@ func TestPublicSetupUpgradesAnActiveRevisionUnderLifecycleLease(t *testing.T) {
 	}
 	setupProcessRewriteAppliedProjectionRevision(t, projection.OwnershipPath,
 		newRevision, oldRevision)
-	oldInstall := node.InstallationVerifierFunc(func(_ context.Context, profile model.Profile) error {
+	oldInstall := setupProcessInstallationFor(oldRevision, bundle, func(_ context.Context, profile model.Profile) error {
 		if profile.Host() != model.HostCodex || profile.ActiveAssetRevision() != oldRevision {
 			return errors.New("old process fixture installation authority differs")
 		}

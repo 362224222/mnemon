@@ -680,7 +680,7 @@ func waitControllerHealth(t *testing.T, client *localapi.Client, status string) 
 }
 
 func testInstallationVerifier(workspace, nodeState string, bundle assets.Bundle) InstallationVerifier {
-	return InstallationVerifierFunc(func(_ context.Context, profile model.Profile) error {
+	verify := InstallationVerifierFunc(func(_ context.Context, profile model.Profile) error {
 		host := assets.Host(profile.Host())
 		if !host.Valid() || profile.ActiveAssetRevision() != bundle.Manifest().AssetRevision {
 			return errors.New("Profile does not select the canonical Host assets")
@@ -690,6 +690,7 @@ func testInstallationVerifier(workspace, nodeState string, bundle assets.Bundle)
 		}
 		return integration.VerifyHostProjection(workspace, nodeState, host, bundle)
 	})
+	return testInstallationWithActions(verify, bundle)
 }
 
 func writeControllerProfileToken(t *testing.T, nodeState string, credential []byte) {

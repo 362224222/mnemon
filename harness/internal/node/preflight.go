@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/mnemon-dev/mnemon/harness/internal/agent"
 	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
@@ -29,6 +30,7 @@ type DaemonPreflight struct {
 	nodeState     string
 	assetRevision string
 	install       InstallationVerifier
+	actionPolicy  agent.ActionPolicy
 }
 
 func NewDaemonPreflight(options DaemonPreflightOptions) (*DaemonPreflight, error) {
@@ -46,8 +48,15 @@ func NewDaemonPreflight(options DaemonPreflightOptions) (*DaemonPreflight, error
 	if options.Install == nil {
 		return nil, fmt.Errorf("%w: installation verifier is unavailable", ErrDaemonPreflight)
 	}
+	actionPolicy, err := actionPolicyForInstallation(options.Install)
+	if err != nil {
+		return nil, fmt.Errorf("%w: action policy: %w", ErrDaemonPreflight, err)
+	}
+	if actionPolicy.AssetRevision().String() != options.AssetRevision {
+		return nil, fmt.Errorf("%w: action policy differs from expected asset revision", ErrDaemonPreflight)
+	}
 	return &DaemonPreflight{workspace: options.Workspace, nodeState: options.NodeState,
-		assetRevision: options.AssetRevision, install: options.Install}, nil
+		assetRevision: options.AssetRevision, install: options.Install, actionPolicy: actionPolicy}, nil
 }
 
 // Verify is validation-only. It never provisions identity or credentials,

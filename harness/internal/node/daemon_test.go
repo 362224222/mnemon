@@ -61,6 +61,32 @@ func TestOpenDaemonBindsIdentityStoreCredentialAssetsAndSocket(t *testing.T) {
 	}
 }
 
+func TestOpenDaemonRejectsMissingActionAuthorityBeforeStoreOrInstallationVerification(t *testing.T) {
+	fixture := newDaemonFixture(t, true)
+	writer, err := store.OpenExisting(context.Background(), filepath.Join(fixture.nodeState, "node.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	install := InstallationVerifierFunc(func(context.Context, model.Profile) error {
+		called = true
+		return nil
+	})
+	daemon, openErr := OpenDaemon(context.Background(), DaemonOptions{
+		Workspace: fixture.workspace, Install: install,
+	})
+	if daemon != nil || !errors.Is(openErr, ErrDaemonAuthority) || errors.Is(openErr, store.ErrWriterActive) {
+		t.Fatalf("OpenDaemon() = (%v, %v)", daemon, openErr)
+	}
+	if called {
+		t.Fatal("action authority failure reached installation verification")
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	assertDaemonStoreReopenable(t, fixture.nodeState)
+}
+
 func TestOpenDaemonRejectsAuthorityDriftAndNeverCreatesMissingDatabase(t *testing.T) {
 	t.Run("identity replacement", func(t *testing.T) {
 		fixture := newDaemonFixture(t, true)

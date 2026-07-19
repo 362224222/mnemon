@@ -5,8 +5,38 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/mnemon-dev/mnemon/harness/internal/agent"
+	"github.com/mnemon-dev/mnemon/harness/internal/assets"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 )
+
+type testActionInstallation struct {
+	InstallationVerifier
+	provider agent.ActionAssetProvider
+}
+
+func (installation testActionInstallation) Revision() string {
+	return installation.provider.Revision()
+}
+
+func (installation testActionInstallation) TeamworkActionPaths() []string {
+	return installation.provider.TeamworkActionPaths()
+}
+
+func (installation testActionInstallation) ReadTeamworkAction(path string) ([]byte, error) {
+	return installation.provider.ReadTeamworkAction(path)
+}
+
+func testInstallationWithActions(verify InstallationVerifier,
+	provider agent.ActionAssetProvider,
+) InstallationVerifier {
+	return testActionInstallation{InstallationVerifier: verify, provider: provider}
+}
+
+func testInstallationWithVerifier(verify, authority InstallationVerifier) InstallationVerifier {
+	provider, _ := authority.(agent.ActionAssetProvider)
+	return testInstallationWithActions(verify, provider)
+}
 
 func TestInstallationVerifierUsesTheCallerContext(t *testing.T) {
 	called := false
@@ -24,5 +54,25 @@ func TestInstallationVerifierUsesTheCallerContext(t *testing.T) {
 	}
 	if err := verify.Verify(nil, model.Profile{}); err == nil {
 		t.Fatal("Verify(nil) succeeded")
+	}
+}
+
+func TestActionPolicyForInstallationRequiresTheSameRawAssetProvider(t *testing.T) {
+	bundle, err := assets.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	verify := InstallationVerifierFunc(func(context.Context, model.Profile) error { return nil })
+	installation := testInstallationWithActions(verify, bundle)
+	policy, err := actionPolicyForInstallation(installation)
+	if err != nil || policy.AssetRevision().String() != bundle.Revision() {
+		t.Fatalf("actionPolicyForInstallation() = (%s, %v)", policy.AssetRevision(), err)
+	}
+	if policy, err := actionPolicyForInstallation(verify); err == nil || !policy.AssetRevision().IsZero() {
+		t.Fatalf("actionPolicyForInstallation(verifier only) = (%#v, %v)", policy, err)
+	}
+	var nilInstallation *testActionInstallation
+	if policy, err := actionPolicyForInstallation(nilInstallation); err == nil || !policy.AssetRevision().IsZero() {
+		t.Fatalf("actionPolicyForInstallation(typed nil) = (%#v, %v)", policy, err)
 	}
 }

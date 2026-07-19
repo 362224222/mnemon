@@ -53,6 +53,48 @@ func TestActivatePublishesOnlyVerifiedInstallationAndReplaysExactly(t *testing.T
 	}
 }
 
+func TestActivateRejectsMissingActionAuthorityBeforeStoreOrProfileMutation(t *testing.T) {
+	workspace := newProvisionWorkspace(t)
+	bundle, err := assets.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	provisioned, err := Provision(context.Background(), ProvisionOptions{Workspace: workspace,
+		Host: model.HostCodex, AssetRevision: bundle.Manifest().AssetRevision,
+		Clock: controllerTestClock{time.Date(2026, 7, 17, 8, 30, 0, 0, time.UTC)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer, err := store.OpenExisting(context.Background(), filepath.Join(provisioned.NodeState, "node.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	called := false
+	install := InstallationVerifierFunc(func(context.Context, model.Profile) error {
+		called = true
+		return nil
+	})
+	_, activateErr := Activate(context.Background(), ActivateOptions{
+		Workspace:         workspace,
+		Host:              model.HostCodex,
+		AssetRevision:     bundle.Manifest().AssetRevision,
+		ExpectedUpdatedAt: provisioned.Profile.UpdatedAt(),
+		Clock:             controllerTestClock{provisioned.Profile.UpdatedAt().Add(time.Second)},
+		Install:           install,
+	})
+	if !errors.Is(activateErr, ErrActivate) || errors.Is(activateErr, store.ErrWriterActive) {
+		t.Fatalf("Activate() error = %v", activateErr)
+	}
+	if called {
+		t.Fatal("action authority failure reached installation verification")
+	}
+	authority, err := writer.ReadLocalAuthority(context.Background())
+	if err != nil || authority.Profile.Enabled() {
+		t.Fatalf("failed activation authority = (%#v, %v)", authority, err)
+	}
+}
+
 func TestActivateFailureLeavesProfileDisabled(t *testing.T) {
 	workspace := newProvisionWorkspace(t)
 	bundle, _ := assets.Load()
@@ -63,13 +105,14 @@ func TestActivateFailureLeavesProfileDisabled(t *testing.T) {
 		t.Fatal(err)
 	}
 	failed := errors.New("Host projection is not installed")
+	install := testInstallationWithActions(InstallationVerifierFunc(func(context.Context, model.Profile) error {
+		return failed
+	}), bundle)
 	options := ActivateOptions{Workspace: workspace, Host: model.HostCodex,
 		AssetRevision:     bundle.Manifest().AssetRevision,
 		ExpectedUpdatedAt: provisioned.Profile.UpdatedAt(),
 		Clock:             controllerTestClock{provisioned.Profile.UpdatedAt().Add(time.Second)},
-		Install: InstallationVerifierFunc(func(context.Context, model.Profile) error {
-			return failed
-		})}
+		Install:           install}
 	if _, err := Activate(context.Background(), options); !errors.Is(err, ErrActivate) || !errors.Is(err, failed) {
 		t.Fatalf("Activate() error = %v", err)
 	}

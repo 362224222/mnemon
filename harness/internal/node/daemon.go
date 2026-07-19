@@ -69,7 +69,11 @@ type Daemon struct {
 }
 
 func OpenDaemon(ctx context.Context, options DaemonOptions) (*Daemon, error) {
-	return openDaemon(ctx, options, nil)
+	policy, err := actionPolicyForInstallation(options.Install)
+	if err != nil {
+		return nil, fmt.Errorf("%w: compose managed action policy: %w", ErrDaemonAuthority, err)
+	}
+	return openDaemon(ctx, options, nil, policy)
 }
 
 // OpenManagedDaemon is the production serve boundary. Unlike OpenDaemon's
@@ -82,6 +86,10 @@ func OpenManagedDaemon(ctx context.Context, options DaemonOptions) (*Daemon, err
 		return nil, err
 	}
 	options.Workspace = workspace
+	policy, err := actionPolicyForInstallation(options.Install)
+	if err != nil {
+		return nil, fmt.Errorf("%w: compose managed action policy: %w", ErrDaemonAuthority, err)
+	}
 	nodeState := filepath.Join(workspace, ".mnemon", "harness", "node")
 	permit, err := openInheritedDaemonLaunchPermit(nodeState)
 	if err != nil {
@@ -93,7 +101,7 @@ func OpenManagedDaemon(ctx context.Context, options DaemonOptions) (*Daemon, err
 			permit.close(),
 		)
 	}
-	daemon, openErr := openDaemon(ctx, options, permit.close)
+	daemon, openErr := openDaemon(ctx, options, permit.close, policy)
 	if openErr != nil {
 		return nil, errors.Join(openErr, permit.close())
 	}
@@ -101,7 +109,7 @@ func OpenManagedDaemon(ctx context.Context, options DaemonOptions) (*Daemon, err
 }
 
 func openDaemon(ctx context.Context, options DaemonOptions,
-	beforeAccept func() error,
+	beforeAccept func() error, actionPolicy agent.ActionPolicy,
 ) (*Daemon, error) {
 	nodeState := filepath.Join(options.Workspace, ".mnemon", "harness", "node")
 	authority, err := openExistingDaemonAuthority(ctx, options.Workspace, nodeState)
@@ -134,7 +142,8 @@ func openDaemon(ctx context.Context, options DaemonOptions,
 	}
 	controller, err := NewController(ctx, ControllerOptions{NodeState: nodeState, Workspace: workspace,
 		Store: st, Profile: authority.authority.Profile, Signer: identity.PublicationSigner(), Clock: options.Clock,
-		Install: options.Install, WakeAdapter: wakeAdapter, BeforeAccept: beforeAccept})
+		Install: options.Install, actionPolicy: actionPolicy,
+		WakeAdapter: wakeAdapter, BeforeAccept: beforeAccept})
 	if err != nil {
 		return fail(fmt.Errorf("%w: compose controller: %v", ErrDaemonAuthority, err))
 	}
@@ -207,14 +216,14 @@ func (daemon *Daemon) Close() error {
 }
 
 func isNilWakeAdapterFactory(factory WakeAdapterFactory) bool {
-	return isNilDaemonInterface(factory)
+	return isNilNodeInterface(factory)
 }
 
 func isNilWakeAdapter(adapter agent.WakeWorkerAdapter) bool {
-	return isNilDaemonInterface(adapter)
+	return isNilNodeInterface(adapter)
 }
 
-func isNilDaemonInterface(value any) bool {
+func isNilNodeInterface(value any) bool {
 	if value == nil {
 		return true
 	}

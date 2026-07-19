@@ -42,11 +42,11 @@ func TestSetupFreshRunsTheLockedStateMachineAndEmitsCanonicalReceipt(t *testing.
 		t.Fatalf("setup receipt = %q, want %q", stdout, string(raw)+"\n")
 	}
 	fixture.wantOrder(t,
-		"cwd", "load-bundle", "new-companion", "bootstrap", "lock", "new-client",
+		"cwd", "load-bundle", "new-preflight", "new-companion", "bootstrap", "lock", "new-client",
 		"can-initialize", "detect:auto", "initialize:codex", "inspect",
 		"inspect-host:codex", "install-bundle", "verify-absent:claude-code",
 		"install-projection:codex", "verify-projection:codex", "verify-activation:codex",
-		"new-client", "new-preflight", "new-gate", "activate:codex",
+		"new-client", "new-gate", "activate:codex",
 		"ensure", "unlock")
 }
 
@@ -113,10 +113,10 @@ func TestSetupExistingAuthorityFreezesAutoAndFailsBeforeActiveMutations(t *testi
 			t.Fatalf("replay = exit %d stdout %q stderr %q", exit, stdout, stderr)
 		}
 		fixture.wantOrder(t,
-			"cwd", "load-bundle", "new-companion", "bootstrap", "lock",
+			"cwd", "load-bundle", "new-preflight", "new-companion", "bootstrap", "lock",
 			"new-client", "read-authority", "inspect-host:claude-code", "install-bundle",
 			"install-projection:claude-code", "verify-projection:claude-code",
-			"verify-activation:claude-code", "new-preflight", "new-gate", "ensure", "unlock")
+			"verify-activation:claude-code", "new-gate", "ensure", "unlock")
 	})
 
 	t.Run("explicit different Host is a domain conflict", func(t *testing.T) {
@@ -126,7 +126,7 @@ func TestSetupExistingAuthorityFreezesAutoAndFailsBeforeActiveMutations(t *testi
 			"profile_host_mismatch: managed Profile is bound to another Host; eject is required before switching\n" {
 			t.Fatalf("conflict = exit %d stdout %q stderr %q", exit, stdout, stderr)
 		}
-		fixture.wantOrder(t, "cwd", "load-bundle", "new-companion", "bootstrap",
+		fixture.wantOrder(t, "cwd", "load-bundle", "new-preflight", "new-companion", "bootstrap",
 			"lock", "new-client", "read-authority", "unlock")
 	})
 
@@ -142,11 +142,11 @@ func TestSetupExistingAuthorityFreezesAutoAndFailsBeforeActiveMutations(t *testi
 			!strings.Contains(stdout, `"started":true`) {
 			t.Fatalf("upgrade = exit %d stdout %q stderr %q", exit, stdout, stderr)
 		}
-		fixture.wantOrder(t, "cwd", "load-bundle", "new-companion", "bootstrap",
+		fixture.wantOrder(t, "cwd", "load-bundle", "new-preflight", "new-companion", "bootstrap",
 			"lock", "new-client", "read-authority", "inspect-host:codex", "install-bundle",
 			"preflight-upgrade:codex", "acquire-lifecycle",
 			"quiesce", "deactivate:codex", "install-projection:codex",
-			"verify-projection:codex", "verify-activation:codex", "new-preflight", "new-gate", "activate:codex",
+			"verify-projection:codex", "verify-activation:codex", "new-gate", "activate:codex",
 			"lifecycle-ensure", "close-lifecycle", "unlock")
 	})
 }
@@ -175,8 +175,6 @@ func TestSetupActiveRevisionUpgradeFailuresPreserveARecoverableForwardState(t *t
 		{name: "projection verification", failure: "verify-projection", wantLifecycle: true,
 			wantDeactivations: 1},
 		{name: "Host activation proof", failure: "verify-activation", wantLifecycle: true,
-			wantDeactivations: 1},
-		{name: "daemon preflight construction", failure: "new-preflight", wantLifecycle: true,
 			wantDeactivations: 1},
 		{name: "projected Hook gate", failure: "new-gate", wantLifecycle: true,
 			wantDeactivations: 1},
@@ -265,10 +263,10 @@ func TestSetupRepairsDisabledAuthorityAndPartialInitialization(t *testing.T) {
 			t.Fatalf("disabled upgrade recovery = exit %d stdout %q stderr %q",
 				exit, stdout, stderr)
 		}
-		fixture.wantOrder(t, "cwd", "load-bundle", "new-companion", "bootstrap",
+		fixture.wantOrder(t, "cwd", "load-bundle", "new-preflight", "new-companion", "bootstrap",
 			"lock", "new-client", "read-authority", "inspect-host:codex", "install-bundle",
 			"verify-absent:claude-code", "install-projection:codex",
-			"verify-projection:codex", "verify-activation:codex", "new-preflight", "new-gate",
+			"verify-projection:codex", "verify-activation:codex", "new-gate",
 			"activate:codex", "ensure", "unlock")
 		if fixture.called("preflight-upgrade:codex") || fixture.called("acquire-lifecycle") {
 			t.Fatalf("disabled recovery entered active upgrade lifecycle: %v", fixture.order)
@@ -282,10 +280,10 @@ func TestSetupRepairsDisabledAuthorityAndPartialInitialization(t *testing.T) {
 			!strings.Contains(stdout, `"replayed":false`) {
 			t.Fatalf("disabled switch = exit %d stdout %q stderr %q", exit, stdout, stderr)
 		}
-		fixture.wantOrder(t, "cwd", "load-bundle", "new-companion", "bootstrap", "lock",
+		fixture.wantOrder(t, "cwd", "load-bundle", "new-preflight", "new-companion", "bootstrap", "lock",
 			"new-client", "read-authority", "inspect-host:claude-code", "install-bundle",
 			"verify-absent:codex", "install-projection:claude-code",
-			"verify-projection:claude-code", "verify-activation:claude-code", "new-preflight", "new-gate",
+			"verify-projection:claude-code", "verify-activation:claude-code", "new-gate",
 			"activate:claude-code",
 			"ensure", "unlock")
 	})
@@ -298,7 +296,7 @@ func TestSetupRepairsDisabledAuthorityAndPartialInitialization(t *testing.T) {
 			"profile_host_mismatch: previous Host projection is not fully ejected; complete eject before switching\n" {
 			t.Fatalf("residual switch = exit %d stdout %q stderr %q", exit, stdout, stderr)
 		}
-		fixture.wantOrder(t, "cwd", "load-bundle", "new-companion", "bootstrap", "lock",
+		fixture.wantOrder(t, "cwd", "load-bundle", "new-preflight", "new-companion", "bootstrap", "lock",
 			"new-client", "read-authority", "inspect-host:claude-code", "install-bundle",
 			"verify-absent:codex", "unlock")
 	})
@@ -312,11 +310,11 @@ func TestSetupRepairsDisabledAuthorityAndPartialInitialization(t *testing.T) {
 			t.Fatalf("partial repair = exit %d stdout %q stderr %q", exit, stdout, stderr)
 		}
 		fixture.wantOrder(t,
-			"cwd", "load-bundle", "new-companion", "bootstrap", "lock",
+			"cwd", "load-bundle", "new-preflight", "new-companion", "bootstrap", "lock",
 			"new-client", "can-initialize", "detect:auto", "initialize:codex", "inspect",
 			"inspect-host:codex", "install-bundle", "verify-absent:claude-code",
 			"install-projection:codex", "verify-projection:codex", "verify-activation:codex",
-			"new-client", "new-preflight", "new-gate",
+			"new-client", "new-gate",
 			"activate:codex", "ensure", "unlock")
 	})
 
@@ -329,7 +327,7 @@ func TestSetupRepairsDisabledAuthorityAndPartialInitialization(t *testing.T) {
 			"authentication_failed: managed Profile credential is unavailable\n" {
 			t.Fatalf("unsafe partial = exit %d stdout %q stderr %q", exit, stdout, stderr)
 		}
-		fixture.wantOrder(t, "cwd", "load-bundle", "new-companion", "bootstrap",
+		fixture.wantOrder(t, "cwd", "load-bundle", "new-preflight", "new-companion", "bootstrap",
 			"lock", "new-client", "can-initialize", "unlock")
 	})
 }
@@ -337,7 +335,7 @@ func TestSetupRepairsDisabledAuthorityAndPartialInitialization(t *testing.T) {
 func TestSetupHostSwitchCrashNeverFallsBackToASecondProjection(t *testing.T) {
 	for _, failure := range []string{
 		"install-projection-after-commit", "verify-projection",
-		"verify-activation", "new-preflight", "new-gate", "activate",
+		"verify-activation", "new-gate", "activate",
 	} {
 		t.Run(failure, func(t *testing.T) {
 			fixture := newSetupFixture(t, assets.HostCodex, false)
@@ -430,7 +428,7 @@ func TestSetupStaticAndHostGatesFailBeforeActivation(t *testing.T) {
 				t.Fatalf("fresh unsupported setup reached %s: %v", forbidden, fixture.order)
 			}
 		}
-		fixture.wantOrder(t, "cwd", "load-bundle", "new-companion", "bootstrap", "lock",
+		fixture.wantOrder(t, "cwd", "load-bundle", "new-preflight", "new-companion", "bootstrap", "lock",
 			"new-client", "can-initialize", "detect:auto", "unlock")
 	})
 }

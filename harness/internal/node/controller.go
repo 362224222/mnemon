@@ -18,22 +18,15 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
 
-type Clock interface {
-	Now() time.Time
-}
-
-type wallClock struct{}
-
-func (wallClock) Now() time.Time { return time.Now() }
-
 type ControllerOptions struct {
-	NodeState string
-	Workspace string
-	Store     *store.Store
-	Profile   model.Profile
-	Signer    event.PublicationSigner
-	Clock     Clock
-	Install   InstallationVerifier
+	NodeState    string
+	Workspace    string
+	Store        *store.Store
+	Profile      model.Profile
+	Signer       event.PublicationSigner
+	Clock        Clock
+	Install      InstallationVerifier
+	actionPolicy agent.ActionPolicy
 	// WakeAdapter enables the managed Runtime worker. It is optional only for
 	// low-level controller and daemon composition; OpenManagedDaemon requires
 	// the production composition layer to supply one.
@@ -61,6 +54,7 @@ type Controller struct {
 	store             *store.Store
 	server            *localapi.Server
 	admission         *controllerAdmissionGate
+	actionPolicy      agent.ActionPolicy
 	wakeWorker        managedWakeWorker
 	shutdownRequested chan struct{}
 	shutdownOnce      sync.Once
@@ -89,8 +83,8 @@ func NewController(ctx context.Context, options ControllerOptions) (*Controller,
 		return nil, errors.New("mnemond controller Store is outside its owner-only Node state")
 	}
 	assetRevision := options.Profile.ActiveAssetRevision()
-	if err := options.Install.Verify(ctx, options.Profile); err != nil {
-		return nil, fmt.Errorf("mnemond controller managed installation: %w", err)
+	if err := bindControllerActionPolicy(ctx, options.Profile, options.Install, assetRevision, &options.actionPolicy); err != nil {
+		return nil, err
 	}
 	cas, err := artifact.NewCAS(filepath.Join(options.NodeState, "objects", "sha256"))
 	if err != nil {
@@ -196,8 +190,8 @@ func NewController(ctx context.Context, options ControllerOptions) (*Controller,
 		return authoritySnapshot(current), nil
 	})
 	controller := &Controller{nodeState: options.NodeState, assetRevision: assetRevision, store: options.Store,
-		admission: admission, wakeWorker: wakeWorker, shutdownRequested: make(chan struct{}),
-		beforeAccept: options.BeforeAccept}
+		admission: admission, actionPolicy: options.actionPolicy, wakeWorker: wakeWorker,
+		shutdownRequested: make(chan struct{}), beforeAccept: options.BeforeAccept}
 	managedService := controllerAdmissionService{gate: admission, next: newLocalAPIServiceAdapter(service)}
 	server, err := localapi.NewServerWithStatusLifecycle(options.Store, managedService, health, status,
 		authority, localapi.LifecycleFunc(controller.requestShutdown), controller)

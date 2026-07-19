@@ -50,7 +50,7 @@ func TestManagedInstallationVerifiesExactProjectionAndReportsDrift(t *testing.T)
 
 func TestManagedInstallationDelegatesFrozenTeamworkActions(t *testing.T) {
 	workspace, _, bundle := newManagedInstallationWorkspace(t)
-	installation, err := newManagedInstallation(workspace, bundle, InspectHost)
+	installation, err := NewManagedInstallationFromBundle(workspace, bundle)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,6 +86,14 @@ func TestManagedInstallationDelegatesFrozenTeamworkActions(t *testing.T) {
 	}
 	if raw, readErr := nilInstallation.ReadTeamworkAction(wantPaths[0]); !errors.Is(readErr, ErrManagedInstallation) || raw != nil {
 		t.Fatalf("nil ReadTeamworkAction() = (%q, %v)", raw, readErr)
+	}
+}
+
+func TestManagedInstallationFromBundleRejectsMissingAuthority(t *testing.T) {
+	workspace, _, _ := newManagedInstallationWorkspace(t)
+	if installation, err := NewManagedInstallationFromBundle(workspace, assets.Bundle{}); installation != nil ||
+		!errors.Is(err, ErrManagedInstallation) {
+		t.Fatalf("NewManagedInstallationFromBundle(zero) = (%#v, %v)", installation, err)
 	}
 }
 

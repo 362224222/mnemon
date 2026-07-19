@@ -58,9 +58,9 @@ func Activate(ctx context.Context, options ActivateOptions) (result ActivateResu
 		return ActivateResult{}, fmt.Errorf("%w: clock is invalid", ErrActivate)
 	}
 	nodeState := filepath.Join(workspace, ".mnemon", "harness", "node")
-	identity, err := LoadIdentity(nodeState)
+	identity, err := loadActivationIdentity(nodeState, options.Install, options.AssetRevision)
 	if err != nil {
-		return ActivateResult{}, fmt.Errorf("%w: %v", ErrActivate, err)
+		return ActivateResult{}, fmt.Errorf("%w: %w", ErrActivate, err)
 	}
 	databasePath := filepath.Join(nodeState, "node.db")
 	databaseInfo, err := os.Lstat(databasePath)

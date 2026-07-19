@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/mnemon-dev/mnemon/harness/internal/agent"
 	"github.com/mnemon-dev/mnemon/harness/internal/assets"
 	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/node"
@@ -60,6 +61,10 @@ func TestEnsureAgentDaemonComposesExactAuthorityAndDefersCompanionDiscovery(t *t
 		preflightOptions.Install == nil || verified != 1 || companionLookups != 0 {
 		t.Fatalf("preflight = %#v verified=%d companion lookups=%d", preflightOptions,
 			verified, companionLookups)
+	}
+	provider, ok := preflightOptions.Install.(agent.ActionAssetProvider)
+	if !ok || provider.Revision() != bundle.Revision() {
+		t.Fatalf("preflight Action provider = (%T, %v)", preflightOptions.Install, ok)
 	}
 }
 

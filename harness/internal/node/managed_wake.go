@@ -30,7 +30,7 @@ func NewManagedWakeAdapterFactory(workspace string,
 	if err != nil {
 		return nil, fmt.Errorf("compose managed wake adapter: %w", err)
 	}
-	if isNilDaemonInterface(install) {
+	if isNilNodeInterface(install) {
 		return nil, errors.New("compose managed wake adapter: installation is unavailable")
 	}
 	nodeState := filepath.Join(validatedWorkspace, ".mnemon", "harness", "node")

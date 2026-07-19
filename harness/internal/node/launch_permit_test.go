@@ -12,11 +12,38 @@ import (
 
 	"github.com/mnemon-dev/mnemon/harness/internal/agent"
 	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
+	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 	"golang.org/x/sys/unix"
 )
 
 func TestOpenManagedDaemonRequiresExactInheritedEnsureLockBeforeStoreOpen(t *testing.T) {
+	t.Run("action authority before permit and Store", func(t *testing.T) {
+		fixture := newDaemonFixture(t, true)
+		writer, err := store.OpenExisting(context.Background(),
+			filepath.Join(fixture.nodeState, "node.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer writer.Close()
+		called := false
+		install := InstallationVerifierFunc(func(context.Context, model.Profile) error {
+			called = true
+			return nil
+		})
+		t.Setenv(daemonLaunchPermitEnvironment, "")
+		daemon, err := OpenManagedDaemon(context.Background(), DaemonOptions{
+			Workspace: fixture.workspace, Install: install,
+		})
+		if daemon != nil || !errors.Is(err, ErrDaemonAuthority) ||
+			errors.Is(err, ErrDaemonLaunchPermit) || errors.Is(err, store.ErrWriterActive) {
+			t.Fatalf("OpenManagedDaemon() = (%v, %v)", daemon, err)
+		}
+		if called {
+			t.Fatal("action authority failure reached installation verification")
+		}
+	})
+
 	t.Run("missing permit", func(t *testing.T) {
 		fixture := newDaemonFixture(t, true)
 		writer, err := store.OpenExisting(context.Background(),
