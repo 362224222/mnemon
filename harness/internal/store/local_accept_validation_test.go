@@ -270,7 +270,7 @@ func TestValidateOperationEventsRequiresExactActionAndExpandedSemantics(t *testi
 	now := time.Date(2026, 7, 16, 13, 0, 0, 0, time.UTC)
 	offer := newCodecEvent(t, model.EventReviewOffered,
 		`{"content":"review","deadline":"2026-07-17T13:00:00Z","iteration":1,"work_version":1}`, now)
-	authority := &LocalOperationAuthority{Kind: model.OperationTeamworkOffer}
+	authority := validationOperationAuthority(t, model.OperationTeamworkOffer, model.MaxChildWorks)
 	if err := validateOperationEvents(authority, []model.Event{offer}, false); err != nil {
 		t.Fatalf("offer validation error = %v", err)
 	}
@@ -281,10 +281,23 @@ func TestValidateOperationEventsRequiresExactActionAndExpandedSemantics(t *testi
 	}
 	expired := eventWithCodecCause(t, newCodecEvent(t, model.EventReviewExpired,
 		`{"deadline":"2026-07-17T13:00:00Z","iteration":1,"work_version":1}`, now))
-	cancel := &LocalOperationAuthority{Kind: model.OperationTeamworkCancel}
+	cancel := validationOperationAuthority(t, model.OperationTeamworkCancel, 1)
 	if err := validateOperationEvents(cancel, []model.Event{expired}, false); err == nil {
 		t.Fatal("cancel operation was committed as expiry success")
 	}
+}
+
+func validationOperationAuthority(t testing.TB, kind model.OperationKind,
+	maxResults uint8,
+) *LocalOperationAuthority {
+	t.Helper()
+	eventType, ok := model.EventTypeForAgentOperation(kind)
+	if !ok {
+		t.Fatalf("operation %s has no Agent Event", kind)
+	}
+	return &LocalOperationAuthority{Kind: kind, policy: localOperationPolicy{
+		assetRevision: model.Sum([]byte("validation-operation-policy")),
+		eventType:     eventType, maxResults: maxResults}}
 }
 
 func eventWithCodecCause(t *testing.T, event model.Event) model.Event {

@@ -1,5 +1,7 @@
 package model
 
+import "strings"
+
 type EventType string
 
 const (
@@ -39,42 +41,99 @@ type EventTypeDescriptor struct {
 	eventType                  EventType
 	scopeAuthority             eventScopeAuthority
 	admissionAuthority         eventAdmissionAuthority
+	agentOperation             OperationKind
+	participantResponse        EventType
 	allowsArtifacts            bool
 	requiresAdmissionCausality bool
 }
 
 var eventTypeDescriptors = [...]EventTypeDescriptor{
-	{EventReviewOffered, eventScopeHome, eventAdmissionAgent, true, false},
-	{EventReviewAcceptRequested, eventScopeParticipant, eventAdmissionAgent, false, true},
-	{EventReviewDeclineRequested, eventScopeParticipant, eventAdmissionAgent, false, true},
-	{EventReviewDeliveryReady, eventScopeParticipant, eventAdmissionAgent, true, true},
-	{EventReviewAccepted, eventScopeHome, eventAdmissionController, false, true},
-	{EventReviewAcceptRejected, eventScopeHome, eventAdmissionController, false, true},
-	{EventReviewDelivered, eventScopeHome, eventAdmissionController, true, true},
-	{EventReviewReworkRequested, eventScopeHome, eventAdmissionAgent, true, true},
-	{EventReviewClosed, eventScopeHome, eventAdmissionAgent, false, true},
-	{EventReviewDeclined, eventScopeHome, eventAdmissionController, false, true},
-	{EventReviewCancelled, eventScopeHome, eventAdmissionAgent, false, true},
-	{EventReviewExpired, eventScopeHome, eventAdmissionController, false, true},
-	{EventReviewOutcome, eventScopeFlexible, eventAdmissionController, false, true},
+	{EventReviewOffered, eventScopeHome, eventAdmissionAgent,
+		OperationTeamworkOffer, "", true, false},
+	{EventReviewAcceptRequested, eventScopeParticipant, eventAdmissionAgent,
+		OperationTeamworkAccept, EventReviewAccepted, false, true},
+	{EventReviewDeclineRequested, eventScopeParticipant, eventAdmissionAgent,
+		OperationTeamworkDecline, EventReviewDeclined, false, true},
+	{EventReviewDeliveryReady, eventScopeParticipant, eventAdmissionAgent,
+		OperationTeamworkDeliver, EventReviewDelivered, true, true},
+	{EventReviewAccepted, eventScopeHome, eventAdmissionController, "", "", false, true},
+	{EventReviewAcceptRejected, eventScopeHome, eventAdmissionController, "", "", false, true},
+	{EventReviewDelivered, eventScopeHome, eventAdmissionController, "", "", true, true},
+	{EventReviewReworkRequested, eventScopeHome, eventAdmissionAgent,
+		OperationTeamworkRework, "", true, true},
+	{EventReviewClosed, eventScopeHome, eventAdmissionAgent,
+		OperationTeamworkClose, "", false, true},
+	{EventReviewDeclined, eventScopeHome, eventAdmissionController, "", "", false, true},
+	{EventReviewCancelled, eventScopeHome, eventAdmissionAgent,
+		OperationTeamworkCancel, "", false, true},
+	{EventReviewExpired, eventScopeHome, eventAdmissionController, "", "", false, true},
+	{EventReviewOutcome, eventScopeFlexible, eventAdmissionController, "", "", false, true},
 }
 
 func init() {
+	if !validEventTypeDescriptorRegistry() {
+		panic("model: invalid EventType descriptor registry")
+	}
+}
+
+func validEventTypeDescriptorRegistry() bool {
 	seen := make(map[EventType]struct{}, len(eventTypeDescriptors))
+	operations := make(map[OperationKind]struct{}, TeamworkActionCount)
 	for _, descriptor := range eventTypeDescriptors {
-		if descriptor.eventType == "" ||
-			(descriptor.scopeAuthority != eventScopeHome &&
-				descriptor.scopeAuthority != eventScopeParticipant &&
-				descriptor.scopeAuthority != eventScopeFlexible) ||
-			(descriptor.admissionAuthority != eventAdmissionAgent &&
-				descriptor.admissionAuthority != eventAdmissionController) {
-			panic("model: invalid EventType descriptor")
-		}
-		if _, duplicate := seen[descriptor.eventType]; duplicate {
-			panic("model: duplicate EventType descriptor: " + descriptor.eventType)
+		_, duplicate := seen[descriptor.eventType]
+		if duplicate || !validEventTypeDescriptorShape(descriptor) ||
+			!recordAgentEventOperation(descriptor, operations) {
+			return false
 		}
 		seen[descriptor.eventType] = struct{}{}
 	}
+	if len(operations) != TeamworkActionCount {
+		return false
+	}
+	for _, descriptor := range eventTypeDescriptors {
+		if !validParticipantEventResponse(descriptor) {
+			return false
+		}
+	}
+	return true
+}
+
+func validEventTypeDescriptorShape(descriptor EventTypeDescriptor) bool {
+	validScope := descriptor.scopeAuthority == eventScopeHome ||
+		descriptor.scopeAuthority == eventScopeParticipant ||
+		descriptor.scopeAuthority == eventScopeFlexible
+	validAdmission := descriptor.admissionAuthority == eventAdmissionAgent ||
+		descriptor.admissionAuthority == eventAdmissionController
+	return descriptor.eventType != "" && validScope && validAdmission
+}
+
+func recordAgentEventOperation(descriptor EventTypeDescriptor,
+	operations map[OperationKind]struct{},
+) bool {
+	if !descriptor.AgentAdmitted() {
+		return descriptor.agentOperation == ""
+	}
+	if !descriptor.agentOperation.Valid() ||
+		!strings.HasPrefix(string(descriptor.agentOperation), "teamwork.") {
+		return false
+	}
+	if _, duplicate := operations[descriptor.agentOperation]; duplicate {
+		return false
+	}
+	operations[descriptor.agentOperation] = struct{}{}
+	return true
+}
+
+func validParticipantEventResponse(descriptor EventTypeDescriptor) bool {
+	if !descriptor.ParticipantInput() {
+		return descriptor.participantResponse == ""
+	}
+	response, hasResponse := descriptor.ParticipantResponse()
+	if !hasResponse {
+		return false
+	}
+	target, valid := response.Descriptor()
+	return valid && target.HomeAuthoritative() && target.ControllerAdmitted()
 }
 
 // EventTypeDescriptors returns a deterministic copy of the canonical registry.
@@ -94,6 +153,13 @@ func (descriptor EventTypeDescriptor) AgentAdmitted() bool {
 }
 func (descriptor EventTypeDescriptor) ControllerAdmitted() bool {
 	return descriptor.admissionAuthority == eventAdmissionController
+}
+func (descriptor EventTypeDescriptor) AgentOperation() (OperationKind, bool) {
+	return descriptor.agentOperation, descriptor.AgentAdmitted() && descriptor.agentOperation.Valid()
+}
+func (descriptor EventTypeDescriptor) ParticipantResponse() (EventType, bool) {
+	return descriptor.participantResponse,
+		descriptor.ParticipantInput() && descriptor.participantResponse.Valid()
 }
 func (descriptor EventTypeDescriptor) AllowsArtifacts() bool { return descriptor.allowsArtifacts }
 func (descriptor EventTypeDescriptor) RequiresAdmissionCausality() bool {
@@ -143,4 +209,33 @@ func (t EventType) AgentAdmitted() bool {
 func (t EventType) ControllerAdmitted() bool {
 	descriptor, valid := t.Descriptor()
 	return valid && descriptor.ControllerAdmitted()
+}
+
+func (t EventType) AgentOperation() (OperationKind, bool) {
+	descriptor, valid := t.Descriptor()
+	if !valid {
+		return "", false
+	}
+	return descriptor.AgentOperation()
+}
+
+func (t EventType) ParticipantResponse() (EventType, bool) {
+	descriptor, valid := t.Descriptor()
+	if !valid {
+		return "", false
+	}
+	return descriptor.ParticipantResponse()
+}
+
+func EventTypeForAgentOperation(operation OperationKind) (EventType, bool) {
+	if !operation.Valid() {
+		return "", false
+	}
+	for _, descriptor := range eventTypeDescriptors {
+		candidate, exists := descriptor.AgentOperation()
+		if exists && candidate == operation {
+			return descriptor.Type(), true
+		}
+	}
+	return "", false
 }

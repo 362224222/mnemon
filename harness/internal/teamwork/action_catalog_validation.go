@@ -36,19 +36,22 @@ func projectAction(source ActionSource, wire actionWire, operation model.Operati
 		receipt: receipt}, nil
 }
 
-func projectContexts(values []string) ([8]ActionContext, uint8, error) {
-	if len(values) == 0 || len(values) > 8 {
-		return [8]ActionContext{}, 0, errors.New("allowed_context count is invalid")
+func projectContexts(values []string) ([model.MaxTeamworkActionContexts]ActionContext, uint8, error) {
+	if len(values) == 0 || len(values) > model.MaxTeamworkActionContexts {
+		return [model.MaxTeamworkActionContexts]ActionContext{}, 0,
+			errors.New("allowed_context count is invalid")
 	}
-	var result [8]ActionContext
+	var result [model.MaxTeamworkActionContexts]ActionContext
 	for index, value := range values {
 		context := ActionContext(value)
 		if !knownActionContext(context) {
-			return [8]ActionContext{}, 0, errors.New("allowed_context contains an unknown value")
+			return [model.MaxTeamworkActionContexts]ActionContext{}, 0,
+				errors.New("allowed_context contains an unknown value")
 		}
 		for prior := 0; prior < index; prior++ {
 			if result[prior] == context {
-				return [8]ActionContext{}, 0, errors.New("allowed_context contains a duplicate")
+				return [model.MaxTeamworkActionContexts]ActionContext{}, 0,
+					errors.New("allowed_context contains a duplicate")
 			}
 		}
 		result[index] = context
@@ -57,13 +60,7 @@ func projectContexts(values []string) ([8]ActionContext, uint8, error) {
 }
 
 func knownActionContext(context ActionContext) bool {
-	switch context {
-	case ActionContextNone, ActionContextReviewerOffered, ActionContextReviewerActive, ActionContextReviewerRework,
-		ActionContextParentResume, ActionContextHomeDelivered, ActionContextHomeDeliveredIteration1, ActionContextHomeNonterminal:
-		return true
-	default:
-		return false
-	}
+	return context.Valid()
 }
 
 func projectArtifacts(wire actionArtifactWire) (ActionArtifactPolicy, error) {

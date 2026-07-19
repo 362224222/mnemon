@@ -239,7 +239,7 @@ func (action ValidatedAction) matches(handlers ActionHandlers,
 ) bool {
 	handler, ok := handlers.Action(action.Name)
 	return ok && action.Candidate != nil && action.handler.ready &&
-		action.handler.assetRevision == handlers.assetRevision &&
+		action.handler.assetRevision == handlers.AssetRevision() &&
 		action.handler.Name() == handler.Name() && action.handler.OperationKind() == kind &&
 		action.handler.EventType() == handler.EventType()
 }

@@ -809,16 +809,16 @@ func eventTypeForImportedState(state model.WorkState) model.EventType {
 }
 
 func participantResponse(eventType model.EventType, state model.WorkState) (model.EventType, bool) {
-	switch eventType {
-	case model.EventReviewAcceptRequested:
-		return model.EventReviewAccepted, state == model.WorkOffered
-	case model.EventReviewDeclineRequested:
-		return model.EventReviewDeclined, state == model.WorkOffered
-	case model.EventReviewDeliveryReady:
-		return model.EventReviewDelivered, state == model.WorkActive || state == model.WorkRework
-	default:
+	response, exists := eventType.ParticipantResponse()
+	if !exists {
 		return "", false
 	}
+	iteration := uint8(1)
+	if state == model.WorkRework {
+		iteration = 2
+	}
+	_, _, allowed := model.NextReviewWorkState(state, iteration, response)
+	return response, allowed
 }
 
 func homeEventArtifactsValid(event model.Event) bool {

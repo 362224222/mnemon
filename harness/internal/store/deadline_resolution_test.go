@@ -42,8 +42,10 @@ func TestResolveDeadlineWinnerCommitsAtomicEvidenceAndReplaysAfterRestart(t *tes
 		t.Fatal(err)
 	}
 	fixture.store = restarted
-	replaySpec := DeadlineResolutionSpec{Action: *authority}
-	replaySpec.Action.LeaseOwner = "different-replay-owner"
+	replaySpec := DeadlineResolutionSpec{Action: LocalOperationAuthority{
+		ID: authority.ID, Kind: authority.Kind, RequestDigest: authority.RequestDigest,
+		LeaseOwner: "different-replay-owner",
+	}}
 	replay, err := restarted.ResolveDeadlineWinner(context.Background(), replaySpec, time.Time{})
 	if err != nil || !replay.Replayed || replay.Receipt.String() != result.Receipt.String() {
 		t.Fatalf("restart replay = (%#v, %v)", replay, err)
@@ -212,6 +214,48 @@ func TestResolveDeadlineWinnerRollsBackEveryEffectOnLateFailure(t *testing.T) {
 	assertDeadlineWinner(t, fixture.store, current.Ref(), operation.ID(), current.Version()+1, 1)
 }
 
+func TestResolveDeadlineWinnerRejectsUnfrozenOrDriftedActionPolicyWithoutWrites(t *testing.T) {
+	tests := []struct {
+		name   string
+		suffix string
+		mutate func(*acceptanceFixture, *DeadlineResolutionSpec)
+		want   error
+	}{
+		{name: "unfrozen public authority", suffix: "unfrozen-policy",
+			mutate: func(_ *acceptanceFixture, spec *DeadlineResolutionSpec) {
+				authority := spec.Action
+				spec.Action = LocalOperationAuthority{ID: authority.ID, Kind: authority.Kind,
+					RequestDigest: authority.RequestDigest, LeaseOwner: authority.LeaseOwner}
+			}, want: ErrOperationMismatch},
+		{name: "authority asset revision", suffix: "authority-revision",
+			mutate: func(_ *acceptanceFixture, spec *DeadlineResolutionSpec) {
+				spec.Action.policy.assetRevision = model.Sum([]byte("drifted-action-policy"))
+			}, want: ErrOperationMismatch},
+		{name: "durable Profile asset revision", suffix: "profile-revision",
+			mutate: func(fixture *acceptanceFixture, _ *DeadlineResolutionSpec) {
+				mustExec(t, fixture.store, `UPDATE profiles SET active_asset_rev=? WHERE profile_id=?`,
+					model.Sum([]byte("drifted-durable-policy")).String(), model.TeamworkProfileID().String())
+			}, want: ErrAdmissionConflict},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture, current := newDeadlineWorkFixture(t, test.suffix)
+			operation, authority, contextHash := reserveDeadlineAction(t, fixture, current,
+				test.suffix, model.OperationTeamworkCancel)
+			deadline := current.Deadline()
+			spec := admittedDeadlineResolution(t, fixture, current, authority, contextHash,
+				deadline, test.suffix)
+			test.mutate(fixture, &spec)
+
+			if _, err := fixture.store.ResolveDeadlineWinner(context.Background(), spec, deadline); !errors.Is(err, test.want) {
+				t.Fatalf("policy drift error = %v, want %v", err, test.want)
+			}
+			assertDeadlineRollback(t, fixture.store, current.Ref(), operation.ID())
+			assertAcceptanceHeads(t, fixture.store, 2, 1)
+		})
+	}
+}
+
 func TestResolveDeadlineWinnerReconcilesNestedDerivationInSameTransaction(t *testing.T) {
 	fixture := newDerivationDispositionFixture(t, false)
 	current, err := fixture.store.GetReviewWork(context.Background(), fixture.children[1])
@@ -324,7 +368,7 @@ func reserveDeadlineAction(t *testing.T, fixture *acceptanceFixture, current mod
 	if _, err := fixture.store.ReserveOperation(context.Background(), operation, started.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	authority := &LocalOperationAuthority{operation.ID(), operation.Kind(), operation.RequestDigest(), operation.LeaseOwner()}
+	authority := mustLocalOperationAuthority(t, operation, fixture.policy)
 	return operation, authority, contextHash
 }
 

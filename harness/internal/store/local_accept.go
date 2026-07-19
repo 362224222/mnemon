@@ -20,6 +20,45 @@ type LocalOperationAuthority struct {
 	Kind          model.OperationKind
 	RequestDigest model.Digest
 	LeaseOwner    string
+	policy        localOperationPolicy
+}
+
+type localOperationPolicy struct {
+	assetRevision model.Digest
+	eventType     model.EventType
+	maxResults    uint8
+}
+
+// NewLocalOperationAuthority freezes the Action-policy slice used by the
+// Agent executor into an opaque Store authority. Callers cannot widen result
+// cardinality by filling public request identity fields themselves.
+func NewLocalOperationAuthority(operation model.Operation,
+	policy model.TeamworkActionPolicy,
+) (LocalOperationAuthority, error) {
+	entry, ok := policy.Operation(operation.Kind())
+	_, hasLease := operation.LeaseUntil()
+	if !ok || operation.ID().IsZero() || operation.ProfileID() != model.TeamworkProfileID() ||
+		operation.Status() != model.OperationStarted || operation.RequestDigest().IsZero() ||
+		operation.LeaseOwner() == "" || !hasLease || policy.AssetRevision().IsZero() ||
+		entry.EventType() == "" || entry.MaxResults() == 0 {
+		return LocalOperationAuthority{}, errors.New("freeze local operation authority: incomplete operation or Action policy")
+	}
+	return LocalOperationAuthority{ID: operation.ID(), Kind: operation.Kind(),
+		RequestDigest: operation.RequestDigest(), LeaseOwner: operation.LeaseOwner(),
+		policy: localOperationPolicy{assetRevision: policy.AssetRevision(),
+			eventType: entry.EventType(), maxResults: entry.MaxResults()}}, nil
+}
+
+func (authority LocalOperationAuthority) policyEvent() (model.EventType, uint8, bool) {
+	want, ok := model.EventTypeForAgentOperation(authority.Kind)
+	return want, authority.policy.maxResults,
+		ok && authority.policy.eventType == want && !authority.policy.assetRevision.IsZero() &&
+			authority.policy.maxResults > 0
+}
+
+func (authority LocalOperationAuthority) matchesProfilePolicy(profile model.Profile) bool {
+	return profile.ID() == model.TeamworkProfileID() && profile.Enabled() &&
+		profile.ActiveAssetRevision() == authority.policy.assetRevision.String()
 }
 
 type LocalDerivationParent struct {
@@ -141,12 +180,34 @@ func readLocalAcceptanceReplayTx(ctx context.Context, tx *sql.Tx, spec LocalAcce
 func readLocalAcceptanceOperation(ctx context.Context, tx *sql.Tx,
 	authority *LocalOperationAuthority,
 ) (model.Operation, error) {
+	if authority == nil {
+		return model.Operation{}, ErrOperationMismatch
+	}
+	if _, _, ok := authority.policyEvent(); !ok {
+		return model.Operation{}, ErrOperationMismatch
+	}
 	operation, err := readOperationByID(ctx, tx, authority.ID)
 	if err != nil {
 		return model.Operation{}, fmt.Errorf("commit local acceptance: operation: %w", err)
 	}
 	if operation.ProfileID() != model.TeamworkProfileID() || operation.Kind() != authority.Kind ||
 		operation.RequestDigest() != authority.RequestDigest {
+		return model.Operation{}, ErrOperationMismatch
+	}
+	return operation, nil
+}
+
+func readFreshLocalAcceptanceOperation(ctx context.Context, tx *sql.Tx,
+	spec LocalAcceptanceSpec,
+) (model.Operation, error) {
+	operation, err := readLocalAcceptanceOperation(ctx, tx, spec.Operation)
+	if err != nil {
+		return model.Operation{}, err
+	}
+	if operation.Status() != model.OperationStarted {
+		return model.Operation{}, ErrOperationTerminal
+	}
+	if !spec.Operation.matchesProfilePolicy(spec.Scope.Profile()) {
 		return model.Operation{}, ErrOperationMismatch
 	}
 	return operation, nil
@@ -166,15 +227,11 @@ func applyLocalAcceptanceTx(ctx context.Context, tx *sql.Tx, spec LocalAcceptanc
 	if spec.Controller == (spec.Operation != nil) {
 		return model.JSON{}, errors.New("commit local acceptance: choose controller or operation authority")
 	}
-	var operation model.Operation
+	operation, err := model.Operation{}, error(nil)
 	if spec.Operation != nil {
-		var err error
-		operation, err = readLocalAcceptanceOperation(ctx, tx, spec.Operation)
+		operation, err = readFreshLocalAcceptanceOperation(ctx, tx, spec)
 		if err != nil {
 			return model.JSON{}, err
-		}
-		if operation.Status() != model.OperationStarted {
-			return model.JSON{}, ErrOperationTerminal
 		}
 	}
 	if len(spec.Items) == 0 || len(spec.Items) > model.MaxChildWorks || spec.Scope.Count() != uint8(len(spec.Items)) {

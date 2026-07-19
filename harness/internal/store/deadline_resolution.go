@@ -69,15 +69,8 @@ func (s *Store) ResolveDeadlineWinner(ctx context.Context, spec DeadlineResoluti
 		}
 		return DeadlineResolutionResult{Receipt: stored, Replayed: true}, nil
 	}
-	if operation.Status() != model.OperationStarted {
-		return DeadlineResolutionResult{}, ErrOperationTerminal
-	}
-	if !deadlineCompetingHomeAction(operation.Kind()) {
-		return DeadlineResolutionResult{}, fmt.Errorf("%w: %s is not a competing home action", ErrDeadlineResolution, operation.Kind())
-	}
-	contextHash, hasContext := operation.ContextHash()
-	if !hasContext || spec.ContextHash.IsZero() || contextHash != spec.ContextHash {
-		return DeadlineResolutionResult{}, fmt.Errorf("%w: action context does not match the started operation", ErrDeadlineResolution)
+	if err := validateFreshDeadlineAction(operation, spec.Action, spec.Scope.Profile(), spec.ContextHash); err != nil {
+		return DeadlineResolutionResult{}, err
 	}
 
 	trustedNow = trustedNow.Round(0).UTC()
@@ -191,6 +184,25 @@ func (s *Store) ResolveDeadlineWinner(ctx context.Context, spec DeadlineResoluti
 		return DeadlineResolutionResult{}, fmt.Errorf("resolve deadline winner: commit: %w", err)
 	}
 	return DeadlineResolutionResult{Receipt: receipt}, nil
+}
+
+func validateFreshDeadlineAction(operation model.Operation, authority LocalOperationAuthority,
+	profile model.Profile, contextHash model.Digest,
+) error {
+	if operation.Status() != model.OperationStarted {
+		return ErrOperationTerminal
+	}
+	if _, _, ok := authority.policyEvent(); !ok || !authority.matchesProfilePolicy(profile) {
+		return ErrOperationMismatch
+	}
+	if !deadlineCompetingHomeAction(operation.Kind()) {
+		return fmt.Errorf("%w: %s is not a competing home action", ErrDeadlineResolution, operation.Kind())
+	}
+	operationContext, hasContext := operation.ContextHash()
+	if !hasContext || contextHash.IsZero() || operationContext != contextHash {
+		return fmt.Errorf("%w: action context does not match the started operation", ErrDeadlineResolution)
+	}
+	return nil
 }
 
 func deadlineCompetingHomeAction(kind model.OperationKind) bool {

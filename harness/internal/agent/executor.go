@@ -224,15 +224,15 @@ func (e *TeamworkActionExecutor) ExecuteTeamwork(ctx context.Context,
 			"Teamwork execution input is incomplete")
 	}
 	spec.At = acceptedAt
-	if !e.matchesTeamworkOperation(spec.Action, operation) {
+	operationAuthority, operationOK := e.startedTeamworkOperationAuthority(spec.Action, operation)
+	if !operationOK {
 		return e.reject(ctx, operation, spec.At, NewControlError(CodeOperationMismatch,
-			"reserved operation differs from Teamwork action"))
+			"reserved operation or Action policy differs from Teamwork action"))
 	}
 	if !spec.Reservation.Acquired {
 		return OperationResponse{}, operationAPIError(CodeOperationPending,
 			"operation lease is not acquired", operation.ID(), false)
 	}
-
 	current, hasCurrent, apiErr := executionCurrent(spec.Reservation, spec.At)
 	if apiErr != nil {
 		return e.reject(ctx, operation, spec.At, apiErr)
@@ -243,10 +243,10 @@ func (e *TeamworkActionExecutor) ExecuteTeamwork(ctx context.Context,
 	}
 
 	var acceptance executionAcceptanceSpec
-	if spec.Action.handler.mechanic.actor == actionActorOffer {
-		acceptance, apiErr = e.buildOffer(ctx, spec, selection, current, hasCurrent, artifactRefs)
+	if spec.Action.handler.EventType() == model.EventReviewOffered {
+		acceptance, apiErr = e.buildOffer(ctx, spec, selection, current, hasCurrent, artifactRefs, operationAuthority)
 	} else {
-		acceptance, apiErr = e.buildCurrentAction(ctx, spec, current, hasCurrent, artifactRefs)
+		acceptance, apiErr = e.buildCurrentAction(ctx, spec, current, hasCurrent, artifactRefs, operationAuthority)
 	}
 	if apiErr != nil {
 		return e.reject(ctx, operation, spec.At, apiErr)
@@ -289,11 +289,14 @@ func (e *TeamworkActionExecutor) prepareActionInputs(ctx context.Context, spec T
 	current model.CurrentReadReceipt, hasCurrent bool,
 ) (AgentOfferSelection, []model.ArtifactRef, *ControlError) {
 	selection := AgentOfferSelection{}
-	if spec.Action.handler.mechanic.actor == actionActorOffer {
+	if spec.Action.handler.EventType() == model.EventReviewOffered {
 		resolved, err := e.selector.Resolve(ctx, AgentOfferSelectionSpec{Profile: e.profile,
 			ChannelAlias: spec.Action.ChannelAlias, ParticipantSelector: spec.Action.Participant, At: spec.At})
 		if err != nil {
 			return AgentOfferSelection{}, nil, mapOfferSelectionError(err)
+		}
+		if len(resolved.Reviewers()) > int(spec.Action.handler.policyEntry.MaxResults()) {
+			return AgentOfferSelection{}, nil, NewControlError(CodeInvalidArgument, "selected Teamwork audience exceeds the Action result bound")
 		}
 		selection = resolved
 	}
@@ -316,7 +319,7 @@ func (e *TeamworkActionExecutor) prepareActionInputs(ctx context.Context, spec T
 
 func (e *TeamworkActionExecutor) buildOffer(ctx context.Context, spec TeamworkExecutionSpec,
 	selection AgentOfferSelection, current model.CurrentReadReceipt, hasCurrent bool,
-	artifacts []model.ArtifactRef,
+	artifacts []model.ArtifactRef, operationAuthority store.LocalOperationAuthority,
 ) (executionAcceptanceSpec, *ControlError) {
 	reviewers := selection.Reviewers()
 	reviewerIDs := make([]model.PeerID, len(reviewers))
@@ -406,11 +409,11 @@ func (e *TeamworkActionExecutor) buildOffer(ctx context.Context, spec TeamworkEx
 		items[index] = store.LocalAcceptanceItem{Publication: bundle.Publication(), Work: &mutation}
 	}
 	return executionAcceptanceSpec{scope: scope, items: items,
-		operation: localExecutionAuthority(spec.Reservation.Operation)}, nil
+		operation: operationAuthority}, nil
 }
 
 func (e *TeamworkActionExecutor) buildCurrentAction(ctx context.Context, spec TeamworkExecutionSpec,
-	current model.CurrentReadReceipt, hasCurrent bool, artifacts []model.ArtifactRef,
+	current model.CurrentReadReceipt, hasCurrent bool, artifacts []model.ArtifactRef, operationAuthority store.LocalOperationAuthority,
 ) (executionAcceptanceSpec, *ControlError) {
 	if !hasCurrent {
 		return executionAcceptanceSpec{}, NewControlError(CodeContextRequired,
@@ -421,12 +424,11 @@ func (e *TeamworkActionExecutor) buildCurrentAction(ctx context.Context, spec Te
 		return executionAcceptanceSpec{}, NewControlError(CodeWorkConflict,
 			"current Work changed before admission")
 	}
-	participant := spec.Action.handler.mechanic.actor == actionActorParticipant
-	localActor := work.Ref().HomePeerID()
-	target := work.Participants().ReviewerPeerID()
-	if participant {
-		localActor, target = work.Participants().ReviewerPeerID(), work.Ref().HomePeerID()
+	participant, localActor, target, validAction := spec.Action.handler.currentAuthority(work)
+	if !validAction {
+		return executionAcceptanceSpec{}, NewControlError(CodeActionNotAllowed, "Teamwork action is not valid for the current Work state")
 	}
+	requestedType := spec.Action.handler.EventType()
 	audience, err := model.NewAudience([]model.PeerID{target})
 	if err != nil {
 		return executionAcceptanceSpec{}, NewControlError(CodeInternal,
@@ -441,8 +443,6 @@ func (e *TeamworkActionExecutor) buildCurrentAction(ctx context.Context, spec Te
 		return executionAcceptanceSpec{}, NewControlError(CodeActionNotAllowed,
 			"local Node is not the frozen Work participant")
 	}
-
-	requestedType := spec.Action.handler.EventType()
 	var transition teamwork.TransitionIntent
 	var deadline *executionDeadlineAuthority
 	if !participant {
@@ -452,7 +452,7 @@ func (e *TeamworkActionExecutor) buildCurrentAction(ctx context.Context, spec Te
 				"home Teamwork action lacks operation context")
 		}
 		deadline = &executionDeadlineAuthority{scope: scope, work: work, current: current,
-			operation: localExecutionAuthority(spec.Reservation.Operation), contextHash: contextHash}
+			operation: operationAuthority, contextHash: contextHash}
 		transition, err = teamwork.PlanHomeTransition(teamwork.HomeTransitionSpec{Work: work,
 			ActorPeerID: scope.node.PeerID(), ExpectedVersion: current.ActionWorkVersion(),
 			EventType: requestedType, NowUnixNano: spec.At.UnixNano()})
@@ -462,7 +462,7 @@ func (e *TeamworkActionExecutor) buildCurrentAction(ctx context.Context, spec Te
 		if transition.DeadlineWon() {
 			deadline.due = true
 			return executionAcceptanceSpec{scope: scope,
-				operation: localExecutionAuthority(spec.Reservation.Operation), deadline: deadline}, nil
+				operation: operationAuthority, deadline: deadline}, nil
 		}
 	}
 	eventID, err := derivedActionEventID(spec.Reservation.Operation.ID())
@@ -515,7 +515,7 @@ func (e *TeamworkActionExecutor) buildCurrentAction(ctx context.Context, spec Te
 		item.Work = &mutation
 	}
 	return executionAcceptanceSpec{scope: scope, items: []store.LocalAcceptanceItem{item},
-		operation: localExecutionAuthority(spec.Reservation.Operation), deadline: deadline}, nil
+		operation: operationAuthority, deadline: deadline}, nil
 }
 
 func (e *TeamworkActionExecutor) resolveDeadline(ctx context.Context,
@@ -776,7 +776,7 @@ func decodeCommittedTeamworkReceipt(handler ActionHandler, receipt model.JSON, o
 		if len(produced) != len(captured) {
 			return OperationResponse{}, errors.New("committed Teamwork result omits capture")
 		}
-		if handler.mechanic.batch {
+		if wantType == model.EventReviewOffered {
 			wantWorkID, wantEventID, idErr := derivedOfferIDs(operation.ID(), uint8(index))
 			if idErr != nil || workID != wantWorkID || eventID != wantEventID ||
 				state != model.WorkOffered || row.Work.Version != 1 {
@@ -784,7 +784,7 @@ func decodeCommittedTeamworkReceipt(handler ActionHandler, receipt model.JSON, o
 			}
 		} else {
 			wantEventID, idErr := derivedActionEventID(operation.ID())
-			if idErr != nil || eventID != wantEventID || !handler.mechanic.committedState(state) {
+			if idErr != nil || eventID != wantEventID || !teamwork.ActionResultStateAllowed(wantType, state) {
 				return OperationResponse{}, errors.New("committed Teamwork action identity is invalid")
 			}
 		}
@@ -907,11 +907,6 @@ func operationAPIError(code ControlErrorCode, message string, operation model.Op
 		apiErr.OperationID = &value
 	}
 	return apiErr
-}
-
-func localExecutionAuthority(operation model.Operation) store.LocalOperationAuthority {
-	return store.LocalOperationAuthority{ID: operation.ID(), Kind: operation.Kind(),
-		RequestDigest: operation.RequestDigest(), LeaseOwner: operation.LeaseOwner()}
 }
 
 func sameExecutionProfile(left, right model.Profile) bool {

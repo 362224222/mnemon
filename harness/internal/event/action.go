@@ -17,6 +17,7 @@ const (
 // managed Agent. Its private marker prevents generic Event implementations.
 type AgentCandidate interface {
 	agentCandidate()
+	EventType() model.EventType
 	draft(AdmissionStamp, time.Time) (eventDraft, error)
 }
 
@@ -35,7 +36,8 @@ func NewOfferCandidate(content string, deadline time.Duration) (OfferCandidate, 
 	return OfferCandidate{content, deadline}, nil
 }
 
-func (OfferCandidate) agentCandidate() {}
+func (OfferCandidate) agentCandidate()            {}
+func (OfferCandidate) EventType() model.EventType { return model.EventReviewOffered }
 func (candidate OfferCandidate) draft(stamp AdmissionStamp, now time.Time) (eventDraft, error) {
 	if err := validateContent("offer content", candidate.content, true); err != nil {
 		return eventDraft{}, err
@@ -53,7 +55,7 @@ func (candidate OfferCandidate) draft(stamp AdmissionStamp, now time.Time) (even
 	}
 	deadline := nowUnixNano + int64(duration)
 	payload := offerPayload{candidate.content, formatTimestamp(deadline), stamp.workVersion, stamp.iteration}
-	return eventDraft{eventType: model.EventReviewOffered, summary: "Review offered",
+	return eventDraft{eventType: candidate.EventType(), summary: "Review offered",
 		payload: payload, deadlineUnixNano: deadline}, nil
 }
 
@@ -66,12 +68,13 @@ func NewAcceptCandidate(note string) (AcceptCandidate, error) {
 	return AcceptCandidate{note}, nil
 }
 
-func (AcceptCandidate) agentCandidate() {}
+func (AcceptCandidate) agentCandidate()            {}
+func (AcceptCandidate) EventType() model.EventType { return model.EventReviewAcceptRequested }
 func (candidate AcceptCandidate) draft(stamp AdmissionStamp, _ time.Time) (eventDraft, error) {
 	if err := validateContent("accept note", candidate.note, false); err != nil {
 		return eventDraft{}, err
 	}
-	return eventDraft{eventType: model.EventReviewAcceptRequested, summary: "Review acceptance requested",
+	return eventDraft{eventType: candidate.EventType(), summary: "Review acceptance requested",
 		payload:          notePayload{candidate.note, stamp.workVersion, stamp.iteration},
 		deadlineUnixNano: stamp.deadlineUnixNano}, nil
 }
@@ -85,12 +88,13 @@ func NewDeclineCandidate(reason string) (DeclineCandidate, error) {
 	return DeclineCandidate{reason}, nil
 }
 
-func (DeclineCandidate) agentCandidate() {}
+func (DeclineCandidate) agentCandidate()            {}
+func (DeclineCandidate) EventType() model.EventType { return model.EventReviewDeclineRequested }
 func (candidate DeclineCandidate) draft(stamp AdmissionStamp, _ time.Time) (eventDraft, error) {
 	if err := validateContent("decline reason", candidate.reason, true); err != nil {
 		return eventDraft{}, err
 	}
-	return eventDraft{eventType: model.EventReviewDeclineRequested, summary: "Review decline requested",
+	return eventDraft{eventType: candidate.EventType(), summary: "Review decline requested",
 		payload:          contentPayload{candidate.reason, stamp.workVersion, stamp.iteration},
 		deadlineUnixNano: stamp.deadlineUnixNano}, nil
 }
@@ -104,12 +108,13 @@ func NewDeliverCandidate(summary string) (DeliverCandidate, error) {
 	return DeliverCandidate{summary}, nil
 }
 
-func (DeliverCandidate) agentCandidate() {}
+func (DeliverCandidate) agentCandidate()            {}
+func (DeliverCandidate) EventType() model.EventType { return model.EventReviewDeliveryReady }
 func (candidate DeliverCandidate) draft(stamp AdmissionStamp, _ time.Time) (eventDraft, error) {
 	if err := validateContent("delivery summary", candidate.summary, true); err != nil {
 		return eventDraft{}, err
 	}
-	return eventDraft{eventType: model.EventReviewDeliveryReady, summary: "Review delivery ready",
+	return eventDraft{eventType: candidate.EventType(), summary: "Review delivery ready",
 		payload:          contentPayload{candidate.summary, stamp.workVersion, stamp.iteration},
 		deadlineUnixNano: stamp.deadlineUnixNano}, nil
 }
@@ -123,12 +128,13 @@ func NewReworkCandidate(correction string) (ReworkCandidate, error) {
 	return ReworkCandidate{correction}, nil
 }
 
-func (ReworkCandidate) agentCandidate() {}
+func (ReworkCandidate) agentCandidate()            {}
+func (ReworkCandidate) EventType() model.EventType { return model.EventReviewReworkRequested }
 func (candidate ReworkCandidate) draft(stamp AdmissionStamp, _ time.Time) (eventDraft, error) {
 	if err := validateContent("rework correction", candidate.correction, true); err != nil {
 		return eventDraft{}, err
 	}
-	return eventDraft{eventType: model.EventReviewReworkRequested, summary: "Review rework requested",
+	return eventDraft{eventType: candidate.EventType(), summary: "Review rework requested",
 		payload:          contentPayload{candidate.correction, stamp.workVersion, stamp.iteration},
 		deadlineUnixNano: stamp.deadlineUnixNano}, nil
 }
@@ -142,12 +148,13 @@ func NewCloseCandidate(note string) (CloseCandidate, error) {
 	return CloseCandidate{note}, nil
 }
 
-func (CloseCandidate) agentCandidate() {}
+func (CloseCandidate) agentCandidate()            {}
+func (CloseCandidate) EventType() model.EventType { return model.EventReviewClosed }
 func (candidate CloseCandidate) draft(stamp AdmissionStamp, _ time.Time) (eventDraft, error) {
 	if err := validateContent("close note", candidate.note, false); err != nil {
 		return eventDraft{}, err
 	}
-	return eventDraft{eventType: model.EventReviewClosed, summary: "Review closed",
+	return eventDraft{eventType: candidate.EventType(), summary: "Review closed",
 		payload:          notePayload{candidate.note, stamp.workVersion, stamp.iteration},
 		deadlineUnixNano: stamp.deadlineUnixNano}, nil
 }
@@ -161,12 +168,13 @@ func NewCancelCandidate(reason string) (CancelCandidate, error) {
 	return CancelCandidate{reason}, nil
 }
 
-func (CancelCandidate) agentCandidate() {}
+func (CancelCandidate) agentCandidate()            {}
+func (CancelCandidate) EventType() model.EventType { return model.EventReviewCancelled }
 func (candidate CancelCandidate) draft(stamp AdmissionStamp, _ time.Time) (eventDraft, error) {
 	if err := validateContent("cancel reason", candidate.reason, true); err != nil {
 		return eventDraft{}, err
 	}
-	return eventDraft{eventType: model.EventReviewCancelled, summary: "Review cancelled",
+	return eventDraft{eventType: candidate.EventType(), summary: "Review cancelled",
 		payload:          contentPayload{candidate.reason, stamp.workVersion, stamp.iteration},
 		deadlineUnixNano: stamp.deadlineUnixNano}, nil
 }

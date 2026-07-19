@@ -15,23 +15,23 @@ import (
 
 const (
 	ActionSchemaVersion  = 1
-	TeamworkActionCount  = 7
+	TeamworkActionCount  = model.TeamworkActionCount
 	maxActionSourceBytes = 16 << 10
 )
 
 var ErrInvalidActionCatalog = errors.New("invalid Teamwork action catalog")
 
-type ActionContext string
+type ActionContext = model.TeamworkActionContext
 
 const (
-	ActionContextNone                    ActionContext = "none"
-	ActionContextReviewerOffered         ActionContext = "reviewer_offered"
-	ActionContextReviewerActive          ActionContext = "reviewer_active"
-	ActionContextReviewerRework          ActionContext = "reviewer_rework"
-	ActionContextParentResume            ActionContext = "parent_resume"
-	ActionContextHomeDelivered           ActionContext = "home_delivered"
-	ActionContextHomeDeliveredIteration1 ActionContext = "home_delivered_iteration_1"
-	ActionContextHomeNonterminal         ActionContext = "home_nonterminal"
+	ActionContextNone                    = model.TeamworkActionContextNone
+	ActionContextReviewerOffered         = model.TeamworkActionContextReviewerOffered
+	ActionContextReviewerActive          = model.TeamworkActionContextReviewerActive
+	ActionContextReviewerRework          = model.TeamworkActionContextReviewerRework
+	ActionContextParentResume            = model.TeamworkActionContextParentResume
+	ActionContextHomeDelivered           = model.TeamworkActionContextHomeDelivered
+	ActionContextHomeDeliveredIteration1 = model.TeamworkActionContextHomeDeliveredIteration1
+	ActionContextHomeNonterminal         = model.TeamworkActionContextHomeNonterminal
 )
 
 type ParticipantSelector string
@@ -130,7 +130,7 @@ type ActionDescriptor struct {
 	ordinal       uint8
 	operation     model.OperationKind
 	raw           []byte
-	contexts      [8]ActionContext
+	contexts      [model.MaxTeamworkActionContexts]ActionContext
 	contextLen    uint8
 	content       ActionContentPolicy
 	artifacts     ActionArtifactPolicy

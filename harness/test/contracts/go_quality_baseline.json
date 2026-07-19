@@ -1407,7 +1407,7 @@
       "identity": "cognitive_complexity:harness/internal/store/deadline_resolution.go::(*Store).ResolveDeadlineWinner",
       "path": "harness/internal/store/deadline_resolution.go",
       "symbol": "(*Store).ResolveDeadlineWinner",
-      "ceiling": 65
+      "ceiling": 61
     },
     {
       "rule": "cognitive_complexity",
@@ -1470,7 +1470,7 @@
       "identity": "cognitive_complexity:harness/internal/store/local_accept.go::applyLocalAcceptanceTx",
       "path": "harness/internal/store/local_accept.go",
       "symbol": "applyLocalAcceptanceTx",
-      "ceiling": 87
+      "ceiling": 85
     },
     {
       "rule": "cognitive_complexity",
@@ -1502,17 +1502,10 @@
     },
     {
       "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/store/local_accept_validation.go::validateOperationEvents",
-      "path": "harness/internal/store/local_accept_validation.go",
-      "symbol": "validateOperationEvents",
-      "ceiling": 46
-    },
-    {
-      "rule": "cognitive_complexity",
       "identity": "cognitive_complexity:harness/internal/store/local_accept_validation.go::validateParticipantBinding",
       "path": "harness/internal/store/local_accept_validation.go",
       "symbol": "validateParticipantBinding",
-      "ceiling": 41
+      "ceiling": 38
     },
     {
       "rule": "cognitive_complexity",
@@ -3717,7 +3710,7 @@
       "identity": "cyclomatic_complexity:harness/internal/store/deadline_resolution.go::(*Store).ResolveDeadlineWinner",
       "path": "harness/internal/store/deadline_resolution.go",
       "symbol": "(*Store).ResolveDeadlineWinner",
-      "ceiling": 63
+      "ceiling": 59
     },
     {
       "rule": "cyclomatic_complexity",
@@ -3794,7 +3787,7 @@
       "identity": "cyclomatic_complexity:harness/internal/store/local_accept.go::applyLocalAcceptanceTx",
       "path": "harness/internal/store/local_accept.go",
       "symbol": "applyLocalAcceptanceTx",
-      "ceiling": 54
+      "ceiling": 53
     },
     {
       "rule": "cyclomatic_complexity",
@@ -3840,17 +3833,10 @@
     },
     {
       "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/store/local_accept_validation.go::validateOperationEvents",
-      "path": "harness/internal/store/local_accept_validation.go",
-      "symbol": "validateOperationEvents",
-      "ceiling": 26
-    },
-    {
-      "rule": "cyclomatic_complexity",
       "identity": "cyclomatic_complexity:harness/internal/store/local_accept_validation.go::validateParticipantBinding",
       "path": "harness/internal/store/local_accept_validation.go",
       "symbol": "validateParticipantBinding",
-      "ceiling": 36
+      "ceiling": 32
     },
     {
       "rule": "cyclomatic_complexity",
@@ -4403,7 +4389,7 @@
       "identity": "function_logical_lines:harness/internal/agent/executor.go::(*TeamworkActionExecutor).buildCurrentAction",
       "path": "harness/internal/agent/executor.go",
       "symbol": "(*TeamworkActionExecutor).buildCurrentAction",
-      "ceiling": 88
+      "ceiling": 86
     },
     {
       "rule": "function_logical_lines",
@@ -4956,7 +4942,7 @@
       "identity": "function_logical_lines:harness/internal/store/deadline_resolution.go::(*Store).ResolveDeadlineWinner",
       "path": "harness/internal/store/deadline_resolution.go",
       "symbol": "(*Store).ResolveDeadlineWinner",
-      "ceiling": 109
+      "ceiling": 104
     },
     {
       "rule": "function_logical_lines",
@@ -4977,7 +4963,7 @@
       "identity": "function_logical_lines:harness/internal/store/local_accept.go::applyLocalAcceptanceTx",
       "path": "harness/internal/store/local_accept.go",
       "symbol": "applyLocalAcceptanceTx",
-      "ceiling": 106
+      "ceiling": 103
     },
     {
       "rule": "function_logical_lines",
@@ -5236,7 +5222,7 @@
       "identity": "function_statements:harness/internal/agent/executor.go::(*TeamworkActionExecutor).buildCurrentAction",
       "path": "harness/internal/agent/executor.go",
       "symbol": "(*TeamworkActionExecutor).buildCurrentAction",
-      "ceiling": 61
+      "ceiling": 59
     },
     {
       "rule": "function_statements",
@@ -6293,7 +6279,7 @@
       "identity": "function_statements:harness/internal/store/deadline_resolution.go::(*Store).ResolveDeadlineWinner",
       "path": "harness/internal/store/deadline_resolution.go",
       "symbol": "(*Store).ResolveDeadlineWinner",
-      "ceiling": 115
+      "ceiling": 111
     },
     {
       "rule": "function_statements",
@@ -6342,7 +6328,7 @@
       "identity": "function_statements:harness/internal/store/local_accept.go::applyLocalAcceptanceTx",
       "path": "harness/internal/store/local_accept.go",
       "symbol": "applyLocalAcceptanceTx",
-      "ceiling": 118
+      "ceiling": 115
     },
     {
       "rule": "function_statements",
@@ -7166,7 +7152,7 @@
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/agent/executor.go",
       "path": "harness/internal/agent/executor.go",
-      "ceiling": 928
+      "ceiling": 923
     },
     {
       "rule": "production_file_lines",

@@ -4,6 +4,8 @@ import "testing"
 
 type eventTypePolicy struct {
 	event                EventType
+	operation            OperationKind
+	participantResponse  EventType
 	home, participant    bool
 	agent, controller    bool
 	artifacts, causality bool
@@ -13,19 +15,23 @@ func TestEventTypeIsClosed(t *testing.T) {
 	t.Parallel()
 
 	want := []eventTypePolicy{
-		{EventReviewOffered, true, false, true, false, true, false},
-		{EventReviewAcceptRequested, false, true, true, false, false, true},
-		{EventReviewDeclineRequested, false, true, true, false, false, true},
-		{EventReviewDeliveryReady, false, true, true, false, true, true},
-		{EventReviewAccepted, true, false, false, true, false, true},
-		{EventReviewAcceptRejected, true, false, false, true, false, true},
-		{EventReviewDelivered, true, false, false, true, true, true},
-		{EventReviewReworkRequested, true, false, true, false, true, true},
-		{EventReviewClosed, true, false, true, false, false, true},
-		{EventReviewDeclined, true, false, false, true, false, true},
-		{EventReviewCancelled, true, false, true, false, false, true},
-		{EventReviewExpired, true, false, false, true, false, true},
-		{EventReviewOutcome, false, false, false, true, false, true},
+		{EventReviewOffered, OperationTeamworkOffer, "", true, false, true, false, true, false},
+		{EventReviewAcceptRequested, OperationTeamworkAccept, EventReviewAccepted,
+			false, true, true, false, false, true},
+		{EventReviewDeclineRequested, OperationTeamworkDecline, EventReviewDeclined,
+			false, true, true, false, false, true},
+		{EventReviewDeliveryReady, OperationTeamworkDeliver, EventReviewDelivered,
+			false, true, true, false, true, true},
+		{EventReviewAccepted, "", "", true, false, false, true, false, true},
+		{EventReviewAcceptRejected, "", "", true, false, false, true, false, true},
+		{EventReviewDelivered, "", "", true, false, false, true, true, true},
+		{EventReviewReworkRequested, OperationTeamworkRework, "",
+			true, false, true, false, true, true},
+		{EventReviewClosed, OperationTeamworkClose, "", true, false, true, false, false, true},
+		{EventReviewDeclined, "", "", true, false, false, true, false, true},
+		{EventReviewCancelled, OperationTeamworkCancel, "", true, false, true, false, false, true},
+		{EventReviewExpired, "", "", true, false, false, true, false, true},
+		{EventReviewOutcome, "", "", false, false, false, true, false, true},
 	}
 	descriptors := EventTypeDescriptors()
 	if len(descriptors) != len(want) {
@@ -51,6 +57,32 @@ func TestEventTypeIsClosed(t *testing.T) {
 	if got := EventTypeDescriptors()[0].Type(); got != EventReviewOffered {
 		t.Fatalf("mutating descriptor projection changed authority to %q", got)
 	}
+	for _, expected := range want {
+		if expected.operation == "" {
+			continue
+		}
+		got, valid := EventTypeForAgentOperation(expected.operation)
+		if !valid || got != expected.event {
+			t.Fatalf("EventTypeForAgentOperation(%s) = (%s, %t)", expected.operation, got, valid)
+		}
+	}
+	if _, valid := EventTypeForAgentOperation(""); valid {
+		t.Fatal("zero operation resolved an Agent Event")
+	}
+	if _, valid := EventTypeForAgentOperation(OperationResolveRetry); valid {
+		t.Fatal("resolve operation resolved an Agent Event")
+	}
+}
+
+func TestEventTypeDescriptorRejectsHiddenParticipantResponse(t *testing.T) {
+	t.Parallel()
+	nonParticipant, _ := EventReviewOffered.Descriptor()
+	nonParticipant.participantResponse = EventReviewDelivered
+	participant, _ := EventReviewAcceptRequested.Descriptor()
+	participant.participantResponse = ""
+	if validParticipantEventResponse(nonParticipant) || validParticipantEventResponse(participant) {
+		t.Fatal("descriptor accepted a hidden or missing participant response")
+	}
 }
 
 func assertEventTypeDescriptor(t *testing.T, index int, descriptor EventTypeDescriptor,
@@ -65,6 +97,13 @@ func assertEventTypeDescriptor(t *testing.T, index int, descriptor EventTypeDesc
 		descriptor.AllowsArtifacts() != expected.artifacts ||
 		descriptor.RequiresAdmissionCausality() != expected.causality {
 		t.Fatalf("EventType descriptor %d = %#v, want %#v", index, descriptor, expected)
+	}
+	operation, hasOperation := descriptor.AgentOperation()
+	response, hasResponse := descriptor.ParticipantResponse()
+	if operation != expected.operation || hasOperation != (expected.operation != "") ||
+		response != expected.participantResponse || hasResponse != (expected.participantResponse != "") {
+		t.Fatalf("EventType descriptor %d action binding = (%s, %t, %s, %t)",
+			index, operation, hasOperation, response, hasResponse)
 	}
 }
 
@@ -82,6 +121,13 @@ func assertEventTypeProjection(t *testing.T, descriptor EventTypeDescriptor,
 		expected.event.RequiresAdmissionCausality() != expected.causality {
 		t.Fatalf("EventType(%q) does not derive from its descriptor", expected.event)
 	}
+	operation, hasOperation := expected.event.AgentOperation()
+	response, hasResponse := expected.event.ParticipantResponse()
+	if operation != expected.operation || hasOperation != (expected.operation != "") ||
+		response != expected.participantResponse || hasResponse != (expected.participantResponse != "") {
+		t.Fatalf("EventType(%q) action projection = (%s, %t, %s, %t)",
+			expected.event, operation, hasOperation, response, hasResponse)
+	}
 }
 
 func assertUnknownEventType(t *testing.T, value EventType) {
@@ -90,5 +136,11 @@ func assertUnknownEventType(t *testing.T, value EventType) {
 		value.ParticipantInput() || value.AgentAdmitted() || value.ControllerAdmitted() ||
 		value.AllowsArtifacts() || value.RequiresAdmissionCausality() {
 		t.Fatalf("unknown EventType(%q) acquired descriptor policy", value)
+	}
+	if _, valid := value.AgentOperation(); valid {
+		t.Fatalf("unknown EventType(%q) acquired Agent operation", value)
+	}
+	if _, valid := value.ParticipantResponse(); valid {
+		t.Fatalf("unknown EventType(%q) acquired participant response", value)
 	}
 }
