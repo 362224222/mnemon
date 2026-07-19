@@ -348,7 +348,7 @@ func TestGCBatchesDurableQueueByItemsAndBytes(t *testing.T) {
 		}
 	})
 
-	t.Run("queue staging and prepare share the cycle byte budget", func(t *testing.T) {
+	t.Run("logical staging and physical queue use separate closed byte bounds", func(t *testing.T) {
 		cas := gcOpenCAS(t)
 		now := gcTestNow()
 		queuedContent := bytes.Repeat([]byte{0x73}, 2<<20)
@@ -361,7 +361,9 @@ func TestGCBatchesDurableQueueByItemsAndBytes(t *testing.T) {
 		store := newGCTestStore()
 		store.addQueue(GCQueueItem{Identity: GCQueueIdentity{Digest: queuedDigest, Token: queuedToken},
 			SizeBytes: uint64(len(queuedContent)), State: GCQueueQueued})
-		store.sweepResult = GCStagingSweepResult{Examined: 1, Swept: 1, SweptBytes: 2 << 20}
+		store.sweepResult = GCStagingSweepResult{
+			Examined: 1, Swept: 1, SweptBytes: MaxTotalBytes,
+		}
 		worker := gcNewWorker(t, store, cas, GCOptions{
 			Clock: func() time.Time { return now }, MaxExamined: 3, MaxQueued: 2,
 			MaxBytes: maxCASObjectSize,
@@ -370,21 +372,16 @@ func TestGCBatchesDurableQueueByItemsAndBytes(t *testing.T) {
 			t.Fatal(err)
 		}
 		if len(store.sweepSpecs) != 1 || store.sweepSpecs[0].MaxItems != 2 ||
-			store.sweepSpecs[0].MaxBytes != 2<<20 || len(store.prepareSpecs) != 0 {
-			t.Fatalf("shared byte budget = sweep %#v prepare %d",
+			store.sweepSpecs[0].MaxBytes != MaxTotalBytes || len(store.prepareSpecs) != 1 {
+			t.Fatalf("separate logical/physical bounds = sweep %#v prepare %d",
 				store.sweepSpecs, len(store.prepareSpecs))
 		}
-		if _, err := os.Lstat(gcObjectPath(t, cas, orphanDigest)); err != nil {
-			t.Fatalf("orphan did not wait after the cycle byte budget was spent: %v", err)
-		}
-		store.mu.Lock()
-		store.sweepResult = GCStagingSweepResult{}
-		store.mu.Unlock()
-		if err := worker.RunCycle(context.Background()); err != nil {
-			t.Fatal(err)
-		}
 		if _, err := os.Lstat(gcObjectPath(t, cas, orphanDigest)); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("fresh cycle did not collect deferred orphan: %v", err)
+			t.Fatalf("physical queue budget did not coexist with root-sized staging sweep: %v", err)
+		}
+		if snapshot := worker.Snapshot(); snapshot.StagingBytesSwept != MaxTotalBytes ||
+			snapshot.ObjectBytesQueued != 2<<20 || snapshot.QueueItemsCompleted != 2 {
+			t.Fatalf("separate-bound snapshot = %#v", snapshot)
 		}
 	})
 
@@ -447,7 +444,7 @@ func TestGCPrunesOnlyOldRecognizableTempsAndSweepsThroughStore(t *testing.T) {
 	}
 	if len(store.sweepSpecs) != 1 || store.sweepSpecs[0].Cutoff != now.Add(-time.Hour) ||
 		store.sweepSpecs[0].MaxItems != gcDefaultMaxExamined ||
-		store.sweepSpecs[0].MaxBytes != gcDefaultMaxBytes {
+		store.sweepSpecs[0].MaxBytes != gcStagingCycleBytes {
 		t.Fatalf("staging sweep spec = %#v", store.sweepSpecs)
 	}
 	if snapshot := worker.Snapshot(); snapshot.TempsPruned != 1 ||

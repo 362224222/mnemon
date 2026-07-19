@@ -25,6 +25,7 @@ const (
 	gcDefaultMaxBytes     = 16 << 20
 	gcDefaultMaxTemps     = 32
 	gcDefaultMaxQueue     = 128
+	gcStagingCycleBytes   = MaxTotalBytes
 	gcMaximumPeriod       = time.Hour
 	gcMaximumTTL          = 365 * 24 * time.Hour
 	gcMaximumBytes        = MaxTotalBytes
@@ -163,9 +164,11 @@ type GCOptions struct {
 
 	MaxExamined int
 	MaxQueued   int
-	MaxBytes    uint64
-	MaxTemps    int
-	MaxQueue    int
+	// MaxBytes bounds physical CAS queue/tombstone bytes per cycle. Staging
+	// metadata has a separate fixed MaxTotalBytes logical-root bound.
+	MaxBytes uint64
+	MaxTemps int
+	MaxQueue int
 }
 
 type GCState string
@@ -478,15 +481,16 @@ func (worker *GCWorker) runCycle(ctx context.Context) error {
 		return err
 	}
 	// Queue recovery, staging examination, and new object preparation share one
-	// cycle-wide item/byte budget. Temp names have their separate MaxTemps cap;
-	// MaxQueue is the independent durable backlog ceiling.
+	// cycle-wide item budget. Physical queue/tombstone work separately shares
+	// MaxBytes between old and new objects. An atomic staging-root sweep has a
+	// fixed MaxTotalBytes logical budget because one root may be larger than one
+	// physical CAS object. Temp names and durable backlog use MaxTemps/MaxQueue.
 	remainingExamined := worker.maxExamined - initial.Processed
-	remainingBytes := worker.maxBytes - initial.ProcessedBytes
-	if remainingExamined == 0 || remainingBytes == 0 {
+	if remainingExamined == 0 {
 		return nil
 	}
 	swept, err := worker.store.SweepArtifactGCStaging(ctx, GCStagingSweepSpec{
-		Cutoff: stagingCutoff, MaxItems: remainingExamined, MaxBytes: remainingBytes, At: now,
+		Cutoff: stagingCutoff, MaxItems: remainingExamined, MaxBytes: gcStagingCycleBytes, At: now,
 	})
 	if err != nil {
 		if gcContextCancellation(err, ctx) {
@@ -494,7 +498,7 @@ func (worker *GCWorker) runCycle(ctx context.Context) error {
 		}
 		return worker.storeFailure("sweep unaccepted staging", err)
 	}
-	if err := validateGCStagingSweep(swept, remainingExamined, remainingBytes); err != nil {
+	if err := validateGCStagingSweep(swept, remainingExamined, gcStagingCycleBytes); err != nil {
 		return gcFatal(GCFatalStoreInvariant, "validate staging sweep result", err)
 	}
 	worker.mu.Lock()
@@ -506,7 +510,7 @@ func (worker *GCWorker) runCycle(ctx context.Context) error {
 		return err
 	}
 	remainingExamined -= swept.Examined
-	remainingBytes -= swept.SweptBytes
+	remainingBytes := worker.maxBytes - initial.ProcessedBytes
 	remainingQueued := worker.maxQueued - initial.Processed
 	if remainingExamined == 0 || remainingQueued == 0 || remainingBytes == 0 {
 		return nil
