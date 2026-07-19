@@ -135,6 +135,9 @@ func TestArtifactClientReturnsOnlyClosedRemoteFailures(t *testing.T) {
 		{name: "not authorized", payload: mustArtifactClientProtocolError(t,
 			ArtifactProtocolErrorSpec{Code: ArtifactErrorNotAuthorized}),
 			code: ArtifactErrorNotAuthorized},
+		{name: "corrupt", payload: mustArtifactClientProtocolError(t,
+			ArtifactProtocolErrorSpec{Code: ArtifactErrorCorrupt}),
+			code: ArtifactErrorCorrupt},
 		{name: "busy", payload: mustArtifactClientProtocolError(t,
 			ArtifactProtocolErrorSpec{Code: ArtifactErrorBusy, Retryable: true,
 				RetryAfter: 1250 * time.Millisecond}), code: ArtifactErrorBusy,
@@ -220,7 +223,9 @@ func TestArtifactClientFencesIdentityInputAndTransport(t *testing.T) {
 	if parseErr != nil {
 		t.Fatal(parseErr)
 	}
-	if _, err := client.GetManifest(ctx, rsaPeer, request); !errors.Is(err, ErrArtifactClientResponse) {
+	if _, err := client.GetManifest(ctx, rsaPeer, request); !errors.Is(err, ErrArtifactClientResponse) ||
+		errors.Is(err, ErrArtifactClientManifestInvalid) ||
+		errors.Is(err, ErrArtifactClientDigestMismatch) {
 		t.Fatalf("RSA remote identity error = %v", err)
 	}
 
@@ -237,7 +242,9 @@ func TestArtifactClientFencesIdentityInputAndTransport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := misdirected.GetManifest(ctx, unreachable.PeerID(), request); !errors.Is(err, ErrArtifactClientResponse) {
+	if _, err := misdirected.GetManifest(ctx, unreachable.PeerID(), request); !errors.Is(err, ErrArtifactClientResponse) ||
+		errors.Is(err, ErrArtifactClientManifestInvalid) ||
+		errors.Is(err, ErrArtifactClientDigestMismatch) {
 		t.Fatalf("wrong secure remote PeerID error = %v", err)
 	}
 }
@@ -265,6 +272,8 @@ func TestArtifactClientRejectsMaliciousResponses(t *testing.T) {
 	wrongManifestFrame, _ := NewArtifactFrame(other.manifestPayload(t))
 	wrongBlockFrame, _ := NewArtifactFrame(other.blockPayload(t))
 	validManifestFrame, _ := NewArtifactFrame(fixture.manifestPayload(t))
+	remoteCanary := "remote-manifest-canary-must-not-escape"
+	invalidManifestBytes := []byte(fmt.Sprintf(`{"%s":true}`, remoteCanary))
 	corruptBlock := []byte(fmt.Sprintf(
 		`{"payload":{"block_bytes":"%s","block_digest":"%s"},"type":"block","version":1}`,
 		base64.StdEncoding.EncodeToString([]byte("corrupt")), fixture.blockDigest))
@@ -272,27 +281,59 @@ func TestArtifactClientRejectsMaliciousResponses(t *testing.T) {
 		`{"payload":{"manifest_bytes":"%s","manifest_digest":"%s","root_digest":"%s"},"type":"manifest","version":1}`,
 		base64.StdEncoding.EncodeToString(fixture.manifest.CanonicalJSON().Bytes()),
 		fixture.blockDigest, fixture.rootDigest))
+	invalidManifest := []byte(fmt.Sprintf(
+		`{"payload":{"manifest_bytes":"%s","manifest_digest":"%s","root_digest":"%s"},"type":"manifest","version":1}`,
+		base64.StdEncoding.EncodeToString(invalidManifestBytes), model.Sum(invalidManifestBytes),
+		fixture.rootDigest))
+	structurallyInvalidManifest := []byte(fmt.Sprintf(
+		`{"payload":{"manifest_bytes":"%%%s","manifest_digest":"%s","root_digest":"%s"},"type":"manifest","version":1}`,
+		remoteCanary, fixture.manifest.ManifestDigest(), fixture.rootDigest))
 	tests := []struct {
-		name  string
-		block bool
-		write func(network.Stream)
+		name       string
+		block      bool
+		write      func(network.Stream)
+		want       error
+		bodyCanary string
 	}{
-		{name: "wrong response type", write: writeArtifactClientFrameResponse(ackFrame)},
-		{name: "request returned as response", write: writeArtifactClientFrameResponse(requestFrame)},
-		{name: "wrong manifest root tuple", write: writeArtifactClientFrameResponse(wrongManifestFrame)},
+		{name: "wrong response type", write: writeArtifactClientFrameResponse(ackFrame),
+			want: ErrArtifactClientResponse},
+		{name: "request returned as response", write: writeArtifactClientFrameResponse(requestFrame),
+			want: ErrArtifactClientResponse},
+		{name: "wrong manifest root tuple", write: writeArtifactClientFrameResponse(wrongManifestFrame),
+			want: ErrArtifactClientDigestMismatch},
 		{name: "wrong block digest tuple", block: true,
-			write: writeArtifactClientFrameResponse(wrongBlockFrame)},
+			write: writeArtifactClientFrameResponse(wrongBlockFrame),
+			want:  ErrArtifactClientDigestMismatch},
 		{name: "unknown frame", write: writeArtifactClientRawResponse(
-			[]byte(`{"payload":{},"type":"future","version":1}`))},
+			[]byte(`{"payload":{},"type":"future","version":1}`)),
+			want: ErrArtifactClientResponse},
 		{name: "noncanonical envelope", write: writeArtifactClientRawResponse(
-			append([]byte(" "), validManifestFrame.CanonicalJSON().Bytes()...))},
-		{name: "corrupt block digest", block: true, write: writeArtifactClientRawResponse(corruptBlock)},
-		{name: "corrupt manifest digest", write: writeArtifactClientRawResponse(corruptManifest)},
+			append([]byte(" "), validManifestFrame.CanonicalJSON().Bytes()...)),
+			want: ErrArtifactClientResponse},
+		{name: "corrupt block digest", block: true, write: writeArtifactClientRawResponse(corruptBlock),
+			want: ErrArtifactClientDigestMismatch},
+		{name: "structurally invalid block", block: true, write: writeArtifactClientRawResponse(
+			[]byte(fmt.Sprintf(
+				`{"payload":{"block_bytes":"%%%s","block_digest":"%s"},"type":"block","version":1}`,
+				remoteCanary, fixture.blockDigest))),
+			want: ErrArtifactClientDigestMismatch, bodyCanary: remoteCanary},
+		{name: "corrupt manifest digest", write: writeArtifactClientRawResponse(corruptManifest),
+			want: ErrArtifactClientDigestMismatch},
+		{name: "invalid manifest", write: writeArtifactClientRawResponse(invalidManifest),
+			want: ErrArtifactClientManifestInvalid, bodyCanary: remoteCanary},
+		{name: "structurally invalid manifest",
+			write: writeArtifactClientRawResponse(structurallyInvalidManifest),
+			want:  ErrArtifactClientManifestInvalid, bodyCanary: remoteCanary},
+		{name: "invalid block is wrong response type",
+			write: writeArtifactClientRawResponse(corruptBlock), want: ErrArtifactClientResponse},
+		{name: "invalid manifest is wrong response type", block: true,
+			write: writeArtifactClientRawResponse(structurallyInvalidManifest),
+			want:  ErrArtifactClientResponse, bodyCanary: remoteCanary},
 		{name: "oversized direct frame", write: func(stream network.Stream) {
 			var prefix [4]byte
 			binary.BigEndian.PutUint32(prefix[:], uint32(maxArtifactFrameBytes()+1))
 			_, _ = stream.Write(prefix[:])
-		}},
+		}, want: ErrArtifactClientResponse},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -310,8 +351,13 @@ func TestArtifactClientRejectsMaliciousResponses(t *testing.T) {
 			} else {
 				_, err = client.GetManifest(ctx, originIdentity.PeerID(), manifestRequest)
 			}
-			if !errors.Is(err, ErrArtifactClientResponse) ||
-				errors.Is(err, ErrArtifactClientTransport) {
+			if !errors.Is(err, test.want) || !errors.Is(err, ErrArtifactClientResponse) ||
+				errors.Is(err, ErrArtifactClientTransport) ||
+				(test.want != ErrArtifactClientManifestInvalid &&
+					errors.Is(err, ErrArtifactClientManifestInvalid)) ||
+				(test.want != ErrArtifactClientDigestMismatch &&
+					errors.Is(err, ErrArtifactClientDigestMismatch)) ||
+				(test.bodyCanary != "" && strings.Contains(err.Error(), test.bodyCanary)) {
 				t.Fatalf("malicious response error = %v", err)
 			}
 		})

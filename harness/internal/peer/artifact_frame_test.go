@@ -280,6 +280,59 @@ func TestArtifactFrameRejectsUnknownNonCanonicalAndUnboundValues(t *testing.T) {
 	}
 }
 
+func TestArtifactFrameReturnsOnlyClosedContentDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	blockBytes := []byte("closed diagnostic block")
+	blockDigest := model.Sum(blockBytes)
+	manifest, err := artifactdomain.NewManifest(artifactdomain.ManifestSpec{
+		RootKind: artifactdomain.EntryFile, RootPath: "closed.txt",
+		Entries: []artifactdomain.ManifestEntry{{Kind: artifactdomain.EntryFile,
+			LogicalPath: "closed.txt", Mode: 0o600, SizeBytes: uint64(len(blockBytes)),
+			Blocks: []artifactdomain.ManifestBlock{{Digest: blockDigest,
+				LengthBytes: uint64(len(blockBytes))}}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalidManifest := []byte(`{"remote-frame-canary":true}`)
+	tests := []struct {
+		name string
+		raw  []byte
+		want error
+	}{
+		{name: "manifest structure", raw: artifactFrameEnvelopeForTest(t, ArtifactFrameManifest,
+			manifestWire{ManifestBytes: base64.StdEncoding.EncodeToString(invalidManifest),
+				ManifestDigest: model.Sum(invalidManifest).String(),
+				RootDigest:     manifest.RootDigest().String()}), want: errArtifactFrameManifestInvalid},
+		{name: "manifest content digest", raw: artifactFrameEnvelopeForTest(t, ArtifactFrameManifest,
+			manifestWire{ManifestBytes: base64.StdEncoding.EncodeToString(manifest.CanonicalJSON().Bytes()),
+				ManifestDigest: model.Sum([]byte("wrong manifest digest")).String(),
+				RootDigest:     manifest.RootDigest().String()}), want: errArtifactFrameManifestDigestMismatch},
+		{name: "manifest root binding", raw: artifactFrameEnvelopeForTest(t, ArtifactFrameManifest,
+			manifestWire{ManifestBytes: base64.StdEncoding.EncodeToString(manifest.CanonicalJSON().Bytes()),
+				ManifestDigest: manifest.ManifestDigest().String(),
+				RootDigest:     model.Sum([]byte("wrong root digest")).String()}),
+			want: errArtifactFrameManifestDigestMismatch},
+		{name: "block content digest", raw: artifactFrameEnvelopeForTest(t, ArtifactFrameBlock,
+			blockWire{BlockBytes: base64.StdEncoding.EncodeToString(blockBytes),
+				BlockDigest: model.Sum([]byte("wrong block digest")).String()}),
+			want: errArtifactFrameBlockDigestMismatch},
+		{name: "block byte encoding", raw: artifactFrameEnvelopeForTest(t, ArtifactFrameBlock,
+			blockWire{BlockBytes: "%remote-frame-canary", BlockDigest: blockDigest.String()}),
+			want: errArtifactFrameBlockDigestMismatch},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := ParseArtifactFrame(test.raw)
+			if !errors.Is(err, ErrArtifactFrame) || !errors.Is(err, test.want) ||
+				strings.Contains(err.Error(), "remote-frame-canary") {
+				t.Fatalf("closed content diagnostic = %v", err)
+			}
+		})
+	}
+}
+
 func TestArtifactReadRequestsPreserveExactChannelRootAuthorityTuples(t *testing.T) {
 	t.Parallel()
 
@@ -465,7 +518,7 @@ func TestArtifactFrameExactHermeticContentAndFrameLimits(t *testing.T) {
 func TestArtifactProtocolErrorIsClosedAndHasStableRetryPolicy(t *testing.T) {
 	t.Parallel()
 
-	for _, code := range []ArtifactProtocolErrorCode{ArtifactErrorNotAuthorized} {
+	for _, code := range []ArtifactProtocolErrorCode{ArtifactErrorNotAuthorized, ArtifactErrorCorrupt} {
 		payload, err := NewArtifactProtocolError(ArtifactProtocolErrorSpec{Code: code})
 		if err != nil || payload.Code() != code || payload.Retryable() || payload.RetryAfter() != 0 {
 			t.Fatalf("NewArtifactProtocolError(%s) = (%#v, %v)", code, payload, err)
@@ -599,6 +652,26 @@ func TestArtifactFrameStreamReservationCoversDecodeAndReleases(t *testing.T) {
 	if _, release, err := readReservedArtifactFrame(&encoded, parseScope, artifactSmallFrameBytes); !errors.Is(err, ErrArtifactFrame) || release != nil || parseScope.released != len(badRaw) {
 		t.Fatalf("parse failure reservation = (release=%t, %v), scope=%#v",
 			release != nil, err, parseScope)
+	}
+
+	invalidManifest := []byte(`{"remote-reservation-canary":true}`)
+	badManifest := artifactFrameEnvelopeForTest(t, ArtifactFrameManifest, manifestWire{
+		ManifestBytes:  base64.StdEncoding.EncodeToString(invalidManifest),
+		ManifestDigest: model.Sum(invalidManifest).String(),
+		RootDigest:     model.Sum([]byte("reservation root")).String(),
+	})
+	encoded.Reset()
+	binary.BigEndian.PutUint32(prefix[:], uint32(len(badManifest)))
+	encoded.Write(prefix[:])
+	encoded.Write(badManifest)
+	manifestScope := &artifactFrameTestScope{}
+	if _, release, err := readReservedArtifactFrame(&encoded, manifestScope,
+		maxArtifactFrameBytes()); !errors.Is(err, errArtifactFrameManifestInvalid) ||
+		release != nil || manifestScope.reserved != len(badManifest) ||
+		manifestScope.released != len(badManifest) ||
+		strings.Contains(err.Error(), "remote-reservation-canary") {
+		t.Fatalf("typed parse failure reservation = (release=%t, %v), scope=%#v",
+			release != nil, err, manifestScope)
 	}
 }
 

@@ -354,12 +354,13 @@ func TestArtifactServerMapsOnlyDeadlineAndCapacityToBusy(t *testing.T) {
 	assertArtifactBusyResponse(t, response)
 }
 
-func TestArtifactServerResetsSourceAndCASCorruptionWithoutAnOracle(t *testing.T) {
+func TestArtifactServerResetsUnsafeSourceAndClosesCASCorruption(t *testing.T) {
 	fixture := newArtifactServerContent(t, "corruption", []byte("verified corruption block"))
 	tests := []struct {
-		name   string
-		source func(*artifactServerTestSource)
-		cas    func(*artifactServerTestCAS)
+		name      string
+		source    func(*artifactServerTestSource)
+		cas       func(*artifactServerTestCAS)
+		corrupted bool
 	}{
 		{name: "source input", source: func(source *artifactServerTestSource) {
 			source.manifest = artifactServerManifestFailure(store.ErrArtifactSourceInput)
@@ -412,7 +413,14 @@ func TestArtifactServerResetsSourceAndCASCorruptionWithoutAnOracle(t *testing.T)
 			source.manifest = artifactServerManifestValue(fixture.manifestView())
 		}, cas: func(cas *artifactServerTestCAS) {
 			cas.read = func(model.Digest, int) ([]byte, error) { return []byte("changed"), nil }
-		}},
+		}, corrupted: true},
+		{name: "CAS digest corruption", source: func(source *artifactServerTestSource) {
+			source.manifest = artifactServerManifestValue(fixture.manifestView())
+		}, cas: func(cas *artifactServerTestCAS) {
+			cas.read = func(model.Digest, int) ([]byte, error) {
+				return nil, artifactdomain.ErrCASCorruption
+			}
+		}, corrupted: true},
 	}
 	for _, test := range tests {
 		test := test
@@ -440,14 +448,20 @@ func TestArtifactServerResetsSourceAndCASCorruptionWithoutAnOracle(t *testing.T)
 			defer server.Close()
 			request, _ := NewGetManifest(GetManifestSpec{ChannelID: fixture.channelID,
 				RootDigest: fixture.rootDigest})
-			assertArtifactServerReset(t, ctx, requesterHost, originHost.ID(), request)
+			if test.corrupted {
+				assertArtifactCorruptResponse(t,
+					exchangeArtifactServerPayload(t, ctx, requesterHost, originHost.ID(), request))
+			} else {
+				assertArtifactServerReset(t, ctx, requesterHost, originHost.ID(), request)
+			}
 		})
 	}
 
 	blockTests := []struct {
-		name   string
-		source func(*artifactServerTestSource)
-		cas    func(*artifactServerTestCAS)
+		name      string
+		source    func(*artifactServerTestSource)
+		cas       func(*artifactServerTestCAS)
+		corrupted bool
 	}{
 		{name: "source input", source: func(source *artifactServerTestSource) {
 			source.block = artifactServerBlockFailure(store.ErrArtifactSourceInput)
@@ -503,7 +517,14 @@ func TestArtifactServerResetsSourceAndCASCorruptionWithoutAnOracle(t *testing.T)
 			cas.read = func(model.Digest, int) ([]byte, error) {
 				return []byte("wrong block bytes"), nil
 			}
-		}},
+		}, corrupted: true},
+		{name: "CAS digest corruption", source: func(source *artifactServerTestSource) {
+			source.block = artifactServerBlockValue(fixture.blockView())
+		}, cas: func(cas *artifactServerTestCAS) {
+			cas.read = func(model.Digest, int) ([]byte, error) {
+				return nil, artifactdomain.ErrCASCorruption
+			}
+		}, corrupted: true},
 	}
 	for _, test := range blockTests {
 		test := test
@@ -531,7 +552,12 @@ func TestArtifactServerResetsSourceAndCASCorruptionWithoutAnOracle(t *testing.T)
 			defer server.Close()
 			request, _ := NewGetBlock(GetBlockSpec{ChannelID: fixture.channelID,
 				RootDigest: fixture.rootDigest, BlockDigest: fixture.blockDigest})
-			assertArtifactServerReset(t, ctx, requesterHost, originHost.ID(), request)
+			if test.corrupted {
+				assertArtifactCorruptResponse(t,
+					exchangeArtifactServerPayload(t, ctx, requesterHost, originHost.ID(), request))
+			} else {
+				assertArtifactServerReset(t, ctx, requesterHost, originHost.ID(), request)
+			}
 		})
 	}
 }
@@ -1222,6 +1248,15 @@ func assertArtifactBusyResponse(t testing.TB, response ArtifactFrame) {
 	if response.Type() != ArtifactFrameProtocolError || !ok || failure.Code() != ArtifactErrorBusy ||
 		!failure.Retryable() || failure.RetryAfter() != artifactServerBusyRetry {
 		t.Fatalf("Artifact overload response = %#v", response)
+	}
+}
+
+func assertArtifactCorruptResponse(t testing.TB, response ArtifactFrame) {
+	t.Helper()
+	failure, ok := response.Payload().(ArtifactProtocolError)
+	if response.Type() != ArtifactFrameProtocolError || !ok ||
+		failure.Code() != ArtifactErrorCorrupt || failure.Retryable() || failure.RetryAfter() != 0 {
+		t.Fatalf("Artifact corruption response = %#v", response)
 	}
 }
 

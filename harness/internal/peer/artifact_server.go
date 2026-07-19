@@ -344,7 +344,8 @@ func (server *ArtifactServer) manifest(ctx context.Context, requester model.Peer
 		return nil, fmt.Errorf("%w: manifest CAS read: %w", ErrArtifactServer, err)
 	}
 	if !bytes.Equal(casBytes, manifestBytes) || model.Sum(casBytes) != manifestDigest {
-		return nil, fmt.Errorf("%w: manifest CAS verification", ErrArtifactServer)
+		return nil, fmt.Errorf("%w: manifest CAS verification: %w",
+			ErrArtifactServer, artifactdomain.ErrCASCorruption)
 	}
 	manifestJSON, err := model.NewJSON(casBytes)
 	if err != nil || !bytes.Equal(manifestJSON.Bytes(), casBytes) {
@@ -383,7 +384,8 @@ func (server *ArtifactServer) block(ctx context.Context, requester model.PeerID,
 		return nil, fmt.Errorf("%w: block CAS read: %w", ErrArtifactServer, err)
 	}
 	if uint64(len(blockBytes)) != sizeBytes || model.Sum(blockBytes) != blockDigest {
-		return nil, fmt.Errorf("%w: block CAS verification", ErrArtifactServer)
+		return nil, fmt.Errorf("%w: block CAS verification: %w",
+			ErrArtifactServer, artifactdomain.ErrCASCorruption)
 	}
 	payload, err := NewBlock(BlockSpec{BlockDigest: blockDigest, BlockBytes: blockBytes})
 	if err != nil {
@@ -400,6 +402,8 @@ func artifactSourceProtocolFailure(cause error) (ArtifactProtocolError, bool) {
 		return ArtifactProtocolError{}, false
 	case errors.Is(cause, store.ErrArtifactSourceUnavailable):
 		specification = ArtifactProtocolErrorSpec{Code: ArtifactErrorNotAuthorized}
+	case errors.Is(cause, artifactdomain.ErrCASCorruption):
+		specification = ArtifactProtocolErrorSpec{Code: ArtifactErrorCorrupt}
 	case errors.Is(cause, context.DeadlineExceeded),
 		errors.Is(cause, network.ErrResourceLimitExceeded),
 		errors.Is(cause, errArtifactServerBudget):

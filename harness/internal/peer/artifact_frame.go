@@ -29,7 +29,17 @@ const (
 	artifactDirectFrameBytes = 8 << 20
 )
 
-var ErrArtifactFrame = errors.New("invalid Mnemon Artifact frame")
+var (
+	ErrArtifactFrame = errors.New("invalid Mnemon Artifact frame")
+
+	// These package-private sentinels preserve the only content diagnostics the
+	// Artifact client may act on after a single bounded frame parse. They carry
+	// no remote bytes or parser detail and remain ordinary ErrArtifactFrame
+	// failures to every other protocol consumer.
+	errArtifactFrameManifestInvalid        = fmt.Errorf("%w: manifest invalid", ErrArtifactFrame)
+	errArtifactFrameManifestDigestMismatch = fmt.Errorf("%w: manifest digest mismatch", ErrArtifactFrame)
+	errArtifactFrameBlockDigestMismatch    = fmt.Errorf("%w: block digest mismatch", ErrArtifactFrame)
+)
 
 // ArtifactJSON is an immutable exact canonical JSON value bounded by the
 // Artifact direct-frame limit. It is intentionally separate from model.JSON:
@@ -500,31 +510,44 @@ func NewManifest(spec ManifestSpec) (Manifest, error) {
 func parseManifest(raw []byte) (Manifest, error) {
 	var wire manifestWire
 	if err := decodeExactArtifactJSON(raw, &wire, maxArtifactFrameBytes()); err != nil {
-		return Manifest{}, err
+		return Manifest{}, errArtifactFrameManifestInvalid
 	}
 	rootDigest, rootErr := model.ParseDigest(wire.RootDigest)
 	manifestDigest, digestErr := model.ParseDigest(wire.ManifestDigest)
 	manifestBytes, bytesErr := base64.StdEncoding.DecodeString(wire.ManifestBytes)
 	if rootErr != nil || digestErr != nil || bytesErr != nil {
-		return Manifest{}, artifactFrameError("invalid Manifest binding or byte encoding",
-			errors.Join(rootErr, digestErr, bytesErr))
+		return Manifest{}, errArtifactFrameManifestInvalid
 	}
-	if len(manifestBytes) == 0 || len(manifestBytes) > artifactManifestMaximum() ||
-		model.Sum(manifestBytes) != manifestDigest {
-		return Manifest{}, artifactFrameError("Manifest bytes violate size or digest binding", nil)
+	if len(manifestBytes) == 0 || len(manifestBytes) > artifactManifestMaximum() {
+		return Manifest{}, errArtifactFrameManifestInvalid
+	}
+	if model.Sum(manifestBytes) != manifestDigest {
+		return Manifest{}, errArtifactFrameManifestDigestMismatch
 	}
 	manifest, err := model.NewJSON(manifestBytes)
 	if err != nil || !bytes.Equal(manifest.Bytes(), manifestBytes) {
-		return Manifest{}, artifactFrameError("Manifest bytes must be exact canonical JSON", err)
+		return Manifest{}, errArtifactFrameManifestInvalid
 	}
-	payload, err := NewManifest(ManifestSpec{RootDigest: rootDigest, Manifest: manifest})
+	domainManifest, err := artifactdomain.ParseManifest(manifestBytes)
+	if err != nil || domainManifest.TotalBytes() > artifactdomain.MaxTotalBytes {
+		return Manifest{}, errArtifactFrameManifestInvalid
+	}
+	if domainManifest.RootDigest() != rootDigest ||
+		domainManifest.ManifestDigest() != manifestDigest {
+		return Manifest{}, errArtifactFrameManifestDigestMismatch
+	}
+	canonical, err := artifactJSONFrom(manifestWire{
+		ManifestBytes:  base64.StdEncoding.EncodeToString(manifestBytes),
+		ManifestDigest: manifestDigest.String(), RootDigest: rootDigest.String(),
+	}, maxArtifactFrameBytes())
 	if err != nil {
-		return Manifest{}, err
+		return Manifest{}, errArtifactFrameManifestInvalid
 	}
-	if payload.manifestDigest != manifestDigest || !bytes.Equal(payload.canonical.Bytes(), raw) {
-		return Manifest{}, artifactFrameError("Manifest bytes are not canonical or correctly bound", nil)
+	if !bytes.Equal(canonical.Bytes(), raw) {
+		return Manifest{}, errArtifactFrameManifestInvalid
 	}
-	return payload, nil
+	return Manifest{rootDigest: rootDigest, manifestDigest: manifestDigest,
+		manifest: manifest, canonical: canonical}, nil
 }
 
 func (payload Manifest) RootDigest() model.Digest     { return payload.rootDigest }
@@ -646,17 +669,20 @@ func parseBlock(raw []byte) (Block, error) {
 	digest, digestErr := model.ParseDigest(wire.BlockDigest)
 	blockBytes, bytesErr := base64.StdEncoding.DecodeString(wire.BlockBytes)
 	if digestErr != nil || bytesErr != nil {
-		return Block{}, artifactFrameError("invalid Block digest or byte encoding",
-			errors.Join(digestErr, bytesErr))
+		return Block{}, errArtifactFrameBlockDigestMismatch
 	}
-	payload, err := NewBlock(BlockSpec{BlockDigest: digest, BlockBytes: blockBytes})
-	if err != nil {
-		return Block{}, err
+	if len(blockBytes) == 0 || len(blockBytes) > artifactBlockMaximum() ||
+		model.Sum(blockBytes) != digest {
+		return Block{}, errArtifactFrameBlockDigestMismatch
 	}
-	if !bytes.Equal(payload.canonical.Bytes(), raw) {
+	blockBytes = append([]byte(nil), blockBytes...)
+	canonical, err := artifactJSONFrom(blockWire{
+		BlockBytes: base64.StdEncoding.EncodeToString(blockBytes), BlockDigest: digest.String(),
+	}, maxArtifactFrameBytes())
+	if err != nil || !bytes.Equal(canonical.Bytes(), raw) {
 		return Block{}, artifactFrameError("Block bytes are not canonical", nil)
 	}
-	return payload, nil
+	return Block{blockDigest: digest, blockBytes: blockBytes, canonical: canonical}, nil
 }
 
 func (payload Block) BlockDigest() model.Digest   { return payload.blockDigest }
@@ -705,14 +731,17 @@ type ArtifactProtocolErrorCode string
 const (
 	ArtifactErrorBusy ArtifactProtocolErrorCode = "busy"
 	// ArtifactErrorNotAuthorized intentionally coalesces unknown objects,
-	// missing authority, and cross-Channel requests. Local CAS/Store corruption
-	// resets the stream and is never exposed as a ProtocolError frame.
+	// missing authority, and cross-Channel requests.
 	ArtifactErrorNotAuthorized ArtifactProtocolErrorCode = "not_authorized"
+	// ArtifactErrorCorrupt reveals no object identity or implementation detail;
+	// it only closes an authorized transfer whose source bytes no longer match
+	// their immutable content address.
+	ArtifactErrorCorrupt ArtifactProtocolErrorCode = "corrupt"
 )
 
 func (code ArtifactProtocolErrorCode) Valid() bool {
 	switch code {
-	case ArtifactErrorBusy, ArtifactErrorNotAuthorized:
+	case ArtifactErrorBusy, ArtifactErrorNotAuthorized, ArtifactErrorCorrupt:
 		return true
 	default:
 		return false

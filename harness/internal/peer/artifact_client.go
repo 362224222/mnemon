@@ -16,9 +16,11 @@ import (
 )
 
 var (
-	ErrArtifactClient          = errors.New("Mnemon Artifact client")
-	ErrArtifactClientTransport = fmt.Errorf("%w: transport unavailable", ErrArtifactClient)
-	ErrArtifactClientResponse  = fmt.Errorf("%w: invalid response", ErrArtifactClient)
+	ErrArtifactClient                = errors.New("Mnemon Artifact client")
+	ErrArtifactClientTransport       = fmt.Errorf("%w: transport unavailable", ErrArtifactClient)
+	ErrArtifactClientResponse        = fmt.Errorf("%w: invalid response", ErrArtifactClient)
+	ErrArtifactClientManifestInvalid = fmt.Errorf("%w: manifest invalid", ErrArtifactClientResponse)
+	ErrArtifactClientDigestMismatch  = fmt.Errorf("%w: digest mismatch", ErrArtifactClientResponse)
 )
 
 // ArtifactRemoteFailure is the complete, diagnostic-free failure vocabulary
@@ -88,9 +90,11 @@ func (client *ArtifactClient) GetManifest(ctx context.Context, source model.Peer
 		return Manifest{}, err
 	}
 	manifest, ok := response.Payload().(Manifest)
-	if response.Type() != ArtifactFrameManifest || !ok ||
-		!validArtifactClientManifest(request, manifest) {
+	if response.Type() != ArtifactFrameManifest || !ok {
 		return Manifest{}, ErrArtifactClientResponse
+	}
+	if err := validateArtifactClientManifest(request, manifest); err != nil {
+		return Manifest{}, err
 	}
 	return manifest, nil
 }
@@ -107,8 +111,11 @@ func (client *ArtifactClient) GetBlock(ctx context.Context, source model.PeerID,
 		return Block{}, err
 	}
 	block, ok := response.Payload().(Block)
-	if response.Type() != ArtifactFrameBlock || !ok || !validArtifactClientBlock(request, block) {
+	if response.Type() != ArtifactFrameBlock || !ok {
 		return Block{}, ErrArtifactClientResponse
+	}
+	if err := validateArtifactClientBlock(request, block); err != nil {
+		return Block{}, err
 	}
 	return block, nil
 }
@@ -163,6 +170,19 @@ func (client *ArtifactClient) exchange(ctx context.Context, source model.PeerID,
 	}
 	response, release, err := readArtifactStreamFrame(stream, maxArtifactFrameBytes())
 	if err != nil {
+		switch request.(type) {
+		case GetManifest:
+			switch {
+			case errors.Is(err, errArtifactFrameManifestInvalid):
+				return ArtifactFrame{}, ErrArtifactClientManifestInvalid
+			case errors.Is(err, errArtifactFrameManifestDigestMismatch):
+				return ArtifactFrame{}, ErrArtifactClientDigestMismatch
+			}
+		case GetBlock:
+			if errors.Is(err, errArtifactFrameBlockDigestMismatch) {
+				return ArtifactFrame{}, ErrArtifactClientDigestMismatch
+			}
+		}
 		return ArtifactFrame{}, artifactClientReadFailure(ctx, err)
 	}
 	defer release()
@@ -178,15 +198,19 @@ func (client *ArtifactClient) exchange(ctx context.Context, source model.PeerID,
 	switch typed := request.(type) {
 	case GetManifest:
 		manifest, ok := response.Payload().(Manifest)
-		if response.Type() != ArtifactFrameManifest || !ok ||
-			!validArtifactClientManifest(typed, manifest) {
+		if response.Type() != ArtifactFrameManifest || !ok {
 			return ArtifactFrame{}, ErrArtifactClientResponse
+		}
+		if err := validateArtifactClientManifest(typed, manifest); err != nil {
+			return ArtifactFrame{}, err
 		}
 	case GetBlock:
 		block, ok := response.Payload().(Block)
-		if response.Type() != ArtifactFrameBlock || !ok ||
-			!validArtifactClientBlock(typed, block) {
+		if response.Type() != ArtifactFrameBlock || !ok {
 			return ArtifactFrame{}, ErrArtifactClientResponse
+		}
+		if err := validateArtifactClientBlock(typed, block); err != nil {
+			return ArtifactFrame{}, err
 		}
 	default:
 		return ArtifactFrame{}, fmt.Errorf("%w: request is not a client operation", ErrArtifactClient)
@@ -241,23 +265,39 @@ func writeArtifactClientFrame(stream network.Stream, frame ArtifactFrame) error 
 	return WriteArtifactFrame(stream, frame)
 }
 
-func validArtifactClientManifest(request GetManifest, response Manifest) bool {
-	if request.IsZero() || response.IsZero() || response.RootDigest() != request.RootDigest() ||
-		len(response.ManifestBytes()) == 0 || len(response.ManifestBytes()) > artifactManifestMaximum() {
-		return false
+func validateArtifactClientManifest(request GetManifest, response Manifest) error {
+	if request.IsZero() || response.IsZero() {
+		return ErrArtifactClientResponse
 	}
-	manifest, err := artifactdomain.ParseManifest(response.ManifestBytes())
-	return err == nil && manifest.RootDigest() == request.RootDigest() &&
-		manifest.RootDigest() == response.RootDigest() &&
-		manifest.ManifestDigest() == response.ManifestDigest() &&
-		manifest.TotalBytes() <= artifactdomain.MaxTotalBytes
+	manifestBytes := response.ManifestBytes()
+	if len(manifestBytes) == 0 || len(manifestBytes) > artifactManifestMaximum() {
+		return ErrArtifactClientManifestInvalid
+	}
+	manifest, err := artifactdomain.ParseManifest(manifestBytes)
+	if err != nil || manifest.TotalBytes() > artifactdomain.MaxTotalBytes {
+		return ErrArtifactClientManifestInvalid
+	}
+	if response.RootDigest() != request.RootDigest() ||
+		manifest.RootDigest() != request.RootDigest() ||
+		manifest.RootDigest() != response.RootDigest() ||
+		manifest.ManifestDigest() != response.ManifestDigest() ||
+		model.Sum(manifestBytes) != response.ManifestDigest() {
+		return ErrArtifactClientDigestMismatch
+	}
+	return nil
 }
 
-func validArtifactClientBlock(request GetBlock, response Block) bool {
-	bytes := response.BlockBytes()
-	return !request.IsZero() && !response.IsZero() &&
-		response.BlockDigest() == request.BlockDigest() && len(bytes) > 0 &&
-		len(bytes) <= artifactBlockMaximum() && model.Sum(bytes) == request.BlockDigest()
+func validateArtifactClientBlock(request GetBlock, response Block) error {
+	if request.IsZero() || response.IsZero() {
+		return ErrArtifactClientResponse
+	}
+	blockBytes := response.BlockBytes()
+	if len(blockBytes) == 0 || len(blockBytes) > artifactBlockMaximum() ||
+		response.BlockDigest() != request.BlockDigest() ||
+		model.Sum(blockBytes) != response.BlockDigest() {
+		return ErrArtifactClientDigestMismatch
+	}
+	return nil
 }
 
 func validArtifactRemoteFailure(failure ArtifactProtocolError) bool {
@@ -269,7 +309,8 @@ func validArtifactRemoteFailure(failure ArtifactProtocolError) bool {
 		return failure.RetryAfter() > 0 &&
 			failure.RetryAfter() <= HermeticLimits().ArtifactRequestTimeout
 	}
-	return failure.Code() == ArtifactErrorNotAuthorized && failure.RetryAfter() == 0
+	return (failure.Code() == ArtifactErrorNotAuthorized || failure.Code() == ArtifactErrorCorrupt) &&
+		failure.RetryAfter() == 0
 }
 
 func artifactClientTransportFailure(ctx context.Context) error {
