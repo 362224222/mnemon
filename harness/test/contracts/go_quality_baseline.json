@@ -7272,7 +7272,7 @@
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/cmd/mnemond/main.go",
       "path": "harness/cmd/mnemond/main.go",
-      "ceiling": 507
+      "ceiling": 419
     },
     {
       "rule": "production_file_lines",
@@ -7362,7 +7362,7 @@
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/cli/setup.go",
       "path": "harness/internal/cli/setup.go",
-      "ceiling": 741
+      "ceiling": 715
     },
     {
       "rule": "production_file_lines",
@@ -7434,7 +7434,7 @@
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/node/controller.go",
       "path": "harness/internal/node/controller.go",
-      "ceiling": 504
+      "ceiling": 489
     },
     {
       "rule": "production_file_lines",

@@ -26,22 +26,6 @@ type wallClock struct{}
 
 func (wallClock) Now() time.Time { return time.Now() }
 
-// InstallationVerifier is supplied by the outer composition layer. Node does
-// not import Host integration; it only requires a current Profile to remain
-// bound to its canonical Node bundle and Host projection.
-type InstallationVerifier interface {
-	Verify(model.Profile) error
-}
-
-type InstallationVerifierFunc func(model.Profile) error
-
-func (verify InstallationVerifierFunc) Verify(profile model.Profile) error {
-	if verify == nil {
-		return errors.New("managed installation verifier is unavailable")
-	}
-	return verify(profile)
-}
-
 type ControllerOptions struct {
 	NodeState string
 	Workspace string
@@ -87,7 +71,7 @@ type Controller struct {
 	beforeAcceptErr   error
 }
 
-func NewController(options ControllerOptions) (*Controller, error) {
+func NewController(ctx context.Context, options ControllerOptions) (*Controller, error) {
 	if options.Clock == nil {
 		options.Clock = wallClock{}
 	}
@@ -105,7 +89,7 @@ func NewController(options ControllerOptions) (*Controller, error) {
 		return nil, errors.New("mnemond controller Store is outside its owner-only Node state")
 	}
 	assetRevision := options.Profile.ActiveAssetRevision()
-	if err := options.Install.Verify(options.Profile); err != nil {
+	if err := options.Install.Verify(ctx, options.Profile); err != nil {
 		return nil, fmt.Errorf("mnemond controller managed installation: %w", err)
 	}
 	cas, err := artifact.NewCAS(filepath.Join(options.NodeState, "objects", "sha256"))
@@ -184,7 +168,7 @@ func NewController(options ControllerOptions) (*Controller, error) {
 		if !sameControllerProfile(current.Profile, options.Profile) {
 			activationIssue = "durable_authority_mismatch"
 		} else if current.Node.ActiveAssetRevision() != assetRevision ||
-			options.Install.Verify(options.Profile) != nil {
+			options.Install.Verify(statusCtx, options.Profile) != nil {
 			activationIssue = "asset_revision_mismatch"
 		}
 		worker := agent.WakeWorkerSnapshot{Healthy: true}
@@ -306,7 +290,8 @@ func (gate controllerActivationGate) Check(ctx context.Context, profile model.Pr
 	if ctx == nil || ctx.Err() != nil {
 		return localapi.NewAPIError(localapi.CodeInternal, "managed activation check was cancelled")
 	}
-	if gate.install == nil || !sameControllerProfile(profile, gate.expected) || gate.install.Verify(profile) != nil {
+	if gate.install == nil || !sameControllerProfile(profile, gate.expected) ||
+		gate.install.Verify(ctx, profile) != nil {
 		return localapi.NewAPIError(localapi.CodeAssetRevisionMismatch,
 			"managed Node assets or Host projection differ from the active Profile")
 	}

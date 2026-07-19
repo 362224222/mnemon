@@ -454,32 +454,6 @@ func (app *setupApp) upgradeActiveLeased(ctx context.Context, workspace, nodeSta
 		Status: "ready"}, nil
 }
 
-func (app *setupApp) ensureOptions(workspace, nodeState, revision string,
-	bundle assets.Bundle, host assets.Host, client setupAuthorityClient,
-) (node.DaemonEnsureOptions, *localapi.APIError) {
-	install := node.InstallationVerifierFunc(func(profile model.Profile) error {
-		if profile.Host() != model.HostKind(host) ||
-			profile.ActiveAssetRevision() != revision {
-			return errors.New("active Profile differs from setup authority")
-		}
-		return app.deps.verifyProjection(workspace, nodeState, host, bundle)
-	})
-	preflight, err := app.deps.newPreflight(node.DaemonPreflightOptions{
-		Workspace: workspace, NodeState: nodeState, AssetRevision: revision, Install: install,
-	})
-	if err != nil {
-		return node.DaemonEnsureOptions{}, setupAssetsError()
-	}
-	gate, err := app.deps.newHookGate(workspace, host)
-	if err != nil {
-		return node.DaemonEnsureOptions{}, setupAssetsError()
-	}
-	launcher := &lazyAgentDaemonLauncher{workspace: workspace, nodeState: nodeState,
-		currentExecutable: app.deps.currentExecutable, newLauncher: app.deps.newLauncher}
-	return node.DaemonEnsureOptions{NodeState: nodeState, AssetRevision: revision,
-		Probe: client, Preflight: preflight, Launcher: launcher, ReadyGate: gate}, nil
-}
-
 func (app *setupApp) observeAuthority(ctx context.Context, nodeState string,
 	companion setupCompanion,
 ) setupAuthorityObservation {

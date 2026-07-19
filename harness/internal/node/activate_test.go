@@ -67,7 +67,9 @@ func TestActivateFailureLeavesProfileDisabled(t *testing.T) {
 		AssetRevision:     bundle.Manifest().AssetRevision,
 		ExpectedUpdatedAt: provisioned.Profile.UpdatedAt(),
 		Clock:             controllerTestClock{provisioned.Profile.UpdatedAt().Add(time.Second)},
-		Install:           InstallationVerifierFunc(func(model.Profile) error { return failed })}
+		Install: InstallationVerifierFunc(func(context.Context, model.Profile) error {
+			return failed
+		})}
 	if _, err := Activate(context.Background(), options); !errors.Is(err, ErrActivate) || !errors.Is(err, failed) {
 		t.Fatalf("Activate() error = %v", err)
 	}

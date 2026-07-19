@@ -132,7 +132,7 @@ func openDaemon(ctx context.Context, options DaemonOptions,
 			return fail(fmt.Errorf("%w: managed wake adapter factory returned no adapter", ErrDaemonAuthority))
 		}
 	}
-	controller, err := NewController(ControllerOptions{NodeState: nodeState, Workspace: workspace,
+	controller, err := NewController(ctx, ControllerOptions{NodeState: nodeState, Workspace: workspace,
 		Store: st, Profile: authority.authority.Profile, Signer: identity.PublicationSigner(), Clock: options.Clock,
 		Install: options.Install, WakeAdapter: wakeAdapter, BeforeAccept: beforeAccept})
 	if err != nil {

@@ -128,7 +128,7 @@ func TestDaemonPreflightRejectsWriterAndDurableAuthorityDrift(t *testing.T) {
 		t.Cleanup(func() { _ = os.RemoveAll(renamed) })
 		fixture.workspace = renamed
 		fixture.nodeState = filepath.Join(renamed, ".mnemon", "harness", "node")
-		install := InstallationVerifierFunc(func(model.Profile) error { return nil })
+		install := InstallationVerifierFunc(func(context.Context, model.Profile) error { return nil })
 		preflight := newFixtureDaemonPreflight(t, fixture, install, fixture.revision)
 		if err := preflight.Verify(context.Background()); !errors.Is(err, ErrDaemonAuthority) {
 			t.Fatalf("Verify() error = %v", err)
@@ -175,7 +175,7 @@ func TestDaemonPreflightVerifiesInstallationAndReleasesWriterAuthority(t *testin
 	t.Run("installation drift", func(t *testing.T) {
 		fixture := newDaemonFixture(t, true)
 		drift := errors.New("projection drift")
-		install := InstallationVerifierFunc(func(profile model.Profile) error {
+		install := InstallationVerifierFunc(func(_ context.Context, profile model.Profile) error {
 			if profile.ID() != model.TeamworkProfileID() {
 				t.Fatalf("Verify profile = %#v", profile)
 			}
@@ -191,13 +191,13 @@ func TestDaemonPreflightVerifiesInstallationAndReleasesWriterAuthority(t *testin
 	t.Run("success", func(t *testing.T) {
 		fixture := newDaemonFixture(t, true)
 		called := false
-		install := InstallationVerifierFunc(func(profile model.Profile) error {
+		install := InstallationVerifierFunc(func(ctx context.Context, profile model.Profile) error {
 			called = true
 			if profile.ID() != model.TeamworkProfileID() || profile.WorkspaceRoot() != fixture.workspace ||
 				profile.ActiveAssetRevision() != fixture.revision || !profile.Enabled() {
 				t.Fatalf("Verify profile = %#v", profile)
 			}
-			return fixture.install.Verify(profile)
+			return fixture.install.Verify(ctx, profile)
 		})
 		preflight := newFixtureDaemonPreflight(t, fixture, install, fixture.revision)
 		if err := preflight.Verify(context.Background()); err != nil {
@@ -212,7 +212,7 @@ func TestDaemonPreflightVerifiesInstallationAndReleasesWriterAuthority(t *testin
 	t.Run("cancelled", func(t *testing.T) {
 		fixture := newDaemonFixture(t, true)
 		called := false
-		install := InstallationVerifierFunc(func(model.Profile) error {
+		install := InstallationVerifierFunc(func(context.Context, model.Profile) error {
 			called = true
 			return nil
 		})
@@ -227,15 +227,13 @@ func TestDaemonPreflightVerifiesInstallationAndReleasesWriterAuthority(t *testin
 		}
 	})
 
-	t.Run("stalled installation verifier", func(t *testing.T) {
+	t.Run("installation verifier cancellation releases Store writer", func(t *testing.T) {
 		fixture := newDaemonFixture(t, true)
 		started := make(chan struct{})
-		release := make(chan struct{})
-		defer close(release)
-		install := InstallationVerifierFunc(func(model.Profile) error {
+		install := InstallationVerifierFunc(func(ctx context.Context, _ model.Profile) error {
 			close(started)
-			<-release
-			return nil
+			<-ctx.Done()
+			return ctx.Err()
 		})
 		preflight := newFixtureDaemonPreflight(t, fixture, install, fixture.revision)
 		ctx, cancel := context.WithCancel(context.Background())
@@ -252,7 +250,7 @@ func TestDaemonPreflightVerifiesInstallationAndReleasesWriterAuthority(t *testin
 		select {
 		case err = <-result:
 		case <-time.After(2 * time.Second):
-			t.Fatal("cancelled installation verifier retained preflight")
+			t.Fatal("cancellable installation verifier retained preflight")
 		}
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("Verify(stalled installation) error = %v", err)

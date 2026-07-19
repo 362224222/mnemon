@@ -78,34 +78,13 @@ func (preflight *DaemonPreflight) Verify(ctx context.Context) (err error) {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("%w: %w", ErrDaemonPreflight, err)
 	}
-	if err := verifyDaemonInstallation(ctx, preflight.install, authority.authority.Profile); err != nil {
+	if err := preflight.install.Verify(ctx, authority.authority.Profile); err != nil {
 		return fmt.Errorf("%w: managed installation: %w", ErrDaemonPreflight, err)
 	}
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("%w: %w", ErrDaemonPreflight, err)
 	}
 	return nil
-}
-
-// Installation verification is filesystem-facing and supplied by the outer
-// composition layer. Keep that boundary behind the same hard ensure context:
-// cancellation releases the temporary Store writer even if a defective or
-// stalled verifier has not returned yet. The verifier receives immutable
-// Profile data and no Store handle, so it cannot retain writer authority.
-func verifyDaemonInstallation(ctx context.Context, install InstallationVerifier,
-	profile model.Profile,
-) error {
-	if ctx == nil || install == nil {
-		return errors.New("managed installation verifier is unavailable")
-	}
-	result := make(chan error, 1)
-	go func() { result <- install.Verify(profile) }()
-	select {
-	case err := <-result:
-		return err
-	case <-ctx.Done():
-		return ctx.Err()
-	}
 }
 
 type existingDaemonAuthority struct {

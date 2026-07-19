@@ -100,7 +100,7 @@ func Activate(ctx context.Context, options ActivateOptions) (result ActivateResu
 	if err != nil {
 		return ActivateResult{}, fmt.Errorf("%w: desired Profile: %v", ErrActivate, err)
 	}
-	if err := options.Install.Verify(desired); err != nil {
+	if err := options.Install.Verify(ctx, desired); err != nil {
 		return ActivateResult{}, fmt.Errorf("%w: managed installation: %w", ErrActivate, err)
 	}
 	if !authority.Profile.UpdatedAt().Equal(expectedUpdatedAt) {

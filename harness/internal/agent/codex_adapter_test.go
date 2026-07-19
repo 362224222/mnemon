@@ -626,7 +626,7 @@ func TestCodexWakeAdapterValidatesClosedConstructionAndPerRunAuthority(t *testin
 	preCanceled := base
 	preCanceled.Starter = preCanceledStarter
 	var preCanceledProjectionCalls atomic.Int32
-	preCanceled.VerifyProjection = func() error {
+	preCanceled.VerifyProjection = func(context.Context) error {
 		preCanceledProjectionCalls.Add(1)
 		return nil
 	}
@@ -650,7 +650,7 @@ func TestCodexWakeAdapterValidatesClosedConstructionAndPerRunAuthority(t *testin
 	canceledAfterProjection := base
 	canceledAfterProjection.Starter = canceledAfterProjectionStarter
 	afterProjectionContext, cancelAfterProjection := context.WithCancel(context.Background())
-	canceledAfterProjection.VerifyProjection = func() error {
+	canceledAfterProjection.VerifyProjection = func(context.Context) error {
 		cancelAfterProjection()
 		return nil
 	}
@@ -670,7 +670,7 @@ func TestCodexWakeAdapterValidatesClosedConstructionAndPerRunAuthority(t *testin
 	projectionStarter := newFakeCodexStarter(fakeCodexScenario{}, nil)
 	projectionFailure := base
 	projectionFailure.Starter = projectionStarter
-	projectionFailure.VerifyProjection = func() error { return errors.New("private projection drift") }
+	projectionFailure.VerifyProjection = func(context.Context) error { return errors.New("private projection drift") }
 	adapter, err = NewCodexWakeAdapter(projectionFailure)
 	if err != nil {
 		t.Fatal(err)
@@ -1343,7 +1343,7 @@ func lastIndexOf(values []string, want string) int {
 
 type testCodexCallbacks struct{}
 
-func passCodexProjection() error { return nil }
+func passCodexProjection(context.Context) error { return nil }
 
 func codexResultWasNotStarted(result CodexWakeResult) bool {
 	return result.ProcessExited && !result.At.IsZero() && result.LaunchAt.IsZero() &&

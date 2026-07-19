@@ -147,7 +147,7 @@ type CodexWakeAdapterOptions struct {
 	Identity         CodexProcessIdentityProbe
 	Clock            CodexAdapterClock
 	Terminator       CodexProcessTerminator
-	VerifyProjection func() error
+	VerifyProjection func(context.Context) error
 	InterruptGrace   time.Duration
 	ExitGrace        time.Duration
 	SignalGrace      time.Duration
@@ -161,7 +161,7 @@ type CodexWakeAdapter struct {
 	identity         CodexProcessIdentityProbe
 	clock            CodexAdapterClock
 	terminator       CodexProcessTerminator
-	verifyProjection func() error
+	verifyProjection func(context.Context) error
 	interruptGrace   time.Duration
 	exitGrace        time.Duration
 	signalGrace      time.Duration
@@ -246,7 +246,7 @@ func (adapter *CodexWakeAdapter) Run(ctx context.Context,
 	// This gate is deliberately inside every Run and immediately before
 	// process creation. Daemon-start readiness is not sufficient: projected
 	// Hook/Skill assets may drift while mnemond remains alive.
-	if err := adapter.verifyProjection(); err != nil {
+	if err := adapter.verifyProjection(ctx); err != nil {
 		return adapter.settleNotStarted(result, codexAdapterError("verify projection", err))
 	}
 	if err := ctx.Err(); err != nil {

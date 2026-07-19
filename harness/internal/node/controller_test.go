@@ -93,7 +93,7 @@ func TestControllerServesOwnerOnlyManagedRoutesFromOneStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	controller, err := NewController(ControllerOptions{NodeState: nodeState, Workspace: workspace,
+	controller, err := NewController(context.Background(), ControllerOptions{NodeState: nodeState, Workspace: workspace,
 		Store: st, Profile: enabled, Signer: signer, Clock: controllerTestClock{enabled.UpdatedAt()},
 		Install: testInstallationVerifier(workspace, nodeState, bundle)})
 	if err != nil {
@@ -651,7 +651,7 @@ func newControllerWithTestWakeWorker(t *testing.T, fixture daemonFixture,
 	if err != nil {
 		t.Fatal(err)
 	}
-	controller, err := NewController(ControllerOptions{NodeState: fixture.nodeState,
+	controller, err := NewController(context.Background(), ControllerOptions{NodeState: fixture.nodeState,
 		Workspace: fixture.workspace, Store: authority.store, Profile: authority.authority.Profile,
 		Signer: authority.identity.PublicationSigner(), Clock: controllerTestClock{fixture.profile.UpdatedAt()},
 		Install: fixture.install, wakeWorker: worker})
@@ -680,7 +680,7 @@ func waitControllerHealth(t *testing.T, client *localapi.Client, status string) 
 }
 
 func testInstallationVerifier(workspace, nodeState string, bundle assets.Bundle) InstallationVerifier {
-	return InstallationVerifierFunc(func(profile model.Profile) error {
+	return InstallationVerifierFunc(func(_ context.Context, profile model.Profile) error {
 		host := assets.Host(profile.Host())
 		if !host.Valid() || profile.ActiveAssetRevision() != bundle.Manifest().AssetRevision {
 			return errors.New("Profile does not select the canonical Host assets")

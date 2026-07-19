@@ -61,12 +61,20 @@ func ensureAgentDaemonWith(ctx context.Context, workspace, nodeState string,
 			"canonical managed assets are unavailable")
 	}
 	revision := bundle.Manifest().AssetRevision
-	install := node.InstallationVerifierFunc(func(profile model.Profile) error {
+	install := node.InstallationVerifierFunc(func(verifyCtx context.Context,
+		profile model.Profile,
+	) error {
+		if verifyCtx == nil {
+			return errors.New("managed installation verification context is unavailable")
+		}
 		host := assets.Host(profile.Host())
 		if !host.Valid() || profile.ActiveAssetRevision() != revision {
 			return errors.New("active Profile differs from the canonical managed assets")
 		}
-		return integration.VerifyHostProjection(workspace, nodeState, host, bundle)
+		if err := integration.VerifyHostProjection(workspace, nodeState, host, bundle); err != nil {
+			return err
+		}
+		return verifyCtx.Err()
 	})
 	preflight, err := dependencies.newPreflight(node.DaemonPreflightOptions{
 		Workspace: workspace, NodeState: nodeState, AssetRevision: revision, Install: install,

@@ -88,7 +88,7 @@
       "path": "harness/cmd/mnemond",
       "component": "agent",
       "risk": "medium",
-      "evidence": "harness/cmd/mnemond/main.go",
+      "evidence": "harness/cmd/mnemond/managed_runtime.go",
       "owner": "harness/cmd/mnemond + harness/internal/node",
       "removal_checkpoint": "7R"
     },
@@ -98,7 +98,7 @@
       "path": "harness/cmd/mnemond",
       "component": "assets",
       "risk": "medium",
-      "evidence": "harness/cmd/mnemond/main.go",
+      "evidence": "harness/cmd/mnemond/managed_runtime.go",
       "owner": "harness/cmd/mnemond + harness/internal/integration",
       "removal_checkpoint": "7R"
     },
@@ -161,16 +161,6 @@
       "evidence": "harness/internal/peer/gater.go::(*ConnectionGater).shutdown",
       "owner": "harness/internal/peer",
       "removal_checkpoint": "7B"
-    },
-    {
-      "rule": "goroutine_ownership",
-      "identity": "goroutine_ownership:daemon-installation-verifier",
-      "path": "harness/internal/node/preflight.go",
-      "symbol": "verifyDaemonInstallation",
-      "risk": "high",
-      "evidence": "harness/internal/node/preflight.go::verifyDaemonInstallation",
-      "owner": "harness/internal/node",
-      "removal_checkpoint": "7R"
     },
     {
       "rule": "lock_callback_io",
