@@ -414,6 +414,28 @@ func TestGCBatchesDurableQueueByItemsAndBytes(t *testing.T) {
 	})
 }
 
+func TestGCStagingScanSeparatesPassesWithAConstantClock(t *testing.T) {
+	now := gcTestNow()
+	store := newGCTestStore()
+	store.sweepDone = true
+	worker := gcNewWorker(t, store, gcOpenCAS(t), GCOptions{
+		Clock: func() time.Time { return now },
+	})
+	if err := worker.RunCycle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := worker.RunCycle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.sweepSpecs) != 2 ||
+		store.sweepSpecs[0].Current.Generation != 1 ||
+		store.sweepSpecs[1].Current.Generation != 2 ||
+		store.sweepSpecs[0].Current.Cutoff != now.Add(-time.Hour) ||
+		store.sweepSpecs[1].Current.Cutoff != now.Add(-time.Hour) {
+		t.Fatalf("constant-clock staging passes = %#v", store.sweepSpecs)
+	}
+}
+
 func TestGCPrunesOnlyOldRecognizableTempsAndSweepsThroughStore(t *testing.T) {
 	cas := gcOpenCAS(t)
 	now := gcTestNow()
@@ -442,7 +464,8 @@ func TestGCPrunesOnlyOldRecognizableTempsAndSweepsThroughStore(t *testing.T) {
 	if _, err := os.Lstat(newTemp); err != nil {
 		t.Fatalf("fresh temp was removed: %v", err)
 	}
-	if len(store.sweepSpecs) != 1 || store.sweepSpecs[0].Cutoff != now.Add(-time.Hour) ||
+	if len(store.sweepSpecs) != 1 || store.sweepSpecs[0].Current.Generation != 1 ||
+		store.sweepSpecs[0].Current.Cutoff != now.Add(-time.Hour) ||
 		store.sweepSpecs[0].MaxItems != gcDefaultMaxExamined ||
 		store.sweepSpecs[0].MaxBytes != gcStagingCycleBytes {
 		t.Fatalf("staging sweep spec = %#v", store.sweepSpecs)
@@ -716,8 +739,22 @@ func TestGCRejectsInvalidOptionsClockAndStoreResults(t *testing.T) {
 		t.Fatalf("invalid Store result = (%v, %#v)", err, worker.Snapshot())
 	}
 
-	zeroRandom := bytes.NewReader(make([]byte, 32*gcRandomTokenAttempts))
 	now := gcTestNow()
+	badGeneration := newGCTestStore()
+	badGeneration.stagingPresent = true
+	badGeneration.stagingScan = GCStagingScanCursor{
+		Generation: gcMaximumStagingPass + 1,
+		Cutoff:     now.Add(-time.Hour),
+	}
+	worker = gcNewWorker(t, badGeneration, gcOpenCAS(t), GCOptions{
+		Clock: func() time.Time { return now },
+	})
+	if err := worker.RunCycle(context.Background()); !errors.Is(err, ErrGCInvariant) ||
+		worker.Snapshot().FatalCode != GCFatalStoreInvariant {
+		t.Fatalf("invalid staging generation = (%v, %#v)", err, worker.Snapshot())
+	}
+
+	zeroRandom := bytes.NewReader(make([]byte, 32*gcRandomTokenAttempts))
 	zeroCAS := gcOpenCAS(t)
 	gcPutOld(t, zeroCAS, []byte("zero token candidate"), now)
 	worker = gcNewWorker(t, newGCTestStore(), zeroCAS, GCOptions{
@@ -745,17 +782,20 @@ func TestGCRejectsInvalidOptionsClockAndStoreResults(t *testing.T) {
 type gcTestStore struct {
 	mu sync.Mutex
 
-	scan        GCScanCursor
-	scanPresent bool
-	protected   map[model.Digest]bool
-	queue       map[string]GCQueueItem
-	completed   map[string]gcTestCompletion
+	scan           GCScanCursor
+	scanPresent    bool
+	stagingScan    GCStagingScanCursor
+	stagingPresent bool
+	protected      map[model.Digest]bool
+	queue          map[string]GCQueueItem
+	completed      map[string]gcTestCompletion
 
 	prepareSpecs  []GCPrepareSpec
 	sweepSpecs    []GCStagingSweepSpec
 	markSpecs     []GCQueueTransitionSpec
 	completeSpecs []GCQueueTransitionSpec
 	sweepResult   GCStagingSweepResult
+	sweepDone     bool
 
 	prepareResponseLoss  bool
 	markResponseLoss     bool
@@ -836,6 +876,23 @@ func (store *gcTestStore) PrepareArtifactGC(ctx context.Context, spec GCPrepareS
 	return result, nil
 }
 
+func (store *gcTestStore) OpenArtifactGCStagingScan(ctx context.Context,
+	spec GCScanSpec,
+) (GCStagingScanCursor, error) {
+	if err := ctx.Err(); err != nil {
+		return GCStagingScanCursor{}, err
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if !store.stagingPresent || store.stagingScan.Done {
+		generation := store.stagingScan.Generation + 1
+		store.stagingScan = GCStagingScanCursor{Generation: generation,
+			Cutoff: spec.InitializeCutoff}
+		store.stagingPresent = true
+	}
+	return store.stagingScan, nil
+}
+
 func (store *gcTestStore) SweepArtifactGCStaging(ctx context.Context,
 	spec GCStagingSweepSpec,
 ) (GCStagingSweepResult, error) {
@@ -869,8 +926,22 @@ func (store *gcTestStore) SweepArtifactGCStaging(ctx context.Context,
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	if !store.stagingPresent || store.stagingScan != spec.Current {
+		return GCStagingSweepResult{}, fmt.Errorf("%w: staging scan cursor changed",
+			ErrGCStoreInvariant)
+	}
 	store.sweepSpecs = append(store.sweepSpecs, spec)
-	return store.sweepResult, nil
+	result := store.sweepResult
+	if result.Next.Generation == 0 {
+		result.Next = spec.Current
+		if result.Examined > 0 {
+			result.Next.After, _ = model.ParseDigest("sha256:" +
+				"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
+		}
+	}
+	result.Next.Done = store.sweepDone
+	store.stagingScan = result.Next
+	return result, nil
 }
 
 func (store *gcTestStore) ListArtifactGCQueue(ctx context.Context, limit int) ([]GCQueueItem, error) {

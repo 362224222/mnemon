@@ -24,7 +24,9 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 		"table": strings.Fields(
 			"node profiles operations operation_artifact_roots events works work_members work_derivations " +
 				"agent_handlings agent_runs artifact_roots artifact_blocks artifact_root_blocks " +
-				"artifact_pins artifact_provenance channels channel_members channel_conflicts " +
+				"artifact_pins artifact_provenance artifact_gc_scan artifact_gc_staging_scan artifact_gc_staging_receipt artifact_gc_queue artifact_gc_prepare_receipt " +
+				"artifact_gc_completion_receipts artifact_gc_delete_guard artifact_gc_block_delete_guard artifact_gc_completion_guard " +
+				"channels channel_members channel_conflicts " +
 				"enrollment_grants enrollment_grant_uses enrollment_receipts channel_join_reservations channel_leave_requests " +
 				"peer_bindings gossip_publications peer_deliveries peer_inbox peer_inbox_pressure peer_inbox_node_pressure publication_conflicts " +
 				"origin_quarantines peer_cursors peer_repairs publication_epochs peer_pull_acks",
@@ -38,17 +40,22 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 		"trigger": strings.Fields(
 			"node_identity_immutable node_no_delete profiles_identity_immutable profiles_no_delete operations_identity_immutable " +
 				"operations_capture_checkpoint_immutable operations_terminal_immutable operations_no_delete " +
-				"operation_artifact_roots_open_capture_insert operation_artifact_roots_no_update operation_artifact_roots_no_delete " +
+				"operation_artifact_roots_open_capture_insert operation_artifact_roots_gc_queue_insert operation_artifact_roots_no_update operation_artifact_roots_no_delete " +
 				"events_no_update events_no_delete events_local_origin_insert events_publication_member_insert " +
 				"works_deadline_immutable works_event_scope_insert works_event_scope_update " +
 				"work_members_no_update work_members_no_delete work_derivations_scope_insert " +
 				"work_derivations_no_update work_derivations_no_delete agent_handlings_identity_immutable " +
 				"agent_runs_claim_snapshot_immutable " +
 				"agent_runs_attachment_identity_immutable agent_runs_evidence_once artifact_roots_content_immutable " +
-				"artifact_roots_no_unverify artifact_roots_verified_at_immutable artifact_blocks_no_update artifact_root_blocks_no_update " +
-				"artifact_root_blocks_verified_insert artifact_root_blocks_verified_delete " +
-				"artifact_root_blocks_provenance_delete artifact_pins_identity_immutable artifact_pins_expiry_managed artifact_pins_inbox_owner_insert artifact_provenance_event_insert " +
-				"artifact_provenance_no_update artifact_provenance_no_delete channels_nonterminal_limit_insert " +
+				"artifact_roots_no_unverify artifact_roots_verified_at_immutable artifact_roots_gc_queue_insert artifact_roots_gc_delete " +
+				"artifact_blocks_no_update artifact_blocks_gc_queue_insert artifact_blocks_gc_delete artifact_root_blocks_no_update " +
+				"artifact_root_blocks_gc_queue_insert artifact_root_blocks_gc_delete artifact_root_blocks_verified_insert artifact_root_blocks_verified_delete " +
+				"artifact_root_blocks_provenance_delete artifact_pins_identity_immutable artifact_pins_expiry_managed artifact_pins_gc_queue_insert artifact_pins_gc_queue_update artifact_pins_inbox_owner_insert artifact_provenance_event_insert " +
+				"artifact_provenance_gc_queue_insert artifact_provenance_no_update artifact_provenance_no_delete " +
+				"artifact_gc_scan_no_delete artifact_gc_scan_cutoff_immutable artifact_gc_scan_cursor_monotonic " +
+				"artifact_gc_staging_scan_no_delete artifact_gc_staging_scan_cutoff_immutable artifact_gc_staging_scan_cursor_monotonic " +
+				"artifact_gc_completion_receipt_insert artifact_gc_completion_receipt_no_update " +
+				"artifact_gc_queue_owner_insert artifact_gc_queue_identity_immutable artifact_gc_queue_transition artifact_gc_queue_no_delete channels_nonterminal_limit_insert " +
 				"channels_descriptor_immutable channels_no_delete channels_roster_head_monotonic " +
 				"channels_terminal_status_update channels_conflicted_status_update channels_leaving_status_update " +
 				"channel_members_no_update channel_members_no_delete channel_conflicts_no_update " +
@@ -111,8 +118,8 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 	if !reflect.DeepEqual(actual, expected) {
 		t.Fatalf("schema object set mismatch\nactual: %#v\nexpected: %#v", actual, expected)
 	}
-	if got := len(actual["table"]) + len(actual["index"]) + len(actual["trigger"]); got != 187 {
-		t.Fatalf("explicit object count = %d, want 187", got)
+	if got := len(actual["table"]) + len(actual["index"]) + len(actual["trigger"]); got != 218 {
+		t.Fatalf("explicit object count = %d, want 218", got)
 	}
 }
 
@@ -1238,8 +1245,8 @@ func TestSchemaSealsVerifiedArtifactRootBlockMap(t *testing.T) {
 		t.Fatalf("verified block map append error = %v", err)
 	}
 	if _, err := st.db.Exec(`DELETE FROM artifact_root_blocks WHERE root_digest=? AND ordinal=0`,
-		root.String()); err == nil || !strings.Contains(err.Error(), "block map is sealed") {
-		t.Fatalf("verified block map delete error = %v", err)
+		root.String()); err == nil || !strings.Contains(err.Error(), "safe GC authority") {
+		t.Fatalf("verified block map direct delete error = %v", err)
 	}
 	if _, err := st.db.Exec(`UPDATE artifact_roots SET verified_at=? WHERE root_digest=?`,
 		"2026-07-16T13:00:02.000000000Z", root.String()); err == nil ||
@@ -1251,8 +1258,15 @@ func TestSchemaSealsVerifiedArtifactRootBlockMap(t *testing.T) {
 		root.String()).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("sealed block map count = %d, err=%v", count, err)
 	}
-	if _, err := st.db.Exec(`DELETE FROM artifact_roots WHERE root_digest=?`, root.String()); err != nil {
-		t.Fatalf("whole unprovenanced root cleanup: %v", err)
+	if _, err := st.db.Exec(`DELETE FROM artifact_roots WHERE root_digest=?`, root.String()); err == nil ||
+		!strings.Contains(err.Error(), "safe GC authority") {
+		t.Fatalf("whole unprovenanced root direct delete error = %v", err)
+	}
+	gcAt := time.Date(2026, 7, 16, 15, 0, 0, 0, time.UTC)
+	gcSpec := artifactGCStoreStagingSpec(t, st, gcAt.Add(-time.Hour), 2,
+		artifactGCMaxSweepBytes, gcAt)
+	if result, err := st.SweepArtifactGCStaging(context.Background(), gcSpec); err != nil || result.Swept != 1 {
+		t.Fatalf("whole unprovenanced root GC cleanup = (%#v, %v)", result, err)
 	}
 	if err := st.db.QueryRow(`SELECT COUNT(*) FROM artifact_root_blocks WHERE root_digest=?`,
 		root.String()).Scan(&count); err != nil || count != 0 {

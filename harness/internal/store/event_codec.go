@@ -135,6 +135,9 @@ func insertArtifactOwnerPin(ctx context.Context, tx *sql.Tx, root model.Digest, 
 	if _, err := requireVerifiedArtifactRoot(ctx, tx, root); err != nil {
 		return err
 	}
+	if err := requireArtifactGCQueueAvailableForRoot(ctx, tx, root); err != nil {
+		return err
+	}
 	_, err := tx.ExecContext(ctx, `INSERT INTO artifact_pins(root_digest,owner_kind,owner_id,created_at)
 		VALUES(?,?,?,?)`, root.String(), kind, owner, storeTime(at))
 	if err != nil {

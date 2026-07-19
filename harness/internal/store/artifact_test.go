@@ -314,7 +314,7 @@ func TestArtifactPinsAndLocalReplicaProvenance(t *testing.T) {
 		t.Fatalf("provenance delete error = %v", err)
 	}
 	if _, err := st.db.Exec("DELETE FROM artifact_roots WHERE root_digest = ?", root.RootDigest.String()); err == nil ||
-		!strings.Contains(err.Error(), "FOREIGN KEY constraint failed") {
+		!strings.Contains(err.Error(), "safe GC authority") {
 		t.Fatalf("accepted Artifact root delete error = %v", err)
 	}
 }

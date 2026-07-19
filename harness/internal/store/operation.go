@@ -155,6 +155,9 @@ func (s *Store) CheckpointOperationCapture(ctx context.Context, id model.Operati
 		return false, err
 	}
 	for _, captured := range captureRoots {
+		if err := requireArtifactGCQueueAvailableForRoot(ctx, tx, captured.RootDigest); err != nil {
+			return false, err
+		}
 		root, err := requireVerifiedArtifactRoot(ctx, tx, captured.RootDigest)
 		if err != nil || root.ManifestDigest != captured.ManifestDigest {
 			return false, fmt.Errorf("checkpoint operation capture: verified root/manifest mismatch: %w", ErrCaptureMismatch)

@@ -162,6 +162,21 @@ WHEN NOT EXISTS (
 )
 BEGIN SELECT RAISE(ABORT, 'operation artifact root projection is sealed'); END;
 
+CREATE TRIGGER operation_artifact_roots_gc_queue_insert
+BEFORE INSERT ON operation_artifact_roots
+WHEN EXISTS (
+  SELECT 1 FROM artifact_roots r
+  JOIN artifact_gc_queue q
+    ON q.digest = 'sha256:' || lower(hex(r.manifest_digest))
+  WHERE r.root_digest = NEW.root_digest
+)
+OR EXISTS (
+  SELECT 1 FROM artifact_root_blocks m
+  JOIN artifact_gc_queue q ON q.digest = m.block_digest
+  WHERE m.root_digest = NEW.root_digest
+)
+BEGIN SELECT RAISE(ABORT, 'Artifact GC queue owns operation root'); END;
+
 CREATE TRIGGER operation_artifact_roots_no_update
 BEFORE UPDATE ON operation_artifact_roots
 BEGIN SELECT RAISE(ABORT, 'operation artifact root projection is immutable'); END;
@@ -633,6 +648,14 @@ BEFORE UPDATE OF verified_at ON artifact_roots
 WHEN OLD.verified_at IS NOT NULL AND NEW.verified_at IS NOT OLD.verified_at
 BEGIN SELECT RAISE(ABORT, 'artifact verification time is immutable'); END;
 
+CREATE TRIGGER artifact_roots_gc_queue_insert
+BEFORE INSERT ON artifact_roots
+WHEN EXISTS (
+  SELECT 1 FROM artifact_gc_queue
+  WHERE digest = 'sha256:' || lower(hex(NEW.manifest_digest))
+)
+BEGIN SELECT RAISE(ABORT, 'Artifact GC queue owns manifest'); END;
+
 CREATE TABLE artifact_blocks (
   block_digest       TEXT PRIMARY KEY,
   size_bytes         INTEGER NOT NULL CHECK (size_bytes >= 0),
@@ -647,6 +670,30 @@ CREATE TABLE artifact_blocks (
 
 CREATE TRIGGER artifact_blocks_no_update BEFORE UPDATE ON artifact_blocks
 BEGIN SELECT RAISE(ABORT, 'artifact blocks are immutable'); END;
+
+CREATE TRIGGER artifact_blocks_gc_queue_insert
+BEFORE INSERT ON artifact_blocks
+WHEN EXISTS (
+  SELECT 1 FROM artifact_gc_queue WHERE digest = NEW.block_digest
+)
+BEGIN SELECT RAISE(ABORT, 'Artifact GC queue owns block'); END;
+
+CREATE TRIGGER artifact_blocks_gc_delete
+BEFORE DELETE ON artifact_blocks
+WHEN (
+  NOT EXISTS (
+    SELECT 1 FROM artifact_gc_queue
+    WHERE digest = OLD.block_digest AND state = 'queued'
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM artifact_gc_block_delete_guard
+    WHERE block_digest = OLD.block_digest
+  )
+)
+OR EXISTS (
+  SELECT 1 FROM artifact_root_blocks WHERE block_digest = OLD.block_digest
+)
+BEGIN SELECT RAISE(ABORT, 'Artifact block deletion requires safe GC queue'); END;
 
 CREATE TABLE artifact_root_blocks (
   root_digest        TEXT NOT NULL REFERENCES artifact_roots(root_digest) ON DELETE CASCADE,
@@ -663,6 +710,20 @@ CREATE TABLE artifact_root_blocks (
 CREATE TRIGGER artifact_root_blocks_no_update BEFORE UPDATE ON artifact_root_blocks
 BEGIN SELECT RAISE(ABORT, 'artifact root block map is immutable'); END;
 
+CREATE TRIGGER artifact_root_blocks_gc_queue_insert
+BEFORE INSERT ON artifact_root_blocks
+WHEN EXISTS (
+  SELECT 1 FROM artifact_gc_queue
+  WHERE digest = NEW.block_digest
+)
+OR EXISTS (
+  SELECT 1 FROM artifact_roots r
+  JOIN artifact_gc_queue q
+    ON q.digest = 'sha256:' || lower(hex(r.manifest_digest))
+  WHERE r.root_digest = NEW.root_digest
+)
+BEGIN SELECT RAISE(ABORT, 'Artifact GC queue owns root map'); END;
+
 CREATE TRIGGER artifact_root_blocks_verified_insert
 BEFORE INSERT ON artifact_root_blocks
 WHEN EXISTS (
@@ -677,7 +738,40 @@ WHEN EXISTS (
   SELECT 1 FROM artifact_roots
   WHERE root_digest = OLD.root_digest AND state = 'verified'
 )
+AND NOT EXISTS (
+  SELECT 1 FROM artifact_gc_delete_guard
+  WHERE root_digest = OLD.root_digest
+)
 BEGIN SELECT RAISE(ABORT, 'verified artifact root block map is sealed'); END;
+
+CREATE TRIGGER artifact_root_blocks_gc_delete
+BEFORE DELETE ON artifact_root_blocks
+WHEN NOT EXISTS (
+  SELECT 1 FROM artifact_gc_delete_guard g
+  WHERE g.root_digest = OLD.root_digest
+    AND NOT EXISTS (
+      SELECT 1 FROM artifact_provenance p WHERE p.root_digest = OLD.root_digest
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM artifact_pins p
+      WHERE p.root_digest = OLD.root_digest
+        AND (p.expires_at IS NULL OR p.expires_at > g.authorized_at)
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM operation_artifact_roots r
+      JOIN operations o ON o.operation_id = r.operation_id
+      WHERE r.root_digest = OLD.root_digest
+        AND (
+          o.status IN ('started','committed')
+          OR (o.status = 'rejected' AND COALESCE(
+            strftime('%Y-%m-%dT%H:%M:%S', substr(o.finished_at,1,19) || 'Z', '+1 hour')
+              || substr(o.finished_at,20) > g.authorized_at,
+            1
+          ))
+        )
+    )
+)
+BEGIN SELECT RAISE(ABORT, 'Artifact root map deletion requires safe GC authority'); END;
 
 CREATE TRIGGER artifact_root_blocks_provenance_delete
 BEFORE DELETE ON artifact_root_blocks
@@ -737,6 +831,36 @@ WHEN OLD.owner_kind <> 'inbox' OR NEW.owner_kind <> 'inbox'
     AND NEW.expires_at < OLD.expires_at)
 BEGIN SELECT RAISE(ABORT, 'Artifact pin expiry cannot regress'); END;
 
+CREATE TRIGGER artifact_pins_gc_queue_insert
+BEFORE INSERT ON artifact_pins
+WHEN EXISTS (
+  SELECT 1 FROM artifact_roots r
+  JOIN artifact_gc_queue q
+    ON q.digest = 'sha256:' || lower(hex(r.manifest_digest))
+  WHERE r.root_digest = NEW.root_digest
+)
+OR EXISTS (
+  SELECT 1 FROM artifact_root_blocks m
+  JOIN artifact_gc_queue q ON q.digest = m.block_digest
+  WHERE m.root_digest = NEW.root_digest
+)
+BEGIN SELECT RAISE(ABORT, 'Artifact GC queue owns pin closure'); END;
+
+CREATE TRIGGER artifact_pins_gc_queue_update
+BEFORE UPDATE OF expires_at ON artifact_pins
+WHEN EXISTS (
+  SELECT 1 FROM artifact_roots r
+  JOIN artifact_gc_queue q
+    ON q.digest = 'sha256:' || lower(hex(r.manifest_digest))
+  WHERE r.root_digest = OLD.root_digest
+)
+OR EXISTS (
+  SELECT 1 FROM artifact_root_blocks m
+  JOIN artifact_gc_queue q ON q.digest = m.block_digest
+  WHERE m.root_digest = OLD.root_digest
+)
+BEGIN SELECT RAISE(ABORT, 'Artifact GC queue owns pin closure'); END;
+
 CREATE TABLE artifact_provenance (
   root_digest        TEXT NOT NULL REFERENCES artifact_roots(root_digest),
   producer_event_id  TEXT NOT NULL REFERENCES events(event_id),
@@ -773,11 +897,375 @@ OR (
 )
 BEGIN SELECT RAISE(ABORT, 'artifact producer event mismatch'); END;
 
+CREATE TRIGGER artifact_provenance_gc_queue_insert
+BEFORE INSERT ON artifact_provenance
+WHEN EXISTS (
+  SELECT 1 FROM artifact_roots r
+  JOIN artifact_gc_queue q
+    ON q.digest = 'sha256:' || lower(hex(r.manifest_digest))
+  WHERE r.root_digest = NEW.root_digest
+)
+OR EXISTS (
+  SELECT 1 FROM artifact_root_blocks m
+  JOIN artifact_gc_queue q ON q.digest = m.block_digest
+  WHERE m.root_digest = NEW.root_digest
+)
+BEGIN SELECT RAISE(ABORT, 'Artifact GC queue owns provenance closure'); END;
+
 CREATE TRIGGER artifact_provenance_no_update BEFORE UPDATE ON artifact_provenance
 BEGIN SELECT RAISE(ABORT, 'artifact provenance is immutable'); END;
 
 CREATE TRIGGER artifact_provenance_no_delete BEFORE DELETE ON artifact_provenance
 BEGIN SELECT RAISE(ABORT, 'artifact provenance is immutable'); END;
+
+-- Artifact collection owns a single durable filesystem scan, a bounded active
+-- queue, and bounded replay receipts. Digests and timestamps use the same
+-- canonical encodings as Artifact authority. Tokens are exact nonzero 256-bit
+-- identities and may never be reused by another queued digest.
+CREATE TABLE artifact_gc_scan (
+  singleton          INTEGER PRIMARY KEY CHECK (singleton = 1),
+  cutoff             TEXT NOT NULL CHECK (
+    typeof(cutoff) = 'text'
+    AND length(cutoff) = 30
+    AND cutoff GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]Z'
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(cutoff, 1, 19) || 'Z')) IS NOT NULL
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(cutoff, 1, 19) || 'Z')) = substr(cutoff, 1, 19)
+    AND cutoff BETWEEN '1677-09-21T00:12:43.145224192Z' AND '2262-04-11T23:47:16.854775807Z'
+  ),
+  after              TEXT NOT NULL CHECK (
+    after = '' OR (
+      length(after) = 71
+      AND substr(after, 1, 7) = 'sha256:'
+      AND substr(after, 8) NOT GLOB '*[^0-9a-f]*'
+    )
+  ),
+  done               INTEGER NOT NULL CHECK (done IN (0,1)),
+  updated_at         TEXT NOT NULL CHECK (
+    typeof(updated_at) = 'text'
+    AND length(updated_at) = 30
+    AND updated_at GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]Z'
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(updated_at, 1, 19) || 'Z')) IS NOT NULL
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(updated_at, 1, 19) || 'Z')) = substr(updated_at, 1, 19)
+    AND updated_at BETWEEN '1677-09-21T00:12:43.145224192Z' AND '2262-04-11T23:47:16.854775807Z'
+  ),
+  CHECK (cutoff <= updated_at)
+);
+
+CREATE TRIGGER artifact_gc_scan_no_delete BEFORE DELETE ON artifact_gc_scan
+BEGIN SELECT RAISE(ABORT, 'Artifact GC scan is durable'); END;
+
+CREATE TRIGGER artifact_gc_scan_cutoff_immutable
+BEFORE UPDATE OF cutoff ON artifact_gc_scan
+WHEN OLD.done = 0 AND NEW.cutoff <> OLD.cutoff
+BEGIN SELECT RAISE(ABORT, 'active Artifact GC cutoff is immutable'); END;
+
+CREATE TRIGGER artifact_gc_scan_cursor_monotonic
+BEFORE UPDATE OF cutoff, after, done, updated_at ON artifact_gc_scan
+WHEN (
+  OLD.done = 0 AND (
+    NEW.cutoff <> OLD.cutoff
+    OR (OLD.after <> '' AND NEW.after < OLD.after)
+    OR NEW.done < OLD.done
+    OR NEW.updated_at < OLD.updated_at
+  )
+) OR (
+  OLD.done = 1 AND (
+    NEW.after <> ''
+    OR NEW.done <> 0
+    OR NEW.updated_at < OLD.updated_at
+  )
+)
+BEGIN SELECT RAISE(ABORT, 'Artifact GC scan cursor cannot regress'); END;
+
+CREATE TABLE artifact_gc_staging_scan (
+  singleton          INTEGER PRIMARY KEY CHECK (singleton = 1),
+  generation         INTEGER NOT NULL CHECK (
+    typeof(generation) = 'integer' AND generation BETWEEN 1 AND 9223372036854775807
+  ),
+  cutoff             TEXT NOT NULL CHECK (
+    typeof(cutoff) = 'text' AND length(cutoff) = 30
+    AND cutoff GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]Z'
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(cutoff, 1, 19) || 'Z')) IS NOT NULL
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(cutoff, 1, 19) || 'Z')) = substr(cutoff, 1, 19)
+    AND cutoff BETWEEN '1677-09-21T00:12:43.145224192Z' AND '2262-04-11T23:47:16.854775807Z'
+  ),
+  after              TEXT NOT NULL CHECK (
+    after = '' OR (
+      length(after) = 71 AND substr(after, 1, 7) = 'sha256:'
+      AND substr(after, 8) NOT GLOB '*[^0-9a-f]*'
+    )
+  ),
+  done               INTEGER NOT NULL CHECK (done IN (0,1)),
+  updated_at         TEXT NOT NULL CHECK (
+    typeof(updated_at) = 'text' AND length(updated_at) = 30
+    AND updated_at GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]Z'
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(updated_at, 1, 19) || 'Z')) IS NOT NULL
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(updated_at, 1, 19) || 'Z')) = substr(updated_at, 1, 19)
+    AND updated_at BETWEEN '1677-09-21T00:12:43.145224192Z' AND '2262-04-11T23:47:16.854775807Z'
+  ),
+  CHECK (cutoff <= updated_at)
+);
+
+CREATE TRIGGER artifact_gc_staging_scan_no_delete BEFORE DELETE ON artifact_gc_staging_scan
+BEGIN SELECT RAISE(ABORT, 'Artifact GC staging scan is durable'); END;
+
+CREATE TRIGGER artifact_gc_staging_scan_cutoff_immutable
+BEFORE UPDATE OF cutoff ON artifact_gc_staging_scan
+WHEN OLD.done = 0 AND NEW.cutoff <> OLD.cutoff
+BEGIN SELECT RAISE(ABORT, 'active Artifact GC staging cutoff is immutable'); END;
+
+CREATE TRIGGER artifact_gc_staging_scan_cursor_monotonic
+BEFORE UPDATE OF generation, after, done, updated_at ON artifact_gc_staging_scan
+WHEN (
+  OLD.done = 0 AND (
+    NEW.generation <> OLD.generation
+    OR (OLD.after <> '' AND NEW.after < OLD.after)
+    OR NEW.done < OLD.done
+    OR NEW.updated_at < OLD.updated_at
+  )
+) OR (
+  OLD.done = 1 AND (
+    OLD.generation = 9223372036854775807
+    OR NEW.generation <> OLD.generation + 1
+    OR NEW.after <> ''
+    OR NEW.done <> 0
+    OR NEW.updated_at < OLD.updated_at
+  )
+)
+BEGIN SELECT RAISE(ABORT, 'Artifact GC staging cursor cannot regress'); END;
+
+CREATE TABLE artifact_gc_staging_receipt (
+  singleton          INTEGER PRIMARY KEY CHECK (singleton = 1),
+  request            BLOB NOT NULL CHECK (typeof(request) = 'blob' AND length(request) BETWEEN 1 AND 1024),
+  next_generation    INTEGER NOT NULL CHECK (
+    typeof(next_generation) = 'integer' AND next_generation BETWEEN 1 AND 9223372036854775807
+  ),
+  next_cutoff        TEXT NOT NULL CHECK (
+    typeof(next_cutoff) = 'text' AND length(next_cutoff) = 30
+    AND next_cutoff GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]Z'
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(next_cutoff, 1, 19) || 'Z')) IS NOT NULL
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(next_cutoff, 1, 19) || 'Z')) = substr(next_cutoff, 1, 19)
+    AND next_cutoff BETWEEN '1677-09-21T00:12:43.145224192Z' AND '2262-04-11T23:47:16.854775807Z'
+  ),
+  next_after         TEXT NOT NULL CHECK (
+    next_after = '' OR (
+      length(next_after) = 71 AND substr(next_after, 1, 7) = 'sha256:'
+      AND substr(next_after, 8) NOT GLOB '*[^0-9a-f]*'
+    )
+  ),
+  next_done          INTEGER NOT NULL CHECK (next_done IN (0,1)),
+  examined           INTEGER NOT NULL CHECK (examined >= 0 AND examined <= 256),
+  swept              INTEGER NOT NULL CHECK (swept >= 0 AND swept <= examined),
+  swept_bytes        INTEGER NOT NULL CHECK (swept_bytes >= 0 AND swept_bytes <= 268435456),
+  created_at         TEXT NOT NULL CHECK (
+    typeof(created_at) = 'text' AND length(created_at) = 30
+    AND created_at GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]Z'
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(created_at, 1, 19) || 'Z')) IS NOT NULL
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(created_at, 1, 19) || 'Z')) = substr(created_at, 1, 19)
+    AND created_at BETWEEN '1677-09-21T00:12:43.145224192Z' AND '2262-04-11T23:47:16.854775807Z'
+  ),
+  CHECK (next_cutoff <= created_at)
+);
+
+CREATE TABLE artifact_gc_queue (
+  digest             TEXT PRIMARY KEY CHECK (
+    typeof(digest) = 'text'
+    AND length(digest) = 71
+    AND substr(digest, 1, 7) = 'sha256:'
+    AND substr(digest, 8) NOT GLOB '*[^0-9a-f]*'
+  ),
+  token              BLOB NOT NULL UNIQUE CHECK (
+    typeof(token) = 'blob' AND length(token) = 32 AND token <> zeroblob(32)
+  ),
+  state              TEXT NOT NULL CHECK (state IN ('queued','renamed')),
+  size_bytes         INTEGER NOT NULL CHECK (size_bytes >= 0 AND size_bytes <= 4194304),
+  modified_at        TEXT NOT NULL CHECK (
+    typeof(modified_at) = 'text' AND length(modified_at) = 30
+    AND modified_at GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]Z'
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(modified_at, 1, 19) || 'Z')) IS NOT NULL
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(modified_at, 1, 19) || 'Z')) = substr(modified_at, 1, 19)
+    AND modified_at BETWEEN '1677-09-21T00:12:43.145224192Z' AND '2262-04-11T23:47:16.854775807Z'
+  ),
+  queued_at          TEXT NOT NULL CHECK (
+    typeof(queued_at) = 'text' AND length(queued_at) = 30
+    AND queued_at GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]Z'
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(queued_at, 1, 19) || 'Z')) IS NOT NULL
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(queued_at, 1, 19) || 'Z')) = substr(queued_at, 1, 19)
+    AND queued_at BETWEEN '1677-09-21T00:12:43.145224192Z' AND '2262-04-11T23:47:16.854775807Z'
+  ),
+  renamed_at         TEXT CHECK (
+    renamed_at IS NULL OR (
+      typeof(renamed_at) = 'text' AND length(renamed_at) = 30
+      AND renamed_at GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]Z'
+      AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(renamed_at, 1, 19) || 'Z')) IS NOT NULL
+      AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(renamed_at, 1, 19) || 'Z')) = substr(renamed_at, 1, 19)
+      AND renamed_at BETWEEN '1677-09-21T00:12:43.145224192Z' AND '2262-04-11T23:47:16.854775807Z'
+    )
+  ),
+  updated_at         TEXT NOT NULL CHECK (
+    typeof(updated_at) = 'text' AND length(updated_at) = 30
+    AND updated_at GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]Z'
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(updated_at, 1, 19) || 'Z')) IS NOT NULL
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(updated_at, 1, 19) || 'Z')) = substr(updated_at, 1, 19)
+    AND updated_at BETWEEN '1677-09-21T00:12:43.145224192Z' AND '2262-04-11T23:47:16.854775807Z'
+  ),
+  CHECK (modified_at < queued_at),
+  CHECK (
+    (state = 'queued' AND renamed_at IS NULL AND updated_at = queued_at)
+    OR (state = 'renamed' AND renamed_at IS NOT NULL
+      AND renamed_at >= queued_at AND updated_at = renamed_at)
+  )
+);
+
+CREATE TRIGGER artifact_gc_queue_identity_immutable
+BEFORE UPDATE OF digest, token, size_bytes, modified_at, queued_at ON artifact_gc_queue
+WHEN NEW.digest <> OLD.digest OR NEW.token <> OLD.token
+  OR NEW.size_bytes <> OLD.size_bytes OR NEW.modified_at <> OLD.modified_at
+  OR NEW.queued_at <> OLD.queued_at
+BEGIN SELECT RAISE(ABORT, 'Artifact GC queue identity is immutable'); END;
+
+CREATE TRIGGER artifact_gc_queue_transition
+BEFORE UPDATE OF state, renamed_at, updated_at ON artifact_gc_queue
+WHEN OLD.state <> 'queued' OR NEW.state <> 'renamed'
+  OR NEW.renamed_at IS NULL OR NEW.updated_at <> NEW.renamed_at
+BEGIN SELECT RAISE(ABORT, 'Artifact GC queue transition is closed'); END;
+
+CREATE TABLE artifact_gc_prepare_receipt (
+  singleton          INTEGER PRIMARY KEY CHECK (singleton = 1),
+  request            BLOB NOT NULL CHECK (typeof(request) = 'blob' AND length(request) BETWEEN 1 AND 65536),
+  next_cutoff        TEXT NOT NULL CHECK (
+    typeof(next_cutoff) = 'text' AND length(next_cutoff) = 30
+    AND next_cutoff GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]Z'
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(next_cutoff, 1, 19) || 'Z')) IS NOT NULL
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(next_cutoff, 1, 19) || 'Z')) = substr(next_cutoff, 1, 19)
+    AND next_cutoff BETWEEN '1677-09-21T00:12:43.145224192Z' AND '2262-04-11T23:47:16.854775807Z'
+  ),
+  next_after         TEXT NOT NULL CHECK (
+    next_after = '' OR (
+      length(next_after) = 71 AND substr(next_after, 1, 7) = 'sha256:'
+      AND substr(next_after, 8) NOT GLOB '*[^0-9a-f]*'
+    )
+  ),
+  next_done          INTEGER NOT NULL CHECK (next_done IN (0,1)),
+  examined           INTEGER NOT NULL CHECK (examined >= 0 AND examined <= 256),
+  protected          INTEGER NOT NULL CHECK (protected >= 0 AND protected <= examined),
+  queued             INTEGER NOT NULL CHECK (queued >= 0 AND queued <= examined),
+  queued_bytes       INTEGER NOT NULL CHECK (queued_bytes >= 0 AND queued_bytes <= 268435456),
+  created_at         TEXT NOT NULL CHECK (
+    typeof(created_at) = 'text' AND length(created_at) = 30
+    AND created_at GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]Z'
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(created_at, 1, 19) || 'Z')) IS NOT NULL
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(created_at, 1, 19) || 'Z')) = substr(created_at, 1, 19)
+    AND created_at BETWEEN '1677-09-21T00:12:43.145224192Z' AND '2262-04-11T23:47:16.854775807Z'
+  ),
+  CHECK (protected + queued = examined),
+  CHECK (next_cutoff <= created_at)
+);
+
+CREATE TABLE artifact_gc_completion_receipts (
+  completion_seq     INTEGER PRIMARY KEY AUTOINCREMENT CHECK (
+    typeof(completion_seq) = 'integer' AND completion_seq > 0
+  ),
+  digest             TEXT NOT NULL CHECK (
+    typeof(digest) = 'text' AND length(digest) = 71
+    AND substr(digest, 1, 7) = 'sha256:'
+    AND substr(digest, 8) NOT GLOB '*[^0-9a-f]*'
+  ),
+  token              BLOB NOT NULL CHECK (
+    typeof(token) = 'blob' AND length(token) = 32 AND token <> zeroblob(32)
+  ),
+  completed_at       TEXT NOT NULL CHECK (
+    typeof(completed_at) = 'text' AND length(completed_at) = 30
+    AND completed_at GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]Z'
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(completed_at, 1, 19) || 'Z')) IS NOT NULL
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(completed_at, 1, 19) || 'Z')) = substr(completed_at, 1, 19)
+    AND completed_at BETWEEN '1677-09-21T00:12:43.145224192Z' AND '2262-04-11T23:47:16.854775807Z'
+  ),
+  UNIQUE (digest, token),
+  UNIQUE (token)
+);
+
+CREATE TRIGGER artifact_gc_completion_receipt_insert
+BEFORE INSERT ON artifact_gc_completion_receipts
+WHEN NOT EXISTS (
+  SELECT 1 FROM artifact_gc_queue q
+  WHERE q.digest = NEW.digest AND q.token = NEW.token AND q.state = 'renamed'
+    AND q.renamed_at <= NEW.completed_at
+)
+BEGIN SELECT RAISE(ABORT, 'Artifact GC completion receipt requires renamed queue'); END;
+
+CREATE TRIGGER artifact_gc_completion_receipt_no_update
+BEFORE UPDATE ON artifact_gc_completion_receipts
+BEGIN SELECT RAISE(ABORT, 'Artifact GC completion receipt is immutable'); END;
+
+CREATE TRIGGER artifact_gc_queue_owner_insert
+BEFORE INSERT ON artifact_gc_queue
+WHEN EXISTS (
+  SELECT 1 FROM artifact_roots r
+  WHERE NEW.digest = 'sha256:' || lower(hex(r.manifest_digest))
+)
+OR EXISTS (
+  SELECT 1 FROM artifact_root_blocks m WHERE m.block_digest = NEW.digest
+)
+OR EXISTS (
+  SELECT 1 FROM artifact_gc_completion_receipts r WHERE r.token = NEW.token
+)
+BEGIN SELECT RAISE(ABORT, 'Artifact GC candidate still has durable ownership'); END;
+
+CREATE TABLE artifact_gc_delete_guard (
+  root_digest        TEXT PRIMARY KEY,
+  authorized_at      TEXT NOT NULL
+);
+
+CREATE TABLE artifact_gc_block_delete_guard (
+  block_digest       TEXT PRIMARY KEY,
+  authorized_at      TEXT NOT NULL
+);
+
+CREATE TABLE artifact_gc_completion_guard (
+  digest             TEXT PRIMARY KEY,
+  token              BLOB NOT NULL,
+  completed_at       TEXT NOT NULL,
+  UNIQUE (token)
+);
+
+CREATE TRIGGER artifact_gc_queue_no_delete
+BEFORE DELETE ON artifact_gc_queue
+WHEN NOT EXISTS (
+  SELECT 1 FROM artifact_gc_completion_guard g
+  WHERE g.digest = OLD.digest AND g.token = OLD.token
+    AND g.completed_at >= OLD.renamed_at AND OLD.state = 'renamed'
+)
+BEGIN SELECT RAISE(ABORT, 'Artifact GC queue completion authority is required'); END;
+
+CREATE TRIGGER artifact_roots_gc_delete
+BEFORE DELETE ON artifact_roots
+WHEN NOT EXISTS (
+  SELECT 1 FROM artifact_gc_delete_guard g
+  WHERE g.root_digest = OLD.root_digest
+    AND NOT EXISTS (
+      SELECT 1 FROM artifact_provenance p WHERE p.root_digest = OLD.root_digest
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM artifact_pins p
+      WHERE p.root_digest = OLD.root_digest
+        AND (p.expires_at IS NULL OR p.expires_at > g.authorized_at)
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM operation_artifact_roots r
+      JOIN operations o ON o.operation_id = r.operation_id
+      WHERE r.root_digest = OLD.root_digest
+        AND (
+          o.status IN ('started','committed')
+          OR (o.status = 'rejected' AND COALESCE(
+            strftime('%Y-%m-%dT%H:%M:%S', substr(o.finished_at,1,19) || 'Z', '+1 hour')
+              || substr(o.finished_at,20) > g.authorized_at,
+            1
+          ))
+        )
+    )
+)
+BEGIN SELECT RAISE(ABORT, 'Artifact root deletion requires safe GC authority'); END;
 
 CREATE TABLE channels (
   channel_id         TEXT PRIMARY KEY,

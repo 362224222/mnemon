@@ -54,6 +54,12 @@ func (s *Store) CheckpointVerifiedArtifactRoot(ctx context.Context,
 		return ArtifactRootCheckpoint{}, fmt.Errorf("checkpoint Artifact root: begin: %w", err)
 	}
 	defer tx.Rollback()
+	if err := requireArtifactGCDigestNotQueued(ctx, tx, root.ManifestDigest); err != nil {
+		return ArtifactRootCheckpoint{}, err
+	}
+	if err := requireArtifactGCQueueAvailableForRoot(ctx, tx, root.RootDigest); err != nil {
+		return ArtifactRootCheckpoint{}, err
+	}
 
 	existing, state, err := readArtifactRoot(ctx, tx, root.RootDigest)
 	if err == nil {
@@ -224,6 +230,9 @@ func insertEventArtifactPin(ctx context.Context, tx *sql.Tx, root model.Digest,
 	if _, err := requireVerifiedArtifactRoot(ctx, tx, root); err != nil {
 		return false, err
 	}
+	if err := requireArtifactGCQueueAvailableForRoot(ctx, tx, root); err != nil {
+		return false, err
+	}
 	if _, _, _, _, _, err := readEventArtifactRole(ctx, tx, event, root); err != nil {
 		return false, err
 	}
@@ -259,6 +268,9 @@ func insertArtifactProvenance(ctx context.Context, tx *sql.Tx,
 	}
 	verifiedRoot, err := requireVerifiedArtifactRoot(ctx, tx, provenance.RootDigest())
 	if err != nil {
+		return false, err
+	}
+	if err := requireArtifactGCQueueAvailableForRoot(ctx, tx, provenance.RootDigest()); err != nil {
 		return false, err
 	}
 	role, source, origin, epoch, actor, err := readEventArtifactRole(ctx, tx,

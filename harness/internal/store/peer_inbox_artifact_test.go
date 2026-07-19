@@ -801,6 +801,7 @@ func TestPeerInboxArtifactReadyRequiresSealedClosureAndOwnsPins(t *testing.T) {
 		t.Run("incomplete sealed map", func(t *testing.T) {
 			fixture, claim, _, _ := newPeerInboxArtifactClosureClaim(t, "artifact-ready-incomplete", true)
 			mustExec(t, fixture.store, `DROP TRIGGER artifact_root_blocks_verified_delete`)
+			mustExec(t, fixture.store, `DROP TRIGGER artifact_root_blocks_gc_delete`)
 			mustExec(t, fixture.store, `DELETE FROM artifact_root_blocks`)
 			_, err := fixture.store.MarkPeerInboxArtifactReady(context.Background(),
 				MarkPeerInboxArtifactReadySpec{Fence: claim.Fence(), At: fixture.at.Add(2 * time.Second)})
@@ -948,6 +949,7 @@ func TestReadPeerInboxArtifactRootClosesCacheProbe(t *testing.T) {
 		t.Fatalf("expired probe error = %v", err)
 	}
 
+	mustExec(t, fixture.store, `DROP TRIGGER artifact_root_blocks_gc_delete`)
 	mustExec(t, fixture.store, `DELETE FROM artifact_root_blocks WHERE root_digest=?`, rootB.RootDigest.String())
 	if _, _, err := fixture.store.ReadPeerInboxArtifactRoot(context.Background(),
 		ReadPeerInboxArtifactRootSpec{Fence: claim.Fence(), RootDigest: rootB.RootDigest,

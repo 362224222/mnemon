@@ -72,6 +72,9 @@ func (s *Store) CheckpointVerifiedArtifactClosure(ctx context.Context,
 		return VerifiedArtifactClosureCheckpoint{}, fmt.Errorf("checkpoint Artifact closure: begin: %w", err)
 	}
 	defer tx.Rollback()
+	if err := requireArtifactGCQueueAvailableForClosure(ctx, tx, closure); err != nil {
+		return VerifiedArtifactClosureCheckpoint{}, err
+	}
 
 	replayed := true
 	durableBlocks := make([]VerifiedArtifactBlock, len(closure.Blocks))

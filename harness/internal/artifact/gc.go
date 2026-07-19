@@ -31,6 +31,7 @@ const (
 	gcMaximumBytes        = MaxTotalBytes
 	gcMaximumTemps        = 256
 	gcMaximumQueue        = 256
+	gcMaximumStagingPass  = uint64(1<<63 - 1)
 	gcRandomTokenAttempts = 4
 )
 
@@ -84,8 +85,20 @@ type GCPrepareResult struct {
 	QueuedBytes uint64
 }
 
+// GCStagingScanCursor is the Store-owned restart point for one frozen staging
+// metadata scan. Generation distinguishes two passes that begin with the same
+// cutoff while a trusted clock is constant; without it, an exact response-loss
+// receipt for the prior pass could be mistaken for the first page of the next
+// pass.
+type GCStagingScanCursor struct {
+	Generation uint64
+	Cutoff     time.Time
+	After      model.Digest
+	Done       bool
+}
+
 type GCStagingSweepSpec struct {
-	Cutoff   time.Time
+	Current  GCStagingScanCursor
 	MaxItems int
 	MaxBytes uint64
 	At       time.Time
@@ -95,6 +108,7 @@ type GCStagingSweepSpec struct {
 // failed, expired, accepted, or otherwise protected staging belongs entirely
 // to the Store transaction.
 type GCStagingSweepResult struct {
+	Next       GCStagingScanCursor
 	Examined   int
 	Swept      int
 	SweptBytes uint64
@@ -144,6 +158,7 @@ type GCQueueTransitionResult struct {
 type GCStore interface {
 	OpenArtifactGCScan(context.Context, GCScanSpec) (GCScanCursor, error)
 	PrepareArtifactGC(context.Context, GCPrepareSpec) (GCPrepareResult, error)
+	OpenArtifactGCStagingScan(context.Context, GCScanSpec) (GCStagingScanCursor, error)
 	SweepArtifactGCStaging(context.Context, GCStagingSweepSpec) (GCStagingSweepResult, error)
 	ListArtifactGCQueue(context.Context, int) ([]GCQueueItem, error)
 	GetArtifactGCQueue(context.Context, GCQueueIdentity) (GCQueueItem, bool, error)
@@ -489,8 +504,19 @@ func (worker *GCWorker) runCycle(ctx context.Context) error {
 	if remainingExamined == 0 {
 		return nil
 	}
+	stagingCursor, err := worker.store.OpenArtifactGCStagingScan(ctx,
+		GCScanSpec{InitializeCutoff: stagingCutoff, At: now})
+	if err != nil {
+		if gcContextCancellation(err, ctx) {
+			return ctx.Err()
+		}
+		return worker.storeFailure("open durable staging scan", err)
+	}
+	if err := validateGCStagingScanCursor(stagingCursor, stagingCutoff, false); err != nil {
+		return gcFatal(GCFatalStoreInvariant, "validate durable staging scan", err)
+	}
 	swept, err := worker.store.SweepArtifactGCStaging(ctx, GCStagingSweepSpec{
-		Cutoff: stagingCutoff, MaxItems: remainingExamined, MaxBytes: gcStagingCycleBytes, At: now,
+		Current: stagingCursor, MaxItems: remainingExamined, MaxBytes: gcStagingCycleBytes, At: now,
 	})
 	if err != nil {
 		if gcContextCancellation(err, ctx) {
@@ -498,7 +524,8 @@ func (worker *GCWorker) runCycle(ctx context.Context) error {
 		}
 		return worker.storeFailure("sweep unaccepted staging", err)
 	}
-	if err := validateGCStagingSweep(swept, remainingExamined, gcStagingCycleBytes); err != nil {
+	if err := validateGCStagingSweep(swept, stagingCursor, remainingExamined,
+		gcStagingCycleBytes); err != nil {
 		return gcFatal(GCFatalStoreInvariant, "validate staging sweep result", err)
 	}
 	worker.mu.Lock()
@@ -1031,9 +1058,28 @@ func validateGCPrepareResult(result GCPrepareResult, current GCScanCursor,
 	return nil
 }
 
-func validateGCStagingSweep(result GCStagingSweepResult, maxItems int, maxBytes uint64) error {
+func validateGCStagingScanCursor(cursor GCStagingScanCursor, maximumCutoff time.Time,
+	allowDone bool,
+) error {
+	cutoff, err := canonicalGCTime(cursor.Cutoff)
+	if err != nil || cutoff != cursor.Cutoff || cutoff.After(maximumCutoff) ||
+		cursor.Generation == 0 || cursor.Generation > gcMaximumStagingPass ||
+		(!allowDone && cursor.Done) {
+		return errors.New("noncanonical or invalid durable staging scan cursor")
+	}
+	return nil
+}
+
+func validateGCStagingSweep(result GCStagingSweepResult, current GCStagingScanCursor,
+	maxItems int, maxBytes uint64,
+) error {
 	if result.Examined < 0 || result.Examined > maxItems || result.Swept < 0 ||
-		result.Swept > result.Examined || result.SweptBytes > maxBytes {
+		result.Swept > result.Examined || result.SweptBytes > maxBytes ||
+		result.Next.Generation != current.Generation || result.Next.Cutoff != current.Cutoff ||
+		(!current.After.IsZero() && (result.Next.After.IsZero() ||
+			result.Next.After.String() < current.After.String())) ||
+		(result.Examined == 0 && result.Next.After != current.After) ||
+		(result.Examined > 0 && result.Next.After == current.After) {
 		return errors.New("invalid bounded staging sweep result")
 	}
 	return nil

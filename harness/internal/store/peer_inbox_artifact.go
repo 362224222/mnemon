@@ -507,6 +507,9 @@ func (s *Store) StagePeerInboxArtifactClosure(ctx context.Context,
 		return PeerInboxArtifactStage{}, fmt.Errorf("%w: staged roots differ from immutable Inbox roots",
 			ErrPeerInboxArtifactInput)
 	}
+	if err := requireArtifactGCQueueAvailableForClosure(ctx, tx, closure); err != nil {
+		return PeerInboxArtifactStage{}, err
+	}
 
 	replayed := true
 	for _, block := range closure.Blocks {
@@ -734,6 +737,11 @@ func (s *Store) MarkPeerInboxArtifactReady(ctx context.Context,
 	replay := row.status == model.InboxReady && row.attempts == spec.Fence.attempt &&
 		row.updatedAt.Equal(at) && !row.hasLease && row.diagnostic == ""
 	if replay {
+		for _, root := range row.requiredRoots {
+			if err := requireArtifactGCQueueAvailableForRoot(ctx, tx, root); err != nil {
+				return PeerInboxArtifactSettlement{}, err
+			}
+		}
 		if err := requirePeerInboxArtifactClosures(ctx, tx, row.requiredRoots, at); err != nil {
 			return PeerInboxArtifactSettlement{}, err
 		}
@@ -758,6 +766,11 @@ func (s *Store) MarkPeerInboxArtifactReady(ctx context.Context,
 	if err := requirePeerInboxArtifactStagePinsAt(ctx, tx, row.inboxID,
 		row.requiredRoots, at, time.Time{}, false); err != nil {
 		return PeerInboxArtifactSettlement{}, err
+	}
+	for _, root := range row.requiredRoots {
+		if err := requireArtifactGCQueueAvailableForRoot(ctx, tx, root); err != nil {
+			return PeerInboxArtifactSettlement{}, err
+		}
 	}
 	for _, root := range row.requiredRoots {
 		result, err := tx.ExecContext(ctx, `UPDATE artifact_roots SET state='verified',verified_at=?
@@ -1221,6 +1234,11 @@ func stagePeerInboxArtifactPins(ctx context.Context, tx *sql.Tx, inboxID model.I
 				ErrPeerInboxArtifactInvariant)
 		}
 	}
+	for _, root := range roots {
+		if err := requireArtifactGCQueueAvailableForRoot(ctx, tx, root); err != nil {
+			return false, err
+		}
+	}
 	if !currentExpiry.Before(expiresAt) {
 		return true, nil
 	}
@@ -1260,6 +1278,11 @@ func refreshExistingPeerInboxArtifactStagePins(ctx context.Context, tx *sql.Tx,
 		if pin.expiresAt != currentExpiry {
 			return false, fmt.Errorf("%w: settlement Inbox pin expiries differ",
 				ErrPeerInboxArtifactInvariant)
+		}
+	}
+	for _, root := range roots {
+		if err := requireArtifactGCQueueAvailableForRoot(ctx, tx, root); err != nil {
+			return false, err
 		}
 	}
 	if !currentExpiry.Before(expiresAt) {

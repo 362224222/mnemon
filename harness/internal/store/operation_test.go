@@ -343,9 +343,12 @@ func TestRejectedOperationRetainsProjectionWithoutArtifactForeignKey(t *testing.
 		fixture.operation.LeaseOwner(), fixture.now, result); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := fixture.store.db.Exec(`DELETE FROM artifact_roots WHERE root_digest=?`,
-		fixture.roots[0].RootDigest.String()); err != nil {
-		t.Fatalf("delete rejected unaccepted staging metadata: %v", err)
+	gcAt := fixture.now.Add(artifactGCStagingRetention)
+	gcSpec := artifactGCStoreStagingSpec(t, fixture.store, fixture.now.Add(time.Nanosecond),
+		2, artifactGCMaxSweepBytes, gcAt)
+	if result, err := fixture.store.SweepArtifactGCStaging(context.Background(),
+		gcSpec); err != nil || result.Swept != 1 {
+		t.Fatalf("collect rejected unaccepted staging metadata = (%#v, %v)", result, err)
 	}
 	var status string
 	var finishedAtIsSet int
