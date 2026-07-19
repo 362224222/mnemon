@@ -30,6 +30,12 @@ func (function artifactVerifierFunc) VerifyClosure(ctx context.Context, closure 
 	return function(ctx, closure)
 }
 
+type artifactCaptureLifecycleFunc func() (*artifact.CASLease, error)
+
+func (function artifactCaptureLifecycleFunc) AcquireUse() (*artifact.CASLease, error) {
+	return function()
+}
+
 type artifactCaptureStoreStub struct {
 	closure   func(context.Context, store.VerifiedArtifactClosure) (store.VerifiedArtifactClosureCheckpoint, error)
 	operation func(context.Context, model.OperationID, string, time.Time, model.JSON) (bool, error)
@@ -112,7 +118,7 @@ func TestArtifactCaptureCoordinatorVerifiesAndCheckpointsFreshClosureInOrder(t *
 		},
 	}
 	clock := &artifactCoordinatorClock{values: []time.Time{at.Add(time.Second), at.Add(2 * time.Second)}}
-	coordinator, err := NewArtifactCaptureCoordinator(capturer, verifier, stub, clock)
+	coordinator, err := NewArtifactCaptureCoordinator(capturer, verifier, cas, stub, clock)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,6 +139,172 @@ func TestArtifactCaptureCoordinatorVerifiesAndCheckpointsFreshClosureInOrder(t *
 		durable.Roots[0].ManifestDigest != result.Roots[0].ManifestDigest ||
 		!durable.Roots[0].CreatedAt.Equal(at) || !durable.Roots[0].VerifiedAt.Equal(at) {
 		t.Fatalf("Store closure projection = %#v", durable)
+	}
+}
+
+func TestArtifactCaptureCoordinatorHoldsLifecycleThroughOperationOwnershipCheckpoint(t *testing.T) {
+	at := time.Date(2026, 7, 16, 18, 30, 0, 0, time.UTC)
+	closure, cas, _ := artifactCoordinatorClosure(t, at)
+	operation := artifactCoordinatorStartedOperation(t, "lifecycle", at, at.Add(time.Minute), nil)
+	reservation := store.ManagedOperationReservation{Operation: operation, Acquired: true}
+	captureEntered, closureEntered, operationEntered := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	captureContinue, closureContinue, operationContinue := make(chan struct{}, 1), make(chan struct{}, 1), make(chan struct{}, 1)
+	defer artifactCoordinatorUnblock(captureContinue)
+	defer artifactCoordinatorUnblock(closureContinue)
+	defer artifactCoordinatorUnblock(operationContinue)
+
+	coordinator, err := NewArtifactCaptureCoordinator(
+		artifactCapturerFunc(func(context.Context, []string) (artifact.Closure, error) {
+			close(captureEntered)
+			<-captureContinue
+			return closure, nil
+		}), artifactVerifierFunc(cas.VerifyClosure), cas, &artifactCaptureStoreStub{
+			closure: func(context.Context, store.VerifiedArtifactClosure) (
+				store.VerifiedArtifactClosureCheckpoint, error,
+			) {
+				close(closureEntered)
+				<-closureContinue
+				return store.VerifiedArtifactClosureCheckpoint{}, nil
+			},
+			operation: func(context.Context, model.OperationID, string, time.Time, model.JSON) (bool, error) {
+				close(operationEntered)
+				<-operationContinue
+				return false, nil
+			},
+		}, &artifactCoordinatorClock{values: []time.Time{at.Add(time.Second), at.Add(2 * time.Second)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	type checkpointOutcome struct {
+		result ArtifactCaptureResult
+		err    *localapi.APIError
+	}
+	checkpointDone := make(chan checkpointOutcome, 1)
+	go func() {
+		result, apiErr := coordinator.Checkpoint(context.Background(), reservation, []string{"result.txt"})
+		checkpointDone <- checkpointOutcome{result: result, err: apiErr}
+	}()
+	artifactCoordinatorAwait(t, captureEntered, "live capture")
+
+	exclusiveStarted := make(chan struct{})
+	exclusiveDone := make(chan error, 1)
+	go func() {
+		close(exclusiveStarted)
+		lease, acquireErr := cas.AcquireExclusive()
+		if acquireErr == nil {
+			lease.Release()
+		}
+		exclusiveDone <- acquireErr
+	}()
+	artifactCoordinatorAwait(t, exclusiveStarted, "exclusive collector start")
+	artifactCoordinatorRequireBlocked(t, exclusiveDone, "live capture")
+
+	captureContinue <- struct{}{}
+	artifactCoordinatorAwait(t, closureEntered, "closure checkpoint")
+	artifactCoordinatorRequireBlocked(t, exclusiveDone, "closure checkpoint")
+	closureContinue <- struct{}{}
+	artifactCoordinatorAwait(t, operationEntered, "operation ownership checkpoint")
+	artifactCoordinatorRequireBlocked(t, exclusiveDone, "operation ownership checkpoint")
+	operationContinue <- struct{}{}
+
+	select {
+	case outcome := <-checkpointDone:
+		if outcome.err != nil || outcome.result.Replayed || len(outcome.result.Roots) != 1 {
+			t.Fatalf("checkpoint outcome = (%#v, %#v)", outcome.result, outcome.err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Artifact checkpoint did not complete")
+	}
+	select {
+	case acquireErr := <-exclusiveDone:
+		if acquireErr != nil {
+			t.Fatalf("exclusive collection after checkpoint = %v", acquireErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("exclusive collection remained blocked after operation ownership checkpoint")
+	}
+}
+
+func TestArtifactCaptureCoordinatorReleasesLifecycleAfterFailureAndCancellation(t *testing.T) {
+	at := time.Date(2026, 7, 16, 18, 45, 0, 0, time.UTC)
+	tests := []struct {
+		name      string
+		capture   func(context.Context, artifact.Closure) (artifact.Closure, error)
+		closure   error
+		operation error
+		code      localapi.ErrorCode
+	}{
+		{name: "capture cancellation", capture: func(ctx context.Context, _ artifact.Closure) (artifact.Closure, error) {
+			return artifact.Closure{}, ctx.Err()
+		}, code: localapi.CodeOperationPending},
+		{name: "closure checkpoint failure", closure: store.ErrArtifactConflict, code: localapi.CodeInternal},
+		{name: "operation checkpoint failure", operation: store.ErrOperationFence,
+			code: localapi.CodeOperationPending},
+	}
+	for index, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			closure, cas, _ := artifactCoordinatorClosure(t, at)
+			operation := artifactCoordinatorStartedOperation(t, "release-"+strconv.Itoa(index),
+				at, at.Add(time.Minute), nil)
+			capture := test.capture
+			if capture == nil {
+				capture = func(context.Context, artifact.Closure) (artifact.Closure, error) {
+					return closure, nil
+				}
+			}
+			coordinator, err := NewArtifactCaptureCoordinator(
+				artifactCapturerFunc(func(ctx context.Context, _ []string) (artifact.Closure, error) {
+					return capture(ctx, closure)
+				}), artifactVerifierFunc(cas.VerifyClosure), cas, &artifactCaptureStoreStub{
+					closure: func(_ context.Context, value store.VerifiedArtifactClosure) (
+						store.VerifiedArtifactClosureCheckpoint, error,
+					) {
+						return store.VerifiedArtifactClosureCheckpoint{Closure: value}, test.closure
+					},
+					operation: func(context.Context, model.OperationID, string, time.Time, model.JSON) (bool, error) {
+						return false, test.operation
+					},
+				}, &artifactCoordinatorClock{values: []time.Time{at.Add(time.Second), at.Add(2 * time.Second)}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx := context.Background()
+			if test.name == "capture cancellation" {
+				cancelled, cancel := context.WithCancel(ctx)
+				cancel()
+				ctx = cancelled
+			}
+			_, apiErr := coordinator.Checkpoint(ctx,
+				store.ManagedOperationReservation{Operation: operation, Acquired: true}, []string{"result.txt"})
+			if apiErr == nil || apiErr.Code != test.code {
+				t.Fatalf("failure = %#v, want %s", apiErr, test.code)
+			}
+			artifactCoordinatorRequireExclusive(t, cas)
+		})
+	}
+}
+
+func TestArtifactCaptureCoordinatorMapsLifecycleAcquisitionFailureToInternal(t *testing.T) {
+	at := time.Date(2026, 7, 16, 18, 50, 0, 0, time.UTC)
+	operation := artifactCoordinatorStartedOperation(t, "lifecycle-failure", at, at.Add(time.Minute), nil)
+	liveCalls := 0
+	coordinator, err := NewArtifactCaptureCoordinator(
+		artifactCapturerFunc(func(context.Context, []string) (artifact.Closure, error) {
+			liveCalls++
+			return artifact.Closure{}, nil
+		}), artifactVerifierFunc(func(context.Context, artifact.Closure) error {
+			liveCalls++
+			return nil
+		}), artifactCaptureLifecycleFunc(func() (*artifact.CASLease, error) {
+			return nil, errors.New("collector lifecycle unavailable")
+		}), &artifactCaptureStoreStub{}, &artifactCoordinatorClock{values: []time.Time{at.Add(time.Second)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, apiErr := coordinator.Checkpoint(context.Background(),
+		store.ManagedOperationReservation{Operation: operation, Acquired: true}, []string{"result.txt"})
+	if apiErr == nil || apiErr.Code != localapi.CodeInternal || apiErr.Retryable || liveCalls != 0 {
+		t.Fatalf("lifecycle acquisition failure = %#v, live calls=%d", apiErr, liveCalls)
 	}
 }
 
@@ -168,7 +340,8 @@ func TestArtifactCaptureCoordinatorReusesDurableCheckpointWithoutLiveReads(t *te
 		artifactVerifierFunc(func(context.Context, artifact.Closure) error {
 			verifyCalls++
 			return errors.New("CAS must not be reverified")
-		}), stub, &artifactCoordinatorClock{values: []time.Time{at.Add(time.Second)}})
+		}), artifactCoordinatorNoLifecycle(t), stub,
+		&artifactCoordinatorClock{values: []time.Time{at.Add(time.Second)}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,7 +442,7 @@ func TestArtifactCaptureCoordinatorSupportsEmptyAndTerminalDurableCapture(t *tes
 
 func TestArtifactCaptureCoordinatorFailsClosedBeforeDurableCheckpoint(t *testing.T) {
 	at := time.Date(2026, 7, 16, 21, 0, 0, 0, time.UTC)
-	closure, _, _ := artifactCoordinatorClosure(t, at)
+	closure, cas, _ := artifactCoordinatorClosure(t, at)
 	operation := artifactCoordinatorStartedOperation(t, "verify-failure", at, at.Add(time.Minute), nil)
 	storeCalls := 0
 	stub := &artifactCaptureStoreStub{
@@ -287,7 +460,7 @@ func TestArtifactCaptureCoordinatorFailsClosedBeforeDurableCheckpoint(t *testing
 	coordinator, err := NewArtifactCaptureCoordinator(
 		artifactCapturerFunc(func(context.Context, []string) (artifact.Closure, error) { return closure, nil }),
 		artifactVerifierFunc(func(context.Context, artifact.Closure) error { return artifact.ErrClosureMismatch }),
-		stub, &artifactCoordinatorClock{values: []time.Time{at.Add(time.Second)}})
+		cas, stub, &artifactCoordinatorClock{values: []time.Time{at.Add(time.Second)}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,7 +490,7 @@ func TestArtifactCaptureCoordinatorDoesNotCheckpointOperationAfterClosureConflic
 	}
 	coordinator, err := NewArtifactCaptureCoordinator(
 		artifactCapturerFunc(func(context.Context, []string) (artifact.Closure, error) { return closure, nil }),
-		artifactVerifierFunc(cas.VerifyClosure), stub,
+		artifactVerifierFunc(cas.VerifyClosure), cas, stub,
 		&artifactCoordinatorClock{values: []time.Time{at.Add(time.Second)}})
 	if err != nil {
 		t.Fatal(err)
@@ -354,7 +527,7 @@ func TestArtifactCaptureCoordinatorUsesPostCaptureTimeForLeaseFence(t *testing.T
 	}
 	coordinator, err := NewArtifactCaptureCoordinator(
 		artifactCapturerFunc(func(context.Context, []string) (artifact.Closure, error) { return closure, nil }),
-		artifactVerifierFunc(cas.VerifyClosure), stub,
+		artifactVerifierFunc(cas.VerifyClosure), cas, stub,
 		&artifactCoordinatorClock{values: []time.Time{at.Add(time.Second), postCapture}})
 	if err != nil {
 		t.Fatal(err)
@@ -391,7 +564,8 @@ func TestArtifactCaptureCoordinatorClassifiesLiveAndStoreErrors(t *testing.T) {
 				}), artifactVerifierFunc(func(context.Context, artifact.Closure) error {
 					t.Fatal("verifier called after capture error")
 					return nil
-				}), stub, &artifactCoordinatorClock{values: []time.Time{at.Add(time.Second)}})
+				}), artifactCoordinatorLifecycle(t), stub,
+				&artifactCoordinatorClock{values: []time.Time{at.Add(time.Second)}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -513,9 +687,71 @@ func artifactCoordinatorWithNoLiveCalls(t *testing.T, stub ArtifactCaptureStore,
 		artifactVerifierFunc(func(context.Context, artifact.Closure) error {
 			t.Fatal("live verifier was called")
 			return nil
-		}), stub, clock)
+		}), artifactCoordinatorNoLifecycle(t), stub, clock)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return coordinator
+}
+
+func artifactCoordinatorLifecycle(t *testing.T) *artifact.CAS {
+	t.Helper()
+	cas, err := artifact.NewCAS(filepath.Join(t.TempDir(), "objects", "sha256"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cas
+}
+
+func artifactCoordinatorNoLifecycle(t *testing.T) ArtifactCaptureLifecycle {
+	t.Helper()
+	return artifactCaptureLifecycleFunc(func() (*artifact.CASLease, error) {
+		t.Fatal("Artifact CAS lifecycle was acquired")
+		return nil, nil
+	})
+}
+
+func artifactCoordinatorUnblock(channel chan<- struct{}) {
+	select {
+	case channel <- struct{}{}:
+	default:
+	}
+}
+
+func artifactCoordinatorAwait(t *testing.T, channel <-chan struct{}, stage string) {
+	t.Helper()
+	select {
+	case <-channel:
+	case <-time.After(time.Second):
+		t.Fatalf("timed out awaiting %s", stage)
+	}
+}
+
+func artifactCoordinatorRequireBlocked(t *testing.T, result <-chan error, stage string) {
+	t.Helper()
+	select {
+	case err := <-result:
+		t.Fatalf("exclusive collection entered during %s: %v", stage, err)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func artifactCoordinatorRequireExclusive(t *testing.T, cas *artifact.CAS) {
+	t.Helper()
+	result := make(chan error, 1)
+	go func() {
+		lease, err := cas.AcquireExclusive()
+		if err == nil {
+			lease.Release()
+		}
+		result <- err
+	}()
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatalf("exclusive lifecycle acquisition = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("exclusive lifecycle remained blocked after capture failure")
+	}
 }

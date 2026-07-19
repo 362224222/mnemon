@@ -116,7 +116,7 @@ func NewController(options ControllerOptions) (*Controller, error) {
 	if err != nil {
 		return nil, err
 	}
-	capture, err := agent.NewArtifactCaptureCoordinator(capturer, cas, options.Store, options.Clock)
+	capture, err := agent.NewArtifactCaptureCoordinator(capturer, cas, cas, options.Store, options.Clock)
 	if err != nil {
 		return nil, err
 	}

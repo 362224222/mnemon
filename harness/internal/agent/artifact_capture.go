@@ -27,6 +27,12 @@ type ArtifactClosureVerifier interface {
 	VerifyClosure(context.Context, artifact.Closure) error
 }
 
+// ArtifactCaptureLifecycle linearizes live CAS capture and its durable Store
+// ownership checkpoints against exclusive Artifact collection.
+type ArtifactCaptureLifecycle interface {
+	AcquireUse() (*artifact.CASLease, error)
+}
+
 // ArtifactCaptureStore is the complete durable authority needed by the
 // coordinator. Closure metadata is checkpointed before the lease-fenced
 // operation checkpoint makes that exact root set reusable by admission.
@@ -52,22 +58,24 @@ type ArtifactCaptureResult struct {
 // the live capturer or CAS verifier again: the durable checkpoint is the sole
 // replay authority.
 type ArtifactCaptureCoordinator struct {
-	capturer ArtifactCapturer
-	verifier ArtifactClosureVerifier
-	store    ArtifactCaptureStore
-	clock    ServiceClock
+	capturer  ArtifactCapturer
+	verifier  ArtifactClosureVerifier
+	lifecycle ArtifactCaptureLifecycle
+	store     ArtifactCaptureStore
+	clock     ServiceClock
 }
 
 func NewArtifactCaptureCoordinator(capturer ArtifactCapturer, verifier ArtifactClosureVerifier,
-	st ArtifactCaptureStore, clock ServiceClock,
+	lifecycle ArtifactCaptureLifecycle, st ArtifactCaptureStore, clock ServiceClock,
 ) (*ArtifactCaptureCoordinator, error) {
-	if capturer == nil || verifier == nil || st == nil {
-		return nil, errors.New("Artifact capture coordinator requires capturer, verifier and Store")
+	if capturer == nil || verifier == nil || lifecycle == nil || st == nil {
+		return nil, errors.New("Artifact capture coordinator requires capturer, verifier, lifecycle and Store")
 	}
 	if clock == nil {
 		clock = wallServiceClock{}
 	}
-	return &ArtifactCaptureCoordinator{capturer: capturer, verifier: verifier, store: st, clock: clock}, nil
+	return &ArtifactCaptureCoordinator{capturer: capturer, verifier: verifier,
+		lifecycle: lifecycle, store: st, clock: clock}, nil
 }
 
 func (coordinator *ArtifactCaptureCoordinator) Checkpoint(ctx context.Context,
@@ -75,7 +83,8 @@ func (coordinator *ArtifactCaptureCoordinator) Checkpoint(ctx context.Context,
 ) (ArtifactCaptureResult, *localapi.APIError) {
 	operation := reservation.Operation
 	if coordinator == nil || coordinator.capturer == nil || coordinator.verifier == nil ||
-		coordinator.store == nil || coordinator.clock == nil || ctx == nil || operation.ID().IsZero() {
+		coordinator.lifecycle == nil || coordinator.store == nil || coordinator.clock == nil ||
+		ctx == nil || operation.ID().IsZero() {
 		return ArtifactCaptureResult{}, captureAPIError(localapi.CodeInternal,
 			"Artifact capture coordinator input is invalid", operation.ID())
 	}
@@ -125,6 +134,13 @@ func (coordinator *ArtifactCaptureCoordinator) Checkpoint(ctx context.Context,
 				"empty Artifact checkpoint cannot be encoded", operation.ID())
 		}
 	} else {
+		lease, err := coordinator.lifecycle.AcquireUse()
+		if err != nil || lease == nil {
+			return ArtifactCaptureResult{}, captureAPIError(localapi.CodeInternal,
+				"Artifact CAS lifecycle is unavailable", operation.ID())
+		}
+		defer lease.Release()
+
 		closure, err := coordinator.capturer.Capture(ctx, append([]string(nil), paths...))
 		if err != nil {
 			return ArtifactCaptureResult{}, mapLiveArtifactError(err, operation.ID())
