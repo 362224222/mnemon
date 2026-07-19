@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -11,7 +13,9 @@ import (
 	"time"
 
 	artifactdomain "github.com/mnemon-dev/mnemon/harness/internal/artifact"
+	eventpkg "github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
+	"github.com/mnemon-dev/mnemon/harness/internal/testkit"
 )
 
 func TestArtifactGCScanPrepareCursorQueueAndResponseReplay(t *testing.T) {
@@ -858,6 +862,473 @@ func TestArtifactGCStaleTransientAuthorityFailsStartupReads(t *testing.T) {
 				t.Fatalf("restart stale guard list error = %v", err)
 			}
 		})
+	}
+}
+
+func TestArtifactGCWorkerIntegratesRealStoreCASAndRestartRecovery(t *testing.T) {
+	t.Run("staging is swept before physical collection while durable ownership survives", func(t *testing.T) {
+		fixture := newArtifactGCIntegrationFixture(t, "worker-closure")
+		protected, protectedManifest, protectedBlock := artifactGCIntegrationClosure(t, fixture.cas,
+			"protected.txt", []byte("durably owned artifact"), fixture.at.Add(time.Second))
+		protectedClaim := stageArtifactGCIntegrationInbox(t, fixture, protected, 1, "protected")
+		readyAt := protectedClaim.Fence().LeaseUntil().Add(-peerInboxArtifactLease).Add(2 * time.Second)
+		ready, err := fixture.store.MarkPeerInboxArtifactReady(context.Background(),
+			MarkPeerInboxArtifactReadySpec{Fence: protectedClaim.Fence(), At: readyAt})
+		if err != nil || ready.Status() != model.InboxReady || !ready.Changed() {
+			t.Fatalf("mark protected Inbox ready = (%#v, %v)", ready, err)
+		}
+
+		orphan, orphanManifest, orphanBlock := artifactGCIntegrationClosure(t, fixture.cas,
+			"orphan.txt", []byte("expired staged artifact"), fixture.at.Add(20*time.Second))
+		claim := stageArtifactGCIntegrationInbox(t, fixture, orphan, 2, "orphan")
+		staged, found, err := fixture.store.ReadPeerInboxArtifactRoot(context.Background(),
+			ReadPeerInboxArtifactRootSpec{Fence: claim.Fence(), RootDigest: orphan.Roots[0].RootDigest,
+				At: claim.Fence().LeaseUntil().Add(-time.Second)})
+		if err != nil || !found || staged.State() != PeerInboxArtifactRootStaged {
+			t.Fatalf("read staged root = (%#v, found %t, %v)", staged, found, err)
+		}
+
+		gcAt := time.Now().Round(0).UTC().Add(4 * time.Hour)
+		worker, err := artifactdomain.NewGCWorker(artifactdomain.GCOptions{
+			Store: fixture.store, CAS: fixture.cas, Clock: func() time.Time { return gcAt },
+			ObjectTTL: time.Hour, StagingTTL: time.Hour, TempTTL: time.Hour,
+			MaxExamined: 2, MaxQueued: 1, MaxBytes: 4 << 20, MaxTemps: 1, MaxQueue: 4,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := worker.RunCycle(context.Background()); err != nil {
+			t.Fatalf("staging collection cycle: %v", err)
+		}
+		first := worker.Snapshot()
+		if first.StagingExamined != 2 || first.StagingSwept != 1 || first.ObjectsQueued != 0 {
+			t.Fatalf("first GC cycle = %#v, want one staged sweep and no physical queue", first)
+		}
+		stagingCursor, err := fixture.store.OpenArtifactGCStagingScan(context.Background(),
+			artifactdomain.GCScanSpec{InitializeCutoff: gcAt.Add(-time.Hour), At: gcAt})
+		if err != nil {
+			t.Fatalf("open post-sweep staging scan: %v", err)
+		}
+		stagingClosed, err := fixture.store.SweepArtifactGCStaging(context.Background(),
+			artifactdomain.GCStagingSweepSpec{Current: stagingCursor, MaxItems: 4,
+				MaxBytes: 4 << 20, At: gcAt})
+		if err != nil || stagingClosed.Examined != 1 || stagingClosed.Swept != 0 ||
+			!stagingClosed.Next.Done {
+			t.Fatalf("post-sweep staging metadata = (%#v, %v), want only protected root",
+				stagingClosed, err)
+		}
+		assertArtifactGCCASContent(t, fixture.cas, orphanManifest, orphan.ManifestBytes)
+		assertArtifactGCCASContent(t, fixture.cas, orphanBlock, []byte("expired staged artifact"))
+
+		observedSingleRemoval := false
+		collected := false
+		for cycle := 0; cycle < 12; cycle++ {
+			before := worker.Snapshot()
+			if err := worker.RunCycle(context.Background()); err != nil {
+				t.Fatalf("physical collection cycle %d: %v", cycle, err)
+			}
+			after := worker.Snapshot()
+			assertArtifactGCIntegrationCycleBound(t, before, after, 1)
+			queue, err := fixture.store.ListArtifactGCQueue(context.Background(),
+				artifactGCMaxQueueList)
+			if err != nil || len(queue) > 1 {
+				t.Fatalf("physical collection cycle %d durable queue = (%#v, %v), want at most one",
+					cycle, queue, err)
+			}
+			manifestPresent := artifactGCCASPresent(t, fixture.cas, orphanManifest)
+			blockPresent := artifactGCCASPresent(t, fixture.cas, orphanBlock)
+			if manifestPresent != blockPresent {
+				observedSingleRemoval = true
+			}
+			if !manifestPresent && !blockPresent {
+				collected = true
+				break
+			}
+		}
+		if !observedSingleRemoval || !collected {
+			t.Fatalf("bounded physical collection = (single removal %t, collected %t), want both true",
+				observedSingleRemoval, collected)
+		}
+		assertArtifactGCCASAbsent(t, fixture.cas, orphanManifest)
+		assertArtifactGCCASAbsent(t, fixture.cas, orphanBlock)
+		assertArtifactGCCASContent(t, fixture.cas, protectedManifest, protected.ManifestBytes)
+		assertArtifactGCCASContent(t, fixture.cas, protectedBlock, []byte("durably owned artifact"))
+		if _, err := fixture.store.GetVerifiedArtifactRoot(context.Background(),
+			protected.Roots[0].RootDigest); err != nil {
+			t.Fatalf("owned root metadata was collected: %v", err)
+		}
+		assertArtifactGCIntegrationClosed(t, fixture.store, fixture.cas)
+		snapshot := worker.Snapshot()
+		if snapshot.State != artifactdomain.GCIdle || snapshot.FatalCode != artifactdomain.GCFatalNone ||
+			snapshot.StagingSwept != 1 || snapshot.ObjectsQueued != 2 ||
+			snapshot.ObjectsTombstoned != 2 || snapshot.TombstonesPurged != 2 ||
+			snapshot.QueueItemsCompleted != 2 || snapshot.ObjectsProtected < 2 {
+			t.Fatalf("settled GC snapshot = %#v", snapshot)
+		}
+		assertArtifactGCSnapshotClosed(t, snapshot, orphan.Roots[0].RootDigest,
+			orphanManifest, orphanBlock)
+	})
+
+	t.Run("startup reconciliation closes a queued tombstone after Store restart", func(t *testing.T) {
+		root := t.TempDir()
+		path := filepath.Join(root, "node", "node.db")
+		st, err := Open(context.Background(), path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		casRoot := filepath.Join(root, "node", "objects", "sha256")
+		cas, err := artifactdomain.NewCAS(casRoot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		content := []byte("restart-owned tombstone")
+		digest := model.Sum(content)
+		if _, err := cas.Put(digest, content); err != nil {
+			t.Fatal(err)
+		}
+		at := time.Now().Round(0).UTC().Add(3 * time.Hour)
+		cutoff := at.Add(-time.Hour)
+		candidates, err := cas.ListObjectsBefore(cutoff, 2)
+		if err != nil || len(candidates) != 1 || candidates[0].Digest != digest {
+			t.Fatalf("CAS candidate = (%#v, %v)", candidates, err)
+		}
+		cursor, err := st.OpenArtifactGCScan(context.Background(), artifactdomain.GCScanSpec{
+			InitializeCutoff: cutoff, At: at,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		identity := artifactdomain.GCQueueIdentity{Digest: digest,
+			Token: artifactGCStoreUniqueToken("real-restart-tombstone")}
+		prepared, err := st.PrepareArtifactGC(context.Background(), artifactdomain.GCPrepareSpec{
+			Current: cursor, Candidates: []artifactdomain.GCCandidate{{Digest: digest,
+				SizeBytes: candidates[0].Size, ModifiedAt: candidates[0].ModifiedAt, Token: identity.Token}},
+			PageDone: true, MaxQueued: 1, MaxQueue: 4, At: at,
+		})
+		if err != nil || prepared.Queued != 1 || !prepared.Next.Done {
+			t.Fatalf("prepare crash queue = (%#v, %v)", prepared, err)
+		}
+		status, err := cas.Tombstone(identity.Digest, identity.Token)
+		if err != nil || status.State != artifactdomain.CASTombstoneTrashOnly || !status.Closed {
+			t.Fatalf("create crash tombstone = (%#v, %v)", status, err)
+		}
+		if err := st.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		restarted, err := OpenExisting(context.Background(), path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = restarted.Close() })
+		restartedCAS, err := artifactdomain.NewCAS(casRoot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		worker, err := artifactdomain.NewGCWorker(artifactdomain.GCOptions{
+			Store: restarted, CAS: restartedCAS, Clock: func() time.Time { return at.Add(time.Second) },
+			MaxExamined: 2, MaxQueued: 2, MaxBytes: 4 << 20, MaxTemps: 1, MaxQueue: 4,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := worker.ReconcileStartup(context.Background()); err != nil {
+			t.Fatalf("startup reconciliation: %v", err)
+		}
+		if err := worker.ReconcileStartup(context.Background()); err != nil {
+			t.Fatalf("startup reconciliation replay: %v", err)
+		}
+		assertArtifactGCCASAbsent(t, restartedCAS, digest)
+		assertArtifactGCIntegrationClosed(t, restarted, restartedCAS)
+		snapshot := worker.Snapshot()
+		if snapshot.State != artifactdomain.GCIdle || snapshot.FatalCode != artifactdomain.GCFatalNone ||
+			snapshot.StartupReconciliations != 2 || snapshot.QueueItemsCompleted != 1 ||
+			snapshot.TombstonesPurged != 1 {
+			t.Fatalf("restart recovery snapshot = %#v", snapshot)
+		}
+		assertArtifactGCSnapshotClosed(t, snapshot, digest)
+	})
+}
+
+type artifactGCIntegrationFixture struct {
+	store   *Store
+	cas     *artifactdomain.CAS
+	owner   testkit.Identity
+	remote  testkit.Identity
+	channel model.ChannelID
+	roster  model.VerifiedRoster
+	at      time.Time
+}
+
+type artifactGCIntegrationClosureValue struct {
+	VerifiedArtifactClosure
+	ManifestBytes []byte
+}
+
+func newArtifactGCIntegrationFixture(t *testing.T, seed string) artifactGCIntegrationFixture {
+	t.Helper()
+	root := t.TempDir()
+	st, err := Open(context.Background(), filepath.Join(root, "node", "node.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	cas, err := artifactdomain.NewCAS(filepath.Join(root, "node", "objects", "sha256"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := time.Now().Round(0).UTC().Add(-6 * time.Hour)
+	channel := testkit.NewSignedChannelAt(t, "artifact-gc-integration-"+seed, base)
+	node, profile := signedBootstrapValues(t, channel.Owner(), "principal-artifact-gc",
+		filepath.Join(root, "workspace"), base)
+	if _, err := st.InitializeNode(context.Background(), node, profile); err != nil {
+		t.Fatal(err)
+	}
+	grantID, _ := model.ParseGrantID("grant-artifact-gc-" + seed)
+	token := storeTestEnrollmentToken(t, channel.Descriptor(), channel.Owner(), grantID,
+		"artifact-gc-"+seed, base, model.MaxMembersPerChannel-1)
+	if _, err := st.CreateChannel(context.Background(), CreateChannelSpec{Channel: channel.Channel(),
+		Genesis: channel.OwnerMember().Member(), Token: token}); err != nil {
+		t.Fatal(err)
+	}
+	remote := testkit.NewIdentity(t, "artifact-gc-remote-"+seed)
+	requestID := stableEnrollmentRequest(t, channel.Channel().ID(), grantID, remote)
+	acceptedAt := base.Add(10 * time.Second)
+	prepared, err := st.PrepareChannelEnrollment(context.Background(), PrepareChannelEnrollmentSpec{
+		ChannelID: channel.Channel().ID(), GrantID: grantID, RequestID: requestID,
+		AuthenticatedPeerID: remote.PeerID(), JoinerOriginEpoch: remote.OriginEpoch(),
+		JoinerPublicKey: remote.PublicKey(), At: acceptedAt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	transcript := enrollmentTestTranscript(t, channel.Descriptor(), grantID, requestID, remote,
+		prepared.RosterHead, 0x91, 0x92)
+	accepted, err := st.AcceptChannelEnrollment(context.Background(), AcceptChannelEnrollmentSpec{
+		AuthenticatedPeerID: remote.PeerID(), Transcript: transcript,
+		AdvertisedMultiaddrs: remote.Multiaddrs(), Proof: enrollmentTestProof(t, token, transcript),
+		Signer: enrollmentTestSigner(t, channel.Owner()), At: acceptedAt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joiningAt := acceptedAt.Add(time.Second)
+	if _, err := st.CompareAndSetChannelTopicState(context.Background(), CompareAndSetChannelTopicStateSpec{
+		ChannelID: channel.Channel().ID(), ExpectedStatus: model.ChannelActive,
+		ExpectedRosterHead: accepted.Roster.Head(), ExpectedTopicState: model.TopicNotJoined,
+		TopicState: model.TopicJoining, At: joiningAt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	joinedAt := joiningAt.Add(time.Second)
+	if _, err := st.CompareAndSetChannelTopicState(context.Background(), CompareAndSetChannelTopicStateSpec{
+		ChannelID: channel.Channel().ID(), ExpectedStatus: model.ChannelActive,
+		ExpectedRosterHead: accepted.Roster.Head(), ExpectedTopicState: model.TopicJoining,
+		TopicState: model.TopicJoined, At: joinedAt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	baselineAt := joinedAt.Add(time.Second)
+	if _, err := st.InstallInboundChannelBaseline(context.Background(), InstallInboundChannelBaselineSpec{
+		AuthenticatedPeerID: remote.PeerID(), Baseline: ChannelDataBaseline{
+			ChannelID: channel.Channel().ID(), OriginPeerID: remote.PeerID(),
+			OriginEpoch: remote.OriginEpoch()}, At: baselineAt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	outbound, err := st.ReserveOutboundChannelBaseline(context.Background(),
+		ReserveOutboundChannelBaselineSpec{ChannelID: channel.Channel().ID(),
+			TargetPeerID: remote.PeerID(), At: baselineAt.Add(time.Second)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ConfirmOutboundChannelBaseline(context.Background(), ConfirmOutboundChannelBaselineSpec{
+		AuthenticatedPeerID: remote.PeerID(), Ack: ChannelDataBaselineAck(outbound.Baseline),
+		At: baselineAt.Add(2 * time.Second),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return artifactGCIntegrationFixture{store: st, cas: cas, owner: channel.Owner(), remote: remote,
+		channel: channel.Channel().ID(), roster: accepted.Roster,
+		at: baselineAt.Add(3 * time.Second)}
+}
+
+func artifactGCIntegrationClosure(t *testing.T, cas *artifactdomain.CAS, logical string,
+	content []byte, at time.Time,
+) (artifactGCIntegrationClosureValue, model.Digest, model.Digest) {
+	t.Helper()
+	blockDigest := model.Sum(content)
+	if _, err := cas.Put(blockDigest, content); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := artifactdomain.NewManifest(artifactdomain.ManifestSpec{
+		RootKind: artifactdomain.EntryFile, RootPath: logical,
+		Entries: []artifactdomain.ManifestEntry{{Kind: artifactdomain.EntryFile,
+			LogicalPath: logical, Mode: 0o600, SizeBytes: uint64(len(content)),
+			Blocks: []artifactdomain.ManifestBlock{{Digest: blockDigest,
+				LengthBytes: uint64(len(content))}}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestBytes := manifest.CanonicalJSON().Bytes()
+	if _, err := cas.Put(manifest.ManifestDigest(), manifestBytes); err != nil {
+		t.Fatal(err)
+	}
+	closure := VerifiedArtifactClosure{
+		Roots: []VerifiedArtifactRoot{{RootDigest: manifest.RootDigest(),
+			Manifest: manifest.CanonicalJSON(), ManifestDigest: manifest.ManifestDigest(),
+			TotalBytes: manifest.TotalBytes(), CreatedAt: at, VerifiedAt: at}},
+		Blocks: []VerifiedArtifactBlock{{Digest: blockDigest,
+			SizeBytes: uint64(len(content)), CreatedAt: at}},
+		RootBlocks: []VerifiedArtifactRootBlock{{RootDigest: manifest.RootDigest(), Ordinal: 0,
+			LogicalPath: logical, LengthBytes: uint64(len(content)), BlockDigest: blockDigest,
+			Mode: 0o600}},
+	}
+	return artifactGCIntegrationClosureValue{VerifiedArtifactClosure: closure,
+		ManifestBytes: manifestBytes}, manifest.ManifestDigest(), blockDigest
+}
+
+func stageArtifactGCIntegrationInbox(t *testing.T, fixture artifactGCIntegrationFixture,
+	closure artifactGCIntegrationClosureValue, sequence uint64, suffix string,
+) PeerInboxArtifactClaim {
+	t.Helper()
+	remoteMember, present := fixture.roster.CurrentMember(fixture.remote.PeerID())
+	if !present {
+		t.Fatal("remote member is absent from integration roster")
+	}
+	workID, _ := model.ParseWorkID("work-artifact-gc-integration-" + suffix)
+	work, _ := model.NewWorkRef(fixture.owner.PeerID(), workID)
+	scope, err := model.NewEventScope(fixture.channel, fixture.remote.PeerID(),
+		fixture.remote.OriginEpoch(), sequence, sequence, remoteMember.Head(), fixture.roster.Head(), work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	audience, _ := model.NewAudience([]model.PeerID{fixture.owner.PeerID()})
+	ref, _ := model.NewArtifactRef(closure.Roots[0].RootDigest, model.ArtifactProduced)
+	payload, _ := model.NewJSON([]byte(`{"iteration":1,"note":"stage only","work_version":1}`))
+	eventAt := fixture.at.Add(time.Duration(sequence*10) * time.Second)
+	eventID, _ := model.ParseEventID("event-artifact-gc-integration-" + suffix)
+	event, err := model.NewEvent(model.EventSpec{ID: eventID, Scope: scope,
+		Source: model.EventSourceLocal, ActorPrincipal: "principal-artifact-gc-remote",
+		Type: model.EventReviewAcceptRequested, Audience: audience,
+		Summary: "staged artifact import", Payload: payload, Artifacts: []model.ArtifactRef{ref},
+		CreatedAt: eventAt, AcceptedAt: eventAt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := model.NewPublicationBody(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, err := model.PublicationSigningMessage(fixture.channel, body.Digest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, _ := eventpkg.NewEd25519Signer(ed25519Private(fixture.remote))
+	signature, err := signer.Sign(context.Background(), message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publication, err := model.AttachSignature(body, signature)
+	if err != nil {
+		t.Fatal(err)
+	}
+	putAt := eventAt.Add(time.Second)
+	put, err := fixture.store.PutPeerInbox(context.Background(), PutPeerInboxSpec{
+		Publication: publication, TransportPeerID: fixture.remote.PeerID(),
+		ArrivalSource: model.ArrivalPull, ReceivedAt: putAt,
+	})
+	if err != nil || put.Disposition != PeerInboxStored {
+		t.Fatalf("put integration Inbox = (%#v, %v)", put, err)
+	}
+	claimAt := putAt.Add(time.Second)
+	claimed, err := fixture.store.ClaimPeerInboxArtifact(context.Background(),
+		ClaimPeerInboxArtifactSpec{LeaseOwner: "artifact-gc-integration-" + suffix, At: claimAt})
+	if err != nil || !claimed.Found() {
+		t.Fatalf("claim integration Inbox = (%#v, %v)", claimed, err)
+	}
+	claim := claimed.Claim()
+	if _, err := fixture.store.StagePeerInboxArtifactClosure(context.Background(),
+		StagePeerInboxArtifactClosureSpec{Fence: claim.Fence(),
+			Closure: closure.VerifiedArtifactClosure, At: claimAt.Add(time.Second)}); err != nil {
+		t.Fatal(err)
+	}
+	return claim
+}
+
+func assertArtifactGCCASContent(t *testing.T, cas *artifactdomain.CAS, digest model.Digest,
+	want []byte,
+) {
+	t.Helper()
+	got, err := cas.Read(digest, artifactdomain.MaxManifestBytes)
+	if err != nil || string(got) != string(want) {
+		t.Fatalf("CAS content %s = (%q, %v), want %q", digest, got, err, want)
+	}
+}
+
+func assertArtifactGCCASAbsent(t *testing.T, cas *artifactdomain.CAS, digest model.Digest) {
+	t.Helper()
+	if content, err := cas.Read(digest, artifactdomain.MaxManifestBytes); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("CAS object %s remains = (%q, %v)", digest, content, err)
+	}
+}
+
+func artifactGCCASPresent(t *testing.T, cas *artifactdomain.CAS, digest model.Digest) bool {
+	t.Helper()
+	if _, err := cas.Read(digest, artifactdomain.MaxManifestBytes); err == nil {
+		return true
+	} else if errors.Is(err, os.ErrNotExist) {
+		return false
+	} else {
+		t.Fatalf("read CAS object %s presence: %v", digest, err)
+		return false
+	}
+}
+
+func assertArtifactGCIntegrationCycleBound(t *testing.T, before, after artifactdomain.GCSnapshot,
+	max uint64,
+) {
+	t.Helper()
+	counters := []struct {
+		name   string
+		before uint64
+		after  uint64
+	}{
+		{"objects queued", before.ObjectsQueued, after.ObjectsQueued},
+		{"objects tombstoned", before.ObjectsTombstoned, after.ObjectsTombstoned},
+		{"tombstones purged", before.TombstonesPurged, after.TombstonesPurged},
+		{"queue items completed", before.QueueItemsCompleted, after.QueueItemsCompleted},
+	}
+	for _, counter := range counters {
+		if counter.after < counter.before || counter.after-counter.before > max {
+			t.Fatalf("GC cycle %s counter = %d -> %d, want delta in [0,%d]",
+				counter.name, counter.before, counter.after, max)
+		}
+	}
+}
+
+func assertArtifactGCIntegrationClosed(t *testing.T, st *Store, cas *artifactdomain.CAS) {
+	t.Helper()
+	queue, err := st.ListArtifactGCQueue(context.Background(), artifactGCMaxQueueList)
+	if err != nil || len(queue) != 0 {
+		t.Fatalf("settled durable queue = (%#v, %v)", queue, err)
+	}
+	tombstones, err := cas.ListTombstones(artifactGCMaxQueueList)
+	if err != nil || len(tombstones) != 0 {
+		t.Fatalf("settled CAS tombstones = (%#v, %v)", tombstones, err)
+	}
+}
+
+func assertArtifactGCSnapshotClosed(t *testing.T, snapshot artifactdomain.GCSnapshot,
+	digests ...model.Digest,
+) {
+	t.Helper()
+	encoded := fmt.Sprintf("%#v", snapshot)
+	for _, digest := range digests {
+		if strings.Contains(encoded, digest.String()) {
+			t.Fatalf("GC snapshot leaked Artifact identity %s: %s", digest, encoded)
+		}
 	}
 }
 
