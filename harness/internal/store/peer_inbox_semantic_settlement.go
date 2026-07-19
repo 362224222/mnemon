@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
-	"github.com/mnemon-dev/mnemon/harness/internal/teamwork"
 )
 
 const peerInboxSemanticHandlingOperationCode = "handling_superseded"
@@ -26,11 +25,11 @@ type peerInboxSemanticHandlingAuthority struct {
 // commits this transition with the imported Event, Work CAS, and Inbox
 // decision. In particular, this helper never commits or rolls back tx.
 //
-// ImportHandlingSettlement points at the pre-transition Work update Event.
+// PeerInboxSemanticHandlingSettlement points at the pre-transition Work update Event.
 // The Work may therefore still be on that actionable update or may already
 // have advanced to the matching terminal update in this same transaction.
 func settlePeerInboxSemanticHandling(ctx context.Context, tx *sql.Tx,
-	settlement teamwork.ImportHandlingSettlement, at time.Time,
+	settlement PeerInboxSemanticHandlingSettlement, at time.Time,
 ) error {
 	if ctx == nil || tx == nil {
 		return fmt.Errorf("%w: nil context or transaction", ErrPeerInboxSemanticInput)
@@ -54,7 +53,7 @@ func settlePeerInboxSemanticHandling(ctx context.Context, tx *sql.Tx,
 			return err
 		}
 		if err := updatePeerInboxSemanticPendingHandling(ctx, tx, authority.handling,
-			settlement.Disposition(), at); err != nil {
+			string(settlement.Disposition()), at); err != nil {
 			return err
 		}
 	case model.HandlingClaimed:
@@ -80,7 +79,7 @@ func settlePeerInboxSemanticHandling(ctx context.Context, tx *sql.Tx,
 // only a fully settled target, including any exact Run and Operation evidence,
 // is accepted.
 func validatePeerInboxSemanticHandlingSettlement(ctx context.Context, tx *sql.Tx,
-	settlement teamwork.ImportHandlingSettlement,
+	settlement PeerInboxSemanticHandlingSettlement,
 ) error {
 	if ctx == nil || tx == nil {
 		return fmt.Errorf("%w: nil context or transaction", ErrPeerInboxSemanticInput)
@@ -96,10 +95,10 @@ func validatePeerInboxSemanticHandlingSettlement(ctx context.Context, tx *sql.Tx
 }
 
 func readPeerInboxSemanticHandlingAuthority(ctx context.Context, tx *sql.Tx,
-	settlement teamwork.ImportHandlingSettlement, requireCurrentProfile bool,
+	settlement PeerInboxSemanticHandlingSettlement, requireCurrentProfile bool,
 ) (peerInboxSemanticHandlingAuthority, error) {
 	if settlement.WorkRef().IsZero() || settlement.SourceEventID().IsZero() ||
-		!validPeerInboxSemanticHandlingDisposition(settlement.Disposition()) {
+		!settlement.Disposition().Valid() {
 		return peerInboxSemanticHandlingAuthority{}, fmt.Errorf(
 			"%w: incomplete or open Handling settlement", ErrPeerInboxSemanticInput)
 	}
@@ -130,7 +129,8 @@ func readPeerInboxSemanticHandlingAuthority(ctx context.Context, tx *sql.Tx,
 		participants.InitiatorPeerID() != settlement.WorkRef().HomePeerID() ||
 		participants.ReviewerPeerID() != node.PeerID() || source.Audience().Len() != 1 ||
 		!source.Audience().Contains(node.PeerID()) ||
-		!peerInboxSemanticSettlementMatchesWork(ctx, tx, source, work, settlement.Disposition()) {
+		!peerInboxSemanticSettlementMatchesWork(ctx, tx, source, work,
+			string(settlement.Disposition())) {
 		return peerInboxSemanticHandlingAuthority{}, peerInboxSemanticHandlingInvariant(
 			"source Event, Work, participant, or terminal disposition differs")
 	}
@@ -262,7 +262,7 @@ func updatePeerInboxSemanticPendingHandling(ctx context.Context, tx *sql.Tx,
 
 func settlePeerInboxSemanticClaimedHandling(ctx context.Context, tx *sql.Tx,
 	authority peerInboxSemanticHandlingAuthority,
-	settlement teamwork.ImportHandlingSettlement, at time.Time,
+	settlement PeerInboxSemanticHandlingSettlement, at time.Time,
 ) error {
 	handling := authority.handling
 	run, err := readExactPeerInboxSemanticHandlingRun(ctx, tx, handling)
@@ -318,7 +318,7 @@ func settlePeerInboxSemanticClaimedHandling(ctx context.Context, tx *sql.Tx,
 		return err
 	}
 	if err := completePeerInboxSemanticClaimedHandling(ctx, tx, handling,
-		settlement.Disposition(), at); err != nil {
+		string(settlement.Disposition()), at); err != nil {
 		return err
 	}
 	return nil
@@ -482,7 +482,7 @@ func validatePeerInboxSemanticUnclaimedHistory(ctx context.Context, tx *sql.Tx,
 
 func validatePeerInboxSemanticTerminalHandling(ctx context.Context, tx *sql.Tx,
 	authority peerInboxSemanticHandlingAuthority,
-	settlement teamwork.ImportHandlingSettlement,
+	settlement PeerInboxSemanticHandlingSettlement,
 ) error {
 	handling := authority.handling
 	if !handling.Status().Terminal() {
@@ -500,7 +500,7 @@ func validatePeerInboxSemanticTerminalHandling(ctx context.Context, tx *sql.Tx,
 	if err := requireNoActivePeerInboxSemanticHandlingRun(ctx, tx, handling, model.RunID{}); err != nil {
 		return err
 	}
-	if handling.LastDisposition() == settlement.Disposition() {
+	if handling.LastDisposition() == string(settlement.Disposition()) {
 		return validatePeerInboxSemanticSupersededTerminal(ctx, tx, authority, settlement)
 	}
 	if validPeerInboxSemanticHandlingDisposition(handling.LastDisposition()) {
@@ -511,7 +511,7 @@ func validatePeerInboxSemanticTerminalHandling(ctx context.Context, tx *sql.Tx,
 
 func validatePeerInboxSemanticSupersededTerminal(ctx context.Context, tx *sql.Tx,
 	authority peerInboxSemanticHandlingAuthority,
-	settlement teamwork.ImportHandlingSettlement,
+	settlement PeerInboxSemanticHandlingSettlement,
 ) error {
 	handling := authority.handling
 	if handling.Status() != model.HandlingCompleted || handling.LastError() != "" {
@@ -688,7 +688,7 @@ func validatePeerInboxSemanticHandlingRunCreation(authority peerInboxSemanticHan
 }
 
 type peerInboxSemanticOperationReceiptExpectation struct {
-	settlement     teamwork.ImportHandlingSettlement
+	settlement     PeerInboxSemanticHandlingSettlement
 	handling       model.Handling
 	run            model.AgentRun
 	settledAt      time.Time
@@ -923,7 +923,7 @@ func validatePeerInboxSemanticOperationBinding(operation model.Operation,
 	return nil
 }
 
-func peerInboxSemanticHandlingOutcomeReceipt(settlement teamwork.ImportHandlingSettlement,
+func peerInboxSemanticHandlingOutcomeReceipt(settlement PeerInboxSemanticHandlingSettlement,
 	handling model.Handling, run model.AgentRun, at time.Time,
 ) (model.JSON, error) {
 	receipt, err := model.JSONFrom(struct {
@@ -935,7 +935,7 @@ func peerInboxSemanticHandlingOutcomeReceipt(settlement teamwork.ImportHandlingS
 		SourceEvent model.EventID    `json:"source_event_id"`
 		Status      string           `json:"status"`
 		Work        model.WorkRef    `json:"work_ref"`
-	}{settlement.Disposition(), handling.ID(), run.ID(), model.SchemaVersion,
+	}{string(settlement.Disposition()), handling.ID(), run.ID(), model.SchemaVersion,
 		storeTime(at), settlement.SourceEventID(), "superseded", settlement.WorkRef()})
 	if err != nil || len(receipt.Bytes()) > model.MaxContentBytes {
 		return model.JSON{}, peerInboxSemanticHandlingInvariant("build bounded AgentRun receipt: %v", err)
@@ -943,7 +943,7 @@ func peerInboxSemanticHandlingOutcomeReceipt(settlement teamwork.ImportHandlingS
 	return receipt, nil
 }
 
-func peerInboxSemanticHandlingOperationReceipt(settlement teamwork.ImportHandlingSettlement,
+func peerInboxSemanticHandlingOperationReceipt(settlement PeerInboxSemanticHandlingSettlement,
 	handling model.Handling, run model.AgentRun, operation model.Operation, at time.Time,
 ) (model.JSON, error) {
 	receipt, err := model.JSONFrom(struct {
@@ -957,7 +957,7 @@ func peerInboxSemanticHandlingOperationReceipt(settlement teamwork.ImportHandlin
 		SourceEvent model.EventID     `json:"source_event_id"`
 		Status      string            `json:"status"`
 		Work        model.WorkRef     `json:"work_ref"`
-	}{peerInboxSemanticHandlingOperationCode, settlement.Disposition(), handling.ID(),
+	}{peerInboxSemanticHandlingOperationCode, string(settlement.Disposition()), handling.ID(),
 		operation.ID(), run.ID(), model.SchemaVersion, storeTime(at),
 		settlement.SourceEventID(), "rejected", settlement.WorkRef()})
 	if err != nil || len(receipt.Bytes()) > model.MaxContentBytes {

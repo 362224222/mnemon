@@ -189,20 +189,14 @@ func TestPeerInboxSemanticDecisionCommitRequestDigestBindsEveryAuthorityDimensio
 	}
 	replacement := fixture.publication(t, 43, 43, "semantic-decision-wire-c", true)
 	decisionAt := fixture.at.Add(10 * time.Second)
-	inboxID, err := model.ParseInboxID("inbox-semantic-decision-request")
-	if err != nil {
-		t.Fatal(err)
-	}
-	fence := PeerInboxSemanticFence{inboxID: inboxID, leaseOwner: "semantic-decision-worker",
-		leaseUntil: decisionAt.Add(time.Minute), attempt: 3,
-		snapshotDigest: model.Sum([]byte("semantic-decision-snapshot"))}
-	copy(fence.semanticNonce[:], model.Sum([]byte("semantic-decision-nonce")).Bytes())
+	fence := peerInboxSemanticRequestDigestFence(t, decisionAt)
+	plan := peerInboxSemanticRequestDigestPlan(fence, decisionAt)
 
-	baseline, err := peerInboxSemanticCommitRequestDigest(fence, scope, responses, decisionAt)
+	baseline, err := peerInboxSemanticCommitRequestDigest(fence, plan, scope, responses)
 	if err != nil || baseline.IsZero() {
 		t.Fatalf("baseline request digest = (%s,%v)", baseline, err)
 	}
-	repeated, err := peerInboxSemanticCommitRequestDigest(fence, scope, responses, decisionAt)
+	repeated, err := peerInboxSemanticCommitRequestDigest(fence, plan, scope, responses)
 	if err != nil || repeated != baseline {
 		t.Fatalf("request digest is not deterministic = (%s,%s,%v)", baseline, repeated, err)
 	}
@@ -210,16 +204,16 @@ func TestPeerInboxSemanticDecisionCommitRequestDigestBindsEveryAuthorityDimensio
 	type requestVariant struct {
 		name      string
 		fence     PeerInboxSemanticFence
+		plan      PeerInboxSemanticPlan
 		scope     LocalAdmissionScope
 		responses []model.SignedPublication
-		at        time.Time
 	}
 	variants := make([]requestVariant, 0, 32)
 	addFence := func(name string, mutate func(*PeerInboxSemanticFence)) {
 		candidate := fence
 		mutate(&candidate)
 		variants = append(variants, requestVariant{name: "fence/" + name, fence: candidate,
-			scope: scope, responses: responses, at: decisionAt})
+			plan: plan, scope: scope, responses: responses})
 	}
 	otherInbox, _ := model.ParseInboxID("inbox-semantic-decision-request-other")
 	addFence("inbox", func(value *PeerInboxSemanticFence) { value.inboxID = otherInbox })
@@ -233,7 +227,7 @@ func TestPeerInboxSemanticDecisionCommitRequestDigestBindsEveryAuthorityDimensio
 
 	addScope := func(name string, candidate LocalAdmissionScope) {
 		variants = append(variants, requestVariant{name: "scope/" + name, fence: fence,
-			scope: candidate, responses: responses, at: decisionAt})
+			plan: plan, scope: candidate, responses: responses})
 	}
 	channel, _ := model.ParseChannelID("channel-semantic-decision-other")
 	candidate := scope
@@ -317,21 +311,19 @@ func TestPeerInboxSemanticDecisionCommitRequestDigestBindsEveryAuthorityDimensio
 	candidate = scope
 	candidate.count--
 	variants = append(variants, requestVariant{name: "scope/count", fence: fence,
-		scope: candidate, responses: responses, at: decisionAt})
+		plan: plan, scope: candidate, responses: responses})
 	variants = append(variants,
-		requestVariant{name: "decision at", fence: fence, scope: scope,
-			responses: responses, at: decisionAt.Add(time.Nanosecond)},
-		requestVariant{name: "wire", fence: fence, scope: scope,
-			responses: []model.SignedPublication{responses[0], replacement}, at: decisionAt},
-		requestVariant{name: "response count", fence: fence, scope: scope,
-			responses: responses[:1], at: decisionAt},
-		requestVariant{name: "order", fence: fence, scope: scope,
-			responses: []model.SignedPublication{responses[1], responses[0]}, at: decisionAt})
+		requestVariant{name: "wire", fence: fence, plan: plan, scope: scope,
+			responses: []model.SignedPublication{responses[0], replacement}},
+		requestVariant{name: "response count", fence: fence, plan: plan,
+			scope: scope, responses: responses[:1]},
+		requestVariant{name: "order", fence: fence, plan: plan, scope: scope,
+			responses: []model.SignedPublication{responses[1], responses[0]}})
 
 	for _, variant := range variants {
 		t.Run(variant.name, func(t *testing.T) {
-			got, err := peerInboxSemanticCommitRequestDigest(variant.fence, variant.scope,
-				variant.responses, variant.at)
+			got, err := peerInboxSemanticCommitRequestDigest(variant.fence, variant.plan,
+				variant.scope, variant.responses)
 			if err != nil {
 				t.Fatalf("variant request digest: %v", err)
 			}
@@ -341,8 +333,8 @@ func TestPeerInboxSemanticDecisionCommitRequestDigestBindsEveryAuthorityDimensio
 		})
 	}
 
-	if _, err := peerInboxSemanticCommitRequestDigest(fence, scope,
-		[]model.SignedPublication{{}}, decisionAt); !errors.Is(err, ErrPeerInboxSemanticInput) {
+	if _, err := peerInboxSemanticCommitRequestDigest(fence, plan, scope,
+		[]model.SignedPublication{{}}); !errors.Is(err, ErrPeerInboxSemanticInput) {
 		t.Fatalf("incomplete response publication error = %v", err)
 	}
 }

@@ -594,7 +594,7 @@ type peerInboxSemanticHandlingSettlementFixture struct {
 	terminal     model.SignedPublication
 	work         model.ReviewWork
 	handling     model.Handling
-	settlement   teamwork.ImportHandlingSettlement
+	settlement   PeerInboxSemanticHandlingSettlement
 	settleAt     time.Time
 }
 
@@ -842,13 +842,10 @@ func newPeerInboxSemanticHandlingSettlementFixture(t *testing.T, seed string,
 	if err != nil {
 		t.Fatal(err)
 	}
-	settlement, ok := plan.Settlement()
-	if !ok {
-		t.Fatalf("terminal plan has no Handling settlement: %#v", plan)
-	}
+	storeSettlement := peerInboxSemanticStoreSettlement(t, plan)
 	return &peerInboxSemanticHandlingSettlementFixture{store: peer.store, peer: peer,
 		profile: profile, source: source.Event(), terminalWire: terminalLocal, terminal: terminal, work: work,
-		handling: handling, settlement: settlement, settleAt: settleAt}
+		handling: handling, settlement: storeSettlement, settleAt: settleAt}
 }
 
 func claimPeerInboxSemanticSettlementHandling(t *testing.T,
@@ -1036,7 +1033,8 @@ func assertPeerInboxSemanticSettlementReceipt(t *testing.T, receipt model.JSON,
 	if !operationID.IsZero() {
 		wantCode = peerInboxSemanticHandlingOperationCode
 	}
-	if envelope.Code != wantCode || envelope.Disposition != fixture.settlement.Disposition() ||
+	if envelope.Code != wantCode ||
+		envelope.Disposition != string(fixture.settlement.Disposition()) ||
 		envelope.HandlingID != handling.ID().String() ||
 		envelope.OperationID != operationID.String() || envelope.RunID != runID.String() ||
 		envelope.SchemaVersion != model.SchemaVersion || envelope.SettledAt != storeTime(fixture.settleAt) ||

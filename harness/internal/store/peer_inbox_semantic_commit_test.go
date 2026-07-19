@@ -68,7 +68,9 @@ func TestCommitPeerInboxSemanticAppliesAndReplaysExactDecision(t *testing.T) {
 	}
 
 	different := spec
-	different.DecisionAt = different.DecisionAt.Add(time.Nanosecond)
+	differentAt := spec.Plan.DecisionAt().Add(time.Nanosecond)
+	different.Plan = peerInboxSemanticStorePlan(t, claim, differentAt,
+		teamworkPlanForClaim(t, claim, differentAt))
 	if _, err := restarted.CommitPeerInboxSemantic(context.Background(), different,
 		trustedNow.Add(time.Hour)); !errors.Is(err, ErrPeerInboxSemanticInvariant) {
 		t.Fatalf("different request replay error = %v", err)
@@ -91,10 +93,14 @@ func TestCommitPeerInboxSemanticRetryAndRollbackLeaveNoDomainEffects(t *testing.
 		claim := mustClaimPeerInboxSemantic(t, fixture.store, "semantic-retry-commit-worker",
 			readyAt.Add(time.Second))
 		decisionAt := readyAt.Add(2 * time.Second)
+		policy := teamworkPlanForClaim(t, claim, decisionAt)
+		if policy.Disposition() != teamwork.ImportRetry {
+			t.Fatalf("policy disposition = %q, want retry", policy.Disposition())
+		}
 		_, err := fixture.store.CommitPeerInboxSemantic(context.Background(),
-			CommitPeerInboxSemanticSpec{Fence: claim.Fence(), DecisionAt: decisionAt}, decisionAt)
-		if !errors.Is(err, ErrPeerInboxSemanticRetryRequired) {
-			t.Fatalf("planner retry error = %v", err)
+			CommitPeerInboxSemanticSpec{Fence: claim.Fence()}, decisionAt)
+		if !errors.Is(err, ErrPeerInboxSemanticInput) {
+			t.Fatalf("retry entered terminal commit: %v", err)
 		}
 		assertPeerInboxSemanticState(t, fixture.store, inboxID, "processing",
 			claim.Fence().attempt, "", true)
@@ -116,7 +122,7 @@ func TestCommitPeerInboxSemanticRetryAndRollbackLeaveNoDomainEffects(t *testing.
 			BEFORE UPDATE OF status ON peer_inbox WHEN NEW.status='accepted'
 			BEGIN SELECT RAISE(ABORT,'injected semantic terminal failure'); END`)
 		if _, err := fixture.store.CommitPeerInboxSemantic(context.Background(), spec,
-			spec.DecisionAt); err == nil {
+			spec.Plan.DecisionAt()); err == nil {
 			t.Fatal("injected terminal failure was accepted")
 		}
 		assertPeerInboxSemanticState(t, fixture.store, put.InboxID, "processing", 1, "", true)
@@ -151,7 +157,7 @@ func TestCommitPeerInboxSemanticRejectsResponseArtifactSelfAuthorization(t *test
 		teamworkPlanForClaim(t, claim, commitAt).Responses()[0], 0, commitAt,
 		[]model.ArtifactRef{ref})
 	if _, err := fixture.store.CommitPeerInboxSemantic(context.Background(), spec,
-		spec.DecisionAt); !errors.Is(err, ErrPeerInboxSemanticInput) {
+		spec.Plan.DecisionAt()); !errors.Is(err, ErrPeerInboxSemanticInput) {
 		t.Fatalf("self-authorized response Artifact error = %v", err)
 	}
 	assertPeerInboxSemanticNoDomainMutation(t, fixture.store, publication.Event().ID())
@@ -282,7 +288,7 @@ func TestCommitPeerInboxSemanticConflictHasNoLocalResponse(t *testing.T) {
 	beforeOrigin, beforeChannel := peerInboxSemanticLocalHeads(t, fixture.store,
 		fixture.channel.Channel().ID(), fixture.channel.Owner())
 	result, err := fixture.store.CommitPeerInboxSemantic(context.Background(),
-		CommitPeerInboxSemanticSpec{Fence: claim.Fence(), DecisionAt: decisionAt}, decisionAt)
+		peerInboxSemanticCommitSpec(t, fixture, claim, decisionAt), decisionAt)
 	if err != nil || result.Status() != model.InboxConflicted || result.Diagnostic() != "invalid_payload" ||
 		len(result.ResponseEventIDs()) != 0 || result.Decision().IsZero() {
 		t.Fatalf("zero-response conflict = (%#v,%v)", result, err)
@@ -380,7 +386,7 @@ func TestCommitPeerInboxSemanticReceiptOnlyConsumesRenewalWithoutResponse(t *tes
 		t.Fatal(err)
 	}
 	decisionAt := renewAt.Add(time.Second)
-	spec := CommitPeerInboxSemanticSpec{Fence: renewed.Fence(), DecisionAt: decisionAt}
+	spec := peerInboxSemanticCommitSpecWithFence(t, fixture, claim, renewed.Fence(), decisionAt)
 	result, err := fixture.store.CommitPeerInboxSemantic(ctx, spec, decisionAt)
 	if err != nil || !result.Changed() || result.Replayed() ||
 		result.Status() != model.InboxAccepted || result.Diagnostic() != "" ||
@@ -426,7 +432,7 @@ func TestCommitPeerInboxSemanticMaterializesImportedReplicaArtifactsAtomically(t
 			readyAt.Add(time.Second))
 		decisionAt := readyAt.Add(2 * time.Second)
 		result, err := fixture.store.CommitPeerInboxSemantic(context.Background(),
-			CommitPeerInboxSemanticSpec{Fence: claim.Fence(), DecisionAt: decisionAt}, decisionAt)
+			peerInboxSemanticCommitSpec(t, fixture, claim, decisionAt), decisionAt)
 		if err != nil || result.ImportedEventID() != claim.ImportedEvent().ID() || result.Changed() == false {
 			t.Fatalf("replica semantic commit = (%#v,%v)", result, err)
 		}
@@ -464,7 +470,7 @@ func TestCommitPeerInboxSemanticMaterializesImportedReplicaArtifactsAtomically(t
 			BEGIN SELECT RAISE(ABORT,'injected replica terminal failure'); END`)
 		decisionAt := readyAt.Add(2 * time.Second)
 		if _, err := fixture.store.CommitPeerInboxSemantic(context.Background(),
-			CommitPeerInboxSemanticSpec{Fence: claim.Fence(), DecisionAt: decisionAt},
+			peerInboxSemanticCommitSpec(t, fixture, claim, decisionAt),
 			decisionAt); err == nil {
 			t.Fatal("injected replica terminal failure was accepted")
 		}
@@ -719,7 +725,7 @@ func TestCommitPeerInboxSemanticReplayRejectsExpandedOrMalformedEffects(t *testi
 		fixture, spec, claim, _ := committedPeerInboxSemanticReplicaFixture(t,
 			"semantic-replay-extra-imported-pin")
 		closure, extraRoot, _ := newArtifactSourceClosure(t, "semantic-extra-pin",
-			[]byte("semantic extra pin"), spec.DecisionAt)
+			[]byte("semantic extra pin"), spec.Plan.DecisionAt())
 		if _, err := fixture.store.CheckpointVerifiedArtifactClosure(context.Background(),
 			closure); err != nil {
 			t.Fatal(err)
@@ -728,7 +734,7 @@ func TestCommitPeerInboxSemanticReplayRejectsExpandedOrMalformedEffects(t *testi
 			created_at) VALUES(?,'event',?,?)`, extraRoot.RootDigest.String(),
 			claim.ImportedEvent().ID().String(), storeTime(claim.ImportedEvent().AcceptedAt()))
 		if _, err := fixture.store.CommitPeerInboxSemantic(context.Background(), spec,
-			spec.DecisionAt.Add(time.Hour)); !errors.Is(err, ErrPeerInboxSemanticInvariant) {
+			spec.Plan.DecisionAt().Add(time.Hour)); !errors.Is(err, ErrPeerInboxSemanticInvariant) {
 			t.Fatalf("extra imported Event pin replay error = %v", err)
 		}
 	})
@@ -737,7 +743,7 @@ func TestCommitPeerInboxSemanticReplayRejectsExpandedOrMalformedEffects(t *testi
 		fixture, spec, claim, _ := committedPeerInboxSemanticReplicaFixture(t,
 			"semantic-replay-extra-imported-provenance")
 		closure, extraRoot, _ := newArtifactSourceClosure(t, "semantic-extra-provenance",
-			[]byte("semantic extra provenance"), spec.DecisionAt)
+			[]byte("semantic extra provenance"), spec.Plan.DecisionAt())
 		if _, err := fixture.store.CheckpointVerifiedArtifactClosure(context.Background(),
 			closure); err != nil {
 			t.Fatal(err)
@@ -749,7 +755,7 @@ func TestCommitPeerInboxSemanticReplayRejectsExpandedOrMalformedEffects(t *testi
 			claim.ImportedEvent().Scope().OriginPeerID().String(),
 			storeTime(claim.ImportedEvent().AcceptedAt()))
 		if _, err := fixture.store.CommitPeerInboxSemantic(context.Background(), spec,
-			spec.DecisionAt.Add(time.Hour)); !errors.Is(err, ErrPeerInboxSemanticInvariant) {
+			spec.Plan.DecisionAt().Add(time.Hour)); !errors.Is(err, ErrPeerInboxSemanticInvariant) {
 			t.Fatalf("extra imported provenance replay error = %v", err)
 		}
 	})
@@ -766,7 +772,7 @@ func TestCommitPeerInboxSemanticReplayRejectsExpandedOrMalformedEffects(t *testi
 			readyAt.Add(time.Second))
 		spec := peerInboxSemanticCommitSpec(t, fixture, claim, readyAt.Add(2*time.Second))
 		if _, err := fixture.store.CommitPeerInboxSemantic(context.Background(), spec,
-			spec.DecisionAt); err != nil {
+			spec.Plan.DecisionAt()); err != nil {
 			t.Fatal(err)
 		}
 		response := spec.Responses[0].Event()
@@ -778,7 +784,7 @@ func TestCommitPeerInboxSemanticReplayRejectsExpandedOrMalformedEffects(t *testi
 			response.Scope().ChannelID().String(), extraTarget.String(), response.ID().String(),
 			storeTime(response.AcceptedAt()), storeTime(response.AcceptedAt()))
 		if _, err := fixture.store.CommitPeerInboxSemantic(context.Background(), spec,
-			spec.DecisionAt.Add(time.Hour)); !errors.Is(err, ErrPeerInboxSemanticInvariant) {
+			spec.Plan.DecisionAt().Add(time.Hour)); !errors.Is(err, ErrPeerInboxSemanticInvariant) {
 			t.Fatalf("extra response delivery replay error = %v", err)
 		}
 	})
@@ -795,14 +801,14 @@ func TestCommitPeerInboxSemanticReplayRejectsExpandedOrMalformedEffects(t *testi
 			readyAt.Add(time.Second))
 		spec := peerInboxSemanticCommitSpec(t, fixture, claim, readyAt.Add(2*time.Second))
 		if _, err := fixture.store.CommitPeerInboxSemantic(context.Background(), spec,
-			spec.DecisionAt); err != nil {
+			spec.Plan.DecisionAt()); err != nil {
 			t.Fatal(err)
 		}
 		mustExec(t, fixture.store, `UPDATE works SET version=version+1,state='REWORK'
 			WHERE home_peer_id=? AND work_id=?`, work.Ref().HomePeerID().String(),
 			work.Ref().WorkID().String())
 		if _, err := fixture.store.CommitPeerInboxSemantic(context.Background(), spec,
-			spec.DecisionAt.Add(time.Hour)); !errors.Is(err, ErrPeerInboxSemanticInvariant) {
+			spec.Plan.DecisionAt().Add(time.Hour)); !errors.Is(err, ErrPeerInboxSemanticInvariant) {
 			t.Fatalf("malformed later Work replay error = %v", err)
 		}
 	})
@@ -819,80 +825,86 @@ func TestCommitPeerInboxSemanticReplayRejectsExpandedOrMalformedEffects(t *testi
 			readyAt.Add(time.Second))
 		spec := peerInboxSemanticCommitSpec(t, fixture, claim, readyAt.Add(2*time.Second))
 		if _, err := fixture.store.CommitPeerInboxSemantic(context.Background(), spec,
-			spec.DecisionAt); err != nil {
+			spec.Plan.DecisionAt()); err != nil {
 			t.Fatal(err)
 		}
-		active, err := fixture.store.GetReviewWork(context.Background(), work.Ref())
-		if err != nil || active.Version() != 2 || active.State() != model.WorkActive {
-			t.Fatalf("semantic Work = (%#v,%v)", active, err)
-		}
-
-		audience, err := model.NewAudience([]model.PeerID{fixture.remote.Identity().PeerID()})
-		if err != nil {
-			t.Fatal(err)
-		}
-		scope, err := fixture.store.PrepareLocalAdmission(context.Background(),
-			active.ChannelID(), audience, 1)
-		if err != nil {
-			t.Fatal(err)
-		}
-		eventScope, err := scope.EventScope(0, active.Ref())
-		if err != nil {
-			t.Fatal(err)
-		}
-		payload, err := model.NewJSON([]byte(`{"iteration":1,"work_version":2}`))
-		if err != nil {
-			t.Fatal(err)
-		}
-		eventID, err := model.ParseEventID("event-inbox-semantic-replay-disjoint-delivered")
-		if err != nil {
-			t.Fatal(err)
-		}
-		branchAt := spec.DecisionAt.Add(time.Second)
-		branch := fixture.signEventAs(t, model.EventSpec{ID: eventID, Scope: eventScope,
-			Source: model.EventSourceLocal, ActorPrincipal: scope.Profile().Principal(),
-			Type: model.EventReviewDelivered, Audience: audience, Summary: "disjoint delivery",
-			Payload: payload, CausedBy: []model.EventKey{offered.Key()},
-			CreatedAt: branchAt, AcceptedAt: branchAt}, fixture.channel.Owner())
-		nextSpec := active.Spec()
-		nextSpec.Version++
-		nextSpec.State = model.WorkDelivered
-		nextSpec.StateData = branch.Event().Payload()
-		nextSpec.UpdatedBy = branch.Event().ID()
-		nextSpec.UpdatedAt = branchAt
-		next, err := model.NewReviewWork(nextSpec)
-		if err != nil {
-			t.Fatal(err)
-		}
-		mutation, err := NewWorkTransition(next, active.Version(), active.State())
-		if err != nil {
-			t.Fatal(err)
-		}
-		tx, err := fixture.store.db.BeginTx(context.Background(), nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer tx.Rollback()
-		if err := insertAcceptedEvent(context.Background(), tx, branch); err != nil {
-			t.Fatal(err)
-		}
-		if err := applyWorkMutation(context.Background(), tx, mutation, branch.Event()); err != nil {
-			t.Fatal(err)
-		}
-		if err := tx.Commit(); err != nil {
-			t.Fatal(err)
-		}
-		durable, err := fixture.store.GetReviewWork(context.Background(), work.Ref())
-		if err != nil || !samePeerInboxSemanticWork(durable, next) {
-			t.Fatalf("disjoint later Work = (%#v,%v), want %#v", durable, err, next)
-		}
-
+		branchAt := installPeerInboxSemanticDisjointLaterWork(t, fixture, spec, work, offered)
 		if _, err := fixture.store.CommitPeerInboxSemantic(context.Background(), spec,
 			branchAt.Add(time.Hour)); !errors.Is(err, ErrPeerInboxSemanticInvariant) ||
 			!strings.Contains(err.Error(), "does not descend from semantic effect") {
 			t.Fatalf("disjoint later Work replay error = %v", err)
 		}
 	})
+}
+
+func installPeerInboxSemanticDisjointLaterWork(t *testing.T, fixture peerInboxFixture,
+	spec CommitPeerInboxSemanticSpec, work model.ReviewWork, offered model.Event,
+) time.Time {
+	t.Helper()
+	active, err := fixture.store.GetReviewWork(context.Background(), work.Ref())
+	if err != nil || active.Version() != 2 || active.State() != model.WorkActive {
+		t.Fatalf("semantic Work = (%#v,%v)", active, err)
+	}
+	audience, err := model.NewAudience([]model.PeerID{fixture.remote.Identity().PeerID()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope, err := fixture.store.PrepareLocalAdmission(context.Background(),
+		active.ChannelID(), audience, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventScope, err := scope.EventScope(0, active.Ref())
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := model.NewJSON([]byte(`{"iteration":1,"work_version":2}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventID, err := model.ParseEventID("event-inbox-semantic-replay-disjoint-delivered")
+	if err != nil {
+		t.Fatal(err)
+	}
+	branchAt := spec.Plan.DecisionAt().Add(time.Second)
+	branch := fixture.signEventAs(t, model.EventSpec{ID: eventID, Scope: eventScope,
+		Source: model.EventSourceLocal, ActorPrincipal: scope.Profile().Principal(),
+		Type: model.EventReviewDelivered, Audience: audience, Summary: "disjoint delivery",
+		Payload: payload, CausedBy: []model.EventKey{offered.Key()},
+		CreatedAt: branchAt, AcceptedAt: branchAt}, fixture.channel.Owner())
+	nextSpec := active.Spec()
+	nextSpec.Version++
+	nextSpec.State = model.WorkDelivered
+	nextSpec.StateData = branch.Event().Payload()
+	nextSpec.UpdatedBy = branch.Event().ID()
+	nextSpec.UpdatedAt = branchAt
+	next, err := model.NewReviewWork(nextSpec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutation, err := NewWorkTransition(next, active.Version(), active.State())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := fixture.store.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if err := insertAcceptedEvent(context.Background(), tx, branch); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyWorkMutation(context.Background(), tx, mutation, branch.Event()); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	durable, err := fixture.store.GetReviewWork(context.Background(), work.Ref())
+	if err != nil || !samePeerInboxSemanticWork(durable, next) {
+		t.Fatalf("disjoint later Work = (%#v,%v), want %#v", durable, err, next)
+	}
+	return branchAt
 }
 
 type peerInboxSemanticMixedArtifactCounts struct {
@@ -1137,10 +1149,11 @@ func peerInboxSemanticCommitSpec(t *testing.T, fixture peerInboxFixture,
 	claim PeerInboxSemanticClaim, at time.Time,
 ) CommitPeerInboxSemanticSpec {
 	t.Helper()
-	plan := teamworkPlanForClaim(t, claim, at)
-	intents := plan.Responses()
+	policy := teamworkPlanForClaim(t, claim, at)
+	plan := peerInboxSemanticStorePlan(t, claim, at, policy)
+	intents := policy.Responses()
 	if len(intents) == 0 {
-		return CommitPeerInboxSemanticSpec{Fence: claim.Fence(), DecisionAt: at}
+		return CommitPeerInboxSemanticSpec{Fence: claim.Fence(), Plan: plan}
 	}
 	audience, err := model.NewAudience([]model.PeerID{claim.ImportedEvent().Scope().OriginPeerID()})
 	if err != nil {
@@ -1166,33 +1179,17 @@ func peerInboxSemanticCommitSpec(t *testing.T, fixture peerInboxFixture,
 		responses[index] = peerInboxSemanticSignedResponse(t, fixture, claim, scope,
 			intent, uint8(index), at, artifacts)
 	}
-	return CommitPeerInboxSemanticSpec{Fence: claim.Fence(), Scope: scope,
-		Responses: responses, DecisionAt: at}
+	return CommitPeerInboxSemanticSpec{Fence: claim.Fence(), Plan: plan,
+		Scope: scope, Responses: responses}
 }
 
-func teamworkPlanForClaim(t *testing.T, claim PeerInboxSemanticClaim,
-	at time.Time,
-) teamwork.ImportPlan {
+func peerInboxSemanticCommitSpecWithFence(t *testing.T, fixture peerInboxFixture,
+	claim PeerInboxSemanticClaim, fence PeerInboxSemanticFence, at time.Time,
+) CommitPeerInboxSemanticSpec {
 	t.Helper()
-	facts := make([]teamwork.ImportEventFact, len(claim.CausalEvents()))
-	for index, event := range claim.CausalEvents() {
-		fact, err := teamwork.NewImportEventFact(event)
-		if err != nil {
-			t.Fatal(err)
-		}
-		facts[index] = fact
-	}
-	var current *model.ReviewWork
-	if value, ok := claim.CurrentWork(); ok {
-		current = &value
-	}
-	local := claim.ImportedEvent().Audience().Peers()
-	plan, err := teamwork.PlanImportedEvent(teamwork.ImportPlanSpec{LocalPeerID: local[0],
-		Event: claim.ImportedEvent(), Current: current, Facts: facts, Now: at})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return plan
+	spec := peerInboxSemanticCommitSpec(t, fixture, claim, at)
+	spec.Fence = fence
+	return spec
 }
 
 func peerInboxSemanticSignedResponse(t *testing.T, fixture peerInboxFixture,
@@ -1333,10 +1330,9 @@ func committedPeerInboxSemanticReplicaFixture(t *testing.T, seed string,
 	t.Helper()
 	fixture, _, root, readyAt := newReadyPeerInboxSemanticArtifact(t, seed)
 	claim := mustClaimPeerInboxSemantic(t, fixture.store, seed+"-worker", readyAt.Add(time.Second))
-	spec := CommitPeerInboxSemanticSpec{Fence: claim.Fence(),
-		DecisionAt: readyAt.Add(2 * time.Second)}
+	spec := peerInboxSemanticCommitSpec(t, fixture, claim, readyAt.Add(2*time.Second))
 	if _, err := fixture.store.CommitPeerInboxSemantic(context.Background(), spec,
-		spec.DecisionAt); err != nil {
+		spec.Plan.DecisionAt()); err != nil {
 		t.Fatal(err)
 	}
 	return fixture, spec, claim, root

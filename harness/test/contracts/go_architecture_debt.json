@@ -93,16 +93,6 @@
       "removal_checkpoint": "7R"
     },
     {
-      "rule": "dependency_direction",
-      "identity": "dependency_direction:harness/internal/store::teamwork",
-      "path": "harness/internal/store",
-      "component": "teamwork",
-      "risk": "medium",
-      "evidence": "harness/internal/store/peer_inbox_semantic_commit.go",
-      "owner": "harness/internal/store + harness/internal/teamwork",
-      "removal_checkpoint": "7R"
-    },
-    {
       "rule": "deterministic_order",
       "identity": "deterministic_order:gossip-subscription-filter",
       "path": "harness/internal/peer/topic.go",

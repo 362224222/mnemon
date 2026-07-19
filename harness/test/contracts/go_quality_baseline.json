@@ -1680,7 +1680,7 @@
       "identity": "cognitive_complexity:harness/internal/store/peer_inbox_semantic_commit.go::(*Store).CommitPeerInboxSemantic",
       "path": "harness/internal/store/peer_inbox_semantic_commit.go",
       "symbol": "(*Store).CommitPeerInboxSemantic",
-      "ceiling": 56
+      "ceiling": 54
     },
     {
       "rule": "cognitive_complexity",
@@ -1708,7 +1708,7 @@
       "identity": "cognitive_complexity:harness/internal/store/peer_inbox_semantic_commit.go::validatePeerInboxSemanticTerminalReplay",
       "path": "harness/internal/store/peer_inbox_semantic_commit.go",
       "symbol": "validatePeerInboxSemanticTerminalReplay",
-      "ceiling": 74
+      "ceiling": 72
     },
     {
       "rule": "cognitive_complexity",
@@ -1736,7 +1736,7 @@
       "identity": "cognitive_complexity:harness/internal/store/peer_inbox_semantic_decision.go::validPeerInboxSemanticDecisionShape",
       "path": "harness/internal/store/peer_inbox_semantic_decision.go",
       "symbol": "validPeerInboxSemanticDecisionShape",
-      "ceiling": 30
+      "ceiling": 29
     },
     {
       "rule": "cognitive_complexity",
@@ -4081,7 +4081,7 @@
       "identity": "cyclomatic_complexity:harness/internal/store/peer_inbox_semantic_commit.go::(*Store).CommitPeerInboxSemantic",
       "path": "harness/internal/store/peer_inbox_semantic_commit.go",
       "symbol": "(*Store).CommitPeerInboxSemantic",
-      "ceiling": 46
+      "ceiling": 44
     },
     {
       "rule": "cyclomatic_complexity",
@@ -4102,7 +4102,7 @@
       "identity": "cyclomatic_complexity:harness/internal/store/peer_inbox_semantic_commit.go::validatePeerInboxSemanticTerminalReplay",
       "path": "harness/internal/store/peer_inbox_semantic_commit.go",
       "symbol": "validatePeerInboxSemanticTerminalReplay",
-      "ceiling": 67
+      "ceiling": 65
     },
     {
       "rule": "cyclomatic_complexity",
@@ -4137,7 +4137,7 @@
       "identity": "cyclomatic_complexity:harness/internal/store/peer_inbox_semantic_decision.go::validPeerInboxSemanticDecisionShape",
       "path": "harness/internal/store/peer_inbox_semantic_decision.go",
       "symbol": "validPeerInboxSemanticDecisionShape",
-      "ceiling": 27
+      "ceiling": 26
     },
     {
       "rule": "cyclomatic_complexity",
@@ -5075,14 +5075,14 @@
       "identity": "function_logical_lines:harness/internal/store/peer_inbox_semantic_commit.go::(*Store).CommitPeerInboxSemantic",
       "path": "harness/internal/store/peer_inbox_semantic_commit.go",
       "symbol": "(*Store).CommitPeerInboxSemantic",
-      "ceiling": 130
+      "ceiling": 126
     },
     {
       "rule": "function_logical_lines",
       "identity": "function_logical_lines:harness/internal/store/peer_inbox_semantic_commit.go::validatePeerInboxSemanticTerminalReplay",
       "path": "harness/internal/store/peer_inbox_semantic_commit.go",
       "symbol": "validatePeerInboxSemanticTerminalReplay",
-      "ceiling": 134
+      "ceiling": 131
     },
     {
       "rule": "function_logical_lines",
@@ -5110,14 +5110,14 @@
       "identity": "function_logical_lines:harness/internal/store/peer_inbox_semantic_commit_test.go::TestCommitPeerInboxSemanticReplayRejectsExpandedOrMalformedEffects",
       "path": "harness/internal/store/peer_inbox_semantic_commit_test.go",
       "symbol": "TestCommitPeerInboxSemanticReplayRejectsExpandedOrMalformedEffects",
-      "ceiling": 143
+      "ceiling": 94
     },
     {
       "rule": "function_logical_lines",
       "identity": "function_logical_lines:harness/internal/store/peer_inbox_semantic_decision_test.go::TestPeerInboxSemanticDecisionCommitRequestDigestBindsEveryAuthorityDimension",
       "path": "harness/internal/store/peer_inbox_semantic_decision_test.go",
       "symbol": "TestPeerInboxSemanticDecisionCommitRequestDigestBindsEveryAuthorityDimension",
-      "ceiling": 143
+      "ceiling": 136
     },
     {
       "rule": "function_logical_lines",
@@ -5145,7 +5145,7 @@
       "identity": "function_logical_lines:harness/internal/store/peer_inbox_semantic_settlement_test.go::newPeerInboxSemanticHandlingSettlementFixture",
       "path": "harness/internal/store/peer_inbox_semantic_settlement_test.go",
       "symbol": "newPeerInboxSemanticHandlingSettlementFixture",
-      "ceiling": 104
+      "ceiling": 102
     },
     {
       "rule": "function_logical_lines",
@@ -6538,14 +6538,14 @@
       "identity": "function_statements:harness/internal/store/peer_inbox_semantic_commit.go::(*Store).CommitPeerInboxSemantic",
       "path": "harness/internal/store/peer_inbox_semantic_commit.go",
       "symbol": "(*Store).CommitPeerInboxSemantic",
-      "ceiling": 123
+      "ceiling": 119
     },
     {
       "rule": "function_statements",
       "identity": "function_statements:harness/internal/store/peer_inbox_semantic_commit.go::validatePeerInboxSemanticTerminalReplay",
       "path": "harness/internal/store/peer_inbox_semantic_commit.go",
       "symbol": "validatePeerInboxSemanticTerminalReplay",
-      "ceiling": 97
+      "ceiling": 95
     },
     {
       "rule": "function_statements",
@@ -6570,17 +6570,10 @@
     },
     {
       "rule": "function_statements",
-      "identity": "function_statements:harness/internal/store/peer_inbox_semantic_commit_test.go::TestCommitPeerInboxSemanticReplayRejectsExpandedOrMalformedEffects.$func-599105a269cc23d04e7bdda3-e6f30033f5bca34c638f042d-cy20-co19-li68-st62-ne1-001",
-      "path": "harness/internal/store/peer_inbox_semantic_commit_test.go",
-      "symbol": "TestCommitPeerInboxSemanticReplayRejectsExpandedOrMalformedEffects.$func-599105a269cc23d04e7bdda3-e6f30033f5bca34c638f042d-cy20-co19-li68-st62-ne1-001",
-      "ceiling": 62
-    },
-    {
-      "rule": "function_statements",
       "identity": "function_statements:harness/internal/store/peer_inbox_semantic_decision_test.go::TestPeerInboxSemanticDecisionCommitRequestDigestBindsEveryAuthorityDimension",
       "path": "harness/internal/store/peer_inbox_semantic_decision_test.go",
       "symbol": "TestPeerInboxSemanticDecisionCommitRequestDigestBindsEveryAuthorityDimension",
-      "ceiling": 82
+      "ceiling": 79
     },
     {
       "rule": "function_statements",
@@ -6615,7 +6608,7 @@
       "identity": "function_statements:harness/internal/store/peer_inbox_semantic_settlement_test.go::newPeerInboxSemanticHandlingSettlementFixture",
       "path": "harness/internal/store/peer_inbox_semantic_settlement_test.go",
       "symbol": "newPeerInboxSemanticHandlingSettlementFixture",
-      "ceiling": 76
+      "ceiling": 74
     },
     {
       "rule": "function_statements",
@@ -7201,13 +7194,13 @@
       "rule": "paired_test_file_lines",
       "identity": "paired_test_file_lines:harness/internal/store/peer_inbox_semantic_commit_test.go",
       "path": "harness/internal/store/peer_inbox_semantic_commit_test.go",
-      "ceiling": 1354
+      "ceiling": 1350
     },
     {
       "rule": "paired_test_file_lines",
       "identity": "paired_test_file_lines:harness/internal/store/peer_inbox_semantic_settlement_test.go",
       "path": "harness/internal/store/peer_inbox_semantic_settlement_test.go",
-      "ceiling": 1089
+      "ceiling": 1087
     },
     {
       "rule": "paired_test_file_lines",
@@ -7615,7 +7608,7 @@
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/store/peer_inbox_semantic_commit.go",
       "path": "harness/internal/store/peer_inbox_semantic_commit.go",
-      "ceiling": 1459
+      "ceiling": 1421
     },
     {
       "rule": "production_file_lines",

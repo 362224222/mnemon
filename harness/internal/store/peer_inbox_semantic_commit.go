@@ -13,28 +13,21 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
-	"github.com/mnemon-dev/mnemon/harness/internal/teamwork"
 )
-
-// ErrPeerInboxSemanticRetryRequired reports that the deterministic semantic
-// planner cannot yet produce a terminal decision from the durable snapshot.
-var ErrPeerInboxSemanticRetryRequired = errors.New("Peer Inbox semantic plan requires retry")
 
 // Terminal replay never scans an unbounded durable causal graph. T0 has at
 // most a handful of Work transitions, so 64 leaves ample room for legitimate
 // fan-in while keeping corrupt or adversarial state bounded.
 const peerInboxSemanticWorkCausalityLimit = 64
 
-// CommitPeerInboxSemanticSpec carries one exact semantic fence plus any local
-// response publications assembled from the claim. Work, Handling, Artifact
-// provenance, settlement and the terminal Inbox decision are never accepted
-// from the caller; the Store re-plans and derives all of them in one write
-// transaction.
+// CommitPeerInboxSemanticSpec carries one exact semantic fence, an immutable
+// Store plan built from its claim outside SQLite, and any local response
+// publications assembled from that plan.
 type CommitPeerInboxSemanticSpec struct {
-	Fence      PeerInboxSemanticFence
-	Scope      LocalAdmissionScope
-	Responses  []model.SignedPublication
-	DecisionAt time.Time
+	Fence     PeerInboxSemanticFence
+	Plan      PeerInboxSemanticPlan
+	Scope     LocalAdmissionScope
+	Responses []model.SignedPublication
 }
 
 // PeerInboxSemanticCommitResult reports the exact durable projection of a
@@ -120,8 +113,8 @@ func PeerInboxSemanticResponseEventID(seed model.Digest, ordinal uint8) (model.E
 
 // CommitPeerInboxSemantic is the atomic materialization boundary for one
 // verified audience Inbox row. A terminal replay validates the original
-// snapshot, deterministic plan and every immutable Event projection before
-// returning; it never reacquires expired Channel or lease authority.
+// snapshot, frozen materialization plan and every immutable Event projection
+// before returning; it never reacquires expired Channel or lease authority.
 func (s *Store) CommitPeerInboxSemantic(ctx context.Context,
 	spec CommitPeerInboxSemanticSpec, trustedNow time.Time,
 ) (PeerInboxSemanticCommitResult, error) {
@@ -129,8 +122,8 @@ func (s *Store) CommitPeerInboxSemantic(ctx context.Context,
 	if err != nil {
 		return PeerInboxSemanticCommitResult{}, err
 	}
-	requestDigest, err := peerInboxSemanticCommitRequestDigest(spec.Fence, spec.Scope,
-		spec.Responses, decisionAt)
+	requestDigest, err := peerInboxSemanticCommitRequestDigest(spec.Fence, spec.Plan,
+		spec.Scope, spec.Responses)
 	if err != nil {
 		return PeerInboxSemanticCommitResult{}, err
 	}
@@ -183,14 +176,7 @@ func (s *Store) CommitPeerInboxSemantic(ctx context.Context,
 		return PeerInboxSemanticCommitResult{}, fmt.Errorf("%w: imported Event local audience",
 			ErrPeerInboxSemanticInvariant)
 	}
-	plan, err := planPeerInboxSemanticSnapshot(snapshot, localAudience[0], decisionAt)
-	if err != nil {
-		return PeerInboxSemanticCommitResult{}, err
-	}
-	if plan.Disposition() == teamwork.ImportRetry {
-		return PeerInboxSemanticCommitResult{}, fmt.Errorf("%w: %s",
-			ErrPeerInboxSemanticRetryRequired, plan.Diagnostic())
-	}
+	plan := spec.Plan
 	if err := validatePeerInboxSemanticPlan(plan); err != nil {
 		return PeerInboxSemanticCommitResult{}, err
 	}
@@ -210,7 +196,8 @@ func (s *Store) CommitPeerInboxSemantic(ctx context.Context,
 		return PeerInboxSemanticCommitResult{}, err
 	}
 	responses := peerInboxSemanticResponseEvents(spec.Responses)
-	if workIntent, ok := plan.Work(); ok && workIntent.Source() == teamwork.ImportWorkFromEvent {
+	if workIntent, ok := plan.Work(); ok &&
+		workIntent.Source() == PeerInboxSemanticFromImportedEvent {
 		mutation, err := peerInboxSemanticWorkMutation(workIntent, snapshot.importedEvent, responses)
 		if err != nil {
 			return PeerInboxSemanticCommitResult{}, err
@@ -308,7 +295,7 @@ func (s *Store) CommitPeerInboxSemantic(ctx context.Context,
 func validatePeerInboxSemanticCommitInput(s *Store, ctx context.Context,
 	spec CommitPeerInboxSemanticSpec, trustedNow time.Time,
 ) (time.Time, time.Time, error) {
-	decisionAt, err := canonicalStoreTime(spec.DecisionAt)
+	decisionAt, err := canonicalStoreTime(spec.Plan.DecisionAt())
 	if err != nil || decisionAt.IsZero() {
 		return time.Time{}, time.Time{}, fmt.Errorf("%w: decision time: %v",
 			ErrPeerInboxSemanticInput, err)
@@ -320,6 +307,11 @@ func validatePeerInboxSemanticCommitInput(s *Store, ctx context.Context,
 	if committedAt.Before(decisionAt) {
 		return time.Time{}, time.Time{}, fmt.Errorf("%w: trusted commit time precedes decision time",
 			ErrPeerInboxSemanticInput)
+	}
+	if spec.Plan.inboxID != spec.Fence.inboxID || spec.Plan.attempt != spec.Fence.attempt ||
+		spec.Plan.snapshotDigest != spec.Fence.snapshotDigest ||
+		!spec.Plan.disposition.Valid() {
+		return time.Time{}, time.Time{}, ErrPeerInboxSemanticInput
 	}
 	if len(spec.Responses) > 2 {
 		return time.Time{}, time.Time{}, ErrPeerInboxSemanticInput
@@ -343,44 +335,18 @@ func peerInboxSemanticAdmissionScopeZero(scope LocalAdmissionScope) bool {
 		scope.FirstOriginSequence() == 0 && scope.FirstChannelSequence() == 0
 }
 
-func planPeerInboxSemanticSnapshot(snapshot peerInboxSemanticSnapshot, local model.PeerID,
-	at time.Time,
-) (teamwork.ImportPlan, error) {
-	facts := make([]teamwork.ImportEventFact, len(snapshot.causalEvents))
-	for index, event := range snapshot.causalEvents {
-		fact, err := teamwork.NewImportEventFact(event)
-		if err != nil {
-			return teamwork.ImportPlan{}, fmt.Errorf("%w: causal Event fact: %v",
-				ErrPeerInboxSemanticInvariant, err)
-		}
-		facts[index] = fact
-	}
-	var current *model.ReviewWork
-	if snapshot.hasCurrentWork {
-		copy := snapshot.currentWork
-		current = &copy
-	}
-	plan, err := teamwork.PlanImportedEvent(teamwork.ImportPlanSpec{LocalPeerID: local,
-		Event: snapshot.importedEvent, Current: current, Facts: facts, Now: at})
-	if err != nil {
-		return teamwork.ImportPlan{}, fmt.Errorf("%w: deterministic import plan: %v",
-			ErrPeerInboxSemanticInvariant, err)
-	}
-	return plan, nil
-}
-
-func validatePeerInboxSemanticPlan(plan teamwork.ImportPlan) error {
-	if !plan.Disposition().Valid() || plan.Disposition() == teamwork.ImportRetry ||
+func validatePeerInboxSemanticPlan(plan PeerInboxSemanticPlan) error {
+	if !plan.Disposition().Valid() ||
 		(plan.InboxStatus() != model.InboxAccepted && plan.InboxStatus() != model.InboxRejected &&
 			plan.InboxStatus() != model.InboxConflicted) || len(plan.Responses()) > 2 {
 		return fmt.Errorf("%w: planner returned an invalid terminal shape",
 			ErrPeerInboxSemanticInvariant)
 	}
-	wantStatus := map[teamwork.ImportDisposition]model.InboxStatus{
-		teamwork.ImportApply:       model.InboxAccepted,
-		teamwork.ImportReceiptOnly: model.InboxAccepted,
-		teamwork.ImportReject:      model.InboxRejected,
-		teamwork.ImportConflict:    model.InboxConflicted,
+	wantStatus := map[PeerInboxSemanticDisposition]model.InboxStatus{
+		PeerInboxSemanticApply:       model.InboxAccepted,
+		PeerInboxSemanticReceiptOnly: model.InboxAccepted,
+		PeerInboxSemanticReject:      model.InboxRejected,
+		PeerInboxSemanticConflict:    model.InboxConflicted,
 	}[plan.Disposition()]
 	if plan.InboxStatus() != wantStatus {
 		return fmt.Errorf("%w: planner disposition/status mismatch",
@@ -396,7 +362,7 @@ func validatePeerInboxSemanticPlan(plan teamwork.ImportPlan) error {
 }
 
 func validatePeerInboxSemanticWorkPredecessor(snapshot peerInboxSemanticSnapshot,
-	plan teamwork.ImportPlan,
+	plan PeerInboxSemanticPlan,
 ) error {
 	intent, ok := plan.Work()
 	if !ok {
@@ -422,7 +388,7 @@ func validatePeerInboxSemanticWorkPredecessor(snapshot peerInboxSemanticSnapshot
 }
 
 func validatePeerInboxSemanticResponses(snapshot peerInboxSemanticSnapshot,
-	plan teamwork.ImportPlan, scope LocalAdmissionScope, publications []model.SignedPublication,
+	plan PeerInboxSemanticPlan, scope LocalAdmissionScope, publications []model.SignedPublication,
 	at time.Time,
 ) error {
 	intents := plan.Responses()
@@ -456,7 +422,7 @@ func validatePeerInboxSemanticResponses(snapshot peerInboxSemanticSnapshot,
 	return nil
 }
 
-func peerInboxSemanticResponseArtifactsMatch(intent teamwork.LocalResponseIntent,
+func peerInboxSemanticResponseArtifactsMatch(intent PeerInboxSemanticResponseIntent,
 	imported model.Event, actual []model.ArtifactRef,
 ) bool {
 	if intent.EventType() != model.EventReviewDelivered {
@@ -533,7 +499,7 @@ func peerInboxSemanticResponseEvents(publications []model.SignedPublication) []m
 	return events
 }
 
-func peerInboxSemanticWorkMutation(intent teamwork.ImportWorkIntent, imported model.Event,
+func peerInboxSemanticWorkMutation(intent PeerInboxSemanticWorkIntent, imported model.Event,
 	responses []model.Event,
 ) (WorkMutation, error) {
 	source, err := peerInboxSemanticIntentSourceEvent(intent.Source(), intent.ResponseOrdinal(),
@@ -569,16 +535,16 @@ func peerInboxSemanticWorkMutation(intent teamwork.ImportWorkIntent, imported mo
 	return mutation, nil
 }
 
-func peerInboxSemanticIntentSourceEvent(source teamwork.ImportWorkSource, ordinal uint8,
+func peerInboxSemanticIntentSourceEvent(source PeerInboxSemanticEffectSource, ordinal uint8,
 	imported model.Event, responses []model.Event,
 ) (model.Event, error) {
 	switch source {
-	case teamwork.ImportWorkFromEvent:
+	case PeerInboxSemanticFromImportedEvent:
 		if ordinal != 0 {
 			return model.Event{}, ErrPeerInboxSemanticInvariant
 		}
 		return imported, nil
-	case teamwork.ImportWorkFromResponse:
+	case PeerInboxSemanticFromLocalResponse:
 		if int(ordinal) >= len(responses) {
 			return model.Event{}, ErrPeerInboxSemanticInvariant
 		}
@@ -588,7 +554,7 @@ func peerInboxSemanticIntentSourceEvent(source teamwork.ImportWorkSource, ordina
 	}
 }
 
-func peerInboxSemanticLocalItems(plan teamwork.ImportPlan,
+func peerInboxSemanticLocalItems(plan PeerInboxSemanticPlan,
 	publications []model.SignedPublication, imported model.Event,
 ) ([]LocalAcceptanceItem, []model.Digest, error) {
 	items := make([]LocalAcceptanceItem, len(publications))
@@ -596,7 +562,7 @@ func peerInboxSemanticLocalItems(plan teamwork.ImportPlan,
 	for index := range publications {
 		items[index].Publication = publications[index]
 	}
-	if intent, ok := plan.Work(); ok && intent.Source() == teamwork.ImportWorkFromResponse {
+	if intent, ok := plan.Work(); ok && intent.Source() == PeerInboxSemanticFromLocalResponse {
 		mutation, err := peerInboxSemanticWorkMutation(intent, imported, responses)
 		if err != nil {
 			return nil, nil, err
@@ -628,16 +594,16 @@ func peerInboxSemanticLocalItems(plan teamwork.ImportPlan,
 }
 
 func materializePeerInboxSemanticHandling(ctx context.Context, tx *sql.Tx,
-	intent teamwork.ImportHandlingIntent, imported model.Event, responses []model.Event,
+	intent PeerInboxSemanticHandlingIntent, imported model.Event, responses []model.Event,
 ) error {
 	var source model.Event
 	switch intent.Source() {
-	case teamwork.ImportHandlingFromEvent:
+	case PeerInboxSemanticFromImportedEvent:
 		if intent.ResponseOrdinal() != 0 {
 			return ErrPeerInboxSemanticInvariant
 		}
 		source = imported
-	case teamwork.ImportHandlingFromResponse:
+	case PeerInboxSemanticFromLocalResponse:
 		if int(intent.ResponseOrdinal()) >= len(responses) {
 			return ErrPeerInboxSemanticInvariant
 		}
@@ -749,7 +715,7 @@ func requirePeerInboxSemanticHandlingPins(ctx context.Context, tx *sql.Tx,
 
 func newPeerInboxSemanticDecision(ctx context.Context, tx *sql.Tx, row peerInboxSemanticRow,
 	snapshot peerInboxSemanticSnapshot,
-	plan teamwork.ImportPlan, responses []model.SignedPublication, requestDigest model.Digest,
+	plan PeerInboxSemanticPlan, responses []model.SignedPublication, requestDigest model.Digest,
 	decisionAt, committedAt time.Time,
 ) (peerInboxSemanticDecision, error) {
 	causal := make([]peerInboxSemanticEventDecision, len(snapshot.causalEvents))
@@ -997,11 +963,7 @@ func validatePeerInboxSemanticTerminalReplay(ctx context.Context, tx *sql.Tx,
 		return PeerInboxSemanticCommitResult{}, fmt.Errorf("%w: terminal imported audience",
 			ErrPeerInboxSemanticInvariant)
 	}
-	plan, err := planPeerInboxSemanticSnapshot(snapshot, localPeers[0], decidedAt)
-	if err != nil || plan.Disposition() == teamwork.ImportRetry {
-		return PeerInboxSemanticCommitResult{}, fmt.Errorf("%w: terminal deterministic plan: %v",
-			ErrPeerInboxSemanticInvariant, err)
-	}
+	plan := spec.Plan
 	if err := validatePeerInboxSemanticPlan(plan); err != nil ||
 		!equalPeerInboxSemanticPlan(peerInboxSemanticPlanProjection(plan), decision.Plan) {
 		return PeerInboxSemanticCommitResult{}, fmt.Errorf("%w: terminal plan projection differs: %v",
@@ -1325,7 +1287,7 @@ func requireExactPeerInboxSemanticOwnerPins(ctx context.Context, tx *sql.Tx,
 }
 
 func validatePeerInboxSemanticWorkEffect(ctx context.Context, tx *sql.Tx,
-	plan teamwork.ImportPlan, imported model.Event, responses []model.Event,
+	plan PeerInboxSemanticPlan, imported model.Event, responses []model.Event,
 ) error {
 	intent, ok := plan.Work()
 	if !ok {
@@ -1434,12 +1396,12 @@ func samePeerInboxSemanticWork(left, right model.ReviewWork) bool {
 }
 
 func validatePeerInboxSemanticHandling(ctx context.Context, tx *sql.Tx,
-	intent teamwork.ImportHandlingIntent, imported model.Event, responses []model.Event,
+	intent PeerInboxSemanticHandlingIntent, imported model.Event, responses []model.Event,
 ) error {
 	var source model.Event
-	if intent.Source() == teamwork.ImportHandlingFromEvent {
+	if intent.Source() == PeerInboxSemanticFromImportedEvent {
 		source = imported
-	} else if intent.Source() == teamwork.ImportHandlingFromResponse &&
+	} else if intent.Source() == PeerInboxSemanticFromLocalResponse &&
 		int(intent.ResponseOrdinal()) < len(responses) {
 		source = responses[intent.ResponseOrdinal()]
 	} else {

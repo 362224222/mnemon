@@ -6,14 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
-	"github.com/mnemon-dev/mnemon/harness/internal/teamwork"
 )
 
 const (
-	peerInboxSemanticCommitRequestDomain = "mnemon/r5/peer-inbox-semantic-commit-request/1"
+	peerInboxSemanticCommitRequestDomain = "mnemon/r5/peer-inbox-semantic-commit-request/2"
 	peerInboxSemanticDecisionDomain      = "mnemon/r5/peer-inbox-semantic-decision/1"
 	peerInboxSemanticResponseIDDomain    = "mnemon/r5/peer-inbox-semantic-response-id/1"
 	peerInboxSemanticHandlingIDDomain    = "mnemon/r5/peer-inbox-semantic-handling-id/1"
@@ -144,7 +142,7 @@ type peerInboxSemanticAdmissionRequest struct {
 	WorkspaceRoot             string `json:"workspace_root"`
 }
 
-func peerInboxSemanticPlanProjection(plan teamwork.ImportPlan) peerInboxSemanticPlanDecision {
+func peerInboxSemanticPlanProjection(plan PeerInboxSemanticPlan) peerInboxSemanticPlanDecision {
 	projection := peerInboxSemanticPlanDecision{Diagnostic: plan.Diagnostic(),
 		Disposition: string(plan.Disposition()), InboxStatus: string(plan.InboxStatus()),
 		Responses: make([]peerInboxSemanticResponseIntentDecision, 0, len(plan.Responses()))}
@@ -171,7 +169,7 @@ func peerInboxSemanticPlanProjection(plan teamwork.ImportPlan) peerInboxSemantic
 	}
 	if settlement, ok := plan.Settlement(); ok {
 		projection.Settlement = &peerInboxSemanticSettlementDecision{
-			Disposition: settlement.Disposition(), HomePeerID: settlement.WorkRef().HomePeerID().String(),
+			Disposition: string(settlement.Disposition()), HomePeerID: settlement.WorkRef().HomePeerID().String(),
 			SourceEventID: settlement.SourceEventID().String(), WorkID: settlement.WorkRef().WorkID().String(),
 		}
 	}
@@ -239,8 +237,8 @@ func peerInboxSemanticEventProjection(event model.Event,
 		Source: string(event.Source())}
 }
 
-func peerInboxSemanticCommitRequestDigest(fence PeerInboxSemanticFence, scope LocalAdmissionScope,
-	responses []model.SignedPublication, decisionAt time.Time,
+func peerInboxSemanticCommitRequestDigest(fence PeerInboxSemanticFence, plan PeerInboxSemanticPlan,
+	scope LocalAdmissionScope, responses []model.SignedPublication,
 ) (model.Digest, error) {
 	wires := make([]string, len(responses))
 	for index, response := range responses {
@@ -279,11 +277,13 @@ func peerInboxSemanticCommitRequestDigest(fence PeerInboxSemanticFence, scope Lo
 		LeaseOwner     string                             `json:"lease_owner"`
 		LeaseUntil     string                             `json:"lease_until"`
 		DecisionAt     string                             `json:"decision_at"`
+		Plan           peerInboxSemanticPlanDecision      `json:"plan"`
 		ResponseWires  []string                           `json:"response_wires"`
 		SnapshotDigest model.Digest                       `json:"snapshot_digest"`
 	}{admission, fence.attempt, peerInboxSemanticDecisionSeed(fence.semanticNonce),
 		peerInboxSemanticCommitRequestDomain, fence.inboxID, fence.leaseOwner,
-		storeTime(fence.leaseUntil), storeTime(decisionAt), wires, fence.snapshotDigest})
+		storeTime(fence.leaseUntil), storeTime(plan.DecisionAt()),
+		peerInboxSemanticPlanProjection(plan), wires, fence.snapshotDigest})
 	if err != nil {
 		return model.Digest{}, fmt.Errorf("%w: canonical semantic commit request: %v",
 			ErrPeerInboxSemanticInvariant, err)
@@ -341,15 +341,15 @@ func validPeerInboxSemanticDecisionShape(value peerInboxSemanticDecision) bool {
 		len(value.Responses) > 2 || len(value.Responses) != len(value.Plan.Responses) {
 		return false
 	}
-	disposition := teamwork.ImportDisposition(value.Plan.Disposition)
-	wantStatus := map[teamwork.ImportDisposition]model.InboxStatus{
-		teamwork.ImportApply:       model.InboxAccepted,
-		teamwork.ImportReceiptOnly: model.InboxAccepted,
-		teamwork.ImportReject:      model.InboxRejected,
-		teamwork.ImportConflict:    model.InboxConflicted,
+	disposition := PeerInboxSemanticDisposition(value.Plan.Disposition)
+	wantStatus := map[PeerInboxSemanticDisposition]model.InboxStatus{
+		PeerInboxSemanticApply:       model.InboxAccepted,
+		PeerInboxSemanticReceiptOnly: model.InboxAccepted,
+		PeerInboxSemanticReject:      model.InboxRejected,
+		PeerInboxSemanticConflict:    model.InboxConflicted,
 	}[disposition]
 	status := model.InboxStatus(value.Status)
-	if !disposition.Valid() || disposition == teamwork.ImportRetry || wantStatus == "" ||
+	if !disposition.Valid() || wantStatus == "" ||
 		status != wantStatus || value.Plan.InboxStatus != value.Status ||
 		(status == model.InboxAccepted) != (value.Plan.Diagnostic == "") ||
 		(status != model.InboxAccepted &&
