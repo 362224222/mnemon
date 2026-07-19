@@ -166,10 +166,24 @@ var rememberCmd = &cobra.Command{
 				if len(result.Matches) > 0 {
 					replacedID = result.Matches[0].ID
 				}
-			case search.DiffConflict, search.DiffUpdate:
-				diffAction = "updated"
-				if len(result.Matches) > 0 {
+			case search.DiffConflict:
+				// A CONFLICT means the two texts appear to disagree. Silently
+				// soft-deleting one side is destructive and has repeatedly
+				// clobbered unrelated same-domain memories (long technical
+				// notes share vocabulary at >=0.7 similarity, and change-log
+				// words like "replaced"/"no longer" appear in almost all of
+				// them). Keep both; the caller sees diff_suggestion=CONFLICT
+				// and can merge or delete deliberately.
+				diffAction = "added"
+			case search.DiffUpdate:
+				// Only auto-replace when the texts overlap heavily by TOKENS.
+				// Cosine similarity alone (same-domain embeddings cluster at
+				// 0.85+) is not enough evidence to destroy an existing memory.
+				if len(result.Matches) > 0 && result.Matches[0].TokenSimilarity >= 0.6 {
+					diffAction = "updated"
 					replacedID = result.Matches[0].ID
+				} else {
+					diffAction = "added"
 				}
 			default:
 				diffAction = "added"

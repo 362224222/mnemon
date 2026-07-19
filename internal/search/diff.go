@@ -84,7 +84,7 @@ func Diff(insights []*model.Insight, newContent string, opts DiffOptions) DiffRe
 			similarity = cosineSim
 		}
 
-		suggestion := classifySuggestion(similarity, newContent, c.Insight.Content)
+		suggestion := classifySuggestion(tokenSim, similarity, newContent, c.Insight.Content)
 		matches = append(matches, DiffMatch{
 			ID:               c.Insight.ID,
 			Content:          c.Insight.Content,
@@ -143,7 +143,7 @@ func Diff(insights []*model.Insight, newContent string, opts DiffOptions) DiffRe
 			if cp.sim >= 0.85 && cp.sim > similarity {
 				similarity = cp.sim
 			}
-			suggestion := classifySuggestion(similarity, newContent, ins.Content)
+			suggestion := classifySuggestion(tokenSim, similarity, newContent, ins.Content)
 
 			// Only add if this match is meaningful (not ADD)
 			if suggestion != DiffAdd {
@@ -195,9 +195,21 @@ var negationWords = []string{
 	"不再", "放弃", "替换", "取消",
 }
 
-func classifySuggestion(similarity float64, newText, existingText string) DiffSuggestion {
+func classifySuggestion(tokenSim, similarity float64, newText, existingText string) DiffSuggestion {
 	if similarity < 0.5 {
 		return DiffAdd
+	}
+
+	// isExtension: the new text is meaningfully longer than the existing one,
+	// i.e. it carries additional information. An extension must never be
+	// classified DUPLICATE — a skip would silently drop the new content.
+	isExtension := len(newText) > len(existingText)+len(existingText)/4
+
+	// Near-verbatim re-statement measured by TOKENS (not just embeddings) is a
+	// duplicate no matter what vocabulary it contains. Checked before the
+	// negation scan so a text can never "conflict" with a copy of itself.
+	if tokenSim > 0.9 && !isExtension {
+		return DiffDuplicate
 	}
 
 	// Only check for conflict signals when texts are substantially similar.
@@ -214,7 +226,7 @@ func classifySuggestion(similarity float64, newText, existingText string) DiffSu
 		}
 	}
 
-	if similarity > 0.9 {
+	if similarity > 0.9 && !isExtension {
 		return DiffDuplicate
 	}
 	return DiffUpdate
