@@ -164,16 +164,6 @@
     },
     {
       "rule": "goroutine_ownership",
-      "identity": "goroutine_ownership:codex-process-cleanup",
-      "path": "harness/internal/agent/codex_adapter.go",
-      "symbol": "(*codexProtocolSession).close",
-      "risk": "high",
-      "evidence": "harness/internal/agent/codex_adapter.go::(*codexProtocolSession).close",
-      "owner": "harness/internal/agent",
-      "removal_checkpoint": "7R"
-    },
-    {
-      "rule": "goroutine_ownership",
       "identity": "goroutine_ownership:connection-gater-timers",
       "path": "harness/internal/peer/gater.go",
       "symbol": "(*ConnectionGater).shutdown",

@@ -426,25 +426,6 @@ func TestCodexWakeAdapterFailsClosedAcrossLaunchAndRuntimeFailures(t *testing.T)
 			t.Fatalf("Run() = (%#v, %v)", result, err)
 		}
 	})
-	t.Run("undrained process pipe blocks Wait", func(t *testing.T) {
-		fixture := newCodexAdapterFixture(t, fakeCodexScenario{stuckPipeDrain: true})
-		result, err := fixture.adapter.Run(context.Background(), fixture.request())
-		if fixture.starter.stuckStdout != nil {
-			t.Cleanup(fixture.starter.stuckStdout.releaseReader)
-		}
-		if !errors.Is(err, ErrCodexWakeAdapter) || !result.WakeDelivered || result.ProcessExited ||
-			!result.At.IsZero() || !result.CompletionReceipt.IsZero() ||
-			fixture.starter.process.waitCount.Load() != 0 || fixture.starter.stuckStdout == nil {
-			t.Fatalf("Run() = (%#v, %v), Wait/stuck=%d/%#v", result, err,
-				fixture.starter.process.waitCount.Load(), fixture.starter.stuckStdout)
-		}
-		fixture.starter.stuckStdout.releaseReader()
-		select {
-		case <-fixture.starter.stuckStdout.returned:
-		case <-time.After(time.Second):
-			t.Fatal("forced-close test reader did not return after release")
-		}
-	})
 }
 
 func TestCodexAdapterFailureKeepsPrivateCausesClosed(t *testing.T) {
@@ -868,39 +849,6 @@ type discardCodexWriteCloser struct{}
 func (discardCodexWriteCloser) Write(value []byte) (int, error) { return len(value), nil }
 func (discardCodexWriteCloser) Close() error                    { return nil }
 
-type stuckCodexReadCloser struct {
-	delegate    io.ReadCloser
-	release     chan struct{}
-	returned    chan struct{}
-	releaseOnce sync.Once
-}
-
-func newStuckCodexReadCloser(delegate io.ReadCloser) *stuckCodexReadCloser {
-	return &stuckCodexReadCloser{delegate: delegate, release: make(chan struct{}),
-		returned: make(chan struct{})}
-}
-
-func (reader *stuckCodexReadCloser) Read(value []byte) (int, error) {
-	read, err := reader.delegate.Read(value)
-	if err == nil {
-		return read, nil
-	}
-	<-reader.release
-	close(reader.returned)
-	return read, err
-}
-
-// Close deliberately cannot wake Read. This test double proves the adapter
-// never starts Wait when an injected process violates the real pipe contract.
-func (*stuckCodexReadCloser) Close() error { return nil }
-
-func (reader *stuckCodexReadCloser) releaseReader() {
-	reader.releaseOnce.Do(func() {
-		close(reader.release)
-		_ = reader.delegate.Close()
-	})
-}
-
 type fakeCodexTerminator struct {
 	mu          sync.Mutex
 	signals     []string
@@ -989,10 +937,12 @@ type fakeCodexStarter struct {
 	sequence    func(string)
 	turnStarted chan struct{}
 	stuckStdout *stuckCodexReadCloser
+	stuckReady  chan *stuckCodexReadCloser
 }
 
 func newFakeCodexStarter(scenario fakeCodexScenario, sequence func(string)) *fakeCodexStarter {
-	return &fakeCodexStarter{scenario: scenario, sequence: sequence, turnStarted: make(chan struct{})}
+	return &fakeCodexStarter{scenario: scenario, sequence: sequence, turnStarted: make(chan struct{}),
+		stuckReady: make(chan *stuckCodexReadCloser, 1)}
 }
 
 func (starter *fakeCodexStarter) Start(spec CodexProcessStartSpec) (CodexProcess, error) {
@@ -1003,6 +953,7 @@ func (starter *fakeCodexStarter) Start(spec CodexProcessStartSpec) (CodexProcess
 	if starter.scenario.stuckPipeDrain {
 		starter.stuckStdout = newStuckCodexReadCloser(clientRead)
 		stdout = starter.stuckStdout
+		starter.stuckReady <- starter.stuckStdout
 	}
 	process := &fakeCodexProcess{pid: 91, stdin: clientWrite, stdout: stdout,
 		stderr: stderrRead, done: make(chan struct{}), sequence: starter.sequence}

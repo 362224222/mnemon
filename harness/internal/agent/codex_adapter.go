@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -166,12 +165,6 @@ type CodexWakeAdapter struct {
 	interruptGrace   time.Duration
 	exitGrace        time.Duration
 	signalGrace      time.Duration
-}
-
-type codexProcessExit struct {
-	exited  bool
-	method  string
-	signals []string
 }
 
 type wallCodexAdapterClock struct{}
@@ -541,97 +534,6 @@ func (adapter *CodexWakeAdapter) settleRegisteredProcess(result *CodexWakeResult
 	return failure
 }
 
-func (adapter *CodexWakeAdapter) closeRegisteredProcess(process CodexProcess,
-	runtimeIDs model.JSON,
-) (codexProcessExit, error) {
-	exit := codexProcessExit{signals: make([]string, 0)}
-	if process == nil {
-		return exit, errors.New("registered process is missing")
-	}
-	for _, stream := range []io.Closer{process.Stdin(), process.Stdout(), process.Stderr()} {
-		if stream != nil {
-			_ = stream.Close()
-		}
-	}
-	// Exact Runtime identity has already been validated. Retain the direct
-	// child unreaped while the terminator proves the process group's exit;
-	// otherwise Wait could release its PID/PGID before group authority is used.
-	terminateCtx, cancel := context.WithTimeout(context.Background(),
-		codexTerminationMax+adapter.signalGrace)
-	signals, err := adapter.terminator.Terminate(terminateCtx, runtimeIDs)
-	cancel()
-	if err != nil {
-		return exit, err
-	}
-	if len(signals) != 0 {
-		if err := validateCodexTerminationSignals(signals); err != nil {
-			return exit, err
-		}
-		exit.signals = append(exit.signals, signals...)
-	}
-	exit.method = "wait_without_signal"
-	if len(exit.signals) != 0 {
-		exit.method = "signal_assisted"
-	}
-	waited := make(chan error, 1)
-	go func() { waited <- process.Wait() }()
-	select {
-	case err := <-waited:
-		exit.exited = true
-		if err != nil {
-			var exitErr *exec.ExitError
-			if len(exit.signals) == 0 || !errors.As(err, &exitErr) {
-				return exit, err
-			}
-		}
-		return exit, nil
-	case <-adapter.clock.After(adapter.exitGrace):
-		return exit, errors.New("registered process did not become waitable after exact termination proof")
-	}
-}
-
-func (adapter *CodexWakeAdapter) closeUnregisteredProcess(process CodexProcess) (codexProcessExit, error) {
-	if process == nil {
-		return codexProcessExit{exited: true, method: "not_started", signals: []string{}}, nil
-	}
-	if stream := process.Stdin(); stream != nil {
-		_ = stream.Close()
-	}
-	if stream := process.Stdout(); stream != nil {
-		_ = stream.Close()
-	}
-	if stream := process.Stderr(); stream != nil {
-		_ = stream.Close()
-	}
-	exit := codexProcessExit{method: "wait_without_signal", signals: make([]string, 0)}
-	// Identity capture failed before the first protocol byte was sent, so this
-	// direct child cannot hold managed work. Signal only the exact os.Process
-	// handle—not its unvalidated numeric group—and do so before Wait can reap
-	// and release the PID. This closes the only safe cleanup window for an
-	// unregistered child that ignores stdio EOF.
-	if err := process.Signal(syscall.SIGKILL); err == nil {
-		exit.method = "signal_assisted"
-		exit.signals = []string{"SIGKILL"}
-	} else if !errors.Is(err, os.ErrProcessDone) && !errors.Is(err, syscall.ESRCH) {
-		return exit, fmt.Errorf("kill exact unregistered child: %w", err)
-	}
-	waited := make(chan error, 1)
-	go func() { waited <- process.Wait() }()
-	select {
-	case err := <-waited:
-		exit.exited = true
-		if err != nil {
-			var exitErr *exec.ExitError
-			if len(exit.signals) == 0 || !errors.As(err, &exitErr) {
-				return exit, err
-			}
-		}
-		return exit, nil
-	case <-adapter.clock.After(adapter.exitGrace):
-		return exit, errors.New("unregistered process did not become waitable after exact kill")
-	}
-}
-
 func (adapter *CodexWakeAdapter) trustedNow() (time.Time, error) {
 	at := adapter.clock.Now().Round(0).UTC()
 	if at.IsZero() || at.UnixNano() <= 0 || !time.Unix(0, at.UnixNano()).UTC().Equal(at) {
@@ -919,16 +821,11 @@ type codexProtocolSession struct {
 	stderr         io.ReadCloser
 	events         chan codexProtocolEvent
 	stopReader     chan struct{}
-	waited         chan error
 	stderrOverflow chan struct{}
 	stdoutDone     chan struct{}
 	stderrDone     chan struct{}
 	writeMu        sync.Mutex
 	closeOnce      sync.Once
-	waitOnce       sync.Once
-	waitMu         sync.Mutex
-	waitDone       bool
-	waitErr        error
 	stdoutEOF      atomic.Bool
 	stderrExceeded atomic.Bool
 	runtimeIDs     model.JSON
@@ -950,8 +847,8 @@ func newCodexProtocolSession(adapter *CodexWakeAdapter,
 	session := &codexProtocolSession{adapter: adapter, process: process, stdin: stdin,
 		stdout: stdout, stderr: stderr,
 		events: make(chan codexProtocolEvent, 1), stopReader: make(chan struct{}),
-		waited: make(chan error, 1), stderrOverflow: make(chan struct{}, 1),
-		stdoutDone: make(chan struct{}), stderrDone: make(chan struct{})}
+		stderrOverflow: make(chan struct{}, 1),
+		stdoutDone:     make(chan struct{}), stderrDone: make(chan struct{})}
 	go session.readStdout(stdout)
 	go session.readStderr(stderr)
 	return session, nil
@@ -1003,48 +900,6 @@ func (session *codexProtocolSession) readStderr(source io.ReadCloser) {
 		session.stderrOverflow <- struct{}{}
 		_, _ = io.Copy(io.Discard, source)
 	}
-}
-
-func (session *codexProtocolSession) waitForProcessPipeDrain(duration time.Duration) (bool, error) {
-	timer := session.adapter.clock.After(duration)
-	stdoutDone, stderrDone := session.stdoutDone, session.stderrDone
-	var result error
-	forcedClose := false
-	for stdoutDone != nil || stderrDone != nil {
-		select {
-		case <-session.stderrOverflow:
-			result = errors.Join(result, errors.New("Codex stderr exceeded its bound"))
-		case event := <-session.events:
-			if event.err != nil && !errors.Is(event.err, io.EOF) {
-				result = errors.Join(result, event.err)
-			}
-			if event.err == nil {
-				session.pending = append(session.pending, event.envelope)
-				if len(session.pending) > codexProtocolMessageMax {
-					result = errors.Join(result,
-						errors.New("cleanup notifications exceeded their bound"))
-				}
-			}
-		case <-stdoutDone:
-			stdoutDone = nil
-		case <-stderrDone:
-			stderrDone = nil
-		case <-timer:
-			if forcedClose {
-				return false, errors.Join(result,
-					errors.New("Codex process pipe readers did not stop after close"))
-			}
-			_ = session.stdout.Close()
-			_ = session.stderr.Close()
-			result = errors.Join(result, errors.New("Codex process pipes did not drain after exit proof"))
-			forcedClose = true
-			timer = session.adapter.clock.After(duration)
-		}
-	}
-	if session.stderrExceeded.Load() {
-		result = errors.Join(result, errors.New("Codex stderr exceeded its bound"))
-	}
-	return true, result
 }
 
 func decodeCodexEnvelope(line []byte) (codexRPCEnvelope, error) {
@@ -1292,49 +1147,6 @@ func matchingCodexJSONDelimiter(start json.Delim) json.Delim {
 	return 0
 }
 
-func (session *codexProtocolSession) setWait(err error) {
-	session.waitMu.Lock()
-	defer session.waitMu.Unlock()
-	if !session.waitDone {
-		session.waitDone, session.waitErr = true, err
-	}
-}
-
-func (session *codexProtocolSession) startWait() {
-	session.waitOnce.Do(func() {
-		go func() {
-			err := session.process.Wait()
-			session.setWait(err)
-			session.waited <- err
-		}()
-	})
-}
-
-func (session *codexProtocolSession) waitFor(duration time.Duration) (bool, error) {
-	session.waitMu.Lock()
-	if session.waitDone {
-		err := session.waitErr
-		session.waitMu.Unlock()
-		return true, err
-	}
-	session.waitMu.Unlock()
-	timer := session.adapter.clock.After(duration)
-	for {
-		select {
-		case err := <-session.waited:
-			session.setWait(err)
-			return true, err
-		case <-timer:
-			session.waitMu.Lock()
-			done, err := session.waitDone, session.waitErr
-			session.waitMu.Unlock()
-			return done, err
-		case <-session.events:
-		case <-session.stderrOverflow:
-		}
-	}
-}
-
 func (session *codexProtocolSession) waitForProtocolExit(duration time.Duration) (bool, error) {
 	if session.stdoutEOF.Load() {
 		return true, nil
@@ -1392,6 +1204,12 @@ func (session *codexProtocolSession) sendForCleanup(value any,
 ) error {
 	written := make(chan error, 1)
 	go func() { written <- session.send(value) }()
+	joinWrite := func(primary error) error {
+		// Closing the owned protocol writer releases an in-flight pipe write.
+		// Every non-write exit joins it before returning.
+		_ = session.stdin.Close()
+		return errors.Join(primary, <-written)
+	}
 	timer := session.adapter.clock.After(duration)
 	for {
 		select {
@@ -1399,15 +1217,15 @@ func (session *codexProtocolSession) sendForCleanup(value any,
 			return err
 		case event := <-session.events:
 			if event.err != nil && !errors.Is(event.err, io.EOF) {
-				return event.err
+				return joinWrite(event.err)
 			}
 			if event.err == nil {
 				session.pending = append(session.pending, event.envelope)
 			}
 		case <-session.stderrOverflow:
-			return errors.New("Codex stderr exceeded its bound")
+			return joinWrite(errors.New("Codex stderr exceeded its bound"))
 		case <-timer:
-			return errors.New("Codex interrupt write exceeded its deadline")
+			return joinWrite(errors.New("Codex interrupt write exceeded its deadline"))
 		}
 	}
 }
@@ -1454,97 +1272,6 @@ func (session *codexProtocolSession) waitForInterruptedTurn(duration time.Durati
 		}
 		return nil
 	}
-}
-
-func (session *codexProtocolSession) close(interrupt bool) (codexProcessExit, error) {
-	var result error
-	exit := codexProcessExit{signals: make([]string, 0)}
-	session.closeOnce.Do(func() {
-		defer func() {
-			close(session.stopReader)
-			_ = session.stdout.Close()
-			_ = session.stderr.Close()
-		}()
-		if interrupt && session.threadID != "" && session.turnID != "" {
-			if err := session.sendForCleanup(map[string]any{"id": 5, "method": "turn/interrupt",
-				"params": map[string]any{"threadId": session.threadID, "turnId": session.turnID}},
-				session.adapter.interruptGrace); err != nil {
-				result = errors.Join(result, codexAdapterError("interrupt", err))
-			} else if err := session.waitForInterruptedTurn(session.adapter.interruptGrace); err != nil {
-				result = errors.Join(result, codexAdapterError("interrupt", err))
-			}
-		}
-		_ = session.stdin.Close()
-		protocolExited, observeErr := session.waitForProtocolExit(session.adapter.exitGrace)
-		if observeErr != nil {
-			result = errors.Join(result, codexAdapterError("observe exit", observeErr))
-		}
-
-		// Wait has deliberately not started, even after protocol EOF: the direct
-		// child therefore cannot be reaped and have its PID/PGID reused between
-		// exact identity proof and termination. This active-owned path retains
-		// the direct child as the process-group identity anchor on every OS.
-		if protocolExited {
-			observed, err := session.observeRuntimeExit(session.adapter.signalGrace)
-			if err != nil {
-				result = errors.Join(result, codexAdapterError("observe Runtime exit", err))
-			} else if observed {
-				exit.method = "wait_without_signal"
-			}
-		}
-		if exit.method == "" {
-			terminationBudget := codexTerminationMax + session.adapter.signalGrace
-			terminateCtx, cancel := context.WithTimeout(context.Background(), terminationBudget)
-			signals, terminateErr := session.adapter.terminator.Terminate(terminateCtx,
-				session.runtimeIDs)
-			cancel()
-			if terminateErr != nil {
-				result = errors.Join(result, codexAdapterError("terminate", terminateErr))
-				return
-			}
-			if len(signals) != 0 {
-				if err := validateCodexTerminationSignals(signals); err != nil {
-					result = errors.Join(result, codexAdapterError("terminate", err))
-					return
-				}
-			}
-			exit.signals = append(exit.signals, signals...)
-		}
-		// StdoutPipe/StderrPipe require the readers to reach EOF before Wait;
-		// Wait itself closes those pipes. Process-group exit proof exists here,
-		// so bounded forced close is safe but is recorded as cleanup failure.
-		drained, drainErr := session.waitForProcessPipeDrain(session.adapter.signalGrace)
-		if drainErr != nil {
-			result = errors.Join(result, codexAdapterError("pipe drain", drainErr))
-		}
-		if !drained {
-			return
-		}
-		session.startWait()
-		if didExit, err := session.waitFor(session.adapter.signalGrace); didExit {
-			exit.exited = true
-			if exit.method == "" {
-				exit.method = "wait_without_signal"
-			}
-			if len(exit.signals) != 0 {
-				exit.method = "signal_assisted"
-			}
-			if err != nil {
-				var exitErr *exec.ExitError
-				if len(exit.signals) == 0 || !errors.As(err, &exitErr) {
-					result = errors.Join(result, codexAdapterError("wait", err))
-				}
-			}
-			if len(exit.signals) != 0 {
-				result = errors.Join(result, codexAdapterError("cleanup",
-					errors.New("process required signal-assisted shutdown")))
-			}
-			return
-		}
-		result = errors.Join(result, codexAdapterError("wait",
-			errors.New("process did not become waitable after exact termination proof")))
-	})
-	return exit, result
 }
 
 func validateCodexInitializeResult(raw json.RawMessage) error {
