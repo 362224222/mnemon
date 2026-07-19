@@ -1,10 +1,12 @@
 package integration
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -43,6 +45,47 @@ func TestManagedInstallationVerifiesExactProjectionAndReportsDrift(t *testing.T)
 	content, err := os.ReadFile(skill)
 	if err != nil || string(content) != "drift\n" {
 		t.Fatalf("Verify repaired drift: content %q, error %v", content, err)
+	}
+}
+
+func TestManagedInstallationDelegatesFrozenTeamworkActions(t *testing.T) {
+	workspace, _, bundle := newManagedInstallationWorkspace(t)
+	installation, err := newManagedInstallation(workspace, bundle, InspectHost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPaths := bundle.TeamworkActionPaths()
+	paths := installation.TeamworkActionPaths()
+	if !reflect.DeepEqual(paths, wantPaths) {
+		t.Fatalf("TeamworkActionPaths() = %v, want %v", paths, wantPaths)
+	}
+	paths[0] = "tampered"
+	if !reflect.DeepEqual(installation.TeamworkActionPaths(), wantPaths) {
+		t.Fatal("TeamworkActionPaths() exposed mutable bundle state")
+	}
+	for _, path := range wantPaths {
+		want, wantErr := bundle.ReadTeamworkAction(path)
+		got, gotErr := installation.ReadTeamworkAction(path)
+		if wantErr != nil || gotErr != nil || !bytes.Equal(got, want) {
+			t.Fatalf("ReadTeamworkAction(%q) = (%q, %v), bundle = (%q, %v)",
+				path, got, gotErr, want, wantErr)
+		}
+		got[0] ^= 0xff
+		fresh, freshErr := installation.ReadTeamworkAction(path)
+		if freshErr != nil || bytes.Equal(got, fresh) {
+			t.Fatalf("ReadTeamworkAction(%q) returned mutable bytes: %v", path, freshErr)
+		}
+	}
+	if raw, readErr := installation.ReadTeamworkAction("SKILL.md"); !errors.Is(readErr, ErrManagedInstallation) || raw != nil {
+		t.Fatalf("ReadTeamworkAction(non-action) = (%q, %v)", raw, readErr)
+	}
+
+	var nilInstallation *ManagedInstallation
+	if nilInstallation.Revision() != "" || nilInstallation.TeamworkActionPaths() != nil {
+		t.Fatal("nil ManagedInstallation exposed frozen action authority")
+	}
+	if raw, readErr := nilInstallation.ReadTeamworkAction(wantPaths[0]); !errors.Is(readErr, ErrManagedInstallation) || raw != nil {
+		t.Fatalf("nil ReadTeamworkAction() = (%q, %v)", raw, readErr)
 	}
 }
 

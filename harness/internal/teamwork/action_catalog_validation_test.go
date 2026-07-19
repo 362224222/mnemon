@@ -43,6 +43,14 @@ func TestActionCatalogRejectsMalformedOrInconsistentSources(t *testing.T) {
 		{name: "missing top-level field", mutate: transformActionRaw("accept", func(raw []byte) []byte {
 			return bytes.Replace(raw, []byte(`,"selectors":null`), nil, 1)
 		})},
+		{name: "missing ordinal", mutate: transformActionRaw("accept", func(raw []byte) []byte {
+			return bytes.Replace(raw, []byte(`,"ordinal":1`), nil, 1)
+		})},
+		{name: "noncanonical ordinal position", mutate: transformActionRaw("accept", func(raw []byte) []byte {
+			return bytes.Replace(raw, []byte(`"deadline":null,"ordinal":1`), []byte(`"ordinal":1,"deadline":null`), 1)
+		})},
+		{name: "duplicate ordinal", mutate: mutateActionWire("accept", func(w *actionWire) { w.Ordinal = 0 })},
+		{name: "out of range ordinal", mutate: mutateActionWire("accept", func(w *actionWire) { w.Ordinal = TeamworkActionCount })},
 		{name: "schema version", mutate: mutateActionWire("accept", func(w *actionWire) { w.SchemaVersion++ })},
 		{name: "path action mismatch", mutate: mutateActionWire("accept", func(w *actionWire) { w.Action = "cancel" })},
 		{name: "unknown operation", mutate: func(t *testing.T, sources []ActionSource) []ActionSource {

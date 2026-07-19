@@ -42,8 +42,8 @@ func newManagedInstallation(workspace string, bundle assets.Bundle,
 	inspect managedHostInspector,
 ) (*ManagedInstallation, error) {
 	info, err := inspectManagedWorkspace(workspace)
-	manifest := bundle.Manifest()
-	if err != nil || inspect == nil || manifest.AssetRevision == "" {
+	revision := bundle.Revision()
+	if err != nil || inspect == nil || revision == "" {
 		if err == nil {
 			err = errors.New("canonical bundle or Host inspector is unavailable")
 		}
@@ -52,7 +52,7 @@ func newManagedInstallation(workspace string, bundle assets.Bundle,
 	return &ManagedInstallation{
 		bundle: bundle, inspectHost: inspect,
 		nodeState:     filepath.Join(workspace, ".mnemon", "harness", "node"),
-		revision:      manifest.AssetRevision,
+		revision:      revision,
 		workspace:     workspace,
 		workspaceInfo: info,
 	}, nil
@@ -64,6 +64,33 @@ func (installation *ManagedInstallation) Revision() string {
 		return ""
 	}
 	return installation.revision
+}
+
+// TeamworkActionPaths returns the exact manifest-filtered action sources from
+// the canonical bundle frozen at construction. An unavailable installation
+// fails closed with no paths.
+func (installation *ManagedInstallation) TeamworkActionPaths() []string {
+	if !installation.hasFrozenBundle() {
+		return nil
+	}
+	return installation.bundle.TeamworkActionPaths()
+}
+
+// ReadTeamworkAction delegates to the canonical bundle frozen at construction.
+func (installation *ManagedInstallation) ReadTeamworkAction(path string) ([]byte, error) {
+	if !installation.hasFrozenBundle() {
+		return nil, ErrManagedInstallation
+	}
+	raw, err := installation.bundle.ReadTeamworkAction(path)
+	if err != nil {
+		return nil, fmt.Errorf("%w: read Teamwork action: %v", ErrManagedInstallation, err)
+	}
+	return raw, nil
+}
+
+func (installation *ManagedInstallation) hasFrozenBundle() bool {
+	return installation != nil && installation.revision != "" &&
+		installation.bundle.Revision() == installation.revision
 }
 
 // Verify proves that the Profile selects this workspace and canonical bundle,

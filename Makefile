@@ -54,7 +54,7 @@ vet: ## Run go vet static analysis
 
 harness-validate: ## Validate the experimental R5 harness layout
 	bash harness/scripts/check_test_pairs.sh
-	go test ./harness/internal/assets
+	go test ./harness/internal/assets ./harness/internal/teamwork
 
 harness-quality: ## Run pinned, non-mutating Harness quality gates
 	@base_ref="$${HARNESS_QUALITY_BASE_REF:-HEAD}"; \

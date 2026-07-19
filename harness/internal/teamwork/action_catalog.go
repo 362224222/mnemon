@@ -127,6 +127,7 @@ func (p ActionReceiptPolicy) Status() ReceiptStatus       { return p.status }
 type ActionDescriptor struct {
 	name, path    string
 	schemaVersion int
+	ordinal       uint8
 	operation     model.OperationKind
 	raw           []byte
 	contexts      [8]ActionContext
@@ -143,6 +144,7 @@ type ActionDescriptor struct {
 func (d ActionDescriptor) Name() string                       { return d.name }
 func (d ActionDescriptor) SourcePath() string                 { return d.path }
 func (d ActionDescriptor) SchemaVersion() int                 { return d.schemaVersion }
+func (d ActionDescriptor) Ordinal() uint8                     { return d.ordinal }
 func (d ActionDescriptor) OperationKind() model.OperationKind { return d.operation }
 func (d ActionDescriptor) SourceBytes() []byte                { return append([]byte(nil), d.raw...) }
 func (d ActionDescriptor) AllowedContexts() []ActionContext {
@@ -212,31 +214,51 @@ func ParseActionCatalog(assetRevision model.Digest, sources []ActionSource) (Act
 	ordered := append([]ActionSource(nil), sources...)
 	sort.Slice(ordered, func(i, j int) bool { return ordered[i].path < ordered[j].path })
 	catalog := ActionCatalog{assetRevision: assetRevision}
-	for index, source := range ordered {
-		if index > 0 && ordered[index-1].path == source.path {
+	var seenOrdinals [TeamworkActionCount]bool
+	for sourceIndex, source := range ordered {
+		if sourceIndex > 0 && ordered[sourceIndex-1].path == source.path {
 			return ActionCatalog{}, catalogError("duplicate source path %q", source.path)
 		}
-		if len(source.raw) == 0 || len(source.raw) > maxActionSourceBytes {
-			return ActionCatalog{}, catalogError("%s has invalid bounded source size", source.path)
-		}
-		wire, err := decodeActionWire(source.raw)
+		descriptor, ordinal, err := parseActionSource(source, catalog.actions, seenOrdinals)
 		if err != nil {
-			return ActionCatalog{}, catalogError("%s: %v", source.path, err)
+			return ActionCatalog{}, err
 		}
-		operation := model.OperationKind(wire.Receipt.Action)
-		if wire.Action == "" || source.path != "actions/teamwork/"+wire.Action+".json" ||
-			wire.Receipt.Action != "teamwork."+wire.Action || !strings.HasPrefix(string(operation), "teamwork.") ||
-			!operation.Valid() || duplicateActionIdentity(catalog.actions[:index], wire.Action, operation) {
-			return ActionCatalog{}, catalogError("%s action/operation binding is invalid", source.path)
+		catalog.actions[ordinal], seenOrdinals[ordinal] = descriptor, true
+	}
+	for ordinal, present := range seenOrdinals {
+		if !present {
+			return ActionCatalog{}, catalogError("semantic ordinal %d is missing", ordinal)
 		}
-		descriptor, err := projectAction(source, wire, operation)
-		if err != nil {
-			return ActionCatalog{}, catalogError("%s: %v", source.path, err)
-		}
-		catalog.actions[index] = descriptor
 	}
 	catalog.ready = true
 	return catalog, nil
+}
+
+func parseActionSource(source ActionSource, actions [TeamworkActionCount]ActionDescriptor,
+	seenOrdinals [TeamworkActionCount]bool,
+) (ActionDescriptor, uint8, error) {
+	if len(source.raw) == 0 || len(source.raw) > maxActionSourceBytes {
+		return ActionDescriptor{}, 0, catalogError("%s has invalid bounded source size", source.path)
+	}
+	wire, err := decodeActionWire(source.raw)
+	if err != nil {
+		return ActionDescriptor{}, 0, catalogError("%s: %v", source.path, err)
+	}
+	if int(wire.Ordinal) >= TeamworkActionCount || seenOrdinals[wire.Ordinal] {
+		return ActionDescriptor{}, 0,
+			catalogError("%s ordinal %d is outside unique dense range", source.path, wire.Ordinal)
+	}
+	operation := model.OperationKind(wire.Receipt.Action)
+	if wire.Action == "" || source.path != "actions/teamwork/"+wire.Action+".json" ||
+		wire.Receipt.Action != "teamwork."+wire.Action || !strings.HasPrefix(string(operation), "teamwork.") ||
+		!operation.Valid() || duplicateActionIdentity(actions[:], wire.Action, operation) {
+		return ActionDescriptor{}, 0, catalogError("%s action/operation binding is invalid", source.path)
+	}
+	descriptor, err := projectAction(source, wire, operation)
+	if err != nil {
+		return ActionDescriptor{}, 0, catalogError("%s: %v", source.path, err)
+	}
+	return descriptor, wire.Ordinal, nil
 }
 
 func duplicateActionIdentity(actions []ActionDescriptor, name string, operation model.OperationKind) bool {
@@ -254,6 +276,7 @@ type actionWire struct {
 	Artifacts      actionArtifactWire  `json:"artifacts"`
 	Content        actionContentWire   `json:"content"`
 	Deadline       *actionDeadlineWire `json:"deadline"`
+	Ordinal        uint8               `json:"ordinal"`
 	Receipt        actionReceiptWire   `json:"receipt"`
 	SchemaVersion  int                 `json:"schema_version"`
 	Selectors      *actionSelectorWire `json:"selectors"`

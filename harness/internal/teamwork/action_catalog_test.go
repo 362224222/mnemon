@@ -13,6 +13,7 @@ import (
 
 type actionCatalogExpectation struct {
 	name              string
+	ordinal           uint8
 	operation         model.OperationKind
 	contexts          []ActionContext
 	contentRequired   bool
@@ -34,26 +35,26 @@ func TestActionCatalogProjectsExactCanonicalAssets(t *testing.T) {
 	}
 
 	want := []actionCatalogExpectation{
-		{name: "accept", operation: model.OperationTeamworkAccept,
-			contexts: []ActionContext{ActionContextReviewerOffered}, receiptHandling: ReceiptHandlingCompleted, receiptMaxResults: 1},
-		{name: "cancel", operation: model.OperationTeamworkCancel,
-			contexts: []ActionContext{ActionContextHomeNonterminal}, contentRequired: true,
-			receiptHandling: ReceiptHandlingCompleted, receiptMaxResults: 1},
-		{name: "close", operation: model.OperationTeamworkClose,
-			contexts: []ActionContext{ActionContextHomeDelivered}, receiptHandling: ReceiptHandlingCompleted, receiptMaxResults: 1},
-		{name: "decline", operation: model.OperationTeamworkDecline,
-			contexts: []ActionContext{ActionContextReviewerOffered}, contentRequired: true,
-			receiptHandling: ReceiptHandlingCompleted, receiptMaxResults: 1},
-		{name: "deliver", operation: model.OperationTeamworkDeliver,
-			contexts:        []ActionContext{ActionContextReviewerActive, ActionContextReviewerRework, ActionContextParentResume},
-			contentRequired: true, artifactsAllowed: true,
-			receiptHandling: ReceiptHandlingCompleted, receiptMaxResults: 1},
-		{name: "offer", operation: model.OperationTeamworkOffer,
+		{name: "offer", ordinal: 0, operation: model.OperationTeamworkOffer,
 			contexts:        []ActionContext{ActionContextNone, ActionContextReviewerActive, ActionContextReviewerRework},
 			contentRequired: true, artifactsAllowed: true, selectors: true,
 			receiptHandling: ReceiptHandlingContextDependent, receiptMaxResults: model.MaxChildWorks},
-		{name: "rework", operation: model.OperationTeamworkRework,
+		{name: "accept", ordinal: 1, operation: model.OperationTeamworkAccept,
+			contexts: []ActionContext{ActionContextReviewerOffered}, receiptHandling: ReceiptHandlingCompleted, receiptMaxResults: 1},
+		{name: "decline", ordinal: 2, operation: model.OperationTeamworkDecline,
+			contexts: []ActionContext{ActionContextReviewerOffered}, contentRequired: true,
+			receiptHandling: ReceiptHandlingCompleted, receiptMaxResults: 1},
+		{name: "deliver", ordinal: 3, operation: model.OperationTeamworkDeliver,
+			contexts:        []ActionContext{ActionContextReviewerActive, ActionContextReviewerRework, ActionContextParentResume},
+			contentRequired: true, artifactsAllowed: true,
+			receiptHandling: ReceiptHandlingCompleted, receiptMaxResults: 1},
+		{name: "rework", ordinal: 4, operation: model.OperationTeamworkRework,
 			contexts: []ActionContext{ActionContextHomeDeliveredIteration1}, contentRequired: true, artifactsAllowed: true,
+			receiptHandling: ReceiptHandlingCompleted, receiptMaxResults: 1},
+		{name: "close", ordinal: 5, operation: model.OperationTeamworkClose,
+			contexts: []ActionContext{ActionContextHomeDelivered}, receiptHandling: ReceiptHandlingCompleted, receiptMaxResults: 1},
+		{name: "cancel", ordinal: 6, operation: model.OperationTeamworkCancel,
+			contexts: []ActionContext{ActionContextHomeNonterminal}, contentRequired: true,
 			receiptHandling: ReceiptHandlingCompleted, receiptMaxResults: 1},
 	}
 	actions := catalog.Actions()
@@ -92,6 +93,7 @@ func assertCanonicalActionIdentity(t *testing.T, got ActionDescriptor,
 	t.Helper()
 	wantPath := "actions/teamwork/" + want.name + ".json"
 	if got.Name() != want.name || got.SourcePath() != wantPath || got.SchemaVersion() != ActionSchemaVersion ||
+		got.Ordinal() != want.ordinal ||
 		got.OperationKind() != want.operation || !bytes.Equal(got.SourceBytes(), rawByPath[wantPath]) ||
 		!reflect.DeepEqual(got.AllowedContexts(), want.contexts) {
 		t.Fatalf("descriptor %s identity/source/context mismatch: %#v", want.name, got)

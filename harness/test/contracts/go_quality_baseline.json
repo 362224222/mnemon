@@ -420,14 +420,7 @@
       "identity": "cognitive_complexity:harness/internal/assets/bundle.go::Load",
       "path": "harness/internal/assets/bundle.go",
       "symbol": "Load",
-      "ceiling": 38
-    },
-    {
-      "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/assets/bundle.go::validateActionSchema",
-      "path": "harness/internal/assets/bundle.go",
-      "symbol": "validateActionSchema",
-      "ceiling": 36
+      "ceiling": 32
     },
     {
       "rule": "cognitive_complexity",
@@ -2381,13 +2374,6 @@
       "path": "harness/internal/artifact/view.go",
       "symbol": "readViewReceipt",
       "ceiling": 25
-    },
-    {
-      "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/assets/bundle.go::validateActionSchema",
-      "path": "harness/internal/assets/bundle.go",
-      "symbol": "validateActionSchema",
-      "ceiling": 31
     },
     {
       "rule": "cyclomatic_complexity",
@@ -5492,13 +5478,6 @@
     },
     {
       "rule": "function_statements",
-      "identity": "function_statements:harness/internal/assets/bundle.go::Load",
-      "path": "harness/internal/assets/bundle.go",
-      "symbol": "Load",
-      "ceiling": 53
-    },
-    {
-      "rule": "function_statements",
       "identity": "function_statements:harness/internal/cli/agent.go::readBoundedWorkspaceFile",
       "path": "harness/internal/cli/agent.go",
       "symbol": "readBoundedWorkspaceFile",
@@ -7285,12 +7264,6 @@
       "identity": "production_file_lines:harness/internal/artifact/view.go",
       "path": "harness/internal/artifact/view.go",
       "ceiling": 1076
-    },
-    {
-      "rule": "production_file_lines",
-      "identity": "production_file_lines:harness/internal/assets/bundle.go",
-      "path": "harness/internal/assets/bundle.go",
-      "ceiling": 426
     },
     {
       "rule": "production_file_lines",

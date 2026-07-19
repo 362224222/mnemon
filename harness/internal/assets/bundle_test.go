@@ -11,35 +11,115 @@ import (
 )
 
 func TestManagedBundleBindsExactTeamworkOnlyAssets(t *testing.T) {
+	bundle := mustLoadManagedBundle(t)
+	manifest := bundle.Manifest()
+	assertManagedManifestBinding(t, bundle, manifest)
+	wantPaths := manifestTeamworkActionPaths(t, manifest)
+	assertManagedTeamworkActionPathProjection(t, bundle, wantPaths)
+	assertManagedTeamworkActionSources(t, bundle, wantPaths)
+	assertManagedTeamworkActionPathRejection(t, bundle)
+	assertManagedAbilityScope(t, manifest)
+	assertZeroManagedBundle(t, wantPaths[0])
+}
+
+func mustLoadManagedBundle(t *testing.T) Bundle {
+	t.Helper()
 	bundle, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifest := bundle.Manifest()
+	return bundle
+}
+
+func assertManagedManifestBinding(t *testing.T, bundle Bundle, manifest Manifest) {
+	t.Helper()
 	if manifest.SchemaVersion != 1 || len(manifest.Files) != 13 || !validDigestText(manifest.AssetRevision) {
 		t.Fatalf("manifest = %#v", manifest)
 	}
-	wantActions := []string{"accept", "cancel", "close", "decline", "deliver", "offer", "rework"}
-	if got := sortedActionNames(bundle.actions); !reflect.DeepEqual(got, wantActions) {
-		t.Fatalf("action catalog = %v, want %v", got, wantActions)
+	if bundle.Revision() != manifest.AssetRevision {
+		t.Fatalf("Revision() = %q, want %q", bundle.Revision(), manifest.AssetRevision)
 	}
-	for _, action := range wantActions {
-		schema, ok := bundle.Action(action)
-		if !ok || schema.Receipt.Action != "teamwork."+action {
-			t.Fatalf("Action(%q) = (%#v, %t)", action, schema, ok)
-		}
-		schema.AllowedContext[0] = "tampered"
-		fresh, _ := bundle.Action(action)
-		if fresh.AllowedContext[0] == "tampered" {
-			t.Fatalf("Action(%q) returned mutable state", action)
+}
+
+func manifestTeamworkActionPaths(t *testing.T, manifest Manifest) []string {
+	t.Helper()
+	wantPaths := make([]string, 0)
+	for _, record := range manifest.Files {
+		if strings.HasPrefix(record.Path, teamworkActionPathRoot) {
+			wantPaths = append(wantPaths, record.Path)
 		}
 	}
+	if len(wantPaths) == 0 {
+		t.Fatal("manifest has no Teamwork action sources")
+	}
+	return wantPaths
+}
+
+func assertManagedTeamworkActionPathProjection(t *testing.T, bundle Bundle, wantPaths []string) {
+	t.Helper()
+	paths := bundle.TeamworkActionPaths()
+	if !reflect.DeepEqual(paths, wantPaths) {
+		t.Fatalf("TeamworkActionPaths() = %v, want %v", paths, wantPaths)
+	}
+	paths[0] = "tampered"
+	if !reflect.DeepEqual(bundle.TeamworkActionPaths(), wantPaths) {
+		t.Fatal("TeamworkActionPaths() returned mutable bundle state")
+	}
+}
+
+func assertManagedTeamworkActionSources(t *testing.T, bundle Bundle, paths []string) {
+	t.Helper()
+	for _, path := range paths {
+		assertManagedTeamworkActionSource(t, bundle, path)
+	}
+}
+
+func assertManagedTeamworkActionSource(t *testing.T, bundle Bundle, path string) {
+	t.Helper()
+	raw, readErr := bundle.ReadTeamworkAction(path)
+	if readErr != nil {
+		t.Fatalf("ReadTeamworkAction(%q) error = %v", path, readErr)
+	}
+	source, sourceErr := os.ReadFile(filepath.Join("managed", filepath.FromSlash(path)))
+	record, ok := bundle.record(path)
+	if sourceErr != nil || !ok || !bytes.Equal(raw, source) || digestBytes(raw) != record.Digest {
+		t.Fatalf("ReadTeamworkAction(%q) did not preserve manifest-bound bytes: source error %v", path, sourceErr)
+	}
+	raw[0] ^= 0xff
+	fresh, freshErr := bundle.ReadTeamworkAction(path)
+	if freshErr != nil || bytes.Equal(raw, fresh) {
+		t.Fatalf("ReadTeamworkAction(%q) returned mutable bytes: %v", path, freshErr)
+	}
+}
+
+func assertManagedTeamworkActionPathRejection(t *testing.T, bundle Bundle) {
+	t.Helper()
+	for _, path := range []string{"SKILL.md", "actions/teamwork", "actions/teamwork/unknown.json", "../offer.json", ""} {
+		if raw, readErr := bundle.ReadTeamworkAction(path); readErr == nil || raw != nil {
+			t.Fatalf("ReadTeamworkAction(%q) = (%q, %v), want rejection", path, raw, readErr)
+		}
+	}
+}
+
+func assertManagedAbilityScope(t *testing.T, manifest Manifest) {
+	t.Helper()
 	for _, forbidden := range []string{"memory", "evolution", "mcp", "capability"} {
 		for _, record := range manifest.Files {
 			if strings.Contains(strings.ToLower(record.Path), forbidden) {
 				t.Fatalf("manifest contains forbidden ability path %q", record.Path)
 			}
 		}
+	}
+}
+
+func assertZeroManagedBundle(t *testing.T, actionPath string) {
+	t.Helper()
+	var zero Bundle
+	if zero.Revision() != "" || zero.TeamworkActionPaths() != nil {
+		t.Fatalf("zero Bundle exposes action state: %#v", zero)
+	}
+	if raw, readErr := zero.ReadTeamworkAction(actionPath); readErr == nil || raw != nil {
+		t.Fatalf("zero Bundle ReadTeamworkAction() = (%q, %v)", raw, readErr)
 	}
 }
 

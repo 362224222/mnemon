@@ -10,15 +10,15 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"sort"
 	"strings"
 )
 
 const (
-	managedRoot        = "managed"
-	manifestPath       = managedRoot + "/manifest.json"
-	hookTimeoutSeconds = 10
-	hookBody           = `#!/bin/sh
+	managedRoot            = "managed"
+	manifestPath           = managedRoot + "/manifest.json"
+	teamworkActionPathRoot = "actions/teamwork/"
+	hookTimeoutSeconds     = 10
+	hookBody               = `#!/bin/sh
 set -eu
 
 if cue=$(mnemon-harness hook check); then
@@ -58,49 +58,6 @@ type Manifest struct {
 	SchemaVersion int          `json:"schema_version"`
 }
 
-type ArtifactPolicy struct {
-	Allowed       bool   `json:"allowed"`
-	MaxEntries    uint32 `json:"max_entries"`
-	MaxPathBytes  uint32 `json:"max_path_bytes"`
-	MaxRoots      uint8  `json:"max_roots"`
-	MaxTotalBytes uint64 `json:"max_total_bytes"`
-}
-
-type ContentPolicy struct {
-	MaxBytes uint32 `json:"max_bytes"`
-	Required bool   `json:"required"`
-	Source   string `json:"source"`
-}
-
-type DeadlinePolicy struct {
-	Default string `json:"default"`
-	Maximum string `json:"maximum"`
-	Minimum string `json:"minimum"`
-}
-
-type ReceiptPolicy struct {
-	Action     string `json:"action"`
-	Handling   string `json:"handling"`
-	MaxResults uint8  `json:"max_results"`
-	Status     string `json:"status"`
-}
-
-type SelectorPolicy struct {
-	Channel     string   `json:"channel"`
-	Participant []string `json:"participant"`
-}
-
-type ActionSchema struct {
-	Action         string          `json:"action"`
-	AllowedContext []string        `json:"allowed_context"`
-	Artifacts      ArtifactPolicy  `json:"artifacts"`
-	Content        ContentPolicy   `json:"content"`
-	Deadline       *DeadlinePolicy `json:"deadline"`
-	Receipt        ReceiptPolicy   `json:"receipt"`
-	SchemaVersion  int             `json:"schema_version"`
-	Selectors      *SelectorPolicy `json:"selectors"`
-}
-
 type Registration struct {
 	Host          Host              `json:"host"`
 	ManagedKey    string            `json:"managed_key"`
@@ -126,10 +83,10 @@ type RegistrationHook struct {
 // It serves source bytes only; projection and Host registration live in the
 // integration package.
 type Bundle struct {
-	manifest     Manifest
-	manifestRaw  []byte
-	actions      map[string]ActionSchema
-	registration map[Host]Registration
+	manifest            Manifest
+	manifestRaw         []byte
+	teamworkActionPaths []string
+	registration        map[Host]Registration
 }
 
 func Load() (Bundle, error) {
@@ -145,7 +102,6 @@ func Load() (Bundle, error) {
 		return Bundle{}, err
 	}
 	bundle := Bundle{manifest: cloneManifest(manifest), manifestRaw: append([]byte(nil), raw...),
-		actions:      make(map[string]ActionSchema),
 		registration: make(map[Host]Registration)}
 	listed := make(map[string]struct{}, len(manifest.Files))
 	for _, record := range manifest.Files {
@@ -157,18 +113,11 @@ func Load() (Bundle, error) {
 			return Bundle{}, fmt.Errorf("managed asset %s differs from manifest digest", record.Path)
 		}
 		listed[record.Path] = struct{}{}
-		if strings.HasPrefix(record.Path, "actions/teamwork/") {
-			var schema ActionSchema
-			if err := decodeCanonicalObject(content, &schema); err != nil {
-				return Bundle{}, fmt.Errorf("managed action %s: %w", record.Path, err)
+		if strings.HasPrefix(record.Path, teamworkActionPathRoot) {
+			if !validTeamworkActionPath(record.Path) {
+				return Bundle{}, fmt.Errorf("managed Teamwork action path %s is not lexical", record.Path)
 			}
-			if err := validateActionSchema(schema); err != nil {
-				return Bundle{}, fmt.Errorf("managed action %s: %w", record.Path, err)
-			}
-			if _, exists := bundle.actions[schema.Action]; exists {
-				return Bundle{}, fmt.Errorf("duplicate managed action %s", schema.Action)
-			}
-			bundle.actions[schema.Action] = schema
+			bundle.teamworkActionPaths = append(bundle.teamworkActionPaths, record.Path)
 		}
 		if strings.HasSuffix(record.Path, "/registration.json") {
 			var registration Registration
@@ -192,13 +141,17 @@ func Load() (Bundle, error) {
 	if err := requireExactFileSet(listed); err != nil {
 		return Bundle{}, err
 	}
-	if len(bundle.actions) != 7 || len(bundle.registration) != 2 {
-		return Bundle{}, errors.New("managed assets do not contain the closed Teamwork and Host sets")
+	if len(bundle.teamworkActionPaths) == 0 || len(bundle.registration) != 2 {
+		return Bundle{}, errors.New("managed assets do not contain Teamwork action sources and the closed Host set")
 	}
 	return bundle, nil
 }
 
 func (bundle Bundle) Manifest() Manifest { return cloneManifest(bundle.manifest) }
+
+// Revision returns the whole-manifest revision that binds every validated
+// source file in this immutable bundle.
+func (bundle Bundle) Revision() string { return bundle.manifest.AssetRevision }
 
 // ManifestBytes returns the exact validated source bytes. Node bundle
 // installation must not re-encode the manifest and accidentally create a
@@ -229,18 +182,21 @@ func (bundle Bundle) FilesFor(host Host) ([]FileRecord, error) {
 	return result, nil
 }
 
-func (bundle Bundle) Action(name string) (ActionSchema, bool) {
-	action, ok := bundle.actions[name]
-	if !ok {
-		return ActionSchema{}, false
+// TeamworkActionPaths returns the manifest-filtered lexical paths of the raw
+// Teamwork action sources. Semantic parsing belongs to the Teamwork package.
+func (bundle Bundle) TeamworkActionPaths() []string {
+	return append([]string(nil), bundle.teamworkActionPaths...)
+}
+
+// ReadTeamworkAction returns exact embedded bytes only for a Teamwork action
+// path frozen into this validated bundle.
+func (bundle Bundle) ReadTeamworkAction(path string) ([]byte, error) {
+	for _, candidate := range bundle.teamworkActionPaths {
+		if candidate == path {
+			return bundle.Read(path)
+		}
 	}
-	action.AllowedContext = append([]string(nil), action.AllowedContext...)
-	if action.Selectors != nil {
-		selectors := *action.Selectors
-		selectors.Participant = append([]string(nil), selectors.Participant...)
-		action.Selectors = &selectors
-	}
-	return action, true
+	return nil, errors.New("path is not a Teamwork action in the validated manifest")
 }
 
 func (bundle Bundle) Registration(host Host) (Registration, bool) {
@@ -289,39 +245,10 @@ func validateManifest(manifest Manifest) error {
 	return nil
 }
 
-func validateActionSchema(schema ActionSchema) error {
-	requiredContent := map[string]bool{"offer": true, "accept": false, "decline": true,
-		"deliver": true, "rework": true, "close": false, "cancel": true}
-	artifactsAllowed := map[string]bool{"offer": true, "deliver": true, "rework": true}
-	required, known := requiredContent[schema.Action]
-	if !known || schema.SchemaVersion != 1 || len(schema.AllowedContext) == 0 ||
-		schema.Content.MaxBytes != 8192 || schema.Content.Required != required ||
-		schema.Content.Source != "content_file_or_stdin" || schema.Receipt.Action != "teamwork."+schema.Action ||
-		schema.Receipt.Status != "accepted" || schema.Receipt.MaxResults == 0 {
-		return errors.New("action differs from the closed Teamwork contract")
-	}
-	if schema.Action == "offer" {
-		if schema.Deadline == nil || schema.Deadline.Default != "24h" || schema.Deadline.Minimum != "5m" ||
-			schema.Deadline.Maximum != "168h" || schema.Selectors == nil ||
-			schema.Selectors.Channel != "optional_when_unambiguous" ||
-			strings.Join(schema.Selectors.Participant, ",") != "effective_alias,auto,team" ||
-			schema.Receipt.MaxResults != 7 || schema.Receipt.Handling != "context_dependent" {
-			return errors.New("offer selectors, deadline, or receipt differ from the closed contract")
-		}
-	} else if schema.Deadline != nil || schema.Selectors != nil || schema.Receipt.MaxResults != 1 ||
-		schema.Receipt.Handling != "completed" {
-		return errors.New("non-offer action exposes selectors, deadline, or a wrong receipt")
-	}
-	if artifactsAllowed[schema.Action] {
-		if !schema.Artifacts.Allowed || schema.Artifacts.MaxRoots != 16 ||
-			schema.Artifacts.MaxEntries != 4096 || schema.Artifacts.MaxPathBytes != 512 ||
-			schema.Artifacts.MaxTotalBytes != 256<<20 {
-			return errors.New("action Artifact bounds differ from the closed contract")
-		}
-	} else if schema.Artifacts != (ArtifactPolicy{}) {
-		return errors.New("action that forbids Artifacts carries nonzero Artifact bounds")
-	}
-	return nil
+func validTeamworkActionPath(path string) bool {
+	name := strings.TrimPrefix(path, teamworkActionPathRoot)
+	return name != path && len(name) > len(".json") && strings.HasSuffix(name, ".json") &&
+		!strings.Contains(name, "/")
 }
 
 func validateRegistration(registration Registration) error {
@@ -414,13 +341,4 @@ func cloneManifest(manifest Manifest) Manifest {
 func cloneFileRecord(record FileRecord) FileRecord {
 	record.Hosts = append([]Host(nil), record.Hosts...)
 	return record
-}
-
-func sortedActionNames(actions map[string]ActionSchema) []string {
-	names := make([]string, 0, len(actions))
-	for name := range actions {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
 }

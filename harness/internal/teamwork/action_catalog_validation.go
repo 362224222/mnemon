@@ -28,7 +28,8 @@ func projectAction(source ActionSource, wire actionWire, operation model.Operati
 	if err != nil {
 		return ActionDescriptor{}, err
 	}
-	return ActionDescriptor{name: wire.Action, path: source.path, schemaVersion: wire.SchemaVersion, operation: operation,
+	return ActionDescriptor{name: wire.Action, path: source.path, schemaVersion: wire.SchemaVersion,
+		ordinal: wire.Ordinal, operation: operation,
 		raw: append([]byte(nil), source.raw...), contexts: contexts, contextLen: contextLen,
 		content:   ActionContentPolicy{maxBytes: wire.Content.MaxBytes, required: wire.Content.Required, source: wire.Content.Source},
 		artifacts: artifacts, deadline: deadline, hasDeadline: hasDeadline, selectors: selectors, hasSelectors: hasSelectors,
