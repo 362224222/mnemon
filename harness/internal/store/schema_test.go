@@ -28,7 +28,7 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 				"artifact_gc_completion_receipts artifact_gc_delete_guard artifact_gc_block_delete_guard artifact_gc_completion_guard " +
 				"channels channel_members channel_conflicts " +
 				"enrollment_grants enrollment_grant_uses enrollment_receipts channel_join_reservations channel_leave_requests " +
-				"peer_bindings gossip_publications peer_deliveries peer_inbox peer_inbox_semantic_transition_receipts peer_inbox_pressure peer_inbox_node_pressure publication_conflicts " +
+				"peer_bindings gossip_publications peer_deliveries peer_inbox peer_inbox_semantic_transition_receipts peer_inbox_artifact_renew_receipts peer_inbox_pressure peer_inbox_node_pressure publication_conflicts " +
 				"origin_quarantines peer_cursors peer_repairs publication_epochs peer_pull_acks",
 		),
 		"index": strings.Fields(
@@ -74,6 +74,7 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 				"peer_inbox_publication_member_insert peer_inbox_identity_immutable peer_inbox_event_scope_update " +
 				"peer_inbox_semantic_nonce_immutable " +
 				"peer_inbox_semantic_transition_receipt_insert peer_inbox_semantic_transition_receipt_update " +
+				"peer_inbox_artifact_renew_receipt_insert peer_inbox_artifact_renew_receipt_update " +
 				"peer_inbox_receipt_scope_insert peer_inbox_receipt_scope_update peer_inbox_no_delete peer_inbox_terminal_status_immutable " +
 				"peer_inbox_pressure_insert_limit peer_inbox_pressure_insert_account " +
 				"peer_inbox_pressure_status_leave_account peer_inbox_pressure_no_delete peer_inbox_pressure_identity_immutable " +
@@ -119,8 +120,8 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 	if !reflect.DeepEqual(actual, expected) {
 		t.Fatalf("schema object set mismatch\nactual: %#v\nexpected: %#v", actual, expected)
 	}
-	if got := len(actual["table"]) + len(actual["index"]) + len(actual["trigger"]); got != 221 {
-		t.Fatalf("explicit object count = %d, want 221", got)
+	if got := len(actual["table"]) + len(actual["index"]) + len(actual["trigger"]); got != 224 {
+		t.Fatalf("explicit object count = %d, want 224", got)
 	}
 }
 
@@ -507,6 +508,65 @@ func TestSchemaV1PeerInboxSemanticTransitionReceiptConstraints(t *testing.T) {
 	if err := fixture.store.db.QueryRow(`SELECT COUNT(*) FROM peer_inbox_semantic_transition_receipts`).
 		Scan(&count); err != nil || count != 1 {
 		t.Fatalf("semantic transition receipt count after invalid writes = (%d,%v)", count, err)
+	}
+}
+
+func TestSchemaV1PeerInboxArtifactRenewReceiptConstraints(t *testing.T) {
+	fixture, claim, _, renewAt := newRenewedPeerInboxArtifact(t,
+		"schema-artifact-renew-receipt")
+	inboxID := claim.InboxID().String()
+	var count int
+	if err := fixture.store.db.QueryRow(`SELECT COUNT(*)
+		FROM peer_inbox_artifact_renew_receipts`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("Artifact renew receipt count = (%d,%v), want one", count, err)
+	}
+	invalidUpdates := []struct {
+		name  string
+		query string
+		args  []any
+	}{
+		{"fractional old attempt", `UPDATE peer_inbox_artifact_renew_receipts
+			SET old_attempt=1.5 WHERE inbox_id=?`, []any{inboxID}},
+		{"invalid old lease month", `UPDATE peer_inbox_artifact_renew_receipts
+			SET old_lease_until='2026-13-01T00:00:00.000000000Z' WHERE inbox_id=?`, []any{inboxID}},
+		{"invalid requested month", `UPDATE peer_inbox_artifact_renew_receipts
+			SET requested_at='2026-13-01T00:00:00.000000000Z' WHERE inbox_id=?`, []any{inboxID}},
+		{"invalid next month", `UPDATE peer_inbox_artifact_renew_receipts
+			SET output_next_attempt_at='2026-13-01T00:00:00.000000000Z' WHERE inbox_id=?`, []any{inboxID}},
+		{"invalid output lease month", `UPDATE peer_inbox_artifact_renew_receipts
+			SET output_lease_until='2026-13-01T00:00:00.000000000Z' WHERE inbox_id=?`, []any{inboxID}},
+		{"invalid output update month", `UPDATE peer_inbox_artifact_renew_receipts
+			SET output_updated_at='2026-13-01T00:00:00.000000000Z' WHERE inbox_id=?`, []any{inboxID}},
+		{"short semantic nonce", `UPDATE peer_inbox_artifact_renew_receipts
+			SET semantic_nonce=zeroblob(31) WHERE inbox_id=?`, []any{inboxID}},
+		{"short request digest", `UPDATE peer_inbox_artifact_renew_receipts
+			SET request_digest=zeroblob(31) WHERE inbox_id=?`, []any{inboxID}},
+		{"unknown output status", `UPDATE peer_inbox_artifact_renew_receipts
+			SET output_status='future' WHERE inbox_id=?`, []any{inboxID}},
+		{"mismatched output attempt", `UPDATE peer_inbox_artifact_renew_receipts
+			SET output_attempt=output_attempt+1 WHERE inbox_id=?`, []any{inboxID}},
+		{"mismatched output owner", `UPDATE peer_inbox_artifact_renew_receipts
+			SET output_lease_owner='schema-artifact-forged' WHERE inbox_id=?`, []any{inboxID}},
+		{"unexpected output diagnostic", `UPDATE peer_inbox_artifact_renew_receipts
+			SET output_diagnostic='artifact_busy' WHERE inbox_id=?`, []any{inboxID}},
+		{"mismatched output next attempt", `UPDATE peer_inbox_artifact_renew_receipts
+			SET output_next_attempt_at=? WHERE inbox_id=?`,
+			[]any{storeTime(renewAt.Add(time.Second)), inboxID}},
+	}
+	for _, test := range invalidUpdates {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := fixture.store.db.Exec(test.query, test.args...); err == nil {
+				t.Fatal("invalid Artifact renew receipt update unexpectedly succeeded")
+			}
+		})
+	}
+	if _, err := fixture.store.db.Exec(`INSERT INTO peer_inbox_artifact_renew_receipts
+		SELECT * FROM peer_inbox_artifact_renew_receipts WHERE inbox_id=?`, inboxID); err == nil {
+		t.Fatal("duplicate Artifact renew receipt unexpectedly succeeded")
+	}
+	if err := fixture.store.db.QueryRow(`SELECT COUNT(*)
+		FROM peer_inbox_artifact_renew_receipts`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("Artifact renew receipt count after invalid writes = (%d,%v)", count, err)
 	}
 }
 

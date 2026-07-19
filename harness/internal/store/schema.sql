@@ -2189,6 +2189,122 @@ WHEN NEW.inbox_id <> OLD.inbox_id OR NOT EXISTS (
 )
 BEGIN SELECT RAISE(ABORT, 'semantic transition receipt output mismatch'); END;
 
+-- Artifact renewal returns a new live fence, so current-row inference is not a
+-- sufficient response-loss proof: several leases in one attempt share owner
+-- and attempt. One row retains only the latest exact old-fence request and its
+-- exact durable output. Other Artifact settlements atomically delete it.
+CREATE TABLE peer_inbox_artifact_renew_receipts (
+  inbox_id           TEXT PRIMARY KEY REFERENCES peer_inbox(inbox_id),
+  old_lease_owner    TEXT NOT NULL CHECK (
+    typeof(old_lease_owner) = 'text'
+    AND length(old_lease_owner) BETWEEN 1 AND 1024
+  ),
+  old_lease_until    TEXT NOT NULL CHECK (
+    typeof(old_lease_until) = 'text'
+    AND length(old_lease_until) = 30
+    AND old_lease_until GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]Z'
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(old_lease_until,1,19) || 'Z')) IS NOT NULL
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(old_lease_until,1,19) || 'Z')) = substr(old_lease_until,1,19)
+    AND old_lease_until BETWEEN '1677-09-21T00:12:43.145224192Z' AND '2262-04-11T23:47:16.854775807Z'
+  ),
+  old_attempt        INTEGER NOT NULL CHECK (
+    typeof(old_attempt) = 'integer' AND old_attempt BETWEEN 1 AND 4294967295
+  ),
+  semantic_nonce     BLOB NOT NULL CHECK (
+    typeof(semantic_nonce) = 'blob' AND length(semantic_nonce) = 32
+  ),
+  requested_at       TEXT NOT NULL CHECK (
+    typeof(requested_at) = 'text'
+    AND length(requested_at) = 30
+    AND requested_at GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]Z'
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(requested_at,1,19) || 'Z')) IS NOT NULL
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(requested_at,1,19) || 'Z')) = substr(requested_at,1,19)
+    AND requested_at BETWEEN '1677-09-21T00:12:43.145224192Z' AND '2262-04-11T23:47:16.854775807Z'
+  ),
+  request_digest     BLOB NOT NULL CHECK (
+    typeof(request_digest) = 'blob' AND length(request_digest) = 32
+  ),
+  output_status      TEXT NOT NULL CHECK (output_status = 'waiting_artifact'),
+  output_attempt     INTEGER NOT NULL CHECK (
+    typeof(output_attempt) = 'integer' AND output_attempt BETWEEN 1 AND 4294967295
+  ),
+  output_next_attempt_at TEXT NOT NULL CHECK (
+    typeof(output_next_attempt_at) = 'text'
+    AND length(output_next_attempt_at) = 30
+    AND output_next_attempt_at GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]Z'
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(output_next_attempt_at,1,19) || 'Z')) IS NOT NULL
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(output_next_attempt_at,1,19) || 'Z')) = substr(output_next_attempt_at,1,19)
+    AND output_next_attempt_at BETWEEN '1677-09-21T00:12:43.145224192Z' AND '2262-04-11T23:47:16.854775807Z'
+  ),
+  output_lease_owner TEXT NOT NULL CHECK (
+    typeof(output_lease_owner) = 'text'
+    AND length(output_lease_owner) BETWEEN 1 AND 1024
+  ),
+  output_lease_until TEXT NOT NULL CHECK (
+    typeof(output_lease_until) = 'text'
+    AND length(output_lease_until) = 30
+    AND output_lease_until GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]Z'
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(output_lease_until,1,19) || 'Z')) IS NOT NULL
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(output_lease_until,1,19) || 'Z')) = substr(output_lease_until,1,19)
+    AND output_lease_until BETWEEN '1677-09-21T00:12:43.145224192Z' AND '2262-04-11T23:47:16.854775807Z'
+  ),
+  output_diagnostic  TEXT,
+  output_updated_at  TEXT NOT NULL CHECK (
+    typeof(output_updated_at) = 'text'
+    AND length(output_updated_at) = 30
+    AND output_updated_at GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]Z'
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(output_updated_at,1,19) || 'Z')) IS NOT NULL
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(output_updated_at,1,19) || 'Z')) = substr(output_updated_at,1,19)
+    AND output_updated_at BETWEEN '1677-09-21T00:12:43.145224192Z' AND '2262-04-11T23:47:16.854775807Z'
+  ),
+  CHECK (old_lease_until > requested_at),
+  CHECK (output_attempt = old_attempt),
+  CHECK (output_lease_owner = old_lease_owner),
+  CHECK (output_lease_until > requested_at),
+  CHECK (output_diagnostic IS NULL),
+  CHECK (output_updated_at = requested_at)
+);
+
+CREATE TRIGGER peer_inbox_artifact_renew_receipt_insert
+BEFORE INSERT ON peer_inbox_artifact_renew_receipts
+WHEN NOT EXISTS (
+  SELECT 1 FROM peer_inbox inbox
+  WHERE inbox.inbox_id = NEW.inbox_id
+    AND inbox.is_audience = 1
+    AND inbox.semantic_nonce = NEW.semantic_nonce
+    AND inbox.status = NEW.output_status
+    AND inbox.attempts = NEW.output_attempt
+    AND inbox.next_attempt_at = NEW.output_next_attempt_at
+    AND inbox.lease_owner = NEW.output_lease_owner
+    AND inbox.lease_until = NEW.output_lease_until
+    AND inbox.diagnostic IS NEW.output_diagnostic
+    AND inbox.updated_at = NEW.output_updated_at
+    AND inbox.local_event_id IS NULL
+    AND inbox.decision_json IS NULL
+    AND inbox.receipt_event_id IS NULL
+)
+BEGIN SELECT RAISE(ABORT, 'Artifact renew receipt output mismatch'); END;
+
+CREATE TRIGGER peer_inbox_artifact_renew_receipt_update
+BEFORE UPDATE ON peer_inbox_artifact_renew_receipts
+WHEN NEW.inbox_id <> OLD.inbox_id OR NOT EXISTS (
+  SELECT 1 FROM peer_inbox inbox
+  WHERE inbox.inbox_id = NEW.inbox_id
+    AND inbox.is_audience = 1
+    AND inbox.semantic_nonce = NEW.semantic_nonce
+    AND inbox.status = NEW.output_status
+    AND inbox.attempts = NEW.output_attempt
+    AND inbox.next_attempt_at = NEW.output_next_attempt_at
+    AND inbox.lease_owner = NEW.output_lease_owner
+    AND inbox.lease_until = NEW.output_lease_until
+    AND inbox.diagnostic IS NEW.output_diagnostic
+    AND inbox.updated_at = NEW.output_updated_at
+    AND inbox.local_event_id IS NULL
+    AND inbox.decision_json IS NULL
+    AND inbox.receipt_event_id IS NULL
+)
+BEGIN SELECT RAISE(ABORT, 'Artifact renew receipt output mismatch'); END;
+
 -- Pending Inbox pressure is materialized at both scopes so admission never
 -- scans permanent Inbox or historical Channel evidence.
 CREATE TABLE peer_inbox_pressure (

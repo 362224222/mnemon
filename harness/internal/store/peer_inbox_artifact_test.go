@@ -440,12 +440,308 @@ func TestRenewPeerInboxArtifactReplayConvergesAfterLaterStage(t *testing.T) {
 	wantExpiry := renewed.Fence().LeaseUntil().Add(peerInboxArtifactStageTTL)
 	assertPeerInboxArtifactStagePins(t, fixture.store, claim.InboxID(),
 		claim.RequiredArtifactRoots(), wantExpiry)
+	assertPeerInboxArtifactRenewReceipt(t, fixture.store, claim.InboxID(),
+		claim.Fence(), renewed.Fence(), renewAt)
 
 	replayed, err := fixture.store.RenewPeerInboxArtifactLease(context.Background(),
 		RenewPeerInboxArtifactSpec{Fence: claim.Fence(), At: renewAt})
 	if err != nil || replayed.Changed() || !replayed.Replayed() ||
 		replayed.Fence() != renewed.Fence() {
 		t.Fatalf("renew replay after later stage = (%#v,%v)", replayed, err)
+	}
+}
+
+func TestPeerInboxArtifactRenewReceiptOnlyLatestFenceReplaysAcrossRestart(t *testing.T) {
+	fixture := newPeerInboxFixture(t, "artifact-renew-receipt-restart", 0)
+	fixture.put(t, fixture.publication(t, 1, 1, "artifact-renew-receipt-restart", true),
+		fixture.at)
+	claimAt := fixture.at.Add(time.Second)
+	claim := mustClaimPeerInboxArtifact(t, fixture.store, "artifact-renew-receipt-worker", claimAt)
+	firstAt := claimAt.Add(time.Second)
+	firstSpec := RenewPeerInboxArtifactSpec{Fence: claim.Fence(), At: firstAt}
+	first, err := fixture.store.RenewPeerInboxArtifactLease(context.Background(), firstSpec)
+	if err != nil || !first.Changed() {
+		t.Fatalf("F0 -> F1 renew = (%#v,%v)", first, err)
+	}
+	secondAt := firstAt.Add(time.Second)
+	secondSpec := RenewPeerInboxArtifactSpec{Fence: first.Fence(), At: secondAt}
+	second, err := fixture.store.RenewPeerInboxArtifactLease(context.Background(), secondSpec)
+	if err != nil || !second.Changed() {
+		t.Fatalf("F1 -> F2 renew = (%#v,%v)", second, err)
+	}
+	if _, err := fixture.store.RenewPeerInboxArtifactLease(context.Background(), firstSpec); !errors.Is(err, ErrPeerInboxArtifactStale) {
+		t.Fatalf("superseded F0 request error = %v", err)
+	}
+	if _, err := fixture.store.RenewPeerInboxArtifactLease(context.Background(),
+		RenewPeerInboxArtifactSpec{Fence: claim.Fence(), At: secondAt}); !errors.Is(err, ErrPeerInboxArtifactStale) {
+		t.Fatalf("F0 masquerading as F1 -> F2 error = %v", err)
+	}
+	assertPeerInboxArtifactRenewReceipt(t, fixture.store, claim.InboxID(),
+		first.Fence(), second.Fence(), secondAt)
+
+	path := fixture.store.Path()
+	if err := fixture.store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := OpenExisting(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = restarted.Close() })
+	fixture.store = restarted
+	replayed, err := restarted.RenewPeerInboxArtifactLease(context.Background(), secondSpec)
+	if err != nil || replayed.Changed() || !replayed.Replayed() || replayed.Fence() != second.Fence() {
+		t.Fatalf("latest renew restart replay = (%#v,%v)", replayed, err)
+	}
+}
+
+func TestPeerInboxArtifactRenewReceiptIsClearedBySupersedingTransitions(t *testing.T) {
+	t.Parallel()
+	t.Run("claim", func(t *testing.T) {
+		fixture, claim, renewed, renewAt := newRenewedPeerInboxArtifact(t, "artifact-renew-clear-claim")
+		reclaimed := mustClaimPeerInboxArtifact(t, fixture.store, "artifact-renew-clear-reclaimed",
+			renewed.Fence().LeaseUntil())
+		if reclaimed.Fence().Attempt() != claim.Fence().Attempt()+1 {
+			t.Fatalf("reclaimed attempt = %d", reclaimed.Fence().Attempt())
+		}
+		assertPeerInboxArtifactRenewReceiptCount(t, fixture.store, claim.InboxID(), 0)
+		_ = renewAt
+	})
+	t.Run("retry", func(t *testing.T) {
+		fixture, claim, renewed, renewAt := newRenewedPeerInboxArtifact(t, "artifact-renew-clear-retry")
+		result, err := fixture.store.RetryPeerInboxArtifact(context.Background(), RetryPeerInboxArtifactSpec{
+			Fence: renewed.Fence(), Diagnostic: PeerInboxArtifactRetryBusy,
+			RetryAfter: time.Second, At: renewAt.Add(time.Second)})
+		if err != nil || !result.Changed() {
+			t.Fatalf("retry after renew = (%#v,%v)", result, err)
+		}
+		assertPeerInboxArtifactRenewReceiptCount(t, fixture.store, claim.InboxID(), 0)
+	})
+	t.Run("quarantine", func(t *testing.T) {
+		fixture, claim, renewed, renewAt := newRenewedPeerInboxArtifact(t, "artifact-renew-clear-quarantine")
+		result, err := fixture.store.QuarantinePeerInboxArtifact(context.Background(),
+			QuarantinePeerInboxArtifactSpec{Fence: renewed.Fence(),
+				Diagnostic: PeerInboxArtifactDigestMismatch, At: renewAt.Add(time.Second)})
+		if err != nil || !result.Changed() {
+			t.Fatalf("quarantine after renew = (%#v,%v)", result, err)
+		}
+		assertPeerInboxArtifactRenewReceiptCount(t, fixture.store, claim.InboxID(), 0)
+	})
+	t.Run("ready", func(t *testing.T) {
+		fixture, claim, renewed, renewAt := newRenewedPeerInboxArtifact(t, "artifact-renew-clear-ready")
+		result, err := fixture.store.MarkPeerInboxArtifactReady(context.Background(),
+			MarkPeerInboxArtifactReadySpec{Fence: renewed.Fence(), At: renewAt.Add(time.Second)})
+		if err != nil || !result.Changed() {
+			t.Fatalf("ready after renew = (%#v,%v)", result, err)
+		}
+		assertPeerInboxArtifactRenewReceiptCount(t, fixture.store, claim.InboxID(), 0)
+	})
+}
+
+func TestPeerInboxArtifactRenewReceiptTamperFailsClosedWithoutLaundering(t *testing.T) {
+	t.Parallel()
+	t.Run("current output mismatch blocks renew and claim", func(t *testing.T) {
+		fixture, claim, renewed, renewAt := newRenewedPeerInboxArtifact(t,
+			"artifact-renew-output-tamper")
+		tamperedNext := renewAt.Add(17 * time.Second)
+		mustExec(t, fixture.store, `UPDATE peer_inbox SET next_attempt_at=? WHERE inbox_id=?`,
+			storeTime(tamperedNext), claim.InboxID().String())
+		_, err := fixture.store.RenewPeerInboxArtifactLease(context.Background(),
+			RenewPeerInboxArtifactSpec{Fence: renewed.Fence(), At: renewAt.Add(time.Second)})
+		if !errors.Is(err, ErrPeerInboxArtifactInvariant) {
+			t.Fatalf("nonmatching renew laundered output mismatch: %v", err)
+		}
+		assertPeerInboxArtifactRenewReceipt(t, fixture.store, claim.InboxID(),
+			claim.Fence(), renewed.Fence(), renewAt)
+		result, err := fixture.store.ClaimPeerInboxArtifact(context.Background(),
+			ClaimPeerInboxArtifactSpec{LeaseOwner: "artifact-renew-tamper-reclaim",
+				At: renewed.Fence().LeaseUntil()})
+		if !errors.Is(err, ErrPeerInboxArtifactInvariant) || result.Found() {
+			t.Fatalf("claim laundered output mismatch = (found %t,%v)", result.Found(), err)
+		}
+		assertPeerInboxArtifactRenewReceiptCount(t, fixture.store, claim.InboxID(), 1)
+		assertPeerInboxArtifactState(t, fixture.store, "waiting_artifact", 1,
+			renewed.Fence().LeaseOwner(), true)
+	})
+	t.Run("request digest blocks read boundaries", func(t *testing.T) {
+		fixture, claim, renewed, renewAt := newRenewedPeerInboxArtifact(t,
+			"artifact-renew-digest-tamper")
+		mustExec(t, fixture.store, `UPDATE peer_inbox_artifact_renew_receipts
+			SET request_digest=? WHERE inbox_id=?`, model.Sum([]byte("tampered Artifact renew")).Bytes(),
+			claim.InboxID().String())
+		err := fixture.store.ProbePeerInboxArtifactAuthority(context.Background(),
+			ProbePeerInboxArtifactAuthoritySpec{Fence: renewed.Fence(), At: renewAt.Add(time.Second)})
+		if !errors.Is(err, ErrPeerInboxArtifactInvariant) {
+			t.Fatalf("tampered receipt probe error = %v", err)
+		}
+	})
+}
+
+func TestPeerInboxArtifactRenewReceiptWriteRollbackPreservesOldFence(t *testing.T) {
+	t.Parallel()
+	t.Run("insert", func(t *testing.T) {
+		fixture := newPeerInboxFixture(t, "artifact-renew-receipt-insert-rollback", 0)
+		fixture.put(t, fixture.publication(t, 1, 1,
+			"artifact-renew-receipt-insert-rollback", true), fixture.at)
+		claimAt := fixture.at.Add(time.Second)
+		claim := mustClaimPeerInboxArtifact(t, fixture.store,
+			"artifact-renew-insert-rollback-worker", claimAt)
+		mustExec(t, fixture.store, `CREATE TEMP TRIGGER reject_artifact_renew_receipt_insert
+			BEFORE INSERT ON peer_inbox_artifact_renew_receipts
+			BEGIN SELECT RAISE(ABORT,'injected Artifact renew receipt insert failure'); END`)
+		renewAt := claimAt.Add(time.Second)
+		_, err := fixture.store.RenewPeerInboxArtifactLease(context.Background(),
+			RenewPeerInboxArtifactSpec{Fence: claim.Fence(), At: renewAt})
+		if !errors.Is(err, ErrPeerInboxArtifactInvariant) {
+			t.Fatalf("renew receipt insert failure error = %v", err)
+		}
+		if err := fixture.store.ProbePeerInboxArtifactAuthority(context.Background(),
+			ProbePeerInboxArtifactAuthoritySpec{Fence: claim.Fence(), At: renewAt}); err != nil {
+			t.Fatalf("old fence after receipt insert rollback = %v", err)
+		}
+		assertPeerInboxArtifactRenewReceiptCount(t, fixture.store, claim.InboxID(), 0)
+	})
+
+	t.Run("update", func(t *testing.T) {
+		fixture, claim, _, closure := newPeerInboxArtifactClosureClaim(t,
+			"artifact-renew-receipt-update-rollback", false)
+		stageAt := fixture.at.Add(2 * time.Second)
+		if _, err := fixture.store.StagePeerInboxArtifactClosure(context.Background(),
+			StagePeerInboxArtifactClosureSpec{Fence: claim.Fence(), Closure: closure,
+				At: stageAt}); err != nil {
+			t.Fatal(err)
+		}
+		firstAt := stageAt.Add(time.Second)
+		first, err := fixture.store.RenewPeerInboxArtifactLease(context.Background(),
+			RenewPeerInboxArtifactSpec{Fence: claim.Fence(), At: firstAt})
+		if err != nil || !first.Changed() {
+			t.Fatalf("first renew before update injection = (%#v,%v)", first, err)
+		}
+		firstExpiry := first.Fence().LeaseUntil().Add(peerInboxArtifactStageTTL)
+		assertPeerInboxArtifactRenewReceipt(t, fixture.store, claim.InboxID(),
+			claim.Fence(), first.Fence(), firstAt)
+		assertPeerInboxArtifactStagePins(t, fixture.store, claim.InboxID(),
+			claim.RequiredArtifactRoots(), firstExpiry)
+
+		mustExec(t, fixture.store, `CREATE TEMP TRIGGER reject_artifact_renew_receipt_update
+			BEFORE UPDATE ON peer_inbox_artifact_renew_receipts
+			BEGIN SELECT RAISE(ABORT,'injected Artifact renew receipt update failure'); END`)
+		secondAt := firstAt.Add(time.Second)
+		_, err = fixture.store.RenewPeerInboxArtifactLease(context.Background(),
+			RenewPeerInboxArtifactSpec{Fence: first.Fence(), At: secondAt})
+		if !errors.Is(err, ErrPeerInboxArtifactInvariant) {
+			t.Fatalf("renew receipt update failure error = %v", err)
+		}
+		if err := fixture.store.ProbePeerInboxArtifactAuthority(context.Background(),
+			ProbePeerInboxArtifactAuthoritySpec{Fence: first.Fence(), At: secondAt}); err != nil {
+			t.Fatalf("F1 after receipt update rollback = %v", err)
+		}
+		assertPeerInboxArtifactRenewReceipt(t, fixture.store, claim.InboxID(),
+			claim.Fence(), first.Fence(), firstAt)
+		assertPeerInboxArtifactStagePins(t, fixture.store, claim.InboxID(),
+			claim.RequiredArtifactRoots(), firstExpiry)
+		var leaseUntil, updatedAt string
+		if err := fixture.store.db.QueryRow(`SELECT lease_until,updated_at FROM peer_inbox
+			WHERE inbox_id=?`, claim.InboxID().String()).Scan(&leaseUntil, &updatedAt); err != nil {
+			t.Fatal(err)
+		}
+		if leaseUntil != storeTime(first.Fence().LeaseUntil()) || updatedAt != storeTime(firstAt) {
+			t.Fatalf("Inbox advanced after receipt update rollback = (%q,%q)", leaseUntil, updatedAt)
+		}
+	})
+}
+
+func TestPeerInboxArtifactRenewAndRetryHaveOneConcurrentWinner(t *testing.T) {
+	t.Parallel()
+	fixture := newPeerInboxFixture(t, "artifact-renew-retry-race", 0)
+	fixture.put(t, fixture.publication(t, 1, 1, "artifact-renew-retry-race", true), fixture.at)
+	claimAt := fixture.at.Add(time.Second)
+	claim := mustClaimPeerInboxArtifact(t, fixture.store, "artifact-renew-retry-race-worker", claimAt)
+	at := claimAt.Add(time.Second)
+	start := make(chan struct{})
+	type outcome struct {
+		kind    string
+		changed bool
+		err     error
+	}
+	outcomes := make(chan outcome, 2)
+	go func() {
+		<-start
+		result, err := fixture.store.RenewPeerInboxArtifactLease(context.Background(),
+			RenewPeerInboxArtifactSpec{Fence: claim.Fence(), At: at})
+		outcomes <- outcome{kind: "renew", changed: result.Changed(), err: err}
+	}()
+	go func() {
+		<-start
+		result, err := fixture.store.RetryPeerInboxArtifact(context.Background(),
+			RetryPeerInboxArtifactSpec{Fence: claim.Fence(), Diagnostic: PeerInboxArtifactRetryBusy,
+				RetryAfter: time.Second, At: at})
+		outcomes <- outcome{kind: "retry", changed: result.Changed(), err: err}
+	}()
+	close(start)
+	winner := ""
+	for range 2 {
+		result := <-outcomes
+		if result.err == nil && result.changed {
+			if winner != "" {
+				t.Fatalf("two transition winners: %s and %s", winner, result.kind)
+			}
+			winner = result.kind
+		} else if !errors.Is(result.err, ErrPeerInboxArtifactStale) {
+			t.Fatalf("%s loser = (changed %t,%v)", result.kind, result.changed, result.err)
+		}
+	}
+	if winner == "" {
+		t.Fatal("renew/retry race has no winner")
+	}
+	wantReceipts := 0
+	if winner == "renew" {
+		wantReceipts = 1
+	}
+	assertPeerInboxArtifactRenewReceiptCount(t, fixture.store, claim.InboxID(), wantReceipts)
+}
+
+func TestPeerInboxArtifactTerminalReplayRejectsNextAttemptDrift(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name string
+		run  func(*testing.T, peerInboxFixture, PeerInboxArtifactClaim, time.Time)
+	}{
+		{name: "quarantine", run: func(t *testing.T, fixture peerInboxFixture,
+			claim PeerInboxArtifactClaim, at time.Time) {
+			spec := QuarantinePeerInboxArtifactSpec{Fence: claim.Fence(),
+				Diagnostic: PeerInboxArtifactDigestMismatch, At: at}
+			if _, err := fixture.store.QuarantinePeerInboxArtifact(context.Background(), spec); err != nil {
+				t.Fatal(err)
+			}
+			mustExec(t, fixture.store, `UPDATE peer_inbox SET next_attempt_at=? WHERE inbox_id=?`,
+				storeTime(at.Add(time.Second)), claim.InboxID().String())
+			if _, err := fixture.store.QuarantinePeerInboxArtifact(context.Background(), spec); !errors.Is(err, ErrPeerInboxArtifactStale) {
+				t.Fatalf("quarantine replay after next-at drift error = %v", err)
+			}
+		}},
+		{name: "ready", run: func(t *testing.T, fixture peerInboxFixture,
+			claim PeerInboxArtifactClaim, at time.Time) {
+			spec := MarkPeerInboxArtifactReadySpec{Fence: claim.Fence(), At: at}
+			if _, err := fixture.store.MarkPeerInboxArtifactReady(context.Background(), spec); err != nil {
+				t.Fatal(err)
+			}
+			mustExec(t, fixture.store, `UPDATE peer_inbox SET next_attempt_at=? WHERE inbox_id=?`,
+				storeTime(at.Add(time.Second)), claim.InboxID().String())
+			if _, err := fixture.store.MarkPeerInboxArtifactReady(context.Background(), spec); !errors.Is(err, ErrPeerInboxArtifactStale) {
+				t.Fatalf("ready replay after next-at drift error = %v", err)
+			}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newPeerInboxFixture(t, "artifact-terminal-next-drift-"+test.name, 0)
+			fixture.put(t, fixture.publication(t, 1, 1,
+				"artifact-terminal-next-drift-"+test.name, true), fixture.at)
+			claimAt := fixture.at.Add(time.Second)
+			claim := mustClaimPeerInboxArtifact(t, fixture.store,
+				"artifact-terminal-next-drift-worker-"+test.name, claimAt)
+			test.run(t, fixture, claim, claimAt.Add(time.Second))
+		})
 	}
 }
 
@@ -1123,6 +1419,68 @@ func mustClaimPeerInboxArtifact(t *testing.T, store *Store, owner string,
 		t.Fatalf("ClaimPeerInboxArtifact(%q) = (found %t,%v)", owner, result.Found(), err)
 	}
 	return result.Claim()
+}
+
+func newRenewedPeerInboxArtifact(t *testing.T, seed string,
+) (peerInboxFixture, PeerInboxArtifactClaim, PeerInboxArtifactRenewal, time.Time) {
+	t.Helper()
+	fixture := newPeerInboxFixture(t, seed, 0)
+	fixture.put(t, fixture.publication(t, 1, 1, seed, true), fixture.at)
+	claimAt := fixture.at.Add(time.Second)
+	claim := mustClaimPeerInboxArtifact(t, fixture.store, seed+"-worker", claimAt)
+	renewAt := claimAt.Add(time.Second)
+	renewed, err := fixture.store.RenewPeerInboxArtifactLease(context.Background(),
+		RenewPeerInboxArtifactSpec{Fence: claim.Fence(), At: renewAt})
+	if err != nil || !renewed.Changed() || renewed.Replayed() {
+		t.Fatalf("renew fixture = (%#v,%v)", renewed, err)
+	}
+	return fixture, claim, renewed, renewAt
+}
+
+func assertPeerInboxArtifactRenewReceipt(t *testing.T, store *Store,
+	inboxID model.InboxID, oldFence, newFence PeerInboxArtifactFence, requestedAt time.Time,
+) {
+	t.Helper()
+	var oldOwner, oldLease, requested, outputStatus, outputNext string
+	var outputOwner, outputLease, outputUpdated string
+	var oldAttempt, outputAttempt, nonceLength, digestLength int64
+	var diagnosticIsNull int
+	err := store.db.QueryRow(`SELECT old_lease_owner,old_lease_until,old_attempt,
+		length(semantic_nonce),requested_at,length(request_digest),output_status,
+		output_attempt,output_next_attempt_at,output_lease_owner,output_lease_until,
+		output_diagnostic IS NULL,output_updated_at
+		FROM peer_inbox_artifact_renew_receipts WHERE inbox_id=?`, inboxID.String()).Scan(&oldOwner, &oldLease,
+		&oldAttempt, &nonceLength, &requested, &digestLength, &outputStatus,
+		&outputAttempt, &outputNext, &outputOwner, &outputLease,
+		&diagnosticIsNull, &outputUpdated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if oldOwner != oldFence.LeaseOwner() || oldLease != storeTime(oldFence.LeaseUntil()) ||
+		oldAttempt != int64(oldFence.Attempt()) || nonceLength != 32 || digestLength != 32 ||
+		requested != storeTime(requestedAt) || outputStatus != string(model.InboxWaitingArtifact) ||
+		outputAttempt != int64(newFence.Attempt()) ||
+		outputOwner != newFence.LeaseOwner() || outputLease != storeTime(newFence.LeaseUntil()) ||
+		diagnosticIsNull != 1 || outputUpdated != storeTime(requestedAt) {
+		t.Fatalf("Artifact renew receipt differs: old=(%q,%q,%d) request=(%q,%d,%d) "+
+			"output=(%q,%d,%q,%q,%q,%d,%q)", oldOwner, oldLease, oldAttempt,
+			requested, nonceLength, digestLength, outputStatus, outputAttempt, outputNext,
+			outputOwner, outputLease, diagnosticIsNull, outputUpdated)
+	}
+}
+
+func assertPeerInboxArtifactRenewReceiptCount(t *testing.T, store *Store,
+	inboxID model.InboxID, want int,
+) {
+	t.Helper()
+	var got int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM peer_inbox_artifact_renew_receipts
+		WHERE inbox_id=?`, inboxID.String()).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("Artifact renew receipt count = %d, want %d", got, want)
+	}
 }
 
 func assertPeerInboxArtifactState(t *testing.T, store *Store, status string,
