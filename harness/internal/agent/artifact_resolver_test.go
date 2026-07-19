@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"sort"
@@ -8,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mnemon-dev/mnemon/harness/internal/assets"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
@@ -55,7 +57,8 @@ func TestArtifactResolverCapturesOrdinaryPathsAsCanonicalProducedRefs(t *testing
 	}
 	result, apiErr := resolver.Coordinate(context.Background(), ArtifactCoordinationSpec{
 		Reservation: store.ManagedOperationReservation{Operation: operation, Acquired: true},
-		Action:      operation.Kind(), Paths: []string{`./outputs\one.txt`, "outputs/./two.txt"},
+		Handler:     artifactResolverHandler(t, operation.Kind()),
+		Paths:       []string{`./outputs\one.txt`, "outputs/./two.txt"},
 	})
 	if apiErr != nil {
 		t.Fatal(apiErr)
@@ -84,12 +87,80 @@ func TestArtifactResolverZeroPathsStillCreatesEmptyDurableCheckpoint(t *testing.
 	resolver, _ := NewArtifactResolver(stub, &artifactResolverViewValidator{})
 	result, apiErr := resolver.Coordinate(context.Background(), ArtifactCoordinationSpec{
 		Reservation: store.ManagedOperationReservation{Operation: operation, Acquired: true},
-		Action:      operation.Kind(), Paths: nil,
+		Handler:     artifactResolverHandler(t, operation.Kind()), Paths: nil,
 	})
 	if apiErr != nil || stub.calls != 1 || stub.paths == nil || len(stub.paths) != 0 ||
 		result.References == nil || len(result.References) != 0 {
 		t.Fatalf("empty resolution = (%#v, %#v), calls=%d paths=%#v",
 			result, apiErr, stub.calls, stub.paths)
+	}
+}
+
+func TestArtifactResolverUsesExactHandlerArtifactPolicy(t *testing.T) {
+	t.Parallel()
+	for _, handler := range testActionHandlers(t).Actions() {
+		t.Run(handler.Name(), func(t *testing.T) {
+			t.Parallel()
+			operation := artifactResolverOperation(t, "policy-"+handler.Name(),
+				handler.OperationKind(), nil)
+			roots := artifactResolverRoots("policy-" + handler.Name())
+			capture := &artifactResolverCheckpointer{result: artifactResolverCaptureResult(t, roots, false)}
+			resolver, err := NewArtifactResolver(capture, &artifactResolverViewValidator{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, apiErr := resolver.Coordinate(context.Background(), ArtifactCoordinationSpec{
+				Reservation: store.ManagedOperationReservation{Operation: operation, Acquired: true},
+				Handler:     handler, Paths: []string{"result"},
+			})
+			if handler.Descriptor().Artifacts().Allowed() {
+				if apiErr != nil || capture.calls != 1 || len(result.References) != 1 {
+					t.Fatalf("allowed Artifact resolution = (%#v, %#v), calls=%d",
+						result, apiErr, capture.calls)
+				}
+				return
+			}
+			if apiErr == nil || apiErr.Code != CodeArtifactInvalid || capture.calls != 0 {
+				t.Fatalf("forbidden Artifact resolution = %#v, calls=%d", apiErr, capture.calls)
+			}
+		})
+	}
+}
+
+func TestArtifactResolverEnforcesAssetNarrowedArtifactPolicy(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		oldText  string
+		newText  string
+		paths    []string
+		wantCode ControlErrorCode
+	}{
+		{name: "forbidden", paths: []string{"result"}, wantCode: CodeArtifactInvalid,
+			oldText: `"artifacts":{"allowed":true,"max_entries":4096,"max_path_bytes":512,"max_roots":16,"max_total_bytes":268435456}`,
+			newText: `"artifacts":{"allowed":false,"max_entries":0,"max_path_bytes":0,"max_roots":0,"max_total_bytes":0}`},
+		{name: "one-root", paths: []string{"first", "second"}, wantCode: CodeArtifactTooLarge,
+			oldText: `"max_roots":16`, newText: `"max_roots":1`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			handler := artifactResolverNarrowedOfferHandler(t, test.oldText, test.newText)
+			operation := artifactResolverOperation(t, "narrowed-"+test.name,
+				model.OperationTeamworkOffer, nil)
+			capture := &artifactResolverCheckpointer{}
+			resolver, err := NewArtifactResolver(capture, &artifactResolverViewValidator{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, apiErr := resolver.Coordinate(context.Background(), ArtifactCoordinationSpec{
+				Reservation: store.ManagedOperationReservation{Operation: operation, Acquired: true},
+				Handler:     handler, Paths: test.paths,
+			})
+			if apiErr == nil || apiErr.Code != test.wantCode || capture.calls != 0 {
+				t.Fatalf("narrowed policy resolution = %#v, calls=%d", apiErr, capture.calls)
+			}
+		})
 	}
 }
 
@@ -106,7 +177,8 @@ func TestArtifactResolverMapsExactCurrentViewsAsReferencedWithoutRecapture(t *te
 	}
 	result, apiErr := resolver.Coordinate(context.Background(), ArtifactCoordinationSpec{
 		Reservation: store.ManagedOperationReservation{Operation: operation, Acquired: true},
-		Action:      operation.Kind(), Paths: []string{viewPath, "new-output"}, Current: current, HasCurrent: true,
+		Handler:     artifactResolverHandler(t, operation.Kind()),
+		Paths:       []string{viewPath, "new-output"}, Current: current, HasCurrent: true,
 	})
 	if apiErr != nil {
 		t.Fatal(apiErr)
@@ -129,7 +201,8 @@ func TestArtifactResolverMapsExactCurrentViewsAsReferencedWithoutRecapture(t *te
 	capture.calls = 0
 	if _, apiErr := resolver.Coordinate(context.Background(), ArtifactCoordinationSpec{
 		Reservation: store.ManagedOperationReservation{Operation: operation, Acquired: true},
-		Action:      operation.Kind(), Paths: []string{viewPath}, Current: current, HasCurrent: true,
+		Handler:     artifactResolverHandler(t, operation.Kind()),
+		Paths:       []string{viewPath}, Current: current, HasCurrent: true,
 	}); apiErr == nil || apiErr.Code != CodeArtifactInvalid || capture.calls != 0 {
 		t.Fatalf("drifted view = %#v capture calls=%d", apiErr, capture.calls)
 	}
@@ -146,7 +219,8 @@ func TestArtifactResolverDurableReplayDoesNotInspectMissingWorkspacePath(t *test
 	resolver, _ := NewArtifactResolver(stub, &artifactResolverViewValidator{})
 	result, apiErr := resolver.Coordinate(context.Background(), ArtifactCoordinationSpec{
 		Reservation: store.ManagedOperationReservation{Operation: operation, Replayed: true, Acquired: true},
-		Action:      operation.Kind(), Paths: []string{"workspace-file-that-no-longer-exists"},
+		Handler:     artifactResolverHandler(t, operation.Kind()),
+		Paths:       []string{"workspace-file-that-no-longer-exists"},
 	})
 	if apiErr != nil || stub.calls != 1 || len(result.References) != 1 ||
 		result.References[0].RootDigest() != checkpointRoots[0].RootDigest ||
@@ -169,7 +243,7 @@ func TestArtifactResolverRejectsInternalReadonlyAndEscapingPathsBeforeCapture(t 
 			resolver, _ := NewArtifactResolver(stub, &artifactResolverViewValidator{})
 			_, apiErr := resolver.Coordinate(context.Background(), ArtifactCoordinationSpec{
 				Reservation: store.ManagedOperationReservation{Operation: operation, Acquired: true},
-				Action:      operation.Kind(), Paths: []string{requested},
+				Handler:     artifactResolverHandler(t, operation.Kind()), Paths: []string{requested},
 			})
 			if apiErr == nil || apiErr.Code != CodeArtifactInvalid || stub.calls != 0 ||
 				apiErr.OperationID == nil || *apiErr.OperationID != operation.ID().String() {
@@ -189,7 +263,8 @@ func TestArtifactResolverDoesNotOvermatchOrdinaryNearInternalPath(t *testing.T) 
 	resolver, _ := NewArtifactResolver(stub, &artifactResolverViewValidator{})
 	result, apiErr := resolver.Coordinate(context.Background(), ArtifactCoordinationSpec{
 		Reservation: store.ManagedOperationReservation{Operation: operation, Acquired: true},
-		Action:      operation.Kind(), Paths: []string{".mnemon/harness-output/result.txt"},
+		Handler:     artifactResolverHandler(t, operation.Kind()),
+		Paths:       []string{".mnemon/harness-output/result.txt"},
 	})
 	if apiErr != nil || stub.calls != 1 || len(result.References) != 1 ||
 		stub.paths[0] != ".mnemon/harness-output/result.txt" {
@@ -207,7 +282,7 @@ func TestArtifactResolverPropagatesStableCaptureErrorsAndRejectsDrift(t *testing
 	resolver, _ := NewArtifactResolver(stub, &artifactResolverViewValidator{})
 	_, apiErr := resolver.Coordinate(context.Background(), ArtifactCoordinationSpec{
 		Reservation: store.ManagedOperationReservation{Operation: operation, Acquired: true},
-		Action:      operation.Kind(), Paths: []string{"result"},
+		Handler:     artifactResolverHandler(t, operation.Kind()), Paths: []string{"result"},
 	})
 	if apiErr != pending || !apiErr.Retryable || stub.calls != 1 {
 		t.Fatalf("stable capture error = %#v, calls=%d", apiErr, stub.calls)
@@ -218,10 +293,21 @@ func TestArtifactResolverPropagatesStableCaptureErrorsAndRejectsDrift(t *testing
 		resolver, _ := NewArtifactResolver(mismatch, &artifactResolverViewValidator{})
 		_, apiErr := resolver.Coordinate(context.Background(), ArtifactCoordinationSpec{
 			Reservation: store.ManagedOperationReservation{Operation: operation, Acquired: true},
-			Action:      model.OperationTeamworkDeliver,
+			Handler:     artifactResolverHandler(t, model.OperationTeamworkDeliver),
 		})
 		if apiErr == nil || apiErr.Code != CodeOperationMismatch || mismatch.calls != 0 {
 			t.Fatalf("action mismatch = %#v, calls=%d", apiErr, mismatch.calls)
+		}
+	})
+
+	t.Run("missing handler", func(t *testing.T) {
+		missing := &artifactResolverCheckpointer{}
+		resolver, _ := NewArtifactResolver(missing, &artifactResolverViewValidator{})
+		_, apiErr := resolver.Coordinate(context.Background(), ArtifactCoordinationSpec{
+			Reservation: store.ManagedOperationReservation{Operation: operation, Acquired: true},
+		})
+		if apiErr == nil || apiErr.Code != CodeOperationMismatch || missing.calls != 0 {
+			t.Fatalf("missing handler = %#v, calls=%d", apiErr, missing.calls)
 		}
 	})
 
@@ -231,7 +317,7 @@ func TestArtifactResolverPropagatesStableCaptureErrorsAndRejectsDrift(t *testing
 		resolver, _ := NewArtifactResolver(forbidden, &artifactResolverViewValidator{})
 		_, apiErr := resolver.Coordinate(context.Background(), ArtifactCoordinationSpec{
 			Reservation: store.ManagedOperationReservation{Operation: closeOperation, Acquired: true},
-			Action:      closeOperation.Kind(), Paths: []string{"result"},
+			Handler:     artifactResolverHandler(t, closeOperation.Kind()), Paths: []string{"result"},
 		})
 		if apiErr == nil || apiErr.Code != CodeArtifactInvalid || forbidden.calls != 0 {
 			t.Fatalf("forbidden Artifact = %#v, calls=%d", apiErr, forbidden.calls)
@@ -247,7 +333,7 @@ func TestArtifactResolverPropagatesStableCaptureErrorsAndRejectsDrift(t *testing
 		resolver, _ := NewArtifactResolver(drifted, &artifactResolverViewValidator{})
 		_, apiErr := resolver.Coordinate(context.Background(), ArtifactCoordinationSpec{
 			Reservation: store.ManagedOperationReservation{Operation: operation, Acquired: true},
-			Action:      operation.Kind(), Paths: []string{"result"},
+			Handler:     artifactResolverHandler(t, operation.Kind()), Paths: []string{"result"},
 		})
 		if apiErr == nil || apiErr.Code != CodeInternal || drifted.calls != 1 {
 			t.Fatalf("checkpoint drift = %#v, calls=%d", apiErr, drifted.calls)
@@ -308,6 +394,39 @@ func artifactResolverOperation(t *testing.T, suffix string, kind model.Operation
 		t.Fatal(err)
 	}
 	return operation
+}
+
+func artifactResolverHandler(t testing.TB, kind model.OperationKind) ActionHandler {
+	t.Helper()
+	handler, ok := testActionHandlers(t).Operation(kind)
+	if !ok {
+		t.Fatalf("test Action handler %s is unavailable", kind)
+	}
+	return handler
+}
+
+func artifactResolverNarrowedOfferHandler(t testing.TB, oldText, newText string) ActionHandler {
+	t.Helper()
+	bundle, err := assets.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := newActionPolicyProviderStub(t, bundle)
+	path := "actions/teamwork/offer.json"
+	provider.raw[path] = bytes.Replace(provider.raw[path], []byte(oldText), []byte(newText), 1)
+	policy, err := NewActionPolicy(provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handlers, err := NewActionHandlers(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, ok := handlers.Action("offer")
+	if !ok {
+		t.Fatal("narrowed offer handler is unavailable")
+	}
+	return handler
 }
 
 func artifactResolverCurrent(t *testing.T,

@@ -22,7 +22,7 @@ import (
 type ArtifactCoordinationSpec struct {
 	Reservation store.ManagedOperationReservation
 	Profile     model.Profile
-	Action      model.OperationKind
+	Handler     ActionHandler
 	Paths       []string
 	Current     model.CurrentReadReceipt
 	HasCurrent  bool
@@ -298,7 +298,7 @@ func (e *TeamworkActionExecutor) prepareActionInputs(ctx context.Context, spec T
 		selection = resolved
 	}
 	coordination, apiErr := e.artifacts.Coordinate(ctx, ArtifactCoordinationSpec{
-		Reservation: spec.Reservation, Profile: e.profile, Action: spec.Reservation.Operation.Kind(),
+		Reservation: spec.Reservation, Profile: e.profile, Handler: spec.Action.handler,
 		Paths: append([]string(nil), spec.Action.ArtifactPaths...), Current: current,
 		HasCurrent: hasCurrent, At: spec.At,
 	})

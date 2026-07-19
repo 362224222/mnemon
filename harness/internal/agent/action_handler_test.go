@@ -67,6 +67,9 @@ func TestActionHandlersRejectPolicyUnsupportedByTypedMechanics(t *testing.T) {
 			oldText: `"max_entries":4096`, newText: `"max_entries":4095`},
 		{name: "capture path contract", path: "actions/teamwork/offer.json",
 			oldText: `"max_path_bytes":512`, newText: `"max_path_bytes":511`},
+		{name: "Event Artifact capability", path: "actions/teamwork/accept.json",
+			oldText: `"artifacts":{"allowed":false,"max_entries":0,"max_path_bytes":0,"max_roots":0,"max_total_bytes":0}`,
+			newText: `"artifacts":{"allowed":true,"max_entries":4096,"max_path_bytes":512,"max_roots":16,"max_total_bytes":268435456}`},
 		{name: "managed context contract", path: "actions/teamwork/accept.json",
 			oldText: `"allowed_context":["reviewer_offered"]`,
 			newText: `"allowed_context":["home_delivered"]`},
@@ -83,6 +86,45 @@ func TestActionHandlersRejectPolicyUnsupportedByTypedMechanics(t *testing.T) {
 			handlers, handlerErr := NewActionHandlers(policy)
 			if handlerErr == nil || !handlers.AssetRevision().IsZero() {
 				t.Fatalf("NewActionHandlers() = (%#v, %v)", handlers, handlerErr)
+			}
+		})
+	}
+}
+
+func TestActionHandlersAllowAssetsToNarrowArtifactCapability(t *testing.T) {
+	t.Parallel()
+	bundle, err := assets.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name        string
+		oldText     string
+		newText     string
+		wantAllowed bool
+		wantRoots   uint8
+	}{
+		{name: "lower root bound", oldText: `"max_roots":16`, newText: `"max_roots":1`,
+			wantAllowed: true, wantRoots: 1},
+		{name: "forbid artifacts",
+			oldText: `"artifacts":{"allowed":true,"max_entries":4096,"max_path_bytes":512,"max_roots":16,"max_total_bytes":268435456}`,
+			newText: `"artifacts":{"allowed":false,"max_entries":0,"max_path_bytes":0,"max_roots":0,"max_total_bytes":0}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			provider := newActionPolicyProviderStub(t, bundle)
+			path := "actions/teamwork/offer.json"
+			provider.raw[path] = bytes.Replace(provider.raw[path],
+				[]byte(test.oldText), []byte(test.newText), 1)
+			policy, policyErr := NewActionPolicy(provider)
+			if policyErr != nil {
+				t.Fatal(policyErr)
+			}
+			handlers, handlerErr := NewActionHandlers(policy)
+			handler, ok := handlers.Action("offer")
+			if handlerErr != nil || !ok || handler.Descriptor().Artifacts().Allowed() != test.wantAllowed ||
+				handler.Descriptor().Artifacts().MaxRoots() != test.wantRoots {
+				t.Fatalf("narrowed offer handler = (%#v, %v)", handler, handlerErr)
 			}
 		})
 	}

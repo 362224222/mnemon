@@ -124,7 +124,8 @@ func assertExecutorCurrentArtifactAuthority(t *testing.T, fixture *executorFixtu
 ) {
 	t.Helper()
 	spec := fixture.artifacts.last
-	if spec.Reservation.Operation.ID() != reservation.Operation.ID() || spec.Action != test.kind ||
+	if spec.Reservation.Operation.ID() != reservation.Operation.ID() ||
+		spec.Handler.OperationKind() != test.kind ||
 		!spec.HasCurrent || spec.Current.SourceEvent() != executorCurrent(t, reservation.Run).SourceEvent() ||
 		strings.Join(spec.Paths, "\x00") != strings.Join(paths, "\x00") {
 		t.Fatalf("%s Artifact authority = %#v", test.name, spec)

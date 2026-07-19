@@ -63,7 +63,7 @@
       "identity": "cognitive_complexity:harness/internal/agent/artifact_resolver.go::(*ArtifactResolver).Coordinate",
       "path": "harness/internal/agent/artifact_resolver.go",
       "symbol": "(*ArtifactResolver).Coordinate",
-      "ceiling": 53
+      "ceiling": 51
     },
     {
       "rule": "cognitive_complexity",
@@ -1995,7 +1995,7 @@
       "identity": "cyclomatic_complexity:harness/internal/agent/artifact_resolver.go::(*ArtifactResolver).Coordinate",
       "path": "harness/internal/agent/artifact_resolver.go",
       "symbol": "(*ArtifactResolver).Coordinate",
-      "ceiling": 34
+      "ceiling": 32
     },
     {
       "rule": "cyclomatic_complexity",

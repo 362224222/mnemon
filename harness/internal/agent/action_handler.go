@@ -118,7 +118,6 @@ type actionMechanic struct {
 	actor           actionActor
 	contexts        []teamwork.ActionContext
 	contentRequired bool
-	artifacts       bool
 	selection       bool
 	batch           bool
 	committedState  committedStateValidator
@@ -134,7 +133,7 @@ func actionMechanicFor(kind model.OperationKind) (actionMechanic, bool) {
 			}, actor: actionActorOffer,
 			contexts: []teamwork.ActionContext{teamwork.ActionContextNone,
 				teamwork.ActionContextReviewerActive, teamwork.ActionContextReviewerRework},
-			contentRequired: true, artifacts: true, selection: true, batch: true}
+			contentRequired: true, selection: true, batch: true}
 	case model.OperationTeamworkAccept:
 		mechanic = actionMechanic{eventType: model.EventReviewAcceptRequested,
 			candidate: func(content string, _ time.Duration) (event.AgentCandidate, error) {
@@ -157,7 +156,7 @@ func actionMechanicFor(kind model.OperationKind) (actionMechanic, bool) {
 			}, actor: actionActorParticipant,
 			contexts: []teamwork.ActionContext{teamwork.ActionContextReviewerActive,
 				teamwork.ActionContextReviewerRework, teamwork.ActionContextParentResume},
-			contentRequired: true, artifacts: true,
+			contentRequired: true,
 			committedState: func(state model.WorkState) bool {
 				return state == model.WorkActive || state == model.WorkRework
 			}}
@@ -167,8 +166,8 @@ func actionMechanicFor(kind model.OperationKind) (actionMechanic, bool) {
 				return event.NewReworkCandidate(content)
 			}, actor: actionActorHome,
 			contexts:        []teamwork.ActionContext{teamwork.ActionContextHomeDeliveredIteration1},
-			contentRequired: true, artifacts: true,
-			committedState: func(state model.WorkState) bool { return state == model.WorkRework }}
+			contentRequired: true,
+			committedState:  func(state model.WorkState) bool { return state == model.WorkRework }}
 	case model.OperationTeamworkClose:
 		mechanic = actionMechanic{eventType: model.EventReviewClosed,
 			candidate: func(content string, _ time.Duration) (event.AgentCandidate, error) {
@@ -203,13 +202,14 @@ func (mechanic actionMechanic) compatible(descriptor teamwork.ActionDescriptor) 
 	stateMechanicReady := mechanic.actor == actionActorOffer || mechanic.committedState != nil
 	artifactPolicy := descriptor.Artifacts()
 	artifactMechanicReady := !artifactPolicy.Allowed() ||
-		(artifactPolicy.MaxEntries() == artifact.MaxEntries &&
+		(mechanic.eventType.AllowsArtifacts() &&
+			artifactPolicy.MaxEntries() == artifact.MaxEntries &&
 			artifactPolicy.MaxPathBytes() == artifact.MaxLogicalPathBytes &&
+			artifactPolicy.MaxRoots() <= artifact.MaxRoots &&
 			artifactPolicy.MaxTotalBytes() == artifact.MaxTotalBytes)
 	return mechanic.candidate != nil && mechanic.eventType.Valid() && mechanic.actor != 0 && stateMechanicReady &&
 		artifactMechanicReady && sameActionContexts(mechanic.contexts, descriptor.AllowedContexts()) &&
 		(!mechanic.contentRequired || descriptor.Content().Required()) &&
-		(!artifactPolicy.Allowed() || mechanic.artifacts) &&
 		hasDeadline == mechanic.selection && hasSelectors == mechanic.selection &&
 		receipt.Handling() == wantHandling && receipt.MaxResults() == wantResults
 }

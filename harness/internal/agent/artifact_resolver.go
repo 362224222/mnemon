@@ -49,15 +49,15 @@ func (resolver *ArtifactResolver) Coordinate(ctx context.Context,
 		return ArtifactCoordinationResult{}, captureAPIError(CodeInternal,
 			"Artifact resolver input is invalid", operation.ID())
 	}
-	if spec.Action != operation.Kind() {
+	if !spec.Handler.ready || spec.Handler.OperationKind() != operation.Kind() {
 		return ArtifactCoordinationResult{}, captureAPIError(CodeOperationMismatch,
-			"Artifact action differs from reserved operation", operation.ID())
+			"Artifact handler differs from reserved operation", operation.ID())
 	}
-	allowsArtifacts := spec.Action == model.OperationTeamworkOffer ||
-		spec.Action == model.OperationTeamworkDeliver || spec.Action == model.OperationTeamworkRework
-	if !allowsArtifacts && len(spec.Paths) != 0 {
-		return ArtifactCoordinationResult{}, captureAPIError(CodeArtifactInvalid,
-			"this Teamwork action forbids Artifacts", operation.ID())
+	requestedPaths, pathErr := validateArtifactPaths(spec.Paths,
+		spec.Handler.Descriptor().Artifacts())
+	if pathErr != nil {
+		return ArtifactCoordinationResult{}, captureAPIError(pathErr.Code,
+			pathErr.Message, operation.ID())
 	}
 
 	viewAuthority := make(map[string]model.CurrentArtifactRef)
@@ -85,9 +85,9 @@ func (resolver *ArtifactResolver) Coordinate(ctx context.Context,
 		}
 	}
 
-	producedPaths := make([]string, 0, len(spec.Paths))
-	referenced := make([]model.ArtifactRef, 0, len(spec.Paths))
-	for _, requested := range spec.Paths {
+	producedPaths := make([]string, 0, len(requestedPaths))
+	referenced := make([]model.ArtifactRef, 0, len(requestedPaths))
+	for _, requested := range requestedPaths {
 		normalized, internal, err := normalizeProducedArtifactPath(requested)
 		if err == nil {
 			if currentRef, ok := viewAuthority[normalized]; ok {
