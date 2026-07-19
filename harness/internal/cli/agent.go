@@ -201,19 +201,8 @@ func parseAgentCommand(args []string) (agentCommand, *localapi.APIError) {
 		}
 	case "teamwork":
 		command.kind, command.action = commandTeamwork, args[1]
-		if !validTeamworkAction(command.action) {
-			return command, localapi.NewAPIError(localapi.CodeUnknownAction, "unknown Teamwork action")
-		}
 		if apiErr := parseAgentFlags(args[2:], &command, true); apiErr != nil {
 			return command, apiErr
-		}
-		if command.action != "offer" && command.contextPath == "" {
-			return command, localapi.NewAPIError(localapi.CodeContextRequired,
-				"this Teamwork action requires --context")
-		}
-		if command.action != "offer" && (command.channel != "" || command.participant != "" || command.deadline != "") {
-			return command, localapi.NewAPIError(localapi.CodeInvalidArgument,
-				"selectors and deadline are only valid for offer")
 		}
 		return command, nil
 	default:
@@ -271,11 +260,6 @@ func parseAgentFlags(args []string, command *agentCommand, allowArtifacts bool) 
 
 func invalidFlag(message string) *localapi.APIError {
 	return localapi.NewAPIError(localapi.CodeInvalidArgument, message)
-}
-
-func validTeamworkAction(action string) bool {
-	return action == "offer" || action == "accept" || action == "decline" || action == "deliver" ||
-		action == "rework" || action == "close" || action == "cancel"
 }
 
 func (app *App) runHook(ctx context.Context, client controlClient) int {
@@ -407,12 +391,14 @@ func (app *App) runTeamwork(ctx context.Context, client controlClient, projectRo
 	if apiErr != nil {
 		return app.writeError(command.jsonOutput, apiErr)
 	}
-	request.Artifacts = validated.ArtifactPaths
-	return app.submitTeamwork(ctx, client, nodeState, request, contextFile, command.jsonOutput)
+	request.Artifacts = validated.validated.ArtifactPaths
+	return app.submitTeamwork(ctx, client, nodeState, request, contextFile, validated,
+		command.jsonOutput)
 }
 
 func (app *App) submitTeamwork(ctx context.Context, client controlClient, nodeState string,
-	request localapi.TeamworkActionRequest, contextFile *localapi.ContextFile, jsonOutput bool,
+	request localapi.TeamworkActionRequest, contextFile *localapi.ContextFile,
+	action managedTeamworkAction, jsonOutput bool,
 ) int {
 	requestDigest, apiErr := canonicalRequestDigest(request)
 	if apiErr != nil {
@@ -439,6 +425,9 @@ func (app *App) submitTeamwork(ctx context.Context, client controlClient, nodeSt
 			return app.writeError(jsonOutput, remoteErr)
 		}
 		return app.presentTerminalError(journalStore, journal, remoteErr, jsonOutput)
+	}
+	if apiErr := validateManagedTeamworkReceipt(action, response); apiErr != nil {
+		return app.writeError(jsonOutput, apiErr)
 	}
 	return app.presentTerminalOperation(nodeState, journalStore, journal, contextFile, response, jsonOutput)
 }

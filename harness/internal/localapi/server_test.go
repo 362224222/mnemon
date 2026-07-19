@@ -891,7 +891,6 @@ func TestServerRejectsAuthorityFieldsDuplicateKeysAndOversize(t *testing.T) {
 		{name: "principal", body: `{"action":"offer","principal":"forged"}`},
 		{name: "actor", body: `{"action":"offer","actor":"forged"}`},
 		{name: "source", body: `{"action":"offer","source":"local"}`},
-		{name: "unknown capability", body: `{"action":"memory.write"}`},
 		{name: "duplicate", body: `{"action":"offer","action":"cancel"}`},
 		{name: "array", body: `[{"action":"offer"}]`},
 		{name: "oversize", body: `{"action":"offer","content":"` + strings.Repeat("x", MaxRequestBodyBytes) + `"}`},

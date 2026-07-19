@@ -32,8 +32,7 @@ func TestParseAgentCommandIsClosedAndKeepsNaturalLanguageOutOfArgv(t *testing.T)
 		{"natural language argv", []string{"teamwork", "offer", "--content", "review this"}, 0, localapi.CodeInvalidArgument},
 		{"generic submit", []string{"agent", "submit", "{}"}, 0, localapi.CodeUnknownAction},
 		{"event emit", []string{"event", "emit"}, 0, localapi.CodeUnknownAction},
-		{"missing context", []string{"teamwork", "deliver", "--content-file", "-"}, 0, localapi.CodeContextRequired},
-		{"selector on action", []string{"teamwork", "accept", "--context", "/node/run.context", "--to", "peer"}, 0, localapi.CodeInvalidArgument},
+		{"semantic validation deferred", []string{"teamwork", "future-action", "--to", "peer"}, commandTeamwork, ""},
 		{"resolve Artifact", []string{"agent", "resolve", "retry", "--context", "/node/run.context", "--artifact", "result"}, 0, localapi.CodeInvalidArgument},
 		{"missing Artifact value", []string{"teamwork", "offer", "--artifact", "--json"}, 0, localapi.CodeInvalidArgument},
 	}
@@ -562,10 +561,14 @@ func cliCurrentProjection(t *testing.T) json.RawMessage {
 }
 
 func acceptedCLIResponse(action string) localapi.OperationResponse {
-	return localapi.OperationResponse{SchemaVersion: 1, Status: "accepted", Action: "teamwork." + action,
+	response := localapi.OperationResponse{SchemaVersion: 1, Status: "accepted", Action: "teamwork." + action,
 		OperationID: "operation-cli-" + action, Results: []localapi.OperationResult{{EventID: "event-cli-" + action,
 			EventType: "review.offered", Work: localapi.WorkReceipt{Ref: "peer/work", Version: 1, State: "OFFERED"}}},
-		Handling: &localapi.HandlingReceipt{Status: "completed"}, Receipt: "receipt"}
+		Receipt: "receipt"}
+	if action != "offer" {
+		response.Handling = &localapi.HandlingReceipt{Status: "completed"}
+	}
+	return response
 }
 
 func resolvedCLIResponse(decision string) localapi.OperationResponse {

@@ -293,9 +293,6 @@ func (c *Client) AgentCurrent(ctx context.Context) (AgentCurrentResponse, *APIEr
 func (c *Client) TeamworkAction(ctx context.Context, request TeamworkActionRequest,
 	contextFile *ContextFile, journal PendingJournal,
 ) (OperationResponse, *APIError) {
-	if !validTeamworkAction(request.Action) {
-		return OperationResponse{}, NewAPIError(CodeUnknownAction, "unknown Teamwork action")
-	}
 	headers, apiErr := c.operationHeaders(request, contextFile, journal)
 	if apiErr != nil {
 		return OperationResponse{}, apiErr
@@ -306,15 +303,6 @@ func (c *Client) TeamworkAction(ctx context.Context, request TeamworkActionReque
 	}
 	if apiErr := validateOperationResponse(response, "teamwork."+request.Action); apiErr != nil {
 		return OperationResponse{}, apiErr
-	}
-	if contextFile == nil && response.Handling != nil {
-		return OperationResponse{}, invalidControlResponse("contextless offer returned a handling receipt")
-	}
-	if contextFile != nil && (response.Handling == nil || response.Handling.Status != "completed") {
-		return OperationResponse{}, invalidControlResponse("context-bound action lacks completed handling evidence")
-	}
-	if request.Action != "offer" && len(response.Results) != 1 {
-		return OperationResponse{}, invalidControlResponse("non-offer action returned the wrong result count")
 	}
 	return response, nil
 }
