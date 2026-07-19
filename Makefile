@@ -6,12 +6,14 @@ BINARY      := mnemon
 VERSION     ?= dev
 LDFLAGS     := -s -w -X github.com/mnemon-dev/mnemon/cmd.version=$(VERSION)
 HARNESS_LDFLAGS := -s -w -X main.version=$(VERSION)
+GO_VERSION   := $(shell awk '$$1 == "go" { print $$2; exit }' go.mod)
+PINNED_GO    := env GOTOOLCHAIN=go$(GO_VERSION) GOFLAGS=-mod=readonly go
 GOBIN       := $(shell go env GOBIN)
 ifeq ($(GOBIN),)
   GOBIN     := $(shell go env GOPATH)/bin
 endif
 
-.PHONY: deps build harness-build install uninstall test unit vet harness-validate docker-build docker-run compose-up compose-down compose-dev release-snapshot clean help
+.PHONY: deps build harness-build install uninstall test unit vet harness-validate harness-quality harness-verify docker-build docker-run compose-up compose-down compose-dev release-snapshot clean help
 
 .DEFAULT_GOAL := help
 
@@ -53,6 +55,25 @@ vet: ## Run go vet static analysis
 harness-validate: ## Validate the experimental R5 harness layout
 	bash harness/scripts/check_test_pairs.sh
 	go test ./harness/internal/assets
+
+harness-quality: ## Run pinned, non-mutating Harness quality gates
+	@base_ref="$${HARNESS_QUALITY_BASE_REF:-HEAD}"; \
+		$(PINNED_GO) run ./harness/tools/quality check --root . --base-ref "$$base_ref"
+	$(PINNED_GO) vet ./harness/...
+	$(PINNED_GO) test ./harness/tools/quality ./harness/internal/assets \
+		./harness/internal/model ./harness/internal/event ./harness/internal/teamwork \
+		./harness/test/contracts
+
+harness-verify: ## Build and verify the experimental R5 Harness
+	@set -eu; \
+		tmp="$$(mktemp -d)"; \
+		trap 'rm -rf "$$tmp"' EXIT; \
+		$(PINNED_GO) build -o "$$tmp/mnemon" .; \
+		$(PINNED_GO) build -o "$$tmp/mnemon-harness" ./harness/cmd/mnemon-harness; \
+		$(PINNED_GO) build -o "$$tmp/mnemond" ./harness/cmd/mnemond
+	bash harness/scripts/check_test_pairs.sh
+	$(MAKE) harness-quality
+	$(PINNED_GO) test ./harness/...
 
 # ── Containers / Deployment ──────────────────────────────────────────
 

@@ -395,6 +395,7 @@ See [Development and Deployment](docs/DEPLOYMENT.md) for Docker, Compose, Ollama
 ## Documentation
 
 - [Mnemon Harness Beta](harness/README.md) — experimental host-agent lifecycle state
+- [Go Engineering Standard](docs/development/go-engineering-standard.md) — maintainability, concurrency, persistence, testing, and quality ratchets
 - [Design & Architecture](docs/DESIGN.md) — current engine architecture, algorithms, integration design
 - [Usage & Reference](docs/USAGE.md) — CLI commands, embedding support, architecture overview
 - [Memory Import Guide](docs/IMPORT.md) — schema and LLM prompt for importing historical chats

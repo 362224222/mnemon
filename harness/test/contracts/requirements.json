@@ -1,0 +1,2284 @@
+{
+  "schema_version": 1,
+  "requirements": [
+    {
+      "id": "AR-01",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/artifact",
+        "harness/internal/event",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [
+        "ff8761dbf19c62bf6959e8df202f612dcdf72580"
+      ],
+      "test_symbols": [
+        "harness/internal/store/artifact_test.go::TestArtifactPinsAndLocalReplicaProvenance"
+      ],
+      "scenario_keys": [
+        "ar-01-local-replica-producer-provenance"
+      ],
+      "evidence_gates": [
+        "G-ARTIFACT"
+      ]
+    },
+    {
+      "id": "AR-02",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/artifact",
+        "harness/internal/event",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-ARTIFACT"
+      ]
+    },
+    {
+      "id": "AR-03",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/artifact",
+        "harness/internal/event",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-ARTIFACT"
+      ]
+    },
+    {
+      "id": "AR-04",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/artifact",
+        "harness/internal/event",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-ARTIFACT"
+      ]
+    },
+    {
+      "id": "AR-05",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/artifact",
+        "harness/internal/event",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-ARTIFACT"
+      ]
+    },
+    {
+      "id": "AR-06",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/artifact",
+        "harness/internal/event",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-ARTIFACT"
+      ]
+    },
+    {
+      "id": "AR-07",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/artifact",
+        "harness/internal/event",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-ARTIFACT"
+      ]
+    },
+    {
+      "id": "AR-08",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/artifact",
+        "harness/internal/event",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-ARTIFACT"
+      ]
+    },
+    {
+      "id": "AR-09",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/artifact",
+        "harness/internal/event",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-ARTIFACT"
+      ]
+    },
+    {
+      "id": "AR-10",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/artifact",
+        "harness/internal/event",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [
+        "4b208b88f20d166596f81916781e42992d8e9dc6"
+      ],
+      "test_symbols": [
+        "harness/internal/store/current_test.go::TestAgentCurrentArtifactPlanRequiresExactViewsAndReverifiesReplay"
+      ],
+      "scenario_keys": [
+        "ar-10-readonly-view-crash-lifecycle"
+      ],
+      "evidence_gates": [
+        "G-ARTIFACT"
+      ]
+    },
+    {
+      "id": "CH-01",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/peer",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-CHANNEL",
+        "G-CHANNEL-FAIL"
+      ]
+    },
+    {
+      "id": "CH-02",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/peer",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-CHANNEL",
+        "G-CHANNEL-FAIL"
+      ]
+    },
+    {
+      "id": "CH-03",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/peer",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-CHANNEL",
+        "G-CHANNEL-FAIL"
+      ]
+    },
+    {
+      "id": "CH-04",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/peer",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-CHANNEL",
+        "G-CHANNEL-FAIL"
+      ]
+    },
+    {
+      "id": "CH-05",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/peer",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-CHANNEL",
+        "G-CHANNEL-FAIL"
+      ]
+    },
+    {
+      "id": "CH-06",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/peer",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-CHANNEL",
+        "G-CHANNEL-FAIL"
+      ]
+    },
+    {
+      "id": "CH-07",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/peer",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-CHANNEL",
+        "G-CHANNEL-FAIL"
+      ]
+    },
+    {
+      "id": "CH-08",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/peer",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-CHANNEL",
+        "G-CHANNEL-FAIL"
+      ]
+    },
+    {
+      "id": "CH-09",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/peer",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-CHANNEL",
+        "G-CHANNEL-FAIL"
+      ]
+    },
+    {
+      "id": "CH-10",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/peer",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-CHANNEL",
+        "G-CHANNEL-FAIL"
+      ]
+    },
+    {
+      "id": "CH-11",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/peer",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-CHANNEL",
+        "G-CHANNEL-FAIL"
+      ]
+    },
+    {
+      "id": "CH-12",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/peer",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-CHANNEL",
+        "G-CHANNEL-FAIL"
+      ]
+    },
+    {
+      "id": "CH-13",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/peer",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-CHANNEL",
+        "G-CHANNEL-FAIL"
+      ]
+    },
+    {
+      "id": "CH-14",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/peer",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-CHANNEL",
+        "G-CHANNEL-FAIL"
+      ]
+    },
+    {
+      "id": "CH-15",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/peer",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [
+        "35e6d8d20faff1247602a6b3e77c10a48d1a622c"
+      ],
+      "test_symbols": [
+        "harness/internal/store/channel_enrollment_test.go::TestInstallJoinedChannelAppliesTerminalReplaySuffixButFreshJoinStaysEmpty"
+      ],
+      "scenario_keys": [
+        "ch-15-terminal-peer-replay"
+      ],
+      "evidence_gates": [
+        "G-CHANNEL",
+        "G-CHANNEL-FAIL"
+      ]
+    },
+    {
+      "id": "CUT-01",
+      "status": "pending",
+      "owner_packages": [
+        ".",
+        "harness"
+      ],
+      "accepted_commits": [
+        "ac5aa4f066596153337bf5303f93e7a3c760a6db"
+      ],
+      "test_symbols": [
+        "harness/test/contracts/release_boundary_test.go::TestReleaseBoundary"
+      ],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-LAYOUT",
+        "G-ROOT"
+      ]
+    },
+    {
+      "id": "CUT-02",
+      "status": "pending",
+      "owner_packages": [
+        ".",
+        "harness"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-LAYOUT",
+        "G-ROOT"
+      ]
+    },
+    {
+      "id": "CUT-03",
+      "status": "pending",
+      "owner_packages": [
+        ".",
+        "harness"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-LAYOUT",
+        "G-ROOT"
+      ]
+    },
+    {
+      "id": "CUT-04",
+      "status": "pending",
+      "owner_packages": [
+        ".",
+        "harness"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-LAYOUT",
+        "G-ROOT"
+      ]
+    },
+    {
+      "id": "CUT-05",
+      "status": "pending",
+      "owner_packages": [
+        ".",
+        "harness"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-LAYOUT",
+        "G-ROOT"
+      ]
+    },
+    {
+      "id": "CUT-06",
+      "status": "pending",
+      "owner_packages": [
+        ".",
+        "harness"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-LAYOUT",
+        "G-ROOT"
+      ]
+    },
+    {
+      "id": "CUT-07",
+      "status": "pending",
+      "owner_packages": [
+        ".",
+        "harness"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-LAYOUT",
+        "G-ROOT"
+      ]
+    },
+    {
+      "id": "CUT-08",
+      "status": "pending",
+      "owner_packages": [
+        ".",
+        "harness"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-LAYOUT",
+        "G-ROOT"
+      ]
+    },
+    {
+      "id": "EQ-01",
+      "status": "pending",
+      "owner_packages": [
+        ".",
+        "harness"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-LAYOUT",
+        "G-QUALITY"
+      ]
+    },
+    {
+      "id": "EQ-02",
+      "status": "pending",
+      "owner_packages": [
+        ".",
+        "harness"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [
+        "eq-02-closed-registry-completeness-determinism"
+      ],
+      "evidence_gates": [
+        "G-LAYOUT",
+        "G-QUALITY"
+      ]
+    },
+    {
+      "id": "EQ-03",
+      "status": "pending",
+      "owner_packages": [
+        ".",
+        "harness"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [
+        "eq-03-goroutine-owner-cancel-bound-wait"
+      ],
+      "evidence_gates": [
+        "G-LAYOUT",
+        "G-QUALITY"
+      ]
+    },
+    {
+      "id": "EQ-04",
+      "status": "pending",
+      "owner_packages": [
+        ".",
+        "harness"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-LAYOUT",
+        "G-QUALITY"
+      ]
+    },
+    {
+      "id": "EQ-05",
+      "status": "pending",
+      "owner_packages": [
+        ".",
+        "harness"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-LAYOUT",
+        "G-QUALITY"
+      ]
+    },
+    {
+      "id": "EQ-06",
+      "status": "pending",
+      "owner_packages": [
+        ".",
+        "harness"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-LAYOUT",
+        "G-QUALITY"
+      ]
+    },
+    {
+      "id": "EQ-07",
+      "status": "pending",
+      "owner_packages": [
+        ".",
+        "harness"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [
+        "eq-07-durable-transition-io-fencing"
+      ],
+      "evidence_gates": [
+        "G-LAYOUT",
+        "G-QUALITY"
+      ]
+    },
+    {
+      "id": "EQ-08",
+      "status": "pending",
+      "owner_packages": [
+        ".",
+        "harness"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [
+        "eq-08-supervisor-lifecycle"
+      ],
+      "evidence_gates": [
+        "G-LAYOUT",
+        "G-QUALITY"
+      ]
+    },
+    {
+      "id": "EQ-09",
+      "status": "pending",
+      "owner_packages": [
+        ".",
+        "harness"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [
+        "eq-09-baseline-delta-hygiene"
+      ],
+      "evidence_gates": [
+        "G-LAYOUT",
+        "G-QUALITY"
+      ]
+    },
+    {
+      "id": "EQ-10",
+      "status": "pending",
+      "owner_packages": [
+        ".",
+        "harness"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [
+        "eq-10-race-fuzz-oracle-preservation"
+      ],
+      "evidence_gates": [
+        "G-LAYOUT",
+        "G-QUALITY"
+      ]
+    },
+    {
+      "id": "EQ-11",
+      "status": "pending",
+      "owner_packages": [
+        ".",
+        "harness"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-LAYOUT",
+        "G-QUALITY"
+      ]
+    },
+    {
+      "id": "EQ-12",
+      "status": "pending",
+      "owner_packages": [
+        ".",
+        "harness"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-LAYOUT",
+        "G-QUALITY"
+      ]
+    },
+    {
+      "id": "EV-01",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/event",
+        "harness/internal/model",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-EVENT",
+        "G-GOSSIP-PULL"
+      ]
+    },
+    {
+      "id": "EV-02",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/event",
+        "harness/internal/model",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-EVENT",
+        "G-GOSSIP-PULL"
+      ]
+    },
+    {
+      "id": "EV-03",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/event",
+        "harness/internal/model",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-EVENT",
+        "G-GOSSIP-PULL"
+      ]
+    },
+    {
+      "id": "EV-04",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/event",
+        "harness/internal/model",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-EVENT",
+        "G-GOSSIP-PULL"
+      ]
+    },
+    {
+      "id": "EV-05",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/event",
+        "harness/internal/model",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-EVENT",
+        "G-GOSSIP-PULL"
+      ]
+    },
+    {
+      "id": "EV-06",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/event",
+        "harness/internal/model",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-EVENT",
+        "G-GOSSIP-PULL"
+      ]
+    },
+    {
+      "id": "EV-07",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/event",
+        "harness/internal/model",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-EVENT",
+        "G-GOSSIP-PULL"
+      ]
+    },
+    {
+      "id": "EV-08",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/event",
+        "harness/internal/model",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-EVENT",
+        "G-GOSSIP-PULL"
+      ]
+    },
+    {
+      "id": "EV-09",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/event",
+        "harness/internal/model",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-EVENT",
+        "G-GOSSIP-PULL"
+      ]
+    },
+    {
+      "id": "ND-01",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/agent",
+        "harness/internal/integration",
+        "harness/internal/localapi",
+        "harness/internal/node"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-MANAGED",
+        "G-PROFILE",
+        "G-SETUP"
+      ]
+    },
+    {
+      "id": "ND-02",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/agent",
+        "harness/internal/integration",
+        "harness/internal/localapi",
+        "harness/internal/node"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-MANAGED",
+        "G-PROFILE",
+        "G-SETUP"
+      ]
+    },
+    {
+      "id": "ND-03",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/agent",
+        "harness/internal/integration",
+        "harness/internal/localapi",
+        "harness/internal/node"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-MANAGED",
+        "G-PROFILE",
+        "G-SETUP"
+      ]
+    },
+    {
+      "id": "ND-04",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/agent",
+        "harness/internal/integration",
+        "harness/internal/localapi",
+        "harness/internal/node"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-MANAGED",
+        "G-PROFILE",
+        "G-SETUP"
+      ]
+    },
+    {
+      "id": "ND-05",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/agent",
+        "harness/internal/integration",
+        "harness/internal/localapi",
+        "harness/internal/node"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-MANAGED",
+        "G-PROFILE",
+        "G-SETUP"
+      ]
+    },
+    {
+      "id": "ND-06",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/agent",
+        "harness/internal/integration",
+        "harness/internal/localapi",
+        "harness/internal/node"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-MANAGED",
+        "G-PROFILE",
+        "G-SETUP"
+      ]
+    },
+    {
+      "id": "ND-07",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/agent",
+        "harness/internal/integration",
+        "harness/internal/localapi",
+        "harness/internal/node"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-MANAGED",
+        "G-PROFILE",
+        "G-SETUP"
+      ]
+    },
+    {
+      "id": "ND-08",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/agent",
+        "harness/internal/integration",
+        "harness/internal/localapi",
+        "harness/internal/node"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-MANAGED",
+        "G-PROFILE",
+        "G-SETUP"
+      ]
+    },
+    {
+      "id": "ND-09",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/agent",
+        "harness/internal/integration",
+        "harness/internal/localapi",
+        "harness/internal/node"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-MANAGED",
+        "G-PROFILE",
+        "G-SETUP"
+      ]
+    },
+    {
+      "id": "ND-10",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/agent",
+        "harness/internal/integration",
+        "harness/internal/localapi",
+        "harness/internal/node"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-MANAGED",
+        "G-PROFILE",
+        "G-SETUP"
+      ]
+    },
+    {
+      "id": "ND-11",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/agent",
+        "harness/internal/integration",
+        "harness/internal/localapi",
+        "harness/internal/node"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-MANAGED",
+        "G-PROFILE",
+        "G-SETUP"
+      ]
+    },
+    {
+      "id": "ND-12",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/agent",
+        "harness/internal/integration",
+        "harness/internal/localapi",
+        "harness/internal/node"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-MANAGED",
+        "G-PROFILE",
+        "G-SETUP"
+      ]
+    },
+    {
+      "id": "ND-13",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/agent",
+        "harness/internal/integration",
+        "harness/internal/localapi",
+        "harness/internal/node"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-MANAGED",
+        "G-PROFILE",
+        "G-SETUP"
+      ]
+    },
+    {
+      "id": "ND-14",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/agent",
+        "harness/internal/integration",
+        "harness/internal/localapi",
+        "harness/internal/node"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-MANAGED",
+        "G-PROFILE",
+        "G-SETUP"
+      ]
+    },
+    {
+      "id": "ND-15",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/agent",
+        "harness/internal/integration",
+        "harness/internal/localapi",
+        "harness/internal/node"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-MANAGED",
+        "G-PROFILE",
+        "G-SETUP"
+      ]
+    },
+    {
+      "id": "ND-16",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/agent",
+        "harness/internal/integration",
+        "harness/internal/localapi",
+        "harness/internal/node"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-MANAGED",
+        "G-PROFILE",
+        "G-SETUP"
+      ]
+    },
+    {
+      "id": "ND-17",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/agent",
+        "harness/internal/integration",
+        "harness/internal/localapi",
+        "harness/internal/node",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [
+        "1f9e9981e7b900333d3d5ee7ce1789910c684883"
+      ],
+      "test_symbols": [
+        "harness/internal/store/agent_attachment_test.go::TestAgentAttachmentNeverFallsBackAndExpiryRequeues"
+      ],
+      "scenario_keys": [
+        "nd-17-attachment-filesystem-db-crash-gap"
+      ],
+      "evidence_gates": [
+        "G-MANAGED",
+        "G-PROFILE",
+        "G-SETUP"
+      ]
+    },
+    {
+      "id": "ND-18",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/agent",
+        "harness/internal/integration",
+        "harness/internal/localapi",
+        "harness/internal/node"
+      ],
+      "accepted_commits": [
+        "da71fbad051695c36cb45e1f34820af6026bb8f4"
+      ],
+      "test_symbols": [
+        "harness/internal/integration/projection_test.go::TestInstallHostProjectionNeverAdoptsUnownedFilesOrRegistrations"
+      ],
+      "scenario_keys": [
+        "nd-18-shared-registration-subentry-ownership"
+      ],
+      "evidence_gates": [
+        "G-MANAGED",
+        "G-PROFILE",
+        "G-SETUP"
+      ]
+    },
+    {
+      "id": "ND-19",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/agent",
+        "harness/internal/integration",
+        "harness/internal/localapi",
+        "harness/internal/node"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-MANAGED",
+        "G-PROFILE",
+        "G-SETUP"
+      ]
+    },
+    {
+      "id": "ND-20",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/agent",
+        "harness/internal/integration",
+        "harness/internal/localapi",
+        "harness/internal/node",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [
+        "ff8761dbf19c62bf6959e8df202f612dcdf72580"
+      ],
+      "test_symbols": [
+        "harness/internal/store/operation_test.go::TestReserveOperationLeaseFenceCaptureAndRejectedReplay"
+      ],
+      "scenario_keys": [
+        "nd-20-response-loss-operation-journal"
+      ],
+      "evidence_gates": [
+        "G-MANAGED",
+        "G-PROFILE",
+        "G-SETUP"
+      ]
+    },
+    {
+      "id": "ND-21",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/agent",
+        "harness/internal/integration",
+        "harness/internal/localapi",
+        "harness/internal/node"
+      ],
+      "accepted_commits": [
+        "f12f1ff62b9e39dbee910126f0258980f1d151e6"
+      ],
+      "test_symbols": [
+        "harness/internal/agent/executor_test.go::TestTeamworkActionExecutorOffersExplicitAutoAndCanonicalTeam"
+      ],
+      "scenario_keys": [
+        "nd-21-one-action-team-expansion"
+      ],
+      "evidence_gates": [
+        "G-MANAGED",
+        "G-PROFILE",
+        "G-SETUP"
+      ]
+    },
+    {
+      "id": "ND-22",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/agent",
+        "harness/internal/integration",
+        "harness/internal/localapi",
+        "harness/internal/model",
+        "harness/internal/node"
+      ],
+      "accepted_commits": [
+        "94294145d27b4997514877881c36d195c59ee2d9"
+      ],
+      "test_symbols": [
+        "harness/internal/model/node_test.go::TestProfileInvariants"
+      ],
+      "scenario_keys": [
+        "nd-22-unique-default-profile-adapter"
+      ],
+      "evidence_gates": [
+        "G-MANAGED",
+        "G-PROFILE",
+        "G-SETUP"
+      ]
+    },
+    {
+      "id": "NET-01",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/node",
+        "harness/internal/peer"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-CHANNEL-FAIL",
+        "G-DOCKER"
+      ]
+    },
+    {
+      "id": "NET-02",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/node",
+        "harness/internal/peer"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-CHANNEL-FAIL",
+        "G-DOCKER"
+      ]
+    },
+    {
+      "id": "NET-03",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/node",
+        "harness/internal/peer"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-CHANNEL-FAIL",
+        "G-DOCKER"
+      ]
+    },
+    {
+      "id": "NET-04",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/node",
+        "harness/internal/peer"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-CHANNEL-FAIL",
+        "G-DOCKER"
+      ]
+    },
+    {
+      "id": "NET-05",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/node",
+        "harness/internal/peer"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-CHANNEL-FAIL",
+        "G-DOCKER"
+      ]
+    },
+    {
+      "id": "NET-06",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/node",
+        "harness/internal/peer"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-CHANNEL-FAIL",
+        "G-DOCKER"
+      ]
+    },
+    {
+      "id": "NET-07",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/node",
+        "harness/internal/peer"
+      ],
+      "accepted_commits": [
+        "a98f3c554c84aa072200fb522b917548e9626187"
+      ],
+      "test_symbols": [
+        "harness/internal/peer/limits_test.go::TestResourceLimitConfigFencesNodePeerAndApplicationProtocols"
+      ],
+      "scenario_keys": [
+        "net-07-frozen-hermetic-resource-profile"
+      ],
+      "evidence_gates": [
+        "G-CHANNEL-FAIL",
+        "G-DOCKER"
+      ]
+    },
+    {
+      "id": "PI-01",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/agent",
+        "harness/internal/assets",
+        "harness/internal/localapi",
+        "harness/internal/model",
+        "harness/internal/peer",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-DOCKER",
+        "G-LIVE",
+        "G-PROFILE"
+      ]
+    },
+    {
+      "id": "PI-02",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/agent",
+        "harness/internal/assets",
+        "harness/internal/localapi",
+        "harness/internal/model",
+        "harness/internal/peer",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-DOCKER",
+        "G-LIVE",
+        "G-PROFILE"
+      ]
+    },
+    {
+      "id": "PI-03",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/agent",
+        "harness/internal/assets",
+        "harness/internal/localapi",
+        "harness/internal/model",
+        "harness/internal/peer",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-DOCKER",
+        "G-LIVE",
+        "G-PROFILE"
+      ]
+    },
+    {
+      "id": "PI-04",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/agent",
+        "harness/internal/assets",
+        "harness/internal/localapi",
+        "harness/internal/model",
+        "harness/internal/peer",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-DOCKER",
+        "G-LIVE",
+        "G-PROFILE"
+      ]
+    },
+    {
+      "id": "PI-05",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/agent",
+        "harness/internal/assets",
+        "harness/internal/localapi",
+        "harness/internal/model",
+        "harness/internal/peer",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [
+        "pi-05-revision-tombstone-conflict"
+      ],
+      "evidence_gates": [
+        "G-DOCKER",
+        "G-LIVE",
+        "G-PROFILE"
+      ]
+    },
+    {
+      "id": "PI-06",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/agent",
+        "harness/internal/assets",
+        "harness/internal/localapi",
+        "harness/internal/model",
+        "harness/internal/peer",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-DOCKER",
+        "G-LIVE",
+        "G-PROFILE"
+      ]
+    },
+    {
+      "id": "PI-07",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/agent",
+        "harness/internal/assets",
+        "harness/internal/localapi",
+        "harness/internal/model",
+        "harness/internal/peer",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [
+        "pi-07-closed-channel-frames"
+      ],
+      "evidence_gates": [
+        "G-DOCKER",
+        "G-LIVE",
+        "G-PROFILE"
+      ]
+    },
+    {
+      "id": "PI-08",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/agent",
+        "harness/internal/assets",
+        "harness/internal/localapi",
+        "harness/internal/model",
+        "harness/internal/peer",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-DOCKER",
+        "G-LIVE",
+        "G-PROFILE"
+      ]
+    },
+    {
+      "id": "PI-09",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/agent",
+        "harness/internal/assets",
+        "harness/internal/localapi",
+        "harness/internal/model",
+        "harness/internal/peer",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-DOCKER",
+        "G-LIVE",
+        "G-PROFILE"
+      ]
+    },
+    {
+      "id": "PI-10",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/agent",
+        "harness/internal/assets",
+        "harness/internal/localapi",
+        "harness/internal/model",
+        "harness/internal/peer",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [
+        "pi-10-eligible-auto-team-invariance"
+      ],
+      "evidence_gates": [
+        "G-DOCKER",
+        "G-LIVE",
+        "G-PROFILE"
+      ]
+    },
+    {
+      "id": "PI-11",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/agent",
+        "harness/internal/assets",
+        "harness/internal/localapi",
+        "harness/internal/model",
+        "harness/internal/peer",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [
+        "pi-11-prompt-injection-boundary"
+      ],
+      "evidence_gates": [
+        "G-DOCKER",
+        "G-LIVE",
+        "G-PROFILE"
+      ]
+    },
+    {
+      "id": "PI-12",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/agent",
+        "harness/internal/assets",
+        "harness/internal/localapi",
+        "harness/internal/model",
+        "harness/internal/peer",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-DOCKER",
+        "G-LIVE",
+        "G-PROFILE"
+      ]
+    },
+    {
+      "id": "PR-01",
+      "status": "pending",
+      "owner_packages": [
+        "harness/cmd/mnemon-harness",
+        "harness/internal/integration",
+        "harness/internal/node"
+      ],
+      "accepted_commits": [
+        "ac5aa4f066596153337bf5303f93e7a3c760a6db"
+      ],
+      "test_symbols": [
+        "harness/test/contracts/release_boundary_test.go::TestReleaseBoundary"
+      ],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-FRICTION",
+        "G-PROFILE",
+        "G-ROOT",
+        "G-SETUP"
+      ]
+    },
+    {
+      "id": "PR-02",
+      "status": "pending",
+      "owner_packages": [
+        "harness/cmd/mnemon-harness",
+        "harness/internal/integration",
+        "harness/internal/node"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-FRICTION",
+        "G-PROFILE",
+        "G-ROOT",
+        "G-SETUP"
+      ]
+    },
+    {
+      "id": "PR-03",
+      "status": "pending",
+      "owner_packages": [
+        "harness/cmd/mnemon-harness",
+        "harness/internal/integration",
+        "harness/internal/node"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-FRICTION",
+        "G-PROFILE",
+        "G-ROOT",
+        "G-SETUP"
+      ]
+    },
+    {
+      "id": "PR-04",
+      "status": "pending",
+      "owner_packages": [
+        "harness/cmd/mnemon-harness",
+        "harness/internal/integration",
+        "harness/internal/node"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-FRICTION",
+        "G-PROFILE",
+        "G-ROOT",
+        "G-SETUP"
+      ]
+    },
+    {
+      "id": "PR-05",
+      "status": "pending",
+      "owner_packages": [
+        "harness/cmd/mnemon-harness",
+        "harness/internal/integration",
+        "harness/internal/node"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-FRICTION",
+        "G-PROFILE",
+        "G-ROOT",
+        "G-SETUP"
+      ]
+    },
+    {
+      "id": "PR-06",
+      "status": "pending",
+      "owner_packages": [
+        "harness/cmd/mnemon-harness",
+        "harness/internal/integration",
+        "harness/internal/node"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-FRICTION",
+        "G-PROFILE",
+        "G-ROOT",
+        "G-SETUP"
+      ]
+    },
+    {
+      "id": "PR-07",
+      "status": "pending",
+      "owner_packages": [
+        "harness/cmd/mnemon-harness",
+        "harness/internal/integration",
+        "harness/internal/node"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-FRICTION",
+        "G-PROFILE",
+        "G-ROOT",
+        "G-SETUP"
+      ]
+    },
+    {
+      "id": "PR-08",
+      "status": "pending",
+      "owner_packages": [
+        "harness/cmd/mnemon-harness",
+        "harness/internal/integration",
+        "harness/internal/node"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-FRICTION",
+        "G-PROFILE",
+        "G-ROOT",
+        "G-SETUP"
+      ]
+    },
+    {
+      "id": "PR-09",
+      "status": "pending",
+      "owner_packages": [
+        "harness/cmd/mnemon-harness",
+        "harness/internal/integration",
+        "harness/internal/node"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-FRICTION",
+        "G-PROFILE",
+        "G-ROOT",
+        "G-SETUP"
+      ]
+    },
+    {
+      "id": "PR-10",
+      "status": "pending",
+      "owner_packages": [
+        "harness/cmd/mnemon-harness",
+        "harness/internal/integration",
+        "harness/internal/node"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-FRICTION",
+        "G-PROFILE",
+        "G-ROOT",
+        "G-SETUP"
+      ]
+    },
+    {
+      "id": "PR-11",
+      "status": "pending",
+      "owner_packages": [
+        "harness/cmd/mnemon-harness",
+        "harness/internal/integration",
+        "harness/internal/node"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-FRICTION",
+        "G-PROFILE",
+        "G-ROOT",
+        "G-SETUP"
+      ]
+    },
+    {
+      "id": "PR-12",
+      "status": "pending",
+      "owner_packages": [
+        "harness/cmd/mnemon-harness",
+        "harness/internal/integration",
+        "harness/internal/node"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-FRICTION",
+        "G-PROFILE",
+        "G-ROOT",
+        "G-SETUP"
+      ]
+    },
+    {
+      "id": "PR-13",
+      "status": "pending",
+      "owner_packages": [
+        "harness/cmd/mnemon-harness",
+        "harness/internal/integration",
+        "harness/internal/node"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-FRICTION",
+        "G-PROFILE",
+        "G-ROOT",
+        "G-SETUP"
+      ]
+    },
+    {
+      "id": "PR-14",
+      "status": "pending",
+      "owner_packages": [
+        "harness/cmd/mnemon-harness",
+        "harness/internal/integration",
+        "harness/internal/node"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-FRICTION",
+        "G-PROFILE",
+        "G-ROOT",
+        "G-SETUP"
+      ]
+    },
+    {
+      "id": "PX-01",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/event",
+        "harness/internal/peer",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-GOSSIP-PULL"
+      ]
+    },
+    {
+      "id": "PX-02",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/event",
+        "harness/internal/peer",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-GOSSIP-PULL"
+      ]
+    },
+    {
+      "id": "PX-03",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/event",
+        "harness/internal/peer",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-GOSSIP-PULL"
+      ]
+    },
+    {
+      "id": "PX-04",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/event",
+        "harness/internal/peer",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-GOSSIP-PULL"
+      ]
+    },
+    {
+      "id": "PX-05",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/event",
+        "harness/internal/peer",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-GOSSIP-PULL"
+      ]
+    },
+    {
+      "id": "PX-06",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/event",
+        "harness/internal/peer",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-GOSSIP-PULL"
+      ]
+    },
+    {
+      "id": "PX-07",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/event",
+        "harness/internal/peer",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-GOSSIP-PULL"
+      ]
+    },
+    {
+      "id": "PX-08",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/event",
+        "harness/internal/peer",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-GOSSIP-PULL"
+      ]
+    },
+    {
+      "id": "PX-09",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/event",
+        "harness/internal/peer",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-GOSSIP-PULL"
+      ]
+    },
+    {
+      "id": "PX-10",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/event",
+        "harness/internal/peer",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-GOSSIP-PULL"
+      ]
+    },
+    {
+      "id": "PX-11",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/event",
+        "harness/internal/peer",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-GOSSIP-PULL"
+      ]
+    },
+    {
+      "id": "PX-12",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/event",
+        "harness/internal/peer",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-GOSSIP-PULL"
+      ]
+    },
+    {
+      "id": "PX-13",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/event",
+        "harness/internal/peer",
+        "harness/internal/store"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-GOSSIP-PULL"
+      ]
+    },
+    {
+      "id": "TW-01",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/agent",
+        "harness/internal/event",
+        "harness/internal/teamwork"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-DOCKER",
+        "G-LIVE",
+        "G-PROFILE",
+        "G-TEAMWORK"
+      ]
+    },
+    {
+      "id": "TW-02",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/agent",
+        "harness/internal/event",
+        "harness/internal/teamwork"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-DOCKER",
+        "G-LIVE",
+        "G-PROFILE",
+        "G-TEAMWORK"
+      ]
+    },
+    {
+      "id": "TW-03",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/agent",
+        "harness/internal/event",
+        "harness/internal/teamwork"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-DOCKER",
+        "G-LIVE",
+        "G-PROFILE",
+        "G-TEAMWORK"
+      ]
+    },
+    {
+      "id": "TW-04",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/agent",
+        "harness/internal/event",
+        "harness/internal/teamwork"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-DOCKER",
+        "G-LIVE",
+        "G-PROFILE",
+        "G-TEAMWORK"
+      ]
+    },
+    {
+      "id": "TW-05",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/agent",
+        "harness/internal/event",
+        "harness/internal/teamwork"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-DOCKER",
+        "G-LIVE",
+        "G-PROFILE",
+        "G-TEAMWORK"
+      ]
+    },
+    {
+      "id": "TW-06",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/agent",
+        "harness/internal/event",
+        "harness/internal/teamwork"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-DOCKER",
+        "G-LIVE",
+        "G-PROFILE",
+        "G-TEAMWORK"
+      ]
+    },
+    {
+      "id": "TW-07",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/agent",
+        "harness/internal/event",
+        "harness/internal/teamwork"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-DOCKER",
+        "G-LIVE",
+        "G-PROFILE",
+        "G-TEAMWORK"
+      ]
+    },
+    {
+      "id": "TW-08",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/agent",
+        "harness/internal/event",
+        "harness/internal/teamwork"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-DOCKER",
+        "G-LIVE",
+        "G-PROFILE",
+        "G-TEAMWORK"
+      ]
+    },
+    {
+      "id": "TW-09",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/agent",
+        "harness/internal/event",
+        "harness/internal/teamwork"
+      ],
+      "accepted_commits": [],
+      "test_symbols": [],
+      "scenario_keys": [],
+      "evidence_gates": [
+        "G-DOCKER",
+        "G-LIVE",
+        "G-PROFILE",
+        "G-TEAMWORK"
+      ]
+    },
+    {
+      "id": "TW-10",
+      "status": "pending",
+      "owner_packages": [
+        "harness/internal/agent",
+        "harness/internal/event",
+        "harness/internal/store",
+        "harness/internal/teamwork"
+      ],
+      "accepted_commits": [
+        "ff8761dbf19c62bf6959e8df202f612dcdf72580"
+      ],
+      "test_symbols": [
+        "harness/internal/store/deadline_resolution_test.go::TestResolveDeadlineWinnerCommitsAtomicEvidenceAndReplaysAfterRestart"
+      ],
+      "scenario_keys": [
+        "tw-10-deadline-restart-race"
+      ],
+      "evidence_gates": [
+        "G-DOCKER",
+        "G-LIVE",
+        "G-PROFILE",
+        "G-TEAMWORK"
+      ]
+    }
+  ]
+}

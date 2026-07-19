@@ -6,11 +6,28 @@
 - Run the E2E suite with `bash scripts/e2e_test.sh` or `make test`.
 - Validate harness module manifests with `make harness-validate` when changing
   harness module assets.
+- Run `make harness-quality` for the pinned Harness quality ratchet and
+  `make harness-verify` for the complete local Harness build and test gate.
 - Treat `harness/` as an experimental, not-yet-released harness layer. Do not
   use it as an implementation dependency for release-path commands such as
   `mnemon setup`; formal integrations belong under `cmd/` and `internal/`.
 - Treat `.claude/`, `.codex/`, `.openclaw/`, and similar host directories as
   local projection surfaces, not canonical project state.
+
+## Go Engineering
+
+- Read and follow [the Go engineering standard](docs/development/go-engineering-standard.md)
+  before changing Go architecture, concurrency, durable state, or shared
+  infrastructure.
+- Use patterns, channels, generics, callbacks, and registries only when they
+  reduce sources of truth, state combinations, or modification points. They are
+  not usage quotas, and reducing `if` statements or total lines is not a goal.
+- Keep authority, digest, fence, bounds, CAS cardinality, and fail-closed checks
+  explicit. Every goroutine must have an owner, cancellation, bounded work, and
+  a wait path.
+- In a scope with a tracked engineering-quality baseline, new or modified code
+  must not increase it. Preserve independent test oracles while compressing
+  fixtures.
 
 ## Commit Discipline
 

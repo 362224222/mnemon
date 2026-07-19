@@ -344,6 +344,7 @@ make help           # 显示所有目标
 ## 文档
 
 - [Mnemon Harness Beta](../../harness/README.md) — 实验性的 host-agent lifecycle state
+- [Go 工程规范](../development/go-engineering-standard.md) — 可维护性、并发、持久化、测试与质量 ratchet
 - [设计与架构](DESIGN.md) — 当前 engine architecture、核心概念、算法、集成设计
 - [用法与参考](USAGE.md) — CLI 命令、嵌入向量支持、架构概览
 - [记忆导入指南](IMPORT.md) — 导入历史聊天的 schema 与 LLM 提取提示词

@@ -1,0 +1,256 @@
+{
+  "schema_version": 1,
+  "source_commit": "0be35cbb4251645d74b5daf5d60f7a4183661087",
+  "entries": [
+    {
+      "rule": "bounded_resource",
+      "identity": "bounded_resource:controller-local-http-admission",
+      "path": "harness/internal/node/controller.go",
+      "symbol": "(*controllerRequestTracker).ServeHTTP",
+      "risk": "high",
+      "evidence": "harness/internal/node/controller.go::(*controllerRequestTracker).ServeHTTP",
+      "owner": "harness/internal/node",
+      "removal_checkpoint": "7R"
+    },
+    {
+      "rule": "bounded_resource",
+      "identity": "bounded_resource:gossip-channel-gates",
+      "path": "harness/internal/peer/topic.go",
+      "symbol": "(*Gossip).joinLocked",
+      "risk": "high",
+      "evidence": "harness/internal/peer/topic.go::(*Gossip).joinLocked",
+      "owner": "harness/internal/peer",
+      "removal_checkpoint": "7B"
+    },
+    {
+      "rule": "closed_set_authority",
+      "identity": "closed_set_authority:artifact-frame-types",
+      "path": "harness/internal/peer/artifact_frame.go",
+      "symbol": "ArtifactFrameType.Valid",
+      "risk": "medium",
+      "evidence": "harness/internal/peer/artifact_frame.go::ArtifactFrameType.Valid",
+      "owner": "harness/internal/peer",
+      "removal_checkpoint": "7B"
+    },
+    {
+      "rule": "closed_set_authority",
+      "identity": "closed_set_authority:channel-frame-types",
+      "path": "harness/internal/peer/channel_frame.go",
+      "symbol": "ChannelFrameType.Valid",
+      "risk": "medium",
+      "evidence": "harness/internal/peer/channel_frame.go::ChannelFrameType.Valid",
+      "owner": "harness/internal/peer",
+      "removal_checkpoint": "8c"
+    },
+    {
+      "rule": "closed_set_authority",
+      "identity": "closed_set_authority:event-frame-types",
+      "path": "harness/internal/peer/event_frame.go",
+      "symbol": "EventFrameType.Valid",
+      "risk": "medium",
+      "evidence": "harness/internal/peer/event_frame.go::EventFrameType.Valid",
+      "owner": "harness/internal/peer",
+      "removal_checkpoint": "7B"
+    },
+    {
+      "rule": "closed_set_authority",
+      "identity": "closed_set_authority:event-types",
+      "path": "harness/internal/model/event.go",
+      "symbol": "EventType.Valid",
+      "risk": "medium",
+      "evidence": "harness/internal/model/event.go::EventType.Valid",
+      "owner": "harness/internal/model + harness/internal/store",
+      "removal_checkpoint": "7R"
+    },
+    {
+      "rule": "closed_set_authority",
+      "identity": "closed_set_authority:local-api-routes",
+      "path": "harness/internal/localapi/server.go",
+      "symbol": "newServer",
+      "risk": "medium",
+      "evidence": "harness/internal/localapi/server.go::newServer",
+      "owner": "harness/internal/localapi",
+      "removal_checkpoint": "9"
+    },
+    {
+      "rule": "closed_set_authority",
+      "identity": "closed_set_authority:operation-kinds",
+      "path": "harness/internal/model/agent.go",
+      "symbol": "OperationKind.Valid",
+      "risk": "medium",
+      "evidence": "harness/internal/model/agent.go::OperationKind.Valid",
+      "owner": "harness/internal/model + harness/internal/store",
+      "removal_checkpoint": "8a"
+    },
+    {
+      "rule": "closed_set_authority",
+      "identity": "closed_set_authority:teamwork-actions",
+      "path": "harness/internal/localapi/server.go",
+      "symbol": "validTeamworkAction",
+      "risk": "high",
+      "evidence": "harness/internal/localapi/server.go::validTeamworkAction",
+      "owner": "harness/internal/assets + harness/internal/cli + harness/internal/localapi + harness/internal/agent + harness/internal/store",
+      "removal_checkpoint": "7R"
+    },
+    {
+      "rule": "dependency_direction",
+      "identity": "dependency_direction:harness/cmd/mnemon-harness::cli",
+      "path": "harness/cmd/mnemon-harness",
+      "component": "cli",
+      "risk": "medium",
+      "evidence": "harness/cmd/mnemon-harness/main.go",
+      "owner": "harness/cmd/mnemon-harness + harness/internal/cli",
+      "removal_checkpoint": "9"
+    },
+    {
+      "rule": "dependency_direction",
+      "identity": "dependency_direction:harness/cmd/mnemond::agent",
+      "path": "harness/cmd/mnemond",
+      "component": "agent",
+      "risk": "medium",
+      "evidence": "harness/cmd/mnemond/main.go",
+      "owner": "harness/cmd/mnemond + harness/internal/node",
+      "removal_checkpoint": "7R"
+    },
+    {
+      "rule": "dependency_direction",
+      "identity": "dependency_direction:harness/cmd/mnemond::assets",
+      "path": "harness/cmd/mnemond",
+      "component": "assets",
+      "risk": "medium",
+      "evidence": "harness/cmd/mnemond/main.go",
+      "owner": "harness/cmd/mnemond + harness/internal/integration",
+      "removal_checkpoint": "7R"
+    },
+    {
+      "rule": "dependency_direction",
+      "identity": "dependency_direction:harness/internal/agent::localapi",
+      "path": "harness/internal/agent",
+      "component": "localapi",
+      "risk": "medium",
+      "evidence": "harness/internal/agent/action.go",
+      "owner": "harness/internal/agent + harness/internal/localapi",
+      "removal_checkpoint": "7R"
+    },
+    {
+      "rule": "dependency_direction",
+      "identity": "dependency_direction:harness/internal/node::localapi",
+      "path": "harness/internal/node",
+      "component": "localapi",
+      "risk": "medium",
+      "evidence": "harness/internal/node/activate.go",
+      "owner": "harness/internal/node + harness/internal/localapi",
+      "removal_checkpoint": "7R"
+    },
+    {
+      "rule": "dependency_direction",
+      "identity": "dependency_direction:harness/internal/store::teamwork",
+      "path": "harness/internal/store",
+      "component": "teamwork",
+      "risk": "medium",
+      "evidence": "harness/internal/store/peer_inbox_semantic_commit.go",
+      "owner": "harness/internal/store + harness/internal/teamwork",
+      "removal_checkpoint": "7R"
+    },
+    {
+      "rule": "deterministic_order",
+      "identity": "deterministic_order:gossip-subscription-filter",
+      "path": "harness/internal/peer/topic.go",
+      "symbol": "authoritySubscriptionFilter.FilterIncomingSubscriptions",
+      "risk": "medium",
+      "evidence": "harness/internal/peer/topic.go::authoritySubscriptionFilter.FilterIncomingSubscriptions",
+      "owner": "harness/internal/peer",
+      "removal_checkpoint": "7B"
+    },
+    {
+      "rule": "durable_lifecycle_duplication",
+      "identity": "durable_lifecycle_duplication:store-transaction-shells",
+      "path": "harness/internal/store/artifact_gc.go",
+      "component": "store-transaction-lifecycle",
+      "risk": "medium",
+      "evidence": "harness/internal/store/artifact_gc.go",
+      "owner": "harness/internal/store",
+      "removal_checkpoint": "12"
+    },
+    {
+      "rule": "goroutine_ownership",
+      "identity": "goroutine_ownership:codex-process-cleanup",
+      "path": "harness/internal/agent/codex_adapter.go",
+      "symbol": "(*codexProtocolSession).close",
+      "risk": "high",
+      "evidence": "harness/internal/agent/codex_adapter.go::(*codexProtocolSession).close",
+      "owner": "harness/internal/agent",
+      "removal_checkpoint": "7R"
+    },
+    {
+      "rule": "goroutine_ownership",
+      "identity": "goroutine_ownership:connection-gater-timers",
+      "path": "harness/internal/peer/gater.go",
+      "symbol": "(*ConnectionGater).shutdown",
+      "risk": "medium",
+      "evidence": "harness/internal/peer/gater.go::(*ConnectionGater).shutdown",
+      "owner": "harness/internal/peer",
+      "removal_checkpoint": "7B"
+    },
+    {
+      "rule": "goroutine_ownership",
+      "identity": "goroutine_ownership:daemon-installation-verifier",
+      "path": "harness/internal/node/preflight.go",
+      "symbol": "verifyDaemonInstallation",
+      "risk": "high",
+      "evidence": "harness/internal/node/preflight.go::verifyDaemonInstallation",
+      "owner": "harness/internal/node",
+      "removal_checkpoint": "7R"
+    },
+    {
+      "rule": "goroutine_ownership",
+      "identity": "goroutine_ownership:host-activation-watch",
+      "path": "harness/internal/integration/host_activation.go",
+      "symbol": "VerifyHostActivation",
+      "risk": "medium",
+      "evidence": "harness/internal/integration/host_activation.go::VerifyHostActivation",
+      "owner": "harness/internal/integration",
+      "removal_checkpoint": "7R"
+    },
+    {
+      "rule": "lock_callback_io",
+      "identity": "lock_callback_io:mesh-authority-commit",
+      "path": "harness/internal/peer/mesh_runtime.go",
+      "symbol": "(*MeshRuntime).ReconcileWithCommit",
+      "risk": "high",
+      "evidence": "harness/internal/peer/mesh_runtime.go::(*MeshRuntime).ReconcileWithCommit",
+      "owner": "harness/internal/peer + harness/internal/store",
+      "removal_checkpoint": "7B"
+    },
+    {
+      "rule": "mutable_registry",
+      "identity": "mutable_registry:artifact-cas-coordination",
+      "path": "harness/internal/artifact/cas.go",
+      "symbol": "NewCAS",
+      "risk": "medium",
+      "evidence": "harness/internal/artifact/cas.go::NewCAS",
+      "owner": "harness/internal/artifact",
+      "removal_checkpoint": "7B"
+    },
+    {
+      "rule": "runtime_supervision",
+      "identity": "runtime_supervision:node-controller",
+      "path": "harness/internal/node/controller.go",
+      "symbol": "(*Controller).Serve",
+      "risk": "high",
+      "evidence": "harness/internal/node/controller.go::(*Controller).Serve",
+      "owner": "harness/internal/node",
+      "removal_checkpoint": "7R"
+    },
+    {
+      "rule": "unexpected_harness_package",
+      "identity": "unexpected_harness_package:harness/internal/cli::cli",
+      "path": "harness/internal/cli",
+      "component": "cli",
+      "risk": "medium",
+      "evidence": "harness/internal/cli/agent.go",
+      "owner": "harness/internal/cli",
+      "removal_checkpoint": "9"
+    }
+  ]
+}
