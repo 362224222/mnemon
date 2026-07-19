@@ -175,7 +175,8 @@ func TestReserveManagedOperationTerminalReplayPrecedesContextAndActivation(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	receipt, _ := model.NewJSON([]byte(`{"code":"work_conflict","status":"error"}`))
+	receipt := mustManagedOperationRejectionReceipt(t, reserved.Operation.ID(), "work_conflict",
+		"current Work changed before admission")
 	rejectedAt := spec.At.Add(time.Second)
 	rejected, err := fixture.store.RejectOperation(context.Background(), reserved.Operation.ID(),
 		spec.LeaseOwner, rejectedAt, receipt)
@@ -193,7 +194,7 @@ func TestReserveManagedOperationTerminalReplayPrecedesContextAndActivation(t *te
 	replayed, err := fixture.store.ReserveManagedOperation(context.Background(), replaySpec)
 	if err != nil || !replayed.Replayed || replayed.Acquired || replayed.HasHandling ||
 		replayed.Operation.Status() != model.OperationRejected ||
-		replayed.Operation.AgentRunID() != rejected.AgentRunID() {
+		replayed.Operation.AgentRunID() != rejected.Operation.AgentRunID() {
 		t.Fatalf("terminal replay with stale exact context = (%#v, %v)", replayed, err)
 	}
 

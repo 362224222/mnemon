@@ -34,19 +34,7 @@ func TestProbeManagedOperationIsReadOnlyAndIndependentOfLiveAuthority(t *testing
 		t.Fatalf("started probe = (%#v, %v)", started, err)
 	}
 
-	receipt, _ := model.NewJSON([]byte(`{"code":"work_conflict","status":"error"}`))
-	if _, err := fixture.store.RejectOperation(context.Background(), reservation.Operation.ID(),
-		spec.LeaseOwner, spec.At.Add(1), receipt); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := fixture.store.db.Exec("UPDATE profiles SET enabled=0 WHERE profile_id=?",
-		fixture.profile.ID().String()); err != nil {
-		t.Fatal(err)
-	}
-	disabled, err := readProfile(context.Background(), fixture.store.db)
-	if err != nil || disabled.Enabled() {
-		t.Fatalf("disabled Profile = (%#v, %v)", disabled, err)
-	}
+	disabled, receipt := rejectManagedOperationProbeFixture(t, fixture, spec, reservation.Operation)
 	terminal, err := fixture.store.ProbeManagedOperation(context.Background(), ManagedOperationProbeSpec{
 		Profile: disabled, ClientKeyHash: spec.ClientKeyHash,
 		RequestDigest: spec.RequestDigest, Kind: spec.Kind,
@@ -123,8 +111,17 @@ func newTerminalManagedOperationProbeFixture(t *testing.T, suffix string) termin
 	if err != nil {
 		t.Fatal(err)
 	}
-	receipt, _ := model.NewJSON([]byte(`{"code":"work_conflict","status":"error"}`))
-	if _, err := fixture.store.RejectOperation(context.Background(), reservation.Operation.ID(),
+	disabled, _ := rejectManagedOperationProbeFixture(t, fixture, spec, reservation.Operation)
+	return terminalManagedOperationProbeFixture{fixture: fixture, spec: spec, profile: disabled}
+}
+
+func rejectManagedOperationProbeFixture(t testing.TB, fixture *managedContextFixture,
+	spec ManagedOperationSpec, operation model.Operation,
+) (model.Profile, model.JSON) {
+	t.Helper()
+	receipt := mustManagedOperationRejectionReceipt(t, operation.ID(), "work_conflict",
+		"current Work changed before admission")
+	if _, err := fixture.store.RejectOperation(context.Background(), operation.ID(),
 		spec.LeaseOwner, spec.At.Add(1), receipt); err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +133,7 @@ func newTerminalManagedOperationProbeFixture(t *testing.T, suffix string) termin
 	if err != nil || disabled.Enabled() {
 		t.Fatalf("disabled Profile = (%#v, %v)", disabled, err)
 	}
-	return terminalManagedOperationProbeFixture{fixture: fixture, spec: spec, profile: disabled}
+	return disabled, receipt
 }
 
 func (fixture terminalManagedOperationProbeFixture) probeSpec() ManagedOperationProbeSpec {

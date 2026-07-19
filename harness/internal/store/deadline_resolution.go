@@ -199,15 +199,13 @@ func deadlineCompetingHomeAction(kind model.OperationKind) bool {
 }
 
 func buildWorkExpiredReceipt(operation model.OperationID) (model.JSON, error) {
-	return model.JSONFrom(struct {
-		SchemaVersion uint64 `json:"schema_version"`
-		Status        string `json:"status"`
-		Code          string `json:"code"`
-		Retryable     bool   `json:"retryable"`
-		Replayed      bool   `json:"replayed"`
-		Message       string `json:"message"`
-		OperationID   string `json:"operation_id"`
-	}{model.SchemaVersion, "error", "work_expired", false, false, workExpiredMessage, operation.String()})
+	receipt, err := model.NewOperationRejectionReceipt(model.OperationRejectionSpec{
+		OperationID: operation, Code: "work_expired", Message: workExpiredMessage,
+	})
+	if err != nil {
+		return model.JSON{}, err
+	}
+	return receipt.JSON(), nil
 }
 
 func requireExactDeadlineCause(ctx context.Context, tx *sql.Tx, expiry model.Event,

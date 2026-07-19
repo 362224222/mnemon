@@ -684,14 +684,12 @@ func (s *Store) FailAgentRuntime(ctx context.Context,
 		return AgentRuntimeTransitionResult{}, fmt.Errorf("%w: failure time precedes wake delivery",
 			ErrAgentRuntimeInvariant)
 	}
-	operationReceipt, err := model.NewJSON([]byte(`{"code":"agent_runtime_failed","status":"rejected"}`))
-	if err != nil {
-		return AgentRuntimeTransitionResult{}, fmt.Errorf("%w: failure operation receipt: %v",
+	if err := rejectStartedManagedOperations(ctx, tx, managedOperationRejectionSpec{
+		RunID: authority.run.ID(), ProfileID: authority.profile.ID(), ContextHash: spec.ClaimFenceHash, Code: "internal",
+		Message: "managed Agent Runtime failed before operation completion", At: at,
+	}); err != nil {
+		return AgentRuntimeTransitionResult{}, fmt.Errorf("%w: reject failed Runtime operations: %v",
 			ErrAgentRuntimeInvariant, err)
-	}
-	if err := rejectAgentRuntimeOperations(ctx, tx, authority.run.ID(), authority.profile.ID(),
-		operationReceipt, at); err != nil {
-		return AgentRuntimeTransitionResult{}, err
 	}
 	dead := authority.handling.Attempts() >= uint32(authority.budget.Spec().MaxAttempts)
 	runStatus := model.AgentRunFailed
@@ -991,26 +989,6 @@ func commitAgentRuntimeResult(tx *sql.Tx, authority agentRuntimeAuthority,
 	}
 	return AgentRuntimeTransitionResult{Status: status, Run: authority.run,
 		Handling: authority.handling}, nil
-}
-
-func rejectAgentRuntimeOperations(ctx context.Context, tx *sql.Tx, runID model.RunID,
-	profile model.ProfileID, receipt model.JSON, at time.Time,
-) error {
-	var future int
-	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM operations
-		WHERE agent_run_id=? AND profile_id=? AND status='started' AND created_at>?)`,
-		runID.String(), profile.String(), storeTime(at)).Scan(&future); err != nil {
-		return fmt.Errorf("fail Agent Runtime: inspect operations: %w", err)
-	}
-	if future == 1 {
-		return fmt.Errorf("%w: trusted time precedes a started operation", ErrAgentRuntimeInvariant)
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE operations SET status='rejected',lease_owner=NULL,
-		lease_until=NULL,result_json=?,finished_at=? WHERE agent_run_id=? AND profile_id=?
-		AND status='started'`, receipt.Bytes(), storeTime(at), runID.String(), profile.String()); err != nil {
-		return fmt.Errorf("fail Agent Runtime: reject operations: %w", err)
-	}
-	return nil
 }
 
 func validateAgentRuntimeObject(field string, value model.JSON) error {

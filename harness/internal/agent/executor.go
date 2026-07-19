@@ -52,9 +52,10 @@ type offerSelectionResolver interface {
 type teamworkExecutionBackend interface {
 	Prepare(context.Context, model.ChannelID, model.Audience, uint8) (executionScope, error)
 	GetReviewWork(context.Context, model.WorkRef) (model.ReviewWork, error)
+	Probe(context.Context, store.ManagedOperationProbeSpec) (store.ManagedOperationProbe, error)
 	Commit(context.Context, executionAcceptanceSpec, time.Time) (store.LocalAcceptanceResult, error)
 	ResolveDeadline(context.Context, executionDeadlineSpec, time.Time) (store.DeadlineResolutionResult, error)
-	Reject(context.Context, model.OperationID, string, time.Time, model.JSON) (model.Operation, error)
+	Reject(context.Context, model.OperationID, string, time.Time, model.JSON) (store.OperationRejectionResult, error)
 }
 
 type executionScope struct {
@@ -123,6 +124,12 @@ func (b storeTeamworkExecutionBackend) GetReviewWork(ctx context.Context,
 	return b.store.GetReviewWork(ctx, ref)
 }
 
+func (b storeTeamworkExecutionBackend) Probe(ctx context.Context,
+	spec store.ManagedOperationProbeSpec,
+) (store.ManagedOperationProbe, error) {
+	return b.store.ProbeManagedOperation(ctx, spec)
+}
+
 func (b storeTeamworkExecutionBackend) Commit(ctx context.Context, spec executionAcceptanceSpec,
 	at time.Time,
 ) (store.LocalAcceptanceResult, error) {
@@ -146,7 +153,7 @@ func (b storeTeamworkExecutionBackend) ResolveDeadline(ctx context.Context, spec
 
 func (b storeTeamworkExecutionBackend) Reject(ctx context.Context, id model.OperationID,
 	owner string, at time.Time, result model.JSON,
-) (model.Operation, error) {
+) (store.OperationRejectionResult, error) {
 	return b.store.RejectOperation(ctx, id, owner, at, result)
 }
 
@@ -617,6 +624,9 @@ func (e *TeamworkActionExecutor) reject(ctx context.Context, operation model.Ope
 	if apiErr == nil {
 		apiErr = NewControlError(CodeInternal, "Teamwork operation was rejected")
 	}
+	if response, replayErr, handled := e.probeRejectionTerminal(ctx, operation); handled {
+		return response, replayErr
+	}
 	if apiErr.Code.Retryable() {
 		return OperationResponse{}, operationAPIError(apiErr.Code, apiErr.Message,
 			operation.ID(), false)
@@ -628,26 +638,16 @@ func (e *TeamworkActionExecutor) reject(ctx context.Context, operation model.Ope
 	}
 	rejectedAt, clockErr := e.freshNow(at)
 	if clockErr != nil {
+		if response, replayErr, handled := e.probeRejectionTerminal(ctx, operation); handled {
+			return response, replayErr
+		}
 		return OperationResponse{}, clockErr
 	}
-	terminal, err := e.backend.Reject(ctx, operation.ID(), operation.LeaseOwner(), rejectedAt, evidence)
+	result, err := e.backend.Reject(ctx, operation.ID(), operation.LeaseOwner(), rejectedAt, evidence)
 	if err != nil {
 		return OperationResponse{}, mapTeamworkExecutionError(err)
 	}
-	switch terminal.Status() {
-	case model.OperationCommitted:
-		response, err := decodeCommittedTeamworkOperation(e.actions, terminal, true)
-		if err != nil {
-			return OperationResponse{}, NewControlError(CodeInternal,
-				"terminal Teamwork receipt is invalid")
-		}
-		return response, nil
-	case model.OperationRejected:
-		return OperationResponse{}, decodeRejectedTeamworkOperation(e.actions, terminal, false)
-	default:
-		return OperationResponse{}, operationAPIError(CodeOperationPending,
-			"operation rejection is pending", operation.ID(), false)
-	}
+	return e.projectRejectionTerminal(operation, result, evidence)
 }
 
 func (e *TeamworkActionExecutor) freshNow(notBefore time.Time) (time.Time, *ControlError) {

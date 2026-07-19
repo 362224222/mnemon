@@ -105,38 +105,57 @@ func NewOperation(spec OperationSpec) (Operation, error) {
 		result.capture, result.hasCapture = *spec.Capture, true
 	}
 	if spec.Status == OperationStarted {
-		if spec.LeaseOwner == "" || spec.LeaseUntil == nil || spec.Result != nil || spec.FinishedAt != nil {
-			return Operation{}, invariant("started operation requires only an active lease")
-		}
-		if err := validateIdentifier("operation lease owner", spec.LeaseOwner); err != nil {
+		if err := bindStartedOperation(&result, spec, createdAt); err != nil {
 			return Operation{}, err
 		}
-		leaseUntil, err := canonicalTime(*spec.LeaseUntil)
-		if err != nil {
-			return Operation{}, err
-		}
-		if !leaseUntil.After(createdAt) {
-			return Operation{}, invariant("operation lease must end after creation")
-		}
-		result.leaseUntil, result.hasLease = leaseUntil, true
-	} else {
-		if spec.LeaseOwner != "" || spec.LeaseUntil != nil || spec.Result == nil || spec.FinishedAt == nil {
-			return Operation{}, invariant("terminal operation requires result/finish and no lease")
-		}
-		if spec.Result.IsZero() || spec.Result.raw[0] != '{' {
-			return Operation{}, invalid("operation result", "must be a canonical JSON object")
-		}
-		finishedAt, err := canonicalTime(*spec.FinishedAt)
-		if err != nil {
-			return Operation{}, err
-		}
-		if finishedAt.Before(createdAt) {
-			return Operation{}, invariant("operation finish precedes creation")
-		}
-		result.result, result.hasResult = *spec.Result, true
-		result.finishedAt, result.hasFinishedAt = finishedAt, true
+		return result, nil
+	}
+	if err := bindTerminalOperation(&result, spec, createdAt); err != nil {
+		return Operation{}, err
 	}
 	return result, nil
+}
+
+func bindStartedOperation(result *Operation, spec OperationSpec, createdAt time.Time) error {
+	if spec.LeaseOwner == "" || spec.LeaseUntil == nil || spec.Result != nil || spec.FinishedAt != nil {
+		return invariant("started operation requires only an active lease")
+	}
+	if err := validateIdentifier("operation lease owner", spec.LeaseOwner); err != nil {
+		return err
+	}
+	leaseUntil, err := canonicalTime(*spec.LeaseUntil)
+	if err != nil {
+		return err
+	}
+	if !leaseUntil.After(createdAt) {
+		return invariant("operation lease must end after creation")
+	}
+	result.leaseUntil, result.hasLease = leaseUntil, true
+	return nil
+}
+
+func bindTerminalOperation(result *Operation, spec OperationSpec, createdAt time.Time) error {
+	if spec.LeaseOwner != "" || spec.LeaseUntil != nil || spec.Result == nil || spec.FinishedAt == nil {
+		return invariant("terminal operation requires result/finish and no lease")
+	}
+	if spec.Result.IsZero() || spec.Result.raw[0] != '{' {
+		return invalid("operation result", "must be a canonical JSON object")
+	}
+	if spec.Status == OperationRejected {
+		if _, err := ParseOperationRejectionReceipt(spec.Result.Bytes(), spec.ID); err != nil {
+			return err
+		}
+	}
+	finishedAt, err := canonicalTime(*spec.FinishedAt)
+	if err != nil {
+		return err
+	}
+	if finishedAt.Before(createdAt) {
+		return invariant("operation finish precedes creation")
+	}
+	result.result, result.hasResult = *spec.Result, true
+	result.finishedAt, result.hasFinishedAt = finishedAt, true
+	return nil
 }
 
 func (o Operation) ID() OperationID               { return o.spec.ID }

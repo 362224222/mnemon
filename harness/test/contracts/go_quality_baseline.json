@@ -599,13 +599,6 @@
     },
     {
       "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/model/agent.go::NewOperation",
-      "path": "harness/internal/model/agent.go",
-      "symbol": "NewOperation",
-      "ceiling": 43
-    },
-    {
-      "rule": "cognitive_complexity",
       "identity": "cognitive_complexity:harness/internal/model/agent_run.go::NewAgentRun",
       "path": "harness/internal/model/agent_run.go",
       "symbol": "NewAgentRun",
@@ -1022,7 +1015,7 @@
       "identity": "cognitive_complexity:harness/internal/store/agent_runtime.go::(*Store).FailAgentRuntime",
       "path": "harness/internal/store/agent_runtime.go",
       "symbol": "(*Store).FailAgentRuntime",
-      "ceiling": 61
+      "ceiling": 60
     },
     {
       "rule": "cognitive_complexity",
@@ -1750,7 +1743,7 @@
       "identity": "cognitive_complexity:harness/internal/store/peer_inbox_semantic_settlement.go::validatePeerInboxSemanticTerminalRunOperations",
       "path": "harness/internal/store/peer_inbox_semantic_settlement.go",
       "symbol": "validatePeerInboxSemanticTerminalRunOperations",
-      "ceiling": 38
+      "ceiling": 28
     },
     {
       "rule": "cognitive_complexity",
@@ -2587,13 +2580,6 @@
     },
     {
       "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/model/agent.go::NewOperation",
-      "path": "harness/internal/model/agent.go",
-      "symbol": "NewOperation",
-      "ceiling": 31
-    },
-    {
-      "rule": "cyclomatic_complexity",
       "identity": "cyclomatic_complexity:harness/internal/model/agent_run.go::NewAgentRun",
       "path": "harness/internal/model/agent_run.go",
       "symbol": "NewAgentRun",
@@ -3213,14 +3199,14 @@
       "identity": "cyclomatic_complexity:harness/internal/store/agent_orphan_test.go::TestSettleOrphanedAgentRuntimeFailsExactActiveClaim",
       "path": "harness/internal/store/agent_orphan_test.go",
       "symbol": "TestSettleOrphanedAgentRuntimeFailsExactActiveClaim",
-      "ceiling": 23
+      "ceiling": 21
     },
     {
       "rule": "cyclomatic_complexity",
       "identity": "cyclomatic_complexity:harness/internal/store/agent_runtime.go::(*Store).FailAgentRuntime",
       "path": "harness/internal/store/agent_runtime.go",
       "symbol": "(*Store).FailAgentRuntime",
-      "ceiling": 50
+      "ceiling": 49
     },
     {
       "rule": "cyclomatic_complexity",
@@ -4144,7 +4130,7 @@
       "identity": "cyclomatic_complexity:harness/internal/store/peer_inbox_semantic_settlement.go::validatePeerInboxSemanticTerminalRunOperations",
       "path": "harness/internal/store/peer_inbox_semantic_settlement.go",
       "symbol": "validatePeerInboxSemanticTerminalRunOperations",
-      "ceiling": 26
+      "ceiling": 21
     },
     {
       "rule": "cyclomatic_complexity",
@@ -4781,7 +4767,7 @@
       "identity": "function_logical_lines:harness/internal/store/agent_runtime.go::(*Store).FailAgentRuntime",
       "path": "harness/internal/store/agent_runtime.go",
       "symbol": "(*Store).FailAgentRuntime",
-      "ceiling": 154
+      "ceiling": 153
     },
     {
       "rule": "function_logical_lines",
@@ -4802,7 +4788,7 @@
       "identity": "function_logical_lines:harness/internal/store/agent_runtime_test.go::TestAgentRuntimeEvidenceAtomicallySettlesExpiredClaim",
       "path": "harness/internal/store/agent_runtime_test.go",
       "symbol": "TestAgentRuntimeEvidenceAtomicallySettlesExpiredClaim",
-      "ceiling": 158
+      "ceiling": 156
     },
     {
       "rule": "function_logical_lines",
@@ -5096,7 +5082,7 @@
       "identity": "function_logical_lines:harness/internal/store/peer_inbox_semantic_settlement_test.go::TestPeerInboxSemanticHandlingSettlementFailsClosedWithoutPartialMutation",
       "path": "harness/internal/store/peer_inbox_semantic_settlement_test.go",
       "symbol": "TestPeerInboxSemanticHandlingSettlementFailsClosedWithoutPartialMutation",
-      "ceiling": 146
+      "ceiling": 126
     },
     {
       "rule": "function_logical_lines",
@@ -6027,7 +6013,7 @@
       "identity": "function_statements:harness/internal/store/agent_runtime.go::(*Store).FailAgentRuntime",
       "path": "harness/internal/store/agent_runtime.go",
       "symbol": "(*Store).FailAgentRuntime",
-      "ceiling": 117
+      "ceiling": 114
     },
     {
       "rule": "function_statements",
@@ -7114,7 +7100,7 @@
       "rule": "paired_test_file_lines",
       "identity": "paired_test_file_lines:harness/internal/store/agent_runtime_test.go",
       "path": "harness/internal/store/agent_runtime_test.go",
-      "ceiling": 1102
+      "ceiling": 1096
     },
     {
       "rule": "paired_test_file_lines",
@@ -7144,7 +7130,7 @@
       "rule": "paired_test_file_lines",
       "identity": "paired_test_file_lines:harness/internal/store/peer_inbox_semantic_settlement_test.go",
       "path": "harness/internal/store/peer_inbox_semantic_settlement_test.go",
-      "ceiling": 1085
+      "ceiling": 1060
     },
     {
       "rule": "paired_test_file_lines",
@@ -7432,13 +7418,13 @@
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/store/agent_claim.go",
       "path": "harness/internal/store/agent_claim.go",
-      "ceiling": 717
+      "ceiling": 693
     },
     {
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/store/agent_runtime.go",
       "path": "harness/internal/store/agent_runtime.go",
-      "ceiling": 1037
+      "ceiling": 1015
     },
     {
       "rule": "production_file_lines",
@@ -7558,7 +7544,7 @@
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/store/peer_inbox_semantic_settlement.go",
       "path": "harness/internal/store/peer_inbox_semantic_settlement.go",
-      "ceiling": 981
+      "ceiling": 904
     },
     {
       "rule": "production_file_lines",

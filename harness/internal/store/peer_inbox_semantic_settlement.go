@@ -3,14 +3,11 @@ package store
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 )
-
-const peerInboxSemanticHandlingOperationCode = "handling_superseded"
 
 type peerInboxSemanticHandlingAuthority struct {
 	source         model.Event
@@ -25,9 +22,8 @@ type peerInboxSemanticHandlingAuthority struct {
 // commits this transition with the imported Event, Work CAS, and Inbox
 // decision. In particular, this helper never commits or rolls back tx.
 //
-// PeerInboxSemanticHandlingSettlement points at the pre-transition Work update Event.
-// The Work may therefore still be on that actionable update or may already
-// have advanced to the matching terminal update in this same transaction.
+// PeerInboxSemanticHandlingSettlement points at the pre-transition Work update Event,
+// which may already have advanced to the matching terminal update in this transaction.
 func settlePeerInboxSemanticHandling(ctx context.Context, tx *sql.Tx,
 	settlement PeerInboxSemanticHandlingSettlement, at time.Time,
 ) error {
@@ -75,9 +71,8 @@ func settlePeerInboxSemanticHandling(ctx context.Context, tx *sql.Tx,
 }
 
 // validatePeerInboxSemanticHandlingSettlement is the read-only half used by
-// terminal Peer Inbox replay. It never turns pending work into terminal work:
-// only a fully settled target, including any exact Run and Operation evidence,
-// is accepted.
+// terminal Peer Inbox replay. It accepts only fully settled targets and never
+// turns pending work into terminal work.
 func validatePeerInboxSemanticHandlingSettlement(ctx context.Context, tx *sql.Tx,
 	settlement PeerInboxSemanticHandlingSettlement,
 ) error {
@@ -300,17 +295,18 @@ func settlePeerInboxSemanticClaimedHandling(ctx context.Context, tx *sql.Tx,
 		return peerInboxSemanticHandlingInvariant(
 			"exact claimed Run has %d started Operations", len(started))
 	}
+	var supersededOperationID model.OperationID
 	for _, operation := range started {
-		receipt, err := peerInboxSemanticHandlingOperationReceipt(
-			settlement, handling, run, operation, at)
+		receipt, err := peerInboxSemanticOperationRejection(settlement, operation)
 		if err != nil {
 			return err
 		}
 		if err := rejectPeerInboxSemanticHandlingOperation(ctx, tx, operation, receipt, at); err != nil {
 			return err
 		}
+		supersededOperationID = operation.ID()
 	}
-	outcome, err := peerInboxSemanticHandlingOutcomeReceipt(settlement, handling, run, at)
+	outcome, err := peerInboxSemanticHandlingOutcomeReceipt(settlement, handling, run, supersededOperationID, at)
 	if err != nil {
 		return err
 	}
@@ -545,8 +541,11 @@ func validatePeerInboxSemanticSupersededTerminal(ctx context.Context, tx *sql.Tx
 	}
 	outcome, hasOutcome := run.OutcomeReceipt()
 	if hasOutcome {
-		expected, err := peerInboxSemanticHandlingOutcomeReceipt(
-			settlement, handling, run, handling.UpdatedAt())
+		operationID, err := peerInboxSemanticHandlingOutcomeOperationID(outcome)
+		if err != nil {
+			return err
+		}
+		expected, err := peerInboxSemanticHandlingOutcomeReceipt(settlement, handling, run, operationID, handling.UpdatedAt())
 		if err != nil {
 			return err
 		}
@@ -555,11 +554,9 @@ func validatePeerInboxSemanticSupersededTerminal(ctx context.Context, tx *sql.Tx
 		}
 		return validatePeerInboxSemanticTerminalRunOperations(ctx, tx, run,
 			&peerInboxSemanticOperationReceiptExpectation{settlement: settlement,
-				handling: handling, run: run, settledAt: handling.UpdatedAt(),
-				notAfter: handling.UpdatedAt()})
+				operationID: operationID, settledAt: handling.UpdatedAt(), notAfter: handling.UpdatedAt()})
 	}
-	// The Handling may have been pending after a prior attempt when the remote
-	// terminal arrived. That immutable Run keeps its earlier terminal evidence.
+	// A prior attempt keeps its earlier terminal evidence when the remote terminal arrives.
 	return validatePeerInboxSemanticTerminalRunOperations(ctx, tx, run,
 		&peerInboxSemanticOperationReceiptExpectation{notAfter: handling.UpdatedAt()})
 }
@@ -687,23 +684,13 @@ func validatePeerInboxSemanticHandlingRunCreation(authority peerInboxSemanticHan
 	return nil
 }
 
-type peerInboxSemanticOperationReceiptExpectation struct {
-	settlement     PeerInboxSemanticHandlingSettlement
-	handling       model.Handling
-	run            model.AgentRun
-	settledAt      time.Time
-	winningOutcome *model.JSON
-	notAfter       time.Time
-}
-
-func validatePeerInboxSemanticTerminalRunOperations(ctx context.Context, tx *sql.Tx,
-	run model.AgentRun, expectation *peerInboxSemanticOperationReceiptExpectation,
-) error {
+func validatePeerInboxSemanticTerminalRunOperations(ctx context.Context, tx *sql.Tx, run model.AgentRun,
+	expectation *peerInboxSemanticOperationReceiptExpectation) error {
 	operations, err := readPeerInboxSemanticHandlingRunOperations(ctx, tx, run)
 	if err != nil {
 		return err
 	}
-	supersededReceipts, winningReceipts := 0, 0
+	supersededReceipt, winningReceipts := false, 0
 	for _, operation := range operations {
 		if err := validatePeerInboxSemanticOperationBinding(operation, run); err != nil {
 			return err
@@ -727,31 +714,15 @@ func validatePeerInboxSemanticTerminalRunOperations(ctx context.Context, tx *sql
 			}
 			winningReceipts++
 		}
-		var envelope struct {
-			Code string `json:"code"`
-		}
-		if err := json.Unmarshal(result.Bytes(), &envelope); err != nil {
-			return peerInboxSemanticHandlingInvariant("terminal Operation receipt is not an object")
-		}
-		if envelope.Code != peerInboxSemanticHandlingOperationCode {
-			continue
-		}
-		if expectation == nil || expectation.settlement.SourceEventID().IsZero() {
-			return peerInboxSemanticHandlingInvariant("unexpected supersede Operation receipt")
-		}
-		expected, err := peerInboxSemanticHandlingOperationReceipt(expectation.settlement,
-			expectation.handling, expectation.run, operation, expectation.settledAt)
+		superseded, err := validatePeerInboxSemanticOperationReceipt(
+			operation, result, finished, expectation)
 		if err != nil {
 			return err
 		}
-		if operation.Status() != model.OperationRejected || !finished.Equal(expectation.settledAt) ||
-			result.String() != expected.String() {
-			return peerInboxSemanticHandlingInvariant("superseded Operation receipt differs")
-		}
-		supersededReceipts++
+		supersededReceipt = supersededReceipt || superseded
 	}
-	if supersededReceipts > 1 {
-		return peerInboxSemanticHandlingInvariant("multiple superseded Operation receipts")
+	if supersededReceipt != (expectation != nil && !expectation.operationID.IsZero()) {
+		return peerInboxSemanticHandlingInvariant("superseded outcome lacks its rejected Operation")
 	}
 	if expectation != nil && expectation.winningOutcome != nil && winningReceipts != 1 {
 		return peerInboxSemanticHandlingInvariant(
@@ -761,8 +732,7 @@ func validatePeerInboxSemanticTerminalRunOperations(ctx context.Context, tx *sql
 }
 
 func readExactPeerInboxSemanticHandlingRun(ctx context.Context, tx *sql.Tx,
-	handling model.Handling,
-) (model.AgentRun, error) {
+	handling model.Handling) (model.AgentRun, error) {
 	run, found, err := readOptionalExactPeerInboxSemanticHandlingRun(ctx, tx, handling)
 	if err != nil {
 		return model.AgentRun{}, err
@@ -777,8 +747,7 @@ func readExactPeerInboxSemanticHandlingRun(ctx context.Context, tx *sql.Tx,
 }
 
 func readOptionalExactPeerInboxSemanticHandlingRun(ctx context.Context, tx *sql.Tx,
-	handling model.Handling,
-) (model.AgentRun, bool, error) {
+	handling model.Handling) (model.AgentRun, bool, error) {
 	if handling.Attempts() == 0 {
 		var present int
 		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM agent_runs
@@ -871,8 +840,7 @@ func requireNoActivePeerInboxSemanticHandlingRun(ctx context.Context, tx *sql.Tx
 }
 
 func readPeerInboxSemanticHandlingRunOperations(ctx context.Context, tx *sql.Tx,
-	run model.AgentRun,
-) ([]model.Operation, error) {
+	run model.AgentRun) ([]model.Operation, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT operation_id FROM operations
 		WHERE agent_run_id=? AND profile_id=? ORDER BY operation_id`,
 		run.ID().String(), run.ProfileID().String())
@@ -911,9 +879,7 @@ func readPeerInboxSemanticHandlingRunOperations(ctx context.Context, tx *sql.Tx,
 	return operations, nil
 }
 
-func validatePeerInboxSemanticOperationBinding(operation model.Operation,
-	run model.AgentRun,
-) error {
+func validatePeerInboxSemanticOperationBinding(operation model.Operation, run model.AgentRun) error {
 	contextHash, hasContext := operation.ContextHash()
 	fence, hasFence := run.ClaimFenceHash()
 	if operation.AgentRunID() != run.ID() || operation.ProfileID() != run.ProfileID() ||
@@ -921,49 +887,6 @@ func validatePeerInboxSemanticOperationBinding(operation model.Operation,
 		return peerInboxSemanticHandlingInvariant("Operation binding drifted from exact AgentRun")
 	}
 	return nil
-}
-
-func peerInboxSemanticHandlingOutcomeReceipt(settlement PeerInboxSemanticHandlingSettlement,
-	handling model.Handling, run model.AgentRun, at time.Time,
-) (model.JSON, error) {
-	receipt, err := model.JSONFrom(struct {
-		Disposition string           `json:"disposition"`
-		HandlingID  model.HandlingID `json:"handling_id"`
-		RunID       model.RunID      `json:"run_id"`
-		Schema      int              `json:"schema_version"`
-		SettledAt   string           `json:"settled_at"`
-		SourceEvent model.EventID    `json:"source_event_id"`
-		Status      string           `json:"status"`
-		Work        model.WorkRef    `json:"work_ref"`
-	}{string(settlement.Disposition()), handling.ID(), run.ID(), model.SchemaVersion,
-		storeTime(at), settlement.SourceEventID(), "superseded", settlement.WorkRef()})
-	if err != nil || len(receipt.Bytes()) > model.MaxContentBytes {
-		return model.JSON{}, peerInboxSemanticHandlingInvariant("build bounded AgentRun receipt: %v", err)
-	}
-	return receipt, nil
-}
-
-func peerInboxSemanticHandlingOperationReceipt(settlement PeerInboxSemanticHandlingSettlement,
-	handling model.Handling, run model.AgentRun, operation model.Operation, at time.Time,
-) (model.JSON, error) {
-	receipt, err := model.JSONFrom(struct {
-		Code        string            `json:"code"`
-		Disposition string            `json:"disposition"`
-		HandlingID  model.HandlingID  `json:"handling_id"`
-		OperationID model.OperationID `json:"operation_id"`
-		RunID       model.RunID       `json:"run_id"`
-		Schema      int               `json:"schema_version"`
-		SettledAt   string            `json:"settled_at"`
-		SourceEvent model.EventID     `json:"source_event_id"`
-		Status      string            `json:"status"`
-		Work        model.WorkRef     `json:"work_ref"`
-	}{peerInboxSemanticHandlingOperationCode, string(settlement.Disposition()), handling.ID(),
-		operation.ID(), run.ID(), model.SchemaVersion, storeTime(at),
-		settlement.SourceEventID(), "rejected", settlement.WorkRef()})
-	if err != nil || len(receipt.Bytes()) > model.MaxContentBytes {
-		return model.JSON{}, peerInboxSemanticHandlingInvariant("build bounded Operation receipt: %v", err)
-	}
-	return receipt, nil
 }
 
 func validPeerInboxSemanticHandlingDisposition(value string) bool {

@@ -23,6 +23,13 @@ type OperationReservation struct {
 	Acquired  bool
 }
 
+// OperationRejectionResult distinguishes a rejection written by this call
+// from a terminal operation that won the same durable fence first.
+type OperationRejectionResult struct {
+	Operation model.Operation
+	Replayed  bool
+}
+
 // ReserveOperation atomically creates or replays a started operation. Only
 // the same client identity and request may reclaim an expired lease; another
 // started operation bound to the same context remains pending.
@@ -246,46 +253,49 @@ func requireOperationArtifactProjection(ctx context.Context, tx *sql.Tx, id mode
 // associated handling. The canonical result carries the stable error union.
 func (s *Store) RejectOperation(ctx context.Context, id model.OperationID, owner string, now time.Time,
 	result model.JSON,
-) (model.Operation, error) {
+) (OperationRejectionResult, error) {
 	if s == nil || s.db == nil || ctx == nil || id.IsZero() {
-		return model.Operation{}, errors.New("reject operation: incomplete input")
+		return OperationRejectionResult{}, errors.New("reject operation: incomplete input")
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return model.Operation{}, fmt.Errorf("reject operation: begin: %w", err)
+		return OperationRejectionResult{}, fmt.Errorf("reject operation: begin: %w", err)
 	}
 	defer tx.Rollback()
 	operation, err := readOperationByID(ctx, tx, id)
 	if err != nil {
-		return model.Operation{}, fmt.Errorf("reject operation: %w", err)
+		return OperationRejectionResult{}, fmt.Errorf("reject operation: %w", err)
 	}
 	if operation.Status().Terminal() {
-		return operation, nil
+		if err := tx.Commit(); err != nil {
+			return OperationRejectionResult{}, fmt.Errorf("reject operation: replay commit: %w", err)
+		}
+		return OperationRejectionResult{Operation: operation, Replayed: true}, nil
 	}
 	if err := requireOperationFence(operation, owner, now); err != nil {
-		return model.Operation{}, err
+		return OperationRejectionResult{}, err
 	}
-	if result.IsZero() || len(result.Bytes()) == 0 || result.Bytes()[0] != '{' {
-		return model.Operation{}, errors.New("reject operation: result must be a canonical object")
+	if _, err := model.ParseOperationRejectionReceipt(result.Bytes(), id); err != nil {
+		return OperationRejectionResult{}, fmt.Errorf("reject operation: invalid rejection receipt: %w", err)
 	}
 	now = now.Round(0).UTC()
 	updated, err := tx.ExecContext(ctx, `UPDATE operations SET status='rejected',lease_owner=NULL,
 		lease_until=NULL,result_json=?,finished_at=? WHERE operation_id=? AND status='started'
 		AND lease_owner=? AND lease_until>?`, result.Bytes(), storeTime(now), id.String(), owner, storeTime(now))
 	if err != nil {
-		return model.Operation{}, fmt.Errorf("reject operation: update: %w", err)
+		return OperationRejectionResult{}, fmt.Errorf("reject operation: update: %w", err)
 	}
 	if exactlyOne(updated) != nil {
-		return model.Operation{}, ErrOperationFence
+		return OperationRejectionResult{}, ErrOperationFence
 	}
 	rejected, err := operationTerminal(operation, model.OperationRejected, result, now)
 	if err != nil {
-		return model.Operation{}, err
+		return OperationRejectionResult{}, err
 	}
 	if err := tx.Commit(); err != nil {
-		return model.Operation{}, fmt.Errorf("reject operation: commit: %w", err)
+		return OperationRejectionResult{}, fmt.Errorf("reject operation: commit: %w", err)
 	}
-	return rejected, nil
+	return OperationRejectionResult{Operation: rejected}, nil
 }
 
 func requireOperationFence(operation model.Operation, owner string, now time.Time) error {

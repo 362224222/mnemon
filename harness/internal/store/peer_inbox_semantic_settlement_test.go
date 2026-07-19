@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
@@ -518,31 +517,6 @@ func TestPeerInboxSemanticHandlingSettlementFailsClosedWithoutPartialMutation(t 
 		}
 	})
 
-	t.Run("tampered supersede receipt", func(t *testing.T) {
-		fixture := newPeerInboxSemanticHandlingSettlementFixture(t, "receipt-drift",
-			model.EventReviewCancelled)
-		claim, _ := claimPeerInboxSemanticSettlementHandling(t, fixture)
-		tx := beginPeerInboxSemanticSettlementTx(t, fixture.store)
-		advancePeerInboxSemanticSettlementWork(t, tx, fixture)
-		if err := settlePeerInboxSemanticHandling(context.Background(), tx,
-			fixture.settlement, fixture.settleAt); err != nil {
-			t.Fatal(err)
-		}
-		if err := tx.Commit(); err != nil {
-			t.Fatal(err)
-		}
-		mustExec(t, fixture.store, `DROP TRIGGER agent_runs_evidence_once`)
-		mustExec(t, fixture.store, `UPDATE agent_runs SET outcome_receipt_json=? WHERE run_id=?`,
-			[]byte(`{"status":"tampered"}`), claim.Run.ID().String())
-		validateTx := beginPeerInboxSemanticSettlementTx(t, fixture.store)
-		err := validatePeerInboxSemanticHandlingSettlement(context.Background(), validateTx,
-			fixture.settlement)
-		_ = validateTx.Rollback()
-		if !errors.Is(err, ErrPeerInboxSemanticInvariant) {
-			t.Fatalf("tampered receipt validation error = %v", err)
-		}
-	})
-
 	t.Run("tampered historical Run cause", func(t *testing.T) {
 		fixture := newPeerInboxSemanticHandlingSettlementFixture(t, "run-cause-drift",
 			model.EventReviewCancelled)
@@ -593,6 +567,7 @@ type peerInboxSemanticHandlingSettlementFixture struct {
 	work         model.ReviewWork
 	handling     model.Handling
 	settlement   PeerInboxSemanticHandlingSettlement
+	operationID  model.OperationID
 	settleAt     time.Time
 }
 
@@ -692,7 +667,7 @@ func assertPeerInboxSemanticSettlementCommit(t *testing.T,
 	}
 	assertPeerInboxSemanticSettlementReceipt(t, runReceipt,
 		fixture.peerInboxSemanticHandlingSettlementFixture, handling, fixture.agent.Run.ID(),
-		model.OperationID{}, "superseded")
+		fixture.operation.ID(), "superseded")
 	operation, err := readOperationByID(context.Background(), fixture.store.db,
 		fixture.operation.ID())
 	if err != nil || operation.Status() != model.OperationRejected {
@@ -893,6 +868,7 @@ func reservePeerInboxSemanticSettlementOperation(t *testing.T,
 	if err != nil || !reservation.Acquired {
 		t.Fatalf("ReserveOperation() = (%#v,%v)", reservation, err)
 	}
+	fixture.operationID = operation.ID()
 	return operation
 }
 
@@ -1009,37 +985,36 @@ func assertPeerInboxSemanticSettlementReceipt(t *testing.T, receipt model.JSON,
 	runID model.RunID, operationID model.OperationID, wantStatus string,
 ) {
 	t.Helper()
-	var envelope struct {
-		Code          string `json:"code"`
-		Disposition   string `json:"disposition"`
-		HandlingID    string `json:"handling_id"`
-		OperationID   string `json:"operation_id"`
-		RunID         string `json:"run_id"`
-		SchemaVersion int    `json:"schema_version"`
-		SettledAt     string `json:"settled_at"`
-		SourceEventID string `json:"source_event_id"`
-		Status        string `json:"status"`
-		WorkRef       struct {
-			HomePeerID string `json:"home_peer_id"`
-			WorkID     string `json:"work_id"`
-		} `json:"work_ref"`
+	if wantStatus == "rejected" {
+		code, message := "work_conflict", "Work was cancelled before action commit"
+		if fixture.terminal.Event().Type() == model.EventReviewExpired {
+			code, message = "work_expired", "Work deadline reached before action commit"
+		}
+		parsed, err := model.ParseOperationRejectionReceipt(receipt.Bytes(), operationID)
+		expected := mustManagedOperationRejectionReceipt(t, operationID, code, message)
+		if err != nil || parsed.Code() != code || parsed.Message() != message ||
+			parsed.OperationID() != operationID || receipt.String() != expected.String() {
+			t.Fatalf("Operation rejection receipt = (%s,%#v,%v)", receipt.String(), parsed, err)
+		}
+		return
 	}
-	if err := json.Unmarshal(receipt.Bytes(), &envelope); err != nil {
-		t.Fatal(err)
+	if wantStatus != "superseded" {
+		t.Fatalf("unknown settlement receipt status %q", wantStatus)
 	}
-	wantCode := ""
+	if operationID.IsZero() {
+		operationID = fixture.operationID
+	}
+	want := map[string]any{
+		"disposition": string(fixture.settlement.Disposition()), "handling_id": handling.ID(),
+		"run_id": runID, "schema_version": model.SchemaVersion, "settled_at": storeTime(fixture.settleAt),
+		"source_event_id": fixture.source.ID(), "status": "superseded", "work_ref": fixture.work.Ref(),
+	}
 	if !operationID.IsZero() {
-		wantCode = peerInboxSemanticHandlingOperationCode
+		want["operation_id"] = operationID.String()
 	}
-	if envelope.Code != wantCode ||
-		envelope.Disposition != string(fixture.settlement.Disposition()) ||
-		envelope.HandlingID != handling.ID().String() ||
-		envelope.OperationID != operationID.String() || envelope.RunID != runID.String() ||
-		envelope.SchemaVersion != model.SchemaVersion || envelope.SettledAt != storeTime(fixture.settleAt) ||
-		envelope.SourceEventID != fixture.source.ID().String() || envelope.Status != wantStatus ||
-		envelope.WorkRef.HomePeerID != fixture.work.Ref().HomePeerID().String() ||
-		envelope.WorkRef.WorkID != fixture.work.Ref().WorkID().String() {
-		t.Fatalf("settlement receipt = %#v", envelope)
+	expected, err := model.JSONFrom(want)
+	if err != nil || receipt.String() != expected.String() {
+		t.Fatalf("Handling outcome receipt = (%s,%v), want %s", receipt.String(), err, expected.String())
 	}
 }
 

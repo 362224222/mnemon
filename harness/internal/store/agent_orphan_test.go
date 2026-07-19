@@ -156,10 +156,8 @@ func TestSettleOrphanedAgentRuntimeFailsExactActiveClaim(t *testing.T) {
 	if err != nil || operation.Status() != model.OperationRejected {
 		t.Fatalf("orphaned Operation = (%#v, %v)", operation, err)
 	}
-	operationReceipt, ok := operation.Result()
-	if !ok || operationReceipt.String() != `{"code":"agent_runtime_orphaned","status":"rejected"}` {
-		t.Fatalf("orphaned Operation receipt = (%s, %v)", operationReceipt, ok)
-	}
+	assertManagedOperationRejectionReceipt(t, operation, "internal",
+		"managed Agent Runtime was orphaned before operation completion")
 
 	replay := spec
 	replay.At = settledAt.Add(time.Minute)

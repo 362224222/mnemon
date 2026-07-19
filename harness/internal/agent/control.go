@@ -9,7 +9,7 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 )
 
-const MaxControlDiagnosticBytes = 512
+const MaxControlDiagnosticBytes = model.MaxOperationRejectionMessageBytes
 
 // ControlErrorCode is the closed Agent-owned error vocabulary. Transport
 // adapters must map every value explicitly and fail closed on unknown values.

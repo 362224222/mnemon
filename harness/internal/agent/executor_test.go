@@ -370,23 +370,29 @@ func (c *fakeArtifactCoordinator) Coordinate(_ context.Context,
 }
 
 type fakeExecutionBackend struct {
-	scope       executionScope
-	work        model.ReviewWork
-	operation   model.Operation
-	committed   executionAcceptanceSpec
-	lastReceipt model.JSON
-	rejected    model.Operation
-	rejection   model.JSON
-	commitAt    time.Time
-	rejectAt    time.Time
-	deadline    executionDeadlineSpec
-	deadlineAt  time.Time
-	deadlineErr error
-	deadlines   int
-	commits     int
-	rejects     int
-	commitErr   error
-	rejectErr   error
+	scope               executionScope
+	work                model.ReviewWork
+	operation           model.Operation
+	probeTerminal       model.Operation
+	committed           executionAcceptanceSpec
+	lastReceipt         model.JSON
+	rejected            model.Operation
+	rejection           model.JSON
+	commitAt            time.Time
+	rejectAt            time.Time
+	deadline            executionDeadlineSpec
+	deadlineAt          time.Time
+	deadlineErr         error
+	probeErr            error
+	deadlines           int
+	probeMisses         int
+	probes              int
+	commits             int
+	rejects             int
+	commitErr           error
+	rejectErr           error
+	rejectReplay        bool
+	rejectFreshTerminal bool
 }
 
 func (b *fakeExecutionBackend) Prepare(_ context.Context, channel model.ChannelID,
@@ -404,6 +410,23 @@ func (b *fakeExecutionBackend) GetReviewWork(_ context.Context,
 		return model.ReviewWork{}, errors.New("Work unavailable")
 	}
 	return b.work, nil
+}
+
+func (b *fakeExecutionBackend) Probe(_ context.Context,
+	_ store.ManagedOperationProbeSpec,
+) (store.ManagedOperationProbe, error) {
+	b.probes++
+	if b.probeErr != nil {
+		return store.ManagedOperationProbe{}, b.probeErr
+	}
+	if b.probeMisses > 0 {
+		b.probeMisses--
+		return store.ManagedOperationProbe{}, nil
+	}
+	if b.probeTerminal.Status().Terminal() {
+		return store.ManagedOperationProbe{Operation: b.probeTerminal, Found: true}, nil
+	}
+	return store.ManagedOperationProbe{}, nil
 }
 
 func (b *fakeExecutionBackend) Commit(_ context.Context, spec executionAcceptanceSpec,
@@ -431,27 +454,35 @@ func (b *fakeExecutionBackend) ResolveDeadline(_ context.Context, spec execution
 	if b.deadlineErr != nil {
 		return store.DeadlineResolutionResult{}, b.deadlineErr
 	}
-	receipt, err := model.JSONFrom(teamworkRejectionWire{SchemaVersion: model.SchemaVersion,
-		Status: "error", Code: CodeWorkExpired, Retryable: false, Replayed: false,
-		Message: "Work deadline reached before action commit", OperationID: spec.operation.ID.String()})
+	rejection, err := model.NewOperationRejectionReceipt(model.OperationRejectionSpec{
+		OperationID: spec.operation.ID, Code: string(CodeWorkExpired),
+		Message: "Work deadline reached before action commit",
+	})
 	if err != nil {
 		return store.DeadlineResolutionResult{}, err
 	}
+	receipt := rejection.JSON()
 	b.rejected = executorTerminalOperationValue(b.operation, model.OperationRejected, receipt, at)
 	return store.DeadlineResolutionResult{Receipt: receipt}, nil
 }
 
 func (b *fakeExecutionBackend) Reject(_ context.Context, _ model.OperationID, _ string,
 	at time.Time, result model.JSON,
-) (model.Operation, error) {
+) (store.OperationRejectionResult, error) {
 	b.rejection = result
 	b.rejectAt = at
 	b.rejects++
 	if b.rejectErr != nil {
-		return model.Operation{}, b.rejectErr
+		return store.OperationRejectionResult{}, b.rejectErr
+	}
+	if b.rejectReplay {
+		return store.OperationRejectionResult{Operation: b.rejected, Replayed: true}, nil
+	}
+	if b.rejectFreshTerminal {
+		return store.OperationRejectionResult{Operation: b.rejected}, nil
 	}
 	b.rejected = executorTerminalOperationValue(b.operation, model.OperationRejected, result, at)
-	return b.rejected, nil
+	return store.OperationRejectionResult{Operation: b.rejected}, nil
 }
 
 func fakeAcceptanceReceipt(spec executionAcceptanceSpec, current model.ReviewWork) (model.JSON, error) {
@@ -660,6 +691,39 @@ func executorTerminalOperationValue(base model.Operation, status model.Operation
 		Kind: base.Kind(), RequestDigest: base.RequestDigest(), Status: status,
 		Result: &result, CreatedAt: base.CreatedAt(), FinishedAt: &at})
 	return operation
+}
+
+func executorOperationWithID(t *testing.T, base model.Operation,
+	id model.OperationID,
+) model.Operation {
+	t.Helper()
+	contextHash, hasContext := base.ContextHash()
+	var contextValue *model.Digest
+	if hasContext {
+		contextValue = &contextHash
+	}
+	lease, _ := base.LeaseUntil()
+	operation, err := model.NewOperation(model.OperationSpec{ID: id, ProfileID: base.ProfileID(),
+		AgentRunID: base.AgentRunID(), ClientKeyHash: base.ClientKeyHash(), ContextHash: contextValue,
+		Kind: base.Kind(), RequestDigest: base.RequestDigest(), Status: model.OperationStarted,
+		LeaseOwner: base.LeaseOwner(), LeaseUntil: &lease, CreatedAt: base.CreatedAt()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return operation
+}
+
+func mustExecutorRejectionReceipt(t *testing.T, operationID model.OperationID,
+	code ControlErrorCode, message string,
+) model.JSON {
+	t.Helper()
+	receipt, err := model.NewOperationRejectionReceipt(model.OperationRejectionSpec{
+		OperationID: operationID, Code: string(code), Message: message,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return receipt.JSON()
 }
 
 func executorProfile(t *testing.T, at time.Time, assetRevision string) model.Profile {

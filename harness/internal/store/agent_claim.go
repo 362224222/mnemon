@@ -322,8 +322,12 @@ func recoverExpiredAgentClaim(ctx context.Context, tx *sql.Tx, profile model.Pro
 	if err != nil {
 		return false, err
 	}
-	if err := rejectExpiredRunOperations(ctx, tx, runID, profile.ID(), at); err != nil {
-		return false, err
+	claimHash, _ := handling.ClaimTokenHash()
+	if err := rejectStartedManagedOperations(ctx, tx, managedOperationRejectionSpec{
+		RunID: runID, ProfileID: profile.ID(), ContextHash: claimHash, Code: "context_stale",
+		Message: "managed operation context expired with its Agent Runtime claim", At: at,
+	}); err != nil {
+		return false, fmt.Errorf("%w: reject expired Run operations: %v", ErrAgentClaimInvariant, err)
 	}
 	if err := finishExpiredAgentRun(ctx, tx, runID, handling, runStatus, lastError, at); err != nil {
 		return false, err
@@ -339,7 +343,6 @@ func recoverExpiredAgentClaim(ctx context.Context, tx *sql.Tx, profile model.Pro
 		}
 		availableAt = storeTime(retryAt)
 	}
-	claimHash, _ := handling.ClaimTokenHash()
 	result, err := tx.ExecContext(ctx, `UPDATE agent_handlings SET status=?, available_at=?, claim_owner=NULL,
 		claim_token_hash=NULL, lease_until=NULL, last_disposition=?, last_error=?, dead_at=?, updated_at=?
 		WHERE handling_id=? AND profile_id=? AND status='claimed' AND claim_owner=?
@@ -392,33 +395,6 @@ func requireActiveAgentRunForClaim(ctx context.Context, tx *sql.Tx, profile mode
 		return model.RunID{}, fmt.Errorf("%w: active AgentRun snapshot differs from Handling", ErrAgentClaimInvariant)
 	}
 	return runID, nil
-}
-
-func rejectExpiredRunOperations(ctx context.Context, tx *sql.Tx, runID model.RunID,
-	profile model.ProfileID, at time.Time,
-) error {
-	var future int
-	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM operations
-		WHERE agent_run_id=? AND profile_id=? AND status='started' AND created_at>?)`,
-		runID.String(), profile.String(), storeTime(at)).Scan(&future); err != nil {
-		return fmt.Errorf("claim Agent current: inspect stale operations: %w", err)
-	}
-	if future == 1 {
-		return fmt.Errorf("%w: trusted time precedes a started operation", ErrAgentClaimInvariant)
-	}
-	receipt, err := model.JSONFrom(struct {
-		Code   string `json:"code"`
-		Status string `json:"status"`
-	}{"claim_lease_expired", "rejected"})
-	if err != nil {
-		return fmt.Errorf("claim Agent current: build stale operation receipt: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE operations SET status='rejected', lease_owner=NULL,
-		lease_until=NULL, result_json=?, finished_at=? WHERE agent_run_id=? AND profile_id=? AND status='started'`,
-		receipt.Bytes(), storeTime(at), runID.String(), profile.String()); err != nil {
-		return fmt.Errorf("claim Agent current: reject stale operations: %w", err)
-	}
-	return nil
 }
 
 func finishExpiredAgentRun(ctx context.Context, tx *sql.Tx, runID model.RunID, handling model.Handling,

@@ -11,6 +11,162 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
 
+func TestTeamworkActionExecutorReportsAsyncRejectionWinnerAsReplay(t *testing.T) {
+	t.Parallel()
+	fixture := newExecutorFixture(t, 1)
+	work := fixture.work(t, model.WorkDelivered, 3, 1, false)
+	fixture.backend.work, fixture.backend.commitErr = work, store.ErrWorkCASConflict
+	action := executorAction(t, "close", true, "", "", "", nil)
+	reservation := executorReservation(t, fixture, action, work, true)
+	const message = "managed operation context expired with its Agent Runtime claim"
+	receipt, err := model.NewOperationRejectionReceipt(model.OperationRejectionSpec{
+		OperationID: reservation.Operation.ID(), Code: string(CodeContextStale), Message: message,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.backend.rejected = executorTerminalOperation(t, reservation.Operation,
+		model.OperationRejected, receipt.JSON(), fixture.clock.now)
+	fixture.backend.rejectReplay = true
+	_, apiErr := fixture.executor.ExecuteTeamwork(context.Background(), TeamworkExecutionSpec{
+		Action: action, Reservation: reservation, At: fixture.at,
+	})
+	if apiErr == nil || apiErr.Code != CodeContextStale || apiErr.Message != message ||
+		!apiErr.Replayed || apiErr.OperationID == nil ||
+		*apiErr.OperationID != reservation.Operation.ID().String() || fixture.backend.rejects != 1 {
+		t.Fatalf("async rejection winner = %#v", apiErr)
+	}
+}
+
+func TestTeamworkActionExecutorReportsCommittedRejectionWinnerAsReplay(t *testing.T) {
+	t.Parallel()
+	fixture := newExecutorFixture(t, 1)
+	work := fixture.work(t, model.WorkDelivered, 3, 1, false)
+	fixture.backend.work = work
+	action := executorAction(t, "close", true, "", "", "", nil)
+	reservation := executorReservation(t, fixture, action, work, true)
+	first, apiErr := fixture.executor.ExecuteTeamwork(context.Background(), TeamworkExecutionSpec{
+		Action: action, Reservation: reservation, At: fixture.at,
+	})
+	if apiErr != nil || first.Status != "accepted" {
+		t.Fatalf("prepare committed winner = (%#v, %#v)", first, apiErr)
+	}
+	fixture.backend.rejected = executorTerminalOperation(t, reservation.Operation,
+		model.OperationCommitted, fixture.backend.lastReceipt, fixture.clock.now)
+	fixture.backend.commitErr, fixture.backend.rejectReplay = store.ErrWorkCASConflict, true
+	replay, apiErr := fixture.executor.ExecuteTeamwork(context.Background(), TeamworkExecutionSpec{
+		Action: action, Reservation: reservation, At: fixture.at,
+	})
+	if apiErr != nil || replay.Status != first.Status || replay.OperationID != first.OperationID ||
+		!replay.Replayed || fixture.backend.rejects != 1 {
+		t.Fatalf("committed rejection winner = (%#v, %#v)", replay, apiErr)
+	}
+}
+
+func TestTeamworkActionExecutorReprobesTerminalAfterRejectClockFailure(t *testing.T) {
+	t.Parallel()
+	fixture := newExecutorFixture(t, 1)
+	work := fixture.work(t, model.WorkDelivered, 3, 1, false)
+	action := executorAction(t, "close", true, "", "", "", nil)
+	reservation := executorReservation(t, fixture, action, work, true)
+	fixture.backend.work = model.ReviewWork{}
+	const message = "managed operation context expired with its Agent Runtime claim"
+	receipt, err := model.NewOperationRejectionReceipt(model.OperationRejectionSpec{
+		OperationID: reservation.Operation.ID(), Code: string(CodeContextStale), Message: message,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.backend.probeTerminal = executorTerminalOperation(t, reservation.Operation,
+		model.OperationRejected, receipt.JSON(), fixture.clock.now)
+	fixture.backend.probeMisses, fixture.clock.now = 1, time.Time{}
+	_, apiErr := fixture.executor.ExecuteTeamwork(context.Background(), TeamworkExecutionSpec{
+		Action: action, Reservation: reservation, At: fixture.at,
+	})
+	if apiErr == nil || apiErr.Code != CodeContextStale || apiErr.Message != message ||
+		!apiErr.Replayed || fixture.backend.probes != 2 || fixture.backend.rejects != 0 {
+		t.Fatalf("terminal replay after clock failure = %#v, backend=%#v", apiErr, fixture.backend)
+	}
+}
+
+func TestTeamworkActionExecutorProbesTerminalBeforeRetryableError(t *testing.T) {
+	t.Parallel()
+	fixture := newExecutorFixture(t, 1)
+	fixture.selector.err = ErrAgentSelectionParticipantUnavailable
+	action := executorAction(t, "offer", false, "terminal before retry", "30m",
+		AgentParticipantAuto, nil)
+	reservation := executorReservation(t, fixture, action, model.ReviewWork{}, false)
+	receipt := mustExecutorRejectionReceipt(t, reservation.Operation.ID(), CodeInvalidArgument,
+		"durable rejection won before retry")
+	fixture.backend.probeTerminal = executorTerminalOperation(t, reservation.Operation,
+		model.OperationRejected, receipt, fixture.clock.now)
+	_, apiErr := fixture.executor.ExecuteTeamwork(context.Background(), TeamworkExecutionSpec{
+		Action: action, Reservation: reservation, At: fixture.at,
+	})
+	if apiErr == nil || apiErr.Code != CodeInvalidArgument || !apiErr.Replayed ||
+		fixture.backend.probes != 1 || fixture.backend.rejects != 0 {
+		t.Fatalf("terminal before retryable error = %#v, backend=%#v", apiErr, fixture.backend)
+	}
+}
+
+func TestTeamworkActionExecutorFailsClosedForRejectBackendDrift(t *testing.T) {
+	t.Parallel()
+	t.Run("substituted operation", func(t *testing.T) {
+		fixture := newExecutorFixture(t, 1)
+		work := fixture.work(t, model.WorkDelivered, 3, 1, false)
+		fixture.backend.work, fixture.backend.commitErr = work, store.ErrWorkCASConflict
+		action := executorAction(t, "close", true, "", "", "", nil)
+		reservation := executorReservation(t, fixture, action, work, true)
+		wrongID, _ := model.ParseOperationID("operation-executor-substituted")
+		wrong := executorOperationWithID(t, reservation.Operation, wrongID)
+		receipt := mustExecutorRejectionReceipt(t, wrongID, CodeContextStale, "substituted receipt")
+		fixture.backend.rejected = executorTerminalOperation(t, wrong, model.OperationRejected,
+			receipt, fixture.clock.now)
+		fixture.backend.rejectReplay = true
+		_, apiErr := fixture.executor.ExecuteTeamwork(context.Background(), TeamworkExecutionSpec{
+			Action: action, Reservation: reservation, At: fixture.at,
+		})
+		if apiErr == nil || apiErr.Code != CodeInternal || !apiErr.Replayed ||
+			apiErr.OperationID == nil || *apiErr.OperationID != reservation.Operation.ID().String() {
+			t.Fatalf("substituted terminal authority = %#v", apiErr)
+		}
+	})
+
+	t.Run("fresh receipt differs", func(t *testing.T) {
+		fixture := newExecutorFixture(t, 1)
+		work := fixture.work(t, model.WorkDelivered, 3, 1, false)
+		fixture.backend.work, fixture.backend.commitErr = work, store.ErrWorkCASConflict
+		action := executorAction(t, "close", true, "", "", "", nil)
+		reservation := executorReservation(t, fixture, action, work, true)
+		receipt := mustExecutorRejectionReceipt(t, reservation.Operation.ID(), CodeContextStale,
+			"different fresh receipt")
+		fixture.backend.rejected = executorTerminalOperation(t, reservation.Operation,
+			model.OperationRejected, receipt, fixture.clock.now)
+		fixture.backend.rejectFreshTerminal = true
+		_, apiErr := fixture.executor.ExecuteTeamwork(context.Background(), TeamworkExecutionSpec{
+			Action: action, Reservation: reservation, At: fixture.at,
+		})
+		if apiErr == nil || apiErr.Code != CodeInternal || apiErr.Replayed {
+			t.Fatalf("different fresh terminal receipt = %#v", apiErr)
+		}
+	})
+
+	t.Run("non-terminal success", func(t *testing.T) {
+		fixture := newExecutorFixture(t, 1)
+		work := fixture.work(t, model.WorkDelivered, 3, 1, false)
+		fixture.backend.work, fixture.backend.commitErr = work, store.ErrWorkCASConflict
+		action := executorAction(t, "close", true, "", "", "", nil)
+		reservation := executorReservation(t, fixture, action, work, true)
+		fixture.backend.rejected, fixture.backend.rejectFreshTerminal = reservation.Operation, true
+		_, apiErr := fixture.executor.ExecuteTeamwork(context.Background(), TeamworkExecutionSpec{
+			Action: action, Reservation: reservation, At: fixture.at,
+		})
+		if apiErr == nil || apiErr.Code != CodeInternal || apiErr.Replayed {
+			t.Fatalf("non-terminal rejection success = %#v", apiErr)
+		}
+	})
+}
+
 func TestServiceTeamworkTerminalReplayPrecedesLiveDependencies(t *testing.T) {
 	t.Parallel()
 	fixture, request, first, terminal := committedTeamworkReplayFixture(t, "goal")
@@ -208,6 +364,67 @@ func TestServiceRejectedResolutionReplayPreservesOriginalError(t *testing.T) {
 		!apiErr.Replayed || apiErr.OperationID == nil || *apiErr.OperationID != terminal.ID().String() ||
 		probeCalls != 1 {
 		t.Fatalf("rejected resolution replay = %#v, probe calls %d", apiErr, probeCalls)
+	}
+}
+
+func TestManagedAsyncRejectionReceiptsPreserveClosedPublicErrors(t *testing.T) {
+	t.Parallel()
+	fixture := newExecutorFixture(t, 1)
+	action := executorAction(t, "accept", true, "", "", "", nil)
+	work := fixture.work(t, model.WorkOffered, 1, 1, true)
+	started := executorReservation(t, fixture, action, work, true).Operation
+	tests := []struct {
+		name    string
+		code    ControlErrorCode
+		message string
+	}{
+		{name: "claim expired", code: CodeContextStale,
+			message: "managed operation context expired with its Agent Runtime claim"},
+		{name: "runtime failed", code: CodeInternal,
+			message: "managed Agent Runtime failed before operation completion"},
+		{name: "runtime orphaned", code: CodeInternal,
+			message: "managed Agent Runtime was orphaned before operation completion"},
+		{name: "Work cancelled", code: CodeWorkConflict,
+			message: "Work was cancelled before action commit"},
+		{name: "Work expired", code: CodeWorkExpired,
+			message: "Work deadline reached before action commit"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			receipt, err := model.NewOperationRejectionReceipt(model.OperationRejectionSpec{
+				OperationID: started.ID(), Code: string(test.code), Message: test.message,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			terminal := executorTerminalOperation(t, started, model.OperationRejected,
+				receipt.JSON(), fixture.at)
+			apiErr := decodeRejectedTeamworkOperation(testActionHandlers(t), terminal, true)
+			if apiErr == nil || apiErr.Code != test.code || apiErr.Message != test.message ||
+				!apiErr.Replayed || apiErr.OperationID == nil || *apiErr.OperationID != started.ID().String() {
+				t.Fatalf("async rejection replay = %#v", apiErr)
+			}
+		})
+	}
+}
+
+func TestManagedRejectionReceiptRejectsCodeOutsideAgentUnion(t *testing.T) {
+	t.Parallel()
+	fixture := newExecutorFixture(t, 1)
+	action := executorAction(t, "accept", true, "", "", "", nil)
+	work := fixture.work(t, model.WorkOffered, 1, 1, true)
+	started := executorReservation(t, fixture, action, work, true).Operation
+	receipt, err := model.NewOperationRejectionReceipt(model.OperationRejectionSpec{
+		OperationID: started.ID(), Code: "runtime_made_this_up", Message: "unknown code",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	terminal := executorTerminalOperation(t, started, model.OperationRejected, receipt.JSON(), fixture.at)
+	apiErr := decodeRejectedTeamworkOperation(testActionHandlers(t), terminal, true)
+	if apiErr == nil || apiErr.Code != CodeInternal || apiErr.Message != "rejected managed receipt is invalid" ||
+		!apiErr.Replayed {
+		t.Fatalf("unknown rejection code = %#v", apiErr)
 	}
 }
 

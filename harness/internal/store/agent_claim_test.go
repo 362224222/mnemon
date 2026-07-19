@@ -170,11 +170,15 @@ func TestAgentClaimAttemptBudgetDiesAndFencesStartedOperation(t *testing.T) {
 	handling := insertClaimHandling(t, fixture.store, "handling-dead", events[0], 1, at, at, 0)
 	first := claimCurrent(t, fixture, "owner-dead", "token-dead", at)
 
-	operationID, _ := model.ParseOperationID("operation-expiring-claim")
-	contextHash := model.Sum([]byte("context-expiring-claim"))
+	operationKey := model.Sum([]byte("operation-key-expiring"))
+	operationID, err := managedOperationID(fixture.profile.ID(), operationKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contextHash := model.Sum([]byte("token-dead"))
 	operationLease := at.Add(10 * time.Minute)
 	operation, err := model.NewOperation(model.OperationSpec{ID: operationID, ProfileID: fixture.profile.ID(),
-		AgentRunID: first.Run.ID(), ClientKeyHash: model.Sum([]byte("operation-key-expiring")),
+		AgentRunID: first.Run.ID(), ClientKeyHash: operationKey,
 		ContextHash: &contextHash, Kind: model.OperationTeamworkAccept,
 		RequestDigest: model.Sum([]byte("operation-request-expiring")), Status: model.OperationStarted,
 		LeaseOwner: "operation-owner", LeaseUntil: &operationLease, CreatedAt: at.Add(time.Second)})
@@ -206,7 +210,8 @@ func TestAgentClaimAttemptBudgetDiesAndFencesStartedOperation(t *testing.T) {
 	var resultJSON []byte
 	if err := fixture.store.db.QueryRow("SELECT status,result_json FROM operations WHERE operation_id=?",
 		operationID.String()).Scan(&operationStatus, &resultJSON); err != nil || operationStatus != "rejected" ||
-		string(resultJSON) != `{"code":"claim_lease_expired","status":"rejected"}` {
+		string(resultJSON) != mustManagedOperationRejectionReceipt(t, operationID, "context_stale",
+			"managed operation context expired with its Agent Runtime claim").String() {
 		t.Fatalf("expired operation = (%q, %s, %v)", operationStatus, resultJSON, err)
 	}
 }

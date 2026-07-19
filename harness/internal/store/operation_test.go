@@ -99,13 +99,14 @@ func TestReserveOperationLeaseFenceCaptureAndRejectedReplay(t *testing.T) {
 	if _, err := st.CheckpointOperationCapture(context.Background(), requested.ID(), "owner-two", leaseExpiredAt, arrayCapture); err == nil {
 		t.Fatal("array capture checkpoint was accepted")
 	}
-	result, _ := model.NewJSON([]byte(`{"error":"invalid_action","replayed":false}`))
+	result := mustManagedOperationRejectionReceipt(t, requested.ID(), "invalid_argument",
+		"invalid Teamwork action")
 	if _, err := st.RejectOperation(context.Background(), requested.ID(), "owner-one", leaseExpiredAt,
 		result); !errors.Is(err, ErrOperationFence) {
 		t.Fatalf("stale reject owner error = %v", err)
 	}
 	rejected, err := st.RejectOperation(context.Background(), requested.ID(), "owner-two", leaseExpiredAt, result)
-	if err != nil || rejected.Status() != model.OperationRejected {
+	if err != nil || rejected.Operation.Status() != model.OperationRejected {
 		t.Fatalf("RejectOperation() = (%#v, %v)", rejected, err)
 	}
 	if _, err := st.db.Exec("UPDATE profiles SET enabled=0 WHERE profile_id='teamwork-default'"); err != nil {
@@ -338,7 +339,8 @@ func TestRejectedOperationRetainsProjectionWithoutArtifactForeignKey(t *testing.
 		fixture.operation.LeaseOwner(), fixture.now, fixture.capture); err != nil {
 		t.Fatal(err)
 	}
-	result, _ := model.NewJSON([]byte(`{"error":"invalid_action"}`))
+	result := mustManagedOperationRejectionReceipt(t, fixture.operation.ID(), "invalid_argument",
+		"invalid Teamwork action")
 	if _, err := fixture.store.RejectOperation(context.Background(), fixture.operation.ID(),
 		fixture.operation.LeaseOwner(), fixture.now, result); err != nil {
 		t.Fatal(err)

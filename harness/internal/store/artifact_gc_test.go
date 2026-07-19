@@ -260,7 +260,7 @@ func TestArtifactGCOperationRetentionAndCommittedInvariant(t *testing.T) {
 		if err != nil || started.Swept != 0 {
 			t.Fatalf("started sweep = (%#v, %v)", started, err)
 		}
-		resultJSON, _ := model.NewJSON([]byte(`{"error":"invalid_action"}`))
+		resultJSON := mustManagedOperationRejectionReceipt(t, fixture.operation.ID(), "invalid_argument", "invalid Teamwork action")
 		if _, err := fixture.store.RejectOperation(context.Background(), fixture.operation.ID(),
 			fixture.operation.LeaseOwner(), fixture.now, resultJSON); err != nil {
 			t.Fatal(err)

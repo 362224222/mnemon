@@ -4,29 +4,23 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"strings"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
 
-type teamworkRejectionWire struct {
-	SchemaVersion int              `json:"schema_version"`
-	Status        string           `json:"status"`
-	Code          ControlErrorCode `json:"code"`
-	Retryable     bool             `json:"retryable"`
-	Replayed      bool             `json:"replayed"`
-	Message       string           `json:"message"`
-	OperationID   string           `json:"operation_id"`
-}
-
 func buildTeamworkRejection(operation model.Operation, apiErr *ControlError) (model.JSON, error) {
-	if operation.ID().IsZero() || apiErr == nil || !apiErr.Code.Valid() || apiErr.Message == "" {
+	if operation.ID().IsZero() || apiErr == nil || !apiErr.Code.Valid() || apiErr.Code.Retryable() ||
+		apiErr.Message == "" {
 		return model.JSON{}, errors.New("incomplete Teamwork rejection")
 	}
-	return model.JSONFrom(teamworkRejectionWire{SchemaVersion: model.SchemaVersion, Status: "error",
-		Code: apiErr.Code, Retryable: apiErr.Code.Retryable(), Replayed: false,
-		Message: apiErr.Message, OperationID: operation.ID().String()})
+	receipt, err := model.NewOperationRejectionReceipt(model.OperationRejectionSpec{
+		Code: string(apiErr.Code), Message: apiErr.Message, OperationID: operation.ID(),
+	})
+	if err != nil {
+		return model.JSON{}, err
+	}
+	return receipt.JSON(), nil
 }
 
 func (e *TeamworkActionExecutor) matchesTeamworkOperation(action ValidatedAction,
@@ -36,6 +30,74 @@ func (e *TeamworkActionExecutor) matchesTeamworkOperation(action ValidatedAction
 	requestDigest, err := action.requestDigest(contextHash, hasContext)
 	return operation.ProfileID() == e.profile.ID() && action.matches(e.actions, operation.Kind()) &&
 		err == nil && operation.RequestDigest() == requestDigest
+}
+
+func sameTeamworkOperationIdentity(started, terminal model.Operation) bool {
+	startedContext, startedHasContext := started.ContextHash()
+	terminalContext, terminalHasContext := terminal.ContextHash()
+	return started.ID() == terminal.ID() && started.ProfileID() == terminal.ProfileID() &&
+		started.AgentRunID() == terminal.AgentRunID() &&
+		started.ClientKeyHash() == terminal.ClientKeyHash() && started.Kind() == terminal.Kind() &&
+		started.RequestDigest() == terminal.RequestDigest() &&
+		started.CreatedAt().Equal(terminal.CreatedAt()) && startedHasContext == terminalHasContext &&
+		(!startedHasContext || startedContext == terminalContext)
+}
+
+func (e *TeamworkActionExecutor) probeRejectionTerminal(ctx context.Context,
+	operation model.Operation,
+) (OperationResponse, *ControlError, bool) {
+	contextHash, hasContext := operation.ContextHash()
+	probe, err := e.backend.Probe(ctx, store.ManagedOperationProbeSpec{Profile: e.profile,
+		ClientKeyHash: operation.ClientKeyHash(), RequestDigest: operation.RequestDigest(),
+		Kind: operation.Kind(), ClaimContextHash: contextHash, HasClaimContext: hasContext})
+	if err != nil {
+		return OperationResponse{}, mapTeamworkExecutionError(err), true
+	}
+	if !probe.Found {
+		if !probe.Operation.ID().IsZero() {
+			return OperationResponse{}, operationAPIError(CodeInternal,
+				"Teamwork operation probe returned live authority", operation.ID(), false), true
+		}
+		return OperationResponse{}, nil, false
+	}
+	response, apiErr := e.projectRejectionTerminal(operation,
+		store.OperationRejectionResult{Operation: probe.Operation, Replayed: true}, model.JSON{})
+	return response, apiErr, true
+}
+
+func (e *TeamworkActionExecutor) projectRejectionTerminal(operation model.Operation,
+	result store.OperationRejectionResult, freshEvidence model.JSON,
+) (OperationResponse, *ControlError) {
+	terminal := result.Operation
+	if !sameTeamworkOperationIdentity(operation, terminal) {
+		return OperationResponse{}, operationAPIError(CodeInternal,
+			"terminal Teamwork operation authority differs", operation.ID(), result.Replayed)
+	}
+	if !terminal.Status().Terminal() {
+		return OperationResponse{}, operationAPIError(CodeInternal,
+			"operation rejection backend returned non-terminal authority", operation.ID(), result.Replayed)
+	}
+	if !result.Replayed {
+		stored, hasResult := terminal.Result()
+		if terminal.Status() != model.OperationRejected || freshEvidence.IsZero() || !hasResult ||
+			stored.String() != freshEvidence.String() {
+			return OperationResponse{}, operationAPIError(CodeInternal,
+				"fresh Teamwork rejection receipt differs", operation.ID(), false)
+		}
+	}
+	switch terminal.Status() {
+	case model.OperationCommitted:
+		response, err := decodeCommittedTeamworkOperation(e.actions, terminal, result.Replayed)
+		if err != nil {
+			return OperationResponse{}, NewControlError(CodeInternal,
+				"terminal Teamwork receipt is invalid")
+		}
+		return response, nil
+	case model.OperationRejected:
+		return OperationResponse{}, decodeRejectedTeamworkOperation(e.actions, terminal, result.Replayed)
+	}
+	return OperationResponse{}, operationAPIError(CodeInternal,
+		"terminal Teamwork operation status is invalid", operation.ID(), result.Replayed)
 }
 
 func (e *TeamworkActionExecutor) replayTerminalTeamworkOperation(action ValidatedAction,
@@ -86,17 +148,13 @@ func decodeManagedRejectionReceipt(result model.JSON, operationID model.Operatio
 		return operationAPIError(CodeInternal, "rejected managed receipt is invalid",
 			operationID, replayed)
 	}
-	var wire teamworkRejectionWire
-	decoder := json.NewDecoder(strings.NewReader(result.String()))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&wire); err != nil || wire.SchemaVersion != model.SchemaVersion ||
-		requireExecutionJSONEOF(decoder) != nil || wire.Status != "error" || wire.Replayed ||
-		wire.OperationID != operationID.String() || !wire.Code.Valid() || wire.Message == "" ||
-		wire.Retryable != wire.Code.Retryable() {
+	receipt, err := model.ParseOperationRejectionReceipt(result.Bytes(), operationID)
+	code := ControlErrorCode(receipt.Code())
+	if err != nil || !code.Valid() || code.Retryable() {
 		return operationAPIError(CodeInternal, "rejected managed receipt is invalid",
 			operationID, replayed)
 	}
-	return operationAPIError(wire.Code, wire.Message, operationID, replayed)
+	return operationAPIError(code, receipt.Message(), operationID, replayed)
 }
 
 func requireOperationCapabilities(metadata ControlMetadata,

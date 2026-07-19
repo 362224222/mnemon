@@ -496,10 +496,8 @@ func TestAgentRuntimeEvidenceAtomicallySettlesExpiredClaim(t *testing.T) {
 		if err != nil || operation.Status() != model.OperationRejected {
 			t.Fatalf("completion replay Operation = (%#v, %v)", operation, err)
 		}
-		result, hasResult := operation.Result()
-		if !hasResult || result.String() != `{"code":"claim_lease_expired","status":"rejected"}` {
-			t.Fatalf("completion replay Operation receipt = (%s, %v)", result, hasResult)
-		}
+		assertManagedOperationRejectionReceipt(t, operation, "context_stale",
+			"managed operation context expired with its Agent Runtime claim")
 	})
 
 	t.Run("failure after lease rejects operation without moving backoff", func(t *testing.T) {
@@ -528,10 +526,8 @@ func TestAgentRuntimeEvidenceAtomicallySettlesExpiredClaim(t *testing.T) {
 		if err != nil || operation.Status() != model.OperationRejected {
 			t.Fatalf("expired Runtime Operation = (%#v, %v)", operation, err)
 		}
-		result, hasResult := operation.Result()
-		if !hasResult || result.String() != `{"code":"claim_lease_expired","status":"rejected"}` {
-			t.Fatalf("expired Runtime Operation receipt = (%s, %v)", result, hasResult)
-		}
+		assertManagedOperationRejectionReceipt(t, operation, "context_stale",
+			"managed operation context expired with its Agent Runtime claim")
 		completionAt, completed := failed.Run.CompletionAt()
 		if !completed || !completionAt.Equal(failureAt) {
 			t.Fatalf("late failure completion = (%s, %v)", completionAt, completed)
@@ -717,10 +713,8 @@ func TestAgentRuntimeFailureAtomicallyRejectsOperationAndRequeues(t *testing.T) 
 	if err != nil || operation.Status() != model.OperationRejected {
 		t.Fatalf("failed Runtime Operation = (%#v, %v)", operation, err)
 	}
-	operationReceipt, _ := operation.Result()
-	if operationReceipt.String() != `{"code":"agent_runtime_failed","status":"rejected"}` {
-		t.Fatalf("failure Operation receipt = %s", operationReceipt)
-	}
+	assertManagedOperationRejectionReceipt(t, operation, "internal",
+		"managed Agent Runtime failed before operation completion")
 
 	replaySpec := spec
 	replaySpec.At = failureAt.Add(time.Second)
