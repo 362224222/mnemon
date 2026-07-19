@@ -650,10 +650,50 @@ CREATE TABLE artifact_pins (
     owner_kind IN ('event','handling','publication','delivery','inbox','retention')
   ),
   owner_id           TEXT NOT NULL,
-  expires_at         TEXT,
-  created_at         TEXT NOT NULL,
-  PRIMARY KEY (root_digest, owner_kind, owner_id)
+  expires_at         TEXT CHECK (
+    expires_at IS NULL OR (
+      typeof(expires_at) = 'text'
+      AND length(expires_at) = 30
+      AND expires_at GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]Z'
+      AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(expires_at, 1, 19) || 'Z')) IS NOT NULL
+      AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(expires_at, 1, 19) || 'Z')) = substr(expires_at, 1, 19)
+      AND expires_at BETWEEN '1677-09-21T00:12:43.145224192Z' AND '2262-04-11T23:47:16.854775807Z'
+    )
+  ),
+  created_at         TEXT NOT NULL CHECK (
+    typeof(created_at) = 'text'
+    AND length(created_at) = 30
+    AND created_at GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]Z'
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(created_at, 1, 19) || 'Z')) IS NOT NULL
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(created_at, 1, 19) || 'Z')) = substr(created_at, 1, 19)
+    AND created_at BETWEEN '1677-09-21T00:12:43.145224192Z' AND '2262-04-11T23:47:16.854775807Z'
+  ),
+  PRIMARY KEY (root_digest, owner_kind, owner_id),
+  CHECK (owner_kind = 'inbox' OR expires_at IS NULL),
+  CHECK (expires_at IS NULL OR expires_at > created_at)
 );
+
+-- Expiring Inbox pins make unaccepted staging ownership directly enumerable;
+-- every root remains protected independently by all of its other owners.
+CREATE INDEX artifact_pins_expiry_idx
+  ON artifact_pins(expires_at,root_digest,owner_kind,owner_id)
+  WHERE expires_at IS NOT NULL;
+
+CREATE TRIGGER artifact_pins_identity_immutable
+BEFORE UPDATE OF root_digest, owner_kind, owner_id, created_at ON artifact_pins
+WHEN NEW.root_digest <> OLD.root_digest
+  OR NEW.owner_kind <> OLD.owner_kind
+  OR NEW.owner_id <> OLD.owner_id
+  OR NEW.created_at <> OLD.created_at
+BEGIN SELECT RAISE(ABORT, 'Artifact pin identity is immutable'); END;
+
+CREATE TRIGGER artifact_pins_expiry_managed
+BEFORE UPDATE OF expires_at ON artifact_pins
+WHEN OLD.owner_kind <> 'inbox' OR NEW.owner_kind <> 'inbox'
+  OR (OLD.expires_at IS NULL AND NEW.expires_at IS NOT NULL)
+  OR (OLD.expires_at IS NOT NULL AND NEW.expires_at IS NOT NULL
+    AND NEW.expires_at < OLD.expires_at)
+BEGIN SELECT RAISE(ABORT, 'Artifact pin expiry cannot regress'); END;
 
 CREATE TABLE artifact_provenance (
   root_digest        TEXT NOT NULL REFERENCES artifact_roots(root_digest),
@@ -1465,6 +1505,14 @@ CREATE TABLE peer_inbox (
       AND lease_owner IS NULL AND lease_until IS NULL)
   )
 );
+
+CREATE TRIGGER artifact_pins_inbox_owner_insert
+BEFORE INSERT ON artifact_pins
+WHEN NEW.owner_kind = 'inbox' AND NOT EXISTS (
+  SELECT 1 FROM peer_inbox
+  WHERE inbox_id = NEW.owner_id AND is_audience = 1
+)
+BEGIN SELECT RAISE(ABORT, 'Inbox Artifact pin requires an audience Inbox owner'); END;
 
 -- Pending Inbox pressure is materialized at both scopes so admission never
 -- scans permanent Inbox or historical Channel evidence.

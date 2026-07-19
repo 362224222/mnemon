@@ -71,6 +71,66 @@ func TestVerifiedArtifactClosureSharesBlocksAndPromotesExistingStage(t *testing.
 	}
 }
 
+func TestVerifiedArtifactClosureRaisesNewRootVerificationToSharedBlockTime(t *testing.T) {
+	st := openTestStore(t)
+	closure := artifactClosureFixture(t, "shared-block-time")
+	blockUses := make(map[model.Digest]int)
+	for _, row := range closure.RootBlocks {
+		blockUses[row.BlockDigest]++
+	}
+	var sharedDigest model.Digest
+	for digest, uses := range blockUses {
+		if uses == 1 {
+			sharedDigest = digest
+			break
+		}
+	}
+	if sharedDigest.IsZero() {
+		t.Fatal("fixture has no block isolated to one new root")
+	}
+	var shared VerifiedArtifactBlock
+	for _, block := range closure.Blocks {
+		if block.Digest == sharedDigest {
+			shared = block
+			break
+		}
+	}
+	if shared.Digest.IsZero() {
+		t.Fatal("fixture shared block is missing")
+	}
+	laterAt := shared.CreatedAt.Add(time.Hour)
+	if _, err := st.db.Exec(`INSERT INTO artifact_blocks(block_digest,size_bytes,created_at)
+		VALUES(?,?,?)`, shared.Digest.String(), shared.SizeBytes, storeTime(laterAt)); err != nil {
+		t.Fatal(err)
+	}
+
+	checkpoint, err := st.CheckpointVerifiedArtifactClosure(context.Background(), closure)
+	if err != nil || checkpoint.Replayed {
+		t.Fatalf("shared-block time checkpoint = (%#v,%v)", checkpoint, err)
+	}
+	for _, root := range checkpoint.Closure.Roots {
+		usesShared := false
+		for _, row := range closure.RootBlocks {
+			usesShared = usesShared || row.RootDigest == root.RootDigest && row.BlockDigest == shared.Digest
+		}
+		want := closure.Roots[0].VerifiedAt
+		for _, requested := range closure.Roots {
+			if requested.RootDigest == root.RootDigest {
+				want = requested.VerifiedAt
+				break
+			}
+		}
+		if usesShared {
+			want = laterAt
+		}
+		if !root.VerifiedAt.Equal(want) {
+			t.Fatalf("root %s verified_at = %s, want %s", root.RootDigest,
+				root.VerifiedAt, want)
+		}
+	}
+	assertArtifactClosureCounts(t, st, 2, 2, 3)
+}
+
 func TestVerifiedArtifactClosureConflictRollsBackEveryNewRow(t *testing.T) {
 	st := openTestStore(t)
 	base := artifactClosureFixture(t, "base")

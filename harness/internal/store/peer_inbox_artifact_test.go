@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -373,6 +374,339 @@ func TestPeerInboxArtifactRenewRetryAndFenceReplay(t *testing.T) {
 	}
 }
 
+func TestRenewPeerInboxArtifactLeaseExtendsDurableStageOwnership(t *testing.T) {
+	t.Parallel()
+	fixture, claim, _, closure := newPeerInboxArtifactClosureClaim(t,
+		"artifact-renew-stage-ownership", false)
+	stageAt := fixture.at.Add(2 * time.Second)
+	if _, err := fixture.store.StagePeerInboxArtifactClosure(context.Background(),
+		StagePeerInboxArtifactClosureSpec{Fence: claim.Fence(), Closure: closure,
+			At: stageAt}); err != nil {
+		t.Fatal(err)
+	}
+	initialExpiry := claim.Fence().LeaseUntil().Add(peerInboxArtifactStageTTL)
+	assertPeerInboxArtifactStagePins(t, fixture.store, claim.InboxID(),
+		claim.RequiredArtifactRoots(), initialExpiry)
+
+	fence := claim.Fence()
+	replayFence := fence
+	renewAt := stageAt
+	for !renewAt.After(initialExpiry) {
+		renewAt = fence.LeaseUntil().Add(-time.Second)
+		replayFence = fence
+		renewed, err := fixture.store.RenewPeerInboxArtifactLease(context.Background(),
+			RenewPeerInboxArtifactSpec{Fence: fence, At: renewAt})
+		if err != nil || !renewed.Changed() || renewed.Replayed() {
+			t.Fatalf("renew at %s = (%#v,%v)", renewAt, renewed, err)
+		}
+		fence = renewed.Fence()
+	}
+	wantExpiry := fence.LeaseUntil().Add(peerInboxArtifactStageTTL)
+	assertPeerInboxArtifactStagePins(t, fixture.store, claim.InboxID(),
+		claim.RequiredArtifactRoots(), wantExpiry)
+
+	replayed, err := fixture.store.RenewPeerInboxArtifactLease(context.Background(),
+		RenewPeerInboxArtifactSpec{Fence: replayFence, At: renewAt})
+	if err != nil || replayed.Changed() || !replayed.Replayed() || replayed.Fence() != fence {
+		t.Fatalf("final renewal response-loss replay = (%#v,%v)", replayed, err)
+	}
+	assertPeerInboxArtifactStagePins(t, fixture.store, claim.InboxID(),
+		claim.RequiredArtifactRoots(), wantExpiry)
+
+	readyAt := renewAt.Add(time.Second)
+	ready, err := fixture.store.MarkPeerInboxArtifactReady(context.Background(),
+		MarkPeerInboxArtifactReadySpec{Fence: fence, At: readyAt})
+	if err != nil || !ready.Changed() || ready.Status() != model.InboxReady {
+		t.Fatalf("ready after initial stage TTL = (%#v,%v)", ready, err)
+	}
+}
+
+func TestRenewPeerInboxArtifactReplayConvergesAfterLaterStage(t *testing.T) {
+	t.Parallel()
+	fixture, claim, _, closure := newPeerInboxArtifactClosureClaim(t,
+		"artifact-renew-before-stage", false)
+	renewAt := claim.Fence().LeaseUntil().Add(-time.Minute)
+	renewed, err := fixture.store.RenewPeerInboxArtifactLease(context.Background(),
+		RenewPeerInboxArtifactSpec{Fence: claim.Fence(), At: renewAt})
+	if err != nil || !renewed.Changed() {
+		t.Fatalf("renew before stage = (%#v,%v)", renewed, err)
+	}
+	stageAt := renewAt.Add(time.Second)
+	if _, err := fixture.store.StagePeerInboxArtifactClosure(context.Background(),
+		StagePeerInboxArtifactClosureSpec{Fence: renewed.Fence(), Closure: closure,
+			At: stageAt}); err != nil {
+		t.Fatal(err)
+	}
+	wantExpiry := renewed.Fence().LeaseUntil().Add(peerInboxArtifactStageTTL)
+	assertPeerInboxArtifactStagePins(t, fixture.store, claim.InboxID(),
+		claim.RequiredArtifactRoots(), wantExpiry)
+
+	replayed, err := fixture.store.RenewPeerInboxArtifactLease(context.Background(),
+		RenewPeerInboxArtifactSpec{Fence: claim.Fence(), At: renewAt})
+	if err != nil || replayed.Changed() || !replayed.Replayed() ||
+		replayed.Fence() != renewed.Fence() {
+		t.Fatalf("renew replay after later stage = (%#v,%v)", replayed, err)
+	}
+}
+
+func TestStagePeerInboxArtifactClosureIsExactDurableAndRestartSafe(t *testing.T) {
+	t.Parallel()
+
+	t.Run("response loss restart and staged visibility", func(t *testing.T) {
+		fixture, claim, root, closure := newPeerInboxArtifactClosureClaim(t,
+			"artifact-stage-restart", false)
+		stageAt := fixture.at.Add(2 * time.Second)
+		spec := StagePeerInboxArtifactClosureSpec{Fence: claim.Fence(), Closure: closure, At: stageAt}
+		staged, err := fixture.store.StagePeerInboxArtifactClosure(context.Background(), spec)
+		if err != nil || !staged.Changed() || staged.Replayed() {
+			t.Fatalf("first stage = (%#v,%v)", staged, err)
+		}
+		assertPeerInboxArtifactRootState(t, fixture.store, root.RootDigest, "staged")
+		assertPeerInboxArtifactStagePins(t, fixture.store, claim.InboxID(),
+			claim.RequiredArtifactRoots(), claim.Fence().LeaseUntil().Add(peerInboxArtifactStageTTL))
+		if _, err := fixture.store.GetVerifiedArtifactRoot(context.Background(), root.RootDigest); !errors.Is(err, ErrArtifactUnverified) {
+			t.Fatalf("staged root visible as verified: %v", err)
+		}
+		replay, err := fixture.store.StagePeerInboxArtifactClosure(context.Background(), spec)
+		if err != nil || replay.Changed() || !replay.Replayed() {
+			t.Fatalf("stage response-loss replay = (%#v,%v)", replay, err)
+		}
+
+		path := fixture.store.Path()
+		if err := fixture.store.Close(); err != nil {
+			t.Fatal(err)
+		}
+		restarted, err := OpenExisting(context.Background(), path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = restarted.Close() })
+		fixture.store = restarted
+		restartReplay, err := restarted.StagePeerInboxArtifactClosure(context.Background(), spec)
+		if err != nil || restartReplay.Changed() || !restartReplay.Replayed() {
+			t.Fatalf("restart stage replay = (%#v,%v)", restartReplay, err)
+		}
+		checkpoint, found, err := restarted.ReadPeerInboxArtifactRoot(context.Background(),
+			ReadPeerInboxArtifactRootSpec{Fence: claim.Fence(), RootDigest: root.RootDigest, At: stageAt})
+		if err != nil || !found || checkpoint.State() != PeerInboxArtifactRootStaged ||
+			checkpoint.RootDigest() != root.RootDigest {
+			t.Fatalf("restart staged checkpoint = (%#v,found %t,%v)", checkpoint, found, err)
+		}
+	})
+
+	t.Run("later shared timestamps make an older observation stale", func(t *testing.T) {
+		fixture, claim, root, closure := newPeerInboxArtifactClosureClaim(t,
+			"artifact-stage-concurrent-time", false)
+		olderAt := fixture.at.Add(2 * time.Second)
+		laterAt := olderAt.Add(2 * time.Second)
+		later := VerifiedArtifactClosure{
+			Roots:      append([]VerifiedArtifactRoot(nil), closure.Roots...),
+			Blocks:     append([]VerifiedArtifactBlock(nil), closure.Blocks...),
+			RootBlocks: append([]VerifiedArtifactRootBlock(nil), closure.RootBlocks...),
+		}
+		for index := range later.Roots {
+			later.Roots[index].CreatedAt = laterAt
+			later.Roots[index].VerifiedAt = laterAt
+		}
+		for index := range later.Blocks {
+			later.Blocks[index].CreatedAt = laterAt
+		}
+		if _, err := fixture.store.StagePeerInboxArtifactClosure(context.Background(),
+			StagePeerInboxArtifactClosureSpec{Fence: claim.Fence(), Closure: later,
+				At: laterAt}); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := fixture.store.ReadPeerInboxArtifactRoot(context.Background(),
+			ReadPeerInboxArtifactRootSpec{Fence: claim.Fence(), RootDigest: root.RootDigest,
+				At: olderAt}); !errors.Is(err, ErrPeerInboxArtifactStale) {
+			t.Fatalf("older cached-root observation error = %v", err)
+		}
+		if _, err := fixture.store.StagePeerInboxArtifactClosure(context.Background(),
+			StagePeerInboxArtifactClosureSpec{Fence: claim.Fence(), Closure: closure,
+				At: olderAt}); !errors.Is(err, ErrPeerInboxArtifactStale) {
+			t.Fatalf("older shared stage error = %v", err)
+		}
+		if _, err := fixture.store.MarkPeerInboxArtifactReady(context.Background(),
+			MarkPeerInboxArtifactReadySpec{Fence: claim.Fence(), At: olderAt}); !errors.Is(err, ErrPeerInboxArtifactStale) {
+			t.Fatalf("older ready observation error = %v", err)
+		}
+		assertPeerInboxArtifactRootState(t, fixture.store, root.RootDigest, "staged")
+		assertPeerInboxArtifactState(t, fixture.store, "waiting_artifact", 1,
+			"artifact-stage-concurrent-time-worker", true)
+		if _, err := fixture.store.MarkPeerInboxArtifactReady(context.Background(),
+			MarkPeerInboxArtifactReadySpec{Fence: claim.Fence(), At: laterAt.Add(time.Second)}); err != nil {
+			t.Fatalf("fresh ready after stale observation: %v", err)
+		}
+	})
+
+	t.Run("fence authority exact roots and rollback", func(t *testing.T) {
+		fixture, claim, _, closure := newPeerInboxArtifactClosureClaim(t,
+			"artifact-stage-fail-closed", false)
+		stageAt := fixture.at.Add(2 * time.Second)
+		wrong := claim.Fence()
+		wrong.attempt++
+		if _, err := fixture.store.StagePeerInboxArtifactClosure(context.Background(),
+			StagePeerInboxArtifactClosureSpec{Fence: wrong, Closure: closure, At: stageAt}); !errors.Is(err, ErrPeerInboxArtifactStale) {
+			t.Fatalf("wrong stage fence error = %v", err)
+		}
+		other, _, _ := newArtifactSourceClosure(t, "artifact-stage-other-root",
+			[]byte("other"), fixture.at)
+		if _, err := fixture.store.StagePeerInboxArtifactClosure(context.Background(),
+			StagePeerInboxArtifactClosureSpec{Fence: claim.Fence(), Closure: other, At: stageAt}); !errors.Is(err, ErrPeerInboxArtifactInput) {
+			t.Fatalf("wrong exact root error = %v", err)
+		}
+		mustExec(t, fixture.store, `CREATE TRIGGER test_artifact_stage_pin_abort
+			BEFORE INSERT ON artifact_pins WHEN NEW.owner_kind='inbox'
+			BEGIN SELECT RAISE(ABORT, 'forced stage rollback'); END`)
+		if _, err := fixture.store.StagePeerInboxArtifactClosure(context.Background(),
+			StagePeerInboxArtifactClosureSpec{Fence: claim.Fence(), Closure: closure, At: stageAt}); !errors.Is(err, ErrPeerInboxArtifactInvariant) {
+			t.Fatalf("forced stage rollback error = %v", err)
+		}
+		for _, table := range []string{"artifact_roots", "artifact_blocks", "artifact_root_blocks", "artifact_pins"} {
+			var count int
+			if err := fixture.store.db.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&count); err != nil || count != 0 {
+				t.Fatalf("%s after stage rollback = (%d,%v)", table, count, err)
+			}
+		}
+	})
+
+	t.Run("authority loss does not install metadata", func(t *testing.T) {
+		fixture, claim, _, closure := newPeerInboxArtifactClosureClaim(t,
+			"artifact-stage-authority", false)
+		stageAt := fixture.at.Add(2 * time.Second)
+		mustExec(t, fixture.store, `UPDATE channels SET topic_state='not_joined'
+			WHERE channel_id=?`, fixture.channel.Channel().ID().String())
+		if _, err := fixture.store.StagePeerInboxArtifactClosure(context.Background(),
+			StagePeerInboxArtifactClosureSpec{Fence: claim.Fence(), Closure: closure, At: stageAt}); !errors.Is(err, ErrPeerInboxArtifactAuthority) {
+			t.Fatalf("stage after authority loss error = %v", err)
+		}
+		var count int
+		if err := fixture.store.db.QueryRow(`SELECT COUNT(*) FROM artifact_roots`).Scan(&count); err != nil || count != 0 {
+			t.Fatalf("roots after authority loss = (%d,%v)", count, err)
+		}
+	})
+
+	t.Run("shared roots and blocks retain independent Inbox owners", func(t *testing.T) {
+		fixture := newPeerInboxFixture(t, "artifact-stage-shared", 0)
+		closureA, rootA, _ := newArtifactSourceClosure(t, "artifact-stage-shared-a",
+			[]byte("shared-block"), fixture.at)
+		closureB, rootB, _ := newArtifactSourceClosure(t, "artifact-stage-shared-b",
+			[]byte("shared-block"), fixture.at)
+		closure := combinePeerInboxArtifactClosures(t, closureA, closureB)
+		if len(closure.Blocks) != 1 {
+			t.Fatalf("combined shared closure blocks = %d, want 1", len(closure.Blocks))
+		}
+		firstPut := fixture.put(t, peerInboxArtifactPublication(t, fixture, 1, 1,
+			"artifact-stage-shared-first", []model.Digest{rootA.RootDigest, rootB.RootDigest}), fixture.at)
+		secondPut := fixture.put(t, peerInboxArtifactPublication(t, fixture, 2, 2,
+			"artifact-stage-shared-second", []model.Digest{rootB.RootDigest, rootA.RootDigest}),
+			fixture.at.Add(time.Second))
+		firstAt := fixture.at.Add(2 * time.Second)
+		first := mustClaimPeerInboxArtifact(t, fixture.store, "artifact-stage-shared-first", firstAt)
+		if _, err := fixture.store.StagePeerInboxArtifactClosure(context.Background(),
+			StagePeerInboxArtifactClosureSpec{Fence: first.Fence(), Closure: closure, At: firstAt}); err != nil {
+			t.Fatal(err)
+		}
+		secondAt := firstAt.Add(time.Second)
+		second := mustClaimPeerInboxArtifact(t, fixture.store, "artifact-stage-shared-second", secondAt)
+		if second.InboxID() != secondPut.InboxID || first.InboxID() != firstPut.InboxID {
+			t.Fatalf("shared Inbox claim order = (%s,%s)", first.InboxID(), second.InboxID())
+		}
+		if _, found, err := fixture.store.ReadPeerInboxArtifactRoot(context.Background(),
+			ReadPeerInboxArtifactRootSpec{Fence: second.Fence(), RootDigest: rootA.RootDigest,
+				At: secondAt}); err != nil || found {
+			t.Fatalf("other Inbox unowned stage = (found %t,%v)", found, err)
+		}
+		secondStage, err := fixture.store.StagePeerInboxArtifactClosure(context.Background(),
+			StagePeerInboxArtifactClosureSpec{Fence: second.Fence(), Closure: closure, At: secondAt})
+		if err != nil || !secondStage.Changed() || secondStage.Replayed() {
+			t.Fatalf("second shared stage = (%#v,%v)", secondStage, err)
+		}
+		for table, want := range map[string]int{"artifact_roots": 2, "artifact_blocks": 1,
+			"artifact_root_blocks": 2, "artifact_pins": 4} {
+			var count int
+			if err := fixture.store.db.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&count); err != nil || count != want {
+				t.Fatalf("shared %s count = (%d,%v), want %d", table, count, err, want)
+			}
+		}
+		if _, err := fixture.store.MarkPeerInboxArtifactReady(context.Background(),
+			MarkPeerInboxArtifactReadySpec{Fence: first.Fence(), At: secondAt.Add(time.Second)}); err != nil {
+			t.Fatal(err)
+		}
+		assertPeerInboxArtifactStagePins(t, fixture.store, second.InboxID(),
+			second.RequiredArtifactRoots(), second.Fence().LeaseUntil().Add(peerInboxArtifactStageTTL))
+		if _, err := fixture.store.MarkPeerInboxArtifactReady(context.Background(),
+			MarkPeerInboxArtifactReadySpec{Fence: second.Fence(), At: secondAt.Add(2 * time.Second)}); err != nil {
+			t.Fatal(err)
+		}
+		assertPeerInboxArtifactPins(t, fixture.store, first.InboxID(), first.RequiredArtifactRoots())
+		assertPeerInboxArtifactPins(t, fixture.store, second.InboxID(), second.RequiredArtifactRoots())
+		assertPeerInboxArtifactRootState(t, fixture.store, rootA.RootDigest, "verified")
+		assertPeerInboxArtifactRootState(t, fixture.store, rootB.RootDigest, "verified")
+	})
+}
+
+func TestPeerInboxArtifactStagePinsSurviveRetryAndBoundQuarantine(t *testing.T) {
+	t.Parallel()
+
+	t.Run("retry extends exact stage ownership", func(t *testing.T) {
+		fixture, claim, _, closure := newPeerInboxArtifactClosureClaim(t,
+			"artifact-stage-retry", false)
+		stageAt := fixture.at.Add(2 * time.Second)
+		if _, err := fixture.store.StagePeerInboxArtifactClosure(context.Background(),
+			StagePeerInboxArtifactClosureSpec{Fence: claim.Fence(), Closure: closure, At: stageAt}); err != nil {
+			t.Fatal(err)
+		}
+		retryAt := claim.Fence().LeaseUntil().Add(-time.Second)
+		spec := RetryPeerInboxArtifactSpec{Fence: claim.Fence(),
+			Diagnostic: PeerInboxArtifactRetryTimeout, RetryAfter: 17 * time.Second, At: retryAt}
+		result, err := fixture.store.RetryPeerInboxArtifact(context.Background(), spec)
+		if err != nil || !result.Changed() || result.Replayed() {
+			t.Fatalf("retry staged closure = (%#v,%v)", result, err)
+		}
+		wantExpiry := result.NextAttemptAt().Add(peerInboxArtifactStageTTL)
+		assertPeerInboxArtifactStagePins(t, fixture.store, claim.InboxID(),
+			claim.RequiredArtifactRoots(), wantExpiry)
+		replay, err := fixture.store.RetryPeerInboxArtifact(context.Background(), spec)
+		if err != nil || replay.Changed() || !replay.Replayed() {
+			t.Fatalf("staged retry replay = (%#v,%v)", replay, err)
+		}
+		reclaimed := mustClaimPeerInboxArtifact(t, fixture.store,
+			"artifact-stage-retry-reclaimed", result.NextAttemptAt())
+		refreshAt := result.NextAttemptAt().Add(time.Second)
+		refreshed, err := fixture.store.StagePeerInboxArtifactClosure(context.Background(),
+			StagePeerInboxArtifactClosureSpec{Fence: reclaimed.Fence(), Closure: closure, At: refreshAt})
+		if err != nil || !refreshed.Changed() || refreshed.Replayed() {
+			t.Fatalf("reclaimed stage refresh = (%#v,%v)", refreshed, err)
+		}
+		assertPeerInboxArtifactStagePins(t, fixture.store, claim.InboxID(),
+			claim.RequiredArtifactRoots(), reclaimed.Fence().LeaseUntil().Add(peerInboxArtifactStageTTL))
+	})
+
+	t.Run("quarantine retains one bounded cleanup window", func(t *testing.T) {
+		fixture, claim, _, closure := newPeerInboxArtifactClosureClaim(t,
+			"artifact-stage-quarantine", false)
+		stageAt := fixture.at.Add(2 * time.Second)
+		if _, err := fixture.store.StagePeerInboxArtifactClosure(context.Background(),
+			StagePeerInboxArtifactClosureSpec{Fence: claim.Fence(), Closure: closure, At: stageAt}); err != nil {
+			t.Fatal(err)
+		}
+		quarantineAt := stageAt.Add(time.Second)
+		spec := QuarantinePeerInboxArtifactSpec{Fence: claim.Fence(),
+			Diagnostic: PeerInboxArtifactDigestMismatch, At: quarantineAt}
+		result, err := fixture.store.QuarantinePeerInboxArtifact(context.Background(), spec)
+		if err != nil || !result.Changed() || result.Replayed() {
+			t.Fatalf("quarantine staged closure = (%#v,%v)", result, err)
+		}
+		assertPeerInboxArtifactStagePins(t, fixture.store, claim.InboxID(),
+			claim.RequiredArtifactRoots(), claim.Fence().LeaseUntil().Add(peerInboxArtifactStageTTL))
+		replay, err := fixture.store.QuarantinePeerInboxArtifact(context.Background(), spec)
+		if err != nil || replay.Changed() || !replay.Replayed() {
+			t.Fatalf("staged quarantine replay = (%#v,%v)", replay, err)
+		}
+	})
+}
+
 func TestPeerInboxArtifactReadyRequiresSealedClosureAndOwnsPins(t *testing.T) {
 	t.Parallel()
 
@@ -387,6 +721,7 @@ func TestPeerInboxArtifactReadyRequiresSealedClosureAndOwnsPins(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
+		closure := combinePeerInboxArtifactClosures(t, closureA, closureB)
 		publication := peerInboxArtifactPublication(t, fixture, 1, 1, "artifact-ready-multi",
 			[]model.Digest{rootB.RootDigest, rootA.RootDigest})
 		put := fixture.put(t, publication, fixture.at)
@@ -401,6 +736,11 @@ func TestPeerInboxArtifactReadyRequiresSealedClosureAndOwnsPins(t *testing.T) {
 			t.Fatal("claim root accessor leaked mutable backing storage")
 		}
 		readyAt := claimAt.Add(time.Second)
+		staged, err := fixture.store.StagePeerInboxArtifactClosure(context.Background(),
+			StagePeerInboxArtifactClosureSpec{Fence: claim.Fence(), Closure: closure, At: readyAt})
+		if err != nil || !staged.Changed() || staged.Replayed() {
+			t.Fatalf("stage cached closure = (%#v,%v)", staged, err)
+		}
 		spec := MarkPeerInboxArtifactReadySpec{Fence: claim.Fence(), At: readyAt}
 		ready, err := fixture.store.MarkPeerInboxArtifactReady(context.Background(), spec)
 		if err != nil || !ready.Changed() || ready.Replayed() || ready.Status() != model.InboxReady {
@@ -484,16 +824,23 @@ func TestPeerInboxArtifactReadyRequiresSealedClosureAndOwnsPins(t *testing.T) {
 		})
 
 		t.Run("ready update failure rolls pins back", func(t *testing.T) {
-			fixture, claim, _, _ := newPeerInboxArtifactClosureClaim(t, "artifact-ready-rollback", true)
+			fixture, claim, _, closure := newPeerInboxArtifactClosureClaim(t, "artifact-ready-rollback", false)
+			readyAt := fixture.at.Add(2 * time.Second)
+			if _, err := fixture.store.StagePeerInboxArtifactClosure(context.Background(),
+				StagePeerInboxArtifactClosureSpec{Fence: claim.Fence(), Closure: closure, At: readyAt}); err != nil {
+				t.Fatal(err)
+			}
 			mustExec(t, fixture.store, `CREATE TRIGGER test_peer_inbox_ready_abort
 				BEFORE UPDATE OF status ON peer_inbox WHEN NEW.status='ready'
 				BEGIN SELECT RAISE(ABORT, 'forced ready rollback'); END`)
 			_, err := fixture.store.MarkPeerInboxArtifactReady(context.Background(),
-				MarkPeerInboxArtifactReadySpec{Fence: claim.Fence(), At: fixture.at.Add(2 * time.Second)})
+				MarkPeerInboxArtifactReadySpec{Fence: claim.Fence(), At: readyAt})
 			if !errors.Is(err, ErrPeerInboxArtifactInvariant) {
 				t.Fatalf("forced ready rollback error = %v", err)
 			}
-			assertPeerInboxArtifactPins(t, fixture.store, claim.InboxID(), nil)
+			assertPeerInboxArtifactStagePins(t, fixture.store, claim.InboxID(),
+				claim.RequiredArtifactRoots(), claim.Fence().LeaseUntil().Add(peerInboxArtifactStageTTL))
+			assertPeerInboxArtifactRootState(t, fixture.store, closure.Roots[0].RootDigest, "staged")
 			assertPeerInboxArtifactState(t, fixture.store, "waiting_artifact", 1,
 				"artifact-ready-rollback-worker", true)
 		})
@@ -548,22 +895,47 @@ func TestReadPeerInboxArtifactRootClosesCacheProbe(t *testing.T) {
 	probeAt := claimAt.Add(time.Second)
 	cached, found, err := fixture.store.ReadPeerInboxArtifactRoot(context.Background(),
 		ReadPeerInboxArtifactRootSpec{Fence: claim.Fence(), RootDigest: rootA.RootDigest, At: probeAt})
-	if err != nil || !found || cached.RootDigest != rootA.RootDigest ||
-		cached.ManifestDigest != rootA.ManifestDigest {
+	verifiedAt, isVerified := cached.VerifiedAt()
+	if err != nil || !found || cached.RootDigest() != rootA.RootDigest ||
+		cached.ManifestDigest() != rootA.ManifestDigest ||
+		cached.State() != PeerInboxArtifactRootVerified || !isVerified || verifiedAt.IsZero() {
 		t.Fatalf("cached root = (%#v,%t,%v)", cached, found, err)
 	}
 	if _, found, err := fixture.store.ReadPeerInboxArtifactRoot(context.Background(),
 		ReadPeerInboxArtifactRootSpec{Fence: claim.Fence(), RootDigest: rootB.RootDigest, At: probeAt}); err != nil || found {
 		t.Fatalf("missing root = (found %t,%v)", found, err)
 	}
-	staged := closureB.Roots[0]
-	mustExec(t, fixture.store, `INSERT INTO artifact_roots(root_digest,manifest_json,
-		manifest_digest,total_bytes,state,created_at) VALUES(?,?,?,?,'staged',?)`,
-		staged.RootDigest.String(), staged.Manifest.Bytes(), staged.ManifestDigest.Bytes(),
-		staged.TotalBytes, storeTime(staged.CreatedAt))
-	if _, found, err := fixture.store.ReadPeerInboxArtifactRoot(context.Background(),
-		ReadPeerInboxArtifactRootSpec{Fence: claim.Fence(), RootDigest: rootB.RootDigest, At: probeAt}); err != nil || found {
-		t.Fatalf("staged root = (found %t,%v)", found, err)
+	closure := combinePeerInboxArtifactClosures(t, closureA, closureB)
+	if _, err := fixture.store.StagePeerInboxArtifactClosure(context.Background(),
+		StagePeerInboxArtifactClosureSpec{Fence: claim.Fence(), Closure: closure, At: probeAt}); err != nil {
+		t.Fatal(err)
+	}
+	staged, found, err := fixture.store.ReadPeerInboxArtifactRoot(context.Background(),
+		ReadPeerInboxArtifactRootSpec{Fence: claim.Fence(), RootDigest: rootB.RootDigest, At: probeAt})
+	if verifiedAt, verified := staged.VerifiedAt(); err != nil || !found ||
+		staged.RootDigest() != rootB.RootDigest || staged.Manifest() != rootB.Manifest ||
+		staged.ManifestDigest() != rootB.ManifestDigest || staged.TotalBytes() != rootB.TotalBytes ||
+		staged.State() != PeerInboxArtifactRootStaged || verified || !verifiedAt.IsZero() {
+		t.Fatalf("staged root = (%#v,found %t,%v)", staged, found, err)
+	}
+	if _, err := fixture.store.GetVerifiedArtifactRoot(context.Background(), rootB.RootDigest); !errors.Is(err, ErrArtifactUnverified) {
+		t.Fatalf("generic verified API exposed staged root: %v", err)
+	}
+	path := fixture.store.Path()
+	if err := fixture.store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := OpenExisting(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = restarted.Close() })
+	fixture.store = restarted
+	resumed, found, err := restarted.ReadPeerInboxArtifactRoot(context.Background(),
+		ReadPeerInboxArtifactRootSpec{Fence: claim.Fence(), RootDigest: rootB.RootDigest, At: probeAt})
+	if err != nil || !found || resumed.State() != PeerInboxArtifactRootStaged ||
+		resumed.Manifest().String() != rootB.Manifest.String() {
+		t.Fatalf("restarted staged root = (%#v,found %t,%v)", resumed, found, err)
 	}
 	if _, _, err := fixture.store.ReadPeerInboxArtifactRoot(context.Background(),
 		ReadPeerInboxArtifactRootSpec{Fence: claim.Fence(), RootDigest: model.Sum([]byte("unrelated")),
@@ -576,12 +948,11 @@ func TestReadPeerInboxArtifactRootClosesCacheProbe(t *testing.T) {
 		t.Fatalf("expired probe error = %v", err)
 	}
 
-	mustExec(t, fixture.store, `DROP TRIGGER artifact_root_blocks_verified_delete`)
-	mustExec(t, fixture.store, `DELETE FROM artifact_root_blocks WHERE root_digest=?`, rootA.RootDigest.String())
+	mustExec(t, fixture.store, `DELETE FROM artifact_root_blocks WHERE root_digest=?`, rootB.RootDigest.String())
 	if _, _, err := fixture.store.ReadPeerInboxArtifactRoot(context.Background(),
-		ReadPeerInboxArtifactRootSpec{Fence: claim.Fence(), RootDigest: rootA.RootDigest,
+		ReadPeerInboxArtifactRootSpec{Fence: claim.Fence(), RootDigest: rootB.RootDigest,
 			At: probeAt}); !errors.Is(err, ErrPeerInboxArtifactInvariant) {
-		t.Fatalf("corrupt cached closure error = %v", err)
+		t.Fatalf("corrupt staged closure error = %v", err)
 	}
 }
 
@@ -823,6 +1194,91 @@ func assertPeerInboxArtifactPins(t *testing.T, store *Store, inboxID model.Inbox
 			t.Fatalf("Inbox pins = %#v, want %#v", got, want)
 		}
 	}
+}
+
+func assertPeerInboxArtifactStagePins(t *testing.T, store *Store, inboxID model.InboxID,
+	want []model.Digest, expiresAt time.Time,
+) {
+	t.Helper()
+	rows, err := store.db.Query(`SELECT root_digest,expires_at FROM artifact_pins
+		WHERE owner_kind='inbox' AND owner_id=? ORDER BY root_digest`, inboxID.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var got []model.Digest
+	for rows.Next() {
+		var rootText, expiresText string
+		if err := rows.Scan(&rootText, &expiresText); err != nil {
+			t.Fatal(err)
+		}
+		root, err := model.ParseDigest(rootText)
+		if err != nil || expiresText != storeTime(expiresAt) {
+			t.Fatalf("stage pin = (%q,%q), want expiry %q: %v",
+				rootText, expiresText, storeTime(expiresAt), err)
+		}
+		got = append(got, root)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("stage pins = %#v, want %#v", got, want)
+	}
+	for index := range want {
+		if got[index] != want[index] {
+			t.Fatalf("stage pins = %#v, want %#v", got, want)
+		}
+	}
+}
+
+func assertPeerInboxArtifactRootState(t *testing.T, store *Store, root model.Digest,
+	want string,
+) {
+	t.Helper()
+	var state string
+	var verified sqlNullString
+	if err := store.db.QueryRow(`SELECT state,verified_at FROM artifact_roots WHERE root_digest=?`,
+		root.String()).Scan(&state, &verified); err != nil {
+		t.Fatal(err)
+	}
+	if state != want || verified.Valid != (want == "verified") {
+		t.Fatalf("Artifact root state = (%q,%#v), want %q", state, verified, want)
+	}
+}
+
+func combinePeerInboxArtifactClosures(t *testing.T,
+	closures ...VerifiedArtifactClosure,
+) VerifiedArtifactClosure {
+	t.Helper()
+	var combined VerifiedArtifactClosure
+	blocks := make(map[model.Digest]VerifiedArtifactBlock)
+	for _, closure := range closures {
+		combined.Roots = append(combined.Roots, closure.Roots...)
+		combined.RootBlocks = append(combined.RootBlocks, closure.RootBlocks...)
+		for _, block := range closure.Blocks {
+			if prior, found := blocks[block.Digest]; found && prior.SizeBytes != block.SizeBytes {
+				t.Fatalf("shared block %s has conflicting sizes", block.Digest)
+			}
+			blocks[block.Digest] = block
+		}
+	}
+	for _, block := range blocks {
+		combined.Blocks = append(combined.Blocks, block)
+	}
+	sort.Slice(combined.Roots, func(left, right int) bool {
+		return combined.Roots[left].RootDigest.String() < combined.Roots[right].RootDigest.String()
+	})
+	sort.Slice(combined.Blocks, func(left, right int) bool {
+		return combined.Blocks[left].Digest.String() < combined.Blocks[right].Digest.String()
+	})
+	sort.Slice(combined.RootBlocks, func(left, right int) bool {
+		if combined.RootBlocks[left].RootDigest != combined.RootBlocks[right].RootDigest {
+			return combined.RootBlocks[left].RootDigest.String() < combined.RootBlocks[right].RootDigest.String()
+		}
+		return combined.RootBlocks[left].Ordinal < combined.RootBlocks[right].Ordinal
+	})
+	return combined
 }
 
 func peerInboxArtifactPressure(t *testing.T, store *Store) int64 {

@@ -85,27 +85,38 @@ func (s *Store) CheckpointVerifiedArtifactClosure(ctx context.Context,
 	}
 
 	durableRoots := make([]VerifiedArtifactRoot, len(closure.Roots))
+	durableRootStates := make([]string, len(closure.Roots))
 	for index, root := range closure.Roots {
 		stored, state, found, err := stageArtifactClosureRoot(ctx, tx, root)
 		if err != nil {
 			return VerifiedArtifactClosureCheckpoint{}, err
 		}
 		durableRoots[index] = stored
+		durableRootStates[index] = state
 		replayed = replayed && found && state == "verified"
 	}
 	durableBlockTimes := make(map[model.Digest]time.Time, len(durableBlocks))
 	for _, block := range durableBlocks {
 		durableBlockTimes[block.Digest] = block.CreatedAt
 	}
-	durableRootTimes := make(map[model.Digest]time.Time, len(durableRoots))
-	for _, root := range durableRoots {
-		durableRootTimes[root.RootDigest] = root.VerifiedAt
+	durableRootIndexes := make(map[model.Digest]int, len(durableRoots))
+	for index, root := range durableRoots {
+		durableRootIndexes[root.RootDigest] = index
 	}
 	for _, row := range closure.RootBlocks {
-		if durableRootTimes[row.RootDigest].Before(durableBlockTimes[row.BlockDigest]) {
-			return VerifiedArtifactClosureCheckpoint{}, fmt.Errorf("%w: root verification precedes a block",
-				ErrArtifactConflict)
+		rootIndex := durableRootIndexes[row.RootDigest]
+		blockCreatedAt := durableBlockTimes[row.BlockDigest]
+		if !durableRoots[rootIndex].VerifiedAt.Before(blockCreatedAt) {
+			continue
 		}
+		if durableRootStates[rootIndex] == "verified" {
+			return VerifiedArtifactClosureCheckpoint{}, fmt.Errorf(
+				"%w: verified root precedes a durable block", ErrArtifactConflict)
+		}
+		// Another same-process closure may have installed a shared block with a
+		// later observation time before this transaction began. Promotion uses
+		// that durable block time as its safe verification lower bound.
+		durableRoots[rootIndex].VerifiedAt = blockCreatedAt
 	}
 
 	for _, root := range durableRoots {
@@ -288,7 +299,10 @@ func stageArtifactClosureRoot(ctx context.Context, tx *sql.Tx,
 			return VerifiedArtifactRoot{}, "", true, ErrArtifactConflict
 		}
 		if state == "staged" && requested.VerifiedAt.Before(existing.CreatedAt) {
-			return VerifiedArtifactRoot{}, "", true, ErrArtifactConflict
+			// A same-content closure may have been staged first by a later
+			// concurrent observer. Its durable creation time is the earliest
+			// valid verification instant for this shared staged row.
+			requested.VerifiedAt = existing.CreatedAt
 		}
 		if state == "verified" {
 			requested.VerifiedAt = existing.VerifiedAt

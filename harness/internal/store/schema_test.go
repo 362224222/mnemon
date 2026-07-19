@@ -32,7 +32,7 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 		"index": strings.Fields(
 			"profiles_one_enabled_teamwork_idx operations_reclaim_idx operations_one_started_context_idx " +
 				"works_due_idx agent_handlings_ready_idx agent_handlings_one_claimed_profile_idx " +
-				"agent_runs_handling_generation_attempt_idx agent_runs_incomplete_managed_idx enrollment_grants_one_open_idx " +
+				"agent_runs_handling_generation_attempt_idx agent_runs_incomplete_managed_idx artifact_pins_expiry_idx enrollment_grants_one_open_idx " +
 				"channel_leave_requests_one_open_idx gossip_publications_ready_idx peer_inbox_work_idx",
 		),
 		"trigger": strings.Fields(
@@ -46,7 +46,7 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 				"agent_runs_attachment_identity_immutable agent_runs_evidence_once artifact_roots_content_immutable " +
 				"artifact_roots_no_unverify artifact_roots_verified_at_immutable artifact_blocks_no_update artifact_root_blocks_no_update " +
 				"artifact_root_blocks_verified_insert artifact_root_blocks_verified_delete " +
-				"artifact_root_blocks_provenance_delete artifact_provenance_event_insert " +
+				"artifact_root_blocks_provenance_delete artifact_pins_identity_immutable artifact_pins_expiry_managed artifact_pins_inbox_owner_insert artifact_provenance_event_insert " +
 				"artifact_provenance_no_update artifact_provenance_no_delete channels_nonterminal_limit_insert " +
 				"channels_descriptor_immutable channels_no_delete channels_roster_head_monotonic " +
 				"channels_terminal_status_update channels_conflicted_status_update channels_leaving_status_update " +
@@ -110,8 +110,8 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 	if !reflect.DeepEqual(actual, expected) {
 		t.Fatalf("schema object set mismatch\nactual: %#v\nexpected: %#v", actual, expected)
 	}
-	if got := len(actual["table"]) + len(actual["index"]) + len(actual["trigger"]); got != 178 {
-		t.Fatalf("explicit object count = %d, want 178", got)
+	if got := len(actual["table"]) + len(actual["index"]) + len(actual["trigger"]); got != 182 {
+		t.Fatalf("explicit object count = %d, want 182", got)
 	}
 }
 
@@ -1213,6 +1213,91 @@ func TestSchemaSealsVerifiedArtifactRootBlockMap(t *testing.T) {
 	if err := st.db.QueryRow(`SELECT COUNT(*) FROM artifact_root_blocks WHERE root_digest=?`,
 		root.String()).Scan(&count); err != nil || count != 0 {
 		t.Fatalf("block map after whole-root cleanup = %d, err=%v", count, err)
+	}
+}
+
+func TestSchemaConstrainsArtifactPinOwnershipTimesAndMutation(t *testing.T) {
+	t.Parallel()
+	fixture := newPeerInboxObserverFixture(t, "schema-artifact-pin")
+	closure, root, _ := newArtifactSourceClosure(t, "schema-artifact-pin-root",
+		[]byte("schema-pin"), fixture.at.Add(-time.Second))
+	if _, err := fixture.store.CheckpointVerifiedArtifactClosure(context.Background(), closure); err != nil {
+		t.Fatal(err)
+	}
+	publication := peerInboxArtifactPublication(t, fixture, 1, 1,
+		"schema-artifact-pin-audience", []model.Digest{root.RootDigest})
+	audience := fixture.put(t, publication, fixture.at)
+	nonAudience := fixture.put(t,
+		fixture.publication(t, 2, 2, "schema-artifact-pin-non-audience", false),
+		fixture.at.Add(time.Second))
+	created := storeTime(fixture.at.Add(2 * time.Second))
+	expires := storeTime(fixture.at.Add(3 * time.Second))
+
+	for name, owner := range map[string]string{
+		"missing":      "inbox-missing-artifact-pin-owner",
+		"non-audience": nonAudience.InboxID.String(),
+	} {
+		if _, err := fixture.store.db.Exec(`INSERT INTO artifact_pins(root_digest,owner_kind,
+			owner_id,expires_at,created_at) VALUES(?,'inbox',?,?,?)`, root.RootDigest.String(),
+			owner, expires, created); err == nil || !strings.Contains(err.Error(), "audience Inbox owner") {
+			t.Fatalf("%s Inbox pin owner error = %v", name, err)
+		}
+	}
+	for name, bad := range map[string]struct{ created, expires any }{
+		"created format":  {"2026-07-19T00:00:00Z", expires},
+		"expiry type":     {created, 7},
+		"nonpositive ttl": {created, created},
+	} {
+		if _, err := fixture.store.db.Exec(`INSERT INTO artifact_pins(root_digest,owner_kind,
+			owner_id,expires_at,created_at) VALUES(?,'inbox',?,?,?)`, root.RootDigest.String(),
+			audience.InboxID.String(), bad.expires, bad.created); err == nil ||
+			!strings.Contains(err.Error(), "CHECK constraint failed") {
+			t.Fatalf("%s pin time error = %v", name, err)
+		}
+	}
+	if _, err := fixture.store.db.Exec(`INSERT INTO artifact_pins(root_digest,owner_kind,
+		owner_id,expires_at,created_at) VALUES(?,'inbox',?,?,?)`, root.RootDigest.String(),
+		audience.InboxID.String(), expires, created); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.db.Exec(`UPDATE artifact_pins SET expires_at=?
+		WHERE owner_kind='inbox'`, storeTime(fixture.at.Add(2500*time.Millisecond))); err == nil ||
+		!strings.Contains(err.Error(), "expiry cannot regress") {
+		t.Fatalf("Inbox pin expiry shrink error = %v", err)
+	}
+	if _, err := fixture.store.db.Exec(`UPDATE artifact_pins SET owner_id='different'
+		WHERE owner_kind='inbox'`); err == nil || !strings.Contains(err.Error(), "identity is immutable") {
+		t.Fatalf("Inbox pin owner rewrite error = %v", err)
+	}
+	if _, err := fixture.store.db.Exec(`UPDATE artifact_pins SET created_at=?
+		WHERE owner_kind='inbox'`, storeTime(fixture.at)); err == nil ||
+		!strings.Contains(err.Error(), "identity is immutable") {
+		t.Fatalf("Inbox pin creation rewrite error = %v", err)
+	}
+	if _, err := fixture.store.db.Exec(`UPDATE artifact_pins SET expires_at=NULL
+		WHERE owner_kind='inbox'`); err != nil {
+		t.Fatalf("managed Inbox pin promotion: %v", err)
+	}
+	if _, err := fixture.store.db.Exec(`UPDATE artifact_pins SET expires_at=?
+		WHERE owner_kind='inbox'`, expires); err == nil ||
+		!strings.Contains(err.Error(), "expiry cannot regress") {
+		t.Fatalf("permanent Inbox pin downgrade error = %v", err)
+	}
+	if _, err := fixture.store.db.Exec(`INSERT INTO artifact_pins(root_digest,owner_kind,
+		owner_id,expires_at,created_at) VALUES(?,'retention','expiring-retention',?,?)`,
+		root.RootDigest.String(), expires, created); err == nil ||
+		!strings.Contains(err.Error(), "CHECK constraint failed") {
+		t.Fatalf("expiring non-Inbox pin insert error = %v", err)
+	}
+	if _, err := fixture.store.db.Exec(`INSERT INTO artifact_pins(root_digest,owner_kind,
+		owner_id,expires_at,created_at) VALUES(?,'retention','retention-owner',NULL,?)`,
+		root.RootDigest.String(), created); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.db.Exec(`UPDATE artifact_pins SET expires_at=?
+		WHERE owner_kind='retention'`, expires); err == nil ||
+		!strings.Contains(err.Error(), "expiry cannot regress") {
+		t.Fatalf("non-Inbox expiry rewrite error = %v", err)
 	}
 }
 
