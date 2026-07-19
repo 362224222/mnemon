@@ -341,65 +341,61 @@ func (controller *Controller) Serve(ctx context.Context) error {
 	if err != nil {
 		return errors.Join(err, controller.releaseBeforeAccept())
 	}
+	admitted, err := newConnectionAdmissionListener(listener, controllerHTTPConnectionLimit)
+	if err != nil {
+		return errors.Join(err, listener.Close(), controller.releaseBeforeAccept())
+	}
 	if err := controller.releaseBeforeAccept(); err != nil {
-		return errors.Join(err, listener.Close())
+		return errors.Join(err, admitted.Close())
 	}
 	requests := newControllerRequestTracker(controller.server.Handler())
 	server := &http.Server{Handler: requests, ReadHeaderTimeout: 5 * time.Second}
-	serveDone := make(chan error, 1)
-	go func() {
-		serveDone <- server.Serve(listener)
-	}()
-
-	// The worker may launch a Runtime whose Hook immediately reconnects to this
-	// socket. A successful authenticated health round-trip proves more than a
-	// bind or an entered Accept call: the owner socket, HTTP server, credential,
-	// schema and exact asset revision are all serving. not_ready is expected
-	// until the worker starts.
-	if err := proveControllerHTTP(ctx, controller.nodeState, controller.assetRevision); err != nil {
-		stopErr := shutdownControllerServer(server, requests, serveDone, ctx)
-		if ctx.Err() != nil {
-			return stopErr
-		}
-		return errors.Join(err, stopErr)
-	}
-	select {
-	case <-ctx.Done():
-		return shutdownControllerServer(server, requests, serveDone, ctx)
-	case <-controller.shutdownRequested:
-		return shutdownControllerServer(server, requests, serveDone, nil)
-	default:
-	}
-
-	var cancelWorker context.CancelFunc
-	var workerDone <-chan error
+	components := []componentSpec{{Name: "control-http",
+		Readiness: func(readyCtx context.Context) error {
+			// A successful authenticated round-trip proves owner socket, HTTP,
+			// credential, schema, and exact asset revision readiness.
+			return proveControllerHTTP(readyCtx, controller.nodeState, controller.assetRevision)
+		},
+		Run: func(runCtx context.Context) error {
+			return normalizeControllerServeError(runCtx, server.Serve(admitted))
+		},
+		Shutdown:  func(context.Context) error { return closeControllerHTTP(server, requests) },
+		Restart:   componentRestartNever,
+		Resources: componentResourceBudget{MaxConcurrent: controllerHTTPConnectionLimit}}}
 	if controller.wakeWorker != nil {
-		workerCtx, cancel := context.WithCancel(ctx)
-		cancelWorker = cancel
-		done := make(chan error, 1)
-		workerDone = done
-		go func() { done <- controller.wakeWorker.Run(workerCtx) }()
+		workerStarted := make(chan struct{})
+		components = append(components, componentSpec{Name: "managed-wake",
+			Dependencies: []string{"control-http"},
+			Readiness: func(readyCtx context.Context) error {
+				// Dynamic Runtime health remains authoritative in WakeWorker.Snapshot.
+				// This signal only proves that lifecycle ownership has transferred.
+				select {
+				case <-workerStarted:
+					return nil
+				case <-readyCtx.Done():
+					return readyCtx.Err()
+				}
+			},
+			Run: func(workerCtx context.Context) error {
+				close(workerStarted)
+				_ = controller.wakeWorker.Run(workerCtx)
+				// WakeWorker publishes domain failure through its existing Snapshot.
+				// Keep the lifecycle component present so HTTP remains reachable and
+				// managed actions stay fail-closed until explicit Node shutdown.
+				if workerCtx.Err() == nil {
+					<-workerCtx.Done()
+				}
+				return nil
+			},
+			Shutdown: func(context.Context) error { return nil }, Restart: componentRestartNever,
+			Resources: componentResourceBudget{MaxConcurrent: 1}})
 	}
-
-	select {
-	case serveErr := <-serveDone:
-		if cancelWorker != nil {
-			cancelWorker()
-			<-workerDone
-		}
-		return drainControllerServer(server, requests, ctx, serveErr)
-	case <-ctx.Done():
-	case <-controller.shutdownRequested:
+	supervisor, err := newNodeSupervisor(components)
+	if err != nil {
+		return errors.Join(err, admitted.Close())
 	}
-
-	// Keep HTTP reachable until the worker has stopped its adapter and settled
-	// any exit evidence. Runtime callbacks and recovery therefore cannot race a
-	// closed local API during orderly shutdown.
-	if cancelWorker != nil {
-		cancelWorker()
-		<-workerDone
-	}
-	return shutdownControllerServer(server, requests, serveDone, ctx)
+	serveErr := supervisor.Run(ctx, controller.shutdownRequested)
+	return errors.Join(serveErr, admitted.Close())
 }
 
 type controllerRequestTracker struct {
@@ -465,21 +461,6 @@ func proveControllerHTTP(ctx context.Context, nodeState, assetRevision string) e
 		return errors.New("mnemond controller HTTP startup proof failed")
 	}
 	return nil
-}
-
-func shutdownControllerServer(server *http.Server, requests *controllerRequestTracker,
-	serveDone <-chan error, caller context.Context,
-) error {
-	shutdownErr := closeControllerHTTP(server, requests)
-	serveErr := <-serveDone
-	return errors.Join(shutdownErr, normalizeControllerServeError(caller, serveErr))
-}
-
-func drainControllerServer(server *http.Server, requests *controllerRequestTracker,
-	caller context.Context, serveErr error,
-) error {
-	shutdownErr := closeControllerHTTP(server, requests)
-	return errors.Join(shutdownErr, normalizeControllerServeError(caller, serveErr))
 }
 
 func closeControllerHTTP(server *http.Server, requests *controllerRequestTracker) error {

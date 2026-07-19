@@ -4,16 +4,6 @@
   "entries": [
     {
       "rule": "bounded_resource",
-      "identity": "bounded_resource:controller-local-http-admission",
-      "path": "harness/internal/node/controller.go",
-      "symbol": "(*controllerRequestTracker).ServeHTTP",
-      "risk": "high",
-      "evidence": "harness/internal/node/controller.go::(*controllerRequestTracker).ServeHTTP",
-      "owner": "harness/internal/node",
-      "removal_checkpoint": "7R"
-    },
-    {
-      "rule": "bounded_resource",
       "identity": "bounded_resource:gossip-channel-gates",
       "path": "harness/internal/peer/topic.go",
       "symbol": "(*Gossip).joinLocked",
@@ -231,16 +221,6 @@
       "evidence": "harness/internal/artifact/cas.go::NewCAS",
       "owner": "harness/internal/artifact",
       "removal_checkpoint": "7B"
-    },
-    {
-      "rule": "runtime_supervision",
-      "identity": "runtime_supervision:node-controller",
-      "path": "harness/internal/node/controller.go",
-      "symbol": "(*Controller).Serve",
-      "risk": "high",
-      "evidence": "harness/internal/node/controller.go::(*Controller).Serve",
-      "owner": "harness/internal/node",
-      "removal_checkpoint": "7R"
     },
     {
       "rule": "unexpected_harness_package",

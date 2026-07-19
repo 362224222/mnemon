@@ -5772,13 +5772,6 @@
     },
     {
       "rule": "function_statements",
-      "identity": "function_statements:harness/internal/node/controller.go::(*Controller).Serve",
-      "path": "harness/internal/node/controller.go",
-      "symbol": "(*Controller).Serve",
-      "ceiling": 59
-    },
-    {
-      "rule": "function_statements",
       "identity": "function_statements:harness/internal/node/controller.go::NewController",
       "path": "harness/internal/node/controller.go",
       "symbol": "NewController",
@@ -7469,7 +7462,7 @@
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/node/controller.go",
       "path": "harness/internal/node/controller.go",
-      "ceiling": 523
+      "ceiling": 504
     },
     {
       "rule": "production_file_lines",
