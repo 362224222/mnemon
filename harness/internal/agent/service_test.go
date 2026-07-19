@@ -351,7 +351,8 @@ func TestServiceHookAndCurrentKeepClaimCapabilityPrivate(t *testing.T) {
 			return store.AgentCurrentReadResult{Projection: projection}, nil
 		},
 	}
-	service, err := NewService(fake, ServiceOptions{Actions: testActionHandlers(t),
+	currentActions := testActionHandlers(t)
+	service, err := NewService(fake, ServiceOptions{Actions: currentActions,
 		Clock: serviceTestClock{at}, Random: bytes.NewReader(entropy), CurrentViews: views})
 	if err != nil {
 		t.Fatal(err)
@@ -380,6 +381,19 @@ func TestServiceHookAndCurrentKeepClaimCapabilityPrivate(t *testing.T) {
 		readSpec.ClaimTokenHash != model.Sum(secret) || !readSpec.At.Equal(at) ||
 		readSpec.ArtifactViews == nil || len(views.plans) != 1 {
 		t.Fatalf("current read spec = %#v", readSpec)
+	}
+	assertCurrentActionPolicy(t, planSpec, readSpec, currentActions)
+}
+
+func assertCurrentActionPolicy(t testing.TB, plan, final store.AgentCurrentReadSpec,
+	actions ActionHandlers,
+) {
+	t.Helper()
+	if plan.ActionPolicy.AssetRevision() != actions.AssetRevision() ||
+		final.ActionPolicy.AssetRevision() != actions.AssetRevision() ||
+		len(plan.ActionPolicy.Entries()) != model.TeamworkActionCount ||
+		len(final.ActionPolicy.Entries()) != model.TeamworkActionCount {
+		t.Fatalf("current Action policies = (%#v, %#v)", plan.ActionPolicy, final.ActionPolicy)
 	}
 }
 

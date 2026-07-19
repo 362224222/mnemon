@@ -329,42 +329,52 @@ func (p CurrentProjection) MarshalJSON() ([]byte, error) {
 }
 
 type CurrentReadReceiptSpec struct {
-	RunID           RunID
-	ProfileID       ProfileID
-	HandlingID      HandlingID
-	HandlingAttempt uint32
-	Projection      CurrentProjection
-	ReadAt          time.Time
+	RunID               RunID
+	ProfileID           ProfileID
+	HandlingID          HandlingID
+	HandlingAttempt     uint32
+	Projection          CurrentProjection
+	ActionWorkUpdatedBy EventID
+	ActionWorkUpdatedAt time.Time
+	ReadAt              time.Time
 }
 
-// CurrentReadReceipt is write-once AgentRun evidence. It contains the exact
-// projection so a response-loss replay never re-renders mutable Work state.
+// CurrentReadReceipt is write-once AgentRun evidence. It freezes the exact
+// projection and private Work updater so replay never re-renders mutable state.
 // It intentionally contains neither a claim token nor its hash.
 type CurrentReadReceipt struct {
-	runID           RunID
-	profileID       ProfileID
-	handlingID      HandlingID
-	handlingAttempt uint32
-	projection      CurrentProjection
-	readAt          time.Time
-	canonical       JSON
+	runID               RunID
+	profileID           ProfileID
+	handlingID          HandlingID
+	handlingAttempt     uint32
+	projection          CurrentProjection
+	actionWorkUpdatedBy EventID
+	actionWorkUpdatedAt time.Time
+	readAt              time.Time
+	canonical           JSON
 }
 
 func NewCurrentReadReceipt(spec CurrentReadReceiptSpec) (CurrentReadReceipt, error) {
 	if spec.RunID.IsZero() || spec.ProfileID != TeamworkProfileID() || spec.HandlingID.IsZero() ||
-		spec.HandlingAttempt == 0 || spec.Projection.CanonicalJSON().IsZero() {
+		spec.HandlingAttempt == 0 || spec.Projection.CanonicalJSON().IsZero() ||
+		spec.ActionWorkUpdatedBy.IsZero() {
 		return CurrentReadReceipt{}, invalid("current-read receipt", "Run, Profile, Handling, attempt and projection are required")
+	}
+	workUpdatedAt, err := canonicalTime(spec.ActionWorkUpdatedAt)
+	if err != nil {
+		return CurrentReadReceipt{}, err
 	}
 	readAt, err := canonicalTime(spec.ReadAt)
 	if err != nil {
 		return CurrentReadReceipt{}, err
 	}
-	if readAt.Before(spec.Projection.SourceEvent().AcceptedAt()) {
-		return CurrentReadReceipt{}, invariant("current-read receipt precedes source Event acceptance")
+	if readAt.Before(spec.Projection.SourceEvent().AcceptedAt()) || readAt.Before(workUpdatedAt) {
+		return CurrentReadReceipt{}, invariant("current-read receipt precedes frozen authority")
 	}
 	result := CurrentReadReceipt{runID: spec.RunID, profileID: spec.ProfileID,
 		handlingID: spec.HandlingID, handlingAttempt: spec.HandlingAttempt,
-		projection: spec.Projection, readAt: readAt}
+		projection: spec.Projection, actionWorkUpdatedBy: spec.ActionWorkUpdatedBy,
+		actionWorkUpdatedAt: workUpdatedAt, readAt: readAt}
 	canonical, err := JSONFrom(currentReceiptWireFrom(result))
 	if err != nil {
 		return CurrentReadReceipt{}, fmt.Errorf("current-read receipt: %w", err)
@@ -380,6 +390,8 @@ func (r CurrentReadReceipt) HandlingAttempt() uint32         { return r.handling
 func (r CurrentReadReceipt) SourceEvent() EventKey           { return r.projection.SourceEvent().Key() }
 func (r CurrentReadReceipt) ActionWork() WorkRef             { return r.projection.ActionWork().Ref() }
 func (r CurrentReadReceipt) ActionWorkVersion() uint64       { return r.projection.ActionWork().Version() }
+func (r CurrentReadReceipt) ActionWorkUpdatedBy() EventID    { return r.actionWorkUpdatedBy }
+func (r CurrentReadReceipt) ActionWorkUpdatedAt() time.Time  { return r.actionWorkUpdatedAt }
 func (r CurrentReadReceipt) AllowedActions() []OperationKind { return r.projection.AllowedActions() }
 func (r CurrentReadReceipt) ArtifactRefs() []CurrentArtifactRef {
 	return r.projection.ArtifactRefs()
@@ -426,50 +438,22 @@ func normalizeCurrentActions(actions []OperationKind) ([]OperationKind, error) {
 	if len(actions) == 0 || len(actions) > 10 {
 		return nil, invalid("current allowed actions", "must contain 1..10 closed actions")
 	}
+	// Preserve the order projected by the revision-bound managed policy. This
+	// model owns closed-set and duplicate validation, not product catalog order.
 	result := append([]OperationKind{}, actions...)
 	for _, action := range result {
 		if !action.Valid() {
 			return nil, invalid("current allowed actions", "contains an unknown action")
 		}
 	}
-	for i := 1; i < len(result); i++ {
-		for j := i; j > 0 && currentActionRank(result[j]) < currentActionRank(result[j-1]); j-- {
-			result[j], result[j-1] = result[j-1], result[j]
-		}
-	}
-	for i := 1; i < len(result); i++ {
-		if result[i] == result[i-1] {
-			return nil, invalid("current allowed actions", "contains a duplicate action")
+	for index, action := range result {
+		for prior := 0; prior < index; prior++ {
+			if result[prior] == action {
+				return nil, invalid("current allowed actions", "contains a duplicate action")
+			}
 		}
 	}
 	return result, nil
-}
-
-func currentActionRank(action OperationKind) int {
-	switch action {
-	case OperationTeamworkOffer:
-		return 0
-	case OperationTeamworkAccept:
-		return 1
-	case OperationTeamworkDecline:
-		return 2
-	case OperationTeamworkDeliver:
-		return 3
-	case OperationTeamworkRework:
-		return 4
-	case OperationTeamworkClose:
-		return 5
-	case OperationTeamworkCancel:
-		return 6
-	case OperationResolveNoAction:
-		return 7
-	case OperationResolveRetry:
-		return 8
-	case OperationResolveReject:
-		return 9
-	default:
-		return 10
-	}
 }
 
 type currentWorkRefWire struct {
@@ -525,19 +509,21 @@ type currentProjectionWire struct {
 }
 
 type currentReceiptWire struct {
-	ActionWorkVersion uint64                `json:"action_work_version"`
-	ActionWork        currentWorkRefWire    `json:"action_work"`
-	AllowedActions    []OperationKind       `json:"allowed_actions"`
-	ArtifactRefs      []currentArtifactWire `json:"artifact_refs"`
-	HandlingAttempt   uint32                `json:"handling_attempt"`
-	HandlingID        string                `json:"handling_id"`
-	ProfileID         string                `json:"profile_id"`
-	Projection        currentProjectionWire `json:"projection"`
-	ProjectionDigest  string                `json:"projection_digest"`
-	ReadAt            string                `json:"read_at"`
-	RunID             string                `json:"run_id"`
-	SchemaVersion     int                   `json:"schema_version"`
-	SourceEvent       currentEventKeyWire   `json:"source_event"`
+	ActionWork          currentWorkRefWire    `json:"action_work"`
+	ActionWorkUpdatedAt string                `json:"action_work_updated_at"`
+	ActionWorkUpdatedBy string                `json:"action_work_updated_by"`
+	ActionWorkVersion   uint64                `json:"action_work_version"`
+	AllowedActions      []OperationKind       `json:"allowed_actions"`
+	ArtifactRefs        []currentArtifactWire `json:"artifact_refs"`
+	HandlingAttempt     uint32                `json:"handling_attempt"`
+	HandlingID          string                `json:"handling_id"`
+	ProfileID           string                `json:"profile_id"`
+	Projection          currentProjectionWire `json:"projection"`
+	ProjectionDigest    string                `json:"projection_digest"`
+	ReadAt              string                `json:"read_at"`
+	RunID               string                `json:"run_id"`
+	SchemaVersion       int                   `json:"schema_version"`
+	SourceEvent         currentEventKeyWire   `json:"source_event"`
 }
 
 func currentProjectionWireFrom(projection CurrentProjection) currentProjectionWire {
@@ -595,9 +581,11 @@ func currentReceiptWireFrom(receipt CurrentReadReceipt) currentReceiptWire {
 	return currentReceiptWire{
 		SchemaVersion: SchemaVersion, RunID: receipt.RunID().String(), ProfileID: receipt.ProfileID().String(),
 		HandlingID: receipt.HandlingID().String(), HandlingAttempt: receipt.HandlingAttempt(),
-		SourceEvent:       currentEventKeyWire{receipt.SourceEvent().OriginPeerID().String(), receipt.SourceEvent().OriginEpoch().String(), receipt.SourceEvent().EventID().String()},
-		ActionWork:        currentWorkRefWire{receipt.ActionWork().HomePeerID().String(), receipt.ActionWork().WorkID().String()},
-		ActionWorkVersion: receipt.ActionWorkVersion(), AllowedActions: receipt.AllowedActions(),
+		SourceEvent:         currentEventKeyWire{receipt.SourceEvent().OriginPeerID().String(), receipt.SourceEvent().OriginEpoch().String(), receipt.SourceEvent().EventID().String()},
+		ActionWork:          currentWorkRefWire{receipt.ActionWork().HomePeerID().String(), receipt.ActionWork().WorkID().String()},
+		ActionWorkUpdatedAt: formatTime(receipt.ActionWorkUpdatedAt()),
+		ActionWorkUpdatedBy: receipt.ActionWorkUpdatedBy().String(),
+		ActionWorkVersion:   receipt.ActionWorkVersion(), AllowedActions: receipt.AllowedActions(),
 		ArtifactRefs: artifactWires(receipt.ArtifactRefs()), Projection: currentProjectionWireFrom(projection),
 		ProjectionDigest: receipt.ProjectionDigest().String(), ReadAt: formatTime(receipt.ReadAt()),
 	}
@@ -646,12 +634,13 @@ func ParseCurrentReadReceipt(raw []byte) (CurrentReadReceipt, error) {
 	if err != nil {
 		return CurrentReadReceipt{}, err
 	}
-	readAt, err := time.Parse(time.RFC3339Nano, wire.ReadAt)
+	workUpdatedBy, workUpdatedAt, readAt, err := parseCurrentReceiptAuthority(wire)
 	if err != nil {
-		return CurrentReadReceipt{}, invalid("current-read receipt read_at", "must be RFC3339Nano")
+		return CurrentReadReceipt{}, err
 	}
 	receipt, err := NewCurrentReadReceipt(CurrentReadReceiptSpec{RunID: runID, ProfileID: profileID,
-		HandlingID: handlingID, HandlingAttempt: wire.HandlingAttempt, Projection: projection, ReadAt: readAt})
+		HandlingID: handlingID, HandlingAttempt: wire.HandlingAttempt, Projection: projection,
+		ActionWorkUpdatedBy: workUpdatedBy, ActionWorkUpdatedAt: workUpdatedAt, ReadAt: readAt})
 	if err != nil {
 		return CurrentReadReceipt{}, err
 	}

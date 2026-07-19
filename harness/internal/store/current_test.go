@@ -56,6 +56,7 @@ func TestFinalizeAgentCurrentReadDerivesAndReplaysDurableProjection(t *testing.T
 		string(stored) != result.Receipt.CanonicalJSON().String() || disposition != "read" {
 		t.Fatalf("durable current evidence = (%s, %q, %v)", stored, disposition, err)
 	}
+	advanceCurrentWorkAfterRead(t, fixture, events[0], readAt.Add(time.Second))
 
 	if err := fixture.store.Close(); err != nil {
 		t.Fatal(err)
@@ -66,7 +67,8 @@ func TestFinalizeAgentCurrentReadDerivesAndReplaysDurableProjection(t *testing.T
 		t.Fatal(err)
 	}
 	fixture.store = restarted
-	spec.At = readAt.Add(time.Second)
+	spec.At = readAt.Add(2 * time.Second)
+	assertCurrentReplayRejectsActionPolicyDrift(t, restarted, spec)
 	replay, err := restarted.FinalizeAgentCurrentRead(context.Background(), spec)
 	if err != nil || !replay.Replayed ||
 		replay.Receipt.CanonicalJSON().String() != result.Receipt.CanonicalJSON().String() ||
@@ -77,6 +79,130 @@ func TestFinalizeAgentCurrentReadDerivesAndReplaysDurableProjection(t *testing.T
 		claim.Run.ID().String()); err == nil {
 		t.Fatal("schema allowed current-read evidence rewrite")
 	}
+}
+
+func assertCurrentReplayRejectsActionPolicyDrift(t testing.TB, st *Store,
+	spec AgentCurrentReadSpec,
+) {
+	t.Helper()
+	spec.ActionPolicy = acceptanceActionPolicy(t, 1)
+	if _, err := st.FinalizeAgentCurrentRead(context.Background(), spec); !errors.Is(err, ErrCurrentReadInput) {
+		t.Fatalf("replay with drifted Action policy error = %v", err)
+	}
+}
+
+func advanceCurrentWorkAfterRead(t *testing.T, fixture *acceptanceFixture,
+	eventID model.EventID, at time.Time,
+) {
+	t.Helper()
+	source, err := readCurrentSourceEvent(context.Background(), fixture.store.db, eventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	work, err := fixture.store.GetReviewWork(context.Background(), source.Scope().WorkRef())
+	if err != nil {
+		t.Fatal(err)
+	}
+	advanced := commitCausalAcceptedWork(t, fixture, source, work, at)
+	if advanced.State() != model.WorkActive || advanced.Version() != 2 {
+		t.Fatalf("advanced Work = %#v", advanced)
+	}
+}
+
+func corruptCurrentWorkUpdater(t *testing.T, fixture *acceptanceFixture,
+	eventID model.EventID, at time.Time,
+) {
+	t.Helper()
+	offered, err := readCurrentSourceEvent(context.Background(), fixture.store.db, eventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	work, err := fixture.store.GetReviewWork(context.Background(), offered.Scope().WorkRef())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, publication := controllerAcceptance(t, fixture, work, offered, at)
+	tx, err := fixture.store.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if err := insertAcceptedEvent(context.Background(), tx, publication); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(`UPDATE works SET updated_by_event=?,updated_at=?
+		WHERE home_peer_id=? AND work_id=?`, publication.Event().ID().String(), storeTime(at),
+		work.Ref().HomePeerID().String(), work.Ref().WorkID().String()); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAgentCurrentReadRejectsActionPolicyRevisionDriftWithoutWrites(t *testing.T) {
+	fixture, events := newAgentClaimFixture(t, 1, "current-action-policy")
+	claimAt := fixture.now.Add(2 * time.Second)
+	insertClaimHandling(t, fixture.store, "handling-current-action-policy", events[0], 1,
+		claimAt, claimAt, 0)
+	claim := claimCurrent(t, fixture, "owner-current-action-policy",
+		"token-current-action-policy", claimAt)
+	spec := currentReadSpec(fixture, claim.Run.ID(), "token-current-action-policy",
+		claimAt.Add(time.Second))
+	spec.ActionPolicy = model.TeamworkActionPolicy{}
+	if _, err := fixture.store.PlanAgentCurrentRead(context.Background(), spec); !errors.Is(err, ErrCurrentReadInput) {
+		t.Fatalf("zero Action policy error = %v", err)
+	}
+	spec.ActionPolicy = acceptanceActionPolicy(t, 1)
+	if _, err := fixture.store.FinalizeAgentCurrentRead(context.Background(), spec); !errors.Is(err, ErrCurrentReadInput) {
+		t.Fatalf("drifted Action policy error = %v", err)
+	}
+	var receipts int
+	if err := fixture.store.db.QueryRow(`SELECT COUNT(*) FROM agent_runs
+		WHERE run_id=? AND current_read_receipt_json IS NOT NULL`, claim.Run.ID().String()).Scan(&receipts); err != nil || receipts != 0 {
+		t.Fatalf("invalid Action policy persisted receipts = %d, err=%v", receipts, err)
+	}
+}
+
+func TestAgentCurrentReadRejectsCorruptDurableWorkUpdater(t *testing.T) {
+	t.Run("fresh", func(t *testing.T) {
+		fixture, events := newAgentClaimFixture(t, 1, "current-corrupt-updater-fresh")
+		claimAt := fixture.now.Add(5 * time.Second)
+		corruptCurrentWorkUpdater(t, fixture, events[0], claimAt.Add(-time.Second))
+		insertClaimHandling(t, fixture.store, "handling-current-corrupt-updater-fresh",
+			events[0], 1, claimAt, claimAt, 0)
+		claim := claimCurrent(t, fixture, "owner-current-corrupt-updater-fresh",
+			"token-current-corrupt-updater-fresh", claimAt)
+		spec := currentReadSpec(fixture, claim.Run.ID(), "token-current-corrupt-updater-fresh",
+			claimAt.Add(time.Second))
+		if _, err := fixture.store.FinalizeAgentCurrentRead(context.Background(), spec); !errors.Is(err, ErrCurrentReadInvariant) ||
+			!strings.Contains(err.Error(), "Work updater does not produce") {
+			t.Fatalf("fresh corrupt updater error = %v", err)
+		}
+		assertNoCurrentReadReceipt(t, fixture.store, claim.Run.ID())
+	})
+
+	t.Run("replay", func(t *testing.T) {
+		fixture, events := newAgentClaimFixture(t, 1, "current-corrupt-updater-replay")
+		claimAt := fixture.now.Add(2 * time.Second)
+		insertClaimHandling(t, fixture.store, "handling-current-corrupt-updater-replay",
+			events[0], 1, claimAt, claimAt, 0)
+		claim := claimCurrent(t, fixture, "owner-current-corrupt-updater-replay",
+			"token-current-corrupt-updater-replay", claimAt)
+		spec := currentReadSpec(fixture, claim.Run.ID(), "token-current-corrupt-updater-replay",
+			claimAt.Add(time.Second))
+		original, err := fixture.store.FinalizeAgentCurrentRead(context.Background(), spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		corruptCurrentWorkUpdater(t, fixture, events[0], claimAt.Add(2*time.Second))
+		spec.At = claimAt.Add(3 * time.Second)
+		if _, err := fixture.store.FinalizeAgentCurrentRead(context.Background(), spec); !errors.Is(err, ErrCurrentReadInvariant) ||
+			!strings.Contains(err.Error(), "Work updater does not produce") {
+			t.Fatalf("replay corrupt updater error = %v", err)
+		}
+		assertStoredCurrentReceipt(t, fixture.store, claim.Run.ID(), original.Receipt.CanonicalJSON())
+	})
 }
 
 func TestFinalizeAgentCurrentReadIsFencedAndConcurrentReplaySafe(t *testing.T) {
@@ -506,92 +632,6 @@ func TestFinalizeAgentCurrentReadKeepsBriefForDerivedRework(t *testing.T) {
 	}
 }
 
-func TestDeriveCurrentActionsUsesExactParticipantStateAndSourceEvent(t *testing.T) {
-	now := time.Date(2026, 7, 16, 16, 0, 0, 0, time.UTC)
-	home, _ := model.ParsePeerID("peer-current-policy-home")
-	reviewer, _ := model.ParsePeerID("peer-current-policy-reviewer")
-	channel, _ := model.ParseChannelID("channel-current-policy")
-	workID, _ := model.ParseWorkID("work-current-policy")
-	ref, _ := model.NewWorkRef(home, workID)
-	participants, _ := model.NewParticipantSnapshot(channel, 2, home, reviewer)
-
-	offered := currentPolicyEvent(t, now, channel, ref, home, reviewer,
-		model.EventReviewOffered, "event-current-policy-offered",
-		`{"content":"review","deadline":"2026-07-17T16:00:00Z","iteration":1,"work_version":1}`)
-	work := currentPolicyWork(t, ref, channel, participants, offered, model.WorkOffered, 1, 1, now.Add(24*time.Hour).UnixNano())
-	offeredFacts, _ := decodeClosedEventPayload(offered)
-	if exact, err := currentWorkIsExactSource(offered, work, offeredFacts); err != nil || !exact {
-		t.Fatalf("offered current binding = (%t, %v)", exact, err)
-	}
-	if got := deriveCurrentActions(model.CurrentReviewer, offered, work, true); !sameOperationKinds(got,
-		[]model.OperationKind{model.OperationTeamworkAccept, model.OperationTeamworkDecline, model.OperationResolveRetry}) {
-		t.Fatalf("reviewer OFFERED actions = %v", got)
-	}
-	if got := deriveCurrentActions(model.CurrentReviewer, offered, work, false); !sameOperationKinds(got,
-		[]model.OperationKind{model.OperationResolveNoAction, model.OperationResolveRetry, model.OperationResolveReject}) {
-		t.Fatalf("stale actions = %v", got)
-	}
-	accepted := currentPolicyEvent(t, now.Add(time.Second), channel, ref, home, reviewer,
-		model.EventReviewAccepted, "event-current-policy-accepted", `{"iteration":1,"work_version":1}`)
-	activeWork := currentPolicyWork(t, ref, channel, participants, accepted, model.WorkActive, 2, 1,
-		now.Add(24*time.Hour).UnixNano())
-	acceptedFacts, _ := decodeClosedEventPayload(accepted)
-	if exact, err := currentWorkIsExactSource(accepted, activeWork, acceptedFacts); err != nil || !exact {
-		t.Fatalf("accepted current binding = (%t, %v)", exact, err)
-	}
-	for _, test := range []struct {
-		name   string
-		mutate func(*model.ReviewWorkSpec)
-	}{
-		{"version", func(spec *model.ReviewWorkSpec) { spec.Version++ }},
-		{"state data", func(spec *model.ReviewWorkSpec) {
-			spec.StateData, _ = model.NewJSON([]byte(`{"forged":true}`))
-		}},
-		{"updated time", func(spec *model.ReviewWorkSpec) {
-			spec.UpdatedAt = spec.UpdatedAt.Add(time.Nanosecond)
-		}},
-	} {
-		t.Run("reject "+test.name+" drift", func(t *testing.T) {
-			spec := activeWork.Spec()
-			test.mutate(&spec)
-			drifted, err := model.NewReviewWork(spec)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if exact, err := currentWorkIsExactSource(accepted, drifted, acceptedFacts); err == nil || exact {
-				t.Fatalf("drifted current binding = (%t,%v)", exact, err)
-			}
-		})
-	}
-	if got := deriveCurrentActions(model.CurrentReviewer, accepted, activeWork, true); !sameOperationKinds(got,
-		[]model.OperationKind{model.OperationTeamworkOffer, model.OperationTeamworkDeliver, model.OperationResolveRetry}) {
-		t.Fatalf("reviewer ACTIVE actions = %v", got)
-	}
-
-	delivered := currentPolicyEvent(t, now.Add(2*time.Second), channel, ref, home, reviewer,
-		model.EventReviewDelivered, "event-current-policy-delivered", `{"iteration":1,"work_version":3}`)
-	deliveredWork := currentPolicyWork(t, ref, channel, participants, delivered, model.WorkDelivered, 4, 1,
-		now.Add(24*time.Hour).UnixNano())
-	deliveredFacts, _ := decodeClosedEventPayload(delivered)
-	if exact, err := currentWorkIsExactSource(delivered, deliveredWork, deliveredFacts); err != nil || !exact {
-		t.Fatalf("delivered current binding = (%t, %v)", exact, err)
-	}
-	if got := deriveCurrentActions(model.CurrentInitiator, delivered, deliveredWork, true); !sameOperationKinds(got,
-		[]model.OperationKind{model.OperationTeamworkRework, model.OperationTeamworkClose,
-			model.OperationTeamworkCancel, model.OperationResolveRetry}) {
-		t.Fatalf("initiator DELIVERED actions = %v", got)
-	}
-	rework := currentPolicyEvent(t, now.Add(3*time.Second), channel, ref, home, reviewer,
-		model.EventReviewReworkRequested, "event-current-policy-rework",
-		`{"content":"correct this","iteration":1,"work_version":4}`)
-	reworkWork := currentPolicyWork(t, ref, channel, participants, rework, model.WorkRework, 5, 2,
-		now.Add(24*time.Hour).UnixNano())
-	reworkFacts, _ := decodeClosedEventPayload(rework)
-	if exact, err := currentWorkIsExactSource(rework, reworkWork, reworkFacts); err != nil || !exact {
-		t.Fatalf("rework current binding = (%t, %v)", exact, err)
-	}
-}
-
 func TestCurrentDistinguishesOrdinaryDerivedWorkHandlingFromParentResume(t *testing.T) {
 	fixture := newDerivationDispositionFixture(t, false)
 	event := currentPolicyEvent(t, fixture.now, fixture.channel, fixture.children[0],
@@ -631,7 +671,7 @@ func currentReadSpec(fixture *acceptanceFixture, run model.RunID, token string,
 ) AgentCurrentReadSpec {
 	return AgentCurrentReadSpec{ProfileID: fixture.profile.ID(),
 		ExpectedAssetRevision: fixture.profile.ActiveAssetRevision(), RunID: run,
-		ClaimTokenHash: model.Sum([]byte(token)), At: at}
+		ClaimTokenHash: model.Sum([]byte(token)), At: at, ActionPolicy: fixture.policy}
 }
 
 func plannedCurrentReadSpec(t *testing.T, st *Store,
@@ -668,6 +708,15 @@ func assertNoCurrentReadReceipt(t *testing.T, st *Store, run model.RunID) {
 	}
 	if count != 0 {
 		t.Fatalf("AgentRun %s has %d current-read receipts", run, count)
+	}
+}
+
+func assertStoredCurrentReceipt(t testing.TB, st *Store, run model.RunID, want model.JSON) {
+	t.Helper()
+	var stored []byte
+	if err := st.db.QueryRow(`SELECT current_read_receipt_json FROM agent_runs WHERE run_id=?`,
+		run.String()).Scan(&stored); err != nil || string(stored) != want.String() {
+		t.Fatalf("stored current receipt = (%s, %v), want %s", stored, err, want.String())
 	}
 }
 

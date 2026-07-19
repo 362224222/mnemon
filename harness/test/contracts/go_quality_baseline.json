@@ -1400,7 +1400,7 @@
       "identity": "cognitive_complexity:harness/internal/store/current.go::validateStoredCurrentAuthority",
       "path": "harness/internal/store/current.go",
       "symbol": "validateStoredCurrentAuthority",
-      "ceiling": 33
+      "ceiling": 27
     },
     {
       "rule": "cognitive_complexity",
@@ -1953,13 +1953,6 @@
       "identity": "control_flow_nesting:harness/internal/store/channel_enrollment.go::replayJoinedChannel",
       "path": "harness/internal/store/channel_enrollment.go",
       "symbol": "replayJoinedChannel",
-      "ceiling": 5
-    },
-    {
-      "rule": "control_flow_nesting",
-      "identity": "control_flow_nesting:harness/internal/store/current.go::deriveCurrentActions",
-      "path": "harness/internal/store/current.go",
-      "symbol": "deriveCurrentActions",
       "ceiling": 5
     },
     {
@@ -3661,7 +3654,7 @@
       "identity": "cyclomatic_complexity:harness/internal/store/current.go::deriveFreshCurrentProjection",
       "path": "harness/internal/store/current.go",
       "symbol": "deriveFreshCurrentProjection",
-      "ceiling": 25
+      "ceiling": 24
     },
     {
       "rule": "cyclomatic_complexity",
@@ -3682,7 +3675,7 @@
       "identity": "cyclomatic_complexity:harness/internal/store/current.go::validateStoredCurrentAuthority",
       "path": "harness/internal/store/current.go",
       "symbol": "validateStoredCurrentAuthority",
-      "ceiling": 32
+      "ceiling": 26
     },
     {
       "rule": "cyclomatic_complexity",
@@ -4403,7 +4396,7 @@
       "identity": "function_logical_lines:harness/internal/agent/service.go::(*Service).AgentCurrent",
       "path": "harness/internal/agent/service.go",
       "symbol": "(*Service).AgentCurrent",
-      "ceiling": 84
+      "ceiling": 82
     },
     {
       "rule": "function_logical_lines",
@@ -6258,7 +6251,7 @@
       "identity": "function_statements:harness/internal/store/current.go::deriveFreshCurrentProjection",
       "path": "harness/internal/store/current.go",
       "symbol": "deriveFreshCurrentProjection",
-      "ceiling": 61
+      "ceiling": 57
     },
     {
       "rule": "function_statements",
@@ -7170,7 +7163,7 @@
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/agent/service.go",
       "path": "harness/internal/agent/service.go",
-      "ceiling": 496
+      "ceiling": 493
     },
     {
       "rule": "production_file_lines",
@@ -7278,7 +7271,7 @@
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/model/current.go",
       "path": "harness/internal/model/current.go",
-      "ceiling": 924
+      "ceiling": 913
     },
     {
       "rule": "production_file_lines",
@@ -7470,7 +7463,7 @@
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/store/current.go",
       "path": "harness/internal/store/current.go",
-      "ceiling": 1025
+      "ceiling": 998
     },
     {
       "rule": "production_file_lines",

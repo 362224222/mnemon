@@ -409,7 +409,8 @@ func installManagedResolutionCurrent(t *testing.T, fixture *acceptanceFixture,
 	}
 	receipt, err := model.NewCurrentReadReceipt(model.CurrentReadReceiptSpec{RunID: claim.Run.ID(),
 		ProfileID: claim.Run.ProfileID(), HandlingID: claim.Handling.ID(),
-		HandlingAttempt: claim.Handling.Attempts(), Projection: projection, ReadAt: readAt})
+		HandlingAttempt: claim.Handling.Attempts(), Projection: projection, ActionWorkUpdatedBy: work.UpdatedBy(),
+		ActionWorkUpdatedAt: work.UpdatedAt(), ReadAt: readAt})
 	if err != nil {
 		t.Fatal(err)
 	}

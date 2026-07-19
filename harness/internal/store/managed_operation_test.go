@@ -394,8 +394,8 @@ func writeManagedCurrentReceipt(t *testing.T, st *Store, claim AgentClaimResult,
 	}
 	receipt, err := model.NewCurrentReadReceipt(model.CurrentReadReceiptSpec{RunID: claim.Run.ID(),
 		ProfileID: claim.Run.ProfileID(), HandlingID: claim.Handling.ID(),
-		HandlingAttempt: claim.Handling.Attempts(), Projection: projection,
-		ReadAt: claim.Run.StartedAt().Add(time.Nanosecond)})
+		HandlingAttempt: claim.Handling.Attempts(), Projection: projection, ActionWorkUpdatedBy: event.Key().EventID(),
+		ActionWorkUpdatedAt: event.AcceptedAt(), ReadAt: claim.Run.StartedAt().Add(time.Nanosecond)})
 	if err != nil {
 		t.Fatal(err)
 	}

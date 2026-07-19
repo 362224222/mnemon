@@ -243,22 +243,50 @@ func newAcceptanceFixtureWithPolicy(t *testing.T, reviewerCount int,
 
 func acceptanceActionPolicy(t testing.TB, offerMax uint8) model.TeamworkActionPolicy {
 	t.Helper()
-	operations := [...]model.OperationKind{model.OperationTeamworkOffer, model.OperationTeamworkAccept,
+	return acceptanceActionPolicyForOperations(t, offerMax, acceptanceActionOperations(), model.Digest{})
+}
+
+func acceptanceActionOperations() []model.OperationKind {
+	return []model.OperationKind{model.OperationTeamworkOffer, model.OperationTeamworkAccept,
 		model.OperationTeamworkDecline, model.OperationTeamworkDeliver, model.OperationTeamworkRework,
 		model.OperationTeamworkClose, model.OperationTeamworkCancel}
+}
+
+func acceptanceActionPolicyForOperations(t testing.TB, offerMax uint8,
+	operations []model.OperationKind, revision model.Digest,
+) model.TeamworkActionPolicy {
+	t.Helper()
 	entries := make([]model.TeamworkActionPolicyEntrySpec, len(operations))
 	for index, operation := range operations {
 		maxResults := uint8(1)
+		var contexts []model.TeamworkActionContext
+		switch operation {
+		case model.OperationTeamworkOffer:
+			contexts = []model.TeamworkActionContext{model.TeamworkActionContextNone,
+				model.TeamworkActionContextReviewerActive, model.TeamworkActionContextReviewerRework}
+		case model.OperationTeamworkAccept, model.OperationTeamworkDecline:
+			contexts = []model.TeamworkActionContext{model.TeamworkActionContextReviewerOffered}
+		case model.OperationTeamworkDeliver:
+			contexts = []model.TeamworkActionContext{model.TeamworkActionContextReviewerActive,
+				model.TeamworkActionContextReviewerRework, model.TeamworkActionContextParentResume}
+		case model.OperationTeamworkRework:
+			contexts = []model.TeamworkActionContext{model.TeamworkActionContextHomeDeliveredIteration1}
+		case model.OperationTeamworkClose:
+			contexts = []model.TeamworkActionContext{model.TeamworkActionContextHomeDelivered}
+		case model.OperationTeamworkCancel:
+			contexts = []model.TeamworkActionContext{model.TeamworkActionContextHomeNonterminal}
+		}
 		if operation == model.OperationTeamworkOffer {
 			maxResults = offerMax
 		}
 		entries[index] = model.TeamworkActionPolicyEntrySpec{Ordinal: uint8(index),
-			OperationKind:   operation,
-			AllowedContexts: []model.TeamworkActionContext{model.TeamworkActionContextNone},
-			MaxResults:      maxResults}
+			OperationKind: operation, AllowedContexts: contexts, MaxResults: maxResults}
+	}
+	if revision.IsZero() {
+		revision = model.Sum([]byte(fmt.Sprintf("acceptance-action-policy-%d-%v", offerMax, operations)))
 	}
 	policy, err := model.NewTeamworkActionPolicy(model.TeamworkActionPolicySpec{
-		AssetRevision: model.Sum([]byte(fmt.Sprintf("acceptance-action-policy-%d", offerMax))),
+		AssetRevision: revision,
 		Entries:       entries})
 	if err != nil {
 		t.Fatal(err)

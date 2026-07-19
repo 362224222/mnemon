@@ -656,7 +656,7 @@ func executorCurrentReceipt(t *testing.T, fixture *executorFixture, run model.Ru
 	}
 	receipt, err := model.NewCurrentReadReceipt(model.CurrentReadReceiptSpec{RunID: run,
 		ProfileID: fixture.profile.ID(), HandlingID: handling, HandlingAttempt: 1,
-		Projection: projection, ReadAt: fixture.at.Add(-time.Minute)})
+		Projection: projection, ActionWorkUpdatedBy: work.UpdatedBy(), ActionWorkUpdatedAt: work.UpdatedAt(), ReadAt: fixture.at.Add(-time.Minute)})
 	if err != nil {
 		t.Fatal(err)
 	}

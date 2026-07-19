@@ -478,7 +478,7 @@ func artifactResolverCurrent(t *testing.T,
 	handlingID, _ := model.ParseHandlingID("handling-resolver-current")
 	receipt, err := model.NewCurrentReadReceipt(model.CurrentReadReceiptSpec{RunID: operation.AgentRunID(),
 		ProfileID: model.TeamworkProfileID(), HandlingID: handlingID, HandlingAttempt: 1,
-		Projection: projection, ReadAt: acceptedAt.Add(time.Second)})
+		Projection: projection, ActionWorkUpdatedBy: eventID, ActionWorkUpdatedAt: acceptedAt, ReadAt: acceptedAt.Add(time.Second)})
 	if err != nil {
 		t.Fatal(err)
 	}
