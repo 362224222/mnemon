@@ -23,6 +23,9 @@ const (
 	casObjectMode    = 0o600
 	maxCASObjectSize = MaxManifestBytes
 	casDigestShards  = 256
+	// Object collection is an internal bounded worker surface. A hard page
+	// limit prevents a caller-controlled allocation from weakening PX-11.
+	maxCASObjectPageSize = 256
 )
 
 var (
@@ -47,12 +50,45 @@ type CASLease struct {
 }
 
 // CASObjectCandidate is a defensive snapshot of one canonical final object.
-// ListObjectsBefore returns candidates in Digest order.
+// Object scan pages return candidates in Digest order.
 type CASObjectCandidate struct {
 	Digest     model.Digest
 	Size       uint64
 	ModifiedAt time.Time
 }
+
+// CASObjectScanCursor is the restartable exclusive lower bound for one
+// object-collection pass. cutoff is carried by every successor so a caller
+// cannot accidentally move the eligibility boundary between pages. A zero
+// after digest denotes the beginning of the canonical digest keyspace.
+type CASObjectScanCursor struct {
+	cutoff time.Time
+	after  model.Digest
+}
+
+// CASObjectPage is one bounded, deterministic object-collection page. The
+// next cursor advances past every returned candidate even when the Store later
+// decides that candidate is protected. Done explicitly marks the terminal
+// state observed by this scan. Replaying its cursor cannot return an existing
+// candidate at or below that digest; ordinary later writes fall outside the
+// frozen cutoff.
+type CASObjectPage struct {
+	Candidates []CASObjectCandidate
+	NextCursor CASObjectScanCursor
+	Done       bool
+}
+
+// NewCASObjectScanCursor constructs a canonical restart cursor. Callers may
+// durably persist Cutoff and After and reconstruct the same scan after restart.
+func NewCASObjectScanCursor(cutoff time.Time, after model.Digest) (CASObjectScanCursor, error) {
+	if cutoff.IsZero() {
+		return CASObjectScanCursor{}, fmt.Errorf("%w: object scan cutoff", ErrCASInput)
+	}
+	return CASObjectScanCursor{cutoff: cutoff.Round(0).UTC(), after: after}, nil
+}
+
+func (cursor CASObjectScanCursor) Cutoff() time.Time   { return cursor.cutoff }
+func (cursor CASObjectScanCursor) After() model.Digest { return cursor.after }
 
 type CASTombstoneState string
 
@@ -484,36 +520,92 @@ func (cas *CAS) TempFiles() ([]string, error) {
 	return result, nil
 }
 
-// ListObjectsBefore returns at most limit canonical final objects whose
-// modification time is strictly before cutoff. Selection and output are
-// deterministic by Digest and memory use is bounded by limit.
+// ListObjectsBefore returns the first bounded page of canonical final objects
+// strictly older than cutoff. It remains as a compatibility surface; a
+// collector must use ListObjectsPage and persist its returned cursor so a
+// protected low-digest prefix cannot starve later orphan candidates.
 func (cas *CAS) ListObjectsBefore(cutoff time.Time, limit int) ([]CASObjectCandidate, error) {
-	if err := cas.validate(); err != nil {
-		return nil, err
-	}
-	if cutoff.IsZero() || limit <= 0 {
-		return nil, fmt.Errorf("%w: object listing cutoff or limit", ErrCASInput)
-	}
-	rootSnapshot, err := cas.validateObjectRootLayout()
+	cursor, err := NewCASObjectScanCursor(cutoff, model.Digest{})
 	if err != nil {
 		return nil, err
 	}
-	cutoff = cutoff.Round(0)
-	candidates := make([]CASObjectCandidate, 0, limit)
-	for prefix := 0; prefix < 256; prefix++ {
-		lock := &cas.coordination.digests[prefix%casDigestShards]
+	page, err := cas.ListObjectsPage(cursor, limit)
+	if err != nil {
+		return nil, err
+	}
+	return page.Candidates, nil
+}
+
+// ListObjectsPage returns at most limit canonical final objects strictly older
+// than the cursor's frozen cutoff and strictly after its digest lower bound.
+//
+// Filesystem directory order is not portable or stable across restart. To
+// preserve canonical digest order with bounded memory, the scanner completely
+// validates each visited shard while retaining only its smallest limit+1
+// matches. Once lookahead is full it stops before opening another shard, so a
+// nonterminal page does not perform a fixed traversal of all 256 object shards.
+// The root namespace remains a bounded full validation (two reserved names plus
+// at most 256 shards) so unknown, uppercase, file, and symlink root entries
+// still fail closed.
+//
+// A very large single shard is necessarily rescanned on each page within that
+// shard. File.ReadDir's directory-order cursor is neither a canonical digest
+// cursor nor reliable across restart/layout changes; using it would trade away
+// deterministic recovery. The one-byte on-disk sharding bounds neither that
+// I/O nor latency, but this conservative scan bounds retained memory/results
+// and closes protected-prefix starvation without changing the CAS layout.
+func (cas *CAS) ListObjectsPage(cursor CASObjectScanCursor, limit int) (CASObjectPage, error) {
+	if err := cas.validate(); err != nil {
+		return CASObjectPage{}, err
+	}
+	if err := validateCASObjectScanCursor(cursor); err != nil {
+		return CASObjectPage{}, err
+	}
+	if limit <= 0 || limit > maxCASObjectPageSize {
+		return CASObjectPage{}, fmt.Errorf("%w: object page limit", ErrCASInput)
+	}
+	rootSnapshot, err := cas.validateObjectRootLayout()
+	if err != nil {
+		return CASObjectPage{}, err
+	}
+
+	lookahead := limit + 1
+	candidates := make([]CASObjectCandidate, 0, lookahead)
+	scanned := make([]casObjectShardSnapshot, 0, 4)
+	start := 0
+	if !cursor.after.IsZero() {
+		start = casDigestShard(cursor.after)
+	}
+	done := true
+	for prefix := start; prefix < casDigestShards; prefix++ {
+		if !rootSnapshot.shards[prefix] {
+			continue
+		}
+		lock := &cas.coordination.digests[prefix]
 		lock.RLock()
-		err = cas.scanObjectShard(byte(prefix), cutoff, limit, &candidates)
+		shardSnapshot, scanErr := cas.scanObjectShard(byte(prefix), cursor, lookahead, &candidates)
 		lock.RUnlock()
-		if err != nil {
-			return nil, err
+		if scanErr != nil {
+			return CASObjectPage{}, scanErr
+		}
+		scanned = append(scanned, casObjectShardSnapshot{prefix: byte(prefix), info: shardSnapshot})
+		if len(candidates) == lookahead {
+			done = false
+			break
 		}
 	}
-	rootAfter, err := os.Lstat(cas.root)
-	if err != nil || !sameCASDirectorySnapshot(rootSnapshot, rootAfter) {
-		return nil, fmt.Errorf("%w: object root changed while listing", ErrCASCorruption)
+	if err := cas.validateObjectScanSnapshots(rootSnapshot, scanned); err != nil {
+		return CASObjectPage{}, err
 	}
-	return candidates, nil
+
+	if len(candidates) > limit {
+		candidates = candidates[:limit]
+	}
+	next := cursor
+	if len(candidates) > 0 {
+		next.after = candidates[len(candidates)-1].Digest
+	}
+	return CASObjectPage{Candidates: candidates, NextCursor: next, Done: done}, nil
 }
 
 // ListTombstones returns at most limit canonical tombstones in deterministic
@@ -852,23 +944,41 @@ func casDigestShard(digest model.Digest) int {
 	return int(bytes[0])
 }
 
-func (cas *CAS) validateObjectRootLayout() (os.FileInfo, error) {
+type casObjectRootSnapshot struct {
+	info   os.FileInfo
+	shards [casDigestShards]bool
+}
+
+type casObjectShardSnapshot struct {
+	prefix byte
+	info   os.FileInfo
+}
+
+func validateCASObjectScanCursor(cursor CASObjectScanCursor) error {
+	if cursor.cutoff.IsZero() || cursor.cutoff != cursor.cutoff.Round(0).UTC() {
+		return fmt.Errorf("%w: noncanonical object scan cursor", ErrCASInput)
+	}
+	return nil
+}
+
+func (cas *CAS) validateObjectRootLayout() (casObjectRootSnapshot, error) {
 	before, err := os.Lstat(cas.root)
 	if err != nil {
-		return nil, fmt.Errorf("inspect Artifact CAS object root: %w", err)
+		return casObjectRootSnapshot{}, fmt.Errorf("inspect Artifact CAS object root: %w", err)
 	}
 	if err := validateCASDirectoryInfo(before); err != nil {
-		return nil, err
+		return casObjectRootSnapshot{}, err
 	}
 	handle, err := os.Open(cas.root)
 	if err != nil {
-		return nil, fmt.Errorf("open Artifact CAS object root: %w", err)
+		return casObjectRootSnapshot{}, fmt.Errorf("open Artifact CAS object root: %w", err)
 	}
 	defer handle.Close()
 	opened, err := handle.Stat()
 	if err != nil || !sameCASDirectorySnapshot(before, opened) {
-		return nil, fmt.Errorf("%w: object root changed while opening", ErrCASCorruption)
+		return casObjectRootSnapshot{}, fmt.Errorf("%w: object root changed while opening", ErrCASCorruption)
 	}
+	snapshot := casObjectRootSnapshot{info: before}
 	foundTemp := false
 	foundTrash := false
 	for {
@@ -878,7 +988,7 @@ func (cas *CAS) validateObjectRootLayout() (os.FileInfo, error) {
 			path := filepath.Join(cas.root, name)
 			info, statErr := os.Lstat(path)
 			if statErr != nil {
-				return nil, fmt.Errorf("inspect Artifact CAS root entry: %w", statErr)
+				return casObjectRootSnapshot{}, fmt.Errorf("inspect Artifact CAS root entry: %w", statErr)
 			}
 			switch name {
 			case ".tmp":
@@ -887,58 +997,60 @@ func (cas *CAS) validateObjectRootLayout() (os.FileInfo, error) {
 				foundTrash = true
 			default:
 				if len(name) != 2 || strings.ToLower(name) != name {
-					return nil, fmt.Errorf("%w: noncanonical object root entry %q", ErrCASCorruption, name)
+					return casObjectRootSnapshot{}, fmt.Errorf("%w: noncanonical object root entry %q", ErrCASCorruption, name)
 				}
 				decoded, decodeErr := hex.DecodeString(name)
 				if decodeErr != nil || len(decoded) != 1 {
-					return nil, fmt.Errorf("%w: noncanonical object root entry %q", ErrCASCorruption, name)
+					return casObjectRootSnapshot{}, fmt.Errorf("%w: noncanonical object root entry %q", ErrCASCorruption, name)
 				}
+				snapshot.shards[int(decoded[0])] = true
 			}
 			if err := validateCASDirectoryInfo(info); err != nil {
-				return nil, fmt.Errorf("%w: unsafe object root entry %q", err, name)
+				return casObjectRootSnapshot{}, fmt.Errorf("%w: unsafe object root entry %q", err, name)
 			}
 		}
 		if errors.Is(readErr, io.EOF) {
 			break
 		}
 		if readErr != nil {
-			return nil, fmt.Errorf("list Artifact CAS object root: %w", readErr)
+			return casObjectRootSnapshot{}, fmt.Errorf("list Artifact CAS object root: %w", readErr)
 		}
 	}
 	if !foundTemp || !foundTrash {
-		return nil, fmt.Errorf("%w: object root is missing a reserved directory", ErrCASCorruption)
+		return casObjectRootSnapshot{}, fmt.Errorf("%w: object root is missing a reserved directory", ErrCASCorruption)
 	}
 	afterFD, fdErr := handle.Stat()
 	afterPath, pathErr := os.Lstat(cas.root)
 	if fdErr != nil || pathErr != nil || !sameCASDirectorySnapshot(before, afterFD) ||
 		!sameCASDirectorySnapshot(before, afterPath) {
-		return nil, fmt.Errorf("%w: object root changed while validating", ErrCASCorruption)
+		return casObjectRootSnapshot{}, fmt.Errorf("%w: object root changed while validating", ErrCASCorruption)
 	}
-	return before, nil
+	return snapshot, nil
 }
 
-func (cas *CAS) scanObjectShard(prefix byte, cutoff time.Time, limit int,
+func (cas *CAS) scanObjectShard(prefix byte, cursor CASObjectScanCursor, limit int,
 	candidates *[]CASObjectCandidate,
-) error {
+) (os.FileInfo, error) {
 	directory := filepath.Join(cas.root, fmt.Sprintf("%02x", prefix))
 	before, err := os.Lstat(directory)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
 	if err != nil {
-		return fmt.Errorf("inspect Artifact CAS object shard: %w", err)
+		return nil, fmt.Errorf("%w: expected object shard is unavailable: %v", ErrCASCorruption, err)
 	}
 	if err := validateCASDirectoryInfo(before); err != nil {
-		return err
+		return nil, err
 	}
 	handle, err := os.Open(directory)
 	if err != nil {
-		return fmt.Errorf("open Artifact CAS object shard: %w", err)
+		return nil, fmt.Errorf("open Artifact CAS object shard: %w", err)
 	}
 	defer handle.Close()
 	opened, err := handle.Stat()
 	if err != nil || !sameCASDirectorySnapshot(before, opened) {
-		return fmt.Errorf("%w: object shard changed while opening", ErrCASCorruption)
+		return nil, fmt.Errorf("%w: object shard changed while opening", ErrCASCorruption)
+	}
+	afterName := ""
+	if !cursor.after.IsZero() {
+		afterName = strings.TrimPrefix(cursor.after.String(), "sha256:")
 	}
 	for {
 		entries, readErr := handle.ReadDir(128)
@@ -947,20 +1059,21 @@ func (cas *CAS) scanObjectShard(prefix byte, cutoff time.Time, limit int,
 			digest, parseErr := model.ParseDigest("sha256:" + name)
 			if parseErr != nil || digest.IsZero() || len(name) != 64 ||
 				!strings.HasPrefix(name, fmt.Sprintf("%02x", prefix)) {
-				return fmt.Errorf("%w: noncanonical object entry %q", ErrCASCorruption, name)
+				return nil, fmt.Errorf("%w: noncanonical object entry %q", ErrCASCorruption, name)
 			}
 			path := filepath.Join(directory, name)
 			info, statErr := os.Lstat(path)
 			if statErr != nil {
-				return fmt.Errorf("inspect Artifact CAS object candidate: %w", statErr)
+				return nil, fmt.Errorf("inspect Artifact CAS object candidate: %w", statErr)
 			}
 			if err := validateCASRegular(info, maxCASObjectSize); err != nil {
-				return err
+				return nil, err
 			}
 			if err := requireCASLinkCount(info, 1); err != nil {
-				return err
+				return nil, err
 			}
-			if !info.ModTime().Before(cutoff) {
+			if (afterName != "" && name <= afterName) ||
+				!info.ModTime().Before(cursor.cutoff) {
 				continue
 			}
 			*candidates = insertCASObjectCandidate(*candidates, CASObjectCandidate{
@@ -971,14 +1084,31 @@ func (cas *CAS) scanObjectShard(prefix byte, cutoff time.Time, limit int,
 			break
 		}
 		if readErr != nil {
-			return fmt.Errorf("list Artifact CAS object shard: %w", readErr)
+			return nil, fmt.Errorf("list Artifact CAS object shard: %w", readErr)
 		}
 	}
 	afterFD, fdErr := handle.Stat()
 	afterPath, pathErr := os.Lstat(directory)
 	if fdErr != nil || pathErr != nil || !sameCASDirectorySnapshot(before, afterFD) ||
 		!sameCASDirectorySnapshot(before, afterPath) {
-		return fmt.Errorf("%w: object shard changed while listing", ErrCASCorruption)
+		return nil, fmt.Errorf("%w: object shard changed while listing", ErrCASCorruption)
+	}
+	return before, nil
+}
+
+func (cas *CAS) validateObjectScanSnapshots(root casObjectRootSnapshot,
+	shards []casObjectShardSnapshot,
+) error {
+	for _, snapshot := range shards {
+		path := filepath.Join(cas.root, fmt.Sprintf("%02x", snapshot.prefix))
+		current, err := os.Lstat(path)
+		if err != nil || !sameCASDirectorySnapshot(snapshot.info, current) {
+			return fmt.Errorf("%w: object shard changed after listing", ErrCASCorruption)
+		}
+	}
+	rootAfter, err := os.Lstat(cas.root)
+	if err != nil || !sameCASDirectorySnapshot(root.info, rootAfter) {
+		return fmt.Errorf("%w: object root changed while listing", ErrCASCorruption)
 	}
 	return nil
 }

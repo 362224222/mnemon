@@ -674,6 +674,308 @@ func TestCASObjectListingIsStrictBoundedAndCanonical(t *testing.T) {
 	}
 }
 
+func TestCASObjectPaginationAdvancesPastProtectedPrefixAndRestarts(t *testing.T) {
+	cas := openTestCAS(t)
+	cutoff := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	digests := make([]model.Digest, 0, 9)
+	for index := 0; index < 9; index++ {
+		content := []byte(fmt.Sprintf("restartable object page %d", index))
+		digest := model.Sum(content)
+		if _, err := cas.Put(digest, content); err != nil {
+			t.Fatal(err)
+		}
+		path := mustCASObjectPath(t, cas, digest)
+		modified := cutoff.Add(-time.Duration(index+1) * time.Minute)
+		if err := os.Chtimes(path, modified, modified); err != nil {
+			t.Fatal(err)
+		}
+		digests = append(digests, digest)
+	}
+	sort.Slice(digests, func(left, right int) bool {
+		return digests[left].String() < digests[right].String()
+	})
+
+	// More low-digest objects are protected than fit in one page. A high
+	// protected object makes the check independent of a prefix-only policy;
+	// the highest digest remains an orphan that must eventually surface.
+	protected := make(map[model.Digest]bool)
+	for _, digest := range digests[:5] {
+		protected[digest] = true
+	}
+	protected[digests[7]] = true
+	wantOrphans := []model.Digest{digests[5], digests[6], digests[8]}
+
+	cursor, err := NewCASObjectScanCursor(cutoff.In(time.FixedZone("test", 3600)), model.Digest{})
+	if err != nil || cursor.Cutoff().Location() != time.UTC {
+		t.Fatalf("initial cursor = (%#v, %v)", cursor, err)
+	}
+	var seen []model.Digest
+	var orphans []model.Digest
+	pages := 0
+	for {
+		page, err := cas.ListObjectsPage(cursor, 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pages++
+		if len(page.Candidates) > 2 || page.NextCursor.Cutoff() != cursor.Cutoff() {
+			t.Fatalf("page %d broke bounds or cutoff = %#v", pages, page)
+		}
+		for index, candidate := range page.Candidates {
+			if !candidate.ModifiedAt.Before(cutoff) {
+				t.Fatalf("page %d returned cutoff-equal/new candidate %#v", pages, candidate)
+			}
+			if index > 0 && page.Candidates[index-1].Digest.String() >= candidate.Digest.String() {
+				t.Fatalf("page %d is not canonical: %#v", pages, page.Candidates)
+			}
+			seen = append(seen, candidate.Digest)
+			if !protected[candidate.Digest] {
+				orphans = append(orphans, candidate.Digest)
+			}
+		}
+		if len(page.Candidates) > 0 &&
+			page.NextCursor.After() != page.Candidates[len(page.Candidates)-1].Digest {
+			t.Fatalf("page %d cursor did not advance over returned candidates", pages)
+		}
+		cursor = page.NextCursor
+		if pages == 1 {
+			// Simulate persisting cutoff+digest, then reopening the same CAS in a
+			// fresh process before continuing the scan.
+			cas, err = NewCAS(cas.root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cursor, err = NewCASObjectScanCursor(cursor.Cutoff(), cursor.After())
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		if page.Done {
+			break
+		}
+		if pages > len(digests)+1 {
+			t.Fatal("object pagination did not terminate")
+		}
+	}
+	if pages < 3 || fmt.Sprint(seen) != fmt.Sprint(digests) ||
+		fmt.Sprint(orphans) != fmt.Sprint(wantOrphans) {
+		t.Fatalf("paged scan pages=%d seen=%v orphans=%v, want seen=%v orphans=%v",
+			pages, seen, orphans, digests, wantOrphans)
+	}
+	terminal, err := cas.ListObjectsPage(cursor, 2)
+	if err != nil || !terminal.Done || len(terminal.Candidates) != 0 ||
+		terminal.NextCursor.After() != cursor.After() || terminal.NextCursor.Cutoff() != cursor.Cutoff() {
+		t.Fatalf("terminal cursor replay = (%#v, %v)", terminal, err)
+	}
+}
+
+func TestCASObjectPaginationFreezesStrictCutoffAcrossNewWrites(t *testing.T) {
+	cas := openTestCAS(t)
+	cutoff := time.Now().UTC().Add(-time.Minute).Truncate(time.Second)
+	old := make(map[model.Digest]bool)
+	for index := 0; index < 4; index++ {
+		content := []byte(fmt.Sprintf("old frozen-cutoff object %d", index))
+		digest := model.Sum(content)
+		if _, err := cas.Put(digest, content); err != nil {
+			t.Fatal(err)
+		}
+		path := mustCASObjectPath(t, cas, digest)
+		modified := cutoff.Add(-time.Duration(index+1) * time.Second)
+		if err := os.Chtimes(path, modified, modified); err != nil {
+			t.Fatal(err)
+		}
+		old[digest] = true
+	}
+	exactContent := []byte("cutoff-equal object")
+	exactDigest := model.Sum(exactContent)
+	if _, err := cas.Put(exactDigest, exactContent); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(mustCASObjectPath(t, cas, exactDigest), cutoff, cutoff); err != nil {
+		t.Fatal(err)
+	}
+
+	cursor, err := NewCASObjectScanCursor(cutoff, model.Digest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := cas.ListObjectsPage(cursor, 1)
+	if err != nil || len(first.Candidates) != 1 || first.Done {
+		t.Fatalf("first frozen-cutoff page = (%#v, %v)", first, err)
+	}
+
+	newContent := []byte("written after the frozen cutoff")
+	newDigest := model.Sum(newContent)
+	if _, err := cas.Put(newDigest, newContent); err != nil {
+		t.Fatal(err)
+	}
+	seen := map[model.Digest]bool{first.Candidates[0].Digest: true}
+	cursor = first.NextCursor
+	for {
+		page, err := cas.ListObjectsPage(cursor, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, candidate := range page.Candidates {
+			seen[candidate.Digest] = true
+		}
+		cursor = page.NextCursor
+		if page.Done {
+			break
+		}
+	}
+	if len(seen) != len(old) || seen[exactDigest] || seen[newDigest] {
+		t.Fatalf("frozen cutoff selected seen=%v, exact=%v new=%v", seen, seen[exactDigest], seen[newDigest])
+	}
+	for digest := range old {
+		if !seen[digest] {
+			t.Fatalf("old digest %s was skipped by frozen scan", digest)
+		}
+	}
+}
+
+func TestCASObjectPaginationRejectsInvalidCursorAndLimit(t *testing.T) {
+	cas := openTestCAS(t)
+	if _, err := cas.ListObjectsPage(CASObjectScanCursor{}, 1); !errors.Is(err, ErrCASInput) {
+		t.Fatalf("zero cursor error = %v", err)
+	}
+	forged := CASObjectScanCursor{cutoff: time.Now(), after: model.Sum([]byte("after"))}
+	if _, err := cas.ListObjectsPage(forged, 1); !errors.Is(err, ErrCASInput) {
+		t.Fatalf("noncanonical cursor error = %v", err)
+	}
+	cursor, err := NewCASObjectScanCursor(time.Now(), model.Digest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, limit := range []int{0, -1, maxCASObjectPageSize + 1} {
+		if _, err := cas.ListObjectsPage(cursor, limit); !errors.Is(err, ErrCASInput) {
+			t.Fatalf("invalid page limit %d error = %v", limit, err)
+		}
+	}
+}
+
+func TestCASObjectPaginationMarksExactLimitTerminalAndReplaysEmpty(t *testing.T) {
+	cas := openTestCAS(t)
+	cutoff := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	for index := 0; index < 2; index++ {
+		content := []byte(fmt.Sprintf("exact terminal page object %d", index))
+		digest := model.Sum(content)
+		if _, err := cas.Put(digest, content); err != nil {
+			t.Fatal(err)
+		}
+		path := mustCASObjectPath(t, cas, digest)
+		if err := os.Chtimes(path, cutoff.Add(-time.Minute), cutoff.Add(-time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cursor, err := NewCASObjectScanCursor(cutoff, model.Digest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := cas.ListObjectsPage(cursor, 2)
+	if err != nil || !page.Done || len(page.Candidates) != 2 {
+		t.Fatalf("exact-limit terminal page = (%#v, %v)", page, err)
+	}
+	replay, err := cas.ListObjectsPage(page.NextCursor, 2)
+	if err != nil || !replay.Done || len(replay.Candidates) != 0 ||
+		replay.NextCursor.After() != page.NextCursor.After() {
+		t.Fatalf("exact-limit terminal replay = (%#v, %v)", replay, err)
+	}
+}
+
+func TestCASObjectPaginationBatchesShardsAndEventuallyFailsClosed(t *testing.T) {
+	cas := openTestCAS(t)
+	cutoff := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	digests := make([]model.Digest, 0, 3)
+	for index := 0; len(digests) < 3; index++ {
+		content := []byte(fmt.Sprintf("low-shard page candidate %d", index))
+		digest := model.Sum(content)
+		if digest.Bytes()[0] >= 0x40 {
+			continue
+		}
+		if _, err := cas.Put(digest, content); err != nil {
+			t.Fatal(err)
+		}
+		path := mustCASObjectPath(t, cas, digest)
+		if err := os.Chtimes(path, cutoff.Add(-time.Minute), cutoff.Add(-time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+		digests = append(digests, digest)
+	}
+	sort.Slice(digests, func(left, right int) bool {
+		return digests[left].String() < digests[right].String()
+	})
+	farShard := filepath.Join(cas.root, "f0")
+	if err := os.Mkdir(farShard, casDirectoryMode); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(farShard, "not-a-digest"), []byte("unsafe"), casObjectMode); err != nil {
+		t.Fatal(err)
+	}
+	cursor, err := NewCASObjectScanCursor(cutoff, model.Digest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := cas.ListObjectsPage(cursor, 1)
+	if err != nil || first.Done || len(first.Candidates) != 1 || first.Candidates[0].Digest != digests[0] {
+		t.Fatalf("bounded first shard page = (%#v, %v)", first, err)
+	}
+	second, err := cas.ListObjectsPage(first.NextCursor, 1)
+	if err != nil || second.Done || len(second.Candidates) != 1 || second.Candidates[0].Digest != digests[1] {
+		t.Fatalf("bounded second shard page = (%#v, %v)", second, err)
+	}
+	if _, err := cas.ListObjectsPage(second.NextCursor, 1); !errors.Is(err, ErrCASCorruption) {
+		t.Fatalf("reached unsafe later shard error = %v", err)
+	}
+}
+
+func TestCASObjectPaginationFailsClosedOnHardLinkAndRestartLayoutChange(t *testing.T) {
+	t.Run("final hard link", func(t *testing.T) {
+		cas := openTestCAS(t)
+		content := []byte("hard-linked final scan object")
+		digest := model.Sum(content)
+		if _, err := cas.Put(digest, content); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Link(mustCASObjectPath(t, cas, digest), filepath.Join(t.TempDir(), "foreign")); err != nil {
+			t.Fatal(err)
+		}
+		cursor, _ := NewCASObjectScanCursor(time.Now().Add(time.Hour), model.Digest{})
+		if _, err := cas.ListObjectsPage(cursor, 1); !errors.Is(err, ErrCASCorruption) {
+			t.Fatalf("hard-linked final error = %v", err)
+		}
+	})
+
+	t.Run("restart shard replacement", func(t *testing.T) {
+		cas := openTestCAS(t)
+		content := []byte("restart layout object")
+		digest := model.Sum(content)
+		if _, err := cas.Put(digest, content); err != nil {
+			t.Fatal(err)
+		}
+		cursor, _ := NewCASObjectScanCursor(time.Now().Add(time.Hour), model.Digest{})
+		shard := filepath.Dir(mustCASObjectPath(t, cas, digest))
+		saved := filepath.Join(filepath.Dir(cas.root), "saved-shard")
+		if err := os.Rename(shard, saved); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(saved, shard); err != nil {
+			t.Fatal(err)
+		}
+		restarted, err := NewCAS(cas.root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resumed, err := NewCASObjectScanCursor(cursor.Cutoff(), cursor.After())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := restarted.ListObjectsPage(resumed, 1); !errors.Is(err, ErrCASCorruption) {
+			t.Fatalf("restarted changed layout error = %v", err)
+		}
+	})
+}
+
 func TestCASObjectListingRejectsUnsafeRootEntries(t *testing.T) {
 	for _, test := range []struct {
 		name   string
