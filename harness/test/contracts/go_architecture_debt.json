@@ -63,16 +63,6 @@
       "removal_checkpoint": "8a"
     },
     {
-      "rule": "closed_set_authority",
-      "identity": "closed_set_authority:teamwork-actions",
-      "path": "harness/internal/localapi/server.go",
-      "symbol": "validTeamworkAction",
-      "risk": "high",
-      "evidence": "harness/internal/localapi/server.go::validTeamworkAction",
-      "owner": "harness/internal/assets + harness/internal/cli + harness/internal/localapi + harness/internal/agent + harness/internal/store",
-      "removal_checkpoint": "7R"
-    },
-    {
       "rule": "dependency_direction",
       "identity": "dependency_direction:harness/cmd/mnemon-harness::cli",
       "path": "harness/cmd/mnemon-harness",

@@ -52,10 +52,6 @@ func (s *Server) handleTeamworkAction(writer http.ResponseWriter, request *http.
 		writeError(writer, apiErr)
 		return
 	}
-	if !validTeamworkAction(input.Action) {
-		writeError(writer, NewAPIError(CodeUnknownAction, "unknown Teamwork action"))
-		return
-	}
 	response, apiErr := s.service.TeamworkAction(request.Context(), metadata, input)
 	if apiErr != nil {
 		writeError(writer, apiErr)

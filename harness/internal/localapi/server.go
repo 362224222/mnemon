@@ -534,8 +534,3 @@ func IsControlRoute(path string) bool {
 	return path == RouteHealth || path == RouteStatus || path == RouteAuthority ||
 		path == RouteShutdown || IsAgentRoute(path)
 }
-
-func validTeamworkAction(action string) bool {
-	return action == "offer" || action == "accept" || action == "decline" ||
-		action == "deliver" || action == "rework" || action == "close" || action == "cancel"
-}

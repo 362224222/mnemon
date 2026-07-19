@@ -11,11 +11,11 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 )
 
-func TestServerRejectsUnknownTeamworkActionBeforeManagedService(t *testing.T) {
+func TestServerTransportsUnknownTeamworkActionToManagedService(t *testing.T) {
 	t.Parallel()
 	credential := make([]byte, opaqueSecretBytes)
 	operation := make([]byte, opaqueSecretBytes)
-	service := &fakeService{}
+	service := &fakeService{fail: NewAPIError(CodeUnknownAction, "unknown Teamwork action")}
 	server, err := NewServer(&fakeAuthenticator{want: modelDigest(credential)}, service)
 	if err != nil {
 		t.Fatal(err)
@@ -25,9 +25,10 @@ func TestServerRejectsUnknownTeamworkActionBeforeManagedService(t *testing.T) {
 	request.Header.Set(operationKeyHeader, encodeSecret(operation))
 	recorder := httptest.NewRecorder()
 	server.Handler().ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusBadRequest || service.called != "" ||
+	if recorder.Code != http.StatusBadRequest || service.called != "action" ||
+		service.action.Action != "future-action" ||
 		!strings.Contains(recorder.Body.String(), `"code":"unknown_action"`) {
-		t.Fatalf("semantic rejection = %d %s service=%#v", recorder.Code,
+		t.Fatalf("managed semantic rejection = %d %s service=%#v", recorder.Code,
 			recorder.Body.String(), service)
 	}
 }
