@@ -102,7 +102,8 @@ func TestFinalizeAgentCurrentReadIsFencedAndConcurrentReplaySafe(t *testing.T) {
 	})
 
 	t.Run("Profile projection budget", func(t *testing.T) {
-		fixture, events := newAgentClaimFixture(t, 1, "current-budget")
+		fixture, events := newAgentClaimFixtureWithContent(t, 1, "current-budget",
+			strings.Repeat("x", 2048))
 		budgetSpec := model.DefaultHandlingBudget().Spec()
 		budgetSpec.MaxCurrentJSONBytes = 1024
 		budget, err := model.NewHandlingBudget(budgetSpec)
@@ -111,13 +112,6 @@ func TestFinalizeAgentCurrentReadIsFencedAndConcurrentReplaySafe(t *testing.T) {
 		}
 		if _, err := fixture.store.db.Exec(`UPDATE profiles SET handling_budget_json=? WHERE profile_id=?`,
 			budget.JSON().Bytes(), fixture.profile.ID().String()); err != nil {
-			t.Fatal(err)
-		}
-		longState, _ := model.JSONFrom(struct {
-			Content string `json:"content"`
-		}{strings.Repeat("x", 2048)})
-		if _, err := fixture.store.db.Exec(`UPDATE works SET state_json=? WHERE updated_by_event=?`,
-			longState.Bytes(), events[0].String()); err != nil {
 			t.Fatal(err)
 		}
 		claimAt := fixture.now.Add(2 * time.Second)
@@ -544,6 +538,30 @@ func TestDeriveCurrentActionsUsesExactParticipantStateAndSourceEvent(t *testing.
 	acceptedFacts, _ := decodeClosedEventPayload(accepted)
 	if exact, err := currentWorkIsExactSource(accepted, activeWork, acceptedFacts); err != nil || !exact {
 		t.Fatalf("accepted current binding = (%t, %v)", exact, err)
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*model.ReviewWorkSpec)
+	}{
+		{"version", func(spec *model.ReviewWorkSpec) { spec.Version++ }},
+		{"state data", func(spec *model.ReviewWorkSpec) {
+			spec.StateData, _ = model.NewJSON([]byte(`{"forged":true}`))
+		}},
+		{"updated time", func(spec *model.ReviewWorkSpec) {
+			spec.UpdatedAt = spec.UpdatedAt.Add(time.Nanosecond)
+		}},
+	} {
+		t.Run("reject "+test.name+" drift", func(t *testing.T) {
+			spec := activeWork.Spec()
+			test.mutate(&spec)
+			drifted, err := model.NewReviewWork(spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if exact, err := currentWorkIsExactSource(accepted, drifted, acceptedFacts); err == nil || exact {
+				t.Fatalf("drifted current binding = (%t,%v)", exact, err)
+			}
+		})
 	}
 	if got := deriveCurrentActions(model.CurrentReviewer, accepted, activeWork, true); !sameOperationKinds(got,
 		[]model.OperationKind{model.OperationTeamworkOffer, model.OperationTeamworkDeliver, model.OperationResolveRetry}) {

@@ -978,9 +978,11 @@ func readPeerInboxSemanticCurrentWork(ctx context.Context, tx *sql.Tx,
 		return model.ReviewWork{}, false, fmt.Errorf("%w: current Work update Event: %v",
 			ErrPeerInboxSemanticInvariant, err)
 	}
-	if err := work.ValidateUpdateEvent(update); err != nil {
-		return model.ReviewWork{}, false, fmt.Errorf("%w: current Work update authority: %v",
-			ErrPeerInboxSemanticInvariant, err)
+	facts, factsErr := decodeClosedEventPayload(update)
+	exact, exactErr := currentWorkIsExactSource(update, work, facts)
+	if factsErr != nil || exactErr != nil || !exact {
+		return model.ReviewWork{}, false, fmt.Errorf("%w: current Work update authority (exact %t): %v",
+			ErrPeerInboxSemanticInvariant, exact, errors.Join(factsErr, exactErr))
 	}
 	return work, true, nil
 }

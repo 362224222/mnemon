@@ -537,7 +537,7 @@ func TestPeerInboxSemanticFailsClosedOnAuthorityArtifactAndSnapshotDrift(t *test
 			[]byte(`{"snapshot":"changed"}`), publication.Event().Scope().WorkRef().HomePeerID().String(),
 			publication.Event().Scope().WorkRef().WorkID().String())
 		if err := fixture.store.ProbePeerInboxSemanticAuthority(context.Background(),
-			ProbePeerInboxSemanticAuthoritySpec{Fence: claim.Fence(), At: readyAt.Add(2 * time.Second)}); !errors.Is(err, ErrPeerInboxSemanticStale) {
+			ProbePeerInboxSemanticAuthoritySpec{Fence: claim.Fence(), At: readyAt.Add(2 * time.Second)}); !errors.Is(err, ErrPeerInboxSemanticInvariant) {
 			t.Fatalf("Work snapshot drift probe error = %v", err)
 		}
 	})
@@ -677,8 +677,14 @@ func peerInboxSemanticCurrentWorkPublication(t *testing.T, fixture peerInboxFixt
 		t.Fatal(err)
 	}
 	offerID, _ := model.ParseEventID("event-inbox-" + seed + "-offered")
-	offerPayload, _ := model.NewJSON([]byte(`{"content":"semantic snapshot offer","iteration":1,"work_version":1}`))
 	offerAt := fixture.at.Add(-10 * time.Second)
+	deadline := fixture.at.Add(time.Hour)
+	offerPayload, _ := model.JSONFrom(struct {
+		Content     string `json:"content"`
+		Deadline    string `json:"deadline"`
+		Iteration   uint8  `json:"iteration"`
+		WorkVersion uint64 `json:"work_version"`
+	}{"semantic snapshot offer", deadline.UTC().Format(time.RFC3339Nano), 1, 1})
 	offerPublication := fixture.signEventAs(t, model.EventSpec{ID: offerID, Scope: offerScope,
 		Source: model.EventSourceLocal, ActorPrincipal: "principal-semantic-local",
 		Type: model.EventReviewOffered, Audience: audience, Summary: "semantic snapshot offer",
@@ -688,11 +694,10 @@ func peerInboxSemanticCurrentWorkPublication(t *testing.T, fixture peerInboxFixt
 	if err != nil {
 		t.Fatal(err)
 	}
-	state, _ := model.NewJSON([]byte(`{"snapshot":"offered"}`))
 	work, err := model.NewReviewWork(model.ReviewWorkSpec{Ref: workRef,
 		ChannelID: fixture.channel.Channel().ID(), Participants: participants, Version: 1,
-		Iteration: 1, DeadlineUnixNano: fixture.at.Add(time.Hour).UnixNano(),
-		State: model.WorkOffered, StateData: state, UpdatedBy: offerID, UpdatedAt: offerAt})
+		Iteration: 1, DeadlineUnixNano: deadline.UnixNano(),
+		State: model.WorkOffered, StateData: offerPayload, UpdatedBy: offerID, UpdatedAt: offerAt})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -723,7 +728,7 @@ func peerInboxSemanticCurrentWorkPublication(t *testing.T, fixture peerInboxFixt
 	}
 	localAudience, _ := model.NewAudience([]model.PeerID{local.PeerID()})
 	requestID, _ := model.ParseEventID("event-inbox-" + seed + "-request")
-	requestPayload, _ := model.NewJSON([]byte(`{"content":"semantic snapshot request","iteration":1,"work_version":1}`))
+	requestPayload, _ := model.NewJSON([]byte(`{"iteration":1,"work_version":1}`))
 	request := fixture.signEvent(t, model.EventSpec{ID: requestID, Scope: remoteScope,
 		Source: model.EventSourceLocal, ActorPrincipal: "principal-semantic-remote",
 		Type: model.EventReviewAcceptRequested, Audience: localAudience,

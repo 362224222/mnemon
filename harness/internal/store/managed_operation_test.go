@@ -133,6 +133,7 @@ func TestReserveManagedOperationRejectsStaleContextAndCrossRunTakeover(t *testin
 
 	t.Run("runtime drift", func(t *testing.T) {
 		fixture := newManagedContextFixture(t, "runtime-drift", model.OperationTeamworkAccept)
+		mustExec(t, fixture.store, `DROP TRIGGER agent_runs_creation_identity_immutable`)
 		if _, err := fixture.store.db.Exec("UPDATE agent_runs SET runtime_kind='claude-cli' WHERE run_id=?",
 			fixture.claim.Run.ID().String()); err != nil {
 			t.Fatal(err)

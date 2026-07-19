@@ -563,6 +563,16 @@ CREATE INDEX agent_runs_incomplete_managed_idx
   ON agent_runs(started_at, run_id)
   WHERE launcher = 'mnemond-wake' AND completion_receipt_json IS NULL;
 
+CREATE TRIGGER agent_runs_creation_identity_immutable
+BEFORE UPDATE OF run_id, profile_id, cause_json, launcher, runtime_kind, started_at ON agent_runs
+WHEN NEW.run_id IS NOT OLD.run_id
+  OR NEW.profile_id IS NOT OLD.profile_id
+  OR NEW.cause_json IS NOT OLD.cause_json
+  OR NEW.launcher IS NOT OLD.launcher
+  OR NEW.runtime_kind IS NOT OLD.runtime_kind
+  OR NEW.started_at IS NOT OLD.started_at
+BEGIN SELECT RAISE(ABORT, 'agent run creation identity is immutable'); END;
+
 CREATE TRIGGER agent_runs_claim_snapshot_immutable
 BEFORE UPDATE OF handling_id, handling_attempt, handling_recovery, claim_fence_hash, lease_until ON agent_runs
 WHEN NEW.handling_id IS NOT OLD.handling_id

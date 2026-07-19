@@ -164,8 +164,19 @@ func validateParticipantBinding(ctx context.Context, tx *sql.Tx, item LocalAccep
 	return errors.New("commit local acceptance: Event origin is not a frozen Work participant")
 }
 
-func validateOperationEvents(authority *LocalOperationAuthority, events []model.Event) error {
+func validateOperationEvents(authority *LocalOperationAuthority, events []model.Event,
+	semanticControllerBatch bool,
+) error {
 	if authority == nil {
+		if semanticControllerBatch {
+			if len(events) != 2 || events[0].Type() != model.EventReviewExpired ||
+				(events[1].Type() != model.EventReviewAcceptRejected &&
+					events[1].Type() != model.EventReviewOutcome) ||
+				len(events[0].CausedBy()) != 1 || len(events[1].CausedBy()) != 1 {
+				return errors.New("commit local acceptance: invalid semantic deadline controller batch")
+			}
+			return nil
+		}
 		if len(events) != 1 {
 			return errors.New("commit local acceptance: controller accepts exactly one Event")
 		}

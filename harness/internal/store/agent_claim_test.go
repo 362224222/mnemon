@@ -247,6 +247,7 @@ func TestAgentClaimFailsClosedForProfileAssetAndRunDrift(t *testing.T) {
 		at := fixture.now.Add(time.Minute)
 		insertClaimHandling(t, fixture.store, "handling-run-drift", events[0], 1, at, at, 0)
 		claimCurrent(t, fixture, "owner-run-drift", "token-run-drift", at)
+		mustExec(t, fixture.store, `DROP TRIGGER agent_runs_creation_identity_immutable`)
 		if _, err := fixture.store.db.Exec("UPDATE agent_runs SET runtime_kind='claude-cli' WHERE handling_id='handling-run-drift'"); err != nil {
 			t.Fatal(err)
 		}
@@ -262,6 +263,7 @@ func TestAgentClaimFailsClosedForProfileAssetAndRunDrift(t *testing.T) {
 		at := fixture.now.Add(time.Minute)
 		insertClaimHandling(t, fixture.store, "handling-run-evidence", events[0], 1, at, at, 0)
 		claimCurrent(t, fixture, "owner-run-evidence", "token-run-evidence", at)
+		mustExec(t, fixture.store, `DROP TRIGGER agent_runs_creation_identity_immutable`)
 		if _, err := fixture.store.db.Exec("UPDATE agent_runs SET cause_json=' { }' WHERE handling_id='handling-run-evidence'"); err != nil {
 			t.Fatal(err)
 		}
@@ -323,10 +325,16 @@ func TestAgentClaimSchemaEnforcesOneOwnerAndRunPerAttempt(t *testing.T) {
 }
 
 func newAgentClaimFixture(t *testing.T, eventCount int, suffix string) (*acceptanceFixture, []model.EventID) {
+	return newAgentClaimFixtureWithContent(t, eventCount, suffix, "Review the production change")
+}
+
+func newAgentClaimFixtureWithContent(t *testing.T, eventCount int, suffix, content string,
+) (*acceptanceFixture, []model.EventID) {
 	t.Helper()
 	fixture := newAcceptanceFixture(t, eventCount)
 	_, authority := fixture.reserveOffer(t, "claim-source-"+suffix, nil)
-	spec := fixture.offer(t, authority, "claim-source-"+suffix, fixture.reviewers, nil, nil)
+	spec := fixture.offerWithContent(t, authority, "claim-source-"+suffix,
+		fixture.reviewers, nil, nil, content)
 	if _, err := fixture.store.CommitLocalAcceptance(context.Background(), spec, fixture.now.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}

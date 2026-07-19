@@ -153,7 +153,7 @@ func TestValidateOperationEventsClosesControllerBypass(t *testing.T) {
 	}
 	for _, test := range allowed {
 		event := eventWithCodecCause(t, newCodecEvent(t, test.typeValue, test.payload, now))
-		if err := validateOperationEvents(nil, []model.Event{event}); err != nil {
+		if err := validateOperationEvents(nil, []model.Event{event}, false); err != nil {
 			t.Errorf("controller %s error = %v", test.typeValue, err)
 		}
 	}
@@ -163,12 +163,12 @@ func TestValidateOperationEventsClosesControllerBypass(t *testing.T) {
 		model.EventReviewCancelled,
 	} {
 		event := eventWithCodecCause(t, newCodecEvent(t, forbidden, `{"iteration":1,"work_version":1}`, now))
-		if err := validateOperationEvents(nil, []model.Event{event}); err == nil {
+		if err := validateOperationEvents(nil, []model.Event{event}, false); err == nil {
 			t.Errorf("controller accepted %s", forbidden)
 		}
 	}
 	valid := eventWithCodecCause(t, newCodecEvent(t, model.EventReviewAccepted, `{"iteration":1,"work_version":1}`, now))
-	if err := validateOperationEvents(nil, []model.Event{valid, valid}); err == nil {
+	if err := validateOperationEvents(nil, []model.Event{valid, valid}, false); err == nil {
 		t.Fatal("controller accepted a batch")
 	}
 }
@@ -271,18 +271,18 @@ func TestValidateOperationEventsRequiresExactActionAndExpandedSemantics(t *testi
 	offer := newCodecEvent(t, model.EventReviewOffered,
 		`{"content":"review","deadline":"2026-07-17T13:00:00Z","iteration":1,"work_version":1}`, now)
 	authority := &LocalOperationAuthority{Kind: model.OperationTeamworkOffer}
-	if err := validateOperationEvents(authority, []model.Event{offer}); err != nil {
+	if err := validateOperationEvents(authority, []model.Event{offer}, false); err != nil {
 		t.Fatalf("offer validation error = %v", err)
 	}
 	changed := newCodecEvent(t, model.EventReviewOffered,
 		`{"content":"different","deadline":"2026-07-17T13:00:00Z","iteration":1,"work_version":1}`, now)
-	if err := validateOperationEvents(authority, []model.Event{offer, changed}); err == nil {
+	if err := validateOperationEvents(authority, []model.Event{offer, changed}, false); err == nil {
 		t.Fatal("expanded offer content drift was accepted")
 	}
 	expired := eventWithCodecCause(t, newCodecEvent(t, model.EventReviewExpired,
 		`{"deadline":"2026-07-17T13:00:00Z","iteration":1,"work_version":1}`, now))
 	cancel := &LocalOperationAuthority{Kind: model.OperationTeamworkCancel}
-	if err := validateOperationEvents(cancel, []model.Event{expired}); err == nil {
+	if err := validateOperationEvents(cancel, []model.Event{expired}, false); err == nil {
 		t.Fatal("cancel operation was committed as expiry success")
 	}
 }

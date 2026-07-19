@@ -266,6 +266,14 @@ func (fixture *acceptanceFixture) reserveOffer(t *testing.T, suffix string,
 func (fixture *acceptanceFixture) offer(t *testing.T, authority *LocalOperationAuthority,
 	suffix string, reviewers []model.PeerID, artifacts []model.ArtifactRef, causes []model.EventKey,
 ) LocalAcceptanceSpec {
+	return fixture.offerWithContent(t, authority, suffix, reviewers, artifacts, causes,
+		"Review the production change")
+}
+
+func (fixture *acceptanceFixture) offerWithContent(t *testing.T,
+	authority *LocalOperationAuthority, suffix string, reviewers []model.PeerID,
+	artifacts []model.ArtifactRef, causes []model.EventKey, content string,
+) LocalAcceptanceSpec {
 	t.Helper()
 	allAudience, _ := model.NewAudience(reviewers)
 	snapshot, err := fixture.store.PrepareLocalAdmission(context.Background(), fixture.channel, allAudience, uint8(len(reviewers)))
@@ -274,7 +282,10 @@ func (fixture *acceptanceFixture) offer(t *testing.T, authority *LocalOperationA
 	}
 	signer, _ := eventpkg.NewEd25519Signer(fixture.privateKey)
 	factory, _ := eventpkg.NewFactory(acceptanceClock{fixture.now}, signer)
-	candidate, _ := eventpkg.NewOfferCandidate("Review the production change", 24*time.Hour)
+	candidate, err := eventpkg.NewOfferCandidate(content, 24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
 	items := make([]LocalAcceptanceItem, len(reviewers))
 	for index, reviewer := range reviewers {
 		workID, _ := model.ParseWorkID(fmt.Sprintf("work-%s-%d", suffix, index))

@@ -297,6 +297,7 @@ func TestAgentAttachmentRejectsAuthorityAndDurableDrift(t *testing.T) {
 	if err := fixture.store.PeekAgentRunAttachment(context.Background(), spec); !errors.Is(err, ErrAgentClaimAsset) {
 		t.Fatalf("asset drift error = %v", err)
 	}
+	mustExec(t, fixture.store, `DROP TRIGGER agent_runs_creation_identity_immutable`)
 	if _, err := fixture.store.db.Exec(`UPDATE agent_runs SET launcher='external' WHERE run_id=?`,
 		claim.Run.ID().String()); err != nil {
 		t.Fatal(err)

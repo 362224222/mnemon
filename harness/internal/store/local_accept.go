@@ -50,6 +50,11 @@ type LocalAcceptanceSpec struct {
 	// AgentRun current_read_receipt rather than accepting it from HTTP.
 	AuthorizedReferences []model.Digest
 	Derivation           *LocalDerivationParent
+	// semanticControllerBatch is set only by the package-private Peer Inbox
+	// transaction. It admits the one closed two-Event deadline decision
+	// (review.expired followed by its request receipt) without widening the
+	// ordinary public controller boundary.
+	semanticControllerBatch bool
 }
 
 type LocalAcceptanceResult struct {
@@ -227,7 +232,7 @@ func applyLocalAcceptanceTx(ctx context.Context, tx *sql.Tx, spec LocalAcceptanc
 		}
 		events[index] = event
 	}
-	if err := validateOperationEvents(spec.Operation, events); err != nil {
+	if err := validateOperationEvents(spec.Operation, events, spec.semanticControllerBatch); err != nil {
 		return model.JSON{}, err
 	}
 	if managed {

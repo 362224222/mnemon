@@ -878,6 +878,9 @@ func TestAgentDeadRecoveryWaitsForManagedRuntimeCompletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtimeStartedAt := fixture.claim.Run.StartedAt().Add(time.Millisecond)
+	// Fault-inject the managed creation shape: production Run creation identity
+	// is immutable and cannot be converted from an external Run in place.
+	mustExec(t, fixture.store, `DROP TRIGGER agent_runs_creation_identity_immutable`)
 	if _, err := fixture.store.db.Exec(`UPDATE agent_runs SET launcher='mnemond-wake',
 		runtime_started_at=?,launcher_diagnostic_json=?,runtime_ids_json=? WHERE run_id=?`,
 		storeTime(runtimeStartedAt), []byte(`{"adapter":"codex"}`), []byte(`{"pid":4501}`),

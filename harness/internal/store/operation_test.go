@@ -380,6 +380,7 @@ func TestReserveOperationRequiresActiveAgentRunAuthority(t *testing.T) {
 	}
 
 	insertOperationAgentRun(t, st, profile, "run-runtime-drift", "running", now)
+	mustExec(t, st, `DROP TRIGGER agent_runs_creation_identity_immutable`)
 	if _, err := st.db.Exec("UPDATE agent_runs SET runtime_kind='claude-cli' WHERE run_id='run-runtime-drift'"); err != nil {
 		t.Fatal(err)
 	}

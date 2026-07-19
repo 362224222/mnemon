@@ -538,6 +538,11 @@ func currentWorkIsExactSource(event model.Event, work model.ReviewWork,
 	if err := work.ValidateUpdateEvent(event); err != nil {
 		return false, fmt.Errorf("%w: current Work update: %v", ErrCurrentReadInvariant, err)
 	}
+	if !work.UpdatedAt().Equal(event.AcceptedAt()) ||
+		work.StateData().String() != event.Payload().String() {
+		return false, fmt.Errorf("%w: source Event payload/time does not bind resulting Work",
+			ErrCurrentReadInvariant)
+	}
 	versionMatches := false
 	iterationMatches := false
 	if event.Type() == model.EventReviewOffered {

@@ -133,7 +133,7 @@ func (s *Store) ResolveDeadlineWinner(ctx context.Context, spec DeadlineResoluti
 	if err := validateLocalCausalSemantics(ctx, tx, model.Operation{}, event); err != nil {
 		return DeadlineResolutionResult{}, err
 	}
-	if err := validateOperationEvents(nil, []model.Event{event}); err != nil {
+	if err := validateOperationEvents(nil, []model.Event{event}, false); err != nil {
 		return DeadlineResolutionResult{}, err
 	}
 	if _, err := validateAcceptanceArtifacts(ctx, tx, model.Operation{}, controllerSpec, []model.Event{event}); err != nil {

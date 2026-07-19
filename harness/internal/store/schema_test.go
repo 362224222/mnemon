@@ -45,7 +45,7 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 				"works_deadline_immutable works_event_scope_insert works_event_scope_update " +
 				"work_members_no_update work_members_no_delete work_derivations_scope_insert " +
 				"work_derivations_no_update work_derivations_no_delete agent_handlings_identity_immutable " +
-				"agent_runs_claim_snapshot_immutable " +
+				"agent_runs_creation_identity_immutable agent_runs_claim_snapshot_immutable " +
 				"agent_runs_attachment_identity_immutable agent_runs_evidence_once artifact_roots_content_immutable " +
 				"artifact_roots_no_unverify artifact_roots_verified_at_immutable artifact_roots_gc_queue_insert artifact_roots_gc_delete " +
 				"artifact_blocks_no_update artifact_blocks_gc_queue_insert artifact_blocks_gc_delete artifact_root_blocks_no_update " +
@@ -120,8 +120,8 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 	if !reflect.DeepEqual(actual, expected) {
 		t.Fatalf("schema object set mismatch\nactual: %#v\nexpected: %#v", actual, expected)
 	}
-	if got := len(actual["table"]) + len(actual["index"]) + len(actual["trigger"]); got != 226 {
-		t.Fatalf("explicit object count = %d, want 226", got)
+	if got := len(actual["table"]) + len(actual["index"]) + len(actual["trigger"]); got != 227 {
+		t.Fatalf("explicit object count = %d, want 227", got)
 	}
 }
 
@@ -831,6 +831,37 @@ func TestSchemaV1KeyConstraintsAndTriggers(t *testing.T) {
 		VALUES('run-operation-one','teamwork-default','{}','test','codex-app-server','{}','{}',
 		'running','2026-01-01T00:00:00.000000000Z')`); err != nil {
 		t.Fatalf("insert operation AgentRun: %v", err)
+	}
+	if _, err := st.db.Exec(`UPDATE agent_runs SET run_id=run_id,profile_id=profile_id,
+		cause_json=cause_json,launcher=launcher,runtime_kind=runtime_kind,started_at=started_at
+		WHERE run_id='run-operation-one'`); err != nil {
+		t.Fatalf("same-value AgentRun creation update: %v", err)
+	}
+	for _, mutation := range []string{
+		`UPDATE agent_runs SET run_id='run-operation-forged' WHERE run_id='run-operation-one'`,
+		`UPDATE agent_runs SET profile_id='teamwork-forged' WHERE run_id='run-operation-one'`,
+		`UPDATE agent_runs SET cause_json='{"kind":"forged"}' WHERE run_id='run-operation-one'`,
+		`UPDATE agent_runs SET launcher='forged' WHERE run_id='run-operation-one'`,
+		`UPDATE agent_runs SET runtime_kind='claude-cli' WHERE run_id='run-operation-one'`,
+		`UPDATE agent_runs SET started_at='2026-01-01T00:00:00.000000001Z' WHERE run_id='run-operation-one'`,
+	} {
+		if _, err := st.db.Exec(mutation); err == nil ||
+			!strings.Contains(err.Error(), "agent run creation identity is immutable") {
+			t.Fatalf("AgentRun creation mutation %q error = %v, want immutable trigger", mutation, err)
+		}
+	}
+	var runCause []byte
+	var runID, runProfileID, runLauncher, runRuntime, runStarted string
+	if err := st.db.QueryRow(`SELECT run_id,profile_id,cause_json,launcher,runtime_kind,started_at
+		FROM agent_runs WHERE run_id='run-operation-one'`).Scan(&runID, &runProfileID, &runCause,
+		&runLauncher, &runRuntime, &runStarted); err != nil {
+		t.Fatal(err)
+	}
+	if runID != "run-operation-one" || runProfileID != "teamwork-default" ||
+		string(runCause) != `{}` || runLauncher != "test" ||
+		runRuntime != "codex-app-server" || runStarted != "2026-01-01T00:00:00.000000000Z" {
+		t.Fatalf("AgentRun creation identity changed = (%q,%q,%q,%q,%q,%q)", runID,
+			runProfileID, runCause, runLauncher, runRuntime, runStarted)
 	}
 
 	if _, err := st.db.Exec(
