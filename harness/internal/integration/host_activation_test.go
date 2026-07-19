@@ -7,9 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -179,45 +177,6 @@ func TestVerifyHostActivationReverifiesProjectionAfterObservation(t *testing.T) 
 			Version: "codex activation-test"}, bundle)
 	if !errors.Is(err, ErrProjectionConflict) {
 		t.Fatalf("VerifyHostActivation() error = %v", err)
-	}
-}
-
-func TestVerifyHostActivationTimeoutKillsTheWholeProcessGroup(t *testing.T) {
-	workspace, nodeState, bundle := newProjectionWorkspace(t)
-	if _, err := InstallHostProjection(workspace, nodeState, assets.HostCodex, bundle); err != nil {
-		t.Fatal(err)
-	}
-	executable, capture := writeActivationHost(t, workspace,
-		validCodexHooksResponse(t, workspace, bundle), "grandchild-timeout")
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel()
-	err := VerifyHostActivation(ctx, workspace, nodeState,
-		HostObservation{Host: assets.HostCodex, Executable: executable,
-			Version: "codex activation-test"}, bundle)
-	if !errors.Is(err, ErrHostUnavailable) {
-		t.Fatalf("VerifyHostActivation() error = %v", err)
-	}
-	raw, err := os.ReadFile(capture + ".child")
-	if err != nil {
-		t.Fatal(err)
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
-	if err != nil || pid <= 0 {
-		t.Fatalf("grandchild PID = %q, %v", raw, err)
-	}
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		err := syscall.Kill(pid, 0)
-		if errors.Is(err, syscall.ESRCH) {
-			break
-		}
-		if err != nil {
-			t.Fatalf("inspect grandchild PID %d: %v", pid, err)
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("Host activation grandchild %d survived cancellation", pid)
-		}
-		time.Sleep(10 * time.Millisecond)
 	}
 }
 

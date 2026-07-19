@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 	"unicode/utf8"
@@ -157,18 +156,9 @@ func VerifyHostActivation(ctx context.Context, workspace, nodeState string,
 		return hostActivationUnavailable("start Host activation observation", err)
 	}
 	waited := false
-	watchDone := make(chan struct{})
-	var stopWatchOnce sync.Once
-	stopWatch := func() { stopWatchOnce.Do(func() { close(watchDone) }) }
-	go func() {
-		select {
-		case <-probeCtx.Done():
-			terminateHostActivationProcessGroup(command.Process.Pid)
-		case <-watchDone:
-		}
-	}()
+	watcher := startHostActivationWatcher(probeCtx, command.Process.Pid)
 	defer func() {
-		stopWatch()
+		watcher.stopAndWait()
 		if waited {
 			return
 		}
@@ -247,8 +237,8 @@ func VerifyHostActivation(ctx context.Context, workspace, nodeState string,
 	}
 	waitErr := command.Wait()
 	waited = true
+	watcher.stopAndWait()
 	terminateHostActivationProcessGroup(command.Process.Pid)
-	stopWatch()
 	if probeCtx.Err() != nil {
 		return hostActivationUnavailable("complete Host activation observation", probeCtx.Err())
 	}

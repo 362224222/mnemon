@@ -4606,7 +4606,7 @@
       "identity": "function_logical_lines:harness/internal/integration/host_activation.go::VerifyHostActivation",
       "path": "harness/internal/integration/host_activation.go",
       "symbol": "VerifyHostActivation",
-      "ceiling": 131
+      "ceiling": 124
     },
     {
       "rule": "function_logical_lines",
@@ -5593,7 +5593,7 @@
       "identity": "function_statements:harness/internal/integration/host_activation.go::VerifyHostActivation",
       "path": "harness/internal/integration/host_activation.go",
       "symbol": "VerifyHostActivation",
-      "ceiling": 104
+      "ceiling": 101
     },
     {
       "rule": "function_statements",
@@ -7396,7 +7396,7 @@
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/integration/host_activation.go",
       "path": "harness/internal/integration/host_activation.go",
-      "ceiling": 457
+      "ceiling": 447
     },
     {
       "rule": "production_file_lines",

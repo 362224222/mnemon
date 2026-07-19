@@ -193,16 +193,6 @@
       "removal_checkpoint": "7R"
     },
     {
-      "rule": "goroutine_ownership",
-      "identity": "goroutine_ownership:host-activation-watch",
-      "path": "harness/internal/integration/host_activation.go",
-      "symbol": "VerifyHostActivation",
-      "risk": "medium",
-      "evidence": "harness/internal/integration/host_activation.go::VerifyHostActivation",
-      "owner": "harness/internal/integration",
-      "removal_checkpoint": "7R"
-    },
-    {
       "rule": "lock_callback_io",
       "identity": "lock_callback_io:mesh-authority-commit",
       "path": "harness/internal/peer/mesh_runtime.go",
