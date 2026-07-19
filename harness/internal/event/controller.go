@@ -18,8 +18,9 @@ type AcceptedDecision struct{}
 
 func (AcceptedDecision) controllerCandidate() {}
 func (AcceptedDecision) draft(stamp AdmissionStamp, _ time.Time) (eventDraft, error) {
-	return eventDraft{model.EventReviewAccepted, "Review accepted",
-		decisionPayload{stamp.workVersion, stamp.iteration}, false, true, stamp.deadlineUnixNano}, nil
+	return eventDraft{eventType: model.EventReviewAccepted, summary: "Review accepted",
+		payload:          decisionPayload{stamp.workVersion, stamp.iteration},
+		deadlineUnixNano: stamp.deadlineUnixNano}, nil
 }
 
 type AcceptRejectedDecision struct{ diagnosticCode string }
@@ -36,25 +37,27 @@ func (decision AcceptRejectedDecision) draft(stamp AdmissionStamp, _ time.Time) 
 	if err := validateToken("accept rejection diagnostic", decision.diagnosticCode); err != nil {
 		return eventDraft{}, err
 	}
-	return eventDraft{model.EventReviewAcceptRejected, "Review acceptance rejected",
-		diagnosticPayload{decision.diagnosticCode, stamp.workVersion, stamp.iteration},
-		false, true, stamp.deadlineUnixNano}, nil
+	return eventDraft{eventType: model.EventReviewAcceptRejected, summary: "Review acceptance rejected",
+		payload:          diagnosticPayload{decision.diagnosticCode, stamp.workVersion, stamp.iteration},
+		deadlineUnixNano: stamp.deadlineUnixNano}, nil
 }
 
 type DeliveredDecision struct{}
 
 func (DeliveredDecision) controllerCandidate() {}
 func (DeliveredDecision) draft(stamp AdmissionStamp, _ time.Time) (eventDraft, error) {
-	return eventDraft{model.EventReviewDelivered, "Review delivered",
-		decisionPayload{stamp.workVersion, stamp.iteration}, true, true, stamp.deadlineUnixNano}, nil
+	return eventDraft{eventType: model.EventReviewDelivered, summary: "Review delivered",
+		payload:          decisionPayload{stamp.workVersion, stamp.iteration},
+		deadlineUnixNano: stamp.deadlineUnixNano}, nil
 }
 
 type DeclinedDecision struct{}
 
 func (DeclinedDecision) controllerCandidate() {}
 func (DeclinedDecision) draft(stamp AdmissionStamp, _ time.Time) (eventDraft, error) {
-	return eventDraft{model.EventReviewDeclined, "Review declined",
-		decisionPayload{stamp.workVersion, stamp.iteration}, false, true, stamp.deadlineUnixNano}, nil
+	return eventDraft{eventType: model.EventReviewDeclined, summary: "Review declined",
+		payload:          decisionPayload{stamp.workVersion, stamp.iteration},
+		deadlineUnixNano: stamp.deadlineUnixNano}, nil
 }
 
 type ExpiredDecision struct{}
@@ -69,8 +72,8 @@ func (ExpiredDecision) draft(stamp AdmissionStamp, now time.Time) (eventDraft, e
 			"trusted clock has not reached the deadline")
 	}
 	payload := expiryPayload{formatTimestamp(stamp.deadlineUnixNano), stamp.workVersion, stamp.iteration}
-	return eventDraft{model.EventReviewExpired, "Review expired", payload,
-		false, true, stamp.deadlineUnixNano}, nil
+	return eventDraft{eventType: model.EventReviewExpired, summary: "Review expired",
+		payload: payload, deadlineUnixNano: stamp.deadlineUnixNano}, nil
 }
 
 type OutcomeStatus string
@@ -117,8 +120,8 @@ func (decision OutcomeDecision) draft(stamp AdmissionStamp, _ time.Time) (eventD
 	}
 	payload := outcomePayload{decision.status, decision.diagnosticCode, decision.decisionRef,
 		stamp.workVersion, stamp.iteration}
-	return eventDraft{model.EventReviewOutcome, "Review outcome", payload,
-		false, true, stamp.deadlineUnixNano}, nil
+	return eventDraft{eventType: model.EventReviewOutcome, summary: "Review outcome",
+		payload: payload, deadlineUnixNano: stamp.deadlineUnixNano}, nil
 }
 
 type decisionPayload struct {

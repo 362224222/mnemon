@@ -5,51 +5,6 @@ import (
 	"time"
 )
 
-type EventType string
-
-const (
-	EventReviewOffered          EventType = "review.offered"
-	EventReviewAcceptRequested  EventType = "review.accept.requested"
-	EventReviewDeclineRequested EventType = "review.decline.requested"
-	EventReviewDeliveryReady    EventType = "review.delivery.ready"
-	EventReviewAccepted         EventType = "review.accepted"
-	EventReviewAcceptRejected   EventType = "review.accept_rejected"
-	EventReviewDelivered        EventType = "review.delivered"
-	EventReviewReworkRequested  EventType = "review.rework_requested"
-	EventReviewClosed           EventType = "review.closed"
-	EventReviewDeclined         EventType = "review.declined"
-	EventReviewCancelled        EventType = "review.cancelled"
-	EventReviewExpired          EventType = "review.expired"
-	EventReviewOutcome          EventType = "review.outcome"
-)
-
-func (t EventType) Valid() bool {
-	switch t {
-	case EventReviewOffered, EventReviewAcceptRequested, EventReviewDeclineRequested,
-		EventReviewDeliveryReady, EventReviewAccepted, EventReviewAcceptRejected,
-		EventReviewDelivered, EventReviewReworkRequested, EventReviewClosed,
-		EventReviewDeclined, EventReviewCancelled, EventReviewExpired, EventReviewOutcome:
-		return true
-	default:
-		return false
-	}
-}
-
-func (t EventType) HomeAuthoritative() bool {
-	switch t {
-	case EventReviewOffered, EventReviewAccepted, EventReviewAcceptRejected,
-		EventReviewDelivered, EventReviewReworkRequested, EventReviewClosed,
-		EventReviewDeclined, EventReviewCancelled, EventReviewExpired:
-		return true
-	default:
-		return false
-	}
-}
-
-func (t EventType) ParticipantInput() bool {
-	return t == EventReviewAcceptRequested || t == EventReviewDeclineRequested || t == EventReviewDeliveryReady
-}
-
 type EventSource string
 
 const (

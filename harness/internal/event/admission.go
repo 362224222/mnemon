@@ -102,8 +102,6 @@ type eventDraft struct {
 	eventType        model.EventType
 	summary          string
 	payload          any
-	allowArtifacts   bool
-	requireCausality bool
 	deadlineUnixNano int64
 }
 
@@ -145,6 +143,10 @@ func (factory *Factory) AdmitAgent(ctx context.Context, stamp AdmissionStamp,
 	if err != nil {
 		return Bundle{}, err
 	}
+	if !draft.eventType.AgentAdmitted() {
+		return Bundle{}, candidateError("Agent candidate", model.ErrInvariant,
+			"maps outside the descriptor-authorized Agent Event set")
+	}
 	return factory.admit(ctx, stamp, draft, now)
 }
 
@@ -164,6 +166,10 @@ func (factory *Factory) AdmitController(ctx context.Context, stamp AdmissionStam
 	draft, err := candidate.draft(stamp, now)
 	if err != nil {
 		return Bundle{}, err
+	}
+	if !draft.eventType.ControllerAdmitted() {
+		return Bundle{}, candidateError("controller candidate", model.ErrInvariant,
+			"maps outside the descriptor-authorized controller Event set")
 	}
 	return factory.admit(ctx, stamp, draft, now)
 }
@@ -197,6 +203,10 @@ func (factory *Factory) admit(ctx context.Context, stamp AdmissionStamp, draft e
 	if now.IsZero() {
 		return Bundle{}, stampError("trusted clock returned zero time")
 	}
+	descriptor, valid := draft.eventType.Descriptor()
+	if !valid {
+		return Bundle{}, stampError("draft uses an unknown Event type")
+	}
 	if draft.eventType == model.EventReviewOffered {
 		if stamp.deadlineUnixNano != 0 || stamp.workVersion != 1 || stamp.iteration != 1 {
 			return Bundle{}, stampError("new offer requires zero stored deadline and Work version/iteration 1")
@@ -204,10 +214,10 @@ func (factory *Factory) admit(ctx context.Context, stamp AdmissionStamp, draft e
 	} else if stamp.deadlineUnixNano <= 0 {
 		return Bundle{}, stampError("existing Work Event requires a frozen deadline")
 	}
-	if draft.requireCausality && len(stamp.causedBy) == 0 {
+	if descriptor.RequiresAdmissionCausality() && len(stamp.causedBy) == 0 {
 		return Bundle{}, stampError("%s requires trusted source Event causality", draft.eventType)
 	}
-	if !draft.allowArtifacts && len(stamp.artifacts) != 0 {
+	if !descriptor.AllowsArtifacts() && len(stamp.artifacts) != 0 {
 		return Bundle{}, stampError("%s forbids Artifact roots", draft.eventType)
 	}
 	scope, err := model.NewEventScope(stamp.channelID, stamp.node.PeerID(), stamp.node.OriginEpoch(),

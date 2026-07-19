@@ -266,7 +266,7 @@ func validateAcceptanceArtifacts(ctx context.Context, tx *sql.Tx, operation mode
 	referenced := make(map[model.Digest]struct{})
 	roles := make(map[model.Digest]model.ArtifactRole)
 	for _, event := range events {
-		if !eventTypeAllowsArtifacts(event.Type()) && len(event.Artifacts()) != 0 {
+		if !event.Type().AllowsArtifacts() && len(event.Artifacts()) != 0 {
 			return nil, fmt.Errorf("%w: %s forbids Artifact roots", ErrArtifactReference, event.Type())
 		}
 		eventProduced := make(map[model.Digest]struct{})
@@ -330,11 +330,6 @@ func validateAcceptanceArtifacts(ctx context.Context, tx *sql.Tx, operation mode
 		}
 	}
 	return capture, nil
-}
-
-func eventTypeAllowsArtifacts(eventType model.EventType) bool {
-	return eventType == model.EventReviewOffered || eventType == model.EventReviewDeliveryReady ||
-		eventType == model.EventReviewDelivered || eventType == model.EventReviewReworkRequested
 }
 
 // requireExactDeliveredArtifactClosure prevents a home controller from

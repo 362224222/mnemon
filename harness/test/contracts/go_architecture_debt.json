@@ -44,16 +44,6 @@
     },
     {
       "rule": "closed_set_authority",
-      "identity": "closed_set_authority:event-types",
-      "path": "harness/internal/model/event.go",
-      "symbol": "EventType.Valid",
-      "risk": "medium",
-      "evidence": "harness/internal/model/event.go::EventType.Valid",
-      "owner": "harness/internal/model + harness/internal/store",
-      "removal_checkpoint": "7R"
-    },
-    {
-      "rule": "closed_set_authority",
       "identity": "closed_set_authority:local-api-routes",
       "path": "harness/internal/localapi/server.go",
       "symbol": "newServer",

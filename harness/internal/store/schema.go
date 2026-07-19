@@ -337,7 +337,11 @@ func schemaDDL() string {
 	if offset < 0 {
 		panic("store: embedded schema has no " + firstDDL)
 	}
-	return schemaV1[offset:]
+	ddl := schemaV1[offset:]
+	if strings.Count(ddl, eventTypeValuesPlaceholder) != 1 {
+		panic("store: embedded schema must contain exactly one EventType projection")
+	}
+	return strings.Replace(ddl, eventTypeValuesPlaceholder, eventTypeSQLProjection(), 1)
 }
 
 func unsupportedSchema(version int, reason string) error {

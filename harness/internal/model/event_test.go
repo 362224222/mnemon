@@ -7,25 +7,6 @@ import (
 	"time"
 )
 
-func TestEventTypeIsClosed(t *testing.T) {
-	t.Parallel()
-
-	valid := []EventType{EventReviewOffered, EventReviewAcceptRequested, EventReviewDeclineRequested,
-		EventReviewDeliveryReady, EventReviewAccepted, EventReviewAcceptRejected, EventReviewDelivered,
-		EventReviewReworkRequested, EventReviewClosed, EventReviewDeclined, EventReviewCancelled,
-		EventReviewExpired, EventReviewOutcome}
-	for _, value := range valid {
-		if !value.Valid() {
-			t.Fatalf("EventType(%q).Valid() = false", value)
-		}
-	}
-	for _, value := range []EventType{"", "memory.updated", "review.generic"} {
-		if value.Valid() {
-			t.Fatalf("EventType(%q).Valid() = true", value)
-		}
-	}
-}
-
 func TestAudienceCanonicalizationAndCopy(t *testing.T) {
 	t.Parallel()
 

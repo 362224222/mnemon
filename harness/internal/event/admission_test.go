@@ -57,13 +57,13 @@ func TestFactoryMapsExactlySevenAgentAndSixControllerCandidates(t *testing.T) {
 		{"fallback outcome", outcome, model.EventReviewOutcome},
 	}
 
-	seen := make(map[model.EventType]bool)
+	seen := make(map[model.EventType]string)
 	for _, test := range agentCases {
 		t.Run("agent "+test.name, func(t *testing.T) {
 			stamp := testStamp(t, string(test.want), test.atHome, test.want == model.EventReviewOffered, now)
 			bundle, err := factory.AdmitAgent(context.Background(), stamp, test.candidate)
 			assertBundle(t, bundle, err, test.want, now, publicKey)
-			seen[test.want] = true
+			seen[test.want] = "agent"
 		})
 	}
 	for _, test := range controllerCases {
@@ -74,11 +74,22 @@ func TestFactoryMapsExactlySevenAgentAndSixControllerCandidates(t *testing.T) {
 			}
 			bundle, err := factory.AdmitController(context.Background(), stamp, test.candidate)
 			assertBundle(t, bundle, err, test.want, now, publicKey)
-			seen[test.want] = true
+			seen[test.want] = "controller"
 		})
 	}
-	if len(seen) != 13 {
-		t.Fatalf("admitted Event families = %d, want 13", len(seen))
+	descriptors := model.EventTypeDescriptors()
+	if len(seen) != len(descriptors) {
+		t.Fatalf("admitted Event families = %d, want descriptor count %d", len(seen), len(descriptors))
+	}
+	for _, descriptor := range descriptors {
+		projection, present := seen[descriptor.Type()]
+		agent := projection == "agent"
+		controller := projection == "controller"
+		if !present || agent != descriptor.AgentAdmitted() ||
+			controller != descriptor.ControllerAdmitted() {
+			t.Fatalf("Event admission projection %q = %q, descriptor = %#v",
+				descriptor.Type(), projection, descriptor)
+		}
 	}
 }
 

@@ -53,7 +53,8 @@ func (candidate OfferCandidate) draft(stamp AdmissionStamp, now time.Time) (even
 	}
 	deadline := nowUnixNano + int64(duration)
 	payload := offerPayload{candidate.content, formatTimestamp(deadline), stamp.workVersion, stamp.iteration}
-	return eventDraft{model.EventReviewOffered, "Review offered", payload, true, false, deadline}, nil
+	return eventDraft{eventType: model.EventReviewOffered, summary: "Review offered",
+		payload: payload, deadlineUnixNano: deadline}, nil
 }
 
 type AcceptCandidate struct{ note string }
@@ -70,8 +71,9 @@ func (candidate AcceptCandidate) draft(stamp AdmissionStamp, _ time.Time) (event
 	if err := validateContent("accept note", candidate.note, false); err != nil {
 		return eventDraft{}, err
 	}
-	return eventDraft{model.EventReviewAcceptRequested, "Review acceptance requested",
-		notePayload{candidate.note, stamp.workVersion, stamp.iteration}, false, true, stamp.deadlineUnixNano}, nil
+	return eventDraft{eventType: model.EventReviewAcceptRequested, summary: "Review acceptance requested",
+		payload:          notePayload{candidate.note, stamp.workVersion, stamp.iteration},
+		deadlineUnixNano: stamp.deadlineUnixNano}, nil
 }
 
 type DeclineCandidate struct{ reason string }
@@ -88,8 +90,9 @@ func (candidate DeclineCandidate) draft(stamp AdmissionStamp, _ time.Time) (even
 	if err := validateContent("decline reason", candidate.reason, true); err != nil {
 		return eventDraft{}, err
 	}
-	return eventDraft{model.EventReviewDeclineRequested, "Review decline requested",
-		contentPayload{candidate.reason, stamp.workVersion, stamp.iteration}, false, true, stamp.deadlineUnixNano}, nil
+	return eventDraft{eventType: model.EventReviewDeclineRequested, summary: "Review decline requested",
+		payload:          contentPayload{candidate.reason, stamp.workVersion, stamp.iteration},
+		deadlineUnixNano: stamp.deadlineUnixNano}, nil
 }
 
 type DeliverCandidate struct{ summary string }
@@ -106,8 +109,9 @@ func (candidate DeliverCandidate) draft(stamp AdmissionStamp, _ time.Time) (even
 	if err := validateContent("delivery summary", candidate.summary, true); err != nil {
 		return eventDraft{}, err
 	}
-	return eventDraft{model.EventReviewDeliveryReady, "Review delivery ready",
-		contentPayload{candidate.summary, stamp.workVersion, stamp.iteration}, true, true, stamp.deadlineUnixNano}, nil
+	return eventDraft{eventType: model.EventReviewDeliveryReady, summary: "Review delivery ready",
+		payload:          contentPayload{candidate.summary, stamp.workVersion, stamp.iteration},
+		deadlineUnixNano: stamp.deadlineUnixNano}, nil
 }
 
 type ReworkCandidate struct{ correction string }
@@ -124,8 +128,9 @@ func (candidate ReworkCandidate) draft(stamp AdmissionStamp, _ time.Time) (event
 	if err := validateContent("rework correction", candidate.correction, true); err != nil {
 		return eventDraft{}, err
 	}
-	return eventDraft{model.EventReviewReworkRequested, "Review rework requested",
-		contentPayload{candidate.correction, stamp.workVersion, stamp.iteration}, true, true, stamp.deadlineUnixNano}, nil
+	return eventDraft{eventType: model.EventReviewReworkRequested, summary: "Review rework requested",
+		payload:          contentPayload{candidate.correction, stamp.workVersion, stamp.iteration},
+		deadlineUnixNano: stamp.deadlineUnixNano}, nil
 }
 
 type CloseCandidate struct{ note string }
@@ -142,8 +147,9 @@ func (candidate CloseCandidate) draft(stamp AdmissionStamp, _ time.Time) (eventD
 	if err := validateContent("close note", candidate.note, false); err != nil {
 		return eventDraft{}, err
 	}
-	return eventDraft{model.EventReviewClosed, "Review closed",
-		notePayload{candidate.note, stamp.workVersion, stamp.iteration}, false, true, stamp.deadlineUnixNano}, nil
+	return eventDraft{eventType: model.EventReviewClosed, summary: "Review closed",
+		payload:          notePayload{candidate.note, stamp.workVersion, stamp.iteration},
+		deadlineUnixNano: stamp.deadlineUnixNano}, nil
 }
 
 type CancelCandidate struct{ reason string }
@@ -160,8 +166,9 @@ func (candidate CancelCandidate) draft(stamp AdmissionStamp, _ time.Time) (event
 	if err := validateContent("cancel reason", candidate.reason, true); err != nil {
 		return eventDraft{}, err
 	}
-	return eventDraft{model.EventReviewCancelled, "Review cancelled",
-		contentPayload{candidate.reason, stamp.workVersion, stamp.iteration}, false, true, stamp.deadlineUnixNano}, nil
+	return eventDraft{eventType: model.EventReviewCancelled, summary: "Review cancelled",
+		payload:          contentPayload{candidate.reason, stamp.workVersion, stamp.iteration},
+		deadlineUnixNano: stamp.deadlineUnixNano}, nil
 }
 
 func validateDeadline(value time.Duration) error {

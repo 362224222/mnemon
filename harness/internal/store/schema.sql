@@ -200,19 +200,7 @@ CREATE TABLE events (
   source             TEXT NOT NULL CHECK (source IN ('local','imported')),
   actor_principal    TEXT NOT NULL,
   event_type         TEXT NOT NULL CHECK (event_type IN (
-    'review.offered',
-    'review.accept.requested',
-    'review.decline.requested',
-    'review.delivery.ready',
-    'review.accepted',
-    'review.accept_rejected',
-    'review.delivered',
-    'review.rework_requested',
-    'review.closed',
-    'review.declined',
-    'review.cancelled',
-    'review.expired',
-    'review.outcome'
+    {{MNEMON_EVENT_TYPE_VALUES}}
   )),
   audience_json      BLOB NOT NULL,
   resource_json      BLOB NOT NULL,
