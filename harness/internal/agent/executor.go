@@ -39,6 +39,7 @@ type ArtifactCoordinator interface {
 
 type TeamworkActionExecutorOptions struct {
 	Profile   model.Profile
+	Actions   ActionHandlers
 	Signer    event.PublicationSigner
 	Artifacts ArtifactCoordinator
 	Clock     ServiceClock
@@ -153,6 +154,7 @@ type TeamworkActionExecutor struct {
 	backend   teamworkExecutionBackend
 	selector  offerSelectionResolver
 	profile   model.Profile
+	actions   ActionHandlers
 	signer    event.PublicationSigner
 	artifacts ArtifactCoordinator
 	clock     ServiceClock
@@ -178,18 +180,18 @@ func newTeamworkActionExecutor(backend teamworkExecutionBackend, selector offerS
 		options.Clock = wallServiceClock{}
 	}
 	if backend == nil || selector == nil || options.Signer == nil || options.Artifacts == nil ||
-		options.Clock == nil || options.Profile.ID() != model.TeamworkProfileID() || !options.Profile.Enabled() {
-		return nil, errors.New("Teamwork action executor requires backend, selector, Profile, signer and Artifact coordinator")
+		options.Clock == nil || options.Profile.ID() != model.TeamworkProfileID() || !options.Profile.Enabled() ||
+		options.Actions.AssetRevision().String() != options.Profile.ActiveAssetRevision() {
+		return nil, errors.New("Teamwork action executor requires backend, selector, Profile, Action handlers, signer and Artifact coordinator")
 	}
 	return &TeamworkActionExecutor{backend: backend, selector: selector, profile: options.Profile,
-		signer: options.Signer, artifacts: options.Artifacts, clock: options.Clock}, nil
+		actions: options.Actions, signer: options.Signer, artifacts: options.Artifacts, clock: options.Clock}, nil
 }
 
 func (e *TeamworkActionExecutor) ExecuteTeamwork(ctx context.Context,
 	spec TeamworkExecutionSpec,
 ) (OperationResponse, *ControlError) {
-	if e == nil || e.backend == nil || e.selector == nil || e.signer == nil || e.artifacts == nil ||
-		e.clock == nil || ctx == nil {
+	if !e.available() || ctx == nil {
 		return OperationResponse{}, NewControlError(CodeInternal,
 			"Teamwork action executor is unavailable")
 	}
@@ -201,7 +203,7 @@ func (e *TeamworkActionExecutor) ExecuteTeamwork(ctx context.Context,
 	}
 	spec.At = acceptedAt
 	_, contextBound := operation.ContextHash()
-	if operation.ProfileID() != e.profile.ID() || operation.Kind() != operationKindForAction(spec.Action.Name) ||
+	if operation.ProfileID() != e.profile.ID() || !spec.Action.matches(e.actions, operation.Kind()) ||
 		spec.Action.HasContext != contextBound {
 		return e.reject(ctx, operation, spec.At, NewControlError(CodeOperationMismatch,
 			"reserved operation differs from Teamwork action"))
@@ -209,14 +211,14 @@ func (e *TeamworkActionExecutor) ExecuteTeamwork(ctx context.Context,
 
 	switch operation.Status() {
 	case model.OperationCommitted:
-		response, err := decodeCommittedTeamworkOperation(operation, true)
+		response, err := decodeCommittedTeamworkOperation(e.actions, operation, true)
 		if err != nil {
 			return OperationResponse{}, NewControlError(CodeInternal,
 				"committed Teamwork receipt is invalid")
 		}
 		return response, nil
 	case model.OperationRejected:
-		return OperationResponse{}, decodeRejectedTeamworkOperation(operation, true)
+		return OperationResponse{}, decodeRejectedTeamworkOperation(e.actions, operation, true)
 	case model.OperationStarted:
 		if !spec.Reservation.Acquired {
 			return OperationResponse{}, operationAPIError(CodeOperationPending,
@@ -231,31 +233,13 @@ func (e *TeamworkActionExecutor) ExecuteTeamwork(ctx context.Context,
 	if apiErr != nil {
 		return e.reject(ctx, operation, spec.At, apiErr)
 	}
-	selection := AgentOfferSelection{}
-	if operation.Kind() == model.OperationTeamworkOffer {
-		var err error
-		selection, err = e.selector.Resolve(ctx, AgentOfferSelectionSpec{Profile: e.profile,
-			ChannelAlias: spec.Action.ChannelAlias, ParticipantSelector: spec.Action.Participant, At: spec.At})
-		if err != nil {
-			return e.reject(ctx, operation, spec.At, mapOfferSelectionError(err))
-		}
-	}
-	coordination, apiErr := e.artifacts.Coordinate(ctx, ArtifactCoordinationSpec{
-		Reservation: spec.Reservation, Profile: e.profile, Action: operation.Kind(),
-		Paths: append([]string(nil), spec.Action.ArtifactPaths...), Current: current,
-		HasCurrent: hasCurrent, At: spec.At,
-	})
+	selection, artifactRefs, apiErr := e.prepareActionInputs(ctx, spec, current, hasCurrent)
 	if apiErr != nil {
 		return e.reject(ctx, operation, spec.At, apiErr)
 	}
-	artifactRefs, err := validateExecutionArtifactRefs(operation.Kind(), coordination.References)
-	if err != nil {
-		return e.reject(ctx, operation, spec.At, NewControlError(CodeArtifactInvalid,
-			"Artifact coordinator returned invalid authority"))
-	}
 
 	var acceptance executionAcceptanceSpec
-	if operation.Kind() == model.OperationTeamworkOffer {
+	if spec.Action.handler.mechanic.actor == actionActorOffer {
 		acceptance, apiErr = e.buildOffer(ctx, spec, selection, current, hasCurrent, artifactRefs)
 	} else {
 		acceptance, apiErr = e.buildCurrentAction(ctx, spec, current, hasCurrent, artifactRefs)
@@ -283,12 +267,47 @@ func (e *TeamworkActionExecutor) ExecuteTeamwork(ctx context.Context,
 		}
 		return e.reject(ctx, operation, spec.At, mapTeamworkExecutionError(err))
 	}
-	response, err := decodeCommittedTeamworkReceipt(result.Receipt, operation, result.Replayed)
+	response, err := decodeCommittedTeamworkReceipt(spec.Action.handler, result.Receipt,
+		operation, result.Replayed)
 	if err != nil {
 		return OperationResponse{}, NewControlError(CodeInternal,
 			"committed Teamwork receipt cannot be projected")
 	}
 	return response, nil
+}
+
+func (e *TeamworkActionExecutor) available() bool {
+	return e != nil && e.backend != nil && e.selector != nil && e.signer != nil &&
+		e.artifacts != nil && e.clock != nil && !e.actions.AssetRevision().IsZero()
+}
+
+func (e *TeamworkActionExecutor) prepareActionInputs(ctx context.Context, spec TeamworkExecutionSpec,
+	current model.CurrentReadReceipt, hasCurrent bool,
+) (AgentOfferSelection, []model.ArtifactRef, *ControlError) {
+	selection := AgentOfferSelection{}
+	if spec.Action.handler.mechanic.actor == actionActorOffer {
+		resolved, err := e.selector.Resolve(ctx, AgentOfferSelectionSpec{Profile: e.profile,
+			ChannelAlias: spec.Action.ChannelAlias, ParticipantSelector: spec.Action.Participant, At: spec.At})
+		if err != nil {
+			return AgentOfferSelection{}, nil, mapOfferSelectionError(err)
+		}
+		selection = resolved
+	}
+	coordination, apiErr := e.artifacts.Coordinate(ctx, ArtifactCoordinationSpec{
+		Reservation: spec.Reservation, Profile: e.profile, Action: spec.Reservation.Operation.Kind(),
+		Paths: append([]string(nil), spec.Action.ArtifactPaths...), Current: current,
+		HasCurrent: hasCurrent, At: spec.At,
+	})
+	if apiErr != nil {
+		return AgentOfferSelection{}, nil, apiErr
+	}
+	refs, err := validateExecutionArtifactRefs(spec.Action.handler.Descriptor().Artifacts(),
+		coordination.References)
+	if err != nil {
+		return AgentOfferSelection{}, nil, NewControlError(CodeArtifactInvalid,
+			"Artifact coordinator returned invalid authority")
+	}
+	return selection, refs, nil
 }
 
 func (e *TeamworkActionExecutor) buildOffer(ctx context.Context, spec TeamworkExecutionSpec,
@@ -398,9 +417,7 @@ func (e *TeamworkActionExecutor) buildCurrentAction(ctx context.Context, spec Te
 		return executionAcceptanceSpec{}, NewControlError(CodeWorkConflict,
 			"current Work changed before admission")
 	}
-	participant := spec.Reservation.Operation.Kind() == model.OperationTeamworkAccept ||
-		spec.Reservation.Operation.Kind() == model.OperationTeamworkDecline ||
-		spec.Reservation.Operation.Kind() == model.OperationTeamworkDeliver
+	participant := spec.Action.handler.mechanic.actor == actionActorParticipant
 	localActor := work.Ref().HomePeerID()
 	target := work.Participants().ReviewerPeerID()
 	if participant {
@@ -421,7 +438,7 @@ func (e *TeamworkActionExecutor) buildCurrentAction(ctx context.Context, spec Te
 			"local Node is not the frozen Work participant")
 	}
 
-	requestedType := operationEventType(spec.Reservation.Operation.Kind())
+	requestedType := spec.Action.handler.EventType()
 	var transition teamwork.TransitionIntent
 	var deadline *executionDeadlineAuthority
 	if !participant {
@@ -567,7 +584,7 @@ func (e *TeamworkActionExecutor) resolveDeadline(ctx context.Context,
 		return OperationResponse{}, operationAPIError(apiErr.Code, apiErr.Message,
 			authority.operation.ID, false)
 	}
-	apiErr := decodeTeamworkRejectionReceipt(result.Receipt, authority.operation.ID,
+	apiErr := decodeTeamworkRejectionReceipt(e.actions, result.Receipt, authority.operation.ID,
 		authority.operation.Kind, result.Replayed)
 	if apiErr.Code != CodeWorkExpired {
 		return OperationResponse{}, operationAPIError(CodeInternal,
@@ -576,10 +593,10 @@ func (e *TeamworkActionExecutor) resolveDeadline(ctx context.Context,
 	return OperationResponse{}, apiErr
 }
 
-func validateExecutionArtifactRefs(kind model.OperationKind,
+func validateExecutionArtifactRefs(policy teamwork.ActionArtifactPolicy,
 	refs []model.ArtifactRef,
 ) ([]model.ArtifactRef, error) {
-	if len(refs) > model.MaxArtifactRefs {
+	if uint64(len(refs)) > uint64(policy.MaxRoots()) {
 		return nil, model.ErrLimit
 	}
 	result := append([]model.ArtifactRef(nil), refs...)
@@ -592,9 +609,7 @@ func validateExecutionArtifactRefs(kind model.OperationKind,
 			return nil, model.ErrInvalid
 		}
 	}
-	allows := kind == model.OperationTeamworkOffer || kind == model.OperationTeamworkDeliver ||
-		kind == model.OperationTeamworkRework
-	if !allows && len(result) != 0 {
+	if !policy.Allowed() && len(result) != 0 {
 		return nil, model.ErrInvalid
 	}
 	return result, nil
@@ -625,14 +640,14 @@ func (e *TeamworkActionExecutor) reject(ctx context.Context, operation model.Ope
 	}
 	switch terminal.Status() {
 	case model.OperationCommitted:
-		response, err := decodeCommittedTeamworkOperation(terminal, true)
+		response, err := decodeCommittedTeamworkOperation(e.actions, terminal, true)
 		if err != nil {
 			return OperationResponse{}, NewControlError(CodeInternal,
 				"terminal Teamwork receipt is invalid")
 		}
 		return response, nil
 	case model.OperationRejected:
-		return OperationResponse{}, decodeRejectedTeamworkOperation(terminal, false)
+		return OperationResponse{}, decodeRejectedTeamworkOperation(e.actions, terminal, false)
 	default:
 		return OperationResponse{}, operationAPIError(CodeOperationPending,
 			"operation rejection is pending", operation.ID(), false)
@@ -687,19 +702,22 @@ func buildTeamworkRejection(operation model.Operation, apiErr *ControlError) (mo
 		Message: apiErr.Message, OperationID: operation.ID().String()})
 }
 
-func decodeRejectedTeamworkOperation(operation model.Operation, replayed bool) *ControlError {
+func decodeRejectedTeamworkOperation(handlers ActionHandlers, operation model.Operation,
+	replayed bool,
+) *ControlError {
 	result, ok := operation.Result()
 	if operation.Status() != model.OperationRejected || !ok {
 		return operationAPIError(CodeInternal, "rejected Teamwork receipt is invalid",
 			operation.ID(), replayed)
 	}
-	return decodeTeamworkRejectionReceipt(result, operation.ID(), operation.Kind(), replayed)
+	return decodeTeamworkRejectionReceipt(handlers, result, operation.ID(), operation.Kind(), replayed)
 }
 
-func decodeTeamworkRejectionReceipt(result model.JSON, operationID model.OperationID,
+func decodeTeamworkRejectionReceipt(handlers ActionHandlers, result model.JSON, operationID model.OperationID,
 	kind model.OperationKind, replayed bool,
 ) *ControlError {
-	if result.IsZero() || operationID.IsZero() || !operationEventType(kind).Valid() {
+	handler, supported := handlers.Operation(kind)
+	if result.IsZero() || operationID.IsZero() || !supported || !handler.EventType().Valid() {
 		return operationAPIError(CodeInternal, "rejected Teamwork receipt is invalid",
 			operationID, replayed)
 	}
@@ -716,19 +734,24 @@ func decodeTeamworkRejectionReceipt(result model.JSON, operationID model.Operati
 	return operationAPIError(wire.Code, wire.Message, operationID, replayed)
 }
 
-func decodeCommittedTeamworkOperation(operation model.Operation,
+func decodeCommittedTeamworkOperation(handlers ActionHandlers, operation model.Operation,
 	replayed bool,
 ) (OperationResponse, error) {
 	receipt, ok := operation.Result()
 	if operation.Status() != model.OperationCommitted || !ok {
 		return OperationResponse{}, errors.New("operation is not committed")
 	}
-	return decodeCommittedTeamworkReceipt(receipt, operation, replayed)
+	handler, supported := handlers.Operation(operation.Kind())
+	if !supported {
+		return OperationResponse{}, errors.New("unsupported committed Teamwork action")
+	}
+	return decodeCommittedTeamworkReceipt(handler, receipt, operation, replayed)
 }
 
-func decodeCommittedTeamworkReceipt(receipt model.JSON, operation model.Operation,
+func decodeCommittedTeamworkReceipt(handler ActionHandler, receipt model.JSON, operation model.Operation,
 	replayed bool,
 ) (OperationResponse, error) {
+	receiptPolicy := handler.Descriptor().Receipt()
 	var wire struct {
 		CaptureRoots []struct {
 			ManifestDigest string `json:"manifest_digest"`
@@ -758,7 +781,7 @@ func decodeCommittedTeamworkReceipt(receipt model.JSON, operation model.Operatio
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&wire); err != nil || wire.Status != "committed" ||
 		wire.OperationID != operation.ID().String() || wire.Events == nil || len(wire.Events) == 0 ||
-		len(wire.Events) > model.MaxChildWorks || wire.CaptureRoots == nil ||
+		len(wire.Events) > int(receiptPolicy.MaxResults()) || wire.CaptureRoots == nil ||
 		requireExecutionJSONEOF(decoder) != nil {
 		return OperationResponse{}, errors.New("invalid committed Teamwork receipt")
 	}
@@ -774,8 +797,8 @@ func decodeCommittedTeamworkReceipt(receipt model.JSON, operation model.Operatio
 		previousCapture = row.RootDigest
 		captured[root] = struct{}{}
 	}
-	wantType := operationEventType(operation.Kind())
-	if !wantType.Valid() || (operation.Kind() != model.OperationTeamworkOffer && len(wire.Events) != 1) {
+	wantType := handler.EventType()
+	if !wantType.Valid() {
 		return OperationResponse{}, errors.New("invalid committed Teamwork action shape")
 	}
 	results := make([]OperationResult, len(wire.Events))
@@ -787,7 +810,7 @@ func decodeCommittedTeamworkReceipt(receipt model.JSON, operation model.Operatio
 		state := model.WorkState(row.Work.State)
 		artifacts, artifactErr := executionReceiptArtifactRefs(row.ArtifactRoots)
 		if artifactErr == nil {
-			_, artifactErr = validateExecutionArtifactRefs(operation.Kind(), artifacts)
+			_, artifactErr = validateExecutionArtifactRefs(handler.Descriptor().Artifacts(), artifacts)
 		}
 		if eventErr != nil || digestErr != nil || eventDigest.IsZero() || homeErr != nil || workErr != nil ||
 			row.EventType != string(wantType) || row.Work.Version == 0 || !state.Valid() ||
@@ -808,7 +831,7 @@ func decodeCommittedTeamworkReceipt(receipt model.JSON, operation model.Operatio
 		if len(produced) != len(captured) {
 			return OperationResponse{}, errors.New("committed Teamwork result omits capture")
 		}
-		if operation.Kind() == model.OperationTeamworkOffer {
+		if handler.mechanic.batch {
 			wantWorkID, wantEventID, idErr := derivedOfferIDs(operation.ID(), uint8(index))
 			if idErr != nil || workID != wantWorkID || eventID != wantEventID ||
 				state != model.WorkOffered || row.Work.Version != 1 {
@@ -816,7 +839,7 @@ func decodeCommittedTeamworkReceipt(receipt model.JSON, operation model.Operatio
 			}
 		} else {
 			wantEventID, idErr := derivedActionEventID(operation.ID())
-			if idErr != nil || eventID != wantEventID || !validCommittedActionState(operation.Kind(), state) {
+			if idErr != nil || eventID != wantEventID || !handler.mechanic.committedState(state) {
 				return OperationResponse{}, errors.New("committed Teamwork action identity is invalid")
 			}
 		}
@@ -824,16 +847,13 @@ func decodeCommittedTeamworkReceipt(receipt model.JSON, operation model.Operatio
 			Work: WorkReceipt{Ref: home.String() + "/" + workID.String(),
 				Version: row.Work.Version, State: row.Work.State}}
 	}
-	action := teamworkActionName(operation.Kind())
-	if action == "" {
-		return OperationResponse{}, errors.New("unknown committed Teamwork kind")
-	}
 	var handling *HandlingReceipt
-	if _, hasContext := operation.ContextHash(); hasContext {
+	_, hasContext := operation.ContextHash()
+	if receiptPolicy.Handling() == teamwork.ReceiptHandlingCompleted || hasContext {
 		handling = &HandlingReceipt{Status: "completed"}
 	}
 	return OperationResponse{SchemaVersion: model.SchemaVersion, Status: "accepted",
-		Action: "teamwork." + action, OperationID: operation.ID().String(), Replayed: replayed,
+		Action: string(handler.OperationKind()), OperationID: operation.ID().String(), Replayed: replayed,
 		Handling: handling, Results: results, Receipt: model.Sum(receipt.Bytes()).String()}, nil
 }
 
@@ -856,23 +876,6 @@ func executionReceiptArtifactRefs(rows []struct {
 		}
 	}
 	return refs, nil
-}
-
-func validCommittedActionState(kind model.OperationKind, state model.WorkState) bool {
-	switch kind {
-	case model.OperationTeamworkAccept, model.OperationTeamworkDecline:
-		return state == model.WorkOffered
-	case model.OperationTeamworkDeliver:
-		return state == model.WorkActive || state == model.WorkRework
-	case model.OperationTeamworkRework:
-		return state == model.WorkRework
-	case model.OperationTeamworkClose:
-		return state == model.WorkClosed
-	case model.OperationTeamworkCancel:
-		return state == model.WorkCancelled
-	default:
-		return false
-	}
 }
 
 func mapOfferSelectionError(err error) *ControlError {
@@ -964,22 +967,6 @@ func operationAPIError(code ControlErrorCode, message string, operation model.Op
 func localExecutionAuthority(operation model.Operation) store.LocalOperationAuthority {
 	return store.LocalOperationAuthority{ID: operation.ID(), Kind: operation.Kind(),
 		RequestDigest: operation.RequestDigest(), LeaseOwner: operation.LeaseOwner()}
-}
-
-func operationEventType(kind model.OperationKind) model.EventType {
-	return map[model.OperationKind]model.EventType{
-		model.OperationTeamworkOffer:   model.EventReviewOffered,
-		model.OperationTeamworkAccept:  model.EventReviewAcceptRequested,
-		model.OperationTeamworkDecline: model.EventReviewDeclineRequested,
-		model.OperationTeamworkDeliver: model.EventReviewDeliveryReady,
-		model.OperationTeamworkRework:  model.EventReviewReworkRequested,
-		model.OperationTeamworkClose:   model.EventReviewClosed,
-		model.OperationTeamworkCancel:  model.EventReviewCancelled,
-	}[kind]
-}
-
-func teamworkActionName(kind model.OperationKind) string {
-	return strings.TrimPrefix(string(kind), "teamwork.")
 }
 
 func sameExecutionProfile(left, right model.Profile) bool {

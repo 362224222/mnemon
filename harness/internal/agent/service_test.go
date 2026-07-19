@@ -165,6 +165,15 @@ func (fake fakeTeamworkExecutor) ExecuteTeamwork(ctx context.Context,
 	return fake.execute(ctx, spec)
 }
 
+func TestServiceRejectsMissingActionHandlers(t *testing.T) {
+	t.Parallel()
+	if _, err := NewService(&fakeControlStore{}, ServiceOptions{
+		CurrentViews: &fakeAgentCurrentViews{},
+	}); err == nil {
+		t.Fatal("service accepted missing Action handlers")
+	}
+}
+
 func TestServiceActivationGateBlocksAllAgentRoutesBeforeSideEffects(t *testing.T) {
 	at := time.Date(2026, 7, 17, 4, 0, 0, 0, time.UTC)
 	profile := serviceTestProfile(t, at)
@@ -221,7 +230,7 @@ func TestServiceActivationGateBlocksAllAgentRoutesBeforeSideEffects(t *testing.T
 	}}
 	clock := &countingServiceClock{now: at}
 	random := &countingServiceRandom{}
-	service, err := NewService(fake, ServiceOptions{AssetRevision: "asset-service",
+	service, err := NewService(fake, ServiceOptions{Actions: testActionHandlers(t),
 		Clock: clock, Random: random, Executor: executor, CurrentViews: &fakeAgentCurrentViews{},
 		ActivationGate: gate})
 	if err != nil {
@@ -262,7 +271,7 @@ func TestServiceActivationGateIsOptionalAndDisabledProfileFailsClosed(t *testing
 		probeCalls++
 		return store.AgentClaimNone, nil
 	}}
-	service, err := NewService(fake, ServiceOptions{AssetRevision: "asset-service",
+	service, err := NewService(fake, ServiceOptions{Actions: testActionHandlers(t),
 		Clock: serviceTestClock{now: at}, CurrentViews: &fakeAgentCurrentViews{}})
 	if err != nil {
 		t.Fatal(err)
@@ -303,7 +312,7 @@ func TestServiceHookAndCurrentKeepClaimCapabilityPrivate(t *testing.T) {
 	views := &fakeAgentCurrentViews{}
 	fake := &fakeControlStore{
 		probe: func(_ context.Context, spec store.AgentClaimProbeSpec) (store.AgentClaimStatus, error) {
-			if spec.ProfileID != profile.ID() || spec.ExpectedAssetRevision != "asset-service" || !spec.At.Equal(at) {
+			if spec.ProfileID != profile.ID() || spec.ExpectedAssetRevision != profile.ActiveAssetRevision() || !spec.At.Equal(at) {
 				t.Fatalf("probe spec = %#v", spec)
 			}
 			return store.AgentClaimActionable, nil
@@ -332,7 +341,7 @@ func TestServiceHookAndCurrentKeepClaimCapabilityPrivate(t *testing.T) {
 			return store.AgentCurrentReadResult{Projection: projection}, nil
 		},
 	}
-	service, err := NewService(fake, ServiceOptions{AssetRevision: "asset-service",
+	service, err := NewService(fake, ServiceOptions{Actions: testActionHandlers(t),
 		Clock: serviceTestClock{at}, Random: bytes.NewReader(entropy), CurrentViews: views})
 	if err != nil {
 		t.Fatal(err)
@@ -399,7 +408,7 @@ func TestServiceAttachmentHookPeeksAndCurrentConsumesExactPreclaim(t *testing.T)
 	fake := &fakeControlStore{
 		peek: func(_ context.Context, spec store.AgentAttachmentSpec) error {
 			peekCalls++
-			if spec.ProfileID != profile.ID() || spec.ExpectedAssetRevision != "asset-service" ||
+			if spec.ProfileID != profile.ID() || spec.ExpectedAssetRevision != profile.ActiveAssetRevision() ||
 				spec.AttachmentTokenHash != tokenHash || !spec.At.Equal(at) {
 				t.Fatalf("peek attachment spec = %#v", spec)
 			}
@@ -427,7 +436,7 @@ func TestServiceAttachmentHookPeeksAndCurrentConsumesExactPreclaim(t *testing.T)
 		},
 	}
 	random := &countingServiceRandom{}
-	service, err := NewService(fake, ServiceOptions{AssetRevision: "asset-service",
+	service, err := NewService(fake, ServiceOptions{Actions: testActionHandlers(t),
 		Clock: serviceTestClock{at}, Random: random, CurrentViews: &fakeAgentCurrentViews{}})
 	if err != nil {
 		t.Fatal(err)
@@ -464,7 +473,7 @@ func TestServiceCurrentNoneCarriesOnlyIdentityFreeInitiationContext(t *testing.T
 			return store.AgentInitiationContext{}, nil
 		},
 	}
-	service, err := NewService(fake, ServiceOptions{AssetRevision: "asset-service",
+	service, err := NewService(fake, ServiceOptions{Actions: testActionHandlers(t),
 		Clock: serviceTestClock{at}, Random: bytes.NewReader(bytes.Repeat([]byte{0x62}, 2*managedSecretBytes)),
 		CurrentViews: &fakeAgentCurrentViews{}})
 	if err != nil {
@@ -515,7 +524,7 @@ func TestServiceTeamworkActionReservesServerOwnedOperation(t *testing.T) {
 		executed = spec
 		return wantResponse, nil
 	}}
-	service, err := NewService(fake, ServiceOptions{AssetRevision: "asset-service",
+	service, err := NewService(fake, ServiceOptions{Actions: testActionHandlers(t),
 		Clock: serviceTestClock{at}, Random: bytes.NewReader(bytes.Repeat([]byte{0x33}, managedSecretBytes)),
 		OperationLease: time.Minute, Executor: executor, CurrentViews: views})
 	if err != nil {
@@ -595,7 +604,7 @@ func TestServiceResolveBindsDigestAndValidatesDurableReceipt(t *testing.T) {
 		return store.ManagedResolutionResult{Operation: committed, Receipt: receipt, Replayed: true}, nil
 	}
 	views := &fakeAgentCurrentViews{}
-	service, err := NewService(fake, ServiceOptions{AssetRevision: "asset-service",
+	service, err := NewService(fake, ServiceOptions{Actions: testActionHandlers(t),
 		Clock: serviceTestClock{at}, Random: bytes.NewReader(bytes.Repeat([]byte{0x44}, managedSecretBytes)),
 		CurrentViews: views})
 	if err != nil {
@@ -629,8 +638,9 @@ func serviceTestProfile(t *testing.T, at time.Time) model.Profile {
 	profile, err := model.NewProfile(model.ProfileSpec{ID: model.TeamworkProfileID(),
 		Principal: "principal-service", WorkspaceRoot: "/workspace", Host: model.HostCodex,
 		Runtime: model.RuntimeCodexAppServer, CredentialHash: model.Sum([]byte("service-credential")),
-		ActiveAssetRevision: "asset-service", HandlingBudget: model.DefaultHandlingBudget().JSON(),
-		Enabled: true, CreatedAt: at, UpdatedAt: at})
+		ActiveAssetRevision: testActionHandlers(t).AssetRevision().String(),
+		HandlingBudget:      model.DefaultHandlingBudget().JSON(),
+		Enabled:             true, CreatedAt: at, UpdatedAt: at})
 	if err != nil {
 		t.Fatal(err)
 	}

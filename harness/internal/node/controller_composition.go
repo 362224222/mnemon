@@ -24,8 +24,9 @@ func (wallClock) Now() time.Time { return time.Now() }
 // controllers compose one only after installation verification succeeds.
 func bindControllerActionPolicy(ctx context.Context, profile model.Profile,
 	install InstallationVerifier, revision string, policy *agent.ActionPolicy,
+	handlers *agent.ActionHandlers,
 ) error {
-	if isNilNodeInterface(install) || policy == nil {
+	if isNilNodeInterface(install) || policy == nil || handlers == nil {
 		return errors.New("mnemond controller installation or action policy is unavailable")
 	}
 	if err := install.Verify(ctx, profile); err != nil {
@@ -40,6 +41,14 @@ func bindControllerActionPolicy(ctx context.Context, profile model.Profile,
 	}
 	if policy.AssetRevision().String() != revision {
 		return errors.New("mnemond controller action policy differs from the active asset revision")
+	}
+	composed, err := agent.NewActionHandlers(*policy)
+	if err != nil {
+		return fmt.Errorf("mnemond controller Action handlers: %w", err)
+	}
+	*handlers = composed
+	if handlers.AssetRevision().String() != revision {
+		return errors.New("mnemond controller Action handlers differ from the active asset revision")
 	}
 	return nil
 }

@@ -403,11 +403,9 @@ func (app *App) runTeamwork(ctx context.Context, client controlClient, projectRo
 		}
 		contextFile = &verified
 	}
-	validated, validationErr := agentcontrol.ValidateAction(agentcontrol.ActionInput{Action: request.Action,
-		HasContext: contextFile != nil, ChannelAlias: request.Channel, Participant: request.To,
-		Deadline: request.Deadline, Content: request.Content, ArtifactPaths: request.Artifacts})
-	if validationErr != nil {
-		return app.writeError(command.jsonOutput, localAPIValidationError(validationErr))
+	validated, apiErr := validateManagedTeamworkAction(request, contextFile != nil)
+	if apiErr != nil {
+		return app.writeError(command.jsonOutput, apiErr)
 	}
 	request.Artifacts = validated.ArtifactPaths
 	return app.submitTeamwork(ctx, client, nodeState, request, contextFile, command.jsonOutput)

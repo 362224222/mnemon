@@ -43,6 +43,9 @@ func actionPolicyForInstallation(installation InstallationVerifier) (agent.Actio
 	if err != nil {
 		return agent.ActionPolicy{}, fmt.Errorf("managed installation action policy: %w", err)
 	}
+	if _, err := agent.NewActionHandlers(policy); err != nil {
+		return agent.ActionPolicy{}, fmt.Errorf("managed installation typed action policy: %w", err)
+	}
 	return policy, nil
 }
 

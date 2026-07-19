@@ -59,7 +59,7 @@ type ControlStore interface {
 }
 
 type ServiceOptions struct {
-	AssetRevision  string
+	Actions        ActionHandlers
 	Clock          ServiceClock
 	Random         io.Reader
 	OperationLease time.Duration
@@ -73,6 +73,7 @@ type ServiceOptions struct {
 type Service struct {
 	store          ControlStore
 	assetRevision  string
+	actions        ActionHandlers
 	clock          ServiceClock
 	random         io.Reader
 	randomMu       sync.Mutex
@@ -83,8 +84,8 @@ type Service struct {
 }
 
 func NewService(st ControlStore, options ServiceOptions) (*Service, error) {
-	if st == nil || options.AssetRevision == "" || options.CurrentViews == nil {
-		return nil, errors.New("Agent service requires Store, asset revision and current view coordinator")
+	if st == nil || options.Actions.AssetRevision().IsZero() || options.CurrentViews == nil {
+		return nil, errors.New("Agent service requires Store, Action handlers and current view coordinator")
 	}
 	if options.Clock == nil {
 		options.Clock = wallServiceClock{}
@@ -98,7 +99,8 @@ func NewService(st ControlStore, options ServiceOptions) (*Service, error) {
 	if options.OperationLease < 5*time.Second || options.OperationLease > 10*time.Minute {
 		return nil, errors.New("Agent service operation lease must be 5s..10m")
 	}
-	return &Service{store: st, assetRevision: options.AssetRevision, clock: options.Clock,
+	return &Service{store: st, assetRevision: options.Actions.AssetRevision().String(),
+		actions: options.Actions, clock: options.Clock,
 		random: options.Random, operationLease: options.OperationLease, executor: options.Executor,
 		currentViews: options.CurrentViews, activationGate: options.ActivationGate}, nil
 }
@@ -252,10 +254,10 @@ func (s *Service) TeamworkAction(ctx context.Context, metadata ControlMetadata,
 	if apiErr := s.checkActivation(ctx, metadata.Profile); apiErr != nil {
 		return OperationResponse{}, apiErr
 	}
-	if apiErr := requireOperationCapabilities(metadata, request.Action != "offer"); apiErr != nil {
+	if apiErr := requireOperationCapabilities(metadata, false); apiErr != nil {
 		return OperationResponse{}, apiErr
 	}
-	validated, apiErr := ValidateAction(ActionInput{Action: request.Action,
+	validated, apiErr := s.actions.Validate(ActionInput{Action: request.Action,
 		HasContext: metadata.HasClaimContext, ChannelAlias: request.Channel,
 		Participant: request.To, Deadline: request.Deadline, Content: request.Content,
 		ArtifactPaths: request.Artifacts})
@@ -281,7 +283,7 @@ func (s *Service) TeamworkAction(ctx context.Context, metadata ControlMetadata,
 	}
 	reservation, err := s.store.ReserveManagedOperation(ctx, store.ManagedOperationSpec{
 		Profile: metadata.Profile, ClientKeyHash: metadata.OperationKeyHash,
-		RequestDigest: model.Sum(raw), Kind: operationKindForAction(request.Action),
+		RequestDigest: model.Sum(raw), Kind: validated.handler.OperationKind(),
 		LeaseOwner: owner, At: at, LeaseUntil: at.Add(s.operationLease),
 		ClaimContextHash: metadata.ClaimContextHash, HasClaimContext: metadata.HasClaimContext,
 	})
@@ -385,7 +387,8 @@ func requireOperationCapabilities(metadata ControlMetadata,
 	if !metadata.HasOperationKey || metadata.OperationKeyHash.IsZero() {
 		return NewControlError(CodeInvalidArgument, "operation key is required")
 	}
-	if contextRequired && (!metadata.HasClaimContext || metadata.ClaimContextHash.IsZero()) {
+	if (contextRequired && !metadata.HasClaimContext) ||
+		(metadata.HasClaimContext && metadata.ClaimContextHash.IsZero()) {
 		return NewControlError(CodeContextRequired, "managed context is required")
 	}
 	return nil
@@ -430,15 +433,6 @@ func drawManagedSecret(random io.Reader) ([]byte, error) {
 		return nil, err
 	}
 	return value, nil
-}
-
-func operationKindForAction(action string) model.OperationKind {
-	return map[string]model.OperationKind{
-		"offer": model.OperationTeamworkOffer, "accept": model.OperationTeamworkAccept,
-		"decline": model.OperationTeamworkDecline, "deliver": model.OperationTeamworkDeliver,
-		"rework": model.OperationTeamworkRework, "close": model.OperationTeamworkClose,
-		"cancel": model.OperationTeamworkCancel,
-	}[action]
 }
 
 func decodeResolutionResponse(receipt model.JSON, operation model.Operation) (OperationResponse, error) {

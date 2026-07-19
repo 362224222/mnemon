@@ -37,7 +37,8 @@ type ControllerOptions struct {
 	BeforeAccept func() error
 	// wakeWorker is a same-package test seam for lifecycle and readiness
 	// verification. Production composition always uses WakeAdapter.
-	wakeWorker managedWakeWorker
+	wakeWorker     managedWakeWorker
+	actionHandlers agent.ActionHandlers
 }
 
 type managedWakeWorker interface {
@@ -54,7 +55,6 @@ type Controller struct {
 	store             *store.Store
 	server            *localapi.Server
 	admission         *controllerAdmissionGate
-	actionPolicy      agent.ActionPolicy
 	wakeWorker        managedWakeWorker
 	shutdownRequested chan struct{}
 	shutdownOnce      sync.Once
@@ -83,7 +83,7 @@ func NewController(ctx context.Context, options ControllerOptions) (*Controller,
 		return nil, errors.New("mnemond controller Store is outside its owner-only Node state")
 	}
 	assetRevision := options.Profile.ActiveAssetRevision()
-	if err := bindControllerActionPolicy(ctx, options.Profile, options.Install, assetRevision, &options.actionPolicy); err != nil {
+	if err := bindControllerActionPolicy(ctx, options.Profile, options.Install, assetRevision, &options.actionPolicy, &options.actionHandlers); err != nil {
 		return nil, err
 	}
 	cas, err := artifact.NewCAS(filepath.Join(options.NodeState, "objects", "sha256"))
@@ -115,7 +115,7 @@ func NewController(ctx context.Context, options ControllerOptions) (*Controller,
 		return nil, err
 	}
 	executor, err := agent.NewTeamworkActionExecutor(options.Store, agent.TeamworkActionExecutorOptions{
-		Profile: options.Profile, Signer: options.Signer, Artifacts: artifactResolver, Clock: options.Clock,
+		Profile: options.Profile, Actions: options.actionHandlers, Signer: options.Signer, Artifacts: artifactResolver, Clock: options.Clock,
 	})
 	if err != nil {
 		return nil, err
@@ -134,7 +134,7 @@ func NewController(ctx context.Context, options ControllerOptions) (*Controller,
 		}
 	}
 	gate := controllerManagedActivationGate{install: installGate, worker: wakeWorker}
-	service, err := agent.NewService(options.Store, agent.ServiceOptions{AssetRevision: assetRevision,
+	service, err := agent.NewService(options.Store, agent.ServiceOptions{Actions: options.actionHandlers,
 		Clock: options.Clock, Executor: executor, CurrentViews: currentViews, ActivationGate: gate})
 	if err != nil {
 		return nil, err
@@ -190,7 +190,7 @@ func NewController(ctx context.Context, options ControllerOptions) (*Controller,
 		return authoritySnapshot(current), nil
 	})
 	controller := &Controller{nodeState: options.NodeState, assetRevision: assetRevision, store: options.Store,
-		admission: admission, actionPolicy: options.actionPolicy, wakeWorker: wakeWorker,
+		admission: admission, wakeWorker: wakeWorker,
 		shutdownRequested: make(chan struct{}), beforeAccept: options.BeforeAccept}
 	managedService := controllerAdmissionService{gate: admission, next: newLocalAPIServiceAdapter(service)}
 	server, err := localapi.NewServerWithStatusLifecycle(options.Store, managedService, health, status,

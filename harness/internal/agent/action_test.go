@@ -1,12 +1,47 @@
 package agent
 
 import (
+	"bytes"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/mnemon-dev/mnemon/harness/internal/assets"
 )
 
-func TestValidateActionClosedSchema(t *testing.T) {
+func TestActionHandlersEnforceParticipantSelectorPolicy(t *testing.T) {
 	t.Parallel()
+	bundle, err := assets.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := newActionPolicyProviderStub(t, bundle)
+	path := "actions/teamwork/offer.json"
+	provider.raw[path] = bytes.Replace(provider.raw[path],
+		[]byte(`["effective_alias","auto","team"]`),
+		[]byte(`["effective_alias","auto"]`), 1)
+	policy, err := NewActionPolicy(provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handlers, err := NewActionHandlers(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, apiErr := handlers.Validate(ActionInput{Action: "offer", Participant: AgentParticipantTeam,
+		Content: "review"})
+	if apiErr == nil || apiErr.Code != CodeInvalidArgument {
+		t.Fatalf("forbidden team selector error = %#v", apiErr)
+	}
+	if _, apiErr := handlers.Validate(ActionInput{Action: "offer", Participant: "reviewer-a",
+		Content: "review"}); apiErr != nil {
+		t.Fatalf("effective alias selector error = %#v", apiErr)
+	}
+}
+
+func TestActionHandlersValidateAssetOwnedSchema(t *testing.T) {
+	t.Parallel()
+	handlers := testActionHandlers(t)
 	tests := []struct {
 		name      string
 		input     ActionInput
@@ -33,17 +68,18 @@ func TestValidateActionClosedSchema(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			result, apiErr := ValidateAction(test.input)
+			result, apiErr := handlers.Validate(test.input)
 			if test.wantCode != "" {
 				if apiErr == nil || apiErr.Code != test.wantCode {
-					t.Fatalf("ValidateAction() error = %#v, want %s", apiErr, test.wantCode)
+					t.Fatalf("Validate() error = %#v, want %s", apiErr, test.wantCode)
 				}
 				return
 			}
-			if apiErr != nil || result.Candidate == nil || result.Name != test.input.Action {
-				t.Fatalf("ValidateAction() = %#v, %#v", result, apiErr)
+			if apiErr != nil || result.Candidate == nil || result.Name != test.input.Action ||
+				!result.matches(handlers, result.handler.OperationKind()) {
+				t.Fatalf("Validate() = %#v, %#v", result, apiErr)
 			}
-			if test.input.Deadline != "" && result.Deadline != 24*time.Hour {
+			if result.Name == "offer" && result.Deadline != 24*time.Hour {
 				t.Fatalf("deadline = %s", result.Deadline)
 			}
 			if test.wantPaths != nil && (len(result.ArtifactPaths) != 2 ||
@@ -54,23 +90,26 @@ func TestValidateActionClosedSchema(t *testing.T) {
 	}
 }
 
-func TestValidateActionContentAndArtifactBounds(t *testing.T) {
+func TestActionHandlersEnforceContentAndArtifactAssetBounds(t *testing.T) {
 	t.Parallel()
-	if _, apiErr := ValidateAction(ActionInput{Action: "offer", Content: string([]byte{0xff})}); apiErr == nil || apiErr.Code != CodeInvalidArgument {
+	handlers := testActionHandlers(t)
+	if _, apiErr := handlers.Validate(ActionInput{Action: "offer", Content: string([]byte{0xff})}); apiErr == nil || apiErr.Code != CodeInvalidArgument {
 		t.Fatalf("invalid UTF-8 error = %#v", apiErr)
 	}
-	content := make([]byte, 8193)
-	for index := range content {
-		content[index] = 'x'
-	}
-	if _, apiErr := ValidateAction(ActionInput{Action: "offer", Content: string(content)}); apiErr == nil || apiErr.Code != CodeContentTooLarge {
+	offer, _ := handlers.Action("offer")
+	content := strings.Repeat("x", int(offer.Descriptor().Content().MaxBytes())+1)
+	if _, apiErr := handlers.Validate(ActionInput{Action: "offer", Content: content}); apiErr == nil || apiErr.Code != CodeContentTooLarge {
 		t.Fatalf("large content error = %#v", apiErr)
 	}
-	paths := make([]string, MaxActionArtifacts+1)
+	paths := make([]string, int(offer.Descriptor().Artifacts().MaxRoots())+1)
 	for index := range paths {
-		paths[index] = string(rune('a' + index))
+		paths[index] = strings.Repeat("x", index+1)
 	}
-	if _, apiErr := ValidateAction(ActionInput{Action: "offer", Content: "x", ArtifactPaths: paths}); apiErr == nil || apiErr.Code != CodeArtifactTooLarge {
+	if _, apiErr := handlers.Validate(ActionInput{Action: "offer", Content: "x", ArtifactPaths: paths}); apiErr == nil || apiErr.Code != CodeArtifactTooLarge {
 		t.Fatalf("large Artifact set error = %#v", apiErr)
+	}
+	longPath := strings.Repeat("x", int(offer.Descriptor().Artifacts().MaxPathBytes())+1)
+	if _, apiErr := handlers.Validate(ActionInput{Action: "offer", Content: "x", ArtifactPaths: []string{longPath}}); apiErr == nil || apiErr.Code != CodeArtifactInvalid {
+		t.Fatalf("long Artifact path error = %#v", apiErr)
 	}
 }

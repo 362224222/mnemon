@@ -154,14 +154,14 @@
       "identity": "cognitive_complexity:harness/internal/agent/executor.go::(*TeamworkActionExecutor).ExecuteTeamwork",
       "path": "harness/internal/agent/executor.go",
       "symbol": "(*TeamworkActionExecutor).ExecuteTeamwork",
-      "ceiling": 42
+      "ceiling": 33
     },
     {
       "rule": "cognitive_complexity",
       "identity": "cognitive_complexity:harness/internal/agent/executor.go::(*TeamworkActionExecutor).buildCurrentAction",
       "path": "harness/internal/agent/executor.go",
       "symbol": "(*TeamworkActionExecutor).buildCurrentAction",
-      "ceiling": 29
+      "ceiling": 27
     },
     {
       "rule": "cognitive_complexity",
@@ -175,7 +175,7 @@
       "identity": "cognitive_complexity:harness/internal/agent/executor.go::decodeCommittedTeamworkReceipt",
       "path": "harness/internal/agent/executor.go",
       "symbol": "decodeCommittedTeamworkReceipt",
-      "ceiling": 64
+      "ceiling": 62
     },
     {
       "rule": "cognitive_complexity",
@@ -1992,13 +1992,6 @@
     },
     {
       "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/agent/action.go::ValidateAction",
-      "path": "harness/internal/agent/action.go",
-      "symbol": "ValidateAction",
-      "ceiling": 22
-    },
-    {
-      "rule": "cyclomatic_complexity",
       "identity": "cyclomatic_complexity:harness/internal/agent/artifact_capture.go::(*ArtifactCaptureCoordinator).Checkpoint",
       "path": "harness/internal/agent/artifact_capture.go",
       "symbol": "(*ArtifactCaptureCoordinator).Checkpoint",
@@ -2093,14 +2086,14 @@
       "identity": "cyclomatic_complexity:harness/internal/agent/executor.go::(*TeamworkActionExecutor).ExecuteTeamwork",
       "path": "harness/internal/agent/executor.go",
       "symbol": "(*TeamworkActionExecutor).ExecuteTeamwork",
-      "ceiling": 37
+      "ceiling": 29
     },
     {
       "rule": "cyclomatic_complexity",
       "identity": "cyclomatic_complexity:harness/internal/agent/executor.go::(*TeamworkActionExecutor).buildCurrentAction",
       "path": "harness/internal/agent/executor.go",
       "symbol": "(*TeamworkActionExecutor).buildCurrentAction",
-      "ceiling": 25
+      "ceiling": 23
     },
     {
       "rule": "cyclomatic_complexity",
@@ -2114,7 +2107,7 @@
       "identity": "cyclomatic_complexity:harness/internal/agent/executor.go::decodeCommittedTeamworkReceipt",
       "path": "harness/internal/agent/executor.go",
       "symbol": "decodeCommittedTeamworkReceipt",
-      "ceiling": 45
+      "ceiling": 43
     },
     {
       "rule": "cyclomatic_complexity",
@@ -4421,24 +4414,17 @@
     },
     {
       "rule": "function_logical_lines",
-      "identity": "function_logical_lines:harness/internal/agent/executor.go::(*TeamworkActionExecutor).ExecuteTeamwork",
-      "path": "harness/internal/agent/executor.go",
-      "symbol": "(*TeamworkActionExecutor).ExecuteTeamwork",
-      "ceiling": 81
-    },
-    {
-      "rule": "function_logical_lines",
       "identity": "function_logical_lines:harness/internal/agent/executor.go::(*TeamworkActionExecutor).buildCurrentAction",
       "path": "harness/internal/agent/executor.go",
       "symbol": "(*TeamworkActionExecutor).buildCurrentAction",
-      "ceiling": 90
+      "ceiling": 88
     },
     {
       "rule": "function_logical_lines",
       "identity": "function_logical_lines:harness/internal/agent/executor.go::decodeCommittedTeamworkReceipt",
       "path": "harness/internal/agent/executor.go",
       "symbol": "decodeCommittedTeamworkReceipt",
-      "ceiling": 92
+      "ceiling": 91
     },
     {
       "rule": "function_logical_lines",
@@ -5271,7 +5257,7 @@
       "identity": "function_statements:harness/internal/agent/executor.go::(*TeamworkActionExecutor).ExecuteTeamwork",
       "path": "harness/internal/agent/executor.go",
       "symbol": "(*TeamworkActionExecutor).ExecuteTeamwork",
-      "ceiling": 61
+      "ceiling": 52
     },
     {
       "rule": "function_statements",
@@ -5285,7 +5271,7 @@
       "identity": "function_statements:harness/internal/agent/executor.go::decodeCommittedTeamworkReceipt",
       "path": "harness/internal/agent/executor.go",
       "symbol": "decodeCommittedTeamworkReceipt",
-      "ceiling": 58
+      "ceiling": 56
     },
     {
       "rule": "function_statements",
@@ -7215,7 +7201,7 @@
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/agent/executor.go",
       "path": "harness/internal/agent/executor.go",
-      "ceiling": 996
+      "ceiling": 983
     },
     {
       "rule": "production_file_lines",
@@ -7233,7 +7219,7 @@
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/agent/service.go",
       "path": "harness/internal/agent/service.go",
-      "ceiling": 505
+      "ceiling": 499
     },
     {
       "rule": "production_file_lines",
@@ -7269,7 +7255,7 @@
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/cli/agent.go",
       "path": "harness/internal/cli/agent.go",
-      "ceiling": 798
+      "ceiling": 796
     },
     {
       "rule": "production_file_lines",

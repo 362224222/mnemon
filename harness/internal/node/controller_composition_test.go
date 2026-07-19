@@ -21,21 +21,27 @@ func TestBindControllerActionPolicyVerifiesAndFreezesTheInstallationRevision(t *
 		return nil
 	}), bundle)
 	policy := agent.ActionPolicy{}
+	handlers := agent.ActionHandlers{}
 	if err := bindControllerActionPolicy(context.Background(), model.Profile{}, install,
-		bundle.Revision(), &policy); err != nil {
+		bundle.Revision(), &policy, &handlers); err != nil {
 		t.Fatal(err)
 	}
 	if verified != 1 || policy.AssetRevision().String() != bundle.Revision() ||
-		len(policy.Actions()) != teamwork.TeamworkActionCount {
+		len(policy.Actions()) != teamwork.TeamworkActionCount ||
+		handlers.AssetRevision().String() != bundle.Revision() {
 		t.Fatalf("bound policy = (%d, %s, %d)", verified,
 			policy.AssetRevision(), len(policy.Actions()))
 	}
 	if err := bindControllerActionPolicy(context.Background(), model.Profile{}, install,
-		model.Sum([]byte("other controller revision")).String(), &policy); err == nil {
+		model.Sum([]byte("other controller revision")).String(), &policy, &handlers); err == nil {
 		t.Fatal("bindControllerActionPolicy accepted a different active revision")
 	}
 	if err := bindControllerActionPolicy(context.Background(), model.Profile{}, install,
-		bundle.Revision(), nil); err == nil {
+		bundle.Revision(), nil, &handlers); err == nil {
 		t.Fatal("bindControllerActionPolicy accepted a missing policy destination")
+	}
+	if err := bindControllerActionPolicy(context.Background(), model.Profile{}, install,
+		bundle.Revision(), &policy, nil); err == nil {
+		t.Fatal("bindControllerActionPolicy accepted a missing handler destination")
 	}
 }

@@ -23,6 +23,24 @@ func TestTeamworkActionExecutorOffersExplicitAutoAndCanonicalTeam(t *testing.T) 
 	runTeamworkActionExecutorOffersExplicitAutoAndCanonicalTeam(t)
 }
 
+func TestTeamworkActionExecutorRejectsMissingOrMismatchedActionHandlers(t *testing.T) {
+	t.Parallel()
+	fixture := newExecutorFixture(t, 1)
+	options := TeamworkActionExecutorOptions{Profile: fixture.profile,
+		Signer:    executorSigner(t, "executor-construction-"+t.Name()),
+		Artifacts: fixture.artifacts, Clock: fixture.clock}
+	if _, err := newTeamworkActionExecutor(fixture.backend, fixture.selector, options); err == nil {
+		t.Fatal("executor accepted missing Action handlers")
+	}
+
+	options.Actions = testActionHandlers(t)
+	options.Profile = executorProfile(t, fixture.at,
+		model.Sum([]byte("mismatched-action-revision")).String())
+	if _, err := newTeamworkActionExecutor(fixture.backend, fixture.selector, options); err == nil {
+		t.Fatal("executor accepted Action handlers from a different asset revision")
+	}
+}
+
 func TestTeamworkActionExecutorNestedOfferUsesCurrentCausality(t *testing.T) {
 	t.Parallel()
 	fixture := newExecutorFixture(t, 2)
@@ -228,7 +246,8 @@ type executorFixture struct {
 func newExecutorFixture(t *testing.T, reviewerCount int) *executorFixture {
 	t.Helper()
 	at := time.Date(2026, 7, 16, 20, 0, 0, 0, time.UTC)
-	profile := executorProfile(t, at.Add(-time.Hour))
+	actions := testActionHandlers(t)
+	profile := executorProfile(t, at.Add(-time.Hour), actions.AssetRevision().String())
 	local := agentSelectorPeer(t, "executor-local-"+t.Name())
 	node, err := model.NewNode(model.NodeSpec{PeerID: local,
 		OriginEpoch: executorEpoch(t, "executor-local-"+t.Name()), NextOriginSequence: 10,
@@ -260,7 +279,7 @@ func newExecutorFixture(t *testing.T, reviewerCount int) *executorFixture {
 	signer := executorSigner(t, "executor-signer-"+t.Name())
 	clock := &executorTestClock{now: at.Add(time.Second)}
 	executor, err := newTeamworkActionExecutor(backend, selector, TeamworkActionExecutorOptions{
-		Profile: profile, Signer: signer, Artifacts: artifacts, Clock: clock})
+		Profile: profile, Actions: actions, Signer: signer, Artifacts: artifacts, Clock: clock})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -570,7 +589,7 @@ func executorAction(t *testing.T, name string, hasContext bool, content, deadlin
 	paths []string,
 ) ValidatedAction {
 	t.Helper()
-	action, apiErr := ValidateAction(ActionInput{Action: name, HasContext: hasContext,
+	action, apiErr := testActionHandlers(t).Validate(ActionInput{Action: name, HasContext: hasContext,
 		ChannelAlias: func() string {
 			if name == "offer" {
 				return "alpha"
@@ -610,12 +629,12 @@ func executorTerminalOperationValue(base model.Operation, status model.Operation
 	return operation
 }
 
-func executorProfile(t *testing.T, at time.Time) model.Profile {
+func executorProfile(t *testing.T, at time.Time, assetRevision string) model.Profile {
 	t.Helper()
 	profile, err := model.NewProfile(model.ProfileSpec{ID: model.TeamworkProfileID(),
 		Principal: "principal-executor", WorkspaceRoot: "/workspace/executor", Host: model.HostCodex,
 		Runtime: model.RuntimeCodexAppServer, CredentialHash: model.Sum([]byte("executor-credential")),
-		ActiveAssetRevision: "asset-r5", HandlingBudget: model.DefaultHandlingBudget().JSON(),
+		ActiveAssetRevision: assetRevision, HandlingBudget: model.DefaultHandlingBudget().JSON(),
 		Enabled: true, CreatedAt: at, UpdatedAt: at})
 	if err != nil {
 		t.Fatal(err)

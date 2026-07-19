@@ -1,6 +1,7 @@
 package node
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"testing"
@@ -13,6 +14,16 @@ import (
 type testActionInstallation struct {
 	InstallationVerifier
 	provider agent.ActionAssetProvider
+}
+
+type incompatibleActionProvider struct{ assets.Bundle }
+
+func (provider incompatibleActionProvider) ReadTeamworkAction(path string) ([]byte, error) {
+	raw, err := provider.Bundle.ReadTeamworkAction(path)
+	if err == nil && path == "actions/teamwork/offer.json" {
+		raw = bytes.Replace(raw, []byte(`"required":true`), []byte(`"required":false`), 1)
+	}
+	return raw, err
 }
 
 func (installation testActionInstallation) Revision() string {
@@ -74,5 +85,9 @@ func TestActionPolicyForInstallationRequiresTheSameRawAssetProvider(t *testing.T
 	var nilInstallation *testActionInstallation
 	if policy, err := actionPolicyForInstallation(nilInstallation); err == nil || !policy.AssetRevision().IsZero() {
 		t.Fatalf("actionPolicyForInstallation(typed nil) = (%#v, %v)", policy, err)
+	}
+	incompatible := testInstallationWithActions(verify, incompatibleActionProvider{Bundle: bundle})
+	if policy, err := actionPolicyForInstallation(incompatible); err == nil || !policy.AssetRevision().IsZero() {
+		t.Fatalf("actionPolicyForInstallation(incompatible) = (%#v, %v)", policy, err)
 	}
 }
