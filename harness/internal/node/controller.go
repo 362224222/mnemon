@@ -198,7 +198,7 @@ func NewController(ctx context.Context, options ControllerOptions) (*Controller,
 	controller := &Controller{nodeState: options.NodeState, assetRevision: assetRevision, store: options.Store,
 		admission: admission, wakeWorker: wakeWorker, shutdownRequested: make(chan struct{}),
 		beforeAccept: options.BeforeAccept}
-	managedService := controllerAdmissionService{gate: admission, next: service}
+	managedService := controllerAdmissionService{gate: admission, next: newLocalAPIServiceAdapter(service)}
 	server, err := localapi.NewServerWithStatusLifecycle(options.Store, managedService, health, status,
 		authority, localapi.LifecycleFunc(controller.requestShutdown), controller)
 	if err != nil {
@@ -271,7 +271,7 @@ type controllerManagedActivationGate struct {
 
 func (gate controllerManagedActivationGate) Check(ctx context.Context,
 	profile model.Profile,
-) *localapi.APIError {
+) *agent.ControlError {
 	if apiErr := gate.install.Check(ctx, profile); apiErr != nil {
 		return apiErr
 	}
@@ -280,19 +280,19 @@ func (gate controllerManagedActivationGate) Check(ctx context.Context,
 	}
 	snapshot := gate.worker.Snapshot()
 	if !snapshot.Running || !snapshot.Ready || !snapshot.Healthy || snapshot.Recovering {
-		return localapi.NewAPIError(localapi.CodeMnemondUnavailable,
+		return agent.NewControlError(agent.CodeMnemondUnavailable,
 			"managed Runtime worker is not ready")
 	}
 	return nil
 }
 
-func (gate controllerActivationGate) Check(ctx context.Context, profile model.Profile) *localapi.APIError {
+func (gate controllerActivationGate) Check(ctx context.Context, profile model.Profile) *agent.ControlError {
 	if ctx == nil || ctx.Err() != nil {
-		return localapi.NewAPIError(localapi.CodeInternal, "managed activation check was cancelled")
+		return agent.NewControlError(agent.CodeInternal, "managed activation check was cancelled")
 	}
 	if gate.install == nil || !sameControllerProfile(profile, gate.expected) ||
 		gate.install.Verify(ctx, profile) != nil {
-		return localapi.NewAPIError(localapi.CodeAssetRevisionMismatch,
+		return agent.NewControlError(agent.CodeAssetRevisionMismatch,
 			"managed Node assets or Host projection differ from the active Profile")
 	}
 	return nil

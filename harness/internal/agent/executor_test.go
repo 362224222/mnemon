@@ -12,186 +12,15 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/event"
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
 
+// TestTeamworkActionExecutorOffersExplicitAutoAndCanonicalTeam remains the
+// stable ND-21 evidence symbol while its identity-specific helpers live beside
+// executor_identity.go.
 func TestTeamworkActionExecutorOffersExplicitAutoAndCanonicalTeam(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name     string
-		selector string
-		count    int
-	}{
-		{name: "explicit", selector: "reviewer-0", count: 1},
-		{name: "auto", selector: AgentParticipantAuto, count: 1},
-	}
-	for count := 1; count <= model.MaxChildWorks; count++ {
-		tests = append(tests, struct {
-			name     string
-			selector string
-			count    int
-		}{name: fmt.Sprintf("team-%d", count), selector: AgentParticipantTeam, count: count})
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			fixture := newExecutorFixture(t, test.count)
-			reservation := executorReservation(t, fixture, model.OperationTeamworkOffer, model.ReviewWork{}, false)
-			action := executorAction(t, "offer", false, "architecture goal", "30m", test.selector, nil)
-			response, apiErr := fixture.executor.ExecuteTeamwork(context.Background(), TeamworkExecutionSpec{
-				Request: localapi.TeamworkActionRequest{Action: "offer", Channel: "alpha", To: test.selector,
-					Deadline: "30m", Content: "architecture goal"},
-				Action: action, Reservation: reservation, At: fixture.at,
-			})
-			if apiErr != nil {
-				t.Fatalf("ExecuteTeamwork(offer) error = %v", apiErr)
-			}
-			if response.Action != "teamwork.offer" || response.Replayed || response.Handling != nil ||
-				len(response.Results) != test.count || len(fixture.backend.committed.items) != test.count ||
-				fixture.backend.commitAt != fixture.clock.now {
-				t.Fatalf("offer response = %#v", response)
-			}
-			if fixture.selector.last.ChannelAlias != "alpha" ||
-				fixture.selector.last.ParticipantSelector != test.selector || fixture.artifacts.calls != 1 {
-				t.Fatalf("selector/artifact calls = %#v / %d", fixture.selector.last, fixture.artifacts.calls)
-			}
-			firstPayload := ""
-			for index, item := range fixture.backend.committed.items {
-				eventValue := item.Publication.Event()
-				work := item.Work.Work
-				wantReviewer := fixture.reviewers[index].PeerID()
-				wantWorkID, wantEventID, _ := derivedOfferIDs(reservation.Operation.ID(), uint8(index))
-				if eventValue.ID() != wantEventID || eventValue.Type() != model.EventReviewOffered ||
-					eventValue.Audience().Len() != 1 || !eventValue.Audience().Contains(wantReviewer) ||
-					work.Participants().ReviewerPeerID() != wantReviewer ||
-					work.Ref().HomePeerID() != fixture.scope.node.PeerID() || work.Ref().WorkID() != wantWorkID ||
-					work.State() != model.WorkOffered ||
-					work.Version() != 1 || work.DeadlineUnixNano() != fixture.at.Add(30*time.Minute).UnixNano() {
-					t.Fatalf("offer item[%d] = Event %#v Work %#v", index, eventValue, work)
-				}
-				scope := eventValue.Scope()
-				if scope.OriginPeerID() != fixture.scope.node.PeerID() ||
-					scope.OriginSequence() != fixture.scope.firstOriginSequence+uint64(index) ||
-					scope.ChannelSequence() != fixture.scope.firstChannelSequence+uint64(index) ||
-					scope.OriginMember() != fixture.scope.originMember ||
-					scope.PublicationRoster() != fixture.scope.publicationRoster ||
-					eventValue.ActorPrincipal() != fixture.profile.Principal() ||
-					!eventValue.AcceptedAt().Equal(fixture.at) {
-					t.Fatalf("offer item[%d] server scope = %#v", index, scope)
-				}
-				if index == 0 {
-					firstPayload = eventValue.Payload().String()
-				} else if eventValue.Payload().String() != firstPayload {
-					t.Fatalf("team item %d changed shared payload", index)
-				}
-				if len(eventValue.CausedBy()) != 0 {
-					t.Fatal("contextless offer claimed causality")
-				}
-			}
-		})
-	}
-}
-
-func TestTeamworkActionExecutorExecutesAllCurrentActions(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name        string
-		kind        model.OperationKind
-		state       model.WorkState
-		version     uint64
-		iteration   uint8
-		content     string
-		wantEvent   model.EventType
-		wantState   model.WorkState
-		wantIter    uint8
-		participant bool
-		artifacts   bool
-	}{
-		{name: "accept", kind: model.OperationTeamworkAccept, state: model.WorkOffered, version: 1,
-			iteration: 1, wantEvent: model.EventReviewAcceptRequested, participant: true},
-		{name: "decline", kind: model.OperationTeamworkDecline, state: model.WorkOffered, version: 1,
-			iteration: 1, content: "not suitable", wantEvent: model.EventReviewDeclineRequested, participant: true},
-		{name: "deliver", kind: model.OperationTeamworkDeliver, state: model.WorkActive, version: 2,
-			iteration: 1, content: "review complete", wantEvent: model.EventReviewDeliveryReady,
-			participant: true, artifacts: true},
-		{name: "rework", kind: model.OperationTeamworkRework, state: model.WorkDelivered, version: 3,
-			iteration: 1, content: "fix edge case", wantEvent: model.EventReviewReworkRequested,
-			wantState: model.WorkRework, wantIter: 2, artifacts: true},
-		{name: "close", kind: model.OperationTeamworkClose, state: model.WorkDelivered, version: 3,
-			iteration: 1, wantEvent: model.EventReviewClosed, wantState: model.WorkClosed, wantIter: 1},
-		{name: "cancel", kind: model.OperationTeamworkCancel, state: model.WorkDelivered, version: 3,
-			iteration: 1, content: "superseded", wantEvent: model.EventReviewCancelled,
-			wantState: model.WorkCancelled, wantIter: 1},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			fixture := newExecutorFixture(t, 1)
-			work := fixture.work(t, test.state, test.version, test.iteration, test.participant)
-			if !test.participant {
-				workSpec := work.Spec()
-				workSpec.DeadlineUnixNano = fixture.at.Add(500 * time.Millisecond).UnixNano()
-				var err error
-				work, err = model.NewReviewWork(workSpec)
-				if err != nil {
-					t.Fatal(err)
-				}
-			}
-			fixture.backend.work = work
-			reservation := executorReservation(t, fixture, test.kind, work, true)
-			paths := []string(nil)
-			if test.artifacts {
-				paths = []string{"result.txt"}
-				ref, _ := model.NewArtifactRef(model.Sum([]byte("artifact-"+test.name)), model.ArtifactProduced)
-				fixture.artifacts.result.References = []model.ArtifactRef{ref}
-			}
-			action := executorAction(t, test.name, true, test.content, "", "", paths)
-			response, apiErr := fixture.executor.ExecuteTeamwork(context.Background(), TeamworkExecutionSpec{
-				Request: localapi.TeamworkActionRequest{Action: test.name, Content: test.content, Artifacts: paths},
-				Action:  action, Reservation: reservation, At: fixture.at,
-			})
-			if apiErr != nil {
-				t.Fatalf("ExecuteTeamwork(%s) error = %v", test.name, apiErr)
-			}
-			if response.Handling == nil || response.Handling.Status != "completed" ||
-				len(response.Results) != 1 || fixture.artifacts.calls != 1 || fixture.backend.deadlines != 0 {
-				t.Fatalf("%s response = %#v", test.name, response)
-			}
-			item := fixture.backend.committed.items[0]
-			eventValue := item.Publication.Event()
-			wantEventID, _ := derivedActionEventID(reservation.Operation.ID())
-			if eventValue.Type() != test.wantEvent || len(eventValue.CausedBy()) != 1 ||
-				eventValue.ID() != wantEventID ||
-				eventValue.CausedBy()[0] != executorCurrent(t, reservation.Run).SourceEvent() ||
-				eventValue.Scope().OriginSequence() != fixture.scope.firstOriginSequence ||
-				eventValue.Scope().ChannelSequence() != fixture.scope.firstChannelSequence ||
-				eventValue.Scope().PublicationRoster() != fixture.scope.publicationRoster ||
-				!eventValue.AcceptedAt().Equal(fixture.at) {
-				t.Fatalf("%s Event = %#v", test.name, eventValue)
-			}
-			artifactSpec := fixture.artifacts.last
-			if artifactSpec.Reservation.Operation.ID() != reservation.Operation.ID() ||
-				artifactSpec.Action != test.kind || !artifactSpec.HasCurrent ||
-				artifactSpec.Current.SourceEvent() != executorCurrent(t, reservation.Run).SourceEvent() ||
-				strings.Join(artifactSpec.Paths, "\x00") != strings.Join(paths, "\x00") {
-				t.Fatalf("%s Artifact authority = %#v", test.name, artifactSpec)
-			}
-			if test.artifacts != (len(eventValue.Artifacts()) == 1) {
-				t.Fatalf("%s Artifact refs = %#v", test.name, eventValue.Artifacts())
-			}
-			if test.participant {
-				if item.Work != nil || eventValue.Scope().OriginPeerID() != work.Participants().ReviewerPeerID() ||
-					!eventValue.Audience().Contains(work.Ref().HomePeerID()) {
-					t.Fatalf("participant action mutated Work or changed participants: %#v", item)
-				}
-			} else if item.Work == nil || item.Work.Work.State() != test.wantState ||
-				item.Work.Work.Version() != work.Version()+1 || item.Work.Work.Iteration() != test.wantIter ||
-				eventValue.Scope().OriginPeerID() != work.Ref().HomePeerID() ||
-				!eventValue.Audience().Contains(work.Participants().ReviewerPeerID()) {
-				t.Fatalf("home transition = %#v", item.Work)
-			}
-		})
-	}
+	runTeamworkActionExecutorOffersExplicitAutoAndCanonicalTeam(t)
 }
 
 func TestTeamworkActionExecutorNestedOfferUsesCurrentCausality(t *testing.T) {
@@ -202,7 +31,7 @@ func TestTeamworkActionExecutorNestedOfferUsesCurrentCausality(t *testing.T) {
 	reservation := executorReservation(t, fixture, model.OperationTeamworkOffer, parent, true)
 	action := executorAction(t, "offer", true, "delegate review", "1h", AgentParticipantTeam, nil)
 	response, apiErr := fixture.executor.ExecuteTeamwork(context.Background(), TeamworkExecutionSpec{
-		Request: localapi.TeamworkActionRequest{Action: "offer", To: AgentParticipantTeam,
+		Request: TeamworkActionRequest{Action: "offer", To: AgentParticipantTeam,
 			Deadline: "1h", Content: "delegate review"},
 		Action: action, Reservation: reservation, At: fixture.at,
 	})
@@ -225,7 +54,7 @@ func TestTeamworkActionExecutorTerminalReplayAndStableRejection(t *testing.T) {
 	base := executorReservation(t, fixture, model.OperationTeamworkOffer, model.ReviewWork{}, false)
 	action := executorAction(t, "offer", false, "goal", "30m", AgentParticipantAuto, nil)
 	first, apiErr := fixture.executor.ExecuteTeamwork(context.Background(), TeamworkExecutionSpec{
-		Request: localapi.TeamworkActionRequest{Action: "offer", Content: "goal"},
+		Request: TeamworkActionRequest{Action: "offer", Content: "goal"},
 		Action:  action, Reservation: base, At: fixture.at,
 	})
 	if apiErr != nil {
@@ -238,7 +67,7 @@ func TestTeamworkActionExecutorTerminalReplayAndStableRejection(t *testing.T) {
 	committed := executorTerminalOperation(t, base.Operation, model.OperationCommitted,
 		fixture.backend.lastReceipt, fixture.at)
 	fixture.selector.err = errors.New("selector must not run")
-	fixture.artifacts.apiErr = localapi.NewAPIError(localapi.CodeInternal, "capture must not run")
+	fixture.artifacts.apiErr = NewControlError(CodeInternal, "capture must not run")
 	replay, apiErr := fixture.executor.ExecuteTeamwork(context.Background(), TeamworkExecutionSpec{
 		Action: action, Reservation: store.ManagedOperationReservation{Operation: committed, Replayed: true},
 		At: fixture.at.Add(time.Second),
@@ -261,10 +90,10 @@ func TestTeamworkActionExecutorTerminalReplayAndStableRejection(t *testing.T) {
 	_, firstErr := rejectedFixture.executor.ExecuteTeamwork(context.Background(), TeamworkExecutionSpec{
 		Action: action, Reservation: rejectedBase, At: rejectedFixture.at,
 	})
-	if firstErr == nil || firstErr.Code != localapi.CodeAmbiguousParticipant || firstErr.Replayed ||
+	if firstErr == nil || firstErr.Code != CodeAmbiguousParticipant || firstErr.Replayed ||
 		firstErr.OperationID == nil || rejectedFixture.backend.rejected.Status() != model.OperationRejected ||
 		rejectedFixture.backend.rejectAt != rejectedFixture.clock.now || rejectedFixture.artifacts.calls != 0 ||
-		len(firstErr.Message) > localapi.MaxDiagnosticBytes ||
+		len(firstErr.Message) > MaxControlDiagnosticBytes ||
 		!strings.Contains(rejectedFixture.backend.rejection.String(), `"status":"error"`) ||
 		!strings.Contains(rejectedFixture.backend.rejection.String(), `"replayed":false`) ||
 		strings.Contains(rejectedFixture.backend.rejection.String(), `"action"`) {
@@ -290,7 +119,7 @@ func TestTeamworkActionExecutorRejectsCommitFailureAndHonorsFence(t *testing.T) 
 	_, apiErr := fixture.executor.ExecuteTeamwork(context.Background(), TeamworkExecutionSpec{
 		Action: action, Reservation: reservation, At: fixture.at,
 	})
-	if apiErr == nil || apiErr.Code != localapi.CodeWorkConflict ||
+	if apiErr == nil || apiErr.Code != CodeWorkConflict ||
 		fixture.backend.rejected.Status() != model.OperationRejected ||
 		fixture.backend.commitAt != fixture.clock.now || fixture.backend.rejectAt != fixture.clock.now {
 		t.Fatalf("commit rejection = %#v, terminal=%s", apiErr, fixture.backend.rejected.Status())
@@ -304,7 +133,7 @@ func TestTeamworkActionExecutorRejectsCommitFailureAndHonorsFence(t *testing.T) 
 	_, apiErr = fenced.executor.ExecuteTeamwork(context.Background(), TeamworkExecutionSpec{
 		Action: action, Reservation: fencedReservation, At: fenced.at,
 	})
-	if apiErr == nil || apiErr.Code != localapi.CodeOperationPending || fenced.backend.rejected.Status().Valid() {
+	if apiErr == nil || apiErr.Code != CodeOperationPending || fenced.backend.rejected.Status().Valid() {
 		t.Fatalf("fenced rejection = %#v, terminal=%s", apiErr, fenced.backend.rejected.Status())
 	}
 }
@@ -327,7 +156,7 @@ func TestTeamworkActionExecutorAtomicallyLetsDeadlineWin(t *testing.T) {
 	response, apiErr := fixture.executor.ExecuteTeamwork(context.Background(), TeamworkExecutionSpec{
 		Action: action, Reservation: reservation, At: fixture.at,
 	})
-	if apiErr == nil || apiErr.Code != localapi.CodeWorkExpired || apiErr.Replayed ||
+	if apiErr == nil || apiErr.Code != CodeWorkExpired || apiErr.Replayed ||
 		apiErr.OperationID == nil || response.OperationID != "" || fixture.backend.deadlines != 1 ||
 		fixture.backend.commits != 0 || fixture.backend.rejects != 0 ||
 		fixture.backend.deadlineAt != fixture.clock.now {
@@ -369,7 +198,7 @@ func TestTeamworkActionExecutorKeepsRetryableOperationOpen(t *testing.T) {
 	_, apiErr := fixture.executor.ExecuteTeamwork(context.Background(), TeamworkExecutionSpec{
 		Action: action, Reservation: reservation, At: fixture.at,
 	})
-	if apiErr == nil || apiErr.Code != localapi.CodePeerUnavailable || !apiErr.Retryable ||
+	if apiErr == nil || apiErr.Code != CodePeerUnavailable || !apiErr.Retryable ||
 		apiErr.OperationID == nil || fixture.backend.rejects != 0 || fixture.artifacts.calls != 0 {
 		t.Fatalf("retryable selection = %#v, rejects=%d artifacts=%d", apiErr,
 			fixture.backend.rejects, fixture.artifacts.calls)
@@ -484,14 +313,14 @@ func (r *fakeOfferResolver) Resolve(_ context.Context,
 
 type fakeArtifactCoordinator struct {
 	result ArtifactCoordinationResult
-	apiErr *localapi.APIError
+	apiErr *ControlError
 	last   ArtifactCoordinationSpec
 	calls  int
 }
 
 func (c *fakeArtifactCoordinator) Coordinate(_ context.Context,
 	spec ArtifactCoordinationSpec,
-) (ArtifactCoordinationResult, *localapi.APIError) {
+) (ArtifactCoordinationResult, *ControlError) {
 	c.calls++
 	c.last = spec
 	return c.result, c.apiErr
@@ -559,8 +388,8 @@ func (b *fakeExecutionBackend) ResolveDeadline(_ context.Context, spec execution
 	if b.deadlineErr != nil {
 		return store.DeadlineResolutionResult{}, b.deadlineErr
 	}
-	receipt, err := model.JSONFrom(teamworkRejectionWire{SchemaVersion: localapi.SchemaVersion,
-		Status: "error", Code: localapi.CodeWorkExpired, Retryable: false, Replayed: false,
+	receipt, err := model.JSONFrom(teamworkRejectionWire{SchemaVersion: model.SchemaVersion,
+		Status: "error", Code: CodeWorkExpired, Retryable: false, Replayed: false,
 		Message: "Work deadline reached before action commit", OperationID: spec.operation.ID.String()})
 	if err != nil {
 		return store.DeadlineResolutionResult{}, err

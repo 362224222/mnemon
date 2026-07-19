@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/artifact"
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
@@ -80,19 +79,19 @@ func NewArtifactCaptureCoordinator(capturer ArtifactCapturer, verifier ArtifactC
 
 func (coordinator *ArtifactCaptureCoordinator) Checkpoint(ctx context.Context,
 	reservation store.ManagedOperationReservation, paths []string,
-) (ArtifactCaptureResult, *localapi.APIError) {
+) (ArtifactCaptureResult, *ControlError) {
 	operation := reservation.Operation
 	if coordinator == nil || coordinator.capturer == nil || coordinator.verifier == nil ||
 		coordinator.lifecycle == nil || coordinator.store == nil || coordinator.clock == nil ||
 		ctx == nil || operation.ID().IsZero() {
-		return ArtifactCaptureResult{}, captureAPIError(localapi.CodeInternal,
+		return ArtifactCaptureResult{}, captureAPIError(CodeInternal,
 			"Artifact capture coordinator input is invalid", operation.ID())
 	}
 
 	if checkpoint, exists := operation.Capture(); exists {
 		roots, err := parseArtifactCaptureCheckpoint(checkpoint)
 		if err != nil {
-			return ArtifactCaptureResult{}, captureAPIError(localapi.CodeInternal,
+			return ArtifactCaptureResult{}, captureAPIError(CodeInternal,
 				"durable Artifact checkpoint is invalid", operation.ID())
 		}
 		if operation.Status().Terminal() {
@@ -108,17 +107,17 @@ func (coordinator *ArtifactCaptureCoordinator) Checkpoint(ctx context.Context,
 			return ArtifactCaptureResult{}, mapArtifactStoreError(err, operation.ID())
 		}
 		if !replayed {
-			return ArtifactCaptureResult{}, captureAPIError(localapi.CodeInternal,
+			return ArtifactCaptureResult{}, captureAPIError(CodeInternal,
 				"durable Artifact checkpoint replay was not recognized", operation.ID())
 		}
 		return ArtifactCaptureResult{Checkpoint: checkpoint, Roots: roots, Replayed: true}, nil
 	}
 	if operation.Status().Terminal() {
-		return ArtifactCaptureResult{}, captureAPIError(localapi.CodeInternal,
+		return ArtifactCaptureResult{}, captureAPIError(CodeInternal,
 			"terminal Teamwork operation has no Artifact checkpoint", operation.ID())
 	}
 	if len(paths) > artifact.MaxRoots {
-		return ArtifactCaptureResult{}, captureAPIError(localapi.CodeArtifactTooLarge,
+		return ArtifactCaptureResult{}, captureAPIError(CodeArtifactTooLarge,
 			"an action accepts at most 16 Artifact paths", operation.ID())
 	}
 	if _, apiErr := coordinator.fencedNow(reservation); apiErr != nil {
@@ -130,13 +129,13 @@ func (coordinator *ArtifactCaptureCoordinator) Checkpoint(ctx context.Context,
 		var err error
 		checkpoint, err = buildArtifactCaptureCheckpoint(nil)
 		if err != nil {
-			return ArtifactCaptureResult{}, captureAPIError(localapi.CodeInternal,
+			return ArtifactCaptureResult{}, captureAPIError(CodeInternal,
 				"empty Artifact checkpoint cannot be encoded", operation.ID())
 		}
 	} else {
 		lease, err := coordinator.lifecycle.AcquireUse()
 		if err != nil || lease == nil {
-			return ArtifactCaptureResult{}, captureAPIError(localapi.CodeInternal,
+			return ArtifactCaptureResult{}, captureAPIError(CodeInternal,
 				"Artifact CAS lifecycle is unavailable", operation.ID())
 		}
 		defer lease.Release()
@@ -166,7 +165,7 @@ func (coordinator *ArtifactCaptureCoordinator) Checkpoint(ctx context.Context,
 	}
 	roots, err := parseArtifactCaptureCheckpoint(checkpoint)
 	if err != nil {
-		return ArtifactCaptureResult{}, captureAPIError(localapi.CodeInternal,
+		return ArtifactCaptureResult{}, captureAPIError(CodeInternal,
 			"Artifact checkpoint projection is invalid", operation.ID())
 	}
 	return ArtifactCaptureResult{Checkpoint: checkpoint, Roots: roots, Replayed: replayed}, nil
@@ -174,10 +173,10 @@ func (coordinator *ArtifactCaptureCoordinator) Checkpoint(ctx context.Context,
 
 func (coordinator *ArtifactCaptureCoordinator) fencedNow(
 	reservation store.ManagedOperationReservation,
-) (time.Time, *localapi.APIError) {
+) (time.Time, *ControlError) {
 	operation := reservation.Operation
 	if operation.Status() != model.OperationStarted || !reservation.Acquired {
-		return time.Time{}, captureAPIError(localapi.CodeOperationPending,
+		return time.Time{}, captureAPIError(CodeOperationPending,
 			"operation capture lease is not acquired", operation.ID())
 	}
 	now, apiErr := coordinator.freshNow(operation.ID())
@@ -187,7 +186,7 @@ func (coordinator *ArtifactCaptureCoordinator) fencedNow(
 	leaseUntil, hasLease := operation.LeaseUntil()
 	if !hasLease || operation.LeaseOwner() == "" || now.Before(operation.CreatedAt()) ||
 		!leaseUntil.After(now) {
-		return time.Time{}, captureAPIError(localapi.CodeOperationPending,
+		return time.Time{}, captureAPIError(CodeOperationPending,
 			"operation capture lease expired", operation.ID())
 	}
 	return now, nil
@@ -195,10 +194,10 @@ func (coordinator *ArtifactCaptureCoordinator) fencedNow(
 
 func (coordinator *ArtifactCaptureCoordinator) freshNow(
 	operation model.OperationID,
-) (time.Time, *localapi.APIError) {
+) (time.Time, *ControlError) {
 	now, err := canonicalArtifactCaptureTime(coordinator.clock.Now())
 	if err != nil {
-		return time.Time{}, captureAPIError(localapi.CodeInternal,
+		return time.Time{}, captureAPIError(CodeInternal,
 			"trusted Artifact capture clock is invalid", operation)
 	}
 	return now, nil
@@ -303,45 +302,45 @@ func canonicalArtifactCaptureTime(value time.Time) (time.Time, error) {
 	return value, nil
 }
 
-func mapLiveArtifactError(err error, operation model.OperationID) *localapi.APIError {
+func mapLiveArtifactError(err error, operation model.OperationID) *ControlError {
 	switch {
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
-		return captureAPIError(localapi.CodeOperationPending, "Artifact capture was interrupted", operation)
+		return captureAPIError(CodeOperationPending, "Artifact capture was interrupted", operation)
 	case errors.Is(err, artifact.ErrArtifactLimit):
-		return captureAPIError(localapi.CodeArtifactTooLarge, "Artifact capture exceeds its bound", operation)
+		return captureAPIError(CodeArtifactTooLarge, "Artifact capture exceeds its bound", operation)
 	case errors.Is(err, artifact.ErrArtifactPath), errors.Is(err, artifact.ErrArtifactType),
 		errors.Is(err, artifact.ErrArtifactChanged):
-		return captureAPIError(localapi.CodeArtifactInvalid, "Artifact path cannot be captured", operation)
+		return captureAPIError(CodeArtifactInvalid, "Artifact path cannot be captured", operation)
 	case errors.Is(err, artifact.ErrCASCorruption), errors.Is(err, artifact.ErrCASInput),
 		errors.Is(err, artifact.ErrInvalidManifest), errors.Is(err, artifact.ErrClosureMismatch):
-		return captureAPIError(localapi.CodeInternal, "Artifact byte store rejected capture", operation)
+		return captureAPIError(CodeInternal, "Artifact byte store rejected capture", operation)
 	default:
-		return captureAPIError(localapi.CodeArtifactInvalid, "Artifact path cannot be captured", operation)
+		return captureAPIError(CodeArtifactInvalid, "Artifact path cannot be captured", operation)
 	}
 }
 
-func mapArtifactVerificationError(err error, operation model.OperationID) *localapi.APIError {
+func mapArtifactVerificationError(err error, operation model.OperationID) *ControlError {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return captureAPIError(localapi.CodeOperationPending, "Artifact verification was interrupted", operation)
+		return captureAPIError(CodeOperationPending, "Artifact verification was interrupted", operation)
 	}
-	return captureAPIError(localapi.CodeInternal, "Artifact closure verification failed", operation)
+	return captureAPIError(CodeInternal, "Artifact closure verification failed", operation)
 }
 
-func mapArtifactStoreError(err error, operation model.OperationID) *localapi.APIError {
+func mapArtifactStoreError(err error, operation model.OperationID) *ControlError {
 	switch {
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded),
 		errors.Is(err, store.ErrOperationFence), errors.Is(err, store.ErrOperationPending):
-		return captureAPIError(localapi.CodeOperationPending, "Artifact checkpoint is pending", operation)
+		return captureAPIError(CodeOperationPending, "Artifact checkpoint is pending", operation)
 	case errors.Is(err, store.ErrOperationMismatch):
-		return captureAPIError(localapi.CodeOperationMismatch,
+		return captureAPIError(CodeOperationMismatch,
 			"operation Artifact checkpoint differs from durable state", operation)
 	default:
-		return captureAPIError(localapi.CodeInternal, "durable Artifact checkpoint failed", operation)
+		return captureAPIError(CodeInternal, "durable Artifact checkpoint failed", operation)
 	}
 }
 
-func captureAPIError(code localapi.ErrorCode, message string, operation model.OperationID) *localapi.APIError {
-	apiErr := localapi.NewAPIError(code, message)
+func captureAPIError(code ControlErrorCode, message string, operation model.OperationID) *ControlError {
+	apiErr := NewControlError(code, message)
 	if !operation.IsZero() {
 		operationID := operation.String()
 		apiErr.OperationID = &operationID

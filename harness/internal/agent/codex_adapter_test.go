@@ -17,10 +17,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 )
 
+// Codex consumes Agent's environment authority; the Node bridge tests local API parity.
 func TestCodexWakeAdapterRunsOneStaticManagedTurn(t *testing.T) {
 	fixture := newCodexAdapterFixture(t, fakeCodexScenario{additiveFields: true})
 	result, err := fixture.adapter.Run(context.Background(), fixture.request())
@@ -264,7 +264,7 @@ func TestCodexWakeAdapterFailsClosedAcrossLaunchAndRuntimeFailures(t *testing.T)
 			t.Fatal(err)
 		}
 		result, err := adapter.Run(context.Background(), CodexWakeRequest{
-			RunAttachmentEnvironment: localapi.RunAttachmentEnv + "=/tmp/run.attach",
+			RunAttachmentEnvironment: RunAttachmentEnvironment + "=/tmp/run.attach",
 			Callbacks:                testCodexCallbacks{}.callbacks()})
 		if !errors.Is(err, ErrCodexWakeAdapter) || strings.Contains(err.Error(), "start unavailable") ||
 			!codexResultWasNotStarted(result) {
@@ -283,7 +283,7 @@ func TestCodexWakeAdapterFailsClosedAcrossLaunchAndRuntimeFailures(t *testing.T)
 			t.Fatal(err)
 		}
 		result, err := adapter.Run(context.Background(), CodexWakeRequest{
-			RunAttachmentEnvironment: localapi.RunAttachmentEnv + "=/tmp/run.attach",
+			RunAttachmentEnvironment: RunAttachmentEnvironment + "=/tmp/run.attach",
 			Callbacks:                testCodexCallbacks{}.callbacks()})
 		if !errors.Is(err, ErrCodexWakeAdapter) || !codexResultWasNotStarted(result) {
 			t.Fatalf("Run() = (%#v, %v)", result, err)
@@ -301,7 +301,7 @@ func TestCodexWakeAdapterFailsClosedAcrossLaunchAndRuntimeFailures(t *testing.T)
 			t.Fatal(err)
 		}
 		result, err := adapter.Run(context.Background(), CodexWakeRequest{
-			RunAttachmentEnvironment: localapi.RunAttachmentEnv + "=/tmp/run.attach",
+			RunAttachmentEnvironment: RunAttachmentEnvironment + "=/tmp/run.attach",
 			Callbacks:                testCodexCallbacks{}.callbacks()})
 		if !errors.Is(err, ErrCodexWakeAdapter) || !result.ProcessExited ||
 			!result.At.IsZero() || !result.CompletionReceipt.IsZero() ||
@@ -334,7 +334,7 @@ func TestCodexWakeAdapterFailsClosedAcrossLaunchAndRuntimeFailures(t *testing.T)
 			t.Fatal(err)
 		}
 		result, err := adapter.Run(context.Background(), CodexWakeRequest{
-			RunAttachmentEnvironment: localapi.RunAttachmentEnv + "=/tmp/run.attach",
+			RunAttachmentEnvironment: RunAttachmentEnvironment + "=/tmp/run.attach",
 			Callbacks:                testCodexCallbacks{}.callbacks()})
 		if !errors.Is(err, ErrCodexWakeAdapter) || !result.ProcessExited ||
 			!strings.Contains(result.CompletionReceipt.String(), `"status":"launch_contract_failed"`) ||
@@ -571,7 +571,7 @@ func TestCodexWakeAdapterRejectsInvalidClockEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	result, err := adapter.Run(context.Background(), CodexWakeRequest{
-		RunAttachmentEnvironment: localapi.RunAttachmentEnv + "=/tmp/run.attach",
+		RunAttachmentEnvironment: RunAttachmentEnvironment + "=/tmp/run.attach",
 		Callbacks:                testCodexCallbacks{}.callbacks()})
 	if !errors.Is(err, ErrCodexWakeAdapter) || !result.Diagnostic.IsZero() ||
 		starter.process.waitCount.Load() != 1 {
@@ -590,7 +590,7 @@ func TestCodexWakeAdapterValidatesClosedConstructionAndPerRunAuthority(t *testin
 		func(value *CodexWakeAdapterOptions) { value.Executable = "codex" },
 		func(value *CodexWakeAdapterOptions) { value.Workspace = "." },
 		func(value *CodexWakeAdapterOptions) {
-			value.Environment = append(value.Environment, localapi.RunAttachmentEnv+"=/stale")
+			value.Environment = append(value.Environment, RunAttachmentEnvironment+"=/stale")
 		},
 		func(value *CodexWakeAdapterOptions) { value.Environment = []string{"PATH=/a", "PATH=/b"} },
 		func(value *CodexWakeAdapterOptions) { value.VerifyProjection = nil },
@@ -616,7 +616,7 @@ func TestCodexWakeAdapterValidatesClosedConstructionAndPerRunAuthority(t *testin
 	for _, request := range []CodexWakeRequest{
 		{},
 		{RunAttachmentEnvironment: "WRONG=/tmp/run", Callbacks: testCodexCallbacks{}.callbacks()},
-		{RunAttachmentEnvironment: localapi.RunAttachmentEnv + "=", Callbacks: testCodexCallbacks{}.callbacks()},
+		{RunAttachmentEnvironment: RunAttachmentEnvironment + "=", Callbacks: testCodexCallbacks{}.callbacks()},
 	} {
 		if _, err := adapter.Run(context.Background(), request); !errors.Is(err, ErrCodexWakeAdapter) {
 			t.Fatalf("Run(%#v) error = %v", request, err)
@@ -637,7 +637,7 @@ func TestCodexWakeAdapterValidatesClosedConstructionAndPerRunAuthority(t *testin
 	preCanceledContext, cancelPreCanceled := context.WithCancel(context.Background())
 	cancelPreCanceled()
 	result, err := adapter.Run(preCanceledContext, CodexWakeRequest{
-		RunAttachmentEnvironment: localapi.RunAttachmentEnv + "=/tmp/run.attach",
+		RunAttachmentEnvironment: RunAttachmentEnvironment + "=/tmp/run.attach",
 		Callbacks:                testCodexCallbacks{}.callbacks()})
 	if !errors.Is(err, ErrCodexWakeAdapter) || !errors.Is(err, context.Canceled) ||
 		!codexResultWasNotStarted(result) || preCanceledProjectionCalls.Load() != 0 ||
@@ -659,7 +659,7 @@ func TestCodexWakeAdapterValidatesClosedConstructionAndPerRunAuthority(t *testin
 		t.Fatal(err)
 	}
 	result, err = adapter.Run(afterProjectionContext, CodexWakeRequest{
-		RunAttachmentEnvironment: localapi.RunAttachmentEnv + "=/tmp/run.attach",
+		RunAttachmentEnvironment: RunAttachmentEnvironment + "=/tmp/run.attach",
 		Callbacks:                testCodexCallbacks{}.callbacks()})
 	if !errors.Is(err, ErrCodexWakeAdapter) || !errors.Is(err, context.Canceled) ||
 		!codexResultWasNotStarted(result) || canceledAfterProjectionStarter.process != nil {
@@ -676,7 +676,7 @@ func TestCodexWakeAdapterValidatesClosedConstructionAndPerRunAuthority(t *testin
 		t.Fatal(err)
 	}
 	result, err = adapter.Run(context.Background(), CodexWakeRequest{
-		RunAttachmentEnvironment: localapi.RunAttachmentEnv + "=/tmp/run.attach",
+		RunAttachmentEnvironment: RunAttachmentEnvironment + "=/tmp/run.attach",
 		Callbacks:                testCodexCallbacks{}.callbacks()})
 	if !errors.Is(err, ErrCodexWakeAdapter) || strings.Contains(err.Error(), "private projection drift") ||
 		!codexResultWasNotStarted(result) || projectionStarter.process != nil {
@@ -711,7 +711,7 @@ func newCodexAdapterFixtureWithIdentity(t *testing.T, scenario fakeCodexScenario
 	fixture := &codexAdapterFixture{t: t, workspace: t.TempDir(), clock: newFakeCodexClock(),
 		wakeRecorded: make(chan struct{}, 1)}
 	fixture.clock.sequence = fixture.addSequence
-	fixture.attachment = localapi.RunAttachmentEnv + "=" + filepath.Join(fixture.workspace, "run.attach")
+	fixture.attachment = RunAttachmentEnvironment + "=" + filepath.Join(fixture.workspace, "run.attach")
 	fixture.starter = newFakeCodexStarter(scenario, fixture.addSequence)
 	fixture.terminator = &fakeCodexTerminator{}
 	if scenario.observeFailure {

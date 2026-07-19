@@ -407,7 +407,7 @@ func (app *App) runTeamwork(ctx context.Context, client controlClient, projectRo
 		HasContext: contextFile != nil, ChannelAlias: request.Channel, Participant: request.To,
 		Deadline: request.Deadline, Content: request.Content, ArtifactPaths: request.Artifacts})
 	if validationErr != nil {
-		return app.writeError(command.jsonOutput, validationErr)
+		return app.writeError(command.jsonOutput, localAPIValidationError(validationErr))
 	}
 	request.Artifacts = validated.ArtifactPaths
 	return app.submitTeamwork(ctx, client, nodeState, request, contextFile, command.jsonOutput)
@@ -460,7 +460,7 @@ func (app *App) runResolve(ctx context.Context, client controlClient, projectRoo
 	request := localapi.AgentResolveRequest{Decision: command.action, Content: content}
 	if _, validationErr := agentcontrol.ValidateResolve(agentcontrol.ResolveInput{Decision: request.Decision,
 		HasContext: true, Content: request.Content}); validationErr != nil {
-		return app.writeError(command.jsonOutput, validationErr)
+		return app.writeError(command.jsonOutput, localAPIValidationError(validationErr))
 	}
 	requestDigest, apiErr := canonicalRequestDigest(request)
 	if apiErr != nil {

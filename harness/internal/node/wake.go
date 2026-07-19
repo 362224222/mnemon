@@ -219,7 +219,8 @@ func newManagedWakeWorker(st *store.Store, nodeState string, profile model.Profi
 	}
 	admitted := &admittedWakeStore{store: st, admission: admission}
 	preparer, err := agent.NewWakeAttachmentPreparer(admitted, agent.WakeAttachmentOptions{
-		NodeState: nodeState, AssetRevision: profile.ActiveAssetRevision(), Clock: clock,
+		Attachments:   newAgentAttachmentFilesystem(nodeState),
+		AssetRevision: profile.ActiveAssetRevision(), Clock: clock,
 	})
 	if err != nil {
 		return nil, err

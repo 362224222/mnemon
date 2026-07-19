@@ -11,7 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
@@ -27,21 +26,21 @@ type wallServiceClock struct{}
 func (wallServiceClock) Now() time.Time { return time.Now() }
 
 type TeamworkExecutionSpec struct {
-	Request     localapi.TeamworkActionRequest
+	Request     TeamworkActionRequest
 	Action      ValidatedAction
 	Reservation store.ManagedOperationReservation
 	At          time.Time
 }
 
 type TeamworkExecutor interface {
-	ExecuteTeamwork(context.Context, TeamworkExecutionSpec) (localapi.OperationResponse, *localapi.APIError)
+	ExecuteTeamwork(context.Context, TeamworkExecutionSpec) (OperationResponse, *ControlError)
 }
 
 // ActivationGate verifies the mutable, disk-backed authority that cannot be
 // frozen safely into a long-lived Service. A nil gate is intentionally
 // supported for low-level composition and unit tests.
 type ActivationGate interface {
-	Check(context.Context, model.Profile) *localapi.APIError
+	Check(context.Context, model.Profile) *ControlError
 }
 
 // ControlStore is the narrow durable authority surface used by the local Agent
@@ -104,18 +103,18 @@ func NewService(st ControlStore, options ServiceOptions) (*Service, error) {
 		currentViews: options.CurrentViews, activationGate: options.ActivationGate}, nil
 }
 
-func (s *Service) HookCheck(ctx context.Context, metadata localapi.RequestMetadata,
-	_ localapi.HookCheckRequest,
-) (localapi.HookCheckResponse, *localapi.APIError) {
+func (s *Service) HookCheck(ctx context.Context,
+	metadata ControlMetadata,
+) (HookCheckResponse, *ControlError) {
 	if apiErr := s.requireMetadata(metadata); apiErr != nil {
-		return localapi.HookCheckResponse{}, apiErr
+		return HookCheckResponse{}, apiErr
 	}
 	if apiErr := s.checkActivation(ctx, metadata.Profile); apiErr != nil {
-		return localapi.HookCheckResponse{}, apiErr
+		return HookCheckResponse{}, apiErr
 	}
 	at, apiErr := s.trustedNow()
 	if apiErr != nil {
-		return localapi.HookCheckResponse{}, apiErr
+		return HookCheckResponse{}, apiErr
 	}
 	if metadata.HasRunAttachment {
 		err := s.store.PeekAgentRunAttachment(ctx, store.AgentAttachmentSpec{
@@ -123,31 +122,31 @@ func (s *Service) HookCheck(ctx context.Context, metadata localapi.RequestMetada
 			AttachmentTokenHash: metadata.RunAttachmentHash, At: at,
 		})
 		if err != nil {
-			return localapi.HookCheckResponse{}, mapControlError(err)
+			return HookCheckResponse{}, mapControlError(err)
 		}
-		return localapi.HookCheckResponse{Pending: true}, nil
+		return HookCheckResponse{Pending: true}, nil
 	}
 	status, err := s.store.ProbeAgentClaim(ctx, store.AgentClaimProbeSpec{
 		ProfileID: metadata.Profile.ID(), ExpectedAssetRevision: s.assetRevision, At: at,
 	})
 	if err != nil {
-		return localapi.HookCheckResponse{}, mapControlError(err)
+		return HookCheckResponse{}, mapControlError(err)
 	}
-	return localapi.HookCheckResponse{Pending: status == store.AgentClaimActionable}, nil
+	return HookCheckResponse{Pending: status == store.AgentClaimActionable}, nil
 }
 
-func (s *Service) AgentCurrent(ctx context.Context, metadata localapi.RequestMetadata,
-	_ localapi.AgentCurrentRequest,
-) (localapi.AgentCurrentResponse, *localapi.APIError) {
+func (s *Service) AgentCurrent(ctx context.Context,
+	metadata ControlMetadata,
+) (AgentCurrentResponse, *ControlError) {
 	if apiErr := s.requireMetadata(metadata); apiErr != nil {
-		return localapi.AgentCurrentResponse{}, apiErr
+		return AgentCurrentResponse{}, apiErr
 	}
 	if apiErr := s.checkActivation(ctx, metadata.Profile); apiErr != nil {
-		return localapi.AgentCurrentResponse{}, apiErr
+		return AgentCurrentResponse{}, apiErr
 	}
 	at, apiErr := s.trustedNow()
 	if apiErr != nil {
-		return localapi.AgentCurrentResponse{}, apiErr
+		return AgentCurrentResponse{}, apiErr
 	}
 	var claimed store.AgentClaimResult
 	var claimHash model.Digest
@@ -162,23 +161,23 @@ func (s *Service) AgentCurrent(ctx context.Context, metadata localapi.RequestMet
 	} else {
 		budget, budgetErr := model.ParseHandlingBudget(metadata.Profile.HandlingBudget())
 		if budgetErr != nil {
-			return localapi.AgentCurrentResponse{}, localapi.NewAPIError(localapi.CodeInternal,
+			return AgentCurrentResponse{}, NewControlError(CodeInternal,
 				"Profile handling budget is invalid")
 		}
 		leaseUntil := at.Add(time.Duration(budget.Spec().ClaimLeaseSeconds) * time.Second)
 		if !leaseUntil.After(at) {
-			return localapi.AgentCurrentResponse{}, localapi.NewAPIError(localapi.CodeInternal,
+			return AgentCurrentResponse{}, NewControlError(CodeInternal,
 				"managed claim lease cannot be represented")
 		}
 		claimSecret, err = s.drawSecret()
 		if err != nil {
-			return localapi.AgentCurrentResponse{}, localapi.NewAPIError(localapi.CodeInternal,
+			return AgentCurrentResponse{}, NewControlError(CodeInternal,
 				"managed claim capability cannot be generated")
 		}
 		defer clear(claimSecret)
 		claimOwnerBytes, ownerErr := s.drawSecret()
 		if ownerErr != nil {
-			return localapi.AgentCurrentResponse{}, localapi.NewAPIError(localapi.CodeInternal,
+			return AgentCurrentResponse{}, NewControlError(CodeInternal,
 				"managed claim owner cannot be generated")
 		}
 		claimOwner := "claim-" + base64.RawURLEncoding.EncodeToString(claimOwnerBytes)
@@ -190,18 +189,18 @@ func (s *Service) AgentCurrent(ctx context.Context, metadata localapi.RequestMet
 		})
 	}
 	if err != nil {
-		return localapi.AgentCurrentResponse{}, mapControlError(err)
+		return AgentCurrentResponse{}, mapControlError(err)
 	}
 	if claimed.Status != store.AgentClaimActionable {
-		response := localapi.AgentCurrentResponse{Status: string(claimed.Status)}
+		response := AgentCurrentResponse{Status: string(claimed.Status)}
 		if claimed.Status == store.AgentClaimNone {
 			initiation, err := s.store.ReadAgentInitiationContext(ctx, metadata.Profile, at)
 			if err != nil {
-				return localapi.AgentCurrentResponse{}, mapControlError(err)
+				return AgentCurrentResponse{}, mapControlError(err)
 			}
 			projection, err := initiation.CanonicalJSON()
 			if err != nil {
-				return localapi.AgentCurrentResponse{}, localapi.NewAPIError(localapi.CodeInternal,
+				return AgentCurrentResponse{}, NewControlError(CodeInternal,
 					"initiation context cannot be projected")
 			}
 			response.Projection = projection.Bytes()
@@ -214,29 +213,29 @@ func (s *Service) AgentCurrent(ctx context.Context, metadata localapi.RequestMet
 	}
 	plan, err := s.store.PlanAgentCurrentRead(ctx, readSpec)
 	if err != nil {
-		return localapi.AgentCurrentResponse{}, mapControlError(err)
+		return AgentCurrentResponse{}, mapControlError(err)
 	}
 	if plan.RunID != claimed.Run.ID() {
-		return localapi.AgentCurrentResponse{}, localapi.NewAPIError(localapi.CodeInternal,
+		return AgentCurrentResponse{}, NewControlError(CodeInternal,
 			"managed current view plan differs from its Run")
 	}
 	views, err := s.currentViews.Materialize(ctx, plan)
 	if err != nil {
-		return localapi.AgentCurrentResponse{}, localapi.NewAPIError(localapi.CodeInternal,
+		return AgentCurrentResponse{}, NewControlError(CodeInternal,
 			"managed current Artifact views cannot be materialized safely")
 	}
 	finalAt, apiErr := s.trustedNow()
 	if apiErr != nil {
 		s.cleanupCurrentViews(claimed.Run.ID())
-		return localapi.AgentCurrentResponse{}, apiErr
+		return AgentCurrentResponse{}, apiErr
 	}
 	readSpec.At, readSpec.ArtifactViews = finalAt, views
 	current, err := s.store.FinalizeAgentCurrentRead(ctx, readSpec)
 	if err != nil {
 		s.cleanupCurrentViews(claimed.Run.ID())
-		return localapi.AgentCurrentResponse{}, mapControlError(err)
+		return AgentCurrentResponse{}, mapControlError(err)
 	}
-	response := localapi.AgentCurrentResponse{Status: string(store.AgentClaimActionable),
+	response := AgentCurrentResponse{Status: string(store.AgentClaimActionable),
 		RunID: claimed.Run.ID().String(), Projection: current.Projection.CanonicalJSON().Bytes()}
 	if !metadata.HasRunAttachment {
 		response.ClaimSecret = base64.RawURLEncoding.EncodeToString(claimSecret)
@@ -244,41 +243,41 @@ func (s *Service) AgentCurrent(ctx context.Context, metadata localapi.RequestMet
 	return response, nil
 }
 
-func (s *Service) TeamworkAction(ctx context.Context, metadata localapi.RequestMetadata,
-	request localapi.TeamworkActionRequest,
-) (localapi.OperationResponse, *localapi.APIError) {
+func (s *Service) TeamworkAction(ctx context.Context, metadata ControlMetadata,
+	request TeamworkActionRequest,
+) (OperationResponse, *ControlError) {
 	if apiErr := s.requireMetadata(metadata); apiErr != nil {
-		return localapi.OperationResponse{}, apiErr
+		return OperationResponse{}, apiErr
 	}
 	if apiErr := s.checkActivation(ctx, metadata.Profile); apiErr != nil {
-		return localapi.OperationResponse{}, apiErr
+		return OperationResponse{}, apiErr
 	}
 	if apiErr := requireOperationCapabilities(metadata, request.Action != "offer"); apiErr != nil {
-		return localapi.OperationResponse{}, apiErr
+		return OperationResponse{}, apiErr
 	}
 	validated, apiErr := ValidateAction(ActionInput{Action: request.Action,
 		HasContext: metadata.HasClaimContext, ChannelAlias: request.Channel,
 		Participant: request.To, Deadline: request.Deadline, Content: request.Content,
 		ArtifactPaths: request.Artifacts})
 	if apiErr != nil {
-		return localapi.OperationResponse{}, apiErr
+		return OperationResponse{}, apiErr
 	}
 	if s.executor == nil {
-		return localapi.OperationResponse{}, localapi.NewAPIError(localapi.CodeInternal,
+		return OperationResponse{}, NewControlError(CodeInternal,
 			"Teamwork action executor is unavailable")
 	}
 	at, apiErr := s.trustedNow()
 	if apiErr != nil {
-		return localapi.OperationResponse{}, apiErr
+		return OperationResponse{}, apiErr
 	}
 	raw, err := model.CanonicalMarshal(request)
 	if err != nil {
-		return localapi.OperationResponse{}, localapi.NewAPIError(localapi.CodeInvalidArgument,
+		return OperationResponse{}, NewControlError(CodeInvalidArgument,
 			"Teamwork request cannot be canonicalized")
 	}
 	owner, apiErr := s.operationOwner()
 	if apiErr != nil {
-		return localapi.OperationResponse{}, apiErr
+		return OperationResponse{}, apiErr
 	}
 	reservation, err := s.store.ReserveManagedOperation(ctx, store.ManagedOperationSpec{
 		Profile: metadata.Profile, ClientKeyHash: metadata.OperationKeyHash,
@@ -287,7 +286,7 @@ func (s *Service) TeamworkAction(ctx context.Context, metadata localapi.RequestM
 		ClaimContextHash: metadata.ClaimContextHash, HasClaimContext: metadata.HasClaimContext,
 	})
 	if err != nil {
-		return localapi.OperationResponse{}, mapControlError(err)
+		return OperationResponse{}, mapControlError(err)
 	}
 	response, executionErr := s.executor.ExecuteTeamwork(ctx, TeamworkExecutionSpec{
 		Request: request, Action: validated, Reservation: reservation, At: at,
@@ -298,35 +297,35 @@ func (s *Service) TeamworkAction(ctx context.Context, metadata localapi.RequestM
 	return response, executionErr
 }
 
-func (s *Service) AgentResolve(ctx context.Context, metadata localapi.RequestMetadata,
-	request localapi.AgentResolveRequest,
-) (localapi.OperationResponse, *localapi.APIError) {
+func (s *Service) AgentResolve(ctx context.Context, metadata ControlMetadata,
+	request AgentResolveRequest,
+) (OperationResponse, *ControlError) {
 	if apiErr := s.requireMetadata(metadata); apiErr != nil {
-		return localapi.OperationResponse{}, apiErr
+		return OperationResponse{}, apiErr
 	}
 	if apiErr := s.checkActivation(ctx, metadata.Profile); apiErr != nil {
-		return localapi.OperationResponse{}, apiErr
+		return OperationResponse{}, apiErr
 	}
 	if apiErr := requireOperationCapabilities(metadata, true); apiErr != nil {
-		return localapi.OperationResponse{}, apiErr
+		return OperationResponse{}, apiErr
 	}
 	validated, apiErr := ValidateResolve(ResolveInput{Decision: request.Decision,
 		HasContext: metadata.HasClaimContext, Content: request.Content})
 	if apiErr != nil {
-		return localapi.OperationResponse{}, apiErr
+		return OperationResponse{}, apiErr
 	}
 	at, apiErr := s.trustedNow()
 	if apiErr != nil {
-		return localapi.OperationResponse{}, apiErr
+		return OperationResponse{}, apiErr
 	}
 	requestDigest, err := store.ManagedResolutionRequestDigest(metadata.ClaimContextHash,
 		validated.Kind, validated.Content)
 	if err != nil {
-		return localapi.OperationResponse{}, mapControlError(err)
+		return OperationResponse{}, mapControlError(err)
 	}
 	owner, apiErr := s.operationOwner()
 	if apiErr != nil {
-		return localapi.OperationResponse{}, apiErr
+		return OperationResponse{}, apiErr
 	}
 	reservation, err := s.store.ReserveManagedOperation(ctx, store.ManagedOperationSpec{
 		Profile: metadata.Profile, ClientKeyHash: metadata.OperationKeyHash,
@@ -335,18 +334,18 @@ func (s *Service) AgentResolve(ctx context.Context, metadata localapi.RequestMet
 		HasClaimContext: true,
 	})
 	if err != nil {
-		return localapi.OperationResponse{}, mapControlError(err)
+		return OperationResponse{}, mapControlError(err)
 	}
 	resolved, err := s.store.CommitManagedResolution(ctx, store.ManagedResolutionSpec{
 		Reservation: reservation, Content: validated.Content, At: at,
 	})
 	if err != nil {
-		return localapi.OperationResponse{}, mapControlError(err)
+		return OperationResponse{}, mapControlError(err)
 	}
 	s.cleanupCurrentViews(reservation.Operation.AgentRunID())
 	response, err := decodeResolutionResponse(resolved.Receipt, resolved.Operation)
 	if err != nil {
-		return localapi.OperationResponse{}, localapi.NewAPIError(localapi.CodeInternal,
+		return OperationResponse{}, NewControlError(CodeInternal,
 			"durable resolution receipt is invalid")
 	}
 	response.Replayed = resolved.Replayed
@@ -362,51 +361,51 @@ func (s *Service) cleanupCurrentViews(runID model.RunID) {
 	_ = s.currentViews.CleanupRun(ctx, runID)
 }
 
-func (s *Service) requireMetadata(metadata localapi.RequestMetadata) *localapi.APIError {
+func (s *Service) requireMetadata(metadata ControlMetadata) *ControlError {
 	if s == nil || s.store == nil || metadata.Profile.ID() != model.TeamworkProfileID() {
-		return localapi.NewAPIError(localapi.CodeAuthenticationFailed, "profile authentication failed")
+		return NewControlError(CodeAuthenticationFailed, "profile authentication failed")
 	}
 	if !metadata.Profile.Enabled() || metadata.Profile.ActiveAssetRevision() != s.assetRevision {
-		return localapi.NewAPIError(localapi.CodeAssetRevisionMismatch,
+		return NewControlError(CodeAssetRevisionMismatch,
 			"managed Profile activation differs from the active asset revision")
 	}
 	return nil
 }
 
-func (s *Service) checkActivation(ctx context.Context, profile model.Profile) *localapi.APIError {
+func (s *Service) checkActivation(ctx context.Context, profile model.Profile) *ControlError {
 	if s == nil || s.activationGate == nil {
 		return nil
 	}
 	return s.activationGate.Check(ctx, profile)
 }
 
-func requireOperationCapabilities(metadata localapi.RequestMetadata,
+func requireOperationCapabilities(metadata ControlMetadata,
 	contextRequired bool,
-) *localapi.APIError {
+) *ControlError {
 	if !metadata.HasOperationKey || metadata.OperationKeyHash.IsZero() {
-		return localapi.NewAPIError(localapi.CodeInvalidArgument, "operation key is required")
+		return NewControlError(CodeInvalidArgument, "operation key is required")
 	}
 	if contextRequired && (!metadata.HasClaimContext || metadata.ClaimContextHash.IsZero()) {
-		return localapi.NewAPIError(localapi.CodeContextRequired, "managed context is required")
+		return NewControlError(CodeContextRequired, "managed context is required")
 	}
 	return nil
 }
 
-func (s *Service) trustedNow() (time.Time, *localapi.APIError) {
+func (s *Service) trustedNow() (time.Time, *ControlError) {
 	if s == nil || s.clock == nil {
-		return time.Time{}, localapi.NewAPIError(localapi.CodeInternal, "managed clock is unavailable")
+		return time.Time{}, NewControlError(CodeInternal, "managed clock is unavailable")
 	}
 	now := s.clock.Now().Round(0).UTC()
 	if now.IsZero() || now.UnixNano() <= 0 || !time.Unix(0, now.UnixNano()).UTC().Equal(now) {
-		return time.Time{}, localapi.NewAPIError(localapi.CodeInternal, "managed clock is invalid")
+		return time.Time{}, NewControlError(CodeInternal, "managed clock is invalid")
 	}
 	return now, nil
 }
 
-func (s *Service) operationOwner() (string, *localapi.APIError) {
+func (s *Service) operationOwner() (string, *ControlError) {
 	raw, err := s.drawSecret()
 	if err != nil {
-		return "", localapi.NewAPIError(localapi.CodeInternal, "operation lease owner cannot be generated")
+		return "", NewControlError(CodeInternal, "operation lease owner cannot be generated")
 	}
 	defer clear(raw)
 	return "run-" + base64.RawURLEncoding.EncodeToString(raw), nil
@@ -442,19 +441,19 @@ func operationKindForAction(action string) model.OperationKind {
 	}[action]
 }
 
-func decodeResolutionResponse(receipt model.JSON, operation model.Operation) (localapi.OperationResponse, error) {
-	var response localapi.OperationResponse
+func decodeResolutionResponse(receipt model.JSON, operation model.Operation) (OperationResponse, error) {
+	var response OperationResponse
 	if receipt.IsZero() || operation.ID().IsZero() || operation.Status() != model.OperationCommitted {
 		return response, errors.New("zero resolution receipt")
 	}
 	if err := json.Unmarshal(receipt.Bytes(), &response); err != nil {
-		return localapi.OperationResponse{}, err
+		return OperationResponse{}, err
 	}
-	if response.SchemaVersion != localapi.SchemaVersion || response.Status != "resolved" ||
+	if response.SchemaVersion != model.SchemaVersion || response.Status != "resolved" ||
 		response.OperationID != operation.ID().String() || response.Action != string(operation.Kind()) ||
 		response.Results == nil || len(response.Results) != 0 || response.Handling == nil ||
 		response.Receipt == "" {
-		return localapi.OperationResponse{}, errors.New("invalid resolution receipt shape")
+		return OperationResponse{}, errors.New("invalid resolution receipt shape")
 	}
 	wantHandling := map[model.OperationKind]string{
 		model.OperationResolveNoAction: "completed",
@@ -462,45 +461,45 @@ func decodeResolutionResponse(receipt model.JSON, operation model.Operation) (lo
 		model.OperationResolveReject:   "rejected",
 	}[operation.Kind()]
 	if wantHandling == "" || response.Handling.Status != wantHandling {
-		return localapi.OperationResponse{}, errors.New("invalid resolution receipt lifecycle")
+		return OperationResponse{}, errors.New("invalid resolution receipt lifecycle")
 	}
 	return response, nil
 }
 
-func mapControlError(err error) *localapi.APIError {
+func mapControlError(err error) *ControlError {
 	switch {
 	case err == nil:
 		return nil
 	case errors.Is(err, store.ErrAgentClaimAsset), errors.Is(err, store.ErrManagedProfileAuthority):
-		return localapi.NewAPIError(localapi.CodeAssetRevisionMismatch, "managed Profile authority drifted")
+		return NewControlError(CodeAssetRevisionMismatch, "managed Profile authority drifted")
 	case errors.Is(err, store.ErrAgentClaimProfile):
-		return localapi.NewAPIError(localapi.CodeProfileHostMismatch, "managed Profile is unavailable")
+		return NewControlError(CodeProfileHostMismatch, "managed Profile is unavailable")
 	case errors.Is(err, store.ErrCurrentReadTooLarge):
-		return localapi.NewAPIError(localapi.CodeCurrentTooLarge, "current projection exceeds its bound")
+		return NewControlError(CodeCurrentTooLarge, "current projection exceeds its bound")
 	case errors.Is(err, store.ErrCurrentReadStale), errors.Is(err, store.ErrManagedContextStale):
-		return localapi.NewAPIError(localapi.CodeContextStale, "managed context is stale")
+		return NewControlError(CodeContextStale, "managed context is stale")
 	case errors.Is(err, store.ErrAgentAttachmentStale):
-		return localapi.NewAPIError(localapi.CodeContextStale, "managed Run attachment is stale")
+		return NewControlError(CodeContextStale, "managed Run attachment is stale")
 	case errors.Is(err, store.ErrAgentAttachmentInput):
-		return localapi.NewAPIError(localapi.CodeContextInvalid, "managed Run attachment is invalid")
+		return NewControlError(CodeContextInvalid, "managed Run attachment is invalid")
 	case errors.Is(err, store.ErrManagedContextRequired):
-		return localapi.NewAPIError(localapi.CodeContextRequired, "managed context is required")
+		return NewControlError(CodeContextRequired, "managed context is required")
 	case errors.Is(err, store.ErrManagedActionNotAllowed):
-		return localapi.NewAPIError(localapi.CodeActionNotAllowed, "action is not allowed by current")
+		return NewControlError(CodeActionNotAllowed, "action is not allowed by current")
 	case errors.Is(err, store.ErrOperationMismatch):
-		return localapi.NewAPIError(localapi.CodeOperationMismatch, "operation identity differs from request")
+		return NewControlError(CodeOperationMismatch, "operation identity differs from request")
 	case errors.Is(err, store.ErrOperationPending), errors.Is(err, store.ErrOperationFence):
-		return localapi.NewAPIError(localapi.CodeOperationPending, "operation is still pending")
+		return NewControlError(CodeOperationPending, "operation is still pending")
 	case errors.Is(err, store.ErrManagedResolutionStale), errors.Is(err, store.ErrAdmissionConflict),
 		errors.Is(err, store.ErrWorkCASConflict):
-		return localapi.NewAPIError(localapi.CodeWorkConflict, "current Work changed before admission")
+		return NewControlError(CodeWorkConflict, "current Work changed before admission")
 	case errors.Is(err, store.ErrDeadlineResolution):
-		return localapi.NewAPIError(localapi.CodeWorkExpired, "Work deadline already won")
+		return NewControlError(CodeWorkExpired, "Work deadline already won")
 	case errors.Is(err, store.ErrManagedResolutionInput), errors.Is(err, store.ErrManagedOperationInput):
-		return localapi.NewAPIError(localapi.CodeInvalidArgument, "managed request is invalid")
+		return NewControlError(CodeInvalidArgument, "managed request is invalid")
 	default:
-		return localapi.NewAPIError(localapi.CodeInternal, fmt.Sprintf("managed control failed: %T", err))
+		return NewControlError(CodeInternal, fmt.Sprintf("managed control failed: %T", err))
 	}
 }
 
-var _ localapi.Service = (*Service)(nil)
+var _ ControlService = (*Service)(nil)

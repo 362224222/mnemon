@@ -186,20 +186,6 @@
     },
     {
       "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/agent/executor_test.go::TestTeamworkActionExecutorExecutesAllCurrentActions.$func-d517570f357e68cb15925473-b6e5f9688f68f8bdec0a0f70-cy34-co37-li54-st37-ne2-001",
-      "path": "harness/internal/agent/executor_test.go",
-      "symbol": "TestTeamworkActionExecutorExecutesAllCurrentActions.$func-d517570f357e68cb15925473-b6e5f9688f68f8bdec0a0f70-cy34-co37-li54-st37-ne2-001",
-      "ceiling": 37
-    },
-    {
-      "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/agent/executor_test.go::TestTeamworkActionExecutorOffersExplicitAutoAndCanonicalTeam.$func-d517570f357e68cb15925473-ffe0d8f6bfa875ce9de0f4a8-cy32-co38-li45-st27-ne3-001",
-      "path": "harness/internal/agent/executor_test.go",
-      "symbol": "TestTeamworkActionExecutorOffersExplicitAutoAndCanonicalTeam.$func-d517570f357e68cb15925473-ffe0d8f6bfa875ce9de0f4a8-cy32-co38-li45-st27-ne3-001",
-      "ceiling": 38
-    },
-    {
-      "rule": "cognitive_complexity",
       "identity": "cognitive_complexity:harness/internal/agent/executor_test.go::TestTeamworkActionExecutorTerminalReplayAndStableRejection",
       "path": "harness/internal/agent/executor_test.go",
       "symbol": "TestTeamworkActionExecutorTerminalReplayAndStableRejection",
@@ -2143,20 +2129,6 @@
       "path": "harness/internal/agent/executor_test.go",
       "symbol": "TestTeamworkActionExecutorAtomicallyLetsDeadlineWin",
       "ceiling": 28
-    },
-    {
-      "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/agent/executor_test.go::TestTeamworkActionExecutorExecutesAllCurrentActions.$func-d517570f357e68cb15925473-b6e5f9688f68f8bdec0a0f70-cy34-co37-li54-st37-ne2-001",
-      "path": "harness/internal/agent/executor_test.go",
-      "symbol": "TestTeamworkActionExecutorExecutesAllCurrentActions.$func-d517570f357e68cb15925473-b6e5f9688f68f8bdec0a0f70-cy34-co37-li54-st37-ne2-001",
-      "ceiling": 34
-    },
-    {
-      "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/agent/executor_test.go::TestTeamworkActionExecutorOffersExplicitAutoAndCanonicalTeam.$func-d517570f357e68cb15925473-ffe0d8f6bfa875ce9de0f4a8-cy32-co38-li45-st27-ne3-001",
-      "path": "harness/internal/agent/executor_test.go",
-      "symbol": "TestTeamworkActionExecutorOffersExplicitAutoAndCanonicalTeam.$func-d517570f357e68cb15925473-ffe0d8f6bfa875ce9de0f4a8-cy32-co38-li45-st27-ne3-001",
-      "ceiling": 32
     },
     {
       "rule": "cyclomatic_complexity",
@@ -4481,13 +4453,6 @@
       "path": "harness/internal/agent/executor.go",
       "symbol": "decodeCommittedTeamworkReceipt",
       "ceiling": 92
-    },
-    {
-      "rule": "function_logical_lines",
-      "identity": "function_logical_lines:harness/internal/agent/executor_test.go::TestTeamworkActionExecutorExecutesAllCurrentActions",
-      "path": "harness/internal/agent/executor_test.go",
-      "symbol": "TestTeamworkActionExecutorExecutesAllCurrentActions",
-      "ceiling": 84
     },
     {
       "rule": "function_logical_lines",
@@ -7138,12 +7103,6 @@
     },
     {
       "rule": "paired_test_file_lines",
-      "identity": "paired_test_file_lines:harness/internal/agent/executor_test.go",
-      "path": "harness/internal/agent/executor_test.go",
-      "ceiling": 823
-    },
-    {
-      "rule": "paired_test_file_lines",
       "identity": "paired_test_file_lines:harness/internal/agent/wake_worker_test.go",
       "path": "harness/internal/agent/wake_worker_test.go",
       "ceiling": 1857
@@ -7284,7 +7243,7 @@
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/agent/executor.go",
       "path": "harness/internal/agent/executor.go",
-      "ceiling": 1047
+      "ceiling": 996
     },
     {
       "rule": "production_file_lines",
@@ -7302,7 +7261,7 @@
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/agent/service.go",
       "path": "harness/internal/agent/service.go",
-      "ceiling": 506
+      "ceiling": 505
     },
     {
       "rule": "production_file_lines",

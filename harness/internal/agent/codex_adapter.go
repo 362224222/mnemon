@@ -17,7 +17,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 )
 
@@ -568,6 +567,7 @@ func codexAdapterErrorCategory(err error) string {
 	}
 }
 
+// Codex validates the same Agent-owned attachment environment authority emitted by wake preparation.
 func validateCodexBaseEnvironment(environment []string) ([]string, error) {
 	result := append([]string(nil), environment...)
 	seen := make(map[string]struct{}, len(result))
@@ -577,7 +577,7 @@ func validateCodexBaseEnvironment(environment []string) ([]string, error) {
 			strings.ContainsAny(entry, "\x00\r\n") {
 			return nil, errors.New("base environment contains an invalid assignment")
 		}
-		if name == localapi.RunAttachmentEnv {
+		if name == RunAttachmentEnvironment {
 			return nil, errors.New("base environment contains a Run attachment")
 		}
 		if _, duplicate := seen[name]; duplicate {
@@ -590,7 +590,7 @@ func validateCodexBaseEnvironment(environment []string) ([]string, error) {
 
 func validateCodexAttachmentEnvironment(assignment string) (string, error) {
 	name, value, ok := strings.Cut(assignment, "=")
-	if !ok || name != localapi.RunAttachmentEnv || value == "" ||
+	if !ok || name != RunAttachmentEnvironment || value == "" ||
 		strings.ContainsAny(assignment, "\x00\r\n") || !filepath.IsAbs(value) ||
 		filepath.Clean(value) != value {
 		return "", errors.New("one exact Run attachment environment assignment is required")

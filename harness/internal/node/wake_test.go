@@ -102,7 +102,8 @@ func TestWakeAttachmentFilesystemWorkStaysOutsideAdmission(t *testing.T) {
 		admission := &wakeAdmissionSpy{}
 		preparer, err := agent.NewWakeAttachmentPreparer(
 			&admittedWakeStore{admission: admission},
-			agent.WakeAttachmentOptions{NodeState: filepath.Join(t.TempDir(), "missing", "node"),
+			agent.WakeAttachmentOptions{Attachments: newAgentAttachmentFilesystem(
+				filepath.Join(t.TempDir(), "missing", "node")),
 				AssetRevision: fixture.revision, Clock: wakeFixedClock{fixture.profile.UpdatedAt()}},
 		)
 		if err != nil {
@@ -128,8 +129,9 @@ func TestWakeAttachmentFilesystemWorkStaysOutsideAdmission(t *testing.T) {
 			admission: admission}
 		preparer, err := agent.NewWakeAttachmentPreparer(
 			&admittedWakeStore{store: st, admission: admission},
-			agent.WakeAttachmentOptions{NodeState: fixture.nodeState, AssetRevision: fixture.revision,
-				Clock: wakeFixedClock{fixture.profile.UpdatedAt()}, Random: entropy},
+			agent.WakeAttachmentOptions{Attachments: newAgentAttachmentFilesystem(fixture.nodeState),
+				AssetRevision: fixture.revision,
+				Clock:         wakeFixedClock{fixture.profile.UpdatedAt()}, Random: entropy},
 		)
 		if err != nil {
 			t.Fatal(err)

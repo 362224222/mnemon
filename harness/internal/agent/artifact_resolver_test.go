@@ -8,14 +8,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
 
 type artifactResolverCheckpointer struct {
 	result      ArtifactCaptureResult
-	apiErr      *localapi.APIError
+	apiErr      *ControlError
 	calls       int
 	reservation store.ManagedOperationReservation
 	paths       []string
@@ -38,7 +37,7 @@ func (stub *artifactResolverViewValidator) Validate(_ context.Context,
 
 func (stub *artifactResolverCheckpointer) Checkpoint(_ context.Context,
 	reservation store.ManagedOperationReservation, paths []string,
-) (ArtifactCaptureResult, *localapi.APIError) {
+) (ArtifactCaptureResult, *ControlError) {
 	stub.calls++
 	stub.reservation = reservation
 	stub.paths = make([]string, len(paths))
@@ -131,7 +130,7 @@ func TestArtifactResolverMapsExactCurrentViewsAsReferencedWithoutRecapture(t *te
 	if _, apiErr := resolver.Coordinate(context.Background(), ArtifactCoordinationSpec{
 		Reservation: store.ManagedOperationReservation{Operation: operation, Acquired: true},
 		Action:      operation.Kind(), Paths: []string{viewPath}, Current: current, HasCurrent: true,
-	}); apiErr == nil || apiErr.Code != localapi.CodeArtifactInvalid || capture.calls != 0 {
+	}); apiErr == nil || apiErr.Code != CodeArtifactInvalid || capture.calls != 0 {
 		t.Fatalf("drifted view = %#v capture calls=%d", apiErr, capture.calls)
 	}
 }
@@ -172,7 +171,7 @@ func TestArtifactResolverRejectsInternalReadonlyAndEscapingPathsBeforeCapture(t 
 				Reservation: store.ManagedOperationReservation{Operation: operation, Acquired: true},
 				Action:      operation.Kind(), Paths: []string{requested},
 			})
-			if apiErr == nil || apiErr.Code != localapi.CodeArtifactInvalid || stub.calls != 0 ||
+			if apiErr == nil || apiErr.Code != CodeArtifactInvalid || stub.calls != 0 ||
 				apiErr.OperationID == nil || *apiErr.OperationID != operation.ID().String() {
 				t.Fatalf("path %q resolution = %#v, capture calls=%d", requested, apiErr, stub.calls)
 			}
@@ -202,7 +201,7 @@ func TestArtifactResolverDoesNotOvermatchOrdinaryNearInternalPath(t *testing.T) 
 func TestArtifactResolverPropagatesStableCaptureErrorsAndRejectsDrift(t *testing.T) {
 	operation := artifactResolverOperation(t, "stable-error", model.OperationTeamworkOffer, nil)
 	operationID := operation.ID().String()
-	pending := localapi.NewAPIError(localapi.CodeOperationPending, "capture remains pending")
+	pending := NewControlError(CodeOperationPending, "capture remains pending")
 	pending.OperationID = &operationID
 	stub := &artifactResolverCheckpointer{apiErr: pending}
 	resolver, _ := NewArtifactResolver(stub, &artifactResolverViewValidator{})
@@ -221,7 +220,7 @@ func TestArtifactResolverPropagatesStableCaptureErrorsAndRejectsDrift(t *testing
 			Reservation: store.ManagedOperationReservation{Operation: operation, Acquired: true},
 			Action:      model.OperationTeamworkDeliver,
 		})
-		if apiErr == nil || apiErr.Code != localapi.CodeOperationMismatch || mismatch.calls != 0 {
+		if apiErr == nil || apiErr.Code != CodeOperationMismatch || mismatch.calls != 0 {
 			t.Fatalf("action mismatch = %#v, calls=%d", apiErr, mismatch.calls)
 		}
 	})
@@ -234,7 +233,7 @@ func TestArtifactResolverPropagatesStableCaptureErrorsAndRejectsDrift(t *testing
 			Reservation: store.ManagedOperationReservation{Operation: closeOperation, Acquired: true},
 			Action:      closeOperation.Kind(), Paths: []string{"result"},
 		})
-		if apiErr == nil || apiErr.Code != localapi.CodeArtifactInvalid || forbidden.calls != 0 {
+		if apiErr == nil || apiErr.Code != CodeArtifactInvalid || forbidden.calls != 0 {
 			t.Fatalf("forbidden Artifact = %#v, calls=%d", apiErr, forbidden.calls)
 		}
 	})
@@ -250,7 +249,7 @@ func TestArtifactResolverPropagatesStableCaptureErrorsAndRejectsDrift(t *testing
 			Reservation: store.ManagedOperationReservation{Operation: operation, Acquired: true},
 			Action:      operation.Kind(), Paths: []string{"result"},
 		})
-		if apiErr == nil || apiErr.Code != localapi.CodeInternal || drifted.calls != 1 {
+		if apiErr == nil || apiErr.Code != CodeInternal || drifted.calls != 1 {
 			t.Fatalf("checkpoint drift = %#v, calls=%d", apiErr, drifted.calls)
 		}
 	})

@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/artifact"
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
@@ -177,7 +176,7 @@ func TestArtifactCaptureCoordinatorHoldsLifecycleThroughOperationOwnershipCheckp
 	}
 	type checkpointOutcome struct {
 		result ArtifactCaptureResult
-		err    *localapi.APIError
+		err    *ControlError
 	}
 	checkpointDone := make(chan checkpointOutcome, 1)
 	go func() {
@@ -232,14 +231,14 @@ func TestArtifactCaptureCoordinatorReleasesLifecycleAfterFailureAndCancellation(
 		capture   func(context.Context, artifact.Closure) (artifact.Closure, error)
 		closure   error
 		operation error
-		code      localapi.ErrorCode
+		code      ControlErrorCode
 	}{
 		{name: "capture cancellation", capture: func(ctx context.Context, _ artifact.Closure) (artifact.Closure, error) {
 			return artifact.Closure{}, ctx.Err()
-		}, code: localapi.CodeOperationPending},
-		{name: "closure checkpoint failure", closure: store.ErrArtifactConflict, code: localapi.CodeInternal},
+		}, code: CodeOperationPending},
+		{name: "closure checkpoint failure", closure: store.ErrArtifactConflict, code: CodeInternal},
 		{name: "operation checkpoint failure", operation: store.ErrOperationFence,
-			code: localapi.CodeOperationPending},
+			code: CodeOperationPending},
 	}
 	for index, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -303,7 +302,7 @@ func TestArtifactCaptureCoordinatorMapsLifecycleAcquisitionFailureToInternal(t *
 	}
 	_, apiErr := coordinator.Checkpoint(context.Background(),
 		store.ManagedOperationReservation{Operation: operation, Acquired: true}, []string{"result.txt"})
-	if apiErr == nil || apiErr.Code != localapi.CodeInternal || apiErr.Retryable || liveCalls != 0 {
+	if apiErr == nil || apiErr.Code != CodeInternal || apiErr.Retryable || liveCalls != 0 {
 		t.Fatalf("lifecycle acquisition failure = %#v, live calls=%d", apiErr, liveCalls)
 	}
 }
@@ -382,7 +381,7 @@ func TestArtifactCaptureCoordinatorRejectsMalformedDurableCheckpointWithoutLiveR
 	coordinator := artifactCoordinatorWithNoLiveCalls(t, stub, clock)
 	_, apiErr := coordinator.Checkpoint(context.Background(),
 		store.ManagedOperationReservation{Operation: operation, Acquired: true}, []string{"missing"})
-	if apiErr == nil || apiErr.Code != localapi.CodeInternal || storeCalls != 0 || clock.calls != 0 {
+	if apiErr == nil || apiErr.Code != CodeInternal || storeCalls != 0 || clock.calls != 0 {
 		t.Fatalf("malformed durable checkpoint = %#v, Store=%d clock=%d", apiErr, storeCalls, clock.calls)
 	}
 }
@@ -466,7 +465,7 @@ func TestArtifactCaptureCoordinatorFailsClosedBeforeDurableCheckpoint(t *testing
 	}
 	_, apiErr := coordinator.Checkpoint(context.Background(),
 		store.ManagedOperationReservation{Operation: operation, Acquired: true}, []string{"result.txt"})
-	if apiErr == nil || apiErr.Code != localapi.CodeInternal || storeCalls != 0 {
+	if apiErr == nil || apiErr.Code != CodeInternal || storeCalls != 0 {
 		t.Fatalf("verification failure = %#v, Store calls=%d", apiErr, storeCalls)
 	}
 }
@@ -497,7 +496,7 @@ func TestArtifactCaptureCoordinatorDoesNotCheckpointOperationAfterClosureConflic
 	}
 	_, apiErr := coordinator.Checkpoint(context.Background(),
 		store.ManagedOperationReservation{Operation: operation, Acquired: true}, []string{"result.txt"})
-	if apiErr == nil || apiErr.Code != localapi.CodeInternal || closureCalls != 1 || operationCalls != 0 {
+	if apiErr == nil || apiErr.Code != CodeInternal || closureCalls != 1 || operationCalls != 0 {
 		t.Fatalf("closure conflict = %#v, closure=%d operation=%d", apiErr, closureCalls, operationCalls)
 	}
 }
@@ -534,7 +533,7 @@ func TestArtifactCaptureCoordinatorUsesPostCaptureTimeForLeaseFence(t *testing.T
 	}
 	_, apiErr := coordinator.Checkpoint(context.Background(),
 		store.ManagedOperationReservation{Operation: operation, Acquired: true}, []string{"result.txt"})
-	if apiErr == nil || apiErr.Code != localapi.CodeOperationPending || !apiErr.Retryable ||
+	if apiErr == nil || apiErr.Code != CodeOperationPending || !apiErr.Retryable ||
 		closureCalls != 1 || operationCalls != 1 {
 		t.Fatalf("post-capture fence = %#v, closure=%d operation=%d", apiErr, closureCalls, operationCalls)
 	}
@@ -544,14 +543,14 @@ func TestArtifactCaptureCoordinatorClassifiesLiveAndStoreErrors(t *testing.T) {
 	at := time.Date(2026, 7, 16, 23, 0, 0, 0, time.UTC)
 	liveTests := []struct {
 		err  error
-		code localapi.ErrorCode
+		code ControlErrorCode
 	}{
-		{artifact.ErrArtifactLimit, localapi.CodeArtifactTooLarge},
-		{artifact.ErrArtifactPath, localapi.CodeArtifactInvalid},
-		{artifact.ErrArtifactChanged, localapi.CodeArtifactInvalid},
-		{os.ErrNotExist, localapi.CodeArtifactInvalid},
-		{artifact.ErrCASCorruption, localapi.CodeInternal},
-		{context.Canceled, localapi.CodeOperationPending},
+		{artifact.ErrArtifactLimit, CodeArtifactTooLarge},
+		{artifact.ErrArtifactPath, CodeArtifactInvalid},
+		{artifact.ErrArtifactChanged, CodeArtifactInvalid},
+		{os.ErrNotExist, CodeArtifactInvalid},
+		{artifact.ErrCASCorruption, CodeInternal},
+		{context.Canceled, CodeOperationPending},
 	}
 	for index, test := range liveTests {
 		t.Run("live-"+strconv.Itoa(index), func(t *testing.T) {
@@ -580,11 +579,11 @@ func TestArtifactCaptureCoordinatorClassifiesLiveAndStoreErrors(t *testing.T) {
 
 	storeTests := []struct {
 		err  error
-		code localapi.ErrorCode
+		code ControlErrorCode
 	}{
-		{store.ErrOperationFence, localapi.CodeOperationPending},
-		{store.ErrOperationMismatch, localapi.CodeOperationMismatch},
-		{store.ErrArtifactConflict, localapi.CodeInternal},
+		{store.ErrOperationFence, CodeOperationPending},
+		{store.ErrOperationMismatch, CodeOperationMismatch},
+		{store.ErrArtifactConflict, CodeInternal},
 	}
 	for index, test := range storeTests {
 		t.Run("store-"+strconv.Itoa(index), func(t *testing.T) {

@@ -2,8 +2,6 @@ package agent
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,7 +11,6 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/event"
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 	"github.com/mnemon-dev/mnemon/harness/internal/teamwork"
@@ -37,7 +34,7 @@ type ArtifactCoordinationResult struct {
 }
 
 type ArtifactCoordinator interface {
-	Coordinate(context.Context, ArtifactCoordinationSpec) (ArtifactCoordinationResult, *localapi.APIError)
+	Coordinate(context.Context, ArtifactCoordinationSpec) (ArtifactCoordinationResult, *ControlError)
 }
 
 type TeamworkActionExecutorOptions struct {
@@ -190,23 +187,23 @@ func newTeamworkActionExecutor(backend teamworkExecutionBackend, selector offerS
 
 func (e *TeamworkActionExecutor) ExecuteTeamwork(ctx context.Context,
 	spec TeamworkExecutionSpec,
-) (localapi.OperationResponse, *localapi.APIError) {
+) (OperationResponse, *ControlError) {
 	if e == nil || e.backend == nil || e.selector == nil || e.signer == nil || e.artifacts == nil ||
 		e.clock == nil || ctx == nil {
-		return localapi.OperationResponse{}, localapi.NewAPIError(localapi.CodeInternal,
+		return OperationResponse{}, NewControlError(CodeInternal,
 			"Teamwork action executor is unavailable")
 	}
 	operation := spec.Reservation.Operation
 	acceptedAt, err := canonicalExecutionTime(spec.At)
 	if operation.ID().IsZero() || spec.Action.Name == "" || err != nil {
-		return localapi.OperationResponse{}, localapi.NewAPIError(localapi.CodeInvalidArgument,
+		return OperationResponse{}, NewControlError(CodeInvalidArgument,
 			"Teamwork execution input is incomplete")
 	}
 	spec.At = acceptedAt
 	_, contextBound := operation.ContextHash()
 	if operation.ProfileID() != e.profile.ID() || operation.Kind() != operationKindForAction(spec.Action.Name) ||
 		spec.Action.HasContext != contextBound {
-		return e.reject(ctx, operation, spec.At, localapi.NewAPIError(localapi.CodeOperationMismatch,
+		return e.reject(ctx, operation, spec.At, NewControlError(CodeOperationMismatch,
 			"reserved operation differs from Teamwork action"))
 	}
 
@@ -214,19 +211,19 @@ func (e *TeamworkActionExecutor) ExecuteTeamwork(ctx context.Context,
 	case model.OperationCommitted:
 		response, err := decodeCommittedTeamworkOperation(operation, true)
 		if err != nil {
-			return localapi.OperationResponse{}, localapi.NewAPIError(localapi.CodeInternal,
+			return OperationResponse{}, NewControlError(CodeInternal,
 				"committed Teamwork receipt is invalid")
 		}
 		return response, nil
 	case model.OperationRejected:
-		return localapi.OperationResponse{}, decodeRejectedTeamworkOperation(operation, true)
+		return OperationResponse{}, decodeRejectedTeamworkOperation(operation, true)
 	case model.OperationStarted:
 		if !spec.Reservation.Acquired {
-			return localapi.OperationResponse{}, operationAPIError(localapi.CodeOperationPending,
+			return OperationResponse{}, operationAPIError(CodeOperationPending,
 				"operation lease is not acquired", operation.ID(), false)
 		}
 	default:
-		return localapi.OperationResponse{}, localapi.NewAPIError(localapi.CodeInternal,
+		return OperationResponse{}, NewControlError(CodeInternal,
 			"reserved operation has an invalid state")
 	}
 
@@ -253,7 +250,7 @@ func (e *TeamworkActionExecutor) ExecuteTeamwork(ctx context.Context,
 	}
 	artifactRefs, err := validateExecutionArtifactRefs(operation.Kind(), coordination.References)
 	if err != nil {
-		return e.reject(ctx, operation, spec.At, localapi.NewAPIError(localapi.CodeArtifactInvalid,
+		return e.reject(ctx, operation, spec.At, NewControlError(CodeArtifactInvalid,
 			"Artifact coordinator returned invalid authority"))
 	}
 
@@ -268,7 +265,7 @@ func (e *TeamworkActionExecutor) ExecuteTeamwork(ctx context.Context,
 	}
 	commitAt, apiErr := e.freshNow(spec.At)
 	if apiErr != nil {
-		return localapi.OperationResponse{}, apiErr
+		return OperationResponse{}, apiErr
 	}
 	if acceptance.deadline != nil && (acceptance.deadline.due ||
 		(acceptance.deadline.work.State().DeadlineEligible() &&
@@ -280,7 +277,7 @@ func (e *TeamworkActionExecutor) ExecuteTeamwork(ctx context.Context,
 		if acceptance.deadline != nil && errors.Is(err, store.ErrDeadlineResolution) {
 			resolvedAt, clockErr := e.freshNow(commitAt)
 			if clockErr != nil {
-				return localapi.OperationResponse{}, clockErr
+				return OperationResponse{}, clockErr
 			}
 			return e.resolveDeadline(ctx, *acceptance.deadline, resolvedAt)
 		}
@@ -288,7 +285,7 @@ func (e *TeamworkActionExecutor) ExecuteTeamwork(ctx context.Context,
 	}
 	response, err := decodeCommittedTeamworkReceipt(result.Receipt, operation, result.Replayed)
 	if err != nil {
-		return localapi.OperationResponse{}, localapi.NewAPIError(localapi.CodeInternal,
+		return OperationResponse{}, NewControlError(CodeInternal,
 			"committed Teamwork receipt cannot be projected")
 	}
 	return response, nil
@@ -297,7 +294,7 @@ func (e *TeamworkActionExecutor) ExecuteTeamwork(ctx context.Context,
 func (e *TeamworkActionExecutor) buildOffer(ctx context.Context, spec TeamworkExecutionSpec,
 	selection AgentOfferSelection, current model.CurrentReadReceipt, hasCurrent bool,
 	artifacts []model.ArtifactRef,
-) (executionAcceptanceSpec, *localapi.APIError) {
+) (executionAcceptanceSpec, *ControlError) {
 	reviewers := selection.Reviewers()
 	reviewerIDs := make([]model.PeerID, len(reviewers))
 	for index := range reviewers {
@@ -305,7 +302,7 @@ func (e *TeamworkActionExecutor) buildOffer(ctx context.Context, spec TeamworkEx
 	}
 	allAudience, err := model.NewAudience(reviewerIDs)
 	if err != nil {
-		return executionAcceptanceSpec{}, localapi.NewAPIError(localapi.CodeInternal,
+		return executionAcceptanceSpec{}, NewControlError(CodeInternal,
 			"selected Teamwork audience is invalid")
 	}
 	scope, err := e.backend.Prepare(ctx, selection.ChannelID(), allAudience, uint8(len(reviewers)))
@@ -314,7 +311,7 @@ func (e *TeamworkActionExecutor) buildOffer(ctx context.Context, spec TeamworkEx
 	}
 	if scope.channelID != selection.ChannelID() || scope.publicationRoster != selection.RosterHead() ||
 		!sameExecutionProfile(scope.profile, e.profile) {
-		return executionAcceptanceSpec{}, localapi.NewAPIError(localapi.CodeWorkConflict,
+		return executionAcceptanceSpec{}, NewControlError(CodeWorkConflict,
 			"selected Channel changed before admission")
 	}
 	plan, err := teamwork.PlanOffer(teamwork.OfferPlanSpec{ChannelID: scope.channelID,
@@ -325,7 +322,7 @@ func (e *TeamworkActionExecutor) buildOffer(ctx context.Context, spec TeamworkEx
 	}
 	planned := plan.Offers()
 	if len(planned) != len(reviewers) {
-		return executionAcceptanceSpec{}, localapi.NewAPIError(localapi.CodeInternal,
+		return executionAcceptanceSpec{}, NewControlError(CodeInternal,
 			"Teamwork offer plan changed reviewer count")
 	}
 
@@ -335,24 +332,24 @@ func (e *TeamworkActionExecutor) buildOffer(ctx context.Context, spec TeamworkEx
 	}
 	factory, err := event.NewFactory(executionClock{spec.At}, e.signer)
 	if err != nil {
-		return executionAcceptanceSpec{}, localapi.NewAPIError(localapi.CodeInternal,
+		return executionAcceptanceSpec{}, NewControlError(CodeInternal,
 			"Teamwork Event factory is unavailable")
 	}
 	items := make([]store.LocalAcceptanceItem, len(planned))
 	for index, offer := range planned {
 		if offer.Ordinal() != uint8(index) || offer.Participants().ReviewerPeerID() != reviewers[index].PeerID() {
-			return executionAcceptanceSpec{}, localapi.NewAPIError(localapi.CodeInternal,
+			return executionAcceptanceSpec{}, NewControlError(CodeInternal,
 				"Teamwork offer plan changed canonical reviewer order")
 		}
 		workID, eventID, err := derivedOfferIDs(spec.Reservation.Operation.ID(), uint8(index))
 		if err != nil {
-			return executionAcceptanceSpec{}, localapi.NewAPIError(localapi.CodeInternal,
+			return executionAcceptanceSpec{}, NewControlError(CodeInternal,
 				"server could not derive Teamwork identities")
 		}
 		workRef, _ := model.NewWorkRef(scope.node.PeerID(), workID)
 		eventScope, err := scope.eventScope(uint8(index), workRef)
 		if err != nil {
-			return executionAcceptanceSpec{}, localapi.NewAPIError(localapi.CodeInternal,
+			return executionAcceptanceSpec{}, NewControlError(CodeInternal,
 				"server could not derive Event scope")
 		}
 		audience, _ := model.NewAudience([]model.PeerID{offer.Participants().ReviewerPeerID()})
@@ -362,12 +359,12 @@ func (e *TeamworkActionExecutor) buildOffer(ctx context.Context, spec TeamworkEx
 			OriginMember: eventScope.OriginMember(), PublicationRoster: eventScope.PublicationRoster(),
 			Audience: audience, WorkVersion: 1, Iteration: 1, Artifacts: artifacts, CausedBy: causes})
 		if err != nil {
-			return executionAcceptanceSpec{}, localapi.NewAPIError(localapi.CodeInternal,
+			return executionAcceptanceSpec{}, NewControlError(CodeInternal,
 				"server could not bind offer authority")
 		}
 		bundle, err := factory.AdmitAgent(ctx, stamp, spec.Action.Candidate)
 		if err != nil || bundle.WorkDeadlineUnixNano() != plan.DeadlineUnixNano() {
-			return executionAcceptanceSpec{}, localapi.NewAPIError(localapi.CodeInternal,
+			return executionAcceptanceSpec{}, NewControlError(CodeInternal,
 				"server could not admit offer Event")
 		}
 		work, err := model.NewReviewWork(model.ReviewWorkSpec{Ref: workRef, ChannelID: scope.channelID,
@@ -375,12 +372,12 @@ func (e *TeamworkActionExecutor) buildOffer(ctx context.Context, spec TeamworkEx
 			DeadlineUnixNano: bundle.WorkDeadlineUnixNano(), State: model.WorkOffered,
 			StateData: bundle.Event().Payload(), UpdatedBy: bundle.Event().ID(), UpdatedAt: bundle.Event().AcceptedAt()})
 		if err != nil {
-			return executionAcceptanceSpec{}, localapi.NewAPIError(localapi.CodeInternal,
+			return executionAcceptanceSpec{}, NewControlError(CodeInternal,
 				"server could not create offered Work")
 		}
 		mutation, err := store.NewWorkCreation(work)
 		if err != nil {
-			return executionAcceptanceSpec{}, localapi.NewAPIError(localapi.CodeInternal,
+			return executionAcceptanceSpec{}, NewControlError(CodeInternal,
 				"server could not freeze offered Work")
 		}
 		items[index] = store.LocalAcceptanceItem{Publication: bundle.Publication(), Work: &mutation}
@@ -391,14 +388,14 @@ func (e *TeamworkActionExecutor) buildOffer(ctx context.Context, spec TeamworkEx
 
 func (e *TeamworkActionExecutor) buildCurrentAction(ctx context.Context, spec TeamworkExecutionSpec,
 	current model.CurrentReadReceipt, hasCurrent bool, artifacts []model.ArtifactRef,
-) (executionAcceptanceSpec, *localapi.APIError) {
+) (executionAcceptanceSpec, *ControlError) {
 	if !hasCurrent {
-		return executionAcceptanceSpec{}, localapi.NewAPIError(localapi.CodeContextRequired,
+		return executionAcceptanceSpec{}, NewControlError(CodeContextRequired,
 			"Teamwork action requires current authority")
 	}
 	work, err := e.backend.GetReviewWork(ctx, current.ActionWork())
 	if err != nil || work.Version() != current.ActionWorkVersion() {
-		return executionAcceptanceSpec{}, localapi.NewAPIError(localapi.CodeWorkConflict,
+		return executionAcceptanceSpec{}, NewControlError(CodeWorkConflict,
 			"current Work changed before admission")
 	}
 	participant := spec.Reservation.Operation.Kind() == model.OperationTeamworkAccept ||
@@ -411,7 +408,7 @@ func (e *TeamworkActionExecutor) buildCurrentAction(ctx context.Context, spec Te
 	}
 	audience, err := model.NewAudience([]model.PeerID{target})
 	if err != nil {
-		return executionAcceptanceSpec{}, localapi.NewAPIError(localapi.CodeInternal,
+		return executionAcceptanceSpec{}, NewControlError(CodeInternal,
 			"current Work audience is invalid")
 	}
 	scope, err := e.backend.Prepare(ctx, work.ChannelID(), audience, 1)
@@ -420,7 +417,7 @@ func (e *TeamworkActionExecutor) buildCurrentAction(ctx context.Context, spec Te
 	}
 	if scope.node.PeerID() != localActor || scope.channelID != work.ChannelID() ||
 		!sameExecutionProfile(scope.profile, e.profile) {
-		return executionAcceptanceSpec{}, localapi.NewAPIError(localapi.CodeActionNotAllowed,
+		return executionAcceptanceSpec{}, NewControlError(CodeActionNotAllowed,
 			"local Node is not the frozen Work participant")
 	}
 
@@ -430,7 +427,7 @@ func (e *TeamworkActionExecutor) buildCurrentAction(ctx context.Context, spec Te
 	if !participant {
 		contextHash, hasContext := spec.Reservation.Operation.ContextHash()
 		if !hasContext {
-			return executionAcceptanceSpec{}, localapi.NewAPIError(localapi.CodeContextInvalid,
+			return executionAcceptanceSpec{}, NewControlError(CodeContextInvalid,
 				"home Teamwork action lacks operation context")
 		}
 		deadline = &executionDeadlineAuthority{scope: scope, work: work, current: current,
@@ -449,12 +446,12 @@ func (e *TeamworkActionExecutor) buildCurrentAction(ctx context.Context, spec Te
 	}
 	eventID, err := derivedActionEventID(spec.Reservation.Operation.ID())
 	if err != nil {
-		return executionAcceptanceSpec{}, localapi.NewAPIError(localapi.CodeInternal,
+		return executionAcceptanceSpec{}, NewControlError(CodeInternal,
 			"server could not derive action Event identity")
 	}
 	eventScope, err := scope.eventScope(0, work.Ref())
 	if err != nil {
-		return executionAcceptanceSpec{}, localapi.NewAPIError(localapi.CodeInternal,
+		return executionAcceptanceSpec{}, NewControlError(CodeInternal,
 			"server could not derive action Event scope")
 	}
 	stamp, err := event.NewAdmissionStamp(event.AdmissionStampSpec{Node: scope.node, Profile: scope.profile,
@@ -465,17 +462,17 @@ func (e *TeamworkActionExecutor) buildCurrentAction(ctx context.Context, spec Te
 		WorkDeadlineUnixNano: work.DeadlineUnixNano(), Artifacts: artifacts,
 		CausedBy: []model.EventKey{current.SourceEvent()}})
 	if err != nil {
-		return executionAcceptanceSpec{}, localapi.NewAPIError(localapi.CodeInternal,
+		return executionAcceptanceSpec{}, NewControlError(CodeInternal,
 			"server could not bind action authority")
 	}
 	factory, err := event.NewFactory(executionClock{spec.At}, e.signer)
 	if err != nil {
-		return executionAcceptanceSpec{}, localapi.NewAPIError(localapi.CodeInternal,
+		return executionAcceptanceSpec{}, NewControlError(CodeInternal,
 			"Teamwork Event factory is unavailable")
 	}
 	bundle, err := factory.AdmitAgent(ctx, stamp, spec.Action.Candidate)
 	if err != nil || bundle.Event().Type() != requestedType {
-		return executionAcceptanceSpec{}, localapi.NewAPIError(localapi.CodeInternal,
+		return executionAcceptanceSpec{}, NewControlError(CodeInternal,
 			"server could not admit action Event")
 	}
 	item := store.LocalAcceptanceItem{Publication: bundle.Publication()}
@@ -486,12 +483,12 @@ func (e *TeamworkActionExecutor) buildCurrentAction(ctx context.Context, spec Te
 		nextSpec.UpdatedBy, nextSpec.UpdatedAt = bundle.Event().ID(), bundle.Event().AcceptedAt()
 		next, err := model.NewReviewWork(nextSpec)
 		if err != nil {
-			return executionAcceptanceSpec{}, localapi.NewAPIError(localapi.CodeInternal,
+			return executionAcceptanceSpec{}, NewControlError(CodeInternal,
 				"server could not project Work transition")
 		}
 		mutation, err := store.NewWorkTransition(next, work.Version(), work.State())
 		if err != nil {
-			return executionAcceptanceSpec{}, localapi.NewAPIError(localapi.CodeInternal,
+			return executionAcceptanceSpec{}, NewControlError(CodeInternal,
 				"server could not freeze Work transition")
 		}
 		item.Work = &mutation
@@ -502,27 +499,27 @@ func (e *TeamworkActionExecutor) buildCurrentAction(ctx context.Context, spec Te
 
 func (e *TeamworkActionExecutor) resolveDeadline(ctx context.Context,
 	authority executionDeadlineAuthority, at time.Time,
-) (localapi.OperationResponse, *localapi.APIError) {
+) (OperationResponse, *ControlError) {
 	transition, err := teamwork.PlanHomeTransition(teamwork.HomeTransitionSpec{Work: authority.work,
 		ActorPeerID: authority.scope.node.PeerID(), ExpectedVersion: authority.current.ActionWorkVersion(),
 		EventType: model.EventReviewExpired, NowUnixNano: at.UnixNano()})
 	if err != nil || transition.AuthoritativeEventType() != model.EventReviewExpired {
-		return localapi.OperationResponse{}, localapi.NewAPIError(localapi.CodeWorkConflict,
+		return OperationResponse{}, NewControlError(CodeWorkConflict,
 			"current Work changed before deadline resolution")
 	}
 	eventID, err := derivedDeadlineEventID(authority.operation.ID)
 	if err != nil {
-		return localapi.OperationResponse{}, localapi.NewAPIError(localapi.CodeInternal,
+		return OperationResponse{}, NewControlError(CodeInternal,
 			"server could not derive deadline Event identity")
 	}
 	eventScope, err := authority.scope.eventScope(0, authority.work.Ref())
 	if err != nil {
-		return localapi.OperationResponse{}, localapi.NewAPIError(localapi.CodeInternal,
+		return OperationResponse{}, NewControlError(CodeInternal,
 			"server could not derive deadline Event scope")
 	}
 	audience, err := model.NewAudience([]model.PeerID{authority.work.Participants().ReviewerPeerID()})
 	if err != nil {
-		return localapi.OperationResponse{}, localapi.NewAPIError(localapi.CodeInternal,
+		return OperationResponse{}, NewControlError(CodeInternal,
 			"deadline Work audience is invalid")
 	}
 	stamp, err := event.NewAdmissionStamp(event.AdmissionStampSpec{Node: authority.scope.node,
@@ -534,18 +531,18 @@ func (e *TeamworkActionExecutor) resolveDeadline(ctx context.Context,
 		WorkDeadlineUnixNano: authority.work.DeadlineUnixNano(),
 		CausedBy:             []model.EventKey{authority.current.SourceEvent()}})
 	if err != nil {
-		return localapi.OperationResponse{}, localapi.NewAPIError(localapi.CodeInternal,
+		return OperationResponse{}, NewControlError(CodeInternal,
 			"server could not bind deadline authority")
 	}
 	factory, err := event.NewFactory(executionClock{at}, e.signer)
 	if err != nil {
-		return localapi.OperationResponse{}, localapi.NewAPIError(localapi.CodeInternal,
+		return OperationResponse{}, NewControlError(CodeInternal,
 			"Teamwork deadline Event factory is unavailable")
 	}
 	bundle, err := factory.AdmitController(ctx, stamp, event.ExpiredDecision{})
 	if err != nil || bundle.Event().Type() != model.EventReviewExpired ||
 		!bundle.Event().AcceptedAt().Equal(at) {
-		return localapi.OperationResponse{}, localapi.NewAPIError(localapi.CodeInternal,
+		return OperationResponse{}, NewControlError(CodeInternal,
 			"server could not admit deadline Event")
 	}
 	nextSpec := authority.work.Spec()
@@ -554,12 +551,12 @@ func (e *TeamworkActionExecutor) resolveDeadline(ctx context.Context,
 	nextSpec.UpdatedBy, nextSpec.UpdatedAt = bundle.Event().ID(), bundle.Event().AcceptedAt()
 	next, err := model.NewReviewWork(nextSpec)
 	if err != nil {
-		return localapi.OperationResponse{}, localapi.NewAPIError(localapi.CodeInternal,
+		return OperationResponse{}, NewControlError(CodeInternal,
 			"server could not project expired Work")
 	}
 	mutation, err := store.NewWorkTransition(next, authority.work.Version(), authority.work.State())
 	if err != nil {
-		return localapi.OperationResponse{}, localapi.NewAPIError(localapi.CodeInternal,
+		return OperationResponse{}, NewControlError(CodeInternal,
 			"server could not freeze expired Work")
 	}
 	result, err := e.backend.ResolveDeadline(ctx, executionDeadlineSpec{scope: authority.scope,
@@ -567,42 +564,16 @@ func (e *TeamworkActionExecutor) resolveDeadline(ctx context.Context,
 		operation: authority.operation, contextHash: authority.contextHash}, at)
 	if err != nil {
 		apiErr := mapTeamworkExecutionError(err)
-		return localapi.OperationResponse{}, operationAPIError(apiErr.Code, apiErr.Message,
+		return OperationResponse{}, operationAPIError(apiErr.Code, apiErr.Message,
 			authority.operation.ID, false)
 	}
 	apiErr := decodeTeamworkRejectionReceipt(result.Receipt, authority.operation.ID,
 		authority.operation.Kind, result.Replayed)
-	if apiErr.Code != localapi.CodeWorkExpired {
-		return localapi.OperationResponse{}, operationAPIError(localapi.CodeInternal,
+	if apiErr.Code != CodeWorkExpired {
+		return OperationResponse{}, operationAPIError(CodeInternal,
 			"deadline rejection receipt is invalid", authority.operation.ID, result.Replayed)
 	}
-	return localapi.OperationResponse{}, apiErr
-}
-
-func executionCurrent(reservation store.ManagedOperationReservation,
-	at time.Time,
-) (model.CurrentReadReceipt, bool, *localapi.APIError) {
-	operation := reservation.Operation
-	_, contextBound := operation.ContextHash()
-	raw, hasCurrent := reservation.Run.CurrentReadReceipt()
-	if !contextBound {
-		if hasCurrent || operation.Kind() != model.OperationTeamworkOffer {
-			return model.CurrentReadReceipt{}, false, localapi.NewAPIError(localapi.CodeContextInvalid,
-				"contextless operation has invalid current authority")
-		}
-		return model.CurrentReadReceipt{}, false, nil
-	}
-	if !hasCurrent {
-		return model.CurrentReadReceipt{}, false, localapi.NewAPIError(localapi.CodeContextStale,
-			"managed current receipt is unavailable")
-	}
-	current, err := model.ParseCurrentReadReceipt(raw.Bytes())
-	if err != nil || current.RunID() != operation.AgentRunID() || current.ProfileID() != operation.ProfileID() ||
-		at.Before(current.ReadAt()) {
-		return model.CurrentReadReceipt{}, false, localapi.NewAPIError(localapi.CodeContextStale,
-			"managed current receipt is stale")
-	}
-	return current, true, nil
+	return OperationResponse{}, apiErr
 }
 
 func validateExecutionArtifactRefs(kind model.OperationKind,
@@ -630,52 +601,52 @@ func validateExecutionArtifactRefs(kind model.OperationKind,
 }
 
 func (e *TeamworkActionExecutor) reject(ctx context.Context, operation model.Operation, at time.Time,
-	apiErr *localapi.APIError,
-) (localapi.OperationResponse, *localapi.APIError) {
+	apiErr *ControlError,
+) (OperationResponse, *ControlError) {
 	if apiErr == nil {
-		apiErr = localapi.NewAPIError(localapi.CodeInternal, "Teamwork operation was rejected")
+		apiErr = NewControlError(CodeInternal, "Teamwork operation was rejected")
 	}
 	if apiErr.Code.Retryable() {
-		return localapi.OperationResponse{}, operationAPIError(apiErr.Code, apiErr.Message,
+		return OperationResponse{}, operationAPIError(apiErr.Code, apiErr.Message,
 			operation.ID(), false)
 	}
 	evidence, err := buildTeamworkRejection(operation, apiErr)
 	if err != nil {
-		return localapi.OperationResponse{}, localapi.NewAPIError(localapi.CodeInternal,
+		return OperationResponse{}, NewControlError(CodeInternal,
 			"Teamwork rejection evidence cannot be encoded")
 	}
 	rejectedAt, clockErr := e.freshNow(at)
 	if clockErr != nil {
-		return localapi.OperationResponse{}, clockErr
+		return OperationResponse{}, clockErr
 	}
 	terminal, err := e.backend.Reject(ctx, operation.ID(), operation.LeaseOwner(), rejectedAt, evidence)
 	if err != nil {
-		return localapi.OperationResponse{}, mapTeamworkExecutionError(err)
+		return OperationResponse{}, mapTeamworkExecutionError(err)
 	}
 	switch terminal.Status() {
 	case model.OperationCommitted:
 		response, err := decodeCommittedTeamworkOperation(terminal, true)
 		if err != nil {
-			return localapi.OperationResponse{}, localapi.NewAPIError(localapi.CodeInternal,
+			return OperationResponse{}, NewControlError(CodeInternal,
 				"terminal Teamwork receipt is invalid")
 		}
 		return response, nil
 	case model.OperationRejected:
-		return localapi.OperationResponse{}, decodeRejectedTeamworkOperation(terminal, false)
+		return OperationResponse{}, decodeRejectedTeamworkOperation(terminal, false)
 	default:
-		return localapi.OperationResponse{}, operationAPIError(localapi.CodeOperationPending,
+		return OperationResponse{}, operationAPIError(CodeOperationPending,
 			"operation rejection is pending", operation.ID(), false)
 	}
 }
 
-func (e *TeamworkActionExecutor) freshNow(notBefore time.Time) (time.Time, *localapi.APIError) {
+func (e *TeamworkActionExecutor) freshNow(notBefore time.Time) (time.Time, *ControlError) {
 	if e == nil || e.clock == nil {
-		return time.Time{}, localapi.NewAPIError(localapi.CodeInternal,
+		return time.Time{}, NewControlError(CodeInternal,
 			"trusted Teamwork clock is unavailable")
 	}
 	now, err := canonicalExecutionTime(e.clock.Now())
 	if err != nil || now.Before(notBefore) {
-		return time.Time{}, localapi.NewAPIError(localapi.CodeInternal,
+		return time.Time{}, NewControlError(CodeInternal,
 			"trusted Teamwork clock is invalid")
 	}
 	return now, nil
@@ -698,28 +669,28 @@ func requireExecutionJSONEOF(decoder *json.Decoder) error {
 }
 
 type teamworkRejectionWire struct {
-	SchemaVersion int                `json:"schema_version"`
-	Status        string             `json:"status"`
-	Code          localapi.ErrorCode `json:"code"`
-	Retryable     bool               `json:"retryable"`
-	Replayed      bool               `json:"replayed"`
-	Message       string             `json:"message"`
-	OperationID   string             `json:"operation_id"`
+	SchemaVersion int              `json:"schema_version"`
+	Status        string           `json:"status"`
+	Code          ControlErrorCode `json:"code"`
+	Retryable     bool             `json:"retryable"`
+	Replayed      bool             `json:"replayed"`
+	Message       string           `json:"message"`
+	OperationID   string           `json:"operation_id"`
 }
 
-func buildTeamworkRejection(operation model.Operation, apiErr *localapi.APIError) (model.JSON, error) {
+func buildTeamworkRejection(operation model.Operation, apiErr *ControlError) (model.JSON, error) {
 	if operation.ID().IsZero() || apiErr == nil || !apiErr.Code.Valid() || apiErr.Message == "" {
 		return model.JSON{}, errors.New("incomplete Teamwork rejection")
 	}
-	return model.JSONFrom(teamworkRejectionWire{SchemaVersion: localapi.SchemaVersion, Status: "error",
+	return model.JSONFrom(teamworkRejectionWire{SchemaVersion: model.SchemaVersion, Status: "error",
 		Code: apiErr.Code, Retryable: apiErr.Code.Retryable(), Replayed: false,
 		Message: apiErr.Message, OperationID: operation.ID().String()})
 }
 
-func decodeRejectedTeamworkOperation(operation model.Operation, replayed bool) *localapi.APIError {
+func decodeRejectedTeamworkOperation(operation model.Operation, replayed bool) *ControlError {
 	result, ok := operation.Result()
 	if operation.Status() != model.OperationRejected || !ok {
-		return operationAPIError(localapi.CodeInternal, "rejected Teamwork receipt is invalid",
+		return operationAPIError(CodeInternal, "rejected Teamwork receipt is invalid",
 			operation.ID(), replayed)
 	}
 	return decodeTeamworkRejectionReceipt(result, operation.ID(), operation.Kind(), replayed)
@@ -727,19 +698,19 @@ func decodeRejectedTeamworkOperation(operation model.Operation, replayed bool) *
 
 func decodeTeamworkRejectionReceipt(result model.JSON, operationID model.OperationID,
 	kind model.OperationKind, replayed bool,
-) *localapi.APIError {
+) *ControlError {
 	if result.IsZero() || operationID.IsZero() || !operationEventType(kind).Valid() {
-		return operationAPIError(localapi.CodeInternal, "rejected Teamwork receipt is invalid",
+		return operationAPIError(CodeInternal, "rejected Teamwork receipt is invalid",
 			operationID, replayed)
 	}
 	var wire teamworkRejectionWire
 	decoder := json.NewDecoder(strings.NewReader(result.String()))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&wire); err != nil || wire.SchemaVersion != localapi.SchemaVersion ||
+	if err := decoder.Decode(&wire); err != nil || wire.SchemaVersion != model.SchemaVersion ||
 		requireExecutionJSONEOF(decoder) != nil || wire.Status != "error" || wire.Replayed ||
 		wire.OperationID != operationID.String() || !wire.Code.Valid() || wire.Message == "" ||
 		wire.Retryable != wire.Code.Retryable() {
-		return operationAPIError(localapi.CodeInternal, "rejected Teamwork receipt is invalid",
+		return operationAPIError(CodeInternal, "rejected Teamwork receipt is invalid",
 			operationID, replayed)
 	}
 	return operationAPIError(wire.Code, wire.Message, operationID, replayed)
@@ -747,17 +718,17 @@ func decodeTeamworkRejectionReceipt(result model.JSON, operationID model.Operati
 
 func decodeCommittedTeamworkOperation(operation model.Operation,
 	replayed bool,
-) (localapi.OperationResponse, error) {
+) (OperationResponse, error) {
 	receipt, ok := operation.Result()
 	if operation.Status() != model.OperationCommitted || !ok {
-		return localapi.OperationResponse{}, errors.New("operation is not committed")
+		return OperationResponse{}, errors.New("operation is not committed")
 	}
 	return decodeCommittedTeamworkReceipt(receipt, operation, replayed)
 }
 
 func decodeCommittedTeamworkReceipt(receipt model.JSON, operation model.Operation,
 	replayed bool,
-) (localapi.OperationResponse, error) {
+) (OperationResponse, error) {
 	var wire struct {
 		CaptureRoots []struct {
 			ManifestDigest string `json:"manifest_digest"`
@@ -789,7 +760,7 @@ func decodeCommittedTeamworkReceipt(receipt model.JSON, operation model.Operatio
 		wire.OperationID != operation.ID().String() || wire.Events == nil || len(wire.Events) == 0 ||
 		len(wire.Events) > model.MaxChildWorks || wire.CaptureRoots == nil ||
 		requireExecutionJSONEOF(decoder) != nil {
-		return localapi.OperationResponse{}, errors.New("invalid committed Teamwork receipt")
+		return OperationResponse{}, errors.New("invalid committed Teamwork receipt")
 	}
 	captured := make(map[model.Digest]struct{}, len(wire.CaptureRoots))
 	previousCapture := ""
@@ -798,16 +769,16 @@ func decodeCommittedTeamworkReceipt(receipt model.JSON, operation model.Operatio
 		_, manifestErr := model.ParseDigest(row.ManifestDigest)
 		if rootErr != nil || manifestErr != nil ||
 			(previousCapture != "" && previousCapture >= row.RootDigest) {
-			return localapi.OperationResponse{}, errors.New("invalid committed Teamwork capture roots")
+			return OperationResponse{}, errors.New("invalid committed Teamwork capture roots")
 		}
 		previousCapture = row.RootDigest
 		captured[root] = struct{}{}
 	}
 	wantType := operationEventType(operation.Kind())
 	if !wantType.Valid() || (operation.Kind() != model.OperationTeamworkOffer && len(wire.Events) != 1) {
-		return localapi.OperationResponse{}, errors.New("invalid committed Teamwork action shape")
+		return OperationResponse{}, errors.New("invalid committed Teamwork action shape")
 	}
-	results := make([]localapi.OperationResult, len(wire.Events))
+	results := make([]OperationResult, len(wire.Events))
 	for index, row := range wire.Events {
 		eventID, eventErr := model.ParseEventID(row.EventID)
 		eventDigest, digestErr := model.ParseDigest(row.EventDigest)
@@ -821,47 +792,47 @@ func decodeCommittedTeamworkReceipt(receipt model.JSON, operation model.Operatio
 		if eventErr != nil || digestErr != nil || eventDigest.IsZero() || homeErr != nil || workErr != nil ||
 			row.EventType != string(wantType) || row.Work.Version == 0 || !state.Valid() ||
 			row.ArtifactRoots == nil || artifactErr != nil {
-			return localapi.OperationResponse{}, errors.New("invalid committed Teamwork result")
+			return OperationResponse{}, errors.New("invalid committed Teamwork result")
 		}
 		produced := make(map[model.Digest]struct{}, len(captured))
 		for _, ref := range artifacts {
 			if ref.Role() == model.ArtifactProduced {
 				if _, exists := captured[ref.RootDigest()]; !exists {
-					return localapi.OperationResponse{}, errors.New("committed Teamwork result exceeds capture")
+					return OperationResponse{}, errors.New("committed Teamwork result exceeds capture")
 				}
 				produced[ref.RootDigest()] = struct{}{}
 			} else if _, exists := captured[ref.RootDigest()]; exists {
-				return localapi.OperationResponse{}, errors.New("committed Teamwork capture role is invalid")
+				return OperationResponse{}, errors.New("committed Teamwork capture role is invalid")
 			}
 		}
 		if len(produced) != len(captured) {
-			return localapi.OperationResponse{}, errors.New("committed Teamwork result omits capture")
+			return OperationResponse{}, errors.New("committed Teamwork result omits capture")
 		}
 		if operation.Kind() == model.OperationTeamworkOffer {
 			wantWorkID, wantEventID, idErr := derivedOfferIDs(operation.ID(), uint8(index))
 			if idErr != nil || workID != wantWorkID || eventID != wantEventID ||
 				state != model.WorkOffered || row.Work.Version != 1 {
-				return localapi.OperationResponse{}, errors.New("committed Teamwork offer identities are invalid")
+				return OperationResponse{}, errors.New("committed Teamwork offer identities are invalid")
 			}
 		} else {
 			wantEventID, idErr := derivedActionEventID(operation.ID())
 			if idErr != nil || eventID != wantEventID || !validCommittedActionState(operation.Kind(), state) {
-				return localapi.OperationResponse{}, errors.New("committed Teamwork action identity is invalid")
+				return OperationResponse{}, errors.New("committed Teamwork action identity is invalid")
 			}
 		}
-		results[index] = localapi.OperationResult{EventID: eventID.String(), EventType: row.EventType,
-			Work: localapi.WorkReceipt{Ref: home.String() + "/" + workID.String(),
+		results[index] = OperationResult{EventID: eventID.String(), EventType: row.EventType,
+			Work: WorkReceipt{Ref: home.String() + "/" + workID.String(),
 				Version: row.Work.Version, State: row.Work.State}}
 	}
 	action := teamworkActionName(operation.Kind())
 	if action == "" {
-		return localapi.OperationResponse{}, errors.New("unknown committed Teamwork kind")
+		return OperationResponse{}, errors.New("unknown committed Teamwork kind")
 	}
-	var handling *localapi.HandlingReceipt
+	var handling *HandlingReceipt
 	if _, hasContext := operation.ContextHash(); hasContext {
-		handling = &localapi.HandlingReceipt{Status: "completed"}
+		handling = &HandlingReceipt{Status: "completed"}
 	}
-	return localapi.OperationResponse{SchemaVersion: localapi.SchemaVersion, Status: "accepted",
+	return OperationResponse{SchemaVersion: model.SchemaVersion, Status: "accepted",
 		Action: "teamwork." + action, OperationID: operation.ID().String(), Replayed: replayed,
 		Handling: handling, Results: results, Receipt: model.Sum(receipt.Bytes()).String()}, nil
 }
@@ -904,7 +875,7 @@ func validCommittedActionState(kind model.OperationKind, state model.WorkState) 
 	}
 }
 
-func mapOfferSelectionError(err error) *localapi.APIError {
+func mapOfferSelectionError(err error) *ControlError {
 	var candidates *AgentSelectionCandidatesError
 	switch {
 	case errors.Is(err, ErrAgentSelectionChannelAmbiguous):
@@ -912,20 +883,20 @@ func mapOfferSelectionError(err error) *localapi.APIError {
 		if errors.As(err, &candidates) {
 			message = boundedOfferSelectionMessage(message, candidates.Candidates())
 		}
-		return localapi.NewAPIError(localapi.CodeAmbiguousChannel, message)
+		return NewControlError(CodeAmbiguousChannel, message)
 	case errors.Is(err, ErrAgentSelectionParticipantAmbiguous):
 		message := "participant selector is ambiguous"
 		if errors.As(err, &candidates) {
 			message = boundedOfferSelectionMessage(message, candidates.Candidates())
 		}
-		return localapi.NewAPIError(localapi.CodeAmbiguousParticipant, message)
+		return NewControlError(CodeAmbiguousParticipant, message)
 	case errors.Is(err, ErrAgentSelectionChannelUnavailable),
 		errors.Is(err, ErrAgentSelectionParticipantUnavailable):
-		return localapi.NewAPIError(localapi.CodePeerUnavailable, "selected Channel participant is unavailable")
+		return NewControlError(CodePeerUnavailable, "selected Channel participant is unavailable")
 	case errors.Is(err, ErrAgentSelectionInput):
-		return localapi.NewAPIError(localapi.CodeInvalidArgument, "Teamwork selector is invalid")
+		return NewControlError(CodeInvalidArgument, "Teamwork selector is invalid")
 	case errors.Is(err, store.ErrAgentOfferCandidatesAuthority):
-		return localapi.NewAPIError(localapi.CodeAssetRevisionMismatch,
+		return NewControlError(CodeAssetRevisionMismatch,
 			"managed Profile authority drifted during selection")
 	default:
 		return mapTeamworkExecutionError(err)
@@ -939,8 +910,8 @@ func boundedOfferSelectionMessage(prefix string, candidates []string) string {
 		if index > 0 {
 			separator = ","
 		}
-		if len(result)+len(separator)+len(candidate) > localapi.MaxDiagnosticBytes {
-			if len(result)+4 <= localapi.MaxDiagnosticBytes {
+		if len(result)+len(separator)+len(candidate) > MaxControlDiagnosticBytes {
+			if len(result)+4 <= MaxControlDiagnosticBytes {
 				result += ",..."
 			}
 			break
@@ -950,66 +921,44 @@ func boundedOfferSelectionMessage(prefix string, candidates []string) string {
 	return result
 }
 
-func mapTeamworkExecutionError(err error) *localapi.APIError {
+func mapTeamworkExecutionError(err error) *ControlError {
 	switch {
 	case err == nil:
 		return nil
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded),
 		errors.Is(err, store.ErrOperationPending), errors.Is(err, store.ErrOperationFence):
-		return localapi.NewAPIError(localapi.CodeOperationPending, "Teamwork operation is pending")
+		return NewControlError(CodeOperationPending, "Teamwork operation is pending")
 	case errors.Is(err, store.ErrChannelUnavailable), errors.Is(err, store.ErrAudienceUnavailable):
-		return localapi.NewAPIError(localapi.CodePeerUnavailable, "selected Channel participant is unavailable")
+		return NewControlError(CodePeerUnavailable, "selected Channel participant is unavailable")
 	case errors.Is(err, store.ErrOperationMismatch), errors.Is(err, store.ErrCaptureMismatch):
-		return localapi.NewAPIError(localapi.CodeOperationMismatch, "operation authority differs from request")
+		return NewControlError(CodeOperationMismatch, "operation authority differs from request")
 	case errors.Is(err, store.ErrArtifactReference), errors.Is(err, store.ErrArtifactUnverified):
-		return localapi.NewAPIError(localapi.CodeArtifactInvalid, "Artifact authority changed before admission")
+		return NewControlError(CodeArtifactInvalid, "Artifact authority changed before admission")
 	case errors.Is(err, store.ErrAdmissionConflict), errors.Is(err, store.ErrWorkCASConflict),
 		errors.Is(err, teamwork.ErrVersionConflict), errors.Is(err, teamwork.ErrWorkVersionExhausted):
-		return localapi.NewAPIError(localapi.CodeWorkConflict, "current Work changed before admission")
+		return NewControlError(CodeWorkConflict, "current Work changed before admission")
 	case errors.Is(err, store.ErrDeadlineResolution):
-		return localapi.NewAPIError(localapi.CodeWorkExpired, "Work deadline already won")
+		return NewControlError(CodeWorkExpired, "Work deadline already won")
 	case errors.Is(err, teamwork.ErrTransitionNotAllowed), errors.Is(err, teamwork.ErrTerminalWork),
 		errors.Is(err, teamwork.ErrNotWorkHome), errors.Is(err, teamwork.ErrParticipantInput):
-		return localapi.NewAPIError(localapi.CodeActionNotAllowed, "Teamwork action is not allowed")
+		return NewControlError(CodeActionNotAllowed, "Teamwork action is not allowed")
 	case errors.Is(err, teamwork.ErrDeadlineOutOfRange), errors.Is(err, teamwork.ErrInvalidOffer):
-		return localapi.NewAPIError(localapi.CodeInvalidArgument, "Teamwork offer is invalid")
+		return NewControlError(CodeInvalidArgument, "Teamwork offer is invalid")
 	default:
 		return mapControlError(err)
 	}
 }
 
-func operationAPIError(code localapi.ErrorCode, message string, operation model.OperationID,
+func operationAPIError(code ControlErrorCode, message string, operation model.OperationID,
 	replayed bool,
-) *localapi.APIError {
-	apiErr := localapi.NewAPIError(code, message)
+) *ControlError {
+	apiErr := NewControlError(code, message)
 	apiErr.Replayed = replayed
 	if !operation.IsZero() {
 		value := operation.String()
 		apiErr.OperationID = &value
 	}
 	return apiErr
-}
-
-func derivedOfferIDs(operation model.OperationID, ordinal uint8) (model.WorkID, model.EventID, error) {
-	workText := derivedExecutionID("work", operation, ordinal)
-	eventText := derivedExecutionID("event", operation, ordinal)
-	workID, workErr := model.ParseWorkID(workText)
-	eventID, eventErr := model.ParseEventID(eventText)
-	return workID, eventID, errors.Join(workErr, eventErr)
-}
-
-func derivedActionEventID(operation model.OperationID) (model.EventID, error) {
-	return model.ParseEventID(derivedExecutionID("event", operation, 0))
-}
-
-func derivedDeadlineEventID(operation model.OperationID) (model.EventID, error) {
-	return model.ParseEventID(derivedExecutionID("deadline-event", operation, 0))
-}
-
-func derivedExecutionID(kind string, operation model.OperationID, ordinal uint8) string {
-	digest := sha256.Sum256([]byte("mnemon-r5-teamwork-" + kind + "\x00" + operation.String() +
-		"\x00" + fmt.Sprintf("%d", ordinal)))
-	return kind + "-" + hex.EncodeToString(digest[:])
 }
 
 func localExecutionAuthority(operation model.Operation) store.LocalOperationAuthority {

@@ -3,7 +3,6 @@ package agent
 import (
 	"testing"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 )
 
@@ -12,14 +11,14 @@ func TestValidateResolveClosedDecisions(t *testing.T) {
 	tests := []struct {
 		input    ResolveInput
 		wantKind model.OperationKind
-		wantCode localapi.ErrorCode
+		wantCode ControlErrorCode
 	}{
 		{ResolveInput{Decision: "no-action", HasContext: true}, model.OperationResolveNoAction, ""},
 		{ResolveInput{Decision: "retry", HasContext: true, Content: "try later"}, model.OperationResolveRetry, ""},
 		{ResolveInput{Decision: "reject", HasContext: true, Content: "not actionable"}, model.OperationResolveReject, ""},
-		{ResolveInput{Decision: "retry"}, "", localapi.CodeContextRequired},
-		{ResolveInput{Decision: "reject", HasContext: true}, "", localapi.CodeContentRequired},
-		{ResolveInput{Decision: "complete", HasContext: true}, "", localapi.CodeUnknownAction},
+		{ResolveInput{Decision: "retry"}, "", CodeContextRequired},
+		{ResolveInput{Decision: "reject", HasContext: true}, "", CodeContentRequired},
+		{ResolveInput{Decision: "complete", HasContext: true}, "", CodeUnknownAction},
 	}
 	for _, test := range tests {
 		result, apiErr := ValidateResolve(test.input)

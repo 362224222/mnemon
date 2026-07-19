@@ -10,10 +10,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
+
+const RunAttachmentEnvironment = "MNEMON_HARNESS_RUN_ATTACHMENT"
 
 var (
 	ErrWakeAttachment      = errors.New("prepare managed wake attachment")
@@ -26,8 +27,37 @@ type WakePreclaimStore interface {
 		store.AgentAttachmentCleanupSpec) ([]store.ReapableAgentRunAttachment, error)
 }
 
+// WakeAttachmentCandidate carries only the filesystem identity that the Store
+// needs to authorize removal. Capability bytes remain owned by the filesystem
+// adapter.
+type WakeAttachmentCandidate struct {
+	RunID     model.RunID
+	TokenHash model.Digest
+}
+
+// WakeAttachmentFilesystem is the consumer-owned port for crash-ordered Run
+// attachment operations. Implementations retain path, inode, ownership and
+// capability fencing internally.
+type WakeAttachmentFilesystem interface {
+	ListCandidates() ([]WakeAttachmentCandidate, error)
+	RemoveReapable(model.RunID, model.Digest) (bool, error)
+	CleanupStages(time.Time) (int, error)
+	Stage(io.Reader) (StagedRunAttachment, error)
+}
+
+type StagedRunAttachment interface {
+	TokenHash() model.Digest
+	Publish(model.RunID) (RunAttachment, error)
+	Discard() error
+}
+
+type RunAttachment interface {
+	Path() string
+	Remove() error
+}
+
 type WakeAttachmentOptions struct {
-	NodeState     string
+	Attachments   WakeAttachmentFilesystem
 	AssetRevision string
 	Clock         ServiceClock
 	Random        io.Reader
@@ -38,7 +68,7 @@ type WakeAttachmentOptions struct {
 // process or treat Runtime completion as Handling completion.
 type WakeAttachmentPreparer struct {
 	store         WakePreclaimStore
-	nodeState     string
+	attachments   WakeAttachmentFilesystem
 	assetRevision string
 	clock         ServiceClock
 	random        io.Reader
@@ -48,15 +78,15 @@ type WakeAttachmentPreparer struct {
 type PreparedWake struct {
 	status     store.AgentClaimStatus
 	run        model.AgentRun
-	attachment localapi.RunAttachment
-	nodeState  string
+	attachment RunAttachment
 }
 
 func NewWakeAttachmentPreparer(st WakePreclaimStore,
 	options WakeAttachmentOptions,
 ) (*WakeAttachmentPreparer, error) {
-	if st == nil || options.NodeState == "" || options.AssetRevision == "" {
-		return nil, fmt.Errorf("%w: Store, Node state and asset revision are required", ErrWakeAttachment)
+	if st == nil || options.Attachments == nil || options.AssetRevision == "" {
+		return nil, fmt.Errorf("%w: Store, attachment filesystem and asset revision are required",
+			ErrWakeAttachment)
 	}
 	if options.Clock == nil {
 		options.Clock = wallServiceClock{}
@@ -64,7 +94,7 @@ func NewWakeAttachmentPreparer(st WakePreclaimStore,
 	if options.Random == nil {
 		options.Random = cryptorandReader{}
 	}
-	return &WakeAttachmentPreparer{store: st, nodeState: options.NodeState,
+	return &WakeAttachmentPreparer{store: st, attachments: options.Attachments,
 		assetRevision: options.AssetRevision, clock: options.Clock, random: options.Random}, nil
 }
 
@@ -90,15 +120,14 @@ func (p *WakeAttachmentPreparer) Prepare(ctx context.Context,
 	if !leaseUntil.After(at) {
 		return PreparedWake{}, fmt.Errorf("%w: claim lease cannot be represented", ErrWakeAttachment)
 	}
-	page, err := localapi.ListRunAttachmentCandidates(p.nodeState)
+	filesystemCandidates, err := p.attachments.ListCandidates()
 	if err != nil {
 		return PreparedWake{}, fmt.Errorf("%w: scan attachment candidates: %v", ErrWakeAttachment, err)
 	}
-	filesystemCandidates := page.Candidates()
 	candidates := make([]store.AgentRunAttachmentCandidate, len(filesystemCandidates))
 	for index, candidate := range filesystemCandidates {
-		candidates[index] = store.AgentRunAttachmentCandidate{RunID: candidate.RunID(),
-			TokenHash: candidate.TokenHash()}
+		candidates[index] = store.AgentRunAttachmentCandidate{RunID: candidate.RunID,
+			TokenHash: candidate.TokenHash}
 	}
 	reapable, err := p.store.ListReapableAgentRunAttachments(ctx, store.AgentAttachmentCleanupSpec{
 		ProfileID: profile.ID(), ExpectedAssetRevision: p.assetRevision, At: at,
@@ -111,17 +140,16 @@ func (p *WakeAttachmentPreparer) Prepare(ctx context.Context,
 		return PreparedWake{}, fmt.Errorf("%w: list expired capabilities: %v", ErrWakeAttachment, err)
 	}
 	for _, target := range reapable {
-		if _, err := localapi.RemoveReapableRunAttachment(p.nodeState, target.RunID,
-			target.TokenHash); err != nil {
+		if _, err := p.attachments.RemoveReapable(target.RunID, target.TokenHash); err != nil {
 			return PreparedWake{}, fmt.Errorf("%w: remove expired capability: %v", ErrWakeAttachment, err)
 		}
 	}
-	if _, err := localapi.CleanupRunAttachmentStages(p.nodeState, at); err != nil {
+	if _, err := p.attachments.CleanupStages(at); err != nil {
 		return PreparedWake{}, fmt.Errorf("%w: cleanup orphan stages: %v", ErrWakeAttachment, err)
 	}
 	p.randomMu.Lock()
 	defer p.randomMu.Unlock()
-	staged, err := localapi.StageRunAttachment(p.nodeState, p.random)
+	staged, err := p.stageAttachment()
 	if err != nil {
 		return PreparedWake{}, fmt.Errorf("%w: stage capability: %v", ErrWakeAttachment, err)
 	}
@@ -155,41 +183,67 @@ func (p *WakeAttachmentPreparer) Prepare(ctx context.Context,
 		return PreparedWake{}, fmt.Errorf("%w: Store returned an actionable preclaim without a Run",
 			ErrWakeAttachment)
 	}
-	attachment, err := staged.Publish(claimed.Run.ID())
+	attachment, err := publishRunAttachment(staged, claimed.Run.ID())
 	if err != nil {
 		// The preclaim transaction already committed the Run. Preserve that
 		// durable authority for the worker so it can record an immediate
 		// launch failure; the empty attachment still makes this result
 		// impossible to launch.
-		return PreparedWake{status: claimed.Status, run: claimed.Run,
-				nodeState: p.nodeState}, fmt.Errorf("%w: publish capability: %v",
-				ErrWakeAttachment, err)
+		return PreparedWake{status: claimed.Status, run: claimed.Run}, fmt.Errorf("%w: publish capability: %v",
+			ErrWakeAttachment, err)
 	}
+	prepared := PreparedWake{status: claimed.Status, run: claimed.Run, attachment: attachment}
 	discard = false
-	return PreparedWake{status: claimed.Status, run: claimed.Run, attachment: attachment,
-		nodeState: p.nodeState}, nil
+	return prepared, nil
+}
+
+func (p *WakeAttachmentPreparer) stageAttachment() (StagedRunAttachment, error) {
+	staged, err := p.attachments.Stage(p.random)
+	if err != nil {
+		return nil, err
+	}
+	if staged == nil {
+		return nil, errors.New("attachment filesystem returned no stage")
+	}
+	return staged, nil
+}
+
+func publishRunAttachment(staged StagedRunAttachment, runID model.RunID) (RunAttachment, error) {
+	attachment, err := staged.Publish(runID)
+	if err != nil {
+		return nil, err
+	}
+	if attachment == nil || attachment.Path() == "" {
+		return nil, errors.New("attachment filesystem returned no attachment")
+	}
+	return attachment, nil
 }
 
 func (p PreparedWake) Status() store.AgentClaimStatus { return p.status }
 func (p PreparedWake) Run() model.AgentRun            { return p.run }
-func (p PreparedWake) AttachmentPath() string         { return p.attachment.Path() }
+func (p PreparedWake) AttachmentPath() string {
+	if p.attachment == nil {
+		return ""
+	}
+	return p.attachment.Path()
+}
 
 // Environment returns exactly one reference assignment for the Runtime
 // adapter. It contains no capability bytes.
 func (p PreparedWake) Environment() string {
-	if p.status != store.AgentClaimActionable || p.attachment.Path() == "" {
+	if p.status != store.AgentClaimActionable || p.AttachmentPath() == "" {
 		return ""
 	}
-	return localapi.RunAttachmentEnv + "=" + p.attachment.Path()
+	return RunAttachmentEnvironment + "=" + p.AttachmentPath()
 }
 
 // RemoveAttachment is used when launch fails before the Runtime inherits the
 // file. The durable claim remains fenced and will be requeued on lease expiry.
 func (p PreparedWake) RemoveAttachment() error {
-	if p.status != store.AgentClaimActionable || p.attachment.Path() == "" {
+	if p.status != store.AgentClaimActionable || p.AttachmentPath() == "" {
 		return nil
 	}
-	return localapi.RemoveRunAttachment(p.nodeState, p.attachment)
+	return p.attachment.Remove()
 }
 
 // cryptorandReader avoids exposing a mutable package-global Reader through

@@ -84,16 +84,6 @@
     },
     {
       "rule": "dependency_direction",
-      "identity": "dependency_direction:harness/internal/agent::localapi",
-      "path": "harness/internal/agent",
-      "component": "localapi",
-      "risk": "medium",
-      "evidence": "harness/internal/agent/action.go",
-      "owner": "harness/internal/agent + harness/internal/localapi",
-      "removal_checkpoint": "7R"
-    },
-    {
-      "rule": "dependency_direction",
       "identity": "dependency_direction:harness/internal/node::localapi",
       "path": "harness/internal/node",
       "component": "localapi",

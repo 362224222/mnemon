@@ -1,18 +1,14 @@
 package agent
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
@@ -1830,21 +1826,25 @@ func wakeWorkerTestRun(t *testing.T, profile model.Profile, text string, at time
 
 func wakeWorkerPrepared(t *testing.T, run model.AgentRun) PreparedWake {
 	t.Helper()
-	nodeState := filepath.Join(t.TempDir(), "node")
-	if err := os.Mkdir(nodeState, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	staged, err := localapi.StageRunAttachment(nodeState,
-		bytes.NewReader(bytes.Repeat([]byte{0xa7}, 48)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	attachment, err := staged.Publish(run.ID())
-	if err != nil {
-		t.Fatal(err)
+	attachment := &wakeWorkerAttachment{
+		path: "/tmp/" + run.ID().String() + ".attach",
 	}
 	return PreparedWake{status: store.AgentClaimActionable, run: run,
-		attachment: attachment, nodeState: nodeState}
+		attachment: attachment}
+}
+
+// wakeWorkerAttachment keeps worker tests at the Agent-owned port instead of
+// coupling their lifecycle oracles to the local control transport filesystem.
+type wakeWorkerAttachment struct {
+	path        string
+	removeCalls int
+}
+
+func (attachment *wakeWorkerAttachment) Path() string { return attachment.path }
+
+func (attachment *wakeWorkerAttachment) Remove() error {
+	attachment.removeCalls++
+	return nil
 }
 
 func wakeWorkerJSON(t *testing.T, text string) model.JSON {

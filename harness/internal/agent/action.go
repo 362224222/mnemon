@@ -8,7 +8,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/event"
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 )
 
 const MaxActionArtifacts = 16
@@ -34,15 +33,15 @@ type ValidatedAction struct {
 	Candidate     event.AgentCandidate
 }
 
-func ValidateAction(input ActionInput) (ValidatedAction, *localapi.APIError) {
+func ValidateAction(input ActionInput) (ValidatedAction, *ControlError) {
 	if !validActionName(input.Action) {
-		return ValidatedAction{}, localapi.NewAPIError(localapi.CodeUnknownAction, "unknown Teamwork action")
+		return ValidatedAction{}, NewControlError(CodeUnknownAction, "unknown Teamwork action")
 	}
 	if input.Action != "offer" && !input.HasContext {
-		return ValidatedAction{}, localapi.NewAPIError(localapi.CodeContextRequired, "this Teamwork action requires managed context")
+		return ValidatedAction{}, NewControlError(CodeContextRequired, "this Teamwork action requires managed context")
 	}
 	if input.Action != "offer" && (input.ChannelAlias != "" || input.Participant != "" || input.Deadline != "") {
-		return ValidatedAction{}, localapi.NewAPIError(localapi.CodeInvalidArgument, "selectors and deadline are only valid for offer")
+		return ValidatedAction{}, NewControlError(CodeInvalidArgument, "selectors and deadline are only valid for offer")
 	}
 	if apiErr := validateSelector("channel", input.ChannelAlias); apiErr != nil {
 		return ValidatedAction{}, apiErr
@@ -56,10 +55,10 @@ func ValidateAction(input ActionInput) (ValidatedAction, *localapi.APIError) {
 	}
 	artifactsAllowed := input.Action == "offer" || input.Action == "deliver" || input.Action == "rework"
 	if !artifactsAllowed && len(paths) != 0 {
-		return ValidatedAction{}, localapi.NewAPIError(localapi.CodeArtifactInvalid, "Artifacts are forbidden for this action")
+		return ValidatedAction{}, NewControlError(CodeArtifactInvalid, "Artifacts are forbidden for this action")
 	}
 	if actionContentRequired(input.Action) && strings.TrimSpace(input.Content) == "" {
-		return ValidatedAction{}, localapi.NewAPIError(localapi.CodeContentRequired, "this Teamwork action requires content")
+		return ValidatedAction{}, NewControlError(CodeContentRequired, "this Teamwork action requires content")
 	}
 
 	deadline, apiErr := parseOfferDeadline(input.Action, input.Deadline)
@@ -68,13 +67,13 @@ func ValidateAction(input ActionInput) (ValidatedAction, *localapi.APIError) {
 	}
 	candidate, err := actionCandidate(input.Action, input.Content, deadline)
 	if err != nil {
-		code := localapi.CodeInvalidArgument
+		code := CodeInvalidArgument
 		if strings.Contains(err.Error(), "must not be empty") {
-			code = localapi.CodeContentRequired
+			code = CodeContentRequired
 		} else if errors.Is(err, event.ErrInvalidCandidate) && len(input.Content) > 8192 {
-			code = localapi.CodeContentTooLarge
+			code = CodeContentTooLarge
 		}
-		return ValidatedAction{}, localapi.NewAPIError(code, boundedCandidateMessage(err))
+		return ValidatedAction{}, NewControlError(code, boundedCandidateMessage(err))
 	}
 	return ValidatedAction{Name: input.Action, HasContext: input.HasContext,
 		ChannelAlias: input.ChannelAlias, Participant: input.Participant, Deadline: deadline,
@@ -112,49 +111,49 @@ func actionCandidate(action, content string, deadline time.Duration) (event.Agen
 	}
 }
 
-func parseOfferDeadline(action, value string) (time.Duration, *localapi.APIError) {
+func parseOfferDeadline(action, value string) (time.Duration, *ControlError) {
 	if value == "" {
 		return 0, nil
 	}
 	if action != "offer" {
-		return 0, localapi.NewAPIError(localapi.CodeInvalidArgument, "deadline is only valid for offer")
+		return 0, NewControlError(CodeInvalidArgument, "deadline is only valid for offer")
 	}
 	duration, err := time.ParseDuration(value)
 	if err != nil || duration < event.MinimumOfferDeadline || duration > event.MaximumOfferDeadline {
-		return 0, localapi.NewAPIError(localapi.CodeInvalidArgument, "offer deadline must be a Go duration from 5m through 168h")
+		return 0, NewControlError(CodeInvalidArgument, "offer deadline must be a Go duration from 5m through 168h")
 	}
 	return duration, nil
 }
 
-func validateSelector(name, value string) *localapi.APIError {
+func validateSelector(name, value string) *ControlError {
 	if value == "" {
 		return nil
 	}
 	if !utf8.ValidString(value) || len(value) > 128 || strings.TrimSpace(value) != value {
-		return localapi.NewAPIError(localapi.CodeInvalidArgument, name+" selector is invalid")
+		return NewControlError(CodeInvalidArgument, name+" selector is invalid")
 	}
 	for _, character := range value {
 		if character <= 0x20 || character == 0x7f {
-			return localapi.NewAPIError(localapi.CodeInvalidArgument, name+" selector is invalid")
+			return NewControlError(CodeInvalidArgument, name+" selector is invalid")
 		}
 	}
 	return nil
 }
 
-func validateArtifactPaths(paths []string) ([]string, *localapi.APIError) {
+func validateArtifactPaths(paths []string) ([]string, *ControlError) {
 	if len(paths) > MaxActionArtifacts {
-		return nil, localapi.NewAPIError(localapi.CodeArtifactTooLarge, "an action accepts at most 16 Artifact paths")
+		return nil, NewControlError(CodeArtifactTooLarge, "an action accepts at most 16 Artifact paths")
 	}
 	result := append([]string(nil), paths...)
 	for _, path := range result {
 		if path == "" || !utf8.ValidString(path) || len(path) > 4096 || strings.IndexByte(path, 0) >= 0 {
-			return nil, localapi.NewAPIError(localapi.CodeArtifactInvalid, "Artifact path is invalid")
+			return nil, NewControlError(CodeArtifactInvalid, "Artifact path is invalid")
 		}
 	}
 	sort.Strings(result)
 	for index := 1; index < len(result); index++ {
 		if result[index] == result[index-1] {
-			return nil, localapi.NewAPIError(localapi.CodeArtifactInvalid, "duplicate Artifact path")
+			return nil, NewControlError(CodeArtifactInvalid, "duplicate Artifact path")
 		}
 	}
 	return result, nil
@@ -165,7 +164,7 @@ func boundedCandidateMessage(err error) string {
 		return "invalid Teamwork action"
 	}
 	message := err.Error()
-	if len(message) > localapi.MaxDiagnosticBytes {
+	if len(message) > MaxControlDiagnosticBytes {
 		return "invalid Teamwork action input"
 	}
 	return message
