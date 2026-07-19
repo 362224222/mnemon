@@ -2,11 +2,140 @@ package store
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 )
+
+func TestCommitLocalAcceptanceRequiresExactOperationArtifactProjection(t *testing.T) {
+	t.Run("normal checkpoint projection", func(t *testing.T) {
+		fixture := newAcceptanceFixture(t, 1)
+		operation, authority := fixture.reserveOffer(t, "artifact-projection-normal", nil)
+		root := verifiedRoot(t, "artifact-projection-normal-root",
+			`{"entries":[],"kind":"review","total_bytes":0}`, 0)
+		if _, err := fixture.store.CheckpointVerifiedArtifactRoot(context.Background(), root); err != nil {
+			t.Fatal(err)
+		}
+		checkpointOperationRoot(t, fixture, operation, authority.LeaseOwner, root)
+		produced, _ := model.NewArtifactRef(root.RootDigest, model.ArtifactProduced)
+		spec := fixture.offer(t, authority, "artifact-projection-normal", fixture.reviewers,
+			[]model.ArtifactRef{produced}, nil)
+		if _, err := fixture.store.CommitLocalAcceptance(context.Background(), spec,
+			fixture.now.Add(time.Second)); err != nil {
+			t.Fatalf("accept exact operation Artifact projection: %v", err)
+		}
+		assertAcceptanceCounts(t, fixture.store, []int{1, 1, 2, 0, 1, 1, 1, 3})
+		assertOperationStatus(t, fixture.store, operation.ID(), model.OperationCommitted)
+	})
+
+	for _, test := range []struct {
+		name   string
+		suffix string
+		tamper func(*testing.T, *acceptanceFixture, model.Operation, VerifiedArtifactRoot)
+	}{
+		{
+			name:   "missing projection",
+			suffix: "artifact-projection-missing",
+			tamper: func(t *testing.T, fixture *acceptanceFixture, operation model.Operation,
+				root VerifiedArtifactRoot,
+			) {
+				setAcceptanceOperationCaptureDirectly(t, fixture, operation, root)
+			},
+		},
+		{
+			name:   "different projection",
+			suffix: "artifact-projection-different",
+			tamper: func(t *testing.T, fixture *acceptanceFixture, operation model.Operation,
+				root VerifiedArtifactRoot,
+			) {
+				mustExec(t, fixture.store, `INSERT INTO operation_artifact_roots(
+					operation_id,root_digest,manifest_digest) VALUES(?,?,?)`, operation.ID().String(),
+					root.RootDigest.String(), model.Sum([]byte("different-projection-manifest")).Bytes())
+				setAcceptanceOperationCaptureDirectly(t, fixture, operation, root)
+			},
+		},
+		{
+			name:   "extra projection",
+			suffix: "artifact-projection-extra",
+			tamper: func(t *testing.T, fixture *acceptanceFixture, operation model.Operation,
+				root VerifiedArtifactRoot,
+			) {
+				mustExec(t, fixture.store, `INSERT INTO operation_artifact_roots(
+					operation_id,root_digest,manifest_digest) VALUES(?,?,?)`, operation.ID().String(),
+					root.RootDigest.String(), root.ManifestDigest.Bytes())
+				mustExec(t, fixture.store, `INSERT INTO operation_artifact_roots(
+					operation_id,root_digest,manifest_digest) VALUES(?,?,?)`, operation.ID().String(),
+					model.Sum([]byte("extra-projection-root")).String(),
+					model.Sum([]byte("extra-projection-manifest")).Bytes())
+				setAcceptanceOperationCaptureDirectly(t, fixture, operation, root)
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newAcceptanceFixture(t, 1)
+			operation, authority := fixture.reserveOffer(t, test.suffix, nil)
+			root := verifiedRoot(t, test.suffix+"-root",
+				`{"entries":[],"kind":"review","total_bytes":0}`, 0)
+			if _, err := fixture.store.CheckpointVerifiedArtifactRoot(context.Background(), root); err != nil {
+				t.Fatal(err)
+			}
+			test.tamper(t, fixture, operation, root)
+			produced, _ := model.NewArtifactRef(root.RootDigest, model.ArtifactProduced)
+			spec := fixture.offer(t, authority, test.suffix, fixture.reviewers,
+				[]model.ArtifactRef{produced}, nil)
+			if _, err := fixture.store.CommitLocalAcceptance(context.Background(), spec,
+				fixture.now.Add(time.Second)); !errors.Is(err, ErrOperationArtifactProjection) {
+				t.Fatalf("CommitLocalAcceptance() error = %v, want projection mismatch", err)
+			}
+			assertAcceptanceProjectionFailure(t, fixture, operation.ID())
+		})
+	}
+
+	t.Run("capture absent with preinjected projection", func(t *testing.T) {
+		fixture := newAcceptanceFixture(t, 1)
+		operation, authority := fixture.reserveOffer(t, "artifact-projection-without-capture", nil)
+		mustExec(t, fixture.store, `INSERT INTO operation_artifact_roots(
+			operation_id,root_digest,manifest_digest) VALUES(?,?,?)`, operation.ID().String(),
+			model.Sum([]byte("preinjected-projection-root")).String(),
+			model.Sum([]byte("preinjected-projection-manifest")).Bytes())
+		spec := fixture.offer(t, authority, "artifact-projection-without-capture",
+			fixture.reviewers, nil, nil)
+		if _, err := fixture.store.CommitLocalAcceptance(context.Background(), spec,
+			fixture.now.Add(time.Second)); !errors.Is(err, ErrOperationArtifactProjection) {
+			t.Fatalf("CommitLocalAcceptance() error = %v, want projection mismatch", err)
+		}
+		assertAcceptanceProjectionFailure(t, fixture, operation.ID())
+	})
+}
+
+func setAcceptanceOperationCaptureDirectly(t *testing.T, fixture *acceptanceFixture,
+	operation model.Operation, root VerifiedArtifactRoot,
+) {
+	t.Helper()
+	capture := operationCaptureJSON(t, []captureRoot{{
+		RootDigest: root.RootDigest, ManifestDigest: root.ManifestDigest,
+	}})
+	mustExec(t, fixture.store, `UPDATE operations SET capture_json=? WHERE operation_id=?`,
+		capture.Bytes(), operation.ID().String())
+}
+
+func assertAcceptanceProjectionFailure(t *testing.T, fixture *acceptanceFixture,
+	operation model.OperationID,
+) {
+	t.Helper()
+	assertAcceptanceCounts(t, fixture.store, []int{0, 0, 0, 0, 0, 0, 0, 0})
+	assertAcceptanceHeads(t, fixture.store, 1, 0)
+	assertOperationStatus(t, fixture.store, operation, model.OperationStarted)
+	var resultIsNull, finishedIsNull int
+	if err := fixture.store.db.QueryRow(`SELECT result_json IS NULL,finished_at IS NULL
+		FROM operations WHERE operation_id=?`, operation.String()).Scan(&resultIsNull, &finishedIsNull); err != nil ||
+		resultIsNull != 1 || finishedIsNull != 1 {
+		t.Fatalf("operation terminal fields after projection rejection = (%d,%d,%v)",
+			resultIsNull, finishedIsNull, err)
+	}
+}
 
 func TestValidateOperationEventsClosesControllerBypass(t *testing.T) {
 	t.Parallel()

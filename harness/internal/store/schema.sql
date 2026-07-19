@@ -128,6 +128,48 @@ BEGIN SELECT RAISE(ABORT, 'terminal operation is immutable'); END;
 CREATE TRIGGER operations_no_delete BEFORE DELETE ON operations
 BEGIN SELECT RAISE(ABORT, 'operations are durable evidence'); END;
 
+-- This is the exact durable ownership projection of an operation capture.
+-- root_digest deliberately has no Artifact FK: once a rejected operation has
+-- passed its staging retention window, GC may remove the unaccepted root while
+-- retaining this immutable operation evidence.
+CREATE TABLE operation_artifact_roots (
+  operation_id       TEXT NOT NULL REFERENCES operations(operation_id),
+  root_digest        TEXT NOT NULL CHECK (
+    typeof(root_digest) = 'text'
+    AND length(root_digest) = 71
+    AND substr(root_digest, 1, 7) = 'sha256:'
+    AND substr(root_digest, 8) NOT GLOB '*[^0-9a-f]*'
+  ),
+  manifest_digest    BLOB NOT NULL CHECK (
+    typeof(manifest_digest) = 'blob' AND length(manifest_digest) = 32
+  ),
+  PRIMARY KEY (operation_id, root_digest)
+);
+
+CREATE INDEX operation_artifact_roots_root_idx
+  ON operation_artifact_roots(root_digest, operation_id);
+
+-- Projection rows are staged only while the operation has no capture
+-- checkpoint. CheckpointOperationCapture seals them and capture_json together
+-- in one transaction.
+CREATE TRIGGER operation_artifact_roots_open_capture_insert
+BEFORE INSERT ON operation_artifact_roots
+WHEN NOT EXISTS (
+  SELECT 1 FROM operations
+  WHERE operation_id = NEW.operation_id
+    AND status = 'started'
+    AND capture_json IS NULL
+)
+BEGIN SELECT RAISE(ABORT, 'operation artifact root projection is sealed'); END;
+
+CREATE TRIGGER operation_artifact_roots_no_update
+BEFORE UPDATE ON operation_artifact_roots
+BEGIN SELECT RAISE(ABORT, 'operation artifact root projection is immutable'); END;
+
+CREATE TRIGGER operation_artifact_roots_no_delete
+BEFORE DELETE ON operation_artifact_roots
+BEGIN SELECT RAISE(ABORT, 'operation artifact root projection is immutable'); END;
+
 CREATE TABLE events (
   event_id           TEXT PRIMARY KEY,
   schema_version     INTEGER NOT NULL CHECK (schema_version = 1),

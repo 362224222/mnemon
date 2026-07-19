@@ -11,9 +11,10 @@ import (
 )
 
 var (
-	ErrOperationMismatch = errors.New("operation identity reused with different request")
-	ErrOperationPending  = errors.New("operation is already in progress")
-	ErrOperationFence    = errors.New("operation lease fence rejected")
+	ErrOperationMismatch           = errors.New("operation identity reused with different request")
+	ErrOperationPending            = errors.New("operation is already in progress")
+	ErrOperationFence              = errors.New("operation lease fence rejected")
+	ErrOperationArtifactProjection = errors.New("operation artifact root projection mismatch")
 )
 
 type OperationReservation struct {
@@ -127,9 +128,9 @@ func (s *Store) ReserveOperation(ctx context.Context, requested model.Operation,
 	return OperationReservation{Operation: requested, Acquired: true}, nil
 }
 
-// CheckpointOperationCapture writes the verified capture closure exactly once
-// under the active operation lease. Identical retry is a replay; different
-// bytes are rejected before SQLite's immutable trigger is reached.
+// CheckpointOperationCapture writes the verified capture closure and its
+// indexed ownership projection exactly once under the active operation lease.
+// Identical retry is a replay; different bytes or projection drift fail closed.
 func (s *Store) CheckpointOperationCapture(ctx context.Context, id model.OperationID, owner string,
 	now time.Time, capture model.JSON,
 ) (bool, error) {
@@ -163,10 +164,23 @@ func (s *Store) CheckpointOperationCapture(ctx context.Context, id model.Operati
 		if existing.String() != capture.String() {
 			return false, ErrOperationMismatch
 		}
+		if err := requireOperationArtifactProjection(ctx, tx, id, captureRoots); err != nil {
+			return false, err
+		}
 		if err := tx.Commit(); err != nil {
 			return false, fmt.Errorf("checkpoint operation capture: replay commit: %w", err)
 		}
 		return true, nil
+	}
+	if err := requireOperationArtifactProjection(ctx, tx, id, nil); err != nil {
+		return false, err
+	}
+	for _, captured := range captureRoots {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO operation_artifact_roots(
+			operation_id,root_digest,manifest_digest) VALUES(?,?,?)`, id.String(),
+			captured.RootDigest.String(), captured.ManifestDigest.Bytes()); err != nil {
+			return false, fmt.Errorf("checkpoint operation capture: insert root projection: %w", err)
+		}
 	}
 	result, err := tx.ExecContext(ctx, `UPDATE operations SET capture_json=? WHERE operation_id=?
 		AND status='started' AND lease_owner=? AND lease_until>? AND capture_json IS NULL`,
@@ -177,10 +191,52 @@ func (s *Store) CheckpointOperationCapture(ctx context.Context, id model.Operati
 	if exactlyOne(result) != nil {
 		return false, ErrOperationFence
 	}
+	if err := requireOperationArtifactProjection(ctx, tx, id, captureRoots); err != nil {
+		return false, err
+	}
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("checkpoint operation capture: commit: %w", err)
 	}
 	return false, nil
+}
+
+func requireOperationArtifactProjection(ctx context.Context, tx *sql.Tx, id model.OperationID,
+	expected []captureRoot,
+) error {
+	rows, err := tx.QueryContext(ctx, `SELECT root_digest,manifest_digest
+		FROM operation_artifact_roots WHERE operation_id=? ORDER BY root_digest`, id.String())
+	if err != nil {
+		return fmt.Errorf("%w: read: %v", ErrOperationArtifactProjection, err)
+	}
+	defer rows.Close()
+
+	actual := make([]captureRoot, 0, len(expected))
+	for rows.Next() {
+		var rootText string
+		var manifestBytes []byte
+		if err := rows.Scan(&rootText, &manifestBytes); err != nil {
+			return fmt.Errorf("%w: scan: %v", ErrOperationArtifactProjection, err)
+		}
+		root, rootErr := model.ParseDigest(rootText)
+		manifest, manifestErr := model.DigestFromBytes(manifestBytes)
+		if rootErr != nil || manifestErr != nil {
+			return fmt.Errorf("%w: invalid durable digest", ErrOperationArtifactProjection)
+		}
+		actual = append(actual, captureRoot{RootDigest: root, ManifestDigest: manifest})
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("%w: iterate: %v", ErrOperationArtifactProjection, err)
+	}
+	if len(actual) != len(expected) {
+		return fmt.Errorf("%w: got %d roots, want %d", ErrOperationArtifactProjection,
+			len(actual), len(expected))
+	}
+	for index := range expected {
+		if actual[index] != expected[index] {
+			return fmt.Errorf("%w: root %d differs", ErrOperationArtifactProjection, index)
+		}
+	}
+	return nil
 }
 
 // RejectOperation durably closes a fenced operation without changing its

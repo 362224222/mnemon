@@ -22,7 +22,7 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 
 	expected := map[string][]string{
 		"table": strings.Fields(
-			"node profiles operations events works work_members work_derivations " +
+			"node profiles operations operation_artifact_roots events works work_members work_derivations " +
 				"agent_handlings agent_runs artifact_roots artifact_blocks artifact_root_blocks " +
 				"artifact_pins artifact_provenance channels channel_members channel_conflicts " +
 				"enrollment_grants enrollment_grant_uses enrollment_receipts channel_join_reservations channel_leave_requests " +
@@ -30,7 +30,7 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 				"origin_quarantines peer_cursors peer_repairs publication_epochs peer_pull_acks",
 		),
 		"index": strings.Fields(
-			"profiles_one_enabled_teamwork_idx operations_reclaim_idx operations_one_started_context_idx " +
+			"profiles_one_enabled_teamwork_idx operations_reclaim_idx operations_one_started_context_idx operation_artifact_roots_root_idx " +
 				"works_due_idx agent_handlings_ready_idx agent_handlings_one_claimed_profile_idx " +
 				"agent_runs_handling_generation_attempt_idx agent_runs_incomplete_managed_idx artifact_pins_expiry_idx enrollment_grants_one_open_idx " +
 				"channel_leave_requests_one_open_idx gossip_publications_ready_idx peer_inbox_work_idx",
@@ -38,6 +38,7 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 		"trigger": strings.Fields(
 			"node_identity_immutable node_no_delete profiles_identity_immutable profiles_no_delete operations_identity_immutable " +
 				"operations_capture_checkpoint_immutable operations_terminal_immutable operations_no_delete " +
+				"operation_artifact_roots_open_capture_insert operation_artifact_roots_no_update operation_artifact_roots_no_delete " +
 				"events_no_update events_no_delete events_local_origin_insert events_publication_member_insert " +
 				"works_deadline_immutable works_event_scope_insert works_event_scope_update " +
 				"work_members_no_update work_members_no_delete work_derivations_scope_insert " +
@@ -110,8 +111,8 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 	if !reflect.DeepEqual(actual, expected) {
 		t.Fatalf("schema object set mismatch\nactual: %#v\nexpected: %#v", actual, expected)
 	}
-	if got := len(actual["table"]) + len(actual["index"]) + len(actual["trigger"]); got != 182 {
-		t.Fatalf("explicit object count = %d, want 182", got)
+	if got := len(actual["table"]) + len(actual["index"]) + len(actual["trigger"]); got != 187 {
+		t.Fatalf("explicit object count = %d, want 187", got)
 	}
 }
 
@@ -534,6 +535,49 @@ func TestSchemaV1KeyConstraintsAndTriggers(t *testing.T) {
 		"UPDATE operations SET agent_run_id = 'run-forged' WHERE operation_id = 'operation-one'",
 	); err == nil || !strings.Contains(err.Error(), "operation identity is immutable") {
 		t.Fatalf("operation AgentRun update error = %v, want immutable trigger", err)
+	}
+	projectionRoot := model.Sum([]byte("schema-operation-artifact-root"))
+	projectionManifest := model.Sum([]byte("schema-operation-artifact-manifest"))
+	if _, err := st.db.Exec(`INSERT INTO operation_artifact_roots(
+		operation_id,root_digest,manifest_digest) VALUES('operation-one',?,?)`,
+		strings.ToUpper(projectionRoot.String()), projectionManifest.Bytes()); err == nil ||
+		!strings.Contains(err.Error(), "CHECK constraint failed") {
+		t.Fatalf("operation Artifact projection noncanonical root error = %v", err)
+	}
+	if _, err := st.db.Exec(`INSERT INTO operation_artifact_roots(
+		operation_id,root_digest,manifest_digest) VALUES('operation-one',?,?)`,
+		projectionRoot.String(), []byte("short")); err == nil ||
+		!strings.Contains(err.Error(), "CHECK constraint failed") {
+		t.Fatalf("operation Artifact projection invalid manifest error = %v", err)
+	}
+	// No Artifact root row is present: the relation intentionally does not FK
+	// root_digest, so rejected staging metadata can later be collected.
+	if _, err := st.db.Exec(`INSERT INTO operation_artifact_roots(
+		operation_id,root_digest,manifest_digest) VALUES('operation-one',?,?)`,
+		projectionRoot.String(), projectionManifest.Bytes()); err != nil {
+		t.Fatalf("insert operation Artifact projection: %v", err)
+	}
+	if _, err := st.db.Exec(`UPDATE operation_artifact_roots SET manifest_digest=?
+		WHERE operation_id='operation-one'`, model.Sum([]byte("changed")).Bytes()); err == nil ||
+		!strings.Contains(err.Error(), "operation artifact root projection is immutable") {
+		t.Fatalf("operation Artifact projection update error = %v", err)
+	}
+	if _, err := st.db.Exec(`DELETE FROM operation_artifact_roots
+		WHERE operation_id='operation-one'`); err == nil ||
+		!strings.Contains(err.Error(), "operation artifact root projection is immutable") {
+		t.Fatalf("operation Artifact projection delete error = %v", err)
+	}
+	projectionCapture := []byte(`{"roots":[{"manifest_digest":"` + projectionManifest.String() +
+		`","root_digest":"` + projectionRoot.String() + `"}]}`)
+	if _, err := st.db.Exec(`UPDATE operations SET capture_json=? WHERE operation_id='operation-one'`,
+		projectionCapture); err != nil {
+		t.Fatalf("seal operation Artifact projection: %v", err)
+	}
+	if _, err := st.db.Exec(`INSERT INTO operation_artifact_roots(
+		operation_id,root_digest,manifest_digest) VALUES('operation-one',?,?)`,
+		model.Sum([]byte("extra-root")).String(), projectionManifest.Bytes()); err == nil ||
+		!strings.Contains(err.Error(), "operation artifact root projection is sealed") {
+		t.Fatalf("sealed operation Artifact projection insert error = %v", err)
 	}
 	if _, err := st.db.Exec(
 		"UPDATE operations SET status = 'committed', lease_owner = NULL, lease_until = NULL, result_json = ?, finished_at = '2026-01-01T00:30:00.000000000Z' WHERE operation_id = 'operation-one'",

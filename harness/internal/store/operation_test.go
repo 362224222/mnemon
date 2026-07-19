@@ -3,6 +3,10 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sort"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -120,6 +124,240 @@ func TestReserveOperationLeaseFenceCaptureAndRejectedReplay(t *testing.T) {
 	}
 }
 
+func TestCheckpointOperationCaptureDurableProjectionAndRestartReplay(t *testing.T) {
+	fixture := newOperationCaptureFixture(t, "projection-restart", 2)
+	if replayed, err := fixture.store.CheckpointOperationCapture(context.Background(),
+		fixture.operation.ID(), fixture.operation.LeaseOwner(), fixture.now, fixture.capture); err != nil || replayed {
+		t.Fatalf("fresh CheckpointOperationCapture() = (%t,%v)", replayed, err)
+	}
+	assertOperationArtifactProjection(t, fixture.store, fixture.operation.ID(), fixture.roots)
+
+	path := fixture.store.Path()
+	if err := fixture.store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := OpenExisting(context.Background(), path)
+	if err != nil {
+		t.Fatalf("OpenExisting() after lost response: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := restarted.Close(); err != nil {
+			t.Errorf("close restarted Store: %v", err)
+		}
+	})
+	if replayed, err := restarted.CheckpointOperationCapture(context.Background(),
+		fixture.operation.ID(), fixture.operation.LeaseOwner(), fixture.now.Add(time.Second),
+		fixture.capture); err != nil || !replayed {
+		t.Fatalf("restart response-loss replay = (%t,%v)", replayed, err)
+	}
+	assertOperationArtifactProjection(t, restarted, fixture.operation.ID(), fixture.roots)
+}
+
+func TestCheckpointOperationCaptureEmptyProjectionIsDurable(t *testing.T) {
+	t.Parallel()
+	fixture := newOperationCaptureFixture(t, "projection-empty", 0)
+	if replayed, err := fixture.store.CheckpointOperationCapture(context.Background(),
+		fixture.operation.ID(), fixture.operation.LeaseOwner(), fixture.now, fixture.capture); err != nil || replayed {
+		t.Fatalf("empty fresh checkpoint = (%t,%v)", replayed, err)
+	}
+	assertOperationArtifactProjection(t, fixture.store, fixture.operation.ID(), nil)
+	if replayed, err := fixture.store.CheckpointOperationCapture(context.Background(),
+		fixture.operation.ID(), fixture.operation.LeaseOwner(), fixture.now.Add(time.Second),
+		fixture.capture); err != nil || !replayed {
+		t.Fatalf("empty replay checkpoint = (%t,%v)", replayed, err)
+	}
+}
+
+func TestCheckpointOperationCaptureFenceLeavesNoProjection(t *testing.T) {
+	t.Parallel()
+	fixture := newOperationCaptureFixture(t, "projection-fence", 1)
+	leaseUntil, _ := fixture.operation.LeaseUntil()
+	for _, attempt := range []struct {
+		name  string
+		owner string
+		at    time.Time
+	}{
+		{name: "wrong owner", owner: "projection-intruder", at: fixture.now},
+		{name: "expired lease", owner: fixture.operation.LeaseOwner(), at: leaseUntil},
+	} {
+		if replayed, err := fixture.store.CheckpointOperationCapture(context.Background(),
+			fixture.operation.ID(), attempt.owner, attempt.at, fixture.capture); replayed ||
+			!errors.Is(err, ErrOperationFence) {
+			t.Fatalf("%s checkpoint = (%t,%v)", attempt.name, replayed, err)
+		}
+		assertOperationArtifactProjection(t, fixture.store, fixture.operation.ID(), nil)
+		var captureIsNull int
+		if err := fixture.store.db.QueryRow(`SELECT capture_json IS NULL FROM operations
+			WHERE operation_id=?`, fixture.operation.ID().String()).Scan(&captureIsNull); err != nil ||
+			captureIsNull != 1 {
+			t.Fatalf("%s capture NULL = (%d,%v)", attempt.name, captureIsNull, err)
+		}
+	}
+}
+
+func TestCheckpointOperationCaptureUpdateFailureRollsBackProjection(t *testing.T) {
+	t.Parallel()
+	fixture := newOperationCaptureFixture(t, "projection-rollback", 2)
+	mustExec(t, fixture.store, `CREATE TRIGGER test_operation_capture_abort
+		BEFORE UPDATE OF capture_json ON operations
+		WHEN NEW.operation_id='operation-projection-rollback'
+		BEGIN SELECT RAISE(ABORT, 'forced capture update failure'); END`)
+	if replayed, err := fixture.store.CheckpointOperationCapture(context.Background(),
+		fixture.operation.ID(), fixture.operation.LeaseOwner(), fixture.now, fixture.capture); replayed ||
+		err == nil || !strings.Contains(err.Error(), "forced capture update failure") {
+		t.Fatalf("forced update failure = (%t,%v)", replayed, err)
+	}
+	assertOperationArtifactProjection(t, fixture.store, fixture.operation.ID(), nil)
+	var captureIsNull int
+	if err := fixture.store.db.QueryRow(`SELECT capture_json IS NULL FROM operations
+		WHERE operation_id=?`, fixture.operation.ID().String()).Scan(&captureIsNull); err != nil ||
+		captureIsNull != 1 {
+		t.Fatalf("rolled-back capture NULL = (%d,%v)", captureIsNull, err)
+	}
+}
+
+func TestCheckpointOperationCaptureConcurrentIdenticalProjection(t *testing.T) {
+	t.Parallel()
+	fixture := newOperationCaptureFixture(t, "projection-race", 2)
+	type result struct {
+		replayed bool
+		err      error
+	}
+	start := make(chan struct{})
+	results := make(chan result, 2)
+	var workers sync.WaitGroup
+	for range 2 {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			<-start
+			replayed, err := fixture.store.CheckpointOperationCapture(context.Background(),
+				fixture.operation.ID(), fixture.operation.LeaseOwner(), fixture.now, fixture.capture)
+			results <- result{replayed: replayed, err: err}
+		}()
+	}
+	close(start)
+	workers.Wait()
+	close(results)
+	fresh, replayed := 0, 0
+	for result := range results {
+		if result.err != nil {
+			t.Fatalf("concurrent checkpoint error = %v", result.err)
+		}
+		if result.replayed {
+			replayed++
+		} else {
+			fresh++
+		}
+	}
+	if fresh != 1 || replayed != 1 {
+		t.Fatalf("concurrent checkpoint outcomes fresh=%d replayed=%d", fresh, replayed)
+	}
+	assertOperationArtifactProjection(t, fixture.store, fixture.operation.ID(), fixture.roots)
+}
+
+func TestCheckpointOperationCaptureFailsClosedOnProjectionDrift(t *testing.T) {
+	t.Run("precheckpoint row", func(t *testing.T) {
+		fixture := newOperationCaptureFixture(t, "projection-drift-precheckpoint", 1)
+		mustExec(t, fixture.store, `INSERT INTO operation_artifact_roots(
+			operation_id,root_digest,manifest_digest) VALUES(?,?,?)`,
+			fixture.operation.ID().String(), fixture.roots[0].RootDigest.String(),
+			fixture.roots[0].ManifestDigest.Bytes())
+		if replayed, err := fixture.store.CheckpointOperationCapture(context.Background(),
+			fixture.operation.ID(), fixture.operation.LeaseOwner(), fixture.now, fixture.capture); replayed || !errors.Is(err, ErrOperationArtifactProjection) {
+			t.Fatalf("precheckpoint projection tamper = (%t,%v)", replayed, err)
+		}
+		var captureIsNull int
+		if err := fixture.store.db.QueryRow(`SELECT capture_json IS NULL FROM operations
+			WHERE operation_id=?`, fixture.operation.ID().String()).Scan(&captureIsNull); err != nil ||
+			captureIsNull != 1 {
+			t.Fatalf("tampered fresh failure capture NULL = (%d,%v)", captureIsNull, err)
+		}
+	})
+
+	for _, test := range []struct {
+		name   string
+		tamper func(*testing.T, operationCaptureFixture)
+	}{
+		{name: "missing", tamper: func(t *testing.T, fixture operationCaptureFixture) {
+			setOperationCaptureDirectly(t, fixture)
+		}},
+		{name: "different", tamper: func(t *testing.T, fixture operationCaptureFixture) {
+			root := fixture.roots[0]
+			mustExec(t, fixture.store, `INSERT INTO operation_artifact_roots(
+				operation_id,root_digest,manifest_digest) VALUES(?,?,?)`,
+				fixture.operation.ID().String(), root.RootDigest.String(),
+				model.Sum([]byte("different-manifest")).Bytes())
+			setOperationCaptureDirectly(t, fixture)
+		}},
+		{name: "extra", tamper: func(t *testing.T, fixture operationCaptureFixture) {
+			root := fixture.roots[0]
+			mustExec(t, fixture.store, `INSERT INTO operation_artifact_roots(
+				operation_id,root_digest,manifest_digest) VALUES(?,?,?)`,
+				fixture.operation.ID().String(), root.RootDigest.String(), root.ManifestDigest.Bytes())
+			mustExec(t, fixture.store, `INSERT INTO operation_artifact_roots(
+				operation_id,root_digest,manifest_digest) VALUES(?,?,?)`,
+				fixture.operation.ID().String(), model.Sum([]byte("extra-projection-root")).String(),
+				model.Sum([]byte("extra-projection-manifest")).Bytes())
+			setOperationCaptureDirectly(t, fixture)
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newOperationCaptureFixture(t, "projection-drift-"+test.name, 1)
+			test.tamper(t, fixture)
+			if replayed, err := fixture.store.CheckpointOperationCapture(context.Background(),
+				fixture.operation.ID(), fixture.operation.LeaseOwner(), fixture.now, fixture.capture); replayed || !errors.Is(err, ErrOperationArtifactProjection) {
+				t.Fatalf("drifted replay = (%t,%v)", replayed, err)
+			}
+		})
+	}
+
+	t.Run("missing survives restart", func(t *testing.T) {
+		fixture := newOperationCaptureFixture(t, "projection-drift-restart", 1)
+		setOperationCaptureDirectly(t, fixture)
+		path := fixture.store.Path()
+		if err := fixture.store.Close(); err != nil {
+			t.Fatal(err)
+		}
+		restarted, err := OpenExisting(context.Background(), path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer restarted.Close()
+		if replayed, err := restarted.CheckpointOperationCapture(context.Background(),
+			fixture.operation.ID(), fixture.operation.LeaseOwner(), fixture.now, fixture.capture); replayed || !errors.Is(err, ErrOperationArtifactProjection) {
+			t.Fatalf("restart drifted replay = (%t,%v)", replayed, err)
+		}
+	})
+}
+
+func TestRejectedOperationRetainsProjectionWithoutArtifactForeignKey(t *testing.T) {
+	t.Parallel()
+	fixture := newOperationCaptureFixture(t, "projection-rejected", 1)
+	if _, err := fixture.store.CheckpointOperationCapture(context.Background(), fixture.operation.ID(),
+		fixture.operation.LeaseOwner(), fixture.now, fixture.capture); err != nil {
+		t.Fatal(err)
+	}
+	result, _ := model.NewJSON([]byte(`{"error":"invalid_action"}`))
+	if _, err := fixture.store.RejectOperation(context.Background(), fixture.operation.ID(),
+		fixture.operation.LeaseOwner(), fixture.now, result); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.db.Exec(`DELETE FROM artifact_roots WHERE root_digest=?`,
+		fixture.roots[0].RootDigest.String()); err != nil {
+		t.Fatalf("delete rejected unaccepted staging metadata: %v", err)
+	}
+	var status string
+	var finishedAtIsSet int
+	if err := fixture.store.db.QueryRow(`SELECT o.status,o.finished_at IS NOT NULL
+		FROM operation_artifact_roots r JOIN operations o ON o.operation_id=r.operation_id
+		WHERE r.operation_id=? AND r.root_digest=?`, fixture.operation.ID().String(),
+		fixture.roots[0].RootDigest.String()).Scan(&status, &finishedAtIsSet); err != nil ||
+		status != "rejected" || finishedAtIsSet != 1 {
+		t.Fatalf("retained rejected projection = (%q,%d,%v)", status, finishedAtIsSet, err)
+	}
+}
+
 func TestReserveOperationRequiresActiveAgentRunAuthority(t *testing.T) {
 	t.Parallel()
 	st := openTestStore(t)
@@ -221,6 +459,115 @@ func TestReserveOperationRejectsActiveAssetAuthorityDrift(t *testing.T) {
 	requested := startedOperation(t, "operation-drift", "key-drift", "request-drift", "run-drift", "owner-drift", now, nil)
 	if _, err := st.ReserveOperation(context.Background(), requested, now); err == nil {
 		t.Fatal("first operation was reserved under Node/Profile asset drift")
+	}
+}
+
+type operationCaptureFixture struct {
+	store     *Store
+	operation model.Operation
+	now       time.Time
+	capture   model.JSON
+	roots     []captureRoot
+}
+
+func newOperationCaptureFixture(t *testing.T, suffix string, rootCount int) operationCaptureFixture {
+	t.Helper()
+	st := openTestStore(t)
+	node, profile := bootstrapValues(t, "peer-"+suffix, "principal-"+suffix,
+		"/workspace/"+suffix)
+	_, _ = activateTestNode(t, st, node, profile)
+	now := time.Date(2026, 7, 18, 9, 0, 0, 0, time.UTC)
+	runID := "run-" + suffix
+	insertOperationAgentRun(t, st, profile, runID, "running", now)
+	operation := startedOperation(t, "operation-"+suffix, "key-"+suffix, "request-"+suffix,
+		runID, "owner-"+suffix, now, nil)
+	if _, err := st.ReserveOperation(context.Background(), operation, now); err != nil {
+		t.Fatalf("ReserveOperation(): %v", err)
+	}
+
+	manifest, err := model.NewJSON([]byte(`{"entries":[]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestDigest := model.Sum(manifest.Bytes())
+	roots := make([]captureRoot, 0, rootCount)
+	for index := 0; index < rootCount; index++ {
+		rootDigest := model.Sum([]byte(fmt.Sprintf("%s-root-%d", suffix, index)))
+		if _, err := st.CheckpointVerifiedArtifactRoot(context.Background(), VerifiedArtifactRoot{
+			RootDigest: rootDigest, Manifest: manifest, ManifestDigest: manifestDigest,
+			CreatedAt: now, VerifiedAt: now,
+		}); err != nil {
+			t.Fatalf("CheckpointVerifiedArtifactRoot(%d): %v", index, err)
+		}
+		roots = append(roots, captureRoot{RootDigest: rootDigest, ManifestDigest: manifestDigest})
+	}
+	sort.Slice(roots, func(left, right int) bool {
+		return roots[left].RootDigest.String() < roots[right].RootDigest.String()
+	})
+	capture := operationCaptureJSON(t, roots)
+	return operationCaptureFixture{store: st, operation: operation, now: now,
+		capture: capture, roots: roots}
+}
+
+func operationCaptureJSON(t *testing.T, roots []captureRoot) model.JSON {
+	t.Helper()
+	var encoded strings.Builder
+	encoded.WriteString(`{"roots":[`)
+	for index, root := range roots {
+		if index != 0 {
+			encoded.WriteByte(',')
+		}
+		_, _ = fmt.Fprintf(&encoded, `{"manifest_digest":"%s","root_digest":"%s"}`,
+			root.ManifestDigest.String(), root.RootDigest.String())
+	}
+	encoded.WriteString(`]}`)
+	value, err := model.NewJSON([]byte(encoded.String()))
+	if err != nil {
+		t.Fatalf("NewJSON(capture): %v", err)
+	}
+	return value
+}
+
+func setOperationCaptureDirectly(t *testing.T, fixture operationCaptureFixture) {
+	t.Helper()
+	mustExec(t, fixture.store, `UPDATE operations SET capture_json=? WHERE operation_id=?`,
+		fixture.capture.Bytes(), fixture.operation.ID().String())
+}
+
+func assertOperationArtifactProjection(t *testing.T, st *Store, operationID model.OperationID,
+	want []captureRoot,
+) {
+	t.Helper()
+	rows, err := st.db.Query(`SELECT root_digest,manifest_digest FROM operation_artifact_roots
+		WHERE operation_id=? ORDER BY root_digest`, operationID.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var got []captureRoot
+	for rows.Next() {
+		var rootText string
+		var manifestBytes []byte
+		if err := rows.Scan(&rootText, &manifestBytes); err != nil {
+			t.Fatal(err)
+		}
+		root, rootErr := model.ParseDigest(rootText)
+		manifest, manifestErr := model.DigestFromBytes(manifestBytes)
+		if rootErr != nil || manifestErr != nil {
+			t.Fatalf("parse projection digest = (%v,%v)", rootErr, manifestErr)
+		}
+		got = append(got, captureRoot{RootDigest: root, ManifestDigest: manifest})
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("projection roots = %#v, want %#v", got, want)
+	}
+	for index := range want {
+		if got[index] != want[index] {
+			t.Fatalf("projection root %d = %#v, want %#v", index, got[index], want[index])
+		}
 	}
 }
 

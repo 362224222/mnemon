@@ -239,6 +239,11 @@ func validateAcceptanceArtifacts(ctx context.Context, tx *sql.Tx, operation mode
 			return nil, err
 		}
 	}
+	if spec.Operation != nil {
+		if err := requireOperationArtifactProjection(ctx, tx, operation.ID(), capture); err != nil {
+			return nil, err
+		}
+	}
 	captured := captureRootSet(capture)
 	for _, root := range capture {
 		verified, err := requireVerifiedArtifactRoot(ctx, tx, root.RootDigest)
