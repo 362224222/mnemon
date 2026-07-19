@@ -46,8 +46,8 @@ func TestTeamworkActionExecutorNestedOfferUsesCurrentCausality(t *testing.T) {
 	fixture := newExecutorFixture(t, 2)
 	parent := fixture.work(t, model.WorkActive, 2, 1, true)
 	fixture.backend.work = parent
-	reservation := executorReservation(t, fixture, model.OperationTeamworkOffer, parent, true)
 	action := executorAction(t, "offer", true, "delegate review", "1h", AgentParticipantTeam, nil)
+	reservation := executorReservation(t, fixture, action, parent, true)
 	response, apiErr := fixture.executor.ExecuteTeamwork(context.Background(), TeamworkExecutionSpec{
 		Request: TeamworkActionRequest{Action: "offer", To: AgentParticipantTeam,
 			Deadline: "1h", Content: "delegate review"},
@@ -69,8 +69,8 @@ func TestTeamworkActionExecutorNestedOfferUsesCurrentCausality(t *testing.T) {
 func TestTeamworkActionExecutorTerminalReplayAndStableRejection(t *testing.T) {
 	t.Parallel()
 	fixture := newExecutorFixture(t, 1)
-	base := executorReservation(t, fixture, model.OperationTeamworkOffer, model.ReviewWork{}, false)
 	action := executorAction(t, "offer", false, "goal", "30m", AgentParticipantAuto, nil)
+	base := executorReservation(t, fixture, action, model.ReviewWork{}, false)
 	first, apiErr := fixture.executor.ExecuteTeamwork(context.Background(), TeamworkExecutionSpec{
 		Request: TeamworkActionRequest{Action: "offer", Content: "goal"},
 		Action:  action, Reservation: base, At: fixture.at,
@@ -86,9 +86,11 @@ func TestTeamworkActionExecutorTerminalReplayAndStableRejection(t *testing.T) {
 		fixture.backend.lastReceipt, fixture.at)
 	fixture.selector.err = errors.New("selector must not run")
 	fixture.artifacts.apiErr = NewControlError(CodeInternal, "capture must not run")
+	fixture.executor.backend, fixture.executor.selector, fixture.executor.signer = nil, nil, nil
+	fixture.executor.artifacts, fixture.executor.clock = nil, nil
 	replay, apiErr := fixture.executor.ExecuteTeamwork(context.Background(), TeamworkExecutionSpec{
 		Action: action, Reservation: store.ManagedOperationReservation{Operation: committed, Replayed: true},
-		At: fixture.at.Add(time.Second),
+		At: time.Time{},
 	})
 	if apiErr != nil || !replay.Replayed || replay.OperationID != first.OperationID ||
 		replay.Receipt != first.Receipt ||
@@ -96,9 +98,8 @@ func TestTeamworkActionExecutorTerminalReplayAndStableRejection(t *testing.T) {
 		t.Fatalf("committed replay = (%#v, %v), calls selector=%d artifacts=%d",
 			replay, apiErr, fixture.selector.calls, fixture.artifacts.calls)
 	}
-
 	rejectedFixture := newExecutorFixture(t, 1)
-	rejectedBase := executorReservation(t, rejectedFixture, model.OperationTeamworkOffer, model.ReviewWork{}, false)
+	rejectedBase := executorReservation(t, rejectedFixture, action, model.ReviewWork{}, false)
 	longCandidates := make([]string, model.MaxChildWorks)
 	for index := range longCandidates {
 		longCandidates[index] = fmt.Sprintf("candidate-%d-%s", index, strings.Repeat("x", 100))
@@ -117,13 +118,36 @@ func TestTeamworkActionExecutorTerminalReplayAndStableRejection(t *testing.T) {
 		strings.Contains(rejectedFixture.backend.rejection.String(), `"action"`) {
 		t.Fatalf("initial rejection = %#v", firstErr)
 	}
+	rejectedFixture.executor.backend, rejectedFixture.executor.selector, rejectedFixture.executor.signer = nil, nil, nil
+	rejectedFixture.executor.artifacts, rejectedFixture.executor.clock = nil, nil
 	_, replayErr := rejectedFixture.executor.ExecuteTeamwork(context.Background(), TeamworkExecutionSpec{
 		Action: action, Reservation: store.ManagedOperationReservation{Operation: rejectedFixture.backend.rejected,
-			Replayed: true}, At: rejectedFixture.at.Add(time.Second),
+			Replayed: true}, At: time.Time{},
 	})
 	if replayErr == nil || replayErr.Code != firstErr.Code || replayErr.Message != firstErr.Message ||
 		!replayErr.Replayed || rejectedFixture.selector.calls != 1 {
 		t.Fatalf("rejected replay = %#v", replayErr)
+	}
+}
+
+func TestTeamworkActionExecutorRejectsTerminalRequestDigestMismatch(t *testing.T) {
+	t.Parallel()
+	fixture := newExecutorFixture(t, 1)
+	action := executorAction(t, "offer", false, "goal", "30m", AgentParticipantAuto, nil)
+	reservation := executorReservation(t, fixture, action, model.ReviewWork{}, false)
+	receipt, err := fakeAcceptanceReceipt(executionAcceptanceSpec{}, model.ReviewWork{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	committed := executorTerminalOperation(t, reservation.Operation, model.OperationCommitted,
+		receipt, fixture.at)
+	changed := action
+	changed.Content = "changed behind the same operation"
+	_, apiErr := fixture.executor.ExecuteTeamwork(context.Background(), TeamworkExecutionSpec{
+		Action: changed, Reservation: store.ManagedOperationReservation{Operation: committed, Replayed: true},
+	})
+	if apiErr == nil || apiErr.Code != CodeOperationMismatch || !apiErr.Replayed {
+		t.Fatalf("terminal request digest mismatch = %#v", apiErr)
 	}
 }
 
@@ -132,8 +156,8 @@ func TestTeamworkActionExecutorRejectsCommitFailureAndHonorsFence(t *testing.T) 
 	fixture := newExecutorFixture(t, 1)
 	work := fixture.work(t, model.WorkDelivered, 3, 1, false)
 	fixture.backend.work, fixture.backend.commitErr = work, store.ErrWorkCASConflict
-	reservation := executorReservation(t, fixture, model.OperationTeamworkClose, work, true)
 	action := executorAction(t, "close", true, "", "", "", nil)
+	reservation := executorReservation(t, fixture, action, work, true)
 	_, apiErr := fixture.executor.ExecuteTeamwork(context.Background(), TeamworkExecutionSpec{
 		Action: action, Reservation: reservation, At: fixture.at,
 	})
@@ -147,7 +171,7 @@ func TestTeamworkActionExecutorRejectsCommitFailureAndHonorsFence(t *testing.T) 
 	fencedWork := fenced.work(t, model.WorkDelivered, 3, 1, false)
 	fenced.backend.work, fenced.backend.commitErr, fenced.backend.rejectErr =
 		fencedWork, store.ErrWorkCASConflict, store.ErrOperationFence
-	fencedReservation := executorReservation(t, fenced, model.OperationTeamworkClose, fencedWork, true)
+	fencedReservation := executorReservation(t, fenced, action, fencedWork, true)
 	_, apiErr = fenced.executor.ExecuteTeamwork(context.Background(), TeamworkExecutionSpec{
 		Action: action, Reservation: fencedReservation, At: fenced.at,
 	})
@@ -168,8 +192,8 @@ func TestTeamworkActionExecutorAtomicallyLetsDeadlineWin(t *testing.T) {
 		t.Fatal(err)
 	}
 	fixture.backend.work = work
-	reservation := executorReservation(t, fixture, model.OperationTeamworkCancel, work, true)
 	action := executorAction(t, "cancel", true, "deadline race", "", "", nil)
+	reservation := executorReservation(t, fixture, action, work, true)
 
 	response, apiErr := fixture.executor.ExecuteTeamwork(context.Background(), TeamworkExecutionSpec{
 		Action: action, Reservation: reservation, At: fixture.at,
@@ -210,8 +234,8 @@ func TestTeamworkActionExecutorKeepsRetryableOperationOpen(t *testing.T) {
 	t.Parallel()
 	fixture := newExecutorFixture(t, 1)
 	fixture.selector.err = ErrAgentSelectionParticipantUnavailable
-	reservation := executorReservation(t, fixture, model.OperationTeamworkOffer, model.ReviewWork{}, false)
 	action := executorAction(t, "offer", false, "retry selection", "30m", AgentParticipantAuto, nil)
+	reservation := executorReservation(t, fixture, action, model.ReviewWork{}, false)
 
 	_, apiErr := fixture.executor.ExecuteTeamwork(context.Background(), TeamworkExecutionSpec{
 		Action: action, Reservation: reservation, At: fixture.at,
@@ -481,10 +505,11 @@ func fakeAcceptanceReceipt(spec executionAcceptanceSpec, current model.ReviewWor
 		OperationID: spec.operation.ID.String(), Status: "committed"})
 }
 
-func executorReservation(t *testing.T, fixture *executorFixture, kind model.OperationKind,
+func executorReservation(t *testing.T, fixture *executorFixture, action ValidatedAction,
 	work model.ReviewWork, contextBound bool,
 ) store.ManagedOperationReservation {
 	t.Helper()
+	kind := action.handler.OperationKind()
 	operationID, _ := model.ParseOperationID("operation-executor-" + strings.TrimPrefix(string(kind), "teamwork."))
 	runID, _ := model.ParseRunID("run-executor-" + strings.TrimPrefix(string(kind), "teamwork."))
 	started := fixture.at.Add(-time.Minute)
@@ -518,9 +543,17 @@ func executorReservation(t *testing.T, fixture *executorFixture, kind model.Oper
 	if err != nil {
 		t.Fatal(err)
 	}
+	digestContext := model.Digest{}
+	if contextHash != nil {
+		digestContext = *contextHash
+	}
+	requestDigest, err := action.requestDigest(digestContext, contextBound)
+	if err != nil {
+		t.Fatal(err)
+	}
 	operation, err := model.NewOperation(model.OperationSpec{ID: operationID, ProfileID: fixture.profile.ID(),
 		AgentRunID: runID, ClientKeyHash: model.Sum([]byte("key-" + operationID.String())),
-		ContextHash: contextHash, Kind: kind, RequestDigest: model.Sum([]byte("request-" + operationID.String())),
+		ContextHash: contextHash, Kind: kind, RequestDigest: requestDigest,
 		Status: model.OperationStarted, LeaseOwner: "owner-" + operationID.String(), LeaseUntil: &lease,
 		CreatedAt: started})
 	if err != nil {

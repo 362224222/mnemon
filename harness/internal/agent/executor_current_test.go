@@ -53,9 +53,9 @@ func runExecutorCurrentActionCase(t *testing.T, test executorCurrentActionCase) 
 	fixture := newExecutorFixture(t, 1)
 	work := executorCurrentActionWork(t, fixture, test)
 	fixture.backend.work = work
-	reservation := executorReservation(t, fixture, test.kind, work, true)
 	paths := executorCurrentActionArtifacts(fixture, test)
 	action := executorAction(t, test.name, true, test.content, "", "", paths)
+	reservation := executorReservation(t, fixture, action, work, true)
 	response, controlErr := fixture.executor.ExecuteTeamwork(context.Background(), TeamworkExecutionSpec{
 		Request: TeamworkActionRequest{Action: test.name, Content: test.content, Artifacts: paths},
 		Action:  action, Reservation: reservation, At: fixture.at})

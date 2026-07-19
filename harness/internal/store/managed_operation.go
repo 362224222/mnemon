@@ -80,8 +80,8 @@ func (s *Store) ReserveManagedOperation(ctx context.Context,
 
 	existing, err := readOperationByClientKey(ctx, tx, profile.ID(), spec.ClientKeyHash)
 	if err == nil {
-		if existing.ID() != operationID || existing.Kind() != spec.Kind ||
-			existing.RequestDigest() != spec.RequestDigest {
+		if !sameManagedOperationRequest(existing, operationID, profile.ID(), spec.ClientKeyHash,
+			spec.RequestDigest, spec.Kind, spec.ClaimContextHash, spec.HasClaimContext) {
 			return ManagedOperationReservation{}, ErrOperationMismatch
 		}
 		if existing.Status().Terminal() {

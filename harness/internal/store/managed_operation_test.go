@@ -188,21 +188,24 @@ func TestReserveManagedOperationTerminalReplayPrecedesContextAndActivation(t *te
 	}
 
 	replaySpec := spec
-	replaySpec.HasClaimContext = false
-	replaySpec.ClaimContextHash = model.Digest{}
 	replaySpec.At = spec.At.Add(10 * time.Minute)
 	replaySpec.LeaseUntil = replaySpec.At.Add(time.Minute)
 	replayed, err := fixture.store.ReserveManagedOperation(context.Background(), replaySpec)
 	if err != nil || !replayed.Replayed || replayed.Acquired || replayed.HasHandling ||
 		replayed.Operation.Status() != model.OperationRejected ||
 		replayed.Operation.AgentRunID() != rejected.AgentRunID() {
-		t.Fatalf("terminal replay without live context = (%#v, %v)", replayed, err)
+		t.Fatalf("terminal replay with stale exact context = (%#v, %v)", replayed, err)
 	}
 
 	mismatch := replaySpec
 	mismatch.RequestDigest = model.Sum([]byte("terminal-request-changed"))
 	if _, err := fixture.store.ReserveManagedOperation(context.Background(), mismatch); !errors.Is(err, ErrOperationMismatch) {
 		t.Fatalf("terminal digest mismatch error = %v", err)
+	}
+	missingContext := replaySpec
+	missingContext.ClaimContextHash, missingContext.HasClaimContext = model.Digest{}, false
+	if _, err := fixture.store.ReserveManagedOperation(context.Background(), missingContext); !errors.Is(err, ErrOperationMismatch) {
+		t.Fatalf("terminal context presence mismatch error = %v", err)
 	}
 }
 

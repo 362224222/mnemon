@@ -42,15 +42,16 @@ func (random *countingServiceRandom) Read(_ []byte) (int, error) {
 }
 
 type fakeControlStore struct {
-	probe    func(context.Context, store.AgentClaimProbeSpec) (store.AgentClaimStatus, error)
-	claim    func(context.Context, store.AgentClaimSpec) (store.AgentClaimResult, error)
-	peek     func(context.Context, store.AgentAttachmentSpec) error
-	consume  func(context.Context, store.AgentAttachmentSpec) (store.AgentClaimResult, error)
-	plan     func(context.Context, store.AgentCurrentReadSpec) (store.AgentCurrentReadPlan, error)
-	current  func(context.Context, store.AgentCurrentReadSpec) (store.AgentCurrentReadResult, error)
-	initiate func(context.Context, model.Profile, time.Time) (store.AgentInitiationContext, error)
-	reserve  func(context.Context, store.ManagedOperationSpec) (store.ManagedOperationReservation, error)
-	resolve  func(context.Context, store.ManagedResolutionSpec) (store.ManagedResolutionResult, error)
+	probe     func(context.Context, store.AgentClaimProbeSpec) (store.AgentClaimStatus, error)
+	claim     func(context.Context, store.AgentClaimSpec) (store.AgentClaimResult, error)
+	peek      func(context.Context, store.AgentAttachmentSpec) error
+	consume   func(context.Context, store.AgentAttachmentSpec) (store.AgentClaimResult, error)
+	plan      func(context.Context, store.AgentCurrentReadSpec) (store.AgentCurrentReadPlan, error)
+	current   func(context.Context, store.AgentCurrentReadSpec) (store.AgentCurrentReadResult, error)
+	initiate  func(context.Context, model.Profile, time.Time) (store.AgentInitiationContext, error)
+	operation func(context.Context, store.ManagedOperationProbeSpec) (store.ManagedOperationProbe, error)
+	reserve   func(context.Context, store.ManagedOperationSpec) (store.ManagedOperationReservation, error)
+	resolve   func(context.Context, store.ManagedResolutionSpec) (store.ManagedResolutionResult, error)
 }
 
 func (fake *fakeControlStore) PeekAgentRunAttachment(ctx context.Context,
@@ -123,6 +124,15 @@ func (fake *fakeControlStore) ReserveManagedOperation(ctx context.Context,
 		return store.ManagedOperationReservation{}, errors.New("unexpected ReserveManagedOperation")
 	}
 	return fake.reserve(ctx, spec)
+}
+
+func (fake *fakeControlStore) ProbeManagedOperation(ctx context.Context,
+	spec store.ManagedOperationProbeSpec,
+) (store.ManagedOperationProbe, error) {
+	if fake.operation == nil {
+		return store.ManagedOperationProbe{}, nil
+	}
+	return fake.operation(ctx, spec)
 }
 
 func (fake *fakeControlStore) CommitManagedResolution(ctx context.Context,
@@ -250,10 +260,10 @@ func TestServiceActivationGateBlocksAllAgentRoutesBeforeSideEffects(t *testing.T
 	_, apiErr = service.AgentCurrent(context.Background(), metadata)
 	assertGateError("AgentCurrent", apiErr)
 	_, apiErr = service.TeamworkAction(context.Background(), metadata,
-		TeamworkActionRequest{Action: "not-an-action"})
+		TeamworkActionRequest{Action: "accept"})
 	assertGateError("TeamworkAction", apiErr)
 	_, apiErr = service.AgentResolve(context.Background(), metadata,
-		AgentResolveRequest{Decision: "not-a-decision"})
+		AgentResolveRequest{Decision: "retry"})
 	assertGateError("AgentResolve", apiErr)
 	if gateCalls != 4 || storeCalls != 0 || executorCalls != 0 || clock.calls != 0 || random.calls != 0 {
 		t.Fatalf("blocked calls: gate=%d Store=%d executor=%d clock=%d random=%d",
@@ -536,9 +546,9 @@ func TestServiceTeamworkActionReservesServerOwnedOperation(t *testing.T) {
 	if apiErr != nil || response.OperationID != wantResponse.OperationID {
 		t.Fatalf("TeamworkAction() = (%#v, %v)", response, apiErr)
 	}
-	raw, _ := model.CanonicalMarshal(request)
+	wantRequestDigest, _ := executed.Action.requestDigest(model.Digest{}, false)
 	if reserved.Profile.ID() != profile.ID() || reserved.Kind != model.OperationTeamworkOffer ||
-		reserved.ClientKeyHash != operationKey || reserved.RequestDigest != model.Sum(raw) ||
+		reserved.ClientKeyHash != operationKey || reserved.RequestDigest != wantRequestDigest ||
 		reserved.HasClaimContext || !reserved.At.Equal(at) || !reserved.LeaseUntil.Equal(at.Add(time.Minute)) {
 		t.Fatalf("reservation = %#v", reserved)
 	}
@@ -617,8 +627,8 @@ func TestServiceResolveBindsDigestAndValidatesDurableReceipt(t *testing.T) {
 	if apiErr != nil {
 		t.Fatal(apiErr)
 	}
-	wantDigest, _ := store.ManagedResolutionRequestDigest(contextHash,
-		model.OperationResolveRetry, "try after correction")
+	wantDigest, _ := store.ManagedResolutionRequestDigest(testActionHandlers(t).AssetRevision(),
+		contextHash, model.OperationResolveRetry, "try after correction")
 	if reserved.Kind != model.OperationResolveRetry || reserved.RequestDigest != wantDigest ||
 		!reserved.HasClaimContext || reserved.ClaimContextHash != contextHash {
 		t.Fatalf("resolution reservation = %#v", reserved)

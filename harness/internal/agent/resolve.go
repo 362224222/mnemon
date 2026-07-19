@@ -50,3 +50,8 @@ func ValidateResolve(input ResolveInput) (ValidatedResolve, *ControlError) {
 	}
 	return ValidatedResolve{Decision: input.Decision, Content: strings.Clone(input.Content), Kind: kind}, nil
 }
+
+func validResolutionOperationKind(kind model.OperationKind) bool {
+	return kind == model.OperationResolveNoAction || kind == model.OperationResolveRetry ||
+		kind == model.OperationResolveReject
+}

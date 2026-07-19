@@ -4,7 +4,6 @@ import (
 	"context"
 	cryptorand "crypto/rand"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -54,6 +53,7 @@ type ControlStore interface {
 	PlanAgentCurrentRead(context.Context, store.AgentCurrentReadSpec) (store.AgentCurrentReadPlan, error)
 	FinalizeAgentCurrentRead(context.Context, store.AgentCurrentReadSpec) (store.AgentCurrentReadResult, error)
 	ReadAgentInitiationContext(context.Context, model.Profile, time.Time) (store.AgentInitiationContext, error)
+	ProbeManagedOperation(context.Context, store.ManagedOperationProbeSpec) (store.ManagedOperationProbe, error)
 	ReserveManagedOperation(context.Context, store.ManagedOperationSpec) (store.ManagedOperationReservation, error)
 	CommitManagedResolution(context.Context, store.ManagedResolutionSpec) (store.ManagedResolutionResult, error)
 }
@@ -248,10 +248,7 @@ func (s *Service) AgentCurrent(ctx context.Context,
 func (s *Service) TeamworkAction(ctx context.Context, metadata ControlMetadata,
 	request TeamworkActionRequest,
 ) (OperationResponse, *ControlError) {
-	if apiErr := s.requireMetadata(metadata); apiErr != nil {
-		return OperationResponse{}, apiErr
-	}
-	if apiErr := s.checkActivation(ctx, metadata.Profile); apiErr != nil {
+	if apiErr := s.requireAuthenticatedMetadata(metadata); apiErr != nil {
 		return OperationResponse{}, apiErr
 	}
 	if apiErr := requireOperationCapabilities(metadata, false); apiErr != nil {
@@ -264,6 +261,26 @@ func (s *Service) TeamworkAction(ctx context.Context, metadata ControlMetadata,
 	if apiErr != nil {
 		return OperationResponse{}, apiErr
 	}
+	requestDigest, err := validated.requestDigest(metadata.ClaimContextHash,
+		metadata.HasClaimContext)
+	if err != nil {
+		return OperationResponse{}, NewControlError(CodeInternal,
+			"Teamwork request authority cannot be canonicalized")
+	}
+	terminal, found, apiErr := s.probeManagedOperation(ctx, metadata,
+		validated.handler.OperationKind(), requestDigest)
+	if apiErr != nil {
+		return OperationResponse{}, apiErr
+	}
+	if found {
+		return s.replayTeamworkOperation(terminal)
+	}
+	if apiErr := s.requireMetadata(metadata); apiErr != nil {
+		return OperationResponse{}, apiErr
+	}
+	if apiErr := s.checkActivation(ctx, metadata.Profile); apiErr != nil {
+		return OperationResponse{}, apiErr
+	}
 	if s.executor == nil {
 		return OperationResponse{}, NewControlError(CodeInternal,
 			"Teamwork action executor is unavailable")
@@ -272,23 +289,21 @@ func (s *Service) TeamworkAction(ctx context.Context, metadata ControlMetadata,
 	if apiErr != nil {
 		return OperationResponse{}, apiErr
 	}
-	raw, err := model.CanonicalMarshal(request)
-	if err != nil {
-		return OperationResponse{}, NewControlError(CodeInvalidArgument,
-			"Teamwork request cannot be canonicalized")
-	}
 	owner, apiErr := s.operationOwner()
 	if apiErr != nil {
 		return OperationResponse{}, apiErr
 	}
 	reservation, err := s.store.ReserveManagedOperation(ctx, store.ManagedOperationSpec{
 		Profile: metadata.Profile, ClientKeyHash: metadata.OperationKeyHash,
-		RequestDigest: model.Sum(raw), Kind: validated.handler.OperationKind(),
+		RequestDigest: requestDigest, Kind: validated.handler.OperationKind(),
 		LeaseOwner: owner, At: at, LeaseUntil: at.Add(s.operationLease),
 		ClaimContextHash: metadata.ClaimContextHash, HasClaimContext: metadata.HasClaimContext,
 	})
 	if err != nil {
 		return OperationResponse{}, mapControlError(err)
+	}
+	if reservation.Operation.Status().Terminal() {
+		return s.replayTeamworkOperation(reservation.Operation)
 	}
 	response, executionErr := s.executor.ExecuteTeamwork(ctx, TeamworkExecutionSpec{
 		Request: request, Action: validated, Reservation: reservation, At: at,
@@ -302,10 +317,7 @@ func (s *Service) TeamworkAction(ctx context.Context, metadata ControlMetadata,
 func (s *Service) AgentResolve(ctx context.Context, metadata ControlMetadata,
 	request AgentResolveRequest,
 ) (OperationResponse, *ControlError) {
-	if apiErr := s.requireMetadata(metadata); apiErr != nil {
-		return OperationResponse{}, apiErr
-	}
-	if apiErr := s.checkActivation(ctx, metadata.Profile); apiErr != nil {
+	if apiErr := s.requireAuthenticatedMetadata(metadata); apiErr != nil {
 		return OperationResponse{}, apiErr
 	}
 	if apiErr := requireOperationCapabilities(metadata, true); apiErr != nil {
@@ -316,14 +328,27 @@ func (s *Service) AgentResolve(ctx context.Context, metadata ControlMetadata,
 	if apiErr != nil {
 		return OperationResponse{}, apiErr
 	}
-	at, apiErr := s.trustedNow()
+	requestDigest, err := store.ManagedResolutionRequestDigest(s.actions.AssetRevision(),
+		metadata.ClaimContextHash, validated.Kind, validated.Content)
+	if err != nil {
+		return OperationResponse{}, mapControlError(err)
+	}
+	terminal, found, apiErr := s.probeManagedOperation(ctx, metadata, validated.Kind, requestDigest)
 	if apiErr != nil {
 		return OperationResponse{}, apiErr
 	}
-	requestDigest, err := store.ManagedResolutionRequestDigest(metadata.ClaimContextHash,
-		validated.Kind, validated.Content)
-	if err != nil {
-		return OperationResponse{}, mapControlError(err)
+	if found {
+		return s.replayResolutionOperation(terminal)
+	}
+	if apiErr := s.requireMetadata(metadata); apiErr != nil {
+		return OperationResponse{}, apiErr
+	}
+	if apiErr := s.checkActivation(ctx, metadata.Profile); apiErr != nil {
+		return OperationResponse{}, apiErr
+	}
+	at, apiErr := s.trustedNow()
+	if apiErr != nil {
+		return OperationResponse{}, apiErr
 	}
 	owner, apiErr := s.operationOwner()
 	if apiErr != nil {
@@ -337,6 +362,9 @@ func (s *Service) AgentResolve(ctx context.Context, metadata ControlMetadata,
 	})
 	if err != nil {
 		return OperationResponse{}, mapControlError(err)
+	}
+	if reservation.Operation.Status().Terminal() {
+		return s.replayResolutionOperation(reservation.Operation)
 	}
 	resolved, err := s.store.CommitManagedResolution(ctx, store.ManagedResolutionSpec{
 		Reservation: reservation, Content: validated.Content, At: at,
@@ -364,12 +392,19 @@ func (s *Service) cleanupCurrentViews(runID model.RunID) {
 }
 
 func (s *Service) requireMetadata(metadata ControlMetadata) *ControlError {
-	if s == nil || s.store == nil || metadata.Profile.ID() != model.TeamworkProfileID() {
-		return NewControlError(CodeAuthenticationFailed, "profile authentication failed")
+	if apiErr := s.requireAuthenticatedMetadata(metadata); apiErr != nil {
+		return apiErr
 	}
 	if !metadata.Profile.Enabled() || metadata.Profile.ActiveAssetRevision() != s.assetRevision {
 		return NewControlError(CodeAssetRevisionMismatch,
 			"managed Profile activation differs from the active asset revision")
+	}
+	return nil
+}
+
+func (s *Service) requireAuthenticatedMetadata(metadata ControlMetadata) *ControlError {
+	if s == nil || s.store == nil || metadata.Profile.ID() != model.TeamworkProfileID() {
+		return NewControlError(CodeAuthenticationFailed, "profile authentication failed")
 	}
 	return nil
 }
@@ -379,19 +414,6 @@ func (s *Service) checkActivation(ctx context.Context, profile model.Profile) *C
 		return nil
 	}
 	return s.activationGate.Check(ctx, profile)
-}
-
-func requireOperationCapabilities(metadata ControlMetadata,
-	contextRequired bool,
-) *ControlError {
-	if !metadata.HasOperationKey || metadata.OperationKeyHash.IsZero() {
-		return NewControlError(CodeInvalidArgument, "operation key is required")
-	}
-	if (contextRequired && !metadata.HasClaimContext) ||
-		(metadata.HasClaimContext && metadata.ClaimContextHash.IsZero()) {
-		return NewControlError(CodeContextRequired, "managed context is required")
-	}
-	return nil
 }
 
 func (s *Service) trustedNow() (time.Time, *ControlError) {
@@ -433,31 +455,6 @@ func drawManagedSecret(random io.Reader) ([]byte, error) {
 		return nil, err
 	}
 	return value, nil
-}
-
-func decodeResolutionResponse(receipt model.JSON, operation model.Operation) (OperationResponse, error) {
-	var response OperationResponse
-	if receipt.IsZero() || operation.ID().IsZero() || operation.Status() != model.OperationCommitted {
-		return response, errors.New("zero resolution receipt")
-	}
-	if err := json.Unmarshal(receipt.Bytes(), &response); err != nil {
-		return OperationResponse{}, err
-	}
-	if response.SchemaVersion != model.SchemaVersion || response.Status != "resolved" ||
-		response.OperationID != operation.ID().String() || response.Action != string(operation.Kind()) ||
-		response.Results == nil || len(response.Results) != 0 || response.Handling == nil ||
-		response.Receipt == "" {
-		return OperationResponse{}, errors.New("invalid resolution receipt shape")
-	}
-	wantHandling := map[model.OperationKind]string{
-		model.OperationResolveNoAction: "completed",
-		model.OperationResolveRetry:    "requeued",
-		model.OperationResolveReject:   "rejected",
-	}[operation.Kind()]
-	if wantHandling == "" || response.Handling.Status != wantHandling {
-		return OperationResponse{}, errors.New("invalid resolution receipt lifecycle")
-	}
-	return response, nil
 }
 
 func mapControlError(err error) *ControlError {

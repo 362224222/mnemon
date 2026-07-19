@@ -1019,10 +1019,7 @@ func newManagedWakeRuntimeFixture(t *testing.T, suffix string, recordWake bool,
 	}
 	readAt := claimAt.Add(2 * time.Second)
 	installManagedResolutionCurrent(t, fixture, consumed, token, readAt)
-	requestDigest, err := ManagedResolutionRequestDigest(token, kind, content)
-	if err != nil {
-		t.Fatal(err)
-	}
+	requestDigest := mustManagedResolutionRequestDigest(t, fixture.profile, token, kind, content)
 	reserveAt := claimAt.Add(3 * time.Second)
 	reserveSpec := ManagedOperationSpec{Profile: fixture.profile,
 		ClientKeyHash: model.Sum([]byte("key-" + suffix)), RequestDigest: requestDigest,

@@ -91,7 +91,7 @@ func TestCommitManagedResolutionTerminalReplaySurvivesRestart(t *testing.T) {
 	fixture.store = restarted
 
 	replaySpec := spec
-	replaySpec.At = spec.At.Add(10 * time.Minute)
+	replaySpec.At = time.Time{}
 	replay, err := restarted.CommitManagedResolution(context.Background(), replaySpec)
 	if err != nil || !replay.Replayed || replay.Receipt.String() != first.Receipt.String() ||
 		replay.Operation.AgentRunID() != first.Operation.AgentRunID() {
@@ -350,10 +350,7 @@ func newManagedResolutionFixture(t *testing.T, suffix string, kind model.Operati
 	current := installManagedResolutionCurrent(t, fixture, claim,
 		model.Sum([]byte(token)), readAt)
 	contextHash := model.Sum([]byte(token))
-	requestDigest, err := ManagedResolutionRequestDigest(contextHash, kind, content)
-	if err != nil {
-		t.Fatal(err)
-	}
+	requestDigest := mustManagedResolutionRequestDigest(t, fixture.profile, contextHash, kind, content)
 	reserveAt := readAt.Add(time.Second)
 	reservation, err := fixture.store.ReserveManagedOperation(context.Background(), ManagedOperationSpec{
 		Profile: fixture.profile, ClientKeyHash: model.Sum([]byte("key-resolution-" + suffix)),

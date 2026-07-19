@@ -38,8 +38,8 @@ func executorOfferCases() []executorOfferCase {
 func runExecutorOfferCase(t *testing.T, test executorOfferCase) {
 	t.Helper()
 	fixture := newExecutorFixture(t, test.count)
-	reservation := executorReservation(t, fixture, model.OperationTeamworkOffer, model.ReviewWork{}, false)
 	action := executorAction(t, "offer", false, "architecture goal", "30m", test.selector, nil)
+	reservation := executorReservation(t, fixture, action, model.ReviewWork{}, false)
 	response, controlErr := fixture.executor.ExecuteTeamwork(context.Background(), TeamworkExecutionSpec{
 		Request: TeamworkActionRequest{Action: "offer", Channel: "alpha", To: test.selector,
 			Deadline: "30m", Content: "architecture goal"},

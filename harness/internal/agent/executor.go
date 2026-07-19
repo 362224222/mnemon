@@ -191,42 +191,39 @@ func newTeamworkActionExecutor(backend teamworkExecutionBackend, selector offerS
 func (e *TeamworkActionExecutor) ExecuteTeamwork(ctx context.Context,
 	spec TeamworkExecutionSpec,
 ) (OperationResponse, *ControlError) {
-	if !e.available() || ctx == nil {
+	if e == nil || ctx == nil || e.actions.AssetRevision().IsZero() {
 		return OperationResponse{}, NewControlError(CodeInternal,
 			"Teamwork action executor is unavailable")
 	}
 	operation := spec.Reservation.Operation
+	if operation.ID().IsZero() || spec.Action.Name == "" {
+		return OperationResponse{}, NewControlError(CodeInvalidArgument,
+			"Teamwork execution input is incomplete")
+	}
+	if response, apiErr, terminal := e.replayTerminalTeamworkOperation(spec.Action, operation); terminal {
+		return response, apiErr
+	}
+	if operation.Status() != model.OperationStarted {
+		return OperationResponse{}, NewControlError(CodeInternal,
+			"reserved operation has an invalid state")
+	}
+	if !e.available() {
+		return OperationResponse{}, NewControlError(CodeInternal,
+			"Teamwork action executor is unavailable")
+	}
 	acceptedAt, err := canonicalExecutionTime(spec.At)
-	if operation.ID().IsZero() || spec.Action.Name == "" || err != nil {
+	if err != nil {
 		return OperationResponse{}, NewControlError(CodeInvalidArgument,
 			"Teamwork execution input is incomplete")
 	}
 	spec.At = acceptedAt
-	_, contextBound := operation.ContextHash()
-	if operation.ProfileID() != e.profile.ID() || !spec.Action.matches(e.actions, operation.Kind()) ||
-		spec.Action.HasContext != contextBound {
+	if !e.matchesTeamworkOperation(spec.Action, operation) {
 		return e.reject(ctx, operation, spec.At, NewControlError(CodeOperationMismatch,
 			"reserved operation differs from Teamwork action"))
 	}
-
-	switch operation.Status() {
-	case model.OperationCommitted:
-		response, err := decodeCommittedTeamworkOperation(e.actions, operation, true)
-		if err != nil {
-			return OperationResponse{}, NewControlError(CodeInternal,
-				"committed Teamwork receipt is invalid")
-		}
-		return response, nil
-	case model.OperationRejected:
-		return OperationResponse{}, decodeRejectedTeamworkOperation(e.actions, operation, true)
-	case model.OperationStarted:
-		if !spec.Reservation.Acquired {
-			return OperationResponse{}, operationAPIError(CodeOperationPending,
-				"operation lease is not acquired", operation.ID(), false)
-		}
-	default:
-		return OperationResponse{}, NewControlError(CodeInternal,
-			"reserved operation has an invalid state")
+	if !spec.Reservation.Acquired {
+		return OperationResponse{}, operationAPIError(CodeOperationPending,
+			"operation lease is not acquired", operation.ID(), false)
 	}
 
 	current, hasCurrent, apiErr := executionCurrent(spec.Reservation, spec.At)
@@ -584,8 +581,7 @@ func (e *TeamworkActionExecutor) resolveDeadline(ctx context.Context,
 		return OperationResponse{}, operationAPIError(apiErr.Code, apiErr.Message,
 			authority.operation.ID, false)
 	}
-	apiErr := decodeTeamworkRejectionReceipt(e.actions, result.Receipt, authority.operation.ID,
-		authority.operation.Kind, result.Replayed)
+	apiErr := decodeManagedRejectionReceipt(result.Receipt, authority.operation.ID, result.Replayed)
 	if apiErr.Code != CodeWorkExpired {
 		return OperationResponse{}, operationAPIError(CodeInternal,
 			"deadline rejection receipt is invalid", authority.operation.ID, result.Replayed)
@@ -681,57 +677,6 @@ func requireExecutionJSONEOF(decoder *json.Decoder) error {
 		return errors.New("unexpected trailing Teamwork receipt value")
 	}
 	return nil
-}
-
-type teamworkRejectionWire struct {
-	SchemaVersion int              `json:"schema_version"`
-	Status        string           `json:"status"`
-	Code          ControlErrorCode `json:"code"`
-	Retryable     bool             `json:"retryable"`
-	Replayed      bool             `json:"replayed"`
-	Message       string           `json:"message"`
-	OperationID   string           `json:"operation_id"`
-}
-
-func buildTeamworkRejection(operation model.Operation, apiErr *ControlError) (model.JSON, error) {
-	if operation.ID().IsZero() || apiErr == nil || !apiErr.Code.Valid() || apiErr.Message == "" {
-		return model.JSON{}, errors.New("incomplete Teamwork rejection")
-	}
-	return model.JSONFrom(teamworkRejectionWire{SchemaVersion: model.SchemaVersion, Status: "error",
-		Code: apiErr.Code, Retryable: apiErr.Code.Retryable(), Replayed: false,
-		Message: apiErr.Message, OperationID: operation.ID().String()})
-}
-
-func decodeRejectedTeamworkOperation(handlers ActionHandlers, operation model.Operation,
-	replayed bool,
-) *ControlError {
-	result, ok := operation.Result()
-	if operation.Status() != model.OperationRejected || !ok {
-		return operationAPIError(CodeInternal, "rejected Teamwork receipt is invalid",
-			operation.ID(), replayed)
-	}
-	return decodeTeamworkRejectionReceipt(handlers, result, operation.ID(), operation.Kind(), replayed)
-}
-
-func decodeTeamworkRejectionReceipt(handlers ActionHandlers, result model.JSON, operationID model.OperationID,
-	kind model.OperationKind, replayed bool,
-) *ControlError {
-	handler, supported := handlers.Operation(kind)
-	if result.IsZero() || operationID.IsZero() || !supported || !handler.EventType().Valid() {
-		return operationAPIError(CodeInternal, "rejected Teamwork receipt is invalid",
-			operationID, replayed)
-	}
-	var wire teamworkRejectionWire
-	decoder := json.NewDecoder(strings.NewReader(result.String()))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&wire); err != nil || wire.SchemaVersion != model.SchemaVersion ||
-		requireExecutionJSONEOF(decoder) != nil || wire.Status != "error" || wire.Replayed ||
-		wire.OperationID != operationID.String() || !wire.Code.Valid() || wire.Message == "" ||
-		wire.Retryable != wire.Code.Retryable() {
-		return operationAPIError(CodeInternal, "rejected Teamwork receipt is invalid",
-			operationID, replayed)
-	}
-	return operationAPIError(wire.Code, wire.Message, operationID, replayed)
 }
 
 func decodeCommittedTeamworkOperation(handlers ActionHandlers, operation model.Operation,

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"errors"
 	"sort"
 	"strings"
 	"time"
@@ -31,6 +32,43 @@ type ValidatedAction struct {
 	ArtifactPaths []string
 	Candidate     event.AgentCandidate
 	handler       ActionHandler
+}
+
+type actionRequestDigestWire struct {
+	SchemaVersion  int                       `json:"schema_version"`
+	Domain         string                    `json:"domain"`
+	AssetRevision  model.Digest              `json:"asset_revision"`
+	PolicyDigest   model.Digest              `json:"policy_digest"`
+	Kind           model.OperationKind       `json:"kind"`
+	Action         string                    `json:"action"`
+	HasContext     bool                      `json:"has_context"`
+	ContextHash    *model.Digest             `json:"context_hash"`
+	ChannelAlias   string                    `json:"channel_alias"`
+	Participant    string                    `json:"participant"`
+	DeadlineNanos  int64                     `json:"deadline_nanos"`
+	Content        string                    `json:"content"`
+	ContentPolicy  actionContentDigestWire   `json:"content_policy"`
+	ArtifactPolicy actionArtifactDigestWire  `json:"artifact_policy"`
+	Artifacts      actionArtifactsDigestWire `json:"artifacts"`
+}
+
+type actionContentDigestWire struct {
+	Required bool   `json:"required"`
+	MaxBytes uint32 `json:"max_bytes"`
+	Source   string `json:"source"`
+}
+
+type actionArtifactDigestWire struct {
+	Allowed       bool   `json:"allowed"`
+	MaxEntries    uint32 `json:"max_entries"`
+	MaxPathBytes  uint32 `json:"max_path_bytes"`
+	MaxRoots      uint8  `json:"max_roots"`
+	MaxTotalBytes uint64 `json:"max_total_bytes"`
+}
+
+type actionArtifactsDigestWire struct {
+	Kind  string   `json:"kind"`
+	Paths []string `json:"paths"`
 }
 
 func (handlers ActionHandlers) Validate(input ActionInput) (ValidatedAction, *ControlError) {
@@ -204,6 +242,48 @@ func (action ValidatedAction) matches(handlers ActionHandlers,
 		action.handler.assetRevision == handlers.assetRevision &&
 		action.handler.Name() == handler.Name() && action.handler.OperationKind() == kind &&
 		action.handler.EventType() == handler.EventType()
+}
+
+func (action ValidatedAction) requestDigest(contextHash model.Digest,
+	hasContext bool,
+) (model.Digest, error) {
+	if !action.handler.ready || action.Name != action.handler.Name() || action.Candidate == nil ||
+		action.HasContext != hasContext || hasContext == contextHash.IsZero() {
+		return model.Digest{}, errors.New("Teamwork Action digest authority is incomplete")
+	}
+	descriptor := action.handler.Descriptor()
+	contentPolicy := descriptor.Content()
+	artifactPolicy := descriptor.Artifacts()
+	participant := action.Participant
+	if _, hasSelectors := descriptor.Selectors(); hasSelectors && participant == "" {
+		participant = AgentParticipantAuto
+	}
+	paths := append([]string{}, action.ArtifactPaths...)
+	sort.Strings(paths)
+	var contextValue *model.Digest
+	if hasContext {
+		value := contextHash
+		contextValue = &value
+	}
+	request, err := model.JSONFrom(actionRequestDigestWire{
+		SchemaVersion: 1, Domain: "mnemon/r5/teamwork-action-request/v1",
+		AssetRevision: action.handler.assetRevision,
+		PolicyDigest:  model.Sum(descriptor.SourceBytes()),
+		Kind:          action.handler.OperationKind(), Action: action.Name,
+		HasContext: hasContext, ContextHash: contextValue,
+		ChannelAlias: action.ChannelAlias, Participant: participant,
+		DeadlineNanos: action.Deadline.Nanoseconds(), Content: action.Content,
+		ContentPolicy: actionContentDigestWire{Required: contentPolicy.Required(),
+			MaxBytes: contentPolicy.MaxBytes(), Source: string(contentPolicy.Source())},
+		ArtifactPolicy: actionArtifactDigestWire{Allowed: artifactPolicy.Allowed(),
+			MaxEntries: artifactPolicy.MaxEntries(), MaxPathBytes: artifactPolicy.MaxPathBytes(),
+			MaxRoots: artifactPolicy.MaxRoots(), MaxTotalBytes: artifactPolicy.MaxTotalBytes()},
+		Artifacts: actionArtifactsDigestWire{Kind: "workspace_relative_path", Paths: paths},
+	})
+	if err != nil {
+		return model.Digest{}, err
+	}
+	return model.Sum(request.Bytes()), nil
 }
 
 func boundedCandidateMessage(err error) string {

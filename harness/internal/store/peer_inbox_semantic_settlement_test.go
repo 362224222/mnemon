@@ -185,10 +185,8 @@ func TestPeerInboxSemanticHandlingSettlementReplaysAndPreservesPriorTerminal(t *
 		readAt := fixture.source.AcceptedAt().Add(500 * time.Millisecond)
 		installPeerInboxSemanticSettlementCurrent(t, fixture, claim, token, readAt)
 		content := "the source was already handled before the remote terminal arrived"
-		request, err := ManagedResolutionRequestDigest(token, model.OperationResolveNoAction, content)
-		if err != nil {
-			t.Fatal(err)
-		}
+		request := mustManagedResolutionRequestDigest(t, fixture.profile, token,
+			model.OperationResolveNoAction, content)
 		reserveAt := readAt.Add(250 * time.Millisecond)
 		reservation, err := fixture.store.ReserveManagedOperation(context.Background(), ManagedOperationSpec{
 			Profile: fixture.profile, ClientKeyHash: model.Sum([]byte("prior-no-action-key")),

@@ -154,7 +154,7 @@
       "identity": "cognitive_complexity:harness/internal/agent/executor.go::(*TeamworkActionExecutor).ExecuteTeamwork",
       "path": "harness/internal/agent/executor.go",
       "symbol": "(*TeamworkActionExecutor).ExecuteTeamwork",
-      "ceiling": 33
+      "ceiling": 29
     },
     {
       "rule": "cognitive_complexity",
@@ -1533,14 +1533,14 @@
       "identity": "cognitive_complexity:harness/internal/store/managed_operation.go::(*Store).ReserveManagedOperation",
       "path": "harness/internal/store/managed_operation.go",
       "symbol": "(*Store).ReserveManagedOperation",
-      "ceiling": 41
+      "ceiling": 39
     },
     {
       "rule": "cognitive_complexity",
       "identity": "cognitive_complexity:harness/internal/store/managed_resolution.go::(*Store).CommitManagedResolution",
       "path": "harness/internal/store/managed_resolution.go",
       "symbol": "(*Store).CommitManagedResolution",
-      "ceiling": 48
+      "ceiling": 43
     },
     {
       "rule": "cognitive_complexity",
@@ -2086,7 +2086,7 @@
       "identity": "cyclomatic_complexity:harness/internal/agent/executor.go::(*TeamworkActionExecutor).ExecuteTeamwork",
       "path": "harness/internal/agent/executor.go",
       "symbol": "(*TeamworkActionExecutor).ExecuteTeamwork",
-      "ceiling": 29
+      "ceiling": 26
     },
     {
       "rule": "cyclomatic_complexity",
@@ -3878,7 +3878,7 @@
       "identity": "cyclomatic_complexity:harness/internal/store/managed_operation.go::(*Store).ReserveManagedOperation",
       "path": "harness/internal/store/managed_operation.go",
       "symbol": "(*Store).ReserveManagedOperation",
-      "ceiling": 31
+      "ceiling": 29
     },
     {
       "rule": "cyclomatic_complexity",
@@ -3899,7 +3899,7 @@
       "identity": "cyclomatic_complexity:harness/internal/store/managed_resolution.go::(*Store).CommitManagedResolution",
       "path": "harness/internal/store/managed_resolution.go",
       "symbol": "(*Store).CommitManagedResolution",
-      "ceiling": 45
+      "ceiling": 40
     },
     {
       "rule": "cyclomatic_complexity",
@@ -4995,13 +4995,6 @@
     },
     {
       "rule": "function_logical_lines",
-      "identity": "function_logical_lines:harness/internal/store/managed_resolution.go::(*Store).CommitManagedResolution",
-      "path": "harness/internal/store/managed_resolution.go",
-      "symbol": "(*Store).CommitManagedResolution",
-      "ceiling": 88
-    },
-    {
-      "rule": "function_logical_lines",
       "identity": "function_logical_lines:harness/internal/store/peer_inbox_artifact.go::(*Store).MarkPeerInboxArtifactReady",
       "path": "harness/internal/store/peer_inbox_artifact.go",
       "symbol": "(*Store).MarkPeerInboxArtifactReady",
@@ -5110,7 +5103,7 @@
       "identity": "function_logical_lines:harness/internal/store/peer_inbox_semantic_settlement_test.go::TestPeerInboxSemanticHandlingSettlementReplaysAndPreservesPriorTerminal",
       "path": "harness/internal/store/peer_inbox_semantic_settlement_test.go",
       "symbol": "TestPeerInboxSemanticHandlingSettlementReplaysAndPreservesPriorTerminal",
-      "ceiling": 117
+      "ceiling": 116
     },
     {
       "rule": "function_logical_lines",
@@ -5251,13 +5244,6 @@
       "path": "harness/internal/agent/codex_adapter_test.go",
       "symbol": "TestCodexWakeAdapterValidatesClosedConstructionAndPerRunAuthority",
       "ceiling": 56
-    },
-    {
-      "rule": "function_statements",
-      "identity": "function_statements:harness/internal/agent/executor.go::(*TeamworkActionExecutor).ExecuteTeamwork",
-      "path": "harness/internal/agent/executor.go",
-      "symbol": "(*TeamworkActionExecutor).ExecuteTeamwork",
-      "ceiling": 52
     },
     {
       "rule": "function_statements",
@@ -6405,7 +6391,7 @@
       "identity": "function_statements:harness/internal/store/managed_resolution.go::(*Store).CommitManagedResolution",
       "path": "harness/internal/store/managed_resolution.go",
       "symbol": "(*Store).CommitManagedResolution",
-      "ceiling": 90
+      "ceiling": 83
     },
     {
       "rule": "function_statements",
@@ -6560,13 +6546,6 @@
       "path": "harness/internal/store/peer_inbox_semantic_settlement_test.go",
       "symbol": "TestPeerInboxSemanticHandlingSettlementClosesPendingAndClaimedAuthority.$func-d517570f357e68cb15925473-685a96e954fd56fdb45b234d-cy27-co31-li62-st54-ne2-001",
       "ceiling": 54
-    },
-    {
-      "rule": "function_statements",
-      "identity": "function_statements:harness/internal/store/peer_inbox_semantic_settlement_test.go::TestPeerInboxSemanticHandlingSettlementReplaysAndPreservesPriorTerminal.$func-c5e4f38d45f567cb35f4c730-53e3cb073118de9d4ab5f717-cy14-co13-li62-st51-ne1-001",
-      "path": "harness/internal/store/peer_inbox_semantic_settlement_test.go",
-      "symbol": "TestPeerInboxSemanticHandlingSettlementReplaysAndPreservesPriorTerminal.$func-c5e4f38d45f567cb35f4c730-53e3cb073118de9d4ab5f717-cy14-co13-li62-st51-ne1-001",
-      "ceiling": 51
     },
     {
       "rule": "function_statements",
@@ -7135,7 +7114,7 @@
       "rule": "paired_test_file_lines",
       "identity": "paired_test_file_lines:harness/internal/store/agent_runtime_test.go",
       "path": "harness/internal/store/agent_runtime_test.go",
-      "ceiling": 1105
+      "ceiling": 1102
     },
     {
       "rule": "paired_test_file_lines",
@@ -7165,7 +7144,7 @@
       "rule": "paired_test_file_lines",
       "identity": "paired_test_file_lines:harness/internal/store/peer_inbox_semantic_settlement_test.go",
       "path": "harness/internal/store/peer_inbox_semantic_settlement_test.go",
-      "ceiling": 1087
+      "ceiling": 1085
     },
     {
       "rule": "paired_test_file_lines",
@@ -7201,7 +7180,7 @@
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/agent/executor.go",
       "path": "harness/internal/agent/executor.go",
-      "ceiling": 983
+      "ceiling": 928
     },
     {
       "rule": "production_file_lines",
@@ -7219,7 +7198,7 @@
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/agent/service.go",
       "path": "harness/internal/agent/service.go",
-      "ceiling": 499
+      "ceiling": 496
     },
     {
       "rule": "production_file_lines",
@@ -7543,7 +7522,7 @@
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/store/managed_resolution.go",
       "path": "harness/internal/store/managed_resolution.go",
-      "ceiling": 683
+      "ceiling": 648
     },
     {
       "rule": "production_file_lines",

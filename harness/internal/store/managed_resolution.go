@@ -36,29 +36,6 @@ type ManagedResolutionResult struct {
 	Replayed  bool
 }
 
-// ManagedResolutionRequestDigest is the closed semantic digest used both when
-// reserving and committing an Agent resolution. Including the server-resolved
-// context hash prevents content or context substitution behind one client key.
-func ManagedResolutionRequestDigest(contextHash model.Digest, kind model.OperationKind,
-	content string,
-) (model.Digest, error) {
-	if contextHash.IsZero() || !managedResolutionKind(kind) {
-		return model.Digest{}, fmt.Errorf("%w: context and closed resolution kind are required", ErrManagedResolutionInput)
-	}
-	if err := validateManagedResolutionContent(kind, content); err != nil {
-		return model.Digest{}, err
-	}
-	request, err := model.JSONFrom(struct {
-		Content     string              `json:"content"`
-		ContextHash model.Digest        `json:"context_hash"`
-		Kind        model.OperationKind `json:"kind"`
-	}{content, contextHash, kind})
-	if err != nil {
-		return model.Digest{}, fmt.Errorf("%w: canonical request: %v", ErrManagedResolutionInput, err)
-	}
-	return model.Sum(request.Bytes()), nil
-}
-
 // CommitManagedResolution atomically commits one explicit no-action, retry or
 // reject decision. A terminal operation returns its original receipt before
 // consulting the now-finished claim, which makes response-loss and restart
@@ -74,30 +51,18 @@ func (s *Store) CommitManagedResolution(ctx context.Context,
 	if supplied.ID().IsZero() || !hasContext || !managedResolutionKind(supplied.Kind()) {
 		return ManagedResolutionResult{}, fmt.Errorf("%w: context-bound resolution reservation is required", ErrManagedResolutionInput)
 	}
-	requestDigest, err := ManagedResolutionRequestDigest(contextHash, supplied.Kind(), spec.Content)
-	if err != nil {
+	if err := validateManagedResolutionContent(supplied.Kind(), spec.Content); err != nil {
 		return ManagedResolutionResult{}, err
 	}
-	if requestDigest != supplied.RequestDigest() {
-		return ManagedResolutionResult{}, ErrOperationMismatch
-	}
-	at, err := canonicalStoreTime(spec.At)
-	if err != nil || at.IsZero() {
-		return ManagedResolutionResult{}, fmt.Errorf("%w: invalid trusted time", ErrManagedResolutionInput)
-	}
-
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return ManagedResolutionResult{}, fmt.Errorf("commit managed resolution: begin: %w", err)
 	}
 	defer tx.Rollback()
 
-	operation, err := readOperationByID(ctx, tx, supplied.ID())
+	operation, profile, err := readManagedResolutionBinding(ctx, tx, supplied, contextHash, spec.Content)
 	if err != nil {
-		return ManagedResolutionResult{}, fmt.Errorf("commit managed resolution: operation: %w", err)
-	}
-	if !sameManagedResolutionOperation(operation, supplied) || operation.RequestDigest() != requestDigest {
-		return ManagedResolutionResult{}, ErrOperationMismatch
+		return ManagedResolutionResult{}, err
 	}
 	if operation.Status().Terminal() {
 		receipt, ok := operation.Result()
@@ -114,6 +79,10 @@ func (s *Store) CommitManagedResolution(ctx context.Context,
 			return ManagedResolutionResult{}, fmt.Errorf("commit managed resolution: replay read: %w", err)
 		}
 		return ManagedResolutionResult{Operation: operation, Receipt: receipt, Replayed: true}, nil
+	}
+	at, err := canonicalStoreTime(spec.At)
+	if err != nil || at.IsZero() {
+		return ManagedResolutionResult{}, fmt.Errorf("%w: invalid trusted time", ErrManagedResolutionInput)
 	}
 	if !spec.Reservation.Acquired || supplied.Status() != model.OperationStarted ||
 		operation.Status() != model.OperationStarted {
@@ -132,10 +101,6 @@ func (s *Store) CommitManagedResolution(ctx context.Context,
 		return ManagedResolutionResult{}, err
 	}
 
-	profile, err := readProfile(ctx, tx)
-	if err != nil || profile.ID() != operation.ProfileID() {
-		return ManagedResolutionResult{}, fmt.Errorf("%w: Profile is unavailable", ErrManagedResolutionInvariant)
-	}
 	if err := requireActiveManagedProfile(ctx, tx, profile, at); err != nil {
 		return ManagedResolutionResult{}, err
 	}

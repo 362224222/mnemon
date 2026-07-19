@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/assets"
+	"github.com/mnemon-dev/mnemon/harness/internal/model"
 )
 
 func TestActionHandlersEnforceParticipantSelectorPolicy(t *testing.T) {
@@ -111,5 +112,57 @@ func TestActionHandlersEnforceContentAndArtifactAssetBounds(t *testing.T) {
 	longPath := strings.Repeat("x", int(offer.Descriptor().Artifacts().MaxPathBytes())+1)
 	if _, apiErr := handlers.Validate(ActionInput{Action: "offer", Content: "x", ArtifactPaths: []string{longPath}}); apiErr == nil || apiErr.Code != CodeArtifactInvalid {
 		t.Fatalf("long Artifact path error = %#v", apiErr)
+	}
+}
+
+func TestValidatedActionRequestDigestBindsNormalizedAuthority(t *testing.T) {
+	t.Parallel()
+	handlers := testActionHandlers(t)
+	implicit, apiErr := handlers.Validate(ActionInput{Action: "offer", ChannelAlias: "alpha",
+		Content: "review", ArtifactPaths: []string{"z.md", "a.md"}})
+	if apiErr != nil {
+		t.Fatal(apiErr)
+	}
+	explicit, apiErr := handlers.Validate(ActionInput{Action: "offer", ChannelAlias: "alpha",
+		Participant: AgentParticipantAuto, Deadline: "24h", Content: "review",
+		ArtifactPaths: []string{"a.md", "z.md"}})
+	if apiErr != nil {
+		t.Fatal(apiErr)
+	}
+	want, err := implicit.requestDigest(model.Digest{}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := explicit.requestDigest(model.Digest{}, false)
+	if err != nil || got != want {
+		t.Fatalf("equivalent normalized digests = (%s, %v), want %s", got, err, want)
+	}
+
+	contextHash := model.Sum([]byte("managed-context"))
+	contextual, apiErr := handlers.Validate(ActionInput{Action: "offer", HasContext: true,
+		ChannelAlias: "alpha", Content: "review", ArtifactPaths: []string{"z.md", "a.md"}})
+	if apiErr != nil {
+		t.Fatal(apiErr)
+	}
+	mutations := []struct {
+		name       string
+		action     ValidatedAction
+		context    model.Digest
+		hasContext bool
+	}{
+		{name: "context", action: contextual, context: contextHash, hasContext: true},
+		{name: "channel", action: func() ValidatedAction { value := implicit; value.ChannelAlias = "beta"; return value }()},
+		{name: "participant", action: func() ValidatedAction { value := implicit; value.Participant = AgentParticipantTeam; return value }()},
+		{name: "deadline", action: func() ValidatedAction { value := implicit; value.Deadline = 23 * time.Hour; return value }()},
+		{name: "content", action: func() ValidatedAction { value := implicit; value.Content = "another review"; return value }()},
+		{name: "artifacts", action: func() ValidatedAction { value := implicit; value.ArtifactPaths = []string{"a.md"}; return value }()},
+	}
+	for _, mutation := range mutations {
+		t.Run(mutation.name, func(t *testing.T) {
+			digest, digestErr := mutation.action.requestDigest(mutation.context, mutation.hasContext)
+			if digestErr == nil && digest == want {
+				t.Fatalf("mutation retained request digest %s", digest)
+			}
+		})
 	}
 }
