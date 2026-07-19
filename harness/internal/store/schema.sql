@@ -1992,17 +1992,64 @@ CREATE TABLE peer_inbox (
     )
   ),
   attempts           INTEGER NOT NULL DEFAULT 0 CHECK (
-    attempts BETWEEN 0 AND 4294967295
+    typeof(attempts) = 'integer' AND attempts BETWEEN 0 AND 4294967295
   ),
-  next_attempt_at    TEXT NOT NULL,
-  lease_owner        TEXT,
-  lease_until        TEXT,
-  local_event_id     TEXT,
+  next_attempt_at    TEXT NOT NULL CHECK (
+    typeof(next_attempt_at) = 'text'
+    AND length(next_attempt_at) = 30
+    AND next_attempt_at GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]Z'
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(next_attempt_at,1,19) || 'Z')) IS NOT NULL
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(next_attempt_at,1,19) || 'Z')) = substr(next_attempt_at,1,19)
+    AND next_attempt_at BETWEEN '1677-09-21T00:12:43.145224192Z' AND '2262-04-11T23:47:16.854775807Z'
+  ),
+  lease_owner        TEXT CHECK (
+    lease_owner IS NULL OR (
+      typeof(lease_owner) = 'text' AND length(lease_owner) BETWEEN 1 AND 512
+    )
+  ),
+  lease_until        TEXT CHECK (
+    lease_until IS NULL OR (
+      typeof(lease_until) = 'text'
+      AND length(lease_until) = 30
+      AND lease_until GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]Z'
+      AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(lease_until,1,19) || 'Z')) IS NOT NULL
+      AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(lease_until,1,19) || 'Z')) = substr(lease_until,1,19)
+      AND lease_until BETWEEN '1677-09-21T00:12:43.145224192Z' AND '2262-04-11T23:47:16.854775807Z'
+    )
+  ),
+  local_event_id     TEXT CHECK (
+    local_event_id IS NULL OR (
+      typeof(local_event_id) = 'text' AND length(local_event_id) BETWEEN 1 AND 512
+    )
+  ),
   decision_json      BLOB,
-  receipt_event_id   TEXT REFERENCES events(event_id),
-  diagnostic         TEXT,
-  received_at        TEXT NOT NULL,
-  updated_at         TEXT NOT NULL,
+  receipt_event_id   TEXT REFERENCES events(event_id) CHECK (
+    receipt_event_id IS NULL OR (
+      typeof(receipt_event_id) = 'text' AND length(receipt_event_id) BETWEEN 1 AND 512
+    )
+  ),
+  diagnostic         TEXT CHECK (
+    diagnostic IS NULL OR (
+      typeof(diagnostic) = 'text' AND length(diagnostic) BETWEEN 1 AND 8192
+      AND instr(diagnostic, char(0)) = 0
+    )
+  ),
+  received_at        TEXT NOT NULL CHECK (
+    typeof(received_at) = 'text'
+    AND length(received_at) = 30
+    AND received_at GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]Z'
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(received_at,1,19) || 'Z')) IS NOT NULL
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(received_at,1,19) || 'Z')) = substr(received_at,1,19)
+    AND received_at BETWEEN '1677-09-21T00:12:43.145224192Z' AND '2262-04-11T23:47:16.854775807Z'
+  ),
+  updated_at         TEXT NOT NULL CHECK (
+    typeof(updated_at) = 'text'
+    AND length(updated_at) = 30
+    AND updated_at GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]Z'
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(updated_at,1,19) || 'Z')) IS NOT NULL
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(updated_at,1,19) || 'Z')) = substr(updated_at,1,19)
+    AND updated_at BETWEEN '1677-09-21T00:12:43.145224192Z' AND '2262-04-11T23:47:16.854775807Z'
+  ),
   UNIQUE (origin_peer_id, origin_epoch, origin_seq),
   UNIQUE (channel_id, origin_peer_id, origin_epoch, channel_seq),
   UNIQUE (event_id),
@@ -2023,18 +2070,72 @@ CREATE TABLE peer_inbox (
   ),
   CHECK (is_audience = 1 OR semantic_nonce IS NULL),
   CHECK (is_audience = 0 OR status = 'quarantined' OR semantic_nonce IS NOT NULL),
+  CHECK (updated_at >= received_at),
   CHECK (
     (is_audience = 0 AND status IN ('ignored','quarantined')
-      AND local_event_id IS NULL AND receipt_event_id IS NULL)
+      AND local_event_id IS NULL AND decision_json IS NULL AND receipt_event_id IS NULL)
     OR (is_audience = 1 AND status <> 'ignored')
   ),
   CHECK (
     (status IN ('waiting_artifact','processing')
-      AND lease_owner IS NOT NULL AND lease_until IS NOT NULL)
+      AND lease_owner IS NOT NULL AND lease_until IS NOT NULL
+      AND lease_until > updated_at)
     OR (status NOT IN ('waiting_artifact','processing')
       AND lease_owner IS NULL AND lease_until IS NULL)
+  ),
+  CHECK (
+    (
+      status IN ('accepted','rejected','conflicted')
+      AND is_audience = 1
+      AND attempts BETWEEN 1 AND 4294967295
+      AND local_event_id IS NOT NULL
+      AND local_event_id = event_id
+      AND CASE
+        WHEN typeof(decision_json) = 'blob'
+          AND length(decision_json) BETWEEN 2 AND 65536
+          AND json_valid(CAST(decision_json AS TEXT)) = 1
+        THEN json_type(CAST(decision_json AS TEXT)) = 'object'
+          AND json_type(CAST(decision_json AS TEXT), '$.status') = 'text'
+          AND json_extract(CAST(decision_json AS TEXT), '$.status') = status
+        ELSE 0
+      END
+      AND next_attempt_at = updated_at
+      AND (
+        (status = 'accepted' AND diagnostic IS NULL)
+        OR (
+          status IN ('rejected','conflicted')
+          AND typeof(diagnostic) = 'text'
+          AND length(diagnostic) BETWEEN 1 AND 512
+          AND diagnostic GLOB '[a-z]*'
+          AND diagnostic NOT GLOB '*[^a-z0-9_]*'
+        )
+      )
+    ) OR (
+      status NOT IN ('accepted','rejected','conflicted')
+      AND local_event_id IS NULL AND decision_json IS NULL AND receipt_event_id IS NULL
+    )
   )
 );
+
+-- A semantic terminal row is a transition result, never an ingress shape. The
+-- worker must first hold one processing generation and then install the whole
+-- terminal evidence projection in one UPDATE.
+CREATE TRIGGER peer_inbox_semantic_terminal_insert
+BEFORE INSERT ON peer_inbox
+WHEN NEW.status IN ('accepted','rejected','conflicted')
+BEGIN SELECT RAISE(ABORT, 'semantic terminal Inbox must transition from processing'); END;
+
+CREATE TRIGGER peer_inbox_semantic_terminal_transition
+BEFORE UPDATE OF status ON peer_inbox
+WHEN NEW.status IN ('accepted','rejected','conflicted')
+ AND OLD.status NOT IN ('accepted','rejected','conflicted')
+ AND (
+   OLD.status <> 'processing'
+   OR OLD.is_audience <> 1
+   OR NEW.is_audience <> 1
+   OR NEW.attempts <> OLD.attempts
+ )
+BEGIN SELECT RAISE(ABORT, 'semantic terminal Inbox requires its audience processing generation'); END;
 
 CREATE TRIGGER artifact_pins_inbox_owner_insert
 BEFORE INSERT ON artifact_pins
@@ -2389,9 +2490,12 @@ BEGIN
 END;
 
 CREATE TRIGGER peer_inbox_terminal_status_immutable
-BEFORE UPDATE OF status ON peer_inbox
-WHEN OLD.status IN ('accepted','rejected','conflicted','quarantined','ignored')
- AND NEW.status <> OLD.status
+BEFORE UPDATE ON peer_inbox
+WHEN OLD.status IN ('accepted','rejected','conflicted')
+ OR (
+   OLD.status IN ('quarantined','ignored')
+   AND NEW.status <> OLD.status
+ )
 BEGIN SELECT RAISE(ABORT, 'terminal peer inbox status is immutable'); END;
 
 CREATE TRIGGER peer_inbox_no_delete BEFORE DELETE ON peer_inbox
@@ -2400,7 +2504,21 @@ BEGIN SELECT RAISE(ABORT, 'peer inbox evidence is permanent'); END;
 CREATE TRIGGER peer_inbox_event_scope_insert
 BEFORE INSERT ON peer_inbox
 WHEN NEW.local_event_id IS NOT NULL AND NOT EXISTS (
-  SELECT 1 FROM events WHERE event_id = NEW.local_event_id AND channel_id = NEW.channel_id
+  SELECT 1 FROM events
+  WHERE event_id = NEW.local_event_id
+    AND channel_id = NEW.channel_id
+    AND origin_peer_id = NEW.origin_peer_id
+    AND origin_epoch = NEW.origin_epoch
+    AND origin_seq = NEW.origin_seq
+    AND channel_seq = NEW.channel_seq
+    AND origin_member_revision = NEW.origin_member_revision
+    AND origin_member_record_hash = NEW.origin_member_record_hash
+    AND publication_roster_revision = NEW.publication_roster_revision
+    AND publication_roster_hash = NEW.publication_roster_hash
+    AND event_digest = NEW.event_digest
+    AND publication_digest = NEW.publication_digest
+    AND origin_signature = NEW.origin_signature
+    AND source = 'imported'
 )
 BEGIN SELECT RAISE(ABORT, 'inbox event channel mismatch'); END;
 
@@ -2477,23 +2595,77 @@ BEGIN SELECT RAISE(ABORT, 'peer inbox semantic nonce is immutable'); END;
 CREATE TRIGGER peer_inbox_event_scope_update
 BEFORE UPDATE OF local_event_id ON peer_inbox
 WHEN NEW.local_event_id IS NOT NULL AND NOT EXISTS (
-  SELECT 1 FROM events WHERE event_id = NEW.local_event_id AND channel_id = NEW.channel_id
+  SELECT 1 FROM events
+  WHERE event_id = NEW.local_event_id
+    AND channel_id = NEW.channel_id
+    AND origin_peer_id = NEW.origin_peer_id
+    AND origin_epoch = NEW.origin_epoch
+    AND origin_seq = NEW.origin_seq
+    AND channel_seq = NEW.channel_seq
+    AND origin_member_revision = NEW.origin_member_revision
+    AND origin_member_record_hash = NEW.origin_member_record_hash
+    AND publication_roster_revision = NEW.publication_roster_revision
+    AND publication_roster_hash = NEW.publication_roster_hash
+    AND event_digest = NEW.event_digest
+    AND publication_digest = NEW.publication_digest
+    AND origin_signature = NEW.origin_signature
+    AND source = 'imported'
 )
 BEGIN SELECT RAISE(ABORT, 'inbox event channel mismatch'); END;
 
 CREATE TRIGGER peer_inbox_receipt_scope_insert
 BEFORE INSERT ON peer_inbox
 WHEN NEW.receipt_event_id IS NOT NULL AND NOT EXISTS (
-  SELECT 1 FROM events WHERE event_id = NEW.receipt_event_id AND channel_id = NEW.channel_id
+  SELECT 1 FROM events receipt
+  WHERE receipt.event_id = NEW.receipt_event_id
+    AND receipt.channel_id = NEW.channel_id
+    AND receipt.source = 'local'
+    AND json_valid(CAST(receipt.audience_json AS TEXT)) = 1
+    AND json_type(CAST(receipt.audience_json AS TEXT)) = 'array'
+    AND json_array_length(CAST(receipt.audience_json AS TEXT)) = 1
+    AND json_extract(CAST(receipt.audience_json AS TEXT), '$[0]') = NEW.origin_peer_id
+    AND json_valid(CAST(receipt.caused_by_json AS TEXT)) = 1
+    AND json_type(CAST(receipt.caused_by_json AS TEXT)) = 'array'
+    AND json_array_length(CAST(receipt.caused_by_json AS TEXT)) = 1
+    AND json_extract(CAST(receipt.caused_by_json AS TEXT), '$[0].event_id') = NEW.event_id
+    AND json_extract(CAST(receipt.caused_by_json AS TEXT), '$[0].origin_epoch') = NEW.origin_epoch
+    AND json_extract(CAST(receipt.caused_by_json AS TEXT), '$[0].origin_peer_id') = NEW.origin_peer_id
+    AND EXISTS (
+      SELECT 1 FROM events source
+      WHERE source.event_id = NEW.event_id
+        AND source.channel_id = receipt.channel_id
+        AND source.work_home_peer_id = receipt.work_home_peer_id
+        AND source.work_id = receipt.work_id
+    )
 )
-BEGIN SELECT RAISE(ABORT, 'inbox receipt channel mismatch'); END;
+BEGIN SELECT RAISE(ABORT, 'inbox receipt source mismatch'); END;
 
 CREATE TRIGGER peer_inbox_receipt_scope_update
 BEFORE UPDATE OF receipt_event_id ON peer_inbox
 WHEN NEW.receipt_event_id IS NOT NULL AND NOT EXISTS (
-  SELECT 1 FROM events WHERE event_id = NEW.receipt_event_id AND channel_id = NEW.channel_id
+  SELECT 1 FROM events receipt
+  WHERE receipt.event_id = NEW.receipt_event_id
+    AND receipt.channel_id = NEW.channel_id
+    AND receipt.source = 'local'
+    AND json_valid(CAST(receipt.audience_json AS TEXT)) = 1
+    AND json_type(CAST(receipt.audience_json AS TEXT)) = 'array'
+    AND json_array_length(CAST(receipt.audience_json AS TEXT)) = 1
+    AND json_extract(CAST(receipt.audience_json AS TEXT), '$[0]') = NEW.origin_peer_id
+    AND json_valid(CAST(receipt.caused_by_json AS TEXT)) = 1
+    AND json_type(CAST(receipt.caused_by_json AS TEXT)) = 'array'
+    AND json_array_length(CAST(receipt.caused_by_json AS TEXT)) = 1
+    AND json_extract(CAST(receipt.caused_by_json AS TEXT), '$[0].event_id') = NEW.event_id
+    AND json_extract(CAST(receipt.caused_by_json AS TEXT), '$[0].origin_epoch') = NEW.origin_epoch
+    AND json_extract(CAST(receipt.caused_by_json AS TEXT), '$[0].origin_peer_id') = NEW.origin_peer_id
+    AND EXISTS (
+      SELECT 1 FROM events source
+      WHERE source.event_id = NEW.event_id
+        AND source.channel_id = receipt.channel_id
+        AND source.work_home_peer_id = receipt.work_home_peer_id
+        AND source.work_id = receipt.work_id
+    )
 )
-BEGIN SELECT RAISE(ABORT, 'inbox receipt channel mismatch'); END;
+BEGIN SELECT RAISE(ABORT, 'inbox receipt source mismatch'); END;
 
 CREATE INDEX peer_inbox_work_idx
   ON peer_inbox(status, next_attempt_at, received_at);

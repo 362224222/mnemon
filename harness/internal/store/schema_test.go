@@ -69,7 +69,7 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 				"peer_bindings_identity_epoch_immutable peer_bindings_revoked_terminal peer_bindings_active_no_pending events_imported_binding_insert " +
 				"gossip_publications_event_scope_insert gossip_publications_identity_immutable gossip_publications_lease_fence_update " +
 				"peer_deliveries_event_scope_insert peer_deliveries_identity_immutable " +
-				"peer_deliveries_scanned_requires_cursor peer_inbox_event_scope_insert " +
+				"peer_deliveries_scanned_requires_cursor peer_inbox_semantic_terminal_insert peer_inbox_semantic_terminal_transition peer_inbox_event_scope_insert " +
 				"peer_inbox_binding_epoch_insert peer_inbox_transport_binding_insert " +
 				"peer_inbox_publication_member_insert peer_inbox_identity_immutable peer_inbox_event_scope_update " +
 				"peer_inbox_semantic_nonce_immutable " +
@@ -120,8 +120,8 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 	if !reflect.DeepEqual(actual, expected) {
 		t.Fatalf("schema object set mismatch\nactual: %#v\nexpected: %#v", actual, expected)
 	}
-	if got := len(actual["table"]) + len(actual["index"]) + len(actual["trigger"]); got != 224 {
-		t.Fatalf("explicit object count = %d, want 224", got)
+	if got := len(actual["table"]) + len(actual["index"]) + len(actual["trigger"]); got != 226 {
+		t.Fatalf("explicit object count = %d, want 226", got)
 	}
 }
 
@@ -163,7 +163,8 @@ func TestSchemaV1PeerInboxPendingPressure(t *testing.T) {
 			assertSchemaPeerInboxPressure(t, fixture.store.db,
 				fixture.channel.Channel().ID().String(), itemBytes)
 		}
-		if _, err := fixture.store.db.Exec(`UPDATE peer_inbox SET status='accepted',updated_at=?
+		if _, err := fixture.store.db.Exec(`UPDATE peer_inbox SET status='quarantined',
+			lease_owner=NULL,lease_until=NULL,diagnostic='schema_pressure_release',updated_at=?
 			WHERE inbox_id='schema-pressure-inbox-1'`, storeTime(fixture.at)); err != nil {
 			t.Fatalf("leave pending statuses: %v", err)
 		}
@@ -215,7 +216,8 @@ func TestSchemaV1PeerInboxPendingPressure(t *testing.T) {
 			!strings.Contains(err.Error(), "terminal peer inbox status is immutable") {
 			t.Fatalf("terminal status transition error = %v", err)
 		}
-		if _, err := fixture.store.db.Exec(`UPDATE peer_inbox SET status='accepted',updated_at=?
+		if _, err := fixture.store.db.Exec(`UPDATE peer_inbox SET status='quarantined',
+			diagnostic='schema_pressure_release',updated_at=?
 			WHERE inbox_id='schema-pressure-inbox-2'`, storeTime(fixture.at)); err != nil {
 			t.Fatalf("release pending budget: %v", err)
 		}
@@ -309,8 +311,10 @@ func TestSchemaV1PeerInboxPendingPressure(t *testing.T) {
 		}
 		assertSchemaPeerInboxNodeEqualsChannelSum(t, fixture.store.db, itemBytes*2)
 
-		if _, err := fixture.store.db.Exec(`UPDATE peer_inbox SET status='accepted',updated_at=?
-			WHERE inbox_id='schema-pressure-inbox-1'`, storeTime(fixture.at.Add(2*time.Second))); err != nil {
+		if _, err := fixture.store.db.Exec(`UPDATE peer_inbox SET status='quarantined',
+			diagnostic='schema_pressure_release',next_attempt_at=?,updated_at=?
+			WHERE inbox_id='schema-pressure-inbox-1'`, storeTime(fixture.at.Add(2*time.Second)),
+			storeTime(fixture.at.Add(2*time.Second))); err != nil {
 			t.Fatalf("terminalize first Channel Inbox: %v", err)
 		}
 		assertSchemaPeerInboxNodeEqualsChannelSum(t, fixture.store.db, itemBytes)
@@ -460,6 +464,207 @@ func TestSchemaV1PeerInboxSemanticNonceInvariant(t *testing.T) {
 		WHERE inbox_id='schema-pressure-inbox-11'`).Scan(&nonceIsNull); err != nil || nonceIsNull != 1 {
 		t.Fatalf("quarantined semantic nonce NULL = (%d,%v)", nonceIsNull, err)
 	}
+}
+
+func TestSchemaV1PeerInboxSemanticTerminalEvidence(t *testing.T) {
+	for _, test := range []struct {
+		status      string
+		diagnostic  any
+		withReceipt bool
+	}{
+		{status: "accepted", withReceipt: true},
+		{status: "rejected", diagnostic: "stale_request"},
+		{status: "conflicted", diagnostic: "cause_conflict"},
+	} {
+		t.Run("valid "+test.status, func(t *testing.T) {
+			fixture, inboxID, claim, terminalAt := newSchemaSemanticTerminal(t,
+				"schema-terminal-valid-"+test.status)
+			insertSchemaSemanticEvent(t, fixture.store, claim.Publication())
+			var receipt any
+			if test.withReceipt {
+				response := schemaSemanticReceipt(t, fixture, claim, terminalAt, true)
+				insertSchemaSemanticEvent(t, fixture.store, response)
+				receipt = response.Event().ID().String()
+			}
+			if err := updateSchemaSemanticTerminal(fixture.store, inboxID, claim.ImportedEvent().ID(),
+				test.status, []byte(fmt.Sprintf(`{"status":%q}`, test.status)),
+				test.diagnostic, receipt, terminalAt); err != nil {
+				t.Fatalf("valid semantic terminal update: %v", err)
+			}
+			var status, localEvent string
+			var decision []byte
+			var diagnostic, receiptID sql.NullString
+			if err := fixture.store.db.QueryRow(`SELECT status,local_event_id,decision_json,
+				diagnostic,receipt_event_id FROM peer_inbox WHERE inbox_id=?`, inboxID.String()).
+				Scan(&status, &localEvent, &decision, &diagnostic, &receiptID); err != nil {
+				t.Fatal(err)
+			}
+			if status != test.status || localEvent != claim.ImportedEvent().ID().String() ||
+				string(decision) != fmt.Sprintf(`{"status":%q}`, test.status) ||
+				diagnostic.String != nullableSchemaString(test.diagnostic) ||
+				receiptID.String != nullableSchemaString(receipt) {
+				t.Fatalf("semantic terminal evidence = (%q,%q,%q,%#v,%#v)",
+					status, localEvent, decision, diagnostic, receiptID)
+			}
+			if _, err := fixture.store.db.Exec(`UPDATE peer_inbox SET decision_json=decision_json
+				WHERE inbox_id=?`, inboxID.String()); err == nil ||
+				!strings.Contains(err.Error(), "terminal peer inbox status is immutable") {
+				t.Fatalf("terminal evidence rewrite error = %v", err)
+			}
+		})
+	}
+
+	t.Run("closed decision and diagnostic shape", func(t *testing.T) {
+		fixture, inboxID, claim, terminalAt := newSchemaSemanticTerminal(t,
+			"schema-terminal-invalid-shape")
+		insertSchemaSemanticEvent(t, fixture.store, claim.Publication())
+		invalid := []struct {
+			name       string
+			status     string
+			decision   any
+			diagnostic any
+			receipt    any
+		}{
+			{name: "missing decision", status: "accepted"},
+			{name: "text storage class", status: "accepted", decision: `{"status":"accepted"}`},
+			{name: "empty decision", status: "accepted", decision: []byte{}},
+			{name: "array decision", status: "accepted", decision: []byte(`[]`)},
+			{name: "invalid json", status: "accepted", decision: []byte(`{`)},
+			{name: "status mismatch", status: "accepted", decision: []byte(`{"status":"rejected"}`)},
+			{name: "oversize decision", status: "accepted", decision: make([]byte, 65537)},
+			{name: "accepted diagnostic", status: "accepted", decision: []byte(`{"status":"accepted"}`),
+				diagnostic: "unexpected"},
+			{name: "rejected missing diagnostic", status: "rejected", decision: []byte(`{"status":"rejected"}`)},
+			{name: "rejected open diagnostic", status: "rejected", decision: []byte(`{"status":"rejected"}`),
+				diagnostic: "Not Closed"},
+			{name: "imported event as receipt", status: "accepted", decision: []byte(`{"status":"accepted"}`),
+				receipt: claim.ImportedEvent().ID().String()},
+		}
+		for _, test := range invalid {
+			t.Run(test.name, func(t *testing.T) {
+				if err := updateSchemaSemanticTerminal(fixture.store, inboxID,
+					claim.ImportedEvent().ID(), test.status, test.decision,
+					test.diagnostic, test.receipt, terminalAt); err == nil {
+					t.Fatal("invalid semantic terminal evidence unexpectedly succeeded")
+				}
+				assertSchemaSemanticProcessing(t, fixture.store, inboxID, claim.Fence().Attempt())
+			})
+		}
+
+		wrongCause := schemaSemanticReceipt(t, fixture, claim, terminalAt, false)
+		insertSchemaSemanticEvent(t, fixture.store, wrongCause)
+		if err := updateSchemaSemanticTerminal(fixture.store, inboxID, claim.ImportedEvent().ID(),
+			"accepted", []byte(`{"status":"accepted"}`), nil,
+			wrongCause.Event().ID().String(), terminalAt); err == nil ||
+			!strings.Contains(err.Error(), "inbox receipt source mismatch") {
+			t.Fatalf("unbound local receipt error = %v", err)
+		}
+	})
+
+	t.Run("receipt Work is bound to the source", func(t *testing.T) {
+		fixture, inboxID, claim, terminalAt := newSchemaSemanticTerminal(t,
+			"schema-terminal-receipt-work")
+		insertSchemaSemanticEvent(t, fixture.store, claim.Publication())
+		wrongWorkID, err := model.ParseWorkID("work-schema-receipt-laundering")
+		if err != nil {
+			t.Fatal(err)
+		}
+		wrongWork, err := model.NewWorkRef(claim.ImportedEvent().Scope().WorkRef().HomePeerID(),
+			wrongWorkID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response := schemaSemanticReceiptWithShape(t, fixture, claim, terminalAt, true,
+			wrongWork, []model.PeerID{claim.ImportedEvent().Scope().OriginPeerID()}, "wrong-work")
+		insertSchemaSemanticEvent(t, fixture.store, response)
+		if err := updateSchemaSemanticTerminal(fixture.store, inboxID, claim.ImportedEvent().ID(),
+			"accepted", []byte(`{"status":"accepted"}`), nil,
+			response.Event().ID().String(), terminalAt); err == nil ||
+			!strings.Contains(err.Error(), "inbox receipt source mismatch") {
+			t.Fatalf("wrong-Work receipt error = %v", err)
+		}
+	})
+
+	t.Run("receipt audience is exactly the source origin", func(t *testing.T) {
+		fixture, inboxID, claim, terminalAt := newSchemaSemanticTerminal(t,
+			"schema-terminal-receipt-audience")
+		insertSchemaSemanticEvent(t, fixture.store, claim.Publication())
+		outsider, err := model.ParsePeerID("peer-schema-receipt-outsider")
+		if err != nil {
+			t.Fatal(err)
+		}
+		response := schemaSemanticReceiptWithShape(t, fixture, claim, terminalAt, true,
+			claim.ImportedEvent().Scope().WorkRef(),
+			[]model.PeerID{claim.ImportedEvent().Scope().OriginPeerID(), outsider}, "wrong-audience")
+		insertSchemaSemanticEvent(t, fixture.store, response)
+		if err := updateSchemaSemanticTerminal(fixture.store, inboxID, claim.ImportedEvent().ID(),
+			"accepted", []byte(`{"status":"accepted"}`), nil,
+			response.Event().ID().String(), terminalAt); err == nil ||
+			!strings.Contains(err.Error(), "inbox receipt source mismatch") {
+			t.Fatalf("wrong-audience receipt error = %v", err)
+		}
+	})
+
+	t.Run("processing generation is required", func(t *testing.T) {
+		fixture, inboxID, claim, terminalAt := newSchemaSemanticTerminal(t,
+			"schema-terminal-generation")
+		insertSchemaSemanticEvent(t, fixture.store, claim.Publication())
+		mustExec(t, fixture.store, `UPDATE peer_inbox SET status='ready',lease_owner=NULL,
+			lease_until=NULL WHERE inbox_id=?`, inboxID.String())
+		if err := updateSchemaSemanticTerminal(fixture.store, inboxID, claim.ImportedEvent().ID(),
+			"accepted", []byte(`{"status":"accepted"}`), nil, nil, terminalAt); err == nil ||
+			!strings.Contains(err.Error(), "semantic terminal Inbox requires its audience processing generation") {
+			t.Fatalf("non-processing terminal error = %v", err)
+		}
+	})
+
+	t.Run("nonzero attempt is required", func(t *testing.T) {
+		fixture, inboxID, claim, terminalAt := newSchemaSemanticTerminal(t,
+			"schema-terminal-attempt")
+		insertSchemaSemanticEvent(t, fixture.store, claim.Publication())
+		mustExec(t, fixture.store, `UPDATE peer_inbox SET attempts=0 WHERE inbox_id=?`, inboxID.String())
+		if err := updateSchemaSemanticTerminal(fixture.store, inboxID, claim.ImportedEvent().ID(),
+			"accepted", []byte(`{"status":"accepted"}`), nil, nil, terminalAt); err == nil {
+			t.Fatal("zero-attempt terminal evidence unexpectedly succeeded")
+		}
+	})
+
+	t.Run("exact imported Event is required", func(t *testing.T) {
+		fixture, inboxID, claim, terminalAt := newSchemaSemanticTerminal(t,
+			"schema-terminal-event-binding")
+		spec := claim.ImportedEvent().Spec()
+		spec.Summary += " altered"
+		altered, err := model.NewEvent(spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := model.NewPublicationBody(altered)
+		if err != nil {
+			t.Fatal(err)
+		}
+		publication, err := model.AttachSignature(body, make([]byte, 64))
+		if err != nil {
+			t.Fatal(err)
+		}
+		insertSchemaSemanticEvent(t, fixture.store, publication)
+		if err := updateSchemaSemanticTerminal(fixture.store, inboxID, claim.ImportedEvent().ID(),
+			"accepted", []byte(`{"status":"accepted"}`), nil, nil, terminalAt); err == nil ||
+			!strings.Contains(err.Error(), "inbox event channel mismatch") {
+			t.Fatalf("mismatched imported Event error = %v", err)
+		}
+	})
+
+	t.Run("terminal shape cannot enter through ingress", func(t *testing.T) {
+		fixture := newChannelBaselineFixture(t, "schema-terminal-insert", model.TopicJoined)
+		if _, err := fixture.store.InstallInboundChannelBaseline(context.Background(),
+			InstallInboundChannelBaselineSpec{AuthenticatedPeerID: fixture.remote.Identity().PeerID(),
+				Baseline: fixture.remoteBaseline(0), At: fixture.at}); err != nil {
+			t.Fatal(err)
+		}
+		if err := insertSchemaPeerInbox(fixture, 1, "accepted", []byte("publication"), []byte("[]")); err == nil || !strings.Contains(err.Error(), "semantic terminal Inbox must transition from processing") {
+			t.Fatalf("terminal ingress error = %v", err)
+		}
+	})
 }
 
 func TestSchemaV1PeerInboxSemanticTransitionReceiptConstraints(t *testing.T) {
@@ -1768,6 +1973,119 @@ func insertSchemaPeerInboxWithNonce(
 		[]byte(fmt.Sprintf("schema-pressure-signature-%d", sequence)), publication, semanticNonce,
 		requiredRoots, status, storeTime(fixture.at), storeTime(fixture.at), storeTime(fixture.at))
 	return err
+}
+
+func newSchemaSemanticTerminal(t *testing.T,
+	seed string,
+) (peerInboxFixture, model.InboxID, PeerInboxSemanticClaim, time.Time) {
+	t.Helper()
+	fixture, inboxID, readyAt := newReadyPeerInboxSemantic(t, seed)
+	claimAt := readyAt.Add(time.Second)
+	claim := mustClaimPeerInboxSemantic(t, fixture.store, seed+"-worker", claimAt)
+	return fixture, inboxID, claim, claimAt.Add(time.Second)
+}
+
+func insertSchemaSemanticEvent(t *testing.T, store *Store,
+	publication model.SignedPublication,
+) {
+	t.Helper()
+	tx, err := store.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if err := insertAcceptedEvent(context.Background(), tx, publication); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func schemaSemanticReceipt(t *testing.T, fixture peerInboxFixture,
+	claim PeerInboxSemanticClaim, acceptedAt time.Time, bindSource bool,
+) model.SignedPublication {
+	t.Helper()
+	return schemaSemanticReceiptWithShape(t, fixture, claim, acceptedAt, bindSource,
+		claim.ImportedEvent().Scope().WorkRef(),
+		[]model.PeerID{claim.ImportedEvent().Scope().OriginPeerID()}, "receipt")
+}
+
+func schemaSemanticReceiptWithShape(t *testing.T, fixture peerInboxFixture,
+	claim PeerInboxSemanticClaim, acceptedAt time.Time, bindSource bool,
+	workRef model.WorkRef, audiencePeers []model.PeerID, suffix string,
+) model.SignedPublication {
+	t.Helper()
+	local := fixture.channel.Owner()
+	member, ok := fixture.channel.Roster().CurrentMember(local.PeerID())
+	if !ok {
+		t.Fatal("local member missing from semantic receipt fixture")
+	}
+	scope, err := model.NewEventScope(claim.ImportedEvent().Scope().ChannelID(), local.PeerID(),
+		local.OriginEpoch(), 1, 1, member.Head(), fixture.channel.Roster().Head(),
+		workRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	audience, err := model.NewAudience(audiencePeers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := model.NewJSON([]byte(`{"diagnostic":"applied","iteration":1,"status":"accepted","work_version":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventID, err := model.ParseEventID("event-" + claim.InboxID().String() + "-" + suffix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var causes []model.EventKey
+	if bindSource {
+		causes = []model.EventKey{claim.ImportedEvent().Key()}
+	}
+	return fixture.signEventAs(t, model.EventSpec{ID: eventID, Scope: scope,
+		Source: model.EventSourceLocal, ActorPrincipal: "principal-schema-semantic",
+		Type: model.EventReviewOutcome, Audience: audience, Summary: "semantic receipt",
+		Payload: payload, CausedBy: causes, CreatedAt: acceptedAt, AcceptedAt: acceptedAt}, local)
+}
+
+func updateSchemaSemanticTerminal(store *Store, inboxID model.InboxID,
+	localEventID model.EventID, status string, decision, diagnostic, receipt any,
+	at time.Time,
+) error {
+	_, err := store.db.Exec(`UPDATE peer_inbox SET status=?,lease_owner=NULL,lease_until=NULL,
+		local_event_id=?,decision_json=?,receipt_event_id=?,diagnostic=?,next_attempt_at=?,updated_at=?
+		WHERE inbox_id=?`, status, localEventID.String(), decision, receipt, diagnostic,
+		storeTime(at), storeTime(at), inboxID.String())
+	return err
+}
+
+func assertSchemaSemanticProcessing(t *testing.T, store *Store, inboxID model.InboxID,
+	wantAttempt uint32,
+) {
+	t.Helper()
+	var status string
+	var attempt uint32
+	var localEvent, decision, receipt sql.NullString
+	if err := store.db.QueryRow(`SELECT status,attempts,local_event_id,
+		CAST(decision_json AS TEXT),receipt_event_id FROM peer_inbox WHERE inbox_id=?`,
+		inboxID.String()).Scan(&status, &attempt, &localEvent, &decision, &receipt); err != nil {
+		t.Fatal(err)
+	}
+	if status != "processing" || attempt != wantAttempt || localEvent.Valid || decision.Valid || receipt.Valid {
+		t.Fatalf("semantic processing row = (%q,%d,%#v,%#v,%#v)",
+			status, attempt, localEvent, decision, receipt)
+	}
+}
+
+func nullableSchemaString(value any) string {
+	if value == nil {
+		return ""
+	}
+	if text, ok := value.(string); ok {
+		return text
+	}
+	return fmt.Sprint(value)
 }
 
 func assertSchemaPeerInboxPressure(t *testing.T, db *sql.DB, channelID string, want int64) {
