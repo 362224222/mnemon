@@ -16,10 +16,10 @@ import (
 
 var ErrDaemonAuthority = errors.New("mnemond durable authority is invalid")
 
-// WakeAdapterFactory is the outer composition boundary between the managed
-// Node and a Host-specific Agent Runtime. Node owns worker lifecycle and
-// durable authority, while the caller supplies the already-inspected Runtime
-// adapter without importing Host integration into this package.
+// WakeAdapterFactory is the construction boundary between the managed Node
+// and a Host-specific Agent Runtime. Node owns worker lifecycle and durable
+// authority; production composition derives this factory from the narrow
+// ManagedRuntimeInstallation port without importing Host integration.
 type WakeAdapterFactory interface {
 	NewWakeAdapter(context.Context, WakeAdapterFactoryOptions) (agent.WakeWorkerAdapter, error)
 }

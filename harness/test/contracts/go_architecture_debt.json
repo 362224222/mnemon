@@ -84,26 +84,6 @@
     },
     {
       "rule": "dependency_direction",
-      "identity": "dependency_direction:harness/cmd/mnemond::agent",
-      "path": "harness/cmd/mnemond",
-      "component": "agent",
-      "risk": "medium",
-      "evidence": "harness/cmd/mnemond/managed_runtime.go",
-      "owner": "harness/cmd/mnemond + harness/internal/node",
-      "removal_checkpoint": "7R"
-    },
-    {
-      "rule": "dependency_direction",
-      "identity": "dependency_direction:harness/cmd/mnemond::assets",
-      "path": "harness/cmd/mnemond",
-      "component": "assets",
-      "risk": "medium",
-      "evidence": "harness/cmd/mnemond/managed_runtime.go",
-      "owner": "harness/cmd/mnemond + harness/internal/integration",
-      "removal_checkpoint": "7R"
-    },
-    {
-      "rule": "dependency_direction",
       "identity": "dependency_direction:harness/internal/agent::localapi",
       "path": "harness/internal/agent",
       "component": "localapi",

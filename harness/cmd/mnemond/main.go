@@ -58,17 +58,8 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	return runWithNode(ctx, args, stdout, stderr, func(ctx context.Context,
-		options node.DaemonOptions,
-	) (daemonRuntime, error) {
-		verify, err := managedInstallationVerifier(options.Workspace)
-		if err != nil {
-			return nil, err
-		}
-		options.Install = verify
-		options.WakeAdapterFactory = managedWakeAdapterFactory(options.Workspace, verify)
-		return node.OpenManagedDaemon(ctx, options)
-	}, node.Provision, activateManagedNode, node.Deactivate)
+	return runWithNode(ctx, args, stdout, stderr, openManagedRuntime,
+		node.Provision, activateManagedNode, node.Deactivate)
 }
 
 func runWithDaemon(ctx context.Context, args []string, stdout, stderr io.Writer,
