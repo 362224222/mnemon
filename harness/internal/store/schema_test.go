@@ -28,7 +28,7 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 				"artifact_gc_completion_receipts artifact_gc_delete_guard artifact_gc_block_delete_guard artifact_gc_completion_guard " +
 				"channels channel_members channel_conflicts " +
 				"enrollment_grants enrollment_grant_uses enrollment_receipts channel_join_reservations channel_leave_requests " +
-				"peer_bindings gossip_publications peer_deliveries peer_inbox peer_inbox_pressure peer_inbox_node_pressure publication_conflicts " +
+				"peer_bindings gossip_publications peer_deliveries peer_inbox peer_inbox_semantic_transition_receipts peer_inbox_pressure peer_inbox_node_pressure publication_conflicts " +
 				"origin_quarantines peer_cursors peer_repairs publication_epochs peer_pull_acks",
 		),
 		"index": strings.Fields(
@@ -73,6 +73,7 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 				"peer_inbox_binding_epoch_insert peer_inbox_transport_binding_insert " +
 				"peer_inbox_publication_member_insert peer_inbox_identity_immutable peer_inbox_event_scope_update " +
 				"peer_inbox_semantic_nonce_immutable " +
+				"peer_inbox_semantic_transition_receipt_insert peer_inbox_semantic_transition_receipt_update " +
 				"peer_inbox_receipt_scope_insert peer_inbox_receipt_scope_update peer_inbox_no_delete peer_inbox_terminal_status_immutable " +
 				"peer_inbox_pressure_insert_limit peer_inbox_pressure_insert_account " +
 				"peer_inbox_pressure_status_leave_account peer_inbox_pressure_no_delete peer_inbox_pressure_identity_immutable " +
@@ -118,8 +119,8 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 	if !reflect.DeepEqual(actual, expected) {
 		t.Fatalf("schema object set mismatch\nactual: %#v\nexpected: %#v", actual, expected)
 	}
-	if got := len(actual["table"]) + len(actual["index"]) + len(actual["trigger"]); got != 218 {
-		t.Fatalf("explicit object count = %d, want 218", got)
+	if got := len(actual["table"]) + len(actual["index"]) + len(actual["trigger"]); got != 221 {
+		t.Fatalf("explicit object count = %d, want 221", got)
 	}
 }
 
@@ -457,6 +458,55 @@ func TestSchemaV1PeerInboxSemanticNonceInvariant(t *testing.T) {
 	if err := fixture.store.db.QueryRow(`SELECT semantic_nonce IS NULL FROM peer_inbox
 		WHERE inbox_id='schema-pressure-inbox-11'`).Scan(&nonceIsNull); err != nil || nonceIsNull != 1 {
 		t.Fatalf("quarantined semantic nonce NULL = (%d,%v)", nonceIsNull, err)
+	}
+}
+
+func TestSchemaV1PeerInboxSemanticTransitionReceiptConstraints(t *testing.T) {
+	fixture, inboxID, readyAt := newReadyPeerInboxSemantic(t, "schema-semantic-transition")
+	claim := mustClaimPeerInboxSemantic(t, fixture.store, "schema-semantic-transition-worker",
+		readyAt.Add(time.Second))
+	renewAt := readyAt.Add(2 * time.Second)
+	if _, err := fixture.store.RenewPeerInboxSemantic(context.Background(),
+		RenewPeerInboxSemanticSpec{Fence: claim.Fence(), At: renewAt}); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := fixture.store.db.QueryRow(`SELECT COUNT(*) FROM peer_inbox_semantic_transition_receipts`).
+		Scan(&count); err != nil || count != 1 {
+		t.Fatalf("semantic transition receipt count = (%d,%v), want one", count, err)
+	}
+	invalidUpdates := []struct {
+		name  string
+		query string
+		args  []any
+	}{
+		{"unknown kind", `UPDATE peer_inbox_semantic_transition_receipts
+			SET transition_kind='future' WHERE inbox_id=?`, []any{inboxID.String()}},
+		{"invalid old lease month", `UPDATE peer_inbox_semantic_transition_receipts
+			SET old_lease_until='2026-13-01T00:00:00.000000000Z' WHERE inbox_id=?`, []any{inboxID.String()}},
+		{"invalid requested month", `UPDATE peer_inbox_semantic_transition_receipts
+			SET requested_at='2026-13-01T00:00:00.000000000Z' WHERE inbox_id=?`, []any{inboxID.String()}},
+		{"invalid next month", `UPDATE peer_inbox_semantic_transition_receipts
+			SET output_next_attempt_at='2026-13-01T00:00:00.000000000Z' WHERE inbox_id=?`, []any{inboxID.String()}},
+		{"invalid output lease month", `UPDATE peer_inbox_semantic_transition_receipts
+			SET output_lease_until='2026-13-01T00:00:00.000000000Z' WHERE inbox_id=?`, []any{inboxID.String()}},
+		{"invalid output update month", `UPDATE peer_inbox_semantic_transition_receipts
+			SET output_updated_at='2026-13-01T00:00:00.000000000Z' WHERE inbox_id=?`, []any{inboxID.String()}},
+		{"renew with retry fields", `UPDATE peer_inbox_semantic_transition_receipts
+			SET retry_diagnostic='semantic_busy',retry_after_ns=1000000000 WHERE inbox_id=?`, []any{inboxID.String()}},
+		{"mismatched output", `UPDATE peer_inbox_semantic_transition_receipts
+			SET output_next_attempt_at=? WHERE inbox_id=?`, []any{storeTime(renewAt.Add(time.Second)), inboxID.String()}},
+	}
+	for _, test := range invalidUpdates {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := fixture.store.db.Exec(test.query, test.args...); err == nil {
+				t.Fatal("invalid semantic transition receipt update unexpectedly succeeded")
+			}
+		})
+	}
+	if err := fixture.store.db.QueryRow(`SELECT COUNT(*) FROM peer_inbox_semantic_transition_receipts`).
+		Scan(&count); err != nil || count != 1 {
+		t.Fatalf("semantic transition receipt count after invalid writes = (%d,%v)", count, err)
 	}
 }
 

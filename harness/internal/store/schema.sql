@@ -2044,6 +2044,151 @@ WHEN NEW.owner_kind = 'inbox' AND NOT EXISTS (
 )
 BEGIN SELECT RAISE(ABORT, 'Inbox Artifact pin requires an audience Inbox owner'); END;
 
+-- Renew and retry are the only pre-decision semantic transitions that need a
+-- response-loss receipt. One mutable row per Inbox records only the latest
+-- transition: a later transition supersedes the previous replay boundary,
+-- while a fresh claim/reclaim deletes it in the same transaction that advances
+-- the attempt. Terminal semantic decisions use their own durable evidence.
+CREATE TABLE peer_inbox_semantic_transition_receipts (
+  inbox_id           TEXT PRIMARY KEY REFERENCES peer_inbox(inbox_id),
+  transition_kind    TEXT NOT NULL CHECK (transition_kind IN ('renew','retry')),
+  old_lease_owner    TEXT NOT NULL CHECK (
+    typeof(old_lease_owner) = 'text'
+    AND length(old_lease_owner) BETWEEN 1 AND 1024
+  ),
+  old_lease_until    TEXT NOT NULL CHECK (
+    typeof(old_lease_until) = 'text'
+    AND length(old_lease_until) = 30
+    AND old_lease_until GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]Z'
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(old_lease_until,1,19) || 'Z')) IS NOT NULL
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(old_lease_until,1,19) || 'Z')) = substr(old_lease_until,1,19)
+    AND old_lease_until BETWEEN '1677-09-21T00:12:43.145224192Z' AND '2262-04-11T23:47:16.854775807Z'
+  ),
+  old_attempt        INTEGER NOT NULL CHECK (old_attempt BETWEEN 1 AND 4294967295),
+  semantic_nonce     BLOB NOT NULL CHECK (
+    typeof(semantic_nonce) = 'blob' AND length(semantic_nonce) = 32
+  ),
+  snapshot_digest    BLOB NOT NULL CHECK (
+    typeof(snapshot_digest) = 'blob' AND length(snapshot_digest) = 32
+  ),
+  requested_at       TEXT NOT NULL CHECK (
+    typeof(requested_at) = 'text'
+    AND length(requested_at) = 30
+    AND requested_at GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]Z'
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(requested_at,1,19) || 'Z')) IS NOT NULL
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(requested_at,1,19) || 'Z')) = substr(requested_at,1,19)
+    AND requested_at BETWEEN '1677-09-21T00:12:43.145224192Z' AND '2262-04-11T23:47:16.854775807Z'
+  ),
+  request_digest     BLOB NOT NULL CHECK (
+    typeof(request_digest) = 'blob' AND length(request_digest) = 32
+  ),
+  retry_diagnostic   TEXT CHECK (
+    retry_diagnostic IS NULL OR retry_diagnostic IN (
+      'semantic_busy','semantic_dependency_unavailable','semantic_timeout',
+      'semantic_resource_exhausted'
+    )
+  ),
+  retry_after_ns     INTEGER,
+  output_status      TEXT NOT NULL CHECK (output_status IN ('processing','retry')),
+  output_attempt     INTEGER NOT NULL CHECK (output_attempt BETWEEN 1 AND 4294967295),
+  output_next_attempt_at TEXT NOT NULL CHECK (
+    typeof(output_next_attempt_at) = 'text'
+    AND length(output_next_attempt_at) = 30
+    AND output_next_attempt_at GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]Z'
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(output_next_attempt_at,1,19) || 'Z')) IS NOT NULL
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(output_next_attempt_at,1,19) || 'Z')) = substr(output_next_attempt_at,1,19)
+    AND output_next_attempt_at BETWEEN '1677-09-21T00:12:43.145224192Z' AND '2262-04-11T23:47:16.854775807Z'
+  ),
+  output_lease_owner TEXT,
+  output_lease_until TEXT CHECK (
+    output_lease_until IS NULL OR (
+      typeof(output_lease_until) = 'text'
+      AND length(output_lease_until) = 30
+      AND output_lease_until GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]Z'
+      AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(output_lease_until,1,19) || 'Z')) IS NOT NULL
+      AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(output_lease_until,1,19) || 'Z')) = substr(output_lease_until,1,19)
+      AND output_lease_until BETWEEN '1677-09-21T00:12:43.145224192Z' AND '2262-04-11T23:47:16.854775807Z'
+    )
+  ),
+  output_diagnostic  TEXT CHECK (
+    output_diagnostic IS NULL OR output_diagnostic IN (
+      'semantic_busy','semantic_dependency_unavailable','semantic_timeout',
+      'semantic_resource_exhausted'
+    )
+  ),
+  output_updated_at  TEXT NOT NULL CHECK (
+    typeof(output_updated_at) = 'text'
+    AND length(output_updated_at) = 30
+    AND output_updated_at GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]Z'
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(output_updated_at,1,19) || 'Z')) IS NOT NULL
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(output_updated_at,1,19) || 'Z')) = substr(output_updated_at,1,19)
+    AND output_updated_at BETWEEN '1677-09-21T00:12:43.145224192Z' AND '2262-04-11T23:47:16.854775807Z'
+  ),
+  CHECK (old_lease_until > requested_at),
+  CHECK (output_attempt = old_attempt),
+  CHECK (output_updated_at = requested_at),
+  CHECK (
+    (
+      transition_kind = 'renew'
+      AND retry_diagnostic IS NULL AND retry_after_ns IS NULL
+      AND output_status = 'processing'
+      AND output_lease_owner = old_lease_owner
+      AND output_lease_until IS NOT NULL
+      AND output_lease_until > requested_at
+      AND output_diagnostic IS NULL
+    ) OR (
+      transition_kind = 'retry'
+      AND retry_diagnostic IS NOT NULL
+      AND typeof(retry_after_ns) = 'integer'
+      AND retry_after_ns BETWEEN 1000000000 AND 300000000000
+      AND output_status = 'retry'
+      AND output_lease_owner IS NULL AND output_lease_until IS NULL
+      AND output_diagnostic = retry_diagnostic
+      AND output_next_attempt_at > requested_at
+    )
+  )
+);
+
+CREATE TRIGGER peer_inbox_semantic_transition_receipt_insert
+BEFORE INSERT ON peer_inbox_semantic_transition_receipts
+WHEN NOT EXISTS (
+  SELECT 1 FROM peer_inbox inbox
+  WHERE inbox.inbox_id = NEW.inbox_id
+    AND inbox.is_audience = 1
+    AND inbox.semantic_nonce = NEW.semantic_nonce
+    AND inbox.status = NEW.output_status
+    AND inbox.attempts = NEW.output_attempt
+    AND inbox.next_attempt_at = NEW.output_next_attempt_at
+    AND inbox.lease_owner IS NEW.output_lease_owner
+    AND inbox.lease_until IS NEW.output_lease_until
+    AND inbox.diagnostic IS NEW.output_diagnostic
+    AND inbox.updated_at = NEW.output_updated_at
+    AND inbox.local_event_id IS NULL
+    AND inbox.decision_json IS NULL
+    AND inbox.receipt_event_id IS NULL
+)
+BEGIN SELECT RAISE(ABORT, 'semantic transition receipt output mismatch'); END;
+
+CREATE TRIGGER peer_inbox_semantic_transition_receipt_update
+BEFORE UPDATE ON peer_inbox_semantic_transition_receipts
+WHEN NEW.inbox_id <> OLD.inbox_id OR NOT EXISTS (
+  SELECT 1 FROM peer_inbox inbox
+  WHERE inbox.inbox_id = NEW.inbox_id
+    AND inbox.is_audience = 1
+    AND inbox.semantic_nonce = NEW.semantic_nonce
+    AND inbox.status = NEW.output_status
+    AND inbox.attempts = NEW.output_attempt
+    AND inbox.next_attempt_at = NEW.output_next_attempt_at
+    AND inbox.lease_owner IS NEW.output_lease_owner
+    AND inbox.lease_until IS NEW.output_lease_until
+    AND inbox.diagnostic IS NEW.output_diagnostic
+    AND inbox.updated_at = NEW.output_updated_at
+    AND inbox.local_event_id IS NULL
+    AND inbox.decision_json IS NULL
+    AND inbox.receipt_event_id IS NULL
+)
+BEGIN SELECT RAISE(ABORT, 'semantic transition receipt output mismatch'); END;
+
 -- Pending Inbox pressure is materialized at both scopes so admission never
 -- scans permanent Inbox or historical Channel evidence.
 CREATE TABLE peer_inbox_pressure (
