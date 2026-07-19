@@ -46,7 +46,22 @@ type supervisedComponent struct {
 	spec   componentSpec
 	cancel context.CancelFunc
 	done   chan struct{}
-	err    error
+}
+
+// supervisorFailure marks a Supervisor-owned terminal cause. Parent and stop
+// cancellation remain clean lifecycle requests, while component and readiness
+// failures are returned to the caller. context cancellation atomically retains
+// the first cause across all four sources.
+type supervisorFailure struct {
+	cause error
+}
+
+func (failure *supervisorFailure) Error() string {
+	return failure.cause.Error()
+}
+
+func (failure *supervisorFailure) Unwrap() error {
+	return failure.cause
 }
 
 func newNodeSupervisor(specs []componentSpec) (*nodeSupervisor, error) {
@@ -151,11 +166,9 @@ func (supervisor *nodeSupervisor) Run(ctx context.Context, stop <-chan struct{})
 	if supervisor == nil || len(supervisor.components) == 0 || ctx == nil {
 		return errors.New("node Supervisor is unavailable")
 	}
-	runCtx, cancelAll := context.WithCancel(ctx)
+	runCtx, cancelAll := context.WithCancelCause(ctx)
 	watchDone := watchSupervisorStop(runCtx, stop, cancelAll)
 	started := make([]*supervisedComponent, 0, len(supervisor.components))
-	exited := make(chan *supervisedComponent, len(supervisor.components))
-	var firstErr error
 
 	for _, spec := range supervisor.components {
 		if runCtx.Err() != nil {
@@ -167,26 +180,24 @@ func (supervisor *nodeSupervisor) Run(ctx context.Context, stop <-chan struct{})
 		componentCtx, cancel := context.WithCancel(context.WithoutCancel(runCtx))
 		runtime := &supervisedComponent{spec: spec, cancel: cancel, done: make(chan struct{})}
 		started = append(started, runtime)
-		go runSupervisedComponent(componentCtx, runtime, exited)
+		go runSupervisedComponent(componentCtx, runtime, cancelAll)
 		if err := spec.Readiness(runCtx); err != nil {
-			if runCtx.Err() == nil {
-				firstErr = fmt.Errorf("node Supervisor component %q readiness: %w", spec.Name, err)
-			}
-			cancelAll()
+			cancelAll(&supervisorFailure{cause: fmt.Errorf(
+				"node Supervisor component %q readiness: %w", spec.Name, err)})
 			break
 		}
 	}
 
-	if firstErr == nil && runCtx.Err() == nil {
-		firstErr = waitForSupervisorStop(runCtx, exited, cancelAll)
-	}
-	cancelAll()
+	firstErr := waitForSupervisorStop(runCtx)
+	cancelAll(nil)
 	shutdownErr := shutdownSupervisedComponents(ctx, started)
 	<-watchDone
 	return errors.Join(firstErr, shutdownErr)
 }
 
-func watchSupervisorStop(ctx context.Context, stop <-chan struct{}, cancel context.CancelFunc) <-chan struct{} {
+func watchSupervisorStop(ctx context.Context, stop <-chan struct{},
+	cancel context.CancelCauseFunc,
+) <-chan struct{} {
 	done := make(chan struct{})
 	if stop == nil {
 		close(done)
@@ -196,7 +207,7 @@ func watchSupervisorStop(ctx context.Context, stop <-chan struct{}, cancel conte
 		defer close(done)
 		select {
 		case <-stop:
-			cancel()
+			cancel(nil)
 		case <-ctx.Done():
 		}
 	}()
@@ -204,35 +215,27 @@ func watchSupervisorStop(ctx context.Context, stop <-chan struct{}, cancel conte
 }
 
 func runSupervisedComponent(ctx context.Context, runtime *supervisedComponent,
-	exited chan<- *supervisedComponent,
+	cancel context.CancelCauseFunc,
 ) {
-	runtime.err = runtime.spec.Run(ctx)
+	err := runtime.spec.Run(ctx)
+	cancel(&supervisorFailure{cause: supervisedComponentExitError(runtime.spec.Name, err)})
 	close(runtime.done)
-	exited <- runtime
 }
 
-func waitForSupervisorStop(ctx context.Context, exited <-chan *supervisedComponent,
-	cancel context.CancelFunc,
-) error {
-	for {
-		if ctx.Err() != nil {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return nil
-		case runtime := <-exited:
-			if ctx.Err() != nil {
-				return nil
-			}
-			err := runtime.err
-			if err == nil {
-				err = errors.New("component stopped before shutdown")
-			}
-			cancel()
-			return fmt.Errorf("node Supervisor component %q: %w", runtime.spec.Name, err)
-		}
+func waitForSupervisorStop(ctx context.Context) error {
+	<-ctx.Done()
+	var failure *supervisorFailure
+	if errors.As(context.Cause(ctx), &failure) {
+		return failure.cause
 	}
+	return nil
+}
+
+func supervisedComponentExitError(name string, err error) error {
+	if err == nil {
+		err = errors.New("component stopped before shutdown")
+	}
+	return fmt.Errorf("node Supervisor component %q: %w", name, err)
 }
 
 func shutdownSupervisedComponents(caller context.Context, started []*supervisedComponent) error {

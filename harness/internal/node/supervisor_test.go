@@ -136,6 +136,247 @@ func TestNodeSupervisorPropagatesFirstFatalErrorAndCancelsDependents(t *testing.
 	}
 }
 
+func TestNodeSupervisorPropagatesComponentExitDuringReadiness(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		runErr  error
+		wantErr string
+	}{
+		{name: "fatal exit", runErr: errors.New("listen failed"), wantErr: "listen failed"},
+		{name: "clean premature exit", wantErr: "component stopped before shutdown"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			readinessEntered := make(chan struct{})
+			exit := make(chan struct{})
+			shutdownCalled := make(chan struct{})
+			dependentStarted := make(chan struct{})
+			primary := componentSpec{Name: "primary",
+				Readiness: func(ctx context.Context) error {
+					close(readinessEntered)
+					<-ctx.Done()
+					return ctx.Err()
+				},
+				Run: func(context.Context) error {
+					<-exit
+					return test.runErr
+				},
+				Shutdown: func(context.Context) error {
+					close(shutdownCalled)
+					return nil
+				}, Restart: componentRestartNever,
+				Resources: componentResourceBudget{MaxConcurrent: 1}}
+			dependent := componentSpec{Name: "dependent", Dependencies: []string{"primary"},
+				Readiness: func(context.Context) error { return nil },
+				Run: func(ctx context.Context) error {
+					close(dependentStarted)
+					<-ctx.Done()
+					return nil
+				}, Shutdown: func(context.Context) error { return nil },
+				Restart:   componentRestartNever,
+				Resources: componentResourceBudget{MaxConcurrent: 1}}
+			supervisor, err := newNodeSupervisor([]componentSpec{dependent, primary})
+			if err != nil {
+				t.Fatal(err)
+			}
+			done := make(chan error, 1)
+			go func() { done <- supervisor.Run(context.Background(), nil) }()
+			awaitSupervisorSignal(t, readinessEntered, "primary readiness")
+			close(exit)
+			select {
+			case err := <-done:
+				if err == nil || !strings.Contains(err.Error(), `component "primary"`) ||
+					!strings.Contains(err.Error(), test.wantErr) {
+					t.Fatalf("Run() error = %v", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("Supervisor did not propagate an exit during readiness")
+			}
+			awaitSupervisorSignal(t, shutdownCalled, "primary shutdown")
+			select {
+			case <-dependentStarted:
+				t.Fatal("dependent started before primary readiness")
+			default:
+			}
+		})
+	}
+}
+
+func TestNodeSupervisorRollsBackReadinessFailure(t *testing.T) {
+	t.Parallel()
+	started := make(chan struct{})
+	shutdownCalled := make(chan struct{})
+	dependentStarted := make(chan struct{})
+	primary := componentSpec{Name: "primary",
+		Readiness: func(ctx context.Context) error {
+			select {
+			case <-started:
+				return errors.New("probe failed")
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}, Run: func(ctx context.Context) error {
+			close(started)
+			<-ctx.Done()
+			return nil
+		}, Shutdown: func(context.Context) error {
+			close(shutdownCalled)
+			return nil
+		}, Restart: componentRestartNever,
+		Resources: componentResourceBudget{MaxConcurrent: 1}}
+	dependent := componentSpec{Name: "dependent", Dependencies: []string{"primary"},
+		Readiness: func(context.Context) error { return nil },
+		Run: func(ctx context.Context) error {
+			close(dependentStarted)
+			<-ctx.Done()
+			return nil
+		}, Shutdown: func(context.Context) error { return nil }, Restart: componentRestartNever,
+		Resources: componentResourceBudget{MaxConcurrent: 1}}
+	supervisor, err := newNodeSupervisor([]componentSpec{dependent, primary})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = supervisor.Run(context.Background(), nil)
+	if err == nil || !strings.Contains(err.Error(), `component "primary" readiness: probe failed`) {
+		t.Fatalf("Run() error = %v", err)
+	}
+	awaitSupervisorSignal(t, shutdownCalled, "primary shutdown")
+	select {
+	case <-dependentStarted:
+		t.Fatal("dependent started after primary readiness failed")
+	default:
+	}
+}
+
+func TestNodeSupervisorAggregatesShutdownErrorsAndAcceptsCallerCancellation(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan struct{}, 2)
+	shutdownCalled := make(chan string, 2)
+	primaryShutdownErr := errors.New("primary shutdown failed")
+	dependentShutdownErr := errors.New("dependent shutdown failed")
+	component := func(name string, shutdownErr error, dependencies ...string) componentSpec {
+		return componentSpec{Name: name, Dependencies: dependencies,
+			Readiness: func(context.Context) error {
+				started <- struct{}{}
+				return nil
+			}, Run: func(ctx context.Context) error {
+				<-ctx.Done()
+				return nil
+			}, Shutdown: func(context.Context) error {
+				shutdownCalled <- name
+				return shutdownErr
+			}, Restart: componentRestartNever,
+			Resources: componentResourceBudget{MaxConcurrent: 1}}
+	}
+	supervisor, err := newNodeSupervisor([]componentSpec{
+		component("primary", primaryShutdownErr),
+		component("dependent", dependentShutdownErr, "primary"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- supervisor.Run(ctx, nil) }()
+	awaitSupervisorSignal(t, started, "primary readiness")
+	awaitSupervisorSignal(t, started, "dependent readiness")
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, primaryShutdownErr) || !errors.Is(err, dependentShutdownErr) {
+			t.Fatalf("Run() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Supervisor did not finish after caller cancellation")
+	}
+	if first, second := <-shutdownCalled, <-shutdownCalled; first != "dependent" || second != "primary" {
+		t.Fatalf("shutdown order = %q, %q", first, second)
+	}
+}
+
+func TestNodeSupervisorTreatsExternalStopsAsClean(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		stop func(context.CancelFunc, chan struct{})
+	}{
+		{name: "caller cancellation", stop: func(cancel context.CancelFunc, _ chan struct{}) {
+			cancel()
+		}},
+		{name: "stop request", stop: func(_ context.CancelFunc, stop chan struct{}) {
+			close(stop)
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			ctx, cancel := context.WithCancel(context.Background())
+			stop := make(chan struct{})
+			started := make(chan struct{})
+			shutdownCalled := make(chan struct{})
+			spec := componentSpec{Name: "primary", Readiness: channelReadiness(started),
+				Run: func(ctx context.Context) error {
+					close(started)
+					<-ctx.Done()
+					return nil
+				}, Shutdown: func(context.Context) error {
+					close(shutdownCalled)
+					return nil
+				}, Restart: componentRestartNever,
+				Resources: componentResourceBudget{MaxConcurrent: 1}}
+			supervisor, err := newNodeSupervisor([]componentSpec{spec})
+			if err != nil {
+				t.Fatal(err)
+			}
+			done := make(chan error, 1)
+			go func() { done <- supervisor.Run(ctx, stop) }()
+			awaitSupervisorSignal(t, started, "component start")
+			test.stop(cancel, stop)
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatalf("Run() error = %v, want nil", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("Supervisor did not accept external stop")
+			}
+			awaitSupervisorSignal(t, shutdownCalled, "component shutdown")
+		})
+	}
+}
+
+func TestWaitForSupervisorStopPreservesFirstTerminationCause(t *testing.T) {
+	t.Parallel()
+	componentErr := errors.New("component failed")
+	tests := []struct {
+		name      string
+		terminate func(context.CancelCauseFunc)
+		wantErr   error
+	}{
+		{name: "external stop wins", terminate: func(cancel context.CancelCauseFunc) {
+			cancel(nil)
+			cancel(&supervisorFailure{cause: componentErr})
+		}},
+		{name: "component failure wins", terminate: func(cancel context.CancelCauseFunc) {
+			cancel(&supervisorFailure{cause: componentErr})
+			cancel(nil)
+		}, wantErr: componentErr},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			ctx, cancel := context.WithCancelCause(context.Background())
+			test.terminate(cancel)
+			err := waitForSupervisorStop(ctx)
+			if !errors.Is(err, test.wantErr) || (test.wantErr == nil && err != nil) {
+				t.Fatalf("waitForSupervisorStop() error = %v, want %v", err, test.wantErr)
+			}
+		})
+	}
+}
+
 func TestNodeSupervisorRejectsInvalidComponentGraphsAndBudgets(t *testing.T) {
 	t.Parallel()
 	valid := func(name string, dependencies ...string) componentSpec {
@@ -200,4 +441,13 @@ func waitSupervisorLog(t *testing.T, mu *sync.Mutex, log *[]string, count int) {
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatalf("Supervisor log did not reach %d entries", count)
+}
+
+func awaitSupervisorSignal(t *testing.T, signal <-chan struct{}, name string) {
+	t.Helper()
+	select {
+	case <-signal:
+	case <-time.After(time.Second):
+		t.Fatalf("Supervisor did not reach %s", name)
+	}
 }
