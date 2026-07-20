@@ -46,34 +46,6 @@ type CompareAndSetChannelTopicStateResult struct {
 	Changed bool
 }
 
-// PeerReachabilityProjection is an observation attached to the exact current
-// signed binding authority. LastSeenAt records successful reachability only;
-// unreachable and unknown transitions preserve it.
-type PeerReachabilityProjection struct {
-	ChannelID    model.ChannelID
-	PeerID       model.PeerID
-	OriginEpoch  model.OriginEpoch
-	RosterHead   model.RecordHead
-	BindingState model.BindingState
-	Reachability model.Reachability
-	LastSeenAt   time.Time
-	HasLastSeen  bool
-}
-
-type SetPeerReachabilitySpec struct {
-	ChannelID          model.ChannelID
-	PeerID             model.PeerID
-	OriginEpoch        model.OriginEpoch
-	ExpectedRosterHead model.RecordHead
-	Reachability       model.Reachability
-	At                 time.Time
-}
-
-type SetPeerReachabilityResult struct {
-	Peer    PeerReachabilityProjection
-	Changed bool
-}
-
 // BeginChannelTopicRuntime invalidates every joined marker from a previous
 // process in one transaction. Repeating startup after the downgrade is a
 // read-only success and therefore does not drift Channel timestamps.
@@ -240,127 +212,6 @@ func (s *Store) ReadChannelTopicRuntime(ctx context.Context) ([]ChannelTopicProj
 	return result, nil
 }
 
-// SetPeerReachability updates only the current nonterminal signed binding.
-// Successful observations advance last_seen_at; negative observations never
-// erase it. Older callbacks cannot overwrite a newer successful observation.
-func (s *Store) SetPeerReachability(ctx context.Context,
-	spec SetPeerReachabilitySpec,
-) (SetPeerReachabilityResult, error) {
-	if s == nil || s.db == nil || ctx == nil || spec.ChannelID.IsZero() || spec.PeerID.IsZero() ||
-		spec.OriginEpoch.IsZero() || spec.ExpectedRosterHead.IsZero() || !spec.Reachability.Valid() {
-		return SetPeerReachabilityResult{}, ErrChannelRuntimeInput
-	}
-	at, err := canonicalStoreTime(spec.At)
-	if err != nil || at.IsZero() {
-		return SetPeerReachabilityResult{}, ErrChannelRuntimeInput
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return SetPeerReachabilityResult{}, fmt.Errorf("set Peer reachability: begin: %w", err)
-	}
-	defer tx.Rollback()
-	node, err := readNode(ctx, tx)
-	if err != nil {
-		return SetPeerReachabilityResult{}, fmt.Errorf("%w: Node: %v", ErrChannelRuntimeAuthority, err)
-	}
-	authority, err := readVerifiedChannelAuthority(ctx, tx, node.PeerID(), spec.ChannelID)
-	if err != nil {
-		return SetPeerReachabilityResult{}, fmt.Errorf("%w: %v", ErrChannelRuntimeAuthority, err)
-	}
-	if authority.channel.Status() != model.ChannelActive {
-		return SetPeerReachabilityResult{}, ErrChannelRuntimeAuthority
-	}
-	if authority.roster.Head() != spec.ExpectedRosterHead {
-		return SetPeerReachabilityResult{}, ErrChannelRuntimeConflict
-	}
-	binding, ok := currentRuntimeBinding(authority.bindings, spec.PeerID)
-	if !ok || binding.State() == model.BindingRevoked {
-		return SetPeerReachabilityResult{}, ErrChannelRuntimeAuthority
-	}
-	if binding.OriginEpoch() != spec.OriginEpoch {
-		return SetPeerReachabilityResult{}, ErrChannelRuntimeConflict
-	}
-	lastSeen, hasLastSeen := binding.LastSeenAt()
-	projection := peerReachabilityProjection(authority.roster.Head(), binding)
-	if binding.Reachability() == spec.Reachability &&
-		(spec.Reachability != model.ReachabilityReachable || (hasLastSeen && lastSeen.Equal(at))) {
-		if err := tx.Commit(); err != nil {
-			return SetPeerReachabilityResult{}, fmt.Errorf("set Peer reachability: commit replay: %w", err)
-		}
-		return SetPeerReachabilityResult{Peer: projection}, nil
-	}
-	member, memberExists := authority.roster.CurrentMember(spec.PeerID)
-	if !memberExists || at.Before(binding.JoinedAt()) || at.Before(member.CreatedAt()) ||
-		(hasLastSeen && (at.Before(lastSeen) ||
-			(spec.Reachability == model.ReachabilityReachable &&
-				binding.Reachability() != model.ReachabilityReachable && !at.After(lastSeen)))) {
-		return SetPeerReachabilityResult{}, ErrChannelRuntimeConflict
-	}
-	var nextLastSeen any
-	if hasLastSeen {
-		nextLastSeen = storeTime(lastSeen)
-	}
-	if spec.Reachability == model.ReachabilityReachable {
-		nextLastSeen = storeTime(at)
-	}
-	var expectedLastSeen any
-	if hasLastSeen {
-		expectedLastSeen = storeTime(lastSeen)
-	}
-	mutation, err := tx.ExecContext(ctx, `UPDATE peer_bindings SET reachability=?,last_seen_at=?
-		WHERE channel_id=? AND peer_id=? AND origin_epoch=? AND member_revision=?
-		AND member_record_hash=? AND state=? AND reachability=? AND last_seen_at IS ?`,
-		string(spec.Reachability), nextLastSeen, spec.ChannelID.String(), spec.PeerID.String(),
-		spec.OriginEpoch.String(), binding.MemberHead().Revision(), binding.MemberHead().Digest().Bytes(),
-		string(binding.State()), string(binding.Reachability()), expectedLastSeen)
-	if err != nil || exactlyOne(mutation) != nil {
-		if err == nil {
-			err = errors.New("PeerBinding changed during reachability update")
-		}
-		return SetPeerReachabilityResult{}, fmt.Errorf("%w: %v", ErrChannelRuntimeConflict, err)
-	}
-	if err := tx.Commit(); err != nil {
-		return SetPeerReachabilityResult{}, fmt.Errorf("set Peer reachability: commit: %w", err)
-	}
-	projection.Reachability = spec.Reachability
-	if spec.Reachability == model.ReachabilityReachable {
-		projection.LastSeenAt, projection.HasLastSeen = at, true
-	}
-	return SetPeerReachabilityResult{Peer: projection, Changed: true}, nil
-}
-
-// ReadPeerReachability returns the current verified binding observation,
-// including terminal forensic state, without changing it.
-func (s *Store) ReadPeerReachability(ctx context.Context, channelID model.ChannelID,
-	peerID model.PeerID,
-) (PeerReachabilityProjection, error) {
-	if s == nil || s.db == nil || ctx == nil || channelID.IsZero() || peerID.IsZero() {
-		return PeerReachabilityProjection{}, ErrChannelRuntimeInput
-	}
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
-		return PeerReachabilityProjection{}, fmt.Errorf("read Peer reachability: begin: %w", err)
-	}
-	defer tx.Rollback()
-	node, err := readNode(ctx, tx)
-	if err != nil {
-		return PeerReachabilityProjection{}, fmt.Errorf("%w: Node: %v", ErrChannelRuntimeAuthority, err)
-	}
-	authority, err := readVerifiedChannelAuthority(ctx, tx, node.PeerID(), channelID)
-	if err != nil {
-		return PeerReachabilityProjection{}, fmt.Errorf("%w: %v", ErrChannelRuntimeAuthority, err)
-	}
-	binding, ok := currentRuntimeBinding(authority.bindings, peerID)
-	if !ok {
-		return PeerReachabilityProjection{}, ErrChannelRuntimeAuthority
-	}
-	result := peerReachabilityProjection(authority.roster.Head(), binding)
-	if err := tx.Commit(); err != nil {
-		return PeerReachabilityProjection{}, fmt.Errorf("read Peer reachability: commit: %w", err)
-	}
-	return result, nil
-}
-
 func channelTopicProjection(channel model.Channel) ChannelTopicProjection {
 	return ChannelTopicProjection{ChannelID: channel.ID(), Status: channel.Status(),
 		RosterHead: channel.RosterHead(), TopicState: channel.TopicState(), UpdatedAt: channel.UpdatedAt()}
@@ -381,22 +232,4 @@ func validRuntimeTopicTransition(from, to model.TopicState) bool {
 	default:
 		return false
 	}
-}
-
-func currentRuntimeBinding(bindings []model.PeerBinding, peerID model.PeerID) (model.PeerBinding, bool) {
-	for _, binding := range bindings {
-		if binding.PeerID() == peerID {
-			return binding, true
-		}
-	}
-	return model.PeerBinding{}, false
-}
-
-func peerReachabilityProjection(rosterHead model.RecordHead,
-	binding model.PeerBinding,
-) PeerReachabilityProjection {
-	lastSeen, hasLastSeen := binding.LastSeenAt()
-	return PeerReachabilityProjection{ChannelID: binding.ChannelID(), PeerID: binding.PeerID(),
-		OriginEpoch: binding.OriginEpoch(), RosterHead: rosterHead, BindingState: binding.State(),
-		Reachability: binding.Reachability(), LastSeenAt: lastSeen, HasLastSeen: hasLastSeen}
 }

@@ -155,41 +155,11 @@ func (coordinator *ChannelAuthorityCoordinator) ReconcileMemberHelloGate(ctx con
 		return peer.ChannelMemberHelloAuthority{}, err
 	}
 	defer release()
-	if len(control.ProofRecords) == 0 {
-		roster, readErr := coordinator.readRoster(ctx, control.ChannelID)
-		return peer.ChannelMemberHelloAuthority{Roster: roster}, readErr
-	}
-	plan, err := coordinator.store.PrepareChannelRosterMerge(ctx, store.MergeChannelRosterSpec{
-		ChannelID: control.ChannelID, AuthenticatedTransportPeerID: control.AuthenticatedPeerID,
+	roster, err := coordinator.reconcileRemoteRoster(ctx, ChannelRuntimeRosterUpdate{
+		ChannelID: control.ChannelID, AuthenticatedPeerID: control.AuthenticatedPeerID,
 		Records: control.ProofRecords, At: control.At,
 	})
-	if err != nil {
-		return peer.ChannelMemberHelloAuthority{}, mapChannelAuthorityError(err)
-	}
-	result, err := executeChannelAuthorityPlan(ctx, coordinator.runtime,
-		channelAuthorityPlanSteps[store.MergeChannelRosterResult]{
-			candidate: plan.Candidate(), changes: plan.ChangesAuthority(), expected: plan.Result(),
-			commit: func(commitCtx context.Context) (store.MergeChannelRosterResult, error) {
-				return coordinator.store.CommitChannelRosterMerge(commitCtx, plan)
-			},
-			resolve: func(resolveCtx context.Context) (store.ChannelAuthorityPlanResolution, error) {
-				return coordinator.store.ResolveChannelRosterMerge(resolveCtx, plan)
-			},
-		})
-	if err != nil {
-		return peer.ChannelMemberHelloAuthority{}, mapChannelAuthorityError(err)
-	}
-	switch result.Status {
-	case store.ChannelRosterApplied, store.ChannelRosterDuplicate:
-		return peer.ChannelMemberHelloAuthority{Roster: result.Roster}, nil
-	case store.ChannelRosterGap:
-		return peer.ChannelMemberHelloAuthority{}, peer.ErrChannelMemberRosterGap
-	case store.ChannelRosterConflicted:
-		return peer.ChannelMemberHelloAuthority{}, peer.ErrChannelMemberRosterConflict
-	default:
-		return peer.ChannelMemberHelloAuthority{}, fmt.Errorf(
-			"%w: Store returned unknown roster result", ErrChannelAuthority)
-	}
+	return peer.ChannelMemberHelloAuthority{Roster: roster}, err
 }
 
 func (coordinator *ChannelAuthorityCoordinator) FreezeMemberRosterForSync(ctx context.Context,

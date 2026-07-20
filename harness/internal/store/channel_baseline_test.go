@@ -123,6 +123,7 @@ func TestInboundChannelBaselinePlanIgnoresObservationChangesAndResolvesOutcome(t
 	if observed, err := fixture.store.SetPeerReachability(context.Background(), SetPeerReachabilitySpec{
 		ChannelID: fixture.channel.Channel().ID(), PeerID: fixture.remote.Identity().PeerID(),
 		OriginEpoch: fixture.remote.Identity().OriginEpoch(), ExpectedRosterHead: fixture.channel.Roster().Head(),
+		ExpectedMemberHead: fixture.remote.Member().Head(), ExpectedBindingState: model.BindingPending,
 		Reachability: model.ReachabilityReachable, At: observationAt,
 	}); err != nil || !observed.Changed {
 		t.Fatalf("independent reachability update = (%#v,%v)", observed, err)

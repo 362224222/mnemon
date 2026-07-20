@@ -139,11 +139,13 @@ func TestChannelEnrollmentPlanExactEvidenceRejectsNonMeshDrift(t *testing.T) {
 		}
 		changed, err := fixture.owner.ownerStore.SetPeerReachability(context.Background(),
 			SetPeerReachabilitySpec{ChannelID: accepted.Channel.ID(),
-				PeerID:             fixture.owner.joiner.PeerID(),
-				OriginEpoch:        fixture.owner.joiner.OriginEpoch(),
-				ExpectedRosterHead: accepted.Roster.Head(),
-				Reachability:       model.ReachabilityReachable,
-				At:                 accepted.Member.CreatedAt().Add(time.Second)})
+				PeerID:               fixture.owner.joiner.PeerID(),
+				OriginEpoch:          fixture.owner.joiner.OriginEpoch(),
+				ExpectedRosterHead:   accepted.Roster.Head(),
+				ExpectedMemberHead:   accepted.Member.Head(),
+				ExpectedBindingState: model.BindingPending,
+				Reachability:         model.ReachabilityReachable,
+				At:                   accepted.Member.CreatedAt().Add(time.Second)})
 		if err != nil || !changed.Changed {
 			t.Fatalf("SetPeerReachability() = (%#v,%v)", changed, err)
 		}
