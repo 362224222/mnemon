@@ -207,6 +207,9 @@ func TestProvisionRejectsUnsafeWorkspaceStateAndInvalidClock(t *testing.T) {
 		if err := os.Mkdir(mnemonDir, 0o755); err != nil {
 			t.Fatal(err)
 		}
+		if err := os.Chmod(mnemonDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
 		result, err := Provision(context.Background(), provisionTestOptions(t, workspace, model.HostCodex))
 		if err != nil {
 			t.Fatal(err)

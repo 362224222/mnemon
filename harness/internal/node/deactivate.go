@@ -29,6 +29,13 @@ type DeactivateResult struct {
 	Changed bool
 }
 
+type deactivationPlan struct {
+	workspace         string
+	runtime           model.RuntimeKind
+	expectedUpdatedAt time.Time
+	at                time.Time
+}
+
 // Deactivate withdraws one exact durable Profile authority for setup rollback
 // or eject. It intentionally does not verify the Host projection: drifted
 // managed assets must still be removable after Agent authority is quiescent.
@@ -36,27 +43,11 @@ func Deactivate(ctx context.Context, options DeactivateOptions) (result Deactiva
 	if ctx == nil {
 		return DeactivateResult{}, fmt.Errorf("%w: context is unavailable", ErrDeactivate)
 	}
-	workspace, err := validateDaemonWorkspace(options.Workspace)
+	plan, err := prepareDeactivation(&options)
 	if err != nil {
-		return DeactivateResult{}, fmt.Errorf("%w: %v", ErrDeactivate, err)
+		return DeactivateResult{}, err
 	}
-	runtimeKind, hostOK := model.RuntimeForHost(options.Host)
-	if _, digestErr := model.ParseDigest(options.AssetRevision); !hostOK || digestErr != nil {
-		return DeactivateResult{}, fmt.Errorf("%w: Host or asset revision is invalid", ErrDeactivate)
-	}
-	expectedUpdatedAt := options.ExpectedUpdatedAt.Round(0).UTC()
-	if expectedUpdatedAt.IsZero() || expectedUpdatedAt.UnixNano() <= 0 ||
-		!time.Unix(0, expectedUpdatedAt.UnixNano()).UTC().Equal(expectedUpdatedAt) {
-		return DeactivateResult{}, fmt.Errorf("%w: expected authority update time is invalid", ErrDeactivate)
-	}
-	if options.Clock == nil {
-		options.Clock = wallClock{}
-	}
-	at := options.Clock.Now().Round(0).UTC()
-	if at.IsZero() || at.UnixNano() <= 0 || !time.Unix(0, at.UnixNano()).UTC().Equal(at) {
-		return DeactivateResult{}, fmt.Errorf("%w: clock is invalid", ErrDeactivate)
-	}
-	nodeState := filepath.Join(workspace, ".mnemon", "harness", "node")
+	nodeState := filepath.Join(plan.workspace, ".mnemon", "harness", "node")
 	identity, err := LoadIdentity(nodeState)
 	if err != nil {
 		return DeactivateResult{}, fmt.Errorf("%w: %v", ErrDeactivate, err)
@@ -82,30 +73,64 @@ func Deactivate(ctx context.Context, options DeactivateOptions) (result Deactiva
 	if err != nil {
 		return DeactivateResult{}, fmt.Errorf("%w: %v", ErrDeactivate, err)
 	}
-	if authority.Node.PeerID() != identity.PeerID() || authority.Profile.WorkspaceRoot() != workspace {
-		return DeactivateResult{}, fmt.Errorf("%w: durable Node differs from workspace identity", ErrDeactivate)
-	}
-	if authority.Profile.Host() != options.Host || authority.Profile.Runtime() != runtimeKind ||
-		authority.Profile.ActiveAssetRevision() != options.AssetRevision ||
-		authority.Node.ActiveAssetRevision() != options.AssetRevision {
-		return DeactivateResult{}, fmt.Errorf("%w: requested authority differs from durable Profile", ErrDeactivate)
-	}
-	if !authority.Profile.UpdatedAt().Equal(expectedUpdatedAt) {
-		return DeactivateResult{}, fmt.Errorf("%w: requested authority generation differs from durable Profile", ErrDeactivate)
-	}
-	if err := localapi.VerifyProfileCredential(nodeState, authority.Profile.CredentialHash()); err != nil {
-		return DeactivateResult{}, fmt.Errorf("%w: %v", ErrDeactivate, err)
+	if err := validateDeactivationAuthority(authority, identity, nodeState, plan, options); err != nil {
+		return DeactivateResult{}, err
 	}
 	expectedSpec := authority.Profile.Spec()
-	expectedSpec.UpdatedAt = expectedUpdatedAt
+	expectedSpec.UpdatedAt = plan.expectedUpdatedAt
 	expected, err := model.NewProfile(expectedSpec)
 	if err != nil {
 		return DeactivateResult{}, fmt.Errorf("%w: expected durable Profile: %v", ErrDeactivate, err)
 	}
-	deactivated, err := st.DeactivateProfile(ctx, expected, at)
+	deactivated, err := st.DeactivateProfile(ctx, expected, plan.at)
 	if err != nil {
 		return DeactivateResult{}, fmt.Errorf("%w: %v", ErrDeactivate, err)
 	}
 	return DeactivateResult{Node: deactivated.Node, Profile: deactivated.Profile,
 		Changed: deactivated.Changed}, nil
+}
+
+func prepareDeactivation(options *DeactivateOptions) (deactivationPlan, error) {
+	workspace, err := validateDaemonWorkspace(options.Workspace)
+	if err != nil {
+		return deactivationPlan{}, fmt.Errorf("%w: %v", ErrDeactivate, err)
+	}
+	runtimeKind, hostOK := model.RuntimeForHost(options.Host)
+	if _, digestErr := model.ParseDigest(options.AssetRevision); !hostOK || digestErr != nil {
+		return deactivationPlan{}, fmt.Errorf("%w: Host or asset revision is invalid", ErrDeactivate)
+	}
+	expectedUpdatedAt, ok := canonicalAuthorityTime(options.ExpectedUpdatedAt)
+	if !ok {
+		return deactivationPlan{}, fmt.Errorf("%w: expected authority update time is invalid", ErrDeactivate)
+	}
+	if options.Clock == nil {
+		options.Clock = wallClock{}
+	}
+	at, ok := canonicalAuthorityTime(options.Clock.Now())
+	if !ok {
+		return deactivationPlan{}, fmt.Errorf("%w: clock is invalid", ErrDeactivate)
+	}
+	return deactivationPlan{workspace: workspace, runtime: runtimeKind,
+		expectedUpdatedAt: expectedUpdatedAt, at: at}, nil
+}
+
+func validateDeactivationAuthority(authority store.LocalAuthority, identity *Identity, nodeState string,
+	plan deactivationPlan, options DeactivateOptions,
+) error {
+	if authority.Node.PeerID() != identity.PeerID() ||
+		authority.Profile.WorkspaceRoot() != plan.workspace {
+		return fmt.Errorf("%w: durable Node differs from workspace identity", ErrDeactivate)
+	}
+	if authority.Profile.Host() != options.Host || authority.Profile.Runtime() != plan.runtime ||
+		authority.Profile.ActiveAssetRevision() != options.AssetRevision ||
+		authority.Node.ActiveAssetRevision() != options.AssetRevision {
+		return fmt.Errorf("%w: requested authority differs from durable Profile", ErrDeactivate)
+	}
+	if !authority.Profile.UpdatedAt().Equal(plan.expectedUpdatedAt) {
+		return fmt.Errorf("%w: requested authority generation differs from durable Profile", ErrDeactivate)
+	}
+	if err := localapi.VerifyProfileCredential(nodeState, authority.Profile.CredentialHash()); err != nil {
+		return fmt.Errorf("%w: %v", ErrDeactivate, err)
+	}
+	return nil
 }

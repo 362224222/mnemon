@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
@@ -44,4 +45,10 @@ func authoritySnapshot(authority store.LocalAuthority) localapi.AuthoritySnapsho
 		Enabled: authority.Profile.Enabled(), AssetRevision: authority.Profile.ActiveAssetRevision(),
 		UpdatedAt: authority.Profile.UpdatedAt(), PeerID: authority.Node.PeerID(),
 		ActiveAssetRevision: authority.Node.ActiveAssetRevision()}
+}
+
+func canonicalAuthorityTime(value time.Time) (time.Time, bool) {
+	canonical := value.Round(0).UTC()
+	return canonical, !canonical.IsZero() && canonical.UnixNano() > 0 &&
+		time.Unix(0, canonical.UnixNano()).UTC().Equal(canonical)
 }

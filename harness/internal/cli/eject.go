@@ -211,18 +211,8 @@ func (app *ejectApp) executeLeased(ctx context.Context, workspace, nodeState str
 	if quiesced != authority {
 		return ejectReceipt{}, setupAuthError("managed authority changed while stopping mnemond")
 	}
-	if authority.Enabled {
-		deactivated, err := companion.Deactivate(ctx, model.HostKind(host),
-			authority.AssetRevision, authorityUpdatedAt)
-		if err != nil {
-			return ejectReceipt{}, ejectLifecycleError(err)
-		}
-		deactivatedAt, generationErr := parseSetupAuthorityTime(deactivated.UpdatedAt)
-		if !deactivated.Changed || generationErr != nil ||
-			!deactivatedAt.After(authorityUpdatedAt) {
-			return ejectReceipt{}, setupError(localapi.CodeInternal,
-				"managed eject returned an invalid deactivation generation")
-		}
+	if apiErr := deactivateEjectAuthority(ctx, companion, host, authority, authorityUpdatedAt); apiErr != nil {
+		return ejectReceipt{}, apiErr
 	}
 	projection, err := app.deps.ejectProjection(workspace, nodeState, host, bundle)
 	if err != nil {
@@ -253,6 +243,25 @@ func (app *ejectApp) executeLeased(ctx context.Context, workspace, nodeState str
 		RemovedFiles:  projection.RemovedFiles,
 		Replayed:      !authority.Enabled && projection.Replayed,
 		SchemaVersion: localapi.SchemaVersion, Status: "ejected"}, nil
+}
+
+func deactivateEjectAuthority(ctx context.Context, companion ejectCompanion, host assets.Host,
+	authority localapi.AuthorityResponse, authorityUpdatedAt time.Time,
+) *localapi.APIError {
+	if !authority.Enabled {
+		return nil
+	}
+	deactivated, err := companion.Deactivate(ctx, model.HostKind(host),
+		authority.AssetRevision, authorityUpdatedAt)
+	if err != nil {
+		return ejectLifecycleError(err)
+	}
+	deactivatedAt, err := parseSetupAuthorityTime(deactivated.UpdatedAt)
+	if !deactivated.Changed || err != nil || !deactivatedAt.After(authorityUpdatedAt) {
+		return setupError(localapi.CodeInternal,
+			"managed eject returned an invalid deactivation generation")
+	}
+	return nil
 }
 
 func ejectLifecycleError(err error) *localapi.APIError {

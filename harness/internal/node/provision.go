@@ -32,6 +32,12 @@ type ProvisionResult struct {
 	CredentialCreated bool
 }
 
+type provisionPlan struct {
+	workspace string
+	runtime   model.RuntimeKind
+	at        time.Time
+}
+
 // PrepareNodeState creates and validates only the owner-controlled directory
 // skeleton required to serialize first setup. It deliberately does not create
 // or open identity keys, Profile credentials, node.db, projections or any
@@ -56,22 +62,11 @@ func Provision(ctx context.Context, options ProvisionOptions) (result ProvisionR
 	if ctx == nil {
 		return ProvisionResult{}, fmt.Errorf("%w: context is unavailable", ErrProvision)
 	}
-	workspace, err := validateDaemonWorkspace(options.Workspace)
+	plan, err := prepareProvision(&options)
 	if err != nil {
-		return ProvisionResult{}, fmt.Errorf("%w: %v", ErrProvision, err)
+		return ProvisionResult{}, err
 	}
-	runtimeKind, ok := model.RuntimeForHost(options.Host)
-	if _, digestErr := model.ParseDigest(options.AssetRevision); !ok || digestErr != nil {
-		return ProvisionResult{}, fmt.Errorf("%w: Host or asset revision is invalid", ErrProvision)
-	}
-	if options.Clock == nil {
-		options.Clock = wallClock{}
-	}
-	at := options.Clock.Now().Round(0).UTC()
-	if at.IsZero() || at.UnixNano() <= 0 || !time.Unix(0, at.UnixNano()).UTC().Equal(at) {
-		return ProvisionResult{}, fmt.Errorf("%w: clock is invalid", ErrProvision)
-	}
-	nodeState, err := ensureProvisionState(workspace)
+	nodeState, err := ensureProvisionState(plan.workspace)
 	if err != nil {
 		return ProvisionResult{}, err
 	}
@@ -94,33 +89,62 @@ func Provision(ctx context.Context, options ProvisionOptions) (result ProvisionR
 	}()
 
 	if authority, readErr := st.ReadLocalAuthority(ctx); readErr == nil {
-		if authority.Node.PeerID() != identity.PeerID() ||
-			authority.Profile.WorkspaceRoot() != workspace ||
-			authority.Profile.CredentialHash() != credential {
-			return ProvisionResult{}, fmt.Errorf("%w: durable identity differs from workspace projections", ErrProvision)
-		}
-		if authority.Profile.Enabled() && authority.Profile.Host() != options.Host {
-			return ProvisionResult{}, fmt.Errorf("%w: enabled Profile Host is %s, not %s",
-				ErrProvision, authority.Profile.Host(), options.Host)
-		}
-		return ProvisionResult{NodeState: nodeState, Node: authority.Node, Profile: authority.Profile,
-			CredentialCreated: credentialCreated}, nil
+		return replayProvision(nodeState, identity, credential, credentialCreated, authority, options.Host, plan.workspace)
 	}
+	return createProvisionAuthority(ctx, st, nodeState, identity, credential, credentialCreated, options, plan)
+}
 
-	epoch, err := model.ParseOriginEpoch(derivedProvisionIdentifier("epoch", identity.PublicKey(), workspace))
+func prepareProvision(options *ProvisionOptions) (provisionPlan, error) {
+	workspace, err := validateDaemonWorkspace(options.Workspace)
+	if err != nil {
+		return provisionPlan{}, fmt.Errorf("%w: %v", ErrProvision, err)
+	}
+	runtimeKind, ok := model.RuntimeForHost(options.Host)
+	if _, digestErr := model.ParseDigest(options.AssetRevision); !ok || digestErr != nil {
+		return provisionPlan{}, fmt.Errorf("%w: Host or asset revision is invalid", ErrProvision)
+	}
+	if options.Clock == nil {
+		options.Clock = wallClock{}
+	}
+	at, ok := canonicalAuthorityTime(options.Clock.Now())
+	if !ok {
+		return provisionPlan{}, fmt.Errorf("%w: clock is invalid", ErrProvision)
+	}
+	return provisionPlan{workspace: workspace, runtime: runtimeKind, at: at}, nil
+}
+
+func replayProvision(nodeState string, identity *Identity, credential model.Digest, credentialCreated bool,
+	authority store.LocalAuthority, host model.HostKind, workspace string,
+) (ProvisionResult, error) {
+	if authority.Node.PeerID() != identity.PeerID() ||
+		authority.Profile.WorkspaceRoot() != workspace || authority.Profile.CredentialHash() != credential {
+		return ProvisionResult{}, fmt.Errorf("%w: durable identity differs from workspace projections", ErrProvision)
+	}
+	if authority.Profile.Enabled() && authority.Profile.Host() != host {
+		return ProvisionResult{}, fmt.Errorf("%w: enabled Profile Host is %s, not %s",
+			ErrProvision, authority.Profile.Host(), host)
+	}
+	return ProvisionResult{NodeState: nodeState, Node: authority.Node, Profile: authority.Profile,
+		CredentialCreated: credentialCreated}, nil
+}
+
+func createProvisionAuthority(ctx context.Context, st *store.Store, nodeState string, identity *Identity,
+	credential model.Digest, credentialCreated bool, options ProvisionOptions, plan provisionPlan,
+) (ProvisionResult, error) {
+	epoch, err := model.ParseOriginEpoch(derivedProvisionIdentifier("epoch", identity.PublicKey(), plan.workspace))
 	if err != nil {
 		return ProvisionResult{}, fmt.Errorf("%w: derive origin epoch: %v", ErrProvision, err)
 	}
-	principal := derivedProvisionIdentifier("principal", identity.PublicKey(), workspace)
+	principal := derivedProvisionIdentifier("principal", identity.PublicKey(), plan.workspace)
 	nodeValue, err := model.NewNode(model.NodeSpec{PeerID: identity.PeerID(), OriginEpoch: epoch,
-		NextOriginSequence: 1, ActiveAssetRevision: options.AssetRevision, CreatedAt: at, UpdatedAt: at})
+		NextOriginSequence: 1, ActiveAssetRevision: options.AssetRevision, CreatedAt: plan.at, UpdatedAt: plan.at})
 	if err != nil {
 		return ProvisionResult{}, fmt.Errorf("%w: create Node value: %v", ErrProvision, err)
 	}
 	profile, err := model.NewProfile(model.ProfileSpec{ID: model.TeamworkProfileID(), Principal: principal,
-		WorkspaceRoot: workspace, Host: options.Host, Runtime: runtimeKind, CredentialHash: credential,
+		WorkspaceRoot: plan.workspace, Host: options.Host, Runtime: plan.runtime, CredentialHash: credential,
 		ActiveAssetRevision: options.AssetRevision, HandlingBudget: model.DefaultHandlingBudget().JSON(),
-		CreatedAt: at, UpdatedAt: at})
+		CreatedAt: plan.at, UpdatedAt: plan.at})
 	if err != nil {
 		return ProvisionResult{}, fmt.Errorf("%w: create Profile value: %v", ErrProvision, err)
 	}
