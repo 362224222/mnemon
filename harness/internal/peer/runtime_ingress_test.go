@@ -256,7 +256,6 @@ func TestRuntimeIngressInvalidPublicationFailsClosedAndDrainsSiblings(t *testing
 	otherChannel := runtimeIngressChannel(t, "invalid-sibling")
 	activity := &runtimeIngressTestActivity{}
 	invalid := newRuntimeIngressTestSession(invalidChannel, local.libp2pID, activity)
-	invalid.Push(runtimeIngressNext{publication: ReceivedPublication{}})
 	sibling := newRuntimeIngressTestSession(otherChannel, local.libp2pID, activity)
 	sessions := newRuntimeIngressTestSessions()
 	sessions.Set(invalidChannel, invalid)
@@ -269,6 +268,9 @@ func TestRuntimeIngressInvalidPublicationFailsClosedAndDrainsSiblings(t *testing
 		run.Cancel()
 		_ = run.Wait(t)
 	})
+	invalid.WaitNextCalls(t, 1)
+	sibling.WaitNextCalls(t, 1)
+	invalid.Push(runtimeIngressNext{publication: ReceivedPublication{}})
 
 	err := run.Wait(t)
 	if !errors.Is(err, ErrRuntimeIngress) {
