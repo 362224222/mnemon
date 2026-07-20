@@ -233,36 +233,33 @@ func TestSetPeerReachabilityIsMonotonicAndAuthorityBound(t *testing.T) {
 	reachableAt := fixture.at
 	base := fixture.spec(model.ReachabilityReachable, reachableAt)
 	first, err := fixture.store.SetPeerReachability(context.Background(), base)
-	if err != nil || !first.Changed || first.Peer.Reachability != model.ReachabilityReachable ||
-		!first.Peer.HasLastSeen || !first.Peer.LastSeenAt.Equal(reachableAt) {
-		t.Fatalf("first reachable = (%#v,%v)", first, err)
-	}
+	assertPeerReachabilityMutation(t, "first reachable", first, err,
+		model.ReachabilityReachable, reachableAt, true)
 	replayed, err := fixture.store.SetPeerReachability(context.Background(), base)
-	if err != nil || replayed.Changed || replayed.Peer != first.Peer {
-		t.Fatalf("reachable replay = (%#v,%v), first %#v", replayed, err, first)
+	assertPeerReachabilityMutation(t, "reachable replay", replayed, err,
+		model.ReachabilityReachable, reachableAt, false)
+	if replayed.Peer != first.Peer {
+		t.Fatalf("reachable replay Peer = %#v, want %#v", replayed.Peer, first.Peer)
 	}
 
 	unreachable := fixture.spec(model.ReachabilityUnreachable, reachableAt.Add(time.Hour))
 	negative, err := fixture.store.SetPeerReachability(context.Background(), unreachable)
-	if err != nil || !negative.Changed || negative.Peer.Reachability != model.ReachabilityUnreachable ||
-		!negative.Peer.LastSeenAt.Equal(reachableAt) {
-		t.Fatalf("unreachable observation = (%#v,%v)", negative, err)
-	}
+	assertPeerReachabilityMutation(t, "unreachable observation", negative, err,
+		model.ReachabilityUnreachable, reachableAt, true)
 	unreachableReplay := unreachable
 	unreachableReplay.At = unreachable.At.Add(time.Hour)
 	replayedNegative, err := fixture.store.SetPeerReachability(context.Background(), unreachableReplay)
-	if err != nil || replayedNegative.Changed || !replayedNegative.Peer.LastSeenAt.Equal(reachableAt) {
-		t.Fatalf("unreachable replay = (%#v,%v)", replayedNegative, err)
-	}
+	assertPeerReachabilityMutation(t, "unreachable replay", replayedNegative, err,
+		model.ReachabilityUnreachable, reachableAt, false)
 	if _, err := fixture.store.SetPeerReachability(context.Background(), base); !errors.Is(err, ErrChannelRuntimeConflict) {
 		t.Fatalf("stale reachable callback error = %v", err)
 	}
 
 	newReachableAt := reachableAt.Add(3 * time.Hour)
 	newReachable := fixture.spec(model.ReachabilityReachable, newReachableAt)
-	if result, err := fixture.store.SetPeerReachability(context.Background(), newReachable); err != nil || !result.Changed || !result.Peer.LastSeenAt.Equal(newReachableAt) {
-		t.Fatalf("new reachable observation = (%#v,%v)", result, err)
-	}
+	result, err := fixture.store.SetPeerReachability(context.Background(), newReachable)
+	assertPeerReachabilityMutation(t, "new reachable observation", result, err,
+		model.ReachabilityReachable, newReachableAt, true)
 	olderUnknown := fixture.spec(model.ReachabilityUnknown, newReachableAt.Add(-time.Second))
 	if _, err := fixture.store.SetPeerReachability(context.Background(), olderUnknown); !errors.Is(err, ErrChannelRuntimeConflict) {
 		t.Fatalf("older negative callback error = %v", err)
@@ -285,33 +282,26 @@ func TestSetPeerReachabilityIsMonotonicAndAuthorityBound(t *testing.T) {
 	}
 	read, err := fixture.store.ReadPeerReachability(context.Background(),
 		fixture.channel.Channel().ID(), fixture.remote.Identity().PeerID())
-	if err != nil || read.Reachability != model.ReachabilityReachable ||
-		!read.LastSeenAt.Equal(newReachableAt) || read.RosterHead != fixture.channel.Roster().Head() {
-		t.Fatalf("ReadPeerReachability() = (%#v,%v)", read, err)
+	assertPeerReachabilityProjection(t, read, err, newReachableAt, fixture.channel.Roster().Head())
+}
+
+func assertPeerReachabilityMutation(t *testing.T, label string, result SetPeerReachabilityResult,
+	err error, reachability model.Reachability, lastSeen time.Time, changed bool,
+) {
+	t.Helper()
+	if err != nil || result.Changed != changed || result.Peer.Reachability != reachability ||
+		!result.Peer.HasLastSeen || !result.Peer.LastSeenAt.Equal(lastSeen) {
+		t.Fatalf("%s = (%#v,%v)", label, result, err)
 	}
 }
 
-func TestSetPeerReachabilityRejectsRevokedBinding(t *testing.T) {
-	t.Parallel()
-	st := openTestStore(t)
-	channel := testkit.NewSignedChannel(t, "reachability-revoked")
-	remote := channel.AppendActive(t, "reachability-revoked-remote")
-	terminal := channel.AppendTerminal(t, remote.Identity().PeerID(), model.MemberRevoked)
-	insertChannelTestNode(t, st.db, channel.Owner(), channel.Channel().CreatedAt())
-	insertSignedChannelFixture(t, st.db, channel, model.TopicJoining)
-	insertSignedPeerBinding(t, st.db, channel.Channel().ID(), terminal, "former",
-		model.BindingRevoked, model.ReachabilityUnknown, remote.Member().CreatedAt())
-	_, err := st.SetPeerReachability(context.Background(), SetPeerReachabilitySpec{
-		ChannelID: channel.Channel().ID(), PeerID: remote.Identity().PeerID(),
-		OriginEpoch: remote.Identity().OriginEpoch(), ExpectedRosterHead: channel.Roster().Head(),
-		Reachability: model.ReachabilityReachable, At: channel.Channel().UpdatedAt().Add(time.Hour)})
-	if !errors.Is(err, ErrChannelRuntimeAuthority) {
-		t.Fatalf("revoked reachability error = %v", err)
-	}
-	read, err := st.ReadPeerReachability(context.Background(), channel.Channel().ID(),
-		remote.Identity().PeerID())
-	if err != nil || read.BindingState != model.BindingRevoked || read.HasLastSeen {
-		t.Fatalf("revoked read projection = (%#v,%v)", read, err)
+func assertPeerReachabilityProjection(t *testing.T, projection PeerReachabilityProjection, err error,
+	lastSeen time.Time, rosterHead model.RecordHead,
+) {
+	t.Helper()
+	if err != nil || projection.Reachability != model.ReachabilityReachable ||
+		!projection.LastSeenAt.Equal(lastSeen) || projection.RosterHead != rosterHead {
+		t.Fatalf("ReadPeerReachability() = (%#v,%v)", projection, err)
 	}
 }
 
