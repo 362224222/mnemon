@@ -36,6 +36,33 @@ func TestChannelContractRejectsOpenShapesAndSecretsOutsideInviteResponses(t *tes
 	}
 }
 
+func TestChannelAbandonContractIsClosedAndCanonical(t *testing.T) {
+	t.Parallel()
+	if !validChannelAbandonRequest(ChannelAbandonRequest{Channel: "alpha",
+		ConfirmChannel: "alpha", Force: true}) {
+		t.Fatal("exact destructive confirmation was rejected")
+	}
+	for _, request := range []ChannelAbandonRequest{
+		{Channel: "alpha", ConfirmChannel: "alpha"},
+		{Channel: "alpha", ConfirmChannel: "beta", Force: true},
+		{Channel: "", ConfirmChannel: "", Force: true},
+	} {
+		if validChannelAbandonRequest(request) {
+			t.Fatalf("unsafe abandon request accepted: %#v", request)
+		}
+	}
+	valid := ChannelAbandonResponse{SchemaVersion: SchemaVersion, Status: "abandoned",
+		Channel: "alpha", TransitionedAt: "2026-07-21T10:00:00.123456789Z",
+		Evidence: ChannelForensicCounts{Bindings: 2, Events: 7}}
+	if apiErr := validateChannelAbandonResponse(valid); apiErr != nil {
+		t.Fatalf("valid abandon response rejected: %v", apiErr)
+	}
+	valid.TransitionedAt = "2026-07-21T10:00:00.1234567890Z"
+	if validateChannelAbandonResponse(valid) == nil {
+		t.Fatal("noncanonical transition time accepted")
+	}
+}
+
 func validChannelContractView() ChannelView {
 	invite := ChannelInviteView{ExpiresAt: time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC).
 		Format(time.RFC3339Nano), RemainingUses: 7, Status: "open"}
