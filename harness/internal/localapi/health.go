@@ -2,10 +2,36 @@ package localapi
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
+	"net/http"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 )
+
+// ProbeHealth performs the authenticated, identity-free daemon readiness
+// probe. A valid not_ready response is returned to the caller as health state,
+// not rewritten into a transport error.
+func (c *Client) ProbeHealth(ctx context.Context) (HealthResponse, *APIError) {
+	var response HealthResponse
+	if c == nil || c.http == nil || ctx == nil {
+		return HealthResponse{}, invalidControlResponse("local control client is unavailable")
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		"http://mnemond"+RouteHealth, nil)
+	if err != nil {
+		return HealthResponse{}, invalidControlResponse("local control request cannot be created")
+	}
+	request.Header.Set(authorizationHeader,
+		profileScheme+base64.RawURLEncoding.EncodeToString(c.token[:]))
+	if apiErr := c.send(request, &response, MaxHealthResponseBytes); apiErr != nil {
+		return HealthResponse{}, apiErr
+	}
+	if apiErr := validateHealthResponse(response); apiErr != nil {
+		return HealthResponse{}, apiErr
+	}
+	return response, nil
+}
 
 // MaxHealthResponseBytes includes both the compact success envelope and the
 // existing bounded API error union.

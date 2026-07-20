@@ -63,6 +63,9 @@ func TestListenOwnerUnixRejectsUnsafePaths(t *testing.T) {
 	if err := os.Mkdir(unsafe, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Chmod(unsafe, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if listener, err := ListenOwnerUnix(filepath.Join(unsafe, "control.sock")); err == nil || listener != nil {
 		t.Fatalf("unsafe parent listener = %v, %v", listener, err)
 	}

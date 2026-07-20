@@ -282,6 +282,9 @@ func TestEnsureProfileCredentialPreservesInvalidExistingPath(t *testing.T) {
 			if err := os.WriteFile(path, test.raw, test.mode); err != nil {
 				t.Fatal(err)
 			}
+			if err := os.Chmod(path, test.mode); err != nil {
+				t.Fatal(err)
+			}
 			before, err := os.Lstat(path)
 			if err != nil {
 				t.Fatal(err)

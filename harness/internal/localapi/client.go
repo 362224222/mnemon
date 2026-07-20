@@ -110,30 +110,6 @@ func VerifyProfileCredential(nodeState string, expected model.Digest) error {
 	return nil
 }
 
-// ProbeHealth performs the authenticated, identity-free daemon readiness
-// probe. A valid not_ready response is returned to the caller as health state,
-// not rewritten into a transport error.
-func (c *Client) ProbeHealth(ctx context.Context) (HealthResponse, *APIError) {
-	var response HealthResponse
-	if c == nil || c.http == nil || ctx == nil {
-		return HealthResponse{}, invalidControlResponse("local control client is unavailable")
-	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		"http://mnemond"+RouteHealth, nil)
-	if err != nil {
-		return HealthResponse{}, invalidControlResponse("local control request cannot be created")
-	}
-	request.Header.Set(authorizationHeader,
-		profileScheme+base64.RawURLEncoding.EncodeToString(c.token[:]))
-	if apiErr := c.send(request, &response, MaxHealthResponseBytes); apiErr != nil {
-		return HealthResponse{}, apiErr
-	}
-	if apiErr := validateHealthResponse(response); apiErr != nil {
-		return HealthResponse{}, apiErr
-	}
-	return response, nil
-}
-
 // ReadStatus observes activation and the live managed Runtime worker even
 // while aggregate health is not_ready. It carries no Agent capability header
 // and accepts only the closed, identity-free status envelope.

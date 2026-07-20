@@ -269,17 +269,6 @@ func (s *Server) handleMutationShutdown(writer http.ResponseWriter, request *htt
 	s.shutdownOnce.Do(s.lifecycle)
 }
 
-func parseMutationShutdownHeader(header http.Header) (bool, error) {
-	values := header.Values(mutationShutdownHeader)
-	if len(values) == 0 {
-		return false, nil
-	}
-	if len(values) != 1 || values[0] != mutationShutdownHeaderValue {
-		return false, errors.New("mutation shutdown header must have its fixed value")
-	}
-	return true, nil
-}
-
 func (s *Server) Handler() http.Handler { return s.handler }
 
 func (s *Server) handleHealth(writer http.ResponseWriter, request *http.Request) {
