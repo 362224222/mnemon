@@ -312,8 +312,7 @@ func acquireWriterLock(path string) (*os.File, error) {
 }
 
 func acquireExistingWriterLock(path string) (*os.File, error) {
-	fd, err := unix.Open(path, unix.O_RDWR|unix.O_CREAT|unix.O_CLOEXEC|unix.O_NOFOLLOW,
-		uint32(privateFileMode))
+	fd, err := unix.Open(path, unix.O_RDWR|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
 		return nil, fmt.Errorf("open existing node store: open writer lock: %w", err)
 	}
