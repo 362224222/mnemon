@@ -381,10 +381,11 @@
         "harness/internal/store"
       ],
       "accepted_commits": [
-        "35e6d8d20faff1247602a6b3e77c10a48d1a622c"
+        "35e6d8d20faff1247602a6b3e77c10a48d1a622c",
+        "68ecc7f3bc7abe8e016ba974c78fced8ab1e3b2f"
       ],
       "test_symbols": [
-        "harness/internal/store/channel_enrollment_test.go::TestInstallJoinedChannelAppliesTerminalReplaySuffixButFreshJoinStaysEmpty"
+        "harness/internal/store/channel_enrollment_install_test.go::TestInstallJoinedChannelAppliesTerminalReplaySuffixButFreshJoinStaysEmpty"
       ],
       "scenario_keys": [
         "ch-15-terminal-peer-replay"
