@@ -95,6 +95,36 @@ func (runtime *MeshRuntime) managedRuntimeHost() host.Host {
 	return runtime.nodeHost.managedRuntimeHost()
 }
 
+// LocalEnrollmentMultiaddrs returns the bounded, canonical address snapshot
+// advertised by the one managed Host. Callers cannot substitute a different
+// address set for enrollment evidence.
+func (runtime *MeshRuntime) LocalEnrollmentMultiaddrs() ([]string, error) {
+	if runtime == nil {
+		return nil, fmt.Errorf("%w: runtime is unavailable", ErrMeshRuntime)
+	}
+	runtime.mu.Lock()
+	if runtime.closed || runtime.nodeHost == nil || runtime.nodeHost.managedRuntimeHost() == nil {
+		runtime.mu.Unlock()
+		return nil, fmt.Errorf("%w: runtime is closed", ErrMeshRuntime)
+	}
+	localHost := runtime.nodeHost.managedRuntimeHost()
+	runtime.mu.Unlock()
+
+	hostAddresses := localHost.Addrs()
+	addresses := make([]string, 0, len(hostAddresses))
+	for _, address := range hostAddresses {
+		if address == nil {
+			return nil, fmt.Errorf("%w: managed Host returned a nil address", ErrMeshRuntime)
+		}
+		addresses = append(addresses, address.String())
+	}
+	sort.Strings(addresses)
+	if _, err := model.AdvertisedAddressDigest(addresses); err != nil {
+		return nil, fmt.Errorf("%w: local enrollment addresses: %w", ErrMeshRuntime, err)
+	}
+	return append([]string(nil), addresses...), nil
+}
+
 func (runtime *MeshRuntime) Session(channelID model.ChannelID) (*TopicSession, error) {
 	if runtime == nil {
 		return nil, fmt.Errorf("%w: runtime is unavailable", ErrMeshRuntime)

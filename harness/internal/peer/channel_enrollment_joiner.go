@@ -52,6 +52,7 @@ func (failure *ChannelJoinControlFailure) Code() ChannelProtocolErrorCode {
 type ChannelJoinPrepareControl struct {
 	AuthenticatedLocalPeerID model.PeerID
 	LocalPublicKey           []byte
+	AdvertisedMultiaddrs     []string
 	Descriptor               model.SignedChannelDescriptor
 	GrantID                  model.GrantID
 	LocalAlias               string
@@ -157,10 +158,9 @@ type ChannelJoinSession interface {
 }
 
 type JoinChannelSpec struct {
-	Token                model.EnrollmentToken
-	DisplayLabel         string
-	AdvertisedMultiaddrs []string
-	LocalAlias           string
+	Token        model.EnrollmentToken
+	DisplayLabel string
+	LocalAlias   string
 }
 
 type channelEnrollmentClient struct {

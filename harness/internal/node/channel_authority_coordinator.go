@@ -17,6 +17,24 @@ var ErrChannelAuthority = errors.New("mnemond Channel authority")
 
 type channelAuthorityStore interface {
 	ReadChannelMeshAuthority(context.Context) (store.ChannelMeshAuthority, error)
+	PrepareJoinedChannel(context.Context,
+		store.PrepareJoinedChannelSpec,
+	) (store.PrepareJoinedChannelResult, error)
+	MarkJoinedChannelCommitUnknown(context.Context, model.EnrollmentRequestID,
+		model.PeerID, uint64, time.Time,
+	) error
+	ReleaseJoinedChannelReservation(context.Context, model.EnrollmentRequestID,
+		model.PeerID, uint64,
+	) error
+	PrepareJoinedChannelInstall(context.Context,
+		store.InstallJoinedChannelSpec,
+	) (store.JoinedChannelInstallPlan, error)
+	CommitJoinedChannelInstall(context.Context,
+		store.JoinedChannelInstallPlan,
+	) (store.InstallJoinedChannelResult, error)
+	ResolveJoinedChannelInstall(context.Context,
+		store.JoinedChannelInstallPlan,
+	) (store.ChannelAuthorityPlanResolution, error)
 	PrepareChannelEnrollment(context.Context,
 		store.PrepareChannelEnrollmentSpec,
 	) (store.PrepareChannelEnrollmentResult, error)
@@ -63,8 +81,9 @@ func (runtime meshChannelAuthorityRuntime) begin(
 
 // ChannelAuthorityCoordinator is the Node-private prepare -> runtime drain ->
 // Store CAS -> runtime install boundary for every local Channel authority
-// mutation. Its single capacity-one token serializes create, member roster,
-// and baseline authority while Store remains the durable source of truth.
+// mutation. Its single capacity-one token serializes create, join, enrollment,
+// member roster, and baseline authority while Store remains the durable source
+// of truth.
 type ChannelAuthorityCoordinator struct {
 	store   channelAuthorityStore
 	runtime channelAuthorityRuntime

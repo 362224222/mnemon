@@ -53,7 +53,11 @@ func (runtime *MeshRuntime) JoinChannel(ctx context.Context, spec JoinChannelSpe
 func (client *channelEnrollmentClient) joinChannel(ctx context.Context, runtime *MeshRuntime,
 	spec JoinChannelSpec,
 ) (result ChannelJoinResult, resultErr error) {
-	frozen, err := freezeJoinChannelSpec(spec)
+	addresses, err := runtime.LocalEnrollmentMultiaddrs()
+	if err != nil {
+		return ChannelJoinResult{}, enrollmentTransportFailure(err)
+	}
+	frozen, err := freezeJoinChannelSpec(spec, addresses)
 	if err != nil {
 		return ChannelJoinResult{}, newChannelProtocolFailure(ChannelErrorInvalidToken, 0)
 	}
@@ -95,13 +99,15 @@ func (client *channelEnrollmentClient) joinChannel(ctx context.Context, runtime 
 	return result, joinErr
 }
 
-func freezeJoinChannelSpec(spec JoinChannelSpec) (frozenJoinChannelSpec, error) {
+func freezeJoinChannelSpec(spec JoinChannelSpec,
+	advertisedMultiaddrs []string,
+) (frozenJoinChannelSpec, error) {
 	token, err := model.ParseEnrollmentToken(spec.Token.Reveal())
 	if err != nil || model.VerifyEnrollmentToken(token) != nil {
 		return frozenJoinChannelSpec{}, ErrChannelEnrollmentProtocol
 	}
 	return frozenJoinChannelSpec{token: token, displayLabel: spec.DisplayLabel,
-		advertisedMultiaddrs: append([]string(nil), spec.AdvertisedMultiaddrs...),
+		advertisedMultiaddrs: append([]string(nil), advertisedMultiaddrs...),
 		localAlias:           spec.LocalAlias}, nil
 }
 
@@ -131,7 +137,8 @@ func (client *channelEnrollmentClient) beginChannelJoin(ctx context.Context,
 	}
 	prepared, err := client.session.BeginChannelJoin(ctx, ChannelJoinPrepareControl{
 		AuthenticatedLocalPeerID: local.peerID, LocalPublicKey: append([]byte(nil), local.publicKey...),
-		Descriptor: payload.Descriptor(), GrantID: payload.GrantID(), LocalAlias: spec.localAlias, At: at,
+		AdvertisedMultiaddrs: append([]string(nil), spec.advertisedMultiaddrs...),
+		Descriptor:           payload.Descriptor(), GrantID: payload.GrantID(), LocalAlias: spec.localAlias, At: at,
 	})
 	if err != nil {
 		return PreparedChannelJoin{}, channelJoinControlError(err)

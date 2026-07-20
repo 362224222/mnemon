@@ -54,8 +54,7 @@ func TestChannelEnrollmentHandshakeCommitsResponseLossReplayAndAtomicInstall(t *
 	}
 	registerEnrollmentTestDispatcher(t, ctx, ownerHost, ownerProtocol)
 	spec := JoinChannelSpec{Token: token, DisplayLabel: joinerIdentity.DisplayName(),
-		AdvertisedMultiaddrs: joinerIdentity.Multiaddrs(),
-		LocalAlias:           "review-team"}
+		LocalAlias: "review-team"}
 
 	// The owner commits, but the first joiner cannot persist the response. A
 	// retry with the same request and fresh nonce must recover the one receipt.
@@ -124,7 +123,7 @@ func TestChannelEnrollmentRecoversOwnerCommitAfterAcceptedResponseLoss(t *testin
 	}
 	registerEnrollmentTestDispatcher(t, ctx, ownerHost, ownerProtocol)
 	firstSpec := JoinChannelSpec{Token: token, DisplayLabel: joinerIdentity.DisplayName(),
-		AdvertisedMultiaddrs: joinerIdentity.Multiaddrs(), LocalAlias: "response-loss-team"}
+		LocalAlias: "response-loss-team"}
 	type joinResult struct {
 		result ChannelJoinResult
 		err    error
@@ -172,7 +171,6 @@ func TestChannelEnrollmentRecoversOwnerCommitAfterAcceptedResponseLoss(t *testin
 	defer reopened.Close()
 	retrySpec := firstSpec
 	retrySpec.DisplayLabel = "renamed-after-restart"
-	retrySpec.AdvertisedMultiaddrs = []string{"/ip4/127.0.0.1/tcp/45555"}
 	installed, err := runtime.JoinChannel(ctx, retrySpec,
 		&enrollmentJoinStoreSession{store: reopened})
 	if err != nil || !installed.Installed() || installed.Roster().Head().Revision() != 2 {
@@ -232,8 +230,8 @@ func TestChannelEnrollmentCommitUnknownRetryReleasesOnAuthenticatedProtocolError
 	}
 	defer dispatcher.Close()
 	_, err = runtime.JoinChannel(ctx, JoinChannelSpec{Token: token,
-		DisplayLabel: joinerIdentity.DisplayName(), AdvertisedMultiaddrs: joinerIdentity.Multiaddrs(),
-		LocalAlias: "stable-reject-team"}, &enrollmentJoinStoreSession{store: joinerStore})
+		DisplayLabel: joinerIdentity.DisplayName(),
+		LocalAlias:   "stable-reject-team"}, &enrollmentJoinStoreSession{store: joinerStore})
 	var failure *ChannelProtocolFailure
 	if !errors.As(err, &failure) || failure.Code() != ChannelErrorTokenClosed {
 		t.Fatalf("commit-unknown stable rejection error = %v", err)
@@ -338,6 +336,7 @@ func (session *enrollmentJoinStoreSession) BeginChannelJoin(ctx context.Context,
 	session.mu.Lock()
 	session.control = control
 	session.control.LocalPublicKey = append([]byte(nil), control.LocalPublicKey...)
+	session.control.AdvertisedMultiaddrs = append([]string(nil), control.AdvertisedMultiaddrs...)
 	session.prepared = prepared
 	session.mu.Unlock()
 	return NewPreparedChannelJoin(prepared.RequestID, prepared.OriginEpoch,

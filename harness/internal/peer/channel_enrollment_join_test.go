@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -22,11 +23,22 @@ func TestMeshRuntimeJoinChannelBindsPreparedPermitInitAndMarksBeforeProof(t *tes
 		markEntered: markEntered, resumeMark: resumeMark}
 	initSeen := make(chan model.EnrollmentRequestID, 1)
 	proofSeen := make(chan struct{})
+	wantAddresses, err := fixture.runtime.LocalEnrollmentMultiaddrs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reflect.DeepEqual(wantAddresses, fixture.joiner.Multiaddrs()) {
+		t.Fatal("join fixture did not distinguish managed Host addresses from caller identity metadata")
+	}
 	registerChannelJoinTestHandler(t, fixture.ctx, fixture.ownerHost,
 		func(_ context.Context, stream network.Stream, frame ChannelFrame) error {
 			init, ok := frame.Payload().(EnrollInit)
 			if !ok {
 				return errors.New("join binding handler received non-init frame")
+			}
+			if !reflect.DeepEqual(init.AdvertisedMultiaddrs(), wantAddresses) {
+				return fmt.Errorf("EnrollInit addresses = %v, want managed snapshot %v",
+					init.AdvertisedMultiaddrs(), wantAddresses)
 			}
 			initSeen <- init.EnrollmentRequestID()
 			if err := writeChannelJoinTestChallenge(stream, frame.RequestID(),
@@ -257,7 +269,7 @@ func newChannelJoinBindingFixture(t *testing.T, seed string) channelJoinBindingF
 	return channelJoinBindingFixture{ctx: ctx, runtime: runtime, ownerHost: ownerHost,
 		channel: channel, joiner: joiner,
 		spec: JoinChannelSpec{Token: token, DisplayLabel: joiner.DisplayName(),
-			AdvertisedMultiaddrs: joiner.Multiaddrs(), LocalAlias: seed + "-alias"}}
+			LocalAlias: seed + "-alias"}}
 }
 
 func registerChannelJoinTestHandler(t *testing.T, ctx context.Context, ownerHost host.Host,

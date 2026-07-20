@@ -3,6 +3,8 @@ package peer
 import (
 	"context"
 	"errors"
+	"reflect"
+	"sort"
 	"testing"
 
 	libp2ppeer "github.com/libp2p/go-libp2p/core/peer"
@@ -12,6 +14,40 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/testkit"
 	ma "github.com/multiformats/go-multiaddr"
 )
+
+func TestMeshRuntimeSnapshotsLocalEnrollmentMultiaddrs(t *testing.T) {
+	identity := testkit.NewIdentity(t, "mesh-runtime-local-enrollment-addresses")
+	st := openPeerMeshStore(t, identity, peerMeshTime(t, "2026-07-20T04:00:00Z"))
+	runtime := newTestMeshRuntime(t, context.Background(), identity,
+		readMeshRuntimeAuthority(t, st))
+
+	wantAddrs := runtime.managedRuntimeHost().Addrs()
+	want := make([]string, len(wantAddrs))
+	for index, address := range wantAddrs {
+		want[index] = address.String()
+	}
+	sort.Strings(want)
+	first, err := runtime.LocalEnrollmentMultiaddrs()
+	if err != nil || !reflect.DeepEqual(first, want) {
+		t.Fatalf("LocalEnrollmentMultiaddrs() = (%v,%v), want %v", first, err, want)
+	}
+	if _, err := model.AdvertisedAddressDigest(first); err != nil {
+		t.Fatalf("local enrollment snapshot is invalid: %v", err)
+	}
+	first[0] = "/ip4/127.0.0.1/tcp/1"
+	second, err := runtime.LocalEnrollmentMultiaddrs()
+	if err != nil || !reflect.DeepEqual(second, want) {
+		t.Fatalf("LocalEnrollmentMultiaddrs() after caller mutation = (%v,%v), want %v",
+			second, err, want)
+	}
+	if err := runtime.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if addresses, err := runtime.LocalEnrollmentMultiaddrs(); addresses != nil ||
+		!errors.Is(err, ErrMeshRuntime) {
+		t.Fatalf("LocalEnrollmentMultiaddrs() after close = (%v,%v)", addresses, err)
+	}
+}
 
 func TestMeshRuntimeStartsOneRouterAndJoinsEveryActiveChannel(t *testing.T) {
 	ctx := context.Background()

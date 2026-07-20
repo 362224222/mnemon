@@ -5530,7 +5530,7 @@
       "identity": "function_statements:harness/internal/peer/channel_enrollment_test.go::TestChannelEnrollmentRecoversOwnerCommitAfterAcceptedResponseLoss",
       "path": "harness/internal/peer/channel_enrollment_test.go",
       "symbol": "TestChannelEnrollmentRecoversOwnerCommitAfterAcceptedResponseLoss",
-      "ceiling": 67
+      "ceiling": 66
     },
     {
       "rule": "function_statements",
