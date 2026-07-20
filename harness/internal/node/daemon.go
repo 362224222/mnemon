@@ -68,6 +68,7 @@ type Daemon struct {
 	mesh             *peer.MeshRuntime
 	channelAuthority *ChannelAuthorityCoordinator
 	meshTransport    managedMeshTransport
+	channelRuntime   *ChannelRuntime
 	controller       *Controller
 
 	lifecycleMu  sync.Mutex
@@ -144,7 +145,8 @@ func openDaemon(ctx context.Context, options DaemonOptions,
 	identity := authority.identity
 	st := authority.store
 	var mesh *peer.MeshRuntime
-	var meshTransport managedMeshTransport
+	var meshTransport managedChannelTransport
+	var channelRuntime *ChannelRuntime
 	fail := func(cause error) (*Daemon, error) {
 		if !isNilNodeInterface(meshTransport) {
 			cause = errors.Join(cause, meshTransport.Close())
@@ -199,16 +201,23 @@ func openDaemon(ctx context.Context, options DaemonOptions,
 		if err != nil {
 			return fail(fmt.Errorf("%w: %w", ErrDaemonAuthority, err))
 		}
+		channelRuntime, err = NewChannelRuntime(ChannelRuntimeOptions{Store: st,
+			Transport: meshTransport, Authority: channelAuthority, Clock: controllerOptions.Clock})
+		if err != nil {
+			return fail(fmt.Errorf("%w: compose Channel runtime: %w", ErrDaemonAuthority, err))
+		}
 	}
 	controllerOptions.ArtifactCAS = cas
 	controllerOptions.meshTransport = meshTransport
+	controllerOptions.channelRuntime = channelRuntime
 	controller, err := newController(controllerOptions)
 	if err != nil {
 		return fail(fmt.Errorf("%w: compose controller: %w", ErrDaemonAuthority, err))
 	}
 	return &Daemon{workspace: workspace, nodeState: nodeState, identity: identity,
 		store: st, artifactCAS: cas, mesh: mesh, channelAuthority: channelAuthority,
-		meshTransport: meshTransport, controller: controller, serveDone: make(chan struct{})}, nil
+		meshTransport: meshTransport, channelRuntime: channelRuntime,
+		controller: controller, serveDone: make(chan struct{})}, nil
 }
 
 func (daemon *Daemon) Serve(ctx context.Context) error {

@@ -50,82 +50,172 @@ func TestBindControllerActionPolicyVerifiesAndFreezesTheInstallationRevision(t *
 	}
 }
 
-func TestControllerRuntimeComponentsFenceAdmissionOnMeshReadiness(t *testing.T) {
-	t.Run("ready", func(t *testing.T) {
-		mesh := newControllerCompositionMesh()
-		local := newControllerCompositionControl(nil)
-		order := &controllerCompositionOrder{}
-		mesh.order, local.order = order, order
-		var releases atomic.Int32
-		controller := &Controller{meshTransport: mesh, beforeAccept: func() error {
+func TestValidateControllerManagedRuntimePairFailsClosed(t *testing.T) {
+	var typedNilMesh *controllerCompositionMesh
+	var typedNilRuntime *controllerCompositionChannelRuntime
+	for _, test := range []struct {
+		name    string
+		mesh    managedMeshTransport
+		runtime managedChannelRuntime
+		wantErr bool
+	}{
+		{name: "unmanaged"},
+		{name: "managed", mesh: newControllerCompositionMesh(),
+			runtime: newControllerCompositionChannelRuntime()},
+		{name: "mesh only", mesh: newControllerCompositionMesh(), wantErr: true},
+		{name: "runtime only", runtime: newControllerCompositionChannelRuntime(), wantErr: true},
+		{name: "typed nil mesh", mesh: typedNilMesh,
+			runtime: newControllerCompositionChannelRuntime(), wantErr: true},
+		{name: "typed nil runtime", mesh: newControllerCompositionMesh(),
+			runtime: typedNilRuntime, wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateControllerManagedRuntimePair(test.mesh, test.runtime)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("validateControllerManagedRuntimePair() = %v, want error %t",
+					err, test.wantErr)
+			}
+		})
+	}
+}
+
+func TestControllerRuntimeComponentsFenceAdmissionOnManagedStartup(t *testing.T) {
+	mesh := newControllerCompositionMesh()
+	channelRuntime := newControllerCompositionChannelRuntime()
+	local := newControllerCompositionControl(nil)
+	order := &controllerCompositionOrder{}
+	mesh.order, channelRuntime.order, local.order = order, order, order
+	var releases atomic.Int32
+	controller := &Controller{meshTransport: mesh, channelRuntime: channelRuntime,
+		beforeAccept: func() error {
 			releases.Add(1)
 			close(local.permitReleased)
 			return nil
 		}}
-		supervisor, err := newNodeSupervisor(controller.runtimeComponents(local))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := controllerCompositionNames(supervisor.components); got !=
-			"mesh-transport,local-control" {
-			t.Fatalf("component order = %q", got)
-		}
-		stop := make(chan struct{})
-		done := make(chan error, 1)
-		go func() { done <- supervisor.Run(context.Background(), stop) }()
-		waitControllerCompositionSignal(t, mesh.runStarted)
-		if releases.Load() != 0 || channelClosed(local.runStarted) {
-			t.Fatalf("mesh-not-ready admission = releases %d, local started %t",
-				releases.Load(), channelClosed(local.runStarted))
-		}
-		mesh.ready <- nil
-		waitControllerCompositionSignal(t, local.runStarted)
-		if releases.Load() != 1 || !local.runSawPermit.Load() {
-			t.Fatalf("ready admission = releases %d, run saw permit %t",
-				releases.Load(), local.runSawPermit.Load())
-		}
-		close(stop)
-		if err := waitControllerCompositionError(t, done); err != nil {
-			t.Fatal(err)
-		}
-		if got := order.String(); got != "local-control,mesh-transport" {
-			t.Fatalf("shutdown order = %q", got)
-		}
-	})
+	supervisor, err := newNodeSupervisor(controller.runtimeComponents(local))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := controllerCompositionNames(supervisor.components); got !=
+		"mesh-transport,channel-runtime,local-control" {
+		t.Fatalf("component order = %q", got)
+	}
+	stop := make(chan struct{})
+	done := make(chan error, 1)
+	go func() { done <- supervisor.Run(context.Background(), stop) }()
+	waitControllerCompositionSignal(t, mesh.runStarted)
+	if releases.Load() != 0 || channelClosed(local.runStarted) {
+		t.Fatalf("mesh-not-ready admission = releases %d, local started %t",
+			releases.Load(), channelClosed(local.runStarted))
+	}
+	mesh.ready <- nil
+	waitControllerCompositionSignal(t, channelRuntime.runStarted)
+	if releases.Load() != 0 || channelClosed(local.runStarted) {
+		t.Fatalf("topics-not-ready admission = releases %d, local started %t",
+			releases.Load(), channelClosed(local.runStarted))
+	}
+	channelRuntime.ready <- nil
+	waitControllerCompositionSignal(t, local.runStarted)
+	if releases.Load() != 1 || !local.runSawPermit.Load() {
+		t.Fatalf("ready admission = releases %d, run saw permit %t",
+			releases.Load(), local.runSawPermit.Load())
+	}
+	close(stop)
+	if err := waitControllerCompositionError(t, done); err != nil {
+		t.Fatal(err)
+	}
+	if got := order.String(); got != "local-control,channel-runtime,mesh-transport" {
+		t.Fatalf("shutdown order = %q", got)
+	}
+}
 
-	t.Run("readiness failure", func(t *testing.T) {
-		mesh := newControllerCompositionMesh()
-		local := newControllerCompositionControl(nil)
-		var releases atomic.Int32
-		controller := &Controller{meshTransport: mesh, beforeAccept: func() error {
-			releases.Add(1)
-			return nil
-		}}
-		supervisor, err := newNodeSupervisor(controller.runtimeComponents(local))
-		if err != nil {
-			t.Fatal(err)
-		}
-		done := make(chan error, 1)
-		go func() { done <- supervisor.Run(context.Background(), nil) }()
-		waitControllerCompositionSignal(t, mesh.runStarted)
-		readyErr := errors.New("injected mesh readiness failure")
-		mesh.ready <- readyErr
-		err = waitControllerCompositionError(t, done)
-		if !errors.Is(err, readyErr) || releases.Load() != 0 ||
-			channelClosed(local.runStarted) || mesh.closeCalls.Load() != 1 {
-			t.Fatalf("readiness result = %v, releases=%d local=%t mesh closes=%d",
-				err, releases.Load(), channelClosed(local.runStarted), mesh.closeCalls.Load())
-		}
-	})
+func TestControllerRuntimeComponentsRejectMeshReadinessFailure(t *testing.T) {
+	mesh := newControllerCompositionMesh()
+	channelRuntime := newControllerCompositionChannelRuntime()
+	local := newControllerCompositionControl(nil)
+	var releases atomic.Int32
+	controller := &Controller{meshTransport: mesh, channelRuntime: channelRuntime,
+		beforeAccept: func() error { releases.Add(1); return nil }}
+	supervisor, err := newNodeSupervisor(controller.runtimeComponents(local))
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- supervisor.Run(context.Background(), nil) }()
+	waitControllerCompositionSignal(t, mesh.runStarted)
+	readyErr := errors.New("injected mesh readiness failure")
+	mesh.ready <- readyErr
+	err = waitControllerCompositionError(t, done)
+	if !errors.Is(err, readyErr) || releases.Load() != 0 ||
+		channelClosed(channelRuntime.runStarted) || channelClosed(local.runStarted) ||
+		mesh.closeCalls.Load() != 1 {
+		t.Fatalf("readiness result = %v, releases=%d runtime=%t local=%t mesh closes=%d",
+			err, releases.Load(), channelClosed(channelRuntime.runStarted),
+			channelClosed(local.runStarted), mesh.closeCalls.Load())
+	}
+}
+
+func TestControllerRuntimeComponentsRejectChannelRuntimeReadinessFailure(t *testing.T) {
+	mesh := newControllerCompositionMesh()
+	channelRuntime := newControllerCompositionChannelRuntime()
+	local := newControllerCompositionControl(nil)
+	var releases atomic.Int32
+	controller := &Controller{meshTransport: mesh, channelRuntime: channelRuntime,
+		beforeAccept: func() error { releases.Add(1); return nil }}
+	supervisor, err := newNodeSupervisor(controller.runtimeComponents(local))
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- supervisor.Run(context.Background(), nil) }()
+	mesh.ready <- nil
+	waitControllerCompositionSignal(t, channelRuntime.runStarted)
+	readyErr := errors.New("injected Channel runtime readiness failure")
+	channelRuntime.ready <- readyErr
+	err = waitControllerCompositionError(t, done)
+	if !errors.Is(err, readyErr) || releases.Load() != 0 ||
+		channelClosed(local.runStarted) || mesh.closeCalls.Load() != 1 ||
+		!channelClosed(channelRuntime.runStopped) {
+		t.Fatalf("Channel readiness result = %v, releases=%d local=%t mesh closes=%d stopped=%t",
+			err, releases.Load(), channelClosed(local.runStarted), mesh.closeCalls.Load(),
+			channelClosed(channelRuntime.runStopped))
+	}
+}
+
+func TestControllerRuntimeComponentsPropagateChannelRuntimeFailure(t *testing.T) {
+	mesh := newControllerCompositionMesh()
+	channelRuntime := newControllerCompositionChannelRuntime()
+	local := newControllerCompositionControl(nil)
+	controller := &Controller{meshTransport: mesh, channelRuntime: channelRuntime,
+		beforeAccept: func() error { close(local.permitReleased); return nil }}
+	supervisor, err := newNodeSupervisor(controller.runtimeComponents(local))
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- supervisor.Run(context.Background(), nil) }()
+	mesh.ready <- nil
+	channelRuntime.ready <- nil
+	waitControllerCompositionSignal(t, local.runStarted)
+	terminalErr := errors.New("injected Channel runtime terminal failure")
+	channelRuntime.terminal <- terminalErr
+	err = waitControllerCompositionError(t, done)
+	if !errors.Is(err, terminalErr) || local.shutdownCalls.Load() != 1 ||
+		mesh.closeCalls.Load() != 1 {
+		t.Fatalf("terminal result = %v, local shutdowns=%d mesh closes=%d", err,
+			local.shutdownCalls.Load(), mesh.closeCalls.Load())
+	}
 }
 
 func TestControllerRuntimeComponentsRetainMeshAfterUnsafeControlDrain(t *testing.T) {
 	mesh := newControllerCompositionMesh()
+	channelRuntime := newControllerCompositionChannelRuntime()
 	local := newControllerCompositionControl(ErrControlTransportUndrained)
-	controller := &Controller{meshTransport: mesh, beforeAccept: func() error {
-		close(local.permitReleased)
-		return nil
-	}}
+	controller := &Controller{meshTransport: mesh, channelRuntime: channelRuntime,
+		beforeAccept: func() error {
+			close(local.permitReleased)
+			return nil
+		}}
 	supervisor, err := newNodeSupervisor(controller.runtimeComponents(local))
 	if err != nil {
 		t.Fatal(err)
@@ -134,13 +224,16 @@ func TestControllerRuntimeComponentsRetainMeshAfterUnsafeControlDrain(t *testing
 	done := make(chan error, 1)
 	go func() { done <- supervisor.Run(context.Background(), stop) }()
 	mesh.ready <- nil
+	channelRuntime.ready <- nil
 	waitControllerCompositionSignal(t, local.runStarted)
 	close(stop)
 	err = waitControllerCompositionError(t, done)
 	if !errors.Is(err, ErrControlTransportUndrained) || mesh.closeCalls.Load() != 0 ||
-		local.shutdownCalls.Load() != 1 || channelClosed(mesh.runStopped) {
-		t.Fatalf("unsafe shutdown = %v, mesh closes=%d local shutdowns=%d stopped=%t", err,
-			mesh.closeCalls.Load(), local.shutdownCalls.Load(), channelClosed(mesh.runStopped))
+		local.shutdownCalls.Load() != 1 || channelClosed(mesh.runStopped) ||
+		!channelClosed(channelRuntime.runStopped) {
+		t.Fatalf("unsafe shutdown = %v, mesh closes=%d local shutdowns=%d mesh stopped=%t runtime stopped=%t",
+			err, mesh.closeCalls.Load(), local.shutdownCalls.Load(),
+			channelClosed(mesh.runStopped), channelClosed(channelRuntime.runStopped))
 	}
 	if err := mesh.Close(); err != nil {
 		t.Fatal(err)
@@ -191,6 +284,45 @@ func (mesh *controllerCompositionMesh) Close() error {
 		mesh.order.Add("mesh-transport")
 	}
 	return nil
+}
+
+type controllerCompositionChannelRuntime struct {
+	ready      chan error
+	terminal   chan error
+	runStarted chan struct{}
+	runStopped chan struct{}
+	started    sync.Once
+	stopped    sync.Once
+	order      *controllerCompositionOrder
+}
+
+func newControllerCompositionChannelRuntime() *controllerCompositionChannelRuntime {
+	return &controllerCompositionChannelRuntime{ready: make(chan error, 1),
+		terminal: make(chan error, 1), runStarted: make(chan struct{}),
+		runStopped: make(chan struct{})}
+}
+
+func (runtime *controllerCompositionChannelRuntime) Run(ctx context.Context) error {
+	runtime.started.Do(func() { close(runtime.runStarted) })
+	var err error
+	select {
+	case err = <-runtime.terminal:
+	case <-ctx.Done():
+	}
+	if runtime.order != nil {
+		runtime.order.Add("channel-runtime")
+	}
+	runtime.stopped.Do(func() { close(runtime.runStopped) })
+	return err
+}
+
+func (runtime *controllerCompositionChannelRuntime) Readiness(ctx context.Context) error {
+	select {
+	case err := <-runtime.ready:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 type controllerCompositionControl struct {

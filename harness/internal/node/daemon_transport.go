@@ -14,9 +14,18 @@ type daemonArtifactCASFactory func(string) (*artifact.CAS, error)
 
 type daemonMeshTransportFactory func(*peer.MeshRuntime,
 	peer.MeshTransportOptions,
-) (managedMeshTransport, error)
+) (managedChannelTransport, error)
 
-var _ managedMeshTransport = (*peer.MeshTransport)(nil)
+// managedChannelTransport is the one production transport capability shared
+// by the mesh lifecycle and Channel reconciler. Keeping the composition seam
+// explicit prevents a daemon from becoming ready with only half of its mesh
+// protocol surface installed.
+type managedChannelTransport interface {
+	managedMeshTransport
+	ChannelRuntimeTransport
+}
+
+var _ managedChannelTransport = (*peer.MeshTransport)(nil)
 
 func newDaemonArtifactCAS(root string,
 	factory daemonArtifactCASFactory,
@@ -37,7 +46,7 @@ func newDaemonArtifactCAS(root string,
 func newDaemonMeshTransport(ctx context.Context, runtime *peer.MeshRuntime, st *store.Store,
 	identity *Identity, cas *artifact.CAS, clock Clock,
 	factory daemonMeshTransportFactory,
-) (*ChannelAuthorityCoordinator, managedMeshTransport, error) {
+) (*ChannelAuthorityCoordinator, managedChannelTransport, error) {
 	if ctx == nil || ctx.Err() != nil || runtime == nil || st == nil || identity == nil || cas == nil ||
 		isNilNodeInterface(clock) {
 		return nil, nil, errors.New(
@@ -50,7 +59,7 @@ func newDaemonMeshTransport(ctx context.Context, runtime *peer.MeshRuntime, st *
 	if factory == nil {
 		factory = func(runtime *peer.MeshRuntime,
 			options peer.MeshTransportOptions,
-		) (managedMeshTransport, error) {
+		) (managedChannelTransport, error) {
 			return peer.NewMeshTransport(runtime, options)
 		}
 	}

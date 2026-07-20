@@ -37,6 +37,7 @@ type ControllerOptions struct {
 	// verification. Production composition always uses WakeAdapter.
 	wakeWorker     managedWakeWorker
 	meshTransport  managedMeshTransport
+	channelRuntime managedChannelRuntime
 	actionHandlers agent.ActionHandlers
 }
 
@@ -60,6 +61,7 @@ type Controller struct {
 	controlService    ManagedControlService
 	wakeWorker        managedWakeWorker
 	meshTransport     managedMeshTransport
+	channelRuntime    managedChannelRuntime
 	shutdownRequested chan struct{}
 	shutdownOnce      sync.Once
 	serveMu           sync.Mutex

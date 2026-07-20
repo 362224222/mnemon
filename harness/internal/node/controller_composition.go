@@ -21,6 +21,13 @@ type managedMeshTransport interface {
 	Close() error
 }
 
+type managedChannelRuntime interface {
+	Run(context.Context) error
+	Readiness(context.Context) error
+}
+
+var _ managedChannelRuntime = (*ChannelRuntime)(nil)
+
 type Clock interface {
 	Now() time.Time
 }
@@ -96,6 +103,10 @@ func newController(options ControllerOptions) (*Controller, error) {
 	if options.ArtifactCAS == nil || options.ArtifactCAS.Root() != casRoot {
 		return nil, errors.New("mnemond controller requires the exact Node Artifact CAS")
 	}
+	if err := validateControllerManagedRuntimePair(
+		options.meshTransport, options.channelRuntime); err != nil {
+		return nil, err
+	}
 	cas := options.ArtifactCAS
 	assetRevision := options.Profile.ActiveAssetRevision()
 	capturer, err := artifact.NewCapturer(options.Workspace, cas, options.Clock.Now)
@@ -150,65 +161,47 @@ func newController(options ControllerOptions) (*Controller, error) {
 	controller := &Controller{nodeState: options.NodeState, assetRevision: assetRevision,
 		store: options.Store, profile: options.Profile, artifactCAS: cas, admission: admission,
 		activation: gate, controlFactory: options.Control, wakeWorker: wakeWorker,
-		meshTransport: options.meshTransport, shutdownRequested: make(chan struct{}),
-		beforeAccept: options.BeforeAccept}
+		meshTransport: options.meshTransport, channelRuntime: options.channelRuntime,
+		shutdownRequested: make(chan struct{}),
+		beforeAccept:      options.BeforeAccept}
 	controller.controlService = controllerAdmissionService{gate: admission, next: service}
 	return controller, nil
 }
 
+func validateControllerManagedRuntimePair(mesh managedMeshTransport,
+	channelRuntime managedChannelRuntime,
+) error {
+	if isNilNodeInterface(mesh) != isNilNodeInterface(channelRuntime) {
+		return errors.New(
+			"mnemond controller requires paired mesh transport and Channel runtime")
+	}
+	return nil
+}
+
 // runtimeComponents freezes the only Supervisor graph for a Controller. A
-// managed mesh must become ready before local control can release the inherited
-// launch permit and accept; managed wake remains the final dependent.
+// managed mesh and its local Channel topics must become ready before local
+// control can release the inherited launch permit and accept. Remote baseline
+// convergence is deliberately not startup readiness; managed wake remains the
+// final dependent.
 func (controller *Controller) runtimeComponents(
 	transport PreparedControlTransport,
 ) []componentSpec {
 	localDependencies := []string(nil)
-	components := make([]componentSpec, 0, 3)
+	components := make([]componentSpec, 0, 4)
 	var retainMeshAuthority atomic.Bool
 	if !isNilNodeInterface(controller.meshTransport) {
-		mesh := controller.meshTransport
-		meshRunDone := make(chan struct{})
-		var meshRunErr error
-		components = append(components, componentSpec{Name: "mesh-transport",
-			Readiness: mesh.Readiness,
-			Run: func(componentCtx context.Context) error {
-				// The transport lifetime is detached from Supervisor cancellation so an
-				// unsafe local-control drain cannot revoke dependencies underneath an
-				// admitted handler.
-				// The unsafe branch deliberately transfers ownership to the Daemon's
-				// process-retained authority; process exit reclaims it alongside the
-				// retained Host, Store and CAS. Normal Shutdown always Close+waits.
-				go func() {
-					meshRunErr = mesh.Run(context.WithoutCancel(componentCtx))
-					close(meshRunDone)
-				}()
-				select {
-				case <-meshRunDone:
-					return meshRunErr
-				case <-componentCtx.Done():
-					select {
-					case <-meshRunDone:
-						return meshRunErr
-					default:
-					}
-					if retainMeshAuthority.Load() {
-						return nil
-					}
-					<-meshRunDone
-					return meshRunErr
-				}
-			},
-			Shutdown: func(context.Context) error {
-				if retainMeshAuthority.Load() {
-					return nil
-				}
-				return mesh.Close()
-			},
-			Restart: componentRestartNever,
-			Resources: componentResourceBudget{
-				MaxConcurrent: uint32(peer.HermeticLimits().NodeStreams),
-			}})
+		components = append(components,
+			managedMeshComponent(controller.meshTransport, &retainMeshAuthority))
 		localDependencies = []string{"mesh-transport"}
+	}
+	if !isNilNodeInterface(controller.channelRuntime) {
+		dependencies := []string(nil)
+		if !isNilNodeInterface(controller.meshTransport) {
+			dependencies = []string{"mesh-transport"}
+		}
+		components = append(components,
+			managedChannelRuntimeComponent(controller.channelRuntime, dependencies))
+		localDependencies = []string{"channel-runtime"}
 	}
 	components = append(components, componentSpec{Name: "local-control",
 		Dependencies: localDependencies, Readiness: transport.Readiness,
@@ -251,4 +244,57 @@ func (controller *Controller) runtimeComponents(
 			Resources: componentResourceBudget{MaxConcurrent: 1}})
 	}
 	return components
+}
+
+func managedMeshComponent(mesh managedMeshTransport,
+	retainAuthority *atomic.Bool,
+) componentSpec {
+	meshRunDone := make(chan struct{})
+	var meshRunErr error
+	return componentSpec{Name: "mesh-transport", Readiness: mesh.Readiness,
+		Run: func(componentCtx context.Context) error {
+			// Detachment lets an unsafe local-control drain retain every dependency
+			// beneath an admitted handler. Normal shutdown still Close+waits.
+			go func() {
+				meshRunErr = mesh.Run(context.WithoutCancel(componentCtx))
+				close(meshRunDone)
+			}()
+			select {
+			case <-meshRunDone:
+				return meshRunErr
+			case <-componentCtx.Done():
+				select {
+				case <-meshRunDone:
+					return meshRunErr
+				default:
+				}
+				if retainAuthority.Load() {
+					return nil
+				}
+				<-meshRunDone
+				return meshRunErr
+			}
+		},
+		Shutdown: func(context.Context) error {
+			if retainAuthority.Load() {
+				return nil
+			}
+			return mesh.Close()
+		},
+		Restart: componentRestartNever,
+		Resources: componentResourceBudget{
+			MaxConcurrent: uint32(peer.HermeticLimits().NodeStreams),
+		}}
+}
+
+func managedChannelRuntimeComponent(channelRuntime managedChannelRuntime,
+	dependencies []string,
+) componentSpec {
+	return componentSpec{Name: "channel-runtime", Dependencies: dependencies,
+		Readiness: channelRuntime.Readiness, Run: channelRuntime.Run,
+		Shutdown: func(context.Context) error { return nil },
+		Restart:  componentRestartNever,
+		Resources: componentResourceBudget{
+			MaxConcurrent: uint32(peer.HermeticLimits().ApplicationProtocolStreams),
+		}}
 }
