@@ -42,9 +42,13 @@ func TestEnsureAgentDaemonComposesExactAuthorityAndDefersCompanionDiscovery(t *t
 		},
 		ensure: func(ctx context.Context, options node.DaemonEnsureOptions) (node.DaemonEnsureResult, error) {
 			if ctx == nil || options.NodeState != nodeState ||
-				options.AssetRevision != bundle.Manifest().AssetRevision || options.Probe != client ||
+				options.AssetRevision != bundle.Manifest().AssetRevision || options.Probe == nil ||
 				options.Preflight == nil || options.Launcher == nil || options.ReadyGate != nil {
 				t.Fatalf("Ensure options = %#v", options)
+			}
+			if _, err := options.Probe.ProbeDaemonHealth(ctx); !errors.Is(err,
+				node.ErrDaemonControlUnavailable) {
+				t.Fatalf("adapted health probe error = %v", err)
 			}
 			if err := options.Preflight.Verify(ctx); err != nil {
 				t.Fatal(err)
@@ -58,7 +62,8 @@ func TestEnsureAgentDaemonComposesExactAuthorityAndDefersCompanionDiscovery(t *t
 	}
 	if preflightOptions.Workspace != workspace || preflightOptions.NodeState != nodeState ||
 		preflightOptions.AssetRevision != bundle.Manifest().AssetRevision ||
-		preflightOptions.Install == nil || verified != 1 || companionLookups != 0 {
+		preflightOptions.Install == nil || preflightOptions.Credentials == nil || verified != 1 ||
+		companionLookups != 0 {
 		t.Fatalf("preflight = %#v verified=%d companion lookups=%d", preflightOptions,
 			verified, companionLookups)
 	}

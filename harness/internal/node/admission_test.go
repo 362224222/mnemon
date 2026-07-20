@@ -7,8 +7,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 )
 
 func TestControllerAdmissionGateDrainsEnteredWorkAndRejectsAfterSeal(t *testing.T) {
@@ -218,17 +216,17 @@ func TestControllerAdmissionServiceWrapsEveryManagedRoute(t *testing.T) {
 	next := &recordingAdmissionService{}
 	service := controllerAdmissionService{gate: gate, next: next}
 	ctx := context.Background()
-	metadata := localapi.RequestMetadata{}
-	if _, apiErr := service.HookCheck(ctx, metadata, localapi.HookCheckRequest{}); apiErr != nil {
+	metadata := ControlMetadata{}
+	if _, apiErr := service.HookCheck(ctx, metadata); apiErr != nil {
 		t.Fatal(apiErr)
 	}
-	if _, apiErr := service.AgentCurrent(ctx, metadata, localapi.AgentCurrentRequest{}); apiErr != nil {
+	if _, apiErr := service.AgentCurrent(ctx, metadata); apiErr != nil {
 		t.Fatal(apiErr)
 	}
-	if _, apiErr := service.TeamworkAction(ctx, metadata, localapi.TeamworkActionRequest{}); apiErr != nil {
+	if _, apiErr := service.TeamworkAction(ctx, metadata, TeamworkActionRequest{}); apiErr != nil {
 		t.Fatal(apiErr)
 	}
-	if _, apiErr := service.AgentResolve(ctx, metadata, localapi.AgentResolveRequest{}); apiErr != nil {
+	if _, apiErr := service.AgentResolve(ctx, metadata, AgentResolveRequest{}); apiErr != nil {
 		t.Fatal(apiErr)
 	}
 	if next.calls.Load() != 4 {
@@ -238,26 +236,26 @@ func TestControllerAdmissionServiceWrapsEveryManagedRoute(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	checks := []func() *localapi.APIError{
-		func() *localapi.APIError {
-			_, apiErr := service.HookCheck(ctx, metadata, localapi.HookCheckRequest{})
+	checks := []func() *ControlError{
+		func() *ControlError {
+			_, apiErr := service.HookCheck(ctx, metadata)
 			return apiErr
 		},
-		func() *localapi.APIError {
-			_, apiErr := service.AgentCurrent(ctx, metadata, localapi.AgentCurrentRequest{})
+		func() *ControlError {
+			_, apiErr := service.AgentCurrent(ctx, metadata)
 			return apiErr
 		},
-		func() *localapi.APIError {
-			_, apiErr := service.TeamworkAction(ctx, metadata, localapi.TeamworkActionRequest{})
+		func() *ControlError {
+			_, apiErr := service.TeamworkAction(ctx, metadata, TeamworkActionRequest{})
 			return apiErr
 		},
-		func() *localapi.APIError {
-			_, apiErr := service.AgentResolve(ctx, metadata, localapi.AgentResolveRequest{})
+		func() *ControlError {
+			_, apiErr := service.AgentResolve(ctx, metadata, AgentResolveRequest{})
 			return apiErr
 		},
 	}
 	for index, check := range checks {
-		if apiErr := check(); apiErr == nil || apiErr.Code != localapi.CodeMnemondUnavailable {
+		if apiErr := check(); apiErr == nil || apiErr.Code != ControlCodeMnemondUnavailable {
 			t.Fatalf("sealed route %d error = %#v", index, apiErr)
 		}
 	}
@@ -271,10 +269,9 @@ func TestControllerAdmissionServiceKeepsHandlerEnteredUntilStoreWorkReturns(t *t
 	gate := newControllerAdmissionGate()
 	next := &blockingAdmissionService{entered: make(chan struct{}), proceed: make(chan struct{})}
 	service := controllerAdmissionService{gate: gate, next: next}
-	handlerDone := make(chan *localapi.APIError, 1)
+	handlerDone := make(chan *ControlError, 1)
 	go func() {
-		_, apiErr := service.HookCheck(context.Background(), localapi.RequestMetadata{},
-			localapi.HookCheckRequest{})
+		_, apiErr := service.HookCheck(context.Background(), ControlMetadata{})
 		handlerDone <- apiErr
 	}()
 	select {
@@ -348,61 +345,61 @@ type blockingAdmissionService struct {
 	proceed chan struct{}
 }
 
-func (service *blockingAdmissionService) HookCheck(context.Context, localapi.RequestMetadata,
-	localapi.HookCheckRequest,
-) (localapi.HookCheckResponse, *localapi.APIError) {
+func (service *blockingAdmissionService) HookCheck(context.Context,
+	ControlMetadata,
+) (HookCheckResponse, *ControlError) {
 	close(service.entered)
 	<-service.proceed
-	return localapi.HookCheckResponse{}, nil
+	return HookCheckResponse{}, nil
 }
 
-func (*blockingAdmissionService) AgentCurrent(context.Context, localapi.RequestMetadata,
-	localapi.AgentCurrentRequest,
-) (localapi.AgentCurrentResponse, *localapi.APIError) {
-	return localapi.AgentCurrentResponse{}, localapi.NewAPIError(localapi.CodeInternal,
-		"unexpected AgentCurrent")
+func (*blockingAdmissionService) AgentCurrent(context.Context,
+	ControlMetadata,
+) (AgentCurrentResponse, *ControlError) {
+	return AgentCurrentResponse{}, &ControlError{Code: ControlCodeInternal,
+		Message: "unexpected AgentCurrent"}
 }
 
-func (*blockingAdmissionService) TeamworkAction(context.Context, localapi.RequestMetadata,
-	localapi.TeamworkActionRequest,
-) (localapi.OperationResponse, *localapi.APIError) {
-	return localapi.OperationResponse{}, localapi.NewAPIError(localapi.CodeInternal,
-		"unexpected TeamworkAction")
+func (*blockingAdmissionService) TeamworkAction(context.Context, ControlMetadata,
+	TeamworkActionRequest,
+) (OperationResponse, *ControlError) {
+	return OperationResponse{}, &ControlError{Code: ControlCodeInternal,
+		Message: "unexpected TeamworkAction"}
 }
 
-func (*blockingAdmissionService) AgentResolve(context.Context, localapi.RequestMetadata,
-	localapi.AgentResolveRequest,
-) (localapi.OperationResponse, *localapi.APIError) {
-	return localapi.OperationResponse{}, localapi.NewAPIError(localapi.CodeInternal,
-		"unexpected AgentResolve")
+func (*blockingAdmissionService) AgentResolve(context.Context, ControlMetadata,
+	AgentResolveRequest,
+) (OperationResponse, *ControlError) {
+	return OperationResponse{}, &ControlError{Code: ControlCodeInternal,
+		Message: "unexpected AgentResolve"}
 }
 
-func (service *recordingAdmissionService) HookCheck(context.Context, localapi.RequestMetadata,
-	localapi.HookCheckRequest,
-) (localapi.HookCheckResponse, *localapi.APIError) {
+func (service *recordingAdmissionService) HookCheck(context.Context,
+	ControlMetadata,
+) (HookCheckResponse, *ControlError) {
 	service.calls.Add(1)
-	return localapi.HookCheckResponse{}, nil
+	return HookCheckResponse{}, nil
 }
 
-func (service *recordingAdmissionService) AgentCurrent(context.Context, localapi.RequestMetadata,
-	localapi.AgentCurrentRequest,
-) (localapi.AgentCurrentResponse, *localapi.APIError) {
+func (service *recordingAdmissionService) AgentCurrent(context.Context,
+	ControlMetadata,
+) (AgentCurrentResponse, *ControlError) {
 	service.calls.Add(1)
-	return localapi.AgentCurrentResponse{}, nil
+	return AgentCurrentResponse{}, nil
 }
 
-func (service *recordingAdmissionService) TeamworkAction(context.Context, localapi.RequestMetadata,
-	localapi.TeamworkActionRequest,
-) (localapi.OperationResponse, *localapi.APIError) {
+func (service *recordingAdmissionService) TeamworkAction(context.Context, ControlMetadata,
+	TeamworkActionRequest,
+) (OperationResponse, *ControlError) {
 	service.calls.Add(1)
-	return localapi.OperationResponse{}, nil
+	return OperationResponse{}, nil
 }
 
-func (service *recordingAdmissionService) AgentResolve(context.Context, localapi.RequestMetadata,
-	localapi.AgentResolveRequest,
-) (localapi.OperationResponse, *localapi.APIError) {
+func (service *recordingAdmissionService) AgentResolve(context.Context, ControlMetadata,
+	AgentResolveRequest,
+) (OperationResponse, *ControlError) {
 	service.calls.Add(1)
-	return localapi.OperationResponse{}, nil
+	return OperationResponse{}, nil
 }
 
 var _ ManagedAdmission = (*controllerAdmissionGate)(nil)

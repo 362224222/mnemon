@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
@@ -22,6 +21,7 @@ type ProvisionOptions struct {
 	Host          model.HostKind
 	AssetRevision string
 	Clock         Clock
+	Credentials   ProfileCredentialProvisioner
 }
 
 type ProvisionResult struct {
@@ -53,8 +53,8 @@ func PrepareNodeState(workspace string) (string, error) {
 // adapter checks, activation and daemon launch are separate setup gates, so a
 // failure after this call cannot accidentally grant managed Agent authority.
 func Provision(ctx context.Context, options ProvisionOptions) (result ProvisionResult, err error) {
-	if ctx == nil {
-		return ProvisionResult{}, fmt.Errorf("%w: context is unavailable", ErrProvision)
+	if err := validateProvisionAuthority(ctx, options.Credentials); err != nil {
+		return ProvisionResult{}, err
 	}
 	workspace, err := validateDaemonWorkspace(options.Workspace)
 	if err != nil {
@@ -79,7 +79,7 @@ func Provision(ctx context.Context, options ProvisionOptions) (result ProvisionR
 	if err != nil {
 		return ProvisionResult{}, fmt.Errorf("%w: %v", ErrProvision, err)
 	}
-	credential, credentialCreated, err := localapi.EnsureProfileCredential(nodeState)
+	credential, credentialCreated, err := options.Credentials.Ensure(nodeState)
 	if err != nil {
 		return ProvisionResult{}, fmt.Errorf("%w: %v", ErrProvision, err)
 	}
@@ -130,6 +130,13 @@ func Provision(ctx context.Context, options ProvisionOptions) (result ProvisionR
 	}
 	return ProvisionResult{NodeState: nodeState, Node: initialized.Node, Profile: initialized.Profile,
 		Created: initialized.Created, CredentialCreated: credentialCreated}, nil
+}
+
+func validateProvisionAuthority(ctx context.Context, credentials ProfileCredentialProvisioner) error {
+	if ctx == nil || isNilNodeInterface(credentials) {
+		return fmt.Errorf("%w: context or credential authority is unavailable", ErrProvision)
+	}
+	return nil
 }
 
 func ensureProvisionState(workspace string) (string, error) {

@@ -17,6 +17,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
+	"github.com/mnemon-dev/mnemon/harness/internal/localapi/nodecontrol"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/node"
 )
@@ -166,28 +167,27 @@ func (runner *companionRunner) Inspect(ctx context.Context) (localapi.AuthorityR
 // unreachable owner control socket while that writer remains held. Exit 75 is
 // the sole retryable process result and maps back to the Node lifecycle's
 // writer-active sentinel without exposing daemon diagnostics.
-func (runner *companionRunner) ConfirmOffline(ctx context.Context,
-	expected localapi.AuthorityResponse,
-) (localapi.AuthorityResponse, error) {
+func (runner *companionRunner) ConfirmOffline(ctx context.Context, expected node.Authority) (node.Authority, error) {
 	if runner == nil {
-		return localapi.AuthorityResponse{}, companionError("confirm-offline request", nil)
+		return node.Authority{}, companionError("confirm-offline request", nil)
 	}
-	digest, err := localapi.AuthorityDigest(expected)
+	digest, err := expected.Digest()
 	if err != nil {
-		return localapi.AuthorityResponse{}, companionError("confirm-offline request", nil)
+		return node.Authority{}, companionError("confirm-offline request", nil)
 	}
-	raw, err := runner.executeClassified(ctx, "confirm-offline", companionCommandTimeout,
-		companionResponseBytes, companionWriterActive, "confirm-offline", "--project-root",
-		runner.workspace, "--expected-authority-digest", digest.String())
+	raw, err := runner.executeClassified(ctx, "confirm-offline", companionCommandTimeout, companionResponseBytes,
+		companionWriterActive, "confirm-offline", "--project-root", runner.workspace, "--expected-authority-digest", digest.String())
 	if err != nil {
-		return localapi.AuthorityResponse{}, err
+		return node.Authority{}, err
 	}
 	var response localapi.AuthorityResponse
-	if decodeErr := decodeCanonicalCompanionLine(raw, &response); decodeErr != nil ||
-		validateCompanionAuthorityResponse(response) != nil || response != expected {
-		return localapi.AuthorityResponse{}, companionError("confirm-offline response", nil)
+	if decodeErr := decodeCanonicalCompanionLine(raw, &response); decodeErr != nil || validateCompanionAuthorityResponse(response) != nil {
+		return node.Authority{}, companionError("confirm-offline response", nil)
 	}
-	return response, nil
+	if authority, err := nodecontrol.Authority(response); err != nil || authority != expected {
+		return node.Authority{}, companionError("confirm-offline response", nil)
+	}
+	return expected, nil
 }
 
 func (runner *companionRunner) Activate(ctx context.Context, host model.HostKind,

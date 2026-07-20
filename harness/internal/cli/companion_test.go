@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
+	"github.com/mnemon-dev/mnemon/harness/internal/localapi/nodecontrol"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/node"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
@@ -37,11 +38,12 @@ func TestCompanionRunnerDiscoversExactPairAndFreezesLifecycleCommands(t *testing
 	if err != nil || !initialized.Created || initialized.Status != "initialized" {
 		t.Fatalf("Initialize() = (%#v, %v)", initialized, err)
 	}
-	authority, err := runner.Inspect(context.Background())
-	if err != nil || !authority.Enabled || authority.Host != string(model.HostCodex) ||
-		authority.AssetRevision != fixture.revision {
-		t.Fatalf("Inspect() = (%#v, %v)", authority, err)
+	authorityResponse, err := runner.Inspect(context.Background())
+	if err != nil || !authorityResponse.Enabled || authorityResponse.Host != string(model.HostCodex) ||
+		authorityResponse.AssetRevision != fixture.revision {
+		t.Fatalf("Inspect() = (%#v, %v)", authorityResponse, err)
 	}
+	authority := mustCompanionNodeAuthority(t, authorityResponse)
 	confirmed, err := runner.ConfirmOffline(context.Background(), authority)
 	if err != nil || confirmed != authority {
 		t.Fatalf("ConfirmOffline() = (%#v, %v)", confirmed, err)
@@ -88,6 +90,26 @@ func TestCompanionRunnerDiscoversExactPairAndFreezesLifecycleCommands(t *testing
 				command.Stdin, command.WaitDelay)
 		}
 	}
+}
+
+func setupTestLocalHealth(health node.DaemonHealth) localapi.HealthResponse {
+	status := "not_ready"
+	if health.Ready {
+		status = "ready"
+	}
+	return localapi.HealthResponse{AssetRevision: health.AssetRevision,
+		SchemaVersion: localapi.SchemaVersion, Status: status}
+}
+
+func mustCompanionNodeAuthority(t *testing.T,
+	response localapi.AuthorityResponse,
+) node.Authority {
+	t.Helper()
+	authority, err := nodecontrol.Authority(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return authority
 }
 
 func TestCompanionRunnerStartsFixedExecutionBudgetAfterProcessStart(t *testing.T) {
@@ -153,13 +175,17 @@ func TestCompanionRunnerClassifiesOnlyClosedOfflineWriterContention(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	expected, err := runner.Inspect(context.Background())
+	expectedResponse, err := runner.Inspect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected, err := nodecontrol.Authority(expectedResponse)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("MNEMON_COMPANION_TEST_MODE", "confirm-writer-active")
 	if response, err := runner.ConfirmOffline(context.Background(), expected); !errors.Is(err,
-		node.ErrOfflineAuthorityActive) || response != (localapi.AuthorityResponse{}) {
+		node.ErrOfflineAuthorityActive) || response != (node.Authority{}) {
 		t.Fatalf("writer-active ConfirmOffline() = (%#v, %v)", response, err)
 	}
 	for _, mode := range []string{"confirm-wrong", "confirm-secret", "confirm-exit"} {
@@ -168,13 +194,13 @@ func TestCompanionRunnerClassifiesOnlyClosedOfflineWriterContention(t *testing.T
 			response, err := runner.ConfirmOffline(context.Background(), expected)
 			if err == nil || errors.Is(err, node.ErrOfflineAuthorityActive) ||
 				!errors.Is(err, errManagedCompanion) ||
-				response != (localapi.AuthorityResponse{}) || strings.Contains(err.Error(), "raw-secret") {
+				response != (node.Authority{}) || strings.Contains(err.Error(), "raw-secret") {
 				t.Fatalf("permanent ConfirmOffline() = (%#v, %v)", response, err)
 			}
 		})
 	}
-	if response, err := runner.ConfirmOffline(context.Background(), localapi.AuthorityResponse{}); err == nil ||
-		!errors.Is(err, errManagedCompanion) || response != (localapi.AuthorityResponse{}) {
+	if response, err := runner.ConfirmOffline(context.Background(), node.Authority{}); err == nil ||
+		!errors.Is(err, errManagedCompanion) || response != (node.Authority{}) {
 		t.Fatalf("invalid expected ConfirmOffline() = (%#v, %v)", response, err)
 	}
 }
@@ -207,14 +233,12 @@ func TestCompanionRunnerMapsRealMnemondWriterActiveExitAndOfflineReceipt(t *test
 	revision := model.Sum([]byte("real-companion-offline-assets")).String()
 	if _, err := node.Provision(context.Background(), node.ProvisionOptions{
 		Workspace: workspace, Host: model.HostCodex, AssetRevision: revision,
+		Credentials: nodecontrol.ProfileCredentials{},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	snapshot, err := node.InspectAuthority(context.Background(), workspace)
-	if err != nil {
-		t.Fatal(err)
-	}
-	expected, err := localapi.NewAuthorityResponse(snapshot)
+	expected, err := node.InspectAuthority(context.Background(), workspace,
+		nodecontrol.ProfileCredentials{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +257,7 @@ func TestCompanionRunnerMapsRealMnemondWriterActiveExitAndOfflineReceipt(t *test
 		t.Fatal(err)
 	}
 	if response, err := runner.ConfirmOffline(context.Background(), expected); !errors.Is(err,
-		node.ErrOfflineAuthorityActive) || response != (localapi.AuthorityResponse{}) {
+		node.ErrOfflineAuthorityActive) || response != (node.Authority{}) {
 		_ = st.Close()
 		t.Fatalf("real writer-active ConfirmOffline() = (%#v, %v)", response, err)
 	}
@@ -614,9 +638,9 @@ esac
 		model.Sum([]byte("durable-replay-assets")).String())
 }
 
-func mustCompanionAuthorityDigest(t *testing.T, response localapi.AuthorityResponse) string {
+func mustCompanionAuthorityDigest(t *testing.T, authority node.Authority) string {
 	t.Helper()
-	digest, err := localapi.AuthorityDigest(response)
+	digest, err := authority.Digest()
 	if err != nil {
 		t.Fatal(err)
 	}

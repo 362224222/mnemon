@@ -13,6 +13,7 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/assets"
 	"github.com/mnemon-dev/mnemon/harness/internal/integration"
 	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
+	"github.com/mnemon-dev/mnemon/harness/internal/localapi/nodecontrol"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/node"
 )
@@ -26,7 +27,7 @@ type ejectCompanion interface {
 }
 
 type ejectAuthorityClient interface {
-	node.DaemonLifecycleClient
+	nodecontrol.MutationShutdownClient
 	ReadAuthority(context.Context) (localapi.AuthorityResponse, *localapi.APIError)
 }
 
@@ -204,12 +205,8 @@ func (app *ejectApp) executeLeased(ctx context.Context, workspace, nodeState str
 	authorityUpdatedAt time.Time, client ejectAuthorityClient, companion ejectCompanion,
 	lease setupDaemonLifecycle,
 ) (ejectReceipt, *localapi.APIError) {
-	quiesced, err := lease.Quiesce(ctx, client, companion, authority)
-	if err != nil {
-		return ejectReceipt{}, ejectLifecycleError(err)
-	}
-	if quiesced != authority {
-		return ejectReceipt{}, setupAuthError("managed authority changed while stopping mnemond")
+	if apiErr := quiesceEjectAuthority(ctx, authority, client, companion, lease); apiErr != nil {
+		return ejectReceipt{}, apiErr
 	}
 	if authority.Enabled {
 		deactivated, err := companion.Deactivate(ctx, model.HostKind(host),
@@ -253,6 +250,23 @@ func (app *ejectApp) executeLeased(ctx context.Context, workspace, nodeState str
 		RemovedFiles:  projection.RemovedFiles,
 		Replayed:      !authority.Enabled && projection.Replayed,
 		SchemaVersion: localapi.SchemaVersion, Status: "ejected"}, nil
+}
+
+func quiesceEjectAuthority(ctx context.Context, authority localapi.AuthorityResponse,
+	client ejectAuthorityClient, companion ejectCompanion, lease setupDaemonLifecycle,
+) *localapi.APIError {
+	expected, err := nodecontrol.Authority(authority)
+	if err != nil {
+		return setupAuthError("managed authority is invalid")
+	}
+	quiesced, err := lease.Quiesce(ctx, nodecontrol.AdaptLifecycleClient(client), companion, expected)
+	if err != nil {
+		return ejectLifecycleError(err)
+	}
+	if quiesced != expected {
+		return setupAuthError("managed authority changed while stopping mnemond")
+	}
+	return nil
 }
 
 func ejectLifecycleError(err error) *localapi.APIError {

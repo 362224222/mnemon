@@ -81,7 +81,8 @@ func TestProvisionCreatesAndReplaysOneDisabledWorkspaceAuthority(t *testing.T) {
 	}
 	at := time.Date(2026, 7, 17, 6, 0, 0, 0, time.UTC)
 	options := ProvisionOptions{Workspace: workspace, Host: model.HostCodex,
-		AssetRevision: bundle.Manifest().AssetRevision, Clock: controllerTestClock{at}}
+		AssetRevision: bundle.Manifest().AssetRevision, Clock: controllerTestClock{at},
+		Credentials: testProfileCredentials{}}
 	first, err := Provision(context.Background(), options)
 	if err != nil || !first.Created || !first.CredentialCreated || first.Profile.Enabled() ||
 		first.Profile.Host() != model.HostCodex || first.Profile.Runtime() != model.RuntimeCodexAppServer ||
@@ -226,7 +227,8 @@ func provisionTestOptions(t *testing.T, workspace string, host model.HostKind) P
 	}
 	return ProvisionOptions{Workspace: workspace, Host: host,
 		AssetRevision: bundle.Manifest().AssetRevision,
-		Clock:         controllerTestClock{time.Date(2026, 7, 17, 7, 0, 0, 0, time.UTC)}}
+		Clock:         controllerTestClock{time.Date(2026, 7, 17, 7, 0, 0, 0, time.UTC)},
+		Credentials:   testProfileCredentials{}}
 }
 
 func newProvisionWorkspace(t *testing.T) string {

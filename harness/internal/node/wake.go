@@ -210,16 +210,18 @@ func (admitted *admittedWakeStore) FailAgentRuntime(ctx context.Context,
 // newManagedWakeWorker is the Node-owned composition boundary for the managed
 // Runtime loop. The admission-aware value is shared by the preparer and
 // worker, while the activation check and adapter remain outside admission.
-func newManagedWakeWorker(st *store.Store, nodeState string, profile model.Profile,
+func newManagedWakeWorker(st *store.Store, profile model.Profile,
 	clock Clock, install InstallationVerifier, adapter agent.WakeWorkerAdapter,
-	admission ManagedAdmission,
+	attachments agent.WakeAttachmentFilesystem, admission ManagedAdmission,
 ) (*agent.WakeWorker, error) {
-	if st == nil || install == nil || admission == nil {
-		return nil, fmt.Errorf("compose managed wake worker: Store, installation verifier and admission are required")
+	if st == nil || isNilNodeInterface(install) || isNilNodeInterface(adapter) ||
+		isNilNodeInterface(attachments) || isNilNodeInterface(admission) {
+		return nil, fmt.Errorf(
+			"compose managed wake worker: Store, installation verifier, attachments, and admission are required")
 	}
 	admitted := &admittedWakeStore{store: st, admission: admission}
 	preparer, err := agent.NewWakeAttachmentPreparer(admitted, agent.WakeAttachmentOptions{
-		Attachments:   newAgentAttachmentFilesystem(nodeState),
+		Attachments:   attachments,
 		AssetRevision: profile.ActiveAssetRevision(), Clock: clock,
 	})
 	if err != nil {

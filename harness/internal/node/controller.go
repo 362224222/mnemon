@@ -4,16 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
-	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/agent"
 	"github.com/mnemon-dev/mnemon/harness/internal/artifact"
 	"github.com/mnemon-dev/mnemon/harness/internal/event"
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
@@ -31,9 +28,11 @@ type ControllerOptions struct {
 	// low-level controller and daemon composition; OpenManagedDaemon requires
 	// the production composition layer to supply one.
 	WakeAdapter agent.WakeWorkerAdapter
+	Attachments agent.WakeAttachmentFilesystem
+	Control     ControlTransportFactory
 	// BeforeAccept is reserved for production mnemond composition. It releases
 	// the inherited ensure.lock duplicate after the control socket exists and
-	// immediately before the first HTTP accept.
+	// immediately before the first local-control admission.
 	BeforeAccept func() error
 	// wakeWorker is a same-package test seam for lifecycle and readiness
 	// verification. Production composition always uses WakeAdapter.
@@ -52,9 +51,12 @@ type managedWakeWorker interface {
 type Controller struct {
 	nodeState         string
 	assetRevision     string
+	profile           model.Profile
 	store             *store.Store
-	server            *localapi.Server
 	admission         *controllerAdmissionGate
+	activation        controllerManagedActivationGate
+	controlFactory    ControlTransportFactory
+	controlService    ManagedControlService
 	wakeWorker        managedWakeWorker
 	shutdownRequested chan struct{}
 	shutdownOnce      sync.Once
@@ -66,16 +68,10 @@ type Controller struct {
 }
 
 func NewController(ctx context.Context, options ControllerOptions) (*Controller, error) {
-	if options.Clock == nil {
-		options.Clock = wallClock{}
-	}
-	if options.Store == nil || options.Signer == nil || options.Install == nil ||
-		options.Profile.ID() != model.TeamworkProfileID() ||
-		!options.Profile.Enabled() || options.NodeState == "" || options.Workspace == "" ||
-		!filepath.IsAbs(options.NodeState) || filepath.Clean(options.NodeState) != options.NodeState ||
-		!filepath.IsAbs(options.Workspace) || filepath.Clean(options.Workspace) != options.Workspace ||
-		options.Profile.WorkspaceRoot() != options.Workspace {
-		return nil, errors.New("mnemond controller requires canonical Node, workspace, Profile, Store and signer")
+	var err error
+	options, err = validateControllerOptions(ctx, options)
+	if err != nil {
+		return nil, err
 	}
 	stateInfo, err := os.Lstat(options.NodeState)
 	if err != nil || !stateInfo.IsDir() || stateInfo.Mode()&os.ModeSymlink != 0 ||
@@ -123,12 +119,9 @@ func NewController(ctx context.Context, options ControllerOptions) (*Controller,
 	installGate := controllerActivationGate{expected: options.Profile, install: options.Install}
 	admission := newControllerAdmissionGate()
 	wakeWorker := options.wakeWorker
-	if wakeWorker != nil && options.WakeAdapter != nil {
-		return nil, errors.New("mnemond controller accepts only one managed wake worker")
-	}
 	if wakeWorker == nil && options.WakeAdapter != nil {
-		wakeWorker, err = newManagedWakeWorker(options.Store, options.NodeState, options.Profile,
-			options.Clock, options.Install, options.WakeAdapter, admission)
+		wakeWorker, err = newManagedWakeWorker(options.Store, options.Profile,
+			options.Clock, options.Install, options.WakeAdapter, options.Attachments, admission)
 		if err != nil {
 			return nil, fmt.Errorf("mnemond controller managed wake worker: %w", err)
 		}
@@ -139,67 +132,56 @@ func NewController(ctx context.Context, options ControllerOptions) (*Controller,
 	if err != nil {
 		return nil, err
 	}
-	health := localapi.HealthProviderFunc(func(healthCtx context.Context,
-		metadata localapi.RequestMetadata,
-	) (localapi.HealthSnapshot, *localapi.APIError) {
-		ready := gate.Check(healthCtx, metadata.Profile) == nil
-		return localapi.HealthSnapshot{AssetRevision: assetRevision, WorkersReady: ready}, nil
-	})
-	status := localapi.StatusProviderFunc(func(statusCtx context.Context,
-		metadata localapi.RequestMetadata,
-	) (localapi.StatusSnapshot, *localapi.APIError) {
-		if statusCtx == nil || statusCtx.Err() != nil ||
-			metadata.Profile.ID() != model.TeamworkProfileID() {
-			return localapi.StatusSnapshot{}, localapi.NewAPIError(localapi.CodeInternal,
-				"operational status observation was cancelled")
-		}
-		current, readErr := options.Store.ReadLocalAuthority(statusCtx)
-		if readErr != nil {
-			return localapi.StatusSnapshot{}, localapi.NewAPIError(localapi.CodeInternal,
-				"durable operational status is unavailable")
-		}
-		activationIssue := ""
-		if !sameControllerProfile(current.Profile, options.Profile) {
-			activationIssue = "durable_authority_mismatch"
-		} else if current.Node.ActiveAssetRevision() != assetRevision ||
-			options.Install.Verify(statusCtx, options.Profile) != nil {
-			activationIssue = "asset_revision_mismatch"
-		}
-		worker := agent.WakeWorkerSnapshot{Healthy: true}
-		if wakeWorker != nil {
-			worker = wakeWorker.Snapshot()
-		}
-		return localapi.StatusSnapshot{AssetRevision: assetRevision,
-			ActivationReady: activationIssue == "", ActivationIssue: activationIssue,
-			Runtime: localapi.RuntimeStatusSnapshot{Running: worker.Running, Ready: worker.Ready,
-				Healthy: worker.Healthy, Recovering: worker.Recovering, Issue: worker.LastError}}, nil
-	})
-	authority := localapi.AuthorityProviderFunc(func(authorityCtx context.Context,
-		metadata localapi.RequestMetadata,
-	) (localapi.AuthoritySnapshot, *localapi.APIError) {
-		if authorityCtx == nil || authorityCtx.Err() != nil ||
-			metadata.Profile.ID() != model.TeamworkProfileID() {
-			return localapi.AuthoritySnapshot{}, localapi.NewAPIError(localapi.CodeInternal,
-				"durable authority observation was cancelled")
-		}
-		current, readErr := options.Store.ReadLocalAuthority(authorityCtx)
-		if readErr != nil {
-			return localapi.AuthoritySnapshot{}, localapi.NewAPIError(localapi.CodeInternal,
-				"durable authority is unavailable")
-		}
-		return authoritySnapshot(current), nil
-	})
 	controller := &Controller{nodeState: options.NodeState, assetRevision: assetRevision, store: options.Store,
-		admission: admission, wakeWorker: wakeWorker,
+		profile: options.Profile, admission: admission, activation: gate,
+		controlFactory: options.Control, wakeWorker: wakeWorker,
 		shutdownRequested: make(chan struct{}), beforeAccept: options.BeforeAccept}
-	managedService := controllerAdmissionService{gate: admission, next: newLocalAPIServiceAdapter(service)}
-	server, err := localapi.NewServerWithStatusLifecycle(options.Store, managedService, health, status,
-		authority, localapi.LifecycleFunc(controller.requestShutdown), controller)
-	if err != nil {
-		return nil, err
-	}
-	controller.server = server
+	controller.controlService = controllerAdmissionService{gate: admission, next: service}
 	return controller, nil
+}
+
+func validateControllerOptions(ctx context.Context, options ControllerOptions) (ControllerOptions, error) {
+	if options.Clock == nil {
+		options.Clock = wallClock{}
+	}
+	if !validControllerCoreOptions(ctx, options) {
+		return ControllerOptions{}, errors.New(
+			"mnemond controller requires canonical Node, workspace, Profile, Store and ports")
+	}
+	hasWakeWorker := !isNilNodeInterface(options.wakeWorker)
+	hasWakeAdapter := !isNilNodeInterface(options.WakeAdapter)
+	if !validControllerWakeOptions(options, hasWakeWorker, hasWakeAdapter) {
+		return ControllerOptions{}, errors.New(
+			"mnemond controller requires one complete managed wake composition")
+	}
+	if !hasWakeWorker {
+		options.wakeWorker = nil
+	}
+	if !hasWakeAdapter {
+		options.WakeAdapter = nil
+		options.Attachments = nil
+	}
+	return options, nil
+}
+
+func validControllerCoreOptions(ctx context.Context, options ControllerOptions) bool {
+	return ctx != nil && ctx.Err() == nil && options.Store != nil &&
+		!isNilNodeInterface(options.Clock) && !isNilNodeInterface(options.Signer) &&
+		!isNilNodeInterface(options.Install) && !isNilNodeInterface(options.Control) &&
+		options.Profile.ID() == model.TeamworkProfileID() && options.Profile.Enabled() &&
+		options.NodeState != "" && options.Workspace != "" &&
+		filepath.IsAbs(options.NodeState) && filepath.Clean(options.NodeState) == options.NodeState &&
+		filepath.IsAbs(options.Workspace) && filepath.Clean(options.Workspace) == options.Workspace &&
+		options.Profile.WorkspaceRoot() == options.Workspace
+}
+
+func validControllerWakeOptions(options ControllerOptions, hasWorker, hasAdapter bool) bool {
+	hasAttachments := !isNilNodeInterface(options.Attachments)
+	return (options.wakeWorker == nil || hasWorker) &&
+		(options.WakeAdapter == nil || hasAdapter) &&
+		(options.Attachments == nil || hasAttachments) &&
+		!(hasWorker && hasAdapter) && hasAdapter == hasAttachments &&
+		!(hasWorker && hasAttachments)
 }
 
 // PrepareMutationShutdown seals every Store-facing Agent admission path,
@@ -208,39 +190,107 @@ func NewController(ctx context.Context, options ControllerOptions) (*Controller,
 // admission; success returns a release callback for later server validation
 // failures, while the accepted shutdown deliberately retains the seal.
 func (controller *Controller) PrepareMutationShutdown(ctx context.Context,
-	metadata localapi.RequestMetadata,
-) (localapi.AuthoritySnapshot, localapi.AdmissionReleaseFunc, *localapi.APIError) {
+	profile model.Profile,
+) (Authority, func(), *ControlError) {
 	if controller == nil || controller.admission == nil || controller.store == nil || ctx == nil {
-		return localapi.AuthoritySnapshot{}, nil, localapi.NewAPIError(localapi.CodeInternal,
+		return Authority{}, nil, agent.NewControlError(agent.CodeInternal,
 			"mutation shutdown controller is unavailable")
 	}
 	generation, err := controller.admission.seal(ctx)
 	if err != nil {
-		return localapi.AuthoritySnapshot{}, nil, localapi.NewAPIError(
-			localapi.CodeMnemondUnavailable, "managed admission could not be sealed")
+		return Authority{}, nil, agent.NewControlError(
+			agent.CodeMnemondUnavailable, "managed admission could not be sealed")
 	}
-	release := localapi.AdmissionReleaseFunc(func() {
+	release := func() {
 		controller.admission.reopen(generation)
-	})
-	authority, err := controller.store.PreflightProfileDeactivation(ctx, metadata.Profile)
+	}
+	authority, err := controller.store.PreflightProfileDeactivation(ctx, profile)
 	if err != nil {
 		release()
 		switch {
 		case errors.Is(err, store.ErrProfileDeactivationBusy):
-			return localapi.AuthoritySnapshot{}, nil, localapi.NewAPIError(
-				localapi.CodeOperationPending, "managed Agent authority is still active")
+			return Authority{}, nil, agent.NewControlError(
+				agent.CodeOperationPending, "managed Agent authority is still active")
 		case errors.Is(err, store.ErrProfileDeactivationConflict):
-			return localapi.AuthoritySnapshot{}, nil, localapi.NewAPIError(
-				localapi.CodeOperationMismatch, "managed Profile authority changed")
+			return Authority{}, nil, agent.NewControlError(
+				agent.CodeOperationMismatch, "managed Profile authority changed")
 		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
-			return localapi.AuthoritySnapshot{}, nil, localapi.NewAPIError(
-				localapi.CodeMnemondUnavailable, "mutation shutdown was cancelled")
+			return Authority{}, nil, agent.NewControlError(
+				agent.CodeMnemondUnavailable, "mutation shutdown was cancelled")
 		default:
-			return localapi.AuthoritySnapshot{}, nil, localapi.NewAPIError(
-				localapi.CodeInternal, "managed Profile idleness could not be proved")
+			return Authority{}, nil, agent.NewControlError(
+				agent.CodeInternal, "managed Profile idleness could not be proved")
 		}
 	}
-	return authoritySnapshot(authority), release, nil
+	value, valueErr := authorityValue(authority)
+	if valueErr != nil {
+		release()
+		return Authority{}, nil, agent.NewControlError(agent.CodeInternal,
+			"managed Profile authority is invalid")
+	}
+	return value, release, nil
+}
+
+func (controller *Controller) ObserveControlHealth(ctx context.Context,
+	profile model.Profile,
+) (DaemonHealth, *ControlError) {
+	if controller == nil {
+		return DaemonHealth{}, agent.NewControlError(agent.CodeInternal,
+			"health observation is unavailable")
+	}
+	ready := controller.activation.Check(ctx, profile) == nil
+	return DaemonHealth{AssetRevision: controller.assetRevision, Ready: ready}, nil
+}
+
+func (controller *Controller) ObserveControlStatus(ctx context.Context,
+	profile model.Profile,
+) (ControlStatus, *ControlError) {
+	if controller == nil || controller.store == nil || ctx == nil || ctx.Err() != nil ||
+		profile.ID() != model.TeamworkProfileID() {
+		return ControlStatus{}, agent.NewControlError(agent.CodeInternal,
+			"operational status observation was cancelled")
+	}
+	current, err := controller.store.ReadLocalAuthority(ctx)
+	if err != nil {
+		return ControlStatus{}, agent.NewControlError(agent.CodeInternal,
+			"durable operational status is unavailable")
+	}
+	activationIssue := ""
+	if !sameControllerProfile(current.Profile, controller.profile) {
+		activationIssue = "durable_authority_mismatch"
+	} else if current.Node.ActiveAssetRevision() != controller.assetRevision ||
+		controller.activation.install.install.Verify(ctx, controller.profile) != nil {
+		activationIssue = "asset_revision_mismatch"
+	}
+	worker := agent.WakeWorkerSnapshot{Healthy: true}
+	if controller.wakeWorker != nil {
+		worker = controller.wakeWorker.Snapshot()
+	}
+	return ControlStatus{AssetRevision: controller.assetRevision,
+		ActivationReady: activationIssue == "", ActivationIssue: activationIssue,
+		Runtime: RuntimeStatus{Running: worker.Running, Ready: worker.Ready,
+			Healthy: worker.Healthy, Recovering: worker.Recovering, Issue: worker.LastError}}, nil
+}
+
+func (controller *Controller) ObserveControlAuthority(ctx context.Context,
+	profile model.Profile,
+) (Authority, *ControlError) {
+	if controller == nil || controller.store == nil || ctx == nil || ctx.Err() != nil ||
+		profile.ID() != model.TeamworkProfileID() {
+		return Authority{}, agent.NewControlError(agent.CodeInternal,
+			"durable authority observation was cancelled")
+	}
+	current, err := controller.store.ReadLocalAuthority(ctx)
+	if err != nil {
+		return Authority{}, agent.NewControlError(agent.CodeInternal,
+			"durable authority is unavailable")
+	}
+	value, valueErr := authorityValue(current)
+	if valueErr != nil {
+		return Authority{}, agent.NewControlError(agent.CodeInternal,
+			"durable authority is invalid")
+	}
+	return value, nil
 }
 
 func (controller *Controller) requestShutdown() {
@@ -269,7 +319,7 @@ func (gate controllerManagedActivationGate) Check(ctx context.Context,
 	if apiErr := gate.install.Check(ctx, profile); apiErr != nil {
 		return apiErr
 	}
-	if gate.worker == nil {
+	if isNilNodeInterface(gate.worker) {
 		return nil
 	}
 	snapshot := gate.worker.Snapshot()
@@ -284,7 +334,7 @@ func (gate controllerActivationGate) Check(ctx context.Context, profile model.Pr
 	if ctx == nil || ctx.Err() != nil {
 		return agent.NewControlError(agent.CodeInternal, "managed activation check was cancelled")
 	}
-	if gate.install == nil || !sameControllerProfile(profile, gate.expected) ||
+	if isNilNodeInterface(gate.install) || !sameControllerProfile(profile, gate.expected) ||
 		gate.install.Verify(ctx, profile) != nil {
 		return agent.NewControlError(agent.CodeAssetRevisionMismatch,
 			"managed Node assets or Host projection differ from the active Profile")
@@ -301,7 +351,8 @@ func sameControllerProfile(got, want model.Profile) bool {
 }
 
 func (controller *Controller) Serve(ctx context.Context) error {
-	if controller == nil || controller.server == nil || ctx == nil {
+	if controller == nil || isNilNodeInterface(controller.controlFactory) ||
+		controller.controlService == nil || ctx == nil {
 		return errors.New("mnemond controller is unavailable")
 	}
 	controller.serveMu.Lock()
@@ -312,39 +363,32 @@ func (controller *Controller) Serve(ctx context.Context) error {
 	controller.served = true
 	controller.serveMu.Unlock()
 
-	socketPath := filepath.Join(controller.nodeState, "control.sock")
-	if _, err := localapi.RemoveStaleOwnerUnix(ctx, socketPath); err != nil {
-		return errors.Join(err, controller.releaseBeforeAccept())
-	}
-	listener, err := localapi.ListenOwnerUnix(socketPath)
-	if err != nil {
-		return errors.Join(err, controller.releaseBeforeAccept())
-	}
-	admitted, err := newConnectionAdmissionListener(listener, controllerHTTPConnectionLimit)
-	if err != nil {
-		return errors.Join(err, listener.Close(), controller.releaseBeforeAccept())
+	transport, err := controller.controlFactory.Prepare(ctx, ControlTransportOptions{
+		NodeState: controller.nodeState, AssetRevision: controller.assetRevision,
+		MaxConnections: controllerControlConnectionLimit,
+	}, ControlBindings{Authenticator: controller.store, Agent: controller.controlService,
+		Observer: controller, Mutation: controller, Shutdown: controller.requestShutdown})
+	if err != nil || isNilNodeInterface(transport) {
+		if err == nil {
+			err = errors.New("local control transport factory returned no transport")
+		}
+		var closeErr error
+		if !isNilNodeInterface(transport) {
+			closeErr = transport.Close()
+		}
+		return errors.Join(err, closeErr, controller.releaseBeforeAccept())
 	}
 	if err := controller.releaseBeforeAccept(); err != nil {
-		return errors.Join(err, admitted.Close())
+		return errors.Join(err, transport.Close())
 	}
-	requests := newControllerRequestTracker(controller.server.Handler())
-	server := &http.Server{Handler: requests, ReadHeaderTimeout: 5 * time.Second}
-	components := []componentSpec{{Name: "control-http",
-		Readiness: func(readyCtx context.Context) error {
-			// A successful authenticated round-trip proves owner socket, HTTP,
-			// credential, schema, and exact asset revision readiness.
-			return proveControllerHTTP(readyCtx, controller.nodeState, controller.assetRevision)
-		},
-		Run: func(runCtx context.Context) error {
-			return normalizeControllerServeError(runCtx, server.Serve(admitted))
-		},
-		Shutdown:  func(context.Context) error { return closeControllerHTTP(server, requests) },
+	components := []componentSpec{{Name: "local-control",
+		Readiness: transport.Readiness, Run: transport.Run, Shutdown: transport.Shutdown,
 		Restart:   componentRestartNever,
-		Resources: componentResourceBudget{MaxConcurrent: controllerHTTPConnectionLimit}}}
+		Resources: componentResourceBudget{MaxConcurrent: controllerControlConnectionLimit}}}
 	if controller.wakeWorker != nil {
 		workerStarted := make(chan struct{})
 		components = append(components, componentSpec{Name: "managed-wake",
-			Dependencies: []string{"control-http"},
+			Dependencies: []string{"local-control"},
 			Readiness: func(readyCtx context.Context) error {
 				// Dynamic Runtime health remains authoritative in WakeWorker.Snapshot.
 				// This signal only proves that lifecycle ownership has transferred.
@@ -359,7 +403,7 @@ func (controller *Controller) Serve(ctx context.Context) error {
 				close(workerStarted)
 				_ = controller.wakeWorker.Run(workerCtx)
 				// WakeWorker publishes domain failure through its existing Snapshot.
-				// Keep the lifecycle component present so HTTP remains reachable and
+				// Keep the lifecycle component present so local control remains reachable and
 				// managed actions stay fail-closed until explicit Node shutdown.
 				if workerCtx.Err() == nil {
 					<-workerCtx.Done()
@@ -371,102 +415,10 @@ func (controller *Controller) Serve(ctx context.Context) error {
 	}
 	supervisor, err := newNodeSupervisor(components)
 	if err != nil {
-		return errors.Join(err, admitted.Close())
+		return errors.Join(err, transport.Close())
 	}
 	serveErr := supervisor.Run(ctx, controller.shutdownRequested)
-	return errors.Join(serveErr, admitted.Close())
-}
-
-type controllerRequestTracker struct {
-	next      http.Handler
-	mu        sync.Mutex
-	accepting bool
-	active    uint64
-	drained   chan struct{}
-}
-
-func newControllerRequestTracker(next http.Handler) *controllerRequestTracker {
-	return &controllerRequestTracker{next: next, accepting: true, drained: make(chan struct{})}
-}
-
-func (tracker *controllerRequestTracker) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
-	tracker.mu.Lock()
-	if !tracker.accepting {
-		tracker.mu.Unlock()
-		http.Error(writer, "mnemond is stopping", http.StatusServiceUnavailable)
-		return
-	}
-	tracker.active++
-	tracker.mu.Unlock()
-
-	defer func() {
-		tracker.mu.Lock()
-		tracker.active--
-		if !tracker.accepting && tracker.active == 0 {
-			close(tracker.drained)
-		}
-		tracker.mu.Unlock()
-	}()
-	tracker.next.ServeHTTP(writer, request)
-}
-
-func (tracker *controllerRequestTracker) seal() <-chan struct{} {
-	tracker.mu.Lock()
-	if tracker.accepting {
-		tracker.accepting = false
-		if tracker.active == 0 {
-			close(tracker.drained)
-		}
-	}
-	drained := tracker.drained
-	tracker.mu.Unlock()
-	return drained
-}
-
-func proveControllerHTTP(ctx context.Context, nodeState, assetRevision string) error {
-	if ctx == nil || ctx.Err() != nil {
-		return errors.New("mnemond controller startup was cancelled")
-	}
-	client, err := localapi.NewClient(nodeState)
-	if err != nil {
-		return errors.New("mnemond controller startup authority is unavailable")
-	}
-	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	health, apiErr := client.ProbeHealth(probeCtx)
-	if apiErr != nil || health.SchemaVersion != localapi.SchemaVersion ||
-		health.AssetRevision != assetRevision ||
-		(health.Status != "ready" && health.Status != "not_ready") {
-		return errors.New("mnemond controller HTTP startup proof failed")
-	}
-	return nil
-}
-
-func closeControllerHTTP(server *http.Server, requests *controllerRequestTracker) error {
-	if server == nil || requests == nil {
-		return errors.New("mnemond controller HTTP lifecycle is unavailable")
-	}
-	drained := requests.seal()
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	shutdownErr := server.Shutdown(shutdownCtx)
-	cancel()
-	if shutdownErr != nil {
-		closeErr := server.Close()
-		if errors.Is(closeErr, http.ErrServerClosed) {
-			closeErr = nil
-		}
-		<-drained
-		return errors.Join(shutdownErr, closeErr)
-	}
-	<-drained
-	return nil
-}
-
-func normalizeControllerServeError(ctx context.Context, err error) error {
-	if errors.Is(err, http.ErrServerClosed) || ctx != nil && ctx.Err() != nil && errors.Is(err, os.ErrClosed) {
-		return nil
-	}
-	return err
+	return errors.Join(serveErr, transport.Close())
 }
 
 func (controller *Controller) releaseBeforeAccept() error {

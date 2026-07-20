@@ -49,7 +49,7 @@
       "identity": "cognitive_complexity:harness/cmd/mnemond/main.go::runWithNode",
       "path": "harness/cmd/mnemond/main.go",
       "symbol": "runWithNode",
-      "ceiling": 87
+      "ceiling": 60
     },
     {
       "rule": "cognitive_complexity",
@@ -676,24 +676,10 @@
     },
     {
       "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/node/controller.go::NewController",
-      "path": "harness/internal/node/controller.go",
-      "symbol": "NewController",
-      "ceiling": 35
-    },
-    {
-      "rule": "cognitive_complexity",
       "identity": "cognitive_complexity:harness/internal/node/controller_test.go::TestControllerServesOwnerOnlyManagedRoutesFromOneStore",
       "path": "harness/internal/node/controller_test.go",
       "symbol": "TestControllerServesOwnerOnlyManagedRoutesFromOneStore",
       "ceiling": 66
-    },
-    {
-      "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/node/deactivate.go::Deactivate",
-      "path": "harness/internal/node/deactivate.go",
-      "symbol": "Deactivate",
-      "ceiling": 26
     },
     {
       "rule": "cognitive_complexity",
@@ -714,7 +700,7 @@
       "identity": "cognitive_complexity:harness/internal/node/lifecycle.go::(*DaemonLifecycleLease).quiesce",
       "path": "harness/internal/node/lifecycle.go",
       "symbol": "(*DaemonLifecycleLease).quiesce",
-      "ceiling": 37
+      "ceiling": 30
     },
     {
       "rule": "cognitive_complexity",
@@ -1967,7 +1953,7 @@
       "identity": "cyclomatic_complexity:harness/cmd/mnemond/main.go::runWithNode",
       "path": "harness/cmd/mnemond/main.go",
       "symbol": "runWithNode",
-      "ceiling": 42
+      "ceiling": 33
     },
     {
       "rule": "cyclomatic_complexity",
@@ -2398,13 +2384,6 @@
     },
     {
       "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/cli/eject.go::(*ejectApp).executeLeased",
-      "path": "harness/internal/cli/eject.go",
-      "symbol": "(*ejectApp).executeLeased",
-      "ceiling": 21
-    },
-    {
-      "rule": "cyclomatic_complexity",
       "identity": "cyclomatic_complexity:harness/internal/cli/setup.go::(*setupApp).executeLocked",
       "path": "harness/internal/cli/setup.go",
       "symbol": "(*setupApp).executeLocked",
@@ -2695,14 +2674,7 @@
       "identity": "cyclomatic_complexity:harness/internal/node/activate.go::Activate",
       "path": "harness/internal/node/activate.go",
       "symbol": "Activate",
-      "ceiling": 25
-    },
-    {
-      "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/node/controller.go::NewController",
-      "path": "harness/internal/node/controller.go",
-      "symbol": "NewController",
-      "ceiling": 35
+      "ceiling": 24
     },
     {
       "rule": "cyclomatic_complexity",
@@ -2737,7 +2709,7 @@
       "identity": "cyclomatic_complexity:harness/internal/node/deactivate.go::Deactivate",
       "path": "harness/internal/node/deactivate.go",
       "symbol": "Deactivate",
-      "ceiling": 27
+      "ceiling": 21
     },
     {
       "rule": "cyclomatic_complexity",
@@ -2765,7 +2737,7 @@
       "identity": "cyclomatic_complexity:harness/internal/node/lifecycle.go::(*DaemonLifecycleLease).quiesce",
       "path": "harness/internal/node/lifecycle.go",
       "symbol": "(*DaemonLifecycleLease).quiesce",
-      "ceiling": 30
+      "ceiling": 25
     },
     {
       "rule": "cyclomatic_complexity",
@@ -4347,7 +4319,7 @@
       "identity": "function_logical_lines:harness/cmd/mnemond/main.go::runWithNode",
       "path": "harness/cmd/mnemond/main.go",
       "symbol": "runWithNode",
-      "ceiling": 120
+      "ceiling": 93
     },
     {
       "rule": "function_logical_lines",
@@ -4547,13 +4519,6 @@
     },
     {
       "rule": "function_logical_lines",
-      "identity": "function_logical_lines:harness/internal/node/controller.go::NewController",
-      "path": "harness/internal/node/controller.go",
-      "symbol": "NewController",
-      "ceiling": 108
-    },
-    {
-      "rule": "function_logical_lines",
       "identity": "function_logical_lines:harness/internal/node/controller_test.go::TestControllerServesOwnerOnlyManagedRoutesFromOneStore",
       "path": "harness/internal/node/controller_test.go",
       "symbol": "TestControllerServesOwnerOnlyManagedRoutesFromOneStore",
@@ -4564,7 +4529,7 @@
       "identity": "function_logical_lines:harness/internal/node/ensure_test.go::TestEnsureDaemonTerminatesOnlyItsOwnedChildAfterPostLaunchFailures",
       "path": "harness/internal/node/ensure_test.go",
       "symbol": "TestEnsureDaemonTerminatesOnlyItsOwnedChildAfterPostLaunchFailures",
-      "ceiling": 108
+      "ceiling": 107
     },
     {
       "rule": "function_logical_lines",
@@ -4572,13 +4537,6 @@
       "path": "harness/internal/node/lifecycle_test.go",
       "symbol": "TestDaemonLifecycleQuiesceRecoversStaleSocketAndBoundsWriterWait",
       "ceiling": 84
-    },
-    {
-      "rule": "function_logical_lines",
-      "identity": "function_logical_lines:harness/internal/node/lifecycle_test.go::TestDaemonLifecycleQuiesceRejectsGenerationAndSocketDrift",
-      "path": "harness/internal/node/lifecycle_test.go",
-      "symbol": "TestDaemonLifecycleQuiesceRejectsGenerationAndSocketDrift",
-      "ceiling": 81
     },
     {
       "rule": "function_logical_lines",
@@ -5145,7 +5103,7 @@
       "identity": "function_logical_lines:harness/test/process/setup_test.go::TestPublicSetupSerializesProcessesAndRecoversAKilledDaemon",
       "path": "harness/test/process/setup_test.go",
       "symbol": "TestPublicSetupSerializesProcessesAndRecoversAKilledDaemon",
-      "ceiling": 167
+      "ceiling": 166
     },
     {
       "rule": "function_logical_lines",
@@ -5159,7 +5117,7 @@
       "identity": "function_statements:harness/cmd/mnemond/main.go::runWithNode",
       "path": "harness/cmd/mnemond/main.go",
       "symbol": "runWithNode",
-      "ceiling": 117
+      "ceiling": 88
     },
     {
       "rule": "function_statements",
@@ -5621,14 +5579,7 @@
       "identity": "function_statements:harness/internal/node/activate.go::Activate",
       "path": "harness/internal/node/activate.go",
       "symbol": "Activate",
-      "ceiling": 59
-    },
-    {
-      "rule": "function_statements",
-      "identity": "function_statements:harness/internal/node/controller.go::NewController",
-      "path": "harness/internal/node/controller.go",
-      "symbol": "NewController",
-      "ceiling": 58
+      "ceiling": 57
     },
     {
       "rule": "function_statements",
@@ -5650,13 +5601,6 @@
       "path": "harness/internal/node/daemon_test.go",
       "symbol": "newDaemonFixture",
       "ceiling": 52
-    },
-    {
-      "rule": "function_statements",
-      "identity": "function_statements:harness/internal/node/deactivate.go::Deactivate",
-      "path": "harness/internal/node/deactivate.go",
-      "symbol": "Deactivate",
-      "ceiling": 53
     },
     {
       "rule": "function_statements",
@@ -5684,14 +5628,14 @@
       "identity": "function_statements:harness/internal/node/lifecycle.go::(*DaemonLifecycleLease).quiesce",
       "path": "harness/internal/node/lifecycle.go",
       "symbol": "(*DaemonLifecycleLease).quiesce",
-      "ceiling": 56
+      "ceiling": 52
     },
     {
       "rule": "function_statements",
       "identity": "function_statements:harness/internal/node/lifecycle_test.go::TestDaemonLifecycleQuiesceWaitsPastShutdownResponseForWriterRelease",
       "path": "harness/internal/node/lifecycle_test.go",
       "symbol": "TestDaemonLifecycleQuiesceWaitsPastShutdownResponseForWriterRelease",
-      "ceiling": 55
+      "ceiling": 53
     },
     {
       "rule": "function_statements",
@@ -7131,12 +7075,6 @@
     },
     {
       "rule": "production_file_lines",
-      "identity": "production_file_lines:harness/cmd/mnemond/main.go",
-      "path": "harness/cmd/mnemond/main.go",
-      "ceiling": 410
-    },
-    {
-      "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/agent/codex_adapter.go",
       "path": "harness/internal/agent/codex_adapter.go",
       "ceiling": 1566
@@ -7217,7 +7155,7 @@
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/cli/setup.go",
       "path": "harness/internal/cli/setup.go",
-      "ceiling": 677
+      "ceiling": 665
     },
     {
       "rule": "production_file_lines",
@@ -7235,7 +7173,7 @@
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/localapi/client.go",
       "path": "harness/internal/localapi/client.go",
-      "ceiling": 648
+      "ceiling": 630
     },
     {
       "rule": "production_file_lines",
@@ -7289,13 +7227,13 @@
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/node/controller.go",
       "path": "harness/internal/node/controller.go",
-      "ceiling": 483
+      "ceiling": 435
     },
     {
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/node/ensure.go",
       "path": "harness/internal/node/ensure.go",
-      "ceiling": 563
+      "ceiling": 562
     },
     {
       "rule": "production_file_lines",
@@ -7307,7 +7245,7 @@
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/node/lifecycle.go",
       "path": "harness/internal/node/lifecycle.go",
-      "ceiling": 436
+      "ceiling": 402
     },
     {
       "rule": "production_file_lines",

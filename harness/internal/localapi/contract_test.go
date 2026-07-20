@@ -55,6 +55,9 @@ func TestAPIErrorIsStableAndBounded(t *testing.T) {
 	if value.ExitStatus() != 5 || !value.Retryable || value.Status != "error" || value.SchemaVersion != 1 {
 		t.Fatalf("API error = %#v", value)
 	}
+	if err := value.Validate(); err != nil {
+		t.Fatalf("canonical API error validation = %v", err)
+	}
 	raw, err := json.Marshal(value)
 	if err != nil {
 		t.Fatal(err)
@@ -65,6 +68,10 @@ func TestAPIErrorIsStableAndBounded(t *testing.T) {
 	invalid := NewAPIError(ErrorCode("unknown"), strings.Repeat("x", MaxDiagnosticBytes+1))
 	if invalid.Code != CodeInternal || invalid.Message != "internal control error" {
 		t.Fatalf("invalid API error was not bounded: %#v", invalid)
+	}
+	invalid.SchemaVersion++
+	if err := invalid.Validate(); err == nil {
+		t.Fatal("malformed API error was accepted")
 	}
 }
 

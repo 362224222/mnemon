@@ -7,8 +7,6 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"errors"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sync"
@@ -95,7 +93,7 @@ func TestControllerServesOwnerOnlyManagedRoutesFromOneStore(t *testing.T) {
 	}
 	controller, err := NewController(context.Background(), ControllerOptions{NodeState: nodeState, Workspace: workspace,
 		Store: st, Profile: enabled, Signer: signer, Clock: controllerTestClock{enabled.UpdatedAt()},
-		Install: testInstallationVerifier(workspace, nodeState, bundle)})
+		Install: testInstallationVerifier(workspace, nodeState, bundle), Control: newTestControlTransportFactory()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +191,8 @@ func TestControllerServesOwnerOnlyManagedRoutesFromOneStore(t *testing.T) {
 func TestControllerAuthenticatedShutdownCompletesResponseThenReturnsAndCleansSocket(t *testing.T) {
 	fixture := newDaemonFixture(t, true)
 	daemon, err := OpenDaemon(context.Background(), DaemonOptions{Workspace: fixture.workspace,
-		Clock: controllerTestClock{fixture.profile.UpdatedAt()}, Install: fixture.install})
+		Clock: controllerTestClock{fixture.profile.UpdatedAt()}, Install: fixture.install,
+		Credentials: testProfileCredentials{}, Control: newTestControlTransportFactory()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,19 +244,7 @@ func TestControllerAuthenticatedShutdownCompletesResponseThenReturnsAndCleansSoc
 func TestControllerMutationShutdownBusyKeepsDaemonReadyAndReopensAdmission(t *testing.T) {
 	fixture := newDaemonFixture(t, true)
 	insertControllerBusyRun(t, fixture)
-	daemon, err := OpenDaemon(context.Background(), DaemonOptions{Workspace: fixture.workspace,
-		Clock: controllerTestClock{fixture.profile.UpdatedAt()}, Install: fixture.install})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer daemon.Close()
-	serveDone := make(chan error, 1)
-	go func() { serveDone <- daemon.Serve(context.Background()) }()
-	waitControllerSocket(t, filepath.Join(fixture.nodeState, "control.sock"), serveDone)
-	client, err := localapi.NewClient(fixture.nodeState)
-	if err != nil {
-		t.Fatal(err)
-	}
+	client, serveDone := startTestControlDaemon(t, fixture)
 	authority, apiErr := client.ReadAuthority(context.Background())
 	if apiErr != nil {
 		t.Fatal(apiErr)
@@ -288,19 +275,7 @@ func TestControllerMutationShutdownBusyKeepsDaemonReadyAndReopensAdmission(t *te
 
 func TestControllerMutationShutdownGenerationMismatchReopensAdmission(t *testing.T) {
 	fixture := newDaemonFixture(t, true)
-	daemon, err := OpenDaemon(context.Background(), DaemonOptions{Workspace: fixture.workspace,
-		Clock: controllerTestClock{fixture.profile.UpdatedAt()}, Install: fixture.install})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer daemon.Close()
-	serveDone := make(chan error, 1)
-	go func() { serveDone <- daemon.Serve(context.Background()) }()
-	waitControllerSocket(t, filepath.Join(fixture.nodeState, "control.sock"), serveDone)
-	client, err := localapi.NewClient(fixture.nodeState)
-	if err != nil {
-		t.Fatal(err)
-	}
+	client, serveDone := startTestControlDaemon(t, fixture)
 	authority, apiErr := client.ReadAuthority(context.Background())
 	if apiErr != nil {
 		t.Fatal(apiErr)
@@ -324,6 +299,25 @@ func TestControllerMutationShutdownGenerationMismatchReopensAdmission(t *testing
 	if err := <-serveDone; err != nil {
 		t.Fatal(err)
 	}
+}
+
+func startTestControlDaemon(t *testing.T, fixture daemonFixture) (*localapi.Client, chan error) {
+	t.Helper()
+	daemon, err := OpenDaemon(context.Background(), DaemonOptions{Workspace: fixture.workspace,
+		Clock: controllerTestClock{fixture.profile.UpdatedAt()}, Install: fixture.install,
+		Credentials: testProfileCredentials{}, Control: newTestControlTransportFactory()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = daemon.Close() })
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- daemon.Serve(context.Background()) }()
+	waitControllerSocket(t, filepath.Join(fixture.nodeState, "control.sock"), serveDone)
+	client, err := localapi.NewClient(fixture.nodeState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client, serveDone
 }
 
 func insertControllerBusyRun(t *testing.T, fixture daemonFixture) {
@@ -367,6 +361,84 @@ func TestControllerShutdownSignalIsConcurrentAndIdempotent(t *testing.T) {
 		t.Fatal("concurrent lifecycle requests did not close the shutdown signal")
 	}
 	controller.requestShutdown()
+}
+
+func TestNewControllerRejectsNilAndTypedNilControlFactories(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		factory ControlTransportFactory
+	}{
+		{name: "nil"},
+		{name: "typed nil", factory: (*controllerTypedNilControlFactory)(nil)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newDaemonFixture(t, true)
+			authority, err := openExistingDaemonAuthority(context.Background(), fixture.workspace,
+				fixture.nodeState, testProfileCredentials{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer authority.store.Close()
+			controller, err := NewController(context.Background(), ControllerOptions{
+				NodeState: fixture.nodeState, Workspace: fixture.workspace, Store: authority.store,
+				Profile: authority.authority.Profile, Signer: authority.identity.PublicationSigner(),
+				Clock: controllerTestClock{fixture.profile.UpdatedAt()}, Install: fixture.install,
+				Control: test.factory,
+			})
+			if err == nil || controller != nil {
+				t.Fatalf("NewController(%s control factory) = (%#v, %v)",
+					test.name, controller, err)
+			}
+		})
+	}
+}
+
+func TestNewControllerRejectsIncompleteWakePortsBeforeCreatingCAS(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*ControllerOptions)
+	}{
+		{name: "typed nil adapter", mutate: func(options *ControllerOptions) {
+			options.WakeAdapter = (*controllerTypedNilWakeAdapter)(nil)
+		}},
+		{name: "missing attachments", mutate: func(options *ControllerOptions) {
+			options.WakeAdapter = daemonTestWakeAdapter{}
+		}},
+		{name: "unused attachments", mutate: func(options *ControllerOptions) {
+			options.Attachments = &testWakeAttachmentFilesystem{}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newDaemonFixture(t, true)
+			authority, err := openExistingDaemonAuthority(context.Background(), fixture.workspace,
+				fixture.nodeState, testProfileCredentials{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer authority.store.Close()
+			options := ControllerOptions{NodeState: fixture.nodeState, Workspace: fixture.workspace,
+				Store: authority.store, Profile: authority.authority.Profile,
+				Signer: authority.identity.PublicationSigner(),
+				Clock:  controllerTestClock{fixture.profile.UpdatedAt()}, Install: fixture.install,
+				Control: newTestControlTransportFactory()}
+			test.mutate(&options)
+			controller, err := NewController(context.Background(), options)
+			if err == nil || controller != nil {
+				t.Fatalf("NewController(%s) = (%#v, %v)", test.name, controller, err)
+			}
+			if _, err := os.Lstat(filepath.Join(fixture.nodeState, "objects")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("invalid wake composition created CAS: %v", err)
+			}
+		})
+	}
+}
+
+type controllerTypedNilWakeAdapter struct{}
+
+func (*controllerTypedNilWakeAdapter) Run(context.Context,
+	agent.CodexWakeRequest,
+) (agent.CodexWakeResult, error) {
+	panic("typed-nil wake adapter must be rejected before invocation")
 }
 
 func TestControllerManagedWorkerGatesReadinessAndStopsBeforeHTTP(t *testing.T) {
@@ -544,47 +616,6 @@ func TestControllerManagedWorkerFailureStaysReachableAndFailsClosed(t *testing.T
 	}
 }
 
-func TestControllerRequestTrackerRejectsNewHandlersAndDrainsEnteredHandler(t *testing.T) {
-	entered := make(chan struct{})
-	release := make(chan struct{})
-	tracker := newControllerRequestTracker(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
-		close(entered)
-		<-release
-	}))
-	requestDone := make(chan struct{})
-	go func() {
-		defer close(requestDone)
-		tracker.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
-	}()
-	select {
-	case <-entered:
-	case <-time.After(time.Second):
-		t.Fatal("tracked handler did not start")
-	}
-	drained := tracker.seal()
-	select {
-	case <-drained:
-		t.Fatal("tracker drained while entered handler was active")
-	default:
-	}
-	rejected := httptest.NewRecorder()
-	tracker.ServeHTTP(rejected, httptest.NewRequest(http.MethodGet, "/", nil))
-	if rejected.Code != http.StatusServiceUnavailable {
-		t.Fatalf("post-seal status = %d", rejected.Code)
-	}
-	close(release)
-	select {
-	case <-requestDone:
-	case <-time.After(time.Second):
-		t.Fatal("entered handler did not return")
-	}
-	select {
-	case <-drained:
-	case <-time.After(time.Second):
-		t.Fatal("tracker did not publish complete drain")
-	}
-}
-
 type controllerTestWakeWorker struct {
 	mu         sync.Mutex
 	snapshot   agent.WakeWorkerSnapshot
@@ -647,14 +678,14 @@ func newControllerWithTestWakeWorker(t *testing.T, fixture daemonFixture,
 ) (*Controller, func()) {
 	t.Helper()
 	authority, err := openExistingDaemonAuthority(context.Background(), fixture.workspace,
-		fixture.nodeState)
+		fixture.nodeState, testProfileCredentials{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	controller, err := NewController(context.Background(), ControllerOptions{NodeState: fixture.nodeState,
 		Workspace: fixture.workspace, Store: authority.store, Profile: authority.authority.Profile,
 		Signer: authority.identity.PublicationSigner(), Clock: controllerTestClock{fixture.profile.UpdatedAt()},
-		Install: fixture.install, wakeWorker: worker})
+		Install: fixture.install, wakeWorker: worker, Control: newTestControlTransportFactory()})
 	if err != nil {
 		_ = authority.store.Close()
 		t.Fatal(err)

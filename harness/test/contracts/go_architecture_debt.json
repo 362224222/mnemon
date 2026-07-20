@@ -73,16 +73,6 @@
       "removal_checkpoint": "9"
     },
     {
-      "rule": "dependency_direction",
-      "identity": "dependency_direction:harness/internal/node::localapi",
-      "path": "harness/internal/node",
-      "component": "localapi",
-      "risk": "medium",
-      "evidence": "harness/internal/node/activate.go",
-      "owner": "harness/internal/node + harness/internal/localapi",
-      "removal_checkpoint": "7R"
-    },
-    {
       "rule": "deterministic_order",
       "identity": "deterministic_order:gossip-subscription-filter",
       "path": "harness/internal/peer/topic.go",

@@ -25,15 +25,9 @@ type setupCompanion interface {
 	Deactivate(context.Context, model.HostKind, string, time.Time) (companionLifecycleReceipt, error)
 }
 
-type setupAuthorityClient interface {
-	node.DaemonHealthProbe
-	node.DaemonLifecycleClient
-	ReadAuthority(context.Context) (localapi.AuthorityResponse, *localapi.APIError)
-}
-
 type setupDaemonLifecycle interface {
 	Quiesce(context.Context, node.DaemonLifecycleClient, node.DaemonOfflineConfirmer,
-		localapi.AuthorityResponse) (localapi.AuthorityResponse, error)
+		node.Authority) (node.Authority, error)
 	Ensure(context.Context, node.DaemonEnsureOptions) (node.DaemonEnsureResult, error)
 	Close() error
 }
@@ -125,13 +119,11 @@ func productionSetupDependencies() setupDependencies {
 			_, err := integration.InstallHostProjection(workspace, nodeState, host, bundle)
 			return err
 		},
-		verifyProjection: integration.VerifyHostProjection,
-		verifyActivation: integration.VerifyHostActivation,
-		verifyAbsent:     integration.VerifyHostProjectionAbsent,
-		preflightUpgrade: integration.PreflightHostProjectionUpgrade,
-		newPreflight: func(options node.DaemonPreflightOptions) (node.DaemonEnsurePreflight, error) {
-			return node.NewDaemonPreflight(options)
-		},
+		verifyProjection:  integration.VerifyHostProjection,
+		verifyActivation:  integration.VerifyHostActivation,
+		verifyAbsent:      integration.VerifyHostProjectionAbsent,
+		preflightUpgrade:  integration.PreflightHostProjectionUpgrade,
+		newPreflight:      newSetupDaemonPreflight,
 		currentExecutable: os.Executable,
 		newLauncher: func(options node.DaemonProcessOptions) (node.DaemonLauncher, error) {
 			return node.NewDaemonProcessLauncher(options)
@@ -361,12 +353,8 @@ func (app *setupApp) upgradeActiveLeased(ctx context.Context, workspace, nodeSta
 	authority localapi.AuthorityResponse, authorityUpdatedAt time.Time,
 	client setupAuthorityClient, companion setupCompanion, lease setupDaemonLifecycle,
 ) (setupReceipt, *localapi.APIError) {
-	quiesced, err := lease.Quiesce(ctx, client, companion, authority)
-	if err != nil {
-		return setupReceipt{}, setupLifecycleError(err)
-	}
-	if quiesced != authority {
-		return setupReceipt{}, setupAuthError("managed authority changed while stopping mnemond")
+	if apiErr := quiesceSetupAuthority(ctx, lease, client, companion, authority); apiErr != nil {
+		return setupReceipt{}, apiErr
 	}
 	deactivated, err := companion.Deactivate(ctx, model.HostKind(host),
 		authority.AssetRevision, authorityUpdatedAt)

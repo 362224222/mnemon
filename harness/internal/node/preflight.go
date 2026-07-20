@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/agent"
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
@@ -20,6 +19,7 @@ type DaemonPreflightOptions struct {
 	NodeState     string
 	AssetRevision string
 	Install       InstallationVerifier
+	Credentials   ProfileCredentialVerifier
 }
 
 // DaemonPreflight is the production DaemonEnsurePreflight. Its constructor
@@ -30,6 +30,7 @@ type DaemonPreflight struct {
 	nodeState     string
 	assetRevision string
 	install       InstallationVerifier
+	credentials   ProfileCredentialVerifier
 	actionPolicy  agent.ActionPolicy
 }
 
@@ -45,8 +46,9 @@ func NewDaemonPreflight(options DaemonPreflightOptions) (*DaemonPreflight, error
 	if _, err := model.ParseDigest(options.AssetRevision); err != nil {
 		return nil, fmt.Errorf("%w: asset revision is invalid", ErrDaemonPreflight)
 	}
-	if options.Install == nil {
-		return nil, fmt.Errorf("%w: installation verifier is unavailable", ErrDaemonPreflight)
+	if isNilNodeInterface(options.Install) || isNilNodeInterface(options.Credentials) {
+		return nil, fmt.Errorf("%w: installation or credential verifier is unavailable",
+			ErrDaemonPreflight)
 	}
 	actionPolicy, err := actionPolicyForInstallation(options.Install)
 	if err != nil {
@@ -56,7 +58,8 @@ func NewDaemonPreflight(options DaemonPreflightOptions) (*DaemonPreflight, error
 		return nil, fmt.Errorf("%w: action policy differs from expected asset revision", ErrDaemonPreflight)
 	}
 	return &DaemonPreflight{workspace: options.Workspace, nodeState: options.NodeState,
-		assetRevision: options.AssetRevision, install: options.Install, actionPolicy: actionPolicy}, nil
+		assetRevision: options.AssetRevision, install: options.Install,
+		credentials: options.Credentials, actionPolicy: actionPolicy}, nil
 }
 
 // Verify is validation-only. It never provisions identity or credentials,
@@ -70,7 +73,8 @@ func (preflight *DaemonPreflight) Verify(ctx context.Context) (err error) {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("%w: %w", ErrDaemonPreflight, err)
 	}
-	authority, err := openExistingDaemonAuthority(ctx, preflight.workspace, preflight.nodeState)
+	authority, err := openExistingDaemonAuthority(ctx, preflight.workspace, preflight.nodeState,
+		preflight.credentials)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrDaemonPreflight, err)
 	}
@@ -102,8 +106,10 @@ type existingDaemonAuthority struct {
 	authority store.LocalAuthority
 }
 
-func openExistingDaemonAuthority(ctx context.Context, workspace, nodeState string) (existingDaemonAuthority, error) {
-	return openExistingStoredAuthority(ctx, workspace, nodeState, false)
+func openExistingDaemonAuthority(ctx context.Context, workspace, nodeState string,
+	credentials ProfileCredentialVerifier,
+) (existingDaemonAuthority, error) {
+	return openExistingStoredAuthority(ctx, workspace, nodeState, false, credentials)
 }
 
 // openExistingStoredAuthority is the strict existing-only reader shared by
@@ -111,10 +117,11 @@ func openExistingDaemonAuthority(ctx context.Context, workspace, nodeState strin
 // latter; all filesystem, identity, credential, schema and workspace bindings
 // remain identical.
 func openExistingStoredAuthority(ctx context.Context, workspace, nodeState string,
-	allowDisabled bool,
+	allowDisabled bool, credentials ProfileCredentialVerifier,
 ) (existingDaemonAuthority, error) {
-	if ctx == nil {
-		return existingDaemonAuthority{}, fmt.Errorf("%w: context is unavailable", ErrDaemonAuthority)
+	if ctx == nil || isNilNodeInterface(credentials) {
+		return existingDaemonAuthority{}, fmt.Errorf("%w: context or credential verifier is unavailable",
+			ErrDaemonAuthority)
 	}
 	if err := ctx.Err(); err != nil {
 		return existingDaemonAuthority{}, fmt.Errorf("%w: %w", ErrDaemonAuthority, err)
@@ -163,7 +170,7 @@ func openExistingStoredAuthority(ctx context.Context, workspace, nodeState strin
 	if authority.Profile.WorkspaceRoot() != validatedWorkspace {
 		return fail(fmt.Errorf("%w: Profile belongs to another workspace", ErrDaemonAuthority))
 	}
-	if err := localapi.VerifyProfileCredential(nodeState, authority.Profile.CredentialHash()); err != nil {
+	if err := credentials.Verify(nodeState, authority.Profile.CredentialHash()); err != nil {
 		return fail(fmt.Errorf("%w: %w", ErrDaemonAuthority, err))
 	}
 	if err := ctx.Err(); err != nil {

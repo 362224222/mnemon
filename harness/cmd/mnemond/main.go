@@ -12,7 +12,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/node"
 )
@@ -42,7 +41,7 @@ type daemonOpener func(context.Context, node.DaemonOptions) (daemonRuntime, erro
 type nodeProvisioner func(context.Context, node.ProvisionOptions) (node.ProvisionResult, error)
 type nodeActivator func(context.Context, node.ActivateOptions) (node.ActivateResult, error)
 type nodeDeactivator func(context.Context, node.DeactivateOptions) (node.DeactivateResult, error)
-type nodeInspector func(context.Context, string) (localapi.AuthoritySnapshot, error)
+type nodeInspector func(context.Context, string) (node.Authority, error)
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -59,13 +58,14 @@ func main() {
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	return runWithNode(ctx, args, stdout, stderr, openManagedRuntime,
-		node.Provision, activateManagedNode, node.Deactivate)
+		provisionManagedNode, activateManagedNode, deactivateManagedNode)
 }
 
 func runWithDaemon(ctx context.Context, args []string, stdout, stderr io.Writer,
 	open daemonOpener,
 ) error {
-	return runWithNode(ctx, args, stdout, stderr, open, node.Provision, activateManagedNode, node.Deactivate)
+	return runWithNode(ctx, args, stdout, stderr, open, provisionManagedNode,
+		activateManagedNode, deactivateManagedNode)
 }
 
 func runWithNode(ctx context.Context, args []string, stdout, stderr io.Writer,
@@ -76,7 +76,7 @@ func runWithNode(ctx context.Context, args []string, stdout, stderr io.Writer,
 	if len(inspectors) > 1 || len(inspectors) == 1 && inspectors[0] == nil {
 		return errors.New("mnemond command has invalid authority inspector composition")
 	}
-	inspect := node.InspectAuthority
+	inspect := inspectManagedNode
 	if len(inspectors) == 1 {
 		inspect = inspectors[0]
 	}
@@ -175,45 +175,9 @@ func runWithNode(ctx context.Context, args []string, stdout, stderr io.Writer,
 		_, err = stdout.Write(append(raw, '\n'))
 		return err
 	case "inspect":
-		projectRoot, err := parseInspectProjectRoot(args[1:])
-		if err != nil {
-			return err
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		snapshot, err := inspect(ctx, projectRoot)
-		if err != nil {
-			return err
-		}
-		receipt, err := localapi.NewAuthorityResponse(snapshot)
-		if err != nil {
-			return fmt.Errorf("encode authority inspection receipt: %w", err)
-		}
-		raw, err := model.CanonicalMarshal(receipt)
-		if err != nil {
-			return fmt.Errorf("encode authority inspection receipt: %w", err)
-		}
-		_, err = stdout.Write(append(raw, '\n'))
-		return err
+		return runInspect(ctx, args[1:], stdout, inspect)
 	case "confirm-offline":
-		projectRoot, expected, err := parseConfirmOfflineOptions(args[1:])
-		if err != nil {
-			return err
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		receipt, err := node.ConfirmOfflineAuthority(ctx, projectRoot, expected)
-		if err != nil {
-			return err
-		}
-		raw, err := model.CanonicalMarshal(receipt)
-		if err != nil {
-			return fmt.Errorf("encode offline authority receipt: %w", err)
-		}
-		_, err = stdout.Write(append(raw, '\n'))
-		return err
+		return runConfirmOffline(ctx, args[1:], stdout)
 	default:
 		if len(args) != 1 {
 			return fmt.Errorf("unsupported command %q", strings.Join(args, " "))

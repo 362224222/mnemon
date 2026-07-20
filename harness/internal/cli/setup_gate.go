@@ -13,6 +13,7 @@ import (
 
 	"github.com/mnemon-dev/mnemon/harness/internal/assets"
 	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
+	"github.com/mnemon-dev/mnemon/harness/internal/node"
 )
 
 const setupHookOutputLimit = 512
@@ -46,7 +47,7 @@ func newSetupHookGate(workspace string, host assets.Host) (*setupHookGate, error
 }
 
 func (gate *setupHookGate) VerifyReady(ctx context.Context,
-	_ localapi.HealthResponse,
+	_ node.DaemonHealth,
 ) error {
 	if gate == nil || ctx == nil || gate.identity == nil {
 		return setupHookError("execute", nil)

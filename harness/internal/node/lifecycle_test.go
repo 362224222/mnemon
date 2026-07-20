@@ -12,13 +12,15 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
+	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
 
 func TestDaemonLifecycleQuiesceWaitsPastShutdownResponseForWriterRelease(t *testing.T) {
 	fixture := newDaemonFixture(t, true)
 	daemon, err := OpenDaemon(context.Background(), DaemonOptions{Workspace: fixture.workspace,
-		Install: fixture.install})
+		Install: fixture.install, Credentials: testProfileCredentials{},
+		Control: newTestControlTransportFactory()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,10 +35,7 @@ func TestDaemonLifecycleQuiesceWaitsPastShutdownResponseForWriterRelease(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	expected, apiErr := client.ReadAuthority(context.Background())
-	if apiErr != nil {
-		t.Fatal(apiErr)
-	}
+	expected := readTestAuthority(t, client)
 	lease := acquireTestDaemonLifecycle(t, fixture)
 	writerActive := make(chan struct{})
 	releaseWriterActive := make(chan struct{})
@@ -47,8 +46,8 @@ func TestDaemonLifecycleQuiesceWaitsPastShutdownResponseForWriterRelease(t *test
 	}
 	defer releaseWriterObservation()
 	confirmer := DaemonOfflineConfirmerFunc(func(ctx context.Context,
-		expected localapi.AuthorityResponse,
-	) (localapi.AuthorityResponse, error) {
+		expected Authority,
+	) (Authority, error) {
 		response, err := daemonFixtureOfflineConfirmer(fixture).ConfirmOffline(ctx, expected)
 		if errors.Is(err, ErrOfflineAuthorityActive) {
 			writerActiveOnce.Do(func() {
@@ -62,14 +61,14 @@ func TestDaemonLifecycleQuiesceWaitsPastShutdownResponseForWriterRelease(t *test
 		return response, err
 	})
 	quiesced := make(chan struct {
-		authority localapi.AuthorityResponse
+		authority Authority
 		err       error
 	}, 1)
 	go func() {
-		authority, err := lease.quiesce(context.Background(), client, confirmer, expected,
+		authority, err := lease.quiesce(context.Background(), localAPILifecycleClient{client}, confirmer, expected,
 			daemonLifecycleTiming{deadline: time.Second, poll: 5 * time.Millisecond})
 		quiesced <- struct {
-			authority localapi.AuthorityResponse
+			authority Authority
 			err       error
 		}{authority: authority, err: err}
 	}()
@@ -111,7 +110,8 @@ func TestDaemonLifecycleQuiesceBusyMutationLeavesDaemonOnline(t *testing.T) {
 	fixture := newDaemonFixture(t, true)
 	insertControllerBusyRun(t, fixture)
 	daemon, err := OpenDaemon(context.Background(), DaemonOptions{Workspace: fixture.workspace,
-		Install: fixture.install})
+		Install: fixture.install, Credentials: testProfileCredentials{},
+		Control: newTestControlTransportFactory()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,19 +123,20 @@ func TestDaemonLifecycleQuiesceBusyMutationLeavesDaemonOnline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	expected, apiErr := client.ReadAuthority(context.Background())
+	wireAuthority, apiErr := client.ReadAuthority(context.Background())
 	if apiErr != nil {
 		t.Fatal(apiErr)
 	}
+	expected := testAuthorityFromLocalAPI(t, wireAuthority)
 	lease := acquireTestDaemonLifecycle(t, fixture)
 	var confirmations atomic.Int32
 	confirmer := DaemonOfflineConfirmerFunc(func(context.Context,
-		localapi.AuthorityResponse,
-	) (localapi.AuthorityResponse, error) {
+		Authority,
+	) (Authority, error) {
 		confirmations.Add(1)
-		return localapi.AuthorityResponse{}, errors.New("offline confirmation must not run")
+		return Authority{}, errors.New("offline confirmation must not run")
 	})
-	_, err = lease.Quiesce(context.Background(), client, confirmer, expected)
+	_, err = lease.Quiesce(context.Background(), localAPILifecycleClient{client}, confirmer, expected)
 	var mutationErr *localapi.APIError
 	if !errors.Is(err, ErrDaemonLifecycle) || !errors.As(err, &mutationErr) ||
 		mutationErr.Code != localapi.CodeOperationPending || confirmations.Load() != 0 {
@@ -149,7 +150,7 @@ func TestDaemonLifecycleQuiesceBusyMutationLeavesDaemonOnline(t *testing.T) {
 		health.Status != "ready" {
 		t.Fatalf("busy Quiesce health = (%#v, %#v)", health, apiErr)
 	}
-	if _, apiErr := client.Shutdown(context.Background(), expected); apiErr != nil {
+	if _, apiErr := client.Shutdown(context.Background(), wireAuthority); apiErr != nil {
 		t.Fatal(apiErr)
 	}
 	if err := <-served; err != nil {
@@ -165,7 +166,7 @@ func TestDaemonLifecycleLeaseBlocksConcurrentEnsureLaunch(t *testing.T) {
 	var ready atomic.Bool
 	options := DaemonEnsureOptions{
 		NodeState: fixture.nodeState, AssetRevision: fixture.revision,
-		Probe: ensureProbeFunc(func(context.Context) (localapi.HealthResponse, *localapi.APIError) {
+		Probe: ensureProbeFunc(func(context.Context) (DaemonHealth, error) {
 			probes.Add(1)
 			if ready.Load() {
 				return readyEnsureHealth(fixture.revision), nil
@@ -204,11 +205,7 @@ func TestDaemonLifecycleQuiesceRejectsGenerationAndSocketDrift(t *testing.T) {
 		fixture := newDaemonFixture(t, true)
 		current := daemonFixtureAuthorityResponse(t, fixture)
 		drifted := current
-		generation, err := time.Parse(time.RFC3339Nano, current.UpdatedAt)
-		if err != nil {
-			t.Fatal(err)
-		}
-		drifted.UpdatedAt = generation.Add(time.Nanosecond).UTC().Format(time.RFC3339Nano)
+		drifted.UpdatedAt = current.UpdatedAt.Add(time.Nanosecond)
 		withoutGeneration := drifted
 		withoutGeneration.UpdatedAt = current.UpdatedAt
 		if withoutGeneration != current || drifted.UpdatedAt == current.UpdatedAt {
@@ -218,23 +215,22 @@ func TestDaemonLifecycleQuiesceRejectsGenerationAndSocketDrift(t *testing.T) {
 		defer lease.Close()
 		var shutdowns atomic.Int32
 		client := lifecycleClientStub{shutdown: func(context.Context,
-			localapi.AuthorityResponse,
-		) (localapi.ShutdownResponse, *localapi.APIError) {
+			Authority,
+		) error {
 			shutdowns.Add(1)
-			return localapi.ShutdownResponse{}, localapi.NewAPIError(
-				localapi.CodeInternal, "unexpected shutdown")
+			return errors.New("unexpected shutdown")
 		}}
-		_, err = lease.Quiesce(context.Background(), client,
+		_, err := lease.Quiesce(context.Background(), client,
 			daemonFixtureOfflineConfirmer(fixture), drifted)
 		if !errors.Is(err, ErrDaemonLifecycle) || !errors.Is(err, ErrOfflineAuthority) ||
 			shutdowns.Load() != 0 {
 			t.Fatalf("generation-drift Quiesce() = %v", err)
 		}
-		snapshot, inspectErr := InspectAuthority(context.Background(), fixture.workspace)
-		observed, responseErr := localapi.NewAuthorityResponse(snapshot)
-		if inspectErr != nil || responseErr != nil || observed != current {
-			t.Fatalf("generation drift changed durable authority = (%#v, %v, %v)",
-				observed, inspectErr, responseErr)
+		observed, inspectErr := InspectAuthority(context.Background(), fixture.workspace,
+			testProfileCredentials{})
+		if inspectErr != nil || observed != current {
+			t.Fatalf("generation drift changed durable authority = (%#v, %v)",
+				observed, inspectErr)
 		}
 	})
 
@@ -271,8 +267,8 @@ func TestDaemonLifecycleQuiesceRejectsGenerationAndSocketDrift(t *testing.T) {
 		defer lease.Close()
 		client := lifecycleClientStub{
 			shutdown: func(_ context.Context,
-				observed localapi.AuthorityResponse,
-			) (localapi.ShutdownResponse, *localapi.APIError) {
+				observed Authority,
+			) error {
 				if observed != expected {
 					t.Errorf("shutdown expected authority = %#v", observed)
 				}
@@ -283,12 +279,12 @@ func TestDaemonLifecycleQuiesceRejectsGenerationAndSocketDrift(t *testing.T) {
 				if err != nil {
 					t.Errorf("create replacement socket: %v", err)
 				}
-				return daemonFixtureShutdownResponse(t, expected), nil
+				return nil
 			},
 		}
 		confirmer := DaemonOfflineConfirmerFunc(func(context.Context,
-			localapi.AuthorityResponse,
-		) (localapi.AuthorityResponse, error) {
+			Authority,
+		) (Authority, error) {
 			confirmations.Add(1)
 			return expected, nil
 		})
@@ -336,7 +332,7 @@ func TestDaemonLifecycleQuiesceRecoversStaleSocketAndBoundsWriterWait(t *testing
 		fixture := newDaemonFixture(t, true)
 		expected := daemonFixtureAuthorityResponse(t, fixture)
 		daemon, err := OpenDaemon(context.Background(), DaemonOptions{Workspace: fixture.workspace,
-			Install: fixture.install})
+			Install: fixture.install, Credentials: testProfileCredentials{}, Control: newTestControlTransportFactory()})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -355,7 +351,7 @@ func TestDaemonLifecycleQuiesceRecoversStaleSocketAndBoundsWriterWait(t *testing
 		fixture := newDaemonFixture(t, true)
 		expected := daemonFixtureAuthorityResponse(t, fixture)
 		daemon, err := OpenDaemon(context.Background(), DaemonOptions{Workspace: fixture.workspace,
-			Install: fixture.install})
+			Install: fixture.install, Credentials: testProfileCredentials{}, Control: newTestControlTransportFactory()})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -365,8 +361,8 @@ func TestDaemonLifecycleQuiesceRecoversStaleSocketAndBoundsWriterWait(t *testing
 		writerWaitStarted := make(chan struct{})
 		var writerWaitOnce sync.Once
 		confirmer := DaemonOfflineConfirmerFunc(func(ctx context.Context,
-			expected localapi.AuthorityResponse,
-		) (localapi.AuthorityResponse, error) {
+			expected Authority,
+		) (Authority, error) {
 			response, err := daemonFixtureOfflineConfirmer(fixture).ConfirmOffline(ctx, expected)
 			if errors.Is(err, ErrOfflineAuthorityActive) {
 				writerWaitOnce.Do(func() { close(writerWaitStarted) })
@@ -424,11 +420,11 @@ func TestDaemonLifecycleRejectsWrongNodeAndClosedLease(t *testing.T) {
 	var wrongReads atomic.Int32
 	wrongClient := lifecycleClientStub{
 		shutdown: func(context.Context,
-			localapi.AuthorityResponse,
-		) (localapi.ShutdownResponse, *localapi.APIError) {
+			Authority,
+		) error {
 			wrongReads.Add(1)
 			t.Fatal("wrong-Node client reached shutdown")
-			return localapi.ShutdownResponse{}, nil
+			return nil
 		},
 	}
 	if _, err := lease.Quiesce(context.Background(), wrongClient,
@@ -437,7 +433,7 @@ func TestDaemonLifecycleRejectsWrongNodeAndClosedLease(t *testing.T) {
 	}
 	var probes atomic.Int32
 	options := unavailableEnsureOptions(other.nodeState, other.revision, new(atomic.Int32))
-	options.Probe = ensureProbeFunc(func(context.Context) (localapi.HealthResponse, *localapi.APIError) {
+	options.Probe = ensureProbeFunc(func(context.Context) (DaemonHealth, error) {
 		probes.Add(1)
 		return unavailableEnsureHealth()
 	})
@@ -461,6 +457,36 @@ func TestDaemonLifecycleRejectsWrongNodeAndClosedLease(t *testing.T) {
 	}
 }
 
+func TestDaemonLifecycleRejectsTypedNilControlPortsBeforeInvocation(t *testing.T) {
+	fixture := newDaemonFixture(t, true)
+	lease := acquireTestDaemonLifecycle(t, fixture)
+	defer lease.Close()
+	expected := daemonFixtureAuthorityResponse(t, fixture)
+	var client *panicLifecycleClient
+	if _, err := lease.Quiesce(context.Background(), client,
+		daemonFixtureOfflineConfirmer(fixture), expected); !errors.Is(err, ErrDaemonLifecycle) {
+		t.Fatalf("Quiesce(typed nil client) = %v", err)
+	}
+	var confirmer *panicOfflineConfirmer
+	if _, err := lease.Quiesce(context.Background(), lifecycleClientStub{
+		shutdown: func(context.Context, Authority) error { return nil },
+	}, confirmer, expected); !errors.Is(err, ErrDaemonLifecycle) {
+		t.Fatalf("Quiesce(typed nil confirmer) = %v", err)
+	}
+}
+
+type panicLifecycleClient struct{}
+
+func (*panicLifecycleClient) ShutdownDaemonForMutation(context.Context, Authority) error {
+	panic("typed-nil lifecycle client must be rejected before invocation")
+}
+
+type panicOfflineConfirmer struct{}
+
+func (*panicOfflineConfirmer) ConfirmOffline(context.Context, Authority) (Authority, error) {
+	panic("typed-nil offline confirmer must be rejected before invocation")
+}
+
 func TestDaemonLifecycleEnsureUsesHeldLeaseWithoutRelocking(t *testing.T) {
 	fixture := newDaemonFixture(t, false)
 	lease := acquireTestDaemonLifecycle(t, fixture)
@@ -470,7 +496,7 @@ func TestDaemonLifecycleEnsureUsesHeldLeaseWithoutRelocking(t *testing.T) {
 	handle := newRecordingDaemonLaunch()
 	result, err := lease.Ensure(context.Background(), DaemonEnsureOptions{
 		NodeState: fixture.nodeState, AssetRevision: fixture.revision,
-		Probe: ensureProbeFunc(func(context.Context) (localapi.HealthResponse, *localapi.APIError) {
+		Probe: ensureProbeFunc(func(context.Context) (DaemonHealth, error) {
 			if ready.Load() {
 				return readyEnsureHealth(fixture.revision), nil
 			}
@@ -483,7 +509,7 @@ func TestDaemonLifecycleEnsureUsesHeldLeaseWithoutRelocking(t *testing.T) {
 			return handle, nil
 		}),
 	})
-	if err != nil || !result.Started || result.Health.Status != "ready" || launches.Load() != 1 ||
+	if err != nil || !result.Started || !result.Health.Ready || launches.Load() != 1 ||
 		handle.releases.Load() != 1 || handle.terminations.Load() != 0 {
 		t.Fatalf("lease.Ensure() = (%#v, %v), launches=%d releases=%d terminations=%d",
 			result, err, launches.Load(), handle.releases.Load(), handle.terminations.Load())
@@ -491,17 +517,38 @@ func TestDaemonLifecycleEnsureUsesHeldLeaseWithoutRelocking(t *testing.T) {
 }
 
 type lifecycleClientStub struct {
-	shutdown func(context.Context, localapi.AuthorityResponse) (
-		localapi.ShutdownResponse, *localapi.APIError,
-	)
+	shutdown func(context.Context, Authority) error
 }
 
-func (client lifecycleClientStub) ShutdownForMutation(ctx context.Context,
-	expected localapi.AuthorityResponse,
-) (
-	localapi.ShutdownResponse, *localapi.APIError,
-) {
+func (client lifecycleClientStub) ShutdownDaemonForMutation(ctx context.Context,
+	expected Authority,
+) error {
 	return client.shutdown(ctx, expected)
+}
+
+type localAPILifecycleClient struct{ client *localapi.Client }
+
+func (client localAPILifecycleClient) ShutdownDaemonForMutation(ctx context.Context,
+	expected Authority,
+) error {
+	wire, err := localAPIAuthorityResponse(expected)
+	if err != nil {
+		return err
+	}
+	response, apiErr := client.client.ShutdownForMutation(ctx, wire)
+	if apiErr != nil {
+		if apiErr.Code == localapi.CodeMnemondUnavailable {
+			return errors.Join(ErrDaemonControlUnavailable, apiErr)
+		}
+		return apiErr
+	}
+	wanted, err := localapi.AuthorityDigest(wire)
+	observed, parseErr := model.ParseDigest(response.AuthorityDigest)
+	if err != nil || parseErr != nil || response.SchemaVersion != localapi.SchemaVersion ||
+		response.Status != "stopping" || observed != wanted {
+		return errors.New("local shutdown response is not canonical")
+	}
+	return nil
 }
 
 func acquireTestDaemonLifecycle(t *testing.T, fixture daemonFixture) *DaemonLifecycleLease {
@@ -515,18 +562,18 @@ func acquireTestDaemonLifecycle(t *testing.T, fixture daemonFixture) *DaemonLife
 	return lease
 }
 
-func daemonFixtureAuthorityResponse(t *testing.T, fixture daemonFixture) localapi.AuthorityResponse {
+func daemonFixtureAuthorityResponse(t *testing.T, fixture daemonFixture) Authority {
 	t.Helper()
-	response, err := localapi.NewAuthorityResponse(localapi.AuthoritySnapshot{
+	authority := Authority{
 		Host: fixture.profile.Host(), Runtime: fixture.profile.Runtime(),
 		Enabled: fixture.profile.Enabled(), AssetRevision: fixture.profile.ActiveAssetRevision(),
 		UpdatedAt: fixture.profile.UpdatedAt(), PeerID: fixture.identity.PeerID(),
 		ActiveAssetRevision: fixture.revision,
-	})
-	if err != nil {
+	}
+	if err := authority.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	return response
+	return authority
 }
 
 func daemonFixtureLifecycleClient(t *testing.T, fixture daemonFixture) DaemonLifecycleClient {
@@ -535,31 +582,57 @@ func daemonFixtureLifecycleClient(t *testing.T, fixture daemonFixture) DaemonLif
 	if err != nil {
 		t.Fatal(err)
 	}
-	return client
+	return localAPILifecycleClient{client: client}
 }
 
 func daemonFixtureOfflineConfirmer(fixture daemonFixture) DaemonOfflineConfirmer {
 	return DaemonOfflineConfirmerFunc(func(ctx context.Context,
-		expected localapi.AuthorityResponse,
-	) (localapi.AuthorityResponse, error) {
-		digest, err := localapi.AuthorityDigest(expected)
+		expected Authority,
+	) (Authority, error) {
+		digest, err := expected.Digest()
 		if err != nil {
-			return localapi.AuthorityResponse{}, err
+			return Authority{}, err
 		}
-		return ConfirmOfflineAuthority(ctx, fixture.workspace, digest)
+		return ConfirmOfflineAuthority(ctx, fixture.workspace, digest,
+			testProfileCredentials{}, localapi.RemoveStaleOwnerUnix)
 	})
 }
 
-func daemonFixtureShutdownResponse(t *testing.T,
-	expected localapi.AuthorityResponse,
-) localapi.ShutdownResponse {
+func localAPIAuthorityResponse(expected Authority) (localapi.AuthorityResponse, error) {
+	return localapi.NewAuthorityResponse(localapi.AuthoritySnapshot{
+		Host: expected.Host, Runtime: expected.Runtime, Enabled: expected.Enabled,
+		AssetRevision: expected.AssetRevision, UpdatedAt: expected.UpdatedAt,
+		PeerID: expected.PeerID, ActiveAssetRevision: expected.ActiveAssetRevision,
+	})
+}
+
+func testAuthorityFromLocalAPI(t *testing.T, response localapi.AuthorityResponse) Authority {
 	t.Helper()
-	digest, err := localapi.AuthorityDigest(expected)
+	peerID, peerErr := model.ParsePeerID(response.PeerID)
+	updatedAt, timeErr := time.Parse(time.RFC3339Nano, response.UpdatedAt)
+	authority := Authority{Host: model.HostKind(response.Host), Runtime: model.RuntimeKind(response.Runtime),
+		Enabled: response.Enabled, AssetRevision: response.AssetRevision, UpdatedAt: updatedAt,
+		PeerID: peerID, ActiveAssetRevision: response.ActiveAssetRevision}
+	if peerErr != nil || timeErr != nil {
+		t.Fatalf("parse local authority = (%v, %v)", peerErr, timeErr)
+	}
+	wire, err := localAPIAuthorityResponse(authority)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return localapi.ShutdownResponse{AuthorityDigest: digest.String(),
-		SchemaVersion: localapi.SchemaVersion, Status: "stopping"}
+	if wire != response {
+		t.Fatalf("noncanonical local authority = %#v", response)
+	}
+	return authority
+}
+
+func readTestAuthority(t *testing.T, client *localapi.Client) Authority {
+	t.Helper()
+	response, apiErr := client.ReadAuthority(context.Background())
+	if apiErr != nil {
+		t.Fatal(apiErr)
+	}
+	return testAuthorityFromLocalAPI(t, response)
 }
 
 func waitAtomicAtLeast(t *testing.T, value *atomic.Int32, expected int32) {

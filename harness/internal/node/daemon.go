@@ -45,7 +45,10 @@ type DaemonOptions struct {
 	Workspace          string
 	Clock              Clock
 	Install            InstallationVerifier
+	Credentials        ProfileCredentialVerifier
 	WakeAdapterFactory WakeAdapterFactory
+	Attachments        agent.WakeAttachmentFilesystem
+	Control            ControlTransportFactory
 }
 
 // Daemon owns the strict restart path for one workspace-local Node. It binds
@@ -62,6 +65,7 @@ type Daemon struct {
 	lifecycleMu  sync.Mutex
 	serveStarted bool
 	serveDone    chan struct{}
+	serveErr     error
 	closing      bool
 	closed       bool
 	closeOnce    sync.Once
@@ -95,9 +99,11 @@ func OpenManagedDaemon(ctx context.Context, options DaemonOptions) (*Daemon, err
 	if err != nil {
 		return nil, err
 	}
-	if isNilWakeAdapterFactory(options.WakeAdapterFactory) {
+	if isNilWakeAdapterFactory(options.WakeAdapterFactory) ||
+		isNilNodeInterface(options.Attachments) || isNilNodeInterface(options.Control) {
 		return nil, errors.Join(
-			fmt.Errorf("%w: managed wake adapter factory is unavailable", ErrDaemonAuthority),
+			fmt.Errorf("%w: managed wake adapter, attachments, or control transport is unavailable",
+				ErrDaemonAuthority),
 			permit.close(),
 		)
 	}
@@ -112,7 +118,8 @@ func openDaemon(ctx context.Context, options DaemonOptions,
 	beforeAccept func() error, actionPolicy agent.ActionPolicy,
 ) (*Daemon, error) {
 	nodeState := filepath.Join(options.Workspace, ".mnemon", "harness", "node")
-	authority, err := openExistingDaemonAuthority(ctx, options.Workspace, nodeState)
+	authority, err := openExistingDaemonAuthority(ctx, options.Workspace, nodeState,
+		options.Credentials)
 	if err != nil {
 		return nil, err
 	}
@@ -143,7 +150,8 @@ func openDaemon(ctx context.Context, options DaemonOptions,
 	controller, err := NewController(ctx, ControllerOptions{NodeState: nodeState, Workspace: workspace,
 		Store: st, Profile: authority.authority.Profile, Signer: identity.PublicationSigner(), Clock: options.Clock,
 		Install: options.Install, actionPolicy: actionPolicy,
-		WakeAdapter: wakeAdapter, BeforeAccept: beforeAccept})
+		WakeAdapter: wakeAdapter, Attachments: options.Attachments, Control: options.Control,
+		BeforeAccept: beforeAccept})
 	if err != nil {
 		return fail(fmt.Errorf("%w: compose controller: %v", ErrDaemonAuthority, err))
 	}
@@ -173,6 +181,7 @@ func (daemon *Daemon) Serve(ctx context.Context) error {
 
 	err := daemon.controller.Serve(ctx)
 	daemon.lifecycleMu.Lock()
+	daemon.serveErr = err
 	close(serveDone)
 	daemon.lifecycleMu.Unlock()
 	return err
@@ -197,12 +206,19 @@ func (daemon *Daemon) Close() error {
 					<-serveDone
 				}
 			}
-			// Serve normally releases the launch permit immediately before HTTP
+			// Serve normally releases the launch permit immediately before local-control
 			// admission. Keep this idempotent fallback for every early-return
 			// path so Close can never strand inherited ensure.lock authority.
 			daemon.closeErr = controller.releaseBeforeAccept()
 		}
-		if daemon.store != nil {
+		daemon.lifecycleMu.Lock()
+		serveErr := daemon.serveErr
+		daemon.lifecycleMu.Unlock()
+		if errors.Is(serveErr, ErrControlTransportUndrained) {
+			daemon.closeErr = errors.Join(daemon.closeErr, fmt.Errorf(
+				"%w: retain Store after unsafe control drain: %w",
+				ErrDaemonAuthority, ErrControlTransportUndrained))
+		} else if daemon.store != nil {
 			daemon.closeErr = errors.Join(daemon.closeErr, daemon.store.Close())
 		}
 		daemon.lifecycleMu.Lock()

@@ -113,6 +113,26 @@ func (e *APIError) Error() string {
 	return fmt.Sprintf("%s: %s", e.Code, e.Message)
 }
 
+// Validate proves that an API error is one exact closed local-control
+// envelope before an adapter may classify it into lifecycle policy.
+func (e *APIError) Validate() error {
+	if e == nil || e.SchemaVersion != SchemaVersion || e.Status != "error" ||
+		!e.Code.Valid() || e.Retryable != e.Code.Retryable() ||
+		strings.TrimSpace(e.Message) != e.Message || e.Message == "" ||
+		len([]byte(e.Message)) > MaxDiagnosticBytes {
+		return errors.New("invalid API error")
+	}
+	if e.Replayed && e.OperationID == nil {
+		return errors.New("replayed API error lacks operation identity")
+	}
+	if e.OperationID != nil {
+		if _, err := model.ParseOperationID(*e.OperationID); err != nil {
+			return errors.New("invalid API error operation identity")
+		}
+	}
+	return nil
+}
+
 func (e *APIError) ExitStatus() int {
 	if e == nil {
 		return 0

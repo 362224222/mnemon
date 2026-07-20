@@ -10,6 +10,7 @@ import (
 
 	"github.com/mnemon-dev/mnemon/harness/internal/assets"
 	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
+	"github.com/mnemon-dev/mnemon/harness/internal/node"
 )
 
 func TestSetupHookGateExecutesActualProjectionWithoutInheritedAttachment(t *testing.T) {
@@ -26,7 +27,7 @@ func TestSetupHookGateExecutesActualProjectionWithoutInheritedAttachment(t *test
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := gate.VerifyReady(context.Background(), localapi.HealthResponse{}); err != nil {
+			if err := gate.VerifyReady(context.Background(), node.DaemonHealth{}); err != nil {
 				t.Fatalf("VerifyReady() error = %v", err)
 			}
 		})
@@ -58,7 +59,7 @@ func TestSetupHookGateFailsClosedForOutputFailureTimeoutAndPathDrift(t *testing.
 				defer cancel()
 				ctx = bounded
 			}
-			if err := gate.VerifyReady(ctx, localapi.HealthResponse{}); !errors.Is(err, errSetupHookGate) {
+			if err := gate.VerifyReady(ctx, node.DaemonHealth{}); !errors.Is(err, errSetupHookGate) {
 				t.Fatalf("VerifyReady() error = %v", err)
 			}
 		})
@@ -75,7 +76,7 @@ func TestSetupHookGateFailsClosedForOutputFailureTimeoutAndPathDrift(t *testing.
 	if err := os.Symlink(filepath.Join(workspace, "outside"), hook); err != nil {
 		t.Fatal(err)
 	}
-	if err := gate.VerifyReady(context.Background(), localapi.HealthResponse{}); !errors.Is(err, errSetupHookGate) {
+	if err := gate.VerifyReady(context.Background(), node.DaemonHealth{}); !errors.Is(err, errSetupHookGate) {
 		t.Fatalf("drift VerifyReady() error = %v", err)
 	}
 }
