@@ -30,42 +30,24 @@ type CreateChannelResult struct {
 	GrantID model.GrantID
 }
 
-// CreateChannel atomically persists the signed descriptor, owner genesis,
-// local publication epoch and first bearer-secret-free enrollment verifier.
-// The signed token crosses this transient boundary so its exact grant can be
-// derived, but only the verifier is written to SQLite.
+// CreateChannel is a transitional Store-only bridge. Production composition
+// uses the typed plan so the runtime can drain and install the same candidate.
 func (s *Store) CreateChannel(ctx context.Context, spec CreateChannelSpec) (CreateChannelResult, error) {
-	if s == nil || s.db == nil || ctx == nil || spec.Genesis.IsZero() || spec.Token.IsZero() {
-		return CreateChannelResult{}, ErrChannelCreateInput
-	}
-	channel := spec.Channel
-	grant, grantErr := model.NewOpenEnrollmentGrantForToken(spec.Token, channel.CreatedAt())
-	genesisAddresses, genesisAddressErr := model.AdvertisedAddressDigest(spec.Genesis.Multiaddrs())
-	tokenAddresses, tokenAddressErr := model.AdvertisedAddressDigest(spec.Token.Payload().OwnerMultiaddrs())
-	if channel.ID().IsZero() || channel.Status() != model.ChannelActive ||
-		channel.TopicState() != model.TopicNotJoined || grantErr != nil || grant.ChannelID() != channel.ID() ||
-		!bytes.Equal(spec.Token.Payload().Descriptor().WireJSON().Bytes(),
-			channel.Descriptor().WireJSON().Bytes()) ||
-		genesisAddressErr != nil || tokenAddressErr != nil || genesisAddresses != tokenAddresses ||
-		channel.UpdatedAt() != channel.CreatedAt() || grant.CreatedAt() != channel.CreatedAt() ||
-		grant.MaxUses() != channel.MemberLimit()-1 {
-		return CreateChannelResult{}, fmt.Errorf("%w: inconsistent Channel, topic or grant", ErrChannelCreateInput)
-	}
-	roster, err := model.NewVerifiedRoster(channel.Descriptor(), []model.Member{spec.Genesis})
-	if err != nil || roster.Head() != channel.RosterHead() {
-		return CreateChannelResult{}, fmt.Errorf("%w: genesis authority: %v", ErrChannelCreateInput, err)
-	}
-
-	tx, err := s.db.BeginTx(ctx, nil)
+	plan, err := s.PrepareCreateChannel(ctx, spec)
 	if err != nil {
-		return CreateChannelResult{}, fmt.Errorf("create Channel: begin: %w", err)
+		return CreateChannelResult{}, err
 	}
-	defer tx.Rollback()
-	node, err := readNode(ctx, tx)
-	if err != nil || node.PeerID() != channel.OwnerPeerID() || node.PeerID() != spec.Genesis.PeerID() ||
-		node.OriginEpoch() != spec.Genesis.OriginEpoch() {
-		return CreateChannelResult{}, fmt.Errorf("%w: local Node is not the genesis owner: %v",
-			ErrChannelCreateInput, err)
+	return s.CommitCreateChannel(ctx, plan)
+}
+
+func applyCreateChannel(ctx context.Context, tx *sql.Tx, node model.Node,
+	candidate createChannelCandidate,
+) (CreateChannelResult, error) {
+	channel, genesis, grant := candidate.channel, candidate.genesis, candidate.grant
+	if node.PeerID() != channel.OwnerPeerID() || node.PeerID() != genesis.PeerID() ||
+		node.OriginEpoch() != genesis.OriginEpoch() {
+		return CreateChannelResult{}, fmt.Errorf("%w: local Node is not the genesis owner",
+			ErrChannelCreateInput)
 	}
 
 	var exists int
@@ -74,18 +56,11 @@ func (s *Store) CreateChannel(ctx context.Context, spec CreateChannelSpec) (Crea
 		return CreateChannelResult{}, fmt.Errorf("create Channel: inspect replay: %w", err)
 	}
 	if exists != 0 {
-		result, err := replayCreateChannel(ctx, tx, node.PeerID(), spec, grant)
-		if err != nil {
-			return CreateChannelResult{}, err
-		}
-		if err := tx.Commit(); err != nil {
-			return CreateChannelResult{}, fmt.Errorf("create Channel: commit replay read: %w", err)
-		}
-		return result, nil
+		return replayCreateChannel(ctx, tx, node.PeerID(), candidate)
 	}
 
 	descriptor := channel.Descriptor().Descriptor()
-	_, err = tx.ExecContext(ctx, `INSERT INTO channels(channel_id,name,local_alias,owner_peer_id,
+	_, err := tx.ExecContext(ctx, `INSERT INTO channels(channel_id,name,local_alias,owner_peer_id,
 		owner_public_key,descriptor_json,descriptor_digest,descriptor_signature,member_limit,
 		roster_head_revision,roster_head_hash,status,topic_state,created_at,updated_at)
 		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, channel.ID().String(), channel.Name(), channel.LocalAlias(),
@@ -96,7 +71,7 @@ func (s *Store) CreateChannel(ctx context.Context, spec CreateChannelSpec) (Crea
 	if err != nil {
 		return CreateChannelResult{}, mapChannelCreateError(err)
 	}
-	if err := insertChannelMember(ctx, tx, spec.Genesis); err != nil {
+	if err := insertChannelMember(ctx, tx, genesis); err != nil {
 		return CreateChannelResult{}, err
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO publication_epochs(channel_id,origin_peer_id,origin_epoch,
@@ -112,9 +87,6 @@ func (s *Store) CreateChannel(ctx context.Context, spec CreateChannelSpec) (Crea
 	if err != nil {
 		return CreateChannelResult{}, mapChannelCreateError(
 			fmt.Errorf("insert enrollment grant: %w", err))
-	}
-	if err := tx.Commit(); err != nil {
-		return CreateChannelResult{}, mapChannelCreateError(err)
 	}
 	return CreateChannelResult{Created: true, Channel: channel, GrantID: grant.ID()}, nil
 }
@@ -146,16 +118,17 @@ func insertChannelMember(ctx context.Context, tx *sql.Tx, member model.Member) e
 }
 
 func replayCreateChannel(ctx context.Context, tx *sql.Tx, localPeer model.PeerID,
-	spec CreateChannelSpec, grant model.OpenEnrollmentGrant,
+	candidate createChannelCandidate,
 ) (CreateChannelResult, error) {
-	authority, err := readVerifiedChannelAuthority(ctx, tx, localPeer, spec.Channel.ID())
+	channel, genesis, grant := candidate.channel, candidate.genesis, candidate.grant
+	authority, err := readVerifiedChannelAuthority(ctx, tx, localPeer, channel.ID())
 	if err != nil {
 		return CreateChannelResult{}, fmt.Errorf("%w: %v", ErrChannelCreateConflict, err)
 	}
 	members := authority.roster.Members()
 	if len(members) == 0 || !bytes.Equal(authority.channel.Descriptor().WireJSON().Bytes(),
-		spec.Channel.Descriptor().WireJSON().Bytes()) || authority.channel.LocalAlias() != spec.Channel.LocalAlias() ||
-		!bytes.Equal(members[0].WireJSON().Bytes(), spec.Genesis.WireJSON().Bytes()) {
+		channel.Descriptor().WireJSON().Bytes()) || authority.channel.LocalAlias() != channel.LocalAlias() ||
+		!bytes.Equal(members[0].WireJSON().Bytes(), genesis.WireJSON().Bytes()) {
 		return CreateChannelResult{}, ErrChannelCreateConflict
 	}
 	if err := verifyOwnedChannelEnrollmentLedger(ctx, tx, authority); err != nil {
@@ -168,7 +141,7 @@ func replayCreateChannel(ctx context.Context, tx *sql.Tx, localPeer model.PeerID
 	err = tx.QueryRowContext(ctx, `SELECT channel_id,verifier,expires_at,max_uses,used_uses,status,
 		created_at,closed_at FROM enrollment_grants WHERE grant_id=?`, grant.ID().String()).
 		Scan(&channelText, &verifier, &expiryText, &maxUses, &usedUses, &status, &createdText, &closedText)
-	if err != nil || channelText != spec.Channel.ID().String() ||
+	if err != nil || channelText != channel.ID().String() ||
 		!bytes.Equal(verifier, grant.Verifier().Bytes()) || expiryText != storeTime(grant.ExpiresAt()) ||
 		maxUses != grant.MaxUses() ||
 		createdText != storeTime(grant.CreatedAt()) {

@@ -1250,13 +1250,6 @@
     },
     {
       "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/store/channel_create.go::(*Store).CreateChannel",
-      "path": "harness/internal/store/channel_create.go",
-      "symbol": "(*Store).CreateChannel",
-      "ceiling": 35
-    },
-    {
-      "rule": "cognitive_complexity",
       "identity": "cognitive_complexity:harness/internal/store/channel_enrollment.go::(*Store).AcceptChannelEnrollment",
       "path": "harness/internal/store/channel_enrollment.go",
       "symbol": "(*Store).AcceptChannelEnrollment",
@@ -3424,13 +3417,6 @@
       "path": "harness/internal/store/channel_baseline_test.go",
       "symbol": "TestConfirmOutboundChannelBaselineIsExactDurableAndOrderIndependent",
       "ceiling": 28
-    },
-    {
-      "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/store/channel_create.go::(*Store).CreateChannel",
-      "path": "harness/internal/store/channel_create.go",
-      "symbol": "(*Store).CreateChannel",
-      "ceiling": 34
     },
     {
       "rule": "cyclomatic_complexity",
@@ -6681,18 +6667,6 @@
       ],
       "fingerprint": "7237961b9067e884c3c8beca4368c780c7106cafb86e558935ccd4c95fe116d5",
       "ceiling": 196
-    },
-    {
-      "rule": "normalized_duplicate_tokens",
-      "identity": "normalized_duplicate_tokens:dup-0023",
-      "path": "harness/internal/store/channel_create.go",
-      "debt_id": "dup-0023",
-      "owners": [
-        "harness/internal/store/channel_create.go::(*Store).CreateChannel",
-        "harness/internal/store/channel_enrollment.go::(*Store).InstallJoinedChannel"
-      ],
-      "fingerprint": "ff1576d5b1bcf43948abfcb6b51db2e929fa1a6c4285fc8881b1b08599689f8c",
-      "ceiling": 164
     },
     {
       "rule": "normalized_duplicate_tokens",
