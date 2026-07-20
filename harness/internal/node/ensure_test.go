@@ -432,38 +432,7 @@ func TestEnsureDaemonPreflightLaunchAndDeadlineFailuresStayClosed(t *testing.T) 
 }
 
 func TestEnsureDaemonTerminatesOnlyItsOwnedChildAfterPostLaunchFailures(t *testing.T) {
-	t.Run("failed termination withholds compensation proof", func(t *testing.T) {
-		nodeState := newEnsureNodeState(t)
-		revision := ensureTestRevision("termination-failure")
-		gateFailure := errors.New("projected Hook failed")
-		terminateFailure := errors.New("child did not stop")
-		handle := newRecordingDaemonLaunch()
-		handle.terminateErr = terminateFailure
-		var launched atomic.Bool
-		result, err := EnsureDaemon(context.Background(), DaemonEnsureOptions{
-			NodeState: nodeState, AssetRevision: revision,
-			Probe: ensureProbeFunc(func(context.Context) (localapi.HealthResponse, *localapi.APIError) {
-				if !launched.Load() {
-					return unavailableEnsureHealth()
-				}
-				return readyEnsureHealth(revision), nil
-			}),
-			Preflight: DaemonEnsurePreflightFunc(func(context.Context) error { return nil }),
-			Launcher: DaemonLauncherFunc(func(context.Context, DaemonLaunchPermit) (DaemonLaunch, error) {
-				launched.Store(true)
-				return handle, nil
-			}),
-			ReadyGate: DaemonReadyGateFunc(func(context.Context, localapi.HealthResponse) error {
-				return gateFailure
-			}),
-		})
-		if !errors.Is(err, gateFailure) || !errors.Is(err, terminateFailure) ||
-			result.FailureOutcome != DaemonEnsureFailureUnproven || !result.Started ||
-			handle.terminations.Load() != 1 {
-			t.Fatalf("EnsureDaemon() = (%#v, %v), terminations=%d", result, err,
-				handle.terminations.Load())
-		}
-	})
+	t.Run("failed termination withholds compensation proof", testEnsureFailedTerminationWithholdsProof)
 
 	t.Run("owned child stays not ready until deadline", func(t *testing.T) {
 		nodeState := newEnsureNodeState(t)
@@ -570,6 +539,39 @@ func TestEnsureDaemonTerminatesOnlyItsOwnedChildAfterPostLaunchFailures(t *testi
 				handle.releases.Load(), handle.terminations.Load())
 		}
 	})
+}
+
+func testEnsureFailedTerminationWithholdsProof(t *testing.T) {
+	nodeState := newEnsureNodeState(t)
+	revision := ensureTestRevision("termination-failure")
+	gateFailure := errors.New("projected Hook failed")
+	terminateFailure := errors.New("child did not stop")
+	handle := newRecordingDaemonLaunch()
+	handle.terminateErr = terminateFailure
+	var launched atomic.Bool
+	result, err := EnsureDaemon(context.Background(), DaemonEnsureOptions{
+		NodeState: nodeState, AssetRevision: revision,
+		Probe: ensureProbeFunc(func(context.Context) (localapi.HealthResponse, *localapi.APIError) {
+			if !launched.Load() {
+				return unavailableEnsureHealth()
+			}
+			return readyEnsureHealth(revision), nil
+		}),
+		Preflight: DaemonEnsurePreflightFunc(func(context.Context) error { return nil }),
+		Launcher: DaemonLauncherFunc(func(context.Context, DaemonLaunchPermit) (DaemonLaunch, error) {
+			launched.Store(true)
+			return handle, nil
+		}),
+		ReadyGate: DaemonReadyGateFunc(func(context.Context, localapi.HealthResponse) error {
+			return gateFailure
+		}),
+	})
+	if !errors.Is(err, gateFailure) || !errors.Is(err, terminateFailure) ||
+		result.FailureOutcome != DaemonEnsureFailureUnproven || !result.Started ||
+		handle.terminations.Load() != 1 {
+		t.Fatalf("EnsureDaemon() = (%#v, %v), terminations=%d", result, err,
+			handle.terminations.Load())
+	}
 }
 
 func TestEnsureDaemonWithholdsCompensationWhenLockCloseFailsAfterChildRelease(t *testing.T) {

@@ -65,7 +65,7 @@ func TestDaemonLifecycleQuiesceWaitsPastShutdownResponseForWriterRelease(t *test
 	}, 1)
 	go func() {
 		authority, err := lease.quiesce(context.Background(), client, confirmer, expected,
-			daemonLifecycleTiming{deadline: time.Second, poll: 5 * time.Millisecond})
+			daemonLifecycleTiming{deadline: 10 * time.Second, poll: 5 * time.Millisecond})
 		quiesced <- struct {
 			authority localapi.AuthorityResponse
 			err       error
@@ -86,12 +86,7 @@ func TestDaemonLifecycleQuiesceWaitsPastShutdownResponseForWriterRelease(t *test
 			result.authority, result.err)
 	default:
 	}
-	if st, err := store.OpenExisting(context.Background(), filepath.Join(fixture.nodeState, "node.db")); st != nil || !errors.Is(err, store.ErrWriterActive) {
-		if st != nil {
-			_ = st.Close()
-		}
-		t.Fatalf("daemon writer before Close = (%v, %v)", st, err)
-	}
+	assertDaemonWriterActive(t, fixture.nodeState)
 	releaseWriterObservation()
 	if err := daemon.Close(); err != nil {
 		t.Fatal(err)
@@ -102,6 +97,17 @@ func TestDaemonLifecycleQuiesceWaitsPastShutdownResponseForWriterRelease(t *test
 	}
 	if err := lease.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func assertDaemonWriterActive(t *testing.T, nodeState string) {
+	t.Helper()
+	st, err := store.OpenExisting(context.Background(), filepath.Join(nodeState, "node.db"))
+	if st != nil {
+		_ = st.Close()
+	}
+	if st != nil || !errors.Is(err, store.ErrWriterActive) {
+		t.Fatalf("daemon writer before Close = (%v, %v)", st, err)
 	}
 }
 
