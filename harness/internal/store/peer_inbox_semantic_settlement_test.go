@@ -596,16 +596,16 @@ func newPeerInboxSemanticSettlementCommitFixture(t *testing.T,
 
 	reserved, err := settlement.store.ReserveOutboundChannelBaseline(context.Background(),
 		ReserveOutboundChannelBaselineSpec{ChannelID: settlement.peer.channel.Channel().ID(),
-			TargetPeerID: settlement.peer.remote.Identity().PeerID(),
-			At:           settlement.source.AcceptedAt().Add(time.Second)})
+			TargetPeerID:       settlement.peer.remote.Identity().PeerID(),
+			ExpectedRosterHead: settlement.peer.channel.Roster().Head(), At: settlement.source.AcceptedAt().Add(time.Second)})
 	if err != nil {
 		t.Fatalf("reserve outbound baseline: %v", err)
 	}
 	if _, err := settlement.store.ConfirmOutboundChannelBaseline(context.Background(),
 		ConfirmOutboundChannelBaselineSpec{
 			AuthenticatedPeerID: settlement.peer.remote.Identity().PeerID(),
-			Ack:                 ChannelDataBaselineAck(reserved.Baseline),
-			At:                  settlement.source.AcceptedAt().Add(time.Second + time.Nanosecond),
+			ExpectedRosterHead:  settlement.peer.channel.Roster().Head(), Ack: ChannelDataBaselineAck(reserved.Baseline),
+			At: settlement.source.AcceptedAt().Add(time.Second + time.Nanosecond),
 		}); err != nil {
 		t.Fatalf("confirm outbound baseline: %v", err)
 	}

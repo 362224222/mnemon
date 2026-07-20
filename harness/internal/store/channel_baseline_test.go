@@ -26,8 +26,7 @@ func TestReserveOutboundChannelBaselineFreezesCurrentHeadAndReplays(t *testing.T
 			fixture := newChannelBaselineFixture(t, "reserve-"+test.name, model.TopicJoined)
 			fixture.advanceLocalHead(t, test.head, fixture.at)
 			first, err := fixture.store.ReserveOutboundChannelBaseline(context.Background(),
-				ReserveOutboundChannelBaselineSpec{ChannelID: fixture.channel.Channel().ID(),
-					TargetPeerID: fixture.remote.Identity().PeerID(), At: fixture.at.Add(time.Second)})
+				fixture.reserveSpec(fixture.at.Add(time.Second)))
 			if err != nil || !first.Reserved ||
 				first.Baseline.BaselineChannelSequence != test.head ||
 				first.Baseline.OriginPeerID != fixture.channel.Owner().PeerID() ||
@@ -43,8 +42,7 @@ func TestReserveOutboundChannelBaselineFreezesCurrentHeadAndReplays(t *testing.T
 
 			fixture.advanceLocalHead(t, test.head+2, fixture.at.Add(2*time.Second))
 			replayed, err := fixture.store.ReserveOutboundChannelBaseline(context.Background(),
-				ReserveOutboundChannelBaselineSpec{ChannelID: fixture.channel.Channel().ID(),
-					TargetPeerID: fixture.remote.Identity().PeerID(), At: fixture.at.Add(3 * time.Second)})
+				fixture.reserveSpec(fixture.at.Add(3*time.Second)))
 			if err != nil || replayed.Reserved || replayed.Baseline != first.Baseline {
 				t.Fatalf("replayed reservation = (%#v, %v), first %#v", replayed, err, first)
 			}
@@ -244,7 +242,8 @@ func TestChannelBaselineRejectsWrongEpochAuthenticationAndRevokedAuthority(t *te
 		}
 		if _, err := st.ReserveOutboundChannelBaseline(context.Background(),
 			ReserveOutboundChannelBaselineSpec{ChannelID: channel.Channel().ID(),
-				TargetPeerID: active.Identity().PeerID(), At: at}); !errors.Is(err, ErrChannelBaselineConflict) {
+				TargetPeerID: active.Identity().PeerID(), ExpectedRosterHead: channel.Roster().Head(),
+				At: at}); !errors.Is(err, ErrChannelBaselineConflict) {
 			t.Fatalf("revoked outbound error = %v", err)
 		}
 		assertBaselineRowCount(t, st, "peer_cursors", 0)
@@ -257,15 +256,13 @@ func TestConfirmOutboundChannelBaselineIsExactDurableAndOrderIndependent(t *test
 	fixture := newChannelBaselineFixture(t, "confirm", model.TopicJoined)
 	fixture.advanceLocalHead(t, 2, fixture.at)
 	reserved, err := fixture.store.ReserveOutboundChannelBaseline(context.Background(),
-		ReserveOutboundChannelBaselineSpec{ChannelID: fixture.channel.Channel().ID(),
-			TargetPeerID: fixture.remote.Identity().PeerID(), At: fixture.at.Add(time.Second)})
+		fixture.reserveSpec(fixture.at.Add(time.Second)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	ack := ChannelDataBaselineAck(reserved.Baseline)
 	confirmed, err := fixture.store.ConfirmOutboundChannelBaseline(context.Background(),
-		ConfirmOutboundChannelBaselineSpec{AuthenticatedPeerID: fixture.remote.Identity().PeerID(),
-			Ack: ack, At: fixture.at.Add(2 * time.Second)})
+		fixture.confirmSpec(ack, fixture.at.Add(2*time.Second)))
 	if err != nil || !confirmed.Confirmed || confirmed.Ack != ack {
 		t.Fatalf("first confirmation = (%#v,%v)", confirmed, err)
 	}
@@ -276,8 +273,7 @@ func TestConfirmOutboundChannelBaselineIsExactDurableAndOrderIndependent(t *test
 		t.Fatal(err)
 	}
 	replay, err := fixture.store.ConfirmOutboundChannelBaseline(context.Background(),
-		ConfirmOutboundChannelBaselineSpec{AuthenticatedPeerID: fixture.remote.Identity().PeerID(),
-			Ack: ack, At: fixture.at.Add(3 * time.Second)})
+		fixture.confirmSpec(ack, fixture.at.Add(3*time.Second)))
 	if err != nil || replay.Confirmed || !replay.ConfirmedAt.Equal(confirmed.ConfirmedAt) {
 		t.Fatalf("confirmation replay = (%#v,%v), first %#v", replay, err, confirmed)
 	}
@@ -293,15 +289,13 @@ func TestConfirmOutboundChannelBaselineIsExactDurableAndOrderIndependent(t *test
 	different := ack
 	different.BaselineChannelSequence++
 	if _, err := fixture.store.ConfirmOutboundChannelBaseline(context.Background(),
-		ConfirmOutboundChannelBaselineSpec{AuthenticatedPeerID: fixture.remote.Identity().PeerID(),
-			Ack: different, At: fixture.at.Add(4 * time.Second)}); !errors.Is(err, ErrChannelBaselineConflict) {
+		fixture.confirmSpec(different, fixture.at.Add(4*time.Second))); !errors.Is(err, ErrChannelBaselineConflict) {
 		t.Fatalf("different ACK error = %v", err)
 	}
 	wrongEpoch := ack
 	wrongEpoch.OriginEpoch, _ = model.ParseOriginEpoch("epoch-wrong-local-ack")
 	if _, err := fixture.store.ConfirmOutboundChannelBaseline(context.Background(),
-		ConfirmOutboundChannelBaselineSpec{AuthenticatedPeerID: fixture.remote.Identity().PeerID(),
-			Ack: wrongEpoch, At: fixture.at.Add(4 * time.Second)}); !errors.Is(err, ErrChannelBaselineEpochMismatch) {
+		fixture.confirmSpec(wrongEpoch, fixture.at.Add(4*time.Second))); !errors.Is(err, ErrChannelBaselineEpochMismatch) {
 		t.Fatalf("wrong ACK epoch error = %v", err)
 	}
 
@@ -378,8 +372,7 @@ func TestChannelBaselineTransactionsConvergeUnderConcurrencyAndRestart(t *testin
 		go func() {
 			defer group.Done()
 			result, err := fixture.store.ReserveOutboundChannelBaseline(context.Background(),
-				ReserveOutboundChannelBaselineSpec{ChannelID: fixture.channel.Channel().ID(),
-					TargetPeerID: fixture.remote.Identity().PeerID(), At: fixture.at})
+				fixture.reserveSpec(fixture.at))
 			outcomes <- reserveOutcome{result: result, err: err}
 		}()
 	}
@@ -440,8 +433,7 @@ func TestChannelBaselineTransactionsConvergeUnderConcurrencyAndRestart(t *testin
 		go func() {
 			defer group.Done()
 			result, err := fixture.store.ConfirmOutboundChannelBaseline(context.Background(),
-				ConfirmOutboundChannelBaselineSpec{AuthenticatedPeerID: fixture.remote.Identity().PeerID(),
-					Ack: ack, At: fixture.at.Add(2 * time.Second)})
+				fixture.confirmSpec(ack, fixture.at.Add(2*time.Second)))
 			confirmations <- confirmOutcome{result: result, err: err}
 		}()
 	}
@@ -474,8 +466,7 @@ func TestChannelBaselineTransactionsConvergeUnderConcurrencyAndRestart(t *testin
 		}
 	})
 	replayed, err := reopened.ReserveOutboundChannelBaseline(context.Background(),
-		ReserveOutboundChannelBaselineSpec{ChannelID: fixture.channel.Channel().ID(),
-			TargetPeerID: fixture.remote.Identity().PeerID(), At: fixture.at.Add(3 * time.Second)})
+		fixture.reserveSpec(fixture.at.Add(3*time.Second)))
 	if err != nil || replayed.Reserved || replayed.Baseline.BaselineChannelSequence != 0 {
 		t.Fatalf("restart reservation replay = (%#v,%v)", replayed, err)
 	}
@@ -515,6 +506,20 @@ func newChannelBaselineFixture(t *testing.T, seed string, topic model.TopicState
 		channel.Owner().OriginEpoch().String(), storeTime(channel.Channel().UpdatedAt()))
 	return channelBaselineFixture{store: st, channel: channel, remote: remote,
 		at: channel.Channel().UpdatedAt().Add(time.Second)}
+}
+
+func (fixture channelBaselineFixture) reserveSpec(at time.Time) ReserveOutboundChannelBaselineSpec {
+	return ReserveOutboundChannelBaselineSpec{ChannelID: fixture.channel.Channel().ID(),
+		TargetPeerID:       fixture.remote.Identity().PeerID(),
+		ExpectedRosterHead: fixture.channel.Roster().Head(), At: at}
+}
+
+func (fixture channelBaselineFixture) confirmSpec(ack ChannelDataBaselineAck,
+	at time.Time,
+) ConfirmOutboundChannelBaselineSpec {
+	return ConfirmOutboundChannelBaselineSpec{
+		AuthenticatedPeerID: fixture.remote.Identity().PeerID(),
+		ExpectedRosterHead:  fixture.channel.Roster().Head(), Ack: ack, At: at}
 }
 
 func (fixture channelBaselineFixture) remoteBaseline(sequence uint64) ChannelDataBaseline {

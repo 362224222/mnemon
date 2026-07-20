@@ -1251,14 +1251,14 @@ func installPeerInboxSemanticLocalAuthority(t *testing.T, fixture peerInboxFixtu
 	}
 	reserved, err := fixture.store.ReserveOutboundChannelBaseline(context.Background(),
 		ReserveOutboundChannelBaselineSpec{ChannelID: fixture.channel.Channel().ID(),
-			TargetPeerID: fixture.remote.Identity().PeerID(), At: fixture.at})
+			TargetPeerID: fixture.remote.Identity().PeerID(), ExpectedRosterHead: fixture.channel.Roster().Head(), At: fixture.at})
 	if err != nil {
 		t.Fatal(err)
 	}
 	baseline := reserved.Baseline
 	_, err = fixture.store.ConfirmOutboundChannelBaseline(context.Background(),
 		ConfirmOutboundChannelBaselineSpec{AuthenticatedPeerID: fixture.remote.Identity().PeerID(),
-			Ack: ChannelDataBaselineAck(baseline), At: fixture.at.Add(time.Nanosecond)})
+			ExpectedRosterHead: fixture.channel.Roster().Head(), Ack: ChannelDataBaselineAck(baseline), At: fixture.at.Add(time.Nanosecond)})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1138,13 +1138,13 @@ func newArtifactGCIntegrationFixture(t *testing.T, seed string) artifactGCIntegr
 	}
 	outbound, err := st.ReserveOutboundChannelBaseline(context.Background(),
 		ReserveOutboundChannelBaselineSpec{ChannelID: channel.Channel().ID(),
-			TargetPeerID: remote.PeerID(), At: baselineAt.Add(time.Second)})
+			TargetPeerID: remote.PeerID(), ExpectedRosterHead: accepted.Roster.Head(), At: baselineAt.Add(time.Second)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.ConfirmOutboundChannelBaseline(context.Background(), ConfirmOutboundChannelBaselineSpec{
-		AuthenticatedPeerID: remote.PeerID(), Ack: ChannelDataBaselineAck(outbound.Baseline),
-		At: baselineAt.Add(2 * time.Second),
+		AuthenticatedPeerID: remote.PeerID(), ExpectedRosterHead: accepted.Roster.Head(),
+		Ack: ChannelDataBaselineAck(outbound.Baseline), At: baselineAt.Add(2 * time.Second),
 	}); err != nil {
 		t.Fatal(err)
 	}

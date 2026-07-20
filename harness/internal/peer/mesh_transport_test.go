@@ -407,13 +407,13 @@ func newMeshTransportConnectedRuntime(t *testing.T, seed string) (*MeshRuntime,
 	}
 	reserved, err := st.ReserveOutboundChannelBaseline(context.Background(),
 		store.ReserveOutboundChannelBaselineSpec{ChannelID: channel.Channel().ID(),
-			TargetPeerID: remote.PeerID(), At: baselineAt.Add(time.Second)})
+			TargetPeerID: remote.PeerID(), ExpectedRosterHead: channel.Roster().Head(), At: baselineAt.Add(time.Second)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.ConfirmOutboundChannelBaseline(context.Background(),
 		store.ConfirmOutboundChannelBaselineSpec{AuthenticatedPeerID: remote.PeerID(),
-			Ack: store.ChannelDataBaselineAck(reserved.Baseline), At: baselineAt.Add(2 * time.Second)}); err != nil {
+			ExpectedRosterHead: channel.Roster().Head(), Ack: store.ChannelDataBaselineAck(reserved.Baseline), At: baselineAt.Add(2 * time.Second)}); err != nil {
 		t.Fatal(err)
 	}
 	return newTestMeshRuntime(t, context.Background(), owner, readMeshRuntimeAuthority(t, st)),

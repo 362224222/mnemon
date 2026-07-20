@@ -33,9 +33,10 @@ type ChannelDataBaselineAck struct {
 	BaselineChannelSequence uint64
 }
 type ReserveOutboundChannelBaselineSpec struct {
-	ChannelID    model.ChannelID
-	TargetPeerID model.PeerID
-	At           time.Time
+	ChannelID          model.ChannelID
+	TargetPeerID       model.PeerID
+	ExpectedRosterHead model.RecordHead
+	At                 time.Time
 }
 type ReserveOutboundChannelBaselineResult struct {
 	Baseline ChannelDataBaseline
@@ -54,6 +55,7 @@ type InstallInboundChannelBaselineResult struct {
 
 type ConfirmOutboundChannelBaselineSpec struct {
 	AuthenticatedPeerID model.PeerID
+	ExpectedRosterHead  model.RecordHead
 	Ack                 ChannelDataBaselineAck
 	At                  time.Time
 }
@@ -79,10 +81,11 @@ func (readiness ChannelPeerReadiness) Ready() bool {
 		readiness.TopicState == model.TopicJoined && readiness.InboundReady && readiness.OutboundReady
 }
 
-// ReserveOutboundChannelBaseline freezes the current head; replay returns the original reservation.
+// ReserveOutboundChannelBaseline freezes the current publication head only
+// while the caller's authenticated roster generation remains current; replay
+// returns the original reservation under that same authority fence.
 func (s *Store) ReserveOutboundChannelBaseline(ctx context.Context, spec ReserveOutboundChannelBaselineSpec) (ReserveOutboundChannelBaselineResult, error) {
-	if s == nil || s.db == nil || ctx == nil || spec.ChannelID.IsZero() ||
-		spec.TargetPeerID.IsZero() {
+	if !validReserveOutboundChannelBaseline(s, ctx, spec) {
 		return ReserveOutboundChannelBaselineResult{}, ErrChannelBaselineInput
 	}
 	at, err := canonicalStoreTime(spec.At)
@@ -94,8 +97,8 @@ func (s *Store) ReserveOutboundChannelBaseline(ctx context.Context, spec Reserve
 		return ReserveOutboundChannelBaselineResult{}, fmt.Errorf("reserve outbound Channel baseline: begin: %w", err)
 	}
 	defer tx.Rollback()
-	node, authority, binding, err := readChannelBaselineAuthority(ctx, tx, spec.ChannelID,
-		spec.TargetPeerID)
+	node, authority, binding, err := readExactOutboundChannelBaselineAuthority(ctx, tx,
+		spec.ChannelID, spec.TargetPeerID, spec.ExpectedRosterHead)
 	if err != nil {
 		return ReserveOutboundChannelBaselineResult{}, err
 	}
@@ -289,11 +292,11 @@ func verifyInboundChannelBaselineEvidence(ctx context.Context, tx *sql.Tx, plan 
 	return nil
 }
 
-// ConfirmOutboundChannelBaseline opens egress after the target echoes the exact reservation.
+// ConfirmOutboundChannelBaseline opens egress after the target echoes the
+// exact reservation and the Hello roster generation is still current.
 func (s *Store) ConfirmOutboundChannelBaseline(ctx context.Context, spec ConfirmOutboundChannelBaselineSpec) (ConfirmOutboundChannelBaselineResult, error) {
 	ack := spec.Ack
-	if s == nil || s.db == nil || ctx == nil || spec.AuthenticatedPeerID.IsZero() ||
-		!validChannelDataBaseline(ChannelDataBaseline(ack)) {
+	if !validConfirmOutboundChannelBaseline(s, ctx, spec) {
 		return ConfirmOutboundChannelBaselineResult{}, ErrChannelBaselineInput
 	}
 	at, err := canonicalStoreTime(spec.At)
@@ -305,8 +308,8 @@ func (s *Store) ConfirmOutboundChannelBaseline(ctx context.Context, spec Confirm
 		return ConfirmOutboundChannelBaselineResult{}, fmt.Errorf("confirm outbound Channel baseline: begin: %w", err)
 	}
 	defer tx.Rollback()
-	node, authority, binding, err := readChannelBaselineAuthority(ctx, tx, ack.ChannelID,
-		spec.AuthenticatedPeerID)
+	node, authority, binding, err := readExactOutboundChannelBaselineAuthority(ctx, tx,
+		ack.ChannelID, spec.AuthenticatedPeerID, spec.ExpectedRosterHead)
 	if err != nil {
 		return ConfirmOutboundChannelBaselineResult{}, err
 	}
@@ -454,42 +457,6 @@ func (s *Store) ReadChannelBaselineReadiness(ctx context.Context, channelID mode
 		return nil, fmt.Errorf("read Channel baseline readiness: commit read: %w", err)
 	}
 	return result, nil
-}
-
-func readChannelBaselineAuthority(ctx context.Context, tx *sql.Tx, channelID model.ChannelID,
-	remotePeer model.PeerID) (model.Node, verifiedChannelAuthority, model.PeerBinding, error) {
-	node, err := readNode(ctx, tx)
-	if err != nil {
-		return model.Node{}, verifiedChannelAuthority{}, model.PeerBinding{},
-			fmt.Errorf("%w: Node: %v", ErrChannelBaselineAuthority, err)
-	}
-	authority, err := readVerifiedChannelAuthority(ctx, tx, node.PeerID(), channelID)
-	if err != nil {
-		return model.Node{}, verifiedChannelAuthority{}, model.PeerBinding{},
-			fmt.Errorf("%w: %v", ErrChannelBaselineAuthority, err)
-	}
-	if authority.channel.Status() != model.ChannelActive {
-		return model.Node{}, verifiedChannelAuthority{}, model.PeerBinding{}, ErrChannelBaselineAuthority
-	}
-	localMember, ok := authority.roster.CurrentMember(node.PeerID())
-	if !ok || localMember.Status() != model.MemberActive ||
-		localMember.OriginEpoch() != node.OriginEpoch() {
-		return model.Node{}, verifiedChannelAuthority{}, model.PeerBinding{}, ErrChannelBaselineAuthority
-	}
-	for _, binding := range authority.bindings {
-		if binding.PeerID() == remotePeer {
-			if binding.State() == model.BindingRevoked {
-				return model.Node{}, verifiedChannelAuthority{}, model.PeerBinding{}, ErrChannelBaselineConflict
-			}
-			remoteMember, exists := authority.roster.CurrentMember(remotePeer)
-			if !exists || remoteMember.Status() != model.MemberActive ||
-				remoteMember.OriginEpoch() != binding.OriginEpoch() {
-				return model.Node{}, verifiedChannelAuthority{}, model.PeerBinding{}, ErrChannelBaselineAuthority
-			}
-			return node, authority, binding, nil
-		}
-	}
-	return model.Node{}, verifiedChannelAuthority{}, model.PeerBinding{}, ErrChannelBaselineAuthority
 }
 
 func mapChannelBaselineMutationError(operation string, err error) error {

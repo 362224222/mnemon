@@ -1192,64 +1192,9 @@ func TestArtifactReceiverConstructorDoubleRunAndPullBounds(t *testing.T) {
 }
 
 func TestArtifactReceiverRealStoreCASClientLibp2pHappyAndRestart(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	createdAt := artifactReceiverTestTime().Add(-time.Hour)
-	requester := testkit.NewIdentity(t, "artifact-receiver-real-store-requester")
-	origin := testkit.NewIdentity(t, "artifact-receiver-real-store-origin")
-	channel := testkit.NewSignedChannelForOwnerAt(t, "artifact-receiver-real-store-channel",
-		requester, createdAt)
-	st := openPeerMeshStore(t, requester, createdAt)
-	createPeerMeshChannel(t, st, channel, "artifact-receiver-real-store-channel")
-	originMember := channel.AppendActiveIdentity(t, origin)
-	mergeAt := originMember.Member().CreatedAt()
-	mergePeerMeshRoster(t, st, channel, originMember.Member(), mergeAt)
-	baselineAt := mergeAt.Add(time.Second)
-	if _, err := st.InstallInboundChannelBaseline(ctx, store.InstallInboundChannelBaselineSpec{
-		AuthenticatedPeerID: origin.PeerID(), Baseline: store.ChannelDataBaseline{
-			ChannelID: channel.Channel().ID(), OriginPeerID: origin.PeerID(),
-			OriginEpoch: origin.OriginEpoch()}, At: baselineAt,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	reserved, err := st.ReserveOutboundChannelBaseline(ctx, store.ReserveOutboundChannelBaselineSpec{
-		ChannelID: channel.Channel().ID(), TargetPeerID: origin.PeerID(),
-		At: baselineAt.Add(time.Second),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := st.ConfirmOutboundChannelBaseline(ctx, store.ConfirmOutboundChannelBaselineSpec{
-		AuthenticatedPeerID: origin.PeerID(), Ack: store.ChannelDataBaselineAck(reserved.Baseline),
-		At: baselineAt.Add(2 * time.Second),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	topics, err := st.ReadChannelTopicRuntime(ctx)
-	if err != nil || len(topics) != 1 {
-		t.Fatalf("read real Store topic = (%#v, %v)", topics, err)
-	}
-	joiningAt := baselineAt.Add(3 * time.Second)
-	if !joiningAt.After(topics[0].UpdatedAt) {
-		joiningAt = topics[0].UpdatedAt.Add(time.Second)
-	}
-	joining, err := st.CompareAndSetChannelTopicState(ctx, store.CompareAndSetChannelTopicStateSpec{
-		ChannelID: channel.Channel().ID(), ExpectedStatus: topics[0].Status,
-		ExpectedRosterHead: topics[0].RosterHead, ExpectedTopicState: topics[0].TopicState,
-		TopicState: model.TopicJoining, At: joiningAt,
-	})
-	if err != nil || joining.Topic.TopicState != model.TopicJoining {
-		t.Fatalf("begin real Store topic join = (%#v, %v)", joining, err)
-	}
-	joinedAt := joiningAt.Add(time.Second)
-	joined, err := st.CompareAndSetChannelTopicState(ctx, store.CompareAndSetChannelTopicStateSpec{
-		ChannelID: channel.Channel().ID(), ExpectedStatus: joining.Topic.Status,
-		ExpectedRosterHead: joining.Topic.RosterHead, ExpectedTopicState: model.TopicJoining,
-		TopicState: model.TopicJoined, At: joinedAt,
-	})
-	if err != nil || joined.Topic.TopicState != model.TopicJoined {
-		t.Fatalf("join real Store topic = (%#v, %v)", joined, err)
-	}
+	fixture := newArtifactReceiverRealStoreFixture(t, "real-store")
+	ctx, requester, origin := fixture.ctx, fixture.requester, fixture.origin
+	channel, originMember, st, joinedAt := fixture.channel, fixture.originMember, fixture.store, fixture.joinedAt
 
 	originHost := newArtifactServerTestHost(t, origin)
 	defer originHost.Close()
@@ -1331,64 +1276,9 @@ func TestArtifactReceiverRealStoreCASClientLibp2pHappyAndRestart(t *testing.T) {
 }
 
 func TestArtifactReceiverRealStoreStagedPartialRestartAndResponseLoss(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	createdAt := artifactReceiverTestTime().Add(-time.Hour)
-	requester := testkit.NewIdentity(t, "artifact-receiver-partial-requester")
-	origin := testkit.NewIdentity(t, "artifact-receiver-partial-origin")
-	channel := testkit.NewSignedChannelForOwnerAt(t, "artifact-receiver-partial-channel",
-		requester, createdAt)
-	st := openPeerMeshStore(t, requester, createdAt)
-	createPeerMeshChannel(t, st, channel, "artifact-receiver-partial-channel")
-	originMember := channel.AppendActiveIdentity(t, origin)
-	mergeAt := originMember.Member().CreatedAt()
-	mergePeerMeshRoster(t, st, channel, originMember.Member(), mergeAt)
-	baselineAt := mergeAt.Add(time.Second)
-	if _, err := st.InstallInboundChannelBaseline(ctx, store.InstallInboundChannelBaselineSpec{
-		AuthenticatedPeerID: origin.PeerID(), Baseline: store.ChannelDataBaseline{
-			ChannelID: channel.Channel().ID(), OriginPeerID: origin.PeerID(),
-			OriginEpoch: origin.OriginEpoch()}, At: baselineAt,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	reserved, err := st.ReserveOutboundChannelBaseline(ctx, store.ReserveOutboundChannelBaselineSpec{
-		ChannelID: channel.Channel().ID(), TargetPeerID: origin.PeerID(),
-		At: baselineAt.Add(time.Second),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := st.ConfirmOutboundChannelBaseline(ctx, store.ConfirmOutboundChannelBaselineSpec{
-		AuthenticatedPeerID: origin.PeerID(), Ack: store.ChannelDataBaselineAck(reserved.Baseline),
-		At: baselineAt.Add(2 * time.Second),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	topics, err := st.ReadChannelTopicRuntime(ctx)
-	if err != nil || len(topics) != 1 {
-		t.Fatalf("read partial-restart topic = (%#v, %v)", topics, err)
-	}
-	joiningAt := baselineAt.Add(3 * time.Second)
-	if !joiningAt.After(topics[0].UpdatedAt) {
-		joiningAt = topics[0].UpdatedAt.Add(time.Second)
-	}
-	joining, err := st.CompareAndSetChannelTopicState(ctx, store.CompareAndSetChannelTopicStateSpec{
-		ChannelID: channel.Channel().ID(), ExpectedStatus: topics[0].Status,
-		ExpectedRosterHead: topics[0].RosterHead, ExpectedTopicState: topics[0].TopicState,
-		TopicState: model.TopicJoining, At: joiningAt,
-	})
-	if err != nil || joining.Topic.TopicState != model.TopicJoining {
-		t.Fatalf("begin partial-restart topic join = (%#v, %v)", joining, err)
-	}
-	joinedAt := joiningAt.Add(time.Second)
-	joined, err := st.CompareAndSetChannelTopicState(ctx, store.CompareAndSetChannelTopicStateSpec{
-		ChannelID: channel.Channel().ID(), ExpectedStatus: joining.Topic.Status,
-		ExpectedRosterHead: joining.Topic.RosterHead, ExpectedTopicState: model.TopicJoining,
-		TopicState: model.TopicJoined, At: joinedAt,
-	})
-	if err != nil || joined.Topic.TopicState != model.TopicJoined {
-		t.Fatalf("join partial-restart topic = (%#v, %v)", joined, err)
-	}
+	fixture := newArtifactReceiverRealStoreFixture(t, "partial-restart")
+	ctx, requester, origin := fixture.ctx, fixture.requester, fixture.origin
+	channel, originMember, st, joinedAt := fixture.channel, fixture.originMember, fixture.store, fixture.joinedAt
 
 	originHost := newArtifactServerTestHost(t, origin)
 	defer originHost.Close()
@@ -2434,6 +2324,78 @@ func waitArtifactReceiverCondition(t testing.TB, condition func() bool, detail s
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %s", detail)
+}
+
+type artifactReceiverRealStoreFixture struct {
+	ctx          context.Context
+	requester    testkit.Identity
+	origin       testkit.Identity
+	channel      *testkit.SignedChannel
+	originMember testkit.MemberFixture
+	store        *store.Store
+	joinedAt     time.Time
+}
+
+func newArtifactReceiverRealStoreFixture(t *testing.T, seed string) artifactReceiverRealStoreFixture {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	t.Cleanup(cancel)
+	createdAt := artifactReceiverTestTime().Add(-time.Hour)
+	requester := testkit.NewIdentity(t, "artifact-receiver-"+seed+"-requester")
+	origin := testkit.NewIdentity(t, "artifact-receiver-"+seed+"-origin")
+	channel := testkit.NewSignedChannelForOwnerAt(t, "artifact-receiver-"+seed+"-channel",
+		requester, createdAt)
+	st := openPeerMeshStore(t, requester, createdAt)
+	createPeerMeshChannel(t, st, channel, "artifact-receiver-"+seed+"-channel")
+	originMember := channel.AppendActiveIdentity(t, origin)
+	mergeAt := originMember.Member().CreatedAt()
+	mergePeerMeshRoster(t, st, channel, originMember.Member(), mergeAt)
+	baselineAt := mergeAt.Add(time.Second)
+	if _, err := st.InstallInboundChannelBaseline(ctx, store.InstallInboundChannelBaselineSpec{
+		AuthenticatedPeerID: origin.PeerID(), Baseline: store.ChannelDataBaseline{
+			ChannelID: channel.Channel().ID(), OriginPeerID: origin.PeerID(),
+			OriginEpoch: origin.OriginEpoch()}, At: baselineAt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reserved, err := st.ReserveOutboundChannelBaseline(ctx, store.ReserveOutboundChannelBaselineSpec{
+		ChannelID: channel.Channel().ID(), TargetPeerID: origin.PeerID(),
+		ExpectedRosterHead: channel.Roster().Head(), At: baselineAt.Add(time.Second)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ConfirmOutboundChannelBaseline(ctx, store.ConfirmOutboundChannelBaselineSpec{
+		AuthenticatedPeerID: origin.PeerID(), ExpectedRosterHead: channel.Roster().Head(),
+		Ack: store.ChannelDataBaselineAck(reserved.Baseline), At: baselineAt.Add(2 * time.Second)}); err != nil {
+		t.Fatal(err)
+	}
+	topics, err := st.ReadChannelTopicRuntime(ctx)
+	if err != nil || len(topics) != 1 {
+		t.Fatalf("read %s topic = (%#v, %v)", seed, topics, err)
+	}
+	joiningAt := baselineAt.Add(3 * time.Second)
+	if !joiningAt.After(topics[0].UpdatedAt) {
+		joiningAt = topics[0].UpdatedAt.Add(time.Second)
+	}
+	joining, err := st.CompareAndSetChannelTopicState(ctx, store.CompareAndSetChannelTopicStateSpec{
+		ChannelID: channel.Channel().ID(), ExpectedStatus: topics[0].Status,
+		ExpectedRosterHead: topics[0].RosterHead, ExpectedTopicState: topics[0].TopicState,
+		TopicState: model.TopicJoining, At: joiningAt,
+	})
+	if err != nil || joining.Topic.TopicState != model.TopicJoining {
+		t.Fatalf("begin %s topic join = (%#v, %v)", seed, joining, err)
+	}
+	joinedAt := joiningAt.Add(time.Second)
+	joined, err := st.CompareAndSetChannelTopicState(ctx, store.CompareAndSetChannelTopicStateSpec{
+		ChannelID: channel.Channel().ID(), ExpectedStatus: joining.Topic.Status,
+		ExpectedRosterHead: joining.Topic.RosterHead, ExpectedTopicState: model.TopicJoining,
+		TopicState: model.TopicJoined, At: joinedAt,
+	})
+	if err != nil || joined.Topic.TopicState != model.TopicJoined {
+		t.Fatalf("join %s topic = (%#v, %v)", seed, joined, err)
+	}
+	return artifactReceiverRealStoreFixture{ctx: ctx, requester: requester, origin: origin,
+		channel: channel, originMember: originMember, store: st, joinedAt: joinedAt}
 }
 
 func artifactReceiverChannelID(t testing.TB, name string) model.ChannelID {
