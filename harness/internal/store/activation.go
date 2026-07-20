@@ -17,11 +17,13 @@ var (
 )
 
 // ActivationResult reports the durable authority after activation. Changed is
-// false for an exact replay, which also preserves the original update times.
+// false for an exact authority replay, which preserves the original authority
+// update times; Recovered reports dead Handling generations requeued by setup.
 type ActivationResult struct {
-	Changed bool
-	Node    model.Node
-	Profile model.Profile
+	Changed   bool
+	Recovered uint32
+	Node      model.Node
+	Profile   model.Profile
 }
 
 // ActivateProfile publishes a successfully staged and self-checked Profile.
@@ -79,8 +81,8 @@ func (s *Store) ActivateProfile(ctx context.Context, desired model.Profile, expe
 	// fields are byte-equivalent, so it requires the same quiescence gate as an
 	// asset, budget or adapter update.
 	authorityChanged := !profile.Enabled() || !sameProfileAuthority(profile, desired)
-	if profile.Enabled() && !authorityChanged {
-		return ActivationResult{Node: node, Profile: profile}, nil
+	if replay, handled, err := replayProfileActivation(ctx, tx, node, profile, authorityChanged, at); handled {
+		return replay, err
 	}
 	if authorityChanged {
 		busy, err := profileAuthorityBusy(ctx, tx, desired.ID())
@@ -124,10 +126,33 @@ func (s *Store) ActivateProfile(ctx context.Context, desired model.Profile, expe
 		activatedProfile.HandlingBudget().Bytes(), storeTime(activatedProfile.UpdatedAt()), activatedProfile.ID().String()); err != nil {
 		return ActivationResult{}, fmt.Errorf("activate Profile: update authority: %w", err)
 	}
+	return commitProfileActivation(ctx, tx, ActivationResult{
+		Changed: true, Node: activatedNode, Profile: activatedProfile,
+	}, at)
+}
+
+func replayProfileActivation(ctx context.Context, tx *sql.Tx, node model.Node, profile model.Profile,
+	authorityChanged bool, at time.Time,
+) (ActivationResult, bool, error) {
+	if !profile.Enabled() || authorityChanged {
+		return ActivationResult{}, false, nil
+	}
+	result, err := commitProfileActivation(ctx, tx, ActivationResult{Node: node, Profile: profile}, at)
+	return result, true, err
+}
+
+func commitProfileActivation(ctx context.Context, tx *sql.Tx, result ActivationResult,
+	at time.Time,
+) (ActivationResult, error) {
+	recovered, err := recoverDeadAgentHandlingsTx(ctx, tx, result.Profile, at)
+	if err != nil {
+		return ActivationResult{}, fmt.Errorf("activate Profile: recover dead managed work: %w", err)
+	}
 	if err := tx.Commit(); err != nil {
 		return ActivationResult{}, fmt.Errorf("activate Profile: commit: %w", err)
 	}
-	return ActivationResult{Changed: true, Node: activatedNode, Profile: activatedProfile}, nil
+	result.Recovered = recovered.Recovered
+	return result, nil
 }
 
 func activationReadError(kind string, err error) error {

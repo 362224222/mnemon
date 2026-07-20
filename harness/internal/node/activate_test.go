@@ -3,6 +3,7 @@ package node
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"errors"
 	"os"
@@ -50,6 +51,136 @@ func TestActivatePublishesOnlyVerifiedInstallationAndReplaysExactly(t *testing.T
 	if err != nil || second.Changed || !second.Profile.UpdatedAt().Equal(first.Profile.UpdatedAt()) ||
 		!second.Node.UpdatedAt().Equal(first.Node.UpdatedAt()) {
 		t.Fatalf("replayed Activate() = (%#v, %v)", second, err)
+	}
+}
+
+func TestActivateRecoversDeadHandlingsAfterVerifiedSelfCheck(t *testing.T) {
+	workspace, provisioned, bundle := activeTestProvision(t)
+	databasePath := filepath.Join(provisioned.NodeState, "node.db")
+	seedDeadActivationHandling(t, databasePath, provisioned.Node, provisioned.Profile)
+
+	activated, err := Activate(context.Background(),
+		activeTestOptions(workspace, provisioned, bundle, model.HostCodex))
+	if err != nil || !activated.Changed || !activated.Profile.Enabled() {
+		t.Fatalf("Activate() = (%#v, %v)", activated, err)
+	}
+	db, err := sql.Open("sqlite", databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var status, disposition string
+	var attempts, recovery uint32
+	var deadAt *string
+	if err := db.QueryRow(`SELECT status,attempts,recovery_count,last_disposition,dead_at
+		FROM agent_handlings WHERE handling_id='handling-activate-dead'`).Scan(
+		&status, &attempts, &recovery, &disposition, &deadAt); err != nil {
+		t.Fatal(err)
+	}
+	if status != "pending" || attempts != 0 || recovery != 1 ||
+		disposition != "setup_recovered" || deadAt != nil {
+		t.Fatalf("recovered handling = (%q,%d,%d,%q,%v)",
+			status, attempts, recovery, disposition, deadAt)
+	}
+}
+
+func TestActivateRecoveryInvariantLeavesProfileDisabled(t *testing.T) {
+	workspace, provisioned, bundle := activeTestProvision(t)
+	databasePath := filepath.Join(provisioned.NodeState, "node.db")
+	seedDeadActivationHandling(t, databasePath, provisioned.Node, provisioned.Profile)
+	db, err := sql.Open("sqlite", databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("DELETE FROM agent_runs WHERE run_id='run-activate-dead'"); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Activate(context.Background(),
+		activeTestOptions(workspace, provisioned, bundle, model.HostCodex)); !errors.Is(err, ErrActivate) {
+		t.Fatalf("Activate() error = %v", err)
+	}
+	st, err := store.Open(context.Background(), databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority, readErr := st.ReadLocalAuthority(context.Background())
+	closeErr := st.Close()
+	if readErr != nil || closeErr != nil || authority.Profile.Enabled() ||
+		!authority.Profile.UpdatedAt().Equal(provisioned.Profile.UpdatedAt()) {
+		t.Fatalf("failed recovery changed activation authority = (%#v, %v, close %v)",
+			authority, readErr, closeErr)
+	}
+}
+
+func seedDeadActivationHandling(t *testing.T, databasePath string, node model.Node, profile model.Profile) {
+	t.Helper()
+	db, err := sql.Open("sqlite", databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
+		t.Fatal(err)
+	}
+	encodedAt := profile.UpdatedAt().Round(0).UTC().Format("2006-01-02T15:04:05.000000000Z")
+	recordHash := model.Sum([]byte("activate-dead-member")).Bytes()
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`INSERT INTO channels(channel_id,name,local_alias,owner_peer_id,owner_public_key,
+		descriptor_json,descriptor_digest,descriptor_signature,member_limit,roster_head_revision,
+		roster_head_hash,status,topic_state,created_at,updated_at)
+		VALUES('channel-activate-dead','Activation recovery','activate-dead',?,'key','descriptor',
+		'descriptor-digest','descriptor-signature',2,1,?,'active','joined',?,?)`,
+		node.PeerID().String(), recordHash, encodedAt, encodedAt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(`INSERT INTO channel_members(channel_id,revision,record_hash,member_peer_id,
+		origin_epoch,display_label,public_key,multiaddrs_json,protocols_json,limits_json,status,
+		signed_record_json,owner_signature,created_at)
+		VALUES('channel-activate-dead',1,?,?,?,'local','key','[]','[]','{}','active','{}','sig',?)`,
+		recordHash, node.PeerID().String(), node.OriginEpoch().String(), encodedAt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(`INSERT INTO events(event_id,schema_version,channel_id,origin_peer_id,origin_epoch,
+		origin_seq,channel_seq,origin_member_revision,origin_member_record_hash,publication_roster_revision,
+		publication_roster_hash,source,actor_principal,event_type,audience_json,resource_json,work_home_peer_id,
+		work_id,summary,payload_json,artifact_roots_json,caused_by_json,canonical_event_json,event_digest,
+		canonical_publication_json,publication_digest,origin_signature,created_at,accepted_at)
+		VALUES('event-activate-dead',1,'channel-activate-dead',?,?,1,1,1,?,1,?,'local',?,
+		'review.offered','[]','{}',?,'work-activate-dead','activation recovery','{}','[]','[]','{}',
+		'event-digest','{}','publication-digest','signature',?,?)`, node.PeerID().String(),
+		node.OriginEpoch().String(), recordHash, recordHash, profile.Principal(), node.PeerID().String(),
+		encodedAt, encodedAt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(`INSERT INTO agent_handlings(
+		handling_id,profile_id,event_id,status,priority,available_at,attempts,last_disposition,
+		last_error,recovery_count,dead_at,created_at,updated_at)
+		VALUES(?,?,?,'dead',1,?,1,'attempt_budget_exhausted',?,0,?,?,?)`,
+		"handling-activate-dead", model.TeamworkProfileID().String(), "event-activate-dead",
+		encodedAt, "maximum handling attempts exhausted", encodedAt, encodedAt, encodedAt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(`INSERT INTO agent_runs(
+		run_id,profile_id,handling_id,cause_json,handling_attempt,handling_recovery,
+		claim_fence_hash,lease_until,launcher,runtime_kind,launcher_diagnostic_json,
+		runtime_ids_json,status,started_at,finished_at,error)
+		VALUES(?,?,?,X'7B7D',1,0,?,?,'external-hook','codex',X'7B7D',X'7B7D',
+		'dead',?,?,?)`, "run-activate-dead", model.TeamworkProfileID().String(),
+		"handling-activate-dead", bytes.Repeat([]byte{0x42}, 32), encodedAt, encodedAt,
+		encodedAt, "maximum handling attempts exhausted"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
 	}
 }
 
