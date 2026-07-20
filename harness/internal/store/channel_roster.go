@@ -12,10 +12,7 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 )
 
-var (
-	ErrChannelRosterInput    = errors.New("invalid Channel roster merge input")
-	ErrChannelRosterConflict = errors.New("Channel roster conflicts with durable authority")
-)
+var ErrChannelRosterInput, ErrChannelRosterConflict = errors.New("invalid Channel roster merge input"), errors.New("Channel roster conflicts with durable authority")
 
 type ChannelRosterMergeStatus string
 
@@ -40,110 +37,143 @@ type MergeChannelRosterResult struct {
 	ExpectedNextRevision uint64
 }
 
-// MergeChannelRoster is the single durable boundary for owner-signed roster
-// repair. It accepts an overlapping prefix or suffix, records a valid fork as
-// permanent evidence, and never performs network I/O inside the transaction.
-func (s *Store) MergeChannelRoster(ctx context.Context,
-	spec MergeChannelRosterSpec,
-) (MergeChannelRosterResult, error) {
+// ChannelRosterMergePlan freezes one roster mutation and its complete runtime candidate.
+type ChannelRosterMergePlan struct {
+	channelAuthorityPlan
+	spec         MergeChannelRosterSpec
+	result       MergeChannelRosterResult
+	expectedHead model.RecordHead
+	conflictID   string
+}
+
+func (plan ChannelRosterMergePlan) Result() MergeChannelRosterResult { return plan.result }
+
+// MergeChannelRoster is the direct compatibility path; runtime callers use Prepare/Commit/Resolve.
+func (s *Store) MergeChannelRoster(ctx context.Context, spec MergeChannelRosterSpec) (MergeChannelRosterResult, error) {
+	plan, err := s.PrepareChannelRosterMerge(ctx, spec)
+	if err != nil {
+		return MergeChannelRosterResult{}, err
+	}
+	return s.CommitChannelRosterMerge(ctx, plan)
+}
+
+func (s *Store) ResolveChannelRosterMerge(ctx context.Context, plan ChannelRosterMergePlan) (ChannelAuthorityPlanResolution, error) {
+	tx, resolution, err := s.beginChannelAuthorityPlan(ctx, plan.channelAuthorityPlan, true)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+	if plan.conflictID != "" && resolution != ChannelAuthorityPlanDiverged &&
+		(!plan.ChangesAuthority() || resolution == ChannelAuthorityPlanCandidate) {
+		present, evidenceErr := channelRosterPlanEvidence(ctx, tx, plan)
+		if evidenceErr != nil {
+			return "", evidenceErr
+		}
+		if present {
+			resolution = ChannelAuthorityPlanCandidate
+		} else if resolution == ChannelAuthorityPlanCandidate {
+			resolution = ChannelAuthorityPlanDiverged
+		}
+	}
+	return resolution, nil
+}
+
+func validateChannelRosterMergeSpec(s *Store, ctx context.Context, spec MergeChannelRosterSpec) (MergeChannelRosterSpec, error) {
 	if s == nil || s.db == nil || ctx == nil || spec.ChannelID.IsZero() ||
 		spec.AuthenticatedTransportPeerID.IsZero() || len(spec.Records) == 0 ||
 		len(spec.Records) > model.MaxMemberRecordsPerChannel {
-		return MergeChannelRosterResult{}, ErrChannelRosterInput
+		return MergeChannelRosterSpec{}, ErrChannelRosterInput
 	}
 	at, err := canonicalStoreTime(spec.At)
 	if err != nil {
-		return MergeChannelRosterResult{}, ErrChannelRosterInput
+		return MergeChannelRosterSpec{}, ErrChannelRosterInput
 	}
-	records := append([]model.Member(nil), spec.Records...)
-	firstRevision := records[0].Head().Revision()
-	if firstRevision == 0 {
-		return MergeChannelRosterResult{}, ErrChannelRosterInput
-	}
-	for index, record := range records {
-		if record.IsZero() || record.ChannelID() != spec.ChannelID ||
-			record.Head().Revision() != firstRevision+uint64(index) ||
+	spec.At, spec.Records = at, append([]model.Member(nil), spec.Records...)
+	first := spec.Records[0].Head().Revision()
+	for index, record := range spec.Records {
+		if first == 0 || record.IsZero() || record.ChannelID() != spec.ChannelID ||
+			record.Head().Revision() != first+uint64(index) ||
 			record.Head().Revision() > model.MaxMemberRecordsPerChannel {
-			return MergeChannelRosterResult{}, ErrChannelRosterInput
+			return MergeChannelRosterSpec{}, ErrChannelRosterInput
 		}
 	}
+	return spec, nil
+}
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return MergeChannelRosterResult{}, fmt.Errorf("merge Channel roster: begin: %w", err)
-	}
-	defer tx.Rollback()
+func readChannelRosterAuthority(ctx context.Context, tx *sql.Tx,
+	channelID model.ChannelID) (model.Node, verifiedChannelAuthority, error) {
 	node, err := readNode(ctx, tx)
 	if err != nil {
-		return MergeChannelRosterResult{}, fmt.Errorf("merge Channel roster: Node: %w", err)
+		return model.Node{}, verifiedChannelAuthority{}, fmt.Errorf("merge Channel roster: Node: %w", err)
 	}
-	authority, err := readVerifiedChannelAuthority(ctx, tx, node.PeerID(), spec.ChannelID)
+	authority, err := readVerifiedChannelAuthority(ctx, tx, node.PeerID(), channelID)
 	if err != nil {
-		return MergeChannelRosterResult{}, fmt.Errorf("%w: %v", ErrChannelRosterConflict, err)
+		return model.Node{}, verifiedChannelAuthority{}, fmt.Errorf("%w: %v", ErrChannelRosterConflict, err)
 	}
+	return node, authority, nil
+}
+
+func (s *Store) applyChannelRosterMerge(ctx context.Context, tx *sql.Tx, localPeer model.PeerID,
+	authority verifiedChannelAuthority, spec MergeChannelRosterSpec) (MergeChannelRosterResult, string, error) {
 	if authority.channel.Status() == model.ChannelAbandoned {
-		return MergeChannelRosterResult{}, ErrChannelRosterConflict
+		return MergeChannelRosterResult{}, "", ErrChannelRosterConflict
 	}
-	if err := validateChannelRosterPage(authority.channel.Descriptor(), records); err != nil {
-		return MergeChannelRosterResult{}, ErrChannelRosterInput
+	if validateChannelRosterPage(authority.channel.Descriptor(), spec.Records) != nil {
+		return MergeChannelRosterResult{}, "", ErrChannelRosterInput
 	}
 	existing := authority.roster.Members()
+	firstRevision := spec.Records[0].Head().Revision()
 	expected := uint64(len(existing)) + 1
 	if firstRevision > expected {
 		if !rosterTransportAuthorized(spec.AuthenticatedTransportPeerID, authority.roster) {
-			return MergeChannelRosterResult{}, ErrChannelRosterInput
-		}
-		if err := tx.Commit(); err != nil {
-			return MergeChannelRosterResult{}, mapChannelRosterError(err)
+			return MergeChannelRosterResult{}, "", ErrChannelRosterInput
 		}
 		return MergeChannelRosterResult{Status: ChannelRosterGap, Channel: authority.channel,
-			Roster: authority.roster, ExpectedNextRevision: expected}, nil
+			Roster: authority.roster, ExpectedNextRevision: expected}, "", nil
 	}
 	prefixLength := int(firstRevision - 1)
 	if prefixLength > len(existing) {
-		return MergeChannelRosterResult{}, ErrChannelRosterInput
+		return MergeChannelRosterResult{}, "", ErrChannelRosterInput
 	}
-	candidateMembers := append([]model.Member(nil), existing[:prefixLength]...)
-	candidateMembers = append(candidateMembers, records...)
-	candidate, err := model.NewVerifiedRoster(authority.channel.Descriptor(), candidateMembers)
-	if err != nil {
-		return MergeChannelRosterResult{}, ErrChannelRosterInput
+	members := append([]model.Member(nil), existing[:prefixLength]...)
+	members = append(members, spec.Records...)
+	candidate, err := model.NewVerifiedRoster(authority.channel.Descriptor(), members)
+	if err != nil || !rosterTransportAuthorized(spec.AuthenticatedTransportPeerID, authority.roster, candidate) {
+		return MergeChannelRosterResult{}, "", ErrChannelRosterInput
 	}
-	if !rosterTransportAuthorized(spec.AuthenticatedTransportPeerID, authority.roster, candidate) {
-		return MergeChannelRosterResult{}, ErrChannelRosterInput
-	}
-
-	overlap := len(existing) - prefixLength
-	if len(records) < overlap {
-		overlap = len(records)
-	}
-	for index := 0; index < overlap; index++ {
-		incumbent := existing[prefixLength+index]
-		challenger := records[index]
+	for index, overlap := 0, min(len(existing)-prefixLength, len(spec.Records)); index < overlap; index++ {
+		incumbent, challenger := existing[prefixLength+index], spec.Records[index]
 		if bytes.Equal(incumbent.WireJSON().Bytes(), challenger.WireJSON().Bytes()) {
 			continue
 		}
-		return s.commitChannelRosterConflict(ctx, tx, node.PeerID(), authority, candidate, incumbent,
-			challenger, spec.AuthenticatedTransportPeerID, at)
-	}
-	if len(candidateMembers) <= len(existing) {
-		if err := tx.Commit(); err != nil {
-			return MergeChannelRosterResult{}, mapChannelRosterError(err)
+		conflictID, idErr := channelRosterConflictID(authority.channel.ID(), incumbent, challenger)
+		if idErr != nil {
+			return MergeChannelRosterResult{}, "", ErrChannelRosterInput
 		}
-		return MergeChannelRosterResult{Status: ChannelRosterDuplicate,
-			Channel: authority.channel, Roster: authority.roster,
-			ExpectedNextRevision: expected}, nil
+		result, applyErr := s.applyChannelRosterConflict(ctx, tx, localPeer, authority, candidate,
+			incumbent, challenger, spec.AuthenticatedTransportPeerID, spec.At, conflictID)
+		return result, conflictID, applyErr
 	}
-	if authority.channel.Status() == model.ChannelConflicted ||
-		at.Before(authority.channel.UpdatedAt()) || at.Before(candidate.Members()[len(candidate.Members())-1].CreatedAt()) {
+	if len(members) <= len(existing) {
+		return MergeChannelRosterResult{Status: ChannelRosterDuplicate, Channel: authority.channel,
+			Roster: authority.roster, ExpectedNextRevision: expected}, "", nil
+	}
+	result, err := s.applyChannelRosterSuffix(ctx, tx, localPeer, authority, candidate, spec.At)
+	return result, "", err
+}
+
+func (s *Store) applyChannelRosterSuffix(ctx context.Context, tx *sql.Tx, localPeer model.PeerID,
+	authority verifiedChannelAuthority, candidate model.VerifiedRoster, at time.Time) (MergeChannelRosterResult, error) {
+	if authority.channel.Status() == model.ChannelConflicted || at.Before(authority.channel.UpdatedAt()) ||
+		at.Before(candidate.Members()[len(candidate.Members())-1].CreatedAt()) {
 		return MergeChannelRosterResult{}, ErrChannelRosterConflict
 	}
-	for _, record := range candidate.Members()[len(existing):] {
+	for _, record := range candidate.Members()[len(authority.roster.Members()):] {
 		if err := insertChannelMember(ctx, tx, record); err != nil {
 			return MergeChannelRosterResult{}, mapChannelRosterError(err)
 		}
 	}
-	channel, err := mergedChannelProjection(node.PeerID(), authority.channel, candidate, at)
+	channel, err := mergedChannelProjection(localPeer, authority.channel, candidate, at)
 	if err != nil {
 		return MergeChannelRosterResult{}, ErrChannelRosterConflict
 	}
@@ -154,26 +184,20 @@ func (s *Store) MergeChannelRoster(ctx context.Context,
 		storeTime(channel.UpdatedAt()), channel.ID().String(), authority.channel.RosterHead().Revision(),
 		authority.channel.RosterHead().Digest().Bytes(), string(authority.channel.Status()),
 		string(authority.channel.TopicState()))
-	if err != nil {
-		return MergeChannelRosterResult{}, mapChannelRosterError(err)
-	}
-	if changed, changedErr := updated.RowsAffected(); changedErr != nil || changed != 1 {
+	if err != nil || exactlyOne(updated) != nil {
 		return MergeChannelRosterResult{}, ErrChannelRosterConflict
 	}
-	if err := syncChannelRosterBindings(ctx, tx, node.PeerID(), channel, candidate,
+	if err := syncChannelRosterBindings(ctx, tx, localPeer, channel, candidate,
 		authority.bindings, at); err != nil {
 		return MergeChannelRosterResult{}, mapChannelRosterError(err)
 	}
-	if err := applyChannelRosterEgressEffects(ctx, tx, node.PeerID(), authority.roster,
+	if err := applyChannelRosterEgressEffects(ctx, tx, localPeer, authority.roster,
 		channel, candidate, at); err != nil {
 		return MergeChannelRosterResult{}, mapChannelRosterError(err)
 	}
-	committed, err := readVerifiedChannelAuthority(ctx, tx, node.PeerID(), channel.ID())
+	committed, err := readVerifiedChannelAuthority(ctx, tx, localPeer, channel.ID())
 	if err != nil || committed.channel.RosterHead() != candidate.Head() {
 		return MergeChannelRosterResult{}, ErrChannelRosterConflict
-	}
-	if err := tx.Commit(); err != nil {
-		return MergeChannelRosterResult{}, mapChannelRosterError(err)
 	}
 	return MergeChannelRosterResult{Status: ChannelRosterApplied, Channel: committed.channel,
 		Roster: committed.roster, ExpectedNextRevision: committed.roster.Head().Revision() + 1}, nil
@@ -226,8 +250,7 @@ func rosterTransportAuthorized(transport model.PeerID, rosters ...model.Verified
 }
 
 func mergedChannelProjection(localPeer model.PeerID, current model.Channel,
-	roster model.VerifiedRoster, at time.Time,
-) (model.Channel, error) {
+	roster model.VerifiedRoster, at time.Time) (model.Channel, error) {
 	status, topic := current.Status(), current.TopicState()
 	owner, ownerOK := roster.CurrentMember(current.OwnerPeerID())
 	local, localOK := roster.CurrentMember(localPeer)
@@ -249,48 +272,38 @@ func mergedChannelProjection(localPeer model.PeerID, current model.Channel,
 		TopicState: topic, UpdatedAt: at})
 }
 
-func (s *Store) commitChannelRosterConflict(ctx context.Context, tx *sql.Tx,
+func (s *Store) applyChannelRosterConflict(ctx context.Context, tx *sql.Tx,
 	localPeer model.PeerID, authority verifiedChannelAuthority, candidate model.VerifiedRoster,
-	incumbent, challenger model.Member,
-	transport model.PeerID, at time.Time,
-) (MergeChannelRosterResult, error) {
+	incumbent, challenger model.Member, transport model.PeerID, at time.Time,
+	conflictID string) (MergeChannelRosterResult, error) {
 	if incumbent.Head().Revision() != challenger.Head().Revision() ||
 		incumbent.Head().Digest() == challenger.Head().Digest() ||
 		at.Before(authority.channel.UpdatedAt()) || at.Before(incumbent.CreatedAt()) ||
 		at.Before(challenger.CreatedAt()) || candidate.Head().Revision() < challenger.Head().Revision() {
 		return MergeChannelRosterResult{}, ErrChannelRosterInput
 	}
-	var existingDigest []byte
-	err := tx.QueryRowContext(ctx, `SELECT challenger_record_hash FROM channel_conflicts
-		WHERE channel_id=? AND revision=? AND challenger_record_hash=?`, authority.channel.ID().String(),
-		challenger.Head().Revision(), challenger.Head().Digest().Bytes()).Scan(&existingDigest)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return MergeChannelRosterResult{}, mapChannelRosterError(err)
+	if replay, found, err := readChannelRosterConflictReplay(ctx, tx, authority,
+		challenger, conflictID); err != nil || found {
+		return replay, err
 	}
-	if errors.Is(err, sql.ErrNoRows) {
-		conflictID, idErr := channelRosterConflictID(authority.channel.ID(), incumbent, challenger)
-		if idErr != nil {
-			return MergeChannelRosterResult{}, ErrChannelRosterInput
-		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO channel_conflicts(conflict_id,channel_id,revision,
-			incumbent_record_hash,incumbent_signed_record_json,incumbent_owner_signature,
-			challenger_record_hash,challenger_signed_record_json,challenger_owner_signature,
-			transport_peer_id,detected_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, conflictID,
-			authority.channel.ID().String(), incumbent.Head().Revision(), incumbent.Head().Digest().Bytes(),
-			incumbent.SignedRecord().Bytes(), incumbent.OwnerSignature(), challenger.Head().Digest().Bytes(),
-			challenger.SignedRecord().Bytes(), challenger.OwnerSignature(), transport.String(), storeTime(at))
-		if err != nil {
-			return MergeChannelRosterResult{}, mapChannelRosterError(err)
-		}
+	if conflictID == "" {
+		return MergeChannelRosterResult{}, ErrChannelRosterInput
+	}
+	_, err := tx.ExecContext(ctx, `INSERT INTO channel_conflicts(conflict_id,channel_id,revision,
+		incumbent_record_hash,incumbent_signed_record_json,incumbent_owner_signature,
+		challenger_record_hash,challenger_signed_record_json,challenger_owner_signature,
+		transport_peer_id,detected_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, conflictID,
+		authority.channel.ID().String(), incumbent.Head().Revision(), incumbent.Head().Digest().Bytes(),
+		incumbent.SignedRecord().Bytes(), incumbent.OwnerSignature(), challenger.Head().Digest().Bytes(),
+		challenger.SignedRecord().Bytes(), challenger.OwnerSignature(), transport.String(), storeTime(at))
+	if err != nil {
+		return MergeChannelRosterResult{}, mapChannelRosterError(err)
 	}
 	updated, err := tx.ExecContext(ctx, `UPDATE channels SET status='conflicted',topic_state='blocked',
 		updated_at=? WHERE channel_id=? AND roster_head_revision=? AND roster_head_hash=?`, storeTime(at),
 		authority.channel.ID().String(), authority.channel.RosterHead().Revision(),
 		authority.channel.RosterHead().Digest().Bytes())
-	if err != nil {
-		return MergeChannelRosterResult{}, mapChannelRosterError(err)
-	}
-	if changed, changedErr := updated.RowsAffected(); changedErr != nil || changed != 1 {
+	if err != nil || exactlyOne(updated) != nil {
 		return MergeChannelRosterResult{}, ErrChannelRosterConflict
 	}
 	if err := blockChannelEgress(ctx, tx, authority.channel.ID(), nil,
@@ -302,16 +315,11 @@ func (s *Store) commitChannelRosterConflict(ctx context.Context, tx *sql.Tx,
 	if err != nil || committed.channel.Status() != model.ChannelConflicted {
 		return MergeChannelRosterResult{}, ErrChannelRosterConflict
 	}
-	if err := tx.Commit(); err != nil {
-		return MergeChannelRosterResult{}, mapChannelRosterError(err)
-	}
-	return MergeChannelRosterResult{Status: ChannelRosterConflicted, Channel: committed.channel,
-		Roster: committed.roster, ExpectedNextRevision: committed.roster.Head().Revision() + 1}, nil
+	return channelRosterConflictResult(committed), nil
 }
 
 func applyChannelRosterEgressEffects(ctx context.Context, tx *sql.Tx, localPeer model.PeerID,
-	previous model.VerifiedRoster, channel model.Channel, candidate model.VerifiedRoster, at time.Time,
-) error {
+	previous model.VerifiedRoster, channel model.Channel, candidate model.VerifiedRoster, at time.Time) error {
 	if channel.Status().Terminal() || channel.Status() == model.ChannelConflicted {
 		return blockChannelEgress(ctx, tx, channel.ID(), nil, "Channel membership is terminal", at)
 	}
@@ -337,8 +345,7 @@ func currentRosterMembers(roster model.VerifiedRoster) map[model.PeerID]model.Me
 }
 
 func blockChannelEgress(ctx context.Context, tx *sql.Tx, channelID model.ChannelID,
-	target *model.PeerID, reason string, at time.Time,
-) error {
+	target *model.PeerID, reason string, at time.Time) error {
 	if target == nil {
 		if _, err := tx.ExecContext(ctx, `UPDATE gossip_publications SET status='blocked',
 			lease_owner=NULL,lease_until=NULL,last_error=?,updated_at=? WHERE channel_id=?
@@ -375,9 +382,6 @@ func channelRosterConflictID(channelID model.ChannelID, incumbent, challenger mo
 }
 
 func mapChannelRosterError(err error) error {
-	if err == nil {
-		return nil
-	}
 	if errors.Is(err, ErrChannelAuthorityInvariant) || errors.Is(err, ErrChannelJoinConflict) ||
 		strings.Contains(err.Error(), "constraint failed") || strings.Contains(err.Error(), "channel_") {
 		return fmt.Errorf("%w: %v", ErrChannelRosterConflict, err)

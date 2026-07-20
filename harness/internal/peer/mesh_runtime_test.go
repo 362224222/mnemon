@@ -110,6 +110,14 @@ func TestMeshRuntimeKeepsOverlappingPeerAddressesUntilLastChannelRevokes(t *test
 	mergePeerMeshRoster(t, st, beta, betaRemote.Member(), betaRemote.Member().CreatedAt())
 	runtime := newTestMeshRuntime(t, ctx, owner, readMeshRuntimeAuthority(t, st))
 	remoteID := meshRuntimeLibp2pID(t, alphaRemote.Identity().PeerID())
+	remoteHost := newEnrollmentTestHost(t, alphaRemote.Identity())
+	if err := remoteHost.Connect(ctx, libp2ppeer.AddrInfo{ID: runtime.Host().ID(),
+		Addrs: runtime.Host().Addrs()}); err != nil {
+		t.Fatal(err)
+	}
+	if len(runtime.Host().Network().ConnsToPeer(remoteID)) == 0 {
+		t.Fatal("shared Peer did not establish the pre-revoke physical connection")
+	}
 	unchangedBeta, err := runtime.Session(beta.Channel().ID())
 	if err != nil {
 		t.Fatal(err)
@@ -129,15 +137,18 @@ func TestMeshRuntimeKeepsOverlappingPeerAddressesUntilLastChannelRevokes(t *test
 	if err := transition.Install(); err != nil {
 		t.Fatal(err)
 	}
-	if len(runtime.Host().Peerstore().Addrs(remoteID)) == 0 || !runtime.authority.CanConnect(remoteID) {
+	if len(runtime.Host().Peerstore().Addrs(remoteID)) == 0 || !runtime.authority.CanConnect(remoteID) ||
+		len(runtime.Host().Network().ConnsToPeer(remoteID)) == 0 {
 		t.Fatal("one Channel revoke removed a Peer still authorized by overlapping Channel")
 	}
 
 	betaRevoked := beta.AppendTerminal(t, betaRemote.Identity().PeerID(), model.MemberRevoked)
 	mergePeerMeshRoster(t, st, beta, betaRevoked.Member(), betaRevoked.Member().CreatedAt())
 	installMeshAuthority(t, runtime, readMeshRuntimeAuthority(t, st))
-	if len(runtime.Host().Peerstore().Addrs(remoteID)) != 0 || runtime.authority.CanConnect(remoteID) {
-		t.Fatal("last Channel revoke retained stale physical Peer authority")
+	waitPeerDisconnected(t, runtime.Host(), remoteID)
+	if len(runtime.addresses[remoteID]) != 0 || runtime.authority.CanConnect(remoteID) ||
+		len(runtime.Host().Network().ConnsToPeer(remoteID)) != 0 {
+		t.Fatal("last Channel revoke retained stale physical Peer authority or connection")
 	}
 }
 

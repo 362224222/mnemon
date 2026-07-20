@@ -1222,13 +1222,6 @@
     },
     {
       "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/store/channel_baseline.go::(*Store).InstallInboundChannelBaseline",
-      "path": "harness/internal/store/channel_baseline.go",
-      "symbol": "(*Store).InstallInboundChannelBaseline",
-      "ceiling": 35
-    },
-    {
-      "rule": "cognitive_complexity",
       "identity": "cognitive_complexity:harness/internal/store/channel_baseline.go::(*Store).ReadChannelBaselineReadiness",
       "path": "harness/internal/store/channel_baseline.go",
       "symbol": "(*Store).ReadChannelBaselineReadiness",
@@ -1331,13 +1324,6 @@
       "path": "harness/internal/store/channel_join.go",
       "symbol": "(*Store).PrepareJoinedChannel",
       "ceiling": 52
-    },
-    {
-      "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/store/channel_roster.go::(*Store).MergeChannelRoster",
-      "path": "harness/internal/store/channel_roster.go",
-      "symbol": "(*Store).MergeChannelRoster",
-      "ceiling": 51
     },
     {
       "rule": "cognitive_complexity",
@@ -3427,13 +3413,6 @@
     },
     {
       "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/store/channel_baseline.go::(*Store).InstallInboundChannelBaseline",
-      "path": "harness/internal/store/channel_baseline.go",
-      "symbol": "(*Store).InstallInboundChannelBaseline",
-      "ceiling": 31
-    },
-    {
-      "rule": "cyclomatic_complexity",
       "identity": "cyclomatic_complexity:harness/internal/store/channel_baseline.go::(*Store).ReadChannelBaselineReadiness",
       "path": "harness/internal/store/channel_baseline.go",
       "symbol": "(*Store).ReadChannelBaselineReadiness",
@@ -3564,13 +3543,6 @@
       "path": "harness/internal/store/channel_join_test.go",
       "symbol": "TestPrepareJoinedChannelFencesConcurrentAttemptsAndCommitUnknown",
       "ceiling": 23
-    },
-    {
-      "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/store/channel_roster.go::(*Store).MergeChannelRoster",
-      "path": "harness/internal/store/channel_roster.go",
-      "symbol": "(*Store).MergeChannelRoster",
-      "ceiling": 45
     },
     {
       "rule": "cyclomatic_complexity",
@@ -4855,13 +4827,6 @@
     },
     {
       "rule": "function_logical_lines",
-      "identity": "function_logical_lines:harness/internal/store/channel_roster.go::(*Store).MergeChannelRoster",
-      "path": "harness/internal/store/channel_roster.go",
-      "symbol": "(*Store).MergeChannelRoster",
-      "ceiling": 100
-    },
-    {
-      "rule": "function_logical_lines",
       "identity": "function_logical_lines:harness/internal/store/current.go::readCurrentSourceEvent",
       "path": "harness/internal/store/current.go",
       "symbol": "readCurrentSourceEvent",
@@ -6136,13 +6101,6 @@
     },
     {
       "rule": "function_statements",
-      "identity": "function_statements:harness/internal/store/channel_roster.go::(*Store).MergeChannelRoster",
-      "path": "harness/internal/store/channel_roster.go",
-      "symbol": "(*Store).MergeChannelRoster",
-      "ceiling": 90
-    },
-    {
-      "rule": "function_statements",
       "identity": "function_statements:harness/internal/store/channel_topic.go::(*Store).SetPeerReachability",
       "path": "harness/internal/store/channel_topic.go",
       "symbol": "(*Store).SetPeerReachability",
@@ -7324,7 +7282,7 @@
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/store/channel_baseline.go",
       "path": "harness/internal/store/channel_baseline.go",
-      "ceiling": 500
+      "ceiling": 497
     },
     {
       "rule": "production_file_lines",

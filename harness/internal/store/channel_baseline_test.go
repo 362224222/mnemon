@@ -115,6 +115,90 @@ func TestInstallInboundChannelBaselineActivatesAtomicallyAndReplaysExactly(t *te
 	}
 }
 
+func TestInboundChannelBaselinePlanIgnoresObservationChangesAndResolvesOutcome(t *testing.T) {
+	t.Parallel()
+	fixture := newChannelBaselineFixture(t, "authority-plan-observation", model.TopicJoined)
+	plan := prepareInboundChannelBaselinePlan(t, fixture, 7)
+	assertInboundChannelBaselineResolution(t, fixture.store, plan,
+		ChannelAuthorityPlanUnchanged, "before observation")
+	observationAt := fixture.at.Add(time.Second)
+	if observed, err := fixture.store.SetPeerReachability(context.Background(), SetPeerReachabilitySpec{
+		ChannelID: fixture.channel.Channel().ID(), PeerID: fixture.remote.Identity().PeerID(),
+		OriginEpoch: fixture.remote.Identity().OriginEpoch(), ExpectedRosterHead: fixture.channel.Roster().Head(),
+		Reachability: model.ReachabilityReachable, At: observationAt,
+	}); err != nil || !observed.Changed {
+		t.Fatalf("independent reachability update = (%#v,%v)", observed, err)
+	}
+	assertInboundChannelBaselineResolution(t, fixture.store, plan,
+		ChannelAuthorityPlanUnchanged, "after reachability/last_seen")
+	contender := prepareInboundChannelBaselinePlan(t, fixture, 7)
+	committed, err := fixture.store.CommitInboundChannelBaseline(context.Background(), plan)
+	if err != nil || !committed.Installed || committed.Baseline != plan.Result().Baseline ||
+		!committed.InstalledAt.Equal(plan.Result().InstalledAt) {
+		t.Fatalf("CommitInboundChannelBaseline() = (%#v,%v)", committed, err)
+	}
+	assertInboundChannelBaselineResolution(t, fixture.store, plan,
+		ChannelAuthorityPlanCandidate, "after commit")
+	if replayed, err := fixture.store.CommitInboundChannelBaseline(context.Background(), plan); err != nil ||
+		replayed != plan.Result() {
+		t.Fatalf("commit outcome-loss replay = (%#v,%v)", replayed, err)
+	}
+	if replayed, err := fixture.store.CommitInboundChannelBaseline(context.Background(), contender); err != nil ||
+		replayed != contender.Result() || replayed.Installed {
+		t.Fatalf("concurrent prepared replay = (%#v,%v)", replayed, err)
+	}
+}
+
+func prepareInboundChannelBaselinePlan(t *testing.T, fixture channelBaselineFixture,
+	sequence uint64) InboundChannelBaselinePlan {
+	t.Helper()
+	plan, err := fixture.store.PrepareInboundChannelBaseline(context.Background(),
+		InstallInboundChannelBaselineSpec{AuthenticatedPeerID: fixture.remote.Identity().PeerID(),
+			Baseline: fixture.remoteBaseline(sequence), At: fixture.at})
+	if err != nil || !plan.ChangesAuthority() || plan.Result().Installed ||
+		plan.BeforeFingerprint().IsZero() || plan.CandidateFingerprint().IsZero() {
+		t.Fatalf("PrepareInboundChannelBaseline() = (%#v,%v)", plan.Result(), err)
+	}
+	candidate := plan.Candidate().Channels()
+	if len(candidate) != 1 || len(candidate[0].Bindings()) != 1 ||
+		candidate[0].Bindings()[0].State() != model.BindingActive {
+		t.Fatalf("prepared baseline candidate = %#v", candidate)
+	}
+	return plan
+}
+
+func assertInboundChannelBaselineResolution(t *testing.T, st *Store, plan InboundChannelBaselinePlan,
+	want ChannelAuthorityPlanResolution, phase string) {
+	t.Helper()
+	resolved, err := st.ResolveInboundChannelBaseline(context.Background(), plan)
+	if err != nil || resolved != want {
+		t.Fatalf("resolve %s = (%q,%v), want %q", phase, resolved, err, want)
+	}
+}
+
+func TestInboundChannelBaselinePlanRejectsDifferentCandidateEvidence(t *testing.T) {
+	t.Parallel()
+	fixture := newChannelBaselineFixture(t, "authority-plan-diverged", model.TopicJoined)
+	plan, err := fixture.store.PrepareInboundChannelBaseline(context.Background(),
+		InstallInboundChannelBaselineSpec{AuthenticatedPeerID: fixture.remote.Identity().PeerID(),
+			Baseline: fixture.remoteBaseline(7), At: fixture.at})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.InstallInboundChannelBaseline(context.Background(),
+		InstallInboundChannelBaselineSpec{AuthenticatedPeerID: fixture.remote.Identity().PeerID(),
+			Baseline: fixture.remoteBaseline(8), At: fixture.at}); err != nil {
+		t.Fatal(err)
+	}
+	if resolved, err := fixture.store.ResolveInboundChannelBaseline(context.Background(), plan); err != nil ||
+		resolved != ChannelAuthorityPlanDiverged {
+		t.Fatalf("resolve different baseline = (%q,%v)", resolved, err)
+	}
+	if _, err := fixture.store.CommitInboundChannelBaseline(context.Background(), plan); !errors.Is(err, ErrChannelAuthorityPlanDiverged) {
+		t.Fatalf("commit different baseline error = %v", err)
+	}
+}
+
 func TestChannelBaselineRejectsWrongEpochAuthenticationAndRevokedAuthority(t *testing.T) {
 	t.Parallel()
 	t.Run("wrong inbound epoch and authenticated source", func(t *testing.T) {

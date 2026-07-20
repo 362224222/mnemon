@@ -16,6 +16,7 @@ const (
 	meshTransitionAborting
 	meshTransitionInstalled
 	meshTransitionAborted
+	meshTransitionFailed
 )
 
 // MeshAuthorityTransition is the runtime capability that brackets one durable
@@ -105,7 +106,8 @@ func (transition *MeshAuthorityTransition) Install() error {
 	}
 	if !transition.phase.CompareAndSwap(meshTransitionPending, meshTransitionInstalling) {
 		<-transition.Done()
-		if transition.phase.Load() == meshTransitionInstalled {
+		if phase := transition.phase.Load(); phase == meshTransitionInstalled ||
+			phase == meshTransitionFailed {
 			return transition.result
 		}
 		return fmt.Errorf("%w: %w", ErrMeshRuntime, ErrMeshAuthorityTransitionFinalized)
@@ -113,6 +115,14 @@ func (transition *MeshAuthorityTransition) Install() error {
 
 	runtime := transition.runtime
 	err := transition.gossipTransition.Install()
+	if err == nil {
+		// Connection lifecycle hooks do not revisit already-upgraded
+		// connections after an authority replacement. Reconcile against the
+		// just-installed whole snapshot before the transition is released so a
+		// Peer revoked from its final Channel cannot retain a stale physical
+		// connection; overlapping Channel authority remains intact.
+		err = runtime.nodeHost.ReconcileConnections()
+	}
 	if err == nil {
 		err = joinActiveChannels(runtime.gossip, transition.snapshot)
 	}
@@ -122,11 +132,13 @@ func (transition *MeshAuthorityTransition) Install() error {
 		runtime.closed = true
 	}
 	runtime.mu.Unlock()
+	phase := uint32(meshTransitionInstalled)
 	if err != nil {
+		phase = meshTransitionFailed
 		err = errors.Join(fmt.Errorf("%w: install authority: %w", ErrMeshRuntime, err),
-			runtime.gossip.Close())
+			runtime.gossip.Close(), runtime.nodeHost.Close())
 	}
-	transition.complete(meshTransitionInstalled, err)
+	transition.complete(phase, err)
 	return err
 }
 

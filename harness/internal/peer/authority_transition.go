@@ -31,6 +31,7 @@ const (
 	gossipTransitionAborting
 	gossipTransitionInstalled
 	gossipTransitionAborted
+	gossipTransitionFailed
 )
 
 // GossipAuthorityTransition is a prepared, drained authority transition. The
@@ -203,7 +204,8 @@ func (transition *GossipAuthorityTransition) Install() error {
 	}
 	if !transition.phase.CompareAndSwap(gossipTransitionPending, gossipTransitionInstalling) {
 		<-transition.Done()
-		if transition.phase.Load() == gossipTransitionInstalled {
+		if phase := transition.phase.Load(); phase == gossipTransitionInstalled ||
+			phase == gossipTransitionFailed {
 			return transition.result
 		}
 		return fmt.Errorf("%w: %w", ErrGossipTopic, ErrGossipTransitionFinalized)
@@ -314,7 +316,7 @@ func (transition *GossipAuthorityTransition) failClosed(reconcileErrors []error)
 	gossip.closeErr = err
 	gossip.finishCloseLocked()
 	gossip.mu.Unlock()
-	transition.complete(gossipTransitionInstalled, err)
+	transition.complete(gossipTransitionFailed, err)
 	return err
 }
 

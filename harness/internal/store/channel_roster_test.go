@@ -76,6 +76,73 @@ func TestMergeChannelRosterAppliesOverlapDetectsGapAndKeepsBindingsPending(t *te
 	}
 }
 
+func TestChannelRosterMergePlanFreezesCandidateAndResolvesOutcome(t *testing.T) {
+	t.Parallel()
+	st := openTestStore(t)
+	fixture := testkit.NewSignedChannel(t, "roster-plan")
+	insertChannelTestNode(t, st.db, fixture.Owner(), fixture.Channel().CreatedAt())
+	insertSignedChannelFixture(t, st.db, fixture, model.TopicJoined)
+	remote := fixture.AppendActive(t, "roster-plan-remote")
+	records := []model.Member{remote.Member()}
+	plan, err := st.PrepareChannelRosterMerge(context.Background(), MergeChannelRosterSpec{
+		ChannelID: fixture.Channel().ID(), AuthenticatedTransportPeerID: fixture.Owner().PeerID(),
+		Records: records, At: fixture.Channel().UpdatedAt(),
+	})
+	if err != nil {
+		t.Fatalf("PrepareChannelRosterMerge() = (%#v,%v)", plan.Result(), err)
+	}
+	assertAppliedChannelRosterPlan(t, plan)
+	records[0] = model.Member{}
+	current, err := st.ReadChannelMeshAuthority(context.Background())
+	if err != nil || current.Channels()[0].Roster().Head().Revision() != 1 ||
+		len(current.Channels()[0].Bindings()) != 0 {
+		t.Fatalf("prepare mutated durable authority = (%#v,%v)", current.Channels(), err)
+	}
+	assertChannelRosterPlanResolution(t, st, plan, ChannelAuthorityPlanUnchanged, "before commit")
+	contender, err := st.PrepareChannelRosterMerge(context.Background(), MergeChannelRosterSpec{
+		ChannelID: fixture.Channel().ID(), AuthenticatedTransportPeerID: fixture.Owner().PeerID(),
+		Records: []model.Member{remote.Member()}, At: fixture.Channel().UpdatedAt(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	committed, err := st.CommitChannelRosterMerge(context.Background(), plan)
+	if err != nil || committed.Status != ChannelRosterApplied {
+		t.Fatalf("CommitChannelRosterMerge() = (%#v,%v)", committed, err)
+	}
+	assertChannelRosterPlanResolution(t, st, plan, ChannelAuthorityPlanCandidate, "after commit")
+	if replayed, err := st.CommitChannelRosterMerge(context.Background(), plan); err != nil ||
+		replayed.Status != plan.Result().Status || replayed.Roster.Head() != plan.Result().Roster.Head() {
+		t.Fatalf("commit outcome-loss replay = (%#v,%v)", replayed, err)
+	}
+	if replayed, err := st.CommitChannelRosterMerge(context.Background(), contender); err != nil ||
+		replayed.Status != ChannelRosterDuplicate {
+		t.Fatalf("concurrent prepared replay = (%#v,%v)", replayed, err)
+	}
+}
+
+func assertAppliedChannelRosterPlan(t *testing.T, plan ChannelRosterMergePlan) {
+	t.Helper()
+	if !plan.ChangesAuthority() || plan.Result().Status != ChannelRosterDuplicate ||
+		plan.BeforeFingerprint().IsZero() || plan.CandidateFingerprint().IsZero() {
+		t.Fatalf("prepared applied roster plan = %#v", plan.Result())
+	}
+	candidate := plan.Candidate().Channels()
+	if len(candidate) != 1 || candidate[0].Roster().Head().Revision() != 2 ||
+		len(candidate[0].Bindings()) != 1 || candidate[0].Bindings()[0].State() != model.BindingPending {
+		t.Fatalf("frozen roster candidate = %#v", candidate)
+	}
+}
+
+func assertChannelRosterPlanResolution(t *testing.T, st *Store, plan ChannelRosterMergePlan,
+	want ChannelAuthorityPlanResolution, phase string) {
+	t.Helper()
+	resolved, err := st.ResolveChannelRosterMerge(context.Background(), plan)
+	if err != nil || resolved != want {
+		t.Fatalf("resolve %s = (%q,%v), want %q", phase, resolved, err, want)
+	}
+}
+
 func TestMergeChannelRosterBlocksOnlyAffectedPendingEgress(t *testing.T) {
 	t.Parallel()
 	t.Run("remote terminal", func(t *testing.T) {
@@ -115,7 +182,47 @@ func TestMergeChannelRosterBlocksOnlyAffectedPendingEgress(t *testing.T) {
 			t.Fatalf("fork merge = (%#v,%v)", result, err)
 		}
 		assertRosterEgressState(t, fixture.store, "blocked", "blocked", true)
+		before := readRosterConflictReplaySnapshot(t, fixture.store, fixture.channel, events[0])
+		replayed, err := fixture.store.MergeChannelRoster(context.Background(), MergeChannelRosterSpec{
+			ChannelID: fixture.channel, AuthenticatedTransportPeerID: fixture.reviewers[0],
+			Records: []model.Member{challenger}, At: fixture.now.Add(3 * time.Second),
+		})
+		if err != nil || replayed.Status != ChannelRosterConflicted {
+			t.Fatalf("fork replay = (%#v,%v)", replayed, err)
+		}
+		after := readRosterConflictReplaySnapshot(t, fixture.store, fixture.channel, events[0])
+		if after != before {
+			t.Fatalf("fork replay mutated timestamps or egress: before=%#v after=%#v", before, after)
+		}
 	})
+}
+
+type rosterConflictReplaySnapshot struct {
+	channel, publication, delivery string
+}
+
+func readRosterConflictReplaySnapshot(t *testing.T, st *Store, channelID model.ChannelID,
+	eventID model.EventID,
+) rosterConflictReplaySnapshot {
+	t.Helper()
+	var snapshot rosterConflictReplaySnapshot
+	if err := st.db.QueryRow(`SELECT updated_at FROM channels WHERE channel_id=?`,
+		channelID.String()).Scan(&snapshot.channel); err != nil {
+		t.Fatal(err)
+	}
+	publicationProjection := `SELECT status||'|'||COALESCE(last_error,'')||'|'||updated_at||'|'||
+		COALESCE(lease_owner,'')||'|'||COALESCE(lease_until,'') FROM `
+	if err := st.db.QueryRow(publicationProjection+`gossip_publications WHERE event_id=? AND channel_id=?`,
+		eventID.String(), channelID.String()).Scan(&snapshot.publication); err != nil {
+		t.Fatal(err)
+	}
+	deliveryProjection := `SELECT status||'|'||COALESCE(last_error,'')||'|'||updated_at||'|'||
+		COALESCE(scanned_at,'') FROM peer_deliveries WHERE event_id=? AND channel_id=?`
+	if err := st.db.QueryRow(deliveryProjection,
+		eventID.String(), channelID.String()).Scan(&snapshot.delivery); err != nil {
+		t.Fatal(err)
+	}
+	return snapshot
 }
 
 func acceptanceSignedChannel(t *testing.T, fixture *acceptanceFixture) *testkit.SignedChannel {

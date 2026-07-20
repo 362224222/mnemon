@@ -17,9 +17,7 @@ var (
 	ErrChannelBaselineEpochMismatch = errors.New("Channel baseline origin epoch mismatch")
 )
 
-// ChannelDataBaseline freezes one origin's publication head for one new
-// directional binding. It is protocol-neutral durable state: the peer layer
-// is responsible for encoding it into /mnemon/channel/1 frames.
+// ChannelDataBaseline freezes one origin publication head for a directional binding.
 type ChannelDataBaseline struct {
 	ChannelID               model.ChannelID
 	OriginPeerID            model.PeerID
@@ -27,33 +25,27 @@ type ChannelDataBaseline struct {
 	BaselineChannelSequence uint64
 }
 
-// ChannelDataBaselineAck is the exact durable acknowledgement of a baseline.
-// An ACK confirms only the frozen baseline; later Pull acknowledgements are a
-// separate monotonic cursor operation.
+// ChannelDataBaselineAck acknowledges only the baseline, not later Pull cursors.
 type ChannelDataBaselineAck struct {
 	ChannelID               model.ChannelID
 	OriginPeerID            model.PeerID
 	OriginEpoch             model.OriginEpoch
 	BaselineChannelSequence uint64
 }
-
 type ReserveOutboundChannelBaselineSpec struct {
 	ChannelID    model.ChannelID
 	TargetPeerID model.PeerID
 	At           time.Time
 }
-
 type ReserveOutboundChannelBaselineResult struct {
 	Baseline ChannelDataBaseline
 	Reserved bool
 }
-
 type InstallInboundChannelBaselineSpec struct {
 	AuthenticatedPeerID model.PeerID
 	Baseline            ChannelDataBaseline
 	At                  time.Time
 }
-
 type InstallInboundChannelBaselineResult struct {
 	Baseline    ChannelDataBaseline
 	Installed   bool
@@ -65,24 +57,21 @@ type ConfirmOutboundChannelBaselineSpec struct {
 	Ack                 ChannelDataBaselineAck
 	At                  time.Time
 }
-
 type ConfirmOutboundChannelBaselineResult struct {
 	Ack         ChannelDataBaselineAck
 	Confirmed   bool
 	ConfirmedAt time.Time
 }
 
-// ChannelPeerReadiness is a read-only projection of the two directional
-// baseline gates. Ready is deliberately derived rather than persisted.
+// ChannelPeerReadiness derives the two directional gates without persisting an aggregate bit.
 type ChannelPeerReadiness struct {
-	ChannelID     model.ChannelID
-	PeerID        model.PeerID
-	OriginEpoch   model.OriginEpoch
-	BindingState  model.BindingState
-	TopicState    model.TopicState
-	RosterHead    model.RecordHead
-	InboundReady  bool
-	OutboundReady bool
+	ChannelID                   model.ChannelID
+	PeerID                      model.PeerID
+	OriginEpoch                 model.OriginEpoch
+	BindingState                model.BindingState
+	TopicState                  model.TopicState
+	RosterHead                  model.RecordHead
+	InboundReady, OutboundReady bool
 }
 
 func (readiness ChannelPeerReadiness) Ready() bool {
@@ -90,12 +79,8 @@ func (readiness ChannelPeerReadiness) Ready() bool {
 		readiness.TopicState == model.TopicJoined && readiness.InboundReady && readiness.OutboundReady
 }
 
-// ReserveOutboundChannelBaseline freezes the local current publication head
-// for a target. A replay returns the original reservation even when the local
-// head has advanced, so a lost frame cannot silently skip new history.
-func (s *Store) ReserveOutboundChannelBaseline(ctx context.Context,
-	spec ReserveOutboundChannelBaselineSpec,
-) (ReserveOutboundChannelBaselineResult, error) {
+// ReserveOutboundChannelBaseline freezes the current head; replay returns the original reservation.
+func (s *Store) ReserveOutboundChannelBaseline(ctx context.Context, spec ReserveOutboundChannelBaselineSpec) (ReserveOutboundChannelBaselineResult, error) {
 	if s == nil || s.db == nil || ctx == nil || spec.ChannelID.IsZero() ||
 		spec.TargetPeerID.IsZero() {
 		return ReserveOutboundChannelBaselineResult{}, ErrChannelBaselineInput
@@ -104,7 +89,6 @@ func (s *Store) ReserveOutboundChannelBaseline(ctx context.Context,
 	if err != nil || at.IsZero() {
 		return ReserveOutboundChannelBaselineResult{}, ErrChannelBaselineInput
 	}
-
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return ReserveOutboundChannelBaselineResult{}, fmt.Errorf("reserve outbound Channel baseline: begin: %w", err)
@@ -118,7 +102,6 @@ func (s *Store) ReserveOutboundChannelBaseline(ctx context.Context,
 	if at.Before(authority.channel.UpdatedAt()) || binding.State() == model.BindingRevoked {
 		return ReserveOutboundChannelBaselineResult{}, ErrChannelBaselineAuthority
 	}
-
 	var sourceHead uint64
 	err = tx.QueryRowContext(ctx, `SELECT source_head_channel_seq FROM publication_epochs
 		WHERE channel_id=? AND origin_peer_id=? AND origin_epoch=?`, spec.ChannelID.String(),
@@ -129,7 +112,6 @@ func (s *Store) ReserveOutboundChannelBaseline(ctx context.Context,
 	}
 	baseline := ChannelDataBaseline{ChannelID: spec.ChannelID, OriginPeerID: node.PeerID(),
 		OriginEpoch: node.OriginEpoch(), BaselineChannelSequence: sourceHead}
-
 	var reservedSequence, acknowledgedSequence uint64
 	var updatedAtText string
 	var confirmedAt sql.NullString
@@ -181,61 +163,83 @@ func (s *Store) ReserveOutboundChannelBaseline(ctx context.Context,
 	return ReserveOutboundChannelBaselineResult{Baseline: baseline, Reserved: true}, nil
 }
 
-// InstallInboundChannelBaseline installs a remote origin cursor and activates
-// its pending binding in the same transaction. Exact replay is a read-only
-// success; any different value for the immutable binding epoch fails closed.
-func (s *Store) InstallInboundChannelBaseline(ctx context.Context,
-	spec InstallInboundChannelBaselineSpec,
-) (InstallInboundChannelBaselineResult, error) {
-	baseline := spec.Baseline
-	if s == nil || s.db == nil || ctx == nil || spec.AuthenticatedPeerID.IsZero() ||
-		!validChannelDataBaseline(baseline) || spec.AuthenticatedPeerID != baseline.OriginPeerID {
-		return InstallInboundChannelBaselineResult{}, ErrChannelBaselineInput
+func (s *Store) CommitInboundChannelBaseline(ctx context.Context, plan InboundChannelBaselinePlan) (InstallInboundChannelBaselineResult, error) {
+	if !validChannelDataBaseline(plan.spec.Baseline) {
+		return InstallInboundChannelBaselineResult{}, ErrChannelAuthorityPlan
 	}
-	at, err := canonicalStoreTime(spec.At)
-	if err != nil || at.IsZero() {
-		return InstallInboundChannelBaselineResult{}, ErrChannelBaselineInput
-	}
-
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return InstallInboundChannelBaselineResult{}, fmt.Errorf("install inbound Channel baseline: begin: %w", err)
-	}
-	defer tx.Rollback()
-	_, authority, binding, err := readChannelBaselineAuthority(ctx, tx, baseline.ChannelID,
-		baseline.OriginPeerID)
+	tx, resolution, err := s.beginChannelAuthorityPlan(ctx, plan.channelAuthorityPlan, false)
 	if err != nil {
 		return InstallInboundChannelBaselineResult{}, err
 	}
+	defer tx.Rollback()
+	if resolution == ChannelAuthorityPlanCandidate {
+		if err := verifyInboundChannelBaselineEvidence(ctx, tx, plan); err != nil {
+			return InstallInboundChannelBaselineResult{}, err
+		}
+		return plan.result, nil
+	}
+	if resolution != ChannelAuthorityPlanUnchanged {
+		return InstallInboundChannelBaselineResult{}, ErrChannelAuthorityPlanDiverged
+	}
+	_, authority, binding, err := readChannelBaselineAuthority(ctx, tx,
+		plan.spec.Baseline.ChannelID, plan.spec.Baseline.OriginPeerID)
+	if err != nil || authority.channel.RosterHead() != plan.expectedRosterHead ||
+		binding.State() != plan.expectedBinding.State() ||
+		binding.OriginEpoch() != plan.expectedBinding.OriginEpoch() ||
+		binding.MemberHead() != plan.expectedBinding.MemberHead() {
+		return InstallInboundChannelBaselineResult{}, ErrChannelAuthorityPlanDiverged
+	}
+	result, err := applyInboundChannelBaseline(ctx, tx, authority, binding, plan.spec)
+	if err != nil {
+		return InstallInboundChannelBaselineResult{}, err
+	}
+	expected := plan.result
+	expected.Installed = plan.ChangesAuthority()
+	if result.Installed != expected.Installed || result.Baseline != expected.Baseline ||
+		!result.InstalledAt.Equal(expected.InstalledAt) {
+		return InstallInboundChannelBaselineResult{}, ErrChannelAuthorityPlanDiverged
+	}
+	after, err := inspectChannelAuthorityPlan(ctx, tx, plan.channelAuthorityPlan)
+	if err != nil {
+		return InstallInboundChannelBaselineResult{}, err
+	}
+	if after != ChannelAuthorityPlanCandidate &&
+		!(after == ChannelAuthorityPlanUnchanged && !plan.ChangesAuthority()) {
+		return InstallInboundChannelBaselineResult{}, ErrChannelAuthorityPlanDiverged
+	}
+	if err := tx.Commit(); err != nil {
+		return InstallInboundChannelBaselineResult{}, mapChannelBaselineMutationError(
+			"commit inbound Channel baseline", err)
+	}
+	return result, nil
+}
+
+func applyInboundChannelBaseline(ctx context.Context, tx *sql.Tx, authority verifiedChannelAuthority,
+	binding model.PeerBinding, spec InstallInboundChannelBaselineSpec) (InstallInboundChannelBaselineResult, error) {
+	baseline := spec.Baseline
 	if binding.OriginEpoch() != baseline.OriginEpoch {
 		return InstallInboundChannelBaselineResult{}, ErrChannelBaselineEpochMismatch
 	}
-	if at.Before(authority.channel.UpdatedAt()) || binding.State() == model.BindingRevoked {
+	if spec.At.Before(authority.channel.UpdatedAt()) || binding.State() == model.BindingRevoked {
 		return InstallInboundChannelBaselineResult{}, ErrChannelBaselineAuthority
 	}
-
-	var installedSequence, contiguousSequence, observedSequence uint64
+	var installed, contiguous, observed uint64
 	var installedAtText string
-	err = tx.QueryRowContext(ctx, `SELECT baseline_channel_seq,contiguous_channel_seq,
+	err := tx.QueryRowContext(ctx, `SELECT baseline_channel_seq,contiguous_channel_seq,
 		observed_channel_seq,updated_at FROM peer_cursors WHERE channel_id=? AND origin_peer_id=?
 		AND origin_epoch=?`, baseline.ChannelID.String(), baseline.OriginPeerID.String(),
-		baseline.OriginEpoch.String()).Scan(&installedSequence, &contiguousSequence,
-		&observedSequence, &installedAtText)
+		baseline.OriginEpoch.String()).Scan(&installed, &contiguous, &observed, &installedAtText)
 	if err == nil {
 		installedAt, parseErr := parseCanonicalStoreTime(installedAtText)
-		if parseErr != nil || binding.State() != model.BindingActive ||
-			installedSequence > model.MaxSQLiteInteger || contiguousSequence < installedSequence ||
-			observedSequence < contiguousSequence || observedSequence > model.MaxSQLiteInteger {
+		if parseErr != nil || binding.State() != model.BindingActive || installed > model.MaxSQLiteInteger ||
+			contiguous < installed || observed < contiguous || observed > model.MaxSQLiteInteger {
 			return InstallInboundChannelBaselineResult{}, ErrChannelBaselineAuthority
 		}
-		if installedSequence != baseline.BaselineChannelSequence {
+		if installed != baseline.BaselineChannelSequence {
 			return InstallInboundChannelBaselineResult{}, ErrChannelBaselineConflict
 		}
-		if at.Before(installedAt) {
+		if spec.At.Before(installedAt) {
 			return InstallInboundChannelBaselineResult{}, ErrChannelBaselineInput
-		}
-		if commitErr := tx.Commit(); commitErr != nil {
-			return InstallInboundChannelBaselineResult{}, fmt.Errorf("install inbound Channel baseline: commit replay: %w", commitErr)
 		}
 		return InstallInboundChannelBaselineResult{Baseline: baseline, InstalledAt: installedAt}, nil
 	}
@@ -245,37 +249,48 @@ func (s *Store) InstallInboundChannelBaseline(ctx context.Context,
 	if binding.State() != model.BindingPending {
 		return InstallInboundChannelBaselineResult{}, ErrChannelBaselineConflict
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO peer_cursors(channel_id,origin_peer_id,origin_epoch,
+	if _, err = tx.ExecContext(ctx, `INSERT INTO peer_cursors(channel_id,origin_peer_id,origin_epoch,
 		baseline_channel_seq,contiguous_channel_seq,observed_channel_seq,updated_at)
 		VALUES(?,?,?,?,?,?,?)`, baseline.ChannelID.String(), baseline.OriginPeerID.String(),
 		baseline.OriginEpoch.String(), baseline.BaselineChannelSequence,
-		baseline.BaselineChannelSequence, baseline.BaselineChannelSequence, storeTime(at))
-	if err != nil {
+		baseline.BaselineChannelSequence, baseline.BaselineChannelSequence, storeTime(spec.At)); err != nil {
 		return InstallInboundChannelBaselineResult{}, mapChannelBaselineMutationError(
 			"install inbound Channel baseline cursor", err)
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE peer_bindings SET state='active'
+	updated, err := tx.ExecContext(ctx, `UPDATE peer_bindings SET state='active'
 		WHERE channel_id=? AND peer_id=? AND origin_epoch=? AND state='pending'`,
 		baseline.ChannelID.String(), baseline.OriginPeerID.String(), baseline.OriginEpoch.String())
-	if err != nil || exactlyOne(result) != nil {
+	if err != nil || exactlyOne(updated) != nil {
 		if err == nil {
 			err = errors.New("binding activation lost its pending authority")
 		}
 		return InstallInboundChannelBaselineResult{}, mapChannelBaselineMutationError(
 			"install inbound Channel baseline activation", err)
 	}
-	if err := tx.Commit(); err != nil {
-		return InstallInboundChannelBaselineResult{}, mapChannelBaselineMutationError(
-			"install inbound Channel baseline", err)
-	}
-	return InstallInboundChannelBaselineResult{Baseline: baseline, Installed: true, InstalledAt: at}, nil
+	return InstallInboundChannelBaselineResult{Baseline: baseline, Installed: true, InstalledAt: spec.At}, nil
 }
 
-// ConfirmOutboundChannelBaseline opens the local-origin delivery gate only
-// after the authenticated target echoes the exact durable reservation.
-func (s *Store) ConfirmOutboundChannelBaseline(ctx context.Context,
-	spec ConfirmOutboundChannelBaselineSpec,
-) (ConfirmOutboundChannelBaselineResult, error) {
+func verifyInboundChannelBaselineEvidence(ctx context.Context, tx *sql.Tx, plan InboundChannelBaselinePlan) error {
+	baseline := plan.spec.Baseline
+	var installed, contiguous, observed uint64
+	var updatedAtText string
+	if err := tx.QueryRowContext(ctx, `SELECT baseline_channel_seq,contiguous_channel_seq,
+		observed_channel_seq,updated_at FROM peer_cursors
+		WHERE channel_id=? AND origin_peer_id=? AND origin_epoch=?`, baseline.ChannelID.String(),
+		baseline.OriginPeerID.String(), baseline.OriginEpoch.String()).Scan(
+		&installed, &contiguous, &observed, &updatedAtText); err != nil {
+		return ErrChannelAuthorityPlanDiverged
+	}
+	updatedAt, err := parseCanonicalStoreTime(updatedAtText)
+	if err != nil || installed != baseline.BaselineChannelSequence || contiguous != installed ||
+		observed != installed || !updatedAt.Equal(plan.result.InstalledAt) {
+		return ErrChannelAuthorityPlanDiverged
+	}
+	return nil
+}
+
+// ConfirmOutboundChannelBaseline opens egress after the target echoes the exact reservation.
+func (s *Store) ConfirmOutboundChannelBaseline(ctx context.Context, spec ConfirmOutboundChannelBaselineSpec) (ConfirmOutboundChannelBaselineResult, error) {
 	ack := spec.Ack
 	if s == nil || s.db == nil || ctx == nil || spec.AuthenticatedPeerID.IsZero() ||
 		!validChannelDataBaseline(ChannelDataBaseline(ack)) {
@@ -285,7 +300,6 @@ func (s *Store) ConfirmOutboundChannelBaseline(ctx context.Context,
 	if err != nil || at.IsZero() {
 		return ConfirmOutboundChannelBaselineResult{}, ErrChannelBaselineInput
 	}
-
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return ConfirmOutboundChannelBaselineResult{}, fmt.Errorf("confirm outbound Channel baseline: begin: %w", err)
@@ -302,7 +316,6 @@ func (s *Store) ConfirmOutboundChannelBaseline(ctx context.Context,
 	if at.Before(authority.channel.UpdatedAt()) || binding.State() == model.BindingRevoked {
 		return ConfirmOutboundChannelBaselineResult{}, ErrChannelBaselineAuthority
 	}
-
 	var reservedSequence, acknowledgedSequence uint64
 	var confirmedAtText sql.NullString
 	var updatedAtText string
@@ -356,12 +369,8 @@ func (s *Store) ConfirmOutboundChannelBaseline(ctx context.Context,
 	return ConfirmOutboundChannelBaselineResult{Ack: ack, Confirmed: true, ConfirmedAt: at}, nil
 }
 
-// ReadChannelBaselineReadiness derives readiness exclusively from durable
-// signed authority and the two directional evidence tables. It never repairs
-// or persists an aggregate readiness bit.
-func (s *Store) ReadChannelBaselineReadiness(ctx context.Context,
-	channelID model.ChannelID,
-) ([]ChannelPeerReadiness, error) {
+// ReadChannelBaselineReadiness derives readiness from signed authority and directional evidence.
+func (s *Store) ReadChannelBaselineReadiness(ctx context.Context, channelID model.ChannelID) ([]ChannelPeerReadiness, error) {
 	if s == nil || s.db == nil || ctx == nil || channelID.IsZero() {
 		return nil, ErrChannelBaselineInput
 	}
@@ -378,7 +387,6 @@ func (s *Store) ReadChannelBaselineReadiness(ctx context.Context,
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrChannelBaselineAuthority, err)
 	}
-
 	var localSourceHead uint64
 	if err := tx.QueryRowContext(ctx, `SELECT source_head_channel_seq FROM publication_epochs
 		WHERE channel_id=? AND origin_peer_id=? AND origin_epoch=?`, channelID.String(),
@@ -386,7 +394,6 @@ func (s *Store) ReadChannelBaselineReadiness(ctx context.Context,
 		localSourceHead > model.MaxSQLiteInteger {
 		return nil, fmt.Errorf("%w: local publication epoch: %v", ErrChannelBaselineAuthority, err)
 	}
-
 	result := make([]ChannelPeerReadiness, 0, len(authority.bindings))
 	for _, binding := range authority.bindings {
 		var cursorBaseline, contiguous, observed uint64
@@ -410,7 +417,6 @@ func (s *Store) ReadChannelBaselineReadiness(ctx context.Context,
 		if binding.State() == model.BindingActive && !cursorPresent {
 			return nil, ErrChannelBaselineAuthority
 		}
-
 		var outboundBaseline, acknowledged uint64
 		var confirmedAt sql.NullString
 		var outboundUpdated string
@@ -451,8 +457,7 @@ func (s *Store) ReadChannelBaselineReadiness(ctx context.Context,
 }
 
 func readChannelBaselineAuthority(ctx context.Context, tx *sql.Tx, channelID model.ChannelID,
-	remotePeer model.PeerID,
-) (model.Node, verifiedChannelAuthority, model.PeerBinding, error) {
+	remotePeer model.PeerID) (model.Node, verifiedChannelAuthority, model.PeerBinding, error) {
 	node, err := readNode(ctx, tx)
 	if err != nil {
 		return model.Node{}, verifiedChannelAuthority{}, model.PeerBinding{},
@@ -487,14 +492,6 @@ func readChannelBaselineAuthority(ctx context.Context, tx *sql.Tx, channelID mod
 	return model.Node{}, verifiedChannelAuthority{}, model.PeerBinding{}, ErrChannelBaselineAuthority
 }
 
-func validChannelDataBaseline(baseline ChannelDataBaseline) bool {
-	return !baseline.ChannelID.IsZero() && !baseline.OriginPeerID.IsZero() &&
-		!baseline.OriginEpoch.IsZero() && baseline.BaselineChannelSequence <= model.MaxSQLiteInteger
-}
-
 func mapChannelBaselineMutationError(operation string, err error) error {
-	if err == nil {
-		return fmt.Errorf("%s: %w", operation, ErrChannelBaselineConflict)
-	}
 	return fmt.Errorf("%s: %w: %v", operation, ErrChannelBaselineConflict, err)
 }
