@@ -34,9 +34,8 @@ type DaemonHealthProbe interface {
 	ProbeHealth(context.Context) (localapi.HealthResponse, *localapi.APIError)
 }
 
-// DaemonEnsurePreflight strictly validates the existing Node schema, identity,
-// Profile credential and exact managed assets. It must not repair or
-// initialize authority and must honor cancellation of the supplied context.
+// DaemonEnsurePreflight validates the existing Node schema, identity and exact managed assets.
+// It must not repair authority and must honor cancellation of the supplied context.
 type DaemonEnsurePreflight interface {
 	Verify(context.Context) error
 }

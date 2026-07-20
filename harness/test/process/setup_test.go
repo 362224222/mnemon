@@ -298,41 +298,6 @@ func TestPublicSetupSerializesProcessesAndRecoversAKilledDaemon(t *testing.T) {
 	cancelRecoveredHealth()
 }
 
-func setupProcessAssertPublicObservability(t *testing.T, executable, workspace string,
-	environment []string, assetRevision string,
-) {
-	t.Helper()
-	statusCtx, cancelStatus := context.WithTimeout(context.Background(), 5*time.Second)
-	statusResult := setupProcessRunHarness(statusCtx, executable, workspace, environment, "status")
-	cancelStatus()
-	status, err := setupProcessParseStatus(statusResult)
-	if err != nil || status.SchemaVersion != localapi.SchemaVersion || status.Scope != "managed_agent" ||
-		status.Status != "ready" || status.AssetRevision != assetRevision ||
-		status.Activation.State != "ready" || status.Activation.Issue != "none" ||
-		status.Runtime.State != "ready" || status.Runtime.Issue != "none" {
-		t.Fatalf("public status after setup = (%#v, %v)", status, err)
-	}
-	doctorCtx, cancelDoctor := context.WithTimeout(context.Background(), 10*time.Second)
-	doctorResult := setupProcessRunHarness(doctorCtx, executable, workspace, environment,
-		"doctor")
-	cancelDoctor()
-	doctor, err := setupProcessParseDoctor(doctorResult)
-	if err != nil || doctor.SchemaVersion != localapi.SchemaVersion ||
-		doctor.Scope != "managed_agent" || doctor.Mode != "online" || doctor.Status != "healthy" ||
-		len(doctor.Checks) != 6 {
-		t.Fatalf("public doctor after setup = (%#v, %v)", doctor, err)
-	}
-	for index, name := range []string{"node_authority", "canonical_assets", "host_projection",
-		"host_registration", "daemon", "managed_runtime"} {
-		check := doctor.Checks[index]
-		if check.Name != name || check.Status != "pass" || check.Issue != "none" ||
-			check.Remedy != "none" {
-			t.Fatalf("public doctor check %d = %#v", index, check)
-		}
-	}
-	setupProcessAssertCodexProjectionLayout(t, workspace, true)
-}
-
 func TestPublicSetupWaitsForExactCodexHookTrustThenConverges(t *testing.T) {
 	repository := setupProcessRepositoryRoot(t)
 	root := setupProcessPhysicalTempDir(t)
