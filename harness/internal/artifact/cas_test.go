@@ -205,14 +205,8 @@ func TestCASTempsAreRecognizableButNeverAuthority(t *testing.T) {
 
 func TestCASLifecycleBarrierIsSharedByCanonicalRoot(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "objects", "sha256")
-	first, err := NewCAS(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := NewCAS(root)
-	if err != nil {
-		t.Fatal(err)
-	}
+	first := openCASAt(t, root)
+	second := openCASAt(t, root)
 	other := openTestCAS(t)
 	if first.coordination != second.coordination {
 		t.Fatal("separate CAS instances did not share root coordination")
@@ -277,10 +271,7 @@ func TestCASLifecycleBarrierIsSharedByCanonicalRoot(t *testing.T) {
 
 func TestCASDigestBarriersSerializeTombstoneAndAllowOtherShards(t *testing.T) {
 	cas := openTestCAS(t)
-	second, err := NewCAS(cas.root)
-	if err != nil {
-		t.Fatal(err)
-	}
+	second := openCASAt(t, cas.root)
 	content := []byte("digest barrier object")
 	digest := model.Sum(content)
 	if _, err := cas.Put(digest, content); err != nil {
@@ -1024,31 +1015,8 @@ func TestCASObjectListingRejectsUnsafeRootEntries(t *testing.T) {
 func TestCASPruneTempsIsBoundedSafeAndSynchronized(t *testing.T) {
 	cas := openTestCAS(t)
 	cutoff := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
-	oldNames := []string{
-		"cas-00000000000000000000000000000001.tmp",
-		"cas-00000000000000000000000000000002.tmp",
-		"cas-00000000000000000000000000000003.tmp",
-	}
-	for _, name := range oldNames {
-		path := filepath.Join(cas.temp, name)
-		if err := os.WriteFile(path, []byte(name), casObjectMode); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Chtimes(path, cutoff.Add(-time.Minute), cutoff.Add(-time.Minute)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	exact := filepath.Join(cas.temp, "cas-00000000000000000000000000000004.tmp")
-	if err := os.WriteFile(exact, []byte("exact"), casObjectMode); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chtimes(exact, cutoff, cutoff); err != nil {
-		t.Fatal(err)
-	}
-	near := filepath.Join(cas.temp, "cas-00000000000000000000000000000005.partial")
-	if err := os.WriteFile(near, []byte("near miss"), casObjectMode); err != nil {
-		t.Fatal(err)
-	}
+	fixture := createCASTempFixture(t, cas, cutoff)
+	oldNames, exact, near := fixture.oldNames, fixture.exact, fixture.near
 
 	removed, err := cas.PruneTempsBefore(cutoff, 2)
 	if err != nil || fmt.Sprint(removed) != fmt.Sprint(oldNames[:2]) {
@@ -1125,54 +1093,4 @@ func TestCASRejectsSymlinkRootAndOversizeObjects(t *testing.T) {
 	if _, err := cas.Put(model.Sum(oversize), oversize); !errors.Is(err, ErrCASInput) {
 		t.Fatalf("oversize Put error = %v", err)
 	}
-}
-
-func waitForCASWriter(t *testing.T, lock *sync.RWMutex) {
-	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if lock.TryRLock() {
-			lock.RUnlock()
-			runtime.Gosched()
-			continue
-		}
-		return
-	}
-	t.Fatal("writer did not reach the shared barrier")
-}
-
-func testCASToken(seed byte) [32]byte {
-	var token [32]byte
-	for index := range token {
-		token[index] = seed + byte(index)
-	}
-	return token
-}
-
-func testCASDifferentShard(digest model.Digest) ([]byte, model.Digest) {
-	for index := 0; ; index++ {
-		content := []byte(fmt.Sprintf("different CAS lock shard %d", index))
-		candidate := model.Sum(content)
-		if casDigestShard(candidate) != casDigestShard(digest) {
-			return content, candidate
-		}
-	}
-}
-
-func mustCASObjectPath(t *testing.T, cas *CAS, digest model.Digest) string {
-	t.Helper()
-	path, err := cas.objectPath(digest, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return path
-}
-
-func openTestCAS(t *testing.T) *CAS {
-	t.Helper()
-	cas, err := NewCAS(filepath.Join(t.TempDir(), "objects", "sha256"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return cas
 }
