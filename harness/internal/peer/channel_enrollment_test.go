@@ -14,6 +14,7 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 	"github.com/mnemon-dev/mnemon/harness/internal/testkit"
 	"path/filepath"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -29,24 +30,20 @@ func TestChannelEnrollmentHandshakeCommitsResponseLossReplayAndAtomicInstall(t *
 	ownerStore := createEnrollmentTestStore(t, ownerPath, ownerIdentity, createdAt)
 	defer ownerStore.Close()
 	joinerStore := openEnrollmentTestStore(t, joinerIdentity, createdAt)
+	ownerHost := newEnrollmentTestHostAtIdentityAddress(t, ownerIdentity)
+	defer ownerHost.Close()
 	grantID, _ := model.ParseGrantID("grant-peer-enrollment-live")
-	token := enrollmentTestToken(t, ownerFixture, grantID, "peer-enrollment-live")
+	token := enrollmentTestTokenForHost(t, ownerFixture, grantID,
+		"peer-enrollment-live", ownerHost)
 	if _, err := ownerStore.CreateChannel(context.Background(), store.CreateChannelSpec{
 		Channel: ownerFixture.Channel(), Genesis: ownerFixture.OwnerMember().Member(), Token: token,
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	ownerHost := newEnrollmentTestHost(t, ownerIdentity)
-	defer ownerHost.Close()
-	joinerHost := newEnrollmentTestHost(t, joinerIdentity)
-	defer joinerHost.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := joinerHost.Connect(ctx, libp2ppeer.AddrInfo{ID: ownerHost.ID(),
-		Addrs: ownerHost.Addrs()}); err != nil {
-		t.Fatal(err)
-	}
+	runtime := newTestMeshRuntime(t, ctx, joinerIdentity, readMeshRuntimeAuthority(t, joinerStore))
 	ownerProtocol, err := NewChannelEnrollmentOwner(ChannelEnrollmentOwnerOptions{
 		Controller: enrollmentOwnerTestControllerFor(t, ownerStore, ownerIdentity),
 		Clock:      fixedEnrollmentClock{at: acceptedAt},
@@ -62,45 +59,30 @@ func TestChannelEnrollmentHandshakeCommitsResponseLossReplayAndAtomicInstall(t *
 
 	// The owner commits, but the first joiner cannot persist the response. A
 	// retry with the same request and fresh nonce must recover the one receipt.
-	firstClient, err := NewChannelEnrollmentClient(ChannelEnrollmentClientOptions{
-		Store: failingEnrollmentInstallStore{delegate: joinerStore,
-			err: errors.New("injected response loss before install")},
-		Clock:  fixedEnrollmentClock{at: acceptedAt.Add(time.Second)},
-		Random: bytes.NewReader(bytes.Repeat([]byte{0x41}, model.EnrollmentNonceBytes+channelRequestIDBytes)),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	firstStream := openEnrollmentTestStream(t, ctx, joinerHost, ownerHost.ID())
-	if result, err := firstClient.Join(ctx, firstStream, spec); err == nil || result.Installed {
+	firstSession := &enrollmentJoinStoreSession{store: joinerStore,
+		installErr: errors.New("injected response loss before install")}
+	if result, err := runtime.JoinChannel(ctx, spec, firstSession); err == nil || result.Installed() {
 		t.Fatalf("lost-response join = (%#v, %v)", result, err)
 	}
 
-	retryClient, err := NewChannelEnrollmentClient(ChannelEnrollmentClientOptions{Store: joinerStore,
-		Clock: fixedEnrollmentClock{at: acceptedAt.Add(2 * time.Second)},
-		Random: bytes.NewReader(bytes.Repeat([]byte{0x42},
-			(model.EnrollmentNonceBytes+channelRequestIDBytes)*2))})
-	if err != nil {
-		t.Fatal(err)
-	}
-	retryStream := openEnrollmentTestStream(t, ctx, joinerHost, ownerHost.ID())
-	installed, err := retryClient.Join(ctx, retryStream, spec)
-	if err != nil || !installed.Installed || installed.Status != store.ChannelEnrollmentAccepted ||
-		installed.Channel.ID() != ownerFixture.Channel().ID() ||
-		installed.Channel.LocalAlias() != spec.LocalAlias || installed.Roster.Head().Revision() != 2 {
+	installed, err := runtime.JoinChannel(ctx, spec,
+		&enrollmentJoinStoreSession{store: joinerStore})
+	if err != nil || !installed.Installed() || installed.Status() != ChannelEnrollmentAccepted ||
+		installed.Channel().ID() != ownerFixture.Channel().ID() ||
+		installed.Channel().LocalAlias() != spec.LocalAlias || installed.Roster().Head().Revision() != 2 {
 		t.Fatalf("recovered join = (%#v, %v)", installed, err)
 	}
-	current, ok := installed.Roster.CurrentMember(joinerIdentity.PeerID())
+	current, ok := installed.Roster().CurrentMember(joinerIdentity.PeerID())
 	if !ok || current.Status() != model.MemberActive || current.OriginEpoch() != joinerIdentity.OriginEpoch() {
 		t.Fatalf("installed local member = (%#v, %t)", current, ok)
 	}
 
 	// A further byte-equivalent operation is a local replica replay, not a
 	// second membership, grant use, receipt, or binding installation.
-	replayStream := openEnrollmentTestStream(t, ctx, joinerHost, ownerHost.ID())
-	replayed, err := retryClient.Join(ctx, replayStream, spec)
-	if err != nil || replayed.Installed || replayed.Status != store.ChannelEnrollmentReplayed ||
-		replayed.Roster.Head() != installed.Roster.Head() {
+	replayed, err := runtime.JoinChannel(ctx, spec,
+		&enrollmentJoinStoreSession{store: joinerStore})
+	if err != nil || replayed.Installed() || replayed.Status() != ChannelEnrollmentReplayed ||
+		replayed.Roster().Head() != installed.Roster().Head() {
 		t.Fatalf("installed replay = (%#v, %v)", replayed, err)
 	}
 }
@@ -116,24 +98,20 @@ func TestChannelEnrollmentRecoversOwnerCommitAfterAcceptedResponseLoss(t *testin
 	defer ownerStore.Close()
 	joinerPath := filepath.Join(t.TempDir(), "joiner", "node.db")
 	joinerStore := createEnrollmentTestStore(t, joinerPath, joinerIdentity, createdAt)
+	ownerHost := newEnrollmentTestHostAtIdentityAddress(t, ownerIdentity)
+	defer ownerHost.Close()
 	grantID, _ := model.ParseGrantID("grant-peer-enrollment-response-loss")
-	token := enrollmentTestToken(t, ownerFixture, grantID, "peer-enrollment-response-loss")
+	token := enrollmentTestTokenForHost(t, ownerFixture, grantID,
+		"peer-enrollment-response-loss", ownerHost)
 	if _, err := ownerStore.CreateChannel(context.Background(), store.CreateChannelSpec{
 		Channel: ownerFixture.Channel(), Genesis: ownerFixture.OwnerMember().Member(), Token: token,
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	ownerHost := newEnrollmentTestHost(t, ownerIdentity)
-	defer ownerHost.Close()
-	joinerHost := newEnrollmentTestHost(t, joinerIdentity)
-	defer joinerHost.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := joinerHost.Connect(ctx, libp2ppeer.AddrInfo{ID: ownerHost.ID(),
-		Addrs: ownerHost.Addrs()}); err != nil {
-		t.Fatal(err)
-	}
+	runtime := newTestMeshRuntime(t, ctx, joinerIdentity, readMeshRuntimeAuthority(t, joinerStore))
 	barrier := &committedEnrollmentOwnerStore{delegate: ownerStore,
 		committed: make(chan struct{}), resume: make(chan struct{})}
 	ownerProtocol, err := NewChannelEnrollmentOwner(ChannelEnrollmentOwnerOptions{
@@ -145,23 +123,16 @@ func TestChannelEnrollmentRecoversOwnerCommitAfterAcceptedResponseLoss(t *testin
 		t.Fatal(err)
 	}
 	registerEnrollmentTestDispatcher(t, ctx, ownerHost, ownerProtocol)
-	firstClient, err := NewChannelEnrollmentClient(ChannelEnrollmentClientOptions{
-		Store: joinerStore, Clock: fixedEnrollmentClock{at: acceptedAt.Add(time.Second)},
-		Random: bytes.NewReader(bytes.Repeat([]byte{0x43}, model.EnrollmentNonceBytes+channelRequestIDBytes)),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	firstSpec := JoinChannelSpec{Token: token, DisplayLabel: joinerIdentity.DisplayName(),
 		AdvertisedMultiaddrs: joinerIdentity.Multiaddrs(), LocalAlias: "response-loss-team"}
-	firstStream := openEnrollmentTestStream(t, ctx, joinerHost, ownerHost.ID())
 	type joinResult struct {
-		result store.InstallJoinedChannelResult
+		result ChannelJoinResult
 		err    error
 	}
 	resultC := make(chan joinResult, 1)
 	go func() {
-		result, joinErr := firstClient.Join(ctx, firstStream, firstSpec)
+		result, joinErr := runtime.JoinChannel(ctx, firstSpec,
+			&enrollmentJoinStoreSession{store: joinerStore})
 		resultC <- joinResult{result: result, err: joinErr}
 	}()
 	select {
@@ -169,12 +140,12 @@ func TestChannelEnrollmentRecoversOwnerCommitAfterAcceptedResponseLoss(t *testin
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 	}
-	if err := firstStream.Reset(); err != nil && !errors.Is(err, network.ErrReset) {
-		t.Fatalf("reset committed response stream: %v", err)
+	if err := ownerHost.Network().ClosePeer(runtime.managedRuntimeHost().ID()); err != nil {
+		t.Fatalf("close committed response connection: %v", err)
 	}
 	close(barrier.resume)
 	first := <-resultC
-	if !errors.Is(first.err, ErrChannelEnrollmentOutcomeUnknown) || first.result.Installed {
+	if !errors.Is(first.err, ErrChannelEnrollmentOutcomeUnknown) || first.result.Installed() {
 		t.Fatalf("lost Accepted response = (%#v,%v)", first.result, first.err)
 	}
 	if err := joinerStore.Close(); err != nil {
@@ -199,19 +170,12 @@ func TestChannelEnrollmentRecoversOwnerCommitAfterAcceptedResponseLoss(t *testin
 		t.Fatal(err)
 	}
 	defer reopened.Close()
-	retryClient, err := NewChannelEnrollmentClient(ChannelEnrollmentClientOptions{
-		Store: reopened, Clock: fixedEnrollmentClock{at: acceptedAt.Add(2 * time.Second)},
-		Random: bytes.NewReader(bytes.Repeat([]byte{0x44}, model.EnrollmentNonceBytes+channelRequestIDBytes)),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	retryStream := openEnrollmentTestStream(t, ctx, joinerHost, ownerHost.ID())
 	retrySpec := firstSpec
 	retrySpec.DisplayLabel = "renamed-after-restart"
 	retrySpec.AdvertisedMultiaddrs = []string{"/ip4/127.0.0.1/tcp/45555"}
-	installed, err := retryClient.Join(ctx, retryStream, retrySpec)
-	if err != nil || !installed.Installed || installed.Roster.Head().Revision() != 2 {
+	installed, err := runtime.JoinChannel(ctx, retrySpec,
+		&enrollmentJoinStoreSession{store: reopened})
+	if err != nil || !installed.Installed() || installed.Roster().Head().Revision() != 2 {
 		t.Fatalf("response-loss recovery = (%#v,%v)", installed, err)
 	}
 	assertEnrollmentDatabaseCounts(t, ownerPath, map[string]int{
@@ -227,8 +191,11 @@ func TestChannelEnrollmentCommitUnknownRetryReleasesOnAuthenticatedProtocolError
 	joinerPath := filepath.Join(t.TempDir(), "joiner", "node.db")
 	joinerStore := createEnrollmentTestStore(t, joinerPath, joinerIdentity, createdAt)
 	defer joinerStore.Close()
+	ownerHost := newEnrollmentTestHostAtIdentityAddress(t, ownerIdentity)
+	defer ownerHost.Close()
 	grantID, _ := model.ParseGrantID("grant-peer-enrollment-stable-reject")
-	token := enrollmentTestToken(t, ownerFixture, grantID, "peer-enrollment-stable-reject")
+	token := enrollmentTestTokenForHost(t, ownerFixture, grantID,
+		"peer-enrollment-stable-reject", ownerHost)
 	joinAt := createdAt.Add(time.Minute)
 	prepared, err := joinerStore.PrepareJoinedChannel(context.Background(), store.PrepareJoinedChannelSpec{
 		AuthenticatedLocalPeerID: joinerIdentity.PeerID(), LocalPublicKey: joinerIdentity.PublicKey(),
@@ -242,16 +209,9 @@ func TestChannelEnrollmentCommitUnknownRetryReleasesOnAuthenticatedProtocolError
 		t.Fatal(err)
 	}
 
-	ownerHost := newEnrollmentTestHost(t, ownerIdentity)
-	defer ownerHost.Close()
-	joinerHost := newEnrollmentTestHost(t, joinerIdentity)
-	defer joinerHost.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := joinerHost.Connect(ctx, libp2ppeer.AddrInfo{ID: ownerHost.ID(),
-		Addrs: ownerHost.Addrs()}); err != nil {
-		t.Fatal(err)
-	}
+	runtime := newTestMeshRuntime(t, ctx, joinerIdentity, readMeshRuntimeAuthority(t, joinerStore))
 	reject := ChannelRequestHandlerFunc(func(_ context.Context, stream network.Stream,
 		frame ChannelFrame,
 	) error {
@@ -271,17 +231,9 @@ func TestChannelEnrollmentCommitUnknownRetryReleasesOnAuthenticatedProtocolError
 		t.Fatal(err)
 	}
 	defer dispatcher.Close()
-	client, err := NewChannelEnrollmentClient(ChannelEnrollmentClientOptions{Store: joinerStore,
-		Clock: fixedEnrollmentClock{at: joinAt.Add(time.Second)},
-		Random: bytes.NewReader(bytes.Repeat([]byte{0x45},
-			model.EnrollmentNonceBytes+channelRequestIDBytes))})
-	if err != nil {
-		t.Fatal(err)
-	}
-	stream := openEnrollmentTestStream(t, ctx, joinerHost, ownerHost.ID())
-	_, err = client.Join(ctx, stream, JoinChannelSpec{Token: token,
+	_, err = runtime.JoinChannel(ctx, JoinChannelSpec{Token: token,
 		DisplayLabel: joinerIdentity.DisplayName(), AdvertisedMultiaddrs: joinerIdentity.Multiaddrs(),
-		LocalAlias: "stable-reject-team"})
+		LocalAlias: "stable-reject-team"}, &enrollmentJoinStoreSession{store: joinerStore})
 	var failure *ChannelProtocolFailure
 	if !errors.As(err, &failure) || failure.Code() != ChannelErrorTokenClosed {
 		t.Fatalf("commit-unknown stable rejection error = %v", err)
@@ -335,33 +287,174 @@ func (barrier *committedEnrollmentOwnerStore) AcceptChannelEnrollment(ctx contex
 	return result, err
 }
 
-type failingEnrollmentInstallStore struct {
-	delegate *store.Store
-	err      error
+type enrollmentJoinTestStore interface {
+	PrepareJoinedChannel(context.Context,
+		store.PrepareJoinedChannelSpec,
+	) (store.PrepareJoinedChannelResult, error)
+	MarkJoinedChannelCommitUnknown(context.Context, model.EnrollmentRequestID,
+		model.PeerID, uint64, time.Time,
+	) error
+	ReleaseJoinedChannelReservation(context.Context, model.EnrollmentRequestID,
+		model.PeerID, uint64,
+	) error
+	InstallJoinedChannel(context.Context,
+		store.InstallJoinedChannelSpec,
+	) (store.InstallJoinedChannelResult, error)
 }
 
-func (failure failingEnrollmentInstallStore) PrepareJoinedChannel(ctx context.Context,
-	spec store.PrepareJoinedChannelSpec,
-) (store.PrepareJoinedChannelResult, error) {
-	return failure.delegate.PrepareJoinedChannel(ctx, spec)
+// enrollmentJoinStoreSession is a test-only composition adapter. Production
+// peer code never receives a Store, attempt number, or install specification.
+type enrollmentJoinStoreSession struct {
+	store        enrollmentJoinTestStore
+	installErr   error
+	afterInstall func(VerifiedChannelEnrollment)
+
+	mu       sync.Mutex
+	begun    bool
+	marked   bool
+	terminal bool
+	control  ChannelJoinPrepareControl
+	prepared store.PrepareJoinedChannelResult
 }
 
-func (failure failingEnrollmentInstallStore) MarkJoinedChannelCommitUnknown(ctx context.Context,
-	requestID model.EnrollmentRequestID, peerID model.PeerID, attempt uint64, at time.Time,
+func (session *enrollmentJoinStoreSession) BeginChannelJoin(ctx context.Context,
+	control ChannelJoinPrepareControl,
+) (PreparedChannelJoin, error) {
+	session.mu.Lock()
+	if session.begun {
+		session.mu.Unlock()
+		return PreparedChannelJoin{}, errors.New("test join session already used")
+	}
+	session.begun = true
+	session.mu.Unlock()
+	prepared, err := session.store.PrepareJoinedChannel(ctx, store.PrepareJoinedChannelSpec{
+		AuthenticatedLocalPeerID: control.AuthenticatedLocalPeerID,
+		LocalPublicKey:           append([]byte(nil), control.LocalPublicKey...),
+		Descriptor:               control.Descriptor, GrantID: control.GrantID, LocalAlias: control.LocalAlias,
+		At: control.At})
+	if err != nil {
+		return PreparedChannelJoin{}, enrollmentJoinTestControlFailure(err)
+	}
+	session.mu.Lock()
+	session.control = control
+	session.control.LocalPublicKey = append([]byte(nil), control.LocalPublicKey...)
+	session.prepared = prepared
+	session.mu.Unlock()
+	return NewPreparedChannelJoin(prepared.RequestID, prepared.OriginEpoch,
+		prepared.Reserved, prepared.CommitUnknown)
+}
+
+func (session *enrollmentJoinStoreSession) MarkChannelJoinCommitUnknown(ctx context.Context,
+	at time.Time,
 ) error {
-	return failure.delegate.MarkJoinedChannelCommitUnknown(ctx, requestID, peerID, attempt, at)
+	control, prepared, err := session.prepareCallback(false)
+	if err != nil {
+		return err
+	}
+	if markErr := session.store.MarkJoinedChannelCommitUnknown(ctx, prepared.RequestID,
+		control.AuthenticatedLocalPeerID, prepared.Attempt, at); markErr != nil {
+		return enrollmentJoinTestControlFailure(markErr)
+	}
+	session.mu.Lock()
+	session.marked = true
+	session.mu.Unlock()
+	return nil
 }
 
-func (failure failingEnrollmentInstallStore) ReleaseJoinedChannelReservation(ctx context.Context,
-	requestID model.EnrollmentRequestID, peerID model.PeerID, attempt uint64,
-) error {
-	return failure.delegate.ReleaseJoinedChannelReservation(ctx, requestID, peerID, attempt)
+func (session *enrollmentJoinStoreSession) ReleaseChannelJoinReservation(ctx context.Context) error {
+	control, prepared, err := session.prepareCallback(true)
+	if err != nil {
+		return err
+	}
+	return session.store.ReleaseJoinedChannelReservation(ctx, prepared.RequestID,
+		control.AuthenticatedLocalPeerID, prepared.Attempt)
 }
 
-func (failure failingEnrollmentInstallStore) InstallJoinedChannel(context.Context,
-	store.InstallJoinedChannelSpec,
-) (store.InstallJoinedChannelResult, error) {
-	return store.InstallJoinedChannelResult{}, failure.err
+func (session *enrollmentJoinStoreSession) InstallAcceptedChannelJoin(ctx context.Context,
+	accepted VerifiedChannelEnrollment, at time.Time,
+) (ChannelJoinResult, error) {
+	control, prepared, err := session.prepareCallback(true)
+	if err != nil {
+		return ChannelJoinResult{}, err
+	}
+	session.mu.Lock()
+	marked := session.marked
+	session.mu.Unlock()
+	if prepared.Reserved && !marked {
+		return ChannelJoinResult{}, errors.New("test join session installed before commit_unknown")
+	}
+	if session.installErr != nil {
+		return ChannelJoinResult{}, session.installErr
+	}
+	status, err := enrollmentJoinTestStoreStatus(accepted.Status())
+	if err != nil {
+		return ChannelJoinResult{}, err
+	}
+	result, err := session.store.InstallJoinedChannel(ctx, store.InstallJoinedChannelSpec{
+		AuthenticatedOwnerPeerID: accepted.AuthenticatedOwnerPeerID(), OwnerOutcome: status,
+		LocalAlias: control.LocalAlias, Descriptor: accepted.Descriptor(),
+		Transcript: accepted.Transcript(), Receipt: accepted.Receipt(),
+		Members: accepted.Roster().Members(), At: at})
+	if err != nil {
+		return ChannelJoinResult{}, enrollmentJoinTestControlFailure(err)
+	}
+	if session.afterInstall != nil {
+		session.afterInstall(accepted)
+	}
+	peerStatus, err := enrollmentOwnerTestStatus(result.Status)
+	if err != nil {
+		return ChannelJoinResult{}, err
+	}
+	return NewChannelJoinResult(ChannelJoinResultSpec{Installed: result.Installed,
+		Status: peerStatus, Channel: result.Channel, Roster: result.Roster})
+}
+
+func (session *enrollmentJoinStoreSession) prepareCallback(terminal bool) (
+	ChannelJoinPrepareControl, store.PrepareJoinedChannelResult, error,
+) {
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if !session.begun || session.terminal {
+		return ChannelJoinPrepareControl{}, store.PrepareJoinedChannelResult{},
+			errors.New("test join session callback out of order")
+	}
+	if terminal {
+		session.terminal = true
+	}
+	return session.control, session.prepared, nil
+}
+
+func enrollmentJoinTestStoreStatus(status ChannelEnrollmentStatus) (store.ChannelEnrollmentStatus, error) {
+	switch status {
+	case ChannelEnrollmentAccepted:
+		return store.ChannelEnrollmentAccepted, nil
+	case ChannelEnrollmentReplayed:
+		return store.ChannelEnrollmentReplayed, nil
+	case ChannelEnrollmentMemberRevoked:
+		return store.ChannelEnrollmentMemberRevoked, nil
+	case ChannelEnrollmentChannelClosed:
+		return store.ChannelEnrollmentChannelClosed, nil
+	default:
+		return "", ErrChannelEnrollmentProtocol
+	}
+}
+
+func enrollmentJoinTestControlFailure(cause error) error {
+	var code ChannelProtocolErrorCode
+	switch {
+	case errors.Is(cause, store.ErrNodeChannelLimit):
+		code = ChannelErrorNodeChannelLimit
+	case errors.Is(cause, store.ErrChannelJoinConflict), errors.Is(cause, store.ErrChannelJoinInput),
+		errors.Is(cause, store.ErrChannelAuthorityInvariant):
+		code = ChannelErrorRosterConflict
+	default:
+		return cause
+	}
+	failure, err := NewChannelJoinControlFailure(code)
+	if err != nil {
+		return cause
+	}
+	return failure
 }
 
 func openEnrollmentTestStore(t *testing.T, identity testkit.Identity, at time.Time) *store.Store {
@@ -424,10 +517,30 @@ func assertEnrollmentDatabaseCounts(t *testing.T, path string, expected map[stri
 func enrollmentTestToken(t *testing.T, fixture *testkit.SignedChannel, grantID model.GrantID,
 	seed string,
 ) model.EnrollmentToken {
+	return enrollmentTestTokenForAddresses(t, fixture, grantID, seed,
+		fixture.Owner().Multiaddrs())
+}
+
+func enrollmentTestTokenForHost(t *testing.T, fixture *testkit.SignedChannel,
+	grantID model.GrantID, seed string, ownerHost host.Host,
+) model.EnrollmentToken {
+	t.Helper()
+	addresses := ownerHost.Addrs()
+	raw := make([]string, len(addresses))
+	for index, address := range addresses {
+		raw[index] = address.String()
+	}
+	sort.Strings(raw)
+	return enrollmentTestTokenForAddresses(t, fixture, grantID, seed, raw)
+}
+
+func enrollmentTestTokenForAddresses(t *testing.T, fixture *testkit.SignedChannel,
+	grantID model.GrantID, seed string, ownerMultiaddrs []string,
+) model.EnrollmentToken {
 	t.Helper()
 	secret := model.Sum([]byte("peer-enrollment-token-secret:" + seed)).Bytes()
 	payload, err := model.NewEnrollmentTokenPayload(model.EnrollmentTokenSpec{
-		Descriptor: fixture.Descriptor(), OwnerMultiaddrs: fixture.Owner().Multiaddrs(),
+		Descriptor: fixture.Descriptor(), OwnerMultiaddrs: append([]string(nil), ownerMultiaddrs...),
 		GrantID: grantID, BearerSecret: secret, ExpiresAt: fixture.Channel().CreatedAt().Add(time.Hour),
 		MaxUses:            fixture.Channel().MemberLimit() - 1,
 		ProtocolMinVersion: model.EnrollmentProtocolMinVersion,
@@ -469,6 +582,20 @@ func newEnrollmentTestHost(t *testing.T, identity testkit.Identity) host.Host {
 	}
 	nodeHost, err := libp2p.New(libp2p.Identity(privateKey),
 		libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return nodeHost
+}
+
+func newEnrollmentTestHostAtIdentityAddress(t *testing.T, identity testkit.Identity) host.Host {
+	t.Helper()
+	privateKey, err := identity.Libp2pPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodeHost, err := libp2p.New(libp2p.Identity(privateKey),
+		libp2p.ListenAddrStrings(identity.Multiaddrs()...))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -14,6 +14,8 @@ import (
 var (
 	ErrEnrollmentTransportPermit       = errors.New("invalid outbound enrollment transport permit")
 	ErrEnrollmentTransportPermitExists = errors.New("outbound enrollment transport permit already exists")
+	errEnrollmentTransportPermitBusy   = fmt.Errorf("%w: outbound enrollment transport budget is busy",
+		ErrEnrollmentTransportPermit)
 )
 
 type outboundEnrollmentPermitToken struct {
@@ -127,10 +129,13 @@ func (gater *ConnectionGater) reserveOutboundEnrollmentResolution(ctx context.Co
 		gater.mu.Unlock()
 		return nil, callbacks, ErrEnrollmentTransportPermitExists
 	}
-	if gater.enrollmentSlotsLocked() >= gater.unknownMax ||
-		gater.outbound.nextGeneration == math.MaxUint64 {
+	if gater.enrollmentSlotsLocked() >= gater.unknownMax {
 		gater.mu.Unlock()
-		return nil, callbacks, fmt.Errorf("%w: enrollment transport budget is exhausted",
+		return nil, callbacks, errEnrollmentTransportPermitBusy
+	}
+	if gater.outbound.nextGeneration == math.MaxUint64 {
+		gater.mu.Unlock()
+		return nil, callbacks, fmt.Errorf("%w: enrollment generation exhausted",
 			ErrEnrollmentTransportPermit)
 	}
 	resolveContext, cancelResolve := context.WithTimeout(ctx, gater.pendingTTL)

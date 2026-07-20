@@ -795,13 +795,6 @@
     },
     {
       "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/peer/channel_enrollment.go::(*ChannelEnrollmentClient).Join",
-      "path": "harness/internal/peer/channel_enrollment.go",
-      "symbol": "(*ChannelEnrollmentClient).Join",
-      "ceiling": 55
-    },
-    {
-      "rule": "cognitive_complexity",
       "identity": "cognitive_complexity:harness/internal/peer/channel_frame.go::NewEnrollAccepted",
       "path": "harness/internal/peer/channel_frame.go",
       "symbol": "NewEnrollAccepted",
@@ -2804,27 +2797,6 @@
     },
     {
       "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/peer/channel_enrollment.go::(*ChannelEnrollmentClient).Join",
-      "path": "harness/internal/peer/channel_enrollment.go",
-      "symbol": "(*ChannelEnrollmentClient).Join",
-      "ceiling": 53
-    },
-    {
-      "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/peer/channel_enrollment_test.go::TestChannelEnrollmentHandshakeCommitsResponseLossReplayAndAtomicInstall",
-      "path": "harness/internal/peer/channel_enrollment_test.go",
-      "symbol": "TestChannelEnrollmentHandshakeCommitsResponseLossReplayAndAtomicInstall",
-      "ceiling": 21
-    },
-    {
-      "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/peer/channel_enrollment_test.go::TestChannelEnrollmentRecoversOwnerCommitAfterAcceptedResponseLoss",
-      "path": "harness/internal/peer/channel_enrollment_test.go",
-      "symbol": "TestChannelEnrollmentRecoversOwnerCommitAfterAcceptedResponseLoss",
-      "ceiling": 22
-    },
-    {
-      "rule": "cyclomatic_complexity",
       "identity": "cyclomatic_complexity:harness/internal/peer/channel_frame.go::NewEnrollAccepted",
       "path": "harness/internal/peer/channel_frame.go",
       "symbol": "NewEnrollAccepted",
@@ -4477,20 +4449,6 @@
     },
     {
       "rule": "function_logical_lines",
-      "identity": "function_logical_lines:harness/internal/peer/channel_enrollment.go::(*ChannelEnrollmentClient).Join",
-      "path": "harness/internal/peer/channel_enrollment.go",
-      "symbol": "(*ChannelEnrollmentClient).Join",
-      "ceiling": 155
-    },
-    {
-      "rule": "function_logical_lines",
-      "identity": "function_logical_lines:harness/internal/peer/channel_enrollment_test.go::TestChannelEnrollmentRecoversOwnerCommitAfterAcceptedResponseLoss",
-      "path": "harness/internal/peer/channel_enrollment_test.go",
-      "symbol": "TestChannelEnrollmentRecoversOwnerCommitAfterAcceptedResponseLoss",
-      "ceiling": 90
-    },
-    {
-      "rule": "function_logical_lines",
       "identity": "function_logical_lines:harness/internal/peer/channel_member_test.go::TestChannelMemberServiceBootstrapsUnknownAndCommitsBaselineBeforeAck",
       "path": "harness/internal/peer/channel_member_test.go",
       "symbol": "TestChannelMemberServiceBootstrapsUnknownAndCommitsBaselineBeforeAck",
@@ -5569,17 +5527,10 @@
     },
     {
       "rule": "function_statements",
-      "identity": "function_statements:harness/internal/peer/channel_enrollment.go::(*ChannelEnrollmentClient).Join",
-      "path": "harness/internal/peer/channel_enrollment.go",
-      "symbol": "(*ChannelEnrollmentClient).Join",
-      "ceiling": 123
-    },
-    {
-      "rule": "function_statements",
       "identity": "function_statements:harness/internal/peer/channel_enrollment_test.go::TestChannelEnrollmentRecoversOwnerCommitAfterAcceptedResponseLoss",
       "path": "harness/internal/peer/channel_enrollment_test.go",
       "symbol": "TestChannelEnrollmentRecoversOwnerCommitAfterAcceptedResponseLoss",
-      "ceiling": 79
+      "ceiling": 67
     },
     {
       "rule": "function_statements",
@@ -6425,18 +6376,6 @@
       ],
       "fingerprint": "f306658d1f52bfbc69947b2f98293882869de4265416f4df1cef074b5701a199",
       "ceiling": 177
-    },
-    {
-      "rule": "normalized_duplicate_tokens",
-      "identity": "normalized_duplicate_tokens:dup-0009",
-      "path": "harness/internal/peer/channel_enrollment_test.go",
-      "debt_id": "dup-0009",
-      "owners": [
-        "harness/internal/peer/channel_enrollment_test.go::TestChannelEnrollmentHandshakeCommitsResponseLossReplayAndAtomicInstall",
-        "harness/internal/peer/channel_enrollment_test.go::TestChannelEnrollmentRecoversOwnerCommitAfterAcceptedResponseLoss"
-      ],
-      "fingerprint": "38a79152190c01f96d03ed7fc73aa2492597053b8f7f4703b075d71217f3f878",
-      "ceiling": 176
     },
     {
       "rule": "normalized_duplicate_tokens",

@@ -5,54 +5,155 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
-	"github.com/libp2p/go-libp2p/core/network"
-	"github.com/mnemon-dev/mnemon/harness/internal/model"
-	"github.com/mnemon-dev/mnemon/harness/internal/store"
 	"io"
 	"net"
+	"reflect"
+	"sync/atomic"
 	"time"
+
+	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/mnemon-dev/mnemon/harness/internal/model"
 )
 
-// ChannelEnrollmentJoinerStore is the joiner's one atomic replica boundary.
-type ChannelEnrollmentJoinerStore interface {
-	PrepareJoinedChannel(context.Context,
-		store.PrepareJoinedChannelSpec,
-	) (store.PrepareJoinedChannelResult, error)
-	MarkJoinedChannelCommitUnknown(context.Context, model.EnrollmentRequestID,
-		model.PeerID, uint64, time.Time,
-	) error
-	ReleaseJoinedChannelReservation(context.Context, model.EnrollmentRequestID,
-		model.PeerID, uint64,
-	) error
-	InstallJoinedChannel(context.Context,
-		store.InstallJoinedChannelSpec,
-	) (store.InstallJoinedChannelResult, error)
+var ErrChannelJoinControlFailure = errors.New("Channel join controller rejected request")
+
+// ChannelJoinControlFailure is the closed, secret-free failure surface of the
+// joiner's mnemond callback. Ordinary controller diagnostics are never exposed
+// as protocol decisions.
+type ChannelJoinControlFailure struct{ code ChannelProtocolErrorCode }
+
+func NewChannelJoinControlFailure(code ChannelProtocolErrorCode) (*ChannelJoinControlFailure, error) {
+	if code != ChannelErrorNodeChannelLimit && code != ChannelErrorRosterConflict {
+		return nil, fmt.Errorf("%w: code is not valid for joined Channel control",
+			ErrChannelEnrollmentProtocol)
+	}
+	return &ChannelJoinControlFailure{code: code}, nil
 }
 
-type ChannelEnrollmentClientOptions struct {
-	Store  ChannelEnrollmentJoinerStore
-	Clock  channelEnrollmentClock
-	Random io.Reader
+func (failure *ChannelJoinControlFailure) Error() string {
+	if failure == nil || (failure.code != ChannelErrorNodeChannelLimit &&
+		failure.code != ChannelErrorRosterConflict) {
+		return ErrChannelJoinControlFailure.Error()
+	}
+	return fmt.Sprintf("%s: %s", ErrChannelJoinControlFailure, failure.code)
 }
 
-type ChannelEnrollmentClient struct {
-	store  ChannelEnrollmentJoinerStore
-	clock  channelEnrollmentClock
-	random io.Reader
+func (failure *ChannelJoinControlFailure) Unwrap() error { return ErrChannelJoinControlFailure }
+
+func (failure *ChannelJoinControlFailure) Code() ChannelProtocolErrorCode {
+	if failure == nil {
+		return ""
+	}
+	return failure.code
 }
 
-func NewChannelEnrollmentClient(options ChannelEnrollmentClientOptions) (*ChannelEnrollmentClient, error) {
-	if options.Store == nil {
-		return nil, fmt.Errorf("%w: joiner Store is required", ErrChannelEnrollmentProtocol)
+// ChannelJoinPrepareControl is the exact authenticated local identity and
+// frozen token projection that mnemond must reserve before any dial occurs.
+type ChannelJoinPrepareControl struct {
+	AuthenticatedLocalPeerID model.PeerID
+	LocalPublicKey           []byte
+	Descriptor               model.SignedChannelDescriptor
+	GrantID                  model.GrantID
+	LocalAlias               string
+	At                       time.Time
+}
+
+type preparedChannelJoinClaim struct{ used atomic.Bool }
+
+// PreparedChannelJoin is a one-use, opaque durable reservation projection.
+// The Store attempt remains private to the Node-owned session.
+type PreparedChannelJoin struct {
+	requestID     model.EnrollmentRequestID
+	originEpoch   model.OriginEpoch
+	reserved      bool
+	commitUnknown bool
+	claim         *preparedChannelJoinClaim
+}
+
+func NewPreparedChannelJoin(requestID model.EnrollmentRequestID, originEpoch model.OriginEpoch,
+	reserved, commitUnknown bool,
+) (PreparedChannelJoin, error) {
+	if requestID.IsZero() || originEpoch.IsZero() || commitUnknown && !reserved {
+		return PreparedChannelJoin{}, fmt.Errorf("%w: invalid prepared join",
+			ErrChannelEnrollmentProtocol)
 	}
-	if options.Clock == nil {
-		options.Clock = wallEnrollmentClock{}
+	return PreparedChannelJoin{requestID: requestID, originEpoch: originEpoch,
+		reserved: reserved, commitUnknown: commitUnknown, claim: &preparedChannelJoinClaim{}}, nil
+}
+
+func (prepared PreparedChannelJoin) RequestID() model.EnrollmentRequestID { return prepared.requestID }
+func (prepared PreparedChannelJoin) OriginEpoch() model.OriginEpoch       { return prepared.originEpoch }
+func (prepared PreparedChannelJoin) Reserved() bool                       { return prepared.reserved }
+func (prepared PreparedChannelJoin) CommitUnknown() bool                  { return prepared.commitUnknown }
+
+func (prepared PreparedChannelJoin) claimOnce() bool {
+	return prepared.claim != nil && !prepared.requestID.IsZero() && !prepared.originEpoch.IsZero() &&
+		(!prepared.commitUnknown || prepared.reserved) && prepared.claim.used.CompareAndSwap(false, true)
+}
+
+// VerifiedChannelEnrollment is immutable owner evidence accepted by the peer
+// protocol. Only the Node session may convert it into durable replica state.
+type VerifiedChannelEnrollment struct {
+	owner      model.PeerID
+	status     ChannelEnrollmentStatus
+	descriptor model.SignedChannelDescriptor
+	transcript model.EnrollmentTranscript
+	receipt    model.EnrollmentReceipt
+	roster     model.VerifiedRoster
+}
+
+func (accepted VerifiedChannelEnrollment) AuthenticatedOwnerPeerID() model.PeerID {
+	return accepted.owner
+}
+func (accepted VerifiedChannelEnrollment) Status() ChannelEnrollmentStatus { return accepted.status }
+func (accepted VerifiedChannelEnrollment) Descriptor() model.SignedChannelDescriptor {
+	return accepted.descriptor
+}
+func (accepted VerifiedChannelEnrollment) Transcript() model.EnrollmentTranscript {
+	return accepted.transcript
+}
+func (accepted VerifiedChannelEnrollment) Receipt() model.EnrollmentReceipt { return accepted.receipt }
+func (accepted VerifiedChannelEnrollment) Roster() model.VerifiedRoster     { return accepted.roster }
+
+type ChannelJoinResultSpec struct {
+	Installed bool
+	Status    ChannelEnrollmentStatus
+	Channel   model.Channel
+	Roster    model.VerifiedRoster
+}
+
+// ChannelJoinResult is the peer-native projection returned after the Node has
+// durably committed and installed the accepted runtime authority.
+type ChannelJoinResult struct{ spec ChannelJoinResultSpec }
+
+func NewChannelJoinResult(spec ChannelJoinResultSpec) (ChannelJoinResult, error) {
+	if !spec.Status.Valid() || spec.Roster.IsZero() {
+		return ChannelJoinResult{}, fmt.Errorf("%w: invalid joined Channel result",
+			ErrChannelEnrollmentProtocol)
 	}
-	if options.Random == nil {
-		options.Random = rand.Reader
+	if !spec.Channel.ID().IsZero() && (spec.Channel.Descriptor().Descriptor().ID() !=
+		spec.Roster.Descriptor().Descriptor().ID() || spec.Channel.RosterHead() != spec.Roster.Head()) {
+		return ChannelJoinResult{}, fmt.Errorf("%w: joined Channel result authority differs",
+			ErrChannelEnrollmentProtocol)
 	}
-	return &ChannelEnrollmentClient{store: options.Store, clock: options.Clock,
-		random: options.Random}, nil
+	return ChannelJoinResult{spec: spec}, nil
+}
+
+func (result ChannelJoinResult) Installed() bool                 { return result.spec.Installed }
+func (result ChannelJoinResult) Status() ChannelEnrollmentStatus { return result.spec.Status }
+func (result ChannelJoinResult) Channel() model.Channel          { return result.spec.Channel }
+func (result ChannelJoinResult) Roster() model.VerifiedRoster    { return result.spec.Roster }
+
+// ChannelJoinSession is a one-use semantic adapter owned by mnemond. Begin must
+// atomically claim the session. Every later method is bound to that prepared
+// request and accepts no caller-selected request, Peer or attempt identity.
+// Callbacks may block, run without peer locks or Store transactions, and must
+// never reacquire the Node's already-held Channel authority token.
+type ChannelJoinSession interface {
+	BeginChannelJoin(context.Context, ChannelJoinPrepareControl) (PreparedChannelJoin, error)
+	MarkChannelJoinCommitUnknown(context.Context, time.Time) error
+	ReleaseChannelJoinReservation(context.Context) error
+	InstallAcceptedChannelJoin(context.Context, VerifiedChannelEnrollment, time.Time) (ChannelJoinResult, error)
 }
 
 type JoinChannelSpec struct {
@@ -62,60 +163,49 @@ type JoinChannelSpec struct {
 	LocalAlias           string
 }
 
-func joinedChannelInstallSpec(ownerPeerID model.PeerID, localAlias string,
-	descriptor model.SignedChannelDescriptor, transcript model.EnrollmentTranscript,
-	accepted EnrollAccepted, members []model.Member, at time.Time,
-) store.InstallJoinedChannelSpec {
-	return store.InstallJoinedChannelSpec{AuthenticatedOwnerPeerID: ownerPeerID,
-		OwnerOutcome: store.ChannelEnrollmentStatus(accepted.Status()), LocalAlias: localAlias,
-		Descriptor: descriptor, Transcript: transcript, Receipt: accepted.JoinReceipt(),
-		Members: members, At: at}
+type channelEnrollmentClient struct {
+	session ChannelJoinSession
+	clock   channelEnrollmentClock
+	random  io.Reader
 }
 
-func receivedChannelFailure(requestID ChannelRequestID, frame ChannelFrame) error {
-	if frame.Type() != ChannelFrameProtocolError {
-		return nil
+func newChannelEnrollmentClient(session ChannelJoinSession, clock channelEnrollmentClock,
+	random io.Reader,
+) (*channelEnrollmentClient, error) {
+	if isNilChannelJoinSession(session) {
+		return nil, fmt.Errorf("%w: join session is required", ErrChannelEnrollmentProtocol)
 	}
-	if frame.RequestID() != requestID {
-		return newChannelProtocolFailure(ChannelErrorRosterConflict, 0)
+	if clock == nil {
+		clock = wallEnrollmentClock{}
 	}
-	payload, ok := frame.Payload().(ProtocolError)
-	if !ok {
-		return newChannelProtocolFailure(ChannelErrorRosterConflict, 0)
+	if random == nil {
+		random = rand.Reader
 	}
-	return &ChannelProtocolFailure{code: payload.Code(), retryable: payload.Retryable(),
-		retryAfter: payload.RetryAfter()}
+	return &channelEnrollmentClient{session: session, clock: clock, random: random}, nil
 }
 
-func validEnrollmentReceiptForStatus(descriptor model.SignedChannelDescriptor,
-	transcript model.EnrollmentTranscript, accepted EnrollAccepted,
-) bool {
-	receipt := accepted.JoinReceipt()
-	member := accepted.MemberRecord()
-	if accepted.Status() == ChannelEnrollmentAccepted {
-		return model.VerifyEnrollmentReceipt(descriptor, member, transcript, receipt) == nil
+func isNilChannelJoinSession(session ChannelJoinSession) bool {
+	if session == nil {
+		return true
 	}
-	identity, err := transcript.JoinIdentityDigest()
-	previous, hasPrevious := member.PreviousDigest()
-	return err == nil && receipt.RequestID() == transcript.RequestID() &&
-		receipt.GrantID() == transcript.GrantID() && receipt.JoinIdentityDigest() == identity &&
-		hasPrevious && member.Head().Revision() == transcript.RosterHead().Revision()+1 &&
-		previous == transcript.RosterHead().Digest() &&
-		model.VerifyEnrollmentReceiptEvidence(descriptor, member, receipt) == nil
-}
-
-func joinedChannelStoreFailure(cause error) error {
-	switch {
-	case errors.Is(cause, store.ErrNodeChannelLimit):
-		return newChannelProtocolFailure(ChannelErrorNodeChannelLimit, 0)
-	case errors.Is(cause, store.ErrChannelJoinConflict), errors.Is(cause, store.ErrChannelJoinInput),
-		errors.Is(cause, store.ErrChannelAuthorityInvariant):
-		return newChannelProtocolFailure(ChannelErrorRosterConflict, 0)
-	case errors.Is(cause, context.Canceled), errors.Is(cause, context.DeadlineExceeded):
-		return enrollmentTransportFailure(cause)
+	value := reflect.ValueOf(session)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
 	default:
-		return fmt.Errorf("%w: joined Channel Store unavailable", ErrChannelEnrollmentProtocol)
+		return false
 	}
+}
+
+func channelJoinControlError(cause error) error {
+	if errors.Is(cause, context.Canceled) || errors.Is(cause, context.DeadlineExceeded) {
+		return cause
+	}
+	var failure *ChannelJoinControlFailure
+	if errors.As(cause, &failure) && failure != nil {
+		return newChannelProtocolFailure(failure.Code(), 0)
+	}
+	return fmt.Errorf("%w: Channel join controller unavailable", ErrChannelEnrollmentProtocol)
 }
 
 func validEnrollmentResultStatus(status ChannelEnrollmentStatus, roster model.VerifiedRoster,
@@ -138,6 +228,11 @@ func validEnrollmentResultStatus(status ChannelEnrollmentStatus, roster model.Ve
 func enrollmentTransportFailure(cause error) error {
 	if errors.Is(cause, context.Canceled) || errors.Is(cause, context.DeadlineExceeded) {
 		return cause
+	}
+	if errors.Is(cause, errEnrollmentTransportPermitBusy) ||
+		errors.Is(cause, ErrEnrollmentTransportPermitExists) ||
+		errors.Is(cause, network.ErrResourceLimitExceeded) {
+		return newChannelProtocolFailure(ChannelErrorBusy, channelEnrollmentBusyRetry)
 	}
 	transport := errors.Is(cause, io.EOF) || errors.Is(cause, io.ErrUnexpectedEOF) ||
 		errors.Is(cause, network.ErrReset)

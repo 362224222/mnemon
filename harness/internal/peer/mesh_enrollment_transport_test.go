@@ -15,6 +15,7 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 	"github.com/mnemon-dev/mnemon/harness/internal/testkit"
+	ma "github.com/multiformats/go-multiaddr"
 )
 
 func TestMeshRuntimeEnrollmentTransportInstallsAndReleasesExactAddressSource(t *testing.T) {
@@ -95,6 +96,180 @@ func TestMeshRuntimeEnrollmentTransportUsesOnlyExactPrivateOpener(t *testing.T) 
 	waitPeerDisconnected(t, runtime.managedRuntimeHost(), remoteID)
 	if replay, err := runtime.openEnrollmentStream(ctx, permit); replay != nil || !errors.Is(err, ErrNodeHost) {
 		t.Fatalf("private opener replay = (%v, %v), want single-use rejection", replay, err)
+	}
+}
+
+func TestMeshRuntimeEnrollmentTransportResetFailureIsObservedAndFailsClosed(t *testing.T) {
+	sentinel := errors.New("injected exact enrollment reset failure")
+	runtime := newMeshEnrollmentResetFailureRuntime(t, sentinel)
+	remote, permit, remoteDone := bindMeshEnrollmentResetFailure(t, runtime, sentinel)
+	if closeErr := permit.Close(); !errors.Is(closeErr, sentinel) ||
+		!errors.Is(permit.Close(), sentinel) {
+		t.Fatalf("idempotent permit reset failure = %v", closeErr)
+	}
+	select {
+	case readErr := <-remoteDone:
+		if readErr == nil {
+			t.Fatal("remote exact stream survived reset failure")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("remote exact stream did not observe retirement")
+	}
+	assertMeshEnrollmentResetFailure(t, runtime, remote, sentinel)
+}
+
+func newMeshEnrollmentResetFailureRuntime(t *testing.T, sentinel error) *MeshRuntime {
+	t.Helper()
+	local := testkit.NewIdentity(t, "mesh-permit-reset-failure-local")
+	at := peerMeshTime(t, "2026-07-20T03:30:00Z")
+	st := openPeerMeshStore(t, local, at)
+	channel := testkit.NewSignedChannelForOwnerAt(t, "mesh-permit-reset-failure-channel",
+		local, at)
+	createPeerMeshChannel(t, st, channel, "mesh-permit-reset-failure")
+	key, err := local.Libp2pPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	listen, err := ma.NewMultiaddr("/ip4/127.0.0.1/tcp/0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := NewMeshRuntime(context.Background(), key, []ma.Multiaddr{listen},
+		readMeshRuntimeAuthority(t, st))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if closeErr := runtime.Close(); !errors.Is(closeErr, sentinel) {
+			t.Errorf("close failed-closed mesh runtime = %v, want %v", closeErr, sentinel)
+		}
+	})
+	return runtime
+}
+
+func bindMeshEnrollmentResetFailure(t *testing.T, runtime *MeshRuntime, sentinel error) (
+	testkit.Identity, *enrollmentTransportPermit, <-chan error,
+) {
+	t.Helper()
+	remote := testkit.NewIdentity(t, "mesh-permit-reset-failure-remote")
+	remoteHost := newEnrollmentTestHost(t, remote)
+	t.Cleanup(func() {
+		if closeErr := remoteHost.Close(); closeErr != nil {
+			t.Errorf("close reset-failure remote: %v", closeErr)
+		}
+	})
+	remoteReady := make(chan struct{})
+	remoteDone := make(chan error, 1)
+	remoteHost.SetStreamHandler(ChannelProtocol, func(stream network.Stream) {
+		if _, readErr := stream.Read(make([]byte, 1)); readErr != nil {
+			remoteDone <- readErr
+			return
+		}
+		close(remoteReady)
+		_, readErr := stream.Read(make([]byte, 1))
+		remoteDone <- readErr
+	})
+	request := meshEnrollmentTransportRequest(t, remote, remoteHost, "reset-failure")
+	permit, err := runtime.acquireEnrollmentTransportPermit(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream, err := runtime.openEnrollmentStream(context.Background(), permit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stream.Write([]byte{'r'}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-remoteReady:
+	case <-time.After(2 * time.Second):
+		t.Fatal("remote exact stream was not established")
+	}
+	runtime.nodeHost.gater.mu.Lock()
+	active := runtime.nodeHost.gater.outbound.permits[permit.token.key]
+	if active == nil || active.resetStream == nil {
+		runtime.nodeHost.gater.mu.Unlock()
+		t.Fatal("opened permit did not bind its exact stream reset")
+	}
+	originalReset := active.resetStream
+	active.resetStream = func() error {
+		_ = originalReset()
+		return sentinel
+	}
+	runtime.nodeHost.gater.mu.Unlock()
+	return remote, permit, remoteDone
+}
+
+func assertMeshEnrollmentResetFailure(t *testing.T, runtime *MeshRuntime,
+	remote testkit.Identity, sentinel error,
+) {
+	t.Helper()
+	remoteID := meshRuntimeLibp2pID(t, remote.PeerID())
+	runtime.mu.Lock()
+	closed, terminalErr := runtime.closed, runtime.terminalErr
+	runtime.mu.Unlock()
+	if !closed || !errors.Is(terminalErr, sentinel) ||
+		runtime.nodeHost.gater.UnknownEnrollmentSlots() != 0 ||
+		len(runtime.managedRuntimeHost().Peerstore().Addrs(remoteID)) != 0 {
+		t.Fatalf("reset failure state = closed %t, terminal %v, slots %d, addrs %d",
+			closed, terminalErr, runtime.nodeHost.gater.UnknownEnrollmentSlots(),
+			len(runtime.managedRuntimeHost().Peerstore().Addrs(remoteID)))
+	}
+}
+
+func TestMeshRuntimeEnrollmentTransportRetiresExactStreamButKeepsPromotedConnection(t *testing.T) {
+	local := testkit.NewIdentity(t, "mesh-permit-promote-local")
+	at := peerMeshTime(t, "2026-07-20T03:45:00Z")
+	st := openPeerMeshStore(t, local, at)
+	channel := testkit.NewSignedChannelForOwnerAt(t, "mesh-permit-promote-channel", local, at)
+	createPeerMeshChannel(t, st, channel, "mesh-permit-promote")
+	runtime := newTestMeshRuntime(t, context.Background(), local, readMeshRuntimeAuthority(t, st))
+	remote := testkit.NewIdentity(t, "mesh-permit-promote-remote")
+	remoteHost := newEnrollmentTestHost(t, remote)
+	defer remoteHost.Close()
+	remoteStreams := make(chan network.Stream, 1)
+	remoteHost.SetStreamHandler(ChannelProtocol, func(stream network.Stream) {
+		if _, err := stream.Read(make([]byte, 1)); err == nil {
+			remoteStreams <- stream
+		}
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	permit, err := runtime.acquireEnrollmentTransportPermit(ctx,
+		meshEnrollmentTransportRequest(t, remote, remoteHost, "promote"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream, err := runtime.openEnrollmentStream(ctx, permit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stream.Write([]byte{'p'}); err != nil {
+		t.Fatal(err)
+	}
+	remoteStream := <-remoteStreams
+	member := channel.AppendActiveIdentity(t, remote)
+	mergePeerMeshRoster(t, st, channel, member.Member(), member.Member().CreatedAt())
+	installMeshAuthority(t, runtime, readMeshRuntimeAuthority(t, st))
+	remoteID := meshRuntimeLibp2pID(t, remote.PeerID())
+	if !runtime.authority.CanConnect(remoteID) {
+		t.Fatal("durable authority did not promote enrollment Peer")
+	}
+	if err := permit.Close(); err != nil {
+		t.Fatal(err)
+	}
+	_ = remoteStream.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := remoteStream.Read(make([]byte, 1)); err == nil {
+		t.Fatal("permit retirement did not reset the exact promoted enrollment stream")
+	}
+	if runtime.managedRuntimeHost().Network().Connectedness(remoteID) != network.Connected ||
+		len(runtime.managedRuntimeHost().Peerstore().Addrs(remoteID)) == 0 ||
+		runtime.nodeHost.gater.UnknownEnrollmentSlots() != 0 {
+		t.Fatalf("promoted retirement = connected %s, addrs %d, slots %d",
+			runtime.managedRuntimeHost().Network().Connectedness(remoteID),
+			len(runtime.managedRuntimeHost().Peerstore().Addrs(remoteID)),
+			runtime.nodeHost.gater.UnknownEnrollmentSlots())
 	}
 }
 

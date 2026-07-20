@@ -11,14 +11,19 @@ import (
 )
 
 // enrollmentTransportPermit is an internal, single-stream transport fence. It
-// does not by itself prove that a future EnrollInit matches the Store-prepared
-// request; the unified Channel enrollment coordinator must perform that
-// binding before this primitive is integrated into its client path.
+// does not by itself prove that a future EnrollInit matches the Node-prepared
+// request; MeshRuntime.JoinChannel owns that higher-level binding.
 type enrollmentTransportPermit struct {
 	runtime *MeshRuntime
 	token   outboundEnrollmentPermitToken
 
-	closeOnce sync.Once
+	closeOnce  sync.Once
+	closeDone  chan struct{}
+	retireOnce sync.Once
+	retired    chan struct{}
+	resultMu   sync.Mutex
+	retireErr  error
+	closeErr   error
 }
 
 type enrollmentTransportPermitRequest struct {
@@ -44,27 +49,33 @@ func (runtime *MeshRuntime) acquireEnrollmentTransportPermit(ctx context.Context
 	nodeHost := runtime.nodeHost
 	addressSources := runtime.addressSources
 	runtime.mu.Unlock()
-	token, err := nodeHost.gater.acquireOutboundEnrollmentPermit(ctx, spec,
-		runtime.retireEnrollmentTransportPermit)
+	permit := &enrollmentTransportPermit{runtime: runtime, closeDone: make(chan struct{}),
+		retired: make(chan struct{})}
+	token, err := nodeHost.gater.acquireOutboundEnrollmentPermit(ctx, spec, permit.retire)
 	if err != nil {
 		return nil, fmt.Errorf("%w: acquire enrollment transport: %w", ErrMeshRuntime, err)
 	}
+	permit.token = token
 	if err := addressSources.addPermit(token); err != nil {
-		nodeHost.gater.releaseOutboundEnrollmentPermit(token)
-		return nil, fmt.Errorf("%w: install enrollment addresses: %w", ErrMeshRuntime, err)
+		cleanupErr := permit.Close()
+		return nil, errors.Join(fmt.Errorf("%w: install enrollment addresses: %w",
+			ErrMeshRuntime, err), cleanupErr)
 	}
 	if !nodeHost.gater.outboundEnrollmentPermitCurrent(token) {
 		addressSources.removePermit(token.ref())
-		return nil, fmt.Errorf("%w: enrollment transport expired during installation", ErrMeshRuntime)
+		cleanupErr := permit.Close()
+		return nil, errors.Join(fmt.Errorf("%w: enrollment transport expired during installation",
+			ErrMeshRuntime), cleanupErr)
 	}
 	runtime.mu.Lock()
 	closed := runtime.closed
 	runtime.mu.Unlock()
 	if closed {
-		nodeHost.gater.releaseOutboundEnrollmentPermit(token)
-		return nil, fmt.Errorf("%w: runtime closed during enrollment transport installation", ErrMeshRuntime)
+		cleanupErr := permit.Close()
+		return nil, errors.Join(fmt.Errorf("%w: runtime closed during enrollment transport installation",
+			ErrMeshRuntime), cleanupErr)
 	}
-	return &enrollmentTransportPermit{runtime: runtime, token: token}, nil
+	return permit, nil
 }
 
 func enrollmentTransportPermitSpecFromRequest(request enrollmentTransportPermitRequest) (
@@ -83,24 +94,40 @@ func enrollmentTransportPermitSpecFromRequest(request enrollmentTransportPermitR
 
 func (runtime *MeshRuntime) retireEnrollmentTransportPermit(ref outboundEnrollmentPermitRef,
 	resetErr error,
-) {
+) error {
 	if runtime == nil || runtime.addressSources == nil {
-		return
+		return fmt.Errorf("%w: enrollment transport owner is unavailable", ErrMeshRuntime)
 	}
 	runtime.addressSources.removePermit(ref)
-	if runtime.nodeHost != nil {
-		// The gater has already removed the exception. Reconciliation therefore
-		// retains a promoted durable binding but closes an otherwise-authorityless
-		// exact enrollment connection. Managed stream gates remain fail-closed
-		// even if the transport reports a best-effort close error.
-		if resetErr != nil {
-			resetErr = fmt.Errorf("reset exact enrollment stream: %w", resetErr)
-		}
-		reconcileErr := runtime.nodeHost.ReconcileConnections()
-		if resetErr != nil || reconcileErr != nil {
-			runtime.failClosedEnrollmentTransport(errors.Join(resetErr, reconcileErr))
-		}
+	if runtime.nodeHost == nil {
+		return fmt.Errorf("%w: enrollment Host is unavailable", ErrMeshRuntime)
 	}
+	// The gater has already removed the exception. Reconciliation therefore
+	// retains a promoted durable binding but closes an otherwise-authorityless
+	// exact enrollment connection. Permit retirement is the sole exact-stream
+	// reset owner; callers must observe any failure before reporting success.
+	if resetErr != nil {
+		resetErr = fmt.Errorf("reset exact enrollment stream: %w", resetErr)
+	}
+	reconcileErr := runtime.nodeHost.ReconcileConnections()
+	result := errors.Join(resetErr, reconcileErr)
+	if result != nil {
+		runtime.failClosedEnrollmentTransport(result)
+	}
+	return result
+}
+
+func (permit *enrollmentTransportPermit) retire(ref outboundEnrollmentPermitRef, resetErr error) {
+	if permit == nil {
+		return
+	}
+	permit.retireOnce.Do(func() {
+		result := permit.runtime.retireEnrollmentTransportPermit(ref, resetErr)
+		permit.resultMu.Lock()
+		permit.retireErr = result
+		permit.resultMu.Unlock()
+		close(permit.retired)
+	})
 }
 
 // openEnrollmentStream is package-private so only the reviewed Channel client
@@ -130,10 +157,23 @@ func (permit *enrollmentTransportPermit) Close() error {
 	if permit == nil {
 		return nil
 	}
+	if permit.closeDone == nil || permit.retired == nil {
+		return fmt.Errorf("%w: enrollment transport capability is incomplete", ErrMeshRuntime)
+	}
 	permit.closeOnce.Do(func() {
-		if permit.runtime != nil && permit.runtime.nodeHost != nil {
-			permit.runtime.nodeHost.gater.releaseOutboundEnrollmentPermit(permit.token)
+		defer close(permit.closeDone)
+		if permit.runtime == nil || permit.runtime.nodeHost == nil ||
+			permit.runtime.nodeHost.gater == nil || permit.token.generation == 0 {
+			permit.closeErr = fmt.Errorf("%w: enrollment transport capability is incomplete",
+				ErrMeshRuntime)
+			return
 		}
+		permit.runtime.nodeHost.gater.releaseOutboundEnrollmentPermit(permit.token)
+		<-permit.retired
+		permit.resultMu.Lock()
+		permit.closeErr = permit.retireErr
+		permit.resultMu.Unlock()
 	})
-	return nil
+	<-permit.closeDone
+	return permit.closeErr
 }

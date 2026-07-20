@@ -102,7 +102,8 @@ func TestConnectionGaterEnrollmentPermitUsesSharedBudget(t *testing.T) {
 	}
 	overflow := testEnrollmentTransportPermitSpec(t, owner,
 		[]string{"/ip4/127.0.0.1/tcp/42999"}, "budget-overflow")
-	if _, err := gater.acquireOutboundEnrollmentPermit(context.Background(), overflow, nil); !errors.Is(err, ErrEnrollmentTransportPermit) {
+	if _, err := gater.acquireOutboundEnrollmentPermit(context.Background(), overflow, nil); !errors.Is(err,
+		errEnrollmentTransportPermitBusy) || !errors.Is(err, ErrEnrollmentTransportPermit) {
 		t.Fatalf("shared-budget overflow error = %v", err)
 	}
 }
