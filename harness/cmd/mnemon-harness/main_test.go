@@ -84,6 +84,7 @@ func TestRun(t *testing.T) {
 	for _, forbidden := range []string{
 		"hub", "remote workspace", "multica", "generic capability", "mcp",
 		"evolution", "tower", "session", "hook check", "agent current", "teamwork offer",
+		"channel abandon", "confirm-channel", "confirm-peer", "reset --force",
 	} {
 		if strings.Contains(lowerHelp, forbidden) {
 			t.Errorf("help contains retired vocabulary %q", forbidden)

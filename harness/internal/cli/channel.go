@@ -21,6 +21,7 @@ type channelControlClient interface {
 	CloseChannelInvite(context.Context, localapi.ChannelInviteCloseRequest) (localapi.ChannelInviteCloseResponse, *localapi.APIError)
 	RemoveChannelMember(context.Context, localapi.ChannelRemoveRequest) (localapi.ChannelRemoveResponse, *localapi.APIError)
 	LeaveChannel(context.Context, localapi.ChannelLeaveRequest) (localapi.ChannelLeaveResponse, *localapi.APIError)
+	AbandonChannel(context.Context, localapi.ChannelAbandonRequest) (localapi.ChannelAbandonResponse, *localapi.APIError)
 	ReadChannelStatus(context.Context) (localapi.ChannelStatusResponse, *localapi.APIError)
 }
 
@@ -89,10 +90,35 @@ func (app *channelApp) run(ctx context.Context, args []string) int {
 		return app.remove(ctx, client, args[1:])
 	case "leave":
 		return app.leave(ctx, client, args[1:])
+	case "abandon":
+		return app.abandon(ctx, client, args[1:])
 	default:
 		return app.writeError(localapi.NewAPIError(localapi.CodeInvalidArgument,
 			"unknown channel subcommand"))
 	}
+}
+
+func (app *channelApp) abandon(ctx context.Context, client channelControlClient, args []string) int {
+	args, jsonOutput := takeJSONFlag(args)
+	flags := flag.NewFlagSet("channel abandon", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	force := flags.Bool("force", false, "confirm forensic abandon")
+	confirmation := flags.String("confirm-channel", "", "exact local Channel alias")
+	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || !*force || *confirmation == "" {
+		return app.writeError(localapi.NewAPIError(localapi.CodeInvalidArgument,
+			"channel abandon requires --force --confirm-channel <local-channel-alias>"))
+	}
+	response, apiErr := client.AbandonChannel(ctx, localapi.ChannelAbandonRequest{
+		Channel: *confirmation, ConfirmChannel: *confirmation, Force: *force})
+	if apiErr != nil {
+		return app.writeError(apiErr)
+	}
+	if jsonOutput {
+		return app.writeJSON(response)
+	}
+	_, err := fmt.Fprintf(app.stdout, "Forensically abandoned Channel %s at %s\n",
+		response.Channel, response.TransitionedAt)
+	return writeExit(err)
 }
 
 func (app *channelApp) remove(ctx context.Context, client channelControlClient, args []string) int {

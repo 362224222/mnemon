@@ -13,12 +13,13 @@ const (
 	RouteChannelInvitesClose = "/v1/channel/invites/close"
 	RouteChannelRemove       = "/v1/channel/remove"
 	RouteChannelLeave        = "/v1/channel/leave"
+	RouteChannelAbandon      = "/v1/channel/abandon"
 )
 
 func IsChannelRoute(path string) bool {
 	return path == RouteChannelCreate || path == RouteChannelJoin || path == RouteChannelStatus ||
 		path == RouteChannelInvites || path == RouteChannelInvitesClose || path == RouteChannelRemove ||
-		path == RouteChannelLeave
+		path == RouteChannelLeave || path == RouteChannelAbandon
 }
 
 func (s *Server) registerChannelRoutes(mux *http.ServeMux) {
@@ -29,6 +30,7 @@ func (s *Server) registerChannelRoutes(mux *http.ServeMux) {
 	mux.HandleFunc(RouteChannelInvitesClose, s.handleChannelInviteClose)
 	mux.HandleFunc(RouteChannelRemove, s.handleChannelRemove)
 	mux.HandleFunc(RouteChannelLeave, s.handleChannelLeave)
+	mux.HandleFunc(RouteChannelAbandon, s.handleChannelAbandon)
 }
 
 func (s *Server) handleChannelCreate(writer http.ResponseWriter, request *http.Request) {
@@ -174,6 +176,29 @@ func (s *Server) handleChannelLeave(writer http.ResponseWriter, request *http.Re
 		return
 	}
 	if apiErr := validateChannelLeaveResponse(response); apiErr != nil {
+		writeError(writer, apiErr)
+		return
+	}
+	writeResponse(writer, http.StatusOK, response)
+}
+
+func (s *Server) handleChannelAbandon(writer http.ResponseWriter, request *http.Request) {
+	var input ChannelAbandonRequest
+	metadata, ok := s.prepareChannelPost(writer, request, &input)
+	if !ok {
+		return
+	}
+	if !validChannelAbandonRequest(input) {
+		writeError(writer, NewAPIError(CodeInvalidArgument,
+			"Channel abandon requires force and an exact Channel confirmation"))
+		return
+	}
+	response, apiErr := s.channels.ChannelAbandon(request.Context(), metadata, input)
+	if apiErr != nil {
+		writeError(writer, apiErr)
+		return
+	}
+	if apiErr := validateChannelAbandonResponse(response); apiErr != nil {
 		writeError(writer, apiErr)
 		return
 	}

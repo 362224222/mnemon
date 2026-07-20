@@ -33,9 +33,43 @@ func TestChannelRoutesAreAuthenticatedClosedAndNeverAcceptTokenInURL(t *testing.
 	}
 }
 
+func TestChannelAbandonRouteRequiresExplicitMatchingDestructiveConfirmation(t *testing.T) {
+	credential := repeatedOpaqueBytes(0x52)
+	service := &channelRouteService{abandon: ChannelAbandonResponse{SchemaVersion: SchemaVersion,
+		Status: "abandoned", Channel: "alpha", TransitionedAt: "2026-07-21T10:00:00Z",
+		Evidence: ChannelForensicCounts{MemberRecords: 3}}}
+	server, err := NewServer(fixedAuthenticator{want: modelDigest(credential)}, service)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, body := range []string{
+		`{"channel":"alpha","confirm_channel":"alpha","force":false}`,
+		`{"channel":"alpha","confirm_channel":"beta","force":true}`,
+	} {
+		request := authenticatedRequest(t, http.MethodPost, RouteChannelAbandon, body, credential)
+		recorder := httptest.NewRecorder()
+		server.Handler().ServeHTTP(recorder, request)
+		if recorder.Code == http.StatusOK || service.abandonCalls != 0 {
+			t.Fatalf("unsafe abandon %s = %d %s", body, recorder.Code, recorder.Body.String())
+		}
+	}
+	request := authenticatedRequest(t, http.MethodPost, RouteChannelAbandon,
+		`{"channel":"alpha","confirm_channel":"alpha","force":true}`, credential)
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || service.abandonCalls != 1 ||
+		service.abandonRequest.Channel != "alpha" {
+		t.Fatalf("confirmed abandon = %d %s request=%#v calls=%d", recorder.Code,
+			recorder.Body.String(), service.abandonRequest, service.abandonCalls)
+	}
+}
+
 type channelRouteService struct {
-	status      ChannelStatusResponse
-	statusCalls int
+	status         ChannelStatusResponse
+	statusCalls    int
+	abandon        ChannelAbandonResponse
+	abandonCalls   int
+	abandonRequest ChannelAbandonRequest
 }
 
 func (*channelRouteService) HookCheck(context.Context, RequestMetadata,
@@ -87,6 +121,13 @@ func (*channelRouteService) ChannelLeave(context.Context, RequestMetadata,
 	ChannelLeaveRequest,
 ) (ChannelLeaveResponse, *APIError) {
 	return ChannelLeaveResponse{}, NewAPIError(CodeActionNotAllowed, "not used")
+}
+func (service *channelRouteService) ChannelAbandon(_ context.Context, _ RequestMetadata,
+	request ChannelAbandonRequest,
+) (ChannelAbandonResponse, *APIError) {
+	service.abandonCalls++
+	service.abandonRequest = request
+	return service.abandon, nil
 }
 func (service *channelRouteService) ChannelStatus(context.Context,
 	RequestMetadata,

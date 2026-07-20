@@ -126,6 +126,23 @@ func (c *Client) LeaveChannel(ctx context.Context,
 	return response, nil
 }
 
+func (c *Client) AbandonChannel(ctx context.Context,
+	request ChannelAbandonRequest,
+) (ChannelAbandonResponse, *APIError) {
+	if !validChannelAbandonRequest(request) {
+		return ChannelAbandonResponse{}, NewAPIError(CodeInvalidArgument,
+			"Channel abandon requires force and an exact Channel confirmation")
+	}
+	var response ChannelAbandonResponse
+	if apiErr := c.postChannel(ctx, RouteChannelAbandon, request, &response); apiErr != nil {
+		return ChannelAbandonResponse{}, apiErr
+	}
+	if apiErr := validateChannelAbandonResponse(response); apiErr != nil {
+		return ChannelAbandonResponse{}, apiErr
+	}
+	return response, nil
+}
+
 func (c *Client) postChannel(ctx context.Context, route string, input, response any) *APIError {
 	if c == nil || c.http == nil || ctx == nil || route == RouteChannelStatus || !IsChannelRoute(route) {
 		return invalidControlResponse("local control client is unavailable")

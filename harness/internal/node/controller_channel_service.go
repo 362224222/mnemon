@@ -89,4 +89,15 @@ func (service controllerChannelService) ChannelLeave(ctx context.Context,
 	return service.channels.ChannelLeave(ctx, metadata, request)
 }
 
+func (service controllerChannelService) ChannelAbandon(ctx context.Context,
+	metadata localapi.RequestMetadata, request localapi.ChannelAbandonRequest,
+) (localapi.ChannelAbandonResponse, *localapi.APIError) {
+	release, apiErr := enterControllerAdmission(ctx, service.gate)
+	if apiErr != nil {
+		return localapi.ChannelAbandonResponse{}, apiErr
+	}
+	defer release()
+	return service.channels.ChannelAbandon(ctx, metadata, request)
+}
+
 var _ localapi.ChannelService = controllerChannelService{}

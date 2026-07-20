@@ -293,8 +293,14 @@ func channelAPIError(err error) *localapi.APIError {
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return localapi.NewAPIError(localapi.CodeOwnerUnreachable, "Channel operation was cancelled")
 	case errors.Is(err, store.ErrChannelCreateInput), errors.Is(err, store.ErrChannelInviteInput),
-		errors.Is(err, store.ErrChannelJoinInput):
+		errors.Is(err, store.ErrChannelJoinInput), errors.Is(err, store.ErrChannelAbandonInput):
 		return localapi.NewAPIError(localapi.CodeInvalidArgument, "Channel operation input is invalid")
+	case errors.Is(err, store.ErrChannelAbandonMissing):
+		return localapi.NewAPIError(localapi.CodeNotMember, "Channel is not present on this Node")
+	case errors.Is(err, store.ErrChannelAbandonTerminal):
+		return localapi.NewAPIError(localapi.CodeChannelClosed, "Channel is already terminal")
+	case errors.Is(err, store.ErrChannelAbandonStale):
+		return localapi.NewAPIError(localapi.CodeOperationMismatch, "Channel authority changed")
 	default:
 		return localapi.NewAPIError(localapi.CodeInternal, "durable Channel operation failed")
 	}

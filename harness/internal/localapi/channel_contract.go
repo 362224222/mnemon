@@ -38,6 +38,12 @@ type ChannelLeaveRequest struct {
 	Channel string `json:"channel,omitempty"`
 }
 
+type ChannelAbandonRequest struct {
+	Channel        string `json:"channel"`
+	ConfirmChannel string `json:"confirm_channel"`
+	Force          bool   `json:"force"`
+}
+
 type ChannelTopicView struct {
 	ReadyMembers uint8  `json:"ready_members"`
 	Status       string `json:"status"`
@@ -114,6 +120,28 @@ type ChannelLeaveResponse struct {
 	Status        string      `json:"status"`
 }
 
+type ChannelForensicCounts struct {
+	Bindings      uint64 `json:"bindings"`
+	Conflicts     uint64 `json:"conflicts"`
+	Cursors       uint64 `json:"cursors"`
+	Deliveries    uint64 `json:"deliveries"`
+	Events        uint64 `json:"events"`
+	Inboxes       uint64 `json:"inboxes"`
+	MemberRecords uint64 `json:"member_records"`
+	Publications  uint64 `json:"publications"`
+	PullACKs      uint64 `json:"pull_acks"`
+	Works         uint64 `json:"works"`
+}
+
+type ChannelAbandonResponse struct {
+	Channel        string                `json:"channel"`
+	Evidence       ChannelForensicCounts `json:"evidence"`
+	Replayed       bool                  `json:"replayed"`
+	SchemaVersion  int                   `json:"schema_version"`
+	Status         string                `json:"status"`
+	TransitionedAt string                `json:"transitioned_at"`
+}
+
 type ChannelStatusResponse struct {
 	Channels      []ChannelView `json:"channels"`
 	SchemaVersion int           `json:"schema_version"`
@@ -128,6 +156,7 @@ type ChannelService interface {
 		ChannelInviteCloseRequest) (ChannelInviteCloseResponse, *APIError)
 	ChannelRemove(context.Context, RequestMetadata, ChannelRemoveRequest) (ChannelRemoveResponse, *APIError)
 	ChannelLeave(context.Context, RequestMetadata, ChannelLeaveRequest) (ChannelLeaveResponse, *APIError)
+	ChannelAbandon(context.Context, RequestMetadata, ChannelAbandonRequest) (ChannelAbandonResponse, *APIError)
 	ChannelStatus(context.Context, RequestMetadata) (ChannelStatusResponse, *APIError)
 }
 
@@ -156,6 +185,11 @@ func validChannelRemoveRequest(request ChannelRemoveRequest) bool {
 
 func validChannelLeaveRequest(request ChannelLeaveRequest) bool {
 	return request.Channel == "" || validChannelAlias(request.Channel)
+}
+
+func validChannelAbandonRequest(request ChannelAbandonRequest) bool {
+	return request.Force && validChannelAlias(request.Channel) &&
+		request.Channel == request.ConfirmChannel
 }
 
 func validateChannelCreateResponse(response ChannelCreateResponse) *APIError {
@@ -210,6 +244,16 @@ func validateChannelLeaveResponse(response ChannelLeaveResponse) *APIError {
 	if response.SchemaVersion != SchemaVersion || response.Status != "left" ||
 		validateChannelView(response.Channel) != nil {
 		return invalidControlResponse("Channel leave response is invalid")
+	}
+	return nil
+}
+
+func validateChannelAbandonResponse(response ChannelAbandonResponse) *APIError {
+	transitionedAt, err := time.Parse(time.RFC3339Nano, response.TransitionedAt)
+	if response.SchemaVersion != SchemaVersion || response.Status != "abandoned" ||
+		!validChannelAlias(response.Channel) || err != nil || transitionedAt.IsZero() ||
+		transitionedAt.Format(time.RFC3339Nano) != response.TransitionedAt {
+		return invalidControlResponse("Channel abandon response is invalid")
 	}
 	return nil
 }

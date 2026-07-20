@@ -21,4 +21,9 @@ func TestChannelClientRejectsSecretsAndInvalidRulesBeforeTransport(t *testing.T)
 		ChannelInviteRequest{ExpiresSeconds: 1}); apiErr == nil || apiErr.Code != CodeInvalidArgument {
 		t.Fatalf("invalid invite duration = %#v", apiErr)
 	}
+	if _, apiErr := client.AbandonChannel(context.Background(), ChannelAbandonRequest{
+		Channel: "alpha", ConfirmChannel: "beta", Force: true}); apiErr == nil ||
+		apiErr.Code != CodeInvalidArgument {
+		t.Fatalf("mismatched abandon confirmation = %#v", apiErr)
+	}
 }
