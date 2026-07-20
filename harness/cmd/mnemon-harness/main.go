@@ -34,10 +34,12 @@ Managed Agent commands are installed through the canonical Skill and Guide
 and are intentionally absent from ordinary help.
 `
 
-type setupRunner func(context.Context, []string, io.Writer, io.Writer, string) int
-type ejectRunner func(context.Context, []string, io.Writer, io.Writer, string) int
-type statusRunner func(context.Context, []string, io.Writer, io.Writer, string) int
-type doctorRunner func(context.Context, []string, io.Writer, io.Writer, string) int
+type lifecycleRunner func(context.Context, []string, io.Writer, io.Writer, string) int
+type setupRunner = lifecycleRunner
+type ejectRunner = lifecycleRunner
+type statusRunner = lifecycleRunner
+type doctorRunner = lifecycleRunner
+type resetRunner = lifecycleRunner
 type channelRunner func(context.Context, []string, io.Reader, io.Writer, io.Writer, string) int
 
 type commandRunners struct {
@@ -45,6 +47,7 @@ type commandRunners struct {
 	eject   ejectRunner
 	status  statusRunner
 	doctor  doctorRunner
+	reset   resetRunner
 	channel channelRunner
 }
 
@@ -60,7 +63,7 @@ func main() {
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	return runWithCommandRunners(ctx, args, stdin, stdout, stderr,
 		commandRunners{setup: cli.RunSetup, eject: cli.RunEject, status: cli.RunStatus,
-			doctor: cli.RunDoctor, channel: cli.RunChannel})
+			doctor: cli.RunDoctor, reset: cli.RunReset, channel: cli.RunChannel})
 }
 
 func runWithSetup(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer,
@@ -105,32 +108,36 @@ func runWithCommandRunners(ctx context.Context, args []string, stdin io.Reader,
 			return 1
 		}
 		return 0
-	case "setup":
-		if runners.setup == nil {
-			return 1
-		}
-		return runners.setup(ctx, args[1:], stdout, stderr, version)
-	case "status":
-		if runners.status == nil {
-			return 1
-		}
-		return runners.status(ctx, args[1:], stdout, stderr, version)
-	case "doctor":
-		if runners.doctor == nil {
-			return 1
-		}
-		return runners.doctor(ctx, args[1:], stdout, stderr, version)
-	case "eject":
-		if runners.eject == nil {
-			return 1
-		}
-		return runners.eject(ctx, args[1:], stdout, stderr, version)
+	case "setup", "status", "doctor", "eject", "reset":
+		return runLifecycleCommand(ctx, args, stdout, stderr, runners)
 	case "channel", "hook", "agent", "teamwork":
 		return runExtendedCommand(ctx, args, stdin, stdout, stderr, version, runners.channel)
 	default:
 		fmt.Fprintf(stderr, "mnemon-harness: unknown command %q\n", args[0])
 		return 2
 	}
+}
+
+func runLifecycleCommand(ctx context.Context, args []string, stdout, stderr io.Writer,
+	runners commandRunners,
+) int {
+	var runner lifecycleRunner
+	switch args[0] {
+	case "setup":
+		runner = runners.setup
+	case "status":
+		runner = runners.status
+	case "doctor":
+		runner = runners.doctor
+	case "eject":
+		runner = runners.eject
+	case "reset":
+		runner = runners.reset
+	}
+	if runner == nil {
+		return 1
+	}
+	return runner(ctx, args[1:], stdout, stderr, version)
 }
 
 func runExtendedCommand(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer,

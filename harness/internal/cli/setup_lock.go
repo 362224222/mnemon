@@ -285,6 +285,13 @@ func (lock *setupLock) Close() error {
 	return lock.close(true)
 }
 
+// CloseAfterRename releases setup.lock after the complete Node directory was
+// atomically moved while this descriptor remained held. The descriptor still
+// pins the exact lock, but its old name can no longer be revalidated.
+func (lock *setupLock) CloseAfterRename() error {
+	return lock.close(false)
+}
+
 func (lock *setupLock) close(validate bool) error {
 	if lock == nil {
 		return nil

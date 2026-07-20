@@ -175,6 +175,30 @@ func TestRunRoutesEjectThroughThePublicLifecycleBoundary(t *testing.T) {
 	}
 }
 
+func TestRunRoutesResetWhileKeepingItOutOfHelp(t *testing.T) {
+	var received []string
+	reset := func(ctx context.Context, args []string, stdout, stderr io.Writer,
+		gotVersion string,
+	) int {
+		if ctx == nil || gotVersion != version {
+			t.Fatalf("reset composition = context %v version %q", ctx, gotVersion)
+		}
+		received = append([]string(nil), args...)
+		_, _ = io.WriteString(stdout, "reset receipt\n")
+		return 4
+	}
+	var stdout, stderr bytes.Buffer
+	exit := runWithCommandRunners(context.Background(),
+		[]string{"reset", "--force", "--confirm-peer", "peer"}, strings.NewReader(""),
+		&stdout, &stderr, commandRunners{reset: reset})
+	if exit != 4 || !reflect.DeepEqual(received,
+		[]string{"--force", "--confirm-peer", "peer"}) ||
+		stdout.String() != "reset receipt\n" || stderr.Len() != 0 {
+		t.Fatalf("reset route = exit %d args %v stdout %q stderr %q", exit, received,
+			stdout.String(), stderr.String())
+	}
+}
+
 func cliSetupMustNotRun(t *testing.T) setupRunner {
 	t.Helper()
 	return func(context.Context, []string, io.Writer, io.Writer, string) int {
