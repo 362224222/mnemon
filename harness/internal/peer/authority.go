@@ -121,58 +121,6 @@ func (authority *Authority) Replace(snapshot NetworkAuthoritySnapshot) error {
 	return nil
 }
 
-// prepare fully validates a candidate without making it visible. Gossip uses
-// this split to identify and drain affected Channel gates before the immutable
-// revision pointer is installed.
-func (authority *Authority) prepare(snapshot NetworkAuthoritySnapshot) (*networkAuthorityState, error) {
-	if authority == nil || authority.state.Load() == nil {
-		return nil, fmt.Errorf("%w: projection is unavailable", ErrNetworkAuthority)
-	}
-	local, err := canonicalLibp2pID(snapshot.LocalPeerID)
-	if err != nil || local != authority.localPeerID {
-		return nil, fmt.Errorf("%w: snapshot local PeerID changed", ErrNetworkAuthority)
-	}
-	if len(snapshot.Channels) > model.MaxChannelsPerNode {
-		return nil, fmt.Errorf("%w: got %d Channels, max %d", ErrNetworkAuthority,
-			len(snapshot.Channels), model.MaxChannelsPerNode)
-	}
-	state := &networkAuthorityState{localPeerID: local,
-		channels:           make(map[model.ChannelID]channelAuthorityState, len(snapshot.Channels)),
-		physical:           make(map[libp2ppeer.ID]struct{}),
-		outboundEnrollment: make(map[libp2ppeer.ID]struct{}, len(snapshot.OutboundEnrollmentPeers))}
-	if len(snapshot.OutboundEnrollmentPeers) > model.MaxChannelsPerNode {
-		return nil, fmt.Errorf("%w: outbound enrollment permit limit exceeded", ErrNetworkAuthority)
-	}
-	for _, permitted := range snapshot.OutboundEnrollmentPeers {
-		peerID, err := canonicalLibp2pID(permitted)
-		if err != nil || peerID == local {
-			return nil, fmt.Errorf("%w: invalid outbound enrollment Peer", ErrNetworkAuthority)
-		}
-		if _, duplicate := state.outboundEnrollment[peerID]; duplicate {
-			return nil, fmt.Errorf("%w: duplicate outbound enrollment Peer", ErrNetworkAuthority)
-		}
-		state.outboundEnrollment[peerID] = struct{}{}
-	}
-	for _, channel := range snapshot.Channels {
-		if _, exists := state.channels[channel.ChannelID]; exists {
-			return nil, fmt.Errorf("%w: duplicate Channel", ErrNetworkAuthority)
-		}
-		built, err := buildChannelAuthority(local, channel)
-		if err != nil {
-			return nil, err
-		}
-		state.channels[channel.ChannelID] = built
-		if !channel.Status.Terminal() {
-			for peerID, binding := range built.bindings {
-				if binding == model.BindingPending || binding == model.BindingActive {
-					state.physical[peerID] = struct{}{}
-				}
-			}
-		}
-	}
-	return state, nil
-}
-
 func (authority *Authority) install(state *networkAuthorityState) {
 	authority.state.Store(state)
 }
