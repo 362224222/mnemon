@@ -2328,13 +2328,6 @@
     },
     {
       "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/cli/setup_test.go::TestSetupFreshClassificationNeverReinitializesAnExistingDatabase",
-      "path": "harness/internal/cli/setup_test.go",
-      "symbol": "TestSetupFreshClassificationNeverReinitializesAnExistingDatabase",
-      "ceiling": 21
-    },
-    {
-      "rule": "cyclomatic_complexity",
       "identity": "cyclomatic_complexity:harness/internal/event/admission.go::NewAdmissionStamp",
       "path": "harness/internal/event/admission.go",
       "symbol": "NewAdmissionStamp",
@@ -6655,7 +6648,7 @@
       "rule": "paired_test_file_lines",
       "identity": "paired_test_file_lines:harness/internal/cli/setup_test.go",
       "path": "harness/internal/cli/setup_test.go",
-      "ceiling": 1227
+      "ceiling": 1175
     },
     {
       "rule": "paired_test_file_lines",
@@ -6835,7 +6828,7 @@
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/cli/setup.go",
       "path": "harness/internal/cli/setup.go",
-      "ceiling": 665
+      "ceiling": 594
     },
     {
       "rule": "production_file_lines",

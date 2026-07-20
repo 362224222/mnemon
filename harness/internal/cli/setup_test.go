@@ -541,58 +541,6 @@ func TestSetupParsingWorkspaceAndStableExitClasses(t *testing.T) {
 	}
 }
 
-func TestSetupFreshClassificationNeverReinitializesAnExistingDatabase(t *testing.T) {
-	workspace, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	nodeState := filepath.Join(workspace, ".mnemon", "harness", "node")
-	if err := os.MkdirAll(nodeState, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(filepath.Join(workspace, ".mnemon"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(filepath.Join(workspace, ".mnemon", "harness"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if allowed, err := setupCanInitialize(nodeState); err != nil || !allowed {
-		t.Fatalf("missing database fresh classification = (%t, %v)", allowed, err)
-	}
-	profiles := filepath.Join(nodeState, "profiles")
-	if err := os.Mkdir(profiles, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	credential := filepath.Join(profiles, model.TeamworkProfileID().String()+".token")
-	if err := os.WriteFile(credential, []byte("corrupt\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if allowed, err := setupCanInitialize(nodeState); err != nil || allowed {
-		t.Fatalf("corrupt credential fresh classification = (%t, %v)", allowed, err)
-	}
-	if err := os.Remove(credential); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := localapi.EnsureProfileCredential(nodeState); err != nil {
-		t.Fatal(err)
-	}
-	if allowed, err := setupCanInitialize(nodeState); err != nil || !allowed {
-		t.Fatalf("valid partial credential classification = (%t, %v)", allowed, err)
-	}
-	if err := os.WriteFile(filepath.Join(nodeState, "node.db"), []byte("corrupt"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if allowed, err := setupCanInitialize(nodeState); err != nil || allowed {
-		t.Fatalf("existing corrupt database fresh classification = (%t, %v)", allowed, err)
-	}
-	if err := os.WriteFile(credential, []byte("corrupt\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if allowed, err := setupCanInitialize(nodeState); err != nil || allowed {
-		t.Fatalf("existing database plus corrupt credential classification = (%t, %v)", allowed, err)
-	}
-}
-
 type concurrentFreshSetupState struct {
 	mu                  sync.Mutex
 	inactive            localapi.AuthorityResponse

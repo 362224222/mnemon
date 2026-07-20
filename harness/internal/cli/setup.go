@@ -81,14 +81,6 @@ type setupReceipt struct {
 	Status        string `json:"status"`
 }
 
-type setupAuthorityObservation struct {
-	authority localapi.AuthorityResponse
-	client    setupAuthorityClient
-	found     bool
-	terminal  *localapi.APIError
-	fallback  *localapi.APIError
-}
-
 func productionSetupDependencies() setupDependencies {
 	return setupDependencies{
 		workingDirectory: os.Getwd,
@@ -175,9 +167,9 @@ func (app *setupApp) run(ctx context.Context, args []string) int {
 func (app *setupApp) executeLocked(ctx context.Context, request setupRequest,
 	workspace, nodeState, revision string, bundle assets.Bundle, preflight node.DaemonEnsurePreflight, companion setupCompanion,
 ) (setupReceipt, *localapi.APIError) {
-	observed := app.observeAuthority(ctx, nodeState, companion)
-	if observed.terminal != nil {
-		return setupReceipt{}, observed.terminal
+	observed, apiErr := app.observeSetupAuthority(ctx, nodeState, companion)
+	if apiErr != nil {
+		return setupReceipt{}, apiErr
 	}
 	if !observed.found {
 		allowed, err := app.deps.canInitialize(nodeState)
@@ -404,29 +396,6 @@ func (app *setupApp) upgradeActiveLeased(ctx context.Context, workspace, nodeSta
 		Status: "ready"}, nil
 }
 
-func (app *setupApp) observeAuthority(ctx context.Context, nodeState string,
-	companion setupCompanion,
-) setupAuthorityObservation {
-	client, err := app.deps.newClient(nodeState)
-	if err != nil {
-		return setupAuthorityObservation{fallback: setupAuthError(
-			"managed Profile credential is unavailable")}
-	}
-	authority, apiErr := client.ReadAuthority(ctx)
-	if apiErr == nil {
-		return setupAuthorityObservation{authority: authority, client: client, found: true}
-	}
-	if apiErr.Code != localapi.CodeMnemondUnavailable {
-		return setupAuthorityObservation{terminal: normalizeSetupAPIError(apiErr)}
-	}
-	authority, err = companion.Inspect(ctx)
-	if err != nil {
-		return setupAuthorityObservation{client: client,
-			fallback: setupAuthError("managed Node authority could not be inspected")}
-	}
-	return setupAuthorityObservation{authority: authority, client: client, found: true}
-}
-
 func (app *setupApp) rollbackActivation(ctx context.Context, companion setupCompanion,
 	host assets.Host, revision string, activationUpdatedAt time.Time, activationChanged bool,
 	failureOutcome node.DaemonEnsureFailureOutcome,
@@ -518,46 +487,6 @@ func resolveSetupWorkspace(requested string, workingDirectory func() (string, er
 		return "", errors.New("project root is not a physical directory")
 	}
 	return physical, nil
-}
-
-func setupCanInitialize(nodeState string) (bool, error) {
-	state, err := openSetupLockNodeState(nodeState)
-	if err != nil {
-		return false, err
-	}
-	if err := state.close(); err != nil {
-		return false, err
-	}
-	path := filepath.Join(nodeState, "node.db")
-	info, err := os.Lstat(path)
-	if errors.Is(err, os.ErrNotExist) {
-		credential := filepath.Join(nodeState, "profiles",
-			model.TeamworkProfileID().String()+".token")
-		if _, credentialErr := os.Lstat(credential); errors.Is(credentialErr, os.ErrNotExist) {
-			return true, nil
-		} else if credentialErr != nil {
-			return false, credentialErr
-		}
-		// A projected credential may legitimately precede node.db after a
-		// crashed initialize. Reuse it only when the normal closed client
-		// validator accepts it; corrupted or unsafe credential state is never
-		// treated as a fresh Node.
-		if _, credentialErr := localapi.NewClient(nodeState); credentialErr != nil {
-			return false, nil
-		}
-		return true, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	if _, err := validateSetupOwnerPath(info, 0o600, false); err != nil {
-		return false, err
-	}
-	// An existing database is never classified as a fresh/partial initialize,
-	// even when its outer file metadata is safe. Its schema and credential
-	// bindings must be recovered through exact authority observation or doctor;
-	// setup must not ask Provision to reinterpret corrupted durable state.
-	return false, nil
 }
 
 func validSetupDependencies(dependencies setupDependencies) bool {
