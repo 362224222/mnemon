@@ -112,8 +112,13 @@ func TestConnectionGaterResolvingReservationsShareEightSlotBudget(t *testing.T) 
 	gater.dnsResolver = resolver
 	ctx, cancel := context.WithCancel(context.Background())
 	results := startBlockedEnrollmentAcquisitions(t, ctx, gater, owner, 32)
-	waitForResolverEntries(t, resolver.entered, HermeticLimits().UnknownEnrollmentConnections)
-	if slots := gater.UnknownEnrollmentSlots(); slots != HermeticLimits().UnknownEnrollmentConnections {
+	limit := HermeticLimits().UnknownEnrollmentConnections
+	waitForResolverEntries(t, resolver.entered, limit)
+	// Drain every acquisition that did not reserve a DNS slot before probing
+	// the mutex. Otherwise TryLock races with those short budget checks and can
+	// falsely attribute their lock ownership to the blocked resolver calls.
+	assertEnrollmentAcquisitionErrors(t, results, 32-limit, errEnrollmentTransportPermitBusy)
+	if slots := gater.UnknownEnrollmentSlots(); slots != limit {
 		t.Fatalf("resolving slots = %d, want shared limit", slots)
 	}
 	if gater.InterceptSecured(network.DirInbound, unknown.libp2pID, testConnectionAddresses()) {
@@ -124,8 +129,8 @@ func TestConnectionGaterResolvingReservationsShareEightSlotBudget(t *testing.T) 
 	}
 	gater.mu.Unlock()
 	cancel()
-	assertFailedEnrollmentAcquisitions(t, results, 32)
-	if resolver.calls.Load() != int32(HermeticLimits().UnknownEnrollmentConnections) ||
+	assertEnrollmentAcquisitionErrors(t, results, limit, ErrEnrollmentTransportPermit)
+	if resolver.calls.Load() != int32(limit) ||
 		gater.UnknownEnrollmentSlots() != 0 {
 		t.Fatalf("resolver calls/remaining slots = %d/%d, want 8/0",
 			resolver.calls.Load(), gater.UnknownEnrollmentSlots())
@@ -445,15 +450,17 @@ func waitForResolverEntries(t *testing.T, entered <-chan struct{}, count int) {
 	}
 }
 
-func assertFailedEnrollmentAcquisitions(t *testing.T, results <-chan error, count int) {
+func assertEnrollmentAcquisitionErrors(t *testing.T, results <-chan error, count int,
+	want error,
+) {
 	t.Helper()
 	deadline := time.NewTimer(2 * time.Second)
 	defer deadline.Stop()
 	for index := 0; index < count; index++ {
 		select {
 		case err := <-results:
-			if !errors.Is(err, ErrEnrollmentTransportPermit) {
-				t.Fatalf("acquisition %d error = %v", index, err)
+			if !errors.Is(err, want) {
+				t.Fatalf("acquisition %d error = %v, want %v", index, err, want)
 			}
 		case <-deadline.C:
 			t.Fatalf("acquisitions returned = %d, want %d", index, count)

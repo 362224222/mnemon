@@ -81,10 +81,10 @@ func waitForActivationChild(t *testing.T, path string, result <-chan error) []by
 	defer deadline.Stop()
 	for {
 		raw, err := os.ReadFile(path)
-		if err == nil {
+		if err == nil && len(raw) > 0 && raw[len(raw)-1] == '\n' {
 			return raw
 		}
-		if !errors.Is(err, os.ErrNotExist) {
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			t.Fatal(err)
 		}
 		select {
