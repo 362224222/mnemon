@@ -48,9 +48,9 @@ func TestChannelEnrollmentHandshakeCommitsResponseLossReplayAndAtomicInstall(t *
 		t.Fatal(err)
 	}
 	ownerProtocol, err := NewChannelEnrollmentOwner(ChannelEnrollmentOwnerOptions{
-		Store: ownerStore, Signer: enrollmentTestSigner{privateKey: enrollmentPrivateKey(t, ownerIdentity)},
-		Clock:  fixedEnrollmentClock{at: acceptedAt},
-		Random: bytes.NewReader(bytes.Repeat([]byte{0x31}, model.EnrollmentNonceBytes*4)),
+		Controller: enrollmentOwnerTestControllerFor(t, ownerStore, ownerIdentity),
+		Clock:      fixedEnrollmentClock{at: acceptedAt},
+		Random:     bytes.NewReader(bytes.Repeat([]byte{0x31}, model.EnrollmentNonceBytes*4)),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -137,9 +137,9 @@ func TestChannelEnrollmentRecoversOwnerCommitAfterAcceptedResponseLoss(t *testin
 	barrier := &committedEnrollmentOwnerStore{delegate: ownerStore,
 		committed: make(chan struct{}), resume: make(chan struct{})}
 	ownerProtocol, err := NewChannelEnrollmentOwner(ChannelEnrollmentOwnerOptions{
-		Store: barrier, Signer: enrollmentTestSigner{privateKey: enrollmentPrivateKey(t, ownerIdentity)},
-		Clock:  fixedEnrollmentClock{at: acceptedAt},
-		Random: bytes.NewReader(bytes.Repeat([]byte{0x33}, model.EnrollmentNonceBytes*4)),
+		Controller: enrollmentOwnerTestControllerFor(t, barrier, ownerIdentity),
+		Clock:      fixedEnrollmentClock{at: acceptedAt},
+		Random:     bytes.NewReader(bytes.Repeat([]byte{0x33}, model.EnrollmentNonceBytes*4)),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -316,28 +316,6 @@ type committedEnrollmentOwnerStore struct {
 	once      sync.Once
 }
 
-type unexpectedEnrollmentOwnerStore struct{ called chan struct{} }
-
-func (unexpected unexpectedEnrollmentOwnerStore) PrepareChannelEnrollment(context.Context,
-	store.PrepareChannelEnrollmentSpec,
-) (store.PrepareChannelEnrollmentResult, error) {
-	select {
-	case unexpected.called <- struct{}{}:
-	default:
-	}
-	return store.PrepareChannelEnrollmentResult{}, store.ErrChannelEnrollmentInput
-}
-
-func (unexpected unexpectedEnrollmentOwnerStore) AcceptChannelEnrollment(context.Context,
-	store.AcceptChannelEnrollmentSpec,
-) (store.AcceptChannelEnrollmentResult, error) {
-	select {
-	case unexpected.called <- struct{}{}:
-	default:
-	}
-	return store.AcceptChannelEnrollmentResult{}, store.ErrChannelEnrollmentInput
-}
-
 func (barrier *committedEnrollmentOwnerStore) PrepareChannelEnrollment(ctx context.Context,
 	spec store.PrepareChannelEnrollmentSpec,
 ) (store.PrepareChannelEnrollmentResult, error) {
@@ -385,11 +363,6 @@ func (failure failingEnrollmentInstallStore) InstallJoinedChannel(context.Contex
 ) (store.InstallJoinedChannelResult, error) {
 	return store.InstallJoinedChannelResult{}, failure.err
 }
-
-type fmtWrappedEnrollmentError struct{ cause error }
-
-func (wrapped fmtWrappedEnrollmentError) Error() string { return "wrapped durable failure" }
-func (wrapped fmtWrappedEnrollmentError) Unwrap() error { return wrapped.cause }
 
 func openEnrollmentTestStore(t *testing.T, identity testkit.Identity, at time.Time) *store.Store {
 	t.Helper()
