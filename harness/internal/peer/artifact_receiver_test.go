@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/libp2p/go-libp2p/core/host"
 	artifactdomain "github.com/mnemon-dev/mnemon/harness/internal/artifact"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
@@ -1191,16 +1192,27 @@ func TestArtifactReceiverConstructorDoubleRunAndPullBounds(t *testing.T) {
 	peerWait.Wait()
 }
 
-func TestArtifactReceiverRealStoreCASClientLibp2pHappyAndRestart(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
+type artifactReceiverRealFixture struct {
+	requester     testkit.Identity
+	origin        testkit.Identity
+	channel       *testkit.SignedChannel
+	originMember  testkit.MemberFixture
+	store         *store.Store
+	joinedAt      time.Time
+	originHost    host.Host
+	requesterHost host.Host
+}
+
+func newArtifactReceiverRealFixture(t *testing.T, ctx context.Context,
+	name string,
+) artifactReceiverRealFixture {
+	t.Helper()
 	createdAt := artifactReceiverTestTime().Add(-time.Hour)
-	requester := testkit.NewIdentity(t, "artifact-receiver-real-store-requester")
-	origin := testkit.NewIdentity(t, "artifact-receiver-real-store-origin")
-	channel := testkit.NewSignedChannelForOwnerAt(t, "artifact-receiver-real-store-channel",
-		requester, createdAt)
+	requester := testkit.NewIdentity(t, name+"-requester")
+	origin := testkit.NewIdentity(t, name+"-origin")
+	channel := testkit.NewSignedChannelForOwnerAt(t, name+"-channel", requester, createdAt)
 	st := openPeerMeshStore(t, requester, createdAt)
-	createPeerMeshChannel(t, st, channel, "artifact-receiver-real-store-channel")
+	createPeerMeshChannel(t, st, channel, name+"-channel")
 	originMember := channel.AppendActiveIdentity(t, origin)
 	mergeAt := originMember.Member().CreatedAt()
 	mergePeerMeshRoster(t, st, channel, originMember.Member(), mergeAt)
@@ -1227,7 +1239,7 @@ func TestArtifactReceiverRealStoreCASClientLibp2pHappyAndRestart(t *testing.T) {
 	}
 	topics, err := st.ReadChannelTopicRuntime(ctx)
 	if err != nil || len(topics) != 1 {
-		t.Fatalf("read real Store topic = (%#v, %v)", topics, err)
+		t.Fatalf("read %s topic = (%#v, %v)", name, topics, err)
 	}
 	joiningAt := baselineAt.Add(3 * time.Second)
 	if !joiningAt.After(topics[0].UpdatedAt) {
@@ -1239,7 +1251,7 @@ func TestArtifactReceiverRealStoreCASClientLibp2pHappyAndRestart(t *testing.T) {
 		TopicState: model.TopicJoining, At: joiningAt,
 	})
 	if err != nil || joining.Topic.TopicState != model.TopicJoining {
-		t.Fatalf("begin real Store topic join = (%#v, %v)", joining, err)
+		t.Fatalf("begin %s topic join = (%#v, %v)", name, joining, err)
 	}
 	joinedAt := joiningAt.Add(time.Second)
 	joined, err := st.CompareAndSetChannelTopicState(ctx, store.CompareAndSetChannelTopicStateSpec{
@@ -1248,27 +1260,38 @@ func TestArtifactReceiverRealStoreCASClientLibp2pHappyAndRestart(t *testing.T) {
 		TopicState: model.TopicJoined, At: joinedAt,
 	})
 	if err != nil || joined.Topic.TopicState != model.TopicJoined {
-		t.Fatalf("join real Store topic = (%#v, %v)", joined, err)
+		t.Fatalf("join %s topic = (%#v, %v)", name, joined, err)
 	}
-
 	originHost := newArtifactServerTestHost(t, origin)
-	defer originHost.Close()
 	requesterHost := newArtifactServerTestHost(t, requester)
-	defer requesterHost.Close()
+	t.Cleanup(func() {
+		_ = requesterHost.Close()
+		_ = originHost.Close()
+	})
 	connectArtifactServerHosts(t, ctx, requesterHost, originHost)
+	return artifactReceiverRealFixture{requester: requester, origin: origin, channel: channel,
+		originMember: originMember, store: st, joinedAt: joinedAt,
+		originHost: originHost, requesterHost: requesterHost}
+}
+func TestArtifactReceiverRealStoreCASClientLibp2pHappyAndRestart(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	fixture := newArtifactReceiverRealFixture(t, ctx, "artifact-receiver-real-store")
+	requester, origin, channel := fixture.requester, fixture.origin, fixture.channel
+	originMember, st, joinedAt := fixture.originMember, fixture.store, fixture.joinedAt
 	content := artifactReceiverContentForTest(t, "real-store", []byte("real Store receiver bytes"))
 	serverContent := artifactServerContent{channelID: channel.Channel().ID(),
 		manifest: content.manifest, rootDigest: content.manifest.RootDigest(),
 		blockDigest: model.Sum(content.blockBytes), blockBytes: content.blockBytes}
 	source := artifactServerStaticSource(serverContent)
 	server, err := NewArtifactServer(context.Background(), ArtifactServerOptions{
-		Host: originHost, Source: source, CAS: serverContent.cas(),
+		Host: fixture.originHost, Source: source, CAS: serverContent.cas(),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer server.Close()
-	client, err := NewArtifactClient(ArtifactClientOptions{Host: requesterHost})
+	client, err := NewArtifactClient(ArtifactClientOptions{Host: fixture.requesterHost})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1298,7 +1321,6 @@ func TestArtifactReceiverRealStoreCASClientLibp2pHappyAndRestart(t *testing.T) {
 		t.Fatalf("first real Store receive = root %#v err %v source %d/%d snapshot %#v",
 			verified, err, source.manifestCalls.Load(), source.blockCalls.Load(), first.Snapshot())
 	}
-
 	secondAt := firstAt.Add(time.Second)
 	secondPublication := artifactReceiverStorePublicationForTest(t, "real-store-second", channel,
 		originMember, requester, 2, content.manifest.RootDigest(), secondAt)
@@ -1329,72 +1351,13 @@ func TestArtifactReceiverRealStoreCASClientLibp2pHappyAndRestart(t *testing.T) {
 		t.Fatalf("real Store left a claimable Inbox = (%#v, %v)", claimed, err)
 	}
 }
-
 func TestArtifactReceiverRealStoreStagedPartialRestartAndResponseLoss(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	createdAt := artifactReceiverTestTime().Add(-time.Hour)
-	requester := testkit.NewIdentity(t, "artifact-receiver-partial-requester")
-	origin := testkit.NewIdentity(t, "artifact-receiver-partial-origin")
-	channel := testkit.NewSignedChannelForOwnerAt(t, "artifact-receiver-partial-channel",
-		requester, createdAt)
-	st := openPeerMeshStore(t, requester, createdAt)
-	createPeerMeshChannel(t, st, channel, "artifact-receiver-partial-channel")
-	originMember := channel.AppendActiveIdentity(t, origin)
-	mergeAt := originMember.Member().CreatedAt()
-	mergePeerMeshRoster(t, st, channel, originMember.Member(), mergeAt)
-	baselineAt := mergeAt.Add(time.Second)
-	if _, err := st.InstallInboundChannelBaseline(ctx, store.InstallInboundChannelBaselineSpec{
-		AuthenticatedPeerID: origin.PeerID(), Baseline: store.ChannelDataBaseline{
-			ChannelID: channel.Channel().ID(), OriginPeerID: origin.PeerID(),
-			OriginEpoch: origin.OriginEpoch()}, At: baselineAt,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	reserved, err := st.ReserveOutboundChannelBaseline(ctx, store.ReserveOutboundChannelBaselineSpec{
-		ChannelID: channel.Channel().ID(), TargetPeerID: origin.PeerID(),
-		At: baselineAt.Add(time.Second),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := st.ConfirmOutboundChannelBaseline(ctx, store.ConfirmOutboundChannelBaselineSpec{
-		AuthenticatedPeerID: origin.PeerID(), Ack: store.ChannelDataBaselineAck(reserved.Baseline),
-		At: baselineAt.Add(2 * time.Second),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	topics, err := st.ReadChannelTopicRuntime(ctx)
-	if err != nil || len(topics) != 1 {
-		t.Fatalf("read partial-restart topic = (%#v, %v)", topics, err)
-	}
-	joiningAt := baselineAt.Add(3 * time.Second)
-	if !joiningAt.After(topics[0].UpdatedAt) {
-		joiningAt = topics[0].UpdatedAt.Add(time.Second)
-	}
-	joining, err := st.CompareAndSetChannelTopicState(ctx, store.CompareAndSetChannelTopicStateSpec{
-		ChannelID: channel.Channel().ID(), ExpectedStatus: topics[0].Status,
-		ExpectedRosterHead: topics[0].RosterHead, ExpectedTopicState: topics[0].TopicState,
-		TopicState: model.TopicJoining, At: joiningAt,
-	})
-	if err != nil || joining.Topic.TopicState != model.TopicJoining {
-		t.Fatalf("begin partial-restart topic join = (%#v, %v)", joining, err)
-	}
-	joinedAt := joiningAt.Add(time.Second)
-	joined, err := st.CompareAndSetChannelTopicState(ctx, store.CompareAndSetChannelTopicStateSpec{
-		ChannelID: channel.Channel().ID(), ExpectedStatus: joining.Topic.Status,
-		ExpectedRosterHead: joining.Topic.RosterHead, ExpectedTopicState: model.TopicJoining,
-		TopicState: model.TopicJoined, At: joinedAt,
-	})
-	if err != nil || joined.Topic.TopicState != model.TopicJoined {
-		t.Fatalf("join partial-restart topic = (%#v, %v)", joined, err)
-	}
-
-	originHost := newArtifactServerTestHost(t, origin)
-	defer originHost.Close()
-	requesterHost := newArtifactServerTestHost(t, requester)
-	defer requesterHost.Close()
-	connectArtifactServerHosts(t, ctx, requesterHost, originHost)
+	fixture := newArtifactReceiverRealFixture(t, ctx, "artifact-receiver-partial")
+	requester, origin, channel := fixture.requester, fixture.origin, fixture.channel
+	originMember, st, joinedAt := fixture.originMember, fixture.store, fixture.joinedAt
+	originHost, requesterHost := fixture.originHost, fixture.requesterHost
 	firstBytes := bytes.Repeat([]byte{'p'}, artifactdomain.BlockSize)
 	secondBytes := []byte("partial restart second missing block")
 	manifest := artifactReceiverTwoBlockManifest(t, "partial-restart", firstBytes, secondBytes)
@@ -1445,7 +1408,6 @@ func TestArtifactReceiverRealStoreStagedPartialRestartAndResponseLoss(t *testing
 	if err != nil || put.Disposition != store.PeerInboxStored {
 		t.Fatalf("put partial-restart Inbox = (%#v, %v)", put, err)
 	}
-
 	firstContext, cancelFirst := context.WithCancel(ctx)
 	firstStore := &artifactReceiverResponseLossStore{ArtifactReceiverStore: st,
 		loseFirstStage: true}
