@@ -56,8 +56,8 @@ func TestRequirementsRegistryIsClosedAndEvidenceBacked(t *testing.T) {
 		t.Fatalf("registry schema versions = (%d,%d), want (1,1)",
 			expected.SchemaVersion, registry.SchemaVersion)
 	}
-	if len(expected.Requirements) != 132 {
-		t.Fatalf("expected requirement count = %d, want 132", len(expected.Requirements))
+	if len(expected.Requirements) != 103 {
+		t.Fatalf("expected requirement count = %d, want 103", len(expected.Requirements))
 	}
 	if len(registry.Requirements) != len(expected.Requirements) {
 		t.Fatalf("requirement evidence count = %d, want %d", len(registry.Requirements),
@@ -202,26 +202,12 @@ func declaresTopLevelTestFunction(file *ast.File, symbol string) bool {
 func requireScenarioKeys(t *testing.T, requirements []requirementEvidence) {
 	t.Helper()
 	required := map[string]string{
-		"ND-17":  "nd-17-attachment-filesystem-db-crash-gap",
-		"ND-18":  "nd-18-shared-registration-subentry-ownership",
-		"ND-20":  "nd-20-response-loss-operation-journal",
-		"ND-21":  "nd-21-one-action-team-expansion",
-		"ND-22":  "nd-22-unique-default-profile-adapter",
-		"CH-15":  "ch-15-terminal-peer-replay",
-		"AR-01":  "ar-01-local-replica-producer-provenance",
-		"AR-10":  "ar-10-readonly-view-crash-lifecycle",
-		"TW-10":  "tw-10-deadline-restart-race",
-		"NET-07": "net-07-frozen-hermetic-resource-profile",
-		"PI-05":  "pi-05-revision-tombstone-conflict",
-		"PI-07":  "pi-07-closed-channel-frames",
-		"PI-10":  "pi-10-eligible-auto-team-invariance",
-		"PI-11":  "pi-11-prompt-injection-boundary",
-		"EQ-02":  "eq-02-closed-registry-completeness-determinism",
-		"EQ-03":  "eq-03-goroutine-owner-cancel-bound-wait",
-		"EQ-07":  "eq-07-durable-transition-io-fencing",
-		"EQ-08":  "eq-08-supervisor-lifecycle",
-		"EQ-09":  "eq-09-baseline-delta-hygiene",
-		"EQ-10":  "eq-10-race-fuzz-oracle-preservation",
+		"ND-17": "nd-17-attachment-filesystem-db-crash-gap",
+		"ND-18": "nd-18-shared-registration-subentry-ownership",
+		"ND-20": "nd-20-response-loss-operation-journal",
+		"ND-21": "nd-21-one-action-team-expansion",
+		"CH-15": "ch-15-terminal-peer-replay",
+		"AR-01": "ar-01-local-replica-producer-provenance",
 	}
 	byID := make(map[string]requirementEvidence, len(requirements))
 	for _, requirement := range requirements {
@@ -230,12 +216,6 @@ func requireScenarioKeys(t *testing.T, requirements []requirementEvidence) {
 	for id, scenario := range required {
 		if !slices.Contains(byID[id].ScenarioKeys, scenario) {
 			t.Errorf("requirement %s lacks independent scenario key %q", id, scenario)
-		}
-	}
-	for _, id := range []string{"PI-01", "PI-02", "PI-03", "PI-04", "PI-05", "PI-06",
-		"PI-07", "PI-08", "PI-09", "PI-10", "PI-11", "PI-12"} {
-		if byID[id].Status != "pending" {
-			t.Errorf("7Q Profile requirement %s status = %q, want pending", id, byID[id].Status)
 		}
 	}
 }

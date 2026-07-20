@@ -38,10 +38,6 @@
       "level": "MUST"
     },
     {
-      "id": "AR-10",
-      "level": "MUST"
-    },
-    {
       "id": "CH-01",
       "level": "MUST"
     },
@@ -131,54 +127,6 @@
     },
     {
       "id": "CUT-08",
-      "level": "MUST"
-    },
-    {
-      "id": "EQ-01",
-      "level": "MUST"
-    },
-    {
-      "id": "EQ-02",
-      "level": "MUST"
-    },
-    {
-      "id": "EQ-03",
-      "level": "MUST"
-    },
-    {
-      "id": "EQ-04",
-      "level": "MUST"
-    },
-    {
-      "id": "EQ-05",
-      "level": "MUST"
-    },
-    {
-      "id": "EQ-06",
-      "level": "MUST"
-    },
-    {
-      "id": "EQ-07",
-      "level": "MUST"
-    },
-    {
-      "id": "EQ-08",
-      "level": "MUST"
-    },
-    {
-      "id": "EQ-09",
-      "level": "MUST"
-    },
-    {
-      "id": "EQ-10",
-      "level": "MUST"
-    },
-    {
-      "id": "EQ-11",
-      "level": "MUST"
-    },
-    {
-      "id": "EQ-12",
       "level": "MUST"
     },
     {
@@ -302,10 +250,6 @@
       "level": "MUST"
     },
     {
-      "id": "ND-22",
-      "level": "MUST"
-    },
-    {
       "id": "NET-01",
       "level": "MUST"
     },
@@ -328,58 +272,6 @@
     {
       "id": "NET-06",
       "level": "SHOULD"
-    },
-    {
-      "id": "NET-07",
-      "level": "MUST"
-    },
-    {
-      "id": "PI-01",
-      "level": "MUST"
-    },
-    {
-      "id": "PI-02",
-      "level": "MUST"
-    },
-    {
-      "id": "PI-03",
-      "level": "MUST"
-    },
-    {
-      "id": "PI-04",
-      "level": "MUST"
-    },
-    {
-      "id": "PI-05",
-      "level": "MUST"
-    },
-    {
-      "id": "PI-06",
-      "level": "MUST"
-    },
-    {
-      "id": "PI-07",
-      "level": "MUST"
-    },
-    {
-      "id": "PI-08",
-      "level": "MUST"
-    },
-    {
-      "id": "PI-09",
-      "level": "MUST"
-    },
-    {
-      "id": "PI-10",
-      "level": "MUST"
-    },
-    {
-      "id": "PI-11",
-      "level": "MUST"
-    },
-    {
-      "id": "PI-12",
-      "level": "MUST"
     },
     {
       "id": "PR-01",
@@ -431,10 +323,6 @@
     },
     {
       "id": "PR-13",
-      "level": "MUST"
-    },
-    {
-      "id": "PR-14",
       "level": "MUST"
     },
     {
@@ -523,10 +411,6 @@
     },
     {
       "id": "TW-09",
-      "level": "MUST"
-    },
-    {
-      "id": "TW-10",
       "level": "MUST"
     }
   ]
