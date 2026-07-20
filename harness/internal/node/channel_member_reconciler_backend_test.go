@@ -40,6 +40,7 @@ func TestDurableChannelMemberReconcileBackendTranslatesExactFences(t *testing.T)
 	}
 	if controller.hello.ChannelID != target.channel.ID() ||
 		controller.hello.AuthenticatedPeerID != target.remoteMember.PeerID() ||
+		controller.confirmed != target.channel.ID() ||
 		st.reserve.TargetPeerID != target.remoteMember.PeerID() ||
 		st.confirm.AuthenticatedPeerID != target.remoteMember.PeerID() ||
 		st.confirm.Ack.BaselineChannelSequence != 9 ||
@@ -108,7 +109,15 @@ func (st *recordingChannelMemberStore) SetPeerReachability(_ context.Context,
 }
 
 type recordingChannelMemberController struct {
-	hello peer.ChannelMemberHelloControl
+	hello     peer.ChannelMemberHelloControl
+	confirmed model.ChannelID
+}
+
+func (controller *recordingChannelMemberController) ConfirmMemberBaselineRuntimeGate(_ context.Context,
+	channelID model.ChannelID,
+) error {
+	controller.confirmed = channelID
+	return nil
 }
 
 func (controller *recordingChannelMemberController) ReconcileMemberHelloGate(_ context.Context,

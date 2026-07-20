@@ -37,9 +37,14 @@ type ChannelMemberReconcilerClock interface{ Now() time.Time }
 type ChannelMemberReconcilerOptions struct {
 	Store      ChannelMemberReconcilerStore
 	Client     ChannelMemberControlClient
-	Controller peer.ChannelMemberController
+	Controller ChannelMemberReconcilerController
 	Clock      ChannelMemberReconcilerClock
 	Period     time.Duration
+}
+
+type ChannelMemberReconcilerController interface {
+	peer.ChannelMemberController
+	ConfirmMemberBaselineRuntimeGate(context.Context, model.ChannelID) error
 }
 
 type channelMemberTarget struct {
@@ -70,7 +75,7 @@ type channelMemberReconcileBackend interface {
 
 type durableChannelMemberReconcileBackend struct {
 	store      ChannelMemberReconcilerStore
-	controller peer.ChannelMemberController
+	controller ChannelMemberReconcilerController
 }
 
 type wallChannelMemberReconcilerClock struct{}
@@ -195,7 +200,10 @@ func (backend durableChannelMemberReconcileBackend) confirm(ctx context.Context,
 			Ack: store.ChannelDataBaselineAck{ChannelID: ack.ChannelID(),
 				OriginPeerID: ack.OriginPeerID(), OriginEpoch: ack.OriginEpoch(),
 				BaselineChannelSequence: ack.BaselineChannelSequence()}, At: at})
-	return err
+	if err != nil {
+		return err
+	}
+	return backend.controller.ConfirmMemberBaselineRuntimeGate(ctx, target.channel.ID())
 }
 
 func (backend durableChannelMemberReconcileBackend) reachability(ctx context.Context,
