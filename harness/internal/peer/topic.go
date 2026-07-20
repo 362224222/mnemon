@@ -2,19 +2,14 @@ package peer
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/binary"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"hash"
 	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
-	pb "github.com/libp2p/go-libp2p-pubsub/pb"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	libp2ppeer "github.com/libp2p/go-libp2p/core/peer"
@@ -22,108 +17,12 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 )
 
-const publicationMessageIDDomain = "mnemon/r5/gossipsub-message-id/1"
-
 var ErrGossipTopic = errors.New("Mnemon Channel Gossip topic")
 
 // NewGossipSub mutates a Host-wide protocol mux. Serializing constructors and
 // checking the mux itself makes the one-router invariant Host-scoped rather
 // than accidentally depending on callers sharing one Authority pointer.
 var gossipConstructorMu sync.Mutex
-
-// PublicationMessageID implements the frozen valid-header tuple plus the
-// PubSub original author. The latter prevents another active member from
-// re-publishing identical application bytes under its own transport signature
-// and poisoning the seen cache before validation rejects it. ReceivedFrom and
-// transport seqno are deliberately excluded so relays and retries are stable.
-//
-// Only a frame whose stable publication header cannot be parsed and validated
-// uses a separate topic+raw fallback. Current-semantic support belongs to the
-// strict validator, not this seen-cache key: an unsupported but stable header must
-// still bind From and the complete publication identity tuple. Parsing is
-// bounded by the publication cap, performs no I/O and is total for every frame
-// admitted by GossipSub's outer wire limit.
-func PublicationMessageID(message *pb.Message) string {
-	hash := sha256.New()
-	if message == nil {
-		writeMessageIDFields(hash, []byte(publicationMessageIDDomain), []byte("invalid"), nil, nil)
-		return "r5:" + hex.EncodeToString(hash.Sum(nil))
-	}
-	publication, err := model.ParsePublicationEvidence(message.GetData())
-	if err != nil {
-		writeMessageIDFields(hash, []byte(publicationMessageIDDomain), []byte("invalid"),
-			[]byte(message.GetTopic()), message.GetData())
-		return "r5:" + hex.EncodeToString(hash.Sum(nil))
-	}
-	sequence := make([]byte, 8)
-	binary.BigEndian.PutUint64(sequence, publication.ChannelSequence())
-	writeMessageIDFields(hash,
-		[]byte(publicationMessageIDDomain),
-		[]byte("valid"),
-		[]byte(message.GetTopic()),
-		message.GetFrom(),
-		[]byte(publication.ChannelID().String()),
-		[]byte(publication.OriginPeerID().String()),
-		[]byte(publication.OriginEpoch().String()),
-		sequence,
-		[]byte(publication.EventID().String()),
-		publication.EventDigest().Bytes(),
-		publication.Digest().Bytes(),
-	)
-	return "r5:" + hex.EncodeToString(hash.Sum(nil))
-}
-
-func writeMessageIDFields(digest hash.Hash, fields ...[]byte) {
-	var length [8]byte
-	for _, field := range fields {
-		binary.BigEndian.PutUint64(length[:], uint64(len(field)))
-		_, _ = digest.Write(length[:])
-		_, _ = digest.Write(field)
-	}
-}
-
-type authoritySubscriptionFilter struct{ authority *Authority }
-
-var _ pubsub.SubscriptionFilter = authoritySubscriptionFilter{}
-
-func (filter authoritySubscriptionFilter) CanSubscribe(topic string) bool {
-	return filter.authority != nil && filter.authority.CanSubscribe(topic)
-}
-
-func (filter authoritySubscriptionFilter) FilterIncomingSubscriptions(from libp2ppeer.ID,
-	subscriptions []*pb.RPC_SubOpts,
-) ([]*pb.RPC_SubOpts, error) {
-	if len(subscriptions) > model.MaxChannelsPerNode {
-		return nil, pubsub.ErrTooManySubscriptions
-	}
-	accepted := make(map[string]*pb.RPC_SubOpts, len(subscriptions))
-	for _, subscription := range subscriptions {
-		if subscription == nil {
-			continue
-		}
-		topic := subscription.GetTopicid()
-		if !filter.CanSubscribe(topic) {
-			continue
-		}
-		// Unsubscribe never grants access and remains admissible for cleanup
-		// after a scoped revoke. Subscribe requires exact active authority.
-		if subscription.GetSubscribe() && !filter.authority.CanUseTopic(from, topic) {
-			continue
-		}
-		if previous, duplicate := accepted[topic]; duplicate {
-			if previous.GetSubscribe() != subscription.GetSubscribe() {
-				delete(accepted, topic)
-			}
-			continue
-		}
-		accepted[topic] = subscription
-	}
-	result := make([]*pb.RPC_SubOpts, 0, len(accepted))
-	for _, subscription := range accepted {
-		result = append(result, subscription)
-	}
-	return result, nil
-}
 
 // Gossip owns one Node-wide GossipSub router and an independent session for
 // each active Channel topic. It has no Store or Agent dependency.
@@ -216,23 +115,6 @@ func NewGossip(ctx context.Context, nodeHost host.Host, authority *Authority) (*
 		refreshWake: make(chan struct{}, 1), refreshDone: make(chan struct{})}
 	go gossip.runRefreshWorker()
 	return gossip, nil
-}
-
-func authorityRPCInspector(authority *Authority) func(libp2ppeer.ID, *pubsub.RPC) error {
-	return func(from libp2ppeer.ID, rpc *pubsub.RPC) error {
-		if authority == nil || from == "" || rpc == nil {
-			return fmt.Errorf("%w: invalid incoming RPC", ErrGossipTopic)
-		}
-		// This runs before transport signature verification, MessageID parsing and
-		// the global validation queue. Inspect only authenticated transport Peer +
-		// exact raw topic; full publication authority remains in the validator.
-		for _, message := range rpc.GetPublish() {
-			if message == nil || !authority.CanUseTopic(from, message.GetTopic()) {
-				return fmt.Errorf("%w: incoming publish is outside Peer Channel authority", ErrGossipTopic)
-			}
-		}
-		return nil
-	}
 }
 
 // Join registers the exact validator before joining/subscribing. Repeated
@@ -339,47 +221,9 @@ func (gossip *Gossip) reconcile(snapshot NetworkAuthoritySnapshot, commit func()
 	}()
 	current := gossip.authority.state.Load()
 	promotedPeers := dataPlanePromotions(current, candidate)
-	// Every Channel ever joined keeps one stable gate for this router's full
-	// lifetime. A PubSub validator closure can outlive its TopicSession, so an
-	// authority revision must also drain gates whose current session was closed
-	// or temporarily inactive.
-	channelIDs := make([]model.ChannelID, 0, len(gossip.gates))
-	previous := make(map[model.ChannelID]topicAuthorityGeneration, len(gossip.gates))
-	for channelID, gate := range gossip.gates {
-		if gate == nil {
-			continue
-		}
-		channelIDs = append(channelIDs, channelID)
-		previous[channelID] = topicGenerationFromState(current, channelID)
-	}
-	sort.Slice(channelIDs, func(left, right int) bool {
-		return channelIDs[left].String() < channelIDs[right].String()
-	})
-	affected := channelIDs[:0]
-	for _, channelID := range channelIDs {
-		if previous[channelID] != topicGenerationFromState(candidate, channelID) {
-			affected = append(affected, channelID)
-		}
-	}
-	locked := make([]*channelGate, 0, len(affected))
-	lockedSet := make(map[*channelGate]struct{}, len(affected))
-	oldSessions := make(map[model.ChannelID]*TopicSession, len(affected))
-	for _, channelID := range affected {
-		gate := gossip.gates[channelID]
-		gate.Lock()
-		locked = append(locked, gate)
-		lockedSet[gate] = struct{}{}
-		if session := gossip.sessions[channelID]; session != nil {
-			oldSessions[channelID] = session
-		}
-	}
-	unlockGates := func() {
-		for index := len(locked) - 1; index >= 0; index-- {
-			locked[index].Unlock()
-		}
-		locked = nil
-	}
-	defer unlockGates()
+	affected := gossip.affectedChannels(current, candidate)
+	gates := gossip.lockAffectedChannels(affected)
+	defer gates.unlock()
 	// Every affected Channel is now drained at the application boundary. The
 	// durable CAS runs before the immutable authority pointer swap while
 	// unrelated Channel sessions keep running on independent gates.
@@ -392,8 +236,80 @@ func (gossip *Gossip) reconcile(snapshot NetworkAuthoritySnapshot, commit func()
 	gossip.authority.finishUpdate()
 	updateHeld = false
 
+	reconcileErrors := gossip.rotateAffectedSessions(affected)
+	if len(reconcileErrors) > 0 {
+		return gossip.failClosedReconcile(gates.lockedSet, reconcileErrors)
+	}
+	reconcileErrors = gossip.rejoinAffectedSessions(affected, gates.oldSessions)
+	gossip.resetUnauthorizedDataPlaneStreams()
+	if len(reconcileErrors) > 0 {
+		return errors.Join(reconcileErrors...)
+	}
+	desiredPeers := dataPlanePeers(candidate)
+	gossip.pruneRefreshPeers(desiredPeers)
+	gossip.recordPromotedPeers(promotedPeers)
+	gates.unlock()
+	gossip.signalRefresh()
+	return nil
+}
+
+type reconcileChannelGates struct {
+	locked      []*channelGate
+	lockedSet   map[*channelGate]struct{}
+	oldSessions map[model.ChannelID]*TopicSession
+}
+
+func (gossip *Gossip) affectedChannels(current, candidate *networkAuthorityState) []model.ChannelID {
+	// Every Channel ever joined keeps one stable gate for this router's full
+	// lifetime. A PubSub validator closure can outlive its TopicSession, so an
+	// authority revision also drains gates whose session is temporarily absent.
+	channelIDs := make([]model.ChannelID, 0, len(gossip.gates))
+	for channelID, gate := range gossip.gates {
+		if gate != nil {
+			channelIDs = append(channelIDs, channelID)
+		}
+	}
+	sort.Slice(channelIDs, func(left, right int) bool {
+		return channelIDs[left].String() < channelIDs[right].String()
+	})
+	affected := channelIDs[:0]
+	for _, channelID := range channelIDs {
+		if topicGenerationFromState(current, channelID) != topicGenerationFromState(candidate, channelID) {
+			affected = append(affected, channelID)
+		}
+	}
+	return affected
+}
+
+func (gossip *Gossip) lockAffectedChannels(channelIDs []model.ChannelID) *reconcileChannelGates {
+	gates := &reconcileChannelGates{locked: make([]*channelGate, 0, len(channelIDs)),
+		lockedSet:   make(map[*channelGate]struct{}, len(channelIDs)),
+		oldSessions: make(map[model.ChannelID]*TopicSession, len(channelIDs))}
+	for _, channelID := range channelIDs {
+		gate := gossip.gates[channelID]
+		gate.Lock()
+		gates.locked = append(gates.locked, gate)
+		gates.lockedSet[gate] = struct{}{}
+		if session := gossip.sessions[channelID]; session != nil {
+			gates.oldSessions[channelID] = session
+		}
+	}
+	return gates
+}
+
+func (gates *reconcileChannelGates) unlock() {
+	if gates == nil {
+		return
+	}
+	for index := len(gates.locked) - 1; index >= 0; index-- {
+		gates.locked[index].Unlock()
+	}
+	gates.locked = nil
+}
+
+func (gossip *Gossip) rotateAffectedSessions(channelIDs []model.ChannelID) []error {
 	var reconcileErrors []error
-	for _, channelID := range affected {
+	for _, channelID := range channelIDs {
 		session := gossip.sessions[channelID]
 		if session == nil {
 			continue
@@ -403,29 +319,37 @@ func (gossip *Gossip) reconcile(snapshot NetworkAuthoritySnapshot, commit func()
 				fmt.Errorf("rotate Channel %s: %w", channelID.String(), err))
 		}
 	}
-	if len(reconcileErrors) > 0 {
-		// A partially closed old mesh cannot safely coexist with a newly
-		// installed authority. Keep the new fail-closed policy and stop the
-		// whole router; daemon restart reconstructs clean sessions.
-		gossip.closed = true
-		if gossip.cancel != nil {
-			gossip.cancel()
-		}
-		for _, session := range gossip.sortedSessionsLocked() {
-			_, alreadyLocked := lockedSet[session.gate]
-			if !alreadyLocked {
-				session.gate.Lock()
-			}
-			if err := gossip.closeSessionLocked(session); err != nil {
-				reconcileErrors = append(reconcileErrors, err)
-			}
-			if !alreadyLocked {
-				session.gate.Unlock()
-			}
-		}
-		return errors.Join(reconcileErrors...)
+	return reconcileErrors
+}
+
+func (gossip *Gossip) failClosedReconcile(locked map[*channelGate]struct{}, causes []error) error {
+	// A partially closed old mesh cannot safely coexist with a newly installed
+	// authority. Keep the new fail-closed policy and stop the whole router;
+	// daemon restart reconstructs clean sessions.
+	gossip.closed = true
+	if gossip.cancel != nil {
+		gossip.cancel()
 	}
-	for _, channelID := range affected {
+	for _, session := range gossip.sortedSessionsLocked() {
+		_, alreadyLocked := locked[session.gate]
+		if !alreadyLocked {
+			session.gate.Lock()
+		}
+		if err := gossip.closeSessionLocked(session); err != nil {
+			causes = append(causes, err)
+		}
+		if !alreadyLocked {
+			session.gate.Unlock()
+		}
+	}
+	return errors.Join(causes...)
+}
+
+func (gossip *Gossip) rejoinAffectedSessions(channelIDs []model.ChannelID,
+	oldSessions map[model.ChannelID]*TopicSession,
+) []error {
+	var reconcileErrors []error
+	for _, channelID := range channelIDs {
 		oldSession := oldSessions[channelID]
 		if oldSession == nil {
 			continue
@@ -437,20 +361,11 @@ func (gossip *Gossip) reconcile(snapshot NetworkAuthoritySnapshot, commit func()
 		if _, err := gossip.joinLocked(channelID, topicName); err != nil {
 			reconcileErrors = append(reconcileErrors,
 				fmt.Errorf("rejoin Channel %s: %w", channelID.String(), err))
-		} else {
-			oldSession.handoff.Store(true)
+			continue
 		}
+		oldSession.handoff.Store(true)
 	}
-	gossip.resetUnauthorizedDataPlaneStreams()
-	if len(reconcileErrors) > 0 {
-		return errors.Join(reconcileErrors...)
-	}
-	desiredPeers := dataPlanePeers(candidate)
-	gossip.pruneRefreshPeers(desiredPeers)
-	gossip.recordPromotedPeers(promotedPeers)
-	unlockGates()
-	gossip.signalRefresh()
-	return nil
+	return reconcileErrors
 }
 
 func dataPlanePromotions(current, candidate *networkAuthorityState) []libp2ppeer.ID {
