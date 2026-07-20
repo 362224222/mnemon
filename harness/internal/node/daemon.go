@@ -58,6 +58,7 @@ type Daemon struct {
 	identity   *Identity
 	store      *store.Store
 	controller *Controller
+	channels   *daemonChannelRuntime
 
 	lifecycleMu  sync.Mutex
 	serveStarted bool
@@ -119,7 +120,13 @@ func openDaemon(ctx context.Context, options DaemonOptions,
 	workspace := options.Workspace
 	identity := authority.identity
 	st := authority.store
+	channels, err := openDaemonChannelRuntime(ctx, st, identity, options.Clock)
+	if err != nil {
+		_ = st.Close()
+		return nil, fmt.Errorf("%w: compose Channel runtime: %v", ErrDaemonAuthority, err)
+	}
 	fail := func(cause error) (*Daemon, error) {
+		cause = errors.Join(cause, channels.Close())
 		if closeErr := st.Close(); closeErr != nil {
 			cause = errors.Join(cause,
 				fmt.Errorf("%w: close Store after composition failure: %v", ErrDaemonAuthority, closeErr))
@@ -142,13 +149,13 @@ func openDaemon(ctx context.Context, options DaemonOptions,
 	}
 	controller, err := NewController(ctx, ControllerOptions{NodeState: nodeState, Workspace: workspace,
 		Store: st, Profile: authority.authority.Profile, Signer: identity.PublicationSigner(), Clock: options.Clock,
-		Install: options.Install, actionPolicy: actionPolicy,
+		Install: options.Install, Channels: channels.manager, actionPolicy: actionPolicy,
 		WakeAdapter: wakeAdapter, BeforeAccept: beforeAccept})
 	if err != nil {
 		return fail(fmt.Errorf("%w: compose controller: %v", ErrDaemonAuthority, err))
 	}
 	return &Daemon{workspace: workspace, nodeState: nodeState, identity: identity,
-		store: st, controller: controller, serveDone: make(chan struct{})}, nil
+		store: st, controller: controller, channels: channels, serveDone: make(chan struct{})}, nil
 }
 
 func (daemon *Daemon) Serve(ctx context.Context) error {
@@ -201,6 +208,9 @@ func (daemon *Daemon) Close() error {
 			// admission. Keep this idempotent fallback for every early-return
 			// path so Close can never strand inherited ensure.lock authority.
 			daemon.closeErr = controller.releaseBeforeAccept()
+		}
+		if daemon.channels != nil {
+			daemon.closeErr = errors.Join(daemon.closeErr, daemon.channels.Close())
 		}
 		if daemon.store != nil {
 			daemon.closeErr = errors.Join(daemon.closeErr, daemon.store.Close())

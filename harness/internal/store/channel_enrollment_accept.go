@@ -344,10 +344,13 @@ func persistAcceptedEnrollment(ctx context.Context, tx *sql.Tx, node model.Node,
 		return mapChannelEnrollmentError(err)
 	}
 	updated, err := tx.ExecContext(ctx, `UPDATE channels SET roster_head_revision=?,roster_head_hash=?,
-		updated_at=? WHERE channel_id=? AND roster_head_revision=? AND roster_head_hash=?`,
+		topic_state=?,updated_at=? WHERE channel_id=? AND roster_head_revision=? AND roster_head_hash=?
+		AND status=? AND topic_state=?`,
 		evidence.channel.RosterHead().Revision(), evidence.channel.RosterHead().Digest().Bytes(),
-		storeTime(evidence.at), evidence.channel.ID().String(), authority.channel.RosterHead().Revision(),
-		authority.channel.RosterHead().Digest().Bytes())
+		string(evidence.channel.TopicState()), storeTime(evidence.at), evidence.channel.ID().String(),
+		authority.channel.RosterHead().Revision(),
+		authority.channel.RosterHead().Digest().Bytes(), string(authority.channel.Status()),
+		string(authority.channel.TopicState()))
 	if err != nil {
 		return mapChannelEnrollmentError(err)
 	}

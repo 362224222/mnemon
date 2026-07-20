@@ -44,6 +44,24 @@ const (
 	CodeOperationPending       ErrorCode = "operation_pending"
 	CodePeerUnavailable        ErrorCode = "peer_unavailable"
 	CodeMnemondUnavailable     ErrorCode = "mnemond_unavailable"
+	CodeOwnerUnreachable       ErrorCode = "owner_unreachable"
+	CodeBusy                   ErrorCode = "busy"
+	CodeInvalidToken           ErrorCode = "invalid_token"
+	CodeWrongOwner             ErrorCode = "wrong_owner"
+	CodeTokenExpired           ErrorCode = "token_expired"
+	CodeTokenClosed            ErrorCode = "token_closed"
+	CodeTokenExhausted         ErrorCode = "token_exhausted"
+	CodeChannelFull            ErrorCode = "channel_full"
+	CodeNodeChannelLimit       ErrorCode = "node_channel_limit"
+	CodeBadProof               ErrorCode = "bad_proof"
+	CodeIncompatibleProtocol   ErrorCode = "incompatible_protocol"
+	CodeNotMember              ErrorCode = "not_member"
+	CodeMemberRevoked          ErrorCode = "member_revoked"
+	CodeChannelClosed          ErrorCode = "channel_closed"
+	CodeBaselineConflict       ErrorCode = "baseline_conflict"
+	CodeOriginEpochMismatch    ErrorCode = "origin_epoch_mismatch"
+	CodeRosterGap              ErrorCode = "roster_gap"
+	CodeRosterConflict         ErrorCode = "roster_conflict"
 	CodeInternal               ErrorCode = "internal"
 )
 
@@ -56,7 +74,11 @@ func (c ErrorCode) Valid() bool {
 		CodeAssetRevisionMismatch, CodeActionNotAllowed, CodeCurrentTooLarge,
 		CodeOperationMismatch, CodeWorkConflict, CodeWorkExpired,
 		CodeProfileHostMismatch, CodeHostActivationRequired, CodeOperationPending, CodePeerUnavailable,
-		CodeMnemondUnavailable, CodeInternal:
+		CodeMnemondUnavailable, CodeOwnerUnreachable, CodeBusy, CodeInvalidToken,
+		CodeWrongOwner, CodeTokenExpired, CodeTokenClosed, CodeTokenExhausted,
+		CodeChannelFull, CodeNodeChannelLimit, CodeBadProof, CodeIncompatibleProtocol,
+		CodeNotMember, CodeMemberRevoked, CodeChannelClosed, CodeBaselineConflict, CodeOriginEpochMismatch,
+		CodeRosterGap, CodeRosterConflict, CodeInternal:
 		return true
 	default:
 		return false
@@ -73,9 +95,14 @@ func (c ErrorCode) ExitStatus() int {
 		CodeContextStale, CodeAssetRevisionMismatch:
 		return 3
 	case CodeActionNotAllowed, CodeCurrentTooLarge, CodeOperationMismatch,
-		CodeWorkConflict, CodeWorkExpired, CodeProfileHostMismatch, CodeHostActivationRequired:
+		CodeWorkConflict, CodeWorkExpired, CodeProfileHostMismatch, CodeHostActivationRequired,
+		CodeInvalidToken, CodeWrongOwner, CodeTokenExpired, CodeTokenClosed,
+		CodeTokenExhausted, CodeChannelFull, CodeNodeChannelLimit, CodeBadProof,
+		CodeIncompatibleProtocol, CodeNotMember, CodeMemberRevoked, CodeChannelClosed,
+		CodeBaselineConflict, CodeOriginEpochMismatch, CodeRosterConflict:
 		return 4
-	case CodeOperationPending, CodePeerUnavailable, CodeMnemondUnavailable:
+	case CodeOperationPending, CodePeerUnavailable, CodeMnemondUnavailable,
+		CodeOwnerUnreachable, CodeBusy, CodeRosterGap:
 		return 5
 	default:
 		return 1
@@ -83,7 +110,8 @@ func (c ErrorCode) ExitStatus() int {
 }
 
 func (c ErrorCode) Retryable() bool {
-	return c == CodeOperationPending || c == CodePeerUnavailable || c == CodeMnemondUnavailable
+	return c == CodeOperationPending || c == CodePeerUnavailable || c == CodeMnemondUnavailable ||
+		c == CodeOwnerUnreachable || c == CodeBusy || c == CodeRosterGap
 }
 
 type APIError struct {

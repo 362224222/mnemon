@@ -38,6 +38,7 @@ type Server struct {
 	authority     AuthorityProvider
 	lifecycle     LifecycleFunc
 	mutation      MutationShutdownPreparer
+	channels      ChannelService
 	shutdownOnce  sync.Once
 	handler       http.Handler
 }
@@ -115,6 +116,9 @@ func newServer(authenticator Authenticator, service Service, health HealthProvid
 	}
 	server := &Server{authenticator: authenticator, service: service, health: health, status: status,
 		authority: authority, lifecycle: lifecycle, mutation: mutation}
+	if channels, ok := service.(ChannelService); ok {
+		server.channels = channels
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc(RouteHealth, server.handleHealth)
 	mux.HandleFunc(RouteStatus, server.handleStatus)
@@ -124,6 +128,7 @@ func newServer(authenticator Authenticator, service Service, health HealthProvid
 	mux.HandleFunc(RouteAgentCurrent, server.handleAgentCurrent)
 	mux.HandleFunc(RouteTeamworkAction, server.handleTeamworkAction)
 	mux.HandleFunc(RouteAgentResolve, server.handleAgentResolve)
+	server.registerChannelRoutes(mux)
 	server.handler = http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if !IsControlRoute(request.URL.Path) {
 			writeErrorStatus(writer, http.StatusNotFound,
@@ -521,7 +526,7 @@ func IsAgentRoute(path string) bool {
 
 func IsControlRoute(path string) bool {
 	return path == RouteHealth || path == RouteStatus || path == RouteAuthority ||
-		path == RouteShutdown || IsAgentRoute(path)
+		path == RouteShutdown || IsAgentRoute(path) || IsChannelRoute(path)
 }
 
 func validTeamworkAction(action string) bool {

@@ -17,6 +17,13 @@ const helpText = `mnemon-harness is the project-local client for mnemond-managed
 
 Usage:
   mnemon-harness setup [--host auto|codex|claude-code] [--project-root DIR]
+  mnemon-harness channel create [NAME]
+  mnemon-harness channel join [--file INVITE_FILE]
+  mnemon-harness channel status [CHANNEL]
+  mnemon-harness channel invite [--channel CHANNEL] [--expires DURATION] [--uses N]
+  mnemon-harness channel invite [--channel CHANNEL] --close
+  mnemon-harness channel remove [--channel CHANNEL] MEMBER
+  mnemon-harness channel leave [CHANNEL]
   mnemon-harness status
   mnemon-harness doctor
   mnemon-harness eject [--host auto|codex|claude-code] [--project-root DIR]
@@ -31,12 +38,14 @@ type setupRunner func(context.Context, []string, io.Writer, io.Writer, string) i
 type ejectRunner func(context.Context, []string, io.Writer, io.Writer, string) int
 type statusRunner func(context.Context, []string, io.Writer, io.Writer, string) int
 type doctorRunner func(context.Context, []string, io.Writer, io.Writer, string) int
+type channelRunner func(context.Context, []string, io.Reader, io.Writer, io.Writer, string) int
 
 type commandRunners struct {
-	setup  setupRunner
-	eject  ejectRunner
-	status statusRunner
-	doctor doctorRunner
+	setup   setupRunner
+	eject   ejectRunner
+	status  statusRunner
+	doctor  doctorRunner
+	channel channelRunner
 }
 
 func main() {
@@ -51,7 +60,7 @@ func main() {
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	return runWithCommandRunners(ctx, args, stdin, stdout, stderr,
 		commandRunners{setup: cli.RunSetup, eject: cli.RunEject, status: cli.RunStatus,
-			doctor: cli.RunDoctor})
+			doctor: cli.RunDoctor, channel: cli.RunChannel})
 }
 
 func runWithSetup(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer,
@@ -116,10 +125,22 @@ func runWithCommandRunners(ctx context.Context, args []string, stdin io.Reader,
 			return 1
 		}
 		return runners.eject(ctx, args[1:], stdout, stderr, version)
-	case "hook", "agent", "teamwork":
-		return cli.New(stdin, stdout, stderr).Run(ctx, args)
+	case "channel", "hook", "agent", "teamwork":
+		return runExtendedCommand(ctx, args, stdin, stdout, stderr, version, runners.channel)
 	default:
 		fmt.Fprintf(stderr, "mnemon-harness: unknown command %q\n", args[0])
 		return 2
 	}
+}
+
+func runExtendedCommand(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer,
+	version string, channel channelRunner,
+) int {
+	if args[0] == "channel" {
+		if channel == nil {
+			return 1
+		}
+		return channel(ctx, args[1:], stdin, stdout, stderr, version)
+	}
+	return cli.New(stdin, stdout, stderr).Run(ctx, args)
 }

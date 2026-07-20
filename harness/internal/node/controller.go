@@ -22,6 +22,7 @@ type ControllerOptions struct {
 	Store        *store.Store
 	Profile      model.Profile
 	Signer       event.PublicationSigner
+	Channels     localapi.ChannelService
 	Clock        Clock
 	Install      InstallationVerifier
 	actionPolicy agent.ActionPolicy
@@ -76,7 +77,12 @@ func NewController(ctx context.Context, options ControllerOptions) (*Controller,
 	controller := &Controller{nodeState: options.NodeState, assetRevision: assetRevision, store: options.Store,
 		admission: admission, wakeWorker: composition.wakeWorker,
 		shutdownRequested: make(chan struct{}), beforeAccept: options.BeforeAccept}
-	managedService := controllerAdmissionService{gate: admission, next: newLocalAPIServiceAdapter(composition.service)}
+	managedAgent := controllerAdmissionService{gate: admission, next: newLocalAPIServiceAdapter(composition.service)}
+	var managedService localapi.Service = managedAgent
+	if options.Channels != nil {
+		managedService = controllerChannelService{Service: managedAgent, gate: admission,
+			channels: options.Channels}
+	}
 	server, err := localapi.NewServerWithStatusLifecycle(options.Store, managedService, composition.observer,
 		composition.observer, composition.observer, localapi.LifecycleFunc(controller.requestShutdown), controller)
 	if err != nil {

@@ -14,10 +14,30 @@ import (
 func TestAcceptChannelEnrollmentCommitsAndReplaysAfterGrantClosure(t *testing.T) {
 	t.Parallel()
 	fixture := newChannelEnrollmentFixture(t, "accept-replay")
+	topicAt := fixture.channel.Channel().CreatedAt().Add(time.Second)
+	joining, err := fixture.ownerStore.CompareAndSetChannelTopicState(context.Background(),
+		CompareAndSetChannelTopicStateSpec{ChannelID: fixture.channel.Channel().ID(),
+			ExpectedStatus: model.ChannelActive, ExpectedRosterHead: fixture.head,
+			ExpectedTopicState: model.TopicNotJoined, TopicState: model.TopicJoining, At: topicAt})
+	if err != nil || !joining.Changed {
+		t.Fatalf("mark Channel topic joining = (%#v, %v)", joining, err)
+	}
+	joined, err := fixture.ownerStore.CompareAndSetChannelTopicState(context.Background(),
+		CompareAndSetChannelTopicStateSpec{ChannelID: fixture.channel.Channel().ID(),
+			ExpectedStatus: model.ChannelActive, ExpectedRosterHead: fixture.head,
+			ExpectedTopicState: model.TopicJoining, TopicState: model.TopicJoined, At: topicAt.Add(time.Second)})
+	if err != nil || !joined.Changed {
+		t.Fatalf("mark Channel topic joined = (%#v, %v)", joined, err)
+	}
 	accepted := fixture.accept(t, fixture.transcript(t, 0x21, 0x22, fixture.head))
 	if accepted.Status != ChannelEnrollmentAccepted || accepted.Member.PeerID() != fixture.joiner.PeerID() ||
-		accepted.Roster.Head().Revision() != 2 {
+		accepted.Roster.Head().Revision() != 2 || accepted.Channel.TopicState() != model.TopicJoining {
 		t.Fatalf("AcceptChannelEnrollment() = %#v", accepted)
+	}
+	var durableTopic string
+	if err := fixture.ownerStore.db.QueryRow(`SELECT topic_state FROM channels WHERE channel_id=?`,
+		fixture.channel.Channel().ID().String()).Scan(&durableTopic); err != nil || durableTopic != string(model.TopicJoining) {
+		t.Fatalf("durable topic state = %q, %v", durableTopic, err)
 	}
 	assertEnrollmentTableCounts(t, fixture.ownerStore, map[string]int{
 		"channel_members": 2, "enrollment_grant_uses": 1, "enrollment_receipts": 1,
