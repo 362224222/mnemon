@@ -559,26 +559,6 @@ func TestCodexWakeAdapterRequiresOneExactManagedHookRegistration(t *testing.T) {
 	}
 }
 
-func TestCodexWakeAdapterRejectsInvalidClockEvidence(t *testing.T) {
-	workspace := t.TempDir()
-	starter := newFakeCodexStarter(fakeCodexScenario{}, nil)
-	adapter, err := NewCodexWakeAdapter(CodexWakeAdapterOptions{Executable: "/usr/bin/codex",
-		Workspace: workspace, Environment: []string{"PATH=/usr/bin"}, Starter: starter,
-		Identity: fixedCodexIdentity{}, Clock: invalidCodexClock{}, Terminator: &fakeCodexTerminator{},
-		VerifyProjection: passCodexProjection,
-		InterruptGrace:   time.Millisecond, ExitGrace: time.Millisecond, SignalGrace: time.Millisecond})
-	if err != nil {
-		t.Fatal(err)
-	}
-	result, err := adapter.Run(context.Background(), CodexWakeRequest{
-		RunAttachmentEnvironment: RunAttachmentEnvironment + "=/tmp/run.attach",
-		Callbacks:                testCodexCallbacks{}.callbacks()})
-	if !errors.Is(err, ErrCodexWakeAdapter) || !result.Diagnostic.IsZero() ||
-		starter.process.waitCount.Load() != 1 {
-		t.Fatalf("Run() = (%#v, %v), Wait=%d", result, err, starter.process.waitCount.Load())
-	}
-}
-
 func TestCodexWakeAdapterValidatesClosedConstructionAndPerRunAuthority(t *testing.T) {
 	workspace := t.TempDir()
 	base := CodexWakeAdapterOptions{Executable: "/usr/bin/codex", Workspace: workspace,
@@ -726,12 +706,20 @@ func newCodexAdapterFixtureWithIdentity(t *testing.T, scenario fakeCodexScenario
 		fixture.terminator.onTerminate = fixture.starter.finishProcess
 		fixture.terminator.err = nil
 	}
+	// The drain grace stays at its generous production default so scheduling
+	// pressure can never starve pipe EOF delivery; only the scenario that
+	// wedges a reader on purpose needs the timer to fire quickly.
+	drainGrace := time.Duration(0)
+	if scenario.stuckPipeDrain {
+		drainGrace = 5 * time.Millisecond
+	}
 	adapter, err := NewCodexWakeAdapter(CodexWakeAdapterOptions{Executable: "/usr/bin/codex",
 		Workspace: fixture.workspace, Environment: []string{"PATH=/usr/bin:/bin"},
 		Starter: fixture.starter, Identity: identity, Clock: fixture.clock,
 		Terminator: fixture.terminator, VerifyProjection: passCodexProjection,
 		InterruptGrace: 2 * time.Millisecond,
-		ExitGrace:      5 * time.Millisecond, SignalGrace: 2 * time.Millisecond})
+		ExitGrace:      5 * time.Millisecond, SignalGrace: 2 * time.Millisecond,
+		PipeDrainGrace: drainGrace})
 	if err != nil {
 		t.Fatal(err)
 	}

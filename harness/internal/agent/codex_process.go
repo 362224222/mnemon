@@ -174,7 +174,7 @@ func (session *codexProtocolSession) proveOwnedProcessExit(protocolExited bool) 
 
 func (session *codexProtocolSession) waitOwnedProcess(exit codexProcessExit) (codexProcessExit, error) {
 	var result error
-	if err := session.waitForProcessPipeDrain(session.adapter.signalGrace); err != nil {
+	if err := session.waitForProcessPipeDrain(session.adapter.pipeDrainGrace); err != nil {
 		result = codexAdapterError("pipe drain", err)
 	}
 	waitErr := session.process.Wait()

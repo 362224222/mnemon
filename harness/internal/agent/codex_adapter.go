@@ -138,20 +138,6 @@ type CodexProcessTerminator interface {
 	Terminate(context.Context, model.JSON) ([]string, error)
 }
 
-type CodexWakeAdapterOptions struct {
-	Executable       string
-	Workspace        string
-	Environment      []string
-	Starter          CodexProcessStarter
-	Identity         CodexProcessIdentityProbe
-	Clock            CodexAdapterClock
-	Terminator       CodexProcessTerminator
-	VerifyProjection func(context.Context) error
-	InterruptGrace   time.Duration
-	ExitGrace        time.Duration
-	SignalGrace      time.Duration
-}
-
 type CodexWakeAdapter struct {
 	executable       string
 	workspace        string
@@ -164,6 +150,7 @@ type CodexWakeAdapter struct {
 	interruptGrace   time.Duration
 	exitGrace        time.Duration
 	signalGrace      time.Duration
+	pipeDrainGrace   time.Duration
 }
 
 type wallCodexAdapterClock struct{}
@@ -206,26 +193,15 @@ func NewCodexWakeAdapter(options CodexWakeAdapterOptions) (*CodexWakeAdapter, er
 	if options.Terminator == nil {
 		options.Terminator = systemCodexProcessTerminator{}
 	}
-	if options.InterruptGrace == 0 {
-		options.InterruptGrace = 2 * time.Second
-	}
-	if options.ExitGrace == 0 {
-		options.ExitGrace = 2 * time.Second
-	}
-	if options.SignalGrace == 0 {
-		options.SignalGrace = time.Second
-	}
-	if options.InterruptGrace < time.Millisecond || options.InterruptGrace > 30*time.Second ||
-		options.ExitGrace < time.Millisecond || options.ExitGrace > 30*time.Second ||
-		options.SignalGrace < time.Millisecond || options.SignalGrace > 30*time.Second {
-		return nil, codexAdapterError("configure", errors.New("cleanup deadlines must be 1ms..30s"))
+	if err := normalizeCodexAdapterDeadlines(&options); err != nil {
+		return nil, codexAdapterError("configure", err)
 	}
 	return &CodexWakeAdapter{executable: options.Executable, workspace: options.Workspace,
 		environment: environment, starter: options.Starter, identity: options.Identity,
 		clock: options.Clock, terminator: options.Terminator,
 		verifyProjection: options.VerifyProjection,
 		interruptGrace:   options.InterruptGrace, exitGrace: options.ExitGrace,
-		signalGrace: options.SignalGrace}, nil
+		signalGrace: options.SignalGrace, pipeDrainGrace: options.PipeDrainGrace}, nil
 }
 
 func (adapter *CodexWakeAdapter) Run(ctx context.Context,
