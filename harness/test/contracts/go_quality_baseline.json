@@ -921,13 +921,6 @@
     },
     {
       "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/peer/topic.go::(*Gossip).reconcile",
-      "path": "harness/internal/peer/topic.go",
-      "symbol": "(*Gossip).reconcile",
-      "ceiling": 50
-    },
-    {
-      "rule": "cognitive_complexity",
       "identity": "cognitive_complexity:harness/internal/peer/topic_test.go::TestGossipReconcileRevokesOneChannelAndPreservesOverlap",
       "path": "harness/internal/peer/topic_test.go",
       "symbol": "TestGossipReconcileRevokesOneChannelAndPreservesOverlap",
@@ -938,7 +931,7 @@
       "identity": "cognitive_complexity:harness/internal/peer/topic_test.go::TestGossipSessionCloseSerializesValidatorRecreation",
       "path": "harness/internal/peer/topic_test.go",
       "symbol": "TestGossipSessionCloseSerializesValidatorRecreation",
-      "ceiling": 59
+      "ceiling": 53
     },
     {
       "rule": "cognitive_complexity",
@@ -2268,7 +2261,7 @@
       "identity": "cyclomatic_complexity:harness/internal/artifact/cas_test.go::TestCASPruneTempsIsBoundedSafeAndSynchronized",
       "path": "harness/internal/artifact/cas_test.go",
       "symbol": "TestCASPruneTempsIsBoundedSafeAndSynchronized",
-      "ceiling": 22
+      "ceiling": 21
     },
     {
       "rule": "cyclomatic_complexity",
@@ -3035,13 +3028,6 @@
     },
     {
       "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/peer/topic.go::(*Gossip).reconcile",
-      "path": "harness/internal/peer/topic.go",
-      "symbol": "(*Gossip).reconcile",
-      "ceiling": 29
-    },
-    {
-      "rule": "cyclomatic_complexity",
       "identity": "cyclomatic_complexity:harness/internal/peer/topic_test.go::TestGossipReconcileRevokesOneChannelAndPreservesOverlap",
       "path": "harness/internal/peer/topic_test.go",
       "symbol": "TestGossipReconcileRevokesOneChannelAndPreservesOverlap",
@@ -3052,7 +3038,7 @@
       "identity": "cyclomatic_complexity:harness/internal/peer/topic_test.go::TestGossipSessionCloseSerializesValidatorRecreation",
       "path": "harness/internal/peer/topic_test.go",
       "symbol": "TestGossipSessionCloseSerializesValidatorRecreation",
-      "ceiling": 56
+      "ceiling": 54
     },
     {
       "rule": "cyclomatic_complexity",
@@ -4673,13 +4659,6 @@
     },
     {
       "rule": "function_logical_lines",
-      "identity": "function_logical_lines:harness/internal/peer/topic.go::(*Gossip).reconcile",
-      "path": "harness/internal/peer/topic.go",
-      "symbol": "(*Gossip).reconcile",
-      "ceiling": 93
-    },
-    {
-      "rule": "function_logical_lines",
       "identity": "function_logical_lines:harness/internal/peer/topic_test.go::TestGossipReconcileRevokesOneChannelAndPreservesOverlap",
       "path": "harness/internal/peer/topic_test.go",
       "symbol": "TestGossipReconcileRevokesOneChannelAndPreservesOverlap",
@@ -4690,7 +4669,7 @@
       "identity": "function_logical_lines:harness/internal/peer/topic_test.go::TestGossipSessionCloseSerializesValidatorRecreation",
       "path": "harness/internal/peer/topic_test.go",
       "symbol": "TestGossipSessionCloseSerializesValidatorRecreation",
-      "ceiling": 184
+      "ceiling": 167
     },
     {
       "rule": "function_logical_lines",
@@ -5271,14 +5250,7 @@
       "identity": "function_statements:harness/internal/artifact/cas_test.go::TestCASDigestBarriersSerializeTombstoneAndAllowOtherShards",
       "path": "harness/internal/artifact/cas_test.go",
       "symbol": "TestCASDigestBarriersSerializeTombstoneAndAllowOtherShards",
-      "ceiling": 69
-    },
-    {
-      "rule": "function_statements",
-      "identity": "function_statements:harness/internal/artifact/cas_test.go::TestCASLifecycleBarrierIsSharedByCanonicalRoot",
-      "path": "harness/internal/artifact/cas_test.go",
-      "symbol": "TestCASLifecycleBarrierIsSharedByCanonicalRoot",
-      "ceiling": 53
+      "ceiling": 67
     },
     {
       "rule": "function_statements",
@@ -5306,7 +5278,7 @@
       "identity": "function_statements:harness/internal/artifact/cas_test.go::TestCASPruneTempsIsBoundedSafeAndSynchronized",
       "path": "harness/internal/artifact/cas_test.go",
       "symbol": "TestCASPruneTempsIsBoundedSafeAndSynchronized",
-      "ceiling": 64
+      "ceiling": 62
     },
     {
       "rule": "function_statements",
@@ -5842,13 +5814,6 @@
     },
     {
       "rule": "function_statements",
-      "identity": "function_statements:harness/internal/peer/topic.go::(*Gossip).reconcile",
-      "path": "harness/internal/peer/topic.go",
-      "symbol": "(*Gossip).reconcile",
-      "ceiling": 88
-    },
-    {
-      "rule": "function_statements",
       "identity": "function_statements:harness/internal/peer/topic_test.go::TestGossipConcurrentCloseWaitsForRefreshQuiescence",
       "path": "harness/internal/peer/topic_test.go",
       "symbol": "TestGossipConcurrentCloseWaitsForRefreshQuiescence",
@@ -5873,7 +5838,7 @@
       "identity": "function_statements:harness/internal/peer/topic_test.go::TestGossipSessionCloseSerializesValidatorRecreation",
       "path": "harness/internal/peer/topic_test.go",
       "symbol": "TestGossipSessionCloseSerializesValidatorRecreation",
-      "ceiling": 173
+      "ceiling": 159
     },
     {
       "rule": "function_statements",
@@ -6662,18 +6627,6 @@
     },
     {
       "rule": "normalized_duplicate_tokens",
-      "identity": "normalized_duplicate_tokens:dup-0011",
-      "path": "harness/internal/peer/topic_test.go",
-      "debt_id": "dup-0011",
-      "owners": [
-        "harness/internal/peer/topic_test.go::TestGossipReconcileWithCommitDrainsBeforeDurableMutation",
-        "harness/internal/peer/topic_test.go::TestGossipSessionCloseSerializesValidatorRecreation"
-      ],
-      "fingerprint": "265bc93a58ceee43a88fc9a712ac30150327cd1b7a81aa26886f62d47eb8ec85",
-      "ceiling": 200
-    },
-    {
-      "rule": "normalized_duplicate_tokens",
       "identity": "normalized_duplicate_tokens:dup-0012",
       "path": "harness/internal/peer/topic_test.go",
       "debt_id": "dup-0012",
@@ -6957,7 +6910,7 @@
       "rule": "paired_test_file_lines",
       "identity": "paired_test_file_lines:harness/internal/artifact/cas_test.go",
       "path": "harness/internal/artifact/cas_test.go",
-      "ceiling": 1178
+      "ceiling": 1165
     },
     {
       "rule": "paired_test_file_lines",
@@ -7017,7 +6970,7 @@
       "rule": "paired_test_file_lines",
       "identity": "paired_test_file_lines:harness/internal/peer/topic_test.go",
       "path": "harness/internal/peer/topic_test.go",
-      "ceiling": 1582
+      "ceiling": 1473
     },
     {
       "rule": "paired_test_file_lines",
@@ -7119,7 +7072,7 @@
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/artifact/cas.go",
       "path": "harness/internal/artifact/cas.go",
-      "ceiling": 1514
+      "ceiling": 1497
     },
     {
       "rule": "production_file_lines",
@@ -7257,7 +7210,7 @@
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/peer/artifact_frame.go",
       "path": "harness/internal/peer/artifact_frame.go",
-      "ceiling": 839
+      "ceiling": 830
     },
     {
       "rule": "production_file_lines",
@@ -7315,15 +7268,9 @@
     },
     {
       "rule": "production_file_lines",
-      "identity": "production_file_lines:harness/internal/peer/gater.go",
-      "path": "harness/internal/peer/gater.go",
-      "ceiling": 414
-    },
-    {
-      "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/peer/topic.go",
       "path": "harness/internal/peer/topic.go",
-      "ceiling": 951
+      "ceiling": 932
     },
     {
       "rule": "production_file_lines",

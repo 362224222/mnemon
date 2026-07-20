@@ -3,26 +3,6 @@
   "source_commit": "0be35cbb4251645d74b5daf5d60f7a4183661087",
   "entries": [
     {
-      "rule": "bounded_resource",
-      "identity": "bounded_resource:gossip-channel-gates",
-      "path": "harness/internal/peer/topic.go",
-      "symbol": "(*Gossip).joinLocked",
-      "risk": "high",
-      "evidence": "harness/internal/peer/topic.go::(*Gossip).joinLocked",
-      "owner": "harness/internal/peer",
-      "removal_checkpoint": "7B"
-    },
-    {
-      "rule": "closed_set_authority",
-      "identity": "closed_set_authority:artifact-frame-types",
-      "path": "harness/internal/peer/artifact_frame.go",
-      "symbol": "ArtifactFrameType.Valid",
-      "risk": "medium",
-      "evidence": "harness/internal/peer/artifact_frame.go::ArtifactFrameType.Valid",
-      "owner": "harness/internal/peer",
-      "removal_checkpoint": "7B"
-    },
-    {
       "rule": "closed_set_authority",
       "identity": "closed_set_authority:channel-frame-types",
       "path": "harness/internal/peer/channel_frame.go",
@@ -31,16 +11,6 @@
       "evidence": "harness/internal/peer/channel_frame.go::ChannelFrameType.Valid",
       "owner": "harness/internal/peer",
       "removal_checkpoint": "8c"
-    },
-    {
-      "rule": "closed_set_authority",
-      "identity": "closed_set_authority:event-frame-types",
-      "path": "harness/internal/peer/event_frame.go",
-      "symbol": "EventFrameType.Valid",
-      "risk": "medium",
-      "evidence": "harness/internal/peer/event_frame.go::EventFrameType.Valid",
-      "owner": "harness/internal/peer",
-      "removal_checkpoint": "7B"
     },
     {
       "rule": "closed_set_authority",
@@ -73,16 +43,6 @@
       "removal_checkpoint": "9"
     },
     {
-      "rule": "deterministic_order",
-      "identity": "deterministic_order:gossip-subscription-filter",
-      "path": "harness/internal/peer/topic.go",
-      "symbol": "authoritySubscriptionFilter.FilterIncomingSubscriptions",
-      "risk": "medium",
-      "evidence": "harness/internal/peer/topic.go::authoritySubscriptionFilter.FilterIncomingSubscriptions",
-      "owner": "harness/internal/peer",
-      "removal_checkpoint": "7B"
-    },
-    {
       "rule": "durable_lifecycle_duplication",
       "identity": "durable_lifecycle_duplication:store-transaction-shells",
       "path": "harness/internal/store/artifact_gc.go",
@@ -91,36 +51,6 @@
       "evidence": "harness/internal/store/artifact_gc.go",
       "owner": "harness/internal/store",
       "removal_checkpoint": "12"
-    },
-    {
-      "rule": "goroutine_ownership",
-      "identity": "goroutine_ownership:connection-gater-timers",
-      "path": "harness/internal/peer/gater.go",
-      "symbol": "(*ConnectionGater).shutdown",
-      "risk": "medium",
-      "evidence": "harness/internal/peer/gater.go::(*ConnectionGater).shutdown",
-      "owner": "harness/internal/peer",
-      "removal_checkpoint": "7B"
-    },
-    {
-      "rule": "lock_callback_io",
-      "identity": "lock_callback_io:mesh-authority-commit",
-      "path": "harness/internal/peer/mesh_runtime.go",
-      "symbol": "(*MeshRuntime).ReconcileWithCommit",
-      "risk": "high",
-      "evidence": "harness/internal/peer/mesh_runtime.go::(*MeshRuntime).ReconcileWithCommit",
-      "owner": "harness/internal/peer + harness/internal/store",
-      "removal_checkpoint": "7B"
-    },
-    {
-      "rule": "mutable_registry",
-      "identity": "mutable_registry:artifact-cas-coordination",
-      "path": "harness/internal/artifact/cas.go",
-      "symbol": "NewCAS",
-      "risk": "medium",
-      "evidence": "harness/internal/artifact/cas.go::NewCAS",
-      "owner": "harness/internal/artifact",
-      "removal_checkpoint": "7B"
     },
     {
       "rule": "unexpected_harness_package",

@@ -2,6 +2,7 @@ package peer
 
 import (
 	"fmt"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -24,7 +25,7 @@ func TestConnectionGaterUsesAnyChannelForPhysicalAuthority(t *testing.T) {
 		Channels: []ChannelAuthoritySnapshot{alpha, beta}}); err != nil {
 		t.Fatal(err)
 	}
-	gater := NewConnectionGater(authority)
+	gater := newTestConnectionGater(t, authority)
 	if !gater.InterceptPeerDial(remote.libp2pID) ||
 		!gater.InterceptSecured(network.DirOutbound, remote.libp2pID, nil) ||
 		!gater.admitUpgraded(network.DirOutbound, remote.libp2pID, "known-1", nil) {
@@ -48,7 +49,7 @@ func TestConnectionGaterBoundsAndReleasesUnknownEnrollment(t *testing.T) {
 	local := testAuthorityPeer(t, "gater-budget-local")
 	unknown := testAuthorityPeer(t, "gater-budget-unknown")
 	authority, _ := NewAuthority(local.modelID)
-	gater := NewConnectionGater(authority)
+	gater := newTestConnectionGater(t, authority)
 	addresses := testConnectionAddresses()
 	const attempts = 32
 	start := make(chan struct{})
@@ -102,7 +103,7 @@ func TestConnectionGaterExpiresFailedUpgradeReservation(t *testing.T) {
 	local := testAuthorityPeer(t, "gater-expiry-local")
 	unknown := testAuthorityPeer(t, "gater-expiry-unknown")
 	authority, _ := NewAuthority(local.modelID)
-	gater := NewConnectionGater(authority)
+	gater := newTestConnectionGater(t, authority)
 	current := time.Date(2026, 7, 18, 0, 0, 0, 0, time.UTC)
 	gater.now = func() time.Time { return current }
 	addresses := testConnectionAddresses()
@@ -123,7 +124,7 @@ func TestConnectionGaterExpiresAndClosesUpgradedUnknownConnections(t *testing.T)
 	local := testAuthorityPeer(t, "gater-lease-local")
 	unknown := testAuthorityPeer(t, "gater-lease-unknown")
 	authority, _ := NewAuthority(local.modelID)
-	gater := NewConnectionGater(authority)
+	gater := newTestConnectionGater(t, authority)
 	gater.pendingTTL = 25 * time.Millisecond
 	addresses := testConnectionAddresses()
 	limit := HermeticLimits().UnknownEnrollmentConnections
@@ -158,13 +159,50 @@ func TestConnectionGaterExpiresAndClosesUpgradedUnknownConnections(t *testing.T)
 	}
 }
 
+func TestConnectionGaterExpiryDoesNotCrossReusedConnectionID(t *testing.T) {
+	local := testAuthorityPeer(t, "gater-reuse-local")
+	unknown := testAuthorityPeer(t, "gater-reuse-unknown")
+	authority, _ := NewAuthority(local.modelID)
+	gater := newTestConnectionGater(t, authority)
+	addresses := testConnectionAddresses()
+	const connectionID = "reused-connection"
+	const firstTTL = 20 * time.Millisecond
+	gater.pendingTTL = firstTTL
+	var firstClosed atomic.Int32
+	if !gater.InterceptSecured(network.DirInbound, unknown.libp2pID, addresses) ||
+		!gater.admitUpgradedConnection(network.DirInbound, unknown.libp2pID,
+			connectionID, addresses, func() error {
+				firstClosed.Add(1)
+				return nil
+			}) {
+		t.Fatal("failed to admit first exact connection")
+	}
+	gater.releaseUnknown(connectionID)
+
+	gater.pendingTTL = 10 * time.Second
+	var replacementClosed atomic.Int32
+	if !gater.InterceptSecured(network.DirInbound, unknown.libp2pID, addresses) ||
+		!gater.admitUpgradedConnection(network.DirInbound, unknown.libp2pID,
+			connectionID, addresses, func() error {
+				replacementClosed.Add(1)
+				return nil
+			}) {
+		t.Fatal("failed to admit replacement exact connection")
+	}
+	time.Sleep(3 * firstTTL)
+	if firstClosed.Load() != 0 || replacementClosed.Load() != 0 || gater.UnknownConnections() != 1 {
+		t.Fatalf("stale expiry crossed reused connection ID: first=%d replacement=%d unknown=%d",
+			firstClosed.Load(), replacementClosed.Load(), gater.UnknownConnections())
+	}
+}
+
 func TestConnectionGaterReconcilePromotesUnknownWithoutLeakingSlot(t *testing.T) {
 	t.Parallel()
 
 	local := testAuthorityPeer(t, "gater-promote-local")
 	remote := testAuthorityPeer(t, "gater-promote-remote")
 	authority, _ := NewAuthority(local.modelID)
-	gater := NewConnectionGater(authority)
+	gater := newTestConnectionGater(t, authority)
 	addresses := testConnectionAddresses()
 	if !gater.InterceptSecured(network.DirInbound, remote.libp2pID, addresses) ||
 		!gater.admitUpgraded(network.DirInbound, remote.libp2pID, "enrollment", addresses) {
@@ -191,7 +229,7 @@ func TestConnectionGaterEnrollmentOwnerPermitIsOutboundOnly(t *testing.T) {
 		OutboundEnrollmentPeers: []model.PeerID{owner.modelID}}); err != nil {
 		t.Fatal(err)
 	}
-	gater := NewConnectionGater(authority)
+	gater := newTestConnectionGater(t, authority)
 	if !gater.InterceptPeerDial(owner.libp2pID) ||
 		!gater.InterceptSecured(network.DirOutbound, owner.libp2pID, nil) ||
 		!gater.admitUpgraded(network.DirOutbound, owner.libp2pID, "owner-outbound", nil) {
@@ -205,13 +243,13 @@ func TestConnectionGaterEnrollmentOwnerPermitIsOutboundOnly(t *testing.T) {
 	}
 }
 
-func TestConnectionGaterShutdownRetiresReservationsAndLeaseTimers(t *testing.T) {
+func TestConnectionGaterShutdownRetiresReservationsAndExpiryOwner(t *testing.T) {
 	t.Parallel()
 
 	local := testAuthorityPeer(t, "gater-shutdown-local")
 	unknown := testAuthorityPeer(t, "gater-shutdown-unknown")
 	authority, _ := NewAuthority(local.modelID)
-	gater := NewConnectionGater(authority)
+	gater := newTestConnectionGater(t, authority)
 	gater.pendingTTL = 25 * time.Millisecond
 	addresses := testConnectionAddresses()
 	var closed atomic.Int32
@@ -228,9 +266,91 @@ func TestConnectionGaterShutdownRetiresReservationsAndLeaseTimers(t *testing.T) 
 	if gater.UnknownEnrollmentSlots() != 0 || gater.UnknownConnections() != 0 {
 		t.Fatal("shutdown retained enrollment reservations")
 	}
+	gater.mu.Lock()
+	running := gater.expiryRunning
+	gater.mu.Unlock()
+	if running {
+		t.Fatal("shutdown returned before the expiry owner stopped")
+	}
 	time.Sleep(3 * gater.pendingTTL)
 	if closed.Load() != 0 {
-		t.Fatal("a retired unknown lease callback survived gater shutdown")
+		t.Fatal("shutdown-first lease invoked a late exact-connection close")
+	}
+}
+
+func TestConnectionGaterShutdownDrainsInFlightExpiryClose(t *testing.T) {
+	local := testAuthorityPeer(t, "gater-drain-local")
+	unknown := testAuthorityPeer(t, "gater-drain-unknown")
+	authority, _ := NewAuthority(local.modelID)
+	gater := newTestConnectionGater(t, authority)
+	gater.pendingTTL = time.Millisecond
+	addresses := testConnectionAddresses()
+	callbackEntered := make(chan int, 1)
+	callbackRelease := make(chan struct{})
+	callbackReturned := make(chan struct{})
+	var closeCount atomic.Int32
+	if !gater.InterceptSecured(network.DirInbound, unknown.libp2pID, addresses) ||
+		!gater.admitUpgradedConnection(network.DirInbound, unknown.libp2pID,
+			"draining-expiry", addresses, func() error {
+				// This re-entry would deadlock if the expiry owner invoked the
+				// unknown network callback while holding the state mutex.
+				callbackEntered <- gater.UnknownConnections()
+				closeCount.Add(1)
+				<-callbackRelease
+				close(callbackReturned)
+				return nil
+			}) {
+		t.Fatal("failed to admit the expiring unknown connection")
+	}
+	select {
+	case remaining := <-callbackEntered:
+		if remaining != 0 {
+			t.Fatalf("expired exact connection remained visible during close: %d", remaining)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("expiry owner did not enter the exact-connection close")
+	}
+
+	shutdownStarted := make(chan struct{})
+	shutdownDone := make(chan struct{})
+	go func() {
+		close(shutdownStarted)
+		gater.shutdown()
+		close(shutdownDone)
+	}()
+	<-shutdownStarted
+	for !gater.closed.Load() {
+		runtime.Gosched()
+	}
+	select {
+	case <-shutdownDone:
+		t.Fatal("shutdown returned while an expiry close callback was in flight")
+	default:
+	}
+	close(callbackRelease)
+	select {
+	case <-callbackReturned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expiry close callback did not drain")
+	}
+	select {
+	case <-shutdownDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("shutdown did not join the drained expiry owner")
+	}
+	if closeCount.Load() != 1 {
+		t.Fatalf("exact-connection close count = %d, want 1", closeCount.Load())
+	}
+	assertConnectionGaterShutdownDrained(t, gater)
+}
+
+func assertConnectionGaterShutdownDrained(t *testing.T, gater *ConnectionGater) {
+	t.Helper()
+	gater.mu.Lock()
+	running := gater.expiryRunning
+	gater.mu.Unlock()
+	if running || gater.UnknownEnrollmentSlots() != 0 {
+		t.Fatal("drained shutdown retained expiry ownership or enrollment state")
 	}
 }
 
@@ -242,7 +362,7 @@ func TestConnectionGaterShutdownIsAdmissionBarrier(t *testing.T) {
 		OutboundEnrollmentPeers: []model.PeerID{unknown.modelID}}); err != nil {
 		t.Fatal(err)
 	}
-	gater := NewConnectionGater(authority)
+	gater := newTestConnectionGater(t, authority)
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	gater.now = func() time.Time {
@@ -294,4 +414,11 @@ func testConnectionAddresses() connectionAddresses {
 		local:  ma.StringCast("/ip4/127.0.0.1/tcp/41001"),
 		remote: ma.StringCast("/ip4/127.0.0.1/tcp/41002"),
 	}
+}
+
+func newTestConnectionGater(t *testing.T, authority *Authority) *ConnectionGater {
+	t.Helper()
+	gater := NewConnectionGater(authority)
+	t.Cleanup(gater.shutdown)
+	return gater
 }

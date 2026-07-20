@@ -54,23 +54,37 @@ func TestMeshRuntimeReconcileRollsBackAddressesAndJoinsNewChannel(t *testing.T) 
 	createPeerMeshChannel(t, st, beta, "runtime-reconcile-beta")
 	candidate := readMeshRuntimeAuthority(t, st)
 	remoteID := meshRuntimeLibp2pID(t, remote.Identity().PeerID())
-	commitErr := errors.New("durable CAS rejected")
-	if err := runtime.ReconcileWithCommit(candidate, func() error { return commitErr }); !errors.Is(err, commitErr) {
-		t.Fatalf("failed reconcile = %v", err)
+	transition, err := runtime.BeginAuthorityTransition(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runtime.Host().Peerstore().Addrs(remoteID)) == 0 {
+		t.Fatal("candidate Peer addresses were not staged for the durable window")
+	}
+	if !runtime.mu.TryLock() {
+		t.Fatal("durable window retained MeshRuntime mutex")
+	}
+	runtime.mu.Unlock()
+	active, err := runtime.BeginAuthorityTransition(candidate)
+	if active != transition || !errors.Is(err, ErrMeshAuthorityTransitionInProgress) {
+		t.Fatalf("transition reentry = (%p, %v), want active %p", active, err, transition)
+	}
+	if err := transition.Abort(); err != nil || transition.Wait() != nil {
+		t.Fatalf("abort authority transition = %v / wait %v", err, transition.Wait())
 	}
 	if runtime.HasCurrentSession(beta.Channel().ID()) ||
 		len(runtime.Host().Peerstore().Addrs(remoteID)) != 0 ||
 		runtime.authority.CanConnect(remoteID) {
-		t.Fatal("failed durable commit leaked candidate topic, addresses or authority")
+		t.Fatal("aborted durable transition leaked candidate topic, addresses or authority")
 	}
-	commits := 0
-	if err := runtime.ReconcileWithCommit(candidate, func() error {
-		commits++
-		return nil
-	}); err != nil {
+	transition, err = runtime.BeginAuthorityTransition(candidate)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if commits != 1 || !runtime.HasCurrentSession(beta.Channel().ID()) ||
+	if err := transition.Install(); err != nil {
+		t.Fatal(err)
+	}
+	if !runtime.HasCurrentSession(beta.Channel().ID()) ||
 		len(runtime.Host().Peerstore().Addrs(remoteID)) == 0 ||
 		!runtime.authority.CanConnect(remoteID) {
 		t.Fatal("successful reconcile did not atomically expose candidate mesh")
@@ -96,10 +110,23 @@ func TestMeshRuntimeKeepsOverlappingPeerAddressesUntilLastChannelRevokes(t *test
 	mergePeerMeshRoster(t, st, beta, betaRemote.Member(), betaRemote.Member().CreatedAt())
 	runtime := newTestMeshRuntime(t, ctx, owner, readMeshRuntimeAuthority(t, st))
 	remoteID := meshRuntimeLibp2pID(t, alphaRemote.Identity().PeerID())
+	unchangedBeta, err := runtime.Session(beta.Channel().ID())
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	alphaRevoked := alpha.AppendTerminal(t, alphaRemote.Identity().PeerID(), model.MemberRevoked)
 	mergePeerMeshRoster(t, st, alpha, alphaRevoked.Member(), alphaRevoked.Member().CreatedAt())
-	if err := runtime.ReconcileWithCommit(readMeshRuntimeAuthority(t, st), func() error { return nil }); err != nil {
+	transition, err := runtime.BeginAuthorityTransition(readMeshRuntimeAuthority(t, st))
+	if err != nil {
+		t.Fatal(err)
+	}
+	duringTransition, err := runtime.Session(beta.Channel().ID())
+	if err != nil || duringTransition != unchangedBeta {
+		t.Fatalf("unchanged Channel session during durable window = (%p, %v), want %p",
+			duringTransition, err, unchangedBeta)
+	}
+	if err := transition.Install(); err != nil {
 		t.Fatal(err)
 	}
 	if len(runtime.Host().Peerstore().Addrs(remoteID)) == 0 || !runtime.authority.CanConnect(remoteID) {
@@ -108,9 +135,7 @@ func TestMeshRuntimeKeepsOverlappingPeerAddressesUntilLastChannelRevokes(t *test
 
 	betaRevoked := beta.AppendTerminal(t, betaRemote.Identity().PeerID(), model.MemberRevoked)
 	mergePeerMeshRoster(t, st, beta, betaRevoked.Member(), betaRevoked.Member().CreatedAt())
-	if err := runtime.ReconcileWithCommit(readMeshRuntimeAuthority(t, st), func() error { return nil }); err != nil {
-		t.Fatal(err)
-	}
+	installMeshAuthority(t, runtime, readMeshRuntimeAuthority(t, st))
 	if len(runtime.Host().Peerstore().Addrs(remoteID)) != 0 || runtime.authority.CanConnect(remoteID) {
 		t.Fatal("last Channel revoke retained stale physical Peer authority")
 	}
@@ -167,6 +192,17 @@ func newTestMeshRuntime(t *testing.T, ctx context.Context, identity testkit.Iden
 		}
 	})
 	return runtime
+}
+
+func installMeshAuthority(t *testing.T, runtime *MeshRuntime, mesh store.ChannelMeshAuthority) {
+	t.Helper()
+	transition, err := runtime.BeginAuthorityTransition(mesh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := transition.Install(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func readMeshRuntimeAuthority(t *testing.T, st *store.Store) store.ChannelMeshAuthority {

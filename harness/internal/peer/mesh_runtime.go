@@ -16,7 +16,11 @@ import (
 	ma "github.com/multiformats/go-multiaddr"
 )
 
-var ErrMeshRuntime = errors.New("Mnemon mesh runtime")
+var (
+	ErrMeshRuntime                       = errors.New("Mnemon mesh runtime")
+	ErrMeshAuthorityTransitionInProgress = errors.New("mesh authority transition is in progress")
+	ErrMeshAuthorityTransitionFinalized  = errors.New("mesh authority transition was already finalized")
+)
 
 // MeshRuntime owns the one libp2p Host, authority projection and Gossip router
 // of a Node. Store remains the durable authority; this runtime only installs
@@ -26,11 +30,12 @@ type MeshRuntime struct {
 	gossip    *Gossip
 	authority *Authority
 
-	mu        sync.Mutex
-	addresses map[libp2ppeer.ID][]ma.Multiaddr
-	closed    bool
-	closeOnce sync.Once
-	closeErr  error
+	mu         sync.Mutex
+	addresses  map[libp2ppeer.ID][]ma.Multiaddr
+	transition *MeshAuthorityTransition
+	closed     bool
+	closeOnce  sync.Once
+	closeErr   error
 }
 
 // NewMeshRuntime starts from one coherent Store snapshot. The Host begins with
@@ -75,43 +80,6 @@ func NewMeshRuntime(ctx context.Context, privateKey libp2pcrypto.PrivKey,
 		addresses: addresses}, nil
 }
 
-// ReconcileWithCommit serializes a complete authority transition. Candidate
-// addresses are staged before Gossip computes connection promotions; a failed
-// durable callback restores the exact previous address set and leaves runtime
-// authority/sessions untouched. Newly active Channels are joined before the
-// transition reports success.
-func (runtime *MeshRuntime) ReconcileWithCommit(mesh store.ChannelMeshAuthority,
-	commit func() error,
-) error {
-	if runtime == nil || commit == nil {
-		return fmt.Errorf("%w: runtime and durable commit are required", ErrMeshRuntime)
-	}
-	snapshot, addresses, err := projectMeshRuntime(mesh)
-	if err != nil {
-		return err
-	}
-	runtime.mu.Lock()
-	defer runtime.mu.Unlock()
-	if runtime.closed || runtime.nodeHost == nil || runtime.gossip == nil {
-		return fmt.Errorf("%w: runtime is closed", ErrMeshRuntime)
-	}
-	previous := cloneManagedAddresses(runtime.addresses)
-	applyManagedAddresses(runtime.nodeHost.Host(), previous, addresses)
-	if err := runtime.gossip.ReconcileWithCommit(snapshot, commit); err != nil {
-		applyManagedAddresses(runtime.nodeHost.Host(), addresses, previous)
-		return fmt.Errorf("%w: reconcile authority: %w", ErrMeshRuntime, err)
-	}
-	runtime.addresses = addresses
-	if err := joinActiveChannels(runtime.gossip, snapshot); err != nil {
-		// Durable authority is already installed. Stop Gossip fail-closed rather
-		// than run a partial set of Channel topics until daemon restart.
-		runtime.closed = true
-		return errors.Join(fmt.Errorf("%w: join reconciled topics: %w", ErrMeshRuntime, err),
-			runtime.gossip.Close())
-	}
-	return nil
-}
-
 func (runtime *MeshRuntime) Host() host.Host {
 	if runtime == nil || runtime.nodeHost == nil {
 		return nil
@@ -124,11 +92,13 @@ func (runtime *MeshRuntime) Session(channelID model.ChannelID) (*TopicSession, e
 		return nil, fmt.Errorf("%w: runtime is unavailable", ErrMeshRuntime)
 	}
 	runtime.mu.Lock()
-	defer runtime.mu.Unlock()
 	if runtime.closed || runtime.gossip == nil {
+		runtime.mu.Unlock()
 		return nil, fmt.Errorf("%w: runtime is closed", ErrMeshRuntime)
 	}
-	session, err := runtime.gossip.Join(channelID)
+	gossip := runtime.gossip
+	runtime.mu.Unlock()
+	session, err := gossip.Join(channelID)
 	if err != nil {
 		return nil, fmt.Errorf("%w: acquire Channel session: %w", ErrMeshRuntime, err)
 	}
@@ -140,8 +110,10 @@ func (runtime *MeshRuntime) HasCurrentSession(channelID model.ChannelID) bool {
 		return false
 	}
 	runtime.mu.Lock()
-	defer runtime.mu.Unlock()
-	return !runtime.closed && runtime.gossip != nil && runtime.gossip.HasCurrentSession(channelID)
+	gossip := runtime.gossip
+	available := !runtime.closed && gossip != nil
+	runtime.mu.Unlock()
+	return available && gossip.HasCurrentSession(channelID)
 }
 
 func (runtime *MeshRuntime) Close() error {
@@ -149,11 +121,22 @@ func (runtime *MeshRuntime) Close() error {
 		return nil
 	}
 	runtime.closeOnce.Do(func() {
-		runtime.mu.Lock()
-		runtime.closed = true
-		gossip := runtime.gossip
-		nodeHost := runtime.nodeHost
-		runtime.mu.Unlock()
+		var gossip *Gossip
+		var nodeHost *NodeHost
+		for {
+			runtime.mu.Lock()
+			if transition := runtime.transition; transition != nil {
+				done := transition.Done()
+				runtime.mu.Unlock()
+				<-done
+				continue
+			}
+			runtime.closed = true
+			gossip = runtime.gossip
+			nodeHost = runtime.nodeHost
+			runtime.mu.Unlock()
+			break
+		}
 		if gossip != nil {
 			runtime.closeErr = errors.Join(runtime.closeErr, gossip.Close())
 		}

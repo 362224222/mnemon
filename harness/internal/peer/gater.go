@@ -19,21 +19,24 @@ import (
 // bounded inbound enrollment exception. Exact Channel stream/topic access is
 // deliberately outside this gate.
 type ConnectionGater struct {
-	authority    *Authority
-	unknownMax   int
-	pendingTTL   time.Duration
-	now          func() time.Time
-	mu           sync.Mutex
-	pending      map[unknownReservationKey][]time.Time
-	pendingCount int
-	unknown      map[string]*unknownConnection
-	closed       atomic.Bool
+	authority     *Authority
+	unknownMax    int
+	pendingTTL    time.Duration
+	now           func() time.Time
+	mu            sync.Mutex
+	pending       map[unknownReservationKey][]time.Time
+	pendingCount  int
+	unknown       map[string]*unknownConnection
+	expiryWake    chan struct{}
+	expiryWG      sync.WaitGroup
+	expiryRunning bool
+	closed        atomic.Bool
 }
 
 type unknownConnection struct {
-	peerID libp2ppeer.ID
-	timer  *time.Timer
-	close  func() error
+	peerID    libp2ppeer.ID
+	expiresAt time.Time
+	close     func() error
 }
 
 type unknownReservationKey struct {
@@ -46,11 +49,15 @@ var _ connmgr.ConnectionGater = (*ConnectionGater)(nil)
 var _ network.Notifiee = (*ConnectionGater)(nil)
 
 func NewConnectionGater(authority *Authority) *ConnectionGater {
-	return &ConnectionGater{authority: authority,
+	return &ConnectionGater{
+		authority:  authority,
 		unknownMax: HermeticLimits().UnknownEnrollmentConnections,
 		pendingTTL: HermeticLimits().ChannelRequestTimeout,
-		now:        time.Now, pending: make(map[unknownReservationKey][]time.Time),
-		unknown: make(map[string]*unknownConnection)}
+		now:        time.Now,
+		pending:    make(map[unknownReservationKey][]time.Time),
+		unknown:    make(map[string]*unknownConnection),
+		expiryWake: make(chan struct{}, 1),
+	}
 }
 
 func (gater *ConnectionGater) InterceptPeerDial(peerID libp2ppeer.ID) bool {
@@ -162,11 +169,11 @@ func (gater *ConnectionGater) admitUpgradedConnection(direction network.Directio
 		gater.pending[key] = reservations[1:]
 	}
 	gater.pendingCount--
-	lease := &unknownConnection{peerID: peerID, close: closeConnection}
+	lease := &unknownConnection{peerID: peerID,
+		expiresAt: time.Now().Add(gater.pendingTTL), close: closeConnection}
 	gater.unknown[connectionID] = lease
-	lease.timer = time.AfterFunc(gater.pendingTTL, func() {
-		gater.expireUnknown(connectionID, lease)
-	})
+	gater.ensureExpiryOwnerLocked()
+	gater.signalExpiryOwnerLocked()
 	return true
 }
 
@@ -178,12 +185,11 @@ func (gater *ConnectionGater) Reconcile() {
 	}
 	gater.mu.Lock()
 	defer gater.mu.Unlock()
+	changed := false
 	for connectionID, connection := range gater.unknown {
 		if gater.authority.CanConnect(connection.peerID) {
-			if connection.timer != nil {
-				connection.timer.Stop()
-			}
 			delete(gater.unknown, connectionID)
+			changed = true
 		}
 	}
 	for key, reservations := range gater.pending {
@@ -191,6 +197,9 @@ func (gater *ConnectionGater) Reconcile() {
 			delete(gater.pending, key)
 			gater.pendingCount -= len(reservations)
 		}
+	}
+	if changed {
+		gater.signalExpiryOwnerLocked()
 	}
 }
 
@@ -305,56 +314,29 @@ func (gater *ConnectionGater) releaseUnknown(connectionID string) {
 		return
 	}
 	gater.mu.Lock()
-	if connection := gater.unknown[connectionID]; connection != nil {
-		if connection.timer != nil {
-			connection.timer.Stop()
-		}
+	if gater.unknown[connectionID] != nil {
 		delete(gater.unknown, connectionID)
+		gater.signalExpiryOwnerLocked()
 	}
 	gater.mu.Unlock()
 }
 
 // shutdown retires every enrollment reservation before its owning Host stops
 // delivering disconnect notifications. The Host close that follows owns the
-// physical connections; this method only prevents lease callbacks from
-// surviving the NodeHost lifecycle.
+// physical connections. It wakes and joins the single expiry owner, including
+// any exact-connection close already in flight, before returning.
 func (gater *ConnectionGater) shutdown() {
 	if gater == nil {
 		return
 	}
 	gater.mu.Lock()
 	gater.closed.Store(true)
-	for _, connection := range gater.unknown {
-		if connection != nil && connection.timer != nil {
-			connection.timer.Stop()
-		}
-	}
 	gater.pending = make(map[unknownReservationKey][]time.Time)
 	gater.pendingCount = 0
 	gater.unknown = make(map[string]*unknownConnection)
+	gater.signalExpiryOwnerLocked()
 	gater.mu.Unlock()
-}
-
-func (gater *ConnectionGater) expireUnknown(connectionID string, expected *unknownConnection) {
-	if gater == nil || connectionID == "" || expected == nil {
-		return
-	}
-	gater.mu.Lock()
-	current := gater.unknown[connectionID]
-	if current != expected {
-		gater.mu.Unlock()
-		return
-	}
-	delete(gater.unknown, connectionID)
-	// Promotion wins if its immutable authority revision became visible before
-	// the lease expiry callback. Otherwise close only the exact connection that
-	// consumed this unknown slot; a later connection cannot inherit the timer.
-	authorized := gater.authority != nil && gater.authority.CanConnect(current.peerID)
-	closeConnection := current.close
-	gater.mu.Unlock()
-	if !authorized && closeConnection != nil {
-		_ = closeConnection()
-	}
+	gater.expiryWG.Wait()
 }
 
 func (gater *ConnectionGater) releasePending(peerID libp2ppeer.ID, addresses network.ConnMultiaddrs) {
