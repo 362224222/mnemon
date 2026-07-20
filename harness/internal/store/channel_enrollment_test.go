@@ -176,6 +176,24 @@ func TestAcceptChannelEnrollmentTerminalReplayReturnsOriginalReceiptAndLatestRos
 	}
 }
 
+func TestPrepareChannelEnrollmentPreservesAuthorityInvariant(t *testing.T) {
+	t.Parallel()
+	fixture := newChannelEnrollmentFixture(t, "prepare-authority-invariant")
+	if _, err := fixture.ownerStore.db.Exec(`DROP TRIGGER channels_descriptor_immutable`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.ownerStore.db.Exec(`UPDATE channels SET name=? WHERE channel_id=?`,
+		"forged-channel-name", fixture.channel.Channel().ID().String()); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := fixture.ownerStore.PrepareChannelEnrollment(context.Background(),
+		fixture.prepareSpec(fixture.acceptedAt))
+	if !errors.Is(err, ErrChannelAuthorityInvariant) || errors.Is(err, ErrChannelEnrollmentConflict) {
+		t.Fatalf("corrupt Channel authority error = %v", err)
+	}
+}
+
 func TestAcceptChannelEnrollmentRejectsBadProofStaleHeadAndRollsBackSignerFailure(t *testing.T) {
 	t.Parallel()
 	t.Run("noncanonical request ID", func(t *testing.T) {

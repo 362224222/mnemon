@@ -194,7 +194,7 @@ func mapChannelEnrollmentError(err error) error {
 		return nil
 	}
 	if errors.Is(err, ErrChannelFull) || errors.Is(err, ErrChannelEnrollmentStale) ||
-		errors.Is(err, ErrChannelEnrollmentProof) ||
+		errors.Is(err, ErrChannelAuthorityInvariant) || errors.Is(err, ErrChannelEnrollmentProof) ||
 		errors.Is(err, ErrChannelEnrollmentTokenExpired) ||
 		errors.Is(err, ErrChannelEnrollmentTokenClosed) ||
 		errors.Is(err, ErrChannelEnrollmentTokenExhausted) ||
@@ -208,7 +208,7 @@ func mapChannelEnrollmentError(err error) error {
 	}
 	if strings.Contains(message, "UNIQUE constraint failed") ||
 		strings.Contains(message, "FOREIGN KEY constraint failed") ||
-		errors.Is(err, ErrChannelInviteConflict) || errors.Is(err, ErrChannelAuthorityInvariant) {
+		errors.Is(err, ErrChannelInviteConflict) {
 		return fmt.Errorf("%w: %v", ErrChannelEnrollmentConflict, err)
 	}
 	return fmt.Errorf("accept Channel enrollment: %w", err)
