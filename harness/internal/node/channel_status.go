@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"sort"
@@ -20,7 +21,7 @@ func (manager *ChannelManager) ChannelStatus(ctx context.Context, metadata local
 	}
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
-	authority, err := manager.store.ReadChannelControlAuthority(ctx)
+	authority, err := manager.store.ReadChannelStatusAuthority(ctx)
 	if err != nil {
 		return localapi.ChannelStatusResponse{}, channelAPIError(err)
 	}
@@ -72,7 +73,7 @@ func (manager *ChannelManager) selectChannel(ctx context.Context,
 func (manager *ChannelManager) readChannelView(ctx context.Context,
 	channelID model.ChannelID,
 ) (localapi.ChannelView, error) {
-	authority, err := manager.store.ReadChannelControlAuthority(ctx)
+	authority, err := manager.store.ReadChannelStatusAuthority(ctx)
 	if err != nil {
 		return localapi.ChannelView{}, err
 	}
@@ -81,11 +82,11 @@ func (manager *ChannelManager) readChannelView(ctx context.Context,
 			return manager.projectChannelView(ctx, authority.LocalPeerID(), channel), nil
 		}
 	}
-	return localapi.ChannelView{}, store.ErrChannelControlAuthority
+	return localapi.ChannelView{}, store.ErrChannelStatusAuthority
 }
 
 func (manager *ChannelManager) projectChannelView(ctx context.Context, local model.PeerID,
-	durable store.ChannelControlChannel,
+	durable store.ChannelStatusChannel,
 ) localapi.ChannelView {
 	channel, roster := durable.Channel(), durable.Roster()
 	readiness := manager.channelReadiness(ctx, channel.ID())
@@ -100,8 +101,8 @@ func (manager *ChannelManager) projectChannelView(ctx context.Context, local mod
 	members := make([]localapi.ChannelMemberView, 0, len(latest))
 	ready := uint8(0)
 	for peerID, member := range latest {
-		projected := localapi.ChannelMemberView{Alias: memberAlias(peerID), Status: string(member.Status()),
-			Binding: "none", Reachability: "unknown"}
+		projected := localapi.ChannelMemberView{Alias: memberAlias(peerID), PeerID: peerID.String(),
+			Status: string(member.Status()), Binding: "none", Reachability: "unknown"}
 		if peerID == local {
 			projected.Binding, projected.Reachability = "self", "self"
 			projected.BaselineReady = manager.channelTopicJoined(channel)
@@ -123,8 +124,53 @@ func (manager *ChannelManager) projectChannelView(ctx context.Context, local mod
 	} else if binding, ok := bindings[channel.OwnerPeerID()]; ok {
 		ownerReachability = string(binding.Reachability())
 	}
+	statusHead := durable.RosterHead()
+	head := statusHead.RecordHead()
+	publications := make([]localapi.ChannelPublicationView, 0, len(durable.Publications()))
+	for _, publication := range durable.Publications() {
+		ref := publication.PublicationRef()
+		event := publication.EventKey()
+		audience := publication.AudiencePeerIDs()
+		audienceView := make([]string, len(audience))
+		for index, peerID := range audience {
+			audienceView[index] = peerID.String()
+		}
+		ignored := publication.IgnoredPeerIDs()
+		ignoredView := make([]string, len(ignored))
+		for index, peerID := range ignored {
+			ignoredView[index] = peerID.String()
+		}
+		var artifactSource *string
+		if peerID, ok := publication.ArtifactDirectSourcePeerID(); ok {
+			value := peerID.String()
+			artifactSource = &value
+		}
+		var causality *localapi.ChannelEventKeyView
+		if key, ok := publication.CausalityEventKey(); ok {
+			value := channelEventKeyView(key)
+			causality = &value
+		}
+		publications = append(publications, localapi.ChannelPublicationView{
+			Arrival: string(publication.Arrival()), ArtifactDirectSourcePeerID: artifactSource,
+			AudiencePeerIDs: audienceView, CausalityEventKey: causality,
+			ChannelIDDigest: publication.ChannelIDDigest().String(),
+			EventDigest:     publication.EventDigest().String(), EventKey: channelEventKeyView(event),
+			IgnoredPeerIDs:           ignoredView,
+			ImmediateTransportPeerID: publication.ImmediateTransportPeerID().String(),
+			OriginPeerID:             publication.OriginPeerID().String(),
+			PublicationDigest:        publication.PublicationDigest().String(),
+			PublicationRef: localapi.ChannelPublicationRefView{
+				ChannelSequence: ref.ChannelSequence(), OriginEpoch: ref.OriginEpoch().String(),
+				OriginPeerID: ref.OriginPeerID().String()},
+			SemanticOutcome: string(publication.SemanticOutcome()),
+		})
+	}
 	view := localapi.ChannelView{Alias: channel.LocalAlias(), Name: channel.Name(),
+		ChannelIDDigest: durable.ChannelIDDigest().String(), Publications: publications,
 		Membership: string(channel.Status()), RosterRevision: channel.RosterHead().Revision(),
+		RosterHead: localapi.ChannelRosterHeadView{Revision: head.Revision(), Digest: head.Digest().String(),
+			OwnerPeerID:    statusHead.OwnerPeerID().String(),
+			OwnerSignature: base64.StdEncoding.EncodeToString(statusHead.OwnerSignature())},
 		Owner: localapi.ChannelOwnerView{Local: ownerLocal, Reachability: ownerReachability}, Members: members,
 		Topic: localapi.ChannelTopicView{Status: channelViewTopicStatus(manager.channelTopicStatus(channel), members),
 			ReadyMembers: ready, TotalMembers: uint8(len(members))}}
@@ -133,6 +179,11 @@ func (manager *ChannelManager) projectChannelView(ctx context.Context, local mod
 		view.Invite = &invite
 	}
 	return view
+}
+
+func channelEventKeyView(key model.EventKey) localapi.ChannelEventKeyView {
+	return localapi.ChannelEventKeyView{OriginPeerID: key.OriginPeerID().String(),
+		OriginEpoch: key.OriginEpoch().String(), EventID: key.EventID().String()}
 }
 
 func channelViewTopicStatus(status string, members []localapi.ChannelMemberView) string {

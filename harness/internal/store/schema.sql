@@ -2404,6 +2404,65 @@ WHEN NEW.inbox_id <> OLD.inbox_id OR NOT EXISTS (
 )
 BEGIN SELECT RAISE(ABORT, 'Artifact renew receipt output mismatch'); END;
 
+-- The first successful authenticated Artifact exchange is immutable public
+-- path evidence. The private worker owner and its exact lease remain internal
+-- fence material; only the serving peer and observation time are projected by
+-- Channel status.
+CREATE TABLE peer_inbox_artifact_source_receipts (
+  inbox_id           TEXT PRIMARY KEY REFERENCES peer_inbox(inbox_id),
+  source_peer_id     TEXT NOT NULL CHECK (
+    typeof(source_peer_id) = 'text'
+    AND length(source_peer_id) BETWEEN 1 AND 512
+  ),
+  attempt            INTEGER NOT NULL CHECK (
+    typeof(attempt) = 'integer' AND attempt BETWEEN 1 AND 4294967295
+  ),
+  lease_owner        TEXT NOT NULL CHECK (
+    typeof(lease_owner) = 'text' AND length(lease_owner) BETWEEN 1 AND 512
+  ),
+  lease_until        TEXT NOT NULL CHECK (
+    typeof(lease_until) = 'text'
+    AND length(lease_until) = 30
+    AND lease_until GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]Z'
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(lease_until,1,19) || 'Z')) IS NOT NULL
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(lease_until,1,19) || 'Z')) = substr(lease_until,1,19)
+    AND lease_until BETWEEN '1677-09-21T00:12:43.145224192Z' AND '2262-04-11T23:47:16.854775807Z'
+  ),
+  recorded_at        TEXT NOT NULL CHECK (
+    typeof(recorded_at) = 'text'
+    AND length(recorded_at) = 30
+    AND recorded_at GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]Z'
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(recorded_at,1,19) || 'Z')) IS NOT NULL
+    AND strftime('%Y-%m-%dT%H:%M:%S', julianday(substr(recorded_at,1,19) || 'Z')) = substr(recorded_at,1,19)
+    AND recorded_at BETWEEN '1677-09-21T00:12:43.145224192Z' AND '2262-04-11T23:47:16.854775807Z'
+  ),
+  CHECK (recorded_at < lease_until)
+);
+
+CREATE TRIGGER peer_inbox_artifact_source_receipt_insert
+BEFORE INSERT ON peer_inbox_artifact_source_receipts
+WHEN NOT EXISTS (
+  SELECT 1 FROM peer_inbox inbox
+  WHERE inbox.inbox_id = NEW.inbox_id
+    AND inbox.is_audience = 1
+    AND inbox.status = 'waiting_artifact'
+    AND inbox.origin_peer_id = NEW.source_peer_id
+    AND inbox.attempts = NEW.attempt
+    AND inbox.lease_owner = NEW.lease_owner
+    AND inbox.lease_until = NEW.lease_until
+    AND inbox.updated_at <= NEW.recorded_at
+    AND NEW.recorded_at < inbox.lease_until
+)
+BEGIN SELECT RAISE(ABORT, 'Artifact source receipt requires its live origin fence'); END;
+
+CREATE TRIGGER peer_inbox_artifact_source_receipt_no_update
+BEFORE UPDATE ON peer_inbox_artifact_source_receipts
+BEGIN SELECT RAISE(ABORT, 'Artifact source receipt is immutable'); END;
+
+CREATE TRIGGER peer_inbox_artifact_source_receipt_no_delete
+BEFORE DELETE ON peer_inbox_artifact_source_receipts
+BEGIN SELECT RAISE(ABORT, 'Artifact source receipt is permanent'); END;
+
 -- Pending Inbox pressure is materialized at both scopes so admission never
 -- scans permanent Inbox or historical Channel evidence.
 CREATE TABLE peer_inbox_pressure (

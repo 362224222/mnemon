@@ -28,7 +28,7 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 				"artifact_gc_completion_receipts artifact_gc_delete_guard artifact_gc_block_delete_guard artifact_gc_completion_guard " +
 				"channels channel_members channel_conflicts " +
 				"enrollment_grants enrollment_grant_uses enrollment_receipts channel_join_reservations channel_leave_requests " +
-				"peer_bindings gossip_publications peer_deliveries peer_inbox peer_inbox_semantic_transition_receipts peer_inbox_artifact_renew_receipts peer_inbox_pressure peer_inbox_node_pressure publication_conflicts " +
+				"peer_bindings gossip_publications peer_deliveries peer_inbox peer_inbox_semantic_transition_receipts peer_inbox_artifact_renew_receipts peer_inbox_artifact_source_receipts peer_inbox_pressure peer_inbox_node_pressure publication_conflicts " +
 				"origin_quarantines peer_cursors peer_repairs publication_epochs peer_pull_acks",
 		),
 		"index": strings.Fields(
@@ -75,6 +75,7 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 				"peer_inbox_semantic_nonce_immutable " +
 				"peer_inbox_semantic_transition_receipt_insert peer_inbox_semantic_transition_receipt_update " +
 				"peer_inbox_artifact_renew_receipt_insert peer_inbox_artifact_renew_receipt_update " +
+				"peer_inbox_artifact_source_receipt_insert peer_inbox_artifact_source_receipt_no_update peer_inbox_artifact_source_receipt_no_delete " +
 				"peer_inbox_receipt_scope_insert peer_inbox_receipt_scope_update peer_inbox_no_delete peer_inbox_terminal_status_immutable " +
 				"peer_inbox_pressure_insert_limit peer_inbox_pressure_insert_account " +
 				"peer_inbox_pressure_status_leave_account peer_inbox_pressure_no_delete peer_inbox_pressure_identity_immutable " +
@@ -120,8 +121,8 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 	if !reflect.DeepEqual(actual, expected) {
 		t.Fatalf("schema object set mismatch\nactual: %#v\nexpected: %#v", actual, expected)
 	}
-	if got := len(actual["table"]) + len(actual["index"]) + len(actual["trigger"]); got != 227 {
-		t.Fatalf("explicit object count = %d, want 227", got)
+	if got := len(actual["table"]) + len(actual["index"]) + len(actual["trigger"]); got != 231 {
+		t.Fatalf("explicit object count = %d, want 231", got)
 	}
 }
 

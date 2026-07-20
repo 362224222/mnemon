@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
+	"github.com/mnemon-dev/mnemon/harness/internal/model"
 )
 
 func TestTakeJSONFlagWorksBeforeOrAfterChannelName(t *testing.T) {
@@ -15,6 +16,44 @@ func TestTakeJSONFlagWorksBeforeOrAfterChannelName(t *testing.T) {
 	if !enabled || len(args) != 1 || args[0] != "review" {
 		t.Fatalf("takeJSONFlag() = %#v, %v", args, enabled)
 	}
+}
+
+func TestChannelStatusAliasJSONPreservesPublicEvidence(t *testing.T) {
+	t.Parallel()
+	channel := localapi.ChannelView{Alias: "alpha", ChannelIDDigest: "sha256:channel",
+		Publications: []localapi.ChannelPublicationView{{Arrival: "gossip",
+			AudiencePeerIDs: []string{"peer-target"}, IgnoredPeerIDs: []string{},
+			OriginPeerID: "peer-origin", ImmediateTransportPeerID: "peer-relay",
+			PublicationDigest: "sha256:publication", EventDigest: "sha256:event",
+			SemanticOutcome: "accepted"}}}
+	response := localapi.ChannelStatusResponse{SchemaVersion: localapi.SchemaVersion, Status: "ok",
+		Channels: []localapi.ChannelView{channel, {Alias: "beta"}}}
+	client := &channelStatusClientStub{response: response}
+	var stdout, stderr bytes.Buffer
+	app := &channelApp{stdin: bytes.NewReader(nil), stdout: &stdout, stderr: &stderr}
+	if exit := app.status(context.Background(), client, []string{"alpha", "--json"}); exit != 0 {
+		t.Fatalf("channel status exit = %d, stderr=%q", exit, stderr.String())
+	}
+	want := response
+	want.Channels = []localapi.ChannelView{channel}
+	raw, err := model.CanonicalMarshal(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := stdout.String(); got != string(raw)+"\n" {
+		t.Fatalf("channel status JSON = %q, want %q", got, string(raw)+"\n")
+	}
+}
+
+type channelStatusClientStub struct {
+	channelControlClient
+	response localapi.ChannelStatusResponse
+}
+
+func (client *channelStatusClientStub) ReadChannelStatus(context.Context) (
+	localapi.ChannelStatusResponse, *localapi.APIError,
+) {
+	return client.response, nil
 }
 
 type abandonChannelClientStub struct {
