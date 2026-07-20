@@ -201,36 +201,9 @@ func applyLocalAcceptanceTx(ctx context.Context, tx *sql.Tx, spec LocalAcceptanc
 			return model.JSON{}, err
 		}
 	}
-
-	events := make([]model.Event, len(spec.Items))
-	for index, item := range spec.Items {
-		event, err := validateLocalPublication(item.Publication, originPublicKey)
-		if err != nil {
-			return model.JSON{}, err
-		}
-		if !event.AcceptedAt().Equal(acceptedAt) || event.ActorPrincipal() != spec.Scope.Profile().Principal() {
-			return model.JSON{}, fmt.Errorf("%w: Event time or actor drift", ErrAdmissionConflict)
-		}
-		expectedScope, err := spec.Scope.EventScope(uint8(index), event.Scope().WorkRef())
-		if err != nil || event.Scope() != expectedScope {
-			return model.JSON{}, fmt.Errorf("%w: Event %d scope drift", ErrAdmissionConflict, index)
-		}
-		if err := validateWorkItem(item, event); err != nil {
-			return model.JSON{}, err
-		}
-		if err := validateParticipantBinding(ctx, tx, item, event); err != nil {
-			return model.JSON{}, err
-		}
-		if err := validateLocalCausality(ctx, tx, event); err != nil {
-			return model.JSON{}, err
-		}
-		if err := validateLocalCausalSemantics(ctx, tx, operation, event); err != nil {
-			return model.JSON{}, err
-		}
-		if err := validateDeadlinePrecedence(ctx, tx, item, event, trustedNow); err != nil {
-			return model.JSON{}, err
-		}
-		events[index] = event
+	events, err := validateAcceptanceItems(ctx, tx, spec, operation, originPublicKey, acceptedAt, trustedNow)
+	if err != nil {
+		return model.JSON{}, err
 	}
 	if err := validateOperationEvents(spec.Operation, events, spec.semanticControllerBatch); err != nil {
 		return model.JSON{}, err
@@ -254,64 +227,132 @@ func applyLocalAcceptanceTx(ctx context.Context, tx *sql.Tx, spec LocalAcceptanc
 	if err != nil {
 		return model.JSON{}, fmt.Errorf("commit local acceptance: receipt: %w", err)
 	}
+	if err := persistAcceptedBatch(ctx, tx, spec, events, trustedNow); err != nil {
+		return model.JSON{}, err
+	}
+	if spec.Operation != nil {
+		if err := commitAcceptanceOperation(ctx, tx, spec, operation, receipt, events,
+			parent, derivations, managedAuthority, managed, trustedNow); err != nil {
+			return model.JSON{}, err
+		}
+	}
+	return receipt, nil
+}
 
+// validateAcceptanceItems checks every publication in Scope order against the
+// frozen batch identity: signature, actor, exact Event scope, Work mutation
+// projection, participant binding, causality and deadline precedence.
+func validateAcceptanceItems(ctx context.Context, tx *sql.Tx, spec LocalAcceptanceSpec,
+	operation model.Operation, originPublicKey []byte, acceptedAt, trustedNow time.Time,
+) ([]model.Event, error) {
+	events := make([]model.Event, len(spec.Items))
+	for index, item := range spec.Items {
+		event, err := validateLocalPublication(item.Publication, originPublicKey)
+		if err != nil {
+			return nil, err
+		}
+		if !event.AcceptedAt().Equal(acceptedAt) || event.ActorPrincipal() != spec.Scope.Profile().Principal() {
+			return nil, fmt.Errorf("%w: Event time or actor drift", ErrAdmissionConflict)
+		}
+		expectedScope, err := spec.Scope.EventScope(uint8(index), event.Scope().WorkRef())
+		if err != nil || event.Scope() != expectedScope {
+			return nil, fmt.Errorf("%w: Event %d scope drift", ErrAdmissionConflict, index)
+		}
+		if err := validateWorkItem(item, event); err != nil {
+			return nil, err
+		}
+		if err := validateParticipantBinding(ctx, tx, item, event); err != nil {
+			return nil, err
+		}
+		if err := validateLocalCausality(ctx, tx, event); err != nil {
+			return nil, err
+		}
+		if err := validateLocalCausalSemantics(ctx, tx, operation, event); err != nil {
+			return nil, err
+		}
+		if err := validateDeadlinePrecedence(ctx, tx, item, event, trustedNow); err != nil {
+			return nil, err
+		}
+		events[index] = event
+	}
+	return events, nil
+}
+
+// persistAcceptedBatch appends every accepted Event with its Work mutation,
+// Artifact pins and publication evidence, then advances the durable
+// publication head and the Node origin sequence.
+func persistAcceptedBatch(ctx context.Context, tx *sql.Tx, spec LocalAcceptanceSpec,
+	events []model.Event, trustedNow time.Time,
+) error {
 	for index, item := range spec.Items {
 		event := events[index]
 		if err := insertAcceptedEvent(ctx, tx, item.Publication); err != nil {
-			return model.JSON{}, err
+			return err
 		}
 		if item.Work != nil {
-			if err := applyWorkMutation(ctx, tx, *item.Work, event); err != nil {
-				return model.JSON{}, err
-			}
-			if item.Work.Work.State().Terminal() {
-				if err := reconcileWorkDerivationDisposition(ctx, tx, item.Work.Work.Ref()); err != nil {
-					return model.JSON{}, err
-				}
+			if err := applyAcceptedWorkMutation(ctx, tx, *item.Work, event); err != nil {
+				return err
 			}
 		}
 		for _, ref := range event.Artifacts() {
 			if _, err := insertEventArtifactPin(ctx, tx, ref.RootDigest(), event.ID(), event.AcceptedAt()); err != nil {
-				return model.JSON{}, err
+				return err
 			}
 		}
 		if err := insertPublicationEvidence(ctx, tx, event); err != nil {
-			return model.JSON{}, err
+			return err
 		}
 		if err := advancePublicationHead(ctx, tx, event, trustedNow); err != nil {
-			return model.JSON{}, err
+			return err
 		}
 	}
-	if err := advanceNodeOriginSequence(ctx, tx, spec.Scope, trustedNow); err != nil {
-		return model.JSON{}, err
-	}
+	return advanceNodeOriginSequence(ctx, tx, spec.Scope, trustedNow)
+}
 
-	if spec.Operation != nil {
-		result, err := tx.ExecContext(ctx, `UPDATE operations SET status='committed',lease_owner=NULL,
-			lease_until=NULL,result_json=?,finished_at=? WHERE operation_id=? AND status='started'
-			AND lease_owner=? AND lease_until>?`, receipt.Bytes(), storeTime(trustedNow), operation.ID().String(),
-			spec.Operation.LeaseOwner, storeTime(trustedNow))
-		if err != nil || exactlyOne(result) != nil {
-			return model.JSON{}, ErrOperationFence
-		}
-		committed, err := operationTerminal(operation, model.OperationCommitted, receipt, trustedNow)
-		if err != nil {
-			return model.JSON{}, err
-		}
-		if err := insertLocalProvenance(ctx, tx, committed, events); err != nil {
-			return model.JSON{}, err
-		}
-		if err := insertLocalDerivations(ctx, tx, committed, parent, derivations); err != nil {
-			return model.JSON{}, err
-		}
-		if managed {
-			if err := completeManagedAcceptance(ctx, tx, committed, managedAuthority,
-				receipt, events, trustedNow); err != nil {
-				return model.JSON{}, err
-			}
-		}
+// applyAcceptedWorkMutation writes one accepted Work mutation and reconciles
+// derivation disposition when the mutation reaches a terminal Work state.
+func applyAcceptedWorkMutation(ctx context.Context, tx *sql.Tx, mutation WorkMutation,
+	event model.Event,
+) error {
+	if err := applyWorkMutation(ctx, tx, mutation, event); err != nil {
+		return err
 	}
-	return receipt, nil
+	if mutation.Work.State().Terminal() {
+		return reconcileWorkDerivationDisposition(ctx, tx, mutation.Work.Ref())
+	}
+	return nil
+}
+
+// commitAcceptanceOperation fences the started operation into its committed
+// terminal state and records provenance, derivations and, for the managed
+// boundary, the settlement evidence for the accepted Events.
+func commitAcceptanceOperation(ctx context.Context, tx *sql.Tx, spec LocalAcceptanceSpec,
+	operation model.Operation, receipt model.JSON, events []model.Event, parent model.ReviewWork,
+	derivations []model.WorkDerivation, managedAuthority managedAcceptanceState, managed bool,
+	trustedNow time.Time,
+) error {
+	result, err := tx.ExecContext(ctx, `UPDATE operations SET status='committed',lease_owner=NULL,
+		lease_until=NULL,result_json=?,finished_at=? WHERE operation_id=? AND status='started'
+		AND lease_owner=? AND lease_until>?`, receipt.Bytes(), storeTime(trustedNow), operation.ID().String(),
+		spec.Operation.LeaseOwner, storeTime(trustedNow))
+	if err != nil || exactlyOne(result) != nil {
+		return ErrOperationFence
+	}
+	committed, err := operationTerminal(operation, model.OperationCommitted, receipt, trustedNow)
+	if err != nil {
+		return err
+	}
+	if err := insertLocalProvenance(ctx, tx, committed, events); err != nil {
+		return err
+	}
+	if err := insertLocalDerivations(ctx, tx, committed, parent, derivations); err != nil {
+		return err
+	}
+	if managed {
+		return completeManagedAcceptance(ctx, tx, committed, managedAuthority,
+			receipt, events, trustedNow)
+	}
+	return nil
 }
 
 func validateDeadlinePrecedence(ctx context.Context, tx *sql.Tx, item LocalAcceptanceItem,
