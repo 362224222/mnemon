@@ -47,150 +47,181 @@ func (s *Store) ResolveDeadlineWinner(ctx context.Context, spec DeadlineResoluti
 	}
 	defer tx.Rollback()
 
-	operation, err := readOperationByID(ctx, tx, spec.Action.ID)
+	operation, receipt, replayed, err := readDeadlineOperation(ctx, tx, spec.Action)
 	if err != nil {
-		return DeadlineResolutionResult{}, fmt.Errorf("resolve deadline winner: operation: %w", err)
+		return DeadlineResolutionResult{}, err
 	}
-	if operation.ProfileID() != model.TeamworkProfileID() || operation.Kind() != spec.Action.Kind ||
-		operation.RequestDigest() != spec.Action.RequestDigest {
-		return DeadlineResolutionResult{}, ErrOperationMismatch
-	}
-	receipt, err := buildWorkExpiredReceipt(operation.ID())
-	if err != nil {
-		return DeadlineResolutionResult{}, fmt.Errorf("resolve deadline winner: receipt: %w", err)
-	}
-	if operation.Status() == model.OperationRejected {
-		stored, ok := operation.Result()
-		if !ok || stored.String() != receipt.String() {
-			return DeadlineResolutionResult{}, ErrOperationTerminal
-		}
+	if replayed {
 		if err := tx.Commit(); err != nil {
 			return DeadlineResolutionResult{}, fmt.Errorf("resolve deadline winner: replay read: %w", err)
 		}
-		return DeadlineResolutionResult{Receipt: stored, Replayed: true}, nil
-	}
-	if operation.Status() != model.OperationStarted {
-		return DeadlineResolutionResult{}, ErrOperationTerminal
-	}
-	if !deadlineCompetingHomeAction(operation.Kind()) {
-		return DeadlineResolutionResult{}, fmt.Errorf("%w: %s is not a competing home action", ErrDeadlineResolution, operation.Kind())
-	}
-	contextHash, hasContext := operation.ContextHash()
-	if !hasContext || spec.ContextHash.IsZero() || contextHash != spec.ContextHash {
-		return DeadlineResolutionResult{}, fmt.Errorf("%w: action context does not match the started operation", ErrDeadlineResolution)
+		return DeadlineResolutionResult{Receipt: receipt, Replayed: true}, nil
 	}
 
-	trustedNow = trustedNow.Round(0).UTC()
-	nowUnixNano := trustedNow.UnixNano()
-	if trustedNow.IsZero() || nowUnixNano <= 0 || !time.Unix(0, nowUnixNano).UTC().Equal(trustedNow) {
-		return DeadlineResolutionResult{}, fmt.Errorf("%w: trusted time is not an exact positive Unix nanosecond", ErrDeadlineResolution)
-	}
-	if err := requireOperationFence(operation, spec.Action.LeaseOwner, trustedNow); err != nil {
-		return DeadlineResolutionResult{}, err
-	}
-	if err := requireOperationAgentRun(ctx, tx, operation, true); err != nil {
-		return DeadlineResolutionResult{}, err
-	}
-
-	event := spec.Expiry.Publication.Event()
-	if spec.Scope.Count() != 1 || spec.Expiry.Work == nil || event.Type() != model.EventReviewExpired ||
-		!event.AcceptedAt().Equal(trustedNow) || !event.CreatedAt().Equal(trustedNow) {
-		return DeadlineResolutionResult{}, fmt.Errorf("%w: exact single expiry at trusted commit time is required", ErrDeadlineResolution)
-	}
-	controllerSpec := LocalAcceptanceSpec{
-		Scope:      spec.Scope,
-		Items:      []LocalAcceptanceItem{spec.Expiry},
-		Controller: true,
-	}
-	originPublicKey, err := validateAdmissionAuthority(ctx, tx, controllerSpec, model.Operation{}, trustedNow)
+	trustedNow, err = validateDeadlineAction(ctx, tx, operation, spec, trustedNow)
 	if err != nil {
 		return DeadlineResolutionResult{}, err
 	}
-	event, err = validateLocalPublication(spec.Expiry.Publication, originPublicKey)
+	controllerSpec, event, err := validateDeadlineExpiry(ctx, tx, spec, trustedNow)
 	if err != nil {
 		return DeadlineResolutionResult{}, err
 	}
-	if event.ActorPrincipal() != spec.Scope.Profile().Principal() {
-		return DeadlineResolutionResult{}, fmt.Errorf("%w: expiry actor drift", ErrAdmissionConflict)
-	}
-	expectedScope, err := spec.Scope.EventScope(0, event.Scope().WorkRef())
-	if err != nil || event.Scope() != expectedScope {
-		return DeadlineResolutionResult{}, fmt.Errorf("%w: expiry scope drift", ErrAdmissionConflict)
-	}
-	if event.Scope().OriginPeerID() != spec.Scope.Node().PeerID() ||
-		event.Scope().WorkRef().HomePeerID() != spec.Scope.Node().PeerID() {
-		return DeadlineResolutionResult{}, fmt.Errorf("%w: only the local Work home may resolve expiry", ErrDeadlineResolution)
-	}
-	if err := validateWorkItem(spec.Expiry, event); err != nil {
+	if err := persistAcceptedBatch(ctx, tx, controllerSpec, []model.Event{event}, trustedNow); err != nil {
 		return DeadlineResolutionResult{}, err
 	}
-	if err := validateParticipantBinding(ctx, tx, spec.Expiry, event); err != nil {
-		return DeadlineResolutionResult{}, err
-	}
-	if err := validateLocalCausality(ctx, tx, event); err != nil {
-		return DeadlineResolutionResult{}, err
-	}
-	if err := validateLocalCausalSemantics(ctx, tx, model.Operation{}, event); err != nil {
-		return DeadlineResolutionResult{}, err
-	}
-	if err := validateOperationEvents(nil, []model.Event{event}, false); err != nil {
-		return DeadlineResolutionResult{}, err
-	}
-	if _, err := validateAcceptanceArtifacts(ctx, tx, model.Operation{}, controllerSpec, []model.Event{event}); err != nil {
-		return DeadlineResolutionResult{}, err
-	}
-
-	current, err := readReviewWork(ctx, tx, event.Scope().WorkRef())
-	if err != nil {
-		return DeadlineResolutionResult{}, fmt.Errorf("resolve deadline winner: current Work: %w", err)
-	}
-	mutation := *spec.Expiry.Work
-	if current.Version() != mutation.ExpectedVersion || current.State() != mutation.ExpectedState ||
-		!current.State().DeadlineEligible() || trustedNow.UnixNano() < current.DeadlineUnixNano() {
-		return DeadlineResolutionResult{}, fmt.Errorf("%w: Work is stale, terminal, or not due", ErrDeadlineResolution)
-	}
-	if err := requireExactDeadlineCause(ctx, tx, event, current); err != nil {
-		return DeadlineResolutionResult{}, err
-	}
-
-	if err := insertAcceptedEvent(ctx, tx, spec.Expiry.Publication); err != nil {
-		return DeadlineResolutionResult{}, err
-	}
-	if err := applyWorkMutation(ctx, tx, mutation, event); err != nil {
-		return DeadlineResolutionResult{}, err
-	}
-	if err := reconcileWorkDerivationDisposition(ctx, tx, mutation.Work.Ref()); err != nil {
-		return DeadlineResolutionResult{}, err
-	}
-	for _, ref := range event.Artifacts() {
-		if _, err := insertEventArtifactPin(ctx, tx, ref.RootDigest(), event.ID(), event.AcceptedAt()); err != nil {
-			return DeadlineResolutionResult{}, err
-		}
-	}
-	if err := insertPublicationEvidence(ctx, tx, event); err != nil {
-		return DeadlineResolutionResult{}, err
-	}
-	if err := advancePublicationHead(ctx, tx, event, trustedNow); err != nil {
-		return DeadlineResolutionResult{}, err
-	}
-	if err := advanceNodeOriginSequence(ctx, tx, spec.Scope, trustedNow); err != nil {
-		return DeadlineResolutionResult{}, err
-	}
-
-	result, err := tx.ExecContext(ctx, `UPDATE operations SET status='rejected',lease_owner=NULL,
-		lease_until=NULL,result_json=?,finished_at=? WHERE operation_id=? AND status='started'
-		AND lease_owner=? AND lease_until>?`, receipt.Bytes(), storeTime(trustedNow), operation.ID().String(),
-		spec.Action.LeaseOwner, storeTime(trustedNow))
-	if err != nil || exactlyOne(result) != nil {
-		return DeadlineResolutionResult{}, ErrOperationFence
-	}
-	if _, err := operationTerminal(operation, model.OperationRejected, receipt, trustedNow); err != nil {
+	if err := rejectDeadlineAction(ctx, tx, operation, spec.Action.LeaseOwner, receipt, trustedNow); err != nil {
 		return DeadlineResolutionResult{}, err
 	}
 	if err := tx.Commit(); err != nil {
 		return DeadlineResolutionResult{}, fmt.Errorf("resolve deadline winner: commit: %w", err)
 	}
 	return DeadlineResolutionResult{Receipt: receipt}, nil
+}
+
+func readDeadlineOperation(ctx context.Context, tx *sql.Tx, authority LocalOperationAuthority,
+) (model.Operation, model.JSON, bool, error) {
+	operation, err := readOperationByID(ctx, tx, authority.ID)
+	if err != nil {
+		return model.Operation{}, model.JSON{}, false,
+			fmt.Errorf("resolve deadline winner: operation: %w", err)
+	}
+	if operation.ProfileID() != model.TeamworkProfileID() || operation.Kind() != authority.Kind ||
+		operation.RequestDigest() != authority.RequestDigest {
+		return model.Operation{}, model.JSON{}, false, ErrOperationMismatch
+	}
+	receipt, err := buildWorkExpiredReceipt(operation.ID())
+	if err != nil {
+		return model.Operation{}, model.JSON{}, false,
+			fmt.Errorf("resolve deadline winner: receipt: %w", err)
+	}
+	if operation.Status() == model.OperationRejected {
+		stored, ok := operation.Result()
+		if !ok || stored.String() != receipt.String() {
+			return model.Operation{}, model.JSON{}, false, ErrOperationTerminal
+		}
+		return operation, stored, true, nil
+	}
+	if operation.Status() != model.OperationStarted {
+		return model.Operation{}, model.JSON{}, false, ErrOperationTerminal
+	}
+	return operation, receipt, false, nil
+}
+
+func validateDeadlineAction(ctx context.Context, tx *sql.Tx, operation model.Operation,
+	spec DeadlineResolutionSpec, trustedNow time.Time,
+) (time.Time, error) {
+	if !deadlineCompetingHomeAction(operation.Kind()) {
+		return time.Time{}, fmt.Errorf("%w: %s is not a competing home action",
+			ErrDeadlineResolution, operation.Kind())
+	}
+	contextHash, hasContext := operation.ContextHash()
+	if !hasContext || spec.ContextHash.IsZero() || contextHash != spec.ContextHash {
+		return time.Time{}, fmt.Errorf("%w: action context does not match the started operation",
+			ErrDeadlineResolution)
+	}
+	canonical, err := canonicalStoreTime(trustedNow)
+	if err != nil || canonical.IsZero() || canonical.UnixNano() <= 0 ||
+		!time.Unix(0, canonical.UnixNano()).UTC().Equal(canonical) {
+		return time.Time{}, fmt.Errorf("%w: trusted time is not an exact positive Unix nanosecond",
+			ErrDeadlineResolution)
+	}
+	if err := requireOperationFence(operation, spec.Action.LeaseOwner, canonical); err != nil {
+		return time.Time{}, err
+	}
+	if err := requireOperationAgentRun(ctx, tx, operation, true); err != nil {
+		return time.Time{}, err
+	}
+	return canonical, nil
+}
+
+func validateDeadlineExpiry(ctx context.Context, tx *sql.Tx, spec DeadlineResolutionSpec,
+	trustedNow time.Time,
+) (LocalAcceptanceSpec, model.Event, error) {
+	controllerSpec := LocalAcceptanceSpec{Scope: spec.Scope,
+		Items: []LocalAcceptanceItem{spec.Expiry}, Controller: true}
+	event := spec.Expiry.Publication.Event()
+	if spec.Scope.Count() != 1 || spec.Expiry.Work == nil || event.Type() != model.EventReviewExpired ||
+		!event.AcceptedAt().Equal(trustedNow) || !event.CreatedAt().Equal(trustedNow) {
+		return LocalAcceptanceSpec{}, model.Event{}, fmt.Errorf(
+			"%w: exact single expiry at trusted commit time is required", ErrDeadlineResolution)
+	}
+	originPublicKey, err := validateAdmissionAuthority(ctx, tx, controllerSpec, model.Operation{}, trustedNow)
+	if err != nil {
+		return LocalAcceptanceSpec{}, model.Event{}, err
+	}
+	event, err = validateLocalPublication(spec.Expiry.Publication, originPublicKey)
+	if err != nil {
+		return LocalAcceptanceSpec{}, model.Event{}, err
+	}
+	if err := validateDeadlineEventAuthority(ctx, tx, spec, controllerSpec, event); err != nil {
+		return LocalAcceptanceSpec{}, model.Event{}, err
+	}
+	if err := validateDueDeadlineWork(ctx, tx, spec.Expiry, event, trustedNow); err != nil {
+		return LocalAcceptanceSpec{}, model.Event{}, err
+	}
+	return controllerSpec, event, nil
+}
+
+func validateDeadlineEventAuthority(ctx context.Context, tx *sql.Tx, spec DeadlineResolutionSpec,
+	controllerSpec LocalAcceptanceSpec, event model.Event,
+) error {
+	if event.ActorPrincipal() != spec.Scope.Profile().Principal() {
+		return fmt.Errorf("%w: expiry actor drift", ErrAdmissionConflict)
+	}
+	expectedScope, err := spec.Scope.EventScope(0, event.Scope().WorkRef())
+	if err != nil || event.Scope() != expectedScope {
+		return fmt.Errorf("%w: expiry scope drift", ErrAdmissionConflict)
+	}
+	if event.Scope().OriginPeerID() != spec.Scope.Node().PeerID() ||
+		event.Scope().WorkRef().HomePeerID() != spec.Scope.Node().PeerID() {
+		return fmt.Errorf("%w: only the local Work home may resolve expiry", ErrDeadlineResolution)
+	}
+	if err := validateWorkItem(spec.Expiry, event); err != nil {
+		return err
+	}
+	if err := validateParticipantBinding(ctx, tx, spec.Expiry, event); err != nil {
+		return err
+	}
+	if err := validateLocalCausality(ctx, tx, event); err != nil {
+		return err
+	}
+	if err := validateLocalCausalSemantics(ctx, tx, model.Operation{}, event); err != nil {
+		return err
+	}
+	if err := validateOperationEvents(nil, []model.Event{event}, false); err != nil {
+		return err
+	}
+	_, err = validateAcceptanceArtifacts(ctx, tx, model.Operation{}, controllerSpec, []model.Event{event})
+	return err
+}
+
+func validateDueDeadlineWork(ctx context.Context, tx *sql.Tx, item LocalAcceptanceItem,
+	event model.Event, trustedNow time.Time,
+) error {
+	current, err := readReviewWork(ctx, tx, event.Scope().WorkRef())
+	if err != nil {
+		return fmt.Errorf("resolve deadline winner: current Work: %w", err)
+	}
+	mutation := *item.Work
+	if current.Version() != mutation.ExpectedVersion || current.State() != mutation.ExpectedState ||
+		!current.State().DeadlineEligible() || trustedNow.UnixNano() < current.DeadlineUnixNano() {
+		return fmt.Errorf("%w: Work is stale, terminal, or not due", ErrDeadlineResolution)
+	}
+	return requireExactDeadlineCause(ctx, tx, event, current)
+}
+
+func rejectDeadlineAction(ctx context.Context, tx *sql.Tx, operation model.Operation,
+	leaseOwner string, receipt model.JSON, trustedNow time.Time,
+) error {
+	result, err := tx.ExecContext(ctx, `UPDATE operations SET status='rejected',lease_owner=NULL,
+		lease_until=NULL,result_json=?,finished_at=? WHERE operation_id=? AND status='started'
+		AND lease_owner=? AND lease_until>?`, receipt.Bytes(), storeTime(trustedNow), operation.ID().String(),
+		leaseOwner, storeTime(trustedNow))
+	if err != nil || exactlyOne(result) != nil {
+		return ErrOperationFence
+	}
+	_, err = operationTerminal(operation, model.OperationRejected, receipt, trustedNow)
+	return err
 }
 
 func deadlineCompetingHomeAction(kind model.OperationKind) bool {
