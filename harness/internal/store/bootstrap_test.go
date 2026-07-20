@@ -53,6 +53,181 @@ func TestInitializeNodeCreatesDisabledIdentityAndReplays(t *testing.T) {
 	}
 }
 
+func TestClassifyNodeInitializationDistinguishesFreshAndExistingAuthority(t *testing.T) {
+	t.Parallel()
+	st := openTestStore(t)
+	state, err := st.ClassifyNodeInitialization(context.Background())
+	if err != nil || state != NodeInitializationFresh {
+		t.Fatalf("fresh ClassifyNodeInitialization() = (%d, %v)", state, err)
+	}
+	node, profile := bootstrapValues(t, "peer-classify", "principal-classify", "/workspace/classify")
+	if _, err := st.InitializeNode(context.Background(), node, profile); err != nil {
+		t.Fatal(err)
+	}
+	state, err = st.ClassifyNodeInitialization(context.Background())
+	if err != nil || state != NodeInitializationExisting {
+		t.Fatalf("existing ClassifyNodeInitialization() = (%d, %v)", state, err)
+	}
+}
+
+func TestClassifyNodeInitializationRejectsPartialAndCorruptAuthority(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		tamper func(*testing.T, *Store)
+	}{
+		{name: "partial", tamper: func(t *testing.T, st *Store) {
+			if _, err := st.db.Exec("DROP TRIGGER profiles_no_delete"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := st.db.Exec("DELETE FROM profiles"); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "corrupt", tamper: func(t *testing.T, st *Store) {
+			if _, err := st.db.Exec("DROP TRIGGER node_identity_immutable"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := st.db.Exec("UPDATE node SET peer_id = 'not a PeerID'"); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			st := openTestStore(t)
+			node, profile := bootstrapValues(t, "peer-classify-"+tc.name,
+				"principal-classify-"+tc.name, "/workspace/classify/"+tc.name)
+			if _, err := st.InitializeNode(context.Background(), node, profile); err != nil {
+				t.Fatal(err)
+			}
+			tc.tamper(t, st)
+			state, err := st.ClassifyNodeInitialization(context.Background())
+			if state != 0 || !errors.Is(err, ErrInitializationConflict) {
+				t.Fatalf("ClassifyNodeInitialization() = (%d, %v)", state, err)
+			}
+		})
+	}
+}
+
+func TestClassifyNodeInitializationRejectsHiddenAndExtraRows(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		id     string
+		tamper func(*testing.T, *Store, model.Node, model.Profile)
+	}{
+		{name: "wrong canonical keys", id: "keys", tamper: func(t *testing.T, st *Store, _ model.Node, _ model.Profile) {
+			mustBootstrapExec(t, st, "PRAGMA ignore_check_constraints = ON")
+			mustBootstrapExec(t, st, "UPDATE node SET singleton=2")
+			mustBootstrapExec(t, st, "DROP TRIGGER profiles_identity_immutable")
+			mustBootstrapExec(t, st, "UPDATE profiles SET profile_id='hidden-profile'")
+		}},
+		{name: "extra Node row", id: "node", tamper: func(t *testing.T, st *Store, _ model.Node, _ model.Profile) {
+			mustBootstrapExec(t, st, "PRAGMA ignore_check_constraints = ON")
+			extra, _ := bootstrapValues(t, "peer-extra-node", "principal-extra-node", "/workspace/extra-node")
+			_, err := st.db.Exec(`INSERT INTO node(singleton,peer_id,origin_epoch,next_origin_seq,
+				active_asset_rev,created_at,updated_at) VALUES(2,?,?,?,?,?,?)`, extra.PeerID().String(),
+				extra.OriginEpoch().String(), extra.NextOriginSequence(), extra.ActiveAssetRevision(),
+				storeTime(extra.CreatedAt()), storeTime(extra.UpdatedAt()))
+			if err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "extra Profile row", id: "profile", tamper: func(t *testing.T, st *Store, _ model.Node, _ model.Profile) {
+			mustBootstrapExec(t, st, "PRAGMA ignore_check_constraints = ON")
+			_, extra := bootstrapValues(t, "peer-extra-profile", "principal-extra-profile", "/workspace/extra-profile")
+			_, err := st.db.Exec(`INSERT INTO profiles(profile_id,principal,workspace_root,host,
+				runtime_kind,credential_hash,active_asset_rev,handling_budget_json,enabled,created_at,updated_at)
+				VALUES('hidden-profile',?,?,?,?,?,?,?,?,?,?)`, extra.Principal(), extra.WorkspaceRoot(),
+				string(extra.Host()), string(extra.Runtime()), extra.CredentialHash().Bytes(),
+				extra.ActiveAssetRevision(), extra.HandlingBudget().Bytes(), 0,
+				storeTime(extra.CreatedAt()), storeTime(extra.UpdatedAt()))
+			if err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			st := openTestStore(t)
+			node, profile := bootstrapValues(t, "peer-hidden-"+tc.id,
+				"principal-hidden-"+tc.id, "/workspace/hidden/"+tc.id)
+			if _, err := st.InitializeNode(context.Background(), node, profile); err != nil {
+				t.Fatal(err)
+			}
+			tc.tamper(t, st, node, profile)
+			state, err := st.ClassifyNodeInitialization(context.Background())
+			if state != 0 || !errors.Is(err, ErrInitializationConflict) {
+				t.Fatalf("ClassifyNodeInitialization() = (%d, %v)", state, err)
+			}
+		})
+	}
+}
+
+func TestClassifyNodeInitializationPreservesOperationalQueryFailure(t *testing.T) {
+	t.Parallel()
+	st := openTestStore(t)
+	if _, err := st.db.Exec("ALTER TABLE node RENAME TO unavailable_node"); err != nil {
+		t.Fatal(err)
+	}
+	state, err := st.ClassifyNodeInitialization(context.Background())
+	if state != 0 || err == nil || errors.Is(err, ErrInitializationConflict) {
+		t.Fatalf("ClassifyNodeInitialization() = (%d, %v)", state, err)
+	}
+}
+
+func TestClassifyNodeInitializationRejectsInvalidStorageClasses(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		query  string
+		column string
+	}{
+		{name: "Node sequence TEXT", query: "UPDATE node SET next_origin_seq='not-an-integer'", column: "Node"},
+		{name: "Profile enabled TEXT", query: "UPDATE profiles SET enabled='not-an-integer'", column: "Profile"},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			st := openTestStore(t)
+			node, profile := bootstrapValues(t, "peer-storage-"+tc.column,
+				"principal-storage-"+tc.column, "/workspace/storage/"+tc.column)
+			if _, err := st.InitializeNode(context.Background(), node, profile); err != nil {
+				t.Fatal(err)
+			}
+			mustBootstrapExec(t, st, "PRAGMA ignore_check_constraints = ON")
+			mustBootstrapExec(t, st, tc.query)
+			state, err := st.ClassifyNodeInitialization(context.Background())
+			if state != 0 || !errors.Is(err, ErrInitializationConflict) {
+				t.Fatalf("ClassifyNodeInitialization() = (%d, %v)", state, err)
+			}
+		})
+	}
+}
+
+func mustBootstrapExec(t *testing.T, st *Store, query string) {
+	t.Helper()
+	if _, err := st.db.Exec(query); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestClassifyNodeInitializationPreservesCancellationCause(t *testing.T) {
+	t.Parallel()
+	st := openTestStore(t)
+	cause := errors.New("bootstrap classification stopped")
+	ctx, cancel := context.WithCancelCause(context.Background())
+	cancel(cause)
+	state, err := st.ClassifyNodeInitialization(ctx)
+	if state != 0 || !errors.Is(err, cause) || !errors.Is(err, context.Canceled) ||
+		errors.Is(err, ErrInitializationConflict) {
+		t.Fatalf("ClassifyNodeInitialization() = (%d, %v)", state, err)
+	}
+}
+
 func TestInitializeNodeFailsClosedAndRollsBack(t *testing.T) {
 	t.Parallel()
 	st := openTestStore(t)
