@@ -1209,7 +1209,7 @@ func peerInboxSemanticSignedResponse(t *testing.T, fixture peerInboxFixture,
 	event, err := model.NewEvent(model.EventSpec{ID: eventID, Scope: eventScope,
 		Source: model.EventSourceLocal, ActorPrincipal: scope.Profile().Principal(),
 		Type: intent.EventType(), Audience: audience,
-		Summary: peerInboxSemanticResponseSummary(intent.EventType()), Payload: intent.Payload(),
+		Summary: PeerInboxSemanticResponseSummary(intent.EventType()), Payload: intent.Payload(),
 		Artifacts: artifacts, CausedBy: []model.EventKey{intent.Cause()}, CreatedAt: at, AcceptedAt: at})
 	if err != nil {
 		t.Fatal(err)

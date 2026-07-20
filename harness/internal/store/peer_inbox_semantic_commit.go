@@ -409,7 +409,7 @@ func validatePeerInboxSemanticResponses(snapshot peerInboxSemanticSnapshot,
 			causes[0] != intent.Cause() || !event.AcceptedAt().Equal(at) ||
 			!event.CreatedAt().Equal(at) || event.Audience().Len() != 1 ||
 			!event.Audience().Contains(snapshot.importedEvent.Scope().OriginPeerID()) ||
-			event.Summary() != peerInboxSemanticResponseSummary(event.Type()) {
+			event.Summary() != PeerInboxSemanticResponseSummary(event.Type()) {
 			return fmt.Errorf("%w: response %d differs from deterministic intent",
 				ErrPeerInboxSemanticInput, index)
 		}
@@ -446,7 +446,7 @@ func peerInboxSemanticResponseArtifactsMatch(intent PeerInboxSemanticResponseInt
 	return true
 }
 
-func peerInboxSemanticResponseSummary(eventType model.EventType) string {
+func PeerInboxSemanticResponseSummary(eventType model.EventType) string {
 	return map[model.EventType]string{
 		model.EventReviewAccepted:       "Review accepted",
 		model.EventReviewAcceptRejected: "Review acceptance rejected",
