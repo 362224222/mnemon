@@ -3,8 +3,9 @@ package peer
 import "time"
 
 // ensureExpiryOwnerLocked starts at most one owner. The owner exits when there
-// are no upgraded unknown connections, so an idle gater retains no goroutine;
-// a later admission starts a new generation under the same mutex.
+// are no upgraded unknown connections or outbound permits, so an idle gater
+// retains no goroutine; a later admission starts a new generation under the
+// same mutex.
 func (gater *ConnectionGater) ensureExpiryOwnerLocked() {
 	if gater.expiryRunning || gater.closed.Load() {
 		return
@@ -27,30 +28,44 @@ func (gater *ConnectionGater) signalExpiryOwnerLocked() {
 func (gater *ConnectionGater) runExpiryOwner() {
 	defer gater.expiryWG.Done()
 	for {
-		closes, next, stop := gater.takeExpiryWork()
+		closes, callbacks, wait, stop := gater.takeExpiryWork()
 		if stop {
 			return
 		}
 		// Connection.Close may enter libp2p and synchronously notify this gater.
 		// It must never run under the state mutex. shutdown waits for this owner,
 		// so no close callback can survive its return.
+		runEnrollmentPermitCallbacks(callbacks)
 		closeUnknownConnections(closes)
-		if len(closes) != 0 {
+		if len(closes) != 0 || len(callbacks) != 0 {
 			continue
 		}
-		waitForUnknownExpiry(next, gater.expiryWake)
+		waitForUnknownExpiry(wait, gater.expiryWake)
 	}
 }
 
-func (gater *ConnectionGater) takeExpiryWork() ([]func() error, time.Time, bool) {
+func (gater *ConnectionGater) takeExpiryWork() ([]func() error,
+	[]outboundEnrollmentPermitRelease, time.Duration, bool,
+) {
 	gater.mu.Lock()
 	defer gater.mu.Unlock()
-	if gater.closed.Load() || len(gater.unknown) == 0 {
+	if gater.closed.Load() || len(gater.unknown) == 0 && len(gater.outbound.permits) == 0 {
 		gater.expiryRunning = false
-		return nil, time.Time{}, true
+		return nil, nil, 0, true
 	}
-	closes, next := gater.collectExpiredUnknownLocked(time.Now())
-	return closes, next, false
+	now := gater.now()
+	closes, nextUnknown := gater.collectExpiredUnknownLocked(now)
+	callbacks := gater.pruneOutboundEnrollmentLocked(now)
+	nextPermit := gater.nextOutboundEnrollmentExpiryLocked()
+	next := earliestExpiry(nextUnknown, nextPermit)
+	return closes, callbacks, next.Sub(now), false
+}
+
+func earliestExpiry(left, right time.Time) time.Time {
+	if left.IsZero() || !right.IsZero() && right.Before(left) {
+		return right
+	}
+	return left
 }
 
 func closeUnknownConnections(closes []func() error) {
@@ -59,11 +74,11 @@ func closeUnknownConnections(closes []func() error) {
 	}
 }
 
-func waitForUnknownExpiry(next time.Time, wake <-chan struct{}) {
-	if next.IsZero() {
+func waitForUnknownExpiry(wait time.Duration, wake <-chan struct{}) {
+	if wait <= 0 {
 		return
 	}
-	timer := time.NewTimer(time.Until(next))
+	timer := time.NewTimer(wait)
 	select {
 	case <-timer.C:
 	case <-wake:

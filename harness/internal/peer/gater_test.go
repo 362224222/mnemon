@@ -219,30 +219,6 @@ func TestConnectionGaterReconcilePromotesUnknownWithoutLeakingSlot(t *testing.T)
 	}
 }
 
-func TestConnectionGaterEnrollmentOwnerPermitIsOutboundOnly(t *testing.T) {
-	t.Parallel()
-
-	local := testAuthorityPeer(t, "gater-enroll-local")
-	owner := testAuthorityPeer(t, "gater-enroll-owner")
-	authority, _ := NewAuthority(local.modelID)
-	if err := authority.Replace(NetworkAuthoritySnapshot{LocalPeerID: local.modelID,
-		OutboundEnrollmentPeers: []model.PeerID{owner.modelID}}); err != nil {
-		t.Fatal(err)
-	}
-	gater := newTestConnectionGater(t, authority)
-	if !gater.InterceptPeerDial(owner.libp2pID) ||
-		!gater.InterceptSecured(network.DirOutbound, owner.libp2pID, nil) ||
-		!gater.admitUpgraded(network.DirOutbound, owner.libp2pID, "owner-outbound", nil) {
-		t.Fatal("fixed enrollment owner could not be dialed")
-	}
-	addresses := testConnectionAddresses()
-	if !gater.InterceptSecured(network.DirInbound, owner.libp2pID, addresses) ||
-		!gater.admitUpgraded(network.DirInbound, owner.libp2pID, "owner-inbound", addresses) ||
-		gater.UnknownConnections() != 1 {
-		t.Fatal("outbound permit incorrectly bypassed the unknown inbound budget")
-	}
-}
-
 func TestConnectionGaterShutdownRetiresReservationsAndExpiryOwner(t *testing.T) {
 	t.Parallel()
 
@@ -358,10 +334,6 @@ func TestConnectionGaterShutdownIsAdmissionBarrier(t *testing.T) {
 	local := testAuthorityPeer(t, "gater-shutdown-barrier-local")
 	unknown := testAuthorityPeer(t, "gater-shutdown-barrier-unknown")
 	authority, _ := NewAuthority(local.modelID)
-	if err := authority.Replace(NetworkAuthoritySnapshot{LocalPeerID: local.modelID,
-		OutboundEnrollmentPeers: []model.PeerID{unknown.modelID}}); err != nil {
-		t.Fatal(err)
-	}
 	gater := newTestConnectionGater(t, authority)
 	entered := make(chan struct{})
 	release := make(chan struct{})

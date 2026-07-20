@@ -3,12 +3,19 @@ package peer
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 	"github.com/mnemon-dev/mnemon/harness/internal/testkit"
 	ma "github.com/multiformats/go-multiaddr"
 )
+
+type meshTransitionBeginResult struct {
+	transition *MeshAuthorityTransition
+	err        error
+}
 
 func TestMeshAuthorityTransitionFailsClosedWithoutInstallingCandidate(t *testing.T) {
 	t.Parallel()
@@ -76,6 +83,214 @@ func TestMeshAuthorityTransitionInstallFailureClosesWholeHost(t *testing.T) {
 	}
 	if _, err := fixture.runtime.Session(fixture.channel.Channel().ID()); !errors.Is(err, ErrMeshRuntime) {
 		t.Fatalf("Session after failed install error = %v", err)
+	}
+}
+
+func TestEnrollmentTransportFailClosedFinalizesPreparedTransitionAndConcurrentClose(t *testing.T) {
+	fixture := newMeshTransitionFailureFixture(t, "mesh-permit-prepared-failure",
+		"2026-07-20T07:00:00Z")
+	remote := testkit.NewIdentity(t, "mesh-permit-prepared-failure-remote")
+	remoteHost := newEnrollmentTestHost(t, remote)
+	defer remoteHost.Close()
+	permit, err := fixture.runtime.acquireEnrollmentTransportPermit(context.Background(),
+		meshEnrollmentTransportRequest(t, remote, remoteHost, "prepared-failure"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	transition, err := fixture.runtime.BeginAuthorityTransition(
+		readMeshRuntimeAuthority(t, fixture.store))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cause := errors.New("injected enrollment transport reconciliation failure")
+	failDone := make(chan struct{})
+	closeDone := make(chan error, 1)
+	go func() {
+		fixture.runtime.failClosedEnrollmentTransport(cause)
+		close(failDone)
+	}()
+	go func() { closeDone <- fixture.runtime.Close() }()
+	select {
+	case <-failDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("prepared-transition transport failure did not return")
+	}
+	select {
+	case closeErr := <-closeDone:
+		if !errors.Is(closeErr, cause) {
+			t.Fatalf("concurrent Close error = %v, want terminal transport cause", closeErr)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("concurrent Close waited forever on prepared transition")
+	}
+	if err := transition.Wait(); !errors.Is(err, cause) ||
+		transition.phase.Load() != meshTransitionFailed ||
+		fixture.runtime.nodeHost.gater.UnknownEnrollmentSlots() != 0 ||
+		fixture.runtime.nodeHost.gater.outboundEnrollmentPermitCurrent(permit.token) {
+		t.Fatalf("prepared fail-closed result=%v phase=%d slots=%d current=%v", err,
+			transition.phase.Load(), fixture.runtime.nodeHost.gater.UnknownEnrollmentSlots(),
+			fixture.runtime.nodeHost.gater.outboundEnrollmentPermitCurrent(permit.token))
+	}
+}
+
+func TestEnrollmentTransportFailClosedCancelsPreparingTransitionAndConcurrentClose(t *testing.T) {
+	fixture := newMeshTransitionFailureFixture(t, "mesh-permit-preparing-failure",
+		"2026-07-20T08:00:00Z")
+	remote := fixture.channel.AppendActive(t, "mesh-permit-preparing-failure-remote")
+	mergePeerMeshRoster(t, fixture.store, fixture.channel, remote.Member(), remote.Member().CreatedAt())
+	fixture.runtime.gossip.mu.Lock()
+	gate := fixture.runtime.gossip.gates[fixture.channel.Channel().ID()]
+	fixture.runtime.gossip.mu.Unlock()
+	if gate == nil || !gate.tryAcquire() {
+		t.Fatal("hold one Channel admission to block transition preparation")
+	}
+	candidate := readMeshRuntimeAuthority(t, fixture.store)
+	beginDone := make(chan meshTransitionBeginResult, 1)
+	go func() {
+		transition, beginErr := fixture.runtime.BeginAuthorityTransition(candidate)
+		beginDone <- meshTransitionBeginResult{transition: transition, err: beginErr}
+	}()
+	if !waitForMeshTransitionPreparation(fixture.runtime, 3*time.Second) {
+		gate.release()
+		t.Fatal("transition did not enter the preparing/draining window")
+	}
+	cause := errors.New("injected failure during transition preparation")
+	failDone := make(chan struct{})
+	closeDone := make(chan error, 1)
+	go func() {
+		fixture.runtime.failClosedEnrollmentTransport(cause)
+		close(failDone)
+	}()
+	go func() { closeDone <- fixture.runtime.Close() }()
+	if !waitForClosed(failDone, 3*time.Second) {
+		gate.release()
+		t.Fatal("preparing-transition transport failure did not return")
+	}
+	gate.release()
+	result, began := waitForMeshTransitionBegin(beginDone, 3*time.Second)
+	if !began {
+		t.Fatal("preparing Begin did not observe fail-closed cancellation")
+	}
+	if result.transition != nil || result.err == nil {
+		t.Fatalf("preparing Begin result = (%v, %v), want terminal error", result.transition, result.err)
+	}
+	closeErr, closed := waitForRuntimeClose(closeDone, 3*time.Second)
+	if !closed {
+		t.Fatal("concurrent Close waited forever on preparing transition")
+	}
+	if !errors.Is(closeErr, cause) {
+		t.Fatalf("preparing concurrent Close error = %v", closeErr)
+	}
+	fixture.runtime.mu.Lock()
+	active := fixture.runtime.transition
+	fixture.runtime.mu.Unlock()
+	if active != nil || fixture.runtime.nodeHost.gater.UnknownEnrollmentSlots() != 0 {
+		t.Fatal("preparing fail-closed retained transition or enrollment slots")
+	}
+}
+
+func waitForMeshTransitionPreparation(runtime *MeshRuntime, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		runtime.mu.Lock()
+		meshTransition := runtime.transition
+		meshPreparing := meshTransition != nil && meshTransition.gossipTransition == nil
+		runtime.mu.Unlock()
+		runtime.gossip.mu.Lock()
+		gossipPreparing := runtime.gossip.transition != nil
+		runtime.gossip.mu.Unlock()
+		if meshPreparing && gossipPreparing {
+			return true
+		}
+		time.Sleep(time.Millisecond)
+	}
+	return false
+}
+
+func waitForClosed(done <-chan struct{}, timeout time.Duration) bool {
+	select {
+	case <-done:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
+}
+
+func waitForMeshTransitionBegin(done <-chan meshTransitionBeginResult,
+	timeout time.Duration,
+) (meshTransitionBeginResult, bool) {
+	select {
+	case result := <-done:
+		return result, true
+	case <-time.After(timeout):
+		return meshTransitionBeginResult{}, false
+	}
+}
+
+func waitForRuntimeClose(done <-chan error, timeout time.Duration) (error, bool) {
+	select {
+	case err := <-done:
+		return err, true
+	case <-time.After(timeout):
+		return nil, false
+	}
+}
+
+func TestEnrollmentTransportExpiryOwnerFailClosedDoesNotSelfJoin(t *testing.T) {
+	fixture := newMeshTransitionFailureFixture(t, "mesh-permit-expiry-owner-failure",
+		"2026-07-20T09:00:00Z")
+	remote := testkit.NewIdentity(t, "mesh-permit-expiry-owner-failure-remote")
+	remoteHost := newEnrollmentTestHost(t, remote)
+	defer remoteHost.Close()
+	gater := fixture.runtime.nodeHost.gater
+	start := time.Date(2026, 7, 20, 9, 30, 0, 0, time.UTC)
+	gater.pendingTTL = time.Minute
+	var clock atomic.Value
+	clock.Store(start)
+	gater.now = func() time.Time { return clock.Load().(time.Time) }
+	permit, err := fixture.runtime.acquireEnrollmentTransportPermit(context.Background(),
+		meshEnrollmentTransportRequest(t, remote, remoteHost, "expiry-owner-failure"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sentinel := errors.New("injected exact stream reset failure")
+	gater.mu.Lock()
+	gater.outbound.permits[permit.token.key].resetStream = func() error { return sentinel }
+	gater.mu.Unlock()
+	clock.Store(start.Add(gater.pendingTTL + time.Nanosecond))
+	gater.mu.Lock()
+	gater.signalExpiryOwnerLocked()
+	gater.mu.Unlock()
+	deadline := time.Now().Add(3 * time.Second)
+	failedClosed := false
+	for time.Now().Before(deadline) {
+		fixture.runtime.mu.Lock()
+		failedClosed = fixture.runtime.closed && errors.Is(fixture.runtime.terminalErr, sentinel)
+		fixture.runtime.mu.Unlock()
+		if failedClosed {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if !failedClosed {
+		t.Fatal("expiry owner did not enter transport fail-closed")
+	}
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- fixture.runtime.Close() }()
+	select {
+	case closeErr := <-closeDone:
+		if !errors.Is(closeErr, sentinel) {
+			t.Fatalf("Close error = %v, want exact reset sentinel", closeErr)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Close self-joined the expiry owner after transport failure")
+	}
+	gater.mu.Lock()
+	expiryRunning := gater.expiryRunning
+	gater.mu.Unlock()
+	if !gater.closed.Load() || expiryRunning || gater.UnknownEnrollmentSlots() != 0 {
+		t.Fatalf("expiry fail-closed retained lifecycle state: closed=%v running=%v slots=%d",
+			gater.closed.Load(), expiryRunning, gater.UnknownEnrollmentSlots())
 	}
 }
 

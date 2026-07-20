@@ -10,7 +10,6 @@ import (
 	libp2pcrypto "github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
 	libp2ppeer "github.com/libp2p/go-libp2p/core/peer"
-	"github.com/libp2p/go-libp2p/core/peerstore"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 	ma "github.com/multiformats/go-multiaddr"
@@ -26,16 +25,18 @@ var (
 // of a Node. Store remains the durable authority; this runtime only installs
 // complete Store projections and never invents an independent Channel view.
 type MeshRuntime struct {
-	nodeHost  *NodeHost
-	gossip    *Gossip
-	authority *Authority
+	nodeHost       *NodeHost
+	gossip         *Gossip
+	authority      *Authority
+	addressSources *meshAddressSources
 
-	mu         sync.Mutex
-	addresses  map[libp2ppeer.ID][]ma.Multiaddr
-	transition *MeshAuthorityTransition
-	closed     bool
-	closeOnce  sync.Once
-	closeErr   error
+	mu          sync.Mutex
+	addresses   map[libp2ppeer.ID][]ma.Multiaddr
+	transition  *MeshAuthorityTransition
+	closed      bool
+	terminalErr error
+	closeOnce   sync.Once
+	closeErr    error
 }
 
 // NewMeshRuntime starts from one coherent Store snapshot. The Host begins with
@@ -59,14 +60,21 @@ func NewMeshRuntime(ctx context.Context, privateKey libp2pcrypto.PrivKey,
 	if err != nil {
 		return nil, fmt.Errorf("%w: construct Host: %w", ErrMeshRuntime, err)
 	}
+	addressSources, err := newMeshAddressSources(nodeHost.managedRuntimeHost().Peerstore())
+	if err != nil {
+		return nil, errors.Join(err, nodeHost.Close())
+	}
 	fail := func(cause error, gossip *Gossip) (*MeshRuntime, error) {
+		addressSources.close()
 		if gossip != nil {
 			cause = errors.Join(cause, gossip.Close())
 		}
 		return nil, errors.Join(cause, nodeHost.Close())
 	}
-	applyManagedAddresses(nodeHost.Host(), nil, addresses)
-	gossip, err := NewGossip(ctx, nodeHost.Host(), authority)
+	if err := addressSources.installInitial(addresses); err != nil {
+		return fail(fmt.Errorf("%w: install initial Peer addresses: %w", ErrMeshRuntime, err), nil)
+	}
+	gossip, err := NewGossip(ctx, nodeHost.managedRuntimeHost(), authority)
 	if err != nil {
 		return fail(fmt.Errorf("%w: construct Gossip router: %w", ErrMeshRuntime, err), nil)
 	}
@@ -77,14 +85,14 @@ func NewMeshRuntime(ctx context.Context, privateKey libp2pcrypto.PrivKey,
 		return fail(fmt.Errorf("%w: join initial topics: %w", ErrMeshRuntime, err), gossip)
 	}
 	return &MeshRuntime{nodeHost: nodeHost, gossip: gossip, authority: authority,
-		addresses: addresses}, nil
+		addressSources: addressSources, addresses: cloneManagedAddresses(addresses)}, nil
 }
 
-func (runtime *MeshRuntime) Host() host.Host {
+func (runtime *MeshRuntime) managedRuntimeHost() host.Host {
 	if runtime == nil || runtime.nodeHost == nil {
 		return nil
 	}
-	return runtime.nodeHost.Host()
+	return runtime.nodeHost.managedRuntimeHost()
 }
 
 func (runtime *MeshRuntime) Session(channelID model.ChannelID) (*TopicSession, error) {
@@ -123,6 +131,7 @@ func (runtime *MeshRuntime) Close() error {
 	runtime.closeOnce.Do(func() {
 		var gossip *Gossip
 		var nodeHost *NodeHost
+		var addressSources *meshAddressSources
 		for {
 			runtime.mu.Lock()
 			if transition := runtime.transition; transition != nil {
@@ -134,8 +143,12 @@ func (runtime *MeshRuntime) Close() error {
 			runtime.closed = true
 			gossip = runtime.gossip
 			nodeHost = runtime.nodeHost
+			addressSources = runtime.addressSources
 			runtime.mu.Unlock()
 			break
+		}
+		if addressSources != nil {
+			addressSources.close()
 		}
 		if gossip != nil {
 			runtime.closeErr = errors.Join(runtime.closeErr, gossip.Close())
@@ -143,6 +156,9 @@ func (runtime *MeshRuntime) Close() error {
 		if nodeHost != nil {
 			runtime.closeErr = errors.Join(runtime.closeErr, nodeHost.Close())
 		}
+		runtime.mu.Lock()
+		runtime.closeErr = errors.Join(runtime.closeErr, runtime.terminalErr)
+		runtime.mu.Unlock()
 	})
 	return runtime.closeErr
 }
@@ -230,30 +246,4 @@ func joinActiveChannels(gossip *Gossip, snapshot NetworkAuthoritySnapshot) error
 		}
 	}
 	return nil
-}
-
-func applyManagedAddresses(nodeHost host.Host, previous,
-	next map[libp2ppeer.ID][]ma.Multiaddr,
-) {
-	if nodeHost == nil {
-		return
-	}
-	for peerID, addresses := range previous {
-		if len(addresses) > 0 {
-			nodeHost.Peerstore().SetAddrs(peerID, addresses, 0)
-		}
-	}
-	for peerID, addresses := range next {
-		if len(addresses) > 0 {
-			nodeHost.Peerstore().AddAddrs(peerID, addresses, peerstore.PermanentAddrTTL)
-		}
-	}
-}
-
-func cloneManagedAddresses(source map[libp2ppeer.ID][]ma.Multiaddr) map[libp2ppeer.ID][]ma.Multiaddr {
-	result := make(map[libp2ppeer.ID][]ma.Multiaddr, len(source))
-	for peerID, addresses := range source {
-		result[peerID] = append([]ma.Multiaddr(nil), addresses...)
-	}
-	return result
 }

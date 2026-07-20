@@ -27,7 +27,6 @@ type MeshAuthorityTransition struct {
 	runtime          *MeshRuntime
 	gossipTransition *GossipAuthorityTransition
 	snapshot         NetworkAuthoritySnapshot
-	previous         map[libp2ppeer.ID][]ma.Multiaddr
 	candidate        map[libp2ppeer.ID][]ma.Multiaddr
 	ready            chan struct{}
 	done             chan struct{}
@@ -66,32 +65,92 @@ func (runtime *MeshRuntime) BeginAuthorityTransition(mesh store.ChannelMeshAutho
 	}
 	transition := &MeshAuthorityTransition{runtime: runtime, snapshot: snapshot,
 		candidate: addresses, ready: make(chan struct{}), done: make(chan struct{})}
-	runtime.mu.Lock()
-	if runtime.closed || runtime.nodeHost == nil || runtime.gossip == nil {
-		runtime.mu.Unlock()
-		return nil, fmt.Errorf("%w: runtime is closed", ErrMeshRuntime)
+	gossip, active, err := runtime.registerMeshAuthorityTransition(transition)
+	if err != nil {
+		return active, err
 	}
-	if active := runtime.transition; active != nil {
-		runtime.mu.Unlock()
-		return active, fmt.Errorf("%w: %w", ErrMeshRuntime, ErrMeshAuthorityTransitionInProgress)
-	}
-	transition.previous = cloneManagedAddresses(runtime.addresses)
-	runtime.transition = transition
-	gossip := runtime.gossip
-	nodeHost := runtime.nodeHost.Host()
-	runtime.mu.Unlock()
-
 	gossipTransition, err := gossip.BeginAuthorityTransition(snapshot)
 	if err != nil {
-		transition.prepareErr = fmt.Errorf("%w: prepare Gossip authority: %w", ErrMeshRuntime, err)
-		close(transition.ready)
-		transition.complete(meshTransitionAborted, transition.prepareErr)
-		return nil, transition.prepareErr
+		return nil, transition.completeGossipPreparationFailure(err)
 	}
-	transition.gossipTransition = gossipTransition
-	applyManagedAddresses(nodeHost, transition.previous, transition.candidate)
+	if err := runtime.addressSources.stageDurable(transition, transition.candidate); err != nil {
+		return nil, transition.completeAddressPreparationFailure(gossipTransition, err)
+	}
+	return transition.publishPrepared(gossipTransition)
+}
+
+func (runtime *MeshRuntime) registerMeshAuthorityTransition(transition *MeshAuthorityTransition) (
+	*Gossip, *MeshAuthorityTransition, error,
+) {
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	if runtime.closed || runtime.nodeHost == nil || runtime.gossip == nil {
+		return nil, nil, fmt.Errorf("%w: runtime is closed", ErrMeshRuntime)
+	}
+	if active := runtime.transition; active != nil {
+		return nil, active, fmt.Errorf("%w: %w", ErrMeshRuntime,
+			ErrMeshAuthorityTransitionInProgress)
+	}
+	runtime.transition = transition
+	return runtime.gossip, nil, nil
+}
+
+func (transition *MeshAuthorityTransition) completeGossipPreparationFailure(cause error) error {
+	transition.prepareErr = fmt.Errorf("%w: prepare Gossip authority: %w", ErrMeshRuntime, cause)
+	transition.runtime.mu.Lock()
+	failedClosed := transition.runtime.closed
+	transition.runtime.mu.Unlock()
 	close(transition.ready)
-	return transition, nil
+	phase := uint32(meshTransitionAborted)
+	if failedClosed {
+		phase = meshTransitionFailed
+	}
+	transition.complete(phase, transition.prepareErr)
+	return transition.prepareErr
+}
+
+func (transition *MeshAuthorityTransition) completeAddressPreparationFailure(
+	gossipTransition *GossipAuthorityTransition, cause error,
+) error {
+	transition.runtime.mu.Lock()
+	failedClosed := transition.runtime.closed
+	transition.runtime.mu.Unlock()
+	phase := uint32(meshTransitionAborted)
+	var finishErr error
+	if failedClosed {
+		phase = meshTransitionFailed
+		finishErr = gossipTransition.FailClosed(cause)
+	} else {
+		finishErr = gossipTransition.Abort()
+	}
+	transition.prepareErr = errors.Join(
+		fmt.Errorf("%w: stage Peer addresses: %w", ErrMeshRuntime, cause), finishErr)
+	close(transition.ready)
+	transition.complete(phase, transition.prepareErr)
+	return transition.prepareErr
+}
+
+func (transition *MeshAuthorityTransition) publishPrepared(
+	gossipTransition *GossipAuthorityTransition,
+) (*MeshAuthorityTransition, error) {
+	runtime := transition.runtime
+	runtime.mu.Lock()
+	if !runtime.closed {
+		transition.gossipTransition = gossipTransition
+		close(transition.ready)
+		runtime.mu.Unlock()
+		return transition, nil
+	}
+	failure := runtime.terminalErr
+	runtime.mu.Unlock()
+	if failure == nil {
+		failure = fmt.Errorf("%w: runtime closed during authority preparation", ErrMeshRuntime)
+	}
+	runtime.addressSources.close()
+	transition.prepareErr = gossipTransition.FailClosed(failure)
+	close(transition.ready)
+	transition.complete(meshTransitionFailed, transition.prepareErr)
+	return nil, transition.prepareErr
 }
 
 // Install exposes the already-committed durable candidate, rotates affected
@@ -116,6 +175,9 @@ func (transition *MeshAuthorityTransition) Install() error {
 	runtime := transition.runtime
 	err := transition.gossipTransition.Install()
 	if err == nil {
+		err = runtime.addressSources.installDurable(transition)
+	}
+	if err == nil {
 		// Connection lifecycle hooks do not revisit already-upgraded
 		// connections after an authority replacement. Reconcile against the
 		// just-installed whole snapshot before the transition is released so a
@@ -135,6 +197,7 @@ func (transition *MeshAuthorityTransition) Install() error {
 	phase := uint32(meshTransitionInstalled)
 	if err != nil {
 		phase = meshTransitionFailed
+		runtime.addressSources.close()
 		err = errors.Join(fmt.Errorf("%w: install authority: %w", ErrMeshRuntime, err),
 			runtime.gossip.Close(), runtime.nodeHost.Close())
 	}
@@ -159,9 +222,20 @@ func (transition *MeshAuthorityTransition) Abort() error {
 		}
 		return fmt.Errorf("%w: %w", ErrMeshRuntime, ErrMeshAuthorityTransitionFinalized)
 	}
-	applyManagedAddresses(transition.runtime.nodeHost.Host(), transition.candidate, transition.previous)
-	err := transition.gossipTransition.Abort()
-	transition.complete(meshTransitionAborted, err)
+	runtime := transition.runtime
+	err := errors.Join(runtime.addressSources.abortDurable(transition),
+		transition.gossipTransition.Abort())
+	phase := uint32(meshTransitionAborted)
+	if err != nil {
+		phase = meshTransitionFailed
+		runtime.mu.Lock()
+		runtime.closed = true
+		runtime.mu.Unlock()
+		runtime.addressSources.close()
+		err = errors.Join(fmt.Errorf("%w: abort authority: %w", ErrMeshRuntime, err),
+			runtime.gossip.Close(), runtime.nodeHost.Close())
+	}
+	transition.complete(phase, err)
 	return err
 }
 

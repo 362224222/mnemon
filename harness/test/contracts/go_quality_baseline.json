@@ -788,13 +788,6 @@
     },
     {
       "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/peer/authority.go::(*Authority).prepare",
-      "path": "harness/internal/peer/authority.go",
-      "symbol": "(*Authority).prepare",
-      "ceiling": 27
-    },
-    {
-      "rule": "cognitive_complexity",
       "identity": "cognitive_complexity:harness/internal/peer/authority.go::buildChannelAuthority",
       "path": "harness/internal/peer/authority.go",
       "symbol": "buildChannelAuthority",
@@ -7051,7 +7044,7 @@
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/peer/authority.go",
       "path": "harness/internal/peer/authority.go",
-      "ceiling": 474
+      "ceiling": 453
     },
     {
       "rule": "production_file_lines",

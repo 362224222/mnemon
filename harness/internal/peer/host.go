@@ -21,11 +21,13 @@ var ErrNodeHost = errors.New("Mnemon libp2p Node Host")
 // deliberately starts without listeners, registers disconnect observation,
 // and only then exposes the configured addresses.
 type NodeHost struct {
-	host      host.Host
-	managed   host.Host
-	gater     *ConnectionGater
-	closeOnce sync.Once
-	closeErr  error
+	host          host.Host
+	managed       host.Host
+	gater         *ConnectionGater
+	hostCloseOnce sync.Once
+	hostCloseErr  error
+	closeOnce     sync.Once
+	closeErr      error
 }
 
 func NewNodeHost(privateKey libp2pcrypto.PrivKey, authority *Authority,
@@ -72,7 +74,7 @@ func NewNodeHost(privateKey libp2pcrypto.PrivKey, authority *Authority,
 	return &NodeHost{host: nodeHost, managed: managed, gater: gater}, nil
 }
 
-func (node *NodeHost) Host() host.Host {
+func (node *NodeHost) managedRuntimeHost() host.Host {
 	if node == nil {
 		return nil
 	}
@@ -113,9 +115,9 @@ func (managed *managedHost) wrapHandler(protocolID protocol.ID,
 		if stream != nil && stream.Protocol() != "" {
 			actual = stream.Protocol()
 		}
-		if stream == nil || handler == nil || (managedProtocol(actual) &&
+		if stream == nil || handler == nil || !managedProtocol(actual) ||
 			!managed.gater.allowsProtocol(stream.Conn().RemotePeer(), actual,
-				network.DirInbound, stream.Conn().ID())) {
+				network.DirInbound, stream.Conn().ID()) {
 			if stream != nil {
 				_ = stream.Reset()
 			}
@@ -131,8 +133,11 @@ func (managed *managedHost) NewStream(ctx context.Context, peerID libp2ppeer.ID,
 	if managed == nil || managed.Host == nil || managed.gater == nil {
 		return nil, fmt.Errorf("%w: managed Host is unavailable", ErrNodeHost)
 	}
+	if len(protocolIDs) == 0 {
+		return nil, fmt.Errorf("%w: a managed protocol is required", ErrNodeHost)
+	}
 	for _, protocolID := range protocolIDs {
-		if managedProtocol(protocolID) &&
+		if !managedProtocol(protocolID) ||
 			!managed.gater.allowsProtocol(peerID, protocolID, network.DirOutbound, "") {
 			return nil, fmt.Errorf("%w: Peer lacks %s stream authority", ErrNodeHost, protocolID)
 		}
@@ -145,7 +150,7 @@ func (managed *managedHost) NewStream(ctx context.Context, peerID libp2ppeer.ID,
 	// stream existed before a revoke scan, that scan observes it; if creation
 	// completed afterwards, this second current-revision check resets it.
 	for _, protocolID := range protocolIDs {
-		if managedProtocol(protocolID) &&
+		if !managedProtocol(protocolID) ||
 			!managed.gater.allowsProtocol(peerID, protocolID, network.DirOutbound, "") {
 			_ = stream.Reset()
 			return nil, fmt.Errorf("%w: Peer lost %s stream authority", ErrNodeHost, protocolID)
@@ -183,7 +188,21 @@ func (node *NodeHost) Close() error {
 			node.gater.shutdown()
 			node.host.Network().StopNotify(node.gater)
 		}
-		node.closeErr = node.host.Close()
+		node.closeErr = node.closeTransportWithoutJoiningGater()
 	})
 	return node.closeErr
+}
+
+// closeTransportWithoutJoiningGater is the raw-Host close seam for a callback
+// already running on the gater expiry owner. NodeHost.Close remains the sole
+// owner of gater shutdown/join; this independently idempotent step prevents a
+// self-join while keeping one synchronized owner for the underlying Host.
+func (node *NodeHost) closeTransportWithoutJoiningGater() error {
+	if node == nil || node.host == nil {
+		return nil
+	}
+	node.hostCloseOnce.Do(func() {
+		node.hostCloseErr = node.host.Close()
+	})
+	return node.hostCloseErr
 }

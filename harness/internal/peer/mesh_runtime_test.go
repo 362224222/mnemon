@@ -25,7 +25,8 @@ func TestMeshRuntimeStartsOneRouterAndJoinsEveryActiveChannel(t *testing.T) {
 	createPeerMeshChannel(t, st, beta, "runtime-beta")
 	mesh := readMeshRuntimeAuthority(t, st)
 	runtime := newTestMeshRuntime(t, ctx, owner, mesh)
-	if runtime.Host() == nil || runtime.Host().ID().String() != owner.PeerID().String() ||
+	if runtime.managedRuntimeHost() == nil ||
+		runtime.managedRuntimeHost().ID().String() != owner.PeerID().String() ||
 		!runtime.HasCurrentSession(alpha.Channel().ID()) ||
 		!runtime.HasCurrentSession(beta.Channel().ID()) {
 		t.Fatal("runtime did not expose one identity-bound router with both active topics")
@@ -33,7 +34,7 @@ func TestMeshRuntimeStartsOneRouterAndJoinsEveryActiveChannel(t *testing.T) {
 	if _, err := runtime.Session(alpha.Channel().ID()); err != nil {
 		t.Fatalf("acquire current session: %v", err)
 	}
-	if protocols := runtime.Host().Mux().Protocols(); countProtocol(protocols, GossipProtocol) != 1 {
+	if protocols := runtime.managedRuntimeHost().Mux().Protocols(); countProtocol(protocols, GossipProtocol) != 1 {
 		t.Fatalf("Gossip protocol handler count = %d, want one", countProtocol(protocols, GossipProtocol))
 	}
 }
@@ -58,7 +59,7 @@ func TestMeshRuntimeReconcileRollsBackAddressesAndJoinsNewChannel(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(runtime.Host().Peerstore().Addrs(remoteID)) == 0 {
+	if len(runtime.managedRuntimeHost().Peerstore().Addrs(remoteID)) == 0 {
 		t.Fatal("candidate Peer addresses were not staged for the durable window")
 	}
 	if !runtime.mu.TryLock() {
@@ -73,7 +74,7 @@ func TestMeshRuntimeReconcileRollsBackAddressesAndJoinsNewChannel(t *testing.T) 
 		t.Fatalf("abort authority transition = %v / wait %v", err, transition.Wait())
 	}
 	if runtime.HasCurrentSession(beta.Channel().ID()) ||
-		len(runtime.Host().Peerstore().Addrs(remoteID)) != 0 ||
+		len(runtime.managedRuntimeHost().Peerstore().Addrs(remoteID)) != 0 ||
 		runtime.authority.CanConnect(remoteID) {
 		t.Fatal("aborted durable transition leaked candidate topic, addresses or authority")
 	}
@@ -85,7 +86,7 @@ func TestMeshRuntimeReconcileRollsBackAddressesAndJoinsNewChannel(t *testing.T) 
 		t.Fatal(err)
 	}
 	if !runtime.HasCurrentSession(beta.Channel().ID()) ||
-		len(runtime.Host().Peerstore().Addrs(remoteID)) == 0 ||
+		len(runtime.managedRuntimeHost().Peerstore().Addrs(remoteID)) == 0 ||
 		!runtime.authority.CanConnect(remoteID) {
 		t.Fatal("successful reconcile did not atomically expose candidate mesh")
 	}
@@ -111,11 +112,11 @@ func TestMeshRuntimeKeepsOverlappingPeerAddressesUntilLastChannelRevokes(t *test
 	runtime := newTestMeshRuntime(t, ctx, owner, readMeshRuntimeAuthority(t, st))
 	remoteID := meshRuntimeLibp2pID(t, alphaRemote.Identity().PeerID())
 	remoteHost := newEnrollmentTestHost(t, alphaRemote.Identity())
-	if err := remoteHost.Connect(ctx, libp2ppeer.AddrInfo{ID: runtime.Host().ID(),
-		Addrs: runtime.Host().Addrs()}); err != nil {
+	if err := remoteHost.Connect(ctx, libp2ppeer.AddrInfo{ID: runtime.managedRuntimeHost().ID(),
+		Addrs: runtime.managedRuntimeHost().Addrs()}); err != nil {
 		t.Fatal(err)
 	}
-	if len(runtime.Host().Network().ConnsToPeer(remoteID)) == 0 {
+	if len(runtime.managedRuntimeHost().Network().ConnsToPeer(remoteID)) == 0 {
 		t.Fatal("shared Peer did not establish the pre-revoke physical connection")
 	}
 	unchangedBeta, err := runtime.Session(beta.Channel().ID())
@@ -137,17 +138,18 @@ func TestMeshRuntimeKeepsOverlappingPeerAddressesUntilLastChannelRevokes(t *test
 	if err := transition.Install(); err != nil {
 		t.Fatal(err)
 	}
-	if len(runtime.Host().Peerstore().Addrs(remoteID)) == 0 || !runtime.authority.CanConnect(remoteID) ||
-		len(runtime.Host().Network().ConnsToPeer(remoteID)) == 0 {
+	if len(runtime.managedRuntimeHost().Peerstore().Addrs(remoteID)) == 0 ||
+		!runtime.authority.CanConnect(remoteID) ||
+		len(runtime.managedRuntimeHost().Network().ConnsToPeer(remoteID)) == 0 {
 		t.Fatal("one Channel revoke removed a Peer still authorized by overlapping Channel")
 	}
 
 	betaRevoked := beta.AppendTerminal(t, betaRemote.Identity().PeerID(), model.MemberRevoked)
 	mergePeerMeshRoster(t, st, beta, betaRevoked.Member(), betaRevoked.Member().CreatedAt())
 	installMeshAuthority(t, runtime, readMeshRuntimeAuthority(t, st))
-	waitPeerDisconnected(t, runtime.Host(), remoteID)
+	waitPeerDisconnected(t, runtime.managedRuntimeHost(), remoteID)
 	if len(runtime.addresses[remoteID]) != 0 || runtime.authority.CanConnect(remoteID) ||
-		len(runtime.Host().Network().ConnsToPeer(remoteID)) != 0 {
+		len(runtime.managedRuntimeHost().Network().ConnsToPeer(remoteID)) != 0 {
 		t.Fatal("last Channel revoke retained stale physical Peer authority or connection")
 	}
 }
