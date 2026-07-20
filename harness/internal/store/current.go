@@ -20,7 +20,7 @@ var (
 	ErrCurrentReadInput       = errors.New("invalid Agent current-read input")
 	ErrCurrentReadStale       = errors.New("Agent current claim is stale")
 	ErrCurrentReadInvariant   = errors.New("Agent current durable invariant violated")
-	ErrCurrentReadUnsupported = errors.New("Agent current projection is not implemented for this handling")
+	ErrCurrentReadUnsupported = errors.New("Agent current projection is unsupported for this handling")
 	ErrCurrentReadTooLarge    = errors.New("Agent current projection exceeds its bounded contract")
 )
 
