@@ -38,8 +38,8 @@ const (
 )
 
 // ChannelAuthoritySigner is the smallest private-key capability accepted by
-// the owner transaction. Store constructs both canonical messages and verifies
-// the returned signatures against committed owner authority before writing.
+// the compatibility bridge. Typed callers sign Store-constructed messages
+// between the two rollback-only preparation stages.
 type ChannelAuthoritySigner interface {
 	Sign(context.Context, []byte) ([]byte, error)
 }
@@ -163,229 +163,30 @@ type AcceptChannelEnrollmentResult struct {
 	Receipt model.EnrollmentReceipt
 }
 
-// AcceptChannelEnrollment is the owner's single durable acceptance boundary.
-// Member, grant use/counter, roster head and signed receipt either all commit
-// or all roll back. Replay is checked before mutable lifecycle policies.
+// AcceptChannelEnrollment is a transitional Store-only bridge. Production
+// composition uses the typed signing and authority plans so private-key I/O is
+// orchestrated explicitly outside every Store transaction.
 func (s *Store) AcceptChannelEnrollment(ctx context.Context,
 	spec AcceptChannelEnrollmentSpec,
 ) (AcceptChannelEnrollmentResult, error) {
-	transcript := spec.Transcript
-	if s == nil || s.db == nil || ctx == nil || spec.Signer == nil || transcript.IsZero() ||
-		spec.AuthenticatedPeerID.IsZero() || spec.Proof.IsZero() ||
-		transcript.JoinerPeerID() != spec.AuthenticatedPeerID {
+	if spec.Signer == nil {
 		return AcceptChannelEnrollmentResult{}, ErrChannelEnrollmentInput
 	}
-	at, err := canonicalStoreTime(spec.At)
-	addressDigest, addressErr := model.AdvertisedAddressDigest(spec.AdvertisedMultiaddrs)
-	joinIdentity, identityErr := transcript.JoinIdentityDigest()
-	expectedRequest, requestErr := model.EnrollmentRequestIDForJoinIdentity(joinIdentity)
-	if err != nil || addressErr != nil || identityErr != nil ||
-		addressDigest != transcript.AdvertisedAddressDigest() {
-		return AcceptChannelEnrollmentResult{}, fmt.Errorf("%w: advertised address transcript mismatch",
-			ErrChannelEnrollmentInput)
-	}
-	if requestErr != nil || expectedRequest != transcript.RequestID() {
-		return AcceptChannelEnrollmentResult{}, ErrChannelEnrollmentProof
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	signing, err := s.PrepareChannelEnrollmentSigning(ctx, PrepareChannelEnrollmentSigningSpec{
+		AuthenticatedPeerID: spec.AuthenticatedPeerID, Transcript: spec.Transcript,
+		AdvertisedMultiaddrs: spec.AdvertisedMultiaddrs, Proof: spec.Proof, At: spec.At})
 	if err != nil {
-		return AcceptChannelEnrollmentResult{}, fmt.Errorf("accept Channel enrollment: begin: %w", err)
-	}
-	defer tx.Rollback()
-	authority, node, err := readOwnedInviteAuthority(ctx, tx, transcript.ChannelID())
-	if err != nil {
-		return AcceptChannelEnrollmentResult{}, mapChannelEnrollmentError(err)
-	}
-	if node.PeerID() != authority.channel.OwnerPeerID() ||
-		transcript.OwnerPeerID() != authority.channel.OwnerPeerID() {
-		return AcceptChannelEnrollmentResult{}, ErrChannelEnrollmentOwner
-	}
-	if err := verifyOwnedChannelEnrollmentLedger(ctx, tx, authority); err != nil {
-		return AcceptChannelEnrollmentResult{}, mapChannelEnrollmentError(err)
-	}
-
-	existing, existingErr := readChannelEnrollmentUse(ctx, tx, authority,
-		spec.AuthenticatedPeerID)
-	var grant durableEnrollmentGrant
-	if existingErr == nil {
-		if existing.grantID != transcript.GrantID() {
-			return AcceptChannelEnrollmentResult{}, ErrChannelEnrollmentProof
-		}
-		grant, err = readDurableEnrollmentGrant(ctx, tx, existing.grantID)
-	} else if errors.Is(existingErr, sql.ErrNoRows) {
-		grant, err = readDurableEnrollmentGrant(ctx, tx, transcript.GrantID())
-	} else {
-		return AcceptChannelEnrollmentResult{}, mapChannelEnrollmentError(existingErr)
-	}
-	if err != nil || grant.channelID != transcript.ChannelID() {
-		return AcceptChannelEnrollmentResult{}, ErrChannelEnrollmentProof
-	}
-	if existingErr == nil {
-		if model.VerifyEnrollmentProof(grant.verifier, transcript, spec.Proof) != nil {
-			return AcceptChannelEnrollmentResult{}, ErrChannelEnrollmentProof
-		}
-		predecessor, predecessorErr := enrollmentPredecessor(existing.member)
-		if joinIdentity != existing.joinIdentity ||
-			existing.receipt.RequestID() != transcript.RequestID() ||
-			predecessorErr != nil || predecessor != transcript.RosterHead() ||
-			model.VerifyEnrollmentReceiptEvidence(authority.channel.Descriptor(), existing.member,
-				existing.receipt) != nil {
-			return AcceptChannelEnrollmentResult{}, ErrChannelEnrollmentProof
-		}
-		status := ChannelEnrollmentReplayed
-		current, ok := authority.roster.CurrentMember(spec.AuthenticatedPeerID)
-		if !ok {
-			return AcceptChannelEnrollmentResult{}, ErrChannelEnrollmentConflict
-		}
-		owner, ownerOK := authority.roster.CurrentMember(authority.channel.OwnerPeerID())
-		if !ownerOK {
-			return AcceptChannelEnrollmentResult{}, ErrChannelEnrollmentConflict
-		}
-		if current.Status().Terminal() {
-			status = ChannelEnrollmentMemberRevoked
-		} else if owner.Status().Terminal() || authority.channel.Status() == model.ChannelClosed {
-			status = ChannelEnrollmentChannelClosed
-		}
-		if err := tx.Commit(); err != nil {
-			return AcceptChannelEnrollmentResult{}, fmt.Errorf("accept Channel enrollment: commit replay: %w", err)
-		}
-		return AcceptChannelEnrollmentResult{Status: status, Channel: authority.channel,
-			Roster: authority.roster, Member: existing.member, Receipt: existing.receipt}, nil
-	}
-
-	if current, ok := authority.roster.CurrentMember(spec.AuthenticatedPeerID); ok {
-		if current.Status().Terminal() {
-			return AcceptChannelEnrollmentResult{}, ErrChannelEnrollmentMemberRevoked
-		}
-		return AcceptChannelEnrollmentResult{}, ErrChannelEnrollmentConflict
-	}
-	if err := freshEnrollmentAvailability(authority, grant, at); err != nil {
 		return AcceptChannelEnrollmentResult{}, err
 	}
-	if at.Before(authority.channel.UpdatedAt()) {
-		return AcceptChannelEnrollmentResult{}, fmt.Errorf("%w: acceptance predates roster authority",
-			ErrChannelEnrollmentInput)
-	}
-	if model.VerifyEnrollmentProof(grant.verifier, transcript, spec.Proof) != nil {
-		return AcceptChannelEnrollmentResult{}, ErrChannelEnrollmentProof
-	}
-	if transcript.RosterHead() != authority.channel.RosterHead() {
-		return AcceptChannelEnrollmentResult{}, ErrChannelEnrollmentStale
-	}
-
-	previous := authority.channel.RosterHead().Digest()
-	record, err := model.NewMemberRecord(model.MemberRecordSpec{
-		ChannelID: authority.channel.ID(), DescriptorDigest: authority.channel.Descriptor().Descriptor().Digest(),
-		Revision: authority.channel.RosterHead().Revision() + 1, PreviousDigest: &previous,
-		PeerID: spec.AuthenticatedPeerID, OriginEpoch: transcript.JoinerOriginEpoch(),
-		DisplayLabel: transcript.JoinerDisplayLabel(), PublicKey: transcript.JoinerPublicKey(),
-		Multiaddrs: spec.AdvertisedMultiaddrs, Protocols: model.RequiredMemberProtocols(),
-		Limits: transcript.Limits(), Status: model.MemberActive, CreatedAt: at,
-	})
+	signatures, err := signChannelEnrollmentPlan(ctx, spec.Signer, signing)
 	if err != nil {
-		return AcceptChannelEnrollmentResult{}, fmt.Errorf("%w: joining MemberRecord: %v",
-			ErrChannelEnrollmentInput, err)
+		return AcceptChannelEnrollmentResult{}, err
 	}
-	message, err := model.MemberRecordSigningMessage(record.ChannelID(), record.Digest())
+	plan, err := s.PrepareSignedChannelEnrollment(ctx, signing, signatures)
 	if err != nil {
-		return AcceptChannelEnrollmentResult{}, mapChannelEnrollmentError(err)
+		return AcceptChannelEnrollmentResult{}, err
 	}
-	signature, err := spec.Signer.Sign(ctx, message)
-	if err != nil {
-		return AcceptChannelEnrollmentResult{}, fmt.Errorf("accept Channel enrollment: sign member: %w", err)
-	}
-	member, err := model.AttachMemberSignature(record, signature)
-	if err != nil {
-		return AcceptChannelEnrollmentResult{}, ErrChannelEnrollmentOwner
-	}
-	candidateMembers := authority.roster.Members()
-	if len(candidateMembers) >= model.MaxMemberRecordsPerChannel {
-		return AcceptChannelEnrollmentResult{}, ErrChannelFull
-	}
-	candidateMembers = append(candidateMembers, member)
-	roster, err := model.NewVerifiedRoster(authority.channel.Descriptor(), candidateMembers)
-	if err != nil {
-		return AcceptChannelEnrollmentResult{}, ErrChannelEnrollmentOwner
-	}
-	topic := authority.channel.TopicState()
-	if topic == model.TopicJoined {
-		topic = model.TopicJoining
-	}
-	channel, err := model.NewChannel(model.ChannelSpec{Descriptor: authority.channel.Descriptor(),
-		LocalAlias: authority.channel.LocalAlias(), RosterHead: roster.Head(), Status: model.ChannelActive,
-		TopicState: topic, UpdatedAt: at})
-	if err != nil {
-		return AcceptChannelEnrollmentResult{}, mapChannelEnrollmentError(err)
-	}
-	useID, receiptID, err := model.EnrollmentEvidenceIDs(joinIdentity)
-	if err != nil {
-		return AcceptChannelEnrollmentResult{}, mapChannelEnrollmentError(err)
-	}
-	receiptRecord, err := model.NewEnrollmentReceiptRecord(model.EnrollmentReceiptRecordSpec{
-		ReceiptID: receiptID, RequestID: transcript.RequestID(), GrantID: transcript.GrantID(),
-		ChannelID: transcript.ChannelID(), MemberPeerID: member.PeerID(),
-		JoinIdentityDigest: joinIdentity, MemberHead: member.Head(), AcceptedAt: at,
-	})
-	if err != nil {
-		return AcceptChannelEnrollmentResult{}, mapChannelEnrollmentError(err)
-	}
-	receiptMessage, err := model.EnrollmentReceiptSigningMessage(channel.ID(), receiptRecord.Digest())
-	if err != nil {
-		return AcceptChannelEnrollmentResult{}, mapChannelEnrollmentError(err)
-	}
-	receiptSignature, err := spec.Signer.Sign(ctx, receiptMessage)
-	if err != nil {
-		return AcceptChannelEnrollmentResult{}, fmt.Errorf("accept Channel enrollment: sign receipt: %w", err)
-	}
-	receipt, err := model.AttachEnrollmentReceiptSignature(receiptRecord, receiptSignature)
-	if err != nil || model.VerifyEnrollmentReceipt(channel.Descriptor(), member, transcript, receipt) != nil {
-		return AcceptChannelEnrollmentResult{}, ErrChannelEnrollmentOwner
-	}
-
-	if err := insertChannelMember(ctx, tx, member); err != nil {
-		return AcceptChannelEnrollmentResult{}, mapChannelEnrollmentError(err)
-	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO enrollment_grant_uses(use_id,grant_id,channel_id,
-		member_peer_id,join_identity_digest,member_revision,member_record_hash,used_at)
-		VALUES(?,?,?,?,?,?,?,?)`, useID.String(), grant.id.String(), channel.ID().String(),
-		member.PeerID().String(), joinIdentity.Bytes(), member.Head().Revision(),
-		member.Head().Digest().Bytes(), storeTime(at))
-	if err != nil {
-		return AcceptChannelEnrollmentResult{}, mapChannelEnrollmentError(err)
-	}
-	updated, err := tx.ExecContext(ctx, `UPDATE channels SET roster_head_revision=?,roster_head_hash=?,
-		updated_at=? WHERE channel_id=? AND roster_head_revision=? AND roster_head_hash=?`,
-		channel.RosterHead().Revision(), channel.RosterHead().Digest().Bytes(), storeTime(at),
-		channel.ID().String(), authority.channel.RosterHead().Revision(),
-		authority.channel.RosterHead().Digest().Bytes())
-	if err != nil {
-		return AcceptChannelEnrollmentResult{}, mapChannelEnrollmentError(err)
-	}
-	if changed, changedErr := updated.RowsAffected(); changedErr != nil || changed != 1 {
-		return AcceptChannelEnrollmentResult{}, ErrChannelEnrollmentStale
-	}
-	if err := syncChannelRosterBindings(ctx, tx, node.PeerID(), channel, roster,
-		authority.bindings, at); err != nil {
-		return AcceptChannelEnrollmentResult{}, mapChannelEnrollmentError(err)
-	}
-	if err := insertEnrollmentReceipt(ctx, tx, receipt, useID.String()); err != nil {
-		return AcceptChannelEnrollmentResult{}, mapChannelEnrollmentError(err)
-	}
-	committed, err := readVerifiedChannelAuthority(ctx, tx, node.PeerID(), channel.ID())
-	if err != nil {
-		return AcceptChannelEnrollmentResult{}, mapChannelEnrollmentError(err)
-	}
-	if committed.channel.RosterHead() != roster.Head() {
-		return AcceptChannelEnrollmentResult{}, ErrChannelEnrollmentConflict
-	}
-	if err := verifyOwnedChannelEnrollmentLedger(ctx, tx, committed); err != nil {
-		return AcceptChannelEnrollmentResult{}, mapChannelEnrollmentError(err)
-	}
-	if err := tx.Commit(); err != nil {
-		return AcceptChannelEnrollmentResult{}, mapChannelEnrollmentError(err)
-	}
-	return AcceptChannelEnrollmentResult{Status: ChannelEnrollmentAccepted, Channel: committed.channel,
-		Roster: committed.roster, Member: member, Receipt: receipt}, nil
+	return s.CommitChannelEnrollment(ctx, plan)
 }
 
 func mapChannelEnrollmentError(err error) error {
