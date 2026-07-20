@@ -1209,7 +1209,7 @@ func peerInboxSemanticSignedResponse(t *testing.T, fixture peerInboxFixture,
 	event, err := model.NewEvent(model.EventSpec{ID: eventID, Scope: eventScope,
 		Source: model.EventSourceLocal, ActorPrincipal: scope.Profile().Principal(),
 		Type: intent.EventType(), Audience: audience,
-		Summary: PeerInboxSemanticResponseSummary(intent.EventType()), Payload: intent.Payload(),
+		Summary: peerInboxSemanticResponseSummary(intent.EventType()), Payload: intent.Payload(),
 		Artifacts: artifacts, CausedBy: []model.EventKey{intent.Cause()}, CreatedAt: at, AcceptedAt: at})
 	if err != nil {
 		t.Fatal(err)
@@ -1251,14 +1251,14 @@ func installPeerInboxSemanticLocalAuthority(t *testing.T, fixture peerInboxFixtu
 	}
 	reserved, err := fixture.store.ReserveOutboundChannelBaseline(context.Background(),
 		ReserveOutboundChannelBaselineSpec{ChannelID: fixture.channel.Channel().ID(),
-			TargetPeerID: fixture.remote.Identity().PeerID(), ExpectedRosterHead: fixture.channel.Roster().Head(), At: fixture.at})
+			TargetPeerID: fixture.remote.Identity().PeerID(), At: fixture.at})
 	if err != nil {
 		t.Fatal(err)
 	}
 	baseline := reserved.Baseline
 	_, err = fixture.store.ConfirmOutboundChannelBaseline(context.Background(),
 		ConfirmOutboundChannelBaselineSpec{AuthenticatedPeerID: fixture.remote.Identity().PeerID(),
-			ExpectedRosterHead: fixture.channel.Roster().Head(), Ack: ChannelDataBaselineAck(baseline), At: fixture.at.Add(time.Nanosecond)})
+			Ack: ChannelDataBaselineAck(baseline), At: fixture.at.Add(time.Nanosecond)})
 	if err != nil {
 		t.Fatal(err)
 	}

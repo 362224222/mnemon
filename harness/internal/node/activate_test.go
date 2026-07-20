@@ -24,8 +24,7 @@ func TestActivatePublishesOnlyVerifiedInstallationAndReplaysExactly(t *testing.T
 	}
 	provisioned, err := Provision(context.Background(), ProvisionOptions{Workspace: workspace,
 		Host: model.HostCodex, AssetRevision: bundle.Manifest().AssetRevision,
-		Clock:       controllerTestClock{time.Date(2026, 7, 17, 8, 0, 0, 0, time.UTC)},
-		Credentials: testProfileCredentials{}})
+		Clock: controllerTestClock{time.Date(2026, 7, 17, 8, 0, 0, 0, time.UTC)}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,9 +37,8 @@ func TestActivatePublishesOnlyVerifiedInstallationAndReplaysExactly(t *testing.T
 	at := provisioned.Profile.UpdatedAt().Add(time.Second)
 	options := ActivateOptions{Workspace: workspace, Host: model.HostCodex,
 		AssetRevision: bundle.Manifest().AssetRevision, ExpectedUpdatedAt: provisioned.Profile.UpdatedAt(),
-		Clock:       controllerTestClock{at},
-		Install:     testInstallationVerifier(workspace, provisioned.NodeState, bundle),
-		Credentials: testProfileCredentials{}}
+		Clock:   controllerTestClock{at},
+		Install: testInstallationVerifier(workspace, provisioned.NodeState, bundle)}
 	first, err := Activate(context.Background(), options)
 	if err != nil || !first.Changed || !first.Profile.Enabled() || first.Profile.Host() != model.HostCodex ||
 		first.Node.ActiveAssetRevision() != bundle.Manifest().AssetRevision {
@@ -63,8 +61,7 @@ func TestActivateRejectsMissingActionAuthorityBeforeStoreOrProfileMutation(t *te
 	}
 	provisioned, err := Provision(context.Background(), ProvisionOptions{Workspace: workspace,
 		Host: model.HostCodex, AssetRevision: bundle.Manifest().AssetRevision,
-		Clock:       controllerTestClock{time.Date(2026, 7, 17, 8, 30, 0, 0, time.UTC)},
-		Credentials: testProfileCredentials{}})
+		Clock: controllerTestClock{time.Date(2026, 7, 17, 8, 30, 0, 0, time.UTC)}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +82,6 @@ func TestActivateRejectsMissingActionAuthorityBeforeStoreOrProfileMutation(t *te
 		ExpectedUpdatedAt: provisioned.Profile.UpdatedAt(),
 		Clock:             controllerTestClock{provisioned.Profile.UpdatedAt().Add(time.Second)},
 		Install:           install,
-		Credentials:       testProfileCredentials{},
 	})
 	if !errors.Is(activateErr, ErrActivate) || errors.Is(activateErr, store.ErrWriterActive) {
 		t.Fatalf("Activate() error = %v", activateErr)
@@ -104,8 +100,7 @@ func TestActivateFailureLeavesProfileDisabled(t *testing.T) {
 	bundle, _ := assets.Load()
 	provisioned, err := Provision(context.Background(), ProvisionOptions{Workspace: workspace,
 		Host: model.HostCodex, AssetRevision: bundle.Manifest().AssetRevision,
-		Clock:       controllerTestClock{time.Date(2026, 7, 17, 9, 0, 0, 0, time.UTC)},
-		Credentials: testProfileCredentials{}})
+		Clock: controllerTestClock{time.Date(2026, 7, 17, 9, 0, 0, 0, time.UTC)}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,8 +112,7 @@ func TestActivateFailureLeavesProfileDisabled(t *testing.T) {
 		AssetRevision:     bundle.Manifest().AssetRevision,
 		ExpectedUpdatedAt: provisioned.Profile.UpdatedAt(),
 		Clock:             controllerTestClock{provisioned.Profile.UpdatedAt().Add(time.Second)},
-		Install:           install,
-		Credentials:       testProfileCredentials{}}
+		Install:           install}
 	if _, err := Activate(context.Background(), options); !errors.Is(err, ErrActivate) || !errors.Is(err, failed) {
 		t.Fatalf("Activate() error = %v", err)
 	}
@@ -183,8 +177,7 @@ func activeTestProvision(t *testing.T) (string, ProvisionResult, assets.Bundle) 
 	bundle, _ := assets.Load()
 	provisioned, err := Provision(context.Background(), ProvisionOptions{Workspace: workspace,
 		Host: model.HostCodex, AssetRevision: bundle.Manifest().AssetRevision,
-		Clock:       controllerTestClock{time.Date(2026, 7, 17, 10, 0, 0, 0, time.UTC)},
-		Credentials: testProfileCredentials{}})
+		Clock: controllerTestClock{time.Date(2026, 7, 17, 10, 0, 0, 0, time.UTC)}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,8 +197,7 @@ func activeTestOptions(workspace string, provisioned ProvisionResult, bundle ass
 		AssetRevision:     bundle.Manifest().AssetRevision,
 		ExpectedUpdatedAt: provisioned.Profile.UpdatedAt(),
 		Clock:             controllerTestClock{provisioned.Profile.UpdatedAt().Add(time.Second)},
-		Install:           testInstallationVerifier(workspace, provisioned.NodeState, bundle),
-		Credentials:       testProfileCredentials{}}
+		Install:           testInstallationVerifier(workspace, provisioned.NodeState, bundle)}
 }
 
 func TestActivateRejectsStaleOrInvalidExpectedGenerationBeforeMutation(t *testing.T) {

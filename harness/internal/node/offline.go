@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
@@ -30,71 +31,71 @@ const OfflineAuthorityActiveExitCode = 75
 // launch permit, so a successful return remains fenced after this short-lived
 // companion releases the Store writer.
 func ConfirmOfflineAuthority(ctx context.Context, workspace string,
-	expected model.Digest, credentials ProfileCredentialVerifier, removeStale ControlSocketRecovery,
-) (response Authority, err error) {
-	return confirmOfflineAuthority(ctx, workspace, expected, credentials, removeStale)
+	expected model.Digest,
+) (response localapi.AuthorityResponse, err error) {
+	return confirmOfflineAuthority(ctx, workspace, expected, localapi.RemoveStaleOwnerUnix)
 }
 
-type ControlSocketRecovery func(context.Context, string) (bool, error)
+type removeStaleOwnerUnixFunc func(context.Context, string) (bool, error)
 
 // confirmOfflineAuthority keeps the stale-socket operation as an internal
 // dependency so the writer-held ordering can be proven without exporting a
 // test hook or weakening the production boundary.
 func confirmOfflineAuthority(ctx context.Context, workspace string,
-	expected model.Digest, credentials ProfileCredentialVerifier, removeStale ControlSocketRecovery,
-) (response Authority, err error) {
+	expected model.Digest, removeStale removeStaleOwnerUnixFunc,
+) (response localapi.AuthorityResponse, err error) {
 	if ctx == nil || expected.IsZero() {
-		return Authority{}, offlineAuthorityError(
+		return localapi.AuthorityResponse{}, offlineAuthorityError(
 			errors.New("context or expected authority digest is unavailable"))
 	}
-	if isNilNodeInterface(credentials) || removeStale == nil {
-		return Authority{}, offlineAuthorityError(
-			errors.New("credential or stale socket recovery is unavailable"))
+	if removeStale == nil {
+		return localapi.AuthorityResponse{}, offlineAuthorityError(
+			errors.New("stale socket recovery is unavailable"))
 	}
 	if contextErr := ctx.Err(); contextErr != nil {
-		return Authority{}, offlineAuthorityError(contextErr)
+		return localapi.AuthorityResponse{}, offlineAuthorityError(contextErr)
 	}
 	nodeState := filepath.Join(workspace, ".mnemon", "harness", "node")
-	authority, openErr := openExistingStoredAuthority(ctx, workspace, nodeState, true, credentials)
+	authority, openErr := openExistingStoredAuthority(ctx, workspace, nodeState, true)
 	if openErr != nil {
 		if errors.Is(openErr, store.ErrWriterActive) {
 			openErr = errors.Join(ErrOfflineAuthorityActive, openErr)
 		}
-		return Authority{}, offlineAuthorityError(openErr)
+		return localapi.AuthorityResponse{}, offlineAuthorityError(openErr)
 	}
 	defer func() {
 		if closeErr := authority.store.Close(); closeErr != nil {
-			response = Authority{}
+			response = localapi.AuthorityResponse{}
 			err = errors.Join(err, offlineAuthorityError(fmt.Errorf("close Store: %w", closeErr)))
 		}
 	}()
 
-	response, err = authorityValue(authority.authority)
+	response, err = localapi.NewAuthorityResponse(authoritySnapshot(authority.authority))
 	if err != nil {
-		return Authority{}, offlineAuthorityError(err)
+		return localapi.AuthorityResponse{}, offlineAuthorityError(err)
 	}
-	observed, digestErr := response.Digest()
+	observed, digestErr := localapi.AuthorityDigest(response)
 	if digestErr != nil || observed != expected {
 		if digestErr == nil {
 			digestErr = errors.New("durable authority differs from expected")
 		}
-		return Authority{}, offlineAuthorityError(digestErr)
+		return localapi.AuthorityResponse{}, offlineAuthorityError(digestErr)
 	}
 	if err := ctx.Err(); err != nil {
-		return Authority{}, offlineAuthorityError(err)
+		return localapi.AuthorityResponse{}, offlineAuthorityError(err)
 	}
 	socketPath := filepath.Join(nodeState, controlSocketName)
 	if _, err := removeStale(ctx, socketPath); err != nil {
-		return Authority{}, offlineAuthorityError(err)
+		return localapi.AuthorityResponse{}, offlineAuthorityError(err)
 	}
 	if _, err := os.Lstat(socketPath); !errors.Is(err, os.ErrNotExist) {
 		if err == nil {
 			err = errors.New("control socket remains after offline confirmation")
 		}
-		return Authority{}, offlineAuthorityError(err)
+		return localapi.AuthorityResponse{}, offlineAuthorityError(err)
 	}
 	if err := ctx.Err(); err != nil {
-		return Authority{}, offlineAuthorityError(err)
+		return localapi.AuthorityResponse{}, offlineAuthorityError(err)
 	}
 	return response, nil
 }

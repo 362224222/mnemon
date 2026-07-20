@@ -10,13 +10,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 )
 
 const (
-	// This outer budget bounds the complete transport-neutral quiesce contract:
-	// control request, admitted-work drain, endpoint recovery and writer proof.
-	// A concrete control transport must settle within this lifecycle deadline.
+	// The controller permits up to five seconds for in-flight HTTP requests to
+	// drain. Leave a bounded margin for socket removal and companion writer
+	// confirmation before declaring quiescence unproven.
 	daemonLifecycleDeadline = 7 * time.Second
 	daemonLifecyclePoll     = 20 * time.Millisecond
 	controlSocketName       = "control.sock"
@@ -44,10 +45,12 @@ type DaemonLifecycleLease struct {
 	closed    bool
 }
 
-// DaemonLifecycleClient is the authenticated, transport-neutral online
-// control boundary required by Quiesce.
+// DaemonLifecycleClient is the authenticated online control boundary required
+// by Quiesce. A localapi.Client satisfies it directly.
 type DaemonLifecycleClient interface {
-	ShutdownDaemonForMutation(context.Context, Authority) error
+	ShutdownForMutation(context.Context, localapi.AuthorityResponse) (
+		localapi.ShutdownResponse, *localapi.APIError,
+	)
 }
 
 // DaemonOfflineConfirmer is the companion-owned offline writer proof. It must
@@ -55,19 +58,19 @@ type DaemonLifecycleClient interface {
 // recover an unreachable owner socket while still retaining that writer. A
 // successful response is the same closed envelope used by the controller.
 type DaemonOfflineConfirmer interface {
-	ConfirmOffline(context.Context, Authority) (Authority, error)
+	ConfirmOffline(context.Context, localapi.AuthorityResponse) (localapi.AuthorityResponse, error)
 }
 
 // DaemonOfflineConfirmerFunc adapts one bounded companion confirmation.
 type DaemonOfflineConfirmerFunc func(context.Context,
-	Authority,
-) (Authority, error)
+	localapi.AuthorityResponse,
+) (localapi.AuthorityResponse, error)
 
 func (confirm DaemonOfflineConfirmerFunc) ConfirmOffline(ctx context.Context,
-	expected Authority,
-) (Authority, error) {
+	expected localapi.AuthorityResponse,
+) (localapi.AuthorityResponse, error) {
 	if confirm == nil {
-		return Authority{}, errors.New("offline authority inspector is unavailable")
+		return localapi.AuthorityResponse{}, errors.New("offline authority inspector is unavailable")
 	}
 	return confirm(ctx, expected)
 }
@@ -138,8 +141,8 @@ func acquireDaemonLifecycle(ctx context.Context, options DaemonLifecycleOptions,
 // start of the fence: this method continues until the socket is gone and the
 // Store writer has actually been released.
 func (lease *DaemonLifecycleLease) Quiesce(ctx context.Context, client DaemonLifecycleClient,
-	confirmer DaemonOfflineConfirmer, expected Authority,
-) (Authority, error) {
+	confirmer DaemonOfflineConfirmer, expected localapi.AuthorityResponse,
+) (localapi.AuthorityResponse, error) {
 	return lease.quiesce(ctx, client, confirmer, expected, daemonLifecycleTiming{
 		deadline: daemonLifecycleDeadline,
 		poll:     daemonLifecyclePoll,
@@ -147,35 +150,36 @@ func (lease *DaemonLifecycleLease) Quiesce(ctx context.Context, client DaemonLif
 }
 
 func (lease *DaemonLifecycleLease) quiesce(ctx context.Context, client DaemonLifecycleClient,
-	confirmer DaemonOfflineConfirmer, expected Authority,
+	confirmer DaemonOfflineConfirmer, expected localapi.AuthorityResponse,
 	timing daemonLifecycleTiming,
-) (authority Authority, err error) {
+) (authority localapi.AuthorityResponse, err error) {
 	if lease == nil {
-		return Authority{}, lifecycleError("quiesce",
+		return localapi.AuthorityResponse{}, lifecycleError("quiesce",
 			errors.New("lease is unavailable"))
 	}
 	lease.mu.Lock()
 	defer lease.mu.Unlock()
 	if err := lease.validateHeld(); err != nil {
-		return Authority{}, lifecycleError("quiesce", err)
+		return localapi.AuthorityResponse{}, lifecycleError("quiesce", err)
 	}
 	if ctx == nil {
-		return Authority{}, lifecycleError("quiesce",
+		return localapi.AuthorityResponse{}, lifecycleError("quiesce",
 			errors.New("context is unavailable"))
 	}
-	if isNilNodeInterface(client) || isNilNodeInterface(confirmer) {
-		return Authority{}, lifecycleError("quiesce",
+	if client == nil || confirmer == nil {
+		return localapi.AuthorityResponse{}, lifecycleError("quiesce",
 			errors.New("online control or offline inspector is unavailable"))
 	}
 	if timing.deadline <= 0 || timing.poll <= 0 || timing.poll > timing.deadline {
-		return Authority{}, lifecycleError("quiesce",
+		return localapi.AuthorityResponse{}, lifecycleError("quiesce",
 			errors.New("bounded timing is invalid"))
 	}
-	if err := expected.Validate(); err != nil {
-		return Authority{}, lifecycleError("quiesce expected authority", err)
+	expectedSnapshot, err := authorityResponseSnapshot(expected)
+	if err != nil {
+		return localapi.AuthorityResponse{}, lifecycleError("quiesce expected authority", err)
 	}
-	if expected.PeerID != lease.peerID {
-		return Authority{}, lifecycleError("quiesce expected authority",
+	if expectedSnapshot.PeerID != lease.peerID {
+		return localapi.AuthorityResponse{}, lifecycleError("quiesce expected authority",
 			errors.New("authority belongs to another Node"))
 	}
 
@@ -183,41 +187,48 @@ func (lease *DaemonLifecycleLease) quiesce(ctx context.Context, client DaemonLif
 	defer cancel()
 	socketIdentity, socketPresent, socketErr := lease.inspectControlSocket()
 	if socketErr != nil {
-		return Authority{}, lifecycleError("quiesce control socket", socketErr)
+		return localapi.AuthorityResponse{}, lifecycleError("quiesce control socket", socketErr)
 	}
 	if socketPresent {
-		shutdownErr := client.ShutdownDaemonForMutation(bounded, expected)
+		response, shutdownErr := client.ShutdownForMutation(bounded, expected)
 		if err := bounded.Err(); err != nil {
-			return Authority{}, lifecycleError("request graceful shutdown", err)
+			return localapi.AuthorityResponse{}, lifecycleError("request graceful shutdown", err)
 		}
-		if shutdownErr != nil && !errors.Is(shutdownErr, ErrDaemonControlUnavailable) {
-			return Authority{}, lifecycleError("request graceful shutdown", shutdownErr)
+		if shutdownErr != nil && shutdownErr.Code != localapi.CodeMnemondUnavailable {
+			return localapi.AuthorityResponse{}, lifecycleError("request graceful shutdown", shutdownErr)
 		}
 		if shutdownErr == nil {
+			expectedDigest, digestErr := localapi.AuthorityDigest(expected)
+			actualDigest, parseErr := model.ParseDigest(response.AuthorityDigest)
+			if digestErr != nil || parseErr != nil || response.SchemaVersion != localapi.SchemaVersion ||
+				response.Status != "stopping" || actualDigest != expectedDigest {
+				return localapi.AuthorityResponse{}, lifecycleError("request graceful shutdown",
+					errors.New("shutdown response is noncanonical"))
+			}
 			if err := lease.waitForExactSocketRemoval(bounded, socketIdentity, timing.poll); err != nil {
-				return Authority{}, lifecycleError("wait for control socket removal", err)
+				return localapi.AuthorityResponse{}, lifecycleError("wait for control socket removal", err)
 			}
 		}
 	}
 
 	authority, err = lease.waitForOfflineAuthority(bounded, confirmer, expected, timing.poll)
 	if err != nil {
-		return Authority{}, lifecycleError("inspect offline authority", err)
+		return localapi.AuthorityResponse{}, lifecycleError("inspect offline authority", err)
 	}
-	if err := authority.Validate(); err != nil || authority != expected {
+	if _, err := authorityResponseSnapshot(authority); err != nil || authority != expected {
 		if err == nil {
 			err = errors.New("authority or generation differs from expected")
 		}
-		return Authority{}, lifecycleError("confirm offline authority", err)
+		return localapi.AuthorityResponse{}, lifecycleError("confirm offline authority", err)
 	}
 	if err := lease.confirmControlSocketAbsent(); err != nil {
-		return Authority{}, lifecycleError("confirm quiescent control socket", err)
+		return localapi.AuthorityResponse{}, lifecycleError("confirm quiescent control socket", err)
 	}
 	if err := lease.validateHeld(); err != nil {
-		return Authority{}, lifecycleError("confirm lifecycle lease", err)
+		return localapi.AuthorityResponse{}, lifecycleError("confirm lifecycle lease", err)
 	}
 	if err := bounded.Err(); err != nil {
-		return Authority{}, lifecycleError("confirm quiescence bound", err)
+		return localapi.AuthorityResponse{}, lifecycleError("confirm quiescence bound", err)
 	}
 	return authority, nil
 }
@@ -346,24 +357,24 @@ func (lease *DaemonLifecycleLease) waitForExactSocketRemoval(ctx context.Context
 }
 
 func (lease *DaemonLifecycleLease) waitForOfflineAuthority(ctx context.Context,
-	confirmer DaemonOfflineConfirmer, expected Authority, poll time.Duration,
-) (Authority, error) {
+	confirmer DaemonOfflineConfirmer, expected localapi.AuthorityResponse, poll time.Duration,
+) (localapi.AuthorityResponse, error) {
 	for {
 		if err := lease.validateHeld(); err != nil {
-			return Authority{}, err
+			return localapi.AuthorityResponse{}, err
 		}
 		authority, err := confirmer.ConfirmOffline(ctx, expected)
 		if contextErr := ctx.Err(); contextErr != nil {
-			return Authority{}, contextErr
+			return localapi.AuthorityResponse{}, contextErr
 		}
 		if err == nil {
 			return authority, nil
 		}
 		if !errors.Is(err, ErrOfflineAuthorityActive) {
-			return Authority{}, err
+			return localapi.AuthorityResponse{}, err
 		}
 		if err := waitEnsurePoll(ctx, poll); err != nil {
-			return Authority{}, err
+			return localapi.AuthorityResponse{}, err
 		}
 	}
 }
@@ -392,6 +403,29 @@ func validateLifecycleSocket(info os.FileInfo, ownerUID uint32) error {
 		return errors.New("control socket owner or link count is unsafe")
 	}
 	return nil
+}
+
+func authorityResponseSnapshot(response localapi.AuthorityResponse) (localapi.AuthoritySnapshot, error) {
+	peerID, err := model.ParsePeerID(response.PeerID)
+	if err != nil {
+		return localapi.AuthoritySnapshot{}, err
+	}
+	updatedAt, err := time.Parse(time.RFC3339Nano, response.UpdatedAt)
+	if err != nil {
+		return localapi.AuthoritySnapshot{}, err
+	}
+	snapshot := localapi.AuthoritySnapshot{Host: model.HostKind(response.Host),
+		Runtime: model.RuntimeKind(response.Runtime), Enabled: response.Enabled,
+		AssetRevision: response.AssetRevision, UpdatedAt: updatedAt, PeerID: peerID,
+		ActiveAssetRevision: response.ActiveAssetRevision}
+	canonical, err := localapi.NewAuthorityResponse(snapshot)
+	if err != nil || canonical != response {
+		if err == nil {
+			err = errors.New("authority response is noncanonical")
+		}
+		return localapi.AuthoritySnapshot{}, err
+	}
+	return snapshot, nil
 }
 
 func lifecycleError(operation string, err error) error {

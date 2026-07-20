@@ -119,13 +119,8 @@ func (filter authoritySubscriptionFilter) FilterIncomingSubscriptions(from libp2
 		accepted[topic] = subscription
 	}
 	result := make([]*pb.RPC_SubOpts, 0, len(accepted))
-	topics := make([]string, 0, len(accepted))
-	for topic := range accepted {
-		topics = append(topics, topic)
-	}
-	sort.Strings(topics)
-	for _, topic := range topics {
-		result = append(result, accepted[topic])
+	for _, subscription := range accepted {
+		result = append(result, subscription)
 	}
 	return result, nil
 }
@@ -141,14 +136,11 @@ type Gossip struct {
 	mu          sync.Mutex
 	sessions    map[model.ChannelID]*TopicSession
 	gates       map[model.ChannelID]*channelGate
-	transition  *GossipAuthorityTransition
 	refresh     map[libp2ppeer.ID]*peerRefresh
 	refreshWake chan struct{}
 	refreshDone chan struct{}
 	refreshWG   sync.WaitGroup
 	closed      bool
-	closeDone   chan struct{}
-	closeErr    error
 }
 
 type peerRefresh struct {
@@ -157,6 +149,15 @@ type peerRefresh struct {
 	attempt uint
 	next    time.Time
 	cancel  context.CancelFunc
+}
+
+// channelGate is stable for one Channel over the full Gossip runtime. The
+// deliverable bit opens only after a current subscription is completely
+// installed, preventing validators from accepted older queued messages into a
+// seen cache while no successor can receive them.
+type channelGate struct {
+	sync.RWMutex
+	deliverable atomic.Bool
 }
 
 func NewGossip(ctx context.Context, nodeHost host.Host, authority *Authority) (*Gossip, error) {
@@ -212,7 +213,7 @@ func NewGossip(ctx context.Context, nodeHost host.Host, authority *Authority) (*
 		sessions:    make(map[model.ChannelID]*TopicSession),
 		gates:       make(map[model.ChannelID]*channelGate),
 		refresh:     make(map[libp2ppeer.ID]*peerRefresh),
-		refreshWake: make(chan struct{}, 1), refreshDone: make(chan struct{}), closeDone: make(chan struct{})}
+		refreshWake: make(chan struct{}, 1), refreshDone: make(chan struct{})}
 	go gossip.runRefreshWorker()
 	return gossip, nil
 }
@@ -237,11 +238,20 @@ func authorityRPCInspector(authority *Authority) func(libp2ppeer.ID, *pubsub.RPC
 // Join registers the exact validator before joining/subscribing. Repeated
 // reconciliation returns the one existing Channel session.
 func (gossip *Gossip) Join(channelID model.ChannelID) (*TopicSession, error) {
-	return gossip.join(context.Background(), channelID)
+	if gossip == nil || gossip.pubsub == nil {
+		return nil, fmt.Errorf("%w: router is unavailable", ErrGossipTopic)
+	}
+	gossip.mu.Lock()
+	defer gossip.mu.Unlock()
+	topicName, err := TopicName(channelID)
+	if err != nil || !gossip.authority.CanSubscribe(topicName) {
+		return nil, fmt.Errorf("%w: Channel is not locally active", ErrGossipTopic)
+	}
+	return gossip.joinLocked(channelID, topicName)
 }
 
 func (gossip *Gossip) joinLocked(channelID model.ChannelID,
-	topicName string, openGate bool,
+	topicName string,
 ) (*TopicSession, error) {
 	if gossip.closed {
 		return nil, fmt.Errorf("%w: router is closed", ErrGossipTopic)
@@ -253,55 +263,194 @@ func (gossip *Gossip) joinLocked(channelID model.ChannelID,
 		gossip.gates = make(map[model.ChannelID]*channelGate)
 	}
 	gate := gossip.gates[channelID]
-	createdGate := false
 	if gate == nil {
-		if len(gossip.gates) >= model.MaxChannelsPerNode {
-			return nil, fmt.Errorf("%w: Channel gate limit exceeded", ErrGossipTopic)
-		}
 		gate = &channelGate{}
 		gossip.gates[channelID] = gate
-		createdGate = true
-	}
-	drained, _ := gate.beginDrain()
-	select {
-	case <-drained:
-	default:
-		return nil, fmt.Errorf("%w: Channel gate is still draining", ErrGossipTopic)
 	}
 	session := &TopicSession{gossip: gossip, channelID: channelID, name: topicName, gate: gate,
-		generation: gossip.authority.topicGeneration(channelID), closeDone: make(chan struct{})}
-	fail := func(cause error) (*TopicSession, error) {
-		if createdGate {
-			gate.retire()
-			delete(gossip.gates, channelID)
-		} else if openGate {
-			gate.resume(false)
-		}
-		return nil, cause
-	}
+		generation: gossip.authority.topicGeneration(channelID)}
 	validator := gossip.validator(session)
 	if err := gossip.pubsub.RegisterTopicValidator(topicName, validator,
 		pubsub.WithValidatorInline(true)); err != nil {
-		return fail(fmt.Errorf("%w: register validator: %v", ErrGossipTopic, err))
+		return nil, fmt.Errorf("%w: register validator: %v", ErrGossipTopic, err)
 	}
 	topic, err := gossip.pubsub.Join(topicName)
 	if err != nil {
 		_ = gossip.pubsub.UnregisterTopicValidator(topicName)
-		return fail(fmt.Errorf("%w: join: %v", ErrGossipTopic, err))
+		return nil, fmt.Errorf("%w: join: %v", ErrGossipTopic, err)
 	}
 	subscription, err := topic.Subscribe(pubsub.WithBufferSize(HermeticLimits().SubscriptionBuffer))
 	if err != nil {
 		_ = topic.Close()
 		_ = gossip.pubsub.UnregisterTopicValidator(topicName)
-		return fail(fmt.Errorf("%w: subscribe: %v", ErrGossipTopic, err))
+		return nil, fmt.Errorf("%w: subscribe: %v", ErrGossipTopic, err)
 	}
 	session.topic = topic
 	session.subscription = subscription
 	gossip.sessions[channelID] = session
-	if openGate {
-		gate.resume(true)
-	}
+	gate.deliverable.Store(true)
 	return session, nil
+}
+
+// Reconcile validates a whole authority candidate, drains only its affected
+// Channel gates, atomically installs the revision, and rotates those sessions
+// before their gates reopen. Rotation is required because
+// go-libp2p-pubsub's peer filter does not re-check the full-message send path
+// for an existing mesh peer. Unchanged Channels keep publishing and receiving.
+// Callers reacquire rotated sessions with Join; blocked Next calls on an old
+// session are cancelled and must be restarted by the owning worker.
+func (gossip *Gossip) Reconcile(snapshot NetworkAuthoritySnapshot) error {
+	return gossip.reconcile(snapshot, nil)
+}
+
+// ReconcileWithCommit validates the complete post-commit authority before it
+// drains affected Channel gates. The callback then performs exactly one
+// bounded durable CAS while those gates remain closed; a callback failure
+// leaves the old runtime authority and TopicSessions untouched. The callback
+// must not perform network I/O or call back into Gossip.
+func (gossip *Gossip) ReconcileWithCommit(snapshot NetworkAuthoritySnapshot,
+	commit func() error,
+) error {
+	if commit == nil {
+		return fmt.Errorf("%w: durable authority commit callback is required", ErrGossipTopic)
+	}
+	return gossip.reconcile(snapshot, commit)
+}
+
+func (gossip *Gossip) reconcile(snapshot NetworkAuthoritySnapshot, commit func() error) error {
+	if gossip == nil || gossip.pubsub == nil || gossip.authority == nil {
+		return fmt.Errorf("%w: router is unavailable", ErrGossipTopic)
+	}
+	gossip.mu.Lock()
+	defer gossip.mu.Unlock()
+	if gossip.closed {
+		return fmt.Errorf("%w: router is closed", ErrGossipTopic)
+	}
+	candidate, err := gossip.authority.prepare(snapshot)
+	if err != nil {
+		return fmt.Errorf("%w: prepare authority: %v", ErrGossipTopic, err)
+	}
+	gossip.authority.beginUpdate()
+	updateHeld := true
+	defer func() {
+		if updateHeld {
+			gossip.authority.finishUpdate()
+		}
+	}()
+	current := gossip.authority.state.Load()
+	promotedPeers := dataPlanePromotions(current, candidate)
+	// Every Channel ever joined keeps one stable gate for this router's full
+	// lifetime. A PubSub validator closure can outlive its TopicSession, so an
+	// authority revision must also drain gates whose current session was closed
+	// or temporarily inactive.
+	channelIDs := make([]model.ChannelID, 0, len(gossip.gates))
+	previous := make(map[model.ChannelID]topicAuthorityGeneration, len(gossip.gates))
+	for channelID, gate := range gossip.gates {
+		if gate == nil {
+			continue
+		}
+		channelIDs = append(channelIDs, channelID)
+		previous[channelID] = topicGenerationFromState(current, channelID)
+	}
+	sort.Slice(channelIDs, func(left, right int) bool {
+		return channelIDs[left].String() < channelIDs[right].String()
+	})
+	affected := channelIDs[:0]
+	for _, channelID := range channelIDs {
+		if previous[channelID] != topicGenerationFromState(candidate, channelID) {
+			affected = append(affected, channelID)
+		}
+	}
+	locked := make([]*channelGate, 0, len(affected))
+	lockedSet := make(map[*channelGate]struct{}, len(affected))
+	oldSessions := make(map[model.ChannelID]*TopicSession, len(affected))
+	for _, channelID := range affected {
+		gate := gossip.gates[channelID]
+		gate.Lock()
+		locked = append(locked, gate)
+		lockedSet[gate] = struct{}{}
+		if session := gossip.sessions[channelID]; session != nil {
+			oldSessions[channelID] = session
+		}
+	}
+	unlockGates := func() {
+		for index := len(locked) - 1; index >= 0; index-- {
+			locked[index].Unlock()
+		}
+		locked = nil
+	}
+	defer unlockGates()
+	// Every affected Channel is now drained at the application boundary. The
+	// durable CAS runs before the immutable authority pointer swap while
+	// unrelated Channel sessions keep running on independent gates.
+	if commit != nil {
+		if err := commit(); err != nil {
+			return fmt.Errorf("%w: durable authority commit: %w", ErrGossipTopic, err)
+		}
+	}
+	gossip.authority.install(candidate)
+	gossip.authority.finishUpdate()
+	updateHeld = false
+
+	var reconcileErrors []error
+	for _, channelID := range affected {
+		session := gossip.sessions[channelID]
+		if session == nil {
+			continue
+		}
+		if err := gossip.closeSessionLocked(session); err != nil {
+			reconcileErrors = append(reconcileErrors,
+				fmt.Errorf("rotate Channel %s: %w", channelID.String(), err))
+		}
+	}
+	if len(reconcileErrors) > 0 {
+		// A partially closed old mesh cannot safely coexist with a newly
+		// installed authority. Keep the new fail-closed policy and stop the
+		// whole router; daemon restart reconstructs clean sessions.
+		gossip.closed = true
+		if gossip.cancel != nil {
+			gossip.cancel()
+		}
+		for _, session := range gossip.sortedSessionsLocked() {
+			_, alreadyLocked := lockedSet[session.gate]
+			if !alreadyLocked {
+				session.gate.Lock()
+			}
+			if err := gossip.closeSessionLocked(session); err != nil {
+				reconcileErrors = append(reconcileErrors, err)
+			}
+			if !alreadyLocked {
+				session.gate.Unlock()
+			}
+		}
+		return errors.Join(reconcileErrors...)
+	}
+	for _, channelID := range affected {
+		oldSession := oldSessions[channelID]
+		if oldSession == nil {
+			continue
+		}
+		topicName, err := TopicName(channelID)
+		if err != nil || !gossip.authority.CanSubscribe(topicName) {
+			continue
+		}
+		if _, err := gossip.joinLocked(channelID, topicName); err != nil {
+			reconcileErrors = append(reconcileErrors,
+				fmt.Errorf("rejoin Channel %s: %w", channelID.String(), err))
+		} else {
+			oldSession.handoff.Store(true)
+		}
+	}
+	gossip.resetUnauthorizedDataPlaneStreams()
+	if len(reconcileErrors) > 0 {
+		return errors.Join(reconcileErrors...)
+	}
+	desiredPeers := dataPlanePeers(candidate)
+	gossip.pruneRefreshPeers(desiredPeers)
+	gossip.recordPromotedPeers(promotedPeers)
+	unlockGates()
+	gossip.signalRefresh()
+	return nil
 }
 
 func dataPlanePromotions(current, candidate *networkAuthorityState) []libp2ppeer.ID {
@@ -519,25 +668,25 @@ func (gossip *Gossip) resetUnauthorizedDataPlaneStreams() {
 }
 
 func (gossip *Gossip) validator(session *TopicSession) pubsub.ValidatorEx {
-	return func(ctx context.Context, transportPeer libp2ppeer.ID,
+	return func(_ context.Context, transportPeer libp2ppeer.ID,
 		message *pubsub.Message,
 	) pubsub.ValidationResult {
 		if session == nil || session.gate == nil {
 			return pubsub.ValidationReject
 		}
-		// Topic.Publish validates synchronously and already owns one admission.
-		// Only remote validation acquires independently; a remote transport can
-		// never authenticate as the local Host PeerID.
+		// Topic.Publish validates synchronously and already holds the read side
+		// of the publication gate. sync.RWMutex is not recursively readable
+		// once a writer is pending, so only remote validation acquires here.
+		// A remote transport can never authenticate as the local Host PeerID.
 		if transportPeer != gossip.authority.LocalPeerID() {
-			if !session.gate.acquire(ctx) {
-				return pubsub.ValidationReject
-			}
-			defer session.gate.release()
+			session.gate.RLock()
+			defer session.gate.RUnlock()
 		} else if session.localPublishes.Load() == 0 {
 			return pubsub.ValidationReject
 		}
 		topic := session.name
-		if session.closed.Load() && !session.handoff.Load() {
+		if !session.gate.deliverable.Load() ||
+			(session.closed.Load() && !session.handoff.Load()) {
 			return pubsub.ValidationReject
 		}
 		if message == nil || message.Message == nil || message.GetTopic() != topic {
@@ -570,66 +719,24 @@ func (gossip *Gossip) Close() error {
 	if gossip == nil {
 		return nil
 	}
-	for {
-		plan, wait, alreadyClosed := gossip.prepareClose()
-		if wait != nil {
-			<-wait
-		}
-		if alreadyClosed {
-			return gossip.closeErr
-		}
-		if plan != nil {
-			return gossip.executeClose(plan)
-		}
-	}
-}
-
-type gossipClosePlan struct {
-	sessions []*TopicSession
-	waits    []<-chan struct{}
-}
-
-func (gossip *Gossip) prepareClose() (*gossipClosePlan, <-chan struct{}, bool) {
 	gossip.mu.Lock()
-	defer gossip.mu.Unlock()
 	if gossip.closed {
-		return nil, gossip.closeDone, true
-	}
-	if transition := gossip.transition; transition != nil {
-		return nil, transition.Done(), false
-	}
-	for _, session := range gossip.sessions {
-		if session != nil && session.closed.Load() && !channelClosed(session.closeDone) {
-			return nil, session.closeDone, false
+		done := gossip.refreshDone
+		gossip.mu.Unlock()
+		if done != nil {
+			<-done
 		}
+		return nil
 	}
 	gossip.closed = true
-	if gossip.closeDone == nil {
-		gossip.closeDone = make(chan struct{})
-	}
-	plan := &gossipClosePlan{sessions: gossip.sortedSessionsLocked(),
-		waits: make([]<-chan struct{}, 0, len(gossip.gates))}
-	for _, gate := range gossip.gates {
-		drained, _ := gate.beginDrain()
-		plan.waits = append(plan.waits, drained)
-	}
-	return plan, nil, false
-}
-
-func (gossip *Gossip) executeClose(plan *gossipClosePlan) error {
-	for _, drained := range plan.waits {
-		<-drained
-	}
+	sessions := gossip.sortedSessionsLocked()
 	var closeErrors []error
-	gossip.mu.Lock()
-	for _, session := range plan.sessions {
+	for _, session := range sessions {
+		session.gate.Lock()
 		if err := gossip.closeSessionLocked(session); err != nil {
 			closeErrors = append(closeErrors, err)
 		}
-	}
-	for channelID, gate := range gossip.gates {
-		gate.retire()
-		delete(gossip.gates, channelID)
+		session.gate.Unlock()
 	}
 	gossip.mu.Unlock()
 	if gossip.cancel != nil {
@@ -638,21 +745,7 @@ func (gossip *Gossip) executeClose(plan *gossipClosePlan) error {
 	if gossip.refreshDone != nil {
 		<-gossip.refreshDone
 	}
-	gossip.mu.Lock()
-	gossip.closeErr = errors.Join(closeErrors...)
-	gossip.finishCloseLocked()
-	result := gossip.closeErr
-	gossip.mu.Unlock()
-	return result
-}
-
-func (gossip *Gossip) finishCloseLocked() {
-	if gossip.closeDone == nil {
-		gossip.closeDone = make(chan struct{})
-	}
-	if !channelClosed(gossip.closeDone) {
-		close(gossip.closeDone)
-	}
+	return errors.Join(closeErrors...)
 }
 
 func (gossip *Gossip) sortedSessionsLocked() []*TopicSession {
@@ -702,7 +795,7 @@ type TopicSession struct {
 	localPublishes atomic.Int64
 	closed         atomic.Bool
 	handoff        atomic.Bool
-	closeDone      chan struct{}
+	closeOnce      sync.Once
 	closeErr       error
 }
 
@@ -716,11 +809,9 @@ func (session *TopicSession) IsCurrent() bool {
 	if session == nil || session.gossip == nil || session.gate == nil {
 		return false
 	}
-	if !session.gate.tryAcquire() {
-		return false
-	}
-	defer session.gate.release()
-	return !session.closed.Load() &&
+	session.gate.RLock()
+	defer session.gate.RUnlock()
+	return !session.closed.Load() && session.gate.deliverable.Load() &&
 		session.generation == session.gossip.authority.topicGeneration(session.channelID)
 }
 
@@ -742,10 +833,8 @@ func (session *TopicSession) Publish(ctx context.Context,
 	if session == nil || session.gossip == nil || session.gate == nil {
 		return fmt.Errorf("%w: publication lacks local Channel authority", ErrGossipTopic)
 	}
-	if !session.gate.acquire(ctx) {
-		return fmt.Errorf("%w: publication lacks current local Channel authority", ErrGossipTopic)
-	}
-	defer session.gate.release()
+	session.gate.RLock()
+	defer session.gate.RUnlock()
 	return session.publishUnderGate(ctx, publication)
 }
 
@@ -774,10 +863,8 @@ func (session *TopicSession) Next(ctx context.Context) (ReceivedPublication, err
 	if err != nil {
 		return ReceivedPublication{}, fmt.Errorf("%w: receive: %v", ErrGossipTopic, err)
 	}
-	if !session.gate.acquire(ctx) {
-		return ReceivedPublication{}, fmt.Errorf("%w: received publication belongs to a retired generation", ErrGossipTopic)
-	}
-	defer session.gate.release()
+	session.gate.RLock()
+	defer session.gate.RUnlock()
 	if session.closed.Load() || message == nil || message.Message == nil || message.GetTopic() != session.name {
 		return ReceivedPublication{}, fmt.Errorf("%w: received publication belongs to a retired generation", ErrGossipTopic)
 	}
@@ -800,10 +887,8 @@ func (session *TopicSession) Peers() []libp2ppeer.ID {
 	if session == nil || session.gossip == nil || session.gate == nil {
 		return nil
 	}
-	if !session.gate.tryAcquire() {
-		return nil
-	}
-	defer session.gate.release()
+	session.gate.RLock()
+	defer session.gate.RUnlock()
 	if session.closed.Load() {
 		return nil
 	}
@@ -826,76 +911,41 @@ func (session *TopicSession) Close() error {
 	if session.gossip == nil || session.gate == nil {
 		return nil
 	}
-	gossip := session.gossip
-	for {
-		gossip.mu.Lock()
-		if session.closed.Load() {
-			done := session.closeDone
-			gossip.mu.Unlock()
-			if done != nil {
-				<-done
-			}
-			return session.closeErr
-		}
-		if gossip.closed {
-			done := gossip.closeDone
-			gossip.mu.Unlock()
-			if done != nil {
-				<-done
-			}
-			return session.closeErr
-		}
-		if transition := gossip.transition; transition != nil && transition.affects(session.channelID) {
-			done := transition.Done()
-			gossip.mu.Unlock()
-			<-done
-			continue
-		}
-		session.closed.Store(true)
-		drained, _ := session.gate.beginDrain()
-		gossip.mu.Unlock()
-		<-drained
-
-		gossip.mu.Lock()
-		err := gossip.closeSessionLocked(session)
-		session.gate.resume(false)
-		gossip.mu.Unlock()
-		return err
-	}
+	session.gossip.mu.Lock()
+	defer session.gossip.mu.Unlock()
+	session.gate.Lock()
+	defer session.gate.Unlock()
+	return session.gossip.closeSessionLocked(session)
 }
 
-// closeSessionLocked requires Gossip.mu and a fully drained session gate. The
-// transition marker or session.closed keeps Join from recreating the validator
-// until cancel -> topic close -> unregister has completed.
+// closeSessionLocked requires Gossip.mu and the session write gate across the
+// full cleanup sequence. A concurrent Join cannot observe a deleted map entry
+// until the old validator is unregistered and the topic is safe to recreate.
 func (gossip *Gossip) closeSessionLocked(session *TopicSession) error {
 	if session == nil {
 		return nil
 	}
-	if channelClosed(session.closeDone) {
-		return session.closeErr
-	}
-	session.closed.Store(true)
-	if session.subscription != nil {
-		session.subscription.Cancel()
-	}
-	var closeErrors []error
-	if session.topic != nil {
-		if err := session.topic.Close(); err != nil {
-			closeErrors = append(closeErrors, fmt.Errorf("close topic: %w", err))
+	session.closeOnce.Do(func() {
+		session.closed.Store(true)
+		if session.subscription != nil {
+			session.subscription.Cancel()
 		}
-	}
-	if gossip.pubsub != nil {
-		if err := gossip.pubsub.UnregisterTopicValidator(session.name); err != nil {
-			closeErrors = append(closeErrors, fmt.Errorf("unregister validator: %w", err))
+		var closeErrors []error
+		if session.topic != nil {
+			if err := session.topic.Close(); err != nil {
+				closeErrors = append(closeErrors, fmt.Errorf("close topic: %w", err))
+			}
 		}
-	}
-	if gossip.sessions[session.channelID] == session {
-		delete(gossip.sessions, session.channelID)
-	}
-	session.closeErr = errors.Join(closeErrors...)
-	if session.closeDone == nil {
-		session.closeDone = make(chan struct{})
-	}
-	close(session.closeDone)
+		if gossip.pubsub != nil {
+			if err := gossip.pubsub.UnregisterTopicValidator(session.name); err != nil {
+				closeErrors = append(closeErrors, fmt.Errorf("unregister validator: %w", err))
+			}
+		}
+		if gossip.sessions[session.channelID] == session {
+			delete(gossip.sessions, session.channelID)
+			session.gate.deliverable.Store(false)
+		}
+		session.closeErr = errors.Join(closeErrors...)
+	})
 	return session.closeErr
 }

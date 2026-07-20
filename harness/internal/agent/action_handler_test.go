@@ -25,7 +25,7 @@ func TestActionHandlersJoinEveryAssetToTypedMechanics(t *testing.T) {
 	for index, handler := range handlers.Actions() {
 		byName, nameOK := handlers.Action(handler.Name())
 		byOperation, operationOK := handlers.Operation(handler.OperationKind())
-		candidate, candidateErr := handler.candidate("typed parity probe", 0)
+		candidate, candidateErr := handler.candidate("typed mechanic parity", 0)
 		if !nameOK || !operationOK || handler.Descriptor().Ordinal() != uint8(index) ||
 			byName.OperationKind() != handler.OperationKind() || byOperation.Name() != handler.Name() ||
 			handler.EventType() != wantEvents[handler.OperationKind()] || candidateErr != nil ||
@@ -68,34 +68,6 @@ func assertActionHandlerRuntimePolicy(t testing.TB, handlers ActionHandlers) {
 	}
 }
 
-func TestActionHandlerRuntimePolicyMatchesCanonicalContextMatrix(t *testing.T) {
-	t.Parallel()
-	policy := testActionHandlers(t).RuntimePolicy()
-	tests := []struct {
-		context model.TeamworkActionContext
-		want    []model.OperationKind
-	}{
-		{model.TeamworkActionContextNone, []model.OperationKind{model.OperationTeamworkOffer}},
-		{model.TeamworkActionContextReviewerOffered,
-			[]model.OperationKind{model.OperationTeamworkAccept, model.OperationTeamworkDecline}},
-		{model.TeamworkActionContextReviewerActive,
-			[]model.OperationKind{model.OperationTeamworkOffer, model.OperationTeamworkDeliver}},
-		{model.TeamworkActionContextReviewerRework,
-			[]model.OperationKind{model.OperationTeamworkOffer, model.OperationTeamworkDeliver}},
-		{model.TeamworkActionContextParentResume, []model.OperationKind{model.OperationTeamworkDeliver}},
-		{model.TeamworkActionContextHomeDelivered, []model.OperationKind{model.OperationTeamworkClose}},
-		{model.TeamworkActionContextHomeDeliveredIteration1,
-			[]model.OperationKind{model.OperationTeamworkRework}},
-		{model.TeamworkActionContextHomeNonterminal, []model.OperationKind{model.OperationTeamworkCancel}},
-	}
-	for _, test := range tests {
-		got, err := policy.ActionsForContexts([]model.TeamworkActionContext{test.context})
-		if err != nil || !reflect.DeepEqual(got, test.want) {
-			t.Fatalf("canonical context %s = (%v, %v), want %v", test.context, got, err, test.want)
-		}
-	}
-}
-
 func TestActionHandlersRejectPolicyUnsupportedByTypedMechanics(t *testing.T) {
 	t.Parallel()
 	bundle, err := assets.Load()
@@ -117,12 +89,6 @@ func TestActionHandlersRejectPolicyUnsupportedByTypedMechanics(t *testing.T) {
 		{name: "Event Artifact capability", path: "actions/teamwork/accept.json",
 			oldText: `"artifacts":{"allowed":false,"max_entries":0,"max_path_bytes":0,"max_roots":0,"max_total_bytes":0}`,
 			newText: `"artifacts":{"allowed":true,"max_entries":4096,"max_path_bytes":512,"max_roots":16,"max_total_bytes":268435456}`},
-		{name: "managed context contract", path: "actions/teamwork/accept.json",
-			oldText: `"allowed_context":["reviewer_offered"]`,
-			newText: `"allowed_context":["home_delivered"]`},
-		{name: "participant state context", path: "actions/teamwork/accept.json",
-			oldText: `"allowed_context":["reviewer_offered"]`,
-			newText: `"allowed_context":["reviewer_active"]`},
 		{name: "multi-result capability ceiling", path: "actions/teamwork/accept.json",
 			oldText: `"max_results":1`, newText: `"max_results":2`},
 		{name: "contextless capability ceiling", path: "actions/teamwork/accept.json",
@@ -146,7 +112,7 @@ func TestActionHandlersRejectPolicyUnsupportedByTypedMechanics(t *testing.T) {
 	}
 }
 
-func TestActionHandlersProjectAssetOwnedSafeContextsAndResultBounds(t *testing.T) {
+func TestActionHandlersProjectAssetOwnedContextsAndResultBounds(t *testing.T) {
 	t.Parallel()
 	offerHandlers := testActionHandlersWithAssetReplacement(t, "actions/teamwork/offer.json",
 		`"max_results":7`, `"max_results":6`)
@@ -155,14 +121,13 @@ func TestActionHandlersProjectAssetOwnedSafeContextsAndResultBounds(t *testing.T
 		t.Fatalf("narrowed offer = %#v, present=%t", offer, ok)
 	}
 
-	contextHandlers := testActionHandlersWithAssetReplacement(t, "actions/teamwork/offer.json",
-		`"allowed_context":["none","reviewer_active","reviewer_rework"]`,
-		`"allowed_context":["none","reviewer_active","reviewer_rework","parent_resume"]`)
+	contextHandlers := testActionHandlersWithAssetReplacement(t, "actions/teamwork/accept.json",
+		`"allowed_context":["reviewer_offered"]`, `"allowed_context":["home_delivered"]`)
 	actions, err := contextHandlers.RuntimePolicy().ActionsForContexts(
-		[]model.TeamworkActionContext{model.TeamworkActionContextParentResume})
+		[]model.TeamworkActionContext{model.TeamworkActionContextHomeDelivered})
 	if err != nil || !reflect.DeepEqual(actions,
-		[]model.OperationKind{model.OperationTeamworkOffer, model.OperationTeamworkDeliver}) {
-		t.Fatalf("parent-resume ActionsForContexts() = (%v, %v)", actions, err)
+		[]model.OperationKind{model.OperationTeamworkAccept, model.OperationTeamworkClose}) {
+		t.Fatalf("home-delivered ActionsForContexts() = (%v, %v)", actions, err)
 	}
 }
 
@@ -208,10 +173,42 @@ func TestActionHandlersAllowAssetsToNarrowArtifactCapability(t *testing.T) {
 func TestActionHandlersExposeExhaustiveExecutionMechanics(t *testing.T) {
 	t.Parallel()
 	handlers := testActionHandlers(t)
-	for _, handler := range handlers.Actions() {
-		wantSelection := handler.EventType() == model.EventReviewOffered
-		if handler.mechanic.candidate == nil || handler.mechanic.selection != wantSelection {
-			t.Fatalf("%s execution mechanic = %#v", handler.Name(), handler.mechanic)
+	states := []model.WorkState{model.WorkOffered, model.WorkActive, model.WorkDelivered,
+		model.WorkRework, model.WorkClosed, model.WorkDeclined, model.WorkExpired, model.WorkCancelled}
+	tests := []struct {
+		name   string
+		actor  actionActor
+		batch  bool
+		states []model.WorkState
+	}{
+		{name: "offer", actor: actionActorOffer, batch: true},
+		{name: "accept", actor: actionActorParticipant, states: []model.WorkState{model.WorkOffered}},
+		{name: "decline", actor: actionActorParticipant, states: []model.WorkState{model.WorkOffered}},
+		{name: "deliver", actor: actionActorParticipant, states: []model.WorkState{model.WorkActive, model.WorkRework}},
+		{name: "rework", actor: actionActorHome, states: []model.WorkState{model.WorkRework}},
+		{name: "close", actor: actionActorHome, states: []model.WorkState{model.WorkClosed}},
+		{name: "cancel", actor: actionActorHome, states: []model.WorkState{model.WorkCancelled}},
+	}
+	for _, test := range tests {
+		handler, ok := handlers.Action(test.name)
+		if !ok || handler.mechanic.actor != test.actor || handler.mechanic.selection != test.batch {
+			t.Fatalf("%s execution mechanic = %#v", test.name, handler.mechanic)
+		}
+		if test.actor == actionActorOffer {
+			if handler.mechanic.committedState != nil {
+				t.Fatalf("offer unexpectedly has current-state receipt mechanics")
+			}
+			continue
+		}
+		want := make(map[model.WorkState]bool, len(test.states))
+		for _, state := range test.states {
+			want[state] = true
+		}
+		for _, state := range states {
+			if handler.mechanic.committedState(state) != want[state] {
+				t.Fatalf("%s committed state %s = %t, want %t", test.name, state,
+					handler.mechanic.committedState(state), want[state])
+			}
 		}
 	}
 }

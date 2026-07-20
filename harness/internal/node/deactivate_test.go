@@ -23,7 +23,7 @@ func TestDeactivateWithdrawsExactAuthorityAndReplays(t *testing.T) {
 	at := active.Profile.UpdatedAt().Add(time.Second)
 	options := DeactivateOptions{Workspace: workspace, Host: model.HostCodex,
 		AssetRevision: bundle.Manifest().AssetRevision, ExpectedUpdatedAt: active.Profile.UpdatedAt(),
-		Clock: controllerTestClock{at}, Credentials: testProfileCredentials{}}
+		Clock: controllerTestClock{at}}
 
 	first, err := Deactivate(context.Background(), options)
 	if err != nil || !first.Changed || first.Profile.Enabled() ||
@@ -55,8 +55,7 @@ func TestDeactivateAllowsDriftedProjectionButRejectsAuthorityDrift(t *testing.T)
 	options := DeactivateOptions{Workspace: workspace, Host: model.HostCodex,
 		AssetRevision:     bundle.Manifest().AssetRevision,
 		ExpectedUpdatedAt: active.Profile.UpdatedAt(),
-		Clock:             controllerTestClock{active.Profile.UpdatedAt().Add(time.Second)},
-		Credentials:       testProfileCredentials{}}
+		Clock:             controllerTestClock{active.Profile.UpdatedAt().Add(time.Second)}}
 	if result, err := Deactivate(context.Background(), options); err != nil || !result.Changed || result.Profile.Enabled() {
 		t.Fatalf("projection-drift Deactivate() = (%#v, %v)", result, err)
 	}
@@ -78,8 +77,7 @@ func TestDeactivateAllowsDriftedProjectionButRejectsAuthorityDrift(t *testing.T)
 			options := DeactivateOptions{Workspace: workspace, Host: model.HostCodex,
 				AssetRevision:     bundle.Manifest().AssetRevision,
 				ExpectedUpdatedAt: active.Profile.UpdatedAt(),
-				Clock:             controllerTestClock{active.Profile.UpdatedAt().Add(time.Second)},
-				Credentials:       testProfileCredentials{}}
+				Clock:             controllerTestClock{active.Profile.UpdatedAt().Add(time.Second)}}
 			mutate(&options)
 			if _, err := Deactivate(context.Background(), options); !errors.Is(err, ErrDeactivate) {
 				t.Fatalf("Deactivate() error = %v", err)
@@ -121,8 +119,7 @@ func TestDeactivateRejectsIdentityAndCredentialDrift(t *testing.T) {
 			options := DeactivateOptions{Workspace: workspace, Host: model.HostCodex,
 				AssetRevision:     bundle.Manifest().AssetRevision,
 				ExpectedUpdatedAt: active.Profile.UpdatedAt(),
-				Clock:             controllerTestClock{active.Profile.UpdatedAt().Add(time.Second)},
-				Credentials:       testProfileCredentials{}}
+				Clock:             controllerTestClock{active.Profile.UpdatedAt().Add(time.Second)}}
 			if _, err := Deactivate(context.Background(), options); !errors.Is(err, ErrDeactivate) {
 				t.Fatalf("Deactivate() error = %v", err)
 			}
@@ -144,8 +141,7 @@ func TestDeactivateRejectsInvalidExpectedGeneration(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			options := DeactivateOptions{Workspace: workspace, Host: model.HostCodex,
 				AssetRevision: bundle.Manifest().AssetRevision, ExpectedUpdatedAt: expected,
-				Clock:       controllerTestClock{active.Profile.UpdatedAt().Add(time.Second)},
-				Credentials: testProfileCredentials{}}
+				Clock: controllerTestClock{active.Profile.UpdatedAt().Add(time.Second)}}
 			if _, err := Deactivate(context.Background(), options); !errors.Is(err, ErrDeactivate) {
 				t.Fatalf("Deactivate() error = %v", err)
 			}
@@ -153,7 +149,7 @@ func TestDeactivateRejectsInvalidExpectedGeneration(t *testing.T) {
 	}
 	equalClock := DeactivateOptions{Workspace: workspace, Host: model.HostCodex,
 		AssetRevision: bundle.Manifest().AssetRevision, ExpectedUpdatedAt: active.Profile.UpdatedAt(),
-		Clock: controllerTestClock{active.Profile.UpdatedAt()}, Credentials: testProfileCredentials{}}
+		Clock: controllerTestClock{active.Profile.UpdatedAt()}}
 	if _, err := Deactivate(context.Background(), equalClock); !errors.Is(err, ErrDeactivate) {
 		t.Fatalf("equal-clock Deactivate() error = %v", err)
 	}
@@ -169,8 +165,7 @@ func TestDeactivateRejectsReactivatedAuthorityABA(t *testing.T) {
 	deactivated, err := Deactivate(context.Background(), DeactivateOptions{Workspace: workspace,
 		Host: model.HostCodex, AssetRevision: bundle.Manifest().AssetRevision,
 		ExpectedUpdatedAt: active.Profile.UpdatedAt(),
-		Clock:             controllerTestClock{active.Profile.UpdatedAt().Add(time.Second)},
-		Credentials:       testProfileCredentials{}})
+		Clock:             controllerTestClock{active.Profile.UpdatedAt().Add(time.Second)}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,8 +178,7 @@ func TestDeactivateRejectsReactivatedAuthorityABA(t *testing.T) {
 	}
 	stale := DeactivateOptions{Workspace: workspace, Host: model.HostCodex,
 		AssetRevision: bundle.Manifest().AssetRevision, ExpectedUpdatedAt: active.Profile.UpdatedAt(),
-		Clock:       controllerTestClock{reactivated.Profile.UpdatedAt().Add(time.Second)},
-		Credentials: testProfileCredentials{}}
+		Clock: controllerTestClock{reactivated.Profile.UpdatedAt().Add(time.Second)}}
 	if _, err := Deactivate(context.Background(), stale); !errors.Is(err, ErrDeactivate) {
 		t.Fatalf("stale ABA Deactivate() error = %v", err)
 	}

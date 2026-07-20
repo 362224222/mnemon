@@ -15,7 +15,6 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/assets"
 	"github.com/mnemon-dev/mnemon/harness/internal/integration"
 	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi/nodecontrol"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/node"
 )
@@ -341,10 +340,10 @@ func (companion *fakeEjectCompanion) Inspect(context.Context) (localapi.Authorit
 }
 
 func (companion *fakeEjectCompanion) ConfirmOffline(_ context.Context,
-	expected node.Authority,
-) (node.Authority, error) {
-	if expected != ejectTestNodeAuthority(companion.fixture.t, companion.fixture.authority) {
-		return node.Authority{}, errors.New("offline authority mismatch")
+	expected localapi.AuthorityResponse,
+) (localapi.AuthorityResponse, error) {
+	if expected != companion.fixture.authority {
+		return localapi.AuthorityResponse{}, errors.New("offline authority mismatch")
 	}
 	return expected, companion.fixture.fail["confirm-offline"]
 }
@@ -378,15 +377,15 @@ type fakeEjectLifecycle struct {
 
 func (lifecycle *fakeEjectLifecycle) Quiesce(ctx context.Context,
 	client node.DaemonLifecycleClient, confirmer node.DaemonOfflineConfirmer,
-	expected node.Authority,
-) (node.Authority, error) {
+	expected localapi.AuthorityResponse,
+) (localapi.AuthorityResponse, error) {
 	lifecycle.fixture.record("quiesce")
 	if lifecycle.closed || ctx == nil || client == nil || confirmer == nil ||
-		expected != ejectTestNodeAuthority(lifecycle.fixture.t, lifecycle.fixture.authority) {
-		return node.Authority{}, errors.New("invalid eject quiescence")
+		expected != lifecycle.fixture.authority {
+		return localapi.AuthorityResponse{}, errors.New("invalid eject quiescence")
 	}
 	if err := lifecycle.fixture.fail["quiesce"]; err != nil {
-		return node.Authority{}, err
+		return localapi.AuthorityResponse{}, err
 	}
 	return expected, nil
 }
@@ -433,13 +432,4 @@ func ejectTestAuthority(t *testing.T, enabled bool, revision string,
 		t.Fatal(err)
 	}
 	return response
-}
-
-func ejectTestNodeAuthority(t *testing.T, response localapi.AuthorityResponse) node.Authority {
-	t.Helper()
-	authority, err := nodecontrol.Authority(response)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return authority
 }

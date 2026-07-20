@@ -468,7 +468,7 @@ func (c *Client) send(request *http.Request, response any, maxResponse int64) *A
 	}
 	if httpResponse.StatusCode < 200 || httpResponse.StatusCode >= 300 {
 		var remote APIError
-		if err := decodeClosedObject(object, &remote); err != nil || remote.Validate() != nil {
+		if err := decodeClosedObject(object, &remote); err != nil || validateAPIError(&remote) != nil {
 			return invalidControlResponse("mnemond returned an invalid error envelope")
 		}
 		if httpStatusForError(&remote) != httpResponse.StatusCode {
@@ -554,6 +554,24 @@ func decodeClosedObject(raw []byte, target any) error {
 		return err
 	}
 	return expectJSONEOF(decoder)
+}
+
+func validateAPIError(apiErr *APIError) error {
+	if apiErr == nil || apiErr.SchemaVersion != SchemaVersion || apiErr.Status != "error" ||
+		!apiErr.Code.Valid() || apiErr.Retryable != apiErr.Code.Retryable() ||
+		strings.TrimSpace(apiErr.Message) != apiErr.Message || apiErr.Message == "" ||
+		len([]byte(apiErr.Message)) > MaxDiagnosticBytes {
+		return errors.New("invalid API error")
+	}
+	if apiErr.Replayed && apiErr.OperationID == nil {
+		return errors.New("replayed API error lacks operation identity")
+	}
+	if apiErr.OperationID != nil {
+		if _, err := model.ParseOperationID(*apiErr.OperationID); err != nil {
+			return errors.New("invalid API error operation identity")
+		}
+	}
+	return nil
 }
 
 func validateCurrentResponse(response AgentCurrentResponse) *APIError {

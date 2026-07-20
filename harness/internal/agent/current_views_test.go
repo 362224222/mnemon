@@ -162,7 +162,7 @@ func currentViewReplayReceipt(t *testing.T, run model.RunID,
 	handling, _ := model.ParseHandlingID("handling-current-view-coordinator")
 	receipt, err := model.NewCurrentReadReceipt(model.CurrentReadReceiptSpec{RunID: run,
 		ProfileID: model.TeamworkProfileID(), HandlingID: handling, HandlingAttempt: 1,
-		Projection: bound, ActionWorkUpdatedBy: source.Key().EventID(), ActionWorkUpdatedAt: source.AcceptedAt(), ReadAt: base.ReadAt()})
+		Projection: bound, ReadAt: base.ReadAt()})
 	if err != nil {
 		t.Fatal(err)
 	}

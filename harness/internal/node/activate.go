@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
@@ -21,7 +22,6 @@ type ActivateOptions struct {
 	ExpectedUpdatedAt time.Time
 	Clock             Clock
 	Install           InstallationVerifier
-	Credentials       ProfileCredentialVerifier
 }
 
 type ActivateResult struct {
@@ -34,10 +34,8 @@ type ActivateResult struct {
 // assets or starts a Runtime; the injected verifier must prove the exact Node
 // bundle and Host projection before Store grants managed admission.
 func Activate(ctx context.Context, options ActivateOptions) (result ActivateResult, err error) {
-	if ctx == nil || isNilNodeInterface(options.Install) ||
-		isNilNodeInterface(options.Credentials) {
-		return ActivateResult{}, fmt.Errorf(
-			"%w: context, installation, or credential verifier is unavailable", ErrActivate)
+	if ctx == nil || options.Install == nil {
+		return ActivateResult{}, fmt.Errorf("%w: context or installation verifier is unavailable", ErrActivate)
 	}
 	workspace, err := validateDaemonWorkspace(options.Workspace)
 	if err != nil {
@@ -85,8 +83,10 @@ func Activate(ctx context.Context, options ActivateOptions) (result ActivateResu
 	if err != nil {
 		return ActivateResult{}, fmt.Errorf("%w: %v", ErrActivate, err)
 	}
-	if err := validateActivationAuthority(authority, identity, workspace, nodeState,
-		options.Credentials); err != nil {
+	if authority.Node.PeerID() != identity.PeerID() || authority.Profile.WorkspaceRoot() != workspace {
+		return ActivateResult{}, fmt.Errorf("%w: durable Node differs from workspace identity", ErrActivate)
+	}
+	if err := localapi.VerifyProfileCredential(nodeState, authority.Profile.CredentialHash()); err != nil {
 		return ActivateResult{}, fmt.Errorf("%w: %v", ErrActivate, err)
 	}
 	spec := authority.Profile.Spec()
@@ -111,13 +111,4 @@ func Activate(ctx context.Context, options ActivateOptions) (result ActivateResu
 		return ActivateResult{}, fmt.Errorf("%w: %v", ErrActivate, err)
 	}
 	return ActivateResult{Node: activated.Node, Profile: activated.Profile, Changed: activated.Changed}, nil
-}
-
-func validateActivationAuthority(authority store.LocalAuthority, identity *Identity,
-	workspace, nodeState string, credentials ProfileCredentialVerifier,
-) error {
-	if authority.Node.PeerID() != identity.PeerID() || authority.Profile.WorkspaceRoot() != workspace {
-		return errors.New("durable Node differs from workspace identity")
-	}
-	return credentials.Verify(nodeState, authority.Profile.CredentialHash())
 }

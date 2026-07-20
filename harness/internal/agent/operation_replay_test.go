@@ -3,7 +3,6 @@ package agent
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"reflect"
 	"testing"
 	"time"
@@ -11,81 +10,6 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
-
-func TestTeamworkTerminalReplayRejectsCorruptedCommittedActionReceipt(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name   string
-		mutate func(testing.TB, model.JSON) model.JSON
-	}{
-		{name: "Event type", mutate: func(t testing.TB, receipt model.JSON) model.JSON {
-			return mutateCommittedReceipt(t, receipt, `"event_type":"review.closed"`,
-				`"event_type":"review.cancelled"`)
-		}},
-		{name: "Work state", mutate: func(t testing.TB, receipt model.JSON) model.JSON {
-			return mutateCommittedReceipt(t, receipt, `"state":"CLOSED"`, `"state":"CANCELLED"`)
-		}},
-		{name: "result cardinality", mutate: duplicateCommittedReceiptEvent},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			fixture := newExecutorFixture(t, 1)
-			work := fixture.work(t, model.WorkDelivered, 3, 1, false)
-			fixture.backend.work = work
-			action := executorAction(t, "close", true, "", "", "", nil)
-			reservation := executorReservation(t, fixture, action, work, true)
-			if _, apiErr := fixture.executor.ExecuteTeamwork(context.Background(), TeamworkExecutionSpec{
-				Action: action, Reservation: reservation, At: fixture.at,
-			}); apiErr != nil {
-				t.Fatal(apiErr)
-			}
-			corrupted := test.mutate(t, fixture.backend.lastReceipt)
-			terminal := executorTerminalOperation(t, reservation.Operation,
-				model.OperationCommitted, corrupted, fixture.clock.now)
-			_, apiErr := fixture.executor.ExecuteTeamwork(context.Background(), TeamworkExecutionSpec{
-				Action: action, Reservation: store.ManagedOperationReservation{
-					Operation: terminal, Replayed: true}, At: fixture.at,
-			})
-			if apiErr == nil || apiErr.Code != CodeInternal || !apiErr.Replayed ||
-				apiErr.OperationID == nil || *apiErr.OperationID != reservation.Operation.ID().String() ||
-				fixture.backend.commits != 1 {
-				t.Fatalf("corrupted terminal replay = %#v, commits=%d", apiErr, fixture.backend.commits)
-			}
-		})
-	}
-}
-
-func mutateCommittedReceipt(t testing.TB, receipt model.JSON, oldText, newText string) model.JSON {
-	t.Helper()
-	raw := bytes.Replace(receipt.Bytes(), []byte(oldText), []byte(newText), 1)
-	if bytes.Equal(raw, receipt.Bytes()) {
-		t.Fatalf("committed receipt lacks %q", oldText)
-	}
-	mutated, err := model.NewJSON(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return mutated
-}
-
-func duplicateCommittedReceiptEvent(t testing.TB, receipt model.JSON) model.JSON {
-	t.Helper()
-	var wire struct {
-		CaptureRoots []json.RawMessage `json:"capture_roots"`
-		Events       []json.RawMessage `json:"events"`
-		OperationID  string            `json:"operation_id"`
-		Status       string            `json:"status"`
-	}
-	if err := json.Unmarshal(receipt.Bytes(), &wire); err != nil || len(wire.Events) != 1 {
-		t.Fatalf("decode committed receipt = (%d Events, %v)", len(wire.Events), err)
-	}
-	wire.Events = append(wire.Events, append(json.RawMessage(nil), wire.Events[0]...))
-	mutated, err := model.JSONFrom(wire)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return mutated
-}
 
 func TestTeamworkActionExecutorReportsAsyncRejectionWinnerAsReplay(t *testing.T) {
 	t.Parallel()

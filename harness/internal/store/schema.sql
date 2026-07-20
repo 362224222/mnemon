@@ -3047,26 +3047,6 @@ WHEN NOT EXISTS (
     AND b.state = 'active'
     AND a.baseline_confirmed_at IS NOT NULL
 )
-AND NOT (
-  NEW.status = 'blocked'
-  AND EXISTS (
-    SELECT 1
-    FROM events e
-    JOIN work_members w
-      ON w.channel_id = e.channel_id
-     AND w.home_peer_id = e.work_home_peer_id
-     AND w.work_id = e.work_id
-     AND w.peer_id = NEW.target_peer_id
-     AND w.role = 'reviewer'
-    JOIN peer_bindings b
-      ON b.channel_id = NEW.channel_id
-     AND b.peer_id = NEW.target_peer_id
-    WHERE e.event_id = NEW.event_id
-      AND e.source = 'local'
-      AND e.event_type = 'review.expired'
-      AND e.origin_peer_id = e.work_home_peer_id
-  )
-)
 BEGIN SELECT RAISE(ABORT, 'peer delivery binding baseline not ready'); END;
 
 CREATE TRIGGER peer_deliveries_binding_ready_update

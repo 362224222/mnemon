@@ -15,30 +15,25 @@ import (
 	ma "github.com/multiformats/go-multiaddr"
 )
 
-// ConnectionGater enforces physical authority plus bounded enrollment exceptions;
-// exact Channel stream/topic access stays outside it.
+// ConnectionGater enforces coarse physical connection authority plus the
+// bounded inbound enrollment exception. Exact Channel stream/topic access is
+// deliberately outside this gate.
 type ConnectionGater struct {
-	authority     *Authority
-	unknownMax    int
-	pendingTTL    time.Duration
-	now           func() time.Time
-	dnsResolver   enrollmentMultiaddrResolver
-	mu            sync.Mutex
-	pending       map[unknownReservationKey][]time.Time
-	pendingCount  int
-	unknown       map[string]*unknownConnection
-	outbound      outboundEnrollmentPermitState
-	resolutionWG  sync.WaitGroup
-	expiryWake    chan struct{}
-	expiryWG      sync.WaitGroup
-	expiryRunning bool
-	closed        atomic.Bool
+	authority    *Authority
+	unknownMax   int
+	pendingTTL   time.Duration
+	now          func() time.Time
+	mu           sync.Mutex
+	pending      map[unknownReservationKey][]time.Time
+	pendingCount int
+	unknown      map[string]*unknownConnection
+	closed       atomic.Bool
 }
 
 type unknownConnection struct {
-	peerID    libp2ppeer.ID
-	expiresAt time.Time
-	close     func() error
+	peerID libp2ppeer.ID
+	timer  *time.Timer
+	close  func() error
 }
 
 type unknownReservationKey struct {
@@ -51,28 +46,19 @@ var _ connmgr.ConnectionGater = (*ConnectionGater)(nil)
 var _ network.Notifiee = (*ConnectionGater)(nil)
 
 func NewConnectionGater(authority *Authority) *ConnectionGater {
-	return &ConnectionGater{
-		authority:   authority,
-		unknownMax:  HermeticLimits().UnknownEnrollmentConnections,
-		pendingTTL:  HermeticLimits().ChannelRequestTimeout,
-		now:         time.Now,
-		dnsResolver: defaultEnrollmentTransportResolver(),
-		pending:     make(map[unknownReservationKey][]time.Time),
-		unknown:     make(map[string]*unknownConnection),
-		outbound:    newOutboundEnrollmentPermitState(),
-		expiryWake:  make(chan struct{}, 1),
-	}
+	return &ConnectionGater{authority: authority,
+		unknownMax: HermeticLimits().UnknownEnrollmentConnections,
+		pendingTTL: HermeticLimits().ChannelRequestTimeout,
+		now:        time.Now, pending: make(map[unknownReservationKey][]time.Time),
+		unknown: make(map[string]*unknownConnection)}
 }
 
 func (gater *ConnectionGater) InterceptPeerDial(peerID libp2ppeer.ID) bool {
-	return gater != nil && !gater.closed.Load() && gater.authority != nil &&
-		(gater.authority.CanDial(peerID) || gater.permitsOutboundEnrollmentPeer(peerID))
+	return gater != nil && !gater.closed.Load() && gater.authority != nil && gater.authority.CanDial(peerID)
 }
 
-func (gater *ConnectionGater) InterceptAddrDial(peerID libp2ppeer.ID, address ma.Multiaddr) bool {
-	return gater != nil && !gater.closed.Load() && gater.authority != nil &&
-		(gater.authority.CanDial(peerID) ||
-			gater.permitsOutboundEnrollmentAddress(peerID, address, true))
+func (gater *ConnectionGater) InterceptAddrDial(peerID libp2ppeer.ID, _ ma.Multiaddr) bool {
+	return gater.InterceptPeerDial(peerID)
 }
 
 // Identity is unavailable at accept time. The resource manager fences all
@@ -89,9 +75,8 @@ func (gater *ConnectionGater) InterceptSecured(direction network.Direction,
 		peerID == gater.authority.LocalPeerID() {
 		return false
 	}
-	if direction == network.DirOutbound {
-		return gater.authority.CanDial(peerID) ||
-			gater.permitsOutboundEnrollmentConnection(peerID, addresses)
+	if direction == network.DirOutbound && gater.authority.CanDial(peerID) {
+		return true
 	}
 	if direction == network.DirInbound && gater.authority.CanConnect(peerID) {
 		return true
@@ -110,7 +95,7 @@ func (gater *ConnectionGater) InterceptSecured(direction network.Direction,
 	}
 	now := gater.now()
 	gater.prunePendingLocked(now)
-	if gater.enrollmentSlotsLocked() >= gater.unknownMax {
+	if gater.pendingCount+len(gater.unknown) >= gater.unknownMax {
 		return false
 	}
 	// The secured hook has no connection ID. Keep one reservation per call,
@@ -144,9 +129,8 @@ func (gater *ConnectionGater) admitUpgradedConnection(direction network.Directio
 		peerID == gater.authority.LocalPeerID() {
 		return false
 	}
-	if direction == network.DirOutbound {
-		return gater.authority.CanDial(peerID) ||
-			gater.bindOutboundEnrollmentConnection(peerID, connectionID, addresses)
+	if direction == network.DirOutbound && gater.authority.CanDial(peerID) {
+		return true
 	}
 	if direction == network.DirInbound && gater.authority.CanConnect(peerID) {
 		gater.releasePending(peerID, addresses)
@@ -164,8 +148,7 @@ func (gater *ConnectionGater) admitUpgradedConnection(direction network.Directio
 	if gater.closed.Load() {
 		return false
 	}
-	now := gater.now()
-	gater.prunePendingLocked(now)
+	gater.prunePendingLocked(gater.now())
 	if existing, duplicate := gater.unknown[connectionID]; duplicate {
 		return existing.peerID == peerID
 	}
@@ -179,11 +162,11 @@ func (gater *ConnectionGater) admitUpgradedConnection(direction network.Directio
 		gater.pending[key] = reservations[1:]
 	}
 	gater.pendingCount--
-	lease := &unknownConnection{peerID: peerID,
-		expiresAt: now.Add(gater.pendingTTL), close: closeConnection}
+	lease := &unknownConnection{peerID: peerID, close: closeConnection}
 	gater.unknown[connectionID] = lease
-	gater.ensureExpiryOwnerLocked()
-	gater.signalExpiryOwnerLocked()
+	lease.timer = time.AfterFunc(gater.pendingTTL, func() {
+		gater.expireUnknown(connectionID, lease)
+	})
 	return true
 }
 
@@ -195,11 +178,12 @@ func (gater *ConnectionGater) Reconcile() {
 	}
 	gater.mu.Lock()
 	defer gater.mu.Unlock()
-	changed := false
 	for connectionID, connection := range gater.unknown {
 		if gater.authority.CanConnect(connection.peerID) {
+			if connection.timer != nil {
+				connection.timer.Stop()
+			}
 			delete(gater.unknown, connectionID)
-			changed = true
 		}
 	}
 	for key, reservations := range gater.pending {
@@ -207,9 +191,6 @@ func (gater *ConnectionGater) Reconcile() {
 			delete(gater.pending, key)
 			gater.pendingCount -= len(reservations)
 		}
-	}
-	if changed {
-		gater.signalExpiryOwnerLocked()
 	}
 }
 
@@ -242,7 +223,8 @@ func (gater *ConnectionGater) reconcileStreams(connection network.Conn) []error 
 	var resetErrors []error
 	for _, stream := range connection.GetStreams() {
 		if stream == nil || !managedProtocol(stream.Protocol()) ||
-			gater.allowsExistingStream(connection, stream) {
+			gater.allowsProtocol(connection.RemotePeer(), stream.Protocol(),
+				stream.Stat().Direction, connection.ID()) {
 			continue
 		}
 		if err := stream.Reset(); err != nil {
@@ -262,8 +244,7 @@ func (gater *ConnectionGater) allowsExisting(connection network.Conn) bool {
 		return false
 	}
 	if gater.authority.CanConnect(peerID) ||
-		connection.Stat().Direction == network.DirOutbound && gater.authority.CanDial(peerID) ||
-		gater.permitsBoundOutboundEnrollmentConnection(connection) {
+		(connection.Stat().Direction == network.DirOutbound && gater.authority.CanDial(peerID)) {
 		return true
 	}
 	if connection.Stat().Direction != network.DirInbound {
@@ -300,6 +281,16 @@ func (gater *ConnectionGater) allowsProtocol(peerID libp2ppeer.ID, protocolID pr
 	return lease != nil && lease.peerID == peerID
 }
 
+func (gater *ConnectionGater) UnknownEnrollmentSlots() int {
+	if gater == nil {
+		return 0
+	}
+	gater.mu.Lock()
+	defer gater.mu.Unlock()
+	gater.prunePendingLocked(gater.now())
+	return gater.pendingCount + len(gater.unknown)
+}
+
 func (gater *ConnectionGater) UnknownConnections() int {
 	if gater == nil {
 		return 0
@@ -314,33 +305,56 @@ func (gater *ConnectionGater) releaseUnknown(connectionID string) {
 		return
 	}
 	gater.mu.Lock()
-	if gater.unknown[connectionID] != nil {
+	if connection := gater.unknown[connectionID]; connection != nil {
+		if connection.timer != nil {
+			connection.timer.Stop()
+		}
 		delete(gater.unknown, connectionID)
-		gater.signalExpiryOwnerLocked()
 	}
 	gater.mu.Unlock()
 }
 
 // shutdown retires every enrollment reservation before its owning Host stops
 // delivering disconnect notifications. The Host close that follows owns the
-// physical connections. It wakes and joins the single expiry owner, including
-// any exact-connection close already in flight, before returning.
+// physical connections; this method only prevents lease callbacks from
+// surviving the NodeHost lifecycle.
 func (gater *ConnectionGater) shutdown() {
 	if gater == nil {
 		return
 	}
 	gater.mu.Lock()
 	gater.closed.Store(true)
+	for _, connection := range gater.unknown {
+		if connection != nil && connection.timer != nil {
+			connection.timer.Stop()
+		}
+	}
 	gater.pending = make(map[unknownReservationKey][]time.Time)
 	gater.pendingCount = 0
 	gater.unknown = make(map[string]*unknownConnection)
-	callbacks := gater.retireOutboundEnrollmentLocked()
-	gater.cancelOutboundEnrollmentResolutionsLocked()
-	gater.signalExpiryOwnerLocked()
 	gater.mu.Unlock()
-	runEnrollmentPermitCallbacks(callbacks)
-	gater.resolutionWG.Wait()
-	gater.expiryWG.Wait()
+}
+
+func (gater *ConnectionGater) expireUnknown(connectionID string, expected *unknownConnection) {
+	if gater == nil || connectionID == "" || expected == nil {
+		return
+	}
+	gater.mu.Lock()
+	current := gater.unknown[connectionID]
+	if current != expected {
+		gater.mu.Unlock()
+		return
+	}
+	delete(gater.unknown, connectionID)
+	// Promotion wins if its immutable authority revision became visible before
+	// the lease expiry callback. Otherwise close only the exact connection that
+	// consumed this unknown slot; a later connection cannot inherit the timer.
+	authorized := gater.authority != nil && gater.authority.CanConnect(current.peerID)
+	closeConnection := current.close
+	gater.mu.Unlock()
+	if !authorized && closeConnection != nil {
+		_ = closeConnection()
+	}
 }
 
 func (gater *ConnectionGater) releasePending(peerID libp2ppeer.ID, addresses network.ConnMultiaddrs) {

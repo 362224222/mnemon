@@ -20,8 +20,9 @@ var ErrNetworkAuthority = errors.New("invalid peer network authority snapshot")
 // Channel authority needed in libp2p callbacks. Store reconciliation replaces
 // it atomically; callbacks never query SQLite or combine two revisions.
 type NetworkAuthoritySnapshot struct {
-	LocalPeerID model.PeerID
-	Channels    []ChannelAuthoritySnapshot
+	LocalPeerID             model.PeerID
+	Channels                []ChannelAuthoritySnapshot
+	OutboundEnrollmentPeers []model.PeerID
 }
 
 type ChannelAuthoritySnapshot struct {
@@ -74,9 +75,10 @@ type topicAuthorityGeneration struct {
 }
 
 type networkAuthorityState struct {
-	localPeerID libp2ppeer.ID
-	channels    map[model.ChannelID]channelAuthorityState
-	physical    map[libp2ppeer.ID]struct{}
+	localPeerID        libp2ppeer.ID
+	channels           map[model.ChannelID]channelAuthorityState
+	physical           map[libp2ppeer.ID]struct{}
+	outboundEnrollment map[libp2ppeer.ID]struct{}
 }
 
 // Authority is the lock-free read projection shared by connection, stream and
@@ -95,7 +97,8 @@ func NewAuthority(localPeerID model.PeerID) (*Authority, error) {
 	}
 	authority := &Authority{localPeerID: local}
 	authority.state.Store(&networkAuthorityState{localPeerID: local,
-		channels: make(map[model.ChannelID]channelAuthorityState), physical: make(map[libp2ppeer.ID]struct{})})
+		channels: make(map[model.ChannelID]channelAuthorityState), physical: make(map[libp2ppeer.ID]struct{}),
+		outboundEnrollment: make(map[libp2ppeer.ID]struct{})})
 	return authority, nil
 }
 
@@ -134,8 +137,22 @@ func (authority *Authority) prepare(snapshot NetworkAuthoritySnapshot) (*network
 			len(snapshot.Channels), model.MaxChannelsPerNode)
 	}
 	state := &networkAuthorityState{localPeerID: local,
-		channels: make(map[model.ChannelID]channelAuthorityState, len(snapshot.Channels)),
-		physical: make(map[libp2ppeer.ID]struct{})}
+		channels:           make(map[model.ChannelID]channelAuthorityState, len(snapshot.Channels)),
+		physical:           make(map[libp2ppeer.ID]struct{}),
+		outboundEnrollment: make(map[libp2ppeer.ID]struct{}, len(snapshot.OutboundEnrollmentPeers))}
+	if len(snapshot.OutboundEnrollmentPeers) > model.MaxChannelsPerNode {
+		return nil, fmt.Errorf("%w: outbound enrollment permit limit exceeded", ErrNetworkAuthority)
+	}
+	for _, permitted := range snapshot.OutboundEnrollmentPeers {
+		peerID, err := canonicalLibp2pID(permitted)
+		if err != nil || peerID == local {
+			return nil, fmt.Errorf("%w: invalid outbound enrollment Peer", ErrNetworkAuthority)
+		}
+		if _, duplicate := state.outboundEnrollment[peerID]; duplicate {
+			return nil, fmt.Errorf("%w: duplicate outbound enrollment Peer", ErrNetworkAuthority)
+		}
+		state.outboundEnrollment[peerID] = struct{}{}
+	}
 	for _, channel := range snapshot.Channels {
 		if _, exists := state.channels[channel.ChannelID]; exists {
 			return nil, fmt.Errorf("%w: duplicate Channel", ErrNetworkAuthority)
@@ -347,14 +364,18 @@ func (authority *Authority) CanOpenDataPlane(peerID libp2ppeer.ID) bool {
 	return false
 }
 
-// CanDial grants outbound transport authority only to a Peer already projected
-// from durable Channel bindings. Short-lived enrollment transport exceptions
-// belong to ConnectionGater and never enter this immutable Store projection.
+// CanDial additionally admits the fixed owner of one bounded outbound
+// enrollment attempt. That permit never grants inbound, topic or stream data
+// authority.
 func (authority *Authority) CanDial(peerID libp2ppeer.ID) bool {
 	if authority == nil || peerID == "" || peerID == authority.localPeerID {
 		return false
 	}
-	_, allowed := authority.state.Load().physical[peerID]
+	state := authority.state.Load()
+	if _, allowed := state.physical[peerID]; allowed {
+		return true
+	}
+	_, allowed := state.outboundEnrollment[peerID]
 	return allowed
 }
 
@@ -387,8 +408,8 @@ func (authority *Authority) CanUseTopic(peerID libp2ppeer.ID, topic string) bool
 }
 
 // topicGeneration is the exact authority subset that can change topic
-// lifecycle or egress. Other durable revisions do not disturb an unrelated
-// live Channel.
+// lifecycle or egress. Other revisions, such as a bounded enrollment dial
+// permit, do not disturb an unrelated live Channel.
 func (authority *Authority) topicGeneration(channelID model.ChannelID) topicAuthorityGeneration {
 	if authority == nil || authority.state.Load() == nil {
 		return topicAuthorityGeneration{}

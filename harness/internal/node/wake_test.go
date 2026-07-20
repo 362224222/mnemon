@@ -102,8 +102,8 @@ func TestWakeAttachmentFilesystemWorkStaysOutsideAdmission(t *testing.T) {
 		admission := &wakeAdmissionSpy{}
 		preparer, err := agent.NewWakeAttachmentPreparer(
 			&admittedWakeStore{admission: admission},
-			agent.WakeAttachmentOptions{Attachments: &testWakeAttachmentFilesystem{
-				listErr: errors.New("attachment scan failed")},
+			agent.WakeAttachmentOptions{Attachments: newAgentAttachmentFilesystem(
+				filepath.Join(t.TempDir(), "missing", "node")),
 				AssetRevision: fixture.revision, Clock: wakeFixedClock{fixture.profile.UpdatedAt()}},
 		)
 		if err != nil {
@@ -129,7 +129,7 @@ func TestWakeAttachmentFilesystemWorkStaysOutsideAdmission(t *testing.T) {
 			admission: admission}
 		preparer, err := agent.NewWakeAttachmentPreparer(
 			&admittedWakeStore{store: st, admission: admission},
-			agent.WakeAttachmentOptions{Attachments: &testWakeAttachmentFilesystem{},
+			agent.WakeAttachmentOptions{Attachments: newAgentAttachmentFilesystem(fixture.nodeState),
 				AssetRevision: fixture.revision,
 				Clock:         wakeFixedClock{fixture.profile.UpdatedAt()}, Random: entropy},
 		)
@@ -162,9 +162,8 @@ func TestManagedWakeWorkerDoesNotHoldAdmissionAcrossAdapterRun(t *testing.T) {
 
 	admission := &wakeAdmissionSpy{}
 	adapter := &wakeBoundaryAdapter{admission: admission, entered: make(chan int, 1)}
-	worker, err := newManagedWakeWorker(st, fixture.profile,
-		wakeFixedClock{fixture.profile.UpdatedAt()}, fixture.install, adapter,
-		&testWakeAttachmentFilesystem{}, admission)
+	worker, err := newManagedWakeWorker(st, fixture.nodeState, fixture.profile,
+		wakeFixedClock{fixture.profile.UpdatedAt()}, fixture.install, adapter, admission)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -362,44 +361,5 @@ func insertWakeBoundaryHandling(t *testing.T, databasePath string, at time.Time)
 	}
 }
 
-type testWakeAttachmentFilesystem struct{ listErr error }
-
-func (filesystem *testWakeAttachmentFilesystem) ListCandidates() ([]WakeAttachmentCandidate, error) {
-	if filesystem == nil {
-		return nil, errors.New("test wake attachment filesystem is unavailable")
-	}
-	return nil, filesystem.listErr
-}
-
-func (*testWakeAttachmentFilesystem) RemoveReapable(model.RunID, model.Digest) (bool, error) {
-	return false, nil
-}
-
-func (*testWakeAttachmentFilesystem) CleanupStages(time.Time) (int, error) { return 0, nil }
-
-func (*testWakeAttachmentFilesystem) Stage(random io.Reader) (StagedRunAttachment, error) {
-	raw := make([]byte, 32)
-	if _, err := io.ReadFull(random, raw); err != nil {
-		return nil, err
-	}
-	return &testWakeAttachmentStage{tokenHash: model.Sum(raw)}, nil
-}
-
-type testWakeAttachmentStage struct{ tokenHash model.Digest }
-
-func (stage *testWakeAttachmentStage) TokenHash() model.Digest { return stage.tokenHash }
-
-func (*testWakeAttachmentStage) Publish(runID model.RunID) (RunAttachment, error) {
-	return testWakeRunAttachment{path: filepath.Join("/tmp", runID.String()+".attach")}, nil
-}
-
-func (*testWakeAttachmentStage) Discard() error { return nil }
-
-type testWakeRunAttachment struct{ path string }
-
-func (attachment testWakeRunAttachment) Path() string { return attachment.path }
-func (testWakeRunAttachment) Remove() error           { return nil }
-
 var _ ManagedAdmission = (*wakeAdmissionSpy)(nil)
 var _ agent.WakeWorkerAdapter = (*wakeBoundaryAdapter)(nil)
-var _ WakeAttachmentFilesystem = (*testWakeAttachmentFilesystem)(nil)

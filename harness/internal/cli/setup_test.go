@@ -541,6 +541,58 @@ func TestSetupParsingWorkspaceAndStableExitClasses(t *testing.T) {
 	}
 }
 
+func TestSetupFreshClassificationNeverReinitializesAnExistingDatabase(t *testing.T) {
+	workspace, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodeState := filepath.Join(workspace, ".mnemon", "harness", "node")
+	if err := os.MkdirAll(nodeState, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(workspace, ".mnemon"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(workspace, ".mnemon", "harness"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if allowed, err := setupCanInitialize(nodeState); err != nil || !allowed {
+		t.Fatalf("missing database fresh classification = (%t, %v)", allowed, err)
+	}
+	profiles := filepath.Join(nodeState, "profiles")
+	if err := os.Mkdir(profiles, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	credential := filepath.Join(profiles, model.TeamworkProfileID().String()+".token")
+	if err := os.WriteFile(credential, []byte("corrupt\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if allowed, err := setupCanInitialize(nodeState); err != nil || allowed {
+		t.Fatalf("corrupt credential fresh classification = (%t, %v)", allowed, err)
+	}
+	if err := os.Remove(credential); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := localapi.EnsureProfileCredential(nodeState); err != nil {
+		t.Fatal(err)
+	}
+	if allowed, err := setupCanInitialize(nodeState); err != nil || !allowed {
+		t.Fatalf("valid partial credential classification = (%t, %v)", allowed, err)
+	}
+	if err := os.WriteFile(filepath.Join(nodeState, "node.db"), []byte("corrupt"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if allowed, err := setupCanInitialize(nodeState); err != nil || allowed {
+		t.Fatalf("existing corrupt database fresh classification = (%t, %v)", allowed, err)
+	}
+	if err := os.WriteFile(credential, []byte("corrupt\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if allowed, err := setupCanInitialize(nodeState); err != nil || allowed {
+		t.Fatalf("existing database plus corrupt credential classification = (%t, %v)", allowed, err)
+	}
+}
+
 type concurrentFreshSetupState struct {
 	mu                  sync.Mutex
 	inactive            localapi.AuthorityResponse
@@ -602,9 +654,9 @@ func (*concurrentFreshSetupCompanion) Deactivate(context.Context, model.HostKind
 }
 
 func (*concurrentFreshSetupCompanion) ConfirmOffline(context.Context,
-	node.Authority,
-) (node.Authority, error) {
-	return node.Authority{}, errors.New("concurrent happy path cannot stop mnemond")
+	localapi.AuthorityResponse,
+) (localapi.AuthorityResponse, error) {
+	return localapi.AuthorityResponse{}, errors.New("concurrent happy path cannot stop mnemond")
 }
 
 type concurrentFreshSetupClient struct{ state *concurrentFreshSetupState }
@@ -694,13 +746,13 @@ func concurrentFreshSetupDependencies(workspace string, bundle assets.Bundle,
 			return nil, errors.New("happy-path fake never launches")
 		},
 		newHookGate: func(string, assets.Host) (node.DaemonReadyGate, error) {
-			return node.DaemonReadyGateFunc(func(context.Context, node.DaemonHealth) error {
+			return node.DaemonReadyGateFunc(func(context.Context, localapi.HealthResponse) error {
 				return nil
 			}), nil
 		},
 		ensure: func(context.Context, node.DaemonEnsureOptions) (node.DaemonEnsureResult, error) {
-			return node.DaemonEnsureResult{Health: node.DaemonHealth{AssetRevision: revision,
-				Ready: true}}, nil
+			return node.DaemonEnsureResult{Health: localapi.HealthResponse{AssetRevision: revision,
+				SchemaVersion: localapi.SchemaVersion, Status: "ready"}}, nil
 		},
 		acquireLifecycle: func(context.Context,
 			node.DaemonLifecycleOptions,
@@ -745,8 +797,8 @@ func newSetupFixture(t *testing.T, host assets.Host, enabled bool) *setupFixture
 		authority: setupTestAuthority(t, host, enabled, revision), detectedHost: assets.HostCodex,
 		canInitialize: true, fail: make(map[string]error),
 		projectionPresent: make(map[assets.Host]bool),
-		ensureResult: node.DaemonEnsureResult{Health: node.DaemonHealth{
-			Ready: true, AssetRevision: revision}}}
+		ensureResult: node.DaemonEnsureResult{Health: localapi.HealthResponse{
+			SchemaVersion: localapi.SchemaVersion, Status: "ready", AssetRevision: revision}}}
 }
 
 func (fixture *setupFixture) app() *setupApp {
@@ -902,7 +954,7 @@ func (fixture *setupFixture) app() *setupApp {
 			if err := fixture.fail["new-gate"]; err != nil {
 				return nil, err
 			}
-			return node.DaemonReadyGateFunc(func(context.Context, node.DaemonHealth) error {
+			return node.DaemonReadyGateFunc(func(context.Context, localapi.HealthResponse) error {
 				return nil
 			}), nil
 		},
@@ -1012,10 +1064,10 @@ func (companion *fakeSetupCompanion) Inspect(context.Context) (localapi.Authorit
 }
 
 func (companion *fakeSetupCompanion) ConfirmOffline(_ context.Context,
-	expected node.Authority,
-) (node.Authority, error) {
-	if expected != mustCompanionNodeAuthority(companion.fixture.t, companion.fixture.authority) {
-		return node.Authority{}, errors.New("offline authority mismatch")
+	expected localapi.AuthorityResponse,
+) (localapi.AuthorityResponse, error) {
+	if expected != companion.fixture.authority {
+		return localapi.AuthorityResponse{}, errors.New("offline authority mismatch")
 	}
 	return expected, companion.fixture.fail["confirm-offline"]
 }
@@ -1076,7 +1128,7 @@ func (client *fakeSetupAuthorityClient) ReadAuthority(context.Context) (localapi
 func (client *fakeSetupAuthorityClient) ProbeHealth(context.Context) (localapi.HealthResponse,
 	*localapi.APIError,
 ) {
-	return setupTestLocalHealth(client.fixture.ensureResult.Health), nil
+	return client.fixture.ensureResult.Health, nil
 }
 
 func (client *fakeSetupAuthorityClient) Shutdown(context.Context,
@@ -1100,15 +1152,15 @@ type fakeSetupDaemonLifecycle struct {
 
 func (lifecycle *fakeSetupDaemonLifecycle) Quiesce(ctx context.Context,
 	client node.DaemonLifecycleClient, confirmer node.DaemonOfflineConfirmer,
-	expected node.Authority,
-) (node.Authority, error) {
+	expected localapi.AuthorityResponse,
+) (localapi.AuthorityResponse, error) {
 	lifecycle.fixture.record("quiesce")
 	if lifecycle.closed || ctx == nil || client == nil || confirmer == nil ||
-		expected != mustCompanionNodeAuthority(lifecycle.fixture.t, lifecycle.fixture.authority) {
-		return node.Authority{}, errors.New("invalid fake lifecycle quiescence")
+		expected != lifecycle.fixture.authority {
+		return localapi.AuthorityResponse{}, errors.New("invalid fake lifecycle quiescence")
 	}
 	if err := lifecycle.fixture.fail["quiesce"]; err != nil {
-		return node.Authority{}, err
+		return localapi.AuthorityResponse{}, err
 	}
 	return expected, nil
 }

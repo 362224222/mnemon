@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -25,8 +24,7 @@ import (
 func TestOpenDaemonBindsIdentityStoreCredentialAssetsAndSocket(t *testing.T) {
 	fixture := newDaemonFixture(t, true)
 	daemon, err := OpenDaemon(context.Background(), DaemonOptions{Workspace: fixture.workspace,
-		Clock: controllerTestClock{fixture.profile.UpdatedAt()}, Install: fixture.install,
-		Credentials: testProfileCredentials{}, Control: newTestControlTransportFactory()})
+		Clock: controllerTestClock{fixture.profile.UpdatedAt()}, Install: fixture.install})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +73,7 @@ func TestOpenDaemonRejectsMissingActionAuthorityBeforeStoreOrInstallationVerific
 		return nil
 	})
 	daemon, openErr := OpenDaemon(context.Background(), DaemonOptions{
-		Workspace: fixture.workspace, Install: install, Credentials: testProfileCredentials{},
+		Workspace: fixture.workspace, Install: install,
 	})
 	if daemon != nil || !errors.Is(openErr, ErrDaemonAuthority) || errors.Is(openErr, store.ErrWriterActive) {
 		t.Fatalf("OpenDaemon() = (%v, %v)", daemon, openErr)
@@ -98,23 +96,20 @@ func TestOpenDaemonRejectsAuthorityDriftAndNeverCreatesMissingDatabase(t *testin
 		if _, err := EnsureIdentity(fixture.nodeState); err != nil {
 			t.Fatal(err)
 		}
-		if daemon, err := OpenDaemon(context.Background(), DaemonOptions{Workspace: fixture.workspace,
-			Install: fixture.install, Credentials: testProfileCredentials{}}); daemon != nil || !errors.Is(err, ErrDaemonAuthority) {
+		if daemon, err := OpenDaemon(context.Background(), DaemonOptions{Workspace: fixture.workspace, Install: fixture.install}); daemon != nil || !errors.Is(err, ErrDaemonAuthority) {
 			t.Fatalf("OpenDaemon() = (%v, %v)", daemon, err)
 		}
 	})
 	t.Run("credential replacement", func(t *testing.T) {
 		fixture := newDaemonFixture(t, true)
 		writeDaemonToken(t, fixture.nodeState, bytes.Repeat([]byte{0x99}, 32), true)
-		if daemon, err := OpenDaemon(context.Background(), DaemonOptions{Workspace: fixture.workspace,
-			Install: fixture.install, Credentials: testProfileCredentials{}}); daemon != nil || !errors.Is(err, ErrDaemonAuthority) {
+		if daemon, err := OpenDaemon(context.Background(), DaemonOptions{Workspace: fixture.workspace, Install: fixture.install}); daemon != nil || !errors.Is(err, ErrDaemonAuthority) {
 			t.Fatalf("OpenDaemon() = (%v, %v)", daemon, err)
 		}
 	})
 	t.Run("disabled Profile", func(t *testing.T) {
 		fixture := newDaemonFixture(t, false)
-		if daemon, err := OpenDaemon(context.Background(), DaemonOptions{Workspace: fixture.workspace,
-			Install: fixture.install, Credentials: testProfileCredentials{}}); daemon != nil || !errors.Is(err, ErrDaemonAuthority) {
+		if daemon, err := OpenDaemon(context.Background(), DaemonOptions{Workspace: fixture.workspace, Install: fixture.install}); daemon != nil || !errors.Is(err, ErrDaemonAuthority) {
 			t.Fatalf("OpenDaemon() = (%v, %v)", daemon, err)
 		}
 	})
@@ -125,7 +120,7 @@ func TestOpenDaemonRejectsAuthorityDriftAndNeverCreatesMissingDatabase(t *testin
 			t.Fatal(err)
 		}
 		if daemon, err := OpenDaemon(context.Background(), DaemonOptions{Workspace: fixture.workspace,
-			Install: fixture.install, Credentials: testProfileCredentials{}}); daemon != nil || !errors.Is(err, ErrDaemonAuthority) {
+			Install: fixture.install}); daemon != nil || !errors.Is(err, ErrDaemonAuthority) {
 			t.Fatalf("OpenDaemon() = (%v, %v)", daemon, err)
 		}
 	})
@@ -141,8 +136,7 @@ func TestOpenDaemonRejectsAuthorityDriftAndNeverCreatesMissingDatabase(t *testin
 		if _, err := EnsureIdentity(nodeState); err != nil {
 			t.Fatal(err)
 		}
-		if daemon, err := OpenDaemon(context.Background(), DaemonOptions{Workspace: workspace,
-			Credentials: testProfileCredentials{}}); daemon != nil || !errors.Is(err, ErrDaemonAuthority) {
+		if daemon, err := OpenDaemon(context.Background(), DaemonOptions{Workspace: workspace}); daemon != nil || !errors.Is(err, ErrDaemonAuthority) {
 			t.Fatalf("OpenDaemon() = (%v, %v)", daemon, err)
 		}
 		if _, err := os.Lstat(filepath.Join(nodeState, "node.db")); !errors.Is(err, os.ErrNotExist) {
@@ -159,7 +153,7 @@ func TestOpenDaemonRejectsAuthorityDriftAndNeverCreatesMissingDatabase(t *testin
 			t.Fatal(err)
 		}
 		if daemon, err := OpenDaemon(context.Background(), DaemonOptions{Workspace: fixture.workspace,
-			Install: fixture.install, Credentials: testProfileCredentials{}}); daemon != nil || !errors.Is(err, store.ErrUnsupportedSchema) {
+			Install: fixture.install}); daemon != nil || !errors.Is(err, store.ErrUnsupportedSchema) {
 			t.Fatalf("OpenDaemon(empty node.db) = (%v, %v)", daemon, err)
 		}
 		info, err := os.Stat(path)
@@ -179,12 +173,9 @@ func TestOpenDaemonComposesWakeAdapterFromExactDurableAuthority(t *testing.T) {
 	var captured WakeAdapterFactoryOptions
 	called := 0
 	daemon, err := OpenDaemon(context.Background(), DaemonOptions{
-		Workspace:   fixture.workspace,
-		Clock:       controllerTestClock{fixture.profile.UpdatedAt()},
-		Install:     fixture.install,
-		Credentials: testProfileCredentials{},
-		Control:     newTestControlTransportFactory(),
-		Attachments: &testWakeAttachmentFilesystem{},
+		Workspace: fixture.workspace,
+		Clock:     controllerTestClock{fixture.profile.UpdatedAt()},
+		Install:   fixture.install,
 		WakeAdapterFactory: WakeAdapterFactoryFunc(func(_ context.Context,
 			options WakeAdapterFactoryOptions,
 		) (agent.WakeWorkerAdapter, error) {
@@ -248,7 +239,6 @@ func TestOpenDaemonFactoryFailureAndNilAdapterReleaseStoreAuthority(t *testing.T
 			daemon, err := OpenDaemon(context.Background(), DaemonOptions{
 				Workspace:          fixture.workspace,
 				Install:            fixture.install,
-				Credentials:        testProfileCredentials{},
 				WakeAdapterFactory: test.factory,
 			})
 			if daemon != nil || !errors.Is(err, ErrDaemonAuthority) ||
@@ -260,60 +250,31 @@ func TestOpenDaemonFactoryFailureAndNilAdapterReleaseStoreAuthority(t *testing.T
 	}
 }
 
-func TestOpenManagedDaemonRejectsMissingOrTypedNilCompositionAfterConsumingPermit(t *testing.T) {
-	for _, test := range []struct {
-		name   string
-		mutate func(*DaemonOptions)
-	}{
-		{name: "missing wake factory", mutate: func(options *DaemonOptions) {
-			options.WakeAdapterFactory = nil
-		}},
-		{name: "typed nil wake factory", mutate: func(options *DaemonOptions) {
-			options.WakeAdapterFactory = (*daemonTypedNilWakeAdapterFactory)(nil)
-		}},
-		{name: "missing attachments", mutate: func(options *DaemonOptions) {
-			options.Attachments = nil
-		}},
-		{name: "typed nil attachments", mutate: func(options *DaemonOptions) {
-			options.Attachments = (*daemonTypedNilWakeAttachmentFilesystem)(nil)
-		}},
-		{name: "missing control factory", mutate: func(options *DaemonOptions) {
-			options.Control = nil
-		}},
-		{name: "typed nil control factory", mutate: func(options *DaemonOptions) {
-			options.Control = (*controllerTypedNilControlFactory)(nil)
-		}},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			fixture := newDaemonFixture(t, true)
-			parent := acquirePermitTestEnsureLock(t, fixture.nodeState)
-			defer parent.close()
-			childFD, err := unix.Dup(int(parent.file.Fd()))
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Setenv(daemonLaunchPermitEnvironment, strconv.Itoa(childFD))
-			options := DaemonOptions{Workspace: fixture.workspace, Install: fixture.install,
-				Credentials: testProfileCredentials{}, WakeAdapterFactory: permitTestWakeFactory(),
-				Attachments: &testWakeAttachmentFilesystem{},
-				Control:     newTestControlTransportFactory()}
-			test.mutate(&options)
-			daemon, err := OpenManagedDaemon(context.Background(), options)
-			if daemon != nil || !errors.Is(err, ErrDaemonAuthority) {
-				t.Fatalf("OpenManagedDaemon() = (%v, %v)", daemon, err)
-			}
-			assertClosedDescriptor(t, childFD)
-			if err := validateHeldEnsureLock(parent, fixture.nodeState); err != nil {
-				t.Fatalf("invalid composition disturbed parent permit: %v", err)
-			}
-			assertDaemonStoreReopenable(t, fixture.nodeState)
-		})
+func TestOpenManagedDaemonRejectsMissingFactoryAfterConsumingValidPermit(t *testing.T) {
+	fixture := newDaemonFixture(t, true)
+	parent := acquirePermitTestEnsureLock(t, fixture.nodeState)
+	defer parent.close()
+	childFD, err := unix.Dup(int(parent.file.Fd()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(daemonLaunchPermitEnvironment, strconv.Itoa(childFD))
+
+	daemon, err := OpenManagedDaemon(context.Background(), DaemonOptions{
+		Workspace: fixture.workspace,
+		Install:   fixture.install,
+	})
+	if daemon != nil || !errors.Is(err, ErrDaemonAuthority) {
+		t.Fatalf("OpenManagedDaemon() = (%v, %v)", daemon, err)
+	}
+	assertClosedDescriptor(t, childFD)
+	if err := validateHeldEnsureLock(parent, fixture.nodeState); err != nil {
+		t.Fatalf("missing factory disturbed parent permit: %v", err)
 	}
 }
 
 func TestManagedDaemonCloseBeforeServeReleasesPermitAndStore(t *testing.T) {
 	fixture := newDaemonFixture(t, true)
-	publishDaemonTestMeshPending(t, fixture)
 	parent := acquirePermitTestEnsureLock(t, fixture.nodeState)
 	defer parent.close()
 	childFD, err := unix.Dup(int(parent.file.Fd()))
@@ -322,12 +283,9 @@ func TestManagedDaemonCloseBeforeServeReleasesPermitAndStore(t *testing.T) {
 	}
 	t.Setenv(daemonLaunchPermitEnvironment, strconv.Itoa(childFD))
 	daemon, err := OpenManagedDaemon(context.Background(), DaemonOptions{
-		Workspace:   fixture.workspace,
-		Clock:       controllerTestClock{fixture.profile.UpdatedAt()},
-		Install:     fixture.install,
-		Credentials: testProfileCredentials{},
-		Control:     newTestControlTransportFactory(),
-		Attachments: &testWakeAttachmentFilesystem{},
+		Workspace: fixture.workspace,
+		Clock:     controllerTestClock{fixture.profile.UpdatedAt()},
+		Install:   fixture.install,
 		WakeAdapterFactory: WakeAdapterFactoryFunc(func(context.Context,
 			WakeAdapterFactoryOptions,
 		) (agent.WakeWorkerAdapter, error) {
@@ -358,11 +316,9 @@ func TestManagedDaemonCloseBeforeServeReleasesPermitAndStore(t *testing.T) {
 func TestDaemonCloseWaitsForServeAndWorkerSettlementBeforeStoreClose(t *testing.T) {
 	fixture := newDaemonFixture(t, true)
 	daemon, err := OpenDaemon(context.Background(), DaemonOptions{
-		Workspace:   fixture.workspace,
-		Clock:       controllerTestClock{fixture.profile.UpdatedAt()},
-		Install:     fixture.install,
-		Credentials: testProfileCredentials{},
-		Control:     newTestControlTransportFactory(),
+		Workspace: fixture.workspace,
+		Clock:     controllerTestClock{fixture.profile.UpdatedAt()},
+		Install:   fixture.install,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -409,11 +365,9 @@ func TestDaemonCloseWaitsForServeAndWorkerSettlementBeforeStoreClose(t *testing.
 func TestDaemonConcurrentCloseAndServeReuseFailClosed(t *testing.T) {
 	fixture := newDaemonFixture(t, true)
 	daemon, err := OpenDaemon(context.Background(), DaemonOptions{
-		Workspace:   fixture.workspace,
-		Clock:       controllerTestClock{fixture.profile.UpdatedAt()},
-		Install:     fixture.install,
-		Credentials: testProfileCredentials{},
-		Control:     newTestControlTransportFactory(),
+		Workspace: fixture.workspace,
+		Clock:     controllerTestClock{fixture.profile.UpdatedAt()},
+		Install:   fixture.install,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -461,76 +415,6 @@ func TestDaemonConcurrentCloseAndServeReuseFailClosed(t *testing.T) {
 	assertDaemonStoreReopenable(t, fixture.nodeState)
 }
 
-func TestDaemonCloseRetainsStoreWhenControlHandlersCannotBeDrained(t *testing.T) {
-	fixture := newDaemonFixture(t, true)
-	transport := &daemonUndrainedControlTransport{started: make(chan struct{})}
-	daemon, err := OpenDaemon(context.Background(), DaemonOptions{
-		Workspace: fixture.workspace, Install: fixture.install,
-		Credentials: testProfileCredentials{},
-		Control: ControlTransportFactoryFunc(func(context.Context, ControlTransportOptions,
-			ControlBindings,
-		) (PreparedControlTransport, error) {
-			return transport, nil
-		}),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	served := make(chan error, 1)
-	go func() { served <- daemon.Serve(context.Background()) }()
-	select {
-	case <-transport.started:
-	case <-time.After(time.Second):
-		t.Fatal("control transport did not start")
-	}
-	if err := daemon.Close(); !errors.Is(err, ErrControlTransportUndrained) {
-		t.Fatalf("Close() error = %v, want retained Store authority", err)
-	}
-	select {
-	case err := <-served:
-		if !errors.Is(err, ErrControlTransportUndrained) {
-			t.Fatalf("Serve() error = %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("Serve did not return its undrained authority signal")
-	}
-	if reopened, err := store.OpenExisting(context.Background(),
-		filepath.Join(fixture.nodeState, "node.db")); reopened != nil ||
-		!errors.Is(err, store.ErrWriterActive) {
-		t.Fatalf("unsafe drain released Store = (%v, %v)", reopened, err)
-	}
-	if err := daemon.store.Close(); err != nil {
-		t.Fatal(err)
-	}
-	assertDaemonStoreReopenable(t, fixture.nodeState)
-}
-
-type daemonUndrainedControlTransport struct {
-	started chan struct{}
-	once    sync.Once
-}
-
-func (transport *daemonUndrainedControlTransport) Run(ctx context.Context) error {
-	transport.once.Do(func() { close(transport.started) })
-	<-ctx.Done()
-	return nil
-}
-
-func (transport *daemonUndrainedControlTransport) Readiness(ctx context.Context) error {
-	select {
-	case <-transport.started:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-func (*daemonUndrainedControlTransport) Shutdown(context.Context) error {
-	return ErrControlTransportUndrained
-}
-
-func (*daemonUndrainedControlTransport) Close() error { return nil }
-
 var errDaemonTestFactory = errors.New("wake adapter factory failed")
 
 type daemonTestWakeAdapter struct{}
@@ -539,32 +423,6 @@ func (daemonTestWakeAdapter) Run(context.Context,
 	agent.CodexWakeRequest,
 ) (agent.CodexWakeResult, error) {
 	return agent.CodexWakeResult{}, nil
-}
-
-type daemonTypedNilWakeAdapterFactory struct{}
-
-func (*daemonTypedNilWakeAdapterFactory) NewWakeAdapter(context.Context,
-	WakeAdapterFactoryOptions,
-) (agent.WakeWorkerAdapter, error) {
-	panic("typed-nil wake adapter factory must be rejected before invocation")
-}
-
-type daemonTypedNilWakeAttachmentFilesystem struct{}
-
-func (*daemonTypedNilWakeAttachmentFilesystem) ListCandidates() ([]agent.WakeAttachmentCandidate, error) {
-	panic("typed-nil wake attachment filesystem must be rejected before invocation")
-}
-
-func (*daemonTypedNilWakeAttachmentFilesystem) RemoveReapable(model.RunID, model.Digest) (bool, error) {
-	panic("typed-nil wake attachment filesystem must be rejected before invocation")
-}
-
-func (*daemonTypedNilWakeAttachmentFilesystem) CleanupStages(time.Time) (int, error) {
-	panic("typed-nil wake attachment filesystem must be rejected before invocation")
-}
-
-func (*daemonTypedNilWakeAttachmentFilesystem) Stage(io.Reader) (agent.StagedRunAttachment, error) {
-	panic("typed-nil wake attachment filesystem must be rejected before invocation")
 }
 
 type daemonCloseWorker struct {

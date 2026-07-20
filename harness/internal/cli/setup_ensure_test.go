@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/assets"
+	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/node"
 )
 
@@ -15,7 +16,7 @@ func TestSetupEnsureOptionsReusesTheEarlyValidatedPreflight(t *testing.T) {
 	preflight := node.DaemonEnsurePreflightFunc(func(context.Context) error { return nil })
 	app := &setupApp{deps: setupDependencies{
 		newHookGate: func(string, assets.Host) (node.DaemonReadyGate, error) {
-			return node.DaemonReadyGateFunc(func(context.Context, node.DaemonHealth) error {
+			return node.DaemonReadyGateFunc(func(context.Context, localapi.HealthResponse) error {
 				return nil
 			}), nil
 		},

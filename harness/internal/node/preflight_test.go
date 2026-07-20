@@ -150,8 +150,7 @@ func TestDaemonPreflightRejectsWriterAndDurableAuthorityDrift(t *testing.T) {
 		fixture := newDaemonFixture(t, true)
 		other := model.Sum([]byte("other-assets")).String()
 		preflight, err := NewDaemonPreflight(DaemonPreflightOptions{Workspace: fixture.workspace,
-			NodeState: fixture.nodeState, AssetRevision: other, Install: fixture.install,
-			Credentials: testProfileCredentials{}})
+			NodeState: fixture.nodeState, AssetRevision: other, Install: fixture.install})
 		if preflight != nil || !errors.Is(err, ErrDaemonPreflight) {
 			t.Fatalf("NewDaemonPreflight(asset mismatch) = (%#v, %v)", preflight, err)
 		}
@@ -267,8 +266,7 @@ func newFixtureDaemonPreflight(t *testing.T, fixture daemonFixture, install Inst
 ) *DaemonPreflight {
 	t.Helper()
 	preflight, err := NewDaemonPreflight(DaemonPreflightOptions{Workspace: fixture.workspace,
-		NodeState: fixture.nodeState, AssetRevision: revision, Install: install,
-		Credentials: testProfileCredentials{}})
+		NodeState: fixture.nodeState, AssetRevision: revision, Install: install})
 	if err != nil {
 		t.Fatal(err)
 	}

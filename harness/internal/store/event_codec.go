@@ -95,16 +95,6 @@ func insertAcceptedEvent(ctx context.Context, tx *sqlTx, publication model.Signe
 type sqlTx = sql.Tx
 
 func insertPublicationEvidence(ctx context.Context, tx *sql.Tx, event model.Event) error {
-	return insertPublicationEvidenceWithDelivery(ctx, tx, event, "pending", "")
-}
-
-func insertPublicationEvidenceWithDelivery(ctx context.Context, tx *sql.Tx, event model.Event,
-	deliveryStatus, deliveryError string,
-) error {
-	if (deliveryStatus != "pending" && deliveryStatus != "blocked") ||
-		(deliveryStatus == "pending") != (deliveryError == "") {
-		return errors.New("insert publication evidence: invalid delivery disposition")
-	}
 	now := storeTime(event.AcceptedAt())
 	scope := event.Scope()
 	_, err := tx.ExecContext(ctx, `INSERT INTO gossip_publications(event_id,channel_id,origin_peer_id,
@@ -122,9 +112,8 @@ func insertPublicationEvidenceWithDelivery(ctx context.Context, tx *sql.Tx, even
 	for _, target := range event.Audience().Peers() {
 		deliveryID := deterministicDeliveryID(event.ID(), target)
 		_, err := tx.ExecContext(ctx, `INSERT INTO peer_deliveries(delivery_id,channel_id,target_peer_id,
-			event_id,status,last_error,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)`, deliveryID,
-			scope.ChannelID().String(), target.String(), event.ID().String(), deliveryStatus,
-			nullText(deliveryError), now, now)
+			event_id,status,created_at,updated_at) VALUES(?,?,?,?,'pending',?,?)`, deliveryID,
+			scope.ChannelID().String(), target.String(), event.ID().String(), now, now)
 		if err != nil {
 			return fmt.Errorf("insert Peer delivery for %s: %w", target.String(), err)
 		}

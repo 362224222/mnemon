@@ -44,15 +44,18 @@ func NewActionHandlers(policy ActionPolicy) (ActionHandlers, error) {
 		return ActionHandlers{}, errors.New("compose Agent Action handlers: Action policy is unavailable")
 	}
 	entries := make([]model.TeamworkActionPolicyEntrySpec, len(descriptors))
+	mechanics := [teamwork.TeamworkActionCount]actionMechanic{}
 	for index, descriptor := range descriptors {
-		_, mechanicOK := actionMechanicFor(descriptor.OperationKind())
-		if !mechanicOK || descriptor.Ordinal() != uint8(index) ||
+		mechanic, mechanicOK := actionMechanicFor(descriptor.OperationKind())
+		eventType, eventOK := mechanic.typedEvent()
+		if !mechanicOK || !eventOK || descriptor.Ordinal() != uint8(index) ||
 			descriptor.Receipt().Action() != descriptor.OperationKind() {
 			return ActionHandlers{}, errors.New("compose Agent Action handlers: typed mechanics are incomplete")
 		}
+		mechanics[index] = mechanic
 		entries[index] = model.TeamworkActionPolicyEntrySpec{Ordinal: descriptor.Ordinal(),
-			OperationKind: descriptor.OperationKind(), AllowedContexts: descriptor.AllowedContexts(),
-			MaxResults: descriptor.Receipt().MaxResults()}
+			OperationKind: descriptor.OperationKind(), EventType: eventType,
+			AllowedContexts: descriptor.AllowedContexts(), MaxResults: descriptor.Receipt().MaxResults()}
 	}
 	runtimePolicy, err := model.NewTeamworkActionPolicy(model.TeamworkActionPolicySpec{
 		AssetRevision: revision, Entries: entries})
@@ -62,8 +65,8 @@ func NewActionHandlers(policy ActionPolicy) (ActionHandlers, error) {
 	result := ActionHandlers{policy: runtimePolicy}
 	for index, descriptor := range descriptors {
 		entry, entryOK := runtimePolicy.Operation(descriptor.OperationKind())
-		mechanic, mechanicOK := actionMechanicFor(descriptor.OperationKind())
-		if !entryOK || !mechanicOK || entry.Ordinal() != uint8(index) ||
+		mechanic := mechanics[index]
+		if !entryOK || entry.Ordinal() != uint8(index) ||
 			!mechanic.compatible(descriptor, entry) {
 			return ActionHandlers{}, errors.New("compose Agent Action handlers: typed mechanics are incomplete")
 		}
@@ -116,23 +119,23 @@ func (handler ActionHandler) candidate(content string,
 	return handler.mechanic.candidate(content, deadline)
 }
 
-func (handler ActionHandler) currentAuthority(work model.ReviewWork) (
-	participant bool, localActor, target model.PeerID, valid bool,
-) {
-	eventType := handler.EventType()
-	home, reviewer := work.Ref().HomePeerID(), work.Participants().ReviewerPeerID()
-	if eventType.ParticipantInput() {
-		return true, reviewer, home, teamwork.ActionResultStateAllowed(eventType, work.State())
-	}
-	return false, home, reviewer, eventType.AgentAdmitted() && eventType.HomeAuthoritative()
-}
+type actionActor uint8
+
+const (
+	actionActorOffer actionActor = iota + 1
+	actionActorParticipant
+	actionActorHome
+)
 
 type actionCandidateFactory func(string, time.Duration) (event.AgentCandidate, error)
+type committedStateValidator func(model.WorkState) bool
 
 type actionMechanic struct {
 	candidate       actionCandidateFactory
+	actor           actionActor
 	contentRequired bool
 	selection       bool
+	committedState  committedStateValidator
 }
 
 func actionMechanicFor(kind model.OperationKind) (actionMechanic, bool) {
@@ -141,31 +144,43 @@ func actionMechanicFor(kind model.OperationKind) (actionMechanic, bool) {
 	case model.OperationTeamworkOffer:
 		mechanic = actionMechanic{candidate: func(content string, deadline time.Duration) (event.AgentCandidate, error) {
 			return event.NewOfferCandidate(content, deadline)
-		}, contentRequired: true, selection: true}
+		}, actor: actionActorOffer, contentRequired: true, selection: true}
 	case model.OperationTeamworkAccept:
 		mechanic = actionMechanic{candidate: func(content string, _ time.Duration) (event.AgentCandidate, error) {
 			return event.NewAcceptCandidate(content)
-		}}
+		}, actor: actionActorParticipant,
+			committedState: func(state model.WorkState) bool { return state == model.WorkOffered }}
 	case model.OperationTeamworkDecline:
 		mechanic = actionMechanic{candidate: func(content string, _ time.Duration) (event.AgentCandidate, error) {
 			return event.NewDeclineCandidate(content)
-		}, contentRequired: true}
+		}, actor: actionActorParticipant,
+			contentRequired: true,
+			committedState:  func(state model.WorkState) bool { return state == model.WorkOffered }}
 	case model.OperationTeamworkDeliver:
 		mechanic = actionMechanic{candidate: func(content string, _ time.Duration) (event.AgentCandidate, error) {
 			return event.NewDeliverCandidate(content)
-		}, contentRequired: true}
+		}, actor: actionActorParticipant,
+			contentRequired: true,
+			committedState: func(state model.WorkState) bool {
+				return state == model.WorkActive || state == model.WorkRework
+			}}
 	case model.OperationTeamworkRework:
 		mechanic = actionMechanic{candidate: func(content string, _ time.Duration) (event.AgentCandidate, error) {
 			return event.NewReworkCandidate(content)
-		}, contentRequired: true}
+		}, actor: actionActorHome,
+			contentRequired: true,
+			committedState:  func(state model.WorkState) bool { return state == model.WorkRework }}
 	case model.OperationTeamworkClose:
 		mechanic = actionMechanic{candidate: func(content string, _ time.Duration) (event.AgentCandidate, error) {
 			return event.NewCloseCandidate(content)
-		}}
+		}, actor: actionActorHome,
+			committedState: func(state model.WorkState) bool { return state == model.WorkClosed }}
 	case model.OperationTeamworkCancel:
 		mechanic = actionMechanic{candidate: func(content string, _ time.Duration) (event.AgentCandidate, error) {
 			return event.NewCancelCandidate(content)
-		}, contentRequired: true}
+		}, actor: actionActorHome,
+			contentRequired: true,
+			committedState:  func(state model.WorkState) bool { return state == model.WorkCancelled }}
 	default:
 		return actionMechanic{}, false
 	}
@@ -186,10 +201,8 @@ func (mechanic actionMechanic) typedEvent() (model.EventType, bool) {
 func (mechanic actionMechanic) compatible(descriptor teamwork.ActionDescriptor,
 	entry model.TeamworkActionPolicyEntry,
 ) bool {
-	eventType, eventOK := mechanic.typedEvent()
-	return eventOK && eventType == entry.EventType() &&
+	return entry.EventType().AgentAdmitted() &&
 		mechanic.executionShapeCompatible(descriptor, entry) &&
-		actionContextsCompatible(entry) &&
 		artifactShapeCompatible(descriptor.Artifacts(), entry.EventType())
 }
 
@@ -203,22 +216,14 @@ func (mechanic actionMechanic) executionShapeCompatible(descriptor teamwork.Acti
 	if mechanic.selection {
 		wantHandling = teamwork.ReceiptHandlingContextDependent
 	}
+	stateMechanicReady := mechanic.actor == actionActorOffer || mechanic.committedState != nil
 	multiResultReady := entry.MaxResults() == 1 || mechanic.selection
 	contextlessReady := !entry.AllowsContext(model.TeamworkActionContextNone) || mechanic.selection
-	return multiResultReady && contextlessReady &&
+	return mechanic.actor != 0 && stateMechanicReady && multiResultReady && contextlessReady &&
 		entry.OperationKind() == descriptor.OperationKind() &&
 		(!mechanic.contentRequired || descriptor.Content().Required()) &&
 		hasDeadline == mechanic.selection && hasSelectors == mechanic.selection &&
 		receipt.Handling() == wantHandling && receipt.MaxResults() == entry.MaxResults()
-}
-
-func actionContextsCompatible(entry model.TeamworkActionPolicyEntry) bool {
-	for _, context := range entry.AllowedContexts() {
-		if !teamwork.ActionContextSupportsEvent(context, entry.EventType()) {
-			return false
-		}
-	}
-	return true
 }
 
 func artifactShapeCompatible(policy teamwork.ActionArtifactPolicy, eventType model.EventType) bool {

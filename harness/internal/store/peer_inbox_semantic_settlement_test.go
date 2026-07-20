@@ -596,16 +596,16 @@ func newPeerInboxSemanticSettlementCommitFixture(t *testing.T,
 
 	reserved, err := settlement.store.ReserveOutboundChannelBaseline(context.Background(),
 		ReserveOutboundChannelBaselineSpec{ChannelID: settlement.peer.channel.Channel().ID(),
-			TargetPeerID:       settlement.peer.remote.Identity().PeerID(),
-			ExpectedRosterHead: settlement.peer.channel.Roster().Head(), At: settlement.source.AcceptedAt().Add(time.Second)})
+			TargetPeerID: settlement.peer.remote.Identity().PeerID(),
+			At:           settlement.source.AcceptedAt().Add(time.Second)})
 	if err != nil {
 		t.Fatalf("reserve outbound baseline: %v", err)
 	}
 	if _, err := settlement.store.ConfirmOutboundChannelBaseline(context.Background(),
 		ConfirmOutboundChannelBaselineSpec{
 			AuthenticatedPeerID: settlement.peer.remote.Identity().PeerID(),
-			ExpectedRosterHead:  settlement.peer.channel.Roster().Head(), Ack: ChannelDataBaselineAck(reserved.Baseline),
-			At: settlement.source.AcceptedAt().Add(time.Second + time.Nanosecond),
+			Ack:                 ChannelDataBaselineAck(reserved.Baseline),
+			At:                  settlement.source.AcceptedAt().Add(time.Second + time.Nanosecond),
 		}); err != nil {
 		t.Fatalf("confirm outbound baseline: %v", err)
 	}
@@ -937,7 +937,7 @@ func installPeerInboxSemanticSettlementCurrent(t *testing.T,
 	}
 	receipt, err := model.NewCurrentReadReceipt(model.CurrentReadReceiptSpec{RunID: claim.Run.ID(),
 		ProfileID: claim.Run.ProfileID(), HandlingID: claim.Handling.ID(),
-		HandlingAttempt: claim.Handling.Attempts(), Projection: projection, ActionWorkUpdatedBy: fixture.work.UpdatedBy(), ActionWorkUpdatedAt: fixture.work.UpdatedAt(), ReadAt: readAt})
+		HandlingAttempt: claim.Handling.Attempts(), Projection: projection, ReadAt: readAt})
 	if err != nil {
 		t.Fatal(err)
 	}

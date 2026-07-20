@@ -275,14 +275,6 @@ func TestOpenExistingNeverInitializesOrRepairsNodeDatabase(t *testing.T) {
 		if err := os.Chmod(path, privateFileMode); err != nil {
 			t.Fatal(err)
 		}
-		guard := path + ".writer.lock"
-		if err := os.WriteFile(guard, nil, privateFileMode); err != nil {
-			t.Fatal(err)
-		}
-		guardBefore, err := os.Lstat(guard)
-		if err != nil {
-			t.Fatal(err)
-		}
 		before, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
@@ -296,11 +288,6 @@ func TestOpenExistingNeverInitializesOrRepairsNodeDatabase(t *testing.T) {
 		after, err := os.ReadFile(path)
 		if err != nil || !bytes.Equal(after, before) {
 			t.Fatalf("unknown node.db was rewritten: equal=%t error=%v", bytes.Equal(after, before), err)
-		}
-		guardAfter, err := os.Lstat(guard)
-		if err != nil || !os.SameFile(guardBefore, guardAfter) || guardAfter.Mode().Perm() != privateFileMode {
-			t.Fatalf("unknown schema writer guard changed: before=%v after=%v error=%v",
-				guardBefore, guardAfter, err)
 		}
 	})
 
@@ -357,30 +344,6 @@ func TestOpenExistingOwnsAndReleasesTheWriterGuard(t *testing.T) {
 	}
 	if err := reopened.Close(); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestOpenExistingRejectsAMissingWriterGuardWithoutCreatingIt(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "node", "node.db")
-	initialized, err := Open(context.Background(), path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := initialized.Close(); err != nil {
-		t.Fatal(err)
-	}
-	guard := path + ".writer.lock"
-	if err := os.Remove(guard); err != nil {
-		t.Fatal(err)
-	}
-	if opened, err := OpenExisting(context.Background(), path); err == nil || opened != nil {
-		if opened != nil {
-			_ = opened.Close()
-		}
-		t.Fatalf("OpenExisting() = (%v, %v)", opened, err)
-	}
-	if _, err := os.Lstat(guard); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("OpenExisting recreated missing writer guard: %v", err)
 	}
 }
 

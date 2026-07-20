@@ -158,17 +158,6 @@ func TestCommitLocalAcceptanceTeamBatchIsAllOrNothing(t *testing.T) {
 			t.Fatalf("operation after rollback = (%q, %v)", status, err)
 		}
 	})
-	t.Run("asset result bound", func(t *testing.T) {
-		fixture := newAcceptanceFixtureWithPolicy(t, 2, acceptanceActionPolicy(t, 1))
-		operation, authority := fixture.reserveOffer(t, "team-asset-bound", nil)
-		spec := fixture.offer(t, authority, "team-asset-bound", fixture.reviewers, nil, nil)
-		if _, err := fixture.store.CommitLocalAcceptance(context.Background(), spec,
-			fixture.now.Add(time.Second)); !errors.Is(err, ErrOperationMismatch) {
-			t.Fatalf("asset-bounded acceptance error = %v", err)
-		}
-		assertAcceptanceCounts(t, fixture.store, []int{0, 0, 0, 0, 0, 0, 0, 0})
-		assertOperationStatus(t, fixture.store, operation.ID(), model.OperationStarted)
-	})
 }
 
 type acceptanceFixture struct {
@@ -176,7 +165,6 @@ type acceptanceFixture struct {
 	path       string
 	node       model.Node
 	profile    model.Profile
-	policy     model.TeamworkActionPolicy
 	channel    model.ChannelID
 	reviewers  []model.PeerID
 	privateKey ed25519.PrivateKey
@@ -185,20 +173,12 @@ type acceptanceFixture struct {
 
 func newAcceptanceFixture(t *testing.T, reviewerCount int) *acceptanceFixture {
 	t.Helper()
-	return newAcceptanceFixtureWithPolicy(t, reviewerCount,
-		acceptanceActionPolicy(t, model.MaxChildWorks))
-}
-
-func newAcceptanceFixtureWithPolicy(t *testing.T, reviewerCount int,
-	policy model.TeamworkActionPolicy,
-) *acceptanceFixture {
-	t.Helper()
 	path := filepath.Join(t.TempDir(), "node", "node.db")
 	st, err := Open(context.Background(), path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	fixture := &acceptanceFixture{store: st, path: path, policy: policy,
+	fixture := &acceptanceFixture{store: st, path: path,
 		now: time.Date(2026, 7, 16, 13, 0, 0, 0, time.UTC)}
 	t.Cleanup(func() {
 		if fixture.store != nil {
@@ -208,17 +188,6 @@ func newAcceptanceFixtureWithPolicy(t *testing.T, reviewerCount int,
 	base := fixture.now.Add(-time.Hour)
 	signed := testkit.NewSignedChannelAt(t, "accept-"+t.Name(), base.Add(time.Minute))
 	node, profile := signedBootstrapValues(t, signed.Owner(), "principal-accept", "/workspace/accept", base)
-	nodeSpec, profileSpec := node.Spec(), profile.Spec()
-	nodeSpec.ActiveAssetRevision = policy.AssetRevision().String()
-	profileSpec.ActiveAssetRevision = policy.AssetRevision().String()
-	node, err = model.NewNode(nodeSpec)
-	if err != nil {
-		t.Fatal(err)
-	}
-	profile, err = model.NewProfile(profileSpec)
-	if err != nil {
-		t.Fatal(err)
-	}
 	fixture.node, fixture.profile = activateTestNode(t, st, node, profile)
 	fixture.channel = signed.Channel().ID()
 	fixture.privateKey = ed25519Private(signed.Owner())
@@ -239,70 +208,6 @@ func newAcceptanceFixtureWithPolicy(t *testing.T, reviewerCount int,
 	}
 	installAcceptanceChannel(t, fixture, signed)
 	return fixture
-}
-
-func acceptanceActionPolicy(t testing.TB, offerMax uint8) model.TeamworkActionPolicy {
-	t.Helper()
-	return acceptanceActionPolicyForOperations(t, offerMax, acceptanceActionOperations(), model.Digest{})
-}
-
-func acceptanceActionOperations() []model.OperationKind {
-	return []model.OperationKind{model.OperationTeamworkOffer, model.OperationTeamworkAccept,
-		model.OperationTeamworkDecline, model.OperationTeamworkDeliver, model.OperationTeamworkRework,
-		model.OperationTeamworkClose, model.OperationTeamworkCancel}
-}
-
-func acceptanceActionPolicyForOperations(t testing.TB, offerMax uint8,
-	operations []model.OperationKind, revision model.Digest,
-) model.TeamworkActionPolicy {
-	t.Helper()
-	entries := make([]model.TeamworkActionPolicyEntrySpec, len(operations))
-	for index, operation := range operations {
-		maxResults := uint8(1)
-		var contexts []model.TeamworkActionContext
-		switch operation {
-		case model.OperationTeamworkOffer:
-			contexts = []model.TeamworkActionContext{model.TeamworkActionContextNone,
-				model.TeamworkActionContextReviewerActive, model.TeamworkActionContextReviewerRework}
-		case model.OperationTeamworkAccept, model.OperationTeamworkDecline:
-			contexts = []model.TeamworkActionContext{model.TeamworkActionContextReviewerOffered}
-		case model.OperationTeamworkDeliver:
-			contexts = []model.TeamworkActionContext{model.TeamworkActionContextReviewerActive,
-				model.TeamworkActionContextReviewerRework, model.TeamworkActionContextParentResume}
-		case model.OperationTeamworkRework:
-			contexts = []model.TeamworkActionContext{model.TeamworkActionContextHomeDeliveredIteration1}
-		case model.OperationTeamworkClose:
-			contexts = []model.TeamworkActionContext{model.TeamworkActionContextHomeDelivered}
-		case model.OperationTeamworkCancel:
-			contexts = []model.TeamworkActionContext{model.TeamworkActionContextHomeNonterminal}
-		}
-		if operation == model.OperationTeamworkOffer {
-			maxResults = offerMax
-		}
-		entries[index] = model.TeamworkActionPolicyEntrySpec{Ordinal: uint8(index),
-			OperationKind: operation, AllowedContexts: contexts, MaxResults: maxResults}
-	}
-	if revision.IsZero() {
-		revision = model.Sum([]byte(fmt.Sprintf("acceptance-action-policy-%d-%v", offerMax, operations)))
-	}
-	policy, err := model.NewTeamworkActionPolicy(model.TeamworkActionPolicySpec{
-		AssetRevision: revision,
-		Entries:       entries})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return policy
-}
-
-func mustLocalOperationAuthority(t testing.TB, operation model.Operation,
-	policy model.TeamworkActionPolicy,
-) *LocalOperationAuthority {
-	t.Helper()
-	authority, err := NewLocalOperationAuthority(operation, policy)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return &authority
 }
 
 func installAcceptanceChannel(t *testing.T, fixture *acceptanceFixture, signed *testkit.SignedChannel) {
@@ -355,8 +260,7 @@ func (fixture *acceptanceFixture) reserveOffer(t *testing.T, suffix string,
 	if _, err := fixture.store.ReserveOperation(context.Background(), operation, fixture.now.Add(-30*time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	authority := mustLocalOperationAuthority(t, operation, fixture.policy)
-	return operation, authority
+	return operation, &LocalOperationAuthority{operation.ID(), operation.Kind(), operation.RequestDigest(), operation.LeaseOwner()}
 }
 
 func (fixture *acceptanceFixture) offer(t *testing.T, authority *LocalOperationAuthority,

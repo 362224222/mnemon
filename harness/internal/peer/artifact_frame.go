@@ -93,67 +93,36 @@ const (
 	ArtifactFrameProtocolError ArtifactFrameType = "protocol_error"
 )
 
+func (frameType ArtifactFrameType) Valid() bool {
+	switch frameType {
+	case ArtifactFrameGetManifest, ArtifactFrameManifest, ArtifactFrameGetBlock,
+		ArtifactFrameBlock, ArtifactFrameAck, ArtifactFrameProtocolError:
+		return true
+	default:
+		return false
+	}
+}
+
+func (frameType ArtifactFrameType) IsRequest() bool {
+	return frameType == ArtifactFrameGetManifest || frameType == ArtifactFrameGetBlock
+}
+
+func (frameType ArtifactFrameType) IsResponse() bool {
+	switch frameType {
+	case ArtifactFrameManifest, ArtifactFrameBlock, ArtifactFrameAck,
+		ArtifactFrameProtocolError:
+		return true
+	default:
+		return false
+	}
+}
+
 // ArtifactFramePayload is sealed to content-addressed manifest/block reads and
 // their closed responses. It cannot carry a filesystem path, generic command,
 // remote write, or execution request.
 type ArtifactFramePayload interface {
 	CanonicalJSON() ArtifactJSON
-	IsZero() bool
-	artifactFramePayload()
-}
-
-type artifactFrameCodec interface {
-	accepts(ArtifactFramePayload) bool
-	parse([]byte) (ArtifactFramePayload, error)
-}
-
-type typedArtifactFrameCodec[T ArtifactFramePayload] func([]byte) (T, error)
-
-func (typedArtifactFrameCodec[T]) accepts(payload ArtifactFramePayload) bool {
-	_, ok := payload.(T)
-	return ok
-}
-func (codec typedArtifactFrameCodec[T]) parse(raw []byte) (ArtifactFramePayload, error) {
-	return codec(raw)
-}
-
-type artifactFrameDescriptor struct {
-	frameType ArtifactFrameType
-	maximum   func() int
-	request   bool
-	codec     artifactFrameCodec
-}
-
-// artifactFrameDescriptors is the immutable ordered Artifact frame authority.
-var artifactFrameDescriptors = [...]artifactFrameDescriptor{
-	{ArtifactFrameGetManifest, artifactSmallFrameMaximum, true, typedArtifactFrameCodec[GetManifest](parseGetManifest)},
-	{ArtifactFrameManifest, maxArtifactFrameBytes, false, typedArtifactFrameCodec[Manifest](parseManifest)},
-	{ArtifactFrameGetBlock, artifactSmallFrameMaximum, true, typedArtifactFrameCodec[GetBlock](parseGetBlock)},
-	{ArtifactFrameBlock, maxArtifactFrameBytes, false, typedArtifactFrameCodec[Block](parseBlock)},
-	{ArtifactFrameAck, artifactSmallFrameMaximum, false, typedArtifactFrameCodec[ArtifactAck](parseArtifactAck)},
-	{ArtifactFrameProtocolError, artifactSmallFrameMaximum, false, typedArtifactFrameCodec[ArtifactProtocolError](parseArtifactProtocolError)},
-}
-
-func artifactFrameDescriptorFor(frameType ArtifactFrameType) (artifactFrameDescriptor, bool) {
-	for _, descriptor := range artifactFrameDescriptors {
-		if descriptor.frameType == frameType {
-			return descriptor, true
-		}
-	}
-	return artifactFrameDescriptor{}, false
-}
-
-func (frameType ArtifactFrameType) Valid() bool {
-	_, valid := artifactFrameDescriptorFor(frameType)
-	return valid
-}
-func (frameType ArtifactFrameType) IsRequest() bool {
-	descriptor, valid := artifactFrameDescriptorFor(frameType)
-	return valid && descriptor.request
-}
-func (frameType ArtifactFrameType) IsResponse() bool {
-	descriptor, valid := artifactFrameDescriptorFor(frameType)
-	return valid && !descriptor.request
+	artifactFrameType() ArtifactFrameType
 }
 
 type ArtifactFrame struct {
@@ -185,20 +154,45 @@ func NewArtifactFrame(payload ArtifactFramePayload) (ArtifactFrame, error) {
 }
 
 func canonicalArtifactPayload(payload ArtifactFramePayload) (ArtifactFrameType, ArtifactJSON, error) {
-	for _, descriptor := range artifactFrameDescriptors {
-		if !descriptor.codec.accepts(payload) {
-			continue
+	var frameType ArtifactFrameType
+	switch value := payload.(type) {
+	case GetManifest:
+		frameType = ArtifactFrameGetManifest
+		if value.IsZero() {
+			return "", ArtifactJSON{}, artifactFrameError("zero GetManifest payload", nil)
 		}
-		if payload.IsZero() {
-			return "", ArtifactJSON{}, artifactFrameError("zero typed Artifact payload", nil)
+	case Manifest:
+		frameType = ArtifactFrameManifest
+		if value.IsZero() {
+			return "", ArtifactJSON{}, artifactFrameError("zero Manifest payload", nil)
 		}
-		canonical := payload.CanonicalJSON()
-		if canonical.IsZero() {
-			return "", ArtifactJSON{}, artifactFrameError("canonical payload bytes are required", nil)
+	case GetBlock:
+		frameType = ArtifactFrameGetBlock
+		if value.IsZero() {
+			return "", ArtifactJSON{}, artifactFrameError("zero GetBlock payload", nil)
 		}
-		return descriptor.frameType, canonical, nil
+	case Block:
+		frameType = ArtifactFrameBlock
+		if value.IsZero() {
+			return "", ArtifactJSON{}, artifactFrameError("zero Block payload", nil)
+		}
+	case ArtifactAck:
+		frameType = ArtifactFrameAck
+		if value.IsZero() {
+			return "", ArtifactJSON{}, artifactFrameError("zero Ack payload", nil)
+		}
+	case ArtifactProtocolError:
+		frameType = ArtifactFrameProtocolError
+		if value.IsZero() {
+			return "", ArtifactJSON{}, artifactFrameError("zero ProtocolError payload", nil)
+		}
+	default:
+		return "", ArtifactJSON{}, artifactFrameError("unknown Artifact payload implementation", nil)
 	}
-	return "", ArtifactJSON{}, artifactFrameError("unknown Artifact payload implementation", nil)
+	if payload.artifactFrameType() != frameType || payload.CanonicalJSON().IsZero() {
+		return "", ArtifactJSON{}, artifactFrameError("payload type or canonical bytes are inconsistent", nil)
+	}
+	return frameType, payload.CanonicalJSON(), nil
 }
 
 // ParseArtifactFrame admits exact canonical JSON only and reconstructs the
@@ -236,11 +230,22 @@ func ParseArtifactFrame(raw []byte) (ArtifactFrame, error) {
 }
 
 func parseArtifactPayload(frameType ArtifactFrameType, raw []byte) (ArtifactFramePayload, error) {
-	descriptor, valid := artifactFrameDescriptorFor(frameType)
-	if !valid {
+	switch frameType {
+	case ArtifactFrameGetManifest:
+		return parseGetManifest(raw)
+	case ArtifactFrameManifest:
+		return parseManifest(raw)
+	case ArtifactFrameGetBlock:
+		return parseGetBlock(raw)
+	case ArtifactFrameBlock:
+		return parseBlock(raw)
+	case ArtifactFrameAck:
+		return parseArtifactAck(raw)
+	case ArtifactFrameProtocolError:
+		return parseArtifactProtocolError(raw)
+	default:
 		return nil, artifactFrameError("unknown frame type", nil)
 	}
-	return descriptor.codec.parse(raw)
 }
 
 // ReadArtifactFrame reads one uint32 big-endian length-prefixed frame and
@@ -363,14 +368,16 @@ func maxArtifactFrameBytes() int {
 }
 
 func artifactFrameMaximum(frameType ArtifactFrameType) int {
-	descriptor, valid := artifactFrameDescriptorFor(frameType)
-	if !valid {
+	switch frameType {
+	case ArtifactFrameGetManifest, ArtifactFrameGetBlock, ArtifactFrameAck,
+		ArtifactFrameProtocolError:
+		return artifactSmallFrameBytes
+	case ArtifactFrameManifest, ArtifactFrameBlock:
+		return maxArtifactFrameBytes()
+	default:
 		return 0
 	}
-	return descriptor.maximum()
 }
-
-func artifactSmallFrameMaximum() int { return artifactSmallFrameBytes }
 
 func artifactManifestMaximum() int {
 	if HermeticLimits().ArtifactManifestBytes < artifactManifestBytes {
@@ -455,7 +462,7 @@ func (payload GetManifest) CanonicalJSON() ArtifactJSON { return payload.canonic
 func (payload GetManifest) IsZero() bool {
 	return payload.channelID.IsZero() || payload.rootDigest.IsZero() || payload.canonical.IsZero()
 }
-func (GetManifest) artifactFramePayload() {}
+func (GetManifest) artifactFrameType() ArtifactFrameType { return ArtifactFrameGetManifest }
 
 type ManifestSpec struct {
 	RootDigest model.Digest
@@ -552,7 +559,7 @@ func (payload Manifest) IsZero() bool {
 	return payload.rootDigest.IsZero() || payload.manifestDigest.IsZero() ||
 		payload.manifest.IsZero() || payload.canonical.IsZero()
 }
-func (Manifest) artifactFramePayload() {}
+func (Manifest) artifactFrameType() ArtifactFrameType { return ArtifactFrameManifest }
 
 // GetBlock binds the block lookup to both its Channel authority scope and the
 // root whose manifest must make that block reachable.
@@ -620,7 +627,7 @@ func (payload GetBlock) IsZero() bool {
 	return payload.channelID.IsZero() || payload.rootDigest.IsZero() ||
 		payload.blockDigest.IsZero() || payload.canonical.IsZero()
 }
-func (GetBlock) artifactFramePayload() {}
+func (GetBlock) artifactFrameType() ArtifactFrameType { return ArtifactFrameGetBlock }
 
 type BlockSpec struct {
 	BlockDigest model.Digest
@@ -684,7 +691,7 @@ func (payload Block) CanonicalJSON() ArtifactJSON { return payload.canonical }
 func (payload Block) IsZero() bool {
 	return payload.blockDigest.IsZero() || len(payload.blockBytes) == 0 || payload.canonical.IsZero()
 }
-func (Block) artifactFramePayload() {}
+func (Block) artifactFrameType() ArtifactFrameType { return ArtifactFrameBlock }
 
 type ArtifactAck struct {
 	canonical ArtifactJSON
@@ -715,9 +722,9 @@ func parseArtifactAck(raw []byte) (ArtifactAck, error) {
 	return payload, nil
 }
 
-func (payload ArtifactAck) CanonicalJSON() ArtifactJSON { return payload.canonical }
-func (payload ArtifactAck) IsZero() bool                { return payload.canonical.IsZero() }
-func (ArtifactAck) artifactFramePayload()               {}
+func (payload ArtifactAck) CanonicalJSON() ArtifactJSON  { return payload.canonical }
+func (payload ArtifactAck) IsZero() bool                 { return payload.canonical.IsZero() }
+func (ArtifactAck) artifactFrameType() ArtifactFrameType { return ArtifactFrameAck }
 
 type ArtifactProtocolErrorCode string
 
@@ -805,7 +812,9 @@ func (payload ArtifactProtocolError) CanonicalJSON() ArtifactJSON     { return p
 func (payload ArtifactProtocolError) IsZero() bool {
 	return !payload.code.Valid() || payload.canonical.IsZero()
 }
-func (ArtifactProtocolError) artifactFramePayload() {}
+func (ArtifactProtocolError) artifactFrameType() ArtifactFrameType {
+	return ArtifactFrameProtocolError
+}
 
 func decodeExactArtifactJSON(raw []byte, destination any, maximum int) error {
 	if _, err := newArtifactJSON(raw, maximum, true); err != nil {

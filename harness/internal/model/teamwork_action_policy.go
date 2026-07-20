@@ -1,5 +1,7 @@
 package model
 
+import "strings"
+
 const (
 	TeamworkActionCount       = 7
 	MaxTeamworkActionContexts = 8
@@ -21,6 +23,49 @@ const (
 	TeamworkActionContextHomeNonterminal         TeamworkActionContext = "home_nonterminal"
 )
 
+type teamworkActionMechanic struct {
+	operation  OperationKind
+	eventType  EventType
+	contexts   [MaxTeamworkActionContexts]TeamworkActionContext
+	contextLen uint8
+	maxResults uint8
+}
+
+func teamworkActionMechanics() [TeamworkActionCount]teamworkActionMechanic {
+	return [TeamworkActionCount]teamworkActionMechanic{
+		{operation: OperationTeamworkOffer, eventType: EventReviewOffered,
+			contexts: [MaxTeamworkActionContexts]TeamworkActionContext{
+				TeamworkActionContextNone, TeamworkActionContextReviewerActive,
+				TeamworkActionContextReviewerRework,
+			}, contextLen: 3, maxResults: MaxChildWorks},
+		{operation: OperationTeamworkAccept, eventType: EventReviewAcceptRequested,
+			contexts: [MaxTeamworkActionContexts]TeamworkActionContext{
+				TeamworkActionContextReviewerOffered,
+			}, contextLen: 1, maxResults: 1},
+		{operation: OperationTeamworkDecline, eventType: EventReviewDeclineRequested,
+			contexts: [MaxTeamworkActionContexts]TeamworkActionContext{
+				TeamworkActionContextReviewerOffered,
+			}, contextLen: 1, maxResults: 1},
+		{operation: OperationTeamworkDeliver, eventType: EventReviewDeliveryReady,
+			contexts: [MaxTeamworkActionContexts]TeamworkActionContext{
+				TeamworkActionContextReviewerActive, TeamworkActionContextReviewerRework,
+				TeamworkActionContextParentResume,
+			}, contextLen: 3, maxResults: 1},
+		{operation: OperationTeamworkRework, eventType: EventReviewReworkRequested,
+			contexts: [MaxTeamworkActionContexts]TeamworkActionContext{
+				TeamworkActionContextHomeDeliveredIteration1,
+			}, contextLen: 1, maxResults: 1},
+		{operation: OperationTeamworkClose, eventType: EventReviewClosed,
+			contexts: [MaxTeamworkActionContexts]TeamworkActionContext{
+				TeamworkActionContextHomeDelivered,
+			}, contextLen: 1, maxResults: 1},
+		{operation: OperationTeamworkCancel, eventType: EventReviewCancelled,
+			contexts: [MaxTeamworkActionContexts]TeamworkActionContext{
+				TeamworkActionContextHomeNonterminal,
+			}, contextLen: 1, maxResults: 1},
+	}
+}
+
 func (context TeamworkActionContext) Valid() bool {
 	switch context {
 	case TeamworkActionContextNone, TeamworkActionContextReviewerOffered,
@@ -34,12 +79,12 @@ func (context TeamworkActionContext) Valid() bool {
 }
 
 // TeamworkActionPolicyEntrySpec is projected from one canonical asset
-// descriptor. Event identity is deliberately absent: the typed Event binding
-// derives it from OperationKind while contexts and result bounds remain owned
-// by the asset.
+// descriptor joined with the Agent-owned typed Event mechanic. The model
+// validates that binding without deriving a second mutable transport schema.
 type TeamworkActionPolicyEntrySpec struct {
 	Ordinal         uint8
 	OperationKind   OperationKind
+	EventType       EventType
 	AllowedContexts []TeamworkActionContext
 	MaxResults      uint8
 }
@@ -87,7 +132,8 @@ type TeamworkActionPolicy struct {
 }
 
 func NewTeamworkActionPolicy(spec TeamworkActionPolicySpec) (TeamworkActionPolicy, error) {
-	if spec.AssetRevision.IsZero() || len(spec.Entries) != TeamworkActionCount {
+	if spec.AssetRevision.IsZero() || len(spec.Entries) != TeamworkActionCount ||
+		!validTeamworkActionMechanics() {
 		return TeamworkActionPolicy{}, invalid("Teamwork Action policy",
 			"asset revision and complete Action entries are required")
 	}
@@ -99,6 +145,10 @@ func NewTeamworkActionPolicy(spec TeamworkActionPolicySpec) (TeamworkActionPolic
 		}
 		result.entries[index] = entry
 	}
+	if !validTeamworkActionPolicyShape(result.entries) {
+		return TeamworkActionPolicy{}, invalid("Teamwork Action policy",
+			"contextless initiation and batch result shape must have one shared owner")
+	}
 	result.ready = true
 	return result, nil
 }
@@ -106,22 +156,25 @@ func NewTeamworkActionPolicy(spec TeamworkActionPolicySpec) (TeamworkActionPolic
 func newTeamworkActionPolicyEntry(spec TeamworkActionPolicyEntrySpec, ordinal uint8,
 	prior []TeamworkActionPolicyEntry,
 ) (TeamworkActionPolicyEntry, error) {
-	eventType, bindingOK := teamworkActionEventFor(spec.OperationKind)
-	if spec.Ordinal != ordinal || !bindingOK || len(spec.AllowedContexts) == 0 ||
-		len(spec.AllowedContexts) > MaxTeamworkActionContexts ||
-		spec.MaxResults == 0 || spec.MaxResults > MaxChildWorks ||
-		(eventType != EventReviewOffered && spec.MaxResults != 1) {
+	mechanic, mechanicOK := teamworkActionMechanicFor(spec.OperationKind)
+	if spec.Ordinal != ordinal || !mechanicOK || spec.EventType != mechanic.eventType ||
+		len(spec.AllowedContexts) == 0 || len(spec.AllowedContexts) > MaxTeamworkActionContexts ||
+		spec.MaxResults == 0 || spec.MaxResults > mechanic.maxResults {
 		return TeamworkActionPolicyEntry{}, invalid("Teamwork Action policy entry",
-			"identity, context or result shape is invalid")
+			"identity, Event, context or result shape is invalid")
 	}
 	for _, existing := range prior {
 		if existing.operation == spec.OperationKind {
 			return TeamworkActionPolicyEntry{}, invalid("Teamwork Action policy entry",
 				"operation identities must be unique")
 		}
+		if existing.eventType == spec.EventType {
+			return TeamworkActionPolicyEntry{}, invalid("Teamwork Action policy entry",
+				"Event identities must be unique")
+		}
 	}
 	entry := TeamworkActionPolicyEntry{ordinal: spec.Ordinal, operation: spec.OperationKind,
-		eventType: eventType, contextLen: uint8(len(spec.AllowedContexts)),
+		eventType: spec.EventType, contextLen: uint8(len(spec.AllowedContexts)),
 		maxResults: spec.MaxResults}
 	for index, context := range spec.AllowedContexts {
 		if !context.Valid() {
@@ -139,8 +192,102 @@ func newTeamworkActionPolicyEntry(spec TeamworkActionPolicyEntrySpec, ordinal ui
 	return entry, nil
 }
 
-func teamworkActionEventFor(operation OperationKind) (EventType, bool) {
-	return EventTypeForAgentOperation(operation)
+func teamworkActionMechanicFor(operation OperationKind) (teamworkActionMechanic, bool) {
+	if !operation.Valid() {
+		return teamworkActionMechanic{}, false
+	}
+	for _, mechanic := range teamworkActionMechanics() {
+		if mechanic.operation == operation {
+			return mechanic, true
+		}
+	}
+	return teamworkActionMechanic{}, false
+}
+
+func validTeamworkActionMechanics() bool {
+	operations := make(map[OperationKind]struct{}, TeamworkActionCount)
+	events := make(map[EventType]struct{}, TeamworkActionCount)
+	batchOperation, contextlessOperation := OperationKind(""), OperationKind("")
+	for _, mechanic := range teamworkActionMechanics() {
+		if !validTeamworkActionMechanic(mechanic) {
+			return false
+		}
+		if _, duplicate := operations[mechanic.operation]; duplicate {
+			return false
+		}
+		if _, duplicate := events[mechanic.eventType]; duplicate {
+			return false
+		}
+		operations[mechanic.operation], events[mechanic.eventType] = struct{}{}, struct{}{}
+		if mechanic.maxResults == MaxChildWorks {
+			if batchOperation != "" {
+				return false
+			}
+			batchOperation = mechanic.operation
+		}
+		if mechanicAllowsContext(mechanic, TeamworkActionContextNone) {
+			if contextlessOperation != "" {
+				return false
+			}
+			contextlessOperation = mechanic.operation
+		}
+	}
+	return len(operations) == TeamworkActionCount && len(events) == TeamworkActionCount &&
+		batchOperation == OperationTeamworkOffer && contextlessOperation == OperationTeamworkOffer
+}
+
+func validTeamworkActionMechanic(mechanic teamworkActionMechanic) bool {
+	if !mechanic.operation.Valid() || !strings.HasPrefix(string(mechanic.operation), "teamwork.") ||
+		!mechanic.eventType.AgentAdmitted() || mechanic.contextLen == 0 ||
+		mechanic.contextLen > MaxTeamworkActionContexts ||
+		(mechanic.maxResults != 1 && mechanic.maxResults != MaxChildWorks) {
+		return false
+	}
+	for index, context := range mechanic.contexts[:mechanic.contextLen] {
+		if !context.Valid() {
+			return false
+		}
+		for prior := 0; prior < index; prior++ {
+			if mechanic.contexts[prior] == context {
+				return false
+			}
+		}
+	}
+	for _, context := range mechanic.contexts[mechanic.contextLen:] {
+		if context != "" {
+			return false
+		}
+	}
+	return true
+}
+
+func mechanicAllowsContext(mechanic teamworkActionMechanic, context TeamworkActionContext) bool {
+	for _, candidate := range mechanic.contexts[:mechanic.contextLen] {
+		if candidate == context {
+			return true
+		}
+	}
+	return false
+}
+
+func validTeamworkActionPolicyShape(entries [TeamworkActionCount]TeamworkActionPolicyEntry) bool {
+	batchOwner, contextlessOwner := -1, -1
+	for index, entry := range entries {
+		if entry.maxResults > 1 {
+			if batchOwner != -1 {
+				return false
+			}
+			batchOwner = index
+		}
+		if entry.AllowsContext(TeamworkActionContextNone) {
+			if contextlessOwner != -1 {
+				return false
+			}
+			contextlessOwner = index
+		}
+	}
+	return batchOwner >= 0 && batchOwner == contextlessOwner &&
+		entries[batchOwner].operation == OperationTeamworkOffer
 }
 
 func (policy TeamworkActionPolicy) AssetRevision() Digest { return policy.assetRevision }

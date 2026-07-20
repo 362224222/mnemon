@@ -150,6 +150,25 @@ func TestAuthorityRuntimeRejectsUngatedReplacement(t *testing.T) {
 	}
 }
 
+func TestAuthorityOutboundEnrollmentPermitDoesNotGrantChannelAccess(t *testing.T) {
+	t.Parallel()
+
+	local := testAuthorityPeer(t, "enrollment-permit-local")
+	owner := testAuthorityPeer(t, "enrollment-permit-owner")
+	authority, _ := NewAuthority(local.modelID)
+	if err := authority.Replace(NetworkAuthoritySnapshot{LocalPeerID: local.modelID,
+		OutboundEnrollmentPeers: []model.PeerID{owner.modelID}}); err != nil {
+		t.Fatal(err)
+	}
+	channelID, _ := model.ParseChannelID("not-installed")
+	topic, _ := TopicName(channelID)
+	if !authority.CanDial(owner.libp2pID) || authority.CanConnect(owner.libp2pID) ||
+		authority.CanOpenDataPlane(owner.libp2pID) || authority.CanUseTopic(owner.libp2pID, topic) ||
+		authority.CanSubscribe(topic) {
+		t.Fatal("outbound enrollment permit leaked into durable Channel authority")
+	}
+}
+
 func TestAuthorizePublicationNeverCombinesAuthorityRevisions(t *testing.T) {
 	t.Parallel()
 

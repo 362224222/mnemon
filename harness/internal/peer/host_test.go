@@ -34,11 +34,11 @@ func TestNodeHostWiresLimitsGatesNotificationsAndManagedStreams(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer node.Close()
-	if node.managedRuntimeHost() == nil || node.managedRuntimeHost().ID() != local.libp2pID ||
-		len(node.managedRuntimeHost().Addrs()) == 0 || node.managedRuntimeHost().Network().ResourceManager() == nil || node.Gater() == nil {
+	if node.Host() == nil || node.Host().ID() != local.libp2pID || len(node.Host().Addrs()) == 0 ||
+		node.Host().Network().ResourceManager() == nil || node.Gater() == nil {
 		t.Fatal("Node Host did not expose its identity, listener, resource manager and authority gate")
 	}
-	if _, managed := node.managedRuntimeHost().(*managedHost); !managed {
+	if _, managed := node.Host().(*managedHost); !managed {
 		t.Fatal("Node Host exposed the raw libp2p Host instead of its managed stream surface")
 	}
 
@@ -51,20 +51,20 @@ func TestNodeHostWiresLimitsGatesNotificationsAndManagedStreams(t *testing.T) {
 
 	eventAccepted := make(chan network.Stream, 1)
 	releaseEvent := make(chan struct{})
-	node.managedRuntimeHost().SetStreamHandler(EventsProtocol, func(stream network.Stream) {
+	node.Host().SetStreamHandler(EventsProtocol, func(stream network.Stream) {
 		eventAccepted <- stream
 		<-releaseEvent
 		_ = stream.Close()
 	})
-	node.managedRuntimeHost().SetStreamHandler(ChannelProtocol, func(stream network.Stream) {
+	node.Host().SetStreamHandler(ChannelProtocol, func(stream network.Stream) {
 		_, _ = stream.Write([]byte{'c'})
 		_ = stream.Close()
 	})
-	if err := node.managedRuntimeHost().Connect(ctx, libp2ppeer.AddrInfo{ID: remoteHost.ID(),
+	if err := node.Host().Connect(ctx, libp2ppeer.AddrInfo{ID: remoteHost.ID(),
 		Addrs: remoteHost.Addrs()}); err != nil {
 		t.Fatal(err)
 	}
-	eventStream, err := remoteHost.NewStream(ctx, node.managedRuntimeHost().ID(), EventsProtocol)
+	eventStream, err := remoteHost.NewStream(ctx, node.Host().ID(), EventsProtocol)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,16 +78,16 @@ func TestNodeHostWiresLimitsGatesNotificationsAndManagedStreams(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("active Peer did not reach the managed Event handler")
 	}
-	if err := node.managedRuntimeHost().Connect(ctx, libp2ppeer.AddrInfo{ID: unknownHost.ID(),
+	if err := node.Host().Connect(ctx, libp2ppeer.AddrInfo{ID: unknownHost.ID(),
 		Addrs: unknownHost.Addrs()}); err == nil {
 		t.Fatal("unknown outbound Peer bypassed the connection gater")
 	}
-	if err := unknownHost.Connect(ctx, libp2ppeer.AddrInfo{ID: node.managedRuntimeHost().ID(),
-		Addrs: node.managedRuntimeHost().Addrs()}); err != nil {
+	if err := unknownHost.Connect(ctx, libp2ppeer.AddrInfo{ID: node.Host().ID(),
+		Addrs: node.Host().Addrs()}); err != nil {
 		t.Fatal(err)
 	}
 	waitUnknownConnections(t, node.Gater(), 1)
-	channelStream, err := unknownHost.NewStream(ctx, node.managedRuntimeHost().ID(), ChannelProtocol)
+	channelStream, err := unknownHost.NewStream(ctx, node.Host().ID(), ChannelProtocol)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestNodeHostWiresLimitsGatesNotificationsAndManagedStreams(t *testing.T) {
 		t.Fatalf("unknown enrollment stream response = (%q, %v)", one[:count], err)
 	}
 	_ = channelStream.Close()
-	unknownEvent, unknownEventErr := unknownHost.NewStream(ctx, node.managedRuntimeHost().ID(), EventsProtocol)
+	unknownEvent, unknownEventErr := unknownHost.NewStream(ctx, node.Host().ID(), EventsProtocol)
 	if unknownEventErr == nil {
 		_ = unknownEvent.SetReadDeadline(time.Now().Add(time.Second))
 		if _, err := unknownEvent.Read(one); err == nil {
@@ -115,7 +115,7 @@ func TestNodeHostWiresLimitsGatesNotificationsAndManagedStreams(t *testing.T) {
 	if err := node.ReconcileConnections(); err != nil {
 		t.Fatal(err)
 	}
-	if node.managedRuntimeHost().Network().Connectedness(remoteHost.ID()) != network.Connected {
+	if node.Host().Network().Connectedness(remoteHost.ID()) != network.Connected {
 		t.Fatal("pending Peer lost its physical enrollment connection")
 	}
 	_ = eventStream.SetReadDeadline(time.Now().Add(time.Second))
@@ -124,7 +124,7 @@ func TestNodeHostWiresLimitsGatesNotificationsAndManagedStreams(t *testing.T) {
 	}
 	close(releaseEvent)
 
-	if err := unknownHost.Network().ClosePeer(node.managedRuntimeHost().ID()); err != nil {
+	if err := unknownHost.Network().ClosePeer(node.Host().ID()); err != nil {
 		t.Fatal(err)
 	}
 	waitUnknownConnections(t, node.Gater(), 0)
@@ -137,7 +137,7 @@ func TestNodeHostWiresLimitsGatesNotificationsAndManagedStreams(t *testing.T) {
 	if err := node.ReconcileConnections(); err != nil {
 		t.Fatal(err)
 	}
-	waitPeerDisconnected(t, node.managedRuntimeHost(), remoteHost.ID())
+	waitPeerDisconnected(t, node.Host(), remoteHost.ID())
 	if err := node.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -220,8 +220,8 @@ func TestNodeHostCloseQuiescesUnknownEnrollmentState(t *testing.T) {
 	defer unknownHost.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := unknownHost.Connect(ctx, libp2ppeer.AddrInfo{ID: node.managedRuntimeHost().ID(),
-		Addrs: node.managedRuntimeHost().Addrs()}); err != nil {
+	if err := unknownHost.Connect(ctx, libp2ppeer.AddrInfo{ID: node.Host().ID(),
+		Addrs: node.Host().Addrs()}); err != nil {
 		t.Fatal(err)
 	}
 	waitUnknownConnections(t, node.Gater(), 1)

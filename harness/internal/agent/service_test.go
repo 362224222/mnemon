@@ -351,8 +351,7 @@ func TestServiceHookAndCurrentKeepClaimCapabilityPrivate(t *testing.T) {
 			return store.AgentCurrentReadResult{Projection: projection}, nil
 		},
 	}
-	currentActions := testActionHandlers(t)
-	service, err := NewService(fake, ServiceOptions{Actions: currentActions,
+	service, err := NewService(fake, ServiceOptions{Actions: testActionHandlers(t),
 		Clock: serviceTestClock{at}, Random: bytes.NewReader(entropy), CurrentViews: views})
 	if err != nil {
 		t.Fatal(err)
@@ -381,19 +380,6 @@ func TestServiceHookAndCurrentKeepClaimCapabilityPrivate(t *testing.T) {
 		readSpec.ClaimTokenHash != model.Sum(secret) || !readSpec.At.Equal(at) ||
 		readSpec.ArtifactViews == nil || len(views.plans) != 1 {
 		t.Fatalf("current read spec = %#v", readSpec)
-	}
-	assertCurrentActionPolicy(t, planSpec, readSpec, currentActions)
-}
-
-func assertCurrentActionPolicy(t testing.TB, plan, final store.AgentCurrentReadSpec,
-	actions ActionHandlers,
-) {
-	t.Helper()
-	if plan.ActionPolicy.AssetRevision() != actions.AssetRevision() ||
-		final.ActionPolicy.AssetRevision() != actions.AssetRevision() ||
-		len(plan.ActionPolicy.Entries()) != model.TeamworkActionCount ||
-		len(final.ActionPolicy.Entries()) != model.TeamworkActionCount {
-		t.Fatalf("current Action policies = (%#v, %#v)", plan.ActionPolicy, final.ActionPolicy)
 	}
 }
 
@@ -583,55 +569,6 @@ func TestServiceTeamworkActionReservesServerOwnedOperation(t *testing.T) {
 	if _, apiErr := service.TeamworkAction(context.Background(), metadata, request); apiErr == nil ||
 		apiErr.Code != CodeContextRequired {
 		t.Fatalf("contextless accept error = %v", apiErr)
-	}
-}
-
-func TestServiceTeamworkActionRejectsUnknownAssetActionBeforeSideEffects(t *testing.T) {
-	t.Parallel()
-	at := time.Date(2026, 7, 19, 10, 0, 0, 0, time.UTC)
-	profile := serviceTestProfile(t, at)
-	storeCalls := 0
-	fake := &fakeControlStore{
-		operation: func(context.Context, store.ManagedOperationProbeSpec) (store.ManagedOperationProbe, error) {
-			storeCalls++
-			return store.ManagedOperationProbe{}, nil
-		},
-		reserve: func(context.Context, store.ManagedOperationSpec) (store.ManagedOperationReservation, error) {
-			storeCalls++
-			return store.ManagedOperationReservation{}, nil
-		},
-	}
-	activationCalls := 0
-	gate := serviceActivationGateFunc(func(context.Context, model.Profile) *ControlError {
-		activationCalls++
-		return nil
-	})
-	executorCalls := 0
-	executor := fakeTeamworkExecutor{execute: func(context.Context,
-		TeamworkExecutionSpec,
-	) (OperationResponse, *ControlError) {
-		executorCalls++
-		return OperationResponse{}, nil
-	}}
-	clock := &countingServiceClock{now: at}
-	random := &countingServiceRandom{}
-	service, err := NewService(fake, ServiceOptions{Actions: testActionHandlers(t),
-		Clock: clock, Random: random, Executor: executor, CurrentViews: &fakeAgentCurrentViews{},
-		ActivationGate: gate})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, apiErr := service.TeamworkAction(context.Background(), ControlMetadata{
-		Profile: profile, HasOperationKey: true,
-		OperationKeyHash: model.Sum([]byte("unknown-action-operation")),
-	}, TeamworkActionRequest{Action: "future-action"})
-	if apiErr == nil || apiErr.Code != CodeUnknownAction {
-		t.Fatalf("unknown Action error = %v", apiErr)
-	}
-	if storeCalls != 0 || activationCalls != 0 || executorCalls != 0 ||
-		clock.calls != 0 || random.calls != 0 {
-		t.Fatalf("unknown Action side effects: Store=%d activation=%d executor=%d clock=%d random=%d",
-			storeCalls, activationCalls, executorCalls, clock.calls, random.calls)
 	}
 }
 

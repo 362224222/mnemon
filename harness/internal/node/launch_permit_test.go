@@ -33,7 +33,7 @@ func TestOpenManagedDaemonRequiresExactInheritedEnsureLockBeforeStoreOpen(t *tes
 		})
 		t.Setenv(daemonLaunchPermitEnvironment, "")
 		daemon, err := OpenManagedDaemon(context.Background(), DaemonOptions{
-			Workspace: fixture.workspace, Install: install, Credentials: testProfileCredentials{},
+			Workspace: fixture.workspace, Install: install,
 		})
 		if daemon != nil || !errors.Is(err, ErrDaemonAuthority) ||
 			errors.Is(err, ErrDaemonLaunchPermit) || errors.Is(err, store.ErrWriterActive) {
@@ -54,7 +54,7 @@ func TestOpenManagedDaemonRequiresExactInheritedEnsureLockBeforeStoreOpen(t *tes
 		defer writer.Close()
 		t.Setenv(daemonLaunchPermitEnvironment, "")
 		daemon, err := OpenManagedDaemon(context.Background(), DaemonOptions{
-			Workspace: fixture.workspace, Install: fixture.install, Credentials: testProfileCredentials{},
+			Workspace: fixture.workspace, Install: fixture.install,
 		})
 		if daemon != nil || !errors.Is(err, ErrDaemonLaunchPermit) ||
 			errors.Is(err, store.ErrWriterActive) {
@@ -84,7 +84,7 @@ func TestOpenManagedDaemonRequiresExactInheritedEnsureLockBeforeStoreOpen(t *tes
 		}
 		t.Setenv(daemonLaunchPermitEnvironment, strconv.Itoa(fd))
 		daemon, err := OpenManagedDaemon(context.Background(), DaemonOptions{
-			Workspace: fixture.workspace, Install: fixture.install, Credentials: testProfileCredentials{},
+			Workspace: fixture.workspace, Install: fixture.install,
 		})
 		if daemon != nil || !errors.Is(err, ErrDaemonLaunchPermit) ||
 			errors.Is(err, store.ErrWriterActive) {
@@ -104,7 +104,7 @@ func TestOpenManagedDaemonRequiresExactInheritedEnsureLockBeforeStoreOpen(t *tes
 		}
 		t.Setenv(daemonLaunchPermitEnvironment, strconv.Itoa(fd))
 		daemon, err := OpenManagedDaemon(context.Background(), DaemonOptions{
-			Workspace: fixture.workspace, Install: fixture.install, Credentials: testProfileCredentials{},
+			Workspace: fixture.workspace, Install: fixture.install,
 		})
 		if daemon != nil || !errors.Is(err, ErrDaemonLaunchPermit) {
 			t.Fatalf("OpenManagedDaemon() = (%v, %v)", daemon, err)
@@ -118,7 +118,6 @@ func TestOpenManagedDaemonRequiresExactInheritedEnsureLockBeforeStoreOpen(t *tes
 
 func TestOpenManagedDaemonRetainsInheritedPermitUntilSocketReadyWithoutSelfDeadlock(t *testing.T) {
 	fixture := newDaemonFixture(t, true)
-	publishDaemonTestMeshPending(t, fixture)
 	parent := acquirePermitTestEnsureLock(t, fixture.nodeState)
 	defer parent.close()
 	childFD, err := unix.Dup(int(parent.file.Fd()))
@@ -128,8 +127,6 @@ func TestOpenManagedDaemonRetainsInheritedPermitUntilSocketReadyWithoutSelfDeadl
 	t.Setenv(daemonLaunchPermitEnvironment, strconv.Itoa(childFD))
 	daemon, err := OpenManagedDaemon(context.Background(), DaemonOptions{Workspace: fixture.workspace,
 		Clock: controllerTestClock{fixture.profile.UpdatedAt()}, Install: fixture.install,
-		Credentials: testProfileCredentials{}, Control: newTestControlTransportFactory(),
-		Attachments:        &testWakeAttachmentFilesystem{},
 		WakeAdapterFactory: permitTestWakeFactory()})
 	if err != nil {
 		t.Fatal(err)
@@ -173,50 +170,6 @@ func TestOpenManagedDaemonRetainsInheritedPermitUntilSocketReadyWithoutSelfDeadl
 	case <-time.After(5 * time.Second):
 		t.Fatal("managed daemon did not stop")
 	}
-}
-
-func TestManagedDaemonControlPrepareFailureRetainsPermitUntilOwnerClose(t *testing.T) {
-	fixture := newDaemonFixture(t, true)
-	publishDaemonTestMeshPending(t, fixture)
-	parent := acquirePermitTestEnsureLock(t, fixture.nodeState)
-	defer parent.close()
-	childFD, err := unix.Dup(int(parent.file.Fd()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv(daemonLaunchPermitEnvironment, strconv.Itoa(childFD))
-	errPrepare := errors.New("test managed control prepare failure")
-	prepares := 0
-	daemon, err := OpenManagedDaemon(context.Background(), DaemonOptions{
-		Workspace: fixture.workspace, Install: fixture.install,
-		Credentials: testProfileCredentials{}, WakeAdapterFactory: permitTestWakeFactory(),
-		Attachments: &testWakeAttachmentFilesystem{},
-		Control: ControlTransportFactoryFunc(func(context.Context, ControlTransportOptions,
-			ControlBindings,
-		) (PreparedControlTransport, error) {
-			prepares++
-			return nil, errPrepare
-		}),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertOpenDescriptor(t, childFD)
-	if err := daemon.Serve(context.Background()); !errors.Is(err, errPrepare) || prepares != 1 {
-		t.Fatalf("Serve() = %v, prepares=%d", err, prepares)
-	}
-	assertOpenDescriptor(t, childFD)
-	if err := validateHeldEnsureLock(parent, fixture.nodeState); err != nil {
-		t.Fatalf("control preparation failure disturbed parent permit: %v", err)
-	}
-	if _, err := os.Lstat(filepath.Join(fixture.nodeState, controlSocketName)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("control preparation failure retained socket: %v", err)
-	}
-	if err := daemon.Close(); err != nil {
-		t.Fatal(err)
-	}
-	assertClosedDescriptor(t, childFD)
-	assertDaemonStoreReopenable(t, fixture.nodeState)
 }
 
 type permitTestWakeAdapter struct{}

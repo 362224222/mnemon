@@ -143,68 +143,6 @@ func TestArtifactFrameCanonicalTypedRoundTripAndDefensiveCopies(t *testing.T) {
 	}
 }
 
-func TestArtifactFrameDescriptorAuthorityIsOrderedCompleteAndCodecBound(t *testing.T) {
-	t.Parallel()
-	channelID, _ := model.ParseChannelID("channel-artifact-descriptor")
-	domainManifest, err := artifactdomain.NewManifest(artifactdomain.ManifestSpec{
-		RootKind: artifactdomain.EntryFile, RootPath: "descriptor.txt",
-		Entries: []artifactdomain.ManifestEntry{{Kind: artifactdomain.EntryFile,
-			LogicalPath: "descriptor.txt", Mode: 0o600}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	rootDigest := domainManifest.RootDigest()
-	blockBytes := []byte("descriptor block")
-	blockDigest := model.Sum(blockBytes)
-	getManifest, getManifestErr := NewGetManifest(GetManifestSpec{ChannelID: channelID, RootDigest: rootDigest})
-	manifest, manifestErr := NewManifest(ManifestSpec{RootDigest: rootDigest, Manifest: domainManifest.CanonicalJSON()})
-	getBlock, getBlockErr := NewGetBlock(GetBlockSpec{ChannelID: channelID, RootDigest: rootDigest, BlockDigest: blockDigest})
-	block, blockErr := NewBlock(BlockSpec{BlockDigest: blockDigest, BlockBytes: blockBytes})
-	ack, ackErr := NewArtifactAck()
-	denied, deniedErr := NewArtifactProtocolError(ArtifactProtocolErrorSpec{Code: ArtifactErrorNotAuthorized})
-	if err := errors.Join(getManifestErr, manifestErr, getBlockErr, blockErr, ackErr, deniedErr); err != nil {
-		t.Fatal(err)
-	}
-	tests := []struct {
-		frameType ArtifactFrameType
-		maximum   int
-		request   bool
-		payload   ArtifactFramePayload
-	}{
-		{ArtifactFrameGetManifest, artifactSmallFrameBytes, true, getManifest},
-		{ArtifactFrameManifest, maxArtifactFrameBytes(), false, manifest},
-		{ArtifactFrameGetBlock, artifactSmallFrameBytes, true, getBlock},
-		{ArtifactFrameBlock, maxArtifactFrameBytes(), false, block},
-		{ArtifactFrameAck, artifactSmallFrameBytes, false, ack},
-		{ArtifactFrameProtocolError, artifactSmallFrameBytes, false, denied},
-	}
-	if len(artifactFrameDescriptors) != len(tests) {
-		t.Fatalf("Artifact frame descriptor count = %d, want %d", len(artifactFrameDescriptors), len(tests))
-	}
-	seen := make(map[ArtifactFrameType]struct{}, len(tests))
-	for index, test := range tests {
-		descriptor := artifactFrameDescriptors[index]
-		_, duplicate := seen[descriptor.frameType]
-		seen[descriptor.frameType] = struct{}{}
-		parsed, parseErr := descriptor.codec.parse(test.payload.CanonicalJSON().Bytes())
-		frameType, canonical, canonicalErr := canonicalArtifactPayload(parsed)
-		if duplicate || descriptor.frameType != test.frameType || !test.frameType.Valid() ||
-			artifactFrameMaximum(test.frameType) != test.maximum ||
-			test.frameType.IsRequest() != test.request || test.frameType.IsResponse() == test.request ||
-			parseErr != nil || frameType != test.frameType ||
-			canonicalErr != nil || canonical.String() != test.payload.CanonicalJSON().String() {
-			t.Fatalf("Artifact frame descriptor %d parity failed: %#v, parse=%v canonical=%v", index, descriptor, parseErr, canonicalErr)
-		}
-	}
-	ackPayload, _ := parseArtifactAck([]byte(`{}`))
-	_, _, unboundErr := canonicalArtifactPayload(struct{ ArtifactAck }{ackPayload})
-	if unknown := ArtifactFrameType("unknown"); unknown.Valid() || unknown.IsRequest() || unknown.IsResponse() ||
-		artifactFrameMaximum(unknown) != 0 || !errors.Is(unboundErr, ErrArtifactFrame) {
-		t.Fatal("unknown Artifact frame type or payload implementation acquired descriptor policy")
-	}
-}
-
 func TestArtifactFrameRejectsUnknownNonCanonicalAndUnboundValues(t *testing.T) {
 	t.Parallel()
 

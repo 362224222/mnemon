@@ -13,7 +13,7 @@ import (
 func TestCommitManagedAcceptanceCompletesContextlessRunAndReplays(t *testing.T) {
 	fixture := newAcceptanceFixture(t, 1)
 	reservation := reserveManagedOfferForAcceptance(t, fixture, "managed-initiate", fixture.now)
-	authority := localAuthority(t, fixture, reservation.Operation)
+	authority := localAuthority(reservation.Operation)
 	lowLevel := fixture.offer(t, &authority, "managed-initiate", fixture.reviewers, nil, nil)
 	spec := ManagedAcceptanceSpec{Scope: lowLevel.Scope, Items: lowLevel.Items, Operation: authority}
 	committedAt := fixture.now.Add(time.Second)
@@ -41,7 +41,7 @@ func TestCommitManagedAcceptanceCompletesContextlessRunAndReplays(t *testing.T) 
 func TestCommitManagedAcceptanceCompletesClaimWithExactCurrentAction(t *testing.T) {
 	fixture := newAcceptanceFixture(t, 1)
 	initial := reserveManagedOfferForAcceptance(t, fixture, "managed-current-source", fixture.now)
-	initialAuthority := localAuthority(t, fixture, initial.Operation)
+	initialAuthority := localAuthority(initial.Operation)
 	initialSpec := fixture.offer(t, &initialAuthority, "managed-current-source", fixture.reviewers, nil, nil)
 	if _, err := fixture.store.CommitManagedAcceptance(context.Background(), ManagedAcceptanceSpec{
 		Scope: initialSpec.Scope, Items: initialSpec.Items, Operation: initialAuthority,
@@ -113,7 +113,7 @@ func TestCommitManagedAcceptanceCompletesClaimWithExactCurrentAction(t *testing.
 func TestCommitManagedAcceptanceRollsBackHandlingAndRunOnLateFailure(t *testing.T) {
 	fixture := newAcceptanceFixture(t, 1)
 	initial := reserveManagedOfferForAcceptance(t, fixture, "managed-rollback-source", fixture.now)
-	initialAuthority := localAuthority(t, fixture, initial.Operation)
+	initialAuthority := localAuthority(initial.Operation)
 	initialSpec := fixture.offer(t, &initialAuthority, "managed-rollback-source", fixture.reviewers, nil, nil)
 	if _, err := fixture.store.CommitManagedAcceptance(context.Background(), ManagedAcceptanceSpec{
 		Scope: initialSpec.Scope, Items: initialSpec.Items, Operation: initialAuthority,
@@ -174,11 +174,9 @@ func reserveManagedOfferForAcceptance(t *testing.T, fixture *acceptanceFixture, 
 	return result
 }
 
-func localAuthority(t testing.TB, fixture *acceptanceFixture,
-	operation model.Operation,
-) LocalOperationAuthority {
-	t.Helper()
-	return *mustLocalOperationAuthority(t, operation, fixture.policy)
+func localAuthority(operation model.Operation) LocalOperationAuthority {
+	return LocalOperationAuthority{ID: operation.ID(), Kind: operation.Kind(),
+		RequestDigest: operation.RequestDigest(), LeaseOwner: operation.LeaseOwner()}
 }
 
 func managedCancelAcceptance(t *testing.T, fixture *acceptanceFixture,
@@ -229,7 +227,7 @@ func managedCancelAcceptance(t *testing.T, fixture *acceptanceFixture,
 	if err != nil {
 		t.Fatal(err)
 	}
-	authority := localAuthority(t, fixture, reservation.Operation)
+	authority := localAuthority(reservation.Operation)
 	return ManagedAcceptanceSpec{Scope: scope, Operation: authority,
 		Items: []LocalAcceptanceItem{{Publication: bundle.Publication(), Work: &mutation}}}
 }

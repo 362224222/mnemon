@@ -23,13 +23,12 @@ func TestConfirmOfflineAuthorityRemovesOnlyStaleSocketWhileHoldingWriter(t *test
 				createOfflineStaleSocket(t, socketPath)
 			}
 			expected := daemonFixtureAuthorityResponse(t, fixture)
-			digest, err := expected.Digest()
+			digest, err := localapi.AuthorityDigest(expected)
 			if err != nil {
 				t.Fatal(err)
 			}
 			writerObserved := false
 			response, err := confirmOfflineAuthority(context.Background(), fixture.workspace, digest,
-				testProfileCredentials{},
 				func(ctx context.Context, path string) (bool, error) {
 					competing, writerErr := store.OpenExisting(context.Background(),
 						filepath.Join(fixture.nodeState, "node.db"))
@@ -74,8 +73,7 @@ func TestConfirmOfflineAuthorityFailsClosedForWriterGenerationAndSocketConflict(
 		}
 		defer st.Close()
 		_, err = ConfirmOfflineAuthority(context.Background(), fixture.workspace,
-			mustOfflineAuthorityDigest(t, daemonFixtureAuthorityResponse(t, fixture)),
-			testProfileCredentials{}, localapi.RemoveStaleOwnerUnix)
+			mustOfflineAuthorityDigest(t, daemonFixtureAuthorityResponse(t, fixture)))
 		if !errors.Is(err, ErrOfflineAuthority) || !errors.Is(err, ErrOfflineAuthorityActive) ||
 			!errors.Is(err, store.ErrWriterActive) {
 			t.Fatalf("writer-active confirmation error = %v", err)
@@ -91,8 +89,7 @@ func TestConfirmOfflineAuthorityFailsClosedForWriterGenerationAndSocketConflict(
 		path := filepath.Join(fixture.nodeState, controlSocketName)
 		createOfflineStaleSocket(t, path)
 		_, err := ConfirmOfflineAuthority(context.Background(), fixture.workspace,
-			mustOfflineAuthorityDigest(t, daemonFixtureAuthorityResponse(t, other)),
-			testProfileCredentials{}, localapi.RemoveStaleOwnerUnix)
+			mustOfflineAuthorityDigest(t, daemonFixtureAuthorityResponse(t, other)))
 		if !errors.Is(err, ErrOfflineAuthority) {
 			t.Fatalf("authority-mismatch confirmation error = %v", err)
 		}
@@ -111,8 +108,7 @@ func TestConfirmOfflineAuthorityFailsClosedForWriterGenerationAndSocketConflict(
 		}
 		defer listener.Close()
 		_, err = ConfirmOfflineAuthority(context.Background(), fixture.workspace,
-			mustOfflineAuthorityDigest(t, daemonFixtureAuthorityResponse(t, fixture)),
-			testProfileCredentials{}, localapi.RemoveStaleOwnerUnix)
+			mustOfflineAuthorityDigest(t, daemonFixtureAuthorityResponse(t, fixture)))
 		if !errors.Is(err, ErrOfflineAuthority) || !errors.Is(err, localapi.ErrOwnerUnixActive) {
 			t.Fatalf("active-socket confirmation error = %v", err)
 		}
@@ -129,8 +125,7 @@ func TestConfirmOfflineAuthorityFailsClosedForWriterGenerationAndSocketConflict(
 			t.Fatal(err)
 		}
 		_, err := ConfirmOfflineAuthority(context.Background(), fixture.workspace,
-			mustOfflineAuthorityDigest(t, daemonFixtureAuthorityResponse(t, fixture)),
-			testProfileCredentials{}, localapi.RemoveStaleOwnerUnix)
+			mustOfflineAuthorityDigest(t, daemonFixtureAuthorityResponse(t, fixture)))
 		if !errors.Is(err, ErrOfflineAuthority) {
 			t.Fatalf("unsafe-socket confirmation error = %v", err)
 		}
@@ -162,8 +157,7 @@ func TestConfirmOfflineAuthorityRejectsInvalidInputWithoutMutation(t *testing.T)
 			digest: mustOfflineAuthorityDigest(t, daemonFixtureAuthorityResponse(t, fixture))},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if _, err := ConfirmOfflineAuthority(test.ctx, test.workspace, test.digest,
-				testProfileCredentials{}, localapi.RemoveStaleOwnerUnix); !errors.Is(err, ErrOfflineAuthority) {
+			if _, err := ConfirmOfflineAuthority(test.ctx, test.workspace, test.digest); !errors.Is(err, ErrOfflineAuthority) {
 				t.Fatalf("ConfirmOfflineAuthority() error = %v", err)
 			}
 			if info, err := os.Lstat(path); err != nil || info.Mode()&os.ModeSocket == 0 {
@@ -188,9 +182,9 @@ func createOfflineStaleSocket(t *testing.T, path string) {
 	}
 }
 
-func mustOfflineAuthorityDigest(t *testing.T, response Authority) model.Digest {
+func mustOfflineAuthorityDigest(t *testing.T, response localapi.AuthorityResponse) model.Digest {
 	t.Helper()
-	digest, err := response.Digest()
+	digest, err := localapi.AuthorityDigest(response)
 	if err != nil {
 		t.Fatal(err)
 	}

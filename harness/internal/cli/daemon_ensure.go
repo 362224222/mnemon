@@ -9,7 +9,6 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/assets"
 	"github.com/mnemon-dev/mnemon/harness/internal/integration"
 	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi/nodecontrol"
 	"github.com/mnemon-dev/mnemon/harness/internal/node"
 )
 
@@ -68,7 +67,6 @@ func ensureAgentDaemonWith(ctx context.Context, workspace, nodeState string,
 	revision := install.Revision()
 	preflight, err := dependencies.newPreflight(node.DaemonPreflightOptions{
 		Workspace: workspace, NodeState: nodeState, AssetRevision: revision, Install: install,
-		Credentials: nodecontrol.ProfileCredentials{},
 	})
 	if err != nil {
 		return daemonEnsureError(err)
@@ -76,8 +74,7 @@ func ensureAgentDaemonWith(ctx context.Context, workspace, nodeState string,
 	launcher := &lazyAgentDaemonLauncher{workspace: workspace, nodeState: nodeState,
 		currentExecutable: dependencies.currentExecutable, newLauncher: dependencies.newLauncher}
 	_, err = dependencies.ensure(ctx, node.DaemonEnsureOptions{NodeState: nodeState,
-		AssetRevision: revision, Probe: nodecontrol.AdaptHealthClient(client),
-		Preflight: preflight, Launcher: launcher})
+		AssetRevision: revision, Probe: client, Preflight: preflight, Launcher: launcher})
 	if err != nil {
 		return daemonEnsureError(err)
 	}

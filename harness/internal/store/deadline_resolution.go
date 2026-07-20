@@ -69,8 +69,15 @@ func (s *Store) ResolveDeadlineWinner(ctx context.Context, spec DeadlineResoluti
 		}
 		return DeadlineResolutionResult{Receipt: stored, Replayed: true}, nil
 	}
-	if err := validateFreshDeadlineAction(operation, spec.Action, spec.Scope.Profile(), spec.ContextHash); err != nil {
-		return DeadlineResolutionResult{}, err
+	if operation.Status() != model.OperationStarted {
+		return DeadlineResolutionResult{}, ErrOperationTerminal
+	}
+	if !deadlineCompetingHomeAction(operation.Kind()) {
+		return DeadlineResolutionResult{}, fmt.Errorf("%w: %s is not a competing home action", ErrDeadlineResolution, operation.Kind())
+	}
+	contextHash, hasContext := operation.ContextHash()
+	if !hasContext || spec.ContextHash.IsZero() || contextHash != spec.ContextHash {
+		return DeadlineResolutionResult{}, fmt.Errorf("%w: action context does not match the started operation", ErrDeadlineResolution)
 	}
 
 	trustedNow = trustedNow.Round(0).UTC()
@@ -146,17 +153,27 @@ func (s *Store) ResolveDeadlineWinner(ctx context.Context, spec DeadlineResoluti
 		return DeadlineResolutionResult{}, err
 	}
 
-	delivery, err := readWorkExpiryDeliveryFence(ctx, tx, spec.Scope,
-		current.Participants().ReviewerPeerID())
-	if err != nil {
+	if err := insertAcceptedEvent(ctx, tx, spec.Expiry.Publication); err != nil {
 		return DeadlineResolutionResult{}, err
 	}
-	status, _ := delivery.status()
-	if status != "pending" {
-		return DeadlineResolutionResult{}, ErrAudienceUnavailable
+	if err := applyWorkMutation(ctx, tx, mutation, event); err != nil {
+		return DeadlineResolutionResult{}, err
 	}
-	if err := applyWorkExpiryEffects(ctx, tx, spec.Scope, spec.Expiry, event,
-		delivery, trustedNow); err != nil {
+	if err := reconcileWorkDerivationDisposition(ctx, tx, mutation.Work.Ref()); err != nil {
+		return DeadlineResolutionResult{}, err
+	}
+	for _, ref := range event.Artifacts() {
+		if _, err := insertEventArtifactPin(ctx, tx, ref.RootDigest(), event.ID(), event.AcceptedAt()); err != nil {
+			return DeadlineResolutionResult{}, err
+		}
+	}
+	if err := insertPublicationEvidence(ctx, tx, event); err != nil {
+		return DeadlineResolutionResult{}, err
+	}
+	if err := advancePublicationHead(ctx, tx, event, trustedNow); err != nil {
+		return DeadlineResolutionResult{}, err
+	}
+	if err := advanceNodeOriginSequence(ctx, tx, spec.Scope, trustedNow); err != nil {
 		return DeadlineResolutionResult{}, err
 	}
 
@@ -174,25 +191,6 @@ func (s *Store) ResolveDeadlineWinner(ctx context.Context, spec DeadlineResoluti
 		return DeadlineResolutionResult{}, fmt.Errorf("resolve deadline winner: commit: %w", err)
 	}
 	return DeadlineResolutionResult{Receipt: receipt}, nil
-}
-
-func validateFreshDeadlineAction(operation model.Operation, authority LocalOperationAuthority,
-	profile model.Profile, contextHash model.Digest,
-) error {
-	if operation.Status() != model.OperationStarted {
-		return ErrOperationTerminal
-	}
-	if _, _, ok := authority.policyEvent(); !ok || !authority.matchesProfilePolicy(profile) {
-		return ErrOperationMismatch
-	}
-	if !deadlineCompetingHomeAction(operation.Kind()) {
-		return fmt.Errorf("%w: %s is not a competing home action", ErrDeadlineResolution, operation.Kind())
-	}
-	operationContext, hasContext := operation.ContextHash()
-	if !hasContext || contextHash.IsZero() || operationContext != contextHash {
-		return fmt.Errorf("%w: action context does not match the started operation", ErrDeadlineResolution)
-	}
-	return nil
 }
 
 func deadlineCompetingHomeAction(kind model.OperationKind) bool {
@@ -217,21 +215,8 @@ func requireExactDeadlineCause(ctx context.Context, tx *sql.Tx, expiry model.Eve
 	if len(causes) != 1 {
 		return fmt.Errorf("%w: expiry must cite exactly the current Work update", ErrDeadlineResolution)
 	}
-	want, err := exactDeadlineCause(ctx, tx, current)
-	if err != nil {
-		return err
-	}
-	if causes[0] != want {
-		return fmt.Errorf("%w: expiry does not cite the current Work update", ErrDeadlineResolution)
-	}
-	return nil
-}
-
-func exactDeadlineCause(ctx context.Context, q rowQuerier,
-	current model.ReviewWork,
-) (model.EventKey, error) {
 	var originText, epochText, channelText, homeText, workText, eventTypeText, sourceText, acceptedText string
-	err := q.QueryRowContext(ctx, `SELECT origin_peer_id,origin_epoch,channel_id,work_home_peer_id,work_id,
+	err := tx.QueryRowContext(ctx, `SELECT origin_peer_id,origin_epoch,channel_id,work_home_peer_id,work_id,
 		event_type,source,accepted_at
 		FROM events WHERE event_id=?`, current.UpdatedBy().String()).
 		Scan(&originText, &epochText, &channelText, &homeText, &workText, &eventTypeText, &sourceText, &acceptedText)
@@ -240,21 +225,24 @@ func exactDeadlineCause(ctx context.Context, q rowQuerier,
 		workText != current.Ref().WorkID().String() || originText != current.Ref().HomePeerID().String() ||
 		model.EventType(eventTypeText) != deadlineCurrentEventType(current.State()) ||
 		sourceText != string(model.EventSourceLocal) || timeErr != nil || !acceptedAt.Equal(current.UpdatedAt()) {
-		return model.EventKey{}, fmt.Errorf("%w: current Work update Event is not exact", ErrDeadlineResolution)
+		return fmt.Errorf("%w: current Work update Event is not exact", ErrDeadlineResolution)
 	}
 	origin, err := model.ParsePeerID(originText)
 	if err != nil {
-		return model.EventKey{}, err
+		return err
 	}
 	epoch, err := model.ParseOriginEpoch(epochText)
 	if err != nil {
-		return model.EventKey{}, err
+		return err
 	}
 	want, err := model.NewEventKey(origin, epoch, current.UpdatedBy())
 	if err != nil {
-		return model.EventKey{}, err
+		return err
 	}
-	return want, nil
+	if causes[0] != want {
+		return fmt.Errorf("%w: expiry does not cite the current Work update", ErrDeadlineResolution)
+	}
+	return nil
 }
 
 func deadlineCurrentEventType(state model.WorkState) model.EventType {

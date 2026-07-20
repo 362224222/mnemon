@@ -41,26 +41,6 @@ func TestTeamworkActionExecutorRejectsMissingOrMismatchedActionHandlers(t *testi
 	}
 }
 
-func TestTeamworkActionExecutorEnforcesAssetResultBoundBeforeCaptureAndPrepare(t *testing.T) {
-	t.Parallel()
-	handlers := testActionHandlersWithAssetReplacement(t, "actions/teamwork/offer.json",
-		`"max_results":7`, `"max_results":6`)
-	fixture := newExecutorFixtureWithActions(t, model.MaxChildWorks, handlers)
-	action := executorActionWithHandlers(t, handlers, "offer", false, "bounded goal", "30m",
-		AgentParticipantTeam, nil)
-	reservation := executorReservation(t, fixture, action, model.ReviewWork{}, false)
-	_, apiErr := fixture.executor.ExecuteTeamwork(context.Background(), TeamworkExecutionSpec{
-		Request: TeamworkActionRequest{Action: "offer", Content: "bounded goal"}, Action: action,
-		Reservation: reservation, At: fixture.at,
-	})
-	if apiErr == nil || apiErr.Code != CodeInvalidArgument || fixture.selector.calls != 1 ||
-		fixture.artifacts.calls != 0 || fixture.backend.prepares != 0 || fixture.backend.commits != 0 ||
-		fixture.backend.rejects != 1 || fixture.backend.rejected.Status() != model.OperationRejected {
-		t.Fatalf("bounded offer = (%#v, selector=%d artifacts=%d backend=%#v)", apiErr,
-			fixture.selector.calls, fixture.artifacts.calls, fixture.backend)
-	}
-}
-
 func TestTeamworkActionExecutorNestedOfferUsesCurrentCausality(t *testing.T) {
 	t.Parallel()
 	fixture := newExecutorFixture(t, 2)
@@ -232,12 +212,11 @@ func TestTeamworkActionExecutorAtomicallyLetsDeadlineWin(t *testing.T) {
 	expiry := item.Publication.Event()
 	wantEventID, _ := derivedDeadlineEventID(reservation.Operation.ID())
 	contextHash, _ := reservation.Operation.ContextHash()
-	wantAuthority, _ := store.NewLocalOperationAuthority(reservation.Operation, fixture.executor.actions.RuntimePolicy())
 	if expiry.ID() != wantEventID || expiry.Type() != model.EventReviewExpired ||
 		!expiry.AcceptedAt().Equal(fixture.clock.now) || len(expiry.CausedBy()) != 1 ||
 		expiry.CausedBy()[0] != executorCurrent(t, reservation.Run).SourceEvent() ||
 		fixture.backend.deadline.contextHash != contextHash ||
-		fixture.backend.deadline.operation != wantAuthority {
+		fixture.backend.deadline.operation != localExecutionAuthority(reservation.Operation) {
 		t.Fatalf("deadline Event/authority = %#v / %#v", expiry, fixture.backend.deadline)
 	}
 
@@ -290,12 +269,8 @@ type executorFixture struct {
 
 func newExecutorFixture(t *testing.T, reviewerCount int) *executorFixture {
 	t.Helper()
-	return newExecutorFixtureWithActions(t, reviewerCount, testActionHandlers(t))
-}
-
-func newExecutorFixtureWithActions(t *testing.T, reviewerCount int, actions ActionHandlers) *executorFixture {
-	t.Helper()
 	at := time.Date(2026, 7, 16, 20, 0, 0, 0, time.UTC)
+	actions := testActionHandlers(t)
 	profile := executorProfile(t, at.Add(-time.Hour), actions.AssetRevision().String())
 	local := agentSelectorPeer(t, "executor-local-"+t.Name())
 	node, err := model.NewNode(model.NodeSpec{PeerID: local,
@@ -412,7 +387,6 @@ type fakeExecutionBackend struct {
 	deadlines           int
 	probeMisses         int
 	probes              int
-	prepares            int
 	commits             int
 	rejects             int
 	commitErr           error
@@ -424,7 +398,6 @@ type fakeExecutionBackend struct {
 func (b *fakeExecutionBackend) Prepare(_ context.Context, channel model.ChannelID,
 	_ model.Audience, count uint8,
 ) (executionScope, error) {
-	b.prepares++
 	scope := b.scope
 	scope.channelID, scope.count = channel, count
 	return scope, nil
@@ -656,7 +629,7 @@ func executorCurrentReceipt(t *testing.T, fixture *executorFixture, run model.Ru
 	}
 	receipt, err := model.NewCurrentReadReceipt(model.CurrentReadReceiptSpec{RunID: run,
 		ProfileID: fixture.profile.ID(), HandlingID: handling, HandlingAttempt: 1,
-		Projection: projection, ActionWorkUpdatedBy: work.UpdatedBy(), ActionWorkUpdatedAt: work.UpdatedAt(), ReadAt: fixture.at.Add(-time.Minute)})
+		Projection: projection, ReadAt: fixture.at.Add(-time.Minute)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -676,15 +649,11 @@ func executorCurrent(t *testing.T, run model.AgentRun) model.CurrentReadReceipt 
 	return current
 }
 
-func executorAction(t *testing.T, name string, hasContext bool, content, deadline, participant string, paths []string) ValidatedAction {
+func executorAction(t *testing.T, name string, hasContext bool, content, deadline, participant string,
+	paths []string,
+) ValidatedAction {
 	t.Helper()
-	return executorActionWithHandlers(t, testActionHandlers(t), name, hasContext, content, deadline, participant, paths)
-}
-
-func executorActionWithHandlers(t *testing.T, handlers ActionHandlers, name string, hasContext bool,
-	content, deadline, participant string, paths []string) ValidatedAction {
-	t.Helper()
-	action, apiErr := handlers.Validate(ActionInput{Action: name, HasContext: hasContext,
+	action, apiErr := testActionHandlers(t).Validate(ActionInput{Action: name, HasContext: hasContext,
 		ChannelAlias: func() string {
 			if name == "offer" {
 				return "alpha"

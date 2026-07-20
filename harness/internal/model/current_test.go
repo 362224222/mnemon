@@ -13,12 +13,12 @@ func TestCurrentProjectionAndReceiptAreCanonicalImmutableBindings(t *testing.T) 
 		OperationResolveRetry, OperationTeamworkDecline, OperationTeamworkAccept,
 	})
 	actions := projection.AllowedActions()
-	wantActions := []OperationKind{OperationResolveRetry, OperationTeamworkDecline, OperationTeamworkAccept}
+	wantActions := []OperationKind{OperationTeamworkAccept, OperationTeamworkDecline, OperationResolveRetry}
 	if !equalCurrentActions(actions, wantActions) {
-		t.Fatalf("policy-ordered allowed actions = %v, want %v", actions, wantActions)
+		t.Fatalf("canonical allowed actions = %v, want %v", actions, wantActions)
 	}
 	actions[0] = OperationTeamworkCancel
-	if projection.AllowedActions()[0] != OperationResolveRetry {
+	if projection.AllowedActions()[0] != OperationTeamworkAccept {
 		t.Fatal("allowed actions getter mutated projection")
 	}
 	brief, ok := projection.ActionWork().Brief()
@@ -33,9 +33,7 @@ func TestCurrentProjectionAndReceiptAreCanonicalImmutableBindings(t *testing.T) 
 	readAt := time.Date(2026, 7, 16, 14, 0, 1, 123, time.UTC)
 	receipt, err := NewCurrentReadReceipt(CurrentReadReceiptSpec{
 		RunID: runID, ProfileID: TeamworkProfileID(), HandlingID: handlingID,
-		HandlingAttempt: 2, Projection: projection,
-		ActionWorkUpdatedBy: projection.SourceEvent().Key().EventID(),
-		ActionWorkUpdatedAt: projection.SourceEvent().AcceptedAt(), ReadAt: readAt,
+		HandlingAttempt: 2, Projection: projection, ReadAt: readAt,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -47,7 +45,6 @@ func TestCurrentProjectionAndReceiptAreCanonicalImmutableBindings(t *testing.T) 
 		!equalCurrentActions(receipt.AllowedActions(), wantActions) {
 		t.Fatalf("receipt does not bind projection: %#v", receipt)
 	}
-	assertCurrentReceiptUpdateEvidence(t, receipt, projection.SourceEvent())
 	if bytes.Contains(receipt.CanonicalJSON().Bytes(), []byte("claim")) ||
 		bytes.Contains(receipt.CanonicalJSON().Bytes(), []byte("fence")) ||
 		bytes.Contains(receipt.CanonicalJSON().Bytes(), []byte("secret")) ||
@@ -204,9 +201,7 @@ func TestCurrentReadReceiptRejectsNoncanonicalOrConflictingEvidence(t *testing.T
 	receipt, err := NewCurrentReadReceipt(CurrentReadReceiptSpec{
 		RunID: runID, ProfileID: TeamworkProfileID(), HandlingID: handlingID,
 		HandlingAttempt: 1, Projection: projection,
-		ActionWorkUpdatedBy: projection.SourceEvent().Key().EventID(),
-		ActionWorkUpdatedAt: projection.SourceEvent().AcceptedAt(),
-		ReadAt:              time.Date(2026, 7, 16, 14, 1, 0, 0, time.UTC),
+		ReadAt: time.Date(2026, 7, 16, 14, 1, 0, 0, time.UTC),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -221,6 +216,9 @@ func TestCurrentReadReceiptRejectsNoncanonicalOrConflictingEvidence(t *testing.T
 		{"binding drift", strings.Replace(raw, `"action_work_version":1`, `"action_work_version":2`, 1)},
 		{"brief drift", strings.Replace(raw, `"content":"review this"`, `"content":"different brief"`, 1)},
 		{"projection digest drift", strings.Replace(raw, receipt.ProjectionDigest().String(), Sum([]byte("other")).String(), 1)},
+		{"action order", strings.Replace(raw,
+			`"allowed_actions":["teamwork.accept","agent.resolve.retry"]`,
+			`"allowed_actions":["agent.resolve.retry","teamwork.accept"]`, 1)},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

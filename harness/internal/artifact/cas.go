@@ -34,12 +34,10 @@ var (
 )
 
 type CAS struct {
-	root      string
-	temp      string
-	trash     string
-	lifecycle sync.RWMutex
-	tempMu    sync.Mutex
-	digests   [casDigestShards]sync.RWMutex
+	root         string
+	temp         string
+	trash        string
+	coordination *casCoordination
 }
 
 // CASLease fences the complete filesystem/Store lifecycle of a CAS user or
@@ -118,6 +116,17 @@ type CASTombstoneDescriptor struct {
 	Closed bool
 }
 
+type casCoordination struct {
+	lifecycle sync.RWMutex
+	temp      sync.Mutex
+	digests   [casDigestShards]sync.RWMutex
+}
+
+var casCoordinationRegistry = struct {
+	sync.Mutex
+	roots map[string]*casCoordination
+}{roots: make(map[string]*casCoordination)}
+
 type PutResult struct {
 	Digest   model.Digest
 	Size     uint64
@@ -126,9 +135,6 @@ type PutResult struct {
 
 // NewCAS creates or validates an owner-only sha256 object directory. The root
 // is expected to be the Node's objects/sha256 path, not a digest-specific path.
-// The caller owns the unique live CAS instance for root and must inject that
-// same pointer into every concurrent user; lifecycle, temp, and digest barriers
-// are deliberately instance-local rather than process-global state.
 func NewCAS(root string) (*CAS, error) {
 	if root == "" || !filepath.IsAbs(root) || filepath.Clean(root) != root {
 		return nil, fmt.Errorf("%w: CAS root must be an absolute canonical path", ErrCASInput)
@@ -147,7 +153,18 @@ func NewCAS(root string) (*CAS, error) {
 	if err := syncDirectory(root); err != nil {
 		return nil, err
 	}
-	return &CAS{root: root, temp: temp, trash: trash}, nil
+	registryRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil, fmt.Errorf("resolve Artifact CAS root: %w", err)
+	}
+	casCoordinationRegistry.Lock()
+	coordination := casCoordinationRegistry.roots[registryRoot]
+	if coordination == nil {
+		coordination = &casCoordination{}
+		casCoordinationRegistry.roots[registryRoot] = coordination
+	}
+	casCoordinationRegistry.Unlock()
+	return &CAS{root: root, temp: temp, trash: trash, coordination: coordination}, nil
 }
 
 func (cas *CAS) Root() string {
@@ -163,8 +180,8 @@ func (cas *CAS) AcquireUse() (*CASLease, error) {
 	if err := cas.validate(); err != nil {
 		return nil, err
 	}
-	cas.lifecycle.RLock()
-	return &CASLease{release: cas.lifecycle.RUnlock}, nil
+	cas.coordination.lifecycle.RLock()
+	return &CASLease{release: cas.coordination.lifecycle.RUnlock}, nil
 }
 
 // AcquireExclusive holds the lifecycle barrier exclusively. A collector keeps
@@ -174,8 +191,8 @@ func (cas *CAS) AcquireExclusive() (*CASLease, error) {
 	if err := cas.validate(); err != nil {
 		return nil, err
 	}
-	cas.lifecycle.Lock()
-	return &CASLease{release: cas.lifecycle.Unlock}, nil
+	cas.coordination.lifecycle.Lock()
+	return &CASLease{release: cas.coordination.lifecycle.Unlock}, nil
 }
 
 func (lease *CASLease) Release() {
@@ -224,8 +241,8 @@ func (cas *CAS) putLocked(digest model.Digest, content []byte) (PutResult, error
 		return result, nil
 	}
 
-	cas.tempMu.Lock()
-	defer cas.tempMu.Unlock()
+	cas.coordination.temp.Lock()
+	defer cas.coordination.temp.Unlock()
 	if err := requireCASDirectory(cas.temp); err != nil {
 		return PutResult{}, err
 	}
@@ -307,8 +324,8 @@ func (cas *CAS) recoverPromotedTemp(final string, digest model.Digest, expected 
 		return fmt.Errorf("%w: final object has unexplained hard links", ErrCASCorruption)
 	}
 
-	cas.tempMu.Lock()
-	defer cas.tempMu.Unlock()
+	cas.coordination.temp.Lock()
+	defer cas.coordination.temp.Unlock()
 	if err := requireCASDirectory(cas.temp); err != nil {
 		return err
 	}
@@ -484,8 +501,8 @@ func (cas *CAS) TempFiles() ([]string, error) {
 	if err := cas.validate(); err != nil {
 		return nil, err
 	}
-	cas.tempMu.Lock()
-	defer cas.tempMu.Unlock()
+	cas.coordination.temp.Lock()
+	defer cas.coordination.temp.Unlock()
 	if err := requireCASDirectory(cas.temp); err != nil {
 		return nil, err
 	}
@@ -564,7 +581,7 @@ func (cas *CAS) ListObjectsPage(cursor CASObjectScanCursor, limit int) (CASObjec
 		if !rootSnapshot.shards[prefix] {
 			continue
 		}
-		lock := &cas.digests[prefix]
+		lock := &cas.coordination.digests[prefix]
 		lock.RLock()
 		shardSnapshot, scanErr := cas.scanObjectShard(byte(prefix), cursor, lookahead, &candidates)
 		lock.RUnlock()
@@ -666,8 +683,8 @@ func (cas *CAS) PruneTempsBefore(cutoff time.Time, limit int) ([]string, error) 
 		return nil, fmt.Errorf("%w: temp pruning cutoff or limit", ErrCASInput)
 	}
 	cutoff = cutoff.Round(0)
-	cas.tempMu.Lock()
-	defer cas.tempMu.Unlock()
+	cas.coordination.temp.Lock()
+	defer cas.coordination.temp.Unlock()
 	if err := requireCASDirectory(cas.temp); err != nil {
 		return nil, err
 	}
@@ -894,7 +911,7 @@ func (cas *CAS) PurgeTombstone(digest model.Digest, token [32]byte) (CASTombston
 }
 
 func (cas *CAS) validate() error {
-	if cas == nil || cas.root == "" || cas.temp == "" || cas.trash == "" {
+	if cas == nil || cas.root == "" || cas.temp == "" || cas.trash == "" || cas.coordination == nil {
 		return fmt.Errorf("%w: nil or incomplete CAS", ErrCASInput)
 	}
 	for _, directory := range []string{cas.root, cas.temp, cas.trash} {
@@ -912,7 +929,7 @@ func (cas *CAS) digestLock(digest model.Digest) (*sync.RWMutex, error) {
 	if digest.IsZero() {
 		return nil, fmt.Errorf("%w: zero CAS digest", ErrCASInput)
 	}
-	return &cas.digests[casDigestShard(digest)], nil
+	return &cas.coordination.digests[casDigestShard(digest)], nil
 }
 
 func (cas *CAS) tombstoneLock(digest model.Digest, token [32]byte) (*sync.RWMutex, error) {

@@ -99,7 +99,8 @@ func TestPeerPullSourceEnforcesBaselineFloorAndRequestBounds(t *testing.T) {
 		fixture := newChannelBaselineFixture(t, "peer-pull-nonzero", model.TopicJoined)
 		fixture.advanceLocalHead(t, 3, fixture.at)
 		reserved, err := fixture.store.ReserveOutboundChannelBaseline(context.Background(),
-			fixture.reserveSpec(fixture.at.Add(time.Second)))
+			ReserveOutboundChannelBaselineSpec{ChannelID: fixture.channel.Channel().ID(),
+				TargetPeerID: fixture.remote.Identity().PeerID(), At: fixture.at.Add(time.Second)})
 		if err != nil || reserved.Baseline.BaselineChannelSequence != 3 {
 			t.Fatalf("reserve nonzero baseline = (%#v,%v)", reserved, err)
 		}
@@ -109,8 +110,8 @@ func TestPeerPullSourceEnforcesBaselineFloorAndRequestBounds(t *testing.T) {
 			t.Fatal(err)
 		}
 		if _, err := fixture.store.ConfirmOutboundChannelBaseline(context.Background(),
-			fixture.confirmSpec(ChannelDataBaselineAck(reserved.Baseline),
-				fixture.at.Add(2*time.Second))); err != nil {
+			ConfirmOutboundChannelBaselineSpec{AuthenticatedPeerID: fixture.remote.Identity().PeerID(),
+				Ack: ChannelDataBaselineAck(reserved.Baseline), At: fixture.at.Add(2 * time.Second)}); err != nil {
 			t.Fatal(err)
 		}
 		_, err = fixture.store.ReadPeerPullPage(context.Background(), ReadPeerPullPageSpec{

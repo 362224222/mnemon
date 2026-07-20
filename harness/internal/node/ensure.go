@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"golang.org/x/sys/unix"
 )
@@ -22,21 +23,15 @@ const (
 )
 
 var (
-	ErrDaemonEnsure             = errors.New("ensure mnemond readiness")
-	ErrDaemonHealthAuthority    = errors.New("authenticated mnemond health authority is invalid")
-	ErrDaemonControlUnavailable = errors.New("mnemond local control is unavailable")
+	ErrDaemonEnsure          = errors.New("ensure mnemond readiness")
+	ErrDaemonHealthAuthority = errors.New("authenticated mnemond health authority is invalid")
 )
 
 // DaemonHealthProbe is the authenticated local health boundary used by the
-// zero-touch ensure path. Transport adapters must validate their wire before
-// returning this identity-free Node value and honor cancellation.
+// zero-touch ensure path. A localapi.Client satisfies this interface directly.
+// Implementations must honor cancellation of the supplied bounded context.
 type DaemonHealthProbe interface {
-	ProbeDaemonHealth(context.Context) (DaemonHealth, error)
-}
-
-type DaemonHealth struct {
-	AssetRevision string
-	Ready         bool
+	ProbeHealth(context.Context) (localapi.HealthResponse, *localapi.APIError)
 }
 
 // DaemonEnsurePreflight strictly validates the existing Node schema,
@@ -59,13 +54,13 @@ func (verify DaemonEnsurePreflightFunc) Verify(ctx context.Context) error {
 // Ensure still owns a newly launched child. Setup uses it for the actual
 // projected Hook self-check; ordinary Agent ensure leaves it nil.
 type DaemonReadyGate interface {
-	VerifyReady(context.Context, DaemonHealth) error
+	VerifyReady(context.Context, localapi.HealthResponse) error
 }
 
-type DaemonReadyGateFunc func(context.Context, DaemonHealth) error
+type DaemonReadyGateFunc func(context.Context, localapi.HealthResponse) error
 
 func (verify DaemonReadyGateFunc) VerifyReady(ctx context.Context,
-	health DaemonHealth,
+	health localapi.HealthResponse,
 ) error {
 	if verify == nil {
 		return errors.New("daemon ready gate is unavailable")
@@ -120,7 +115,7 @@ type DaemonEnsureOptions struct {
 }
 
 type DaemonEnsureResult struct {
-	Health         DaemonHealth
+	Health         localapi.HealthResponse
 	Started        bool
 	FailureOutcome DaemonEnsureFailureOutcome
 }
@@ -191,7 +186,7 @@ func ensureDaemon(ctx context.Context, options DaemonEnsureOptions,
 		}
 		return DaemonEnsureResult{Health: health}, nil
 	}
-	if isNilNodeInterface(options.Preflight) || isNilNodeInterface(options.Launcher) {
+	if options.Preflight == nil || options.Launcher == nil {
 		return DaemonEnsureResult{}, fmt.Errorf("%w: launch boundary is unavailable", ErrDaemonEnsure)
 	}
 
@@ -233,7 +228,7 @@ func ensureDaemonLocked(ctx context.Context, options DaemonEnsureOptions,
 	}
 	var launched DaemonLaunch
 	defer func() {
-		if isNilNodeInterface(launched) {
+		if launched == nil {
 			return
 		}
 		cleanup, cancelCleanup := context.WithTimeout(context.WithoutCancel(ctx), daemonCleanupDeadline)
@@ -261,7 +256,7 @@ func ensureDaemonLocked(ctx context.Context, options DaemonEnsureOptions,
 	// managed launch lock. From here until a child is returned, exact Store-side
 	// compensation is permitted to make the final writer/busy decision.
 	compensationFenced = true
-	if isNilNodeInterface(options.Preflight) || isNilNodeInterface(options.Launcher) {
+	if options.Preflight == nil || options.Launcher == nil {
 		return DaemonEnsureResult{}, fmt.Errorf("%w: launch boundary is unavailable", ErrDaemonEnsure)
 	}
 	if verifyErr := options.Preflight.Verify(ctx); verifyErr != nil {
@@ -275,14 +270,14 @@ func ensureDaemonLocked(ctx context.Context, options DaemonEnsureOptions,
 			ErrDaemonEnsure, lockErr)
 	}
 	launch, launchErr := options.Launcher.Launch(ctx, DaemonLaunchPermit{lock: lock})
-	if !isNilNodeInterface(launch) {
+	if launch != nil {
 		launched = launch
 		result.Started = true
 	}
 	if launchErr != nil {
 		return result, fmt.Errorf("%w: launch mnemond: %w", ErrDaemonEnsure, launchErr)
 	}
-	if isNilNodeInterface(launched) {
+	if launched == nil {
 		return result, fmt.Errorf("%w: launcher returned no child ownership", ErrDaemonEnsure)
 	}
 
@@ -326,7 +321,7 @@ const (
 )
 
 func validateDaemonEnsure(options DaemonEnsureOptions, timing daemonEnsureTiming) error {
-	if isNilNodeInterface(options.Probe) {
+	if options.Probe == nil {
 		return fmt.Errorf("%w: health boundary is unavailable", ErrDaemonEnsure)
 	}
 	if options.NodeState == "" || !filepath.IsAbs(options.NodeState) ||
@@ -343,9 +338,9 @@ func validateDaemonEnsure(options DaemonEnsureOptions, timing daemonEnsureTiming
 }
 
 func verifyDaemonReadyGate(ctx context.Context, gate DaemonReadyGate,
-	health DaemonHealth,
+	health localapi.HealthResponse,
 ) error {
-	if isNilNodeInterface(gate) {
+	if gate == nil {
 		return nil
 	}
 	if err := gate.VerifyReady(ctx, health); err != nil {
@@ -359,22 +354,22 @@ func verifyDaemonReadyGate(ctx context.Context, gate DaemonReadyGate,
 
 func probeDaemonHealth(ctx context.Context, probe DaemonHealthProbe,
 	expectedRevision string,
-) (DaemonHealth, bool, error) {
+) (localapi.HealthResponse, bool, error) {
 	health, observation, err := observeDaemonHealth(ctx, probe, expectedRevision)
 	if err != nil {
-		return DaemonHealth{}, false, err
+		return localapi.HealthResponse{}, false, err
 	}
 	switch observation {
 	case daemonHealthUnavailable:
-		return DaemonHealth{}, true, nil
+		return localapi.HealthResponse{}, true, nil
 	case daemonHealthReady:
 		return health, false, nil
 	case daemonHealthNotReady:
-		return DaemonHealth{}, false,
+		return localapi.HealthResponse{}, false,
 			fmt.Errorf("%w: %w: daemon is not ready", ErrDaemonEnsure,
 				ErrDaemonHealthAuthority)
 	default:
-		return DaemonHealth{}, false,
+		return localapi.HealthResponse{}, false,
 			fmt.Errorf("%w: %w: health observation is invalid", ErrDaemonEnsure,
 				ErrDaemonHealthAuthority)
 	}
@@ -382,30 +377,36 @@ func probeDaemonHealth(ctx context.Context, probe DaemonHealthProbe,
 
 func observeDaemonHealth(ctx context.Context, probe DaemonHealthProbe,
 	expectedRevision string,
-) (DaemonHealth, daemonHealthObservation, error) {
+) (localapi.HealthResponse, daemonHealthObservation, error) {
 	if err := ctx.Err(); err != nil {
-		return DaemonHealth{}, 0,
+		return localapi.HealthResponse{}, 0,
 			fmt.Errorf("%w: bounded deadline: %w", ErrDaemonEnsure, err)
 	}
-	health, err := probe.ProbeDaemonHealth(ctx)
-	if err != nil {
-		if errors.Is(err, ErrDaemonControlUnavailable) {
-			return DaemonHealth{}, daemonHealthUnavailable, nil
+	health, apiErr := probe.ProbeHealth(ctx)
+	if apiErr != nil {
+		if apiErr.Code == localapi.CodeMnemondUnavailable {
+			return localapi.HealthResponse{}, daemonHealthUnavailable, nil
 		}
-		return DaemonHealth{}, 0,
-			fmt.Errorf("%w: authenticated health failed: %w", ErrDaemonEnsure, err)
+		return localapi.HealthResponse{}, 0,
+			fmt.Errorf("%w: authenticated health failed: %w", ErrDaemonEnsure, apiErr)
+	}
+	if health.SchemaVersion != localapi.SchemaVersion ||
+		(health.Status != "ready" && health.Status != "not_ready") {
+		return localapi.HealthResponse{}, 0,
+			fmt.Errorf("%w: %w: response is noncanonical", ErrDaemonEnsure,
+				ErrDaemonHealthAuthority)
 	}
 	if _, err := model.ParseDigest(health.AssetRevision); err != nil {
-		return DaemonHealth{}, 0,
+		return localapi.HealthResponse{}, 0,
 			fmt.Errorf("%w: %w: revision is invalid", ErrDaemonEnsure,
 				ErrDaemonHealthAuthority)
 	}
 	if health.AssetRevision != expectedRevision {
-		return DaemonHealth{}, 0,
+		return localapi.HealthResponse{}, 0,
 			fmt.Errorf("%w: %w: revision differs", ErrDaemonEnsure,
 				ErrDaemonHealthAuthority)
 	}
-	if !health.Ready {
+	if health.Status == "not_ready" {
 		return health, daemonHealthNotReady, nil
 	}
 	return health, daemonHealthReady, nil

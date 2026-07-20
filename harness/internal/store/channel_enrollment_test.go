@@ -3,11 +3,14 @@ package store
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"database/sql"
 	"errors"
 	"strings"
 	"testing"
 	"time"
 
+	eventpkg "github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/testkit"
 )
@@ -116,8 +119,7 @@ func TestAcceptChannelEnrollmentUsesOneGrantForMultipleAuthenticatedPeers(t *tes
 	insertChannelTestNode(t, secondStore.db, secondPeer, fixture.channel.Channel().CreatedAt())
 	installSpec := InstallJoinedChannelSpec{
 		AuthenticatedOwnerPeerID: fixture.channel.Owner().PeerID(), LocalAlias: "multi-use-team",
-		OwnerOutcome: ChannelEnrollmentAccepted,
-		Descriptor:   fixture.channel.Descriptor(), Transcript: transcript, Receipt: second.Receipt,
+		Descriptor: fixture.channel.Descriptor(), Transcript: transcript, Receipt: second.Receipt,
 		Members: second.Roster.Members(), At: secondAt.Add(time.Second)}
 	reserveJoinedChannelTest(t, secondStore, installSpec)
 	installed, err := secondStore.InstallJoinedChannel(context.Background(), installSpec)
@@ -173,24 +175,6 @@ func TestAcceptChannelEnrollmentTerminalReplayReturnsOriginalReceiptAndLatestRos
 		WHERE grant_id=?`, fixture.grantID.String()).Scan(&status, &used); err != nil ||
 		status != "closed" || used != 1 {
 		t.Fatalf("terminal replay grant = (%q,%d,%v)", status, used, err)
-	}
-}
-
-func TestPrepareChannelEnrollmentPreservesAuthorityInvariant(t *testing.T) {
-	t.Parallel()
-	fixture := newChannelEnrollmentFixture(t, "prepare-authority-invariant")
-	if _, err := fixture.ownerStore.db.Exec(`DROP TRIGGER channels_descriptor_immutable`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := fixture.ownerStore.db.Exec(`UPDATE channels SET name=? WHERE channel_id=?`,
-		"forged-channel-name", fixture.channel.Channel().ID().String()); err != nil {
-		t.Fatal(err)
-	}
-
-	_, err := fixture.ownerStore.PrepareChannelEnrollment(context.Background(),
-		fixture.prepareSpec(fixture.acceptedAt))
-	if !errors.Is(err, ErrChannelAuthorityInvariant) || errors.Is(err, ErrChannelEnrollmentConflict) {
-		t.Fatalf("corrupt Channel authority error = %v", err)
 	}
 }
 
@@ -490,104 +474,151 @@ func TestAcceptChannelEnrollmentPreservesClosedAndExpiredReasonsAcrossChallengeR
 	})
 }
 
-func TestInstallJoinedChannelSuffixFailureRollsBackHeadMembersBindingsAndAliases(t *testing.T) {
+func TestInstallJoinedChannelCommitsReplicaBindingsAndReplays(t *testing.T) {
 	t.Parallel()
-	owner, joinerStore, baseSpec, initialRoster := newInstalledJoinedChannelFixture(t,
-		"join-suffix-rollback", "suffix-rollback-team")
-	baseAt := baseSpec.At
-	var originalAlias string
-	if err := joinerStore.db.QueryRow(`SELECT effective_alias FROM peer_bindings`).Scan(&originalAlias); err != nil {
-		t.Fatal(err)
+	owner := newChannelEnrollmentFixture(t, "join-install")
+	transcript := owner.transcript(t, 0x71, 0x72, owner.head)
+	accepted := owner.accept(t, transcript)
+	joinerStore := openTestStore(t)
+	insertChannelTestNode(t, joinerStore.db, owner.joiner, owner.channel.Channel().CreatedAt())
+	spec := InstallJoinedChannelSpec{AuthenticatedOwnerPeerID: owner.channel.Owner().PeerID(),
+		LocalAlias: "project-team", Descriptor: owner.channel.Descriptor(), Transcript: transcript,
+		Receipt: accepted.Receipt, Members: accepted.Roster.Members(), At: owner.acceptedAt.Add(time.Second)}
+	wrongOwner := testkit.NewIdentity(t, "join-install-wrong-secure-owner")
+	wrongSpec := spec
+	wrongSpec.AuthenticatedOwnerPeerID = wrongOwner.PeerID()
+	if _, err := joinerStore.InstallJoinedChannel(context.Background(), wrongSpec); !errors.Is(err, ErrChannelJoinInput) {
+		t.Fatalf("wrong secure owner error = %v", err)
 	}
-	newPeer := testkit.NewIdentity(t, "join-suffix-rollback-new")
-	ownerMember, _ := initialRoster.CurrentMember(owner.channel.Owner().PeerID())
-	_, expanded := appendRosterMemberWithLabel(t, owner.channel.Descriptor(), owner.signer,
-		initialRoster, newPeer, ownerMember.DisplayLabel())
-	if _, err := joinerStore.db.Exec(`CREATE TRIGGER test_reject_suffix_binding
-		BEFORE INSERT ON peer_bindings
-		BEGIN SELECT RAISE(ABORT, 'test reject suffix binding'); END`); err != nil {
-		t.Fatal(err)
+	wrongHeadSpec := spec
+	wrongHeadSpec.Transcript = enrollmentTestTranscript(t, owner.channel.Descriptor(), owner.grantID,
+		owner.requestID, owner.joiner, accepted.Roster.Head(), 0x6f, 0x70)
+	if _, err := joinerStore.InstallJoinedChannel(context.Background(), wrongHeadSpec); !errors.Is(err, ErrChannelJoinInput) {
+		t.Fatalf("wrong historical predecessor error = %v", err)
 	}
-	replaySpec := baseSpec
-	replaySpec.Members = expanded.Members()
-	replaySpec.At = baseAt.Add(2 * time.Second)
-	if _, err := joinerStore.InstallJoinedChannel(context.Background(), replaySpec); err == nil {
-		t.Fatal("suffix binding failure was accepted")
+	assertEnrollmentTableCounts(t, joinerStore, map[string]int{
+		"channels": 0, "channel_members": 0, "enrollment_receipts": 0,
+		"publication_epochs": 0, "peer_bindings": 0,
+	})
+	reserveJoinedChannelTest(t, joinerStore, spec)
+	installed, err := joinerStore.InstallJoinedChannel(context.Background(), spec)
+	if err != nil || !installed.Installed || installed.Status != ChannelEnrollmentAccepted ||
+		installed.Channel.LocalAlias() != "project-team" {
+		t.Fatalf("InstallJoinedChannel() = (%#v, %v)", installed, err)
+	}
+	assertEnrollmentTableCounts(t, joinerStore, map[string]int{
+		"channels": 1, "channel_members": 2, "enrollment_receipts": 1,
+		"publication_epochs": 1, "peer_bindings": 1, "enrollment_grants": 0,
+		"enrollment_grant_uses": 0,
+	})
+	var epochPeer, epochText string
+	var floor, head uint64
+	if err := joinerStore.db.QueryRow(`SELECT origin_peer_id,origin_epoch,source_floor_channel_seq,
+		source_head_channel_seq FROM publication_epochs`).Scan(&epochPeer, &epochText, &floor, &head); err != nil ||
+		epochPeer != owner.joiner.PeerID().String() || epochText != owner.joiner.OriginEpoch().String() ||
+		floor != 1 || head != 0 {
+		t.Fatalf("local publication epoch = (%q,%q,%d,%d,%v)", epochPeer, epochText, floor, head, err)
+	}
+	var ownerUse sql.NullString
+	var bindingState, alias string
+	if err := joinerStore.db.QueryRow(`SELECT owner_use_id FROM enrollment_receipts`).Scan(&ownerUse); err != nil || ownerUse.Valid {
+		t.Fatalf("replica owner_use_id = %#v, %v", ownerUse, err)
+	}
+	if err := joinerStore.db.QueryRow(`SELECT state,effective_alias FROM peer_bindings`).Scan(
+		&bindingState, &alias); err != nil || bindingState != "pending" || alias == "" {
+		t.Fatalf("owner binding = (%q,%q,%v)", bindingState, alias, err)
+	}
+	replayed, err := joinerStore.InstallJoinedChannel(context.Background(), spec)
+	if err != nil || replayed.Installed || replayed.Status != ChannelEnrollmentReplayed {
+		t.Fatalf("InstallJoinedChannel(replay) = (%#v, %v)", replayed, err)
 	}
 	assertEnrollmentTableCounts(t, joinerStore, map[string]int{
 		"channels": 1, "channel_members": 2, "enrollment_receipts": 1,
 		"publication_epochs": 1, "peer_bindings": 1,
 	})
-	var head uint64
-	var status, topic, alias string
-	if err := joinerStore.db.QueryRow(`SELECT roster_head_revision,status,topic_state FROM channels`).Scan(
-		&head, &status, &topic); err != nil || head != 2 || status != "active" || topic != "not_joined" {
-		t.Fatalf("Channel after suffix rollback = (%d,%q,%q,%v)", head, status, topic, err)
-	}
-	if err := joinerStore.db.QueryRow(`SELECT effective_alias FROM peer_bindings`).Scan(&alias); err != nil ||
-		alias != originalAlias {
-		t.Fatalf("binding alias after suffix rollback = (%q,%v), want %q", alias, err, originalAlias)
-	}
 }
 
-func TestInstallJoinedChannelKeepsTerminalAliasAndDisambiguatesReplacementPeer(t *testing.T) {
+func TestInstallJoinedChannelRejectsNinthNonterminalReplicaWithoutPartialState(t *testing.T) {
 	t.Parallel()
-	owner, joinerStore, baseSpec, initialRoster := newInstalledJoinedChannelFixture(t,
-		"join-alias-churn", "alias-churn-team")
-	baseAt := baseSpec.At
-	firstPeer := testkit.NewIdentity(t, "join-alias-churn-first")
-	_, firstRoster := appendRosterMemberWithLabel(t, owner.channel.Descriptor(), owner.signer,
-		initialRoster, firstPeer, "reviewer")
-	firstSpec := baseSpec
-	firstSpec.Members = firstRoster.Members()
-	firstSpec.At = baseAt.Add(2 * time.Second)
-	if result, err := joinerStore.InstallJoinedChannel(context.Background(), firstSpec); err != nil ||
-		result.Roster.Head() != firstRoster.Head() {
-		t.Fatalf("first alias suffix = (%#v,%v)", result, err)
+	sharedJoiner := testkit.NewIdentity(t, "join-channel-limit-shared")
+	joinerStore := openTestStore(t)
+	base := time.Date(2026, 7, 18, 0, 0, 0, 0, time.UTC)
+	insertChannelTestNode(t, joinerStore.db, sharedJoiner, base)
+	var rejectedChannel model.ChannelID
+	for index := 0; index <= model.MaxChannelsPerNode; index++ {
+		seed := "join-channel-limit-" + string(rune('a'+index))
+		owner := newChannelEnrollmentFixture(t, seed)
+		owner.joiner = sharedJoiner
+		owner.requestID = stableEnrollmentRequest(t, owner.channel.Channel().ID(), owner.grantID,
+			sharedJoiner)
+		prepared, err := owner.ownerStore.PrepareChannelEnrollment(context.Background(),
+			owner.prepareSpec(owner.acceptedAt))
+		if err != nil {
+			t.Fatalf("prepare Channel %d: %v", index+1, err)
+		}
+		transcript := owner.transcript(t, byte(0x80+index), byte(0x90+index), prepared.RosterHead)
+		accepted := owner.accept(t, transcript)
+		installSpec := InstallJoinedChannelSpec{
+			AuthenticatedOwnerPeerID: owner.channel.Owner().PeerID(),
+			LocalAlias:               "joined-" + string(rune('a'+index)),
+			Descriptor:               owner.channel.Descriptor(), Transcript: transcript,
+			Receipt: accepted.Receipt, Members: accepted.Roster.Members(), At: owner.acceptedAt.Add(time.Second)}
+		if index == model.MaxChannelsPerNode {
+			rejectedChannel = owner.channel.Channel().ID()
+			_, err := joinerStore.PrepareJoinedChannel(context.Background(), PrepareJoinedChannelSpec{
+				AuthenticatedLocalPeerID: sharedJoiner.PeerID(), LocalPublicKey: sharedJoiner.PublicKey(),
+				Descriptor: owner.channel.Descriptor(), GrantID: owner.grantID,
+				LocalAlias: installSpec.LocalAlias, At: installSpec.At})
+			if !errors.Is(err, ErrNodeChannelLimit) {
+				t.Fatalf("ninth joined Channel preflight error = %v", err)
+			}
+			continue
+		}
+		reserveJoinedChannelTest(t, joinerStore, installSpec)
+		result, err := joinerStore.InstallJoinedChannel(context.Background(), installSpec)
+		if err != nil || !result.Installed {
+			t.Fatalf("install Channel %d = (%#v,%v)", index+1, result, err)
+		}
 	}
-	var firstAlias string
-	if err := joinerStore.db.QueryRow(`SELECT effective_alias FROM peer_bindings WHERE peer_id=?`,
-		firstPeer.PeerID().String()).Scan(&firstAlias); err != nil || firstAlias != "reviewer" {
-		t.Fatalf("first reviewer alias = (%q,%v)", firstAlias, err)
-	}
-	_, terminalRoster := appendRosterTerminal(t, owner.channel.Descriptor(), owner.signer,
-		firstRoster, firstPeer.PeerID(), model.MemberRevoked, baseAt.Add(3*time.Second))
-	secondPeer := testkit.NewIdentity(t, "join-alias-churn-second")
-	_, replacementRoster := appendRosterMemberWithLabel(t, owner.channel.Descriptor(), owner.signer,
-		terminalRoster, secondPeer, "reviewer")
-	replacementSpec := baseSpec
-	replacementSpec.Members = replacementRoster.Members()
-	replacementSpec.At = baseAt.Add(5 * time.Second)
-	if result, err := joinerStore.InstallJoinedChannel(context.Background(), replacementSpec); err != nil ||
-		result.Roster.Head() != replacementRoster.Head() {
-		t.Fatalf("replacement alias suffix = (%#v,%v)", result, err)
-	}
-	var firstState, retainedAlias, secondState, replacementAlias string
-	if err := joinerStore.db.QueryRow(`SELECT state,effective_alias FROM peer_bindings WHERE peer_id=?`,
-		firstPeer.PeerID().String()).Scan(&firstState, &retainedAlias); err != nil {
-		t.Fatal(err)
-	}
-	if err := joinerStore.db.QueryRow(`SELECT state,effective_alias FROM peer_bindings WHERE peer_id=?`,
-		secondPeer.PeerID().String()).Scan(&secondState, &replacementAlias); err != nil {
-		t.Fatal(err)
-	}
-	if firstState != "revoked" || retainedAlias != firstAlias || secondState != "pending" ||
-		replacementAlias == firstAlias || !strings.HasPrefix(replacementAlias, "reviewer~") {
-		t.Fatalf("alias churn = first(%q,%q) second(%q,%q)", firstState, retainedAlias,
-			secondState, replacementAlias)
+	assertEnrollmentTableCounts(t, joinerStore, map[string]int{
+		"channels": model.MaxChannelsPerNode, "channel_members": model.MaxChannelsPerNode * 2,
+		"enrollment_receipts": model.MaxChannelsPerNode,
+		"publication_epochs":  model.MaxChannelsPerNode, "peer_bindings": model.MaxChannelsPerNode,
+	})
+	for _, table := range []string{"channels", "channel_members", "enrollment_receipts",
+		"publication_epochs", "peer_bindings"} {
+		var count int
+		if err := joinerStore.db.QueryRow(`SELECT COUNT(*) FROM `+table+` WHERE channel_id=?`,
+			rejectedChannel.String()).Scan(&count); err != nil || count != 0 {
+			t.Fatalf("partial ninth %s rows = %d, %v", table, count, err)
+		}
 	}
 }
 
-func newInstalledJoinedChannelFixture(t *testing.T, seed, localAlias string) (
-	channelEnrollmentFixture, *Store, InstallJoinedChannelSpec, model.VerifiedRoster,
-) {
-	t.Helper()
-	owner, joinerStore, spec := newJoinedChannelInstallFixture(t, seed, localAlias)
-	result, err := joinerStore.InstallJoinedChannel(context.Background(), spec)
-	if err != nil || !result.Installed {
-		t.Fatalf("initial joined Channel install = (%#v,%v)", result, err)
+func TestInstallJoinedChannelFinalBindingFailureRollsBackEverything(t *testing.T) {
+	t.Parallel()
+	owner := newChannelEnrollmentFixture(t, "join-binding-rollback")
+	transcript := owner.transcript(t, 0x73, 0x74, owner.head)
+	accepted := owner.accept(t, transcript)
+	joinerStore := openTestStore(t)
+	insertChannelTestNode(t, joinerStore.db, owner.joiner, owner.channel.Channel().CreatedAt())
+	if _, err := joinerStore.db.Exec(`CREATE TRIGGER test_reject_join_binding BEFORE INSERT ON peer_bindings
+		BEGIN SELECT RAISE(ABORT, 'test reject binding'); END`); err != nil {
+		t.Fatal(err)
 	}
-	return owner, joinerStore, spec, result.Roster
+	installSpec := InstallJoinedChannelSpec{
+		AuthenticatedOwnerPeerID: owner.channel.Owner().PeerID(), LocalAlias: "rollback-team",
+		Descriptor: owner.channel.Descriptor(), Transcript: transcript, Receipt: accepted.Receipt,
+		Members: accepted.Roster.Members(), At: owner.acceptedAt.Add(time.Second)}
+	reserveJoinedChannelTest(t, joinerStore, installSpec)
+	_, err := joinerStore.InstallJoinedChannel(context.Background(), installSpec)
+	if err == nil {
+		t.Fatal("binding failure did not reject join install")
+	}
+	assertEnrollmentTableCounts(t, joinerStore, map[string]int{
+		"channels": 0, "channel_members": 0, "enrollment_receipts": 0,
+		"publication_epochs": 0, "peer_bindings": 0, "channel_join_reservations": 1,
+	})
 }
 
 func TestInstallJoinedChannelAppliesTerminalReplaySuffixButFreshJoinStaysEmpty(t *testing.T) {
@@ -597,8 +628,7 @@ func TestInstallJoinedChannelAppliesTerminalReplaySuffixButFreshJoinStaysEmpty(t
 	accepted := owner.accept(t, transcript)
 	initialAt := owner.acceptedAt.Add(time.Second)
 	baseSpec := InstallJoinedChannelSpec{AuthenticatedOwnerPeerID: owner.channel.Owner().PeerID(),
-		OwnerOutcome: ChannelEnrollmentAccepted, LocalAlias: "terminal-team",
-		Descriptor: owner.channel.Descriptor(), Transcript: transcript,
+		LocalAlias: "terminal-team", Descriptor: owner.channel.Descriptor(), Transcript: transcript,
 		Receipt: accepted.Receipt, Members: accepted.Roster.Members(), At: initialAt}
 	joinerStore := openTestStore(t)
 	insertChannelTestNode(t, joinerStore.db, owner.joiner, owner.channel.Channel().CreatedAt())
@@ -613,7 +643,6 @@ func TestInstallJoinedChannelAppliesTerminalReplaySuffixButFreshJoinStaysEmpty(t
 	_, terminalRoster := appendRosterTerminal(t, owner.channel.Descriptor(), owner.signer,
 		expandedRoster, owner.joiner.PeerID(), model.MemberLeft, terminalAt)
 	replaySpec := baseSpec
-	replaySpec.OwnerOutcome = ChannelEnrollmentMemberRevoked
 	replaySpec.Members = terminalRoster.Members()
 	replaySpec.At = terminalAt.Add(time.Second)
 	replayed, err := joinerStore.InstallJoinedChannel(context.Background(), replaySpec)
@@ -654,4 +683,449 @@ func TestInstallJoinedChannelAppliesTerminalReplaySuffixButFreshJoinStaysEmpty(t
 		"channels": 1, "channel_members": 5, "enrollment_receipts": 1,
 		"publication_epochs": 1, "peer_bindings": 2,
 	})
+}
+
+func TestInstallJoinedChannelSuffixFailureRollsBackHeadMembersBindingsAndAliases(t *testing.T) {
+	t.Parallel()
+	owner := newChannelEnrollmentFixture(t, "join-suffix-rollback")
+	transcript := owner.transcript(t, 0x77, 0x78, owner.head)
+	accepted := owner.accept(t, transcript)
+	joinerStore := openTestStore(t)
+	insertChannelTestNode(t, joinerStore.db, owner.joiner, owner.channel.Channel().CreatedAt())
+	baseAt := owner.acceptedAt.Add(time.Second)
+	baseSpec := InstallJoinedChannelSpec{AuthenticatedOwnerPeerID: owner.channel.Owner().PeerID(),
+		LocalAlias: "suffix-rollback-team", Descriptor: owner.channel.Descriptor(), Transcript: transcript,
+		Receipt: accepted.Receipt, Members: accepted.Roster.Members(), At: baseAt}
+	reserveJoinedChannelTest(t, joinerStore, baseSpec)
+	if result, err := joinerStore.InstallJoinedChannel(context.Background(), baseSpec); err != nil || !result.Installed {
+		t.Fatalf("initial install = (%#v,%v)", result, err)
+	}
+	var originalAlias string
+	if err := joinerStore.db.QueryRow(`SELECT effective_alias FROM peer_bindings`).Scan(&originalAlias); err != nil {
+		t.Fatal(err)
+	}
+	newPeer := testkit.NewIdentity(t, "join-suffix-rollback-new")
+	ownerMember, _ := accepted.Roster.CurrentMember(owner.channel.Owner().PeerID())
+	_, expanded := appendRosterMemberWithLabel(t, owner.channel.Descriptor(), owner.signer,
+		accepted.Roster, newPeer, ownerMember.DisplayLabel())
+	if _, err := joinerStore.db.Exec(`CREATE TRIGGER test_reject_suffix_binding
+		BEFORE INSERT ON peer_bindings
+		BEGIN SELECT RAISE(ABORT, 'test reject suffix binding'); END`); err != nil {
+		t.Fatal(err)
+	}
+	replaySpec := baseSpec
+	replaySpec.Members = expanded.Members()
+	replaySpec.At = baseAt.Add(2 * time.Second)
+	if _, err := joinerStore.InstallJoinedChannel(context.Background(), replaySpec); err == nil {
+		t.Fatal("suffix binding failure was accepted")
+	}
+	assertEnrollmentTableCounts(t, joinerStore, map[string]int{
+		"channels": 1, "channel_members": 2, "enrollment_receipts": 1,
+		"publication_epochs": 1, "peer_bindings": 1,
+	})
+	var head uint64
+	var status, topic, alias string
+	if err := joinerStore.db.QueryRow(`SELECT roster_head_revision,status,topic_state FROM channels`).Scan(
+		&head, &status, &topic); err != nil || head != 2 || status != "active" || topic != "not_joined" {
+		t.Fatalf("Channel after suffix rollback = (%d,%q,%q,%v)", head, status, topic, err)
+	}
+	if err := joinerStore.db.QueryRow(`SELECT effective_alias FROM peer_bindings`).Scan(&alias); err != nil ||
+		alias != originalAlias {
+		t.Fatalf("binding alias after suffix rollback = (%q,%v), want %q", alias, err, originalAlias)
+	}
+}
+
+func TestInstallJoinedChannelOwnerCloseSuffixClosesReplicaAndFreshJoinStaysEmpty(t *testing.T) {
+	t.Parallel()
+	owner := newChannelEnrollmentFixture(t, "join-owner-close")
+	transcript := owner.transcript(t, 0x79, 0x7a, owner.head)
+	accepted := owner.accept(t, transcript)
+	baseAt := owner.acceptedAt.Add(time.Second)
+	baseSpec := InstallJoinedChannelSpec{AuthenticatedOwnerPeerID: owner.channel.Owner().PeerID(),
+		LocalAlias: "owner-close-team", Descriptor: owner.channel.Descriptor(), Transcript: transcript,
+		Receipt: accepted.Receipt, Members: accepted.Roster.Members(), At: baseAt}
+	joinerStore := openTestStore(t)
+	insertChannelTestNode(t, joinerStore.db, owner.joiner, owner.channel.Channel().CreatedAt())
+	reserveJoinedChannelTest(t, joinerStore, baseSpec)
+	if result, err := joinerStore.InstallJoinedChannel(context.Background(), baseSpec); err != nil || !result.Installed {
+		t.Fatalf("initial install = (%#v,%v)", result, err)
+	}
+	_, closedRoster := appendRosterTerminal(t, owner.channel.Descriptor(), owner.signer,
+		accepted.Roster, owner.channel.Owner().PeerID(), model.MemberLeft, baseAt.Add(time.Second))
+	closeSpec := baseSpec
+	closeSpec.Members = closedRoster.Members()
+	closeSpec.At = baseAt.Add(2 * time.Second)
+	closed, err := joinerStore.InstallJoinedChannel(context.Background(), closeSpec)
+	if err != nil || closed.Status != ChannelEnrollmentChannelClosed ||
+		closed.Channel.Status() != model.ChannelClosed || closed.Channel.TopicState() != model.TopicLeft ||
+		closed.Channel.RosterHead() != closedRoster.Head() {
+		t.Fatalf("owner close suffix = (%#v,%v)", closed, err)
+	}
+
+	fresh := openTestStore(t)
+	insertChannelTestNode(t, fresh.db, owner.joiner, owner.channel.Channel().CreatedAt())
+	reserveJoinedChannelTest(t, fresh, closeSpec)
+	freshResult, err := fresh.InstallJoinedChannel(context.Background(), closeSpec)
+	if err != nil || freshResult.Installed || freshResult.Status != ChannelEnrollmentChannelClosed {
+		t.Fatalf("fresh owner-close install = (%#v,%v)", freshResult, err)
+	}
+	assertEnrollmentTableCounts(t, fresh, map[string]int{
+		"channels": 0, "channel_members": 0, "enrollment_receipts": 0,
+		"publication_epochs": 0, "peer_bindings": 0,
+	})
+}
+
+func TestInstallJoinedChannelKeepsTerminalAliasAndDisambiguatesReplacementPeer(t *testing.T) {
+	t.Parallel()
+	owner := newChannelEnrollmentFixture(t, "join-alias-churn")
+	transcript := owner.transcript(t, 0x7b, 0x7c, owner.head)
+	accepted := owner.accept(t, transcript)
+	joinerStore := openTestStore(t)
+	insertChannelTestNode(t, joinerStore.db, owner.joiner, owner.channel.Channel().CreatedAt())
+	baseAt := owner.acceptedAt.Add(time.Second)
+	baseSpec := InstallJoinedChannelSpec{AuthenticatedOwnerPeerID: owner.channel.Owner().PeerID(),
+		LocalAlias: "alias-churn-team", Descriptor: owner.channel.Descriptor(), Transcript: transcript,
+		Receipt: accepted.Receipt, Members: accepted.Roster.Members(), At: baseAt}
+	reserveJoinedChannelTest(t, joinerStore, baseSpec)
+	if result, err := joinerStore.InstallJoinedChannel(context.Background(), baseSpec); err != nil || !result.Installed {
+		t.Fatalf("initial install = (%#v,%v)", result, err)
+	}
+	firstPeer := testkit.NewIdentity(t, "join-alias-churn-first")
+	_, firstRoster := appendRosterMemberWithLabel(t, owner.channel.Descriptor(), owner.signer,
+		accepted.Roster, firstPeer, "reviewer")
+	firstSpec := baseSpec
+	firstSpec.Members = firstRoster.Members()
+	firstSpec.At = baseAt.Add(2 * time.Second)
+	if result, err := joinerStore.InstallJoinedChannel(context.Background(), firstSpec); err != nil ||
+		result.Roster.Head() != firstRoster.Head() {
+		t.Fatalf("first alias suffix = (%#v,%v)", result, err)
+	}
+	var firstAlias string
+	if err := joinerStore.db.QueryRow(`SELECT effective_alias FROM peer_bindings WHERE peer_id=?`,
+		firstPeer.PeerID().String()).Scan(&firstAlias); err != nil || firstAlias != "reviewer" {
+		t.Fatalf("first reviewer alias = (%q,%v)", firstAlias, err)
+	}
+	_, terminalRoster := appendRosterTerminal(t, owner.channel.Descriptor(), owner.signer,
+		firstRoster, firstPeer.PeerID(), model.MemberRevoked, baseAt.Add(3*time.Second))
+	secondPeer := testkit.NewIdentity(t, "join-alias-churn-second")
+	_, replacementRoster := appendRosterMemberWithLabel(t, owner.channel.Descriptor(), owner.signer,
+		terminalRoster, secondPeer, "reviewer")
+	replacementSpec := baseSpec
+	replacementSpec.Members = replacementRoster.Members()
+	replacementSpec.At = baseAt.Add(5 * time.Second)
+	if result, err := joinerStore.InstallJoinedChannel(context.Background(), replacementSpec); err != nil ||
+		result.Roster.Head() != replacementRoster.Head() {
+		t.Fatalf("replacement alias suffix = (%#v,%v)", result, err)
+	}
+	var firstState, retainedAlias, secondState, replacementAlias string
+	if err := joinerStore.db.QueryRow(`SELECT state,effective_alias FROM peer_bindings WHERE peer_id=?`,
+		firstPeer.PeerID().String()).Scan(&firstState, &retainedAlias); err != nil {
+		t.Fatal(err)
+	}
+	if err := joinerStore.db.QueryRow(`SELECT state,effective_alias FROM peer_bindings WHERE peer_id=?`,
+		secondPeer.PeerID().String()).Scan(&secondState, &replacementAlias); err != nil {
+		t.Fatal(err)
+	}
+	if firstState != "revoked" || retainedAlias != firstAlias || secondState != "pending" ||
+		replacementAlias == firstAlias || !strings.HasPrefix(replacementAlias, "reviewer~") {
+		t.Fatalf("alias churn = first(%q,%q) second(%q,%q)", firstState, retainedAlias,
+			secondState, replacementAlias)
+	}
+}
+
+func TestDeriveEffectiveAliasesHandlesDuplicatesReservedAndSecondaryCollision(t *testing.T) {
+	t.Parallel()
+	channel := testkit.NewSignedChannel(t, "effective-aliases")
+	roster := channel.Roster()
+	ownerSigner := enrollmentTestSigner(t, channel.Owner())
+	firstIdentity := testkit.NewIdentity(t, "duplicate-one")
+	first, roster := appendRosterMemberWithLabel(t, channel.Descriptor(), ownerSigner, roster,
+		firstIdentity, "duplicate")
+	secondIdentity := testkit.NewIdentity(t, "duplicate-two")
+	_, roster = appendRosterMemberWithLabel(t, channel.Descriptor(), ownerSigner, roster,
+		secondIdentity, "duplicate")
+	reservedIdentity := testkit.NewIdentity(t, "reserved-team")
+	_, roster = appendRosterMemberWithLabel(t, channel.Descriptor(), ownerSigner, roster,
+		reservedIdentity, "team")
+	aliases, _, err := deriveEffectiveAliases(channel.Owner().PeerID(), roster)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if aliases[firstIdentity.PeerID()] == first.DisplayLabel() ||
+		aliases[secondIdentity.PeerID()] == first.DisplayLabel() ||
+		aliases[firstIdentity.PeerID()] == aliases[secondIdentity.PeerID()] ||
+		aliases[reservedIdentity.PeerID()] == "team" {
+		t.Fatalf("derived aliases = %#v", aliases)
+	}
+}
+
+func TestDeriveEffectiveAliasesSanitizesDisplayWhitespaceBeforeCollisionRules(t *testing.T) {
+	t.Parallel()
+	channel := testkit.NewSignedChannel(t, "effective-alias-whitespace")
+	roster := channel.Roster()
+	signer := enrollmentTestSigner(t, channel.Owner())
+	first := testkit.NewIdentity(t, "alias-space-one")
+	second := testkit.NewIdentity(t, "alias-space-two")
+	_, roster = appendRosterMemberWithLabel(t, channel.Descriptor(), signer, roster, first, "Alice Smith")
+	_, roster = appendRosterMemberWithLabel(t, channel.Descriptor(), signer, roster, second, "Alice\u00a0Smith")
+	aliases, _, err := deriveEffectiveAliases(channel.Owner().PeerID(), roster)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if aliases[first.PeerID()] == "Alice-Smith" || aliases[second.PeerID()] == "Alice-Smith" ||
+		aliases[first.PeerID()] == aliases[second.PeerID()] ||
+		strings.ContainsAny(aliases[first.PeerID()]+aliases[second.PeerID()], " \u00a0") {
+		t.Fatalf("whitespace aliases = %#v", aliases)
+	}
+}
+
+type channelEnrollmentFixture struct {
+	ownerStore *Store
+	channel    *testkit.SignedChannel
+	joiner     testkit.Identity
+	grantID    model.GrantID
+	requestID  model.EnrollmentRequestID
+	token      model.EnrollmentToken
+	signer     ChannelAuthoritySigner
+	head       model.RecordHead
+	acceptedAt time.Time
+}
+
+func newChannelEnrollmentFixture(t *testing.T, seed string) channelEnrollmentFixture {
+	t.Helper()
+	st := openTestStore(t)
+	channel := testkit.NewSignedChannel(t, "enrollment-"+seed)
+	insertChannelTestNode(t, st.db, channel.Owner(), channel.Channel().CreatedAt())
+	grantID, _ := model.ParseGrantID("grant-" + seed)
+	token := storeTestEnrollmentToken(t, channel.Descriptor(), channel.Owner(), grantID, seed,
+		channel.Channel().CreatedAt(), model.MaxMembersPerChannel-1)
+	if _, err := st.CreateChannel(context.Background(), CreateChannelSpec{Channel: channel.Channel(),
+		Genesis: channel.OwnerMember().Member(), Token: token}); err != nil {
+		t.Fatalf("CreateChannel() error = %v", err)
+	}
+	joiner := testkit.NewIdentity(t, "joiner-"+seed)
+	requestID := stableEnrollmentRequest(t, channel.Channel().ID(), grantID, joiner)
+	signer := enrollmentTestSigner(t, channel.Owner())
+	acceptedAt := channel.Channel().CreatedAt().Add(10 * time.Second)
+	fixture := channelEnrollmentFixture{ownerStore: st, channel: channel, joiner: joiner,
+		grantID: grantID, requestID: requestID, token: token, signer: signer,
+		head: channel.Roster().Head(), acceptedAt: acceptedAt}
+	prepared, err := st.PrepareChannelEnrollment(context.Background(), fixture.prepareSpec(acceptedAt))
+	if err != nil || prepared.Status != ChannelEnrollmentAccepted || prepared.RosterHead != fixture.head {
+		t.Fatalf("PrepareChannelEnrollment() = (%#v, %v)", prepared, err)
+	}
+	return fixture
+}
+
+func stableEnrollmentRequest(t testing.TB, channelID model.ChannelID, grantID model.GrantID,
+	identity testkit.Identity,
+) model.EnrollmentRequestID {
+	t.Helper()
+	joinIdentity, err := model.EnrollmentJoinIdentityDigest(channelID, grantID, identity.PeerID(),
+		identity.PublicKey(), identity.OriginEpoch())
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestID, err := model.EnrollmentRequestIDForJoinIdentity(joinIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return requestID
+}
+
+func reserveJoinedChannelTest(t testing.TB, st *Store, spec InstallJoinedChannelSpec) {
+	t.Helper()
+	prepared, err := st.PrepareJoinedChannel(context.Background(), PrepareJoinedChannelSpec{
+		AuthenticatedLocalPeerID: spec.Transcript.JoinerPeerID(),
+		LocalPublicKey:           spec.Transcript.JoinerPublicKey(),
+		Descriptor:               spec.Descriptor,
+		GrantID:                  spec.Transcript.GrantID(),
+		LocalAlias:               spec.LocalAlias,
+		At:                       spec.At,
+	})
+	if err != nil || prepared.RequestID != spec.Transcript.RequestID() ||
+		prepared.OriginEpoch != spec.Transcript.JoinerOriginEpoch() || !prepared.Reserved {
+		t.Fatalf("PrepareJoinedChannel() = (%#v, %v)", prepared, err)
+	}
+}
+
+func (fixture channelEnrollmentFixture) prepareSpec(at time.Time) PrepareChannelEnrollmentSpec {
+	return PrepareChannelEnrollmentSpec{ChannelID: fixture.channel.Channel().ID(), GrantID: fixture.grantID,
+		RequestID: fixture.requestID, AuthenticatedPeerID: fixture.joiner.PeerID(),
+		JoinerOriginEpoch: fixture.joiner.OriginEpoch(), JoinerPublicKey: fixture.joiner.PublicKey(), At: at}
+}
+
+func (fixture channelEnrollmentFixture) transcript(t testing.TB, ownerNonce, joinerNonce byte,
+	head model.RecordHead,
+) model.EnrollmentTranscript {
+	t.Helper()
+	return enrollmentTestTranscript(t, fixture.channel.Descriptor(), fixture.grantID,
+		fixture.requestID, fixture.joiner, head, ownerNonce, joinerNonce)
+}
+
+func (fixture channelEnrollmentFixture) accept(t testing.TB,
+	transcript model.EnrollmentTranscript,
+) AcceptChannelEnrollmentResult {
+	t.Helper()
+	return fixture.acceptAt(t, transcript, fixture.acceptedAt)
+}
+
+func (fixture channelEnrollmentFixture) acceptAt(t testing.TB, transcript model.EnrollmentTranscript,
+	at time.Time,
+) AcceptChannelEnrollmentResult {
+	t.Helper()
+	proof := enrollmentTestProof(t, fixture.token, transcript)
+	result, err := fixture.ownerStore.AcceptChannelEnrollment(context.Background(), AcceptChannelEnrollmentSpec{
+		AuthenticatedPeerID: fixture.joiner.PeerID(), Transcript: transcript,
+		AdvertisedMultiaddrs: fixture.joiner.Multiaddrs(), Proof: proof, Signer: fixture.signer, At: at})
+	if err != nil {
+		t.Fatalf("AcceptChannelEnrollment() error = %v", err)
+	}
+	return result
+}
+
+func enrollmentTestTranscript(t testing.TB, descriptor model.SignedChannelDescriptor,
+	grantID model.GrantID, requestID model.EnrollmentRequestID, joiner testkit.Identity,
+	head model.RecordHead, ownerNonce, joinerNonce byte,
+) model.EnrollmentTranscript {
+	t.Helper()
+	transcript, err := model.NewEnrollmentTranscript(model.EnrollmentTranscriptSpec{
+		ChannelID: descriptor.Descriptor().ID(), GrantID: grantID, RequestID: requestID,
+		OwnerPeerID: descriptor.Descriptor().OwnerPeerID(), JoinerPeerID: joiner.PeerID(),
+		OwnerNonce:      bytes.Repeat([]byte{ownerNonce}, model.EnrollmentNonceBytes),
+		JoinerNonce:     bytes.Repeat([]byte{joinerNonce}, model.EnrollmentNonceBytes),
+		SelectedVersion: model.EnrollmentProtocolMinVersion, Limits: model.DefaultMemberLimits(),
+		JoinerOriginEpoch: joiner.OriginEpoch(), JoinerDisplayLabel: joiner.DisplayName(),
+		JoinerPublicKey: joiner.PublicKey(), AdvertisedMultiaddrs: joiner.Multiaddrs(), RosterHead: head})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return transcript
+}
+
+func enrollmentTestProof(t testing.TB, token model.EnrollmentToken,
+	transcript model.EnrollmentTranscript,
+) model.Digest {
+	t.Helper()
+	verifier, err := model.VerifierForEnrollment(token.Payload().BearerSecret(), transcript.ChannelID(),
+		transcript.GrantID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof, err := model.ComputeEnrollmentProof(verifier, transcript)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return proof
+}
+
+func enrollmentTestSigner(t testing.TB, identity testkit.Identity) ChannelAuthoritySigner {
+	t.Helper()
+	privateKey, err := identity.Libp2pPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := privateKey.Raw()
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := eventpkg.NewEd25519Signer(ed25519.PrivateKey(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return signer
+}
+
+type failAfterSigner struct {
+	delegate  ChannelAuthoritySigner
+	remaining int
+}
+
+func (signer *failAfterSigner) Sign(ctx context.Context, message []byte) ([]byte, error) {
+	if signer.remaining == 0 {
+		return nil, errors.New("injected signer failure")
+	}
+	signer.remaining--
+	return signer.delegate.Sign(ctx, message)
+}
+
+func assertEnrollmentTableCounts(t testing.TB, st *Store, wants map[string]int) {
+	t.Helper()
+	for table, want := range wants {
+		var got int
+		if err := st.db.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&got); err != nil || got != want {
+			t.Fatalf("%s count = %d, err=%v, want %d", table, got, err, want)
+		}
+	}
+}
+
+// appendRosterMemberWithLabel creates a test-only label variant while
+// preserving real owner signatures and complete roster verification.
+func appendRosterMemberWithLabel(t testing.TB, descriptor model.SignedChannelDescriptor,
+	ownerSigner ChannelAuthoritySigner, roster model.VerifiedRoster, identity testkit.Identity, label string,
+) (model.Member, model.VerifiedRoster) {
+	t.Helper()
+	previous := roster.Head().Digest()
+	revision := roster.Head().Revision() + 1
+	members := roster.Members()
+	record, err := model.NewMemberRecord(model.MemberRecordSpec{ChannelID: descriptor.Descriptor().ID(),
+		DescriptorDigest: descriptor.Descriptor().Digest(), Revision: revision,
+		PreviousDigest: &previous, PeerID: identity.PeerID(), OriginEpoch: identity.OriginEpoch(),
+		DisplayLabel: label, PublicKey: identity.PublicKey(), Multiaddrs: identity.Multiaddrs(),
+		Protocols: model.RequiredMemberProtocols(), Limits: model.DefaultMemberLimits(),
+		Status: model.MemberActive, CreatedAt: members[len(members)-1].CreatedAt().Add(time.Second)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _ := model.MemberRecordSigningMessage(record.ChannelID(), record.Digest())
+	signature, err := ownerSigner.Sign(context.Background(), message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	member, err := model.AttachMemberSignature(record, signature)
+	if err != nil {
+		t.Fatal(err)
+	}
+	members = append(members, member)
+	verified, err := model.NewVerifiedRoster(descriptor, members)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return member, verified
+}
+
+func appendRosterTerminal(t testing.TB, descriptor model.SignedChannelDescriptor,
+	ownerSigner ChannelAuthoritySigner, roster model.VerifiedRoster, peerID model.PeerID,
+	status model.MemberStatus, at time.Time,
+) (model.Member, model.VerifiedRoster) {
+	t.Helper()
+	current, ok := roster.CurrentMember(peerID)
+	if !ok || current.Status() != model.MemberActive || !status.Terminal() {
+		t.Fatal("terminal test member lacks active authority")
+	}
+	previous := roster.Head().Digest()
+	record, err := model.NewMemberRecord(model.MemberRecordSpec{ChannelID: descriptor.Descriptor().ID(),
+		DescriptorDigest: descriptor.Descriptor().Digest(), Revision: roster.Head().Revision() + 1,
+		PreviousDigest: &previous, PeerID: current.PeerID(), OriginEpoch: current.OriginEpoch(),
+		DisplayLabel: current.DisplayLabel(), PublicKey: current.PublicKey(), Multiaddrs: current.Multiaddrs(),
+		Protocols: current.Protocols(), Limits: current.Limits(), Status: status, CreatedAt: at})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _ := model.MemberRecordSigningMessage(record.ChannelID(), record.Digest())
+	signature, err := ownerSigner.Sign(context.Background(), message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	member, err := model.AttachMemberSignature(record, signature)
+	if err != nil {
+		t.Fatal(err)
+	}
+	members := roster.Members()
+	members = append(members, member)
+	verified, err := model.NewVerifiedRoster(descriptor, members)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return member, verified
 }

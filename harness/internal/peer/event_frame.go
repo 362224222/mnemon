@@ -38,60 +38,22 @@ const (
 	EventFrameProtocolError EventFrameType = "protocol_error"
 )
 
-// EventFramePayload is sealed to the five /mnemon/events/1 repair messages;
-// their one-request stream is the correlation scope.
+func (frameType EventFrameType) Valid() bool {
+	switch frameType {
+	case EventFramePullRequest, EventFramePullPage, EventFrameCursorAck,
+		EventFrameAck, EventFrameProtocolError:
+		return true
+	default:
+		return false
+	}
+}
+
+// EventFramePayload is sealed to the five direct repair messages supported by
+// /mnemon/events/1. Request correlation is the stream itself; unlike Channel
+// enrollment, this one-request stream has no generic request identifier.
 type EventFramePayload interface {
 	CanonicalJSON() model.JSON
-	IsZero() bool
-	eventFramePayload()
-}
-type eventFrameCodec interface {
-	accepts(EventFramePayload) bool
-	parse([]byte) (EventFramePayload, error)
-}
-type typedEventFrameCodec[T EventFramePayload] func([]byte) (T, error)
-
-func (typedEventFrameCodec[T]) accepts(payload EventFramePayload) bool {
-	_, ok := payload.(T)
-	return ok
-}
-func (codec typedEventFrameCodec[T]) parse(raw []byte) (EventFramePayload, error) { return codec(raw) }
-
-// eventFrameDescriptors is the immutable ordered authority for Events frames.
-type eventFrameDescriptor struct {
-	frameType EventFrameType
-	maximum   int
-	request   bool
-	codec     eventFrameCodec
-}
-
-var eventFrameDescriptors = [...]eventFrameDescriptor{
-	{EventFramePullRequest, eventSmallFrameBytes, true, typedEventFrameCodec[PullRequest](parsePullRequest)},
-	{EventFramePullPage, eventPullPageFrameBytes, false, typedEventFrameCodec[PullPage](parsePullPage)},
-	{EventFrameCursorAck, eventSmallFrameBytes, true, typedEventFrameCodec[CursorAck](parseCursorAck)},
-	{EventFrameAck, eventSmallFrameBytes, false, typedEventFrameCodec[EventAck](parseEventAck)},
-	{EventFrameProtocolError, eventSmallFrameBytes, false, typedEventFrameCodec[EventProtocolError](parseEventProtocolError)},
-}
-
-func eventFrameDescriptorFor(frameType EventFrameType) (eventFrameDescriptor, bool) {
-	for _, descriptor := range eventFrameDescriptors {
-		if descriptor.frameType == frameType {
-			return descriptor, true
-		}
-	}
-	return eventFrameDescriptor{}, false
-}
-func (frameType EventFrameType) Valid() bool {
-	_, valid := eventFrameDescriptorFor(frameType)
-	return valid
-}
-func (frameType EventFrameType) IsRequest() bool {
-	descriptor, valid := eventFrameDescriptorFor(frameType)
-	return valid && descriptor.request
-}
-func (frameType EventFrameType) IsResponse() bool {
-	descriptor, valid := eventFrameDescriptorFor(frameType)
-	return valid && !descriptor.request
+	eventFrameType() EventFrameType
 }
 
 type EventFrame struct {
@@ -126,23 +88,44 @@ func NewEventFrame(payload EventFramePayload) (EventFrame, error) {
 }
 
 func canonicalEventPayload(payload EventFramePayload) (EventFrameType, model.JSON, error) {
-	for _, descriptor := range eventFrameDescriptors {
-		if !descriptor.codec.accepts(payload) {
-			continue
+	var frameType EventFrameType
+	switch value := payload.(type) {
+	case PullRequest:
+		frameType = EventFramePullRequest
+		if value.IsZero() {
+			return "", model.JSON{}, eventFrameError("zero PullRequest payload", nil)
 		}
-		if payload.IsZero() {
-			return "", model.JSON{}, eventFrameError("zero typed Events payload", nil)
+	case PullPage:
+		frameType = EventFramePullPage
+		if value.IsZero() {
+			return "", model.JSON{}, eventFrameError("zero PullPage payload", nil)
 		}
-		canonical := payload.CanonicalJSON()
-		if canonical.IsZero() {
-			return "", model.JSON{}, eventFrameError("canonical payload bytes are required", nil)
+	case CursorAck:
+		frameType = EventFrameCursorAck
+		if value.IsZero() {
+			return "", model.JSON{}, eventFrameError("zero CursorAck payload", nil)
 		}
-		return descriptor.frameType, canonical, nil
+	case EventAck:
+		frameType = EventFrameAck
+		if value.IsZero() {
+			return "", model.JSON{}, eventFrameError("zero Ack payload", nil)
+		}
+	case EventProtocolError:
+		frameType = EventFrameProtocolError
+		if value.IsZero() {
+			return "", model.JSON{}, eventFrameError("zero ProtocolError payload", nil)
+		}
+	default:
+		return "", model.JSON{}, eventFrameError("unknown Events payload implementation", nil)
 	}
-	return "", model.JSON{}, eventFrameError("unknown Events payload implementation", nil)
+	if payload.eventFrameType() != frameType || payload.CanonicalJSON().IsZero() {
+		return "", model.JSON{}, eventFrameError("payload type or canonical bytes are inconsistent", nil)
+	}
+	return frameType, payload.CanonicalJSON(), nil
 }
 
-// ParseEventFrame admits exact canonical JSON and rebuilds the selected payload.
+// ParseEventFrame admits exact canonical JSON only and rebuilds every selected
+// typed payload before returning it.
 func ParseEventFrame(raw []byte) (EventFrame, error) {
 	if len(raw) == 0 || len(raw) > maxEventFrameBytes() {
 		return EventFrame{}, eventFrameError("empty or oversized envelope", nil)
@@ -176,20 +159,31 @@ func ParseEventFrame(raw []byte) (EventFrame, error) {
 }
 
 func parseEventPayload(frameType EventFrameType, raw []byte) (EventFramePayload, error) {
-	descriptor, valid := eventFrameDescriptorFor(frameType)
-	if !valid {
+	switch frameType {
+	case EventFramePullRequest:
+		return parsePullRequest(raw)
+	case EventFramePullPage:
+		return parsePullPage(raw)
+	case EventFrameCursorAck:
+		return parseCursorAck(raw)
+	case EventFrameAck:
+		return parseEventAck(raw)
+	case EventFrameProtocolError:
+		return parseEventProtocolError(raw)
+	default:
 		return nil, eventFrameError("unknown frame type", nil)
 	}
-	return descriptor.codec.parse(raw)
 }
 
-// ReadEventFrame fences and reads one uint32 big-endian length-prefixed envelope.
+// ReadEventFrame reads one uint32 big-endian length-prefixed envelope. The
+// Hermetic direct-frame fence is checked before payload allocation or reads.
 func ReadEventFrame(reader io.Reader) (EventFrame, error) {
 	return readEventFrameWithScope(reader, nil, maxEventFrameBytes())
 }
 
-// readEventStreamFrame reserves declared bytes until the caller invokes the
-// returned idempotent release function.
+// readEventStreamFrame reserves the declared frame bytes in the libp2p stream
+// scope for the lifetime selected by the caller. The returned release function
+// is idempotent and must be called after the typed frame is no longer in use.
 func readEventStreamFrame(stream network.Stream, maximum int) (EventFrame, func(), error) {
 	if stream == nil || stream.Scope() == nil {
 		return EventFrame{}, nil, eventFrameError("live stream scope is required", nil)
@@ -256,7 +250,8 @@ func readEventFrameReserved(reader io.Reader, scope network.ResourceScope,
 	return frame, release, nil
 }
 
-// WriteEventFrame writes one frame and rejects a zero-progress writer.
+// WriteEventFrame writes one complete uint32 big-endian length-prefixed
+// envelope and treats a zero-progress writer as io.ErrShortWrite.
 func WriteEventFrame(writer io.Writer, frame EventFrame) error {
 	if writer == nil || frame.IsZero() {
 		return eventFrameError("writer and complete frame are required", nil)
@@ -304,16 +299,20 @@ func maxEventFrameBytes() int {
 }
 
 func eventFrameMaximum(frameType EventFrameType) int {
-	descriptor, _ := eventFrameDescriptorFor(frameType)
-	return descriptor.maximum
+	switch frameType {
+	case EventFramePullPage:
+		return eventPullPageFrameBytes
+	case EventFramePullRequest, EventFrameCursorAck, EventFrameAck, EventFrameProtocolError:
+		return eventSmallFrameBytes
+	default:
+		return 0
+	}
 }
 
 func (frame EventFrame) Version() uint8             { return EventFrameVersion }
 func (frame EventFrame) Type() EventFrameType       { return frame.frameType }
 func (frame EventFrame) Payload() EventFramePayload { return frame.payload }
 func (frame EventFrame) CanonicalJSON() model.JSON  { return frame.canonical }
-func (frame EventFrame) IsRequest() bool            { return frame.frameType.IsRequest() }
-func (frame EventFrame) IsResponse() bool           { return frame.frameType.IsResponse() }
 func (frame EventFrame) IsZero() bool {
 	return !frame.frameType.Valid() || frame.payload == nil || frame.canonical.IsZero()
 }
@@ -392,7 +391,7 @@ func (payload PullRequest) CanonicalJSON() model.JSON { return payload.canonical
 func (payload PullRequest) IsZero() bool {
 	return payload.channelID.IsZero() || payload.originEpoch.IsZero() || payload.limit == 0 || payload.canonical.IsZero()
 }
-func (PullRequest) eventFramePayload() {}
+func (PullRequest) eventFrameType() EventFrameType { return EventFramePullRequest }
 
 type PullPageSpec struct {
 	Publications           []model.SignedPublication
@@ -553,7 +552,7 @@ func (payload PullPage) CanonicalJSON() model.JSON      { return payload.canonic
 func (payload PullPage) IsZero() bool {
 	return payload.originEpoch.IsZero() || payload.sourceFloor == 0 || payload.canonical.IsZero()
 }
-func (PullPage) eventFramePayload() {}
+func (PullPage) eventFrameType() EventFrameType { return EventFramePullPage }
 
 type CursorAckSpec struct {
 	ChannelID                 model.ChannelID
@@ -622,10 +621,11 @@ func (payload CursorAck) CanonicalJSON() model.JSON { return payload.canonical }
 func (payload CursorAck) IsZero() bool {
 	return payload.channelID.IsZero() || payload.originEpoch.IsZero() || payload.canonical.IsZero()
 }
-func (CursorAck) eventFramePayload() {}
+func (CursorAck) eventFrameType() EventFrameType { return EventFrameCursorAck }
 
-// EventAck is the empty success response to a durable CursorAck commit; its
-// request stream supplies correlation and Store retries remain idempotent.
+// EventAck is the exact empty success response to a durable CursorAck commit.
+// Success carries no duplicate cursor identity: the request stream is its
+// correlation scope and a retry remains idempotent at the Store boundary.
 type EventAck struct{ canonical model.JSON }
 
 func NewEventAck() (EventAck, error) {
@@ -653,7 +653,7 @@ func parseEventAck(raw []byte) (EventAck, error) {
 
 func (payload EventAck) CanonicalJSON() model.JSON { return payload.canonical }
 func (payload EventAck) IsZero() bool              { return payload.canonical.IsZero() }
-func (EventAck) eventFramePayload()                {}
+func (EventAck) eventFrameType() EventFrameType    { return EventFrameAck }
 
 type EventProtocolErrorCode string
 
@@ -751,7 +751,7 @@ func (payload EventProtocolError) CanonicalJSON() model.JSON    { return payload
 func (payload EventProtocolError) IsZero() bool {
 	return !payload.code.Valid() || payload.canonical.IsZero()
 }
-func (EventProtocolError) eventFramePayload() {}
+func (EventProtocolError) eventFrameType() EventFrameType { return EventFrameProtocolError }
 
 func decodeExactEventJSON(raw []byte, destination any) error {
 	if len(raw) == 0 || len(raw) > maxEventFrameBytes() {

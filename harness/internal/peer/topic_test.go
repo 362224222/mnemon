@@ -431,7 +431,7 @@ func TestGossipTopicsDeliverOnceAndPreserveConflictChallenger(t *testing.T) {
 	rotatedAuthorityB.Members = append(
 		append([]MemberAuthoritySnapshot(nil), channelB.Members...), rotatedAuthorRecord)
 	boundary := testPeerPublication(t, channelA, local, remote, "rotation-boundary")
-	requireGateAdmission(t, sessionB.gate, ctx)
+	sessionB.gate.RLock()
 	reconciled := make(chan error, 1)
 	go func() {
 		reconciled <- gossipB.Reconcile(NetworkAuthoritySnapshot{LocalPeerID: remote.modelID,
@@ -440,16 +440,16 @@ func TestGossipTopicsDeliverOnceAndPreserveConflictChallenger(t *testing.T) {
 	writerDeadline := time.Now().Add(2 * time.Second)
 	writerPending := false
 	for time.Now().Before(writerDeadline) {
-		if !sessionB.gate.tryAcquire() {
+		if !sessionB.gate.TryRLock() {
 			writerPending = true
 			break
 		}
-		sessionB.gate.release()
+		sessionB.gate.RUnlock()
 		runtime.Gosched()
 	}
 	boundaryPublishErr := sessionA.Publish(ctx, boundary)
 	time.Sleep(300 * time.Millisecond)
-	sessionB.gate.release()
+	sessionB.gate.RUnlock()
 	reconcileErr := <-reconciled
 	if !writerPending || boundaryPublishErr != nil || reconcileErr != nil {
 		t.Fatalf("rotation boundary = pending %v, publish %v, reconcile %v",
@@ -1000,7 +1000,7 @@ func TestGossipReconcileRevokesOneChannelAndPreservesOverlap(t *testing.T) {
 	revokedAlpha := alphaA
 	revokedAlpha.Bindings = []BindingAuthoritySnapshot{{PeerID: remote.modelID, State: model.BindingRevoked}}
 	betaDuringRotation := testPeerPublication(t, betaA, local, remote, "beta-during-alpha-rotation")
-	requireGateAdmission(t, alphaSessionA.gate, ctx)
+	alphaSessionA.gate.RLock()
 	reconciled := make(chan error, 1)
 	go func() {
 		reconciled <- gossipA.Reconcile(NetworkAuthoritySnapshot{LocalPeerID: local.modelID,
@@ -1009,18 +1009,18 @@ func TestGossipReconcileRevokesOneChannelAndPreservesOverlap(t *testing.T) {
 	writerDeadline := time.Now().Add(2 * time.Second)
 	writerPending := false
 	for time.Now().Before(writerDeadline) {
-		if !alphaSessionA.gate.tryAcquire() {
+		if !alphaSessionA.gate.TryRLock() {
 			writerPending = true
 			break
 		}
-		alphaSessionA.gate.release()
+		alphaSessionA.gate.RUnlock()
 		runtime.Gosched()
 	}
 	betaPublishErr := betaSessionA.Publish(ctx, betaDuringRotation)
 	betaContext, betaCancel := context.WithTimeout(ctx, 2*time.Second)
 	betaReceived, betaReceiveErr := betaSessionC.Next(betaContext)
 	betaCancel()
-	alphaSessionA.gate.release()
+	alphaSessionA.gate.RUnlock()
 	reconcileErr := <-reconciled
 	if !writerPending {
 		t.Fatal("Alpha reconciliation did not reach its Channel write gate")
@@ -1138,7 +1138,7 @@ func TestGossipSessionCloseSerializesValidatorRecreation(t *testing.T) {
 	stableGate := session.gate
 	oldValidator := gossip.validator(firstGeneration)
 	publication := testPeerPublication(t, channel, local, remote, "publish-at-roster-rotation")
-	requireGateAdmission(t, session.gate, ctx)
+	session.gate.RLock()
 	reconciled := make(chan error, 1)
 	go func() {
 		reconciled <- gossip.Reconcile(NetworkAuthoritySnapshot{LocalPeerID: local.modelID,
@@ -1147,11 +1147,11 @@ func TestGossipSessionCloseSerializesValidatorRecreation(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	writerPending := false
 	for time.Now().Before(deadline) {
-		if !session.gate.tryAcquire() {
+		if !session.gate.TryRLock() {
 			writerPending = true
 			break
 		}
-		session.gate.release()
+		session.gate.RUnlock()
 		runtime.Gosched()
 	}
 	published := make(chan error, 1)
@@ -1162,7 +1162,7 @@ func TestGossipSessionCloseSerializesValidatorRecreation(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		publishErr = errors.New("local validator recursively blocked behind the pending Channel writer")
 	}
-	session.gate.release()
+	session.gate.RUnlock()
 	reconcileErr := <-reconciled
 	if !writerPending || publishErr != nil || reconcileErr != nil {
 		t.Fatalf("Publish/roster Reconcile = pending %v, publish %v, reconcile %v",
@@ -1213,14 +1213,21 @@ func TestGossipSessionCloseSerializesValidatorRecreation(t *testing.T) {
 		"validator-during-sessionless-reactivation")
 	reactivationMessage := testPubSubMessage(topicName, reactivationPublication,
 		local.libp2pID, remote.libp2pID)
-	reactivation, err := gossip.BeginAuthorityTransition(NetworkAuthoritySnapshot{
-		LocalPeerID: local.modelID, Channels: []ChannelAuthoritySnapshot{rosterChanged}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stableGate.tryAcquire() {
-		stableGate.release()
-		t.Fatal("sessionless reactivation left admission open")
+	stableGate.RLock()
+	reactivated := make(chan error, 1)
+	go func() {
+		reactivated <- gossip.Reconcile(NetworkAuthoritySnapshot{LocalPeerID: local.modelID,
+			Channels: []ChannelAuthoritySnapshot{rosterChanged}})
+	}()
+	deadline = time.Now().Add(2 * time.Second)
+	reactivationWriterPending := false
+	for time.Now().Before(deadline) {
+		if !stableGate.TryRLock() {
+			reactivationWriterPending = true
+			break
+		}
+		stableGate.RUnlock()
+		runtime.Gosched()
 	}
 	reactivationValidated := make(chan pubsub.ValidationResult, 1)
 	go func() {
@@ -1229,14 +1236,17 @@ func TestGossipSessionCloseSerializesValidatorRecreation(t *testing.T) {
 	}()
 	select {
 	case result := <-reactivationValidated:
+		stableGate.RUnlock()
 		t.Fatalf("ancestor validator bypassed the sessionless authority gate: %v", result)
 	case <-time.After(100 * time.Millisecond):
 	}
-	reactivateErr := reactivation.Install()
+	stableGate.RUnlock()
+	reactivateErr := <-reactivated
 	reactivationResult := <-reactivationValidated
-	if reactivateErr != nil || reactivationResult != pubsub.ValidationReject {
-		t.Fatalf("sessionless reactivation = reconcile %v, old validation %v",
-			reactivateErr, reactivationResult)
+	if !reactivationWriterPending || reactivateErr != nil ||
+		reactivationResult != pubsub.ValidationReject {
+		t.Fatalf("sessionless reactivation = pending %v, reconcile %v, old validation %v",
+			reactivationWriterPending, reactivateErr, reactivationResult)
 	}
 	session, err = gossip.Join(channel.ChannelID)
 	if err != nil {
@@ -1258,14 +1268,21 @@ func TestGossipSessionCloseSerializesValidatorRecreation(t *testing.T) {
 	delayedPublication := testPeerPublication(t, channel, local, remote, "delayed-old-validator")
 	delayedMessage := testPubSubMessage(topicName, delayedPublication, local.libp2pID, remote.libp2pID)
 
-	secondTransition, err := gossip.BeginAuthorityTransition(NetworkAuthoritySnapshot{
-		LocalPeerID: local.modelID, Channels: []ChannelAuthoritySnapshot{rosterChangedAgain}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stableGate.tryAcquire() {
-		stableGate.release()
-		t.Fatal("second rotation left admission open")
+	stableGate.RLock()
+	secondReconcile := make(chan error, 1)
+	go func() {
+		secondReconcile <- gossip.Reconcile(NetworkAuthoritySnapshot{LocalPeerID: local.modelID,
+			Channels: []ChannelAuthoritySnapshot{rosterChangedAgain}})
+	}()
+	deadline = time.Now().Add(2 * time.Second)
+	secondWriterPending := false
+	for time.Now().Before(deadline) {
+		if !stableGate.TryRLock() {
+			secondWriterPending = true
+			break
+		}
+		stableGate.RUnlock()
+		runtime.Gosched()
 	}
 	validated := make(chan pubsub.ValidationResult, 1)
 	go func() {
@@ -1273,14 +1290,16 @@ func TestGossipSessionCloseSerializesValidatorRecreation(t *testing.T) {
 	}()
 	select {
 	case result := <-validated:
+		stableGate.RUnlock()
 		t.Fatalf("old validator bypassed the lifetime gate before revision rotation: %v", result)
 	case <-time.After(100 * time.Millisecond):
 	}
-	secondReconcileErr := secondTransition.Install()
+	stableGate.RUnlock()
+	secondReconcileErr := <-secondReconcile
 	validationResult := <-validated
-	if secondReconcileErr != nil || validationResult != pubsub.ValidationAccept {
-		t.Fatalf("second rotation = reconcile %v, old validation %v",
-			secondReconcileErr, validationResult)
+	if !secondWriterPending || secondReconcileErr != nil || validationResult != pubsub.ValidationAccept {
+		t.Fatalf("second rotation = pending %v, reconcile %v, old validation %v",
+			secondWriterPending, secondReconcileErr, validationResult)
 	}
 	if !session.closed.Load() {
 		t.Fatal("second roster rotation did not close the reactivated generation")
@@ -1292,6 +1311,96 @@ func TestGossipSessionCloseSerializesValidatorRecreation(t *testing.T) {
 	if session.gate != stableGate {
 		t.Fatal("multi-rotation successor replaced its lifetime validator gate")
 	}
+}
+
+func TestGossipReconcileWithCommitDrainsBeforeDurableMutation(t *testing.T) {
+	local := testAuthorityPeer(t, "gossip-commit-local")
+	remote := testAuthorityPeer(t, "gossip-commit-remote")
+	channel := testAuthorityChannel(t, "gossip-commit-channel", model.BindingActive, local, remote)
+	authority, _ := NewAuthority(local.modelID)
+	if err := authority.Replace(NetworkAuthoritySnapshot{LocalPeerID: local.modelID,
+		Channels: []ChannelAuthoritySnapshot{channel}}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	nodeHost, err := libp2p.New(libp2p.Identity(local.libp2pPrivate),
+		libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nodeHost.Close()
+	gossip, err := NewGossip(ctx, nodeHost, authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gossip.Close()
+	session, err := gossip.Join(channel.ChannelID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := nextTopicAuthorityGeneration(t, channel, "gossip-commit-roster-3")
+	snapshot := NetworkAuthoritySnapshot{LocalPeerID: local.modelID,
+		Channels: []ChannelAuthoritySnapshot{candidate}}
+
+	commitFailure := errors.New("injected durable CAS failure")
+	entered := make(chan struct{})
+	completed := make(chan error, 1)
+	session.gate.RLock()
+	go func() {
+		completed <- gossip.ReconcileWithCommit(snapshot, func() error {
+			close(entered)
+			return commitFailure
+		})
+	}()
+	select {
+	case <-entered:
+		session.gate.RUnlock()
+		t.Fatal("durable commit ran before the existing Channel gate drained")
+	case <-time.After(100 * time.Millisecond):
+	}
+	session.gate.RUnlock()
+	if err := <-completed; !errors.Is(err, commitFailure) {
+		t.Fatalf("failed commit error = %v", err)
+	}
+	if session.closed.Load() || !session.IsCurrent() || !gossip.HasCurrentSession(channel.ChannelID) {
+		t.Fatal("failed durable commit changed the old runtime authority")
+	}
+
+	commits := 0
+	if err := gossip.ReconcileWithCommit(snapshot, func() error {
+		commits++
+		if session.gate.TryRLock() {
+			session.gate.RUnlock()
+			return errors.New("commit callback observed an open Channel gate")
+		}
+		return nil
+	}); err != nil || commits != 1 {
+		t.Fatalf("successful gated commit = commits %d, error %v", commits, err)
+	}
+	if !session.closed.Load() || session.IsCurrent() {
+		t.Fatal("successful durable authority commit did not retire the old session")
+	}
+	replacement, err := gossip.Join(channel.ChannelID)
+	if err != nil || replacement == session || !replacement.IsCurrent() ||
+		!gossip.HasCurrentSession(channel.ChannelID) {
+		t.Fatalf("post-commit TopicSession = (%p,%v), previous %p", replacement, err, session)
+	}
+}
+
+func nextTopicAuthorityGeneration(t *testing.T, channel ChannelAuthoritySnapshot,
+	seed string,
+) ChannelAuthoritySnapshot {
+	t.Helper()
+	head, _ := model.NewRecordHead(channel.RosterHead.Revision()+1, model.Sum([]byte(seed)))
+	candidate := channel
+	candidate.RosterHead = head
+	candidate.VerifiedRosterHeads = append(
+		append([]model.RecordHead(nil), channel.VerifiedRosterHeads...), head)
+	member := channel.Members[len(channel.Members)-1]
+	member.Head = head
+	candidate.Members = append(append([]MemberAuthoritySnapshot(nil), channel.Members...), member)
+	return candidate
 }
 
 func testThreePeerAuthorityChannel(t *testing.T, id string,

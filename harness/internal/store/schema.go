@@ -3,13 +3,22 @@ package store
 import (
 	"context"
 	"database/sql"
+	_ "embed"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 )
 
 // SchemaVersion is the only Node database version accepted by R5.
 const SchemaVersion = 1
+
+//go:embed schema.sql
+var schemaV1 string
+
+var createObjectPattern = regexp.MustCompile(
+	"(?m)^CREATE (?:UNIQUE )?(TABLE|TRIGGER|INDEX) ([A-Za-z_][A-Za-z0-9_]*)",
+)
 
 func configureDatabase(ctx context.Context, db *sql.DB) error {
 	if err := db.PingContext(ctx); err != nil {
@@ -227,8 +236,7 @@ func validateSchemaObjects(ctx context.Context, db *sql.DB) error {
 	}
 
 	var differences []string
-	for _, expectedObject := range expected {
-		name, object := expectedObject.name, expectedObject.object
+	for name, object := range expected {
 		if got, ok := actual[name]; !ok {
 			differences = append(differences, "missing "+object.objectType+" "+name)
 		} else if got.objectType != object.objectType {
@@ -239,16 +247,101 @@ func validateSchemaObjects(ctx context.Context, db *sql.DB) error {
 		} else if got.definition != object.definition {
 			differences = append(differences, "definition mismatch for "+object.objectType+" "+name)
 		}
-		delete(actual, name)
 	}
 	for name, object := range actual {
-		differences = append(differences, "unexpected "+object.objectType+" "+name)
+		if _, ok := expected[name]; !ok {
+			differences = append(differences, "unexpected "+object.objectType+" "+name)
+		}
 	}
 	if len(differences) != 0 {
 		sort.Strings(differences)
 		return unsupportedSchema(SchemaVersion, strings.Join(differences, "; "))
 	}
 	return nil
+}
+
+type schemaObject struct {
+	objectType string
+	definition string
+}
+
+func referenceSchemaObjects(ctx context.Context) (map[string]schemaObject, error) {
+	declared, err := declaredSchemaObjects()
+	if err != nil {
+		return nil, err
+	}
+
+	reference, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		return nil, fmt.Errorf("open reference database: %w", err)
+	}
+	reference.SetMaxOpenConns(1)
+	reference.SetMaxIdleConns(1)
+	defer reference.Close()
+	if _, err := reference.ExecContext(ctx, schemaDDL()); err != nil {
+		return nil, fmt.Errorf("create reference database: %w", err)
+	}
+
+	rows, err := reference.QueryContext(
+		ctx,
+		"SELECT type, name, sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name",
+	)
+	if err != nil {
+		return nil, fmt.Errorf("read reference schema: %w", err)
+	}
+	defer rows.Close()
+
+	objects := make(map[string]schemaObject, len(declared))
+	for rows.Next() {
+		var objectType, name string
+		var definition sql.NullString
+		if err := rows.Scan(&objectType, &name, &definition); err != nil {
+			return nil, fmt.Errorf("scan reference schema: %w", err)
+		}
+		objects[name] = schemaObject{objectType: objectType, definition: definition.String}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("scan reference schema: %w", err)
+	}
+	if len(objects) != len(declared) {
+		return nil, fmt.Errorf("declared %d objects but SQLite created %d", len(declared), len(objects))
+	}
+	for name, objectType := range declared {
+		if object, ok := objects[name]; !ok || object.objectType != objectType {
+			return nil, fmt.Errorf("declared %s %s was not created", objectType, name)
+		}
+	}
+	return objects, nil
+}
+
+func declaredSchemaObjects() (map[string]string, error) {
+	matches := createObjectPattern.FindAllStringSubmatch(schemaV1, -1)
+	if len(matches) == 0 {
+		return nil, fmt.Errorf("no CREATE statements")
+	}
+	objects := make(map[string]string, len(matches))
+	for _, match := range matches {
+		objectType := strings.ToLower(match[1])
+		name := match[2]
+		if previous, exists := objects[name]; exists {
+			return nil, fmt.Errorf("duplicate object %s (%s and %s)", name, previous, objectType)
+		}
+		objects[name] = objectType
+	}
+	return objects, nil
+}
+
+func schemaDDL() string {
+	const firstDDL = "CREATE TABLE node"
+	offset := strings.Index(schemaV1, firstDDL)
+	if offset < 0 {
+		panic("store: embedded schema has no " + firstDDL)
+	}
+	ddl := schemaV1[offset:]
+	if strings.Count(ddl, eventTypeValuesPlaceholder) != 1 {
+		panic("store: embedded schema must contain exactly one EventType projection")
+	}
+	return strings.Replace(ddl, eventTypeValuesPlaceholder, eventTypeSQLProjection(), 1)
 }
 
 func unsupportedSchema(version int, reason string) error {

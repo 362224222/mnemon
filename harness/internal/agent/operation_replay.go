@@ -32,16 +32,6 @@ func (e *TeamworkActionExecutor) matchesTeamworkOperation(action ValidatedAction
 		err == nil && operation.RequestDigest() == requestDigest
 }
 
-func (e *TeamworkActionExecutor) startedTeamworkOperationAuthority(action ValidatedAction,
-	operation model.Operation,
-) (store.LocalOperationAuthority, bool) {
-	if !e.matchesTeamworkOperation(action, operation) {
-		return store.LocalOperationAuthority{}, false
-	}
-	authority, err := store.NewLocalOperationAuthority(operation, e.actions.RuntimePolicy())
-	return authority, err == nil
-}
-
 func sameTeamworkOperationIdentity(started, terminal model.Operation) bool {
 	startedContext, startedHasContext := started.ContextHash()
 	terminalContext, terminalHasContext := terminal.ContextHash()
@@ -99,8 +89,8 @@ func (e *TeamworkActionExecutor) projectRejectionTerminal(operation model.Operat
 	case model.OperationCommitted:
 		response, err := decodeCommittedTeamworkOperation(e.actions, terminal, result.Replayed)
 		if err != nil {
-			return OperationResponse{}, operationAPIError(CodeInternal,
-				"terminal Teamwork receipt is invalid", terminal.ID(), result.Replayed)
+			return OperationResponse{}, NewControlError(CodeInternal,
+				"terminal Teamwork receipt is invalid")
 		}
 		return response, nil
 	case model.OperationRejected:
@@ -125,8 +115,8 @@ func (e *TeamworkActionExecutor) replayTerminalTeamworkOperation(action Validate
 	}
 	response, err := decodeCommittedTeamworkOperation(e.actions, operation, true)
 	if err != nil {
-		return OperationResponse{}, operationAPIError(CodeInternal,
-			"committed Teamwork receipt is invalid", operation.ID(), true), true
+		return OperationResponse{}, NewControlError(CodeInternal,
+			"committed Teamwork receipt is invalid"), true
 	}
 	return response, nil, true
 }

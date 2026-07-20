@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
@@ -20,7 +21,6 @@ type DeactivateOptions struct {
 	AssetRevision     string
 	ExpectedUpdatedAt time.Time
 	Clock             Clock
-	Credentials       ProfileCredentialVerifier
 }
 
 type DeactivateResult struct {
@@ -33,9 +33,8 @@ type DeactivateResult struct {
 // or eject. It intentionally does not verify the Host projection: drifted
 // managed assets must still be removable after Agent authority is quiescent.
 func Deactivate(ctx context.Context, options DeactivateOptions) (result DeactivateResult, err error) {
-	if ctx == nil || isNilNodeInterface(options.Credentials) {
-		return DeactivateResult{}, fmt.Errorf("%w: context or credential verifier is unavailable",
-			ErrDeactivate)
+	if ctx == nil {
+		return DeactivateResult{}, fmt.Errorf("%w: context is unavailable", ErrDeactivate)
 	}
 	workspace, err := validateDaemonWorkspace(options.Workspace)
 	if err != nil {
@@ -83,8 +82,18 @@ func Deactivate(ctx context.Context, options DeactivateOptions) (result Deactiva
 	if err != nil {
 		return DeactivateResult{}, fmt.Errorf("%w: %v", ErrDeactivate, err)
 	}
-	if err := validateDeactivationAuthority(authority, identity, workspace, nodeState,
-		options, runtimeKind, expectedUpdatedAt); err != nil {
+	if authority.Node.PeerID() != identity.PeerID() || authority.Profile.WorkspaceRoot() != workspace {
+		return DeactivateResult{}, fmt.Errorf("%w: durable Node differs from workspace identity", ErrDeactivate)
+	}
+	if authority.Profile.Host() != options.Host || authority.Profile.Runtime() != runtimeKind ||
+		authority.Profile.ActiveAssetRevision() != options.AssetRevision ||
+		authority.Node.ActiveAssetRevision() != options.AssetRevision {
+		return DeactivateResult{}, fmt.Errorf("%w: requested authority differs from durable Profile", ErrDeactivate)
+	}
+	if !authority.Profile.UpdatedAt().Equal(expectedUpdatedAt) {
+		return DeactivateResult{}, fmt.Errorf("%w: requested authority generation differs from durable Profile", ErrDeactivate)
+	}
+	if err := localapi.VerifyProfileCredential(nodeState, authority.Profile.CredentialHash()); err != nil {
 		return DeactivateResult{}, fmt.Errorf("%w: %v", ErrDeactivate, err)
 	}
 	expectedSpec := authority.Profile.Spec()
@@ -99,22 +108,4 @@ func Deactivate(ctx context.Context, options DeactivateOptions) (result Deactiva
 	}
 	return DeactivateResult{Node: deactivated.Node, Profile: deactivated.Profile,
 		Changed: deactivated.Changed}, nil
-}
-
-func validateDeactivationAuthority(authority store.LocalAuthority, identity *Identity,
-	workspace, nodeState string, options DeactivateOptions, runtimeKind model.RuntimeKind,
-	expectedUpdatedAt time.Time,
-) error {
-	if authority.Node.PeerID() != identity.PeerID() || authority.Profile.WorkspaceRoot() != workspace {
-		return errors.New("durable Node differs from workspace identity")
-	}
-	if authority.Profile.Host() != options.Host || authority.Profile.Runtime() != runtimeKind ||
-		authority.Profile.ActiveAssetRevision() != options.AssetRevision ||
-		authority.Node.ActiveAssetRevision() != options.AssetRevision {
-		return errors.New("requested authority differs from durable Profile")
-	}
-	if !authority.Profile.UpdatedAt().Equal(expectedUpdatedAt) {
-		return errors.New("requested authority generation differs from durable Profile")
-	}
-	return options.Credentials.Verify(nodeState, authority.Profile.CredentialHash())
 }

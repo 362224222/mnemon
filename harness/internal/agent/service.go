@@ -209,7 +209,10 @@ func (s *Service) AgentCurrent(ctx context.Context,
 		}
 		return response, nil
 	}
-	readSpec := s.currentReadSpec(metadata.Profile, claimed.Run.ID(), claimHash, at)
+	readSpec := store.AgentCurrentReadSpec{
+		ProfileID: metadata.Profile.ID(), ExpectedAssetRevision: s.assetRevision,
+		RunID: claimed.Run.ID(), ClaimTokenHash: claimHash, At: at,
+	}
 	plan, err := s.store.PlanAgentCurrentRead(ctx, readSpec)
 	if err != nil {
 		return AgentCurrentResponse{}, mapControlError(err)

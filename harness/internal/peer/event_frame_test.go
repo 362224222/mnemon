@@ -19,6 +19,7 @@ import (
 
 func TestEventFrameCanonicalTypedRoundTripAndCopies(t *testing.T) {
 	t.Parallel()
+
 	channelID, _ := model.ParseChannelID("channel-events-codec")
 	originPeerID, _ := model.ParsePeerID("peer-events-origin")
 	originEpoch, _ := model.ParseOriginEpoch("epoch-events-origin")
@@ -56,6 +57,7 @@ func TestEventFrameCanonicalTypedRoundTripAndCopies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	wantPull := `{"payload":{"after_channel_seq":0,"channel_id":"channel-events-codec","limit":32,"origin_epoch":"epoch-events-origin"},"type":"pull_request","version":1}`
 	pullFrame, err := NewEventFrame(pull)
 	if err != nil || pullFrame.CanonicalJSON().String() != wantPull {
@@ -82,6 +84,7 @@ func TestEventFrameCanonicalTypedRoundTripAndCopies(t *testing.T) {
 			t.Fatalf("PullPage publication %d changed its exact signed wire", index+1)
 		}
 	}
+
 	payloads := []struct {
 		wantType EventFrameType
 		payload  EventFramePayload
@@ -117,6 +120,7 @@ func TestEventFrameCanonicalTypedRoundTripAndCopies(t *testing.T) {
 	if stream.Len() != 0 {
 		t.Fatalf("framed reader left %d bytes", stream.Len())
 	}
+
 	gotPublications := page.Publications()
 	gotPublications[0] = model.PublicationEvidence{}
 	wireCopy := page.Publications()[0].WireJSON().Bytes()
@@ -135,53 +139,16 @@ func TestEventFrameCanonicalTypedRoundTripAndCopies(t *testing.T) {
 	}
 }
 
-func TestEventFrameDescriptorAuthorityIsOrderedCompleteAndCodecBound(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		frameType EventFrameType
-		maximum   int
-		request   bool
-		payload   []byte
-	}{
-		{EventFramePullRequest, eventSmallFrameBytes, true, []byte(`{"after_channel_seq":0,"channel_id":"channel-events-descriptor","limit":1,"origin_epoch":"epoch-events-descriptor"}`)},
-		{EventFramePullPage, eventPullPageFrameBytes, false, []byte(`{"origin_epoch":"epoch-events-descriptor","publications":[],"scanned_channel_seq":0,"source_floor":1,"source_head":0}`)},
-		{EventFrameCursorAck, eventSmallFrameBytes, true, []byte(`{"channel_id":"channel-events-descriptor","contiguous_channel_seq":0,"origin_epoch":"epoch-events-descriptor"}`)},
-		{EventFrameAck, eventSmallFrameBytes, false, []byte(`{}`)},
-		{EventFrameProtocolError, eventSmallFrameBytes, false, []byte(`{"code":"not_member","retry_after":0,"retryable":false,"source_floor":0}`)},
-	}
-	if len(eventFrameDescriptors) != len(tests) {
-		t.Fatalf("Event frame descriptor count = %d, want %d", len(eventFrameDescriptors), len(tests))
-	}
-	seen := make(map[EventFrameType]struct{}, len(tests))
-	for index, test := range tests {
-		descriptor := eventFrameDescriptors[index]
-		_, duplicate := seen[descriptor.frameType]
-		seen[descriptor.frameType] = struct{}{}
-		parsed, parseErr := descriptor.codec.parse(test.payload)
-		frameType, canonical, canonicalErr := canonicalEventPayload(parsed)
-		if duplicate || descriptor.frameType != test.frameType || !test.frameType.Valid() ||
-			eventFrameMaximum(test.frameType) != test.maximum ||
-			test.frameType.IsRequest() != test.request || test.frameType.IsResponse() == test.request ||
-			parseErr != nil || frameType != test.frameType ||
-			canonicalErr != nil || canonical.String() != string(test.payload) {
-			t.Fatalf("Event frame descriptor %d parity failed: %#v, parse=%v canonical=%v", index, descriptor, parseErr, canonicalErr)
-		}
-	}
-	ack, _ := parseEventAck([]byte(`{}`))
-	_, _, unboundErr := canonicalEventPayload(struct{ EventAck }{ack})
-	if unknown := EventFrameType("unknown"); unknown.Valid() || unknown.IsRequest() || unknown.IsResponse() ||
-		eventFrameMaximum(unknown) != 0 || !errors.Is(unboundErr, ErrEventFrame) {
-		t.Fatal("unknown Event frame type or payload implementation acquired descriptor policy")
-	}
-}
 func TestPullPageRetainsUnsupportedPublicationEvidence(t *testing.T) {
 	t.Parallel()
+
 	channelID, _ := model.ParseChannelID("channel-events-evidence")
 	originPeerID, _ := model.ParsePeerID("peer-events-evidence")
 	originEpoch, _ := model.ParseOriginEpoch("epoch-events-evidence")
 	base := newEventFramePublication(t, channelID, originPeerID, originEpoch, 1, 8)
 	privateKey := eventFramePublicationPrivateKey()
 	publicKey := privateKey.Public().(ed25519.PublicKey)
+
 	tests := []struct {
 		name       string
 		wantSchema uint64
@@ -227,6 +194,7 @@ func TestPullPageRetainsUnsupportedPublicationEvidence(t *testing.T) {
 			if _, err := model.ParseSignedPublication(rawPublication); err == nil {
 				t.Fatal("strict Gossip publication parser accepted unsupported evidence")
 			}
+
 			publications[0] = model.PublicationEvidence{}
 			wireCopy := evidence.WireJSON().Bytes()
 			wireCopy[0] = 'x'
@@ -239,6 +207,7 @@ func TestPullPageRetainsUnsupportedPublicationEvidence(t *testing.T) {
 
 func TestPullPageRejectsMalformedEvidenceAsACompleteFrame(t *testing.T) {
 	t.Parallel()
+
 	channelID, _ := model.ParseChannelID("channel-events-evidence-reject")
 	otherChannelID, _ := model.ParseChannelID("channel-events-evidence-other")
 	originPeerID, _ := model.ParsePeerID("peer-events-evidence-reject")
@@ -252,6 +221,7 @@ func TestPullPageRejectsMalformedEvidenceAsACompleteFrame(t *testing.T) {
 	otherChannel := newEventFramePublication(t, otherChannelID, originPeerID, originEpoch, 2, 8)
 	otherOrigin := newEventFramePublication(t, channelID, otherPeerID, originEpoch, 2, 8)
 	otherOriginEpoch := newEventFramePublication(t, channelID, originPeerID, otherEpoch, 2, 8)
+
 	wrongDigest := eventFrameCanonicalMutation(t, first.WireJSON().String(), func(value map[string]any) {
 		value["publication_digest"] = model.Sum([]byte("wrong PullPage evidence body")).String()
 	})
@@ -265,6 +235,7 @@ func TestPullPageRejectsMalformedEvidenceAsACompleteFrame(t *testing.T) {
 	}
 	oversizedPublication := append([]byte{'"'}, bytes.Repeat([]byte{'x'}, model.MaxPublicationBytes)...)
 	oversizedPublication = append(oversizedPublication, '"')
+
 	tests := []struct {
 		name string
 		raw  []byte
@@ -291,6 +262,7 @@ func TestPullPageRejectsMalformedEvidenceAsACompleteFrame(t *testing.T) {
 			}
 		})
 	}
+
 	valid := eventFramePullPage(t, originEpoch, 2, 1, 2,
 		first.WireJSON().Bytes(), second.WireJSON().Bytes())
 	if _, err := ParseEventFrame(valid); err != nil {
@@ -300,6 +272,7 @@ func TestPullPageRejectsMalformedEvidenceAsACompleteFrame(t *testing.T) {
 
 func TestEventFrameEmptyPageAndAckHaveExactBytes(t *testing.T) {
 	t.Parallel()
+
 	channelID, _ := model.ParseChannelID("channel-events-empty")
 	originEpoch, _ := model.ParseOriginEpoch("epoch-events-empty")
 	page, err := NewPullPage(PullPageSpec{SourceFloor: 1, SourceHead: 0,
@@ -329,12 +302,14 @@ func TestEventFrameEmptyPageAndAckHaveExactBytes(t *testing.T) {
 
 func TestEventFrameRejectsEnvelopeAndPayloadSchemaDrift(t *testing.T) {
 	t.Parallel()
+
 	channelID, _ := model.ParseChannelID("channel-events-schema")
 	originEpoch, _ := model.ParseOriginEpoch("epoch-events-schema")
 	pull, _ := NewPullRequest(PullRequestSpec{ChannelID: channelID,
 		OriginEpoch: originEpoch, Limit: 1})
 	frame, _ := NewEventFrame(pull)
 	canonical := frame.CanonicalJSON().String()
+
 	mutations := map[string][]byte{
 		"noncanonical whitespace": []byte(strings.Replace(canonical, `{"payload":`, `{ "payload":`, 1)),
 		"unknown envelope field": eventFrameCanonicalMutation(t, canonical, func(value map[string]any) {
@@ -360,6 +335,7 @@ func TestEventFrameRejectsEnvelopeAndPayloadSchemaDrift(t *testing.T) {
 			t.Errorf("%s: ParseEventFrame() error = %v", name, err)
 		}
 	}
+
 	oversizedSmall := []byte(fmt.Sprintf(`{"payload":{"after_channel_seq":0,"channel_id":"%s","extra":"%s","limit":1,"origin_epoch":"%s"},"type":"pull_request","version":1}`,
 		channelID.String(), strings.Repeat("x", eventSmallFrameBytes), originEpoch.String()))
 	if _, err := ParseEventFrame(oversizedSmall); !errors.Is(err, ErrEventFrame) {
@@ -374,12 +350,14 @@ func TestEventFrameRejectsEnvelopeAndPayloadSchemaDrift(t *testing.T) {
 
 func TestPullAndCursorConstructorsEnforceSQLiteAndPageBounds(t *testing.T) {
 	t.Parallel()
+
 	channelID, _ := model.ParseChannelID("channel-events-bounds")
 	otherChannelID, _ := model.ParseChannelID("channel-events-other")
 	originPeerID, _ := model.ParsePeerID("peer-events-bounds")
 	otherPeerID, _ := model.ParsePeerID("peer-events-other")
 	originEpoch, _ := model.ParseOriginEpoch("epoch-events-bounds")
 	otherEpoch, _ := model.ParseOriginEpoch("epoch-events-other")
+
 	badPulls := []PullRequestSpec{
 		{OriginEpoch: originEpoch, Limit: 1},
 		{ChannelID: channelID, Limit: 1},
@@ -397,6 +375,7 @@ func TestPullAndCursorConstructorsEnforceSQLiteAndPageBounds(t *testing.T) {
 		OriginEpoch: originEpoch, ContiguousChannelSequence: model.MaxSQLiteInteger + 1}); !errors.Is(err, ErrEventFrame) {
 		t.Fatalf("oversized CursorAck error = %v", err)
 	}
+
 	first := newEventFramePublication(t, channelID, originPeerID, originEpoch, 1, 4)
 	second := newEventFramePublication(t, channelID, originPeerID, originEpoch, 2, 4)
 	third := newEventFramePublication(t, channelID, originPeerID, originEpoch, 3, 4)
@@ -440,6 +419,7 @@ func TestPullAndCursorConstructorsEnforceSQLiteAndPageBounds(t *testing.T) {
 			t.Errorf("bad PullPage %d error = %v", index, err)
 		}
 	}
+
 	page, err := NewPullPage(PullPageSpec{OriginEpoch: originEpoch, SourceFloor: 1,
 		SourceHead: 2, ScannedChannelSequence: 2,
 		Publications: []model.SignedPublication{first, second}})
@@ -529,6 +509,7 @@ func TestPullPageRejectsEnvelopeOverheadBeyondPageLimit(t *testing.T) {
 
 func TestEventProtocolErrorStableRetryPolicy(t *testing.T) {
 	t.Parallel()
+
 	tests := []EventProtocolErrorSpec{
 		{Code: EventErrorBusy, Retryable: true, RetryAfter: time.Millisecond},
 		{Code: EventErrorHistoryGap, SourceFloor: 3},
@@ -545,6 +526,7 @@ func TestEventProtocolErrorStableRetryPolicy(t *testing.T) {
 			t.Errorf("NewEventProtocolError(%s) = (%#v, %v)", spec.Code, payload, err)
 		}
 	}
+
 	invalid := []EventProtocolErrorSpec{
 		{},
 		{Code: EventErrorBusy},
@@ -560,6 +542,7 @@ func TestEventProtocolErrorStableRetryPolicy(t *testing.T) {
 			t.Errorf("invalid ProtocolError %d error = %v", index, err)
 		}
 	}
+
 	raw := []byte(`{"code":"busy","retry_after":9223372036854775807,"retryable":true,"source_floor":0}`)
 	if _, err := parseEventProtocolError(raw); !errors.Is(err, ErrEventFrame) {
 		t.Fatalf("overflowing retry_after error = %v", err)
@@ -568,6 +551,7 @@ func TestEventProtocolErrorStableRetryPolicy(t *testing.T) {
 
 func TestEventFrameLengthPrefixShortIOAndSizeFence(t *testing.T) {
 	t.Parallel()
+
 	ack, _ := NewEventAck()
 	frame, _ := NewEventFrame(ack)
 	var stream bytes.Buffer
@@ -581,6 +565,7 @@ func TestEventFrameLengthPrefixShortIOAndSizeFence(t *testing.T) {
 	if parsed, err := ReadEventFrame(bytes.NewReader(encoded)); err != nil || parsed.Type() != EventFrameAck {
 		t.Fatalf("ReadEventFrame() = (%#v, %v)", parsed, err)
 	}
+
 	chunked := &eventFrameChunkWriter{maximum: 2}
 	if err := WriteEventFrame(chunked, frame); err != nil || !bytes.Equal(chunked.buffer.Bytes(), encoded) {
 		t.Fatalf("chunked WriteEventFrame() = (%x, %v)", chunked.buffer.Bytes(), err)
@@ -594,6 +579,7 @@ func TestEventFrameLengthPrefixShortIOAndSizeFence(t *testing.T) {
 	if _, err := ReadEventFrame(bytes.NewReader(encoded[:len(encoded)-1])); !errors.Is(err, ErrEventFrame) {
 		t.Fatalf("short payload error = %v", err)
 	}
+
 	var prefix [eventFrameLengthBytes]byte
 	binary.BigEndian.PutUint32(prefix[:], uint32(maxEventFrameBytes()+1))
 	oversized := bytes.NewReader(append(prefix[:], []byte("must-not-be-read")...))
@@ -610,6 +596,7 @@ func TestEventFrameLengthPrefixShortIOAndSizeFence(t *testing.T) {
 
 func TestEventFrameStreamScopeReservationCoversDecodeAndReleases(t *testing.T) {
 	t.Parallel()
+
 	ack, _ := NewEventAck()
 	frame, _ := NewEventFrame(ack)
 	var encoded bytes.Buffer
@@ -628,6 +615,7 @@ func TestEventFrameStreamScopeReservationCoversDecodeAndReleases(t *testing.T) {
 	if scope.released != wantReserved {
 		t.Fatalf("idempotent release = %d, want %d", scope.released, wantReserved)
 	}
+
 	encoded.Reset()
 	_ = WriteEventFrame(&encoded, frame)
 	rejected := &eventFrameTestScope{reserveError: errors.New("budget exhausted")}
@@ -639,7 +627,10 @@ func TestEventFrameStreamScopeReservationCoversDecodeAndReleases(t *testing.T) {
 	}
 }
 
-func newEventFramePublication(t testing.TB, channelID model.ChannelID, originPeerID model.PeerID, originEpoch model.OriginEpoch, sequence uint64, contentBytes int) model.SignedPublication {
+func newEventFramePublication(t testing.TB, channelID model.ChannelID,
+	originPeerID model.PeerID, originEpoch model.OriginEpoch, sequence uint64,
+	contentBytes int,
+) model.SignedPublication {
 	t.Helper()
 	audiencePeerID, _ := model.ParsePeerID("peer-events-audience")
 	audience, err := model.NewAudience([]model.PeerID{audiencePeerID})
@@ -694,7 +685,10 @@ func eventFramePublicationPrivateKey() ed25519.PrivateKey {
 	seed := sha256.Sum256([]byte("mnemon/events/frame/test-signing-key"))
 	return ed25519.NewKeyFromSeed(seed[:])
 }
-func resignEventFramePublication(t testing.TB, raw []byte, privateKey ed25519.PrivateKey, mutate func(map[string]any)) []byte {
+
+func resignEventFramePublication(t testing.TB, raw []byte, privateKey ed25519.PrivateKey,
+	mutate func(map[string]any),
+) []byte {
 	t.Helper()
 	var wire eventFrameSignedPublicationWire
 	if err := json.Unmarshal(raw, &wire); err != nil {
@@ -729,7 +723,10 @@ func resignEventFramePublication(t testing.TB, raw []byte, privateKey ed25519.Pr
 	}
 	return result.Bytes()
 }
-func eventFramePullPage(t testing.TB, originEpoch model.OriginEpoch, scannedChannelSequence, sourceFloor, sourceHead uint64, publications ...[]byte) []byte {
+
+func eventFramePullPage(t testing.TB, originEpoch model.OriginEpoch,
+	scannedChannelSequence, sourceFloor, sourceHead uint64, publications ...[]byte,
+) []byte {
 	t.Helper()
 	wirePublications := make([]json.RawMessage, len(publications))
 	for index, publication := range publications {
@@ -748,7 +745,10 @@ func eventFramePullPage(t testing.TB, originEpoch model.OriginEpoch, scannedChan
 	}
 	return frame.Bytes()
 }
-func eventFrameCanonicalMutation(t testing.TB, raw string, mutate func(map[string]any)) []byte {
+
+func eventFrameCanonicalMutation(t testing.TB, raw string,
+	mutate func(map[string]any),
+) []byte {
 	t.Helper()
 	decoder := json.NewDecoder(strings.NewReader(raw))
 	decoder.UseNumber()

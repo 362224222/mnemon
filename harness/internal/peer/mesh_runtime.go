@@ -10,95 +10,58 @@ import (
 	libp2pcrypto "github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
 	libp2ppeer "github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/peerstore"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 	ma "github.com/multiformats/go-multiaddr"
 )
 
-var (
-	ErrMeshRuntime                       = errors.New("Mnemon mesh runtime")
-	ErrMeshAuthorityTransitionInProgress = errors.New("mesh authority transition is in progress")
-	ErrMeshAuthorityTransitionFinalized  = errors.New("mesh authority transition was already finalized")
-	errMeshRuntimeAuthorityTerminated    = fmt.Errorf("%w: authority terminated", ErrMeshRuntime)
-)
+var ErrMeshRuntime = errors.New("Mnemon mesh runtime")
 
 // MeshRuntime owns the one libp2p Host, authority projection and Gossip router
 // of a Node. Store remains the durable authority; this runtime only installs
 // complete Store projections and never invents an independent Channel view.
 type MeshRuntime struct {
-	nodeHost       *NodeHost
-	gossip         *Gossip
-	authority      *Authority
-	addressSources *meshAddressSources
-	endpoint       MeshEndpointSnapshot
-	cancel         context.CancelFunc
+	nodeHost  *NodeHost
+	gossip    *Gossip
+	authority *Authority
 
-	mu            sync.Mutex
-	addresses     map[libp2ppeer.ID][]ma.Multiaddr
-	transition    *MeshAuthorityTransition
-	closed        bool
-	terminalErr   error
-	terminalCause error
-	terminalDone  chan struct{}
-	closeOnce     sync.Once
-	closeErr      error
+	mu        sync.Mutex
+	addresses map[libp2ppeer.ID][]ma.Multiaddr
+	closed    bool
+	closeOnce sync.Once
+	closeErr  error
 }
 
-var unavailableMeshRuntimeTerminalSignal = func() <-chan struct{} {
-	done := make(chan struct{})
-	close(done)
-	return done
-}()
-
-// NewMeshRuntime is the one-shot composition of BindMeshHost and Freeze for
-// callers that do not need to persist endpoint authority between the stages.
-// It still creates exactly one Host and transfers that same Host into runtime.
+// NewMeshRuntime starts from one coherent Store snapshot. The Host begins with
+// empty authority, canonical Peer addresses are installed, and Gossip performs
+// the first whole-snapshot reconciliation before any Channel topic is joined.
 func NewMeshRuntime(ctx context.Context, privateKey libp2pcrypto.PrivKey,
 	listenAddrs []ma.Multiaddr, mesh store.ChannelMeshAuthority,
 ) (*MeshRuntime, error) {
-	bound, err := BindMeshHost(ctx, privateKey, MeshHostBindSpec{ListenAddrs: listenAddrs})
-	if err != nil {
-		return nil, fmt.Errorf("%w: bind Host: %w", ErrMeshRuntime, err)
-	}
-	runtime, err := bound.Freeze(ctx, mesh)
-	if err != nil {
-		return nil, errors.Join(fmt.Errorf("%w: freeze Host: %w", ErrMeshRuntime, err),
-			bound.Close())
-	}
-	return runtime, nil
-}
-
-func freezeMeshRuntime(ctx context.Context, nodeHost *NodeHost, authority *Authority,
-	endpoint MeshEndpointSnapshot, mesh store.ChannelMeshAuthority,
-) (*MeshRuntime, error) {
-	if ctx == nil || ctx.Err() != nil || nodeHost == nil || authority == nil ||
-		endpoint.peerID.IsZero() {
-		return nil, fmt.Errorf("%w: live bound Host is required", ErrMeshRuntime)
+	if ctx == nil || ctx.Err() != nil || privateKey == nil {
+		return nil, fmt.Errorf("%w: live context and Node key are required", ErrMeshRuntime)
 	}
 	snapshot, addresses, err := projectMeshRuntime(mesh)
 	if err != nil {
 		return nil, err
 	}
-	if snapshot.LocalPeerID != endpoint.peerID || authority.LocalPeerID().String() != endpoint.peerID.String() ||
-		nodeHost.managedRuntimeHost() == nil ||
-		nodeHost.managedRuntimeHost().ID().String() != endpoint.peerID.String() {
-		return nil, fmt.Errorf("%w: bound Host identity differs from durable mesh", ErrMeshRuntime)
-	}
-	addressSources, err := newMeshAddressSources(nodeHost.managedRuntimeHost().Peerstore())
+	authority, err := NewAuthority(snapshot.LocalPeerID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: construct authority: %w", ErrMeshRuntime, err)
+	}
+	nodeHost, err := NewNodeHost(privateKey, authority, listenAddrs)
+	if err != nil {
+		return nil, fmt.Errorf("%w: construct Host: %w", ErrMeshRuntime, err)
 	}
 	fail := func(cause error, gossip *Gossip) (*MeshRuntime, error) {
-		addressSources.close()
 		if gossip != nil {
 			cause = errors.Join(cause, gossip.Close())
 		}
-		return nil, cause
+		return nil, errors.Join(cause, nodeHost.Close())
 	}
-	if err := addressSources.installInitial(addresses); err != nil {
-		return fail(fmt.Errorf("%w: install initial Peer addresses: %w", ErrMeshRuntime, err), nil)
-	}
-	gossip, err := NewGossip(ctx, nodeHost.managedRuntimeHost(), authority)
+	applyManagedAddresses(nodeHost.Host(), nil, addresses)
+	gossip, err := NewGossip(ctx, nodeHost.Host(), authority)
 	if err != nil {
 		return fail(fmt.Errorf("%w: construct Gossip router: %w", ErrMeshRuntime, err), nil)
 	}
@@ -108,62 +71,64 @@ func freezeMeshRuntime(ctx context.Context, nodeHost *NodeHost, authority *Autho
 	if err := joinActiveChannels(gossip, snapshot); err != nil {
 		return fail(fmt.Errorf("%w: join initial topics: %w", ErrMeshRuntime, err), gossip)
 	}
-	if err := ctx.Err(); err != nil {
-		return fail(fmt.Errorf("%w: initial reconcile canceled: %w", ErrMeshRuntime, err), gossip)
-	}
 	return &MeshRuntime{nodeHost: nodeHost, gossip: gossip, authority: authority,
-		addressSources: addressSources, endpoint: endpoint.clone(),
-		addresses: cloneManagedAddresses(addresses), terminalDone: make(chan struct{})}, nil
+		addresses: addresses}, nil
 }
 
-func (runtime *MeshRuntime) managedRuntimeHost() host.Host {
+// ReconcileWithCommit serializes a complete authority transition. Candidate
+// addresses are staged before Gossip computes connection promotions; a failed
+// durable callback restores the exact previous address set and leaves runtime
+// authority/sessions untouched. Newly active Channels are joined before the
+// transition reports success.
+func (runtime *MeshRuntime) ReconcileWithCommit(mesh store.ChannelMeshAuthority,
+	commit func() error,
+) error {
+	if runtime == nil || commit == nil {
+		return fmt.Errorf("%w: runtime and durable commit are required", ErrMeshRuntime)
+	}
+	snapshot, addresses, err := projectMeshRuntime(mesh)
+	if err != nil {
+		return err
+	}
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	if runtime.closed || runtime.nodeHost == nil || runtime.gossip == nil {
+		return fmt.Errorf("%w: runtime is closed", ErrMeshRuntime)
+	}
+	previous := cloneManagedAddresses(runtime.addresses)
+	applyManagedAddresses(runtime.nodeHost.Host(), previous, addresses)
+	if err := runtime.gossip.ReconcileWithCommit(snapshot, commit); err != nil {
+		applyManagedAddresses(runtime.nodeHost.Host(), addresses, previous)
+		return fmt.Errorf("%w: reconcile authority: %w", ErrMeshRuntime, err)
+	}
+	runtime.addresses = addresses
+	if err := joinActiveChannels(runtime.gossip, snapshot); err != nil {
+		// Durable authority is already installed. Stop Gossip fail-closed rather
+		// than run a partial set of Channel topics until daemon restart.
+		runtime.closed = true
+		return errors.Join(fmt.Errorf("%w: join reconciled topics: %w", ErrMeshRuntime, err),
+			runtime.gossip.Close())
+	}
+	return nil
+}
+
+func (runtime *MeshRuntime) Host() host.Host {
 	if runtime == nil || runtime.nodeHost == nil {
 		return nil
 	}
-	return runtime.nodeHost.managedRuntimeHost()
+	return runtime.nodeHost.Host()
 }
 
-// LocalEnrollmentMultiaddrs returns the bounded, canonical address snapshot
-// advertised by the one managed Host. Callers cannot substitute a different
-// address set for enrollment evidence.
-func (runtime *MeshRuntime) LocalEnrollmentMultiaddrs() ([]string, error) {
+func (runtime *MeshRuntime) Session(channelID model.ChannelID) (*TopicSession, error) {
 	if runtime == nil {
 		return nil, fmt.Errorf("%w: runtime is unavailable", ErrMeshRuntime)
 	}
 	runtime.mu.Lock()
-	if runtime.closed || runtime.nodeHost == nil {
-		runtime.mu.Unlock()
-		return nil, fmt.Errorf("%w: runtime is closed", ErrMeshRuntime)
-	}
-	addresses := runtime.endpoint.AdvertisedAddrs()
-	runtime.mu.Unlock()
-	if len(addresses) == 0 {
-		return nil, fmt.Errorf("%w: local enrollment snapshot is unavailable", ErrMeshRuntime)
-	}
-	return addresses, nil
-}
-
-func (runtime *MeshRuntime) Session(channelID model.ChannelID) (*TopicSession, error) {
-	return runtime.session(context.Background(), channelID)
-}
-
-func (runtime *MeshRuntime) session(ctx context.Context,
-	channelID model.ChannelID,
-) (*TopicSession, error) {
-	if runtime == nil || ctx == nil {
-		return nil, fmt.Errorf("%w: runtime is unavailable", ErrMeshRuntime)
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, fmt.Errorf("%w: acquire Channel session: %w", ErrMeshRuntime, err)
-	}
-	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
 	if runtime.closed || runtime.gossip == nil {
-		runtime.mu.Unlock()
 		return nil, fmt.Errorf("%w: runtime is closed", ErrMeshRuntime)
 	}
-	gossip := runtime.gossip
-	runtime.mu.Unlock()
-	session, err := gossip.join(ctx, channelID)
+	session, err := runtime.gossip.Join(channelID)
 	if err != nil {
 		return nil, fmt.Errorf("%w: acquire Channel session: %w", ErrMeshRuntime, err)
 	}
@@ -175,64 +140,8 @@ func (runtime *MeshRuntime) HasCurrentSession(channelID model.ChannelID) bool {
 		return false
 	}
 	runtime.mu.Lock()
-	gossip := runtime.gossip
-	available := !runtime.closed && gossip != nil
-	runtime.mu.Unlock()
-	return available && gossip.HasCurrentSession(channelID)
-}
-
-// terminalSignal closes when the frozen authority can no longer admit work.
-// It does not wait for the owned transports to finish physical cleanup.
-func (runtime *MeshRuntime) terminalSignal() <-chan struct{} {
-	if runtime == nil || runtime.terminalDone == nil {
-		return unavailableMeshRuntimeTerminalSignal
-	}
-	return runtime.terminalDone
-}
-
-// terminalError reports the primary authority-termination cause after
-// terminalSignal closes. Calling it before termination fails closed rather
-// than presenting a live runtime as a successful shutdown.
-func (runtime *MeshRuntime) terminalError() error {
-	if runtime == nil || runtime.terminalDone == nil {
-		return fmt.Errorf("%w: authority terminal signal is unavailable", ErrMeshRuntime)
-	}
-	select {
-	case <-runtime.terminalDone:
-	default:
-		return fmt.Errorf("%w: authority has not terminated", ErrMeshRuntime)
-	}
-	runtime.mu.Lock()
 	defer runtime.mu.Unlock()
-	if !runtime.closed {
-		return fmt.Errorf("%w: authority terminal state is inconsistent", ErrMeshRuntime)
-	}
-	if runtime.terminalCause == nil {
-		return fmt.Errorf("%w: authority terminal cause is unavailable", ErrMeshRuntime)
-	}
-	return runtime.terminalCause
-}
-
-// terminateAuthorityLocked publishes the one authority-terminal edge. The
-// caller holds runtime.mu. Every non-nil primary is joined before checking
-// whether another owner already published the edge, preserving concurrent
-// failure aggregation without reopening or replacing the one signal.
-func (runtime *MeshRuntime) terminateAuthorityLocked(primary error) bool {
-	if primary != nil {
-		runtime.terminalErr = errors.Join(runtime.terminalErr, primary)
-	}
-	if runtime.closed {
-		return false
-	}
-	if primary == nil {
-		primary = errMeshRuntimeAuthorityTerminated
-	}
-	runtime.terminalCause = primary
-	runtime.closed = true
-	if runtime.terminalDone != nil {
-		close(runtime.terminalDone)
-	}
-	return true
+	return !runtime.closed && runtime.gossip != nil && runtime.gossip.HasCurrentSession(channelID)
 }
 
 func (runtime *MeshRuntime) Close() error {
@@ -240,46 +149,19 @@ func (runtime *MeshRuntime) Close() error {
 		return nil
 	}
 	runtime.closeOnce.Do(func() {
-		var gossip *Gossip
-		var nodeHost *NodeHost
-		var addressSources *meshAddressSources
-		var cancel context.CancelFunc
-		for {
-			runtime.mu.Lock()
-			if transition := runtime.transition; transition != nil {
-				done := transition.Done()
-				runtime.mu.Unlock()
-				<-done
-				continue
-			}
-			runtime.terminateAuthorityLocked(nil)
-			gossip = runtime.gossip
-			nodeHost = runtime.nodeHost
-			addressSources = runtime.addressSources
-			cancel = runtime.cancel
-			runtime.mu.Unlock()
-			break
-		}
-		if addressSources != nil {
-			addressSources.close()
-		}
+		runtime.mu.Lock()
+		runtime.closed = true
+		gossip := runtime.gossip
+		nodeHost := runtime.nodeHost
+		runtime.mu.Unlock()
 		if gossip != nil {
 			runtime.closeErr = errors.Join(runtime.closeErr, gossip.Close())
 		}
 		if nodeHost != nil {
 			runtime.closeErr = errors.Join(runtime.closeErr, nodeHost.Close())
 		}
-		if cancel != nil {
-			cancel()
-		}
-		runtime.mu.Lock()
-		runtime.terminalErr = errors.Join(runtime.terminalErr, runtime.closeErr)
-		runtime.mu.Unlock()
 	})
-	runtime.mu.Lock()
-	result := runtime.terminalErr
-	runtime.mu.Unlock()
-	return result
+	return runtime.closeErr
 }
 
 func projectMeshRuntime(mesh store.ChannelMeshAuthority) (NetworkAuthoritySnapshot,
@@ -365,4 +247,30 @@ func joinActiveChannels(gossip *Gossip, snapshot NetworkAuthoritySnapshot) error
 		}
 	}
 	return nil
+}
+
+func applyManagedAddresses(nodeHost host.Host, previous,
+	next map[libp2ppeer.ID][]ma.Multiaddr,
+) {
+	if nodeHost == nil {
+		return
+	}
+	for peerID, addresses := range previous {
+		if len(addresses) > 0 {
+			nodeHost.Peerstore().SetAddrs(peerID, addresses, 0)
+		}
+	}
+	for peerID, addresses := range next {
+		if len(addresses) > 0 {
+			nodeHost.Peerstore().AddAddrs(peerID, addresses, peerstore.PermanentAddrTTL)
+		}
+	}
+}
+
+func cloneManagedAddresses(source map[libp2ppeer.ID][]ma.Multiaddr) map[libp2ppeer.ID][]ma.Multiaddr {
+	result := make(map[libp2ppeer.ID][]ma.Multiaddr, len(source))
+	for peerID, addresses := range source {
+		result[peerID] = append([]ma.Multiaddr(nil), addresses...)
+	}
+	return result
 }

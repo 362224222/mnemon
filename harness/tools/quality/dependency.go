@@ -126,14 +126,8 @@ func (collector *dependencyCollector) recordLayerEdge(source dependencySource, i
 		return
 	}
 	target := importedHarnessPackage(importPath)
-	targetPath := importedHarnessPackagePath(importPath)
-	if target != "" && !allowedHarnessImport(source.layer, target) &&
-		!allowedHarnessPackageImport(source.packagePath, targetPath) {
-		component := target
-		if source.layer == target {
-			component = targetPath
-		}
-		collector.add("dependency_direction", source.packagePath, component, source.relative)
+	if target != "" && !allowedHarnessImport(source.layer, target) {
+		collector.add("dependency_direction", source.packagePath, target, source.relative)
 	}
 }
 
@@ -211,14 +205,6 @@ func importedHarnessPackage(importPath string) string {
 	return strings.Split(strings.TrimPrefix(importPath, prefix), "/")[0]
 }
 
-func importedHarnessPackagePath(importPath string) string {
-	prefix := modulePath + "/"
-	if !strings.HasPrefix(importPath, prefix+"harness/internal/") {
-		return ""
-	}
-	return strings.TrimPrefix(importPath, prefix)
-}
-
 func isHarnessImport(importPath string) bool {
 	return importPath == modulePath+"/harness" || strings.HasPrefix(importPath, modulePath+"/harness/")
 }
@@ -236,11 +222,6 @@ func allowedHarnessImport(source, target string) bool {
 		"store": {"artifact": true}, "artifact": {}, "model": {}, "assets": {}, "testkit": {},
 	}
 	return allowed[source][target]
-}
-
-func allowedHarnessPackageImport(source, target string) bool {
-	return source == "harness/internal/localapi/nodecontrol" &&
-		target == "harness/internal/localapi"
 }
 
 func knownHarnessPackage(name string) bool {

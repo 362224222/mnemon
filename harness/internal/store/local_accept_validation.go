@@ -1,13 +1,86 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 )
+
+func validateAdmissionAuthority(ctx context.Context, tx *sql.Tx, spec LocalAcceptanceSpec,
+	operation model.Operation, acceptedAt time.Time,
+) ([]byte, error) {
+	snapshot := spec.Scope
+	node, err := readNode(ctx, tx)
+	if err != nil || node.PeerID() != snapshot.Node().PeerID() || node.OriginEpoch() != snapshot.Node().OriginEpoch() ||
+		node.NextOriginSequence() != snapshot.FirstOriginSequence() || node.ActiveAssetRevision() != snapshot.Node().ActiveAssetRevision() {
+		return nil, fmt.Errorf("%w: Node authority changed", ErrAdmissionConflict)
+	}
+	profile, err := readProfile(ctx, tx)
+	if err != nil || !profile.Enabled() || !sameProfileIdentity(profile, snapshot.Profile()) ||
+		!sameProfileAuthority(profile, snapshot.Profile()) || profile.ActiveAssetRevision() != node.ActiveAssetRevision() {
+		return nil, fmt.Errorf("%w: Profile authority changed", ErrAdmissionConflict)
+	}
+	if spec.Operation != nil {
+		var runProfile, runtime, runStatus string
+		err := tx.QueryRowContext(ctx, `SELECT profile_id,runtime_kind,status FROM agent_runs WHERE run_id=?`,
+			operation.AgentRunID().String()).Scan(&runProfile, &runtime, &runStatus)
+		if err != nil || runProfile != profile.ID().String() || runtime != string(profile.Runtime()) ||
+			(runStatus != "starting" && runStatus != "running" && runStatus != "runtime_finished") {
+			return nil, fmt.Errorf("%w: acting AgentRun authority changed", ErrAdmissionConflict)
+		}
+	}
+	count := uint64(len(spec.Items))
+	if node.NextOriginSequence() > model.MaxSQLiteInteger-count || acceptedAt.Before(node.UpdatedAt()) {
+		return nil, fmt.Errorf("%w: origin sequence successor exhausted or clock regressed", ErrAdmissionConflict)
+	}
+	var status, topic string
+	var rosterRevision, sourceHead uint64
+	var rosterHash []byte
+	err = tx.QueryRowContext(ctx, `SELECT c.status,c.topic_state,c.roster_head_revision,c.roster_head_hash,
+		p.source_head_channel_seq FROM channels c JOIN publication_epochs p ON p.channel_id=c.channel_id
+		AND p.origin_peer_id=? AND p.origin_epoch=? WHERE c.channel_id=?`, node.PeerID().String(),
+		node.OriginEpoch().String(), snapshot.ChannelID().String()).Scan(&status, &topic, &rosterRevision, &rosterHash, &sourceHead)
+	if err != nil || status != string(model.ChannelActive) || topic != string(model.TopicJoined) ||
+		rosterRevision != snapshot.PublicationRoster().Revision() || !bytes.Equal(rosterHash, snapshot.PublicationRoster().Digest().Bytes()) ||
+		sourceHead+1 != snapshot.FirstChannelSequence() || sourceHead > model.MaxSQLiteInteger-count {
+		return nil, fmt.Errorf("%w: Channel or publication head changed", ErrAdmissionConflict)
+	}
+	var memberRevision uint64
+	var memberHash, publicKey []byte
+	var epoch, memberStatus string
+	err = tx.QueryRowContext(ctx, `SELECT revision,record_hash,origin_epoch,status,public_key FROM channel_members
+		WHERE channel_id=? AND member_peer_id=? ORDER BY revision DESC LIMIT 1`, snapshot.ChannelID().String(),
+		node.PeerID().String()).Scan(&memberRevision, &memberHash, &epoch, &memberStatus, &publicKey)
+	if err != nil || memberRevision != snapshot.OriginMember().Revision() ||
+		!bytes.Equal(memberHash, snapshot.OriginMember().Digest().Bytes()) || epoch != node.OriginEpoch().String() ||
+		memberStatus != string(model.MemberActive) {
+		return nil, fmt.Errorf("%w: origin member head changed", ErrAdmissionConflict)
+	}
+	seen := make(map[model.PeerID]struct{})
+	for _, item := range spec.Items {
+		for _, target := range item.Publication.Event().Audience().Peers() {
+			if _, ok := seen[target]; ok {
+				continue
+			}
+			seen[target] = struct{}{}
+			var binding string
+			var confirmed sql.NullString
+			err := tx.QueryRowContext(ctx, `SELECT b.state,a.baseline_confirmed_at FROM peer_bindings b
+				LEFT JOIN peer_pull_acks a ON a.channel_id=b.channel_id AND a.target_peer_id=b.peer_id
+				AND a.origin_peer_id=? AND a.origin_epoch=? WHERE b.channel_id=? AND b.peer_id=?`,
+				node.PeerID().String(), node.OriginEpoch().String(), snapshot.ChannelID().String(), target.String()).Scan(&binding, &confirmed)
+			if err != nil || binding != string(model.BindingActive) || !confirmed.Valid {
+				return nil, fmt.Errorf("%w: target %s", ErrAudienceUnavailable, target.String())
+			}
+		}
+	}
+	return append([]byte(nil), publicKey...), nil
+}
 
 func validateWorkItem(item LocalAcceptanceItem, event model.Event) error {
 	mutatesWork := event.Type() == model.EventReviewOffered || event.Type() == model.EventReviewAccepted ||
@@ -69,10 +142,10 @@ func validateParticipantBinding(ctx context.Context, tx *sql.Tx, item LocalAccep
 		return errors.New("commit local acceptance: expiry payload changed frozen deadline")
 	}
 	if event.Type().ParticipantInput() {
-		response, validState := event.Type().ParticipantResponse()
-		if validState {
-			_, _, validState = model.NextReviewWorkState(current.State(), current.Iteration(), response)
-		}
+		validState := (event.Type() == model.EventReviewAcceptRequested || event.Type() == model.EventReviewDeclineRequested) &&
+			current.State() == model.WorkOffered
+		validState = validState || event.Type() == model.EventReviewDeliveryReady &&
+			(current.State() == model.WorkActive || current.State() == model.WorkRework)
 		if scope.OriginPeerID() != reviewer || event.Audience().Len() != 1 || !event.Audience().Contains(home) || !validState {
 			return errors.New("commit local acceptance: participant input is not frozen reviewer authority")
 		}
@@ -94,80 +167,65 @@ func validateParticipantBinding(ctx context.Context, tx *sql.Tx, item LocalAccep
 func validateOperationEvents(authority *LocalOperationAuthority, events []model.Event,
 	semanticControllerBatch bool,
 ) error {
-	if len(events) == 0 {
-		return errors.New("commit local acceptance: accepted Event set is empty")
-	}
 	if authority == nil {
-		return validateControllerEvents(events, semanticControllerBatch)
-	}
-	return validateAgentOperationEvents(*authority, events)
-}
-
-func validateControllerEvents(events []model.Event, semanticBatch bool) error {
-	if semanticBatch {
-		if len(events) != 2 || events[0].Type() != model.EventReviewExpired ||
-			(events[1].Type() != model.EventReviewAcceptRejected &&
-				events[1].Type() != model.EventReviewOutcome) ||
-			len(events[0].CausedBy()) != 1 || len(events[1].CausedBy()) != 1 {
-			return errors.New("commit local acceptance: invalid semantic deadline controller batch")
+		if semanticControllerBatch {
+			if len(events) != 2 || events[0].Type() != model.EventReviewExpired ||
+				(events[1].Type() != model.EventReviewAcceptRejected &&
+					events[1].Type() != model.EventReviewOutcome) ||
+				len(events[0].CausedBy()) != 1 || len(events[1].CausedBy()) != 1 {
+				return errors.New("commit local acceptance: invalid semantic deadline controller batch")
+			}
+			return nil
 		}
-		return nil
-	}
-	if len(events) != 1 {
-		return errors.New("commit local acceptance: controller accepts exactly one Event")
-	}
-	switch events[0].Type() {
-	case model.EventReviewAccepted, model.EventReviewAcceptRejected, model.EventReviewDelivered,
-		model.EventReviewDeclined, model.EventReviewExpired, model.EventReviewOutcome:
-		if len(events[0].CausedBy()) == 0 {
-			return errors.New("commit local acceptance: controller Event requires source causality")
+		if len(events) != 1 {
+			return errors.New("commit local acceptance: controller accepts exactly one Event")
 		}
-		return nil
-	default:
-		return errors.New("commit local acceptance: Event type is not controller-authoritative")
+		switch events[0].Type() {
+		case model.EventReviewAccepted, model.EventReviewAcceptRejected, model.EventReviewDelivered,
+			model.EventReviewDeclined, model.EventReviewExpired, model.EventReviewOutcome:
+			if len(events[0].CausedBy()) == 0 {
+				return errors.New("commit local acceptance: controller Event requires source causality")
+			}
+			return nil
+		default:
+			return errors.New("commit local acceptance: Event type is not controller-authoritative")
+		}
 	}
-}
-
-func validateAgentOperationEvents(authority LocalOperationAuthority, events []model.Event) error {
-	want, maxResults, validPolicy := authority.policyEvent()
-	if !validPolicy || len(events) > int(maxResults) {
-		return fmt.Errorf("%w: operation Action policy does not admit the Event result set",
-			ErrOperationMismatch)
+	want := map[model.OperationKind]model.EventType{
+		model.OperationTeamworkOffer: model.EventReviewOffered, model.OperationTeamworkAccept: model.EventReviewAcceptRequested,
+		model.OperationTeamworkDecline: model.EventReviewDeclineRequested, model.OperationTeamworkDeliver: model.EventReviewDeliveryReady,
+		model.OperationTeamworkRework: model.EventReviewReworkRequested, model.OperationTeamworkClose: model.EventReviewClosed,
+		model.OperationTeamworkCancel: model.EventReviewCancelled,
+	}[authority.Kind]
+	if !want.Valid() {
+		return errors.New("commit local acceptance: operation kind does not admit an Event")
 	}
-	for _, event := range events {
+	if len(events) > 1 && want != model.EventReviewOffered {
+		return errors.New("commit local acceptance: only teamwork.offer may expand a batch")
+	}
+	var previousReviewer model.PeerID
+	for index, event := range events {
 		if event.Type() != want {
 			return fmt.Errorf("commit local acceptance: operation %s cannot emit %s", authority.Kind, event.Type())
 		}
-	}
-	if want == model.EventReviewOffered {
-		return validateExpandedOfferEvents(events)
-	}
-	if len(events) != 1 {
-		return errors.New("commit local acceptance: only teamwork.offer may expand a batch")
-	}
-	if len(events[0].CausedBy()) == 0 {
-		return errors.New("commit local acceptance: context action requires source causality")
-	}
-	return nil
-}
-
-func validateExpandedOfferEvents(events []model.Event) error {
-	var previousReviewer model.PeerID
-	for index, event := range events {
-		if event.Audience().Len() != 1 {
-			return errors.New("commit local acceptance: offer batch must use canonical unique reviewer order")
-		}
-		reviewer := event.Audience().Peers()[0]
-		if index > 0 {
-			comparison, err := model.ComparePeerIDs(previousReviewer, reviewer)
-			if err != nil || comparison >= 0 {
+		if want == model.EventReviewOffered {
+			if event.Audience().Len() != 1 {
 				return errors.New("commit local acceptance: offer batch must use canonical unique reviewer order")
 			}
-			if !sameExpandedOfferSemantics(events[0], event) {
+			reviewer := event.Audience().Peers()[0]
+			if index > 0 {
+				comparison, err := model.ComparePeerIDs(previousReviewer, reviewer)
+				if err != nil || comparison >= 0 {
+					return errors.New("commit local acceptance: offer batch must use canonical unique reviewer order")
+				}
+			}
+			previousReviewer = reviewer
+			if index > 0 && !sameExpandedOfferSemantics(events[0], event) {
 				return errors.New("commit local acceptance: expanded offers changed content, deadline, Artifact or causality")
 			}
+		} else if len(event.CausedBy()) == 0 {
+			return errors.New("commit local acceptance: context action requires source causality")
 		}
-		previousReviewer = reviewer
 	}
 	return nil
 }

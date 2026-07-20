@@ -203,15 +203,22 @@ func TestCASTempsAreRecognizableButNeverAuthority(t *testing.T) {
 	}
 }
 
-func TestCASLifecycleBarrierIsOwnedByOneInstance(t *testing.T) {
-	first := openTestCAS(t)
-	second := first
-	other := openTestCAS(t)
-	if first != second {
-		t.Fatal("CAS consumers did not reuse the owner instance")
+func TestCASLifecycleBarrierIsSharedByCanonicalRoot(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "objects", "sha256")
+	first, err := NewCAS(root)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if first == other {
-		t.Fatal("independent CAS owners unexpectedly share an instance")
+	second, err := NewCAS(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := openTestCAS(t)
+	if first.coordination != second.coordination {
+		t.Fatal("separate CAS instances did not share root coordination")
+	}
+	if first.coordination == other.coordination {
+		t.Fatal("different CAS roots shared lifecycle coordination")
 	}
 
 	use, err := first.AcquireUse()
@@ -231,7 +238,7 @@ func TestCASLifecycleBarrierIsOwnedByOneInstance(t *testing.T) {
 		acquired <- lease
 	}()
 	<-started
-	waitForCASWriter(t, &first.lifecycle)
+	waitForCASWriter(t, &first.coordination.lifecycle)
 	select {
 	case lease := <-acquired:
 		lease.Release()
@@ -270,7 +277,10 @@ func TestCASLifecycleBarrierIsOwnedByOneInstance(t *testing.T) {
 
 func TestCASDigestBarriersSerializeTombstoneAndAllowOtherShards(t *testing.T) {
 	cas := openTestCAS(t)
-	second := cas
+	second, err := NewCAS(cas.root)
+	if err != nil {
+		t.Fatal(err)
+	}
 	content := []byte("digest barrier object")
 	digest := model.Sum(content)
 	if _, err := cas.Put(digest, content); err != nil {
@@ -1065,10 +1075,13 @@ func TestCASPruneTempsIsBoundedSafeAndSynchronized(t *testing.T) {
 		t.Fatalf("unsafe temp was removed: %v", err)
 	}
 
-	// The owner instance's temp mutex covers pruning's selection/removal
-	// interval as well as Put's temp lifetime for every injected consumer.
-	second := cas
-	cas.tempMu.Lock()
+	// The registry temp mutex is shared across instances and covers pruning's
+	// selection/removal interval as well as Put's temp lifetime.
+	second, err := NewCAS(cas.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cas.coordination.temp.Lock()
 	started := make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
@@ -1082,11 +1095,11 @@ func TestCASPruneTempsIsBoundedSafeAndSynchronized(t *testing.T) {
 	}
 	select {
 	case err := <-done:
-		cas.tempMu.Unlock()
+		cas.coordination.temp.Unlock()
 		t.Fatalf("prune crossed active temp mutex: %v", err)
 	default:
 	}
-	cas.tempMu.Unlock()
+	cas.coordination.temp.Unlock()
 	if err := <-done; !errors.Is(err, ErrCASCorruption) {
 		// The still-present unsafe recognizable symlink is intentionally
 		// detected once the synchronization barrier opens.

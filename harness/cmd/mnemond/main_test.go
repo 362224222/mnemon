@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi/nodecontrol"
+	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/node"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
@@ -412,12 +412,12 @@ func TestRunInspectCallsExistingOnlyReaderAndEmitsCanonicalReceipt(t *testing.T)
 	peerID, _ := model.ParsePeerID("peer-command-inspect")
 	at := time.Date(2026, 7, 17, 6, 7, 8, 9, time.UTC)
 	called := 0
-	inspect := func(ctx context.Context, workspace string) (node.Authority, error) {
+	inspect := func(ctx context.Context, workspace string) (localapi.AuthoritySnapshot, error) {
 		called++
 		if ctx == nil || workspace != resolved {
 			t.Fatalf("inspect input = (%v, %q)", ctx, workspace)
 		}
-		return node.Authority{Host: model.HostClaudeCode, Runtime: model.RuntimeClaudeCLI,
+		return localapi.AuthoritySnapshot{Host: model.HostClaudeCode, Runtime: model.RuntimeClaudeCLI,
 			Enabled: false, AssetRevision: revision, UpdatedAt: at, PeerID: peerID,
 			ActiveAssetRevision: revision}, nil
 	}
@@ -437,9 +437,9 @@ func TestRunInspectCallsExistingOnlyReaderAndEmitsCanonicalReceipt(t *testing.T)
 func TestRunInspectRejectsMalformedOrCancelledInvocationBeforeReading(t *testing.T) {
 	project := t.TempDir()
 	called := 0
-	inspect := func(context.Context, string) (node.Authority, error) {
+	inspect := func(context.Context, string) (localapi.AuthoritySnapshot, error) {
 		called++
-		return node.Authority{}, nil
+		return localapi.AuthoritySnapshot{}, nil
 	}
 	for _, args := range [][]string{{"inspect"}, {"inspect", "--project-root"},
 		{"inspect", "--project-root=" + project}, {"inspect", "--project-root", project, "trailing"},
@@ -466,20 +466,20 @@ func TestRunConfirmOfflineEmitsExactAuthorityAndClassifiesActiveWriter(t *testin
 		t.Fatal(err)
 	}
 	revision := model.Sum([]byte("confirm-offline-command-assets")).String()
-	if _, err := provisionManagedNode(context.Background(), node.ProvisionOptions{
+	if _, err := node.Provision(context.Background(), node.ProvisionOptions{
 		Workspace: project, Host: model.HostCodex, AssetRevision: revision,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	snapshot, err := inspectManagedNode(context.Background(), project)
+	snapshot, err := node.InspectAuthority(context.Background(), project)
 	if err != nil {
 		t.Fatal(err)
 	}
-	expected, err := nodecontrol.AuthorityResponse(snapshot)
+	expected, err := localapi.NewAuthorityResponse(snapshot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	digest, err := snapshot.Digest()
+	digest, err := localapi.AuthorityDigest(expected)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -515,7 +515,7 @@ func TestRunConfirmOfflineRejectsMalformedAndMismatchedAuthority(t *testing.T) {
 		t.Fatal(err)
 	}
 	revision := model.Sum([]byte("confirm-offline-mismatch-assets")).String()
-	if _, err := provisionManagedNode(context.Background(), node.ProvisionOptions{
+	if _, err := node.Provision(context.Background(), node.ProvisionOptions{
 		Workspace: project, Host: model.HostCodex, AssetRevision: revision,
 	}); err != nil {
 		t.Fatal(err)

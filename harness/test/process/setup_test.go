@@ -24,7 +24,6 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/assets"
 	"github.com/mnemon-dev/mnemon/harness/internal/integration"
 	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi/nodecontrol"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/node"
 	"golang.org/x/sys/unix"
@@ -135,7 +134,8 @@ func TestPublicSetupSerializesProcessesAndRecoversAKilledDaemon(t *testing.T) {
 
 	buildCtx, cancelBuild := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancelBuild()
-	setupProcessBuild(t, buildCtx, repository, harnessExecutable, "./harness/cmd/mnemon-harness")
+	setupProcessBuild(t, buildCtx, repository, harnessExecutable,
+		"./harness/cmd/mnemon-harness")
 	setupProcessBuild(t, buildCtx, repository, mnemondExecutable,
 		"./harness/cmd/mnemond")
 	setupProcessFakeCodex(t, filepath.Join(bin, "codex"))
@@ -457,7 +457,7 @@ func TestPublicSetupUpgradesAnActiveRevisionUnderLifecycleLease(t *testing.T) {
 	createdAt := time.Date(2020, time.January, 2, 8, 0, 0, 0, time.UTC)
 	provisioned, err := node.Provision(context.Background(), node.ProvisionOptions{
 		Workspace: workspace, Host: model.HostCodex, AssetRevision: oldRevision,
-		Clock: setupProcessClock{at: createdAt}, Credentials: nodecontrol.ProfileCredentials{},
+		Clock: setupProcessClock{at: createdAt},
 	})
 	if err != nil || provisioned.NodeState != nodeState || provisioned.Profile.Enabled() {
 		t.Fatalf("provision old revision = (%#v, %v)", provisioned, err)
@@ -482,14 +482,14 @@ func TestPublicSetupUpgradesAnActiveRevisionUnderLifecycleLease(t *testing.T) {
 		Workspace: workspace, Host: model.HostCodex, AssetRevision: oldRevision,
 		ExpectedUpdatedAt: provisioned.Profile.UpdatedAt(),
 		Clock:             setupProcessClock{at: createdAt.Add(time.Second)},
-		Install:           oldInstall, Credentials: nodecontrol.ProfileCredentials{},
+		Install:           oldInstall,
 	})
 	if err != nil || !activated.Changed || !activated.Profile.Enabled() {
 		t.Fatalf("activate old revision = (%#v, %v)", activated, err)
 	}
 
 	oldDaemon, err := node.OpenDaemon(context.Background(), node.DaemonOptions{
-		Workspace: workspace, Install: oldInstall, Credentials: nodecontrol.ProfileCredentials{}, Control: nodecontrol.Factory{},
+		Workspace: workspace, Install: oldInstall,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -547,7 +547,7 @@ func TestPublicSetupUpgradesAnActiveRevisionUnderLifecycleLease(t *testing.T) {
 		t.Fatalf("modified upgrade did not remain offline: %v", err)
 	}
 	cancelOffline()
-	disabled, err := node.InspectAuthority(context.Background(), workspace, nodecontrol.ProfileCredentials{})
+	disabled, err := node.InspectAuthority(context.Background(), workspace)
 	if err != nil || disabled.Enabled || disabled.PeerID != provisioned.Node.PeerID() ||
 		disabled.Host != model.HostCodex || disabled.AssetRevision != oldRevision ||
 		disabled.ActiveAssetRevision != oldRevision {

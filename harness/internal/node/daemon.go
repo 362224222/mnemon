@@ -10,9 +10,7 @@ import (
 	"sync"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/agent"
-	"github.com/mnemon-dev/mnemon/harness/internal/artifact"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
-	"github.com/mnemon-dev/mnemon/harness/internal/peer"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
 
@@ -44,15 +42,10 @@ type WakeAdapterFactoryOptions struct {
 }
 
 type DaemonOptions struct {
-	Workspace            string
-	Clock                Clock
-	Install              InstallationVerifier
-	Credentials          ProfileCredentialVerifier
-	WakeAdapterFactory   WakeAdapterFactory
-	Attachments          agent.WakeAttachmentFilesystem
-	Control              ControlTransportFactory
-	artifactCASFactory   daemonArtifactCASFactory
-	meshTransportFactory daemonMeshTransportFactory
+	Workspace          string
+	Clock              Clock
+	Install            InstallationVerifier
+	WakeAdapterFactory WakeAdapterFactory
 }
 
 // Daemon owns the strict restart path for one workspace-local Node. It binds
@@ -60,21 +53,15 @@ type DaemonOptions struct {
 // controller is allowed to create its socket. It never initializes missing
 // state or silently rotates identity.
 type Daemon struct {
-	workspace        string
-	nodeState        string
-	identity         *Identity
-	store            *store.Store
-	artifactCAS      *artifact.CAS
-	mesh             *peer.MeshRuntime
-	channelAuthority *ChannelAuthorityCoordinator
-	meshTransport    managedMeshTransport
-	channelRuntime   *ChannelRuntime
-	controller       *Controller
+	workspace  string
+	nodeState  string
+	identity   *Identity
+	store      *store.Store
+	controller *Controller
 
 	lifecycleMu  sync.Mutex
 	serveStarted bool
 	serveDone    chan struct{}
-	serveErr     error
 	closing      bool
 	closed       bool
 	closeOnce    sync.Once
@@ -86,7 +73,7 @@ func OpenDaemon(ctx context.Context, options DaemonOptions) (*Daemon, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: compose managed action policy: %w", ErrDaemonAuthority, err)
 	}
-	return openDaemon(ctx, options, nil, policy, nil)
+	return openDaemon(ctx, options, nil, policy)
 }
 
 // OpenManagedDaemon is the production serve boundary. Unlike OpenDaemon's
@@ -94,15 +81,6 @@ func OpenDaemon(ctx context.Context, options DaemonOptions) (*Daemon, error) {
 // inherited by DaemonProcessLauncher and consumes that descriptor before the
 // controller begins accepting requests.
 func OpenManagedDaemon(ctx context.Context, options DaemonOptions) (*Daemon, error) {
-	return openManagedDaemonWithMeshFreezer(ctx, options, freezeManagedDaemonMesh)
-}
-
-func openManagedDaemonWithMeshFreezer(ctx context.Context, options DaemonOptions,
-	freezer managedDaemonMeshFreezer,
-) (*Daemon, error) {
-	if freezer == nil {
-		return nil, fmt.Errorf("%w: managed mesh freezer is unavailable", ErrDaemonAuthority)
-	}
 	workspace, err := validateDaemonWorkspace(options.Workspace)
 	if err != nil {
 		return nil, err
@@ -117,15 +95,13 @@ func openManagedDaemonWithMeshFreezer(ctx context.Context, options DaemonOptions
 	if err != nil {
 		return nil, err
 	}
-	if isNilWakeAdapterFactory(options.WakeAdapterFactory) ||
-		isNilNodeInterface(options.Attachments) || isNilNodeInterface(options.Control) {
+	if isNilWakeAdapterFactory(options.WakeAdapterFactory) {
 		return nil, errors.Join(
-			fmt.Errorf("%w: managed wake adapter, attachments, or control transport is unavailable",
-				ErrDaemonAuthority),
+			fmt.Errorf("%w: managed wake adapter factory is unavailable", ErrDaemonAuthority),
 			permit.close(),
 		)
 	}
-	daemon, openErr := openDaemon(ctx, options, permit.close, policy, freezer)
+	daemon, openErr := openDaemon(ctx, options, permit.close, policy)
 	if openErr != nil {
 		return nil, errors.Join(openErr, permit.close())
 	}
@@ -133,38 +109,22 @@ func openManagedDaemonWithMeshFreezer(ctx context.Context, options DaemonOptions
 }
 
 func openDaemon(ctx context.Context, options DaemonOptions,
-	beforeAccept func() error, actionPolicy agent.ActionPolicy, meshFreezer managedDaemonMeshFreezer,
+	beforeAccept func() error, actionPolicy agent.ActionPolicy,
 ) (*Daemon, error) {
 	nodeState := filepath.Join(options.Workspace, ".mnemon", "harness", "node")
-	authority, err := openExistingDaemonAuthority(ctx, options.Workspace, nodeState,
-		options.Credentials)
+	authority, err := openExistingDaemonAuthority(ctx, options.Workspace, nodeState)
 	if err != nil {
 		return nil, err
 	}
 	workspace := options.Workspace
 	identity := authority.identity
 	st := authority.store
-	var mesh *peer.MeshRuntime
-	var meshTransport managedChannelTransport
-	var channelRuntime *ChannelRuntime
 	fail := func(cause error) (*Daemon, error) {
-		if !isNilNodeInterface(meshTransport) {
-			cause = errors.Join(cause, meshTransport.Close())
-		}
-		if mesh != nil {
-			cause = errors.Join(cause, mesh.Close())
-		}
 		if closeErr := st.Close(); closeErr != nil {
 			cause = errors.Join(cause,
 				fmt.Errorf("%w: close Store after composition failure: %v", ErrDaemonAuthority, closeErr))
 		}
 		return nil, cause
-	}
-	if meshFreezer != nil {
-		mesh, err = openManagedDaemonMesh(ctx, nodeState, authority, meshFreezer)
-		if err != nil {
-			return fail(fmt.Errorf("%w: compose managed mesh: %w", ErrDaemonAuthority, err))
-		}
 	}
 	var wakeAdapter agent.WakeWorkerAdapter
 	if !isNilWakeAdapterFactory(options.WakeAdapterFactory) {
@@ -180,44 +140,15 @@ func openDaemon(ctx context.Context, options DaemonOptions,
 			return fail(fmt.Errorf("%w: managed wake adapter factory returned no adapter", ErrDaemonAuthority))
 		}
 	}
-	controllerOptions, err := prepareControllerOptions(ctx, ControllerOptions{
-		NodeState: nodeState, Workspace: workspace,
+	controller, err := NewController(ctx, ControllerOptions{NodeState: nodeState, Workspace: workspace,
 		Store: st, Profile: authority.authority.Profile, Signer: identity.PublicationSigner(), Clock: options.Clock,
 		Install: options.Install, actionPolicy: actionPolicy,
-		WakeAdapter: wakeAdapter, Attachments: options.Attachments, Control: options.Control,
-		BeforeAccept: beforeAccept})
+		WakeAdapter: wakeAdapter, BeforeAccept: beforeAccept})
 	if err != nil {
-		return fail(fmt.Errorf("%w: preflight controller: %w", ErrDaemonAuthority, err))
-	}
-	cas, err := newDaemonArtifactCAS(filepath.Join(nodeState, "objects", "sha256"),
-		options.artifactCASFactory)
-	if err != nil {
-		return fail(fmt.Errorf("%w: %w", ErrDaemonAuthority, err))
-	}
-	var channelAuthority *ChannelAuthorityCoordinator
-	if mesh != nil {
-		channelAuthority, meshTransport, err = newDaemonMeshTransport(ctx, mesh, st,
-			identity, cas, controllerOptions.Clock, options.meshTransportFactory)
-		if err != nil {
-			return fail(fmt.Errorf("%w: %w", ErrDaemonAuthority, err))
-		}
-		channelRuntime, err = NewChannelRuntime(ChannelRuntimeOptions{Store: st,
-			Transport: meshTransport, Authority: channelAuthority, Clock: controllerOptions.Clock})
-		if err != nil {
-			return fail(fmt.Errorf("%w: compose Channel runtime: %w", ErrDaemonAuthority, err))
-		}
-	}
-	controllerOptions.ArtifactCAS = cas
-	controllerOptions.meshTransport = meshTransport
-	controllerOptions.channelRuntime = channelRuntime
-	controller, err := newController(controllerOptions)
-	if err != nil {
-		return fail(fmt.Errorf("%w: compose controller: %w", ErrDaemonAuthority, err))
+		return fail(fmt.Errorf("%w: compose controller: %v", ErrDaemonAuthority, err))
 	}
 	return &Daemon{workspace: workspace, nodeState: nodeState, identity: identity,
-		store: st, artifactCAS: cas, mesh: mesh, channelAuthority: channelAuthority,
-		meshTransport: meshTransport, channelRuntime: channelRuntime,
-		controller: controller, serveDone: make(chan struct{})}, nil
+		store: st, controller: controller, serveDone: make(chan struct{})}, nil
 }
 
 func (daemon *Daemon) Serve(ctx context.Context) error {
@@ -242,7 +173,6 @@ func (daemon *Daemon) Serve(ctx context.Context) error {
 
 	err := daemon.controller.Serve(ctx)
 	daemon.lifecycleMu.Lock()
-	daemon.serveErr = err
 	close(serveDone)
 	daemon.lifecycleMu.Unlock()
 	return err
@@ -267,30 +197,13 @@ func (daemon *Daemon) Close() error {
 					<-serveDone
 				}
 			}
+			// Serve normally releases the launch permit immediately before HTTP
+			// admission. Keep this idempotent fallback for every early-return
+			// path so Close can never strand inherited ensure.lock authority.
+			daemon.closeErr = controller.releaseBeforeAccept()
 		}
-		daemon.lifecycleMu.Lock()
-		serveErr := daemon.serveErr
-		daemon.lifecycleMu.Unlock()
-		if errors.Is(serveErr, ErrControlTransportUndrained) {
-			daemon.closeErr = errors.Join(daemon.closeErr, fmt.Errorf(
-				"%w: retain mesh and Store after unsafe control drain: %w",
-				ErrDaemonAuthority, ErrControlTransportUndrained))
-		} else {
-			if !isNilNodeInterface(daemon.meshTransport) {
-				daemon.closeErr = errors.Join(daemon.closeErr, daemon.meshTransport.Close())
-			}
-			if daemon.mesh != nil {
-				daemon.closeErr = errors.Join(daemon.closeErr, daemon.mesh.Close())
-			}
-			if daemon.store != nil {
-				daemon.closeErr = errors.Join(daemon.closeErr, daemon.store.Close())
-			}
-		}
-		if controller != nil {
-			// Serve normally consumes this permit immediately before local-control
-			// admission. Close-before-Serve keeps the lifecycle fence until the
-			// listener and Store writer have both been released.
-			daemon.closeErr = errors.Join(daemon.closeErr, controller.releaseBeforeAccept())
+		if daemon.store != nil {
+			daemon.closeErr = errors.Join(daemon.closeErr, daemon.store.Close())
 		}
 		daemon.lifecycleMu.Lock()
 		daemon.closed = true

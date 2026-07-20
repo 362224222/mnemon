@@ -1,4 +1,4 @@
-package nodecontrol
+package node
 
 import (
 	"bytes"
@@ -13,7 +13,6 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/agent"
 	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
-	"github.com/mnemon-dev/mnemon/harness/internal/node"
 )
 
 func TestAgentAttachmentEnvironmentMatchesLocalAPI(t *testing.T) {
@@ -25,7 +24,7 @@ func TestAgentAttachmentEnvironmentMatchesLocalAPI(t *testing.T) {
 
 func TestAgentAttachmentFilesystemCleansAndDiscardsExactStages(t *testing.T) {
 	nodeState := newAgentAttachmentNodeState(t)
-	filesystem := NewAgentAttachmentFilesystem(nodeState)
+	filesystem := newAgentAttachmentFilesystem(nodeState)
 	at := time.Date(2026, 7, 19, 9, 0, 0, 0, time.UTC)
 
 	orphan := stageAgentAttachment(t, filesystem, 0x31)
@@ -84,8 +83,8 @@ func TestAgentAttachmentFilesystemRejectsReplacementAndReapsAuthorizedSecret(t *
 	if err := fixture.attachment.Remove(); !errors.Is(err, localapi.ErrUnsafeClientState) {
 		t.Fatalf("Remove() after inode replacement = %v", err)
 	}
-	if removed, err := fixture.filesystem.RemoveReapable(fixture.runID,
-		model.Sum(fixture.token)); removed || !errors.Is(err, localapi.ErrUnsafeClientState) {
+	if removed, err := fixture.filesystem.RemoveReapable(fixture.runID, model.Sum(fixture.token)); removed ||
+		!errors.Is(err, localapi.ErrUnsafeClientState) {
 		t.Fatalf("RemoveReapable(original) = (%t, %v)", removed, err)
 	}
 	if removed, err := fixture.filesystem.RemoveReapable(fixture.runID,
@@ -96,7 +95,7 @@ func TestAgentAttachmentFilesystemRejectsReplacementAndReapsAuthorizedSecret(t *
 
 func TestAgentAttachmentFilesystemPreservesCandidatePageBoundAndOrder(t *testing.T) {
 	nodeState := newAgentAttachmentNodeState(t)
-	filesystem := NewAgentAttachmentFilesystem(nodeState)
+	filesystem := newAgentAttachmentFilesystem(nodeState)
 	for index := 0; index < 66; index++ {
 		staged := stageAgentAttachment(t, filesystem, byte(index+1))
 		runID, err := model.ParseRunID(fmt.Sprintf("run-agent-candidate-%03d", index))
@@ -135,11 +134,11 @@ func newAgentAttachmentNodeState(t *testing.T) string {
 
 type publishedAgentAttachment struct {
 	nodeState  string
-	filesystem *AgentAttachmentFilesystem
+	filesystem *agentAttachmentFilesystem
 	runID      model.RunID
 	token      []byte
 	tokenHash  model.Digest
-	attachment node.RunAttachment
+	attachment agent.RunAttachment
 }
 
 func newPublishedAgentAttachment(t *testing.T, tokenByte byte,
@@ -147,7 +146,7 @@ func newPublishedAgentAttachment(t *testing.T, tokenByte byte,
 ) publishedAgentAttachment {
 	t.Helper()
 	nodeState := newAgentAttachmentNodeState(t)
-	filesystem := NewAgentAttachmentFilesystem(nodeState)
+	filesystem := newAgentAttachmentFilesystem(nodeState)
 	staged := stageAgentAttachment(t, filesystem, tokenByte)
 	runID, err := model.ParseRunID(runText)
 	if err != nil {
@@ -161,9 +160,9 @@ func newPublishedAgentAttachment(t *testing.T, tokenByte byte,
 		token: bytes.Repeat([]byte{tokenByte}, 32), tokenHash: staged.TokenHash(), attachment: attachment}
 }
 
-func stageAgentAttachment(t *testing.T, filesystem *AgentAttachmentFilesystem,
+func stageAgentAttachment(t *testing.T, filesystem *agentAttachmentFilesystem,
 	value byte,
-) node.StagedRunAttachment {
+) agent.StagedRunAttachment {
 	t.Helper()
 	staged, err := filesystem.Stage(bytes.NewReader(bytes.Repeat([]byte{value}, 48)))
 	if err != nil {

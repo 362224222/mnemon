@@ -5,7 +5,7 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/agent"
+	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 )
 
 var ErrManagedAdmission = errors.New("managed Agent admission is sealed")
@@ -170,48 +170,48 @@ func fmtAdmissionError(err error) error {
 
 type controllerAdmissionService struct {
 	gate ManagedAdmission
-	next ManagedControlService
+	next localapi.Service
 }
 
 func (service controllerAdmissionService) HookCheck(ctx context.Context,
-	metadata ControlMetadata,
-) (HookCheckResponse, *ControlError) {
+	metadata localapi.RequestMetadata, request localapi.HookCheckRequest,
+) (localapi.HookCheckResponse, *localapi.APIError) {
 	release, apiErr := enterControllerAdmission(ctx, service.gate)
 	if apiErr != nil {
-		return HookCheckResponse{}, apiErr
+		return localapi.HookCheckResponse{}, apiErr
 	}
 	defer release()
-	return service.next.HookCheck(ctx, metadata)
+	return service.next.HookCheck(ctx, metadata, request)
 }
 
 func (service controllerAdmissionService) AgentCurrent(ctx context.Context,
-	metadata ControlMetadata,
-) (AgentCurrentResponse, *ControlError) {
+	metadata localapi.RequestMetadata, request localapi.AgentCurrentRequest,
+) (localapi.AgentCurrentResponse, *localapi.APIError) {
 	release, apiErr := enterControllerAdmission(ctx, service.gate)
 	if apiErr != nil {
-		return AgentCurrentResponse{}, apiErr
+		return localapi.AgentCurrentResponse{}, apiErr
 	}
 	defer release()
-	return service.next.AgentCurrent(ctx, metadata)
+	return service.next.AgentCurrent(ctx, metadata, request)
 }
 
 func (service controllerAdmissionService) TeamworkAction(ctx context.Context,
-	metadata ControlMetadata, request TeamworkActionRequest,
-) (OperationResponse, *ControlError) {
+	metadata localapi.RequestMetadata, request localapi.TeamworkActionRequest,
+) (localapi.OperationResponse, *localapi.APIError) {
 	release, apiErr := enterControllerAdmission(ctx, service.gate)
 	if apiErr != nil {
-		return OperationResponse{}, apiErr
+		return localapi.OperationResponse{}, apiErr
 	}
 	defer release()
 	return service.next.TeamworkAction(ctx, metadata, request)
 }
 
 func (service controllerAdmissionService) AgentResolve(ctx context.Context,
-	metadata ControlMetadata, request AgentResolveRequest,
-) (OperationResponse, *ControlError) {
+	metadata localapi.RequestMetadata, request localapi.AgentResolveRequest,
+) (localapi.OperationResponse, *localapi.APIError) {
 	release, apiErr := enterControllerAdmission(ctx, service.gate)
 	if apiErr != nil {
-		return OperationResponse{}, apiErr
+		return localapi.OperationResponse{}, apiErr
 	}
 	defer release()
 	return service.next.AgentResolve(ctx, metadata, request)
@@ -219,17 +219,17 @@ func (service controllerAdmissionService) AgentResolve(ctx context.Context,
 
 func enterControllerAdmission(ctx context.Context,
 	gate ManagedAdmission,
-) (func(), *ControlError) {
+) (func(), *localapi.APIError) {
 	if gate == nil {
-		return nil, agent.NewControlError(agent.CodeInternal,
+		return nil, localapi.NewAPIError(localapi.CodeInternal,
 			"managed admission gate is unavailable")
 	}
 	release, err := gate.Enter(ctx)
 	if err != nil || release == nil {
-		return nil, agent.NewControlError(agent.CodeMnemondUnavailable,
+		return nil, localapi.NewAPIError(localapi.CodeMnemondUnavailable,
 			"managed admission is stopping")
 	}
 	return release, nil
 }
 
-var _ ManagedControlService = controllerAdmissionService{}
+var _ localapi.Service = controllerAdmissionService{}

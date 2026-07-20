@@ -251,7 +251,7 @@ func TestCommitLocalAcceptanceRollsBackTerminalChildAndDispositionAfterLaterEvid
 	if _, err := fixture.store.ReserveOperation(ctx, operation, fixture.now.Add(24*time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	authority := mustLocalOperationAuthority(t, operation, fixture.policy)
+	authority := &LocalOperationAuthority{operation.ID(), operation.Kind(), operation.RequestDigest(), operation.LeaseOwner()}
 
 	current, err := fixture.store.GetReviewWork(ctx, child)
 	if err != nil {
