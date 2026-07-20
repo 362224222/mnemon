@@ -76,6 +76,45 @@ func TestInstallJoinedChannelCommitsReplicaBindingsAndReplays(t *testing.T) {
 	})
 }
 
+func TestReplayJoinedChannelPreservesCorruptReplicaAuthority(t *testing.T) {
+	t.Parallel()
+	_, joinerStore, spec := newJoinedChannelInstallFixture(t,
+		"join-install-corrupt-replay", "joined-replay-team")
+	initial, err := joinerStore.PrepareJoinedChannelInstall(context.Background(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := joinerStore.CommitJoinedChannelInstall(context.Background(), initial); err != nil {
+		t.Fatal(err)
+	}
+	corruptJoinedChannelAuthority(t, joinerStore, spec.Descriptor.Descriptor().ID())
+	roster, err := model.NewVerifiedRoster(spec.Descriptor, spec.Members)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := joinerStore.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	node, err := readNode(context.Background(), tx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = replayJoinedChannel(context.Background(), tx, node, spec, roster)
+	if !errors.Is(err, ErrChannelAuthorityInvariant) || errors.Is(err, ErrChannelJoinConflict) {
+		t.Fatalf("replayJoinedChannel(corrupt replica) error = %v", err)
+	}
+}
+
+func TestMapChannelJoinErrorKeepsBusinessConflictClassification(t *testing.T) {
+	t.Parallel()
+	err := mapChannelJoinError(ErrChannelEnrollmentConflict)
+	if !errors.Is(err, ErrChannelJoinConflict) || errors.Is(err, ErrChannelAuthorityInvariant) {
+		t.Fatalf("mapped enrollment conflict = %v", err)
+	}
+}
+
 func TestInstallJoinedChannelRejectsNinthNonterminalReplicaWithoutPartialState(t *testing.T) {
 	t.Parallel()
 	sharedJoiner := testkit.NewIdentity(t, "join-channel-limit-shared")
@@ -201,4 +240,11 @@ func TestInstallJoinedChannelOwnerCloseSuffixClosesReplicaAndFreshJoinStaysEmpty
 		"channels": 0, "channel_members": 0, "enrollment_receipts": 0,
 		"publication_epochs": 0, "peer_bindings": 0,
 	})
+}
+
+func corruptJoinedChannelAuthority(t *testing.T, st *Store, channelID model.ChannelID) {
+	t.Helper()
+	mustExec(t, st, `DROP TRIGGER channels_descriptor_immutable`)
+	mustExec(t, st, `UPDATE channels SET name=? WHERE channel_id=?`,
+		"forged-joined-channel-name", channelID.String())
 }

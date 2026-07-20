@@ -349,7 +349,8 @@ func readJoinedChannelInstallPreimage(ctx context.Context, tx *sql.Tx, node mode
 	authority, err := readVerifiedChannelAuthority(ctx, tx, node.PeerID(),
 		candidate.descriptor.Descriptor().ID())
 	if err != nil {
-		return joinedChannelReservationFence{}, joinedChannelReplicaSnapshot{}, ErrChannelJoinConflict
+		return joinedChannelReservationFence{}, joinedChannelReplicaSnapshot{},
+			fmt.Errorf("read joined Channel install preimage: %w", err)
 	}
 	return joinedChannelReservationFence{}, joinedChannelReplicaSnapshot{
 		channel: authority.channel, roster: authority.roster}, nil

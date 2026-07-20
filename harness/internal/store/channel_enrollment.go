@@ -252,11 +252,9 @@ func freshEnrollmentAvailability(authority verifiedChannelAuthority, grant durab
 func replayJoinedChannel(ctx context.Context, tx *sql.Tx, node model.Node,
 	spec InstallJoinedChannelSpec, incoming model.VerifiedRoster,
 ) (InstallJoinedChannelResult, error) {
-	authority, err := readVerifiedChannelAuthority(ctx, tx, node.PeerID(),
-		incoming.Descriptor().Descriptor().ID())
-	if err != nil || authority.channel.LocalAlias() != spec.LocalAlias ||
-		!bytes.Equal(authority.channel.Descriptor().WireJSON().Bytes(), spec.Descriptor.WireJSON().Bytes()) {
-		return InstallJoinedChannelResult{}, ErrChannelJoinConflict
+	authority, err := readJoinedChannelReplayAuthority(ctx, tx, node, spec, model.RecordHead{})
+	if err != nil {
+		return InstallJoinedChannelResult{}, err
 	}
 	storedMembers := authority.roster.Members()
 	incomingMembers := incoming.Members()
@@ -326,9 +324,9 @@ func replayJoinedChannel(ctx context.Context, tx *sql.Tx, node model.Node,
 			authority.bindings, spec.At); err != nil {
 			return InstallJoinedChannelResult{}, mapChannelJoinError(err)
 		}
-		authority, err = readVerifiedChannelAuthority(ctx, tx, node.PeerID(), channel.ID())
-		if err != nil || authority.channel.RosterHead() != incoming.Head() {
-			return InstallJoinedChannelResult{}, ErrChannelJoinConflict
+		authority, err = readJoinedChannelReplayAuthority(ctx, tx, node, spec, incoming.Head())
+		if err != nil {
+			return InstallJoinedChannelResult{}, err
 		}
 	}
 	status := ChannelEnrollmentReplayed

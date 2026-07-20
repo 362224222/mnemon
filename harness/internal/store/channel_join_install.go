@@ -102,7 +102,10 @@ func installJoinedChannelReplica(ctx context.Context, tx *sql.Tx, node model.Nod
 		return InstallJoinedChannelResult{}, err
 	}
 	committed, err := readVerifiedChannelAuthority(ctx, tx, node.PeerID(), channel.ID())
-	if err != nil || committed.channel.RosterHead() != candidate.roster.Head() {
+	if err != nil {
+		return InstallJoinedChannelResult{}, mapChannelJoinError(err)
+	}
+	if committed.channel.RosterHead() != candidate.roster.Head() {
 		return InstallJoinedChannelResult{}, ErrChannelJoinConflict
 	}
 	member, _ := memberAtHead(candidate.roster, candidate.receipt.MemberHead())
@@ -140,9 +143,29 @@ func insertJoinedChannelAuthority(ctx context.Context, tx *sql.Tx, node model.No
 		candidate.roster, candidate.at))
 }
 
+func readJoinedChannelReplayAuthority(ctx context.Context, tx *sql.Tx, node model.Node,
+	spec InstallJoinedChannelSpec, expectedHead model.RecordHead,
+) (verifiedChannelAuthority, error) {
+	authority, err := readVerifiedChannelAuthority(ctx, tx, node.PeerID(),
+		spec.Descriptor.Descriptor().ID())
+	if err != nil {
+		return verifiedChannelAuthority{}, mapChannelJoinError(err)
+	}
+	if authority.channel.LocalAlias() != spec.LocalAlias ||
+		!bytes.Equal(authority.channel.Descriptor().WireJSON().Bytes(),
+			spec.Descriptor.WireJSON().Bytes()) ||
+		(!expectedHead.IsZero() && authority.channel.RosterHead() != expectedHead) {
+		return verifiedChannelAuthority{}, ErrChannelJoinConflict
+	}
+	return authority, nil
+}
+
 func mapChannelJoinError(err error) error {
 	if err == nil {
 		return nil
+	}
+	if errors.Is(err, ErrChannelAuthorityInvariant) {
+		return fmt.Errorf("install joined Channel: %w", err)
 	}
 	message := err.Error()
 	if strings.Contains(message, "node_channel_limit") {
@@ -154,7 +177,7 @@ func mapChannelJoinError(err error) error {
 		strings.Contains(message, "conflicts with reserved join") ||
 		strings.Contains(message, "join reservation attempt") ||
 		strings.Contains(message, "join reservation state or time") ||
-		errors.Is(err, ErrChannelAuthorityInvariant) || errors.Is(err, ErrChannelEnrollmentConflict) {
+		errors.Is(err, ErrChannelEnrollmentConflict) {
 		return fmt.Errorf("%w: %v", ErrChannelJoinConflict, err)
 	}
 	return fmt.Errorf("install joined Channel: %w", err)

@@ -307,7 +307,7 @@ func readChannelAuthorityPlanMesh(ctx context.Context, tx *sql.Tx) (ChannelMeshA
 	for _, channelID := range channelIDs {
 		verified, readErr := readVerifiedChannelAuthority(ctx, tx, node.PeerID(), channelID)
 		if readErr != nil {
-			return ChannelMeshAuthority{}, fmt.Errorf("%w: Channel %q: %v",
+			return ChannelMeshAuthority{}, fmt.Errorf("%w: Channel %q: %w",
 				ErrChannelAuthorityPlan, channelID.String(), readErr)
 		}
 		live := make([]model.PeerBinding, 0, len(verified.bindings))

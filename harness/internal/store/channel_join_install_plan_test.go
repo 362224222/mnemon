@@ -74,6 +74,25 @@ func TestJoinedChannelInstallPlanNoopReplayHasCurrentExactEvidence(t *testing.T)
 	}
 }
 
+func TestJoinedChannelInstallPlanPreservesCorruptReplicaAuthority(t *testing.T) {
+	t.Parallel()
+	_, joinerStore, spec := newJoinedChannelInstallFixture(t,
+		"join-authority-plan-corrupt", "joined-plan-team")
+	initial, err := joinerStore.PrepareJoinedChannelInstall(context.Background(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := joinerStore.CommitJoinedChannelInstall(context.Background(), initial); err != nil {
+		t.Fatal(err)
+	}
+	corruptJoinedChannelAuthority(t, joinerStore, spec.Descriptor.Descriptor().ID())
+
+	_, err = joinerStore.PrepareJoinedChannelInstall(context.Background(), spec)
+	if !errors.Is(err, ErrChannelAuthorityInvariant) || errors.Is(err, ErrChannelJoinConflict) {
+		t.Fatalf("PrepareJoinedChannelInstall(corrupt replica) error = %v", err)
+	}
+}
+
 func TestJoinedChannelInstallPlanFreezesExplicitOwnerOutcomeVerification(t *testing.T) {
 	t.Parallel()
 	owner := newChannelEnrollmentFixture(t, "join-owner-outcome-plan")
