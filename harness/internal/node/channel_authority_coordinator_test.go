@@ -1,14 +1,17 @@
 package node
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"errors"
 	"path/filepath"
 	"reflect"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	eventpkg "github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/peer"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
@@ -88,7 +91,8 @@ func newRealChannelAuthorityCoordinatorFixture(t *testing.T) realChannelAuthorit
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = runtime.Close() })
-	controller, err := NewChannelAuthorityCoordinator(st, runtime)
+	controller, err := NewChannelAuthorityCoordinator(context.Background(), st, runtime,
+		newChannelAuthorityNodeIdentity(t, owner))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +147,17 @@ func realChannelCreateSpec(t *testing.T,
 	channel *testkit.SignedChannel, owner testkit.Identity, at time.Time,
 ) store.CreateChannelSpec {
 	t.Helper()
-	grantID, _ := model.ParseGrantID("grant-node-channel-member")
+	return realChannelCreateSpecWithGrant(t, channel, owner, at, "grant-node-channel-member")
+}
+
+func realChannelCreateSpecWithGrant(t *testing.T, channel *testkit.SignedChannel,
+	owner testkit.Identity, at time.Time, grant string,
+) store.CreateChannelSpec {
+	t.Helper()
+	grantID, err := model.ParseGrantID(grant)
+	if err != nil {
+		t.Fatal(err)
+	}
 	payload, err := model.NewEnrollmentTokenPayload(model.EnrollmentTokenSpec{
 		Descriptor: channel.Descriptor(), OwnerMultiaddrs: owner.Multiaddrs(), GrantID: grantID,
 		BearerSecret: model.Sum([]byte("node-channel-member-secret")).Bytes(),
@@ -186,6 +200,237 @@ func assertRealChannelMemberBinding(t *testing.T, st *store.Store,
 	}
 }
 
+type channelAuthorityEnrollmentFixture struct {
+	store      *store.Store
+	owner      testkit.Identity
+	channel    *testkit.SignedChannel
+	joiner     testkit.Identity
+	challenge  peer.ChannelEnrollmentChallengeControl
+	acceptance peer.ChannelEnrollmentAcceptanceControl
+}
+
+func newChannelAuthorityEnrollmentFixture(t *testing.T,
+	seed string,
+) channelAuthorityEnrollmentFixture {
+	t.Helper()
+	at := time.Date(2026, 7, 19, 4, 30, 0, 0, time.UTC)
+	st, owner := newInitializedChannelAuthorityStore(t, "node-owner-enrollment-"+seed, at)
+	channel := testkit.NewSignedChannelForOwnerAt(t, "node-owner-enrollment-channel-"+seed,
+		owner, at)
+	create := realChannelCreateSpec(t, channel, owner, at)
+	if _, err := st.CreateChannel(context.Background(), create); err != nil {
+		t.Fatal(err)
+	}
+	joiner := testkit.NewIdentity(t, "node-owner-enrollment-joiner-"+seed)
+	joinIdentity, err := model.EnrollmentJoinIdentityDigest(channel.Channel().ID(),
+		create.Token.Payload().GrantID(), joiner.PeerID(), joiner.PublicKey(), joiner.OriginEpoch())
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestID, err := model.EnrollmentRequestIDForJoinIdentity(joinIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	acceptedAt := at.Add(10 * time.Second)
+	transcript, err := model.NewEnrollmentTranscript(model.EnrollmentTranscriptSpec{
+		ChannelID: channel.Channel().ID(), GrantID: create.Token.Payload().GrantID(),
+		RequestID: requestID, OwnerPeerID: owner.PeerID(), JoinerPeerID: joiner.PeerID(),
+		OwnerNonce:      bytes.Repeat([]byte{0x31}, model.EnrollmentNonceBytes),
+		JoinerNonce:     bytes.Repeat([]byte{0x32}, model.EnrollmentNonceBytes),
+		SelectedVersion: model.EnrollmentProtocolMinVersion, Limits: model.DefaultMemberLimits(),
+		JoinerOriginEpoch: joiner.OriginEpoch(), JoinerDisplayLabel: joiner.DisplayName(),
+		JoinerPublicKey: joiner.PublicKey(), AdvertisedMultiaddrs: joiner.Multiaddrs(),
+		RosterHead: channel.Roster().Head()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier, err := model.VerifierForEnrollment(create.Token.Payload().BearerSecret(),
+		channel.Channel().ID(), create.Token.Payload().GrantID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof, err := model.ComputeEnrollmentProof(verifier, transcript)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return channelAuthorityEnrollmentFixture{store: st, owner: owner, channel: channel,
+		joiner: joiner,
+		challenge: peer.ChannelEnrollmentChallengeControl{AuthenticatedPeerID: joiner.PeerID(),
+			ChannelID: channel.Channel().ID(), GrantID: create.Token.Payload().GrantID(),
+			RequestID: requestID, JoinerOriginEpoch: joiner.OriginEpoch(),
+			JoinerPublicKey: joiner.PublicKey(), At: acceptedAt},
+		acceptance: peer.ChannelEnrollmentAcceptanceControl{AuthenticatedPeerID: joiner.PeerID(),
+			Transcript: transcript, AdvertisedMultiaddrs: joiner.Multiaddrs(), Proof: proof,
+			At: acceptedAt}}
+}
+
+type channelAuthorityTestSigner struct {
+	privateKey ed25519.PrivateKey
+	calls      atomic.Int64
+	failAt     int64
+	failure    error
+}
+
+func newChannelAuthorityTestSigner(t testing.TB,
+	identity testkit.Identity,
+) *channelAuthorityTestSigner {
+	t.Helper()
+	privateKey, err := identity.Libp2pPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := privateKey.Raw()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &channelAuthorityTestSigner{privateKey: append(ed25519.PrivateKey(nil), raw...)}
+}
+
+func newChannelAuthorityNodeIdentity(t testing.TB, identity testkit.Identity) *Identity {
+	t.Helper()
+	privateKey, err := identity.Libp2pPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := privateKey.Raw()
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicationSigner, err := eventpkg.NewEd25519Signer(ed25519.PrivateKey(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &Identity{peerID: identity.PeerID(), privateKey: privateKey,
+		publicKey: identity.PublicKey(), signer: publicationSigner}
+}
+
+func (signer *channelAuthorityTestSigner) Sign(ctx context.Context,
+	message []byte,
+) ([]byte, error) {
+	call := signer.calls.Add(1)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if signer.failAt == call {
+		return nil, signer.failure
+	}
+	return ed25519.Sign(signer.privateKey, message), nil
+}
+
+func TestChannelAuthorityCoordinatorChallengeDoesNotTakeMutationToken(t *testing.T) {
+	t.Parallel()
+	fixture := newChannelAuthorityEnrollmentFixture(t, "challenge-no-token")
+	trace := []string{}
+	coordinator, err := newChannelAuthorityCoordinator(fixture.store,
+		newChannelAuthorityRuntimeTrace(&trace), newChannelAuthorityTestSigner(t, fixture.owner))
+	if err != nil {
+		t.Fatal(err)
+	}
+	release, err := coordinator.acquire(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	challengeCtx, cancelChallenge := context.WithTimeout(context.Background(), time.Second)
+	prepared, prepareErr := coordinator.PrepareEnrollmentChallenge(challengeCtx, fixture.challenge)
+	cancelChallenge()
+	release()
+	if prepareErr != nil || prepared.RosterHead != fixture.channel.Roster().Head() {
+		t.Fatalf("PrepareEnrollmentChallenge() while mutation token held = (%#v,%v)",
+			prepared, prepareErr)
+	}
+	if len(trace) != 0 {
+		t.Fatalf("read-only challenge touched runtime: %v", trace)
+	}
+}
+
+func TestChannelAuthorityCoordinatorAcceptSerializesAgainstCreate(t *testing.T) {
+	t.Parallel()
+	fixture := newChannelAuthorityEnrollmentFixture(t, "accept-serialize")
+	gated := newGatedChannelEnrollmentAuthorityStore(fixture.store)
+	t.Cleanup(gated.releaseCreate)
+	trace := []string{}
+	coordinator, err := newChannelAuthorityCoordinator(gated,
+		newChannelAuthorityRuntimeTrace(&trace), newChannelAuthorityTestSigner(t, fixture.owner))
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondAt := fixture.channel.Channel().CreatedAt().Add(time.Second)
+	second := testkit.NewSignedChannelForOwnerAt(t, "node-owner-enrollment-second",
+		fixture.owner, secondAt)
+	secondSpec := realChannelCreateSpecWithGrant(t, second, fixture.owner, secondAt,
+		"grant-node-owner-enrollment-second")
+	createDone := make(chan error, 1)
+	go func() {
+		_, createErr := coordinator.CreateChannel(context.Background(), secondSpec)
+		createDone <- createErr
+	}()
+	select {
+	case <-gated.createEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("create did not enter Store while holding the mutation token")
+	}
+	acceptDone := make(chan error, 1)
+	go func() {
+		_, acceptErr := coordinator.AcceptEnrollmentAuthority(context.Background(), fixture.acceptance)
+		acceptDone <- acceptErr
+	}()
+	select {
+	case <-gated.signingEntered:
+		t.Fatal("owner acceptance overlapped create at the Store boundary")
+	case <-time.After(100 * time.Millisecond):
+	}
+	gated.releaseCreate()
+	if err := <-createDone; err != nil {
+		t.Fatalf("serialized CreateChannel() = %v", err)
+	}
+	select {
+	case <-gated.signingEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("owner acceptance did not enter after create released the token")
+	}
+	if err := <-acceptDone; err != nil {
+		t.Fatalf("serialized AcceptEnrollmentAuthority() = %v", err)
+	}
+}
+
+type gatedChannelEnrollmentAuthorityStore struct {
+	*store.Store
+	createEntered  chan struct{}
+	createRelease  chan struct{}
+	signingEntered chan struct{}
+	released       atomic.Bool
+}
+
+func newGatedChannelEnrollmentAuthorityStore(st *store.Store) *gatedChannelEnrollmentAuthorityStore {
+	return &gatedChannelEnrollmentAuthorityStore{Store: st, createEntered: make(chan struct{}, 1),
+		createRelease: make(chan struct{}), signingEntered: make(chan struct{}, 1)}
+}
+
+func (st *gatedChannelEnrollmentAuthorityStore) PrepareCreateChannel(ctx context.Context,
+	spec store.CreateChannelSpec,
+) (store.CreateChannelPlan, error) {
+	st.createEntered <- struct{}{}
+	select {
+	case <-ctx.Done():
+		return store.CreateChannelPlan{}, ctx.Err()
+	case <-st.createRelease:
+		return st.Store.PrepareCreateChannel(ctx, spec)
+	}
+}
+
+func (st *gatedChannelEnrollmentAuthorityStore) PrepareChannelEnrollmentSigning(ctx context.Context,
+	spec store.PrepareChannelEnrollmentSigningSpec,
+) (store.ChannelEnrollmentSigningPlan, error) {
+	st.signingEntered <- struct{}{}
+	return st.Store.PrepareChannelEnrollmentSigning(ctx, spec)
+}
+
+func (st *gatedChannelEnrollmentAuthorityStore) releaseCreate() {
+	if st != nil && st.released.CompareAndSwap(false, true) {
+		close(st.createRelease)
+	}
+}
+
 func TestChannelAuthorityCoordinatorCreateTransitionsPreparedCandidateInOrder(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 7, 19, 5, 0, 0, 0, time.UTC)
@@ -194,7 +439,8 @@ func TestChannelAuthorityCoordinatorCreateTransitionsPreparedCandidateInOrder(t 
 	trace := []string{}
 	tracedStore := &channelAuthorityCreateTraceStore{Store: st, trace: &trace}
 	runtime := newChannelAuthorityRuntimeTrace(&trace)
-	coordinator, err := newChannelAuthorityCoordinator(tracedStore, runtime)
+	coordinator, err := newChannelAuthorityCoordinator(tracedStore, runtime,
+		newChannelAuthorityTestSigner(t, owner))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +462,7 @@ func TestChannelAuthorityCoordinatorSerializesCreateMemberAndBaseline(t *testing
 	t.Cleanup(func() { close(gatedStore.release) })
 	trace := []string{}
 	coordinator, err := newChannelAuthorityCoordinator(gatedStore,
-		newChannelAuthorityRuntimeTrace(&trace))
+		newChannelAuthorityRuntimeTrace(&trace), newChannelAuthorityTestSigner(t, owner))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,7 +529,7 @@ func TestChannelAuthorityCoordinatorMutationWaitHonorsCancellation(t *testing.T)
 	t.Cleanup(func() { close(gatedStore.release) })
 	trace := []string{}
 	coordinator, err := newChannelAuthorityCoordinator(gatedStore,
-		newChannelAuthorityRuntimeTrace(&trace))
+		newChannelAuthorityRuntimeTrace(&trace), newChannelAuthorityTestSigner(t, owner))
 	if err != nil {
 		t.Fatal(err)
 	}

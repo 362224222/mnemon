@@ -17,6 +17,21 @@ var ErrChannelAuthority = errors.New("mnemond Channel authority")
 
 type channelAuthorityStore interface {
 	ReadChannelMeshAuthority(context.Context) (store.ChannelMeshAuthority, error)
+	PrepareChannelEnrollment(context.Context,
+		store.PrepareChannelEnrollmentSpec,
+	) (store.PrepareChannelEnrollmentResult, error)
+	PrepareChannelEnrollmentSigning(context.Context,
+		store.PrepareChannelEnrollmentSigningSpec,
+	) (store.ChannelEnrollmentSigningPlan, error)
+	PrepareSignedChannelEnrollment(context.Context, store.ChannelEnrollmentSigningPlan,
+		store.ChannelEnrollmentSignatures,
+	) (store.ChannelEnrollmentPlan, error)
+	CommitChannelEnrollment(context.Context,
+		store.ChannelEnrollmentPlan,
+	) (store.AcceptChannelEnrollmentResult, error)
+	ResolveChannelEnrollment(context.Context,
+		store.ChannelEnrollmentPlan,
+	) (store.ChannelAuthorityPlanResolution, error)
 	PrepareCreateChannel(context.Context, store.CreateChannelSpec) (store.CreateChannelPlan, error)
 	CommitCreateChannel(context.Context, store.CreateChannelPlan) (store.CreateChannelResult, error)
 	ResolveCreateChannel(context.Context, store.CreateChannelPlan) (store.ChannelAuthorityPlanResolution, error)
@@ -53,29 +68,37 @@ func (runtime meshChannelAuthorityRuntime) begin(
 type ChannelAuthorityCoordinator struct {
 	store   channelAuthorityStore
 	runtime channelAuthorityRuntime
+	signer  store.ChannelAuthoritySigner
 	token   chan struct{}
 }
 
 var _ peer.ChannelMemberController = (*ChannelAuthorityCoordinator)(nil)
 
-func NewChannelAuthorityCoordinator(st *store.Store,
-	runtime *peer.MeshRuntime,
+func NewChannelAuthorityCoordinator(ctx context.Context, st *store.Store,
+	runtime *peer.MeshRuntime, identity *Identity,
 ) (*ChannelAuthorityCoordinator, error) {
-	if st == nil || runtime == nil {
-		return nil, fmt.Errorf("%w: Store and mesh runtime are required", ErrChannelAuthority)
+	if ctx == nil || st == nil || runtime == nil || identity == nil || identity.PeerID().IsZero() {
+		return nil, fmt.Errorf("%w: Store, mesh runtime, and Node identity are required",
+			ErrChannelAuthority)
 	}
-	return newChannelAuthorityCoordinator(st, meshChannelAuthorityRuntime{runtime: runtime})
+	mesh, err := st.ReadChannelMeshAuthority(ctx)
+	if err != nil || mesh.LocalPeerID() != identity.PeerID() {
+		return nil, fmt.Errorf("%w: Node identity does not match durable authority",
+			ErrChannelAuthority)
+	}
+	return newChannelAuthorityCoordinator(st, meshChannelAuthorityRuntime{runtime: runtime},
+		identity.PublicationSigner())
 }
 
 func newChannelAuthorityCoordinator(st channelAuthorityStore,
-	runtime channelAuthorityRuntime,
+	runtime channelAuthorityRuntime, signer store.ChannelAuthoritySigner,
 ) (*ChannelAuthorityCoordinator, error) {
-	if st == nil || runtime == nil {
-		return nil, fmt.Errorf("%w: Store and mesh runtime are required", ErrChannelAuthority)
+	if st == nil || runtime == nil || nilChannelAuthoritySigner(signer) {
+		return nil, fmt.Errorf("%w: Store, mesh runtime, and signer are required", ErrChannelAuthority)
 	}
 	token := make(chan struct{}, 1)
 	token <- struct{}{}
-	return &ChannelAuthorityCoordinator{store: st, runtime: runtime, token: token}, nil
+	return &ChannelAuthorityCoordinator{store: st, runtime: runtime, signer: signer, token: token}, nil
 }
 
 // CreateChannel prepares and commits the exact Store-bound create candidate
