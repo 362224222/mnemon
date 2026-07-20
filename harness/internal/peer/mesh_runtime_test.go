@@ -76,6 +76,29 @@ func TestMeshRuntimeStartsOneRouterAndJoinsEveryActiveChannel(t *testing.T) {
 	}
 }
 
+func TestMeshRuntimeSessionContextPreservesLegacyAndCancellation(t *testing.T) {
+	owner := testkit.NewIdentity(t, "mesh-runtime-session-context-owner")
+	st := openPeerMeshStore(t, owner, peerMeshTime(t, "2026-07-18T04:30:00Z"))
+	channel := testkit.NewSignedChannelForOwnerAt(t, "mesh-runtime-session-context", owner,
+		peerMeshTime(t, "2026-07-18T04:30:00Z"))
+	createPeerMeshChannel(t, st, channel, "runtime-session-context")
+	runtime := newTestMeshRuntime(t, context.Background(), owner,
+		readMeshRuntimeAuthority(t, st))
+	current, err := runtime.session(context.Background(), channel.Channel().ID())
+	if err != nil || current == nil || !current.IsCurrent() {
+		t.Fatalf("context session = (%p, %v)", current, err)
+	}
+	legacy, err := runtime.Session(channel.Channel().ID())
+	if err != nil || legacy != current {
+		t.Fatalf("legacy Session = (%p, %v), want %p", legacy, err, current)
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := runtime.session(canceled, channel.Channel().ID()); !errors.Is(err, context.Canceled) || !errors.Is(err, ErrMeshRuntime) {
+		t.Fatalf("canceled context session error = %v", err)
+	}
+}
+
 func TestMeshRuntimeReconcileRollsBackAddressesAndJoinsNewChannel(t *testing.T) {
 	ctx := context.Background()
 	owner := testkit.NewIdentity(t, "mesh-runtime-reconcile-owner")

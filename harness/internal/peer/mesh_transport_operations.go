@@ -2,9 +2,39 @@ package peer
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 )
+
+func (transport *MeshTransport) EnsureChannelTopic(ctx context.Context,
+	channelID model.ChannelID,
+) error {
+	callCtx, done, err := transport.beginCall(ctx)
+	if err != nil {
+		return err
+	}
+	defer done()
+	session, err := transport.runtime.session(callCtx, channelID)
+	if err != nil {
+		return err
+	}
+	if session == nil || !session.IsCurrent() {
+		return fmt.Errorf("%w: Channel topic is not current", ErrMeshTransport)
+	}
+	return nil
+}
+
+func (transport *MeshTransport) HasCurrentChannelTopic(channelID model.ChannelID) bool {
+	if transport == nil || channelID.IsZero() {
+		return false
+	}
+	transport.mu.Lock()
+	defer transport.mu.Unlock()
+	return transport.state == meshTransportRunning && transport.runCtx != nil &&
+		transport.runCtx.Err() == nil && transport.runtimeLive() &&
+		transport.runtime.HasCurrentSession(channelID)
+}
 
 func (transport *MeshTransport) JoinChannel(ctx context.Context, spec JoinChannelSpec,
 	session ChannelJoinSession,

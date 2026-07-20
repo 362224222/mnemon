@@ -237,38 +237,7 @@ func authorityRPCInspector(authority *Authority) func(libp2ppeer.ID, *pubsub.RPC
 // Join registers the exact validator before joining/subscribing. Repeated
 // reconciliation returns the one existing Channel session.
 func (gossip *Gossip) Join(channelID model.ChannelID) (*TopicSession, error) {
-	if gossip == nil || gossip.pubsub == nil {
-		return nil, fmt.Errorf("%w: router is unavailable", ErrGossipTopic)
-	}
-	for {
-		gossip.mu.Lock()
-		if gossip.closed {
-			gossip.mu.Unlock()
-			return nil, fmt.Errorf("%w: router is closed", ErrGossipTopic)
-		}
-		if transition := gossip.transition; transition != nil && transition.affects(channelID) {
-			done := transition.Done()
-			gossip.mu.Unlock()
-			<-done
-			continue
-		}
-		if current := gossip.sessions[channelID]; current != nil && current.closed.Load() {
-			done := current.closeDone
-			gossip.mu.Unlock()
-			if done != nil {
-				<-done
-			}
-			continue
-		}
-		topicName, err := TopicName(channelID)
-		if err != nil || !gossip.authority.CanSubscribe(topicName) {
-			gossip.mu.Unlock()
-			return nil, fmt.Errorf("%w: Channel is not locally active", ErrGossipTopic)
-		}
-		session, err := gossip.joinLocked(channelID, topicName, true)
-		gossip.mu.Unlock()
-		return session, err
-	}
+	return gossip.join(context.Background(), channelID)
 }
 
 func (gossip *Gossip) joinLocked(channelID model.ChannelID,

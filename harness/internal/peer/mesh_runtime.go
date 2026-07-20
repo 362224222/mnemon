@@ -144,8 +144,17 @@ func (runtime *MeshRuntime) LocalEnrollmentMultiaddrs() ([]string, error) {
 }
 
 func (runtime *MeshRuntime) Session(channelID model.ChannelID) (*TopicSession, error) {
-	if runtime == nil {
+	return runtime.session(context.Background(), channelID)
+}
+
+func (runtime *MeshRuntime) session(ctx context.Context,
+	channelID model.ChannelID,
+) (*TopicSession, error) {
+	if runtime == nil || ctx == nil {
 		return nil, fmt.Errorf("%w: runtime is unavailable", ErrMeshRuntime)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("%w: acquire Channel session: %w", ErrMeshRuntime, err)
 	}
 	runtime.mu.Lock()
 	if runtime.closed || runtime.gossip == nil {
@@ -154,7 +163,7 @@ func (runtime *MeshRuntime) Session(channelID model.ChannelID) (*TopicSession, e
 	}
 	gossip := runtime.gossip
 	runtime.mu.Unlock()
-	session, err := gossip.Join(channelID)
+	session, err := gossip.join(ctx, channelID)
 	if err != nil {
 		return nil, fmt.Errorf("%w: acquire Channel session: %w", ErrMeshRuntime, err)
 	}
