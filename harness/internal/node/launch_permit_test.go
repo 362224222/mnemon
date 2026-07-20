@@ -118,6 +118,7 @@ func TestOpenManagedDaemonRequiresExactInheritedEnsureLockBeforeStoreOpen(t *tes
 
 func TestOpenManagedDaemonRetainsInheritedPermitUntilSocketReadyWithoutSelfDeadlock(t *testing.T) {
 	fixture := newDaemonFixture(t, true)
+	publishDaemonTestMeshPending(t, fixture)
 	parent := acquirePermitTestEnsureLock(t, fixture.nodeState)
 	defer parent.close()
 	childFD, err := unix.Dup(int(parent.file.Fd()))
@@ -176,6 +177,7 @@ func TestOpenManagedDaemonRetainsInheritedPermitUntilSocketReadyWithoutSelfDeadl
 
 func TestManagedDaemonControlPrepareFailureReleasesPermitBeforeReturn(t *testing.T) {
 	fixture := newDaemonFixture(t, true)
+	publishDaemonTestMeshPending(t, fixture)
 	parent := acquirePermitTestEnsureLock(t, fixture.nodeState)
 	defer parent.close()
 	childFD, err := unix.Dup(int(parent.file.Fd()))

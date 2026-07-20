@@ -313,6 +313,7 @@ func TestOpenManagedDaemonRejectsMissingOrTypedNilCompositionAfterConsumingPermi
 
 func TestManagedDaemonCloseBeforeServeReleasesPermitAndStore(t *testing.T) {
 	fixture := newDaemonFixture(t, true)
+	publishDaemonTestMeshPending(t, fixture)
 	parent := acquirePermitTestEnsureLock(t, fixture.nodeState)
 	defer parent.close()
 	childFD, err := unix.Dup(int(parent.file.Fd()))

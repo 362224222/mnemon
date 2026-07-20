@@ -11,6 +11,7 @@ import (
 
 	"github.com/mnemon-dev/mnemon/harness/internal/agent"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
+	"github.com/mnemon-dev/mnemon/harness/internal/peer"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
 
@@ -60,6 +61,7 @@ type Daemon struct {
 	nodeState  string
 	identity   *Identity
 	store      *store.Store
+	mesh       *peer.MeshRuntime
 	controller *Controller
 
 	lifecycleMu  sync.Mutex
@@ -77,7 +79,7 @@ func OpenDaemon(ctx context.Context, options DaemonOptions) (*Daemon, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: compose managed action policy: %w", ErrDaemonAuthority, err)
 	}
-	return openDaemon(ctx, options, nil, policy)
+	return openDaemon(ctx, options, nil, policy, nil)
 }
 
 // OpenManagedDaemon is the production serve boundary. Unlike OpenDaemon's
@@ -85,6 +87,15 @@ func OpenDaemon(ctx context.Context, options DaemonOptions) (*Daemon, error) {
 // inherited by DaemonProcessLauncher and consumes that descriptor before the
 // controller begins accepting requests.
 func OpenManagedDaemon(ctx context.Context, options DaemonOptions) (*Daemon, error) {
+	return openManagedDaemonWithMeshFreezer(ctx, options, freezeManagedDaemonMesh)
+}
+
+func openManagedDaemonWithMeshFreezer(ctx context.Context, options DaemonOptions,
+	freezer managedDaemonMeshFreezer,
+) (*Daemon, error) {
+	if freezer == nil {
+		return nil, fmt.Errorf("%w: managed mesh freezer is unavailable", ErrDaemonAuthority)
+	}
 	workspace, err := validateDaemonWorkspace(options.Workspace)
 	if err != nil {
 		return nil, err
@@ -107,7 +118,7 @@ func OpenManagedDaemon(ctx context.Context, options DaemonOptions) (*Daemon, err
 			permit.close(),
 		)
 	}
-	daemon, openErr := openDaemon(ctx, options, permit.close, policy)
+	daemon, openErr := openDaemon(ctx, options, permit.close, policy, freezer)
 	if openErr != nil {
 		return nil, errors.Join(openErr, permit.close())
 	}
@@ -115,7 +126,7 @@ func OpenManagedDaemon(ctx context.Context, options DaemonOptions) (*Daemon, err
 }
 
 func openDaemon(ctx context.Context, options DaemonOptions,
-	beforeAccept func() error, actionPolicy agent.ActionPolicy,
+	beforeAccept func() error, actionPolicy agent.ActionPolicy, meshFreezer managedDaemonMeshFreezer,
 ) (*Daemon, error) {
 	nodeState := filepath.Join(options.Workspace, ".mnemon", "harness", "node")
 	authority, err := openExistingDaemonAuthority(ctx, options.Workspace, nodeState,
@@ -126,12 +137,22 @@ func openDaemon(ctx context.Context, options DaemonOptions,
 	workspace := options.Workspace
 	identity := authority.identity
 	st := authority.store
+	var mesh *peer.MeshRuntime
 	fail := func(cause error) (*Daemon, error) {
+		if mesh != nil {
+			cause = errors.Join(cause, mesh.Close())
+		}
 		if closeErr := st.Close(); closeErr != nil {
 			cause = errors.Join(cause,
 				fmt.Errorf("%w: close Store after composition failure: %v", ErrDaemonAuthority, closeErr))
 		}
 		return nil, cause
+	}
+	if meshFreezer != nil {
+		mesh, err = openManagedDaemonMesh(ctx, nodeState, authority, meshFreezer)
+		if err != nil {
+			return fail(fmt.Errorf("%w: compose managed mesh: %w", ErrDaemonAuthority, err))
+		}
 	}
 	var wakeAdapter agent.WakeWorkerAdapter
 	if !isNilWakeAdapterFactory(options.WakeAdapterFactory) {
@@ -156,7 +177,7 @@ func openDaemon(ctx context.Context, options DaemonOptions,
 		return fail(fmt.Errorf("%w: compose controller: %v", ErrDaemonAuthority, err))
 	}
 	return &Daemon{workspace: workspace, nodeState: nodeState, identity: identity,
-		store: st, controller: controller, serveDone: make(chan struct{})}, nil
+		store: st, mesh: mesh, controller: controller, serveDone: make(chan struct{})}, nil
 }
 
 func (daemon *Daemon) Serve(ctx context.Context) error {
@@ -206,20 +227,27 @@ func (daemon *Daemon) Close() error {
 					<-serveDone
 				}
 			}
-			// Serve normally releases the launch permit immediately before local-control
-			// admission. Keep this idempotent fallback for every early-return
-			// path so Close can never strand inherited ensure.lock authority.
-			daemon.closeErr = controller.releaseBeforeAccept()
 		}
 		daemon.lifecycleMu.Lock()
 		serveErr := daemon.serveErr
 		daemon.lifecycleMu.Unlock()
 		if errors.Is(serveErr, ErrControlTransportUndrained) {
 			daemon.closeErr = errors.Join(daemon.closeErr, fmt.Errorf(
-				"%w: retain Store after unsafe control drain: %w",
+				"%w: retain mesh and Store after unsafe control drain: %w",
 				ErrDaemonAuthority, ErrControlTransportUndrained))
-		} else if daemon.store != nil {
-			daemon.closeErr = errors.Join(daemon.closeErr, daemon.store.Close())
+		} else {
+			if daemon.mesh != nil {
+				daemon.closeErr = errors.Join(daemon.closeErr, daemon.mesh.Close())
+			}
+			if daemon.store != nil {
+				daemon.closeErr = errors.Join(daemon.closeErr, daemon.store.Close())
+			}
+		}
+		if controller != nil {
+			// Serve normally consumes this permit immediately before local-control
+			// admission. Close-before-Serve keeps the lifecycle fence until the
+			// listener and Store writer have both been released.
+			daemon.closeErr = errors.Join(daemon.closeErr, controller.releaseBeforeAccept())
 		}
 		daemon.lifecycleMu.Lock()
 		daemon.closed = true
