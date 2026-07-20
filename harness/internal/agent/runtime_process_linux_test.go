@@ -158,6 +158,12 @@ func TestLinuxRuntimeProcessStatParserHandlesClosedComm(t *testing.T) {
 			t.Fatalf("malformed stat accepted: %q", malformed)
 		}
 	}
+	// Kernel threads report pgid 0 and sid 0 on hosts with an unrestricted
+	// /proc view; they must classify as foreign, not as a malformed scan.
+	foreign := []byte("2 (kthreadd) S 0 0 0 0 -1 0 0 0 0 0 0 0 0 0 0 0 1 0 23 0\n")
+	if _, err := parseLinuxRuntimeProcessStat(2, boot, foreign); !errors.Is(err, errLinuxRuntimeProcessForeignIdentity) {
+		t.Fatalf("kernel-thread stat classification = %v", err)
+	}
 }
 
 func TestLinuxRuntimeProcessRestartRecoveryIsObservationOnly(t *testing.T) {

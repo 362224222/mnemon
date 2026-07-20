@@ -28,7 +28,13 @@ const (
 	linuxRuntimeProcessEntryMax  = 131072
 )
 
-var errLinuxRuntimeProcessNotExist = errors.New("Linux process does not exist")
+var (
+	errLinuxRuntimeProcessNotExist = errors.New("Linux process does not exist")
+	// errLinuxRuntimeProcessForeignIdentity marks stat lines whose identity can
+	// never belong to a managed positive-PGID group, such as kernel threads
+	// reporting pgid 0 and sid 0 on hosts with an unrestricted /proc view.
+	errLinuxRuntimeProcessForeignIdentity = errors.New("Linux process identity is outside any managed group")
+)
 
 type linuxRuntimeProcessSnapshot struct {
 	pid        int
@@ -571,8 +577,11 @@ func parseLinuxRuntimeProcessStat(pid int, bootID string, raw []byte) (linuxRunt
 	pgid, pgidErr := strconv.Atoi(fields[2])
 	sid, sidErr := strconv.Atoi(fields[3])
 	start, startErr := strconv.ParseUint(fields[19], 10, 64)
-	if pgidErr != nil || sidErr != nil || startErr != nil || pgid <= 0 || sid <= 0 || start == 0 {
+	if pgidErr != nil || sidErr != nil || startErr != nil || start == 0 {
 		return linuxRuntimeProcessSnapshot{}, errors.New("Linux process stat identity is invalid")
+	}
+	if pgid <= 0 || sid <= 0 {
+		return linuxRuntimeProcessSnapshot{}, errLinuxRuntimeProcessForeignIdentity
 	}
 	return linuxRuntimeProcessSnapshot{pid: pid, pgid: pgid, sid: sid,
 		startToken: fmt.Sprintf("linux:%s:%d", bootID, start), state: fields[0][0]}, nil
@@ -703,7 +712,8 @@ func (system systemLinuxRuntimeProcess) groupHasMatchingMembers(ctx context.Cont
 				continue
 			}
 			snapshot, snapshotErr := readLinuxRuntimeProcessStat(pid, bootID)
-			if errors.Is(snapshotErr, errLinuxRuntimeProcessNotExist) {
+			if errors.Is(snapshotErr, errLinuxRuntimeProcessNotExist) ||
+				errors.Is(snapshotErr, errLinuxRuntimeProcessForeignIdentity) {
 				continue
 			}
 			if snapshotErr != nil {
