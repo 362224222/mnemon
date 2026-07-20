@@ -246,27 +246,7 @@ func requireExactDeadlineCause(ctx context.Context, tx *sql.Tx, expiry model.Eve
 	if len(causes) != 1 {
 		return fmt.Errorf("%w: expiry must cite exactly the current Work update", ErrDeadlineResolution)
 	}
-	var originText, epochText, channelText, homeText, workText, eventTypeText, sourceText, acceptedText string
-	err := tx.QueryRowContext(ctx, `SELECT origin_peer_id,origin_epoch,channel_id,work_home_peer_id,work_id,
-		event_type,source,accepted_at
-		FROM events WHERE event_id=?`, current.UpdatedBy().String()).
-		Scan(&originText, &epochText, &channelText, &homeText, &workText, &eventTypeText, &sourceText, &acceptedText)
-	acceptedAt, timeErr := parseCanonicalStoreTime(acceptedText)
-	if err != nil || channelText != current.ChannelID().String() || homeText != current.Ref().HomePeerID().String() ||
-		workText != current.Ref().WorkID().String() || originText != current.Ref().HomePeerID().String() ||
-		model.EventType(eventTypeText) != deadlineCurrentEventType(current.State()) ||
-		sourceText != string(model.EventSourceLocal) || timeErr != nil || !acceptedAt.Equal(current.UpdatedAt()) {
-		return fmt.Errorf("%w: current Work update Event is not exact", ErrDeadlineResolution)
-	}
-	origin, err := model.ParsePeerID(originText)
-	if err != nil {
-		return err
-	}
-	epoch, err := model.ParseOriginEpoch(epochText)
-	if err != nil {
-		return err
-	}
-	want, err := model.NewEventKey(origin, epoch, current.UpdatedBy())
+	want, err := exactDeadlineCause(ctx, tx, current)
 	if err != nil {
 		return err
 	}
