@@ -410,11 +410,7 @@ func TestCompanionRunnerBoundsAndSanitizesSubprocessFailures(t *testing.T) {
 				}
 				return
 			}
-			runner, err := newCompanionRunnerWith(context.Background(), fixture.workspace,
-				"r5-test", fixture.dependencies())
-			if err != nil {
-				t.Fatal(err)
-			}
+			runner := fixture.frozenRunner(t)
 			t.Setenv("MNEMON_COMPANION_TEST_MODE", test.mode)
 			ctx := context.Background()
 			var cancel context.CancelFunc
@@ -422,7 +418,7 @@ func TestCompanionRunnerBoundsAndSanitizesSubprocessFailures(t *testing.T) {
 				ctx, cancel = context.WithTimeout(ctx, 40*time.Millisecond)
 				defer cancel()
 			}
-			_, err = runner.Inspect(ctx)
+			_, err := runner.Inspect(ctx)
 			if err == nil || !errors.Is(err, errManagedCompanion) ||
 				strings.Contains(err.Error(), "raw-secret") {
 				t.Fatalf("Inspect() error = %v", err)
@@ -555,6 +551,21 @@ func (fixture *companionFixture) dependencies() companionRunnerDependencies {
 		lookPath:          func(string) (string, error) { return fixture.harness, nil },
 		commandContext:    productionCompanionRunnerDependencies().commandContext,
 	}
+}
+
+func (fixture *companionFixture) frozenRunner(t *testing.T) *companionRunner {
+	t.Helper()
+	executable, executableInfo, err := resolveSecureCompanionExecutable(fixture.companion, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspaceInfo, err := validateCompanionWorkspace(fixture.workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &companionRunner{executable: executable, executableInfo: executableInfo,
+		workspace: fixture.workspace, workspaceInfo: workspaceInfo,
+		commandContext: productionCompanionRunnerDependencies().commandContext}
 }
 
 func physicalTempDir(t *testing.T) string {
