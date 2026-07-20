@@ -38,17 +38,29 @@ func ConfirmOfflineAuthority(ctx context.Context, workspace string,
 
 type removeStaleOwnerUnixFunc func(context.Context, string) (bool, error)
 
+type existingStoredAuthorityOpener func(context.Context, string, string, bool) (
+	existingDaemonAuthority, error,
+)
+
 // confirmOfflineAuthority keeps the stale-socket operation as an internal
 // dependency so the writer-held ordering can be proven without exporting a
 // test hook or weakening the production boundary.
 func confirmOfflineAuthority(ctx context.Context, workspace string,
 	expected model.Digest, removeStale removeStaleOwnerUnixFunc,
 ) (response localapi.AuthorityResponse, err error) {
+	return confirmOfflineAuthorityWith(ctx, workspace, expected, removeStale,
+		openExistingStoredAuthority)
+}
+
+func confirmOfflineAuthorityWith(ctx context.Context, workspace string,
+	expected model.Digest, removeStale removeStaleOwnerUnixFunc,
+	openAuthority existingStoredAuthorityOpener,
+) (response localapi.AuthorityResponse, err error) {
 	if ctx == nil || expected.IsZero() {
 		return localapi.AuthorityResponse{}, offlineAuthorityError(
 			errors.New("context or expected authority digest is unavailable"))
 	}
-	if removeStale == nil {
+	if removeStale == nil || openAuthority == nil {
 		return localapi.AuthorityResponse{}, offlineAuthorityError(
 			errors.New("stale socket recovery is unavailable"))
 	}
@@ -56,7 +68,7 @@ func confirmOfflineAuthority(ctx context.Context, workspace string,
 		return localapi.AuthorityResponse{}, offlineAuthorityError(contextErr)
 	}
 	nodeState := filepath.Join(workspace, ".mnemon", "harness", "node")
-	authority, openErr := openExistingStoredAuthority(ctx, workspace, nodeState, true)
+	authority, openErr := openAuthority(ctx, workspace, nodeState, true)
 	if openErr != nil {
 		if errors.Is(openErr, store.ErrWriterActive) {
 			openErr = errors.Join(ErrOfflineAuthorityActive, openErr)

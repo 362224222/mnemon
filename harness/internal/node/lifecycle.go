@@ -35,12 +35,15 @@ type DaemonLifecycleOptions struct {
 // serialization authority for stop, offline mutation, and restart. It does
 // not use a pidfile as authority and never kills a process.
 type DaemonLifecycleLease struct {
-	mu        sync.Mutex
-	workspace string
-	nodeState string
-	peerID    model.PeerID
-	lock      *ensureLock
-	closed    bool
+	mu          sync.Mutex
+	workspace   string
+	nodeState   string
+	peerID      model.PeerID
+	lock        *ensureLock
+	recovery    bool
+	quiesced    *localapi.AuthorityResponse
+	quarantined bool
+	closed      bool
 }
 
 // DaemonLifecycleClient is the authenticated online control boundary required
@@ -84,14 +87,27 @@ type daemonLifecycleTiming struct {
 func AcquireDaemonLifecycle(ctx context.Context,
 	options DaemonLifecycleOptions,
 ) (*DaemonLifecycleLease, error) {
-	return acquireDaemonLifecycle(ctx, options, daemonLifecycleTiming{
+	return acquireDaemonLifecycle(ctx, options, false, daemonLifecycleTiming{
+		deadline: daemonLifecycleDeadline,
+		poll:     daemonLifecyclePoll,
+	})
+}
+
+// AcquireRecoveryLifecycle acquires the same launch exclusion as normal
+// lifecycle work without requiring a readable identity key. It is reserved for
+// whole-Node forensic reset, where the durable Store PeerID is the confirmation
+// authority and the complete Node tree is moved rather than repaired in place.
+func AcquireRecoveryLifecycle(ctx context.Context,
+	options DaemonLifecycleOptions,
+) (*DaemonLifecycleLease, error) {
+	return acquireDaemonLifecycle(ctx, options, true, daemonLifecycleTiming{
 		deadline: daemonLifecycleDeadline,
 		poll:     daemonLifecyclePoll,
 	})
 }
 
 func acquireDaemonLifecycle(ctx context.Context, options DaemonLifecycleOptions,
-	timing daemonLifecycleTiming,
+	recovery bool, timing daemonLifecycleTiming,
 ) (*DaemonLifecycleLease, error) {
 	if ctx == nil {
 		return nil, lifecycleError("acquire", errors.New("context is unavailable"))
@@ -120,17 +136,21 @@ func acquireDaemonLifecycle(ctx context.Context, options DaemonLifecycleOptions,
 		_ = lock.close()
 		return nil, lifecycleError("acquire", err)
 	}
-	identity, err := loadExistingDaemonIdentity(bounded, wantedNodeState)
-	if err != nil {
-		_ = lock.close()
-		return nil, lifecycleError("acquire identity", err)
-	}
-	if err := bounded.Err(); err != nil {
-		_ = lock.close()
-		return nil, lifecycleError("acquire identity", err)
+	var peerID model.PeerID
+	if !recovery {
+		identity, identityErr := loadExistingDaemonIdentity(bounded, wantedNodeState)
+		if identityErr != nil {
+			_ = lock.close()
+			return nil, lifecycleError("acquire identity", identityErr)
+		}
+		peerID = identity.PeerID()
+		if err := bounded.Err(); err != nil {
+			_ = lock.close()
+			return nil, lifecycleError("acquire identity", err)
+		}
 	}
 	return &DaemonLifecycleLease{workspace: workspace, nodeState: wantedNodeState,
-		peerID: identity.PeerID(), lock: lock}, nil
+		peerID: peerID, lock: lock, recovery: recovery}, nil
 }
 
 // Quiesce obtains an authenticated authority generation, requests graceful
@@ -176,6 +196,9 @@ func (lease *DaemonLifecycleLease) quiesce(ctx context.Context, client DaemonLif
 	if err != nil {
 		return localapi.AuthorityResponse{}, lifecycleError("quiesce expected authority", err)
 	}
+	if lease.recovery && lease.peerID.IsZero() {
+		lease.peerID = expectedSnapshot.PeerID
+	}
 	if expectedSnapshot.PeerID != lease.peerID {
 		return localapi.AuthorityResponse{}, lifecycleError("quiesce expected authority",
 			errors.New("authority belongs to another Node"))
@@ -214,6 +237,8 @@ func (lease *DaemonLifecycleLease) quiesce(ctx context.Context, client DaemonLif
 	if err := bounded.Err(); err != nil {
 		return localapi.AuthorityResponse{}, lifecycleError("confirm quiescence bound", err)
 	}
+	confirmed := authority
+	lease.quiesced = &confirmed
 	return authority, nil
 }
 
@@ -237,6 +262,10 @@ func (lease *DaemonLifecycleLease) Ensure(ctx context.Context,
 	defer lease.mu.Unlock()
 	if err := lease.validateHeld(); err != nil {
 		return DaemonEnsureResult{}, lifecycleError("ensure", err)
+	}
+	if lease.recovery {
+		return DaemonEnsureResult{}, lifecycleError("ensure",
+			errors.New("recovery lease cannot launch mnemond"))
 	}
 	if options.NodeState != lease.nodeState {
 		return DaemonEnsureResult{}, lifecycleError("ensure",
@@ -276,7 +305,13 @@ func (lease *DaemonLifecycleLease) Close() error {
 	if lock == nil {
 		return lifecycleError("close", errors.New("lease lock is unavailable"))
 	}
-	if err := lock.close(); err != nil {
+	var err error
+	if lease.quarantined {
+		err = lock.closeAfterRename()
+	} else {
+		err = lock.close()
+	}
+	if err != nil {
 		return lifecycleError("close", err)
 	}
 	return nil
@@ -287,7 +322,7 @@ func (lease *DaemonLifecycleLease) validateHeld() error {
 		return errors.New("lease is closed")
 	}
 	if lease.workspace == "" || lease.nodeState == "" ||
-		lease.peerID.IsZero() ||
+		(!lease.recovery && lease.peerID.IsZero()) ||
 		filepath.Join(lease.workspace, ".mnemon", "harness", "node") != lease.nodeState {
 		return errors.New("lease Node binding is invalid")
 	}

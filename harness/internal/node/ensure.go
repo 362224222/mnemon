@@ -528,11 +528,23 @@ func validateEnsureLockFile(lock *ensureLock) error {
 }
 
 func (lock *ensureLock) close() error {
+	return lock.closeValidated(true)
+}
+
+// closeAfterRename releases a lock whose complete Node directory was moved
+// while the descriptor remained held. Name-based validation is intentionally
+// impossible after that successful atomic rename; the live descriptors still
+// pin the exact authority being released.
+func (lock *ensureLock) closeAfterRename() error {
+	return lock.closeValidated(false)
+}
+
+func (lock *ensureLock) closeValidated(validate bool) error {
 	if lock == nil {
 		return nil
 	}
 	var err error
-	if lock.file != nil && lock.state != nil {
+	if validate && lock.file != nil && lock.state != nil {
 		err = validateEnsureLockFile(lock)
 	}
 	if lock.file != nil {
