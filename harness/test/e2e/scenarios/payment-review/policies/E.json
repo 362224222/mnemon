@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "node": "E",
+  "derive_channel": "gamma",
+  "derive_to": "F",
+  "offer_to": "auto",
+  "result_content": "Check idempotency-key secrecy, replay boundaries, token handling, and aggregate the ledger consistency finding for C.",
+  "rework_once": false,
+  "decline_once": false
+}

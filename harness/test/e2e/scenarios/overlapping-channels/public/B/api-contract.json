@@ -1,0 +1,5 @@
+{
+  "required_openapi": "3.1.0",
+  "required_paths": ["/health"],
+  "forbid_breaking_removals": true
+}

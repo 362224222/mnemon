@@ -1,0 +1,302 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnemon.dev/schemas/r5/scenario.schema.json",
+  "title": "Mnemon R5 canonical acceptance scenario",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "name",
+    "description",
+    "entry_node",
+    "prompt_file",
+    "nodes",
+    "channels",
+    "derived_path",
+    "faults",
+    "oracles",
+    "expected"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "name": {
+      "enum": [
+        "payment-review",
+        "api-sdk-contract",
+        "offline-incident",
+        "parallel-hardening",
+        "overlapping-channels"
+      ]
+    },
+    "description": { "type": "string", "minLength": 20, "maxLength": 512 },
+    "entry_node": { "const": "A" },
+    "prompt_file": { "const": "prompt.txt" },
+    "nodes": {
+      "type": "array",
+      "minItems": 6,
+      "maxItems": 6,
+      "prefixItems": [
+        { "$ref": "#/$defs/nodeA" },
+        { "$ref": "#/$defs/nodeB" },
+        { "$ref": "#/$defs/nodeC" },
+        { "$ref": "#/$defs/nodeD" },
+        { "$ref": "#/$defs/nodeE" },
+        { "$ref": "#/$defs/nodeF" }
+      ],
+      "items": false
+    },
+    "channels": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "prefixItems": [
+        { "$ref": "#/$defs/alpha" },
+        { "$ref": "#/$defs/beta" },
+        { "$ref": "#/$defs/gamma" }
+      ],
+      "items": false
+    },
+    "derived_path": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "prefixItems": [
+        { "const": "A:alpha:C" },
+        { "const": "C:beta:E" },
+        { "const": "E:gamma:F" },
+        { "const": "E:beta:C" },
+        { "const": "C:alpha:A" }
+      ],
+      "items": false
+    },
+    "faults": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": { "$ref": "#/$defs/fault" }
+    },
+    "oracles": { "$ref": "#/$defs/oracles" },
+    "expected": { "$ref": "#/$defs/expected" }
+  },
+  "$defs": {
+    "nodeBase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "role", "policy_file"],
+      "properties": {
+        "id": { "enum": ["A", "B", "C", "D", "E", "F"] },
+        "role": { "type": "string", "minLength": 3, "maxLength": 120 },
+        "policy_file": { "type": "string", "pattern": "^policies/[A-F]\\.json$" }
+      }
+    },
+    "nodeA": {
+      "allOf": [
+        { "$ref": "#/$defs/nodeBase" },
+        { "properties": { "id": { "const": "A" }, "policy_file": { "const": "policies/A.json" } } }
+      ]
+    },
+    "nodeB": {
+      "allOf": [
+        { "$ref": "#/$defs/nodeBase" },
+        { "properties": { "id": { "const": "B" }, "policy_file": { "const": "policies/B.json" } } }
+      ]
+    },
+    "nodeC": {
+      "allOf": [
+        { "$ref": "#/$defs/nodeBase" },
+        { "properties": { "id": { "const": "C" }, "policy_file": { "const": "policies/C.json" } } }
+      ]
+    },
+    "nodeD": {
+      "allOf": [
+        { "$ref": "#/$defs/nodeBase" },
+        { "properties": { "id": { "const": "D" }, "policy_file": { "const": "policies/D.json" } } }
+      ]
+    },
+    "nodeE": {
+      "allOf": [
+        { "$ref": "#/$defs/nodeBase" },
+        { "properties": { "id": { "const": "E" }, "policy_file": { "const": "policies/E.json" } } }
+      ]
+    },
+    "nodeF": {
+      "allOf": [
+        { "$ref": "#/$defs/nodeBase" },
+        { "properties": { "id": { "const": "F" }, "policy_file": { "const": "policies/F.json" } } }
+      ]
+    },
+    "channelBase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["alias", "owner", "members"],
+      "properties": {
+        "alias": { "enum": ["alpha", "beta", "gamma"] },
+        "owner": { "enum": ["A", "C", "E"] },
+        "members": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": { "enum": ["A", "B", "C", "D", "E", "F"] }
+        }
+      }
+    },
+    "alpha": {
+      "allOf": [
+        { "$ref": "#/$defs/channelBase" },
+        {
+          "properties": {
+            "alias": { "const": "alpha" },
+            "owner": { "const": "A" },
+            "members": {
+              "prefixItems": [{ "const": "A" }, { "const": "B" }, { "const": "C" }],
+              "items": false
+            }
+          }
+        }
+      ]
+    },
+    "beta": {
+      "allOf": [
+        { "$ref": "#/$defs/channelBase" },
+        {
+          "properties": {
+            "alias": { "const": "beta" },
+            "owner": { "const": "C" },
+            "members": {
+              "prefixItems": [{ "const": "C" }, { "const": "D" }, { "const": "E" }],
+              "items": false
+            }
+          }
+        }
+      ]
+    },
+    "gamma": {
+      "allOf": [
+        { "$ref": "#/$defs/channelBase" },
+        {
+          "properties": {
+            "alias": { "const": "gamma" },
+            "owner": { "const": "E" },
+            "members": {
+              "prefixItems": [{ "const": "E" }, { "const": "F" }, { "const": "A" }],
+              "items": false
+            }
+          }
+        }
+      ]
+    },
+    "fault": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type", "phase", "target", "required_observation"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{2,63}$" },
+        "type": {
+          "enum": [
+            "gossip-relay",
+            "network-disconnect",
+            "node-kill",
+            "daemon-kill",
+            "artifact-interrupt",
+            "artifact-corruption",
+            "wrong-topic-replay",
+            "concurrent-runtime",
+            "receipt-loss",
+            "projection-drift",
+            "parent-stale",
+            "preclaim-file-crash",
+            "terminal-enrollment-replay"
+          ]
+        },
+        "phase": { "type": "string", "minLength": 3, "maxLength": 96 },
+        "target": { "type": "string", "pattern": "^(node|channel|publication|artifact|runtime):[A-Za-z0-9._-]+$" },
+        "required_observation": { "type": "string", "minLength": 12, "maxLength": 512 }
+      }
+    },
+    "oracles": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["system", "task", "experience"],
+      "properties": {
+        "system": {
+          "type": "array",
+          "minItems": 3,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9-]{2,95}$" }
+        },
+        "task": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "command", "timeout_seconds", "evidence"],
+            "properties": {
+              "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{2,95}$" },
+              "command": {
+                "type": "array",
+                "minItems": 1,
+                "items": { "type": "string", "minLength": 1, "maxLength": 256 }
+              },
+              "timeout_seconds": { "type": "integer", "minimum": 1, "maximum": 900 },
+              "evidence": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": { "type": "string", "pattern": "^[A-Za-z0-9._/-]+$" }
+              }
+            }
+          }
+        },
+        "experience": {
+          "type": "array",
+          "minItems": 3,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{2,95}$" }
+        }
+      }
+    },
+    "expected": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "business_prompts",
+        "remote_prompts",
+        "manual_daemon_actions",
+        "manual_sync_actions",
+        "nodes_in_business_path",
+        "channels_ready",
+        "cross_channel_bridges",
+        "fresh_handlings_terminal"
+      ],
+      "properties": {
+        "business_prompts": { "const": 1 },
+        "remote_prompts": { "const": 0 },
+        "manual_daemon_actions": { "const": 0 },
+        "manual_sync_actions": { "const": 0 },
+        "nodes_in_business_path": {
+          "type": "array",
+          "minItems": 4,
+          "uniqueItems": true,
+          "items": { "enum": ["A", "B", "C", "D", "E", "F"] }
+        },
+        "channels_ready": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "prefixItems": [{ "const": "alpha" }, { "const": "beta" }, { "const": "gamma" }],
+          "items": false
+        },
+        "cross_channel_bridges": { "const": 0 },
+        "fresh_handlings_terminal": { "const": true },
+        "rework_count": { "type": "integer", "minimum": 0, "maximum": 2 },
+        "team_offer_count": { "type": "integer", "minimum": 0, "maximum": 3 },
+        "parent_resume_count": { "type": "integer", "minimum": 0, "maximum": 1 },
+        "parent_stale_count": { "type": "integer", "minimum": 0, "maximum": 1 },
+        "origin_only_repairs": { "type": "integer", "minimum": 0 },
+        "artifact_resumes": { "type": "integer", "minimum": 0 },
+        "parallel_runtime_count": { "type": "integer", "minimum": 0, "maximum": 4 }
+      }
+    }
+  }
+}

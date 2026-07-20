@@ -1,0 +1,1 @@
+Complete release hardening for this candidate and obtain independent API, consumer, dependency, security, and adversarial deployment review through the collaboration network. Integrate the accepted findings, run all public checks, and leave a reconstructable final release bundle and verification record.

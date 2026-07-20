@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "node": "A",
+  "entry_channel": "alpha",
+  "entry_to": "C",
+  "offer_to": "auto",
+  "result_content": "Implement authenticated cursor pagination, update OpenAPI and release notes, and return the patch plus Go test log.",
+  "rework_once": false,
+  "decline_once": false
+}

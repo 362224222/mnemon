@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "node": "B",
+  "offer_to": "auto",
+  "result_content": "Validate the API fixture independently and explicitly deliver a signed result Artifact to A in Alpha.",
+  "rework_once": false,
+  "decline_once": false
+}

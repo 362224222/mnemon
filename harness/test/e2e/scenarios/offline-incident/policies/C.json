@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "node": "C",
+  "derive_channel": "beta",
+  "derive_to": "E",
+  "offer_to": "auto",
+  "result_content": "Apply the consumer runbook to recovered source, logs, and trace; verify the origin-only repair before deriving Beta review.",
+  "rework_once": false,
+  "decline_once": false
+}

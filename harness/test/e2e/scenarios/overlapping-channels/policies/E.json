@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "node": "E",
+  "derive_channel": "gamma",
+  "derive_to": "F",
+  "offer_to": "auto",
+  "result_content": "Validate security policy, derive adversarial deployment review to F in Gamma, and explicitly deliver aggregation to C.",
+  "rework_once": false,
+  "decline_once": false
+}

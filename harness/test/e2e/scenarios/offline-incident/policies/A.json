@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "node": "A",
+  "entry_channel": "alpha",
+  "entry_to": "C",
+  "offer_to": "auto",
+  "result_content": "Diagnose and repair the replay defect, provide the source-log-trace Artifact closure, and return a regression report.",
+  "rework_once": false,
+  "decline_once": false
+}

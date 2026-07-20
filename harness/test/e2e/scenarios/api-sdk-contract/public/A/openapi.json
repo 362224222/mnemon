@@ -1,0 +1,17 @@
+{
+  "openapi": "3.1.0",
+  "info": { "title": "Items API", "version": "1.0.0" },
+  "paths": {
+    "/items": {
+      "get": {
+        "parameters": [
+          { "name": "cursor", "in": "query", "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "A page of items" },
+          "400": { "description": "Invalid cursor" }
+        }
+      }
+    }
+  }
+}

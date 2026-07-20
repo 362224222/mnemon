@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "node": "F",
+  "offer_to": "auto",
+  "result_content": "Run the adversarial deployment harness and explicitly deliver the result Artifact to E in Gamma.",
+  "rework_once": false,
+  "decline_once": false
+}

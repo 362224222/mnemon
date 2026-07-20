@@ -1,0 +1,6 @@
+{
+  "secrets_in_bundle_allowed": 0,
+  "critical_findings_allowed": 0,
+  "require_non_root": true,
+  "require_read_only_root": true
+}

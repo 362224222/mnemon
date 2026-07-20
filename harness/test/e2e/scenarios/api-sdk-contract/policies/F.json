@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "node": "F",
+  "offer_to": "auto",
+  "result_content": "Verify TypeScript SDK compatibility, pagination termination, schema compatibility, and accurate release notes.",
+  "rework_once": false,
+  "decline_once": false
+}

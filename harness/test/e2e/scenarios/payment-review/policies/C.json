@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "node": "C",
+  "derive_channel": "beta",
+  "derive_to": "E",
+  "offer_to": "auto",
+  "result_content": "Verify concurrent consumer retries reuse one idempotency key and request exactly one rework if duplicate charging remains possible.",
+  "rework_once": false,
+  "decline_once": false
+}

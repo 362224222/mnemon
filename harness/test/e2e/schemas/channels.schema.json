@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnemon.dev/schemas/r5/channels.schema.json",
+  "title": "Mnemon R5 public channel topology evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "run_id", "identity_binding", "channels", "evidence_refs"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "run_id": { "$ref": "#/$defs/runID" },
+    "identity_binding": { "const": "public-d4" },
+    "channels": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": { "$ref": "#/$defs/channel" },
+      "allOf": [
+        { "contains": { "properties": { "alias": { "const": "alpha" } }, "required": ["alias"] }, "minContains": 1, "maxContains": 1 },
+        { "contains": { "properties": { "alias": { "const": "beta" } }, "required": ["alias"] }, "minContains": 1, "maxContains": 1 },
+        { "contains": { "properties": { "alias": { "const": "gamma" } }, "required": ["alias"] }, "minContains": 1, "maxContains": 1 }
+      ]
+    },
+    "evidence_refs": { "$ref": "#/$defs/evidenceRefs" }
+  },
+  "$defs": {
+    "runID": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$" },
+    "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "peerID": { "type": "string", "minLength": 3, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
+    "node": { "enum": ["A", "B", "C", "D", "E", "F"] },
+    "evidenceRefs": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "maxLength": 240, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9][A-Za-z0-9._/-]*$" }
+    },
+    "rosterHead": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["revision", "digest", "owner_peer_id", "owner_signature"],
+      "properties": {
+        "revision": { "type": "integer", "minimum": 1 },
+        "digest": { "$ref": "#/$defs/digest" },
+        "owner_peer_id": { "$ref": "#/$defs/peerID" },
+        "owner_signature": { "type": "string", "pattern": "^[A-Za-z0-9+/]{86}==$" }
+      }
+    },
+    "member": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["alias", "status", "binding", "reachability", "baseline_ready", "peer_id", "node"],
+      "properties": {
+        "alias": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "status": { "enum": ["active", "left", "revoked"] },
+        "binding": { "enum": ["self", "pending", "active", "revoked", "none"] },
+        "reachability": { "enum": ["self", "unknown", "reachable", "unreachable"] },
+        "baseline_ready": { "type": "boolean" },
+        "peer_id": { "$ref": "#/$defs/peerID" },
+        "node": { "$ref": "#/$defs/node" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "baseline_ready": { "const": true } }, "required": ["baseline_ready"] },
+          "then": { "properties": { "binding": { "enum": ["self", "active"] } } }
+        },
+        {
+          "if": { "properties": { "binding": { "const": "self" } }, "required": ["binding"] },
+          "then": { "properties": { "reachability": { "const": "self" } } }
+        }
+      ]
+    },
+    "channel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "alias", "name", "membership", "channel_id_digest", "roster_revision",
+        "roster_head", "owner_node", "topic", "owner", "members",
+        "invite_token_redacted", "evidence_refs"
+      ],
+      "properties": {
+        "alias": { "enum": ["alpha", "beta", "gamma"] },
+        "name": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "membership": { "enum": ["active", "leaving", "conflicted", "left", "closed", "abandoned"] },
+        "channel_id_digest": { "$ref": "#/$defs/digest" },
+        "roster_revision": { "type": "integer", "minimum": 1 },
+        "roster_head": { "$ref": "#/$defs/rosterHead" },
+        "owner_node": { "$ref": "#/$defs/node" },
+        "topic": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "ready_members", "total_members"],
+          "properties": {
+            "status": { "enum": ["joined", "converging", "blocked", "left"] },
+            "ready_members": { "type": "integer", "minimum": 0, "maximum": 8 },
+            "total_members": { "type": "integer", "minimum": 1, "maximum": 8 }
+          }
+        },
+        "owner": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["local", "reachability"],
+          "properties": {
+            "local": { "type": "boolean" },
+            "reachability": { "enum": ["self", "unknown", "reachable", "unreachable"] }
+          }
+        },
+        "members": { "type": "array", "minItems": 3, "maxItems": 8, "items": { "$ref": "#/$defs/member" } },
+        "invite_token_redacted": { "const": true },
+        "evidence_refs": { "$ref": "#/$defs/evidenceRefs" }
+      }
+    }
+  }
+}
