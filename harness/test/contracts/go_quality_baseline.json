@@ -6909,12 +6909,6 @@
     },
     {
       "rule": "paired_test_file_lines",
-      "identity": "paired_test_file_lines:harness/internal/store/channel_enrollment_test.go",
-      "path": "harness/internal/store/channel_enrollment_test.go",
-      "ceiling": 1131
-    },
-    {
-      "rule": "paired_test_file_lines",
       "identity": "paired_test_file_lines:harness/internal/store/peer_inbox_artifact_test.go",
       "path": "harness/internal/store/peer_inbox_artifact_test.go",
       "ceiling": 1652
@@ -7157,7 +7151,7 @@
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/peer/channel_enrollment.go",
       "path": "harness/internal/peer/channel_enrollment.go",
-      "ceiling": 718
+      "ceiling": 448
     },
     {
       "rule": "production_file_lines",
@@ -7253,7 +7247,7 @@
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/store/channel_enrollment.go",
       "path": "harness/internal/store/channel_enrollment.go",
-      "ceiling": 1175
+      "ceiling": 888
     },
     {
       "rule": "production_file_lines",

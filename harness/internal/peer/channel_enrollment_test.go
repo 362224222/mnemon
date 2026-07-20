@@ -6,12 +6,6 @@ import (
 	"crypto/ed25519"
 	"database/sql"
 	"errors"
-	"io"
-	"path/filepath"
-	"sync"
-	"testing"
-	"time"
-
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
@@ -19,6 +13,10 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 	"github.com/mnemon-dev/mnemon/harness/internal/testkit"
+	"path/filepath"
+	"sync"
+	"testing"
+	"time"
 )
 
 func TestChannelEnrollmentHandshakeCommitsResponseLossReplayAndAtomicInstall(t *testing.T) {
@@ -219,170 +217,6 @@ func TestChannelEnrollmentRecoversOwnerCommitAfterAcceptedResponseLoss(t *testin
 	assertEnrollmentDatabaseCounts(t, ownerPath, map[string]int{
 		"channel_members": 2, "enrollment_grant_uses": 1, "enrollment_receipts": 1,
 	})
-}
-
-func TestChannelEnrollmentClientRejectsWrongSecureOwner(t *testing.T) {
-	createdAt := time.Date(2026, 7, 18, 2, 0, 0, 0, time.UTC)
-	ownerFixture := testkit.NewSignedChannelAt(t, "peer-enrollment-owner", createdAt)
-	joiner := testkit.NewIdentity(t, "peer-enrollment-owner-joiner")
-	wrongOwner := testkit.NewIdentity(t, "peer-enrollment-wrong-owner")
-	joinerStore := openEnrollmentTestStore(t, joiner, createdAt)
-	grantID, _ := model.ParseGrantID("grant-peer-enrollment-owner")
-	token := enrollmentTestToken(t, ownerFixture, grantID, "peer-enrollment-owner")
-	joinerHost := newEnrollmentTestHost(t, joiner)
-	defer joinerHost.Close()
-	wrongHost := newEnrollmentTestHost(t, wrongOwner)
-	defer wrongHost.Close()
-	wrongHost.SetStreamHandler(ChannelProtocol, func(stream network.Stream) {
-		defer stream.Close()
-		_, _ = io.Copy(io.Discard, stream)
-	})
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := joinerHost.Connect(ctx, libp2ppeer.AddrInfo{ID: wrongHost.ID(),
-		Addrs: wrongHost.Addrs()}); err != nil {
-		t.Fatal(err)
-	}
-	client, err := NewChannelEnrollmentClient(ChannelEnrollmentClientOptions{Store: joinerStore,
-		Clock:  fixedEnrollmentClock{at: createdAt.Add(time.Minute)},
-		Random: bytes.NewReader(bytes.Repeat([]byte{0x51}, model.EnrollmentNonceBytes))})
-	if err != nil {
-		t.Fatal(err)
-	}
-	stream := openEnrollmentTestStream(t, ctx, joinerHost, wrongHost.ID())
-	_, err = client.Join(ctx, stream, JoinChannelSpec{Token: token, DisplayLabel: joiner.DisplayName(),
-		AdvertisedMultiaddrs: joiner.Multiaddrs(), LocalAlias: "wrong-owner"})
-	var failure *ChannelProtocolFailure
-	if !errors.As(err, &failure) || failure.Code() != ChannelErrorWrongOwner || failure.Retryable() {
-		t.Fatalf("wrong secure owner error = %#v", err)
-	}
-}
-
-func TestChannelEnrollmentOwnerRejectsUnsupportedVersionBeforeStore(t *testing.T) {
-	fixture := testkit.NewSignedChannel(t, "peer-enrollment-version")
-	joiner := testkit.NewIdentity(t, "peer-enrollment-version-joiner")
-	ownerHost := newEnrollmentTestHost(t, fixture.Owner())
-	defer ownerHost.Close()
-	joinerHost := newEnrollmentTestHost(t, joiner)
-	defer joinerHost.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := joinerHost.Connect(ctx, libp2ppeer.AddrInfo{ID: ownerHost.ID(),
-		Addrs: ownerHost.Addrs()}); err != nil {
-		t.Fatal(err)
-	}
-	called := make(chan struct{}, 1)
-	ownerProtocol, err := NewChannelEnrollmentOwner(ChannelEnrollmentOwnerOptions{
-		Store:  unexpectedEnrollmentOwnerStore{called: called},
-		Signer: enrollmentTestSigner{privateKey: enrollmentPrivateKey(t, fixture.Owner())},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	registerEnrollmentTestDispatcher(t, ctx, ownerHost, ownerProtocol)
-	grantID, _ := model.ParseGrantID("grant-peer-enrollment-version")
-	identity, err := model.EnrollmentJoinIdentityDigest(fixture.Channel().ID(), grantID,
-		joiner.PeerID(), joiner.PublicKey(), joiner.OriginEpoch())
-	if err != nil {
-		t.Fatal(err)
-	}
-	requestID, err := model.EnrollmentRequestIDForJoinIdentity(identity)
-	if err != nil {
-		t.Fatal(err)
-	}
-	init, err := NewEnrollInit(EnrollInitSpec{ChannelID: fixture.Channel().ID(), GrantID: grantID,
-		EnrollmentRequestID: requestID,
-		JoinerNonce:         bytes.Repeat([]byte{0x55}, model.EnrollmentNonceBytes),
-		SupportedVersions:   []uint8{2}, OriginEpoch: joiner.OriginEpoch(),
-		DisplayLabel: joiner.DisplayName(), AdvertisedMultiaddrs: joiner.Multiaddrs()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	frameRequestID, err := ParseChannelRequestID("channel-request-303132333435363738393a3b3c3d3e3f")
-	if err != nil {
-		t.Fatal(err)
-	}
-	frame, err := NewChannelFrame(frameRequestID, init)
-	if err != nil {
-		t.Fatal(err)
-	}
-	stream := openEnrollmentTestStream(t, ctx, joinerHost, ownerHost.ID())
-	defer stream.Close()
-	if err := WriteChannelFrame(stream, frame); err != nil {
-		t.Fatal(err)
-	}
-	response, err := ReadChannelFrame(stream)
-	if err != nil {
-		t.Fatal(err)
-	}
-	failure, ok := response.Payload().(ProtocolError)
-	if response.RequestID() != frameRequestID || !ok || failure.Code() != ChannelErrorIncompatibleProtocol ||
-		failure.Retryable() {
-		t.Fatalf("unsupported-version response = %#v", response)
-	}
-	select {
-	case <-called:
-		t.Fatal("unsupported version reached owner Store")
-	default:
-	}
-}
-
-func TestChannelEnrollmentMapsOnlyTypedStableStoreFailures(t *testing.T) {
-	tests := []struct {
-		cause      error
-		code       ChannelProtocolErrorCode
-		retryAfter time.Duration
-	}{
-		{store.ErrChannelEnrollmentOwner, ChannelErrorWrongOwner, 0},
-		{store.ErrChannelEnrollmentProof, ChannelErrorBadProof, 0},
-		{store.ErrChannelEnrollmentTokenExpired, ChannelErrorTokenExpired, 0},
-		{store.ErrChannelEnrollmentTokenClosed, ChannelErrorTokenClosed, 0},
-		{store.ErrChannelEnrollmentTokenExhausted, ChannelErrorTokenExhausted, 0},
-		{store.ErrChannelFull, ChannelErrorChannelFull, 0},
-		{store.ErrChannelEnrollmentChannelClosed, ChannelErrorChannelClosed, 0},
-		{store.ErrChannelEnrollmentMemberRevoked, ChannelErrorMemberRevoked, 0},
-		{store.ErrChannelEnrollmentStale, ChannelErrorRosterGap, channelEnrollmentGapRetry},
-		{store.ErrChannelEnrollmentConflict, ChannelErrorRosterConflict, 0},
-		{store.ErrChannelEnrollmentUnavailable, ChannelErrorInvalidToken, 0},
-	}
-	for _, test := range tests {
-		code, retryAfter, ok := channelStoreFailure(fmtWrappedEnrollmentError{test.cause})
-		if !ok || code != test.code || retryAfter != test.retryAfter {
-			t.Errorf("channelStoreFailure(%v) = (%q,%s,%t)", test.cause, code, retryAfter, ok)
-		}
-	}
-	if code, retryAfter, ok := channelStoreFailure(errors.New("sqlite path and secret detail")); ok || code != "" || retryAfter != 0 {
-		t.Fatalf("untyped Store failure leaked to wire = (%q,%s,%t)", code, retryAfter, ok)
-	}
-	if code, retryAfter, ok := channelStoreFailure(context.DeadlineExceeded); ok || code != "" || retryAfter != 0 {
-		t.Fatalf("ambiguous Store timeout leaked as a rejection = (%q,%s,%t)", code, retryAfter, ok)
-	}
-}
-
-func TestChannelEnrollmentConstructorsRejectMissingControlAuthority(t *testing.T) {
-	if owner, err := NewChannelEnrollmentOwner(ChannelEnrollmentOwnerOptions{}); owner != nil || err == nil {
-		t.Fatalf("empty owner = (%#v,%v)", owner, err)
-	}
-	if client, err := NewChannelEnrollmentClient(ChannelEnrollmentClientOptions{}); client != nil || err == nil {
-		t.Fatalf("empty client = (%#v,%v)", client, err)
-	}
-	var failure *ChannelProtocolFailure
-	err := enrollmentTransportFailure(io.EOF)
-	if !errors.As(err, &failure) || failure.Code() != ChannelErrorOwnerUnreachable ||
-		!failure.Retryable() || failure.RetryAfter() != channelEnrollmentBusyRetry ||
-		!errors.Is(err, ErrChannelEnrollmentProtocol) {
-		t.Fatalf("transport failure = %#v", err)
-	}
-	err = enrollmentTransportFailure(channelFrameError("authenticated malformed response", nil))
-	if !errors.As(err, &failure) || failure.Code() != ChannelErrorRosterConflict || failure.Retryable() {
-		t.Fatalf("malformed authenticated response = %#v", err)
-	}
-	if err := enrollmentPrecommitTransportFailure(canceledEnrollmentContext(), io.EOF); !errors.Is(err, context.Canceled) {
-		t.Fatalf("canceled precommit transport = %v", err)
-	}
-	if err := enrollmentOutcomeUnknown(network.ErrReset); !errors.Is(err, ErrChannelEnrollmentOutcomeUnknown) {
-		t.Fatalf("post-proof response loss = %v", err)
-	}
 }
 
 func canceledEnrollmentContext() context.Context {

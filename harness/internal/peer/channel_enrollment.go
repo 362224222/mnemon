@@ -2,19 +2,16 @@ package peer
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
-	"net"
-	"time"
-
 	libp2pcrypto "github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/network"
 	libp2ppeer "github.com/libp2p/go-libp2p/core/peer"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
+	"io"
+	"time"
 )
 
 var (
@@ -79,49 +76,56 @@ type wallEnrollmentClock struct{}
 
 func (wallEnrollmentClock) Now() time.Time { return time.Now() }
 
-// ChannelEnrollmentOwnerStore is the exact owner transaction surface used by
-// the Channel handler. mnemond still owns the Store and signer; peer transport
-// cannot construct durable membership evidence by itself.
-type ChannelEnrollmentOwnerStore interface {
-	PrepareChannelEnrollment(context.Context,
-		store.PrepareChannelEnrollmentSpec,
-	) (store.PrepareChannelEnrollmentResult, error)
-	AcceptChannelEnrollment(context.Context,
-		store.AcceptChannelEnrollmentSpec,
-	) (store.AcceptChannelEnrollmentResult, error)
+// readChannelStreamFrame applies the domain size fence before allocation and
+// accounts the declared buffer against the libp2p stream scope for the entire
+// decode. Small handshake messages never receive the 4 MiB roster-frame
+// allowance merely because they share the same direct protocol.
+func readChannelStreamFrame(stream network.Stream, maximum int) (ChannelFrame, func(), error) {
+	if stream == nil || maximum <= 0 || maximum > maxChannelFrameBytes() {
+		return ChannelFrame{}, nil, channelFrameError("invalid stream frame bound", nil)
+	}
+	var prefix [channelFrameLengthBytes]byte
+	if _, err := io.ReadFull(stream, prefix[:]); err != nil {
+		return ChannelFrame{}, nil, channelFrameError("read stream length prefix", err)
+	}
+	length := uint64(binary.BigEndian.Uint32(prefix[:]))
+	if length == 0 || length > uint64(maximum) {
+		return ChannelFrame{}, nil, channelFrameError("stream frame exceeds message bound", nil)
+	}
+	reserved := int(length)
+	if err := stream.Scope().ReserveMemory(reserved, network.ReservationPriorityAlways); err != nil {
+		return ChannelFrame{}, nil, channelFrameError("reserve stream frame memory", err)
+	}
+	release := func() { stream.Scope().ReleaseMemory(reserved) }
+	raw := make([]byte, reserved)
+	if _, err := io.ReadFull(stream, raw); err != nil {
+		release()
+		return ChannelFrame{}, nil, channelFrameError("read stream frame", err)
+	}
+	frame, err := ParseChannelFrame(raw)
+	if err != nil {
+		release()
+		return ChannelFrame{}, nil, err
+	}
+	return frame, release, nil
 }
 
-type ChannelEnrollmentOwnerOptions struct {
-	Store  ChannelEnrollmentOwnerStore
-	Signer store.ChannelAuthoritySigner
-	Clock  channelEnrollmentClock
-	Random io.Reader
-}
-
-// ChannelEnrollmentOwner serves the owner side of /mnemon/channel/1. Its
-// bounded semaphore is deliberately independent of libp2p's outer resource
-// manager: admitted streams must also have a fixed Store transaction budget.
-type ChannelEnrollmentOwner struct {
-	store  ChannelEnrollmentOwnerStore
-	signer store.ChannelAuthoritySigner
-	clock  channelEnrollmentClock
-	random io.Reader
-	budget chan struct{}
-}
-
-func NewChannelEnrollmentOwner(options ChannelEnrollmentOwnerOptions) (*ChannelEnrollmentOwner, error) {
-	if options.Store == nil || options.Signer == nil {
-		return nil, fmt.Errorf("%w: owner Store and signer are required", ErrChannelEnrollmentProtocol)
+func secureChannelPeer(peerID libp2ppeer.ID) (model.PeerID, []byte, error) {
+	parsed, err := model.ParsePeerID(peerID.String())
+	if err != nil {
+		return model.PeerID{}, nil, fmt.Errorf("%w: secure PeerID", ErrChannelEnrollmentProtocol)
 	}
-	if options.Clock == nil {
-		options.Clock = wallEnrollmentClock{}
+	publicKey, err := peerID.ExtractPublicKey()
+	if err != nil || publicKey == nil || publicKey.Type() != libp2pcrypto.Ed25519 {
+		return model.PeerID{}, nil, fmt.Errorf("%w: secure PeerID lacks an Ed25519 key",
+			ErrChannelEnrollmentProtocol)
 	}
-	if options.Random == nil {
-		options.Random = rand.Reader
+	raw, err := publicKey.Raw()
+	if err != nil || len(raw) != 32 {
+		return model.PeerID{}, nil, fmt.Errorf("%w: invalid secure Ed25519 key",
+			ErrChannelEnrollmentProtocol)
 	}
-	return &ChannelEnrollmentOwner{store: options.Store, signer: options.Signer,
-		clock: options.Clock, random: options.Random,
-		budget: make(chan struct{}, HermeticLimits().UnknownEnrollmentConnections)}, nil
+	return parsed, append([]byte(nil), raw...), nil
 }
 
 // HandleChannelRequest serves an EnrollInit already admitted by the sole
@@ -235,130 +239,6 @@ func (owner *ChannelEnrollmentOwner) HandleChannelRequest(ctx context.Context,
 	// The final frame is complete. Handler closes only after frame reservations
 	// are released by this call's deferred cleanup.
 	return nil
-}
-
-func (owner *ChannelEnrollmentOwner) writeStoreFailure(stream network.Stream,
-	requestID ChannelRequestID, cause error,
-) error {
-	code, retryAfter, ok := channelStoreFailure(cause)
-	if !ok {
-		return cause
-	}
-	return owner.writeFailure(stream, requestID, code, retryAfter)
-}
-
-func (owner *ChannelEnrollmentOwner) writeFailure(stream network.Stream,
-	requestID ChannelRequestID, code ChannelProtocolErrorCode,
-	retryAfter time.Duration,
-) error {
-	payload, err := NewProtocolError(ProtocolErrorSpec{Code: code,
-		Retryable: code.retryable(), RetryAfter: retryAfter})
-	if err != nil {
-		return err
-	}
-	frame, err := NewChannelFrame(requestID, payload)
-	if err != nil {
-		return err
-	}
-	if err := WriteChannelFrame(stream, frame); err != nil {
-		return err
-	}
-	return nil
-}
-
-func channelStoreFailure(cause error) (ChannelProtocolErrorCode, time.Duration, bool) {
-	switch {
-	case errors.Is(cause, store.ErrChannelEnrollmentOwner):
-		return ChannelErrorWrongOwner, 0, true
-	case errors.Is(cause, store.ErrChannelEnrollmentProof):
-		return ChannelErrorBadProof, 0, true
-	case errors.Is(cause, store.ErrChannelEnrollmentTokenExpired):
-		return ChannelErrorTokenExpired, 0, true
-	case errors.Is(cause, store.ErrChannelEnrollmentTokenClosed):
-		return ChannelErrorTokenClosed, 0, true
-	case errors.Is(cause, store.ErrChannelEnrollmentTokenExhausted):
-		return ChannelErrorTokenExhausted, 0, true
-	case errors.Is(cause, store.ErrChannelFull):
-		return ChannelErrorChannelFull, 0, true
-	case errors.Is(cause, store.ErrChannelEnrollmentChannelClosed):
-		return ChannelErrorChannelClosed, 0, true
-	case errors.Is(cause, store.ErrChannelEnrollmentMemberRevoked):
-		return ChannelErrorMemberRevoked, 0, true
-	case errors.Is(cause, store.ErrChannelEnrollmentStale):
-		return ChannelErrorRosterGap, channelEnrollmentGapRetry, true
-	case errors.Is(cause, store.ErrChannelEnrollmentConflict),
-		errors.Is(cause, store.ErrChannelAuthorityInvariant):
-		return ChannelErrorRosterConflict, 0, true
-	case errors.Is(cause, store.ErrChannelEnrollmentUnavailable),
-		errors.Is(cause, store.ErrChannelEnrollmentInput):
-		return ChannelErrorInvalidToken, 0, true
-	default:
-		return "", 0, false
-	}
-}
-
-func wireEnrollmentStatus(status store.ChannelEnrollmentStatus) (ChannelEnrollmentStatus, error) {
-	switch status {
-	case store.ChannelEnrollmentAccepted:
-		return ChannelEnrollmentAccepted, nil
-	case store.ChannelEnrollmentReplayed:
-		return ChannelEnrollmentReplayed, nil
-	case store.ChannelEnrollmentMemberRevoked:
-		return ChannelEnrollmentMemberRevoked, nil
-	case store.ChannelEnrollmentChannelClosed:
-		return ChannelEnrollmentChannelClosed, nil
-	default:
-		return "", fmt.Errorf("%w: unknown durable enrollment status", ErrChannelEnrollmentProtocol)
-	}
-}
-
-// ChannelEnrollmentJoinerStore is the joiner's one atomic replica boundary.
-type ChannelEnrollmentJoinerStore interface {
-	PrepareJoinedChannel(context.Context,
-		store.PrepareJoinedChannelSpec,
-	) (store.PrepareJoinedChannelResult, error)
-	MarkJoinedChannelCommitUnknown(context.Context, model.EnrollmentRequestID,
-		model.PeerID, uint64, time.Time,
-	) error
-	ReleaseJoinedChannelReservation(context.Context, model.EnrollmentRequestID,
-		model.PeerID, uint64,
-	) error
-	InstallJoinedChannel(context.Context,
-		store.InstallJoinedChannelSpec,
-	) (store.InstallJoinedChannelResult, error)
-}
-
-type ChannelEnrollmentClientOptions struct {
-	Store  ChannelEnrollmentJoinerStore
-	Clock  channelEnrollmentClock
-	Random io.Reader
-}
-
-type ChannelEnrollmentClient struct {
-	store  ChannelEnrollmentJoinerStore
-	clock  channelEnrollmentClock
-	random io.Reader
-}
-
-func NewChannelEnrollmentClient(options ChannelEnrollmentClientOptions) (*ChannelEnrollmentClient, error) {
-	if options.Store == nil {
-		return nil, fmt.Errorf("%w: joiner Store is required", ErrChannelEnrollmentProtocol)
-	}
-	if options.Clock == nil {
-		options.Clock = wallEnrollmentClock{}
-	}
-	if options.Random == nil {
-		options.Random = rand.Reader
-	}
-	return &ChannelEnrollmentClient{store: options.Store, clock: options.Clock,
-		random: options.Random}, nil
-}
-
-type JoinChannelSpec struct {
-	Token                model.EnrollmentToken
-	DisplayLabel         string
-	AdvertisedMultiaddrs []string
-	LocalAlias           string
 }
 
 // Join executes the authenticated handshake on an already-open exact Channel
@@ -565,154 +445,4 @@ func (client *ChannelEnrollmentClient) Join(ctx context.Context, stream network.
 		return store.InstallJoinedChannelResult{}, newChannelProtocolFailure(ChannelErrorRosterConflict, 0)
 	}
 	return installed, nil
-}
-
-func receivedChannelFailure(requestID ChannelRequestID, frame ChannelFrame) error {
-	if frame.Type() != ChannelFrameProtocolError {
-		return nil
-	}
-	if frame.RequestID() != requestID {
-		return newChannelProtocolFailure(ChannelErrorRosterConflict, 0)
-	}
-	payload, ok := frame.Payload().(ProtocolError)
-	if !ok {
-		return newChannelProtocolFailure(ChannelErrorRosterConflict, 0)
-	}
-	return &ChannelProtocolFailure{code: payload.Code(), retryable: payload.Retryable(),
-		retryAfter: payload.RetryAfter()}
-}
-
-func validEnrollmentReceiptForStatus(descriptor model.SignedChannelDescriptor,
-	transcript model.EnrollmentTranscript, accepted EnrollAccepted,
-) bool {
-	receipt := accepted.JoinReceipt()
-	member := accepted.MemberRecord()
-	if accepted.Status() == ChannelEnrollmentAccepted {
-		return model.VerifyEnrollmentReceipt(descriptor, member, transcript, receipt) == nil
-	}
-	identity, err := transcript.JoinIdentityDigest()
-	previous, hasPrevious := member.PreviousDigest()
-	return err == nil && receipt.RequestID() == transcript.RequestID() &&
-		receipt.GrantID() == transcript.GrantID() && receipt.JoinIdentityDigest() == identity &&
-		hasPrevious && member.Head().Revision() == transcript.RosterHead().Revision()+1 &&
-		previous == transcript.RosterHead().Digest() &&
-		model.VerifyEnrollmentReceiptEvidence(descriptor, member, receipt) == nil
-}
-
-func supportsChannelFrameVersion(versions []uint8, selected uint8) bool {
-	for _, version := range versions {
-		if version == selected {
-			return true
-		}
-	}
-	return false
-}
-
-func joinedChannelStoreFailure(cause error) error {
-	switch {
-	case errors.Is(cause, store.ErrNodeChannelLimit):
-		return newChannelProtocolFailure(ChannelErrorNodeChannelLimit, 0)
-	case errors.Is(cause, store.ErrChannelJoinConflict), errors.Is(cause, store.ErrChannelJoinInput),
-		errors.Is(cause, store.ErrChannelAuthorityInvariant):
-		return newChannelProtocolFailure(ChannelErrorRosterConflict, 0)
-	case errors.Is(cause, context.Canceled), errors.Is(cause, context.DeadlineExceeded):
-		return enrollmentTransportFailure(cause)
-	default:
-		return fmt.Errorf("%w: joined Channel Store unavailable", ErrChannelEnrollmentProtocol)
-	}
-}
-
-func validEnrollmentResultStatus(status ChannelEnrollmentStatus, roster model.VerifiedRoster,
-	joiner model.PeerID,
-) bool {
-	current, currentOK := roster.CurrentMember(joiner)
-	owner, ownerOK := roster.CurrentMember(roster.Descriptor().Descriptor().OwnerPeerID())
-	if !currentOK || !ownerOK {
-		return false
-	}
-	if current.Status().Terminal() {
-		return status == ChannelEnrollmentMemberRevoked
-	}
-	if owner.Status().Terminal() {
-		return status == ChannelEnrollmentChannelClosed
-	}
-	return status == ChannelEnrollmentAccepted || status == ChannelEnrollmentReplayed
-}
-
-func enrollmentTransportFailure(cause error) error {
-	if errors.Is(cause, context.Canceled) || errors.Is(cause, context.DeadlineExceeded) {
-		return cause
-	}
-	transport := errors.Is(cause, io.EOF) || errors.Is(cause, io.ErrUnexpectedEOF) ||
-		errors.Is(cause, network.ErrReset)
-	var netError net.Error
-	transport = transport || errors.As(cause, &netError)
-	if errors.Is(cause, ErrChannelFrame) && !transport {
-		return newChannelProtocolFailure(ChannelErrorRosterConflict, 0)
-	}
-	if transport {
-		return newChannelProtocolFailure(ChannelErrorOwnerUnreachable, channelEnrollmentBusyRetry)
-	}
-	return fmt.Errorf("%w: Channel transport unavailable", ErrChannelEnrollmentProtocol)
-}
-
-func enrollmentPrecommitTransportFailure(ctx context.Context, cause error) error {
-	if ctx != nil && ctx.Err() != nil {
-		return ctx.Err()
-	}
-	return enrollmentTransportFailure(cause)
-}
-
-func enrollmentOutcomeUnknown(_ error) error { return ErrChannelEnrollmentOutcomeUnknown }
-
-// readChannelStreamFrame applies the domain size fence before allocation and
-// accounts the declared buffer against the libp2p stream scope for the entire
-// decode. Small handshake messages never receive the 4 MiB roster-frame
-// allowance merely because they share the same direct protocol.
-func readChannelStreamFrame(stream network.Stream, maximum int) (ChannelFrame, func(), error) {
-	if stream == nil || maximum <= 0 || maximum > maxChannelFrameBytes() {
-		return ChannelFrame{}, nil, channelFrameError("invalid stream frame bound", nil)
-	}
-	var prefix [channelFrameLengthBytes]byte
-	if _, err := io.ReadFull(stream, prefix[:]); err != nil {
-		return ChannelFrame{}, nil, channelFrameError("read stream length prefix", err)
-	}
-	length := uint64(binary.BigEndian.Uint32(prefix[:]))
-	if length == 0 || length > uint64(maximum) {
-		return ChannelFrame{}, nil, channelFrameError("stream frame exceeds message bound", nil)
-	}
-	reserved := int(length)
-	if err := stream.Scope().ReserveMemory(reserved, network.ReservationPriorityAlways); err != nil {
-		return ChannelFrame{}, nil, channelFrameError("reserve stream frame memory", err)
-	}
-	release := func() { stream.Scope().ReleaseMemory(reserved) }
-	raw := make([]byte, reserved)
-	if _, err := io.ReadFull(stream, raw); err != nil {
-		release()
-		return ChannelFrame{}, nil, channelFrameError("read stream frame", err)
-	}
-	frame, err := ParseChannelFrame(raw)
-	if err != nil {
-		release()
-		return ChannelFrame{}, nil, err
-	}
-	return frame, release, nil
-}
-
-func secureChannelPeer(peerID libp2ppeer.ID) (model.PeerID, []byte, error) {
-	parsed, err := model.ParsePeerID(peerID.String())
-	if err != nil {
-		return model.PeerID{}, nil, fmt.Errorf("%w: secure PeerID", ErrChannelEnrollmentProtocol)
-	}
-	publicKey, err := peerID.ExtractPublicKey()
-	if err != nil || publicKey == nil || publicKey.Type() != libp2pcrypto.Ed25519 {
-		return model.PeerID{}, nil, fmt.Errorf("%w: secure PeerID lacks an Ed25519 key",
-			ErrChannelEnrollmentProtocol)
-	}
-	raw, err := publicKey.Raw()
-	if err != nil || len(raw) != 32 {
-		return model.PeerID{}, nil, fmt.Errorf("%w: invalid secure Ed25519 key",
-			ErrChannelEnrollmentProtocol)
-	}
-	return parsed, append([]byte(nil), raw...), nil
 }
