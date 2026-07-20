@@ -343,7 +343,7 @@ func (client *ChannelEnrollmentClient) Join(ctx context.Context, stream network.
 	defer releaseChallenge()
 	if failure := receivedChannelFailure(frameRequestID, challengeFrame); failure != nil {
 		completed = true
-		if reservationActive && !prepared.CommitUnknown {
+		if reservationActive {
 			releaseReservation = true
 		}
 		return store.InstallJoinedChannelResult{}, failure
@@ -409,7 +409,7 @@ func (client *ChannelEnrollmentClient) Join(ctx context.Context, stream network.
 	defer releaseAccepted()
 	if failure := receivedChannelFailure(frameRequestID, acceptedFrame); failure != nil {
 		completed = true
-		if reservationActive && !prepared.CommitUnknown {
+		if reservationActive {
 			releaseReservation = true
 		}
 		return store.InstallJoinedChannelResult{}, failure
@@ -430,10 +430,9 @@ func (client *ChannelEnrollmentClient) Join(ctx context.Context, stream network.
 		return store.InstallJoinedChannelResult{}, newChannelProtocolFailure(ChannelErrorRosterConflict, 0)
 	}
 	completed = true
-	installed, err := client.store.InstallJoinedChannel(requestCtx, store.InstallJoinedChannelSpec{
-		AuthenticatedOwnerPeerID: ownerPeerID, LocalAlias: spec.LocalAlias, Descriptor: descriptor,
-		Transcript: transcript, Receipt: accepted.JoinReceipt(), Members: members, At: client.clock.Now(),
-	})
+	installed, err := client.store.InstallJoinedChannel(requestCtx,
+		joinedChannelInstallSpec(ownerPeerID, spec.LocalAlias, descriptor,
+			transcript, accepted, members, client.clock.Now()))
 	if err != nil {
 		return store.InstallJoinedChannelResult{}, joinedChannelStoreFailure(err)
 	}

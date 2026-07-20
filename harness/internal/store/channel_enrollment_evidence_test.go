@@ -127,6 +127,10 @@ func reserveJoinedChannelTest(t testing.TB, st *Store, spec InstallJoinedChannel
 		prepared.OriginEpoch != spec.Transcript.JoinerOriginEpoch() || !prepared.Reserved {
 		t.Fatalf("PrepareJoinedChannel() = (%#v, %v)", prepared, err)
 	}
+	if err := st.MarkJoinedChannelCommitUnknown(context.Background(), prepared.RequestID,
+		spec.Transcript.JoinerPeerID(), prepared.Attempt, spec.At); err != nil {
+		t.Fatalf("MarkJoinedChannelCommitUnknown() = %v", err)
+	}
 }
 
 func (fixture channelEnrollmentFixture) prepareSpec(at time.Time) PrepareChannelEnrollmentSpec {

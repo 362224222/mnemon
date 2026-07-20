@@ -219,6 +219,77 @@ func TestChannelEnrollmentRecoversOwnerCommitAfterAcceptedResponseLoss(t *testin
 	})
 }
 
+func TestChannelEnrollmentCommitUnknownRetryReleasesOnAuthenticatedProtocolError(t *testing.T) {
+	createdAt := time.Date(2026, 7, 18, 2, 0, 0, 0, time.UTC)
+	ownerFixture := testkit.NewSignedChannelAt(t, "peer-enrollment-stable-reject", createdAt)
+	ownerIdentity := ownerFixture.Owner()
+	joinerIdentity := testkit.NewIdentity(t, "peer-enrollment-stable-reject-joiner")
+	joinerPath := filepath.Join(t.TempDir(), "joiner", "node.db")
+	joinerStore := createEnrollmentTestStore(t, joinerPath, joinerIdentity, createdAt)
+	defer joinerStore.Close()
+	grantID, _ := model.ParseGrantID("grant-peer-enrollment-stable-reject")
+	token := enrollmentTestToken(t, ownerFixture, grantID, "peer-enrollment-stable-reject")
+	joinAt := createdAt.Add(time.Minute)
+	prepared, err := joinerStore.PrepareJoinedChannel(context.Background(), store.PrepareJoinedChannelSpec{
+		AuthenticatedLocalPeerID: joinerIdentity.PeerID(), LocalPublicKey: joinerIdentity.PublicKey(),
+		Descriptor: ownerFixture.Descriptor(), GrantID: grantID, LocalAlias: "stable-reject-team",
+		At: joinAt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := joinerStore.MarkJoinedChannelCommitUnknown(context.Background(), prepared.RequestID,
+		joinerIdentity.PeerID(), prepared.Attempt, joinAt); err != nil {
+		t.Fatal(err)
+	}
+
+	ownerHost := newEnrollmentTestHost(t, ownerIdentity)
+	defer ownerHost.Close()
+	joinerHost := newEnrollmentTestHost(t, joinerIdentity)
+	defer joinerHost.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := joinerHost.Connect(ctx, libp2ppeer.AddrInfo{ID: ownerHost.ID(),
+		Addrs: ownerHost.Addrs()}); err != nil {
+		t.Fatal(err)
+	}
+	reject := ChannelRequestHandlerFunc(func(_ context.Context, stream network.Stream,
+		frame ChannelFrame,
+	) error {
+		failure, err := NewProtocolError(ProtocolErrorSpec{Code: ChannelErrorTokenClosed})
+		if err != nil {
+			return err
+		}
+		response, err := NewChannelFrame(frame.RequestID(), failure)
+		if err != nil {
+			return err
+		}
+		return WriteChannelFrame(stream, response)
+	})
+	dispatcher, err := NewChannelDispatcher(ctx, ownerHost,
+		ChannelDispatcherOptions{Enrollment: reject})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dispatcher.Close()
+	client, err := NewChannelEnrollmentClient(ChannelEnrollmentClientOptions{Store: joinerStore,
+		Clock: fixedEnrollmentClock{at: joinAt.Add(time.Second)},
+		Random: bytes.NewReader(bytes.Repeat([]byte{0x45},
+			model.EnrollmentNonceBytes+channelRequestIDBytes))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream := openEnrollmentTestStream(t, ctx, joinerHost, ownerHost.ID())
+	_, err = client.Join(ctx, stream, JoinChannelSpec{Token: token,
+		DisplayLabel: joinerIdentity.DisplayName(), AdvertisedMultiaddrs: joinerIdentity.Multiaddrs(),
+		LocalAlias: "stable-reject-team"})
+	var failure *ChannelProtocolFailure
+	if !errors.As(err, &failure) || failure.Code() != ChannelErrorTokenClosed {
+		t.Fatalf("commit-unknown stable rejection error = %v", err)
+	}
+	assertEnrollmentDatabaseCounts(t, joinerPath, map[string]int{"channel_join_reservations": 0,
+		"channels": 0})
+}
+
 func canceledEnrollmentContext() context.Context {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

@@ -62,6 +62,16 @@ type JoinChannelSpec struct {
 	LocalAlias           string
 }
 
+func joinedChannelInstallSpec(ownerPeerID model.PeerID, localAlias string,
+	descriptor model.SignedChannelDescriptor, transcript model.EnrollmentTranscript,
+	accepted EnrollAccepted, members []model.Member, at time.Time,
+) store.InstallJoinedChannelSpec {
+	return store.InstallJoinedChannelSpec{AuthenticatedOwnerPeerID: ownerPeerID,
+		OwnerOutcome: store.ChannelEnrollmentStatus(accepted.Status()), LocalAlias: localAlias,
+		Descriptor: descriptor, Transcript: transcript, Receipt: accepted.JoinReceipt(),
+		Members: members, At: at}
+}
+
 func receivedChannelFailure(requestID ChannelRequestID, frame ChannelFrame) error {
 	if frame.Type() != ChannelFrameProtocolError {
 		return nil

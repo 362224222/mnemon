@@ -19,7 +19,8 @@ func TestInstallJoinedChannelCommitsReplicaBindingsAndReplays(t *testing.T) {
 	joinerStore := openTestStore(t)
 	insertChannelTestNode(t, joinerStore.db, owner.joiner, owner.channel.Channel().CreatedAt())
 	spec := InstallJoinedChannelSpec{AuthenticatedOwnerPeerID: owner.channel.Owner().PeerID(),
-		LocalAlias: "project-team", Descriptor: owner.channel.Descriptor(), Transcript: transcript,
+		OwnerOutcome: ChannelEnrollmentAccepted, LocalAlias: "project-team",
+		Descriptor: owner.channel.Descriptor(), Transcript: transcript,
 		Receipt: accepted.Receipt, Members: accepted.Roster.Members(), At: owner.acceptedAt.Add(time.Second)}
 	wrongOwner := testkit.NewIdentity(t, "join-install-wrong-secure-owner")
 	wrongSpec := spec
@@ -97,6 +98,7 @@ func TestInstallJoinedChannelRejectsNinthNonterminalReplicaWithoutPartialState(t
 		accepted := owner.accept(t, transcript)
 		installSpec := InstallJoinedChannelSpec{
 			AuthenticatedOwnerPeerID: owner.channel.Owner().PeerID(),
+			OwnerOutcome:             ChannelEnrollmentAccepted,
 			LocalAlias:               "joined-" + string(rune('a'+index)),
 			Descriptor:               owner.channel.Descriptor(), Transcript: transcript,
 			Receipt: accepted.Receipt, Members: accepted.Roster.Members(), At: owner.acceptedAt.Add(time.Second)}
@@ -145,7 +147,8 @@ func TestInstallJoinedChannelFinalBindingFailureRollsBackEverything(t *testing.T
 	}
 	installSpec := InstallJoinedChannelSpec{
 		AuthenticatedOwnerPeerID: owner.channel.Owner().PeerID(), LocalAlias: "rollback-team",
-		Descriptor: owner.channel.Descriptor(), Transcript: transcript, Receipt: accepted.Receipt,
+		OwnerOutcome: ChannelEnrollmentAccepted,
+		Descriptor:   owner.channel.Descriptor(), Transcript: transcript, Receipt: accepted.Receipt,
 		Members: accepted.Roster.Members(), At: owner.acceptedAt.Add(time.Second)}
 	reserveJoinedChannelTest(t, joinerStore, installSpec)
 	_, err := joinerStore.InstallJoinedChannel(context.Background(), installSpec)
@@ -165,7 +168,8 @@ func TestInstallJoinedChannelOwnerCloseSuffixClosesReplicaAndFreshJoinStaysEmpty
 	accepted := owner.accept(t, transcript)
 	baseAt := owner.acceptedAt.Add(time.Second)
 	baseSpec := InstallJoinedChannelSpec{AuthenticatedOwnerPeerID: owner.channel.Owner().PeerID(),
-		LocalAlias: "owner-close-team", Descriptor: owner.channel.Descriptor(), Transcript: transcript,
+		OwnerOutcome: ChannelEnrollmentAccepted, LocalAlias: "owner-close-team",
+		Descriptor: owner.channel.Descriptor(), Transcript: transcript,
 		Receipt: accepted.Receipt, Members: accepted.Roster.Members(), At: baseAt}
 	joinerStore := openTestStore(t)
 	insertChannelTestNode(t, joinerStore.db, owner.joiner, owner.channel.Channel().CreatedAt())
@@ -176,6 +180,7 @@ func TestInstallJoinedChannelOwnerCloseSuffixClosesReplicaAndFreshJoinStaysEmpty
 	_, closedRoster := appendRosterTerminal(t, owner.channel.Descriptor(), owner.signer,
 		accepted.Roster, owner.channel.Owner().PeerID(), model.MemberLeft, baseAt.Add(time.Second))
 	closeSpec := baseSpec
+	closeSpec.OwnerOutcome = ChannelEnrollmentChannelClosed
 	closeSpec.Members = closedRoster.Members()
 	closeSpec.At = baseAt.Add(2 * time.Second)
 	closed, err := joinerStore.InstallJoinedChannel(context.Background(), closeSpec)

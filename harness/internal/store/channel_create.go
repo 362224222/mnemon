@@ -59,22 +59,13 @@ func applyCreateChannel(ctx context.Context, tx *sql.Tx, node model.Node,
 		return replayCreateChannel(ctx, tx, node.PeerID(), candidate)
 	}
 
-	descriptor := channel.Descriptor().Descriptor()
-	_, err := tx.ExecContext(ctx, `INSERT INTO channels(channel_id,name,local_alias,owner_peer_id,
-		owner_public_key,descriptor_json,descriptor_digest,descriptor_signature,member_limit,
-		roster_head_revision,roster_head_hash,status,topic_state,created_at,updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, channel.ID().String(), channel.Name(), channel.LocalAlias(),
-		channel.OwnerPeerID().String(), channel.OwnerPublicKey(), descriptor.CanonicalJSON().Bytes(),
-		descriptor.Digest().Bytes(), channel.Descriptor().OwnerSignature(), channel.MemberLimit(),
-		channel.RosterHead().Revision(), channel.RosterHead().Digest().Bytes(), string(channel.Status()),
-		string(channel.TopicState()), storeTime(channel.CreatedAt()), storeTime(channel.UpdatedAt()))
-	if err != nil {
+	if err := insertChannelProjection(ctx, tx, channel); err != nil {
 		return CreateChannelResult{}, mapChannelCreateError(err)
 	}
 	if err := insertChannelMember(ctx, tx, genesis); err != nil {
 		return CreateChannelResult{}, err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO publication_epochs(channel_id,origin_peer_id,origin_epoch,
+	_, err := tx.ExecContext(ctx, `INSERT INTO publication_epochs(channel_id,origin_peer_id,origin_epoch,
 		source_floor_channel_seq,source_head_channel_seq,updated_at) VALUES(?,?,?,1,0,?)`,
 		channel.ID().String(), node.PeerID().String(), node.OriginEpoch().String(), storeTime(channel.CreatedAt()))
 	if err != nil {
@@ -89,6 +80,19 @@ func applyCreateChannel(ctx context.Context, tx *sql.Tx, node model.Node,
 			fmt.Errorf("insert enrollment grant: %w", err))
 	}
 	return CreateChannelResult{Created: true, Channel: channel, GrantID: grant.ID()}, nil
+}
+
+func insertChannelProjection(ctx context.Context, tx *sql.Tx, channel model.Channel) error {
+	descriptor := channel.Descriptor().Descriptor()
+	_, err := tx.ExecContext(ctx, `INSERT INTO channels(channel_id,name,local_alias,owner_peer_id,
+		owner_public_key,descriptor_json,descriptor_digest,descriptor_signature,member_limit,
+		roster_head_revision,roster_head_hash,status,topic_state,created_at,updated_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, channel.ID().String(), channel.Name(), channel.LocalAlias(),
+		channel.OwnerPeerID().String(), channel.OwnerPublicKey(), descriptor.CanonicalJSON().Bytes(),
+		descriptor.Digest().Bytes(), channel.Descriptor().OwnerSignature(), channel.MemberLimit(),
+		channel.RosterHead().Revision(), channel.RosterHead().Digest().Bytes(), string(channel.Status()),
+		string(channel.TopicState()), storeTime(channel.CreatedAt()), storeTime(channel.UpdatedAt()))
+	return err
 }
 
 func insertChannelMember(ctx context.Context, tx *sql.Tx, member model.Member) error {

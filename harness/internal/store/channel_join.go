@@ -211,28 +211,6 @@ func readReplicaEnrollmentRequest(ctx context.Context, tx *sql.Tx, channelID mod
 	return record.RequestID(), nil
 }
 
-func verifyJoinedChannelReservation(ctx context.Context, tx *sql.Tx, node model.Node,
-	spec InstallJoinedChannelSpec,
-) error {
-	joinIdentity, err := spec.Transcript.JoinIdentityDigest()
-	if err != nil {
-		return ErrChannelJoinInput
-	}
-	var channelText, grantText, peerText, epochText, alias string
-	var storedJoinIdentity, descriptorDigest []byte
-	err = tx.QueryRowContext(ctx, `SELECT channel_id,grant_id,join_identity_digest,descriptor_digest,
-		local_peer_id,origin_epoch,local_alias FROM channel_join_reservations WHERE request_id=?`,
-		spec.Transcript.RequestID().String()).Scan(&channelText, &grantText, &storedJoinIdentity,
-		&descriptorDigest, &peerText, &epochText, &alias)
-	if err != nil || channelText != spec.Transcript.ChannelID().String() ||
-		grantText != spec.Transcript.GrantID().String() || !bytes.Equal(storedJoinIdentity, joinIdentity.Bytes()) ||
-		!bytes.Equal(descriptorDigest, spec.Descriptor.Descriptor().Digest().Bytes()) ||
-		peerText != node.PeerID().String() || epochText != node.OriginEpoch().String() || alias != spec.LocalAlias {
-		return ErrChannelJoinInput
-	}
-	return nil
-}
-
 func consumeJoinedChannelReservation(ctx context.Context, tx *sql.Tx,
 	requestID model.EnrollmentRequestID,
 ) error {

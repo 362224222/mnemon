@@ -19,6 +19,7 @@ func TestPrepareJoinedChannelFencesConcurrentAttemptsAndCommitUnknown(t *testing
 	insertChannelTestNode(t, joinerStore.db, owner.joiner, owner.channel.Channel().CreatedAt())
 	installSpec := InstallJoinedChannelSpec{
 		AuthenticatedOwnerPeerID: owner.channel.Owner().PeerID(),
+		OwnerOutcome:             ChannelEnrollmentAccepted,
 		LocalAlias:               "reservation-team",
 		Descriptor:               owner.channel.Descriptor(),
 		Transcript:               transcript,

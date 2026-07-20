@@ -116,7 +116,8 @@ func TestAcceptChannelEnrollmentUsesOneGrantForMultipleAuthenticatedPeers(t *tes
 	insertChannelTestNode(t, secondStore.db, secondPeer, fixture.channel.Channel().CreatedAt())
 	installSpec := InstallJoinedChannelSpec{
 		AuthenticatedOwnerPeerID: fixture.channel.Owner().PeerID(), LocalAlias: "multi-use-team",
-		Descriptor: fixture.channel.Descriptor(), Transcript: transcript, Receipt: second.Receipt,
+		OwnerOutcome: ChannelEnrollmentAccepted,
+		Descriptor:   fixture.channel.Descriptor(), Transcript: transcript, Receipt: second.Receipt,
 		Members: second.Roster.Members(), At: secondAt.Add(time.Second)}
 	reserveJoinedChannelTest(t, secondStore, installSpec)
 	installed, err := secondStore.InstallJoinedChannel(context.Background(), installSpec)
@@ -473,27 +474,17 @@ func TestAcceptChannelEnrollmentPreservesClosedAndExpiredReasonsAcrossChallengeR
 
 func TestInstallJoinedChannelSuffixFailureRollsBackHeadMembersBindingsAndAliases(t *testing.T) {
 	t.Parallel()
-	owner := newChannelEnrollmentFixture(t, "join-suffix-rollback")
-	transcript := owner.transcript(t, 0x77, 0x78, owner.head)
-	accepted := owner.accept(t, transcript)
-	joinerStore := openTestStore(t)
-	insertChannelTestNode(t, joinerStore.db, owner.joiner, owner.channel.Channel().CreatedAt())
-	baseAt := owner.acceptedAt.Add(time.Second)
-	baseSpec := InstallJoinedChannelSpec{AuthenticatedOwnerPeerID: owner.channel.Owner().PeerID(),
-		LocalAlias: "suffix-rollback-team", Descriptor: owner.channel.Descriptor(), Transcript: transcript,
-		Receipt: accepted.Receipt, Members: accepted.Roster.Members(), At: baseAt}
-	reserveJoinedChannelTest(t, joinerStore, baseSpec)
-	if result, err := joinerStore.InstallJoinedChannel(context.Background(), baseSpec); err != nil || !result.Installed {
-		t.Fatalf("initial install = (%#v,%v)", result, err)
-	}
+	owner, joinerStore, baseSpec, initialRoster := newInstalledJoinedChannelFixture(t,
+		"join-suffix-rollback", "suffix-rollback-team")
+	baseAt := baseSpec.At
 	var originalAlias string
 	if err := joinerStore.db.QueryRow(`SELECT effective_alias FROM peer_bindings`).Scan(&originalAlias); err != nil {
 		t.Fatal(err)
 	}
 	newPeer := testkit.NewIdentity(t, "join-suffix-rollback-new")
-	ownerMember, _ := accepted.Roster.CurrentMember(owner.channel.Owner().PeerID())
+	ownerMember, _ := initialRoster.CurrentMember(owner.channel.Owner().PeerID())
 	_, expanded := appendRosterMemberWithLabel(t, owner.channel.Descriptor(), owner.signer,
-		accepted.Roster, newPeer, ownerMember.DisplayLabel())
+		initialRoster, newPeer, ownerMember.DisplayLabel())
 	if _, err := joinerStore.db.Exec(`CREATE TRIGGER test_reject_suffix_binding
 		BEFORE INSERT ON peer_bindings
 		BEGIN SELECT RAISE(ABORT, 'test reject suffix binding'); END`); err != nil {
@@ -523,22 +514,12 @@ func TestInstallJoinedChannelSuffixFailureRollsBackHeadMembersBindingsAndAliases
 
 func TestInstallJoinedChannelKeepsTerminalAliasAndDisambiguatesReplacementPeer(t *testing.T) {
 	t.Parallel()
-	owner := newChannelEnrollmentFixture(t, "join-alias-churn")
-	transcript := owner.transcript(t, 0x7b, 0x7c, owner.head)
-	accepted := owner.accept(t, transcript)
-	joinerStore := openTestStore(t)
-	insertChannelTestNode(t, joinerStore.db, owner.joiner, owner.channel.Channel().CreatedAt())
-	baseAt := owner.acceptedAt.Add(time.Second)
-	baseSpec := InstallJoinedChannelSpec{AuthenticatedOwnerPeerID: owner.channel.Owner().PeerID(),
-		LocalAlias: "alias-churn-team", Descriptor: owner.channel.Descriptor(), Transcript: transcript,
-		Receipt: accepted.Receipt, Members: accepted.Roster.Members(), At: baseAt}
-	reserveJoinedChannelTest(t, joinerStore, baseSpec)
-	if result, err := joinerStore.InstallJoinedChannel(context.Background(), baseSpec); err != nil || !result.Installed {
-		t.Fatalf("initial install = (%#v,%v)", result, err)
-	}
+	owner, joinerStore, baseSpec, initialRoster := newInstalledJoinedChannelFixture(t,
+		"join-alias-churn", "alias-churn-team")
+	baseAt := baseSpec.At
 	firstPeer := testkit.NewIdentity(t, "join-alias-churn-first")
 	_, firstRoster := appendRosterMemberWithLabel(t, owner.channel.Descriptor(), owner.signer,
-		accepted.Roster, firstPeer, "reviewer")
+		initialRoster, firstPeer, "reviewer")
 	firstSpec := baseSpec
 	firstSpec.Members = firstRoster.Members()
 	firstSpec.At = baseAt.Add(2 * time.Second)
@@ -579,6 +560,18 @@ func TestInstallJoinedChannelKeepsTerminalAliasAndDisambiguatesReplacementPeer(t
 	}
 }
 
+func newInstalledJoinedChannelFixture(t *testing.T, seed, localAlias string) (
+	channelEnrollmentFixture, *Store, InstallJoinedChannelSpec, model.VerifiedRoster,
+) {
+	t.Helper()
+	owner, joinerStore, spec := newJoinedChannelInstallFixture(t, seed, localAlias)
+	result, err := joinerStore.InstallJoinedChannel(context.Background(), spec)
+	if err != nil || !result.Installed {
+		t.Fatalf("initial joined Channel install = (%#v,%v)", result, err)
+	}
+	return owner, joinerStore, spec, result.Roster
+}
+
 func TestInstallJoinedChannelAppliesTerminalReplaySuffixButFreshJoinStaysEmpty(t *testing.T) {
 	t.Parallel()
 	owner := newChannelEnrollmentFixture(t, "join-terminal-replay")
@@ -586,7 +579,8 @@ func TestInstallJoinedChannelAppliesTerminalReplaySuffixButFreshJoinStaysEmpty(t
 	accepted := owner.accept(t, transcript)
 	initialAt := owner.acceptedAt.Add(time.Second)
 	baseSpec := InstallJoinedChannelSpec{AuthenticatedOwnerPeerID: owner.channel.Owner().PeerID(),
-		LocalAlias: "terminal-team", Descriptor: owner.channel.Descriptor(), Transcript: transcript,
+		OwnerOutcome: ChannelEnrollmentAccepted, LocalAlias: "terminal-team",
+		Descriptor: owner.channel.Descriptor(), Transcript: transcript,
 		Receipt: accepted.Receipt, Members: accepted.Roster.Members(), At: initialAt}
 	joinerStore := openTestStore(t)
 	insertChannelTestNode(t, joinerStore.db, owner.joiner, owner.channel.Channel().CreatedAt())
@@ -601,6 +595,7 @@ func TestInstallJoinedChannelAppliesTerminalReplaySuffixButFreshJoinStaysEmpty(t
 	_, terminalRoster := appendRosterTerminal(t, owner.channel.Descriptor(), owner.signer,
 		expandedRoster, owner.joiner.PeerID(), model.MemberLeft, terminalAt)
 	replaySpec := baseSpec
+	replaySpec.OwnerOutcome = ChannelEnrollmentMemberRevoked
 	replaySpec.Members = terminalRoster.Members()
 	replaySpec.At = terminalAt.Add(time.Second)
 	replayed, err := joinerStore.InstallJoinedChannel(context.Background(), replaySpec)
