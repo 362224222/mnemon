@@ -53,8 +53,7 @@ func (s LocalAdmissionScope) EventScope(index uint8, work model.WorkRef) (model.
 func (s *Store) PrepareLocalAdmission(ctx context.Context, channel model.ChannelID, audience model.Audience,
 	count uint8,
 ) (LocalAdmissionScope, error) {
-	if s == nil || s.db == nil || ctx == nil || channel.IsZero() || audience.Len() == 0 ||
-		count == 0 || count > model.MaxChildWorks {
+	if !validLocalAdmissionInput(s, ctx, channel, audience, count) {
 		return LocalAdmissionScope{}, errors.New("prepare local admission: incomplete or out-of-range input")
 	}
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
@@ -74,51 +73,17 @@ func (s *Store) PrepareLocalAdmission(ctx context.Context, channel model.Channel
 		return LocalAdmissionScope{}, fmt.Errorf("%w: Profile is disabled or asset revision drifted", ErrChannelUnavailable)
 	}
 
-	var status, topic string
-	var rosterRevision uint64
-	var rosterDigestBytes []byte
-	if err := tx.QueryRowContext(ctx,
-		"SELECT status, topic_state, roster_head_revision, roster_head_hash FROM channels WHERE channel_id = ?",
-		channel.String()).Scan(&status, &topic, &rosterRevision, &rosterDigestBytes); err != nil {
-		return LocalAdmissionScope{}, fmt.Errorf("prepare local admission: Channel: %w", err)
-	}
-	if status != string(model.ChannelActive) || topic != string(model.TopicJoined) {
-		return LocalAdmissionScope{}, fmt.Errorf("%w: status=%s topic=%s", ErrChannelUnavailable, status, topic)
-	}
-	rosterDigest, err := model.DigestFromBytes(rosterDigestBytes)
+	rosterHead, err := readLocalAdmissionChannel(ctx, tx, channel)
 	if err != nil {
-		return LocalAdmissionScope{}, fmt.Errorf("prepare local admission: roster digest: %w", err)
+		return LocalAdmissionScope{}, err
 	}
-	rosterHead, err := model.NewRecordHead(rosterRevision, rosterDigest)
+	memberHead, err := readLocalAdmissionMember(ctx, tx, channel, node)
 	if err != nil {
-		return LocalAdmissionScope{}, fmt.Errorf("prepare local admission: roster head: %w", err)
+		return LocalAdmissionScope{}, err
 	}
-
-	var memberRevision uint64
-	var memberDigestBytes []byte
-	var memberEpoch, memberStatus string
-	if err := tx.QueryRowContext(ctx,
-		"SELECT revision, record_hash, origin_epoch, status FROM channel_members WHERE channel_id = ? AND member_peer_id = ? ORDER BY revision DESC LIMIT 1",
-		channel.String(), node.PeerID().String()).Scan(&memberRevision, &memberDigestBytes, &memberEpoch, &memberStatus); err != nil {
-		return LocalAdmissionScope{}, fmt.Errorf("prepare local admission: origin member: %w", err)
-	}
-	if memberEpoch != node.OriginEpoch().String() || memberStatus != string(model.MemberActive) {
-		return LocalAdmissionScope{}, fmt.Errorf("%w: local origin membership is not active", ErrChannelUnavailable)
-	}
-	memberDigest, err := model.DigestFromBytes(memberDigestBytes)
+	sourceHead, err := readLocalAdmissionSourceHead(ctx, tx, channel, node)
 	if err != nil {
-		return LocalAdmissionScope{}, fmt.Errorf("prepare local admission: member digest: %w", err)
-	}
-	memberHead, err := model.NewRecordHead(memberRevision, memberDigest)
-	if err != nil {
-		return LocalAdmissionScope{}, fmt.Errorf("prepare local admission: member head: %w", err)
-	}
-
-	var sourceHead uint64
-	if err := tx.QueryRowContext(ctx,
-		"SELECT source_head_channel_seq FROM publication_epochs WHERE channel_id = ? AND origin_peer_id = ? AND origin_epoch = ?",
-		channel.String(), node.PeerID().String(), node.OriginEpoch().String()).Scan(&sourceHead); err != nil {
-		return LocalAdmissionScope{}, fmt.Errorf("prepare local admission: publication epoch: %w", err)
+		return LocalAdmissionScope{}, err
 	}
 	// next_origin_seq records the next value after commit, so unlike the
 	// publication head it must retain one representable successor.
@@ -127,6 +92,91 @@ func (s *Store) PrepareLocalAdmission(ctx context.Context, channel model.Channel
 		return LocalAdmissionScope{}, errors.New("prepare local admission: sequence range exhausted")
 	}
 
+	if err := validateLocalAdmissionAudience(ctx, tx, channel, node, audience); err != nil {
+		return LocalAdmissionScope{}, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return LocalAdmissionScope{}, fmt.Errorf("prepare local admission: commit read: %w", err)
+	}
+	return LocalAdmissionScope{node: node, profile: profile, channelID: channel, originMember: memberHead,
+		publicationRoster: rosterHead, firstOriginSequence: node.NextOriginSequence(),
+		firstChannelSequence: sourceHead + 1, count: count}, nil
+}
+
+func validLocalAdmissionInput(s *Store, ctx context.Context, channel model.ChannelID,
+	audience model.Audience, count uint8,
+) bool {
+	return s != nil && s.db != nil && ctx != nil && !channel.IsZero() && audience.Len() != 0 &&
+		count != 0 && count <= model.MaxChildWorks
+}
+
+func readLocalAdmissionChannel(ctx context.Context, tx *sql.Tx,
+	channel model.ChannelID,
+) (model.RecordHead, error) {
+	var status, topic string
+	var revision uint64
+	var digestBytes []byte
+	if err := tx.QueryRowContext(ctx,
+		"SELECT status, topic_state, roster_head_revision, roster_head_hash FROM channels WHERE channel_id = ?",
+		channel.String()).Scan(&status, &topic, &revision, &digestBytes); err != nil {
+		return model.RecordHead{}, fmt.Errorf("prepare local admission: Channel: %w", err)
+	}
+	if status != string(model.ChannelActive) || topic != string(model.TopicJoined) {
+		return model.RecordHead{}, fmt.Errorf("%w: status=%s topic=%s", ErrChannelUnavailable, status, topic)
+	}
+	digest, err := model.DigestFromBytes(digestBytes)
+	if err != nil {
+		return model.RecordHead{}, fmt.Errorf("prepare local admission: roster digest: %w", err)
+	}
+	head, err := model.NewRecordHead(revision, digest)
+	if err != nil {
+		return model.RecordHead{}, fmt.Errorf("prepare local admission: roster head: %w", err)
+	}
+	return head, nil
+}
+
+func readLocalAdmissionMember(ctx context.Context, tx *sql.Tx, channel model.ChannelID,
+	node model.Node,
+) (model.RecordHead, error) {
+	var revision uint64
+	var digestBytes []byte
+	var epoch, status string
+	if err := tx.QueryRowContext(ctx,
+		"SELECT revision, record_hash, origin_epoch, status FROM channel_members WHERE channel_id = ? AND member_peer_id = ? ORDER BY revision DESC LIMIT 1",
+		channel.String(), node.PeerID().String()).Scan(&revision, &digestBytes, &epoch, &status); err != nil {
+		return model.RecordHead{}, fmt.Errorf("prepare local admission: origin member: %w", err)
+	}
+	if epoch != node.OriginEpoch().String() || status != string(model.MemberActive) {
+		return model.RecordHead{}, fmt.Errorf("%w: local origin membership is not active", ErrChannelUnavailable)
+	}
+	digest, err := model.DigestFromBytes(digestBytes)
+	if err != nil {
+		return model.RecordHead{}, fmt.Errorf("prepare local admission: member digest: %w", err)
+	}
+	head, err := model.NewRecordHead(revision, digest)
+	if err != nil {
+		return model.RecordHead{}, fmt.Errorf("prepare local admission: member head: %w", err)
+	}
+	return head, nil
+}
+
+func readLocalAdmissionSourceHead(ctx context.Context, tx *sql.Tx, channel model.ChannelID,
+	node model.Node,
+) (uint64, error) {
+	var sourceHead uint64
+	err := tx.QueryRowContext(ctx,
+		"SELECT source_head_channel_seq FROM publication_epochs WHERE channel_id = ? AND origin_peer_id = ? AND origin_epoch = ?",
+		channel.String(), node.PeerID().String(), node.OriginEpoch().String()).Scan(&sourceHead)
+	if err != nil {
+		return 0, fmt.Errorf("prepare local admission: publication epoch: %w", err)
+	}
+	return sourceHead, nil
+}
+
+func validateLocalAdmissionAudience(ctx context.Context, tx *sql.Tx, channel model.ChannelID,
+	node model.Node, audience model.Audience,
+) error {
 	for _, target := range audience.Peers() {
 		var bindingState string
 		var confirmed sql.NullString
@@ -137,14 +187,8 @@ func (s *Store) PrepareLocalAdmission(ctx context.Context, channel model.Channel
 			WHERE b.channel_id=? AND b.peer_id=?`, node.PeerID().String(), node.OriginEpoch().String(),
 			channel.String(), target.String()).Scan(&bindingState, &confirmed)
 		if err != nil || bindingState != string(model.BindingActive) || !confirmed.Valid {
-			return LocalAdmissionScope{}, fmt.Errorf("%w: target %s", ErrAudienceUnavailable, target.String())
+			return fmt.Errorf("%w: target %s", ErrAudienceUnavailable, target.String())
 		}
 	}
-
-	if err := tx.Commit(); err != nil {
-		return LocalAdmissionScope{}, fmt.Errorf("prepare local admission: commit read: %w", err)
-	}
-	return LocalAdmissionScope{node: node, profile: profile, channelID: channel, originMember: memberHead,
-		publicationRoster: rosterHead, firstOriginSequence: node.NextOriginSequence(),
-		firstChannelSequence: sourceHead + 1, count: count}, nil
+	return nil
 }
