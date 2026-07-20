@@ -457,6 +457,12 @@ func peerInboxSemanticResponseSummary(eventType model.EventType) string {
 	}[eventType]
 }
 
+// PeerInboxSemanticResponseSummary is the canonical controller-owned summary
+// used by the semantic worker before Store verifies the signed response.
+func PeerInboxSemanticResponseSummary(eventType model.EventType) string {
+	return peerInboxSemanticResponseSummary(eventType)
+}
+
 func materializePeerInboxSemanticArtifacts(ctx context.Context, tx *sql.Tx,
 	event model.Event,
 ) error {
