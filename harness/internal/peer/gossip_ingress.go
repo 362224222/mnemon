@@ -101,6 +101,11 @@ type GossipIngressClock interface{ Now() time.Time }
 // coalescing; Gossip ingress never waits for, or acknowledges, repair work.
 type GossipRepairTrigger interface{ Trigger() }
 
+// GossipInboxTrigger wakes durable Artifact and semantic consumers after an
+// Inbox put. It is only a latency hint; their startup/periodic scans remain the
+// restart authority.
+type GossipInboxTrigger interface{ Trigger() }
+
 type wallGossipIngressClock struct{}
 
 func (wallGossipIngressClock) Now() time.Time { return time.Now() }
@@ -140,6 +145,7 @@ type GossipIngress struct {
 	store   GossipIngressStore
 	clock   GossipIngressClock
 	repair  GossipRepairTrigger
+	inbox   GossipInboxTrigger
 
 	mu       sync.Mutex
 	snapshot GossipIngressSnapshot
@@ -251,10 +257,17 @@ func (ingress *GossipIngress) Run(ctx context.Context) error {
 		if !ingress.recordDisposition(result.Disposition) {
 			return ingress.stop(GossipIngressDiagnosticStore)
 		}
+		ingress.signalInbox()
 		if result.Disposition != store.PeerInboxConflicted &&
 			result.Cursor.ObservedChannelSequence > result.Cursor.ContiguousChannelSequence {
 			ingress.signalRepair()
 		}
+	}
+}
+
+func (ingress *GossipIngress) signalInbox() {
+	if ingress != nil && ingress.inbox != nil {
+		ingress.inbox.Trigger()
 	}
 }
 
