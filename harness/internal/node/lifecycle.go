@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 )
@@ -185,11 +187,12 @@ func (lease *DaemonLifecycleLease) quiesce(ctx context.Context, client DaemonLif
 
 	bounded, cancel := context.WithTimeout(ctx, timing.deadline)
 	defer cancel()
-	socketIdentity, socketPresent, socketErr := lease.inspectControlSocket()
+	socketPin, socketIdentity, socketPresent, socketErr := lease.pinControlSocket()
 	if socketErr != nil {
 		return localapi.AuthorityResponse{}, lifecycleError("quiesce control socket", socketErr)
 	}
 	if socketPresent {
+		defer socketPin.Close()
 		response, shutdownErr := client.ShutdownForMutation(bounded, expected)
 		if err := bounded.Err(); err != nil {
 			return localapi.AuthorityResponse{}, lifecycleError("request graceful shutdown", err)
@@ -310,23 +313,43 @@ func (lease *DaemonLifecycleLease) validateHeld() error {
 	return validateEnsureLockFile(lease.lock)
 }
 
-func (lease *DaemonLifecycleLease) inspectControlSocket() (os.FileInfo, bool, error) {
+// pinControlSocket opens the live control socket with O_PATH relative to the
+// held Node-state directory. The returned handle pins the socket inode for the
+// whole removal wait: while it stays open the kernel cannot recycle the inode
+// number, so os.SameFile reliably distinguishes the observed daemon socket
+// from any replacement bound at the same path.
+func (lease *DaemonLifecycleLease) pinControlSocket() (*os.File, os.FileInfo, bool, error) {
 	if err := lease.validateHeld(); err != nil {
-		return nil, false, err
+		return nil, nil, false, err
 	}
-	info, err := lease.lock.state.root.Lstat(controlSocketName)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, false, nil
+	fd, err := unix.Openat(int(lease.lock.state.dir.Fd()), controlSocketName,
+		unix.O_PATH|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	for errors.Is(err, unix.EINTR) {
+		fd, err = unix.Openat(int(lease.lock.state.dir.Fd()), controlSocketName,
+			unix.O_PATH|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	}
+	if errors.Is(err, unix.ENOENT) {
+		return nil, nil, false, nil
 	}
 	if err != nil {
-		return nil, false, err
+		return nil, nil, false, err
+	}
+	pin := os.NewFile(uintptr(fd), controlSocketName)
+	info, err := pin.Stat()
+	if err != nil {
+		_ = pin.Close()
+		return nil, nil, false, err
 	}
 	if err := validateLifecycleSocket(info, lease.lock.state.ownerUID); err != nil {
-		return nil, false, err
+		_ = pin.Close()
+		return nil, nil, false, err
 	}
-	return info, true, nil
+	return pin, info, true, nil
 }
 
+// waitForExactSocketRemoval requires the caller to keep the pin backing
+// expected open; only that pin makes the SameFile comparison replacement-proof
+// against immediate inode recycling.
 func (lease *DaemonLifecycleLease) waitForExactSocketRemoval(ctx context.Context,
 	expected os.FileInfo, poll time.Duration,
 ) error {
