@@ -13,7 +13,10 @@ ifeq ($(GOBIN),)
   GOBIN     := $(shell go env GOPATH)/bin
 endif
 
-.PHONY: deps build harness-build install uninstall test unit vet harness-validate harness-quality harness-verify docker-build docker-run compose-up compose-down compose-dev release-snapshot clean help
+.PHONY: deps build harness-build install uninstall test unit vet harness-validate harness-quality harness-verify
+.PHONY: test-layout test-unit test-unit-race test-process test-docker test-docker-case
+.PHONY: test-live-codex test-live-codex-case test-evidence verify release-verify
+.PHONY: docker-build docker-run compose-up compose-down compose-dev release-snapshot clean help
 
 .DEFAULT_GOAL := help
 
@@ -74,6 +77,65 @@ harness-verify: ## Build and verify the experimental R5 Harness
 	bash harness/scripts/check_test_pairs.sh
 	$(MAKE) harness-quality
 	$(PINNED_GO) test ./harness/...
+
+test-layout: harness-validate ## Run the R5 Harness layout gate
+
+test-unit: test-layout ## Run the R5 Harness unit tests
+	$(PINNED_GO) test ./harness/cmd/... ./harness/internal/... ./harness/tools/... \
+		./harness/test/contracts
+
+test-unit-race: test-layout ## Run the R5 Harness unit tests under the race detector
+	$(PINNED_GO) test -race ./harness/cmd/... ./harness/internal/... ./harness/tools/... \
+		./harness/test/contracts
+
+test-process: harness-build ## Run the R5 process integration tests
+	$(PINNED_GO) test ./harness/test/process
+
+test-docker: ## Run the R5 hermetic Docker suite
+	@test -x harness/test/e2e/runner/run_docker.sh || { \
+		echo "error: R5 Docker runner is unavailable: harness/test/e2e/runner/run_docker.sh" >&2; \
+		exit 1; \
+	}
+	harness/test/e2e/runner/run_docker.sh
+
+test-docker-case: ## Run one R5 hermetic Docker case with CASE=<name>
+	@test -n "$(CASE)" || { echo "error: CASE is required" >&2; exit 2; }
+	@test -x harness/test/e2e/runner/run_docker.sh || { \
+		echo "error: R5 Docker runner is unavailable: harness/test/e2e/runner/run_docker.sh" >&2; \
+		exit 1; \
+	}
+	harness/test/e2e/runner/run_docker.sh --case "$(CASE)"
+
+test-live-codex: ## Run the R5 Live Codex acceptance suite
+	@test "$(LIVE_CODEX)" = "1" || { \
+		echo "error: set LIVE_CODEX=1 to run Live Codex acceptance" >&2; \
+		exit 2; \
+	}
+	@test -x harness/test/e2e/runner/run_live_codex.sh || { \
+		echo "error: R5 Live Codex runner is unavailable: harness/test/e2e/runner/run_live_codex.sh" >&2; \
+		exit 1; \
+	}
+	harness/test/e2e/runner/run_live_codex.sh
+
+test-live-codex-case: ## Run one R5 Live Codex case with CASE=<name>
+	@test -n "$(CASE)" || { echo "error: CASE is required" >&2; exit 2; }
+	@test "$(LIVE_CODEX)" = "1" || { \
+		echo "error: set LIVE_CODEX=1 to run Live Codex acceptance" >&2; \
+		exit 2; \
+	}
+	@test -x harness/test/e2e/runner/run_live_codex.sh || { \
+		echo "error: R5 Live Codex runner is unavailable: harness/test/e2e/runner/run_live_codex.sh" >&2; \
+		exit 1; \
+	}
+	harness/test/e2e/runner/run_live_codex.sh --case "$(CASE)"
+
+test-evidence: ## Validate the tracked R5 requirement evidence
+	$(PINNED_GO) test ./harness/test/contracts \
+		-run '^TestRequirementsRegistryIsClosedAndEvidenceBacked$$' -count=1
+
+verify: test-layout test-unit test-unit-race test-process test-docker test-evidence ## Run R5 merge verification gates
+
+release-verify: verify test-live-codex ## Run R5 release verification gates
 
 # ── Containers / Deployment ──────────────────────────────────────────
 
