@@ -90,12 +90,9 @@ func Open(ctx context.Context, dbPath string) (_ *Store, err error) {
 	return &Store{db: db, path: path, lockFile: lockFile}, nil
 }
 
-// OpenExisting acquires the Node writer guard and opens only an already
-// initialized, exact R5 schema v1 store. Unlike Open, it never creates
-// node.db, initializes a version-zero database, migrates a schema, or repairs
-// filesystem modes. Daemon restart and ensure preflight use this boundary so
-// damaged or incomplete durable authority cannot be mistaken for first-run
-// setup.
+// OpenExisting acquires the writer guard for an initialized, exact R5 schema.
+// It never creates, migrates, repairs modes, or mistakes damaged durable
+// authority for first-run setup.
 func OpenExisting(ctx context.Context, dbPath string) (_ *Store, err error) {
 	if ctx == nil {
 		return nil, errors.New("open existing node store: nil context")

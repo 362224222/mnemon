@@ -186,30 +186,31 @@ func TestPeerPullSourceEnforcesBaselineFloorAndRequestBounds(t *testing.T) {
 		}
 	})
 
-	t.Run("input and source head bounds", func(t *testing.T) {
-		fixture, _ := newPeerPullSourceFixture(t, 1)
-		at := peerPullTestAt(fixture)
-		for name, spec := range map[string]ReadPeerPullPageSpec{
-			"zero limit": {AuthenticatedPeerID: fixture.reviewers[0], ChannelID: fixture.channel,
-				OriginEpoch: fixture.node.OriginEpoch(), Limit: 0, At: at},
-			"large limit": {AuthenticatedPeerID: fixture.reviewers[0], ChannelID: fixture.channel,
-				OriginEpoch: fixture.node.OriginEpoch(), Limit: 33, At: at},
-			"past head": {AuthenticatedPeerID: fixture.reviewers[0], ChannelID: fixture.channel,
-				OriginEpoch: fixture.node.OriginEpoch(), AfterChannelSequence: 2, Limit: 1,
-				At: at},
-		} {
-			t.Run(name, func(t *testing.T) {
-				_, err := fixture.store.ReadPeerPullPage(context.Background(), spec)
-				if name == "past head" {
-					if !errors.Is(err, ErrPeerPullCursor) {
-						t.Fatalf("error = %v", err)
-					}
-				} else if !errors.Is(err, ErrPeerPullInput) {
+	t.Run("input and source head bounds", testPeerPullSourceRequestBounds)
+}
+
+func testPeerPullSourceRequestBounds(t *testing.T) {
+	fixture, _ := newPeerPullSourceFixture(t, 1)
+	at := peerPullTestAt(fixture)
+	for name, spec := range map[string]ReadPeerPullPageSpec{
+		"zero limit": {AuthenticatedPeerID: fixture.reviewers[0], ChannelID: fixture.channel,
+			OriginEpoch: fixture.node.OriginEpoch(), Limit: 0, At: at},
+		"large limit": {AuthenticatedPeerID: fixture.reviewers[0], ChannelID: fixture.channel,
+			OriginEpoch: fixture.node.OriginEpoch(), Limit: 33, At: at},
+		"past head": {AuthenticatedPeerID: fixture.reviewers[0], ChannelID: fixture.channel,
+			OriginEpoch: fixture.node.OriginEpoch(), AfterChannelSequence: 2, Limit: 1, At: at},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := fixture.store.ReadPeerPullPage(context.Background(), spec)
+			if name == "past head" {
+				if !errors.Is(err, ErrPeerPullCursor) {
 					t.Fatalf("error = %v", err)
 				}
-			})
-		}
-	})
+			} else if !errors.Is(err, ErrPeerPullInput) {
+				t.Fatalf("error = %v", err)
+			}
+		})
+	}
 }
 
 func TestPeerPullSourceRejectsWrongPeerEpochRevocationAndDurableCorruption(t *testing.T) {
