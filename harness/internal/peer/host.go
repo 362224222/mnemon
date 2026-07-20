@@ -33,6 +33,15 @@ type NodeHost struct {
 func NewNodeHost(privateKey libp2pcrypto.PrivKey, authority *Authority,
 	listenAddrs []ma.Multiaddr,
 ) (*NodeHost, error) {
+	return newNodeHost(privateKey, authority, listenAddrs, nil)
+}
+
+// newNodeHost accepts the address projection callback owned by the bind stage.
+// libp2p may invoke it concurrently; the callback must therefore be bounded,
+// non-blocking and concurrency-safe.
+func newNodeHost(privateKey libp2pcrypto.PrivKey, authority *Authority,
+	listenAddrs []ma.Multiaddr, addrsFactory func([]ma.Multiaddr) []ma.Multiaddr,
+) (*NodeHost, error) {
 	if privateKey == nil || privateKey.Type() != libp2pcrypto.Ed25519 || authority == nil ||
 		len(listenAddrs) == 0 {
 		return nil, fmt.Errorf("%w: Ed25519 identity, authority and listen address are required", ErrNodeHost)
@@ -53,13 +62,17 @@ func NewNodeHost(privateKey libp2pcrypto.PrivKey, authority *Authority,
 		return nil, fmt.Errorf("%w: resource manager: %v", ErrNodeHost, err)
 	}
 	gater := NewConnectionGater(authority)
-	nodeHost, err := libp2p.New(
+	options := []libp2p.Option{
 		libp2p.Identity(privateKey),
 		libp2p.NoListenAddrs,
 		libp2p.DisableRelay(),
 		libp2p.ResourceManager(resourceManager),
 		libp2p.ConnectionGater(gater),
-	)
+	}
+	if addrsFactory != nil {
+		options = append(options, libp2p.AddrsFactory(addrsFactory))
+	}
+	nodeHost, err := libp2p.New(options...)
 	if err != nil {
 		_ = resourceManager.Close()
 		return nil, fmt.Errorf("%w: construct Host: %v", ErrNodeHost, err)

@@ -29,6 +29,8 @@ type MeshRuntime struct {
 	gossip         *Gossip
 	authority      *Authority
 	addressSources *meshAddressSources
+	endpoint       MeshEndpointSnapshot
+	cancel         context.CancelFunc
 
 	mu          sync.Mutex
 	addresses   map[libp2ppeer.ID][]ma.Multiaddr
@@ -39,37 +41,50 @@ type MeshRuntime struct {
 	closeErr    error
 }
 
-// NewMeshRuntime starts from one coherent Store snapshot. The Host begins with
-// empty authority, canonical Peer addresses are installed, and Gossip performs
-// the first whole-snapshot reconciliation before any Channel topic is joined.
+// NewMeshRuntime is the one-shot composition of BindMeshHost and Freeze for
+// callers that do not need to persist endpoint authority between the stages.
+// It still creates exactly one Host and transfers that same Host into runtime.
 func NewMeshRuntime(ctx context.Context, privateKey libp2pcrypto.PrivKey,
 	listenAddrs []ma.Multiaddr, mesh store.ChannelMeshAuthority,
 ) (*MeshRuntime, error) {
-	if ctx == nil || ctx.Err() != nil || privateKey == nil {
-		return nil, fmt.Errorf("%w: live context and Node key are required", ErrMeshRuntime)
+	bound, err := BindMeshHost(ctx, privateKey, MeshHostBindSpec{ListenAddrs: listenAddrs})
+	if err != nil {
+		return nil, fmt.Errorf("%w: bind Host: %w", ErrMeshRuntime, err)
+	}
+	runtime, err := bound.Freeze(ctx, mesh)
+	if err != nil {
+		return nil, errors.Join(fmt.Errorf("%w: freeze Host: %w", ErrMeshRuntime, err),
+			bound.Close())
+	}
+	return runtime, nil
+}
+
+func freezeMeshRuntime(ctx context.Context, nodeHost *NodeHost, authority *Authority,
+	endpoint MeshEndpointSnapshot, mesh store.ChannelMeshAuthority,
+) (*MeshRuntime, error) {
+	if ctx == nil || ctx.Err() != nil || nodeHost == nil || authority == nil ||
+		endpoint.peerID.IsZero() {
+		return nil, fmt.Errorf("%w: live bound Host is required", ErrMeshRuntime)
 	}
 	snapshot, addresses, err := projectMeshRuntime(mesh)
 	if err != nil {
 		return nil, err
 	}
-	authority, err := NewAuthority(snapshot.LocalPeerID)
-	if err != nil {
-		return nil, fmt.Errorf("%w: construct authority: %w", ErrMeshRuntime, err)
-	}
-	nodeHost, err := NewNodeHost(privateKey, authority, listenAddrs)
-	if err != nil {
-		return nil, fmt.Errorf("%w: construct Host: %w", ErrMeshRuntime, err)
+	if snapshot.LocalPeerID != endpoint.peerID || authority.LocalPeerID().String() != endpoint.peerID.String() ||
+		nodeHost.managedRuntimeHost() == nil ||
+		nodeHost.managedRuntimeHost().ID().String() != endpoint.peerID.String() {
+		return nil, fmt.Errorf("%w: bound Host identity differs from durable mesh", ErrMeshRuntime)
 	}
 	addressSources, err := newMeshAddressSources(nodeHost.managedRuntimeHost().Peerstore())
 	if err != nil {
-		return nil, errors.Join(err, nodeHost.Close())
+		return nil, err
 	}
 	fail := func(cause error, gossip *Gossip) (*MeshRuntime, error) {
 		addressSources.close()
 		if gossip != nil {
 			cause = errors.Join(cause, gossip.Close())
 		}
-		return nil, errors.Join(cause, nodeHost.Close())
+		return nil, cause
 	}
 	if err := addressSources.installInitial(addresses); err != nil {
 		return fail(fmt.Errorf("%w: install initial Peer addresses: %w", ErrMeshRuntime, err), nil)
@@ -84,8 +99,12 @@ func NewMeshRuntime(ctx context.Context, privateKey libp2pcrypto.PrivKey,
 	if err := joinActiveChannels(gossip, snapshot); err != nil {
 		return fail(fmt.Errorf("%w: join initial topics: %w", ErrMeshRuntime, err), gossip)
 	}
+	if err := ctx.Err(); err != nil {
+		return fail(fmt.Errorf("%w: initial reconcile canceled: %w", ErrMeshRuntime, err), gossip)
+	}
 	return &MeshRuntime{nodeHost: nodeHost, gossip: gossip, authority: authority,
-		addressSources: addressSources, addresses: cloneManagedAddresses(addresses)}, nil
+		addressSources: addressSources, endpoint: endpoint.clone(),
+		addresses: cloneManagedAddresses(addresses)}, nil
 }
 
 func (runtime *MeshRuntime) managedRuntimeHost() host.Host {
@@ -103,26 +122,16 @@ func (runtime *MeshRuntime) LocalEnrollmentMultiaddrs() ([]string, error) {
 		return nil, fmt.Errorf("%w: runtime is unavailable", ErrMeshRuntime)
 	}
 	runtime.mu.Lock()
-	if runtime.closed || runtime.nodeHost == nil || runtime.nodeHost.managedRuntimeHost() == nil {
+	if runtime.closed || runtime.nodeHost == nil {
 		runtime.mu.Unlock()
 		return nil, fmt.Errorf("%w: runtime is closed", ErrMeshRuntime)
 	}
-	localHost := runtime.nodeHost.managedRuntimeHost()
+	addresses := runtime.endpoint.AdvertisedAddrs()
 	runtime.mu.Unlock()
-
-	hostAddresses := localHost.Addrs()
-	addresses := make([]string, 0, len(hostAddresses))
-	for _, address := range hostAddresses {
-		if address == nil {
-			return nil, fmt.Errorf("%w: managed Host returned a nil address", ErrMeshRuntime)
-		}
-		addresses = append(addresses, address.String())
+	if len(addresses) == 0 {
+		return nil, fmt.Errorf("%w: local enrollment snapshot is unavailable", ErrMeshRuntime)
 	}
-	sort.Strings(addresses)
-	if _, err := model.AdvertisedAddressDigest(addresses); err != nil {
-		return nil, fmt.Errorf("%w: local enrollment addresses: %w", ErrMeshRuntime, err)
-	}
-	return append([]string(nil), addresses...), nil
+	return addresses, nil
 }
 
 func (runtime *MeshRuntime) Session(channelID model.ChannelID) (*TopicSession, error) {
@@ -162,6 +171,7 @@ func (runtime *MeshRuntime) Close() error {
 		var gossip *Gossip
 		var nodeHost *NodeHost
 		var addressSources *meshAddressSources
+		var cancel context.CancelFunc
 		for {
 			runtime.mu.Lock()
 			if transition := runtime.transition; transition != nil {
@@ -174,6 +184,7 @@ func (runtime *MeshRuntime) Close() error {
 			gossip = runtime.gossip
 			nodeHost = runtime.nodeHost
 			addressSources = runtime.addressSources
+			cancel = runtime.cancel
 			runtime.mu.Unlock()
 			break
 		}
@@ -185,6 +196,9 @@ func (runtime *MeshRuntime) Close() error {
 		}
 		if nodeHost != nil {
 			runtime.closeErr = errors.Join(runtime.closeErr, nodeHost.Close())
+		}
+		if cancel != nil {
+			cancel()
 		}
 		runtime.mu.Lock()
 		runtime.closeErr = errors.Join(runtime.closeErr, runtime.terminalErr)
