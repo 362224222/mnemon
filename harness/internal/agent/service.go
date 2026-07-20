@@ -150,49 +150,12 @@ func (s *Service) AgentCurrent(ctx context.Context,
 	if apiErr != nil {
 		return AgentCurrentResponse{}, apiErr
 	}
-	var claimed store.AgentClaimResult
-	var claimHash model.Digest
-	var claimSecret []byte
-	var err error
-	if metadata.HasRunAttachment {
-		claimed, err = s.store.ConsumeAgentRunAttachment(ctx, store.AgentAttachmentSpec{
-			ProfileID: metadata.Profile.ID(), ExpectedAssetRevision: s.assetRevision,
-			AttachmentTokenHash: metadata.RunAttachmentHash, At: at,
-		})
-		claimHash, _ = claimed.Run.ClaimFenceHash()
-	} else {
-		budget, budgetErr := model.ParseHandlingBudget(metadata.Profile.HandlingBudget())
-		if budgetErr != nil {
-			return AgentCurrentResponse{}, NewControlError(CodeInternal,
-				"Profile handling budget is invalid")
-		}
-		leaseUntil := at.Add(time.Duration(budget.Spec().ClaimLeaseSeconds) * time.Second)
-		if !leaseUntil.After(at) {
-			return AgentCurrentResponse{}, NewControlError(CodeInternal,
-				"managed claim lease cannot be represented")
-		}
-		claimSecret, err = s.drawSecret()
-		if err != nil {
-			return AgentCurrentResponse{}, NewControlError(CodeInternal,
-				"managed claim capability cannot be generated")
-		}
-		defer clear(claimSecret)
-		claimOwnerBytes, ownerErr := s.drawSecret()
-		if ownerErr != nil {
-			return AgentCurrentResponse{}, NewControlError(CodeInternal,
-				"managed claim owner cannot be generated")
-		}
-		claimOwner := "claim-" + base64.RawURLEncoding.EncodeToString(claimOwnerBytes)
-		clear(claimOwnerBytes)
-		claimHash = model.Sum(claimSecret)
-		claimed, err = s.store.ClaimAgentCurrent(ctx, store.AgentClaimSpec{
-			ProfileID: metadata.Profile.ID(), ExpectedAssetRevision: s.assetRevision,
-			ClaimOwner: claimOwner, ClaimTokenHash: claimHash, At: at, LeaseUntil: leaseUntil,
-		})
+	claim, apiErr := s.claimAgentCurrent(ctx, metadata, at)
+	if apiErr != nil {
+		return AgentCurrentResponse{}, apiErr
 	}
-	if err != nil {
-		return AgentCurrentResponse{}, mapControlError(err)
-	}
+	defer clear(claim.secret)
+	claimed, claimHash, claimSecret := claim.result, claim.hash, claim.secret
 	if claimed.Status != store.AgentClaimActionable {
 		response := AgentCurrentResponse{Status: string(claimed.Status)}
 		if claimed.Status == store.AgentClaimNone {
