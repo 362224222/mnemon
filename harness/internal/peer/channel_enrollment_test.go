@@ -22,33 +22,12 @@ import (
 )
 
 func TestChannelEnrollmentHandshakeCommitsResponseLossReplayAndAtomicInstall(t *testing.T) {
-	createdAt := time.Date(2026, 7, 18, 1, 0, 0, 0, time.UTC)
-	acceptedAt := createdAt.Add(time.Minute)
-	ownerFixture := testkit.NewSignedChannelAt(t, "peer-enrollment-live", createdAt)
-	ownerIdentity := ownerFixture.Owner()
-	joinerIdentity := testkit.NewIdentity(t, "peer-enrollment-live-joiner")
-	ownerPath := filepath.Join(t.TempDir(), "owner", "node.db")
-	ownerStore := createEnrollmentTestStore(t, ownerPath, ownerIdentity, createdAt)
-	defer ownerStore.Close()
-	joinerStore := openEnrollmentTestStore(t, joinerIdentity, createdAt)
-	grantID, _ := model.ParseGrantID("grant-peer-enrollment-live")
-	token := enrollmentTestToken(t, ownerFixture, grantID, "peer-enrollment-live")
-	if _, err := ownerStore.CreateChannel(context.Background(), store.CreateChannelSpec{
-		Channel: ownerFixture.Channel(), Genesis: ownerFixture.OwnerMember().Member(), Token: token,
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	ownerHost := newEnrollmentTestHost(t, ownerIdentity)
-	defer ownerHost.Close()
-	joinerHost := newEnrollmentTestHost(t, joinerIdentity)
-	defer joinerHost.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := joinerHost.Connect(ctx, libp2ppeer.AddrInfo{ID: ownerHost.ID(),
-		Addrs: ownerHost.Addrs()}); err != nil {
-		t.Fatal(err)
-	}
+	fixture := newEnrollmentHandshakeFixture(t, "peer-enrollment-live",
+		time.Date(2026, 7, 18, 1, 0, 0, 0, time.UTC), false)
+	acceptedAt, ownerFixture := fixture.acceptedAt, fixture.ownerFixture
+	ownerIdentity, joinerIdentity := fixture.ownerIdentity, fixture.joinerIdentity
+	ownerStore, joinerStore := fixture.ownerStore, fixture.joinerStore
+	ownerHost, joinerHost, ctx, token := fixture.ownerHost, fixture.joinerHost, fixture.ctx, fixture.token
 	ownerProtocol, err := NewChannelEnrollmentOwner(ChannelEnrollmentOwnerOptions{
 		Store: ownerStore, Signer: enrollmentTestSigner{privateKey: enrollmentPrivateKey(t, ownerIdentity)},
 		Clock:  fixedEnrollmentClock{at: acceptedAt},
@@ -108,34 +87,12 @@ func TestChannelEnrollmentHandshakeCommitsResponseLossReplayAndAtomicInstall(t *
 }
 
 func TestChannelEnrollmentRecoversOwnerCommitAfterAcceptedResponseLoss(t *testing.T) {
-	createdAt := time.Date(2026, 7, 18, 1, 30, 0, 0, time.UTC)
-	acceptedAt := createdAt.Add(time.Minute)
-	ownerFixture := testkit.NewSignedChannelAt(t, "peer-enrollment-response-loss", createdAt)
-	ownerIdentity := ownerFixture.Owner()
-	joinerIdentity := testkit.NewIdentity(t, "peer-enrollment-response-loss-joiner")
-	ownerPath := filepath.Join(t.TempDir(), "owner", "node.db")
-	ownerStore := createEnrollmentTestStore(t, ownerPath, ownerIdentity, createdAt)
-	defer ownerStore.Close()
-	joinerPath := filepath.Join(t.TempDir(), "joiner", "node.db")
-	joinerStore := createEnrollmentTestStore(t, joinerPath, joinerIdentity, createdAt)
-	grantID, _ := model.ParseGrantID("grant-peer-enrollment-response-loss")
-	token := enrollmentTestToken(t, ownerFixture, grantID, "peer-enrollment-response-loss")
-	if _, err := ownerStore.CreateChannel(context.Background(), store.CreateChannelSpec{
-		Channel: ownerFixture.Channel(), Genesis: ownerFixture.OwnerMember().Member(), Token: token,
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	ownerHost := newEnrollmentTestHost(t, ownerIdentity)
-	defer ownerHost.Close()
-	joinerHost := newEnrollmentTestHost(t, joinerIdentity)
-	defer joinerHost.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := joinerHost.Connect(ctx, libp2ppeer.AddrInfo{ID: ownerHost.ID(),
-		Addrs: ownerHost.Addrs()}); err != nil {
-		t.Fatal(err)
-	}
+	fixture := newEnrollmentHandshakeFixture(t, "peer-enrollment-response-loss",
+		time.Date(2026, 7, 18, 1, 30, 0, 0, time.UTC), true)
+	acceptedAt, ownerIdentity := fixture.acceptedAt, fixture.ownerIdentity
+	joinerIdentity, ownerPath, joinerPath := fixture.joinerIdentity, fixture.ownerPath, fixture.joinerPath
+	ownerStore, joinerStore := fixture.ownerStore, fixture.joinerStore
+	ownerHost, joinerHost, ctx, token := fixture.ownerHost, fixture.joinerHost, fixture.ctx, fixture.token
 	barrier := &committedEnrollmentOwnerStore{delegate: ownerStore,
 		committed: make(chan struct{}), resume: make(chan struct{})}
 	ownerProtocol, err := NewChannelEnrollmentOwner(ChannelEnrollmentOwnerOptions{
@@ -219,6 +176,63 @@ func TestChannelEnrollmentRecoversOwnerCommitAfterAcceptedResponseLoss(t *testin
 	assertEnrollmentDatabaseCounts(t, ownerPath, map[string]int{
 		"channel_members": 2, "enrollment_grant_uses": 1, "enrollment_receipts": 1,
 	})
+}
+
+type enrollmentHandshakeFixture struct {
+	acceptedAt     time.Time
+	ownerFixture   *testkit.SignedChannel
+	ownerIdentity  testkit.Identity
+	joinerIdentity testkit.Identity
+	ownerPath      string
+	joinerPath     string
+	ownerStore     *store.Store
+	joinerStore    *store.Store
+	ownerHost      host.Host
+	joinerHost     host.Host
+	ctx            context.Context
+	token          model.EnrollmentToken
+}
+
+func newEnrollmentHandshakeFixture(t *testing.T, name string, createdAt time.Time,
+	persistentJoiner bool,
+) enrollmentHandshakeFixture {
+	t.Helper()
+	ownerFixture := testkit.NewSignedChannelAt(t, name, createdAt)
+	ownerIdentity := ownerFixture.Owner()
+	joinerIdentity := testkit.NewIdentity(t, name+"-joiner")
+	ownerPath := filepath.Join(t.TempDir(), "owner", "node.db")
+	ownerStore := createEnrollmentTestStore(t, ownerPath, ownerIdentity, createdAt)
+	t.Cleanup(func() { _ = ownerStore.Close() })
+	joinerPath := filepath.Join(t.TempDir(), "joiner", "node.db")
+	var joinerStore *store.Store
+	if persistentJoiner {
+		joinerStore = createEnrollmentTestStore(t, joinerPath, joinerIdentity, createdAt)
+	} else {
+		joinerStore = openEnrollmentTestStore(t, joinerIdentity, createdAt)
+	}
+	grantID, _ := model.ParseGrantID("grant-" + name)
+	token := enrollmentTestToken(t, ownerFixture, grantID, name)
+	if _, err := ownerStore.CreateChannel(context.Background(), store.CreateChannelSpec{
+		Channel: ownerFixture.Channel(), Genesis: ownerFixture.OwnerMember().Member(), Token: token,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ownerHost := newEnrollmentTestHost(t, ownerIdentity)
+	joinerHost := newEnrollmentTestHost(t, joinerIdentity)
+	t.Cleanup(func() {
+		_ = joinerHost.Close()
+		_ = ownerHost.Close()
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	t.Cleanup(cancel)
+	if err := joinerHost.Connect(ctx, libp2ppeer.AddrInfo{ID: ownerHost.ID(),
+		Addrs: ownerHost.Addrs()}); err != nil {
+		t.Fatal(err)
+	}
+	return enrollmentHandshakeFixture{acceptedAt: createdAt.Add(time.Minute), ownerFixture: ownerFixture,
+		ownerIdentity: ownerIdentity, joinerIdentity: joinerIdentity, ownerPath: ownerPath,
+		joinerPath: joinerPath, ownerStore: ownerStore, joinerStore: joinerStore,
+		ownerHost: ownerHost, joinerHost: joinerHost, ctx: ctx, token: token}
 }
 
 func TestChannelEnrollmentClientRejectsWrongSecureOwner(t *testing.T) {
