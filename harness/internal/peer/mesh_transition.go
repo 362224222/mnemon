@@ -190,16 +190,26 @@ func (transition *MeshAuthorityTransition) Install() error {
 	}
 	runtime.mu.Lock()
 	runtime.addresses = cloneManagedAddresses(transition.candidate)
+	var primary error
+	primaryWon := false
 	if err != nil {
-		runtime.closed = true
+		primary = fmt.Errorf("%w: install authority: %w", ErrMeshRuntime, err)
+		primaryWon = runtime.terminateAuthorityLocked(primary)
 	}
 	runtime.mu.Unlock()
 	phase := uint32(meshTransitionInstalled)
 	if err != nil {
 		phase = meshTransitionFailed
 		runtime.addressSources.close()
-		err = errors.Join(fmt.Errorf("%w: install authority: %w", ErrMeshRuntime, err),
-			runtime.gossip.Close(), runtime.nodeHost.Close())
+		cleanupErr := errors.Join(runtime.gossip.Close(), runtime.nodeHost.Close())
+		runtime.mu.Lock()
+		runtime.terminalErr = errors.Join(runtime.terminalErr, cleanupErr)
+		runtime.mu.Unlock()
+		var firstCause error
+		if !primaryWon {
+			firstCause = runtime.terminalError()
+		}
+		err = errors.Join(primary, firstCause, cleanupErr)
 	}
 	transition.complete(phase, err)
 	return err
@@ -226,14 +236,24 @@ func (transition *MeshAuthorityTransition) Abort() error {
 	err := errors.Join(runtime.addressSources.abortDurable(transition),
 		transition.gossipTransition.Abort())
 	phase := uint32(meshTransitionAborted)
+	var primary error
+	primaryWon := false
 	if err != nil {
 		phase = meshTransitionFailed
+		primary = fmt.Errorf("%w: abort authority: %w", ErrMeshRuntime, err)
 		runtime.mu.Lock()
-		runtime.closed = true
+		primaryWon = runtime.terminateAuthorityLocked(primary)
 		runtime.mu.Unlock()
 		runtime.addressSources.close()
-		err = errors.Join(fmt.Errorf("%w: abort authority: %w", ErrMeshRuntime, err),
-			runtime.gossip.Close(), runtime.nodeHost.Close())
+		cleanupErr := errors.Join(runtime.gossip.Close(), runtime.nodeHost.Close())
+		runtime.mu.Lock()
+		runtime.terminalErr = errors.Join(runtime.terminalErr, cleanupErr)
+		runtime.mu.Unlock()
+		var firstCause error
+		if !primaryWon {
+			firstCause = runtime.terminalError()
+		}
+		err = errors.Join(primary, firstCause, cleanupErr)
 	}
 	transition.complete(phase, err)
 	return err

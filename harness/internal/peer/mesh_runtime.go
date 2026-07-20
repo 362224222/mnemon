@@ -19,6 +19,7 @@ var (
 	ErrMeshRuntime                       = errors.New("Mnemon mesh runtime")
 	ErrMeshAuthorityTransitionInProgress = errors.New("mesh authority transition is in progress")
 	ErrMeshAuthorityTransitionFinalized  = errors.New("mesh authority transition was already finalized")
+	errMeshRuntimeAuthorityTerminated    = fmt.Errorf("%w: authority terminated", ErrMeshRuntime)
 )
 
 // MeshRuntime owns the one libp2p Host, authority projection and Gossip router
@@ -32,14 +33,22 @@ type MeshRuntime struct {
 	endpoint       MeshEndpointSnapshot
 	cancel         context.CancelFunc
 
-	mu          sync.Mutex
-	addresses   map[libp2ppeer.ID][]ma.Multiaddr
-	transition  *MeshAuthorityTransition
-	closed      bool
-	terminalErr error
-	closeOnce   sync.Once
-	closeErr    error
+	mu            sync.Mutex
+	addresses     map[libp2ppeer.ID][]ma.Multiaddr
+	transition    *MeshAuthorityTransition
+	closed        bool
+	terminalErr   error
+	terminalCause error
+	terminalDone  chan struct{}
+	closeOnce     sync.Once
+	closeErr      error
 }
+
+var unavailableMeshRuntimeTerminalSignal = func() <-chan struct{} {
+	done := make(chan struct{})
+	close(done)
+	return done
+}()
 
 // NewMeshRuntime is the one-shot composition of BindMeshHost and Freeze for
 // callers that do not need to persist endpoint authority between the stages.
@@ -104,7 +113,7 @@ func freezeMeshRuntime(ctx context.Context, nodeHost *NodeHost, authority *Autho
 	}
 	return &MeshRuntime{nodeHost: nodeHost, gossip: gossip, authority: authority,
 		addressSources: addressSources, endpoint: endpoint.clone(),
-		addresses: cloneManagedAddresses(addresses)}, nil
+		addresses: cloneManagedAddresses(addresses), terminalDone: make(chan struct{})}, nil
 }
 
 func (runtime *MeshRuntime) managedRuntimeHost() host.Host {
@@ -163,6 +172,60 @@ func (runtime *MeshRuntime) HasCurrentSession(channelID model.ChannelID) bool {
 	return available && gossip.HasCurrentSession(channelID)
 }
 
+// terminalSignal closes when the frozen authority can no longer admit work.
+// It does not wait for the owned transports to finish physical cleanup.
+func (runtime *MeshRuntime) terminalSignal() <-chan struct{} {
+	if runtime == nil || runtime.terminalDone == nil {
+		return unavailableMeshRuntimeTerminalSignal
+	}
+	return runtime.terminalDone
+}
+
+// terminalError reports the primary authority-termination cause after
+// terminalSignal closes. Calling it before termination fails closed rather
+// than presenting a live runtime as a successful shutdown.
+func (runtime *MeshRuntime) terminalError() error {
+	if runtime == nil || runtime.terminalDone == nil {
+		return fmt.Errorf("%w: authority terminal signal is unavailable", ErrMeshRuntime)
+	}
+	select {
+	case <-runtime.terminalDone:
+	default:
+		return fmt.Errorf("%w: authority has not terminated", ErrMeshRuntime)
+	}
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	if !runtime.closed {
+		return fmt.Errorf("%w: authority terminal state is inconsistent", ErrMeshRuntime)
+	}
+	if runtime.terminalCause == nil {
+		return fmt.Errorf("%w: authority terminal cause is unavailable", ErrMeshRuntime)
+	}
+	return runtime.terminalCause
+}
+
+// terminateAuthorityLocked publishes the one authority-terminal edge. The
+// caller holds runtime.mu. Every non-nil primary is joined before checking
+// whether another owner already published the edge, preserving concurrent
+// failure aggregation without reopening or replacing the one signal.
+func (runtime *MeshRuntime) terminateAuthorityLocked(primary error) bool {
+	if primary != nil {
+		runtime.terminalErr = errors.Join(runtime.terminalErr, primary)
+	}
+	if runtime.closed {
+		return false
+	}
+	if primary == nil {
+		primary = errMeshRuntimeAuthorityTerminated
+	}
+	runtime.terminalCause = primary
+	runtime.closed = true
+	if runtime.terminalDone != nil {
+		close(runtime.terminalDone)
+	}
+	return true
+}
+
 func (runtime *MeshRuntime) Close() error {
 	if runtime == nil {
 		return nil
@@ -180,7 +243,7 @@ func (runtime *MeshRuntime) Close() error {
 				<-done
 				continue
 			}
-			runtime.closed = true
+			runtime.terminateAuthorityLocked(nil)
 			gossip = runtime.gossip
 			nodeHost = runtime.nodeHost
 			addressSources = runtime.addressSources
@@ -201,10 +264,13 @@ func (runtime *MeshRuntime) Close() error {
 			cancel()
 		}
 		runtime.mu.Lock()
-		runtime.closeErr = errors.Join(runtime.closeErr, runtime.terminalErr)
+		runtime.terminalErr = errors.Join(runtime.terminalErr, runtime.closeErr)
 		runtime.mu.Unlock()
 	})
-	return runtime.closeErr
+	runtime.mu.Lock()
+	result := runtime.terminalErr
+	runtime.mu.Unlock()
+	return result
 }
 
 func projectMeshRuntime(mesh store.ChannelMeshAuthority) (NetworkAuthoritySnapshot,

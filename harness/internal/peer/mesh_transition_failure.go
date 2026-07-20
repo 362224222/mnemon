@@ -15,14 +15,12 @@ func (runtime *MeshRuntime) failClosedEnrollmentTransport(cause error) {
 	if runtime == nil || cause == nil {
 		return
 	}
+	primary := fmt.Errorf("%w: retire enrollment transport: %w", ErrMeshRuntime, cause)
 	runtime.mu.Lock()
-	runtime.terminalErr = errors.Join(runtime.terminalErr,
-		fmt.Errorf("%w: retire enrollment transport: %w", ErrMeshRuntime, cause))
-	if runtime.closed {
+	if !runtime.terminateAuthorityLocked(primary) {
 		runtime.mu.Unlock()
 		return
 	}
-	runtime.closed = true
 	gossip := runtime.gossip
 	nodeHost := runtime.nodeHost
 	addressSources := runtime.addressSources
@@ -106,12 +104,21 @@ func (transition *MeshAuthorityTransition) FailClosed(cause error) error {
 	}
 
 	runtime := transition.runtime
-	result := transition.gossipTransition.FailClosed(cause)
+	primary := fmt.Errorf("%w: fail authority closed: %w", ErrMeshRuntime, cause)
 	runtime.mu.Lock()
-	runtime.closed = true
+	primaryWon := runtime.terminateAuthorityLocked(primary)
 	runtime.mu.Unlock()
+	cleanupErr := transition.gossipTransition.FailClosed(cause)
 	runtime.addressSources.close()
-	result = errors.Join(result, runtime.nodeHost.Close())
+	cleanupErr = errors.Join(cleanupErr, runtime.nodeHost.Close())
+	runtime.mu.Lock()
+	runtime.terminalErr = errors.Join(runtime.terminalErr, cleanupErr)
+	runtime.mu.Unlock()
+	var firstCause error
+	if !primaryWon {
+		firstCause = runtime.terminalError()
+	}
+	result := errors.Join(primary, firstCause, cleanupErr)
 	transition.complete(meshTransitionFailed, result)
 	return result
 }

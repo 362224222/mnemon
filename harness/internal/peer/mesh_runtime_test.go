@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"sort"
+	"sync"
 	"testing"
 
 	libp2ppeer "github.com/libp2p/go-libp2p/core/peer"
@@ -216,6 +217,75 @@ func TestMeshRuntimeRejectsAddressIdentityMismatchAndClosesOnce(t *testing.T) {
 	}
 	if _, err := runtime.Session(channel.Channel().ID()); !errors.Is(err, ErrMeshRuntime) {
 		t.Fatalf("session after close error = %v", err)
+	}
+}
+
+func TestMeshRuntimeTerminalSignalClosesOnceWithConcurrentClose(t *testing.T) {
+	owner := testkit.NewIdentity(t, "mesh-runtime-terminal-close")
+	st := openPeerMeshStore(t, owner, peerMeshTime(t, "2026-07-20T10:00:00Z"))
+	channel := testkit.NewSignedChannelForOwnerAt(t, "mesh-runtime-terminal-close", owner,
+		peerMeshTime(t, "2026-07-20T10:00:00Z"))
+	createPeerMeshChannel(t, st, channel, "runtime-terminal-close")
+	runtime := newTestMeshRuntime(t, context.Background(), owner,
+		readMeshRuntimeAuthority(t, st))
+	signal := runtime.terminalSignal()
+	if signal != runtime.terminalSignal() {
+		t.Fatal("terminalSignal did not retain one immutable channel")
+	}
+	select {
+	case <-signal:
+		t.Fatal("live MeshRuntime exposed a closed terminal signal")
+	default:
+	}
+	if err := runtime.terminalError(); !errors.Is(err, ErrMeshRuntime) {
+		t.Fatalf("terminalError before Close = %v", err)
+	}
+
+	const closers = 32
+	start := make(chan struct{})
+	errs := make(chan error, closers)
+	var callers sync.WaitGroup
+	callers.Add(closers)
+	for index := 0; index < closers; index++ {
+		go func() {
+			defer callers.Done()
+			<-start
+			errs <- runtime.Close()
+		}()
+	}
+	close(start)
+	callers.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent Close error = %v", err)
+		}
+	}
+	select {
+	case <-signal:
+	default:
+		t.Fatal("normal Close did not publish authority termination")
+	}
+	if err := runtime.terminalError(); !errors.Is(err, ErrMeshRuntime) {
+		t.Fatalf("normal terminalError = %v, want ErrMeshRuntime", err)
+	}
+	if signal != runtime.terminalSignal() {
+		t.Fatal("Close replaced the terminal signal channel")
+	}
+}
+
+func TestMeshRuntimeZeroTerminalSignalFailsClosed(t *testing.T) {
+	for name, runtime := range map[string]*MeshRuntime{"nil": nil, "malformed": {}} {
+		t.Run(name, func(t *testing.T) {
+			select {
+			case <-runtime.terminalSignal():
+			default:
+				t.Fatal("unavailable runtime returned a live terminal signal")
+			}
+			if err := runtime.terminalError(); !errors.Is(err, ErrMeshRuntime) {
+				t.Fatalf("terminalError = %v, want ErrMeshRuntime", err)
+			}
+		})
 	}
 }
 

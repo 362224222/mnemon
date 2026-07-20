@@ -29,8 +29,18 @@ func TestMeshAuthorityTransitionFailsClosedWithoutInstallingCandidate(t *testing
 		t.Fatal(err)
 	}
 	cause := errors.New("durable authority diverged")
+	terminal := fixture.runtime.terminalSignal()
 	if err := transition.FailClosed(cause); !errors.Is(err, cause) {
 		t.Fatalf("fail closed error = %v", err)
+	}
+	select {
+	case <-terminal:
+	default:
+		t.Fatal("FailClosed did not publish authority termination")
+	}
+	if err := fixture.runtime.terminalError(); !errors.Is(err, ErrMeshRuntime) ||
+		!errors.Is(err, cause) {
+		t.Fatalf("FailClosed terminal error = %v", err)
 	}
 	if err := transition.FailClosed(cause); !errors.Is(err, cause) {
 		t.Fatalf("fail closed replay error = %v", err)
@@ -72,9 +82,19 @@ func TestMeshAuthorityTransitionInstallFailureClosesWholeHost(t *testing.T) {
 	fixture.runtime.gossip.mu.Lock()
 	fixture.runtime.gossip.transition = nil
 	fixture.runtime.gossip.mu.Unlock()
+	terminal := fixture.runtime.terminalSignal()
 	if err := transition.Install(); !errors.Is(err, ErrMeshRuntime) ||
 		!errors.Is(err, ErrGossipTopic) {
 		t.Fatalf("injected Mesh install failure = %v", err)
+	}
+	select {
+	case <-terminal:
+	default:
+		t.Fatal("failed Install did not publish authority termination")
+	}
+	if err := fixture.runtime.terminalError(); !errors.Is(err, ErrMeshRuntime) ||
+		!errors.Is(err, ErrGossipTopic) {
+		t.Fatalf("failed Install terminal error = %v", err)
 	}
 	if transition.phase.Load() != meshTransitionFailed || !fixture.runtime.closed ||
 		!fixture.runtime.nodeHost.gater.closed.Load() {
@@ -83,6 +103,101 @@ func TestMeshAuthorityTransitionInstallFailureClosesWholeHost(t *testing.T) {
 	}
 	if _, err := fixture.runtime.Session(fixture.channel.Channel().ID()); !errors.Is(err, ErrMeshRuntime) {
 		t.Fatalf("Session after failed install error = %v", err)
+	}
+}
+
+func TestMeshAuthorityTransitionAbortFailureSignalsInnerCause(t *testing.T) {
+	t.Parallel()
+	fixture := newMeshTransitionFailureFixture(t, "mesh-abort-failure",
+		"2026-07-20T10:30:00Z")
+	remote := fixture.channel.AppendActive(t, "mesh-abort-failure-remote")
+	mergePeerMeshRoster(t, fixture.store, fixture.channel, remote.Member(), remote.Member().CreatedAt())
+	transition, err := fixture.runtime.BeginAuthorityTransition(
+		readMeshRuntimeAuthority(t, fixture.store))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Consume the inner token as installed while the outer durable owner still
+	// believes it can abort. The outer Abort must treat that contradiction as
+	// terminal instead of reopening either authority generation.
+	if err := transition.gossipTransition.Install(); err != nil {
+		t.Fatal(err)
+	}
+	terminal := fixture.runtime.terminalSignal()
+	if err := transition.Abort(); !errors.Is(err, ErrMeshRuntime) ||
+		!errors.Is(err, ErrGossipTransitionFinalized) {
+		t.Fatalf("injected Mesh abort failure = %v", err)
+	}
+	select {
+	case <-terminal:
+	default:
+		t.Fatal("failed Abort did not publish authority termination")
+	}
+	if err := fixture.runtime.terminalError(); !errors.Is(err, ErrMeshRuntime) ||
+		!errors.Is(err, ErrGossipTransitionFinalized) {
+		t.Fatalf("failed Abort terminal error = %v", err)
+	}
+	if transition.phase.Load() != meshTransitionFailed || !fixture.runtime.closed ||
+		!fixture.runtime.nodeHost.gater.closed.Load() {
+		t.Fatalf("failed Abort retained Host authority: phase=%d runtime_closed=%v gater_closed=%v",
+			transition.phase.Load(), fixture.runtime.closed,
+			fixture.runtime.nodeHost.gater.closed.Load())
+	}
+}
+
+func TestMeshRuntimeNormalTerminalCauseSurvivesLateFatal(t *testing.T) {
+	fixture := newMeshTransitionFailureFixture(t, "mesh-terminal-normal-first",
+		"2026-07-20T10:45:00Z")
+	signal := fixture.runtime.terminalSignal()
+	if err := fixture.runtime.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-signal:
+	default:
+		t.Fatal("normal Close did not publish authority termination")
+	}
+	terminal := fixture.runtime.terminalError()
+	if terminal != errMeshRuntimeAuthorityTerminated {
+		t.Fatalf("normal terminal cause = %v, want stable generic sentinel", terminal)
+	}
+
+	lateFatal := errors.New("late enrollment transport failure")
+	fixture.runtime.failClosedEnrollmentTransport(lateFatal)
+	if current := fixture.runtime.terminalError(); current != terminal ||
+		errors.Is(current, lateFatal) {
+		t.Fatalf("late fatal changed frozen terminal cause: before=%v after=%v",
+			terminal, current)
+	}
+	if err := fixture.runtime.Close(); !errors.Is(err, lateFatal) {
+		t.Fatalf("Close aggregate after late fatal = %v", err)
+	}
+	if signal != fixture.runtime.terminalSignal() {
+		t.Fatal("late fatal replaced the one terminal signal")
+	}
+}
+
+func TestMeshRuntimeFatalTerminalCauseSurvivesNormalClose(t *testing.T) {
+	fixture := newMeshTransitionFailureFixture(t, "mesh-terminal-fatal-first",
+		"2026-07-20T10:50:00Z")
+	signal := fixture.runtime.terminalSignal()
+	fatal := errors.New("first enrollment transport failure")
+	fixture.runtime.failClosedEnrollmentTransport(fatal)
+	select {
+	case <-signal:
+	default:
+		t.Fatal("fatal termination did not publish authority termination")
+	}
+	terminal := fixture.runtime.terminalError()
+	if !errors.Is(terminal, ErrMeshRuntime) || !errors.Is(terminal, fatal) {
+		t.Fatalf("fatal terminal cause = %v", terminal)
+	}
+	if err := fixture.runtime.Close(); !errors.Is(err, fatal) {
+		t.Fatalf("normal Close aggregate after fatal = %v", err)
+	}
+	if current := fixture.runtime.terminalError(); current != terminal {
+		t.Fatalf("normal Close changed frozen terminal cause: before=%v after=%v",
+			terminal, current)
 	}
 }
 
@@ -261,19 +376,14 @@ func TestEnrollmentTransportExpiryOwnerFailClosedDoesNotSelfJoin(t *testing.T) {
 	gater.mu.Lock()
 	gater.signalExpiryOwnerLocked()
 	gater.mu.Unlock()
-	deadline := time.Now().Add(3 * time.Second)
-	failedClosed := false
-	for time.Now().Before(deadline) {
-		fixture.runtime.mu.Lock()
-		failedClosed = fixture.runtime.closed && errors.Is(fixture.runtime.terminalErr, sentinel)
-		fixture.runtime.mu.Unlock()
-		if failedClosed {
-			break
-		}
-		time.Sleep(time.Millisecond)
+	select {
+	case <-fixture.runtime.terminalSignal():
+	case <-time.After(3 * time.Second):
+		t.Fatal("expiry owner did not publish transport fail-closed")
 	}
-	if !failedClosed {
-		t.Fatal("expiry owner did not enter transport fail-closed")
+	if err := fixture.runtime.terminalError(); !errors.Is(err, ErrMeshRuntime) ||
+		!errors.Is(err, sentinel) {
+		t.Fatalf("expiry transport terminal error = %v", err)
 	}
 	closeDone := make(chan error, 1)
 	go func() { closeDone <- fixture.runtime.Close() }()
