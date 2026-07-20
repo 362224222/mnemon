@@ -13,10 +13,13 @@ import (
 
 const channelAuthorityResolveTimeout = 10 * time.Second
 
-var ErrChannelMemberAuthority = errors.New("mnemond Channel member authority")
+var ErrChannelAuthority = errors.New("mnemond Channel authority")
 
-type channelMemberAuthorityStore interface {
+type channelAuthorityStore interface {
 	ReadChannelMeshAuthority(context.Context) (store.ChannelMeshAuthority, error)
+	PrepareCreateChannel(context.Context, store.CreateChannelSpec) (store.CreateChannelPlan, error)
+	CommitCreateChannel(context.Context, store.CreateChannelPlan) (store.CreateChannelResult, error)
+	ResolveCreateChannel(context.Context, store.CreateChannelPlan) (store.ChannelAuthorityPlanResolution, error)
 	PrepareChannelRosterMerge(context.Context, store.MergeChannelRosterSpec) (store.ChannelRosterMergePlan, error)
 	CommitChannelRosterMerge(context.Context, store.ChannelRosterMergePlan) (store.MergeChannelRosterResult, error)
 	ResolveChannelRosterMerge(context.Context, store.ChannelRosterMergePlan) (store.ChannelAuthorityPlanResolution, error)
@@ -25,87 +28,114 @@ type channelMemberAuthorityStore interface {
 	ResolveInboundChannelBaseline(context.Context, store.InboundChannelBaselinePlan) (store.ChannelAuthorityPlanResolution, error)
 }
 
-type channelMemberAuthorityTransition interface {
+type channelAuthorityTransition interface {
 	Install() error
 	Abort() error
 	FailClosed(error) error
 }
 
-type channelMemberAuthorityRuntime interface {
-	begin(store.ChannelMeshAuthority) (channelMemberAuthorityTransition, error)
+type channelAuthorityRuntime interface {
+	begin(store.ChannelMeshAuthority) (channelAuthorityTransition, error)
 }
 
-type meshChannelMemberAuthorityRuntime struct{ runtime *peer.MeshRuntime }
+type meshChannelAuthorityRuntime struct{ runtime *peer.MeshRuntime }
 
-func (runtime meshChannelMemberAuthorityRuntime) begin(
+func (runtime meshChannelAuthorityRuntime) begin(
 	candidate store.ChannelMeshAuthority,
-) (channelMemberAuthorityTransition, error) {
+) (channelAuthorityTransition, error) {
 	return runtime.runtime.BeginAuthorityTransition(candidate)
 }
 
-// ChannelMemberController is the production prepare -> runtime drain -> Store
-// CAS -> runtime install boundary for /mnemon/channel/1 member traffic. Its
-// capacity-one owner is the boundary production composition must reuse for
-// every Channel authority mutation; Store remains the only durable source of truth.
-type ChannelMemberController struct {
-	store   channelMemberAuthorityStore
-	runtime channelMemberAuthorityRuntime
+// ChannelAuthorityCoordinator is the Node-private prepare -> runtime drain ->
+// Store CAS -> runtime install boundary for every local Channel authority
+// mutation. Its single capacity-one token serializes create, member roster,
+// and baseline authority while Store remains the durable source of truth.
+type ChannelAuthorityCoordinator struct {
+	store   channelAuthorityStore
+	runtime channelAuthorityRuntime
 	token   chan struct{}
 }
 
-var _ peer.ChannelMemberController = (*ChannelMemberController)(nil)
+var _ peer.ChannelMemberController = (*ChannelAuthorityCoordinator)(nil)
 
-func NewChannelMemberController(st *store.Store,
+func NewChannelAuthorityCoordinator(st *store.Store,
 	runtime *peer.MeshRuntime,
-) (*ChannelMemberController, error) {
+) (*ChannelAuthorityCoordinator, error) {
 	if st == nil || runtime == nil {
-		return nil, fmt.Errorf("%w: Store and mesh runtime are required", ErrChannelMemberAuthority)
+		return nil, fmt.Errorf("%w: Store and mesh runtime are required", ErrChannelAuthority)
 	}
-	return newChannelMemberController(st, meshChannelMemberAuthorityRuntime{runtime: runtime})
+	return newChannelAuthorityCoordinator(st, meshChannelAuthorityRuntime{runtime: runtime})
 }
 
-func newChannelMemberController(st channelMemberAuthorityStore,
-	runtime channelMemberAuthorityRuntime,
-) (*ChannelMemberController, error) {
+func newChannelAuthorityCoordinator(st channelAuthorityStore,
+	runtime channelAuthorityRuntime,
+) (*ChannelAuthorityCoordinator, error) {
 	if st == nil || runtime == nil {
-		return nil, fmt.Errorf("%w: Store and mesh runtime are required", ErrChannelMemberAuthority)
+		return nil, fmt.Errorf("%w: Store and mesh runtime are required", ErrChannelAuthority)
 	}
 	token := make(chan struct{}, 1)
 	token <- struct{}{}
-	return &ChannelMemberController{store: st, runtime: runtime, token: token}, nil
+	return &ChannelAuthorityCoordinator{store: st, runtime: runtime, token: token}, nil
 }
 
-func (controller *ChannelMemberController) ReconcileMemberHelloGate(ctx context.Context,
+// CreateChannel prepares and commits the exact Store-bound create candidate
+// while holding the same logical Channel authority token as remote member
+// reconciliation.
+func (coordinator *ChannelAuthorityCoordinator) CreateChannel(ctx context.Context,
+	spec store.CreateChannelSpec,
+) (store.CreateChannelResult, error) {
+	release, err := coordinator.acquire(ctx)
+	if err != nil {
+		return store.CreateChannelResult{}, err
+	}
+	defer release()
+	plan, err := coordinator.store.PrepareCreateChannel(ctx, spec)
+	if err != nil {
+		return store.CreateChannelResult{}, err
+	}
+	return executeChannelAuthorityPlan(ctx, coordinator.runtime,
+		channelAuthorityPlanSteps[store.CreateChannelResult]{
+			candidate: plan.Candidate(), changes: plan.ChangesAuthority(), expected: plan.Result(),
+			commit: func(commitCtx context.Context) (store.CreateChannelResult, error) {
+				return coordinator.store.CommitCreateChannel(commitCtx, plan)
+			},
+			resolve: func(resolveCtx context.Context) (store.ChannelAuthorityPlanResolution, error) {
+				return coordinator.store.ResolveCreateChannel(resolveCtx, plan)
+			},
+		})
+}
+
+func (coordinator *ChannelAuthorityCoordinator) ReconcileMemberHelloGate(ctx context.Context,
 	control peer.ChannelMemberHelloControl,
 ) (peer.ChannelMemberHelloAuthority, error) {
-	release, err := controller.acquire(ctx)
+	release, err := coordinator.acquire(ctx)
 	if err != nil {
 		return peer.ChannelMemberHelloAuthority{}, err
 	}
 	defer release()
 	if len(control.ProofRecords) == 0 {
-		roster, readErr := controller.readRoster(ctx, control.ChannelID)
+		roster, readErr := coordinator.readRoster(ctx, control.ChannelID)
 		return peer.ChannelMemberHelloAuthority{Roster: roster}, readErr
 	}
-	plan, err := controller.store.PrepareChannelRosterMerge(ctx, store.MergeChannelRosterSpec{
+	plan, err := coordinator.store.PrepareChannelRosterMerge(ctx, store.MergeChannelRosterSpec{
 		ChannelID: control.ChannelID, AuthenticatedTransportPeerID: control.AuthenticatedPeerID,
 		Records: control.ProofRecords, At: control.At,
 	})
 	if err != nil {
-		return peer.ChannelMemberHelloAuthority{}, mapChannelMemberAuthorityError(err)
+		return peer.ChannelMemberHelloAuthority{}, mapChannelAuthorityError(err)
 	}
-	result, err := executeChannelAuthorityPlan(ctx, controller.runtime,
+	result, err := executeChannelAuthorityPlan(ctx, coordinator.runtime,
 		channelAuthorityPlanSteps[store.MergeChannelRosterResult]{
 			candidate: plan.Candidate(), changes: plan.ChangesAuthority(), expected: plan.Result(),
 			commit: func(commitCtx context.Context) (store.MergeChannelRosterResult, error) {
-				return controller.store.CommitChannelRosterMerge(commitCtx, plan)
+				return coordinator.store.CommitChannelRosterMerge(commitCtx, plan)
 			},
 			resolve: func(resolveCtx context.Context) (store.ChannelAuthorityPlanResolution, error) {
-				return controller.store.ResolveChannelRosterMerge(resolveCtx, plan)
+				return coordinator.store.ResolveChannelRosterMerge(resolveCtx, plan)
 			},
 		})
 	if err != nil {
-		return peer.ChannelMemberHelloAuthority{}, mapChannelMemberAuthorityError(err)
+		return peer.ChannelMemberHelloAuthority{}, mapChannelAuthorityError(err)
 	}
 	switch result.Status {
 	case store.ChannelRosterApplied, store.ChannelRosterDuplicate:
@@ -116,26 +146,26 @@ func (controller *ChannelMemberController) ReconcileMemberHelloGate(ctx context.
 		return peer.ChannelMemberHelloAuthority{}, peer.ErrChannelMemberRosterConflict
 	default:
 		return peer.ChannelMemberHelloAuthority{}, fmt.Errorf(
-			"%w: Store returned unknown roster result", ErrChannelMemberAuthority)
+			"%w: Store returned unknown roster result", ErrChannelAuthority)
 	}
 }
 
-func (controller *ChannelMemberController) FreezeMemberRosterForSync(ctx context.Context,
+func (coordinator *ChannelAuthorityCoordinator) FreezeMemberRosterForSync(ctx context.Context,
 	control peer.ChannelMemberSyncControl,
 ) (peer.ChannelMemberRosterSnapshot, error) {
-	release, err := controller.acquire(ctx)
+	release, err := coordinator.acquire(ctx)
 	if err != nil {
 		return peer.ChannelMemberRosterSnapshot{}, err
 	}
 	defer release()
-	roster, err := controller.readRoster(ctx, control.ChannelID)
+	roster, err := coordinator.readRoster(ctx, control.ChannelID)
 	return peer.ChannelMemberRosterSnapshot{Roster: roster}, err
 }
 
-func (controller *ChannelMemberController) InstallMemberBaselineGate(ctx context.Context,
+func (coordinator *ChannelAuthorityCoordinator) InstallMemberBaselineGate(ctx context.Context,
 	control peer.ChannelMemberBaselineControl,
 ) (peer.ChannelMemberBaselineAuthority, error) {
-	release, err := controller.acquire(ctx)
+	release, err := coordinator.acquire(ctx)
 	if err != nil {
 		return peer.ChannelMemberBaselineAuthority{}, err
 	}
@@ -143,24 +173,24 @@ func (controller *ChannelMemberController) InstallMemberBaselineGate(ctx context
 	baseline := store.ChannelDataBaseline{ChannelID: control.Baseline.ChannelID,
 		OriginPeerID: control.Baseline.OriginPeerID, OriginEpoch: control.Baseline.OriginEpoch,
 		BaselineChannelSequence: control.Baseline.BaselineChannelSequence}
-	plan, err := controller.store.PrepareInboundChannelBaseline(ctx,
+	plan, err := coordinator.store.PrepareInboundChannelBaseline(ctx,
 		store.InstallInboundChannelBaselineSpec{AuthenticatedPeerID: control.AuthenticatedPeerID,
 			Baseline: baseline, At: control.At})
 	if err != nil {
-		return peer.ChannelMemberBaselineAuthority{}, mapChannelMemberAuthorityError(err)
+		return peer.ChannelMemberBaselineAuthority{}, mapChannelAuthorityError(err)
 	}
-	result, err := executeChannelAuthorityPlan(ctx, controller.runtime,
+	result, err := executeChannelAuthorityPlan(ctx, coordinator.runtime,
 		channelAuthorityPlanSteps[store.InstallInboundChannelBaselineResult]{
 			candidate: plan.Candidate(), changes: plan.ChangesAuthority(), expected: plan.Result(),
 			commit: func(commitCtx context.Context) (store.InstallInboundChannelBaselineResult, error) {
-				return controller.store.CommitInboundChannelBaseline(commitCtx, plan)
+				return coordinator.store.CommitInboundChannelBaseline(commitCtx, plan)
 			},
 			resolve: func(resolveCtx context.Context) (store.ChannelAuthorityPlanResolution, error) {
-				return controller.store.ResolveInboundChannelBaseline(resolveCtx, plan)
+				return coordinator.store.ResolveInboundChannelBaseline(resolveCtx, plan)
 			},
 		})
 	if err != nil {
-		return peer.ChannelMemberBaselineAuthority{}, mapChannelMemberAuthorityError(err)
+		return peer.ChannelMemberBaselineAuthority{}, mapChannelAuthorityError(err)
 	}
 	roster, err := rosterFromChannelMesh(plan.Candidate(), result.Baseline.ChannelID)
 	if err != nil {
@@ -172,25 +202,25 @@ func (controller *ChannelMemberController) InstallMemberBaselineGate(ctx context
 	return peer.ChannelMemberBaselineAuthority{Baseline: committed, Roster: roster}, nil
 }
 
-func (controller *ChannelMemberController) acquire(ctx context.Context) (func(), error) {
-	if controller == nil || controller.store == nil || controller.runtime == nil ||
-		controller.token == nil || ctx == nil {
-		return nil, fmt.Errorf("%w: controller is unavailable", ErrChannelMemberAuthority)
+func (coordinator *ChannelAuthorityCoordinator) acquire(ctx context.Context) (func(), error) {
+	if coordinator == nil || coordinator.store == nil || coordinator.runtime == nil ||
+		coordinator.token == nil || ctx == nil {
+		return nil, fmt.Errorf("%w: coordinator is unavailable", ErrChannelAuthority)
 	}
 	select {
 	case <-ctx.Done():
-		return nil, fmt.Errorf("%w: mutation wait: %w", ErrChannelMemberAuthority, ctx.Err())
-	case <-controller.token:
-		return func() { controller.token <- struct{}{} }, nil
+		return nil, fmt.Errorf("%w: mutation wait: %w", ErrChannelAuthority, ctx.Err())
+	case <-coordinator.token:
+		return func() { coordinator.token <- struct{}{} }, nil
 	}
 }
 
-func (controller *ChannelMemberController) readRoster(ctx context.Context,
+func (coordinator *ChannelAuthorityCoordinator) readRoster(ctx context.Context,
 	channelID model.ChannelID,
 ) (model.VerifiedRoster, error) {
-	mesh, err := controller.store.ReadChannelMeshAuthority(ctx)
+	mesh, err := coordinator.store.ReadChannelMeshAuthority(ctx)
 	if err != nil {
-		return model.VerifiedRoster{}, fmt.Errorf("%w: read mesh: %w", ErrChannelMemberAuthority, err)
+		return model.VerifiedRoster{}, fmt.Errorf("%w: read mesh: %w", ErrChannelAuthority, err)
 	}
 	return rosterFromChannelMesh(mesh, channelID)
 }
@@ -215,7 +245,7 @@ type channelAuthorityPlanSteps[T any] struct {
 }
 
 func executeChannelAuthorityPlan[T any](ctx context.Context,
-	runtime channelMemberAuthorityRuntime, steps channelAuthorityPlanSteps[T],
+	runtime channelAuthorityRuntime, steps channelAuthorityPlanSteps[T],
 ) (T, error) {
 	var zero T
 	if !steps.changes {
@@ -234,18 +264,18 @@ func executeChannelAuthorityPlan[T any](ctx context.Context,
 		if beginErr != nil {
 			return zero, errors.Join(commitErr, fmt.Errorf(
 				"%w: prepare runtime transition after unknown commit: %w",
-				ErrChannelMemberAuthority, beginErr))
+				ErrChannelAuthority, beginErr))
 		}
 		return resolveChannelAuthorityCommit(ctx, transition, steps, commitErr)
 	}
 	transition, err := runtime.begin(steps.candidate)
 	if err != nil {
-		return zero, fmt.Errorf("%w: prepare runtime transition: %w", ErrChannelMemberAuthority, err)
+		return zero, fmt.Errorf("%w: prepare runtime transition: %w", ErrChannelAuthority, err)
 	}
 	committed, commitErr := steps.commit(ctx)
 	if commitErr == nil {
 		if err := transition.Install(); err != nil {
-			return zero, fmt.Errorf("%w: install committed authority: %w", ErrChannelMemberAuthority, err)
+			return zero, fmt.Errorf("%w: install committed authority: %w", ErrChannelAuthority, err)
 		}
 		return committed, nil
 	}
@@ -253,7 +283,7 @@ func executeChannelAuthorityPlan[T any](ctx context.Context,
 }
 
 func resolveChannelAuthorityCommit[T any](ctx context.Context,
-	transition channelMemberAuthorityTransition, steps channelAuthorityPlanSteps[T],
+	transition channelAuthorityTransition, steps channelAuthorityPlanSteps[T],
 	commitErr error,
 ) (T, error) {
 	var zero T
@@ -264,18 +294,18 @@ func resolveChannelAuthorityCommit[T any](ctx context.Context,
 	case resolveErr == nil && resolution == store.ChannelAuthorityPlanUnchanged:
 		if abortErr := transition.Abort(); abortErr != nil {
 			return zero, errors.Join(commitErr, fmt.Errorf(
-				"%w: abort uncommitted authority: %w", ErrChannelMemberAuthority, abortErr))
+				"%w: abort uncommitted authority: %w", ErrChannelAuthority, abortErr))
 		}
 		return zero, commitErr
 	case resolveErr == nil && resolution == store.ChannelAuthorityPlanCandidate:
 		if installErr := transition.Install(); installErr != nil {
 			return zero, fmt.Errorf("%w: install resolved authority: %w",
-				ErrChannelMemberAuthority, installErr)
+				ErrChannelAuthority, installErr)
 		}
 		return steps.expected, nil
 	default:
 		cause := errors.Join(commitErr, resolveErr,
-			fmt.Errorf("%w: durable authority outcome diverged", ErrChannelMemberAuthority))
+			fmt.Errorf("%w: durable authority outcome diverged", ErrChannelAuthority))
 		if failErr := transition.FailClosed(cause); failErr != nil {
 			return zero, failErr
 		}
@@ -283,7 +313,7 @@ func resolveChannelAuthorityCommit[T any](ctx context.Context,
 	}
 }
 
-func mapChannelMemberAuthorityError(err error) error {
+func mapChannelAuthorityError(err error) error {
 	switch {
 	case errors.Is(err, store.ErrChannelBaselineConflict):
 		return peer.ErrChannelMemberBaselineConflict

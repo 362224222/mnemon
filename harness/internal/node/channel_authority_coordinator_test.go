@@ -16,8 +16,8 @@ import (
 	ma "github.com/multiformats/go-multiaddr"
 )
 
-func TestChannelMemberControllerReconcilesRealStoreAndMeshRuntime(t *testing.T) {
-	fixture := newRealChannelMemberControllerFixture(t)
+func TestChannelAuthorityCoordinatorReconcilesRealStoreAndMeshRuntime(t *testing.T) {
+	fixture := newRealChannelAuthorityCoordinatorFixture(t)
 	initial, err := fixture.runtime.Session(fixture.channel.Channel().ID())
 	if err != nil || !initial.IsCurrent() {
 		t.Fatalf("initial topic session = (%#v,%v)", initial, err)
@@ -56,28 +56,21 @@ func TestChannelMemberControllerReconcilesRealStoreAndMeshRuntime(t *testing.T) 
 		model.BindingActive, true)
 }
 
-type realChannelMemberControllerFixture struct {
+type realChannelAuthorityCoordinatorFixture struct {
 	store      *store.Store
 	runtime    *peer.MeshRuntime
-	controller *ChannelMemberController
+	controller *ChannelAuthorityCoordinator
 	channel    *testkit.SignedChannel
 	remote     testkit.MemberFixture
 	at         time.Time
 }
 
-func newRealChannelMemberControllerFixture(t *testing.T) realChannelMemberControllerFixture {
+func newRealChannelAuthorityCoordinatorFixture(t *testing.T) realChannelAuthorityCoordinatorFixture {
 	t.Helper()
 	at := time.Date(2026, 7, 19, 4, 0, 0, 0, time.UTC)
-	owner := testkit.NewIdentity(t, "node-channel-member-owner")
-	workspace := t.TempDir()
-	st, err := store.Open(context.Background(), filepath.Join(workspace, "node", "node.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	initializeRealChannelMemberStore(t, st, owner, workspace, at)
+	st, owner := newInitializedChannelAuthorityStore(t, "node-channel-member-owner", at)
 	channel := testkit.NewSignedChannelForOwnerAt(t, "node-channel-member", owner, at)
-	createRealChannelMemberChannel(t, st, channel, owner, at)
+	createSpec := realChannelCreateSpec(t, channel, owner, at)
 	mesh, err := st.ReadChannelMeshAuthority(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -95,15 +88,34 @@ func newRealChannelMemberControllerFixture(t *testing.T) realChannelMemberContro
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = runtime.Close() })
-	controller, err := NewChannelMemberController(st, runtime)
+	controller, err := NewChannelAuthorityCoordinator(st, runtime)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return realChannelMemberControllerFixture{store: st, runtime: runtime, controller: controller,
+	created, err := controller.CreateChannel(context.Background(), createSpec)
+	if err != nil || !created.Created || created.Channel.ID() != channel.Channel().ID() {
+		t.Fatalf("CreateChannel() = (%#v,%v)", created, err)
+	}
+	return realChannelAuthorityCoordinatorFixture{store: st, runtime: runtime, controller: controller,
 		channel: channel, remote: channel.AppendActive(t, "node-channel-member-remote"), at: at}
 }
 
-func initializeRealChannelMemberStore(t *testing.T, st *store.Store, owner testkit.Identity,
+func newInitializedChannelAuthorityStore(t *testing.T, seed string,
+	at time.Time,
+) (*store.Store, testkit.Identity) {
+	t.Helper()
+	owner := testkit.NewIdentity(t, seed)
+	workspace := t.TempDir()
+	st, err := store.Open(context.Background(), filepath.Join(workspace, "node", "node.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	initializeRealChannelAuthorityStore(t, st, owner, workspace, at)
+	return st, owner
+}
+
+func initializeRealChannelAuthorityStore(t *testing.T, st *store.Store, owner testkit.Identity,
 	workspace string, at time.Time,
 ) {
 	t.Helper()
@@ -127,9 +139,9 @@ func initializeRealChannelMemberStore(t *testing.T, st *store.Store, owner testk
 	}
 }
 
-func createRealChannelMemberChannel(t *testing.T, st *store.Store,
+func realChannelCreateSpec(t *testing.T,
 	channel *testkit.SignedChannel, owner testkit.Identity, at time.Time,
-) {
+) store.CreateChannelSpec {
 	t.Helper()
 	grantID, _ := model.ParseGrantID("grant-node-channel-member")
 	payload, err := model.NewEnrollmentTokenPayload(model.EnrollmentTokenSpec{
@@ -158,10 +170,8 @@ func createRealChannelMemberChannel(t *testing.T, st *store.Store,
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.CreateChannel(context.Background(), store.CreateChannelSpec{
-		Channel: channel.Channel(), Genesis: channel.OwnerMember().Member(), Token: token}); err != nil {
-		t.Fatal(err)
-	}
+	return store.CreateChannelSpec{Channel: channel.Channel(),
+		Genesis: channel.OwnerMember().Member(), Token: token}
 }
 
 func assertRealChannelMemberBinding(t *testing.T, st *store.Store,
@@ -174,6 +184,206 @@ func assertRealChannelMemberBinding(t *testing.T, st *store.Store,
 		t.Fatalf("real member binding = (%#v,%v), want state=%s inbound=%t",
 			readiness, err, want, inbound)
 	}
+}
+
+func TestChannelAuthorityCoordinatorCreateTransitionsPreparedCandidateInOrder(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 7, 19, 5, 0, 0, 0, time.UTC)
+	st, owner := newInitializedChannelAuthorityStore(t, "node-channel-create-order-owner", at)
+	channel := testkit.NewSignedChannelForOwnerAt(t, "node-channel-create-order", owner, at)
+	trace := []string{}
+	tracedStore := &channelAuthorityCreateTraceStore{Store: st, trace: &trace}
+	runtime := newChannelAuthorityRuntimeTrace(&trace)
+	coordinator, err := newChannelAuthorityCoordinator(tracedStore, runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := coordinator.CreateChannel(context.Background(),
+		realChannelCreateSpec(t, channel, owner, at))
+	if err != nil || !result.Created || result.Channel.ID() != channel.Channel().ID() {
+		t.Fatalf("CreateChannel() = (%#v,%v)", result, err)
+	}
+	assertChannelAuthorityTrace(t, trace, "prepare", "begin", "commit", "install")
+}
+
+func TestChannelAuthorityCoordinatorSerializesCreateMemberAndBaseline(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 7, 19, 6, 0, 0, 0, time.UTC)
+	st, owner := newInitializedChannelAuthorityStore(t, "node-channel-serialize-owner", at)
+	channel := testkit.NewSignedChannelForOwnerAt(t, "node-channel-serialize", owner, at)
+	gatedStore := newGatedChannelAuthorityStore(st)
+	t.Cleanup(func() { close(gatedStore.release) })
+	trace := []string{}
+	coordinator, err := newChannelAuthorityCoordinator(gatedStore,
+		newChannelAuthorityRuntimeTrace(&trace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	createSpec := realChannelCreateSpec(t, channel, owner, at)
+	start := make(chan struct{})
+	done := make(chan string, 3)
+	go func() {
+		<-start
+		_, _ = coordinator.CreateChannel(context.Background(), createSpec)
+		done <- "create"
+	}()
+	go func() {
+		<-start
+		_, _ = coordinator.FreezeMemberRosterForSync(context.Background(),
+			peer.ChannelMemberSyncControl{ChannelID: channel.Channel().ID()})
+		done <- "member"
+	}()
+	go func() {
+		<-start
+		_, _ = coordinator.InstallMemberBaselineGate(context.Background(),
+			peer.ChannelMemberBaselineControl{})
+		done <- "baseline"
+	}()
+	close(start)
+
+	entered := make(map[string]bool, 3)
+	for range 3 {
+		select {
+		case call := <-gatedStore.entered:
+			if entered[call] {
+				t.Fatalf("authority operation entered twice: %q", call)
+			}
+			entered[call] = true
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for serialized authority operation")
+		}
+		select {
+		case call := <-gatedStore.entered:
+			t.Fatalf("authority operations overlapped at Store boundary: %q", call)
+		case <-time.After(100 * time.Millisecond):
+		}
+		gatedStore.release <- struct{}{}
+	}
+	for range 3 {
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("serialized authority operation did not finish")
+		}
+	}
+	for _, want := range []string{"create", "member", "baseline"} {
+		if !entered[want] {
+			t.Fatalf("authority operation %q never entered Store", want)
+		}
+	}
+}
+
+func TestChannelAuthorityCoordinatorMutationWaitHonorsCancellation(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 7, 19, 7, 0, 0, 0, time.UTC)
+	st, owner := newInitializedChannelAuthorityStore(t, "node-channel-cancel-owner", at)
+	channel := testkit.NewSignedChannelForOwnerAt(t, "node-channel-cancel", owner, at)
+	gatedStore := newGatedChannelAuthorityStore(st)
+	t.Cleanup(func() { close(gatedStore.release) })
+	trace := []string{}
+	coordinator, err := newChannelAuthorityCoordinator(gatedStore,
+		newChannelAuthorityRuntimeTrace(&trace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	createSpec := realChannelCreateSpec(t, channel, owner, at)
+	createDone := make(chan error, 1)
+	go func() {
+		_, createErr := coordinator.CreateChannel(context.Background(), createSpec)
+		createDone <- createErr
+	}()
+	select {
+	case call := <-gatedStore.entered:
+		if call != "create" {
+			t.Fatalf("first authority operation = %q, want create", call)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("create did not acquire Channel authority")
+	}
+
+	waitCtx, cancelWait := context.WithCancel(context.Background())
+	waitDone := make(chan error, 1)
+	go func() {
+		_, waitErr := coordinator.InstallMemberBaselineGate(waitCtx,
+			peer.ChannelMemberBaselineControl{})
+		waitDone <- waitErr
+	}()
+	select {
+	case waitErr := <-waitDone:
+		t.Fatalf("authority waiter returned before cancellation: %v", waitErr)
+	case <-time.After(100 * time.Millisecond):
+	}
+	cancelWait()
+	waitErr := <-waitDone
+	if !errors.Is(waitErr, context.Canceled) || !errors.Is(waitErr, ErrChannelAuthority) {
+		t.Fatalf("canceled authority wait error = %v", waitErr)
+	}
+	select {
+	case call := <-gatedStore.entered:
+		t.Fatalf("canceled operation reached Store boundary: %q", call)
+	default:
+	}
+	gatedStore.release <- struct{}{}
+	if err := <-createDone; err != nil {
+		t.Fatalf("CreateChannel() after canceled waiter = %v", err)
+	}
+}
+
+type channelAuthorityCreateTraceStore struct {
+	*store.Store
+	trace *[]string
+}
+
+func (st *channelAuthorityCreateTraceStore) PrepareCreateChannel(ctx context.Context,
+	spec store.CreateChannelSpec,
+) (store.CreateChannelPlan, error) {
+	*st.trace = append(*st.trace, "prepare")
+	return st.Store.PrepareCreateChannel(ctx, spec)
+}
+
+func (st *channelAuthorityCreateTraceStore) CommitCreateChannel(ctx context.Context,
+	plan store.CreateChannelPlan,
+) (store.CreateChannelResult, error) {
+	*st.trace = append(*st.trace, "commit")
+	return st.Store.CommitCreateChannel(ctx, plan)
+}
+
+type gatedChannelAuthorityStore struct {
+	*store.Store
+	entered chan string
+	release chan struct{}
+}
+
+func newGatedChannelAuthorityStore(st *store.Store) *gatedChannelAuthorityStore {
+	return &gatedChannelAuthorityStore{Store: st, entered: make(chan string, 3),
+		release: make(chan struct{})}
+}
+
+func (st *gatedChannelAuthorityStore) ReadChannelMeshAuthority(
+	ctx context.Context,
+) (store.ChannelMeshAuthority, error) {
+	st.gate("member")
+	return st.Store.ReadChannelMeshAuthority(ctx)
+}
+
+func (st *gatedChannelAuthorityStore) PrepareCreateChannel(ctx context.Context,
+	spec store.CreateChannelSpec,
+) (store.CreateChannelPlan, error) {
+	st.gate("create")
+	return st.Store.PrepareCreateChannel(ctx, spec)
+}
+
+func (st *gatedChannelAuthorityStore) PrepareInboundChannelBaseline(ctx context.Context,
+	spec store.InstallInboundChannelBaselineSpec,
+) (store.InboundChannelBaselinePlan, error) {
+	st.gate("baseline")
+	return st.Store.PrepareInboundChannelBaseline(ctx, spec)
+}
+
+func (st *gatedChannelAuthorityStore) gate(call string) {
+	st.entered <- call
+	<-st.release
 }
 
 func TestExecuteChannelAuthorityPlanCommitsBeforeInstall(t *testing.T) {
@@ -278,7 +488,7 @@ func TestExecuteChannelAuthorityPlanCommitsRuntimeEquivalentPlanWithoutTransitio
 	assertChannelAuthorityTrace(t, trace, "commit")
 }
 
-func TestMapChannelMemberAuthorityErrorPreservesStableProtocolCategories(t *testing.T) {
+func TestMapChannelAuthorityErrorPreservesStableProtocolCategories(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {
 		input error
@@ -290,7 +500,7 @@ func TestMapChannelMemberAuthorityErrorPreservesStableProtocolCategories(t *test
 		{store.ErrChannelRosterConflict, peer.ErrChannelMemberRosterConflict},
 		{store.ErrChannelRosterInput, peer.ErrChannelMemberRosterConflict},
 	} {
-		if got := mapChannelMemberAuthorityError(test.input); !errors.Is(got, test.want) {
+		if got := mapChannelAuthorityError(test.input); !errors.Is(got, test.want) {
 			t.Fatalf("map authority error %v = %v, want %v", test.input, got, test.want)
 		}
 	}
@@ -308,7 +518,7 @@ func newChannelAuthorityRuntimeTrace(trace *[]string) *channelAuthorityRuntimeTr
 
 func (runtime *channelAuthorityRuntimeTrace) begin(
 	store.ChannelMeshAuthority,
-) (channelMemberAuthorityTransition, error) {
+) (channelAuthorityTransition, error) {
 	*runtime.trace = append(*runtime.trace, "begin")
 	return runtime.transition, nil
 }
