@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/agent"
+	"github.com/mnemon-dev/mnemon/harness/internal/artifact"
 	"github.com/mnemon-dev/mnemon/harness/internal/assets"
 	"github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/integration"
@@ -92,7 +93,7 @@ func TestControllerServesOwnerOnlyManagedRoutesFromOneStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	controller, err := NewController(context.Background(), ControllerOptions{NodeState: nodeState, Workspace: workspace,
-		Store: st, Profile: enabled, Signer: signer, Clock: controllerTestClock{enabled.UpdatedAt()},
+		Store: st, ArtifactCAS: newControllerTestCAS(t, nodeState), Profile: enabled, Signer: signer, Clock: controllerTestClock{enabled.UpdatedAt()},
 		Install: testInstallationVerifier(workspace, nodeState, bundle), Control: newTestControlTransportFactory()})
 	if err != nil {
 		t.Fatal(err)
@@ -683,7 +684,8 @@ func newControllerWithTestWakeWorker(t *testing.T, fixture daemonFixture,
 		t.Fatal(err)
 	}
 	controller, err := NewController(context.Background(), ControllerOptions{NodeState: fixture.nodeState,
-		Workspace: fixture.workspace, Store: authority.store, Profile: authority.authority.Profile,
+		Workspace: fixture.workspace, Store: authority.store,
+		ArtifactCAS: newControllerTestCAS(t, fixture.nodeState), Profile: authority.authority.Profile,
 		Signer: authority.identity.PublicationSigner(), Clock: controllerTestClock{fixture.profile.UpdatedAt()},
 		Install: fixture.install, wakeWorker: worker, Control: newTestControlTransportFactory()})
 	if err != nil {
@@ -695,6 +697,15 @@ func newControllerWithTestWakeWorker(t *testing.T, fixture daemonFixture,
 			t.Errorf("close Controller Store: %v", err)
 		}
 	}
+}
+
+func newControllerTestCAS(t testing.TB, nodeState string) *artifact.CAS {
+	t.Helper()
+	cas, err := artifact.NewCAS(filepath.Join(nodeState, "objects", "sha256"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cas
 }
 
 func waitControllerHealth(t *testing.T, client *localapi.Client, status string) {

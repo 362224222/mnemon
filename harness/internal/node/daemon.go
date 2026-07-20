@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/agent"
+	"github.com/mnemon-dev/mnemon/harness/internal/artifact"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/peer"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
@@ -43,13 +44,15 @@ type WakeAdapterFactoryOptions struct {
 }
 
 type DaemonOptions struct {
-	Workspace          string
-	Clock              Clock
-	Install            InstallationVerifier
-	Credentials        ProfileCredentialVerifier
-	WakeAdapterFactory WakeAdapterFactory
-	Attachments        agent.WakeAttachmentFilesystem
-	Control            ControlTransportFactory
+	Workspace            string
+	Clock                Clock
+	Install              InstallationVerifier
+	Credentials          ProfileCredentialVerifier
+	WakeAdapterFactory   WakeAdapterFactory
+	Attachments          agent.WakeAttachmentFilesystem
+	Control              ControlTransportFactory
+	artifactCASFactory   daemonArtifactCASFactory
+	meshTransportFactory daemonMeshTransportFactory
 }
 
 // Daemon owns the strict restart path for one workspace-local Node. It binds
@@ -57,12 +60,15 @@ type DaemonOptions struct {
 // controller is allowed to create its socket. It never initializes missing
 // state or silently rotates identity.
 type Daemon struct {
-	workspace  string
-	nodeState  string
-	identity   *Identity
-	store      *store.Store
-	mesh       *peer.MeshRuntime
-	controller *Controller
+	workspace        string
+	nodeState        string
+	identity         *Identity
+	store            *store.Store
+	artifactCAS      *artifact.CAS
+	mesh             *peer.MeshRuntime
+	channelAuthority *ChannelAuthorityCoordinator
+	meshTransport    managedMeshTransport
+	controller       *Controller
 
 	lifecycleMu  sync.Mutex
 	serveStarted bool
@@ -138,7 +144,11 @@ func openDaemon(ctx context.Context, options DaemonOptions,
 	identity := authority.identity
 	st := authority.store
 	var mesh *peer.MeshRuntime
+	var meshTransport managedMeshTransport
 	fail := func(cause error) (*Daemon, error) {
+		if !isNilNodeInterface(meshTransport) {
+			cause = errors.Join(cause, meshTransport.Close())
+		}
 		if mesh != nil {
 			cause = errors.Join(cause, mesh.Close())
 		}
@@ -168,16 +178,37 @@ func openDaemon(ctx context.Context, options DaemonOptions,
 			return fail(fmt.Errorf("%w: managed wake adapter factory returned no adapter", ErrDaemonAuthority))
 		}
 	}
-	controller, err := NewController(ctx, ControllerOptions{NodeState: nodeState, Workspace: workspace,
+	controllerOptions, err := prepareControllerOptions(ctx, ControllerOptions{
+		NodeState: nodeState, Workspace: workspace,
 		Store: st, Profile: authority.authority.Profile, Signer: identity.PublicationSigner(), Clock: options.Clock,
 		Install: options.Install, actionPolicy: actionPolicy,
 		WakeAdapter: wakeAdapter, Attachments: options.Attachments, Control: options.Control,
 		BeforeAccept: beforeAccept})
 	if err != nil {
-		return fail(fmt.Errorf("%w: compose controller: %v", ErrDaemonAuthority, err))
+		return fail(fmt.Errorf("%w: preflight controller: %w", ErrDaemonAuthority, err))
+	}
+	cas, err := newDaemonArtifactCAS(filepath.Join(nodeState, "objects", "sha256"),
+		options.artifactCASFactory)
+	if err != nil {
+		return fail(fmt.Errorf("%w: %w", ErrDaemonAuthority, err))
+	}
+	var channelAuthority *ChannelAuthorityCoordinator
+	if mesh != nil {
+		channelAuthority, meshTransport, err = newDaemonMeshTransport(ctx, mesh, st,
+			identity, cas, controllerOptions.Clock, options.meshTransportFactory)
+		if err != nil {
+			return fail(fmt.Errorf("%w: %w", ErrDaemonAuthority, err))
+		}
+	}
+	controllerOptions.ArtifactCAS = cas
+	controllerOptions.meshTransport = meshTransport
+	controller, err := newController(controllerOptions)
+	if err != nil {
+		return fail(fmt.Errorf("%w: compose controller: %w", ErrDaemonAuthority, err))
 	}
 	return &Daemon{workspace: workspace, nodeState: nodeState, identity: identity,
-		store: st, mesh: mesh, controller: controller, serveDone: make(chan struct{})}, nil
+		store: st, artifactCAS: cas, mesh: mesh, channelAuthority: channelAuthority,
+		meshTransport: meshTransport, controller: controller, serveDone: make(chan struct{})}, nil
 }
 
 func (daemon *Daemon) Serve(ctx context.Context) error {
@@ -236,6 +267,9 @@ func (daemon *Daemon) Close() error {
 				"%w: retain mesh and Store after unsafe control drain: %w",
 				ErrDaemonAuthority, ErrControlTransportUndrained))
 		} else {
+			if !isNilNodeInterface(daemon.meshTransport) {
+				daemon.closeErr = errors.Join(daemon.closeErr, daemon.meshTransport.Close())
+			}
 			if daemon.mesh != nil {
 				daemon.closeErr = errors.Join(daemon.closeErr, daemon.mesh.Close())
 			}

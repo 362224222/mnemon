@@ -21,7 +21,7 @@ const (
 	testControlForcedDrainTimeout = time.Second
 )
 
-func TestControllerTransportPreparationFailureClosesResourcesAndReleasesFence(t *testing.T) {
+func TestControllerTransportPreparationFailureClosesResourcesAndRetainsFence(t *testing.T) {
 	errPrepare := errors.New("test control transport preparation failed")
 	for _, test := range []struct {
 		name       string
@@ -67,10 +67,13 @@ func TestControllerTransportPreparationFailureClosesResourcesAndReleasesFence(t 
 			defer closeStore()
 			err := controller.Serve(context.Background())
 			if err == nil || test.wantCause != nil && !errors.Is(err, test.wantCause) ||
-				prepares != 1 || releases != 1 || transport.closes != test.wantCloses ||
+				prepares != 1 || releases != 0 || transport.closes != test.wantCloses ||
 				transport.runs != 0 || transport.readiness != 0 || transport.shutdowns != 0 {
 				t.Fatalf("Serve() = %v; prepares=%d releases=%d transport=%#v",
 					err, prepares, releases, transport)
+			}
+			if err := controller.releaseBeforeAccept(); err != nil || releases != 1 {
+				t.Fatalf("owner release = %v, calls=%d", err, releases)
 			}
 		})
 	}
@@ -124,7 +127,8 @@ func newControllerWithControlFactory(t *testing.T, fixture daemonFixture,
 	}
 	controller, err := NewController(context.Background(), ControllerOptions{
 		NodeState: fixture.nodeState, Workspace: fixture.workspace, Store: authority.store,
-		Profile: authority.authority.Profile, Signer: authority.identity.PublicationSigner(),
+		ArtifactCAS: newControllerTestCAS(t, fixture.nodeState),
+		Profile:     authority.authority.Profile, Signer: authority.identity.PublicationSigner(),
 		Clock: controllerTestClock{fixture.profile.UpdatedAt()}, Install: fixture.install,
 		Control: factory, BeforeAccept: beforeAccept,
 	})

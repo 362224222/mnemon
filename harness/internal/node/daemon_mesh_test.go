@@ -312,6 +312,7 @@ func TestManagedDaemonUnsafeControlDrainRetainsMeshAndStore(t *testing.T) {
 		!errors.Is(err, store.ErrWriterActive) {
 		t.Fatalf("unsafe drain released Store = (%v,%v)", reopened, err)
 	}
+	closeRetainedDaemonMeshTransport(t, daemon.meshTransport)
 	if err := daemon.mesh.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -320,6 +321,18 @@ func TestManagedDaemonUnsafeControlDrainRetainsMeshAndStore(t *testing.T) {
 	}
 	assertDaemonTestMeshPort(t, final, true)
 	assertDaemonStoreReopenable(t, fixture.nodeState)
+}
+
+func closeRetainedDaemonMeshTransport(t *testing.T, transport managedMeshTransport) {
+	t.Helper()
+	readyCtx, cancelReady := context.WithTimeout(context.Background(), time.Second)
+	defer cancelReady()
+	if err := transport.Readiness(readyCtx); err != nil {
+		t.Fatalf("unsafe drain revoked live mesh transport: %v", err)
+	}
+	if err := transport.Close(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestManagedDaemonCloseBeforeServeReleasesPermitAfterMeshAndStore(t *testing.T) {

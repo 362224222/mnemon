@@ -175,7 +175,7 @@ func TestOpenManagedDaemonRetainsInheritedPermitUntilSocketReadyWithoutSelfDeadl
 	}
 }
 
-func TestManagedDaemonControlPrepareFailureReleasesPermitBeforeReturn(t *testing.T) {
+func TestManagedDaemonControlPrepareFailureRetainsPermitUntilOwnerClose(t *testing.T) {
 	fixture := newDaemonFixture(t, true)
 	publishDaemonTestMeshPending(t, fixture)
 	parent := acquirePermitTestEnsureLock(t, fixture.nodeState)
@@ -205,7 +205,7 @@ func TestManagedDaemonControlPrepareFailureReleasesPermitBeforeReturn(t *testing
 	if err := daemon.Serve(context.Background()); !errors.Is(err, errPrepare) || prepares != 1 {
 		t.Fatalf("Serve() = %v, prepares=%d", err, prepares)
 	}
-	assertClosedDescriptor(t, childFD)
+	assertOpenDescriptor(t, childFD)
 	if err := validateHeldEnsureLock(parent, fixture.nodeState); err != nil {
 		t.Fatalf("control preparation failure disturbed parent permit: %v", err)
 	}
@@ -215,6 +215,7 @@ func TestManagedDaemonControlPrepareFailureReleasesPermitBeforeReturn(t *testing
 	if err := daemon.Close(); err != nil {
 		t.Fatal(err)
 	}
+	assertClosedDescriptor(t, childFD)
 	assertDaemonStoreReopenable(t, fixture.nodeState)
 }
 

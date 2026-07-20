@@ -3,8 +3,6 @@ package node
 import (
 	"context"
 	"errors"
-	"fmt"
-	"os"
 	"path/filepath"
 	"sync"
 
@@ -19,6 +17,7 @@ type ControllerOptions struct {
 	NodeState    string
 	Workspace    string
 	Store        *store.Store
+	ArtifactCAS  *artifact.CAS
 	Profile      model.Profile
 	Signer       event.PublicationSigner
 	Clock        Clock
@@ -37,6 +36,7 @@ type ControllerOptions struct {
 	// wakeWorker is a same-package test seam for lifecycle and readiness
 	// verification. Production composition always uses WakeAdapter.
 	wakeWorker     managedWakeWorker
+	meshTransport  managedMeshTransport
 	actionHandlers agent.ActionHandlers
 }
 
@@ -53,11 +53,13 @@ type Controller struct {
 	assetRevision     string
 	profile           model.Profile
 	store             *store.Store
+	artifactCAS       *artifact.CAS
 	admission         *controllerAdmissionGate
 	activation        controllerManagedActivationGate
 	controlFactory    ControlTransportFactory
 	controlService    ManagedControlService
 	wakeWorker        managedWakeWorker
+	meshTransport     managedMeshTransport
 	shutdownRequested chan struct{}
 	shutdownOnce      sync.Once
 	serveMu           sync.Mutex
@@ -68,76 +70,11 @@ type Controller struct {
 }
 
 func NewController(ctx context.Context, options ControllerOptions) (*Controller, error) {
-	var err error
-	options, err = validateControllerOptions(ctx, options)
+	options, err := prepareControllerOptions(ctx, options)
 	if err != nil {
 		return nil, err
 	}
-	stateInfo, err := os.Lstat(options.NodeState)
-	if err != nil || !stateInfo.IsDir() || stateInfo.Mode()&os.ModeSymlink != 0 ||
-		stateInfo.Mode().Perm() != 0o700 || options.Store.Path() != filepath.Join(options.NodeState, "node.db") {
-		return nil, errors.New("mnemond controller Store is outside its owner-only Node state")
-	}
-	assetRevision := options.Profile.ActiveAssetRevision()
-	if err := bindControllerActionPolicy(ctx, options.Profile, options.Install, assetRevision, &options.actionPolicy, &options.actionHandlers); err != nil {
-		return nil, err
-	}
-	cas, err := artifact.NewCAS(filepath.Join(options.NodeState, "objects", "sha256"))
-	if err != nil {
-		return nil, err
-	}
-	capturer, err := artifact.NewCapturer(options.Workspace, cas, options.Clock.Now)
-	if err != nil {
-		return nil, err
-	}
-	capture, err := agent.NewArtifactCaptureCoordinator(capturer, cas, cas, options.Store, options.Clock)
-	if err != nil {
-		return nil, err
-	}
-	materializer, err := artifact.NewViewMaterializer(options.NodeState, cas)
-	if err != nil {
-		return nil, err
-	}
-	currentViews, err := agent.NewCurrentViewCoordinator(materializer)
-	if err != nil {
-		return nil, err
-	}
-	viewValidator, err := agent.NewReadonlyArtifactViewValidator(options.NodeState)
-	if err != nil {
-		return nil, err
-	}
-	artifactResolver, err := agent.NewArtifactResolver(capture, viewValidator)
-	if err != nil {
-		return nil, err
-	}
-	executor, err := agent.NewTeamworkActionExecutor(options.Store, agent.TeamworkActionExecutorOptions{
-		Profile: options.Profile, Actions: options.actionHandlers, Signer: options.Signer, Artifacts: artifactResolver, Clock: options.Clock,
-	})
-	if err != nil {
-		return nil, err
-	}
-	installGate := controllerActivationGate{expected: options.Profile, install: options.Install}
-	admission := newControllerAdmissionGate()
-	wakeWorker := options.wakeWorker
-	if wakeWorker == nil && options.WakeAdapter != nil {
-		wakeWorker, err = newManagedWakeWorker(options.Store, options.Profile,
-			options.Clock, options.Install, options.WakeAdapter, options.Attachments, admission)
-		if err != nil {
-			return nil, fmt.Errorf("mnemond controller managed wake worker: %w", err)
-		}
-	}
-	gate := controllerManagedActivationGate{install: installGate, worker: wakeWorker}
-	service, err := agent.NewService(options.Store, agent.ServiceOptions{Actions: options.actionHandlers,
-		Clock: options.Clock, Executor: executor, CurrentViews: currentViews, ActivationGate: gate})
-	if err != nil {
-		return nil, err
-	}
-	controller := &Controller{nodeState: options.NodeState, assetRevision: assetRevision, store: options.Store,
-		profile: options.Profile, admission: admission, activation: gate,
-		controlFactory: options.Control, wakeWorker: wakeWorker,
-		shutdownRequested: make(chan struct{}), beforeAccept: options.BeforeAccept}
-	controller.controlService = controllerAdmissionService{gate: admission, next: service}
-	return controller, nil
+	return newController(options)
 }
 
 func validateControllerOptions(ctx context.Context, options ControllerOptions) (ControllerOptions, error) {
@@ -376,43 +313,9 @@ func (controller *Controller) Serve(ctx context.Context) error {
 		if !isNilNodeInterface(transport) {
 			closeErr = transport.Close()
 		}
-		return errors.Join(err, closeErr, controller.releaseBeforeAccept())
+		return errors.Join(err, closeErr)
 	}
-	if err := controller.releaseBeforeAccept(); err != nil {
-		return errors.Join(err, transport.Close())
-	}
-	components := []componentSpec{{Name: "local-control",
-		Readiness: transport.Readiness, Run: transport.Run, Shutdown: transport.Shutdown,
-		Restart:   componentRestartNever,
-		Resources: componentResourceBudget{MaxConcurrent: controllerControlConnectionLimit}}}
-	if controller.wakeWorker != nil {
-		workerStarted := make(chan struct{})
-		components = append(components, componentSpec{Name: "managed-wake",
-			Dependencies: []string{"local-control"},
-			Readiness: func(readyCtx context.Context) error {
-				// Dynamic Runtime health remains authoritative in WakeWorker.Snapshot.
-				// This signal only proves that lifecycle ownership has transferred.
-				select {
-				case <-workerStarted:
-					return nil
-				case <-readyCtx.Done():
-					return readyCtx.Err()
-				}
-			},
-			Run: func(workerCtx context.Context) error {
-				close(workerStarted)
-				_ = controller.wakeWorker.Run(workerCtx)
-				// WakeWorker publishes domain failure through its existing Snapshot.
-				// Keep the lifecycle component present so local control remains reachable and
-				// managed actions stay fail-closed until explicit Node shutdown.
-				if workerCtx.Err() == nil {
-					<-workerCtx.Done()
-				}
-				return nil
-			},
-			Shutdown: func(context.Context) error { return nil }, Restart: componentRestartNever,
-			Resources: componentResourceBudget{MaxConcurrent: 1}})
-	}
+	components := controller.runtimeComponents(transport)
 	supervisor, err := newNodeSupervisor(components)
 	if err != nil {
 		return errors.Join(err, transport.Close())
