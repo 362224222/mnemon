@@ -146,27 +146,17 @@ func (s *Store) ResolveDeadlineWinner(ctx context.Context, spec DeadlineResoluti
 		return DeadlineResolutionResult{}, err
 	}
 
-	if err := insertAcceptedEvent(ctx, tx, spec.Expiry.Publication); err != nil {
+	delivery, err := readWorkExpiryDeliveryFence(ctx, tx, spec.Scope,
+		current.Participants().ReviewerPeerID())
+	if err != nil {
 		return DeadlineResolutionResult{}, err
 	}
-	if err := applyWorkMutation(ctx, tx, mutation, event); err != nil {
-		return DeadlineResolutionResult{}, err
+	status, _ := delivery.status()
+	if status != "pending" {
+		return DeadlineResolutionResult{}, ErrAudienceUnavailable
 	}
-	if err := reconcileWorkDerivationDisposition(ctx, tx, mutation.Work.Ref()); err != nil {
-		return DeadlineResolutionResult{}, err
-	}
-	for _, ref := range event.Artifacts() {
-		if _, err := insertEventArtifactPin(ctx, tx, ref.RootDigest(), event.ID(), event.AcceptedAt()); err != nil {
-			return DeadlineResolutionResult{}, err
-		}
-	}
-	if err := insertPublicationEvidence(ctx, tx, event); err != nil {
-		return DeadlineResolutionResult{}, err
-	}
-	if err := advancePublicationHead(ctx, tx, event, trustedNow); err != nil {
-		return DeadlineResolutionResult{}, err
-	}
-	if err := advanceNodeOriginSequence(ctx, tx, spec.Scope, trustedNow); err != nil {
+	if err := applyWorkExpiryEffects(ctx, tx, spec.Scope, spec.Expiry, event,
+		delivery, trustedNow); err != nil {
 		return DeadlineResolutionResult{}, err
 	}
 
@@ -227,8 +217,21 @@ func requireExactDeadlineCause(ctx context.Context, tx *sql.Tx, expiry model.Eve
 	if len(causes) != 1 {
 		return fmt.Errorf("%w: expiry must cite exactly the current Work update", ErrDeadlineResolution)
 	}
+	want, err := exactDeadlineCause(ctx, tx, current)
+	if err != nil {
+		return err
+	}
+	if causes[0] != want {
+		return fmt.Errorf("%w: expiry does not cite the current Work update", ErrDeadlineResolution)
+	}
+	return nil
+}
+
+func exactDeadlineCause(ctx context.Context, q rowQuerier,
+	current model.ReviewWork,
+) (model.EventKey, error) {
 	var originText, epochText, channelText, homeText, workText, eventTypeText, sourceText, acceptedText string
-	err := tx.QueryRowContext(ctx, `SELECT origin_peer_id,origin_epoch,channel_id,work_home_peer_id,work_id,
+	err := q.QueryRowContext(ctx, `SELECT origin_peer_id,origin_epoch,channel_id,work_home_peer_id,work_id,
 		event_type,source,accepted_at
 		FROM events WHERE event_id=?`, current.UpdatedBy().String()).
 		Scan(&originText, &epochText, &channelText, &homeText, &workText, &eventTypeText, &sourceText, &acceptedText)
@@ -237,24 +240,21 @@ func requireExactDeadlineCause(ctx context.Context, tx *sql.Tx, expiry model.Eve
 		workText != current.Ref().WorkID().String() || originText != current.Ref().HomePeerID().String() ||
 		model.EventType(eventTypeText) != deadlineCurrentEventType(current.State()) ||
 		sourceText != string(model.EventSourceLocal) || timeErr != nil || !acceptedAt.Equal(current.UpdatedAt()) {
-		return fmt.Errorf("%w: current Work update Event is not exact", ErrDeadlineResolution)
+		return model.EventKey{}, fmt.Errorf("%w: current Work update Event is not exact", ErrDeadlineResolution)
 	}
 	origin, err := model.ParsePeerID(originText)
 	if err != nil {
-		return err
+		return model.EventKey{}, err
 	}
 	epoch, err := model.ParseOriginEpoch(epochText)
 	if err != nil {
-		return err
+		return model.EventKey{}, err
 	}
 	want, err := model.NewEventKey(origin, epoch, current.UpdatedBy())
 	if err != nil {
-		return err
+		return model.EventKey{}, err
 	}
-	if causes[0] != want {
-		return fmt.Errorf("%w: expiry does not cite the current Work update", ErrDeadlineResolution)
-	}
-	return nil
+	return want, nil
 }
 
 func deadlineCurrentEventType(state model.WorkState) model.EventType {

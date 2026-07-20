@@ -1,86 +1,13 @@
 package store
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 )
-
-func validateAdmissionAuthority(ctx context.Context, tx *sql.Tx, spec LocalAcceptanceSpec,
-	operation model.Operation, acceptedAt time.Time,
-) ([]byte, error) {
-	snapshot := spec.Scope
-	node, err := readNode(ctx, tx)
-	if err != nil || node.PeerID() != snapshot.Node().PeerID() || node.OriginEpoch() != snapshot.Node().OriginEpoch() ||
-		node.NextOriginSequence() != snapshot.FirstOriginSequence() || node.ActiveAssetRevision() != snapshot.Node().ActiveAssetRevision() {
-		return nil, fmt.Errorf("%w: Node authority changed", ErrAdmissionConflict)
-	}
-	profile, err := readProfile(ctx, tx)
-	if err != nil || !profile.Enabled() || !sameProfileIdentity(profile, snapshot.Profile()) ||
-		!sameProfileAuthority(profile, snapshot.Profile()) || profile.ActiveAssetRevision() != node.ActiveAssetRevision() {
-		return nil, fmt.Errorf("%w: Profile authority changed", ErrAdmissionConflict)
-	}
-	if spec.Operation != nil {
-		var runProfile, runtime, runStatus string
-		err := tx.QueryRowContext(ctx, `SELECT profile_id,runtime_kind,status FROM agent_runs WHERE run_id=?`,
-			operation.AgentRunID().String()).Scan(&runProfile, &runtime, &runStatus)
-		if err != nil || runProfile != profile.ID().String() || runtime != string(profile.Runtime()) ||
-			(runStatus != "starting" && runStatus != "running" && runStatus != "runtime_finished") {
-			return nil, fmt.Errorf("%w: acting AgentRun authority changed", ErrAdmissionConflict)
-		}
-	}
-	count := uint64(len(spec.Items))
-	if node.NextOriginSequence() > model.MaxSQLiteInteger-count || acceptedAt.Before(node.UpdatedAt()) {
-		return nil, fmt.Errorf("%w: origin sequence successor exhausted or clock regressed", ErrAdmissionConflict)
-	}
-	var status, topic string
-	var rosterRevision, sourceHead uint64
-	var rosterHash []byte
-	err = tx.QueryRowContext(ctx, `SELECT c.status,c.topic_state,c.roster_head_revision,c.roster_head_hash,
-		p.source_head_channel_seq FROM channels c JOIN publication_epochs p ON p.channel_id=c.channel_id
-		AND p.origin_peer_id=? AND p.origin_epoch=? WHERE c.channel_id=?`, node.PeerID().String(),
-		node.OriginEpoch().String(), snapshot.ChannelID().String()).Scan(&status, &topic, &rosterRevision, &rosterHash, &sourceHead)
-	if err != nil || status != string(model.ChannelActive) || topic != string(model.TopicJoined) ||
-		rosterRevision != snapshot.PublicationRoster().Revision() || !bytes.Equal(rosterHash, snapshot.PublicationRoster().Digest().Bytes()) ||
-		sourceHead+1 != snapshot.FirstChannelSequence() || sourceHead > model.MaxSQLiteInteger-count {
-		return nil, fmt.Errorf("%w: Channel or publication head changed", ErrAdmissionConflict)
-	}
-	var memberRevision uint64
-	var memberHash, publicKey []byte
-	var epoch, memberStatus string
-	err = tx.QueryRowContext(ctx, `SELECT revision,record_hash,origin_epoch,status,public_key FROM channel_members
-		WHERE channel_id=? AND member_peer_id=? ORDER BY revision DESC LIMIT 1`, snapshot.ChannelID().String(),
-		node.PeerID().String()).Scan(&memberRevision, &memberHash, &epoch, &memberStatus, &publicKey)
-	if err != nil || memberRevision != snapshot.OriginMember().Revision() ||
-		!bytes.Equal(memberHash, snapshot.OriginMember().Digest().Bytes()) || epoch != node.OriginEpoch().String() ||
-		memberStatus != string(model.MemberActive) {
-		return nil, fmt.Errorf("%w: origin member head changed", ErrAdmissionConflict)
-	}
-	seen := make(map[model.PeerID]struct{})
-	for _, item := range spec.Items {
-		for _, target := range item.Publication.Event().Audience().Peers() {
-			if _, ok := seen[target]; ok {
-				continue
-			}
-			seen[target] = struct{}{}
-			var binding string
-			var confirmed sql.NullString
-			err := tx.QueryRowContext(ctx, `SELECT b.state,a.baseline_confirmed_at FROM peer_bindings b
-				LEFT JOIN peer_pull_acks a ON a.channel_id=b.channel_id AND a.target_peer_id=b.peer_id
-				AND a.origin_peer_id=? AND a.origin_epoch=? WHERE b.channel_id=? AND b.peer_id=?`,
-				node.PeerID().String(), node.OriginEpoch().String(), snapshot.ChannelID().String(), target.String()).Scan(&binding, &confirmed)
-			if err != nil || binding != string(model.BindingActive) || !confirmed.Valid {
-				return nil, fmt.Errorf("%w: target %s", ErrAudienceUnavailable, target.String())
-			}
-		}
-	}
-	return append([]byte(nil), publicKey...), nil
-}
 
 func validateWorkItem(item LocalAcceptanceItem, event model.Event) error {
 	mutatesWork := event.Type() == model.EventReviewOffered || event.Type() == model.EventReviewAccepted ||
