@@ -54,11 +54,20 @@ func validateChannelCreateResponse(response ChannelCreateResponse) *APIError {
 }
 
 func validateChannelJoinResponse(response ChannelJoinResponse) *APIError {
-	if response.SchemaVersion != SchemaVersion || response.Status != "joined" ||
+	if response.SchemaVersion != SchemaVersion || !validChannelJoinStatus(response.Status) ||
 		validateChannelView(response.Channel) != nil {
 		return invalidControlResponse("Channel join response is invalid")
 	}
 	return nil
+}
+
+func validChannelJoinStatus(status string) bool {
+	switch status {
+	case "joined", "replayed", "member_revoked", "channel_closed":
+		return true
+	default:
+		return false
+	}
 }
 
 func validateChannelInviteResponse(response ChannelInviteResponse) *APIError {

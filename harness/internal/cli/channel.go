@@ -219,8 +219,20 @@ func (app *channelApp) join(ctx context.Context, client channelControlClient, ar
 	if jsonOutput {
 		return app.writeJSON(response)
 	}
-	_, err = fmt.Fprintf(app.stdout, "Joined Channel %s (%s)\n",
-		response.Channel.Alias, response.Channel.Topic.Status)
+	switch response.Status {
+	case "member_revoked":
+		_, err = fmt.Fprintf(app.stdout, "Channel %s membership is terminal (member revoked)\n",
+			response.Channel.Alias)
+	case "channel_closed":
+		_, err = fmt.Fprintf(app.stdout, "Channel %s is terminal (closed)\n",
+			response.Channel.Alias)
+	case "replayed":
+		_, err = fmt.Fprintf(app.stdout, "Replayed Channel %s join (%s)\n",
+			response.Channel.Alias, response.Channel.Topic.Status)
+	default:
+		_, err = fmt.Fprintf(app.stdout, "Joined Channel %s (%s)\n",
+			response.Channel.Alias, response.Channel.Topic.Status)
+	}
 	if err != nil {
 		return 1
 	}

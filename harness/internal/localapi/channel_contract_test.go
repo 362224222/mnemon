@@ -37,6 +37,22 @@ func TestChannelContractRejectsOpenShapesAndSecretsOutsideInviteResponses(t *tes
 	}
 }
 
+func TestChannelJoinContractAcceptsReplayAndTerminalStatuses(t *testing.T) {
+	t.Parallel()
+	for _, status := range []string{"joined", "replayed", "member_revoked", "channel_closed"} {
+		response := ChannelJoinResponse{SchemaVersion: SchemaVersion, Status: status,
+			Channel: validChannelContractView()}
+		if apiErr := validateChannelJoinResponse(response); apiErr != nil {
+			t.Fatalf("join status %q rejected: %v", status, apiErr)
+		}
+	}
+	response := ChannelJoinResponse{SchemaVersion: SchemaVersion, Status: "pending",
+		Channel: validChannelContractView()}
+	if validateChannelJoinResponse(response) == nil {
+		t.Fatal("open join status passed the public contract")
+	}
+}
+
 func TestChannelAbandonContractIsClosedAndCanonical(t *testing.T) {
 	t.Parallel()
 	if !validChannelAbandonRequest(ChannelAbandonRequest{Channel: "alpha",

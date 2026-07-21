@@ -109,7 +109,11 @@ func (manager *ChannelManager) ChannelJoin(ctx context.Context, metadata Request
 	if err != nil {
 		return ChannelJoinResponse{}, channelAPIError(err)
 	}
-	alias := uniqueChannelAlias(channelAlias(token.Payload().Descriptor().Descriptor().Name()), control)
+	descriptor := token.Payload().Descriptor().Descriptor()
+	alias := existingChannelAlias(descriptor.ID(), control)
+	if alias == "" {
+		alias = uniqueChannelAlias(channelAlias(descriptor.Name()), control)
+	}
 	client, err := peer.NewChannelEnrollmentClient(peer.ChannelEnrollmentClientOptions{Store: manager.store})
 	if err != nil {
 		return ChannelJoinResponse{}, channelAPIError(err)
@@ -128,7 +132,7 @@ func (manager *ChannelManager) ChannelJoin(ctx context.Context, metadata Request
 		return ChannelJoinResponse{}, channelAPIError(err)
 	}
 	return ChannelJoinResponse{SchemaVersion: SchemaVersion,
-		Status: "joined", Channel: view}, nil
+		Status: channelJoinResponseStatus(installed.Status), Channel: view}, nil
 }
 
 func (manager *ChannelManager) triggerMemberReconcile() {
@@ -369,5 +373,27 @@ func uniqueChannelAlias(base string, authority store.ChannelControlAuthority) st
 		if _, exists := used[candidate]; !exists {
 			return candidate
 		}
+	}
+}
+
+func existingChannelAlias(channelID model.ChannelID, authority store.ChannelControlAuthority) string {
+	for _, channel := range authority.Channels() {
+		if channel.Channel().ID() == channelID {
+			return channel.Channel().LocalAlias()
+		}
+	}
+	return ""
+}
+
+func channelJoinResponseStatus(status store.ChannelEnrollmentStatus) string {
+	switch status {
+	case store.ChannelEnrollmentReplayed:
+		return "replayed"
+	case store.ChannelEnrollmentMemberRevoked:
+		return "member_revoked"
+	case store.ChannelEnrollmentChannelClosed:
+		return "channel_closed"
+	default:
+		return "joined"
 	}
 }
