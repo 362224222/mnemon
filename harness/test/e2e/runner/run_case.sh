@@ -1706,7 +1706,7 @@ write_agent_current_race_fault_evidence() {
        statuses:$statuses,
        observation:{both_calls_bounded:($first_exit == 0 and $second_exit == 0),
          responses_stable:all($statuses[]; stable_status(.)),
-         at_most_one_actionable:([$statuses[] | select(. == "actionable")] | length) <= 1,
+         at_most_one_actionable:(([$statuses[] | select(. == "actionable")] | length) <= 1),
          loser_received_stable_empty_or_busy:
            (([$statuses[] | select(. == "none" or . == "busy")] | length) >= 1 or
             ([$statuses[] | select(. == "actionable")] | length) == 0),
