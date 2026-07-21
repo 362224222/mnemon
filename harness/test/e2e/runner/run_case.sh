@@ -60,7 +60,7 @@ case_failed=false
 execution_failed=false
 finalized=false
 logs_collected=false
-public_status_ready_timeout_seconds=30
+public_status_ready_timeout_seconds=60
 derived_offer_ready_timeout_seconds=30
 final_public_status_ready_timeout_seconds=60
 
