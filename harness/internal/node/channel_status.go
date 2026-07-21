@@ -202,6 +202,8 @@ func channelAPIError(err error) *APIError {
 	case errors.Is(err, peer.ErrChannelEnrollmentOutcomeUnknown), errors.Is(err, peer.ErrMeshRuntime),
 		errors.Is(err, peer.ErrChannelEnrollmentProtocol):
 		return NewAPIError(CodeOwnerUnreachable, "Channel owner could not be reached")
+	case errors.Is(err, peer.ErrGossipTopic):
+		return NewAPIError(CodeOperationPending, "Channel replay topic is unavailable")
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return NewAPIError(CodeOwnerUnreachable, "Channel operation was cancelled")
 	case errors.Is(err, store.ErrChannelCreateInput), errors.Is(err, store.ErrChannelInviteInput),
@@ -213,6 +215,8 @@ func channelAPIError(err error) *APIError {
 		return NewAPIError(CodeChannelClosed, "Channel is already terminal")
 	case errors.Is(err, store.ErrChannelAbandonStale):
 		return NewAPIError(CodeOperationMismatch, "Channel authority changed")
+	case errors.Is(err, store.ErrWrongTopicReplay):
+		return NewAPIError(CodeOperationPending, "Channel replay evidence is unavailable")
 	default:
 		return NewAPIError(CodeInternal, "durable Channel operation failed")
 	}

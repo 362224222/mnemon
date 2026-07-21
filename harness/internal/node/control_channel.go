@@ -37,6 +37,11 @@ type ChannelAbandonRequest struct {
 	Force          bool   `json:"force"`
 }
 
+type ChannelReplayProbeRequest struct {
+	SourceChannel string `json:"source_channel"`
+	TargetChannel string `json:"target_channel"`
+}
+
 type ChannelTopicView struct {
 	ReadyMembers uint8  `json:"ready_members"`
 	Status       string `json:"status"`
@@ -168,6 +173,11 @@ type ChannelForensicCounts struct {
 	Works         uint64 `json:"works"`
 }
 
+type ChannelMutationCounts struct {
+	Events uint64 `json:"events"`
+	Works  uint64 `json:"works"`
+}
+
 type ChannelAbandonResponse struct {
 	Channel        string                `json:"channel"`
 	Evidence       ChannelForensicCounts `json:"evidence"`
@@ -175,6 +185,23 @@ type ChannelAbandonResponse struct {
 	SchemaVersion  int                   `json:"schema_version"`
 	Status         string                `json:"status"`
 	TransitionedAt string                `json:"transitioned_at"`
+}
+
+type ChannelReplayProbeResponse struct {
+	EventDigest              string                `json:"event_digest"`
+	EventKey                 ChannelEventKeyView   `json:"event_key"`
+	PublicationDigest        string                `json:"publication_digest"`
+	Rejection                string                `json:"rejection"`
+	ReplayAttempted          bool                  `json:"replay_attempted"`
+	SchemaVersion            int                   `json:"schema_version"`
+	SourceChannel            string                `json:"source_channel"`
+	SourceChannelIDDigest    string                `json:"source_channel_id_digest"`
+	Status                   string                `json:"status"`
+	TargetAfter              ChannelMutationCounts `json:"target_after"`
+	TargetBefore             ChannelMutationCounts `json:"target_before"`
+	TargetChannel            string                `json:"target_channel"`
+	TargetChannelIDDigest    string                `json:"target_channel_id_digest"`
+	TargetMutationSuppressed bool                  `json:"target_mutation_suppressed"`
 }
 
 type ChannelStatusResponse struct {
@@ -192,5 +219,7 @@ type ChannelService interface {
 	ChannelRemove(context.Context, RequestMetadata, ChannelRemoveRequest) (ChannelRemoveResponse, *APIError)
 	ChannelLeave(context.Context, RequestMetadata, ChannelLeaveRequest) (ChannelLeaveResponse, *APIError)
 	ChannelAbandon(context.Context, RequestMetadata, ChannelAbandonRequest) (ChannelAbandonResponse, *APIError)
+	ChannelReplayProbe(context.Context, RequestMetadata,
+		ChannelReplayProbeRequest) (ChannelReplayProbeResponse, *APIError)
 	ChannelStatus(context.Context, RequestMetadata) (ChannelStatusResponse, *APIError)
 }

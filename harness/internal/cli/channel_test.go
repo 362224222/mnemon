@@ -97,6 +97,37 @@ func TestChannelAbandonRequiresHiddenExactConfirmation(t *testing.T) {
 	}
 }
 
+type replayProbeChannelClientStub struct {
+	channelControlClient
+	request  localapi.ChannelReplayProbeRequest
+	response localapi.ChannelReplayProbeResponse
+}
+
+func (client *replayProbeChannelClientStub) ProbeChannelReplay(_ context.Context,
+	request localapi.ChannelReplayProbeRequest,
+) (localapi.ChannelReplayProbeResponse, *localapi.APIError) {
+	client.request = request
+	return client.response, nil
+}
+
+func TestChannelReplayProbePassesDistinctChannels(t *testing.T) {
+	t.Parallel()
+	client := &replayProbeChannelClientStub{response: localapi.ChannelReplayProbeResponse{
+		SchemaVersion: localapi.SchemaVersion, Status: "rejected",
+		SourceChannel: "alpha", TargetChannel: "beta", Rejection: "wrong_topic",
+		ReplayAttempted: true, TargetMutationSuppressed: true}}
+	var stdout, stderr bytes.Buffer
+	app := &channelApp{stdin: strings.NewReader(""), stdout: &stdout, stderr: &stderr}
+	exit := app.replayProbe(context.Background(), client,
+		[]string{"--source", "alpha", "--target", "beta", "--json"})
+	if exit != 0 || stderr.Len() != 0 || client.request.SourceChannel != "alpha" ||
+		client.request.TargetChannel != "beta" ||
+		!strings.Contains(stdout.String(), `"rejection":"wrong_topic"`) {
+		t.Fatalf("replay probe = exit %d request=%#v stdout=%q stderr=%q", exit,
+			client.request, stdout.String(), stderr.String())
+	}
+}
+
 func TestChannelLeaveReportsQueuedOwnerAcknowledgement(t *testing.T) {
 	t.Parallel()
 	client := &leaveChannelClientStub{response: localapi.ChannelLeaveResponse{

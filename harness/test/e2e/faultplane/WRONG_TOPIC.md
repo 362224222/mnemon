@@ -1,32 +1,29 @@
 # Wrong-topic replay boundary
 
-The R5 contract asks the fixed six-node Docker topology to replay a publication
-captured on channel Alpha onto channel Beta. That fault cannot currently be
-created through the production-like public surface without weakening another
-acceptance boundary.
+The R5 wrong-topic fault replays an exact signed Alpha publication against
+Beta without manufacturing a new Beta event.
 
-All six nodes A-F are ordinary product participants in the prescribed topology.
-The public commands can create and join channels and publish new domain events,
-but they do not expose an operation that emits a captured raw publication frame
-on a caller-selected transport topic. The authenticated and encrypted libp2p
-transport also prevents a host-side byte proxy from changing the topic of an
-opaque captured frame. Creating a new Beta event is not replaying the captured
-Alpha publication.
+The public surface is `mnemon-harness channel replay-probe --source alpha
+--target beta --json`. It is an authenticated owner-local Channel command and
+uses the same managed admission and daemon readiness path as other Channel
+operations. On Node C, which is a member of both Alpha and Beta, the daemon
+selects one local-origin Alpha publication from durable evidence, binds its
+unchanged signed wire bytes to the Beta topic validator, and returns a bounded
+receipt.
 
-The apparent workarounds violate the contract:
+The receipt intentionally contains only public evidence: source and target
+Channel digests, Event and publication digests, the Event key, the validator
+outcome, and Beta Event/Work counts before and after the probe. It does not
+export publication payload bytes, private keys, bearer tokens, lease owners, or
+raw signed envelopes.
 
-- importing Harness internals or mutating node state would introduce a test
-  backdoor;
-- parsing and rewriting protocol messages in the fault plane would cease to be
-  an external, domain-opaque fault;
-- adding a malicious seventh publisher would violate the fixed six-node
-  topology;
-- treating a newly derived Beta event as the replay would weaken the required
-  semantic oracle.
+The acceptance oracle requires:
 
-Accordingly, this fault plane deliberately has no wrong-topic primitive. The
-`wrong-topic-replay` claim must remain neither injected nor observed until a
-production-like public adversarial surface can perform the exact replay, or the
-canonical topology contract is explicitly changed. The response-loss and Docker
-network receipts likewise assert only their exact external action; they do not
-claim a public fault observation.
+- the replay attempt exits successfully and reports `status:"rejected"` with
+  `rejection:"wrong_topic"`;
+- the source is Alpha and the target is Beta;
+- a real publication digest and Event digest are present; and
+- Beta Event and Work counts remain unchanged.
+
+Any missing local source publication, unavailable target topic, accepted probe,
+or target count change remains a failed fault observation.

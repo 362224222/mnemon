@@ -143,6 +143,23 @@ func (c *Client) AbandonChannel(ctx context.Context,
 	return response, nil
 }
 
+func (c *Client) ProbeChannelReplay(ctx context.Context,
+	request ChannelReplayProbeRequest,
+) (ChannelReplayProbeResponse, *APIError) {
+	if !validChannelReplayProbeRequest(request) {
+		return ChannelReplayProbeResponse{}, NewAPIError(CodeInvalidArgument,
+			"Channel replay probe requires distinct source and target Channels")
+	}
+	var response ChannelReplayProbeResponse
+	if apiErr := c.postChannel(ctx, RouteChannelReplayProbe, request, &response); apiErr != nil {
+		return ChannelReplayProbeResponse{}, apiErr
+	}
+	if apiErr := validateChannelReplayProbeResponse(response); apiErr != nil {
+		return ChannelReplayProbeResponse{}, apiErr
+	}
+	return response, nil
+}
+
 func (c *Client) postChannel(ctx context.Context, route string, input, response any) *APIError {
 	if c == nil || c.http == nil || ctx == nil || route == RouteChannelStatus || !IsChannelRoute(route) {
 		return invalidControlResponse("local control client is unavailable")

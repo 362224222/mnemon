@@ -26,4 +26,9 @@ func TestChannelClientRejectsSecretsAndInvalidRulesBeforeTransport(t *testing.T)
 		apiErr.Code != CodeInvalidArgument {
 		t.Fatalf("mismatched abandon confirmation = %#v", apiErr)
 	}
+	if _, apiErr := client.ProbeChannelReplay(context.Background(), ChannelReplayProbeRequest{
+		SourceChannel: "alpha", TargetChannel: "alpha"}); apiErr == nil ||
+		apiErr.Code != CodeInvalidArgument {
+		t.Fatalf("same-Channel replay probe = %#v", apiErr)
+	}
 }

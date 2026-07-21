@@ -22,6 +22,8 @@ type channelControlClient interface {
 	RemoveChannelMember(context.Context, localapi.ChannelRemoveRequest) (localapi.ChannelRemoveResponse, *localapi.APIError)
 	LeaveChannel(context.Context, localapi.ChannelLeaveRequest) (localapi.ChannelLeaveResponse, *localapi.APIError)
 	AbandonChannel(context.Context, localapi.ChannelAbandonRequest) (localapi.ChannelAbandonResponse, *localapi.APIError)
+	ProbeChannelReplay(context.Context,
+		localapi.ChannelReplayProbeRequest) (localapi.ChannelReplayProbeResponse, *localapi.APIError)
 	ReadChannelStatus(context.Context) (localapi.ChannelStatusResponse, *localapi.APIError)
 }
 
@@ -98,10 +100,35 @@ func (app *channelApp) dispatch(ctx context.Context, client channelControlClient
 		return app.leave(ctx, client, args)
 	case "abandon":
 		return app.abandon(ctx, client, args)
+	case "replay-probe":
+		return app.replayProbe(ctx, client, args)
 	default:
 		return app.writeError(localapi.NewAPIError(localapi.CodeInvalidArgument,
 			"unknown channel subcommand"))
 	}
+}
+
+func (app *channelApp) replayProbe(ctx context.Context, client channelControlClient, args []string) int {
+	args, jsonOutput := takeJSONFlag(args)
+	flags := flag.NewFlagSet("channel replay-probe", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	source := flags.String("source", "", "source Channel alias")
+	target := flags.String("target", "", "target Channel alias")
+	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || *source == "" || *target == "" {
+		return app.writeError(localapi.NewAPIError(localapi.CodeInvalidArgument,
+			"channel replay-probe requires --source and --target"))
+	}
+	response, apiErr := client.ProbeChannelReplay(ctx, localapi.ChannelReplayProbeRequest{
+		SourceChannel: *source, TargetChannel: *target})
+	if apiErr != nil {
+		return app.writeError(apiErr)
+	}
+	if jsonOutput {
+		return app.writeJSON(response)
+	}
+	_, err := fmt.Fprintf(app.stdout, "Rejected %s publication replay on %s (%s)\n",
+		response.SourceChannel, response.TargetChannel, response.Rejection)
+	return writeExit(err)
 }
 
 func (app *channelApp) abandon(ctx context.Context, client channelControlClient, args []string) int {

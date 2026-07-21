@@ -64,12 +64,56 @@ func TestChannelAbandonRouteRequiresExplicitMatchingDestructiveConfirmation(t *t
 	}
 }
 
+func TestChannelReplayProbeRouteRequiresDistinctChannelsAndReturnsEvidence(t *testing.T) {
+	credential := repeatedOpaqueBytes(0x53)
+	service := &channelRouteService{replay: validChannelReplayRouteResponse()}
+	server, err := NewServer(fixedAuthenticator{want: modelDigest(credential)}, service)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := authenticatedRequest(t, http.MethodPost, RouteChannelReplayProbe,
+		`{"source_channel":"alpha","target_channel":"alpha"}`, credential)
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+	if recorder.Code == http.StatusOK || service.replayCalls != 0 {
+		t.Fatalf("same-Channel replay probe = %d %s", recorder.Code, recorder.Body.String())
+	}
+	request = authenticatedRequest(t, http.MethodPost, RouteChannelReplayProbe,
+		`{"source_channel":"alpha","target_channel":"beta"}`, credential)
+	recorder = httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || service.replayCalls != 1 ||
+		service.replayRequest.SourceChannel != "alpha" ||
+		service.replayRequest.TargetChannel != "beta" ||
+		!strings.Contains(recorder.Body.String(), `"rejection":"wrong_topic"`) {
+		t.Fatalf("replay probe = %d %s request=%#v calls=%d", recorder.Code,
+			recorder.Body.String(), service.replayRequest, service.replayCalls)
+	}
+}
+
 type channelRouteService struct {
 	status         ChannelStatusResponse
 	statusCalls    int
 	abandon        ChannelAbandonResponse
 	abandonCalls   int
 	abandonRequest ChannelAbandonRequest
+	replay         ChannelReplayProbeResponse
+	replayCalls    int
+	replayRequest  ChannelReplayProbeRequest
+}
+
+func validChannelReplayRouteResponse() ChannelReplayProbeResponse {
+	const peerID = "12D3KooWCgPRroygp86pxPWqvQuXKSDf6CoJJHkmfEsNhm9rF46B"
+	return ChannelReplayProbeResponse{SchemaVersion: SchemaVersion, Status: "rejected",
+		SourceChannel: "alpha", TargetChannel: "beta",
+		SourceChannelIDDigest: modelDigest([]byte("alpha")).String(),
+		TargetChannelIDDigest: modelDigest([]byte("beta")).String(),
+		PublicationDigest:     modelDigest([]byte("publication")).String(),
+		EventDigest:           modelDigest([]byte("event")).String(),
+		EventKey: ChannelEventKeyView{OriginPeerID: peerID,
+			OriginEpoch: "epoch-alpha", EventID: "event-alpha"},
+		ReplayAttempted: true, Rejection: "wrong_topic",
+		TargetMutationSuppressed: true}
 }
 
 func (*channelRouteService) HookCheck(context.Context, RequestMetadata,
@@ -128,6 +172,13 @@ func (service *channelRouteService) ChannelAbandon(_ context.Context, _ RequestM
 	service.abandonCalls++
 	service.abandonRequest = request
 	return service.abandon, nil
+}
+func (service *channelRouteService) ChannelReplayProbe(_ context.Context, _ RequestMetadata,
+	request ChannelReplayProbeRequest,
+) (ChannelReplayProbeResponse, *APIError) {
+	service.replayCalls++
+	service.replayRequest = request
+	return service.replay, nil
 }
 func (service *channelRouteService) ChannelStatus(context.Context,
 	RequestMetadata,
