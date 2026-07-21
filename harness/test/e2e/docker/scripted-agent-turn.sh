@@ -4,6 +4,7 @@ set -eu
 mode=${1:-}
 test "$mode" = --user || test "$mode" = --managed
 policy=.r5/policy.json
+topology=.r5/topology.json
 test -f "$policy"
 install -d -m 0700 .r5/runtime result
 umask 077
@@ -32,11 +33,35 @@ submit_context_action() {
     jq -e '.status == "accepted"' "$receipt" >/dev/null
 }
 
+resolve_participant() {
+    channel=$1
+    selector=$2
+    case "$selector" in
+        "" | auto | team)
+            printf '%s\n' "$selector"
+            return 0
+            ;;
+    esac
+    if [ -f "$topology" ]; then
+        resolved=$(
+          jq -er --arg channel "$channel" --arg node "$selector" '
+            first(.channels[] | select(.alias == $channel) | .members[] |
+              select(.node == $node)) | .alias
+          ' "$topology" 2>/dev/null
+        ) || resolved=
+        if [ -n "$resolved" ]; then
+            printf '%s\n' "$resolved"
+            return 0
+        fi
+    fi
+    printf '%s\n' "$selector"
+}
+
 if [ "$mode" = --user ]; then
     mnemon-harness agent current --json >"$current"
     test "$(jq -r '.status' "$current")" = none
     channel=$(jq -er '.entry_channel' "$policy")
-    participant=$(jq -er '.entry_to' "$policy")
+    participant=$(resolve_participant "$channel" "$(jq -er '.entry_to' "$policy")")
     content=$(sed -n '1,200p')
     test -n "$content"
     set -- mnemon-harness teamwork offer --channel "$channel" --to "$participant" \
@@ -67,7 +92,7 @@ fi
 
 derive_channel=$(jq -r '.derive_channel // empty' "$policy")
 if [ -n "$derive_channel" ] && [ ! -e .r5/derived ] && has_action teamwork.offer; then
-    derive_to=$(jq -er '.derive_to' "$policy")
+    derive_to=$(resolve_participant "$derive_channel" "$(jq -er '.derive_to' "$policy")")
     content=$(jq -er '.result_content' "$policy")
     set -- mnemon-harness teamwork offer --context "$context" --channel "$derive_channel" \
       --to "$derive_to" --deadline 24h --content-file - --json
@@ -83,7 +108,7 @@ fi
 if [ -n "$derive_channel" ] && [ -e .r5/derived ] && [ ! -e .r5/derived-retry ] &&
    jq -e '.source_event.event_type == "review.declined"' "$current" >/dev/null 2>&1 &&
    has_action teamwork.offer; then
-    derive_to=$(jq -er '.derive_to' "$policy")
+    derive_to=$(resolve_participant "$derive_channel" "$(jq -er '.derive_to' "$policy")")
     content=$(jq -er '.result_content' "$policy")
     printf '%s\n' "$content" | mnemon-harness teamwork offer --context "$context" \
       --channel "$derive_channel" --to "$derive_to" --deadline 24h --content-file - --json \

@@ -458,11 +458,12 @@ create_channels() {
     : >"$private/gamma.invite"
 
     wait_public_status_ready || return 1
+    write_channel_topology || return 1
+    install_scripted_topology || return 1
     wait_derived_offer_candidates_ready || return 1
     for node in A B C D E F; do
         public_command "$node" status "nodes/$node/status-before.json" mnemon-harness status || return 1
     done
-    write_channel_topology
 }
 
 wait_channel_ready() {
@@ -581,6 +582,15 @@ wait_derived_offer_candidates_ready() {
                 case_error "invalid derived_path route: $node:$channel:$participant"
                 return 1
             fi
+            resolved_participant=$(
+              jq -er --arg channel "$channel" --arg node "$participant" '
+                first(.channels[] | select(.alias == $channel) | .members[] |
+                  select(.node == $node)) | .alias
+              ' "$output/topology/channels.json" 2>/dev/null
+            ) || {
+                case_error "derived_path route target is not present in public topology: $node:$channel:$participant"
+                return 1
+            }
             if [ "$(date +%s%3N)" -ge "$readiness_deadline_ms" ]; then
                 all_ready=false
                 break
@@ -591,7 +601,7 @@ wait_derived_offer_candidates_ready() {
             current_exit=$?
             set -e
             if [ "$current_exit" -ne 0 ] ||
-               ! jq -e --arg channel "$channel" --arg participant "$participant" '
+               ! jq -e --arg channel "$channel" --arg participant "$resolved_participant" '
                  .status == "none" and
                  any(.initiation_context.channels[]?;
                    .local_alias == $channel and
@@ -619,6 +629,18 @@ wait_derived_offer_candidates_ready() {
         case_error "derived offer candidates did not become eligible within ${derived_offer_ready_timeout_seconds} seconds"
         return 1
     }
+}
+
+install_scripted_topology() {
+    [ "$runtime" = scripted ] || return 0
+    for node in A B C D E F; do
+        node_exec_stdin "$node" sh -c \
+          'umask 077; cat > /workspace/.r5/topology.json' \
+          <"$output/topology/channels.json" || {
+            case_error "scripted topology could not be installed on Node $node"
+            return 1
+        }
+    done
 }
 
 write_channel_topology() {
@@ -735,25 +757,6 @@ run_entry_prompt() {
         c_peer=$(jq -er '[.channels[].members[] | select(.node == "C") | .peer_id] |
           unique | select(length == 1) | .[0]' \
           "$output/topology/channels.json")
-        if [ "$runtime" = scripted ]; then
-            # Scenario policies use stable topology labels, while the public
-            # selector accepts only the effective member alias. Bind the one
-            # entry target from the already-validated public D4 topology.
-            c_alias=$(jq -er '
-              first(.channels[] | select(.alias == "alpha") | .members[] |
-                select(.node == "C")) | .alias
-            ' "$output/topology/channels.json")
-            node_exec A sh -c '
-              set -eu
-              policy=/workspace/.r5/policy.json
-              next=/workspace/.r5/policy.next
-              trap '\''rm -f "$next"'\'' EXIT HUP INT TERM
-              umask 077
-              jq --arg to "$1" '\''.entry_to = $to'\'' "$policy" >"$next"
-              mv "$next" "$policy"
-              trap - EXIT HUP INT TERM
-            ' sh "$c_alias"
-        fi
         prompt_receipt="$private/payment-relay-prompt.json"
         scope_b="$private/payment-relay-scope-b.json"
         scope_c="$private/payment-relay-scope-c.json"
