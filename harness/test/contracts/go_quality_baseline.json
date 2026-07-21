@@ -798,7 +798,7 @@
       "identity": "cognitive_complexity:harness/internal/peer/channel_frame.go::canonicalChannelPayload",
       "path": "harness/internal/peer/channel_frame.go",
       "symbol": "canonicalChannelPayload",
-      "ceiling": 36
+      "ceiling": 31
     },
     {
       "rule": "cognitive_complexity",
@@ -2772,7 +2772,7 @@
       "identity": "cyclomatic_complexity:harness/internal/peer/channel_frame.go::canonicalChannelPayload",
       "path": "harness/internal/peer/channel_frame.go",
       "symbol": "canonicalChannelPayload",
-      "ceiling": 26
+      "ceiling": 23
     },
     {
       "rule": "cyclomatic_complexity",
@@ -3556,7 +3556,7 @@
       "identity": "cyclomatic_complexity:harness/internal/store/local_accept.go::applyLocalAcceptanceTx",
       "path": "harness/internal/store/local_accept.go",
       "symbol": "applyLocalAcceptanceTx",
-      "ceiling": 53
+      "ceiling": 28
     },
     {
       "rule": "cyclomatic_complexity",

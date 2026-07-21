@@ -130,6 +130,10 @@ func channelMemberStoreError(err error) error {
 		return peer.ErrChannelMemberEpochMismatch
 	case errors.Is(err, store.ErrChannelRosterConflict), errors.Is(err, store.ErrChannelRosterInput):
 		return peer.ErrChannelMemberRosterConflict
+	case errors.Is(err, store.ErrChannelLeaveInput), errors.Is(err, store.ErrChannelLeaveConflict):
+		return peer.ErrChannelMemberRosterConflict
+	case errors.Is(err, store.ErrChannelLeaveAuthority):
+		return peer.ErrChannelMemberNotMember
 	case errors.Is(err, store.ErrChannelBaselineAuthority):
 		return peer.ErrChannelMemberNotMember
 	default:

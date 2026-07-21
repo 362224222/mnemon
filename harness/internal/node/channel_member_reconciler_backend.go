@@ -20,6 +20,8 @@ var (
 
 type ChannelMemberReconcilerStore interface {
 	ReadChannelMemberReadinessAuthority(context.Context) (store.ChannelMemberReadinessAuthority, error)
+	ReadDueChannelLeaveTargets(context.Context, time.Time) ([]store.ChannelLeaveTarget, error)
+	StartChannelLeaveAttempt(context.Context, store.StartChannelLeaveAttemptSpec) error
 	ReserveOutboundChannelBaseline(context.Context, store.ReserveOutboundChannelBaselineSpec) (store.ReserveOutboundChannelBaselineResult, error)
 	ConfirmOutboundChannelBaseline(context.Context, store.ConfirmOutboundChannelBaselineSpec) (store.ConfirmOutboundChannelBaselineResult, error)
 	SetPeerReachability(context.Context, store.SetPeerReachabilitySpec) (store.SetPeerReachabilityResult, error)
@@ -29,6 +31,7 @@ type ChannelMemberControlClient interface {
 	Hello(context.Context, model.PeerID, []byte, peer.MemberHello) (peer.MemberHelloAck, error)
 	Sync(context.Context, model.PeerID, []byte, peer.SyncRequest) ([]peer.SyncPage, error)
 	InstallBaseline(context.Context, model.PeerID, []byte, peer.DataBaseline) (peer.DataBaselineAck, error)
+	Leave(context.Context, model.PeerID, []byte, peer.LeaveRequest) (peer.LeaveReceipt, error)
 }
 
 type ChannelMemberReconcilerClock interface{ Now() time.Time }
@@ -44,6 +47,8 @@ type ChannelMemberReconcilerOptions struct {
 type ChannelMemberReconcilerController interface {
 	peer.ChannelMemberController
 	ConfirmMemberBaselineRuntimeGate(context.Context, model.ChannelID) error
+	SettleMemberLeaveRuntimeGate(context.Context, model.ChannelLeaveRequestID,
+		model.SignedChannelLeaveReceipt, time.Time) error
 }
 
 type channelMemberTarget struct {
@@ -64,8 +69,21 @@ type channelMemberTargetKey struct {
 	peerID    model.PeerID
 }
 
+type channelMemberLeaveTarget struct {
+	channel       model.Channel
+	roster        model.VerifiedRoster
+	request       model.SignedChannelLeaveRequest
+	owner         model.Member
+	attempts      uint64
+	nextAttemptAt time.Time
+}
+
 type channelMemberReconcileBackend interface {
 	targets(context.Context) ([]channelMemberTarget, error)
+	leaveTargets(context.Context, time.Time) ([]channelMemberLeaveTarget, error)
+	startLeave(context.Context, channelMemberLeaveTarget, time.Time, time.Time) error
+	settleLeave(context.Context, channelMemberLeaveTarget,
+		model.SignedChannelLeaveReceipt, time.Time) error
 	merge(context.Context, channelMemberTarget, []model.Member, model.RecordHead, time.Time) error
 	reserve(context.Context, channelMemberTarget, time.Time) (store.ChannelDataBaseline, error)
 	confirm(context.Context, channelMemberTarget, peer.DataBaselineAck, time.Time) error
@@ -113,6 +131,36 @@ func (backend durableChannelMemberReconcileBackend) targets(ctx context.Context)
 		result = append(result, channelTargets...)
 	}
 	return result, nil
+}
+
+func (backend durableChannelMemberReconcileBackend) leaveTargets(ctx context.Context,
+	at time.Time,
+) ([]channelMemberLeaveTarget, error) {
+	durable, err := backend.store.ReadDueChannelLeaveTargets(ctx, at)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]channelMemberLeaveTarget, len(durable))
+	for index, target := range durable {
+		result[index] = channelMemberLeaveTarget{channel: target.Channel(), roster: target.Roster(),
+			request: target.Request(), owner: target.Owner(), attempts: target.Attempts(),
+			nextAttemptAt: target.NextAttemptAt()}
+	}
+	return result, nil
+}
+
+func (backend durableChannelMemberReconcileBackend) startLeave(ctx context.Context,
+	target channelMemberLeaveTarget, attemptedAt, retryAt time.Time,
+) error {
+	return backend.store.StartChannelLeaveAttempt(ctx, store.StartChannelLeaveAttemptSpec{
+		RequestID: target.request.RequestID(), ExpectedAttempts: target.attempts,
+		ExpectedNextAttemptAt: target.nextAttemptAt, AttemptedAt: attemptedAt, RetryAt: retryAt})
+}
+
+func (backend durableChannelMemberReconcileBackend) settleLeave(ctx context.Context,
+	target channelMemberLeaveTarget, receipt model.SignedChannelLeaveReceipt, at time.Time,
+) error {
+	return backend.controller.SettleMemberLeaveRuntimeGate(ctx, target.request.RequestID(), receipt, at)
 }
 
 func (backend durableChannelMemberReconcileBackend) channelTargets(localPeerID model.PeerID,

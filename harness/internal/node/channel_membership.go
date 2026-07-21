@@ -58,8 +58,7 @@ func (manager *ChannelManager) ChannelLeave(ctx context.Context, metadata locala
 		return localapi.ChannelLeaveResponse{}, apiErr
 	}
 	if channel.Channel().OwnerPeerID() != authority.LocalPeerID() {
-		return localapi.ChannelLeaveResponse{}, localapi.NewAPIError(localapi.CodeOwnerUnreachable,
-			"Channel owner acknowledgement is required to leave")
+		return manager.beginNonOwnerChannelLeave(ctx, authority.LocalPeerID(), channel)
 	}
 	updated, err := manager.commitTerminalMember(ctx, authority.LocalPeerID(), channel,
 		authority.LocalPeerID(), model.MemberLeft)
@@ -72,6 +71,59 @@ func (manager *ChannelManager) ChannelLeave(ctx context.Context, metadata locala
 	}
 	return localapi.ChannelLeaveResponse{SchemaVersion: localapi.SchemaVersion,
 		Status: "left", Channel: view}, nil
+}
+
+func (manager *ChannelManager) beginNonOwnerChannelLeave(ctx context.Context, local model.PeerID,
+	durable store.ChannelControlChannel,
+) (localapi.ChannelLeaveResponse, *localapi.APIError) {
+	channel := durable.Channel()
+	request, err := manager.newChannelLeaveRequest(ctx, local, durable)
+	if err != nil {
+		return localapi.ChannelLeaveResponse{}, channelAPIError(err)
+	}
+	result, err := manager.store.BeginChannelLeave(ctx, store.BeginChannelLeaveSpec{
+		ChannelID: channel.ID(), Request: request})
+	if err != nil {
+		return localapi.ChannelLeaveResponse{}, channelAPIError(err)
+	}
+	mesh, err := manager.store.ReadChannelMeshAuthority(ctx)
+	if err != nil {
+		return localapi.ChannelLeaveResponse{}, channelAPIError(err)
+	}
+	if err := manager.runtime.ReconcileWithCommit(mesh, func() error { return nil }); err != nil {
+		return localapi.ChannelLeaveResponse{}, channelAPIError(err)
+	}
+	manager.triggerMemberReconcile()
+	view, err := manager.readChannelView(ctx, result.Channel.ID())
+	if err != nil {
+		return localapi.ChannelLeaveResponse{}, channelAPIError(err)
+	}
+	return localapi.ChannelLeaveResponse{SchemaVersion: localapi.SchemaVersion,
+		Status: "leaving", Channel: view}, nil
+}
+
+func (manager *ChannelManager) newChannelLeaveRequest(ctx context.Context, local model.PeerID,
+	durable store.ChannelControlChannel,
+) (model.SignedChannelLeaveRequest, error) {
+	if durable.Channel().Status() == model.ChannelLeaving {
+		return model.SignedChannelLeaveRequest{}, nil
+	}
+	member, ok := durable.Roster().CurrentMember(local)
+	if !ok || member.Status() != model.MemberActive || durable.Channel().Status() != model.ChannelActive {
+		return model.SignedChannelLeaveRequest{}, store.ErrChannelLeaveConflict
+	}
+	record, err := model.NewChannelLeaveRequestRecord(model.ChannelLeaveRequestRecordSpec{
+		ChannelID: durable.Channel().ID(), MemberPeerID: local, ActiveMemberHead: member.Head(),
+		KnownRosterHead: durable.Roster().Head(), RequestedAt: manager.clock.Now()})
+	if err != nil {
+		return model.SignedChannelLeaveRequest{}, err
+	}
+	message, _ := model.ChannelLeaveRequestSigningMessage(record.ChannelID(), record.Digest())
+	signature, err := manager.identity.PublicationSigner().Sign(ctx, message)
+	if err != nil {
+		return model.SignedChannelLeaveRequest{}, err
+	}
+	return model.AttachChannelLeaveRequestSignature(record, signature)
 }
 
 func (manager *ChannelManager) commitTerminalMember(ctx context.Context, local model.PeerID,

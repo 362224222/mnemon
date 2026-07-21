@@ -38,6 +38,13 @@ func TestDurableChannelMemberReconcileBackendTranslatesExactFences(t *testing.T)
 	if err := backend.reachability(context.Background(), target, model.ReachabilityReachable, at); err != nil {
 		t.Fatal(err)
 	}
+	leave, receipt := newChannelMemberLeaveTarget(t, "member-reconciler-backend-leave")
+	if err := backend.startLeave(context.Background(), leave, at, at.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.settleLeave(context.Background(), leave, receipt, at); err != nil {
+		t.Fatal(err)
+	}
 	if controller.hello.ChannelID != target.channel.ID() ||
 		controller.hello.AuthenticatedPeerID != target.remoteMember.PeerID() ||
 		controller.confirmed != target.channel.ID() ||
@@ -45,7 +52,9 @@ func TestDurableChannelMemberReconcileBackendTranslatesExactFences(t *testing.T)
 		st.confirm.AuthenticatedPeerID != target.remoteMember.PeerID() ||
 		st.confirm.Ack.BaselineChannelSequence != 9 ||
 		st.reach.ExpectedRosterHead != target.roster.Head() ||
-		st.reach.OriginEpoch != target.remoteMember.OriginEpoch() {
+		st.reach.OriginEpoch != target.remoteMember.OriginEpoch() ||
+		st.start.RequestID != leave.request.RequestID() ||
+		controller.settled != leave.request.RequestID() || controller.receipt.IsZero() {
 		t.Fatalf("translated controls = controller %#v Store %#v %#v %#v",
 			controller.hello, st.reserve, st.confirm, st.reach)
 	}
@@ -75,6 +84,21 @@ type recordingChannelMemberStore struct {
 	reserve  store.ReserveOutboundChannelBaselineSpec
 	confirm  store.ConfirmOutboundChannelBaselineSpec
 	reach    store.SetPeerReachabilitySpec
+	leaves   []store.ChannelLeaveTarget
+	start    store.StartChannelLeaveAttemptSpec
+}
+
+func (st *recordingChannelMemberStore) ReadDueChannelLeaveTargets(context.Context,
+	time.Time,
+) ([]store.ChannelLeaveTarget, error) {
+	return append([]store.ChannelLeaveTarget(nil), st.leaves...), nil
+}
+
+func (st *recordingChannelMemberStore) StartChannelLeaveAttempt(_ context.Context,
+	spec store.StartChannelLeaveAttemptSpec,
+) error {
+	st.start = spec
+	return nil
 }
 
 func (*recordingChannelMemberStore) ReadChannelMemberReadinessAuthority(context.Context,
@@ -106,6 +130,17 @@ func (st *recordingChannelMemberStore) SetPeerReachability(_ context.Context,
 type recordingChannelMemberController struct {
 	hello     peer.ChannelMemberHelloControl
 	confirmed model.ChannelID
+	settled   model.ChannelLeaveRequestID
+	receipt   model.SignedChannelLeaveReceipt
+}
+
+func (controller *recordingChannelMemberController) SettleMemberLeaveRuntimeGate(
+	_ context.Context, requestID model.ChannelLeaveRequestID,
+	receipt model.SignedChannelLeaveReceipt, _ time.Time,
+) error {
+	controller.settled = requestID
+	controller.receipt = receipt
+	return nil
 }
 
 func (controller *recordingChannelMemberController) ConfirmMemberBaselineRuntimeGate(_ context.Context,

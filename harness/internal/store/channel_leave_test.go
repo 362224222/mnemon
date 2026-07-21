@@ -15,6 +15,15 @@ func TestChannelLeavePersistsLocalExitRetriesAndOwnerTerminalAtomically(t *testi
 	t.Parallel()
 	fixture := newInstalledJoinedChannelFixture(t, "leave-lifecycle", "leave-team", 0x51, 0x52)
 	request := signedStoreLeaveRequest(t, fixture, fixture.at.Add(time.Second))
+	beginStoreChannelLeave(t, fixture, request)
+	attemptedAt := exerciseStoreChannelLeaveRetry(t, fixture.store, request)
+	settleStoreChannelLeave(t, fixture, request, attemptedAt)
+}
+
+func beginStoreChannelLeave(t *testing.T, fixture installedJoinedChannelFixture,
+	request model.SignedChannelLeaveRequest,
+) {
+	t.Helper()
 	result, err := fixture.store.BeginChannelLeave(context.Background(), BeginChannelLeaveSpec{
 		ChannelID: fixture.spec.Descriptor.Descriptor().ID(), Request: request})
 	if err != nil || result.Replay || result.Channel.Status() != model.ChannelLeaving ||
@@ -29,28 +38,12 @@ func TestChannelLeavePersistsLocalExitRetriesAndOwnerTerminalAtomically(t *testi
 		!replayed.Channel.UpdatedAt().Equal(result.Channel.UpdatedAt()) {
 		t.Fatalf("BeginChannelLeave(replay) = (%#v,%v)", replayed, err)
 	}
-	targets, err := fixture.store.ReadDueChannelLeaveTargets(context.Background(),
-		request.Record().RequestedAt())
-	if err != nil || len(targets) != 1 || targets[0].Request().RequestID() != request.RequestID() ||
-		targets[0].Owner().PeerID() != fixture.owner.channel.Owner().PeerID() || targets[0].Attempts() != 0 {
-		t.Fatalf("ReadDueChannelLeaveTargets() = (%#v,%v)", targets, err)
-	}
-	attemptedAt := request.Record().RequestedAt().Add(time.Second)
-	retryAt := attemptedAt.Add(time.Minute)
-	if err := fixture.store.StartChannelLeaveAttempt(context.Background(), StartChannelLeaveAttemptSpec{
-		RequestID: request.RequestID(), ExpectedNextAttemptAt: request.Record().RequestedAt(),
-		AttemptedAt: attemptedAt, RetryAt: retryAt}); err != nil {
-		t.Fatal(err)
-	}
-	if targets, err := fixture.store.ReadDueChannelLeaveTargets(context.Background(),
-		retryAt.Add(-time.Nanosecond)); err != nil || len(targets) != 0 {
-		t.Fatalf("early retry targets = (%#v,%v)", targets, err)
-	}
-	targets, err = fixture.store.ReadDueChannelLeaveTargets(context.Background(), retryAt)
-	if err != nil || len(targets) != 1 || targets[0].Attempts() != 1 ||
-		!targets[0].NextAttemptAt().Equal(retryAt) {
-		t.Fatalf("due retry targets = (%#v,%v)", targets, err)
-	}
+}
+
+func settleStoreChannelLeave(t *testing.T, fixture installedJoinedChannelFixture,
+	request model.SignedChannelLeaveRequest, attemptedAt time.Time,
+) {
+	t.Helper()
 	receipt := signedStoreLeaveReceipt(t, fixture, request, attemptedAt.Add(time.Second))
 	settledAt := receipt.Record().AcceptedAt().Add(time.Second)
 	settled, err := fixture.store.SettleChannelLeave(context.Background(), SettleChannelLeaveSpec{
@@ -157,44 +150,4 @@ func signedStoreLeaveReceipt(t *testing.T, fixture installedJoinedChannelFixture
 		t.Fatal(err)
 	}
 	return receipt
-}
-
-func assertChannelLeaveRow(t *testing.T, st *Store, request model.SignedChannelLeaveRequest,
-	wantStatus string, wantAttempts uint64, wantReceipt []byte,
-) {
-	t.Helper()
-	var status string
-	var attempts uint64
-	var requestJSON, signature, receipt []byte
-	if err := st.db.QueryRow(`SELECT status,attempts,request_json,member_signature,receipt_json
-		FROM channel_leave_requests WHERE request_id=?`, request.RequestID().String()).Scan(
-		&status, &attempts, &requestJSON, &signature, &receipt); err != nil {
-		t.Fatal(err)
-	}
-	if status != wantStatus || attempts != wantAttempts ||
-		!bytes.Equal(requestJSON, request.Record().CanonicalJSON().Bytes()) ||
-		!bytes.Equal(signature, request.MemberSignature()) || !bytes.Equal(receipt, wantReceipt) {
-		t.Fatalf("leave row = status %q attempts %d request=%d signature=%d receipt=%d",
-			status, attempts, len(requestJSON), len(signature), len(receipt))
-	}
-}
-
-func assertChannelLeaveProjection(t *testing.T, st *Store, channelID model.ChannelID,
-	wantStatus string, wantRequests int,
-) {
-	t.Helper()
-	var status string
-	var requests int
-	if err := st.db.QueryRow(`SELECT status FROM channels WHERE channel_id=?`,
-		channelID.String()).Scan(&status); err != nil {
-		t.Fatal(err)
-	}
-	if err := st.db.QueryRow(`SELECT COUNT(*) FROM channel_leave_requests WHERE channel_id=?`,
-		channelID.String()).Scan(&requests); err != nil {
-		t.Fatal(err)
-	}
-	if status != wantStatus || requests != wantRequests {
-		t.Fatalf("leave projection = status %q requests %d, want %q/%d",
-			status, requests, wantStatus, wantRequests)
-	}
 }

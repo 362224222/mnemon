@@ -165,6 +165,11 @@ func (app *channelApp) leave(ctx context.Context, client channelControlClient, a
 	if jsonOutput {
 		return app.writeJSON(response)
 	}
+	if response.Status == "leaving" {
+		_, err := fmt.Fprintf(app.stdout, "Leaving Channel %s (owner acknowledgement queued)\n",
+			response.Channel.Alias)
+		return writeExit(err)
+	}
 	_, err := fmt.Fprintf(app.stdout, "Left Channel %s\n", response.Channel.Alias)
 	return writeExit(err)
 }

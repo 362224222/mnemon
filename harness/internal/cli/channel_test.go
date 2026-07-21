@@ -96,3 +96,28 @@ func TestChannelAbandonRequiresHiddenExactConfirmation(t *testing.T) {
 			client.request, stdout.String(), stderr.String())
 	}
 }
+
+func TestChannelLeaveReportsQueuedOwnerAcknowledgement(t *testing.T) {
+	t.Parallel()
+	client := &leaveChannelClientStub{response: localapi.ChannelLeaveResponse{
+		SchemaVersion: localapi.SchemaVersion, Status: "leaving",
+		Channel: localapi.ChannelView{Alias: "alpha", Membership: "leaving"}}}
+	var stdout, stderr bytes.Buffer
+	app := &channelApp{stdin: strings.NewReader(""), stdout: &stdout, stderr: &stderr}
+	if exit := app.leave(context.Background(), client, []string{"alpha"}); exit != 0 ||
+		stderr.Len() != 0 || stdout.String() !=
+		"Leaving Channel alpha (owner acknowledgement queued)\n" {
+		t.Fatalf("queued leave = exit %d stdout=%q stderr=%q", exit, stdout.String(), stderr.String())
+	}
+}
+
+type leaveChannelClientStub struct {
+	channelControlClient
+	response localapi.ChannelLeaveResponse
+}
+
+func (client *leaveChannelClientStub) LeaveChannel(context.Context,
+	localapi.ChannelLeaveRequest,
+) (localapi.ChannelLeaveResponse, *localapi.APIError) {
+	return client.response, nil
+}

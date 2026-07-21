@@ -128,52 +128,6 @@ func NewChannelMemberService(options ChannelMemberServiceOptions) (*ChannelMembe
 	return &ChannelMemberService{controller: options.Controller, clock: options.Clock}, nil
 }
 
-func (service *ChannelMemberService) HandleChannelRequest(ctx context.Context,
-	stream network.Stream, first ChannelFrame,
-) error {
-	if service == nil || service.controller == nil || service.clock == nil || ctx == nil ||
-		stream == nil || stream.Protocol() != ChannelProtocol || stream.Conn() == nil || first.IsZero() {
-		return ErrChannelMemberProtocol
-	}
-	localPeerID, _, err := secureChannelPeer(stream.Conn().LocalPeer())
-	if err != nil {
-		return err
-	}
-	remotePeerID, remotePublicKey, err := secureChannelPeer(stream.Conn().RemotePeer())
-	if err != nil || remotePeerID == localPeerID {
-		return ErrChannelMemberProtocol
-	}
-	at := service.clock.Now()
-	if at.IsZero() {
-		return ErrChannelMemberProtocol
-	}
-	switch first.Type() {
-	case ChannelFrameMemberHello:
-		payload, ok := first.Payload().(MemberHello)
-		if !ok {
-			return ErrChannelMemberProtocol
-		}
-		return service.handleHello(ctx, stream, first.RequestID(), remotePeerID,
-			remotePublicKey, payload, at)
-	case ChannelFrameSyncRequest:
-		payload, ok := first.Payload().(SyncRequest)
-		if !ok {
-			return ErrChannelMemberProtocol
-		}
-		return service.handleSync(ctx, stream, first.RequestID(), remotePeerID,
-			remotePublicKey, payload, at)
-	case ChannelFrameDataBaseline:
-		payload, ok := first.Payload().(DataBaseline)
-		if !ok {
-			return ErrChannelMemberProtocol
-		}
-		return service.handleBaseline(ctx, stream, first.RequestID(), remotePeerID,
-			remotePublicKey, payload, at)
-	default:
-		return ErrChannelMemberProtocol
-	}
-}
-
 func (service *ChannelMemberService) handleHello(ctx context.Context, stream network.Stream,
 	requestID ChannelRequestID, remotePeerID model.PeerID, remotePublicKey []byte,
 	hello MemberHello, at time.Time,

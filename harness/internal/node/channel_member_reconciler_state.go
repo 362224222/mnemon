@@ -1,12 +1,70 @@
 package node
 
 import (
+	"errors"
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
+	"github.com/mnemon-dev/mnemon/harness/internal/peer"
+	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
 
 const channelMemberRetryMaximum = 10 * time.Second
+
+type channelMemberFailureDisposition uint8
+
+const (
+	channelMemberFailureFatal channelMemberFailureDisposition = iota
+	channelMemberFailureRetryable
+	channelMemberFailurePermanent
+)
+
+func classifyChannelMemberFailure(err error) channelMemberFailureDisposition {
+	var remote *peer.ChannelProtocolFailure
+	if errors.As(err, &remote) {
+		if remote.Code() == peer.ChannelErrorNotMember || remote.Retryable() {
+			return channelMemberFailureRetryable
+		}
+		return channelMemberFailurePermanent
+	}
+	if retryableChannelMemberFailure(err) {
+		return channelMemberFailureRetryable
+	}
+	if permanentChannelMemberFailure(err) {
+		return channelMemberFailurePermanent
+	}
+	return channelMemberFailureFatal
+}
+
+func retryableChannelMemberFailure(err error) bool {
+	return errors.Is(err, peer.ErrChannelMemberClientTransport) ||
+		errors.Is(err, peer.ErrChannelMemberBusy) || errors.Is(err, peer.ErrChannelMemberRosterGap) ||
+		errors.Is(err, peer.ErrChannelMemberNotMember) ||
+		errors.Is(err, store.ErrChannelBaselineAuthority) ||
+		errors.Is(err, store.ErrChannelRuntimeAuthority) || errors.Is(err, store.ErrChannelRuntimeConflict) ||
+		errors.Is(err, store.ErrChannelLeaveConflict) || errors.Is(err, store.ErrChannelLeaveAuthority)
+}
+
+func permanentChannelMemberFailure(err error) bool {
+	return errors.Is(err, peer.ErrChannelMemberClientResponse) ||
+		errors.Is(err, peer.ErrChannelMemberRevoked) || errors.Is(err, peer.ErrChannelMemberClosed) ||
+		errors.Is(err, peer.ErrChannelMemberRosterConflict) ||
+		errors.Is(err, peer.ErrChannelMemberBaselineConflict) ||
+		errors.Is(err, peer.ErrChannelMemberEpochMismatch) ||
+		errors.Is(err, store.ErrChannelLeaveInput) || errors.Is(err, store.ErrChannelBaselineConflict) ||
+		errors.Is(err, store.ErrChannelBaselineEpochMismatch)
+}
+
+func channelMemberRetryDelay(attempt uint64) time.Duration {
+	delay := time.Second
+	for current := uint64(1); current < attempt && delay < channelMemberRetryMaximum; current++ {
+		delay *= 2
+	}
+	if delay > channelMemberRetryMaximum {
+		return channelMemberRetryMaximum
+	}
+	return delay
+}
 
 func (worker *ChannelMemberReconciler) finish(failed *bool) {
 	worker.mu.Lock()
@@ -48,18 +106,38 @@ func (worker *ChannelMemberReconciler) scheduleFailure(key channelMemberTargetKe
 		schedule.permanent = true
 		worker.snapshot.PermanentFailures++
 	} else {
-		delay := time.Second
-		for attempt := uint8(1); attempt < schedule.attempt && delay < channelMemberRetryMaximum; attempt++ {
-			delay *= 2
-		}
-		if delay > channelMemberRetryMaximum {
-			delay = channelMemberRetryMaximum
-		}
-		schedule.next = at.Add(delay)
+		schedule.next = at.Add(channelMemberRetryDelay(uint64(schedule.attempt)))
 		worker.snapshot.RetryableFailures++
 	}
 	worker.mu.Unlock()
 	worker.schedules[key] = schedule
+}
+
+func (worker *ChannelMemberReconciler) recordDurableFailure(
+	disposition channelMemberFailureDisposition, cause error,
+) {
+	worker.mu.Lock()
+	defer worker.mu.Unlock()
+	if cause != nil {
+		worker.snapshot.LastFailure = cause.Error()
+	}
+	if disposition == channelMemberFailurePermanent {
+		worker.snapshot.PermanentFailures++
+	} else {
+		worker.snapshot.RetryableFailures++
+	}
+}
+
+func (worker *ChannelMemberReconciler) recordLeaveRequest() {
+	worker.mu.Lock()
+	worker.snapshot.LeaveRequests++
+	worker.mu.Unlock()
+}
+
+func (worker *ChannelMemberReconciler) recordLeaveSettlement() {
+	worker.mu.Lock()
+	worker.snapshot.LeaveSettlements++
+	worker.mu.Unlock()
 }
 
 func (worker *ChannelMemberReconciler) recordCycle(at time.Time, targets int) {

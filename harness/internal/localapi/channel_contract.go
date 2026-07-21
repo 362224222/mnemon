@@ -284,14 +284,6 @@ func validateChannelRemoveResponse(response ChannelRemoveResponse) *APIError {
 	return nil
 }
 
-func validateChannelLeaveResponse(response ChannelLeaveResponse) *APIError {
-	if response.SchemaVersion != SchemaVersion || response.Status != "left" ||
-		validateChannelView(response.Channel) != nil {
-		return invalidControlResponse("Channel leave response is invalid")
-	}
-	return nil
-}
-
 func validateChannelAbandonResponse(response ChannelAbandonResponse) *APIError {
 	transitionedAt, err := time.Parse(time.RFC3339Nano, response.TransitionedAt)
 	if response.SchemaVersion != SchemaVersion || response.Status != "abandoned" ||

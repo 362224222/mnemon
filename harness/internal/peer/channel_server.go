@@ -131,7 +131,8 @@ func (dispatcher *ChannelDispatcher) serve(stream network.Stream) error {
 	switch first.Type() {
 	case ChannelFrameEnrollInit:
 		handler = dispatcher.enrollment
-	case ChannelFrameMemberHello, ChannelFrameSyncRequest, ChannelFrameDataBaseline:
+	case ChannelFrameMemberHello, ChannelFrameSyncRequest, ChannelFrameDataBaseline,
+		ChannelFrameLeaveRequest:
 		handler = dispatcher.member
 	default:
 		return fmt.Errorf("%w: invalid first request frame", ErrChannelDispatcher)

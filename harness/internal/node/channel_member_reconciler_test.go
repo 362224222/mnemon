@@ -202,9 +202,43 @@ type fakeChannelMemberBackend struct {
 	mu          sync.Mutex
 	target      channelMemberTarget
 	hasTarget   bool
+	leaveTarget channelMemberLeaveTarget
+	hasLeave    bool
+	leaveStarts int
+	leaveSettle int
 	mergeValues []model.Member
 	mergeHead   model.RecordHead
 	confirms    int
+}
+
+func (backend *fakeChannelMemberBackend) leaveTargets(context.Context,
+	time.Time,
+) ([]channelMemberLeaveTarget, error) {
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	if !backend.hasLeave {
+		return nil, nil
+	}
+	return []channelMemberLeaveTarget{backend.leaveTarget}, nil
+}
+
+func (backend *fakeChannelMemberBackend) startLeave(_ context.Context,
+	_ channelMemberLeaveTarget, _, _ time.Time,
+) error {
+	backend.mu.Lock()
+	backend.leaveStarts++
+	backend.mu.Unlock()
+	return nil
+}
+
+func (backend *fakeChannelMemberBackend) settleLeave(_ context.Context,
+	_ channelMemberLeaveTarget, _ model.SignedChannelLeaveReceipt, _ time.Time,
+) error {
+	backend.mu.Lock()
+	backend.leaveSettle++
+	backend.hasLeave = false
+	backend.mu.Unlock()
+	return nil
 }
 
 func (backend *fakeChannelMemberBackend) targets(context.Context) ([]channelMemberTarget, error) {
@@ -270,6 +304,18 @@ type fakeChannelMemberClient struct {
 	hellos        int
 	syncs         int
 	installs      int
+	leaveResponse peer.LeaveReceipt
+	leaveError    error
+	leaves        int
+}
+
+func (client *fakeChannelMemberClient) Leave(context.Context, model.PeerID, []byte,
+	peer.LeaveRequest,
+) (peer.LeaveReceipt, error) {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	client.leaves++
+	return client.leaveResponse, client.leaveError
 }
 
 func (client *fakeChannelMemberClient) Hello(_ context.Context, _ model.PeerID, _ []byte,

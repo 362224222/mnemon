@@ -133,6 +133,27 @@ func (client *ChannelMemberClient) InstallBaseline(ctx context.Context, remote m
 	return ack, nil
 }
 
+func (client *ChannelMemberClient) Leave(ctx context.Context, remote model.PeerID,
+	remotePublicKey []byte, request LeaveRequest,
+) (LeaveReceipt, error) {
+	session, err := client.open(ctx, remote, remotePublicKey, request)
+	if err != nil {
+		return LeaveReceipt{}, err
+	}
+	defer session.finish()
+	response, err := session.read(maxChannelFrameBytes())
+	if err != nil {
+		return LeaveReceipt{}, err
+	}
+	receipt, ok := response.Payload().(LeaveReceipt)
+	if response.Type() != ChannelFrameLeaveReceipt || !ok ||
+		!validLeaveReceipt(request, receipt) {
+		return LeaveReceipt{}, ErrChannelMemberClientResponse
+	}
+	session.completed = true
+	return receipt, nil
+}
+
 type channelMemberClientSession struct {
 	stream    network.Stream
 	requestID ChannelRequestID
@@ -306,6 +327,17 @@ func validMemberSyncPage(after, frozen model.RecordHead, page SyncPage) bool {
 	}
 	return page.More() && previous.Revision() < page.RosterHead().Revision() ||
 		!page.More() && previous == page.RosterHead()
+}
+
+func validLeaveReceipt(request LeaveRequest, receipt LeaveReceipt) bool {
+	if request.IsZero() || receipt.IsZero() {
+		return false
+	}
+	requestRecord := request.SignedRequest().Record()
+	receiptRecord := receipt.SignedReceipt().Record()
+	return receiptRecord.ChannelID() == requestRecord.ChannelID() &&
+		receiptRecord.MemberPeerID() == requestRecord.MemberPeerID() &&
+		receiptRecord.RequestDigest() == request.SignedRequest().Digest()
 }
 
 func channelMemberClientTransportFailure(ctx context.Context, cause error) error {

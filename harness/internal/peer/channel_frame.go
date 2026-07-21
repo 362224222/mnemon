@@ -47,6 +47,8 @@ const (
 	ChannelFrameSyncPage        ChannelFrameType = "sync_page"
 	ChannelFrameDataBaseline    ChannelFrameType = "data_baseline"
 	ChannelFrameDataBaselineAck ChannelFrameType = "data_baseline_ack"
+	ChannelFrameLeaveRequest    ChannelFrameType = "leave_request"
+	ChannelFrameLeaveReceipt    ChannelFrameType = "leave_receipt"
 	ChannelFrameProtocolError   ChannelFrameType = "protocol_error"
 )
 
@@ -55,7 +57,8 @@ func (frameType ChannelFrameType) Valid() bool {
 	case ChannelFrameEnrollInit, ChannelFrameEnrollChallenge, ChannelFrameEnrollProof,
 		ChannelFrameEnrollAccepted, ChannelFrameMemberHello, ChannelFrameMemberHelloAck,
 		ChannelFrameSyncRequest, ChannelFrameSyncPage, ChannelFrameDataBaseline,
-		ChannelFrameDataBaselineAck, ChannelFrameProtocolError:
+		ChannelFrameDataBaselineAck, ChannelFrameLeaveRequest, ChannelFrameLeaveReceipt,
+		ChannelFrameProtocolError:
 		return true
 	default:
 		return false
@@ -139,6 +142,9 @@ func NewChannelFrame(requestID ChannelRequestID,
 }
 
 func canonicalChannelPayload(payload ChannelFramePayload) (ChannelFrameType, model.JSON, error) {
+	if frameType, canonical, handled, err := canonicalMemberControlPayload(payload); handled {
+		return frameType, canonical, err
+	}
 	var frameType ChannelFrameType
 	switch value := payload.(type) {
 	case EnrollInit:
@@ -180,16 +186,6 @@ func canonicalChannelPayload(payload ChannelFramePayload) (ChannelFrameType, mod
 		frameType = ChannelFrameSyncPage
 		if value.IsZero() {
 			return "", model.JSON{}, channelFrameError("zero SyncPage payload", nil)
-		}
-	case DataBaseline:
-		frameType = ChannelFrameDataBaseline
-		if value.IsZero() {
-			return "", model.JSON{}, channelFrameError("zero DataBaseline payload", nil)
-		}
-	case DataBaselineAck:
-		frameType = ChannelFrameDataBaselineAck
-		if value.IsZero() {
-			return "", model.JSON{}, channelFrameError("zero DataBaselineAck payload", nil)
 		}
 	case ProtocolError:
 		frameType = ChannelFrameProtocolError
@@ -265,6 +261,10 @@ func parseChannelPayload(frameType ChannelFrameType, raw []byte) (ChannelFramePa
 		return parseDataBaseline(raw)
 	case ChannelFrameDataBaselineAck:
 		return parseDataBaselineAck(raw)
+	case ChannelFrameLeaveRequest:
+		return parseLeaveRequest(raw)
+	case ChannelFrameLeaveReceipt:
+		return parseLeaveReceipt(raw)
 	case ChannelFrameProtocolError:
 		return parseProtocolError(raw)
 	default:
@@ -331,22 +331,16 @@ func writeFull(writer io.Writer, value []byte) error {
 	return nil
 }
 
-func maxChannelFrameBytes() int {
-	if HermeticLimits().DirectFrameBytes < model.MaxCanonicalJSONBytes {
-		return HermeticLimits().DirectFrameBytes
-	}
-	return model.MaxCanonicalJSONBytes
-}
-
 func channelFrameMaximum(frameType ChannelFrameType) int {
 	switch frameType {
 	case ChannelFrameSyncPage:
 		return channelSyncPageFrameBytes
-	case ChannelFrameEnrollAccepted, ChannelFrameMemberHello, ChannelFrameMemberHelloAck:
+	case ChannelFrameEnrollAccepted, ChannelFrameMemberHello, ChannelFrameMemberHelloAck,
+		ChannelFrameLeaveReceipt:
 		return channelRosterFrameBytes
 	case ChannelFrameEnrollInit, ChannelFrameEnrollChallenge, ChannelFrameEnrollProof,
 		ChannelFrameSyncRequest, ChannelFrameDataBaseline, ChannelFrameDataBaselineAck,
-		ChannelFrameProtocolError:
+		ChannelFrameLeaveRequest, ChannelFrameProtocolError:
 		return channelSmallFrameBytes
 	default:
 		return 0

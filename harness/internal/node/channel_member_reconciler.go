@@ -30,6 +30,8 @@ type ChannelMemberReconcilerSnapshot struct {
 	Syncs             uint64
 	RosterMerges      uint64
 	Baselines         uint64
+	LeaveRequests     uint64
+	LeaveSettlements  uint64
 	Reachable         uint64
 	Unreachable       uint64
 	RetryableFailures uint64
@@ -178,14 +180,24 @@ func (worker *ChannelMemberReconciler) runCycle(ctx context.Context, force bool)
 	if err != nil {
 		return fmt.Errorf("%w: read durable targets: %w", ErrChannelMemberReconciler, err)
 	}
+	leaves, err := worker.backend.leaveTargets(ctx, at)
+	if err != nil {
+		return fmt.Errorf("%w: read durable leave targets: %w", ErrChannelMemberReconciler, err)
+	}
 	if err := validateChannelMemberTargets(targets); err != nil {
+		return err
+	}
+	if err := validateChannelMemberLeaveTargets(leaves, at); err != nil {
 		return err
 	}
 	if force {
 		clear(worker.schedules)
 	}
 	worker.pruneSchedules(targets)
-	worker.recordCycle(at, len(targets))
+	worker.recordCycle(at, len(targets)+len(leaves))
+	if err := worker.processLeaveTargets(ctx, leaves, at); err != nil {
+		return err
+	}
 	for _, target := range targets {
 		key := target.key()
 		schedule := worker.schedules[key]
@@ -322,46 +334,6 @@ func (worker *ChannelMemberReconciler) markReachability(ctx context.Context,
 		return nil
 	}
 	return err
-}
-
-type channelMemberFailureDisposition uint8
-
-const (
-	channelMemberFailureFatal channelMemberFailureDisposition = iota
-	channelMemberFailureRetryable
-	channelMemberFailurePermanent
-)
-
-func classifyChannelMemberFailure(err error) channelMemberFailureDisposition {
-	var remote *peer.ChannelProtocolFailure
-	if errors.As(err, &remote) {
-		// An active signed target can race the remote install immediately after
-		// enrollment acceptance. The wire answer remains fail-closed; this owner
-		// retries only the same roster generation until the remote catches up.
-		if remote.Code() == peer.ChannelErrorNotMember {
-			return channelMemberFailureRetryable
-		}
-		if remote.Retryable() {
-			return channelMemberFailureRetryable
-		}
-		return channelMemberFailurePermanent
-	}
-	if errors.Is(err, peer.ErrChannelMemberClientTransport) ||
-		errors.Is(err, peer.ErrChannelMemberBusy) || errors.Is(err, peer.ErrChannelMemberRosterGap) ||
-		errors.Is(err, peer.ErrChannelMemberNotMember) ||
-		errors.Is(err, store.ErrChannelBaselineAuthority) ||
-		errors.Is(err, store.ErrChannelRuntimeAuthority) || errors.Is(err, store.ErrChannelRuntimeConflict) {
-		return channelMemberFailureRetryable
-	}
-	if errors.Is(err, peer.ErrChannelMemberClientResponse) || errors.Is(err, peer.ErrChannelMemberRevoked) ||
-		errors.Is(err, peer.ErrChannelMemberClosed) || errors.Is(err, peer.ErrChannelMemberRosterConflict) ||
-		errors.Is(err, peer.ErrChannelMemberBaselineConflict) ||
-		errors.Is(err, peer.ErrChannelMemberEpochMismatch) ||
-		errors.Is(err, store.ErrChannelBaselineConflict) ||
-		errors.Is(err, store.ErrChannelBaselineEpochMismatch) {
-		return channelMemberFailurePermanent
-	}
-	return channelMemberFailureFatal
 }
 
 func validateChannelMemberTargets(targets []channelMemberTarget) error {
