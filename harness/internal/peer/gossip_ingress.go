@@ -236,51 +236,73 @@ func (ingress *GossipIngress) Run(ctx context.Context) error {
 		if ctx.Err() != nil || !ingress.session.IsCurrent() {
 			return nil
 		}
-		spec, admission := ingress.admit(received)
-		switch admission {
-		case gossipIngressAdmissionCovered:
-			// PubSub delivers the locally signed publish to its own
-			// subscription. The durable origin log already covers that exact
-			// publication, so it must not enter the imported Inbox or stop the
-			// Channel receive loop.
-			if !ingress.recordDisposition(store.PeerInboxCovered) {
-				return ingress.stop(GossipIngressDiagnosticStore)
-			}
-			continue
-		case gossipIngressAdmissionImported:
-		default:
-			return ingress.stop(GossipIngressDiagnosticPublication)
+		if err := ingress.putReceived(ctx, received); err != nil {
+			return err
 		}
-		result, err := ingress.store.PutPeerInbox(ctx, spec)
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil
-			}
-			switch {
-			case errors.Is(err, store.ErrPeerInboxQuarantined):
-				ingress.recordQuarantine()
-				continue
-			case errors.Is(err, store.ErrPeerInboxPressure):
-				ingress.signalRepair()
-				return ingress.stop(GossipIngressDiagnosticPressure)
-			case errors.Is(err, store.ErrPeerInboxAuthority):
-				return ingress.stop(GossipIngressDiagnosticAuthority)
-			case errors.Is(err, store.ErrPeerInboxConflict):
-				return ingress.stop(GossipIngressDiagnosticConflict)
-			case errors.Is(err, store.ErrPeerInboxInput):
-				return ingress.stop(GossipIngressDiagnosticPublication)
-			default:
-				return ingress.stop(GossipIngressDiagnosticStore)
-			}
+	}
+}
+
+func (ingress *GossipIngress) putReceived(ctx context.Context, received ReceivedPublication) error {
+	spec, imported, err := ingress.admitForStore(received)
+	if err != nil || !imported {
+		return err
+	}
+	result, err := ingress.store.PutPeerInbox(ctx, spec)
+	if err != nil {
+		return ingress.handleStoreError(ctx, err)
+	}
+	if !ingress.recordDisposition(result.Disposition) {
+		return ingress.stop(GossipIngressDiagnosticStore)
+	}
+	ingress.signalInbox()
+	if result.Disposition != store.PeerInboxConflicted &&
+		result.Cursor.ObservedChannelSequence > result.Cursor.ContiguousChannelSequence {
+		ingress.signalRepair()
+	}
+	return nil
+}
+
+func (ingress *GossipIngress) handleStoreError(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return nil
+	}
+	switch {
+	case errors.Is(err, store.ErrPeerInboxQuarantined):
+		ingress.recordQuarantine()
+		return nil
+	case errors.Is(err, store.ErrPeerInboxPressure):
+		ingress.signalRepair()
+		return ingress.stop(GossipIngressDiagnosticPressure)
+	case errors.Is(err, store.ErrPeerInboxAuthority):
+		return ingress.stop(GossipIngressDiagnosticAuthority)
+	case errors.Is(err, store.ErrPeerInboxConflict):
+		return ingress.stop(GossipIngressDiagnosticConflict)
+	case errors.Is(err, store.ErrPeerInboxInput):
+		return ingress.stop(GossipIngressDiagnosticPublication)
+	default:
+		return ingress.stop(GossipIngressDiagnosticStore)
+	}
+}
+
+func (ingress *GossipIngress) admitForStore(received ReceivedPublication) (
+	store.PutPeerInboxSpec, bool, error,
+) {
+	spec, admission := ingress.admit(received)
+	switch admission {
+	case gossipIngressAdmissionCovered:
+		// PubSub delivers the locally signed publish to its own subscription.
+		// The durable origin log already covers that exact publication, so it
+		// must not enter the imported Inbox or stop the Channel receive loop.
+		if !ingress.recordDisposition(store.PeerInboxCovered) {
+			return store.PutPeerInboxSpec{}, false,
+				ingress.stop(GossipIngressDiagnosticStore)
 		}
-		if !ingress.recordDisposition(result.Disposition) {
-			return ingress.stop(GossipIngressDiagnosticStore)
-		}
-		ingress.signalInbox()
-		if result.Disposition != store.PeerInboxConflicted &&
-			result.Cursor.ObservedChannelSequence > result.Cursor.ContiguousChannelSequence {
-			ingress.signalRepair()
-		}
+		return store.PutPeerInboxSpec{}, false, nil
+	case gossipIngressAdmissionImported:
+		return spec, true, nil
+	default:
+		return store.PutPeerInboxSpec{}, false,
+			ingress.stop(GossipIngressDiagnosticPublication)
 	}
 }
 
