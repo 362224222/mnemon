@@ -138,7 +138,7 @@ func productionSetupDependencies() setupDependencies {
 		newHookGate: func(workspace string, host assets.Host) (node.DaemonReadyGate, error) {
 			return newSetupHookGate(workspace, host)
 		},
-		ensure: node.EnsureDaemon,
+		ensure: ensureSetupDaemon,
 		acquireLifecycle: func(ctx context.Context,
 			options node.DaemonLifecycleOptions,
 		) (setupDaemonLifecycle, error) {

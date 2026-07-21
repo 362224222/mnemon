@@ -2,8 +2,11 @@ package cli
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/assets"
 	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
@@ -28,5 +31,36 @@ func TestSetupEnsureOptionsReusesTheEarlyValidatedPreflight(t *testing.T) {
 	}
 	if err := options.Preflight.Verify(context.Background()); err != nil {
 		t.Fatalf("reused preflight Verify() error = %v", err)
+	}
+}
+
+func TestEnsureSetupDaemonRetriesTransientExistingNotReady(t *testing.T) {
+	calls := 0
+	want := node.DaemonEnsureResult{Health: localapi.HealthResponse{
+		AssetRevision: "asset-r5", SchemaVersion: localapi.SchemaVersion, Status: "ready"}}
+	got, err := ensureSetupDaemonWith(context.Background(), node.DaemonEnsureOptions{},
+		func(context.Context, node.DaemonEnsureOptions) (node.DaemonEnsureResult, error) {
+			calls++
+			if calls == 1 {
+				return node.DaemonEnsureResult{}, fmt.Errorf("%w: existing daemon is settling",
+					node.ErrDaemonHealthAuthority)
+			}
+			return want, nil
+		}, 200*time.Millisecond, time.Millisecond)
+	if err != nil || got != want || calls != 2 {
+		t.Fatalf("ensureSetupDaemonWith() = (%#v, %v), calls=%d", got, err, calls)
+	}
+}
+
+func TestEnsureSetupDaemonDoesNotRetryNonAuthorityFailure(t *testing.T) {
+	calls := 0
+	failed := errors.New("transport failed")
+	_, err := ensureSetupDaemonWith(context.Background(), node.DaemonEnsureOptions{},
+		func(context.Context, node.DaemonEnsureOptions) (node.DaemonEnsureResult, error) {
+			calls++
+			return node.DaemonEnsureResult{}, failed
+		}, 200*time.Millisecond, time.Millisecond)
+	if !errors.Is(err, failed) || calls != 1 {
+		t.Fatalf("ensureSetupDaemonWith() error = %v, calls=%d", err, calls)
 	}
 }

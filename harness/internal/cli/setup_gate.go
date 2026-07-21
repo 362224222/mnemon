@@ -109,7 +109,8 @@ func (gate *setupHookGate) verifyReadyOnce(ctx context.Context) (bool, error) {
 }
 
 func setupHookRetryable(runErr error, stderr string) bool {
-	return runErr != nil && strings.Contains(stderr, "asset_revision_mismatch:")
+	return runErr != nil && (strings.Contains(stderr, "asset_revision_mismatch:") ||
+		strings.Contains(stderr, "mnemond_unavailable:"))
 }
 
 func validateSetupHookPath(path string) (os.FileInfo, error) {
