@@ -40,6 +40,8 @@ type managedAcceptanceState struct {
 	hasHandling          bool
 	current              model.CurrentReadReceipt
 	hasCurrent           bool
+	actionWork           model.ReviewWork
+	hasActionWork        bool
 	authorizedReferences []model.Digest
 	derivation           *LocalDerivationParent
 }
@@ -89,16 +91,21 @@ func prepareManagedAcceptance(ctx context.Context, tx *sql.Tx, spec LocalAccepta
 	}
 	state := managedAcceptanceState{run: run, handling: handling, hasHandling: true,
 		current: current, hasCurrent: true}
+	actionWork, err := readReviewWork(ctx, tx, current.ActionWork())
+	if err != nil {
+		return managedAcceptanceState{}, fmt.Errorf("%w: current action Work is unavailable",
+			ErrManagedAcceptanceInvariant)
+	}
+	state.actionWork, state.hasActionWork = actionWork, true
 	if operation.Kind() == model.OperationTeamworkOffer {
-		parent, err := readReviewWork(ctx, tx, current.ActionWork())
-		if err != nil || parent.Version() != current.ActionWorkVersion() ||
-			parent.UpdatedBy() != current.SourceEvent().EventID() ||
-			(parent.State() != model.WorkActive && parent.State() != model.WorkRework) {
+		if actionWork.Version() != current.ActionWorkVersion() ||
+			actionWork.UpdatedBy() != current.SourceEvent().EventID() ||
+			(actionWork.State() != model.WorkActive && actionWork.State() != model.WorkRework) {
 			return managedAcceptanceState{}, fmt.Errorf("%w: nested offer parent differs from current receipt",
 				ErrManagedAcceptanceInvariant)
 		}
-		state.derivation = &LocalDerivationParent{ChannelID: parent.ChannelID(), WorkRef: parent.Ref(),
-			ExpectedVersion: parent.Version(), UpdatedByEvent: parent.UpdatedBy()}
+		state.derivation = &LocalDerivationParent{ChannelID: actionWork.ChannelID(), WorkRef: actionWork.Ref(),
+			ExpectedVersion: actionWork.Version(), UpdatedByEvent: actionWork.UpdatedBy()}
 	}
 	return state, nil
 }
@@ -128,7 +135,11 @@ func validateManagedAcceptanceEvents(authority managedAcceptanceState, operation
 	source := authority.current.SourceEvent()
 	for _, event := range events {
 		causes := event.CausedBy()
-		if len(causes) != 1 || causes[0] != source || event.AcceptedAt().Before(authority.current.ReadAt()) {
+		if len(causes) != 1 || event.AcceptedAt().Before(authority.current.ReadAt()) {
+			return fmt.Errorf("%w: Event is not caused by the exact current source",
+				ErrManagedAcceptanceInvariant)
+		}
+		if causes[0] != source && !managedParentResumeActionWorkCause(authority, operation, event) {
 			return fmt.Errorf("%w: Event is not caused by the exact current source",
 				ErrManagedAcceptanceInvariant)
 		}
@@ -149,6 +160,41 @@ func validateManagedAcceptanceEvents(authority managedAcceptanceState, operation
 			ErrManagedAcceptanceInvariant)
 	}
 	return nil
+}
+
+func managedParentResumeActionWorkCause(authority managedAcceptanceState,
+	operation model.Operation, event model.Event,
+) bool {
+	if !authority.hasCurrent || !authority.hasActionWork ||
+		operation.Kind() != model.OperationTeamworkDeliver ||
+		event.Type() != model.EventReviewDeliveryReady ||
+		len(authority.current.Projection().ChildResults()) == 0 {
+		return false
+	}
+	action := authority.current.Projection().ActionWork()
+	source := authority.current.Projection().SourceEvent()
+	work := authority.actionWork
+	causes := event.CausedBy()
+	if len(causes) != 1 ||
+		causes[0].EventID() != work.UpdatedBy() ||
+		causes[0].OriginPeerID() != work.Ref().HomePeerID() ||
+		event.Scope().WorkRef() != action.Ref() ||
+		work.Ref() != action.Ref() ||
+		work.ChannelID() != event.Scope().ChannelID() {
+		return false
+	}
+	sourceChild := false
+	for _, child := range authority.current.Projection().ChildResults() {
+		sourceChild = sourceChild || child.WorkRef() == source.WorkRef()
+	}
+	return sourceChild &&
+		action.LocalRole() == model.CurrentReviewer &&
+		work.Version() == action.Version() &&
+		work.Iteration() == action.Iteration() &&
+		work.State() == action.State() &&
+		work.DeadlineUnixNano() == action.DeadlineUnixNano() &&
+		work.StateData().String() == action.StateData().String() &&
+		source.WorkRef() != action.Ref()
 }
 
 func managedAuthorizedReferences(authority managedAcceptanceState,

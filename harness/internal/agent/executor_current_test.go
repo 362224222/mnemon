@@ -48,6 +48,33 @@ func TestTeamworkActionExecutorExecutesAllCurrentActions(t *testing.T) {
 	}
 }
 
+func TestTeamworkActionExecutorParentResumeDeliveryCitesParentUpdate(t *testing.T) {
+	t.Parallel()
+	fixture := newExecutorFixture(t, 1)
+	work := fixture.work(t, model.WorkActive, 2, 1, true)
+	fixture.backend.work = work
+	action := executorAction(t, "deliver", true, "aggregate child result", "", "", nil)
+	current := executorParentResumeCurrentReceipt(t, fixture, action, work)
+	reservation := executorReservationWithCurrent(t, fixture, action, work, true, &current)
+	response, controlErr := fixture.executor.ExecuteTeamwork(context.Background(), TeamworkExecutionSpec{
+		Request: TeamworkActionRequest{Action: "deliver", Content: "aggregate child result"},
+		Action:  action, Reservation: reservation, At: fixture.at})
+	if controlErr != nil || response.Handling == nil || len(response.Results) != 1 {
+		t.Fatalf("parent-resume deliver = (%#v, %v)", response, controlErr)
+	}
+	eventValue := fixture.backend.committed.items[0].Publication.Event()
+	parentCause, err := fixture.backend.ReviewWorkUpdateCause(context.Background(), work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if eventValue.Type() != model.EventReviewDeliveryReady || len(eventValue.CausedBy()) != 1 ||
+		eventValue.CausedBy()[0] != parentCause ||
+		eventValue.CausedBy()[0] == current.SourceEvent() {
+		t.Fatalf("parent-resume delivery cause = %v, parent=%v child=%v",
+			eventValue.CausedBy(), parentCause, current.SourceEvent())
+	}
+}
+
 func runExecutorCurrentActionCase(t *testing.T, test executorCurrentActionCase) {
 	t.Helper()
 	fixture := newExecutorFixture(t, 1)

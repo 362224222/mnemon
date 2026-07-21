@@ -372,6 +372,7 @@ func (c *fakeArtifactCoordinator) Coordinate(_ context.Context,
 type fakeExecutionBackend struct {
 	scope               executionScope
 	work                model.ReviewWork
+	causeErr            error
 	operation           model.Operation
 	probeTerminal       model.Operation
 	committed           executionAcceptanceSpec
@@ -410,6 +411,22 @@ func (b *fakeExecutionBackend) GetReviewWork(_ context.Context,
 		return model.ReviewWork{}, errors.New("Work unavailable")
 	}
 	return b.work, nil
+}
+
+func (b *fakeExecutionBackend) ReviewWorkUpdateCause(_ context.Context,
+	work model.ReviewWork,
+) (model.EventKey, error) {
+	if b.causeErr != nil {
+		return model.EventKey{}, b.causeErr
+	}
+	if work.Ref().IsZero() || work.UpdatedBy().IsZero() {
+		return model.EventKey{}, errors.New("Work update cause unavailable")
+	}
+	epoch, err := model.ParseOriginEpoch("epoch-" + fmt.Sprintf("%x", sha256.Sum256([]byte("current-source"))))
+	if err != nil {
+		return model.EventKey{}, err
+	}
+	return model.NewEventKey(work.Ref().HomePeerID(), epoch, work.UpdatedBy())
 }
 
 func (b *fakeExecutionBackend) Probe(_ context.Context,
@@ -540,6 +557,13 @@ func executorReservation(t *testing.T, fixture *executorFixture, action Validate
 	work model.ReviewWork, contextBound bool,
 ) store.ManagedOperationReservation {
 	t.Helper()
+	return executorReservationWithCurrent(t, fixture, action, work, contextBound, nil)
+}
+
+func executorReservationWithCurrent(t *testing.T, fixture *executorFixture, action ValidatedAction,
+	work model.ReviewWork, contextBound bool, currentOverride *model.CurrentReadReceipt,
+) store.ManagedOperationReservation {
+	t.Helper()
 	kind := action.handler.OperationKind()
 	operationID, _ := model.ParseOperationID("operation-executor-" + strings.TrimPrefix(string(kind), "teamwork."))
 	runID, _ := model.ParseRunID("run-executor-" + strings.TrimPrefix(string(kind), "teamwork."))
@@ -556,6 +580,9 @@ func executorReservation(t *testing.T, fixture *executorFixture, action Validate
 		handling, _ := model.ParseHandlingID("handling-" + operationID.String())
 		handlingID, attempt = &handling, 1
 		current := executorCurrentReceipt(t, fixture, runID, handling, work, kind)
+		if currentOverride != nil {
+			current = *currentOverride
+		}
 		valueJSON := current.CanonicalJSON()
 		currentJSON = &valueJSON
 	}
@@ -628,6 +655,57 @@ func executorCurrentReceipt(t *testing.T, fixture *executorFixture, run model.Ru
 		t.Fatal(err)
 	}
 	receipt, err := model.NewCurrentReadReceipt(model.CurrentReadReceiptSpec{RunID: run,
+		ProfileID: fixture.profile.ID(), HandlingID: handling, HandlingAttempt: 1,
+		Projection: projection, ReadAt: fixture.at.Add(-time.Minute)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return receipt
+}
+
+func executorParentResumeCurrentReceipt(t *testing.T, fixture *executorFixture,
+	action ValidatedAction, work model.ReviewWork,
+) model.CurrentReadReceipt {
+	t.Helper()
+	runID, _ := model.ParseRunID("run-executor-" + strings.TrimPrefix(string(action.handler.OperationKind()), "teamwork."))
+	handling, _ := model.ParseHandlingID("handling-operation-executor-" +
+		strings.TrimPrefix(string(action.handler.OperationKind()), "teamwork."))
+	childWorkID, _ := model.ParseWorkID("work-executor-parent-resume-child")
+	childRef, _ := model.NewWorkRef(fixture.scope.node.PeerID(), childWorkID)
+	childEventID, _ := model.ParseEventID("event-executor-parent-resume-child-closed")
+	childKey, _ := model.NewEventKey(childRef.HomePeerID(),
+		executorEpoch(t, "parent-resume-child"), childEventID)
+	childPayload, _ := model.NewJSON([]byte(`{"iteration":1,"note":"","work_version":3}`))
+	source, err := model.NewCurrentEvent(model.CurrentEventSpec{Key: childKey,
+		Digest: model.Sum([]byte("parent-resume-child-source")),
+		Type:   model.EventReviewClosed, WorkRef: childRef, Summary: "child closed",
+		Payload: childPayload, AcceptedAt: fixture.at.Add(-90 * time.Second)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	brief, _ := model.NewCurrentBrief(model.CurrentBriefSpec{Content: "persistent goal",
+		DeadlineUnixNano: work.DeadlineUnixNano()})
+	currentWork, err := model.NewCurrentWork(model.CurrentWorkSpec{Ref: work.Ref(),
+		Version: work.Version(), Iteration: work.Iteration(),
+		DeadlineUnixNano: work.DeadlineUnixNano(), State: work.State(),
+		StateData: work.StateData(), LocalRole: model.CurrentReviewer, Brief: brief})
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err := model.NewCurrentChildResult(model.CurrentChildResultSpec{
+		Ordinal: 0, WorkRef: childRef, State: model.WorkClosed, Version: 4, Iteration: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	projection, err := model.NewCurrentProjection(model.CurrentProjectionSpec{
+		SourceEvent: source, ActionWork: currentWork,
+		AllowedActions: []model.OperationKind{action.handler.OperationKind(), model.OperationResolveRetry},
+		ChildResults:   []model.CurrentChildResult{child},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := model.NewCurrentReadReceipt(model.CurrentReadReceiptSpec{RunID: runID,
 		ProfileID: fixture.profile.ID(), HandlingID: handling, HandlingAttempt: 1,
 		Projection: projection, ReadAt: fixture.at.Add(-time.Minute)})
 	if err != nil {

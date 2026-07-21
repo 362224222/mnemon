@@ -34,7 +34,7 @@ func validateLocalCausality(ctx context.Context, tx *sql.Tx, event model.Event) 
 // context-bound offer path is checked against its frozen derivation parent by
 // prepareLocalDerivations.
 func validateLocalCausalSemantics(ctx context.Context, tx *sql.Tx, operation model.Operation,
-	event model.Event, managedAuthority managedAcceptanceState,
+	event model.Event, _ managedAcceptanceState,
 ) error {
 	if ctx == nil || tx == nil {
 		return errors.New("commit local acceptance: nil causality context or transaction")
@@ -65,9 +65,6 @@ func validateLocalCausalSemantics(ctx context.Context, tx *sql.Tx, operation mod
 	case model.EventReviewAcceptRequested, model.EventReviewDeclineRequested,
 		model.EventReviewDeliveryReady, model.EventReviewReworkRequested,
 		model.EventReviewClosed, model.EventReviewCancelled:
-		if managedParentResumeDeliveryCause(managedAuthority, operation, event, current) {
-			return nil
-		}
 		return requireCurrentWorkCause(ctx, tx, event, current)
 	case model.EventReviewAccepted, model.EventReviewAcceptRejected,
 		model.EventReviewDelivered, model.EventReviewDeclined:
@@ -82,34 +79,6 @@ func validateLocalCausalSemantics(ctx context.Context, tx *sql.Tx, operation mod
 	default:
 		return causalConflict("Event type is outside the closed Teamwork causality policy")
 	}
-}
-
-func managedParentResumeDeliveryCause(authority managedAcceptanceState, operation model.Operation,
-	event model.Event, current model.ReviewWork,
-) bool {
-	if !authority.hasCurrent || operation.Kind() != model.OperationTeamworkDeliver ||
-		event.Type() != model.EventReviewDeliveryReady ||
-		len(authority.current.Projection().ChildResults()) == 0 {
-		return false
-	}
-	action := authority.current.Projection().ActionWork()
-	source := authority.current.Projection().SourceEvent()
-	causes := event.CausedBy()
-	if len(causes) != 1 || causes[0] != source.Key() ||
-		event.Scope().WorkRef() != action.Ref() || current.Ref() != action.Ref() ||
-		current.Version() != action.Version() || current.Iteration() != action.Iteration() ||
-		current.State() != action.State() ||
-		current.DeadlineUnixNano() != action.DeadlineUnixNano() ||
-		current.StateData().String() != action.StateData().String() ||
-		source.WorkRef() == action.Ref() {
-		return false
-	}
-	for _, child := range authority.current.Projection().ChildResults() {
-		if child.WorkRef() == source.WorkRef() {
-			return true
-		}
-	}
-	return false
 }
 
 type durableCausalEvent struct {

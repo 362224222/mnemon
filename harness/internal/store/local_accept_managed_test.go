@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -234,6 +235,44 @@ func TestCommitManagedAcceptanceAcceptsParentResumeDelivery(t *testing.T) {
 	}
 }
 
+func TestCommitManagedAcceptanceRejectsParentResumeDeliveryChildCause(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fixture := newDerivationDispositionFixture(t, true)
+	if err := fixture.store.ReconcileWorkDerivationDisposition(ctx, fixture.children[0]); err != nil {
+		t.Fatal(err)
+	}
+	claimAt := fixture.now.Add(7 * time.Second)
+	claim := claimCurrent(t, fixture.acceptanceFixture, "owner-parent-resume-child-cause",
+		"token-parent-resume-child-cause", claimAt)
+	readAt := claimAt.Add(time.Second)
+	current, err := fixture.store.FinalizeAgentCurrentRead(ctx,
+		plannedCurrentReadSpec(t, fixture.store, currentReadSpec(fixture.acceptanceFixture,
+			claim.Run.ID(), "token-parent-resume-child-cause", readAt)))
+	if err != nil || len(current.Receipt.Projection().ChildResults()) == 0 {
+		t.Fatalf("parent-resume current = (%#v, %v)", current, err)
+	}
+	operationAt := readAt.Add(time.Second)
+	reservation, err := fixture.store.ReserveManagedOperation(ctx, ManagedOperationSpec{
+		Profile: fixture.profile, ClientKeyHash: model.Sum([]byte("key-parent-resume-child-cause")),
+		RequestDigest: model.Sum([]byte("request-parent-resume-child-cause")),
+		Kind:          model.OperationTeamworkDeliver, LeaseOwner: "server-parent-resume-child-cause",
+		At: operationAt, LeaseUntil: operationAt.Add(time.Minute),
+		ClaimContextHash: model.Sum([]byte("token-parent-resume-child-cause")), HasClaimContext: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	acceptedAt := operationAt.Add(time.Second)
+	managedSpec := managedDeliverAcceptance(t, fixture.acceptanceFixture, reservation,
+		current, acceptedAt, "event-parent-resume-child-cause-delivery-ready",
+		current.Receipt.SourceEvent())
+	if _, err := fixture.store.CommitManagedAcceptance(ctx, managedSpec,
+		acceptedAt.Add(time.Second)); !errors.Is(err, ErrAdmissionConflict) {
+		t.Fatalf("parent-resume child-cause delivery error = %v, want admission conflict", err)
+	}
+}
+
 func TestCommitManagedAcceptanceRollsBackHandlingAndRunOnLateFailure(t *testing.T) {
 	t.Parallel()
 	fixture := newAcceptanceFixture(t, 1)
@@ -359,7 +398,7 @@ func managedCancelAcceptance(t *testing.T, fixture *acceptanceFixture,
 
 func managedDeliverAcceptance(t *testing.T, fixture *acceptanceFixture,
 	reservation ManagedOperationReservation, current AgentCurrentReadResult,
-	acceptedAt time.Time, eventText string,
+	acceptedAt time.Time, eventText string, causeOverride ...model.EventKey,
 ) ManagedAcceptanceSpec {
 	t.Helper()
 	work, err := fixture.store.GetReviewWork(context.Background(), current.Receipt.ActionWork())
@@ -376,13 +415,23 @@ func managedDeliverAcceptance(t *testing.T, fixture *acceptanceFixture,
 	if err != nil {
 		t.Fatal(err)
 	}
+	cause, err := exactReviewWorkUpdateCause(context.Background(), fixture.store.db, work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(causeOverride) > 1 {
+		t.Fatal("managed delivery helper accepts at most one cause override")
+	}
+	if len(causeOverride) == 1 {
+		cause = causeOverride[0]
+	}
 	stamp, err := eventpkg.NewAdmissionStamp(eventpkg.AdmissionStampSpec{
 		Node: scope.Node(), Profile: scope.Profile(), EventID: eventID, ChannelID: work.ChannelID(),
 		WorkRef: work.Ref(), OriginSequence: eventScope.OriginSequence(),
 		ChannelSequence: eventScope.ChannelSequence(), OriginMember: eventScope.OriginMember(),
 		PublicationRoster: eventScope.PublicationRoster(), Audience: audience,
 		WorkVersion: work.Version(), Iteration: work.Iteration(),
-		WorkDeadlineUnixNano: work.DeadlineUnixNano(), CausedBy: []model.EventKey{current.Receipt.SourceEvent()},
+		WorkDeadlineUnixNano: work.DeadlineUnixNano(), CausedBy: []model.EventKey{cause},
 	})
 	if err != nil {
 		t.Fatal(err)

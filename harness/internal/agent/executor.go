@@ -52,6 +52,7 @@ type offerSelectionResolver interface {
 type teamworkExecutionBackend interface {
 	Prepare(context.Context, model.ChannelID, model.Audience, uint8) (executionScope, error)
 	GetReviewWork(context.Context, model.WorkRef) (model.ReviewWork, error)
+	ReviewWorkUpdateCause(context.Context, model.ReviewWork) (model.EventKey, error)
 	Probe(context.Context, store.ManagedOperationProbeSpec) (store.ManagedOperationProbe, error)
 	Commit(context.Context, executionAcceptanceSpec, time.Time) (store.LocalAcceptanceResult, error)
 	ResolveDeadline(context.Context, executionDeadlineSpec, time.Time) (store.DeadlineResolutionResult, error)
@@ -122,6 +123,12 @@ func (b storeTeamworkExecutionBackend) GetReviewWork(ctx context.Context,
 	ref model.WorkRef,
 ) (model.ReviewWork, error) {
 	return b.store.GetReviewWork(ctx, ref)
+}
+
+func (b storeTeamworkExecutionBackend) ReviewWorkUpdateCause(ctx context.Context,
+	work model.ReviewWork,
+) (model.EventKey, error) {
+	return b.store.ReviewWorkUpdateCause(ctx, work)
 }
 
 func (b storeTeamworkExecutionBackend) Probe(ctx context.Context,
@@ -457,13 +464,17 @@ func (e *TeamworkActionExecutor) buildCurrentAction(ctx context.Context, spec Te
 		return executionAcceptanceSpec{}, NewControlError(CodeInternal,
 			"server could not derive action Event scope")
 	}
+	cause, apiErr := e.currentActionCause(ctx, spec.Action, current, work)
+	if apiErr != nil {
+		return executionAcceptanceSpec{}, apiErr
+	}
 	stamp, err := event.NewAdmissionStamp(event.AdmissionStampSpec{Node: scope.node, Profile: scope.profile,
 		EventID: eventID, ChannelID: scope.channelID, WorkRef: work.Ref(),
 		OriginSequence: eventScope.OriginSequence(), ChannelSequence: eventScope.ChannelSequence(),
 		OriginMember: eventScope.OriginMember(), PublicationRoster: eventScope.PublicationRoster(),
 		Audience: audience, WorkVersion: work.Version(), Iteration: work.Iteration(),
 		WorkDeadlineUnixNano: work.DeadlineUnixNano(), Artifacts: artifacts,
-		CausedBy: []model.EventKey{current.SourceEvent()}})
+		CausedBy: []model.EventKey{cause}})
 	if err != nil {
 		return executionAcceptanceSpec{}, NewControlError(CodeInternal,
 			"server could not bind action authority")
@@ -498,6 +509,20 @@ func (e *TeamworkActionExecutor) buildCurrentAction(ctx context.Context, spec Te
 	}
 	return executionAcceptanceSpec{scope: scope, items: []store.LocalAcceptanceItem{item},
 		operation: localExecutionAuthority(spec.Reservation.Operation), deadline: deadline}, nil
+}
+
+func (e *TeamworkActionExecutor) currentActionCause(ctx context.Context,
+	action ValidatedAction, current model.CurrentReadReceipt, work model.ReviewWork,
+) (model.EventKey, *ControlError) {
+	if action.handler.OperationKind() != model.OperationTeamworkDeliver ||
+		len(current.Projection().ChildResults()) == 0 {
+		return current.SourceEvent(), nil
+	}
+	cause, err := e.backend.ReviewWorkUpdateCause(ctx, work)
+	if err != nil {
+		return model.EventKey{}, mapTeamworkExecutionError(err)
+	}
+	return cause, nil
 }
 
 func (e *TeamworkActionExecutor) resolveDeadline(ctx context.Context,
