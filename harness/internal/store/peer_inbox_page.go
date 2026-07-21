@@ -98,7 +98,7 @@ func (s *Store) PutPeerInboxPage(ctx context.Context,
 			quarantined = true
 		}
 	}
-	cursor, err = advancePeerCursor(ctx, tx, cursor, observed, spec.ReceivedAt)
+	cursor, err = advancePeerCursor(ctx, tx, cursor, observed, spec.ReceivedAt, false)
 	if err != nil {
 		return PutPeerInboxPageResult{}, err
 	}

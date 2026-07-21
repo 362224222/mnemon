@@ -225,7 +225,7 @@ func TestRuntimeIngressRetriesOneFailedChannelWithoutStoppingOthers(t *testing.T
 	}
 }
 
-func TestRuntimeIngressSignalsInboxAfterDurablePut(t *testing.T) {
+func TestRuntimeIngressSignalsInboxAndRepairAfterDurablePut(t *testing.T) {
 	fixture := newGossipIngressFixture(t, "runtime-inbox-trigger")
 	activity := &runtimeIngressTestActivity{}
 	session := newRuntimeIngressTestSession(fixture.channel.ChannelID,
@@ -245,7 +245,7 @@ func TestRuntimeIngressSignalsInboxAfterDurablePut(t *testing.T) {
 	session.WaitNextCalls(t, 2)
 	specs := backend.Specs()
 	if len(specs) != 1 || specs[0].Publication.Event().Scope().ChannelID() != fixture.channel.ChannelID ||
-		inbox.Calls() != 1 || repair.Calls() != 0 {
+		inbox.Calls() != 1 || repair.Calls() != 1 {
 		t.Fatalf("durable put signals = specs %d inbox %d repair %d", len(specs), inbox.Calls(), repair.Calls())
 	}
 }

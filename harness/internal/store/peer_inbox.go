@@ -110,7 +110,8 @@ func (s *Store) PutPeerInbox(ctx context.Context, spec PutPeerInboxSpec) (PutPee
 	if err != nil {
 		return PutPeerInboxResult{}, err
 	}
-	cursor, err = advancePeerCursor(ctx, tx, cursor, scope.ChannelSequence(), spec.ReceivedAt)
+	cursor, err = advancePeerCursor(ctx, tx, cursor, scope.ChannelSequence(), spec.ReceivedAt,
+		spec.ArrivalSource == model.ArrivalGossip)
 	if err != nil {
 		return PutPeerInboxResult{}, err
 	}
@@ -651,7 +652,7 @@ func insertUnsupportedPeerInbox(ctx context.Context, tx *sql.Tx, inboxID model.I
 }
 
 func advancePeerCursor(ctx context.Context, tx *sql.Tx, cursor PeerCursorProjection,
-	observed uint64, at time.Time,
+	observed uint64, at time.Time, scheduleLiveRepair bool,
 ) (PeerCursorProjection, error) {
 	if observed > cursor.ObservedChannelSequence {
 		cursor.ObservedChannelSequence = observed
@@ -712,7 +713,34 @@ func advancePeerCursor(ctx context.Context, tx *sql.Tx, cursor PeerCursorProject
 		return PeerCursorProjection{}, fmt.Errorf("%w: update cursor: %v", ErrPeerInboxConflict, err)
 	}
 	cursor.UpdatedAt = at
+	if scheduleLiveRepair {
+		if err := schedulePeerRepairAfterLiveCursorAdvance(ctx, tx, cursor, at); err != nil {
+			return PeerCursorProjection{}, err
+		}
+	}
 	return cursor, nil
+}
+
+func schedulePeerRepairAfterLiveCursorAdvance(ctx context.Context, tx *sql.Tx,
+	cursor PeerCursorProjection, at time.Time,
+) error {
+	// Live Gossip has durably advanced this receiver's inbound cursor, but the
+	// origin only settles peer_deliveries through the direct Events repair ACK.
+	// Make an already-caught-up/progress checkpoint due now without mutating
+	// Pull-page repair transactions that already own their target fence.
+	result, err := tx.ExecContext(ctx, `UPDATE peer_repairs
+		SET generation=generation+1,next_attempt_at=?,updated_at=?
+		WHERE channel_id=? AND origin_peer_id=? AND origin_epoch=?
+		AND status IN ('progress','caught_up') AND next_attempt_at>? AND updated_at<=?`,
+		storeTime(at), storeTime(at), cursor.ChannelID.String(), cursor.OriginPeerID.String(),
+		cursor.OriginEpoch.String(), storeTime(at), storeTime(at))
+	if err != nil {
+		return fmt.Errorf("%w: schedule live cursor repair: %v", ErrPeerInboxConflict, err)
+	}
+	if _, err := result.RowsAffected(); err != nil {
+		return fmt.Errorf("%w: schedule live cursor repair rows: %v", ErrPeerInboxConflict, err)
+	}
+	return nil
 }
 
 func recordPeerPublicationConflict(ctx context.Context, tx *sql.Tx,

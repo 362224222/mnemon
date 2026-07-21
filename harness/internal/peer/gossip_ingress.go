@@ -177,8 +177,7 @@ func (ingress *GossipIngress) putReceived(ctx context.Context, received Received
 		return ingress.stop(GossipIngressDiagnosticStore)
 	}
 	ingress.signalInbox()
-	if result.Disposition != store.PeerInboxConflicted &&
-		result.Cursor.ObservedChannelSequence > result.Cursor.ContiguousChannelSequence {
+	if result.Disposition != store.PeerInboxConflicted {
 		ingress.signalRepair()
 	}
 	return nil

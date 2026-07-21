@@ -73,8 +73,24 @@ func TestPeerRepairPageProgressUsesCurrentCursorAndReplaysExactly(t *testing.T) 
 		t.Fatalf("caught-up commit = (%#v,%v)", caughtUp, err)
 	}
 	assertPeerRepairTargetCount(t, fixture.store, nextPeriodic.Add(-time.Nanosecond), 0)
+	liveAt := committedAt.Add(3 * time.Second)
+	third := fixture.publication(t, 3, 3, "repair-page-live-third", true)
+	live, err := fixture.store.PutPeerInbox(context.Background(), PutPeerInboxSpec{
+		Publication: third, TransportPeerID: fixture.remote.Identity().PeerID(),
+		ArrivalSource: model.ArrivalGossip, ReceivedAt: liveAt})
+	if err != nil || live.Cursor.ContiguousChannelSequence != 3 {
+		t.Fatalf("live Gossip cursor advance = (%#v,%v)", live, err)
+	}
+	liveDue := onlyPeerRepairTarget(t, fixture.store, liveAt)
+	if liveDue.Generation() != 3 || liveDue.Status() != PeerRepairCaughtUp ||
+		liveDue.ContiguousChannelSequence() != 3 || liveDue.RetryCount() != 0 {
+		t.Fatalf("live cursor repair reschedule = %#v", liveDue)
+	}
+	if head, ok := liveDue.SourceHead(); !ok || head != 2 {
+		t.Fatalf("live cursor repair source head = (%d,%t), want stale head until direct Pull", head, ok)
+	}
 	periodic := onlyPeerRepairTarget(t, fixture.store, nextPeriodic)
-	if periodic.Status() != PeerRepairCaughtUp || periodic.Generation() != 2 ||
+	if periodic.Status() != PeerRepairCaughtUp || periodic.Generation() != 3 ||
 		periodic.RetryCount() != 0 {
 		t.Fatalf("periodic target = %#v", periodic)
 	}
