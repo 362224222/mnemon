@@ -446,24 +446,47 @@ channel_join() {
 
 create_channels() {
     channel_create A alpha && channel_join B alpha && channel_join C alpha || return 1
+    wait_channel_ready alpha 1 A B C || return 1
     : >"$private/alpha.invite"
     channel_create C beta && channel_join D beta && channel_join E beta || return 1
+    wait_channel_ready beta 3 C D E || return 1
     : >"$private/beta.invite"
     channel_create E gamma && channel_join F gamma && channel_join A gamma || return 1
+    wait_channel_ready gamma 5 E F A || return 1
     : >"$private/gamma.invite"
 
-    readiness_deadline_ms=$(( $(date +%s%3N) + 10000 ))
+    wait_public_status_ready || return 1
+    for node in A B C D E F; do
+        public_command "$node" status "nodes/$node/status-before.json" mnemon-harness status || return 1
+    done
+    write_channel_topology
+}
+
+wait_channel_ready() {
+    alias=$1
+    join_index=$2
+    shift 2
+    accepted_at=$(jq -s -r --argjson index "$join_index" '
+      [.[] | select(.kind == "channel-join")][$index].finished_unix_ms
+    ' "$commands_jsonl")
+    readiness_deadline_ms=$(( accepted_at + 10000 ))
     all_ready=false
     while [ "$(date +%s%3N)" -lt "$readiness_deadline_ms" ]; do
         all_ready=true
-        for node in A B C D E F; do
+        for node in "$@"; do
             if [ "$(date +%s%3N)" -ge "$readiness_deadline_ms" ]; then
                 all_ready=false
                 break
             fi
             raw="$private/channel-status-$node.json"
             if ! node_exec "$node" timeout 1s mnemon-harness channel status --json >"$raw" 2>/dev/null ||
-               ! jq -e '.status == "ok" and all(.channels[]; .topic.status == "joined")' \
+               ! jq -e --arg alias "$alias" '
+                 .status == "ok" and
+                 ([.channels[] | select(.alias == $alias)] | length) == 1 and
+                 all(.channels[] | select(.alias == $alias);
+                   .topic.status == "joined" and
+                   .topic.ready_members == .topic.total_members)
+               ' \
                  "$raw" >/dev/null; then
                 all_ready=false
             fi
@@ -474,6 +497,52 @@ create_channels() {
         [ "$all_ready" = true ] && break
         sleep 0.2
     done
+    [ "$all_ready" = true ] || {
+        case_error "Channel $alias topic did not become joined within 10 seconds"
+        return 1
+    }
+    ready_at=$(date +%s%3N)
+    ready_ms=$((ready_at - accepted_at))
+    jq -cn --arg channel "$alias" --argjson duration "$ready_ms" \
+      '{kind:"channel-ready",channel:$channel,duration_ms:$duration}' >>"$latency_jsonl"
+    ready_fast=true
+    [ "$ready_ms" -le 10000 ] || ready_fast=false
+    add_assertion "channel-$alias-ready-within-10s" system true "$ready_fast" \
+      "nodes/A/channel-status-before.json,nodes/C/channel-status-before.json,nodes/E/channel-status-before.json" \
+      'Final join acceptance reached joined topics and complete reachable-member baselines within 10 seconds.'
+}
+
+wait_public_status_ready() {
+    readiness_deadline_ms=$(( $(date +%s%3N) + 10000 ))
+    all_ready=false
+    while [ "$(date +%s%3N)" -lt "$readiness_deadline_ms" ]; do
+        all_ready=true
+        for node in A B C D E F; do
+            if [ "$(date +%s%3N)" -ge "$readiness_deadline_ms" ]; then
+                all_ready=false
+                break
+            fi
+            raw="$private/status-ready-$node.json"
+            set +e
+            node_exec "$node" timeout 1s mnemon-harness status >"$raw" 2>/dev/null
+            status_exit=$?
+            set -e
+            if [ "$status_exit" -ne 0 ] ||
+               ! jq -e '.status == "ready" and all(.channels[]; .state == "ready")' \
+                 "$raw" >/dev/null; then
+                all_ready=false
+            fi
+        done
+        if [ "$(date +%s%3N)" -gt "$readiness_deadline_ms" ]; then
+            all_ready=false
+        fi
+        [ "$all_ready" = true ] && break
+        sleep 0.2
+    done
+    [ "$all_ready" = true ] || {
+        case_error 'Channel status did not quiesce to public ready within 10 seconds'
+        return 1
+    }
     for node in A B C D E F; do
         if [ -s "$private/channel-status-$node.json" ] &&
            jq -e . "$private/channel-status-$node.json" >/dev/null 2>&1; then
@@ -481,32 +550,6 @@ create_channels() {
               >"$output/nodes/$node/channel-status-before.json"
         fi
     done
-    [ "$all_ready" = true ] || {
-        case_error 'Channel topics did not become joined within 10 seconds'
-        return 1
-    }
-    ready_at=$(date +%s%3N)
-    while IFS=$(printf '\t') read -r alias join_index; do
-        accepted_at=$(jq -s -r --argjson index "$join_index" '
-          [.[] | select(.kind == "channel-join")][$index].finished_unix_ms
-        ' "$commands_jsonl")
-        ready_ms=$((ready_at - accepted_at))
-        jq -cn --arg channel "$alias" --argjson duration "$ready_ms" \
-          '{kind:"channel-ready",channel:$channel,duration_ms:$duration}' >>"$latency_jsonl"
-        ready_fast=true
-        [ "$ready_ms" -le 10000 ] || ready_fast=false
-        add_assertion "channel-$alias-ready-within-10s" system true "$ready_fast" \
-          "nodes/A/channel-status-before.json,nodes/C/channel-status-before.json,nodes/E/channel-status-before.json" \
-          'Final join acceptance reached joined topics and complete reachable-member baselines within 10 seconds.'
-    done <<EOF
-alpha	1
-beta	3
-gamma	5
-EOF
-    for node in A B C D E F; do
-        public_command "$node" status "nodes/$node/status-before.json" mnemon-harness status || return 1
-    done
-    write_channel_topology
 }
 
 write_channel_topology() {
