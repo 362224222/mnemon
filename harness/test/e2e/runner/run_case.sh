@@ -867,14 +867,17 @@ network_paths_relay_origin_ok() {
 
 network_paths_non_audience_ignored_ok() {
     jq -e '
-      [.publications[] as $publication |
-        select($publication.arrival != "local" and
-          (($publication.audience_nodes | index($publication.observer_node)) == null))] as $non_audience |
+      [.publications[] |
+        .observer_node as $observer |
+        select(.arrival != "local" and
+          ((.audience_nodes | index($observer)) == null))] as $non_audience |
       ($non_audience | length) > 0 and
-      all($non_audience[] as $publication |
-        $publication.ignored_nodes == [$publication.observer_node] and
-        ($publication.semantic_outcome == "ignored" or
-         $publication.semantic_outcome == "quarantined"))
+      (($non_audience | map(
+        .observer_node as $observer |
+        select(((.ignored_nodes == [$observer]) and
+          (.semantic_outcome == "ignored" or
+           .semantic_outcome == "quarantined")) | not)) |
+        length) == 0)
     ' "$output/topology/network-paths.json" >/dev/null
 }
 

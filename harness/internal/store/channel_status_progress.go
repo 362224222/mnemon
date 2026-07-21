@@ -245,7 +245,10 @@ func readChannelStatusRuntimeProgress(ctx context.Context, tx *sql.Tx,
 		COUNT(DISTINCT CASE WHEN r.status='rejected' THEN r.run_id END),
 		COUNT(DISTINCT CASE WHEN r.status IN ('failed','dead') THEN r.run_id END)
 		FROM agent_handlings h JOIN events e ON e.event_id=h.event_id
-		LEFT JOIN agent_runs r ON r.handling_id=h.handling_id WHERE e.channel_id=?`, channelID.String()).
+		LEFT JOIN agent_runs r ON r.handling_id=h.handling_id
+			AND r.handling_attempt=h.attempts
+			AND r.handling_recovery=h.recovery_count
+		WHERE e.channel_id=?`, channelID.String()).
 		Scan(statusCountDestinations(values)...)
 	if err != nil || !validStatusCounts(values) {
 		return statusProgressError("Runtime", err)
