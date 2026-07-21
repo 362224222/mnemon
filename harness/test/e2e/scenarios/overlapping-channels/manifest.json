@@ -27,6 +27,13 @@
       "required_observation": "The original bytes fail the Beta validator while a separately admitted derived Beta Event has a new identity."
     },
     {
+      "id": "nested-parent-stale-variant",
+      "type": "parent-stale",
+      "phase": "before-final-child-terminal",
+      "target": "runtime:C",
+      "required_observation": "A changed parent version produces one completed parent-stale evidence record with zero wake and zero late transition."
+    },
+    {
       "id": "restart-intersection-c",
       "type": "node-kill",
       "phase": "return-chain-complete",
@@ -39,13 +46,6 @@
       "phase": "return-chain-complete",
       "target": "node:E",
       "required_observation": "E restores Beta and Gamma state under one public Node alias without cross-Channel cursor movement."
-    },
-    {
-      "id": "nested-parent-stale-variant",
-      "type": "parent-stale",
-      "phase": "before-final-child-terminal",
-      "target": "runtime:C",
-      "required_observation": "A changed parent version produces one completed parent-stale evidence record with zero wake and zero late transition."
     }
   ],
   "oracles": {

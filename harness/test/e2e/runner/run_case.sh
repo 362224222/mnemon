@@ -229,6 +229,30 @@ public_command() {
     return "$exit_code"
 }
 
+capture_public_output() {
+    node=$1
+    evidence=$2
+    shift 2
+    stdout=$(mktemp "$private/fault-capture.XXXXXX.stdout")
+    stderr=$(mktemp "$private/fault-capture.XXXXXX.stderr")
+    set +e
+    node_exec "$node" timeout 30s "$@" >"$stdout" 2>"$stderr"
+    exit_code=$?
+    set -e
+    destination="$output/$evidence"
+    mkdir -p "$(dirname "$destination")"
+    if jq -e . "$stdout" >/dev/null 2>&1; then
+        redact_json <"$stdout" >"$destination"
+    else
+        redact_text_file "$stdout" "$destination"
+    fi
+    if [ -s "$stderr" ]; then
+        safe_evidence=$(printf '%s' "$evidence" | tr -c 'A-Za-z0-9._-' '_')
+        redact_text_file "$stderr" "$output/transcript/$safe_evidence.stderr"
+    fi
+    return "$exit_code"
+}
+
 cleanup() {
     status=$?
     trap - EXIT HUP INT TERM
@@ -757,15 +781,15 @@ capture_fault_public_snapshots() {
     status_ok=false
     channel_ok=false
     doctor_ok=false
-    if public_command "$node" fault-status "faults/$id-status.json" \
+    if capture_public_output "$node" "faults/$id-status.json" \
       mnemon-harness status; then
         status_ok=true
     fi
-    if public_command "$node" fault-channel-status "faults/$id-channel-status.json" \
+    if capture_public_output "$node" "faults/$id-channel-status.json" \
       mnemon-harness channel status --json; then
         channel_ok=true
     fi
-    if public_command "$node" fault-doctor "faults/$id-doctor.json" \
+    if capture_public_output "$node" "faults/$id-doctor.json" \
       mnemon-harness doctor; then
         doctor_ok=true
     fi
@@ -1396,7 +1420,7 @@ write_restart_fault_evidence() {
          final_public_status_was_terminal:$terminal_ok,
          doctor_healthy:($snapshot.doctor_ok and $doctor_doc.status == "healthy"),
          all_commands_bounded:($fault_exit == 0 and $snapshot.status_ok and
-           $snapshot.channel_ok and $snapshot.doctor_ok)}}}
+           $snapshot.channel_ok and $snapshot.doctor_ok)}}
     ' >"$evidence_path"
 }
 
@@ -1498,7 +1522,7 @@ write_disconnect_fault_evidence() {
          one_local_semantic_effect:$single_effect_ok,
          doctor_healthy:($snapshot.doctor_ok and $doctor_doc.status == "healthy"),
          all_commands_bounded:($snapshot.status_ok and $snapshot.channel_ok and
-           $snapshot.doctor_ok)}}}
+           $snapshot.doctor_ok)}}
     ' >"$evidence_path"
 }
 
@@ -1547,10 +1571,10 @@ write_daemon_absent_fault_evidence() {
     wait_node_public_status_ready "$node" 30 && wait_ready=true
     status_ok=false
     doctor_ok=false
-    if public_command "$node" daemon-fault-status "$status_ref" mnemon-harness status; then
+    if capture_public_output "$node" "$status_ref" mnemon-harness status; then
         status_ok=true
     fi
-    if public_command "$node" daemon-fault-doctor "$doctor_ref" mnemon-harness doctor; then
+    if capture_public_output "$node" "$doctor_ref" mnemon-harness doctor; then
         doctor_ok=true
     fi
     node_exec "$node" sh -c 'pidof mnemond 2>/dev/null || true' >"$after_ensure_pids" 2>/dev/null ||
@@ -1582,7 +1606,7 @@ write_daemon_absent_fault_evidence() {
            $after_ensure_count == 1 and $status_doc.status == "ready"),
          doctor_healthy:($doctor_ok and $doctor_doc.status == "healthy"),
          no_user_daemon_command_recorded:true,
-         all_commands_bounded:($kill_exit == 0 and $status_ok and $doctor_ok)}}}
+         all_commands_bounded:($kill_exit == 0 and $status_ok and $doctor_ok)}}
     ' >"$evidence_path"
 }
 
@@ -1670,7 +1694,7 @@ write_agent_current_race_fault_evidence() {
          bounded_recovery_evidence:($snapshot.status_ok and $snapshot.channel_ok and
            $snapshot.doctor_ok),
          all_commands_bounded:($first_exit == 0 and $second_exit == 0 and
-           $snapshot.status_ok and $snapshot.channel_ok and $snapshot.doctor_ok)}}}
+           $snapshot.status_ok and $snapshot.channel_ok and $snapshot.doctor_ok)}}
     ' >"$evidence_path"
 }
 
@@ -1775,7 +1799,7 @@ write_parent_stale_fault_evidence() {
               ((.runtime.run_active // 0) == 0))),
          zero_late_transition:($no_new_publication and $runtime_unique),
          bounded_recovery_evidence:($snapshot.status_ok and $snapshot.channel_ok),
-         all_commands_bounded:($snapshot.status_ok and $snapshot.channel_ok)}}}
+         all_commands_bounded:($snapshot.status_ok and $snapshot.channel_ok)}}
     ' >"$evidence_path"
 }
 
