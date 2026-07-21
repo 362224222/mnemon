@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	setupDaemonSettleLimit = time.Second
+	setupDaemonSettleLimit = 5 * time.Second
 	setupDaemonSettlePoll  = 20 * time.Millisecond
 )
 

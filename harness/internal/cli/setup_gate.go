@@ -18,7 +18,7 @@ import (
 
 const (
 	setupHookOutputLimit = 512
-	setupHookRetryLimit  = time.Second
+	setupHookRetryLimit  = 5 * time.Second
 	setupHookRetryPoll   = 20 * time.Millisecond
 )
 
