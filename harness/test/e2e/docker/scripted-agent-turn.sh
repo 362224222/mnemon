@@ -23,14 +23,74 @@ submit_context_action() {
     context=$2
     content=$3
     artifact=${4:-}
+    destination=${5:-$receipt}
     if [ -n "$artifact" ]; then
-        printf '%s\n' "$content" | mnemon-harness teamwork "$action" \
-          --context "$context" --content-file - --artifact "$artifact" --json >"$receipt"
+        if printf '%s\n' "$content" | mnemon-harness teamwork "$action" \
+          --context "$context" --content-file - --artifact "$artifact" --json >"$destination"; then
+            status=0
+        else
+            status=$?
+        fi
     else
-        printf '%s\n' "$content" | mnemon-harness teamwork "$action" \
-          --context "$context" --content-file - --json >"$receipt"
+        if printf '%s\n' "$content" | mnemon-harness teamwork "$action" \
+          --context "$context" --content-file - --json >"$destination"; then
+            status=0
+        else
+            status=$?
+        fi
     fi
-    jq -e '.status == "accepted"' "$receipt" >/dev/null
+    [ "$status" -eq 0 ] || return "$status"
+    [ "$destination" != /dev/full ] || return 0
+    jq -e '.status == "accepted"' "$destination" >/dev/null
+}
+
+scenario_name() {
+    if [ -n "${R5_SCENARIO:-}" ]; then
+        printf '%s\n' "$R5_SCENARIO"
+        return 0
+    fi
+    if [ -f .r5/scenario ]; then
+        sed -n '1p' .r5/scenario
+        return 0
+    fi
+    printf '%s\n' ''
+}
+
+submit_context_action_with_receipt_loss() {
+    action=$1
+    context=$2
+    content=$3
+    artifact=${4:-}
+    phase=${5:-}
+    fault_record=".r5/runtime/${stamp}-${node}-receipt-loss.json"
+    first_stderr=".r5/runtime/${stamp}-${node}-receipt-loss-first.stderr"
+
+    set +e
+    submit_context_action "$action" "$context" "$content" "$artifact" /dev/full 2>"$first_stderr"
+    first_exit=$?
+    submit_context_action "$action" "$context" "$content" "$artifact" "$receipt"
+    retry_exit=$?
+    set -e
+
+    test "$first_exit" -ne 0
+    test "$retry_exit" -eq 0
+    jq -e '.status == "accepted" and .replayed == true' "$receipt" >/dev/null
+    jq -n --arg fault review-receipt-loss --arg node "$node" \
+      --arg phase "$phase" --arg action "teamwork.$action" \
+      --argjson first_exit "$first_exit" --argjson retry_exit "$retry_exit" \
+      --slurpfile retry "$receipt" '
+      {schema_version:1,fault:$fault,node:$node,phase:$phase,action:$action,
+       first_stdout_sink:"/dev/full",first_exit_code:$first_exit,
+       retry_exit_code:$retry_exit,retry:$retry[0],
+       observation:{
+         retry_returned_terminal_receipt:
+           ($retry[0].status == "accepted" and $retry[0].replayed == true),
+         operation_id:$retry[0].operation_id,
+         receipt:$retry[0].receipt,
+         event_ids:[$retry[0].results[]?.event_id],
+         event_types:[$retry[0].results[]?.event_type]
+       }}
+    ' >"$fault_record"
 }
 
 resolve_participant() {
@@ -128,6 +188,14 @@ fi
 if has_action teamwork.deliver; then
     content=$(jq -er '.result_content' "$policy")
     printf '%s\n' "$content" >"result/${node}.txt"
+    if [ "$(scenario_name)" = payment-review ] && [ "$node" = C ] &&
+       [ ! -e .r5/review-receipt-loss ] &&
+       jq -e '.source_event.event_type == "review.closed" and
+         .action_work.local_role == "reviewer"' "$current" >/dev/null; then
+        : >.r5/review-receipt-loss
+        submit_context_action_with_receipt_loss deliver "$context" "$content" result c-requests-rework
+        exit 0
+    fi
     submit_context_action deliver "$context" "$content" result
     exit 0
 fi

@@ -684,6 +684,54 @@ write_channel_topology() {
       topology/channels.json 'Public D4 status binds each Channel digest, signed roster head, and member PeerID to the six isolated Nodes.'
 }
 
+declares_system_oracle() {
+    oracle_id=$1
+    jq -e --arg id "$oracle_id" 'any(.oracles.system[]?; . == $id)' "$scenario_manifest" >/dev/null
+}
+
+runtime_result_event_count() {
+    event_type=$1
+    find "$output/runtime" -type f -name '*.json' -exec jq -r --arg event_type "$event_type" '
+      .results[]? | select(.event_type == $event_type) | .event_id
+    ' {} + | LC_ALL=C sort -u | awk 'NF { count++ } END { print count + 0 }'
+}
+
+runtime_action_count() {
+    action=$1
+    find "$output/runtime" -type f -name '*.json' -exec jq -r --arg action "$action" '
+      select(.action? == $action) | .operation_id
+    ' {} + | LC_ALL=C sort -u | awk 'NF { count++ } END { print count + 0 }'
+}
+
+review_receipt_loss_file() {
+    [ -d "$output/runtime/C" ] || return 1
+    find "$output/runtime/C" -type f -name '*-receipt-loss.json' | LC_ALL=C sort | sed -n '1p'
+}
+
+review_receipt_loss_ref() {
+    path=$(review_receipt_loss_file || true)
+    [ -n "$path" ] || return 1
+    printf '%s\n' "${path#"$output/"}"
+}
+
+payment_review_receipt_loss_ok() {
+    receipt_path=$(review_receipt_loss_file || true)
+    [ -n "$receipt_path" ] || return 1
+    [ "$(find "$output/runtime/C" -type f -name '*-receipt-loss.json' | wc -l)" -eq 1 ] ||
+        return 1
+    jq -e '
+      .schema_version == 1 and .fault == "review-receipt-loss" and
+      .node == "C" and .phase == "c-requests-rework" and
+      .action == "teamwork.deliver" and .first_exit_code != 0 and
+      .retry_exit_code == 0 and .observation.retry_returned_terminal_receipt == true and
+      .retry.status == "accepted" and .retry.replayed == true and
+      (.retry.operation_id | type == "string" and length > 0) and
+      (.retry.receipt | type == "string" and startswith("sha256:")) and
+      ([.retry.results[]? | select(.event_type == "review.delivery.ready")] | length) == 1
+    ' "$receipt_path" >/dev/null || return 1
+    [ "$(runtime_result_event_count review.rework_requested)" -eq 1 ] || return 1
+}
+
 evaluate_declared_faults() {
     while IFS=$(printf '\t') read -r id type phase target observation; do
         injected=false
@@ -730,6 +778,19 @@ evaluate_declared_faults() {
             else
                 detail='The relay action receipt and required final public D4 observation were not both established; both fault booleans remain fail-closed.'
             fi
+        elif [ "$case_name" = payment-review ] && [ "$id" = review-receipt-loss ]; then
+            receipt_ref=$(review_receipt_loss_ref || true)
+            if [ -n "$receipt_ref" ]; then
+                evidence="$receipt_ref,topology/network-paths.json,nodes/A/handling-trace.ndjson"
+            fi
+            if payment_review_receipt_loss_ok; then
+                injected=true
+                observed=true
+                at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+                detail='The C Runtime lost stdout presentation for a public deliver action; retry returned the replayed terminal receipt and final public evidence shows exactly one source Work rework transition.'
+            else
+                detail='The public receipt-loss gate did not establish a replayed terminal receipt and a single semantic rework transition.'
+            fi
         fi
         jq -cn --arg id "$id" --arg type "$type" --arg phase "$phase" --arg target "$target" \
           --arg observation "$observation" --arg detail "$detail" --arg at "$at" --arg evidence "$evidence" \
@@ -743,6 +804,200 @@ evaluate_declared_faults() {
     done <<EOF
 $(jq -r '.faults[] | [.id,.type,.phase,.target,.required_observation] | @tsv' "$scenario_manifest")
 EOF
+}
+
+add_declared_system_assertion() {
+    oracle_id=$1
+    passed=$2
+    evidence=$3
+    message=$4
+    declares_system_oracle "$oracle_id" || return 0
+    has_assertion "$oracle_id" && return 0
+    add_assertion "$oracle_id" system true "$passed" "$evidence" "$message"
+}
+
+network_paths_cross_channel_causality_ok() {
+    minimum=$(jq -r '.derived_path | length' "$scenario_manifest")
+    [ "$minimum" -gt 0 ] || minimum=1
+    jq -e --argjson minimum "$minimum" '
+      .publications as $publications |
+      ($publications | map({
+        key:([.event_key.origin_peer_id,.event_key.origin_epoch,.event_key.event_id] | @json),
+        channel:.channel
+      })) as $events |
+      [
+        $publications[] as $publication |
+        select($publication.causality_event_key != null) |
+        ($publication.causality_event_key |
+          [.origin_peer_id,.origin_epoch,.event_id] | @json) as $cause |
+        ([$events[] | select(.key == $cause) | .channel] | unique) as $cause_channels |
+        select(($cause_channels | length) > 0 and
+          (($cause_channels | index($publication.channel)) == null)) |
+        $publication
+      ] as $hops |
+      ($hops | length) >= $minimum and
+      all($hops[];
+        [.event_key.origin_peer_id,.event_key.origin_epoch,.event_key.event_id] !=
+        [.causality_event_key.origin_peer_id,.causality_event_key.origin_epoch,
+         .causality_event_key.event_id])
+    ' "$output/topology/network-paths.json" >/dev/null
+}
+
+network_paths_no_implicit_bridge_ok() {
+    jq -e '
+      .publications |
+      sort_by(.event_key.origin_peer_id,.event_key.origin_epoch,.event_key.event_id) |
+      group_by([.event_key.origin_peer_id,.event_key.origin_epoch,.event_key.event_id]) |
+      all(.[]; ([.[].channel] | unique | length) == 1)
+    ' "$output/topology/network-paths.json" >/dev/null
+}
+
+network_paths_relay_origin_ok() {
+    jq -e '
+      [.publications[] |
+        select(.arrival == "gossip" and .immediate_transport_node != .origin_node)] as $relayed |
+      ($relayed | length) > 0 and
+      all($relayed[];
+        .event_key.origin_peer_id == .origin_peer_id and
+        .publication_ref.origin_peer_id == .origin_peer_id and
+        (.artifact_direct_source_node == null or
+         .artifact_direct_source_node == .origin_node))
+    ' "$output/topology/network-paths.json" >/dev/null
+}
+
+network_paths_non_audience_ignored_ok() {
+    jq -e '
+      [.publications[] as $publication |
+        select($publication.arrival != "local" and
+          (($publication.audience_nodes | index($publication.observer_node)) == null))] as $non_audience |
+      ($non_audience | length) > 0 and
+      all($non_audience[] as $publication |
+        $publication.ignored_nodes == [$publication.observer_node] and
+        ($publication.semantic_outcome == "ignored" or
+         $publication.semantic_outcome == "quarantined"))
+    ' "$output/topology/network-paths.json" >/dev/null
+}
+
+network_paths_artifact_origin_ok() {
+    jq -e '
+      [.publications[] | select(.artifact_direct_source_node != null)] as $artifact_paths |
+      ($artifact_paths | length) > 0 and
+      all($artifact_paths[];
+        .artifact_direct_source_node == .origin_node and
+        .semantic_outcome != "ignored" and .semantic_outcome != "quarantined")
+    ' "$output/topology/network-paths.json" >/dev/null
+}
+
+status_after_all_terminal_ok() {
+    jq -s -e '
+      all(.[];
+        .status == "ready" and
+        all(.channels[];
+          .state == "ready" and
+          (.runtime.handling_claimed // 0) == 0 and
+          (.runtime.handling_pending // 0) == 0 and
+          (.runtime.handling_dead // 0) == 0 and
+          (.runtime.run_active // 0) == 0 and
+          (.runtime.run_failed // 0) == 0))
+    ' "$output"/nodes/*/status-after.json >/dev/null
+}
+
+payment_review_rework_once_ok() {
+    expected=$(jq -r '.expected.rework_count // 0' "$scenario_manifest")
+    [ "$expected" -eq 1 ] || return 1
+    [ "$(runtime_action_count teamwork.rework)" -eq "$expected" ] || return 1
+    [ "$(runtime_result_event_count review.rework_requested)" -eq "$expected" ] || return 1
+    jq -e --argjson expected "$expected" '
+      .rework_count == $expected and .status == "verified"
+    ' "$output/artifacts/result/review-summary.json" >/dev/null
+}
+
+evaluate_public_system_oracles() {
+    network_ref=topology/network-paths.json
+    status_refs='nodes/A/status-after.json,nodes/B/status-after.json,nodes/C/status-after.json,nodes/D/status-after.json,nodes/E/status-after.json,nodes/F/status-after.json'
+
+    if payment_review_receipt_loss_ok; then
+        receipt_ref=$(review_receipt_loss_ref)
+        add_declared_system_assertion ND-20 true \
+          "$receipt_ref,$network_ref,nodes/A/handling-trace.ndjson" \
+          'A public response-loss retry returned the terminal operation receipt without duplicating the semantic rework effect.'
+    else
+        add_declared_system_assertion ND-20 false "$network_ref" \
+          'No sufficient public response-loss replay evidence was recorded.'
+    fi
+
+    if network_paths_cross_channel_causality_ok; then
+        cross_passed=true
+    else
+        cross_passed=false
+    fi
+    add_declared_system_assertion new-event-per-cross-channel-hop "$cross_passed" "$network_ref" \
+      'Cross-Channel handoffs use new Event identities with explicit causality to the source Channel.'
+    add_declared_system_assertion cross-channel-derived-events-have-new-identity "$cross_passed" "$network_ref" \
+      'Derived cross-Channel Events have new identities and retain explicit causal source Events.'
+    add_declared_system_assertion new-identity-and-causality-at-each-channel-hop "$cross_passed" "$network_ref" \
+      'Every observed Channel hop is backed by a distinct Event identity and causality edge.'
+    add_declared_system_assertion three-channel-derived-return-path-is-explicit "$cross_passed" "$network_ref" \
+      'The three-Channel return path is explicit in public D4 causality evidence.'
+
+    if network_paths_no_implicit_bridge_ok; then
+        bridge_passed=true
+    else
+        bridge_passed=false
+    fi
+    add_declared_system_assertion alpha-publication-not-implicitly-bridged-to-beta "$bridge_passed" "$network_ref" \
+      'No Event identity appears as an implicit publication bridge across Channels.'
+    add_declared_system_assertion channel-sequences-never-fill-other-channel-gaps "$bridge_passed" "$network_ref" \
+      'Channel publication sequences are scoped to one Channel and do not fill another Channel gap.'
+
+    if network_paths_relay_origin_ok; then
+        relay_passed=true
+    else
+        relay_passed=false
+    fi
+    add_declared_system_assertion relay-never-becomes-origin "$relay_passed" "$network_ref" \
+      'Relayed gossip preserves the signed Event origin and does not turn transport into authority.'
+    add_declared_system_assertion relay-preserves-origin-and-is-not-artifact-source "$relay_passed" "$network_ref" \
+      'Transport relays preserve origin identity and are not recorded as Artifact sources.'
+
+    if network_paths_non_audience_ignored_ok; then
+        ignored_passed=true
+    else
+        ignored_passed=false
+    fi
+    add_declared_system_assertion non-audience-members-only-ignored "$ignored_passed" "$network_ref" \
+      'Non-audience observers only record ignored/quarantined transport evidence.'
+    add_declared_system_assertion gamma-non-audience-a-only-ignored "$ignored_passed" "$network_ref" \
+      'Gamma publications observed by non-audience Node A are ignored rather than handled.'
+
+    if network_paths_artifact_origin_ok; then
+        artifact_passed=true
+    else
+        artifact_passed=false
+    fi
+    add_declared_system_assertion artifact-pulled-from-publication-origin "$artifact_passed" "$network_ref" \
+      'Artifact pull evidence records the publication origin as the direct source.'
+    add_declared_system_assertion artifact-closure-authorized-per-publication-origin "$artifact_passed" "$network_ref" \
+      'Artifact closure evidence remains authorized by the publication origin.'
+    add_declared_system_assertion result-artifacts-follow-explicit-origin-pins "$artifact_passed" "$network_ref" \
+      'Result Artifact paths follow explicit origin pins in the public D4 evidence.'
+
+    if payment_review_rework_once_ok; then
+        rework_passed=true
+    else
+        rework_passed=false
+    fi
+    add_declared_system_assertion exactly-one-rework-and-no-duplicate-effect "$rework_passed" \
+      "nodes/A/handling-trace.ndjson,artifacts/result/review-summary.json,$network_ref" \
+      'The payment review records exactly one rework action, one rework Event, and one final verified result.'
+
+    if status_after_all_terminal_ok; then
+        terminal_passed=true
+    else
+        terminal_passed=false
+    fi
+    add_declared_system_assertion all-fresh-handlings-terminal "$terminal_passed" "$status_refs" \
+      'Final public status shows no fresh handling or runtime work left active, pending, failed, or dead.'
 }
 
 run_entry_prompt() {
@@ -1213,6 +1468,7 @@ run_workflow() {
     fi
     collect_public_evidence
     evaluate_declared_faults
+    evaluate_public_system_oracles
     run_task_oracles
 }
 
