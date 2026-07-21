@@ -78,6 +78,25 @@ func TestValidateClauseBindingsRejectsNormativeDrift(t *testing.T) {
 	assertErrorContains(t, err, "binding digest")
 }
 
+func TestValidateNormativeSourceRejectsClauseTextDrift(t *testing.T) {
+	t.Parallel()
+	clauses := []requirementClause{{
+		ID:           "ND-21",
+		Level:        "MUST",
+		ClauseDigest: digestRequirementClause("ND-21", "MUST", "one ACTIVE|REWORK action"),
+	}}
+	registry := requirementClauseRegistry{BindingDigest: digestRequirementClauses(clauses),
+		Requirements: clauses}
+	valid := []byte("| ND-21 | MUST | one ACTIVE|REWORK action |\n")
+	if err := validateNormativeSource(registry, valid); err != nil {
+		t.Fatalf("unchanged normative source rejected: %v", err)
+	}
+	drifted := []byte("| ND-21 | MUST | two ACTIVE|REWORK actions |\n")
+	err := validateNormativeSource(registry, drifted)
+	assertErrorContains(t, err, "clause digest or level differs")
+	assertErrorContains(t, err, "source binding digest")
+}
+
 func runTestGit(t *testing.T, repository string, arguments ...string) string {
 	t.Helper()
 	command := exec.Command("git", arguments...)

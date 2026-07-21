@@ -83,8 +83,8 @@ type canonicalScenarioManifest struct {
 	} `json:"oracles"`
 }
 
-// The source path is provenance only: the R5 blueprint forbids tracked CI gates from
-// depending on the ignored design tree, so the reviewed digest catalog is authoritative.
+// Fresh CI may omit the ignored design tree. The tracked catalog remains authoritative
+// there; a development checkout that has the source recomputes and compares every digest.
 const normativeRequirementsDocument = ".mnemon-dev/architecture/r5/requirements-and-gates.md"
 const normativeRequirementDigestScheme = "sha256:mnemon-r5-requirement-clause-v1(id,level,clause)"
 
@@ -93,6 +93,7 @@ var commitPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 var clauseDigestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 var scenarioKeyPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{2,95}$`)
 var scenarioNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{2,63}$`)
+var requirementClauseRowPattern = regexp.MustCompile(`^\| ([A-Z]{2,3}-[0-9]{2}) \| (MUST|SHOULD) \| (.*) \|$`)
 
 func TestRequirementsRegistryIsClosedAndEvidenceBacked(t *testing.T) {
 	t.Parallel()
@@ -154,6 +155,7 @@ func TestRequirementsRegistryIsClosedAndEvidenceBacked(t *testing.T) {
 		clauses.BindingDigest); err != nil {
 		t.Error(err)
 	}
+	validateNormativeSourceWhenAvailable(t, root, clauses)
 	requireScenarioKeys(t, registry.Requirements)
 	validateRequirementScenarios(t, root, registry.Requirements, scenarios.Scenarios)
 }
@@ -213,6 +215,79 @@ func digestRequirementClauses(clauses []requirementClause) string {
 	}
 	digest := sha256.Sum256([]byte(binding.String()))
 	return fmt.Sprintf("sha256:%x", digest)
+}
+
+func digestRequirementClause(id, level, clause string) string {
+	preimage := "mnemon-r5-requirement-clause-v1\n" + id + "\n" + level + "\n" + clause + "\n"
+	digest := sha256.Sum256([]byte(preimage))
+	return fmt.Sprintf("sha256:%x", digest)
+}
+
+func validateNormativeSourceWhenAvailable(t *testing.T, root string,
+	registry requirementClauseRegistry,
+) {
+	t.Helper()
+	contents, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(registry.SourceDocument)))
+	if errors.Is(err, os.ErrNotExist) {
+		return
+	}
+	if err != nil {
+		t.Fatalf("read normative requirement source: %v", err)
+	}
+	if err := validateNormativeSource(registry, contents); err != nil {
+		t.Fatalf("normative requirement source drift: %v", err)
+	}
+}
+
+func validateNormativeSource(registry requirementClauseRegistry, contents []byte) error {
+	observed, err := parseNormativeRequirementClauses(contents)
+	if err != nil {
+		return err
+	}
+	var validationErrors []error
+	if len(observed) != len(registry.Requirements) {
+		validationErrors = append(validationErrors,
+			fmt.Errorf("normative requirement count = %d, want %d", len(observed),
+				len(registry.Requirements)))
+	}
+	limit := min(len(observed), len(registry.Requirements))
+	for index := range limit {
+		if observed[index] != registry.Requirements[index] {
+			validationErrors = append(validationErrors,
+				fmt.Errorf("normative requirement %s clause digest or level differs",
+					registry.Requirements[index].ID))
+		}
+	}
+	if digest := digestRequirementClauses(observed); digest != registry.BindingDigest {
+		validationErrors = append(validationErrors,
+			fmt.Errorf("normative source binding digest = %q, want %q", digest,
+				registry.BindingDigest))
+	}
+	return errors.Join(validationErrors...)
+}
+
+func parseNormativeRequirementClauses(contents []byte) ([]requirementClause, error) {
+	clauses := make([]requirementClause, 0, 103)
+	seen := make(map[string]struct{}, 103)
+	for _, line := range strings.Split(string(contents), "\n") {
+		matches := requirementClauseRowPattern.FindStringSubmatch(strings.TrimSuffix(line, "\r"))
+		if matches == nil {
+			continue
+		}
+		if _, duplicate := seen[matches[1]]; duplicate {
+			return nil, fmt.Errorf("normative source repeats requirement %s", matches[1])
+		}
+		seen[matches[1]] = struct{}{}
+		clauses = append(clauses, requirementClause{ID: matches[1], Level: matches[2],
+			ClauseDigest: digestRequirementClause(matches[1], matches[2], matches[3])})
+	}
+	if len(clauses) == 0 {
+		return nil, errors.New("normative source contains no requirement clauses")
+	}
+	slices.SortFunc(clauses, func(left, right requirementClause) int {
+		return strings.Compare(left.ID, right.ID)
+	})
+	return clauses, nil
 }
 
 func validateRequirementEvidence(t *testing.T, root string, requirement requirementEvidence) {
@@ -393,105 +468,182 @@ func validateRequirementScenarios(t *testing.T, root string, requirements []requ
 
 type canonicalScenarioLoader func(string) (canonicalScenarioManifest, error)
 
+type scenarioBindingIndex struct {
+	requirementByID map[string]requirementEvidence
+	referenceByKey  map[string]string
+	definitionByKey map[string]requirementScenarioDefinition
+	loaded          map[string]canonicalScenarioManifest
+}
+
 func validateScenarioBindings(requirements []requirementEvidence,
 	definitions []requirementScenarioDefinition, load canonicalScenarioLoader,
 ) error {
+	index, indexErr := buildScenarioBindingIndex(requirements, definitions)
+	validationErrors := []error{indexErr}
+	for _, definition := range definitions {
+		validationErrors = append(validationErrors,
+			validateScenarioDefinition(definition, index, load))
+	}
+	validationErrors = append(validationErrors,
+		validateScenarioDefinitionSet(definitions, index))
+	return errors.Join(validationErrors...)
+}
+
+func buildScenarioBindingIndex(requirements []requirementEvidence,
+	definitions []requirementScenarioDefinition,
+) (*scenarioBindingIndex, error) {
+	index := &scenarioBindingIndex{
+		requirementByID: make(map[string]requirementEvidence, len(requirements)),
+		referenceByKey:  make(map[string]string),
+		definitionByKey: make(map[string]requirementScenarioDefinition, len(definitions)),
+		loaded:          make(map[string]canonicalScenarioManifest),
+	}
+	return index, errors.Join(indexScenarioRequirements(index, requirements),
+		indexScenarioDefinitions(index, definitions))
+}
+
+func indexScenarioRequirements(index *scenarioBindingIndex,
+	requirements []requirementEvidence,
+) error {
 	var validationErrors []error
-	requirementByID := make(map[string]requirementEvidence, len(requirements))
-	referenceByKey := make(map[string]string)
 	for _, requirement := range requirements {
-		requirementByID[requirement.ID] = requirement
+		index.requirementByID[requirement.ID] = requirement
 		for _, key := range requirement.ScenarioKeys {
 			if !scenarioKeyPattern.MatchString(key) {
 				validationErrors = append(validationErrors,
 					fmt.Errorf("requirement %s has invalid scenario key %q", requirement.ID, key))
 			}
-			if previous, exists := referenceByKey[key]; exists {
+			if previous, exists := index.referenceByKey[key]; exists {
 				validationErrors = append(validationErrors,
 					fmt.Errorf("scenario key %q is referenced by both %s and %s", key, previous,
 						requirement.ID))
-				continue
+			} else {
+				index.referenceByKey[key] = requirement.ID
 			}
-			referenceByKey[key] = requirement.ID
 		}
 	}
+	return errors.Join(validationErrors...)
+}
 
-	definitionKeys := make([]string, len(definitions))
-	definitionByKey := make(map[string]requirementScenarioDefinition, len(definitions))
-	loaded := make(map[string]canonicalScenarioManifest)
-	for index, definition := range definitions {
-		definitionKeys[index] = definition.Key
-		if previous, exists := definitionByKey[definition.Key]; exists {
+func indexScenarioDefinitions(index *scenarioBindingIndex,
+	definitions []requirementScenarioDefinition,
+) error {
+	var validationErrors []error
+	for _, definition := range definitions {
+		if previous, exists := index.definitionByKey[definition.Key]; exists {
 			validationErrors = append(validationErrors,
 				fmt.Errorf("canonical scenario key %q is defined more than once (%s and %s)",
 					definition.Key, previous.RequirementID, definition.RequirementID))
-			continue
-		}
-		definitionByKey[definition.Key] = definition
-		if !scenarioKeyPattern.MatchString(definition.Key) {
-			validationErrors = append(validationErrors,
-				fmt.Errorf("canonical scenario has invalid key %q", definition.Key))
-		}
-		if !requirementIDPattern.MatchString(definition.RequirementID) {
-			validationErrors = append(validationErrors,
-				fmt.Errorf("scenario %q has invalid requirement ID %q", definition.Key,
-					definition.RequirementID))
-			continue
-		}
-		if _, exists := requirementByID[definition.RequirementID]; !exists {
-			validationErrors = append(validationErrors,
-				fmt.Errorf("scenario %q references unknown requirement %s", definition.Key,
-					definition.RequirementID))
-		}
-		referencedBy, exists := referenceByKey[definition.Key]
-		if !exists {
-			validationErrors = append(validationErrors,
-				fmt.Errorf("canonical scenario %q is not referenced by the requirement registry",
-					definition.Key))
-		} else if referencedBy != definition.RequirementID {
-			validationErrors = append(validationErrors,
-				fmt.Errorf("scenario %q belongs to %s but is referenced by %s", definition.Key,
-					definition.RequirementID, referencedBy))
-		}
-		manifest, exists := loaded[definition.Case]
-		if !exists {
-			var err error
-			manifest, err = load(definition.Case)
-			if err != nil {
-				validationErrors = append(validationErrors,
-					fmt.Errorf("scenario %q canonical case %q: %w", definition.Key,
-						definition.Case, err))
-				continue
-			}
-			loaded[definition.Case] = manifest
-		}
-		if manifest.SchemaVersion != 1 || manifest.Name != definition.Case {
-			validationErrors = append(validationErrors,
-				fmt.Errorf("scenario %q canonical case identity = (%d,%q), want (1,%q)",
-					definition.Key, manifest.SchemaVersion, manifest.Name, definition.Case))
-		}
-		if !slices.Contains(manifest.Oracles.System, definition.RequirementID) {
-			validationErrors = append(validationErrors,
-				fmt.Errorf("scenario %q canonical case %q lacks requirement oracle %s",
-					definition.Key, definition.Case, definition.RequirementID))
-		}
-		if definition.Anchor == "" || definition.Anchor == definition.RequirementID {
-			validationErrors = append(validationErrors,
-				fmt.Errorf("scenario %q lacks an independent canonical anchor", definition.Key))
-			continue
-		}
-		if !scenarioDefinesAnchor(manifest, definition.AnchorKind, definition.Anchor) {
-			validationErrors = append(validationErrors,
-				fmt.Errorf("scenario %q canonical case %q does not define %s anchor %q",
-					definition.Key, definition.Case, definition.AnchorKind, definition.Anchor))
+		} else {
+			index.definitionByKey[definition.Key] = definition
 		}
 	}
+	return errors.Join(validationErrors...)
+}
+
+func validateScenarioDefinition(definition requirementScenarioDefinition,
+	index *scenarioBindingIndex, load canonicalScenarioLoader,
+) error {
+	identityErr := validateScenarioDefinitionIdentity(definition)
+	referenceErr := validateScenarioDefinitionReference(definition, index)
+	manifest, loadErr := loadScenarioDefinitionManifest(definition, index, load)
+	if loadErr != nil {
+		return errors.Join(identityErr, referenceErr, loadErr)
+	}
+	return errors.Join(identityErr, referenceErr,
+		validateScenarioManifestDefinition(definition, manifest))
+}
+
+func validateScenarioDefinitionIdentity(definition requirementScenarioDefinition) error {
+	var validationErrors []error
+	if !scenarioKeyPattern.MatchString(definition.Key) {
+		validationErrors = append(validationErrors,
+			fmt.Errorf("canonical scenario has invalid key %q", definition.Key))
+	}
+	if !requirementIDPattern.MatchString(definition.RequirementID) {
+		validationErrors = append(validationErrors,
+			fmt.Errorf("scenario %q has invalid requirement ID %q", definition.Key,
+				definition.RequirementID))
+	}
+	return errors.Join(validationErrors...)
+}
+
+func validateScenarioDefinitionReference(definition requirementScenarioDefinition,
+	index *scenarioBindingIndex,
+) error {
+	var validationErrors []error
+	if _, exists := index.requirementByID[definition.RequirementID]; !exists {
+		validationErrors = append(validationErrors,
+			fmt.Errorf("scenario %q references unknown requirement %s", definition.Key,
+				definition.RequirementID))
+	}
+	referencedBy, exists := index.referenceByKey[definition.Key]
+	if !exists {
+		validationErrors = append(validationErrors,
+			fmt.Errorf("canonical scenario %q is not referenced by the requirement registry",
+				definition.Key))
+	} else if referencedBy != definition.RequirementID {
+		validationErrors = append(validationErrors,
+			fmt.Errorf("scenario %q belongs to %s but is referenced by %s", definition.Key,
+				definition.RequirementID, referencedBy))
+	}
+	return errors.Join(validationErrors...)
+}
+
+func loadScenarioDefinitionManifest(definition requirementScenarioDefinition,
+	index *scenarioBindingIndex, load canonicalScenarioLoader,
+) (canonicalScenarioManifest, error) {
+	if manifest, exists := index.loaded[definition.Case]; exists {
+		return manifest, nil
+	}
+	manifest, err := load(definition.Case)
+	if err != nil {
+		return canonicalScenarioManifest{}, fmt.Errorf("scenario %q canonical case %q: %w",
+			definition.Key, definition.Case, err)
+	}
+	index.loaded[definition.Case] = manifest
+	return manifest, nil
+}
+
+func validateScenarioManifestDefinition(definition requirementScenarioDefinition,
+	manifest canonicalScenarioManifest,
+) error {
+	var validationErrors []error
+	if manifest.SchemaVersion != 1 || manifest.Name != definition.Case {
+		validationErrors = append(validationErrors,
+			fmt.Errorf("scenario %q canonical case identity = (%d,%q), want (1,%q)",
+				definition.Key, manifest.SchemaVersion, manifest.Name, definition.Case))
+	}
+	if !slices.Contains(manifest.Oracles.System, definition.RequirementID) {
+		validationErrors = append(validationErrors,
+			fmt.Errorf("scenario %q canonical case %q lacks requirement oracle %s",
+				definition.Key, definition.Case, definition.RequirementID))
+	}
+	if definition.Anchor == "" || definition.Anchor == definition.RequirementID {
+		validationErrors = append(validationErrors,
+			fmt.Errorf("scenario %q lacks an independent canonical anchor", definition.Key))
+	} else if !scenarioDefinesAnchor(manifest, definition.AnchorKind, definition.Anchor) {
+		validationErrors = append(validationErrors,
+			fmt.Errorf("scenario %q canonical case %q does not define %s anchor %q",
+				definition.Key, definition.Case, definition.AnchorKind, definition.Anchor))
+	}
+	return errors.Join(validationErrors...)
+}
+
+func validateScenarioDefinitionSet(definitions []requirementScenarioDefinition,
+	index *scenarioBindingIndex,
+) error {
+	definitionKeys := make([]string, len(definitions))
+	for position, definition := range definitions {
+		definitionKeys[position] = definition.Key
+	}
+	var validationErrors []error
 	if !slices.IsSorted(definitionKeys) {
 		validationErrors = append(validationErrors,
 			fmt.Errorf("canonical scenario keys are not sorted: %v", definitionKeys))
 	}
-	for key, requirementID := range referenceByKey {
-		if _, exists := definitionByKey[key]; !exists {
+	for key, requirementID := range index.referenceByKey {
+		if _, exists := index.definitionByKey[key]; !exists {
 			validationErrors = append(validationErrors,
 				fmt.Errorf("requirement %s scenario key %q has no canonical definition",
 					requirementID, key))
