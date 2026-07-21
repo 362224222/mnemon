@@ -139,6 +139,23 @@ func channelRosterConflict(existing, records []model.Member,
 func (s *Store) applyChannelRosterCandidate(ctx context.Context, tx *sql.Tx,
 	localPeer model.PeerID, authority verifiedChannelAuthority, candidate model.VerifiedRoster, at time.Time,
 ) (MergeChannelRosterResult, error) {
+	result, err := s.applyChannelRosterCandidateTx(ctx, tx, localPeer, authority, candidate, at)
+	if err != nil {
+		return MergeChannelRosterResult{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return MergeChannelRosterResult{}, mapChannelRosterError(err)
+	}
+	return result, nil
+}
+
+// applyChannelRosterCandidateTx installs one already-verified extension but
+// deliberately leaves commit ownership with its caller. Voluntary leave uses
+// this boundary to make the terminal roster merge and request receipt one
+// indivisible durable transition.
+func (s *Store) applyChannelRosterCandidateTx(ctx context.Context, tx *sql.Tx,
+	localPeer model.PeerID, authority verifiedChannelAuthority, candidate model.VerifiedRoster, at time.Time,
+) (MergeChannelRosterResult, error) {
 	existing := authority.roster.Members()
 	if authority.channel.Status() == model.ChannelConflicted ||
 		at.Before(authority.channel.UpdatedAt()) || at.Before(candidate.Members()[len(candidate.Members())-1].CreatedAt()) {
@@ -177,9 +194,6 @@ func (s *Store) applyChannelRosterCandidate(ctx context.Context, tx *sql.Tx,
 	committed, err := readVerifiedChannelAuthority(ctx, tx, localPeer, channel.ID())
 	if err != nil || committed.channel.RosterHead() != candidate.Head() {
 		return MergeChannelRosterResult{}, ErrChannelRosterConflict
-	}
-	if err := tx.Commit(); err != nil {
-		return MergeChannelRosterResult{}, mapChannelRosterError(err)
 	}
 	return MergeChannelRosterResult{Status: ChannelRosterApplied, Channel: committed.channel,
 		Roster: committed.roster, ExpectedNextRevision: committed.roster.Head().Revision() + 1}, nil
