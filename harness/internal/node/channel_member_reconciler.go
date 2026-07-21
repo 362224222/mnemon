@@ -243,6 +243,9 @@ func (worker *ChannelMemberReconciler) processTarget(ctx context.Context,
 	}
 	worker.recordHello()
 	missing := ack.MissingRecords()
+	if settled, err := worker.mergeTerminalMemberHello(ctx, target, ack); settled || err != nil {
+		return err
+	}
 	if len(missing) > 0 {
 		request, err := peer.NewSyncRequest(peer.SyncRequestSpec{ChannelID: target.channel.ID(),
 			AfterHead: ack.RosterHead()})

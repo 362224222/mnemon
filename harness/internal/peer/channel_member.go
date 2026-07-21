@@ -145,6 +145,14 @@ func (service *ChannelMemberService) handleHello(ctx context.Context, stream net
 	if err != nil {
 		return service.respondControllerFailure(stream, requestID, err)
 	}
+	terminalAck, terminal, err := terminalMemberHelloAcknowledgement(result.Roster,
+		hello, remotePeerID, remotePublicKey)
+	if err != nil {
+		return err
+	}
+	if terminal {
+		return writeChannelMemberFrame(stream, requestID, terminalAck)
+	}
 	if code, err := validateChannelMemberAuthority(result.Roster, hello.ChannelID(),
 		remotePeerID, remotePublicKey); err != nil {
 		return err
