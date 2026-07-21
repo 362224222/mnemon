@@ -4,6 +4,7 @@ set -eu
 . "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)/lib.sh"
 
 for script in "$runner_dir"/*.sh "$repo_root"/harness/test/e2e/docker/*.sh \
+    "$repo_root"/harness/test/e2e/faultplane/*.sh \
     "$scenario_root"/*/oracle/oracle.sh; do
     [ -x "$script" ] || die "required E2E script is not executable: $script"
     sh -n "$script"
@@ -78,7 +79,8 @@ if find "$repo_root/harness/test/e2e/docker" "$repo_root/harness/test/e2e/runner
 fi
 if grep -R --exclude=smoke_test.sh -n -E \
   'harness/internal/|mnemon-harness[[:space:]]+event|REQUEST\.json|RESOLUTION\.json' \
-  "$repo_root/harness/test/e2e/docker" "$repo_root/harness/test/e2e/runner" >/dev/null; then
+  "$repo_root/harness/test/e2e/docker" "$repo_root/harness/test/e2e/faultplane" \
+  "$repo_root/harness/test/e2e/runner" >/dev/null; then
     die 'E2E runner crosses the public black-box boundary'
 fi
 

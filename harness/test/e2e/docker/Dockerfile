@@ -13,7 +13,10 @@ RUN CGO_ENABLED=0 go build -trimpath \
       -o /out/mnemon-harness ./harness/cmd/mnemon-harness && \
     CGO_ENABLED=0 go build -trimpath \
       -ldflags "-s -w -X main.version=${VERSION}" \
-      -o /out/mnemond ./harness/cmd/mnemond
+      -o /out/mnemond ./harness/cmd/mnemond && \
+    CGO_ENABLED=0 go build -trimpath \
+      -ldflags "-s -w" \
+      -o /out/r5-response-loss-proxy ./harness/test/e2e/faultplane
 
 FROM ${GO_IMAGE} AS runtime
 ARG GIT_SHA=unknown
@@ -49,6 +52,7 @@ RUN set -eu; \
 
 COPY --from=build /out/mnemon-harness /usr/local/bin/mnemon-harness
 COPY --from=build /out/mnemond /usr/local/bin/mnemond
+COPY --from=build /out/r5-response-loss-proxy /opt/r5/bin/r5-response-loss-proxy
 COPY harness/test/e2e/docker/idle.sh /opt/r5/bin/idle
 COPY harness/test/e2e/docker/scripted-codex.sh /opt/r5/scripted/bin/codex
 COPY harness/test/e2e/docker/scripted-agent-turn.sh /opt/r5/bin/scripted-agent-turn
