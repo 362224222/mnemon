@@ -46,42 +46,16 @@ func TestCommitManagedAcceptanceCompletesClaimWithExactCurrentAction(t *testing.
 	initial := reserveManagedOfferForAcceptance(t, fixture, "managed-current-source", fixture.now)
 	initialAuthority := localAuthority(initial.Operation)
 	initialSpec := fixture.offer(t, &initialAuthority, "managed-current-source", fixture.reviewers, nil, nil)
-	if _, err := fixture.store.CommitManagedAcceptance(context.Background(), ManagedAcceptanceSpec{
-		Scope: initialSpec.Scope, Items: initialSpec.Items, Operation: initialAuthority,
-	}, fixture.now.Add(time.Second)); err != nil {
-		t.Fatal(err)
-	}
-
-	sourceEvent := initialSpec.Items[0].Publication.Event()
-	claimAt := fixture.now.Add(2 * time.Second)
-	insertClaimHandling(t, fixture.store, "handling-managed-cancel", sourceEvent.ID(), 1,
-		claimAt, claimAt, 0)
-	claim := claimCurrent(t, fixture, "owner-managed-cancel", "token-managed-cancel", claimAt)
-	readAt := claimAt.Add(time.Second)
-	current, err := fixture.store.FinalizeAgentCurrentRead(context.Background(), currentReadSpec(
-		fixture, claim.Run.ID(), "token-managed-cancel", readAt))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !sameOperationKinds(current.Projection.AllowedActions(),
+	prepared := prepareManagedCancelFromInitial(t, fixture, "cancel", initialSpec)
+	if !sameOperationKinds(prepared.current.Projection.AllowedActions(),
 		[]model.OperationKind{model.OperationTeamworkCancel, model.OperationResolveRetry}) {
-		t.Fatalf("current actions = %v", current.Projection.AllowedActions())
+		t.Fatalf("current actions = %v", prepared.current.Projection.AllowedActions())
 	}
 
-	operationAt := readAt.Add(time.Second)
-	reservation, err := fixture.store.ReserveManagedOperation(context.Background(), ManagedOperationSpec{
-		Profile: fixture.profile, ClientKeyHash: model.Sum([]byte("key-managed-cancel")),
-		RequestDigest: model.Sum([]byte("request-managed-cancel")), Kind: model.OperationTeamworkCancel,
-		LeaseOwner: "server-managed-cancel", At: operationAt, LeaseUntil: operationAt.Add(time.Minute),
-		ClaimContextHash: model.Sum([]byte("token-managed-cancel")), HasClaimContext: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	acceptedAt := operationAt.Add(time.Second)
-	managedSpec := managedCancelAcceptance(t, fixture, reservation, current, acceptedAt)
+	managedSpec := managedCancelAcceptance(t, fixture, prepared.reservation,
+		prepared.current, prepared.acceptedAt)
 	result, err := fixture.store.CommitManagedAcceptance(context.Background(), managedSpec,
-		acceptedAt.Add(time.Second))
+		prepared.acceptedAt.Add(time.Second))
 	if err != nil || result.Replayed {
 		t.Fatalf("managed cancel acceptance = (%#v, %v)", result, err)
 	}
@@ -91,7 +65,7 @@ func TestCommitManagedAcceptanceCompletesClaimWithExactCurrentAction(t *testing.
 		}
 	}
 
-	handling, err := readAgentHandling(context.Background(), fixture.store.db, claim.Handling.ID())
+	handling, err := readAgentHandling(context.Background(), fixture.store.db, prepared.claim.Handling.ID())
 	if err != nil || handling.Status() != model.HandlingCompleted ||
 		handling.LastDisposition() != "teamwork_action" || handling.ClaimOwner() != "" {
 		t.Fatalf("completed Handling = (%#v, %v)", handling, err)
@@ -100,8 +74,8 @@ func TestCommitManagedAcceptanceCompletesClaimWithExactCurrentAction(t *testing.
 	if !ok || outcome != managedSpec.Items[0].Publication.Event().ID() {
 		t.Fatalf("Handling outcome Event = %s, %v", outcome, ok)
 	}
-	assertManagedAcceptanceRun(t, fixture.store, claim.Run.ID(), result.Receipt)
-	durable, err := fixture.store.GetReviewWork(context.Background(), current.Receipt.ActionWork())
+	assertManagedAcceptanceRun(t, fixture.store, prepared.claim.Run.ID(), result.Receipt)
+	durable, err := fixture.store.GetReviewWork(context.Background(), prepared.current.Receipt.ActionWork())
 	if err != nil || durable.State() != model.WorkCancelled || durable.Version() != 2 {
 		t.Fatalf("cancelled Work = (%#v, %v)", durable, err)
 	}
@@ -128,46 +102,17 @@ func TestCommitManagedAcceptanceDoesNotAuthorizeUnusedCurrentArtifacts(t *testin
 	artifact, _ := model.NewArtifactRef(root.RootDigest, model.ArtifactProduced)
 	initialSpec := fixture.offer(t, &initialAuthority, "managed-unused-artifact-source",
 		fixture.reviewers, []model.ArtifactRef{artifact}, nil)
-	if _, err := fixture.store.CommitManagedAcceptance(context.Background(), ManagedAcceptanceSpec{
-		Scope: initialSpec.Scope, Items: initialSpec.Items, Operation: initialAuthority,
-	}, fixture.now.Add(time.Second)); err != nil {
-		t.Fatal(err)
-	}
-
-	sourceEvent := initialSpec.Items[0].Publication.Event()
-	claimAt := fixture.now.Add(2 * time.Second)
-	insertClaimHandling(t, fixture.store, "handling-managed-unused-artifact", sourceEvent.ID(), 1,
-		claimAt, claimAt, 0)
-	claim := claimCurrent(t, fixture, "owner-managed-unused-artifact",
-		"token-managed-unused-artifact", claimAt)
-	readAt := claimAt.Add(time.Second)
-	current, err := fixture.store.FinalizeAgentCurrentRead(context.Background(),
-		plannedCurrentReadSpec(t, fixture.store, currentReadSpec(fixture, claim.Run.ID(),
-			"token-managed-unused-artifact", readAt)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(current.Receipt.ArtifactRefs()) != 1 ||
-		current.Receipt.ArtifactRefs()[0].RootDigest() != root.RootDigest {
-		t.Fatalf("current Artifact refs = %v, want %s", current.Receipt.ArtifactRefs(),
+	prepared := prepareManagedCancelFromInitial(t, fixture, "unused-artifact", initialSpec)
+	if len(prepared.current.Receipt.ArtifactRefs()) != 1 ||
+		prepared.current.Receipt.ArtifactRefs()[0].RootDigest() != root.RootDigest {
+		t.Fatalf("current Artifact refs = %v, want %s", prepared.current.Receipt.ArtifactRefs(),
 			root.RootDigest)
 	}
 
-	operationAt := readAt.Add(time.Second)
-	reservation, err := fixture.store.ReserveManagedOperation(context.Background(), ManagedOperationSpec{
-		Profile: fixture.profile, ClientKeyHash: model.Sum([]byte("key-managed-unused-artifact")),
-		RequestDigest: model.Sum([]byte("request-managed-unused-artifact")), Kind: model.OperationTeamworkCancel,
-		LeaseOwner: "server-managed-unused-artifact", At: operationAt,
-		LeaseUntil: operationAt.Add(time.Minute), ClaimContextHash: model.Sum([]byte("token-managed-unused-artifact")),
-		HasClaimContext: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	acceptedAt := operationAt.Add(time.Second)
-	managedSpec := managedCancelAcceptance(t, fixture, reservation, current, acceptedAt)
+	managedSpec := managedCancelAcceptance(t, fixture, prepared.reservation,
+		prepared.current, prepared.acceptedAt)
 	result, err := fixture.store.CommitManagedAcceptance(context.Background(), managedSpec,
-		acceptedAt.Add(time.Second))
+		prepared.acceptedAt.Add(time.Second))
 	if err != nil || result.Replayed {
 		t.Fatalf("managed cancel with unused current Artifact = (%#v, %v)", result, err)
 	}
@@ -176,45 +121,64 @@ func TestCommitManagedAcceptanceDoesNotAuthorizeUnusedCurrentArtifacts(t *testin
 	}
 }
 
-func TestCommitManagedAcceptanceAcceptsParentResumeDelivery(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	fixture := newDerivationDispositionFixture(t, true)
-	if err := fixture.store.ReconcileWorkDerivationDisposition(ctx, fixture.children[0]); err != nil {
+type managedCancelCurrent struct {
+	current     AgentCurrentReadResult
+	claim       AgentClaimResult
+	reservation ManagedOperationReservation
+	acceptedAt  time.Time
+}
+
+func prepareManagedCancelFromInitial(t *testing.T, fixture *acceptanceFixture,
+	suffix string, initialSpec LocalAcceptanceSpec,
+) managedCancelCurrent {
+	t.Helper()
+	if initialSpec.Operation == nil {
+		t.Fatal("managed initial offer lacks operation authority")
+	}
+	if _, err := fixture.store.CommitManagedAcceptance(context.Background(), ManagedAcceptanceSpec{
+		Scope: initialSpec.Scope, Items: initialSpec.Items, Operation: *initialSpec.Operation,
+	}, fixture.now.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	handling := fixture.handling(t)
-	claimAt := fixture.now.Add(7 * time.Second)
-	claim := claimCurrent(t, fixture.acceptanceFixture, "owner-parent-resume-deliver",
-		"token-parent-resume-deliver", claimAt)
-	if claim.Status != AgentClaimActionable || claim.Handling.ID() != handling.ID() {
-		t.Fatalf("parent-resume claim = %#v, want Handling %s", claim, handling.ID())
-	}
+	token := "token-managed-" + suffix
+	claimAt := fixture.now.Add(2 * time.Second)
+	insertClaimHandling(t, fixture.store, "handling-managed-"+suffix,
+		initialSpec.Items[0].Publication.Event().ID(), 1, claimAt, claimAt, 0)
+	claim := claimCurrent(t, fixture, "owner-managed-"+suffix, token, claimAt)
 	readAt := claimAt.Add(time.Second)
-	current, err := fixture.store.FinalizeAgentCurrentRead(ctx,
-		plannedCurrentReadSpec(t, fixture.store, currentReadSpec(fixture.acceptanceFixture,
-			claim.Run.ID(), "token-parent-resume-deliver", readAt)))
-	if err != nil || len(current.Receipt.Projection().ChildResults()) == 0 ||
-		current.Receipt.ActionWork() != fixture.parent {
-		t.Fatalf("parent-resume current = (%#v, %v)", current, err)
-	}
-
-	operationAt := readAt.Add(time.Second)
-	reservation, err := fixture.store.ReserveManagedOperation(ctx, ManagedOperationSpec{
-		Profile: fixture.profile, ClientKeyHash: model.Sum([]byte("key-parent-resume-deliver")),
-		RequestDigest: model.Sum([]byte("request-parent-resume-deliver")),
-		Kind:          model.OperationTeamworkDeliver, LeaseOwner: "server-parent-resume-deliver",
-		At: operationAt, LeaseUntil: operationAt.Add(time.Minute),
-		ClaimContextHash: model.Sum([]byte("token-parent-resume-deliver")), HasClaimContext: true,
-	})
+	current, err := fixture.store.FinalizeAgentCurrentRead(context.Background(),
+		plannedCurrentReadSpec(t, fixture.store, currentReadSpec(fixture,
+			claim.Run.ID(), token, readAt)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	acceptedAt := operationAt.Add(time.Second)
-	managedSpec := managedDeliverAcceptance(t, fixture.acceptanceFixture, reservation,
-		current, acceptedAt, "event-parent-resume-delivery-ready")
-	result, err := fixture.store.CommitManagedAcceptance(ctx, managedSpec,
-		acceptedAt.Add(time.Second))
+	operationAt := readAt.Add(time.Second)
+	reservation, err := fixture.store.ReserveManagedOperation(context.Background(),
+		ManagedOperationSpec{Profile: fixture.profile,
+			ClientKeyHash:    model.Sum([]byte("key-managed-" + suffix)),
+			RequestDigest:    model.Sum([]byte("request-managed-" + suffix)),
+			Kind:             model.OperationTeamworkCancel,
+			LeaseOwner:       "server-managed-" + suffix,
+			At:               operationAt,
+			LeaseUntil:       operationAt.Add(time.Minute),
+			ClaimContextHash: model.Sum([]byte(token)),
+			HasClaimContext:  true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return managedCancelCurrent{current: current, claim: claim, reservation: reservation,
+		acceptedAt: operationAt.Add(time.Second)}
+}
+
+func TestCommitManagedAcceptanceAcceptsParentResumeDelivery(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	prepared := prepareParentResumeManagedDelivery(t, "deliver")
+	managedSpec := managedDeliverAcceptance(t, prepared.fixture.acceptanceFixture,
+		prepared.reservation, prepared.current, prepared.acceptedAt,
+		"event-parent-resume-delivery-ready")
+	result, err := prepared.fixture.store.CommitManagedAcceptance(ctx, managedSpec,
+		prepared.acceptedAt.Add(time.Second))
 	if err != nil || result.Replayed {
 		t.Fatalf("parent-resume delivery acceptance = (%#v, %v)", result, err)
 	}
@@ -223,13 +187,13 @@ func TestCommitManagedAcceptanceAcceptsParentResumeDelivery(t *testing.T) {
 			t.Fatalf("delivery receipt lacks frozen parent result %s: %s", binding, result.Receipt)
 		}
 	}
-	assertManagedAcceptanceRun(t, fixture.store, claim.Run.ID(), result.Receipt)
-	handling, err = readAgentHandling(ctx, fixture.store.db, claim.Handling.ID())
+	assertManagedAcceptanceRun(t, prepared.fixture.store, prepared.claim.Run.ID(), result.Receipt)
+	handling, err := readAgentHandling(ctx, prepared.fixture.store.db, prepared.claim.Handling.ID())
 	if err != nil || handling.Status() != model.HandlingCompleted ||
 		handling.LastDisposition() != "teamwork_action" {
 		t.Fatalf("completed parent-resume Handling = (%#v, %v)", handling, err)
 	}
-	durable, err := fixture.store.GetReviewWork(ctx, fixture.parent)
+	durable, err := prepared.fixture.store.GetReviewWork(ctx, prepared.fixture.parent)
 	if err != nil || durable.State() != model.WorkActive || durable.Version() != 2 {
 		t.Fatalf("parent Work changed after participant delivery = (%#v, %v)", durable, err)
 	}
@@ -238,39 +202,63 @@ func TestCommitManagedAcceptanceAcceptsParentResumeDelivery(t *testing.T) {
 func TestCommitManagedAcceptanceRejectsParentResumeDeliveryChildCause(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
+	prepared := prepareParentResumeManagedDelivery(t, "child-cause")
+	managedSpec := managedDeliverAcceptance(t, prepared.fixture.acceptanceFixture,
+		prepared.reservation, prepared.current, prepared.acceptedAt,
+		"event-parent-resume-child-cause-delivery-ready",
+		prepared.current.Receipt.SourceEvent())
+	if _, err := prepared.fixture.store.CommitManagedAcceptance(ctx, managedSpec,
+		prepared.acceptedAt.Add(time.Second)); !errors.Is(err, ErrAdmissionConflict) {
+		t.Fatalf("parent-resume child-cause delivery error = %v, want admission conflict", err)
+	}
+}
+
+type parentResumeManagedDelivery struct {
+	fixture     *derivationDispositionFixture
+	claim       AgentClaimResult
+	current     AgentCurrentReadResult
+	reservation ManagedOperationReservation
+	acceptedAt  time.Time
+}
+
+func prepareParentResumeManagedDelivery(t *testing.T,
+	suffix string,
+) parentResumeManagedDelivery {
+	t.Helper()
+	ctx := context.Background()
 	fixture := newDerivationDispositionFixture(t, true)
 	if err := fixture.store.ReconcileWorkDerivationDisposition(ctx, fixture.children[0]); err != nil {
 		t.Fatal(err)
 	}
+	handling := fixture.handling(t)
 	claimAt := fixture.now.Add(7 * time.Second)
-	claim := claimCurrent(t, fixture.acceptanceFixture, "owner-parent-resume-child-cause",
-		"token-parent-resume-child-cause", claimAt)
+	token := "token-parent-resume-" + suffix
+	claim := claimCurrent(t, fixture.acceptanceFixture, "owner-parent-resume-"+suffix,
+		token, claimAt)
+	if claim.Status != AgentClaimActionable || claim.Handling.ID() != handling.ID() {
+		t.Fatalf("parent-resume claim = %#v, want Handling %s", claim, handling.ID())
+	}
 	readAt := claimAt.Add(time.Second)
 	current, err := fixture.store.FinalizeAgentCurrentRead(ctx,
 		plannedCurrentReadSpec(t, fixture.store, currentReadSpec(fixture.acceptanceFixture,
-			claim.Run.ID(), "token-parent-resume-child-cause", readAt)))
-	if err != nil || len(current.Receipt.Projection().ChildResults()) == 0 {
+			claim.Run.ID(), token, readAt)))
+	if err != nil || len(current.Receipt.Projection().ChildResults()) == 0 ||
+		current.Receipt.ActionWork() != fixture.parent {
 		t.Fatalf("parent-resume current = (%#v, %v)", current, err)
 	}
 	operationAt := readAt.Add(time.Second)
 	reservation, err := fixture.store.ReserveManagedOperation(ctx, ManagedOperationSpec{
-		Profile: fixture.profile, ClientKeyHash: model.Sum([]byte("key-parent-resume-child-cause")),
-		RequestDigest: model.Sum([]byte("request-parent-resume-child-cause")),
-		Kind:          model.OperationTeamworkDeliver, LeaseOwner: "server-parent-resume-child-cause",
+		Profile: fixture.profile, ClientKeyHash: model.Sum([]byte("key-parent-resume-" + suffix)),
+		RequestDigest: model.Sum([]byte("request-parent-resume-" + suffix)),
+		Kind:          model.OperationTeamworkDeliver, LeaseOwner: "server-parent-resume-" + suffix,
 		At: operationAt, LeaseUntil: operationAt.Add(time.Minute),
-		ClaimContextHash: model.Sum([]byte("token-parent-resume-child-cause")), HasClaimContext: true,
+		ClaimContextHash: model.Sum([]byte(token)), HasClaimContext: true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	acceptedAt := operationAt.Add(time.Second)
-	managedSpec := managedDeliverAcceptance(t, fixture.acceptanceFixture, reservation,
-		current, acceptedAt, "event-parent-resume-child-cause-delivery-ready",
-		current.Receipt.SourceEvent())
-	if _, err := fixture.store.CommitManagedAcceptance(ctx, managedSpec,
-		acceptedAt.Add(time.Second)); !errors.Is(err, ErrAdmissionConflict) {
-		t.Fatalf("parent-resume child-cause delivery error = %v, want admission conflict", err)
-	}
+	return parentResumeManagedDelivery{fixture: fixture, claim: claim, current: current,
+		reservation: reservation, acceptedAt: operationAt.Add(time.Second)}
 }
 
 func TestCommitManagedAcceptanceRollsBackHandlingAndRunOnLateFailure(t *testing.T) {

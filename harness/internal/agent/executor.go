@@ -104,6 +104,12 @@ type executionDeadlineSpec struct {
 	contextHash model.Digest
 }
 
+type currentActionTransitionPlan struct {
+	transition teamwork.TransitionIntent
+	deadline   *executionDeadlineAuthority
+	due        bool
+}
+
 type storeTeamworkExecutionBackend struct{ store *store.Store }
 
 func (b storeTeamworkExecutionBackend) Prepare(ctx context.Context, channel model.ChannelID,
@@ -431,42 +437,73 @@ func (e *TeamworkActionExecutor) buildCurrentAction(ctx context.Context, spec Te
 	participant := prepared.participant
 
 	requestedType := spec.Action.handler.EventType()
-	var err error
-	var transition teamwork.TransitionIntent
-	var deadline *executionDeadlineAuthority
-	if !participant {
-		contextHash, hasContext := spec.Reservation.Operation.ContextHash()
-		if !hasContext {
-			return executionAcceptanceSpec{}, NewControlError(CodeContextInvalid,
-				"home Teamwork action lacks operation context")
-		}
-		deadline = &executionDeadlineAuthority{scope: scope, work: work, current: current,
-			operation: localExecutionAuthority(spec.Reservation.Operation), contextHash: contextHash}
-		transition, err = teamwork.PlanHomeTransition(teamwork.HomeTransitionSpec{Work: work,
-			ActorPeerID: scope.node.PeerID(), ExpectedVersion: current.ActionWorkVersion(),
-			EventType: requestedType, NowUnixNano: spec.At.UnixNano()})
-		if err != nil {
-			return executionAcceptanceSpec{}, mapTeamworkExecutionError(err)
-		}
-		if transition.DeadlineWon() {
-			deadline.due = true
-			return executionAcceptanceSpec{scope: scope,
-				operation: localExecutionAuthority(spec.Reservation.Operation), deadline: deadline}, nil
-		}
+	plan, apiErr := e.planCurrentActionTransition(spec, current, work, scope,
+		participant, requestedType)
+	if apiErr != nil {
+		return executionAcceptanceSpec{}, apiErr
 	}
+	if plan.due {
+		return executionAcceptanceSpec{scope: scope,
+			operation: localExecutionAuthority(spec.Reservation.Operation), deadline: plan.deadline}, nil
+	}
+	bundle, apiErr := e.admitCurrentActionEvent(ctx, spec, current, work, audience, scope,
+		artifacts, requestedType)
+	if apiErr != nil {
+		return executionAcceptanceSpec{}, apiErr
+	}
+	item, apiErr := buildCurrentActionItem(bundle, work, plan.transition, participant)
+	if apiErr != nil {
+		return executionAcceptanceSpec{}, apiErr
+	}
+	return executionAcceptanceSpec{scope: scope, items: []store.LocalAcceptanceItem{item},
+		operation: localExecutionAuthority(spec.Reservation.Operation), deadline: plan.deadline}, nil
+}
+
+func (e *TeamworkActionExecutor) planCurrentActionTransition(spec TeamworkExecutionSpec,
+	current model.CurrentReadReceipt, work model.ReviewWork, scope executionScope,
+	participant bool, requestedType model.EventType,
+) (currentActionTransitionPlan, *ControlError) {
+	if participant {
+		return currentActionTransitionPlan{}, nil
+	}
+	contextHash, hasContext := spec.Reservation.Operation.ContextHash()
+	if !hasContext {
+		return currentActionTransitionPlan{}, NewControlError(CodeContextInvalid,
+			"home Teamwork action lacks operation context")
+	}
+	deadline := &executionDeadlineAuthority{scope: scope, work: work, current: current,
+		operation: localExecutionAuthority(spec.Reservation.Operation), contextHash: contextHash}
+	transition, err := teamwork.PlanHomeTransition(teamwork.HomeTransitionSpec{Work: work,
+		ActorPeerID: scope.node.PeerID(), ExpectedVersion: current.ActionWorkVersion(),
+		EventType: requestedType, NowUnixNano: spec.At.UnixNano()})
+	if err != nil {
+		return currentActionTransitionPlan{}, mapTeamworkExecutionError(err)
+	}
+	if transition.DeadlineWon() {
+		deadline.due = true
+		return currentActionTransitionPlan{transition: transition, deadline: deadline, due: true}, nil
+	}
+	return currentActionTransitionPlan{transition: transition, deadline: deadline}, nil
+}
+
+func (e *TeamworkActionExecutor) admitCurrentActionEvent(ctx context.Context,
+	spec TeamworkExecutionSpec, current model.CurrentReadReceipt, work model.ReviewWork,
+	audience model.Audience, scope executionScope, artifacts []model.ArtifactRef,
+	requestedType model.EventType,
+) (event.Bundle, *ControlError) {
 	eventID, err := derivedActionEventID(spec.Reservation.Operation.ID())
 	if err != nil {
-		return executionAcceptanceSpec{}, NewControlError(CodeInternal,
+		return event.Bundle{}, NewControlError(CodeInternal,
 			"server could not derive action Event identity")
 	}
 	eventScope, err := scope.eventScope(0, work.Ref())
 	if err != nil {
-		return executionAcceptanceSpec{}, NewControlError(CodeInternal,
+		return event.Bundle{}, NewControlError(CodeInternal,
 			"server could not derive action Event scope")
 	}
 	cause, apiErr := e.currentActionCause(ctx, spec.Action, current, work)
 	if apiErr != nil {
-		return executionAcceptanceSpec{}, apiErr
+		return event.Bundle{}, apiErr
 	}
 	stamp, err := event.NewAdmissionStamp(event.AdmissionStampSpec{Node: scope.node, Profile: scope.profile,
 		EventID: eventID, ChannelID: scope.channelID, WorkRef: work.Ref(),
@@ -476,39 +513,45 @@ func (e *TeamworkActionExecutor) buildCurrentAction(ctx context.Context, spec Te
 		WorkDeadlineUnixNano: work.DeadlineUnixNano(), Artifacts: artifacts,
 		CausedBy: []model.EventKey{cause}})
 	if err != nil {
-		return executionAcceptanceSpec{}, NewControlError(CodeInternal,
+		return event.Bundle{}, NewControlError(CodeInternal,
 			"server could not bind action authority")
 	}
 	factory, err := event.NewFactory(executionClock{spec.At}, e.signer)
 	if err != nil {
-		return executionAcceptanceSpec{}, NewControlError(CodeInternal,
+		return event.Bundle{}, NewControlError(CodeInternal,
 			"Teamwork Event factory is unavailable")
 	}
 	bundle, err := factory.AdmitAgent(ctx, stamp, spec.Action.Candidate)
 	if err != nil || bundle.Event().Type() != requestedType {
-		return executionAcceptanceSpec{}, NewControlError(CodeInternal,
+		return event.Bundle{}, NewControlError(CodeInternal,
 			"server could not admit action Event")
 	}
+	return bundle, nil
+}
+
+func buildCurrentActionItem(bundle event.Bundle, work model.ReviewWork,
+	transition teamwork.TransitionIntent, participant bool,
+) (store.LocalAcceptanceItem, *ControlError) {
 	item := store.LocalAcceptanceItem{Publication: bundle.Publication()}
-	if !participant {
-		nextSpec := work.Spec()
-		nextSpec.Version, nextSpec.Iteration = transition.NextVersion(), transition.NextIteration()
-		nextSpec.State, nextSpec.StateData = transition.NextState(), bundle.Event().Payload()
-		nextSpec.UpdatedBy, nextSpec.UpdatedAt = bundle.Event().ID(), bundle.Event().AcceptedAt()
-		next, err := model.NewReviewWork(nextSpec)
-		if err != nil {
-			return executionAcceptanceSpec{}, NewControlError(CodeInternal,
-				"server could not project Work transition")
-		}
-		mutation, err := store.NewWorkTransition(next, work.Version(), work.State())
-		if err != nil {
-			return executionAcceptanceSpec{}, NewControlError(CodeInternal,
-				"server could not freeze Work transition")
-		}
-		item.Work = &mutation
+	if participant {
+		return item, nil
 	}
-	return executionAcceptanceSpec{scope: scope, items: []store.LocalAcceptanceItem{item},
-		operation: localExecutionAuthority(spec.Reservation.Operation), deadline: deadline}, nil
+	nextSpec := work.Spec()
+	nextSpec.Version, nextSpec.Iteration = transition.NextVersion(), transition.NextIteration()
+	nextSpec.State, nextSpec.StateData = transition.NextState(), bundle.Event().Payload()
+	nextSpec.UpdatedBy, nextSpec.UpdatedAt = bundle.Event().ID(), bundle.Event().AcceptedAt()
+	next, err := model.NewReviewWork(nextSpec)
+	if err != nil {
+		return store.LocalAcceptanceItem{}, NewControlError(CodeInternal,
+			"server could not project Work transition")
+	}
+	mutation, err := store.NewWorkTransition(next, work.Version(), work.State())
+	if err != nil {
+		return store.LocalAcceptanceItem{}, NewControlError(CodeInternal,
+			"server could not freeze Work transition")
+	}
+	item.Work = &mutation
+	return item, nil
 }
 
 func (e *TeamworkActionExecutor) currentActionCause(ctx context.Context,
@@ -523,84 +566,6 @@ func (e *TeamworkActionExecutor) currentActionCause(ctx context.Context,
 		return model.EventKey{}, mapTeamworkExecutionError(err)
 	}
 	return cause, nil
-}
-
-func (e *TeamworkActionExecutor) resolveDeadline(ctx context.Context,
-	authority executionDeadlineAuthority, at time.Time,
-) (OperationResponse, *ControlError) {
-	transition, err := teamwork.PlanHomeTransition(teamwork.HomeTransitionSpec{Work: authority.work,
-		ActorPeerID: authority.scope.node.PeerID(), ExpectedVersion: authority.current.ActionWorkVersion(),
-		EventType: model.EventReviewExpired, NowUnixNano: at.UnixNano()})
-	if err != nil || transition.AuthoritativeEventType() != model.EventReviewExpired {
-		return OperationResponse{}, NewControlError(CodeWorkConflict,
-			"current Work changed before deadline resolution")
-	}
-	eventID, err := derivedDeadlineEventID(authority.operation.ID)
-	if err != nil {
-		return OperationResponse{}, NewControlError(CodeInternal,
-			"server could not derive deadline Event identity")
-	}
-	eventScope, err := authority.scope.eventScope(0, authority.work.Ref())
-	if err != nil {
-		return OperationResponse{}, NewControlError(CodeInternal,
-			"server could not derive deadline Event scope")
-	}
-	audience, err := model.NewAudience([]model.PeerID{authority.work.Participants().ReviewerPeerID()})
-	if err != nil {
-		return OperationResponse{}, NewControlError(CodeInternal,
-			"deadline Work audience is invalid")
-	}
-	stamp, err := event.NewAdmissionStamp(event.AdmissionStampSpec{Node: authority.scope.node,
-		Profile: authority.scope.profile, EventID: eventID, ChannelID: authority.scope.channelID,
-		WorkRef: authority.work.Ref(), OriginSequence: eventScope.OriginSequence(),
-		ChannelSequence: eventScope.ChannelSequence(), OriginMember: eventScope.OriginMember(),
-		PublicationRoster: eventScope.PublicationRoster(), Audience: audience,
-		WorkVersion: authority.work.Version(), Iteration: authority.work.Iteration(),
-		WorkDeadlineUnixNano: authority.work.DeadlineUnixNano(),
-		CausedBy:             []model.EventKey{authority.current.SourceEvent()}})
-	if err != nil {
-		return OperationResponse{}, NewControlError(CodeInternal,
-			"server could not bind deadline authority")
-	}
-	factory, err := event.NewFactory(executionClock{at}, e.signer)
-	if err != nil {
-		return OperationResponse{}, NewControlError(CodeInternal,
-			"Teamwork deadline Event factory is unavailable")
-	}
-	bundle, err := factory.AdmitController(ctx, stamp, event.ExpiredDecision{})
-	if err != nil || bundle.Event().Type() != model.EventReviewExpired ||
-		!bundle.Event().AcceptedAt().Equal(at) {
-		return OperationResponse{}, NewControlError(CodeInternal,
-			"server could not admit deadline Event")
-	}
-	nextSpec := authority.work.Spec()
-	nextSpec.Version, nextSpec.Iteration = transition.NextVersion(), transition.NextIteration()
-	nextSpec.State, nextSpec.StateData = transition.NextState(), bundle.Event().Payload()
-	nextSpec.UpdatedBy, nextSpec.UpdatedAt = bundle.Event().ID(), bundle.Event().AcceptedAt()
-	next, err := model.NewReviewWork(nextSpec)
-	if err != nil {
-		return OperationResponse{}, NewControlError(CodeInternal,
-			"server could not project expired Work")
-	}
-	mutation, err := store.NewWorkTransition(next, authority.work.Version(), authority.work.State())
-	if err != nil {
-		return OperationResponse{}, NewControlError(CodeInternal,
-			"server could not freeze expired Work")
-	}
-	result, err := e.backend.ResolveDeadline(ctx, executionDeadlineSpec{scope: authority.scope,
-		expiry:    store.LocalAcceptanceItem{Publication: bundle.Publication(), Work: &mutation},
-		operation: authority.operation, contextHash: authority.contextHash}, at)
-	if err != nil {
-		apiErr := mapTeamworkExecutionError(err)
-		return OperationResponse{}, operationAPIError(apiErr.Code, apiErr.Message,
-			authority.operation.ID, false)
-	}
-	apiErr := decodeManagedRejectionReceipt(result.Receipt, authority.operation.ID, result.Replayed)
-	if apiErr.Code != CodeWorkExpired {
-		return OperationResponse{}, operationAPIError(CodeInternal,
-			"deadline rejection receipt is invalid", authority.operation.ID, result.Replayed)
-	}
-	return OperationResponse{}, apiErr
 }
 
 func validateExecutionArtifactRefs(policy teamwork.ActionArtifactPolicy,

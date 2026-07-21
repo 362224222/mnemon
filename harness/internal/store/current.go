@@ -76,9 +76,7 @@ type currentReadAuthority struct {
 // PlanAgentCurrentRead derives the exact semantic Artifact union and returns
 // only verified manifest identities. It never writes current-read evidence.
 // The final transaction repeats every authority check after filesystem work.
-func (s *Store) PlanAgentCurrentRead(ctx context.Context,
-	spec AgentCurrentReadSpec,
-) (AgentCurrentReadPlan, error) {
+func (s *Store) PlanAgentCurrentRead(ctx context.Context, spec AgentCurrentReadSpec) (AgentCurrentReadPlan, error) {
 	if len(spec.ArtifactViews) != 0 {
 		return AgentCurrentReadPlan{}, fmt.Errorf("%w: materialized views are not plan input", ErrCurrentReadInput)
 	}
@@ -112,9 +110,7 @@ func (s *Store) PlanAgentCurrentRead(ctx context.Context,
 // server materializer returns, validates its exact Run/ordinal/root paths and
 // only then persists write-once current-read evidence. Receipt replay also
 // requires the exact already-stored mapping to be re-materialized.
-func (s *Store) FinalizeAgentCurrentRead(ctx context.Context,
-	spec AgentCurrentReadSpec,
-) (AgentCurrentReadResult, error) {
+func (s *Store) FinalizeAgentCurrentRead(ctx context.Context, spec AgentCurrentReadSpec) (AgentCurrentReadResult, error) {
 	at, err := validateAgentCurrentReadInput(s, ctx, spec)
 	if err != nil {
 		return AgentCurrentReadResult{}, err

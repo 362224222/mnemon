@@ -165,15 +165,33 @@ func validateManagedAcceptanceEvents(authority managedAcceptanceState, operation
 func managedParentResumeActionWorkCause(authority managedAcceptanceState,
 	operation model.Operation, event model.Event,
 ) bool {
+	if !managedParentResumeCauseEligible(authority, operation, event) {
+		return false
+	}
+	projection := authority.current.Projection()
+	action := projection.ActionWork()
+	source := projection.SourceEvent()
+	return eventCausesParentResumeActionWork(event, authority.actionWork, action) &&
+		parentResumeActionWorkMatchesCurrent(authority.actionWork, action) &&
+		currentSourceIsParentResumeChild(projection.ChildResults(), source.WorkRef()) &&
+		source.WorkRef() != action.Ref()
+}
+
+func managedParentResumeCauseEligible(authority managedAcceptanceState,
+	operation model.Operation, event model.Event,
+) bool {
 	if !authority.hasCurrent || !authority.hasActionWork ||
 		operation.Kind() != model.OperationTeamworkDeliver ||
 		event.Type() != model.EventReviewDeliveryReady ||
 		len(authority.current.Projection().ChildResults()) == 0 {
 		return false
 	}
-	action := authority.current.Projection().ActionWork()
-	source := authority.current.Projection().SourceEvent()
-	work := authority.actionWork
+	return true
+}
+
+func eventCausesParentResumeActionWork(event model.Event, work model.ReviewWork,
+	action model.CurrentWork,
+) bool {
 	causes := event.CausedBy()
 	if len(causes) != 1 ||
 		causes[0].EventID() != work.UpdatedBy() ||
@@ -183,18 +201,29 @@ func managedParentResumeActionWorkCause(authority managedAcceptanceState,
 		work.ChannelID() != event.Scope().ChannelID() {
 		return false
 	}
-	sourceChild := false
-	for _, child := range authority.current.Projection().ChildResults() {
-		sourceChild = sourceChild || child.WorkRef() == source.WorkRef()
-	}
-	return sourceChild &&
-		action.LocalRole() == model.CurrentReviewer &&
+	return true
+}
+
+func parentResumeActionWorkMatchesCurrent(work model.ReviewWork,
+	action model.CurrentWork,
+) bool {
+	return action.LocalRole() == model.CurrentReviewer &&
 		work.Version() == action.Version() &&
 		work.Iteration() == action.Iteration() &&
 		work.State() == action.State() &&
 		work.DeadlineUnixNano() == action.DeadlineUnixNano() &&
-		work.StateData().String() == action.StateData().String() &&
-		source.WorkRef() != action.Ref()
+		work.StateData().String() == action.StateData().String()
+}
+
+func currentSourceIsParentResumeChild(children []model.CurrentChildResult,
+	source model.WorkRef,
+) bool {
+	for _, child := range children {
+		if child.WorkRef() == source {
+			return true
+		}
+	}
+	return false
 }
 
 func managedAuthorizedReferences(authority managedAcceptanceState,

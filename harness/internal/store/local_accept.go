@@ -160,35 +160,9 @@ func readLocalAcceptanceOperation(ctx context.Context, tx *sql.Tx,
 func applyLocalAcceptanceTx(ctx context.Context, tx *sql.Tx, spec LocalAcceptanceSpec,
 	trustedNow time.Time, managed bool,
 ) (model.JSON, error) {
-	if ctx == nil || tx == nil {
-		return model.JSON{}, errors.New("commit local acceptance: nil context or transaction")
-	}
-	if spec.Controller == (spec.Operation != nil) {
-		return model.JSON{}, errors.New("commit local acceptance: choose controller or operation authority")
-	}
-	var operation model.Operation
-	if spec.Operation != nil {
-		var err error
-		operation, err = readLocalAcceptanceOperation(ctx, tx, spec.Operation)
-		if err != nil {
-			return model.JSON{}, err
-		}
-		if operation.Status() != model.OperationStarted {
-			return model.JSON{}, ErrOperationTerminal
-		}
-	}
-	if len(spec.Items) == 0 || len(spec.Items) > model.MaxChildWorks || spec.Scope.Count() != uint8(len(spec.Items)) {
-		return model.JSON{}, errors.New("commit local acceptance: batch must contain exactly Scope count 1..7")
-	}
-	trustedNow = trustedNow.Round(0).UTC()
-	acceptedAt := spec.Items[0].Publication.Event().AcceptedAt()
-	if trustedNow.IsZero() || acceptedAt.IsZero() || trustedNow.Before(acceptedAt) {
-		return model.JSON{}, errors.New("commit local acceptance: trusted commit time is invalid")
-	}
-	if spec.Operation != nil {
-		if err := requireOperationFence(operation, spec.Operation.LeaseOwner, trustedNow); err != nil {
-			return model.JSON{}, err
-		}
+	operation, acceptedAt, trustedNow, err := prepareLocalAcceptanceTx(ctx, tx, spec, trustedNow)
+	if err != nil {
+		return model.JSON{}, err
 	}
 	originPublicKey, err := validateAdmissionAuthority(ctx, tx, spec, operation, acceptedAt)
 	if err != nil {
@@ -210,16 +184,10 @@ func applyLocalAcceptanceTx(ctx context.Context, tx *sql.Tx, spec LocalAcceptanc
 		return model.JSON{}, err
 	}
 	if managed {
-		if err := validateManagedAcceptanceEvents(managedAuthority, operation, events); err != nil {
-			return model.JSON{}, err
-		}
-		references, err := managedAuthorizedReferences(managedAuthority, events)
+		spec, managedAuthority, err = bindManagedAcceptanceAuthority(spec, managedAuthority, operation, events)
 		if err != nil {
 			return model.JSON{}, err
 		}
-		managedAuthority.authorizedReferences = references
-		spec.AuthorizedReferences = managedAuthority.authorizedReferences
-		spec.Derivation = managedAuthority.derivation
 	}
 	capture, err := validateAcceptanceArtifacts(ctx, tx, operation, spec, events)
 	if err != nil {
