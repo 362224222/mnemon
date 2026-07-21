@@ -2189,11 +2189,17 @@ network_paths_single_repair_effect_ok() {
     channel=$2
     origin=$3
     jq -e --arg observer "$observer" --arg channel "$channel" --arg origin "$origin" '
-      [.publications[] |
+      . as $doc |
+      [$doc.publications[] |
         select(.arrival == "repair" and .observer_node == $observer and
           .channel == $channel and .origin_node == $origin and
           .immediate_transport_node == $origin and
-          .semantic_outcome == "accepted")] as $repairs |
+          .semantic_outcome == "accepted") as $repair |
+        select([$doc.publications[] |
+          select(.event_key == $repair.causality_event_key and
+            .observer_node == $origin and .origin_node == $origin and
+            .arrival == "local" and .semantic_outcome == "originated")] |
+          length == 1)] as $repairs |
       ($repairs | length) == 1 and
       ($repairs[0].event_key.origin_peer_id == $repairs[0].origin_peer_id) and
       ([.publications[] |
