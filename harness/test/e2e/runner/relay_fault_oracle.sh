@@ -18,7 +18,7 @@ scope_c=$4
 jq -e '
   ([.publications[] | select(
     .channel == "alpha" and .observer_node == "B" and .origin_node == "A" and
-    .immediate_transport_node == "A" and .arrival == "gossip" and
+    .immediate_transport_node == "A" and (.arrival | IN("gossip","repair")) and
     .publication_ref.channel_sequence == 1 and .audience_nodes == ["C"] and
     .ignored_nodes == ["B"] and .semantic_outcome == "ignored")]) as $at_b |
   ([.publications[] | select(
@@ -58,7 +58,8 @@ jq -e --argjson event "$event" --slurpfile cdoc "$scope_c" '
     .publication_digest == $event.publication_digest and
     .origin_peer_id == $event.origin_peer_id and
     .immediate_transport_peer_id == $event.origin_peer_id and
-    .arrival == "gossip" and .publication_ref.channel_sequence == 1 and
+    (.arrival | IN("gossip","repair")) and
+    .publication_ref.channel_sequence == 1 and
     .audience_peer_ids == $event.audience_peer_ids and
     .ignored_peer_ids == [$event.b_peer_id] and
     .semantic_outcome == "ignored"))) as $at_b |

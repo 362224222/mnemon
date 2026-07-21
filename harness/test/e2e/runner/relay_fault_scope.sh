@@ -136,7 +136,8 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
           [.channels[] | select(.alias == "alpha") | .publications[]];
         (alpha_publications |
           map(select(.origin_peer_id == $a and .immediate_transport_peer_id == $a and
-            .arrival == "gossip" and .publication_ref.channel_sequence == 1 and
+            (.arrival | IN("gossip","repair")) and
+            .publication_ref.channel_sequence == 1 and
             .audience_peer_ids == [$c] and .ignored_peer_ids == [$b] and
             .semantic_outcome == "ignored"))) as $from_b |
         ($cdoc[0] | alpha_publications |
