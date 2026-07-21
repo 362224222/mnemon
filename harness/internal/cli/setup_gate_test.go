@@ -80,6 +80,41 @@ func TestSetupHookGateFailsClosedForOutputFailureTimeoutAndPathDrift(t *testing.
 	}
 }
 
+func TestSetupHookGateRetriesTransientAssetRevisionMismatch(t *testing.T) {
+	workspace, hook := setupHookFixture(t, assets.HostCodex, "exit 0\n")
+	marker := filepath.Join(workspace, "retry.marker")
+	t.Setenv("MNEMON_TEST_SETUP_GATE_RETRY_MARKER", marker)
+	script := `#!/bin/sh
+set -eu
+marker=${MNEMON_TEST_SETUP_GATE_RETRY_MARKER:?}
+if [ ! -f "$marker" ]; then
+	printf '%s\n' first >"$marker"
+	printf '%s\n' 'mnemon-harness hook check failed; managed Agent execution is blocked' >&2
+	printf '%s\n' 'asset_revision_mismatch: transient projection observation' >&2
+	exit 2
+fi
+printf '%s\n' second >>"$marker"
+exit 0
+`
+	if err := os.WriteFile(hook, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gate, err := newSetupHookGate(workspace, assets.HostCodex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gate.VerifyReady(context.Background(), localapi.HealthResponse{}); err != nil {
+		t.Fatalf("VerifyReady() error = %v", err)
+	}
+	raw, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != "first\nsecond\n" {
+		t.Fatalf("retry marker = %q", raw)
+	}
+}
+
 func TestSetupHookGateRejectsUnknownHostAndUnsafeHook(t *testing.T) {
 	workspace := setupGateWorkspace(t)
 	if gate, err := newSetupHookGate(workspace, "other"); gate != nil || !errors.Is(err, errSetupHookGate) {

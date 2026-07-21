@@ -10,12 +10,17 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/assets"
 	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 )
 
-const setupHookOutputLimit = 512
+const (
+	setupHookOutputLimit = 512
+	setupHookRetryLimit  = time.Second
+	setupHookRetryPoll   = 20 * time.Millisecond
+)
 
 var errSetupHookGate = errors.New("managed Host Hook self-check")
 
@@ -48,15 +53,32 @@ func newSetupHookGate(workspace string, host assets.Host) (*setupHookGate, error
 func (gate *setupHookGate) VerifyReady(ctx context.Context,
 	_ localapi.HealthResponse,
 ) error {
+	deadline := time.Now().Add(setupHookRetryLimit)
+	for {
+		retry, err := gate.verifyReadyOnce(ctx)
+		if err == nil || !retry || time.Now().After(deadline) {
+			return err
+		}
+		timer := time.NewTimer(setupHookRetryPoll)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return setupHookError("execute", ctx.Err())
+		case <-timer.C:
+		}
+	}
+}
+
+func (gate *setupHookGate) verifyReadyOnce(ctx context.Context) (bool, error) {
 	if gate == nil || ctx == nil || gate.identity == nil {
-		return setupHookError("execute", nil)
+		return false, setupHookError("execute", nil)
 	}
 	if err := ctx.Err(); err != nil {
-		return setupHookError("execute", err)
+		return false, setupHookError("execute", err)
 	}
 	before, err := validateSetupHookPath(gate.hook)
 	if err != nil || !os.SameFile(gate.identity, before) {
-		return setupHookError("revalidate projection", nil)
+		return false, setupHookError("revalidate projection", nil)
 	}
 	var stdout, stderr boundedSetupHookBuffer
 	command := exec.CommandContext(ctx, gate.hook)
@@ -70,17 +92,24 @@ func (gate *setupHookGate) VerifyReady(ctx context.Context,
 	defer stderr.clear()
 	after, pathErr := validateSetupHookPath(gate.hook)
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return setupHookError("execute", ctxErr)
+		return false, setupHookError("execute", ctxErr)
 	}
 	if runErr != nil || pathErr != nil || !os.SameFile(gate.identity, after) ||
 		stdout.overflow || stderr.overflow || stderr.data.Len() != 0 {
-		return setupHookError("execute", nil)
+		retry := pathErr == nil && os.SameFile(gate.identity, after) &&
+			!stdout.overflow && stdout.data.Len() == 0 && !stderr.overflow &&
+			setupHookRetryable(runErr, stderr.data.String())
+		return retry, setupHookError("execute", nil)
 	}
 	output := stdout.data.String()
 	if output != "" && output != WakeCue+"\n" {
-		return setupHookError("validate output", nil)
+		return false, setupHookError("validate output", nil)
 	}
-	return nil
+	return false, nil
+}
+
+func setupHookRetryable(runErr error, stderr string) bool {
+	return runErr != nil && strings.Contains(stderr, "asset_revision_mismatch:")
 }
 
 func validateSetupHookPath(path string) (os.FileInfo, error) {
