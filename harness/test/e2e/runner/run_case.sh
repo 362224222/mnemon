@@ -714,6 +714,15 @@ review_receipt_loss_ref() {
     printf '%s\n' "${path#"$output/"}"
 }
 
+normalize_json_or_empty() {
+    source=$1
+    destination=$2
+    if jq -c . "$source" >"$destination" 2>/dev/null; then
+        return 0
+    fi
+    printf '{}\n' >"$destination"
+}
+
 payment_review_receipt_loss_ok() {
     receipt_path=$(review_receipt_loss_file || true)
     [ -n "$receipt_path" ] || return 1
@@ -730,6 +739,386 @@ payment_review_receipt_loss_ok() {
       ([.retry.results[]? | select(.event_type == "review.delivery.ready")] | length) == 1
     ' "$receipt_path" >/dev/null || return 1
     [ "$(runtime_result_event_count review.rework_requested)" -eq 1 ] || return 1
+}
+
+api_projection_drift_fault() {
+    id=$1
+    evidence_path="$output/faults/$id.json"
+    config_path=/workspace/.codex/hooks.json
+    hook_command=/workspace/.codex/hooks/mnemon-harness/hook.sh
+    before_config="$private/$id-before-config.json"
+    drift_config="$private/$id-drift-config.json"
+    repaired_config="$private/$id-repaired-config.json"
+    mutation_stdout="$private/$id-mutation.stdout"
+    mutation_stderr="$private/$id-mutation.stderr"
+    drift_doctor_raw="$private/$id-drift-doctor.raw.json"
+    drift_doctor_err="$private/$id-drift-doctor.stderr"
+    repair_setup_raw="$private/$id-repair-setup.raw.json"
+    repair_setup_err="$private/$id-repair-setup.stderr"
+    repaired_doctor_raw="$private/$id-repaired-doctor.raw.json"
+    repaired_doctor_err="$private/$id-repaired-doctor.stderr"
+    before_norm="$private/$id-before-config.norm.json"
+    drift_norm="$private/$id-drift-config.norm.json"
+    repaired_norm="$private/$id-repaired-config.norm.json"
+    drift_doctor_norm="$private/$id-drift-doctor.norm.json"
+    repair_setup_norm="$private/$id-repair-setup.norm.json"
+    repaired_doctor_norm="$private/$id-repaired-doctor.norm.json"
+
+    set +e
+    node_exec C timeout 30s jq -c . "$config_path" >"$before_config" 2>"$mutation_stderr"
+    before_exit=$?
+    node_exec C timeout 30s sh -c '
+      set -eu
+      config=$1
+      hook=$2
+      tmp=$(mktemp "$config.XXXXXX")
+      jq --arg hook "$hook" '"'"'
+        .user_after_install = {"preserve":true} |
+        .hooks.UserPromptSubmit = ((.hooks.UserPromptSubmit // []) |
+          map(select(((.hooks // []) | map(.command == $hook) | any) | not)))
+      '"'"' "$config" >"$tmp" &&
+      mv "$tmp" "$config" &&
+      chmod 0600 "$config"
+    ' sh "$config_path" "$hook_command" >"$mutation_stdout" 2>>"$mutation_stderr"
+    mutation_exit=$?
+    node_exec C timeout 30s jq -c . "$config_path" >"$drift_config" 2>>"$mutation_stderr"
+    drift_config_exit=$?
+    node_exec C timeout 30s mnemon-harness doctor >"$drift_doctor_raw" 2>"$drift_doctor_err"
+    drift_doctor_exit=$?
+    node_exec C timeout 60s mnemon-harness setup --host codex --project-root /workspace \
+      >"$repair_setup_raw" 2>"$repair_setup_err"
+    repair_setup_exit=$?
+    node_exec C timeout 30s jq -c . "$config_path" >"$repaired_config" 2>>"$mutation_stderr"
+    repaired_config_exit=$?
+    repaired_doctor_exit=125
+    repaired_deadline_ms=$(( $(date +%s%3N) + 30000 ))
+    while [ "$(date +%s%3N)" -lt "$repaired_deadline_ms" ]; do
+        node_exec C timeout 5s mnemon-harness doctor >"$repaired_doctor_raw" 2>"$repaired_doctor_err"
+        repaired_doctor_exit=$?
+        if [ "$repaired_doctor_exit" -eq 0 ] &&
+          jq -e '.status == "healthy" and all(.checks[]; .status == "pass")' \
+            "$repaired_doctor_raw" >/dev/null 2>&1; then
+            break
+        fi
+        sleep 0.2
+    done
+    set -e
+
+    normalize_json_or_empty "$before_config" "$before_norm"
+    normalize_json_or_empty "$drift_config" "$drift_norm"
+    normalize_json_or_empty "$repaired_config" "$repaired_norm"
+    normalize_json_or_empty "$drift_doctor_raw" "$drift_doctor_norm"
+    normalize_json_or_empty "$repair_setup_raw" "$repair_setup_norm"
+    normalize_json_or_empty "$repaired_doctor_raw" "$repaired_doctor_norm"
+
+    jq -n --arg id "$id" --arg node C --arg config_path "$config_path" \
+      --arg hook_command "$hook_command" \
+      --argjson before_exit "$before_exit" --argjson mutation_exit "$mutation_exit" \
+      --argjson drift_config_exit "$drift_config_exit" \
+      --argjson drift_doctor_exit "$drift_doctor_exit" \
+      --argjson repair_setup_exit "$repair_setup_exit" \
+      --argjson repaired_config_exit "$repaired_config_exit" \
+      --argjson repaired_doctor_exit "$repaired_doctor_exit" \
+      --slurpfile before "$before_norm" --slurpfile drift "$drift_norm" \
+      --slurpfile repaired "$repaired_norm" \
+      --slurpfile drift_doctor "$drift_doctor_norm" \
+      --slurpfile repair_setup "$repair_setup_norm" \
+      --slurpfile repaired_doctor "$repaired_doctor_norm" '
+      def first($value): if ($value | length) == 0 then {} else $value[0] end;
+      def managed_count($document):
+        [($document.hooks.UserPromptSubmit // [])[]? |
+          select([.hooks[]?.command] | index($hook_command))] | length;
+      (first($before)) as $before_doc |
+      (first($drift)) as $drift_doc |
+      (first($repaired)) as $repaired_doc |
+      (first($drift_doctor)) as $drift_doctor_doc |
+      (first($repair_setup)) as $repair_setup_doc |
+      (first($repaired_doctor)) as $repaired_doctor_doc |
+      (any($drift_doctor_doc.checks[]?;
+        .name == "host_projection" and .status == "fail" and
+        .issue == "host_projection_unavailable" and .remedy == "run_setup")) as $failed_closed |
+      (managed_count($before_doc) == 1 and managed_count($drift_doc) == 0 and
+        managed_count($repaired_doc) == 1) as $restored |
+      (($drift_doc.user_after_install.preserve == true) and
+        ($repaired_doc.user_after_install.preserve == true)) as $preserved |
+      {schema_version:1,fault:$id,type:"projection-drift",node:$node,
+       config_path:$config_path,hook_command:$hook_command,
+       before_config_exit_code:$before_exit,mutation_exit_code:$mutation_exit,
+       drift_config_exit_code:$drift_config_exit,
+       doctor_after_drift_exit_code:$drift_doctor_exit,
+       setup_repair_exit_code:$repair_setup_exit,
+       repaired_config_exit_code:$repaired_config_exit,
+       doctor_after_repair_exit_code:$repaired_doctor_exit,
+       counts:{before_managed_entries:managed_count($before_doc),
+         drift_managed_entries:managed_count($drift_doc),
+         repaired_managed_entries:managed_count($repaired_doc)},
+       doctor_after_drift:{status:($drift_doctor_doc.status // ""),
+         host_projection:([$drift_doctor_doc.checks[]? |
+           select(.name == "host_projection")] | first // {})},
+       setup_repair:{status:($repair_setup_doc.status // ""),
+         replayed:($repair_setup_doc.replayed // null)},
+       doctor_after_repair:{status:($repaired_doctor_doc.status // "")},
+       observation:{fail_closed_before_repair:$failed_closed,
+         setup_restored_canonical_projection:$restored,
+         neighbor_user_registration_preserved:$preserved,
+         repaired_doctor_healthy:($repaired_doctor_doc.status == "healthy" and
+           all($repaired_doctor_doc.checks[]?; .status == "pass")),
+         all_commands_bounded:($before_exit == 0 and $mutation_exit == 0 and
+           $drift_config_exit == 0 and $repair_setup_exit == 0 and
+           $repaired_config_exit == 0 and $repaired_doctor_exit == 0)}}
+    ' >"$evidence_path"
+}
+
+api_projection_drift_ok() {
+    evidence_path="$output/faults/managed-guide-drift.json"
+    [ -f "$evidence_path" ] || return 1
+    jq -e '
+      .schema_version == 1 and .fault == "managed-guide-drift" and
+      .type == "projection-drift" and .node == "C" and
+      .doctor_after_drift_exit_code != 0 and
+      .setup_repair_exit_code == 0 and
+      .doctor_after_repair_exit_code == 0 and
+      .observation.fail_closed_before_repair == true and
+      .observation.setup_restored_canonical_projection == true and
+      .observation.neighbor_user_registration_preserved == true and
+      .observation.repaired_doctor_healthy == true and
+      .observation.all_commands_bounded == true
+    ' "$evidence_path" >/dev/null
+}
+
+api_terminal_enrollment_replay_fault() {
+    id=$1
+    evidence_path="$output/faults/$id.json"
+    invite_raw="$private/$id-invite.raw.json"
+    invite_err="$private/$id-invite.stderr"
+    join_raw="$private/$id-initial-join.raw.json"
+    join_err="$private/$id-initial-join.stderr"
+    owner_after_join_raw="$private/$id-owner-after-join.raw.json"
+    owner_after_join_err="$private/$id-owner-after-join.stderr"
+    remove_raw="$private/$id-remove.raw.json"
+    remove_err="$private/$id-remove.stderr"
+    owner_after_remove_raw="$private/$id-owner-after-remove.raw.json"
+    owner_after_remove_err="$private/$id-owner-after-remove.stderr"
+    replay_raw="$private/$id-replay.raw.json"
+    replay_err="$private/$id-replay.stderr"
+    joiner_after_replay_raw="$private/$id-joiner-after-replay.raw.json"
+    joiner_after_replay_err="$private/$id-joiner-after-replay.stderr"
+    owner_after_replay_raw="$private/$id-owner-after-replay.raw.json"
+    owner_after_replay_err="$private/$id-owner-after-replay.stderr"
+    invite_token="$private/$id.invite"
+    invite_norm="$private/$id-invite.norm.json"
+    join_norm="$private/$id-initial-join.norm.json"
+    owner_join_norm="$private/$id-owner-after-join.norm.json"
+    remove_norm="$private/$id-remove.norm.json"
+    owner_remove_norm="$private/$id-owner-after-remove.norm.json"
+    replay_norm="$private/$id-replay.norm.json"
+    joiner_replay_norm="$private/$id-joiner-after-replay.norm.json"
+    owner_replay_norm="$private/$id-owner-after-replay.norm.json"
+
+    selector=
+    joiner_peer=
+    set +e
+    node_exec A timeout 30s mnemon-harness channel invite --channel alpha --uses 1 --json \
+      >"$invite_raw" 2>"$invite_err"
+    invite_exit=$?
+    if [ "$invite_exit" -eq 0 ] &&
+      jq -e '.schema_version == 1 and .status == "created" and
+        .channel.alias == "alpha" and (.invite_token | startswith("mnch1_"))' \
+        "$invite_raw" >/dev/null 2>&1; then
+        jq -r '.invite_token' "$invite_raw" >"$invite_token"
+        chmod 0600 "$invite_token"
+        node_exec_stdin D timeout 30s mnemon-harness channel join --json \
+          <"$invite_token" >"$join_raw" 2>"$join_err"
+        join_exit=$?
+        if [ "$join_exit" -eq 0 ]; then
+            joiner_peer=$(jq -r '.channel.members[]? |
+              select(.binding == "self") | .peer_id' "$join_raw" 2>/dev/null | sed -n '1p')
+        fi
+    else
+        : >"$invite_token"
+        : >"$join_raw"
+        : >"$join_err"
+        join_exit=125
+    fi
+
+    owner_after_join_exit=125
+    if [ -n "$joiner_peer" ]; then
+        owner_join_deadline_ms=$(( $(date +%s%3N) + 10000 ))
+        while [ "$(date +%s%3N)" -lt "$owner_join_deadline_ms" ]; do
+            node_exec A timeout 2s mnemon-harness channel status alpha --json \
+              >"$owner_after_join_raw" 2>"$owner_after_join_err"
+            owner_after_join_exit=$?
+            if [ "$owner_after_join_exit" -eq 0 ]; then
+                selector=$(jq -r --arg peer "$joiner_peer" '
+                  .channels[]? | select(.alias == "alpha") |
+                  .members[]? | select(.peer_id == $peer and .status == "active") |
+                  .alias
+                ' "$owner_after_join_raw" 2>/dev/null | sed -n '1p')
+                [ -z "$selector" ] || break
+            fi
+            sleep 0.2
+        done
+    else
+        : >"$owner_after_join_raw"
+        : >"$owner_after_join_err"
+    fi
+
+    if [ -n "$selector" ]; then
+        node_exec A timeout 30s mnemon-harness channel remove --channel alpha "$selector" --json \
+          >"$remove_raw" 2>"$remove_err"
+        remove_exit=$?
+    else
+        : >"$remove_raw"
+        : >"$remove_err"
+        remove_exit=125
+    fi
+
+    owner_after_remove_exit=125
+    if [ -n "$joiner_peer" ]; then
+        owner_remove_deadline_ms=$(( $(date +%s%3N) + 10000 ))
+        while [ "$(date +%s%3N)" -lt "$owner_remove_deadline_ms" ]; do
+            node_exec A timeout 2s mnemon-harness channel status alpha --json \
+              >"$owner_after_remove_raw" 2>"$owner_after_remove_err"
+            owner_after_remove_exit=$?
+            if [ "$owner_after_remove_exit" -eq 0 ] &&
+              jq -e --arg peer "$joiner_peer" '
+                .status == "ok" and
+                any(.channels[]? | select(.alias == "alpha") |
+                  .members[]?; .peer_id == $peer and .status == "revoked")
+              ' "$owner_after_remove_raw" >/dev/null 2>&1; then
+                break
+            fi
+            sleep 0.2
+        done
+    else
+        : >"$owner_after_remove_raw"
+        : >"$owner_after_remove_err"
+    fi
+
+    if [ -s "$invite_token" ]; then
+        node_exec_stdin D timeout 30s mnemon-harness channel join --json \
+          <"$invite_token" >"$replay_raw" 2>"$replay_err"
+        replay_exit=$?
+    else
+        : >"$replay_raw"
+        : >"$replay_err"
+        replay_exit=125
+    fi
+
+    node_exec D timeout 30s mnemon-harness channel status alpha --json \
+      >"$joiner_after_replay_raw" 2>"$joiner_after_replay_err"
+    joiner_after_replay_exit=$?
+    node_exec A timeout 30s mnemon-harness channel status alpha --json \
+      >"$owner_after_replay_raw" 2>"$owner_after_replay_err"
+    owner_after_replay_exit=$?
+    set -e
+
+    normalize_json_or_empty "$invite_raw" "$invite_norm"
+    normalize_json_or_empty "$join_raw" "$join_norm"
+    normalize_json_or_empty "$owner_after_join_raw" "$owner_join_norm"
+    normalize_json_or_empty "$remove_raw" "$remove_norm"
+    normalize_json_or_empty "$owner_after_remove_raw" "$owner_remove_norm"
+    normalize_json_or_empty "$replay_raw" "$replay_norm"
+    normalize_json_or_empty "$joiner_after_replay_raw" "$joiner_replay_norm"
+    normalize_json_or_empty "$owner_after_replay_raw" "$owner_replay_norm"
+
+    jq -n --arg id "$id" --arg channel alpha --arg owner A --arg joiner D \
+      --arg joiner_peer "$joiner_peer" --arg selector "$selector" \
+      --argjson invite_exit "$invite_exit" --argjson join_exit "$join_exit" \
+      --argjson owner_after_join_exit "$owner_after_join_exit" \
+      --argjson remove_exit "$remove_exit" \
+      --argjson owner_after_remove_exit "$owner_after_remove_exit" \
+      --argjson replay_exit "$replay_exit" \
+      --argjson joiner_after_replay_exit "$joiner_after_replay_exit" \
+      --argjson owner_after_replay_exit "$owner_after_replay_exit" \
+      --slurpfile invite "$invite_norm" --slurpfile join "$join_norm" \
+      --slurpfile owner_join "$owner_join_norm" --slurpfile remove "$remove_norm" \
+      --slurpfile owner_remove "$owner_remove_norm" --slurpfile replay "$replay_norm" \
+      --slurpfile joiner_replay "$joiner_replay_norm" \
+      --slurpfile owner_replay "$owner_replay_norm" '
+      def first($value): if ($value | length) == 0 then {} else $value[0] end;
+      def channel($document):
+        if ($document.channel? | type) == "object" then $document.channel
+        else ([($document.channels // [])[]? | select(.alias == "alpha")] | first // {})
+        end;
+      def member($document; $peer):
+        ([channel($document).members[]? | select(.peer_id == $peer)] | first // {});
+      (first($invite)) as $invite_doc |
+      (first($join)) as $join_doc |
+      (first($owner_join)) as $owner_join_doc |
+      (first($remove)) as $remove_doc |
+      (first($owner_remove)) as $owner_remove_doc |
+      (first($replay)) as $replay_doc |
+      (first($joiner_replay)) as $joiner_replay_doc |
+      (first($owner_replay)) as $owner_replay_doc |
+      (channel($join_doc)) as $initial_join_channel |
+      (channel($remove_doc)) as $remove_channel |
+      (channel($owner_remove_doc)) as $owner_removed_channel |
+      (channel($replay_doc)) as $replay_channel |
+      (channel($joiner_replay_doc)) as $joiner_replay_channel |
+      (channel($owner_replay_doc)) as $owner_replay_channel |
+      (member($replay_doc; $joiner_peer)) as $replay_member |
+      (member($joiner_replay_doc; $joiner_peer)) as $joiner_replay_member |
+      (member($owner_remove_doc; $joiner_peer)) as $owner_removed_member |
+      (member($owner_replay_doc; $joiner_peer)) as $owner_replay_member |
+      ($join_exit == 0 and $initial_join_channel.alias == "alpha" and
+        member($join_doc; $joiner_peer).status == "active") as $initial_joined |
+      ($remove_exit == 0 and $remove_doc.status == "removed" and
+        member($remove_doc; $joiner_peer).status == "revoked") as $removed |
+      ($replay_exit == 0 and $replay_doc.status == "joined" and
+        $replay_channel.alias == "alpha" and
+        $replay_channel.membership == "left" and
+        ($replay_member.status == "revoked" or $joiner_replay_member.status == "revoked")) as $terminal_projection |
+      (([$replay_channel.members[]?, $joiner_replay_channel.members[]?,
+         $owner_replay_channel.members[]?] |
+        map(select(.peer_id == $joiner_peer and .status == "active")) | length) == 0) as $not_reactivated |
+      (($replay_channel.roster_revision // 0) > ($initial_join_channel.roster_revision // 0) and
+        ($owner_replay_channel.roster_revision // 0) >= ($replay_channel.roster_revision // 0)) as $terminal_suffix |
+      {schema_version:1,fault:$id,type:"terminal-enrollment-replay",
+       channel:$channel,owner_node:$owner,joiner_node:$joiner,
+       joiner_peer_id:$joiner_peer,owner_member_selector:$selector,
+       invite_exit_code:$invite_exit,initial_join_exit_code:$join_exit,
+       owner_after_join_exit_code:$owner_after_join_exit,
+       remove_exit_code:$remove_exit,
+       owner_after_remove_exit_code:$owner_after_remove_exit,
+       replay_join_exit_code:$replay_exit,
+       joiner_after_replay_exit_code:$joiner_after_replay_exit,
+       owner_after_replay_exit_code:$owner_after_replay_exit,
+       invite:{status:($invite_doc.status // ""),
+         remaining_uses:($invite_doc.invite.remaining_uses // null)},
+       initial_join:{membership:($initial_join_channel.membership // ""),
+         roster_revision:($initial_join_channel.roster_revision // null)},
+       remove:{status:($remove_doc.status // ""),
+         owner_member_status:($owner_removed_member.status // "")},
+       replay:{status:($replay_doc.status // ""),
+         membership:($replay_channel.membership // ""),
+         self_member_status:($replay_member.status // $joiner_replay_member.status // ""),
+         roster_revision:($replay_channel.roster_revision // null)},
+       observation:{initial_joined:$initial_joined,member_removed:$removed,
+         replay_returned_terminal_projection:$terminal_projection,
+         terminal_suffix_observed:$terminal_suffix,
+         member_never_reactivated:$not_reactivated,
+         all_commands_bounded:($invite_exit == 0 and $join_exit == 0 and
+           $owner_after_join_exit == 0 and $remove_exit == 0 and
+           $owner_after_remove_exit == 0 and $replay_exit == 0 and
+           $joiner_after_replay_exit == 0 and $owner_after_replay_exit == 0)}}
+    ' >"$evidence_path"
+}
+
+api_terminal_enrollment_replay_ok() {
+    evidence_path="$output/faults/terminal-enrollment-replay.json"
+    [ -f "$evidence_path" ] || return 1
+    jq -e '
+      .schema_version == 1 and .fault == "terminal-enrollment-replay" and
+      .type == "terminal-enrollment-replay" and .channel == "alpha" and
+      .owner_node == "A" and .joiner_node == "D" and
+      .observation.initial_joined == true and
+      .observation.member_removed == true and
+      .observation.replay_returned_terminal_projection == true and
+      .observation.terminal_suffix_observed == true and
+      .observation.member_never_reactivated == true and
+      .observation.all_commands_bounded == true
+    ' "$evidence_path" >/dev/null
 }
 
 evaluate_declared_faults() {
@@ -790,6 +1179,26 @@ evaluate_declared_faults() {
                 detail='The C Runtime lost stdout presentation for a public deliver action; retry returned the replayed terminal receipt and final public evidence shows exactly one source Work rework transition.'
             else
                 detail='The public receipt-loss gate did not establish a replayed terminal receipt and a single semantic rework transition.'
+            fi
+        elif [ "$case_name" = api-sdk-contract ] && [ "$id" = managed-guide-drift ]; then
+            api_projection_drift_fault "$id"
+            evidence="faults/$id.json"
+            if api_projection_drift_ok; then
+                injected=true
+                observed=true
+                detail='A public doctor run failed closed on Host projection drift, ordinary setup restored the canonical managed registration, and the adjacent user JSON survived unchanged.'
+            else
+                detail='The public projection-drift gate did not prove fail-closed diagnosis, setup repair, and adjacent user JSON preservation.'
+            fi
+        elif [ "$case_name" = api-sdk-contract ] && [ "$id" = terminal-enrollment-replay ]; then
+            api_terminal_enrollment_replay_fault "$id"
+            evidence="faults/$id.json"
+            if api_terminal_enrollment_replay_ok; then
+                injected=true
+                observed=true
+                detail='A once-used public Alpha invite was replayed after owner revocation; the replay returned a terminal local projection with the revoked member suffix and never restored active membership.'
+            else
+                detail='The public terminal-enrollment replay gate did not prove the terminal suffix and non-reactivation behavior.'
             fi
         fi
         jq -cn --arg id "$id" --arg type "$type" --arg phase "$phase" --arg target "$target" \
