@@ -777,7 +777,7 @@
       "identity": "cognitive_complexity:harness/internal/peer/artifact_receiver_test.go::TestArtifactReceiverRealStoreStagedPartialRestartAndResponseLoss",
       "path": "harness/internal/peer/artifact_receiver_test.go",
       "symbol": "TestArtifactReceiverRealStoreStagedPartialRestartAndResponseLoss",
-      "ceiling": 53
+      "ceiling": 43
     },
     {
       "rule": "cognitive_complexity",
@@ -903,7 +903,7 @@
       "identity": "cognitive_complexity:harness/internal/peer/topic_test.go::TestGossipSessionCloseSerializesValidatorRecreation",
       "path": "harness/internal/peer/topic_test.go",
       "symbol": "TestGossipSessionCloseSerializesValidatorRecreation",
-      "ceiling": 53
+      "ceiling": 43
     },
     {
       "rule": "cognitive_complexity",
@@ -917,7 +917,7 @@
       "identity": "cognitive_complexity:harness/internal/store/activation.go::(*Store).ActivateProfile",
       "path": "harness/internal/store/activation.go",
       "symbol": "(*Store).ActivateProfile",
-      "ceiling": 31
+      "ceiling": 29
     },
     {
       "rule": "cognitive_complexity",
@@ -1225,7 +1225,7 @@
       "identity": "cognitive_complexity:harness/internal/store/channel_enrollment.go::(*Store).PrepareChannelEnrollment",
       "path": "harness/internal/store/channel_enrollment.go",
       "symbol": "(*Store).PrepareChannelEnrollment",
-      "ceiling": 47
+      "ceiling": 35
     },
     {
       "rule": "cognitive_complexity",
@@ -1372,7 +1372,7 @@
       "identity": "cognitive_complexity:harness/internal/store/local_accept.go::applyLocalAcceptanceTx",
       "path": "harness/internal/store/local_accept.go",
       "symbol": "applyLocalAcceptanceTx",
-      "ceiling": 85
+      "ceiling": 33
     },
     {
       "rule": "cognitive_complexity",
@@ -1764,7 +1764,7 @@
       "identity": "cognitive_complexity:harness/test/process/setup_test.go::TestPublicSetupSerializesProcessesAndRecoversAKilledDaemon",
       "path": "harness/test/process/setup_test.go",
       "symbol": "TestPublicSetupSerializesProcessesAndRecoversAKilledDaemon",
-      "ceiling": 62
+      "ceiling": 41
     },
     {
       "rule": "cognitive_complexity",
@@ -2632,7 +2632,7 @@
       "identity": "cyclomatic_complexity:harness/internal/node/lifecycle.go::(*DaemonLifecycleLease).quiesce",
       "path": "harness/internal/node/lifecycle.go",
       "symbol": "(*DaemonLifecycleLease).quiesce",
-      "ceiling": 25
+      "ceiling": 23
     },
     {
       "rule": "cyclomatic_complexity",
@@ -2905,7 +2905,7 @@
       "identity": "cyclomatic_complexity:harness/internal/peer/topic_test.go::TestGossipSessionCloseSerializesValidatorRecreation",
       "path": "harness/internal/peer/topic_test.go",
       "symbol": "TestGossipSessionCloseSerializesValidatorRecreation",
-      "ceiling": 54
+      "ceiling": 46
     },
     {
       "rule": "cyclomatic_complexity",
@@ -2926,7 +2926,7 @@
       "identity": "cyclomatic_complexity:harness/internal/store/activation.go::(*Store).ActivateProfile",
       "path": "harness/internal/store/activation.go",
       "symbol": "(*Store).ActivateProfile",
-      "ceiling": 30
+      "ceiling": 28
     },
     {
       "rule": "cyclomatic_complexity",
@@ -3339,7 +3339,7 @@
       "identity": "cyclomatic_complexity:harness/internal/store/channel_enrollment.go::(*Store).PrepareChannelEnrollment",
       "path": "harness/internal/store/channel_enrollment.go",
       "symbol": "(*Store).PrepareChannelEnrollment",
-      "ceiling": 35
+      "ceiling": 31
     },
     {
       "rule": "cyclomatic_complexity",

@@ -64,6 +64,16 @@ func TestAcceptChannelEnrollmentCommitsAndReplaysAfterGrantClosure(t *testing.T)
 		"channel_members": 2, "enrollment_grant_uses": 1, "enrollment_receipts": 1,
 	})
 	assertEnrollmentGrantProjection(t, fixture.ownerStore, fixture.grantID, "closed", 1)
+	assertAcceptedEnrollmentReplayForgeryRejected(t, fixture, accepted)
+	assertEnrollmentTableCounts(t, fixture.ownerStore, map[string]int{
+		"channel_members": 2, "enrollment_grant_uses": 1, "enrollment_receipts": 1,
+	})
+}
+
+func assertAcceptedEnrollmentReplayForgeryRejected(t *testing.T, fixture channelEnrollmentFixture,
+	accepted AcceptChannelEnrollmentResult,
+) {
+	t.Helper()
 	changedRequest, _ := model.ParseEnrollmentRequestID("request-accept-replay-changed")
 	requestSpec := fixture.prepareSpec(fixture.acceptedAt.Add(3 * time.Second))
 	requestSpec.RequestID = changedRequest
@@ -77,7 +87,7 @@ func TestAcceptChannelEnrollmentCommitsAndReplaysAfterGrantClosure(t *testing.T)
 		t.Fatalf("changed replay epoch error = %v", err)
 	}
 	wrongPredecessor := fixture.transcript(t, 0x35, 0x36, accepted.Roster.Head())
-	_, err = fixture.ownerStore.AcceptChannelEnrollment(context.Background(), AcceptChannelEnrollmentSpec{
+	_, err := fixture.ownerStore.AcceptChannelEnrollment(context.Background(), AcceptChannelEnrollmentSpec{
 		AuthenticatedPeerID: fixture.joiner.PeerID(), Transcript: wrongPredecessor,
 		AdvertisedMultiaddrs: fixture.joiner.Multiaddrs(),
 		Proof:                enrollmentTestProof(t, fixture.token, wrongPredecessor), Signer: fixture.signer,
@@ -86,9 +96,6 @@ func TestAcceptChannelEnrollmentCommitsAndReplaysAfterGrantClosure(t *testing.T)
 	if !errors.Is(err, ErrChannelEnrollmentProof) {
 		t.Fatalf("changed replay predecessor error = %v", err)
 	}
-	assertEnrollmentTableCounts(t, fixture.ownerStore, map[string]int{
-		"channel_members": 2, "enrollment_grant_uses": 1, "enrollment_receipts": 1,
-	})
 }
 
 func TestAcceptChannelEnrollmentUsesOneGrantForMultipleAuthenticatedPeers(t *testing.T) {

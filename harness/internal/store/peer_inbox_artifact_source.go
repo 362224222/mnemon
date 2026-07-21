@@ -72,50 +72,63 @@ func (s *Store) RecordPeerInboxArtifactSource(ctx context.Context,
 		return PeerInboxArtifactSourceReceipt{}, err
 	}
 	if found {
-		if stored.sourcePeerID != spec.SourcePeerID || stored.sourcePeerID != row.originPeerID {
-			return PeerInboxArtifactSourceReceipt{}, fmt.Errorf("%w: Artifact source receipt origin differs", ErrPeerInboxArtifactInvariant)
-		}
-		if stored.attempt != spec.Fence.attempt || stored.leaseOwner != spec.Fence.leaseOwner ||
-			!stored.leaseUntil.Equal(spec.Fence.leaseUntil) {
-			return PeerInboxArtifactSourceReceipt{}, ErrPeerInboxArtifactStale
-		}
-		if err := tx.Commit(); err != nil {
-			return PeerInboxArtifactSourceReceipt{}, fmt.Errorf("record Peer Inbox Artifact source: replay commit: %w", err)
-		}
-		return projectPeerInboxArtifactSourceReceipt(stored, false, true), nil
+		err = validatePeerInboxArtifactSourceReplay(stored, row, spec)
+	} else {
+		stored, err = insertPeerInboxArtifactSource(ctx, tx, row, spec, at)
 	}
+	if err != nil {
+		return PeerInboxArtifactSourceReceipt{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return PeerInboxArtifactSourceReceipt{}, fmt.Errorf("record Peer Inbox Artifact source: commit: %w", err)
+	}
+	return projectPeerInboxArtifactSourceReceipt(stored, !found, found), nil
+}
 
+func validatePeerInboxArtifactSourceReplay(stored storedPeerInboxArtifactSourceReceipt,
+	row peerInboxArtifactRow, spec RecordPeerInboxArtifactSourceSpec,
+) error {
+	if stored.sourcePeerID != spec.SourcePeerID || stored.sourcePeerID != row.originPeerID {
+		return fmt.Errorf("%w: Artifact source receipt origin differs", ErrPeerInboxArtifactInvariant)
+	}
+	if stored.attempt != spec.Fence.attempt || stored.leaseOwner != spec.Fence.leaseOwner ||
+		!stored.leaseUntil.Equal(spec.Fence.leaseUntil) {
+		return ErrPeerInboxArtifactStale
+	}
+	return nil
+}
+
+func insertPeerInboxArtifactSource(ctx context.Context, tx *sql.Tx, row peerInboxArtifactRow,
+	spec RecordPeerInboxArtifactSourceSpec, at time.Time,
+) (storedPeerInboxArtifactSourceReceipt, error) {
 	if spec.SourcePeerID != row.originPeerID {
-		return PeerInboxArtifactSourceReceipt{}, ErrPeerInboxArtifactInput
+		return storedPeerInboxArtifactSourceReceipt{}, ErrPeerInboxArtifactInput
 	}
 	if err := requireLivePeerInboxArtifactFence(row, spec.Fence, at); err != nil {
-		return PeerInboxArtifactSourceReceipt{}, err
+		return storedPeerInboxArtifactSourceReceipt{}, err
 	}
 	if err := requirePeerInboxArtifactAuthority(ctx, tx, row, at); err != nil {
-		return PeerInboxArtifactSourceReceipt{}, err
+		return storedPeerInboxArtifactSourceReceipt{}, err
 	}
 	result, err := tx.ExecContext(ctx, `INSERT INTO peer_inbox_artifact_source_receipts(
 		inbox_id,source_peer_id,attempt,lease_owner,lease_until,recorded_at) VALUES(?,?,?,?,?,?)`,
 		spec.Fence.inboxID.String(), spec.SourcePeerID.String(), spec.Fence.attempt,
 		spec.Fence.leaseOwner, storeTime(spec.Fence.leaseUntil), storeTime(at))
 	if err != nil {
-		return PeerInboxArtifactSourceReceipt{}, fmt.Errorf("%w: insert Artifact source receipt: %v",
+		return storedPeerInboxArtifactSourceReceipt{}, fmt.Errorf("%w: insert Artifact source receipt: %v",
 			ErrPeerInboxArtifactInvariant, err)
 	}
 	if err := requireExactlyOneRow(result, "record Peer Inbox Artifact source"); err != nil {
-		return PeerInboxArtifactSourceReceipt{}, fmt.Errorf("%w: %v", ErrPeerInboxArtifactInvariant, err)
+		return storedPeerInboxArtifactSourceReceipt{}, fmt.Errorf("%w: %v", ErrPeerInboxArtifactInvariant, err)
 	}
-	stored, found, err = readPeerInboxArtifactSourceReceipt(ctx, tx, spec.Fence.inboxID)
+	stored, found, err := readPeerInboxArtifactSourceReceipt(ctx, tx, spec.Fence.inboxID)
 	if err != nil || !found || stored.sourcePeerID != row.originPeerID ||
 		stored.attempt != spec.Fence.attempt || stored.leaseOwner != spec.Fence.leaseOwner ||
 		!stored.leaseUntil.Equal(spec.Fence.leaseUntil) || !stored.recordedAt.Equal(at) {
-		return PeerInboxArtifactSourceReceipt{}, fmt.Errorf("%w: installed Artifact source receipt differs: %v",
-			ErrPeerInboxArtifactInvariant, err)
+		return storedPeerInboxArtifactSourceReceipt{}, fmt.Errorf(
+			"%w: installed Artifact source receipt differs: %v", ErrPeerInboxArtifactInvariant, err)
 	}
-	if err := tx.Commit(); err != nil {
-		return PeerInboxArtifactSourceReceipt{}, fmt.Errorf("record Peer Inbox Artifact source: commit: %w", err)
-	}
-	return projectPeerInboxArtifactSourceReceipt(stored, true, false), nil
+	return stored, nil
 }
 
 func readPeerInboxArtifactSourceReceipt(ctx context.Context, tx *sql.Tx,

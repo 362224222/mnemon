@@ -77,21 +77,27 @@ func (app *channelApp) run(ctx context.Context, args []string) int {
 	if apiErr := app.deps.ensureDaemon(ctx, workspace, nodeState, client); apiErr != nil {
 		return app.writeError(apiErr)
 	}
-	switch args[0] {
+	return app.dispatch(ctx, client, args[0], args[1:])
+}
+
+func (app *channelApp) dispatch(ctx context.Context, client channelControlClient,
+	command string, args []string,
+) int {
+	switch command {
 	case "create":
-		return app.create(ctx, client, args[1:])
+		return app.create(ctx, client, args)
 	case "join":
-		return app.join(ctx, client, args[1:])
+		return app.join(ctx, client, args)
 	case "status":
-		return app.status(ctx, client, args[1:])
+		return app.status(ctx, client, args)
 	case "invite":
-		return app.invite(ctx, client, args[1:])
+		return app.invite(ctx, client, args)
 	case "remove":
-		return app.remove(ctx, client, args[1:])
+		return app.remove(ctx, client, args)
 	case "leave":
-		return app.leave(ctx, client, args[1:])
+		return app.leave(ctx, client, args)
 	case "abandon":
-		return app.abandon(ctx, client, args[1:])
+		return app.abandon(ctx, client, args)
 	default:
 		return app.writeError(localapi.NewAPIError(localapi.CodeInvalidArgument,
 			"unknown channel subcommand"))

@@ -18,22 +18,8 @@ import (
 )
 
 func TestResetRequiresExactPeerThenPreservesLostKeyNodeAndAllowsFreshIdentity(t *testing.T) {
-	workspace, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	nodeState, err := node.PrepareNodeState(workspace)
-	if err != nil {
-		t.Fatal(err)
-	}
-	revision := model.Sum([]byte("reset-test-assets")).String()
-	provisioned, err := node.Provision(context.Background(), node.ProvisionOptions{
-		Workspace: workspace, Host: model.HostCodex, AssetRevision: revision,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	peerID := provisioned.Node.PeerID().String()
+	fixture := newResetTestFixture(t)
+	workspace, nodeState, peerID := fixture.workspace, fixture.nodeState, fixture.peerID
 	wrong := "12D3KooWLzW3XvRNG5Jv84reMiXzrU1QpkwQCrw4EP8AVSv4GDKJ"
 	deps := productionResetDependencies()
 	deps.workingDirectory = func() (string, error) { return workspace, nil }
@@ -60,34 +46,70 @@ func TestResetRequiresExactPeerThenPreservesLostKeyNodeAndAllowsFreshIdentity(t 
 		t.Fatalf("confirmed reset = exit %d stdout=%q stderr=%q", exit,
 			stdout.String(), stderr.String())
 	}
-	var receipt resetReceipt
-	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &receipt); err != nil {
+	assertResetReceiptAndFreshIdentity(t, fixture, fixed, stdout.Bytes())
+}
+
+type resetTestFixture struct {
+	workspace string
+	nodeState string
+	revision  string
+	peerID    string
+}
+
+func newResetTestFixture(t *testing.T) resetTestFixture {
+	t.Helper()
+	workspace, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
 		t.Fatal(err)
 	}
-	wantPath := filepath.Join(workspace, ".mnemon", "harness", "recovery",
-		"20260721T141516.123456789Z-"+peerID, "node")
+	nodeState, err := node.PrepareNodeState(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision := model.Sum([]byte("reset-test-assets")).String()
+	provisioned, err := node.Provision(context.Background(), node.ProvisionOptions{
+		Workspace: workspace, Host: model.HostCodex, AssetRevision: revision,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	peerID := provisioned.Node.PeerID().String()
+	return resetTestFixture{workspace: workspace, nodeState: nodeState,
+		revision: revision, peerID: peerID}
+}
+
+func assertResetReceiptAndFreshIdentity(t *testing.T, fixture resetTestFixture,
+	fixed time.Time, raw []byte,
+) {
+	t.Helper()
+	var receipt resetReceipt
+	if err := json.Unmarshal(bytes.TrimSpace(raw), &receipt); err != nil {
+		t.Fatal(err)
+	}
+	wantPath := filepath.Join(fixture.workspace, ".mnemon", "harness", "recovery",
+		"20260721T141516.123456789Z-"+fixture.peerID, "node")
 	if receipt.Status != "reset" || receipt.SchemaVersion != localapi.SchemaVersion ||
-		receipt.PeerID != peerID || receipt.RecoveryPath != wantPath ||
+		receipt.PeerID != fixture.peerID || receipt.RecoveryPath != wantPath ||
 		receipt.RenamedAt != fixed.Format(time.RFC3339Nano) {
 		t.Fatalf("reset receipt = %#v", receipt)
 	}
-	if _, err := os.Lstat(nodeState); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Lstat(fixture.nodeState); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("old Node remains: %v", err)
 	}
 	if info, err := os.Lstat(filepath.Join(wantPath, "node.db")); err != nil ||
 		!info.Mode().IsRegular() {
 		t.Fatalf("forensic database = (%v, %v)", info, err)
 	}
-	if nodeState, err = node.PrepareNodeState(workspace); err != nil {
+	if _, err := node.PrepareNodeState(fixture.workspace); err != nil {
 		t.Fatal(err)
 	}
 	fresh, err := node.Provision(context.Background(), node.ProvisionOptions{
-		Workspace: workspace, Host: model.HostCodex, AssetRevision: revision,
+		Workspace: fixture.workspace, Host: model.HostCodex, AssetRevision: fixture.revision,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fresh.Node.PeerID().String() == peerID {
+	if fresh.Node.PeerID().String() == fixture.peerID {
 		t.Fatal("setup after reset reused quarantined Node identity")
 	}
 }

@@ -39,6 +39,21 @@ func TestAbandonChannelAtomicallyFencesScopedWorkAndReplaysExactForensics(t *tes
 		result.Evidence != wantCounts {
 		t.Fatalf("AbandonChannel() = (%#v, %v), want counts %#v", result, err, wantCounts)
 	}
+	assertChannelAbandonScopedState(t, fixture, other, lease, transitionedAt)
+
+	replay, err := fixture.store.AbandonChannel(context.Background(), AbandonChannelSpec{
+		ChannelAlias: alias, ConfirmedAlias: alias, Force: true, At: transitionedAt.Add(time.Hour)})
+	result.Changed = false
+	result.Replayed = true
+	if err != nil || replay != result {
+		t.Fatalf("AbandonChannel(replay) = (%#v, %v), want %#v", replay, err, result)
+	}
+}
+
+func assertChannelAbandonScopedState(t *testing.T, fixture *acceptanceFixture,
+	other *testkit.SignedChannel, lease GossipPublicationLease, transitionedAt time.Time,
+) {
+	t.Helper()
 	var channelStatus, topicStatus, publicationStatus, deliveryStatus string
 	var publicationOwner, publicationUntil sql.NullString
 	if err := fixture.store.db.QueryRow(`SELECT c.status,c.topic_state,p.status,d.status,
@@ -69,14 +84,6 @@ func TestAbandonChannelAtomicallyFencesScopedWorkAndReplaysExactForensics(t *tes
 	}
 	if otherStatus != "active" || otherTopic != "joined" || nodePeer != fixture.node.PeerID().String() {
 		t.Fatalf("unrelated authority changed: other=%q/%q node=%q", otherStatus, otherTopic, nodePeer)
-	}
-
-	replay, err := fixture.store.AbandonChannel(context.Background(), AbandonChannelSpec{
-		ChannelAlias: alias, ConfirmedAlias: alias, Force: true, At: transitionedAt.Add(time.Hour)})
-	result.Changed = false
-	result.Replayed = true
-	if err != nil || replay != result {
-		t.Fatalf("AbandonChannel(replay) = (%#v, %v), want %#v", replay, err, result)
 	}
 }
 

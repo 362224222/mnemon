@@ -58,32 +58,52 @@ type AbandonChannelResult struct {
 func (s *Store) AbandonChannel(ctx context.Context,
 	spec AbandonChannelSpec,
 ) (AbandonChannelResult, error) {
-	if s == nil || s.db == nil || ctx == nil || !spec.Force ||
-		spec.ChannelAlias != spec.ConfirmedAlias ||
-		validateDurableAgentAlias(spec.ChannelAlias) != nil {
-		return AbandonChannelResult{}, ErrChannelAbandonInput
-	}
-	at, err := canonicalStoreTime(spec.At)
+	at, err := validateAbandonChannelCall(s, ctx, spec)
 	if err != nil {
-		return AbandonChannelResult{}, fmt.Errorf("%w: transition time: %v", ErrChannelAbandonInput, err)
+		return AbandonChannelResult{}, err
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return AbandonChannelResult{}, fmt.Errorf("abandon Channel: begin: %w", err)
 	}
 	defer tx.Rollback()
-
 	result, status, topic, err := readChannelAbandonTarget(ctx, tx, spec.ChannelAlias)
 	if err != nil {
 		return AbandonChannelResult{}, err
 	}
+	result, err = settleChannelAbandon(ctx, tx, result, status, topic, at)
+	if err != nil {
+		return AbandonChannelResult{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return AbandonChannelResult{}, fmt.Errorf("abandon Channel: commit: %w", err)
+	}
+	return result, nil
+}
+
+func validateAbandonChannelCall(s *Store, ctx context.Context,
+	spec AbandonChannelSpec,
+) (time.Time, error) {
+	if s == nil || s.db == nil || ctx == nil || !spec.Force ||
+		spec.ChannelAlias != spec.ConfirmedAlias ||
+		validateDurableAgentAlias(spec.ChannelAlias) != nil {
+		return time.Time{}, ErrChannelAbandonInput
+	}
+	at, err := canonicalStoreTime(spec.At)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("%w: transition time: %v", ErrChannelAbandonInput, err)
+	}
+	return at, nil
+}
+
+func settleChannelAbandon(ctx context.Context, tx *sql.Tx, result AbandonChannelResult,
+	status model.ChannelStatus, topic model.TopicState, at time.Time,
+) (AbandonChannelResult, error) {
+	var err error
 	if status == model.ChannelAbandoned {
 		result.Evidence, err = readChannelForensicCounts(ctx, tx, result.ChannelID)
 		if err != nil {
 			return AbandonChannelResult{}, err
-		}
-		if err := tx.Commit(); err != nil {
-			return AbandonChannelResult{}, fmt.Errorf("abandon Channel: commit replay: %w", err)
 		}
 		result.Replayed = true
 		return result, nil
@@ -102,9 +122,6 @@ func (s *Store) AbandonChannel(ctx context.Context,
 	result.Evidence, err = readChannelForensicCounts(ctx, tx, result.ChannelID)
 	if err != nil {
 		return AbandonChannelResult{}, err
-	}
-	if err := tx.Commit(); err != nil {
-		return AbandonChannelResult{}, fmt.Errorf("abandon Channel: commit: %w", err)
 	}
 	result.Changed = true
 	return result, nil

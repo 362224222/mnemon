@@ -59,6 +59,21 @@ func TestRecoveryQuarantineAtomicallyMovesWholeNodeAfterExactQuiescence(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
+	assertRecoveryQuarantinePreserved(t, fixture, lease, result, at,
+		recoveryQuarantineEvidence{before: before, database: database, identity: identity})
+}
+
+type recoveryQuarantineEvidence struct {
+	before   os.FileInfo
+	database []byte
+	identity []byte
+}
+
+func assertRecoveryQuarantinePreserved(t *testing.T, fixture daemonFixture,
+	lease *DaemonLifecycleLease, result RecoveryQuarantineResult, at time.Time,
+	evidence recoveryQuarantineEvidence,
+) {
+	t.Helper()
 	want := filepath.Join(fixture.workspace, ".mnemon", "harness", "recovery",
 		"20260721T120000.123456789Z-"+fixture.identity.PeerID().String(), "node")
 	if result.NodePath != want || result.PeerID != fixture.identity.PeerID().String() ||
@@ -69,12 +84,12 @@ func TestRecoveryQuarantineAtomicallyMovesWholeNodeAfterExactQuiescence(t *testi
 		t.Fatalf("old Node path remains: %v", err)
 	}
 	after, err := os.Lstat(want)
-	if err != nil || !os.SameFile(before, after) {
+	if err != nil || !os.SameFile(evidence.before, after) {
 		t.Fatalf("renamed Node identity = (%v, %v)", after, err)
 	}
 	for path, wantBytes := range map[string][]byte{
-		filepath.Join(want, "node.db"):       database,
-		filepath.Join(want, identityKeyName): identity,
+		filepath.Join(want, "node.db"):       evidence.database,
+		filepath.Join(want, identityKeyName): evidence.identity,
 	} {
 		got, err := os.ReadFile(path)
 		if err != nil || !bytes.Equal(got, wantBytes) {

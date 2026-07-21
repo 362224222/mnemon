@@ -268,9 +268,55 @@ func readChannelStatusPublications(ctx context.Context, tx *sql.Tx, local model.
 
 type channelStatusScanner interface{ Scan(...any) error }
 
+type channelStatusPublicationRow struct {
+	kind              string
+	channelID         model.ChannelID
+	originPeerID      model.PeerID
+	transportPeerID   model.PeerID
+	originEpoch       model.OriginEpoch
+	originSequence    uint64
+	channelSequence   uint64
+	eventID           model.EventID
+	eventDigest       model.Digest
+	publicationDigest model.Digest
+	publicationBytes  []byte
+	originSignature   []byte
+	arrival           string
+	isAudience        int
+	semanticOutcome   string
+	artifactSource    sql.NullString
+}
+
 func scanChannelStatusPublication(scanner channelStatusScanner, local model.PeerID,
 	channels []ChannelStatusChannel, byID map[model.ChannelID]int,
 ) (ChannelStatusPublication, model.ChannelID, error) {
+	row, err := scanChannelStatusPublicationRow(scanner)
+	if err != nil {
+		return ChannelStatusPublication{}, model.ChannelID{}, err
+	}
+	index, ok := byID[row.channelID]
+	if !ok {
+		return ChannelStatusPublication{}, model.ChannelID{}, fmt.Errorf(
+			"%w: publication references unknown Channel", ErrChannelStatusAuthority)
+	}
+	channel := channels[index]
+	signed, err := decodeChannelStatusSignedPublication(row)
+	if err != nil {
+		return ChannelStatusPublication{}, model.ChannelID{}, err
+	}
+	if err := verifyChannelStatusPublication(channel, signed); err != nil {
+		return ChannelStatusPublication{}, model.ChannelID{}, err
+	}
+	arrival, outcome, ignored, err := projectChannelStatusPublicationPath(row, signed.Event(), local)
+	if err != nil {
+		return ChannelStatusPublication{}, model.ChannelID{}, err
+	}
+	publication, err := projectChannelStatusPublication(row, channel, signed, arrival, outcome, ignored)
+	return publication, row.channelID, err
+}
+
+func scanChannelStatusPublicationRow(scanner channelStatusScanner,
+) (channelStatusPublicationRow, error) {
 	var kind, channelText, originText, transportText, epochText, eventText string
 	var arrivalText, outcomeText string
 	var originSequence, channelSequence uint64
@@ -281,7 +327,7 @@ func scanChannelStatusPublication(scanner channelStatusScanner, local model.Peer
 		&originSequence, &channelSequence, &eventText, &eventDigestRaw, &publicationDigestRaw,
 		&publicationRaw, &signature, &arrivalText, &isAudience, &outcomeText,
 		&artifactSourceText); err != nil {
-		return ChannelStatusPublication{}, model.ChannelID{}, fmt.Errorf("%w: scan publication: %v",
+		return channelStatusPublicationRow{}, fmt.Errorf("%w: scan publication: %v",
 			ErrChannelStatusAuthority, err)
 	}
 	channelID, channelErr := model.ParseChannelID(channelText)
@@ -294,89 +340,115 @@ func scanChannelStatusPublication(scanner channelStatusScanner, local model.Peer
 	if channelErr != nil || originErr != nil || transportErr != nil || epochErr != nil ||
 		eventErr != nil || eventDigestErr != nil || publicationDigestErr != nil ||
 		originSequence == 0 || channelSequence == 0 || isAudience < 0 || isAudience > 1 {
-		return ChannelStatusPublication{}, model.ChannelID{}, fmt.Errorf("%w: malformed publication tuple",
+		return channelStatusPublicationRow{}, fmt.Errorf("%w: malformed publication tuple",
 			ErrChannelStatusAuthority)
 	}
-	index, ok := byID[channelID]
-	if !ok {
-		return ChannelStatusPublication{}, model.ChannelID{}, fmt.Errorf("%w: publication references unknown Channel",
+	return channelStatusPublicationRow{kind: kind, channelID: channelID, originPeerID: origin,
+		transportPeerID: transport, originEpoch: epoch, originSequence: originSequence,
+		channelSequence: channelSequence, eventID: eventID, eventDigest: eventDigest,
+		publicationDigest: publicationDigest, publicationBytes: publicationRaw,
+		originSignature: signature, arrival: arrivalText, isAudience: isAudience,
+		semanticOutcome: outcomeText, artifactSource: artifactSourceText}, nil
+}
+
+func decodeChannelStatusSignedPublication(row channelStatusPublicationRow,
+) (model.SignedPublication, error) {
+	wire, err := channelStatusPublicationWire(row)
+	if err != nil {
+		return model.SignedPublication{}, err
+	}
+	signed, err := model.ParseSignedPublication(wire)
+	if err != nil {
+		return model.SignedPublication{}, fmt.Errorf("%w: unsupported signed publication: %v",
+			ErrChannelStatusAuthority, err)
+	}
+	event, scope := signed.Event(), signed.Event().Scope()
+	if event.Source() != model.EventSourceLocal || signed.Digest() != row.publicationDigest ||
+		event.Digest() != row.eventDigest || event.ID() != row.eventID ||
+		scope.ChannelID() != row.channelID || scope.OriginPeerID() != row.originPeerID ||
+		scope.OriginEpoch() != row.originEpoch || scope.OriginSequence() != row.originSequence ||
+		scope.ChannelSequence() != row.channelSequence ||
+		!bytes.Equal(signed.OriginSignature(), row.originSignature) {
+		return model.SignedPublication{}, fmt.Errorf("%w: signed publication projection mismatch",
 			ErrChannelStatusAuthority)
 	}
+	return signed, nil
+}
+
+func channelStatusPublicationWire(row channelStatusPublicationRow) ([]byte, error) {
 	var wire []byte
-	switch kind {
+	switch row.kind {
 	case "local":
-		body, err := model.NewJSON(publicationRaw)
-		if err != nil || !bytes.Equal(body.Bytes(), publicationRaw) {
-			return ChannelStatusPublication{}, model.ChannelID{}, fmt.Errorf("%w: noncanonical local publication body",
+		body, err := model.NewJSON(row.publicationBytes)
+		if err != nil || !bytes.Equal(body.Bytes(), row.publicationBytes) {
+			return nil, fmt.Errorf("%w: noncanonical local publication body",
 				ErrChannelStatusAuthority)
 		}
 		encoded, err := model.JSONFrom(struct {
 			Publication       model.JSON   `json:"publication"`
 			PublicationDigest model.Digest `json:"publication_digest"`
 			OriginSignature   []byte       `json:"origin_signature"`
-		}{body, publicationDigest, signature})
+		}{body, row.publicationDigest, row.originSignature})
 		if err != nil {
-			return ChannelStatusPublication{}, model.ChannelID{}, fmt.Errorf("%w: local publication wire: %v",
+			return nil, fmt.Errorf("%w: local publication wire: %v",
 				ErrChannelStatusAuthority, err)
 		}
 		wire = encoded.Bytes()
 	case "inbox":
-		wire = publicationRaw
+		wire = row.publicationBytes
 	default:
-		return ChannelStatusPublication{}, model.ChannelID{}, fmt.Errorf("%w: unknown publication evidence kind",
+		return nil, fmt.Errorf("%w: unknown publication evidence kind",
 			ErrChannelStatusAuthority)
 	}
-	signed, err := model.ParseSignedPublication(wire)
-	if err != nil {
-		return ChannelStatusPublication{}, model.ChannelID{}, fmt.Errorf("%w: unsupported signed publication: %v",
-			ErrChannelStatusAuthority, err)
-	}
-	event, scope := signed.Event(), signed.Event().Scope()
-	if event.Source() != model.EventSourceLocal || signed.Digest() != publicationDigest ||
-		event.Digest() != eventDigest || event.ID() != eventID || scope.ChannelID() != channelID ||
-		scope.OriginPeerID() != origin || scope.OriginEpoch() != epoch ||
-		scope.OriginSequence() != originSequence || scope.ChannelSequence() != channelSequence ||
-		!bytes.Equal(signed.OriginSignature(), signature) {
-		return ChannelStatusPublication{}, model.ChannelID{}, fmt.Errorf("%w: signed publication projection mismatch",
-			ErrChannelStatusAuthority)
-	}
-	channel := channels[index]
-	if err := verifyChannelStatusPublication(channel, signed); err != nil {
-		return ChannelStatusPublication{}, model.ChannelID{}, err
-	}
-	arrival := ChannelStatusArrival(arrivalText)
-	outcome := ChannelStatusSemanticOutcome(outcomeText)
+	return wire, nil
+}
+
+func projectChannelStatusPublicationPath(row channelStatusPublicationRow, event model.Event,
+	local model.PeerID,
+) (ChannelStatusArrival, ChannelStatusSemanticOutcome, []model.PeerID, error) {
+	arrival := ChannelStatusArrival(row.arrival)
+	outcome := ChannelStatusSemanticOutcome(row.semanticOutcome)
 	ignored := []model.PeerID{}
-	if kind == "local" {
-		if origin != local || transport != local || arrival != ChannelStatusArrivalLocal ||
-			isAudience != 1 || outcome != ChannelStatusOutcomeOriginated || artifactSourceText.Valid {
-			return ChannelStatusPublication{}, model.ChannelID{}, fmt.Errorf("%w: invalid local publication path",
+	if row.kind == "local" {
+		if row.originPeerID != local || row.transportPeerID != local ||
+			arrival != ChannelStatusArrivalLocal || row.isAudience != 1 ||
+			outcome != ChannelStatusOutcomeOriginated || row.artifactSource.Valid {
+			return "", "", nil, fmt.Errorf("%w: invalid local publication path",
 				ErrChannelStatusAuthority)
 		}
 	} else {
-		if origin == local || transport == local || !model.ArrivalSource(arrivalText).Valid() ||
-			(model.ArrivalSource(arrivalText) == model.ArrivalPull && transport != origin) ||
-			!model.InboxStatus(outcomeText).Valid() ||
-			(isAudience == 1) != event.Audience().Contains(local) {
-			return ChannelStatusPublication{}, model.ChannelID{}, fmt.Errorf("%w: invalid imported publication path",
+		source := model.ArrivalSource(row.arrival)
+		if row.kind != "inbox" || row.originPeerID == local || row.transportPeerID == local ||
+			!source.Valid() || source == model.ArrivalPull && row.transportPeerID != row.originPeerID ||
+			!model.InboxStatus(row.semanticOutcome).Valid() ||
+			(row.isAudience == 1) != event.Audience().Contains(local) {
+			return "", "", nil, fmt.Errorf("%w: invalid imported publication path",
 				ErrChannelStatusAuthority)
 		}
-		if model.ArrivalSource(arrivalText) == model.ArrivalPull {
+		if source == model.ArrivalPull {
 			arrival = ChannelStatusArrivalRepair
 		} else {
 			arrival = ChannelStatusArrivalGossip
 		}
-		if isAudience == 0 {
+		if row.isAudience == 0 {
 			ignored = append(ignored, local)
 		}
 	}
 	if !arrival.Valid() || !outcome.Valid() {
-		return ChannelStatusPublication{}, model.ChannelID{}, fmt.Errorf("%w: unclosed path outcome",
+		return "", "", nil, fmt.Errorf("%w: unclosed path outcome",
 			ErrChannelStatusAuthority)
 	}
+	return arrival, outcome, ignored, nil
+}
+
+func projectChannelStatusPublication(row channelStatusPublicationRow, channel ChannelStatusChannel,
+	signed model.SignedPublication, arrival ChannelStatusArrival,
+	outcome ChannelStatusSemanticOutcome, ignored []model.PeerID,
+) (ChannelStatusPublication, error) {
+	event := signed.Event()
 	causedBy := event.CausedBy()
 	if len(causedBy) > 1 {
-		return ChannelStatusPublication{}, model.ChannelID{}, fmt.Errorf("%w: publication causality exceeds singular public contract",
+		return ChannelStatusPublication{}, fmt.Errorf("%w: publication causality exceeds singular public contract",
 			ErrChannelStatusAuthority)
 	}
 	key := signed.Key()
@@ -384,13 +456,13 @@ func scanChannelStatusPublication(scanner channelStatusScanner, local model.Peer
 		originPeerID: key.OriginPeerID(), originEpoch: key.OriginEpoch(),
 		channelSequence: key.ChannelSequence()},
 		publicationDigest: signed.Digest(), eventKey: event.Key(), eventDigest: event.Digest(),
-		channelIDDigest: channel.channelIDDigest, originPeerID: origin,
-		immediateTransportPeerID: transport, arrival: arrival,
+		channelIDDigest: channel.channelIDDigest, originPeerID: row.originPeerID,
+		immediateTransportPeerID: row.transportPeerID, arrival: arrival,
 		audiencePeerIDs: event.Audience().Peers(), ignoredPeerIDs: ignored, semanticOutcome: outcome}
-	if artifactSourceText.Valid {
-		source, err := model.ParsePeerID(artifactSourceText.String)
-		if err != nil || source != origin || len(event.Artifacts()) == 0 {
-			return ChannelStatusPublication{}, model.ChannelID{}, fmt.Errorf("%w: invalid Artifact direct source",
+	if row.artifactSource.Valid {
+		source, err := model.ParsePeerID(row.artifactSource.String)
+		if err != nil || source != row.originPeerID || len(event.Artifacts()) == 0 {
+			return ChannelStatusPublication{}, fmt.Errorf("%w: invalid Artifact direct source",
 				ErrChannelStatusAuthority)
 		}
 		publication.artifactDirectSourcePeerID = source
@@ -400,7 +472,7 @@ func scanChannelStatusPublication(scanner channelStatusScanner, local model.Peer
 		publication.causalityEventKey = causedBy[0]
 		publication.hasCausalityEventKey = true
 	}
-	return publication, channelID, nil
+	return publication, nil
 }
 
 func verifyChannelStatusPublication(channel ChannelStatusChannel,
