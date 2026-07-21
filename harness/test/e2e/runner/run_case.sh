@@ -810,9 +810,15 @@ api_projection_drift_fault() {
     normalize_json_or_empty "$drift_doctor_raw" "$drift_doctor_norm"
     normalize_json_or_empty "$repair_setup_raw" "$repair_setup_norm"
     normalize_json_or_empty "$repaired_doctor_raw" "$repaired_doctor_norm"
+    repair_setup_stderr_first_line=$(sed -E \
+      -e 's/mnch1_[A-Za-z0-9_-]+/<redacted-invite>/g' \
+      -e 's/sk-[A-Za-z0-9_-]{12,}/<redacted-provider-key>/g' \
+      -e 's/(OPENAI_API_KEY=)[^[:space:]]+/\1<redacted>/g' \
+      "$repair_setup_err" | sed -n '1p' | cut -c1-512)
 
     jq -n --arg id "$id" --arg node C --arg config_path "$config_path" \
       --arg hook_command "$hook_command" \
+      --arg repair_setup_stderr_first_line "$repair_setup_stderr_first_line" \
       --argjson before_exit "$before_exit" --argjson mutation_exit "$mutation_exit" \
       --argjson drift_config_exit "$drift_config_exit" \
       --argjson drift_doctor_exit "$drift_doctor_exit" \
@@ -856,7 +862,11 @@ api_projection_drift_fault() {
          host_projection:([$drift_doctor_doc.checks[]? |
            select(.name == "host_projection")] | first // {})},
        setup_repair:{status:($repair_setup_doc.status // ""),
-         replayed:($repair_setup_doc.replayed // null)},
+         replayed:($repair_setup_doc.replayed // null),
+         error:(if $repair_setup_stderr_first_line == "" then null else
+           {first_line:$repair_setup_stderr_first_line,
+            code:($repair_setup_stderr_first_line | split(":") | .[0])}
+         end)},
        doctor_after_repair:{status:($repaired_doctor_doc.status // "")},
        observation:{fail_closed_before_repair:$failed_closed,
          setup_restored_canonical_projection:$restored,
@@ -883,6 +893,21 @@ api_projection_drift_ok() {
       .observation.neighbor_user_registration_preserved == true and
       .observation.repaired_doctor_healthy == true and
       .observation.all_commands_bounded == true
+    ' "$evidence_path" >/dev/null
+}
+
+api_projection_drift_requirement_ok() {
+    evidence_path="$output/faults/managed-guide-drift.json"
+    [ -f "$evidence_path" ] || return 1
+    jq -e '
+      .schema_version == 1 and .fault == "managed-guide-drift" and
+      .type == "projection-drift" and .node == "C" and
+      .doctor_after_drift_exit_code != 0 and
+      .repaired_config_exit_code == 0 and
+      .observation.fail_closed_before_repair == true and
+      .observation.setup_restored_canonical_projection == true and
+      .observation.neighbor_user_registration_preserved == true and
+      .observation.repaired_doctor_healthy == true
     ' "$evidence_path" >/dev/null
 }
 
@@ -1372,6 +1397,22 @@ payment_review_rework_once_ok() {
 evaluate_public_system_oracles() {
     network_ref=topology/network-paths.json
     status_refs='nodes/A/status-after.json,nodes/B/status-after.json,nodes/C/status-after.json,nodes/D/status-after.json,nodes/E/status-after.json,nodes/F/status-after.json'
+
+    if api_projection_drift_requirement_ok; then
+        projection_drift_passed=true
+    else
+        projection_drift_passed=false
+    fi
+    add_declared_system_assertion ND-18 "$projection_drift_passed" faults/managed-guide-drift.json \
+      'Public projection-drift evidence shows Mnemon repaired only its managed Host registration subentry and preserved adjacent user shared config.'
+
+    if api_terminal_enrollment_replay_ok; then
+        terminal_replay_passed=true
+    else
+        terminal_replay_passed=false
+    fi
+    add_declared_system_assertion CH-15 "$terminal_replay_passed" faults/terminal-enrollment-replay.json \
+      'Public terminal enrollment replay evidence shows a revoked same-Channel PeerID remains terminal and is never reactivated by a stale accepted join.'
 
     if payment_review_receipt_loss_ok; then
         receipt_ref=$(review_receipt_loss_ref)
