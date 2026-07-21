@@ -831,15 +831,36 @@ run_entry_prompt() {
 wait_for_public_result() {
     timeout_seconds=${R5_E2E_RESULT_TIMEOUT_SECONDS:-180}
     deadline=$(( $(date +%s) + timeout_seconds ))
+    next_drive=0
     while [ "$(date +%s)" -lt "$deadline" ]; do
         if node_exec A test -d /workspace/result &&
            [ "$(node_exec A sh -c 'find /workspace/result -type f -size +0c | wc -l')" -gt 0 ]; then
             return 0
         fi
+        now=$(date +%s)
+        if [ "$now" -ge "$next_drive" ]; then
+            drive_public_runtime
+            next_drive=$(( $(date +%s) + 2 ))
+            continue
+        fi
         sleep 0.5
     done
     case_error "no nonempty public entry-node result appeared within ${timeout_seconds}s"
     return 1
+}
+
+drive_public_runtime() {
+    pids=
+    for node in A B C D E F; do
+        # Status is a public observation that also ensures each node-local
+        # daemon has a bounded chance to run its own managed wake worker. Do
+        # not replace this with agent current: that route claims work.
+        node_exec "$node" timeout 5s mnemon-harness status >/dev/null 2>/dev/null &
+        pids="$pids $!"
+    done
+    for pid in $pids; do
+        wait "$pid" || true
+    done
 }
 
 collect_public_evidence() {
