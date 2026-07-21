@@ -201,7 +201,8 @@ func applyLocalAcceptanceTx(ctx context.Context, tx *sql.Tx, spec LocalAcceptanc
 			return model.JSON{}, err
 		}
 	}
-	events, err := validateAcceptanceItems(ctx, tx, spec, operation, originPublicKey, acceptedAt, trustedNow)
+	events, err := validateAcceptanceItems(ctx, tx, spec, operation, originPublicKey,
+		acceptedAt, trustedNow, managedAuthority)
 	if err != nil {
 		return model.JSON{}, err
 	}
@@ -249,6 +250,7 @@ func applyLocalAcceptanceTx(ctx context.Context, tx *sql.Tx, spec LocalAcceptanc
 // projection, participant binding, causality and deadline precedence.
 func validateAcceptanceItems(ctx context.Context, tx *sql.Tx, spec LocalAcceptanceSpec,
 	operation model.Operation, originPublicKey []byte, acceptedAt, trustedNow time.Time,
+	managedAuthority managedAcceptanceState,
 ) ([]model.Event, error) {
 	events := make([]model.Event, len(spec.Items))
 	for index, item := range spec.Items {
@@ -272,7 +274,7 @@ func validateAcceptanceItems(ctx context.Context, tx *sql.Tx, spec LocalAcceptan
 		if err := validateLocalCausality(ctx, tx, event); err != nil {
 			return nil, err
 		}
-		if err := validateLocalCausalSemantics(ctx, tx, operation, event); err != nil {
+		if err := validateLocalCausalSemantics(ctx, tx, operation, event, managedAuthority); err != nil {
 			return nil, err
 		}
 		if err := validateDeadlinePrecedence(ctx, tx, item, event, trustedNow); err != nil {

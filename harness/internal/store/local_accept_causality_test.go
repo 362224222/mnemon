@@ -55,19 +55,19 @@ func TestValidateLocalCausalSemanticsBindsCurrentWorkUpdate(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer tx.Rollback()
-	if err := validateLocalCausalSemantics(context.Background(), tx, model.Operation{}, valid); err != nil {
+	if err := validateLocalCausalSemantics(context.Background(), tx, model.Operation{}, valid, managedAcceptanceState{}); err != nil {
 		t.Fatalf("exact current Work cause error = %v", err)
 	}
 	wrong := causalSuccessorEvent(t, current, model.EventReviewCancelled, "event-causal-wrong",
 		`{"content":"cancel","iteration":1,"work_version":1}`, other.Key(), fixture.now.Add(2*time.Second))
-	if err := validateLocalCausalSemantics(context.Background(), tx, model.Operation{}, wrong); err == nil {
+	if err := validateLocalCausalSemantics(context.Background(), tx, model.Operation{}, wrong, managedAcceptanceState{}); err == nil {
 		t.Fatal("unrelated durable Work Event authorized cancel")
 	}
 	missing := valid.Spec()
 	missing.ID, _ = model.ParseEventID("event-causal-missing")
 	missing.CausedBy = nil
 	withoutCause, _ := model.NewEvent(missing)
-	if err := validateLocalCausalSemantics(context.Background(), tx, model.Operation{}, withoutCause); err == nil {
+	if err := validateLocalCausalSemantics(context.Background(), tx, model.Operation{}, withoutCause, managedAcceptanceState{}); err == nil {
 		t.Fatal("context action without exact current Work cause was accepted")
 	}
 }
@@ -91,19 +91,19 @@ func TestValidateLocalCausalSemanticsBindsControllerRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer tx.Rollback()
-	if err := validateLocalCausalSemantics(context.Background(), tx, model.Operation{}, accepted); err != nil {
+	if err := validateLocalCausalSemantics(context.Background(), tx, model.Operation{}, accepted, managedAcceptanceState{}); err != nil {
 		t.Fatalf("exact participant request cause error = %v", err)
 	}
 	wrong := causalSuccessorEvent(t, offered, model.EventReviewAccepted, "event-causal-accepted-wrong",
 		`{"iteration":1,"work_version":1}`, offered.Key(), fixture.now.Add(3*time.Second))
-	if err := validateLocalCausalSemantics(context.Background(), tx, model.Operation{}, wrong); err == nil {
+	if err := validateLocalCausalSemantics(context.Background(), tx, model.Operation{}, wrong, managedAcceptanceState{}); err == nil {
 		t.Fatal("home's own durable Event authorized a controller response")
 	}
 	outcome := causalSuccessorEvent(t, offered, model.EventReviewOutcome, "event-causal-outcome",
 		fmt.Sprintf(`{"decision_ref":%q,"diagnostic_code":"fallback","iteration":1,"status":"rejected","work_version":1}`,
 			request.EventID().String()),
 		request, fixture.now.Add(3*time.Second))
-	if err := validateLocalCausalSemantics(context.Background(), tx, model.Operation{}, outcome); err != nil {
+	if err := validateLocalCausalSemantics(context.Background(), tx, model.Operation{}, outcome, managedAcceptanceState{}); err != nil {
 		t.Fatalf("fallback outcome exact source error = %v", err)
 	}
 }
@@ -407,7 +407,7 @@ func TestValidateLocalCausalSemanticsDoesNotCompareRemoteWallClock(t *testing.T)
 		t.Fatal(err)
 	}
 	defer tx.Rollback()
-	if err := validateLocalCausalSemantics(context.Background(), tx, model.Operation{}, accepted); err != nil {
+	if err := validateLocalCausalSemantics(context.Background(), tx, model.Operation{}, accepted, managedAcceptanceState{}); err != nil {
 		t.Fatalf("durable remote cause with an ahead wall clock was rejected: %v", err)
 	}
 }
@@ -423,7 +423,7 @@ func TestValidateLocalCausalSemanticsSeparatesInitiateAndDerivedOffer(t *testing
 		t.Fatal(err)
 	}
 	defer tx.Rollback()
-	if err := validateLocalCausalSemantics(context.Background(), tx, model.Operation{}, offer); err != nil {
+	if err := validateLocalCausalSemantics(context.Background(), tx, model.Operation{}, offer, managedAcceptanceState{}); err != nil {
 		t.Fatalf("contextless offer error = %v", err)
 	}
 	causedSpec := offer.Spec()
@@ -433,7 +433,7 @@ func TestValidateLocalCausalSemanticsSeparatesInitiateAndDerivedOffer(t *testing
 	cause, _ := model.NewEventKey(causePeer, causeEpoch, causeID)
 	causedSpec.CausedBy = []model.EventKey{cause}
 	caused, _ := model.NewEvent(causedSpec)
-	if err := validateLocalCausalSemantics(context.Background(), tx, model.Operation{}, caused); err == nil {
+	if err := validateLocalCausalSemantics(context.Background(), tx, model.Operation{}, caused, managedAcceptanceState{}); err == nil {
 		t.Fatal("contextless offer with claimed parent causality was accepted")
 	}
 	contextHash := model.Sum([]byte("derived-context"))
@@ -447,7 +447,7 @@ func TestValidateLocalCausalSemanticsSeparatesInitiateAndDerivedOffer(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := validateLocalCausalSemantics(context.Background(), tx, operation, caused); err != nil {
+	if err := validateLocalCausalSemantics(context.Background(), tx, operation, caused, managedAcceptanceState{}); err != nil {
 		t.Fatalf("context-bound offer shape error = %v", err)
 	}
 }
@@ -692,7 +692,7 @@ func assertCausalConflict(t *testing.T, fixture *acceptanceFixture, event model.
 		t.Fatal(err)
 	}
 	defer tx.Rollback()
-	if err := validateLocalCausalSemantics(context.Background(), tx, model.Operation{}, event); !errors.Is(err, ErrAdmissionConflict) {
+	if err := validateLocalCausalSemantics(context.Background(), tx, model.Operation{}, event, managedAcceptanceState{}); !errors.Is(err, ErrAdmissionConflict) {
 		t.Fatalf("causal error = %v, want admission conflict", err)
 	}
 }

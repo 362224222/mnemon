@@ -215,7 +215,7 @@ func validateWorkExpiryPublicationTx(ctx context.Context, tx *sql.Tx,
 	if err := validateLocalCausality(ctx, tx, event); err != nil {
 		return model.Event{}, err
 	}
-	if err := validateLocalCausalSemantics(ctx, tx, model.Operation{}, event); err != nil {
+	if err := validateLocalCausalSemantics(ctx, tx, model.Operation{}, event, managedAcceptanceState{}); err != nil {
 		return model.Event{}, err
 	}
 	if err := validateOperationEvents(nil, []model.Event{event}, false); err != nil {

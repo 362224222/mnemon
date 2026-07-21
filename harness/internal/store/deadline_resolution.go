@@ -185,7 +185,7 @@ func validateDeadlineEventAuthority(ctx context.Context, tx *sql.Tx, spec Deadli
 	if err := validateLocalCausality(ctx, tx, event); err != nil {
 		return err
 	}
-	if err := validateLocalCausalSemantics(ctx, tx, model.Operation{}, event); err != nil {
+	if err := validateLocalCausalSemantics(ctx, tx, model.Operation{}, event, managedAcceptanceState{}); err != nil {
 		return err
 	}
 	if err := validateOperationEvents(nil, []model.Event{event}, false); err != nil {
