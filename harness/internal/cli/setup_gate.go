@@ -70,17 +70,50 @@ func (gate *setupHookGate) VerifyReady(ctx context.Context,
 }
 
 func (gate *setupHookGate) verifyReadyOnce(ctx context.Context) (bool, error) {
+	if err := gate.validateReadyExecution(ctx); err != nil {
+		return false, err
+	}
+	result := gate.runSetupHook(ctx)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return false, setupHookError("execute", ctxErr)
+	}
+	if result.failed() {
+		return result.retryable(), setupHookError("execute", nil)
+	}
+	if !setupHookOutputValid(result.stdout) {
+		return false, setupHookError("validate output", nil)
+	}
+	return false, nil
+}
+
+func (gate *setupHookGate) validateReadyExecution(ctx context.Context) error {
 	if gate == nil || ctx == nil || gate.identity == nil {
-		return false, setupHookError("execute", nil)
+		return setupHookError("execute", nil)
 	}
 	if err := ctx.Err(); err != nil {
-		return false, setupHookError("execute", err)
+		return setupHookError("execute", err)
 	}
 	before, err := validateSetupHookPath(gate.hook)
 	if err != nil || !os.SameFile(gate.identity, before) {
-		return false, setupHookError("revalidate projection", nil)
+		return setupHookError("revalidate projection", nil)
 	}
+	return nil
+}
+
+type setupHookExecution struct {
+	runErr         error
+	pathErr        error
+	identityStable bool
+	stdout         string
+	stderr         string
+	stdoutOverflow bool
+	stderrOverflow bool
+}
+
+func (gate *setupHookGate) runSetupHook(ctx context.Context) setupHookExecution {
 	var stdout, stderr boundedSetupHookBuffer
+	defer stdout.clear()
+	defer stderr.clear()
 	command := exec.CommandContext(ctx, gate.hook)
 	command.Dir = gate.workspace
 	command.Stdin = bytes.NewReader(nil)
@@ -88,24 +121,26 @@ func (gate *setupHookGate) verifyReadyOnce(ctx context.Context) (bool, error) {
 	command.Stderr = &stderr
 	command.Env = withoutEnvironment(os.Environ(), localapi.RunAttachmentEnv)
 	runErr := command.Run()
-	defer stdout.clear()
-	defer stderr.clear()
 	after, pathErr := validateSetupHookPath(gate.hook)
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		return false, setupHookError("execute", ctxErr)
-	}
-	if runErr != nil || pathErr != nil || !os.SameFile(gate.identity, after) ||
-		stdout.overflow || stderr.overflow || stderr.data.Len() != 0 {
-		retry := pathErr == nil && os.SameFile(gate.identity, after) &&
-			!stdout.overflow && stdout.data.Len() == 0 && !stderr.overflow &&
-			setupHookRetryable(runErr, stderr.data.String())
-		return retry, setupHookError("execute", nil)
-	}
-	output := stdout.data.String()
-	if output != "" && output != WakeCue+"\n" {
-		return false, setupHookError("validate output", nil)
-	}
-	return false, nil
+	return setupHookExecution{runErr: runErr, pathErr: pathErr,
+		identityStable: pathErr == nil && os.SameFile(gate.identity, after),
+		stdout:         stdout.data.String(), stderr: stderr.data.String(),
+		stdoutOverflow: stdout.overflow, stderrOverflow: stderr.overflow}
+}
+
+func (result setupHookExecution) failed() bool {
+	return result.runErr != nil || result.pathErr != nil || !result.identityStable ||
+		result.stdoutOverflow || result.stderrOverflow || result.stderr != ""
+}
+
+func (result setupHookExecution) retryable() bool {
+	return result.pathErr == nil && result.identityStable && !result.stdoutOverflow &&
+		result.stdout == "" && !result.stderrOverflow &&
+		setupHookRetryable(result.runErr, result.stderr)
+}
+
+func setupHookOutputValid(output string) bool {
+	return output == "" || output == WakeCue+"\n"
 }
 
 func setupHookRetryable(runErr error, stderr string) bool {
