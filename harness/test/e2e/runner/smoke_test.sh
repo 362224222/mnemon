@@ -27,6 +27,7 @@ done
 
 "$runner_dir/run_docker.sh" --validate-only >/dev/null
 LIVE_CODEX=1 "$runner_dir/run_live_codex.sh" --validate-only >/dev/null
+"$runner_dir/relay_fault_oracle_test.sh"
 
 if "$runner_dir/run_docker.sh" --validate-only --case not-a-case >/dev/null 2>&1; then
     die 'unknown CASE did not fail closed'

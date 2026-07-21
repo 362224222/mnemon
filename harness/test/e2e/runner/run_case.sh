@@ -63,7 +63,7 @@ logs_collected=false
 
 mkdir -p "$output/topology" "$output/transcript" "$output/nodes" \
     "$output/runtime" "$output/artifacts" "$output/faults" "$output/oracle"
-chmod 0700 "$output"
+chmod 0700 "$output" "$output/faults"
 for node in A B C D E F; do
     mkdir -p "$output/nodes/$node"
     : >"$output/nodes/$node/peer-trace.ndjson"
@@ -544,26 +544,62 @@ write_channel_topology() {
       topology/channels.json 'Public D4 status binds each Channel digest, signed roster head, and member PeerID to the six isolated Nodes.'
 }
 
-inject_declared_faults() {
+evaluate_declared_faults() {
     while IFS=$(printf '\t') read -r id type phase target observation; do
         injected=false
         observed=false
-        # Exact gossip, response, receipt, preclaim, terminal-enrollment, and
-        # parent-race phases are not exposed by the public process surface yet.
-        # A coarse timer-based disconnect or kill would be a different fault,
-        # so do not mutate the candidate and do not claim injection. The case
-        # remains deterministically blocked until an external byte/process
-        # fault plane can synchronize on public phase receipts.
+        evidence=
         detail='The public black-box surface has no exact phase receipt or external fault gate; injection and observation remain fail-closed.'
         at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+        if [ "$case_name" = payment-review ] && [ "$id" = alpha-gossip-via-b ]; then
+            action_ref="faults/$id-action.json"
+            scope_b_ref="faults/$id-scope-b.json"
+            scope_c_ref="faults/$id-scope-c.json"
+            action_ok=false
+            public_ok=false
+            expected_a=$(container_id A 2>/dev/null || true)
+            expected_c=$(container_id C 2>/dev/null || true)
+            if [ -f "$output/$action_ref" ] &&
+              PYTHONDONTWRITEBYTECODE=1 python3 "$runner_dir/schema_validate.py" \
+                "$schema_root/fault-action.schema.json" "$output/$action_ref" >/dev/null 2>&1 &&
+              jq -e --arg token "$id" --arg network "$project-mesh" \
+                --arg left "$expected_a" --arg right "$expected_c" '
+                .token == $token and .action == "docker-edge-block" and
+                .external_action_applied == true and .public_observation_bound == false and
+                .restored == true and .command_exit_code == 0 and
+                .network_name == $network and .left_container_id == $left and
+                .right_container_id == $right
+              ' "$output/$action_ref" >/dev/null; then
+                action_ok=true
+                at=$(jq -r '.generated_at' "$output/$action_ref")
+            fi
+            if [ -f "$output/$scope_b_ref" ] && [ -f "$output/$scope_c_ref" ] &&
+              "$runner_dir/relay_fault_oracle.sh" "$output/topology/network-paths.json" \
+                "$output/nodes/C/handling-trace.ndjson" "$output/$scope_b_ref" \
+                "$output/$scope_c_ref"; then
+                public_ok=true
+            fi
+            evidence='topology/network-paths.json,nodes/C/handling-trace.ndjson'
+            [ ! -f "$output/$scope_c_ref" ] || evidence="$scope_c_ref,$evidence"
+            [ ! -f "$output/$scope_b_ref" ] || evidence="$scope_b_ref,$evidence"
+            [ ! -f "$output/$action_ref" ] || evidence="$action_ref,$evidence"
+            if [ "$action_ok" = true ] && [ "$public_ok" = true ]; then
+                injected=true
+                observed=true
+                detail='The supervised A-C bridge rule was restored after the scoped public arrival; final D4 shows one Alpha effect at C with origin A and transport B while B is ignored.'
+            else
+                detail='The relay action receipt and required final public D4 observation were not both established; both fault booleans remain fail-closed.'
+            fi
+        fi
         jq -cn --arg id "$id" --arg type "$type" --arg phase "$phase" --arg target "$target" \
-          --arg observation "$observation" --arg detail "$detail" --arg at "$at" \
+          --arg observation "$observation" --arg detail "$detail" --arg at "$at" --arg evidence "$evidence" \
           --argjson injected "$injected" --argjson observed "$observed" '
           {id:$id,type:$type,phase:$phase,target:$target,injected:$injected,
-           required_observation:$observation,observation_passed:$observed,detail:$detail,at:$at}
+           required_observation:$observation,observation_passed:$observed,detail:$detail,at:$at,
+           evidence_refs:(if $evidence == "" then [] else ($evidence | split(",")) end)}
         ' >>"$faults_jsonl"
-        add_assertion "fault-$id" system true false faults/timeline.json \
-          "Required fault observation was not established from public evidence: $observation"
+        add_assertion "fault-$id" system true "$observed" "$evidence" \
+          "Required fault observation: $observation"
     done <<EOF
 $(jq -r '.faults[] | [.id,.type,.phase,.target,.required_observation] | @tsv' "$scenario_manifest")
 EOF
@@ -574,20 +610,90 @@ run_entry_prompt() {
     stderr="$private/entry-turn.stderr"
     prompt="$scenario/$(jq -r '.prompt_file' "$scenario_manifest")"
     started=$(date +%s%3N)
-    if [ "$runtime" = scripted ]; then
+    if [ "$case_name" = payment-review ]; then
+        a_container=$(container_id A)
+        b_container=$(container_id B)
+        c_container=$(container_id C)
+        a_peer=$(jq -er '[.channels[].members[] | select(.node == "A") | .peer_id] |
+          unique | select(length == 1) | .[0]' \
+          "$output/topology/channels.json")
+        b_peer=$(jq -er '[.channels[].members[] | select(.node == "B") | .peer_id] |
+          unique | select(length == 1) | .[0]' \
+          "$output/topology/channels.json")
+        c_peer=$(jq -er '[.channels[].members[] | select(.node == "C") | .peer_id] |
+          unique | select(length == 1) | .[0]' \
+          "$output/topology/channels.json")
+        if [ "$runtime" = scripted ]; then
+            # Scenario policies use stable topology labels, while the public
+            # selector accepts only the effective member alias. Bind the one
+            # entry target from the already-validated public D4 topology.
+            c_alias=$(jq -er '
+              first(.channels[] | select(.alias == "alpha") | .members[] |
+                select(.node == "C")) | .alias
+            ' "$output/topology/channels.json")
+            node_exec A sh -c '
+              set -eu
+              policy=/workspace/.r5/policy.json
+              next=/workspace/.r5/policy.next
+              trap '\''rm -f "$next"'\'' EXIT HUP INT TERM
+              umask 077
+              jq --arg to "$1" '\''.entry_to = $to'\'' "$policy" >"$next"
+              mv "$next" "$policy"
+              trap - EXIT HUP INT TERM
+            ' sh "$c_alias"
+        fi
+        prompt_receipt="$private/payment-relay-prompt.json"
+        scope_b="$private/payment-relay-scope-b.json"
+        scope_c="$private/payment-relay-scope-c.json"
+        wrapper_stdout="$private/payment-relay-wrapper.stdout"
+        wrapper_stderr="$private/payment-relay-wrapper.stderr"
+        set +e
+        "$repo_root/harness/test/e2e/faultplane/docker_network.sh" edge \
+          --network "$project-mesh" --left "$a_container" --right "$c_container" \
+          --token alpha-gossip-via-b --receipt-dir "$output/faults" -- \
+          "$runner_dir/relay_fault_scope.sh" --runtime "$runtime" \
+          --a-container "$a_container" --b-container "$b_container" --c-container "$c_container" \
+          --a-peer "$a_peer" --b-peer "$b_peer" --c-peer "$c_peer" --prompt "$prompt" \
+          --stdout "$stdout" --stderr "$stderr" --prompt-receipt "$prompt_receipt" \
+          --scope-b "$scope_b" --scope-c "$scope_c" \
+          --prompt-timeout "${R5_E2E_TURN_TIMEOUT_SECONDS:-300}" --observation-timeout 30 \
+          >"$wrapper_stdout" 2>"$wrapper_stderr"
+        scope_exit=$?
+        set -e
+        exit_code=$scope_exit
+        if [ -f "$prompt_receipt" ] && jq -e '
+          .schema_version == 1 and (.prompt_exit_code | type == "number" and . >= 0 and . <= 255)
+        ' "$prompt_receipt" >/dev/null 2>&1; then
+            exit_code=$(jq -r '.prompt_exit_code' "$prompt_receipt")
+        fi
+        if [ -f "$scope_b" ] && [ -f "$scope_c" ]; then
+            redact_json <"$scope_b" >"$output/faults/alpha-gossip-via-b-scope-b.json"
+            redact_json <"$scope_c" >"$output/faults/alpha-gossip-via-b-scope-c.json"
+            chmod 0600 "$output/faults/alpha-gossip-via-b-scope-b.json" \
+              "$output/faults/alpha-gossip-via-b-scope-c.json"
+        fi
+        if [ -s "$wrapper_stderr" ]; then
+            redact_text_file "$wrapper_stderr" "$output/transcript/payment-relay-fault.stderr"
+        fi
+        [ -e "$stdout" ] || : >"$stdout"
+        [ -e "$stderr" ] || : >"$stderr"
+    elif [ "$runtime" = scripted ]; then
         node_exec A timeout "${R5_E2E_TURN_TIMEOUT_SECONDS:-300}s" codex exec - \
           <"$prompt" >"$stdout" 2>"$stderr" &
+        prompt_pid=$!
+        set +e
+        wait "$prompt_pid"
+        exit_code=$?
+        set -e
     else
         node_exec A timeout "${R5_E2E_TURN_TIMEOUT_SECONDS:-300}s" /opt/r5/bin/live-codex-exec \
           <"$prompt" >"$stdout" 2>"$stderr" &
+        prompt_pid=$!
+        set +e
+        wait "$prompt_pid"
+        exit_code=$?
+        set -e
     fi
-    prompt_pid=$!
-    sleep 0.25
-    inject_declared_faults
-    set +e
-    wait "$prompt_pid"
-    exit_code=$?
-    set -e
     finished=$(date +%s%3N)
     # Do not retain real Codex stdout: some versions expose reasoning event
     # envelopes. The exit metadata and product-side Hook/action receipts are
@@ -921,6 +1027,7 @@ run_workflow() {
         wait_for_public_result || true
     fi
     collect_public_evidence
+    evaluate_declared_faults
     run_task_oracles
 }
 

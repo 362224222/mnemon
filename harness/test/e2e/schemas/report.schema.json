@@ -163,7 +163,13 @@
         "required_observation": { "type": "string", "minLength": 1, "maxLength": 1024 },
         "observation_passed": { "type": "boolean" },
         "detail": { "type": "string", "minLength": 1, "maxLength": 1024 },
-        "at": { "type": "string", "format": "date-time" }
+        "at": { "type": "string", "format": "date-time" },
+        "evidence_refs": {
+          "type": "array",
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/evidenceRef" }
+        }
       }
     },
     "scenario": {
