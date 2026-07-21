@@ -6,11 +6,16 @@ set -eu
 # workspace edits and public tests after a genuine remote delivery reaches the
 # initiator. Hidden oracles remain outside every Node.
 current=${1:-}
-test "${R5_NODE_ALIAS:-}" = A
 test -f "$current"
+test -f .r5/policy.json
+test "$(jq -er '.node' .r5/policy.json)" = A
 jail=$(pwd -P)
 jq -e '.status == "actionable" and .action_work.local_role == "initiator" and
   .source_event.event_type == "review.delivered"' "$current" >/dev/null
+scenario=${R5_SCENARIO:-}
+if [ -z "$scenario" ] && [ -f .r5/scenario ]; then
+  scenario=$(sed -n '1p' .r5/scenario)
+fi
 install -d -m 0700 result
 install -d -m 0700 .r5/go-cache .r5/go-tmp .r5/tmp
 export GOCACHE="$jail/.r5/go-cache"
@@ -18,7 +23,7 @@ export GOTMPDIR="$jail/.r5/go-tmp"
 export TMPDIR="$jail/.r5/tmp"
 umask 077
 
-case "${R5_SCENARIO:-}" in
+case "$scenario" in
   payment-review)
     cat >case/payment.go <<'EOF'
 package payment

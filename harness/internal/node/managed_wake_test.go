@@ -168,6 +168,7 @@ func TestManagedWakeEnvironmentIsClosedAndDeterministic(t *testing.T) {
 	input := []string{
 		"PATH=/managed/bin", "HOME=/home/agent", "CODEX_HOME=/home/agent/.codex",
 		"XDG_CACHE_HOME=/home/agent/.cache", "LC_ALL=C.UTF-8", "LANG=en_US.UTF-8",
+		"R5_NODE_ALIAS=A", "R5_SCENARIO=payment-review",
 		"PATH=/untrusted/duplicate", "OPENAI_API_KEY=private", "MNEMON_EVENT_BODY=private",
 		"MNEMON_HARNESS_RUN_ATTACHMENT=/private/run.attach",
 		"MNEMON_HARNESS_INTERNAL_MNEMOND_ENSURE_FD=99", "MALFORMED",

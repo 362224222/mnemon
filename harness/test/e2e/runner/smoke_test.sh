@@ -28,6 +28,13 @@ done
 "$runner_dir/run_docker.sh" --validate-only >/dev/null
 LIVE_CODEX=1 "$runner_dir/run_live_codex.sh" --validate-only >/dev/null
 "$runner_dir/relay_fault_oracle_test.sh"
+if grep -n 'R5_NODE_ALIAS' "$runner_dir/scripted_task_apply.sh" >/dev/null; then
+    die 'scripted task apply depends on managed child R5_NODE_ALIAS env'
+fi
+if ! grep -n '\.r5/scenario' "$runner_dir/scripted_task_apply.sh" >/dev/null ||
+   ! grep -n '/workspace/\.r5/scenario' "$runner_dir/run_case.sh" >/dev/null; then
+    die 'scripted task apply scenario authority is not projected through workspace state'
+fi
 
 if "$runner_dir/run_docker.sh" --validate-only --case not-a-case >/dev/null 2>&1; then
     die 'unknown CASE did not fail closed'

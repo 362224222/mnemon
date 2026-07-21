@@ -373,6 +373,11 @@ install_setup_and_fixtures() {
                 case_error "scripted policy could not be installed on Node $node"
                 return 1
             }
+            printf '%s\n' "$case_name" | node_exec_stdin "$node" sh -c \
+              'umask 077; cat > /workspace/.r5/scenario' || {
+                case_error "scripted scenario identity could not be installed on Node $node"
+                return 1
+            }
             if [ "$node" = A ]; then
                 node_exec_stdin "$node" sh -c \
                   'umask 077; cat > /workspace/.r5/task-apply' \
