@@ -52,6 +52,25 @@ func TestEnsureSetupDaemonRetriesTransientExistingNotReady(t *testing.T) {
 	}
 }
 
+func TestEnsureSetupDaemonRetriesTransientAssetRevisionMismatch(t *testing.T) {
+	calls := 0
+	want := node.DaemonEnsureResult{Health: localapi.HealthResponse{
+		AssetRevision: "asset-r5", SchemaVersion: localapi.SchemaVersion, Status: "ready"}}
+	got, err := ensureSetupDaemonWith(context.Background(), node.DaemonEnsureOptions{},
+		func(context.Context, node.DaemonEnsureOptions) (node.DaemonEnsureResult, error) {
+			calls++
+			if calls == 1 {
+				return node.DaemonEnsureResult{}, fmt.Errorf("%w: %w", node.ErrDaemonEnsure,
+					localapi.NewAPIError(localapi.CodeAssetRevisionMismatch,
+						"managed asset revision is settling"))
+			}
+			return want, nil
+		}, 200*time.Millisecond, time.Millisecond)
+	if err != nil || got != want || calls != 2 {
+		t.Fatalf("ensureSetupDaemonWith() = (%#v, %v), calls=%d", got, err, calls)
+	}
+}
+
 func TestEnsureSetupDaemonDoesNotRetryNonAuthorityFailure(t *testing.T) {
 	calls := 0
 	failed := errors.New("transport failed")

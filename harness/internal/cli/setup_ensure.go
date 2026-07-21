@@ -54,8 +54,7 @@ func ensureSetupDaemonWith(ctx context.Context, options node.DaemonEnsureOptions
 	deadline := time.Now().Add(settleLimit)
 	for {
 		result, err := ensure(ctx, options)
-		if err == nil || !errors.Is(err, node.ErrDaemonHealthAuthority) ||
-			time.Now().After(deadline) {
+		if err == nil || !setupDaemonSettleRetryable(err) || time.Now().After(deadline) {
 			return result, err
 		}
 		timer := time.NewTimer(settlePoll)
@@ -67,4 +66,12 @@ func ensureSetupDaemonWith(ctx context.Context, options node.DaemonEnsureOptions
 		case <-timer.C:
 		}
 	}
+}
+
+func setupDaemonSettleRetryable(err error) bool {
+	if errors.Is(err, node.ErrDaemonHealthAuthority) {
+		return true
+	}
+	var apiErr *localapi.APIError
+	return errors.As(err, &apiErr) && apiErr.Code == localapi.CodeAssetRevisionMismatch
 }
