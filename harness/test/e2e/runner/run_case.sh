@@ -1065,7 +1065,7 @@ api_terminal_enrollment_replay_fault() {
         member($join_doc; $joiner_peer).status == "active") as $initial_joined |
       ($remove_exit == 0 and $remove_doc.status == "removed" and
         member($remove_doc; $joiner_peer).status == "revoked") as $removed |
-      ($replay_exit == 0 and $replay_doc.status == "joined" and
+      ($replay_exit == 0 and $replay_doc.status == "member_revoked" and
         $replay_channel.alias == "alpha" and
         $replay_channel.membership == "left" and
         ($replay_member.status == "revoked" or $joiner_replay_member.status == "revoked")) as $terminal_projection |

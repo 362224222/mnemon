@@ -4,12 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	libp2ppeer "github.com/libp2p/go-libp2p/core/peer"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 	"github.com/multiformats/go-multiaddr"
 )
+
+const channelEnrollmentMaxAttempts = 2
 
 type ChannelMeshLoader func(context.Context) (store.ChannelMeshAuthority, error)
 
@@ -55,10 +58,64 @@ func (runtime *MeshRuntime) EnrollChannel(ctx context.Context, before store.Chan
 		applyManagedAddresses(runtime.nodeHost.Host(), staged, previous)
 		return store.InstallJoinedChannelResult{}, fmt.Errorf("%w: stage enrollment: %v", ErrMeshRuntime, err)
 	}
-	result, joinErr := runtime.exchangeEnrollment(ctx, owner, client, spec)
+	var result store.InstallJoinedChannelResult
+	var joinErr error
+	for attempt := 1; attempt <= channelEnrollmentMaxAttempts; attempt++ {
+		attemptCtx, cancel := context.WithTimeout(ctx, HermeticLimits().ChannelRequestTimeout)
+		result, joinErr = runtime.exchangeEnrollment(attemptCtx, owner, client, spec)
+		cancel()
+		if joinErr == nil || attempt == channelEnrollmentMaxAttempts ||
+			!retryableEnrollmentAttempt(joinErr) {
+			break
+		}
+		if err := waitEnrollmentRetry(ctx, enrollmentRetryDelay(joinErr)); err != nil {
+			joinErr = err
+			break
+		}
+		closeEnrollmentConnections(runtime, owner)
+	}
 	post, loadErr := load(ctx)
 	reconcileErr := runtime.finishEnrollment(staged, post, loadErr)
 	return result, errors.Join(joinErr, reconcileErr)
+}
+
+func retryableEnrollmentAttempt(err error) bool {
+	var failure *ChannelProtocolFailure
+	if errors.As(err, &failure) {
+		return failure.Retryable()
+	}
+	return errors.Is(err, ErrChannelEnrollmentOutcomeUnknown) || errors.Is(err, ErrMeshRuntime)
+}
+
+func enrollmentRetryDelay(err error) time.Duration {
+	var failure *ChannelProtocolFailure
+	if errors.As(err, &failure) && failure.RetryAfter() > 0 {
+		return failure.RetryAfter()
+	}
+	return channelEnrollmentGapRetry
+}
+
+func waitEnrollmentRetry(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return ctx.Err()
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func closeEnrollmentConnections(runtime *MeshRuntime, owner libp2ppeer.ID) {
+	if runtime == nil || runtime.nodeHost == nil || owner == "" {
+		return
+	}
+	for _, connection := range runtime.nodeHost.Host().Network().ConnsToPeer(owner) {
+		_ = connection.Close()
+	}
 }
 
 func (runtime *MeshRuntime) stageEnrollment(mesh store.ChannelMeshAuthority,
