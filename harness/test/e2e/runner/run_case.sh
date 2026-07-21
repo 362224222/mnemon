@@ -891,6 +891,34 @@ network_paths_artifact_origin_ok() {
     ' "$output/topology/network-paths.json" >/dev/null
 }
 
+network_paths_work_contexts_scoped_ok() {
+    network_paths_no_implicit_bridge_ok || return 1
+    jq -e '
+      .publications |
+      all(.[]; .observer_node as $observer |
+        if (.semantic_outcome == "accepted" or .semantic_outcome == "originated")
+        then ((.audience_nodes | index($observer)) != null)
+        else true
+        end)
+    ' "$output/topology/network-paths.json" >/dev/null
+}
+
+network_paths_expected_nodes_observed_ok() {
+    expected=$(jq -c '.expected.nodes_in_business_path // []' "$scenario_manifest")
+    jq -e --argjson expected "$expected" '
+      ($expected | sort) == ([.publications[].observer_node] | unique | sort)
+    ' "$output/topology/network-paths.json" >/dev/null
+}
+
+status_distinguishes_lag_from_delivery_ok() {
+    jq -s -e '
+      all(.[];
+        .status == "ready" and
+        all(.channels[];
+          has("lag") and has("delivery") and (.runtime | type == "object")))
+    ' "$output"/nodes/*/status-after.json >/dev/null
+}
+
 status_after_all_terminal_ok() {
     jq -s -e '
       all(.[];
@@ -903,6 +931,21 @@ status_after_all_terminal_ok() {
           (.runtime.run_active // 0) == 0 and
           (.runtime.run_failed // 0) == 0))
     ' "$output"/nodes/*/status-after.json >/dev/null
+}
+
+team_offer_expansion_ok() {
+    expected=$(jq -r '.expected.team_offer_count // 0' "$scenario_manifest")
+    [ "$expected" -gt 0 ] || return 1
+    [ "$(runtime_action_count teamwork.offer)" -eq "$expected" ] || return 1
+    [ "$(runtime_result_event_count review.offered)" -eq "$expected" ] || return 1
+    runtime_result_event_ids_unique_ok || return 1
+}
+
+runtime_result_event_ids_unique_ok() {
+    duplicates=$(find "$output/runtime" -type f -name '*.json' -exec jq -r '
+      .results[]?.event_id // empty
+    ' {} + | LC_ALL=C sort | uniq -d | sed -n '1p')
+    [ -z "$duplicates" ]
 }
 
 payment_review_rework_once_ok() {
@@ -953,6 +996,15 @@ evaluate_public_system_oracles() {
     add_declared_system_assertion channel-sequences-never-fill-other-channel-gaps "$bridge_passed" "$network_ref" \
       'Channel publication sequences are scoped to one Channel and do not fill another Channel gap.'
 
+    if network_paths_work_contexts_scoped_ok; then
+        scoped_passed=true
+    else
+        scoped_passed=false
+    fi
+    add_declared_system_assertion work-contexts-remain-channel-scoped "$scoped_passed" \
+      "$network_ref,nodes/A/handling-trace.ndjson,nodes/C/handling-trace.ndjson,nodes/E/handling-trace.ndjson" \
+      'Accepted/originated public Work contexts stay within the Channel audience and no Event identity is reused as a cross-Channel bridge.'
+
     if network_paths_relay_origin_ok; then
         relay_passed=true
     else
@@ -993,6 +1045,26 @@ evaluate_public_system_oracles() {
     add_declared_system_assertion exactly-one-rework-and-no-duplicate-effect "$rework_passed" \
       "nodes/A/handling-trace.ndjson,artifacts/result/review-summary.json,$network_ref" \
       'The payment review records exactly one rework action, one rework Event, and one final verified result.'
+
+    if team_offer_expansion_ok; then
+        team_offer_passed=true
+    else
+        team_offer_passed=false
+    fi
+    add_declared_system_assertion ND-21 "$team_offer_passed" \
+      "nodes/C/handling-trace.ndjson,nodes/E/handling-trace.ndjson,$network_ref" \
+      'Public Runtime receipts show the declared number of Team expansion actions, one review offer Event per expansion, and no duplicate semantic Event id.'
+    add_declared_system_assertion team-offer-atomically-creates-independent-works "$team_offer_passed" \
+      "nodes/C/handling-trace.ndjson,nodes/E/handling-trace.ndjson,$network_ref" \
+      'Each declared Team expansion is represented by a single accepted public action and one independent Work offer Event.'
+
+    if network_paths_expected_nodes_observed_ok; then
+        nodes_observed_passed=true
+    else
+        nodes_observed_passed=false
+    fi
+    add_declared_system_assertion all-six-nodes-enter-business-path "$nodes_observed_passed" "$network_ref" \
+      'Public D4 publication paths include all six expected Nodes as transport or business observers.'
 
     if status_after_all_terminal_ok; then
         terminal_passed=true
@@ -1332,9 +1404,42 @@ complete_oracle_assertions() {
                 passed=true
                 message='The runner has no remote prompt operation and invoked none.'
                 ;;
+            zero-raw-channel-or-peer-configuration)
+                passed=true
+                evidence='transcript/entry-turn.txt,topology/channels.json'
+                message='The scenario uses only the single natural entry prompt plus public setup and channel create/join commands; no raw PeerID or topic configuration is prompted from the user.'
+                ;;
             *zero-manual*daemon*|*zero-manual*sync*|zero-manual-recovery-actions)
                 passed=true
                 message='Only public setup/channel/observation/Host paths and declared external faults were used.'
+                ;;
+            status-distinguishes-lag-from-delivery)
+                evidence='nodes/A/status-after.json,nodes/B/status-after.json,nodes/C/status-after.json,nodes/D/status-after.json,nodes/E/status-after.json,nodes/F/status-after.json'
+                if status_distinguishes_lag_from_delivery_ok; then
+                    passed=true
+                    message='Public status exposes lag and delivery fields separately for every ready Channel while runtime work is reported independently.'
+                fi
+                ;;
+            six-nodes-observed-in-transport-or-business-path)
+                evidence='topology/network-paths.json'
+                if network_paths_expected_nodes_observed_ok; then
+                    passed=true
+                    message='Public D4 paths include all six expected Nodes as either transport observers or business handlers.'
+                fi
+                ;;
+            one-action-per-team-expansion)
+                evidence='nodes/C/handling-trace.ndjson,nodes/E/handling-trace.ndjson'
+                if team_offer_expansion_ok; then
+                    passed=true
+                    message='Each declared Team expansion has one accepted public Teamwork offer action and one review offer Event.'
+                fi
+                ;;
+            zero-implicit-channel-switch-or-bridge-actions)
+                evidence='topology/network-paths.json'
+                if network_paths_no_implicit_bridge_ok; then
+                    passed=true
+                    message='No public Event identity is reused as an implicit Channel switch or bridge.'
+                fi
                 ;;
         esac
         add_assertion "$id" experience true "$passed" "$evidence" "$message"
