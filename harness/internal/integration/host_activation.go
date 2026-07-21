@@ -118,7 +118,7 @@ func VerifyHostActivation(ctx context.Context, workspace, nodeState string,
 		return err
 	}
 	if observation.Host != assets.HostCodex {
-		return hostActivationUnavailable("Host has no bounded activation observation surface", nil)
+		return verifyAlternateHostActivation(ctx, workspace, nodeState, observation, bundle)
 	}
 	executable, err := verifyHostExecutable(observation.Executable)
 	if err != nil || executable != observation.Executable {
