@@ -62,6 +62,7 @@ finalized=false
 logs_collected=false
 public_status_ready_timeout_seconds=30
 derived_offer_ready_timeout_seconds=30
+final_public_status_ready_timeout_seconds=60
 
 mkdir -p "$output/topology" "$output/transcript" "$output/nodes" \
     "$output/runtime" "$output/artifacts" "$output/faults" "$output/oracle"
@@ -854,6 +855,47 @@ wait_for_public_result() {
     return 1
 }
 
+wait_final_public_status_ready() {
+    readiness_deadline_ms=$(( $(date +%s%3N) + final_public_status_ready_timeout_seconds * 1000 ))
+    all_ready=false
+    while [ "$(date +%s%3N)" -lt "$readiness_deadline_ms" ]; do
+        all_ready=true
+        for node in A B C D E F; do
+            if [ "$(date +%s%3N)" -ge "$readiness_deadline_ms" ]; then
+                all_ready=false
+                break
+            fi
+            raw="$private/status-final-ready-$node.json"
+            set +e
+            node_exec "$node" timeout 1s mnemon-harness status >"$raw" 2>/dev/null
+            status_exit=$?
+            set -e
+            if [ "$status_exit" -ne 0 ] ||
+               ! jq -e '.status == "ready" and all(.channels[]; .state == "ready")' \
+                 "$raw" >/dev/null; then
+                all_ready=false
+            fi
+        done
+        [ "$all_ready" = true ] && break
+        sleep 0.2
+    done
+    [ "$all_ready" = true ] || {
+        for node in A B C D E F; do
+            raw="$private/status-final-ready-$node.json"
+            destination="$output/nodes/$node/status-ready-after.json"
+            if [ -s "$raw" ]; then
+                if jq -e . "$raw" >/dev/null 2>&1; then
+                    redact_json <"$raw" >"$destination"
+                else
+                    redact_text_file "$raw" "$destination"
+                fi
+            fi
+        done
+        case_error "final Channel status did not quiesce to public ready within ${final_public_status_ready_timeout_seconds} seconds"
+        return 1
+    }
+}
+
 drive_public_runtime() {
     pids=
     for node in A B C D E F; do
@@ -1165,7 +1207,9 @@ run_workflow() {
     install_setup_and_fixtures || return 1
     create_channels || return 1
     if run_entry_prompt; then
-        wait_for_public_result || true
+        if wait_for_public_result; then
+            wait_final_public_status_ready || true
+        fi
     fi
     collect_public_evidence
     evaluate_declared_faults
