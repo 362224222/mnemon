@@ -136,6 +136,14 @@ type gossipIngressSession interface {
 	gossipIngressLocalPeerID() libp2ppeer.ID
 }
 
+type gossipIngressAdmission uint8
+
+const (
+	gossipIngressAdmissionInvalid gossipIngressAdmission = iota
+	gossipIngressAdmissionCovered
+	gossipIngressAdmissionImported
+)
+
 // GossipIngress is one synchronous, bounded admission loop for one current
 // TopicSession. It owns no queue and starts no goroutine: at most one validated
 // live publication can be inside PutPeerInbox, while subscription overflow is
@@ -228,8 +236,19 @@ func (ingress *GossipIngress) Run(ctx context.Context) error {
 		if ctx.Err() != nil || !ingress.session.IsCurrent() {
 			return nil
 		}
-		spec, ok := ingress.admit(received)
-		if !ok {
+		spec, admission := ingress.admit(received)
+		switch admission {
+		case gossipIngressAdmissionCovered:
+			// PubSub delivers the locally signed publish to its own
+			// subscription. The durable origin log already covers that exact
+			// publication, so it must not enter the imported Inbox or stop the
+			// Channel receive loop.
+			if !ingress.recordDisposition(store.PeerInboxCovered) {
+				return ingress.stop(GossipIngressDiagnosticStore)
+			}
+			continue
+		case gossipIngressAdmissionImported:
+		default:
 			return ingress.stop(GossipIngressDiagnosticPublication)
 		}
 		result, err := ingress.store.PutPeerInbox(ctx, spec)
@@ -277,33 +296,44 @@ func (ingress *GossipIngress) signalRepair() {
 	}
 }
 
-func (ingress *GossipIngress) admit(received ReceivedPublication) (store.PutPeerInboxSpec, bool) {
+func (ingress *GossipIngress) admit(received ReceivedPublication) (
+	store.PutPeerInboxSpec, gossipIngressAdmission,
+) {
 	publication := received.Publication()
 	projected, err := model.ProjectImportedPublication(&publication)
 	if err != nil {
-		return store.PutPeerInboxSpec{}, false
+		return store.PutPeerInboxSpec{}, gossipIngressAdmissionInvalid
 	}
 	local := ingress.session.gossipIngressLocalPeerID()
 	transport, author := received.ReceivedFrom(), received.OriginalAuthor()
 	scope := projected.Event().Scope()
-	if received.Local() || local == "" || transport == "" || author == "" ||
-		transport == local || author == local || scope.ChannelID() != ingress.session.ChannelID() ||
+	if local == "" || transport == "" || author == "" ||
+		scope.ChannelID() != ingress.session.ChannelID() ||
 		author.String() != scope.OriginPeerID().String() {
-		return store.PutPeerInboxSpec{}, false
+		return store.PutPeerInboxSpec{}, gossipIngressAdmissionInvalid
 	}
 	transportID, transportErr := model.ParsePeerID(transport.String())
 	authorID, authorErr := model.ParsePeerID(author.String())
 	localID, localErr := model.ParsePeerID(local.String())
 	if transportErr != nil || authorErr != nil || localErr != nil ||
-		authorID != scope.OriginPeerID() || transportID == localID {
-		return store.PutPeerInboxSpec{}, false
+		authorID != scope.OriginPeerID() {
+		return store.PutPeerInboxSpec{}, gossipIngressAdmissionInvalid
+	}
+	if authorID == localID {
+		if received.Local() && transportID != localID {
+			return store.PutPeerInboxSpec{}, gossipIngressAdmissionInvalid
+		}
+		return store.PutPeerInboxSpec{}, gossipIngressAdmissionCovered
+	}
+	if received.Local() || transportID == localID {
+		return store.PutPeerInboxSpec{}, gossipIngressAdmissionInvalid
 	}
 	receivedAt := ingress.clock.Now().Round(0).UTC()
 	if receivedAt.IsZero() {
-		return store.PutPeerInboxSpec{}, false
+		return store.PutPeerInboxSpec{}, gossipIngressAdmissionInvalid
 	}
 	return store.PutPeerInboxSpec{Publication: projected, TransportPeerID: transportID,
-		ArrivalSource: model.ArrivalGossip, ReceivedAt: receivedAt}, true
+		ArrivalSource: model.ArrivalGossip, ReceivedAt: receivedAt}, gossipIngressAdmissionImported
 }
 
 func newGossipIngressDiagnostic(code GossipIngressDiagnosticCode) GossipIngressDiagnostic {

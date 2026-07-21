@@ -45,6 +45,37 @@ func TestGossipIngressPreservesRelayTransportAndOriginalAuthor(t *testing.T) {
 	}
 }
 
+func TestGossipIngressCoversSelfAuthoredSubscriptionCopies(t *testing.T) {
+	t.Parallel()
+	fixture := newGossipIngressFixture(t, "self-authored")
+	publication := testPeerPublication(t, fixture.channel, fixture.local, fixture.origin,
+		"private-self-authored-publication")
+	source := newGossipIngressTestSession(fixture.channel.ChannelID, fixture.local.libp2pID,
+		ReceivedPublication{publication: publication, receivedFrom: fixture.local.libp2pID,
+			originalAuthor: fixture.local.libp2pID},
+		ReceivedPublication{publication: publication, receivedFrom: fixture.relay.libp2pID,
+			originalAuthor: fixture.local.libp2pID},
+		fixture.received(fixture.origin.libp2pID))
+	ctx, cancel := context.WithCancel(context.Background())
+	durable := &gossipIngressTestStore{outcomes: []gossipIngressStoreOutcome{{
+		result: store.PutPeerInboxResult{Disposition: store.PeerInboxStored},
+		after:  cancel,
+	}}}
+	ingress := mustGossipIngress(t, source, durable, fixture.at)
+	if err := ingress.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if source.NextCalls() != 3 || len(durable.Specs()) != 1 {
+		t.Fatalf("self-authored coverage calls = Next %d, Put %d",
+			source.NextCalls(), len(durable.Specs()))
+	}
+	snapshot := ingress.Snapshot()
+	if snapshot.Received != 3 || snapshot.Covered != 2 || snapshot.Stored != 1 ||
+		snapshot.LastDiagnostic.Code().Valid() {
+		t.Fatalf("self-authored coverage snapshot = %#v", snapshot)
+	}
+}
+
 func TestGossipIngressRejectsPublicationTamperingBeforeStore(t *testing.T) {
 	t.Parallel()
 	fixture := newGossipIngressFixture(t, "tampering")
