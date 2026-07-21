@@ -252,8 +252,8 @@ func prepareChannelLeaveCandidate(authority verifiedChannelAuthority,
 
 func settledChannelLeaveAuthority(result MergeChannelRosterResult, localPeerID model.PeerID) bool {
 	local, ok := result.Roster.CurrentMember(localPeerID)
-	return ok && local.Status().Terminal() &&
-		(result.Channel.Status() == model.ChannelLeft || result.Channel.Status() == model.ChannelClosed)
+	return result.Channel.Status() == model.ChannelClosed ||
+		ok && local.Status().Terminal() && result.Channel.Status() == model.ChannelLeft
 }
 
 func acceptChannelLeaveRequest(ctx context.Context, tx *sql.Tx, spec SettleChannelLeaveSpec,

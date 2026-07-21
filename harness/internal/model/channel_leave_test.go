@@ -92,6 +92,7 @@ type channelLeaveModelFixture struct {
 	descriptor    SignedChannelDescriptor
 	ownerPrivate  ed25519.PrivateKey
 	memberPrivate ed25519.PrivateKey
+	ownerMember   Member
 	activeMember  Member
 	at            time.Time
 }
@@ -122,7 +123,7 @@ func newChannelLeaveModelFixture(t *testing.T) channelLeaveModelFixture {
 	member, _ := AttachMemberSignature(memberRecord, ed25519.Sign(ownerPrivate, memberMessage))
 	return channelLeaveModelFixture{channelID: channelID, memberPeerID: memberPeerID,
 		descriptor: descriptor, ownerPrivate: ownerPrivate, memberPrivate: memberPrivate,
-		activeMember: member, at: at.Add(time.Second)}
+		ownerMember: genesis, activeMember: member, at: at.Add(time.Second)}
 }
 
 func (fixture channelLeaveModelFixture) signedRequest(t *testing.T) SignedChannelLeaveRequest {

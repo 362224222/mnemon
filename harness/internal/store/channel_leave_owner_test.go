@@ -121,6 +121,47 @@ func TestAcceptChannelLeaveHonorsPriorRemoveAndSigningRollback(t *testing.T) {
 	})
 }
 
+func TestAcceptChannelLeaveHonorsPriorOwnerCloseWithExactReplay(t *testing.T) {
+	t.Parallel()
+	fixture, accepted := acceptedOwnerLeaveFixture(t, "owner-leave-closed")
+	request := signedOwnerStoreLeaveRequest(t, fixture, accepted.Roster,
+		fixture.acceptedAt.Add(500*time.Millisecond))
+	owner, _ := accepted.Roster.CurrentMember(fixture.channel.Owner().PeerID())
+	previous := accepted.Roster.Head().Digest()
+	ownerLeft, closedRoster := signAndAppendRosterMember(t, fixture.channel.Descriptor(),
+		fixture.signer, accepted.Roster, model.MemberRecordSpec{
+			ChannelID:        fixture.channel.Channel().ID(),
+			DescriptorDigest: fixture.channel.Descriptor().Descriptor().Digest(),
+			Revision:         accepted.Roster.Head().Revision() + 1, PreviousDigest: &previous,
+			PeerID: owner.PeerID(), OriginEpoch: owner.OriginEpoch(), DisplayLabel: owner.DisplayLabel(),
+			PublicKey: owner.PublicKey(), Multiaddrs: owner.Multiaddrs(), Protocols: owner.Protocols(),
+			Limits: owner.Limits(), Status: model.MemberLeft,
+			CreatedAt: fixture.acceptedAt.Add(time.Second)})
+	merged, err := fixture.ownerStore.MergeChannelRoster(context.Background(), MergeChannelRosterSpec{
+		ChannelID:                    fixture.channel.Channel().ID(),
+		AuthenticatedTransportPeerID: fixture.channel.Owner().PeerID(),
+		Records:                      []model.Member{ownerLeft}, At: ownerLeft.CreatedAt()})
+	if err != nil || merged.Channel.Status() != model.ChannelClosed {
+		t.Fatalf("close owner Channel = (%#v,%v)", merged, err)
+	}
+	acceptedAt := fixture.acceptedAt.Add(2 * time.Second)
+	result, err := fixture.ownerStore.AcceptChannelLeave(context.Background(), AcceptChannelLeaveSpec{
+		AuthenticatedPeerID: fixture.joiner.PeerID(), Request: request,
+		Signer: fixture.signer, At: acceptedAt})
+	if err != nil || result.Replay || result.Channel.Status() != model.ChannelClosed ||
+		result.Roster.Head() != closedRoster.Head() || result.Terminal.Head() != ownerLeft.Head() ||
+		len(result.Receipt.Record().RosterRecords()) != 1 {
+		t.Fatalf("AcceptChannelLeave(after owner close) = (%#v,%v)", result, err)
+	}
+	replay, err := fixture.ownerStore.AcceptChannelLeave(context.Background(), AcceptChannelLeaveSpec{
+		AuthenticatedPeerID: fixture.joiner.PeerID(), Request: request,
+		Signer: fixture.signer, At: acceptedAt.Add(time.Second)})
+	if err != nil || !replay.Replay ||
+		!bytes.Equal(replay.Receipt.WireJSON().Bytes(), result.Receipt.WireJSON().Bytes()) {
+		t.Fatalf("owner-close leave replay = (%#v,%v)", replay, err)
+	}
+}
+
 func acceptedOwnerLeaveFixture(t *testing.T,
 	seed string,
 ) (channelEnrollmentFixture, AcceptChannelEnrollmentResult) {

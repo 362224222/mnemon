@@ -86,13 +86,14 @@ func authorizeOwnerChannelLeave(node model.Node, authority verifiedChannelAuthor
 ) (model.Member, model.Member, error) {
 	requestRecord := spec.Request.Record()
 	if node.PeerID() != authority.channel.OwnerPeerID() ||
-		spec.AuthenticatedPeerID == node.PeerID() || authority.channel.Status() != model.ChannelActive ||
+		spec.AuthenticatedPeerID == node.PeerID() || !ownerMayAcceptChannelLeave(authority) ||
 		at.Before(authority.channel.UpdatedAt()) {
 		return model.Member{}, model.Member{}, ErrChannelLeaveConflict
 	}
 	members := authority.roster.Members()
 	knownRevision := requestRecord.KnownRosterHead().Revision()
 	if knownRevision > uint64(len(members)) ||
+		authority.channel.Status() == model.ChannelClosed && knownRevision == uint64(len(members)) ||
 		members[knownRevision-1].Head() != requestRecord.KnownRosterHead() {
 		return model.Member{}, model.Member{}, ErrChannelLeaveConflict
 	}
@@ -109,6 +110,14 @@ func authorizeOwnerChannelLeave(node model.Node, authority verifiedChannelAuthor
 		return model.Member{}, model.Member{}, ErrChannelLeaveInput
 	}
 	return active, current, nil
+}
+
+func ownerMayAcceptChannelLeave(authority verifiedChannelAuthority) bool {
+	if authority.channel.Status() == model.ChannelActive {
+		return true
+	}
+	owner, ok := authority.roster.CurrentMember(authority.channel.OwnerPeerID())
+	return authority.channel.Status() == model.ChannelClosed && ok && owner.Status() == model.MemberLeft
 }
 
 func (s *Store) acceptFreshOwnerChannelLeave(ctx context.Context, tx *sql.Tx,
@@ -151,6 +160,13 @@ func ownerChannelLeaveCandidate(ctx context.Context, authority verifiedChannelAu
 ) (model.VerifiedRoster, model.Member, bool, error) {
 	if current.Status().Terminal() {
 		return authority.roster, current, false, nil
+	}
+	if authority.channel.Status() == model.ChannelClosed {
+		owner, ok := authority.roster.CurrentMember(authority.channel.OwnerPeerID())
+		if !ok || owner.Status() != model.MemberLeft {
+			return model.VerifiedRoster{}, model.Member{}, false, ErrChannelLeaveConflict
+		}
+		return authority.roster, owner, false, nil
 	}
 	if current.Status() != model.MemberActive ||
 		len(authority.roster.Members()) >= model.MaxMemberRecordsPerChannel {
@@ -205,11 +221,18 @@ func signOwnerChannelLeaveReceipt(ctx context.Context, authority verifiedChannel
 	}
 	receipt, err := model.AttachChannelLeaveReceiptSignature(record, signature)
 	if err != nil || model.VerifyChannelLeaveReceipt(authority.channel.Descriptor(), active,
-		spec.Request, receipt) != nil || terminal.PeerID() != spec.AuthenticatedPeerID ||
-		!terminal.Status().Terminal() {
+		spec.Request, receipt) != nil || !validAcceptedChannelLeaveTerminal(authority,
+		terminal, spec.AuthenticatedPeerID) {
 		return model.SignedChannelLeaveReceipt{}, ErrChannelLeaveAuthority
 	}
 	return receipt, nil
+}
+
+func validAcceptedChannelLeaveTerminal(authority verifiedChannelAuthority,
+	terminal model.Member, requester model.PeerID,
+) bool {
+	return terminal.PeerID() == requester && terminal.Status().Terminal() ||
+		terminal.PeerID() == authority.channel.OwnerPeerID() && terminal.Status() == model.MemberLeft
 }
 
 func persistAcceptedOwnerChannelLeave(ctx context.Context, tx *sql.Tx,
@@ -273,7 +296,8 @@ func readAcceptedOwnerChannelLeave(ctx context.Context, tx *sql.Tx,
 		!channelLeaveReceiptMatchesRoster(receipt, authority.roster) {
 		return AcceptChannelLeaveResult{}, false, ErrChannelLeaveConflict
 	}
-	terminal, ok := receiptTerminalMember(receipt, request.Record().MemberPeerID())
+	terminal, ok := receiptTerminalMember(receipt, request.Record().MemberPeerID(),
+		authority.channel.OwnerPeerID())
 	if !ok {
 		return AcceptChannelLeaveResult{}, false, ErrChannelLeaveAuthority
 	}
@@ -296,10 +320,15 @@ func channelLeaveReceiptMatchesRoster(receipt model.SignedChannelLeaveReceipt,
 }
 
 func receiptTerminalMember(receipt model.SignedChannelLeaveReceipt,
-	peerID model.PeerID,
+	peerID, ownerPeerID model.PeerID,
 ) (model.Member, bool) {
 	for _, member := range receipt.Record().RosterRecords() {
 		if member.PeerID() == peerID && member.Status().Terminal() {
+			return member, true
+		}
+	}
+	for _, member := range receipt.Record().RosterRecords() {
+		if member.PeerID() == ownerPeerID && member.Status() == model.MemberLeft {
 			return member, true
 		}
 	}

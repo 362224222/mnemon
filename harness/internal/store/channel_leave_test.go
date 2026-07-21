@@ -96,6 +96,28 @@ func TestChannelLeaveRejectsForgedRequestAndReceiptWithoutPartialState(t *testin
 	assertChannelLeaveRow(t, fixture.store, request, "queued", 0, nil)
 }
 
+func TestChannelLeaveSettlementAcceptsOwnerClosePrecedence(t *testing.T) {
+	t.Parallel()
+	fixture := newInstalledJoinedChannelFixture(t, "leave-owner-close",
+		"leave-owner-close-team", 0x63, 0x64)
+	request := signedStoreLeaveRequest(t, fixture, fixture.at.Add(time.Second))
+	if _, err := fixture.store.BeginChannelLeave(context.Background(), BeginChannelLeaveSpec{
+		ChannelID: fixture.spec.Descriptor.Descriptor().ID(), Request: request}); err != nil {
+		t.Fatal(err)
+	}
+	receipt := signedStoreOwnerCloseReceipt(t, fixture, request,
+		request.Record().RequestedAt().Add(time.Second))
+	settled, err := fixture.store.SettleChannelLeave(context.Background(), SettleChannelLeaveSpec{
+		RequestID: request.RequestID(), Receipt: receipt,
+		At: receipt.Record().AcceptedAt().Add(time.Second)})
+	local, ok := settled.Roster.CurrentMember(fixture.owner.joiner.PeerID())
+	if err != nil || settled.Channel.Status() != model.ChannelClosed || !ok ||
+		local.Status() != model.MemberActive {
+		t.Fatalf("SettleChannelLeave(owner close) = (%#v,%v)", settled, err)
+	}
+	assertChannelLeaveRow(t, fixture.store, request, "accepted", 0, receipt.WireJSON().Bytes())
+}
+
 func signedStoreLeaveRequest(t *testing.T, fixture installedJoinedChannelFixture,
 	at time.Time,
 ) model.SignedChannelLeaveRequest {
@@ -140,6 +162,40 @@ func signedStoreLeaveReceipt(t *testing.T, fixture installedJoinedChannelFixture
 		ChannelID: request.Record().ChannelID(), MemberPeerID: request.Record().MemberPeerID(),
 		RequestDigest: request.Digest(), RosterRecords: []model.Member{terminal},
 		FinalRosterHead: terminal.Head(), AcceptedAt: at.Add(time.Second)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _ := model.ChannelLeaveReceiptSigningMessage(record.ChannelID(), record.Digest())
+	receipt, err := model.AttachChannelLeaveReceiptSignature(record,
+		ed25519.Sign(ed25519Private(fixture.owner.channel.Owner()), message))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return receipt
+}
+
+func signedStoreOwnerCloseReceipt(t *testing.T, fixture installedJoinedChannelFixture,
+	request model.SignedChannelLeaveRequest, at time.Time,
+) model.SignedChannelLeaveReceipt {
+	t.Helper()
+	owner, ok := fixture.accepted.Roster.CurrentMember(
+		fixture.spec.Descriptor.Descriptor().OwnerPeerID())
+	if !ok {
+		t.Fatal("joined roster has no owner")
+	}
+	previous := fixture.accepted.Roster.Head().Digest()
+	ownerLeft, _ := signAndAppendRosterMember(t, fixture.spec.Descriptor,
+		fixture.owner.signer, fixture.accepted.Roster, model.MemberRecordSpec{
+			ChannelID:        fixture.spec.Descriptor.Descriptor().ID(),
+			DescriptorDigest: fixture.spec.Descriptor.Descriptor().Digest(),
+			Revision:         fixture.accepted.Roster.Head().Revision() + 1, PreviousDigest: &previous,
+			PeerID: owner.PeerID(), OriginEpoch: owner.OriginEpoch(), DisplayLabel: owner.DisplayLabel(),
+			PublicKey: owner.PublicKey(), Multiaddrs: owner.Multiaddrs(), Protocols: owner.Protocols(),
+			Limits: owner.Limits(), Status: model.MemberLeft, CreatedAt: at})
+	record, err := model.NewChannelLeaveReceiptRecord(model.ChannelLeaveReceiptRecordSpec{
+		ChannelID: request.Record().ChannelID(), MemberPeerID: request.Record().MemberPeerID(),
+		RequestDigest: request.Digest(), RosterRecords: []model.Member{ownerLeft},
+		FinalRosterHead: ownerLeft.Head(), AcceptedAt: at.Add(time.Second)})
 	if err != nil {
 		t.Fatal(err)
 	}
