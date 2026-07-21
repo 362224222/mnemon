@@ -35,6 +35,16 @@ if ! grep -n '\.r5/scenario' "$runner_dir/scripted_task_apply.sh" >/dev/null ||
    ! grep -n '/workspace/\.r5/scenario' "$runner_dir/run_case.sh" >/dev/null; then
     die 'scripted task apply scenario authority is not projected through workspace state'
 fi
+if ! grep -n 'node_exec_stdin A timeout .* codex exec -' "$runner_dir/run_case.sh" >/dev/null ||
+   ! grep -n 'node_exec_stdin A timeout .* /opt/r5/bin/live-codex-exec' \
+      "$runner_dir/run_case.sh" >/dev/null; then
+    die 'entry prompt runner must preserve stdin into Docker exec'
+fi
+if grep -n 'node_exec A timeout .* codex exec -' "$runner_dir/run_case.sh" >/dev/null ||
+   grep -n 'node_exec A timeout .* /opt/r5/bin/live-codex-exec' \
+      "$runner_dir/run_case.sh" >/dev/null; then
+    die 'entry prompt runner uses Docker exec without stdin'
+fi
 
 if "$runner_dir/run_docker.sh" --validate-only --case not-a-case >/dev/null 2>&1; then
     die 'unknown CASE did not fail closed'

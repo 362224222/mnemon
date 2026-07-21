@@ -1057,7 +1057,7 @@ run_entry_prompt() {
         [ -e "$stdout" ] || : >"$stdout"
         [ -e "$stderr" ] || : >"$stderr"
     elif [ "$runtime" = scripted ]; then
-        node_exec A timeout "${R5_E2E_TURN_TIMEOUT_SECONDS:-300}s" codex exec - \
+        node_exec_stdin A timeout "${R5_E2E_TURN_TIMEOUT_SECONDS:-300}s" codex exec - \
           <"$prompt" >"$stdout" 2>"$stderr" &
         prompt_pid=$!
         set +e
@@ -1065,7 +1065,7 @@ run_entry_prompt() {
         exit_code=$?
         set -e
     else
-        node_exec A timeout "${R5_E2E_TURN_TIMEOUT_SECONDS:-300}s" /opt/r5/bin/live-codex-exec \
+        node_exec_stdin A timeout "${R5_E2E_TURN_TIMEOUT_SECONDS:-300}s" /opt/r5/bin/live-codex-exec \
           <"$prompt" >"$stdout" 2>"$stderr" &
         prompt_pid=$!
         set +e
