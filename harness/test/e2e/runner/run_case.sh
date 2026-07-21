@@ -1449,6 +1449,7 @@ write_disconnect_fault_evidence() {
     expected_channels=$(json_array_from_args "$@")
     evidence_path="$output/faults/$id.json"
     action_ref="faults/$id-action.json"
+    relay_action_ref="faults/$id-relay-block-action.json"
     status_ref="faults/$id-status.json"
     channel_ref="faults/$id-channel-status.json"
     doctor_ref="faults/$id-doctor.json"
@@ -1467,30 +1468,42 @@ write_disconnect_fault_evidence() {
         "$schema_root/fault-action.schema.json" "$output/$action_ref" >/dev/null 2>&1; then
         action_schema_ok=true
     fi
+    relay_action_schema_ok=false
+    if [ -f "$output/$relay_action_ref" ] &&
+      PYTHONDONTWRITEBYTECODE=1 python3 "$runner_dir/schema_validate.py" \
+        "$schema_root/fault-action.schema.json" "$output/$relay_action_ref" >/dev/null 2>&1; then
+        relay_action_schema_ok=true
+    fi
     origin_repair_ok=false
     network_paths_origin_only_repairs_ok && origin_repair_ok=true
     single_effect_ok=false
     network_paths_single_repair_effect_ok "$node" alpha A && single_effect_ok=true
 
     normalize_json_or_empty "$output/$action_ref" "$action_norm"
+    relay_action_norm="$private/$id-relay-action.norm.json"
     normalize_json_or_empty "$output/$status_ref" "$status_norm"
     normalize_json_or_empty "$output/$channel_ref" "$channel_norm"
     normalize_json_or_empty "$output/$doctor_ref" "$doctor_norm"
+    normalize_json_or_empty "$output/$relay_action_ref" "$relay_action_norm"
     jq -n --arg id "$id" --arg node "$node" --arg type network-disconnect \
       --arg action_ref "$action_ref" --arg status_ref "$status_ref" \
       --arg channel_ref "$channel_ref" --arg doctor_ref "$doctor_ref" \
+      --arg relay_action_ref "$relay_action_ref" \
       --arg target_container "$target_container" --arg network "$project-mesh" \
       --argjson expected "$expected_channels" --argjson wait_ready "$wait_ready" \
       --argjson action_schema_ok "$action_schema_ok" --argjson snapshot "$snapshot_result" \
+      --argjson relay_action_schema_ok "$relay_action_schema_ok" \
       --argjson origin_repair_ok "$origin_repair_ok" --argjson single_effect_ok "$single_effect_ok" \
       --slurpfile action "$action_norm" --slurpfile status "$status_norm" \
-      --slurpfile channel "$channel_norm" --slurpfile doctor "$doctor_norm" '
+      --slurpfile channel "$channel_norm" --slurpfile doctor "$doctor_norm" \
+      --slurpfile relay_action "$relay_action_norm" '
       def first($value): if ($value | length) == 0 then {} else $value[0] end;
       def status_channel($document; $alias):
         ([($document.channels // [])[] | select(.alias == $alias)] | first // {});
       def channel_document($document; $alias):
         ([($document.channels // [])[] | select(.alias == $alias)] | first // {});
       (first($action)) as $action_doc |
+      (first($relay_action)) as $relay_action_doc |
       (first($status)) as $status_doc |
       (first($channel)) as $channel_doc |
       (first($doctor)) as $doctor_doc |
@@ -1500,6 +1513,11 @@ write_disconnect_fault_evidence() {
         $action_doc.restored == true and $action_doc.command_exit_code == 0 and
         $action_doc.network_name == $network and
         $action_doc.container_id == $target_container) as $action_valid |
+      ($relay_action_schema_ok and $relay_action_doc.token == ($id + "-relay-block") and
+        $relay_action_doc.action == "docker-edge-block" and
+        $relay_action_doc.external_action_applied == true and
+        $relay_action_doc.restored == true and $relay_action_doc.command_exit_code == 0 and
+        $relay_action_doc.network_name == $network) as $relay_action_valid |
       ($expected | all(. as $alias |
         (status_channel($status_doc; $alias).state == "ready") and
         (status_channel($status_doc; $alias).topic.state == "joined") and
@@ -1512,9 +1530,11 @@ write_disconnect_fault_evidence() {
           .status == "active" and .baseline_ready == true))) as $identity_ready |
       {schema_version:1,fault:$id,type:$type,node:$node,
        action_ref:$action_ref,status_ref:$status_ref,
+       relay_block_action_ref:$relay_action_ref,
        channel_status_ref:$channel_ref,doctor_ref:$doctor_ref,
        expected_channels:$expected,
        observation:{action_receipt_valid:$action_valid,
+         relay_block_receipt_valid:$relay_action_valid,
          public_status_ready:($wait_ready and $status_doc.status == "ready"),
          expected_channels_ready:$channels_ready,
          channel_identity_ready:$identity_ready,
@@ -1533,6 +1553,7 @@ disconnect_fault_ok() {
     jq -e '
       .schema_version == 1 and .type == "network-disconnect" and
       .observation.action_receipt_valid == true and
+      .observation.relay_block_receipt_valid == true and
       .observation.public_status_ready == true and
       .observation.expected_channels_ready == true and
       .observation.channel_identity_ready == true and
@@ -1911,11 +1932,11 @@ evaluate_declared_faults() {
             fi
         elif [ "$case_name" = offline-incident ] && [ "$id" = c-misses-alpha-update ]; then
             write_disconnect_fault_evidence "$id" C alpha beta
-            evidence="faults/$id-action.json,faults/$id.json,faults/$id-status.json,faults/$id-channel-status.json,topology/network-paths.json"
+            evidence="faults/$id-action.json,faults/$id-relay-block-action.json,faults/$id.json,faults/$id-status.json,faults/$id-channel-status.json,topology/network-paths.json"
             if disconnect_fault_ok "$id"; then
                 injected=true
                 observed=true
-                detail='Node C was disconnected during an A-origin Alpha publication, restored through the supervised Docker faultplane, and final public D4 shows exactly one C Alpha repair accepted from origin A.'
+                detail='Node C was disconnected during an A-origin Alpha publication while B-C relay replay stayed blocked; final public D4 shows exactly one C Alpha repair accepted from origin A.'
             else
                 detail='The C disconnect receipt, ready-after-reconnect status, and origin-only Alpha repair observation were not all established.'
             fi
@@ -2641,11 +2662,24 @@ inject_offline_alpha_repair_fault() {
     fi
     fault_stdout="$private/$id-offline.stdout"
     fault_stderr="$private/$id-offline.stderr"
+    relay_token="$id-relay-block"
     c_container=$(container_id C)
+    b_container=$(container_id B)
     set +e
-    "$repo_root/harness/test/e2e/faultplane/docker_network.sh" offline \
-      --network "$project-mesh" --container "$c_container" \
-      --token "$id" --receipt-dir "$output/faults" -- sh -c 'sleep 8' \
+    "$repo_root/harness/test/e2e/faultplane/docker_network.sh" edge \
+      --network "$project-mesh" --left "$b_container" --right "$c_container" \
+      --token "$relay_token" --receipt-dir "$output/faults" -- \
+      sh -ceu '
+        faultplane=$1
+        network=$2
+        container=$3
+        token=$4
+        receipt_dir=$5
+        "$faultplane" offline --network "$network" --container "$container" \
+          --token "$token" --receipt-dir "$receipt_dir" -- sh -c "sleep 16"
+        sleep 15
+      ' sh "$repo_root/harness/test/e2e/faultplane/docker_network.sh" \
+        "$project-mesh" "$c_container" "$id" "$output/faults" \
       >"$fault_stdout" 2>"$fault_stderr"
     fault_exit=$?
     set -e
