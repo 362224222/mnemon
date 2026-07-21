@@ -22,6 +22,26 @@ type ChannelPeerReadiness struct {
 	OutboundReady bool
 }
 
+// ChannelMemberReadinessAuthority couples the signed mesh generation with
+// every directional baseline gate read from the same SQLite snapshot. Member
+// reconciliation must not combine independently committed roster and cursor
+// views.
+type ChannelMemberReadinessAuthority struct {
+	mesh      ChannelMeshAuthority
+	readiness map[model.ChannelID][]ChannelPeerReadiness
+}
+
+func (authority ChannelMemberReadinessAuthority) MeshAuthority() ChannelMeshAuthority {
+	return ChannelMeshAuthority{localPeerID: authority.mesh.localPeerID,
+		channels: authority.mesh.Channels()}
+}
+
+func (authority ChannelMemberReadinessAuthority) Readiness(
+	channelID model.ChannelID,
+) []ChannelPeerReadiness {
+	return append([]ChannelPeerReadiness(nil), authority.readiness[channelID]...)
+}
+
 func (readiness ChannelPeerReadiness) Ready() bool {
 	return readiness.BindingState == model.BindingActive &&
 		readiness.TopicState == model.TopicJoined && readiness.InboundReady && readiness.OutboundReady
@@ -49,12 +69,75 @@ func (s *Store) ReadChannelBaselineReadiness(ctx context.Context,
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrChannelBaselineAuthority, err)
 	}
+	result, err := readChannelBaselineReadinessSnapshot(ctx, tx, node, authority)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("read Channel baseline readiness: commit read: %w", err)
+	}
+	return result, nil
+}
 
+// ReadChannelMemberReadinessAuthority returns the only reconciliation input:
+// complete signed Channels, live bindings, and baseline gates from one
+// read-only transaction.
+func (s *Store) ReadChannelMemberReadinessAuthority(ctx context.Context,
+) (ChannelMemberReadinessAuthority, error) {
+	if s == nil || s.db == nil || ctx == nil {
+		return ChannelMemberReadinessAuthority{}, ErrChannelBaselineInput
+	}
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return ChannelMemberReadinessAuthority{},
+			fmt.Errorf("read Channel member readiness: begin: %w", err)
+	}
+	defer tx.Rollback()
+	node, err := readNode(ctx, tx)
+	if err != nil {
+		return ChannelMemberReadinessAuthority{}, fmt.Errorf("%w: Node: %v",
+			ErrChannelBaselineAuthority, err)
+	}
+	channelIDs, err := readChannelMeshIDs(ctx, tx)
+	if err != nil {
+		return ChannelMemberReadinessAuthority{}, err
+	}
+	channels := make([]ChannelMeshChannel, 0, len(channelIDs))
+	readiness := make(map[model.ChannelID][]ChannelPeerReadiness, len(channelIDs))
+	for _, channelID := range channelIDs {
+		verified, err := readVerifiedChannelAuthority(ctx, tx, node.PeerID(), channelID)
+		if err != nil {
+			return ChannelMemberReadinessAuthority{}, fmt.Errorf("%w: Channel %q: %v",
+				ErrChannelBaselineAuthority, channelID.String(), err)
+		}
+		projected, err := projectChannelMeshChannel(channelID, verified)
+		if err != nil {
+			return ChannelMemberReadinessAuthority{}, err
+		}
+		channels = append(channels, projected)
+		if verified.channel.Status() == model.ChannelActive {
+			readiness[channelID], err = readChannelBaselineReadinessSnapshot(ctx, tx, node, verified)
+			if err != nil {
+				return ChannelMemberReadinessAuthority{}, err
+			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return ChannelMemberReadinessAuthority{},
+			fmt.Errorf("read Channel member readiness: commit read: %w", err)
+	}
+	return ChannelMemberReadinessAuthority{mesh: ChannelMeshAuthority{
+		localPeerID: node.PeerID(), channels: channels}, readiness: readiness}, nil
+}
+
+func readChannelBaselineReadinessSnapshot(ctx context.Context, tx *sql.Tx, node model.Node,
+	authority verifiedChannelAuthority,
+) ([]ChannelPeerReadiness, error) {
+	channelID := authority.channel.ID()
 	localSourceHead, err := readLocalPublicationHead(ctx, tx, channelID, node)
 	if err != nil {
 		return nil, err
 	}
-
 	result := make([]ChannelPeerReadiness, 0, len(authority.bindings))
 	for _, binding := range authority.bindings {
 		inboundReady, err := readInboundBaselineReadiness(ctx, tx, authority, binding)
@@ -70,9 +153,6 @@ func (s *Store) ReadChannelBaselineReadiness(ctx context.Context,
 			OriginEpoch: binding.OriginEpoch(), BindingState: binding.State(),
 			TopicState: authority.channel.TopicState(), RosterHead: authority.roster.Head(),
 			InboundReady: inboundReady, OutboundReady: outboundReady})
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("read Channel baseline readiness: commit read: %w", err)
 	}
 	return result, nil
 }

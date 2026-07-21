@@ -38,6 +38,7 @@ type ChannelMemberReconcilerSnapshot struct {
 	InFlight          int
 	MaximumInFlight   int
 	LastCycleAt       time.Time
+	LastFailure       string
 }
 
 type ChannelMemberReconciler struct {
@@ -206,7 +207,7 @@ func (worker *ChannelMemberReconciler) runCycle(ctx context.Context, force bool)
 		if disposition == channelMemberFailureFatal {
 			return fmt.Errorf("%w: reconcile target: %w", ErrChannelMemberReconciler, err)
 		}
-		worker.scheduleFailure(key, target.roster.Head(), schedule, disposition, at)
+		worker.scheduleFailure(key, target.roster.Head(), schedule, disposition, at, err)
 	}
 	return nil
 }
@@ -334,6 +335,12 @@ const (
 func classifyChannelMemberFailure(err error) channelMemberFailureDisposition {
 	var remote *peer.ChannelProtocolFailure
 	if errors.As(err, &remote) {
+		// An active signed target can race the remote install immediately after
+		// enrollment acceptance. The wire answer remains fail-closed; this owner
+		// retries only the same roster generation until the remote catches up.
+		if remote.Code() == peer.ChannelErrorNotMember {
+			return channelMemberFailureRetryable
+		}
 		if remote.Retryable() {
 			return channelMemberFailureRetryable
 		}
@@ -341,12 +348,12 @@ func classifyChannelMemberFailure(err error) channelMemberFailureDisposition {
 	}
 	if errors.Is(err, peer.ErrChannelMemberClientTransport) ||
 		errors.Is(err, peer.ErrChannelMemberBusy) || errors.Is(err, peer.ErrChannelMemberRosterGap) ||
+		errors.Is(err, peer.ErrChannelMemberNotMember) ||
 		errors.Is(err, store.ErrChannelBaselineAuthority) ||
 		errors.Is(err, store.ErrChannelRuntimeAuthority) || errors.Is(err, store.ErrChannelRuntimeConflict) {
 		return channelMemberFailureRetryable
 	}
-	if errors.Is(err, peer.ErrChannelMemberClientResponse) ||
-		errors.Is(err, peer.ErrChannelMemberNotMember) || errors.Is(err, peer.ErrChannelMemberRevoked) ||
+	if errors.Is(err, peer.ErrChannelMemberClientResponse) || errors.Is(err, peer.ErrChannelMemberRevoked) ||
 		errors.Is(err, peer.ErrChannelMemberClosed) || errors.Is(err, peer.ErrChannelMemberRosterConflict) ||
 		errors.Is(err, peer.ErrChannelMemberBaselineConflict) ||
 		errors.Is(err, peer.ErrChannelMemberEpochMismatch) ||

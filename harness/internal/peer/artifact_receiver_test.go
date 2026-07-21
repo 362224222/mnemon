@@ -134,6 +134,18 @@ func TestArtifactReceiverClaimsAndPullsAtHermeticWorkerConcurrency(t *testing.T)
 		snapshot.MaximumInFlightClaims != len(claims) || snapshot.MaximumInClosureBuild != 1 {
 		t.Fatalf("completed concurrency snapshot = %#v", snapshot)
 	}
+	backend.mu.Lock()
+	sources := append([]model.PeerID(nil), backend.sources...)
+	backend.mu.Unlock()
+	if len(sources) < len(claims) || len(sources) > 2*len(claims) {
+		t.Fatalf("durable direct-source receipts = %d, want [%d,%d]",
+			len(sources), len(claims), 2*len(claims))
+	}
+	for _, source := range sources {
+		if source != origin.PeerID() {
+			t.Fatalf("durable direct-source receipt = %s, want origin %s", source, origin.PeerID())
+		}
+	}
 }
 
 func TestArtifactReceiverSlowBlockDoesNotHoldClosureBuildGate(t *testing.T) {
@@ -235,9 +247,10 @@ func TestArtifactReceiverFullCacheReverifiesCASWithoutNetwork(t *testing.T) {
 	backend.mu.Lock()
 	log := append([]string(nil), backend.log...)
 	checkpoint := backend.lastCheckpoint
+	sources := append([]model.PeerID(nil), backend.sources...)
 	backend.mu.Unlock()
 	if fmt.Sprint(log) != fmt.Sprint([]string{"checkpoint", "ready"}) ||
-		len(checkpoint.Roots) != 1 || len(checkpoint.Blocks) != 1 {
+		len(checkpoint.Roots) != 1 || len(checkpoint.Blocks) != 1 || len(sources) != 0 {
 		t.Fatalf("cache durable order/closure = %v / %#v", log, checkpoint)
 	}
 	if snapshot := receiver.Snapshot(); snapshot.ManifestCacheHits != 1 ||
@@ -1422,38 +1435,9 @@ func TestArtifactReceiverRealStoreStagedPartialRestartAndResponseLoss(t *testing
 	if err := first.runCycle(firstContext); !errors.Is(err, context.Canceled) {
 		t.Fatalf("partial first worker cancellation = %v", err)
 	}
-	stageResults, stageSpecs, _ := firstStore.snapshot()
-	if len(stageResults) != 2 || !stageResults[0].Changed() || stageResults[0].Replayed() ||
-		stageResults[1].Changed() || !stageResults[1].Replayed() {
-		t.Fatalf("stage response-loss proof = %#v", stageResults)
-	}
-	if len(stageSpecs) != 2 || stageSpecs[0].Fence != stageSpecs[1].Fence ||
-		stageSpecs[0].At != stageSpecs[1].At {
-		t.Fatalf("stage replay fence changed = %#v", stageSpecs)
-	}
-	manifestRequests, firstBlockRequests, observedDurable := firstClient.snapshot()
-	if len(manifestRequests) != 1 || len(firstBlockRequests) != 2 || !observedDurable ||
-		source.manifestCalls.Load() != 1 || source.blockCalls.Load() != 1 ||
-		first.Snapshot().Checkpoints != 1 || first.Snapshot().Ready != 0 {
-		t.Fatalf("partial first worker = manifests %v blocks %v durable %t source %d/%d snapshot %#v",
-			manifestRequests, firstBlockRequests, observedDurable, source.manifestCalls.Load(),
-			source.blockCalls.Load(), first.Snapshot())
-	}
-	if _, err := receiverCAS.Read(firstBlockRequests[0], artifactdomain.BlockSize); err != nil {
-		t.Fatalf("first pulled block was not durable: %v", err)
-	}
-	if _, err := receiverCAS.Read(firstBlockRequests[1], artifactdomain.BlockSize); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("cancelled block unexpectedly materialized: %v", err)
-	}
-	staged, found, err := st.ReadPeerInboxArtifactRoot(context.Background(),
-		store.ReadPeerInboxArtifactRootSpec{Fence: stageSpecs[0].Fence,
-			RootDigest: rootDigest, At: firstAt})
-	if err != nil || !found || staged.State() != store.PeerInboxArtifactRootStaged {
-		t.Fatalf("durable partial stage = (%#v, found %t, %v)", staged, found, err)
-	}
-	if _, err := st.GetVerifiedArtifactRoot(context.Background(), rootDigest); !errors.Is(err, store.ErrArtifactUnverified) {
-		t.Fatalf("partial stage escaped as verified authority: %v", err)
-	}
+	firstBlockRequests, stageFence := assertArtifactReceiverPartialFirstPass(t,
+		firstStore, firstClient, source, first, receiverCAS)
+	assertArtifactReceiverPartialStage(t, st, stageFence, rootDigest, firstAt)
 
 	secondAt := firstAt.Add(121 * time.Second)
 	secondStore := &artifactReceiverResponseLossStore{ArtifactReceiverStore: st,
@@ -1468,22 +1452,8 @@ func TestArtifactReceiverRealStoreStagedPartialRestartAndResponseLoss(t *testing
 	if err := second.runCycle(ctx); err != nil {
 		t.Fatal(err)
 	}
-	secondManifestRequests, secondBlockRequests, _ := secondClient.snapshot()
-	if len(secondManifestRequests) != 0 || len(secondBlockRequests) != 1 ||
-		secondBlockRequests[0] != firstBlockRequests[1] || source.manifestCalls.Load() != 1 ||
-		source.blockCalls.Load() != 2 || second.Snapshot().ManifestCacheHits != 1 ||
-		second.Snapshot().ManifestPulls != 0 || second.Snapshot().BlockCacheHits != 1 ||
-		second.Snapshot().BlockPulls != 1 || second.Snapshot().Ready != 1 {
-		t.Fatalf("partial restart reuse = manifests %v blocks %v source %d/%d snapshot %#v",
-			secondManifestRequests, secondBlockRequests, source.manifestCalls.Load(),
-			source.blockCalls.Load(), second.Snapshot())
-	}
-	_, _, readyResults := secondStore.snapshot()
-	if len(readyResults) != 2 || !readyResults[0].Changed() || readyResults[0].Replayed() ||
-		readyResults[1].Changed() || !readyResults[1].Replayed() ||
-		readyResults[1].Status() != model.InboxReady {
-		t.Fatalf("ready response-loss proof = %#v", readyResults)
-	}
+	assertArtifactReceiverPartialRestart(t, secondStore, secondClient, source, second,
+		firstBlockRequests[1])
 	verified, err := st.GetVerifiedArtifactRoot(ctx, rootDigest)
 	if err != nil || verified.ManifestDigest != manifest.ManifestDigest() {
 		t.Fatalf("partial restart final verified root = (%#v, %v)", verified, err)
@@ -1497,6 +1467,74 @@ func TestArtifactReceiverRealStoreStagedPartialRestartAndResponseLoss(t *testing
 		LeaseOwner: "artifact-receiver-partial-proof", At: secondAt.Add(time.Second),
 	}); err != nil || claimed.Found() {
 		t.Fatalf("partial restart left a claimable Inbox = (%#v, %v)", claimed, err)
+	}
+}
+
+func assertArtifactReceiverPartialFirstPass(t *testing.T,
+	responseLoss *artifactReceiverResponseLossStore, client *artifactReceiverRecordingClient,
+	source *artifactServerTestSource, receiver *ArtifactReceiver, cas artifactReceiverCAS,
+) ([]model.Digest, store.PeerInboxArtifactFence) {
+	t.Helper()
+	stageResults, stageSpecs, _ := responseLoss.snapshot()
+	if len(stageResults) != 2 || !stageResults[0].Changed() || stageResults[0].Replayed() ||
+		stageResults[1].Changed() || !stageResults[1].Replayed() {
+		t.Fatalf("stage response-loss proof = %#v", stageResults)
+	}
+	if len(stageSpecs) != 2 || stageSpecs[0].Fence != stageSpecs[1].Fence ||
+		stageSpecs[0].At != stageSpecs[1].At {
+		t.Fatalf("stage replay fence changed = %#v", stageSpecs)
+	}
+	manifestRequests, blockRequests, observedDurable := client.snapshot()
+	if len(manifestRequests) != 1 || len(blockRequests) != 2 || !observedDurable ||
+		source.manifestCalls.Load() != 1 || source.blockCalls.Load() != 1 ||
+		receiver.Snapshot().Checkpoints != 1 || receiver.Snapshot().Ready != 0 {
+		t.Fatalf("partial first worker = manifests %v blocks %v durable %t source %d/%d snapshot %#v",
+			manifestRequests, blockRequests, observedDurable, source.manifestCalls.Load(),
+			source.blockCalls.Load(), receiver.Snapshot())
+	}
+	if _, err := cas.Read(blockRequests[0], artifactdomain.BlockSize); err != nil {
+		t.Fatalf("first pulled block was not durable: %v", err)
+	}
+	if _, err := cas.Read(blockRequests[1], artifactdomain.BlockSize); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("cancelled block unexpectedly materialized: %v", err)
+	}
+	return blockRequests, stageSpecs[0].Fence
+}
+
+func assertArtifactReceiverPartialStage(t *testing.T, st *store.Store,
+	fence store.PeerInboxArtifactFence, rootDigest model.Digest, at time.Time,
+) {
+	t.Helper()
+	staged, found, err := st.ReadPeerInboxArtifactRoot(context.Background(),
+		store.ReadPeerInboxArtifactRootSpec{Fence: fence, RootDigest: rootDigest, At: at})
+	if err != nil || !found || staged.State() != store.PeerInboxArtifactRootStaged {
+		t.Fatalf("durable partial stage = (%#v, found %t, %v)", staged, found, err)
+	}
+	if _, err := st.GetVerifiedArtifactRoot(context.Background(), rootDigest); !errors.Is(err, store.ErrArtifactUnverified) {
+		t.Fatalf("partial stage escaped as verified authority: %v", err)
+	}
+}
+
+func assertArtifactReceiverPartialRestart(t *testing.T,
+	responseLoss *artifactReceiverResponseLossStore, client *artifactReceiverRecordingClient,
+	source *artifactServerTestSource, receiver *ArtifactReceiver, missing model.Digest,
+) {
+	t.Helper()
+	manifestRequests, blockRequests, _ := client.snapshot()
+	if len(manifestRequests) != 0 || len(blockRequests) != 1 || blockRequests[0] != missing ||
+		source.manifestCalls.Load() != 1 || source.blockCalls.Load() != 2 ||
+		receiver.Snapshot().ManifestCacheHits != 1 || receiver.Snapshot().ManifestPulls != 0 ||
+		receiver.Snapshot().BlockCacheHits != 1 || receiver.Snapshot().BlockPulls != 1 ||
+		receiver.Snapshot().Ready != 1 {
+		t.Fatalf("partial restart reuse = manifests %v blocks %v source %d/%d snapshot %#v",
+			manifestRequests, blockRequests, source.manifestCalls.Load(), source.blockCalls.Load(),
+			receiver.Snapshot())
+	}
+	_, _, readyResults := responseLoss.snapshot()
+	if len(readyResults) != 2 || !readyResults[0].Changed() || readyResults[0].Replayed() ||
+		readyResults[1].Changed() || !readyResults[1].Replayed() ||
+		readyResults[1].Status() != model.InboxReady {
+		t.Fatalf("ready response-loss proof = %#v", readyResults)
 	}
 }
 
@@ -1815,6 +1853,8 @@ type artifactReceiverTestBackend struct {
 	readyErrors      []error
 	readyCalls       int
 	readyFences      []artifactReceiverFence
+	sourceError      error
+	sources          []model.PeerID
 	retries          []artifactReceiverTestRetry
 	quarantines      []store.PeerInboxArtifactPermanentDiagnostic
 	log              []string
@@ -1891,6 +1931,18 @@ func (backend *artifactReceiverTestBackend) readRoot(ctx context.Context,
 		return read(ctx, fence, root, at)
 	}
 	return value, found, nil
+}
+
+func (backend *artifactReceiverTestBackend) recordSource(_ context.Context,
+	_ artifactReceiverFence, source model.PeerID, _ time.Time,
+) error {
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	if backend.sourceError != nil {
+		return backend.sourceError
+	}
+	backend.sources = append(backend.sources, source)
+	return nil
 }
 
 func (backend *artifactReceiverTestBackend) stage(_ context.Context,

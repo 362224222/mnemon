@@ -79,25 +79,35 @@ func (s *Store) ReadChannelMeshAuthority(ctx context.Context) (ChannelMeshAuthor
 			return ChannelMeshAuthority{}, fmt.Errorf("%w: Channel %q: %w",
 				ErrChannelMeshAuthority, channelID.String(), err)
 		}
-		liveBindings := make([]model.PeerBinding, 0, len(verified.bindings))
-		for _, binding := range verified.bindings {
-			switch binding.State() {
-			case model.BindingPending, model.BindingActive:
-				liveBindings = append(liveBindings, binding)
-			case model.BindingRevoked:
-				// The complete verified roster retains the terminal evidence.
-			default:
-				return ChannelMeshAuthority{}, fmt.Errorf("%w: Channel %q has unknown binding state",
-					ErrChannelMeshAuthority, channelID.String())
-			}
+		projected, err := projectChannelMeshChannel(channelID, verified)
+		if err != nil {
+			return ChannelMeshAuthority{}, err
 		}
-		channels = append(channels, ChannelMeshChannel{channel: verified.channel,
-			roster: verified.roster, bindings: liveBindings})
+		channels = append(channels, projected)
 	}
 	if err := tx.Commit(); err != nil {
 		return ChannelMeshAuthority{}, fmt.Errorf("%w: commit read: %v", ErrChannelMeshAuthority, err)
 	}
 	return ChannelMeshAuthority{localPeerID: node.PeerID(), channels: channels}, nil
+}
+
+func projectChannelMeshChannel(channelID model.ChannelID,
+	verified verifiedChannelAuthority,
+) (ChannelMeshChannel, error) {
+	liveBindings := make([]model.PeerBinding, 0, len(verified.bindings))
+	for _, binding := range verified.bindings {
+		switch binding.State() {
+		case model.BindingPending, model.BindingActive:
+			liveBindings = append(liveBindings, binding)
+		case model.BindingRevoked:
+			// The complete verified roster retains the terminal evidence.
+		default:
+			return ChannelMeshChannel{}, fmt.Errorf("%w: Channel %q has unknown binding state",
+				ErrChannelMeshAuthority, channelID.String())
+		}
+	}
+	return ChannelMeshChannel{channel: verified.channel,
+		roster: verified.roster, bindings: liveBindings}, nil
 }
 
 func readChannelMeshIDs(ctx context.Context, tx *sql.Tx) ([]model.ChannelID, error) {

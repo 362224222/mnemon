@@ -120,6 +120,7 @@ func (manager *ChannelManager) commitTerminalMember(ctx context.Context, local m
 		return model.Channel{}, err
 	}
 	manager.markTopicJoined(ctx, merged.Channel)
+	manager.triggerMemberReconcile()
 	return merged.Channel, nil
 }
 

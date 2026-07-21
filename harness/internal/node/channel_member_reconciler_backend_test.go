@@ -77,14 +77,9 @@ type recordingChannelMemberStore struct {
 	reach    store.SetPeerReachabilitySpec
 }
 
-func (*recordingChannelMemberStore) ReadChannelMeshAuthority(context.Context) (store.ChannelMeshAuthority, error) {
-	return store.ChannelMeshAuthority{}, nil
-}
-
-func (*recordingChannelMemberStore) ReadChannelBaselineReadiness(context.Context,
-	model.ChannelID,
-) ([]store.ChannelPeerReadiness, error) {
-	return nil, nil
+func (*recordingChannelMemberStore) ReadChannelMemberReadinessAuthority(context.Context,
+) (store.ChannelMemberReadinessAuthority, error) {
+	return store.ChannelMemberReadinessAuthority{}, nil
 }
 
 func (st *recordingChannelMemberStore) ReserveOutboundChannelBaseline(_ context.Context,

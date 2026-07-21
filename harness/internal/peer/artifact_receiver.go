@@ -44,6 +44,7 @@ type ArtifactReceiverStore interface {
 	RenewPeerInboxArtifactLease(context.Context, store.RenewPeerInboxArtifactSpec) (store.PeerInboxArtifactRenewal, error)
 	ProbePeerInboxArtifactAuthority(context.Context, store.ProbePeerInboxArtifactAuthoritySpec) error
 	ReadPeerInboxArtifactRoot(context.Context, store.ReadPeerInboxArtifactRootSpec) (store.PeerInboxArtifactRoot, bool, error)
+	RecordPeerInboxArtifactSource(context.Context, store.RecordPeerInboxArtifactSourceSpec) (store.PeerInboxArtifactSourceReceipt, error)
 	StagePeerInboxArtifactClosure(context.Context, store.StagePeerInboxArtifactClosureSpec) (store.PeerInboxArtifactStage, error)
 	MarkPeerInboxArtifactReady(context.Context, store.MarkPeerInboxArtifactReadySpec) (store.PeerInboxArtifactSettlement, error)
 	RetryPeerInboxArtifact(context.Context, store.RetryPeerInboxArtifactSpec) (store.PeerInboxArtifactSettlement, error)
@@ -178,6 +179,7 @@ type artifactReceiverBackend interface {
 	renew(context.Context, artifactReceiverFence, time.Time) (artifactReceiverFence, error)
 	probe(context.Context, artifactReceiverFence, time.Time) error
 	readRoot(context.Context, artifactReceiverFence, model.Digest, time.Time) (artifactReceiverCachedRoot, bool, error)
+	recordSource(context.Context, artifactReceiverFence, model.PeerID, time.Time) error
 	stage(context.Context, artifactReceiverFence, store.VerifiedArtifactClosure, time.Time) error
 	ready(context.Context, artifactReceiverFence, time.Time) error
 	retry(context.Context, artifactReceiverFence, store.PeerInboxArtifactRetryDiagnostic, time.Duration, time.Time) error
@@ -817,7 +819,7 @@ func (receiver *ArtifactReceiver) pull(ctx context.Context, claim *artifactRecei
 			artifactReceiverBackoff(claim.fence.attempt)), nil
 	}
 	if callErr == nil {
-		return nil, nil
+		return receiver.recordDirectSource(ctx, claim)
 	}
 	var remote *ArtifactRemoteFailure
 	if errors.As(callErr, &remote) {
@@ -855,6 +857,21 @@ func (receiver *ArtifactReceiver) pull(ctx context.Context, claim *artifactRecei
 	}
 	return nil, artifactReceiverFatal(ArtifactReceiverFatalClientInvariant,
 		"unexpected Artifact client failure", callErr)
+}
+
+func (receiver *ArtifactReceiver) recordDirectSource(ctx context.Context,
+	claim *artifactReceiverClaim,
+) (*artifactReceiverClaimFailure, error) {
+	at, err := receiver.now()
+	if err != nil {
+		return nil, artifactReceiverFatal(ArtifactReceiverFatalWorkerInvariant,
+			"read Artifact source receipt clock", err)
+	}
+	if err := receiver.backend.recordSource(ctx, claim.fence,
+		claim.originPeerID, at); err != nil {
+		return receiver.classifyStoreClaimFailure("record Artifact direct source", err)
+	}
+	return nil, nil
 }
 
 // probeAuthority is the last local gate before opening an Artifact stream. It
@@ -1312,6 +1329,18 @@ func (backend durableArtifactReceiverBackend) readRoot(ctx context.Context,
 	return artifactReceiverCachedRoot{rootDigest: value.RootDigest(), manifest: value.Manifest(),
 		manifestDigest: value.ManifestDigest(), totalBytes: value.TotalBytes(),
 		createdAt: value.CreatedAt(), verifiedAt: verifiedAt, verified: verified}, true, nil
+}
+
+func (backend durableArtifactReceiverBackend) recordSource(ctx context.Context,
+	fence artifactReceiverFence, source model.PeerID, at time.Time,
+) error {
+	if !fence.hasDurable {
+		return store.ErrPeerInboxArtifactInput
+	}
+	_, err := backend.store.RecordPeerInboxArtifactSource(ctx,
+		store.RecordPeerInboxArtifactSourceSpec{Fence: fence.durable,
+			SourcePeerID: source, At: at})
+	return err
 }
 
 func (backend durableArtifactReceiverBackend) stage(ctx context.Context,

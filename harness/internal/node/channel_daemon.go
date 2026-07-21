@@ -16,6 +16,7 @@ type daemonChannelRuntime struct {
 	manager    *ChannelManager
 	mesh       *peer.MeshRuntime
 	dispatcher *peer.ChannelDispatcher
+	data       *daemonDataPlaneRuntime
 	cancel     context.CancelFunc
 }
 
@@ -62,8 +63,12 @@ func openDaemonChannelRuntime(ctx context.Context, st *store.Store, identity *Id
 	if err != nil {
 		return closeMesh(err)
 	}
+	data, err := openDaemonDataPlane(ctx, lifetime, st, identity, clock, mesh, manager)
+	if err != nil {
+		return closeMesh(errors.Join(err, dispatcher.Close()))
+	}
 	return &daemonChannelRuntime{manager: manager, mesh: mesh, dispatcher: dispatcher,
-		cancel: cancel}, nil
+		data: data, cancel: cancel}, nil
 }
 
 func channelListenAddress(peerID model.PeerID) (ma.Multiaddr, error) {
@@ -79,14 +84,18 @@ func (runtime *daemonChannelRuntime) Close() error {
 	if runtime == nil {
 		return nil
 	}
+	var result error
+	if runtime.data != nil {
+		result = errors.Join(result, runtime.data.Close())
+	}
 	if runtime.dispatcher != nil {
-		_ = runtime.dispatcher.Close()
+		result = errors.Join(result, runtime.dispatcher.Close())
+	}
+	if runtime.mesh != nil {
+		result = errors.Join(result, runtime.mesh.Close())
 	}
 	if runtime.cancel != nil {
 		runtime.cancel()
 	}
-	if runtime.mesh != nil {
-		return runtime.mesh.Close()
-	}
-	return nil
+	return result
 }

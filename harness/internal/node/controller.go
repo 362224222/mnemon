@@ -37,12 +37,19 @@ type ControllerOptions struct {
 	// wakeWorker is a same-package test seam for lifecycle and readiness
 	// verification. Production composition always uses WakeAdapter.
 	wakeWorker     managedWakeWorker
+	networkRuntime managedNetworkRuntime
 	actionHandlers agent.ActionHandlers
 }
 
 type managedWakeWorker interface {
 	Run(context.Context) error
 	Snapshot() agent.WakeWorkerSnapshot
+}
+
+type managedNetworkRuntime interface {
+	Run(context.Context) error
+	Readiness(context.Context) error
+	MaxConcurrent() uint32
 }
 
 // Controller is the single local composition root for mnemond-managed Agent
@@ -55,6 +62,7 @@ type Controller struct {
 	server            *localapi.Server
 	admission         *controllerAdmissionGate
 	wakeWorker        managedWakeWorker
+	networkRuntime    managedNetworkRuntime
 	shutdownRequested chan struct{}
 	shutdownOnce      sync.Once
 	serveMu           sync.Mutex
@@ -76,6 +84,7 @@ func NewController(ctx context.Context, options ControllerOptions) (*Controller,
 	}
 	controller := &Controller{nodeState: options.NodeState, assetRevision: assetRevision, store: options.Store,
 		admission: admission, wakeWorker: composition.wakeWorker,
+		networkRuntime:    options.networkRuntime,
 		shutdownRequested: make(chan struct{}), beforeAccept: options.BeforeAccept}
 	managedAgent := controllerAdmissionService{gate: admission, next: newLocalAPIServiceAdapter(composition.service)}
 	var managedService localapi.Service = managedAgent
@@ -164,23 +173,41 @@ func (controller *Controller) Serve(ctx context.Context) error {
 	if err != nil {
 		return errors.Join(err, listener.Close(), controller.releaseBeforeAccept())
 	}
-	if err := controller.releaseBeforeAccept(); err != nil {
-		return errors.Join(err, admitted.Close())
-	}
 	requests := newControllerRequestTracker(controller.server.Handler())
 	server := &http.Server{Handler: requests, ReadHeaderTimeout: 5 * time.Second}
-	components := []componentSpec{{Name: "control-http",
+	control := componentSpec{Name: "control-http",
 		Readiness: func(readyCtx context.Context) error {
 			// A successful authenticated round-trip proves owner socket, HTTP,
 			// credential, schema, and exact asset revision readiness.
 			return proveControllerHTTP(readyCtx, controller.nodeState, controller.assetRevision)
 		},
 		Run: func(runCtx context.Context) error {
+			// Keep the inherited ensure.lock authority until every dependency is
+			// ready, then consume it at the final boundary before HTTP Accept.
+			if err := controller.releaseBeforeAccept(); err != nil {
+				return err
+			}
 			return normalizeControllerServeError(runCtx, server.Serve(admitted))
 		},
 		Shutdown:  func(context.Context) error { return closeControllerHTTP(server, requests) },
 		Restart:   componentRestartNever,
-		Resources: componentResourceBudget{MaxConcurrent: controllerHTTPConnectionLimit}}}
+		Resources: componentResourceBudget{MaxConcurrent: controllerHTTPConnectionLimit}}
+	components := make([]componentSpec, 0, 3)
+	if controller.networkRuntime != nil {
+		maximum := controller.networkRuntime.MaxConcurrent()
+		if maximum == 0 {
+			return errors.Join(errors.New("mnemond network runtime has no resource budget"),
+				admitted.Close())
+		}
+		components = append(components, componentSpec{Name: "managed-network",
+			Readiness: controller.networkRuntime.Readiness,
+			Run:       controller.networkRuntime.Run,
+			Shutdown:  func(context.Context) error { return nil },
+			Restart:   componentRestartNever,
+			Resources: componentResourceBudget{MaxConcurrent: maximum}})
+		control.Dependencies = []string{"managed-network"}
+	}
+	components = append(components, control)
 	if controller.wakeWorker != nil {
 		workerStarted := make(chan struct{})
 		components = append(components, componentSpec{Name: "managed-wake",
@@ -211,10 +238,10 @@ func (controller *Controller) Serve(ctx context.Context) error {
 	}
 	supervisor, err := newNodeSupervisor(components)
 	if err != nil {
-		return errors.Join(err, admitted.Close())
+		return errors.Join(err, admitted.Close(), controller.releaseBeforeAccept())
 	}
 	serveErr := supervisor.Run(ctx, controller.shutdownRequested)
-	return errors.Join(serveErr, admitted.Close())
+	return errors.Join(serveErr, admitted.Close(), controller.releaseBeforeAccept())
 }
 
 type controllerRequestTracker struct {

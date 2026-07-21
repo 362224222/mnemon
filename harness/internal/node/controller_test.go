@@ -435,6 +435,71 @@ func TestControllerManagedWorkerGatesReadinessAndStopsBeforeHTTP(t *testing.T) {
 	}
 }
 
+func TestControllerRetainsLaunchPermitUntilNetworkReadiness(t *testing.T) {
+	fixture := newDaemonFixture(t, true)
+	authority, err := openExistingDaemonAuthority(context.Background(), fixture.workspace,
+		fixture.nodeState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer authority.store.Close()
+	network := newControllerTestNetworkRuntime()
+	released := make(chan struct{})
+	controller, err := NewController(context.Background(), ControllerOptions{
+		NodeState: fixture.nodeState, Workspace: fixture.workspace, Store: authority.store,
+		Profile: authority.authority.Profile, Signer: authority.identity.PublicationSigner(),
+		Clock: controllerTestClock{fixture.profile.UpdatedAt()}, Install: fixture.install,
+		networkRuntime: network, BeforeAccept: func() error {
+			close(released)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- controller.Serve(context.Background()) }()
+	select {
+	case <-network.started:
+	case err := <-serveDone:
+		t.Fatalf("Controller exited before network startup: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Controller did not start its network runtime")
+	}
+	select {
+	case <-released:
+		t.Fatal("launch permit released before network readiness")
+	default:
+	}
+	close(network.allowReady)
+	select {
+	case <-released:
+	case err := <-serveDone:
+		t.Fatalf("Controller exited before consuming launch permit: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Controller did not consume launch permit after network readiness")
+	}
+	client, err := localapi.NewClient(fixture.nodeState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitControllerHealth(t, client, "ready")
+	controller.requestShutdown()
+	select {
+	case err := <-serveDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Controller did not stop its network runtime")
+	}
+	select {
+	case <-network.stopped:
+	default:
+		t.Fatal("Controller returned before network runtime stopped")
+	}
+}
+
 func TestControllerStatusDistinguishesInstallationDriftFromRuntimeHealth(t *testing.T) {
 	fixture := newDaemonFixture(t, true)
 	worker := newControllerTestWakeWorker()
@@ -595,6 +660,35 @@ type controllerTestWakeWorker struct {
 	allowStop  chan struct{}
 	stopped    chan struct{}
 }
+
+type controllerTestNetworkRuntime struct {
+	started    chan struct{}
+	allowReady chan struct{}
+	stopped    chan struct{}
+}
+
+func newControllerTestNetworkRuntime() *controllerTestNetworkRuntime {
+	return &controllerTestNetworkRuntime{started: make(chan struct{}),
+		allowReady: make(chan struct{}), stopped: make(chan struct{})}
+}
+
+func (runtime *controllerTestNetworkRuntime) Run(ctx context.Context) error {
+	close(runtime.started)
+	<-ctx.Done()
+	close(runtime.stopped)
+	return nil
+}
+
+func (runtime *controllerTestNetworkRuntime) Readiness(ctx context.Context) error {
+	select {
+	case <-runtime.allowReady:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (*controllerTestNetworkRuntime) MaxConcurrent() uint32 { return 1 }
 
 func newControllerTestWakeWorker() *controllerTestWakeWorker {
 	return &controllerTestWakeWorker{snapshot: agent.WakeWorkerSnapshot{Healthy: true},

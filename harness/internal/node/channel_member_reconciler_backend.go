@@ -19,8 +19,7 @@ var (
 )
 
 type ChannelMemberReconcilerStore interface {
-	ReadChannelMeshAuthority(context.Context) (store.ChannelMeshAuthority, error)
-	ReadChannelBaselineReadiness(context.Context, model.ChannelID) ([]store.ChannelPeerReadiness, error)
+	ReadChannelMemberReadinessAuthority(context.Context) (store.ChannelMemberReadinessAuthority, error)
 	ReserveOutboundChannelBaseline(context.Context, store.ReserveOutboundChannelBaselineSpec) (store.ReserveOutboundChannelBaselineResult, error)
 	ConfirmOutboundChannelBaseline(context.Context, store.ConfirmOutboundChannelBaselineSpec) (store.ConfirmOutboundChannelBaselineResult, error)
 	SetPeerReachability(context.Context, store.SetPeerReachabilitySpec) (store.SetPeerReachabilityResult, error)
@@ -99,13 +98,15 @@ func NewChannelMemberReconciler(options ChannelMemberReconcilerOptions) (*Channe
 }
 
 func (backend durableChannelMemberReconcileBackend) targets(ctx context.Context) ([]channelMemberTarget, error) {
-	mesh, err := backend.store.ReadChannelMeshAuthority(ctx)
+	authority, err := backend.store.ReadChannelMemberReadinessAuthority(ctx)
 	if err != nil {
 		return nil, err
 	}
+	mesh := authority.MeshAuthority()
 	result := make([]channelMemberTarget, 0, model.MaxChannelsPerNode*(model.MaxMembersPerChannel-1))
 	for _, durable := range mesh.Channels() {
-		channelTargets, err := backend.channelTargets(ctx, mesh.LocalPeerID(), durable)
+		channelTargets, err := backend.channelTargets(mesh.LocalPeerID(), durable,
+			authority.Readiness(durable.Channel().ID()))
 		if err != nil {
 			return nil, err
 		}
@@ -114,8 +115,8 @@ func (backend durableChannelMemberReconcileBackend) targets(ctx context.Context)
 	return result, nil
 }
 
-func (backend durableChannelMemberReconcileBackend) channelTargets(ctx context.Context,
-	localPeerID model.PeerID, durable store.ChannelMeshChannel,
+func (backend durableChannelMemberReconcileBackend) channelTargets(localPeerID model.PeerID,
+	durable store.ChannelMeshChannel, readiness []store.ChannelPeerReadiness,
 ) ([]channelMemberTarget, error) {
 	channel, roster := durable.Channel(), durable.Roster()
 	if channel.Status() != model.ChannelActive {
@@ -126,7 +127,7 @@ func (backend durableChannelMemberReconcileBackend) channelTargets(ctx context.C
 		return nil, fmt.Errorf("%w: active Channel lacks local member authority",
 			ErrChannelMemberReconciler)
 	}
-	outbound, err := backend.outboundReadiness(ctx, channel, roster)
+	outbound, err := projectChannelMemberOutboundReadiness(channel, roster, readiness)
 	if err != nil {
 		return nil, err
 	}
@@ -148,13 +149,9 @@ func (backend durableChannelMemberReconcileBackend) channelTargets(ctx context.C
 	return result, nil
 }
 
-func (backend durableChannelMemberReconcileBackend) outboundReadiness(ctx context.Context,
-	channel model.Channel, roster model.VerifiedRoster,
+func projectChannelMemberOutboundReadiness(channel model.Channel, roster model.VerifiedRoster,
+	readiness []store.ChannelPeerReadiness,
 ) (map[model.PeerID]bool, error) {
-	readiness, err := backend.store.ReadChannelBaselineReadiness(ctx, channel.ID())
-	if err != nil {
-		return nil, err
-	}
 	outbound := make(map[model.PeerID]bool, len(readiness))
 	for _, peerReadiness := range readiness {
 		if peerReadiness.ChannelID != channel.ID() || peerReadiness.PeerID.IsZero() ||

@@ -1,6 +1,7 @@
 package node
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -12,7 +13,7 @@ func TestChannelMemberReconcilerStateBoundsBackoffAndCounters(t *testing.T) {
 	key := channelMemberTargetKey{}
 	at := time.Date(2026, 7, 21, 1, 0, 0, 0, time.UTC)
 	worker.scheduleFailure(key, model.RecordHead{}, channelMemberSchedule{attempt: 20},
-		channelMemberFailureRetryable, at)
+		channelMemberFailureRetryable, at, errors.New("retryable fixture"))
 	if got := worker.schedules[key].next.Sub(at); got != channelMemberRetryMaximum {
 		t.Fatalf("retry delay = %v", got)
 	}
@@ -29,7 +30,7 @@ func TestChannelMemberReconcilerStateBoundsBackoffAndCounters(t *testing.T) {
 	if snapshot.MaximumInFlight != 1 || snapshot.InFlight != 0 || snapshot.Hellos != 1 ||
 		snapshot.Syncs != 1 || snapshot.RosterMerges != 1 || snapshot.Baselines != 1 ||
 		snapshot.Reachable != 1 || snapshot.Unreachable != 1 || snapshot.StaleSettlements != 1 ||
-		snapshot.RetryableFailures != 1 {
+		snapshot.RetryableFailures != 1 || snapshot.LastFailure != "retryable fixture" {
 		t.Fatalf("snapshot = %#v", snapshot)
 	}
 }

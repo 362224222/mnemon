@@ -36,6 +36,7 @@ type ChannelManager struct {
 	runtime  *peer.MeshRuntime
 	clock    Clock
 	random   io.Reader
+	members  interface{ Trigger() }
 	mu       sync.Mutex
 }
 
@@ -123,12 +124,19 @@ func (manager *ChannelManager) ChannelJoin(ctx context.Context, metadata localap
 		return localapi.ChannelJoinResponse{}, channelAPIError(err)
 	}
 	manager.markTopicJoined(ctx, installed.Channel)
+	manager.triggerMemberReconcile()
 	view, err := manager.readChannelView(ctx, installed.Channel.ID())
 	if err != nil {
 		return localapi.ChannelJoinResponse{}, channelAPIError(err)
 	}
 	return localapi.ChannelJoinResponse{SchemaVersion: localapi.SchemaVersion,
 		Status: "joined", Channel: view}, nil
+}
+
+func (manager *ChannelManager) triggerMemberReconcile() {
+	if manager != nil && manager.members != nil {
+		manager.members.Trigger()
+	}
 }
 
 func (manager *ChannelManager) ChannelInvite(ctx context.Context, metadata localapi.RequestMetadata,

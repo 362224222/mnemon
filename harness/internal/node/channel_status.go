@@ -222,6 +222,7 @@ func (manager *ChannelManager) refreshAndJoin(ctx context.Context, channel model
 		return
 	}
 	manager.markTopicJoined(ctx, channel)
+	manager.triggerMemberReconcile()
 }
 
 func (manager *ChannelManager) markTopicJoined(ctx context.Context, channel model.Channel) {
@@ -384,6 +385,7 @@ func (owned channelEnrollmentOwnerStore) AcceptChannelEnrollment(ctx context.Con
 		return result, err
 	}
 	owned.manager.markTopicJoined(ctx, result.Channel)
+	owned.manager.triggerMemberReconcile()
 	return result, nil
 }
 

@@ -37,10 +37,13 @@ func (worker *ChannelMemberReconciler) pruneSchedules(targets []channelMemberTar
 
 func (worker *ChannelMemberReconciler) scheduleFailure(key channelMemberTargetKey,
 	head model.RecordHead, prior channelMemberSchedule,
-	disposition channelMemberFailureDisposition, at time.Time,
+	disposition channelMemberFailureDisposition, at time.Time, cause error,
 ) {
 	schedule := channelMemberSchedule{head: head, attempt: prior.attempt + 1}
 	worker.mu.Lock()
+	if cause != nil {
+		worker.snapshot.LastFailure = cause.Error()
+	}
 	if disposition == channelMemberFailurePermanent {
 		schedule.permanent = true
 		worker.snapshot.PermanentFailures++
