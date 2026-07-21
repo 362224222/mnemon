@@ -89,11 +89,6 @@ func prepareManagedAcceptance(ctx context.Context, tx *sql.Tx, spec LocalAccepta
 	}
 	state := managedAcceptanceState{run: run, handling: handling, hasHandling: true,
 		current: current, hasCurrent: true}
-	refs := current.ArtifactRefs()
-	state.authorizedReferences = make([]model.Digest, len(refs))
-	for index, ref := range refs {
-		state.authorizedReferences[index] = ref.RootDigest()
-	}
 	if operation.Kind() == model.OperationTeamworkOffer {
 		parent, err := readReviewWork(ctx, tx, current.ActionWork())
 		if err != nil || parent.Version() != current.ActionWorkVersion() ||
@@ -154,6 +149,35 @@ func validateManagedAcceptanceEvents(authority managedAcceptanceState, operation
 			ErrManagedAcceptanceInvariant)
 	}
 	return nil
+}
+
+func managedAuthorizedReferences(authority managedAcceptanceState,
+	events []model.Event,
+) ([]model.Digest, error) {
+	referenced := make(map[model.Digest]struct{})
+	for _, event := range events {
+		for _, ref := range event.Artifacts() {
+			if ref.Role() == model.ArtifactReferenced {
+				referenced[ref.RootDigest()] = struct{}{}
+			}
+		}
+	}
+	if len(referenced) == 0 {
+		return nil, nil
+	}
+	if !authority.hasCurrent {
+		return nil, fmt.Errorf("%w: referenced roots require current authority", ErrArtifactReference)
+	}
+	current := make(map[model.Digest]struct{}, len(authority.current.ArtifactRefs()))
+	for _, ref := range authority.current.ArtifactRefs() {
+		current[ref.RootDigest()] = struct{}{}
+	}
+	for root := range referenced {
+		if _, ok := current[root]; !ok {
+			return nil, fmt.Errorf("%w: referenced root lacks current authority", ErrArtifactReference)
+		}
+	}
+	return sortedDigests(referenced), nil
 }
 
 func completeManagedAcceptance(ctx context.Context, tx *sql.Tx, operation model.Operation,

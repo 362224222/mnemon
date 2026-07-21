@@ -212,6 +212,11 @@ func applyLocalAcceptanceTx(ctx context.Context, tx *sql.Tx, spec LocalAcceptanc
 		if err := validateManagedAcceptanceEvents(managedAuthority, operation, events); err != nil {
 			return model.JSON{}, err
 		}
+		references, err := managedAuthorizedReferences(managedAuthority, events)
+		if err != nil {
+			return model.JSON{}, err
+		}
+		managedAuthority.authorizedReferences = references
 		spec.AuthorizedReferences = managedAuthority.authorizedReferences
 		spec.Derivation = managedAuthority.derivation
 	}

@@ -112,6 +112,69 @@ func TestCommitManagedAcceptanceCompletesClaimWithExactCurrentAction(t *testing.
 	}
 }
 
+func TestCommitManagedAcceptanceDoesNotAuthorizeUnusedCurrentArtifacts(t *testing.T) {
+	t.Parallel()
+	fixture := newAcceptanceFixture(t, 1)
+	initial := reserveManagedOfferForAcceptance(t, fixture, "managed-unused-artifact-source", fixture.now)
+	initialAuthority := localAuthority(initial.Operation)
+	root := verifiedRoot(t, "managed-unused-artifact-root",
+		`{"entries":[],"kind":"managed-current","total_bytes":0}`, 0)
+	if _, err := fixture.store.CheckpointVerifiedArtifactRoot(context.Background(), root); err != nil {
+		t.Fatal(err)
+	}
+	checkpointOperationRootAt(t, fixture, initial.Operation, initial.Operation.LeaseOwner(),
+		root, initial.Operation.CreatedAt().Add(time.Millisecond))
+	artifact, _ := model.NewArtifactRef(root.RootDigest, model.ArtifactProduced)
+	initialSpec := fixture.offer(t, &initialAuthority, "managed-unused-artifact-source",
+		fixture.reviewers, []model.ArtifactRef{artifact}, nil)
+	if _, err := fixture.store.CommitManagedAcceptance(context.Background(), ManagedAcceptanceSpec{
+		Scope: initialSpec.Scope, Items: initialSpec.Items, Operation: initialAuthority,
+	}, fixture.now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
+	sourceEvent := initialSpec.Items[0].Publication.Event()
+	claimAt := fixture.now.Add(2 * time.Second)
+	insertClaimHandling(t, fixture.store, "handling-managed-unused-artifact", sourceEvent.ID(), 1,
+		claimAt, claimAt, 0)
+	claim := claimCurrent(t, fixture, "owner-managed-unused-artifact",
+		"token-managed-unused-artifact", claimAt)
+	readAt := claimAt.Add(time.Second)
+	current, err := fixture.store.FinalizeAgentCurrentRead(context.Background(),
+		plannedCurrentReadSpec(t, fixture.store, currentReadSpec(fixture, claim.Run.ID(),
+			"token-managed-unused-artifact", readAt)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(current.Receipt.ArtifactRefs()) != 1 ||
+		current.Receipt.ArtifactRefs()[0].RootDigest() != root.RootDigest {
+		t.Fatalf("current Artifact refs = %v, want %s", current.Receipt.ArtifactRefs(),
+			root.RootDigest)
+	}
+
+	operationAt := readAt.Add(time.Second)
+	reservation, err := fixture.store.ReserveManagedOperation(context.Background(), ManagedOperationSpec{
+		Profile: fixture.profile, ClientKeyHash: model.Sum([]byte("key-managed-unused-artifact")),
+		RequestDigest: model.Sum([]byte("request-managed-unused-artifact")), Kind: model.OperationTeamworkCancel,
+		LeaseOwner: "server-managed-unused-artifact", At: operationAt,
+		LeaseUntil: operationAt.Add(time.Minute), ClaimContextHash: model.Sum([]byte("token-managed-unused-artifact")),
+		HasClaimContext: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	acceptedAt := operationAt.Add(time.Second)
+	managedSpec := managedCancelAcceptance(t, fixture, reservation, current, acceptedAt)
+	result, err := fixture.store.CommitManagedAcceptance(context.Background(), managedSpec,
+		acceptedAt.Add(time.Second))
+	if err != nil || result.Replayed {
+		t.Fatalf("managed cancel with unused current Artifact = (%#v, %v)", result, err)
+	}
+	if strings.Contains(result.Receipt.String(), root.RootDigest.String()) {
+		t.Fatalf("unused current Artifact leaked into cancel receipt: %s", result.Receipt)
+	}
+}
+
 func TestCommitManagedAcceptanceRollsBackHandlingAndRunOnLateFailure(t *testing.T) {
 	t.Parallel()
 	fixture := newAcceptanceFixture(t, 1)

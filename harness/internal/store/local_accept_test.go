@@ -327,6 +327,13 @@ func checkpointOperationRoot(t *testing.T, fixture *acceptanceFixture, operation
 	owner string, root VerifiedArtifactRoot,
 ) {
 	t.Helper()
+	checkpointOperationRootAt(t, fixture, operation, owner, root, fixture.now.Add(-time.Second))
+}
+
+func checkpointOperationRootAt(t *testing.T, fixture *acceptanceFixture, operation model.Operation,
+	owner string, root VerifiedArtifactRoot, at time.Time,
+) {
+	t.Helper()
 	capture, _ := model.JSONFrom(struct {
 		Roots []struct {
 			ManifestDigest model.Digest `json:"manifest_digest"`
@@ -337,7 +344,7 @@ func checkpointOperationRoot(t *testing.T, fixture *acceptanceFixture, operation
 		RootDigest     model.Digest `json:"root_digest"`
 	}{{root.ManifestDigest, root.RootDigest}}})
 	if _, err := fixture.store.CheckpointOperationCapture(context.Background(), operation.ID(), owner,
-		fixture.now.Add(-time.Second), capture); err != nil {
+		at, capture); err != nil {
 		t.Fatal(err)
 	}
 }
