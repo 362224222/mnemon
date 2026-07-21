@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -574,7 +575,7 @@ func TestClientStatusResponseValidationFailsClosed(t *testing.T) {
 				t.Fatal(err)
 			}
 			if response, apiErr := client.ReadStatus(context.Background()); apiErr == nil ||
-				apiErr.Code != CodeInternal || response != (StatusResponse{}) {
+				apiErr.Code != CodeInternal || !reflect.DeepEqual(response, StatusResponse{}) {
 				t.Fatalf("invalid ReadStatus() = (%#v, %#v)", response, apiErr)
 			}
 		})

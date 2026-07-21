@@ -108,8 +108,10 @@ func composeController(ctx context.Context, options *ControllerOptions,
 	if err != nil {
 		return controllerComposition{}, err
 	}
+	channelRuntime, _ := options.Channels.(channelSessionObserver)
 	observer := controllerObserver{assetRevision: assetRevision, store: options.Store,
 		profile: options.Profile, install: options.Install, gate: gate, wakeWorker: wakeWorker}
+	observer.channelRuntime = channelRuntime
 	return controllerComposition{service: service, observer: observer, wakeWorker: wakeWorker}, nil
 }
 
@@ -132,12 +134,13 @@ func composeControllerWakeWorker(options *ControllerOptions,
 }
 
 type controllerObserver struct {
-	assetRevision string
-	store         *store.Store
-	profile       model.Profile
-	install       InstallationVerifier
-	gate          controllerManagedActivationGate
-	wakeWorker    managedWakeWorker
+	assetRevision  string
+	store          *store.Store
+	profile        model.Profile
+	install        InstallationVerifier
+	gate           controllerManagedActivationGate
+	wakeWorker     managedWakeWorker
+	channelRuntime channelSessionObserver
 }
 
 func (observer controllerObserver) Health(ctx context.Context,
@@ -164,10 +167,16 @@ func (observer controllerObserver) Status(ctx context.Context,
 	if observer.wakeWorker != nil {
 		worker = observer.wakeWorker.Snapshot()
 	}
+	channels, err := observer.store.ReadChannelStatusAuthority(ctx)
+	if err != nil {
+		return localapi.StatusSnapshot{}, localapi.NewAPIError(localapi.CodeInternal,
+			"durable Channel progress is unavailable")
+	}
 	return localapi.StatusSnapshot{AssetRevision: observer.assetRevision,
 		ActivationReady: activationIssue == "", ActivationIssue: activationIssue,
 		Runtime: localapi.RuntimeStatusSnapshot{Running: worker.Running, Ready: worker.Ready,
-			Healthy: worker.Healthy, Recovering: worker.Recovering, Issue: worker.LastError}}, nil
+			Healthy: worker.Healthy, Recovering: worker.Recovering, Issue: worker.LastError},
+		Channels: projectStatusChannels(channels, observer.channelRuntime)}, nil
 }
 
 func (observer controllerObserver) activationIssue(ctx context.Context, current store.LocalAuthority) string {

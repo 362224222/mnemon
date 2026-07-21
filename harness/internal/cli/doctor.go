@@ -13,7 +13,7 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/node"
 )
 
-const maxDoctorResponseBytes = 4096
+const maxDoctorResponseBytes = localapi.MaxStatusResponseBytes + 4096
 
 const (
 	doctorModeOnline  = "online"
@@ -42,6 +42,9 @@ const (
 	doctorIssueRuntimeRetrying      = "runtime_retrying"
 	doctorIssueRuntimeFailed        = "runtime_failed"
 	doctorIssueRuntimeUnobserved    = "runtime_unobserved"
+	doctorIssueChannelQueued        = "channel_progress_queued"
+	doctorIssueChannelDegraded      = "channel_progress_degraded"
+	doctorIssueChannelUnobserved    = "channel_progress_unobserved"
 	doctorIssueObservationUnknown   = "observation_inconclusive"
 
 	doctorRemedyNone   = "none"
@@ -57,7 +60,10 @@ var doctorCheckNames = [...]string{
 	"host_registration",
 	"daemon",
 	"managed_runtime",
+	"channel_progress",
 }
+
+type doctorChecks [len(doctorCheckNames)]doctorCheck
 
 type doctorControlClient interface {
 	statusControlClient
@@ -101,11 +107,12 @@ type doctorCheck struct {
 }
 
 type doctorReport struct {
-	Checks        []doctorCheck `json:"checks"`
-	Mode          string        `json:"mode"`
-	SchemaVersion int           `json:"schema_version"`
-	Scope         string        `json:"scope"`
-	Status        string        `json:"status"`
+	Channels      []localapi.StatusChannel `json:"channels"`
+	Checks        []doctorCheck            `json:"checks"`
+	Mode          string                   `json:"mode"`
+	SchemaVersion int                      `json:"schema_version"`
+	Scope         string                   `json:"scope"`
+	Status        string                   `json:"status"`
 }
 
 type doctorObservation struct {
@@ -219,9 +226,13 @@ func (app *doctorApp) observeOnline(ctx context.Context, workspace, nodeState st
 	checks[4] = passedDoctorCheck(doctorCheckNames[4])
 	runtime, runtimeExit := doctorRuntimeCheck(status.Runtime.State)
 	checks[5] = runtime
+	channel, channelExit := doctorChannelCheck(status.Channels)
+	checks[6] = channel
 	exit := mergeDoctorExit(status.ExitStatus(), installExit)
 	exit = mergeDoctorExit(exit, runtimeExit)
-	return doctorObservation{report: newDoctorReport(doctorModeOnline, checks, exit), exit: exit}
+	exit = mergeDoctorExit(exit, channelExit)
+	return doctorObservation{report: newDoctorReportWithChannels(doctorModeOnline, checks,
+		status.Channels, exit), exit: exit}
 }
 
 func (app *doctorApp) observeOffline(ctx context.Context, workspace,
@@ -260,6 +271,8 @@ func (app *doctorApp) observeOffline(ctx context.Context, workspace,
 	checks[4] = failedDoctorCheck(doctorCheckNames[4], doctorIssueDaemon, doctorRemedyRetry)
 	checks[5] = unobservedDoctorCheck(doctorCheckNames[5], doctorIssueRuntimeUnobserved,
 		doctorRemedyRetry)
+	checks[6] = unobservedDoctorCheck(doctorCheckNames[6], doctorIssueChannelUnobserved,
+		doctorRemedyRetry)
 	exit := mergeDoctorExit(5, installExit)
 	report := newDoctorReport(doctorModeOffline, checks, exit)
 	if err := closeLease(); err != nil {
@@ -270,7 +283,7 @@ func (app *doctorApp) observeOffline(ctx context.Context, workspace,
 
 func (app *doctorApp) installationChecks(ctx context.Context, workspace, nodeState string,
 	authority localapi.AuthorityResponse,
-) ([6]doctorCheck, int) {
+) (doctorChecks, int) {
 	checks := unobservedDoctorChecks()
 	exit := 0
 	if _, err := localapi.AuthorityDigest(authority); err != nil {
@@ -351,8 +364,8 @@ func unobservedDoctorCheck(name, issue, remedy string) doctorCheck {
 	return doctorCheck{Issue: issue, Name: name, Remedy: remedy, Status: doctorUnobserved}
 }
 
-func unobservedDoctorChecks() [6]doctorCheck {
-	var checks [6]doctorCheck
+func unobservedDoctorChecks() doctorChecks {
+	var checks doctorChecks
 	for index, name := range doctorCheckNames {
 		checks[index] = unobservedDoctorCheck(name, doctorIssueObservationUnknown,
 			doctorRemedyDoctor)
@@ -362,11 +375,12 @@ func unobservedDoctorChecks() [6]doctorCheck {
 
 func inconclusiveDoctorObservation() doctorObservation {
 	checks := unobservedDoctorChecks()
-	return doctorObservation{report: doctorReport{Checks: checks[:], Mode: doctorModeUnknown,
+	return doctorObservation{report: doctorReport{Channels: []localapi.StatusChannel{},
+		Checks: checks[:], Mode: doctorModeUnknown,
 		SchemaVersion: localapi.SchemaVersion, Scope: "managed_agent", Status: doctorInconclusive}, exit: 1}
 }
 
-func doctorInstallationFailure(checks [6]doctorCheck) bool {
+func doctorInstallationFailure(checks doctorChecks) bool {
 	for index := 0; index < 4; index++ {
 		if checks[index].Status == doctorFail {
 			return true
@@ -375,12 +389,19 @@ func doctorInstallationFailure(checks [6]doctorCheck) bool {
 	return false
 }
 
-func newDoctorReport(mode string, checks [6]doctorCheck, exit int) doctorReport {
+func newDoctorReport(mode string, checks doctorChecks, exit int) doctorReport {
+	return newDoctorReportWithChannels(mode, checks, nil, exit)
+}
+
+func newDoctorReportWithChannels(mode string, checks doctorChecks,
+	channels []localapi.StatusChannel, exit int,
+) doctorReport {
 	status := doctorHealthy
 	if exit != 0 {
 		status = doctorDegraded
 	}
-	return doctorReport{Checks: checks[:], Mode: mode, SchemaVersion: localapi.SchemaVersion,
+	return doctorReport{Channels: append([]localapi.StatusChannel{}, channels...),
+		Checks: checks[:], Mode: mode, SchemaVersion: localapi.SchemaVersion,
 		Scope: "managed_agent", Status: status}
 }
 
@@ -408,131 +429,6 @@ func validDoctorDependencies(deps doctorDependencies) bool {
 		deps.loadBundle != nil && deps.verifyNodeBundle != nil && deps.verifyProjection != nil &&
 		deps.inspectHost != nil && deps.verifyActivation != nil && deps.newCompanion != nil &&
 		deps.acquireLifecycle != nil
-}
-
-func validDoctorReport(report doctorReport) bool {
-	if report.SchemaVersion != localapi.SchemaVersion || report.Scope != "managed_agent" ||
-		(report.Mode != doctorModeOnline && report.Mode != doctorModeOffline && report.Mode != doctorModeUnknown) ||
-		(report.Status != doctorHealthy && report.Status != doctorDegraded &&
-			report.Status != doctorInconclusive) || len(report.Checks) != len(doctorCheckNames) {
-		return false
-	}
-	for index, check := range report.Checks {
-		if check.Name != doctorCheckNames[index] || !validDoctorCheck(index, check) {
-			return false
-		}
-	}
-	switch report.Mode {
-	case doctorModeOnline:
-		if report.Checks[4] != passedDoctorCheck(doctorCheckNames[4]) ||
-			report.Checks[5].Status == doctorUnobserved || report.Status == doctorInconclusive {
-			return false
-		}
-	case doctorModeOffline:
-		if report.Checks[4] != failedDoctorCheck(doctorCheckNames[4], doctorIssueDaemon,
-			doctorRemedyRetry) || report.Checks[5] != unobservedDoctorCheck(doctorCheckNames[5],
-			doctorIssueRuntimeUnobserved, doctorRemedyRetry) || report.Status != doctorDegraded {
-			return false
-		}
-	case doctorModeUnknown:
-		if report.Status != doctorInconclusive {
-			return false
-		}
-		for index, check := range report.Checks {
-			if check != unobservedDoctorCheck(doctorCheckNames[index],
-				doctorIssueObservationUnknown, doctorRemedyDoctor) {
-				return false
-			}
-		}
-	}
-	exit := doctorReportExit(report)
-	if exit == 0 && !allDoctorChecksPass(report.Checks) {
-		return false
-	}
-	wantStatus := doctorHealthy
-	if report.Mode == doctorModeUnknown {
-		wantStatus = doctorInconclusive
-	} else if exit != 0 {
-		wantStatus = doctorDegraded
-	}
-	return report.Status == wantStatus
-}
-
-func validDoctorCheck(index int, check doctorCheck) bool {
-	if check == passedDoctorCheck(doctorCheckNames[index]) {
-		return true
-	}
-	unknown := unobservedDoctorCheck(doctorCheckNames[index], doctorIssueObservationUnknown,
-		doctorRemedyDoctor)
-	if check == unknown {
-		return true
-	}
-	switch index {
-	case 0:
-		return check == failedDoctorCheck(doctorCheckNames[index], doctorIssueAuthorityDisabled,
-			doctorRemedySetup) ||
-			check == failedDoctorCheck(doctorCheckNames[index], doctorIssueAuthorityStale,
-				doctorRemedySetup) ||
-			check == failedDoctorCheck(doctorCheckNames[index], doctorIssueAuthorityUnavailable,
-				doctorRemedyDoctor)
-	case 1:
-		return check == failedDoctorCheck(doctorCheckNames[index], doctorIssueAssetsUnavailable,
-			doctorRemedySetup) ||
-			check == failedDoctorCheck(doctorCheckNames[index], doctorIssueAssetMismatch,
-				doctorRemedySetup)
-	case 2:
-		return check == failedDoctorCheck(doctorCheckNames[index], doctorIssueProjection,
-			doctorRemedySetup)
-	case 3:
-		return check == failedDoctorCheck(doctorCheckNames[index], doctorIssueRegistration,
-			doctorRemedySetup)
-	case 4:
-		return check == failedDoctorCheck(doctorCheckNames[index], doctorIssueDaemon,
-			doctorRemedyRetry)
-	case 5:
-		return check == failedDoctorCheck(doctorCheckNames[index], doctorIssueRuntimeStarting,
-			doctorRemedyRetry) ||
-			check == failedDoctorCheck(doctorCheckNames[index], doctorIssueRuntimeRecovering,
-				doctorRemedyRetry) ||
-			check == failedDoctorCheck(doctorCheckNames[index], doctorIssueRuntimeRetrying,
-				doctorRemedyRetry) ||
-			check == failedDoctorCheck(doctorCheckNames[index], doctorIssueRuntimeFailed,
-				doctorRemedyDoctor) ||
-			check == unobservedDoctorCheck(doctorCheckNames[index], doctorIssueRuntimeUnobserved,
-				doctorRemedyRetry)
-	default:
-		return false
-	}
-}
-
-func allDoctorChecksPass(checks []doctorCheck) bool {
-	for _, check := range checks {
-		if check.Status != doctorPass {
-			return false
-		}
-	}
-	return true
-}
-
-func doctorReportExit(report doctorReport) int {
-	exit := 0
-	if report.Mode == doctorModeUnknown {
-		exit = 1
-	}
-	for _, check := range report.Checks {
-		switch check.Issue {
-		case doctorIssueAuthorityUnavailable, doctorIssueRuntimeFailed:
-			exit = mergeDoctorExit(exit, 1)
-		case doctorIssueAuthorityDisabled, doctorIssueAuthorityStale,
-			doctorIssueAssetsUnavailable, doctorIssueAssetMismatch, doctorIssueProjection,
-			doctorIssueRegistration:
-			exit = mergeDoctorExit(exit, 3)
-		case doctorIssueDaemon, doctorIssueRuntimeStarting, doctorIssueRuntimeRecovering,
-			doctorIssueRuntimeRetrying, doctorIssueRuntimeUnobserved:
-			exit = mergeDoctorExit(exit, 5)
-		}
-	}
-	return exit
 }
 
 func (app *doctorApp) writeObservation(observation doctorObservation) int {

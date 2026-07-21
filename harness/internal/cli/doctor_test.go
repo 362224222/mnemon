@@ -524,7 +524,7 @@ func TestDoctorAppValidatesInvocationAndReportShape(t *testing.T) {
 		t.Fatalf("invalid report = exit %d output %q", exit, sink.String())
 	}
 
-	var passed [6]doctorCheck
+	var passed doctorChecks
 	for index, name := range doctorCheckNames {
 		passed[index] = passedDoctorCheck(name)
 	}

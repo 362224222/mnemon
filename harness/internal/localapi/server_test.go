@@ -696,7 +696,7 @@ func TestServerStatusIsAuthenticatedClosedAndAvailableWhileDegraded(t *testing.T
 	recorder := httptest.NewRecorder()
 	server.Handler().ServeHTTP(recorder, request)
 	want := `{"activation":{"issue":"none","state":"ready"},"asset_revision":"` + revision +
-		`","runtime":{"issue":"wake_preparation_unavailable","state":"retrying"},` +
+		`","channels":[],"runtime":{"issue":"wake_preparation_unavailable","state":"retrying"},` +
 		`"schema_version":1,"scope":"managed_agent","status":"degraded"}` + "\n"
 	if recorder.Code != http.StatusOK || recorder.Body.String() != want || called != 1 ||
 		recorder.Header().Get("Cache-Control") != "no-store" ||

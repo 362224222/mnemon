@@ -2,7 +2,6 @@ package node
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"sort"
@@ -27,7 +26,7 @@ func (manager *ChannelManager) ChannelStatus(ctx context.Context, metadata local
 	}
 	channels := make([]localapi.ChannelView, 0, len(authority.Channels()))
 	for _, channel := range authority.Channels() {
-		channels = append(channels, manager.projectChannelView(ctx, authority.LocalPeerID(), channel))
+		channels = append(channels, manager.projectChannelView(authority.LocalPeerID(), channel))
 	}
 	sort.Slice(channels, func(left, right int) bool { return channels[left].Alias < channels[right].Alias })
 	return localapi.ChannelStatusResponse{SchemaVersion: localapi.SchemaVersion,
@@ -79,141 +78,18 @@ func (manager *ChannelManager) readChannelView(ctx context.Context,
 	}
 	for _, channel := range authority.Channels() {
 		if channel.Channel().ID() == channelID {
-			return manager.projectChannelView(ctx, authority.LocalPeerID(), channel), nil
+			return manager.projectChannelView(authority.LocalPeerID(), channel), nil
 		}
 	}
 	return localapi.ChannelView{}, store.ErrChannelStatusAuthority
 }
 
-func (manager *ChannelManager) projectChannelView(ctx context.Context, local model.PeerID,
-	durable store.ChannelStatusChannel,
-) localapi.ChannelView {
-	channel, roster := durable.Channel(), durable.Roster()
-	readiness := manager.channelReadiness(ctx, channel.ID())
-	bindings := make(map[model.PeerID]model.PeerBinding)
-	for _, binding := range durable.Bindings() {
-		bindings[binding.PeerID()] = binding
-	}
-	latest := make(map[model.PeerID]model.Member)
-	for _, member := range roster.Members() {
-		latest[member.PeerID()] = member
-	}
-	members := make([]localapi.ChannelMemberView, 0, len(latest))
-	ready := uint8(0)
-	for peerID, member := range latest {
-		projected := localapi.ChannelMemberView{Alias: memberAlias(peerID), PeerID: peerID.String(),
-			Status: string(member.Status()), Binding: "none", Reachability: "unknown"}
-		if peerID == local {
-			projected.Binding, projected.Reachability = "self", "self"
-			projected.BaselineReady = manager.channelTopicJoined(channel)
-		} else if binding, ok := bindings[peerID]; ok {
-			projected.Alias = binding.EffectiveAlias()
-			projected.Binding, projected.Reachability = string(binding.State()), string(binding.Reachability())
-			projected.BaselineReady = readiness[peerID]
-		}
-		if projected.BaselineReady {
-			ready++
-		}
-		members = append(members, projected)
-	}
-	sort.Slice(members, func(left, right int) bool { return members[left].Alias < members[right].Alias })
-	ownerLocal := channel.OwnerPeerID() == local
-	ownerReachability := "unknown"
-	if ownerLocal {
-		ownerReachability = "self"
-	} else if binding, ok := bindings[channel.OwnerPeerID()]; ok {
-		ownerReachability = string(binding.Reachability())
-	}
-	statusHead := durable.RosterHead()
-	head := statusHead.RecordHead()
-	publications := make([]localapi.ChannelPublicationView, 0, len(durable.Publications()))
-	for _, publication := range durable.Publications() {
-		ref := publication.PublicationRef()
-		event := publication.EventKey()
-		audience := publication.AudiencePeerIDs()
-		audienceView := make([]string, len(audience))
-		for index, peerID := range audience {
-			audienceView[index] = peerID.String()
-		}
-		ignored := publication.IgnoredPeerIDs()
-		ignoredView := make([]string, len(ignored))
-		for index, peerID := range ignored {
-			ignoredView[index] = peerID.String()
-		}
-		var artifactSource *string
-		if peerID, ok := publication.ArtifactDirectSourcePeerID(); ok {
-			value := peerID.String()
-			artifactSource = &value
-		}
-		var causality *localapi.ChannelEventKeyView
-		if key, ok := publication.CausalityEventKey(); ok {
-			value := channelEventKeyView(key)
-			causality = &value
-		}
-		publications = append(publications, localapi.ChannelPublicationView{
-			Arrival: string(publication.Arrival()), ArtifactDirectSourcePeerID: artifactSource,
-			AudiencePeerIDs: audienceView, CausalityEventKey: causality,
-			ChannelIDDigest: publication.ChannelIDDigest().String(),
-			EventDigest:     publication.EventDigest().String(), EventKey: channelEventKeyView(event),
-			IgnoredPeerIDs:           ignoredView,
-			ImmediateTransportPeerID: publication.ImmediateTransportPeerID().String(),
-			OriginPeerID:             publication.OriginPeerID().String(),
-			PublicationDigest:        publication.PublicationDigest().String(),
-			PublicationRef: localapi.ChannelPublicationRefView{
-				ChannelSequence: ref.ChannelSequence(), OriginEpoch: ref.OriginEpoch().String(),
-				OriginPeerID: ref.OriginPeerID().String()},
-			SemanticOutcome: string(publication.SemanticOutcome()),
-		})
-	}
-	view := localapi.ChannelView{Alias: channel.LocalAlias(), Name: channel.Name(),
-		ChannelIDDigest: durable.ChannelIDDigest().String(), Publications: publications,
-		Membership: string(channel.Status()), RosterRevision: channel.RosterHead().Revision(),
-		RosterHead: localapi.ChannelRosterHeadView{Revision: head.Revision(), Digest: head.Digest().String(),
-			OwnerPeerID:    statusHead.OwnerPeerID().String(),
-			OwnerSignature: base64.StdEncoding.EncodeToString(statusHead.OwnerSignature())},
-		Owner: localapi.ChannelOwnerView{Local: ownerLocal, Reachability: ownerReachability}, Members: members,
-		Topic: localapi.ChannelTopicView{Status: channelViewTopicStatus(manager.channelTopicStatus(channel), members),
-			ReadyMembers: ready, TotalMembers: uint8(len(members))}}
-	if grant, ok := durable.OpenGrant(); ok {
-		invite := inviteView(grant.ExpiresAt(), grant.MaxUses(), grant.UsedUses(), grant.Status(), manager.clock.Now())
-		view.Invite = &invite
-	}
-	return view
-}
-
-func channelEventKeyView(key model.EventKey) localapi.ChannelEventKeyView {
-	return localapi.ChannelEventKeyView{OriginPeerID: key.OriginPeerID().String(),
-		OriginEpoch: key.OriginEpoch().String(), EventID: key.EventID().String()}
-}
-
-func channelViewTopicStatus(status string, members []localapi.ChannelMemberView) string {
-	if status != "joined" {
-		return status
-	}
-	for _, member := range members {
-		if member.Status == string(model.MemberActive) && member.Binding != "self" &&
-			(member.Binding != string(model.BindingActive) || !member.BaselineReady) {
-			return "converging"
-		}
-	}
-	return status
-}
-
 func (manager *ChannelManager) channelTopicJoined(channel model.Channel) bool {
-	return channel.TopicState() == model.TopicJoined && manager.runtime.HasCurrentSession(channel.ID())
+	return channel.TopicState() == model.TopicJoined && manager.channelSessionReady(channel.ID())
 }
 
 func (manager *ChannelManager) channelTopicStatus(channel model.Channel) string {
-	if channel.Status().Terminal() || channel.TopicState() == model.TopicLeft {
-		return "left"
-	}
-	if channel.Status() == model.ChannelConflicted || channel.TopicState() == model.TopicBlocked {
-		return "blocked"
-	}
-	if manager.channelTopicJoined(channel) {
-		return "joined"
-	}
-	return "converging"
+	return observedChannelTopicState(channel, manager.channelSessionReady(channel.ID()))
 }
 
 func (manager *ChannelManager) refreshAndJoin(ctx context.Context, channel model.Channel) {
@@ -265,20 +141,6 @@ func channelBaselinesReady(readiness []store.ChannelPeerReadiness) bool {
 		}
 	}
 	return true
-}
-
-func (manager *ChannelManager) channelReadiness(ctx context.Context,
-	channelID model.ChannelID,
-) map[model.PeerID]bool {
-	result := make(map[model.PeerID]bool)
-	readiness, err := manager.store.ReadChannelBaselineReadiness(ctx, channelID)
-	if err != nil {
-		return result
-	}
-	for _, remote := range readiness {
-		result[remote.PeerID] = remote.Ready()
-	}
-	return result
 }
 
 func inviteView(expiresAt time.Time, maxUses, usedUses uint8, status string,

@@ -3,14 +3,15 @@ package localapi
 import (
 	"context"
 	"errors"
+	"reflect"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 )
 
-// MaxStatusResponseBytes bounds the closed local observation envelope and the
-// existing API error union. Status deliberately contains no Node, Runtime,
-// Event, queue, filesystem, or transport identity.
-const MaxStatusResponseBytes = 2048
+// MaxStatusResponseBytes bounds eight compact Channel aggregates plus the
+// closed activation and Runtime checks. Status contains no Event, Peer, queue
+// lease, filesystem, payload, or transport identity.
+const MaxStatusResponseBytes = 32 << 10
 
 const (
 	statusScopeManagedAgent = "managed_agent"
@@ -81,6 +82,7 @@ type StatusSnapshot struct {
 	ActivationReady bool
 	ActivationIssue string
 	Runtime         RuntimeStatusSnapshot
+	Channels        []StatusChannelSnapshot
 }
 
 type StatusCheck struct {
@@ -88,16 +90,14 @@ type StatusCheck struct {
 	State string `json:"state"`
 }
 
-// StatusResponse is intentionally smaller than the eventual Channel status
-// surface. Network and queue fields must not appear until their workers can
-// supply real observations.
 type StatusResponse struct {
-	Activation    StatusCheck `json:"activation"`
-	AssetRevision string      `json:"asset_revision"`
-	Runtime       StatusCheck `json:"runtime"`
-	SchemaVersion int         `json:"schema_version"`
-	Scope         string      `json:"scope"`
-	Status        string      `json:"status"`
+	Activation    StatusCheck     `json:"activation"`
+	AssetRevision string          `json:"asset_revision"`
+	Channels      []StatusChannel `json:"channels"`
+	Runtime       StatusCheck     `json:"runtime"`
+	SchemaVersion int             `json:"schema_version"`
+	Scope         string          `json:"scope"`
+	Status        string          `json:"status"`
 }
 
 // ExitStatus maps one already-validated observation to the existing CLI exit
@@ -116,6 +116,9 @@ func (response StatusResponse) ExitStatus() int {
 	if response.Runtime.State == runtimeStarting || response.Runtime.State == runtimeRecovering ||
 		response.Runtime.State == runtimeRetrying {
 		return CodeMnemondUnavailable.ExitStatus()
+	}
+	if exit := statusChannelsExit(response.Channels); exit != 0 {
+		return exit
 	}
 	return CodeInternal.ExitStatus()
 }
@@ -138,12 +141,17 @@ func NewStatusResponse(snapshot StatusSnapshot) (StatusResponse, error) {
 	if err != nil {
 		return StatusResponse{}, err
 	}
+	channels, err := newStatusChannels(snapshot.Channels)
+	if err != nil {
+		return StatusResponse{}, err
+	}
 	state := statusDegraded
-	if activation.State == activationReady && runtime.State == runtimeReady {
+	if activation.State == activationReady && runtime.State == runtimeReady && statusChannelsExit(channels) == 0 {
 		state = statusReady
 	}
 	response := StatusResponse{Activation: activation, AssetRevision: snapshot.AssetRevision,
-		Runtime: runtime, SchemaVersion: SchemaVersion, Scope: statusScopeManagedAgent, Status: state}
+		Channels: channels, Runtime: runtime, SchemaVersion: SchemaVersion,
+		Scope: statusScopeManagedAgent, Status: state}
 	if raw, err := model.CanonicalMarshal(response); err != nil || len(raw)+1 > MaxStatusResponseBytes {
 		return StatusResponse{}, errors.New("local API: status response exceeds its closed bound")
 	}
@@ -216,8 +224,8 @@ func validateStatusResponse(response StatusResponse) *APIError {
 	want, err := NewStatusResponse(StatusSnapshot{AssetRevision: response.AssetRevision,
 		ActivationReady: response.Activation.State == activationReady,
 		ActivationIssue: activationIssueFromResponse(response.Activation),
-		Runtime:         runtimeSnapshotFromResponse(response.Runtime)})
-	if err != nil || want != response {
+		Runtime:         runtimeSnapshotFromResponse(response.Runtime), Channels: statusChannelSnapshots(response.Channels)})
+	if err != nil || !reflect.DeepEqual(want, response) {
 		return invalidControlResponse("status response is not a closed observation")
 	}
 	return nil
