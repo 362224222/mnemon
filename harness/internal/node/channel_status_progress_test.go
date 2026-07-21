@@ -3,8 +3,6 @@ package node
 import (
 	"context"
 	"testing"
-
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 )
 
 func TestProjectStatusChannelsExposesCoherentIdleAndQueuedPublicationProgress(t *testing.T) {
@@ -17,8 +15,8 @@ func TestProjectStatusChannelsExposesCoherentIdleAndQueuedPublicationProgress(t 
 	}
 	t.Cleanup(func() { _ = daemon.Close() })
 	created, apiErr := daemon.channels.manager.ChannelCreate(context.Background(),
-		localapi.RequestMetadata{Profile: fixture.profile},
-		localapi.ChannelCreateRequest{Name: "status-progress"})
+		RequestMetadata{Profile: fixture.profile},
+		ChannelCreateRequest{Name: "status-progress"})
 	if apiErr != nil {
 		t.Fatal(apiErr)
 	}
@@ -29,7 +27,7 @@ func TestProjectStatusChannelsExposesCoherentIdleAndQueuedPublicationProgress(t 
 	channels := projectStatusChannels(authority, daemon.channels.manager)
 	if len(channels) != 1 || channels[0].Alias != created.Channel.Alias ||
 		channels[0].Topic.TotalMembers != 1 || channels[0].LocalCommit.Accepted != 0 ||
-		channels[0].Runtime != (localapi.StatusChannelRuntime{}) {
+		channels[0].Runtime != (StatusChannelRuntime{}) {
 		t.Fatalf("idle status Channels = %#v", channels)
 	}
 }
@@ -37,12 +35,12 @@ func TestProjectStatusChannelsExposesCoherentIdleAndQueuedPublicationProgress(t 
 func TestControllerStatusPublishesChannelStagesWithoutRawIdentities(t *testing.T) {
 	fixture := newDaemonFixture(t, true)
 	serving := openServingDataPlaneDaemon(t, fixture)
-	client, err := localapi.NewClient(fixture.nodeState)
+	client, err := NewClient(fixture.nodeState)
 	if err != nil {
 		t.Fatal(err)
 	}
 	created, apiErr := client.CreateChannel(context.Background(),
-		localapi.ChannelCreateRequest{Name: "public-progress"})
+		ChannelCreateRequest{Name: "public-progress"})
 	if apiErr != nil {
 		t.Fatal(apiErr)
 	}

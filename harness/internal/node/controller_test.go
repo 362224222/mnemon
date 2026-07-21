@@ -19,7 +19,6 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/assets"
 	"github.com/mnemon-dev/mnemon/harness/internal/event"
 	"github.com/mnemon-dev/mnemon/harness/internal/integration"
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
@@ -104,7 +103,7 @@ func TestControllerServesOwnerOnlyManagedRoutesFromOneStore(t *testing.T) {
 	served := make(chan error, 1)
 	go func() { served <- controller.Serve(serveCtx) }()
 	waitControllerSocket(t, filepath.Join(nodeState, "control.sock"), served)
-	client, err := localapi.NewClient(nodeState)
+	client, err := NewClient(nodeState)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +135,7 @@ func TestControllerServesOwnerOnlyManagedRoutesFromOneStore(t *testing.T) {
 	if apiErr != nil || current.Status != "none" || current.RunID != "" || current.ClaimSecret != "" {
 		t.Fatalf("AgentCurrent() = (%#v, %v)", current, apiErr)
 	}
-	projection, err := localapi.ParseInitiationProjection(current.Projection)
+	projection, err := ParseInitiationProjection(current.Projection)
 	if err != nil || len(projection.InitiationContext.Channels) != 0 {
 		t.Fatalf("initiation projection = %s, %v", current.Projection, err)
 	}
@@ -173,7 +172,7 @@ func TestControllerServesOwnerOnlyManagedRoutesFromOneStore(t *testing.T) {
 		t.Fatalf("drifted ReadStatus() = (%#v, %v)", status, apiErr)
 	}
 	if _, apiErr := client.HookCheck(context.Background()); apiErr == nil ||
-		apiErr.Code != localapi.CodeAssetRevisionMismatch {
+		apiErr.Code != CodeAssetRevisionMismatch {
 		t.Fatalf("drifted HookCheck() error = %v", apiErr)
 	}
 	cancel()
@@ -202,7 +201,7 @@ func TestControllerAuthenticatedShutdownCompletesResponseThenReturnsAndCleansSoc
 	go func() { serveDone <- daemon.Serve(context.Background()) }()
 	socketPath := filepath.Join(fixture.nodeState, "control.sock")
 	waitControllerSocket(t, socketPath, serveDone)
-	client, err := localapi.NewClient(fixture.nodeState)
+	client, err := NewClient(fixture.nodeState)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,12 +209,12 @@ func TestControllerAuthenticatedShutdownCompletesResponseThenReturnsAndCleansSoc
 	if apiErr != nil {
 		t.Fatalf("ReadAuthority() before shutdown = %#v", apiErr)
 	}
-	expectedDigest, err := localapi.AuthorityDigest(authority)
+	expectedDigest, err := AuthorityDigest(authority)
 	if err != nil {
 		t.Fatal(err)
 	}
 	response, apiErr := client.Shutdown(context.Background(), authority)
-	if apiErr != nil || response.SchemaVersion != localapi.SchemaVersion || response.Status != "stopping" ||
+	if apiErr != nil || response.SchemaVersion != SchemaVersion || response.Status != "stopping" ||
 		response.AuthorityDigest != expectedDigest.String() {
 		t.Fatalf("Shutdown() = (%#v, %#v)", response, apiErr)
 	}
@@ -254,7 +253,7 @@ func TestControllerMutationShutdownBusyKeepsDaemonReadyAndReopensAdmission(t *te
 	serveDone := make(chan error, 1)
 	go func() { serveDone <- daemon.Serve(context.Background()) }()
 	waitControllerSocket(t, filepath.Join(fixture.nodeState, "control.sock"), serveDone)
-	client, err := localapi.NewClient(fixture.nodeState)
+	client, err := NewClient(fixture.nodeState)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +262,7 @@ func TestControllerMutationShutdownBusyKeepsDaemonReadyAndReopensAdmission(t *te
 		t.Fatal(apiErr)
 	}
 	if response, apiErr := client.ShutdownForMutation(context.Background(), authority); apiErr == nil ||
-		apiErr.Code != localapi.CodeOperationPending || response != (localapi.ShutdownResponse{}) {
+		apiErr.Code != CodeOperationPending || response != (ShutdownResponse{}) {
 		t.Fatalf("busy ShutdownForMutation() = (%#v, %#v)", response, apiErr)
 	}
 	select {
@@ -297,7 +296,7 @@ func TestControllerMutationShutdownGenerationMismatchReopensAdmission(t *testing
 	serveDone := make(chan error, 1)
 	go func() { serveDone <- daemon.Serve(context.Background()) }()
 	waitControllerSocket(t, filepath.Join(fixture.nodeState, "control.sock"), serveDone)
-	client, err := localapi.NewClient(fixture.nodeState)
+	client, err := NewClient(fixture.nodeState)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -312,7 +311,7 @@ func TestControllerMutationShutdownGenerationMismatchReopensAdmission(t *testing
 	}
 	drifted.UpdatedAt = generation.Add(time.Nanosecond).Format(time.RFC3339Nano)
 	if _, apiErr := client.ShutdownForMutation(context.Background(), drifted); apiErr == nil ||
-		apiErr.Code != localapi.CodeOperationMismatch {
+		apiErr.Code != CodeOperationMismatch {
 		t.Fatalf("drifted ShutdownForMutation() error = %#v", apiErr)
 	}
 	if hook, apiErr := client.HookCheck(context.Background()); apiErr != nil || hook.Pending {
@@ -384,7 +383,7 @@ func TestControllerManagedWorkerGatesReadinessAndStopsBeforeHTTP(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("Controller did not start managed worker")
 	}
-	client, err := localapi.NewClient(fixture.nodeState)
+	client, err := NewClient(fixture.nodeState)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -435,71 +434,6 @@ func TestControllerManagedWorkerGatesReadinessAndStopsBeforeHTTP(t *testing.T) {
 	}
 }
 
-func TestControllerRetainsLaunchPermitUntilNetworkReadiness(t *testing.T) {
-	fixture := newDaemonFixture(t, true)
-	authority, err := openExistingDaemonAuthority(context.Background(), fixture.workspace,
-		fixture.nodeState)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer authority.store.Close()
-	network := newControllerTestNetworkRuntime()
-	released := make(chan struct{})
-	controller, err := NewController(context.Background(), ControllerOptions{
-		NodeState: fixture.nodeState, Workspace: fixture.workspace, Store: authority.store,
-		Profile: authority.authority.Profile, Signer: authority.identity.PublicationSigner(),
-		Clock: controllerTestClock{fixture.profile.UpdatedAt()}, Install: fixture.install,
-		networkRuntime: network, BeforeAccept: func() error {
-			close(released)
-			return nil
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	serveDone := make(chan error, 1)
-	go func() { serveDone <- controller.Serve(context.Background()) }()
-	select {
-	case <-network.started:
-	case err := <-serveDone:
-		t.Fatalf("Controller exited before network startup: %v", err)
-	case <-time.After(5 * time.Second):
-		t.Fatal("Controller did not start its network runtime")
-	}
-	select {
-	case <-released:
-		t.Fatal("launch permit released before network readiness")
-	default:
-	}
-	close(network.allowReady)
-	select {
-	case <-released:
-	case err := <-serveDone:
-		t.Fatalf("Controller exited before consuming launch permit: %v", err)
-	case <-time.After(5 * time.Second):
-		t.Fatal("Controller did not consume launch permit after network readiness")
-	}
-	client, err := localapi.NewClient(fixture.nodeState)
-	if err != nil {
-		t.Fatal(err)
-	}
-	waitControllerHealth(t, client, "ready")
-	controller.requestShutdown()
-	select {
-	case err := <-serveDone:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("Controller did not stop its network runtime")
-	}
-	select {
-	case <-network.stopped:
-	default:
-		t.Fatal("Controller returned before network runtime stopped")
-	}
-}
-
 func TestControllerStatusDistinguishesInstallationDriftFromRuntimeHealth(t *testing.T) {
 	fixture := newDaemonFixture(t, true)
 	worker := newControllerTestWakeWorker()
@@ -515,7 +449,7 @@ func TestControllerStatusDistinguishesInstallationDriftFromRuntimeHealth(t *test
 	case <-time.After(5 * time.Second):
 		t.Fatal("Controller did not start managed worker")
 	}
-	client, err := localapi.NewClient(fixture.nodeState)
+	client, err := NewClient(fixture.nodeState)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -570,7 +504,7 @@ func TestControllerManagedWorkerFailureStaysReachableAndFailsClosed(t *testing.T
 	case <-time.After(5 * time.Second):
 		t.Fatal("Controller did not start managed worker")
 	}
-	client, err := localapi.NewClient(fixture.nodeState)
+	client, err := NewClient(fixture.nodeState)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -590,7 +524,7 @@ func TestControllerManagedWorkerFailureStaysReachableAndFailsClosed(t *testing.T
 		t.Fatalf("failed worker status = (%#v, %#v)", status, apiErr)
 	}
 	if _, apiErr := client.HookCheck(context.Background()); apiErr == nil ||
-		apiErr.Code != localapi.CodeMnemondUnavailable {
+		apiErr.Code != CodeMnemondUnavailable {
 		t.Fatalf("HookCheck after worker failure = %#v", apiErr)
 	}
 	select {
@@ -760,7 +694,7 @@ func newControllerWithTestWakeWorker(t *testing.T, fixture daemonFixture,
 	}
 }
 
-func waitControllerHealth(t *testing.T, client *localapi.Client, status string) {
+func waitControllerHealth(t *testing.T, client *Client, status string) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {

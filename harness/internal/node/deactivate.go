@@ -4,13 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/mnemon-dev/mnemon/harness/internal/model"
+	"github.com/mnemon-dev/mnemon/harness/internal/store"
 	"os"
 	"path/filepath"
 	"time"
-
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
-	"github.com/mnemon-dev/mnemon/harness/internal/model"
-	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
 
 var ErrDeactivate = errors.New("deactivate mnemond Profile")
@@ -21,6 +19,7 @@ type DeactivateOptions struct {
 	AssetRevision     string
 	ExpectedUpdatedAt time.Time
 	Clock             Clock
+	Credentials       ProfileCredentialAuthority
 }
 
 type DeactivateResult struct {
@@ -42,6 +41,10 @@ type deactivationPlan struct {
 func Deactivate(ctx context.Context, options DeactivateOptions) (result DeactivateResult, err error) {
 	if ctx == nil {
 		return DeactivateResult{}, fmt.Errorf("%w: context is unavailable", ErrDeactivate)
+	}
+	credentials, err := requireProfileCredentialAuthority(options.Credentials)
+	if err != nil {
+		return DeactivateResult{}, fmt.Errorf("%w: %w", ErrDeactivate, err)
 	}
 	plan, err := prepareDeactivation(&options)
 	if err != nil {
@@ -73,7 +76,8 @@ func Deactivate(ctx context.Context, options DeactivateOptions) (result Deactiva
 	if err != nil {
 		return DeactivateResult{}, fmt.Errorf("%w: %v", ErrDeactivate, err)
 	}
-	if err := validateDeactivationAuthority(authority, identity, nodeState, plan, options); err != nil {
+	if err := validateDeactivationAuthority(authority, identity, nodeState, plan, options,
+		credentials); err != nil {
 		return DeactivateResult{}, err
 	}
 	expectedSpec := authority.Profile.Spec()
@@ -115,7 +119,7 @@ func prepareDeactivation(options *DeactivateOptions) (deactivationPlan, error) {
 }
 
 func validateDeactivationAuthority(authority store.LocalAuthority, identity *Identity, nodeState string,
-	plan deactivationPlan, options DeactivateOptions,
+	plan deactivationPlan, options DeactivateOptions, credentials ProfileCredentialAuthority,
 ) error {
 	if authority.Node.PeerID() != identity.PeerID() ||
 		authority.Profile.WorkspaceRoot() != plan.workspace {
@@ -129,7 +133,7 @@ func validateDeactivationAuthority(authority store.LocalAuthority, identity *Ide
 	if !authority.Profile.UpdatedAt().Equal(plan.expectedUpdatedAt) {
 		return fmt.Errorf("%w: requested authority generation differs from durable Profile", ErrDeactivate)
 	}
-	if err := localapi.VerifyProfileCredential(nodeState, authority.Profile.CredentialHash()); err != nil {
+	if err := credentials.VerifyProfileCredential(nodeState, authority.Profile.CredentialHash()); err != nil {
 		return fmt.Errorf("%w: %v", ErrDeactivate, err)
 	}
 	return nil

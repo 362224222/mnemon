@@ -44,11 +44,12 @@ func setupProcessAssertPublicDoctor(t *testing.T, executable, workspace string,
 	cancel()
 	doctor, err := setupProcessParseDoctor(result)
 	if err != nil || doctor.SchemaVersion != localapi.SchemaVersion || doctor.Scope != "managed_agent" ||
-		doctor.Mode != "online" || doctor.Status != "healthy" || len(doctor.Checks) != 6 {
+		doctor.Mode != "online" || doctor.Status != "healthy" || len(doctor.Checks) != 7 ||
+		len(doctor.Channels) != 0 {
 		t.Fatalf("public doctor after setup = (%#v, %v)", doctor, err)
 	}
 	for index, name := range []string{"node_authority", "canonical_assets", "host_projection",
-		"host_registration", "daemon", "managed_runtime"} {
+		"host_registration", "daemon", "managed_runtime", "channel_progress"} {
 		check := doctor.Checks[index]
 		if check.Name != name || check.Status != "pass" || check.Issue != "none" ||
 			check.Remedy != "none" {

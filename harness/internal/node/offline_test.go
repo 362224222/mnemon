@@ -3,14 +3,12 @@ package node
 import (
 	"context"
 	"errors"
+	"github.com/mnemon-dev/mnemon/harness/internal/model"
+	"github.com/mnemon-dev/mnemon/harness/internal/store"
 	"net"
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
-	"github.com/mnemon-dev/mnemon/harness/internal/model"
-	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
 
 func TestConfirmOfflineAuthorityRemovesOnlyStaleSocketWhileHoldingWriter(t *testing.T) {
@@ -23,7 +21,7 @@ func TestConfirmOfflineAuthorityRemovesOnlyStaleSocketWhileHoldingWriter(t *test
 				createOfflineStaleSocket(t, socketPath)
 			}
 			expected := daemonFixtureAuthorityResponse(t, fixture)
-			digest, err := localapi.AuthorityDigest(expected)
+			digest, err := AuthorityDigest(expected)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -40,7 +38,7 @@ func TestConfirmOfflineAuthorityRemovesOnlyStaleSocketWhileHoldingWriter(t *test
 						return false, errors.New("stale recovery Store writer was not observable")
 					}
 					writerObserved = true
-					return localapi.RemoveStaleOwnerUnix(ctx, path)
+					return RemoveStaleOwnerUnix(ctx, path)
 				})
 			if err != nil || response != expected {
 				t.Fatalf("ConfirmOfflineAuthority() = (%#v, %v)", response, err)
@@ -102,14 +100,14 @@ func TestConfirmOfflineAuthorityFailsClosedForWriterGenerationAndSocketConflict(
 	t.Run("active socket", func(t *testing.T) {
 		fixture := newDaemonFixture(t, false)
 		path := filepath.Join(fixture.nodeState, controlSocketName)
-		listener, err := localapi.ListenOwnerUnix(path)
+		listener, err := ListenOwnerUnix(path)
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer listener.Close()
 		_, err = ConfirmOfflineAuthority(context.Background(), fixture.workspace,
 			mustOfflineAuthorityDigest(t, daemonFixtureAuthorityResponse(t, fixture)))
-		if !errors.Is(err, ErrOfflineAuthority) || !errors.Is(err, localapi.ErrOwnerUnixActive) {
+		if !errors.Is(err, ErrOfflineAuthority) || !errors.Is(err, ErrOwnerUnixActive) {
 			t.Fatalf("active-socket confirmation error = %v", err)
 		}
 		if info, statErr := os.Lstat(path); statErr != nil || info.Mode()&os.ModeSocket == 0 {
@@ -182,9 +180,9 @@ func createOfflineStaleSocket(t *testing.T, path string) {
 	}
 }
 
-func mustOfflineAuthorityDigest(t *testing.T, response localapi.AuthorityResponse) model.Digest {
+func mustOfflineAuthorityDigest(t *testing.T, response AuthorityResponse) model.Digest {
 	t.Helper()
-	digest, err := localapi.AuthorityDigest(response)
+	digest, err := AuthorityDigest(response)
 	if err != nil {
 		t.Fatal(err)
 	}

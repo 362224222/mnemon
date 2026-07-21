@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/agent"
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 )
 
@@ -23,95 +22,95 @@ func newLocalAPIServiceAdapter(next agent.ControlService) *localAPIServiceAdapte
 }
 
 func (adapter *localAPIServiceAdapter) HookCheck(ctx context.Context,
-	metadata localapi.RequestMetadata, _ localapi.HookCheckRequest,
-) (localapi.HookCheckResponse, *localapi.APIError) {
+	metadata RequestMetadata, _ HookCheckRequest,
+) (HookCheckResponse, *APIError) {
 	response, controlErr := adapter.next.HookCheck(ctx, agentControlMetadata(metadata))
 	if controlErr != nil {
-		return localapi.HookCheckResponse{}, localAPIControlError(controlErr)
+		return HookCheckResponse{}, localAPIControlError(controlErr)
 	}
-	return localapi.HookCheckResponse{SchemaVersion: localapi.SchemaVersion,
+	return HookCheckResponse{SchemaVersion: SchemaVersion,
 		Pending: response.Pending}, nil
 }
 
 func (adapter *localAPIServiceAdapter) AgentCurrent(ctx context.Context,
-	metadata localapi.RequestMetadata, _ localapi.AgentCurrentRequest,
-) (localapi.AgentCurrentResponse, *localapi.APIError) {
+	metadata RequestMetadata, _ AgentCurrentRequest,
+) (AgentCurrentResponse, *APIError) {
 	response, controlErr := adapter.next.AgentCurrent(ctx, agentControlMetadata(metadata))
 	if controlErr != nil {
-		return localapi.AgentCurrentResponse{}, localAPIControlError(controlErr)
+		return AgentCurrentResponse{}, localAPIControlError(controlErr)
 	}
-	return localapi.AgentCurrentResponse{SchemaVersion: localapi.SchemaVersion,
+	return AgentCurrentResponse{SchemaVersion: SchemaVersion,
 		Status: response.Status, RunID: response.RunID, ClaimSecret: response.ClaimSecret,
 		Projection: append(response.Projection[:0:0], response.Projection...)}, nil
 }
 
 func (adapter *localAPIServiceAdapter) TeamworkAction(ctx context.Context,
-	metadata localapi.RequestMetadata, request localapi.TeamworkActionRequest,
-) (localapi.OperationResponse, *localapi.APIError) {
+	metadata RequestMetadata, request TeamworkActionRequest,
+) (OperationResponse, *APIError) {
 	response, controlErr := adapter.next.TeamworkAction(ctx, agentControlMetadata(metadata),
 		agent.TeamworkActionRequest{Action: request.Action, Channel: request.Channel,
 			To: request.To, Deadline: request.Deadline, Content: request.Content,
 			Artifacts: append([]string(nil), request.Artifacts...)})
 	if controlErr != nil {
-		return localapi.OperationResponse{}, localAPIControlError(controlErr)
+		return OperationResponse{}, localAPIControlError(controlErr)
 	}
 	return localAPIOperationResponse(response), nil
 }
 
 func (adapter *localAPIServiceAdapter) AgentResolve(ctx context.Context,
-	metadata localapi.RequestMetadata, request localapi.AgentResolveRequest,
-) (localapi.OperationResponse, *localapi.APIError) {
+	metadata RequestMetadata, request AgentResolveRequest,
+) (OperationResponse, *APIError) {
 	response, controlErr := adapter.next.AgentResolve(ctx, agentControlMetadata(metadata),
 		agent.AgentResolveRequest{Decision: request.Decision, Content: request.Content})
 	if controlErr != nil {
-		return localapi.OperationResponse{}, localAPIControlError(controlErr)
+		return OperationResponse{}, localAPIControlError(controlErr)
 	}
 	return localAPIOperationResponse(response), nil
 }
 
-func agentControlMetadata(metadata localapi.RequestMetadata) agent.ControlMetadata {
+func agentControlMetadata(metadata RequestMetadata) agent.ControlMetadata {
 	return agent.ControlMetadata{Profile: metadata.Profile,
 		OperationKeyHash: metadata.OperationKeyHash, HasOperationKey: metadata.HasOperationKey,
 		ClaimContextHash: metadata.ClaimContextHash, HasClaimContext: metadata.HasClaimContext,
 		RunAttachmentHash: metadata.RunAttachmentHash, HasRunAttachment: metadata.HasRunAttachment}
 }
 
-func localAPIOperationResponse(response agent.OperationResponse) localapi.OperationResponse {
-	var handling *localapi.HandlingReceipt
+func localAPIOperationResponse(response agent.OperationResponse) OperationResponse {
+	var handling *HandlingReceipt
 	if response.Handling != nil {
-		handling = &localapi.HandlingReceipt{Status: response.Handling.Status}
+		handling = &HandlingReceipt{Status: response.Handling.Status}
 	}
-	var results []localapi.OperationResult
+	var results []OperationResult
 	if response.Results != nil {
-		results = make([]localapi.OperationResult, len(response.Results))
+		results = make([]OperationResult, len(response.Results))
 		for index, result := range response.Results {
-			results[index] = localapi.OperationResult{EventID: result.EventID,
-				EventType: result.EventType, Work: localapi.WorkReceipt{Ref: result.Work.Ref,
+			results[index] = OperationResult{EventID: result.EventID,
+				EventType: result.EventType, Work: WorkReceipt{Ref: result.Work.Ref,
 					Version: result.Work.Version, State: result.Work.State}}
 		}
 	}
-	return localapi.OperationResponse{SchemaVersion: response.SchemaVersion,
+	return OperationResponse{SchemaVersion: response.SchemaVersion,
 		Status: response.Status, Action: response.Action, OperationID: response.OperationID,
 		Replayed: response.Replayed, Handling: handling, Results: results, Receipt: response.Receipt}
 }
 
-func localAPIControlError(controlErr *agent.ControlError) *localapi.APIError {
+func localAPIControlError(controlErr *agent.ControlError) *APIError {
 	if controlErr == nil {
 		return nil
 	}
 	code, known := localAPIErrorCode(controlErr.Code)
 	if !known || controlErr.Retryable != controlErr.Code.Retryable() ||
 		controlErr.Replayed && controlErr.OperationID == nil {
-		return localapi.NewAPIError(localapi.CodeInternal, "internal control error")
+		return NewAPIError(CodeInternal, "internal control error")
 	}
 	if controlErr.OperationID != nil {
 		if _, err := model.ParseOperationID(*controlErr.OperationID); err != nil {
-			return localapi.NewAPIError(localapi.CodeInternal, "internal control error")
+			return NewAPIError(CodeInternal, "internal control error")
 		}
 	}
-	mapped := localapi.NewAPIError(code, controlErr.Message)
+	mapped := NewAPIError(code, controlErr.Message)
 	if mapped.Code != code || mapped.Message != controlErr.Message {
-		return localapi.NewAPIError(localapi.CodeInternal, "internal control error")
+		return NewAPIError(CodeInternal, "internal control error")
 	}
 	mapped.Replayed = controlErr.Replayed
 	if controlErr.OperationID != nil {
@@ -123,42 +122,42 @@ func localAPIControlError(controlErr *agent.ControlError) *localapi.APIError {
 
 type localAPIErrorMapping struct {
 	domain    agent.ControlErrorCode
-	transport localapi.ErrorCode
+	transport ErrorCode
 }
 
 var localAPIErrorMappings = [...]localAPIErrorMapping{
-	{agent.CodeInvalidArgument, localapi.CodeInvalidArgument},
-	{agent.CodeContentRequired, localapi.CodeContentRequired},
-	{agent.CodeContentTooLarge, localapi.CodeContentTooLarge},
-	{agent.CodeArtifactInvalid, localapi.CodeArtifactInvalid},
-	{agent.CodeArtifactTooLarge, localapi.CodeArtifactTooLarge},
-	{agent.CodeAmbiguousChannel, localapi.CodeAmbiguousChannel},
-	{agent.CodeAmbiguousParticipant, localapi.CodeAmbiguousParticipant},
-	{agent.CodeUnknownAction, localapi.CodeUnknownAction},
-	{agent.CodeAuthenticationFailed, localapi.CodeAuthenticationFailed},
-	{agent.CodeContextRequired, localapi.CodeContextRequired},
-	{agent.CodeContextInvalid, localapi.CodeContextInvalid},
-	{agent.CodeContextStale, localapi.CodeContextStale},
-	{agent.CodeAssetRevisionMismatch, localapi.CodeAssetRevisionMismatch},
-	{agent.CodeActionNotAllowed, localapi.CodeActionNotAllowed},
-	{agent.CodeCurrentTooLarge, localapi.CodeCurrentTooLarge},
-	{agent.CodeOperationMismatch, localapi.CodeOperationMismatch},
-	{agent.CodeWorkConflict, localapi.CodeWorkConflict},
-	{agent.CodeWorkExpired, localapi.CodeWorkExpired},
-	{agent.CodeProfileHostMismatch, localapi.CodeProfileHostMismatch},
-	{agent.CodeOperationPending, localapi.CodeOperationPending},
-	{agent.CodePeerUnavailable, localapi.CodePeerUnavailable},
-	{agent.CodeMnemondUnavailable, localapi.CodeMnemondUnavailable},
-	{agent.CodeInternal, localapi.CodeInternal},
+	{agent.CodeInvalidArgument, CodeInvalidArgument},
+	{agent.CodeContentRequired, CodeContentRequired},
+	{agent.CodeContentTooLarge, CodeContentTooLarge},
+	{agent.CodeArtifactInvalid, CodeArtifactInvalid},
+	{agent.CodeArtifactTooLarge, CodeArtifactTooLarge},
+	{agent.CodeAmbiguousChannel, CodeAmbiguousChannel},
+	{agent.CodeAmbiguousParticipant, CodeAmbiguousParticipant},
+	{agent.CodeUnknownAction, CodeUnknownAction},
+	{agent.CodeAuthenticationFailed, CodeAuthenticationFailed},
+	{agent.CodeContextRequired, CodeContextRequired},
+	{agent.CodeContextInvalid, CodeContextInvalid},
+	{agent.CodeContextStale, CodeContextStale},
+	{agent.CodeAssetRevisionMismatch, CodeAssetRevisionMismatch},
+	{agent.CodeActionNotAllowed, CodeActionNotAllowed},
+	{agent.CodeCurrentTooLarge, CodeCurrentTooLarge},
+	{agent.CodeOperationMismatch, CodeOperationMismatch},
+	{agent.CodeWorkConflict, CodeWorkConflict},
+	{agent.CodeWorkExpired, CodeWorkExpired},
+	{agent.CodeProfileHostMismatch, CodeProfileHostMismatch},
+	{agent.CodeOperationPending, CodeOperationPending},
+	{agent.CodePeerUnavailable, CodePeerUnavailable},
+	{agent.CodeMnemondUnavailable, CodeMnemondUnavailable},
+	{agent.CodeInternal, CodeInternal},
 }
 
-func localAPIErrorCode(code agent.ControlErrorCode) (localapi.ErrorCode, bool) {
+func localAPIErrorCode(code agent.ControlErrorCode) (ErrorCode, bool) {
 	for _, mapping := range localAPIErrorMappings {
 		if mapping.domain == code {
 			return mapping.transport, true
 		}
 	}
-	return localapi.CodeInternal, false
+	return CodeInternal, false
 }
 
-var _ localapi.Service = (*localAPIServiceAdapter)(nil)
+var _ Service = (*localAPIServiceAdapter)(nil)

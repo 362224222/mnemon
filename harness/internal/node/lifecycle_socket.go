@@ -7,10 +7,8 @@ import (
 	"syscall"
 	"time"
 
-	"golang.org/x/sys/unix"
-
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
+	"golang.org/x/sys/unix"
 )
 
 // pinControlSocket opens the live control socket with O_PATH relative to the
@@ -52,20 +50,20 @@ func (lease *DaemonLifecycleLease) pinControlSocket() (*os.File, os.FileInfo, bo
 // waits until exactly that pinned control socket is removed. The caller must
 // keep the pin backing socketIdentity open until this method returns.
 func (lease *DaemonLifecycleLease) drainOnlineDaemon(bounded context.Context,
-	client DaemonLifecycleClient, expected localapi.AuthorityResponse,
+	client DaemonLifecycleClient, expected AuthorityResponse,
 	socketIdentity os.FileInfo, poll time.Duration,
 ) error {
 	response, shutdownErr := client.ShutdownForMutation(bounded, expected)
 	if err := bounded.Err(); err != nil {
 		return lifecycleError("request graceful shutdown", err)
 	}
-	if shutdownErr != nil && shutdownErr.Code != localapi.CodeMnemondUnavailable {
+	if shutdownErr != nil && shutdownErr.Code != CodeMnemondUnavailable {
 		return lifecycleError("request graceful shutdown", shutdownErr)
 	}
 	if shutdownErr == nil {
-		expectedDigest, digestErr := localapi.AuthorityDigest(expected)
+		expectedDigest, digestErr := AuthorityDigest(expected)
 		actualDigest, parseErr := model.ParseDigest(response.AuthorityDigest)
-		if digestErr != nil || parseErr != nil || response.SchemaVersion != localapi.SchemaVersion ||
+		if digestErr != nil || parseErr != nil || response.SchemaVersion != SchemaVersion ||
 			response.Status != "stopping" || actualDigest != expectedDigest {
 			return lifecycleError("request graceful shutdown",
 				errors.New("shutdown response is noncanonical"))

@@ -3,14 +3,12 @@ package node
 import (
 	"context"
 	"errors"
+	"github.com/mnemon-dev/mnemon/harness/internal/store"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
-	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
 
 func TestDaemonLifecycleQuiesceWaitsPastShutdownResponseForWriterRelease(t *testing.T) {
@@ -27,7 +25,7 @@ func TestDaemonLifecycleQuiesceWaitsPastShutdownResponseForWriterRelease(t *test
 	go func() { served <- daemon.Serve(serveCtx) }()
 	waitControllerSocket(t, filepath.Join(fixture.nodeState, controlSocketName), served)
 
-	client, err := localapi.NewClient(fixture.nodeState)
+	client, err := NewClient(fixture.nodeState)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,8 +43,8 @@ func TestDaemonLifecycleQuiesceWaitsPastShutdownResponseForWriterRelease(t *test
 	}
 	defer releaseWriterObservation()
 	confirmer := DaemonOfflineConfirmerFunc(func(ctx context.Context,
-		expected localapi.AuthorityResponse,
-	) (localapi.AuthorityResponse, error) {
+		expected AuthorityResponse,
+	) (AuthorityResponse, error) {
 		response, err := daemonFixtureOfflineConfirmer(fixture).ConfirmOffline(ctx, expected)
 		if errors.Is(err, ErrOfflineAuthorityActive) {
 			writerActiveOnce.Do(func() {
@@ -60,14 +58,14 @@ func TestDaemonLifecycleQuiesceWaitsPastShutdownResponseForWriterRelease(t *test
 		return response, err
 	})
 	quiesced := make(chan struct {
-		authority localapi.AuthorityResponse
+		authority AuthorityResponse
 		err       error
 	}, 1)
 	go func() {
 		authority, err := lease.quiesce(context.Background(), client, confirmer, expected,
 			daemonLifecycleTiming{deadline: 10 * time.Second, poll: 5 * time.Millisecond})
 		quiesced <- struct {
-			authority localapi.AuthorityResponse
+			authority AuthorityResponse
 			err       error
 		}{authority: authority, err: err}
 	}()
@@ -123,7 +121,7 @@ func TestDaemonLifecycleQuiesceBusyMutationLeavesDaemonOnline(t *testing.T) {
 	served := make(chan error, 1)
 	go func() { served <- daemon.Serve(context.Background()) }()
 	waitControllerSocket(t, filepath.Join(fixture.nodeState, controlSocketName), served)
-	client, err := localapi.NewClient(fixture.nodeState)
+	client, err := NewClient(fixture.nodeState)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,15 +132,15 @@ func TestDaemonLifecycleQuiesceBusyMutationLeavesDaemonOnline(t *testing.T) {
 	lease := acquireTestDaemonLifecycle(t, fixture)
 	var confirmations atomic.Int32
 	confirmer := DaemonOfflineConfirmerFunc(func(context.Context,
-		localapi.AuthorityResponse,
-	) (localapi.AuthorityResponse, error) {
+		AuthorityResponse,
+	) (AuthorityResponse, error) {
 		confirmations.Add(1)
-		return localapi.AuthorityResponse{}, errors.New("offline confirmation must not run")
+		return AuthorityResponse{}, errors.New("offline confirmation must not run")
 	})
 	_, err = lease.Quiesce(context.Background(), client, confirmer, expected)
-	var mutationErr *localapi.APIError
+	var mutationErr *APIError
 	if !errors.Is(err, ErrDaemonLifecycle) || !errors.As(err, &mutationErr) ||
-		mutationErr.Code != localapi.CodeOperationPending || confirmations.Load() != 0 {
+		mutationErr.Code != CodeOperationPending || confirmations.Load() != 0 {
 		t.Fatalf("busy Quiesce() = %v, API=%#v confirmations=%d", err, mutationErr,
 			confirmations.Load())
 	}
@@ -169,7 +167,7 @@ func TestDaemonLifecycleLeaseBlocksConcurrentEnsureLaunch(t *testing.T) {
 	var ready atomic.Bool
 	options := DaemonEnsureOptions{
 		NodeState: fixture.nodeState, AssetRevision: fixture.revision,
-		Probe: ensureProbeFunc(func(context.Context) (localapi.HealthResponse, *localapi.APIError) {
+		Probe: ensureProbeFunc(func(context.Context) (HealthResponse, *APIError) {
 			probes.Add(1)
 			if ready.Load() {
 				return readyEnsureHealth(fixture.revision), nil
@@ -215,11 +213,11 @@ func TestDaemonLifecycleRejectsWrongNodeAndClosedLease(t *testing.T) {
 	var wrongReads atomic.Int32
 	wrongClient := lifecycleClientStub{
 		shutdown: func(context.Context,
-			localapi.AuthorityResponse,
-		) (localapi.ShutdownResponse, *localapi.APIError) {
+			AuthorityResponse,
+		) (ShutdownResponse, *APIError) {
 			wrongReads.Add(1)
 			t.Fatal("wrong-Node client reached shutdown")
-			return localapi.ShutdownResponse{}, nil
+			return ShutdownResponse{}, nil
 		},
 	}
 	if _, err := lease.Quiesce(context.Background(), wrongClient,
@@ -228,7 +226,7 @@ func TestDaemonLifecycleRejectsWrongNodeAndClosedLease(t *testing.T) {
 	}
 	var probes atomic.Int32
 	options := unavailableEnsureOptions(other.nodeState, other.revision, new(atomic.Int32))
-	options.Probe = ensureProbeFunc(func(context.Context) (localapi.HealthResponse, *localapi.APIError) {
+	options.Probe = ensureProbeFunc(func(context.Context) (HealthResponse, *APIError) {
 		probes.Add(1)
 		return unavailableEnsureHealth()
 	})
@@ -261,7 +259,7 @@ func TestDaemonLifecycleEnsureUsesHeldLeaseWithoutRelocking(t *testing.T) {
 	handle := newRecordingDaemonLaunch()
 	result, err := lease.Ensure(context.Background(), DaemonEnsureOptions{
 		NodeState: fixture.nodeState, AssetRevision: fixture.revision,
-		Probe: ensureProbeFunc(func(context.Context) (localapi.HealthResponse, *localapi.APIError) {
+		Probe: ensureProbeFunc(func(context.Context) (HealthResponse, *APIError) {
 			if ready.Load() {
 				return readyEnsureHealth(fixture.revision), nil
 			}
@@ -282,15 +280,15 @@ func TestDaemonLifecycleEnsureUsesHeldLeaseWithoutRelocking(t *testing.T) {
 }
 
 type lifecycleClientStub struct {
-	shutdown func(context.Context, localapi.AuthorityResponse) (
-		localapi.ShutdownResponse, *localapi.APIError,
+	shutdown func(context.Context, AuthorityResponse) (
+		ShutdownResponse, *APIError,
 	)
 }
 
 func (client lifecycleClientStub) ShutdownForMutation(ctx context.Context,
-	expected localapi.AuthorityResponse,
+	expected AuthorityResponse,
 ) (
-	localapi.ShutdownResponse, *localapi.APIError,
+	ShutdownResponse, *APIError,
 ) {
 	return client.shutdown(ctx, expected)
 }
@@ -306,9 +304,9 @@ func acquireTestDaemonLifecycle(t *testing.T, fixture daemonFixture) *DaemonLife
 	return lease
 }
 
-func daemonFixtureAuthorityResponse(t *testing.T, fixture daemonFixture) localapi.AuthorityResponse {
+func daemonFixtureAuthorityResponse(t *testing.T, fixture daemonFixture) AuthorityResponse {
 	t.Helper()
-	response, err := localapi.NewAuthorityResponse(localapi.AuthoritySnapshot{
+	response, err := NewAuthorityResponse(AuthoritySnapshot{
 		Host: fixture.profile.Host(), Runtime: fixture.profile.Runtime(),
 		Enabled: fixture.profile.Enabled(), AssetRevision: fixture.profile.ActiveAssetRevision(),
 		UpdatedAt: fixture.profile.UpdatedAt(), PeerID: fixture.identity.PeerID(),
@@ -322,7 +320,7 @@ func daemonFixtureAuthorityResponse(t *testing.T, fixture daemonFixture) localap
 
 func daemonFixtureLifecycleClient(t *testing.T, fixture daemonFixture) DaemonLifecycleClient {
 	t.Helper()
-	client, err := localapi.NewClient(fixture.nodeState)
+	client, err := NewClient(fixture.nodeState)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -331,26 +329,26 @@ func daemonFixtureLifecycleClient(t *testing.T, fixture daemonFixture) DaemonLif
 
 func daemonFixtureOfflineConfirmer(fixture daemonFixture) DaemonOfflineConfirmer {
 	return DaemonOfflineConfirmerFunc(func(ctx context.Context,
-		expected localapi.AuthorityResponse,
-	) (localapi.AuthorityResponse, error) {
-		digest, err := localapi.AuthorityDigest(expected)
+		expected AuthorityResponse,
+	) (AuthorityResponse, error) {
+		digest, err := AuthorityDigest(expected)
 		if err != nil {
-			return localapi.AuthorityResponse{}, err
+			return AuthorityResponse{}, err
 		}
 		return ConfirmOfflineAuthority(ctx, fixture.workspace, digest)
 	})
 }
 
 func daemonFixtureShutdownResponse(t *testing.T,
-	expected localapi.AuthorityResponse,
-) localapi.ShutdownResponse {
+	expected AuthorityResponse,
+) ShutdownResponse {
 	t.Helper()
-	digest, err := localapi.AuthorityDigest(expected)
+	digest, err := AuthorityDigest(expected)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return localapi.ShutdownResponse{AuthorityDigest: digest.String(),
-		SchemaVersion: localapi.SchemaVersion, Status: "stopping"}
+	return ShutdownResponse{AuthorityDigest: digest.String(),
+		SchemaVersion: SchemaVersion, Status: "stopping"}
 }
 
 func waitAtomicAtLeast(t *testing.T, value *atomic.Int32, expected int32) {

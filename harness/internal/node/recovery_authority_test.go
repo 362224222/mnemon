@@ -3,13 +3,11 @@ package node
 import (
 	"context"
 	"errors"
+	"github.com/mnemon-dev/mnemon/harness/internal/model"
+	"github.com/mnemon-dev/mnemon/harness/internal/store"
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
-	"github.com/mnemon-dev/mnemon/harness/internal/model"
-	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
 
 func TestRecoveryAuthoritySurvivesLostIdentityAndCredentialButStillRequiresWriter(t *testing.T) {
@@ -29,7 +27,7 @@ func TestRecoveryAuthoritySurvivesLostIdentityAndCredentialButStillRequiresWrite
 	if err != nil || snapshot.PeerID != fixture.identity.PeerID() {
 		t.Fatalf("InspectRecoveryAuthority() = (%#v, %v)", snapshot, err)
 	}
-	digest, err := localapi.AuthorityDigest(expected)
+	digest, err := AuthorityDigest(expected)
 	if err != nil {
 		t.Fatal(err)
 	}

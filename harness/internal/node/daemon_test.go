@@ -15,7 +15,6 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/agent"
 	"github.com/mnemon-dev/mnemon/harness/internal/assets"
 	"github.com/mnemon-dev/mnemon/harness/internal/integration"
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 	"golang.org/x/sys/unix"
@@ -37,7 +36,7 @@ func TestOpenDaemonBindsIdentityStoreCredentialAssetsAndSocket(t *testing.T) {
 	served := make(chan error, 1)
 	go func() { served <- daemon.Serve(serveCtx) }()
 	waitControllerSocket(t, filepath.Join(fixture.nodeState, "control.sock"), served)
-	client, err := localapi.NewClient(fixture.nodeState)
+	client, err := NewClient(fixture.nodeState)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -375,7 +374,7 @@ func TestDaemonConcurrentCloseAndServeReuseFailClosed(t *testing.T) {
 	served := make(chan error, 1)
 	go func() { served <- daemon.Serve(context.Background()) }()
 	waitControllerSocket(t, filepath.Join(fixture.nodeState, controlSocketName), served)
-	client, err := localapi.NewClient(fixture.nodeState)
+	client, err := NewClient(fixture.nodeState)
 	if err != nil {
 		t.Fatal(err)
 	}

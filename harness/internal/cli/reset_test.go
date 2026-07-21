@@ -69,6 +69,7 @@ func newResetTestFixture(t *testing.T) resetTestFixture {
 	revision := model.Sum([]byte("reset-test-assets")).String()
 	provisioned, err := node.Provision(context.Background(), node.ProvisionOptions{
 		Workspace: workspace, Host: model.HostCodex, AssetRevision: revision,
+		Credentials: localapi.NodeRuntime{},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -105,6 +106,7 @@ func assertResetReceiptAndFreshIdentity(t *testing.T, fixture resetTestFixture,
 	}
 	fresh, err := node.Provision(context.Background(), node.ProvisionOptions{
 		Workspace: fixture.workspace, Host: model.HostCodex, AssetRevision: fixture.revision,
+		Credentials: localapi.NodeRuntime{},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -139,6 +141,7 @@ func TestResetProcessBoundaryRenamesNodeTree(t *testing.T) {
 	revision := model.Sum([]byte("reset-process-assets")).String()
 	provisioned, err := node.Provision(context.Background(), node.ProvisionOptions{
 		Workspace: workspace, Host: model.HostCodex, AssetRevision: revision,
+		Credentials: localapi.NodeRuntime{},
 	})
 	if err != nil {
 		t.Fatal(err)

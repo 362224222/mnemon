@@ -2,7 +2,6 @@ package localapi
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -22,13 +21,6 @@ const (
 	RouteTeamworkAction = "/v1/teamwork/action"
 	RouteAgentResolve   = "/v1/agent/resolve"
 )
-
-type Service interface {
-	HookCheck(context.Context, RequestMetadata, HookCheckRequest) (HookCheckResponse, *APIError)
-	AgentCurrent(context.Context, RequestMetadata, AgentCurrentRequest) (AgentCurrentResponse, *APIError)
-	TeamworkAction(context.Context, RequestMetadata, TeamworkActionRequest) (OperationResponse, *APIError)
-	AgentResolve(context.Context, RequestMetadata, AgentResolveRequest) (OperationResponse, *APIError)
-}
 
 type Server struct {
 	authenticator Authenticator

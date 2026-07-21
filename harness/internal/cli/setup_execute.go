@@ -104,7 +104,7 @@ func productionSetupDependencies() setupDependencies {
 		detectHost:  integration.DetectHost,
 		inspectHost: integration.InspectHost,
 		activationSupported: func(observation integration.HostObservation) bool {
-			return observation.Host == assets.HostCodex
+			return observation.Host.Valid()
 		},
 		prepareNode:   node.PrepareNodeState,
 		canInitialize: setupCanInitialize,
@@ -267,7 +267,8 @@ func (app *setupApp) execute(ctx context.Context,
 		return setupReceipt{}, setupAssetsError()
 	}
 	preflight, err := app.deps.newPreflight(node.DaemonPreflightOptions{
-		Workspace: workspace, NodeState: nodeState, AssetRevision: revision, Install: installation,
+		Workspace: workspace, NodeState: nodeState, AssetRevision: revision,
+		Install: installation, Credentials: localapi.NodeRuntime{},
 	})
 	if err != nil || preflight == nil {
 		return setupReceipt{}, setupAssetsError()

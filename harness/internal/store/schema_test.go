@@ -33,8 +33,7 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 		),
 		"index": strings.Fields(
 			"profiles_one_enabled_teamwork_idx operations_reclaim_idx operations_one_started_context_idx operation_artifact_roots_root_idx " +
-				"works_due_idx agent_handlings_ready_idx agent_handlings_one_claimed_profile_idx " +
-				"agent_runs_handling_generation_attempt_idx agent_runs_incomplete_managed_idx artifact_pins_expiry_idx enrollment_grants_one_open_idx " +
+				"works_due_idx agent_handlings_ready_idx agent_handlings_one_claimed_profile_idx agent_runs_handling_generation_attempt_idx agent_runs_incomplete_managed_idx artifact_pins_expiry_idx enrollment_grants_one_open_idx " +
 				"channel_leave_requests_one_open_idx gossip_publications_ready_idx peer_inbox_work_idx",
 		),
 		"trigger": strings.Fields(

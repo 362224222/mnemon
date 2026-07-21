@@ -45,6 +45,7 @@ type DaemonOptions struct {
 	Workspace          string
 	Clock              Clock
 	Install            InstallationVerifier
+	Control            ControlRuntime
 	WakeAdapterFactory WakeAdapterFactory
 }
 
@@ -115,8 +116,14 @@ func openDaemon(ctx context.Context, options DaemonOptions,
 	if options.Clock == nil {
 		options.Clock = wallClock{}
 	}
+	control, err := requireControlRuntime(options.Control)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrDaemonAuthority, err)
+	}
+	options.Control = control
 	nodeState := filepath.Join(options.Workspace, ".mnemon", "harness", "node")
-	authority, err := openExistingDaemonAuthority(ctx, options.Workspace, nodeState)
+	authority, err := openExistingDaemonAuthority(ctx, options.Workspace, nodeState,
+		options.Control)
 	if err != nil {
 		return nil, err
 	}
@@ -152,7 +159,7 @@ func openDaemon(ctx context.Context, options DaemonOptions,
 	}
 	controller, err := NewController(ctx, ControllerOptions{NodeState: nodeState, Workspace: workspace,
 		Store: st, Profile: authority.authority.Profile, Signer: identity.PublicationSigner(), Clock: options.Clock,
-		Install: options.Install, Channels: channels.manager, actionPolicy: actionPolicy,
+		Install: options.Install, Control: options.Control, Channels: channels.manager, actionPolicy: actionPolicy,
 		WakeAdapter: wakeAdapter, BeforeAccept: beforeAccept, networkRuntime: channels.data.plane})
 	if err != nil {
 		return fail(fmt.Errorf("%w: compose controller: %v", ErrDaemonAuthority, err))

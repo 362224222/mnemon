@@ -4,13 +4,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"github.com/mnemon-dev/mnemon/harness/internal/store"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
-
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
-	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
 
 func TestRecoveryQuarantineAtomicallyMovesWholeNodeAfterExactQuiescence(t *testing.T) {
@@ -42,11 +40,11 @@ func TestRecoveryQuarantineAtomicallyMovesWholeNodeAfterExactQuiescence(t *testi
 		t.Fatalf("unquiesced attempt changed Node: %v", err)
 	}
 	confirmer := DaemonOfflineConfirmerFunc(func(ctx context.Context,
-		expected localapi.AuthorityResponse,
-	) (localapi.AuthorityResponse, error) {
-		digest, err := localapi.AuthorityDigest(expected)
+		expected AuthorityResponse,
+	) (AuthorityResponse, error) {
+		digest, err := AuthorityDigest(expected)
 		if err != nil {
-			return localapi.AuthorityResponse{}, err
+			return AuthorityResponse{}, err
 		}
 		return ConfirmRecoveryOfflineAuthority(ctx, fixture.workspace, digest)
 	})

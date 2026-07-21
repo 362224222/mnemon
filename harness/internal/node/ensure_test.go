@@ -3,15 +3,13 @@ package node
 import (
 	"context"
 	"errors"
+	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
-	"github.com/mnemon-dev/mnemon/harness/internal/model"
 )
 
 func TestEnsureDaemonReturnsExactReadyHealthWithoutLockOrLaunch(t *testing.T) {
@@ -20,7 +18,7 @@ func TestEnsureDaemonReturnsExactReadyHealthWithoutLockOrLaunch(t *testing.T) {
 	health := readyEnsureHealth(revision)
 	result, err := EnsureDaemon(context.Background(), DaemonEnsureOptions{
 		NodeState: nodeState, AssetRevision: revision,
-		Probe: ensureProbeFunc(func(context.Context) (localapi.HealthResponse, *localapi.APIError) {
+		Probe: ensureProbeFunc(func(context.Context) (HealthResponse, *APIError) {
 			return health, nil
 		}),
 	})
@@ -40,10 +38,10 @@ func TestEnsureDaemonRunsCallerReadyGateWithoutCreatingAnotherAuthority(t *testi
 	var gates atomic.Int32
 	result, err := EnsureDaemon(context.Background(), DaemonEnsureOptions{
 		NodeState: nodeState, AssetRevision: revision,
-		Probe: ensureProbeFunc(func(context.Context) (localapi.HealthResponse, *localapi.APIError) {
+		Probe: ensureProbeFunc(func(context.Context) (HealthResponse, *APIError) {
 			return health, nil
 		}),
-		ReadyGate: DaemonReadyGateFunc(func(_ context.Context, received localapi.HealthResponse) error {
+		ReadyGate: DaemonReadyGateFunc(func(_ context.Context, received HealthResponse) error {
 			gates.Add(1)
 			if received != health {
 				t.Fatalf("ready gate health = %#v", received)
@@ -64,20 +62,20 @@ func TestEnsureDaemonFailsClosedForEveryReachableNonreadyState(t *testing.T) {
 	wanted := ensureTestRevision("wanted")
 	other := ensureTestRevision("other")
 	tests := map[string]ensureProbeFunc{
-		"not ready": func(context.Context) (localapi.HealthResponse, *localapi.APIError) {
-			return localapi.HealthResponse{AssetRevision: wanted, SchemaVersion: localapi.SchemaVersion,
+		"not ready": func(context.Context) (HealthResponse, *APIError) {
+			return HealthResponse{AssetRevision: wanted, SchemaVersion: SchemaVersion,
 				Status: "not_ready"}, nil
 		},
-		"different revision": func(context.Context) (localapi.HealthResponse, *localapi.APIError) {
+		"different revision": func(context.Context) (HealthResponse, *APIError) {
 			return readyEnsureHealth(other), nil
 		},
-		"authentication failure": func(context.Context) (localapi.HealthResponse, *localapi.APIError) {
-			return localapi.HealthResponse{}, localapi.NewAPIError(
-				localapi.CodeAuthenticationFailed, "authentication failed")
+		"authentication failure": func(context.Context) (HealthResponse, *APIError) {
+			return HealthResponse{}, NewAPIError(
+				CodeAuthenticationFailed, "authentication failed")
 		},
-		"noncanonical response": func(context.Context) (localapi.HealthResponse, *localapi.APIError) {
-			return localapi.HealthResponse{AssetRevision: wanted,
-				SchemaVersion: localapi.SchemaVersion + 1, Status: "ready"}, nil
+		"noncanonical response": func(context.Context) (HealthResponse, *APIError) {
+			return HealthResponse{AssetRevision: wanted,
+				SchemaVersion: SchemaVersion + 1, Status: "ready"}, nil
 		},
 	}
 	for name, probe := range tests {
@@ -121,7 +119,7 @@ func TestEnsureDaemonRechecksUnderLockBeforeStrictPreflight(t *testing.T) {
 	var launches atomic.Int32
 	result, err := EnsureDaemon(context.Background(), DaemonEnsureOptions{
 		NodeState: nodeState, AssetRevision: revision,
-		Probe: ensureProbeFunc(func(context.Context) (localapi.HealthResponse, *localapi.APIError) {
+		Probe: ensureProbeFunc(func(context.Context) (HealthResponse, *APIError) {
 			if probes.Add(1) == 1 {
 				return unavailableEnsureHealth()
 			}
@@ -157,7 +155,7 @@ func TestEnsureDaemonRunsStrictPreflightThenOneLaunchAndWaitsForReady(t *testing
 	handle := newRecordingDaemonLaunch()
 	result, err := EnsureDaemon(context.Background(), DaemonEnsureOptions{
 		NodeState: nodeState, AssetRevision: revision,
-		Probe: ensureProbeFunc(func(context.Context) (localapi.HealthResponse, *localapi.APIError) {
+		Probe: ensureProbeFunc(func(context.Context) (HealthResponse, *APIError) {
 			probes.Add(1)
 			if !launched.Load() {
 				return unavailableEnsureHealth()
@@ -177,7 +175,7 @@ func TestEnsureDaemonRunsStrictPreflightThenOneLaunchAndWaitsForReady(t *testing
 			launched.Store(true)
 			return handle, nil
 		}),
-		ReadyGate: DaemonReadyGateFunc(func(context.Context, localapi.HealthResponse) error {
+		ReadyGate: DaemonReadyGateFunc(func(context.Context, HealthResponse) error {
 			if err := validateHeldEnsureLock(receivedPermit.lock, nodeState); err != nil {
 				t.Fatalf("ready gate observed released launch permit: %v", err)
 			}
@@ -207,14 +205,14 @@ func TestEnsureDaemonWaitsForOwnedChildExactNotReadyThenReleasesReady(t *testing
 	var readyGates atomic.Int32
 	handle := newRecordingDaemonLaunch()
 	options := DaemonEnsureOptions{NodeState: nodeState, AssetRevision: revision,
-		Probe: ensureProbeFunc(func(context.Context) (localapi.HealthResponse, *localapi.APIError) {
+		Probe: ensureProbeFunc(func(context.Context) (HealthResponse, *APIError) {
 			call := probes.Add(1)
 			if !launched.Load() {
 				return unavailableEnsureHealth()
 			}
 			if call == 3 {
-				return localapi.HealthResponse{AssetRevision: revision,
-					SchemaVersion: localapi.SchemaVersion, Status: "not_ready"}, nil
+				return HealthResponse{AssetRevision: revision,
+					SchemaVersion: SchemaVersion, Status: "not_ready"}, nil
 			}
 			return readyEnsureHealth(revision), nil
 		}),
@@ -223,7 +221,7 @@ func TestEnsureDaemonWaitsForOwnedChildExactNotReadyThenReleasesReady(t *testing
 			launched.Store(true)
 			return handle, nil
 		}),
-		ReadyGate: DaemonReadyGateFunc(func(_ context.Context, health localapi.HealthResponse) error {
+		ReadyGate: DaemonReadyGateFunc(func(_ context.Context, health HealthResponse) error {
 			readyGates.Add(1)
 			if health != readyEnsureHealth(revision) {
 				t.Fatalf("ready gate health = %#v", health)
@@ -250,7 +248,7 @@ func TestEnsureDaemonTerminatesNewChildWhenReadyGateFails(t *testing.T) {
 	handle := newRecordingDaemonLaunch()
 	result, err := EnsureDaemon(context.Background(), DaemonEnsureOptions{
 		NodeState: nodeState, AssetRevision: revision,
-		Probe: ensureProbeFunc(func(context.Context) (localapi.HealthResponse, *localapi.APIError) {
+		Probe: ensureProbeFunc(func(context.Context) (HealthResponse, *APIError) {
 			if !launched.Load() {
 				return unavailableEnsureHealth()
 			}
@@ -261,7 +259,7 @@ func TestEnsureDaemonTerminatesNewChildWhenReadyGateFails(t *testing.T) {
 			launched.Store(true)
 			return handle, nil
 		}),
-		ReadyGate: DaemonReadyGateFunc(func(context.Context, localapi.HealthResponse) error {
+		ReadyGate: DaemonReadyGateFunc(func(context.Context, HealthResponse) error {
 			return failed
 		}),
 	})
@@ -345,7 +343,7 @@ func TestEnsureDaemonPreflightLaunchAndDeadlineFailuresStayClosed(t *testing.T) 
 		var launches atomic.Int32
 		result, err := EnsureDaemon(context.Background(), DaemonEnsureOptions{
 			NodeState: nodeState, AssetRevision: revision,
-			Probe: ensureProbeFunc(func(context.Context) (localapi.HealthResponse, *localapi.APIError) {
+			Probe: ensureProbeFunc(func(context.Context) (HealthResponse, *APIError) {
 				return unavailableEnsureHealth()
 			}),
 			Preflight: DaemonEnsurePreflightFunc(func(context.Context) error { return failed }),
@@ -366,7 +364,7 @@ func TestEnsureDaemonPreflightLaunchAndDeadlineFailuresStayClosed(t *testing.T) 
 		handle := newRecordingDaemonLaunch()
 		result, err := EnsureDaemon(context.Background(), DaemonEnsureOptions{
 			NodeState: nodeState, AssetRevision: revision,
-			Probe: ensureProbeFunc(func(context.Context) (localapi.HealthResponse, *localapi.APIError) {
+			Probe: ensureProbeFunc(func(context.Context) (HealthResponse, *APIError) {
 				return unavailableEnsureHealth()
 			}),
 			Preflight: DaemonEnsurePreflightFunc(func(context.Context) error { return nil }),
@@ -389,7 +387,7 @@ func TestEnsureDaemonPreflightLaunchAndDeadlineFailuresStayClosed(t *testing.T) 
 		handle := newRecordingDaemonLaunch()
 		options := DaemonEnsureOptions{
 			NodeState: nodeState, AssetRevision: revision,
-			Probe: ensureProbeFunc(func(context.Context) (localapi.HealthResponse, *localapi.APIError) {
+			Probe: ensureProbeFunc(func(context.Context) (HealthResponse, *APIError) {
 				return unavailableEnsureHealth()
 			}),
 			Preflight: DaemonEnsurePreflightFunc(func(context.Context) error { return nil }),
@@ -441,12 +439,12 @@ func TestEnsureDaemonTerminatesOnlyItsOwnedChildAfterPostLaunchFailures(t *testi
 		var launched atomic.Bool
 		options := DaemonEnsureOptions{
 			NodeState: nodeState, AssetRevision: revision,
-			Probe: ensureProbeFunc(func(context.Context) (localapi.HealthResponse, *localapi.APIError) {
+			Probe: ensureProbeFunc(func(context.Context) (HealthResponse, *APIError) {
 				if !launched.Load() {
 					return unavailableEnsureHealth()
 				}
-				return localapi.HealthResponse{AssetRevision: revision,
-					SchemaVersion: localapi.SchemaVersion, Status: "not_ready"}, nil
+				return HealthResponse{AssetRevision: revision,
+					SchemaVersion: SchemaVersion, Status: "not_ready"}, nil
 			}),
 			Preflight: DaemonEnsurePreflightFunc(func(context.Context) error { return nil }),
 			Launcher: DaemonLauncherFunc(func(context.Context, DaemonLaunchPermit) (DaemonLaunch, error) {
@@ -472,7 +470,7 @@ func TestEnsureDaemonTerminatesOnlyItsOwnedChildAfterPostLaunchFailures(t *testi
 		var probes atomic.Int32
 		_, err := EnsureDaemon(context.Background(), DaemonEnsureOptions{
 			NodeState: nodeState, AssetRevision: revision,
-			Probe: ensureProbeFunc(func(context.Context) (localapi.HealthResponse, *localapi.APIError) {
+			Probe: ensureProbeFunc(func(context.Context) (HealthResponse, *APIError) {
 				probes.Add(1)
 				if !launched.Load() {
 					return unavailableEnsureHealth()
@@ -500,7 +498,7 @@ func TestEnsureDaemonTerminatesOnlyItsOwnedChildAfterPostLaunchFailures(t *testi
 		var launched atomic.Bool
 		_, err := EnsureDaemon(context.Background(), DaemonEnsureOptions{
 			NodeState: nodeState, AssetRevision: revision,
-			Probe: ensureProbeFunc(func(context.Context) (localapi.HealthResponse, *localapi.APIError) {
+			Probe: ensureProbeFunc(func(context.Context) (HealthResponse, *APIError) {
 				if !launched.Load() {
 					return unavailableEnsureHealth()
 				}
@@ -525,7 +523,7 @@ func TestEnsureDaemonTerminatesOnlyItsOwnedChildAfterPostLaunchFailures(t *testi
 		handle := newRecordingDaemonLaunch()
 		_, err := EnsureDaemon(context.Background(), DaemonEnsureOptions{
 			NodeState: nodeState, AssetRevision: revision,
-			Probe: ensureProbeFunc(func(context.Context) (localapi.HealthResponse, *localapi.APIError) {
+			Probe: ensureProbeFunc(func(context.Context) (HealthResponse, *APIError) {
 				return unavailableEnsureHealth()
 			}),
 			Preflight: DaemonEnsurePreflightFunc(func(context.Context) error { return nil }),
@@ -551,7 +549,7 @@ func testEnsureFailedTerminationWithholdsProof(t *testing.T) {
 	var launched atomic.Bool
 	result, err := EnsureDaemon(context.Background(), DaemonEnsureOptions{
 		NodeState: nodeState, AssetRevision: revision,
-		Probe: ensureProbeFunc(func(context.Context) (localapi.HealthResponse, *localapi.APIError) {
+		Probe: ensureProbeFunc(func(context.Context) (HealthResponse, *APIError) {
 			if !launched.Load() {
 				return unavailableEnsureHealth()
 			}
@@ -562,7 +560,7 @@ func testEnsureFailedTerminationWithholdsProof(t *testing.T) {
 			launched.Store(true)
 			return handle, nil
 		}),
-		ReadyGate: DaemonReadyGateFunc(func(context.Context, localapi.HealthResponse) error {
+		ReadyGate: DaemonReadyGateFunc(func(context.Context, HealthResponse) error {
 			return gateFailure
 		}),
 	})
@@ -590,7 +588,7 @@ func TestEnsureDaemonWithholdsCompensationWhenLockCloseFailsAfterChildRelease(t 
 	}
 	result, err := EnsureDaemon(context.Background(), DaemonEnsureOptions{
 		NodeState: nodeState, AssetRevision: revision,
-		Probe: ensureProbeFunc(func(context.Context) (localapi.HealthResponse, *localapi.APIError) {
+		Probe: ensureProbeFunc(func(context.Context) (HealthResponse, *APIError) {
 			if !launched.Load() {
 				return unavailableEnsureHealth()
 			}
@@ -645,7 +643,7 @@ func TestEnsureDaemonRejectsUnsafeLockAndInvalidInputWithoutLaunch(t *testing.T)
 
 	var probes atomic.Int32
 	options := unavailableEnsureOptions("relative", ensureTestRevision("invalid"), new(atomic.Int32))
-	options.Probe = ensureProbeFunc(func(context.Context) (localapi.HealthResponse, *localapi.APIError) {
+	options.Probe = ensureProbeFunc(func(context.Context) (HealthResponse, *APIError) {
 		probes.Add(1)
 		return unavailableEnsureHealth()
 	})
@@ -654,9 +652,9 @@ func TestEnsureDaemonRejectsUnsafeLockAndInvalidInputWithoutLaunch(t *testing.T)
 	}
 }
 
-type ensureProbeFunc func(context.Context) (localapi.HealthResponse, *localapi.APIError)
+type ensureProbeFunc func(context.Context) (HealthResponse, *APIError)
 
-func (probe ensureProbeFunc) ProbeHealth(ctx context.Context) (localapi.HealthResponse, *localapi.APIError) {
+func (probe ensureProbeFunc) ProbeHealth(ctx context.Context) (HealthResponse, *APIError) {
 	return probe(ctx)
 }
 
@@ -697,8 +695,8 @@ type barrierEnsureProbe struct {
 	ready    atomic.Bool
 }
 
-func (probe *barrierEnsureProbe) ProbeHealth(ctx context.Context) (localapi.HealthResponse,
-	*localapi.APIError,
+func (probe *barrierEnsureProbe) ProbeHealth(ctx context.Context) (HealthResponse,
+	*APIError,
 ) {
 	if probe.ready.Load() {
 		return readyEnsureHealth(probe.revision), nil
@@ -710,8 +708,8 @@ func (probe *barrierEnsureProbe) ProbeHealth(ctx context.Context) (localapi.Heal
 		}
 		select {
 		case <-ctx.Done():
-			return localapi.HealthResponse{}, localapi.NewAPIError(
-				localapi.CodeMnemondUnavailable, "mnemond unavailable")
+			return HealthResponse{}, NewAPIError(
+				CodeMnemondUnavailable, "mnemond unavailable")
 		case <-probe.release:
 			return unavailableEnsureHealth()
 		}
@@ -738,14 +736,14 @@ func ensureTestRevision(label string) string {
 	return model.Sum([]byte("daemon-ensure-" + label)).String()
 }
 
-func readyEnsureHealth(revision string) localapi.HealthResponse {
-	return localapi.HealthResponse{AssetRevision: revision,
-		SchemaVersion: localapi.SchemaVersion, Status: "ready"}
+func readyEnsureHealth(revision string) HealthResponse {
+	return HealthResponse{AssetRevision: revision,
+		SchemaVersion: SchemaVersion, Status: "ready"}
 }
 
-func unavailableEnsureHealth() (localapi.HealthResponse, *localapi.APIError) {
-	return localapi.HealthResponse{}, localapi.NewAPIError(
-		localapi.CodeMnemondUnavailable, "mnemond unavailable")
+func unavailableEnsureHealth() (HealthResponse, *APIError) {
+	return HealthResponse{}, NewAPIError(
+		CodeMnemondUnavailable, "mnemond unavailable")
 }
 
 func unavailableEnsureOptions(nodeState, revision string,
@@ -753,7 +751,7 @@ func unavailableEnsureOptions(nodeState, revision string,
 ) DaemonEnsureOptions {
 	return DaemonEnsureOptions{
 		NodeState: nodeState, AssetRevision: revision,
-		Probe: ensureProbeFunc(func(context.Context) (localapi.HealthResponse, *localapi.APIError) {
+		Probe: ensureProbeFunc(func(context.Context) (HealthResponse, *APIError) {
 			return unavailableEnsureHealth()
 		}),
 		Preflight: DaemonEnsurePreflightFunc(func(context.Context) error { return nil }),

@@ -5,8 +5,6 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
-
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 )
 
 func TestOpenDaemonDataPlaneRejectsMissingAuthority(t *testing.T) {
@@ -35,21 +33,21 @@ func TestDaemonDataPlaneConvergesDirectionalChannelBaselines(t *testing.T) {
 	joinerFixture := newDaemonFixture(t, true)
 	owner := openServingDataPlaneDaemon(t, ownerFixture)
 	joiner := openServingDataPlaneDaemon(t, joinerFixture)
-	ownerClient, err := localapi.NewClient(ownerFixture.nodeState)
+	ownerClient, err := NewClient(ownerFixture.nodeState)
 	if err != nil {
 		t.Fatal(err)
 	}
-	joinerClient, err := localapi.NewClient(joinerFixture.nodeState)
+	joinerClient, err := NewClient(joinerFixture.nodeState)
 	if err != nil {
 		t.Fatal(err)
 	}
 	created, apiErr := ownerClient.CreateChannel(context.Background(),
-		localapi.ChannelCreateRequest{Name: "data-plane-integration"})
+		ChannelCreateRequest{Name: "data-plane-integration"})
 	if apiErr != nil {
 		t.Fatal(apiErr)
 	}
 	if _, apiErr := joinerClient.JoinChannel(context.Background(),
-		localapi.ChannelJoinRequest{Token: created.InviteToken}); apiErr != nil {
+		ChannelJoinRequest{Token: created.InviteToken}); apiErr != nil {
 		t.Fatal(apiErr)
 	}
 	waitForConvergedDataPlaneChannel(t, ownerClient, owner)
@@ -85,13 +83,13 @@ func openServingDataPlaneDaemon(t *testing.T, fixture daemonFixture) *servingDat
 	return &servingDataPlaneDaemon{Daemon: daemon, serveErr: serveErr}
 }
 
-func waitForConvergedDataPlaneChannel(t *testing.T, client *localapi.Client,
+func waitForConvergedDataPlaneChannel(t *testing.T, client *Client,
 	daemon *servingDataPlaneDaemon,
 ) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
-	var last localapi.ChannelStatusResponse
-	var lastErr *localapi.APIError
+	var last ChannelStatusResponse
+	var lastErr *APIError
 	for time.Now().Before(deadline) {
 		select {
 		case err := <-daemon.serveErr:

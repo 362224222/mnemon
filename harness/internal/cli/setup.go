@@ -416,7 +416,7 @@ func setupAssetsError() *localapi.APIError {
 func setupHostActivationError(err error) *localapi.APIError {
 	if errors.Is(err, integration.ErrHostActivationRequired) {
 		return setupError(localapi.CodeHostActivationRequired,
-			"Codex has not loaded the exact trusted Mnemon Hook and Skill; trust this project and the current Hook with /hooks, then rerun setup")
+			"selected Host has not loaded the exact Mnemon Hook and Skill; repair project trust or activation and rerun setup")
 	}
 	if errors.Is(err, integration.ErrProjectionConflict) ||
 		errors.Is(err, integration.ErrUnsafeProjection) {
@@ -427,7 +427,7 @@ func setupHostActivationError(err error) *localapi.APIError {
 
 func setupUnsupportedActivationError() *localapi.APIError {
 	return setupError(localapi.CodeHostActivationRequired,
-		"selected Host has no verifiable managed Hook activation surface; use codex")
+		"selected Host has no verifiable managed Hook activation surface")
 }
 
 func setupUnavailableError(message string) *localapi.APIError {

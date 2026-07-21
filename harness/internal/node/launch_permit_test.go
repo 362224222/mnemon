@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/agent"
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 	"golang.org/x/sys/unix"
@@ -143,7 +142,7 @@ func TestOpenManagedDaemonRetainsInheritedPermitUntilSocketReadyWithoutSelfDeadl
 	served := make(chan error, 1)
 	go func() { served <- daemon.Serve(serveCtx) }()
 	waitControllerSocket(t, filepath.Join(fixture.nodeState, controlSocketName), served)
-	client, err := localapi.NewClient(fixture.nodeState)
+	client, err := NewClient(fixture.nodeState)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,5 +227,100 @@ func assertClosedDescriptor(t *testing.T, fd int) {
 	t.Helper()
 	if _, err := unix.FcntlInt(uintptr(fd), unix.F_GETFD, 0); !errors.Is(err, unix.EBADF) {
 		t.Fatalf("descriptor %d remained open: %v", fd, err)
+	}
+}
+
+func TestControllerRetainsLaunchPermitUntilNetworkReadiness(t *testing.T) {
+	fixture := newDaemonFixture(t, true)
+	controller, network, serveDone, released, closeStore := startNetworkReadinessController(t,
+		fixture)
+	defer closeStore()
+	waitControllerNetworkStarted(t, network, serveDone)
+	assertLaunchPermitWaitsForNetworkReadiness(t, network, serveDone, released)
+	client, err := NewClient(fixture.nodeState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitControllerHealth(t, client, "ready")
+	controller.requestShutdown()
+	assertControllerStoppedNetwork(t, network, serveDone)
+}
+
+func startNetworkReadinessController(t *testing.T, fixture daemonFixture) (
+	*Controller, *controllerTestNetworkRuntime, chan error, chan struct{}, func(),
+) {
+	t.Helper()
+	authority, err := openExistingDaemonAuthority(context.Background(), fixture.workspace,
+		fixture.nodeState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	network := newControllerTestNetworkRuntime()
+	released := make(chan struct{})
+	controller, err := NewController(context.Background(), ControllerOptions{
+		NodeState: fixture.nodeState, Workspace: fixture.workspace, Store: authority.store,
+		Profile: authority.authority.Profile, Signer: authority.identity.PublicationSigner(),
+		Clock: controllerTestClock{fixture.profile.UpdatedAt()}, Install: fixture.install,
+		networkRuntime: network, BeforeAccept: func() error {
+			close(released)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- controller.Serve(context.Background()) }()
+	return controller, network, serveDone, released, func() { _ = authority.store.Close() }
+}
+
+func waitControllerNetworkStarted(t *testing.T, network *controllerTestNetworkRuntime,
+	serveDone <-chan error,
+) {
+	t.Helper()
+	select {
+	case <-network.started:
+	case err := <-serveDone:
+		t.Fatalf("Controller exited before network startup: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Controller did not start its network runtime")
+	}
+}
+
+func assertLaunchPermitWaitsForNetworkReadiness(t *testing.T,
+	network *controllerTestNetworkRuntime, serveDone <-chan error, released <-chan struct{},
+) {
+	t.Helper()
+	select {
+	case <-released:
+		t.Fatal("launch permit released before network readiness")
+	default:
+	}
+	close(network.allowReady)
+	select {
+	case <-released:
+	case err := <-serveDone:
+		t.Fatalf("Controller exited before consuming launch permit: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Controller did not consume launch permit after network readiness")
+	}
+}
+
+func assertControllerStoppedNetwork(t *testing.T, network *controllerTestNetworkRuntime,
+	serveDone <-chan error,
+) {
+	t.Helper()
+	select {
+	case err := <-serveDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Controller did not stop its network runtime")
+	}
+	select {
+	case <-network.stopped:
+	default:
+		t.Fatal("Controller returned before network runtime stopped")
 	}
 }

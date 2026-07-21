@@ -10,7 +10,6 @@ import (
 
 	"github.com/mnemon-dev/mnemon/harness/internal/agent"
 	"github.com/mnemon-dev/mnemon/harness/internal/artifact"
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
@@ -125,7 +124,7 @@ func composeControllerWakeWorker(options *ControllerOptions,
 	if wakeWorker == nil && options.WakeAdapter != nil {
 		var err error
 		wakeWorker, err = newManagedWakeWorker(options.Store, options.NodeState, options.Profile,
-			options.Clock, options.Install, options.WakeAdapter, admission)
+			options.Clock, options.Install, options.WakeAdapter, admission, options.Control)
 		if err != nil {
 			return nil, fmt.Errorf("mnemond controller managed wake worker: %w", err)
 		}
@@ -144,22 +143,22 @@ type controllerObserver struct {
 }
 
 func (observer controllerObserver) Health(ctx context.Context,
-	metadata localapi.RequestMetadata,
-) (localapi.HealthSnapshot, *localapi.APIError) {
+	metadata RequestMetadata,
+) (HealthSnapshot, *APIError) {
 	ready := observer.gate.Check(ctx, metadata.Profile) == nil
-	return localapi.HealthSnapshot{AssetRevision: observer.assetRevision, WorkersReady: ready}, nil
+	return HealthSnapshot{AssetRevision: observer.assetRevision, WorkersReady: ready}, nil
 }
 
 func (observer controllerObserver) Status(ctx context.Context,
-	metadata localapi.RequestMetadata,
-) (localapi.StatusSnapshot, *localapi.APIError) {
+	metadata RequestMetadata,
+) (StatusSnapshot, *APIError) {
 	if ctx == nil || ctx.Err() != nil || metadata.Profile.ID() != model.TeamworkProfileID() {
-		return localapi.StatusSnapshot{}, localapi.NewAPIError(localapi.CodeInternal,
+		return StatusSnapshot{}, NewAPIError(CodeInternal,
 			"operational status observation was cancelled")
 	}
 	current, err := observer.store.ReadLocalAuthority(ctx)
 	if err != nil {
-		return localapi.StatusSnapshot{}, localapi.NewAPIError(localapi.CodeInternal,
+		return StatusSnapshot{}, NewAPIError(CodeInternal,
 			"durable operational status is unavailable")
 	}
 	activationIssue := observer.activationIssue(ctx, current)
@@ -169,12 +168,12 @@ func (observer controllerObserver) Status(ctx context.Context,
 	}
 	channels, err := observer.store.ReadChannelStatusAuthority(ctx)
 	if err != nil {
-		return localapi.StatusSnapshot{}, localapi.NewAPIError(localapi.CodeInternal,
+		return StatusSnapshot{}, NewAPIError(CodeInternal,
 			"durable Channel progress is unavailable")
 	}
-	return localapi.StatusSnapshot{AssetRevision: observer.assetRevision,
+	return StatusSnapshot{AssetRevision: observer.assetRevision,
 		ActivationReady: activationIssue == "", ActivationIssue: activationIssue,
-		Runtime: localapi.RuntimeStatusSnapshot{Running: worker.Running, Ready: worker.Ready,
+		Runtime: RuntimeStatusSnapshot{Running: worker.Running, Ready: worker.Ready,
 			Healthy: worker.Healthy, Recovering: worker.Recovering, Issue: worker.LastError},
 		Channels: projectStatusChannels(channels, observer.channelRuntime)}, nil
 }
@@ -191,15 +190,15 @@ func (observer controllerObserver) activationIssue(ctx context.Context, current 
 }
 
 func (observer controllerObserver) Authority(ctx context.Context,
-	metadata localapi.RequestMetadata,
-) (localapi.AuthoritySnapshot, *localapi.APIError) {
+	metadata RequestMetadata,
+) (AuthoritySnapshot, *APIError) {
 	if ctx == nil || ctx.Err() != nil || metadata.Profile.ID() != model.TeamworkProfileID() {
-		return localapi.AuthoritySnapshot{}, localapi.NewAPIError(localapi.CodeInternal,
+		return AuthoritySnapshot{}, NewAPIError(CodeInternal,
 			"durable authority observation was cancelled")
 	}
 	current, err := observer.store.ReadLocalAuthority(ctx)
 	if err != nil {
-		return localapi.AuthoritySnapshot{}, localapi.NewAPIError(localapi.CodeInternal,
+		return AuthoritySnapshot{}, NewAPIError(CodeInternal,
 			"durable authority is unavailable")
 	}
 	return authoritySnapshot(current), nil

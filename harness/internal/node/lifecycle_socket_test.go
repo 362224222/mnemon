@@ -10,8 +10,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 )
 
 func TestDaemonLifecycleQuiesceRejectsOfflineGenerationDrift(t *testing.T) {
@@ -32,11 +30,11 @@ func TestDaemonLifecycleQuiesceRejectsOfflineGenerationDrift(t *testing.T) {
 	defer lease.Close()
 	var shutdowns atomic.Int32
 	client := lifecycleClientStub{shutdown: func(context.Context,
-		localapi.AuthorityResponse,
-	) (localapi.ShutdownResponse, *localapi.APIError) {
+		AuthorityResponse,
+	) (ShutdownResponse, *APIError) {
 		shutdowns.Add(1)
-		return localapi.ShutdownResponse{}, localapi.NewAPIError(
-			localapi.CodeInternal, "unexpected shutdown")
+		return ShutdownResponse{}, NewAPIError(
+			CodeInternal, "unexpected shutdown")
 	}}
 	_, err = lease.Quiesce(context.Background(), client,
 		daemonFixtureOfflineConfirmer(fixture), drifted)
@@ -45,7 +43,7 @@ func TestDaemonLifecycleQuiesceRejectsOfflineGenerationDrift(t *testing.T) {
 		t.Fatalf("generation-drift Quiesce() = %v", err)
 	}
 	snapshot, inspectErr := InspectAuthority(context.Background(), fixture.workspace)
-	observed, responseErr := localapi.NewAuthorityResponse(snapshot)
+	observed, responseErr := NewAuthorityResponse(snapshot)
 	if inspectErr != nil || responseErr != nil || observed != current {
 		t.Fatalf("generation drift changed durable authority = (%#v, %v, %v)",
 			observed, inspectErr, responseErr)
@@ -74,7 +72,7 @@ func TestDaemonLifecycleQuiesceRejectsOnlineSocketReplacement(t *testing.T) {
 	fixture := newDaemonFixture(t, true)
 	expected := daemonFixtureAuthorityResponse(t, fixture)
 	path := filepath.Join(fixture.nodeState, controlSocketName)
-	original, err := localapi.ListenOwnerUnix(path)
+	original, err := ListenOwnerUnix(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,15 +83,15 @@ func TestDaemonLifecycleQuiesceRejectsOnlineSocketReplacement(t *testing.T) {
 	defer lease.Close()
 	client := lifecycleClientStub{
 		shutdown: func(_ context.Context,
-			observed localapi.AuthorityResponse,
-		) (localapi.ShutdownResponse, *localapi.APIError) {
+			observed AuthorityResponse,
+		) (ShutdownResponse, *APIError) {
 			if observed != expected {
 				t.Errorf("shutdown expected authority = %#v", observed)
 			}
 			if err := original.Close(); err != nil {
 				t.Errorf("close original socket: %v", err)
 			}
-			replacement, err = localapi.ListenOwnerUnix(path)
+			replacement, err = ListenOwnerUnix(path)
 			if err != nil {
 				t.Errorf("create replacement socket: %v", err)
 			}
@@ -101,8 +99,8 @@ func TestDaemonLifecycleQuiesceRejectsOnlineSocketReplacement(t *testing.T) {
 		},
 	}
 	confirmer := DaemonOfflineConfirmerFunc(func(context.Context,
-		localapi.AuthorityResponse,
-	) (localapi.AuthorityResponse, error) {
+		AuthorityResponse,
+	) (AuthorityResponse, error) {
 		confirmations.Add(1)
 		return expected, nil
 	})
@@ -177,8 +175,8 @@ func TestDaemonLifecycleQuiesceCancelledDuringWriterWait(t *testing.T) {
 	writerWaitStarted := make(chan struct{})
 	var writerWaitOnce sync.Once
 	confirmer := DaemonOfflineConfirmerFunc(func(ctx context.Context,
-		expected localapi.AuthorityResponse,
-	) (localapi.AuthorityResponse, error) {
+		expected AuthorityResponse,
+	) (AuthorityResponse, error) {
 		response, err := daemonFixtureOfflineConfirmer(fixture).ConfirmOffline(ctx, expected)
 		if errors.Is(err, ErrOfflineAuthorityActive) {
 			writerWaitOnce.Do(func() { close(writerWaitStarted) })

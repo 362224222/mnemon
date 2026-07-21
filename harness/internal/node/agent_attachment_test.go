@@ -11,14 +11,13 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/agent"
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 )
 
 func TestAgentAttachmentEnvironmentMatchesLocalAPI(t *testing.T) {
-	if agent.RunAttachmentEnvironment != localapi.RunAttachmentEnv {
+	if agent.RunAttachmentEnvironment != RunAttachmentEnv {
 		t.Fatalf("Run attachment environment = %q, local API = %q",
-			agent.RunAttachmentEnvironment, localapi.RunAttachmentEnv)
+			agent.RunAttachmentEnvironment, RunAttachmentEnv)
 	}
 }
 
@@ -58,7 +57,7 @@ func TestAgentAttachmentFilesystemPublishesAndProjectsCandidate(t *testing.T) {
 	if fixture.attachment.Path() != wantPath {
 		t.Fatalf("Path() = %q, want %q", fixture.attachment.Path(), wantPath)
 	}
-	verified, err := localapi.ReadRunAttachment(fixture.nodeState, wantPath)
+	verified, err := ReadRunAttachment(fixture.nodeState, wantPath)
 	if err != nil || verified.RunID() != fixture.runID || verified.HeaderValue() !=
 		base64.RawURLEncoding.EncodeToString(fixture.token) {
 		t.Fatalf("ReadRunAttachment() = (%#v, %v)", verified, err)
@@ -80,11 +79,11 @@ func TestAgentAttachmentFilesystemRejectsReplacementAndReapsAuthorizedSecret(t *
 	if err := os.WriteFile(fixture.attachment.Path(), payload, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := fixture.attachment.Remove(); !errors.Is(err, localapi.ErrUnsafeClientState) {
+	if err := fixture.attachment.Remove(); !errors.Is(err, ErrUnsafeClientState) {
 		t.Fatalf("Remove() after inode replacement = %v", err)
 	}
 	if removed, err := fixture.filesystem.RemoveReapable(fixture.runID, model.Sum(fixture.token)); removed ||
-		!errors.Is(err, localapi.ErrUnsafeClientState) {
+		!errors.Is(err, ErrUnsafeClientState) {
 		t.Fatalf("RemoveReapable(original) = (%t, %v)", removed, err)
 	}
 	if removed, err := fixture.filesystem.RemoveReapable(fixture.runID,
@@ -106,7 +105,7 @@ func TestAgentAttachmentFilesystemPreservesCandidatePageBoundAndOrder(t *testing
 			t.Fatal(err)
 		}
 	}
-	direct, err := localapi.ListRunAttachmentCandidates(nodeState)
+	direct, err := ListRunAttachmentCandidates(nodeState)
 	if err != nil || !direct.More() {
 		t.Fatalf("direct candidate page = (%#v, %v)", direct, err)
 	}

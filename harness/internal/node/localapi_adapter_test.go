@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/agent"
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 )
 
@@ -45,7 +44,7 @@ func TestLocalAPIServiceAdapterMapsMetadataAndRequestsExactly(t *testing.T) {
 	operationHash := model.Sum([]byte("operation"))
 	contextHash := model.Sum([]byte("context"))
 	attachmentHash := model.Sum([]byte("attachment"))
-	metadata := localapi.RequestMetadata{OperationKeyHash: operationHash, HasOperationKey: true,
+	metadata := RequestMetadata{OperationKeyHash: operationHash, HasOperationKey: true,
 		ClaimContextHash: contextHash, HasClaimContext: true,
 		RunAttachmentHash: attachmentHash, HasRunAttachment: true}
 	assertMetadata := func(got agent.ControlMetadata) {
@@ -56,9 +55,9 @@ func TestLocalAPIServiceAdapterMapsMetadataAndRequestsExactly(t *testing.T) {
 			t.Fatalf("Agent metadata = %#v", got)
 		}
 	}
-	actionRequest := localapi.TeamworkActionRequest{Action: "offer", Channel: "alpha", To: "reviewer",
+	actionRequest := TeamworkActionRequest{Action: "offer", Channel: "alpha", To: "reviewer",
 		Deadline: "24h", Content: "review", Artifacts: []string{"a.md"}}
-	resolveRequest := localapi.AgentResolveRequest{Decision: "retry", Content: "later"}
+	resolveRequest := AgentResolveRequest{Decision: "retry", Content: "later"}
 	service := localAPIAdapterService{
 		hook: func(ctx context.Context, got agent.ControlMetadata) (agent.HookCheckResponse, *agent.ControlError) {
 			assertAdapterContext(t, ctx)
@@ -92,12 +91,12 @@ func TestLocalAPIServiceAdapterMapsMetadataAndRequestsExactly(t *testing.T) {
 	}
 	adapter := newLocalAPIServiceAdapter(service)
 	ctx := context.WithValue(context.Background(), adapterContextKey{}, "present")
-	if response, controlErr := adapter.HookCheck(ctx, metadata, localapi.HookCheckRequest{}); controlErr != nil ||
-		!response.Pending || response.SchemaVersion != localapi.SchemaVersion {
+	if response, controlErr := adapter.HookCheck(ctx, metadata, HookCheckRequest{}); controlErr != nil ||
+		!response.Pending || response.SchemaVersion != SchemaVersion {
 		t.Fatalf("HookCheck() = (%#v, %v)", response, controlErr)
 	}
-	if response, controlErr := adapter.AgentCurrent(ctx, metadata, localapi.AgentCurrentRequest{}); controlErr != nil ||
-		response.Status != "none" || response.SchemaVersion != localapi.SchemaVersion {
+	if response, controlErr := adapter.AgentCurrent(ctx, metadata, AgentCurrentRequest{}); controlErr != nil ||
+		response.Status != "none" || response.SchemaVersion != SchemaVersion {
 		t.Fatalf("AgentCurrent() = (%#v, %v)", response, controlErr)
 	}
 	if _, controlErr := adapter.TeamworkAction(ctx, metadata, actionRequest); controlErr != nil {
@@ -121,11 +120,11 @@ func TestLocalAPIServiceAdapterPreservesResultNullabilityAndPrivateFields(t *tes
 		return current, nil
 	}}
 	adapter := &localAPIServiceAdapter{next: service}
-	gotCurrent, controlErr := adapter.AgentCurrent(context.Background(), localapi.RequestMetadata{},
-		localapi.AgentCurrentRequest{})
+	gotCurrent, controlErr := adapter.AgentCurrent(context.Background(), RequestMetadata{},
+		AgentCurrentRequest{})
 	if controlErr != nil || gotCurrent.Status != current.Status || gotCurrent.RunID != current.RunID ||
 		gotCurrent.ClaimSecret != current.ClaimSecret || !bytes.Equal(gotCurrent.Projection, projection) ||
-		gotCurrent.SchemaVersion != localapi.SchemaVersion {
+		gotCurrent.SchemaVersion != SchemaVersion {
 		t.Fatalf("AgentCurrent() = (%#v, %v)", gotCurrent, controlErr)
 	}
 	gotCurrent.Projection[0] = 'x'
@@ -179,8 +178,8 @@ func TestLocalAPIServiceAdapterFailsClosedOnMalformedControlErrors(t *testing.T)
 	invalidOperation := "bad id"
 	malformedOperation := localAPIControlError(&agent.ControlError{Code: agent.CodeInternal,
 		Message: "diagnostic", OperationID: &invalidOperation})
-	for _, mapped := range []*localapi.APIError{unknown, malformedRetry, malformedReplay, malformedOperation} {
-		if mapped == nil || mapped.Code != localapi.CodeInternal || mapped.Message != "internal control error" ||
+	for _, mapped := range []*APIError{unknown, malformedRetry, malformedReplay, malformedOperation} {
+		if mapped == nil || mapped.Code != CodeInternal || mapped.Message != "internal control error" ||
 			mapped.Retryable || mapped.Replayed || mapped.OperationID != nil {
 			t.Fatalf("invalid Control error mapping = %#v", mapped)
 		}
@@ -199,9 +198,9 @@ func TestLocalAPIServiceAdapterPrioritizesControlErrorOverResult(t *testing.T) {
 				"current Work changed")
 	}}
 	adapter := newLocalAPIServiceAdapter(service)
-	response, apiErr := adapter.TeamworkAction(context.Background(), localapi.RequestMetadata{},
-		localapi.TeamworkActionRequest{Action: "offer"})
-	if apiErr == nil || apiErr.Code != localapi.CodeWorkConflict || response.Status != "" ||
+	response, apiErr := adapter.TeamworkAction(context.Background(), RequestMetadata{},
+		TeamworkActionRequest{Action: "offer"})
+	if apiErr == nil || apiErr.Code != CodeWorkConflict || response.Status != "" ||
 		response.OperationID != "" || response.Results != nil {
 		t.Fatalf("error-priority result = (%#v, %#v)", response, apiErr)
 	}
@@ -216,7 +215,7 @@ func assertLocalAPIControlError(t *testing.T, code agent.ControlErrorCode) {
 	mapped := localAPIControlError(controlErr)
 	if string(mapped.Code) != string(code) || mapped.Retryable != code.Retryable() ||
 		!mapped.Replayed || mapped.OperationID == nil || *mapped.OperationID != operationID ||
-		mapped.SchemaVersion != localapi.SchemaVersion || mapped.Status != "error" {
+		mapped.SchemaVersion != SchemaVersion || mapped.Status != "error" {
 		t.Fatalf("mapped Control error %q = %#v", code, mapped)
 	}
 }
@@ -230,7 +229,7 @@ func assertAdapterContext(t *testing.T, ctx context.Context) {
 	}
 }
 
-func assertCanonicalAdapterRequest(t *testing.T, transport localapi.TeamworkActionRequest,
+func assertCanonicalAdapterRequest(t *testing.T, transport TeamworkActionRequest,
 	domain agent.TeamworkActionRequest,
 ) {
 	t.Helper()

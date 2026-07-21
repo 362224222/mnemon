@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/assets"
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
@@ -99,7 +98,7 @@ func TestProvisionCreatesAndReplaysOneDisabledWorkspaceAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := localapi.VerifyProfileCredential(first.NodeState, first.Profile.CredentialHash()); err != nil {
+	if err := VerifyProfileCredential(first.NodeState, first.Profile.CredentialHash()); err != nil {
 		t.Fatal(err)
 	}
 

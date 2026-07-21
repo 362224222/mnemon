@@ -19,20 +19,6 @@ const (
 	opaqueSecretBytes   = 32
 )
 
-type Authenticator interface {
-	AuthenticateProfile(context.Context, model.Digest) (model.Profile, error)
-}
-
-type RequestMetadata struct {
-	Profile           model.Profile
-	OperationKeyHash  model.Digest
-	HasOperationKey   bool
-	ClaimContextHash  model.Digest
-	HasClaimContext   bool
-	RunAttachmentHash model.Digest
-	HasRunAttachment  bool
-}
-
 type headerPolicy struct {
 	operationRequired bool
 	operationAllowed  bool

@@ -6,15 +6,13 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/mnemon-dev/mnemon/harness/internal/model"
+	"github.com/mnemon-dev/mnemon/harness/internal/peer"
+	"github.com/mnemon-dev/mnemon/harness/internal/store"
 	"io"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
-	"github.com/mnemon-dev/mnemon/harness/internal/model"
-	"github.com/mnemon-dev/mnemon/harness/internal/peer"
-	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
 
 const defaultChannelInviteLifetime = time.Hour
@@ -55,81 +53,81 @@ func NewChannelManager(options ChannelManagerOptions) (*ChannelManager, error) {
 		clock: options.Clock, random: options.Random}, nil
 }
 
-func (manager *ChannelManager) ChannelCreate(ctx context.Context, metadata localapi.RequestMetadata,
-	request localapi.ChannelCreateRequest,
-) (localapi.ChannelCreateResponse, *localapi.APIError) {
+func (manager *ChannelManager) ChannelCreate(ctx context.Context, metadata RequestMetadata,
+	request ChannelCreateRequest,
+) (ChannelCreateResponse, *APIError) {
 	if apiErr := manager.validateCall(ctx, metadata); apiErr != nil {
-		return localapi.ChannelCreateResponse{}, apiErr
+		return ChannelCreateResponse{}, apiErr
 	}
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	authority, err := manager.store.ReadChannelControlAuthority(ctx)
 	if err != nil {
-		return localapi.ChannelCreateResponse{}, channelAPIError(err)
+		return ChannelCreateResponse{}, channelAPIError(err)
 	}
 	channel, genesis, token, err := manager.buildChannel(ctx, request.Name, authority)
 	if err != nil {
-		return localapi.ChannelCreateResponse{}, channelAPIError(err)
+		return ChannelCreateResponse{}, channelAPIError(err)
 	}
 	if _, err := manager.store.CreateChannel(ctx, store.CreateChannelSpec{Channel: channel,
 		Genesis: genesis, Token: token}); err != nil {
-		return localapi.ChannelCreateResponse{}, channelAPIError(err)
+		return ChannelCreateResponse{}, channelAPIError(err)
 	}
 	manager.refreshAndJoin(ctx, channel)
 	view, err := manager.readChannelView(ctx, channel.ID())
 	if err != nil {
-		return localapi.ChannelCreateResponse{}, channelAPIError(err)
+		return ChannelCreateResponse{}, channelAPIError(err)
 	}
 	invite := inviteView(token.Payload().ExpiresAt(), token.Payload().MaxUses(), 0, "open", manager.clock.Now())
 	view.Invite = &invite
-	return localapi.ChannelCreateResponse{SchemaVersion: localapi.SchemaVersion, Status: "created",
+	return ChannelCreateResponse{SchemaVersion: SchemaVersion, Status: "created",
 		Channel: view, Invite: invite, InviteToken: token.Reveal()}, nil
 }
 
-func (manager *ChannelManager) ChannelJoin(ctx context.Context, metadata localapi.RequestMetadata,
-	request localapi.ChannelJoinRequest,
-) (localapi.ChannelJoinResponse, *localapi.APIError) {
+func (manager *ChannelManager) ChannelJoin(ctx context.Context, metadata RequestMetadata,
+	request ChannelJoinRequest,
+) (ChannelJoinResponse, *APIError) {
 	if apiErr := manager.validateCall(ctx, metadata); apiErr != nil {
-		return localapi.ChannelJoinResponse{}, apiErr
+		return ChannelJoinResponse{}, apiErr
 	}
 	token, err := model.ParseEnrollmentToken(request.Token)
 	if err != nil {
-		return localapi.ChannelJoinResponse{}, localapi.NewAPIError(localapi.CodeInvalidToken,
+		return ChannelJoinResponse{}, NewAPIError(CodeInvalidToken,
 			"Channel invite token is invalid")
 	}
 	if !manager.clock.Now().Before(token.Payload().ExpiresAt()) {
-		return localapi.ChannelJoinResponse{}, localapi.NewAPIError(localapi.CodeTokenExpired,
+		return ChannelJoinResponse{}, NewAPIError(CodeTokenExpired,
 			"Channel invite has expired")
 	}
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	before, err := manager.store.ReadChannelMeshAuthority(ctx)
 	if err != nil {
-		return localapi.ChannelJoinResponse{}, channelAPIError(err)
+		return ChannelJoinResponse{}, channelAPIError(err)
 	}
 	control, err := manager.store.ReadChannelControlAuthority(ctx)
 	if err != nil {
-		return localapi.ChannelJoinResponse{}, channelAPIError(err)
+		return ChannelJoinResponse{}, channelAPIError(err)
 	}
 	alias := uniqueChannelAlias(channelAlias(token.Payload().Descriptor().Descriptor().Name()), control)
 	client, err := peer.NewChannelEnrollmentClient(peer.ChannelEnrollmentClientOptions{Store: manager.store})
 	if err != nil {
-		return localapi.ChannelJoinResponse{}, channelAPIError(err)
+		return ChannelJoinResponse{}, channelAPIError(err)
 	}
 	spec := peer.JoinChannelSpec{Token: token, DisplayLabel: memberAlias(manager.identity.PeerID()),
 		AdvertisedMultiaddrs: manager.runtime.AdvertisedMultiaddrs(), LocalAlias: alias}
 	installed, err := manager.runtime.EnrollChannel(ctx, before, client, spec,
 		manager.store.ReadChannelMeshAuthority)
 	if err != nil {
-		return localapi.ChannelJoinResponse{}, channelAPIError(err)
+		return ChannelJoinResponse{}, channelAPIError(err)
 	}
 	manager.markTopicJoined(ctx, installed.Channel)
 	manager.triggerMemberReconcile()
 	view, err := manager.readChannelView(ctx, installed.Channel.ID())
 	if err != nil {
-		return localapi.ChannelJoinResponse{}, channelAPIError(err)
+		return ChannelJoinResponse{}, channelAPIError(err)
 	}
-	return localapi.ChannelJoinResponse{SchemaVersion: localapi.SchemaVersion,
+	return ChannelJoinResponse{SchemaVersion: SchemaVersion,
 		Status: "joined", Channel: view}, nil
 }
 
@@ -139,21 +137,21 @@ func (manager *ChannelManager) triggerMemberReconcile() {
 	}
 }
 
-func (manager *ChannelManager) ChannelInvite(ctx context.Context, metadata localapi.RequestMetadata,
-	request localapi.ChannelInviteRequest,
-) (localapi.ChannelInviteResponse, *localapi.APIError) {
+func (manager *ChannelManager) ChannelInvite(ctx context.Context, metadata RequestMetadata,
+	request ChannelInviteRequest,
+) (ChannelInviteResponse, *APIError) {
 	if apiErr := manager.validateCall(ctx, metadata); apiErr != nil {
-		return localapi.ChannelInviteResponse{}, apiErr
+		return ChannelInviteResponse{}, apiErr
 	}
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	authority, selected, apiErr := manager.selectChannel(ctx, request.Channel)
 	if apiErr != nil {
-		return localapi.ChannelInviteResponse{}, apiErr
+		return ChannelInviteResponse{}, apiErr
 	}
 	channel := selected.Channel()
 	if channel.OwnerPeerID() != authority.LocalPeerID() {
-		return localapi.ChannelInviteResponse{}, localapi.NewAPIError(localapi.CodeWrongOwner,
+		return ChannelInviteResponse{}, NewAPIError(CodeWrongOwner,
 			"only the Channel owner may create invites")
 	}
 	remaining := remainingChannelSeats(selected.Roster(), channel.MemberLimit())
@@ -162,7 +160,7 @@ func (manager *ChannelManager) ChannelInvite(ctx context.Context, metadata local
 		uses = remaining
 	}
 	if uses == 0 || uses > remaining {
-		return localapi.ChannelInviteResponse{}, localapi.NewAPIError(localapi.CodeChannelFull,
+		return ChannelInviteResponse{}, NewAPIError(CodeChannelFull,
 			"Channel has insufficient remaining seats")
 	}
 	lifetime := defaultChannelInviteLifetime
@@ -171,58 +169,58 @@ func (manager *ChannelManager) ChannelInvite(ctx context.Context, metadata local
 	}
 	owner, ok := selected.Roster().CurrentMember(authority.LocalPeerID())
 	if !ok {
-		return localapi.ChannelInviteResponse{}, channelAPIError(store.ErrChannelInviteOwner)
+		return ChannelInviteResponse{}, channelAPIError(store.ErrChannelInviteOwner)
 	}
 	token, err := manager.buildToken(ctx, channel.Descriptor(), owner.Multiaddrs(), manager.clock.Now(),
 		lifetime, uses)
 	if err != nil {
-		return localapi.ChannelInviteResponse{}, channelAPIError(err)
+		return ChannelInviteResponse{}, channelAPIError(err)
 	}
 	if _, err := manager.store.RotateChannelInvite(ctx, store.RotateChannelInviteSpec{
 		ChannelID: channel.ID(), Token: token, At: manager.clock.Now()}); err != nil {
-		return localapi.ChannelInviteResponse{}, channelAPIError(err)
+		return ChannelInviteResponse{}, channelAPIError(err)
 	}
 	view, err := manager.readChannelView(ctx, channel.ID())
 	if err != nil {
-		return localapi.ChannelInviteResponse{}, channelAPIError(err)
+		return ChannelInviteResponse{}, channelAPIError(err)
 	}
 	invite := inviteView(token.Payload().ExpiresAt(), token.Payload().MaxUses(), 0, "open", manager.clock.Now())
 	view.Invite = &invite
-	return localapi.ChannelInviteResponse{SchemaVersion: localapi.SchemaVersion, Status: "created",
+	return ChannelInviteResponse{SchemaVersion: SchemaVersion, Status: "created",
 		Channel: view, Invite: invite, InviteToken: token.Reveal()}, nil
 }
 
-func (manager *ChannelManager) ChannelInviteClose(ctx context.Context, metadata localapi.RequestMetadata,
-	request localapi.ChannelInviteCloseRequest,
-) (localapi.ChannelInviteCloseResponse, *localapi.APIError) {
+func (manager *ChannelManager) ChannelInviteClose(ctx context.Context, metadata RequestMetadata,
+	request ChannelInviteCloseRequest,
+) (ChannelInviteCloseResponse, *APIError) {
 	if apiErr := manager.validateCall(ctx, metadata); apiErr != nil {
-		return localapi.ChannelInviteCloseResponse{}, apiErr
+		return ChannelInviteCloseResponse{}, apiErr
 	}
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	authority, selected, apiErr := manager.selectChannel(ctx, request.Channel)
 	if apiErr != nil {
-		return localapi.ChannelInviteCloseResponse{}, apiErr
+		return ChannelInviteCloseResponse{}, apiErr
 	}
 	channel := selected.Channel()
 	if channel.OwnerPeerID() != authority.LocalPeerID() {
-		return localapi.ChannelInviteCloseResponse{}, localapi.NewAPIError(localapi.CodeWrongOwner,
+		return ChannelInviteCloseResponse{}, NewAPIError(CodeWrongOwner,
 			"only the Channel owner may close invites")
 	}
 	grant, ok := selected.OpenGrant()
 	if !ok {
-		return localapi.ChannelInviteCloseResponse{}, localapi.NewAPIError(localapi.CodeTokenClosed,
+		return ChannelInviteCloseResponse{}, NewAPIError(CodeTokenClosed,
 			"Channel has no open invite")
 	}
 	if _, err := manager.store.CloseChannelInvite(ctx, channel.ID(), grant.ID(), manager.clock.Now()); err != nil {
-		return localapi.ChannelInviteCloseResponse{}, channelAPIError(err)
+		return ChannelInviteCloseResponse{}, channelAPIError(err)
 	}
 	view, err := manager.readChannelView(ctx, channel.ID())
 	if err != nil {
-		return localapi.ChannelInviteCloseResponse{}, channelAPIError(err)
+		return ChannelInviteCloseResponse{}, channelAPIError(err)
 	}
 	view.Invite = nil
-	return localapi.ChannelInviteCloseResponse{SchemaVersion: localapi.SchemaVersion,
+	return ChannelInviteCloseResponse{SchemaVersion: SchemaVersion,
 		Status: "closed", Channel: view}, nil
 }
 

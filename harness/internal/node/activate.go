@@ -4,13 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/mnemon-dev/mnemon/harness/internal/model"
+	"github.com/mnemon-dev/mnemon/harness/internal/store"
 	"os"
 	"path/filepath"
 	"time"
-
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
-	"github.com/mnemon-dev/mnemon/harness/internal/model"
-	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
 
 var ErrActivate = errors.New("activate mnemond Profile")
@@ -22,6 +20,7 @@ type ActivateOptions struct {
 	ExpectedUpdatedAt time.Time
 	Clock             Clock
 	Install           InstallationVerifier
+	Credentials       ProfileCredentialAuthority
 }
 
 type ActivateResult struct {
@@ -42,7 +41,12 @@ type activationPlan struct {
 // bundle and Host projection before Store grants managed admission.
 func Activate(ctx context.Context, options ActivateOptions) (result ActivateResult, err error) {
 	if ctx == nil || options.Install == nil {
-		return ActivateResult{}, fmt.Errorf("%w: context or installation verifier is unavailable", ErrActivate)
+		return ActivateResult{}, fmt.Errorf(
+			"%w: context or installation verifier is unavailable", ErrActivate)
+	}
+	credentials, err := requireProfileCredentialAuthority(options.Credentials)
+	if err != nil {
+		return ActivateResult{}, fmt.Errorf("%w: %w", ErrActivate, err)
 	}
 	plan, err := prepareActivation(&options)
 	if err != nil {
@@ -77,7 +81,7 @@ func Activate(ctx context.Context, options ActivateOptions) (result ActivateResu
 	if authority.Node.PeerID() != identity.PeerID() || authority.Profile.WorkspaceRoot() != plan.workspace {
 		return ActivateResult{}, fmt.Errorf("%w: durable Node differs from workspace identity", ErrActivate)
 	}
-	if err := localapi.VerifyProfileCredential(nodeState, authority.Profile.CredentialHash()); err != nil {
+	if err := credentials.VerifyProfileCredential(nodeState, authority.Profile.CredentialHash()); err != nil {
 		return ActivateResult{}, fmt.Errorf("%w: %v", ErrActivate, err)
 	}
 	spec := authority.Profile.Spec()

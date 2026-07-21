@@ -2,30 +2,28 @@ package node
 
 import (
 	"testing"
-
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 )
 
 func TestChannelViewTopicStatusRequiresEveryActiveRemoteBaseline(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name    string
-		members []localapi.ChannelMemberView
+		members []ChannelMemberView
 		want    string
 	}{
-		{name: "ready", members: []localapi.ChannelMemberView{
+		{name: "ready", members: []ChannelMemberView{
 			{Status: "active", Binding: "self", BaselineReady: true},
 			{Status: "active", Binding: "active", BaselineReady: true},
 		}, want: "joined"},
-		{name: "pending binding", members: []localapi.ChannelMemberView{
+		{name: "pending binding", members: []ChannelMemberView{
 			{Status: "active", Binding: "self", BaselineReady: true},
 			{Status: "active", Binding: "pending", BaselineReady: false},
 		}, want: "converging"},
-		{name: "missing outbound baseline", members: []localapi.ChannelMemberView{
+		{name: "missing outbound baseline", members: []ChannelMemberView{
 			{Status: "active", Binding: "self", BaselineReady: true},
 			{Status: "active", Binding: "active", BaselineReady: false},
 		}, want: "converging"},
-		{name: "terminal remote", members: []localapi.ChannelMemberView{
+		{name: "terminal remote", members: []ChannelMemberView{
 			{Status: "active", Binding: "self", BaselineReady: true},
 			{Status: "revoked", Binding: "none", BaselineReady: false},
 		}, want: "joined"},

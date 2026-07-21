@@ -7,8 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"time"
-
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 )
 
 var ErrRecoveryQuarantine = errors.New("quarantine mnemond Node")
@@ -31,7 +29,7 @@ type recoveryQuarantinePlan struct {
 // the exact durable authority offline. No state is interpreted, migrated, or
 // deleted; the setup and ensure descriptors remain held across the rename.
 func (lease *DaemonLifecycleLease) Quarantine(ctx context.Context,
-	expected localapi.AuthorityResponse, at time.Time,
+	expected AuthorityResponse, at time.Time,
 ) (RecoveryQuarantineResult, error) {
 	if lease == nil {
 		return RecoveryQuarantineResult{}, recoveryQuarantineError("prepare",
@@ -47,7 +45,7 @@ func (lease *DaemonLifecycleLease) Quarantine(ctx context.Context,
 }
 
 func (lease *DaemonLifecycleLease) prepareRecoveryQuarantine(ctx context.Context,
-	expected localapi.AuthorityResponse, at time.Time,
+	expected AuthorityResponse, at time.Time,
 ) (recoveryQuarantinePlan, error) {
 	snapshot, renamedAt, err := lease.validateRecoveryQuarantine(ctx, expected, at)
 	if err != nil {
@@ -67,32 +65,32 @@ func (lease *DaemonLifecycleLease) prepareRecoveryQuarantine(ctx context.Context
 }
 
 func (lease *DaemonLifecycleLease) validateRecoveryQuarantine(ctx context.Context,
-	expected localapi.AuthorityResponse, at time.Time,
-) (localapi.AuthoritySnapshot, time.Time, error) {
+	expected AuthorityResponse, at time.Time,
+) (AuthoritySnapshot, time.Time, error) {
 	if ctx == nil {
-		return localapi.AuthoritySnapshot{}, time.Time{}, recoveryQuarantineError("prepare",
+		return AuthoritySnapshot{}, time.Time{}, recoveryQuarantineError("prepare",
 			errors.New("context is unavailable"))
 	}
 	if err := ctx.Err(); err != nil {
-		return localapi.AuthoritySnapshot{}, time.Time{}, recoveryQuarantineError("prepare", err)
+		return AuthoritySnapshot{}, time.Time{}, recoveryQuarantineError("prepare", err)
 	}
 	if !lease.recovery || lease.quarantined || lease.quiesced == nil || *lease.quiesced != expected {
-		return localapi.AuthoritySnapshot{}, time.Time{}, recoveryQuarantineError("prepare",
+		return AuthoritySnapshot{}, time.Time{}, recoveryQuarantineError("prepare",
 			errors.New("exact recovery quiescence was not proved"))
 	}
 	if err := lease.validateHeld(); err != nil {
-		return localapi.AuthoritySnapshot{}, time.Time{}, recoveryQuarantineError("confirm lease", err)
+		return AuthoritySnapshot{}, time.Time{}, recoveryQuarantineError("confirm lease", err)
 	}
 	snapshot, err := authorityResponseSnapshot(expected)
 	if err != nil || snapshot.PeerID != lease.peerID {
 		if err == nil {
 			err = errors.New("recovery authority belongs to another Node")
 		}
-		return localapi.AuthoritySnapshot{}, time.Time{}, recoveryQuarantineError("confirm authority", err)
+		return AuthoritySnapshot{}, time.Time{}, recoveryQuarantineError("confirm authority", err)
 	}
 	renamedAt, ok := canonicalAuthorityTime(at)
 	if !ok {
-		return localapi.AuthoritySnapshot{}, time.Time{}, recoveryQuarantineError("prepare",
+		return AuthoritySnapshot{}, time.Time{}, recoveryQuarantineError("prepare",
 			errors.New("rename time is invalid"))
 	}
 	return snapshot, renamedAt, nil

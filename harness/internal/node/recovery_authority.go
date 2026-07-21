@@ -4,12 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
-
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
-	"github.com/mnemon-dev/mnemon/harness/internal/store"
+	"path/filepath"
 )
 
 var ErrRecoveryAuthority = errors.New("inspect recovery mnemond authority")
@@ -21,10 +17,10 @@ var ErrRecoveryAuthority = errors.New("inspect recovery mnemond authority")
 // remain mandatory.
 func InspectRecoveryAuthority(ctx context.Context,
 	workspace string,
-) (_ localapi.AuthoritySnapshot, err error) {
+) (_ AuthoritySnapshot, err error) {
 	authority, err := openRecoveryStoredAuthority(ctx, workspace)
 	if err != nil {
-		return localapi.AuthoritySnapshot{}, fmt.Errorf("%w: %v", ErrRecoveryAuthority, err)
+		return AuthoritySnapshot{}, fmt.Errorf("%w: %v", ErrRecoveryAuthority, err)
 	}
 	defer func() {
 		if closeErr := authority.store.Close(); closeErr != nil {
@@ -32,7 +28,7 @@ func InspectRecoveryAuthority(ctx context.Context,
 		}
 	}()
 	if err := ctx.Err(); err != nil {
-		return localapi.AuthoritySnapshot{}, fmt.Errorf("%w: %v", ErrRecoveryAuthority, err)
+		return AuthoritySnapshot{}, fmt.Errorf("%w: %v", ErrRecoveryAuthority, err)
 	}
 	return authoritySnapshot(authority.authority), nil
 }
@@ -41,8 +37,19 @@ func InspectRecoveryAuthority(ctx context.Context,
 // proof used only while setup.lock and ensure.lock fence the complete Node.
 func ConfirmRecoveryOfflineAuthority(ctx context.Context, workspace string,
 	expected model.Digest,
-) (localapi.AuthorityResponse, error) {
-	return confirmOfflineAuthorityWith(ctx, workspace, expected, localapi.RemoveStaleOwnerUnix,
+) (AuthorityResponse, error) {
+	return ConfirmRecoveryOfflineAuthorityWithControl(ctx, workspace, expected, nil)
+}
+
+func ConfirmRecoveryOfflineAuthorityWithControl(ctx context.Context, workspace string,
+	expected model.Digest, control ControlRuntime,
+) (AuthorityResponse, error) {
+	control, controlErr := requireControlRuntime(control)
+	if controlErr != nil {
+		return AuthorityResponse{}, fmt.Errorf("%w: %w", ErrRecoveryAuthority,
+			controlErr)
+	}
+	return confirmOfflineAuthorityWith(ctx, workspace, expected, control.RemoveStaleOwnerUnix,
 		func(ctx context.Context, workspace, _ string, _ bool) (existingDaemonAuthority, error) {
 			return openRecoveryStoredAuthority(ctx, workspace)
 		})
@@ -62,28 +69,14 @@ func openRecoveryStoredAuthority(ctx context.Context,
 		return existingDaemonAuthority{}, err
 	}
 	nodeState := filepath.Join(validatedWorkspace, ".mnemon", "harness", "node")
-	databasePath := filepath.Join(nodeState, "node.db")
-	databaseInfo, err := os.Lstat(databasePath)
+	database, err := openStoredAuthorityDatabase(ctx, nodeState)
 	if err != nil {
-		return existingDaemonAuthority{}, fmt.Errorf("%w: inspect node.db: %v", ErrDaemonAuthority, err)
-	}
-	if _, err := validateIdentityOwnerPath(databaseInfo, 0o600, false); err != nil {
-		return existingDaemonAuthority{}, fmt.Errorf("%w: node.db: %v", ErrDaemonAuthority, err)
-	}
-	st, err := store.OpenExisting(ctx, databasePath)
-	if err != nil {
-		return existingDaemonAuthority{}, fmt.Errorf("%w: open Store: %w", ErrDaemonAuthority, err)
+		return existingDaemonAuthority{}, err
 	}
 	fail := func(cause error) (existingDaemonAuthority, error) {
-		if closeErr := st.Close(); closeErr != nil {
-			cause = errors.Join(cause, fmt.Errorf("%w: close Store: %v", ErrDaemonAuthority, closeErr))
-		}
-		return existingDaemonAuthority{}, cause
+		return existingDaemonAuthority{}, database.closeForAuthorityError(cause)
 	}
-	authority, err := st.ReadLocalAuthority(ctx)
-	if err != nil {
-		return fail(fmt.Errorf("%w: %v", ErrDaemonAuthority, err))
-	}
+	authority := database.authority
 	if authority.Profile.ID() != model.TeamworkProfileID() ||
 		authority.Profile.WorkspaceRoot() != validatedWorkspace || authority.Node.PeerID().IsZero() {
 		return fail(fmt.Errorf("%w: durable recovery binding is invalid", ErrDaemonAuthority))
@@ -91,5 +84,5 @@ func openRecoveryStoredAuthority(ctx context.Context,
 	if err := ctx.Err(); err != nil {
 		return fail(fmt.Errorf("%w: %v", ErrDaemonAuthority, err))
 	}
-	return existingDaemonAuthority{store: st, authority: authority}, nil
+	return existingDaemonAuthority{store: database.store, authority: authority}, nil
 }

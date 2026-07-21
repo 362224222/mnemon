@@ -6,13 +6,11 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"github.com/mnemon-dev/mnemon/harness/internal/model"
+	"github.com/mnemon-dev/mnemon/harness/internal/store"
 	"os"
 	"path/filepath"
 	"time"
-
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
-	"github.com/mnemon-dev/mnemon/harness/internal/model"
-	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
 
 var ErrProvision = errors.New("provision mnemond Node")
@@ -22,6 +20,7 @@ type ProvisionOptions struct {
 	Host          model.HostKind
 	AssetRevision string
 	Clock         Clock
+	Credentials   ProfileCredentialAuthority
 }
 
 type ProvisionResult struct {
@@ -74,7 +73,11 @@ func Provision(ctx context.Context, options ProvisionOptions) (result ProvisionR
 	if err != nil {
 		return ProvisionResult{}, fmt.Errorf("%w: %v", ErrProvision, err)
 	}
-	credential, credentialCreated, err := localapi.EnsureProfileCredential(nodeState)
+	credentials, err := requireProfileCredentialAuthority(options.Credentials)
+	if err != nil {
+		return ProvisionResult{}, fmt.Errorf("%w: %w", ErrProvision, err)
+	}
+	credential, credentialCreated, err := credentials.EnsureProfileCredential(nodeState)
 	if err != nil {
 		return ProvisionResult{}, fmt.Errorf("%w: %v", ErrProvision, err)
 	}

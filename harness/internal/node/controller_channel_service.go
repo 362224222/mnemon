@@ -2,102 +2,100 @@ package node
 
 import (
 	"context"
-
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 )
 
 type controllerChannelService struct {
-	localapi.Service
+	Service
 	gate     ManagedAdmission
-	channels localapi.ChannelService
+	channels ChannelService
 }
 
-func (service controllerChannelService) ChannelCreate(ctx context.Context, metadata localapi.RequestMetadata,
-	request localapi.ChannelCreateRequest,
-) (localapi.ChannelCreateResponse, *localapi.APIError) {
+func (service controllerChannelService) ChannelCreate(ctx context.Context, metadata RequestMetadata,
+	request ChannelCreateRequest,
+) (ChannelCreateResponse, *APIError) {
 	release, apiErr := enterControllerAdmission(ctx, service.gate)
 	if apiErr != nil {
-		return localapi.ChannelCreateResponse{}, apiErr
+		return ChannelCreateResponse{}, apiErr
 	}
 	defer release()
 	return service.channels.ChannelCreate(ctx, metadata, request)
 }
 
-func (service controllerChannelService) ChannelJoin(ctx context.Context, metadata localapi.RequestMetadata,
-	request localapi.ChannelJoinRequest,
-) (localapi.ChannelJoinResponse, *localapi.APIError) {
+func (service controllerChannelService) ChannelJoin(ctx context.Context, metadata RequestMetadata,
+	request ChannelJoinRequest,
+) (ChannelJoinResponse, *APIError) {
 	release, apiErr := enterControllerAdmission(ctx, service.gate)
 	if apiErr != nil {
-		return localapi.ChannelJoinResponse{}, apiErr
+		return ChannelJoinResponse{}, apiErr
 	}
 	defer release()
 	return service.channels.ChannelJoin(ctx, metadata, request)
 }
 
 func (service controllerChannelService) ChannelInvite(ctx context.Context,
-	metadata localapi.RequestMetadata, request localapi.ChannelInviteRequest,
-) (localapi.ChannelInviteResponse, *localapi.APIError) {
+	metadata RequestMetadata, request ChannelInviteRequest,
+) (ChannelInviteResponse, *APIError) {
 	release, apiErr := enterControllerAdmission(ctx, service.gate)
 	if apiErr != nil {
-		return localapi.ChannelInviteResponse{}, apiErr
+		return ChannelInviteResponse{}, apiErr
 	}
 	defer release()
 	return service.channels.ChannelInvite(ctx, metadata, request)
 }
 
 func (service controllerChannelService) ChannelInviteClose(ctx context.Context,
-	metadata localapi.RequestMetadata, request localapi.ChannelInviteCloseRequest,
-) (localapi.ChannelInviteCloseResponse, *localapi.APIError) {
+	metadata RequestMetadata, request ChannelInviteCloseRequest,
+) (ChannelInviteCloseResponse, *APIError) {
 	release, apiErr := enterControllerAdmission(ctx, service.gate)
 	if apiErr != nil {
-		return localapi.ChannelInviteCloseResponse{}, apiErr
+		return ChannelInviteCloseResponse{}, apiErr
 	}
 	defer release()
 	return service.channels.ChannelInviteClose(ctx, metadata, request)
 }
 
 func (service controllerChannelService) ChannelStatus(ctx context.Context,
-	metadata localapi.RequestMetadata,
-) (localapi.ChannelStatusResponse, *localapi.APIError) {
+	metadata RequestMetadata,
+) (ChannelStatusResponse, *APIError) {
 	release, apiErr := enterControllerAdmission(ctx, service.gate)
 	if apiErr != nil {
-		return localapi.ChannelStatusResponse{}, apiErr
+		return ChannelStatusResponse{}, apiErr
 	}
 	defer release()
 	return service.channels.ChannelStatus(ctx, metadata)
 }
 
 func (service controllerChannelService) ChannelRemove(ctx context.Context,
-	metadata localapi.RequestMetadata, request localapi.ChannelRemoveRequest,
-) (localapi.ChannelRemoveResponse, *localapi.APIError) {
+	metadata RequestMetadata, request ChannelRemoveRequest,
+) (ChannelRemoveResponse, *APIError) {
 	release, apiErr := enterControllerAdmission(ctx, service.gate)
 	if apiErr != nil {
-		return localapi.ChannelRemoveResponse{}, apiErr
+		return ChannelRemoveResponse{}, apiErr
 	}
 	defer release()
 	return service.channels.ChannelRemove(ctx, metadata, request)
 }
 
 func (service controllerChannelService) ChannelLeave(ctx context.Context,
-	metadata localapi.RequestMetadata, request localapi.ChannelLeaveRequest,
-) (localapi.ChannelLeaveResponse, *localapi.APIError) {
+	metadata RequestMetadata, request ChannelLeaveRequest,
+) (ChannelLeaveResponse, *APIError) {
 	release, apiErr := enterControllerAdmission(ctx, service.gate)
 	if apiErr != nil {
-		return localapi.ChannelLeaveResponse{}, apiErr
+		return ChannelLeaveResponse{}, apiErr
 	}
 	defer release()
 	return service.channels.ChannelLeave(ctx, metadata, request)
 }
 
 func (service controllerChannelService) ChannelAbandon(ctx context.Context,
-	metadata localapi.RequestMetadata, request localapi.ChannelAbandonRequest,
-) (localapi.ChannelAbandonResponse, *localapi.APIError) {
+	metadata RequestMetadata, request ChannelAbandonRequest,
+) (ChannelAbandonResponse, *APIError) {
 	release, apiErr := enterControllerAdmission(ctx, service.gate)
 	if apiErr != nil {
-		return localapi.ChannelAbandonResponse{}, apiErr
+		return ChannelAbandonResponse{}, apiErr
 	}
 	defer release()
 	return service.channels.ChannelAbandon(ctx, metadata, request)
 }
 
-var _ localapi.ChannelService = controllerChannelService{}
+var _ ChannelService = controllerChannelService{}

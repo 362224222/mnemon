@@ -4,12 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"path/filepath"
 	"sync"
 	"time"
-
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
-	"github.com/mnemon-dev/mnemon/harness/internal/model"
 )
 
 const (
@@ -41,16 +39,16 @@ type DaemonLifecycleLease struct {
 	peerID      model.PeerID
 	lock        *ensureLock
 	recovery    bool
-	quiesced    *localapi.AuthorityResponse
+	quiesced    *AuthorityResponse
 	quarantined bool
 	closed      bool
 }
 
 // DaemonLifecycleClient is the authenticated online control boundary required
-// by Quiesce. A localapi.Client satisfies it directly.
+// by Quiesce. A Client satisfies it directly.
 type DaemonLifecycleClient interface {
-	ShutdownForMutation(context.Context, localapi.AuthorityResponse) (
-		localapi.ShutdownResponse, *localapi.APIError,
+	ShutdownForMutation(context.Context, AuthorityResponse) (
+		ShutdownResponse, *APIError,
 	)
 }
 
@@ -59,19 +57,19 @@ type DaemonLifecycleClient interface {
 // recover an unreachable owner socket while still retaining that writer. A
 // successful response is the same closed envelope used by the controller.
 type DaemonOfflineConfirmer interface {
-	ConfirmOffline(context.Context, localapi.AuthorityResponse) (localapi.AuthorityResponse, error)
+	ConfirmOffline(context.Context, AuthorityResponse) (AuthorityResponse, error)
 }
 
 // DaemonOfflineConfirmerFunc adapts one bounded companion confirmation.
 type DaemonOfflineConfirmerFunc func(context.Context,
-	localapi.AuthorityResponse,
-) (localapi.AuthorityResponse, error)
+	AuthorityResponse,
+) (AuthorityResponse, error)
 
 func (confirm DaemonOfflineConfirmerFunc) ConfirmOffline(ctx context.Context,
-	expected localapi.AuthorityResponse,
-) (localapi.AuthorityResponse, error) {
+	expected AuthorityResponse,
+) (AuthorityResponse, error) {
 	if confirm == nil {
-		return localapi.AuthorityResponse{}, errors.New("offline authority inspector is unavailable")
+		return AuthorityResponse{}, errors.New("offline authority inspector is unavailable")
 	}
 	return confirm(ctx, expected)
 }
@@ -159,8 +157,8 @@ func acquireDaemonLifecycle(ctx context.Context, options DaemonLifecycleOptions,
 // start of the fence: this method continues until the socket is gone and the
 // Store writer has actually been released.
 func (lease *DaemonLifecycleLease) Quiesce(ctx context.Context, client DaemonLifecycleClient,
-	confirmer DaemonOfflineConfirmer, expected localapi.AuthorityResponse,
-) (localapi.AuthorityResponse, error) {
+	confirmer DaemonOfflineConfirmer, expected AuthorityResponse,
+) (AuthorityResponse, error) {
 	return lease.quiesce(ctx, client, confirmer, expected, daemonLifecycleTiming{
 		deadline: daemonLifecycleDeadline,
 		poll:     daemonLifecyclePoll,
@@ -168,39 +166,39 @@ func (lease *DaemonLifecycleLease) Quiesce(ctx context.Context, client DaemonLif
 }
 
 func (lease *DaemonLifecycleLease) quiesce(ctx context.Context, client DaemonLifecycleClient,
-	confirmer DaemonOfflineConfirmer, expected localapi.AuthorityResponse,
+	confirmer DaemonOfflineConfirmer, expected AuthorityResponse,
 	timing daemonLifecycleTiming,
-) (authority localapi.AuthorityResponse, err error) {
+) (authority AuthorityResponse, err error) {
 	if lease == nil {
-		return localapi.AuthorityResponse{}, lifecycleError("quiesce",
+		return AuthorityResponse{}, lifecycleError("quiesce",
 			errors.New("lease is unavailable"))
 	}
 	lease.mu.Lock()
 	defer lease.mu.Unlock()
 	if err := lease.validateHeld(); err != nil {
-		return localapi.AuthorityResponse{}, lifecycleError("quiesce", err)
+		return AuthorityResponse{}, lifecycleError("quiesce", err)
 	}
 	if ctx == nil {
-		return localapi.AuthorityResponse{}, lifecycleError("quiesce",
+		return AuthorityResponse{}, lifecycleError("quiesce",
 			errors.New("context is unavailable"))
 	}
 	if client == nil || confirmer == nil {
-		return localapi.AuthorityResponse{}, lifecycleError("quiesce",
+		return AuthorityResponse{}, lifecycleError("quiesce",
 			errors.New("online control or offline inspector is unavailable"))
 	}
 	if timing.deadline <= 0 || timing.poll <= 0 || timing.poll > timing.deadline {
-		return localapi.AuthorityResponse{}, lifecycleError("quiesce",
+		return AuthorityResponse{}, lifecycleError("quiesce",
 			errors.New("bounded timing is invalid"))
 	}
 	expectedSnapshot, err := authorityResponseSnapshot(expected)
 	if err != nil {
-		return localapi.AuthorityResponse{}, lifecycleError("quiesce expected authority", err)
+		return AuthorityResponse{}, lifecycleError("quiesce expected authority", err)
 	}
 	if lease.recovery && lease.peerID.IsZero() {
 		lease.peerID = expectedSnapshot.PeerID
 	}
 	if expectedSnapshot.PeerID != lease.peerID {
-		return localapi.AuthorityResponse{}, lifecycleError("quiesce expected authority",
+		return AuthorityResponse{}, lifecycleError("quiesce expected authority",
 			errors.New("authority belongs to another Node"))
 	}
 
@@ -208,34 +206,34 @@ func (lease *DaemonLifecycleLease) quiesce(ctx context.Context, client DaemonLif
 	defer cancel()
 	socketPin, socketIdentity, socketPresent, socketErr := lease.pinControlSocket()
 	if socketErr != nil {
-		return localapi.AuthorityResponse{}, lifecycleError("quiesce control socket", socketErr)
+		return AuthorityResponse{}, lifecycleError("quiesce control socket", socketErr)
 	}
 	if socketPresent {
 		defer socketPin.Close()
 		if err := lease.drainOnlineDaemon(bounded, client, expected, socketIdentity,
 			timing.poll); err != nil {
-			return localapi.AuthorityResponse{}, err
+			return AuthorityResponse{}, err
 		}
 	}
 
 	authority, err = lease.waitForOfflineAuthority(bounded, confirmer, expected, timing.poll)
 	if err != nil {
-		return localapi.AuthorityResponse{}, lifecycleError("inspect offline authority", err)
+		return AuthorityResponse{}, lifecycleError("inspect offline authority", err)
 	}
 	if _, err := authorityResponseSnapshot(authority); err != nil || authority != expected {
 		if err == nil {
 			err = errors.New("authority or generation differs from expected")
 		}
-		return localapi.AuthorityResponse{}, lifecycleError("confirm offline authority", err)
+		return AuthorityResponse{}, lifecycleError("confirm offline authority", err)
 	}
 	if err := lease.confirmControlSocketAbsent(); err != nil {
-		return localapi.AuthorityResponse{}, lifecycleError("confirm quiescent control socket", err)
+		return AuthorityResponse{}, lifecycleError("confirm quiescent control socket", err)
 	}
 	if err := lease.validateHeld(); err != nil {
-		return localapi.AuthorityResponse{}, lifecycleError("confirm lifecycle lease", err)
+		return AuthorityResponse{}, lifecycleError("confirm lifecycle lease", err)
 	}
 	if err := bounded.Err(); err != nil {
-		return localapi.AuthorityResponse{}, lifecycleError("confirm quiescence bound", err)
+		return AuthorityResponse{}, lifecycleError("confirm quiescence bound", err)
 	}
 	confirmed := authority
 	lease.quiesced = &confirmed
@@ -330,47 +328,47 @@ func (lease *DaemonLifecycleLease) validateHeld() error {
 }
 
 func (lease *DaemonLifecycleLease) waitForOfflineAuthority(ctx context.Context,
-	confirmer DaemonOfflineConfirmer, expected localapi.AuthorityResponse, poll time.Duration,
-) (localapi.AuthorityResponse, error) {
+	confirmer DaemonOfflineConfirmer, expected AuthorityResponse, poll time.Duration,
+) (AuthorityResponse, error) {
 	for {
 		if err := lease.validateHeld(); err != nil {
-			return localapi.AuthorityResponse{}, err
+			return AuthorityResponse{}, err
 		}
 		authority, err := confirmer.ConfirmOffline(ctx, expected)
 		if contextErr := ctx.Err(); contextErr != nil {
-			return localapi.AuthorityResponse{}, contextErr
+			return AuthorityResponse{}, contextErr
 		}
 		if err == nil {
 			return authority, nil
 		}
 		if !errors.Is(err, ErrOfflineAuthorityActive) {
-			return localapi.AuthorityResponse{}, err
+			return AuthorityResponse{}, err
 		}
 		if err := waitEnsurePoll(ctx, poll); err != nil {
-			return localapi.AuthorityResponse{}, err
+			return AuthorityResponse{}, err
 		}
 	}
 }
 
-func authorityResponseSnapshot(response localapi.AuthorityResponse) (localapi.AuthoritySnapshot, error) {
+func authorityResponseSnapshot(response AuthorityResponse) (AuthoritySnapshot, error) {
 	peerID, err := model.ParsePeerID(response.PeerID)
 	if err != nil {
-		return localapi.AuthoritySnapshot{}, err
+		return AuthoritySnapshot{}, err
 	}
 	updatedAt, err := time.Parse(time.RFC3339Nano, response.UpdatedAt)
 	if err != nil {
-		return localapi.AuthoritySnapshot{}, err
+		return AuthoritySnapshot{}, err
 	}
-	snapshot := localapi.AuthoritySnapshot{Host: model.HostKind(response.Host),
+	snapshot := AuthoritySnapshot{Host: model.HostKind(response.Host),
 		Runtime: model.RuntimeKind(response.Runtime), Enabled: response.Enabled,
 		AssetRevision: response.AssetRevision, UpdatedAt: updatedAt, PeerID: peerID,
 		ActiveAssetRevision: response.ActiveAssetRevision}
-	canonical, err := localapi.NewAuthorityResponse(snapshot)
+	canonical, err := NewAuthorityResponse(snapshot)
 	if err != nil || canonical != response {
 		if err == nil {
 			err = errors.New("authority response is noncanonical")
 		}
-		return localapi.AuthoritySnapshot{}, err
+		return AuthoritySnapshot{}, err
 	}
 	return snapshot, nil
 }

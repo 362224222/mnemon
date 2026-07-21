@@ -58,7 +58,7 @@ func main() {
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	return runWithNode(ctx, args, stdout, stderr, openManagedRuntime,
-		node.Provision, activateManagedNode, node.Deactivate)
+		provisionManagedNode, activateManagedNode, deactivateManagedNode, inspectManagedNode)
 }
 
 func runWithDaemon(ctx context.Context, args []string, stdout, stderr io.Writer,
@@ -212,7 +212,8 @@ func runConfirmOffline(ctx context.Context, args []string, stdout io.Writer) err
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	receipt, err := node.ConfirmOfflineAuthority(ctx, projectRoot, expected)
+	receipt, err := node.ConfirmOfflineAuthorityWithControl(ctx, projectRoot, expected,
+		localapi.NodeRuntime{})
 	if err != nil {
 		return err
 	}

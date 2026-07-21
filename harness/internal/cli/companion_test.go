@@ -207,10 +207,12 @@ func TestCompanionRunnerMapsRealMnemondWriterActiveExitAndOfflineReceipt(t *test
 	revision := model.Sum([]byte("real-companion-offline-assets")).String()
 	if _, err := node.Provision(context.Background(), node.ProvisionOptions{
 		Workspace: workspace, Host: model.HostCodex, AssetRevision: revision,
+		Credentials: localapi.NodeRuntime{},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	snapshot, err := node.InspectAuthority(context.Background(), workspace)
+	snapshot, err := node.InspectAuthorityWithCredentials(context.Background(), workspace,
+		localapi.NodeRuntime{})
 	if err != nil {
 		t.Fatal(err)
 	}

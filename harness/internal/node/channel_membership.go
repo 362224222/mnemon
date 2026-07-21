@@ -2,60 +2,58 @@ package node
 
 import (
 	"context"
-
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
 
-func (manager *ChannelManager) ChannelRemove(ctx context.Context, metadata localapi.RequestMetadata,
-	request localapi.ChannelRemoveRequest,
-) (localapi.ChannelRemoveResponse, *localapi.APIError) {
+func (manager *ChannelManager) ChannelRemove(ctx context.Context, metadata RequestMetadata,
+	request ChannelRemoveRequest,
+) (ChannelRemoveResponse, *APIError) {
 	if apiErr := manager.validateCall(ctx, metadata); apiErr != nil {
-		return localapi.ChannelRemoveResponse{}, apiErr
+		return ChannelRemoveResponse{}, apiErr
 	}
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	authority, channel, apiErr := manager.selectChannel(ctx, request.Channel)
 	if apiErr != nil {
-		return localapi.ChannelRemoveResponse{}, apiErr
+		return ChannelRemoveResponse{}, apiErr
 	}
 	if channel.Channel().OwnerPeerID() != authority.LocalPeerID() {
-		return localapi.ChannelRemoveResponse{}, localapi.NewAPIError(localapi.CodeWrongOwner,
+		return ChannelRemoveResponse{}, NewAPIError(CodeWrongOwner,
 			"only the Channel owner may remove a member")
 	}
 	target, apiErr := selectChannelMember(authority.LocalPeerID(), channel, request.Member)
 	if apiErr != nil {
-		return localapi.ChannelRemoveResponse{}, apiErr
+		return ChannelRemoveResponse{}, apiErr
 	}
 	if target == authority.LocalPeerID() {
-		return localapi.ChannelRemoveResponse{}, localapi.NewAPIError(localapi.CodeActionNotAllowed,
+		return ChannelRemoveResponse{}, NewAPIError(CodeActionNotAllowed,
 			"the Channel owner must use channel leave")
 	}
 	updated, err := manager.commitTerminalMember(ctx, authority.LocalPeerID(), channel,
 		target, model.MemberRevoked)
 	if err != nil {
-		return localapi.ChannelRemoveResponse{}, channelAPIError(err)
+		return ChannelRemoveResponse{}, channelAPIError(err)
 	}
 	view, err := manager.readChannelView(ctx, updated.ID())
 	if err != nil {
-		return localapi.ChannelRemoveResponse{}, channelAPIError(err)
+		return ChannelRemoveResponse{}, channelAPIError(err)
 	}
-	return localapi.ChannelRemoveResponse{SchemaVersion: localapi.SchemaVersion,
+	return ChannelRemoveResponse{SchemaVersion: SchemaVersion,
 		Status: "removed", Channel: view}, nil
 }
 
-func (manager *ChannelManager) ChannelLeave(ctx context.Context, metadata localapi.RequestMetadata,
-	request localapi.ChannelLeaveRequest,
-) (localapi.ChannelLeaveResponse, *localapi.APIError) {
+func (manager *ChannelManager) ChannelLeave(ctx context.Context, metadata RequestMetadata,
+	request ChannelLeaveRequest,
+) (ChannelLeaveResponse, *APIError) {
 	if apiErr := manager.validateCall(ctx, metadata); apiErr != nil {
-		return localapi.ChannelLeaveResponse{}, apiErr
+		return ChannelLeaveResponse{}, apiErr
 	}
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	authority, channel, apiErr := manager.selectChannel(ctx, request.Channel)
 	if apiErr != nil {
-		return localapi.ChannelLeaveResponse{}, apiErr
+		return ChannelLeaveResponse{}, apiErr
 	}
 	if channel.Channel().OwnerPeerID() != authority.LocalPeerID() {
 		return manager.beginNonOwnerChannelLeave(ctx, authority.LocalPeerID(), channel)
@@ -63,42 +61,42 @@ func (manager *ChannelManager) ChannelLeave(ctx context.Context, metadata locala
 	updated, err := manager.commitTerminalMember(ctx, authority.LocalPeerID(), channel,
 		authority.LocalPeerID(), model.MemberLeft)
 	if err != nil {
-		return localapi.ChannelLeaveResponse{}, channelAPIError(err)
+		return ChannelLeaveResponse{}, channelAPIError(err)
 	}
 	view, err := manager.readChannelView(ctx, updated.ID())
 	if err != nil {
-		return localapi.ChannelLeaveResponse{}, channelAPIError(err)
+		return ChannelLeaveResponse{}, channelAPIError(err)
 	}
-	return localapi.ChannelLeaveResponse{SchemaVersion: localapi.SchemaVersion,
+	return ChannelLeaveResponse{SchemaVersion: SchemaVersion,
 		Status: "left", Channel: view}, nil
 }
 
 func (manager *ChannelManager) beginNonOwnerChannelLeave(ctx context.Context, local model.PeerID,
 	durable store.ChannelControlChannel,
-) (localapi.ChannelLeaveResponse, *localapi.APIError) {
+) (ChannelLeaveResponse, *APIError) {
 	channel := durable.Channel()
 	request, err := manager.newChannelLeaveRequest(ctx, local, durable)
 	if err != nil {
-		return localapi.ChannelLeaveResponse{}, channelAPIError(err)
+		return ChannelLeaveResponse{}, channelAPIError(err)
 	}
 	result, err := manager.store.BeginChannelLeave(ctx, store.BeginChannelLeaveSpec{
 		ChannelID: channel.ID(), Request: request})
 	if err != nil {
-		return localapi.ChannelLeaveResponse{}, channelAPIError(err)
+		return ChannelLeaveResponse{}, channelAPIError(err)
 	}
 	mesh, err := manager.store.ReadChannelMeshAuthority(ctx)
 	if err != nil {
-		return localapi.ChannelLeaveResponse{}, channelAPIError(err)
+		return ChannelLeaveResponse{}, channelAPIError(err)
 	}
 	if err := manager.runtime.ReconcileWithCommit(mesh, func() error { return nil }); err != nil {
-		return localapi.ChannelLeaveResponse{}, channelAPIError(err)
+		return ChannelLeaveResponse{}, channelAPIError(err)
 	}
 	manager.triggerMemberReconcile()
 	view, err := manager.readChannelView(ctx, result.Channel.ID())
 	if err != nil {
-		return localapi.ChannelLeaveResponse{}, channelAPIError(err)
+		return ChannelLeaveResponse{}, channelAPIError(err)
 	}
-	return localapi.ChannelLeaveResponse{SchemaVersion: localapi.SchemaVersion,
+	return ChannelLeaveResponse{SchemaVersion: SchemaVersion,
 		Status: "leaving", Channel: view}, nil
 }
 
@@ -178,7 +176,7 @@ func (manager *ChannelManager) commitTerminalMember(ctx context.Context, local m
 
 func selectChannelMember(local model.PeerID, durable store.ChannelControlChannel,
 	selector string,
-) (model.PeerID, *localapi.APIError) {
+) (model.PeerID, *APIError) {
 	aliases := make(map[model.PeerID]string)
 	for _, binding := range durable.Bindings() {
 		aliases[binding.PeerID()] = binding.EffectiveAlias()
@@ -195,14 +193,14 @@ func selectChannelMember(local model.PeerID, durable store.ChannelControlChannel
 		}
 		if alias == selector {
 			if !selected.IsZero() && selected != member.PeerID() {
-				return model.PeerID{}, localapi.NewAPIError(localapi.CodeAmbiguousParticipant,
+				return model.PeerID{}, NewAPIError(CodeAmbiguousParticipant,
 					"member selector is ambiguous")
 			}
 			selected = member.PeerID()
 		}
 	}
 	if selected.IsZero() {
-		return model.PeerID{}, localapi.NewAPIError(localapi.CodeNotMember,
+		return model.PeerID{}, NewAPIError(CodeNotMember,
 			"member is not active in this Channel")
 	}
 	return selected, nil

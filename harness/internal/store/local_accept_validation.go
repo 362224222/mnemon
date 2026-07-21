@@ -15,36 +15,57 @@ func validateAdmissionAuthority(ctx context.Context, tx *sql.Tx, spec LocalAccep
 	operation model.Operation, acceptedAt time.Time,
 ) ([]byte, error) {
 	snapshot := spec.Scope
-	node, err := readNode(ctx, tx)
-	if err != nil || node.PeerID() != snapshot.Node().PeerID() || node.OriginEpoch() != snapshot.Node().OriginEpoch() ||
-		node.NextOriginSequence() != snapshot.FirstOriginSequence() || node.ActiveAssetRevision() != snapshot.Node().ActiveAssetRevision() {
-		return nil, fmt.Errorf("%w: Node authority changed", ErrAdmissionConflict)
-	}
-	profile, err := readProfile(ctx, tx)
-	if err != nil || !profile.Enabled() || !sameProfileIdentity(profile, snapshot.Profile()) ||
-		!sameProfileAuthority(profile, snapshot.Profile()) || profile.ActiveAssetRevision() != node.ActiveAssetRevision() {
-		return nil, fmt.Errorf("%w: Profile authority changed", ErrAdmissionConflict)
-	}
-	if spec.Operation != nil {
-		if err := requireActingAgentRunAuthority(ctx, tx, operation, profile); err != nil {
-			return nil, err
-		}
-	}
-	count := uint64(len(spec.Items))
-	if node.NextOriginSequence() > model.MaxSQLiteInteger-count || acceptedAt.Before(node.UpdatedAt()) {
-		return nil, fmt.Errorf("%w: origin sequence successor exhausted or clock regressed", ErrAdmissionConflict)
-	}
-	if err := requireFrozenPublicationHead(ctx, tx, node, snapshot, count); err != nil {
-		return nil, err
-	}
-	publicKey, err := requireFrozenOriginMemberHead(ctx, tx, node, snapshot)
+	authority, err := requireFrozenAdmissionAuthority(ctx, tx, snapshot,
+		acceptedAt, uint64(len(spec.Items)))
 	if err != nil {
 		return nil, err
 	}
-	if err := requireAdmissionAudienceBaselines(ctx, tx, node, snapshot.ChannelID(), spec.Items); err != nil {
+	if spec.Operation != nil {
+		if err := requireActingAgentRunAuthority(ctx, tx, operation, authority.profile); err != nil {
+			return nil, err
+		}
+	}
+	if err := requireFrozenPublicationHead(ctx, tx, authority.node, snapshot, uint64(len(spec.Items))); err != nil {
+		return nil, err
+	}
+	publicKey, err := requireFrozenOriginMemberHead(ctx, tx, authority.node, snapshot)
+	if err != nil {
+		return nil, err
+	}
+	if err := requireAdmissionAudienceBaselines(ctx, tx, authority.node,
+		snapshot.ChannelID(), spec.Items); err != nil {
 		return nil, err
 	}
 	return publicKey, nil
+}
+
+type frozenAdmissionAuthority struct {
+	node    model.Node
+	profile model.Profile
+}
+
+func requireFrozenAdmissionAuthority(ctx context.Context, tx *sql.Tx,
+	snapshot LocalAdmissionScope, acceptedAt time.Time, count uint64,
+) (frozenAdmissionAuthority, error) {
+	node, err := readNode(ctx, tx)
+	if err != nil || node.PeerID() != snapshot.Node().PeerID() ||
+		node.OriginEpoch() != snapshot.Node().OriginEpoch() ||
+		node.NextOriginSequence() != snapshot.FirstOriginSequence() ||
+		node.ActiveAssetRevision() != snapshot.Node().ActiveAssetRevision() {
+		return frozenAdmissionAuthority{}, fmt.Errorf("%w: Node authority changed", ErrAdmissionConflict)
+	}
+	profile, err := readProfile(ctx, tx)
+	if err != nil || !profile.Enabled() || !sameProfileIdentity(profile, snapshot.Profile()) ||
+		!sameProfileAuthority(profile, snapshot.Profile()) ||
+		profile.ActiveAssetRevision() != node.ActiveAssetRevision() {
+		return frozenAdmissionAuthority{}, fmt.Errorf("%w: Profile authority changed", ErrAdmissionConflict)
+	}
+	if count > model.MaxSQLiteInteger || node.NextOriginSequence() > model.MaxSQLiteInteger-count ||
+		acceptedAt.Before(node.UpdatedAt()) {
+		return frozenAdmissionAuthority{}, fmt.Errorf("%w: origin sequence successor exhausted or clock regressed",
+			ErrAdmissionConflict)
+	}
+	return frozenAdmissionAuthority{node: node, profile: profile}, nil
 }
 
 // requireActingAgentRunAuthority requires the operation's AgentRun to still be

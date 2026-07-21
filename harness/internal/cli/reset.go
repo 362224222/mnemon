@@ -74,9 +74,14 @@ func productionResetDependencies() resetDependencies {
 		newClient: func(nodeState string) (resetAuthorityClient, error) {
 			return localapi.NewClient(nodeState)
 		},
-		inspect:        node.InspectRecoveryAuthority,
-		confirmOffline: node.ConfirmRecoveryOfflineAuthority,
-		now:            time.Now,
+		inspect: node.InspectRecoveryAuthority,
+		confirmOffline: func(ctx context.Context, workspace string,
+			expected model.Digest,
+		) (localapi.AuthorityResponse, error) {
+			return node.ConfirmRecoveryOfflineAuthorityWithControl(ctx, workspace,
+				expected, localapi.NodeRuntime{})
+		},
+		now: time.Now,
 	}
 }
 

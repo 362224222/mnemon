@@ -212,14 +212,18 @@ func (admitted *admittedWakeStore) FailAgentRuntime(ctx context.Context,
 // worker, while the activation check and adapter remain outside admission.
 func newManagedWakeWorker(st *store.Store, nodeState string, profile model.Profile,
 	clock Clock, install InstallationVerifier, adapter agent.WakeWorkerAdapter,
-	admission ManagedAdmission,
+	admission ManagedAdmission, attachments ...RunAttachmentFilesystemFactory,
 ) (*agent.WakeWorker, error) {
 	if st == nil || install == nil || admission == nil {
 		return nil, fmt.Errorf("compose managed wake worker: Store, installation verifier and admission are required")
 	}
 	admitted := &admittedWakeStore{store: st, admission: admission}
+	filesystem := newAgentAttachmentFilesystem(nodeState, attachments...)
+	if filesystem.err != nil {
+		return nil, filesystem.err
+	}
 	preparer, err := agent.NewWakeAttachmentPreparer(admitted, agent.WakeAttachmentOptions{
-		Attachments:   newAgentAttachmentFilesystem(nodeState),
+		Attachments:   filesystem,
 		AssetRevision: profile.ActiveAssetRevision(), Clock: clock,
 	})
 	if err != nil {

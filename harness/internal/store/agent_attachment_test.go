@@ -3,15 +3,17 @@ package store
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 )
 
@@ -242,7 +244,7 @@ func TestAgentAttachmentCleanupUsesRealFilesNotHistoricalRows(t *testing.T) {
 	nodeState := filepath.Dir(fixture.store.Path())
 	token := bytes.Repeat([]byte{0xf1}, 32)
 	stageID := bytes.Repeat([]byte{0xf2}, 16)
-	staged, err := localapi.StageRunAttachment(nodeState,
+	staged, err := stageStoreTestRunAttachment(nodeState,
 		bytes.NewReader(append(token, stageID...)))
 	if err != nil {
 		t.Fatal(err)
@@ -255,7 +257,7 @@ func TestAgentAttachmentCleanupUsesRealFilesNotHistoricalRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	page, err := localapi.ListRunAttachmentCandidates(nodeState)
+	page, err := listStoreTestRunAttachmentCandidates(nodeState)
 	if err != nil || len(page.Candidates()) != 1 || page.More() {
 		t.Fatalf("filesystem candidate page = (%#v, %v)", page, err)
 	}
@@ -272,7 +274,7 @@ func TestAgentAttachmentCleanupUsesRealFilesNotHistoricalRows(t *testing.T) {
 	if err != nil || len(reapable) != 1 || reapable[0].RunID != claim.Run.ID() {
 		t.Fatalf("reapable real attachment = (%#v, %v)", reapable, err)
 	}
-	if removed, err := localapi.RemoveReapableRunAttachment(nodeState, reapable[0].RunID,
+	if removed, err := removeStoreTestReapableRunAttachment(nodeState, reapable[0].RunID,
 		reapable[0].TokenHash); err != nil || !removed {
 		t.Fatalf("remove real attachment = (%t, %v)", removed, err)
 	}
@@ -320,4 +322,187 @@ func preclaimWake(t *testing.T, fixture *acceptanceFixture, token model.Digest,
 		t.Fatal(err)
 	}
 	return result
+}
+
+const (
+	storeTestRunAttachmentSuffix        = ".attach"
+	storeTestRunAttachmentFileBytes     = 43 + 1
+	storeTestRunAttachmentSecretBytes   = 32
+	storeTestRunAttachmentStageIDBytes  = 16
+	storeTestMaxRunAttachmentCandidates = 65
+)
+
+type storeTestStagedRunAttachment struct {
+	nodeState string
+	path      string
+	token     [storeTestRunAttachmentSecretBytes]byte
+}
+
+func (attachment storeTestStagedRunAttachment) TokenHash() model.Digest {
+	return model.Sum(attachment.token[:])
+}
+
+func (attachment storeTestStagedRunAttachment) Publish(runID model.RunID) (storeTestRunAttachment, error) {
+	if runID.IsZero() {
+		return storeTestRunAttachment{}, errors.New("test Run attachment requires Run ID")
+	}
+	runs, err := ensureStoreTestRunsDirectory(attachment.nodeState)
+	if err != nil {
+		return storeTestRunAttachment{}, err
+	}
+	path := filepath.Join(runs, runID.String()+storeTestRunAttachmentSuffix)
+	if err := os.Rename(attachment.path, path); err != nil {
+		return storeTestRunAttachment{}, err
+	}
+	return storeTestRunAttachment{path: path, runID: runID, token: attachment.token}, nil
+}
+
+type storeTestRunAttachment struct {
+	path  string
+	runID model.RunID
+	token [storeTestRunAttachmentSecretBytes]byte
+}
+
+func (attachment storeTestRunAttachment) Path() string { return attachment.path }
+
+type storeTestRunAttachmentCandidate struct {
+	runID     model.RunID
+	tokenHash model.Digest
+}
+
+func (candidate storeTestRunAttachmentCandidate) RunID() model.RunID {
+	return candidate.runID
+}
+
+func (candidate storeTestRunAttachmentCandidate) TokenHash() model.Digest {
+	return candidate.tokenHash
+}
+
+type storeTestRunAttachmentCandidatePage struct {
+	candidates []storeTestRunAttachmentCandidate
+	more       bool
+}
+
+func (page storeTestRunAttachmentCandidatePage) More() bool { return page.more }
+
+func (page storeTestRunAttachmentCandidatePage) Candidates() []storeTestRunAttachmentCandidate {
+	return append([]storeTestRunAttachmentCandidate(nil), page.candidates...)
+}
+
+func stageStoreTestRunAttachment(nodeState string,
+	random io.Reader,
+) (storeTestStagedRunAttachment, error) {
+	if random == nil {
+		return storeTestStagedRunAttachment{}, errors.New("test Run attachment entropy is unavailable")
+	}
+	runs, err := ensureStoreTestRunsDirectory(nodeState)
+	if err != nil {
+		return storeTestStagedRunAttachment{}, err
+	}
+	entropy := make([]byte, storeTestRunAttachmentSecretBytes+storeTestRunAttachmentStageIDBytes)
+	if _, err := io.ReadFull(random, entropy); err != nil {
+		return storeTestStagedRunAttachment{}, err
+	}
+	var token [storeTestRunAttachmentSecretBytes]byte
+	copy(token[:], entropy[:storeTestRunAttachmentSecretBytes])
+	stageID := base64.RawURLEncoding.EncodeToString(entropy[storeTestRunAttachmentSecretBytes:])
+	path := filepath.Join(runs, ".mnemon-run-attachment-"+stageID+".tmp")
+	payload := []byte(base64.RawURLEncoding.EncodeToString(token[:]) + "\n")
+	if err := os.WriteFile(path, payload, 0o600); err != nil {
+		return storeTestStagedRunAttachment{}, err
+	}
+	return storeTestStagedRunAttachment{nodeState: nodeState, path: path, token: token}, nil
+}
+
+func listStoreTestRunAttachmentCandidates(nodeState string) (storeTestRunAttachmentCandidatePage, error) {
+	runs, err := ensureStoreTestRunsDirectory(nodeState)
+	if err != nil {
+		return storeTestRunAttachmentCandidatePage{}, err
+	}
+	entries, err := os.ReadDir(runs)
+	if err != nil {
+		return storeTestRunAttachmentCandidatePage{}, err
+	}
+	page := storeTestRunAttachmentCandidatePage{}
+	for _, entry := range entries {
+		if !strings.HasSuffix(entry.Name(), storeTestRunAttachmentSuffix) {
+			continue
+		}
+		attachment, err := readStoreTestRunAttachment(runs, filepath.Join(runs, entry.Name()))
+		if err != nil {
+			return storeTestRunAttachmentCandidatePage{}, err
+		}
+		if len(page.candidates) == storeTestMaxRunAttachmentCandidates {
+			page.more = true
+			return page, nil
+		}
+		page.candidates = append(page.candidates, storeTestRunAttachmentCandidate{
+			runID: attachment.runID, tokenHash: model.Sum(attachment.token[:]),
+		})
+	}
+	return page, nil
+}
+
+func removeStoreTestReapableRunAttachment(nodeState string, runID model.RunID,
+	expectedHash model.Digest,
+) (bool, error) {
+	if runID.IsZero() || expectedHash.IsZero() {
+		return false, errors.New("test Run attachment authority is incomplete")
+	}
+	runs, err := ensureStoreTestRunsDirectory(nodeState)
+	if err != nil {
+		return false, err
+	}
+	path := filepath.Join(runs, runID.String()+storeTestRunAttachmentSuffix)
+	attachment, err := readStoreTestRunAttachment(runs, path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if attachment.runID != runID || model.Sum(attachment.token[:]) != expectedHash {
+		return false, errors.New("test Run attachment differs from durable authority")
+	}
+	return true, os.Remove(path)
+}
+
+func readStoreTestRunAttachment(runs, path string) (storeTestRunAttachment, error) {
+	if filepath.Dir(path) != runs || !strings.HasSuffix(filepath.Base(path),
+		storeTestRunAttachmentSuffix) {
+		return storeTestRunAttachment{}, errors.New("test Run attachment path is invalid")
+	}
+	raw, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return storeTestRunAttachment{}, err
+	}
+	if err != nil {
+		return storeTestRunAttachment{}, err
+	}
+	if len(raw) != storeTestRunAttachmentFileBytes || raw[len(raw)-1] != '\n' {
+		return storeTestRunAttachment{}, errors.New("test Run attachment bytes are invalid")
+	}
+	token, err := base64.RawURLEncoding.DecodeString(string(raw[:len(raw)-1]))
+	if err != nil || len(token) != storeTestRunAttachmentSecretBytes {
+		return storeTestRunAttachment{}, errors.New("test Run attachment secret is invalid")
+	}
+	runIDText := strings.TrimSuffix(filepath.Base(path), storeTestRunAttachmentSuffix)
+	runID, err := model.ParseRunID(runIDText)
+	if err != nil {
+		return storeTestRunAttachment{}, err
+	}
+	var fixed [storeTestRunAttachmentSecretBytes]byte
+	copy(fixed[:], token)
+	return storeTestRunAttachment{path: path, runID: runID, token: fixed}, nil
+}
+
+func ensureStoreTestRunsDirectory(nodeState string) (string, error) {
+	runs := filepath.Join(nodeState, "runs")
+	if err := os.Mkdir(runs, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+		return "", fmt.Errorf("create test Run attachment directory: %w", err)
+	}
+	if err := os.Chmod(runs, 0o700); err != nil {
+		return "", fmt.Errorf("protect test Run attachment directory: %w", err)
+	}
+	return runs, nil
 }

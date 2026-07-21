@@ -418,7 +418,7 @@ func TestSetupStaticAndHostGatesFailBeforeActivation(t *testing.T) {
 		fixture.fail["activation-unsupported"] = errors.New("unsupported")
 		exit, stdout, stderr := fixture.run()
 		if exit != 4 || stdout != "" || stderr !=
-			"host_activation_required: selected Host has no verifiable managed Hook activation surface; use codex\n" {
+			"host_activation_required: selected Host has no verifiable managed Hook activation surface\n" {
 			t.Fatalf("fresh unsupported setup = exit %d stdout %q stderr %q", exit, stdout, stderr)
 		}
 		for _, forbidden := range []string{"initialize:codex", "install-bundle",
@@ -432,7 +432,7 @@ func TestSetupStaticAndHostGatesFailBeforeActivation(t *testing.T) {
 	})
 }
 
-func TestSetupRequiresCodexTrustBeforeAnyActivation(t *testing.T) {
+func TestSetupRequiresObservedHostAssetsBeforeAnyActivation(t *testing.T) {
 	for _, enabled := range []bool{false, true} {
 		t.Run(fmt.Sprintf("enabled=%t", enabled), func(t *testing.T) {
 			fixture := newSetupFixture(t, assets.HostCodex, enabled)
@@ -440,7 +440,7 @@ func TestSetupRequiresCodexTrustBeforeAnyActivation(t *testing.T) {
 				integration.ErrHostActivationRequired)
 			exit, stdout, stderr := fixture.run()
 			if exit != 4 || stdout != "" || stderr !=
-				"host_activation_required: Codex has not loaded the exact trusted Mnemon Hook and Skill; trust this project and the current Hook with /hooks, then rerun setup\n" {
+				"host_activation_required: selected Host has not loaded the exact Mnemon Hook and Skill; repair project trust or activation and rerun setup\n" {
 				t.Fatalf("untrusted setup = exit %d stdout %q stderr %q", exit, stdout, stderr)
 			}
 			if fixture.called("activate:codex") || fixture.called("ensure") ||

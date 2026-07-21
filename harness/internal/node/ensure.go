@@ -4,19 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
-	"syscall"
-	"time"
-
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
-	"golang.org/x/sys/unix"
+	"path/filepath"
+	"time"
 )
 
 const (
-	ensureLockName        = "ensure.lock"
-	ensureLockMode        = os.FileMode(0o600)
 	daemonEnsureDeadline  = 3 * time.Second
 	daemonEnsurePoll      = 20 * time.Millisecond
 	daemonCleanupDeadline = time.Second
@@ -28,10 +21,10 @@ var (
 )
 
 // DaemonHealthProbe is the authenticated local health boundary used by the
-// zero-touch ensure path. A localapi.Client satisfies this interface directly.
+// zero-touch ensure path. A Client satisfies this interface directly.
 // Implementations must honor cancellation of the supplied bounded context.
 type DaemonHealthProbe interface {
-	ProbeHealth(context.Context) (localapi.HealthResponse, *localapi.APIError)
+	ProbeHealth(context.Context) (HealthResponse, *APIError)
 }
 
 // DaemonEnsurePreflight validates the existing Node schema, identity and exact managed assets.
@@ -53,13 +46,13 @@ func (verify DaemonEnsurePreflightFunc) Verify(ctx context.Context) error {
 // Ensure still owns a newly launched child. Setup uses it for the actual
 // projected Hook self-check; ordinary Agent ensure leaves it nil.
 type DaemonReadyGate interface {
-	VerifyReady(context.Context, localapi.HealthResponse) error
+	VerifyReady(context.Context, HealthResponse) error
 }
 
-type DaemonReadyGateFunc func(context.Context, localapi.HealthResponse) error
+type DaemonReadyGateFunc func(context.Context, HealthResponse) error
 
 func (verify DaemonReadyGateFunc) VerifyReady(ctx context.Context,
-	health localapi.HealthResponse,
+	health HealthResponse,
 ) error {
 	if verify == nil {
 		return errors.New("daemon ready gate is unavailable")
@@ -114,7 +107,7 @@ type DaemonEnsureOptions struct {
 }
 
 type DaemonEnsureResult struct {
-	Health         localapi.HealthResponse
+	Health         HealthResponse
 	Started        bool
 	FailureOutcome DaemonEnsureFailureOutcome
 }
@@ -337,7 +330,7 @@ func validateDaemonEnsure(options DaemonEnsureOptions, timing daemonEnsureTiming
 }
 
 func verifyDaemonReadyGate(ctx context.Context, gate DaemonReadyGate,
-	health localapi.HealthResponse,
+	health HealthResponse,
 ) error {
 	if gate == nil {
 		return nil
@@ -353,22 +346,22 @@ func verifyDaemonReadyGate(ctx context.Context, gate DaemonReadyGate,
 
 func probeDaemonHealth(ctx context.Context, probe DaemonHealthProbe,
 	expectedRevision string,
-) (localapi.HealthResponse, bool, error) {
+) (HealthResponse, bool, error) {
 	health, observation, err := observeDaemonHealth(ctx, probe, expectedRevision)
 	if err != nil {
-		return localapi.HealthResponse{}, false, err
+		return HealthResponse{}, false, err
 	}
 	switch observation {
 	case daemonHealthUnavailable:
-		return localapi.HealthResponse{}, true, nil
+		return HealthResponse{}, true, nil
 	case daemonHealthReady:
 		return health, false, nil
 	case daemonHealthNotReady:
-		return localapi.HealthResponse{}, false,
+		return HealthResponse{}, false,
 			fmt.Errorf("%w: %w: daemon is not ready", ErrDaemonEnsure,
 				ErrDaemonHealthAuthority)
 	default:
-		return localapi.HealthResponse{}, false,
+		return HealthResponse{}, false,
 			fmt.Errorf("%w: %w: health observation is invalid", ErrDaemonEnsure,
 				ErrDaemonHealthAuthority)
 	}
@@ -376,32 +369,32 @@ func probeDaemonHealth(ctx context.Context, probe DaemonHealthProbe,
 
 func observeDaemonHealth(ctx context.Context, probe DaemonHealthProbe,
 	expectedRevision string,
-) (localapi.HealthResponse, daemonHealthObservation, error) {
+) (HealthResponse, daemonHealthObservation, error) {
 	if err := ctx.Err(); err != nil {
-		return localapi.HealthResponse{}, 0,
+		return HealthResponse{}, 0,
 			fmt.Errorf("%w: bounded deadline: %w", ErrDaemonEnsure, err)
 	}
 	health, apiErr := probe.ProbeHealth(ctx)
 	if apiErr != nil {
-		if apiErr.Code == localapi.CodeMnemondUnavailable {
-			return localapi.HealthResponse{}, daemonHealthUnavailable, nil
+		if apiErr.Code == CodeMnemondUnavailable {
+			return HealthResponse{}, daemonHealthUnavailable, nil
 		}
-		return localapi.HealthResponse{}, 0,
+		return HealthResponse{}, 0,
 			fmt.Errorf("%w: authenticated health failed: %w", ErrDaemonEnsure, apiErr)
 	}
-	if health.SchemaVersion != localapi.SchemaVersion ||
+	if health.SchemaVersion != SchemaVersion ||
 		(health.Status != "ready" && health.Status != "not_ready") {
-		return localapi.HealthResponse{}, 0,
+		return HealthResponse{}, 0,
 			fmt.Errorf("%w: %w: response is noncanonical", ErrDaemonEnsure,
 				ErrDaemonHealthAuthority)
 	}
 	if _, err := model.ParseDigest(health.AssetRevision); err != nil {
-		return localapi.HealthResponse{}, 0,
+		return HealthResponse{}, 0,
 			fmt.Errorf("%w: %w: revision is invalid", ErrDaemonEnsure,
 				ErrDaemonHealthAuthority)
 	}
 	if health.AssetRevision != expectedRevision {
-		return localapi.HealthResponse{}, 0,
+		return HealthResponse{}, 0,
 			fmt.Errorf("%w: %w: revision differs", ErrDaemonEnsure,
 				ErrDaemonHealthAuthority)
 	}
@@ -409,157 +402,6 @@ func observeDaemonHealth(ctx context.Context, probe DaemonHealthProbe,
 		return health, daemonHealthNotReady, nil
 	}
 	return health, daemonHealthReady, nil
-}
-
-type ensureLock struct {
-	state *identityNodeState
-	file  *os.File
-	held  bool
-}
-
-func acquireEnsureLock(ctx context.Context, nodeState string,
-	poll time.Duration,
-) (*ensureLock, error) {
-	state, err := openIdentityNodeState(nodeState)
-	if err != nil {
-		return nil, err
-	}
-	file, err := openEnsureLockFile(state)
-	if err != nil {
-		state.close()
-		return nil, err
-	}
-	lock := &ensureLock{state: state, file: file}
-	for {
-		if err := unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB); err == nil {
-			lock.held = true
-			if err := validateEnsureLockFile(lock); err != nil {
-				_ = lock.close()
-				return nil, err
-			}
-			return lock, nil
-		} else if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EAGAIN) {
-			_ = lock.close()
-			return nil, err
-		}
-		if err := waitEnsurePoll(ctx, poll); err != nil {
-			_ = lock.close()
-			return nil, err
-		}
-	}
-}
-
-func validateHeldEnsureLock(lock *ensureLock, nodeState string) error {
-	if lock == nil || !lock.held || lock.state == nil || lock.state.path != nodeState {
-		return errors.New("ensure lock is not held for this Node")
-	}
-	if err := validateEnsureLockFile(lock); err != nil {
-		return err
-	}
-	if err := unix.Flock(int(lock.file.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
-		return fmt.Errorf("reassert exclusive ensure lock: %w", err)
-	}
-	return validateEnsureLockFile(lock)
-}
-
-func openEnsureLockFile(state *identityNodeState) (*os.File, error) {
-	if state == nil || state.dir == nil {
-		return nil, errors.New("Node state directory is unavailable")
-	}
-	flags := unix.O_RDWR | unix.O_CLOEXEC | unix.O_NOFOLLOW | unix.O_CREAT | unix.O_EXCL
-	fd, err := unix.Openat(int(state.dir.Fd()), ensureLockName, flags, uint32(ensureLockMode))
-	created := err == nil
-	if errors.Is(err, syscall.EEXIST) {
-		fd, err = unix.Openat(int(state.dir.Fd()), ensureLockName,
-			unix.O_RDWR|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
-	}
-	if err != nil {
-		return nil, err
-	}
-	file := os.NewFile(uintptr(fd), filepath.Join(state.path, ensureLockName))
-	if file == nil {
-		_ = unix.Close(fd)
-		return nil, errors.New("open ensure lock returned no file")
-	}
-	if created {
-		if err := file.Chmod(ensureLockMode); err != nil {
-			_ = file.Close()
-			return nil, err
-		}
-		if err := state.dir.Sync(); err != nil {
-			_ = file.Close()
-			return nil, err
-		}
-	}
-	if err := validateEnsureLockFile(&ensureLock{state: state, file: file}); err != nil {
-		_ = file.Close()
-		return nil, err
-	}
-	return file, nil
-}
-
-func validateEnsureLockFile(lock *ensureLock) error {
-	if lock == nil || lock.state == nil || lock.state.root == nil || lock.file == nil {
-		return errors.New("ensure lock is unavailable")
-	}
-	if err := lock.state.validateLive(); err != nil {
-		return err
-	}
-	opened, err := lock.file.Stat()
-	if err != nil {
-		return err
-	}
-	ownerUID, err := validateIdentityOwnerPath(opened, ensureLockMode, false)
-	if err != nil || ownerUID != lock.state.ownerUID {
-		if err == nil {
-			err = errors.New("ensure lock owner differs from Node state owner")
-		}
-		return err
-	}
-	stat, ok := opened.Sys().(*syscall.Stat_t)
-	if !ok || stat.Nlink != 1 {
-		return errors.New("ensure lock must have exactly one filesystem link")
-	}
-	current, err := lock.state.root.Lstat(ensureLockName)
-	if err != nil || !os.SameFile(opened, current) {
-		return errors.New("ensure lock identity changed")
-	}
-	return nil
-}
-
-func (lock *ensureLock) close() error {
-	return lock.closeValidated(true)
-}
-
-// closeAfterRename releases a lock whose complete Node directory was moved
-// while the descriptor remained held. Name-based validation is intentionally
-// impossible after that successful atomic rename; the live descriptors still
-// pin the exact authority being released.
-func (lock *ensureLock) closeAfterRename() error {
-	return lock.closeValidated(false)
-}
-
-func (lock *ensureLock) closeValidated(validate bool) error {
-	if lock == nil {
-		return nil
-	}
-	var err error
-	if validate && lock.file != nil && lock.state != nil {
-		err = validateEnsureLockFile(lock)
-	}
-	if lock.file != nil {
-		if lock.held {
-			err = errors.Join(err, unix.Flock(int(lock.file.Fd()), unix.LOCK_UN))
-			lock.held = false
-		}
-		err = errors.Join(err, lock.file.Close())
-		lock.file = nil
-	}
-	if lock.state != nil {
-		lock.state.close()
-		lock.state = nil
-	}
-	return err
 }
 
 func waitEnsurePoll(ctx context.Context, duration time.Duration) error {

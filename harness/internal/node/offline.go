@@ -4,12 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
-
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
+	"os"
+	"path/filepath"
 )
 
 var (
@@ -32,8 +30,20 @@ const OfflineAuthorityActiveExitCode = 75
 // companion releases the Store writer.
 func ConfirmOfflineAuthority(ctx context.Context, workspace string,
 	expected model.Digest,
-) (response localapi.AuthorityResponse, err error) {
-	return confirmOfflineAuthority(ctx, workspace, expected, localapi.RemoveStaleOwnerUnix)
+) (response AuthorityResponse, err error) {
+	return ConfirmOfflineAuthorityWithControl(ctx, workspace, expected, nil)
+}
+
+func ConfirmOfflineAuthorityWithControl(ctx context.Context, workspace string,
+	expected model.Digest, control ControlRuntime,
+) (response AuthorityResponse, err error) {
+	control, controlErr := requireControlRuntime(control)
+	if controlErr != nil {
+		return AuthorityResponse{}, offlineAuthorityError(
+			controlErr)
+	}
+	return confirmOfflineAuthority(ctx, workspace, expected, control.RemoveStaleOwnerUnix,
+		control)
 }
 
 type removeStaleOwnerUnixFunc func(context.Context, string) (bool, error)
@@ -47,25 +57,35 @@ type existingStoredAuthorityOpener func(context.Context, string, string, bool) (
 // test hook or weakening the production boundary.
 func confirmOfflineAuthority(ctx context.Context, workspace string,
 	expected model.Digest, removeStale removeStaleOwnerUnixFunc,
-) (response localapi.AuthorityResponse, err error) {
+	credentials ...ProfileCredentialAuthority,
+) (response AuthorityResponse, err error) {
+	var credentialAuthority ProfileCredentialAuthority
+	if len(credentials) > 0 {
+		credentialAuthority = credentials[0]
+	}
 	return confirmOfflineAuthorityWith(ctx, workspace, expected, removeStale,
-		openExistingStoredAuthority)
+		func(ctx context.Context, workspace, nodeState string, allowDisabled bool) (
+			existingDaemonAuthority, error,
+		) {
+			return openExistingStoredAuthority(ctx, workspace, nodeState, allowDisabled,
+				credentialAuthority)
+		})
 }
 
 func confirmOfflineAuthorityWith(ctx context.Context, workspace string,
 	expected model.Digest, removeStale removeStaleOwnerUnixFunc,
 	openAuthority existingStoredAuthorityOpener,
-) (response localapi.AuthorityResponse, err error) {
+) (response AuthorityResponse, err error) {
 	if ctx == nil || expected.IsZero() {
-		return localapi.AuthorityResponse{}, offlineAuthorityError(
+		return AuthorityResponse{}, offlineAuthorityError(
 			errors.New("context or expected authority digest is unavailable"))
 	}
 	if removeStale == nil || openAuthority == nil {
-		return localapi.AuthorityResponse{}, offlineAuthorityError(
+		return AuthorityResponse{}, offlineAuthorityError(
 			errors.New("stale socket recovery is unavailable"))
 	}
 	if contextErr := ctx.Err(); contextErr != nil {
-		return localapi.AuthorityResponse{}, offlineAuthorityError(contextErr)
+		return AuthorityResponse{}, offlineAuthorityError(contextErr)
 	}
 	nodeState := filepath.Join(workspace, ".mnemon", "harness", "node")
 	authority, openErr := openAuthority(ctx, workspace, nodeState, true)
@@ -73,41 +93,41 @@ func confirmOfflineAuthorityWith(ctx context.Context, workspace string,
 		if errors.Is(openErr, store.ErrWriterActive) {
 			openErr = errors.Join(ErrOfflineAuthorityActive, openErr)
 		}
-		return localapi.AuthorityResponse{}, offlineAuthorityError(openErr)
+		return AuthorityResponse{}, offlineAuthorityError(openErr)
 	}
 	defer func() {
 		if closeErr := authority.store.Close(); closeErr != nil {
-			response = localapi.AuthorityResponse{}
+			response = AuthorityResponse{}
 			err = errors.Join(err, offlineAuthorityError(fmt.Errorf("close Store: %w", closeErr)))
 		}
 	}()
 
-	response, err = localapi.NewAuthorityResponse(authoritySnapshot(authority.authority))
+	response, err = NewAuthorityResponse(authoritySnapshot(authority.authority))
 	if err != nil {
-		return localapi.AuthorityResponse{}, offlineAuthorityError(err)
+		return AuthorityResponse{}, offlineAuthorityError(err)
 	}
-	observed, digestErr := localapi.AuthorityDigest(response)
+	observed, digestErr := AuthorityDigest(response)
 	if digestErr != nil || observed != expected {
 		if digestErr == nil {
 			digestErr = errors.New("durable authority differs from expected")
 		}
-		return localapi.AuthorityResponse{}, offlineAuthorityError(digestErr)
+		return AuthorityResponse{}, offlineAuthorityError(digestErr)
 	}
 	if err := ctx.Err(); err != nil {
-		return localapi.AuthorityResponse{}, offlineAuthorityError(err)
+		return AuthorityResponse{}, offlineAuthorityError(err)
 	}
 	socketPath := filepath.Join(nodeState, controlSocketName)
 	if _, err := removeStale(ctx, socketPath); err != nil {
-		return localapi.AuthorityResponse{}, offlineAuthorityError(err)
+		return AuthorityResponse{}, offlineAuthorityError(err)
 	}
 	if _, err := os.Lstat(socketPath); !errors.Is(err, os.ErrNotExist) {
 		if err == nil {
 			err = errors.New("control socket remains after offline confirmation")
 		}
-		return localapi.AuthorityResponse{}, offlineAuthorityError(err)
+		return AuthorityResponse{}, offlineAuthorityError(err)
 	}
 	if err := ctx.Err(); err != nil {
-		return localapi.AuthorityResponse{}, offlineAuthorityError(err)
+		return AuthorityResponse{}, offlineAuthorityError(err)
 	}
 	return response, nil
 }

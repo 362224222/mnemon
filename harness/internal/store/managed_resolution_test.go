@@ -10,9 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 )
+
+const storeTestMaxDiagnosticBytes = 512
 
 func TestCommitManagedResolutionAtomicallyTransitionsClosedDecisions(t *testing.T) {
 	tests := []struct {
@@ -474,7 +475,7 @@ func assertManagedResolutionReceipt(t *testing.T, receipt model.JSON,
 	if err != nil || envelope.Receipt != model.Sum(evidence.Bytes()).String() {
 		t.Fatalf("resolution evidence digest = %s, error %v", envelope.Receipt, err)
 	}
-	if len(envelope.Receipt) > localapi.MaxDiagnosticBytes || strings.Contains(envelope.Receipt, fixture.content) ||
+	if len(envelope.Receipt) > storeTestMaxDiagnosticBytes || strings.Contains(envelope.Receipt, fixture.content) ||
 		strings.Contains(envelope.Receipt, fixture.current.SourceEvent().EventID().String()) {
 		t.Fatalf("resolution receipt exposed unbounded evidence: %s", envelope.Receipt)
 	}

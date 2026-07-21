@@ -1,11 +1,9 @@
 package node
 
 import (
-	"sort"
-
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
+	"sort"
 )
 
 type channelSessionObserver interface {
@@ -18,9 +16,9 @@ func (manager *ChannelManager) channelSessionReady(channelID model.ChannelID) bo
 
 func projectStatusChannels(authority store.ChannelStatusAuthority,
 	sessions channelSessionObserver,
-) []localapi.StatusChannelSnapshot {
+) []StatusChannelSnapshot {
 	channels := authority.Channels()
-	result := make([]localapi.StatusChannelSnapshot, 0, len(channels))
+	result := make([]StatusChannelSnapshot, 0, len(channels))
 	for _, durable := range channels {
 		sessionReady := sessions != nil && sessions.channelSessionReady(durable.Channel().ID())
 		result = append(result, projectStatusChannel(authority.LocalPeerID(), durable, sessionReady))
@@ -31,32 +29,32 @@ func projectStatusChannels(authority store.ChannelStatusAuthority,
 
 func projectStatusChannel(local model.PeerID, durable store.ChannelStatusChannel,
 	sessionReady bool,
-) localapi.StatusChannelSnapshot {
+) StatusChannelSnapshot {
 	channel, progress := durable.Channel(), durable.Progress()
 	topic := projectStatusChannelTopic(local, durable, sessionReady)
 	commit, publication := progress.Commit(), progress.Publication()
 	cursor, inbox := progress.Cursor(), progress.Inbox()
 	artifact, runtime := progress.Artifact(), progress.Runtime()
-	return localapi.StatusChannelSnapshot{Alias: channel.LocalAlias(), Membership: string(channel.Status()),
+	return StatusChannelSnapshot{Alias: channel.LocalAlias(), Membership: string(channel.Status()),
 		RosterRevision: channel.RosterHead().Revision(), Topic: topic,
-		LocalCommit: localapi.StatusChannelCommit{Accepted: commit.Accepted},
-		Publication: localapi.StatusChannelPublication{Queued: publication.Queued,
+		LocalCommit: StatusChannelCommit{Accepted: commit.Accepted},
+		Publication: StatusChannelPublication{Queued: publication.Queued,
 			Published: publication.Published, Blocked: publication.Blocked,
 			RemotePending:      publication.RemotePending,
 			RemoteAcknowledged: publication.RemoteAcknowledged,
 			RemoteBlocked:      publication.RemoteBlocked},
-		Cursor: localapi.StatusChannelCursor{InboundOrigins: cursor.InboundOrigins,
+		Cursor: StatusChannelCursor{InboundOrigins: cursor.InboundOrigins,
 			InboundCaughtUp: cursor.InboundCaughtUp, InboundPending: cursor.InboundPending,
 			InboundTerminal: cursor.InboundTerminal, InboundGapped: cursor.InboundGapped,
 			OutboundPeers: cursor.OutboundPeers, OutboundAcknowledged: cursor.OutboundAcknowledged,
 			OutboundPending: cursor.OutboundPending},
-		Inbox: localapi.StatusChannelInbox{Durable: inbox.Durable, Pending: inbox.Pending,
+		Inbox: StatusChannelInbox{Durable: inbox.Durable, Pending: inbox.Pending,
 			WaitingArtifact: inbox.WaitingArtifact, Accepted: inbox.Accepted,
 			Rejected: inbox.Rejected, Conflicted: inbox.Conflicted, Ignored: inbox.Ignored,
 			Quarantined: inbox.Quarantined},
-		Artifact: localapi.StatusChannelArtifact{PinnedRoots: artifact.PinnedRoots,
+		Artifact: StatusChannelArtifact{PinnedRoots: artifact.PinnedRoots,
 			VerifiedRoots: artifact.VerifiedRoots},
-		Runtime: localapi.StatusChannelRuntime{HandlingPending: runtime.HandlingPending,
+		Runtime: StatusChannelRuntime{HandlingPending: runtime.HandlingPending,
 			HandlingClaimed: runtime.HandlingClaimed, HandlingCompleted: runtime.HandlingCompleted,
 			HandlingRejected: runtime.HandlingRejected, HandlingDead: runtime.HandlingDead,
 			RunActive: runtime.RunActive, RunCompleted: runtime.RunCompleted,
@@ -65,7 +63,7 @@ func projectStatusChannel(local model.PeerID, durable store.ChannelStatusChannel
 
 func projectStatusChannelTopic(local model.PeerID, durable store.ChannelStatusChannel,
 	sessionReady bool,
-) localapi.StatusChannelTopic {
+) StatusChannelTopic {
 	channel := durable.Channel()
 	readiness := make(map[model.PeerID]bool)
 	for _, remote := range durable.Progress().Readiness() {
@@ -102,7 +100,7 @@ func projectStatusChannelTopic(local model.PeerID, durable store.ChannelStatusCh
 	if state == "joined" && ready < activeChannelMembers(latest) {
 		state = "converging"
 	}
-	return localapi.StatusChannelTopic{State: state, ReadyMembers: ready,
+	return StatusChannelTopic{State: state, ReadyMembers: ready,
 		TotalMembers: uint8(len(latest)), UnreachableMembers: unreachable}
 }
 

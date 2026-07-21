@@ -4,11 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/agent"
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
@@ -20,6 +18,7 @@ type DaemonPreflightOptions struct {
 	NodeState     string
 	AssetRevision string
 	Install       InstallationVerifier
+	Credentials   ProfileCredentialAuthority
 }
 
 // DaemonPreflight is the production DaemonEnsurePreflight. Its constructor
@@ -30,6 +29,7 @@ type DaemonPreflight struct {
 	nodeState     string
 	assetRevision string
 	install       InstallationVerifier
+	credentials   ProfileCredentialAuthority
 	actionPolicy  agent.ActionPolicy
 }
 
@@ -48,6 +48,10 @@ func NewDaemonPreflight(options DaemonPreflightOptions) (*DaemonPreflight, error
 	if options.Install == nil {
 		return nil, fmt.Errorf("%w: installation verifier is unavailable", ErrDaemonPreflight)
 	}
+	credentials, err := requireProfileCredentialAuthority(options.Credentials)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrDaemonPreflight, err)
+	}
 	actionPolicy, err := actionPolicyForInstallation(options.Install)
 	if err != nil {
 		return nil, fmt.Errorf("%w: action policy: %w", ErrDaemonPreflight, err)
@@ -56,7 +60,8 @@ func NewDaemonPreflight(options DaemonPreflightOptions) (*DaemonPreflight, error
 		return nil, fmt.Errorf("%w: action policy differs from expected asset revision", ErrDaemonPreflight)
 	}
 	return &DaemonPreflight{workspace: options.Workspace, nodeState: options.NodeState,
-		assetRevision: options.AssetRevision, install: options.Install, actionPolicy: actionPolicy}, nil
+		assetRevision: options.AssetRevision, install: options.Install,
+		credentials: credentials, actionPolicy: actionPolicy}, nil
 }
 
 // Verify is validation-only. It never provisions identity or credentials,
@@ -70,7 +75,8 @@ func (preflight *DaemonPreflight) Verify(ctx context.Context) (err error) {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("%w: %w", ErrDaemonPreflight, err)
 	}
-	authority, err := openExistingDaemonAuthority(ctx, preflight.workspace, preflight.nodeState)
+	authority, err := openExistingDaemonAuthority(ctx, preflight.workspace, preflight.nodeState,
+		preflight.credentials)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrDaemonPreflight, err)
 	}
@@ -102,8 +108,14 @@ type existingDaemonAuthority struct {
 	authority store.LocalAuthority
 }
 
-func openExistingDaemonAuthority(ctx context.Context, workspace, nodeState string) (existingDaemonAuthority, error) {
-	return openExistingStoredAuthority(ctx, workspace, nodeState, false)
+func openExistingDaemonAuthority(ctx context.Context, workspace, nodeState string,
+	credentials ...ProfileCredentialAuthority,
+) (existingDaemonAuthority, error) {
+	var credentialAuthority ProfileCredentialAuthority
+	if len(credentials) > 0 {
+		credentialAuthority = credentials[0]
+	}
+	return openExistingStoredAuthority(ctx, workspace, nodeState, false, credentialAuthority)
 }
 
 // openExistingStoredAuthority is the strict existing-only reader shared by
@@ -111,7 +123,7 @@ func openExistingDaemonAuthority(ctx context.Context, workspace, nodeState strin
 // latter; all filesystem, identity, credential, schema and workspace bindings
 // remain identical.
 func openExistingStoredAuthority(ctx context.Context, workspace, nodeState string,
-	allowDisabled bool,
+	allowDisabled bool, credentials ProfileCredentialAuthority,
 ) (existingDaemonAuthority, error) {
 	if ctx == nil {
 		return existingDaemonAuthority{}, fmt.Errorf("%w: context is unavailable", ErrDaemonAuthority)
@@ -131,28 +143,14 @@ func openExistingStoredAuthority(ctx context.Context, workspace, nodeState strin
 	if err != nil {
 		return existingDaemonAuthority{}, fmt.Errorf("%w: %w", ErrDaemonAuthority, err)
 	}
-	databasePath := filepath.Join(nodeState, "node.db")
-	databaseInfo, err := os.Lstat(databasePath)
+	database, err := openStoredAuthorityDatabase(ctx, nodeState)
 	if err != nil {
-		return existingDaemonAuthority{}, fmt.Errorf("%w: inspect node.db: %v", ErrDaemonAuthority, err)
-	}
-	if _, err := validateIdentityOwnerPath(databaseInfo, 0o600, false); err != nil {
-		return existingDaemonAuthority{}, fmt.Errorf("%w: node.db: %v", ErrDaemonAuthority, err)
-	}
-	st, err := store.OpenExisting(ctx, databasePath)
-	if err != nil {
-		return existingDaemonAuthority{}, fmt.Errorf("%w: open Store: %w", ErrDaemonAuthority, err)
+		return existingDaemonAuthority{}, err
 	}
 	fail := func(cause error) (existingDaemonAuthority, error) {
-		if closeErr := st.Close(); closeErr != nil {
-			cause = errors.Join(cause, fmt.Errorf("%w: close Store: %v", ErrDaemonAuthority, closeErr))
-		}
-		return existingDaemonAuthority{}, cause
+		return existingDaemonAuthority{}, database.closeForAuthorityError(cause)
 	}
-	authority, err := st.ReadLocalAuthority(ctx)
-	if err != nil {
-		return fail(fmt.Errorf("%w: %w", ErrDaemonAuthority, err))
-	}
+	authority := database.authority
 	if authority.Profile.ID() != model.TeamworkProfileID() ||
 		(!allowDisabled && !authority.Profile.Enabled()) {
 		return fail(fmt.Errorf("%w: the unique Teamwork Profile is disabled or unavailable", ErrDaemonAuthority))
@@ -163,13 +161,17 @@ func openExistingStoredAuthority(ctx context.Context, workspace, nodeState strin
 	if authority.Profile.WorkspaceRoot() != validatedWorkspace {
 		return fail(fmt.Errorf("%w: Profile belongs to another workspace", ErrDaemonAuthority))
 	}
-	if err := localapi.VerifyProfileCredential(nodeState, authority.Profile.CredentialHash()); err != nil {
+	credentials, credentialErr := requireProfileCredentialAuthority(credentials)
+	if credentialErr != nil {
+		return fail(fmt.Errorf("%w: Profile credential authority is unavailable", ErrDaemonAuthority))
+	}
+	if err := credentials.VerifyProfileCredential(nodeState, authority.Profile.CredentialHash()); err != nil {
 		return fail(fmt.Errorf("%w: %w", ErrDaemonAuthority, err))
 	}
 	if err := ctx.Err(); err != nil {
 		return fail(fmt.Errorf("%w: %w", ErrDaemonAuthority, err))
 	}
-	return existingDaemonAuthority{identity: identity, store: st, authority: authority}, nil
+	return existingDaemonAuthority{identity: identity, store: database.store, authority: authority}, nil
 }
 
 func loadExistingDaemonIdentity(ctx context.Context, nodeState string) (*Identity, error) {

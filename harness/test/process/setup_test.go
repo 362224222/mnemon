@@ -82,6 +82,7 @@ type setupProcessDoctorCheck struct {
 }
 
 type setupProcessDoctorReport struct {
+	Channels      []localapi.StatusChannel  `json:"channels"`
 	Checks        []setupProcessDoctorCheck `json:"checks"`
 	Mode          string                    `json:"mode"`
 	SchemaVersion int                       `json:"schema_version"`
@@ -338,7 +339,7 @@ func TestPublicSetupWaitsForExactCodexHookTrustThenConverges(t *testing.T) {
 	var untrustedExit *exec.ExitError
 	if !errors.As(untrusted.err, &untrustedExit) || untrustedExit.ExitCode() != 4 ||
 		len(untrusted.stdout) != 0 || string(untrusted.stderr) !=
-		"host_activation_required: Codex has not loaded the exact trusted Mnemon Hook and Skill; trust this project and the current Hook with /hooks, then rerun setup\n" {
+		"host_activation_required: selected Host has not loaded the exact Mnemon Hook and Skill; repair project trust or activation and rerun setup\n" {
 		t.Fatalf("untrusted setup = exit=%v stdout=%s stderr=%s", untrusted.err,
 			setupProcessFingerprint(untrusted.stdout), setupProcessFingerprint(untrusted.stderr))
 	}
@@ -428,13 +429,8 @@ func TestPublicSetupUpgradesAnActiveRevisionUnderLifecycleLease(t *testing.T) {
 	newRevision := bundle.Manifest().AssetRevision
 	oldRevision := model.Sum([]byte("process active revision before upgrade")).String()
 	createdAt := time.Date(2020, time.January, 2, 8, 0, 0, 0, time.UTC)
-	provisioned, err := node.Provision(context.Background(), node.ProvisionOptions{
-		Workspace: workspace, Host: model.HostCodex, AssetRevision: oldRevision,
-		Clock: setupProcessClock{at: createdAt},
-	})
-	if err != nil || provisioned.NodeState != nodeState || provisioned.Profile.Enabled() {
-		t.Fatalf("provision old revision = (%#v, %v)", provisioned, err)
-	}
+	provisioned := setupProcessProvisionDisabledRevision(t, workspace, nodeState,
+		oldRevision, createdAt)
 	if _, err := integration.InstallNodeBundle(nodeState, bundle); err != nil {
 		t.Fatal(err)
 	}
@@ -455,14 +451,14 @@ func TestPublicSetupUpgradesAnActiveRevisionUnderLifecycleLease(t *testing.T) {
 		Workspace: workspace, Host: model.HostCodex, AssetRevision: oldRevision,
 		ExpectedUpdatedAt: provisioned.Profile.UpdatedAt(),
 		Clock:             setupProcessClock{at: createdAt.Add(time.Second)},
-		Install:           oldInstall,
+		Install:           oldInstall, Credentials: localapi.NodeRuntime{},
 	})
 	if err != nil || !activated.Changed || !activated.Profile.Enabled() {
 		t.Fatalf("activate old revision = (%#v, %v)", activated, err)
 	}
 
 	oldDaemon, err := node.OpenDaemon(context.Background(), node.DaemonOptions{
-		Workspace: workspace, Install: oldInstall,
+		Workspace: workspace, Install: oldInstall, Control: localapi.NodeRuntime{},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -497,7 +493,7 @@ func TestPublicSetupUpgradesAnActiveRevisionUnderLifecycleLease(t *testing.T) {
 	var modifiedExit *exec.ExitError
 	if !errors.As(result.err, &modifiedExit) || modifiedExit.ExitCode() != 4 ||
 		len(result.stdout) != 0 || string(result.stderr) !=
-		"host_activation_required: Codex has not loaded the exact trusted Mnemon Hook and Skill; trust this project and the current Hook with /hooks, then rerun setup\n" {
+		"host_activation_required: selected Host has not loaded the exact Mnemon Hook and Skill; repair project trust or activation and rerun setup\n" {
 		t.Fatalf("modified upgrade = exit=%v stdout=%s stderr=%s", result.err,
 			setupProcessFingerprint(result.stdout), setupProcessFingerprint(result.stderr))
 	}
@@ -520,7 +516,8 @@ func TestPublicSetupUpgradesAnActiveRevisionUnderLifecycleLease(t *testing.T) {
 		t.Fatalf("modified upgrade did not remain offline: %v", err)
 	}
 	cancelOffline()
-	disabled, err := node.InspectAuthority(context.Background(), workspace)
+	disabled, err := node.InspectAuthorityWithCredentials(context.Background(), workspace,
+		localapi.NodeRuntime{})
 	if err != nil || disabled.Enabled || disabled.PeerID != provisioned.Node.PeerID() ||
 		disabled.Host != model.HostCodex || disabled.AssetRevision != oldRevision ||
 		disabled.ActiveAssetRevision != oldRevision {
@@ -550,154 +547,6 @@ func TestPublicSetupUpgradesAnActiveRevisionUnderLifecycleLease(t *testing.T) {
 		authority.PeerID != receipt.PeerID {
 		t.Fatalf("new durable authority = (%#v, %#v)", authority, apiErr)
 	}
-}
-
-func TestPublicEjectPreservesNodeAndRejectsUnobservableHostSwitch(t *testing.T) {
-	repository := setupProcessRepositoryRoot(t)
-	root := setupProcessPhysicalTempDir(t)
-	bin := filepath.Join(root, "bin")
-	workspace := filepath.Join(root, "work")
-	harnessExecutable := filepath.Join(bin, "mnemon-harness")
-	mnemondExecutable := filepath.Join(bin, "mnemond")
-	nodeState := filepath.Join(workspace, ".mnemon", "harness", "node")
-	cleanup := &setupProcessCleanup{root: root, nodeState: nodeState}
-	t.Cleanup(func() { cleanup.run(t) })
-	for _, path := range []string{bin, workspace} {
-		if err := os.Mkdir(path, 0o700); err != nil {
-			t.Fatalf("create eject process-test directory: %v", err)
-		}
-	}
-
-	buildCtx, cancelBuild := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancelBuild()
-	setupProcessBuild(t, buildCtx, repository, harnessExecutable,
-		"./harness/cmd/mnemon-harness")
-	setupProcessBuild(t, buildCtx, repository, mnemondExecutable,
-		"./harness/cmd/mnemond")
-	setupProcessFakeCodex(t, filepath.Join(bin, "codex"))
-	setupProcessFakeClaude(t, filepath.Join(bin, "claude"))
-	environment := setupProcessEnvironment(bin, workspace, root)
-	cleanup.offline = setupProcessOfflineProbe{executable: mnemondExecutable,
-		workspace: workspace, environment: append([]string(nil), environment...)}
-
-	setupCtx, cancelSetup := context.WithTimeout(context.Background(), 20*time.Second)
-	cleanup.autoMayRun = true
-	installed := setupProcessRunSetup(setupCtx, harnessExecutable, workspace, environment)
-	cancelSetup()
-	setupReceipt, err := setupProcessParseReceipt(installed)
-	if err != nil || setupReceipt.Host != "codex" || setupReceipt.Replayed {
-		t.Fatalf("initial public setup = (%#v, %v)", setupReceipt, err)
-	}
-	client, err := localapi.NewClient(nodeState)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cleanup.client = client
-	readyCtx, cancelReady := context.WithTimeout(context.Background(), 5*time.Second)
-	if err := setupProcessWaitReady(readyCtx, client, setupReceipt.AssetRevision); err != nil {
-		cancelReady()
-		t.Fatalf("initial setup readiness: %v", err)
-	}
-	cancelReady()
-	databaseInfo, _ := setupProcessSnapshotFile(t, filepath.Join(nodeState, "node.db"), 0)
-	identityInfo, identityRaw := setupProcessSnapshotFile(t,
-		filepath.Join(nodeState, "identity.key"), 4096)
-	credentialInfo, credentialRaw := setupProcessSnapshotFile(t,
-		filepath.Join(nodeState, "profiles", model.TeamworkProfileID().String()+".token"), 4096)
-
-	ejectCtx, cancelEject := context.WithTimeout(context.Background(), 20*time.Second)
-	ejected := setupProcessRunEject(ejectCtx, harnessExecutable, workspace, environment)
-	cancelEject()
-	ejectReceipt, err := setupProcessParseEjectReceipt(ejected)
-	if err != nil || ejectReceipt.AssetRevision != setupReceipt.AssetRevision ||
-		ejectReceipt.Host != "codex" || ejectReceipt.PeerID != setupReceipt.PeerID ||
-		ejectReceipt.RemovedFiles != 3 || !ejectReceipt.RegistrationRemoved ||
-		ejectReceipt.Replayed || ejectReceipt.Status != "ejected" {
-		t.Fatalf("public eject receipt = (%#v, %v)", ejectReceipt, err)
-	}
-	offlineCtx, cancelOffline := context.WithTimeout(context.Background(), 5*time.Second)
-	if err := setupProcessWaitOffline(offlineCtx, client, nodeState, cleanup.offline); err != nil {
-		cancelOffline()
-		t.Fatalf("eject did not leave the Node offline: %v", err)
-	}
-	cancelOffline()
-	cleanup.autoMayRun = false
-	bundle, err := assets.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := integration.VerifyHostProjectionAbsent(workspace, nodeState,
-		assets.HostCodex, bundle); err != nil {
-		t.Fatalf("Codex projection remains after eject: %v", err)
-	}
-	setupProcessAssertCodexProjectionLayout(t, workspace, false)
-	if err := integration.VerifyNodeBundle(nodeState, bundle); err != nil {
-		t.Fatalf("eject removed the immutable Node bundle: %v", err)
-	}
-	setupProcessAssertPreservedFile(t, filepath.Join(nodeState, "node.db"), databaseInfo, nil)
-	setupProcessAssertPreservedFile(t, filepath.Join(nodeState, "identity.key"),
-		identityInfo, identityRaw)
-	setupProcessAssertPreservedFile(t, filepath.Join(nodeState, "profiles",
-		model.TeamworkProfileID().String()+".token"), credentialInfo, credentialRaw)
-
-	replayCtx, cancelReplay := context.WithTimeout(context.Background(), 15*time.Second)
-	replayed := setupProcessRunEject(replayCtx, harnessExecutable, workspace, environment)
-	cancelReplay()
-	replayReceipt, err := setupProcessParseEjectReceipt(replayed)
-	if err != nil || !replayReceipt.Replayed || replayReceipt.RemovedFiles != 0 ||
-		replayReceipt.RegistrationRemoved || replayReceipt.PeerID != setupReceipt.PeerID {
-		t.Fatalf("replayed public eject = (%#v, %v)", replayReceipt, err)
-	}
-
-	switchCtx, cancelSwitch := context.WithTimeout(context.Background(), 20*time.Second)
-	cleanup.autoMayRun = true
-	switched := setupProcessRunHarness(switchCtx, harnessExecutable, workspace, environment,
-		"setup", "--host", "claude-code", "--project-root", workspace)
-	cancelSwitch()
-	var switchExit *exec.ExitError
-	if !errors.As(switched.err, &switchExit) || switchExit.ExitCode() != 4 ||
-		len(switched.stdout) != 0 || string(switched.stderr) !=
-		"host_activation_required: selected Host has no verifiable managed Hook activation surface; use codex\n" {
-		t.Fatalf("unobservable Host switch = exit=%v stdout=%s stderr=%s", switched.err,
-			setupProcessFingerprint(switched.stdout), setupProcessFingerprint(switched.stderr))
-	}
-	if err := integration.VerifyHostProjectionAbsent(workspace, nodeState,
-		assets.HostClaudeCode, bundle); err != nil {
-		t.Fatalf("unsupported Host switch staged a Claude projection: %v", err)
-	}
-	if err := integration.VerifyHostProjectionAbsent(workspace, nodeState,
-		assets.HostCodex, bundle); err != nil {
-		t.Fatalf("unsupported Host switch recreated the Codex projection: %v", err)
-	}
-	setupProcessAssertCodexProjectionLayout(t, workspace, false)
-
-	reactivateCtx, cancelReactivate := context.WithTimeout(context.Background(), 20*time.Second)
-	reactivated := setupProcessRunHarness(reactivateCtx, harnessExecutable, workspace, environment,
-		"setup", "--host", "codex", "--project-root", workspace)
-	cancelReactivate()
-	reactivateReceipt, err := setupProcessParseReceipt(reactivated)
-	if err != nil || reactivateReceipt.Host != "codex" || reactivateReceipt.Replayed ||
-		!reactivateReceipt.Started || reactivateReceipt.PeerID != setupReceipt.PeerID ||
-		reactivateReceipt.AssetRevision != setupReceipt.AssetRevision {
-		t.Fatalf("explicit Codex reactivation = (%#v, %v)", reactivateReceipt, err)
-	}
-	reactivatedReadyCtx, cancelReactivatedReady := context.WithTimeout(context.Background(), 5*time.Second)
-	if err := setupProcessWaitReady(reactivatedReadyCtx, client,
-		reactivateReceipt.AssetRevision); err != nil {
-		cancelReactivatedReady()
-		t.Fatalf("reactivated Codex daemon did not become ready: %v", err)
-	}
-	cancelReactivatedReady()
-	if err := integration.VerifyHostProjection(workspace, nodeState,
-		assets.HostCodex, bundle); err != nil {
-		t.Fatalf("Codex reactivation did not restore its projection: %v", err)
-	}
-	setupProcessAssertCodexProjectionLayout(t, workspace, true)
-	setupProcessAssertPreservedFile(t, filepath.Join(nodeState, "node.db"), databaseInfo, nil)
-	setupProcessAssertPreservedFile(t, filepath.Join(nodeState, "identity.key"),
-		identityInfo, identityRaw)
-	setupProcessAssertPreservedFile(t, filepath.Join(nodeState, "profiles",
-		model.TeamworkProfileID().String()+".token"), credentialInfo, credentialRaw)
 }
 
 func setupProcessAssertConcurrentReceipts(t *testing.T, receipts []setupProcessReceipt) {
@@ -1001,9 +850,15 @@ func setupProcessFakeCodex(t *testing.T, path string) {
 func setupProcessFakeClaude(t *testing.T, path string) {
 	t.Helper()
 	contents := []byte("#!/bin/sh\nset -eu\n" +
-		"case \"$*\" in\n" +
+		"case \"${1:-}\" in\n" +
 		"  --version) printf '%s\\n' 'claude process-test' ;;\n" +
 		"  --help) printf '%s\\n' 'Usage: claude' ;;\n" +
+		"  doctor) printf '%s\\n' 'Claude process-test doctor healthy' ;;\n" +
+		"  -p)\n" +
+		"    session=11111111-1111-4111-8111-111111111111\n" +
+		"    printf '{\"type\":\"system\",\"subtype\":\"init\",\"cwd\":\"%s\",\"session_id\":\"%s\",\"tools\":[],\"mcp_servers\":[],\"claude_code_version\":\"claude process-test\",\"skills\":[\"mnemon-harness\"]}\\n' \"$PWD\" \"$session\"\n" +
+		"    printf '{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"duration_api_ms\":0,\"num_turns\":0,\"result\":\"synthetic\",\"session_id\":\"%s\",\"total_cost_usd\":0,\"usage\":{\"input_tokens\":0,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"output_tokens\":0}}\\n' \"$session\"\n" +
+		"    ;;\n" +
 		"  *) exit 64 ;;\n" +
 		"esac\n")
 	if err := os.WriteFile(path, contents, 0o700); err != nil {

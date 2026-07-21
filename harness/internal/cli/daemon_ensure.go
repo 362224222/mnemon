@@ -67,6 +67,7 @@ func ensureAgentDaemonWith(ctx context.Context, workspace, nodeState string,
 	revision := install.Revision()
 	preflight, err := dependencies.newPreflight(node.DaemonPreflightOptions{
 		Workspace: workspace, NodeState: nodeState, AssetRevision: revision, Install: install,
+		Credentials: localapi.NodeRuntime{},
 	})
 	if err != nil {
 		return daemonEnsureError(err)

@@ -4,50 +4,48 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
-	"sort"
-	"time"
-
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/peer"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
+	"sort"
+	"time"
 )
 
-func (manager *ChannelManager) ChannelStatus(ctx context.Context, metadata localapi.RequestMetadata,
-) (localapi.ChannelStatusResponse, *localapi.APIError) {
+func (manager *ChannelManager) ChannelStatus(ctx context.Context, metadata RequestMetadata,
+) (ChannelStatusResponse, *APIError) {
 	if apiErr := manager.validateCall(ctx, metadata); apiErr != nil {
-		return localapi.ChannelStatusResponse{}, apiErr
+		return ChannelStatusResponse{}, apiErr
 	}
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	authority, err := manager.store.ReadChannelStatusAuthority(ctx)
 	if err != nil {
-		return localapi.ChannelStatusResponse{}, channelAPIError(err)
+		return ChannelStatusResponse{}, channelAPIError(err)
 	}
-	channels := make([]localapi.ChannelView, 0, len(authority.Channels()))
+	channels := make([]ChannelView, 0, len(authority.Channels()))
 	for _, channel := range authority.Channels() {
 		channels = append(channels, manager.projectChannelView(authority.LocalPeerID(), channel))
 	}
 	sort.Slice(channels, func(left, right int) bool { return channels[left].Alias < channels[right].Alias })
-	return localapi.ChannelStatusResponse{SchemaVersion: localapi.SchemaVersion,
+	return ChannelStatusResponse{SchemaVersion: SchemaVersion,
 		Status: "ok", Channels: channels}, nil
 }
 
 func (manager *ChannelManager) validateCall(ctx context.Context,
-	metadata localapi.RequestMetadata,
-) *localapi.APIError {
+	metadata RequestMetadata,
+) *APIError {
 	if manager == nil || manager.store == nil || manager.runtime == nil || ctx == nil || ctx.Err() != nil {
-		return localapi.NewAPIError(localapi.CodeMnemondUnavailable, "Channel controller is unavailable")
+		return NewAPIError(CodeMnemondUnavailable, "Channel controller is unavailable")
 	}
 	if metadata.Profile.ID() != model.TeamworkProfileID() || !metadata.Profile.Enabled() {
-		return localapi.NewAPIError(localapi.CodeAuthenticationFailed, "profile authentication failed")
+		return NewAPIError(CodeAuthenticationFailed, "profile authentication failed")
 	}
 	return nil
 }
 
 func (manager *ChannelManager) selectChannel(ctx context.Context,
 	selector string,
-) (store.ChannelControlAuthority, store.ChannelControlChannel, *localapi.APIError) {
+) (store.ChannelControlAuthority, store.ChannelControlChannel, *APIError) {
 	authority, err := manager.store.ReadChannelControlAuthority(ctx)
 	if err != nil {
 		return store.ChannelControlAuthority{}, store.ChannelControlChannel{}, channelAPIError(err)
@@ -56,7 +54,7 @@ func (manager *ChannelManager) selectChannel(ctx context.Context,
 	if selector == "" {
 		if len(channels) != 1 {
 			return store.ChannelControlAuthority{}, store.ChannelControlChannel{},
-				localapi.NewAPIError(localapi.CodeInvalidArgument, "Channel selector is required")
+				NewAPIError(CodeInvalidArgument, "Channel selector is required")
 		}
 		return authority, channels[0], nil
 	}
@@ -66,22 +64,22 @@ func (manager *ChannelManager) selectChannel(ctx context.Context,
 		}
 	}
 	return store.ChannelControlAuthority{}, store.ChannelControlChannel{},
-		localapi.NewAPIError(localapi.CodeNotMember, "Channel is not present on this Node")
+		NewAPIError(CodeNotMember, "Channel is not present on this Node")
 }
 
 func (manager *ChannelManager) readChannelView(ctx context.Context,
 	channelID model.ChannelID,
-) (localapi.ChannelView, error) {
+) (ChannelView, error) {
 	authority, err := manager.store.ReadChannelStatusAuthority(ctx)
 	if err != nil {
-		return localapi.ChannelView{}, err
+		return ChannelView{}, err
 	}
 	for _, channel := range authority.Channels() {
 		if channel.Channel().ID() == channelID {
 			return manager.projectChannelView(authority.LocalPeerID(), channel), nil
 		}
 	}
-	return localapi.ChannelView{}, store.ErrChannelStatusAuthority
+	return ChannelView{}, store.ErrChannelStatusAuthority
 }
 
 func (manager *ChannelManager) channelTopicJoined(channel model.Channel) bool {
@@ -145,7 +143,7 @@ func channelBaselinesReady(readiness []store.ChannelPeerReadiness) bool {
 
 func inviteView(expiresAt time.Time, maxUses, usedUses uint8, status string,
 	now time.Time,
-) localapi.ChannelInviteView {
+) ChannelInviteView {
 	if status == "open" && !now.Before(expiresAt) {
 		status = "expired"
 	}
@@ -153,7 +151,7 @@ func inviteView(expiresAt time.Time, maxUses, usedUses uint8, status string,
 	if usedUses < maxUses {
 		remaining = maxUses - usedUses
 	}
-	return localapi.ChannelInviteView{ExpiresAt: expiresAt.UTC().Format(time.RFC3339Nano),
+	return ChannelInviteView{ExpiresAt: expiresAt.UTC().Format(time.RFC3339Nano),
 		RemainingUses: remaining, Status: status}
 }
 
@@ -179,44 +177,44 @@ func memberAlias(peerID model.PeerID) string {
 	return "member-" + hex.EncodeToString(digest[:4])
 }
 
-func channelAPIError(err error) *localapi.APIError {
+func channelAPIError(err error) *APIError {
 	if err == nil {
 		return nil
 	}
 	var protocolFailure *peer.ChannelProtocolFailure
 	if errors.As(err, &protocolFailure) {
-		code := localapi.ErrorCode(protocolFailure.Code())
+		code := ErrorCode(protocolFailure.Code())
 		if code.Valid() {
-			return localapi.NewAPIError(code, "Channel operation was rejected")
+			return NewAPIError(code, "Channel operation was rejected")
 		}
 	}
 	switch {
 	case errors.Is(err, store.ErrNodeChannelLimit):
-		return localapi.NewAPIError(localapi.CodeNodeChannelLimit, "Node Channel limit reached")
+		return NewAPIError(CodeNodeChannelLimit, "Node Channel limit reached")
 	case errors.Is(err, store.ErrChannelFull):
-		return localapi.NewAPIError(localapi.CodeChannelFull, "Channel member limit reached")
+		return NewAPIError(CodeChannelFull, "Channel member limit reached")
 	case errors.Is(err, store.ErrChannelInviteOwner):
-		return localapi.NewAPIError(localapi.CodeWrongOwner, "local Node is not the Channel owner")
+		return NewAPIError(CodeWrongOwner, "local Node is not the Channel owner")
 	case errors.Is(err, store.ErrChannelInviteUnavailable):
-		return localapi.NewAPIError(localapi.CodeChannelClosed, "Channel invite is unavailable")
+		return NewAPIError(CodeChannelClosed, "Channel invite is unavailable")
 	case errors.Is(err, store.ErrChannelJoinConflict), errors.Is(err, store.ErrChannelAuthorityInvariant):
-		return localapi.NewAPIError(localapi.CodeRosterConflict, "Channel authority conflicts with durable state")
+		return NewAPIError(CodeRosterConflict, "Channel authority conflicts with durable state")
 	case errors.Is(err, peer.ErrChannelEnrollmentOutcomeUnknown), errors.Is(err, peer.ErrMeshRuntime),
 		errors.Is(err, peer.ErrChannelEnrollmentProtocol):
-		return localapi.NewAPIError(localapi.CodeOwnerUnreachable, "Channel owner could not be reached")
+		return NewAPIError(CodeOwnerUnreachable, "Channel owner could not be reached")
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
-		return localapi.NewAPIError(localapi.CodeOwnerUnreachable, "Channel operation was cancelled")
+		return NewAPIError(CodeOwnerUnreachable, "Channel operation was cancelled")
 	case errors.Is(err, store.ErrChannelCreateInput), errors.Is(err, store.ErrChannelInviteInput),
 		errors.Is(err, store.ErrChannelJoinInput), errors.Is(err, store.ErrChannelAbandonInput):
-		return localapi.NewAPIError(localapi.CodeInvalidArgument, "Channel operation input is invalid")
+		return NewAPIError(CodeInvalidArgument, "Channel operation input is invalid")
 	case errors.Is(err, store.ErrChannelAbandonMissing):
-		return localapi.NewAPIError(localapi.CodeNotMember, "Channel is not present on this Node")
+		return NewAPIError(CodeNotMember, "Channel is not present on this Node")
 	case errors.Is(err, store.ErrChannelAbandonTerminal):
-		return localapi.NewAPIError(localapi.CodeChannelClosed, "Channel is already terminal")
+		return NewAPIError(CodeChannelClosed, "Channel is already terminal")
 	case errors.Is(err, store.ErrChannelAbandonStale):
-		return localapi.NewAPIError(localapi.CodeOperationMismatch, "Channel authority changed")
+		return NewAPIError(CodeOperationMismatch, "Channel authority changed")
 	default:
-		return localapi.NewAPIError(localapi.CodeInternal, "durable Channel operation failed")
+		return NewAPIError(CodeInternal, "durable Channel operation failed")
 	}
 }
 

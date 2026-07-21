@@ -468,10 +468,12 @@ func TestRunConfirmOfflineEmitsExactAuthorityAndClassifiesActiveWriter(t *testin
 	revision := model.Sum([]byte("confirm-offline-command-assets")).String()
 	if _, err := node.Provision(context.Background(), node.ProvisionOptions{
 		Workspace: project, Host: model.HostCodex, AssetRevision: revision,
+		Credentials: localapi.NodeRuntime{},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	snapshot, err := node.InspectAuthority(context.Background(), project)
+	snapshot, err := node.InspectAuthorityWithCredentials(context.Background(), project,
+		localapi.NodeRuntime{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -517,6 +519,7 @@ func TestRunConfirmOfflineRejectsMalformedAndMismatchedAuthority(t *testing.T) {
 	revision := model.Sum([]byte("confirm-offline-mismatch-assets")).String()
 	if _, err := node.Provision(context.Background(), node.ProvisionOptions{
 		Workspace: project, Host: model.HostCodex, AssetRevision: revision,
+		Credentials: localapi.NodeRuntime{},
 	}); err != nil {
 		t.Fatal(err)
 	}
