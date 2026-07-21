@@ -62,7 +62,8 @@ finalized=false
 logs_collected=false
 public_status_ready_timeout_seconds=60
 derived_offer_ready_timeout_seconds=30
-final_public_status_ready_timeout_seconds=60
+final_public_status_ready_timeout_seconds=180
+final_public_status_stable_seconds=8
 
 mkdir -p "$output/topology" "$output/transcript" "$output/nodes" \
     "$output/runtime" "$output/artifacts" "$output/faults" "$output/oracle"
@@ -2698,19 +2699,23 @@ inject_offline_alpha_repair_fault() {
 
 wait_final_public_status_ready() {
     readiness_deadline_ms=$(( $(date +%s%3N) + final_public_status_ready_timeout_seconds * 1000 ))
-    stable_passes=0
-    required_stable_passes=3
+    stable_since_ms=0
+    stable_required_ms=$(( final_public_status_stable_seconds * 1000 ))
     while [ "$(date +%s%3N)" -lt "$readiness_deadline_ms" ]; do
         if observe_final_public_status_ready; then
-            stable_passes=$((stable_passes + 1))
-            [ "$stable_passes" -ge "$required_stable_passes" ] && return 0
+            now_ms=$(date +%s%3N)
+            [ "$stable_since_ms" -ne 0 ] || stable_since_ms=$now_ms
+            [ $(( now_ms - stable_since_ms )) -ge "$stable_required_ms" ] && return 0
         else
-            stable_passes=0
+            stable_since_ms=0
         fi
         sleep 0.5
     done
-    if observe_final_public_status_ready; then
-        return 0
+    if [ "$stable_since_ms" -ne 0 ] && observe_final_public_status_ready; then
+        now_ms=$(date +%s%3N)
+        if [ $(( now_ms - stable_since_ms )) -ge "$stable_required_ms" ]; then
+            return 0
+        fi
     fi
     for node in A B C D E F; do
         raw="$private/status-final-ready-$node.json"
