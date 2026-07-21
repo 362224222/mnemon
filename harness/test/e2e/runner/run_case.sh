@@ -60,6 +60,7 @@ case_failed=false
 execution_failed=false
 finalized=false
 logs_collected=false
+public_status_ready_timeout_seconds=30
 
 mkdir -p "$output/topology" "$output/transcript" "$output/nodes" \
     "$output/runtime" "$output/artifacts" "$output/faults" "$output/oracle"
@@ -513,7 +514,7 @@ wait_channel_ready() {
 }
 
 wait_public_status_ready() {
-    readiness_deadline_ms=$(( $(date +%s%3N) + 10000 ))
+    readiness_deadline_ms=$(( $(date +%s%3N) + public_status_ready_timeout_seconds * 1000 ))
     all_ready=false
     while [ "$(date +%s%3N)" -lt "$readiness_deadline_ms" ]; do
         all_ready=true
@@ -540,7 +541,18 @@ wait_public_status_ready() {
         sleep 0.2
     done
     [ "$all_ready" = true ] || {
-        case_error 'Channel status did not quiesce to public ready within 10 seconds'
+        for node in A B C D E F; do
+            raw="$private/status-ready-$node.json"
+            destination="$output/nodes/$node/status-ready-before.json"
+            if [ -s "$raw" ]; then
+                if jq -e . "$raw" >/dev/null 2>&1; then
+                    redact_json <"$raw" >"$destination"
+                else
+                    redact_text_file "$raw" "$destination"
+                fi
+            fi
+        done
+        case_error "Channel status did not quiesce to public ready within ${public_status_ready_timeout_seconds} seconds"
         return 1
     }
     for node in A B C D E F; do
