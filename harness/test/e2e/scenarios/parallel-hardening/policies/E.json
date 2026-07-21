@@ -4,7 +4,7 @@
   "derive_channel": "gamma",
   "derive_to": "F",
   "offer_to": "auto",
-  "result_content": "Run security and bounded-resource checks, decline the first incomplete candidate once, then derive deployment review to F.",
+  "result_content": "Run security and bounded-resource checks, derive deployment review to F, then return the verified aggregation.",
   "rework_once": false,
-  "decline_once": true
+  "decline_once": false
 }

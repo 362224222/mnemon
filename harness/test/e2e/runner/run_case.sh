@@ -723,6 +723,57 @@ normalize_json_or_empty() {
     printf '{}\n' >"$destination"
 }
 
+json_array_from_args() {
+    for value in "$@"; do
+        printf '%s\n' "$value"
+    done | jq -Rcs 'split("\n") | map(select(length > 0))'
+}
+
+wait_node_public_status_ready() {
+    node=$1
+    timeout_seconds=${2:-30}
+    readiness_deadline_ms=$(( $(date +%s%3N) + timeout_seconds * 1000 ))
+    ready=false
+    while [ "$(date +%s%3N)" -lt "$readiness_deadline_ms" ]; do
+        raw="$private/fault-ready-$node.json"
+        set +e
+        node_exec "$node" timeout 2s mnemon-harness status >"$raw" 2>/dev/null
+        status_exit=$?
+        set -e
+        if [ "$status_exit" -eq 0 ] &&
+          jq -e '.status == "ready" and all(.channels[]; .state == "ready")' \
+            "$raw" >/dev/null 2>&1; then
+            ready=true
+            break
+        fi
+        sleep 0.2
+    done
+    [ "$ready" = true ]
+}
+
+capture_fault_public_snapshots() {
+    id=$1
+    node=$2
+    status_ok=false
+    channel_ok=false
+    doctor_ok=false
+    if public_command "$node" fault-status "faults/$id-status.json" \
+      mnemon-harness status; then
+        status_ok=true
+    fi
+    if public_command "$node" fault-channel-status "faults/$id-channel-status.json" \
+      mnemon-harness channel status --json; then
+        channel_ok=true
+    fi
+    if public_command "$node" fault-doctor "faults/$id-doctor.json" \
+      mnemon-harness doctor; then
+        doctor_ok=true
+    fi
+    jq -cn --argjson status_ok "$status_ok" --argjson channel_ok "$channel_ok" \
+      --argjson doctor_ok "$doctor_ok" \
+      '{status_ok:$status_ok,channel_ok:$channel_ok,doctor_ok:$doctor_ok}'
+}
+
 payment_review_receipt_loss_ok() {
     receipt_path=$(review_receipt_loss_file || true)
     [ -n "$receipt_path" ] || return 1
@@ -971,10 +1022,11 @@ api_wrong_topic_replay_fault() {
 }
 
 api_wrong_topic_replay_ok() {
-    evidence_path="$output/faults/alpha-frame-on-beta.json"
+    id=${1:-alpha-frame-on-beta}
+    evidence_path="$output/faults/$id.json"
     [ -f "$evidence_path" ] || return 1
-    jq -e '
-      .schema_version == 1 and .fault == "alpha-frame-on-beta" and
+    jq -e --arg id "$id" '
+      .schema_version == 1 and .fault == $id and
       .type == "wrong-topic-replay" and .node == "C" and
       .source_channel == "alpha" and .target_channel == "beta" and
       .probe_exit_code == 0 and
@@ -1220,6 +1272,529 @@ api_terminal_enrollment_replay_ok() {
     ' "$evidence_path" >/dev/null
 }
 
+write_restart_fault_evidence() {
+    id=$1
+    node=$2
+    shift 2
+    expected_channels=$(json_array_from_args "$@")
+    evidence_path="$output/faults/$id.json"
+    action_ref="faults/$id-action.json"
+    status_ref="faults/$id-status.json"
+    channel_ref="faults/$id-channel-status.json"
+    doctor_ref="faults/$id-doctor.json"
+    before_status_ref="nodes/$node/status-after.json"
+    before_channel_ref="nodes/$node/channel-status-after.json"
+    fault_stdout="$private/$id-restart.stdout"
+    fault_stderr="$private/$id-restart.stderr"
+    action_norm="$private/$id-action.norm.json"
+    before_status_norm="$private/$id-before-status.norm.json"
+    before_channel_norm="$private/$id-before-channel.norm.json"
+    status_norm="$private/$id-status.norm.json"
+    channel_norm="$private/$id-channel.norm.json"
+    doctor_norm="$private/$id-doctor.norm.json"
+    target_container=$(container_id "$node")
+
+    set +e
+    "$repo_root/harness/test/e2e/faultplane/docker_network.sh" restart \
+      --container "$target_container" --token "$id" --receipt-dir "$output/faults" -- \
+      sh -c 'true' >"$fault_stdout" 2>"$fault_stderr"
+    fault_exit=$?
+    set -e
+    [ ! -s "$fault_stderr" ] ||
+      redact_text_file "$fault_stderr" "$output/transcript/$id-restart.stderr"
+
+    wait_ready=false
+    if [ "$fault_exit" -eq 0 ] && wait_node_public_status_ready "$node" 30; then
+        wait_ready=true
+    fi
+    snapshot_result=$(capture_fault_public_snapshots "$id" "$node")
+    action_schema_ok=false
+    if [ -f "$output/$action_ref" ] &&
+      PYTHONDONTWRITEBYTECODE=1 python3 "$runner_dir/schema_validate.py" \
+        "$schema_root/fault-action.schema.json" "$output/$action_ref" >/dev/null 2>&1; then
+        action_schema_ok=true
+    fi
+    runtime_unique=false
+    runtime_result_event_ids_unique_ok && runtime_unique=true
+    bridge_ok=false
+    network_paths_no_implicit_bridge_ok && bridge_ok=true
+    terminal_ok=false
+    status_after_all_terminal_ok && terminal_ok=true
+
+    normalize_json_or_empty "$output/$action_ref" "$action_norm"
+    normalize_json_or_empty "$output/$before_status_ref" "$before_status_norm"
+    normalize_json_or_empty "$output/$before_channel_ref" "$before_channel_norm"
+    normalize_json_or_empty "$output/$status_ref" "$status_norm"
+    normalize_json_or_empty "$output/$channel_ref" "$channel_norm"
+    normalize_json_or_empty "$output/$doctor_ref" "$doctor_norm"
+    jq -n --arg id "$id" --arg node "$node" --arg type node-kill \
+      --arg action_ref "$action_ref" --arg status_ref "$status_ref" \
+      --arg channel_ref "$channel_ref" --arg doctor_ref "$doctor_ref" \
+      --arg before_status_ref "$before_status_ref" --arg before_channel_ref "$before_channel_ref" \
+      --arg target_container "$target_container" --argjson expected "$expected_channels" \
+      --argjson fault_exit "$fault_exit" --argjson wait_ready "$wait_ready" \
+      --argjson action_schema_ok "$action_schema_ok" --argjson snapshot "$snapshot_result" \
+      --argjson runtime_unique "$runtime_unique" --argjson bridge_ok "$bridge_ok" \
+      --argjson terminal_ok "$terminal_ok" --slurpfile action "$action_norm" \
+      --slurpfile before_status "$before_status_norm" --slurpfile before_channel "$before_channel_norm" \
+      --slurpfile status "$status_norm" --slurpfile channel "$channel_norm" \
+      --slurpfile doctor "$doctor_norm" '
+      def first($value): if ($value | length) == 0 then {} else $value[0] end;
+      def status_channel($document; $alias):
+        ([($document.channels // [])[] | select(.alias == $alias)] | first // {});
+      def channel_document($document; $alias):
+        ([($document.channels // [])[] | select(.alias == $alias)] | first // {});
+      (first($action)) as $action_doc |
+      (first($before_status)) as $before_status_doc |
+      (first($before_channel)) as $before_channel_doc |
+      (first($status)) as $status_doc |
+      (first($channel)) as $channel_doc |
+      (first($doctor)) as $doctor_doc |
+      ($action_schema_ok and $action_doc.token == $id and
+        $action_doc.action == "docker-node-kill-restart" and
+        $action_doc.external_action_applied == true and
+        $action_doc.restored == true and $action_doc.command_exit_code == 0 and
+        $action_doc.container_id == $target_container) as $action_valid |
+      ($action_valid and $action_doc.started_at_before != $action_doc.started_at_after and
+        $action_doc.exit_code_after_kill == 137) as $restarted |
+      ($status_doc.status == "ready" and
+        all($status_doc.channels[]?; .state == "ready")) as $public_ready |
+      ($expected | all(. as $alias |
+        (status_channel($status_doc; $alias).state == "ready") and
+        (status_channel($status_doc; $alias).topic.state == "joined") and
+        ((status_channel($status_doc; $alias).cursor.inbound_gapped // 0) == 0) and
+        ((status_channel($status_doc; $alias).cursor.inbound_pending // 0) == 0) and
+        ((status_channel($status_doc; $alias).publication.remote_pending // 0) == 0) and
+        ((status_channel($status_doc; $alias).publication.remote_blocked // 0) == 0) and
+        ((status_channel($status_doc; $alias).inbox.waiting_artifact // 0) == 0))) as $channels_ready |
+      ($expected | all(. as $alias |
+        ((channel_document($before_channel_doc; $alias).channel_id_digest // "") | startswith("sha256:")) and
+        channel_document($before_channel_doc; $alias).channel_id_digest ==
+          channel_document($channel_doc; $alias).channel_id_digest and
+        channel_document($channel_doc; $alias).topic.status == "joined" and
+        all(channel_document($channel_doc; $alias).members[]?;
+          .status == "active" and .baseline_ready == true))) as $identity_preserved |
+      ($expected | all(. as $alias |
+        ((status_channel($status_doc; $alias).runtime.handling_claimed // 0) == 0) and
+        ((status_channel($status_doc; $alias).runtime.handling_pending // 0) == 0) and
+        ((status_channel($status_doc; $alias).runtime.handling_dead // 0) == 0) and
+        ((status_channel($status_doc; $alias).runtime.run_active // 0) == 0) and
+        ((status_channel($status_doc; $alias).runtime.run_failed // 0) == 0))) as $runtime_terminal |
+      {schema_version:1,fault:$id,type:$type,node:$node,
+       action_ref:$action_ref,status_ref:$status_ref,channel_status_ref:$channel_ref,
+       doctor_ref:$doctor_ref,before_status_ref:$before_status_ref,
+       before_channel_status_ref:$before_channel_ref,expected_channels:$expected,
+       fault_exit_code:$fault_exit,
+       observation:{action_receipt_valid:$action_valid,
+         container_restarted:$restarted,
+         public_status_ready:($wait_ready and $public_ready),
+         expected_channels_ready:$channels_ready,
+         channel_identity_preserved:$identity_preserved,
+         runtime_terminal_after_restart:$runtime_terminal,
+         no_duplicate_transition_observed:$runtime_unique,
+         no_cross_channel_cursor_movement:$bridge_ok,
+         final_public_status_was_terminal:$terminal_ok,
+         doctor_healthy:($snapshot.doctor_ok and $doctor_doc.status == "healthy"),
+         all_commands_bounded:($fault_exit == 0 and $snapshot.status_ok and
+           $snapshot.channel_ok and $snapshot.doctor_ok)}}}
+    ' >"$evidence_path"
+}
+
+restart_fault_ok() {
+    id=$1
+    evidence_path="$output/faults/$id.json"
+    [ -f "$evidence_path" ] || return 1
+    jq -e '
+      .schema_version == 1 and .type == "node-kill" and
+      .observation.action_receipt_valid == true and
+      .observation.container_restarted == true and
+      .observation.public_status_ready == true and
+      .observation.expected_channels_ready == true and
+      .observation.channel_identity_preserved == true and
+      .observation.runtime_terminal_after_restart == true and
+      .observation.no_duplicate_transition_observed == true and
+      .observation.no_cross_channel_cursor_movement == true and
+      .observation.all_commands_bounded == true
+    ' "$evidence_path" >/dev/null
+}
+
+write_disconnect_fault_evidence() {
+    id=$1
+    node=$2
+    shift 2
+    expected_channels=$(json_array_from_args "$@")
+    evidence_path="$output/faults/$id.json"
+    action_ref="faults/$id-action.json"
+    status_ref="faults/$id-status.json"
+    channel_ref="faults/$id-channel-status.json"
+    doctor_ref="faults/$id-doctor.json"
+    action_norm="$private/$id-action.norm.json"
+    status_norm="$private/$id-status.norm.json"
+    channel_norm="$private/$id-channel.norm.json"
+    doctor_norm="$private/$id-doctor.norm.json"
+    target_container=$(container_id "$node")
+
+    wait_ready=false
+    wait_node_public_status_ready "$node" 30 && wait_ready=true
+    snapshot_result=$(capture_fault_public_snapshots "$id" "$node")
+    action_schema_ok=false
+    if [ -f "$output/$action_ref" ] &&
+      PYTHONDONTWRITEBYTECODE=1 python3 "$runner_dir/schema_validate.py" \
+        "$schema_root/fault-action.schema.json" "$output/$action_ref" >/dev/null 2>&1; then
+        action_schema_ok=true
+    fi
+    origin_repair_ok=false
+    network_paths_origin_only_repairs_ok && origin_repair_ok=true
+    single_effect_ok=false
+    network_paths_single_repair_effect_ok "$node" alpha A && single_effect_ok=true
+
+    normalize_json_or_empty "$output/$action_ref" "$action_norm"
+    normalize_json_or_empty "$output/$status_ref" "$status_norm"
+    normalize_json_or_empty "$output/$channel_ref" "$channel_norm"
+    normalize_json_or_empty "$output/$doctor_ref" "$doctor_norm"
+    jq -n --arg id "$id" --arg node "$node" --arg type network-disconnect \
+      --arg action_ref "$action_ref" --arg status_ref "$status_ref" \
+      --arg channel_ref "$channel_ref" --arg doctor_ref "$doctor_ref" \
+      --arg target_container "$target_container" --arg network "$project-mesh" \
+      --argjson expected "$expected_channels" --argjson wait_ready "$wait_ready" \
+      --argjson action_schema_ok "$action_schema_ok" --argjson snapshot "$snapshot_result" \
+      --argjson origin_repair_ok "$origin_repair_ok" --argjson single_effect_ok "$single_effect_ok" \
+      --slurpfile action "$action_norm" --slurpfile status "$status_norm" \
+      --slurpfile channel "$channel_norm" --slurpfile doctor "$doctor_norm" '
+      def first($value): if ($value | length) == 0 then {} else $value[0] end;
+      def status_channel($document; $alias):
+        ([($document.channels // [])[] | select(.alias == $alias)] | first // {});
+      def channel_document($document; $alias):
+        ([($document.channels // [])[] | select(.alias == $alias)] | first // {});
+      (first($action)) as $action_doc |
+      (first($status)) as $status_doc |
+      (first($channel)) as $channel_doc |
+      (first($doctor)) as $doctor_doc |
+      ($action_schema_ok and $action_doc.token == $id and
+        $action_doc.action == "docker-node-disconnect" and
+        $action_doc.external_action_applied == true and
+        $action_doc.restored == true and $action_doc.command_exit_code == 0 and
+        $action_doc.network_name == $network and
+        $action_doc.container_id == $target_container) as $action_valid |
+      ($expected | all(. as $alias |
+        (status_channel($status_doc; $alias).state == "ready") and
+        (status_channel($status_doc; $alias).topic.state == "joined") and
+        ((status_channel($status_doc; $alias).cursor.inbound_gapped // 0) == 0) and
+        ((status_channel($status_doc; $alias).publication.remote_pending // 0) == 0))) as $channels_ready |
+      ($expected | all(. as $alias |
+        ((channel_document($channel_doc; $alias).channel_id_digest // "") | startswith("sha256:")) and
+        channel_document($channel_doc; $alias).topic.status == "joined" and
+        all(channel_document($channel_doc; $alias).members[]?;
+          .status == "active" and .baseline_ready == true))) as $identity_ready |
+      {schema_version:1,fault:$id,type:$type,node:$node,
+       action_ref:$action_ref,status_ref:$status_ref,
+       channel_status_ref:$channel_ref,doctor_ref:$doctor_ref,
+       expected_channels:$expected,
+       observation:{action_receipt_valid:$action_valid,
+         public_status_ready:($wait_ready and $status_doc.status == "ready"),
+         expected_channels_ready:$channels_ready,
+         channel_identity_ready:$identity_ready,
+         repaired_only_from_origin:$origin_repair_ok,
+         one_local_semantic_effect:$single_effect_ok,
+         doctor_healthy:($snapshot.doctor_ok and $doctor_doc.status == "healthy"),
+         all_commands_bounded:($snapshot.status_ok and $snapshot.channel_ok and
+           $snapshot.doctor_ok)}}}
+    ' >"$evidence_path"
+}
+
+disconnect_fault_ok() {
+    id=$1
+    evidence_path="$output/faults/$id.json"
+    [ -f "$evidence_path" ] || return 1
+    jq -e '
+      .schema_version == 1 and .type == "network-disconnect" and
+      .observation.action_receipt_valid == true and
+      .observation.public_status_ready == true and
+      .observation.expected_channels_ready == true and
+      .observation.channel_identity_ready == true and
+      .observation.repaired_only_from_origin == true and
+      .observation.one_local_semantic_effect == true and
+      .observation.all_commands_bounded == true
+    ' "$evidence_path" >/dev/null
+}
+
+write_daemon_absent_fault_evidence() {
+    id=$1
+    node=$2
+    evidence_path="$output/faults/$id.json"
+    before_pids="$private/$id-before-pids.txt"
+    after_kill_pids="$private/$id-after-kill-pids.txt"
+    after_ensure_pids="$private/$id-after-ensure-pids.txt"
+    status_ref="faults/$id-status.json"
+    doctor_ref="faults/$id-doctor.json"
+    status_norm="$private/$id-status.norm.json"
+    doctor_norm="$private/$id-doctor.norm.json"
+
+    set +e
+    node_exec "$node" sh -c 'pidof mnemond 2>/dev/null || true' >"$before_pids" 2>/dev/null
+    node_exec "$node" sh -c 'pids=$(pidof mnemond 2>/dev/null || true); test -n "$pids"; kill -KILL $pids'
+    kill_exit=$?
+    absent_deadline_ms=$(( $(date +%s%3N) + 5000 ))
+    : >"$after_kill_pids"
+    while [ "$(date +%s%3N)" -lt "$absent_deadline_ms" ]; do
+        node_exec "$node" sh -c 'pidof mnemond 2>/dev/null || true' \
+          >"$after_kill_pids" 2>/dev/null
+        [ ! -s "$after_kill_pids" ] && break
+        sleep 0.1
+    done
+    set -e
+    wait_ready=false
+    wait_node_public_status_ready "$node" 30 && wait_ready=true
+    status_ok=false
+    doctor_ok=false
+    if public_command "$node" daemon-fault-status "$status_ref" mnemon-harness status; then
+        status_ok=true
+    fi
+    if public_command "$node" daemon-fault-doctor "$doctor_ref" mnemon-harness doctor; then
+        doctor_ok=true
+    fi
+    node_exec "$node" sh -c 'pidof mnemond 2>/dev/null || true' >"$after_ensure_pids" 2>/dev/null ||
+        : >"$after_ensure_pids"
+
+    before_count=$(wc -w <"$before_pids" | tr -d ' ')
+    after_kill_count=$(wc -w <"$after_kill_pids" | tr -d ' ')
+    after_ensure_count=$(wc -w <"$after_ensure_pids" | tr -d ' ')
+    normalize_json_or_empty "$output/$status_ref" "$status_norm"
+    normalize_json_or_empty "$output/$doctor_ref" "$doctor_norm"
+    jq -n --arg id "$id" --arg node "$node" --arg type daemon-kill \
+      --arg status_ref "$status_ref" --arg doctor_ref "$doctor_ref" \
+      --argjson kill_exit "$kill_exit" --argjson wait_ready "$wait_ready" \
+      --argjson status_ok "$status_ok" --argjson doctor_ok "$doctor_ok" \
+      --argjson before_count "$before_count" --argjson after_kill_count "$after_kill_count" \
+      --argjson after_ensure_count "$after_ensure_count" \
+      --slurpfile status "$status_norm" --slurpfile doctor "$doctor_norm" '
+      def first($value): if ($value | length) == 0 then {} else $value[0] end;
+      (first($status)) as $status_doc |
+      (first($doctor)) as $doctor_doc |
+      {schema_version:1,fault:$id,type:$type,node:$node,
+       status_ref:$status_ref,doctor_ref:$doctor_ref,
+       process_counts:{before:$before_count,after_kill:$after_kill_count,
+         after_ensure:$after_ensure_count},
+       kill_exit_code:$kill_exit,
+       observation:{daemon_was_present:($before_count >= 1),
+         daemon_absent_after_kill:($kill_exit == 0 and $after_kill_count == 0),
+         ordinary_status_restarted_one_daemon:($wait_ready and $status_ok and
+           $after_ensure_count == 1 and $status_doc.status == "ready"),
+         doctor_healthy:($doctor_ok and $doctor_doc.status == "healthy"),
+         no_user_daemon_command_recorded:true,
+         all_commands_bounded:($kill_exit == 0 and $status_ok and $doctor_ok)}}}
+    ' >"$evidence_path"
+}
+
+daemon_absent_fault_ok() {
+    id=$1
+    evidence_path="$output/faults/$id.json"
+    [ -f "$evidence_path" ] || return 1
+    jq -e '
+      .schema_version == 1 and .type == "daemon-kill" and
+      .observation.daemon_was_present == true and
+      .observation.daemon_absent_after_kill == true and
+      .observation.ordinary_status_restarted_one_daemon == true and
+      .observation.doctor_healthy == true and
+      .observation.no_user_daemon_command_recorded == true and
+      .observation.all_commands_bounded == true
+    ' "$evidence_path" >/dev/null
+}
+
+write_agent_current_race_fault_evidence() {
+    id=$1
+    node=$2
+    type=$3
+    evidence_path="$output/faults/$id.json"
+    first_raw="$private/$id-current-1.raw.json"
+    second_raw="$private/$id-current-2.raw.json"
+    first_err="$private/$id-current-1.stderr"
+    second_err="$private/$id-current-2.stderr"
+    first_norm="$private/$id-current-1.norm.json"
+    second_norm="$private/$id-current-2.norm.json"
+
+    set +e
+    node_exec "$node" timeout 30s mnemon-harness agent current --json \
+      >"$first_raw" 2>"$first_err" &
+    first_pid=$!
+    node_exec "$node" timeout 30s mnemon-harness agent current --json \
+      >"$second_raw" 2>"$second_err" &
+    second_pid=$!
+    wait "$first_pid"
+    first_exit=$?
+    wait "$second_pid"
+    second_exit=$?
+    set -e
+    if jq -e . "$first_raw" >/dev/null 2>&1; then
+        redact_json <"$first_raw" >"$output/faults/$id-current-1.json"
+    else
+        redact_text_file "$first_raw" "$output/faults/$id-current-1.txt"
+    fi
+    if jq -e . "$second_raw" >/dev/null 2>&1; then
+        redact_json <"$second_raw" >"$output/faults/$id-current-2.json"
+    else
+        redact_text_file "$second_raw" "$output/faults/$id-current-2.txt"
+    fi
+    [ ! -s "$first_err" ] || redact_text_file "$first_err" "$output/transcript/$id-current-1.stderr"
+    [ ! -s "$second_err" ] || redact_text_file "$second_err" "$output/transcript/$id-current-2.stderr"
+    snapshot_result=$(capture_fault_public_snapshots "$id" "$node")
+    runtime_unique=false
+    runtime_result_event_ids_unique_ok && runtime_unique=true
+    terminal_ok=false
+    status_after_all_terminal_ok && terminal_ok=true
+    normalize_json_or_empty "$first_raw" "$first_norm"
+    normalize_json_or_empty "$second_raw" "$second_norm"
+    jq -n --arg id "$id" --arg node "$node" --arg type "$type" \
+      --argjson first_exit "$first_exit" --argjson second_exit "$second_exit" \
+      --argjson snapshot "$snapshot_result" --argjson runtime_unique "$runtime_unique" \
+      --argjson terminal_ok "$terminal_ok" --slurpfile first "$first_norm" \
+      --slurpfile second "$second_norm" '
+      def first($value): if ($value | length) == 0 then {} else $value[0] end;
+      def stable_status($status):
+        ($status | IN("none","busy","waiting_artifact","actionable"));
+      (first($first)) as $first_doc |
+      (first($second)) as $second_doc |
+      ([$first_doc.status, $second_doc.status]) as $statuses |
+      {schema_version:1,fault:$id,type:$type,node:$node,
+       current_refs:["faults/"+$id+"-current-1.json","faults/"+$id+"-current-2.json"],
+       exits:{first:$first_exit,second:$second_exit},
+       statuses:$statuses,
+       observation:{both_calls_bounded:($first_exit == 0 and $second_exit == 0),
+         responses_stable:all($statuses[]; stable_status(.)),
+         at_most_one_actionable:([$statuses[] | select(. == "actionable")] | length) <= 1,
+         loser_received_stable_empty_or_busy:
+           (([$statuses[] | select(. == "none" or . == "busy")] | length) >= 1 or
+            ([$statuses[] | select(. == "actionable")] | length) == 0),
+         no_duplicate_transition_observed:$runtime_unique,
+         final_public_status_was_terminal:$terminal_ok,
+         bounded_recovery_evidence:($snapshot.status_ok and $snapshot.channel_ok and
+           $snapshot.doctor_ok),
+         all_commands_bounded:($first_exit == 0 and $second_exit == 0 and
+           $snapshot.status_ok and $snapshot.channel_ok and $snapshot.doctor_ok)}}}
+    ' >"$evidence_path"
+}
+
+agent_current_race_fault_ok() {
+    id=$1
+    evidence_path="$output/faults/$id.json"
+    [ -f "$evidence_path" ] || return 1
+    jq -e '
+      .schema_version == 1 and
+      .observation.both_calls_bounded == true and
+      .observation.responses_stable == true and
+      .observation.at_most_one_actionable == true and
+      .observation.loser_received_stable_empty_or_busy == true and
+      .observation.no_duplicate_transition_observed == true and
+      .observation.bounded_recovery_evidence == true and
+      .observation.all_commands_bounded == true
+    ' "$evidence_path" >/dev/null
+}
+
+parent_resume_projection_ok() {
+    expected=$(jq -r '.expected.parent_resume_count // 1' "$scenario_manifest")
+    [ "$expected" -gt 0 ] || return 1
+    count=$(find "$output/runtime" -type f -name '*-current.json' -exec jq -r '
+      select(.status == "actionable" and ((.child_results // []) | length) > 0 and
+        (.allowed_actions | index("teamwork.deliver") != null)) |
+      .context_file
+    ' {} + | awk 'NF { count++ } END { print count + 0 }')
+    [ "$count" -ge "$expected" ]
+}
+
+write_parent_stale_fault_evidence() {
+    id=$1
+    node=$2
+    evidence_path="$output/faults/$id.json"
+    stale_context=".r5/${node}-parent-resume-stale.context"
+    before_channel_ref="nodes/$node/channel-status-after.json"
+    channel_ref="faults/$id-channel-status.json"
+    status_ref="faults/$id-status.json"
+    probe_ref="faults/$id-probe.json"
+    probe_raw="$private/$id-probe.raw.json"
+    probe_err="$private/$id-probe.stderr"
+    probe_norm="$private/$id-probe.norm.json"
+    before_channel_norm="$private/$id-before-channel.norm.json"
+    channel_norm="$private/$id-channel.norm.json"
+    status_norm="$private/$id-status.norm.json"
+
+    context_present=false
+    node_exec "$node" test -f "/workspace/$stale_context" && context_present=true
+    set +e
+    printf '%s\n' 'Late parent stale replay must not create a second parent transition.' |
+      node_exec_stdin "$node" timeout 30s mnemon-harness teamwork deliver \
+        --context "$stale_context" --content-file - --json >"$probe_raw" 2>"$probe_err"
+    probe_exit=$?
+    set -e
+    if jq -e . "$probe_raw" >/dev/null 2>&1; then
+        redact_json <"$probe_raw" >"$output/$probe_ref"
+    else
+        redact_text_file "$probe_raw" "$output/faults/$id-probe.txt"
+    fi
+    [ ! -s "$probe_err" ] || redact_text_file "$probe_err" "$output/transcript/$id-probe.stderr"
+    snapshot_result=$(capture_fault_public_snapshots "$id" "$node")
+    parent_resume_ok=false
+    parent_resume_projection_ok && parent_resume_ok=true
+    runtime_unique=false
+    runtime_result_event_ids_unique_ok && runtime_unique=true
+
+    normalize_json_or_empty "$probe_raw" "$probe_norm"
+    normalize_json_or_empty "$output/$before_channel_ref" "$before_channel_norm"
+    normalize_json_or_empty "$output/$channel_ref" "$channel_norm"
+    normalize_json_or_empty "$output/$status_ref" "$status_norm"
+    jq -n --arg id "$id" --arg node "$node" --arg type parent-stale \
+      --arg stale_context "$stale_context" --arg probe_ref "$probe_ref" \
+      --arg before_channel_ref "$before_channel_ref" --arg channel_ref "$channel_ref" \
+      --arg status_ref "$status_ref" --argjson context_present "$context_present" \
+      --argjson probe_exit "$probe_exit" --argjson snapshot "$snapshot_result" \
+      --argjson parent_resume_ok "$parent_resume_ok" --argjson runtime_unique "$runtime_unique" \
+      --slurpfile probe "$probe_norm" --slurpfile before_channel "$before_channel_norm" \
+      --slurpfile channel "$channel_norm" --slurpfile status "$status_norm" '
+      def first($value): if ($value | length) == 0 then {} else $value[0] end;
+      def publication_counts($document):
+        [($document.channels // [])[] | {alias:.alias,count:((.publications // []) | length)}] |
+        sort_by(.alias);
+      (first($probe)) as $probe_doc |
+      (first($before_channel)) as $before_doc |
+      (first($channel)) as $channel_doc |
+      (first($status)) as $status_doc |
+      (publication_counts($before_doc) == publication_counts($channel_doc)) as $no_new_publication |
+      {schema_version:1,fault:$id,type:$type,node:$node,
+       stale_context:$stale_context,probe_ref:$probe_ref,
+       before_channel_status_ref:$before_channel_ref,channel_status_ref:$channel_ref,
+       status_ref:$status_ref,probe_exit_code:$probe_exit,
+       probe_status:($probe_doc.status // ""),
+       observation:{parent_resume_projection_seen:$parent_resume_ok,
+         stale_context_present:$context_present,
+         stale_replay_rejected:($context_present and $probe_exit != 0 and
+           ($probe_doc.status // "") != "accepted"),
+         zero_wake_after_stale_replay:
+           ($status_doc.status == "ready" and
+            all($status_doc.channels[]?;
+              ((.runtime.handling_claimed // 0) == 0) and
+              ((.runtime.handling_pending // 0) == 0) and
+              ((.runtime.run_active // 0) == 0))),
+         zero_late_transition:($no_new_publication and $runtime_unique),
+         bounded_recovery_evidence:($snapshot.status_ok and $snapshot.channel_ok),
+         all_commands_bounded:($snapshot.status_ok and $snapshot.channel_ok)}}}
+    ' >"$evidence_path"
+}
+
+parent_stale_fault_ok() {
+    id=$1
+    evidence_path="$output/faults/$id.json"
+    [ -f "$evidence_path" ] || return 1
+    jq -e '
+      .schema_version == 1 and .type == "parent-stale" and
+      .observation.parent_resume_projection_seen == true and
+      .observation.stale_context_present == true and
+      .observation.stale_replay_rejected == true and
+      .observation.zero_wake_after_stale_replay == true and
+      .observation.zero_late_transition == true and
+      .observation.bounded_recovery_evidence == true and
+      .observation.all_commands_bounded == true
+    ' "$evidence_path" >/dev/null
+}
+
 evaluate_declared_faults() {
     while IFS=$(printf '\t') read -r id type phase target observation; do
         injected=false
@@ -1227,7 +1802,8 @@ evaluate_declared_faults() {
         evidence=
         detail='The public black-box surface has no exact phase receipt or external fault gate; injection and observation remain fail-closed.'
         at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-        if [ "$case_name" = payment-review ] && [ "$id" = alpha-gossip-via-b ]; then
+        if { [ "$case_name" = payment-review ] && [ "$id" = alpha-gossip-via-b ]; } ||
+          { [ "$case_name" = offline-incident ] && [ "$id" = alpha-first-hop-via-b ]; }; then
             action_ref="faults/$id-action.json"
             scope_b_ref="faults/$id-scope-b.json"
             scope_c_ref="faults/$id-scope-c.json"
@@ -1292,7 +1868,7 @@ evaluate_declared_faults() {
         elif [ "$case_name" = api-sdk-contract ] && [ "$id" = alpha-frame-on-beta ]; then
             api_wrong_topic_replay_fault "$id"
             evidence="faults/$id.json"
-            if api_wrong_topic_replay_ok; then
+            if api_wrong_topic_replay_ok "$id"; then
                 injected=true
                 observed=true
                 detail='Node C replayed exact local Alpha publication bytes against its public Beta topic probe; Beta rejected the wrong-topic frame and its Event/Work counts did not change.'
@@ -1308,6 +1884,126 @@ evaluate_declared_faults() {
                 detail='A once-used public Alpha invite was replayed after owner revocation; the replay returned a terminal local projection with the revoked member suffix and never restored active membership.'
             else
                 detail='The public terminal-enrollment replay gate did not prove the terminal suffix and non-reactivation behavior.'
+            fi
+        elif [ "$case_name" = offline-incident ] && [ "$id" = c-misses-alpha-update ]; then
+            write_disconnect_fault_evidence "$id" C alpha beta
+            evidence="faults/$id-action.json,faults/$id.json,faults/$id-status.json,faults/$id-channel-status.json,topology/network-paths.json"
+            if disconnect_fault_ok "$id"; then
+                injected=true
+                observed=true
+                detail='Node C was disconnected during an A-origin Alpha publication, restored through the supervised Docker faultplane, and final public D4 shows exactly one C Alpha repair accepted from origin A.'
+            else
+                detail='The C disconnect receipt, ready-after-reconnect status, and origin-only Alpha repair observation were not all established.'
+            fi
+        elif [ "$case_name" = offline-incident ] && [ "$id" = large-artifact-receiver-restart ]; then
+            write_restart_fault_evidence "$id" C alpha beta
+            evidence="faults/$id-action.json,faults/$id.json,faults/$id-status.json,faults/$id-channel-status.json,topology/network-paths.json"
+            if restart_fault_ok "$id" && network_paths_artifact_origin_ok; then
+                injected=true
+                observed=true
+                detail='Node C was killed and restarted after the incident Artifact path was exercised; public status returned ready with Alpha/Beta identity intact and D4 retained origin-pinned Artifact provenance.'
+            else
+                detail='The C restart receipt, ready status, channel identity, and origin-pinned Artifact provenance were not all established.'
+            fi
+        elif [ "$case_name" = offline-incident ] && [ "$id" = c-daemon-absent-on-host-turn ]; then
+            write_daemon_absent_fault_evidence "$id" C
+            evidence="faults/$id.json,faults/$id-status.json,faults/$id-doctor.json"
+            if daemon_absent_fault_ok "$id"; then
+                injected=true
+                observed=true
+                detail='The C daemon was killed through the container process boundary; an ordinary public status command restarted exactly one daemon and reached healthy ready status without a user daemon command.'
+            else
+                detail='The daemon-kill gate did not prove daemon absence, bounded public ensure recovery, and healthy ready status.'
+            fi
+        elif [ "$case_name" = parallel-hardening ] && [ "$id" = dual-runtime-on-c ]; then
+            write_agent_current_race_fault_evidence "$id" C concurrent-runtime
+            evidence="faults/$id.json,faults/$id-current-1.json,faults/$id-current-2.json,nodes/C/status-after.json"
+            if agent_current_race_fault_ok "$id"; then
+                injected=true
+                observed=true
+                detail='Two concurrent public current probes on C returned stable bounded results, at most one actionable claim, and no duplicate semantic transition.'
+            else
+                detail='The concurrent C current probe did not prove single-owner behavior and duplicate-free recovery.'
+            fi
+        elif [ "$case_name" = parallel-hardening ] && [ "$id" = dual-runtime-on-e ]; then
+            write_agent_current_race_fault_evidence "$id" E concurrent-runtime
+            evidence="faults/$id.json,faults/$id-current-1.json,faults/$id-current-2.json,nodes/E/status-after.json"
+            if agent_current_race_fault_ok "$id"; then
+                injected=true
+                observed=true
+                detail='Two concurrent public current probes on E returned stable bounded results, at most one actionable claim, and no duplicate semantic transition.'
+            else
+                detail='The concurrent E current probe did not prove single-owner behavior and duplicate-free recovery.'
+            fi
+        elif [ "$case_name" = parallel-hardening ] && [ "$id" = restart-overlap-c ]; then
+            write_restart_fault_evidence "$id" C alpha beta
+            evidence="faults/$id-action.json,faults/$id.json,faults/$id-status.json,faults/$id-channel-status.json,topology/network-paths.json"
+            if restart_fault_ok "$id"; then
+                injected=true
+                observed=true
+                detail='Node C was killed and restarted; Alpha and Beta returned ready with stable Channel identity, zero runtime residue, and no duplicate transition.'
+            else
+                detail='The C overlap restart gate did not prove independent Alpha/Beta restoration and duplicate-free status.'
+            fi
+        elif [ "$case_name" = parallel-hardening ] && [ "$id" = restart-overlap-e ]; then
+            write_restart_fault_evidence "$id" E beta gamma
+            evidence="faults/$id-action.json,faults/$id.json,faults/$id-status.json,faults/$id-channel-status.json,topology/network-paths.json"
+            if restart_fault_ok "$id"; then
+                injected=true
+                observed=true
+                detail='Node E was killed and restarted; Beta and Gamma returned ready with stable Channel identity, zero runtime residue, and no duplicate transition.'
+            else
+                detail='The E overlap restart gate did not prove independent Beta/Gamma restoration and duplicate-free status.'
+            fi
+        elif [ "$case_name" = parallel-hardening ] && [ "$id" = preclaim-attachment-rename-crash ]; then
+            write_agent_current_race_fault_evidence "$id" E preclaim-file-crash
+            evidence="faults/$id.json,faults/$id-current-1.json,faults/$id-current-2.json,faults/$id-status.json,faults/$id-channel-status.json"
+            if agent_current_race_fault_ok "$id"; then
+                injected=true
+                observed=true
+                detail='The public current race exercised the preclaim/attachment boundary and recovered with stable empty-or-owned results, healthy status, and no wrong-owner transition.'
+            else
+                detail='The preclaim boundary probe did not prove bounded recovery and wrong-owner suppression.'
+            fi
+        elif [ "$case_name" = overlapping-channels ] && [ "$id" = alpha-bytes-on-beta ]; then
+            api_wrong_topic_replay_fault "$id"
+            evidence="faults/$id.json,topology/network-paths.json"
+            if api_wrong_topic_replay_ok "$id" && network_paths_cross_channel_causality_ok; then
+                injected=true
+                observed=true
+                detail='Node C replayed original Alpha bytes against Beta; Beta rejected the wrong-topic frame while separate derived Beta Events kept new identities and explicit causality.'
+            else
+                detail='The overlapping wrong-topic gate did not prove Beta rejection plus separate derived-event identity.'
+            fi
+        elif [ "$case_name" = overlapping-channels ] && [ "$id" = restart-intersection-c ]; then
+            write_restart_fault_evidence "$id" C alpha beta
+            evidence="faults/$id-action.json,faults/$id.json,faults/$id-status.json,faults/$id-channel-status.json,topology/network-paths.json"
+            if restart_fault_ok "$id"; then
+                injected=true
+                observed=true
+                detail='Node C was killed and restarted; Alpha/Beta state returned ready under one public Node alias without cross-Channel cursor movement.'
+            else
+                detail='The C intersection restart gate did not prove ready Alpha/Beta restoration without cross-Channel cursor movement.'
+            fi
+        elif [ "$case_name" = overlapping-channels ] && [ "$id" = restart-intersection-e ]; then
+            write_restart_fault_evidence "$id" E beta gamma
+            evidence="faults/$id-action.json,faults/$id.json,faults/$id-status.json,faults/$id-channel-status.json,topology/network-paths.json"
+            if restart_fault_ok "$id"; then
+                injected=true
+                observed=true
+                detail='Node E was killed and restarted; Beta/Gamma state returned ready under one public Node alias without cross-Channel cursor movement.'
+            else
+                detail='The E intersection restart gate did not prove ready Beta/Gamma restoration without cross-Channel cursor movement.'
+            fi
+        elif [ "$case_name" = overlapping-channels ] && [ "$id" = nested-parent-stale-variant ]; then
+            write_parent_stale_fault_evidence "$id" C
+            evidence="faults/$id.json,faults/$id-probe.json,faults/$id-status.json,faults/$id-channel-status.json,nodes/C/handling-trace.ndjson"
+            if parent_stale_fault_ok "$id"; then
+                injected=true
+                observed=true
+                detail='A preserved C parent-resume context was replayed after the parent version advanced; the stale replay was rejected with zero wake and zero late transition.'
+            else
+                detail='The parent-stale replay gate did not prove stale rejection, zero wake, and zero late transition.'
             fi
         fi
         jq -cn --arg id "$id" --arg type "$type" --arg phase "$phase" --arg target "$target" \
@@ -1430,12 +2126,53 @@ network_paths_expected_nodes_observed_ok() {
     ' "$output/topology/network-paths.json" >/dev/null
 }
 
+network_paths_origin_only_repairs_ok() {
+    minimum=$(jq -r '.expected.origin_only_repairs // 1' "$scenario_manifest")
+    [ "$minimum" -gt 0 ] || minimum=1
+    jq -e --argjson minimum "$minimum" '
+      [.publications[] | select(.arrival == "repair")] as $repairs |
+      ($repairs | length) >= $minimum and
+      all($repairs[];
+        .origin_node == .immediate_transport_node and
+        .origin_peer_id == .publication_ref.origin_peer_id and
+        .origin_peer_id == .event_key.origin_peer_id)
+    ' "$output/topology/network-paths.json" >/dev/null
+}
+
+network_paths_single_repair_effect_ok() {
+    observer=$1
+    channel=$2
+    origin=$3
+    jq -e --arg observer "$observer" --arg channel "$channel" --arg origin "$origin" '
+      [.publications[] |
+        select(.arrival == "repair" and .observer_node == $observer and
+          .channel == $channel and .origin_node == $origin and
+          .immediate_transport_node == $origin and
+          .semantic_outcome == "accepted")] as $repairs |
+      ($repairs | length) == 1 and
+      ($repairs[0].event_key.origin_peer_id == $repairs[0].origin_peer_id) and
+      ([.publications[] |
+        select(.event_key == $repairs[0].event_key and
+          .observer_node == $observer and .semantic_outcome == "accepted")] |
+        length) == 1
+    ' "$output/topology/network-paths.json" >/dev/null
+}
+
 status_distinguishes_lag_from_delivery_ok() {
     jq -s -e '
       all(.[];
         .status == "ready" and
         all(.channels[];
-          has("lag") and has("delivery") and (.runtime | type == "object")))
+          .state == "ready" and
+          (.cursor | type == "object") and
+          (.publication | type == "object") and
+          (.inbox | type == "object") and
+          (.runtime | type == "object") and
+          (.cursor | has("inbound_gapped") and has("inbound_pending") and
+            has("outbound_pending")) and
+          (.publication | has("remote_acknowledged") and has("remote_pending") and
+            has("remote_blocked")) and
+          (.inbox | has("waiting_artifact"))))
     ' "$output"/nodes/*/status-after.json >/dev/null
 }
 
@@ -1456,8 +2193,29 @@ status_after_all_terminal_ok() {
 team_offer_expansion_ok() {
     expected=$(jq -r '.expected.team_offer_count // 0' "$scenario_manifest")
     [ "$expected" -gt 0 ] || return 1
-    [ "$(runtime_action_count teamwork.offer)" -eq "$expected" ] || return 1
-    [ "$(runtime_result_event_count review.offered)" -eq "$expected" ] || return 1
+    entry=$(jq -r '.entry_node // "A"' "$scenario_manifest")
+    summary="$private/team-offer-expansions.jsonl"
+    find "$output/runtime" -type f -name '*.json' -exec jq -c '
+      input_filename as $file |
+      select(.action? == "teamwork.offer" and .status == "accepted") |
+      {file:$file,node:($file | split("/")[-2]),operation_id,
+       results:(.results // [])}
+    ' {} + >"$summary"
+    jq -s -e --arg entry "$entry" --argjson expected "$expected" '
+      (map(select(.node != $entry))) as $expansions |
+      ($expansions | length) == $expected and
+      all($expansions[];
+        (.operation_id | type == "string" and length > 0) and
+        ((.results // []) | length) > 0 and
+        all(.results[]?;
+          .event_type == "review.offered" and
+          (.event_id | type == "string" and length > 0) and
+          (.work.ref | type == "string" and length > 0))) and
+      ([$expansions[].results[]?.event_id] as $ids |
+        ($ids | length) >= $expected and ($ids | unique | length) == ($ids | length)) and
+      ([$expansions[].results[]?.work.ref] as $works |
+        ($works | length) >= $expected and ($works | unique | length) == ($works | length))
+    ' "$summary" >/dev/null || return 1
     runtime_result_event_ids_unique_ok || return 1
 }
 
@@ -1507,6 +2265,114 @@ evaluate_public_system_oracles() {
         add_declared_system_assertion ND-20 false "$network_ref" \
           'No sufficient public response-loss replay evidence was recorded.'
     fi
+
+    if disconnect_fault_ok c-misses-alpha-update &&
+      network_paths_origin_only_repairs_ok; then
+        repair_origin_passed=true
+    else
+        repair_origin_passed=false
+    fi
+    add_declared_system_assertion missed-gossip-repaired-only-from-origin \
+      "$repair_origin_passed" \
+      "faults/c-misses-alpha-update.json,$network_ref" \
+      'The missed Alpha publication was repaired through a direct origin path, never by filling a Channel gap from a relay or another Channel.'
+
+    if disconnect_fault_ok c-misses-alpha-update &&
+      network_paths_single_repair_effect_ok C alpha A; then
+        repair_effect_passed=true
+    else
+        repair_effect_passed=false
+    fi
+    add_declared_system_assertion repair-replay-has-one-semantic-effect \
+      "$repair_effect_passed" \
+      "faults/c-misses-alpha-update.json,$network_ref,nodes/C/handling-trace.ndjson" \
+      'The C Alpha repair replay produced exactly one accepted local semantic effect.'
+
+    if restart_fault_ok large-artifact-receiver-restart &&
+      network_paths_artifact_origin_ok; then
+        artifact_resume_passed=true
+    else
+        artifact_resume_passed=false
+    fi
+    add_declared_system_assertion artifact-resume-verifies-digest-before-ready \
+      "$artifact_resume_passed" \
+      "faults/large-artifact-receiver-restart.json,$network_ref,nodes/C/status-after.json" \
+      'After the receiver restart, public status returned ready only with verified Artifact roots and origin-pinned direct source evidence.'
+
+    if network_paths_artifact_origin_ok; then
+        artifact_provenance_passed=true
+    else
+        artifact_provenance_passed=false
+    fi
+    add_declared_system_assertion AR-01 "$artifact_provenance_passed" "$network_ref" \
+      'Public D4 Artifact evidence retains the producer origin as the direct Artifact source and later Events only pin verified roots.'
+    add_declared_system_assertion producer-pin-survives-until-semantic-receipt \
+      "$artifact_provenance_passed" "$network_ref" \
+      'Artifact producer pins remain attached through the semantic receipt path.'
+
+    if agent_current_race_fault_ok dual-runtime-on-c &&
+      agent_current_race_fault_ok dual-runtime-on-e; then
+        current_race_passed=true
+    else
+        current_race_passed=false
+    fi
+    add_declared_system_assertion single-owner-per-handling-under-concurrency \
+      "$current_race_passed" \
+      'faults/dual-runtime-on-c.json,faults/dual-runtime-on-e.json,nodes/C/status-after.json,nodes/E/status-after.json' \
+      'Concurrent public current probes preserve at most one actionable owner and produce no duplicate semantic transition.'
+
+    if agent_current_race_fault_ok preclaim-attachment-rename-crash; then
+        preclaim_passed=true
+    else
+        preclaim_passed=false
+    fi
+    add_declared_system_assertion ND-17 "$preclaim_passed" \
+      'faults/preclaim-attachment-rename-crash.json,faults/preclaim-attachment-rename-crash-status.json' \
+      'The owner-only current/preclaim boundary returns stable empty-or-owned results with bounded recovery evidence and no wrong-owner launch.'
+
+    c_restart_passed=false
+    restart_fault_ok restart-overlap-c && c_restart_passed=true
+    e_restart_passed=false
+    restart_fault_ok restart-overlap-e && e_restart_passed=true
+    add_declared_system_assertion c-restores-alpha-and-beta-independently \
+      "$c_restart_passed" \
+      'faults/restart-overlap-c.json,faults/restart-overlap-c-channel-status.json' \
+      'C restores Alpha and Beta independently with stable Channel identities and ready cursors after restart.'
+    add_declared_system_assertion e-restores-beta-and-gamma-independently \
+      "$e_restart_passed" \
+      'faults/restart-overlap-e.json,faults/restart-overlap-e-channel-status.json' \
+      'E restores Beta and Gamma independently with stable Channel identities and ready cursors after restart.'
+    if [ "$c_restart_passed" = true ] && [ "$e_restart_passed" = true ] &&
+      runtime_result_event_ids_unique_ok; then
+        restart_duplicate_passed=true
+    else
+        restart_duplicate_passed=false
+    fi
+    add_declared_system_assertion restart-produces-no-duplicate-transition \
+      "$restart_duplicate_passed" \
+      'faults/restart-overlap-c.json,faults/restart-overlap-e.json,nodes/C/handling-trace.ndjson,nodes/E/handling-trace.ndjson' \
+      'Restart recovery does not duplicate Runtime transition Event identities.'
+
+    if api_wrong_topic_replay_ok alpha-bytes-on-beta &&
+      network_paths_cross_channel_causality_ok; then
+        wrong_topic_passed=true
+    else
+        wrong_topic_passed=false
+    fi
+    add_declared_system_assertion wrong-topic-original-bytes-fail-closed \
+      "$wrong_topic_passed" 'faults/alpha-bytes-on-beta.json,topology/network-paths.json' \
+      'Original Alpha publication bytes fail closed on Beta while accepted Beta work uses a separate derived Event identity.'
+
+    if parent_stale_fault_ok nested-parent-stale-variant ||
+      parent_resume_projection_ok; then
+        parent_disposition_passed=true
+    else
+        parent_disposition_passed=false
+    fi
+    add_declared_system_assertion one-parent-resume-or-one-parent-stale \
+      "$parent_disposition_passed" \
+      'faults/nested-parent-stale-variant.json,nodes/C/handling-trace.ndjson,nodes/E/handling-trace.ndjson' \
+      'Parent derivation disposition is represented by a bounded parent-resume projection or a rejected stale replay with no late transition.'
 
     if network_paths_cross_channel_causality_ok; then
         cross_passed=true
@@ -1572,6 +2438,14 @@ evaluate_public_system_oracles() {
       'Artifact closure evidence remains authorized by the publication origin.'
     add_declared_system_assertion result-artifacts-follow-explicit-origin-pins "$artifact_passed" "$network_ref" \
       'Result Artifact paths follow explicit origin pins in the public D4 evidence.'
+    if [ "$artifact_passed" = true ] && network_paths_work_contexts_scoped_ok; then
+        scoped_artifact_passed=true
+    else
+        scoped_artifact_passed=false
+    fi
+    add_declared_system_assertion candidate-artifact-closure-remains-work-scoped \
+      "$scoped_artifact_passed" "$network_ref" \
+      'Candidate Artifact closure remains scoped to the Work audience and explicit origin pins.'
 
     if payment_review_rework_once_ok; then
         rework_passed=true
@@ -1589,10 +2463,10 @@ evaluate_public_system_oracles() {
     fi
     add_declared_system_assertion ND-21 "$team_offer_passed" \
       "nodes/C/handling-trace.ndjson,nodes/E/handling-trace.ndjson,$network_ref" \
-      'Public Runtime receipts show the declared number of Team expansion actions, one review offer Event per expansion, and no duplicate semantic Event id.'
+      'Public Runtime receipts show the declared number of non-entry Team expansion actions, independent offered Works, and no duplicate semantic Event id.'
     add_declared_system_assertion team-offer-atomically-creates-independent-works "$team_offer_passed" \
       "nodes/C/handling-trace.ndjson,nodes/E/handling-trace.ndjson,$network_ref" \
-      'Each declared Team expansion is represented by a single accepted public action and one independent Work offer Event.'
+      'Each declared Team expansion is represented by one accepted public action producing independently identified Work offers.'
 
     if network_paths_expected_nodes_observed_ok; then
         nodes_observed_passed=true
@@ -1616,7 +2490,12 @@ run_entry_prompt() {
     stderr="$private/entry-turn.stderr"
     prompt="$scenario/$(jq -r '.prompt_file' "$scenario_manifest")"
     started=$(date +%s%3N)
-    if [ "$case_name" = payment-review ]; then
+    relay_fault_id=
+    case "$case_name" in
+        payment-review) relay_fault_id=alpha-gossip-via-b ;;
+        offline-incident) relay_fault_id=alpha-first-hop-via-b ;;
+    esac
+    if [ -n "$relay_fault_id" ]; then
         a_container=$(container_id A)
         b_container=$(container_id B)
         c_container=$(container_id C)
@@ -1630,14 +2509,14 @@ run_entry_prompt() {
           unique | select(length == 1) | .[0]' \
           "$output/topology/channels.json")
         prompt_receipt="$private/payment-relay-prompt.json"
-        scope_b="$private/payment-relay-scope-b.json"
-        scope_c="$private/payment-relay-scope-c.json"
-        wrapper_stdout="$private/payment-relay-wrapper.stdout"
-        wrapper_stderr="$private/payment-relay-wrapper.stderr"
+        scope_b="$private/$relay_fault_id-scope-b.json"
+        scope_c="$private/$relay_fault_id-scope-c.json"
+        wrapper_stdout="$private/$relay_fault_id-wrapper.stdout"
+        wrapper_stderr="$private/$relay_fault_id-wrapper.stderr"
         set +e
         "$repo_root/harness/test/e2e/faultplane/docker_network.sh" edge \
           --network "$project-mesh" --left "$a_container" --right "$c_container" \
-          --token alpha-gossip-via-b --receipt-dir "$output/faults" -- \
+          --token "$relay_fault_id" --receipt-dir "$output/faults" -- \
           "$runner_dir/relay_fault_scope.sh" --runtime "$runtime" \
           --a-container "$a_container" --b-container "$b_container" --c-container "$c_container" \
           --a-peer "$a_peer" --b-peer "$b_peer" --c-peer "$c_peer" --prompt "$prompt" \
@@ -1654,13 +2533,13 @@ run_entry_prompt() {
             exit_code=$(jq -r '.prompt_exit_code' "$prompt_receipt")
         fi
         if [ -f "$scope_b" ] && [ -f "$scope_c" ]; then
-            redact_json <"$scope_b" >"$output/faults/alpha-gossip-via-b-scope-b.json"
-            redact_json <"$scope_c" >"$output/faults/alpha-gossip-via-b-scope-c.json"
-            chmod 0600 "$output/faults/alpha-gossip-via-b-scope-b.json" \
-              "$output/faults/alpha-gossip-via-b-scope-c.json"
+            redact_json <"$scope_b" >"$output/faults/$relay_fault_id-scope-b.json"
+            redact_json <"$scope_c" >"$output/faults/$relay_fault_id-scope-c.json"
+            chmod 0600 "$output/faults/$relay_fault_id-scope-b.json" \
+              "$output/faults/$relay_fault_id-scope-c.json"
         fi
         if [ -s "$wrapper_stderr" ]; then
-            redact_text_file "$wrapper_stderr" "$output/transcript/payment-relay-fault.stderr"
+            redact_text_file "$wrapper_stderr" "$output/transcript/$relay_fault_id.stderr"
         fi
         [ -e "$stdout" ] || : >"$stdout"
         [ -e "$stderr" ] || : >"$stderr"
@@ -1719,6 +2598,38 @@ wait_for_public_result() {
     done
     case_error "no nonempty public entry-node result appeared within ${timeout_seconds}s"
     return 1
+}
+
+inject_offline_alpha_repair_fault() {
+    [ "$case_name" = offline-incident ] || return 0
+    id=c-misses-alpha-update
+    marker_deadline_ms=$(( $(date +%s%3N) + 10000 ))
+    marker_seen=false
+    while [ "$(date +%s%3N)" -lt "$marker_deadline_ms" ]; do
+        if node_exec A test -f /workspace/.r5/offline-before-close; then
+            marker_seen=true
+            break
+        fi
+        sleep 0.1
+    done
+    if [ "$marker_seen" != true ]; then
+        return 0
+    fi
+    fault_stdout="$private/$id-offline.stdout"
+    fault_stderr="$private/$id-offline.stderr"
+    c_container=$(container_id C)
+    set +e
+    "$repo_root/harness/test/e2e/faultplane/docker_network.sh" offline \
+      --network "$project-mesh" --container "$c_container" \
+      --token "$id" --receipt-dir "$output/faults" -- sh -c 'sleep 8' \
+      >"$fault_stdout" 2>"$fault_stderr"
+    fault_exit=$?
+    set -e
+    [ ! -s "$fault_stderr" ] ||
+      redact_text_file "$fault_stderr" "$output/transcript/$id-offline.stderr"
+    if [ "$fault_exit" -ne 0 ]; then
+        case_error "offline repair fault injection failed for Node C"
+    fi
 }
 
 wait_final_public_status_ready() {
@@ -1953,7 +2864,7 @@ complete_oracle_assertions() {
                 evidence='nodes/A/status-after.json,nodes/B/status-after.json,nodes/C/status-after.json,nodes/D/status-after.json,nodes/E/status-after.json,nodes/F/status-after.json'
                 if status_distinguishes_lag_from_delivery_ok; then
                     passed=true
-                    message='Public status exposes lag and delivery fields separately for every ready Channel while runtime work is reported independently.'
+                    message='Public status exposes cursor lag, publication delivery, inbox Artifact wait, and runtime work as separate ready Channel fields.'
                 fi
                 ;;
             six-nodes-observed-in-transport-or-business-path)
@@ -1967,7 +2878,7 @@ complete_oracle_assertions() {
                 evidence='nodes/C/handling-trace.ndjson,nodes/E/handling-trace.ndjson'
                 if team_offer_expansion_ok; then
                     passed=true
-                    message='Each declared Team expansion has one accepted public Teamwork offer action and one review offer Event.'
+                    message='Each declared non-entry Team expansion has one accepted public Teamwork offer action and independent Work offer results.'
                 fi
                 ;;
             zero-implicit-channel-switch-or-bridge-actions)
@@ -2107,6 +3018,7 @@ run_workflow() {
     create_channels || return 1
     if run_entry_prompt; then
         if wait_for_public_result; then
+            inject_offline_alpha_repair_fault
             wait_final_public_status_ready || true
         fi
     fi

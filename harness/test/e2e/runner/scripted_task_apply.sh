@@ -255,3 +255,7 @@ EOF
     ;;
   *) exit 2 ;;
 esac
+if [ "$scenario" = offline-incident ]; then
+  : >.r5/offline-before-close
+  sleep 6
+fi

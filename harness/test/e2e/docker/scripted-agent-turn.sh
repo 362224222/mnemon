@@ -188,6 +188,10 @@ fi
 if has_action teamwork.deliver; then
     content=$(jq -er '.result_content' "$policy")
     printf '%s\n' "$content" >"result/${node}.txt"
+    if [ "$(scenario_name)" = overlapping-channels ] &&
+       jq -e '(.child_results // []) | length > 0' "$current" >/dev/null 2>&1; then
+        install -m 0600 "$context" ".r5/${node}-parent-resume-stale.context"
+    fi
     if [ "$(scenario_name)" = payment-review ] && [ "$node" = C ] &&
        [ ! -e .r5/review-receipt-loss ] &&
        jq -e '.source_event.event_type == "review.closed" and
