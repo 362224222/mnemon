@@ -147,7 +147,9 @@ func (s *Store) FinalizeAgentCurrentRead(ctx context.Context,
 
 	projection, err := model.NewCurrentProjection(model.CurrentProjectionSpec{
 		SourceEvent: authority.projection.SourceEvent(), ActionWork: authority.projection.ActionWork(),
-		AllowedActions: authority.projection.AllowedActions(), ArtifactViews: views,
+		AllowedActions: authority.projection.AllowedActions(),
+		ChildResults:   authority.projection.ChildResults(),
+		ArtifactViews:  views,
 	})
 	if errors.Is(err, model.ErrLimit) {
 		return AgentCurrentReadResult{}, fmt.Errorf("%w: %v", ErrCurrentReadTooLarge, err)

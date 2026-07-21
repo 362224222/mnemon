@@ -174,20 +174,69 @@ func (w CurrentWork) Brief() (CurrentBrief, bool) {
 	return w.brief, w.hasBrief
 }
 
+type CurrentChildResultSpec struct {
+	Ordinal      uint8
+	WorkRef      WorkRef
+	State        WorkState
+	Version      uint64
+	Iteration    uint8
+	ArtifactRefs []CurrentArtifactRef
+}
+
+// CurrentChildResult is the bounded terminal child summary that authorizes a
+// parent-resume current. It carries identities and reusable result roots only;
+// the parent action authority remains the single ActionWork in the projection.
+type CurrentChildResult struct {
+	spec      CurrentChildResultSpec
+	artifacts []CurrentArtifactRef
+}
+
+func NewCurrentChildResult(spec CurrentChildResultSpec) (CurrentChildResult, error) {
+	if spec.WorkRef.IsZero() || !spec.State.Valid() || !spec.State.Terminal() {
+		return CurrentChildResult{}, invalid("current child result",
+			"terminal WorkRef and state are required")
+	}
+	if err := validateSQLitePositive("current child result version", spec.Version); err != nil {
+		return CurrentChildResult{}, err
+	}
+	if spec.Iteration < 1 || spec.Iteration > 2 {
+		return CurrentChildResult{}, invalid("current child result", "iteration must be 1..2")
+	}
+	artifacts, err := normalizeCurrentArtifactRoots(spec.ArtifactRefs, MaxCurrentArtifactRefs)
+	if err != nil {
+		return CurrentChildResult{}, err
+	}
+	result := CurrentChildResult{spec: spec, artifacts: artifacts}
+	result.spec.ArtifactRefs = nil
+	return result, nil
+}
+
+func (r CurrentChildResult) Ordinal() uint8   { return r.spec.Ordinal }
+func (r CurrentChildResult) WorkRef() WorkRef { return r.spec.WorkRef }
+func (r CurrentChildResult) State() WorkState { return r.spec.State }
+func (r CurrentChildResult) Version() uint64  { return r.spec.Version }
+func (r CurrentChildResult) Iteration() uint8 { return r.spec.Iteration }
+func (r CurrentChildResult) ArtifactRefs() []CurrentArtifactRef {
+	return append([]CurrentArtifactRef{}, r.artifacts...)
+}
+
 type CurrentProjectionSpec struct {
 	SourceEvent    CurrentEvent
 	ActionWork     CurrentWork
 	AllowedActions []OperationKind
+	ChildResults   []CurrentChildResult
 	ArtifactViews  []CurrentArtifactRef
 }
 
 // CurrentProjection is the public, bounded read model. The current schema has
-// one source Event and one action Work. Future parent-resume projections use a
-// new schema version instead of inventing child references in this base path.
+// one source Event and one action Work. Parent-resume projections keep that
+// single source Event, but explicitly bind the terminal child set that makes the
+// cross-Channel parent action locally resumable.
 type CurrentProjection struct {
 	sourceEvent CurrentEvent
 	actionWork  CurrentWork
 	actions     []OperationKind
+	children    []CurrentChildResult
 	artifacts   []CurrentArtifactRef
 	canonical   JSON
 	digest      Digest
@@ -197,7 +246,12 @@ func NewCurrentProjection(spec CurrentProjectionSpec) (CurrentProjection, error)
 	if spec.SourceEvent.Key().IsZero() || spec.ActionWork.Ref().IsZero() {
 		return CurrentProjection{}, invalid("current projection", "source Event and action Work are required")
 	}
-	if spec.SourceEvent.WorkRef() != spec.ActionWork.Ref() {
+	children, err := normalizeCurrentChildResults(spec.ChildResults, spec.SourceEvent.WorkRef(),
+		spec.ActionWork)
+	if err != nil {
+		return CurrentProjection{}, err
+	}
+	if len(children) == 0 && spec.SourceEvent.WorkRef() != spec.ActionWork.Ref() {
 		return CurrentProjection{}, invariant("base current source Event and action Work differ")
 	}
 	brief, hasBrief := spec.ActionWork.Brief()
@@ -216,7 +270,9 @@ func NewCurrentProjection(spec CurrentProjectionSpec) (CurrentProjection, error)
 	if len(actions) == 0 {
 		return CurrentProjection{}, invariant("current projection must allow an action or explicit resolution")
 	}
-	authorizedRoots, err := mergeCurrentArtifactRefs(brief.ArtifactRefs(), spec.SourceEvent.ArtifactRefs())
+	childArtifacts := currentChildResultArtifactRefs(children)
+	authorizedRoots, err := mergeCurrentArtifactRefs(brief.ArtifactRefs(),
+		spec.SourceEvent.ArtifactRefs(), childArtifacts)
 	if err != nil {
 		return CurrentProjection{}, err
 	}
@@ -225,7 +281,7 @@ func NewCurrentProjection(spec CurrentProjectionSpec) (CurrentProjection, error)
 		return CurrentProjection{}, err
 	}
 	result := CurrentProjection{sourceEvent: spec.SourceEvent, actionWork: spec.ActionWork,
-		actions: actions, artifacts: authorized}
+		actions: actions, children: children, artifacts: authorized}
 	canonical, err := JSONFrom(currentProjectionWireFrom(result))
 	if err != nil {
 		return CurrentProjection{}, fmt.Errorf("current projection: %w", err)
@@ -241,6 +297,9 @@ func (p CurrentProjection) SourceEvent() CurrentEvent { return p.sourceEvent }
 func (p CurrentProjection) ActionWork() CurrentWork   { return p.actionWork }
 func (p CurrentProjection) AllowedActions() []OperationKind {
 	return append([]OperationKind{}, p.actions...)
+}
+func (p CurrentProjection) ChildResults() []CurrentChildResult {
+	return append([]CurrentChildResult{}, p.children...)
 }
 func (p CurrentProjection) ArtifactRefs() []CurrentArtifactRef {
 	return append([]CurrentArtifactRef{}, p.artifacts...)
@@ -450,12 +509,22 @@ type currentWorkWire struct {
 	Version          uint64             `json:"version"`
 }
 
+type currentChildResultWire struct {
+	ArtifactRefs []currentArtifactWire `json:"artifact_refs"`
+	Iteration    uint8                 `json:"iteration"`
+	Ordinal      uint8                 `json:"ordinal"`
+	State        WorkState             `json:"state"`
+	Version      uint64                `json:"version"`
+	WorkRef      currentWorkRefWire    `json:"work_ref"`
+}
+
 type currentProjectionWire struct {
-	ActionWork     currentWorkWire       `json:"action_work"`
-	AllowedActions []OperationKind       `json:"allowed_actions"`
-	ArtifactRefs   []currentArtifactWire `json:"artifact_refs"`
-	SchemaVersion  int                   `json:"schema_version"`
-	SourceEvent    currentEventWire      `json:"source_event"`
+	ActionWork     currentWorkWire          `json:"action_work"`
+	AllowedActions []OperationKind          `json:"allowed_actions"`
+	ArtifactRefs   []currentArtifactWire    `json:"artifact_refs"`
+	ChildResults   []currentChildResultWire `json:"child_results,omitempty"`
+	SchemaVersion  int                      `json:"schema_version"`
+	SourceEvent    currentEventWire         `json:"source_event"`
 }
 
 type currentReceiptWire struct {
@@ -495,6 +564,7 @@ func currentProjectionWireFrom(projection CurrentProjection) currentProjectionWi
 			State: work.State(), StateData: work.StateData().Bytes(), LocalRole: work.LocalRole(),
 		},
 		AllowedActions: projection.AllowedActions(), ArtifactRefs: artifactWires(projection.ArtifactRefs()),
+		ChildResults: childResultWires(projection.ChildResults()),
 	}
 }
 
@@ -544,6 +614,24 @@ func artifactWires(refs []CurrentArtifactRef) []currentArtifactWire {
 		result[index] = currentArtifactWire{RootDigest: ref.RootDigest().String(), Path: path}
 	}
 	return result
+}
+
+func childResultWires(results []CurrentChildResult) []currentChildResultWire {
+	if len(results) == 0 {
+		return nil
+	}
+	encoded := make([]currentChildResultWire, len(results))
+	for index, result := range results {
+		encoded[index] = currentChildResultWire{
+			ArtifactRefs: artifactWires(result.ArtifactRefs()),
+			Iteration:    result.Iteration(),
+			Ordinal:      result.Ordinal(),
+			State:        result.State(),
+			Version:      result.Version(),
+			WorkRef:      currentWorkRefWire{result.WorkRef().HomePeerID().String(), result.WorkRef().WorkID().String()},
+		}
+	}
+	return encoded
 }
 
 // ParseCurrentReadReceipt accepts only the exact canonical schema-v1 shape.
@@ -681,12 +769,48 @@ func currentProjectionFromWire(wire currentProjectionWire) (CurrentProjection, e
 	if err != nil {
 		return CurrentProjection{}, err
 	}
+	children, err := childResultsFromWire(wire.ChildResults)
+	if err != nil {
+		return CurrentProjection{}, err
+	}
 	projection, err := NewCurrentProjection(CurrentProjectionSpec{SourceEvent: event, ActionWork: work,
-		AllowedActions: wire.AllowedActions, ArtifactViews: authorized})
+		AllowedActions: wire.AllowedActions, ChildResults: children, ArtifactViews: authorized})
 	if err != nil {
 		return CurrentProjection{}, err
 	}
 	return projection, nil
+}
+
+func childResultsFromWire(wires []currentChildResultWire) ([]CurrentChildResult, error) {
+	if len(wires) == 0 {
+		return nil, nil
+	}
+	if len(wires) > MaxChildWorks {
+		return nil, limit("current child results", len(wires), MaxChildWorks)
+	}
+	results := make([]CurrentChildResult, len(wires))
+	for index, wire := range wires {
+		ref, err := workRefFromWire(wire.WorkRef)
+		if err != nil {
+			return nil, err
+		}
+		artifacts, err := artifactRefsFromWire(wire.ArtifactRefs, MaxCurrentArtifactRefs)
+		if err != nil {
+			return nil, err
+		}
+		result, err := NewCurrentChildResult(CurrentChildResultSpec{
+			Ordinal: wire.Ordinal, WorkRef: ref, State: wire.State, Version: wire.Version,
+			Iteration: wire.Iteration, ArtifactRefs: artifacts,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if result.Ordinal() != uint8(index) {
+			return nil, invariant("current child results are not canonical")
+		}
+		results[index] = result
+	}
+	return results, nil
 }
 
 func decodeCurrentWire(raw []byte, destination any) error {
@@ -841,18 +965,66 @@ func bindCurrentArtifactViews(roots, supplied []CurrentArtifactRef) ([]CurrentAr
 	return views, nil
 }
 
-func mergeCurrentArtifactRefs(left, right []CurrentArtifactRef) ([]CurrentArtifactRef, error) {
-	merged := append([]CurrentArtifactRef{}, left...)
-	seen := make(map[Digest]struct{}, len(merged))
-	for _, ref := range merged {
-		seen[ref.RootDigest()] = struct{}{}
+func normalizeCurrentChildResults(children []CurrentChildResult, source WorkRef,
+	action CurrentWork,
+) ([]CurrentChildResult, error) {
+	if len(children) == 0 {
+		return nil, nil
 	}
-	for _, ref := range right {
+	if len(children) > MaxChildWorks {
+		return nil, limit("current child results", len(children), MaxChildWorks)
+	}
+	if source.IsZero() || action.Ref().IsZero() || source == action.Ref() ||
+		action.LocalRole() != CurrentReviewer ||
+		(action.State() != WorkActive && action.State() != WorkRework) {
+		return nil, invariant("parent-resume current must bind terminal children to a reviewer parent")
+	}
+	result := append([]CurrentChildResult{}, children...)
+	seen := make(map[WorkRef]struct{}, len(result))
+	sourceFound := false
+	totalArtifacts := 0
+	for index, child := range result {
+		if child.Ordinal() != uint8(index) || child.WorkRef().IsZero() ||
+			!child.State().Terminal() || child.WorkRef() == action.Ref() {
+			return nil, invariant("current child results are not a canonical terminal set")
+		}
+		if _, exists := seen[child.WorkRef()]; exists {
+			return nil, invalid("current child results", "contain duplicate child Work refs")
+		}
+		seen[child.WorkRef()] = struct{}{}
+		sourceFound = sourceFound || child.WorkRef() == source
+		totalArtifacts += len(child.ArtifactRefs())
+		if totalArtifacts > MaxCurrentArtifactRefs {
+			return nil, limit("current child result Artifact refs", totalArtifacts, MaxCurrentArtifactRefs)
+		}
+	}
+	if !sourceFound {
+		return nil, invariant("parent-resume source Event does not identify a child result")
+	}
+	return result, nil
+}
+
+func currentChildResultArtifactRefs(children []CurrentChildResult) []CurrentArtifactRef {
+	var result []CurrentArtifactRef
+	for _, child := range children {
+		result = append(result, child.ArtifactRefs()...)
+	}
+	return result
+}
+
+func mergeCurrentArtifactRefs(groups ...[]CurrentArtifactRef) ([]CurrentArtifactRef, error) {
+	var merged []CurrentArtifactRef
+	for _, group := range groups {
+		merged = append(merged, group...)
+	}
+	seen := make(map[Digest]struct{}, len(merged))
+	result := make([]CurrentArtifactRef, 0, len(merged))
+	for _, ref := range merged {
 		if _, exists := seen[ref.RootDigest()]; exists {
 			continue
 		}
 		seen[ref.RootDigest()] = struct{}{}
-		merged = append(merged, ref)
+		result = append(result, ref)
 	}
-	return normalizeCurrentArtifactRefs(merged, MaxCurrentArtifactRefs)
+	return normalizeCurrentArtifactRefs(result, MaxCurrentArtifactRefs)
 }

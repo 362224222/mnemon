@@ -140,6 +140,71 @@ func TestCurrentProjectionCarriesOfferedBriefAcrossFreshTransitionTurns(t *testi
 	}
 }
 
+func TestCurrentProjectionBindsParentResumeChildResults(t *testing.T) {
+	parent := currentTestProjection(t, []OperationKind{OperationTeamworkAccept})
+	brief, _ := parent.ActionWork().Brief()
+	parentRef := parent.ActionWork().Ref()
+	childID, _ := ParseWorkID("work-current-child")
+	childRef, _ := NewWorkRef(parent.SourceEvent().Key().OriginPeerID(), childID)
+	closedID, _ := ParseEventID("event-current-child-closed")
+	closedKey, _ := NewEventKey(parent.SourceEvent().Key().OriginPeerID(),
+		parent.SourceEvent().Key().OriginEpoch(), closedID)
+	payload, _ := NewJSON([]byte(`{"iteration":1,"note":"","work_version":3}`))
+	source, err := NewCurrentEvent(CurrentEventSpec{Key: closedKey,
+		Digest: Sum([]byte("current-child-closed")), Type: EventReviewClosed, WorkRef: childRef,
+		Summary: "Child closed", Payload: payload, AcceptedAt: parent.SourceEvent().AcceptedAt().Add(time.Second)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentState, _ := NewJSON([]byte(`{"iteration":1,"work_version":1}`))
+	actionWork, err := NewCurrentWork(CurrentWorkSpec{Ref: parentRef, Version: 2, Iteration: 1,
+		DeadlineUnixNano: parent.ActionWork().DeadlineUnixNano(), State: WorkActive,
+		StateData: parentState, LocalRole: CurrentReviewer, Brief: brief})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resultRoot, _ := NewCurrentArtifactRef(Sum([]byte("current-child-result")))
+	child, err := NewCurrentChildResult(CurrentChildResultSpec{Ordinal: 0, WorkRef: childRef,
+		State: WorkClosed, Version: 4, Iteration: 1, ArtifactRefs: []CurrentArtifactRef{resultRoot}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	projection, err := NewCurrentProjection(CurrentProjectionSpec{SourceEvent: source,
+		ActionWork: actionWork, AllowedActions: []OperationKind{OperationTeamworkDeliver,
+			OperationResolveRetry}, ChildResults: []CurrentChildResult{child}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projection.ChildResults()) != 1 || projection.ChildResults()[0].WorkRef() != childRef ||
+		!sameArtifactRefSet(projection.ArtifactRefs(), []CurrentArtifactRef{parent.ArtifactRefs()[0], resultRoot}) {
+		t.Fatalf("parent-resume projection = %#v", projection)
+	}
+	parsed, err := ParseCurrentProjection(projection.CanonicalJSON().Bytes())
+	if err != nil || parsed.Digest() != projection.Digest() || len(parsed.ChildResults()) != 1 {
+		t.Fatalf("Parse parent-resume projection = (%#v,%v)", parsed, err)
+	}
+	if _, err := NewCurrentProjection(CurrentProjectionSpec{SourceEvent: source,
+		ActionWork: actionWork, AllowedActions: []OperationKind{OperationTeamworkDeliver}}); !errors.Is(err, ErrInvariant) {
+		t.Fatalf("source/action mismatch without child_results error = %v", err)
+	}
+}
+
+func sameArtifactRefSet(left, right []CurrentArtifactRef) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	seen := make(map[Digest]struct{}, len(left))
+	for _, ref := range left {
+		seen[ref.RootDigest()] = struct{}{}
+	}
+	for _, ref := range right {
+		if _, ok := seen[ref.RootDigest()]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
 func TestCurrentReadReceiptRejectsNoncanonicalOrConflictingEvidence(t *testing.T) {
 	projection := currentTestProjection(t, []OperationKind{OperationTeamworkAccept, OperationResolveRetry})
 	runID, _ := ParseRunID("run-current-parse")

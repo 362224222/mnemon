@@ -635,6 +635,56 @@ func TestCurrentDistinguishesOrdinaryDerivedWorkHandlingFromParentResume(t *test
 	}
 }
 
+func TestFinalizeAgentCurrentReadProjectsParentResumeChildResults(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fixture := newDerivationDispositionFixture(t, true)
+	if err := fixture.store.ReconcileWorkDerivationDisposition(ctx, fixture.children[0]); err != nil {
+		t.Fatal(err)
+	}
+	handling := fixture.handling(t)
+	claimAt := fixture.now.Add(7 * time.Second)
+	claim := claimCurrent(t, fixture.acceptanceFixture, "owner-parent-resume",
+		"token-parent-resume", claimAt)
+	if claim.Status != AgentClaimActionable || claim.Handling.ID() != handling.ID() {
+		t.Fatalf("parent-resume claim = %#v, want Handling %s", claim, handling.ID())
+	}
+	spec := currentReadSpec(fixture.acceptanceFixture, claim.Run.ID(), "token-parent-resume",
+		claimAt.Add(time.Second))
+	spec = plannedCurrentReadSpec(t, fixture.store, spec)
+	result, err := fixture.store.FinalizeAgentCurrentRead(ctx, spec)
+	if err != nil || result.Replayed {
+		t.Fatalf("FinalizeAgentCurrentRead(parent-resume) = (%#v,%v)", result, err)
+	}
+	projection := result.Projection
+	if projection.ActionWork().Ref() != fixture.parent ||
+		projection.SourceEvent().Key().EventID() != handling.EventID() ||
+		len(projection.ChildResults()) != len(fixture.children) ||
+		!sameOperationKinds(projection.AllowedActions(),
+			[]model.OperationKind{model.OperationTeamworkDeliver, model.OperationResolveRetry}) {
+		t.Fatalf("parent-resume projection = %s", projection.CanonicalJSON().String())
+	}
+	for index, child := range projection.ChildResults() {
+		if child.Ordinal() != uint8(index) || child.WorkRef() != fixture.children[index] ||
+			child.State() != model.WorkClosed || child.Version() != 4 {
+			t.Fatalf("child result %d = %#v", index, child)
+		}
+	}
+	if len(result.Receipt.ArtifactRefs()) != 1 ||
+		result.Receipt.ArtifactRefs()[0].RootDigest() != fixture.artifacts[0][0].RootDigest() ||
+		!strings.Contains(result.Receipt.CanonicalJSON().String(), `"child_results"`) {
+		t.Fatalf("parent-resume receipt artifacts/json = %s", result.Receipt.CanonicalJSON().String())
+	}
+	replaySpec := currentReadSpec(fixture.acceptanceFixture, claim.Run.ID(), "token-parent-resume",
+		claimAt.Add(2*time.Second))
+	replaySpec.ArtifactViews = result.Receipt.ArtifactRefs()
+	replay, err := fixture.store.FinalizeAgentCurrentRead(ctx, replaySpec)
+	if err != nil || !replay.Replayed ||
+		replay.Receipt.CanonicalJSON().String() != result.Receipt.CanonicalJSON().String() {
+		t.Fatalf("parent-resume replay = (%#v,%v)", replay, err)
+	}
+}
+
 func currentReadSpec(fixture *acceptanceFixture, run model.RunID, token string,
 	at time.Time,
 ) AgentCurrentReadSpec {

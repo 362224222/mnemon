@@ -367,8 +367,10 @@ func newDerivationDispositionFixture(t *testing.T, allTerminal bool) *derivation
 
 	parentID, _ := model.ParseWorkID("work-parent")
 	fixture.parent, _ = model.NewWorkRef(base.reviewers[0], parentID)
+	fixture.insertEvent(t, "event-parent-offered", fixture.parent, base.reviewers[0], base.node.PeerID(),
+		model.EventReviewOffered, 1, base.now.Add(-time.Second), nil, nil)
 	fixture.insertEvent(t, "event-parent-active", fixture.parent, base.reviewers[0], base.node.PeerID(),
-		model.EventReviewAccepted, 1, base.now, nil, nil)
+		model.EventReviewAccepted, 2, base.now, nil, nil)
 	fixture.insertWork(t, fixture.parent, base.node.PeerID(), model.WorkActive, 2,
 		"event-parent-active", base.now)
 
@@ -449,24 +451,61 @@ func (fixture *derivationDispositionFixture) insertEventAtVersion(t *testing.T, 
 	if origin == fixture.node.PeerID() {
 		source = model.EventSourceLocal
 	}
-	digest := model.Sum([]byte(eventText))
+	eventID, err := model.ParseEventID(eventText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originEpoch, err := model.ParseOriginEpoch(epoch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originHeadHash, err := model.DigestFromBytes(memberHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originHead, err := model.NewRecordHead(memberRevision, originHeadHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rosterHeadHash, err := model.DigestFromBytes(rosterHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rosterHead, err := model.NewRecordHead(rosterRevision, rosterHeadHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope, err := model.NewEventScope(fixture.channel, origin, originEpoch, sequence, sequence,
+		originHead, rosterHead, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event, err := model.NewEvent(model.EventSpec{ID: eventID, Scope: scope, Source: source,
+		ActorPrincipal: "principal-derivation", Type: eventType, Audience: audience,
+		Summary: "derivation event", Payload: payloadJSON, Artifacts: artifacts,
+		CausedBy: causes, CreatedAt: acceptedAt, AcceptedAt: acceptedAt})
+	if err != nil {
+		t.Fatal(err)
+	}
 	mustExec(t, fixture.store, `INSERT INTO events(event_id,schema_version,channel_id,origin_peer_id,
 		origin_epoch,origin_seq,channel_seq,origin_member_revision,origin_member_record_hash,
 		publication_roster_revision,publication_roster_hash,source,actor_principal,event_type,
 		audience_json,resource_json,work_home_peer_id,work_id,summary,payload_json,artifact_roots_json,
 		caused_by_json,canonical_event_json,event_digest,canonical_publication_json,publication_digest,
 		origin_signature,created_at,accepted_at) VALUES(?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
-		?,'{}',?,'{}',?,X'01',?,?)`, eventText, fixture.channel.String(), origin.String(), epoch,
+		?,?,?,?,?,X'01',?,?)`, eventText, fixture.channel.String(), origin.String(), epoch,
 		sequence, sequence, memberRevision, memberHash, rosterRevision, rosterHash, string(source),
 		"principal-derivation", string(eventType), audienceJSON.Bytes(), resourceJSON.Bytes(),
 		ref.HomePeerID().String(), ref.WorkID().String(), "derivation event", payloadJSON.Bytes(),
-		artifactJSON.Bytes(), causedByJSON.Bytes(), digest.Bytes(), digest.Bytes(),
-		storeTime(acceptedAt), storeTime(acceptedAt))
+		artifactJSON.Bytes(), causedByJSON.Bytes(), event.CanonicalJSON().Bytes(), event.Digest().Bytes(),
+		event.CanonicalJSON().Bytes(), event.Digest().Bytes(), storeTime(acceptedAt), storeTime(acceptedAt))
 }
 
 func derivationFixtureWorkVersion(t *testing.T, eventType model.EventType) uint64 {
 	t.Helper()
 	switch eventType {
+	case model.EventReviewOffered:
+		return 1
 	case model.EventReviewAccepted:
 		return 1
 	case model.EventReviewDeliveryReady, model.EventReviewDelivered, model.EventReviewCancelled,
@@ -486,6 +525,13 @@ func derivationFixturePayload(t *testing.T, eventType model.EventType, workVersi
 	t.Helper()
 	var value any
 	switch eventType {
+	case model.EventReviewOffered:
+		value = struct {
+			Content     string `json:"content"`
+			Deadline    string `json:"deadline"`
+			Iteration   uint8  `json:"iteration"`
+			WorkVersion uint64 `json:"work_version"`
+		}{"fixture parent work", deadline.UTC().Format(time.RFC3339Nano), iteration, workVersion}
 	case model.EventReviewAccepted, model.EventReviewDelivered, model.EventReviewDeclined:
 		value = struct {
 			Iteration   uint8  `json:"iteration"`
@@ -667,7 +713,7 @@ func (fixture *derivationDispositionFixture) advanceParent(t *testing.T, eventTy
 	t.Helper()
 	acceptedAt := fixture.now.Add(20 * time.Second)
 	fixture.insertEvent(t, "event-parent-advanced", fixture.parent, fixture.parent.HomePeerID(),
-		fixture.node.PeerID(), eventType, 2, acceptedAt, nil, nil)
+		fixture.node.PeerID(), eventType, 3, acceptedAt, nil, nil)
 	stateData := fixture.eventPayload(t, "event-parent-advanced")
 	mustExec(t, fixture.store, `UPDATE works SET version=?,state=?,state_json=?,updated_by_event=?,updated_at=?
 		WHERE home_peer_id=? AND work_id=?`, version, string(state), stateData.Bytes(), "event-parent-advanced",
