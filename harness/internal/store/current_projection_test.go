@@ -7,6 +7,7 @@ import (
 )
 
 func TestDeriveCurrentActionsFailsClosedWithoutExactUpdate(t *testing.T) {
+	t.Parallel()
 	want := []model.OperationKind{
 		model.OperationResolveNoAction,
 		model.OperationResolveRetry,

@@ -11,6 +11,7 @@ import (
 )
 
 func TestRecoveryAuthoritySurvivesLostIdentityAndCredentialButStillRequiresWriter(t *testing.T) {
+	t.Parallel()
 	fixture := newDaemonFixture(t, true)
 	expected := daemonFixtureAuthorityResponse(t, fixture)
 	credentialPath := filepath.Join(fixture.nodeState, "profiles",

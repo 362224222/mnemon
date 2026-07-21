@@ -11,6 +11,7 @@ import (
 )
 
 func TestBindControllerActionPolicyVerifiesAndFreezesTheInstallationRevision(t *testing.T) {
+	t.Parallel()
 	bundle, err := assets.Load()
 	if err != nil {
 		t.Fatal(err)

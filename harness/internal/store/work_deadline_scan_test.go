@@ -11,6 +11,7 @@ import (
 )
 
 func TestScanWorkDeadlinesIsBoundedDeterministicAndSeparatesExhaustion(t *testing.T) {
+	t.Parallel()
 	fixture := newAcceptanceFixture(t, 1)
 	works := make([]model.ReviewWork, 10)
 	for index := range works {
@@ -81,6 +82,7 @@ func assertRestartedDeadlineScan(t *testing.T, candidates, prior []WorkDeadlineC
 }
 
 func TestScanWorkDeadlinesSkipsFrozenChannelWithoutStarvingHealthyWork(t *testing.T) {
+	t.Parallel()
 	fixture := newAcceptanceFixture(t, 1)
 	frozenChannel := fixture.channel
 	for index := 0; index < WorkDeadlineScanLimit; index++ {

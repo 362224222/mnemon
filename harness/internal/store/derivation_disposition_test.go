@@ -13,6 +13,7 @@ import (
 )
 
 func TestReconcileWorkDerivationDispositionWaitsForEveryChildThenResumes(t *testing.T) {
+	t.Parallel()
 	fixture := newDerivationDispositionFixture(t, false)
 	ctx := context.Background()
 	if err := fixture.store.ReconcileWorkDerivationDisposition(ctx, fixture.children[0]); err != nil {
@@ -37,6 +38,7 @@ func TestReconcileWorkDerivationDispositionWaitsForEveryChildThenResumes(t *test
 }
 
 func TestReconcileWorkDerivationDispositionRecordsParentStaleWithoutWake(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name      string
 		eventType model.EventType
@@ -140,6 +142,7 @@ func TestReconcileWorkDerivationDispositionIsAtomicConcurrentAndRestartSafe(t *t
 }
 
 func TestReconcileWorkDerivationDispositionRejectsInvalidClosedResultChain(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name    string
 		replace func(*testing.T, *derivationDispositionFixture)
@@ -190,6 +193,7 @@ func TestReconcileWorkDerivationDispositionRejectsInvalidClosedResultChain(t *te
 }
 
 func TestReconcileWorkDerivationDispositionRejectsClosedCauseFromPriorIteration(t *testing.T) {
+	t.Parallel()
 	fixture := newDerivationDispositionFixture(t, true)
 	child := fixture.children[0]
 	deliveredAt := fixture.now.Add(49 * time.Second)

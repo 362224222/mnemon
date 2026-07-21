@@ -5,10 +5,12 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -464,5 +466,87 @@ func assertMode(t *testing.T, path string, want os.FileMode) {
 	}
 	if got := info.Mode().Perm(); got != want {
 		t.Fatalf("%s mode = %04o, want %04o", path, got, want)
+	}
+}
+
+func openStoreTestTemplateCopy(t *testing.T, path string) *Store {
+	t.Helper()
+	copyStoreTestTemplate(t, path)
+	canonical, err := privateDatabasePath(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lockFile, err := acquireWriterLock(canonical + ".writer.lock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyPrivateRegular(canonical); err != nil {
+		_ = releaseWriterLock(lockFile)
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", sqliteDSN(canonical))
+	if err != nil {
+		_ = releaseWriterLock(lockFile)
+		t.Fatal(err)
+	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	return &Store{db: db, path: canonical, lockFile: lockFile}
+}
+
+var storeTestTemplatePath = sync.OnceValues(func() (string, error) {
+	dir, err := os.MkdirTemp("", "mnemon-store-schema-template-")
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, "node", "node.db")
+	st, err := Open(context.Background(), path)
+	if err != nil {
+		_ = os.RemoveAll(dir)
+		return "", err
+	}
+	if _, err := st.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+		_ = st.Close()
+		_ = os.RemoveAll(dir)
+		return "", err
+	}
+	if err := st.Close(); err != nil {
+		_ = os.RemoveAll(dir)
+		return "", err
+	}
+	return path, nil
+})
+
+func copyStoreTestTemplate(t *testing.T, path string) {
+	t.Helper()
+	template, err := storeTestTemplatePath()
+	if err != nil {
+		t.Fatalf("initialize Store schema template: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), directoryMode); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Dir(path), directoryMode); err != nil {
+		t.Fatal(err)
+	}
+	source, err := os.Open(template)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	destination, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, privateFileMode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, copyErr := io.Copy(destination, source)
+	closeErr := destination.Close()
+	if copyErr != nil {
+		t.Fatal(copyErr)
+	}
+	if closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	if err := os.Chmod(path, privateFileMode); err != nil {
+		t.Fatal(err)
 	}
 }

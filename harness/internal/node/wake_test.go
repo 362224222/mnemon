@@ -17,6 +17,7 @@ import (
 )
 
 func TestAdmittedWakeStoreEntersAndReleasesEveryOperationIndependently(t *testing.T) {
+	t.Parallel()
 	fixture := newDaemonFixture(t, true)
 	st, err := store.OpenExisting(context.Background(), filepath.Join(fixture.nodeState, "node.db"))
 	if err != nil {
@@ -39,6 +40,7 @@ func TestAdmittedWakeStoreEntersAndReleasesEveryOperationIndependently(t *testin
 }
 
 func TestAdmittedWakeStoreRejectsEveryOperationBeforeStore(t *testing.T) {
+	t.Parallel()
 	rejected := errors.New("worker admission rejected")
 	for _, test := range wakeStoreOperationTests() {
 		t.Run(test.name, func(t *testing.T) {
@@ -60,6 +62,7 @@ func TestAdmittedWakeStoreRejectsEveryOperationBeforeStore(t *testing.T) {
 }
 
 func TestAdmittedWakeStoreProvesRetainedSealPreventedStoreCall(t *testing.T) {
+	t.Parallel()
 	fixture := newDaemonFixture(t, true)
 	st, err := store.OpenExisting(context.Background(), filepath.Join(fixture.nodeState, "node.db"))
 	if err != nil {
@@ -97,6 +100,7 @@ func TestAdmittedWakeStoreProvesRetainedSealPreventedStoreCall(t *testing.T) {
 }
 
 func TestWakeAttachmentFilesystemWorkStaysOutsideAdmission(t *testing.T) {
+	t.Parallel()
 	t.Run("scan failure precedes first Store entry", func(t *testing.T) {
 		fixture := newDaemonFixture(t, true)
 		admission := &wakeAdmissionSpy{}
@@ -152,6 +156,7 @@ func TestWakeAttachmentFilesystemWorkStaysOutsideAdmission(t *testing.T) {
 }
 
 func TestManagedWakeWorkerDoesNotHoldAdmissionAcrossAdapterRun(t *testing.T) {
+	t.Parallel()
 	fixture := newDaemonFixture(t, true)
 	st, err := store.OpenExisting(context.Background(), filepath.Join(fixture.nodeState, "node.db"))
 	if err != nil {

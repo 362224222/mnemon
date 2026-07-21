@@ -6,6 +6,7 @@ import (
 )
 
 func TestControlMutationShutdownPreparerFuncRejectsNil(t *testing.T) {
+	t.Parallel()
 	if _, _, apiErr := (MutationShutdownPreparerFunc(nil)).
 		PrepareMutationShutdown(context.Background(), RequestMetadata{}); apiErr == nil ||
 		apiErr.Code != CodeInternal {

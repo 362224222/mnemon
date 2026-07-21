@@ -11,6 +11,7 @@ import (
 )
 
 func TestDurableChannelMemberReconcileBackendTranslatesExactFences(t *testing.T) {
+	t.Parallel()
 	target := newChannelMemberReconcilerTarget(t, "member-reconciler-backend")
 	st := &recordingChannelMemberStore{baseline: store.ChannelDataBaseline{
 		ChannelID: target.channel.ID(), OriginPeerID: target.localMember.PeerID(),
@@ -61,6 +62,7 @@ func TestDurableChannelMemberReconcileBackendTranslatesExactFences(t *testing.T)
 }
 
 func TestNewChannelMemberReconcilerRejectsIncompleteComposition(t *testing.T) {
+	t.Parallel()
 	if worker, err := NewChannelMemberReconciler(ChannelMemberReconcilerOptions{}); worker != nil || err == nil {
 		t.Fatalf("incomplete worker = (%#v,%v)", worker, err)
 	}

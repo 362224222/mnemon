@@ -11,6 +11,7 @@ import (
 )
 
 func TestCommitManagedAcceptanceCompletesContextlessRunAndReplays(t *testing.T) {
+	t.Parallel()
 	fixture := newAcceptanceFixture(t, 1)
 	reservation := reserveManagedOfferForAcceptance(t, fixture, "managed-initiate", fixture.now)
 	authority := localAuthority(reservation.Operation)
@@ -39,6 +40,7 @@ func TestCommitManagedAcceptanceCompletesContextlessRunAndReplays(t *testing.T) 
 }
 
 func TestCommitManagedAcceptanceCompletesClaimWithExactCurrentAction(t *testing.T) {
+	t.Parallel()
 	fixture := newAcceptanceFixture(t, 1)
 	initial := reserveManagedOfferForAcceptance(t, fixture, "managed-current-source", fixture.now)
 	initialAuthority := localAuthority(initial.Operation)
@@ -111,6 +113,7 @@ func TestCommitManagedAcceptanceCompletesClaimWithExactCurrentAction(t *testing.
 }
 
 func TestCommitManagedAcceptanceRollsBackHandlingAndRunOnLateFailure(t *testing.T) {
+	t.Parallel()
 	fixture := newAcceptanceFixture(t, 1)
 	initial := reserveManagedOfferForAcceptance(t, fixture, "managed-rollback-source", fixture.now)
 	initialAuthority := localAuthority(initial.Operation)

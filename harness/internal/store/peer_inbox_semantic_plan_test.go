@@ -11,6 +11,7 @@ import (
 )
 
 func TestPeerInboxSemanticPlanBindsSnapshotAndDefensivelyCopiesResponses(t *testing.T) {
+	t.Parallel()
 	fixture := newPeerInboxFixture(t, "semantic-frozen-plan", 0)
 	installPeerInboxSemanticLocalAuthority(t, fixture)
 	publication, _, _ := peerInboxSemanticCurrentWorkPublication(t, fixture,
@@ -49,6 +50,7 @@ func TestPeerInboxSemanticPlanBindsSnapshotAndDefensivelyCopiesResponses(t *test
 }
 
 func TestPeerInboxSemanticPlanRejectsRetryAndForgedEffects(t *testing.T) {
+	t.Parallel()
 	fixture := newPeerInboxFixture(t, "semantic-plan-invalid", 0)
 	installPeerInboxSemanticLocalAuthority(t, fixture)
 	publication, _, _ := peerInboxSemanticCurrentWorkPublication(t, fixture,
@@ -125,6 +127,7 @@ func TestPeerInboxSemanticPlanRejectsRetryAndForgedEffects(t *testing.T) {
 }
 
 func TestPeerInboxSemanticRequestDigestBindsFrozenPlanProjection(t *testing.T) {
+	t.Parallel()
 	fixture := newPeerInboxFixture(t, "semantic-plan-request-digest", 0)
 	installPeerInboxSemanticLocalAuthority(t, fixture)
 	publication, _, _ := peerInboxSemanticCurrentWorkPublication(t, fixture,
@@ -183,6 +186,7 @@ func TestPeerInboxSemanticRequestDigestBindsFrozenPlanProjection(t *testing.T) {
 }
 
 func TestPeerInboxSemanticReplayRejectsDifferentFrozenPlan(t *testing.T) {
+	t.Parallel()
 	fixture := newPeerInboxFixture(t, "semantic-plan-replay", 0)
 	installPeerInboxSemanticLocalAuthority(t, fixture)
 	publication, _, _ := peerInboxSemanticCurrentWorkPublication(t, fixture,

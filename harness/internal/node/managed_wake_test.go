@@ -40,6 +40,7 @@ func (install *managedRuntimeInstallationFixture) Verify(ctx context.Context,
 }
 
 func TestNewManagedWakeAdapterFactoryRejectsInvalidCompositionAndAuthority(t *testing.T) {
+	t.Parallel()
 	fixture := newDaemonFixture(t, true)
 	install := &managedRuntimeInstallationFixture{executable: "/usr/bin/codex"}
 	if factory, err := NewManagedWakeAdapterFactory(".", install); factory != nil || err == nil {
@@ -98,6 +99,7 @@ func TestNewManagedWakeAdapterFactoryRejectsInvalidCompositionAndAuthority(t *te
 }
 
 func TestManagedWakeAdapterFactorySelectsClaudeRuntime(t *testing.T) {
+	t.Parallel()
 	fixture := newDaemonFixture(t, true)
 	profileSpec := fixture.profile.Spec()
 	profileSpec.Host, profileSpec.Runtime = model.HostClaudeCode, model.RuntimeClaudeCLI
@@ -122,6 +124,7 @@ func TestManagedWakeAdapterFactorySelectsClaudeRuntime(t *testing.T) {
 }
 
 func TestManagedWakeAdapterFactoryUsesEachCallerContext(t *testing.T) {
+	t.Parallel()
 	fixture := newDaemonFixture(t, true)
 	install := &managedRuntimeInstallationFixture{
 		executable: "/usr/bin/codex",
@@ -161,6 +164,7 @@ func TestManagedWakeAdapterFactoryUsesEachCallerContext(t *testing.T) {
 }
 
 func TestManagedWakeEnvironmentIsClosedAndDeterministic(t *testing.T) {
+	t.Parallel()
 	input := []string{
 		"PATH=/managed/bin", "HOME=/home/agent", "CODEX_HOME=/home/agent/.codex",
 		"XDG_CACHE_HOME=/home/agent/.cache", "LC_ALL=C.UTF-8", "LANG=en_US.UTF-8",

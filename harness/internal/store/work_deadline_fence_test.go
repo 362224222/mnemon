@@ -20,6 +20,7 @@ type deadlineCompetingFixture struct {
 }
 
 func TestCommitWorkExpiryFencesCompetingOperationLeaseDrift(t *testing.T) {
+	t.Parallel()
 	test := newDeadlineCompetingFixture(t, "lease-drift")
 	reclaim := test.operationSpec
 	reclaim.LeaseOwner = "deadline-operation-reclaimed"
@@ -49,6 +50,7 @@ func TestCommitWorkExpiryFencesCompetingOperationLeaseDrift(t *testing.T) {
 }
 
 func TestCommitWorkExpiryAtomicallyRejectsExactCompetingOperation(t *testing.T) {
+	t.Parallel()
 	test := newDeadlineCompetingFixture(t, "atomic-rejection")
 	mustExec(t, test.fixture.store, `CREATE TRIGGER test_timer_expiry_rejection_failure
 		BEFORE UPDATE ON operations WHEN OLD.operation_id='`+test.operation.ID().String()+`'

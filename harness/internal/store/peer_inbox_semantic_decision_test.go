@@ -15,6 +15,7 @@ import (
 )
 
 func TestPeerInboxSemanticDecisionResponseEventIDIsStableAndOrdinalBound(t *testing.T) {
+	t.Parallel()
 	seed := model.Sum([]byte("decision-response-seed"))
 	want := []string{
 		"event-semantic-e7b895ed3a4fdbf45ab5c961d822c6dc67e387ad511aab17a93e9bdba9dca66a",
@@ -43,6 +44,7 @@ func TestPeerInboxSemanticDecisionResponseEventIDIsStableAndOrdinalBound(t *test
 }
 
 func TestPeerInboxSemanticDecisionCanonicalRoundTripZeroOneAndTwoResponses(t *testing.T) {
+	t.Parallel()
 	names := []string{"zero", "one", "two"}
 	for responseCount := 0; responseCount <= 2; responseCount++ {
 		t.Run(names[responseCount], func(t *testing.T) {
@@ -69,6 +71,7 @@ func TestPeerInboxSemanticDecisionCanonicalRoundTripZeroOneAndTwoResponses(t *te
 }
 
 func TestPeerInboxSemanticDecisionDecoderRejectsNoncanonicalAndOpenShapes(t *testing.T) {
+	t.Parallel()
 	valid := peerInboxSemanticDecisionTestValue(1)
 	canonical := mustEncodePeerInboxSemanticDecisionTest(t, valid)
 
@@ -151,6 +154,7 @@ func TestPeerInboxSemanticDecisionDecoderRejectsNoncanonicalAndOpenShapes(t *tes
 }
 
 func TestPeerInboxSemanticDecisionEnforcesExact64KiBBoundary(t *testing.T) {
+	t.Parallel()
 	atLimit, atLimitJSON := peerInboxSemanticDecisionTestSized(t, 65536)
 	encoded, err := encodePeerInboxSemanticDecision(atLimit)
 	if err != nil || len(encoded.Bytes()) != 65536 || encoded.String() != atLimitJSON.String() {

@@ -126,10 +126,7 @@ func TestStoreTimeIsFixedWidthAndLexicallyOrdered(t *testing.T) {
 func TestAgentHandlingPersistsAcrossRestart(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "node", "node.db")
-	st, err := Open(context.Background(), path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := openStoreTestTemplateCopy(t, path)
 	insertNode(t, st.db)
 	insertProfile(t, st.db)
 	insertChannelAndEvent(t, st.db)
@@ -144,7 +141,7 @@ func TestAgentHandlingPersistsAcrossRestart(t *testing.T) {
 	if err := st.Close(); err != nil {
 		t.Fatal(err)
 	}
-	st, err = Open(context.Background(), path)
+	st, err := Open(context.Background(), path)
 	if err != nil {
 		t.Fatal(err)
 	}

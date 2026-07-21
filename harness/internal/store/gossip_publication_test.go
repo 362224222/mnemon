@@ -16,6 +16,7 @@ import (
 )
 
 func TestGossipPublicationLeaseRetryPublishAndExactReplay(t *testing.T) {
+	t.Parallel()
 	fixture := newAcceptanceFixture(t, 1)
 	_, authority := fixture.reserveOffer(t, "gossip-lifecycle", nil)
 	acceptance := fixture.offer(t, authority, "gossip-lifecycle", fixture.reviewers, nil, nil)
@@ -92,6 +93,7 @@ func TestGossipPublicationLeaseRetryPublishAndExactReplay(t *testing.T) {
 }
 
 func TestGossipPublicationConcurrentClaimHasOneOwnerGeneration(t *testing.T) {
+	t.Parallel()
 	fixture := acceptedGossipFixture(t, "gossip-concurrent")
 	at := fixture.now.Add(2 * time.Second)
 	const workers = 12
@@ -143,6 +145,7 @@ func TestGossipPublicationConcurrentClaimHasOneOwnerGeneration(t *testing.T) {
 }
 
 func TestGossipPublicationLeaseRecoversAfterRestartAndPublishCrash(t *testing.T) {
+	t.Parallel()
 	fixture, acceptance := acceptedGossipFixtureWithPublication(t, "gossip-restart")
 	claimAt := fixture.now.Add(2 * time.Second)
 	first := claimPublication(t, fixture.store, fixture.channel, "gossip-before-crash",
@@ -183,6 +186,7 @@ func TestGossipPublicationLeaseRecoversAfterRestartAndPublishCrash(t *testing.T)
 }
 
 func TestGossipPublicationChannelIsolationAndAuthorityGenerationFence(t *testing.T) {
+	t.Parallel()
 	fixture, primaryPublication := acceptedGossipFixtureWithPublication(t, "gossip-isolation")
 	secondaryChannel, secondaryPublication := installSecondaryGossipPublication(t, fixture,
 		"gossip-isolation-secondary", 101)
@@ -231,6 +235,7 @@ func TestGossipPublicationChannelIsolationAndAuthorityGenerationFence(t *testing
 }
 
 func TestGossipPublicationRejectsUnavailableAuthorityAndOversizeDiagnostic(t *testing.T) {
+	t.Parallel()
 	t.Run("terminal Channel", func(t *testing.T) {
 		fixture := acceptedGossipFixture(t, "gossip-terminal")
 		signed := acceptanceSignedChannel(t, fixture)

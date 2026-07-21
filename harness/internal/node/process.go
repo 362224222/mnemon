@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -51,7 +52,6 @@ type DaemonProcessLauncher struct {
 	executable string
 	workspace  string
 	nodeState  string
-
 	// The callback is deliberately private and nil in production. Tests use it
 	// to make the otherwise tiny post-Start/pre-publication failure window
 	// deterministic without a package-global failpoint.
@@ -701,7 +701,6 @@ func daemonPIDMatches(state *identityNodeState, expected *daemonPIDSnapshot) (bo
 	}
 	return os.SameFile(expected.info, current.info) && bytes.Equal(expected.encoded, current.encoded), nil
 }
-
 func daemonProcessAlive(pid int) (bool, error) {
 	err := unix.Kill(pid, 0)
 	switch {
@@ -782,7 +781,6 @@ func (launch *daemonProcessLaunch) Terminate(ctx context.Context) error {
 	launch.state = daemonProcessTerminated
 	return errors.Join(processErr, cleanupErr)
 }
-
 func (launch *daemonProcessLaunch) abortLockedState(state *identityNodeState) error {
 	if launch == nil {
 		return nil
@@ -798,7 +796,6 @@ func (launch *daemonProcessLaunch) abortLockedState(state *identityNodeState) er
 	launch.state = daemonProcessTerminated
 	return errors.Join(processErr, cleanupErr)
 }
-
 func terminateDaemonCommand(ctx context.Context, command *exec.Cmd) error {
 	if command == nil || command.Process == nil {
 		return daemonProcessError("terminate child", errors.New("child process is unavailable"))
@@ -810,23 +807,27 @@ func terminateDaemonCommand(ctx context.Context, command *exec.Cmd) error {
 	go func() { waited <- command.Wait() }()
 	select {
 	case err := <-waited:
-		if err != nil {
-			var exitError *exec.ExitError
-			if !errors.As(err, &exitError) {
-				return daemonProcessError("wait for child", err)
-			}
-		}
-		return nil
+		return unexpectedDaemonWaitError("wait for child", err)
 	case <-ctx.Done():
 		_ = command.Process.Kill()
-		err := <-waited
-		var exitError *exec.ExitError
-		if err != nil && !errors.As(err, &exitError) {
-			return errors.Join(daemonProcessError("wait for child", err),
-				daemonProcessError("terminate child", ctx.Err()))
-		}
-		return daemonProcessError("terminate child", ctx.Err())
+		return waitDaemonCommandAfterKill(waited, ctx.Err())
 	}
+}
+func waitDaemonCommandAfterKill(waited <-chan error, cause error) error {
+	termination := daemonProcessError("terminate child", cause)
+	select {
+	case err := <-waited:
+		return errors.Join(unexpectedDaemonWaitError("wait for child", err), termination)
+	case <-time.After(daemonCleanupDeadline):
+	}
+	return errors.Join(daemonProcessError("wait for killed child", errors.New("bounded wait expired")), termination)
+}
+func unexpectedDaemonWaitError(stage string, err error) error {
+	var exitError *exec.ExitError
+	if err == nil || errors.As(err, &exitError) {
+		return nil
+	}
+	return daemonProcessError(stage, err)
 }
 
 func cleanupPublishedDaemonPID(ctx context.Context, nodeState string,
@@ -846,7 +847,6 @@ func cleanupPublishedDaemonPID(ctx context.Context, nodeState string,
 	defer state.unlock()
 	return removeDaemonPIDIfOwned(state, expected)
 }
-
 func removeDaemonPIDIfOwned(state *identityNodeState, expected *daemonPIDSnapshot) error {
 	matches, err := daemonPIDMatches(state, expected)
 	if err != nil {

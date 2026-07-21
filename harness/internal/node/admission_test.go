@@ -10,6 +10,7 @@ import (
 )
 
 func TestControllerAdmissionGateDrainsEnteredWorkAndRejectsAfterSeal(t *testing.T) {
+	t.Parallel()
 	gate := newControllerAdmissionGate()
 	release, err := gate.Enter(context.Background())
 	if err != nil || release == nil {
@@ -52,6 +53,7 @@ func TestControllerAdmissionGateDrainsEnteredWorkAndRejectsAfterSeal(t *testing.
 }
 
 func TestControllerAdmissionGateCancellationReopensWithoutStealingAnotherSeal(t *testing.T) {
+	t.Parallel()
 	gate := newControllerAdmissionGate()
 	release, err := gate.Enter(context.Background())
 	if err != nil {
@@ -92,6 +94,7 @@ func TestControllerAdmissionGateCancellationReopensWithoutStealingAnotherSeal(t 
 }
 
 func TestControllerAdmissionGateWorkerWaitsForExactGenerationReopen(t *testing.T) {
+	t.Parallel()
 	gate := newControllerAdmissionGate()
 	generation, err := gate.seal(context.Background())
 	if err != nil {
@@ -152,6 +155,7 @@ func TestControllerAdmissionGateWorkerWaitsForExactGenerationReopen(t *testing.T
 }
 
 func TestControllerAdmissionGateWorkerCancellationLeavesRetainedSeal(t *testing.T) {
+	t.Parallel()
 	gate := newControllerAdmissionGate()
 	generation, err := gate.seal(context.Background())
 	if err != nil {
@@ -185,6 +189,7 @@ func TestControllerAdmissionGateWorkerCancellationLeavesRetainedSeal(t *testing.
 }
 
 func TestControllerAdmissionGateWorkerDoesNotMissConcurrentReopen(t *testing.T) {
+	t.Parallel()
 	for iteration := 0; iteration < 100; iteration++ {
 		gate := newControllerAdmissionGate()
 		generation, err := gate.seal(context.Background())
@@ -212,6 +217,7 @@ func TestControllerAdmissionGateWorkerDoesNotMissConcurrentReopen(t *testing.T) 
 }
 
 func TestControllerAdmissionServiceWrapsEveryManagedRoute(t *testing.T) {
+	t.Parallel()
 	gate := newControllerAdmissionGate()
 	next := &recordingAdmissionService{}
 	service := controllerAdmissionService{gate: gate, next: next}
@@ -266,6 +272,7 @@ func TestControllerAdmissionServiceWrapsEveryManagedRoute(t *testing.T) {
 }
 
 func TestControllerAdmissionServiceKeepsHandlerEnteredUntilStoreWorkReturns(t *testing.T) {
+	t.Parallel()
 	gate := newControllerAdmissionGate()
 	next := &blockingAdmissionService{entered: make(chan struct{}), proceed: make(chan struct{})}
 	service := controllerAdmissionService{gate: gate, next: next}

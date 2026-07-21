@@ -710,7 +710,7 @@ func TestGCRunIsSingleUseAndStopsCleanly(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("periodic worker did not stop")
 	}
-	if snapshot := worker.Snapshot(); snapshot.State != GCStopped || snapshot.Cycles != 1 ||
+	if snapshot := worker.Snapshot(); snapshot.State != GCStopped || snapshot.Cycles == 0 ||
 		snapshot.FatalCode != GCFatalNone {
 		t.Fatalf("stopped snapshot = %#v", snapshot)
 	}

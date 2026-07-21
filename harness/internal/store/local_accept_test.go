@@ -17,6 +17,7 @@ import (
 )
 
 func TestCommitLocalAcceptancePersistsCompleteEvidenceAndReplaysAfterRestart(t *testing.T) {
+	t.Parallel()
 	fixture := newAcceptanceFixture(t, 1)
 	operation, authority := fixture.reserveOffer(t, "single", nil)
 	root := verifiedRoot(t, "accept-root", `{"entries":[],"kind":"review","total_bytes":0}`, 0)
@@ -62,6 +63,7 @@ func TestCommitLocalAcceptancePersistsCompleteEvidenceAndReplaysAfterRestart(t *
 }
 
 func TestApplyLocalAcceptanceTxParticipatesInCallerTransaction(t *testing.T) {
+	t.Parallel()
 	fixture := newAcceptanceFixture(t, 1)
 	operation, authority := fixture.reserveOffer(t, "outer-transaction", nil)
 	spec := fixture.offer(t, authority, "outer-transaction", fixture.reviewers, nil, nil)
@@ -131,6 +133,7 @@ func TestApplyLocalAcceptanceTxParticipatesInCallerTransaction(t *testing.T) {
 }
 
 func TestCommitLocalAcceptanceTeamBatchIsAllOrNothing(t *testing.T) {
+	t.Parallel()
 	t.Run("committed", func(t *testing.T) {
 		fixture := newAcceptanceFixture(t, 2)
 		_, authority := fixture.reserveOffer(t, "team", nil)
@@ -174,10 +177,7 @@ type acceptanceFixture struct {
 func newAcceptanceFixture(t *testing.T, reviewerCount int) *acceptanceFixture {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "node", "node.db")
-	st, err := Open(context.Background(), path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := openStoreTestTemplateCopy(t, path)
 	fixture := &acceptanceFixture{store: st, path: path,
 		now: time.Date(2026, 7, 16, 13, 0, 0, 0, time.UTC)}
 	t.Cleanup(func() {

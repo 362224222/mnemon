@@ -21,6 +21,7 @@ import (
 )
 
 func TestOpenDaemonBindsIdentityStoreCredentialAssetsAndSocket(t *testing.T) {
+	t.Parallel()
 	fixture := newDaemonFixture(t, true)
 	daemon, err := OpenDaemon(context.Background(), DaemonOptions{Workspace: fixture.workspace,
 		Clock: controllerTestClock{fixture.profile.UpdatedAt()}, Install: fixture.install})
@@ -61,6 +62,7 @@ func TestOpenDaemonBindsIdentityStoreCredentialAssetsAndSocket(t *testing.T) {
 }
 
 func TestOpenDaemonRejectsMissingActionAuthorityBeforeStoreOrInstallationVerification(t *testing.T) {
+	t.Parallel()
 	fixture := newDaemonFixture(t, true)
 	writer, err := store.OpenExisting(context.Background(), filepath.Join(fixture.nodeState, "node.db"))
 	if err != nil {
@@ -87,6 +89,7 @@ func TestOpenDaemonRejectsMissingActionAuthorityBeforeStoreOrInstallationVerific
 }
 
 func TestOpenDaemonRejectsAuthorityDriftAndNeverCreatesMissingDatabase(t *testing.T) {
+	t.Parallel()
 	t.Run("identity replacement", func(t *testing.T) {
 		fixture := newDaemonFixture(t, true)
 		if err := os.Remove(filepath.Join(fixture.nodeState, identityKeyName)); err != nil {
@@ -168,6 +171,7 @@ func TestOpenDaemonRejectsAuthorityDriftAndNeverCreatesMissingDatabase(t *testin
 }
 
 func TestOpenDaemonComposesWakeAdapterFromExactDurableAuthority(t *testing.T) {
+	t.Parallel()
 	fixture := newDaemonFixture(t, true)
 	var captured WakeAdapterFactoryOptions
 	called := 0
@@ -200,6 +204,7 @@ func TestOpenDaemonComposesWakeAdapterFromExactDurableAuthority(t *testing.T) {
 }
 
 func TestOpenDaemonFactoryFailureAndNilAdapterReleaseStoreAuthority(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		factory     WakeAdapterFactory
@@ -257,6 +262,7 @@ func TestOpenManagedDaemonRejectsMissingFactoryAfterConsumingValidPermit(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
+	descriptor := descriptorIdentity(t, childFD)
 	t.Setenv(daemonLaunchPermitEnvironment, strconv.Itoa(childFD))
 
 	daemon, err := OpenManagedDaemon(context.Background(), DaemonOptions{
@@ -266,7 +272,7 @@ func TestOpenManagedDaemonRejectsMissingFactoryAfterConsumingValidPermit(t *test
 	if daemon != nil || !errors.Is(err, ErrDaemonAuthority) {
 		t.Fatalf("OpenManagedDaemon() = (%v, %v)", daemon, err)
 	}
-	assertClosedDescriptor(t, childFD)
+	assertReleasedDescriptor(t, childFD, descriptor)
 	if err := validateHeldEnsureLock(parent, fixture.nodeState); err != nil {
 		t.Fatalf("missing factory disturbed parent permit: %v", err)
 	}
@@ -280,6 +286,7 @@ func TestManagedDaemonCloseBeforeServeReleasesPermitAndStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	descriptor := descriptorIdentity(t, childFD)
 	t.Setenv(daemonLaunchPermitEnvironment, strconv.Itoa(childFD))
 	daemon, err := OpenManagedDaemon(context.Background(), DaemonOptions{
 		Workspace: fixture.workspace,
@@ -302,7 +309,7 @@ func TestManagedDaemonCloseBeforeServeReleasesPermitAndStore(t *testing.T) {
 	if err := daemon.Close(); err != nil {
 		t.Fatal(err)
 	}
-	assertClosedDescriptor(t, childFD)
+	assertReleasedDescriptor(t, childFD, descriptor)
 	if err := daemon.Close(); err != nil {
 		t.Fatalf("repeated Close() = %v", err)
 	}
@@ -313,6 +320,7 @@ func TestManagedDaemonCloseBeforeServeReleasesPermitAndStore(t *testing.T) {
 }
 
 func TestDaemonCloseWaitsForServeAndWorkerSettlementBeforeStoreClose(t *testing.T) {
+	t.Parallel()
 	fixture := newDaemonFixture(t, true)
 	daemon, err := OpenDaemon(context.Background(), DaemonOptions{
 		Workspace: fixture.workspace,
@@ -362,6 +370,7 @@ func TestDaemonCloseWaitsForServeAndWorkerSettlementBeforeStoreClose(t *testing.
 }
 
 func TestDaemonConcurrentCloseAndServeReuseFailClosed(t *testing.T) {
+	t.Parallel()
 	fixture := newDaemonFixture(t, true)
 	daemon, err := OpenDaemon(context.Background(), DaemonOptions{
 		Workspace: fixture.workspace,

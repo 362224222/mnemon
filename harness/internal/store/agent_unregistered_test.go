@@ -12,6 +12,7 @@ import (
 )
 
 func TestAbandonUnregisteredAgentRunRequeuesWithoutProcessCompletion(t *testing.T) {
+	t.Parallel()
 	fixture, claim, token, claimAt := newWakeRuntimeFixture(t, "unregistered-requeue", 0)
 	before, err := fixture.store.ListIncompleteManagedAgentRuns(context.Background())
 	if err != nil || len(before) != 1 || before[0].ID() != claim.Run.ID() {
@@ -74,6 +75,7 @@ func TestAbandonUnregisteredAgentRunRequeuesWithoutProcessCompletion(t *testing.
 }
 
 func TestAbandonUnregisteredAgentRunAllowsDeadRecoveryWithoutFalseCompletion(t *testing.T) {
+	t.Parallel()
 	fixture, claim, token, claimAt := newWakeRuntimeFixture(t, "unregistered-dead", 1)
 	settledAt := claimAt.Add(time.Second)
 	result, err := fixture.store.AbandonUnregisteredAgentRun(context.Background(),
@@ -104,6 +106,7 @@ func TestAbandonUnregisteredAgentRunAllowsDeadRecoveryWithoutFalseCompletion(t *
 }
 
 func TestAbandonUnregisteredAgentRunReplayPreservesAdvancedHandling(t *testing.T) {
+	t.Parallel()
 	t.Run("next attempt claimed", func(t *testing.T) {
 		fixture, claim, token, claimAt := newWakeRuntimeFixture(t, "unregistered-replay-claimed", 0)
 		settledAt := claimAt.Add(time.Second)
@@ -168,6 +171,7 @@ func TestAbandonUnregisteredAgentRunReplayPreservesAdvancedHandling(t *testing.T
 }
 
 func TestAbandonUnregisteredAgentRunAndLateLaunchAreExactlyOrdered(t *testing.T) {
+	t.Parallel()
 	diagnostic := runtimeTestJSON(t, `{"adapter":"codex"}`)
 	runtimeIDs := runtimeTestJSON(t, `{"pid":4402}`)
 
@@ -224,6 +228,7 @@ func TestAbandonUnregisteredAgentRunAndLateLaunchAreExactlyOrdered(t *testing.T)
 }
 
 func TestAbandonUnregisteredAgentRunRejectsLaunchedPartialAndStaleAuthority(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name   string
 		mutate func(*acceptanceFixture, AgentClaimResult, model.Digest, time.Time)

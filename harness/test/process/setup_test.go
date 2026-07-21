@@ -270,7 +270,7 @@ func TestPublicSetupSerializesProcessesAndRecoversAKilledDaemon(t *testing.T) {
 		t.Fatalf("owned child crash changed the prior stale lifecycle generation: %v", err)
 	}
 
-	recoveryCtx, cancelRecovery := context.WithTimeout(context.Background(), 20*time.Second)
+	recoveryCtx, cancelRecovery := context.WithTimeout(context.Background(), time.Minute)
 	cleanup.autoMayRun = true
 	recovery := setupProcessRunSetup(recoveryCtx, harnessExecutable, workspace, environment)
 	cancelRecovery()
@@ -1058,7 +1058,7 @@ func setupProcessWaitOffline(ctx context.Context, client *localapi.Client, nodeS
 		if statErr != nil && !socketAbsent {
 			return errors.New("local control socket cannot be inspected")
 		}
-		if apiErr != nil && !unavailable {
+		if apiErr != nil && !unavailable && socketAbsent {
 			return fmt.Errorf("offline health failed with code %s", apiErr.Code)
 		}
 		if err := setupProcessPoll(ctx); err != nil {

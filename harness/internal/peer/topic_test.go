@@ -241,9 +241,9 @@ func TestGossipTopicsDeliverOnceAndPreserveConflictChallenger(t *testing.T) {
 	}
 	waitTopicPeer(t, sessionA, hostB.ID())
 	waitTopicPeer(t, sessionB, hostA.ID())
-	// ListPeers proves the signed subscription exchange; the first GossipSub
+	// ListPeers proves the signed subscription exchange; a full GossipSub
 	// heartbeat installs the mesh edge shortly afterwards.
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(1200 * time.Millisecond)
 
 	original := testPeerPublication(t, channelA, local, remote, "original")
 	if err := sessionA.Publish(ctx, original); err != nil {
@@ -408,7 +408,7 @@ func TestNewGossipRejectsDuplicateWithoutReplacingStreamHandler(t *testing.T) {
 	assertExactGossipSubV12(t, hostB, hostA.ID())
 	waitTopicPeer(t, sessionA, hostB.ID())
 	waitTopicPeer(t, sessionB, hostA.ID())
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(1200 * time.Millisecond)
 
 	publication := testPeerPublication(t, channelB, remote, local, "after-duplicate-reconnect")
 	if err := sessionB.Publish(ctx, publication); err != nil {
@@ -848,7 +848,7 @@ func TestGossipReconcileRevokesOneChannelAndPreservesOverlap(t *testing.T) {
 	waitTopicPeer(t, betaSessionC, hostA.ID())
 	assertExactGossipSubV12(t, hostA, hostC.ID())
 	assertExactGossipSubV12(t, hostC, hostA.ID())
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(1200 * time.Millisecond)
 
 	revokedAlpha := alphaA
 	revokedAlpha.Bindings = []BindingAuthoritySnapshot{{PeerID: remote.modelID, State: model.BindingRevoked}}
@@ -908,7 +908,7 @@ func TestGossipReconcileRevokesOneChannelAndPreservesOverlap(t *testing.T) {
 	}
 	// Allow a full heartbeat after rejoin so the assertion exercises the
 	// steady-state mesh rather than only the subscription transition.
-	time.Sleep(1100 * time.Millisecond)
+	time.Sleep(1200 * time.Millisecond)
 	alphaPublication := testPeerPublication(t, revokedAlpha, local, remote, "revoked-alpha")
 	if err := alphaSessionA.Publish(ctx, alphaPublication); err != nil {
 		t.Fatal(err)

@@ -10,6 +10,7 @@ import (
 )
 
 func TestAdvanceConfirmedMemberTopicRequiresBothDurableDirections(t *testing.T) {
+	t.Parallel()
 	target := newChannelMemberReconcilerTarget(t, "member-reconciler-topic-gate")
 	channel, err := model.NewChannel(model.ChannelSpec{Descriptor: target.channel.Descriptor(),
 		LocalAlias: target.channel.LocalAlias(), RosterHead: target.roster.Head(),
@@ -41,6 +42,7 @@ func TestAdvanceConfirmedMemberTopicRequiresBothDurableDirections(t *testing.T) 
 }
 
 func TestAdvanceConfirmedMemberTopicPreservesNotJoinedCASOrder(t *testing.T) {
+	t.Parallel()
 	target := newChannelMemberReconcilerTarget(t, "member-reconciler-topic-order")
 	gate := &recordingMemberTopicGate{readiness: []store.ChannelPeerReadiness{{
 		ChannelID: target.channel.ID(), PeerID: target.remoteMember.PeerID(),

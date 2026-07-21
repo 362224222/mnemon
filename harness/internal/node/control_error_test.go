@@ -3,6 +3,7 @@ package node
 import "testing"
 
 func TestControlErrorCodesRemainClosedAndBounded(t *testing.T) {
+	t.Parallel()
 	if !CodeMnemondUnavailable.Valid() || !CodeMnemondUnavailable.Retryable() ||
 		CodeMnemondUnavailable.ExitStatus() != 5 {
 		t.Fatalf("mnemond unavailable code lost retryable exit semantics")

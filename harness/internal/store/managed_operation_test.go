@@ -11,6 +11,7 @@ import (
 )
 
 func TestReserveManagedOperationBindsExactCurrentAndFencesOneStartedAction(t *testing.T) {
+	t.Parallel()
 	fixture := newManagedContextFixture(t, "authority",
 		model.OperationTeamworkAccept, model.OperationTeamworkDecline)
 	spec := fixture.spec("authority-key", "authority-request", model.OperationTeamworkAccept)
@@ -74,6 +75,7 @@ func TestReserveManagedOperationBindsExactCurrentAndFencesOneStartedAction(t *te
 }
 
 func TestReserveManagedOperationRejectsStaleContextAndCrossRunTakeover(t *testing.T) {
+	t.Parallel()
 	t.Run("wrong context", func(t *testing.T) {
 		fixture := newManagedContextFixture(t, "wrong-context", model.OperationTeamworkAccept)
 		spec := fixture.spec("wrong-context-key", "wrong-context-request", model.OperationTeamworkAccept)
@@ -169,6 +171,7 @@ func TestReserveManagedOperationRejectsStaleContextAndCrossRunTakeover(t *testin
 }
 
 func TestReserveManagedOperationTerminalReplayPrecedesContextAndActivation(t *testing.T) {
+	t.Parallel()
 	fixture := newManagedContextFixture(t, "terminal", model.OperationTeamworkAccept)
 	spec := fixture.spec("terminal-key", "terminal-request", model.OperationTeamworkAccept)
 	reserved, err := fixture.store.ReserveManagedOperation(context.Background(), spec)
@@ -211,6 +214,7 @@ func TestReserveManagedOperationTerminalReplayPrecedesContextAndActivation(t *te
 }
 
 func TestReserveManagedOperationContextlessOfferCreatesOneRunAndSurvivesRestart(t *testing.T) {
+	t.Parallel()
 	fixture := newAcceptanceFixture(t, 1)
 	at := fixture.now.Add(time.Minute)
 	spec := ManagedOperationSpec{Profile: fixture.profile,
@@ -260,6 +264,7 @@ func TestReserveManagedOperationContextlessOfferCreatesOneRunAndSurvivesRestart(
 }
 
 func TestReserveManagedOperationContextlessConcurrencyIsSingleEffect(t *testing.T) {
+	t.Parallel()
 	fixture := newAcceptanceFixture(t, 1)
 	at := fixture.now.Add(time.Minute)
 	spec := ManagedOperationSpec{Profile: fixture.profile,
@@ -312,6 +317,7 @@ func TestReserveManagedOperationContextlessConcurrencyIsSingleEffect(t *testing.
 }
 
 func TestReserveManagedOperationContextlessOfferRejectsActiveClaim(t *testing.T) {
+	t.Parallel()
 	fixture := newManagedContextFixture(t, "active-claim", model.OperationTeamworkAccept)
 	spec := fixture.spec("active-claim-offer-key", "active-claim-offer-request", model.OperationTeamworkOffer)
 	spec.HasClaimContext = false

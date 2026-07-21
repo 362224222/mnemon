@@ -78,6 +78,7 @@ func TestOpenManagedDaemonRequiresExactInheritedEnsureLockBeforeStoreOpen(t *tes
 		if err != nil {
 			t.Fatal(err)
 		}
+		descriptor := descriptorIdentity(t, fd)
 		if err := wrong.Close(); err != nil {
 			t.Fatal(err)
 		}
@@ -89,7 +90,7 @@ func TestOpenManagedDaemonRequiresExactInheritedEnsureLockBeforeStoreOpen(t *tes
 			errors.Is(err, store.ErrWriterActive) {
 			t.Fatalf("OpenManagedDaemon() = (%v, %v)", daemon, err)
 		}
-		assertClosedDescriptor(t, fd)
+		assertReleasedDescriptor(t, fd, descriptor)
 	})
 
 	t.Run("unlocked descriptor cannot bypass holder", func(t *testing.T) {
@@ -101,6 +102,7 @@ func TestOpenManagedDaemonRequiresExactInheritedEnsureLockBeforeStoreOpen(t *tes
 		if err != nil {
 			t.Fatal(err)
 		}
+		descriptor := descriptorIdentity(t, fd)
 		t.Setenv(daemonLaunchPermitEnvironment, strconv.Itoa(fd))
 		daemon, err := OpenManagedDaemon(context.Background(), DaemonOptions{
 			Workspace: fixture.workspace, Install: fixture.install,
@@ -108,7 +110,7 @@ func TestOpenManagedDaemonRequiresExactInheritedEnsureLockBeforeStoreOpen(t *tes
 		if daemon != nil || !errors.Is(err, ErrDaemonLaunchPermit) {
 			t.Fatalf("OpenManagedDaemon() = (%v, %v)", daemon, err)
 		}
-		assertClosedDescriptor(t, fd)
+		assertReleasedDescriptor(t, fd, descriptor)
 		if err := validateHeldEnsureLock(held, fixture.nodeState); err != nil {
 			t.Fatalf("failed opener disturbed lifecycle holder: %v", err)
 		}
@@ -123,6 +125,7 @@ func TestOpenManagedDaemonRetainsInheritedPermitUntilSocketReadyWithoutSelfDeadl
 	if err != nil {
 		t.Fatal(err)
 	}
+	descriptor := descriptorIdentity(t, childFD)
 	t.Setenv(daemonLaunchPermitEnvironment, strconv.Itoa(childFD))
 	daemon, err := OpenManagedDaemon(context.Background(), DaemonOptions{Workspace: fixture.workspace,
 		Clock: controllerTestClock{fixture.profile.UpdatedAt()}, Install: fixture.install,
@@ -147,7 +150,7 @@ func TestOpenManagedDaemonRetainsInheritedPermitUntilSocketReadyWithoutSelfDeadl
 		t.Fatal(err)
 	}
 	waitControllerHealth(t, client, "ready")
-	assertClosedDescriptor(t, childFD)
+	assertReleasedDescriptor(t, childFD, descriptor)
 	if err := validateHeldEnsureLock(parent, fixture.nodeState); err != nil {
 		t.Fatalf("child release dropped parent launch fence: %v", err)
 	}
@@ -223,10 +226,32 @@ func assertOpenDescriptor(t *testing.T, fd int) {
 	}
 }
 
-func assertClosedDescriptor(t *testing.T, fd int) {
+type testDescriptorIdentity struct {
+	dev uint64
+	ino uint64
+}
+
+func descriptorIdentity(t *testing.T, fd int) testDescriptorIdentity {
 	t.Helper()
-	if _, err := unix.FcntlInt(uintptr(fd), unix.F_GETFD, 0); !errors.Is(err, unix.EBADF) {
-		t.Fatalf("descriptor %d remained open: %v", fd, err)
+	var stat unix.Stat_t
+	if err := unix.Fstat(fd, &stat); err != nil {
+		t.Fatalf("descriptor %d identity: %v", fd, err)
+	}
+	return testDescriptorIdentity{dev: uint64(stat.Dev), ino: uint64(stat.Ino)}
+}
+
+func assertReleasedDescriptor(t *testing.T, fd int, original testDescriptorIdentity) {
+	t.Helper()
+	var stat unix.Stat_t
+	err := unix.Fstat(fd, &stat)
+	if errors.Is(err, unix.EBADF) {
+		return
+	}
+	if err != nil {
+		t.Fatalf("descriptor %d release probe: %v", fd, err)
+	}
+	if uint64(stat.Dev) == original.dev && uint64(stat.Ino) == original.ino {
+		t.Fatalf("descriptor %d still references original launch permit", fd)
 	}
 }
 

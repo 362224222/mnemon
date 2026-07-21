@@ -203,6 +203,7 @@ func TestActivateProfileDisabledButBusyRemainsDisabled(t *testing.T) {
 }
 
 func TestProfileAuthorityBusyTracksOnlyUnfinishedManagedTerminalRuntime(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name     string
 		launcher string

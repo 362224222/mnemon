@@ -14,6 +14,7 @@ import (
 )
 
 func TestResolveDeadlineWinnerCommitsAtomicEvidenceAndReplaysAfterRestart(t *testing.T) {
+	t.Parallel()
 	fixture, current := newDeadlineWorkFixture(t, "atomic")
 	operation, authority, contextHash := reserveDeadlineAction(t, fixture, current,
 		"atomic", model.OperationTeamworkCancel)
@@ -52,6 +53,7 @@ func TestResolveDeadlineWinnerCommitsAtomicEvidenceAndReplaysAfterRestart(t *tes
 }
 
 func TestResolveDeadlineWinnerCommitsOverdueWorkAfterRestart(t *testing.T) {
+	t.Parallel()
 	fixture, current := newDeadlineWorkFixture(t, "overdue-restart")
 	operation, authority, contextHash := reserveDeadlineAction(t, fixture, current,
 		"overdue-restart", model.OperationTeamworkCancel)
@@ -74,6 +76,7 @@ func TestResolveDeadlineWinnerCommitsOverdueWorkAfterRestart(t *testing.T) {
 }
 
 func TestResolveDeadlineWinnerBeatsConcurrentHomeAction(t *testing.T) {
+	t.Parallel()
 	fixture, current := newDeadlineWorkFixture(t, "race")
 	operation, authority, contextHash := reserveDeadlineAction(t, fixture, current,
 		"race", model.OperationTeamworkCancel)
@@ -116,6 +119,7 @@ func TestResolveDeadlineWinnerBeatsConcurrentHomeAction(t *testing.T) {
 }
 
 func TestResolveDeadlineWinnerCannotBeBypassedByPreDeadlineEventTime(t *testing.T) {
+	t.Parallel()
 	fixture, current := newDeadlineWorkFixture(t, "predeadline-event")
 	operation, authority, contextHash := reserveDeadlineAction(t, fixture, current,
 		"predeadline-event", model.OperationTeamworkCancel)
@@ -149,6 +153,7 @@ func TestResolveDeadlineWinnerCannotBeBypassedByPreDeadlineEventTime(t *testing.
 }
 
 func TestResolveDeadlineWinnerConvergesConcurrentRetries(t *testing.T) {
+	t.Parallel()
 	fixture, current := newDeadlineWorkFixture(t, "concurrent-retry")
 	operation, authority, contextHash := reserveDeadlineAction(t, fixture, current,
 		"concurrent-retry", model.OperationTeamworkCancel)
@@ -189,6 +194,7 @@ func TestResolveDeadlineWinnerConvergesConcurrentRetries(t *testing.T) {
 }
 
 func TestResolveDeadlineWinnerRollsBackEveryEffectOnLateFailure(t *testing.T) {
+	t.Parallel()
 	fixture, current := newDeadlineWorkFixture(t, "rollback")
 	operation, authority, contextHash := reserveDeadlineAction(t, fixture, current,
 		"rollback", model.OperationTeamworkCancel)
@@ -213,6 +219,7 @@ func TestResolveDeadlineWinnerRollsBackEveryEffectOnLateFailure(t *testing.T) {
 }
 
 func TestResolveDeadlineWinnerReconcilesNestedDerivationInSameTransaction(t *testing.T) {
+	t.Parallel()
 	fixture := newDerivationDispositionFixture(t, false)
 	current, err := fixture.store.GetReviewWork(context.Background(), fixture.children[1])
 	if err != nil {
@@ -237,6 +244,7 @@ func TestResolveDeadlineWinnerReconcilesNestedDerivationInSameTransaction(t *tes
 }
 
 func TestResolveDeadlineWinnerRejectsEarlyForgedAndContextlessInputsWithoutWrites(t *testing.T) {
+	t.Parallel()
 	t.Run("trusted time before admitted expiry", func(t *testing.T) {
 		fixture, current := newDeadlineWorkFixture(t, "early")
 		operation, authority, contextHash := reserveDeadlineAction(t, fixture, current,

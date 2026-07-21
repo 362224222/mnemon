@@ -12,6 +12,7 @@ import (
 )
 
 func TestChannelMemberReconcilerSettlesDurableLeaveInExistingSerialWorker(t *testing.T) {
+	t.Parallel()
 	target, receipt := newChannelMemberLeaveTarget(t, "member-reconciler-leave")
 	response, err := peer.NewLeaveReceipt(receipt)
 	if err != nil {

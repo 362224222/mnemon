@@ -50,6 +50,7 @@ func testInstallationWithVerifier(verify, authority InstallationVerifier) Instal
 }
 
 func TestInstallationVerifierUsesTheCallerContext(t *testing.T) {
+	t.Parallel()
 	called := false
 	verify := InstallationVerifierFunc(func(ctx context.Context, _ model.Profile) error {
 		called = true
@@ -69,6 +70,7 @@ func TestInstallationVerifierUsesTheCallerContext(t *testing.T) {
 }
 
 func TestActionPolicyForInstallationRequiresTheSameRawAssetProvider(t *testing.T) {
+	t.Parallel()
 	bundle, err := assets.Load()
 	if err != nil {
 		t.Fatal(err)

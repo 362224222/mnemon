@@ -14,6 +14,7 @@ import (
 )
 
 func TestCommitWorkExpiryPersistsCompleteEvidenceAndDeterministicIdentity(t *testing.T) {
+	t.Parallel()
 	fixture, current := newDeadlineWorkFixture(t, "timer-atomic")
 	candidate := onlyWorkDeadlineCandidate(t, fixture.store, current.Deadline())
 	first, err := fixture.store.PrepareWorkExpiry(context.Background(), candidate, current.Deadline())
@@ -68,6 +69,7 @@ func TestCommitWorkExpiryPersistsCompleteEvidenceAndDeterministicIdentity(t *tes
 }
 
 func TestCommitWorkExpiryFencesDeliveryAuthorityAndPersistsBlockedDiagnostic(t *testing.T) {
+	t.Parallel()
 	fixture, current := newDeadlineWorkFixture(t, "binding-drift")
 	candidate := onlyWorkDeadlineCandidate(t, fixture.store, current.Deadline())
 	prepared, err := fixture.store.PrepareWorkExpiry(context.Background(), candidate, current.Deadline())
@@ -118,6 +120,7 @@ func TestCommitWorkExpiryFencesDeliveryAuthorityAndPersistsBlockedDiagnostic(t *
 }
 
 func TestWorkExpiryIgnoresTopicRecoveryButFreezesInactiveChannel(t *testing.T) {
+	t.Parallel()
 	t.Run("active Channel topic recovering", func(t *testing.T) {
 		fixture, current := newDeadlineWorkFixture(t, "topic-recovering")
 		mustExec(t, fixture.store, `UPDATE channels SET topic_state='not_joined' WHERE channel_id=?`,

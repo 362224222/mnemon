@@ -12,6 +12,7 @@ import (
 )
 
 func TestRecoveryQuarantineAtomicallyMovesWholeNodeAfterExactQuiescence(t *testing.T) {
+	t.Parallel()
 	fixture := newDaemonFixture(t, false)
 	expected := daemonFixtureAuthorityResponse(t, fixture)
 	before, err := os.Lstat(fixture.nodeState)

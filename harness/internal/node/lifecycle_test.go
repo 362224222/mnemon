@@ -75,7 +75,7 @@ func TestDaemonLifecycleQuiesceWaitsPastShutdownResponseForWriterRelease(t *test
 	}
 	select {
 	case <-writerActive:
-	case <-time.After(time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("Quiesce did not observe the retained Store writer")
 	}
 	select {

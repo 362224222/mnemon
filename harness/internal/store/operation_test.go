@@ -126,6 +126,7 @@ func TestReserveOperationLeaseFenceCaptureAndRejectedReplay(t *testing.T) {
 }
 
 func TestCheckpointOperationCaptureDurableProjectionAndRestartReplay(t *testing.T) {
+	t.Parallel()
 	fixture := newOperationCaptureFixture(t, "projection-restart", 2)
 	if replayed, err := fixture.store.CheckpointOperationCapture(context.Background(),
 		fixture.operation.ID(), fixture.operation.LeaseOwner(), fixture.now, fixture.capture); err != nil || replayed {
@@ -258,6 +259,7 @@ func TestCheckpointOperationCaptureConcurrentIdenticalProjection(t *testing.T) {
 }
 
 func TestCheckpointOperationCaptureFailsClosedOnProjectionDrift(t *testing.T) {
+	t.Parallel()
 	t.Run("precheckpoint row", func(t *testing.T) {
 		fixture := newOperationCaptureFixture(t, "projection-drift-precheckpoint", 1)
 		mustExec(t, fixture.store, `INSERT INTO operation_artifact_roots(
@@ -425,6 +427,7 @@ func TestReserveOperationRequiresActiveAgentRunAuthority(t *testing.T) {
 }
 
 func TestReserveOperationRuntimeFinishedAllowsOnlyExistingIdentity(t *testing.T) {
+	t.Parallel()
 	st := openTestStore(t)
 	node, profile := bootstrapValues(t, "peer-operation-finished", "principal-operation-finished",
 		"/workspace/operation-finished")

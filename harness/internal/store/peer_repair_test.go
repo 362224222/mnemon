@@ -89,10 +89,7 @@ func TestPeerRepairPageProgressUsesCurrentCursorAndReplaysExactly(t *testing.T) 
 func TestPeerRepairRetryAndTerminalEvidenceSurviveRestart(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "node", "node.db")
-	st, err := Open(context.Background(), path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := openStoreTestTemplateCopy(t, path)
 	channel := testkit.NewSignedChannel(t, "peer-repair-restart")
 	remote := channel.AppendActive(t, "peer-repair-restart-remote")
 	insertChannelTestNode(t, st.db, channel.Owner(), channel.Channel().CreatedAt())

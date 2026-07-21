@@ -13,6 +13,7 @@ import (
 )
 
 func TestEnsureDaemonReturnsExactReadyHealthWithoutLockOrLaunch(t *testing.T) {
+	t.Parallel()
 	nodeState := newEnsureNodeState(t)
 	revision := ensureTestRevision("already-ready")
 	health := readyEnsureHealth(revision)
@@ -31,6 +32,7 @@ func TestEnsureDaemonReturnsExactReadyHealthWithoutLockOrLaunch(t *testing.T) {
 }
 
 func TestEnsureDaemonRunsCallerReadyGateWithoutCreatingAnotherAuthority(t *testing.T) {
+	t.Parallel()
 	nodeState := newEnsureNodeState(t)
 	revision := ensureTestRevision("ready-gate")
 	health := readyEnsureHealth(revision)
@@ -59,6 +61,7 @@ func TestEnsureDaemonRunsCallerReadyGateWithoutCreatingAnotherAuthority(t *testi
 }
 
 func TestEnsureDaemonFailsClosedForEveryReachableNonreadyState(t *testing.T) {
+	t.Parallel()
 	wanted := ensureTestRevision("wanted")
 	other := ensureTestRevision("other")
 	tests := map[string]ensureProbeFunc{
@@ -112,6 +115,7 @@ func TestEnsureDaemonFailsClosedForEveryReachableNonreadyState(t *testing.T) {
 }
 
 func TestEnsureDaemonRechecksUnderLockBeforeStrictPreflight(t *testing.T) {
+	t.Parallel()
 	nodeState := newEnsureNodeState(t)
 	revision := ensureTestRevision("recheck")
 	var probes atomic.Int32
@@ -145,6 +149,7 @@ func TestEnsureDaemonRechecksUnderLockBeforeStrictPreflight(t *testing.T) {
 }
 
 func TestEnsureDaemonRunsStrictPreflightThenOneLaunchAndWaitsForReady(t *testing.T) {
+	t.Parallel()
 	nodeState := newEnsureNodeState(t)
 	revision := ensureTestRevision("launch")
 	var probes atomic.Int32
@@ -198,6 +203,7 @@ func TestEnsureDaemonRunsStrictPreflightThenOneLaunchAndWaitsForReady(t *testing
 }
 
 func TestEnsureDaemonWaitsForOwnedChildExactNotReadyThenReleasesReady(t *testing.T) {
+	t.Parallel()
 	nodeState := newEnsureNodeState(t)
 	revision := ensureTestRevision("owned-not-ready")
 	var probes atomic.Int32
@@ -241,6 +247,7 @@ func TestEnsureDaemonWaitsForOwnedChildExactNotReadyThenReleasesReady(t *testing
 }
 
 func TestEnsureDaemonTerminatesNewChildWhenReadyGateFails(t *testing.T) {
+	t.Parallel()
 	nodeState := newEnsureNodeState(t)
 	revision := ensureTestRevision("launched-ready-gate")
 	failed := errors.New("actual Hook failed")
@@ -273,6 +280,7 @@ func TestEnsureDaemonTerminatesNewChildWhenReadyGateFails(t *testing.T) {
 }
 
 func TestEnsureDaemonConcurrentCallersLaunchExactlyOnce(t *testing.T) {
+	t.Parallel()
 	nodeState := newEnsureNodeState(t)
 	revision := ensureTestRevision("concurrent")
 	const callers = 20
@@ -336,6 +344,7 @@ func TestEnsureDaemonConcurrentCallersLaunchExactlyOnce(t *testing.T) {
 }
 
 func TestEnsureDaemonPreflightLaunchAndDeadlineFailuresStayClosed(t *testing.T) {
+	t.Parallel()
 	t.Run("preflight", func(t *testing.T) {
 		nodeState := newEnsureNodeState(t)
 		revision := ensureTestRevision("preflight-failure")
@@ -397,7 +406,7 @@ func TestEnsureDaemonPreflightLaunchAndDeadlineFailuresStayClosed(t *testing.T) 
 			}),
 		}
 		_, err := ensureDaemon(context.Background(), options,
-			daemonEnsureTiming{deadline: 50 * time.Millisecond, poll: 5 * time.Millisecond})
+			daemonEnsureTiming{deadline: 2 * time.Second, poll: 10 * time.Millisecond})
 		if !errors.Is(err, ErrDaemonEnsure) || !errors.Is(err, context.DeadlineExceeded) ||
 			launches.Load() != 1 || handle.releases.Load() != 0 || handle.terminations.Load() != 1 {
 			t.Fatalf("ensureDaemon() = %v, launches=%d releases=%d terminations=%d", err,
@@ -453,7 +462,7 @@ func TestEnsureDaemonTerminatesOnlyItsOwnedChildAfterPostLaunchFailures(t *testi
 			}),
 		}
 		_, err := ensureDaemon(context.Background(), options,
-			daemonEnsureTiming{deadline: 50 * time.Millisecond, poll: 5 * time.Millisecond})
+			daemonEnsureTiming{deadline: 2 * time.Second, poll: 10 * time.Millisecond})
 		if !errors.Is(err, ErrDaemonEnsure) || !errors.Is(err, context.DeadlineExceeded) ||
 			handle.releases.Load() != 0 ||
 			handle.terminations.Load() != 1 {
@@ -573,6 +582,7 @@ func testEnsureFailedTerminationWithholdsProof(t *testing.T) {
 }
 
 func TestEnsureDaemonWithholdsCompensationWhenLockCloseFailsAfterChildRelease(t *testing.T) {
+	t.Parallel()
 	nodeState := newEnsureNodeState(t)
 	revision := ensureTestRevision("release-then-lock-drift")
 	handle := newRecordingDaemonLaunch()
@@ -608,6 +618,7 @@ func TestEnsureDaemonWithholdsCompensationWhenLockCloseFailsAfterChildRelease(t 
 }
 
 func TestEnsureDaemonRejectsUnsafeLockAndInvalidInputWithoutLaunch(t *testing.T) {
+	t.Parallel()
 	tests := map[string]func(*testing.T, string){
 		"symlink lock": func(t *testing.T, nodeState string) {
 			target := filepath.Join(t.TempDir(), "target")

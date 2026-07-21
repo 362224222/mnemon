@@ -39,6 +39,7 @@ func TestValidateLocalCausalityRequiresExactDurableEventKey(t *testing.T) {
 }
 
 func TestValidateLocalCausalSemanticsBindsCurrentWorkUpdate(t *testing.T) {
+	t.Parallel()
 	fixture := newAcceptanceFixture(t, 2)
 	_, authority := fixture.reserveOffer(t, "causal-current", nil)
 	spec := fixture.offer(t, authority, "causal-current", fixture.reviewers, nil, nil)
@@ -72,6 +73,7 @@ func TestValidateLocalCausalSemanticsBindsCurrentWorkUpdate(t *testing.T) {
 }
 
 func TestValidateLocalCausalSemanticsBindsControllerRequest(t *testing.T) {
+	t.Parallel()
 	fixture := newAcceptanceFixture(t, 1)
 	_, authority := fixture.reserveOffer(t, "causal-controller", nil)
 	spec := fixture.offer(t, authority, "causal-controller", fixture.reviewers, nil, nil)
@@ -107,6 +109,7 @@ func TestValidateLocalCausalSemanticsBindsControllerRequest(t *testing.T) {
 }
 
 func TestCommitLocalAcceptanceAdmitsStaleAcceptRejectedReceipt(t *testing.T) {
+	t.Parallel()
 	fixture := newAcceptanceFixture(t, 1)
 	offered, current := commitCausalOffer(t, fixture, "stale-accept-rejected")
 	current = commitCausalAcceptedWork(t, fixture, offered, current, fixture.now.Add(3*time.Second))
@@ -132,6 +135,7 @@ func TestCommitLocalAcceptanceAdmitsStaleAcceptRejectedReceipt(t *testing.T) {
 }
 
 func TestCommitLocalAcceptanceAdmitsAcceptRejectedAfterAtomicExpiry(t *testing.T) {
+	t.Parallel()
 	fixture := newAcceptanceFixture(t, 1)
 	offered, current := commitCausalOffer(t, fixture, "expired-accept-rejected")
 	expiredAt := current.Deadline()
@@ -163,6 +167,7 @@ func TestCommitLocalAcceptanceAdmitsAcceptRejectedAfterAtomicExpiry(t *testing.T
 }
 
 func TestCommitLocalAcceptanceAdmitsStaleRemoteOutcomeReceipt(t *testing.T) {
+	t.Parallel()
 	fixture := newAcceptanceFixture(t, 1)
 	offered, current := commitCausalOffer(t, fixture, "stale-outcome")
 	current = commitCausalAcceptedWork(t, fixture, offered, current, fixture.now.Add(3*time.Second))
@@ -189,6 +194,7 @@ func TestCommitLocalAcceptanceAdmitsStaleRemoteOutcomeReceipt(t *testing.T) {
 }
 
 func TestRequireReceiptSourceEchoBoundsStaleCausality(t *testing.T) {
+	t.Parallel()
 	fixture := newAcceptanceFixture(t, 1)
 	offered, current := commitCausalOffer(t, fixture, "receipt-echo")
 	current = commitCausalAcceptedWork(t, fixture, offered, current, fixture.now.Add(3*time.Second))
@@ -237,6 +243,7 @@ func TestRequireReceiptSourceEchoBoundsStaleCausality(t *testing.T) {
 }
 
 func TestRequireReceiptSourceEchoRejectsImpossibleClosedTuples(t *testing.T) {
+	t.Parallel()
 	fixture := newAcceptanceFixture(t, 1)
 	offered, current := commitCausalOffer(t, fixture, "receipt-closed-tuples")
 	terminalSpec := current.Spec()
@@ -288,6 +295,7 @@ func TestRequireReceiptSourceEchoRejectsImpossibleClosedTuples(t *testing.T) {
 }
 
 func TestRequireReceiptSourceEchoRejectsAcceptRejectedOutsideInitialOffer(t *testing.T) {
+	t.Parallel()
 	fixture := newAcceptanceFixture(t, 1)
 	offered, current := commitCausalOffer(t, fixture, "accept-rejected-tuple")
 	current = commitCausalAcceptedWork(t, fixture, offered, current, fixture.now.Add(3*time.Second))
@@ -304,6 +312,7 @@ func TestRequireReceiptSourceEchoRejectsAcceptRejectedOutsideInitialOffer(t *tes
 }
 
 func TestValidateLocalCausalSemanticsRejectsInvalidReceiptSources(t *testing.T) {
+	t.Parallel()
 	t.Run("outcome decision ref must name exact source", func(t *testing.T) {
 		fixture := newAcceptanceFixture(t, 1)
 		offered, _ := commitCausalOffer(t, fixture, "wrong-outcome-decision-ref")
@@ -346,6 +355,7 @@ func TestValidateLocalCausalSemanticsRejectsInvalidReceiptSources(t *testing.T) 
 }
 
 func TestValidateLocalCausalSemanticsKeepsStateChangesOnCurrentWork(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name         string
 		sourceType   model.EventType
@@ -378,6 +388,7 @@ func TestValidateLocalCausalSemanticsKeepsStateChangesOnCurrentWork(t *testing.T
 }
 
 func TestValidateLocalCausalSemanticsDoesNotCompareRemoteWallClock(t *testing.T) {
+	t.Parallel()
 	fixture := newAcceptanceFixture(t, 1)
 	_, authority := fixture.reserveOffer(t, "causal-remote-clock", nil)
 	spec := fixture.offer(t, authority, "causal-remote-clock", fixture.reviewers, nil, nil)
@@ -402,6 +413,7 @@ func TestValidateLocalCausalSemanticsDoesNotCompareRemoteWallClock(t *testing.T)
 }
 
 func TestValidateLocalCausalSemanticsSeparatesInitiateAndDerivedOffer(t *testing.T) {
+	t.Parallel()
 	fixture := newAcceptanceFixture(t, 1)
 	_, authority := fixture.reserveOffer(t, "causal-offer", nil)
 	spec := fixture.offer(t, authority, "causal-offer", fixture.reviewers, nil, nil)

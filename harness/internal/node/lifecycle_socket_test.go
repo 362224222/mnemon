@@ -13,6 +13,7 @@ import (
 )
 
 func TestDaemonLifecycleQuiesceRejectsOfflineGenerationDrift(t *testing.T) {
+	t.Parallel()
 	fixture := newDaemonFixture(t, true)
 	current := daemonFixtureAuthorityResponse(t, fixture)
 	drifted := current
@@ -51,6 +52,7 @@ func TestDaemonLifecycleQuiesceRejectsOfflineGenerationDrift(t *testing.T) {
 }
 
 func TestDaemonLifecycleQuiesceRejectsUnsafeOfflineSocket(t *testing.T) {
+	t.Parallel()
 	fixture := newDaemonFixture(t, true)
 	path := filepath.Join(fixture.nodeState, controlSocketName)
 	if err := os.WriteFile(path, nil, 0o600); err != nil {
@@ -69,6 +71,7 @@ func TestDaemonLifecycleQuiesceRejectsUnsafeOfflineSocket(t *testing.T) {
 }
 
 func TestDaemonLifecycleQuiesceRejectsOnlineSocketReplacement(t *testing.T) {
+	t.Parallel()
 	fixture := newDaemonFixture(t, true)
 	expected := daemonFixtureAuthorityResponse(t, fixture)
 	path := filepath.Join(fixture.nodeState, controlSocketName)
@@ -116,6 +119,7 @@ func TestDaemonLifecycleQuiesceRejectsOnlineSocketReplacement(t *testing.T) {
 }
 
 func TestDaemonLifecycleQuiesceRecoversStaleOwnerSocket(t *testing.T) {
+	t.Parallel()
 	fixture := newDaemonFixture(t, true)
 	path := filepath.Join(fixture.nodeState, controlSocketName)
 	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
@@ -143,6 +147,7 @@ func TestDaemonLifecycleQuiesceRecoversStaleOwnerSocket(t *testing.T) {
 }
 
 func TestDaemonLifecycleQuiesceBoundsWriterTimeout(t *testing.T) {
+	t.Parallel()
 	fixture := newDaemonFixture(t, true)
 	expected := daemonFixtureAuthorityResponse(t, fixture)
 	daemon, err := OpenDaemon(context.Background(), DaemonOptions{Workspace: fixture.workspace,
@@ -162,6 +167,7 @@ func TestDaemonLifecycleQuiesceBoundsWriterTimeout(t *testing.T) {
 }
 
 func TestDaemonLifecycleQuiesceCancelledDuringWriterWait(t *testing.T) {
+	t.Parallel()
 	fixture := newDaemonFixture(t, true)
 	expected := daemonFixtureAuthorityResponse(t, fixture)
 	daemon, err := OpenDaemon(context.Background(), DaemonOptions{Workspace: fixture.workspace,
@@ -209,6 +215,7 @@ func TestDaemonLifecycleQuiesceCancelledDuringWriterWait(t *testing.T) {
 }
 
 func TestDaemonLifecycleQuiesceRejectsCancelledContext(t *testing.T) {
+	t.Parallel()
 	fixture := newDaemonFixture(t, true)
 	lease := acquireTestDaemonLifecycle(t, fixture)
 	defer lease.Close()

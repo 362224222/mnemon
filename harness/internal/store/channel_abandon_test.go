@@ -12,6 +12,7 @@ import (
 )
 
 func TestAbandonChannelAtomicallyFencesScopedWorkAndReplaysExactForensics(t *testing.T) {
+	t.Parallel()
 	fixture := acceptedGossipFixture(t, "abandon-atomic")
 	claimAt := fixture.now.Add(2 * time.Second)
 	lease := claimPublication(t, fixture.store, fixture.channel, "abandon-worker", claimAt,
@@ -88,6 +89,7 @@ func assertChannelAbandonScopedState(t *testing.T, fixture *acceptanceFixture,
 }
 
 func TestAbandonChannelRollsBackEveryStepAndRejectsConfirmationMismatch(t *testing.T) {
+	t.Parallel()
 	fixture := acceptedGossipFixture(t, "abandon-rollback")
 	alias := channelAliasForTest(t, fixture.store, fixture.channel)
 	if _, err := fixture.store.AbandonChannel(context.Background(), AbandonChannelSpec{

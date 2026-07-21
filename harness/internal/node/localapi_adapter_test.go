@@ -41,6 +41,7 @@ func (service localAPIAdapterService) AgentResolve(ctx context.Context,
 }
 
 func TestLocalAPIServiceAdapterMapsMetadataAndRequestsExactly(t *testing.T) {
+	t.Parallel()
 	operationHash := model.Sum([]byte("operation"))
 	contextHash := model.Sum([]byte("context"))
 	attachmentHash := model.Sum([]byte("attachment"))
@@ -111,6 +112,7 @@ func TestLocalAPIServiceAdapterMapsMetadataAndRequestsExactly(t *testing.T) {
 }
 
 func TestLocalAPIServiceAdapterPreservesResultNullabilityAndPrivateFields(t *testing.T) {
+	t.Parallel()
 	projection := []byte(`{"status":"actionable"}`)
 	current := agent.AgentCurrentResponse{Status: "actionable", RunID: "run-adapter",
 		ClaimSecret: "private", Projection: projection}
@@ -153,6 +155,7 @@ func TestLocalAPIServiceAdapterPreservesResultNullabilityAndPrivateFields(t *tes
 }
 
 func TestLocalAPIServiceAdapterMapsAllControlErrorsExhaustively(t *testing.T) {
+	t.Parallel()
 	codes := agent.ControlErrorCodes()
 	if len(localAPIErrorMappings) != len(codes) {
 		t.Fatalf("local API mappings = %d, Agent codes = %d", len(localAPIErrorMappings), len(codes))
@@ -170,6 +173,7 @@ func TestLocalAPIServiceAdapterMapsAllControlErrorsExhaustively(t *testing.T) {
 }
 
 func TestLocalAPIServiceAdapterFailsClosedOnMalformedControlErrors(t *testing.T) {
+	t.Parallel()
 	unknown := localAPIControlError(&agent.ControlError{Code: "unknown", Message: "diagnostic"})
 	malformedRetry := localAPIControlError(&agent.ControlError{Code: agent.CodeOperationPending,
 		Message: "diagnostic", Retryable: false})
@@ -190,6 +194,7 @@ func TestLocalAPIServiceAdapterFailsClosedOnMalformedControlErrors(t *testing.T)
 }
 
 func TestLocalAPIServiceAdapterPrioritizesControlErrorOverResult(t *testing.T) {
+	t.Parallel()
 	service := localAPIAdapterService{action: func(context.Context, agent.ControlMetadata,
 		agent.TeamworkActionRequest,
 	) (agent.OperationResponse, *agent.ControlError) {

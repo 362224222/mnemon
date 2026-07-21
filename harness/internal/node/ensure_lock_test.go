@@ -9,6 +9,7 @@ import (
 )
 
 func TestEnsureLockCreatesValidatedOwnerFile(t *testing.T) {
+	t.Parallel()
 	nodeState := newEnsureNodeState(t)
 	lock, err := acquireEnsureLock(context.Background(), nodeState, time.Millisecond)
 	if err != nil {

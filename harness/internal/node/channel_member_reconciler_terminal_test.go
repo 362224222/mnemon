@@ -11,6 +11,7 @@ import (
 )
 
 func TestChannelMemberReconcilerMergesOwnTerminalHelloWithoutSyncOrBaseline(t *testing.T) {
+	t.Parallel()
 	target, terminal := newTerminalChannelMemberTarget(t, "member-reconciler-terminal")
 	ack, err := peer.NewMemberHelloAck(peer.MemberHelloAckSpec{ChannelID: target.channel.ID(),
 		MissingRecords: []model.Member{terminal}, RosterHead: terminal.Head()})

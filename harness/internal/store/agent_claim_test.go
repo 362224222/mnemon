@@ -11,6 +11,7 @@ import (
 )
 
 func TestAgentClaimProbeAndDeterministicSelection(t *testing.T) {
+	t.Parallel()
 	fixture, events := newAgentClaimFixture(t, 3, "queue")
 	base := fixture.now.Add(time.Minute)
 	oldHigh := insertClaimHandling(t, fixture.store, "handling-high-old", events[0], 20,
@@ -51,6 +52,7 @@ func TestAgentClaimProbeAndDeterministicSelection(t *testing.T) {
 }
 
 func TestAgentClaimNoneWaitingAndDueBoundary(t *testing.T) {
+	t.Parallel()
 	fixture, events := newAgentClaimFixture(t, 1, "states")
 	at := fixture.now.Add(time.Minute)
 	probe := AgentClaimProbeSpec{ProfileID: fixture.profile.ID(),
@@ -69,6 +71,7 @@ func TestAgentClaimNoneWaitingAndDueBoundary(t *testing.T) {
 }
 
 func TestAgentClaimConcurrentLoserIsBusy(t *testing.T) {
+	t.Parallel()
 	fixture, events := newAgentClaimFixture(t, 1, "concurrent")
 	at := fixture.now.Add(time.Minute)
 	insertClaimHandling(t, fixture.store, "handling-concurrent", events[0], 1, at, at, 0)
@@ -121,6 +124,7 @@ func TestAgentClaimConcurrentLoserIsBusy(t *testing.T) {
 }
 
 func TestAgentClaimLeaseRecoveryBackoffAndRestart(t *testing.T) {
+	t.Parallel()
 	fixture, events := newAgentClaimFixture(t, 1, "restart")
 	at := fixture.now.Add(time.Minute)
 	handling := insertClaimHandling(t, fixture.store, "handling-restart-claim", events[0], 1, at, at, 0)
@@ -164,6 +168,7 @@ func TestAgentClaimLeaseRecoveryBackoffAndRestart(t *testing.T) {
 }
 
 func TestAgentClaimAttemptBudgetDiesAndFencesStartedOperation(t *testing.T) {
+	t.Parallel()
 	fixture, events := newAgentClaimFixture(t, 1, "dead")
 	setClaimBudget(t, fixture.store, 1)
 	at := fixture.now.Add(time.Minute)
@@ -217,6 +222,7 @@ func TestAgentClaimAttemptBudgetDiesAndFencesStartedOperation(t *testing.T) {
 }
 
 func TestAgentClaimFailsClosedForProfileAssetAndRunDrift(t *testing.T) {
+	t.Parallel()
 	t.Run("disabled Profile", func(t *testing.T) {
 		st := openTestStore(t)
 		node, profile := bootstrapValues(t, "peer-claim-disabled", "principal-claim-disabled", "/workspace/claim-disabled")
@@ -281,6 +287,7 @@ func TestAgentClaimFailsClosedForProfileAssetAndRunDrift(t *testing.T) {
 }
 
 func TestAgentClaimRunInsertFailureRollsBackHandlingCAS(t *testing.T) {
+	t.Parallel()
 	fixture, events := newAgentClaimFixture(t, 1, "rollback")
 	at := fixture.now.Add(time.Minute)
 	handling := insertClaimHandling(t, fixture.store, "handling-rollback", events[0], 1, at, at, 0)
@@ -306,6 +313,7 @@ func TestAgentClaimRunInsertFailureRollsBackHandlingCAS(t *testing.T) {
 }
 
 func TestAgentClaimSchemaEnforcesOneOwnerAndRunPerAttempt(t *testing.T) {
+	t.Parallel()
 	fixture, events := newAgentClaimFixture(t, 2, "schema")
 	at := fixture.now.Add(time.Minute)
 	first := insertClaimHandling(t, fixture.store, "handling-schema-a", events[0], 1, at, at, 0)

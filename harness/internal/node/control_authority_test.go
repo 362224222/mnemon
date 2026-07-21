@@ -8,6 +8,7 @@ import (
 )
 
 func TestControlAuthorityResponseIsCanonicalAndDigestible(t *testing.T) {
+	t.Parallel()
 	peer, err := model.ParsePeerID("12D3KooWBGZcLJWATvD7zmYyooNARUfxeecfUrmsLrNdeu4Wq2eD")
 	if err != nil {
 		t.Fatal(err)

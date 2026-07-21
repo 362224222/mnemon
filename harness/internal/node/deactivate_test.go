@@ -14,6 +14,7 @@ import (
 )
 
 func TestDeactivateWithdrawsExactAuthorityAndReplays(t *testing.T) {
+	t.Parallel()
 	workspace, provisioned, bundle := activeTestProvision(t)
 	active, err := Activate(context.Background(), activeTestOptions(workspace, provisioned, bundle,
 		model.HostCodex))
@@ -42,6 +43,7 @@ func TestDeactivateWithdrawsExactAuthorityAndReplays(t *testing.T) {
 }
 
 func TestDeactivateAllowsDriftedProjectionButRejectsAuthorityDrift(t *testing.T) {
+	t.Parallel()
 	workspace, provisioned, bundle := activeTestProvision(t)
 	active, err := Activate(context.Background(), activeTestOptions(workspace, provisioned, bundle,
 		model.HostCodex))
@@ -87,6 +89,7 @@ func TestDeactivateAllowsDriftedProjectionButRejectsAuthorityDrift(t *testing.T)
 }
 
 func TestDeactivateRejectsIdentityAndCredentialDrift(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name  string
 		drift func(*testing.T, string)
@@ -128,6 +131,7 @@ func TestDeactivateRejectsIdentityAndCredentialDrift(t *testing.T) {
 }
 
 func TestDeactivateRejectsInvalidExpectedGeneration(t *testing.T) {
+	t.Parallel()
 	workspace, provisioned, bundle := activeTestProvision(t)
 	active, err := Activate(context.Background(), activeTestOptions(workspace, provisioned, bundle,
 		model.HostCodex))
@@ -156,6 +160,7 @@ func TestDeactivateRejectsInvalidExpectedGeneration(t *testing.T) {
 }
 
 func TestDeactivateRejectsReactivatedAuthorityABA(t *testing.T) {
+	t.Parallel()
 	workspace, provisioned, bundle := activeTestProvision(t)
 	active, err := Activate(context.Background(), activeTestOptions(workspace, provisioned, bundle,
 		model.HostCodex))

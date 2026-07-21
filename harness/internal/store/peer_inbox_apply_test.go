@@ -179,6 +179,7 @@ func TestPeerInboxSemanticReclaimAdvancesAttemptAndFencesOldOwner(t *testing.T) 
 }
 
 func TestPeerInboxSemanticRenewAndRetryReplayAcrossRestart(t *testing.T) {
+	t.Parallel()
 	fixture, _, readyAt := newReadyPeerInboxSemantic(t, "semantic-restart")
 	path := fixture.store.Path()
 	claimAt := readyAt.Add(time.Second)

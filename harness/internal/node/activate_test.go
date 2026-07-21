@@ -18,6 +18,7 @@ import (
 )
 
 func TestActivatePublishesOnlyVerifiedInstallationAndReplaysExactly(t *testing.T) {
+	t.Parallel()
 	workspace := newProvisionWorkspace(t)
 	bundle, err := assets.Load()
 	if err != nil {
@@ -55,6 +56,7 @@ func TestActivatePublishesOnlyVerifiedInstallationAndReplaysExactly(t *testing.T
 }
 
 func TestActivateRecoversDeadHandlingsAfterVerifiedSelfCheck(t *testing.T) {
+	t.Parallel()
 	workspace, provisioned, bundle := activeTestProvision(t)
 	databasePath := filepath.Join(provisioned.NodeState, "node.db")
 	seedDeadActivationHandling(t, databasePath, provisioned.Node, provisioned.Profile)
@@ -85,6 +87,7 @@ func TestActivateRecoversDeadHandlingsAfterVerifiedSelfCheck(t *testing.T) {
 }
 
 func TestActivateRecoveryInvariantLeavesProfileDisabled(t *testing.T) {
+	t.Parallel()
 	workspace, provisioned, bundle := activeTestProvision(t)
 	databasePath := filepath.Join(provisioned.NodeState, "node.db")
 	seedDeadActivationHandling(t, databasePath, provisioned.Node, provisioned.Profile)
@@ -185,6 +188,7 @@ func seedDeadActivationHandling(t *testing.T, databasePath string, node model.No
 }
 
 func TestActivateRejectsMissingActionAuthorityBeforeStoreOrProfileMutation(t *testing.T) {
+	t.Parallel()
 	workspace := newProvisionWorkspace(t)
 	bundle, err := assets.Load()
 	if err != nil {
@@ -227,6 +231,7 @@ func TestActivateRejectsMissingActionAuthorityBeforeStoreOrProfileMutation(t *te
 }
 
 func TestActivateFailureLeavesProfileDisabled(t *testing.T) {
+	t.Parallel()
 	workspace := newProvisionWorkspace(t)
 	bundle, _ := assets.Load()
 	provisioned, err := Provision(context.Background(), ProvisionOptions{Workspace: workspace,
@@ -259,6 +264,7 @@ func TestActivateFailureLeavesProfileDisabled(t *testing.T) {
 }
 
 func TestActivateRejectsIdentityCredentialAndHostDrift(t *testing.T) {
+	t.Parallel()
 	t.Run("identity", func(t *testing.T) {
 		workspace, provisioned, bundle := activeTestProvision(t)
 		if err := os.Remove(filepath.Join(provisioned.NodeState, identityKeyName)); err != nil {
@@ -332,6 +338,7 @@ func activeTestOptions(workspace string, provisioned ProvisionResult, bundle ass
 }
 
 func TestActivateRejectsStaleOrInvalidExpectedGenerationBeforeMutation(t *testing.T) {
+	t.Parallel()
 	workspace, provisioned, bundle := activeTestProvision(t)
 	for name, expected := range map[string]time.Time{
 		"stale": provisioned.Profile.UpdatedAt().Add(-time.Nanosecond),

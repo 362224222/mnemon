@@ -14,6 +14,7 @@ import (
 )
 
 func TestChannelMemberReconcilerRunsBoundedHelloBaselineAndReachability(t *testing.T) {
+	t.Parallel()
 	target := newChannelMemberReconcilerTarget(t, "member-reconciler-normal")
 	backend := &fakeChannelMemberBackend{target: target, hasTarget: true}
 	client := &fakeChannelMemberClient{}
@@ -52,6 +53,7 @@ func TestChannelMemberReconcilerRunsBoundedHelloBaselineAndReachability(t *testi
 }
 
 func TestChannelMemberReconcilerSyncsRemoteSuffixBeforeBaseline(t *testing.T) {
+	t.Parallel()
 	target := newChannelMemberReconcilerTarget(t, "member-reconciler-sync")
 	fixture := targetFixture(t, target, "member-reconciler-sync")
 	update := fixture.AppendActiveUpdate(t, target.remoteMember.PeerID()).Member()
@@ -89,6 +91,7 @@ func TestChannelMemberReconcilerSyncsRemoteSuffixBeforeBaseline(t *testing.T) {
 }
 
 func TestChannelMemberReconcilerBacksOffAndSuppressesPermanentGeneration(t *testing.T) {
+	t.Parallel()
 	target := newChannelMemberReconcilerTarget(t, "member-reconciler-backoff")
 	backend := &fakeChannelMemberBackend{target: target, hasTarget: true}
 	client := &fakeChannelMemberClient{helloError: peer.ErrChannelMemberClientTransport}
@@ -138,6 +141,7 @@ func TestChannelMemberReconcilerBacksOffAndSuppressesPermanentGeneration(t *test
 }
 
 func TestChannelMemberReconcilerExposesBoundedRepairWakeups(t *testing.T) {
+	t.Parallel()
 	worker := &ChannelMemberReconciler{trigger: make(chan struct{}, 1)}
 	target := newChannelMemberReconcilerTarget(t, "member-reconciler-wakeup")
 	ctx := context.Background()

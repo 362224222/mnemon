@@ -19,10 +19,7 @@ import (
 func TestCreateChannelCommitsReplaysRestartsAndNeverStoresSecret(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "node", "node.db")
-	st, err := Open(context.Background(), path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := openStoreTestTemplateCopy(t, path)
 	fixture := testkit.NewSignedChannel(t, "create-transaction")
 	insertChannelTestNode(t, st.db, fixture.Owner(), fixture.Channel().CreatedAt())
 	grantID, _ := model.ParseGrantID("grant-create-transaction")

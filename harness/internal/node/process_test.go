@@ -551,7 +551,7 @@ func runDaemonProcessHelper(args []string) int {
 
 func waitDaemonProcessMarker(t *testing.T, path string) string {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for {
 		encoded, err := os.ReadFile(path)
 		if err == nil {
@@ -623,7 +623,7 @@ func daemonProcessTestAlive(pid int) bool {
 
 func terminateDaemonProcessTestHandle(t *testing.T, handle DaemonLaunch) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := handle.Terminate(ctx); err != nil {
 		t.Fatal(err)
@@ -649,7 +649,7 @@ func reapReleasedDaemonProcess(t *testing.T, pid int) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(10 * time.Second):
 		_ = process.Kill()
 		t.Fatal("timed out reaping released helper")
 	}

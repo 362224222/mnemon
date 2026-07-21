@@ -10,6 +10,7 @@ import (
 )
 
 func TestCommitLocalAcceptancePersistsExactContextDerivations(t *testing.T) {
+	t.Parallel()
 	fixture := newAcceptanceFixture(t, 2)
 	parent, source := seedDerivationParent(t, fixture)
 	contextHash := model.Sum([]byte("parent-read-receipt"))
@@ -56,6 +57,7 @@ func TestCommitLocalAcceptancePersistsExactContextDerivations(t *testing.T) {
 }
 
 func TestCommitLocalAcceptanceRejectsMissingDerivationCausalityWithoutWrites(t *testing.T) {
+	t.Parallel()
 	fixture := newAcceptanceFixture(t, 1)
 	parent, _ := seedDerivationParent(t, fixture)
 	contextHash := model.Sum([]byte("missing-parent-cause"))

@@ -13,6 +13,7 @@ import (
 )
 
 func TestListIncompleteManagedAgentRunsIsBoundedStableAndIndexed(t *testing.T) {
+	t.Parallel()
 	t.Run("stable complete workset", func(t *testing.T) {
 		fixture, first, firstToken, claimAt := newWakeRuntimeFixture(t, "orphan-list", 0)
 		diagnostic := runtimeTestJSON(t, `{"adapter":"codex-app-server","phase":"initialized"}`)
@@ -125,6 +126,7 @@ func TestListIncompleteManagedAgentRunsIsBoundedStableAndIndexed(t *testing.T) {
 }
 
 func TestSettleOrphanedAgentRuntimeFailsExactActiveClaim(t *testing.T) {
+	t.Parallel()
 	fixture := newManagedWakeRuntimeFixture(t, "orphan-active", true,
 		model.OperationResolveNoAction, "orphaned before resolution")
 	settledAt := fixture.reserveSpec.At.Add(time.Second)
@@ -174,6 +176,7 @@ func TestSettleOrphanedAgentRuntimeFailsExactActiveClaim(t *testing.T) {
 }
 
 func TestSettleOrphanedAgentRuntimeUsesActiveAttemptBudgetAfterLeaseInstant(t *testing.T) {
+	t.Parallel()
 	fixture, claim, token, claimAt := newWakeRuntimeFixture(t, "orphan-dead", 1)
 	diagnostic := runtimeTestJSON(t, `{"adapter":"codex-app-server","phase":"initialized"}`)
 	runtimeIDs := runtimeTestJSON(t, `{"pgid":4201,"pid":4201,"start_token":"dead"}`)
@@ -199,6 +202,7 @@ func TestSettleOrphanedAgentRuntimeUsesActiveAttemptBudgetAfterLeaseInstant(t *t
 }
 
 func TestSettleOrphanedAgentRuntimeAppendsAfterLeaseSettlement(t *testing.T) {
+	t.Parallel()
 	fixture, claim, token, claimAt := newWakeRuntimeFixture(t, "orphan-lease", 0)
 	diagnostic := runtimeTestJSON(t, `{"adapter":"codex-app-server","phase":"initialized"}`)
 	runtimeIDs := runtimeTestJSON(t, `{"pgid":4301,"pid":4301,"start_token":"lease"}`)
@@ -247,6 +251,7 @@ func TestSettleOrphanedAgentRuntimeAppendsAfterLeaseSettlement(t *testing.T) {
 }
 
 func TestSettleOrphanedAgentRuntimePreservesSemanticWinner(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		kind    model.OperationKind
@@ -306,6 +311,7 @@ func TestSettleOrphanedAgentRuntimePreservesSemanticWinner(t *testing.T) {
 }
 
 func TestSettleOrphanedAgentRuntimeRejectsAuthorityDriftWithoutMutation(t *testing.T) {
+	t.Parallel()
 	fixture, claim, token, claimAt := newWakeRuntimeFixture(t, "orphan-fence", 0)
 	diagnostic := runtimeTestJSON(t, `{"adapter":"codex-app-server","phase":"initialized"}`)
 	runtimeIDs := runtimeTestJSON(t, `{"pgid":4401,"pid":4401,"start_token":"fence"}`)

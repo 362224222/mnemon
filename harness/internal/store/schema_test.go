@@ -1913,10 +1913,7 @@ func TestSchemaProtectsPeerRepairCheckpoint(t *testing.T) {
 func openTestStore(t *testing.T) *Store {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "node", "node.db")
-	st, err := Open(context.Background(), path)
-	if err != nil {
-		t.Fatalf("Open() error = %v", err)
-	}
+	st := openStoreTestTemplateCopy(t, path)
 	t.Cleanup(func() {
 		if err := st.Close(); err != nil {
 			t.Errorf("Close() error = %v", err)

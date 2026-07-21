@@ -12,6 +12,7 @@ import (
 )
 
 func TestConfirmOfflineAuthorityRemovesOnlyStaleSocketWhileHoldingWriter(t *testing.T) {
+	t.Parallel()
 	for _, withSocket := range []bool{false, true} {
 		withSocket := withSocket
 		t.Run(map[bool]string{false: "absent", true: "stale"}[withSocket], func(t *testing.T) {
@@ -61,6 +62,7 @@ func TestConfirmOfflineAuthorityRemovesOnlyStaleSocketWhileHoldingWriter(t *test
 }
 
 func TestConfirmOfflineAuthorityFailsClosedForWriterGenerationAndSocketConflict(t *testing.T) {
+	t.Parallel()
 	t.Run("writer active", func(t *testing.T) {
 		fixture := newDaemonFixture(t, true)
 		path := filepath.Join(fixture.nodeState, controlSocketName)
@@ -135,6 +137,7 @@ func TestConfirmOfflineAuthorityFailsClosedForWriterGenerationAndSocketConflict(
 }
 
 func TestConfirmOfflineAuthorityRejectsInvalidInputWithoutMutation(t *testing.T) {
+	t.Parallel()
 	fixture := newDaemonFixture(t, true)
 	path := filepath.Join(fixture.nodeState, controlSocketName)
 	createOfflineStaleSocket(t, path)

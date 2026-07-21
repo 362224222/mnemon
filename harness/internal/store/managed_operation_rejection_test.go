@@ -12,6 +12,7 @@ import (
 )
 
 func TestRejectStartedManagedOperationsBindsExactOperationReceipt(t *testing.T) {
+	t.Parallel()
 	fixture := newManagedOperationRejectionFixture(t, "exact", 0)
 	tx, err := fixture.store.db.BeginTx(context.Background(), nil)
 	if err != nil {
@@ -42,6 +43,7 @@ func TestRejectStartedManagedOperationsBindsExactOperationReceipt(t *testing.T) 
 }
 
 func TestRejectOperationRequiresCanonicalReceiptBoundToExactOperation(t *testing.T) {
+	t.Parallel()
 	fixture := newManagedOperationRejectionFixture(t, "boundary", 0)
 	operation := fixture.operations[0]
 	legacy, err := model.NewJSON([]byte(`{"code":"internal","status":"rejected"}`))
@@ -81,6 +83,7 @@ func TestRejectOperationRequiresCanonicalReceiptBoundToExactOperation(t *testing
 }
 
 func TestRejectOperationReplaysCommittedWinnerBeforeLiveFence(t *testing.T) {
+	t.Parallel()
 	fixture := newManagedOperationRejectionFixture(t, "committed-replay", 0)
 	operation := fixture.operations[0]
 	receipt, err := model.JSONFrom(struct {
@@ -107,6 +110,7 @@ func TestRejectOperationReplaysCommittedWinnerBeforeLiveFence(t *testing.T) {
 }
 
 func TestRejectStartedManagedOperationsCASFailureRollsBackEveryReceipt(t *testing.T) {
+	t.Parallel()
 	fixture := newManagedOperationRejectionFixture(t, "cas", 0)
 	blockedID := fixture.operations[0].ID().String()
 	trigger := fmt.Sprintf(`CREATE TRIGGER reject_managed_operation BEFORE UPDATE OF status ON operations
@@ -134,6 +138,7 @@ func TestRejectStartedManagedOperationsCASFailureRollsBackEveryReceipt(t *testin
 }
 
 func TestRejectStartedManagedOperationsRejectsFutureCreationAtomically(t *testing.T) {
+	t.Parallel()
 	fixture := newManagedOperationRejectionFixture(t, "future", 20*time.Second)
 	tx, err := fixture.store.db.BeginTx(context.Background(), nil)
 	if err != nil {
@@ -155,6 +160,7 @@ func TestRejectStartedManagedOperationsRejectsFutureCreationAtomically(t *testin
 }
 
 func TestRejectStartedManagedOperationsRejectsAuthorityDrift(t *testing.T) {
+	t.Parallel()
 	t.Run("multiple started operations", func(t *testing.T) {
 		fixture := newManagedOperationRejectionFixture(t, "multiple", 0)
 		if _, err := fixture.store.db.Exec(`DROP INDEX operations_one_started_context_idx`); err != nil {
@@ -209,6 +215,7 @@ func TestRejectStartedManagedOperationsRejectsAuthorityDrift(t *testing.T) {
 }
 
 func TestManagedOperationRejectionAuthorityFailureRollsBackLifecycle(t *testing.T) {
+	t.Parallel()
 	t.Run("claim expiry", func(t *testing.T) {
 		fixture := newManagedContextFixture(t, "reject-claim-drift", model.OperationTeamworkAccept)
 		reservation, err := fixture.store.ReserveManagedOperation(context.Background(),

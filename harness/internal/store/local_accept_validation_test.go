@@ -10,6 +10,7 @@ import (
 )
 
 func TestCommitLocalAcceptanceRequiresExactOperationArtifactProjection(t *testing.T) {
+	t.Parallel()
 	t.Run("normal checkpoint projection", func(t *testing.T) {
 		fixture := newAcceptanceFixture(t, 1)
 		operation, authority := fixture.reserveOffer(t, "artifact-projection-normal", nil)
@@ -138,6 +139,7 @@ func assertAcceptanceProjectionFailure(t *testing.T, fixture *acceptanceFixture,
 }
 
 func TestValidateParticipantBindingBoundsReceiptOnlyVersions(t *testing.T) {
+	t.Parallel()
 	fixture := newAcceptanceFixture(t, 1)
 	offered, current := commitCausalOffer(t, fixture, "participant-receipt-version")
 	current = commitCausalAcceptedWork(t, fixture, offered, current, fixture.now.Add(3*time.Second))
@@ -192,6 +194,7 @@ func TestValidateParticipantBindingBoundsReceiptOnlyVersions(t *testing.T) {
 }
 
 func TestRequireExactDeliveredArtifactClosureRejectsReusableSubstitution(t *testing.T) {
+	t.Parallel()
 	fixture := newAcceptanceFixture(t, 1)
 	_, authority := fixture.reserveOffer(t, "delivered-closure", nil)
 	offer := fixture.offer(t, authority, "delivered-closure", fixture.reviewers, nil, nil)

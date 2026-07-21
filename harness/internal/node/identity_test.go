@@ -92,6 +92,7 @@ func TestIdentityCreateRestartAndSharedDerivation(t *testing.T) {
 }
 
 func TestIdentityConcurrentCreateConvergesWithoutClobber(t *testing.T) {
+	t.Parallel()
 	nodeState := newIdentityNodeState(t)
 	const callers = 32
 	start := make(chan struct{})
@@ -135,6 +136,7 @@ func TestIdentityConcurrentCreateConvergesWithoutClobber(t *testing.T) {
 }
 
 func TestIdentityRestartCleansReservedCrashStaging(t *testing.T) {
+	t.Parallel()
 	t.Run("before canonical publication", func(t *testing.T) {
 		nodeState := newIdentityNodeState(t)
 		staged := filepath.Join(nodeState, ".identity-00000000000000000000000000000000.tmp")
@@ -186,6 +188,7 @@ func TestIdentityRestartCleansReservedCrashStaging(t *testing.T) {
 }
 
 func TestIdentityRejectsUnsafeStateAndKeyPaths(t *testing.T) {
+	t.Parallel()
 	t.Run("relative Node state", func(t *testing.T) {
 		if _, err := EnsureIdentity("relative/node"); !errors.Is(err, ErrIdentity) {
 			t.Fatalf("EnsureIdentity() error = %v", err)
@@ -278,6 +281,7 @@ func TestIdentityRejectsUnsafeStateAndKeyPaths(t *testing.T) {
 }
 
 func TestIdentityRejectsInvalidOrReplacedKeyMaterialWithoutOverwrite(t *testing.T) {
+	t.Parallel()
 	nonEdKey, _, err := libp2pcrypto.GenerateECDSAKeyPair(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -323,6 +327,7 @@ func TestIdentityRejectsInvalidOrReplacedKeyMaterialWithoutOverwrite(t *testing.
 }
 
 func TestIdentityNodeStateLockContextHonorsCancellation(t *testing.T) {
+	t.Parallel()
 	nodeState := newIdentityNodeState(t)
 	first, err := openIdentityNodeState(nodeState)
 	if err != nil {

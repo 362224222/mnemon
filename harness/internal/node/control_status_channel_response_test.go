@@ -7,6 +7,7 @@ import (
 )
 
 func TestStatusChannelsSortAndDeriveClosedState(t *testing.T) {
+	t.Parallel()
 	alpha := statusChannelResponseSnapshot("alpha")
 	alpha.Inbox.Durable = 1
 	alpha.Inbox.Pending = 1
@@ -26,6 +27,7 @@ func TestStatusChannelsSortAndDeriveClosedState(t *testing.T) {
 }
 
 func TestStatusChannelsRejectDuplicateAlias(t *testing.T) {
+	t.Parallel()
 	_, err := newStatusChannels([]StatusChannelSnapshot{
 		statusChannelResponseSnapshot("alpha"),
 		statusChannelResponseSnapshot("alpha"),

@@ -9,6 +9,7 @@ import (
 )
 
 func TestChannelMemberReconcilerStateBoundsBackoffAndCounters(t *testing.T) {
+	t.Parallel()
 	worker := &ChannelMemberReconciler{schedules: make(map[channelMemberTargetKey]channelMemberSchedule)}
 	key := channelMemberTargetKey{}
 	at := time.Date(2026, 7, 21, 1, 0, 0, 0, time.UTC)

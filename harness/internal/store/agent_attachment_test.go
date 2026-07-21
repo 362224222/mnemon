@@ -87,6 +87,7 @@ func TestAgentWakePreclaimPeekConsumeAndExpiry(t *testing.T) {
 }
 
 func TestAgentWakePreclaimIsAtomicAndConcurrent(t *testing.T) {
+	t.Parallel()
 	fixture, events := newAgentClaimFixture(t, 1, "attachment-concurrent")
 	at := fixture.now.Add(time.Minute)
 	insertClaimHandling(t, fixture.store, "handling-attachment-concurrent", events[0], 1, at, at, 0)
@@ -133,6 +134,7 @@ func TestAgentWakePreclaimIsAtomicAndConcurrent(t *testing.T) {
 }
 
 func TestAgentAttachmentNeverFallsBackAndExpiryRequeues(t *testing.T) {
+	t.Parallel()
 	fixture, events := newAgentClaimFixture(t, 2, "attachment-stale")
 	at := fixture.now.Add(time.Minute)
 	first := insertClaimHandling(t, fixture.store, "handling-attachment-stale-a", events[0], 2, at, at, 0)
@@ -175,6 +177,7 @@ func TestAgentAttachmentNeverFallsBackAndExpiryRequeues(t *testing.T) {
 }
 
 func TestAgentAttachmentCleanupExcludesActiveConsumedRun(t *testing.T) {
+	t.Parallel()
 	fixture, events := newAgentClaimFixture(t, 1, "attachment-cleanup-active")
 	at := fixture.now.Add(time.Minute)
 	insertClaimHandling(t, fixture.store, "handling-attachment-cleanup-active", events[0], 1, at, at, 0)
@@ -289,6 +292,7 @@ func TestAgentAttachmentCleanupUsesRealFilesNotHistoricalRows(t *testing.T) {
 }
 
 func TestAgentAttachmentRejectsAuthorityAndDurableDrift(t *testing.T) {
+	t.Parallel()
 	fixture, events := newAgentClaimFixture(t, 1, "attachment-drift")
 	at := fixture.now.Add(time.Minute)
 	insertClaimHandling(t, fixture.store, "handling-attachment-drift", events[0], 1, at, at, 0)

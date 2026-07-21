@@ -9,6 +9,7 @@ import (
 )
 
 func TestWorkDeadlineScopeRejectsUnknownChannelWithoutPublishingAuthority(t *testing.T) {
+	t.Parallel()
 	st := openTestStore(t)
 	insertNode(t, st.db)
 	insertProfile(t, st.db)

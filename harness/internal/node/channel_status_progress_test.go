@@ -33,6 +33,7 @@ func TestProjectStatusChannelsExposesCoherentIdleAndQueuedPublicationProgress(t 
 }
 
 func TestControllerStatusPublishesChannelStagesWithoutRawIdentities(t *testing.T) {
+	t.Parallel()
 	fixture := newDaemonFixture(t, true)
 	serving := openServingDataPlaneDaemon(t, fixture)
 	client, err := NewClient(fixture.nodeState)

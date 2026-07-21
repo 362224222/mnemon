@@ -7,6 +7,7 @@ import (
 )
 
 func TestPeerInboxSemanticCommitResultAccessorsAreDefensive(t *testing.T) {
+	t.Parallel()
 	imported := parseSemanticResultEventID(t, "event-semantic-result-imported")
 	first := parseSemanticResultEventID(t, "event-semantic-result-response-a")
 	second := parseSemanticResultEventID(t, "event-semantic-result-response-b")

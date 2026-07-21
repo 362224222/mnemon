@@ -14,6 +14,7 @@ import (
 )
 
 func TestFinalizeAgentCurrentReadDerivesAndReplaysDurableProjection(t *testing.T) {
+	t.Parallel()
 	fixture, events := newAgentClaimFixture(t, 1, "current-read")
 	claimAt := fixture.now.Add(2 * time.Second)
 	handling := insertClaimHandling(t, fixture.store, "handling-current-read", events[0], 10,
@@ -80,6 +81,7 @@ func TestFinalizeAgentCurrentReadDerivesAndReplaysDurableProjection(t *testing.T
 }
 
 func TestFinalizeAgentCurrentReadIsFencedAndConcurrentReplaySafe(t *testing.T) {
+	t.Parallel()
 	t.Run("wrong token and lease boundary", func(t *testing.T) {
 		fixture, events := newAgentClaimFixture(t, 1, "current-fence")
 		claimAt := fixture.now.Add(2 * time.Second)
@@ -176,6 +178,7 @@ func TestFinalizeAgentCurrentReadIsFencedAndConcurrentReplaySafe(t *testing.T) {
 }
 
 func TestFinalizeAgentCurrentReadIncludesOnlyVerifiedEventPinnedArtifacts(t *testing.T) {
+	t.Parallel()
 	t.Run("verified and pinned", func(t *testing.T) {
 		fixture, eventID, root, claim, claimAt := currentArtifactReadFixture(t, "valid")
 		spec := plannedCurrentReadSpec(t, fixture.store, currentReadSpec(fixture, claim.Run.ID(),
@@ -208,6 +211,7 @@ func TestFinalizeAgentCurrentReadIncludesOnlyVerifiedEventPinnedArtifacts(t *tes
 }
 
 func TestAgentCurrentArtifactPlanRequiresExactViewsAndReverifiesReplay(t *testing.T) {
+	t.Parallel()
 	fixture, eventID, root, claim, claimAt := currentArtifactReadFixture(t, "exact-view")
 	base := currentReadSpec(fixture, claim.Run.ID(), "token-current-artifact-exact-view",
 		claimAt.Add(time.Second))
@@ -281,6 +285,7 @@ func TestAgentCurrentArtifactPlanRequiresExactViewsAndReverifiesReplay(t *testin
 }
 
 func TestAgentCurrentArtifactFinalizeHonorsProfilePathBudget(t *testing.T) {
+	t.Parallel()
 	fixture, _, _, claim, claimAt := currentArtifactReadFixture(t, "path-budget")
 	base := currentReadSpec(fixture, claim.Run.ID(), "token-current-artifact-path-budget",
 		claimAt.Add(time.Second))
@@ -315,6 +320,7 @@ func TestAgentCurrentArtifactFinalizeHonorsProfilePathBudget(t *testing.T) {
 }
 
 func TestAgentCurrentArtifactFinalizeIsConcurrentReplaySafe(t *testing.T) {
+	t.Parallel()
 	fixture, _, _, claim, claimAt := currentArtifactReadFixture(t, "concurrent-view")
 	spec := plannedCurrentReadSpec(t, fixture.store, currentReadSpec(fixture, claim.Run.ID(),
 		"token-current-artifact-concurrent-view", claimAt.Add(time.Second)))
@@ -357,6 +363,7 @@ func TestAgentCurrentArtifactFinalizeIsConcurrentReplaySafe(t *testing.T) {
 }
 
 func TestFinalizeAgentCurrentReadKeepsOfferedBriefAfterAcceptedTransition(t *testing.T) {
+	t.Parallel()
 	fixture := newAcceptanceFixture(t, 1)
 	operation, authority := fixture.reserveOffer(t, "current-accepted-brief", nil)
 	root := verifiedRoot(t, "current-accepted-brief-root",
@@ -507,6 +514,7 @@ func TestFinalizeAgentCurrentReadKeepsBriefForDerivedRework(t *testing.T) {
 }
 
 func TestDeriveCurrentActionsUsesExactParticipantStateAndSourceEvent(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 7, 16, 16, 0, 0, 0, time.UTC)
 	home, _ := model.ParsePeerID("peer-current-policy-home")
 	reviewer, _ := model.ParsePeerID("peer-current-policy-reviewer")
@@ -593,6 +601,7 @@ func TestDeriveCurrentActionsUsesExactParticipantStateAndSourceEvent(t *testing.
 }
 
 func TestCurrentDistinguishesOrdinaryDerivedWorkHandlingFromParentResume(t *testing.T) {
+	t.Parallel()
 	fixture := newDerivationDispositionFixture(t, false)
 	event := currentPolicyEvent(t, fixture.now, fixture.channel, fixture.children[0],
 		fixture.node.PeerID(), fixture.reviewers[1], model.EventReviewAccepted,

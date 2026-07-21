@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 )
 
 // SchemaVersion is the only Node database version accepted by R5.
@@ -19,6 +20,10 @@ var schemaV1 string
 var createObjectPattern = regexp.MustCompile(
 	"(?m)^CREATE (?:UNIQUE )?(TABLE|TRIGGER|INDEX) ([A-Za-z_][A-Za-z0-9_]*)",
 )
+
+var referenceSchemaObjectCache = sync.OnceValues(func() (map[string]schemaObject, error) {
+	return buildReferenceSchemaObjects(context.Background())
+})
 
 func configureDatabase(ctx context.Context, db *sql.DB) error {
 	if err := db.PingContext(ctx); err != nil {
@@ -266,6 +271,20 @@ type schemaObject struct {
 }
 
 func referenceSchemaObjects(ctx context.Context) (map[string]schemaObject, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("nil context")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	objects, err := referenceSchemaObjectCache()
+	if err != nil {
+		return nil, err
+	}
+	return cloneSchemaObjects(objects), nil
+}
+
+func buildReferenceSchemaObjects(ctx context.Context) (map[string]schemaObject, error) {
 	declared, err := declaredSchemaObjects()
 	if err != nil {
 		return nil, err
@@ -312,6 +331,14 @@ func referenceSchemaObjects(ctx context.Context) (map[string]schemaObject, error
 		}
 	}
 	return objects, nil
+}
+
+func cloneSchemaObjects(objects map[string]schemaObject) map[string]schemaObject {
+	clone := make(map[string]schemaObject, len(objects))
+	for name, object := range objects {
+		clone[name] = object
+	}
+	return clone
 }
 
 func declaredSchemaObjects() (map[string]string, error) {

@@ -16,10 +16,7 @@ import (
 func TestVerifiedArtifactRootCheckpointReplayConflictAndRestart(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "node", "node.db")
-	st, err := Open(context.Background(), path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := openStoreTestTemplateCopy(t, path)
 	root := verifiedRoot(t, "root-one", `{"entries":[],"kind":"report","total_bytes":0}`, 0)
 	first, err := st.CheckpointVerifiedArtifactRoot(context.Background(), root)
 	if err != nil || first.Replayed {

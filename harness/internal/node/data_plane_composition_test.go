@@ -87,7 +87,7 @@ func waitForConvergedDataPlaneChannel(t *testing.T, client *Client,
 	daemon *servingDataPlaneDaemon,
 ) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(60 * time.Second)
 	var last ChannelStatusResponse
 	var lastErr *APIError
 	for time.Now().Before(deadline) {

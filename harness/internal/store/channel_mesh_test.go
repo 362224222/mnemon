@@ -109,10 +109,7 @@ func TestReadChannelMeshAuthorityFailsClosedOnCorruptProjection(t *testing.T) {
 func TestChannelMeshAuthorityIsDefensiveAndSurvivesRestart(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "node", "node.db")
-	st, err := Open(context.Background(), path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := openStoreTestTemplateCopy(t, path)
 	fixture := testkit.NewSignedChannel(t, "mesh-restart")
 	remote := fixture.AppendActive(t, "mesh-restart-remote")
 	insertChannelTestNode(t, st.db, fixture.Owner(), fixture.Channel().CreatedAt())

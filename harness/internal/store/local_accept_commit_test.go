@@ -11,6 +11,7 @@ import (
 )
 
 func TestCommitLocalAcceptanceRollsBackStalePublicationSequence(t *testing.T) {
+	t.Parallel()
 	fixture := newAcceptanceFixture(t, 1)
 	operation, authority := fixture.reserveOffer(t, "stale-sequence", nil)
 	spec := fixture.offer(t, authority, "stale-sequence", fixture.reviewers, nil, nil)
@@ -28,6 +29,7 @@ func TestCommitLocalAcceptanceRollsBackStalePublicationSequence(t *testing.T) {
 }
 
 func TestCommitLocalAcceptanceRollsBackStaleWorkCAS(t *testing.T) {
+	t.Parallel()
 	fixture := newAcceptanceFixture(t, 1)
 	_, authority := fixture.reserveOffer(t, "cas-offer", nil)
 	offer := fixture.offer(t, authority, "cas-offer", fixture.reviewers, nil, nil)
@@ -71,6 +73,7 @@ func TestCommitLocalAcceptanceRollsBackStaleWorkCAS(t *testing.T) {
 }
 
 func TestCommitLocalAcceptanceDoesNotSubstituteUnrelatedActiveRun(t *testing.T) {
+	t.Parallel()
 	fixture := newAcceptanceFixture(t, 1)
 	operation, authority := fixture.reserveOffer(t, "durable-run", nil)
 	spec := fixture.offer(t, authority, "durable-run", fixture.reviewers, nil, nil)
@@ -91,6 +94,7 @@ func TestCommitLocalAcceptanceDoesNotSubstituteUnrelatedActiveRun(t *testing.T) 
 }
 
 func TestCommitLocalAcceptanceRejectsInvalidEvidenceWithoutWrites(t *testing.T) {
+	t.Parallel()
 	t.Run("missing outbound baseline", func(t *testing.T) {
 		fixture := newAcceptanceFixture(t, 1)
 		operation, authority := fixture.reserveOffer(t, "missing-baseline", nil)

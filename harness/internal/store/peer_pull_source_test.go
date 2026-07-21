@@ -12,6 +12,7 @@ import (
 )
 
 func TestPeerPullSourceReadsContinuousExactPagesAndReplaysResponseLoss(t *testing.T) {
+	t.Parallel()
 	fixture, publications := newPeerPullSourceFixture(t, 5)
 	baseAt := peerPullTestAt(fixture)
 	first := readPeerPullPage(t, fixture, 0, 2, baseAt)
@@ -54,6 +55,7 @@ func TestPeerPullSourceReadsContinuousExactPagesAndReplaysResponseLoss(t *testin
 }
 
 func TestPeerPullSourceCursorAckIsMonotonicIdempotentAndSettlesDeliveries(t *testing.T) {
+	t.Parallel()
 	fixture, _ := newPeerPullSourceFixture(t, 4)
 	at := peerPullTestAt(fixture)
 	first, err := fixture.store.CommitPeerPullCursorAck(context.Background(), CommitPeerPullCursorAckSpec{
@@ -95,6 +97,7 @@ func TestPeerPullSourceCursorAckIsMonotonicIdempotentAndSettlesDeliveries(t *tes
 }
 
 func TestPeerPullSourceEnforcesBaselineFloorAndRequestBounds(t *testing.T) {
+	t.Parallel()
 	t.Run("nonzero binding baseline", func(t *testing.T) {
 		fixture := newChannelBaselineFixture(t, "peer-pull-nonzero", model.TopicJoined)
 		fixture.advanceLocalHead(t, 3, fixture.at)
@@ -214,6 +217,7 @@ func testPeerPullSourceRequestBounds(t *testing.T) {
 }
 
 func TestPeerPullSourceRejectsWrongPeerEpochRevocationAndDurableCorruption(t *testing.T) {
+	t.Parallel()
 	t.Run("wrong authenticated peer and local origin epoch", func(t *testing.T) {
 		fixture, _ := newPeerPullSourceFixture(t, 1)
 		at := peerPullTestAt(fixture)
@@ -302,6 +306,7 @@ func TestPeerPullSourceRejectsWrongPeerEpochRevocationAndDurableCorruption(t *te
 }
 
 func TestPeerPullSourceReturnsClosedAuthorityFailures(t *testing.T) {
+	t.Parallel()
 	t.Run("not origin", func(t *testing.T) {
 		fixture := newAcceptanceFixture(t, 1)
 		otherChannel, err := model.ParseChannelID("channel-peer-pull-other-origin")
@@ -363,6 +368,7 @@ func TestPeerPullSourceReturnsClosedAuthorityFailures(t *testing.T) {
 }
 
 func TestPeerPullSourceAppliesCountAndCanonicalByteBounds(t *testing.T) {
+	t.Parallel()
 	fixture, publications := newPeerPullSourceFixture(t, 33)
 	page := readPeerPullPage(t, fixture, 0, 32, peerPullTestAt(fixture))
 	if len(page.Publications) != 32 || page.ScannedChannelSequence != 32 {

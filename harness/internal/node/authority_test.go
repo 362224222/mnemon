@@ -12,6 +12,7 @@ import (
 )
 
 func TestInspectAuthorityReadsActiveAndDisabledExistingState(t *testing.T) {
+	t.Parallel()
 	for _, enabled := range []bool{false, true} {
 		enabled := enabled
 		t.Run(map[bool]string{false: "disabled", true: "active"}[enabled], func(t *testing.T) {
@@ -37,6 +38,7 @@ func TestInspectAuthorityReadsActiveAndDisabledExistingState(t *testing.T) {
 }
 
 func TestInspectAuthorityRejectsActiveWriterExplicitly(t *testing.T) {
+	t.Parallel()
 	fixture := newDaemonFixture(t, true)
 	st, err := store.OpenExisting(context.Background(), filepath.Join(fixture.nodeState, "node.db"))
 	if err != nil {
@@ -55,6 +57,7 @@ func TestInspectAuthorityRejectsActiveWriterExplicitly(t *testing.T) {
 }
 
 func TestInspectAuthorityRejectsIdentityAndCredentialDriftAndReleasesStore(t *testing.T) {
+	t.Parallel()
 	t.Run("credential", func(t *testing.T) {
 		fixture := newDaemonFixture(t, false)
 		writeDaemonToken(t, fixture.nodeState, bytes.Repeat([]byte{0x29}, 32), true)
@@ -83,6 +86,7 @@ func TestInspectAuthorityRejectsIdentityAndCredentialDriftAndReleasesStore(t *te
 }
 
 func TestInspectAuthorityNeverCreatesOrRepairsStateAndHonorsContext(t *testing.T) {
+	t.Parallel()
 	workspace := newDaemonWorkspace(t)
 	if _, err := InspectAuthority(context.Background(), workspace); !errors.Is(err, ErrAuthorityInspection) {
 		t.Fatalf("missing authority error = %v", err)

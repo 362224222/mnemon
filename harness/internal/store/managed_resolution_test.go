@@ -16,6 +16,7 @@ import (
 const storeTestMaxDiagnosticBytes = 512
 
 func TestCommitManagedResolutionAtomicallyTransitionsClosedDecisions(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		kind        model.OperationKind
@@ -74,6 +75,7 @@ func TestCommitManagedResolutionAtomicallyTransitionsClosedDecisions(t *testing.
 }
 
 func TestCommitManagedResolutionTerminalReplaySurvivesRestart(t *testing.T) {
+	t.Parallel()
 	fixture := newManagedResolutionFixture(t, "restart", model.OperationResolveNoAction,
 		"no local action remains")
 	spec := fixture.resolveSpec()
@@ -109,6 +111,7 @@ func TestCommitManagedResolutionTerminalReplaySurvivesRestart(t *testing.T) {
 }
 
 func TestCommitManagedResolutionRetryReplaySurvivesSuccessorClaim(t *testing.T) {
+	t.Parallel()
 	fixture := newManagedResolutionFixture(t, "retry-successor", model.OperationResolveRetry,
 		"retry after a later claim")
 	spec := fixture.resolveSpec()
@@ -134,6 +137,7 @@ func TestCommitManagedResolutionRetryReplaySurvivesSuccessorClaim(t *testing.T) 
 }
 
 func TestCommitManagedResolutionFinalRetryAtomicallyDies(t *testing.T) {
+	t.Parallel()
 	fixture := newManagedResolutionFixture(t, "final-retry", model.OperationResolveRetry,
 		"retry cannot proceed in this repaired generation")
 	setClaimBudget(t, fixture.store, 1)
@@ -187,6 +191,7 @@ func TestCommitManagedResolutionFinalRetryAtomicallyDies(t *testing.T) {
 }
 
 func TestCommitManagedResolutionTerminalReplayRejectsLifecycleDrift(t *testing.T) {
+	t.Parallel()
 	fixture := newManagedResolutionFixture(t, "terminal-drift", model.OperationResolveNoAction,
 		"nothing remains actionable")
 	spec := fixture.resolveSpec()
@@ -203,6 +208,7 @@ func TestCommitManagedResolutionTerminalReplayRejectsLifecycleDrift(t *testing.T
 }
 
 func TestCommitManagedResolutionConcurrentReplayIsSingleEffect(t *testing.T) {
+	t.Parallel()
 	fixture := newManagedResolutionFixture(t, "concurrent", model.OperationResolveReject,
 		"this obligation is invalid for the current Agent")
 	spec := fixture.resolveSpec()
@@ -250,6 +256,7 @@ func TestCommitManagedResolutionConcurrentReplayIsSingleEffect(t *testing.T) {
 }
 
 func TestCommitManagedResolutionRejectsStaleExpiredAndFutureEvidenceAtomically(t *testing.T) {
+	t.Parallel()
 	t.Run("Work version changed", func(t *testing.T) {
 		fixture := newManagedResolutionFixture(t, "work-stale", model.OperationResolveNoAction, "stale Work")
 		work := fixture.current.ActionWork()

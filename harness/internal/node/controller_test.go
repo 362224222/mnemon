@@ -544,6 +544,7 @@ func TestControllerManagedWorkerFailureStaysReachableAndFailsClosed(t *testing.T
 }
 
 func TestControllerRequestTrackerRejectsNewHandlersAndDrainsEnteredHandler(t *testing.T) {
+	t.Parallel()
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	tracker := newControllerRequestTracker(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {

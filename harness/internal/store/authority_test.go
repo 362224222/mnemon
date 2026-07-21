@@ -9,6 +9,7 @@ import (
 )
 
 func TestReadLocalAuthorityReturnsOneConsistentSnapshot(t *testing.T) {
+	t.Parallel()
 	st := openTestStore(t)
 	node, profile := bootstrapValues(t, "peer-authority", "principal-authority", t.TempDir())
 	if _, err := st.InitializeNode(context.Background(), node, profile); err != nil {
@@ -27,6 +28,7 @@ func TestReadLocalAuthorityReturnsOneConsistentSnapshot(t *testing.T) {
 }
 
 func TestReadLocalAuthorityRejectsMissingAndInconsistentState(t *testing.T) {
+	t.Parallel()
 	t.Run("missing", func(t *testing.T) {
 		st := openTestStore(t)
 		if _, err := st.ReadLocalAuthority(context.Background()); !errors.Is(err, ErrLocalAuthority) {

@@ -15,6 +15,7 @@ import (
 )
 
 func TestAgentAttachmentEnvironmentMatchesLocalAPI(t *testing.T) {
+	t.Parallel()
 	if agent.RunAttachmentEnvironment != RunAttachmentEnv {
 		t.Fatalf("Run attachment environment = %q, local API = %q",
 			agent.RunAttachmentEnvironment, RunAttachmentEnv)
@@ -22,6 +23,7 @@ func TestAgentAttachmentEnvironmentMatchesLocalAPI(t *testing.T) {
 }
 
 func TestAgentAttachmentFilesystemCleansAndDiscardsExactStages(t *testing.T) {
+	t.Parallel()
 	nodeState := newAgentAttachmentNodeState(t)
 	filesystem := newAgentAttachmentFilesystem(nodeState)
 	at := time.Date(2026, 7, 19, 9, 0, 0, 0, time.UTC)
@@ -49,6 +51,7 @@ func TestAgentAttachmentFilesystemCleansAndDiscardsExactStages(t *testing.T) {
 }
 
 func TestAgentAttachmentFilesystemPublishesAndProjectsCandidate(t *testing.T) {
+	t.Parallel()
 	fixture := newPublishedAgentAttachment(t, 0x51, "run-agent-attachment-bridge")
 	if fixture.tokenHash != model.Sum(fixture.token) {
 		t.Fatalf("TokenHash() = %s", fixture.tokenHash)
@@ -70,6 +73,7 @@ func TestAgentAttachmentFilesystemPublishesAndProjectsCandidate(t *testing.T) {
 }
 
 func TestAgentAttachmentFilesystemRejectsReplacementAndReapsAuthorizedSecret(t *testing.T) {
+	t.Parallel()
 	fixture := newPublishedAgentAttachment(t, 0x51, "run-agent-attachment-replacement")
 	replacement := bytes.Repeat([]byte{0x61}, 32)
 	if err := os.Remove(fixture.attachment.Path()); err != nil {
@@ -93,6 +97,7 @@ func TestAgentAttachmentFilesystemRejectsReplacementAndReapsAuthorizedSecret(t *
 }
 
 func TestAgentAttachmentFilesystemPreservesCandidatePageBoundAndOrder(t *testing.T) {
+	t.Parallel()
 	nodeState := newAgentAttachmentNodeState(t)
 	filesystem := newAgentAttachmentFilesystem(nodeState)
 	for index := 0; index < 66; index++ {

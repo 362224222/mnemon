@@ -10,6 +10,7 @@ import (
 )
 
 func TestPeerInboxSemanticOutcomeBindsExactRejectedOperation(t *testing.T) {
+	t.Parallel()
 	fixture := newPeerInboxSemanticHandlingSettlementFixture(t, "receipt-operation-link",
 		model.EventReviewCancelled)
 	claim, token := claimPeerInboxSemanticSettlementHandling(t, fixture)

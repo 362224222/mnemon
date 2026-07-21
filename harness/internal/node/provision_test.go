@@ -15,6 +15,7 @@ import (
 )
 
 func TestPrepareNodeStateCreatesOnlyASerializableOwnerDirectorySkeleton(t *testing.T) {
+	t.Parallel()
 	workspace := newProvisionWorkspace(t)
 	const callers = 20
 	results := make(chan string, callers)
@@ -57,6 +58,7 @@ func TestPrepareNodeStateCreatesOnlyASerializableOwnerDirectorySkeleton(t *testi
 }
 
 func TestPrepareNodeStateRejectsUnsafeParentsWithoutCreatingAuthority(t *testing.T) {
+	t.Parallel()
 	workspace := newProvisionWorkspace(t)
 	if err := os.Mkdir(filepath.Join(workspace, ".mnemon"), 0o700); err != nil {
 		t.Fatal(err)
@@ -73,6 +75,7 @@ func TestPrepareNodeStateRejectsUnsafeParentsWithoutCreatingAuthority(t *testing
 }
 
 func TestProvisionCreatesAndReplaysOneDisabledWorkspaceAuthority(t *testing.T) {
+	t.Parallel()
 	workspace := newProvisionWorkspace(t)
 	bundle, err := assets.Load()
 	if err != nil {
@@ -127,6 +130,7 @@ func TestProvisionCreatesAndReplaysOneDisabledWorkspaceAuthority(t *testing.T) {
 }
 
 func TestProvisionRejectsProjectionAndHostAuthorityDrift(t *testing.T) {
+	t.Parallel()
 	t.Run("identity replacement", func(t *testing.T) {
 		workspace := newProvisionWorkspace(t)
 		options := provisionTestOptions(t, workspace, model.HostCodex)
@@ -174,6 +178,7 @@ func TestProvisionRejectsProjectionAndHostAuthorityDrift(t *testing.T) {
 }
 
 func TestProvisionRejectsUnsafeWorkspaceStateAndInvalidClock(t *testing.T) {
+	t.Parallel()
 	t.Run("relative workspace", func(t *testing.T) {
 		options := ProvisionOptions{Workspace: ".", Host: model.HostCodex, AssetRevision: "asset-r5"}
 		if _, err := Provision(context.Background(), options); !errors.Is(err, ErrProvision) {

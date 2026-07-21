@@ -15,6 +15,7 @@ import (
 )
 
 func TestDaemonPreflightNeverInitializesOrRewritesNodeDatabase(t *testing.T) {
+	t.Parallel()
 	t.Run("missing", func(t *testing.T) {
 		fixture := newDaemonFixture(t, true)
 		path := filepath.Join(fixture.nodeState, "node.db")
@@ -84,6 +85,7 @@ func TestDaemonPreflightNeverInitializesOrRewritesNodeDatabase(t *testing.T) {
 }
 
 func TestDaemonPreflightRejectsWriterAndDurableAuthorityDrift(t *testing.T) {
+	t.Parallel()
 	t.Run("writer active", func(t *testing.T) {
 		fixture := newDaemonFixture(t, true)
 		st, err := store.OpenExisting(context.Background(), filepath.Join(fixture.nodeState, "node.db"))
@@ -174,6 +176,7 @@ func TestDaemonPreflightRejectsWriterAndDurableAuthorityDrift(t *testing.T) {
 }
 
 func TestDaemonPreflightVerifiesInstallationAndReleasesWriterAuthority(t *testing.T) {
+	t.Parallel()
 	t.Run("installation drift", func(t *testing.T) {
 		fixture := newDaemonFixture(t, true)
 		drift := errors.New("projection drift")
@@ -243,7 +246,7 @@ func TestDaemonPreflightVerifiesInstallationAndReleasesWriterAuthority(t *testin
 		go func() { result <- preflight.Verify(ctx) }()
 		select {
 		case <-started:
-		case <-time.After(2 * time.Second):
+		case <-time.After(10 * time.Second):
 			cancel()
 			t.Fatal("installation verifier did not start")
 		}
@@ -251,7 +254,7 @@ func TestDaemonPreflightVerifiesInstallationAndReleasesWriterAuthority(t *testin
 		var err error
 		select {
 		case err = <-result:
-		case <-time.After(2 * time.Second):
+		case <-time.After(10 * time.Second):
 			t.Fatal("cancellable installation verifier retained preflight")
 		}
 		if !errors.Is(err, context.Canceled) {

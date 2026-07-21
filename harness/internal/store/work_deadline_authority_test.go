@@ -8,6 +8,7 @@ import (
 )
 
 func TestWorkDeadlineAuthorityRejectsNonControllerBatchBeforeDurableRead(t *testing.T) {
+	t.Parallel()
 	st := openTestStore(t)
 	tx, err := st.db.BeginTx(context.Background(), nil)
 	if err != nil {
