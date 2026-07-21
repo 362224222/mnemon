@@ -61,6 +61,7 @@ execution_failed=false
 finalized=false
 logs_collected=false
 public_status_ready_timeout_seconds=30
+derived_offer_ready_timeout_seconds=30
 
 mkdir -p "$output/topology" "$output/transcript" "$output/nodes" \
     "$output/runtime" "$output/artifacts" "$output/faults" "$output/oracle"
@@ -457,6 +458,7 @@ create_channels() {
     : >"$private/gamma.invite"
 
     wait_public_status_ready || return 1
+    wait_derived_offer_candidates_ready || return 1
     for node in A B C D E F; do
         public_command "$node" status "nodes/$node/status-before.json" mnemon-harness status || return 1
     done
@@ -562,6 +564,61 @@ wait_public_status_ready() {
               >"$output/nodes/$node/channel-status-before.json"
         fi
     done
+}
+
+wait_derived_offer_candidates_ready() {
+    routes="$private/derived-offer-routes.txt"
+    jq -r '.derived_path[]?' "$scenario_manifest" >"$routes"
+    [ -s "$routes" ] || return 0
+
+    readiness_deadline_ms=$(( $(date +%s%3N) + derived_offer_ready_timeout_seconds * 1000 ))
+    all_ready=false
+    while [ "$(date +%s%3N)" -lt "$readiness_deadline_ms" ]; do
+        all_ready=true
+        while IFS=: read -r node channel participant extra; do
+            if [ -z "$node" ] || [ -z "$channel" ] || [ -z "$participant" ] ||
+               [ -n "${extra:-}" ]; then
+                case_error "invalid derived_path route: $node:$channel:$participant"
+                return 1
+            fi
+            if [ "$(date +%s%3N)" -ge "$readiness_deadline_ms" ]; then
+                all_ready=false
+                break
+            fi
+            raw="$private/initiation-ready-$node.json"
+            set +e
+            node_exec "$node" timeout 1s mnemon-harness agent current --json >"$raw" 2>/dev/null
+            current_exit=$?
+            set -e
+            if [ "$current_exit" -ne 0 ] ||
+               ! jq -e --arg channel "$channel" --arg participant "$participant" '
+                 .status == "none" and
+                 any(.initiation_context.channels[]?;
+                   .local_alias == $channel and
+                   any(.participants[]?;
+                     .effective_alias == $participant and .eligible == true))
+               ' "$raw" >/dev/null; then
+                all_ready=false
+            fi
+        done <"$routes"
+        [ "$all_ready" = true ] && break
+        sleep 0.2
+    done
+    [ "$all_ready" = true ] || {
+        for node in A B C D E F; do
+            raw="$private/initiation-ready-$node.json"
+            destination="$output/nodes/$node/initiation-before.json"
+            if [ -s "$raw" ]; then
+                if jq -e . "$raw" >/dev/null 2>&1; then
+                    redact_json <"$raw" >"$destination"
+                else
+                    redact_text_file "$raw" "$destination"
+                fi
+            fi
+        done
+        case_error "derived offer candidates did not become eligible within ${derived_offer_ready_timeout_seconds} seconds"
+        return 1
+    }
 }
 
 write_channel_topology() {
