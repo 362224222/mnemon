@@ -38,6 +38,7 @@ const (
 	wakeWorkerCallbackFailure = "managed Runtime durable callback failed"
 	wakeWorkerRecoveryFailure = "managed Runtime was orphaned during startup recovery"
 	wakeWorkerUnregistered    = "managed Runtime launch was not registered"
+	wakeWorkerLauncher        = "mnemond-wake"
 )
 
 // WakeWorkerStore is the complete durable surface reachable by the worker.
@@ -129,6 +130,7 @@ type WakeWorker struct {
 	pollInterval      time.Duration
 	backoffInterval   time.Duration
 	settlementTimeout time.Duration
+	runtimeTimeout    time.Duration
 	recoverRuntime    func(context.Context, model.JSON, func() time.Time) (runtimeProcessRecovery, error)
 
 	mu       sync.Mutex
@@ -216,40 +218,16 @@ func (state *wakeWorkerCallbackState) closeAndWait() wakeWorkerCallbackSnapshot 
 }
 
 func NewWakeWorker(options WakeWorkerOptions) (*WakeWorker, error) {
-	if options.Profile.ID() != model.TeamworkProfileID() || !options.Profile.Enabled() ||
-		options.Profile.Runtime() != model.RuntimeCodexAppServer || options.AssetRevision == "" ||
-		options.Profile.ActiveAssetRevision() != options.AssetRevision || options.Store == nil ||
-		options.Preparer == nil || options.Adapter == nil || options.Gate == nil {
-		return nil, fmt.Errorf("%w: active Codex Profile, Store, gate, preparer and adapter are required",
-			ErrWakeWorker)
-	}
-	if options.Clock == nil {
-		options.Clock = wallServiceClock{}
-	}
-	if options.Timer == nil {
-		options.Timer = wallWakeWorkerTimer{}
-	}
-	if options.PollInterval == 0 {
-		options.PollInterval = defaultWakeWorkerPoll
-	}
-	if options.BackoffInterval == 0 {
-		options.BackoffInterval = defaultWakeWorkerBackoff
-	}
-	if options.SettlementTimeout == 0 {
-		options.SettlementTimeout = defaultWakeWorkerSettlement
-	}
-	if options.PollInterval < time.Millisecond || options.PollInterval > maxWakeWorkerPoll ||
-		options.BackoffInterval < time.Millisecond || options.BackoffInterval > maxWakeWorkerBackoff ||
-		options.SettlementTimeout < time.Millisecond ||
-		options.SettlementTimeout > maxWakeWorkerSettlement {
-		return nil, fmt.Errorf("%w: poll, backoff or settlement bound is invalid", ErrWakeWorker)
+	runtimeTimeout, err := validateWakeWorkerOptions(&options)
+	if err != nil {
+		return nil, err
 	}
 	return &WakeWorker{profile: options.Profile, assetRevision: options.AssetRevision,
 		store: options.Store, preparer: options.Preparer, adapter: options.Adapter,
 		gate: options.Gate, clock: options.Clock, timer: options.Timer,
 		pollInterval: options.PollInterval, backoffInterval: options.BackoffInterval,
-		settlementTimeout: options.SettlementTimeout, recoverRuntime: recoverRuntimeProcess,
-		healthy: true}, nil
+		settlementTimeout: options.SettlementTimeout, runtimeTimeout: runtimeTimeout,
+		recoverRuntime: recoverRuntimeProcess, healthy: true}, nil
 }
 
 func (worker *WakeWorker) Snapshot() WakeWorkerSnapshot {
@@ -510,6 +488,8 @@ func (worker *WakeWorker) runPrepared(ctx context.Context, prepared PreparedWake
 	fence model.Digest,
 ) (time.Duration, string) {
 	run := prepared.Run()
+	adapterCtx, cancelAdapter := worker.runtimeExecutionContext(ctx, run)
+	defer cancelAdapter()
 	callbackState := newWakeWorkerCallbackState()
 	callbacks := CodexWakeCallbacks{
 		RecordLaunch: func(callbackCtx context.Context, evidence CodexLaunchEvidence) error {
@@ -550,7 +530,7 @@ func (worker *WakeWorker) runPrepared(ctx context.Context, prepared PreparedWake
 			return nil
 		},
 	}
-	result, adapterErr := worker.adapter.Run(ctx, CodexWakeRequest{
+	result, adapterErr := worker.adapter.Run(adapterCtx, CodexWakeRequest{
 		RunAttachmentEnvironment: prepared.Environment(), Callbacks: callbacks})
 	callback := callbackState.closeAndWait()
 	if callback.launchFailed && !result.LaunchAt.IsZero() &&
@@ -620,7 +600,11 @@ func (worker *WakeWorker) failPreparedRun(prepared PreparedWake) string {
 	if err != nil {
 		return wakeWorkerIssueAdapterInvariant
 	}
-	receipt, err := codexCompletionReceipt("launch_failed", "", "", false,
+	adapter, ok := worker.adapterName()
+	if !ok {
+		return wakeWorkerIssueAdapterInvariant
+	}
+	receipt, err := managedCompletionReceipt(adapter, "launch_failed", "", "", false,
 		"not_started", nil)
 	if err != nil {
 		return wakeWorkerIssueAdapterInvariant
@@ -629,7 +613,7 @@ func (worker *WakeWorker) failPreparedRun(prepared PreparedWake) string {
 		Adapter       string `json:"adapter"`
 		Failure       string `json:"failure"`
 		SchemaVersion int    `json:"schema_version"`
-	}{codexAdapterName, wakeWorkerIssuePrepareRun, 1})
+	}{adapter, wakeWorkerIssuePrepareRun, 1})
 	if err != nil {
 		return wakeWorkerIssueAdapterInvariant
 	}
@@ -652,7 +636,7 @@ func (worker *WakeWorker) runAuthority(run model.AgentRun) (model.Digest, bool) 
 	_, hasHandling := run.HandlingID()
 	return fence, hasFence && hasHandling && !fence.IsZero() && !run.ID().IsZero() &&
 		run.ProfileID() == worker.profile.ID() && run.Runtime() == worker.profile.Runtime() &&
-		run.Launcher() == "mnemond-wake"
+		run.Launcher() == wakeWorkerLauncher
 }
 
 func (worker *WakeWorker) trustedNow() (time.Time, error) {

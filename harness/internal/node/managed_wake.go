@@ -21,7 +21,7 @@ type ManagedRuntimeInstallation interface {
 }
 
 // NewManagedWakeAdapterFactory binds one canonical workspace to its installed
-// Codex Runtime. The returned factory accepts only the exact durable Node and
+// Host Runtime. The returned factory accepts only the exact durable Node and
 // Profile authority supplied by OpenDaemon.
 func NewManagedWakeAdapterFactory(workspace string,
 	install ManagedRuntimeInstallation,
@@ -53,16 +53,17 @@ func NewManagedWakeAdapterFactory(workspace string,
 		if err := ctx.Err(); err != nil {
 			return nil, fmt.Errorf("compose managed wake adapter: %w", err)
 		}
-		adapter, err := agent.NewCodexWakeAdapter(agent.CodexWakeAdapterOptions{
-			Executable:  executable,
-			Workspace:   validatedWorkspace,
-			Environment: managedWakeEnvironment(os.Environ()),
-			VerifyProjection: func(runCtx context.Context) error {
-				return install.Verify(runCtx, options.Profile)
-			},
-		})
+		adapter, err := newManagedProfileWakeAdapter(options.Profile,
+			agent.CodexWakeAdapterOptions{
+				Executable:  executable,
+				Workspace:   validatedWorkspace,
+				Environment: managedWakeEnvironment(os.Environ()),
+				VerifyProjection: func(runCtx context.Context) error {
+					return install.Verify(runCtx, options.Profile)
+				},
+			})
 		if err != nil {
-			return nil, fmt.Errorf("compose managed Codex wake adapter: %w", err)
+			return nil, fmt.Errorf("compose managed wake adapter: %w", err)
 		}
 		return adapter, nil
 	}), nil
@@ -72,10 +73,23 @@ func managedWakeAuthorityMatches(workspace, nodeState string,
 	options WakeAdapterFactoryOptions,
 ) bool {
 	profile := options.Profile
+	runtime, supported := model.RuntimeForHost(profile.Host())
 	return options.Workspace == workspace && options.NodeState == nodeState &&
 		profile.ID() == model.TeamworkProfileID() && profile.Enabled() &&
-		profile.WorkspaceRoot() == workspace && profile.Host() == model.HostCodex &&
-		profile.Runtime() == model.RuntimeCodexAppServer
+		profile.WorkspaceRoot() == workspace && supported && profile.Runtime() == runtime
+}
+
+func newManagedProfileWakeAdapter(profile model.Profile,
+	options agent.CodexWakeAdapterOptions,
+) (agent.WakeWorkerAdapter, error) {
+	switch profile.Runtime() {
+	case model.RuntimeCodexAppServer:
+		return agent.NewCodexWakeAdapter(options)
+	case model.RuntimeClaudeCLI:
+		return agent.NewClaudeWakeAdapter(options)
+	default:
+		return nil, errors.New("managed Runtime is unsupported")
+	}
 }
 
 // managedWakeEnvironment is the closed inheritance boundary for managed

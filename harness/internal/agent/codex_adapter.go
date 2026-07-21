@@ -139,18 +139,7 @@ type CodexProcessTerminator interface {
 }
 
 type CodexWakeAdapter struct {
-	executable       string
-	workspace        string
-	environment      []string
-	starter          CodexProcessStarter
-	identity         CodexProcessIdentityProbe
-	clock            CodexAdapterClock
-	terminator       CodexProcessTerminator
-	verifyProjection func(context.Context) error
-	interruptGrace   time.Duration
-	exitGrace        time.Duration
-	signalGrace      time.Duration
-	pipeDrainGrace   time.Duration
+	*managedRuntimeCore
 }
 
 type wallCodexAdapterClock struct{}
@@ -161,47 +150,11 @@ func (wallCodexAdapterClock) After(duration time.Duration) <-chan time.Time {
 }
 
 func NewCodexWakeAdapter(options CodexWakeAdapterOptions) (*CodexWakeAdapter, error) {
-	if options.Executable == "" || !filepath.IsAbs(options.Executable) ||
-		filepath.Clean(options.Executable) != options.Executable {
-		return nil, codexAdapterError("configure", errors.New("executable must be absolute and clean"))
-	}
-	if options.Workspace == "" || !filepath.IsAbs(options.Workspace) ||
-		filepath.Clean(options.Workspace) != options.Workspace {
-		return nil, codexAdapterError("configure", errors.New("workspace must be absolute and clean"))
-	}
-	environment, err := validateCodexBaseEnvironment(options.Environment)
+	core, stage, err := newManagedRuntimeCore(options)
 	if err != nil {
-		return nil, codexAdapterError("configure", err)
+		return nil, codexAdapterError(stage, err)
 	}
-	if options.VerifyProjection == nil {
-		return nil, codexAdapterError("configure", errors.New("projection verifier is required"))
-	}
-	if options.Identity == nil || options.Terminator == nil {
-		if err := checkSystemRuntimeProcessSupport(); err != nil {
-			return nil, codexAdapterError("runtime readiness", err)
-		}
-	}
-	if options.Starter == nil {
-		options.Starter = execCodexProcessStarter{}
-	}
-	if options.Identity == nil {
-		options.Identity = systemCodexProcessIdentityProbe{}
-	}
-	if options.Clock == nil {
-		options.Clock = wallCodexAdapterClock{}
-	}
-	if options.Terminator == nil {
-		options.Terminator = systemCodexProcessTerminator{}
-	}
-	if err := normalizeCodexAdapterDeadlines(&options); err != nil {
-		return nil, codexAdapterError("configure", err)
-	}
-	return &CodexWakeAdapter{executable: options.Executable, workspace: options.Workspace,
-		environment: environment, starter: options.Starter, identity: options.Identity,
-		clock: options.Clock, terminator: options.Terminator,
-		verifyProjection: options.VerifyProjection,
-		interruptGrace:   options.InterruptGrace, exitGrace: options.ExitGrace,
-		signalGrace: options.SignalGrace, pipeDrainGrace: options.PipeDrainGrace}, nil
+	return &CodexWakeAdapter{managedRuntimeCore: core}, nil
 }
 
 func (adapter *CodexWakeAdapter) Run(ctx context.Context,
@@ -509,7 +462,7 @@ func (adapter *CodexWakeAdapter) settleRegisteredProcess(result *CodexWakeResult
 	return failure
 }
 
-func (adapter *CodexWakeAdapter) trustedNow() (time.Time, error) {
+func (adapter *managedRuntimeCore) trustedNow() (time.Time, error) {
 	at := adapter.clock.Now().Round(0).UTC()
 	if at.IsZero() || at.UnixNano() <= 0 || !time.Unix(0, at.UnixNano()).UTC().Equal(at) {
 		return time.Time{}, errors.New("clock returned a non-canonical instant")
@@ -591,13 +544,19 @@ func validateCodexProcessIdentity(pid int,
 func codexLaunchJSON(executable string,
 	identity CodexProcessIdentity,
 ) (model.JSON, model.JSON, error) {
+	return managedLaunchJSON(codexAdapterName, codexClientName, executable, "jsonl-v2", identity)
+}
+
+func managedLaunchJSON(adapter, client, executable, protocol string,
+	identity CodexProcessIdentity,
+) (model.JSON, model.JSON, error) {
 	diagnostic, err := model.JSONFrom(struct {
 		Adapter       string `json:"adapter"`
 		Client        string `json:"client"`
 		Executable    string `json:"executable"`
 		Protocol      string `json:"protocol"`
 		SchemaVersion int    `json:"schema_version"`
-	}{codexAdapterName, codexClientName, executable, "jsonl-v2", 1})
+	}{adapter, client, executable, protocol, 1})
 	if err != nil {
 		return model.JSON{}, model.JSON{}, err
 	}
@@ -607,6 +566,16 @@ func codexLaunchJSON(executable string,
 func codexCompletionReceipt(status, threadID, turnID string, wake bool,
 	exitMethod string, signals []string,
 ) (model.JSON, error) {
+	return managedCompletionReceipt(codexAdapterName, status, threadID, turnID, wake,
+		exitMethod, signals)
+}
+
+func managedCompletionReceipt(adapter, status, threadID, turnID string, wake bool,
+	exitMethod string, signals []string,
+) (model.JSON, error) {
+	if !validManagedRuntimeAdapter(adapter) {
+		return model.JSON{}, errors.New("completion adapter is invalid")
+	}
 	if err := validateCodexCompletionAuthority(status, threadID, turnID, wake,
 		exitMethod, signals); err != nil {
 		return model.JSON{}, err
@@ -624,11 +593,20 @@ func codexCompletionReceipt(status, threadID, turnID string, wake bool,
 		ThreadID      string   `json:"thread_id,omitempty"`
 		TurnID        string   `json:"turn_id,omitempty"`
 		WakeDelivered bool     `json:"wake_delivered"`
-	}{codexAdapterName, exitMethod, 1, closedSignals, status, threadID, turnID, wake})
+	}{adapter, exitMethod, 1, closedSignals, status, threadID, turnID, wake})
 	if err != nil {
 		return model.JSON{}, err
 	}
 	return receipt, nil
+}
+
+func validManagedRuntimeAdapter(adapter string) bool {
+	switch adapter {
+	case codexAdapterName, claudeAdapterName:
+		return true
+	default:
+		return false
+	}
 }
 
 func validateCodexCompletionAuthority(status, threadID, turnID string, wake bool,

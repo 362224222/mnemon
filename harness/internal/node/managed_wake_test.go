@@ -72,13 +72,6 @@ func TestNewManagedWakeAdapterFactoryRejectsInvalidCompositionAndAuthority(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	claudeProfile := fixture.profile.Spec()
-	claudeProfile.Host = model.HostClaudeCode
-	claudeProfile.Runtime = model.RuntimeClaudeCLI
-	claude, err := model.NewProfile(claudeProfile)
-	if err != nil {
-		t.Fatal(err)
-	}
 	tests := []struct {
 		name    string
 		ctx     context.Context
@@ -89,7 +82,6 @@ func TestNewManagedWakeAdapterFactoryRejectsInvalidCompositionAndAuthority(t *te
 		{name: "node state", ctx: context.Background(), options: withManagedWakeNodeState(valid, filepath.Join(other.workspace, "node"))},
 		{name: "foreign Profile", ctx: context.Background(), options: withManagedWakeProfile(valid, foreignProfile)},
 		{name: "disabled Profile", ctx: context.Background(), options: withManagedWakeProfile(valid, disabled)},
-		{name: "unsupported Profile", ctx: context.Background(), options: withManagedWakeProfile(valid, claude)},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -102,6 +94,30 @@ func TestNewManagedWakeAdapterFactoryRejectsInvalidCompositionAndAuthority(t *te
 				t.Fatal("invalid authority reached Runtime executable resolution")
 			}
 		})
+	}
+}
+
+func TestManagedWakeAdapterFactorySelectsClaudeRuntime(t *testing.T) {
+	fixture := newDaemonFixture(t, true)
+	profileSpec := fixture.profile.Spec()
+	profileSpec.Host, profileSpec.Runtime = model.HostClaudeCode, model.RuntimeClaudeCLI
+	profile, err := model.NewProfile(profileSpec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	install := &managedRuntimeInstallationFixture{executable: "/usr/local/bin/claude"}
+	factory, err := NewManagedWakeAdapterFactory(fixture.workspace, install)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := factory.NewWakeAdapter(context.Background(), WakeAdapterFactoryOptions{
+		Workspace: fixture.workspace, NodeState: fixture.nodeState, Profile: profile,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := adapter.(*agent.ClaudeWakeAdapter); !ok || install.executableCalls != 1 {
+		t.Fatalf("Claude adapter/calls = (%T, %d)", adapter, install.executableCalls)
 	}
 }
 

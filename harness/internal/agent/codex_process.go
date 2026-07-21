@@ -19,7 +19,7 @@ type codexProcessExit struct {
 	signals []string
 }
 
-func (adapter *CodexWakeAdapter) closeRegisteredProcess(process CodexProcess,
+func (adapter *managedRuntimeCore) closeRegisteredProcess(process CodexProcess,
 	runtimeIDs model.JSON,
 ) (codexProcessExit, error) {
 	exit := codexProcessExit{signals: make([]string, 0)}
@@ -62,7 +62,7 @@ func (adapter *CodexWakeAdapter) closeRegisteredProcess(process CodexProcess,
 	return exit, nil
 }
 
-func (adapter *CodexWakeAdapter) closeUnregisteredProcess(process CodexProcess) (codexProcessExit, error) {
+func (adapter *managedRuntimeCore) closeUnregisteredProcess(process CodexProcess) (codexProcessExit, error) {
 	if process == nil {
 		return codexProcessExit{exited: true, method: "not_started", signals: []string{}}, nil
 	}
