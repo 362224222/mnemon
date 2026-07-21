@@ -896,8 +896,10 @@ network_paths_work_contexts_scoped_ok() {
     jq -e '
       .publications |
       all(.[]; .observer_node as $observer |
-        if (.semantic_outcome == "accepted" or .semantic_outcome == "originated")
+        if .semantic_outcome == "accepted"
         then ((.audience_nodes | index($observer)) != null)
+        elif .semantic_outcome == "originated"
+        then $observer == .origin_node
         else true
         end)
     ' "$output/topology/network-paths.json" >/dev/null
