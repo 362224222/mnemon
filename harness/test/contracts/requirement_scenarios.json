@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "scenarios": [
+    {
+      "key": "ar-01-local-replica-producer-provenance",
+      "requirement_id": "AR-01",
+      "case": "offline-incident",
+      "anchor_kind": "fault",
+      "anchor": "alpha-first-hop-via-b"
+    },
+    {
+      "key": "ch-15-terminal-peer-replay",
+      "requirement_id": "CH-15",
+      "case": "api-sdk-contract",
+      "anchor_kind": "fault",
+      "anchor": "terminal-enrollment-replay"
+    },
+    {
+      "key": "nd-17-attachment-filesystem-db-crash-gap",
+      "requirement_id": "ND-17",
+      "case": "parallel-hardening",
+      "anchor_kind": "fault",
+      "anchor": "preclaim-attachment-rename-crash"
+    },
+    {
+      "key": "nd-18-shared-registration-subentry-ownership",
+      "requirement_id": "ND-18",
+      "case": "api-sdk-contract",
+      "anchor_kind": "fault",
+      "anchor": "managed-guide-drift"
+    },
+    {
+      "key": "nd-20-response-loss-operation-journal",
+      "requirement_id": "ND-20",
+      "case": "payment-review",
+      "anchor_kind": "fault",
+      "anchor": "review-receipt-loss"
+    },
+    {
+      "key": "nd-21-one-action-team-expansion",
+      "requirement_id": "ND-21",
+      "case": "overlapping-channels",
+      "anchor_kind": "experience",
+      "anchor": "one-action-per-team-expansion"
+    }
+  ]
+}
