@@ -162,45 +162,11 @@ func TestGossipIngressSignalsDurableRepairForGapAndPressure(t *testing.T) {
 	fixture := newGossipIngressFixture(t, "repair-signal")
 
 	t.Run("durable cursor advanced", func(t *testing.T) {
-		source := newGossipIngressTestSession(fixture.channel.ChannelID, fixture.local.libp2pID,
-			fixture.received(fixture.origin.libp2pID))
-		ctx, cancel := context.WithCancel(context.Background())
-		trigger := &gossipIngressTestRepairTrigger{}
-		durable := &gossipIngressTestStore{outcomes: []gossipIngressStoreOutcome{{
-			result: store.PutPeerInboxResult{Disposition: store.PeerInboxStored,
-				Cursor: store.PeerCursorProjection{ContiguousChannelSequence: 3,
-					ObservedChannelSequence: 3}}, after: cancel,
-		}}}
-		ingress, err := newGossipIngress(source, durable,
-			fixedGossipIngressClock{at: fixture.at}, trigger)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := ingress.Run(ctx); err != nil || trigger.Calls() != 1 || durable.AckCalls() != 0 {
-			t.Fatalf("contiguous repair signal = Run %v, signals %d, ACK %d",
-				err, trigger.Calls(), durable.AckCalls())
-		}
+		assertGossipIngressDurableRepairSignal(t, fixture, "contiguous repair signal", 3, 3)
 	})
 
 	t.Run("durable cursor gap", func(t *testing.T) {
-		source := newGossipIngressTestSession(fixture.channel.ChannelID, fixture.local.libp2pID,
-			fixture.received(fixture.origin.libp2pID))
-		ctx, cancel := context.WithCancel(context.Background())
-		trigger := &gossipIngressTestRepairTrigger{}
-		durable := &gossipIngressTestStore{outcomes: []gossipIngressStoreOutcome{{
-			result: store.PutPeerInboxResult{Disposition: store.PeerInboxStored,
-				Cursor: store.PeerCursorProjection{ContiguousChannelSequence: 1,
-					ObservedChannelSequence: 3}}, after: cancel,
-		}}}
-		ingress, err := newGossipIngress(source, durable,
-			fixedGossipIngressClock{at: fixture.at}, trigger)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := ingress.Run(ctx); err != nil || trigger.Calls() != 1 || durable.AckCalls() != 0 {
-			t.Fatalf("gap repair signal = Run %v, signals %d, ACK %d",
-				err, trigger.Calls(), durable.AckCalls())
-		}
+		assertGossipIngressDurableRepairSignal(t, fixture, "gap repair signal", 1, 3)
 	})
 
 	t.Run("pressure", func(t *testing.T) {
@@ -221,6 +187,30 @@ func TestGossipIngressSignalsDurableRepairForGapAndPressure(t *testing.T) {
 			t.Fatalf("pressure repair signal = %d, ACK %d", trigger.Calls(), durable.AckCalls())
 		}
 	})
+}
+
+func assertGossipIngressDurableRepairSignal(t *testing.T, fixture gossipIngressFixture,
+	label string, contiguous, observed uint64,
+) {
+	t.Helper()
+	source := newGossipIngressTestSession(fixture.channel.ChannelID, fixture.local.libp2pID,
+		fixture.received(fixture.origin.libp2pID))
+	ctx, cancel := context.WithCancel(context.Background())
+	trigger := &gossipIngressTestRepairTrigger{}
+	durable := &gossipIngressTestStore{outcomes: []gossipIngressStoreOutcome{{
+		result: store.PutPeerInboxResult{Disposition: store.PeerInboxStored,
+			Cursor: store.PeerCursorProjection{ContiguousChannelSequence: contiguous,
+				ObservedChannelSequence: observed}}, after: cancel,
+	}}}
+	ingress, err := newGossipIngress(source, durable,
+		fixedGossipIngressClock{at: fixture.at}, trigger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ingress.Run(ctx); err != nil || trigger.Calls() != 1 || durable.AckCalls() != 0 {
+		t.Fatalf("%s = Run %v, signals %d, ACK %d",
+			label, err, trigger.Calls(), durable.AckCalls())
+	}
 }
 
 func TestGossipIngressQuarantineAndDurableConflictDoNotStarveOtherOrigins(t *testing.T) {

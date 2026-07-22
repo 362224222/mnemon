@@ -1530,13 +1530,6 @@
     },
     {
       "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/store/peer_repair_test.go::TestPeerRepairPageProgressUsesCurrentCursorAndReplaysExactly",
-      "path": "harness/internal/store/peer_repair_test.go",
-      "symbol": "TestPeerRepairPageProgressUsesCurrentCursorAndReplaysExactly",
-      "ceiling": 40
-    },
-    {
-      "rule": "cognitive_complexity",
       "identity": "cognitive_complexity:harness/internal/store/peer_repair_test.go::TestPeerRepairRetryAndTerminalEvidenceSurviveRestart",
       "path": "harness/internal/store/peer_repair_test.go",
       "symbol": "TestPeerRepairRetryAndTerminalEvidenceSurviveRestart",
@@ -3570,13 +3563,6 @@
       "identity": "cyclomatic_complexity:harness/internal/store/peer_repair.go::validateCommitPeerRepairSpec",
       "path": "harness/internal/store/peer_repair.go",
       "symbol": "validateCommitPeerRepairSpec",
-      "ceiling": 41
-    },
-    {
-      "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/store/peer_repair_test.go::TestPeerRepairPageProgressUsesCurrentCursorAndReplaysExactly",
-      "path": "harness/internal/store/peer_repair_test.go",
-      "symbol": "TestPeerRepairPageProgressUsesCurrentCursorAndReplaysExactly",
       "ceiling": 41
     },
     {
@@ -6385,7 +6371,7 @@
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/store/peer_inbox.go",
       "path": "harness/internal/store/peer_inbox.go",
-      "ceiling": 817
+      "ceiling": 753
     },
     {
       "rule": "production_file_lines",
