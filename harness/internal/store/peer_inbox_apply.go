@@ -13,7 +13,6 @@ import (
 )
 
 const (
-	peerInboxSemanticLease    = 120 * time.Second
 	minPeerInboxSemanticRetry = time.Second
 	maxPeerInboxSemanticRetry = 300 * time.Second
 
