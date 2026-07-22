@@ -61,6 +61,7 @@ execution_failed=false
 finalized=false
 logs_collected=false
 public_status_ready_timeout_seconds=60
+public_status_stable_seconds=8
 derived_offer_ready_timeout_seconds=30
 final_public_status_ready_timeout_seconds=180
 final_public_status_stable_seconds=8
@@ -549,46 +550,62 @@ wait_channel_ready() {
 
 wait_public_status_ready() {
     readiness_deadline_ms=$(( $(date +%s%3N) + public_status_ready_timeout_seconds * 1000 ))
-    all_ready=false
+    stable_since_ms=0
+    stable_required_ms=$(( public_status_stable_seconds * 1000 ))
     while [ "$(date +%s%3N)" -lt "$readiness_deadline_ms" ]; do
-        all_ready=true
-        for node in A B C D E F; do
-            if [ "$(date +%s%3N)" -ge "$readiness_deadline_ms" ]; then
-                all_ready=false
-                break
+        if observe_public_status_ready status-ready; then
+            now_ms=$(date +%s%3N)
+            [ "$stable_since_ms" -ne 0 ] || stable_since_ms=$now_ms
+            if [ $(( now_ms - stable_since_ms )) -ge "$stable_required_ms" ]; then
+                record_initial_channel_status_before
+                return 0
             fi
-            raw="$private/status-ready-$node.json"
-            set +e
-            node_exec "$node" timeout 1s mnemon-harness status >"$raw" 2>/dev/null
-            status_exit=$?
-            set -e
-            if [ "$status_exit" -ne 0 ] ||
-               ! jq -e '.status == "ready" and all(.channels[]; .state == "ready")' \
-                 "$raw" >/dev/null; then
-                all_ready=false
+        else
+            stable_since_ms=0
+        fi
+        sleep 0.5
+    done
+    if [ "$stable_since_ms" -ne 0 ] && observe_public_status_ready status-ready; then
+        now_ms=$(date +%s%3N)
+        if [ $(( now_ms - stable_since_ms )) -ge "$stable_required_ms" ]; then
+            record_initial_channel_status_before
+            return 0
+        fi
+    fi
+    for node in A B C D E F; do
+        raw="$private/status-ready-$node.json"
+        destination="$output/nodes/$node/status-ready-before.json"
+        if [ -s "$raw" ]; then
+            if jq -e . "$raw" >/dev/null 2>&1; then
+                redact_json <"$raw" >"$destination"
+            else
+                redact_text_file "$raw" "$destination"
             fi
-        done
-        if [ "$(date +%s%3N)" -gt "$readiness_deadline_ms" ]; then
+        fi
+    done
+    case_error "Channel status did not quiesce to public ready within ${public_status_ready_timeout_seconds} seconds"
+    return 1
+}
+
+observe_public_status_ready() {
+    prefix=$1
+    all_ready=true
+    for node in A B C D E F; do
+        raw="$private/$prefix-$node.json"
+        set +e
+        node_exec "$node" timeout 1s mnemon-harness status >"$raw" 2>/dev/null
+        status_exit=$?
+        set -e
+        if [ "$status_exit" -ne 0 ] ||
+           ! jq -e '.status == "ready" and all(.channels[]; .state == "ready")' \
+             "$raw" >/dev/null; then
             all_ready=false
         fi
-        [ "$all_ready" = true ] && break
-        sleep 0.2
     done
-    [ "$all_ready" = true ] || {
-        for node in A B C D E F; do
-            raw="$private/status-ready-$node.json"
-            destination="$output/nodes/$node/status-ready-before.json"
-            if [ -s "$raw" ]; then
-                if jq -e . "$raw" >/dev/null 2>&1; then
-                    redact_json <"$raw" >"$destination"
-                else
-                    redact_text_file "$raw" "$destination"
-                fi
-            fi
-        done
-        case_error "Channel status did not quiesce to public ready within ${public_status_ready_timeout_seconds} seconds"
-        return 1
-    }
+    [ "$all_ready" = true ]
+}
+
+record_initial_channel_status_before() {
     for node in A B C D E F; do
         if [ -s "$private/channel-status-$node.json" ] &&
            jq -e . "$private/channel-status-$node.json" >/dev/null 2>&1; then
