@@ -292,9 +292,6 @@ func TestPeerInboxSemanticDecisionCommitRequestDigestBindsEveryAuthorityDimensio
 	}
 	addProfileScope("principal", func(value *model.ProfileSpec) { value.Principal += "-other" })
 	addProfileScope("workspace", func(value *model.ProfileSpec) { value.WorkspaceRoot += "-other" })
-	addProfileScope("host runtime", func(value *model.ProfileSpec) {
-		value.Host, value.Runtime = model.HostClaudeCode, model.RuntimeClaudeCLI
-	})
 	addProfileScope("credential", func(value *model.ProfileSpec) {
 		value.CredentialHash = model.Sum([]byte("semantic-profile-credential-other"))
 	})

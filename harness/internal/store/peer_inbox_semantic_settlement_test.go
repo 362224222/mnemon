@@ -138,8 +138,7 @@ func TestPeerInboxSemanticHandlingSettlementReplaysAndPreservesPriorTerminal(t *
 			t.Fatal(err)
 		}
 		desiredSpec := deactivated.Profile.Spec()
-		desiredSpec.Host = model.HostClaudeCode
-		desiredSpec.Runtime = model.RuntimeClaudeCLI
+		desiredSpec.ActiveAssetRevision = model.Sum([]byte("settlement replay assets")).String()
 		desiredSpec.Enabled = true
 		desired, err := model.NewProfile(desiredSpec)
 		if err != nil {
@@ -147,12 +146,12 @@ func TestPeerInboxSemanticHandlingSettlementReplaysAndPreservesPriorTerminal(t *
 		}
 		if _, err := fixture.store.ActivateProfile(context.Background(), desired,
 			deactivated.Profile.UpdatedAt(), deactivatedAt.Add(time.Nanosecond)); err != nil {
-			t.Fatalf("switch Profile runtime after settlement: %v", err)
+			t.Fatalf("upgrade Profile authority after settlement: %v", err)
 		}
 		validateTx := beginPeerInboxSemanticSettlementTx(t, fixture.store)
 		if err := validatePeerInboxSemanticHandlingSettlement(context.Background(), validateTx,
 			fixture.settlement); err != nil {
-			t.Fatalf("historical settlement after runtime switch = %v", err)
+			t.Fatalf("historical settlement after authority upgrade = %v", err)
 		}
 		_ = validateTx.Rollback()
 
@@ -209,8 +208,7 @@ func TestPeerInboxSemanticHandlingSettlementReplaysAndPreservesPriorTerminal(t *
 			t.Fatal(err)
 		}
 		desiredSpec := deactivated.Profile.Spec()
-		desiredSpec.Host = model.HostClaudeCode
-		desiredSpec.Runtime = model.RuntimeClaudeCLI
+		desiredSpec.ActiveAssetRevision = model.Sum([]byte("prior winner assets")).String()
 		desiredSpec.Enabled = true
 		desired, err := model.NewProfile(desiredSpec)
 		if err != nil {
@@ -218,7 +216,7 @@ func TestPeerInboxSemanticHandlingSettlementReplaysAndPreservesPriorTerminal(t *
 		}
 		if _, err := fixture.store.ActivateProfile(context.Background(), desired,
 			deactivated.Profile.UpdatedAt(), deactivatedAt.Add(time.Nanosecond)); err != nil {
-			t.Fatalf("switch Profile before prior-winner settlement: %v", err)
+			t.Fatalf("upgrade Profile before prior-winner settlement: %v", err)
 		}
 		beforeHandling, _ := readAgentHandling(context.Background(), fixture.store.db,
 			fixture.handling.ID())
@@ -254,7 +252,7 @@ func TestPeerInboxSemanticHandlingSettlementReplaysAndPreservesPriorTerminal(t *
 }
 
 func TestCommitPeerInboxSemanticSettlesClaimedHandlingAtomicallyAndReplays(t *testing.T) {
-	t.Run("commit, runtime switch, and restart replay", func(t *testing.T) {
+	t.Run("commit, authority upgrade, and restart replay", func(t *testing.T) {
 		fixture := newPeerInboxSemanticSettlementCommitFixture(t, "public-commit")
 		result, err := fixture.store.CommitPeerInboxSemantic(context.Background(),
 			fixture.spec, fixture.committedAt)
@@ -294,8 +292,7 @@ func TestCommitPeerInboxSemanticSettlesClaimedHandlingAtomicallyAndReplays(t *te
 			t.Fatalf("deactivate Profile after settlement: %v", err)
 		}
 		desiredSpec := deactivated.Profile.Spec()
-		desiredSpec.Host = model.HostClaudeCode
-		desiredSpec.Runtime = model.RuntimeClaudeCLI
+		desiredSpec.ActiveAssetRevision = model.Sum([]byte("committed settlement assets")).String()
 		desiredSpec.Enabled = true
 		desired, err := model.NewProfile(desiredSpec)
 		if err != nil {
@@ -303,8 +300,8 @@ func TestCommitPeerInboxSemanticSettlesClaimedHandlingAtomicallyAndReplays(t *te
 		}
 		activated, err := fixture.store.ActivateProfile(context.Background(), desired,
 			deactivated.Profile.UpdatedAt(), switchAt.Add(time.Nanosecond))
-		if err != nil || activated.Profile.Runtime() != model.RuntimeClaudeCLI {
-			t.Fatalf("switch Profile runtime after commit = (%#v,%v)", activated, err)
+		if err != nil || activated.Profile.Runtime() != model.RuntimeCodexAppServer {
+			t.Fatalf("upgrade Profile authority after commit = (%#v,%v)", activated, err)
 		}
 		if beforeRun.Runtime() != model.RuntimeCodexAppServer {
 			t.Fatalf("historical AgentRun runtime = %s", beforeRun.Runtime())

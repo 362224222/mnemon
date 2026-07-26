@@ -33,8 +33,6 @@ func TestInitializeNodeCreatesDisabledIdentityAndReplays(t *testing.T) {
 		t.Fatal(err)
 	}
 	profileSpec := profile.Spec()
-	profileSpec.Host = model.HostClaudeCode
-	profileSpec.Runtime = model.RuntimeClaudeCLI
 	profileSpec.ActiveAssetRevision = "asset-staged"
 	profileSpec.CreatedAt = profileSpec.CreatedAt.Add(time.Hour)
 	profileSpec.UpdatedAt = profileSpec.UpdatedAt.Add(time.Hour)

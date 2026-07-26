@@ -45,7 +45,7 @@ func TestActivateProfilePublishesAuthorityAtomicallyAndReplays(t *testing.T) {
 	stagedNodeSpec := node.Spec()
 	stagedNodeSpec.ActiveAssetRevision = "asset-staged"
 	stagedNode, _ := model.NewNode(stagedNodeSpec)
-	stagedProfile := activationProfile(t, disabled, model.HostClaudeCode, model.RuntimeClaudeCLI,
+	stagedProfile := activationProfile(t, disabled, model.HostCodex, model.RuntimeCodexAppServer,
 		"asset-staged", disabled.HandlingBudget(), disabled.UpdatedAt())
 	stagedSpec := stagedProfile.Spec()
 	stagedSpec.Enabled = false
@@ -57,7 +57,7 @@ func TestActivateProfilePublishesAuthorityAtomicallyAndReplays(t *testing.T) {
 	}
 }
 
-func TestActivateProfileHostSwitchAndAuthorityUpgradeRules(t *testing.T) {
+func TestActivateProfileAuthorityUpgradeRules(t *testing.T) {
 	t.Parallel()
 	st := openTestStore(t)
 	node, disabled := bootstrapValues(t, "peer-switch", "principal-switch", "/workspace/switch")
@@ -65,26 +65,20 @@ func TestActivateProfileHostSwitchAndAuthorityUpgradeRules(t *testing.T) {
 		t.Fatal(err)
 	}
 	changedBudget := changedHandlingBudget(t)
-	claude := activationProfile(t, disabled, model.HostClaudeCode, model.RuntimeClaudeCLI,
-		"asset-claude", changedBudget, disabled.UpdatedAt().Add(time.Minute))
+	desired := activationProfile(t, disabled, model.HostCodex, model.RuntimeCodexAppServer,
+		"asset-current", changedBudget, disabled.UpdatedAt().Add(time.Minute))
 	activatedAt := disabled.UpdatedAt().Add(2 * time.Minute)
-	result, err := st.ActivateProfile(context.Background(), claude, disabled.UpdatedAt(), activatedAt)
-	if err != nil || result.Profile.Host() != model.HostClaudeCode ||
-		result.Node.ActiveAssetRevision() != "asset-claude" || !result.Profile.Enabled() {
-		t.Fatalf("disabled Host switch = (%#v, %v)", result, err)
-	}
-
-	codex := activationProfile(t, result.Profile, model.HostCodex, model.RuntimeCodexAppServer,
-		"asset-codex", changedBudget, activatedAt.Add(time.Minute))
-	if _, err := st.ActivateProfile(context.Background(), codex, result.Profile.UpdatedAt(), activatedAt.Add(time.Minute)); !errors.Is(err, ErrProfileHostMismatch) {
-		t.Fatalf("enabled Host switch error = %v", err)
+	result, err := st.ActivateProfile(context.Background(), desired, disabled.UpdatedAt(), activatedAt)
+	if err != nil || result.Profile.Host() != model.HostCodex ||
+		result.Node.ActiveAssetRevision() != "asset-current" || !result.Profile.Enabled() {
+		t.Fatalf("initial authority activation = (%#v, %v)", result, err)
 	}
 
 	upgradedBudget := model.DefaultHandlingBudget().JSON()
-	upgrade := activationProfile(t, result.Profile, model.HostClaudeCode, model.RuntimeClaudeCLI,
-		"asset-claude-next", upgradedBudget, activatedAt.Add(time.Minute))
+	upgrade := activationProfile(t, result.Profile, model.HostCodex, model.RuntimeCodexAppServer,
+		"asset-next", upgradedBudget, activatedAt.Add(time.Minute))
 	upgraded, err := st.ActivateProfile(context.Background(), upgrade, result.Profile.UpdatedAt(), activatedAt.Add(time.Minute))
-	if err != nil || !upgraded.Changed || upgraded.Node.ActiveAssetRevision() != "asset-claude-next" ||
+	if err != nil || !upgraded.Changed || upgraded.Node.ActiveAssetRevision() != "asset-next" ||
 		upgraded.Profile.HandlingBudget().String() != upgradedBudget.String() {
 		t.Fatalf("idle authority upgrade = (%#v, %v)", upgraded, err)
 	}
