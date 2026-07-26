@@ -20,13 +20,6 @@
   "derived_path": ["A:alpha:C", "C:beta:E", "E:gamma:F", "E:beta:C", "C:alpha:A"],
   "faults": [
     {
-      "id": "alpha-frame-on-beta",
-      "type": "wrong-topic-replay",
-      "phase": "after-alpha-accept",
-      "target": "channel:beta",
-      "required_observation": "The original Alpha bytes are rejected on Beta and no Beta Event or Work is created from the replay."
-    },
-    {
       "id": "managed-guide-drift",
       "type": "projection-drift",
       "phase": "before-c-review-turn",

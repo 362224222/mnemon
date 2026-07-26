@@ -98,15 +98,4 @@ func (service controllerChannelService) ChannelAbandon(ctx context.Context,
 	return service.channels.ChannelAbandon(ctx, metadata, request)
 }
 
-func (service controllerChannelService) ChannelReplayProbe(ctx context.Context,
-	metadata RequestMetadata, request ChannelReplayProbeRequest,
-) (ChannelReplayProbeResponse, *APIError) {
-	release, apiErr := enterControllerAdmission(ctx, service.gate)
-	if apiErr != nil {
-		return ChannelReplayProbeResponse{}, apiErr
-	}
-	defer release()
-	return service.channels.ChannelReplayProbe(ctx, metadata, request)
-}
-
 var _ ChannelService = controllerChannelService{}

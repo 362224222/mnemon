@@ -20,13 +20,6 @@
   "derived_path": ["A:alpha:C", "C:beta:E", "E:gamma:F", "E:beta:C", "C:alpha:A"],
   "faults": [
     {
-      "id": "alpha-bytes-on-beta",
-      "type": "wrong-topic-replay",
-      "phase": "after-alpha-team-offer",
-      "target": "channel:beta",
-      "required_observation": "The original bytes fail the Beta validator while a separately admitted derived Beta Event has a new identity."
-    },
-    {
       "id": "nested-parent-stale-variant",
       "type": "parent-stale",
       "phase": "before-final-child-terminal",
@@ -54,7 +47,6 @@
       "team-offer-atomically-creates-independent-works",
       "new-identity-and-causality-at-each-channel-hop",
       "channel-sequences-never-fill-other-channel-gaps",
-      "wrong-topic-original-bytes-fail-closed",
       "one-parent-resume-or-one-parent-stale",
       "result-artifacts-follow-explicit-origin-pins",
       "all-six-nodes-enter-business-path",

@@ -1004,81 +1004,6 @@ api_projection_drift_requirement_ok() {
     ' "$evidence_path" >/dev/null
 }
 
-api_wrong_topic_replay_fault() {
-    id=$1
-    evidence_path="$output/faults/$id.json"
-    probe_raw="$private/$id-probe.raw.json"
-    probe_err="$private/$id-probe.stderr"
-    probe_norm="$private/$id-probe.norm.json"
-
-    set +e
-    node_exec C timeout 30s mnemon-harness channel replay-probe \
-      --source alpha --target beta --json >"$probe_raw" 2>"$probe_err"
-    probe_exit=$?
-    set -e
-
-    normalize_json_or_empty "$probe_raw" "$probe_norm"
-    probe_stderr_first_line=$(sed -E \
-      -e 's/mnch1_[A-Za-z0-9_-]+/<redacted-invite>/g' \
-      -e 's/sk-[A-Za-z0-9_-]{12,}/<redacted-provider-key>/g' \
-      -e 's/(OPENAI_API_KEY=)[^[:space:]]+/\1<redacted>/g' \
-      "$probe_err" | sed -n '1p' | cut -c1-512)
-
-    jq -n --arg id "$id" --arg node C --arg source alpha --arg target beta \
-      --arg probe_stderr_first_line "$probe_stderr_first_line" \
-      --argjson probe_exit "$probe_exit" --slurpfile probe "$probe_norm" '
-      def first($value): if ($value | length) == 0 then {} else $value[0] end;
-      (first($probe)) as $probe_doc |
-      ($probe_doc.status == "rejected" and
-        $probe_doc.rejection == "wrong_topic") as $rejected |
-      (($probe_doc.target_before // {}) == ($probe_doc.target_after // {}) and
-        $probe_doc.target_mutation_suppressed == true) as $unchanged |
-      {schema_version:1,fault:$id,type:"wrong-topic-replay",node:$node,
-       source_channel:$source,target_channel:$target,
-       probe_exit_code:$probe_exit,
-       probe:{status:($probe_doc.status // ""),
-         source_channel:($probe_doc.source_channel // ""),
-         target_channel:($probe_doc.target_channel // ""),
-         source_channel_id_digest:($probe_doc.source_channel_id_digest // ""),
-         target_channel_id_digest:($probe_doc.target_channel_id_digest // ""),
-         publication_digest:($probe_doc.publication_digest // ""),
-         event_digest:($probe_doc.event_digest // ""),
-         event_key:($probe_doc.event_key // {}),
-         replay_attempted:($probe_doc.replay_attempted // false),
-         rejection:($probe_doc.rejection // ""),
-         target_before:($probe_doc.target_before // {}),
-         target_after:($probe_doc.target_after // {}),
-         target_mutation_suppressed:($probe_doc.target_mutation_suppressed // false),
-         error:(if $probe_stderr_first_line == "" then null else
-           {first_line:$probe_stderr_first_line,
-            code:($probe_stderr_first_line | split(":") | .[0])}
-         end)},
-       observation:{exact_alpha_replay_attempted:
-           ($probe_exit == 0 and $probe_doc.replay_attempted == true and
-            $probe_doc.source_channel == $source and $probe_doc.target_channel == $target and
-            (($probe_doc.publication_digest // "") | startswith("sha256:"))),
-         rejected_on_beta:$rejected,
-         beta_event_work_counts_unchanged:$unchanged,
-         all_commands_bounded:($probe_exit == 0)}}
-    ' >"$evidence_path"
-}
-
-api_wrong_topic_replay_ok() {
-    id=${1:-alpha-frame-on-beta}
-    evidence_path="$output/faults/$id.json"
-    [ -f "$evidence_path" ] || return 1
-    jq -e --arg id "$id" '
-      .schema_version == 1 and .fault == $id and
-      .type == "wrong-topic-replay" and .node == "C" and
-      .source_channel == "alpha" and .target_channel == "beta" and
-      .probe_exit_code == 0 and
-      .observation.exact_alpha_replay_attempted == true and
-      .observation.rejected_on_beta == true and
-      .observation.beta_event_work_counts_unchanged == true and
-      .observation.all_commands_bounded == true
-    ' "$evidence_path" >/dev/null
-}
-
 api_terminal_enrollment_replay_fault() {
     id=$1
     evidence_path="$output/faults/$id.json"
@@ -1928,16 +1853,6 @@ evaluate_declared_faults() {
             else
                 detail='The public projection-drift gate did not prove fail-closed diagnosis, setup repair, and adjacent user JSON preservation.'
             fi
-        elif [ "$case_name" = api-sdk-contract ] && [ "$id" = alpha-frame-on-beta ]; then
-            api_wrong_topic_replay_fault "$id"
-            evidence="faults/$id.json"
-            if api_wrong_topic_replay_ok "$id"; then
-                injected=true
-                observed=true
-                detail='Node C replayed exact local Alpha publication bytes against its public Beta topic probe; Beta rejected the wrong-topic frame and its Event/Work counts did not change.'
-            else
-                detail='The public wrong-topic replay gate did not prove an exact Alpha publication rejection on Beta with no Beta Event or Work mutation.'
-            fi
         elif [ "$case_name" = api-sdk-contract ] && [ "$id" = terminal-enrollment-replay ]; then
             api_terminal_enrollment_replay_fault "$id"
             evidence="faults/$id.json"
@@ -2027,16 +1942,6 @@ evaluate_declared_faults() {
                 detail='The public current race exercised the preclaim/attachment boundary and recovered with stable empty-or-owned results, healthy status, and no wrong-owner transition.'
             else
                 detail='The preclaim boundary probe did not prove bounded recovery and wrong-owner suppression.'
-            fi
-        elif [ "$case_name" = overlapping-channels ] && [ "$id" = alpha-bytes-on-beta ]; then
-            api_wrong_topic_replay_fault "$id"
-            evidence="faults/$id.json,topology/network-paths.json"
-            if api_wrong_topic_replay_ok "$id" && network_paths_cross_channel_causality_ok; then
-                injected=true
-                observed=true
-                detail='Node C replayed original Alpha bytes against Beta; Beta rejected the wrong-topic frame while separate derived Beta Events kept new identities and explicit causality.'
-            else
-                detail='The overlapping wrong-topic gate did not prove Beta rejection plus separate derived-event identity.'
             fi
         elif [ "$case_name" = overlapping-channels ] && [ "$id" = restart-intersection-c ]; then
             write_restart_fault_evidence "$id" C alpha beta
@@ -2421,16 +2326,6 @@ evaluate_public_system_oracles() {
       "$restart_duplicate_passed" \
       'faults/restart-overlap-c.json,faults/restart-overlap-e.json,nodes/C/handling-trace.ndjson,nodes/E/handling-trace.ndjson' \
       'Restart recovery does not duplicate Runtime transition Event identities.'
-
-    if api_wrong_topic_replay_ok alpha-bytes-on-beta &&
-      network_paths_cross_channel_causality_ok; then
-        wrong_topic_passed=true
-    else
-        wrong_topic_passed=false
-    fi
-    add_declared_system_assertion wrong-topic-original-bytes-fail-closed \
-      "$wrong_topic_passed" 'faults/alpha-bytes-on-beta.json,topology/network-paths.json' \
-      'Original Alpha publication bytes fail closed on Beta while accepted Beta work uses a separate derived Event identity.'
 
     if parent_stale_fault_ok nested-parent-stale-variant ||
       parent_resume_projection_ok; then

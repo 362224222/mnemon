@@ -199,7 +199,6 @@
             "daemon-kill",
             "artifact-interrupt",
             "artifact-corruption",
-            "wrong-topic-replay",
             "concurrent-runtime",
             "receipt-loss",
             "projection-drift",

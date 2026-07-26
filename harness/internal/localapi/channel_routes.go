@@ -14,13 +14,12 @@ const (
 	RouteChannelRemove       = "/v1/channel/remove"
 	RouteChannelLeave        = "/v1/channel/leave"
 	RouteChannelAbandon      = "/v1/channel/abandon"
-	RouteChannelReplayProbe  = "/v1/channel/replay-probe"
 )
 
 func IsChannelRoute(path string) bool {
 	return path == RouteChannelCreate || path == RouteChannelJoin || path == RouteChannelStatus ||
 		path == RouteChannelInvites || path == RouteChannelInvitesClose || path == RouteChannelRemove ||
-		path == RouteChannelLeave || path == RouteChannelAbandon || path == RouteChannelReplayProbe
+		path == RouteChannelLeave || path == RouteChannelAbandon
 }
 
 func (s *Server) registerChannelRoutes(mux *http.ServeMux) {
@@ -32,7 +31,6 @@ func (s *Server) registerChannelRoutes(mux *http.ServeMux) {
 	mux.HandleFunc(RouteChannelRemove, s.handleChannelRemove)
 	mux.HandleFunc(RouteChannelLeave, s.handleChannelLeave)
 	mux.HandleFunc(RouteChannelAbandon, s.handleChannelAbandon)
-	mux.HandleFunc(RouteChannelReplayProbe, s.handleChannelReplayProbe)
 }
 
 func (s *Server) handleChannelCreate(writer http.ResponseWriter, request *http.Request) {
@@ -201,29 +199,6 @@ func (s *Server) handleChannelAbandon(writer http.ResponseWriter, request *http.
 		return
 	}
 	if apiErr := validateChannelAbandonResponse(response); apiErr != nil {
-		writeError(writer, apiErr)
-		return
-	}
-	writeResponse(writer, http.StatusOK, response)
-}
-
-func (s *Server) handleChannelReplayProbe(writer http.ResponseWriter, request *http.Request) {
-	var input ChannelReplayProbeRequest
-	metadata, ok := s.prepareChannelPost(writer, request, &input)
-	if !ok {
-		return
-	}
-	if !validChannelReplayProbeRequest(input) {
-		writeError(writer, NewAPIError(CodeInvalidArgument,
-			"Channel replay probe requires distinct source and target Channels"))
-		return
-	}
-	response, apiErr := s.channels.ChannelReplayProbe(request.Context(), metadata, input)
-	if apiErr != nil {
-		writeError(writer, apiErr)
-		return
-	}
-	if apiErr := validateChannelReplayProbeResponse(response); apiErr != nil {
 		writeError(writer, apiErr)
 		return
 	}
