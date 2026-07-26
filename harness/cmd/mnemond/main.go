@@ -74,12 +74,9 @@ func runWithNode(ctx context.Context, args []string, stdout, stderr io.Writer,
 	inspectors ...nodeInspector,
 ) error {
 	_ = stderr
-	if len(inspectors) > 1 || len(inspectors) == 1 && inspectors[0] == nil {
-		return errors.New("mnemond command has invalid authority inspector composition")
-	}
-	inspect := node.InspectAuthority
-	if len(inspectors) == 1 {
-		inspect = inspectors[0]
+	inspect, err := selectNodeInspector(inspectors)
+	if err != nil {
+		return err
 	}
 
 	if len(args) == 0 {
@@ -100,82 +97,13 @@ func runWithNode(ctx context.Context, args []string, stdout, stderr io.Writer,
 		_, err := fmt.Fprintf(stdout, "mnemond version %s\n", version)
 		return err
 	case "serve":
-		projectRoot, err := parseServeProjectRoot(args[1:])
-		if err != nil {
-			return err
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		daemon, err := open(ctx, node.DaemonOptions{Workspace: projectRoot,
-			GracefulShutdownBudget: gracefulShutdownBudget})
-		if err != nil {
-			return err
-		}
-		serveErr := daemon.Serve(ctx)
-		return errors.Join(serveErr, daemon.Close())
+		return runServe(ctx, args[1:], open)
 	case "initialize":
-		options, err := parseInitializeOptions(args[1:])
-		if err != nil {
-			return err
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		result, err := provision(ctx, options)
-		if err != nil {
-			return err
-		}
-		receipt := initializeReceipt{AssetRevision: result.Profile.ActiveAssetRevision(), Created: result.Created,
-			Host: string(result.Profile.Host()), SchemaVersion: model.SchemaVersion, Status: "initialized"}
-		raw, err := model.CanonicalMarshal(receipt)
-		if err != nil {
-			return fmt.Errorf("encode initialization receipt: %w", err)
-		}
-		_, err = stdout.Write(append(raw, '\n'))
-		return err
+		return runInitialize(ctx, args[1:], stdout, provision)
 	case "activate":
-		options, err := parseActivateOptions(args[1:])
-		if err != nil {
-			return err
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		result, err := activate(ctx, options)
-		if err != nil {
-			return err
-		}
-		receipt := activateReceipt{AssetRevision: result.Profile.ActiveAssetRevision(), Changed: result.Changed,
-			Host: string(result.Profile.Host()), SchemaVersion: model.SchemaVersion, Status: "active",
-			UpdatedAt: result.Profile.UpdatedAt().UTC().Format(time.RFC3339Nano)}
-		raw, err := model.CanonicalMarshal(receipt)
-		if err != nil {
-			return fmt.Errorf("encode activation receipt: %w", err)
-		}
-		_, err = stdout.Write(append(raw, '\n'))
-		return err
+		return runActivate(ctx, args[1:], stdout, activate)
 	case "deactivate":
-		options, err := parseDeactivateOptions(args[1:])
-		if err != nil {
-			return err
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		result, err := deactivate(ctx, options)
-		if err != nil {
-			return err
-		}
-		receipt := deactivateReceipt{AssetRevision: result.Profile.ActiveAssetRevision(), Changed: result.Changed,
-			Host: string(result.Profile.Host()), SchemaVersion: model.SchemaVersion, Status: "inactive",
-			UpdatedAt: result.Profile.UpdatedAt().UTC().Format(time.RFC3339Nano)}
-		raw, err := model.CanonicalMarshal(receipt)
-		if err != nil {
-			return fmt.Errorf("encode deactivation receipt: %w", err)
-		}
-		_, err = stdout.Write(append(raw, '\n'))
-		return err
+		return runDeactivate(ctx, args[1:], stdout, deactivate)
 	case "inspect":
 		return runInspect(ctx, args[1:], stdout, inspect)
 	case "confirm-offline":
@@ -186,6 +114,92 @@ func runWithNode(ctx context.Context, args []string, stdout, stderr io.Writer,
 		}
 		return fmt.Errorf("unsupported command %q", args[0])
 	}
+}
+
+func selectNodeInspector(inspectors []nodeInspector) (nodeInspector, error) {
+	if len(inspectors) > 1 || len(inspectors) == 1 && inspectors[0] == nil {
+		return nil, errors.New("mnemond command has invalid authority inspector composition")
+	}
+	if len(inspectors) == 1 {
+		return inspectors[0], nil
+	}
+	return node.InspectAuthority, nil
+}
+
+func runServe(ctx context.Context, args []string, open daemonOpener) error {
+	projectRoot, err := parseServeProjectRoot(args)
+	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	daemon, err := open(ctx, node.DaemonOptions{Workspace: projectRoot,
+		GracefulShutdownBudget: gracefulShutdownBudget})
+	if err != nil {
+		return err
+	}
+	serveErr := daemon.Serve(ctx)
+	return errors.Join(serveErr, daemon.Close())
+}
+
+func runInitialize(ctx context.Context, args []string, stdout io.Writer,
+	provision nodeProvisioner,
+) error {
+	options, err := parseInitializeOptions(args)
+	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	result, err := provision(ctx, options)
+	if err != nil {
+		return err
+	}
+	receipt := initializeReceipt{AssetRevision: result.Profile.ActiveAssetRevision(), Created: result.Created,
+		Host: string(result.Profile.Host()), SchemaVersion: model.SchemaVersion, Status: "initialized"}
+	return writeCanonicalReceipt(stdout, receipt, "initialization")
+}
+
+func runActivate(ctx context.Context, args []string, stdout io.Writer,
+	activate nodeActivator,
+) error {
+	options, err := parseActivateOptions(args)
+	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	result, err := activate(ctx, options)
+	if err != nil {
+		return err
+	}
+	receipt := activateReceipt{AssetRevision: result.Profile.ActiveAssetRevision(), Changed: result.Changed,
+		Host: string(result.Profile.Host()), SchemaVersion: model.SchemaVersion, Status: "active",
+		UpdatedAt: result.Profile.UpdatedAt().UTC().Format(time.RFC3339Nano)}
+	return writeCanonicalReceipt(stdout, receipt, "activation")
+}
+
+func runDeactivate(ctx context.Context, args []string, stdout io.Writer,
+	deactivate nodeDeactivator,
+) error {
+	options, err := parseDeactivateOptions(args)
+	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	result, err := deactivate(ctx, options)
+	if err != nil {
+		return err
+	}
+	receipt := deactivateReceipt{AssetRevision: result.Profile.ActiveAssetRevision(), Changed: result.Changed,
+		Host: string(result.Profile.Host()), SchemaVersion: model.SchemaVersion, Status: "inactive",
+		UpdatedAt: result.Profile.UpdatedAt().UTC().Format(time.RFC3339Nano)}
+	return writeCanonicalReceipt(stdout, receipt, "deactivation")
 }
 
 func runInspect(ctx context.Context, args []string, stdout io.Writer, inspect nodeInspector) error {
