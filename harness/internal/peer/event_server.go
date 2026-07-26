@@ -274,44 +274,6 @@ func (server *EventServer) pull(ctx context.Context, requester, localPeer model.
 	return payload, nil
 }
 
-func validateEventSourcePage(localPeer model.PeerID, localPublicKey []byte,
-	request PullRequest, page store.PeerPullPage,
-) error {
-	if localPeer.IsZero() || len(localPublicKey) != 32 ||
-		page.OriginEpoch != request.OriginEpoch() || page.SourceFloor == 0 ||
-		page.SourceFloor > model.MaxSQLiteInteger || page.SourceHead > model.MaxSQLiteInteger ||
-		page.SourceFloor-1 > page.SourceHead ||
-		request.AfterChannelSequence() < page.SourceFloor-1 ||
-		page.ScannedChannelSequence < request.AfterChannelSequence() ||
-		page.ScannedChannelSequence > page.SourceHead ||
-		page.AcknowledgedSequence != request.AfterChannelSequence() ||
-		len(page.Publications) > int(request.Limit()) {
-		return store.ErrPeerPullInvariant
-	}
-	if len(page.Publications) == 0 {
-		if page.ScannedChannelSequence != request.AfterChannelSequence() ||
-			page.SourceHead != request.AfterChannelSequence() {
-			return store.ErrPeerPullInvariant
-		}
-		return nil
-	}
-	expected := request.AfterChannelSequence() + 1
-	for _, publication := range page.Publications {
-		key := publication.Key()
-		if publication.WireJSON().IsZero() || key.ChannelID() != request.ChannelID() ||
-			key.OriginPeerID() != localPeer || key.OriginEpoch() != request.OriginEpoch() ||
-			key.ChannelSequence() != expected ||
-			model.VerifyPublication(localPublicKey, publication) != nil {
-			return store.ErrPeerPullInvariant
-		}
-		expected++
-	}
-	if expected-1 != page.ScannedChannelSequence {
-		return store.ErrPeerPullInvariant
-	}
-	return nil
-}
-
 func (server *EventServer) acknowledge(ctx context.Context, requester model.PeerID,
 	acknowledgement CursorAck,
 ) (EventFramePayload, error) {
