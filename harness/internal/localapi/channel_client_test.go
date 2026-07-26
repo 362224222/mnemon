@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/mnemon-dev/mnemon/harness/internal/model"
 )
 
 func TestChannelClientRejectsSecretsAndInvalidRulesBeforeTransport(t *testing.T) {
@@ -30,21 +32,29 @@ func TestChannelClientRejectsSecretsAndInvalidRulesBeforeTransport(t *testing.T)
 	}
 }
 
-func TestChannelClientSendsVerifiedJournalKeyAndRejectsChangedRequestLocally(t *testing.T) {
+type channelClientJournalFixture struct {
+	client   *Client
+	journals *PendingJournalStore
+	calls    int
+	paths    []string
+	keys     []string
+}
+
+func newChannelClientJournalFixture(t *testing.T) *channelClientJournalFixture {
+	t.Helper()
 	nodeState := newClientNodeState(t)
 	credential := repeatedOpaqueBytes(0x71)
 	installClientCredential(t, nodeState, credential)
-	calls := 0
-	var paths, keys []string
+	fixture := &channelClientJournalFixture{}
 	stop := serveRawClientControl(t, nodeState, http.HandlerFunc(func(writer http.ResponseWriter,
 		request *http.Request,
 	) {
-		calls++
-		paths = append(paths, request.URL.Path)
-		keys = append(keys, request.Header.Get(operationKeyHeader))
+		fixture.calls++
+		fixture.paths = append(fixture.paths, request.URL.Path)
+		fixture.keys = append(fixture.keys, request.Header.Get(operationKeyHeader))
 		writeError(writer, NewAPIError(CodeActionNotAllowed, "captured Channel mutation"))
 	}))
-	defer stop()
+	t.Cleanup(stop)
 	client, err := NewClient(nodeState)
 	if err != nil {
 		t.Fatal(err)
@@ -53,51 +63,81 @@ func TestChannelClientSendsVerifiedJournalKeyAndRejectsChangedRequestLocally(t *
 	if err != nil {
 		t.Fatal(err)
 	}
+	fixture.client = client
+	fixture.journals = journals
+	return fixture
+}
+
+func (fixture *channelClientJournalFixture) journal(t *testing.T,
+	digest model.Digest,
+) PendingJournal {
+	t.Helper()
+	journal, _, err := fixture.journals.FindOrCreate(digest, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return journal
+}
+
+func TestChannelClientSendsVerifiedCreateJournalKey(t *testing.T) {
+	fixture := newChannelClientJournalFixture(t)
 	create := ChannelCreateRequest{Name: "alpha"}
 	createDigest, _ := ChannelCreateRequestDigest(create)
-	createJournal, _, err := journals.FindOrCreate(createDigest, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, apiErr := client.CreateChannel(context.Background(), create, createJournal); apiErr == nil || apiErr.Code != CodeActionNotAllowed {
+	createJournal := fixture.journal(t, createDigest)
+	if _, apiErr := fixture.client.CreateChannel(context.Background(),
+		create, createJournal); apiErr == nil || apiErr.Code != CodeActionNotAllowed {
 		t.Fatalf("captured create error = %#v", apiErr)
 	}
-	if calls != 1 || paths[0] != RouteChannelCreate ||
-		keys[0] != createJournal.OperationKeyHeader() {
-		t.Fatalf("create transport = calls %d paths %v keys %v", calls, paths, keys)
+	if fixture.calls != 1 || fixture.paths[0] != RouteChannelCreate ||
+		fixture.keys[0] != createJournal.OperationKeyHeader() {
+		t.Fatalf("create transport = calls %d paths %v keys %v",
+			fixture.calls, fixture.paths, fixture.keys)
 	}
-	if _, apiErr := client.CreateChannel(context.Background(),
-		ChannelCreateRequest{Name: "changed"}, createJournal); apiErr == nil || apiErr.Code != CodeOperationMismatch || calls != 1 {
-		t.Fatalf("changed create = error %#v calls %d", apiErr, calls)
-	}
+}
 
+func TestChannelClientRejectsChangedCreateBeforeTransport(t *testing.T) {
+	fixture := newChannelClientJournalFixture(t)
+	createDigest, _ := ChannelCreateRequestDigest(ChannelCreateRequest{Name: "alpha"})
+	createJournal := fixture.journal(t, createDigest)
+	if _, apiErr := fixture.client.CreateChannel(context.Background(),
+		ChannelCreateRequest{Name: "changed"}, createJournal); apiErr == nil ||
+		apiErr.Code != CodeOperationMismatch || fixture.calls != 0 {
+		t.Fatalf("changed create = error %#v calls %d", apiErr, fixture.calls)
+	}
+}
+
+func TestChannelClientSendsDistinctVerifiedInviteJournalKey(t *testing.T) {
+	fixture := newChannelClientJournalFixture(t)
+	createDigest, _ := ChannelCreateRequestDigest(ChannelCreateRequest{Name: "alpha"})
+	createJournal := fixture.journal(t, createDigest)
 	invite := ChannelInviteRequest{Channel: "alpha", ExpiresSeconds: 3600, Uses: 1}
 	inviteDigest, _ := ChannelInviteRequestDigest(invite)
-	inviteJournal, _, err := journals.FindOrCreate(inviteDigest, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, apiErr := client.CreateChannelInvite(context.Background(), invite, inviteJournal); apiErr == nil || apiErr.Code != CodeActionNotAllowed {
+	inviteJournal := fixture.journal(t, inviteDigest)
+	if _, apiErr := fixture.client.CreateChannelInvite(context.Background(),
+		invite, inviteJournal); apiErr == nil || apiErr.Code != CodeActionNotAllowed {
 		t.Fatalf("captured invite error = %#v", apiErr)
 	}
-	if calls != 2 || paths[1] != RouteChannelInvites ||
-		keys[1] != inviteJournal.OperationKeyHeader() ||
+	if fixture.calls != 1 || fixture.paths[0] != RouteChannelInvites ||
+		fixture.keys[0] != inviteJournal.OperationKeyHeader() ||
 		createJournal.OperationKeyHash() == inviteJournal.OperationKeyHash() {
-		t.Fatalf("invite transport = calls %d paths %v keys %v", calls, paths, keys)
+		t.Fatalf("invite transport = calls %d paths %v keys %v",
+			fixture.calls, fixture.paths, fixture.keys)
 	}
+}
 
+func TestChannelClientSendsVerifiedLeaveJournalKey(t *testing.T) {
+	fixture := newChannelClientJournalFixture(t)
 	leave := ChannelLeaveRequest{Channel: "alpha"}
 	leaveDigest, _ := ChannelLeaveRequestDigest(leave)
-	leaveJournal, _, err := journals.FindOrCreate(leaveDigest, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, apiErr := client.LeaveChannel(context.Background(), leave, leaveJournal); apiErr == nil ||
+	leaveJournal := fixture.journal(t, leaveDigest)
+	if _, apiErr := fixture.client.LeaveChannel(context.Background(),
+		leave, leaveJournal); apiErr == nil ||
 		apiErr.Code != CodeActionNotAllowed {
 		t.Fatalf("captured leave error = %#v", apiErr)
 	}
-	if calls != 3 || paths[2] != RouteChannelLeave ||
-		keys[2] != leaveJournal.OperationKeyHeader() {
-		t.Fatalf("leave transport = calls %d paths %v keys %v", calls, paths, keys)
+	if fixture.calls != 1 || fixture.paths[0] != RouteChannelLeave ||
+		fixture.keys[0] != leaveJournal.OperationKeyHeader() {
+		t.Fatalf("leave transport = calls %d paths %v keys %v",
+			fixture.calls, fixture.paths, fixture.keys)
 	}
 }

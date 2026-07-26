@@ -68,88 +68,125 @@ func TestChannelAbandonRouteRequiresExplicitMatchingDestructiveConfirmation(t *t
 	}
 }
 
-func TestChannelMutationRoutesRequireKeyAndBindIndependentCanonicalDigest(t *testing.T) {
+type channelMutationRouteFixture struct {
+	credential []byte
+	operation  []byte
+	service    *channelRouteService
+	handler    http.Handler
+}
+
+func newChannelMutationRouteFixture(t *testing.T) *channelMutationRouteFixture {
+	t.Helper()
 	credential := repeatedOpaqueBytes(0x53)
-	operation := repeatedOpaqueBytes(0x54)
 	service := &channelRouteService{}
 	server, err := NewServer(fixedAuthenticator{want: modelDigest(credential)}, service)
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := `{"name":"alpha"}`
-	request := authenticatedRequest(t, http.MethodPost, RouteChannelCreate, body, credential)
-	recorder := httptest.NewRecorder()
-	server.Handler().ServeHTTP(recorder, request)
-	if recorder.Code == http.StatusOK || service.createCalls != 0 {
-		t.Fatalf("keyless create = %d %s calls=%d",
-			recorder.Code, recorder.Body.String(), service.createCalls)
-	}
+	return &channelMutationRouteFixture{credential: credential,
+		operation: repeatedOpaqueBytes(0x54), service: service, handler: server.Handler()}
+}
 
-	request = authenticatedRequest(t, http.MethodPost, RouteChannelCreate, body, credential)
-	request.Header.Set(operationKeyHeader,
-		base64.RawURLEncoding.EncodeToString(operation))
-	recorder = httptest.NewRecorder()
-	server.Handler().ServeHTTP(recorder, request)
+func (fixture *channelMutationRouteFixture) post(t *testing.T, route, body string,
+	withOperationKey bool,
+) *httptest.ResponseRecorder {
+	t.Helper()
+	request := authenticatedRequest(t, http.MethodPost, route, body, fixture.credential)
+	if withOperationKey {
+		request.Header.Set(operationKeyHeader,
+			base64.RawURLEncoding.EncodeToString(fixture.operation))
+	}
+	recorder := httptest.NewRecorder()
+	fixture.handler.ServeHTTP(recorder, request)
+	return recorder
+}
+
+func (fixture *channelMutationRouteFixture) calls(route string) int {
+	switch route {
+	case RouteChannelCreate:
+		return fixture.service.createCalls
+	case RouteChannelInvites:
+		return fixture.service.inviteCalls
+	case RouteChannelLeave:
+		return fixture.service.leaveCalls
+	default:
+		return -1
+	}
+}
+
+func TestChannelMutationRoutesRequireOperationKey(t *testing.T) {
+	tests := []struct {
+		name  string
+		route string
+		body  string
+	}{
+		{name: "create", route: RouteChannelCreate, body: `{"name":"alpha"}`},
+		{name: "invite", route: RouteChannelInvites, body: `{}`},
+		{name: "leave", route: RouteChannelLeave, body: `{"channel":"alpha"}`},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			fixture := newChannelMutationRouteFixture(t)
+			recorder := fixture.post(t, testCase.route, testCase.body, false)
+			if recorder.Code == http.StatusOK || fixture.calls(testCase.route) != 0 {
+				t.Fatalf("keyless route = %d %s calls=%d", recorder.Code,
+					recorder.Body.String(), fixture.calls(testCase.route))
+			}
+		})
+	}
+}
+
+func TestChannelCreateRouteBindsOperationKeyAndCanonicalDigest(t *testing.T) {
+	fixture := newChannelMutationRouteFixture(t)
+	recorder := fixture.post(t, RouteChannelCreate, `{"name":"alpha"}`, true)
 	wantDigest, apiErr := ChannelCreateRequestDigest(ChannelCreateRequest{Name: "alpha"})
 	if apiErr != nil {
 		t.Fatal(apiErr)
 	}
-	if service.createCalls != 1 || !service.createMetadata.HasOperationKey ||
-		service.createMetadata.OperationKeyHash != modelDigest(operation) ||
-		!service.createMetadata.HasRequestDigest ||
-		service.createMetadata.RequestDigest != wantDigest ||
-		!bytes.Equal(service.createSecret, operation) ||
+	metadata := fixture.service.createMetadata
+	if fixture.service.createCalls != 1 || !metadata.HasOperationKey ||
+		metadata.OperationKeyHash != modelDigest(fixture.operation) ||
+		!metadata.HasRequestDigest || metadata.RequestDigest != wantDigest ||
+		!bytes.Equal(fixture.service.createSecret, fixture.operation) ||
 		strings.Contains(recorder.Body.String(),
-			base64.RawURLEncoding.EncodeToString(operation)) {
+			base64.RawURLEncoding.EncodeToString(fixture.operation)) {
 		t.Fatalf("keyed create metadata=%#v secret=%x response=%d %s",
-			service.createMetadata, service.createSecret, recorder.Code, recorder.Body.String())
+			metadata, fixture.service.createSecret, recorder.Code, recorder.Body.String())
 	}
+}
 
-	createEmpty, _ := ChannelCreateRequestDigest(ChannelCreateRequest{})
-	inviteEmpty, _ := ChannelInviteRequestDigest(ChannelInviteRequest{})
-	leaveEmpty, _ := ChannelLeaveRequestDigest(ChannelLeaveRequest{})
-	if createEmpty == inviteEmpty || createEmpty == leaveEmpty || inviteEmpty == leaveEmpty {
-		t.Fatalf("empty Channel routes reused digest create=%s invite=%s leave=%s",
-			createEmpty.String(), inviteEmpty.String(), leaveEmpty.String())
-	}
-
-	request = authenticatedRequest(t, http.MethodPost, RouteChannelInvites, `{}`, credential)
-	recorder = httptest.NewRecorder()
-	server.Handler().ServeHTTP(recorder, request)
-	if recorder.Code == http.StatusOK || service.inviteCalls != 0 {
-		t.Fatalf("keyless invite = %d %s calls=%d",
-			recorder.Code, recorder.Body.String(), service.inviteCalls)
-	}
-	request = authenticatedRequest(t, http.MethodPost, RouteChannelInvites, `{}`, credential)
-	request.Header.Set(operationKeyHeader,
-		base64.RawURLEncoding.EncodeToString(operation))
-	recorder = httptest.NewRecorder()
-	server.Handler().ServeHTTP(recorder, request)
-	if service.inviteCalls != 1 || service.inviteMetadata.RequestDigest != inviteEmpty ||
-		!bytes.Equal(service.inviteSecret, operation) {
+func TestChannelInviteRouteBindsOperationKeyAndCanonicalDigest(t *testing.T) {
+	fixture := newChannelMutationRouteFixture(t)
+	recorder := fixture.post(t, RouteChannelInvites, `{}`, true)
+	wantDigest, _ := ChannelInviteRequestDigest(ChannelInviteRequest{})
+	if fixture.service.inviteCalls != 1 ||
+		fixture.service.inviteMetadata.RequestDigest != wantDigest ||
+		!bytes.Equal(fixture.service.inviteSecret, fixture.operation) {
 		t.Fatalf("keyed invite metadata=%#v secret=%x response=%d %s",
-			service.inviteMetadata, service.inviteSecret, recorder.Code, recorder.Body.String())
+			fixture.service.inviteMetadata, fixture.service.inviteSecret,
+			recorder.Code, recorder.Body.String())
 	}
+}
 
-	request = authenticatedRequest(t, http.MethodPost, RouteChannelLeave,
-		`{"channel":"alpha"}`, credential)
-	recorder = httptest.NewRecorder()
-	server.Handler().ServeHTTP(recorder, request)
-	if recorder.Code == http.StatusOK || service.leaveCalls != 0 {
-		t.Fatalf("keyless leave = %d %s calls=%d",
-			recorder.Code, recorder.Body.String(), service.leaveCalls)
-	}
-	request = authenticatedRequest(t, http.MethodPost, RouteChannelLeave,
-		`{"channel":"alpha"}`, credential)
-	request.Header.Set(operationKeyHeader,
-		base64.RawURLEncoding.EncodeToString(operation))
-	recorder = httptest.NewRecorder()
-	server.Handler().ServeHTTP(recorder, request)
-	leaveDigest, _ := ChannelLeaveRequestDigest(ChannelLeaveRequest{Channel: "alpha"})
-	if service.leaveCalls != 1 || service.leaveMetadata.RequestDigest != leaveDigest ||
-		len(service.leaveMetadata.OperationKeySecret) != 0 {
+func TestChannelLeaveRouteBindsCanonicalDigestWithoutRetainingSecret(t *testing.T) {
+	fixture := newChannelMutationRouteFixture(t)
+	recorder := fixture.post(t, RouteChannelLeave, `{"channel":"alpha"}`, true)
+	wantDigest, _ := ChannelLeaveRequestDigest(ChannelLeaveRequest{Channel: "alpha"})
+	if fixture.service.leaveCalls != 1 ||
+		fixture.service.leaveMetadata.RequestDigest != wantDigest ||
+		len(fixture.service.leaveMetadata.OperationKeySecret) != 0 {
 		t.Fatalf("keyed leave metadata=%#v response=%d %s",
-			service.leaveMetadata, recorder.Code, recorder.Body.String())
+			fixture.service.leaveMetadata, recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestChannelMutationRequestDigestsAreRouteSeparated(t *testing.T) {
+	create, _ := ChannelCreateRequestDigest(ChannelCreateRequest{})
+	invite, _ := ChannelInviteRequestDigest(ChannelInviteRequest{})
+	leave, _ := ChannelLeaveRequestDigest(ChannelLeaveRequest{})
+	if create == invite || create == leave || invite == leave {
+		t.Fatalf("empty Channel routes reused digest create=%s invite=%s leave=%s",
+			create.String(), invite.String(), leave.String())
 	}
 }
 
