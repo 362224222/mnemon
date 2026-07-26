@@ -183,13 +183,10 @@ func (client *ChannelEnrollmentClient) release(prepared preparedChannelJoin) {
 }
 
 func (session *channelJoinSession) start(ctx context.Context) error {
-	client, stream := session.client, session.stream
-	if client == nil || client.store == nil || ctx == nil || stream == nil || stream.Conn() == nil ||
-		stream.Protocol() != ChannelProtocol || model.VerifyEnrollmentToken(session.spec.Token) != nil ||
-		session.prepared.RequestID.IsZero() || session.joinerPeerID.IsZero() ||
-		session.descriptor.IsZero() {
+	if !validChannelJoinSession(session, ctx) {
 		return newChannelProtocolFailure(ChannelErrorInvalidToken, 0)
 	}
+	stream := session.stream
 	if err := ctx.Err(); err != nil {
 		return enrollmentTransportFailure(err)
 	}
@@ -222,6 +219,15 @@ func (session *channelJoinSession) start(ctx context.Context) error {
 	}
 	session.ownerPeerID = ownerPeerID
 	return nil
+}
+
+func validChannelJoinSession(session *channelJoinSession, ctx context.Context) bool {
+	return session != nil && session.client != nil && session.client.store != nil &&
+		ctx != nil && session.stream != nil && session.stream.Conn() != nil &&
+		session.stream.Protocol() == ChannelProtocol &&
+		model.VerifyEnrollmentToken(session.spec.Token) == nil &&
+		!session.prepared.RequestID.IsZero() && !session.joinerPeerID.IsZero() &&
+		!session.descriptor.IsZero()
 }
 
 func (session *channelJoinSession) newInitFrame() (ChannelFrame, error) {
