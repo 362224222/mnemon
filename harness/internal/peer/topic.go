@@ -182,24 +182,6 @@ func (gossip *Gossip) joinLocked(channelID model.ChannelID,
 // Callers reacquire rotated sessions with Join; blocked Next calls on an old
 // session are cancelled and must be restarted by the owning worker.
 func (gossip *Gossip) Reconcile(snapshot NetworkAuthoritySnapshot) error {
-	return gossip.reconcile(snapshot, nil)
-}
-
-// ReconcileWithCommit validates the complete post-commit authority before it
-// drains affected Channel gates. The callback then performs exactly one
-// bounded durable CAS while those gates remain closed; a callback failure
-// leaves the old runtime authority and TopicSessions untouched. The callback
-// must not perform network I/O or call back into Gossip.
-func (gossip *Gossip) ReconcileWithCommit(snapshot NetworkAuthoritySnapshot,
-	commit func() error,
-) error {
-	if commit == nil {
-		return fmt.Errorf("%w: durable authority commit callback is required", ErrGossipTopic)
-	}
-	return gossip.reconcile(snapshot, commit)
-}
-
-func (gossip *Gossip) reconcile(snapshot NetworkAuthoritySnapshot, commit func() error) error {
 	if gossip == nil || gossip.pubsub == nil || gossip.authority == nil {
 		return fmt.Errorf("%w: router is unavailable", ErrGossipTopic)
 	}
@@ -224,14 +206,8 @@ func (gossip *Gossip) reconcile(snapshot NetworkAuthoritySnapshot, commit func()
 	affected := gossip.affectedChannels(current, candidate)
 	gates := gossip.lockAffectedChannels(affected)
 	defer gates.unlock()
-	// Every affected Channel is now drained at the application boundary. The
-	// durable CAS runs before the immutable authority pointer swap while
+	// Every affected Channel is now drained at the application boundary while
 	// unrelated Channel sessions keep running on independent gates.
-	if commit != nil {
-		if err := commit(); err != nil {
-			return fmt.Errorf("%w: durable authority commit: %w", ErrGossipTopic, err)
-		}
-	}
 	gossip.authority.install(candidate)
 	gossip.authority.finishUpdate()
 	updateHeld = false

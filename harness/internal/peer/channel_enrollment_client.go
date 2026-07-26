@@ -1,6 +1,7 @@
 package peer
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"fmt"
@@ -47,6 +48,17 @@ type JoinChannelSpec struct {
 	LocalAlias           string
 }
 
+// preparedChannelJoin is the bounded durable reservation for exactly one
+// enrollment attempt. It contains no bearer material beyond the caller-owned
+// token already required for the exchange.
+type preparedChannelJoin struct {
+	spec           JoinChannelSpec
+	descriptor     model.SignedChannelDescriptor
+	localPeerID    model.PeerID
+	localPublicKey []byte
+	reservation    store.PrepareJoinedChannelResult
+}
+
 type channelJoinSession struct {
 	client  *ChannelEnrollmentClient
 	stream  network.Stream
@@ -85,21 +97,50 @@ func NewChannelEnrollmentClient(options ChannelEnrollmentClientOptions) (*Channe
 		random: options.Random}, nil
 }
 
-// Join executes the authenticated handshake on an already-open exact Channel
-// stream and atomically installs only verified signed evidence. Dial authority
-// and peerstore address admission remain the Node reconciler's responsibility.
-func (client *ChannelEnrollmentClient) Join(ctx context.Context, stream network.Stream,
-	spec JoinChannelSpec,
+// prepare reserves the local Channel slot and immutable attempt fence before
+// Connect or NewStream can consume remote resources or grant authority.
+func (client *ChannelEnrollmentClient) prepare(ctx context.Context, spec JoinChannelSpec,
+	localPeerID model.PeerID, localPublicKey []byte,
+) (preparedChannelJoin, error) {
+	if client == nil || client.store == nil || ctx == nil ||
+		localPeerID.IsZero() || len(localPublicKey) == 0 ||
+		model.VerifyEnrollmentToken(spec.Token) != nil {
+		return preparedChannelJoin{},
+			newChannelProtocolFailure(ChannelErrorInvalidToken, 0)
+	}
+	if err := ctx.Err(); err != nil {
+		return preparedChannelJoin{}, enrollmentTransportFailure(err)
+	}
+	descriptor := spec.Token.Payload().Descriptor()
+	reservation, err := client.store.PrepareJoinedChannel(ctx, store.PrepareJoinedChannelSpec{
+		AuthenticatedLocalPeerID: localPeerID, LocalPublicKey: localPublicKey,
+		Descriptor: descriptor, GrantID: spec.Token.Payload().GrantID(),
+		LocalAlias: spec.LocalAlias, At: client.clock.Now(),
+	})
+	if err != nil {
+		return preparedChannelJoin{}, joinedChannelStoreFailure(err)
+	}
+	return preparedChannelJoin{spec: spec, descriptor: descriptor, localPeerID: localPeerID,
+		localPublicKey: append([]byte(nil), localPublicKey...), reservation: reservation}, nil
+}
+
+// join executes the authenticated handshake using a reservation created before
+// the stream was opened, then atomically installs only verified signed
+// evidence.
+func (client *ChannelEnrollmentClient) join(ctx context.Context, stream network.Stream,
+	prepared preparedChannelJoin,
 ) (store.InstallJoinedChannelResult, error) {
-	if stream == nil {
+	if client == nil || prepared.reservation.RequestID.IsZero() ||
+		prepared.localPeerID.IsZero() || prepared.descriptor.IsZero() {
 		return store.InstallJoinedChannelResult{}, newChannelProtocolFailure(ChannelErrorInvalidToken, 0)
 	}
-	session := &channelJoinSession{client: client, stream: stream, spec: spec}
+	session := &channelJoinSession{client: client, stream: stream, spec: prepared.spec,
+		descriptor: prepared.descriptor, joinerPeerID: prepared.localPeerID,
+		joinerPublicKey: append([]byte(nil), prepared.localPublicKey...),
+		prepared:        prepared.reservation, reservationActive: prepared.reservation.Reserved,
+		releaseReservation: prepared.reservation.Reserved && !prepared.reservation.CommitUnknown}
 	defer session.finish()
 	if err := session.start(ctx); err != nil {
-		return store.InstallJoinedChannelResult{}, err
-	}
-	if err := session.prepare(); err != nil {
 		return store.InstallJoinedChannelResult{}, err
 	}
 	initFrame, err := session.newInitFrame()
@@ -130,10 +171,23 @@ func (client *ChannelEnrollmentClient) Join(ctx context.Context, stream network.
 	return session.installAccepted(accepted)
 }
 
+func (client *ChannelEnrollmentClient) release(prepared preparedChannelJoin) {
+	if client == nil || client.store == nil || !prepared.reservation.Reserved ||
+		prepared.reservation.CommitUnknown {
+		return
+	}
+	releaseCtx, releaseCancel := context.WithTimeout(context.Background(), time.Second)
+	_ = client.store.ReleaseJoinedChannelReservation(releaseCtx, prepared.reservation.RequestID,
+		prepared.localPeerID, prepared.reservation.Attempt)
+	releaseCancel()
+}
+
 func (session *channelJoinSession) start(ctx context.Context) error {
 	client, stream := session.client, session.stream
-	if client == nil || client.store == nil || ctx == nil || stream.Conn() == nil ||
-		stream.Protocol() != ChannelProtocol || model.VerifyEnrollmentToken(session.spec.Token) != nil {
+	if client == nil || client.store == nil || ctx == nil || stream == nil || stream.Conn() == nil ||
+		stream.Protocol() != ChannelProtocol || model.VerifyEnrollmentToken(session.spec.Token) != nil ||
+		session.prepared.RequestID.IsZero() || session.joinerPeerID.IsZero() ||
+		session.descriptor.IsZero() {
 		return newChannelProtocolFailure(ChannelErrorInvalidToken, 0)
 	}
 	if err := ctx.Err(); err != nil {
@@ -152,35 +206,21 @@ func (session *channelJoinSession) start(ctx context.Context) error {
 		func() { _ = stream.SetDeadline(time.Now()) })
 
 	session.payload = session.spec.Token.Payload()
-	session.descriptor = session.payload.Descriptor()
+	if session.payload.Descriptor().Descriptor().Digest() !=
+		session.descriptor.Descriptor().Digest() {
+		return newChannelProtocolFailure(ChannelErrorInvalidToken, 0)
+	}
 	wantOwner := session.descriptor.Descriptor().OwnerPeerID()
 	ownerPeerID, _, err := secureChannelPeer(stream.Conn().RemotePeer())
 	if err != nil || ownerPeerID != wantOwner {
 		return newChannelProtocolFailure(ChannelErrorWrongOwner, 0)
 	}
 	joinerPeerID, joinerPublicKey, err := secureChannelPeer(stream.Conn().LocalPeer())
-	if err != nil || joinerPeerID == ownerPeerID {
+	if err != nil || joinerPeerID == ownerPeerID || joinerPeerID != session.joinerPeerID ||
+		!bytes.Equal(joinerPublicKey, session.joinerPublicKey) {
 		return newChannelProtocolFailure(ChannelErrorInvalidToken, 0)
 	}
 	session.ownerPeerID = ownerPeerID
-	session.joinerPeerID = joinerPeerID
-	session.joinerPublicKey = joinerPublicKey
-	return nil
-}
-
-func (session *channelJoinSession) prepare() error {
-	prepared, err := session.client.store.PrepareJoinedChannel(session.requestCtx,
-		store.PrepareJoinedChannelSpec{
-			AuthenticatedLocalPeerID: session.joinerPeerID, LocalPublicKey: session.joinerPublicKey,
-			Descriptor: session.descriptor, GrantID: session.payload.GrantID(),
-			LocalAlias: session.spec.LocalAlias, At: session.client.clock.Now(),
-		})
-	if err != nil {
-		return joinedChannelStoreFailure(err)
-	}
-	session.prepared = prepared
-	session.reservationActive = prepared.Reserved
-	session.releaseReservation = prepared.Reserved && !prepared.CommitUnknown
 	return nil
 }
 
@@ -211,16 +251,17 @@ func (session *channelJoinSession) newInitFrame() (ChannelFrame, error) {
 
 func (session *channelJoinSession) finish() {
 	if session.reservationActive && session.releaseReservation {
-		releaseCtx, releaseCancel := context.WithTimeout(context.Background(), time.Second)
-		_ = session.client.store.ReleaseJoinedChannelReservation(releaseCtx, session.prepared.RequestID,
-			session.joinerPeerID, session.prepared.Attempt)
-		releaseCancel()
+		session.client.release(preparedChannelJoin{localPeerID: session.joinerPeerID,
+			reservation: session.prepared})
 	}
 	if session.stopCancellation != nil {
 		session.stopCancellation()
 	}
 	if session.cancel != nil {
 		session.cancel()
+	}
+	if session.stream == nil {
+		return
 	}
 	if session.completed {
 		_ = session.stream.Close()

@@ -132,7 +132,7 @@ func TestAcceptChannelEnrollmentUsesOneGrantForMultipleAuthenticatedPeers(t *tes
 		AuthenticatedOwnerPeerID: fixture.channel.Owner().PeerID(), LocalAlias: "multi-use-team",
 		Descriptor: fixture.channel.Descriptor(), Transcript: transcript, Receipt: second.Receipt,
 		Members: second.Roster.Members(), At: secondAt.Add(time.Second)}
-	reserveJoinedChannelTest(t, secondStore, installSpec)
+	reserveJoinedChannelTest(t, secondStore, &installSpec)
 	installed, err := secondStore.InstallJoinedChannel(context.Background(), installSpec)
 	if err != nil || !installed.Installed || len(installed.Roster.Members()) != 3 {
 		t.Fatalf("multi-member initial install = (%#v,%v)", installed, err)

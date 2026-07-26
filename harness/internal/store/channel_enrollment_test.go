@@ -67,8 +67,11 @@ func stableEnrollmentRequest(t testing.TB, channelID model.ChannelID, grantID mo
 	return requestID
 }
 
-func reserveJoinedChannelTest(t testing.TB, st *Store, spec InstallJoinedChannelSpec) {
+func reserveJoinedChannelTest(t testing.TB, st *Store, spec *InstallJoinedChannelSpec) {
 	t.Helper()
+	if spec == nil {
+		t.Fatal("joined Channel install spec is nil")
+	}
 	prepared, err := st.PrepareJoinedChannel(context.Background(), PrepareJoinedChannelSpec{
 		AuthenticatedLocalPeerID: spec.Transcript.JoinerPeerID(),
 		LocalPublicKey:           spec.Transcript.JoinerPublicKey(),
@@ -81,6 +84,11 @@ func reserveJoinedChannelTest(t testing.TB, st *Store, spec InstallJoinedChannel
 		prepared.OriginEpoch != spec.Transcript.JoinerOriginEpoch() || !prepared.Reserved {
 		t.Fatalf("PrepareJoinedChannel() = (%#v, %v)", prepared, err)
 	}
+	if err := st.MarkJoinedChannelCommitUnknown(context.Background(), prepared.RequestID,
+		spec.Transcript.JoinerPeerID(), prepared.Attempt, spec.At); err != nil {
+		t.Fatalf("MarkJoinedChannelCommitUnknown() = %v", err)
+	}
+	spec.ReservationAttempt = prepared.Attempt
 }
 
 func (fixture channelEnrollmentFixture) prepareSpec(at time.Time) PrepareChannelEnrollmentSpec {

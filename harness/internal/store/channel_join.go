@@ -214,21 +214,27 @@ func readReplicaEnrollmentRequest(ctx context.Context, tx *sql.Tx, channelID mod
 func verifyJoinedChannelReservation(ctx context.Context, tx *sql.Tx, node model.Node,
 	spec InstallJoinedChannelSpec,
 ) error {
+	if spec.ReservationAttempt == 0 || spec.ReservationAttempt > model.MaxSQLiteInteger {
+		return ErrChannelJoinInput
+	}
 	joinIdentity, err := spec.Transcript.JoinIdentityDigest()
 	if err != nil {
 		return ErrChannelJoinInput
 	}
-	var channelText, grantText, peerText, epochText, alias string
+	var channelText, grantText, peerText, epochText, alias, state string
 	var storedJoinIdentity, descriptorDigest []byte
+	var attempt uint64
 	err = tx.QueryRowContext(ctx, `SELECT channel_id,grant_id,join_identity_digest,descriptor_digest,
-		local_peer_id,origin_epoch,local_alias FROM channel_join_reservations WHERE request_id=?`,
+		local_peer_id,origin_epoch,local_alias,attempt,state
+		FROM channel_join_reservations WHERE request_id=?`,
 		spec.Transcript.RequestID().String()).Scan(&channelText, &grantText, &storedJoinIdentity,
-		&descriptorDigest, &peerText, &epochText, &alias)
+		&descriptorDigest, &peerText, &epochText, &alias, &attempt, &state)
 	if err != nil || channelText != spec.Transcript.ChannelID().String() ||
 		grantText != spec.Transcript.GrantID().String() || !bytes.Equal(storedJoinIdentity, joinIdentity.Bytes()) ||
 		!bytes.Equal(descriptorDigest, spec.Descriptor.Descriptor().Digest().Bytes()) ||
-		peerText != node.PeerID().String() || epochText != node.OriginEpoch().String() || alias != spec.LocalAlias {
-		return ErrChannelJoinInput
+		peerText != node.PeerID().String() || epochText != node.OriginEpoch().String() ||
+		alias != spec.LocalAlias || attempt != spec.ReservationAttempt || state != "commit_unknown" {
+		return ErrChannelJoinConflict
 	}
 	return nil
 }

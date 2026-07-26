@@ -82,7 +82,7 @@ func (manager *ChannelManager) refreshMemberAuthority(ctx context.Context,
 	if err != nil {
 		return model.VerifiedRoster{}, err
 	}
-	if err := manager.runtime.ReconcileWithCommit(mesh, func() error { return nil }); err != nil {
+	if err := manager.runtime.Reconcile(mesh); err != nil {
 		return model.VerifiedRoster{}, err
 	}
 	return rosterFromMesh(mesh, channelID)

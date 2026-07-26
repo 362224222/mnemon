@@ -31,7 +31,7 @@ func (manager *ChannelManager) ConfirmMemberBaselineRuntimeGate(ctx context.Cont
 	if err != nil {
 		return fmt.Errorf("%w: read post-ACK authority: %w", ErrChannelMemberReconciler, err)
 	}
-	if err := manager.runtime.ReconcileWithCommit(mesh, func() error { return nil }); err != nil {
+	if err := manager.runtime.Reconcile(mesh); err != nil {
 		return fmt.Errorf("%w: install post-ACK authority: %w", ErrChannelMemberReconciler, err)
 	}
 	channel, err := channelForMemberRuntimeGate(mesh, channelID)

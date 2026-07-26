@@ -1118,59 +1118,6 @@ func TestGossipSessionCloseSerializesValidatorRecreation(t *testing.T) {
 	}
 }
 
-func TestGossipReconcileWithCommitDrainsBeforeDurableMutation(t *testing.T) {
-	fixture := newTopicLifecycleFixture(t, "gossip-commit")
-	local, channel := fixture.local, fixture.channel
-	gossip, session := fixture.gossip, fixture.session
-	candidate := nextTopicAuthorityGeneration(t, channel, "gossip-commit-roster-3")
-	snapshot := NetworkAuthoritySnapshot{LocalPeerID: local.modelID,
-		Channels: []ChannelAuthoritySnapshot{candidate}}
-
-	commitFailure := errors.New("injected durable CAS failure")
-	entered := make(chan struct{})
-	completed := make(chan error, 1)
-	session.gate.RLock()
-	go func() {
-		completed <- gossip.ReconcileWithCommit(snapshot, func() error {
-			close(entered)
-			return commitFailure
-		})
-	}()
-	select {
-	case <-entered:
-		session.gate.RUnlock()
-		t.Fatal("durable commit ran before the existing Channel gate drained")
-	case <-time.After(100 * time.Millisecond):
-	}
-	session.gate.RUnlock()
-	if err := <-completed; !errors.Is(err, commitFailure) {
-		t.Fatalf("failed commit error = %v", err)
-	}
-	if session.closed.Load() || !session.IsCurrent() || !gossip.HasCurrentSession(channel.ChannelID) {
-		t.Fatal("failed durable commit changed the old runtime authority")
-	}
-
-	commits := 0
-	if err := gossip.ReconcileWithCommit(snapshot, func() error {
-		commits++
-		if session.gate.TryRLock() {
-			session.gate.RUnlock()
-			return errors.New("commit callback observed an open Channel gate")
-		}
-		return nil
-	}); err != nil || commits != 1 {
-		t.Fatalf("successful gated commit = commits %d, error %v", commits, err)
-	}
-	if !session.closed.Load() || session.IsCurrent() {
-		t.Fatal("successful durable authority commit did not retire the old session")
-	}
-	replacement, err := gossip.Join(channel.ChannelID)
-	if err != nil || replacement == session || !replacement.IsCurrent() ||
-		!gossip.HasCurrentSession(channel.ChannelID) {
-		t.Fatalf("post-commit TopicSession = (%p,%v), previous %p", replacement, err, session)
-	}
-}
-
 type topicLifecycleFixture struct {
 	local   authorityTestPeer
 	remote  authorityTestPeer

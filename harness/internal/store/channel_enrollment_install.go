@@ -17,6 +17,7 @@ type InstallJoinedChannelSpec struct {
 	Transcript               model.EnrollmentTranscript
 	Receipt                  model.EnrollmentReceipt
 	Members                  []model.Member
+	ReservationAttempt       uint64
 	At                       time.Time
 }
 

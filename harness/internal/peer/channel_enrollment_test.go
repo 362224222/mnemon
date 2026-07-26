@@ -52,8 +52,9 @@ func TestChannelEnrollmentHandshakeCommitsResponseLossReplayAndAtomicInstall(t *
 	if err != nil {
 		t.Fatal(err)
 	}
+	firstAttempt := prepareEnrollmentTestAttempt(t, ctx, firstClient, joinerHost, spec)
 	firstStream := openEnrollmentTestStream(t, ctx, joinerHost, ownerHost.ID())
-	if result, err := firstClient.Join(ctx, firstStream, spec); err == nil || result.Installed {
+	if result, err := firstClient.join(ctx, firstStream, firstAttempt); err == nil || result.Installed {
 		t.Fatalf("lost-response join = (%#v, %v)", result, err)
 	}
 
@@ -64,8 +65,9 @@ func TestChannelEnrollmentHandshakeCommitsResponseLossReplayAndAtomicInstall(t *
 	if err != nil {
 		t.Fatal(err)
 	}
+	retryAttempt := prepareEnrollmentTestAttempt(t, ctx, retryClient, joinerHost, spec)
 	retryStream := openEnrollmentTestStream(t, ctx, joinerHost, ownerHost.ID())
-	installed, err := retryClient.Join(ctx, retryStream, spec)
+	installed, err := retryClient.join(ctx, retryStream, retryAttempt)
 	if err != nil || !installed.Installed || installed.Status != store.ChannelEnrollmentAccepted ||
 		installed.Channel.ID() != ownerFixture.Channel().ID() ||
 		installed.Channel.LocalAlias() != spec.LocalAlias || installed.Roster.Head().Revision() != 2 {
@@ -78,8 +80,9 @@ func TestChannelEnrollmentHandshakeCommitsResponseLossReplayAndAtomicInstall(t *
 
 	// A further byte-equivalent operation is a local replica replay, not a
 	// second membership, grant use, receipt, or binding installation.
+	replayAttempt := prepareEnrollmentTestAttempt(t, ctx, retryClient, joinerHost, spec)
 	replayStream := openEnrollmentTestStream(t, ctx, joinerHost, ownerHost.ID())
-	replayed, err := retryClient.Join(ctx, replayStream, spec)
+	replayed, err := retryClient.join(ctx, replayStream, replayAttempt)
 	if err != nil || replayed.Installed || replayed.Status != store.ChannelEnrollmentReplayed ||
 		replayed.Roster.Head() != installed.Roster.Head() {
 		t.Fatalf("installed replay = (%#v, %v)", replayed, err)
@@ -113,14 +116,15 @@ func TestChannelEnrollmentRecoversOwnerCommitAfterAcceptedResponseLoss(t *testin
 	}
 	firstSpec := JoinChannelSpec{Token: token, DisplayLabel: joinerIdentity.DisplayName(),
 		AdvertisedMultiaddrs: joinerIdentity.Multiaddrs(), LocalAlias: "response-loss-team"}
-	firstStream := openEnrollmentTestStream(t, ctx, joinerHost, ownerHost.ID())
 	type joinResult struct {
 		result store.InstallJoinedChannelResult
 		err    error
 	}
 	resultC := make(chan joinResult, 1)
+	firstAttempt := prepareEnrollmentTestAttempt(t, ctx, firstClient, joinerHost, firstSpec)
+	firstStream := openEnrollmentTestStream(t, ctx, joinerHost, ownerHost.ID())
 	go func() {
-		result, joinErr := firstClient.Join(ctx, firstStream, firstSpec)
+		result, joinErr := firstClient.join(ctx, firstStream, firstAttempt)
 		resultC <- joinResult{result: result, err: joinErr}
 	}()
 	select {
@@ -165,11 +169,12 @@ func TestChannelEnrollmentRecoversOwnerCommitAfterAcceptedResponseLoss(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	retryStream := openEnrollmentTestStream(t, ctx, joinerHost, ownerHost.ID())
 	retrySpec := firstSpec
 	retrySpec.DisplayLabel = "renamed-after-restart"
 	retrySpec.AdvertisedMultiaddrs = []string{"/ip4/127.0.0.1/tcp/45555"}
-	installed, err := retryClient.Join(ctx, retryStream, retrySpec)
+	retryAttempt := prepareEnrollmentTestAttempt(t, ctx, retryClient, joinerHost, retrySpec)
+	retryStream := openEnrollmentTestStream(t, ctx, joinerHost, ownerHost.ID())
+	installed, err := retryClient.join(ctx, retryStream, retryAttempt)
 	if err != nil || !installed.Installed || installed.Roster.Head().Revision() != 2 {
 		t.Fatalf("response-loss recovery = (%#v,%v)", installed, err)
 	}
@@ -263,9 +268,11 @@ func TestChannelEnrollmentClientRejectsWrongSecureOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	spec := JoinChannelSpec{Token: token, DisplayLabel: joiner.DisplayName(),
+		AdvertisedMultiaddrs: joiner.Multiaddrs(), LocalAlias: "wrong-owner"}
+	attempt := prepareEnrollmentTestAttempt(t, ctx, client, joinerHost, spec)
 	stream := openEnrollmentTestStream(t, ctx, joinerHost, wrongHost.ID())
-	_, err = client.Join(ctx, stream, JoinChannelSpec{Token: token, DisplayLabel: joiner.DisplayName(),
-		AdvertisedMultiaddrs: joiner.Multiaddrs(), LocalAlias: "wrong-owner"})
+	_, err = client.join(ctx, stream, attempt)
 	var failure *ChannelProtocolFailure
 	if !errors.As(err, &failure) || failure.Code() != ChannelErrorWrongOwner || failure.Retryable() {
 		t.Fatalf("wrong secure owner error = %#v", err)
@@ -636,4 +643,19 @@ func openEnrollmentTestStream(t *testing.T, ctx context.Context, local host.Host
 		t.Fatal(err)
 	}
 	return stream
+}
+
+func prepareEnrollmentTestAttempt(t *testing.T, ctx context.Context,
+	client *ChannelEnrollmentClient, local host.Host, spec JoinChannelSpec,
+) preparedChannelJoin {
+	t.Helper()
+	peerID, publicKey, err := secureChannelPeer(local.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := client.prepare(ctx, spec, peerID, publicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return prepared
 }

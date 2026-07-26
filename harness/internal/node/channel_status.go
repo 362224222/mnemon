@@ -92,7 +92,7 @@ func (manager *ChannelManager) channelTopicStatus(channel model.Channel) string 
 
 func (manager *ChannelManager) refreshAndJoin(ctx context.Context, channel model.Channel) {
 	mesh, err := manager.store.ReadChannelMeshAuthority(ctx)
-	if err != nil || manager.runtime.ReconcileWithCommit(mesh, func() error { return nil }) != nil {
+	if err != nil || manager.runtime.Reconcile(mesh) != nil {
 		return
 	}
 	manager.markTopicJoined(ctx, channel)
@@ -243,7 +243,7 @@ func (owned channelEnrollmentOwnerStore) AcceptChannelEnrollment(ctx context.Con
 	if err != nil {
 		return result, err
 	}
-	if err := owned.manager.runtime.ReconcileWithCommit(mesh, func() error { return nil }); err != nil {
+	if err := owned.manager.runtime.Reconcile(mesh); err != nil {
 		return result, err
 	}
 	owned.manager.markTopicJoined(ctx, result.Channel)

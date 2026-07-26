@@ -88,7 +88,7 @@ func (manager *ChannelManager) beginNonOwnerChannelLeave(ctx context.Context, lo
 	if err != nil {
 		return ChannelLeaveResponse{}, channelAPIError(err)
 	}
-	if err := manager.runtime.ReconcileWithCommit(mesh, func() error { return nil }); err != nil {
+	if err := manager.runtime.Reconcile(mesh); err != nil {
 		return ChannelLeaveResponse{}, channelAPIError(err)
 	}
 	manager.triggerMemberReconcile()
@@ -166,7 +166,7 @@ func (manager *ChannelManager) commitTerminalMember(ctx context.Context, local m
 	if err != nil {
 		return model.Channel{}, err
 	}
-	if err := manager.runtime.ReconcileWithCommit(mesh, func() error { return nil }); err != nil {
+	if err := manager.runtime.Reconcile(mesh); err != nil {
 		return model.Channel{}, err
 	}
 	manager.markTopicJoined(ctx, merged.Channel)

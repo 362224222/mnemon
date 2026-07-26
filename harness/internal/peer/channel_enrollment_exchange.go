@@ -133,7 +133,8 @@ func (session *channelJoinSession) installAccepted(
 		store.InstallJoinedChannelSpec{
 			AuthenticatedOwnerPeerID: session.ownerPeerID, LocalAlias: session.spec.LocalAlias,
 			Descriptor: session.descriptor, Transcript: session.transcript,
-			Receipt: accepted.JoinReceipt(), Members: members, At: session.client.clock.Now(),
+			Receipt: accepted.JoinReceipt(), Members: members,
+			ReservationAttempt: session.prepared.Attempt, At: session.client.clock.Now(),
 		})
 	if err != nil {
 		return store.InstallJoinedChannelResult{}, joinedChannelStoreFailure(err)

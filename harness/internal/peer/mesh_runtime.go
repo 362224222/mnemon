@@ -18,6 +18,10 @@ import (
 
 var ErrMeshRuntime = errors.New("Mnemon mesh runtime")
 
+var errMeshRuntimeRevision = errors.New("mesh runtime authority revision changed")
+
+const meshRuntimeReconcileAttempts = 3
+
 // MeshRuntime owns the one libp2p Host, authority projection and Gossip router
 // of a Node. Store remains the durable authority; this runtime only installs
 // complete Store projections and never invents an independent Channel view.
@@ -26,11 +30,20 @@ type MeshRuntime struct {
 	gossip    *Gossip
 	authority *Authority
 
-	mu        sync.Mutex
-	addresses map[libp2ppeer.ID][]ma.Multiaddr
-	closed    bool
-	closeOnce sync.Once
-	closeErr  error
+	// enrollmentMu serializes only outbound Channel joins. It may be held
+	// across the bounded exchange without blocking unrelated mesh operations.
+	enrollmentMu sync.Mutex
+	// peerstoreMu couples each external address update with the exact set that
+	// was applied. It never guards logical runtime state or Gossip operations.
+	peerstoreMu sync.Mutex
+	mu          sync.Mutex
+	mesh        store.ChannelMeshAuthority
+	applied     map[libp2ppeer.ID][]ma.Multiaddr
+	enrollment  *meshEnrollmentPermit
+	revision    uint64
+	closed      bool
+	closeOnce   sync.Once
+	closeErr    error
 }
 
 // NewMeshRuntime starts from one coherent Store snapshot. The Host begins with
@@ -72,44 +85,121 @@ func NewMeshRuntime(ctx context.Context, privateKey libp2pcrypto.PrivKey,
 		return fail(fmt.Errorf("%w: join initial topics: %w", ErrMeshRuntime, err), gossip)
 	}
 	return &MeshRuntime{nodeHost: nodeHost, gossip: gossip, authority: authority,
-		addresses: addresses}, nil
+		mesh: mesh, applied: cloneManagedAddresses(addresses), revision: 1}, nil
 }
 
-// ReconcileWithCommit serializes a complete authority transition. Candidate
-// addresses are staged before Gossip computes connection promotions; a failed
-// durable callback restores the exact previous address set and leaves runtime
-// authority/sessions untouched. Newly active Channels are joined before the
-// transition reports success.
-func (runtime *MeshRuntime) ReconcileWithCommit(mesh store.ChannelMeshAuthority,
-	commit func() error,
-) error {
-	if runtime == nil || commit == nil {
-		return fmt.Errorf("%w: runtime and durable commit are required", ErrMeshRuntime)
+// Reconcile publishes one complete post-commit Store authority. Store mutation
+// belongs to the caller and is never hidden behind a runtime callback. Newly
+// active Channels are joined before success returns.
+func (runtime *MeshRuntime) Reconcile(mesh store.ChannelMeshAuthority) error {
+	if runtime == nil {
+		return fmt.Errorf("%w: runtime is required", ErrMeshRuntime)
 	}
+	if _, _, err := projectMeshRuntime(mesh); err != nil {
+		return err
+	}
+	runtime.mu.Lock()
+	if runtime.closed || runtime.nodeHost == nil || runtime.gossip == nil {
+		runtime.mu.Unlock()
+		return fmt.Errorf("%w: runtime is closed", ErrMeshRuntime)
+	}
+	runtime.mesh = mesh
+	runtime.revision++
+	revision := runtime.revision
+	runtime.mu.Unlock()
+
+	err := runtime.reconcileProjectionOnce(revision)
+	if !errors.Is(err, errMeshRuntimeRevision) {
+		return err
+	}
+	return runtime.reconcileCurrentProjection()
+}
+
+func (runtime *MeshRuntime) reconcileCurrentProjection() error {
+	for attempt := 0; attempt < meshRuntimeReconcileAttempts; attempt++ {
+		err := runtime.reconcileProjectionOnce(0)
+		if !errors.Is(err, errMeshRuntimeRevision) {
+			return err
+		}
+	}
+	return runtime.failClosed(fmt.Errorf("%w: authority did not stabilize after %d attempts",
+		ErrMeshRuntime, meshRuntimeReconcileAttempts))
+}
+
+func (runtime *MeshRuntime) reconcileProjectionOnce(expectedRevision uint64) error {
+	runtime.mu.Lock()
+	if runtime.closed || runtime.nodeHost == nil || runtime.gossip == nil {
+		runtime.mu.Unlock()
+		return fmt.Errorf("%w: runtime is closed", ErrMeshRuntime)
+	}
+	if expectedRevision != 0 && runtime.revision != expectedRevision {
+		runtime.mu.Unlock()
+		return errMeshRuntimeRevision
+	}
+	mesh := runtime.mesh
+	permit := runtime.enrollment
+	revision := runtime.revision
+	nodeHost, gossip := runtime.nodeHost, runtime.gossip
+	runtime.mu.Unlock()
+
 	snapshot, addresses, err := projectMeshRuntime(mesh)
 	if err != nil {
 		return err
 	}
+	snapshot, addresses, err = overlayEnrollmentPermit(snapshot, addresses, permit)
+	if err != nil {
+		return err
+	}
+	runtime.peerstoreMu.Lock()
 	runtime.mu.Lock()
-	defer runtime.mu.Unlock()
-	if runtime.closed || runtime.nodeHost == nil || runtime.gossip == nil {
+	if runtime.closed {
+		runtime.mu.Unlock()
+		runtime.peerstoreMu.Unlock()
 		return fmt.Errorf("%w: runtime is closed", ErrMeshRuntime)
 	}
-	previous := cloneManagedAddresses(runtime.addresses)
-	applyManagedAddresses(runtime.nodeHost.Host(), previous, addresses)
-	if err := runtime.gossip.ReconcileWithCommit(snapshot, commit); err != nil {
-		applyManagedAddresses(runtime.nodeHost.Host(), addresses, previous)
-		return fmt.Errorf("%w: reconcile authority: %w", ErrMeshRuntime, err)
+	if runtime.revision != revision || runtime.enrollment != permit {
+		runtime.mu.Unlock()
+		runtime.peerstoreMu.Unlock()
+		return errMeshRuntimeRevision
 	}
-	runtime.addresses = addresses
-	if err := joinActiveChannels(runtime.gossip, snapshot); err != nil {
-		// Durable authority is already installed. Stop Gossip fail-closed rather
-		// than run a partial set of Channel topics until daemon restart.
-		runtime.closed = true
-		return errors.Join(fmt.Errorf("%w: join reconciled topics: %w", ErrMeshRuntime, err),
-			runtime.gossip.Close())
+	previous := cloneManagedAddresses(runtime.applied)
+	runtime.mu.Unlock()
+	applyManagedAddresses(nodeHost.Host(), previous, addresses)
+	runtime.mu.Lock()
+	runtime.applied = cloneManagedAddresses(addresses)
+	runtime.mu.Unlock()
+	runtime.peerstoreMu.Unlock()
+	if err := gossip.Reconcile(snapshot); err != nil {
+		return runtime.failClosed(fmt.Errorf("%w: reconcile authority: %v", ErrMeshRuntime, err))
+	}
+	if err := joinActiveChannels(gossip, snapshot); err != nil {
+		return runtime.failClosed(fmt.Errorf("%w: join reconciled topics: %v", ErrMeshRuntime, err))
+	}
+
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	if runtime.closed {
+		return fmt.Errorf("%w: runtime is closed", ErrMeshRuntime)
+	}
+	if runtime.revision != revision || runtime.enrollment != permit {
+		return errMeshRuntimeRevision
 	}
 	return nil
+}
+
+func (runtime *MeshRuntime) failClosed(cause error) error {
+	runtime.mu.Lock()
+	runtime.closed = true
+	runtime.revision++
+	gossip, nodeHost := runtime.gossip, runtime.nodeHost
+	runtime.mu.Unlock()
+	if gossip != nil {
+		cause = errors.Join(cause, gossip.Close())
+	}
+	if nodeHost != nil {
+		cause = errors.Join(cause, nodeHost.Close())
+	}
+	return cause
 }
 
 func (runtime *MeshRuntime) Host() host.Host {
@@ -124,13 +214,21 @@ func (runtime *MeshRuntime) Session(channelID model.ChannelID) (*TopicSession, e
 		return nil, fmt.Errorf("%w: runtime is unavailable", ErrMeshRuntime)
 	}
 	runtime.mu.Lock()
-	defer runtime.mu.Unlock()
 	if runtime.closed || runtime.gossip == nil {
+		runtime.mu.Unlock()
 		return nil, fmt.Errorf("%w: runtime is closed", ErrMeshRuntime)
 	}
-	session, err := runtime.gossip.Join(channelID)
+	gossip, revision := runtime.gossip, runtime.revision
+	runtime.mu.Unlock()
+	session, err := gossip.Join(channelID)
 	if err != nil {
 		return nil, fmt.Errorf("%w: acquire Channel session: %w", ErrMeshRuntime, err)
+	}
+	runtime.mu.Lock()
+	current := !runtime.closed && runtime.gossip == gossip && runtime.revision == revision
+	runtime.mu.Unlock()
+	if !current {
+		return nil, fmt.Errorf("%w: Channel session authority changed", ErrMeshRuntime)
 	}
 	return session, nil
 }
@@ -140,8 +238,17 @@ func (runtime *MeshRuntime) HasCurrentSession(channelID model.ChannelID) bool {
 		return false
 	}
 	runtime.mu.Lock()
-	defer runtime.mu.Unlock()
-	return !runtime.closed && runtime.gossip != nil && runtime.gossip.HasCurrentSession(channelID)
+	if runtime.closed || runtime.gossip == nil {
+		runtime.mu.Unlock()
+		return false
+	}
+	gossip, revision := runtime.gossip, runtime.revision
+	runtime.mu.Unlock()
+	current := gossip.HasCurrentSession(channelID)
+	runtime.mu.Lock()
+	stable := !runtime.closed && runtime.gossip == gossip && runtime.revision == revision
+	runtime.mu.Unlock()
+	return stable && current
 }
 
 func (runtime *MeshRuntime) Close() error {

@@ -38,7 +38,7 @@ func TestInstallJoinedChannelCommitsReplicaBindingsAndReplays(t *testing.T) {
 		"channels": 0, "channel_members": 0, "enrollment_receipts": 0,
 		"publication_epochs": 0, "peer_bindings": 0,
 	})
-	reserveJoinedChannelTest(t, joinerStore, spec)
+	reserveJoinedChannelTest(t, joinerStore, &spec)
 	installed, err := joinerStore.InstallJoinedChannel(context.Background(), spec)
 	if err != nil || !installed.Installed || installed.Status != ChannelEnrollmentAccepted ||
 		installed.Channel.LocalAlias() != "project-team" {
@@ -74,6 +74,51 @@ func TestInstallJoinedChannelCommitsReplicaBindingsAndReplays(t *testing.T) {
 		"channels": 1, "channel_members": 2, "enrollment_receipts": 1,
 		"publication_epochs": 1, "peer_bindings": 1,
 	})
+}
+
+func TestInstallJoinedChannelRejectsLateReservationAttempt(t *testing.T) {
+	t.Parallel()
+	owner := newChannelEnrollmentFixture(t, "join-install-attempt-fence")
+	transcript := owner.transcript(t, 0x79, 0x7a, owner.head)
+	accepted := owner.accept(t, transcript)
+	joinerStore := openTestStore(t)
+	insertChannelTestNode(t, joinerStore.db, owner.joiner, owner.channel.Channel().CreatedAt())
+	spec := InstallJoinedChannelSpec{AuthenticatedOwnerPeerID: owner.channel.Owner().PeerID(),
+		LocalAlias: "attempt-fence", Descriptor: owner.channel.Descriptor(), Transcript: transcript,
+		Receipt: accepted.Receipt, Members: accepted.Roster.Members(),
+		At: owner.acceptedAt.Add(time.Second)}
+	prepare := PrepareJoinedChannelSpec{AuthenticatedLocalPeerID: owner.joiner.PeerID(),
+		LocalPublicKey: owner.joiner.PublicKey(), Descriptor: owner.channel.Descriptor(),
+		GrantID: owner.grantID, LocalAlias: spec.LocalAlias, At: spec.At}
+	first, err := joinerStore.PrepareJoinedChannel(context.Background(), prepare)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := joinerStore.MarkJoinedChannelCommitUnknown(context.Background(), first.RequestID,
+		owner.joiner.PeerID(), first.Attempt, spec.At); err != nil {
+		t.Fatal(err)
+	}
+	prepare.At = prepare.At.Add(time.Second)
+	current, err := joinerStore.PrepareJoinedChannel(context.Background(), prepare)
+	if err != nil || current.Attempt != first.Attempt+1 || !current.CommitUnknown {
+		t.Fatalf("current reservation = (%#v,%v)", current, err)
+	}
+	spec.ReservationAttempt = first.Attempt
+	if _, err := joinerStore.InstallJoinedChannel(context.Background(), spec); !errors.Is(err, ErrChannelJoinConflict) {
+		t.Fatalf("late attempt install error = %v", err)
+	}
+	assertEnrollmentTableCounts(t, joinerStore, map[string]int{
+		"channels": 0, "channel_join_reservations": 1,
+	})
+	if err := joinerStore.MarkJoinedChannelCommitUnknown(context.Background(), current.RequestID,
+		owner.joiner.PeerID(), current.Attempt, prepare.At); err != nil {
+		t.Fatal(err)
+	}
+	spec.ReservationAttempt = current.Attempt
+	installed, err := joinerStore.InstallJoinedChannel(context.Background(), spec)
+	if err != nil || !installed.Installed {
+		t.Fatalf("current attempt install = (%#v,%v)", installed, err)
+	}
 }
 
 func TestInstallJoinedChannelRejectsNinthNonterminalReplicaWithoutPartialState(t *testing.T) {
@@ -112,7 +157,7 @@ func TestInstallJoinedChannelRejectsNinthNonterminalReplicaWithoutPartialState(t
 			}
 			continue
 		}
-		reserveJoinedChannelTest(t, joinerStore, installSpec)
+		reserveJoinedChannelTest(t, joinerStore, &installSpec)
 		result, err := joinerStore.InstallJoinedChannel(context.Background(), installSpec)
 		if err != nil || !result.Installed {
 			t.Fatalf("install Channel %d = (%#v,%v)", index+1, result, err)
@@ -148,7 +193,7 @@ func TestInstallJoinedChannelFinalBindingFailureRollsBackEverything(t *testing.T
 		AuthenticatedOwnerPeerID: owner.channel.Owner().PeerID(), LocalAlias: "rollback-team",
 		Descriptor: owner.channel.Descriptor(), Transcript: transcript, Receipt: accepted.Receipt,
 		Members: accepted.Roster.Members(), At: owner.acceptedAt.Add(time.Second)}
-	reserveJoinedChannelTest(t, joinerStore, installSpec)
+	reserveJoinedChannelTest(t, joinerStore, &installSpec)
 	_, err := joinerStore.InstallJoinedChannel(context.Background(), installSpec)
 	if err == nil {
 		t.Fatal("binding failure did not reject join install")
@@ -170,7 +215,7 @@ func TestInstallJoinedChannelAppliesTerminalReplaySuffixButFreshJoinStaysEmpty(t
 		Receipt: accepted.Receipt, Members: accepted.Roster.Members(), At: initialAt}
 	joinerStore := openTestStore(t)
 	insertChannelTestNode(t, joinerStore.db, owner.joiner, owner.channel.Channel().CreatedAt())
-	reserveJoinedChannelTest(t, joinerStore, baseSpec)
+	reserveJoinedChannelTest(t, joinerStore, &baseSpec)
 	if result, err := joinerStore.InstallJoinedChannel(context.Background(), baseSpec); err != nil || !result.Installed {
 		t.Fatalf("initial InstallJoinedChannel() = (%#v,%v)", result, err)
 	}
@@ -196,7 +241,7 @@ func TestInstallJoinedChannelAppliesTerminalReplaySuffixButFreshJoinStaysEmpty(t
 
 	fresh := openTestStore(t)
 	insertChannelTestNode(t, fresh.db, owner.joiner, owner.channel.Channel().CreatedAt())
-	reserveJoinedChannelTest(t, fresh, replaySpec)
+	reserveJoinedChannelTest(t, fresh, &replaySpec)
 	freshResult, err := fresh.InstallJoinedChannel(context.Background(), replaySpec)
 	if err != nil || freshResult.Installed || freshResult.Status != ChannelEnrollmentMemberRevoked {
 		t.Fatalf("fresh terminal install = (%#v,%v)", freshResult, err)
@@ -273,7 +318,7 @@ func TestInstallJoinedChannelOwnerCloseSuffixClosesReplicaAndFreshJoinStaysEmpty
 		Receipt: accepted.Receipt, Members: accepted.Roster.Members(), At: baseAt}
 	joinerStore := openTestStore(t)
 	insertChannelTestNode(t, joinerStore.db, owner.joiner, owner.channel.Channel().CreatedAt())
-	reserveJoinedChannelTest(t, joinerStore, baseSpec)
+	reserveJoinedChannelTest(t, joinerStore, &baseSpec)
 	if result, err := joinerStore.InstallJoinedChannel(context.Background(), baseSpec); err != nil || !result.Installed {
 		t.Fatalf("initial install = (%#v,%v)", result, err)
 	}
@@ -291,7 +336,7 @@ func TestInstallJoinedChannelOwnerCloseSuffixClosesReplicaAndFreshJoinStaysEmpty
 
 	fresh := openTestStore(t)
 	insertChannelTestNode(t, fresh.db, owner.joiner, owner.channel.Channel().CreatedAt())
-	reserveJoinedChannelTest(t, fresh, closeSpec)
+	reserveJoinedChannelTest(t, fresh, &closeSpec)
 	freshResult, err := fresh.InstallJoinedChannel(context.Background(), closeSpec)
 	if err != nil || freshResult.Installed || freshResult.Status != ChannelEnrollmentChannelClosed {
 		t.Fatalf("fresh owner-close install = (%#v,%v)", freshResult, err)
@@ -369,7 +414,7 @@ func newInstalledJoinedChannelFixture(t *testing.T, seed, localAlias string,
 	spec := InstallJoinedChannelSpec{AuthenticatedOwnerPeerID: owner.channel.Owner().PeerID(),
 		LocalAlias: localAlias, Descriptor: owner.channel.Descriptor(), Transcript: transcript,
 		Receipt: accepted.Receipt, Members: accepted.Roster.Members(), At: at}
-	reserveJoinedChannelTest(t, st, spec)
+	reserveJoinedChannelTest(t, st, &spec)
 	if result, err := st.InstallJoinedChannel(context.Background(), spec); err != nil || !result.Installed {
 		t.Fatalf("initial install = (%#v,%v)", result, err)
 	}

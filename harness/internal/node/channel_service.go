@@ -104,13 +104,9 @@ func (manager *ChannelManager) ChannelJoin(ctx context.Context, metadata Request
 			"Channel invite has expired")
 	}
 	manager.mu.Lock()
-	defer manager.mu.Unlock()
-	before, err := manager.store.ReadChannelMeshAuthority(ctx)
-	if err != nil {
-		return ChannelJoinResponse{}, channelAPIError(err)
-	}
 	control, err := manager.store.ReadChannelControlAuthority(ctx)
 	if err != nil {
+		manager.mu.Unlock()
 		return ChannelJoinResponse{}, channelAPIError(err)
 	}
 	descriptor := token.Payload().Descriptor().Descriptor()
@@ -120,21 +116,26 @@ func (manager *ChannelManager) ChannelJoin(ctx context.Context, metadata Request
 	}
 	client, err := peer.NewChannelEnrollmentClient(peer.ChannelEnrollmentClientOptions{Store: manager.store})
 	if err != nil {
+		manager.mu.Unlock()
 		return ChannelJoinResponse{}, channelAPIError(err)
 	}
 	spec := peer.JoinChannelSpec{Token: token, DisplayLabel: memberAlias(manager.identity.PeerID()),
 		AdvertisedMultiaddrs: manager.runtime.AdvertisedMultiaddrs(), LocalAlias: alias}
-	installed, err := manager.runtime.EnrollChannel(ctx, before, client, spec,
+	manager.mu.Unlock()
+
+	installed, err := manager.runtime.EnrollChannel(ctx, client, spec,
 		manager.store.ReadChannelMeshAuthority)
 	if err != nil {
 		return ChannelJoinResponse{}, channelAPIError(err)
 	}
+	manager.mu.Lock()
 	manager.markTopicJoined(ctx, installed.Channel)
-	manager.triggerMemberReconcile()
 	view, err := manager.readChannelView(ctx, installed.Channel.ID())
+	manager.mu.Unlock()
 	if err != nil {
 		return ChannelJoinResponse{}, channelAPIError(err)
 	}
+	manager.triggerMemberReconcile()
 	return ChannelJoinResponse{SchemaVersion: SchemaVersion,
 		Status: channelJoinResponseStatus(installed.Status), Channel: view}, nil
 }

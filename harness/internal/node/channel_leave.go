@@ -69,7 +69,7 @@ func (manager *ChannelManager) refreshChannelLeaveRuntime(ctx context.Context,
 	if err != nil {
 		return channelMemberStoreError(err)
 	}
-	if err := manager.runtime.ReconcileWithCommit(mesh, func() error { return nil }); err != nil {
+	if err := manager.runtime.Reconcile(mesh); err != nil {
 		return err
 	}
 	manager.markTopicForRoster(ctx, channelID)

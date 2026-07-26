@@ -26,7 +26,7 @@ func (manager *ChannelManager) ChannelAbandon(ctx context.Context,
 	}
 	mesh, err := manager.store.ReadChannelMeshAuthority(ctx)
 	if err == nil {
-		err = manager.runtime.ReconcileWithCommit(mesh, func() error { return nil })
+		err = manager.runtime.Reconcile(mesh)
 	}
 	if err != nil {
 		// The Store gate already rejects new scoped work. If its runtime
