@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
+	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
 
 const (
@@ -37,6 +38,7 @@ type StatusChannel struct {
 	Publication    StatusChannelPublication `json:"publication"`
 	RosterRevision uint64                   `json:"roster_revision"`
 	Runtime        StatusChannelRuntime     `json:"runtime"`
+	Leave          StatusChannelLeave       `json:"leave"`
 	Semantic       StatusChannelSemantic    `json:"semantic_outcome"`
 	State          string                   `json:"state"`
 	Topic          StatusChannelTopic       `json:"topic"`
@@ -63,9 +65,12 @@ func newStatusChannels(snapshots []StatusChannelSnapshot) ([]StatusChannel, erro
 }
 
 func newStatusChannel(snapshot StatusChannelSnapshot) (StatusChannel, error) {
+	if snapshot.Leave.Status == "" {
+		snapshot.Leave.Status = "none"
+	}
 	if !validControlAlias(snapshot.Alias) || !model.ChannelStatus(snapshot.Membership).Valid() ||
 		snapshot.RosterRevision == 0 || !validStatusChannelTopic(snapshot) ||
-		!validStatusChannelCardinality(snapshot) {
+		!validStatusChannelCardinality(snapshot) || !validStatusChannelLeave(snapshot.Leave) {
 		return StatusChannel{}, errors.New("local API: status Channel progress is invalid")
 	}
 	semantic := StatusChannelSemantic{Originated: snapshot.LocalCommit.Accepted,
@@ -76,8 +81,32 @@ func newStatusChannel(snapshot StatusChannelSnapshot) (StatusChannel, error) {
 	return StatusChannel{Alias: snapshot.Alias, Artifact: snapshot.Artifact, Cursor: snapshot.Cursor,
 		Inbox: snapshot.Inbox, LocalCommit: snapshot.LocalCommit, Membership: snapshot.Membership,
 		Publication: snapshot.Publication, RosterRevision: snapshot.RosterRevision,
-		Runtime: snapshot.Runtime, Semantic: semantic, State: statusChannelState(snapshot),
+		Runtime: snapshot.Runtime, Leave: snapshot.Leave, Semantic: semantic,
+		State: statusChannelState(snapshot),
 		Topic: snapshot.Topic}, nil
+}
+
+func validStatusChannelLeave(leave StatusChannelLeave) bool {
+	if leave.Attempts > store.ChannelLeaveMaximumAttempts {
+		return false
+	}
+	switch leave.Status {
+	case "none":
+		return leave.Attempts == 0 && leave.Diagnostic == "" && leave.Recovery == ""
+	case "queued":
+		return leave.Attempts == 0 && leave.Diagnostic == "" && leave.Recovery == ""
+	case "accepted":
+		return leave.Diagnostic == "" && leave.Recovery == ""
+	case "sent":
+		return leave.Attempts > 0 && leave.Diagnostic == "" && leave.Recovery == ""
+	case "failed":
+		diagnostic := store.ChannelLeaveFailureCode(leave.Diagnostic)
+		return leave.Attempts > 0 && diagnostic.Valid() && leave.Recovery == "channel_leave" &&
+			(diagnostic != store.ChannelLeaveFailureAttemptsExhausted ||
+				leave.Attempts == store.ChannelLeaveMaximumAttempts)
+	default:
+		return false
+	}
 }
 
 func validStatusChannelTopic(snapshot StatusChannelSnapshot) bool {
@@ -127,6 +156,7 @@ func statusChannelState(snapshot StatusChannelSnapshot) string {
 func statusChannelIsDegraded(snapshot StatusChannelSnapshot) bool {
 	status := model.ChannelStatus(snapshot.Membership)
 	return status == model.ChannelConflicted || status == model.ChannelAbandoned ||
+		snapshot.Leave.Status == "failed" ||
 		snapshot.Topic.State == "blocked" || snapshot.Publication.Blocked > 0 ||
 		snapshot.Publication.RemoteBlocked > 0 ||
 		snapshot.Cursor.InboundTerminal > 0 || snapshot.Inbox.Conflicted > 0 ||
@@ -167,7 +197,7 @@ func statusChannelSnapshots(channels []StatusChannel) []StatusChannelSnapshot {
 			RosterRevision: channel.RosterRevision, Topic: channel.Topic,
 			LocalCommit: channel.LocalCommit, Publication: channel.Publication,
 			Cursor: channel.Cursor, Inbox: channel.Inbox, Artifact: artifact,
-			Runtime: channel.Runtime}
+			Runtime: channel.Runtime, Leave: channel.Leave}
 	}
 	return result
 }

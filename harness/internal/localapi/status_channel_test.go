@@ -19,6 +19,10 @@ func TestStatusChannelDerivesReadyQueuedDegradedAndTerminal(t *testing.T) {
 		{name: "degraded remote publication", mutate: func(snapshot *StatusChannelSnapshot) {
 			snapshot.Publication.RemoteBlocked = 1
 		}, want: statusChannelDegraded},
+		{name: "degraded terminal leave retry", mutate: func(snapshot *StatusChannelSnapshot) {
+			snapshot.Leave = StatusChannelLeave{Status: "failed", Attempts: 5,
+				Diagnostic: "attempts_exhausted", Recovery: "channel_leave"}
+		}, want: statusChannelDegraded},
 		{name: "terminal", mutate: func(snapshot *StatusChannelSnapshot) {
 			snapshot.Membership, snapshot.Topic.State = "closed", "left"
 		}, want: statusChannelTerminal},
@@ -54,6 +58,17 @@ func TestStatusChannelRejectsCrossStageCardinalityAndSortsAliases(t *testing.T) 
 	}
 	if _, err := newStatusChannels([]StatusChannelSnapshot{alpha, alpha}); err == nil {
 		t.Fatal("status Channels accepted a duplicate alias")
+	}
+	invalidLeave := validStatusChannelSnapshot()
+	invalidLeave.Leave = StatusChannelLeave{Status: "failed", Attempts: 1,
+		Diagnostic: "peer said secret content", Recovery: "channel_leave"}
+	if _, err := newStatusChannel(invalidLeave); err == nil {
+		t.Fatal("status Channel accepted an open leave diagnostic")
+	}
+	invalidLeave.Leave = StatusChannelLeave{Status: "failed", Attempts: 1,
+		Diagnostic: "attempts_exhausted", Recovery: "channel_leave"}
+	if _, err := newStatusChannel(invalidLeave); err == nil {
+		t.Fatal("status Channel accepted premature leave attempt exhaustion")
 	}
 }
 

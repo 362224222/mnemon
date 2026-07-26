@@ -121,13 +121,18 @@ func (c *Client) RemoveChannelMember(ctx context.Context,
 }
 
 func (c *Client) LeaveChannel(ctx context.Context,
-	request ChannelLeaveRequest,
+	request ChannelLeaveRequest, journal PendingJournal,
 ) (ChannelLeaveResponse, *APIError) {
 	if !validChannelLeaveRequest(request) {
 		return ChannelLeaveResponse{}, NewAPIError(CodeInvalidArgument, "Channel selector is invalid")
 	}
+	requestDigest, apiErr := ChannelLeaveRequestDigest(request)
+	if apiErr != nil {
+		return ChannelLeaveResponse{}, apiErr
+	}
 	var response ChannelLeaveResponse
-	if apiErr := c.postChannel(ctx, RouteChannelLeave, request, &response); apiErr != nil {
+	if apiErr := c.postChannelMutation(ctx, RouteChannelLeave, request, requestDigest,
+		journal, &response); apiErr != nil {
 		return ChannelLeaveResponse{}, apiErr
 	}
 	if apiErr := validateChannelLeaveResponse(response); apiErr != nil {

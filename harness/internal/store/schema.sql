@@ -1739,17 +1739,79 @@ CREATE TABLE channel_leave_requests (
   request_digest     BLOB NOT NULL UNIQUE,
   request_json       BLOB NOT NULL,
   member_signature   BLOB NOT NULL,
-  status             TEXT NOT NULL CHECK (status IN ('queued','sent','accepted','rejected')),
-  attempts           INTEGER NOT NULL DEFAULT 0,
+  status             TEXT NOT NULL CHECK (
+    status IN ('queued','sent','accepted','failed')
+  ),
+  attempts           INTEGER NOT NULL DEFAULT 0 CHECK (attempts BETWEEN 0 AND 5),
+  retry_generation   INTEGER NOT NULL DEFAULT 0 CHECK (retry_generation >= 0),
   next_attempt_at    TEXT NOT NULL,
+  failure_code       TEXT,
   receipt_json       BLOB,
   created_at         TEXT NOT NULL,
-  updated_at         TEXT NOT NULL
+  updated_at         TEXT NOT NULL,
+  CHECK (
+    (status = 'queued' AND attempts = 0 AND failure_code IS NULL)
+    OR (status = 'sent' AND attempts BETWEEN 1 AND 5 AND failure_code IS NULL)
+    OR (status = 'accepted' AND failure_code IS NULL)
+    OR (
+      status = 'failed' AND attempts BETWEEN 1 AND 5
+      AND (
+        failure_code = 'permanent_failure'
+        OR (failure_code = 'attempts_exhausted' AND attempts = 5)
+      )
+    )
+  )
 );
 
 CREATE UNIQUE INDEX channel_leave_requests_one_open_idx
   ON channel_leave_requests(channel_id, member_peer_id)
-  WHERE status IN ('queued','sent');
+  WHERE status IN ('queued','sent','failed');
+
+CREATE TRIGGER channel_leave_requests_retry_generation_fenced
+BEFORE UPDATE OF status,attempts,retry_generation ON channel_leave_requests
+WHEN (
+    OLD.status = 'failed' AND NEW.status = 'queued'
+    AND (NEW.retry_generation <> OLD.retry_generation + 1 OR NEW.attempts <> 0)
+  )
+  OR (
+    NOT (OLD.status = 'failed' AND NEW.status = 'queued')
+    AND NEW.retry_generation <> OLD.retry_generation
+  )
+BEGIN SELECT RAISE(ABORT, 'Channel leave retry generation is fenced'); END;
+
+CREATE TABLE channel_leave_operations (
+  operation_key_hash BLOB PRIMARY KEY CHECK (length(operation_key_hash) = 32),
+  request_digest     BLOB NOT NULL CHECK (length(request_digest) = 32),
+  channel_id         TEXT NOT NULL REFERENCES channels(channel_id),
+  request_id         TEXT REFERENCES channel_leave_requests(request_id),
+  retry_generation   INTEGER CHECK (retry_generation >= 0),
+  committed_at       TEXT NOT NULL,
+  CHECK ((request_id IS NULL) = (retry_generation IS NULL))
+);
+
+CREATE TRIGGER channel_leave_operations_no_update
+BEFORE UPDATE ON channel_leave_operations
+BEGIN SELECT RAISE(ABORT, 'Channel leave operation evidence is immutable'); END;
+
+CREATE TRIGGER channel_leave_operations_no_delete
+BEFORE DELETE ON channel_leave_operations
+BEGIN SELECT RAISE(ABORT, 'Channel leave operation evidence is permanent'); END;
+
+CREATE TRIGGER channel_leave_operations_key_scope_insert
+BEFORE INSERT ON channel_leave_operations
+WHEN EXISTS (
+  SELECT 1 FROM channel_mutation_operations
+  WHERE operation_key_hash = NEW.operation_key_hash
+)
+BEGIN SELECT RAISE(ABORT, 'Channel operation key is already in use'); END;
+
+CREATE TRIGGER channel_mutation_operations_key_scope_insert
+BEFORE INSERT ON channel_mutation_operations
+WHEN EXISTS (
+  SELECT 1 FROM channel_leave_operations
+  WHERE operation_key_hash = NEW.operation_key_hash
+)
+BEGIN SELECT RAISE(ABORT, 'Channel operation key is already in use'); END;
 
 CREATE TABLE peer_bindings (
   channel_id         TEXT NOT NULL REFERENCES channels(channel_id),

@@ -24,19 +24,37 @@ func beginStoreChannelLeave(t *testing.T, fixture installedJoinedChannelFixture,
 	request model.SignedChannelLeaveRequest,
 ) {
 	t.Helper()
+	operation := testChannelLeaveOperation("leave-lifecycle")
 	result, err := fixture.store.BeginChannelLeave(context.Background(), BeginChannelLeaveSpec{
-		ChannelID: fixture.spec.Descriptor.Descriptor().ID(), Request: request})
+		ChannelID: fixture.spec.Descriptor.Descriptor().ID(), Request: request,
+		Operation: operation, At: request.Record().RequestedAt()})
 	if err != nil || result.Replay || result.Channel.Status() != model.ChannelLeaving ||
 		result.Channel.TopicState() != model.TopicLeft || result.Request.RequestID() != request.RequestID() {
 		t.Fatalf("BeginChannelLeave() = (%#v,%v)", result, err)
 	}
 	assertChannelLeaveRow(t, fixture.store, request, "queued", 0, nil)
 	replayed, err := fixture.store.BeginChannelLeave(context.Background(), BeginChannelLeaveSpec{
-		ChannelID: fixture.spec.Descriptor.Descriptor().ID()})
+		ChannelID: fixture.spec.Descriptor.Descriptor().ID(), Operation: operation,
+		At: request.Record().RequestedAt()})
 	if err != nil || !replayed.Replay ||
 		!bytes.Equal(replayed.Request.WireJSON().Bytes(), request.WireJSON().Bytes()) ||
 		!replayed.Channel.UpdatedAt().Equal(result.Channel.UpdatedAt()) {
 		t.Fatalf("BeginChannelLeave(replay) = (%#v,%v)", replayed, err)
+	}
+	authority, found, err := fixture.store.ReadChannelLeaveOperation(context.Background(), operation)
+	if err != nil || !found || authority.ChannelID() != request.Record().ChannelID() {
+		t.Fatalf("ReadChannelLeaveOperation() = (%#v,%t,%v)", authority, found, err)
+	}
+	changed := operation
+	changed.RequestDigest = model.Sum([]byte("changed Channel leave request"))
+	if _, _, err := fixture.store.ReadChannelLeaveOperation(context.Background(), changed); !errors.Is(err, ErrChannelLeaveOperationMismatch) {
+		t.Fatalf("changed Channel leave operation error = %v", err)
+	}
+	crossRoute := ChannelMutationOperation{Kind: ChannelMutationInvite,
+		OperationKeyHash: operation.OperationKeyHash,
+		RequestDigest:    model.Sum([]byte("cross-route invite request"))}
+	if _, _, err := fixture.store.ReadChannelMutation(context.Background(), crossRoute); !errors.Is(err, ErrChannelMutationMismatch) {
+		t.Fatalf("leave key reused for invite error = %v", err)
 	}
 }
 
@@ -70,13 +88,17 @@ func TestChannelLeaveRejectsForgedRequestAndReceiptWithoutPartialState(t *testin
 		t.Fatal(err)
 	}
 	_, err = fixture.store.BeginChannelLeave(context.Background(), BeginChannelLeaveSpec{
-		ChannelID: fixture.spec.Descriptor.Descriptor().ID(), Request: forgedRequest})
+		ChannelID: fixture.spec.Descriptor.Descriptor().ID(), Request: forgedRequest,
+		Operation: testChannelLeaveOperation("leave-forged"),
+		At:        forgedRequest.Record().RequestedAt()})
 	if !errors.Is(err, ErrChannelLeaveInput) {
 		t.Fatalf("forged request error = %v", err)
 	}
 	assertChannelLeaveProjection(t, fixture.store, fixture.spec.Descriptor.Descriptor().ID(), "active", 0)
 	if _, err := fixture.store.BeginChannelLeave(context.Background(), BeginChannelLeaveSpec{
-		ChannelID: fixture.spec.Descriptor.Descriptor().ID(), Request: request}); err != nil {
+		ChannelID: fixture.spec.Descriptor.Descriptor().ID(), Request: request,
+		Operation: testChannelLeaveOperation("leave-valid"),
+		At:        request.Record().RequestedAt()}); err != nil {
 		t.Fatal(err)
 	}
 	receipt := signedStoreLeaveReceipt(t, fixture, request,
@@ -102,7 +124,9 @@ func TestChannelLeaveSettlementAcceptsOwnerClosePrecedence(t *testing.T) {
 		"leave-owner-close-team", 0x63, 0x64)
 	request := signedStoreLeaveRequest(t, fixture, fixture.at.Add(time.Second))
 	if _, err := fixture.store.BeginChannelLeave(context.Background(), BeginChannelLeaveSpec{
-		ChannelID: fixture.spec.Descriptor.Descriptor().ID(), Request: request}); err != nil {
+		ChannelID: fixture.spec.Descriptor.Descriptor().ID(), Request: request,
+		Operation: testChannelLeaveOperation("leave-owner-close"),
+		At:        request.Record().RequestedAt()}); err != nil {
 		t.Fatal(err)
 	}
 	receipt := signedStoreOwnerCloseReceipt(t, fixture, request,
@@ -116,6 +140,13 @@ func TestChannelLeaveSettlementAcceptsOwnerClosePrecedence(t *testing.T) {
 		t.Fatalf("SettleChannelLeave(owner close) = (%#v,%v)", settled, err)
 	}
 	assertChannelLeaveRow(t, fixture.store, request, "accepted", 0, receipt.WireJSON().Bytes())
+}
+
+func testChannelLeaveOperation(seed string) ChannelLeaveOperation {
+	return ChannelLeaveOperation{
+		OperationKeyHash: model.Sum([]byte("channel-leave-operation-key:" + seed)),
+		RequestDigest:    model.Sum([]byte("channel-leave-request:" + seed)),
+	}
 }
 
 func signedStoreLeaveRequest(t *testing.T, fixture installedJoinedChannelFixture,

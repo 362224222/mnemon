@@ -61,6 +61,7 @@ type StatusChannelSnapshot struct {
 	Inbox          StatusChannelInbox
 	Artifact       StatusChannelArtifact
 	Runtime        StatusChannelRuntime
+	Leave          StatusChannelLeave
 }
 
 type StatusChannelTopic struct {
@@ -122,4 +123,14 @@ type StatusChannelRuntime struct {
 	RunFailed         uint64 `json:"run_failed"`
 	RunRejected       uint64 `json:"run_rejected"`
 	RunRetry          uint64 `json:"run_retry"`
+}
+
+// StatusChannelLeave is the bounded public projection of the local member's
+// durable leave request. A failed request is recovered only by an explicit
+// `channel leave [alias]` invocation, represented by recovery=channel_leave.
+type StatusChannelLeave struct {
+	Attempts   uint64 `json:"attempts"`
+	Diagnostic string `json:"diagnostic"`
+	Recovery   string `json:"recovery"`
+	Status     string `json:"status"`
 }

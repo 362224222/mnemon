@@ -107,8 +107,10 @@ func TestChannelMutationRoutesRequireKeyAndBindIndependentCanonicalDigest(t *tes
 
 	createEmpty, _ := ChannelCreateRequestDigest(ChannelCreateRequest{})
 	inviteEmpty, _ := ChannelInviteRequestDigest(ChannelInviteRequest{})
-	if createEmpty == inviteEmpty {
-		t.Fatalf("empty create and invite reused digest %s", createEmpty.String())
+	leaveEmpty, _ := ChannelLeaveRequestDigest(ChannelLeaveRequest{})
+	if createEmpty == inviteEmpty || createEmpty == leaveEmpty || inviteEmpty == leaveEmpty {
+		t.Fatalf("empty Channel routes reused digest create=%s invite=%s leave=%s",
+			createEmpty.String(), inviteEmpty.String(), leaveEmpty.String())
 	}
 
 	request = authenticatedRequest(t, http.MethodPost, RouteChannelInvites, `{}`, credential)
@@ -128,6 +130,27 @@ func TestChannelMutationRoutesRequireKeyAndBindIndependentCanonicalDigest(t *tes
 		t.Fatalf("keyed invite metadata=%#v secret=%x response=%d %s",
 			service.inviteMetadata, service.inviteSecret, recorder.Code, recorder.Body.String())
 	}
+
+	request = authenticatedRequest(t, http.MethodPost, RouteChannelLeave,
+		`{"channel":"alpha"}`, credential)
+	recorder = httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+	if recorder.Code == http.StatusOK || service.leaveCalls != 0 {
+		t.Fatalf("keyless leave = %d %s calls=%d",
+			recorder.Code, recorder.Body.String(), service.leaveCalls)
+	}
+	request = authenticatedRequest(t, http.MethodPost, RouteChannelLeave,
+		`{"channel":"alpha"}`, credential)
+	request.Header.Set(operationKeyHeader,
+		base64.RawURLEncoding.EncodeToString(operation))
+	recorder = httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+	leaveDigest, _ := ChannelLeaveRequestDigest(ChannelLeaveRequest{Channel: "alpha"})
+	if service.leaveCalls != 1 || service.leaveMetadata.RequestDigest != leaveDigest ||
+		len(service.leaveMetadata.OperationKeySecret) != 0 {
+		t.Fatalf("keyed leave metadata=%#v response=%d %s",
+			service.leaveMetadata, recorder.Code, recorder.Body.String())
+	}
 }
 
 type channelRouteService struct {
@@ -142,6 +165,8 @@ type channelRouteService struct {
 	inviteCalls    int
 	inviteMetadata RequestMetadata
 	inviteSecret   []byte
+	leaveCalls     int
+	leaveMetadata  RequestMetadata
 }
 
 func (*channelRouteService) HookCheck(context.Context, RequestMetadata,
@@ -195,9 +220,11 @@ func (*channelRouteService) ChannelRemove(context.Context, RequestMetadata,
 ) (ChannelRemoveResponse, *APIError) {
 	return ChannelRemoveResponse{}, NewAPIError(CodeActionNotAllowed, "not used")
 }
-func (*channelRouteService) ChannelLeave(context.Context, RequestMetadata,
-	ChannelLeaveRequest,
+func (service *channelRouteService) ChannelLeave(_ context.Context, metadata RequestMetadata,
+	_ ChannelLeaveRequest,
 ) (ChannelLeaveResponse, *APIError) {
+	service.leaveCalls++
+	service.leaveMetadata = metadata
 	return ChannelLeaveResponse{}, NewAPIError(CodeActionNotAllowed, "not used")
 }
 func (service *channelRouteService) ChannelAbandon(_ context.Context, _ RequestMetadata,

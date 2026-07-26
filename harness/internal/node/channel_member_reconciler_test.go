@@ -142,17 +142,40 @@ func TestChannelMemberReconcilerBacksOffAndSuppressesPermanentGeneration(t *test
 
 func TestChannelMemberReconcilerExposesBoundedRepairWakeups(t *testing.T) {
 	t.Parallel()
-	worker := &ChannelMemberReconciler{trigger: make(chan struct{}, 1)}
-	target := newChannelMemberReconcilerTarget(t, "member-reconciler-wakeup")
+	first := newChannelMemberReconcilerTarget(t, "member-reconciler-wakeup-first")
+	second := newChannelMemberReconcilerTarget(t, "member-reconciler-wakeup-second")
+	firstKey, secondKey := first.key(), second.key()
+	worker := &ChannelMemberReconciler{trigger: make(chan struct{}, 1),
+		schedules: map[channelMemberTargetKey]channelMemberSchedule{
+			firstKey:  {permanent: true},
+			secondKey: {permanent: true},
+		}}
 	ctx := context.Background()
-	if err := worker.ReconcileEventRepair(ctx, target.channel.ID(), target.remoteMember.PeerID()); err != nil {
+	worker.applyWake(false)
+	if len(worker.schedules) != 2 {
+		t.Fatal("ordinary cycle cleared member schedules without authority")
+	}
+	if err := worker.TriggerScope(first.channel.ID(), first.remoteMember.PeerID()); err != nil {
 		t.Fatal(err)
 	}
-	if err := worker.ReconcileArtifactReceiver(ctx, target.channel.ID(), target.remoteMember.PeerID()); err != nil {
+	if err := worker.ReconcileArtifactReceiver(ctx, first.channel.ID(),
+		first.remoteMember.PeerID()); err != nil {
 		t.Fatal(err)
 	}
 	if len(worker.trigger) != 1 {
 		t.Fatalf("coalesced trigger depth = %d", len(worker.trigger))
+	}
+	worker.applyWake(false)
+	if _, exists := worker.schedules[firstKey]; exists {
+		t.Fatal("scoped repair wake retained its exact target schedule")
+	}
+	if _, exists := worker.schedules[secondKey]; !exists {
+		t.Fatal("scoped repair wake cleared an unrelated target schedule")
+	}
+	worker.Trigger()
+	worker.applyWake(false)
+	if len(worker.schedules) != 0 {
+		t.Fatalf("global authority wake retained %d schedules", len(worker.schedules))
 	}
 	if err := worker.ReconcileEventRepair(nil, model.ChannelID{}, model.PeerID{}); !errors.Is(err,
 		ErrChannelMemberReconciler) {
@@ -203,16 +226,19 @@ func (clock *mutableChannelMemberClock) advance(delta time.Duration) {
 }
 
 type fakeChannelMemberBackend struct {
-	mu          sync.Mutex
-	target      channelMemberTarget
-	hasTarget   bool
-	leaveTarget channelMemberLeaveTarget
-	hasLeave    bool
-	leaveStarts int
-	leaveSettle int
-	mergeValues []model.Member
-	mergeHead   model.RecordHead
-	confirms    int
+	mu                  sync.Mutex
+	target              channelMemberTarget
+	hasTarget           bool
+	leaveTarget         channelMemberLeaveTarget
+	hasLeave            bool
+	leaveStarts         int
+	leaveFails          int
+	leaveFailedAttempts uint64
+	leaveFailure        store.ChannelLeaveFailureCode
+	leaveSettle         int
+	mergeValues         []model.Member
+	mergeHead           model.RecordHead
+	confirms            int
 }
 
 func (backend *fakeChannelMemberBackend) leaveTargets(context.Context,
@@ -231,6 +257,19 @@ func (backend *fakeChannelMemberBackend) startLeave(_ context.Context,
 ) error {
 	backend.mu.Lock()
 	backend.leaveStarts++
+	backend.mu.Unlock()
+	return nil
+}
+
+func (backend *fakeChannelMemberBackend) failLeave(_ context.Context,
+	_ channelMemberLeaveTarget, attempts uint64, _ time.Time,
+	failure store.ChannelLeaveFailureCode, _ time.Time,
+) error {
+	backend.mu.Lock()
+	backend.leaveFails++
+	backend.leaveFailedAttempts = attempts
+	backend.leaveFailure = failure
+	backend.hasLeave = false
 	backend.mu.Unlock()
 	return nil
 }

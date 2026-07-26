@@ -34,8 +34,11 @@ type ChannelManager struct {
 	runtime  *peer.MeshRuntime
 	clock    Clock
 	random   io.Reader
-	members  interface{ Trigger() }
-	mu       sync.Mutex
+	members  interface {
+		Trigger()
+		TriggerScope(model.ChannelID, model.PeerID) error
+	}
+	mu sync.Mutex
 }
 
 func NewChannelManager(options ChannelManagerOptions) (*ChannelManager, error) {
@@ -143,6 +146,14 @@ func (manager *ChannelManager) ChannelJoin(ctx context.Context, metadata Request
 func (manager *ChannelManager) triggerMemberReconcile() {
 	if manager != nil && manager.members != nil {
 		manager.members.Trigger()
+	}
+}
+
+func (manager *ChannelManager) triggerMemberReconcileScope(channelID model.ChannelID,
+	peerID model.PeerID,
+) {
+	if manager != nil && manager.members != nil {
+		_ = manager.members.TriggerScope(channelID, peerID)
 	}
 }
 

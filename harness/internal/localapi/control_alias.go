@@ -92,6 +92,7 @@ type StatusChannelCursor = node.StatusChannelCursor
 type StatusChannelInbox = node.StatusChannelInbox
 type StatusChannelArtifact = node.StatusChannelArtifact
 type StatusChannelRuntime = node.StatusChannelRuntime
+type StatusChannelLeave = node.StatusChannelLeave
 
 const MaxChannelResponseBytes = node.MaxChannelResponseBytes
 

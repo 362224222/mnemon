@@ -67,6 +67,16 @@ func (manager *ChannelManager) channelMutationOperation(ctx context.Context,
 		RequestDigest: metadata.RequestDigest}, nil
 }
 
+func channelLeaveOperation(metadata RequestMetadata) (store.ChannelLeaveOperation, *APIError) {
+	if !metadata.HasOperationKey || metadata.OperationKeyHash.IsZero() ||
+		!metadata.HasRequestDigest || metadata.RequestDigest.IsZero() {
+		return store.ChannelLeaveOperation{},
+			NewAPIError(CodeOperationMismatch, "Channel leave operation identity is invalid")
+	}
+	return store.ChannelLeaveOperation{OperationKeyHash: metadata.OperationKeyHash,
+		RequestDigest: metadata.RequestDigest}, nil
+}
+
 func deriveChannelMutationBearer(operation store.ChannelMutationOperation,
 	operationSecret []byte, channelID model.ChannelID, grantID model.GrantID,
 ) ([]byte, error) {
@@ -157,6 +167,14 @@ func channelMutationAPIError(err error) *APIError {
 	if errors.Is(err, store.ErrChannelMutationMismatch) ||
 		errors.Is(err, store.ErrChannelMutationInput) {
 		return NewAPIError(CodeOperationMismatch, "Channel mutation operation does not match request")
+	}
+	return channelAPIError(err)
+}
+
+func channelLeaveOperationAPIError(err error) *APIError {
+	if errors.Is(err, store.ErrChannelLeaveOperationMismatch) ||
+		errors.Is(err, store.ErrChannelLeaveInput) {
+		return NewAPIError(CodeOperationMismatch, "Channel leave operation does not match request")
 	}
 	return channelAPIError(err)
 }

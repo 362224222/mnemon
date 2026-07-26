@@ -33,7 +33,7 @@ func (manager *ChannelManager) AcceptMemberLeaveGate(ctx context.Context,
 	if err := manager.refreshChannelLeaveRuntime(ctx, result.Channel.ID()); err != nil {
 		return peer.ChannelMemberLeaveAuthority{}, err
 	}
-	manager.triggerMemberReconcile()
+	manager.triggerMemberReconcileScope(result.Channel.ID(), control.AuthenticatedPeerID)
 	return peer.ChannelMemberLeaveAuthority{Descriptor: result.Channel.Descriptor(),
 		ActiveMember: result.ActiveMember, Receipt: result.Receipt}, nil
 }
@@ -58,7 +58,7 @@ func (manager *ChannelManager) SettleMemberLeaveRuntimeGate(ctx context.Context,
 	if err := manager.refreshChannelLeaveRuntime(ctx, result.Channel.ID()); err != nil {
 		return err
 	}
-	manager.triggerMemberReconcile()
+	manager.triggerMemberReconcileScope(result.Channel.ID(), result.Channel.OwnerPeerID())
 	return nil
 }
 

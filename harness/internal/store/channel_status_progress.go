@@ -19,6 +19,7 @@ type ChannelStatusProgress struct {
 	inbox       ChannelStatusInboxProgress
 	artifact    ChannelStatusArtifactProgress
 	runtime     ChannelStatusRuntimeProgress
+	leave       ChannelStatusLeaveProgress
 }
 
 type ChannelStatusCommitProgress struct{ Accepted uint64 }
@@ -72,6 +73,12 @@ type ChannelStatusRuntimeProgress struct {
 	RunFailed         uint64
 }
 
+type ChannelStatusLeaveProgress struct {
+	Status     string
+	Attempts   uint64
+	Diagnostic ChannelLeaveFailureCode
+}
+
 func (progress ChannelStatusProgress) Readiness() []ChannelPeerReadiness {
 	return append([]ChannelPeerReadiness(nil), progress.readiness...)
 }
@@ -85,6 +92,7 @@ func (progress ChannelStatusProgress) Artifact() ChannelStatusArtifactProgress {
 	return progress.artifact
 }
 func (progress ChannelStatusProgress) Runtime() ChannelStatusRuntimeProgress { return progress.runtime }
+func (progress ChannelStatusProgress) Leave() ChannelStatusLeaveProgress     { return progress.leave }
 func (progress ChannelStatusProgress) clone() ChannelStatusProgress {
 	progress.readiness = progress.Readiness()
 	return progress
@@ -116,7 +124,39 @@ func readChannelStatusProgress(ctx context.Context, tx *sql.Tx, node model.Node,
 			return ChannelStatusProgress{}, err
 		}
 	}
+	if err := readChannelStatusLeaveProgress(ctx, tx, channelID, node.PeerID(), &progress); err != nil {
+		return ChannelStatusProgress{}, err
+	}
 	return progress, nil
+}
+
+func readChannelStatusLeaveProgress(ctx context.Context, tx *sql.Tx,
+	channelID model.ChannelID, localPeerID model.PeerID, progress *ChannelStatusProgress,
+) error {
+	var count, attempts, generation int64
+	var status, diagnostic string
+	err := tx.QueryRowContext(ctx, `SELECT COUNT(*),COALESCE(MAX(status),''),
+		COALESCE(MAX(attempts),0),COALESCE(MAX(retry_generation),0),
+		COALESCE(MAX(failure_code),'')
+		FROM channel_leave_requests WHERE channel_id=? AND member_peer_id=?`,
+		channelID.String(), localPeerID.String()).Scan(&count, &status, &attempts,
+		&generation, &diagnostic)
+	if err != nil || count < 0 || count > 1 || attempts < 0 ||
+		uint64(attempts) > ChannelLeaveMaximumAttempts || generation < 0 ||
+		uint64(generation) > model.MaxSQLiteInteger {
+		return statusProgressError("leave retry", err)
+	}
+	if count == 0 {
+		progress.leave.Status = "none"
+		return nil
+	}
+	failure := ChannelLeaveFailureCode(diagnostic)
+	if !validChannelLeaveRetryState(status, uint64(attempts), failure, diagnostic != "") {
+		return statusProgressError("leave retry", nil)
+	}
+	progress.leave = ChannelStatusLeaveProgress{Status: status, Attempts: uint64(attempts),
+		Diagnostic: failure}
+	return nil
 }
 
 func readChannelStatusPublicationProgress(ctx context.Context, tx *sql.Tx,

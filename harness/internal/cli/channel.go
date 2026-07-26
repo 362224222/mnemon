@@ -22,7 +22,8 @@ type channelControlClient interface {
 		localapi.PendingJournal) (localapi.ChannelInviteResponse, *localapi.APIError)
 	CloseChannelInvite(context.Context, localapi.ChannelInviteCloseRequest) (localapi.ChannelInviteCloseResponse, *localapi.APIError)
 	RemoveChannelMember(context.Context, localapi.ChannelRemoveRequest) (localapi.ChannelRemoveResponse, *localapi.APIError)
-	LeaveChannel(context.Context, localapi.ChannelLeaveRequest) (localapi.ChannelLeaveResponse, *localapi.APIError)
+	LeaveChannel(context.Context, localapi.ChannelLeaveRequest,
+		localapi.PendingJournal) (localapi.ChannelLeaveResponse, *localapi.APIError)
 	AbandonChannel(context.Context, localapi.ChannelAbandonRequest) (localapi.ChannelAbandonResponse, *localapi.APIError)
 	ReadChannelStatus(context.Context) (localapi.ChannelStatusResponse, *localapi.APIError)
 }
@@ -102,7 +103,7 @@ func (app *channelApp) dispatch(ctx context.Context, client channelControlClient
 	case "remove":
 		return app.remove(ctx, client, args)
 	case "leave":
-		return app.leave(ctx, client, args)
+		return app.leave(ctx, client, nodeState, args)
 	case "abandon":
 		return app.abandon(ctx, client, args)
 	default:
@@ -155,7 +156,9 @@ func (app *channelApp) remove(ctx context.Context, client channelControlClient, 
 	return writeExit(err)
 }
 
-func (app *channelApp) leave(ctx context.Context, client channelControlClient, args []string) int {
+func (app *channelApp) leave(ctx context.Context, client channelControlClient,
+	nodeState string, args []string,
+) int {
 	args, jsonOutput := takeJSONFlag(args)
 	if len(args) > 1 {
 		return app.writeError(localapi.NewAPIError(localapi.CodeInvalidArgument,
@@ -165,20 +168,28 @@ func (app *channelApp) leave(ctx context.Context, client channelControlClient, a
 	if len(args) == 1 {
 		channel = args[0]
 	}
-	response, apiErr := client.LeaveChannel(ctx, localapi.ChannelLeaveRequest{Channel: channel})
+	request := localapi.ChannelLeaveRequest{Channel: channel}
+	requestDigest, apiErr := localapi.ChannelLeaveRequestDigest(request)
 	if apiErr != nil {
 		return app.writeError(apiErr)
 	}
-	if jsonOutput {
-		return app.writeJSON(response)
+	journals, pending, apiErr := app.beginChannelMutation(nodeState, requestDigest)
+	if apiErr != nil {
+		return app.writeError(apiErr)
 	}
-	if response.Status == "leaving" {
-		_, err := fmt.Fprintf(app.stdout, "Leaving Channel %s (owner acknowledgement queued)\n",
-			response.Channel.Alias)
+	response, apiErr := client.LeaveChannel(ctx, request, pending)
+	if apiErr != nil {
+		return app.writeError(apiErr)
+	}
+	return app.presentChannelMutation(journals, pending, jsonOutput, response, func() int {
+		if response.Status == "leaving" {
+			_, err := fmt.Fprintf(app.stdout, "Leaving Channel %s (owner acknowledgement queued)\n",
+				response.Channel.Alias)
+			return writeExit(err)
+		}
+		_, err := fmt.Fprintf(app.stdout, "Left Channel %s\n", response.Channel.Alias)
 		return writeExit(err)
-	}
-	_, err := fmt.Fprintf(app.stdout, "Left Channel %s\n", response.Channel.Alias)
-	return writeExit(err)
+	})
 }
 
 func (app *channelApp) create(ctx context.Context, client channelControlClient,

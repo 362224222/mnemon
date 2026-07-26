@@ -11,11 +11,13 @@ import (
 )
 
 type durableChannelLeaveRequest struct {
-	request       model.SignedChannelLeaveRequest
-	status        string
-	attempts      uint64
-	nextAttemptAt time.Time
-	receiptJSON   []byte
+	request         model.SignedChannelLeaveRequest
+	status          string
+	attempts        uint64
+	retryGeneration uint64
+	nextAttemptAt   time.Time
+	failureCode     ChannelLeaveFailureCode
+	receiptJSON     []byte
 }
 
 func readChannelLeaveAuthority(ctx context.Context, tx *sql.Tx,
@@ -38,9 +40,24 @@ func readOpenChannelLeaveRequest(ctx context.Context, tx *sql.Tx, authority veri
 	localPeerID model.PeerID,
 ) (durableChannelLeaveRequest, error) {
 	row := tx.QueryRowContext(ctx, `SELECT request_id,channel_id,member_peer_id,request_digest,
-		request_json,member_signature,status,attempts,next_attempt_at,receipt_json,created_at,updated_at
+		request_json,member_signature,status,attempts,retry_generation,next_attempt_at,
+		failure_code,receipt_json,
+		created_at,updated_at
 		FROM channel_leave_requests WHERE channel_id=? AND member_peer_id=?
 		AND status IN ('queued','sent')`, authority.channel.ID().String(), localPeerID.String())
+	return scanChannelLeaveRequest(row, authority, localPeerID)
+}
+
+func readRecoverableChannelLeaveRequest(ctx context.Context, tx *sql.Tx,
+	authority verifiedChannelAuthority, localPeerID model.PeerID,
+) (durableChannelLeaveRequest, error) {
+	row := tx.QueryRowContext(ctx, `SELECT request_id,channel_id,member_peer_id,request_digest,
+		request_json,member_signature,status,attempts,retry_generation,next_attempt_at,
+		failure_code,receipt_json,
+		created_at,updated_at
+		FROM channel_leave_requests WHERE channel_id=? AND member_peer_id=?
+		AND status IN ('queued','sent','failed')`, authority.channel.ID().String(),
+		localPeerID.String())
 	return scanChannelLeaveRequest(row, authority, localPeerID)
 }
 
@@ -62,7 +79,9 @@ func readChannelLeaveRequestByID(ctx context.Context, tx *sql.Tx, localPeerID mo
 			ErrChannelLeaveAuthority, err)
 	}
 	row := tx.QueryRowContext(ctx, `SELECT request_id,channel_id,member_peer_id,request_digest,
-		request_json,member_signature,status,attempts,next_attempt_at,receipt_json,created_at,updated_at
+		request_json,member_signature,status,attempts,retry_generation,next_attempt_at,
+		failure_code,receipt_json,
+		created_at,updated_at
 		FROM channel_leave_requests WHERE request_id=?`, requestID.String())
 	request, err := scanChannelLeaveRequest(row, authority, localPeerID)
 	return request, authority, err
@@ -76,6 +95,8 @@ type channelLeaveRowValues struct {
 	requestDigest, requestJSON, memberSignature []byte
 	receiptJSON                                 []byte
 	attempts                                    uint64
+	retryGeneration                             uint64
+	failureCode                                 sql.NullString
 }
 
 func scanChannelLeaveRequest(row channelLeaveRow, authority verifiedChannelAuthority,
@@ -84,8 +105,9 @@ func scanChannelLeaveRequest(row channelLeaveRow, authority verifiedChannelAutho
 	var values channelLeaveRowValues
 	if err := row.Scan(&values.requestIDText, &values.channelText, &values.memberText,
 		&values.requestDigest, &values.requestJSON, &values.memberSignature, &values.status,
-		&values.attempts, &values.nextText, &values.receiptJSON, &values.createdText,
-		&values.updatedText); err != nil {
+		&values.attempts, &values.retryGeneration, &values.nextText, &values.failureCode,
+		&values.receiptJSON,
+		&values.createdText, &values.updatedText); err != nil {
 		return durableChannelLeaveRequest{}, mapChannelLeaveError(err)
 	}
 	return validateChannelLeaveRow(values, authority, localPeerID)
@@ -111,8 +133,10 @@ func validateChannelLeaveRow(values channelLeaveRowValues, authority verifiedCha
 		return durableChannelLeaveRequest{}, ErrChannelLeaveAuthority
 	}
 	return durableChannelLeaveRequest{request: parsed.request, status: values.status,
-		attempts: values.attempts, nextAttemptAt: parsed.nextAttempt,
-		receiptJSON: append([]byte(nil), values.receiptJSON...)}, nil
+		attempts: values.attempts, retryGeneration: values.retryGeneration,
+		nextAttemptAt: parsed.nextAttempt,
+		failureCode:   ChannelLeaveFailureCode(values.failureCode.String),
+		receiptJSON:   append([]byte(nil), values.receiptJSON...)}, nil
 }
 
 func parseChannelLeaveRow(values channelLeaveRowValues, authority verifiedChannelAuthority,
@@ -138,8 +162,11 @@ func validChannelLeaveRowMetadata(values channelLeaveRowValues, parsed parsedCha
 ) bool {
 	record := parsed.request.Record()
 	validStatus := values.status == "queued" || values.status == "sent" ||
-		values.status == "accepted" || values.status == "rejected"
-	return values.attempts <= model.MaxSQLiteInteger && validStatus &&
+		values.status == "accepted" || values.status == "failed"
+	return values.attempts <= ChannelLeaveMaximumAttempts &&
+		values.retryGeneration <= model.MaxSQLiteInteger && validStatus &&
+		validChannelLeaveRetryState(values.status, values.attempts,
+			ChannelLeaveFailureCode(values.failureCode.String), values.failureCode.Valid) &&
 		parsed.requestID == parsed.request.RequestID() && parsed.digest == parsed.request.Digest() &&
 		values.channelText == authority.channel.ID().String() && values.memberText == localPeerID.String() &&
 		record.ChannelID() == authority.channel.ID() && record.MemberPeerID() == localPeerID &&
@@ -147,6 +174,28 @@ func validChannelLeaveRowMetadata(values channelLeaveRowValues, parsed parsedCha
 		!parsed.nextAttempt.Before(parsed.createdAt) &&
 		model.VerifyChannelLeaveRequest(authority.channel.Descriptor(), parsed.active, parsed.request) == nil &&
 		(values.status == "accepted") == (len(values.receiptJSON) > 0)
+}
+
+func validChannelLeaveRetryState(status string, attempts uint64,
+	failure ChannelLeaveFailureCode, failurePresent bool,
+) bool {
+	switch status {
+	case "queued":
+		return attempts == 0 && !failurePresent
+	case "sent":
+		return attempts > 0 && attempts <= ChannelLeaveMaximumAttempts && !failurePresent
+	case "accepted":
+		return attempts <= ChannelLeaveMaximumAttempts && !failurePresent
+	case "failed":
+		if attempts == 0 || attempts > ChannelLeaveMaximumAttempts ||
+			!failurePresent || !failure.Valid() {
+			return false
+		}
+		return failure != ChannelLeaveFailureAttemptsExhausted ||
+			attempts == ChannelLeaveMaximumAttempts
+	default:
+		return false
+	}
 }
 
 func validateChannelLeaveRowReceipt(raw []byte, authority verifiedChannelAuthority,

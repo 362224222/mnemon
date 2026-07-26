@@ -97,16 +97,43 @@ func TestChannelAbandonRequiresHiddenExactConfirmation(t *testing.T) {
 
 func TestChannelLeaveReportsQueuedOwnerAcknowledgement(t *testing.T) {
 	t.Parallel()
+	workspace, _ := cliWorkspace(t)
 	client := &leaveChannelClientStub{response: localapi.ChannelLeaveResponse{
 		SchemaVersion: localapi.SchemaVersion, Status: "leaving",
 		Channel: localapi.ChannelView{Alias: "alpha", Membership: "leaving"}}}
-	var stdout, stderr bytes.Buffer
-	app := &channelApp{stdin: strings.NewReader(""), stdout: &stdout, stderr: &stderr}
-	if exit := app.leave(context.Background(), client, []string{"alpha"}); exit != 0 ||
+	stdout, stderr, app := channelMutationTestApp(t, workspace, client)
+	if exit := app.run(context.Background(), []string{"leave", "alpha"}); exit != 0 ||
 		stderr.Len() != 0 || stdout.String() !=
-		"Leaving Channel alpha (owner acknowledgement queued)\n" {
+		"Leaving Channel alpha (owner acknowledgement queued)\n" ||
+		client.journal.OperationKeyHash().IsZero() {
 		t.Fatalf("queued leave = exit %d stdout=%q stderr=%q", exit, stdout.String(), stderr.String())
 	}
+}
+
+func TestChannelLeaveResponseLossReusesJournalUntilPresentation(t *testing.T) {
+	workspace, nodeState := cliWorkspace(t)
+	client := &leaveChannelClientStub{apiErr: localapi.NewAPIError(
+		localapi.CodeMnemondUnavailable, "mnemond local control is unavailable")}
+	stdout, stderr, app := channelMutationTestApp(t, workspace, client)
+	args := []string{"leave", "alpha", "--json"}
+	if exit := app.run(context.Background(), args); exit != 5 || stdout.Len() != 0 {
+		t.Fatalf("lost leave response = exit %d stdout=%q stderr=%q",
+			exit, stdout.String(), stderr.String())
+	}
+	firstKey := client.journal.OperationKeyHash()
+	assertJournalSuffixes(t, nodeState, []string{".pending"})
+
+	client.apiErr = nil
+	client.response = localapi.ChannelLeaveResponse{SchemaVersion: localapi.SchemaVersion,
+		Status: "leaving", Channel: localapi.ChannelView{Alias: "alpha", Membership: "leaving"}}
+	stdout.Reset()
+	stderr.Reset()
+	if exit := app.run(context.Background(), args); exit != 0 ||
+		client.journal.OperationKeyHash() != firstKey {
+		t.Fatalf("leave replay = exit %d key=%s stdout=%q",
+			exit, client.journal.OperationKeyHash().String(), stdout.String())
+	}
+	assertJournalSuffixes(t, nodeState, []string{".presented"})
 }
 
 func TestChannelCreateResponseLossReusesJournalUntilPresentation(t *testing.T) {
@@ -215,10 +242,13 @@ func channelMutationTestApp(t *testing.T, workspace string,
 type leaveChannelClientStub struct {
 	channelControlClient
 	response localapi.ChannelLeaveResponse
+	journal  localapi.PendingJournal
+	apiErr   *localapi.APIError
 }
 
-func (client *leaveChannelClientStub) LeaveChannel(context.Context,
-	localapi.ChannelLeaveRequest,
+func (client *leaveChannelClientStub) LeaveChannel(_ context.Context,
+	_ localapi.ChannelLeaveRequest, journal localapi.PendingJournal,
 ) (localapi.ChannelLeaveResponse, *localapi.APIError) {
-	return client.response, nil
+	client.journal = journal
+	return client.response, client.apiErr
 }

@@ -168,7 +168,8 @@ func (s *Server) handleChannelRemove(writer http.ResponseWriter, request *http.R
 
 func (s *Server) handleChannelLeave(writer http.ResponseWriter, request *http.Request) {
 	var input ChannelLeaveRequest
-	metadata, ok := s.prepareChannelPost(writer, request, &input)
+	metadata, ok := s.prepareChannelIdempotentPost(writer, request, &input,
+		func() (model.Digest, *APIError) { return ChannelLeaveRequestDigest(input) })
 	if !ok {
 		return
 	}
@@ -221,8 +222,22 @@ func (s *Server) prepareChannelMutationPost(
 	writer http.ResponseWriter, request *http.Request, target any,
 	digest func() (model.Digest, *APIError),
 ) (RequestMetadata, bool) {
+	return s.prepareChannelOperationPost(writer, request, target, digest, true)
+}
+
+func (s *Server) prepareChannelIdempotentPost(
+	writer http.ResponseWriter, request *http.Request, target any,
+	digest func() (model.Digest, *APIError),
+) (RequestMetadata, bool) {
+	return s.prepareChannelOperationPost(writer, request, target, digest, false)
+}
+
+func (s *Server) prepareChannelOperationPost(
+	writer http.ResponseWriter, request *http.Request, target any,
+	digest func() (model.Digest, *APIError), retainOperation bool,
+) (RequestMetadata, bool) {
 	metadata, ok := s.prepareChannelPostWithPolicy(writer, request, target, headerPolicy{
-		operationRequired: true, operationAllowed: true, retainOperation: true,
+		operationRequired: true, operationAllowed: true, retainOperation: retainOperation,
 	})
 	if !ok {
 		return RequestMetadata{}, false

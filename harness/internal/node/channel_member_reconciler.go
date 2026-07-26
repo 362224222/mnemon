@@ -52,10 +52,12 @@ type ChannelMemberReconciler struct {
 	ready   chan struct{}
 	once    sync.Once
 
-	mu        sync.Mutex
-	started   bool
-	snapshot  ChannelMemberReconcilerSnapshot
-	schedules map[channelMemberTargetKey]channelMemberSchedule
+	mu         sync.Mutex
+	started    bool
+	snapshot   ChannelMemberReconcilerSnapshot
+	globalWake bool
+	scopedWake map[channelMemberTargetKey]struct{}
+	schedules  map[channelMemberTargetKey]channelMemberSchedule
 }
 
 type channelMemberSchedule struct {
@@ -75,14 +77,25 @@ func newChannelMemberReconciler(backend channelMemberReconcileBackend,
 	}
 	return &ChannelMemberReconciler{backend: backend, client: client, clock: clock,
 		period: period, trigger: make(chan struct{}, 1), ready: make(chan struct{}),
-		schedules: make(map[channelMemberTargetKey]channelMemberSchedule),
-		snapshot:  ChannelMemberReconcilerSnapshot{State: ChannelMemberReconcilerIdle}}, nil
+		scopedWake: make(map[channelMemberTargetKey]struct{}),
+		schedules:  make(map[channelMemberTargetKey]channelMemberSchedule),
+		snapshot:   ChannelMemberReconcilerSnapshot{State: ChannelMemberReconcilerIdle}}, nil
 }
 
+// Trigger is reserved for an explicit global Channel-authority change. It
+// invalidates every in-memory member schedule before waking the serial worker.
 func (worker *ChannelMemberReconciler) Trigger() {
 	if worker == nil || worker.trigger == nil {
 		return
 	}
+	worker.mu.Lock()
+	worker.globalWake = true
+	clear(worker.scopedWake)
+	worker.mu.Unlock()
+	worker.signal()
+}
+
+func (worker *ChannelMemberReconciler) signal() {
 	select {
 	case worker.trigger <- struct{}{}:
 	default:
@@ -95,8 +108,16 @@ func (worker *ChannelMemberReconciler) ReconcileEventRepair(ctx context.Context,
 	if worker == nil || ctx == nil || ctx.Err() != nil || channelID.IsZero() || peerID.IsZero() {
 		return ErrChannelMemberReconciler
 	}
-	worker.Trigger()
-	return nil
+	return worker.TriggerScope(channelID, peerID)
+}
+
+func (worker *ChannelMemberReconciler) TriggerScope(channelID model.ChannelID,
+	peerID model.PeerID,
+) error {
+	if worker == nil || channelID.IsZero() || peerID.IsZero() {
+		return ErrChannelMemberReconciler
+	}
+	return worker.triggerScope(channelMemberTargetKey{channelID: channelID, peerID: peerID})
 }
 
 func (worker *ChannelMemberReconciler) ReconcileArtifactReceiver(ctx context.Context,
@@ -105,8 +126,7 @@ func (worker *ChannelMemberReconciler) ReconcileArtifactReceiver(ctx context.Con
 	if worker == nil || ctx == nil || ctx.Err() != nil || channelID.IsZero() || peerID.IsZero() {
 		return ErrChannelMemberReconciler
 	}
-	worker.Trigger()
-	return nil
+	return worker.TriggerScope(channelID, peerID)
 }
 
 func (worker *ChannelMemberReconciler) Readiness(ctx context.Context) error {
@@ -163,7 +183,7 @@ func (worker *ChannelMemberReconciler) Run(ctx context.Context) error {
 		case <-ticker.C:
 			force = false
 		case <-worker.trigger:
-			force = true
+			force = false
 		}
 	}
 }
@@ -190,9 +210,7 @@ func (worker *ChannelMemberReconciler) runCycle(ctx context.Context, force bool)
 	if err := validateChannelMemberLeaveTargets(leaves, at); err != nil {
 		return err
 	}
-	if force {
-		clear(worker.schedules)
-	}
+	worker.applyWake(force)
 	worker.pruneSchedules(targets)
 	worker.recordCycle(at, len(targets)+len(leaves))
 	if err := worker.processLeaveTargets(ctx, leaves, at); err != nil {

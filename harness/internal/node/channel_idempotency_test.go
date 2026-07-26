@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -95,6 +96,29 @@ func TestChannelCreateAndInviteReplayExactTokenAcrossResponseLossAndRestart(t *t
 	if apiErr != nil || inviteRestart.InviteToken != invited.InviteToken {
 		t.Fatalf("invite restart replay = (%#v, %v)", inviteRestart, apiErr)
 	}
+	leaveMetadata := channelMutationTestMetadata(fixture.profile,
+		model.Sum([]byte("typed-leave-request")), 0x71)
+	clear(leaveMetadata.OperationKeySecret)
+	leaveMetadata.OperationKeySecret = nil
+	wakes := &recordingChannelMemberWake{}
+	daemon.channels.manager.members = wakes
+	left, apiErr := daemon.channels.manager.ChannelLeave(context.Background(),
+		leaveMetadata, ChannelLeaveRequest{Channel: created.Channel.Alias})
+	if apiErr != nil || left.Status != "left" || left.Channel.Membership != "closed" {
+		t.Fatalf("owner leave operation = (%#v, %v)", left, apiErr)
+	}
+	if globals, scopes := wakes.snapshot(); globals != 0 || scopes != 1 {
+		t.Fatalf("owner leave wake scope = global %d scoped %d", globals, scopes)
+	}
+	leaveReplay, apiErr := daemon.channels.manager.ChannelLeave(context.Background(),
+		leaveMetadata, ChannelLeaveRequest{Channel: created.Channel.Alias})
+	if apiErr != nil || leaveReplay.Status != left.Status ||
+		leaveReplay.Channel.ChannelIDDigest != left.Channel.ChannelIDDigest {
+		t.Fatalf("owner leave response-loss replay = (%#v, %v)", leaveReplay, apiErr)
+	}
+	if globals, scopes := wakes.snapshot(); globals != 0 || scopes != 2 {
+		t.Fatalf("owner leave replay wake scope = global %d scoped %d", globals, scopes)
+	}
 
 	corrupt, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -118,6 +142,31 @@ func TestChannelCreateAndInviteReplayExactTokenAcrossResponseLossAndRestart(t *t
 		inviteMetadata, inviteRequest); apiErr == nil || apiErr.Code != CodeInternal {
 		t.Fatalf("corrupt durable token commitment error = %#v", apiErr)
 	}
+}
+
+type recordingChannelMemberWake struct {
+	mu      sync.Mutex
+	globals int
+	scopes  int
+}
+
+func (wake *recordingChannelMemberWake) Trigger() {
+	wake.mu.Lock()
+	wake.globals++
+	wake.mu.Unlock()
+}
+
+func (wake *recordingChannelMemberWake) TriggerScope(model.ChannelID, model.PeerID) error {
+	wake.mu.Lock()
+	wake.scopes++
+	wake.mu.Unlock()
+	return nil
+}
+
+func (wake *recordingChannelMemberWake) snapshot() (int, int) {
+	wake.mu.Lock()
+	defer wake.mu.Unlock()
+	return wake.globals, wake.scopes
 }
 
 func channelMutationTestMetadata(profile model.Profile, requestDigest model.Digest, fill byte,

@@ -125,6 +125,17 @@ func (s *Store) ReadChannelMutation(ctx context.Context,
 func readChannelMutation(ctx context.Context, tx *sql.Tx,
 	operation ChannelMutationOperation,
 ) (ChannelMutationAuthority, bool, error) {
+	var conflict int
+	conflictErr := tx.QueryRowContext(ctx, `SELECT 1 FROM channel_leave_operations
+		WHERE operation_key_hash=?`, operation.OperationKeyHash.Bytes()).Scan(&conflict)
+	if conflictErr == nil {
+		return ChannelMutationAuthority{}, false, ErrChannelMutationMismatch
+	}
+	if !errors.Is(conflictErr, sql.ErrNoRows) {
+		return ChannelMutationAuthority{}, false,
+			fmt.Errorf("%w: inspect operation key scope: %v",
+				ErrChannelMutationConflict, conflictErr)
+	}
 	var requestBytes, payloadDigestBytes, addressesJSON []byte
 	var kindText, channelText, grantText, committedText string
 	err := tx.QueryRowContext(ctx, `SELECT request_digest,kind,channel_id,grant_id,

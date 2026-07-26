@@ -20,6 +20,8 @@ var (
 type BeginChannelLeaveSpec struct {
 	ChannelID model.ChannelID
 	Request   model.SignedChannelLeaveRequest
+	Operation ChannelLeaveOperation
+	At        time.Time
 }
 
 type BeginChannelLeaveResult struct {
@@ -31,12 +33,16 @@ type BeginChannelLeaveResult struct {
 
 // BeginChannelLeave is the local voluntary-exit boundary for a non-owner. The
 // topic and all new egress are closed in the same transaction that persists
-// the member-signed retry request. A leaving replay returns the original bytes
-// without advancing timestamps or attempt state.
+// the member-signed retry request. An open replay returns the original bytes;
+// explicitly repeating a failed leave starts a new fenced retry generation.
 func (s *Store) BeginChannelLeave(ctx context.Context,
 	spec BeginChannelLeaveSpec,
 ) (BeginChannelLeaveResult, error) {
 	if s == nil || s.db == nil || ctx == nil || spec.ChannelID.IsZero() {
+		return BeginChannelLeaveResult{}, ErrChannelLeaveInput
+	}
+	at, err := canonicalStoreTime(spec.At)
+	if err != nil || !spec.Operation.valid() {
 		return BeginChannelLeaveResult{}, ErrChannelLeaveInput
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -51,21 +57,60 @@ func (s *Store) BeginChannelLeave(ctx context.Context,
 	if authority.channel.OwnerPeerID() == node.PeerID() {
 		return BeginChannelLeaveResult{}, ErrChannelLeaveConflict
 	}
+	operation, found, err := readChannelLeaveOperation(ctx, tx, spec.Operation)
+	if err != nil {
+		return BeginChannelLeaveResult{}, err
+	}
+	if found {
+		return replayChannelLeaveOperation(ctx, tx, node.PeerID(), authority, operation)
+	}
 	switch authority.channel.Status() {
 	case model.ChannelLeaving:
-		return replayChannelLeave(ctx, tx, node.PeerID(), authority)
+		return resumeChannelLeave(ctx, tx, node.PeerID(), authority, spec.Operation, at)
 	case model.ChannelActive:
-		return s.beginFreshChannelLeave(ctx, tx, node.PeerID(), authority, spec.Request)
+		return s.beginFreshChannelLeave(ctx, tx, node.PeerID(), authority, spec.Request,
+			spec.Operation, at)
 	default:
 		return BeginChannelLeaveResult{}, ErrChannelLeaveConflict
 	}
 }
 
-func replayChannelLeave(ctx context.Context, tx *sql.Tx, localPeerID model.PeerID,
-	authority verifiedChannelAuthority,
+func replayChannelLeaveOperation(ctx context.Context, tx *sql.Tx, localPeerID model.PeerID,
+	authority verifiedChannelAuthority, operation ChannelLeaveOperationAuthority,
 ) (BeginChannelLeaveResult, error) {
-	request, err := readOpenChannelLeaveRequest(ctx, tx, authority, localPeerID)
+	if operation.channelID != authority.channel.ID() || !operation.hasRequest() {
+		return BeginChannelLeaveResult{}, ErrChannelLeaveOperationMismatch
+	}
+	request, _, err := readChannelLeaveRequestByID(ctx, tx, localPeerID, operation.requestID)
+	if err != nil || request.request.Record().ChannelID() != operation.channelID ||
+		request.retryGeneration < operation.retryGeneration {
+		return BeginChannelLeaveResult{}, ErrChannelLeaveAuthority
+	}
+	if err := tx.Commit(); err != nil {
+		return BeginChannelLeaveResult{}, mapChannelLeaveError(err)
+	}
+	return BeginChannelLeaveResult{Channel: authority.channel, Roster: authority.roster,
+		Request: request.request, Replay: true}, nil
+}
+
+func resumeChannelLeave(ctx context.Context, tx *sql.Tx, localPeerID model.PeerID,
+	authority verifiedChannelAuthority, operation ChannelLeaveOperation, at time.Time,
+) (BeginChannelLeaveResult, error) {
+	request, err := readRecoverableChannelLeaveRequest(ctx, tx, authority, localPeerID)
 	if err != nil {
+		return BeginChannelLeaveResult{}, err
+	}
+	if request.status == "failed" {
+		if err := recoverFailedChannelLeave(ctx, tx, request, at); err != nil {
+			return BeginChannelLeaveResult{}, err
+		}
+		request, err = readOpenChannelLeaveRequest(ctx, tx, authority, localPeerID)
+		if err != nil {
+			return BeginChannelLeaveResult{}, err
+		}
+	}
+	if err := insertChannelLeaveOperation(ctx, tx, operation, authority.channel.ID(),
+		request.request.RequestID(), request.retryGeneration, at); err != nil {
 		return BeginChannelLeaveResult{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -75,8 +120,35 @@ func replayChannelLeave(ctx context.Context, tx *sql.Tx, localPeerID model.PeerI
 		Request: request.request, Replay: true}, nil
 }
 
+func recoverFailedChannelLeave(ctx context.Context, tx *sql.Tx,
+	request durableChannelLeaveRequest, at time.Time,
+) error {
+	if request.retryGeneration >= model.MaxSQLiteInteger {
+		return ErrChannelLeaveConflict
+	}
+	at, err := canonicalStoreTime(at)
+	if err != nil {
+		return ErrChannelLeaveInput
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE channel_leave_requests
+		SET status='queued',attempts=0,retry_generation=retry_generation+1,
+		next_attempt_at=?,failure_code=NULL,updated_at=? WHERE request_id=?
+		AND status='failed' AND retry_generation=? AND attempts=? AND next_attempt_at=?
+		AND failure_code=? AND updated_at<=?`, storeTime(at), storeTime(at),
+		request.request.RequestID().String(), request.retryGeneration, request.attempts,
+		storeTime(request.nextAttemptAt), string(request.failureCode), storeTime(at))
+	if err != nil {
+		return mapChannelLeaveError(err)
+	}
+	if changed, changedErr := result.RowsAffected(); changedErr != nil || changed != 1 {
+		return ErrChannelLeaveConflict
+	}
+	return nil
+}
+
 func (s *Store) beginFreshChannelLeave(ctx context.Context, tx *sql.Tx, localPeerID model.PeerID,
 	authority verifiedChannelAuthority, request model.SignedChannelLeaveRequest,
+	operation ChannelLeaveOperation, operationAt time.Time,
 ) (BeginChannelLeaveResult, error) {
 	localMember, ok := authority.roster.CurrentMember(localPeerID)
 	if !ok || localMember.Status() != model.MemberActive ||
@@ -91,6 +163,10 @@ func (s *Store) beginFreshChannelLeave(ctx context.Context, tx *sql.Tx, localPee
 		return BeginChannelLeaveResult{}, ErrChannelLeaveConflict
 	}
 	if err := applyFreshChannelLeave(ctx, tx, localPeerID, authority, request, at); err != nil {
+		return BeginChannelLeaveResult{}, err
+	}
+	if err := insertChannelLeaveOperation(ctx, tx, operation, authority.channel.ID(),
+		request.RequestID(), 0, operationAt); err != nil {
 		return BeginChannelLeaveResult{}, err
 	}
 	committed, err := readVerifiedChannelAuthority(ctx, tx, localPeerID, authority.channel.ID())

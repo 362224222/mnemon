@@ -27,7 +27,7 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 				"artifact_pins artifact_provenance artifact_gc_scan artifact_gc_staging_scan artifact_gc_staging_receipt artifact_gc_queue artifact_gc_prepare_receipt " +
 				"artifact_gc_completion_receipts artifact_gc_delete_guard artifact_gc_block_delete_guard artifact_gc_completion_guard " +
 				"channels channel_members channel_conflicts " +
-				"enrollment_grants channel_mutation_operations enrollment_grant_uses enrollment_receipts channel_join_reservations channel_leave_requests " +
+				"enrollment_grants channel_mutation_operations enrollment_grant_uses enrollment_receipts channel_join_reservations channel_leave_requests channel_leave_operations " +
 				"peer_bindings gossip_publications peer_deliveries peer_inbox peer_inbox_semantic_transition_receipts peer_inbox_artifact_renew_receipts peer_inbox_artifact_source_receipts peer_inbox_pressure peer_inbox_node_pressure publication_conflicts " +
 				"origin_quarantines peer_cursors peer_repairs publication_epochs peer_pull_acks",
 		),
@@ -65,6 +65,7 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 				"enrollment_grant_uses_no_update enrollment_grant_uses_no_delete " +
 				"enrollment_receipts_owner_evidence_insert enrollment_receipts_no_update enrollment_receipts_no_delete " +
 				"channel_join_reservations_limit_insert channel_join_reservations_scope_insert channel_join_reservations_identity_immutable channel_join_reservations_attempt_monotonic channel_join_reservations_state_time_monotonic channels_join_reservation_insert " +
+				"channel_leave_requests_retry_generation_fenced channel_leave_operations_no_update channel_leave_operations_no_delete channel_leave_operations_key_scope_insert channel_mutation_operations_key_scope_insert " +
 				"peer_bindings_no_self_insert peer_bindings_member_state_insert peer_bindings_member_state_update peer_bindings_no_self_update " +
 				"peer_bindings_identity_epoch_immutable peer_bindings_revoked_terminal peer_bindings_active_no_pending events_imported_binding_insert " +
 				"gossip_publications_event_scope_insert gossip_publications_identity_immutable gossip_publications_lease_fence_update " +
@@ -121,8 +122,8 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 	if !reflect.DeepEqual(actual, expected) {
 		t.Fatalf("schema object set mismatch\nactual: %#v\nexpected: %#v", actual, expected)
 	}
-	if got := len(actual["table"]) + len(actual["index"]) + len(actual["trigger"]); got != 234 {
-		t.Fatalf("explicit object count = %d, want 234", got)
+	if got := len(actual["table"]) + len(actual["index"]) + len(actual["trigger"]); got != 240 {
+		t.Fatalf("explicit object count = %d, want 240", got)
 	}
 }
 

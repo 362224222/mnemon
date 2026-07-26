@@ -32,6 +32,34 @@ func TestDoctorAppReportsClosedChannelProgress(t *testing.T) {
 	}
 }
 
+func TestDoctorReportsTerminalLeaveRetryDiagnosticAndRecovery(t *testing.T) {
+	fixture := newDoctorTestFixture(t)
+	status, err := localapi.NewStatusResponse(localapi.StatusSnapshot{
+		AssetRevision: fixture.bundle.Manifest().AssetRevision, ActivationReady: true,
+		Runtime: localapi.RuntimeStatusSnapshot{Running: true, Ready: true, Healthy: true},
+		Channels: []localapi.StatusChannelSnapshot{{Alias: "alpha", Membership: "leaving",
+			RosterRevision: 1, Topic: localapi.StatusChannelTopic{State: "left",
+				ReadyMembers: 0, TotalMembers: 1},
+			Leave: localapi.StatusChannelLeave{Status: "failed", Attempts: 5,
+				Diagnostic: "attempts_exhausted", Recovery: "channel_leave"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &fakeDoctorClient{statuses: []localapi.StatusResponse{status},
+		authorities: []localapi.AuthorityResponse{fixture.authority}}
+	app, stdout, stderr := fixture.app(t, client, doctorTestOverrides{})
+	exit := app.run(context.Background(), nil)
+	report := decodeDoctorReport(t, stdout.String())
+	if exit != 1 || stderr.Len() != 0 || len(report.Channels) != 1 ||
+		report.Channels[0].Leave.Diagnostic != "attempts_exhausted" ||
+		report.Channels[0].Leave.Recovery != "channel_leave" ||
+		report.Checks[6].Issue != doctorIssueChannelDegraded {
+		t.Fatalf("terminal leave doctor = exit %d report %#v stderr %q",
+			exit, report, stderr.String())
+	}
+}
+
 func TestDoctorChannelCheckDistinguishesQueuedAndDegradedProgress(t *testing.T) {
 	t.Parallel()
 	ready := doctorStatusChannel(t, "active", "joined", 0, 0)

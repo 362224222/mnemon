@@ -31,7 +31,7 @@ func (manager *ChannelManager) ChannelRemove(ctx context.Context, metadata Reque
 			"the Channel owner must use channel leave")
 	}
 	updated, err := manager.commitTerminalMember(ctx, authority.LocalPeerID(), channel,
-		target, model.MemberRevoked)
+		target, model.MemberRevoked, nil)
 	if err != nil {
 		return ChannelRemoveResponse{}, channelAPIError(err)
 	}
@@ -49,30 +49,40 @@ func (manager *ChannelManager) ChannelLeave(ctx context.Context, metadata Reques
 	if apiErr := manager.validateCall(ctx, metadata); apiErr != nil {
 		return ChannelLeaveResponse{}, apiErr
 	}
+	operation, apiErr := channelLeaveOperation(metadata)
+	if apiErr != nil {
+		return ChannelLeaveResponse{}, apiErr
+	}
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
+	if replay, found, err := manager.store.ReadChannelLeaveOperation(ctx, operation); err != nil {
+		return ChannelLeaveResponse{}, channelLeaveOperationAPIError(err)
+	} else if found {
+		if err := manager.reconcileChannelLeaveOperation(ctx, replay.ChannelID()); err != nil {
+			return ChannelLeaveResponse{}, channelAPIError(err)
+		}
+		return manager.channelLeaveOperationResponse(ctx, replay.ChannelID())
+	}
 	authority, channel, apiErr := manager.selectChannel(ctx, request.Channel)
 	if apiErr != nil {
 		return ChannelLeaveResponse{}, apiErr
 	}
 	if channel.Channel().OwnerPeerID() != authority.LocalPeerID() {
-		return manager.beginNonOwnerChannelLeave(ctx, authority.LocalPeerID(), channel)
+		return manager.beginNonOwnerChannelLeave(ctx, authority.LocalPeerID(), channel, operation)
+	}
+	if channel.Channel().Status() == model.ChannelClosed {
+		return manager.channelLeaveOperationResponse(ctx, channel.Channel().ID())
 	}
 	updated, err := manager.commitTerminalMember(ctx, authority.LocalPeerID(), channel,
-		authority.LocalPeerID(), model.MemberLeft)
+		authority.LocalPeerID(), model.MemberLeft, &operation)
 	if err != nil {
 		return ChannelLeaveResponse{}, channelAPIError(err)
 	}
-	view, err := manager.readChannelView(ctx, updated.ID())
-	if err != nil {
-		return ChannelLeaveResponse{}, channelAPIError(err)
-	}
-	return ChannelLeaveResponse{SchemaVersion: SchemaVersion,
-		Status: "left", Channel: view}, nil
+	return manager.channelLeaveOperationResponse(ctx, updated.ID())
 }
 
 func (manager *ChannelManager) beginNonOwnerChannelLeave(ctx context.Context, local model.PeerID,
-	durable store.ChannelControlChannel,
+	durable store.ChannelControlChannel, operation store.ChannelLeaveOperation,
 ) (ChannelLeaveResponse, *APIError) {
 	channel := durable.Channel()
 	request, err := manager.newChannelLeaveRequest(ctx, local, durable)
@@ -80,24 +90,63 @@ func (manager *ChannelManager) beginNonOwnerChannelLeave(ctx context.Context, lo
 		return ChannelLeaveResponse{}, channelAPIError(err)
 	}
 	result, err := manager.store.BeginChannelLeave(ctx, store.BeginChannelLeaveSpec{
-		ChannelID: channel.ID(), Request: request})
+		ChannelID: channel.ID(), Request: request, Operation: operation, At: manager.clock.Now()})
 	if err != nil {
 		return ChannelLeaveResponse{}, channelAPIError(err)
 	}
-	mesh, err := manager.store.ReadChannelMeshAuthority(ctx)
-	if err != nil {
+	if err := manager.reconcileChannelLeaveOperation(ctx, channel.ID()); err != nil {
 		return ChannelLeaveResponse{}, channelAPIError(err)
 	}
-	if err := manager.runtime.Reconcile(mesh); err != nil {
-		return ChannelLeaveResponse{}, channelAPIError(err)
-	}
-	manager.triggerMemberReconcile()
 	view, err := manager.readChannelView(ctx, result.Channel.ID())
 	if err != nil {
 		return ChannelLeaveResponse{}, channelAPIError(err)
 	}
 	return ChannelLeaveResponse{SchemaVersion: SchemaVersion,
 		Status: "leaving", Channel: view}, nil
+}
+
+func (manager *ChannelManager) channelLeaveOperationResponse(ctx context.Context,
+	channelID model.ChannelID,
+) (ChannelLeaveResponse, *APIError) {
+	view, err := manager.readChannelView(ctx, channelID)
+	if err != nil {
+		return ChannelLeaveResponse{}, channelAPIError(err)
+	}
+	status := ""
+	switch model.ChannelStatus(view.Membership) {
+	case model.ChannelLeaving:
+		status = "leaving"
+	case model.ChannelLeft, model.ChannelClosed:
+		status = "left"
+	default:
+		return ChannelLeaveResponse{},
+			NewAPIError(CodeInternal, "durable Channel leave result is invalid")
+	}
+	return ChannelLeaveResponse{SchemaVersion: SchemaVersion, Status: status, Channel: view}, nil
+}
+
+func (manager *ChannelManager) reconcileChannelLeaveOperation(ctx context.Context,
+	channelID model.ChannelID,
+) error {
+	mesh, err := manager.store.ReadChannelMeshAuthority(ctx)
+	if err != nil {
+		return err
+	}
+	var owner model.PeerID
+	for _, channel := range mesh.Channels() {
+		if channel.Channel().ID() == channelID {
+			owner = channel.Channel().OwnerPeerID()
+			break
+		}
+	}
+	if owner.IsZero() {
+		return store.ErrChannelLeaveAuthority
+	}
+	if err := manager.runtime.Reconcile(mesh); err != nil {
+		return err
+	}
+	manager.triggerMemberReconcileScope(channelID, owner)
+	return nil
 }
 
 func (manager *ChannelManager) newChannelLeaveRequest(ctx context.Context, local model.PeerID,
@@ -126,7 +175,7 @@ func (manager *ChannelManager) newChannelLeaveRequest(ctx context.Context, local
 
 func (manager *ChannelManager) commitTerminalMember(ctx context.Context, local model.PeerID,
 	durable store.ChannelControlChannel, target model.PeerID,
-	status model.MemberStatus,
+	status model.MemberStatus, leaveOperation *store.ChannelLeaveOperation,
 ) (model.Channel, error) {
 	channel, roster := durable.Channel(), durable.Roster()
 	member, ok := roster.CurrentMember(target)
@@ -155,7 +204,7 @@ func (manager *ChannelManager) commitTerminalMember(ctx context.Context, local m
 	}
 	merged, err := manager.store.MergeChannelRoster(ctx, store.MergeChannelRosterSpec{
 		ChannelID: channel.ID(), AuthenticatedTransportPeerID: local,
-		Records: []model.Member{terminal}, At: at})
+		Records: []model.Member{terminal}, LeaveOperation: leaveOperation, At: at})
 	if err != nil || merged.Status != store.ChannelRosterApplied {
 		if err == nil {
 			err = store.ErrChannelRosterConflict
@@ -170,7 +219,7 @@ func (manager *ChannelManager) commitTerminalMember(ctx context.Context, local m
 		return model.Channel{}, err
 	}
 	manager.markTopicJoined(ctx, merged.Channel)
-	manager.triggerMemberReconcile()
+	manager.triggerMemberReconcileScope(channel.ID(), target)
 	return merged.Channel, nil
 }
 

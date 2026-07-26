@@ -8,6 +8,7 @@ import (
 
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/peer"
+	"github.com/mnemon-dev/mnemon/harness/internal/store"
 	"github.com/mnemon-dev/mnemon/harness/internal/testkit"
 )
 
@@ -40,6 +41,65 @@ func TestChannelMemberReconcilerSettlesDurableLeaveInExistingSerialWorker(t *tes
 		snapshot.MaximumInFlight != 1 || snapshot.InFlight != 0 {
 		t.Fatalf("leave cycle = start %d wire %d settle %d snapshot %#v",
 			starts, leaves, settlements, snapshot)
+	}
+}
+
+func TestChannelMemberReconcilerTerminalizesPermanentAndExhaustedLeaveAttempts(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name         string
+		attempts     uint64
+		clientError  error
+		wantStarts   int
+		wantRequests int
+		wantAttempts uint64
+		wantFailure  store.ChannelLeaveFailureCode
+	}{
+		{name: "permanent response", clientError: peer.ErrChannelMemberClientResponse,
+			wantStarts: 1, wantRequests: 1, wantAttempts: 1,
+			wantFailure: store.ChannelLeaveFailurePermanent},
+		{name: "fifth transient response", attempts: store.ChannelLeaveMaximumAttempts - 1,
+			clientError: peer.ErrChannelMemberClientTransport,
+			wantStarts:  1, wantRequests: 1, wantAttempts: store.ChannelLeaveMaximumAttempts,
+			wantFailure: store.ChannelLeaveFailureAttemptsExhausted},
+		{name: "exhausted after crash", attempts: store.ChannelLeaveMaximumAttempts,
+			wantAttempts: store.ChannelLeaveMaximumAttempts,
+			wantFailure:  store.ChannelLeaveFailureAttemptsExhausted},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			target, _ := newChannelMemberLeaveTarget(t, "member-reconciler-leave-"+test.name)
+			target.attempts = test.attempts
+			backend := &fakeChannelMemberBackend{leaveTarget: target, hasLeave: true}
+			client := &fakeChannelMemberClient{leaveError: test.clientError}
+			clock := &mutableChannelMemberClock{at: target.nextAttemptAt}
+			worker, err := newChannelMemberReconciler(backend, client, clock, time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := worker.runCycle(context.Background(), false); err != nil {
+				t.Fatal(err)
+			}
+			backend.mu.Lock()
+			starts, failures := backend.leaveStarts, backend.leaveFails
+			failedAttempts, failure := backend.leaveFailedAttempts, backend.leaveFailure
+			backend.mu.Unlock()
+			client.mu.Lock()
+			requests := client.leaves
+			client.mu.Unlock()
+			if starts != test.wantStarts || requests != test.wantRequests || failures != 1 ||
+				failedAttempts != test.wantAttempts || failure != test.wantFailure {
+				t.Fatalf("terminal leave = start %d request %d fail %d attempt %d code %q",
+					starts, requests, failures, failedAttempts, failure)
+			}
+			snapshot := worker.Snapshot()
+			if snapshot.PermanentFailures != 1 || snapshot.RetryableFailures != 0 ||
+				snapshot.LastFailure != string(test.wantFailure) {
+				t.Fatalf("terminal leave snapshot = %#v", snapshot)
+			}
+		})
 	}
 }
 

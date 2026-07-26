@@ -40,7 +40,12 @@ func TestDurableChannelMemberReconcileBackendTranslatesExactFences(t *testing.T)
 		t.Fatal(err)
 	}
 	leave, receipt := newChannelMemberLeaveTarget(t, "member-reconciler-backend-leave")
+	leave.retryGeneration = 3
 	if err := backend.startLeave(context.Background(), leave, at, at.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.failLeave(context.Background(), leave, 1, at.Add(time.Second),
+		store.ChannelLeaveFailurePermanent, at); err != nil {
 		t.Fatal(err)
 	}
 	if err := backend.settleLeave(context.Background(), leave, receipt, at); err != nil {
@@ -55,6 +60,10 @@ func TestDurableChannelMemberReconcileBackendTranslatesExactFences(t *testing.T)
 		st.reach.ExpectedRosterHead != target.roster.Head() ||
 		st.reach.OriginEpoch != target.remoteMember.OriginEpoch() ||
 		st.start.RequestID != leave.request.RequestID() ||
+		st.start.ExpectedGeneration != leave.retryGeneration ||
+		st.failure.RequestID != leave.request.RequestID() ||
+		st.failure.ExpectedGeneration != leave.retryGeneration ||
+		st.failure.Failure != store.ChannelLeaveFailurePermanent ||
 		controller.settled != leave.request.RequestID() || controller.receipt.IsZero() {
 		t.Fatalf("translated controls = controller %#v Store %#v %#v %#v",
 			controller.hello, st.reserve, st.confirm, st.reach)
@@ -88,6 +97,7 @@ type recordingChannelMemberStore struct {
 	reach    store.SetPeerReachabilitySpec
 	leaves   []store.ChannelLeaveTarget
 	start    store.StartChannelLeaveAttemptSpec
+	failure  store.FailChannelLeaveAttemptSpec
 }
 
 func (st *recordingChannelMemberStore) ReadDueChannelLeaveTargets(context.Context,
@@ -100,6 +110,13 @@ func (st *recordingChannelMemberStore) StartChannelLeaveAttempt(_ context.Contex
 	spec store.StartChannelLeaveAttemptSpec,
 ) error {
 	st.start = spec
+	return nil
+}
+
+func (st *recordingChannelMemberStore) FailChannelLeaveAttempt(_ context.Context,
+	spec store.FailChannelLeaveAttemptSpec,
+) error {
+	st.failure = spec
 	return nil
 }
 

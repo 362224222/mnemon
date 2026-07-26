@@ -30,6 +30,7 @@ type MergeChannelRosterSpec struct {
 	ChannelID                    model.ChannelID
 	AuthenticatedTransportPeerID model.PeerID
 	Records                      []model.Member
+	LeaveOperation               *ChannelLeaveOperation
 	At                           time.Time
 }
 

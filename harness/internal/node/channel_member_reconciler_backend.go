@@ -22,6 +22,7 @@ type ChannelMemberReconcilerStore interface {
 	ReadChannelMemberReadinessAuthority(context.Context) (store.ChannelMemberReadinessAuthority, error)
 	ReadDueChannelLeaveTargets(context.Context, time.Time) ([]store.ChannelLeaveTarget, error)
 	StartChannelLeaveAttempt(context.Context, store.StartChannelLeaveAttemptSpec) error
+	FailChannelLeaveAttempt(context.Context, store.FailChannelLeaveAttemptSpec) error
 	ReserveOutboundChannelBaseline(context.Context, store.ReserveOutboundChannelBaselineSpec) (store.ReserveOutboundChannelBaselineResult, error)
 	ConfirmOutboundChannelBaseline(context.Context, store.ConfirmOutboundChannelBaselineSpec) (store.ConfirmOutboundChannelBaselineResult, error)
 	SetPeerReachability(context.Context, store.SetPeerReachabilitySpec) (store.SetPeerReachabilityResult, error)
@@ -70,18 +71,21 @@ type channelMemberTargetKey struct {
 }
 
 type channelMemberLeaveTarget struct {
-	channel       model.Channel
-	roster        model.VerifiedRoster
-	request       model.SignedChannelLeaveRequest
-	owner         model.Member
-	attempts      uint64
-	nextAttemptAt time.Time
+	channel         model.Channel
+	roster          model.VerifiedRoster
+	request         model.SignedChannelLeaveRequest
+	owner           model.Member
+	attempts        uint64
+	retryGeneration uint64
+	nextAttemptAt   time.Time
 }
 
 type channelMemberReconcileBackend interface {
 	targets(context.Context) ([]channelMemberTarget, error)
 	leaveTargets(context.Context, time.Time) ([]channelMemberLeaveTarget, error)
 	startLeave(context.Context, channelMemberLeaveTarget, time.Time, time.Time) error
+	failLeave(context.Context, channelMemberLeaveTarget, uint64, time.Time,
+		store.ChannelLeaveFailureCode, time.Time) error
 	settleLeave(context.Context, channelMemberLeaveTarget,
 		model.SignedChannelLeaveReceipt, time.Time) error
 	merge(context.Context, channelMemberTarget, []model.Member, model.RecordHead, time.Time) error
@@ -144,7 +148,8 @@ func (backend durableChannelMemberReconcileBackend) leaveTargets(ctx context.Con
 	for index, target := range durable {
 		result[index] = channelMemberLeaveTarget{channel: target.Channel(), roster: target.Roster(),
 			request: target.Request(), owner: target.Owner(), attempts: target.Attempts(),
-			nextAttemptAt: target.NextAttemptAt()}
+			retryGeneration: target.RetryGeneration(),
+			nextAttemptAt:   target.NextAttemptAt()}
 	}
 	return result, nil
 }
@@ -153,8 +158,19 @@ func (backend durableChannelMemberReconcileBackend) startLeave(ctx context.Conte
 	target channelMemberLeaveTarget, attemptedAt, retryAt time.Time,
 ) error {
 	return backend.store.StartChannelLeaveAttempt(ctx, store.StartChannelLeaveAttemptSpec{
-		RequestID: target.request.RequestID(), ExpectedAttempts: target.attempts,
+		RequestID: target.request.RequestID(), ExpectedGeneration: target.retryGeneration,
+		ExpectedAttempts:      target.attempts,
 		ExpectedNextAttemptAt: target.nextAttemptAt, AttemptedAt: attemptedAt, RetryAt: retryAt})
+}
+
+func (backend durableChannelMemberReconcileBackend) failLeave(ctx context.Context,
+	target channelMemberLeaveTarget, attempts uint64, nextAttemptAt time.Time,
+	failure store.ChannelLeaveFailureCode, at time.Time,
+) error {
+	return backend.store.FailChannelLeaveAttempt(ctx, store.FailChannelLeaveAttemptSpec{
+		RequestID: target.request.RequestID(), ExpectedGeneration: target.retryGeneration,
+		ExpectedAttempts:      attempts,
+		ExpectedNextAttemptAt: nextAttemptAt, Failure: failure, FailedAt: at})
 }
 
 func (backend durableChannelMemberReconcileBackend) settleLeave(ctx context.Context,

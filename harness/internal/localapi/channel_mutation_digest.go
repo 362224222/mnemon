@@ -5,6 +5,7 @@ import "github.com/mnemon-dev/mnemon/harness/internal/model"
 const (
 	channelCreateMutationKind = "create"
 	channelInviteMutationKind = "invite"
+	channelLeaveMutationKind  = "leave"
 )
 
 // ChannelCreateRequestDigest binds the typed canonical body to its closed
@@ -18,6 +19,12 @@ func ChannelCreateRequestDigest(request ChannelCreateRequest) (model.Digest, *AP
 // typed Channel invite request.
 func ChannelInviteRequestDigest(request ChannelInviteRequest) (model.Digest, *APIError) {
 	return channelMutationRequestDigest(channelInviteMutationKind, request)
+}
+
+// ChannelLeaveRequestDigest binds a leave or explicit leave-recovery request
+// to its typed route before the caller allocates a stable operation key.
+func ChannelLeaveRequestDigest(request ChannelLeaveRequest) (model.Digest, *APIError) {
+	return channelMutationRequestDigest(channelLeaveMutationKind, request)
 }
 
 func channelMutationRequestDigest(kind string, request any) (model.Digest, *APIError) {

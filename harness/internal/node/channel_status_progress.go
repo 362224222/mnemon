@@ -34,7 +34,12 @@ func projectStatusChannel(local model.PeerID, durable store.ChannelObservationCh
 	topic := projectStatusChannelTopic(local, durable, sessionReady)
 	commit, publication := progress.Commit(), progress.Publication()
 	cursor, inbox := progress.Cursor(), progress.Inbox()
-	artifact, runtime := progress.Artifact(), progress.Runtime()
+	artifact, runtime, leave := progress.Artifact(), progress.Runtime(), progress.Leave()
+	leaveStatus := StatusChannelLeave{Status: leave.Status, Attempts: leave.Attempts,
+		Diagnostic: string(leave.Diagnostic)}
+	if leave.Status == "failed" {
+		leaveStatus.Recovery = "channel_leave"
+	}
 	return StatusChannelSnapshot{Alias: channel.LocalAlias(), Membership: string(channel.Status()),
 		RosterRevision: channel.RosterHead().Revision(), Topic: topic,
 		LocalCommit: StatusChannelCommit{Accepted: commit.Accepted},
@@ -58,7 +63,8 @@ func projectStatusChannel(local model.PeerID, durable store.ChannelObservationCh
 			HandlingClaimed: runtime.HandlingClaimed, HandlingCompleted: runtime.HandlingCompleted,
 			HandlingRejected: runtime.HandlingRejected, HandlingDead: runtime.HandlingDead,
 			RunActive: runtime.RunActive, RunCompleted: runtime.RunCompleted,
-			RunRetry: runtime.RunRetry, RunRejected: runtime.RunRejected, RunFailed: runtime.RunFailed}}
+			RunRetry: runtime.RunRetry, RunRejected: runtime.RunRejected, RunFailed: runtime.RunFailed},
+		Leave: leaveStatus}
 }
 
 func projectStatusChannelTopic(local model.PeerID, durable store.ChannelObservationChannel,

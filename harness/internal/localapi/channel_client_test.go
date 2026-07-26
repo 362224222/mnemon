@@ -85,4 +85,19 @@ func TestChannelClientSendsVerifiedJournalKeyAndRejectsChangedRequestLocally(t *
 		createJournal.OperationKeyHash() == inviteJournal.OperationKeyHash() {
 		t.Fatalf("invite transport = calls %d paths %v keys %v", calls, paths, keys)
 	}
+
+	leave := ChannelLeaveRequest{Channel: "alpha"}
+	leaveDigest, _ := ChannelLeaveRequestDigest(leave)
+	leaveJournal, _, err := journals.FindOrCreate(leaveDigest, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, apiErr := client.LeaveChannel(context.Background(), leave, leaveJournal); apiErr == nil ||
+		apiErr.Code != CodeActionNotAllowed {
+		t.Fatalf("captured leave error = %#v", apiErr)
+	}
+	if calls != 3 || paths[2] != RouteChannelLeave ||
+		keys[2] != leaveJournal.OperationKeyHeader() {
+		t.Fatalf("leave transport = calls %d paths %v keys %v", calls, paths, keys)
+	}
 }

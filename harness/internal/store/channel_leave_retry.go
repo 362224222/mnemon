@@ -9,13 +9,26 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 )
 
+type ChannelLeaveFailureCode string
+
+const (
+	ChannelLeaveMaximumAttempts                                  = uint64(5)
+	ChannelLeaveFailurePermanent         ChannelLeaveFailureCode = "permanent_failure"
+	ChannelLeaveFailureAttemptsExhausted ChannelLeaveFailureCode = "attempts_exhausted"
+)
+
+func (code ChannelLeaveFailureCode) Valid() bool {
+	return code == ChannelLeaveFailurePermanent || code == ChannelLeaveFailureAttemptsExhausted
+}
+
 type ChannelLeaveTarget struct {
-	channel       model.Channel
-	roster        model.VerifiedRoster
-	request       model.SignedChannelLeaveRequest
-	owner         model.Member
-	attempts      uint64
-	nextAttemptAt time.Time
+	channel         model.Channel
+	roster          model.VerifiedRoster
+	request         model.SignedChannelLeaveRequest
+	owner           model.Member
+	attempts        uint64
+	retryGeneration uint64
+	nextAttemptAt   time.Time
 }
 
 func (target ChannelLeaveTarget) Channel() model.Channel                   { return target.channel }
@@ -23,6 +36,7 @@ func (target ChannelLeaveTarget) Roster() model.VerifiedRoster             { ret
 func (target ChannelLeaveTarget) Request() model.SignedChannelLeaveRequest { return target.request }
 func (target ChannelLeaveTarget) Owner() model.Member                      { return target.owner }
 func (target ChannelLeaveTarget) Attempts() uint64                         { return target.attempts }
+func (target ChannelLeaveTarget) RetryGeneration() uint64                  { return target.retryGeneration }
 func (target ChannelLeaveTarget) NextAttemptAt() time.Time                 { return target.nextAttemptAt }
 
 // ReadDueChannelLeaveTargets returns at most one open request per local
@@ -112,25 +126,28 @@ func readDueChannelLeaveTarget(ctx context.Context, tx *sql.Tx, localPeerID mode
 	}
 	return ChannelLeaveTarget{channel: authority.channel, roster: authority.roster,
 		request: request.request, owner: owner, attempts: request.attempts,
-		nextAttemptAt: request.nextAttemptAt}, nil
+		retryGeneration: request.retryGeneration,
+		nextAttemptAt:   request.nextAttemptAt}, nil
 }
 
 type StartChannelLeaveAttemptSpec struct {
 	RequestID             model.ChannelLeaveRequestID
+	ExpectedGeneration    uint64
 	ExpectedAttempts      uint64
 	ExpectedNextAttemptAt time.Time
 	AttemptedAt           time.Time
 	RetryAt               time.Time
 }
 
-// StartChannelLeaveAttempt advances the durable retry fence before network
-// I/O. The existing serial member reconciler is the sole caller; the CAS still
-// rejects stale in-process work and survives process loss.
+// StartChannelLeaveAttempt advances the durable attempt inside one exact retry
+// generation before network I/O. The serial member reconciler is the sole
+// caller; the CAS still rejects stale in-process work and survives process loss.
 func (s *Store) StartChannelLeaveAttempt(ctx context.Context,
 	spec StartChannelLeaveAttemptSpec,
 ) error {
 	if s == nil || s.db == nil || ctx == nil || spec.RequestID.IsZero() ||
-		spec.ExpectedAttempts >= model.MaxSQLiteInteger {
+		spec.ExpectedGeneration > model.MaxSQLiteInteger ||
+		spec.ExpectedAttempts >= ChannelLeaveMaximumAttempts {
 		return ErrChannelLeaveInput
 	}
 	expectedNext, err := canonicalStoreTime(spec.ExpectedNextAttemptAt)
@@ -147,9 +164,55 @@ func (s *Store) StartChannelLeaveAttempt(ctx context.Context,
 	}
 	result, err := s.db.ExecContext(ctx, `UPDATE channel_leave_requests SET status='sent',
 		attempts=attempts+1,next_attempt_at=?,updated_at=? WHERE request_id=?
-		AND status IN ('queued','sent') AND attempts=? AND next_attempt_at=? AND updated_at<=?`,
+		AND status IN ('queued','sent') AND retry_generation=? AND attempts=?
+		AND next_attempt_at=? AND updated_at<=?`,
 		storeTime(retryAt), storeTime(attemptedAt), spec.RequestID.String(),
-		spec.ExpectedAttempts, storeTime(expectedNext), storeTime(attemptedAt))
+		spec.ExpectedGeneration, spec.ExpectedAttempts, storeTime(expectedNext),
+		storeTime(attemptedAt))
+	if err != nil {
+		return mapChannelLeaveError(err)
+	}
+	if changed, changedErr := result.RowsAffected(); changedErr != nil || changed != 1 {
+		return ErrChannelLeaveConflict
+	}
+	return nil
+}
+
+type FailChannelLeaveAttemptSpec struct {
+	RequestID             model.ChannelLeaveRequestID
+	ExpectedGeneration    uint64
+	ExpectedAttempts      uint64
+	ExpectedNextAttemptAt time.Time
+	Failure               ChannelLeaveFailureCode
+	FailedAt              time.Time
+}
+
+// FailChannelLeaveAttempt terminalizes exactly the started generation and
+// attempt named by its retry timestamp. Only closed, non-sensitive failure
+// codes cross the persistence and public diagnostic boundary.
+func (s *Store) FailChannelLeaveAttempt(ctx context.Context,
+	spec FailChannelLeaveAttemptSpec,
+) error {
+	if s == nil || s.db == nil || ctx == nil || spec.RequestID.IsZero() ||
+		spec.ExpectedGeneration > model.MaxSQLiteInteger ||
+		spec.ExpectedAttempts == 0 || spec.ExpectedAttempts > ChannelLeaveMaximumAttempts ||
+		!spec.Failure.Valid() {
+		return ErrChannelLeaveInput
+	}
+	expectedNext, err := canonicalStoreTime(spec.ExpectedNextAttemptAt)
+	if err != nil {
+		return ErrChannelLeaveInput
+	}
+	failedAt, err := canonicalStoreTime(spec.FailedAt)
+	if err != nil {
+		return ErrChannelLeaveInput
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE channel_leave_requests
+		SET status='failed',failure_code=?,updated_at=? WHERE request_id=? AND status='sent'
+		AND retry_generation=? AND attempts=? AND next_attempt_at=? AND updated_at<=?`,
+		string(spec.Failure), storeTime(failedAt), spec.RequestID.String(),
+		spec.ExpectedGeneration, spec.ExpectedAttempts, storeTime(expectedNext),
+		storeTime(failedAt))
 	if err != nil {
 		return mapChannelLeaveError(err)
 	}

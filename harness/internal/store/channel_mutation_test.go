@@ -115,6 +115,17 @@ func TestChannelCreateOperationIsAtomicConcurrentRestartableAndSecretFree(t *tes
 	if _, _, err := st.ReadChannelMutation(ctx, mismatch); !errors.Is(err, ErrChannelMutationMismatch) {
 		t.Fatalf("same key with changed digest error = %v", err)
 	}
+	leaveReuse := ChannelLeaveOperation{OperationKeyHash: operation.OperationKeyHash,
+		RequestDigest: model.Sum([]byte("cross-route-leave-request"))}
+	if _, _, err := st.ReadChannelLeaveOperation(ctx, leaveReuse); !errors.Is(err, ErrChannelLeaveOperationMismatch) {
+		t.Fatalf("create key reused for leave error = %v", err)
+	}
+	if _, err := st.db.Exec(`INSERT INTO channel_leave_operations(
+		operation_key_hash,request_digest,channel_id,request_id,retry_generation,committed_at)
+		VALUES(?,?,?,NULL,NULL,?)`, operation.OperationKeyHash.Bytes(),
+		leaveReuse.RequestDigest.Bytes(), first.result.Channel.ID().String(), storeTime(at)); err == nil {
+		t.Fatal("schema allowed create operation key reuse for leave")
+	}
 	winnerToken := first.token
 	if first.result.GrantID != first.token.Payload().GrantID() {
 		winnerToken = second.token
@@ -139,6 +150,21 @@ func TestChannelCreateOperationIsAtomicConcurrentRestartableAndSecretFree(t *tes
 		replay.GrantID() != first.result.GrantID ||
 		replay.TokenPayloadDigest() != winnerToken.Payload().Digest() {
 		t.Fatalf("restart replay = (%#v, %v, %v)", replay, found, err)
+	}
+	if _, err := restarted.db.Exec(`DROP TRIGGER channel_leave_operations_key_scope_insert`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := restarted.db.Exec(`INSERT INTO channel_leave_operations(
+		operation_key_hash,request_digest,channel_id,request_id,retry_generation,committed_at)
+		VALUES(?,?,?,NULL,NULL,?)`, operation.OperationKeyHash.Bytes(),
+		leaveReuse.RequestDigest.Bytes(), first.result.Channel.ID().String(), storeTime(at)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := restarted.ReadChannelMutation(ctx, operation); !errors.Is(err, ErrChannelMutationMismatch) {
+		t.Fatalf("dual operation authority mutation read error = %v", err)
+	}
+	if _, _, err := restarted.ReadChannelLeaveOperation(ctx, leaveReuse); !errors.Is(err, ErrChannelLeaveOperationMismatch) {
+		t.Fatalf("dual operation authority leave read error = %v", err)
 	}
 }
 
