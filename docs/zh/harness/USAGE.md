@@ -59,7 +59,7 @@ go build -o mnemon-harness ./harness/cmd/mnemon-harness
 
 ## 4. 验证声明
 
-仓库维护者可以验证 harness loop、host 和 binding manifest：
+仓库维护者可以验证规范的 managed Host 资产和 Teamwork action 声明：
 
 ```sh
 make harness-validate

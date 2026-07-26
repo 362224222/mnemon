@@ -25,9 +25,9 @@ make harness-verify
 
 Harness changes follow the repository
 [Go Engineering Standard](../docs/development/go-engineering-standard.md).
-`make harness-validate` currently checks test pairing and managed assets; it is
-the focused asset/layout gate. `make harness-quality` applies the tracked R5
-quality ratchet, while `make harness-verify` composes the full local Harness
-build, layout, quality, vet, and unit-test gate.
+`make harness-validate` checks canonical managed assets and Teamwork action
+declarations. `make harness-quality` applies the tracked R5 quality ratchet,
+while `make harness-verify` composes the full local Harness build, declaration,
+quality, vet, and unit-test gate.
 
 The root `mnemon` release path must not import or depend on this directory.

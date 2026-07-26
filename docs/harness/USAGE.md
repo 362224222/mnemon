@@ -80,7 +80,8 @@ Run background sync:
 
 ## 4. Validate Declarations
 
-Repository maintainers can validate harness loop, host, and binding manifests:
+Repository maintainers can validate the canonical managed Host assets and
+Teamwork action declarations:
 
 ```sh
 make harness-validate
