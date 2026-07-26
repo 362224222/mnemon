@@ -47,8 +47,8 @@ func TestSetupHookGateFailsClosedForOutputFailureTimeoutAndPathDrift(t *testing.
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			workspace, _ := setupHookFixture(t, assets.HostClaudeCode, test.script+"\n")
-			gate, err := newSetupHookGate(workspace, assets.HostClaudeCode)
+			workspace, _ := setupHookFixture(t, assets.HostCodex, test.script+"\n")
+			gate, err := newSetupHookGate(workspace, assets.HostCodex)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -145,8 +145,7 @@ func TestSetupHookGateRejectsUnknownHostAndUnsafeHook(t *testing.T) {
 func setupHookFixture(t *testing.T, host assets.Host, body string) (string, string) {
 	t.Helper()
 	workspace := setupGateWorkspace(t)
-	hostRoot := map[assets.Host]string{assets.HostCodex: ".codex", assets.HostClaudeCode: ".claude"}[host]
-	hook := filepath.Join(workspace, hostRoot, "hooks", "mnemon-harness", "hook.sh")
+	hook := filepath.Join(workspace, ".codex", "hooks", "mnemon-harness", "hook.sh")
 	if err := os.MkdirAll(filepath.Dir(hook), 0o700); err != nil {
 		t.Fatal(err)
 	}

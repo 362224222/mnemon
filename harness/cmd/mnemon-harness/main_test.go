@@ -68,11 +68,11 @@ func TestRun(t *testing.T) {
 
 	lowerHelp := strings.ToLower(wantHelp)
 	if !strings.Contains(wantHelp,
-		"mnemon-harness setup [--host auto|codex|claude-code] [--project-root DIR]") {
+		"mnemon-harness setup [--host auto|codex] [--project-root DIR]") {
 		t.Error("ordinary help does not expose the complete setup entrypoint")
 	}
 	if !strings.Contains(wantHelp,
-		"mnemon-harness eject [--host auto|codex|claude-code] [--project-root DIR]") {
+		"mnemon-harness eject [--host auto|codex] [--project-root DIR]") {
 		t.Error("ordinary help does not expose the complete eject entrypoint")
 	}
 	if !strings.Contains(wantHelp, "mnemon-harness status") {

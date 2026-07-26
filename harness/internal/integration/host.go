@@ -33,9 +33,7 @@ type HostObservation struct {
 type hostLookup func(string) (string, error)
 type hostRun func(context.Context, string, ...string) ([]byte, error)
 
-// DetectHost resolves an explicit Host or chooses the first fully verifiable
-// T0 adapter. Auto selection prefers Codex and falls back to Claude Code only
-// when the complete Codex binary/version/app-server preflight is unavailable.
+// DetectHost resolves the explicit Codex Host or its auto alias.
 func DetectHost(ctx context.Context, selection string) (HostObservation, error) {
 	return detectHost(ctx, selection, exec.LookPath, runHostProbe)
 }
@@ -57,26 +55,10 @@ func detectHost(ctx context.Context, selection string, lookup hostLookup,
 		return HostObservation{}, fmt.Errorf("%w: detection dependencies are unavailable", ErrHostUnavailable)
 	}
 	selection = strings.TrimSpace(selection)
-	if selection != "auto" && selection != string(assets.HostCodex) &&
-		selection != string(assets.HostClaudeCode) {
-		return HostObservation{}, fmt.Errorf("%w: Host must be auto, codex or claude-code", ErrHostUnavailable)
+	if selection != "auto" && selection != string(assets.HostCodex) {
+		return HostObservation{}, fmt.Errorf("%w: Host must be auto or codex", ErrHostUnavailable)
 	}
-	if selection != "auto" {
-		return inspectHost(ctx, assets.Host(selection), lookup, run)
-	}
-	var failures []error
-	for _, host := range []assets.Host{assets.HostCodex, assets.HostClaudeCode} {
-		observation, err := inspectHost(ctx, host, lookup, run)
-		if err == nil {
-			return observation, nil
-		}
-		failures = append(failures, err)
-		if ctx.Err() != nil {
-			return HostObservation{}, fmt.Errorf("%w: %v", ErrHostUnavailable, ctx.Err())
-		}
-	}
-	return HostObservation{}, fmt.Errorf("%w: no supported Host passed preflight: %v",
-		ErrHostUnavailable, errors.Join(failures...))
+	return inspectHost(ctx, assets.HostCodex, lookup, run)
 }
 
 func inspectHost(ctx context.Context, host assets.Host, lookup hostLookup,
@@ -85,8 +67,7 @@ func inspectHost(ctx context.Context, host assets.Host, lookup hostLookup,
 	if ctx == nil || lookup == nil || run == nil || !host.Valid() {
 		return HostObservation{}, fmt.Errorf("%w: inspection input is invalid", ErrHostUnavailable)
 	}
-	binary := map[assets.Host]string{assets.HostCodex: "codex", assets.HostClaudeCode: "claude"}[host]
-	path, err := lookup(binary)
+	path, err := lookup("codex")
 	if err != nil {
 		return HostObservation{}, fmt.Errorf("%w: %s binary was not found", ErrHostUnavailable, host)
 	}
@@ -102,14 +83,9 @@ func inspectHost(ctx context.Context, host assets.Host, lookup hostLookup,
 	if err != nil {
 		return HostObservation{}, fmt.Errorf("%w: %s version is invalid", ErrHostUnavailable, host)
 	}
-	helpArgs := []string{"--help"}
-	wantUsage := "Usage: claude"
-	if host == assets.HostCodex {
-		helpArgs, wantUsage = []string{"app-server", "--help"}, "Usage: codex app-server"
-	}
-	help, err := run(ctx, path, helpArgs...)
+	help, err := run(ctx, path, "app-server", "--help")
 	if err != nil || len(help) == 0 || len(help) > hostProbeOutputMax || !utf8.Valid(help) ||
-		!bytes.Contains(help, []byte(wantUsage)) {
+		!bytes.Contains(help, []byte("Usage: codex app-server")) {
 		return HostObservation{}, fmt.Errorf("%w: %s adapter surface did not pass preflight",
 			ErrHostUnavailable, host)
 	}

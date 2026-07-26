@@ -35,14 +35,11 @@ type setupHookGate struct {
 }
 
 func newSetupHookGate(workspace string, host assets.Host) (*setupHookGate, error) {
-	hostRoot := map[assets.Host]string{
-		assets.HostCodex: ".codex", assets.HostClaudeCode: ".claude",
-	}[host]
-	if hostRoot == "" || workspace == "" || !filepath.IsAbs(workspace) ||
+	if host != assets.HostCodex || workspace == "" || !filepath.IsAbs(workspace) ||
 		filepath.Clean(workspace) != workspace {
 		return nil, setupHookError("configure", nil)
 	}
-	hook := filepath.Join(workspace, hostRoot, "hooks", "mnemon-harness", "hook.sh")
+	hook := filepath.Join(workspace, ".codex", "hooks", "mnemon-harness", "hook.sh")
 	identity, err := validateSetupHookPath(hook)
 	if err != nil {
 		return nil, setupHookError("validate projection", nil)

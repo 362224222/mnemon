@@ -38,22 +38,20 @@ type setupDaemonLifecycle interface {
 }
 
 type setupDependencies struct {
-	workingDirectory    func() (string, error)
-	loadBundle          func() (assets.Bundle, error)
-	newCompanion        func(context.Context, string, string) (setupCompanion, error)
-	detectHost          func(context.Context, string) (integration.HostObservation, error)
-	inspectHost         func(context.Context, assets.Host) (integration.HostObservation, error)
-	activationSupported func(integration.HostObservation) bool
-	prepareNode         func(string) (string, error)
-	canInitialize       func(string) (bool, error)
-	acquireLock         func(context.Context, string) (io.Closer, error)
-	newClient           func(string) (setupAuthorityClient, error)
-	installBundle       func(string, assets.Bundle) error
-	installProjection   func(string, string, assets.Host, assets.Bundle) error
-	verifyProjection    func(string, string, assets.Host, assets.Bundle) error
-	verifyActivation    func(context.Context, string, string, integration.HostObservation,
+	workingDirectory  func() (string, error)
+	loadBundle        func() (assets.Bundle, error)
+	newCompanion      func(context.Context, string, string) (setupCompanion, error)
+	detectHost        func(context.Context, string) (integration.HostObservation, error)
+	inspectHost       func(context.Context, assets.Host) (integration.HostObservation, error)
+	prepareNode       func(string) (string, error)
+	canInitialize     func(string) (bool, error)
+	acquireLock       func(context.Context, string) (io.Closer, error)
+	newClient         func(string) (setupAuthorityClient, error)
+	installBundle     func(string, assets.Bundle) error
+	installProjection func(string, string, assets.Host, assets.Bundle) error
+	verifyProjection  func(string, string, assets.Host, assets.Bundle) error
+	verifyActivation  func(context.Context, string, string, integration.HostObservation,
 		assets.Bundle) error
-	verifyAbsent     func(string, string, assets.Host, assets.Bundle) error
 	preflightUpgrade func(string, string, assets.Host, string,
 		assets.Bundle) (integration.HostProjectionUpgradePreflight, error)
 	newPreflight      func(node.DaemonPreflightOptions) (node.DaemonEnsurePreflight, error)
@@ -101,11 +99,8 @@ func productionSetupDependencies() setupDependencies {
 		newCompanion: func(ctx context.Context, workspace, version string) (setupCompanion, error) {
 			return newCompanionRunner(ctx, workspace, version)
 		},
-		detectHost:  integration.DetectHost,
-		inspectHost: integration.InspectHost,
-		activationSupported: func(observation integration.HostObservation) bool {
-			return observation.Host.Valid()
-		},
+		detectHost:    integration.DetectHost,
+		inspectHost:   integration.InspectHost,
 		prepareNode:   node.PrepareNodeState,
 		canInitialize: setupCanInitialize,
 		acquireLock: func(ctx context.Context, nodeState string) (io.Closer, error) {
@@ -126,7 +121,6 @@ func productionSetupDependencies() setupDependencies {
 		},
 		verifyProjection: integration.VerifyHostProjection,
 		verifyActivation: integration.VerifyHostActivation,
-		verifyAbsent:     integration.VerifyHostProjectionAbsent,
 		preflightUpgrade: integration.PreflightHostProjectionUpgrade,
 		newPreflight: func(options node.DaemonPreflightOptions) (node.DaemonEnsurePreflight, error) {
 			return node.NewDaemonPreflight(options)
@@ -170,10 +164,9 @@ func parseSetupRequest(args []string) (setupRequest, *localapi.APIError) {
 			request.projectRoot = args[index]
 		}
 	}
-	if request.host != "auto" && request.host != string(assets.HostCodex) &&
-		request.host != string(assets.HostClaudeCode) {
+	if request.host != "auto" && request.host != string(assets.HostCodex) {
 		return setupRequest{}, setupError(localapi.CodeInvalidArgument,
-			"--host must be auto, codex, or claude-code")
+			"--host must be auto or codex")
 	}
 	return request, nil
 }

@@ -290,22 +290,6 @@ func TestActivateRejectsIdentityCredentialAndHostDrift(t *testing.T) {
 			t.Fatalf("Activate() error = %v", err)
 		}
 	})
-	t.Run("enabled Host switch", func(t *testing.T) {
-		workspace, provisioned, bundle := activeTestProvision(t)
-		first, err := Activate(context.Background(), activeTestOptions(workspace, provisioned, bundle, model.HostCodex))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := integration.InstallHostProjection(workspace, provisioned.NodeState, assets.HostClaudeCode, bundle); err != nil {
-			t.Fatal(err)
-		}
-		options := activeTestOptions(workspace, provisioned, bundle, model.HostClaudeCode)
-		options.Clock = controllerTestClock{first.Profile.UpdatedAt().Add(time.Second)}
-		options.Install = testInstallationVerifier(workspace, provisioned.NodeState, bundle)
-		if _, err := Activate(context.Background(), options); !errors.Is(err, ErrActivate) {
-			t.Fatalf("Activate() Host switch error = %v", err)
-		}
-	})
 }
 
 func activeTestProvision(t *testing.T) (string, ProvisionResult, assets.Bundle) {

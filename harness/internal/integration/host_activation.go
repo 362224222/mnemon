@@ -114,11 +114,11 @@ func VerifyHostActivation(ctx context.Context, workspace, nodeState string,
 	if ctx == nil {
 		return hostActivationUnavailable("validate context", nil)
 	}
+	if observation.Host != assets.HostCodex {
+		return hostActivationUnavailable("unsupported Host", nil)
+	}
 	if err := VerifyHostProjection(workspace, nodeState, observation.Host, bundle); err != nil {
 		return err
-	}
-	if observation.Host != assets.HostCodex {
-		return verifyAlternateHostActivation(ctx, workspace, nodeState, observation, bundle)
 	}
 	executable, err := verifyHostExecutable(observation.Executable)
 	if err != nil || executable != observation.Executable {

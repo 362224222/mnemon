@@ -1,7 +1,7 @@
 # mnemon-harness — Quickstart
 
 Two paths, each from nothing to something running and governed. Commands below
-are the real CLI; substitute your own host (`codex`, `claude-code`) and ports.
+use the Codex-only R5 Core host surface; substitute your own ports.
 
 > Status: experimental. This shows the governed-event loop working end to end;
 > it does not claim production readiness.

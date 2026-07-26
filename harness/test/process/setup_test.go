@@ -847,28 +847,6 @@ func setupProcessFakeCodex(t *testing.T, path string) {
 	}
 }
 
-func setupProcessFakeClaude(t *testing.T, path string) {
-	t.Helper()
-	contents := []byte("#!/bin/sh\nset -eu\n" +
-		"case \"${1:-}\" in\n" +
-		"  --version) printf '%s\\n' 'claude process-test' ;;\n" +
-		"  --help) printf '%s\\n' 'Usage: claude' ;;\n" +
-		"  doctor) printf '%s\\n' 'Claude process-test doctor healthy' ;;\n" +
-		"  -p)\n" +
-		"    session=11111111-1111-4111-8111-111111111111\n" +
-		"    printf '{\"type\":\"system\",\"subtype\":\"init\",\"cwd\":\"%s\",\"session_id\":\"%s\",\"tools\":[],\"mcp_servers\":[],\"claude_code_version\":\"claude process-test\",\"skills\":[\"mnemon-harness\"]}\\n' \"$PWD\" \"$session\"\n" +
-		"    printf '{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"duration_api_ms\":0,\"num_turns\":0,\"result\":\"synthetic\",\"session_id\":\"%s\",\"total_cost_usd\":0,\"usage\":{\"input_tokens\":0,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"output_tokens\":0}}\\n' \"$session\"\n" +
-		"    ;;\n" +
-		"  *) exit 64 ;;\n" +
-		"esac\n")
-	if err := os.WriteFile(path, contents, 0o700); err != nil {
-		t.Fatalf("write fake Claude executable: %v", err)
-	}
-	if err := os.Chmod(path, 0o700); err != nil {
-		t.Fatalf("protect fake Claude executable: %v", err)
-	}
-}
-
 func setupProcessRewriteAppliedProjectionRevision(t *testing.T, ownershipPath,
 	currentRevision, previousRevision string,
 ) {

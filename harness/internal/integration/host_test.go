@@ -15,17 +15,17 @@ func TestDetectHostUsesCompletePreflightAndStableAutoPriority(t *testing.T) {
 	t.Parallel()
 	directory := t.TempDir()
 	codex := hostTestExecutable(t, directory, "codex")
-	claude := hostTestExecutable(t, directory, "claude")
 	lookup := func(name string) (string, error) {
-		return map[string]string{"codex": codex, "claude": claude}[name], nil
+		if name != "codex" {
+			return "", os.ErrNotExist
+		}
+		return codex, nil
 	}
 	run := func(_ context.Context, path string, args ...string) ([]byte, error) {
 		key := filepath.Base(path) + " " + strings.Join(args, " ")
 		return map[string][]byte{
 			"codex --version":         []byte("codex-cli 0.144.4\n"),
 			"codex app-server --help": []byte("Usage: codex app-server [OPTIONS]\n"),
-			"claude --version":        []byte("2.1.202 (Claude Code)\n"),
-			"claude --help":           []byte("Usage: claude [options] [command]\n"),
 		}[key], nil
 	}
 
@@ -34,12 +34,6 @@ func TestDetectHostUsesCompletePreflightAndStableAutoPriority(t *testing.T) {
 		automatic.Version != "codex-cli 0.144.4" {
 		t.Fatalf("auto DetectHost() = (%#v, %v)", automatic, err)
 	}
-	explicit, err := detectHost(context.Background(), "claude-code", lookup, run)
-	if err != nil || explicit.Host != assets.HostClaudeCode || explicit.Executable != claude ||
-		explicit.Version != "2.1.202 (Claude Code)" {
-		t.Fatalf("explicit DetectHost() = (%#v, %v)", explicit, err)
-	}
-
 	fallbackRun := func(ctx context.Context, path string, args ...string) ([]byte, error) {
 		if filepath.Base(path) == "codex" && len(args) == 2 {
 			return []byte("unrelated help\n"), nil
@@ -47,8 +41,8 @@ func TestDetectHostUsesCompletePreflightAndStableAutoPriority(t *testing.T) {
 		return run(ctx, path, args...)
 	}
 	fallback, err := detectHost(context.Background(), "auto", lookup, fallbackRun)
-	if err != nil || fallback.Host != assets.HostClaudeCode {
-		t.Fatalf("fallback DetectHost() = (%#v, %v)", fallback, err)
+	if fallback != (HostObservation{}) || !errors.Is(err, ErrHostUnavailable) {
+		t.Fatalf("broken auto DetectHost() = (%#v, %v)", fallback, err)
 	}
 	if _, err := detectHost(context.Background(), "codex", lookup, fallbackRun); !errors.Is(err, ErrHostUnavailable) {
 		t.Fatalf("explicit broken Codex error = %v", err)
@@ -76,6 +70,7 @@ func TestDetectHostRejectsUnsafeMissingAndMalformedAdapters(t *testing.T) {
 		run       hostRun
 	}{
 		{name: "unknown selection", selection: "other", lookup: func(string) (string, error) { return safe, nil }, run: validRun},
+		{name: "removed Claude selection", selection: "claude-code", lookup: func(string) (string, error) { return safe, nil }, run: validRun},
 		{name: "missing", selection: "codex", lookup: func(string) (string, error) { return "", os.ErrNotExist }, run: validRun},
 		{name: "unsafe executable", selection: "codex", lookup: func(string) (string, error) { return unsafe, nil }, run: validRun},
 		{name: "multiline version", selection: "codex", lookup: func(string) (string, error) { return safe, nil },

@@ -82,14 +82,10 @@ func managedWakeAuthorityMatches(workspace, nodeState string,
 func newManagedProfileWakeAdapter(profile model.Profile,
 	options agent.CodexWakeAdapterOptions,
 ) (agent.WakeWorkerAdapter, error) {
-	switch profile.Runtime() {
-	case model.RuntimeCodexAppServer:
-		return agent.NewCodexWakeAdapter(options)
-	case model.RuntimeClaudeCLI:
-		return agent.NewClaudeWakeAdapter(options)
-	default:
+	if profile.Runtime() != model.RuntimeCodexAppServer {
 		return nil, errors.New("managed Runtime is unsupported")
 	}
+	return agent.NewCodexWakeAdapter(options)
 }
 
 // managedWakeEnvironment is the closed inheritance boundary for managed

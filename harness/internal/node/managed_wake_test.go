@@ -98,31 +98,6 @@ func TestNewManagedWakeAdapterFactoryRejectsInvalidCompositionAndAuthority(t *te
 	}
 }
 
-func TestManagedWakeAdapterFactorySelectsClaudeRuntime(t *testing.T) {
-	t.Parallel()
-	fixture := newDaemonFixture(t, true)
-	profileSpec := fixture.profile.Spec()
-	profileSpec.Host, profileSpec.Runtime = model.HostClaudeCode, model.RuntimeClaudeCLI
-	profile, err := model.NewProfile(profileSpec)
-	if err != nil {
-		t.Fatal(err)
-	}
-	install := &managedRuntimeInstallationFixture{executable: "/usr/local/bin/claude"}
-	factory, err := NewManagedWakeAdapterFactory(fixture.workspace, install)
-	if err != nil {
-		t.Fatal(err)
-	}
-	adapter, err := factory.NewWakeAdapter(context.Background(), WakeAdapterFactoryOptions{
-		Workspace: fixture.workspace, NodeState: fixture.nodeState, Profile: profile,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := adapter.(*agent.ClaudeWakeAdapter); !ok || install.executableCalls != 1 {
-		t.Fatalf("Claude adapter/calls = (%T, %d)", adapter, install.executableCalls)
-	}
-}
-
 func TestManagedWakeAdapterFactoryUsesEachCallerContext(t *testing.T) {
 	t.Parallel()
 	fixture := newDaemonFixture(t, true)

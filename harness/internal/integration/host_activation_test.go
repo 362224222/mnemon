@@ -118,11 +118,8 @@ func TestVerifyHostActivationRequiresOneEnabledTrustedExactHook(t *testing.T) {
 func TestVerifyHostActivationFailsClosedForProtocolAndUnsupportedHost(t *testing.T) {
 	t.Run("unsupported Host", func(t *testing.T) {
 		workspace, nodeState, bundle := newProjectionWorkspace(t)
-		if _, err := InstallHostProjection(workspace, nodeState, assets.HostClaudeCode, bundle); err != nil {
-			t.Fatal(err)
-		}
 		err := VerifyHostActivation(context.Background(), workspace, nodeState,
-			HostObservation{Host: assets.HostClaudeCode}, bundle)
+			HostObservation{Host: assets.Host("unsupported")}, bundle)
 		if !errors.Is(err, ErrHostUnavailable) || errors.Is(err, ErrHostActivationRequired) {
 			t.Fatalf("unsupported VerifyHostActivation() error = %v", err)
 		}

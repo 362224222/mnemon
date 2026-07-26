@@ -7,33 +7,21 @@ import (
 
 type HostKind string
 
-const (
-	HostCodex      HostKind = "codex"
-	HostClaudeCode HostKind = "claude-code"
-)
+const HostCodex HostKind = "codex"
 
-func (h HostKind) Valid() bool { return h == HostCodex || h == HostClaudeCode }
+func (h HostKind) Valid() bool { return h == HostCodex }
 
 type RuntimeKind string
 
-const (
-	RuntimeCodexAppServer RuntimeKind = "codex-app-server"
-	RuntimeClaudeCLI      RuntimeKind = "claude-cli"
-)
+const RuntimeCodexAppServer RuntimeKind = "codex-app-server"
 
-func (r RuntimeKind) Valid() bool {
-	return r == RuntimeCodexAppServer || r == RuntimeClaudeCLI
-}
+func (r RuntimeKind) Valid() bool { return r == RuntimeCodexAppServer }
 
 func RuntimeForHost(host HostKind) (RuntimeKind, bool) {
-	switch host {
-	case HostCodex:
-		return RuntimeCodexAppServer, true
-	case HostClaudeCode:
-		return RuntimeClaudeCLI, true
-	default:
+	if host != HostCodex {
 		return "", false
 	}
+	return RuntimeCodexAppServer, true
 }
 
 type NodeSpec struct {

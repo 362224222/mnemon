@@ -220,7 +220,7 @@ func TestRunInitializeRejectsMalformedAuthorityBeforeProvision(t *testing.T) {
 	}
 	for _, args := range [][]string{
 		{"initialize"},
-		{"initialize", "--project-root", project, "--host", "unknown", "--asset-revision", revision},
+		{"initialize", "--project-root", project, "--host", "claude-code", "--asset-revision", revision},
 		{"initialize", "--project-root", project, "--host", "codex", "--asset-revision", "asset-r5"},
 		{"initialize", "--project-root", project, "--project-root", project, "--host", "codex", "--asset-revision", revision},
 	} {
@@ -243,7 +243,7 @@ func TestRunInitializeReceiptReportsDurableReplayAuthority(t *testing.T) {
 	durable := model.Sum([]byte("durable-initialize-assets")).String()
 	provision := func(context.Context, node.ProvisionOptions) (node.ProvisionResult, error) {
 		return node.ProvisionResult{Profile: commandTestProfile(t, resolved,
-			model.HostClaudeCode, durable, false)}, nil
+			model.HostCodex, durable, false)}, nil
 	}
 	args := []string{"initialize", "--project-root", project, "--host", "codex",
 		"--asset-revision", requested}
@@ -252,7 +252,7 @@ func TestRunInitializeReceiptReportsDurableReplayAuthority(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := `{"asset_revision":"` + durable +
-		`","created":false,"host":"claude-code","schema_version":1,"status":"initialized"}` + "\n"
+		`","created":false,"host":"codex","schema_version":1,"status":"initialized"}` + "\n"
 	if stdout.String() != want {
 		t.Fatalf("replay receipt = %q, want %q", stdout.String(), want)
 	}
@@ -272,7 +272,7 @@ func TestRunActivateCallsTheNodeWriterAndEmitsClosedReceipt(t *testing.T) {
 			activate := func(_ context.Context, options node.ActivateOptions) (node.ActivateResult, error) {
 				received = options
 				return node.ActivateResult{Changed: changed,
-					Profile: commandTestProfile(t, resolved, model.HostClaudeCode, revision, true)}, nil
+					Profile: commandTestProfile(t, resolved, model.HostCodex, revision, true)}, nil
 			}
 			open := func(context.Context, node.DaemonOptions) (daemonRuntime, error) {
 				t.Fatal("activate opened the daemon")
@@ -286,17 +286,17 @@ func TestRunActivateCallsTheNodeWriterAndEmitsClosedReceipt(t *testing.T) {
 			if changed {
 				expected = expected.Add(-time.Second)
 			}
-			args := []string{"activate", "--host", "claude-code", "--asset-revision", revision,
+			args := []string{"activate", "--host", "codex", "--asset-revision", revision,
 				"--project-root", project, "--expected-updated-at", expected.Format(time.RFC3339Nano)}
 			var stdout, stderr bytes.Buffer
 			if err := runWithNode(context.Background(), args, &stdout, &stderr, open, provision, activate, nil); err != nil {
 				t.Fatal(err)
 			}
 			want := `{"asset_revision":"` + revision + `","changed":` + fmt.Sprint(changed) +
-				`,"host":"claude-code","schema_version":1,"status":"active",` +
+				`,"host":"codex","schema_version":1,"status":"active",` +
 				`"updated_at":"2026-07-17T12:00:00Z"}` + "\n"
 			if stdout.String() != want || stderr.Len() != 0 || received.Workspace != resolved ||
-				received.Host != model.HostClaudeCode || received.AssetRevision != revision ||
+				received.Host != model.HostCodex || received.AssetRevision != revision ||
 				!received.ExpectedUpdatedAt.Equal(expected) || received.Clock != nil || received.Install != nil {
 				t.Fatalf("activate = stdout %q stderr %q options %#v", stdout.String(), stderr.String(), received)
 			}
@@ -316,7 +316,7 @@ func TestRunActivateRejectsMalformedAuthorityBeforeActivation(t *testing.T) {
 	for _, args := range [][]string{
 		{"activate"},
 		{"activate", "--expected-updated-at"},
-		{"activate", "--project-root", project, "--host", "unknown", "--asset-revision", revision, "--expected-updated-at", generation},
+		{"activate", "--project-root", project, "--host", "claude-code", "--asset-revision", revision, "--expected-updated-at", generation},
 		{"activate", "--project-root", project, "--host", "codex", "--asset-revision", "asset-r5", "--expected-updated-at", generation},
 		{"activate", "--project-root", project, "--project-root", project, "--host", "codex", "--asset-revision", revision, "--expected-updated-at", generation},
 		{"activate", "--project-root", project, "--host", "codex", "--asset-revision", revision, "--expected-updated-at", generation, "trailing"},
@@ -403,7 +403,7 @@ func TestRunDeactivateRejectsMalformedAuthorityBeforeDeactivation(t *testing.T) 
 	for _, args := range [][]string{
 		{"deactivate"},
 		{"deactivate", "--expected-updated-at"},
-		{"deactivate", "--project-root", project, "--host", "unknown", "--asset-revision", revision, "--expected-updated-at", generation},
+		{"deactivate", "--project-root", project, "--host", "claude-code", "--asset-revision", revision, "--expected-updated-at", generation},
 		{"deactivate", "--project-root", project, "--host", "codex", "--asset-revision", "asset-r5", "--expected-updated-at", generation},
 		{"deactivate", "--project-root", project, "--host", "codex", "--host", "codex", "--asset-revision", revision, "--expected-updated-at", generation},
 		{"deactivate", "--project-root", project, "--host", "codex", "--asset-revision", revision, "--expected-updated-at", generation, "trailing"},
@@ -434,7 +434,7 @@ func TestRunInspectCallsExistingOnlyReaderAndEmitsCanonicalReceipt(t *testing.T)
 		if ctx == nil || workspace != resolved {
 			t.Fatalf("inspect input = (%v, %q)", ctx, workspace)
 		}
-		return localapi.AuthoritySnapshot{Host: model.HostClaudeCode, Runtime: model.RuntimeClaudeCLI,
+		return localapi.AuthoritySnapshot{Host: model.HostCodex, Runtime: model.RuntimeCodexAppServer,
 			Enabled: false, AssetRevision: revision, UpdatedAt: at, PeerID: peerID,
 			ActiveAssetRevision: revision}, nil
 	}
@@ -444,8 +444,8 @@ func TestRunInspectCallsExistingOnlyReaderAndEmitsCanonicalReceipt(t *testing.T)
 		t.Fatal(err)
 	}
 	want := `{"active_asset_revision":"` + revision + `","asset_revision":"` + revision +
-		`","enabled":false,"host":"claude-code","peer_id":"peer-command-inspect",` +
-		`"runtime":"claude-cli","schema_version":1,"updated_at":"2026-07-17T06:07:08.000000009Z"}` + "\n"
+		`","enabled":false,"host":"codex","peer_id":"peer-command-inspect",` +
+		`"runtime":"codex-app-server","schema_version":1,"updated_at":"2026-07-17T06:07:08.000000009Z"}` + "\n"
 	if stdout.String() != want || stderr.Len() != 0 || called != 1 {
 		t.Fatalf("inspect = stdout %q stderr %q called=%d", stdout.String(), stderr.String(), called)
 	}

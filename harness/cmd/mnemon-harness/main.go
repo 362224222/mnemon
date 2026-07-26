@@ -16,7 +16,7 @@ var version = "dev"
 const helpText = `mnemon-harness is the project-local client for mnemond-managed Teamwork.
 
 Usage:
-  mnemon-harness setup [--host auto|codex|claude-code] [--project-root DIR]
+  mnemon-harness setup [--host auto|codex] [--project-root DIR]
   mnemon-harness channel create [NAME]
   mnemon-harness channel join [--file INVITE_FILE]
   mnemon-harness channel status [CHANNEL]
@@ -26,7 +26,7 @@ Usage:
   mnemon-harness channel leave [CHANNEL]
   mnemon-harness status
   mnemon-harness doctor
-  mnemon-harness eject [--host auto|codex|claude-code] [--project-root DIR]
+  mnemon-harness eject [--host auto|codex] [--project-root DIR]
   mnemon-harness --help
   mnemon-harness --version
 

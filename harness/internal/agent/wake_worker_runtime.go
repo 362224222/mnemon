@@ -31,12 +31,8 @@ func (worker *WakeWorker) runtimeExecutionContext(parent context.Context,
 }
 
 func (worker *WakeWorker) adapterName() (string, bool) {
-	switch worker.profile.Runtime() {
-	case model.RuntimeCodexAppServer:
-		return codexAdapterName, true
-	case model.RuntimeClaudeCLI:
-		return claudeAdapterName, true
-	default:
+	if worker.profile.Runtime() != model.RuntimeCodexAppServer {
 		return "", false
 	}
+	return codexAdapterName, true
 }

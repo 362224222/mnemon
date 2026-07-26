@@ -65,9 +65,6 @@ func (app *setupApp) executeLocked(ctx context.Context, request setupRequest,
 		if err != nil || !selected.Host.Valid() {
 			return setupReceipt{}, setupUnavailableError("no requested Host adapter passed preflight")
 		}
-		if !app.deps.activationSupported(selected) {
-			return setupReceipt{}, setupUnsupportedActivationError()
-		}
 		if _, err := companion.Initialize(ctx, model.HostKind(selected.Host), revision); err != nil {
 			return setupReceipt{}, setupAuthError("managed Node initialization failed")
 		}
@@ -99,25 +96,8 @@ func (app *setupApp) executeLocked(ctx context.Context, request setupRequest,
 	if err != nil {
 		return setupReceipt{}, setupUnavailableError("selected Host adapter failed preflight")
 	}
-	if !app.deps.activationSupported(hostObservation) {
-		return setupReceipt{}, setupUnsupportedActivationError()
-	}
 	if err := app.deps.installBundle(nodeState, bundle); err != nil {
 		return setupReceipt{}, setupAssetsError()
-	}
-	if !authority.Enabled {
-		otherHost, ok := otherSetupHost(targetHost)
-		if !ok {
-			return setupReceipt{}, setupAuthError("managed Host selection is invalid")
-		}
-		if err := app.deps.verifyAbsent(workspace, nodeState, otherHost, bundle); err != nil {
-			if targetHost != durableHost {
-				return setupReceipt{}, setupError(localapi.CodeProfileHostMismatch,
-					"previous Host projection is not fully ejected; complete eject before switching")
-			}
-			return setupReceipt{}, setupError(localapi.CodeProfileHostMismatch,
-				"another managed Host projection remains; select that Host explicitly to resume switching")
-		}
 	}
 	if authority.Enabled && authority.AssetRevision != revision {
 		return app.upgradeActive(ctx, workspace, nodeState, revision, bundle, preflight, targetHost,
@@ -175,17 +155,6 @@ func (app *setupApp) executeLocked(ctx context.Context, request setupRequest,
 	return setupReceipt{AssetRevision: revision, Host: string(targetHost), PeerID: authority.PeerID,
 		Replayed: authority.Enabled, SchemaVersion: localapi.SchemaVersion, Started: ensured.Started,
 		Status: "ready"}, nil
-}
-
-func otherSetupHost(host assets.Host) (assets.Host, bool) {
-	switch host {
-	case assets.HostCodex:
-		return assets.HostClaudeCode, true
-	case assets.HostClaudeCode:
-		return assets.HostCodex, true
-	default:
-		return "", false
-	}
 }
 
 func (app *setupApp) upgradeActive(ctx context.Context, workspace, nodeState,
@@ -343,12 +312,12 @@ func parseSetupAuthorityTime(value string) (time.Time, error) {
 func validSetupDependencies(dependencies setupDependencies) bool {
 	return dependencies.workingDirectory != nil && dependencies.loadBundle != nil &&
 		dependencies.newCompanion != nil && dependencies.detectHost != nil &&
-		dependencies.inspectHost != nil && dependencies.activationSupported != nil &&
+		dependencies.inspectHost != nil &&
 		dependencies.prepareNode != nil &&
 		dependencies.canInitialize != nil && dependencies.acquireLock != nil &&
 		dependencies.newClient != nil && dependencies.installBundle != nil &&
 		dependencies.installProjection != nil && dependencies.verifyProjection != nil &&
-		dependencies.verifyActivation != nil && dependencies.verifyAbsent != nil &&
+		dependencies.verifyActivation != nil &&
 		dependencies.preflightUpgrade != nil && dependencies.acquireLifecycle != nil &&
 		dependencies.newPreflight != nil && dependencies.currentExecutable != nil &&
 		dependencies.newLauncher != nil && dependencies.newHookGate != nil &&
@@ -423,11 +392,6 @@ func setupHostActivationError(err error) *localapi.APIError {
 		return setupAssetsError()
 	}
 	return setupUnavailableError("selected Host activation could not be observed")
-}
-
-func setupUnsupportedActivationError() *localapi.APIError {
-	return setupError(localapi.CodeHostActivationRequired,
-		"selected Host has no verifiable managed Hook activation surface")
 }
 
 func setupUnavailableError(message string) *localapi.APIError {

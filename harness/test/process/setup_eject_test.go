@@ -25,18 +25,16 @@ type setupProcessPaths struct {
 	nodeState         string
 }
 
-func TestPublicEjectPreservesNodeAndSwitchesToObservableClaudeHost(t *testing.T) {
-	fixture := newSetupHostSwitchFixture(t)
+func TestPublicEjectPreservesNodeAndSupportsCodexReactivation(t *testing.T) {
+	fixture := newSetupEjectFixture(t)
 	setupReceipt := fixture.installCodex(t)
 	snapshots := fixture.snapshotNodeFiles(t)
 	fixture.ejectCodex(t, setupReceipt, snapshots)
 	fixture.assertEjectReplay(t, setupReceipt)
-	fixture.switchToClaude(t, setupReceipt)
-	fixture.ejectClaude(t, setupReceipt)
 	fixture.reactivateCodex(t, setupReceipt, snapshots)
 }
 
-type setupHostSwitchFixture struct {
+type setupEjectFixture struct {
 	root              string
 	bin               string
 	workspace         string
@@ -49,7 +47,7 @@ type setupHostSwitchFixture struct {
 	bundle            assets.Bundle
 }
 
-type setupHostSwitchSnapshots struct {
+type setupEjectSnapshots struct {
 	databaseInfo   os.FileInfo
 	identityInfo   os.FileInfo
 	identityRaw    []byte
@@ -57,7 +55,7 @@ type setupHostSwitchSnapshots struct {
 	credentialRaw  []byte
 }
 
-func newSetupHostSwitchFixture(t *testing.T) *setupHostSwitchFixture {
+func newSetupEjectFixture(t *testing.T) *setupEjectFixture {
 	t.Helper()
 	paths := newSetupProcessPaths(t)
 	cleanup := &setupProcessCleanup{root: paths.root, nodeState: paths.nodeState}
@@ -65,7 +63,6 @@ func newSetupHostSwitchFixture(t *testing.T) *setupHostSwitchFixture {
 	setupProcessPrepareDirectories(t, paths, "eject")
 	setupProcessBuildHarnessCommands(t, paths)
 	setupProcessFakeCodex(t, filepath.Join(paths.bin, "codex"))
-	setupProcessFakeClaude(t, filepath.Join(paths.bin, "claude"))
 	environment := setupProcessEnvironment(paths.bin, paths.workspace, paths.root)
 	cleanup.offline = setupProcessOfflineProbe{executable: paths.mnemondExecutable,
 		workspace: paths.workspace, environment: append([]string(nil), environment...)}
@@ -73,7 +70,7 @@ func newSetupHostSwitchFixture(t *testing.T) *setupHostSwitchFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &setupHostSwitchFixture{root: paths.root, bin: paths.bin, workspace: paths.workspace,
+	return &setupEjectFixture{root: paths.root, bin: paths.bin, workspace: paths.workspace,
 		harnessExecutable: paths.harnessExecutable, mnemondExecutable: paths.mnemondExecutable,
 		nodeState: paths.nodeState, environment: environment, cleanup: cleanup, bundle: bundle}
 }
@@ -109,7 +106,7 @@ func setupProcessBuildHarnessCommands(t *testing.T, paths setupProcessPaths) {
 		"./harness/cmd/mnemond")
 }
 
-func (fixture *setupHostSwitchFixture) installCodex(t *testing.T) setupProcessReceipt {
+func (fixture *setupEjectFixture) installCodex(t *testing.T) setupProcessReceipt {
 	t.Helper()
 	setupCtx, cancelSetup := context.WithTimeout(context.Background(), 20*time.Second)
 	fixture.cleanup.autoMayRun = true
@@ -135,19 +132,19 @@ func (fixture *setupHostSwitchFixture) installCodex(t *testing.T) setupProcessRe
 	return setupReceipt
 }
 
-func (fixture *setupHostSwitchFixture) snapshotNodeFiles(t *testing.T) setupHostSwitchSnapshots {
+func (fixture *setupEjectFixture) snapshotNodeFiles(t *testing.T) setupEjectSnapshots {
 	t.Helper()
 	databaseInfo, _ := setupProcessSnapshotFile(t, filepath.Join(fixture.nodeState, "node.db"), 0)
 	identityInfo, identityRaw := setupProcessSnapshotFile(t,
 		filepath.Join(fixture.nodeState, "identity.key"), 4096)
 	credentialInfo, credentialRaw := setupProcessSnapshotFile(t,
 		fixture.credentialPath(), 4096)
-	return setupHostSwitchSnapshots{databaseInfo: databaseInfo, identityInfo: identityInfo,
+	return setupEjectSnapshots{databaseInfo: databaseInfo, identityInfo: identityInfo,
 		identityRaw: identityRaw, credentialInfo: credentialInfo, credentialRaw: credentialRaw}
 }
 
-func (fixture *setupHostSwitchFixture) ejectCodex(t *testing.T,
-	setupReceipt setupProcessReceipt, snapshots setupHostSwitchSnapshots,
+func (fixture *setupEjectFixture) ejectCodex(t *testing.T,
+	setupReceipt setupProcessReceipt, snapshots setupEjectSnapshots,
 ) {
 	t.Helper()
 	ejectCtx, cancelEject := context.WithTimeout(context.Background(), 20*time.Second)
@@ -180,7 +177,7 @@ func (fixture *setupHostSwitchFixture) ejectCodex(t *testing.T,
 	fixture.assertPreservedNodeFiles(t, snapshots)
 }
 
-func (fixture *setupHostSwitchFixture) assertEjectReplay(t *testing.T,
+func (fixture *setupEjectFixture) assertEjectReplay(t *testing.T,
 	setupReceipt setupProcessReceipt,
 ) {
 	t.Helper()
@@ -195,76 +192,8 @@ func (fixture *setupHostSwitchFixture) assertEjectReplay(t *testing.T,
 	}
 }
 
-func (fixture *setupHostSwitchFixture) switchToClaude(t *testing.T,
-	setupReceipt setupProcessReceipt,
-) setupProcessReceipt {
-	t.Helper()
-	switchCtx, cancelSwitch := context.WithTimeout(context.Background(), 20*time.Second)
-	fixture.cleanup.autoMayRun = true
-	switched := setupProcessRunHarness(switchCtx, fixture.harnessExecutable, fixture.workspace,
-		fixture.environment, "setup", "--host", "claude-code", "--project-root",
-		fixture.workspace)
-	cancelSwitch()
-	switchReceipt, err := setupProcessParseReceipt(switched)
-	if err != nil || switchReceipt.Host != "claude-code" || switchReceipt.Replayed ||
-		!switchReceipt.Started || switchReceipt.PeerID != setupReceipt.PeerID ||
-		switchReceipt.AssetRevision != setupReceipt.AssetRevision {
-		t.Fatalf("observable Claude Host switch = (%#v, %v)", switchReceipt, err)
-	}
-	switchReadyCtx, cancelSwitchReady := context.WithTimeout(context.Background(), 5*time.Second)
-	if err := setupProcessWaitReady(switchReadyCtx, fixture.client,
-		switchReceipt.AssetRevision); err != nil {
-		cancelSwitchReady()
-		t.Fatalf("Claude daemon did not become ready: %v", err)
-	}
-	cancelSwitchReady()
-	if err := integration.VerifyHostProjection(fixture.workspace, fixture.nodeState,
-		assets.HostClaudeCode, fixture.bundle); err != nil {
-		t.Fatalf("Claude switch did not install its projection: %v", err)
-	}
-	if err := integration.VerifyHostProjectionAbsent(fixture.workspace, fixture.nodeState,
-		assets.HostCodex, fixture.bundle); err != nil {
-		t.Fatalf("Claude switch recreated the Codex projection: %v", err)
-	}
-	setupProcessAssertCodexProjectionLayout(t, fixture.workspace, false)
-	authority, authorityErr := fixture.client.ReadAuthority(context.Background())
-	if authorityErr != nil || !authority.Enabled || authority.Host != string(model.HostClaudeCode) ||
-		authority.PeerID != setupReceipt.PeerID || authority.Runtime != string(model.RuntimeClaudeCLI) {
-		t.Fatalf("Claude durable authority = (%#v, %#v)", authority, authorityErr)
-	}
-	return switchReceipt
-}
-
-func (fixture *setupHostSwitchFixture) ejectClaude(t *testing.T,
-	setupReceipt setupProcessReceipt,
-) {
-	t.Helper()
-	claudeEjectCtx, cancelClaudeEject := context.WithTimeout(context.Background(), 20*time.Second)
-	claudeEjected := setupProcessRunEject(claudeEjectCtx, fixture.harnessExecutable,
-		fixture.workspace, fixture.environment)
-	cancelClaudeEject()
-	claudeEjectReceipt, err := setupProcessParseEjectReceipt(claudeEjected)
-	if err != nil || claudeEjectReceipt.Host != "claude-code" ||
-		claudeEjectReceipt.PeerID != setupReceipt.PeerID || claudeEjectReceipt.Replayed ||
-		claudeEjectReceipt.RemovedFiles != 3 || !claudeEjectReceipt.RegistrationRemoved {
-		t.Fatalf("Claude eject receipt = (%#v, %v)", claudeEjectReceipt, err)
-	}
-	claudeOfflineCtx, cancelClaudeOffline := context.WithTimeout(context.Background(), 5*time.Second)
-	if err := setupProcessWaitOffline(claudeOfflineCtx, fixture.client, fixture.nodeState,
-		fixture.cleanup.offline); err != nil {
-		cancelClaudeOffline()
-		t.Fatalf("Claude eject did not leave the Node offline: %v", err)
-	}
-	cancelClaudeOffline()
-	fixture.cleanup.autoMayRun = false
-	if err := integration.VerifyHostProjectionAbsent(fixture.workspace, fixture.nodeState,
-		assets.HostClaudeCode, fixture.bundle); err != nil {
-		t.Fatalf("Claude projection remains after eject: %v", err)
-	}
-}
-
-func (fixture *setupHostSwitchFixture) reactivateCodex(t *testing.T,
-	setupReceipt setupProcessReceipt, snapshots setupHostSwitchSnapshots,
+func (fixture *setupEjectFixture) reactivateCodex(t *testing.T,
+	setupReceipt setupProcessReceipt, snapshots setupEjectSnapshots,
 ) {
 	t.Helper()
 	reactivateCtx, cancelReactivate := context.WithTimeout(context.Background(), 20*time.Second)
@@ -294,13 +223,13 @@ func (fixture *setupHostSwitchFixture) reactivateCodex(t *testing.T,
 	fixture.assertPreservedNodeFiles(t, snapshots)
 }
 
-func (fixture *setupHostSwitchFixture) credentialPath() string {
+func (fixture *setupEjectFixture) credentialPath() string {
 	return filepath.Join(fixture.nodeState, "profiles",
 		model.TeamworkProfileID().String()+".token")
 }
 
-func (fixture *setupHostSwitchFixture) assertPreservedNodeFiles(t *testing.T,
-	snapshots setupHostSwitchSnapshots,
+func (fixture *setupEjectFixture) assertPreservedNodeFiles(t *testing.T,
+	snapshots setupEjectSnapshots,
 ) {
 	t.Helper()
 	setupProcessAssertPreservedFile(t, filepath.Join(fixture.nodeState, "node.db"),

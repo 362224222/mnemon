@@ -12,7 +12,7 @@ import (
 )
 
 func TestVerifyHostProjectionAbsentAcceptsUnrelatedConfigurationReadOnly(t *testing.T) {
-	for _, host := range []assets.Host{assets.HostCodex, assets.HostClaudeCode} {
+	for _, host := range []assets.Host{assets.HostCodex} {
 		host := host
 		t.Run(string(host), func(t *testing.T) {
 			workspace, nodeState, bundle := newProjectionWorkspace(t)
@@ -221,15 +221,15 @@ func TestEjectHostProjectionRemovesOnlyManagedAssetsAndReplays(t *testing.T) {
 
 func TestEjectHostProjectionConvergesMissingManagedEntries(t *testing.T) {
 	workspace, nodeState, bundle := newProjectionWorkspace(t)
-	installed, err := InstallHostProjection(workspace, nodeState, assets.HostClaudeCode, bundle)
+	installed, err := InstallHostProjection(workspace, nodeState, assets.HostCodex, bundle)
 	if err != nil {
 		t.Fatal(err)
 	}
-	missing := filepath.Join(workspace, ".claude", "skills", "mnemon-harness", "SKILL.md")
+	missing := filepath.Join(workspace, ".agents", "skills", "mnemon-harness", "SKILL.md")
 	if err := os.Remove(missing); err != nil {
 		t.Fatal(err)
 	}
-	receipt, err := EjectHostProjection(workspace, nodeState, assets.HostClaudeCode, bundle)
+	receipt, err := EjectHostProjection(workspace, nodeState, assets.HostCodex, bundle)
 	if err != nil || receipt.RemovedFiles != 2 || !receipt.RegistrationRemoved {
 		t.Fatalf("partial EjectHostProjection() = (%#v, %v)", receipt, err)
 	}

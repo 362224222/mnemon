@@ -33,10 +33,7 @@ CREATE TABLE profiles (
   enabled            INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0,1)),
   created_at         TEXT NOT NULL,
   updated_at         TEXT NOT NULL,
-  CHECK (
-    (host = 'codex' AND runtime_kind = 'codex-app-server')
-    OR (host = 'claude-code' AND runtime_kind = 'claude-cli')
-  )
+  CHECK (host = 'codex' AND runtime_kind = 'codex-app-server')
 );
 
 CREATE UNIQUE INDEX profiles_one_enabled_teamwork_idx

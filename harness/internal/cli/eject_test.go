@@ -68,15 +68,14 @@ func TestEjectDisabledAbsentProjectionReplaysWithoutActivationOrHostBinary(t *te
 	}
 }
 
-func TestEjectRejectsAnotherHostBeforeLifecycleOrProjectionMutation(t *testing.T) {
+func TestEjectRejectsUnsupportedHostBeforeLifecycleOrProjectionMutation(t *testing.T) {
 	fixture := newEjectFixture(t, true)
 	exit, stdout, stderr := fixture.run("--host", "claude-code")
-	if exit != 4 || stdout != "" || stderr !=
-		"profile_host_mismatch: managed Profile is bound to another Host\n" {
-		t.Fatalf("Host mismatch = exit %d stdout %q stderr %q", exit, stdout, stderr)
+	if exit != 2 || stdout != "" || stderr !=
+		"invalid_argument: --host must be auto or codex\n" {
+		t.Fatalf("unsupported Host = exit %d stdout %q stderr %q", exit, stdout, stderr)
 	}
-	fixture.wantOrder(t, "cwd", "load-bundle", "new-companion", "lock", "new-client",
-		"read-authority", "unlock")
+	fixture.wantOrder(t)
 }
 
 func TestEjectFailureBoundariesKeepAuthorityAndAssetsFailClosed(t *testing.T) {
@@ -142,7 +141,7 @@ func TestEjectFailureBoundariesKeepAuthorityAndAssetsFailClosed(t *testing.T) {
 }
 
 func TestEjectParsingAndClosedDependencyFailures(t *testing.T) {
-	for _, args := range [][]string{{"--host"}, {"--host", "other"}, {"--project-root"},
+	for _, args := range [][]string{{"--host"}, {"--host", "other"}, {"--host", "claude-code"}, {"--project-root"},
 		{"--host", "auto", "--host", "codex"}, {"--json"}} {
 		if _, apiErr := parseEjectRequest(args); apiErr == nil ||
 			apiErr.Code != localapi.CodeInvalidArgument || apiErr.ExitStatus() != 2 {

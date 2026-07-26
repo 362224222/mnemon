@@ -43,7 +43,7 @@ func TestSetupFreshRunsTheLockedStateMachineAndEmitsCanonicalReceipt(t *testing.
 	fixture.wantOrder(t,
 		"cwd", "load-bundle", "new-preflight", "new-companion", "bootstrap", "lock", "new-client",
 		"can-initialize", "detect:auto", "initialize:codex", "inspect",
-		"inspect-host:codex", "install-bundle", "verify-absent:claude-code",
+		"inspect-host:codex", "install-bundle",
 		"install-projection:codex", "verify-projection:codex", "verify-activation:codex",
 		"new-client", "new-gate", "activate:codex",
 		"ensure", "unlock")
@@ -105,28 +105,17 @@ func TestSetupEightConcurrentFreshCallersInitializeExactlyOnceUnderSetupLock(t *
 
 func TestSetupExistingAuthorityFreezesAutoAndFailsBeforeActiveMutations(t *testing.T) {
 	t.Run("auto freezes durable Host and exact replay never activates", func(t *testing.T) {
-		fixture := newSetupFixture(t, assets.HostClaudeCode, true)
+		fixture := newSetupFixture(t, assets.HostCodex, true)
 		exit, stdout, stderr := fixture.run()
-		if exit != 0 || stderr != "" || !strings.Contains(stdout, `"host":"claude-code"`) ||
+		if exit != 0 || stderr != "" || !strings.Contains(stdout, `"host":"codex"`) ||
 			!strings.Contains(stdout, `"replayed":true`) {
 			t.Fatalf("replay = exit %d stdout %q stderr %q", exit, stdout, stderr)
 		}
 		fixture.wantOrder(t,
 			"cwd", "load-bundle", "new-preflight", "new-companion", "bootstrap", "lock",
-			"new-client", "read-authority", "inspect-host:claude-code", "install-bundle",
-			"install-projection:claude-code", "verify-projection:claude-code",
-			"verify-activation:claude-code", "new-gate", "ensure", "unlock")
-	})
-
-	t.Run("explicit different Host is a domain conflict", func(t *testing.T) {
-		fixture := newSetupFixture(t, assets.HostCodex, true)
-		exit, stdout, stderr := fixture.run("--host", "claude-code")
-		if exit != 4 || stdout != "" || stderr !=
-			"profile_host_mismatch: managed Profile is bound to another Host; eject is required before switching\n" {
-			t.Fatalf("conflict = exit %d stdout %q stderr %q", exit, stdout, stderr)
-		}
-		fixture.wantOrder(t, "cwd", "load-bundle", "new-preflight", "new-companion", "bootstrap",
-			"lock", "new-client", "read-authority", "unlock")
+			"new-client", "read-authority", "inspect-host:codex", "install-bundle",
+			"install-projection:codex", "verify-projection:codex",
+			"verify-activation:codex", "new-gate", "ensure", "unlock")
 	})
 
 	t.Run("different active revision performs one forward lifecycle upgrade", func(t *testing.T) {
@@ -264,40 +253,12 @@ func TestSetupRepairsDisabledAuthorityAndPartialInitialization(t *testing.T) {
 		}
 		fixture.wantOrder(t, "cwd", "load-bundle", "new-preflight", "new-companion", "bootstrap",
 			"lock", "new-client", "read-authority", "inspect-host:codex", "install-bundle",
-			"verify-absent:claude-code", "install-projection:codex",
+			"install-projection:codex",
 			"verify-projection:codex", "verify-activation:codex", "new-gate",
 			"activate:codex", "ensure", "unlock")
 		if fixture.called("preflight-upgrade:codex") || fixture.called("acquire-lifecycle") {
 			t.Fatalf("disabled recovery entered active upgrade lifecycle: %v", fixture.order)
 		}
-	})
-
-	t.Run("disabled Profile switches Host only after exact eject evidence", func(t *testing.T) {
-		fixture := newSetupFixture(t, assets.HostCodex, false)
-		exit, stdout, stderr := fixture.run("--host", "claude-code")
-		if exit != 0 || stderr != "" || !strings.Contains(stdout, `"host":"claude-code"`) ||
-			!strings.Contains(stdout, `"replayed":false`) {
-			t.Fatalf("disabled switch = exit %d stdout %q stderr %q", exit, stdout, stderr)
-		}
-		fixture.wantOrder(t, "cwd", "load-bundle", "new-preflight", "new-companion", "bootstrap", "lock",
-			"new-client", "read-authority", "inspect-host:claude-code", "install-bundle",
-			"verify-absent:codex", "install-projection:claude-code",
-			"verify-projection:claude-code", "verify-activation:claude-code", "new-gate",
-			"activate:claude-code",
-			"ensure", "unlock")
-	})
-
-	t.Run("disabled Profile cannot switch while previous Host residue remains", func(t *testing.T) {
-		fixture := newSetupFixture(t, assets.HostCodex, false)
-		fixture.fail["verify-absent"] = errors.New("injected previous Host residue")
-		exit, stdout, stderr := fixture.run("--host", "claude-code")
-		if exit != 4 || stdout != "" || stderr !=
-			"profile_host_mismatch: previous Host projection is not fully ejected; complete eject before switching\n" {
-			t.Fatalf("residual switch = exit %d stdout %q stderr %q", exit, stdout, stderr)
-		}
-		fixture.wantOrder(t, "cwd", "load-bundle", "new-preflight", "new-companion", "bootstrap", "lock",
-			"new-client", "read-authority", "inspect-host:claude-code", "install-bundle",
-			"verify-absent:codex", "unlock")
 	})
 
 	t.Run("safe partial Node initializes only after taking setup lock", func(t *testing.T) {
@@ -311,7 +272,7 @@ func TestSetupRepairsDisabledAuthorityAndPartialInitialization(t *testing.T) {
 		fixture.wantOrder(t,
 			"cwd", "load-bundle", "new-preflight", "new-companion", "bootstrap", "lock",
 			"new-client", "can-initialize", "detect:auto", "initialize:codex", "inspect",
-			"inspect-host:codex", "install-bundle", "verify-absent:claude-code",
+			"inspect-host:codex", "install-bundle",
 			"install-projection:codex", "verify-projection:codex", "verify-activation:codex",
 			"new-client", "new-gate",
 			"activate:codex", "ensure", "unlock")
@@ -331,44 +292,6 @@ func TestSetupRepairsDisabledAuthorityAndPartialInitialization(t *testing.T) {
 	})
 }
 
-func TestSetupHostSwitchCrashNeverFallsBackToASecondProjection(t *testing.T) {
-	for _, failure := range []string{
-		"install-projection-after-commit", "verify-projection",
-		"verify-activation", "new-gate", "activate",
-	} {
-		t.Run(failure, func(t *testing.T) {
-			fixture := newSetupFixture(t, assets.HostCodex, false)
-			fixture.fail[failure] = errors.New("injected Host-switch crash boundary")
-			exit, stdout, stderr := fixture.run("--host", "claude-code")
-			if exit == 0 || stdout != "" || stderr == "" ||
-				!fixture.projectionPresent[assets.HostClaudeCode] || fixture.authority.Enabled ||
-				fixture.authority.Host != string(assets.HostCodex) {
-				t.Fatalf("failed Host switch = exit %d stdout %q stderr %q authority=%#v projections=%v order=%v",
-					exit, stdout, stderr, fixture.authority, fixture.projectionPresent, fixture.order)
-			}
-
-			delete(fixture.fail, failure)
-			fixture.resetInvocation()
-			exit, stdout, stderr = fixture.run()
-			if exit != 4 || stdout != "" || stderr !=
-				"profile_host_mismatch: another managed Host projection remains; select that Host explicitly to resume switching\n" ||
-				fixture.projectionPresent[assets.HostCodex] || fixture.authority.Enabled {
-				t.Fatalf("auto fallback = exit %d stdout %q stderr %q authority=%#v projections=%v order=%v",
-					exit, stdout, stderr, fixture.authority, fixture.projectionPresent, fixture.order)
-			}
-
-			fixture.resetInvocation()
-			exit, stdout, stderr = fixture.run("--host", "claude-code")
-			if exit != 0 || stderr != "" || !strings.Contains(stdout, `"host":"claude-code"`) ||
-				!fixture.authority.Enabled || fixture.authority.Host != string(assets.HostClaudeCode) ||
-				fixture.projectionPresent[assets.HostCodex] {
-				t.Fatalf("explicit Host recovery = exit %d stdout %q stderr %q authority=%#v projections=%v order=%v",
-					exit, stdout, stderr, fixture.authority, fixture.projectionPresent, fixture.order)
-			}
-		})
-	}
-}
-
 func TestSetupStaticAndHostGatesFailBeforeActivation(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -381,8 +304,6 @@ func TestSetupStaticAndHostGatesFailBeforeActivation(t *testing.T) {
 		{name: "projection verification", failure: "verify-projection", exit: 3,
 			lastStage: "verify-projection:codex"},
 		{name: "Host", failure: "inspect-host", exit: 5,
-			lastStage: "inspect-host:codex"},
-		{name: "unsupported activation surface", failure: "activation-unsupported", exit: 4,
 			lastStage: "inspect-host:codex"},
 		{name: "Host activation observation", failure: "verify-activation", exit: 5,
 			lastStage: "verify-activation:codex"},
@@ -401,35 +322,12 @@ func TestSetupStaticAndHostGatesFailBeforeActivation(t *testing.T) {
 				fixture.called("deactivate:codex") {
 				t.Fatalf("post-failure authority mutation: %v", fixture.order)
 			}
-			if test.failure == "activation-unsupported" &&
-				(fixture.called("install-bundle") || fixture.called("install-projection:codex")) {
-				t.Fatalf("unsupported Host changed managed assets: %v", fixture.order)
-			}
 			if len(fixture.order) < 2 || fixture.order[len(fixture.order)-2] != test.lastStage ||
 				fixture.order[len(fixture.order)-1] != "unlock" {
 				t.Fatalf("failure order = %v", fixture.order)
 			}
 		})
 	}
-
-	t.Run("fresh unsupported Host stops before initialization", func(t *testing.T) {
-		fixture := newSetupFixture(t, assets.HostCodex, false)
-		fixture.clientFailures = 1
-		fixture.fail["activation-unsupported"] = errors.New("unsupported")
-		exit, stdout, stderr := fixture.run()
-		if exit != 4 || stdout != "" || stderr !=
-			"host_activation_required: selected Host has no verifiable managed Hook activation surface\n" {
-			t.Fatalf("fresh unsupported setup = exit %d stdout %q stderr %q", exit, stdout, stderr)
-		}
-		for _, forbidden := range []string{"initialize:codex", "install-bundle",
-			"install-projection:codex", "activate:codex", "ensure"} {
-			if fixture.called(forbidden) {
-				t.Fatalf("fresh unsupported setup reached %s: %v", forbidden, fixture.order)
-			}
-		}
-		fixture.wantOrder(t, "cwd", "load-bundle", "new-preflight", "new-companion", "bootstrap", "lock",
-			"new-client", "can-initialize", "detect:auto", "unlock")
-	})
 }
 
 func TestSetupRequiresObservedHostAssetsBeforeAnyActivation(t *testing.T) {
@@ -619,8 +517,7 @@ func concurrentFreshSetupDependencies(workspace string, bundle assets.Bundle,
 		inspectHost: func(context.Context, assets.Host) (integration.HostObservation, error) {
 			return integration.HostObservation{Host: assets.HostCodex}, nil
 		},
-		activationSupported: func(integration.HostObservation) bool { return true },
-		prepareNode:         node.PrepareNodeState,
+		prepareNode: node.PrepareNodeState,
 		canInitialize: func(string) (bool, error) {
 			state.mu.Lock()
 			defer state.mu.Unlock()
@@ -645,7 +542,6 @@ func concurrentFreshSetupDependencies(workspace string, bundle assets.Bundle,
 		) error {
 			return nil
 		},
-		verifyAbsent: func(string, string, assets.Host, assets.Bundle) error { return nil },
 		preflightUpgrade: func(string, string, assets.Host, string,
 			assets.Bundle,
 		) (integration.HostProjectionUpgradePreflight, error) {
@@ -748,12 +644,6 @@ func (fixture *setupFixture) app() *setupApp {
 			fixture.record("inspect-host:" + string(host))
 			return integration.HostObservation{Host: host}, fixture.fail["inspect-host"]
 		},
-		activationSupported: func(observation integration.HostObservation) bool {
-			if !observation.Host.Valid() {
-				t.Fatalf("activation support Host = %q", observation.Host)
-			}
-			return fixture.fail["activation-unsupported"] == nil
-		},
 		prepareNode: func(workspace string) (string, error) {
 			fixture.record("bootstrap")
 			if workspace != fixture.workspace {
@@ -815,16 +705,6 @@ func (fixture *setupFixture) app() *setupApp {
 				t.Fatalf("Host activation authority = (%v, %#v)", ctx, observation)
 			}
 			return fixture.fail["verify-activation"]
-		},
-		verifyAbsent: func(workspace, nodeState string, host assets.Host,
-			bundle assets.Bundle,
-		) error {
-			fixture.record("verify-absent:" + string(host))
-			fixture.wantWorkspace(t, workspace, nodeState)
-			if fixture.projectionPresent[host] {
-				return errors.New("managed Host projection remains")
-			}
-			return fixture.fail["verify-absent"]
 		},
 		preflightUpgrade: func(workspace, nodeState string, host assets.Host,
 			previousRevision string, bundle assets.Bundle,

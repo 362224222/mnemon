@@ -15,7 +15,7 @@ func TestHostRuntimeMappingIsClosed(t *testing.T) {
 		ok      bool
 	}{
 		{HostCodex, RuntimeCodexAppServer, true},
-		{HostClaudeCode, RuntimeClaudeCLI, true},
+		{HostKind("claude-code"), "", false},
 		{HostKind("multica"), "", false},
 	}
 	for _, test := range tests {
@@ -60,7 +60,7 @@ func TestProfileInvariants(t *testing.T) {
 		wantErr error
 	}{
 		{name: "relative workspace", mutate: func(spec *ProfileSpec) { spec.WorkspaceRoot = "project" }, wantErr: ErrInvalid},
-		{name: "runtime fallback", mutate: func(spec *ProfileSpec) { spec.Runtime = RuntimeClaudeCLI }, wantErr: ErrInvariant},
+		{name: "runtime fallback", mutate: func(spec *ProfileSpec) { spec.Runtime = RuntimeKind("claude-cli") }, wantErr: ErrInvariant},
 		{name: "wrong profile", mutate: func(spec *ProfileSpec) { spec.ID, _ = ParseProfileID("other") }, wantErr: ErrInvariant},
 	}
 	for _, test := range tests {

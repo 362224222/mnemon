@@ -601,12 +601,7 @@ func managedCompletionReceipt(adapter, status, threadID, turnID string, wake boo
 }
 
 func validManagedRuntimeAdapter(adapter string) bool {
-	switch adapter {
-	case codexAdapterName, claudeAdapterName:
-		return true
-	default:
-		return false
-	}
+	return adapter == codexAdapterName
 }
 
 func validateCodexCompletionAuthority(status, threadID, turnID string, wake bool,

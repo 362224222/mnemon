@@ -492,7 +492,7 @@ func TestCompanionRunnerReportsDurableInitializeReplayForSetupToDecide(t *testin
 	t.Setenv("MNEMON_COMPANION_TEST_MODE", "initialize-replay")
 	receipt, err := runner.Initialize(context.Background(), model.HostCodex, fixture.revision)
 	otherRevision := model.Sum([]byte("durable-replay-assets")).String()
-	if err != nil || receipt.Created || receipt.Host != string(model.HostClaudeCode) ||
+	if err != nil || receipt.Created || receipt.Host != string(model.HostCodex) ||
 		receipt.AssetRevision != otherRevision {
 		t.Fatalf("Initialize() replay = (%#v, %v)", receipt, err)
 	}
@@ -572,8 +572,8 @@ case "$1" in
       initialize-unknown) printf '{"asset_revision":"@REVISION@","created":true,"host":"codex","raw_secret":"raw-secret","schema_version":1,"status":"initialized"}\n';;
       initialize-noncanonical) printf '{ "asset_revision":"@REVISION@","created":true,"host":"codex","schema_version":1,"status":"initialized"}\n';;
       initialize-multiline) printf '{"asset_revision":"@REVISION@","created":true,"host":"codex","schema_version":1,"status":"initialized"}\n{}\n';;
-      initialize-replay) printf '{"asset_revision":"@REPLAY_REVISION@","created":false,"host":"claude-code","schema_version":1,"status":"initialized"}\n';;
-      initialize-created-drift) printf '{"asset_revision":"@REPLAY_REVISION@","created":true,"host":"claude-code","schema_version":1,"status":"initialized"}\n';;
+      initialize-replay) printf '{"asset_revision":"@REPLAY_REVISION@","created":false,"host":"codex","schema_version":1,"status":"initialized"}\n';;
+      initialize-created-drift) printf '{"asset_revision":"@REPLAY_REVISION@","created":true,"host":"codex","schema_version":1,"status":"initialized"}\n';;
       *) printf '{"asset_revision":"@REVISION@","created":true,"host":"codex","schema_version":1,"status":"initialized"}\n';;
     esac
     ;;

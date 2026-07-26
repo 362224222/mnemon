@@ -31,7 +31,7 @@ func TestSetupRejectsActionPreflightBeforeCompanionOrNodeMutation(t *testing.T) 
 
 func TestSetupParsingWorkspaceAndStableExitClasses(t *testing.T) {
 	for _, args := range [][]string{
-		{"--host"}, {"--host", "other"}, {"--project-root"},
+		{"--host"}, {"--host", "other"}, {"--host", "claude-code"}, {"--project-root"},
 		{"--host", "auto", "--host", "codex"}, {"--json"},
 	} {
 		if _, apiErr := parseSetupRequest(args); apiErr == nil ||

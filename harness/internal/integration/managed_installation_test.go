@@ -172,7 +172,7 @@ func TestManagedInstallationResolvesOnlyTheProfileHostRuntime(t *testing.T) {
 	}
 
 	installation.inspectHost = func(context.Context, assets.Host) (HostObservation, error) {
-		return HostObservation{Host: assets.HostClaudeCode, Executable: "/test/claude"}, nil
+		return HostObservation{Host: assets.Host("unsupported"), Executable: "/test/other"}, nil
 	}
 	if executable, err := installation.RuntimeExecutable(context.Background(), profile); !errors.Is(err, ErrManagedInstallation) || executable != "" {
 		t.Fatalf("RuntimeExecutable(mismatched Host) = (%q, %v)", executable, err)

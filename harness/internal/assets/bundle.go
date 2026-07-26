@@ -38,12 +38,9 @@ var managedFS embed.FS
 
 type Host string
 
-const (
-	HostCodex      Host = "codex"
-	HostClaudeCode Host = "claude-code"
-)
+const HostCodex Host = "codex"
 
-func (host Host) Valid() bool { return host == HostCodex || host == HostClaudeCode }
+func (host Host) Valid() bool { return host == HostCodex }
 
 type FileRecord struct {
 	Digest string `json:"digest"`
@@ -141,7 +138,7 @@ func Load() (Bundle, error) {
 	if err := requireExactFileSet(listed); err != nil {
 		return Bundle{}, err
 	}
-	if len(bundle.teamworkActionPaths) == 0 || len(bundle.registration) != 2 {
+	if len(bundle.teamworkActionPaths) == 0 || len(bundle.registration) != 1 {
 		return Bundle{}, errors.New("managed assets do not contain Teamwork action sources and the closed Host set")
 	}
 	return bundle, nil
@@ -214,7 +211,7 @@ func (bundle Bundle) record(path string) (FileRecord, bool) {
 }
 
 func validateManifest(manifest Manifest) error {
-	if manifest.SchemaVersion != 1 || len(manifest.Files) != 13 ||
+	if manifest.SchemaVersion != 1 || len(manifest.Files) != 11 ||
 		!validDigestText(manifest.AssetRevision) {
 		return errors.New("managed asset manifest has invalid schema, revision, or file count")
 	}
@@ -227,16 +224,14 @@ func validateManifest(manifest Manifest) error {
 	for index, record := range manifest.Files {
 		if record.Path == "" || strings.HasPrefix(record.Path, "/") || strings.Contains(record.Path, "..") ||
 			!validDigestText(record.Digest) || (record.Mode != "0644" && record.Mode != "0755") ||
-			len(record.Hosts) == 0 || len(record.Hosts) > 2 {
+			len(record.Hosts) != 1 {
 			return fmt.Errorf("managed asset manifest record %d is invalid", index)
 		}
 		if index > 0 && manifest.Files[index-1].Path >= record.Path {
 			return errors.New("managed asset manifest paths are not strictly ordered")
 		}
-		for hostIndex, host := range record.Hosts {
-			if !host.Valid() || (hostIndex > 0 && record.Hosts[hostIndex-1] >= host) {
-				return fmt.Errorf("managed asset %s has invalid Host applicability", record.Path)
-			}
+		if !record.Hosts[0].Valid() {
+			return fmt.Errorf("managed asset %s has invalid Host applicability", record.Path)
 		}
 		if strings.HasSuffix(record.Path, "/hook.sh") != (record.Mode == "0755") {
 			return fmt.Errorf("managed asset %s has the wrong source mode", record.Path)
@@ -252,13 +247,10 @@ func validTeamworkActionPath(path string) bool {
 }
 
 func validateRegistration(registration Registration) error {
-	wantTarget := map[Host]string{HostCodex: "hooks.json", HostClaudeCode: "settings.json"}[registration.Host]
-	wantSkillTarget := map[Host]string{
-		HostCodex: ".agents/skills/mnemon-harness", HostClaudeCode: ".claude/skills/mnemon-harness",
-	}[registration.Host]
 	if !registration.Host.Valid() || registration.SchemaVersion != 1 ||
-		registration.ManagedKey != "mnemon-harness" || registration.SkillTarget != wantSkillTarget ||
-		registration.Target != wantTarget ||
+		registration.ManagedKey != "mnemon-harness" ||
+		registration.SkillTarget != ".agents/skills/mnemon-harness" ||
+		registration.Target != "hooks.json" ||
 		registration.Value.Event != "UserPromptSubmit" || registration.Value.Hook.Command != "{{HOOK_PATH}}" ||
 		registration.Value.Hook.Type != "command" || registration.Value.Hook.Timeout != hookTimeoutSeconds ||
 		registration.Value.Hook.StatusMessage == "" {

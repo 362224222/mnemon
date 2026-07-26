@@ -69,7 +69,7 @@ func TestDeactivateAllowsDriftedProjectionButRejectsAuthorityDrift(t *testing.T)
 		t.Fatal(err)
 	}
 	for name, mutate := range map[string]func(*DeactivateOptions){
-		"Host":     func(value *DeactivateOptions) { value.Host = model.HostClaudeCode },
+		"Host":     func(value *DeactivateOptions) { value.Host = model.HostKind("claude-code") },
 		"revision": func(value *DeactivateOptions) { value.AssetRevision = model.Sum([]byte("other-assets")).String() },
 		"generation": func(value *DeactivateOptions) {
 			value.ExpectedUpdatedAt = value.ExpectedUpdatedAt.Add(-time.Nanosecond)

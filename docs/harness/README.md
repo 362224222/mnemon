@@ -23,8 +23,8 @@ contract.
 
 ## 2. Current Scope
 
-The beta supports Codex and Claude Code projections. Projected host directories
-such as `.codex/` and `.claude/` are generated surfaces. Local state lives under
+The R5 Core beta supports only the Codex projection. Projected host directories
+such as `.codex/` and `.agents/` are generated surfaces. Local state lives under
 `.mnemon/harness/`.
 
 The current beta does not promise production readiness, automatic apply,

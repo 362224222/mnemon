@@ -148,7 +148,7 @@ func TestProvisionRejectsProjectionAndHostAuthorityDrift(t *testing.T) {
 			t.Fatalf("identity drift Provision() error = %v", err)
 		}
 	})
-	t.Run("enabled Host switch", func(t *testing.T) {
+	t.Run("unsupported Host", func(t *testing.T) {
 		workspace := newProvisionWorkspace(t)
 		options := provisionTestOptions(t, workspace, model.HostCodex)
 		first, err := Provision(context.Background(), options)
@@ -170,9 +170,9 @@ func TestProvisionRejectsProjectionAndHostAuthorityDrift(t *testing.T) {
 		if err := st.Close(); err != nil {
 			t.Fatal(err)
 		}
-		options.Host = model.HostClaudeCode
+		options.Host = model.HostKind("claude-code")
 		if _, err := Provision(context.Background(), options); !errors.Is(err, ErrProvision) {
-			t.Fatalf("Host switch Provision() error = %v", err)
+			t.Fatalf("unsupported Host Provision() error = %v", err)
 		}
 	})
 }

@@ -13,26 +13,6 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
 
-func TestNewWakeWorkerAcceptsClaudeProfile(t *testing.T) {
-	at := time.Date(2026, 7, 18, 8, 55, 0, 0, time.UTC)
-	profileSpec := wakeWorkerTestProfile(t, at).Spec()
-	profileSpec.Host, profileSpec.Runtime = model.HostClaudeCode, model.RuntimeClaudeCLI
-	profile, err := model.NewProfile(profileSpec)
-	if err != nil {
-		t.Fatal(err)
-	}
-	worker := newWakeWorkerForTest(t, profile, newWakeWorkerTestStore(),
-		wakeWorkerPreparerFunc(func(context.Context, model.Profile) (PreparedWake, error) {
-			return PreparedWake{}, nil
-		}), wakeWorkerAdapterFunc(func(context.Context, CodexWakeRequest) (CodexWakeResult, error) {
-			return CodexWakeResult{}, nil
-		}), WakeWorkerGateFunc(func(context.Context, model.Profile) error { return nil }),
-		newWakeWorkerTestTimer())
-	if worker.profile.Runtime() != model.RuntimeClaudeCLI {
-		t.Fatalf("worker Runtime = %s", worker.profile.Runtime())
-	}
-}
-
 func TestWakeWorkerRecordsCallbacksAndSettlesNormalOrFailedRuntime(t *testing.T) {
 	at := time.Date(2026, 7, 18, 10, 0, 0, 0, time.UTC)
 	for _, scenario := range []wakeWorkerCallbackScenario{
@@ -276,21 +256,15 @@ func TestWakeWorkerBoundsAdapterContextByClaimLease(t *testing.T) {
 
 func TestWakeWorkerPrepareFailureUsesRuntimeAdapterEvidence(t *testing.T) {
 	at := time.Date(2026, 7, 18, 13, 5, 0, 0, time.UTC)
-	profileSpec := wakeWorkerTestProfile(t, at).Spec()
-	profileSpec.Host, profileSpec.Runtime = model.HostClaudeCode, model.RuntimeClaudeCLI
-	profile, err := model.NewProfile(profileSpec)
-	if err != nil {
-		t.Fatal(err)
-	}
-	run := wakeWorkerTestRun(t, profile, "run-worker-claude-publish", at, false)
+	profile := wakeWorkerTestProfile(t, at)
+	run := wakeWorkerTestRun(t, profile, "run-worker-codex-publish", at, false)
 	st := newWakeWorkerTestStore(run)
 	ctx, cancel := context.WithCancel(context.Background())
 	st.onFail = func(settleCtx context.Context, spec store.AgentRuntimeFailureSpec) error {
 		if settleCtx.Err() != nil || spec.Error != wakeWorkerPrepareFailure ||
-			!strings.Contains(spec.LauncherDiagnostic.String(), `"adapter":"claude-cli"`) ||
-			strings.Contains(spec.LauncherDiagnostic.String(), `"adapter":"codex-app-server"`) ||
-			!strings.Contains(spec.CompletionReceipt.String(), `"adapter":"claude-cli"`) {
-			t.Errorf("Claude prepare failure spec = %#v, ctx=%v", spec, settleCtx.Err())
+			!strings.Contains(spec.LauncherDiagnostic.String(), `"adapter":"codex-app-server"`) ||
+			!strings.Contains(spec.CompletionReceipt.String(), `"adapter":"codex-app-server"`) {
+			t.Errorf("Codex prepare failure spec = %#v, ctx=%v", spec, settleCtx.Err())
 		}
 		cancel()
 		return nil

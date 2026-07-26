@@ -33,7 +33,7 @@ func mustLoadManagedBundle(t *testing.T) Bundle {
 
 func assertManagedManifestBinding(t *testing.T, bundle Bundle, manifest Manifest) {
 	t.Helper()
-	if manifest.SchemaVersion != 1 || len(manifest.Files) != 13 || !validDigestText(manifest.AssetRevision) {
+	if manifest.SchemaVersion != 1 || len(manifest.Files) != 11 || !validDigestText(manifest.AssetRevision) {
 		t.Fatalf("manifest = %#v", manifest)
 	}
 	if bundle.Revision() != manifest.AssetRevision {
@@ -123,30 +123,26 @@ func assertZeroManagedBundle(t *testing.T, actionPath string) {
 	}
 }
 
-func TestManagedBundleSelectsHostVariantAndServesExactBytes(t *testing.T) {
+func TestManagedBundleServesExactCodexBytes(t *testing.T) {
 	bundle, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, host := range []Host{HostCodex, HostClaudeCode} {
-		files, err := bundle.FilesFor(host)
-		if err != nil || len(files) != 11 {
-			t.Fatalf("FilesFor(%s) = (%v, %v)", host, files, err)
-		}
-		registration, ok := bundle.Registration(host)
-		wantSkillTarget := map[Host]string{
-			HostCodex: ".agents/skills/mnemon-harness", HostClaudeCode: ".claude/skills/mnemon-harness",
-		}[host]
-		if !ok || registration.Host != host || registration.SkillTarget != wantSkillTarget ||
-			registration.Value.Hook.Command != "{{HOOK_PATH}}" {
-			t.Fatalf("Registration(%s) = (%#v, %t)", host, registration, ok)
-		}
-		hookPath := "hosts/" + string(host) + "/hook.sh"
-		hook, err := bundle.Read(hookPath)
-		if err != nil || len(hook) > 256 || bytes.Contains(hook, []byte("Event")) ||
-			bytes.Contains(hook, []byte("pending")) {
-			t.Fatalf("Read(%s) = (%q, %v)", hookPath, hook, err)
-		}
+	files, err := bundle.FilesFor(HostCodex)
+	if err != nil || len(files) != 11 {
+		t.Fatalf("FilesFor(%s) = (%v, %v)", HostCodex, files, err)
+	}
+	registration, ok := bundle.Registration(HostCodex)
+	if !ok || registration.Host != HostCodex ||
+		registration.SkillTarget != ".agents/skills/mnemon-harness" ||
+		registration.Value.Hook.Command != "{{HOOK_PATH}}" {
+		t.Fatalf("Registration(%s) = (%#v, %t)", HostCodex, registration, ok)
+	}
+	hookPath := "hosts/codex/hook.sh"
+	hook, err := bundle.Read(hookPath)
+	if err != nil || len(hook) > 256 || bytes.Contains(hook, []byte("Event")) ||
+		bytes.Contains(hook, []byte("pending")) {
+		t.Fatalf("Read(%s) = (%q, %v)", hookPath, hook, err)
 	}
 	if _, err := bundle.FilesFor("unknown"); err == nil {
 		t.Fatal("unknown Host selected an asset variant")
@@ -207,7 +203,7 @@ func TestManagedSourceModesAndSkillGuideResponsibilities(t *testing.T) {
 
 func TestManagedHooksPreserveCueAndMapFailureToBlockingExit(t *testing.T) {
 	const cue = "[mnemon:wake] Managed work is pending. Use the Mnemon Harness skill to process one Event.\n"
-	for _, host := range []Host{HostCodex, HostClaudeCode} {
+	for _, host := range []Host{HostCodex} {
 		host := host
 		t.Run(string(host), func(t *testing.T) {
 			hookPath, err := filepath.Abs(filepath.Join("managed", "hosts", string(host), "hook.sh"))

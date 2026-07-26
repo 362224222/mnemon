@@ -135,7 +135,7 @@ func TestPreflightHostProjectionUpgradeIsStrictAndReadOnly(t *testing.T) {
 	t.Run("ownership Host mismatch", func(t *testing.T) {
 		workspace, nodeState, bundle, previous := newUpgradePreflightFixture(t, assets.HostCodex)
 		manifest := previous.manifest
-		manifest.Host = assets.HostClaudeCode
+		manifest.Host = assets.Host("unsupported")
 		writeOwnershipManifest(t, previous.plan.ownershipPath, manifest)
 		assertUpgradePreflightConflict(t, workspace, func() error {
 			_, err := PreflightHostProjectionUpgrade(workspace, nodeState, assets.HostCodex,

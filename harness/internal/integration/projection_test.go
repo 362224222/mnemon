@@ -16,7 +16,7 @@ import (
 
 func TestInstallHostProjectionUsesFrozenPathsAndPreservesAdjacentConfiguration(t *testing.T) {
 	workspace, nodeState, bundle := newProjectionWorkspace(t)
-	for _, host := range []assets.Host{assets.HostCodex, assets.HostClaudeCode} {
+	for _, host := range []assets.Host{assets.HostCodex} {
 		host := host
 		t.Run(string(host), func(t *testing.T) {
 			configPath := hostConfigPath(workspace, host)
@@ -244,19 +244,19 @@ func TestInstallHostProjectionRepairsOnlyMissingAppliedObjects(t *testing.T) {
 
 	t.Run("registration subentry", func(t *testing.T) {
 		workspace, nodeState, bundle := newProjectionWorkspace(t)
-		configPath := hostConfigPath(workspace, assets.HostClaudeCode)
+		configPath := hostConfigPath(workspace, assets.HostCodex)
 		if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
 			t.Fatal(err)
 		}
 		writeTestJSON(t, configPath, map[string]any{"user": map[string]any{"keep": true}})
-		if _, err := InstallHostProjection(workspace, nodeState, assets.HostClaudeCode, bundle); err != nil {
+		if _, err := InstallHostProjection(workspace, nodeState, assets.HostCodex, bundle); err != nil {
 			t.Fatal(err)
 		}
 		document := readTestJSON(t, configPath)
 		hooks := document["hooks"].(map[string]any)
 		delete(hooks, "UserPromptSubmit")
 		writeTestJSON(t, configPath, document)
-		repaired, err := InstallHostProjection(workspace, nodeState, assets.HostClaudeCode, bundle)
+		repaired, err := InstallHostProjection(workspace, nodeState, assets.HostCodex, bundle)
 		if err != nil || repaired.Replayed {
 			t.Fatalf("registration repair = (%#v, %v)", repaired, err)
 		}
@@ -268,7 +268,7 @@ func TestInstallHostProjectionRepairsOnlyMissingAppliedObjects(t *testing.T) {
 		if len(entries) != 1 {
 			t.Fatalf("registration repair entries = %#v", entries)
 		}
-		if err := VerifyHostProjection(workspace, nodeState, assets.HostClaudeCode, bundle); err != nil {
+		if err := VerifyHostProjection(workspace, nodeState, assets.HostCodex, bundle); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -363,19 +363,19 @@ func TestInstallHostProjectionSafelyUpgradesPreviousAppliedRevision(t *testing.T
 func TestHostProjectionUpgradeResumesAtEveryDurableBoundary(t *testing.T) {
 	stages := []string{
 		"after_upgrade_journal",
-		"after_file:.claude/hooks/mnemon-harness/hook.sh",
-		"after_file:.claude/skills/mnemon-harness/SKILL.md",
-		"after_file:.claude/skills/mnemon-harness/guides/teamwork/GUIDE.md",
+		"after_file:.agents/skills/mnemon-harness/SKILL.md",
+		"after_file:.agents/skills/mnemon-harness/guides/teamwork/GUIDE.md",
+		"after_file:.codex/hooks/mnemon-harness/hook.sh",
 		"after_config",
 		"before_applied",
 	}
 	for _, stage := range stages {
 		t.Run(stage, func(t *testing.T) {
 			workspace, nodeState, bundle := newProjectionWorkspace(t)
-			if _, err := InstallHostProjection(workspace, nodeState, assets.HostClaudeCode, bundle); err != nil {
+			if _, err := InstallHostProjection(workspace, nodeState, assets.HostCodex, bundle); err != nil {
 				t.Fatal(err)
 			}
-			previous := installSyntheticPreviousProjection(t, workspace, nodeState, assets.HostClaudeCode, bundle)
+			previous := installSyntheticPreviousProjection(t, workspace, nodeState, assets.HostCodex, bundle)
 			interrupted := errors.New("simulated upgrade interruption")
 			fired := false
 			boundary := func(current string) error {
@@ -385,7 +385,7 @@ func TestHostProjectionUpgradeResumesAtEveryDurableBoundary(t *testing.T) {
 				}
 				return nil
 			}
-			if _, err := installHostProjection(workspace, nodeState, assets.HostClaudeCode, bundle, boundary); !errors.Is(err, interrupted) {
+			if _, err := installHostProjection(workspace, nodeState, assets.HostCodex, bundle, boundary); !errors.Is(err, interrupted) {
 				t.Fatalf("interrupted upgrade error = %v", err)
 			}
 			if !fired {
@@ -404,14 +404,14 @@ func TestHostProjectionUpgradeResumesAtEveryDurableBoundary(t *testing.T) {
 					}
 				}
 			}
-			if err := VerifyHostProjection(workspace, nodeState, assets.HostClaudeCode, bundle); !errors.Is(err, ErrProjectionConflict) {
+			if err := VerifyHostProjection(workspace, nodeState, assets.HostCodex, bundle); !errors.Is(err, ErrProjectionConflict) {
 				t.Fatalf("upgrading VerifyHostProjection() error = %v", err)
 			}
-			receipt, err := InstallHostProjection(workspace, nodeState, assets.HostClaudeCode, bundle)
+			receipt, err := InstallHostProjection(workspace, nodeState, assets.HostCodex, bundle)
 			if err != nil || receipt.Replayed {
 				t.Fatalf("resumed upgrade = (%#v, %v)", receipt, err)
 			}
-			if err := VerifyHostProjection(workspace, nodeState, assets.HostClaudeCode, bundle); err != nil {
+			if err := VerifyHostProjection(workspace, nodeState, assets.HostCodex, bundle); err != nil {
 				t.Fatal(err)
 			}
 		})
@@ -487,7 +487,7 @@ func TestHostProjectionUpgradeRejectsPreviousDriftBeforeJournaling(t *testing.T)
 		}},
 		{name: "Host identity", tamper: func(t *testing.T, previous syntheticPreviousProjection) {
 			manifest := previous.manifest
-			manifest.Host = assets.HostClaudeCode
+			manifest.Host = assets.Host("unsupported")
 			writeOwnershipManifest(t, previous.plan.ownershipPath, manifest)
 		}},
 	}
@@ -564,7 +564,7 @@ func TestInstallHostProjectionNeverAdoptsUnownedFilesOrRegistrations(t *testing.
 
 	t.Run("exact canonical registration", func(t *testing.T) {
 		workspace, nodeState, bundle := newProjectionWorkspace(t)
-		plan, err := prepareProjection(workspace, nodeState, assets.HostClaudeCode, bundle)
+		plan, err := prepareProjection(workspace, nodeState, assets.HostCodex, bundle)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -575,7 +575,7 @@ func TestInstallHostProjectionNeverAdoptsUnownedFilesOrRegistrations(t *testing.
 			"UserPromptSubmit": []any{plan.entry},
 		}})
 		before, _ := os.ReadFile(plan.configPath)
-		if _, err := InstallHostProjection(workspace, nodeState, assets.HostClaudeCode, bundle); !errors.Is(err, ErrProjectionConflict) {
+		if _, err := InstallHostProjection(workspace, nodeState, assets.HostCodex, bundle); !errors.Is(err, ErrProjectionConflict) {
 			t.Fatalf("InstallHostProjection() error = %v", err)
 		}
 		after, _ := os.ReadFile(plan.configPath)
@@ -727,18 +727,11 @@ func newProjectionWorkspace(t *testing.T) (string, string, assets.Bundle) {
 }
 
 func hostDirectory(host assets.Host) string {
-	if host == assets.HostCodex {
-		return ".codex"
-	}
-	return ".claude"
+	return ".codex"
 }
 
 func hostConfigPath(workspace string, host assets.Host) string {
-	name := "hooks.json"
-	if host == assets.HostClaudeCode {
-		name = "settings.json"
-	}
-	return filepath.Join(workspace, hostDirectory(host), name)
+	return filepath.Join(workspace, hostDirectory(host), "hooks.json")
 }
 
 func assertProjectedFiles(t *testing.T, workspace string, host assets.Host, bundle assets.Bundle) {
@@ -764,10 +757,7 @@ func assertProjectedFiles(t *testing.T, workspace string, host assets.Host, bund
 }
 
 func skillDirectory(host assets.Host) string {
-	if host == assets.HostCodex {
-		return filepath.Join(".agents", "skills", "mnemon-harness")
-	}
-	return filepath.Join(".claude", "skills", "mnemon-harness")
+	return filepath.Join(".agents", "skills", "mnemon-harness")
 }
 
 func writeTestJSON(t *testing.T, path string, value any) {

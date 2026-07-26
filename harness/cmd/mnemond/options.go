@@ -127,7 +127,7 @@ func parseManagedAuthorityOptions(command string, args []string) (string, model.
 	}
 	host := model.HostKind(values["--host"])
 	if _, ok := model.RuntimeForHost(host); !ok {
-		return "", "", "", fmt.Errorf("%s Host must be codex or claude-code", command)
+		return "", "", "", fmt.Errorf("%s Host must be codex", command)
 	}
 	if _, err := model.ParseDigest(values["--asset-revision"]); err != nil {
 		return "", "", "", fmt.Errorf("%s asset revision must be a sha256 digest", command)

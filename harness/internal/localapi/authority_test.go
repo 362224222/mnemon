@@ -52,7 +52,7 @@ func TestAuthorityResponseRejectsInvalidState(t *testing.T) {
 		mutate func(*AuthoritySnapshot)
 	}{
 		{name: "Host", mutate: func(value *AuthoritySnapshot) { value.Host = "multica" }},
-		{name: "Runtime", mutate: func(value *AuthoritySnapshot) { value.Runtime = model.RuntimeClaudeCLI }},
+		{name: "Runtime", mutate: func(value *AuthoritySnapshot) { value.Runtime = model.RuntimeKind("claude-cli") }},
 		{name: "Profile revision", mutate: func(value *AuthoritySnapshot) { value.AssetRevision = "asset-r5" }},
 		{name: "Node revision", mutate: func(value *AuthoritySnapshot) {
 			value.ActiveAssetRevision = model.Sum([]byte("other-assets")).String()

@@ -329,10 +329,9 @@ func parseEjectRequest(args []string) (ejectRequest, *localapi.APIError) {
 			request.projectRoot = args[index]
 		}
 	}
-	if request.host != "auto" && request.host != string(assets.HostCodex) &&
-		request.host != string(assets.HostClaudeCode) {
+	if request.host != "auto" && request.host != string(assets.HostCodex) {
 		return ejectRequest{}, setupError(localapi.CodeInvalidArgument,
-			"--host must be auto, codex, or claude-code")
+			"--host must be auto or codex")
 	}
 	return request, nil
 }

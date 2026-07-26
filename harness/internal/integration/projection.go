@@ -213,7 +213,7 @@ func prepareProjection(workspace, nodeState string, host assets.Host, bundle ass
 	if !ok {
 		return projectionPlan{}, fmt.Errorf("%w: Host registration is absent", ErrUnsafeProjection)
 	}
-	hostDir := map[assets.Host]string{assets.HostCodex: ".codex", assets.HostClaudeCode: ".claude"}[host]
+	hostDir := ".codex"
 	hostRoot := filepath.Join(workspace, hostDir)
 	hookRelative := filepath.Join(hostDir, "hooks", "mnemon-harness", "hook.sh")
 	hookPath := filepath.Join(workspace, hookRelative)

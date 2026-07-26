@@ -19,9 +19,8 @@
 
 ## 2. 当前范围
 
-这个 beta 支持 Codex 和 Claude Code 投影。`.codex/`
-和 `.claude/` 等 host 目录是生成出来的 surface。本地状态位于
-`.mnemon/harness/`。
+R5 Core beta 只支持 Codex 投影。`.codex/` 和 `.agents/` 等 host
+目录是生成出来的 surface。本地状态位于 `.mnemon/harness/`。
 
 当前 beta 不承诺生产可用、自动 apply、多 agent governance、广义组织范围，
 或通用 eval runtime。
