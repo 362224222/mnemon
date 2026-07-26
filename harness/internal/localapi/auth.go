@@ -34,18 +34,9 @@ func authenticateRequest(ctx context.Context, request *http.Request, authenticat
 	if ctx == nil || request == nil || authenticator == nil {
 		return RequestMetadata{}, NewAPIError(CodeInternal, "local authentication is unavailable")
 	}
-	authorization, err := singleHeader(request.Header, authorizationHeader)
-	if err != nil || !strings.HasPrefix(authorization, profileScheme) {
-		return RequestMetadata{}, NewAPIError(CodeAuthenticationFailed, "profile authentication failed")
-	}
-	credential, err := decodeOpaqueSecret(strings.TrimPrefix(authorization, profileScheme))
-	if err != nil {
-		return RequestMetadata{}, NewAPIError(CodeAuthenticationFailed, "profile authentication failed")
-	}
-	profile, err := authenticator.AuthenticateProfile(ctx, model.Sum(credential))
-	clear(credential)
-	if err != nil || profile.ID().IsZero() {
-		return RequestMetadata{}, NewAPIError(CodeAuthenticationFailed, "profile authentication failed")
+	profile, apiErr := authenticateProfile(ctx, request.Header, authenticator)
+	if apiErr != nil {
+		return RequestMetadata{}, apiErr
 	}
 	metadata := RequestMetadata{Profile: profile}
 
@@ -94,6 +85,25 @@ func authenticateRequest(ctx context.Context, request *http.Request, authenticat
 		metadata.OperationKeySecret = append([]byte(nil), operation...)
 	}
 	return metadata, nil
+}
+
+func authenticateProfile(ctx context.Context, header http.Header,
+	authenticator Authenticator,
+) (model.Profile, *APIError) {
+	authorization, err := singleHeader(header, authorizationHeader)
+	if err != nil || !strings.HasPrefix(authorization, profileScheme) {
+		return model.Profile{}, NewAPIError(CodeAuthenticationFailed, "profile authentication failed")
+	}
+	credential, err := decodeOpaqueSecret(strings.TrimPrefix(authorization, profileScheme))
+	if err != nil {
+		return model.Profile{}, NewAPIError(CodeAuthenticationFailed, "profile authentication failed")
+	}
+	profile, err := authenticator.AuthenticateProfile(ctx, model.Sum(credential))
+	clear(credential)
+	if err != nil || profile.ID().IsZero() {
+		return model.Profile{}, NewAPIError(CodeAuthenticationFailed, "profile authentication failed")
+	}
+	return profile, nil
 }
 
 func optionalSecretHeader(header http.Header, name string) ([]byte, bool, *APIError) {

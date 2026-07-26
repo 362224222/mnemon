@@ -106,7 +106,8 @@ func TestMeshEnrollmentExchangeAndAuthorityLoadDoNotHoldRuntimeLock(t *testing.T
 	barrier := &committedEnrollmentOwnerStore{delegate: fixture.ownerStore,
 		committed: make(chan struct{}), resume: make(chan struct{})}
 	var releaseOwner sync.Once
-	t.Cleanup(func() { releaseOwner.Do(func() { close(barrier.resume) }) })
+	cleanupOwner := func() { releaseOwner.Do(func() { close(barrier.resume) }) }
+	t.Cleanup(cleanupOwner)
 	ownerProtocol, err := NewChannelEnrollmentOwner(ChannelEnrollmentOwnerOptions{
 		Store: barrier,
 		Signer: enrollmentTestSigner{
@@ -133,7 +134,8 @@ func TestMeshEnrollmentExchangeAndAuthorityLoadDoNotHoldRuntimeLock(t *testing.T
 
 	loadStarted, releaseLoad := make(chan struct{}), make(chan struct{})
 	var releaseLoader sync.Once
-	t.Cleanup(func() { releaseLoader.Do(func() { close(releaseLoad) }) })
+	cleanupLoader := func() { releaseLoader.Do(func() { close(releaseLoad) }) }
+	t.Cleanup(cleanupLoader)
 	loadCalls := 0
 	load := func(ctx context.Context) (store.ChannelMeshAuthority, error) {
 		mesh, loadErr := fixture.joinerStore.ReadChannelMeshAuthority(ctx)
