@@ -1,8 +1,11 @@
 package node
 
 import (
+	"bytes"
 	"context"
 	"testing"
+
+	"github.com/mnemon-dev/mnemon/harness/internal/model"
 )
 
 func TestProjectStatusChannelsExposesCoherentIdleAndQueuedPublicationProgress(t *testing.T) {
@@ -20,11 +23,19 @@ func TestProjectStatusChannelsExposesCoherentIdleAndQueuedPublicationProgress(t 
 	if apiErr != nil {
 		t.Fatal(apiErr)
 	}
-	authority, err := daemon.store.ReadChannelStatusAuthority(context.Background())
+	rawView, err := model.CanonicalMarshal(created.Channel)
 	if err != nil {
 		t.Fatal(err)
 	}
-	channels := projectStatusChannels(authority, daemon.channels.manager)
+	if len(rawView)+1 > MaxChannelResponseBytes ||
+		bytes.Contains(rawView, []byte(`"publications"`)) {
+		t.Fatalf("Channel mutation returned unbounded history view: %s", rawView)
+	}
+	observation, err := daemon.store.ReadChannelObservation(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	channels := projectStatusChannels(observation, daemon.channels.manager)
 	if len(channels) != 1 || channels[0].Alias != created.Channel.Alias ||
 		channels[0].Topic.TotalMembers != 1 || channels[0].LocalCommit.Accepted != 0 ||
 		channels[0].Runtime != (StatusChannelRuntime{}) {

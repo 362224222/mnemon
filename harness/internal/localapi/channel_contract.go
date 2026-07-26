@@ -3,7 +3,6 @@ package localapi
 import (
 	"crypto/ed25519"
 	"encoding/base64"
-	"strings"
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
@@ -114,13 +113,8 @@ func validateChannelStatusResponse(response ChannelStatusResponse) *APIError {
 		return invalidControlResponse("Channel status response is invalid")
 	}
 	previous := ""
-	publicationCount := 0
 	for _, channel := range response.Channels {
 		if validateChannelView(channel) != nil || previous != "" && previous >= channel.Alias {
-			return invalidControlResponse("Channel status response is invalid")
-		}
-		publicationCount += len(channel.Publications)
-		if publicationCount > model.MaxChannelStatusPublications {
 			return invalidControlResponse("Channel status response is invalid")
 		}
 		previous = channel.Alias
@@ -138,11 +132,11 @@ func validateChannelView(channel ChannelView) *APIError {
 	if channel.Invite != nil && validateChannelInviteView(*channel.Invite) != nil {
 		return invalidControlResponse("Channel projection invite is invalid")
 	}
-	self, apiErr := validateChannelMembers(channel.Members)
+	_, apiErr := validateChannelMembers(channel.Members)
 	if apiErr != nil {
 		return apiErr
 	}
-	return validateChannelEvidence(channel, self)
+	return validateChannelEvidence(channel)
 }
 
 func validChannelViewHeader(channel ChannelView) bool {
@@ -150,8 +144,7 @@ func validChannelViewHeader(channel ChannelView) bool {
 		validChannelMembership(channel.Membership) && channel.RosterRevision != 0 &&
 		channel.Members != nil && len(channel.Members) > 0 &&
 		len(channel.Members) <= model.MaxMembersPerChannel && validChannelTopicView(channel.Topic) &&
-		validChannelOwnerView(channel.Owner) && channel.Publications != nil &&
-		len(channel.Publications) <= model.MaxChannelStatusPublications
+		validChannelOwnerView(channel.Owner)
 }
 
 func validChannelAlias(value string) bool {
@@ -203,7 +196,7 @@ func validateChannelMembers(members []ChannelMemberView) (string, *APIError) {
 	return self, nil
 }
 
-func validateChannelEvidence(channel ChannelView, self string) *APIError {
+func validateChannelEvidence(channel ChannelView) *APIError {
 	channelDigest, err := model.ParseDigest(channel.ChannelIDDigest)
 	rosterDigest, rosterErr := model.ParseDigest(channel.RosterHead.Digest)
 	owner, ownerErr := model.ParsePeerID(channel.RosterHead.OwnerPeerID)
@@ -223,151 +216,5 @@ func validateChannelEvidence(channel ChannelView, self string) *APIError {
 	if !memberOwner {
 		return invalidControlResponse("Channel evidence roster owner is absent")
 	}
-	var previous *ChannelPublicationRefView
-	for index := range channel.Publications {
-		publication := &channel.Publications[index]
-		if validateChannelPublication(*publication, channel.ChannelIDDigest, self) != nil ||
-			previous != nil && compareChannelPublicationRefs(*previous, publication.PublicationRef) >= 0 {
-			return invalidControlResponse("Channel publication evidence is invalid")
-		}
-		previous = &publication.PublicationRef
-	}
 	return nil
-}
-
-func validateChannelPublication(publication ChannelPublicationView, channelDigest, self string) *APIError {
-	if !validChannelPublicationShape(publication, channelDigest) ||
-		!validChannelPublicationIdentity(publication) ||
-		!validChannelPublicationAudience(publication, self) ||
-		!validChannelPublicationArtifactSource(publication) ||
-		!validChannelPublicationPath(publication, self) {
-		return invalidControlResponse("Channel publication evidence is invalid")
-	}
-	return nil
-}
-
-func validChannelPublicationShape(publication ChannelPublicationView, channelDigest string) bool {
-	if publication.ChannelIDDigest != channelDigest ||
-		publication.PublicationRef.ChannelSequence == 0 ||
-		publication.PublicationRef.OriginPeerID != publication.OriginPeerID ||
-		publication.EventKey.OriginPeerID != publication.OriginPeerID ||
-		publication.EventKey.OriginEpoch != publication.PublicationRef.OriginEpoch ||
-		publication.AudiencePeerIDs == nil || publication.IgnoredPeerIDs == nil ||
-		len(publication.AudiencePeerIDs) == 0 ||
-		len(publication.AudiencePeerIDs) > model.MaxMembersPerChannel-1 ||
-		len(publication.IgnoredPeerIDs) > 1 {
-		return false
-	}
-	return validChannelEvidenceDigest(publication.PublicationDigest) &&
-		validChannelEvidenceDigest(publication.EventDigest)
-}
-
-func validChannelEvidenceDigest(value string) bool {
-	digest, err := model.ParseDigest(value)
-	return err == nil && !digest.IsZero() && digest.String() == value
-}
-
-func validChannelPublicationIdentity(publication ChannelPublicationView) bool {
-	origin, originErr := model.ParsePeerID(publication.OriginPeerID)
-	transport, transportErr := model.ParsePeerID(publication.ImmediateTransportPeerID)
-	epoch, epochErr := model.ParseOriginEpoch(publication.PublicationRef.OriginEpoch)
-	if originErr != nil || transportErr != nil || epochErr != nil ||
-		origin.String() != publication.OriginPeerID || transport.String() != publication.ImmediateTransportPeerID ||
-		epoch.String() != publication.PublicationRef.OriginEpoch ||
-		validateChannelEventKey(publication.EventKey) != nil {
-		return false
-	}
-	return publication.CausalityEventKey == nil || validateChannelEventKey(*publication.CausalityEventKey) == nil
-}
-
-func validChannelPublicationAudience(publication ChannelPublicationView, self string) bool {
-	return validChannelPublicationPeers(publication.AudiencePeerIDs, publication.OriginPeerID) &&
-		validChannelPublicationPeers(publication.IgnoredPeerIDs, "") &&
-		(len(publication.IgnoredPeerIDs) == 0 || publication.IgnoredPeerIDs[0] == self) &&
-		(publication.Arrival == "local" ||
-			containsChannelPeer(publication.AudiencePeerIDs, self) != (len(publication.IgnoredPeerIDs) != 0))
-}
-
-func validChannelPublicationArtifactSource(publication ChannelPublicationView) bool {
-	if publication.ArtifactDirectSourcePeerID == nil {
-		return true
-	}
-	source, err := model.ParsePeerID(*publication.ArtifactDirectSourcePeerID)
-	return err == nil && source.String() == publication.OriginPeerID && publication.Arrival != "local"
-}
-
-func validChannelPublicationPath(publication ChannelPublicationView, self string) bool {
-	switch publication.Arrival {
-	case "local":
-		return publication.OriginPeerID == self && publication.SemanticOutcome == "originated" &&
-			publication.ImmediateTransportPeerID == publication.OriginPeerID &&
-			publication.ArtifactDirectSourcePeerID == nil && len(publication.IgnoredPeerIDs) == 0
-	case "gossip":
-		return validChannelImportedPublicationPath(publication, self)
-	case "repair":
-		return validChannelImportedPublicationPath(publication, self) &&
-			publication.ImmediateTransportPeerID == publication.OriginPeerID
-	default:
-		return false
-	}
-}
-
-func validChannelImportedPublicationPath(publication ChannelPublicationView, self string) bool {
-	if publication.OriginPeerID == self || publication.ImmediateTransportPeerID == self ||
-		publication.SemanticOutcome == "originated" ||
-		!validChannelInboxOutcome(publication.SemanticOutcome) {
-		return false
-	}
-	if len(publication.IgnoredPeerIDs) != 0 {
-		return publication.SemanticOutcome == "ignored" || publication.SemanticOutcome == "quarantined"
-	}
-	return publication.SemanticOutcome != "ignored"
-}
-
-func validateChannelEventKey(key ChannelEventKeyView) error {
-	peer, peerErr := model.ParsePeerID(key.OriginPeerID)
-	epoch, epochErr := model.ParseOriginEpoch(key.OriginEpoch)
-	event, eventErr := model.ParseEventID(key.EventID)
-	if peerErr != nil || epochErr != nil || eventErr != nil || peer.String() != key.OriginPeerID ||
-		epoch.String() != key.OriginEpoch || event.String() != key.EventID {
-		return model.ErrInvalid
-	}
-	return nil
-}
-
-func validChannelPublicationPeers(peers []string, excluded string) bool {
-	previous := ""
-	for _, value := range peers {
-		peer, err := model.ParsePeerID(value)
-		if err != nil || peer.String() != value || value == excluded || previous != "" && previous >= value {
-			return false
-		}
-		previous = value
-	}
-	return true
-}
-
-func containsChannelPeer(peers []string, value string) bool {
-	for _, peer := range peers {
-		if peer == value {
-			return true
-		}
-	}
-	return false
-}
-
-func compareChannelPublicationRefs(left, right ChannelPublicationRefView) int {
-	if left.ChannelSequence < right.ChannelSequence {
-		return -1
-	}
-	if left.ChannelSequence > right.ChannelSequence {
-		return 1
-	}
-	if left.OriginPeerID < right.OriginPeerID {
-		return -1
-	}
-	if left.OriginPeerID > right.OriginPeerID {
-		return 1
-	}
-	return strings.Compare(left.OriginEpoch, right.OriginEpoch)
 }

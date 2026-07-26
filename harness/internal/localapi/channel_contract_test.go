@@ -1,8 +1,10 @@
 package localapi
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"encoding/base64"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -80,55 +82,30 @@ func TestChannelAbandonContractIsClosedAndCanonical(t *testing.T) {
 	}
 }
 
-func TestChannelStatusContractClosesEvidencePathSemantics(t *testing.T) {
+func TestChannelStatusContractIsBoundedOperationalProjection(t *testing.T) {
 	t.Parallel()
-	const (
-		origin = "12D3KooWCgPRroygp86pxPWqvQuXKSDf6CoJJHkmfEsNhm9rF46B"
-		target = "12D3KooWLzW3XvRNG5Jv84reMiXzrU1QpkwQCrw4EP8AVSv4GDKJ"
-	)
-	channel := validChannelContractView()
-	channel.Publications = []ChannelPublicationView{{
-		Arrival: "local", ArtifactDirectSourcePeerID: nil, AudiencePeerIDs: []string{target},
-		CausalityEventKey: nil, ChannelIDDigest: channel.ChannelIDDigest,
-		EventDigest: model.Sum([]byte("event-alpha")).String(),
-		EventKey: ChannelEventKeyView{EventID: "event-alpha", OriginEpoch: "epoch-alpha",
-			OriginPeerID: origin},
-		IgnoredPeerIDs: []string{}, ImmediateTransportPeerID: origin, OriginPeerID: origin,
-		PublicationDigest: model.Sum([]byte("publication-alpha")).String(),
-		PublicationRef: ChannelPublicationRefView{ChannelSequence: 1,
-			OriginEpoch: "epoch-alpha", OriginPeerID: origin},
-		SemanticOutcome: "originated",
-	}}
+	channels := make([]ChannelView, model.MaxChannelsPerNode)
+	for index := range channels {
+		channels[index] = validChannelContractView()
+		channels[index].Alias = fmt.Sprintf("alpha-%d", index)
+	}
 	status := ChannelStatusResponse{SchemaVersion: SchemaVersion, Status: "ok",
-		Channels: []ChannelView{channel}}
+		Channels: channels}
 	if apiErr := validateChannelStatusResponse(status); apiErr != nil {
-		t.Fatalf("valid evidence status rejected: %v", apiErr)
+		t.Fatalf("maximum bounded status rejected: %v", apiErr)
 	}
-
-	wrongSource := status
-	wrongSource.Channels = append([]ChannelView(nil), status.Channels...)
-	wrongSource.Channels[0].Publications = append([]ChannelPublicationView(nil), channel.Publications...)
-	wrongSource.Channels[0].Publications[0].ArtifactDirectSourcePeerID = pointerToString(target)
-	if validateChannelStatusResponse(wrongSource) == nil {
-		t.Fatal("Artifact direct source different from signed origin passed")
+	raw, err := model.CanonicalMarshal(status)
+	if err != nil {
+		t.Fatal(err)
 	}
-	wrongTransport := status
-	wrongTransport.Channels = append([]ChannelView(nil), status.Channels...)
-	wrongTransport.Channels[0].Publications = append([]ChannelPublicationView(nil), channel.Publications...)
-	wrongTransport.Channels[0].Publications[0].ImmediateTransportPeerID = target
-	if validateChannelStatusResponse(wrongTransport) == nil {
-		t.Fatal("local publication with a relay transport passed")
+	if len(raw)+1 > MaxChannelResponseBytes {
+		t.Fatalf("maximum Channel status response = %d bytes, bound %d",
+			len(raw)+1, MaxChannelResponseBytes)
 	}
-	wrongRef := status
-	wrongRef.Channels = append([]ChannelView(nil), status.Channels...)
-	wrongRef.Channels[0].Publications = append([]ChannelPublicationView(nil), channel.Publications...)
-	wrongRef.Channels[0].Publications[0].PublicationRef.ChannelSequence = 0
-	if validateChannelStatusResponse(wrongRef) == nil {
-		t.Fatal("zero-sequence publication reference passed")
+	if bytes.Contains(raw, []byte(`"publications"`)) {
+		t.Fatalf("operational Channel status contains publication history: %s", raw)
 	}
 }
-
-func pointerToString(value string) *string { return &value }
 
 func validChannelContractView() ChannelView {
 	const peerID = "12D3KooWCgPRroygp86pxPWqvQuXKSDf6CoJJHkmfEsNhm9rF46B"
@@ -139,7 +116,6 @@ func validChannelContractView() ChannelView {
 		Members: []ChannelMemberView{{Alias: "self", Binding: "self", PeerID: peerID,
 			Reachability: "self", Status: "active"}},
 		Membership: "active", Name: "Alpha", Owner: ChannelOwnerView{Local: true, Reachability: "self"},
-		Publications: []ChannelPublicationView{},
 		RosterHead: ChannelRosterHeadView{Digest: model.Sum([]byte("roster-alpha")).String(),
 			OwnerPeerID: peerID, OwnerSignature: base64.StdEncoding.EncodeToString(make([]byte, ed25519.SignatureSize)),
 			Revision: 1},

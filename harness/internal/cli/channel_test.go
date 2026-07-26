@@ -18,14 +18,9 @@ func TestTakeJSONFlagWorksBeforeOrAfterChannelName(t *testing.T) {
 	}
 }
 
-func TestChannelStatusAliasJSONPreservesPublicEvidence(t *testing.T) {
+func TestChannelStatusAliasJSONPreservesBoundedOperationalView(t *testing.T) {
 	t.Parallel()
-	channel := localapi.ChannelView{Alias: "alpha", ChannelIDDigest: "sha256:channel",
-		Publications: []localapi.ChannelPublicationView{{Arrival: "gossip",
-			AudiencePeerIDs: []string{"peer-target"}, IgnoredPeerIDs: []string{},
-			OriginPeerID: "peer-origin", ImmediateTransportPeerID: "peer-relay",
-			PublicationDigest: "sha256:publication", EventDigest: "sha256:event",
-			SemanticOutcome: "accepted"}}}
+	channel := localapi.ChannelView{Alias: "alpha", ChannelIDDigest: "sha256:channel"}
 	response := localapi.ChannelStatusResponse{SchemaVersion: localapi.SchemaVersion, Status: "ok",
 		Channels: []localapi.ChannelView{channel, {Alias: "beta"}}}
 	client := &channelStatusClientStub{response: response}
@@ -42,6 +37,9 @@ func TestChannelStatusAliasJSONPreservesPublicEvidence(t *testing.T) {
 	}
 	if got := stdout.String(); got != string(raw)+"\n" {
 		t.Fatalf("channel status JSON = %q, want %q", got, string(raw)+"\n")
+	}
+	if strings.Contains(stdout.String(), `"publications"`) {
+		t.Fatalf("Channel operational JSON contains publication history: %s", stdout.String())
 	}
 }
 

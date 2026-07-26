@@ -48,7 +48,7 @@ type StatusSnapshot struct {
 }
 
 // StatusChannelSnapshot is controller input assembled from one durable
-// ChannelStatusAuthority and one adjacent topic-session observation. It has no
+// ChannelObservation and one adjacent topic-session observation. It has no
 // caller-selected aggregate state; the local API derives that closed result.
 type StatusChannelSnapshot struct {
 	Alias          string

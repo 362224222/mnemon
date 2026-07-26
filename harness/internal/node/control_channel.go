@@ -70,49 +70,17 @@ type ChannelRosterHeadView struct {
 	Revision       uint64 `json:"revision"`
 }
 
-// ChannelPublicationRefView is deliberately structured: Channel, Peer and
-// epoch identifiers may themselves contain separators, so concatenation is
-// not an unambiguous public reference.
-type ChannelPublicationRefView struct {
-	ChannelSequence uint64 `json:"channel_sequence"`
-	OriginEpoch     string `json:"origin_epoch"`
-	OriginPeerID    string `json:"origin_peer_id"`
-}
-
-type ChannelEventKeyView struct {
-	EventID      string `json:"event_id"`
-	OriginEpoch  string `json:"origin_epoch"`
-	OriginPeerID string `json:"origin_peer_id"`
-}
-
-type ChannelPublicationView struct {
-	Arrival                    string                    `json:"arrival"`
-	ArtifactDirectSourcePeerID *string                   `json:"artifact_direct_source_peer_id"`
-	AudiencePeerIDs            []string                  `json:"audience_peer_ids"`
-	CausalityEventKey          *ChannelEventKeyView      `json:"causality_event_key"`
-	ChannelIDDigest            string                    `json:"channel_id_digest"`
-	EventDigest                string                    `json:"event_digest"`
-	EventKey                   ChannelEventKeyView       `json:"event_key"`
-	IgnoredPeerIDs             []string                  `json:"ignored_peer_ids"`
-	ImmediateTransportPeerID   string                    `json:"immediate_transport_peer_id"`
-	OriginPeerID               string                    `json:"origin_peer_id"`
-	PublicationDigest          string                    `json:"publication_digest"`
-	PublicationRef             ChannelPublicationRefView `json:"publication_ref"`
-	SemanticOutcome            string                    `json:"semantic_outcome"`
-}
-
 type ChannelView struct {
-	Alias           string                   `json:"alias"`
-	ChannelIDDigest string                   `json:"channel_id_digest"`
-	Invite          *ChannelInviteView       `json:"invite,omitempty"`
-	Members         []ChannelMemberView      `json:"members"`
-	Membership      string                   `json:"membership"`
-	Name            string                   `json:"name"`
-	Owner           ChannelOwnerView         `json:"owner"`
-	Publications    []ChannelPublicationView `json:"publications"`
-	RosterHead      ChannelRosterHeadView    `json:"roster_head"`
-	RosterRevision  uint64                   `json:"roster_revision"`
-	Topic           ChannelTopicView         `json:"topic"`
+	Alias           string                `json:"alias"`
+	ChannelIDDigest string                `json:"channel_id_digest"`
+	Invite          *ChannelInviteView    `json:"invite,omitempty"`
+	Members         []ChannelMemberView   `json:"members"`
+	Membership      string                `json:"membership"`
+	Name            string                `json:"name"`
+	Owner           ChannelOwnerView      `json:"owner"`
+	RosterHead      ChannelRosterHeadView `json:"roster_head"`
+	RosterRevision  uint64                `json:"roster_revision"`
+	Topic           ChannelTopicView      `json:"topic"`
 }
 
 type ChannelCreateResponse struct {

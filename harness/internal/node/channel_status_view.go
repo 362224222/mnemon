@@ -14,7 +14,7 @@ type channelMemberProjection struct {
 }
 
 func (manager *ChannelManager) projectChannelView(local model.PeerID,
-	durable store.ChannelStatusChannel,
+	durable store.ChannelObservationChannel,
 ) ChannelView {
 	channel := durable.Channel()
 	members := manager.projectChannelMembers(local, durable)
@@ -22,7 +22,6 @@ func (manager *ChannelManager) projectChannelView(local model.PeerID,
 	head := statusHead.RecordHead()
 	view := ChannelView{Alias: channel.LocalAlias(), Name: channel.Name(),
 		ChannelIDDigest: durable.ChannelIDDigest().String(),
-		Publications:    projectChannelPublications(durable.Publications()),
 		Membership:      string(channel.Status()), RosterRevision: channel.RosterHead().Revision(),
 		RosterHead: ChannelRosterHeadView{Revision: head.Revision(), Digest: head.Digest().String(),
 			OwnerPeerID:    statusHead.OwnerPeerID().String(),
@@ -40,7 +39,7 @@ func (manager *ChannelManager) projectChannelView(local model.PeerID,
 }
 
 func (manager *ChannelManager) projectChannelMembers(local model.PeerID,
-	durable store.ChannelStatusChannel,
+	durable store.ChannelObservationChannel,
 ) channelMemberProjection {
 	readiness := make(map[model.PeerID]bool)
 	for _, remote := range durable.Progress().Readiness() {
@@ -89,57 +88,6 @@ func projectChannelOwner(channel model.Channel, local model.PeerID,
 		reachability = string(binding.Reachability())
 	}
 	return ChannelOwnerView{Reachability: reachability}
-}
-
-func projectChannelPublications(values []store.ChannelStatusPublication,
-) []ChannelPublicationView {
-	result := make([]ChannelPublicationView, len(values))
-	for index, publication := range values {
-		result[index] = projectChannelPublication(publication)
-	}
-	return result
-}
-
-func projectChannelPublication(publication store.ChannelStatusPublication,
-) ChannelPublicationView {
-	ref := publication.PublicationRef()
-	var artifactSource *string
-	if peerID, ok := publication.ArtifactDirectSourcePeerID(); ok {
-		value := peerID.String()
-		artifactSource = &value
-	}
-	var causality *ChannelEventKeyView
-	if key, ok := publication.CausalityEventKey(); ok {
-		value := channelEventKeyView(key)
-		causality = &value
-	}
-	return ChannelPublicationView{Arrival: string(publication.Arrival()),
-		ArtifactDirectSourcePeerID: artifactSource,
-		AudiencePeerIDs:            channelPeerIDsView(publication.AudiencePeerIDs()),
-		CausalityEventKey:          causality,
-		ChannelIDDigest:            publication.ChannelIDDigest().String(),
-		EventDigest:                publication.EventDigest().String(),
-		EventKey:                   channelEventKeyView(publication.EventKey()),
-		IgnoredPeerIDs:             channelPeerIDsView(publication.IgnoredPeerIDs()),
-		ImmediateTransportPeerID:   publication.ImmediateTransportPeerID().String(),
-		OriginPeerID:               publication.OriginPeerID().String(),
-		PublicationDigest:          publication.PublicationDigest().String(),
-		PublicationRef: ChannelPublicationRefView{ChannelSequence: ref.ChannelSequence(),
-			OriginEpoch: ref.OriginEpoch().String(), OriginPeerID: ref.OriginPeerID().String()},
-		SemanticOutcome: string(publication.SemanticOutcome())}
-}
-
-func channelPeerIDsView(values []model.PeerID) []string {
-	result := make([]string, len(values))
-	for index, peerID := range values {
-		result[index] = peerID.String()
-	}
-	return result
-}
-
-func channelEventKeyView(key model.EventKey) ChannelEventKeyView {
-	return ChannelEventKeyView{OriginPeerID: key.OriginPeerID().String(),
-		OriginEpoch: key.OriginEpoch().String(), EventID: key.EventID().String()}
 }
 
 func channelViewTopicStatus(status string, members []ChannelMemberView) string {

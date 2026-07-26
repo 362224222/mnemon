@@ -14,20 +14,20 @@ func (manager *ChannelManager) channelSessionReady(channelID model.ChannelID) bo
 	return manager != nil && manager.runtime != nil && manager.runtime.HasCurrentSession(channelID)
 }
 
-func projectStatusChannels(authority store.ChannelStatusAuthority,
+func projectStatusChannels(observation store.ChannelObservation,
 	sessions channelSessionObserver,
 ) []StatusChannelSnapshot {
-	channels := authority.Channels()
+	channels := observation.Channels()
 	result := make([]StatusChannelSnapshot, 0, len(channels))
 	for _, durable := range channels {
 		sessionReady := sessions != nil && sessions.channelSessionReady(durable.Channel().ID())
-		result = append(result, projectStatusChannel(authority.LocalPeerID(), durable, sessionReady))
+		result = append(result, projectStatusChannel(observation.LocalPeerID(), durable, sessionReady))
 	}
 	sort.Slice(result, func(left, right int) bool { return result[left].Alias < result[right].Alias })
 	return result
 }
 
-func projectStatusChannel(local model.PeerID, durable store.ChannelStatusChannel,
+func projectStatusChannel(local model.PeerID, durable store.ChannelObservationChannel,
 	sessionReady bool,
 ) StatusChannelSnapshot {
 	channel, progress := durable.Channel(), durable.Progress()
@@ -61,7 +61,7 @@ func projectStatusChannel(local model.PeerID, durable store.ChannelStatusChannel
 			RunRetry: runtime.RunRetry, RunRejected: runtime.RunRejected, RunFailed: runtime.RunFailed}}
 }
 
-func projectStatusChannelTopic(local model.PeerID, durable store.ChannelStatusChannel,
+func projectStatusChannelTopic(local model.PeerID, durable store.ChannelObservationChannel,
 	sessionReady bool,
 ) StatusChannelTopic {
 	channel := durable.Channel()

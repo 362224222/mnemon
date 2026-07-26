@@ -166,7 +166,7 @@ func (observer controllerObserver) Status(ctx context.Context,
 	if observer.wakeWorker != nil {
 		worker = observer.wakeWorker.Snapshot()
 	}
-	channels, err := observer.store.ReadChannelStatusAuthority(ctx)
+	channels, err := observer.store.ReadChannelObservation(ctx)
 	if err != nil {
 		return StatusSnapshot{}, NewAPIError(CodeInternal,
 			"durable Channel progress is unavailable")

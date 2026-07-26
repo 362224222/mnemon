@@ -20,7 +20,9 @@ func TestChannelRoutesAreAuthenticatedClosedAndNeverAcceptTokenInURL(t *testing.
 	request.Header.Del("Content-Type")
 	recorder := httptest.NewRecorder()
 	server.Handler().ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusOK || service.statusCalls != 1 {
+	if recorder.Code != http.StatusOK || service.statusCalls != 1 ||
+		recorder.Body.Len() > MaxChannelResponseBytes ||
+		strings.Contains(recorder.Body.String(), `"publications"`) {
 		t.Fatalf("Channel status = %d %s", recorder.Code, recorder.Body.String())
 	}
 	for _, path := range []string{RouteChannelJoin + "?token=mnch1_secret", RouteChannelStatus + "?channel=alpha"} {

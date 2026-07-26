@@ -18,13 +18,13 @@ func (manager *ChannelManager) ChannelStatus(ctx context.Context, metadata Reque
 	}
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
-	authority, err := manager.store.ReadChannelStatusAuthority(ctx)
+	observation, err := manager.store.ReadChannelObservation(ctx)
 	if err != nil {
 		return ChannelStatusResponse{}, channelAPIError(err)
 	}
-	channels := make([]ChannelView, 0, len(authority.Channels()))
-	for _, channel := range authority.Channels() {
-		channels = append(channels, manager.projectChannelView(authority.LocalPeerID(), channel))
+	channels := make([]ChannelView, 0, len(observation.Channels()))
+	for _, channel := range observation.Channels() {
+		channels = append(channels, manager.projectChannelView(observation.LocalPeerID(), channel))
 	}
 	sort.Slice(channels, func(left, right int) bool { return channels[left].Alias < channels[right].Alias })
 	return ChannelStatusResponse{SchemaVersion: SchemaVersion,
@@ -70,13 +70,13 @@ func (manager *ChannelManager) selectChannel(ctx context.Context,
 func (manager *ChannelManager) readChannelView(ctx context.Context,
 	channelID model.ChannelID,
 ) (ChannelView, error) {
-	authority, err := manager.store.ReadChannelStatusAuthority(ctx)
+	observation, err := manager.store.ReadChannelObservation(ctx)
 	if err != nil {
 		return ChannelView{}, err
 	}
-	for _, channel := range authority.Channels() {
+	for _, channel := range observation.Channels() {
 		if channel.Channel().ID() == channelID {
-			return manager.projectChannelView(authority.LocalPeerID(), channel), nil
+			return manager.projectChannelView(observation.LocalPeerID(), channel), nil
 		}
 	}
 	return ChannelView{}, store.ErrChannelStatusAuthority

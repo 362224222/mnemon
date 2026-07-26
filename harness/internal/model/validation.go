@@ -29,10 +29,7 @@ const (
 	MaxMemberRecordsPerChannel = 64
 	MaxChannelRecordBytes      = 32 << 10
 	MaxPublicationBytes        = 64 << 10
-	// MaxChannelStatusPublications bounds one complete, non-paginated public
-	// evidence snapshot. Readers fail closed instead of silently truncating.
-	MaxChannelStatusPublications = 64
-	MaxCanonicalJSONBytes        = 4 << 20
+	MaxCanonicalJSONBytes      = 4 << 20
 )
 
 var (
