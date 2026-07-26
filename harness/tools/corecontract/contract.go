@@ -42,6 +42,12 @@ type Gate struct {
 	Closure string
 }
 
+type contractSections struct {
+	current      string
+	requirements bool
+	gates        bool
+}
+
 func Load(root string) (Contract, error) {
 	contents, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(DocumentPath)))
 	if err != nil {
@@ -52,72 +58,38 @@ func Load(root string) (Contract, error) {
 
 func Parse(contents []byte) (Contract, error) {
 	var contract Contract
-	section := ""
-	requirementsSection := false
-	gatesSection := false
+	var sections contractSections
 	requirementIDs := make(map[string]struct{}, RequirementCount)
 	gateIDs := make(map[string]struct{}, GateCount)
 	scanner := bufio.NewScanner(bytes.NewReader(contents))
 	for scanner.Scan() {
-		line := strings.TrimSuffix(scanner.Text(), "\r")
-		trimmed := strings.TrimSpace(line)
-		switch trimmed {
-		case "## 8. Canonical requirements":
-			if requirementsSection {
-				return Contract{}, fmt.Errorf("tracked contract repeats canonical requirements section")
-			}
-			requirementsSection = true
-			section = "requirements"
-			continue
-		case "## 9. Closed evidence gates":
-			if gatesSection {
-				return Contract{}, fmt.Errorf("tracked contract repeats closed evidence gates section")
-			}
-			gatesSection = true
-			section = "gates"
+		line := strings.TrimSpace(strings.TrimSuffix(scanner.Text(), "\r"))
+		handled, err := sections.consume(line)
+		if err != nil {
+			return Contract{}, err
+		}
+		if handled {
 			continue
 		}
-		if strings.HasPrefix(trimmed, "## ") {
-			section = ""
-			continue
-		}
-		switch section {
+		switch sections.current {
 		case "requirements":
-			requirement, parsed, err := parseRequirementRow(trimmed)
-			if err != nil {
+			if err := appendRequirementRow(&contract, requirementIDs, line); err != nil {
 				return Contract{}, err
 			}
-			if !parsed {
-				continue
-			}
-			if _, exists := requirementIDs[requirement.ID]; exists {
-				return Contract{}, fmt.Errorf("tracked contract repeats requirement %s", requirement.ID)
-			}
-			requirementIDs[requirement.ID] = struct{}{}
-			contract.Requirements = append(contract.Requirements, requirement)
 		case "gates":
-			gate, parsed, err := parseGateRow(trimmed)
-			if err != nil {
+			if err := appendGateRow(&contract, gateIDs, line); err != nil {
 				return Contract{}, err
 			}
-			if !parsed {
-				continue
-			}
-			if _, exists := gateIDs[gate.ID]; exists {
-				return Contract{}, fmt.Errorf("tracked contract repeats gate %s", gate.ID)
-			}
-			gateIDs[gate.ID] = struct{}{}
-			contract.Gates = append(contract.Gates, gate)
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		return Contract{}, fmt.Errorf("scan tracked R5 Core contract: %w", err)
 	}
-	if !requirementsSection || len(contract.Requirements) != RequirementCount {
+	if !sections.requirements || len(contract.Requirements) != RequirementCount {
 		return Contract{}, fmt.Errorf("tracked contract has %d requirements, want %d",
 			len(contract.Requirements), RequirementCount)
 	}
-	if !gatesSection || len(contract.Gates) != GateCount {
+	if !sections.gates || len(contract.Gates) != GateCount {
 		return Contract{}, fmt.Errorf("tracked contract has %d gates, want %d",
 			len(contract.Gates), GateCount)
 	}
@@ -128,6 +100,56 @@ func Parse(contents []byte) (Contract, error) {
 		}
 	}
 	return contract, nil
+}
+
+func (sections *contractSections) consume(line string) (bool, error) {
+	switch line {
+	case "## 8. Canonical requirements":
+		if sections.requirements {
+			return true, fmt.Errorf("tracked contract repeats canonical requirements section")
+		}
+		sections.requirements = true
+		sections.current = "requirements"
+		return true, nil
+	case "## 9. Closed evidence gates":
+		if sections.gates {
+			return true, fmt.Errorf("tracked contract repeats closed evidence gates section")
+		}
+		sections.gates = true
+		sections.current = "gates"
+		return true, nil
+	}
+	if strings.HasPrefix(line, "## ") {
+		sections.current = ""
+		return true, nil
+	}
+	return false, nil
+}
+
+func appendRequirementRow(contract *Contract, ids map[string]struct{}, line string) error {
+	requirement, parsed, err := parseRequirementRow(line)
+	if err != nil || !parsed {
+		return err
+	}
+	if _, exists := ids[requirement.ID]; exists {
+		return fmt.Errorf("tracked contract repeats requirement %s", requirement.ID)
+	}
+	ids[requirement.ID] = struct{}{}
+	contract.Requirements = append(contract.Requirements, requirement)
+	return nil
+}
+
+func appendGateRow(contract *Contract, ids map[string]struct{}, line string) error {
+	gate, parsed, err := parseGateRow(line)
+	if err != nil || !parsed {
+		return err
+	}
+	if _, exists := ids[gate.ID]; exists {
+		return fmt.Errorf("tracked contract repeats gate %s", gate.ID)
+	}
+	ids[gate.ID] = struct{}{}
+	contract.Gates = append(contract.Gates, gate)
+	return nil
 }
 
 func (contract Contract) RequirementByID() map[string]Requirement {
