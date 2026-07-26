@@ -158,18 +158,22 @@ func composeDaemonDataPlaneWorkers(st *store.Store, identity *Identity, clock Cl
 	}, nil
 }
 
-func (runtime *daemonDataPlaneRuntime) Close() error {
+func (runtime *daemonDataPlaneRuntime) CloseContext(ctx context.Context) error {
 	if runtime == nil {
 		return nil
 	}
+	if ctx == nil {
+		return errors.New("mnemond data-plane shutdown context is unavailable")
+	}
 	var result error
 	if runtime.artifactServer != nil {
-		result = errors.Join(result, runtime.artifactServer.Close())
+		result = errors.Join(result, runtime.artifactServer.CloseContext(ctx))
 	}
 	if runtime.eventServer != nil {
-		result = errors.Join(result, runtime.eventServer.Close())
+		result = errors.Join(result, runtime.eventServer.CloseContext(ctx))
 	}
-	return result
+	return errors.Join(result,
+		gracefulShutdownDeadlineError(ctx, "close mnemond data-plane runtime"))
 }
 
 type daemonInboxTrigger []interface{ Trigger() }

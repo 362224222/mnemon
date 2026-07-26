@@ -62,10 +62,11 @@ type EventServer struct {
 	cancel context.CancelFunc
 	budget chan struct{}
 
-	mu        sync.Mutex
-	active    sync.WaitGroup
-	closed    bool
-	closeOnce sync.Once
+	mu             sync.Mutex
+	activeHandlers uint32
+	handlersDone   chan struct{}
+	closed         bool
+	closeOnce      sync.Once
 }
 
 func NewEventServer(lifetime context.Context, options EventServerOptions) (*EventServer, error) {
@@ -103,7 +104,7 @@ func (server *EventServer) handle(stream network.Stream) {
 		}
 		return
 	}
-	defer server.active.Done()
+	defer server.finishHandler()
 
 	if !server.admit() {
 		if err := server.writeBusy(stream); err != nil {
@@ -135,8 +136,24 @@ func (server *EventServer) begin() bool {
 	if server.closed || server.ctx == nil || server.ctx.Err() != nil {
 		return false
 	}
-	server.active.Add(1)
+	if server.activeHandlers == 0 {
+		server.handlersDone = make(chan struct{})
+	}
+	server.activeHandlers++
 	return true
+}
+
+func (server *EventServer) finishHandler() {
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	if server.activeHandlers == 0 {
+		panic("Mnemon Event server handler accounting underflow")
+	}
+	server.activeHandlers--
+	if server.activeHandlers == 0 {
+		close(server.handlersDone)
+		server.handlersDone = nil
+	}
 }
 
 func (server *EventServer) admit() bool {
@@ -406,12 +423,21 @@ func writeEventStreamFrame(stream network.Stream, frame EventFrame) error {
 }
 
 func (server *EventServer) Close() error {
+	return server.CloseContext(context.Background())
+}
+
+// CloseContext seals handler admission, broadcasts cancellation and waits for
+// every handler admitted before the seal. A caller may retry the wait with a
+// later context after an earlier deadline expires.
+func (server *EventServer) CloseContext(ctx context.Context) error {
 	if server == nil {
 		return nil
 	}
+	if ctx == nil {
+		return fmt.Errorf("%w: shutdown context is unavailable", ErrEventServer)
+	}
 	server.closeOnce.Do(func() {
 		eventServerConstructorMu.Lock()
-		defer eventServerConstructorMu.Unlock()
 		server.mu.Lock()
 		server.closed = true
 		if server.cancel != nil {
@@ -421,9 +447,20 @@ func (server *EventServer) Close() error {
 			server.host.RemoveStreamHandler(EventsProtocol)
 		}
 		server.mu.Unlock()
-		server.active.Wait()
+		eventServerConstructorMu.Unlock()
 	})
-	return nil
+	server.mu.Lock()
+	drained := server.handlersDone
+	server.mu.Unlock()
+	if drained == nil {
+		return nil
+	}
+	select {
+	case <-drained:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("%w: drain active handlers: %w", ErrEventServer, ctx.Err())
+	}
 }
 
 func isNilEventServerClock(clock EventServerClock) bool {

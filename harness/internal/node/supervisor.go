@@ -162,8 +162,12 @@ func orderComponentSpecs(byName map[string]componentSpec) ([]componentSpec, erro
 // Run serves until caller cancellation, an explicit stop request, or the first
 // component exit. Domain components that intentionally remain degraded adapt
 // their terminal domain result into a lifecycle that waits for cancellation.
-func (supervisor *nodeSupervisor) Run(ctx context.Context, stop <-chan struct{}) error {
-	if supervisor == nil || len(supervisor.components) == 0 || ctx == nil {
+// Shutdown callbacks must stop waiting when their shared shutdown context is
+// done; the Supervisor never grants a fresh per-component drain interval.
+func (supervisor *nodeSupervisor) Run(ctx context.Context, stop <-chan struct{},
+	shutdown *gracefulShutdown,
+) error {
+	if supervisor == nil || len(supervisor.components) == 0 || ctx == nil || shutdown == nil {
 		return errors.New("node Supervisor is unavailable")
 	}
 	runCtx, cancelAll := context.WithCancelCause(ctx)
@@ -189,10 +193,11 @@ func (supervisor *nodeSupervisor) Run(ctx context.Context, stop <-chan struct{})
 	}
 
 	firstErr := waitForSupervisorStop(runCtx)
+	shutdownCtx := shutdown.Context()
 	cancelAll(nil)
-	shutdownErr := shutdownSupervisedComponents(ctx, started)
-	<-watchDone
-	return errors.Join(firstErr, shutdownErr)
+	shutdownErr := shutdownSupervisedComponents(shutdownCtx, started)
+	watchErr := waitForGracefulShutdown(shutdownCtx, watchDone, "join stop watcher")
+	return errors.Join(firstErr, shutdownErr, watchErr)
 }
 
 func watchSupervisorStop(ctx context.Context, stop <-chan struct{},
@@ -238,18 +243,24 @@ func supervisedComponentExitError(name string, err error) error {
 	return fmt.Errorf("node Supervisor component %q: %w", name, err)
 }
 
-func shutdownSupervisedComponents(caller context.Context, started []*supervisedComponent) error {
-	shutdownCtx := context.Background()
-	if caller != nil {
-		shutdownCtx = context.WithoutCancel(caller)
-	}
+func shutdownSupervisedComponents(shutdownCtx context.Context,
+	started []*supervisedComponent,
+) error {
 	var result error
 	for index := len(started) - 1; index >= 0; index-- {
 		runtime := started[index]
 		runtime.cancel()
 		shutdownErr := runtime.spec.Shutdown(shutdownCtx)
-		<-runtime.done
-		result = errors.Join(result, shutdownErr)
+		if shutdownErr != nil {
+			result = errors.Join(result, fmt.Errorf(
+				"node Supervisor component %q shutdown: %w", runtime.spec.Name, shutdownErr))
+		}
+		if deadlineErr := gracefulShutdownDeadlineError(shutdownCtx,
+			fmt.Sprintf("component %q shutdown", runtime.spec.Name)); deadlineErr != nil {
+			result = errors.Join(result, deadlineErr)
+		}
+		result = errors.Join(result, waitForGracefulShutdown(shutdownCtx, runtime.done,
+			fmt.Sprintf("join component %q", runtime.spec.Name)))
 	}
 	return result
 }

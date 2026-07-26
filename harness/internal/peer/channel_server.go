@@ -49,10 +49,11 @@ type ChannelDispatcher struct {
 	enrollment ChannelRequestHandler
 	member     ChannelRequestHandler
 
-	mu        sync.Mutex
-	active    sync.WaitGroup
-	closed    bool
-	closeOnce sync.Once
+	mu             sync.Mutex
+	activeHandlers uint32
+	handlersDone   chan struct{}
+	closed         bool
+	closeOnce      sync.Once
 }
 
 func NewChannelDispatcher(lifetime context.Context, nodeHost host.Host,
@@ -83,7 +84,7 @@ func (dispatcher *ChannelDispatcher) handle(stream network.Stream) {
 		}
 		return
 	}
-	defer dispatcher.active.Done()
+	defer dispatcher.finishHandler()
 	if err := dispatcher.serve(stream); err != nil {
 		if stream != nil {
 			_ = stream.Reset()
@@ -102,8 +103,24 @@ func (dispatcher *ChannelDispatcher) begin() bool {
 	if dispatcher.closed || dispatcher.ctx == nil || dispatcher.ctx.Err() != nil {
 		return false
 	}
-	dispatcher.active.Add(1)
+	if dispatcher.activeHandlers == 0 {
+		dispatcher.handlersDone = make(chan struct{})
+	}
+	dispatcher.activeHandlers++
 	return true
+}
+
+func (dispatcher *ChannelDispatcher) finishHandler() {
+	dispatcher.mu.Lock()
+	defer dispatcher.mu.Unlock()
+	if dispatcher.activeHandlers == 0 {
+		panic("Mnemon Channel dispatcher handler accounting underflow")
+	}
+	dispatcher.activeHandlers--
+	if dispatcher.activeHandlers == 0 {
+		close(dispatcher.handlersDone)
+		dispatcher.handlersDone = nil
+	}
 }
 
 func (dispatcher *ChannelDispatcher) serve(stream network.Stream) error {
@@ -147,8 +164,18 @@ func (dispatcher *ChannelDispatcher) serve(stream network.Stream) error {
 }
 
 func (dispatcher *ChannelDispatcher) Close() error {
+	return dispatcher.CloseContext(context.Background())
+}
+
+// CloseContext seals handler admission, broadcasts cancellation and waits for
+// every handler admitted before the seal. A caller may retry the wait with a
+// later context after an earlier deadline expires.
+func (dispatcher *ChannelDispatcher) CloseContext(ctx context.Context) error {
 	if dispatcher == nil {
 		return nil
+	}
+	if ctx == nil {
+		return fmt.Errorf("%w: shutdown context is unavailable", ErrChannelDispatcher)
 	}
 	dispatcher.closeOnce.Do(func() {
 		channelDispatcherConstructorMu.Lock()
@@ -162,9 +189,19 @@ func (dispatcher *ChannelDispatcher) Close() error {
 		}
 		dispatcher.mu.Unlock()
 		channelDispatcherConstructorMu.Unlock()
-		dispatcher.active.Wait()
 	})
-	return nil
+	dispatcher.mu.Lock()
+	drained := dispatcher.handlersDone
+	dispatcher.mu.Unlock()
+	if drained == nil {
+		return nil
+	}
+	select {
+	case <-drained:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("%w: drain active handlers: %w", ErrChannelDispatcher, ctx.Err())
+	}
 }
 
 func isNilChannelRequestHandler(handler ChannelRequestHandler) bool {

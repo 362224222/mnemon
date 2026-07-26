@@ -119,12 +119,13 @@ type ArtifactServer struct {
 	nodeLimit int
 	peerLimit int
 
-	mu         sync.Mutex
-	active     sync.WaitGroup
-	closed     bool
-	nodeActive int
-	peerActive map[model.PeerID]int
-	closeOnce  sync.Once
+	mu             sync.Mutex
+	activeHandlers uint32
+	handlersDone   chan struct{}
+	closed         bool
+	nodeActive     int
+	peerActive     map[model.PeerID]int
+	closeOnce      sync.Once
 }
 
 func NewArtifactServer(lifetime context.Context,
@@ -163,7 +164,7 @@ func (server *ArtifactServer) handle(stream network.Stream) {
 		}
 		return
 	}
-	defer server.active.Done()
+	defer server.finishHandler()
 
 	requester, err := authenticateArtifactStream(stream)
 	if err != nil {
@@ -198,8 +199,24 @@ func (server *ArtifactServer) begin() bool {
 	if server.closed || server.ctx == nil || server.ctx.Err() != nil {
 		return false
 	}
-	server.active.Add(1)
+	if server.activeHandlers == 0 {
+		server.handlersDone = make(chan struct{})
+	}
+	server.activeHandlers++
 	return true
+}
+
+func (server *ArtifactServer) finishHandler() {
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	if server.activeHandlers == 0 {
+		panic("Mnemon Artifact server handler accounting underflow")
+	}
+	server.activeHandlers--
+	if server.activeHandlers == 0 {
+		close(server.handlersDone)
+		server.handlersDone = nil
+	}
 }
 
 func (server *ArtifactServer) admit(requester model.PeerID) bool {
@@ -471,12 +488,21 @@ func writeArtifactFrameWithScope(writer io.Writer, scope network.ResourceScope,
 }
 
 func (server *ArtifactServer) Close() error {
+	return server.CloseContext(context.Background())
+}
+
+// CloseContext seals handler admission, broadcasts cancellation and waits for
+// every handler admitted before the seal. A caller may retry the wait with a
+// later context after an earlier deadline expires.
+func (server *ArtifactServer) CloseContext(ctx context.Context) error {
 	if server == nil {
 		return nil
 	}
+	if ctx == nil {
+		return fmt.Errorf("%w: shutdown context is unavailable", ErrArtifactServer)
+	}
 	server.closeOnce.Do(func() {
 		artifactServerConstructorMu.Lock()
-		defer artifactServerConstructorMu.Unlock()
 		server.mu.Lock()
 		server.closed = true
 		if server.cancel != nil {
@@ -486,9 +512,20 @@ func (server *ArtifactServer) Close() error {
 			server.host.RemoveStreamHandler(ArtifactsProtocol)
 		}
 		server.mu.Unlock()
-		server.active.Wait()
+		artifactServerConstructorMu.Unlock()
 	})
-	return nil
+	server.mu.Lock()
+	drained := server.handlersDone
+	server.mu.Unlock()
+	if drained == nil {
+		return nil
+	}
+	select {
+	case <-drained:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("%w: drain active handlers: %w", ErrArtifactServer, ctx.Err())
+	}
 }
 
 func isNilArtifactServerSource(source ArtifactServerSource) bool {

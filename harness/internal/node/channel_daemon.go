@@ -18,6 +18,7 @@ type daemonChannelRuntime struct {
 	dispatcher *peer.ChannelDispatcher
 	data       *daemonDataPlaneRuntime
 	cancel     context.CancelFunc
+	meshCancel context.CancelFunc
 }
 
 func openDaemonChannelRuntime(ctx context.Context, st *store.Store, identity *Identity,
@@ -34,15 +35,19 @@ func openDaemonChannelRuntime(ctx context.Context, st *store.Store, identity *Id
 	if err != nil {
 		return nil, fmt.Errorf("construct Channel listen address: %w", err)
 	}
-	lifetime, cancel := context.WithCancel(context.Background())
-	mesh, err := peer.NewMeshRuntime(lifetime, identity.PrivateKey(), []ma.Multiaddr{listen}, meshAuthority)
+	meshLifetime, meshCancel := context.WithCancel(context.Background())
+	handlerLifetime, cancel := context.WithCancel(meshLifetime)
+	mesh, err := peer.NewMeshRuntime(meshLifetime, identity.PrivateKey(), []ma.Multiaddr{listen}, meshAuthority)
 	if err != nil {
 		cancel()
+		meshCancel()
 		return nil, err
 	}
 	closeMesh := func(cause error) (*daemonChannelRuntime, error) {
 		cancel()
-		return nil, errors.Join(cause, mesh.Close())
+		cause = errors.Join(cause, mesh.Close())
+		meshCancel()
+		return nil, cause
 	}
 	manager, err := NewChannelManager(ChannelManagerOptions{Store: st, Identity: identity,
 		Runtime: mesh, Clock: clock})
@@ -58,17 +63,17 @@ func openDaemonChannelRuntime(ctx context.Context, st *store.Store, identity *Id
 	if err != nil {
 		return closeMesh(err)
 	}
-	dispatcher, err := peer.NewChannelDispatcher(lifetime, mesh.Host(), peer.ChannelDispatcherOptions{
+	dispatcher, err := peer.NewChannelDispatcher(handlerLifetime, mesh.Host(), peer.ChannelDispatcherOptions{
 		Enrollment: owner, Member: members})
 	if err != nil {
 		return closeMesh(err)
 	}
-	data, err := openDaemonDataPlane(ctx, lifetime, st, identity, clock, mesh, manager)
+	data, err := openDaemonDataPlane(ctx, handlerLifetime, st, identity, clock, mesh, manager)
 	if err != nil {
 		return closeMesh(errors.Join(err, dispatcher.Close()))
 	}
 	return &daemonChannelRuntime{manager: manager, mesh: mesh, dispatcher: dispatcher,
-		data: data, cancel: cancel}, nil
+		data: data, cancel: cancel, meshCancel: meshCancel}, nil
 }
 
 func channelListenAddress(peerID model.PeerID) (ma.Multiaddr, error) {
@@ -80,22 +85,31 @@ func channelListenAddress(peerID model.PeerID) (ma.Multiaddr, error) {
 	return ma.NewMultiaddr(fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", port))
 }
 
-func (runtime *daemonChannelRuntime) Close() error {
+func (runtime *daemonChannelRuntime) CloseContext(ctx context.Context) error {
 	if runtime == nil {
 		return nil
 	}
-	var result error
-	if runtime.data != nil {
-		result = errors.Join(result, runtime.data.Close())
+	if ctx == nil {
+		return errors.New("mnemond Channel shutdown context is unavailable")
 	}
-	if runtime.dispatcher != nil {
-		result = errors.Join(result, runtime.dispatcher.Close())
-	}
-	if runtime.mesh != nil {
-		result = errors.Join(result, runtime.mesh.Close())
-	}
+	// Broadcast the protocol lifetime cancellation before waiting for any
+	// admitted dispatcher/Event/Artifact handler to drain.
 	if runtime.cancel != nil {
 		runtime.cancel()
 	}
-	return result
+	var result error
+	if runtime.data != nil {
+		result = errors.Join(result, runtime.data.CloseContext(ctx))
+	}
+	if runtime.dispatcher != nil {
+		result = errors.Join(result, runtime.dispatcher.CloseContext(ctx))
+	}
+	if runtime.mesh != nil && ctx.Err() == nil {
+		result = errors.Join(result, runtime.mesh.Close())
+	}
+	if runtime.meshCancel != nil {
+		runtime.meshCancel()
+	}
+	return errors.Join(result,
+		gracefulShutdownDeadlineError(ctx, "close mnemond Channel runtime"))
 }

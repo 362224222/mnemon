@@ -59,7 +59,9 @@ func TestNodeSupervisorStartsDependenciesAndWaitsForReverseShutdown(t *testing.T
 	}
 	stop := make(chan struct{})
 	done := make(chan error, 1)
-	go func() { done <- supervisor.Run(context.Background(), stop) }()
+	go func() {
+		done <- supervisor.Run(context.Background(), stop, newGracefulShutdown(time.Second))
+	}()
 	wantStarted := []string{"run:store", "ready:store", "run:http", "ready:http",
 		"run:worker", "ready:worker"}
 	waitSupervisorLog(t, &logMu, &log, len(wantStarted))
@@ -113,7 +115,9 @@ func TestNodeSupervisorPropagatesFirstFatalErrorAndCancelsDependents(t *testing.
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
-	go func() { done <- supervisor.Run(context.Background(), nil) }()
+	go func() {
+		done <- supervisor.Run(context.Background(), nil, newGracefulShutdown(time.Second))
+	}()
 	select {
 	case <-workerStarted:
 	case <-time.After(time.Second):
@@ -182,7 +186,9 @@ func TestNodeSupervisorPropagatesComponentExitDuringReadiness(t *testing.T) {
 				t.Fatal(err)
 			}
 			done := make(chan error, 1)
-			go func() { done <- supervisor.Run(context.Background(), nil) }()
+			go func() {
+				done <- supervisor.Run(context.Background(), nil, newGracefulShutdown(time.Second))
+			}()
 			awaitSupervisorSignal(t, readinessEntered, "primary readiness")
 			close(exit)
 			select {
@@ -238,7 +244,7 @@ func TestNodeSupervisorRollsBackReadinessFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = supervisor.Run(context.Background(), nil)
+	err = supervisor.Run(context.Background(), nil, newGracefulShutdown(time.Second))
 	if err == nil || !strings.Contains(err.Error(), `component "primary" readiness: probe failed`) {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -279,7 +285,7 @@ func TestNodeSupervisorAggregatesShutdownErrorsAndAcceptsCallerCancellation(t *t
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
-	go func() { done <- supervisor.Run(ctx, nil) }()
+	go func() { done <- supervisor.Run(ctx, nil, newGracefulShutdown(time.Second)) }()
 	awaitSupervisorSignal(t, started, "primary readiness")
 	awaitSupervisorSignal(t, started, "dependent readiness")
 	cancel()
@@ -331,7 +337,9 @@ func TestNodeSupervisorTreatsExternalStopsAsClean(t *testing.T) {
 				t.Fatal(err)
 			}
 			done := make(chan error, 1)
-			go func() { done <- supervisor.Run(ctx, stop) }()
+			go func() {
+				done <- supervisor.Run(ctx, stop, newGracefulShutdown(time.Second))
+			}()
 			awaitSupervisorSignal(t, started, "component start")
 			test.stop(cancel, stop)
 			select {
@@ -345,6 +353,108 @@ func TestNodeSupervisorTreatsExternalStopsAsClean(t *testing.T) {
 			awaitSupervisorSignal(t, shutdownCalled, "component shutdown")
 		})
 	}
+}
+
+func TestNodeSupervisorBoundsBlockedShutdownAndAttemptsReverseOrder(t *testing.T) {
+	t.Parallel()
+	started := make(chan struct{}, 2)
+	attempted := make(chan string, 2)
+	component := func(name string, block bool, dependencies ...string) componentSpec {
+		return componentSpec{Name: name, Dependencies: dependencies,
+			Readiness: func(context.Context) error {
+				started <- struct{}{}
+				return nil
+			},
+			Run: func(ctx context.Context) error {
+				<-ctx.Done()
+				return nil
+			},
+			Shutdown: func(ctx context.Context) error {
+				attempted <- name
+				if block {
+					<-ctx.Done()
+					return ctx.Err()
+				}
+				return nil
+			},
+			Restart:   componentRestartNever,
+			Resources: componentResourceBudget{MaxConcurrent: 1}}
+	}
+	supervisor, err := newNodeSupervisor([]componentSpec{
+		component("primary", false),
+		component("dependent", true, "primary"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- supervisor.Run(context.Background(), stop,
+			newGracefulShutdown(50*time.Millisecond))
+	}()
+	awaitSupervisorSignal(t, started, "primary readiness")
+	awaitSupervisorSignal(t, started, "dependent readiness")
+	close(stop)
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrGracefulShutdownDeadline) ||
+			!errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("Run() error = %v, want graceful shutdown deadline", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Supervisor exceeded the process shutdown budget")
+	}
+	if first, second := <-attempted, <-attempted; first != "dependent" || second != "primary" {
+		t.Fatalf("shutdown attempts = %q, %q, want dependent then primary", first, second)
+	}
+}
+
+func TestNodeSupervisorBoundsBlockedRunJoin(t *testing.T) {
+	t.Parallel()
+	started := make(chan struct{})
+	shutdownCalled := make(chan struct{})
+	release := make(chan struct{})
+	exited := make(chan struct{})
+	spec := componentSpec{Name: "blocked-run",
+		Readiness: channelReadiness(started),
+		Run: func(context.Context) error {
+			close(started)
+			<-release
+			close(exited)
+			return nil
+		},
+		Shutdown: func(context.Context) error {
+			close(shutdownCalled)
+			return nil
+		},
+		Restart:   componentRestartNever,
+		Resources: componentResourceBudget{MaxConcurrent: 1}}
+	supervisor, err := newNodeSupervisor([]componentSpec{spec})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- supervisor.Run(context.Background(), stop,
+			newGracefulShutdown(50*time.Millisecond))
+	}()
+	awaitSupervisorSignal(t, started, "blocked component start")
+	close(stop)
+	awaitSupervisorSignal(t, shutdownCalled, "blocked component shutdown")
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrGracefulShutdownDeadline) ||
+			!strings.Contains(err.Error(), `join component "blocked-run"`) {
+			t.Fatalf("Run() error = %v, want blocked Run diagnostic", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Supervisor did not bound a blocked Run join")
+	}
+	close(release)
+	awaitSupervisorSignal(t, exited, "blocked component release")
 }
 
 func TestWaitForSupervisorStopPreservesFirstTerminationCause(t *testing.T) {

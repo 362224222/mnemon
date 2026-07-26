@@ -89,9 +89,10 @@ func TestRun(t *testing.T) {
 }
 
 type fakeDaemonRuntime struct {
-	served bool
-	closed bool
-	err    error
+	served   bool
+	closed   bool
+	err      error
+	closeErr error
 }
 
 func (daemon *fakeDaemonRuntime) Serve(ctx context.Context) error {
@@ -101,7 +102,7 @@ func (daemon *fakeDaemonRuntime) Serve(ctx context.Context) error {
 
 func (daemon *fakeDaemonRuntime) Close() error {
 	daemon.closed = true
-	return nil
+	return daemon.closeErr
 }
 
 func TestRunServeResolvesOneCanonicalProjectRoot(t *testing.T) {
@@ -125,7 +126,9 @@ func TestRunServeResolvesOneCanonicalProjectRoot(t *testing.T) {
 		if err := runWithDaemon(context.Background(), args, &stdout, &stderr, open); err != nil {
 			t.Fatalf("runWithDaemon(%v) error = %v", args, err)
 		}
-		if opened.Workspace != resolvedProject || opened.Clock != nil || !daemon.served || !daemon.closed ||
+		if opened.Workspace != resolvedProject || opened.Clock != nil ||
+			opened.GracefulShutdownBudget != gracefulShutdownBudget ||
+			!daemon.served || !daemon.closed ||
 			stdout.Len() != 0 || stderr.Len() != 0 {
 			t.Fatalf("serve state = options %#v daemon %#v stdout=%q stderr=%q",
 				opened, daemon, stdout.String(), stderr.String())
@@ -147,6 +150,20 @@ func TestRunServeRejectsMalformedArgumentsBeforeOpening(t *testing.T) {
 	}
 	if opened != 0 {
 		t.Fatalf("malformed serve opened %d daemons", opened)
+	}
+}
+
+func TestRunServeReturnsGracefulShutdownDiagnosticToExecutable(t *testing.T) {
+	project := t.TempDir()
+	diagnostic := fmt.Errorf("%w: test component", node.ErrGracefulShutdownDeadline)
+	daemon := &fakeDaemonRuntime{closeErr: diagnostic}
+	open := func(context.Context, node.DaemonOptions) (daemonRuntime, error) {
+		return daemon, nil
+	}
+	err := runWithDaemon(context.Background(),
+		[]string{"serve", "--project-root", project}, io.Discard, io.Discard, open)
+	if !errors.Is(err, node.ErrGracefulShutdownDeadline) || !daemon.served || !daemon.closed {
+		t.Fatalf("serve result = (%v, %#v), want shutdown diagnostic after close", err, daemon)
 	}
 }
 

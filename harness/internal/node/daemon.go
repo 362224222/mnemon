@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sync"
+	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/agent"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
@@ -47,6 +48,10 @@ type DaemonOptions struct {
 	Install            InstallationVerifier
 	Control            ControlRuntime
 	WakeAdapterFactory WakeAdapterFactory
+	// GracefulShutdownBudget is the one process-level drain budget supplied by
+	// mnemond. Zero selects the bounded compatibility default for low-level
+	// in-process composition.
+	GracefulShutdownBudget time.Duration
 }
 
 // Daemon owns the strict restart path for one workspace-local Node. It binds
@@ -60,6 +65,7 @@ type Daemon struct {
 	store      *store.Store
 	controller *Controller
 	channels   *daemonChannelRuntime
+	shutdown   *gracefulShutdown
 
 	lifecycleMu  sync.Mutex
 	serveStarted bool
@@ -121,6 +127,7 @@ func openDaemon(ctx context.Context, options DaemonOptions,
 		return nil, fmt.Errorf("%w: %w", ErrDaemonAuthority, err)
 	}
 	options.Control = control
+	shutdown := newGracefulShutdown(options.GracefulShutdownBudget)
 	nodeState := filepath.Join(options.Workspace, ".mnemon", "harness", "node")
 	authority, err := openExistingDaemonAuthority(ctx, options.Workspace, nodeState,
 		options.Control)
@@ -136,11 +143,13 @@ func openDaemon(ctx context.Context, options DaemonOptions,
 		return nil, fmt.Errorf("%w: compose Channel runtime: %v", ErrDaemonAuthority, err)
 	}
 	fail := func(cause error) (*Daemon, error) {
-		cause = errors.Join(cause, channels.Close())
+		shutdownCtx := shutdown.Context()
+		cause = errors.Join(cause, channels.CloseContext(shutdownCtx))
 		if closeErr := st.Close(); closeErr != nil {
 			cause = errors.Join(cause,
 				fmt.Errorf("%w: close Store after composition failure: %v", ErrDaemonAuthority, closeErr))
 		}
+		shutdown.finish()
 		return nil, cause
 	}
 	var wakeAdapter agent.WakeWorkerAdapter
@@ -160,12 +169,14 @@ func openDaemon(ctx context.Context, options DaemonOptions,
 	controller, err := NewController(ctx, ControllerOptions{NodeState: nodeState, Workspace: workspace,
 		Store: st, Profile: authority.authority.Profile, Signer: identity.PublicationSigner(), Clock: options.Clock,
 		Install: options.Install, Control: options.Control, Channels: channels.manager, actionPolicy: actionPolicy,
-		WakeAdapter: wakeAdapter, BeforeAccept: beforeAccept, networkRuntime: channels.data.plane})
+		WakeAdapter: wakeAdapter, BeforeAccept: beforeAccept, networkRuntime: channels.data.plane,
+		shutdown: shutdown})
 	if err != nil {
 		return fail(fmt.Errorf("%w: compose controller: %v", ErrDaemonAuthority, err))
 	}
 	return &Daemon{workspace: workspace, nodeState: nodeState, identity: identity,
-		store: st, controller: controller, channels: channels, serveDone: make(chan struct{})}, nil
+		store: st, controller: controller, channels: channels, shutdown: shutdown,
+		serveDone: make(chan struct{})}, nil
 }
 
 func (daemon *Daemon) Serve(ctx context.Context) error {
@@ -200,6 +211,8 @@ func (daemon *Daemon) Close() error {
 		return nil
 	}
 	daemon.closeOnce.Do(func() {
+		shutdownCtx := daemon.shutdown.Context()
+		defer daemon.shutdown.finish()
 		daemon.lifecycleMu.Lock()
 		daemon.closing = true
 		serveStarted := daemon.serveStarted
@@ -211,19 +224,32 @@ func (daemon *Daemon) Close() error {
 			if serveStarted {
 				controller.requestShutdown()
 				if serveDone != nil {
-					<-serveDone
+					daemon.closeErr = errors.Join(daemon.closeErr,
+						waitForGracefulShutdown(shutdownCtx, serveDone, "join daemon Serve"))
 				}
 			}
 			// Serve normally releases the launch permit immediately before HTTP
 			// admission. Keep this idempotent fallback for every early-return
 			// path so Close can never strand inherited ensure.lock authority.
-			daemon.closeErr = controller.releaseBeforeAccept()
+			daemon.closeErr = errors.Join(daemon.closeErr, controller.releaseBeforeAccept())
 		}
 		if daemon.channels != nil {
-			daemon.closeErr = errors.Join(daemon.closeErr, daemon.channels.Close())
+			daemon.closeErr = errors.Join(daemon.closeErr,
+				daemon.channels.CloseContext(shutdownCtx))
 		}
 		if daemon.store != nil {
-			daemon.closeErr = errors.Join(daemon.closeErr, daemon.store.Close())
+			// Store.Close has no context-aware database/sql equivalent. Invoke
+			// it only after Supervisor/Serve and Channel ownership have joined,
+			// and never start it after their shared process deadline expires.
+			var storeErr error
+			if shutdownCtx.Err() == nil {
+				storeErr = daemon.store.Close()
+				if storeErr != nil {
+					storeErr = fmt.Errorf("close mnemond Store: %w", storeErr)
+				}
+			}
+			daemon.closeErr = errors.Join(daemon.closeErr, storeErr,
+				gracefulShutdownDeadlineError(shutdownCtx, "close mnemond Store"))
 		}
 		daemon.lifecycleMu.Lock()
 		daemon.closed = true

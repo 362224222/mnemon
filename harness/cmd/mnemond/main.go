@@ -18,6 +18,8 @@ import (
 
 var version = "dev"
 
+const gracefulShutdownBudget = 10 * time.Second
+
 const helpText = `mnemond is the sole local controller for an R5 managed Agent.
 
 It owns Node, Event, Work, Handling, and Artifact state.
@@ -105,7 +107,8 @@ func runWithNode(ctx context.Context, args []string, stdout, stderr io.Writer,
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		daemon, err := open(ctx, node.DaemonOptions{Workspace: projectRoot})
+		daemon, err := open(ctx, node.DaemonOptions{Workspace: projectRoot,
+			GracefulShutdownBudget: gracefulShutdownBudget})
 		if err != nil {
 			return err
 		}

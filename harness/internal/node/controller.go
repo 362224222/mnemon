@@ -39,6 +39,7 @@ type ControllerOptions struct {
 	wakeWorker     managedWakeWorker
 	networkRuntime managedNetworkRuntime
 	actionHandlers agent.ActionHandlers
+	shutdown       *gracefulShutdown
 }
 
 type managedWakeWorker interface {
@@ -64,6 +65,7 @@ type Controller struct {
 	admission         *controllerAdmissionGate
 	wakeWorker        managedWakeWorker
 	networkRuntime    managedNetworkRuntime
+	shutdown          *gracefulShutdown
 	shutdownRequested chan struct{}
 	shutdownOnce      sync.Once
 	serveMu           sync.Mutex
@@ -88,10 +90,15 @@ func NewController(ctx context.Context, options ControllerOptions) (*Controller,
 	if err != nil {
 		return nil, err
 	}
+	shutdown := options.shutdown
+	if shutdown == nil {
+		shutdown = newGracefulShutdown(defaultGracefulShutdownBudget)
+	}
 	controller := &Controller{nodeState: options.NodeState, assetRevision: assetRevision, store: options.Store,
 		control: options.Control, admission: admission, wakeWorker: composition.wakeWorker,
 		networkRuntime:    options.networkRuntime,
-		shutdownRequested: make(chan struct{}), beforeAccept: options.BeforeAccept}
+		shutdownRequested: make(chan struct{}), beforeAccept: options.BeforeAccept,
+		shutdown: shutdown}
 	managedAgent := controllerAdmissionService{gate: admission, next: newLocalAPIServiceAdapter(composition.service)}
 	var managedService Service = managedAgent
 	if options.Channels != nil {
@@ -196,7 +203,9 @@ func (controller *Controller) Serve(ctx context.Context) error {
 			}
 			return normalizeControllerServeError(runCtx, server.Serve(admitted))
 		},
-		Shutdown:  func(context.Context) error { return closeControllerHTTP(server, requests) },
+		Shutdown: func(shutdownCtx context.Context) error {
+			return closeControllerHTTP(shutdownCtx, server, requests)
+		},
 		Restart:   componentRestartNever,
 		Resources: componentResourceBudget{MaxConcurrent: controllerHTTPConnectionLimit}}
 	components := make([]componentSpec, 0, 3)
@@ -247,7 +256,7 @@ func (controller *Controller) Serve(ctx context.Context) error {
 	if err != nil {
 		return errors.Join(err, admitted.Close(), controller.releaseBeforeAccept())
 	}
-	serveErr := supervisor.Run(ctx, controller.shutdownRequested)
+	serveErr := supervisor.Run(ctx, controller.shutdownRequested, controller.shutdown)
 	return errors.Join(serveErr, admitted.Close(), controller.releaseBeforeAccept())
 }
 
@@ -321,24 +330,23 @@ func proveControllerHTTP(ctx context.Context, control ControlClientFactory,
 	return nil
 }
 
-func closeControllerHTTP(server *http.Server, requests *controllerRequestTracker) error {
-	if server == nil || requests == nil {
+func closeControllerHTTP(ctx context.Context, server *http.Server,
+	requests *controllerRequestTracker,
+) error {
+	if ctx == nil || server == nil || requests == nil {
 		return errors.New("mnemond controller HTTP lifecycle is unavailable")
 	}
 	drained := requests.seal()
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	shutdownErr := server.Shutdown(shutdownCtx)
-	cancel()
+	shutdownErr := server.Shutdown(ctx)
+	var closeErr error
 	if shutdownErr != nil {
-		closeErr := server.Close()
+		closeErr = server.Close()
 		if errors.Is(closeErr, http.ErrServerClosed) {
 			closeErr = nil
 		}
-		<-drained
-		return errors.Join(shutdownErr, closeErr)
 	}
-	<-drained
-	return nil
+	drainErr := waitForGracefulShutdown(ctx, drained, "drain controller HTTP requests")
+	return errors.Join(shutdownErr, closeErr, drainErr)
 }
 
 func normalizeControllerServeError(ctx context.Context, err error) error {
