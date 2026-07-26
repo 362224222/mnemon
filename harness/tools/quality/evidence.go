@@ -7,6 +7,8 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+
+	"github.com/mnemon-dev/mnemon/harness/tools/corecontract"
 )
 
 func validateArchitectureEvidence(root string, manifest architectureManifest, findings []architectureFinding) error {
@@ -52,133 +54,10 @@ func automaticArchitectureRule(rule string) bool {
 	}
 }
 
-func validateRequirementEvidence(root string, expected expectedManifest, requirements requirementsManifest) error {
-	if len(expected.Requirements) != len(requirements.Requirements) {
-		return fmt.Errorf("requirements evidence has %d IDs, expected %d", len(requirements.Requirements), len(expected.Requirements))
-	}
-	for index := range expected.Requirements {
-		if expected.Requirements[index].ID != requirements.Requirements[index].ID {
-			return fmt.Errorf("requirements ID mismatch at index %d: got %s, want %s", index, requirements.Requirements[index].ID, expected.Requirements[index].ID)
-		}
-	}
-	for _, requirement := range requirements.Requirements {
-		if err := validateRequirementRecordEvidence(root, requirement); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func validateRequirementRecordEvidence(root string, requirement requirementRecord) error {
-	if err := validateOwnerPackages(root, requirement); err != nil {
-		return err
-	}
-	if err := validateAcceptedCommits(root, requirement); err != nil {
-		return err
-	}
-	for _, reference := range requirement.TestSymbols {
-		path, symbol, _ := parsePathSymbol(reference)
-		if err := testSymbolEvidenceExists(root, path, symbol); err != nil {
-			return fmt.Errorf("requirement %s test evidence %s: %w", requirement.ID, reference, err)
-		}
-		if err := validateTestSymbolCommitBinding(root, requirement, path, symbol); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func validateTestSymbolCommitBinding(root string, requirement requirementRecord, path, symbol string) error {
-	var firstReadError error
-	for _, commit := range requirement.AcceptedCommits {
-		found, err := commitDeclaresTestSymbol(root, commit, path, symbol)
-		if err != nil {
-			if firstReadError == nil {
-				firstReadError = fmt.Errorf("requirement %s test evidence %s::%s at accepted commit %s: %w",
-					requirement.ID, path, symbol, commit, err)
-			}
-			continue
-		}
-		if found {
-			return nil
-		}
-	}
-	if firstReadError != nil {
-		return firstReadError
-	}
-	return fmt.Errorf("requirement %s test evidence %s::%s is not declared in any accepted commit",
-		requirement.ID, path, symbol)
-}
-
-func commitDeclaresTestSymbol(root, commit, path, symbol string) (bool, error) {
-	reference := commit + ":" + path
-	if _, err := runGit(root, "cat-file", "-e", reference); err != nil {
-		return false, nil
-	}
-	data, err := runGit(root, "show", reference)
-	if err != nil {
-		return false, fmt.Errorf("read %s: %w", path, err)
-	}
-	parsed, err := parser.ParseFile(token.NewFileSet(), path, data, parser.SkipObjectResolution)
-	if err != nil {
-		return false, fmt.Errorf("parse %s: %w", path, err)
-	}
-	return fileDeclaresTestSymbol(parsed, symbol), nil
-}
-
-func testSymbolEvidenceExists(root, relative, symbol string) error {
-	absolute := filepath.Join(root, filepath.FromSlash(relative))
-	info, err := os.Stat(absolute)
-	if err != nil {
-		return fmt.Errorf("%s does not exist", relative)
-	}
-	if info.IsDir() || filepath.Ext(absolute) != ".go" {
-		return fmt.Errorf("%s cannot provide Go test symbol %s", relative, symbol)
-	}
-	parsed, err := parser.ParseFile(token.NewFileSet(), absolute, nil, parser.SkipObjectResolution)
-	if err != nil {
-		return fmt.Errorf("parse %s: %w", relative, err)
-	}
-	if fileDeclaresTestSymbol(parsed, symbol) {
-		return nil
-	}
-	return fmt.Errorf("%s does not declare top-level test function %s", relative, symbol)
-}
-
-func fileDeclaresTestSymbol(file *ast.File, symbol string) bool {
-	for _, declaration := range file.Decls {
-		function, ok := declaration.(*ast.FuncDecl)
-		if ok && function.Recv == nil && function.Name.Name == symbol {
-			return true
-		}
-	}
-	return false
-}
-
-func validateOwnerPackages(root string, requirement requirementRecord) error {
-	for _, packagePath := range requirement.OwnerPackages {
-		path := root
-		if packagePath != "." {
-			path = filepath.Join(root, filepath.FromSlash(packagePath))
-		}
-		info, err := os.Stat(path)
-		if err != nil || !info.IsDir() {
-			return fmt.Errorf("requirement %s owner package %s does not exist", requirement.ID, packagePath)
-		}
-	}
-	return nil
-}
-
-func validateAcceptedCommits(root string, requirement requirementRecord) error {
-	for _, commit := range requirement.AcceptedCommits {
-		if _, err := runGit(root, "cat-file", "-e", commit+"^{commit}"); err != nil {
-			return fmt.Errorf("requirement %s accepted commit %s does not exist: %w", requirement.ID, commit, err)
-		}
-		if _, err := runGit(root, "merge-base", "--is-ancestor", commit, "HEAD"); err != nil {
-			return fmt.Errorf("requirement %s accepted commit %s is not an ancestor of HEAD", requirement.ID, commit)
-		}
-	}
-	return nil
+func validateRequirementEvidence(root string, contract corecontract.Contract,
+	requirements requirementsManifest,
+) error {
+	return corecontract.ValidateBehavioralEvidence(root, contract, requirements)
 }
 
 func pathEvidenceExists(root, relative, symbol string) error {

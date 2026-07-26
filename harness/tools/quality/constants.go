@@ -1,6 +1,10 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/mnemon-dev/mnemon/harness/tools/corecontract"
+)
 
 const (
 	manifestSchemaVersion = 1
@@ -90,30 +94,8 @@ type architectureEntry struct {
 	RemovalCheckpoint string `json:"removal_checkpoint"`
 }
 
-type expectedManifest struct {
-	SchemaVersion int                   `json:"schema_version"`
-	Requirements  []expectedRequirement `json:"requirements"`
-}
-
-type expectedRequirement struct {
-	ID    string `json:"id"`
-	Level string `json:"level"`
-}
-
-type requirementsManifest struct {
-	SchemaVersion int                 `json:"schema_version"`
-	Requirements  []requirementRecord `json:"requirements"`
-}
-
-type requirementRecord struct {
-	ID              string   `json:"id"`
-	Status          string   `json:"status"`
-	OwnerPackages   []string `json:"owner_packages"`
-	AcceptedCommits []string `json:"accepted_commits"`
-	TestSymbols     []string `json:"test_symbols"`
-	ScenarioKeys    []string `json:"scenario_keys"`
-	EvidenceGates   []string `json:"evidence_gates"`
-}
+type requirementsManifest = corecontract.Registry
+type requirementRecord = corecontract.EvidenceRecord
 
 func functionIdentity(rule, path, symbol string) string {
 	return fmt.Sprintf("%s:%s::%s", rule, path, symbol)

@@ -159,6 +159,12 @@ an evidence projection of these clauses, not a second requirements authority.
 Its status is derived from validated evidence. A requirement is release-ready
 only when its registry status is `verified`.
 
+A scenario key has the exact form
+`<scenario>/<fault|system|task|experience>/<anchor>` and binds directly to that
+named anchor in the tracked canonical scenario manifest. The anchor must exist
+both in the current tree and in at least one accepted commit; a free-form key
+or generated marker is not evidence.
+
 | ID | Level | Canonical clause | Owner | Evidence |
 |---|---|---|---|---|
 | SC-01 | MUST | Root release packages must not import Harness, and root build, help, setup, and legacy persistence behavior must remain unchanged. | `harness/test/contracts` | `G-ROOT` static + process |

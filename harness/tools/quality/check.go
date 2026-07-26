@@ -4,13 +4,14 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+
+	"github.com/mnemon-dev/mnemon/harness/tools/corecontract"
 )
 
 const (
 	baselinePath     = "harness/test/contracts/go_quality_baseline.json"
 	exceptionsPath   = "harness/test/contracts/go_quality_exceptions.json"
 	architecturePath = "harness/test/contracts/go_architecture_debt.json"
-	expectedPath     = "harness/test/contracts/expected_requirements.json"
 	requirementsPath = "harness/test/contracts/requirements.json"
 )
 
@@ -18,7 +19,7 @@ type contractBundle struct {
 	baseline     baselineManifest
 	exceptions   exceptionManifest
 	architecture architectureManifest
-	expected     expectedManifest
+	core         corecontract.Contract
 	requirements requirementsManifest
 }
 
@@ -64,7 +65,7 @@ func loadContractBundle(root string) (contractBundle, error) {
 		},
 		func() error {
 			var err error
-			bundle.expected, err = readExactJSON[expectedManifest](filepath.Join(root, expectedPath))
+			bundle.core, err = corecontract.Load(root)
 			return err
 		},
 		func() error {
@@ -82,7 +83,8 @@ func loadContractBundle(root string) (contractBundle, error) {
 }
 
 func validateContractBundle(root string, bundle contractBundle) error {
-	if err := validateAllManifests(bundle.baseline, bundle.exceptions, bundle.architecture, bundle.expected, bundle.requirements); err != nil {
+	if err := validateAllManifests(bundle.baseline, bundle.exceptions, bundle.architecture,
+		bundle.core, bundle.requirements); err != nil {
 		return err
 	}
 	if bundle.baseline.SourceCommit != bundle.architecture.SourceCommit {
@@ -126,7 +128,7 @@ func runRepositoryChecks(root, baseReference string, bundle contractBundle) erro
 	if err := validateArchitectureEvidence(root, bundle.architecture, findings); err != nil {
 		return err
 	}
-	if err := validateRequirementEvidence(root, bundle.expected, bundle.requirements); err != nil {
+	if err := validateRequirementEvidence(root, bundle.core, bundle.requirements); err != nil {
 		return err
 	}
 	if baseReference != "" {
@@ -137,13 +139,15 @@ func runRepositoryChecks(root, baseReference string, bundle contractBundle) erro
 	return nil
 }
 
-func validateAllManifests(baseline baselineManifest, exceptions exceptionManifest, architecture architectureManifest, expected expectedManifest, requirements requirementsManifest) error {
+func validateAllManifests(baseline baselineManifest, exceptions exceptionManifest,
+	architecture architectureManifest, contract corecontract.Contract,
+	requirements requirementsManifest,
+) error {
 	validators := []func() error{
 		func() error { return validateBaseline(baseline) },
 		func() error { return validateExceptions(exceptions) },
 		func() error { return validateArchitectureManifest(architecture) },
-		func() error { return validateExpectedManifest(expected) },
-		func() error { return validateRequirementsManifest(requirements) },
+		func() error { return corecontract.ValidateRegistry(contract, requirements) },
 	}
 	for _, validate := range validators {
 		if err := validate(); err != nil {

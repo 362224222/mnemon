@@ -3,26 +3,46 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"github.com/mnemon-dev/mnemon/harness/tools/corecontract"
 )
 
 func TestValidateAllManifestsRejectsMalformedManifest(t *testing.T) {
 	baseline := validBaselineManifest()
 	exceptions := exceptionManifest{SchemaVersion: 1, Entries: []exceptionEntry{}}
 	architecture := architectureManifest{SchemaVersion: 1, SourceCommit: baseline.SourceCommit, Entries: []architectureEntry{}}
-	expected := expectedManifest{SchemaVersion: 1, Requirements: []expectedRequirement{{ID: "EQ-02", Level: "MUST"}}}
-	requirements := requirementsManifest{SchemaVersion: 1, Requirements: []requirementRecord{{
-		ID: "EQ-03", Status: "pending", OwnerPackages: []string{"."}, AcceptedCommits: []string{},
-		TestSymbols: []string{}, ScenarioKeys: []string{}, EvidenceGates: []string{},
-	}}}
-	if err := validateAllManifests(baseline, exceptions, architecture, expected, requirements); err != nil {
-		t.Fatalf("individual schemas should be valid before cross-check: %v", err)
+	contract := testCoreContract()
+	requirements := testCoreRegistry()
+	if err := validateAllManifests(baseline, exceptions, architecture, contract, requirements); err != nil {
+		t.Fatalf("valid manifests: %v", err)
 	}
-	if err := validateRequirementEvidence(t.TempDir(), expected, requirements); err == nil || !strings.Contains(err.Error(), "mismatch") {
-		t.Fatalf("cross-manifest mismatch error = %v", err)
+	requirements.Requirements[0].ID = "SC-99"
+	if err := validateAllManifests(baseline, exceptions, architecture, contract, requirements); err == nil ||
+		!strings.Contains(err.Error(), "unknown requirement") {
+		t.Fatalf("unknown requirement error = %v", err)
 	}
 	baseline.ToolVersion = "latest"
-	if err := validateAllManifests(baseline, exceptions, architecture, expected, requirements); err == nil || !strings.Contains(err.Error(), "tool_version") {
+	if err := validateAllManifests(baseline, exceptions, architecture, contract,
+		testCoreRegistry()); err == nil || !strings.Contains(err.Error(), "tool_version") {
 		t.Fatalf("tool version error = %v", err)
+	}
+}
+
+func testCoreContract() corecontract.Contract {
+	return corecontract.Contract{
+		Requirements: []corecontract.Requirement{{
+			ID: "SC-01", Level: "MUST", Clause: "proof", Owner: ".", PrimaryGate: "G-PROCESS",
+		}},
+		Gates: []corecontract.Gate{{ID: "G-PROCESS", Closure: "proof"}},
+	}
+}
+
+func testCoreRegistry() requirementsManifest {
+	return requirementsManifest{
+		SchemaVersion: corecontract.RegistrySchemaVersion,
+		Requirements: []requirementRecord{{
+			ID: "SC-01", AcceptedCommits: []string{}, TestSymbols: []string{}, ScenarioKeys: []string{},
+		}},
 	}
 }
 

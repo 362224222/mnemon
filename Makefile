@@ -14,6 +14,7 @@ ifeq ($(GOBIN),)
 endif
 
 .PHONY: deps build harness-build install uninstall test unit vet harness-validate harness-quality harness-verify
+.PHONY: core-contract core-release-closure core-verify core-release-verify
 .PHONY: test-layout test-unit test-unit-race test-process test-e2e-smoke test-docker test-docker-case
 .PHONY: test-live-codex test-live-codex-case test-evidence verify release-verify
 .PHONY: docker-build docker-run compose-up compose-down compose-dev release-snapshot clean help
@@ -78,6 +79,13 @@ harness-verify: ## Build and verify the experimental R5 Harness
 	$(MAKE) harness-quality
 	$(PINNED_GO) test ./harness/...
 
+core-contract: ## Validate the tracked R5 Core contract and evidence registry
+	$(PINNED_GO) test ./harness/tools/corecontract ./harness/test/contracts -count=1
+
+core-release-closure: ## Require every tracked R5 Core MUST to have grounded evidence
+	R5_CORE_RELEASE_CLOSURE=1 $(PINNED_GO) test ./harness/test/contracts \
+		-run '^TestCoreRequirementsReleaseClosure$$' -count=1
+
 test-layout: harness-validate ## Run the R5 Harness layout gate
 
 test-unit: test-layout ## Run the R5 Harness unit tests
@@ -134,29 +142,33 @@ test-live-codex-case: test-e2e-smoke ## Run one R5 Live Codex case with CASE=<na
 
 test-evidence: ## Validate one complete R5 evidence bundle with RUN=<run-id>
 	$(PINNED_GO) test ./harness/test/contracts \
-		-run '^TestRequirementsRegistryIsClosedAndEvidenceBacked$$' -count=1
+		-run '^TestCoreRequirementsRegistry$$' -count=1
 	@test -n "$(RUN)" || { \
 		echo "error: RUN is required and must name a complete five-case bundle" >&2; \
 		exit 2; \
 	}
 	harness/test/e2e/runner/validate_evidence.sh --run "$(RUN)"
 
-verify: test-layout test-unit test-unit-race test-process test-docker ## Run R5 merge verification gates
+core-verify: core-contract test harness-quality test-unit test-unit-race test-process test-docker ## Run the six R5 Core merge gates
 	@run="$$(cat .testdata/r5/latest-scripted-run 2>/dev/null)"; \
 		test -n "$$run" || { echo "error: Hermetic suite did not publish a complete RUN" >&2; exit 1; }; \
 		$(MAKE) test-evidence RUN="$$run"
 
-release-verify: ## Run R5 release verification gates
+verify: core-verify ## Compatibility alias for core-verify
+
+core-release-verify: core-verify ## Run all seven R5 Core gates and require zero pending MUST
 	@test "$(LIVE_CODEX)" = "1" || { echo "error: set LIVE_CODEX=1 for release verification" >&2; exit 2; }
 	@test -n "$(CODEX_VERSION)" -a -n "$(CODEX_PACKAGE_INTEGRITY)" || { \
 		echo "error: CODEX_VERSION and CODEX_PACKAGE_INTEGRITY are required" >&2; \
 		exit 2; \
 	}
-	$(MAKE) verify
 	$(MAKE) test-live-codex LIVE_CODEX="$(LIVE_CODEX)"
 	@run="$$(cat .testdata/r5/latest-codex-run 2>/dev/null)"; \
 		test -n "$$run" || { echo "error: Live suite did not publish a complete RUN" >&2; exit 1; }; \
 		$(MAKE) test-evidence RUN="$$run"
+	$(MAKE) core-release-closure
+
+release-verify: core-release-verify ## Compatibility alias for core-release-verify
 
 # ── Containers / Deployment ──────────────────────────────────────────
 

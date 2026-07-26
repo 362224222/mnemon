@@ -2,115 +2,85 @@ package contracts_test
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/mnemon-dev/mnemon/harness/tools/corecontract"
 )
 
-func TestValidateAcceptedCommitRejectsNonAncestor(t *testing.T) {
-	t.Parallel()
-	repository := t.TempDir()
-	runTestGit(t, repository, "init", "--quiet", "--initial-branch=main")
-	runTestGit(t, repository, "config", "user.name", "Mnemon Contract Test")
-	runTestGit(t, repository, "config", "user.email", "contracts@example.invalid")
-	if err := os.WriteFile(filepath.Join(repository, "main.txt"), []byte("main\n"), 0o600); err != nil {
-		t.Fatal(err)
+func TestCoreReleaseClosureRejectsUnresolvedMust(t *testing.T) {
+	root, contract, registry := loadCoreRequirements(t)
+	err := coreReleaseClosureError(root, contract, registry)
+	if err == nil || !strings.Contains(err.Error(), "42 unresolved MUST") {
+		t.Fatalf("release closure error = %v", err)
 	}
-	runTestGit(t, repository, "add", "main.txt")
-	runTestGit(t, repository, "commit", "--quiet", "-m", "main")
-	nonAncestor := runTestGit(t, repository, "rev-parse", "HEAD")
-
-	runTestGit(t, repository, "switch", "--quiet", "--orphan", "side")
-	if err := os.WriteFile(filepath.Join(repository, "side.txt"), []byte("side\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	runTestGit(t, repository, "add", "--all")
-	runTestGit(t, repository, "commit", "--quiet", "-m", "side")
-	head := runTestGit(t, repository, "rev-parse", "HEAD")
-	if err := validateAcceptedCommit(repository, head); err != nil {
-		t.Fatalf("current HEAD rejected: %v", err)
-	}
-	if err := validateAcceptedCommit(repository, nonAncestor); err == nil ||
-		!strings.Contains(err.Error(), "not an ancestor") {
-		t.Fatalf("non-ancestor error = %v, want ancestry rejection", err)
+	registry.Requirements[0].AcceptedCommits = []string{strings.Repeat("a", 40)}
+	err = coreReleaseClosureError(root, contract, registry)
+	if err == nil || !strings.Contains(err.Error(), "ungrounded behavioral evidence") {
+		t.Fatalf("release closure ungrounded evidence error = %v", err)
 	}
 }
 
-func TestValidateScenarioBindingsFailsClosed(t *testing.T) {
-	t.Parallel()
-	requirements := []requirementEvidence{{
-		ID:           "ND-17",
-		ScenarioKeys: []string{"nd-17-attachment-filesystem-db-crash-gap"},
-	}}
-	manifest := canonicalScenarioManifest{SchemaVersion: 1, Name: "parallel-hardening"}
-	manifest.Oracles.System = []string{"ND-17"}
-	load := func(string) (canonicalScenarioManifest, error) { return manifest, nil }
-
-	t.Run("orphan registry key", func(t *testing.T) {
-		err := validateScenarioBindings(requirements, nil, load)
-		assertErrorContains(t, err, "has no canonical definition")
-	})
-	t.Run("missing concrete anchor", func(t *testing.T) {
-		definitions := []requirementScenarioDefinition{{
-			Key:           "nd-17-attachment-filesystem-db-crash-gap",
-			RequirementID: "ND-17",
-			Case:          "parallel-hardening",
-			AnchorKind:    "fault",
-			Anchor:        "preclaim-attachment-rename-crash",
-		}}
-		err := validateScenarioBindings(requirements, definitions, load)
-		assertErrorContains(t, err, "does not define fault anchor")
-	})
-}
-
-func TestValidateClauseBindingsRejectsNormativeDrift(t *testing.T) {
-	t.Parallel()
-	expected := []expectedRequirement{{ID: "AR-01", Level: "MUST"}}
-	clauses := []requirementClause{{
-		ID:           "AR-01",
-		Level:        "MUST",
-		ClauseDigest: "sha256:" + strings.Repeat("a", 64),
-	}}
-	bindingDigest := digestRequirementClauses(clauses)
-	clauses[0].ClauseDigest = "sha256:" + strings.Repeat("b", 64)
-	err := validateClauseBindings(expected, clauses, bindingDigest)
-	assertErrorContains(t, err, "binding digest")
-}
-
-func TestValidateNormativeSourceRejectsClauseTextDrift(t *testing.T) {
-	t.Parallel()
-	clauses := []requirementClause{{
-		ID:           "ND-21",
-		Level:        "MUST",
-		ClauseDigest: digestRequirementClause("ND-21", "MUST", "one ACTIVE|REWORK action"),
-	}}
-	registry := requirementClauseRegistry{BindingDigest: digestRequirementClauses(clauses),
-		Requirements: clauses}
-	valid := []byte("| ND-21 | MUST | one ACTIVE|REWORK action |\n")
-	if err := validateNormativeSource(registry, valid); err != nil {
-		t.Fatalf("unchanged normative source rejected: %v", err)
+func TestTrackedCoreContractRejectsUnknownGate(t *testing.T) {
+	contents := readCoreContract(t)
+	changed := strings.Replace(string(contents),
+		"| `G-ROOT` static + process |", "| `G-UNKNOWN` static + process |", 1)
+	if changed == string(contents) {
+		t.Fatal("unknown-gate fixture did not change the contract")
 	}
-	drifted := []byte("| ND-21 | MUST | two ACTIVE|REWORK actions |\n")
-	err := validateNormativeSource(registry, drifted)
-	assertErrorContains(t, err, "clause digest or level differs")
-	assertErrorContains(t, err, "source binding digest")
+	if _, err := corecontract.Parse([]byte(changed)); err == nil ||
+		!strings.Contains(err.Error(), "unknown primary gate") {
+		t.Fatalf("unknown gate error = %v", err)
+	}
 }
 
-func runTestGit(t *testing.T, repository string, arguments ...string) string {
+func TestTrackedCoreContractRejectsDuplicateIDAndMalformedOwner(t *testing.T) {
+	contents := string(readCoreContract(t))
+	duplicate := strings.Replace(contents, "| SC-02 | MUST |", "| SC-01 | MUST |", 1)
+	if _, err := corecontract.Parse([]byte(duplicate)); err == nil ||
+		!strings.Contains(err.Error(), "repeats requirement SC-01") {
+		t.Fatalf("duplicate requirement error = %v", err)
+	}
+	malformedOwner := strings.Replace(contents,
+		"`harness/test/contracts` | `G-ROOT`", "`../escape` | `G-ROOT`", 1)
+	if _, err := corecontract.Parse([]byte(malformedOwner)); err == nil ||
+		!strings.Contains(err.Error(), "repository-relative directory") {
+		t.Fatalf("malformed owner error = %v", err)
+	}
+}
+
+func TestCoreRegistryRejectsUnknownIDAndUngroundedEvidence(t *testing.T) {
+	_, contract, registry := loadCoreRequirements(t)
+	registry.Requirements[0].ID = "ZZ-99"
+	if err := corecontract.ValidateRegistry(contract, registry); err == nil ||
+		!strings.Contains(err.Error(), "unknown requirement") {
+		t.Fatalf("unknown requirement error = %v", err)
+	}
+
+	_, _, registry = loadCoreRequirements(t)
+	registry.Requirements[0].AcceptedCommits = []string{strings.Repeat("a", 40)}
+	if err := corecontract.ValidateRegistry(contract, registry); err == nil ||
+		!strings.Contains(err.Error(), "ungrounded behavioral evidence") {
+		t.Fatalf("ungrounded evidence error = %v", err)
+	}
+}
+
+func TestCoreRegistryRejectsManualVerifiedClaim(t *testing.T) {
+	document := []byte(`{"schema_version":2,"requirements":[{"id":"SC-01",` +
+		`"status":"verified","accepted_commits":[],"test_symbols":[],"scenario_keys":[]}]}`)
+	if _, err := corecontract.DecodeRegistry(document); err == nil ||
+		!strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("manual verified claim error = %v", err)
+	}
+}
+
+func readCoreContract(t *testing.T) []byte {
 	t.Helper()
-	command := exec.Command("git", arguments...)
-	command.Dir = repository
-	output, err := command.CombinedOutput()
+	contents, err := os.ReadFile(filepath.Join(repositoryRoot(t),
+		filepath.FromSlash(corecontract.DocumentPath)))
 	if err != nil {
-		t.Fatalf("git %s: %v: %s", strings.Join(arguments, " "), err, output)
+		t.Fatal(err)
 	}
-	return strings.TrimSpace(string(output))
-}
-
-func assertErrorContains(t *testing.T, err error, fragment string) {
-	t.Helper()
-	if err == nil || !strings.Contains(err.Error(), fragment) {
-		t.Fatalf("error = %v, want fragment %q", err, fragment)
-	}
+	return contents
 }

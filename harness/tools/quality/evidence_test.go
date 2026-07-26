@@ -50,18 +50,19 @@ func TestValidateRequirementEvidenceMatchesIDsAndTestSymbols(t *testing.T) {
 	root := initTestRepository(t)
 	writeTestFile(t, root, "harness/a_test.go", "package harness\nfunc TestProof() {}\n")
 	commit := commitTestRepository(t, root, "add proof")
-	expected := expectedManifest{Requirements: []expectedRequirement{{ID: "EQ-02", Level: "MUST"}}}
-	requirements := requirementsManifest{Requirements: []requirementRecord{{
-		ID: "EQ-02", Status: "pending", OwnerPackages: []string{"."},
+	contract := testCoreContract()
+	requirements := requirementsManifest{SchemaVersion: 2, Requirements: []requirementRecord{{
+		ID:              "SC-01",
 		AcceptedCommits: []string{commit}, TestSymbols: []string{"harness/a_test.go::TestProof"},
-		ScenarioKeys: []string{}, EvidenceGates: []string{},
+		ScenarioKeys: []string{},
 	}}}
-	if err := validateRequirementEvidence(root, expected, requirements); err != nil {
+	if err := validateRequirementEvidence(root, contract, requirements); err != nil {
 		t.Fatal(err)
 	}
-	requirements.Requirements[0].ID = "EQ-03"
-	if err := validateRequirementEvidence(root, expected, requirements); err == nil || !strings.Contains(err.Error(), "mismatch") {
-		t.Fatalf("ID mismatch error = %v", err)
+	requirements.Requirements[0].ID = "SC-99"
+	if err := validateRequirementEvidence(root, contract, requirements); err == nil ||
+		!strings.Contains(err.Error(), "unknown requirement") {
+		t.Fatalf("unknown requirement error = %v", err)
 	}
 }
 
@@ -72,12 +73,15 @@ func TestValidateRequirementEvidenceBindsTestToAcceptedCommitTree(t *testing.T) 
 	writeTestFile(t, root, "harness/a_test.go", "package harness\nfunc TestEarlier() {}\nfunc TestProof() {}\n")
 
 	requirement := requirementRecord{
-		ID: "EQ-02", Status: "pending", OwnerPackages: []string{"."},
+		ID:              "SC-01",
 		AcceptedCommits: []string{earlier}, TestSymbols: []string{"harness/a_test.go::TestProof"},
-		ScenarioKeys: []string{}, EvidenceGates: []string{},
+		ScenarioKeys: []string{},
 	}
-	if err := validateRequirementRecordEvidence(root, requirement); err == nil ||
-		!strings.Contains(err.Error(), "not declared in any accepted commit") {
+	registry := requirementsManifest{
+		SchemaVersion: 2, Requirements: []requirementRecord{requirement},
+	}
+	if err := validateRequirementEvidence(root, testCoreContract(), registry); err == nil ||
+		!strings.Contains(err.Error(), "absent from every accepted commit") {
 		t.Fatalf("working-tree-only evidence error = %v", err)
 	}
 
@@ -90,13 +94,15 @@ func TestValidateRequirementEvidenceBindsTestToAcceptedCommitTree(t *testing.T) 
 		"harness/a_test.go::TestEarlier",
 		"harness/a_test.go::TestProof",
 	}
-	if err := validateRequirementRecordEvidence(root, requirement); err != nil {
+	registry.Requirements[0] = requirement
+	if err := validateRequirementEvidence(root, testCoreContract(), registry); err != nil {
 		t.Fatalf("evidence distributed across accepted commits: %v", err)
 	}
 
 	requirement.AcceptedCommits = []string{}
-	if err := validateRequirementRecordEvidence(root, requirement); err == nil ||
-		!strings.Contains(err.Error(), "not declared in any accepted commit") {
+	registry.Requirements[0] = requirement
+	if err := validateRequirementEvidence(root, testCoreContract(), registry); err == nil ||
+		!strings.Contains(err.Error(), "ungrounded behavioral evidence") {
 		t.Fatalf("test evidence without accepted commit error = %v", err)
 	}
 }

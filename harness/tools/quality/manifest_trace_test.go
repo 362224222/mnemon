@@ -20,31 +20,3 @@ func TestValidateArchitectureRequiresStableEvidence(t *testing.T) {
 		t.Fatal("free-form evidence was accepted")
 	}
 }
-
-func TestValidateRequirementsRequiresVerifiedEvidence(t *testing.T) {
-	record := requirementRecord{
-		ID: "EQ-02", Status: "verified", OwnerPackages: []string{"harness/internal/model"},
-		AcceptedCommits: []string{}, TestSymbols: []string{}, ScenarioKeys: []string{}, EvidenceGates: []string{},
-	}
-	if err := validateRequirementRecord(record); err == nil || !strings.Contains(err.Error(), "must not be empty") {
-		t.Fatalf("verified evidence error = %v", err)
-	}
-	record.Status = "pending"
-	if err := validateRequirementRecord(record); err != nil {
-		t.Fatalf("pending evidence: %v", err)
-	}
-}
-
-func TestExpectedRequirementsRejectUnknownOrderAndLevel(t *testing.T) {
-	manifest := expectedManifest{SchemaVersion: 1, Requirements: []expectedRequirement{
-		{ID: "PR-02", Level: "MUST"},
-		{ID: "PR-01", Level: "MUST"},
-	}}
-	if err := validateExpectedManifest(manifest); err == nil || !strings.Contains(err.Error(), "sorted") {
-		t.Fatalf("order error = %v", err)
-	}
-	manifest.Requirements = []expectedRequirement{{ID: "PR-01", Level: "OPTIONAL"}}
-	if err := validateExpectedManifest(manifest); err == nil || !strings.Contains(err.Error(), "level") {
-		t.Fatalf("level error = %v", err)
-	}
-}
