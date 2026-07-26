@@ -1,7 +1,9 @@
 package localapi
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -66,12 +68,80 @@ func TestChannelAbandonRouteRequiresExplicitMatchingDestructiveConfirmation(t *t
 	}
 }
 
+func TestChannelMutationRoutesRequireKeyAndBindIndependentCanonicalDigest(t *testing.T) {
+	credential := repeatedOpaqueBytes(0x53)
+	operation := repeatedOpaqueBytes(0x54)
+	service := &channelRouteService{}
+	server, err := NewServer(fixedAuthenticator{want: modelDigest(credential)}, service)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := `{"name":"alpha"}`
+	request := authenticatedRequest(t, http.MethodPost, RouteChannelCreate, body, credential)
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+	if recorder.Code == http.StatusOK || service.createCalls != 0 {
+		t.Fatalf("keyless create = %d %s calls=%d",
+			recorder.Code, recorder.Body.String(), service.createCalls)
+	}
+
+	request = authenticatedRequest(t, http.MethodPost, RouteChannelCreate, body, credential)
+	request.Header.Set(operationKeyHeader,
+		base64.RawURLEncoding.EncodeToString(operation))
+	recorder = httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+	wantDigest, apiErr := ChannelCreateRequestDigest(ChannelCreateRequest{Name: "alpha"})
+	if apiErr != nil {
+		t.Fatal(apiErr)
+	}
+	if service.createCalls != 1 || !service.createMetadata.HasOperationKey ||
+		service.createMetadata.OperationKeyHash != modelDigest(operation) ||
+		!service.createMetadata.HasRequestDigest ||
+		service.createMetadata.RequestDigest != wantDigest ||
+		!bytes.Equal(service.createSecret, operation) ||
+		strings.Contains(recorder.Body.String(),
+			base64.RawURLEncoding.EncodeToString(operation)) {
+		t.Fatalf("keyed create metadata=%#v secret=%x response=%d %s",
+			service.createMetadata, service.createSecret, recorder.Code, recorder.Body.String())
+	}
+
+	createEmpty, _ := ChannelCreateRequestDigest(ChannelCreateRequest{})
+	inviteEmpty, _ := ChannelInviteRequestDigest(ChannelInviteRequest{})
+	if createEmpty == inviteEmpty {
+		t.Fatalf("empty create and invite reused digest %s", createEmpty.String())
+	}
+
+	request = authenticatedRequest(t, http.MethodPost, RouteChannelInvites, `{}`, credential)
+	recorder = httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+	if recorder.Code == http.StatusOK || service.inviteCalls != 0 {
+		t.Fatalf("keyless invite = %d %s calls=%d",
+			recorder.Code, recorder.Body.String(), service.inviteCalls)
+	}
+	request = authenticatedRequest(t, http.MethodPost, RouteChannelInvites, `{}`, credential)
+	request.Header.Set(operationKeyHeader,
+		base64.RawURLEncoding.EncodeToString(operation))
+	recorder = httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+	if service.inviteCalls != 1 || service.inviteMetadata.RequestDigest != inviteEmpty ||
+		!bytes.Equal(service.inviteSecret, operation) {
+		t.Fatalf("keyed invite metadata=%#v secret=%x response=%d %s",
+			service.inviteMetadata, service.inviteSecret, recorder.Code, recorder.Body.String())
+	}
+}
+
 type channelRouteService struct {
 	status         ChannelStatusResponse
 	statusCalls    int
 	abandon        ChannelAbandonResponse
 	abandonCalls   int
 	abandonRequest ChannelAbandonRequest
+	createCalls    int
+	createMetadata RequestMetadata
+	createSecret   []byte
+	inviteCalls    int
+	inviteMetadata RequestMetadata
+	inviteSecret   []byte
 }
 
 func (*channelRouteService) HookCheck(context.Context, RequestMetadata,
@@ -94,9 +164,12 @@ func (*channelRouteService) AgentResolve(context.Context, RequestMetadata,
 ) (OperationResponse, *APIError) {
 	return OperationResponse{}, NewAPIError(CodeActionNotAllowed, "not used")
 }
-func (*channelRouteService) ChannelCreate(context.Context, RequestMetadata,
-	ChannelCreateRequest,
+func (service *channelRouteService) ChannelCreate(_ context.Context, metadata RequestMetadata,
+	_ ChannelCreateRequest,
 ) (ChannelCreateResponse, *APIError) {
+	service.createCalls++
+	service.createMetadata = metadata
+	service.createSecret = append([]byte(nil), metadata.OperationKeySecret...)
 	return ChannelCreateResponse{}, NewAPIError(CodeActionNotAllowed, "not used")
 }
 func (*channelRouteService) ChannelJoin(context.Context, RequestMetadata,
@@ -104,9 +177,12 @@ func (*channelRouteService) ChannelJoin(context.Context, RequestMetadata,
 ) (ChannelJoinResponse, *APIError) {
 	return ChannelJoinResponse{}, NewAPIError(CodeActionNotAllowed, "not used")
 }
-func (*channelRouteService) ChannelInvite(context.Context, RequestMetadata,
-	ChannelInviteRequest,
+func (service *channelRouteService) ChannelInvite(_ context.Context, metadata RequestMetadata,
+	_ ChannelInviteRequest,
 ) (ChannelInviteResponse, *APIError) {
+	service.inviteCalls++
+	service.inviteMetadata = metadata
+	service.inviteSecret = append([]byte(nil), metadata.OperationKeySecret...)
 	return ChannelInviteResponse{}, NewAPIError(CodeActionNotAllowed, "not used")
 }
 func (*channelRouteService) ChannelInviteClose(context.Context, RequestMetadata,

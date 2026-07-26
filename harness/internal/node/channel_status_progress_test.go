@@ -18,7 +18,8 @@ func TestProjectStatusChannelsExposesCoherentIdleAndQueuedPublicationProgress(t 
 	}
 	t.Cleanup(func() { _ = daemon.Close() })
 	created, apiErr := daemon.channels.manager.ChannelCreate(context.Background(),
-		RequestMetadata{Profile: fixture.profile},
+		testChannelCreateMetadata(fixture.profile,
+			ChannelCreateRequest{Name: "status-progress"}),
 		ChannelCreateRequest{Name: "status-progress"})
 	if apiErr != nil {
 		t.Fatal(apiErr)
@@ -41,6 +42,16 @@ func TestProjectStatusChannelsExposesCoherentIdleAndQueuedPublicationProgress(t 
 		channels[0].Runtime != (StatusChannelRuntime{}) {
 		t.Fatalf("idle status Channels = %#v", channels)
 	}
+}
+
+func testChannelCreateMetadata(profile model.Profile,
+	request ChannelCreateRequest,
+) RequestMetadata {
+	digest := testChannelCreateRequestDigest(request)
+	secret := model.Sum([]byte("node-direct-channel-operation:" + digest.String())).Bytes()
+	return RequestMetadata{Profile: profile, OperationKeyHash: model.Sum(secret),
+		HasOperationKey: true, OperationKeySecret: secret,
+		RequestDigest: digest, HasRequestDigest: true}
 }
 
 func TestControllerStatusPublishesChannelStagesWithoutRawIdentities(t *testing.T) {

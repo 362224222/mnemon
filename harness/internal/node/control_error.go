@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
@@ -149,11 +150,26 @@ type Authenticator interface {
 }
 
 type RequestMetadata struct {
-	Profile           model.Profile
-	OperationKeyHash  model.Digest
-	HasOperationKey   bool
-	ClaimContextHash  model.Digest
-	HasClaimContext   bool
-	RunAttachmentHash model.Digest
-	HasRunAttachment  bool
+	Profile          model.Profile
+	OperationKeyHash model.Digest
+	HasOperationKey  bool
+	// OperationKeySecret is retained only for Channel create/invite until the
+	// authenticated request returns. It derives a replayable bearer without
+	// ever becoming durable state, output evidence, or a diagnostic value.
+	OperationKeySecret []byte `json:"-"`
+	RequestDigest      model.Digest
+	HasRequestDigest   bool
+	ClaimContextHash   model.Digest
+	HasClaimContext    bool
+	RunAttachmentHash  model.Digest
+	HasRunAttachment   bool
+}
+
+func (RequestMetadata) String() string   { return "[request metadata; secrets REDACTED]" }
+func (RequestMetadata) GoString() string { return "[request metadata; secrets REDACTED]" }
+func (RequestMetadata) Format(state fmt.State, _ rune) {
+	_, _ = state.Write([]byte("[request metadata; secrets REDACTED]"))
+}
+func (RequestMetadata) LogValue() slog.Value {
+	return slog.StringValue("[request metadata; secrets REDACTED]")
 }

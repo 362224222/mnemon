@@ -19,15 +19,17 @@ var (
 )
 
 type CreateChannelSpec struct {
-	Channel model.Channel
-	Genesis model.Member
-	Token   model.EnrollmentToken
+	Channel   model.Channel
+	Genesis   model.Member
+	Token     model.EnrollmentToken
+	Operation *ChannelMutationOperation
 }
 
 type CreateChannelResult struct {
-	Created bool
-	Channel model.Channel
-	GrantID model.GrantID
+	Created  bool
+	Channel  model.Channel
+	GrantID  model.GrantID
+	Mutation ChannelMutationAuthority
 }
 
 // CreateChannel atomically persists the signed descriptor, owner genesis,
@@ -42,12 +44,31 @@ func (s *Store) CreateChannel(ctx context.Context, spec CreateChannelSpec) (Crea
 	if err != nil {
 		return CreateChannelResult{}, err
 	}
+	operation, hasOperation, err := optionalChannelMutationOperation(
+		spec.Operation, ChannelMutationCreate)
+	if err != nil {
+		return CreateChannelResult{}, err
+	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return CreateChannelResult{}, fmt.Errorf("create Channel: begin: %w", err)
 	}
 	defer tx.Rollback()
+	if hasOperation {
+		mutation, found, readErr := readChannelMutation(ctx, tx, operation)
+		if readErr != nil {
+			return CreateChannelResult{}, readErr
+		}
+		if found {
+			if err := tx.Commit(); err != nil {
+				return CreateChannelResult{},
+					fmt.Errorf("create Channel: commit operation replay: %w", err)
+			}
+			return CreateChannelResult{Channel: mutation.Channel(),
+				GrantID: mutation.GrantID(), Mutation: mutation}, nil
+		}
+	}
 	node, err := readNode(ctx, tx)
 	if err != nil || !localGenesisOwner(node, channel, spec.Genesis) {
 		return CreateChannelResult{}, fmt.Errorf("%w: local Node is not the genesis owner: %v",
@@ -64,6 +85,13 @@ func (s *Store) CreateChannel(ctx context.Context, spec CreateChannelSpec) (Crea
 		if err != nil {
 			return CreateChannelResult{}, err
 		}
+		if hasOperation {
+			result.Mutation, err = insertChannelMutation(ctx, tx, operation,
+				spec.Token, channel.CreatedAt())
+			if err != nil {
+				return CreateChannelResult{}, err
+			}
+		}
 		if err := tx.Commit(); err != nil {
 			return CreateChannelResult{}, fmt.Errorf("create Channel: commit replay read: %w", err)
 		}
@@ -73,10 +101,18 @@ func (s *Store) CreateChannel(ctx context.Context, spec CreateChannelSpec) (Crea
 	if err := insertCreatedChannel(ctx, tx, node, channel, spec.Genesis, grant); err != nil {
 		return CreateChannelResult{}, err
 	}
+	var mutation ChannelMutationAuthority
+	if hasOperation {
+		mutation, err = insertChannelMutation(ctx, tx, operation, spec.Token, channel.CreatedAt())
+		if err != nil {
+			return CreateChannelResult{}, err
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return CreateChannelResult{}, mapChannelCreateError(err)
 	}
-	return CreateChannelResult{Created: true, Channel: channel, GrantID: grant.ID()}, nil
+	return CreateChannelResult{Created: true, Channel: channel, GrantID: grant.ID(),
+		Mutation: mutation}, nil
 }
 
 func validateCreateChannelSpec(spec CreateChannelSpec) (model.Channel, model.OpenEnrollmentGrant, error) {

@@ -56,32 +56,36 @@ func NewChannelManager(options ChannelManagerOptions) (*ChannelManager, error) {
 func (manager *ChannelManager) ChannelCreate(ctx context.Context, metadata RequestMetadata,
 	request ChannelCreateRequest,
 ) (ChannelCreateResponse, *APIError) {
-	if apiErr := manager.validateCall(ctx, metadata); apiErr != nil {
+	operation, apiErr := manager.channelMutationOperation(ctx, metadata,
+		store.ChannelMutationCreate)
+	if apiErr != nil {
 		return ChannelCreateResponse{}, apiErr
 	}
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
+	if mutation, found, err := manager.store.ReadChannelMutation(ctx, operation); err != nil {
+		return ChannelCreateResponse{}, channelMutationAPIError(err)
+	} else if found {
+		return manager.channelCreateMutationResponse(ctx, metadata, mutation)
+	}
 	authority, err := manager.store.ReadChannelControlAuthority(ctx)
 	if err != nil {
 		return ChannelCreateResponse{}, channelAPIError(err)
 	}
-	channel, genesis, token, err := manager.buildChannel(ctx, request.Name, authority)
+	channel, genesis, token, err := manager.buildChannel(ctx, request.Name, authority,
+		operation, metadata.OperationKeySecret)
 	if err != nil {
 		return ChannelCreateResponse{}, channelAPIError(err)
 	}
-	if _, err := manager.store.CreateChannel(ctx, store.CreateChannelSpec{Channel: channel,
-		Genesis: genesis, Token: token}); err != nil {
-		return ChannelCreateResponse{}, channelAPIError(err)
-	}
-	manager.refreshAndJoin(ctx, channel)
-	view, err := manager.readChannelView(ctx, channel.ID())
+	result, err := manager.store.CreateChannel(ctx, store.CreateChannelSpec{Channel: channel,
+		Genesis: genesis, Token: token, Operation: &operation})
 	if err != nil {
-		return ChannelCreateResponse{}, channelAPIError(err)
+		return ChannelCreateResponse{}, channelMutationAPIError(err)
 	}
-	invite := inviteView(token.Payload().ExpiresAt(), token.Payload().MaxUses(), 0, "open", manager.clock.Now())
-	view.Invite = &invite
-	return ChannelCreateResponse{SchemaVersion: SchemaVersion, Status: "created",
-		Channel: view, Invite: invite, InviteToken: token.Reveal()}, nil
+	if result.Created {
+		manager.refreshAndJoin(ctx, result.Channel)
+	}
+	return manager.channelCreateMutationResponse(ctx, metadata, result.Mutation)
 }
 
 func (manager *ChannelManager) ChannelJoin(ctx context.Context, metadata RequestMetadata,
@@ -144,11 +148,18 @@ func (manager *ChannelManager) triggerMemberReconcile() {
 func (manager *ChannelManager) ChannelInvite(ctx context.Context, metadata RequestMetadata,
 	request ChannelInviteRequest,
 ) (ChannelInviteResponse, *APIError) {
-	if apiErr := manager.validateCall(ctx, metadata); apiErr != nil {
+	operation, apiErr := manager.channelMutationOperation(ctx, metadata,
+		store.ChannelMutationInvite)
+	if apiErr != nil {
 		return ChannelInviteResponse{}, apiErr
 	}
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
+	if mutation, found, err := manager.store.ReadChannelMutation(ctx, operation); err != nil {
+		return ChannelInviteResponse{}, channelMutationAPIError(err)
+	} else if found {
+		return manager.channelInviteMutationResponse(ctx, metadata, mutation)
+	}
 	authority, selected, apiErr := manager.selectChannel(ctx, request.Channel)
 	if apiErr != nil {
 		return ChannelInviteResponse{}, apiErr
@@ -171,27 +182,22 @@ func (manager *ChannelManager) ChannelInvite(ctx context.Context, metadata Reque
 	if request.ExpiresSeconds != 0 {
 		lifetime = time.Duration(request.ExpiresSeconds) * time.Second
 	}
+	at := manager.clock.Now()
 	owner, ok := selected.Roster().CurrentMember(authority.LocalPeerID())
 	if !ok {
 		return ChannelInviteResponse{}, channelAPIError(store.ErrChannelInviteOwner)
 	}
-	token, err := manager.buildToken(ctx, channel.Descriptor(), owner.Multiaddrs(), manager.clock.Now(),
-		lifetime, uses)
+	token, err := manager.buildToken(ctx, channel.Descriptor(), owner.Multiaddrs(), at,
+		lifetime, uses, operation, metadata.OperationKeySecret)
 	if err != nil {
 		return ChannelInviteResponse{}, channelAPIError(err)
 	}
-	if _, err := manager.store.RotateChannelInvite(ctx, store.RotateChannelInviteSpec{
-		ChannelID: channel.ID(), Token: token, At: manager.clock.Now()}); err != nil {
-		return ChannelInviteResponse{}, channelAPIError(err)
-	}
-	view, err := manager.readChannelView(ctx, channel.ID())
+	result, err := manager.store.RotateChannelInvite(ctx, store.RotateChannelInviteSpec{
+		ChannelID: channel.ID(), Token: token, At: at, Operation: &operation})
 	if err != nil {
-		return ChannelInviteResponse{}, channelAPIError(err)
+		return ChannelInviteResponse{}, channelMutationAPIError(err)
 	}
-	invite := inviteView(token.Payload().ExpiresAt(), token.Payload().MaxUses(), 0, "open", manager.clock.Now())
-	view.Invite = &invite
-	return ChannelInviteResponse{SchemaVersion: SchemaVersion, Status: "created",
-		Channel: view, Invite: invite, InviteToken: token.Reveal()}, nil
+	return manager.channelInviteMutationResponse(ctx, metadata, result.Mutation)
 }
 
 func (manager *ChannelManager) ChannelInviteClose(ctx context.Context, metadata RequestMetadata,
@@ -229,7 +235,8 @@ func (manager *ChannelManager) ChannelInviteClose(ctx context.Context, metadata 
 }
 
 func (manager *ChannelManager) buildChannel(ctx context.Context, requestedName string,
-	authority store.ChannelControlAuthority,
+	authority store.ChannelControlAuthority, operation store.ChannelMutationOperation,
+	operationSecret []byte,
 ) (model.Channel, model.Member, model.EnrollmentToken, error) {
 	at := manager.clock.Now().UTC()
 	channelID, err := manager.newChannelID()
@@ -285,35 +292,8 @@ func (manager *ChannelManager) buildChannel(ctx context.Context, requestedName s
 		return model.Channel{}, model.Member{}, model.EnrollmentToken{}, err
 	}
 	token, err := manager.buildToken(ctx, signed, genesis.Multiaddrs(), at,
-		defaultChannelInviteLifetime, model.MaxMembersPerChannel-1)
+		defaultChannelInviteLifetime, model.MaxMembersPerChannel-1, operation, operationSecret)
 	return channel, genesis, token, err
-}
-
-func (manager *ChannelManager) buildToken(ctx context.Context, descriptor model.SignedChannelDescriptor,
-	addresses []string, at time.Time, lifetime time.Duration, uses uint8,
-) (model.EnrollmentToken, error) {
-	grantID, err := manager.newGrantID()
-	if err != nil {
-		return model.EnrollmentToken{}, err
-	}
-	secret := make([]byte, model.EnrollmentSecretBytes)
-	if _, err := io.ReadFull(manager.random, secret); err != nil {
-		return model.EnrollmentToken{}, err
-	}
-	payload, err := model.NewEnrollmentTokenPayload(model.EnrollmentTokenSpec{Descriptor: descriptor,
-		OwnerMultiaddrs: addresses, GrantID: grantID, BearerSecret: secret, ExpiresAt: at.Add(lifetime),
-		MaxUses: uses, ProtocolMinVersion: model.EnrollmentProtocolMinVersion,
-		ProtocolMaxVersion: model.EnrollmentProtocolMaxVersion})
-	clear(secret)
-	if err != nil {
-		return model.EnrollmentToken{}, err
-	}
-	message, _ := model.EnrollmentTokenSigningMessage(descriptor.Descriptor().ID(), payload.Digest())
-	signature, err := manager.identity.PublicationSigner().Sign(ctx, message)
-	if err != nil {
-		return model.EnrollmentToken{}, err
-	}
-	return model.AttachEnrollmentTokenSignature(payload, signature)
 }
 
 func (manager *ChannelManager) newChannelID() (model.ChannelID, error) {

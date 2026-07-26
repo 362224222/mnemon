@@ -15,9 +15,11 @@ import (
 
 type channelControlClient interface {
 	daemonHealthClient
-	CreateChannel(context.Context, localapi.ChannelCreateRequest) (localapi.ChannelCreateResponse, *localapi.APIError)
+	CreateChannel(context.Context, localapi.ChannelCreateRequest,
+		localapi.PendingJournal) (localapi.ChannelCreateResponse, *localapi.APIError)
 	JoinChannel(context.Context, localapi.ChannelJoinRequest) (localapi.ChannelJoinResponse, *localapi.APIError)
-	CreateChannelInvite(context.Context, localapi.ChannelInviteRequest) (localapi.ChannelInviteResponse, *localapi.APIError)
+	CreateChannelInvite(context.Context, localapi.ChannelInviteRequest,
+		localapi.PendingJournal) (localapi.ChannelInviteResponse, *localapi.APIError)
 	CloseChannelInvite(context.Context, localapi.ChannelInviteCloseRequest) (localapi.ChannelInviteCloseResponse, *localapi.APIError)
 	RemoveChannelMember(context.Context, localapi.ChannelRemoveRequest) (localapi.ChannelRemoveResponse, *localapi.APIError)
 	LeaveChannel(context.Context, localapi.ChannelLeaveRequest) (localapi.ChannelLeaveResponse, *localapi.APIError)
@@ -29,6 +31,7 @@ type channelDependencies struct {
 	workingDirectory func() (string, error)
 	newClient        func(string) (channelControlClient, error)
 	ensureDaemon     func(context.Context, string, string, daemonHealthClient) *localapi.APIError
+	newJournals      func(string) (journalStore, error)
 }
 
 type channelApp struct {
@@ -41,7 +44,10 @@ type channelApp struct {
 func productionChannelDependencies() channelDependencies {
 	return channelDependencies{workingDirectory: os.Getwd,
 		newClient:    func(nodeState string) (channelControlClient, error) { return localapi.NewClient(nodeState) },
-		ensureDaemon: ensureAgentDaemon}
+		ensureDaemon: ensureAgentDaemon,
+		newJournals: func(nodeState string) (journalStore, error) {
+			return localapi.NewPendingJournalStore(nodeState)
+		}}
 }
 
 func RunChannel(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer,
@@ -54,7 +60,8 @@ func RunChannel(ctx context.Context, args []string, stdin io.Reader, stdout, std
 
 func (app *channelApp) run(ctx context.Context, args []string) int {
 	if app == nil || ctx == nil || app.stdin == nil || app.stdout == nil || app.stderr == nil ||
-		app.deps.workingDirectory == nil || app.deps.newClient == nil || app.deps.ensureDaemon == nil {
+		app.deps.workingDirectory == nil || app.deps.newClient == nil || app.deps.ensureDaemon == nil ||
+		app.deps.newJournals == nil {
 		return 1
 	}
 	if len(args) == 0 {
@@ -77,21 +84,21 @@ func (app *channelApp) run(ctx context.Context, args []string) int {
 	if apiErr := app.deps.ensureDaemon(ctx, workspace, nodeState, client); apiErr != nil {
 		return app.writeError(apiErr)
 	}
-	return app.dispatch(ctx, client, args[0], args[1:])
+	return app.dispatch(ctx, client, nodeState, args[0], args[1:])
 }
 
 func (app *channelApp) dispatch(ctx context.Context, client channelControlClient,
-	command string, args []string,
+	nodeState, command string, args []string,
 ) int {
 	switch command {
 	case "create":
-		return app.create(ctx, client, args)
+		return app.create(ctx, client, nodeState, args)
 	case "join":
 		return app.join(ctx, client, args)
 	case "status":
 		return app.status(ctx, client, args)
 	case "invite":
-		return app.invite(ctx, client, args)
+		return app.invite(ctx, client, nodeState, args)
 	case "remove":
 		return app.remove(ctx, client, args)
 	case "leave":
@@ -174,7 +181,9 @@ func (app *channelApp) leave(ctx context.Context, client channelControlClient, a
 	return writeExit(err)
 }
 
-func (app *channelApp) create(ctx context.Context, client channelControlClient, args []string) int {
+func (app *channelApp) create(ctx context.Context, client channelControlClient,
+	nodeState string, args []string,
+) int {
 	args, jsonOutput := takeJSONFlag(args)
 	if len(args) > 1 || len(args) == 1 && len(args[0]) > model.MaxLabelBytes {
 		return app.writeError(localapi.NewAPIError(localapi.CodeInvalidArgument,
@@ -184,19 +193,25 @@ func (app *channelApp) create(ctx context.Context, client channelControlClient, 
 	if len(args) == 1 {
 		name = args[0]
 	}
-	response, apiErr := client.CreateChannel(ctx, localapi.ChannelCreateRequest{Name: name})
+	request := localapi.ChannelCreateRequest{Name: name}
+	requestDigest, apiErr := localapi.ChannelCreateRequestDigest(request)
 	if apiErr != nil {
 		return app.writeError(apiErr)
 	}
-	if jsonOutput {
-		return app.writeJSON(response)
+	journals, pending, apiErr := app.beginChannelMutation(nodeState, requestDigest)
+	if apiErr != nil {
+		return app.writeError(apiErr)
 	}
-	_, err := fmt.Fprintf(app.stdout, "Created Channel %s (%s)\nInvite token (shown once):\n%s\n",
-		response.Channel.Alias, response.Channel.Topic.Status, response.InviteToken)
-	if err != nil {
-		return 1
+	response, apiErr := client.CreateChannel(ctx, request, pending)
+	if apiErr != nil {
+		return app.writeError(apiErr)
 	}
-	return 0
+	return app.presentChannelMutation(journals, pending, jsonOutput, response, func() int {
+		_, err := fmt.Fprintf(app.stdout,
+			"Created Channel %s (%s)\nInvite token (shown once):\n%s\n",
+			response.Channel.Alias, response.Channel.Topic.Status, response.InviteToken)
+		return writeExit(err)
+	})
 }
 
 func (app *channelApp) join(ctx context.Context, client channelControlClient, args []string) int {
@@ -268,7 +283,9 @@ func (app *channelApp) status(ctx context.Context, client channelControlClient, 
 	return 0
 }
 
-func (app *channelApp) invite(ctx context.Context, client channelControlClient, args []string) int {
+func (app *channelApp) invite(ctx context.Context, client channelControlClient,
+	nodeState string, args []string,
+) int {
 	args, jsonOutput := takeJSONFlag(args)
 	flags := flag.NewFlagSet("channel invite", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
@@ -292,17 +309,25 @@ func (app *channelApp) invite(ctx context.Context, client channelControlClient, 
 		_, err := fmt.Fprintf(app.stdout, "Closed invite for Channel %s\n", response.Channel.Alias)
 		return writeExit(err)
 	}
-	response, apiErr := client.CreateChannelInvite(ctx, localapi.ChannelInviteRequest{
-		Channel: *channel, ExpiresSeconds: int64(*expires / time.Second), Uses: uint8(*uses)})
+	request := localapi.ChannelInviteRequest{Channel: *channel,
+		ExpiresSeconds: int64(*expires / time.Second), Uses: uint8(*uses)}
+	requestDigest, apiErr := localapi.ChannelInviteRequestDigest(request)
 	if apiErr != nil {
 		return app.writeError(apiErr)
 	}
-	if jsonOutput {
-		return app.writeJSON(response)
+	journals, pending, apiErr := app.beginChannelMutation(nodeState, requestDigest)
+	if apiErr != nil {
+		return app.writeError(apiErr)
 	}
-	_, err := fmt.Fprintf(app.stdout, "Created invite for Channel %s (shown once):\n%s\n",
-		response.Channel.Alias, response.InviteToken)
-	return writeExit(err)
+	response, apiErr := client.CreateChannelInvite(ctx, request, pending)
+	if apiErr != nil {
+		return app.writeError(apiErr)
+	}
+	return app.presentChannelMutation(journals, pending, jsonOutput, response, func() int {
+		_, err := fmt.Fprintf(app.stdout, "Created invite for Channel %s (shown once):\n%s\n",
+			response.Channel.Alias, response.InviteToken)
+		return writeExit(err)
+	})
 }
 
 func takeJSONFlag(args []string) ([]string, bool) {

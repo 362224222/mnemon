@@ -22,6 +22,7 @@ const (
 type headerPolicy struct {
 	operationRequired bool
 	operationAllowed  bool
+	retainOperation   bool
 	claimRequired     bool
 	claimAllowed      bool
 	attachmentAllowed bool
@@ -52,6 +53,7 @@ func authenticateRequest(ctx context.Context, request *http.Request, authenticat
 	if apiErr != nil {
 		return RequestMetadata{}, apiErr
 	}
+	defer clear(operation)
 	if present && !policy.operationAllowed {
 		return RequestMetadata{}, NewAPIError(CodeInvalidArgument, "operation key is not allowed on this route")
 	}
@@ -60,7 +62,6 @@ func authenticateRequest(ctx context.Context, request *http.Request, authenticat
 	}
 	if present {
 		metadata.OperationKeyHash, metadata.HasOperationKey = model.Sum(operation), true
-		clear(operation)
 	}
 
 	claim, present, apiErr := optionalSecretHeader(request.Header, claimContextHeader)
@@ -88,6 +89,9 @@ func authenticateRequest(ctx context.Context, request *http.Request, authenticat
 	if present {
 		metadata.RunAttachmentHash, metadata.HasRunAttachment = model.Sum(attachment), true
 		clear(attachment)
+	}
+	if metadata.HasOperationKey && policy.retainOperation {
+		metadata.OperationKeySecret = append([]byte(nil), operation...)
 	}
 	return metadata, nil
 }

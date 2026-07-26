@@ -326,15 +326,10 @@ func (c *Client) operationHeaders(request any, contextFile *ContextFile,
 	if journal.requestDigest != model.Sum(body) {
 		return clientHeaders{}, NewAPIError(CodeOperationMismatch, "pending operation does not match request")
 	}
-	currentJournal, err := c.readExpectedJournal(journal)
-	if err != nil {
-		return clientHeaders{}, NewAPIError(CodeOperationMismatch, "pending operation identity is invalid")
+	headers, currentJournal, apiErr := c.pendingOperationHeaders(journal.requestDigest, journal)
+	if apiErr != nil {
+		return clientHeaders{}, apiErr
 	}
-	if currentJournal.requestDigest != journal.requestDigest ||
-		subtle.ConstantTimeCompare(currentJournal.operationKey[:], journal.operationKey[:]) != 1 {
-		return clientHeaders{}, NewAPIError(CodeOperationMismatch, "pending operation identity changed")
-	}
-	headers := clientHeaders{operation: currentJournal.OperationKeyHeader()}
 	if contextFile == nil {
 		if currentJournal.hasContext {
 			return clientHeaders{}, NewAPIError(CodeOperationMismatch, "pending operation expects managed context")
@@ -352,6 +347,27 @@ func (c *Client) operationHeaders(request any, contextFile *ContextFile,
 	}
 	headers.claim = verified.HeaderValue()
 	return headers, nil
+}
+
+func (c *Client) pendingOperationHeaders(requestDigest model.Digest,
+	journal PendingJournal,
+) (clientHeaders, PendingJournal, *APIError) {
+	if c == nil || requestDigest.IsZero() || journal.requestDigest != requestDigest {
+		return clientHeaders{}, PendingJournal{},
+			NewAPIError(CodeOperationMismatch, "pending operation does not match request")
+	}
+	currentJournal, err := c.readExpectedJournal(journal)
+	if err != nil {
+		return clientHeaders{}, PendingJournal{},
+			NewAPIError(CodeOperationMismatch, "pending operation identity is invalid")
+	}
+	if currentJournal.requestDigest != journal.requestDigest ||
+		subtle.ConstantTimeCompare(currentJournal.operationKey[:], journal.operationKey[:]) != 1 {
+		return clientHeaders{}, PendingJournal{},
+			NewAPIError(CodeOperationMismatch, "pending operation identity changed")
+	}
+	headers := clientHeaders{operation: currentJournal.OperationKeyHeader()}
+	return headers, currentJournal, nil
 }
 
 func (c *Client) readExpectedJournal(expected PendingJournal) (PendingJournal, error) {

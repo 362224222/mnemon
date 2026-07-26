@@ -24,6 +24,7 @@ type RotateChannelInviteSpec struct {
 	ChannelID model.ChannelID
 	Token     model.EnrollmentToken
 	At        time.Time
+	Operation *ChannelMutationOperation
 }
 
 type RotateChannelInviteResult struct {
@@ -32,6 +33,7 @@ type RotateChannelInviteResult struct {
 	ReplacedGrant  model.GrantID
 	RemainingSeats uint8
 	Status         string
+	Mutation       ChannelMutationAuthority
 }
 
 type CloseChannelInviteResult struct {
@@ -57,12 +59,31 @@ func (s *Store) RotateChannelInvite(ctx context.Context,
 		return RotateChannelInviteResult{}, fmt.Errorf("%w: invalid creation time or signed token",
 			ErrChannelInviteInput)
 	}
+	operation, hasOperation, err := optionalChannelMutationOperation(
+		spec.Operation, ChannelMutationInvite)
+	if err != nil {
+		return RotateChannelInviteResult{}, err
+	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return RotateChannelInviteResult{}, fmt.Errorf("rotate Channel invite: begin: %w", err)
 	}
 	defer tx.Rollback()
+	if hasOperation {
+		mutation, found, readErr := readChannelMutation(ctx, tx, operation)
+		if readErr != nil {
+			return RotateChannelInviteResult{}, readErr
+		}
+		if found {
+			if err := tx.Commit(); err != nil {
+				return RotateChannelInviteResult{},
+					fmt.Errorf("rotate Channel invite: commit operation replay: %w", err)
+			}
+			return RotateChannelInviteResult{GrantID: mutation.GrantID(),
+				Status: mutation.GrantStatus(), Mutation: mutation}, nil
+		}
+	}
 	authority, node, err := readOwnedInviteAuthority(ctx, tx, spec.ChannelID)
 	if err != nil {
 		return RotateChannelInviteResult{}, err
@@ -86,11 +107,18 @@ func (s *Store) RotateChannelInvite(ctx context.Context,
 			return RotateChannelInviteResult{}, ErrChannelInviteConflict
 		}
 		remaining := remainingChannelSeats(authority.roster, authority.channel.MemberLimit())
+		var mutation ChannelMutationAuthority
+		if hasOperation {
+			mutation, err = insertChannelMutation(ctx, tx, operation, spec.Token, at)
+			if err != nil {
+				return RotateChannelInviteResult{}, err
+			}
+		}
 		if err := tx.Commit(); err != nil {
 			return RotateChannelInviteResult{}, fmt.Errorf("rotate Channel invite: commit replay read: %w", err)
 		}
 		return RotateChannelInviteResult{GrantID: grant.ID(), RemainingSeats: remaining,
-			Status: existing.status}, nil
+			Status: existing.status, Mutation: mutation}, nil
 	}
 	if !errors.Is(existingErr, sql.ErrNoRows) {
 		return RotateChannelInviteResult{}, existingErr
@@ -157,11 +185,18 @@ func (s *Store) RotateChannelInvite(ctx context.Context,
 	if err != nil {
 		return RotateChannelInviteResult{}, mapChannelInviteError(err)
 	}
+	var mutation ChannelMutationAuthority
+	if hasOperation {
+		mutation, err = insertChannelMutation(ctx, tx, operation, spec.Token, at)
+		if err != nil {
+			return RotateChannelInviteResult{}, err
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return RotateChannelInviteResult{}, mapChannelInviteError(err)
 	}
 	return RotateChannelInviteResult{Created: true, GrantID: grant.ID(), ReplacedGrant: replaced,
-		RemainingSeats: remaining, Status: "open"}, nil
+		RemainingSeats: remaining, Status: "open", Mutation: mutation}, nil
 }
 
 // CloseChannelInvite retires one exact grant. Replaying a close after a later

@@ -27,7 +27,7 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 				"artifact_pins artifact_provenance artifact_gc_scan artifact_gc_staging_scan artifact_gc_staging_receipt artifact_gc_queue artifact_gc_prepare_receipt " +
 				"artifact_gc_completion_receipts artifact_gc_delete_guard artifact_gc_block_delete_guard artifact_gc_completion_guard " +
 				"channels channel_members channel_conflicts " +
-				"enrollment_grants enrollment_grant_uses enrollment_receipts channel_join_reservations channel_leave_requests " +
+				"enrollment_grants channel_mutation_operations enrollment_grant_uses enrollment_receipts channel_join_reservations channel_leave_requests " +
 				"peer_bindings gossip_publications peer_deliveries peer_inbox peer_inbox_semantic_transition_receipts peer_inbox_artifact_renew_receipts peer_inbox_artifact_source_receipts peer_inbox_pressure peer_inbox_node_pressure publication_conflicts " +
 				"origin_quarantines peer_cursors peer_repairs publication_epochs peer_pull_acks",
 		),
@@ -60,6 +60,7 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 				"channel_members_no_update channel_members_no_delete channel_conflicts_no_update " +
 				"channel_conflicts_no_delete channel_conflicts_limit_insert channels_conflicted_requires_evidence channel_members_no_reactivate " +
 				"channel_members_capacity_insert enrollment_grants_initial_state_insert enrollment_grants_lifecycle_insert enrollment_grants_identity_immutable enrollment_grants_no_delete enrollment_grants_state_update " +
+				"channel_mutation_operations_no_update channel_mutation_operations_no_delete " +
 				"enrollment_grant_uses_validate_insert enrollment_grant_uses_account_insert " +
 				"enrollment_grant_uses_no_update enrollment_grant_uses_no_delete " +
 				"enrollment_receipts_owner_evidence_insert enrollment_receipts_no_update enrollment_receipts_no_delete " +
@@ -120,8 +121,8 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 	if !reflect.DeepEqual(actual, expected) {
 		t.Fatalf("schema object set mismatch\nactual: %#v\nexpected: %#v", actual, expected)
 	}
-	if got := len(actual["table"]) + len(actual["index"]) + len(actual["trigger"]); got != 231 {
-		t.Fatalf("explicit object count = %d, want 231", got)
+	if got := len(actual["table"]) + len(actual["index"]) + len(actual["trigger"]); got != 234 {
+		t.Fatalf("explicit object count = %d, want 234", got)
 	}
 }
 

@@ -10,13 +10,18 @@ import (
 )
 
 func (c *Client) CreateChannel(ctx context.Context,
-	request ChannelCreateRequest,
+	request ChannelCreateRequest, journal PendingJournal,
 ) (ChannelCreateResponse, *APIError) {
 	if !validChannelCreateRequest(request) {
 		return ChannelCreateResponse{}, NewAPIError(CodeInvalidArgument, "Channel name is invalid")
 	}
+	requestDigest, apiErr := ChannelCreateRequestDigest(request)
+	if apiErr != nil {
+		return ChannelCreateResponse{}, apiErr
+	}
 	var response ChannelCreateResponse
-	if apiErr := c.postChannel(ctx, RouteChannelCreate, request, &response); apiErr != nil {
+	if apiErr := c.postChannelMutation(ctx, RouteChannelCreate, request, requestDigest,
+		journal, &response); apiErr != nil {
 		return ChannelCreateResponse{}, apiErr
 	}
 	if apiErr := validateChannelCreateResponse(response); apiErr != nil {
@@ -42,13 +47,18 @@ func (c *Client) JoinChannel(ctx context.Context,
 }
 
 func (c *Client) CreateChannelInvite(ctx context.Context,
-	request ChannelInviteRequest,
+	request ChannelInviteRequest, journal PendingJournal,
 ) (ChannelInviteResponse, *APIError) {
 	if !validChannelInviteRequest(request) {
 		return ChannelInviteResponse{}, NewAPIError(CodeInvalidArgument, "Channel invite options are invalid")
 	}
+	requestDigest, apiErr := ChannelInviteRequestDigest(request)
+	if apiErr != nil {
+		return ChannelInviteResponse{}, apiErr
+	}
 	var response ChannelInviteResponse
-	if apiErr := c.postChannel(ctx, RouteChannelInvites, request, &response); apiErr != nil {
+	if apiErr := c.postChannelMutation(ctx, RouteChannelInvites, request, requestDigest,
+		journal, &response); apiErr != nil {
 		return ChannelInviteResponse{}, apiErr
 	}
 	if apiErr := validateChannelInviteResponse(response); apiErr != nil {
@@ -144,6 +154,26 @@ func (c *Client) AbandonChannel(ctx context.Context,
 }
 
 func (c *Client) postChannel(ctx context.Context, route string, input, response any) *APIError {
+	return c.postChannelWithHeaders(ctx, route, input, clientHeaders{}, response)
+}
+
+func (c *Client) postChannelMutation(
+	ctx context.Context, route string, input any, requestDigest model.Digest,
+	journal PendingJournal, response any,
+) *APIError {
+	if journal.RequestDigest() != requestDigest {
+		return NewAPIError(CodeOperationMismatch, "pending Channel mutation does not match request")
+	}
+	headers, _, apiErr := c.pendingOperationHeaders(requestDigest, journal)
+	if apiErr != nil {
+		return apiErr
+	}
+	return c.postChannelWithHeaders(ctx, route, input, headers, response)
+}
+
+func (c *Client) postChannelWithHeaders(ctx context.Context, route string, input any,
+	headers clientHeaders, response any,
+) *APIError {
 	if c == nil || c.http == nil || ctx == nil || route == RouteChannelStatus || !IsChannelRoute(route) {
 		return invalidControlResponse("local control client is unavailable")
 	}
@@ -159,5 +189,8 @@ func (c *Client) postChannel(ctx context.Context, route string, input, response 
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set(authorizationHeader,
 		profileScheme+base64.RawURLEncoding.EncodeToString(c.token[:]))
+	if headers.operation != "" {
+		request.Header.Set(operationKeyHeader, headers.operation)
+	}
 	return c.send(request, response, MaxChannelResponseBytes)
 }

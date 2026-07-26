@@ -3,6 +3,8 @@ package localapi
 import (
 	"io"
 	"net/http"
+
+	"github.com/mnemon-dev/mnemon/harness/internal/model"
 )
 
 const (
@@ -35,10 +37,12 @@ func (s *Server) registerChannelRoutes(mux *http.ServeMux) {
 
 func (s *Server) handleChannelCreate(writer http.ResponseWriter, request *http.Request) {
 	var input ChannelCreateRequest
-	metadata, ok := s.prepareChannelPost(writer, request, &input)
+	metadata, ok := s.prepareChannelMutationPost(writer, request, &input,
+		func() (model.Digest, *APIError) { return ChannelCreateRequestDigest(input) })
 	if !ok {
 		return
 	}
+	defer clear(metadata.OperationKeySecret)
 	if !validChannelCreateRequest(input) {
 		writeError(writer, NewAPIError(CodeInvalidArgument, "Channel name is invalid"))
 		return
@@ -79,10 +83,12 @@ func (s *Server) handleChannelJoin(writer http.ResponseWriter, request *http.Req
 
 func (s *Server) handleChannelInvite(writer http.ResponseWriter, request *http.Request) {
 	var input ChannelInviteRequest
-	metadata, ok := s.prepareChannelPost(writer, request, &input)
+	metadata, ok := s.prepareChannelMutationPost(writer, request, &input,
+		func() (model.Digest, *APIError) { return ChannelInviteRequestDigest(input) })
 	if !ok {
 		return
 	}
+	defer clear(metadata.OperationKeySecret)
 	if !validChannelInviteRequest(input) {
 		writeError(writer, NewAPIError(CodeInvalidArgument, "Channel invite options are invalid"))
 		return
@@ -208,19 +214,48 @@ func (s *Server) handleChannelAbandon(writer http.ResponseWriter, request *http.
 func (s *Server) prepareChannelPost(writer http.ResponseWriter, request *http.Request,
 	target any,
 ) (RequestMetadata, bool) {
-	metadata, ok := s.prepare(writer, request, headerPolicy{})
+	return s.prepareChannelPostWithPolicy(writer, request, target, headerPolicy{})
+}
+
+func (s *Server) prepareChannelMutationPost(
+	writer http.ResponseWriter, request *http.Request, target any,
+	digest func() (model.Digest, *APIError),
+) (RequestMetadata, bool) {
+	metadata, ok := s.prepareChannelPostWithPolicy(writer, request, target, headerPolicy{
+		operationRequired: true, operationAllowed: true, retainOperation: true,
+	})
+	if !ok {
+		return RequestMetadata{}, false
+	}
+	requestDigest, apiErr := digest()
+	if apiErr != nil {
+		clear(metadata.OperationKeySecret)
+		writeError(writer, apiErr)
+		return RequestMetadata{}, false
+	}
+	metadata.RequestDigest, metadata.HasRequestDigest = requestDigest, true
+	return metadata, true
+}
+
+func (s *Server) prepareChannelPostWithPolicy(writer http.ResponseWriter, request *http.Request,
+	target any, policy headerPolicy,
+) (RequestMetadata, bool) {
+	metadata, ok := s.prepare(writer, request, policy)
 	if !ok {
 		return RequestMetadata{}, false
 	}
 	if request.URL.RawQuery != "" {
+		clear(metadata.OperationKeySecret)
 		writeError(writer, NewAPIError(CodeInvalidArgument, "Channel request must not contain a query"))
 		return RequestMetadata{}, false
 	}
 	if apiErr := decodeRequest(writer, request, target); apiErr != nil {
+		clear(metadata.OperationKeySecret)
 		writeError(writer, apiErr)
 		return RequestMetadata{}, false
 	}
 	if s.channels == nil {
+		clear(metadata.OperationKeySecret)
 		writeError(writer, NewAPIError(CodeInternal, "Channel controller is unavailable"))
 		return RequestMetadata{}, false
 	}

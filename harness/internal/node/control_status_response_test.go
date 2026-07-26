@@ -107,7 +107,11 @@ func (client *Client) CreateChannel(ctx context.Context,
 	request ChannelCreateRequest,
 ) (ChannelCreateResponse, *APIError) {
 	var response ChannelCreateResponse
-	if apiErr := client.post(ctx, "/v1/channel/create", request, &response, nil); apiErr != nil {
+	digest := testChannelCreateRequestDigest(request)
+	secret := model.Sum([]byte("node-test-channel-operation:" + digest.String())).Bytes()
+	defer clear(secret)
+	headers := map[string]string{"Mnemon-Operation-Key": base64.RawURLEncoding.EncodeToString(secret)}
+	if apiErr := client.post(ctx, "/v1/channel/create", request, &response, headers); apiErr != nil {
 		return ChannelCreateResponse{}, apiErr
 	}
 	return response, nil
@@ -121,6 +125,18 @@ func (client *Client) JoinChannel(ctx context.Context,
 		return ChannelJoinResponse{}, apiErr
 	}
 	return response, nil
+}
+
+func testChannelCreateRequestDigest(request ChannelCreateRequest) model.Digest {
+	raw, err := model.CanonicalMarshal(struct {
+		Kind          string               `json:"kind"`
+		Request       ChannelCreateRequest `json:"request"`
+		SchemaVersion int                  `json:"schema_version"`
+	}{Kind: "create", Request: request, SchemaVersion: SchemaVersion})
+	if err != nil {
+		panic(err)
+	}
+	return model.Sum(raw)
 }
 
 func (client *Client) ReadChannelStatus(ctx context.Context) (ChannelStatusResponse, *APIError) {

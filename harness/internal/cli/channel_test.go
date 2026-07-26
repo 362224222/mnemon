@@ -109,6 +109,109 @@ func TestChannelLeaveReportsQueuedOwnerAcknowledgement(t *testing.T) {
 	}
 }
 
+func TestChannelCreateResponseLossReusesJournalUntilPresentation(t *testing.T) {
+	workspace, nodeState := cliWorkspace(t)
+	client := &channelMutationClientStub{createErr: localapi.NewAPIError(
+		localapi.CodeMnemondUnavailable, "mnemond local control is unavailable")}
+	stdout, stderr, app := channelMutationTestApp(t, workspace, client)
+	args := []string{"create", "review", "--json"}
+	if exit := app.run(context.Background(), args); exit != 5 || stdout.Len() != 0 ||
+		stderr.String() != "mnemond_unavailable: mnemond local control is unavailable\n" {
+		t.Fatalf("lost create response = exit %d stdout=%q stderr=%q",
+			exit, stdout.String(), stderr.String())
+	}
+	firstKey := client.createJournal.OperationKeyHash()
+	assertJournalSuffixes(t, nodeState, []string{".pending"})
+
+	client.createErr = nil
+	client.createResponse = localapi.ChannelCreateResponse{SchemaVersion: localapi.SchemaVersion,
+		Status: "created", Channel: localapi.ChannelView{Alias: "review",
+			Topic: localapi.ChannelTopicView{Status: "joined"}},
+		InviteToken: "mnch1_test-token"}
+	stdout.Reset()
+	stderr.Reset()
+	if exit := app.run(context.Background(), args); exit != 0 ||
+		client.createJournal.OperationKeyHash() != firstKey {
+		t.Fatalf("create replay = exit %d key=%s stdout=%q", exit,
+			client.createJournal.OperationKeyHash().String(), stdout.String())
+	}
+	assertJournalSuffixes(t, nodeState, []string{".presented"})
+
+	stdout.Reset()
+	if exit := app.run(context.Background(), args); exit != 0 ||
+		client.createJournal.OperationKeyHash() == firstKey {
+		t.Fatalf("intentional create after presentation = exit %d key=%s",
+			exit, client.createJournal.OperationKeyHash().String())
+	}
+	assertJournalSuffixes(t, nodeState, []string{".presented", ".presented"})
+}
+
+func TestChannelInviteTerminalJournalSurvivesPresentationFailure(t *testing.T) {
+	workspace, nodeState := cliWorkspace(t)
+	client := &channelMutationClientStub{inviteResponse: localapi.ChannelInviteResponse{
+		SchemaVersion: localapi.SchemaVersion, Status: "created",
+		Channel:     localapi.ChannelView{Alias: "review"},
+		InviteToken: "mnch1_test-token"}}
+	_, stderr, app := channelMutationTestApp(t, workspace, client)
+	app.stdout = failingWriter{}
+	args := []string{"invite", "--channel", "review", "--uses", "2", "--json"}
+	if exit := app.run(context.Background(), args); exit != 1 || stderr.Len() != 0 {
+		t.Fatalf("failed invite presentation = exit %d stderr=%q", exit, stderr.String())
+	}
+	firstKey := client.inviteJournal.OperationKeyHash()
+	assertJournalSuffixes(t, nodeState, []string{".terminal"})
+
+	stdout := &bytes.Buffer{}
+	app.stdout = stdout
+	if exit := app.run(context.Background(), args); exit != 0 ||
+		client.inviteJournal.OperationKeyHash() != firstKey {
+		t.Fatalf("invite terminal replay = exit %d key=%s stdout=%q", exit,
+			client.inviteJournal.OperationKeyHash().String(), stdout.String())
+	}
+	assertJournalSuffixes(t, nodeState, []string{".presented"})
+}
+
+type channelMutationClientStub struct {
+	channelControlClient
+	createJournal  localapi.PendingJournal
+	createResponse localapi.ChannelCreateResponse
+	createErr      *localapi.APIError
+	inviteJournal  localapi.PendingJournal
+	inviteResponse localapi.ChannelInviteResponse
+	inviteErr      *localapi.APIError
+}
+
+func (client *channelMutationClientStub) CreateChannel(_ context.Context,
+	_ localapi.ChannelCreateRequest, journal localapi.PendingJournal,
+) (localapi.ChannelCreateResponse, *localapi.APIError) {
+	client.createJournal = journal
+	return client.createResponse, client.createErr
+}
+
+func (client *channelMutationClientStub) CreateChannelInvite(_ context.Context,
+	_ localapi.ChannelInviteRequest, journal localapi.PendingJournal,
+) (localapi.ChannelInviteResponse, *localapi.APIError) {
+	client.inviteJournal = journal
+	return client.inviteResponse, client.inviteErr
+}
+
+func channelMutationTestApp(t *testing.T, workspace string,
+	client channelControlClient,
+) (*bytes.Buffer, *bytes.Buffer, *channelApp) {
+	t.Helper()
+	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+	app := &channelApp{stdin: bytes.NewReader(nil), stdout: stdout, stderr: stderr,
+		deps: productionChannelDependencies()}
+	app.deps.workingDirectory = func() (string, error) { return workspace, nil }
+	app.deps.newClient = func(string) (channelControlClient, error) { return client, nil }
+	app.deps.ensureDaemon = func(context.Context, string, string,
+		daemonHealthClient,
+	) *localapi.APIError {
+		return nil
+	}
+	return stdout, stderr, app
+}
+
 type leaveChannelClientStub struct {
 	channelControlClient
 	response localapi.ChannelLeaveResponse

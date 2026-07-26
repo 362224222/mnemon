@@ -1539,6 +1539,27 @@ WHEN NEW.used_uses < OLD.used_uses
   )
 BEGIN SELECT RAISE(ABORT, 'enrollment grant state is monotonic and terminal'); END;
 
+CREATE TABLE channel_mutation_operations (
+  operation_key_hash BLOB PRIMARY KEY CHECK (length(operation_key_hash) = 32),
+  request_digest     BLOB NOT NULL CHECK (length(request_digest) = 32),
+  kind               TEXT NOT NULL CHECK (kind IN ('create','invite')),
+  channel_id         TEXT NOT NULL,
+  grant_id           TEXT NOT NULL,
+  token_payload_digest BLOB NOT NULL CHECK (length(token_payload_digest) = 32),
+  owner_multiaddrs_json BLOB NOT NULL CHECK (json_valid(owner_multiaddrs_json)),
+  committed_at       TEXT NOT NULL,
+  FOREIGN KEY (channel_id) REFERENCES channels(channel_id),
+  FOREIGN KEY (grant_id, channel_id) REFERENCES enrollment_grants(grant_id, channel_id)
+);
+
+CREATE TRIGGER channel_mutation_operations_no_update
+BEFORE UPDATE ON channel_mutation_operations
+BEGIN SELECT RAISE(ABORT, 'Channel mutation operation evidence is immutable'); END;
+
+CREATE TRIGGER channel_mutation_operations_no_delete
+BEFORE DELETE ON channel_mutation_operations
+BEGIN SELECT RAISE(ABORT, 'Channel mutation operation evidence is permanent'); END;
+
 CREATE TABLE enrollment_grant_uses (
   use_id             TEXT PRIMARY KEY,
   grant_id           TEXT NOT NULL REFERENCES enrollment_grants(grant_id),

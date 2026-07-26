@@ -1,10 +1,13 @@
 package localapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -50,6 +53,36 @@ func TestAuthenticateRequestFreezesAuthorityAndMetadata(t *testing.T) {
 		!metadata.HasClaimContext || metadata.ClaimContextHash != model.Sum(claim) ||
 		metadata.HasRunAttachment {
 		t.Fatalf("request metadata = %#v", metadata)
+	}
+}
+
+func TestAuthenticateRequestRetainsChannelOperationSecretOnlyWhenExplicit(t *testing.T) {
+	t.Parallel()
+	credential := repeatedOpaqueBytes(0x31)
+	operation := repeatedOpaqueBytes(0x32)
+	auth := &fakeAuthenticator{want: model.Sum(credential)}
+	request := httptest.NewRequest("POST", RouteChannelCreate, nil)
+	request.Header.Set(authorizationHeader,
+		profileScheme+base64.RawURLEncoding.EncodeToString(credential))
+	request.Header.Set(operationKeyHeader,
+		base64.RawURLEncoding.EncodeToString(operation))
+	metadata, apiErr := authenticateRequest(context.Background(), request, auth, headerPolicy{
+		operationRequired: true, operationAllowed: true, retainOperation: true,
+	})
+	if apiErr != nil || !bytes.Equal(metadata.OperationKeySecret, operation) {
+		t.Fatalf("retained Channel operation = (%#v, %v)", metadata, apiErr)
+	}
+	formatted := fmt.Sprintf("%#v", metadata)
+	if strings.Contains(formatted, base64.RawURLEncoding.EncodeToString(operation)) ||
+		strings.Contains(formatted, fmt.Sprintf("%v", operation)) {
+		t.Fatalf("request metadata formatting leaked operation secret: %s", formatted)
+	}
+
+	metadata, apiErr = authenticateRequest(context.Background(), request, auth, headerPolicy{
+		operationRequired: true, operationAllowed: true,
+	})
+	if apiErr != nil || len(metadata.OperationKeySecret) != 0 {
+		t.Fatalf("ordinary operation retained raw key = (%#v, %v)", metadata, apiErr)
 	}
 }
 

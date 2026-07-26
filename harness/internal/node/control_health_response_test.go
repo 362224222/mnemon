@@ -274,6 +274,20 @@ func (server *nodeTestControlServer) handleChannelCreate(writer http.ResponseWri
 	if !ok {
 		return
 	}
+	values := request.Header.Values("Mnemon-Operation-Key")
+	if len(values) != 1 {
+		writeTestError(writer, NewAPIError(CodeInvalidArgument, "operation key is required"))
+		return
+	}
+	operationSecret, err := decodeTestSecret(values[0])
+	if err != nil {
+		writeTestError(writer, NewAPIError(CodeInvalidArgument, "operation key is invalid"))
+		return
+	}
+	defer clear(operationSecret)
+	metadata.OperationKeyHash, metadata.HasOperationKey = model.Sum(operationSecret), true
+	metadata.OperationKeySecret = operationSecret
+	metadata.RequestDigest, metadata.HasRequestDigest = testChannelCreateRequestDigest(input), true
 	response, apiErr := server.channels.ChannelCreate(request.Context(), metadata, input)
 	if apiErr != nil {
 		writeTestError(writer, apiErr)
