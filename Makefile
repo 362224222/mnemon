@@ -15,7 +15,7 @@ endif
 
 .PHONY: deps build harness-build install uninstall test unit vet harness-validate harness-quality harness-verify
 .PHONY: core-contract core-release-closure core-verify core-release-verify
-.PHONY: test-layout test-unit test-unit-race test-process test-e2e-smoke test-docker test-docker-case
+.PHONY: test-unit test-unit-race test-process test-e2e-smoke test-docker test-docker-case
 .PHONY: test-live-codex test-live-codex-case test-evidence verify release-verify
 .PHONY: docker-build docker-run compose-up compose-down compose-dev release-snapshot clean help
 
@@ -56,8 +56,7 @@ unit: ## Run Go unit tests
 vet: ## Run go vet static analysis
 	go vet ./...
 
-harness-validate: ## Validate the experimental R5 harness layout
-	bash harness/scripts/check_test_pairs.sh
+harness-validate: ## Validate R5 managed assets and action declarations
 	go test ./harness/internal/assets ./harness/internal/teamwork
 
 harness-quality: ## Run pinned, non-mutating Harness quality gates
@@ -75,7 +74,7 @@ harness-verify: ## Build and verify the experimental R5 Harness
 		$(PINNED_GO) build -o "$$tmp/mnemon" .; \
 		$(PINNED_GO) build -o "$$tmp/mnemon-harness" ./harness/cmd/mnemon-harness; \
 		$(PINNED_GO) build -o "$$tmp/mnemond" ./harness/cmd/mnemond
-	bash harness/scripts/check_test_pairs.sh
+	$(MAKE) harness-validate
 	$(MAKE) harness-quality
 	$(PINNED_GO) test ./harness/...
 
@@ -86,13 +85,11 @@ core-release-closure: ## Require every tracked R5 Core MUST to have grounded evi
 	R5_CORE_RELEASE_CLOSURE=1 $(PINNED_GO) test ./harness/test/contracts \
 		-run '^TestCoreRequirementsReleaseClosure$$' -count=1
 
-test-layout: harness-validate ## Run the R5 Harness layout gate
-
-test-unit: test-layout ## Run the R5 Harness unit tests
+test-unit: harness-validate ## Run the R5 Harness unit tests
 	$(PINNED_GO) test ./harness/cmd/... ./harness/internal/... ./harness/tools/... \
 		./harness/test/contracts
 
-test-unit-race: test-layout ## Run the R5 Harness unit tests under the race detector
+test-unit-race: harness-validate ## Run the R5 Harness unit tests under the race detector
 	$(PINNED_GO) test -race ./harness/cmd/... ./harness/internal/... ./harness/tools/... \
 		./harness/test/contracts
 

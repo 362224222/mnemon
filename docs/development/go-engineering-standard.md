@@ -257,8 +257,9 @@ For new or meaningfully rewritten production code:
 | normalized duplicate block | none | >= 150 tokens |
 
 R5 additionally targets at most 400 lines for a hand-written production file
-and 800 lines for its paired unit-test file. These are responsibility-split
-signals, not permission to hide code generation or combine statements.
+and 800 lines for an individual hand-written test file. These are
+responsibility-split signals, not permission to hide code generation or combine
+statements.
 
 In a scope with an adopted baseline, existing violations MUST NOT increase. The
 baseline MUST use a stable identity appropriate to the rule rather than a line
@@ -329,19 +330,19 @@ go vet ./...
 bash scripts/e2e_test.sh
 
 make harness-build
-bash harness/scripts/check_test_pairs.sh
 go test ./harness/...
 go test -race ./harness/...
 go vet ./harness/...
-make harness-validate        # test-pair and managed-asset validation only
+make harness-validate        # managed-asset and action-declaration validation
 make harness-quality         # pinned format/static/dependency/debt ratchets
-make harness-verify          # three builds, layout, quality, vet, and unit tests
+make harness-verify          # three builds, declarations, quality, vet, and unit tests
 ```
 
 `make harness-validate` is not a full Harness quality or verification gate.
 R5 uses the pinned, tracked `make harness-quality` target for format/static
 analysis, dependency/registry checks, and complexity/duplication ratchets.
-`make harness-verify` composes it with build, layout, vet, and Harness tests.
+`make harness-verify` composes it with build, managed-declaration validation,
+vet, and Harness tests.
 
 Any added analyzer MUST have a repository-owned version and configuration and
 be reproducible in CI. Do not depend on a developer's global tool version or

@@ -28,7 +28,7 @@ make unit       # Go unit tests (go test ./...)
 make test       # Full E2E test suite (scripts/e2e_test.sh)
 make vet        # Static analysis (go vet ./...)
 make harness-quality # Pinned Harness format, static, architecture, and debt ratchets
-make harness-verify  # Harness binaries, layout, quality, vet, and unit tests
+make harness-verify  # Harness binaries, declarations, quality, vet, and unit tests
 ```
 
 Both `make unit` and `make test` must pass before submitting a PR. A change to
