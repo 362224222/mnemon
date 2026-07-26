@@ -39,52 +39,76 @@ func authenticateRequest(ctx context.Context, request *http.Request, authenticat
 		return RequestMetadata{}, apiErr
 	}
 	metadata := RequestMetadata{Profile: profile}
-
-	operation, present, apiErr := optionalSecretHeader(request.Header, operationKeyHeader)
-	if apiErr != nil {
+	if apiErr := authenticateOperationHeader(request.Header, policy, &metadata); apiErr != nil {
 		return RequestMetadata{}, apiErr
 	}
+	if apiErr := authenticateClaimHeader(request.Header, policy, &metadata); apiErr != nil {
+		return RequestMetadata{}, apiErr
+	}
+	if apiErr := authenticateAttachmentHeader(request.Header, policy, &metadata); apiErr != nil {
+		return RequestMetadata{}, apiErr
+	}
+	return metadata, nil
+}
+
+func authenticateOperationHeader(header http.Header, policy headerPolicy,
+	metadata *RequestMetadata,
+) *APIError {
+	operation, present, apiErr := optionalSecretHeader(header, operationKeyHeader)
 	defer clear(operation)
+	if apiErr != nil {
+		return apiErr
+	}
 	if present && !policy.operationAllowed {
-		return RequestMetadata{}, NewAPIError(CodeInvalidArgument, "operation key is not allowed on this route")
+		return NewAPIError(CodeInvalidArgument, "operation key is not allowed on this route")
 	}
 	if !present && policy.operationRequired {
-		return RequestMetadata{}, NewAPIError(CodeInvalidArgument, "operation key is required")
+		return NewAPIError(CodeInvalidArgument, "operation key is required")
 	}
 	if present {
 		metadata.OperationKeyHash, metadata.HasOperationKey = model.Sum(operation), true
 	}
-
-	claim, present, apiErr := optionalSecretHeader(request.Header, claimContextHeader)
-	if apiErr != nil {
-		return RequestMetadata{}, apiErr
-	}
-	if present && !policy.claimAllowed {
-		return RequestMetadata{}, NewAPIError(CodeInvalidArgument, "claim context is not allowed on this route")
-	}
-	if !present && policy.claimRequired {
-		return RequestMetadata{}, NewAPIError(CodeContextRequired, "managed context is required")
-	}
-	if present {
-		metadata.ClaimContextHash, metadata.HasClaimContext = model.Sum(claim), true
-		clear(claim)
-	}
-
-	attachment, present, apiErr := optionalSecretHeader(request.Header, runAttachmentHeader)
-	if apiErr != nil {
-		return RequestMetadata{}, apiErr
-	}
-	if present && !policy.attachmentAllowed {
-		return RequestMetadata{}, NewAPIError(CodeInvalidArgument, "run attachment is not allowed on this route")
-	}
-	if present {
-		metadata.RunAttachmentHash, metadata.HasRunAttachment = model.Sum(attachment), true
-		clear(attachment)
-	}
 	if metadata.HasOperationKey && policy.retainOperation {
 		metadata.OperationKeySecret = append([]byte(nil), operation...)
 	}
-	return metadata, nil
+	return nil
+}
+
+func authenticateClaimHeader(header http.Header, policy headerPolicy,
+	metadata *RequestMetadata,
+) *APIError {
+	claim, present, apiErr := optionalSecretHeader(header, claimContextHeader)
+	defer clear(claim)
+	if apiErr != nil {
+		return apiErr
+	}
+	if present && !policy.claimAllowed {
+		return NewAPIError(CodeInvalidArgument, "claim context is not allowed on this route")
+	}
+	if !present && policy.claimRequired {
+		return NewAPIError(CodeContextRequired, "managed context is required")
+	}
+	if present {
+		metadata.ClaimContextHash, metadata.HasClaimContext = model.Sum(claim), true
+	}
+	return nil
+}
+
+func authenticateAttachmentHeader(header http.Header, policy headerPolicy,
+	metadata *RequestMetadata,
+) *APIError {
+	attachment, present, apiErr := optionalSecretHeader(header, runAttachmentHeader)
+	defer clear(attachment)
+	if apiErr != nil {
+		return apiErr
+	}
+	if present && !policy.attachmentAllowed {
+		return NewAPIError(CodeInvalidArgument, "run attachment is not allowed on this route")
+	}
+	if present {
+		metadata.RunAttachmentHash, metadata.HasRunAttachment = model.Sum(attachment), true
+	}
+	return nil
 }
 
 func authenticateProfile(ctx context.Context, header http.Header,
