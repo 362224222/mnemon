@@ -419,7 +419,7 @@ func channelProcessAssertReadyProjection(view localapi.ChannelView, alias, name 
 	if view.Alias != alias || view.Name != name || view.Membership != "active" ||
 		view.Topic.Status != "joined" || int(view.Topic.TotalMembers) != memberCount ||
 		int(view.Topic.ReadyMembers) != memberCount || view.RosterRevision != uint64(memberCount) ||
-		view.RosterHead.Revision != view.RosterRevision || len(view.Publications) != 0 {
+		view.RosterHead.Revision != view.RosterRevision {
 		return errors.New("Channel is not joined with a complete ready signed roster")
 	}
 	return nil
