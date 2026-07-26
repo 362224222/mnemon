@@ -511,40 +511,6 @@ func validateCurrentResponse(response AgentCurrentResponse) *APIError {
 	return nil
 }
 
-func validateOperationResponse(response OperationResponse, expectedAction string) *APIError {
-	if response.SchemaVersion != SchemaVersion || response.Action != expectedAction ||
-		(response.Status != "accepted" && response.Status != "resolved") ||
-		response.OperationID == "" || response.Receipt == "" ||
-		len(response.Receipt) > MaxDiagnosticBytes || response.Results == nil ||
-		len(response.Results) > model.MaxChildWorks {
-		return invalidControlResponse("operation response has an invalid envelope")
-	}
-	if _, err := model.ParseOperationID(response.OperationID); err != nil {
-		return invalidControlResponse("operation response has an invalid identity")
-	}
-	if strings.HasPrefix(expectedAction, "teamwork.") != (response.Status == "accepted") ||
-		strings.HasPrefix(expectedAction, "agent.resolve.") != (response.Status == "resolved") {
-		return invalidControlResponse("operation response status does not match its action")
-	}
-	if response.Status == "resolved" && len(response.Results) != 0 {
-		return invalidControlResponse("handling resolution returned domain results")
-	}
-	for _, result := range response.Results {
-		if _, err := model.ParseEventID(result.EventID); err != nil || result.EventType == "" ||
-			result.Work.Ref == "" || result.Work.Version == 0 || !model.WorkState(result.Work.State).Valid() {
-			return invalidControlResponse("operation response contains an invalid result")
-		}
-	}
-	if response.Handling != nil && response.Handling.Status != "completed" &&
-		response.Handling.Status != "requeued" && response.Handling.Status != "rejected" {
-		return invalidControlResponse("operation response has an invalid handling receipt")
-	}
-	if response.Status == "resolved" && response.Handling == nil {
-		return invalidControlResponse("handling resolution lacks a handling receipt")
-	}
-	return nil
-}
-
 func invalidControlResponse(message string) *APIError {
 	return NewAPIError(CodeInternal, fmt.Sprintf("%s", message))
 }
