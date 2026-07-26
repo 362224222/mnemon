@@ -19,6 +19,7 @@ const channelEnrollmentAuthorityLoads = 2
 type ChannelMeshLoader func(context.Context) (store.ChannelMeshAuthority, error)
 
 type meshEnrollmentPermit struct {
+	active    bool
 	owner     model.PeerID
 	ownerID   libp2ppeer.ID
 	addresses []multiaddr.Multiaddr
@@ -51,23 +52,25 @@ func (runtime *MeshRuntime) EnrollChannel(ctx context.Context,
 	if runtime == nil || ctx == nil || client == nil || load == nil || spec.Token.IsZero() {
 		return store.InstallJoinedChannelResult{}, fmt.Errorf("%w: enrollment inputs are incomplete", ErrMeshRuntime)
 	}
-	runtime.enrollmentMu.Lock()
-	defer runtime.enrollmentMu.Unlock()
-
-	localPeerID, localPublicKey, err := runtime.enrollmentIdentity()
+	slot, localHostID, err := runtime.claimEnrollmentSlot()
 	if err != nil {
 		return store.InstallJoinedChannelResult{}, err
+	}
+	localPeerID, localPublicKey, err := secureChannelPeer(localHostID)
+	if err != nil {
+		cause := fmt.Errorf("%w: local enrollment identity: %v", ErrMeshRuntime, err)
+		return store.InstallJoinedChannelResult{}, runtime.clearEnrollmentSlot(slot, cause)
 	}
 	prepared, err := client.prepare(ctx, spec, localPeerID, localPublicKey)
 	if err != nil {
-		return store.InstallJoinedChannelResult{}, err
+		return store.InstallJoinedChannelResult{}, runtime.clearEnrollmentSlot(slot, err)
 	}
-	permit, err := runtime.prepareEnrollmentPermit(spec.Token)
+	permit, err := prepareEnrollmentPermit(spec.Token, localHostID)
 	if err != nil {
 		client.release(prepared)
-		return store.InstallJoinedChannelResult{}, err
+		return store.InstallJoinedChannelResult{}, runtime.clearEnrollmentSlot(slot, err)
 	}
-	if err := runtime.stageEnrollment(permit); err != nil {
+	if err := runtime.activateEnrollment(slot, permit); err != nil {
 		client.release(prepared)
 		return store.InstallJoinedChannelResult{}, err
 	}
@@ -75,7 +78,7 @@ func (runtime *MeshRuntime) EnrollChannel(ctx context.Context,
 	var joinErr error
 	for attempt := 1; attempt <= channelEnrollmentMaxAttempts; attempt++ {
 		attemptCtx, cancel := context.WithTimeout(ctx, HermeticLimits().ChannelRequestTimeout)
-		result, joinErr = runtime.exchangeEnrollment(attemptCtx, permit.ownerID, client, prepared)
+		result, joinErr = runtime.exchangeEnrollment(attemptCtx, slot.ownerID, client, prepared)
 		cancel()
 		if joinErr == nil || attempt == channelEnrollmentMaxAttempts ||
 			!retryableEnrollmentAttempt(joinErr) {
@@ -85,30 +88,30 @@ func (runtime *MeshRuntime) EnrollChannel(ctx context.Context,
 			joinErr = err
 			break
 		}
-		closeEnrollmentConnections(runtime, permit.ownerID)
+		closeEnrollmentConnections(runtime, slot.ownerID)
 		prepared, joinErr = client.prepare(ctx, spec, localPeerID, localPublicKey)
 		if joinErr != nil {
 			break
 		}
 	}
-	reconcileErr := runtime.finishEnrollment(ctx, permit, load)
+	reconcileErr := runtime.finishEnrollment(ctx, slot, load)
 	return result, errors.Join(joinErr, reconcileErr)
 }
 
-func (runtime *MeshRuntime) enrollmentIdentity() (model.PeerID, []byte, error) {
+func (runtime *MeshRuntime) claimEnrollmentSlot() (*meshEnrollmentPermit, libp2ppeer.ID, error) {
 	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
 	if runtime.closed || runtime.nodeHost == nil || runtime.nodeHost.Host() == nil ||
 		runtime.gossip == nil {
-		runtime.mu.Unlock()
-		return model.PeerID{}, nil, fmt.Errorf("%w: runtime is closed", ErrMeshRuntime)
+		return nil, "", fmt.Errorf("%w: runtime is closed", ErrMeshRuntime)
 	}
-	hostID := runtime.nodeHost.Host().ID()
-	runtime.mu.Unlock()
-	peerID, publicKey, err := secureChannelPeer(hostID)
-	if err != nil {
-		return model.PeerID{}, nil, fmt.Errorf("%w: local enrollment identity: %v", ErrMeshRuntime, err)
+	if runtime.enrollment != nil {
+		return nil, "", fmt.Errorf("%w: runtime enrollment is busy", ErrMeshRuntime)
 	}
-	return peerID, publicKey, nil
+	slot := &meshEnrollmentPermit{}
+	runtime.enrollment = slot
+	runtime.revision++
+	return slot, runtime.nodeHost.Host().ID(), nil
 }
 
 func retryableEnrollmentAttempt(err error) bool {
@@ -150,57 +153,68 @@ func closeEnrollmentConnections(runtime *MeshRuntime, owner libp2ppeer.ID) {
 	}
 }
 
-func (runtime *MeshRuntime) prepareEnrollmentPermit(token model.EnrollmentToken,
-) (*meshEnrollmentPermit, error) {
+func prepareEnrollmentPermit(token model.EnrollmentToken,
+	local libp2ppeer.ID,
+) (meshEnrollmentPermit, error) {
 	payload := token.Payload()
 	owner, err := canonicalLibp2pID(payload.Descriptor().Descriptor().OwnerPeerID())
-	runtime.mu.Lock()
-	var local libp2ppeer.ID
-	if runtime.nodeHost != nil && runtime.nodeHost.Host() != nil {
-		local = runtime.nodeHost.Host().ID()
-	}
-	runtime.mu.Unlock()
 	if err != nil || owner == local || local == "" {
-		return nil, fmt.Errorf("%w: invalid enrollment owner", ErrMeshRuntime)
+		return meshEnrollmentPermit{}, fmt.Errorf("%w: invalid enrollment owner", ErrMeshRuntime)
 	}
 	ownerAddresses := make([]multiaddr.Multiaddr, 0, len(payload.OwnerMultiaddrs()))
 	for _, raw := range payload.OwnerMultiaddrs() {
 		parsed, parseErr := canonicalPeerAddresses(owner, raw)
 		if parseErr != nil {
-			return nil, parseErr
+			return meshEnrollmentPermit{}, parseErr
 		}
 		ownerAddresses = append(ownerAddresses, parsed...)
 	}
-	return &meshEnrollmentPermit{owner: payload.Descriptor().Descriptor().OwnerPeerID(),
+	return meshEnrollmentPermit{owner: payload.Descriptor().Descriptor().OwnerPeerID(),
 		ownerID: owner, addresses: ownerAddresses}, nil
 }
 
-func (runtime *MeshRuntime) stageEnrollment(permit *meshEnrollmentPermit) error {
+func (runtime *MeshRuntime) activateEnrollment(slot *meshEnrollmentPermit,
+	permit meshEnrollmentPermit,
+) error {
 	runtime.mu.Lock()
-	if runtime.closed || runtime.nodeHost == nil || runtime.gossip == nil ||
-		permit == nil || runtime.enrollment != nil {
+	if slot == nil || runtime.enrollment != slot {
+		runtime.mu.Unlock()
+		return fmt.Errorf("%w: runtime enrollment slot was fenced", ErrMeshRuntime)
+	}
+	if runtime.closed || runtime.nodeHost == nil || runtime.gossip == nil || slot.active {
+		runtime.enrollment = nil
+		runtime.revision++
 		runtime.mu.Unlock()
 		return fmt.Errorf("%w: runtime enrollment is unavailable", ErrMeshRuntime)
 	}
-	runtime.enrollment = permit
+	permit.active = true
+	*slot = permit
 	runtime.revision++
 	runtime.mu.Unlock()
 	if err := runtime.reconcileCurrentProjection(); err != nil {
-		runtime.mu.Lock()
-		if runtime.enrollment == permit {
-			runtime.enrollment = nil
-			runtime.revision++
-		}
-		runtime.mu.Unlock()
-		return fmt.Errorf("%w: stage enrollment: %v", ErrMeshRuntime, err)
+		cause := fmt.Errorf("%w: stage enrollment: %v", ErrMeshRuntime, err)
+		return runtime.clearEnrollmentSlot(slot, cause)
 	}
 	return nil
+}
+
+func (runtime *MeshRuntime) clearEnrollmentSlot(slot *meshEnrollmentPermit, cause error) error {
+	runtime.mu.Lock()
+	if slot == nil || runtime.enrollment != slot {
+		runtime.mu.Unlock()
+		return errors.Join(cause,
+			fmt.Errorf("%w: enrollment slot was fenced", ErrMeshRuntime))
+	}
+	runtime.enrollment = nil
+	runtime.revision++
+	runtime.mu.Unlock()
+	return cause
 }
 
 func overlayEnrollmentPermit(snapshot NetworkAuthoritySnapshot,
 	addresses map[libp2ppeer.ID][]multiaddr.Multiaddr, permit *meshEnrollmentPermit,
 ) (NetworkAuthoritySnapshot, map[libp2ppeer.ID][]multiaddr.Multiaddr, error) {
-	if permit == nil {
+	if permit == nil || !permit.active {
 		return snapshot, addresses, nil
 	}
 	if permit.owner.IsZero() || permit.ownerID == "" ||

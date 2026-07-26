@@ -164,6 +164,9 @@ func (manager *ChannelManager) projectChannelMutation(ctx context.Context,
 }
 
 func channelMutationAPIError(err error) *APIError {
+	if errors.Is(err, store.ErrChannelInviteStale) {
+		return NewAPIError(CodeOperationMismatch, "Channel authority changed")
+	}
 	if errors.Is(err, store.ErrChannelMutationMismatch) ||
 		errors.Is(err, store.ErrChannelMutationInput) {
 		return NewAPIError(CodeOperationMismatch, "Channel mutation operation does not match request")

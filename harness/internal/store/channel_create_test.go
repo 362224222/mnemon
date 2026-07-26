@@ -108,7 +108,8 @@ func TestChannelInvitePersistenceRequiresSignedTokenAuthorityProjection(t *testi
 		rotationID, model.Sum([]byte("wrong-rotation-address-secret")).Bytes(), wrongAddresses,
 		rotationAt, 1)
 	if _, err := st.RotateChannelInvite(ctx, RotateChannelInviteSpec{ChannelID: fixture.Channel().ID(),
-		Token: wrongRotation, At: rotationAt}); !errors.Is(err, ErrChannelInviteInput) {
+		Token: wrongRotation, At: rotationAt, ExpectedRosterHead: fixture.Roster().Head(),
+		ExpectedOpenGrant: inviteTestOpenGrantFence(initialID)}); !errors.Is(err, ErrChannelInviteInput) {
 		t.Fatalf("rotation with uncommitted owner addresses error = %v", err)
 	}
 	assertInviteGrantState(t, st, initialID, "open", 0)

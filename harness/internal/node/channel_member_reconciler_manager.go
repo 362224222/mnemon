@@ -16,8 +16,8 @@ type channelMemberTopicGateStore interface {
 }
 
 // ConfirmMemberBaselineRuntimeGate re-evaluates topic readiness only after the
-// outbound ACK is durable. It serializes with every other Channel mutation and
-// never infers readiness from the wire response alone.
+// outbound ACK is durable and never infers readiness from the wire response
+// alone. The topic transitions retain their Store authority fences.
 func (manager *ChannelManager) ConfirmMemberBaselineRuntimeGate(ctx context.Context,
 	channelID model.ChannelID,
 ) error {
@@ -25,8 +25,6 @@ func (manager *ChannelManager) ConfirmMemberBaselineRuntimeGate(ctx context.Cont
 		ctx == nil || ctx.Err() != nil || channelID.IsZero() {
 		return fmt.Errorf("%w: baseline runtime gate is unavailable", ErrChannelMemberReconciler)
 	}
-	manager.mu.Lock()
-	defer manager.mu.Unlock()
 	mesh, err := manager.store.ReadChannelMeshAuthority(ctx)
 	if err != nil {
 		return fmt.Errorf("%w: read post-ACK authority: %w", ErrChannelMemberReconciler, err)

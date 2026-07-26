@@ -411,7 +411,9 @@ func testAcceptEnrollmentExhaustionAndOwnerClosure(t *testing.T) {
 		rotatedToken := storeTestEnrollmentToken(t, fixture.channel.Descriptor(), fixture.channel.Owner(),
 			rotatedID, "exhausted-rotation", rotationAt, 1)
 		if _, err := fixture.ownerStore.RotateChannelInvite(context.Background(), RotateChannelInviteSpec{
-			ChannelID: fixture.channel.Channel().ID(), Token: rotatedToken, At: rotationAt}); err != nil {
+			ChannelID: fixture.channel.Channel().ID(), Token: rotatedToken, At: rotationAt,
+			ExpectedRosterHead: fixture.channel.Roster().Head(),
+			ExpectedOpenGrant:  inviteTestOpenGrantFence(fixture.grantID)}); err != nil {
 			t.Fatal(err)
 		}
 		fixture.grantID = rotatedID

@@ -143,22 +143,6 @@ func TestMeshRuntimeLateOldProjectionRepairsToNewestAuthority(t *testing.T) {
 	go func() { newResult <- runtime.Reconcile(newMesh) }()
 	waitMeshRuntimeApplied(t, runtime, newID, true)
 
-	// Reconcile is now blocked in Gossip, so this short-lock state read proves
-	// the external operation does not retain MeshRuntime.mu.
-	identityResult := make(chan error, 1)
-	go func() {
-		_, _, identityErr := runtime.enrollmentIdentity()
-		identityResult <- identityErr
-	}()
-	select {
-	case err := <-identityResult:
-		if err != nil {
-			t.Fatalf("runtime identity during blocked reconcile: %v", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("blocked Gossip reconcile retained MeshRuntime.mu")
-	}
-
 	runtime.gossip.mu.Unlock()
 	locked = false
 	if err := <-newResult; err != nil {

@@ -12,13 +12,13 @@ import (
 func (manager *ChannelManager) ReconcileMemberHelloGate(ctx context.Context,
 	control peer.ChannelMemberHelloControl,
 ) (peer.ChannelMemberHelloAuthority, error) {
-	manager.mu.Lock()
-	defer manager.mu.Unlock()
 	rosterChanged := false
 	if len(control.ProofRecords) != 0 {
+		manager.mu.Lock()
 		result, err := manager.store.MergeChannelRoster(ctx, store.MergeChannelRosterSpec{
 			ChannelID: control.ChannelID, AuthenticatedTransportPeerID: control.AuthenticatedPeerID,
 			Records: control.ProofRecords, At: control.At})
+		manager.mu.Unlock()
 		if err != nil {
 			return peer.ChannelMemberHelloAuthority{}, channelMemberStoreError(err)
 		}
@@ -36,7 +36,7 @@ func (manager *ChannelManager) ReconcileMemberHelloGate(ctx context.Context,
 	}
 	roster, err := manager.refreshMemberAuthority(ctx, control.ChannelID)
 	if err == nil && rosterChanged {
-		manager.triggerMemberReconcile()
+		manager.triggerMemberReconcileScope(control.ChannelID, control.AuthenticatedPeerID)
 	}
 	return peer.ChannelMemberHelloAuthority{Roster: roster}, err
 }
@@ -44,8 +44,6 @@ func (manager *ChannelManager) ReconcileMemberHelloGate(ctx context.Context,
 func (manager *ChannelManager) FreezeMemberRosterForSync(ctx context.Context,
 	control peer.ChannelMemberSyncControl,
 ) (peer.ChannelMemberRosterSnapshot, error) {
-	manager.mu.Lock()
-	defer manager.mu.Unlock()
 	roster, err := manager.readMemberRoster(ctx, control.ChannelID)
 	return peer.ChannelMemberRosterSnapshot{Roster: roster}, err
 }
@@ -54,12 +52,12 @@ func (manager *ChannelManager) InstallMemberBaselineGate(ctx context.Context,
 	control peer.ChannelMemberBaselineControl,
 ) (peer.ChannelMemberBaselineAuthority, error) {
 	manager.mu.Lock()
-	defer manager.mu.Unlock()
 	result, err := manager.store.InstallInboundChannelBaseline(ctx,
 		store.InstallInboundChannelBaselineSpec{AuthenticatedPeerID: control.AuthenticatedPeerID,
 			Baseline: store.ChannelDataBaseline{ChannelID: control.Baseline.ChannelID,
 				OriginPeerID: control.Baseline.OriginPeerID, OriginEpoch: control.Baseline.OriginEpoch,
 				BaselineChannelSequence: control.Baseline.BaselineChannelSequence}, At: control.At})
+	manager.mu.Unlock()
 	if err != nil {
 		return peer.ChannelMemberBaselineAuthority{}, channelMemberStoreError(err)
 	}
@@ -71,7 +69,8 @@ func (manager *ChannelManager) InstallMemberBaselineGate(ctx context.Context,
 		OriginPeerID: result.Baseline.OriginPeerID, OriginEpoch: result.Baseline.OriginEpoch,
 		BaselineChannelSequence: result.Baseline.BaselineChannelSequence}
 	manager.markTopicForRoster(ctx, control.Baseline.ChannelID)
-	manager.triggerMemberReconcile()
+	manager.triggerMemberReconcileScope(control.Baseline.ChannelID,
+		control.AuthenticatedPeerID)
 	return peer.ChannelMemberBaselineAuthority{Baseline: baseline, Roster: roster}, nil
 }
 

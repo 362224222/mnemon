@@ -125,17 +125,41 @@ func (s *Store) ReadChannelMutation(ctx context.Context,
 func readChannelMutation(ctx context.Context, tx *sql.Tx,
 	operation ChannelMutationOperation,
 ) (ChannelMutationAuthority, bool, error) {
+	identity, found, err := readChannelMutationIdentity(ctx, tx, operation)
+	if err != nil || !found {
+		return ChannelMutationAuthority{}, false, err
+	}
+	authority, err := loadChannelMutationAuthority(ctx, tx, identity)
+	if err != nil {
+		return ChannelMutationAuthority{}, false, err
+	}
+	return authority, true, nil
+}
+
+type channelMutationIdentity struct {
+	kind          ChannelMutationKind
+	channelID     model.ChannelID
+	grantID       model.GrantID
+	payloadDigest model.Digest
+	addresses     []byte
+	committedAt   string
+}
+
+func readChannelMutationIdentity(ctx context.Context, tx *sql.Tx,
+	operation ChannelMutationOperation,
+) (channelMutationIdentity, bool, error) {
 	var conflict int
 	conflictErr := tx.QueryRowContext(ctx, `SELECT 1 FROM channel_leave_operations
 		WHERE operation_key_hash=?`, operation.OperationKeyHash.Bytes()).Scan(&conflict)
 	if conflictErr == nil {
-		return ChannelMutationAuthority{}, false, ErrChannelMutationMismatch
+		return channelMutationIdentity{}, false, ErrChannelMutationMismatch
 	}
 	if !errors.Is(conflictErr, sql.ErrNoRows) {
-		return ChannelMutationAuthority{}, false,
+		return channelMutationIdentity{}, false,
 			fmt.Errorf("%w: inspect operation key scope: %v",
 				ErrChannelMutationConflict, conflictErr)
 	}
+
 	var requestBytes, payloadDigestBytes, addressesJSON []byte
 	var kindText, channelText, grantText, committedText string
 	err := tx.QueryRowContext(ctx, `SELECT request_digest,kind,channel_id,grant_id,
@@ -144,63 +168,72 @@ func readChannelMutation(ctx context.Context, tx *sql.Tx,
 		&requestBytes, &kindText, &channelText, &grantText, &payloadDigestBytes,
 		&addressesJSON, &committedText)
 	if errors.Is(err, sql.ErrNoRows) {
-		return ChannelMutationAuthority{}, false, nil
+		return channelMutationIdentity{}, false, nil
 	}
 	if err != nil {
-		return ChannelMutationAuthority{}, false,
+		return channelMutationIdentity{}, false,
 			fmt.Errorf("%w: read operation: %v", ErrChannelMutationConflict, err)
 	}
 	requestDigest, err := model.DigestFromBytes(requestBytes)
 	storedKind := ChannelMutationKind(kindText)
 	if err != nil || !storedKind.Valid() {
-		return ChannelMutationAuthority{}, false,
+		return channelMutationIdentity{}, false,
 			fmt.Errorf("%w: invalid operation identity", ErrChannelMutationConflict)
 	}
 	if storedKind != operation.Kind || requestDigest != operation.RequestDigest {
-		return ChannelMutationAuthority{}, false, ErrChannelMutationMismatch
+		return channelMutationIdentity{}, false, ErrChannelMutationMismatch
 	}
 	channelID, channelErr := model.ParseChannelID(channelText)
 	grantID, grantErr := model.ParseGrantID(grantText)
 	payloadDigest, payloadErr := model.DigestFromBytes(payloadDigestBytes)
 	if channelErr != nil || grantErr != nil || payloadErr != nil || payloadDigest.IsZero() {
-		return ChannelMutationAuthority{}, false,
+		return channelMutationIdentity{}, false,
 			fmt.Errorf("%w: invalid result identity", ErrChannelMutationConflict)
 	}
+	return channelMutationIdentity{kind: storedKind, channelID: channelID,
+		grantID: grantID, payloadDigest: payloadDigest,
+		addresses: addressesJSON, committedAt: committedText}, true, nil
+}
+
+func loadChannelMutationAuthority(ctx context.Context, tx *sql.Tx,
+	identity channelMutationIdentity,
+) (ChannelMutationAuthority, error) {
 	node, err := readNode(ctx, tx)
 	if err != nil {
-		return ChannelMutationAuthority{}, false,
+		return ChannelMutationAuthority{},
 			fmt.Errorf("%w: read Node: %v", ErrChannelMutationConflict, err)
 	}
-	verified, err := readVerifiedChannelAuthority(ctx, tx, node.PeerID(), channelID)
+	verified, err := readVerifiedChannelAuthority(ctx, tx, node.PeerID(), identity.channelID)
 	if err != nil || verified.channel.OwnerPeerID() != node.PeerID() {
-		return ChannelMutationAuthority{}, false,
+		return ChannelMutationAuthority{},
 			fmt.Errorf("%w: read Channel authority: %v", ErrChannelMutationConflict, err)
 	}
 	if err := verifyOwnedChannelEnrollmentLedger(ctx, tx, verified); err != nil {
-		return ChannelMutationAuthority{}, false,
+		return ChannelMutationAuthority{},
 			fmt.Errorf("%w: verify enrollment ledger: %v", ErrChannelMutationConflict, err)
 	}
-	grant, err := readDurableEnrollmentGrant(ctx, tx, grantID)
-	if err != nil || grant.channelID != channelID || committedText != storeTime(grant.createdAt) {
-		return ChannelMutationAuthority{}, false,
+	grant, err := readDurableEnrollmentGrant(ctx, tx, identity.grantID)
+	if err != nil || grant.channelID != identity.channelID ||
+		identity.committedAt != storeTime(grant.createdAt) {
+		return ChannelMutationAuthority{},
 			fmt.Errorf("%w: read grant authority: %v", ErrChannelMutationConflict, err)
 	}
-	addresses, err := decodeChannelMutationAddresses(addressesJSON)
+	addresses, err := decodeChannelMutationAddresses(identity.addresses)
 	if err != nil || !ownerAddressesExisted(verified, addresses, grant.createdAt) {
-		return ChannelMutationAuthority{}, false,
+		return ChannelMutationAuthority{},
 			fmt.Errorf("%w: invalid owner address authority", ErrChannelMutationConflict)
 	}
-	if storedKind == ChannelMutationCreate &&
+	if identity.kind == ChannelMutationCreate &&
 		(grant.createdAt != verified.channel.CreatedAt() ||
 			grant.maxUses != verified.channel.MemberLimit()-1) {
-		return ChannelMutationAuthority{}, false,
+		return ChannelMutationAuthority{},
 			fmt.Errorf("%w: create result differs from genesis", ErrChannelMutationConflict)
 	}
-	return ChannelMutationAuthority{kind: storedKind, channel: verified.channel,
-		grantID: grant.id, tokenPayload: payloadDigest, grantVerifier: grant.verifier,
+	return ChannelMutationAuthority{kind: identity.kind, channel: verified.channel,
+		grantID: grant.id, tokenPayload: identity.payloadDigest, grantVerifier: grant.verifier,
 		grantExpiresAt: grant.expiresAt,
 		grantMaxUses:   grant.maxUses, grantUsedUses: grant.usedUses, grantStatus: grant.status,
-		grantCreatedAt: grant.createdAt, ownerMultiaddrs: addresses, replayed: true}, true, nil
+		grantCreatedAt: grant.createdAt, ownerMultiaddrs: addresses, replayed: true}, nil
 }
 
 func insertChannelMutation(ctx context.Context, tx *sql.Tx, operation ChannelMutationOperation,

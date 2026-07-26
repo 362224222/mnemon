@@ -21,8 +21,9 @@ type ChannelControlAuthority struct {
 }
 
 type ChannelControlChannel struct {
-	mesh      ChannelMeshChannel
-	openGrant *ChannelControlGrant
+	mesh             ChannelMeshChannel
+	selectorBindings []model.PeerBinding
+	openGrant        *ChannelControlGrant
 }
 
 type ChannelControlGrant struct {
@@ -41,6 +42,9 @@ func (channel ChannelControlChannel) Channel() model.Channel       { return chan
 func (channel ChannelControlChannel) Roster() model.VerifiedRoster { return channel.mesh.Roster() }
 func (channel ChannelControlChannel) Bindings() []model.PeerBinding {
 	return channel.mesh.Bindings()
+}
+func (channel ChannelControlChannel) SelectorBindings() []model.PeerBinding {
+	return append([]model.PeerBinding(nil), channel.selectorBindings...)
 }
 func (channel ChannelControlChannel) OpenGrant() (ChannelControlGrant, bool) {
 	if channel.openGrant == nil {
@@ -100,7 +104,8 @@ func readChannelControlChannel(ctx context.Context, tx *sql.Tx, local model.Peer
 		}
 	}
 	result := ChannelControlChannel{mesh: ChannelMeshChannel{channel: verified.channel,
-		roster: verified.roster, bindings: bindings}}
+		roster: verified.roster, bindings: bindings},
+		selectorBindings: append([]model.PeerBinding(nil), verified.bindings...)}
 	grant, err := readOpenEnrollmentGrant(ctx, tx, id)
 	if err == nil {
 		result.openGrant = &ChannelControlGrant{id: grant.id, expiresAt: grant.expiresAt,

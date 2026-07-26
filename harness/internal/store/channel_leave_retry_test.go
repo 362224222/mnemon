@@ -14,6 +14,24 @@ func TestChannelLeaveFailureIsFencedObservableAndExplicitlyRecoverableAcrossRest
 	fixture := newInstalledJoinedChannelFixture(t, "leave-terminal-retry",
 		"leave-terminal-team", 0x71, 0x72)
 	request := signedStoreLeaveRequest(t, fixture, fixture.at.Add(time.Second))
+	retryAt, failedAt := terminalizeInitialChannelLeave(t, fixture, request)
+	restarted := restartChannelLeaveStore(t, fixture.store.Path())
+	assertChannelLeaveStatusProgress(t, restarted, request.Record().ChannelID(),
+		"failed", 1, ChannelLeaveFailurePermanent)
+	recoveredAt := failedAt.Add(time.Second)
+	recoveryOperation := recoverTerminalChannelLeave(t, restarted, request,
+		retryAt, recoveredAt)
+	secondFailedAt := failRecoveredChannelLeave(t, restarted, request,
+		retryAt, recoveredAt)
+	assertChannelLeaveRecoveryReplay(t, restarted, request, recoveryOperation,
+		secondFailedAt)
+	assertChannelLeaveSchemaRejectsInvalidTerminalState(t, restarted, request)
+}
+
+func terminalizeInitialChannelLeave(t *testing.T, fixture installedJoinedChannelFixture,
+	request model.SignedChannelLeaveRequest,
+) (time.Time, time.Time) {
+	t.Helper()
 	initialOperation := testChannelLeaveOperation("leave-terminal-initial")
 	if _, err := fixture.store.BeginChannelLeave(context.Background(), BeginChannelLeaveSpec{
 		ChannelID: request.Record().ChannelID(), Request: request,
@@ -37,23 +55,30 @@ func TestChannelLeaveFailureIsFencedObservableAndExplicitlyRecoverableAcrossRest
 	}
 	assertChannelLeaveStatusProgress(t, fixture.store, request.Record().ChannelID(),
 		"failed", 1, ChannelLeaveFailurePermanent)
-	path := fixture.store.Path()
 	if err := fixture.store.Close(); err != nil {
 		t.Fatal(err)
 	}
+	return retryAt, failedAt
+}
+
+func restartChannelLeaveStore(t *testing.T, path string) *Store {
+	t.Helper()
 	restarted, err := OpenExisting(context.Background(), path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = restarted.Close() })
+	return restarted
+}
+
+func recoverTerminalChannelLeave(t *testing.T, restarted *Store,
+	request model.SignedChannelLeaveRequest, retryAt, recoveredAt time.Time,
+) ChannelLeaveOperation {
+	t.Helper()
 	if due, err := restarted.ReadDueChannelLeaveTargets(context.Background(),
 		retryAt.Add(24*time.Hour)); err != nil || len(due) != 0 {
 		t.Fatalf("terminal leave retried after restart = (%#v,%v)", due, err)
 	}
-	assertChannelLeaveStatusProgress(t, restarted, request.Record().ChannelID(),
-		"failed", 1, ChannelLeaveFailurePermanent)
-
-	recoveredAt := failedAt.Add(time.Second)
 	recoveryOperation := testChannelLeaveOperation("leave-terminal-recovery")
 	recovered, err := restarted.BeginChannelLeave(context.Background(), BeginChannelLeaveSpec{
 		ChannelID: request.Record().ChannelID(), Operation: recoveryOperation, At: recoveredAt})
@@ -67,11 +92,10 @@ func TestChannelLeaveFailureIsFencedObservableAndExplicitlyRecoverableAcrossRest
 	if err != nil || len(due) != 1 || due[0].RetryGeneration() != 1 {
 		t.Fatalf("recovered leave generation = (%#v,%v)", due, err)
 	}
-	nextRetryAt := retryAt
 	if err := restarted.StartChannelLeaveAttempt(context.Background(),
 		StartChannelLeaveAttemptSpec{RequestID: request.RequestID(),
 			ExpectedGeneration: 1, ExpectedNextAttemptAt: recoveredAt, AttemptedAt: recoveredAt,
-			RetryAt: nextRetryAt}); err != nil {
+			RetryAt: retryAt}); err != nil {
 		t.Fatal(err)
 	}
 	stale := restarted.FailChannelLeaveAttempt(context.Background(),
@@ -83,14 +107,29 @@ func TestChannelLeaveFailureIsFencedObservableAndExplicitlyRecoverableAcrossRest
 		t.Fatalf("old attempt terminalization error = %v", stale)
 	}
 	assertChannelLeaveStatusProgress(t, restarted, request.Record().ChannelID(), "sent", 1, "")
+	return recoveryOperation
+}
+
+func failRecoveredChannelLeave(t *testing.T, restarted *Store,
+	request model.SignedChannelLeaveRequest, retryAt, recoveredAt time.Time,
+) time.Time {
+	t.Helper()
 	secondFailedAt := recoveredAt.Add(2 * time.Second)
 	if err := restarted.FailChannelLeaveAttempt(context.Background(),
 		FailChannelLeaveAttemptSpec{RequestID: request.RequestID(), ExpectedGeneration: 1,
 			ExpectedAttempts:      1,
-			ExpectedNextAttemptAt: nextRetryAt, Failure: ChannelLeaveFailurePermanent,
+			ExpectedNextAttemptAt: retryAt, Failure: ChannelLeaveFailurePermanent,
 			FailedAt: secondFailedAt}); err != nil {
 		t.Fatal(err)
 	}
+	return secondFailedAt
+}
+
+func assertChannelLeaveRecoveryReplay(t *testing.T, restarted *Store,
+	request model.SignedChannelLeaveRequest, recoveryOperation ChannelLeaveOperation,
+	secondFailedAt time.Time,
+) {
+	t.Helper()
 	responseLossReplay, err := restarted.BeginChannelLeave(context.Background(),
 		BeginChannelLeaveSpec{ChannelID: request.Record().ChannelID(),
 			Operation: recoveryOperation, At: secondFailedAt.Add(time.Second)})
@@ -103,6 +142,12 @@ func TestChannelLeaveFailureIsFencedObservableAndExplicitlyRecoverableAcrossRest
 		secondFailedAt.Add(24*time.Hour)); err != nil || len(due) != 0 {
 		t.Fatalf("replayed recovery advanced terminal generation = (%#v,%v)", due, err)
 	}
+}
+
+func assertChannelLeaveSchemaRejectsInvalidTerminalState(t *testing.T, restarted *Store,
+	request model.SignedChannelLeaveRequest,
+) {
+	t.Helper()
 	for name, mutation := range map[string]string{
 		"generation change": `UPDATE channel_leave_requests SET retry_generation=2
 			WHERE request_id=?`,

@@ -16,8 +16,6 @@ func (manager *ChannelManager) ChannelStatus(ctx context.Context, metadata Reque
 	if apiErr := manager.validateCall(ctx, metadata); apiErr != nil {
 		return ChannelStatusResponse{}, apiErr
 	}
-	manager.mu.Lock()
-	defer manager.mu.Unlock()
 	observation, err := manager.store.ReadChannelObservation(ctx)
 	if err != nil {
 		return ChannelStatusResponse{}, channelAPIError(err)
@@ -96,7 +94,6 @@ func (manager *ChannelManager) refreshAndJoin(ctx context.Context, channel model
 		return
 	}
 	manager.markTopicJoined(ctx, channel)
-	manager.triggerMemberReconcile()
 }
 
 func (manager *ChannelManager) markTopicJoined(ctx context.Context, channel model.Channel) {
@@ -199,6 +196,8 @@ func channelAPIError(err error) *APIError {
 		return NewAPIError(CodeChannelClosed, "Channel invite is unavailable")
 	case errors.Is(err, store.ErrChannelJoinConflict), errors.Is(err, store.ErrChannelAuthorityInvariant):
 		return NewAPIError(CodeRosterConflict, "Channel authority conflicts with durable state")
+	case errors.Is(err, store.ErrChannelRosterConflict):
+		return NewAPIError(CodeRosterConflict, "Channel roster changed")
 	case errors.Is(err, peer.ErrChannelEnrollmentOutcomeUnknown), errors.Is(err, peer.ErrMeshRuntime),
 		errors.Is(err, peer.ErrChannelEnrollmentProtocol):
 		return NewAPIError(CodeOwnerUnreachable, "Channel owner could not be reached")
@@ -225,16 +224,12 @@ type channelEnrollmentOwnerStore struct{ manager *ChannelManager }
 func (owned channelEnrollmentOwnerStore) PrepareChannelEnrollment(ctx context.Context,
 	spec store.PrepareChannelEnrollmentSpec,
 ) (store.PrepareChannelEnrollmentResult, error) {
-	owned.manager.mu.Lock()
-	defer owned.manager.mu.Unlock()
 	return owned.manager.store.PrepareChannelEnrollment(ctx, spec)
 }
 
 func (owned channelEnrollmentOwnerStore) AcceptChannelEnrollment(ctx context.Context,
 	spec store.AcceptChannelEnrollmentSpec,
 ) (store.AcceptChannelEnrollmentResult, error) {
-	owned.manager.mu.Lock()
-	defer owned.manager.mu.Unlock()
 	result, err := owned.manager.store.AcceptChannelEnrollment(ctx, spec)
 	if err != nil {
 		return result, err
@@ -247,7 +242,7 @@ func (owned channelEnrollmentOwnerStore) AcceptChannelEnrollment(ctx context.Con
 		return result, err
 	}
 	owned.manager.markTopicJoined(ctx, result.Channel)
-	owned.manager.triggerMemberReconcile()
+	owned.manager.triggerMemberReconcileScope(result.Channel.ID(), result.Member.PeerID())
 	return result, nil
 }
 

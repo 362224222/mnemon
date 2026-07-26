@@ -27,13 +27,19 @@ func TestOwnerChannelLeaveOperationCommitsWithTerminalRosterAndReplays(t *testin
 			Multiaddrs: owner.Multiaddrs(), Protocols: owner.Protocols(), Limits: owner.Limits(),
 			Status: model.MemberLeft, CreatedAt: at})
 	operation := testChannelLeaveOperation("owner-terminal")
-	result, err := fixture.ownerStore.MergeChannelRoster(context.Background(),
-		MergeChannelRosterSpec{ChannelID: fixture.channel.Channel().ID(),
-			AuthenticatedTransportPeerID: fixture.channel.Owner().PeerID(),
-			Records:                      []model.Member{terminal}, LeaveOperation: &operation, At: at})
+	spec := MergeChannelRosterSpec{ChannelID: fixture.channel.Channel().ID(),
+		AuthenticatedTransportPeerID: fixture.channel.Owner().PeerID(),
+		Records:                      []model.Member{terminal}, ExpectedRosterHead: accepted.Roster.Head(),
+		LeaveOperation: &operation, At: at}
+	result, err := fixture.ownerStore.MergeChannelRoster(context.Background(), spec)
 	if err != nil || result.Status != ChannelRosterApplied ||
 		result.Channel.Status() != model.ChannelClosed {
 		t.Fatalf("owner terminal operation = (%#v,%v)", result, err)
+	}
+	duplicate, err := fixture.ownerStore.MergeChannelRoster(context.Background(), spec)
+	if err != nil || duplicate.Status != ChannelRosterDuplicate ||
+		duplicate.Channel.Status() != model.ChannelClosed {
+		t.Fatalf("owner terminal exact replay = (%#v,%v)", duplicate, err)
 	}
 	replay, found, err := fixture.ownerStore.ReadChannelLeaveOperation(
 		context.Background(), operation)

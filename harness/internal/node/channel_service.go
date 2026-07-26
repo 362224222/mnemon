@@ -5,14 +5,14 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
-	"fmt"
-	"github.com/mnemon-dev/mnemon/harness/internal/model"
-	"github.com/mnemon-dev/mnemon/harness/internal/peer"
-	"github.com/mnemon-dev/mnemon/harness/internal/store"
 	"io"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/mnemon-dev/mnemon/harness/internal/model"
+	"github.com/mnemon-dev/mnemon/harness/internal/peer"
+	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
 
 const defaultChannelInviteLifetime = time.Hour
@@ -35,7 +35,6 @@ type ChannelManager struct {
 	clock    Clock
 	random   io.Reader
 	members  interface {
-		Trigger()
 		TriggerScope(model.ChannelID, model.PeerID) error
 	}
 	mu sync.Mutex
@@ -65,23 +64,31 @@ func (manager *ChannelManager) ChannelCreate(ctx context.Context, metadata Reque
 		return ChannelCreateResponse{}, apiErr
 	}
 	manager.mu.Lock()
-	defer manager.mu.Unlock()
-	if mutation, found, err := manager.store.ReadChannelMutation(ctx, operation); err != nil {
+	mutation, found, err := manager.store.ReadChannelMutation(ctx, operation)
+	manager.mu.Unlock()
+	if err != nil {
 		return ChannelCreateResponse{}, channelMutationAPIError(err)
-	} else if found {
+	}
+	if found {
 		return manager.channelCreateMutationResponse(ctx, metadata, mutation)
 	}
-	authority, err := manager.store.ReadChannelControlAuthority(ctx)
-	if err != nil {
-		return ChannelCreateResponse{}, channelAPIError(err)
-	}
-	channel, genesis, token, err := manager.buildChannel(ctx, request.Name, authority,
+	channel, genesis, token, err := manager.buildChannel(ctx, request.Name,
 		operation, metadata.OperationKeySecret)
 	if err != nil {
 		return ChannelCreateResponse{}, channelAPIError(err)
 	}
-	result, err := manager.store.CreateChannel(ctx, store.CreateChannelSpec{Channel: channel,
-		Genesis: genesis, Token: token, Operation: &operation})
+	manager.mu.Lock()
+	latest, err := manager.store.ReadChannelControlAuthority(ctx)
+	if err == nil {
+		channel, err = rebindChannelAlias(channel,
+			uniqueChannelAlias(channelAlias(request.Name), latest))
+	}
+	var result store.CreateChannelResult
+	if err == nil {
+		result, err = manager.store.CreateChannel(ctx, store.CreateChannelSpec{Channel: channel,
+			Genesis: genesis, Token: token, Operation: &operation})
+	}
+	manager.mu.Unlock()
 	if err != nil {
 		return ChannelCreateResponse{}, channelMutationAPIError(err)
 	}
@@ -106,6 +113,11 @@ func (manager *ChannelManager) ChannelJoin(ctx context.Context, metadata Request
 		return ChannelJoinResponse{}, NewAPIError(CodeTokenExpired,
 			"Channel invite has expired")
 	}
+	addresses := manager.runtime.AdvertisedMultiaddrs()
+	client, err := peer.NewChannelEnrollmentClient(peer.ChannelEnrollmentClientOptions{Store: manager.store})
+	if err != nil {
+		return ChannelJoinResponse{}, channelAPIError(err)
+	}
 	manager.mu.Lock()
 	control, err := manager.store.ReadChannelControlAuthority(ctx)
 	if err != nil {
@@ -117,36 +129,24 @@ func (manager *ChannelManager) ChannelJoin(ctx context.Context, metadata Request
 	if alias == "" {
 		alias = uniqueChannelAlias(channelAlias(descriptor.Name()), control)
 	}
-	client, err := peer.NewChannelEnrollmentClient(peer.ChannelEnrollmentClientOptions{Store: manager.store})
-	if err != nil {
-		manager.mu.Unlock()
-		return ChannelJoinResponse{}, channelAPIError(err)
-	}
-	spec := peer.JoinChannelSpec{Token: token, DisplayLabel: memberAlias(manager.identity.PeerID()),
-		AdvertisedMultiaddrs: manager.runtime.AdvertisedMultiaddrs(), LocalAlias: alias}
 	manager.mu.Unlock()
+	spec := peer.JoinChannelSpec{Token: token, DisplayLabel: memberAlias(manager.identity.PeerID()),
+		AdvertisedMultiaddrs: addresses, LocalAlias: alias}
 
 	installed, err := manager.runtime.EnrollChannel(ctx, client, spec,
 		manager.store.ReadChannelMeshAuthority)
 	if err != nil {
 		return ChannelJoinResponse{}, channelAPIError(err)
 	}
-	manager.mu.Lock()
 	manager.markTopicJoined(ctx, installed.Channel)
 	view, err := manager.readChannelView(ctx, installed.Channel.ID())
-	manager.mu.Unlock()
 	if err != nil {
 		return ChannelJoinResponse{}, channelAPIError(err)
 	}
-	manager.triggerMemberReconcile()
+	manager.triggerMemberReconcileScope(installed.Channel.ID(),
+		installed.Channel.OwnerPeerID())
 	return ChannelJoinResponse{SchemaVersion: SchemaVersion,
 		Status: channelJoinResponseStatus(installed.Status), Channel: view}, nil
-}
-
-func (manager *ChannelManager) triggerMemberReconcile() {
-	if manager != nil && manager.members != nil {
-		manager.members.Trigger()
-	}
 }
 
 func (manager *ChannelManager) triggerMemberReconcileScope(channelID model.ChannelID,
@@ -166,18 +166,23 @@ func (manager *ChannelManager) ChannelInvite(ctx context.Context, metadata Reque
 		return ChannelInviteResponse{}, apiErr
 	}
 	manager.mu.Lock()
-	defer manager.mu.Unlock()
-	if mutation, found, err := manager.store.ReadChannelMutation(ctx, operation); err != nil {
+	mutation, found, err := manager.store.ReadChannelMutation(ctx, operation)
+	if err != nil {
+		manager.mu.Unlock()
 		return ChannelInviteResponse{}, channelMutationAPIError(err)
-	} else if found {
+	}
+	if found {
+		manager.mu.Unlock()
 		return manager.channelInviteMutationResponse(ctx, metadata, mutation)
 	}
 	authority, selected, apiErr := manager.selectChannel(ctx, request.Channel)
 	if apiErr != nil {
+		manager.mu.Unlock()
 		return ChannelInviteResponse{}, apiErr
 	}
 	channel := selected.Channel()
 	if channel.OwnerPeerID() != authority.LocalPeerID() {
+		manager.mu.Unlock()
 		return ChannelInviteResponse{}, NewAPIError(CodeWrongOwner,
 			"only the Channel owner may create invites")
 	}
@@ -187,6 +192,7 @@ func (manager *ChannelManager) ChannelInvite(ctx context.Context, metadata Reque
 		uses = remaining
 	}
 	if uses == 0 || uses > remaining {
+		manager.mu.Unlock()
 		return ChannelInviteResponse{}, NewAPIError(CodeChannelFull,
 			"Channel has insufficient remaining seats")
 	}
@@ -194,18 +200,29 @@ func (manager *ChannelManager) ChannelInvite(ctx context.Context, metadata Reque
 	if request.ExpiresSeconds != 0 {
 		lifetime = time.Duration(request.ExpiresSeconds) * time.Second
 	}
-	at := manager.clock.Now()
 	owner, ok := selected.Roster().CurrentMember(authority.LocalPeerID())
 	if !ok {
+		manager.mu.Unlock()
 		return ChannelInviteResponse{}, channelAPIError(store.ErrChannelInviteOwner)
 	}
+	expectedOpenGrant := store.ChannelInviteOpenGrantFence{}
+	if grant, found := selected.OpenGrant(); found {
+		expectedOpenGrant = store.ChannelInviteOpenGrantFence{Present: true, GrantID: grant.ID()}
+	}
+	expectedRosterHead := selected.Roster().Head()
+	manager.mu.Unlock()
+	at := manager.clock.Now()
 	token, err := manager.buildToken(ctx, channel.Descriptor(), owner.Multiaddrs(), at,
 		lifetime, uses, operation, metadata.OperationKeySecret)
 	if err != nil {
 		return ChannelInviteResponse{}, channelAPIError(err)
 	}
+	manager.mu.Lock()
 	result, err := manager.store.RotateChannelInvite(ctx, store.RotateChannelInviteSpec{
-		ChannelID: channel.ID(), Token: token, At: at, Operation: &operation})
+		ChannelID: channel.ID(), Token: token, At: at,
+		ExpectedRosterHead: expectedRosterHead, ExpectedOpenGrant: expectedOpenGrant,
+		Operation: &operation})
+	manager.mu.Unlock()
 	if err != nil {
 		return ChannelInviteResponse{}, channelMutationAPIError(err)
 	}
@@ -218,23 +235,28 @@ func (manager *ChannelManager) ChannelInviteClose(ctx context.Context, metadata 
 	if apiErr := manager.validateCall(ctx, metadata); apiErr != nil {
 		return ChannelInviteCloseResponse{}, apiErr
 	}
+	at := manager.clock.Now()
 	manager.mu.Lock()
-	defer manager.mu.Unlock()
 	authority, selected, apiErr := manager.selectChannel(ctx, request.Channel)
 	if apiErr != nil {
+		manager.mu.Unlock()
 		return ChannelInviteCloseResponse{}, apiErr
 	}
 	channel := selected.Channel()
 	if channel.OwnerPeerID() != authority.LocalPeerID() {
+		manager.mu.Unlock()
 		return ChannelInviteCloseResponse{}, NewAPIError(CodeWrongOwner,
 			"only the Channel owner may close invites")
 	}
 	grant, ok := selected.OpenGrant()
 	if !ok {
+		manager.mu.Unlock()
 		return ChannelInviteCloseResponse{}, NewAPIError(CodeTokenClosed,
 			"Channel has no open invite")
 	}
-	if _, err := manager.store.CloseChannelInvite(ctx, channel.ID(), grant.ID(), manager.clock.Now()); err != nil {
+	_, err := manager.store.CloseChannelInvite(ctx, channel.ID(), grant.ID(), at)
+	manager.mu.Unlock()
+	if err != nil {
 		return ChannelInviteCloseResponse{}, channelAPIError(err)
 	}
 	view, err := manager.readChannelView(ctx, channel.ID())
@@ -247,7 +269,7 @@ func (manager *ChannelManager) ChannelInviteClose(ctx context.Context, metadata 
 }
 
 func (manager *ChannelManager) buildChannel(ctx context.Context, requestedName string,
-	authority store.ChannelControlAuthority, operation store.ChannelMutationOperation,
+	operation store.ChannelMutationOperation,
 	operationSecret []byte,
 ) (model.Channel, model.Member, model.EnrollmentToken, error) {
 	at := manager.clock.Now().UTC()
@@ -255,7 +277,7 @@ func (manager *ChannelManager) buildChannel(ctx context.Context, requestedName s
 	if err != nil {
 		return model.Channel{}, model.Member{}, model.EnrollmentToken{}, err
 	}
-	alias := uniqueChannelAlias(channelAlias(requestedName), authority)
+	alias := channelAlias(requestedName)
 	name := requestedName
 	if name == "" {
 		name = "Channel " + strings.TrimPrefix(channelID.String(), "channel-")[:8]
@@ -328,53 +350,6 @@ func (manager *ChannelManager) randomIdentifier(prefix string) (string, error) {
 		return "", err
 	}
 	return prefix + hex.EncodeToString(raw), nil
-}
-
-func channelAlias(name string) string {
-	var result strings.Builder
-	separator := false
-	for _, character := range strings.ToLower(name) {
-		if character >= 'a' && character <= 'z' || character >= '0' && character <= '9' {
-			result.WriteRune(character)
-			separator = false
-		} else if result.Len() != 0 && !separator {
-			result.WriteByte('-')
-			separator = true
-		}
-	}
-	alias := strings.Trim(result.String(), "-")
-	if alias == "" {
-		return "channel"
-	}
-	if len(alias) > 48 {
-		alias = strings.Trim(alias[:48], "-")
-	}
-	return alias
-}
-
-func uniqueChannelAlias(base string, authority store.ChannelControlAuthority) string {
-	used := make(map[string]struct{}, len(authority.Channels()))
-	for _, channel := range authority.Channels() {
-		used[channel.Channel().LocalAlias()] = struct{}{}
-	}
-	if _, exists := used[base]; !exists {
-		return base
-	}
-	for suffix := 2; ; suffix++ {
-		candidate := fmt.Sprintf("%s-%d", base, suffix)
-		if _, exists := used[candidate]; !exists {
-			return candidate
-		}
-	}
-}
-
-func existingChannelAlias(channelID model.ChannelID, authority store.ChannelControlAuthority) string {
-	for _, channel := range authority.Channels() {
-		if channel.Channel().ID() == channelID {
-			return channel.Channel().LocalAlias()
-		}
-	}
-	return ""
 }
 
 func channelJoinResponseStatus(status store.ChannelEnrollmentStatus) string {

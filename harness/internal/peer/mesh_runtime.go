@@ -30,9 +30,6 @@ type MeshRuntime struct {
 	gossip    *Gossip
 	authority *Authority
 
-	// enrollmentMu serializes only outbound Channel joins. It may be held
-	// across the bounded exchange without blocking unrelated mesh operations.
-	enrollmentMu sync.Mutex
 	// peerstoreMu couples each external address update with the exact set that
 	// was applied. It never guards logical runtime state or Gossip operations.
 	peerstoreMu sync.Mutex
@@ -135,7 +132,8 @@ func (runtime *MeshRuntime) reconcileProjectionOnce(expectedRevision uint64) err
 		return errMeshRuntimeRevision
 	}
 	mesh := runtime.mesh
-	permit := runtime.enrollment
+	slot := runtime.enrollment
+	permit := activeEnrollmentPermitSnapshot(slot)
 	revision := runtime.revision
 	nodeHost, gossip := runtime.nodeHost, runtime.gossip
 	runtime.mu.Unlock()
@@ -155,7 +153,7 @@ func (runtime *MeshRuntime) reconcileProjectionOnce(expectedRevision uint64) err
 		runtime.peerstoreMu.Unlock()
 		return fmt.Errorf("%w: runtime is closed", ErrMeshRuntime)
 	}
-	if runtime.revision != revision || runtime.enrollment != permit {
+	if runtime.revision != revision || runtime.enrollment != slot {
 		runtime.mu.Unlock()
 		runtime.peerstoreMu.Unlock()
 		return errMeshRuntimeRevision
@@ -179,10 +177,18 @@ func (runtime *MeshRuntime) reconcileProjectionOnce(expectedRevision uint64) err
 	if runtime.closed {
 		return fmt.Errorf("%w: runtime is closed", ErrMeshRuntime)
 	}
-	if runtime.revision != revision || runtime.enrollment != permit {
+	if runtime.revision != revision || runtime.enrollment != slot {
 		return errMeshRuntimeRevision
 	}
 	return nil
+}
+
+func activeEnrollmentPermitSnapshot(slot *meshEnrollmentPermit) *meshEnrollmentPermit {
+	if slot == nil || !slot.active {
+		return nil
+	}
+	active := *slot
+	return &active
 }
 
 func (runtime *MeshRuntime) failClosed(cause error) error {

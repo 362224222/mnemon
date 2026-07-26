@@ -42,7 +42,7 @@ type Identity struct {
 	peerID     model.PeerID
 	privateKey libp2pcrypto.PrivKey
 	publicKey  ed25519.PublicKey
-	signer     *event.Ed25519Signer
+	signer     event.PublicationSigner
 }
 
 func (identity *Identity) PeerID() model.PeerID {

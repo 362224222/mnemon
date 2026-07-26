@@ -27,11 +27,10 @@ type AcceptChannelLeaveResult struct {
 	Replay       bool
 }
 
-// AcceptChannelLeave is the owner's sole voluntary-leave mutation boundary.
-// It verifies the secure requester, appends an owner-signed left record when
-// the member is still active, and persists the exact signed receipt in the
-// same transaction. A prior remove wins by terminal precedence and is
-// acknowledged without forging a replacement left record.
+// AcceptChannelLeave releases its read snapshot before owner signing, then
+// revalidates exact authority before persisting the terminal record and receipt.
+// Those writes remain one transaction. A prior remove wins by terminal
+// precedence and is acknowledged without forging a replacement left record.
 func (s *Store) AcceptChannelLeave(ctx context.Context,
 	spec AcceptChannelLeaveSpec,
 ) (AcceptChannelLeaveResult, error) {
@@ -48,21 +47,22 @@ func (s *Store) AcceptChannelLeave(ctx context.Context,
 	if err != nil {
 		return AcceptChannelLeaveResult{}, err
 	}
+	replay, found, err := readAcceptedOwnerChannelLeave(ctx, tx, authority, spec.Request)
+	if err != nil {
+		return AcceptChannelLeaveResult{}, err
+	}
+	if found {
+		return commitAcceptedOwnerChannelLeaveReplay(tx, replay)
+	}
 	active, current, err := authorizeOwnerChannelLeave(node, authority, spec, at)
 	if err != nil {
 		return AcceptChannelLeaveResult{}, err
 	}
-	if replay, found, err := readAcceptedOwnerChannelLeave(ctx, tx, authority, active,
-		spec.Request); err != nil || found {
-		if err != nil {
-			return AcceptChannelLeaveResult{}, err
-		}
-		if err := tx.Commit(); err != nil {
-			return AcceptChannelLeaveResult{}, mapChannelLeaveError(err)
-		}
-		return replay, nil
+	if err := tx.Commit(); err != nil {
+		return AcceptChannelLeaveResult{},
+			fmt.Errorf("accept Channel leave: commit preparation: %w", err)
 	}
-	return s.acceptFreshOwnerChannelLeave(ctx, tx, node.PeerID(), authority,
+	return s.acceptFreshOwnerChannelLeave(ctx, node, authority,
 		active, current, spec, at)
 }
 
@@ -120,23 +120,46 @@ func ownerMayAcceptChannelLeave(authority verifiedChannelAuthority) bool {
 	return authority.channel.Status() == model.ChannelClosed && ok && owner.Status() == model.MemberLeft
 }
 
-func (s *Store) acceptFreshOwnerChannelLeave(ctx context.Context, tx *sql.Tx,
-	localPeerID model.PeerID, authority verifiedChannelAuthority, active, current model.Member,
+func (s *Store) acceptFreshOwnerChannelLeave(ctx context.Context, preparedNode model.Node,
+	preparedAuthority verifiedChannelAuthority, active, current model.Member,
 	spec AcceptChannelLeaveSpec, at time.Time,
 ) (AcceptChannelLeaveResult, error) {
-	candidate, terminal, appended, err := ownerChannelLeaveCandidate(ctx, authority, current, spec, at)
+	candidate, terminal, appended, err := ownerChannelLeaveCandidate(ctx, preparedAuthority,
+		current, spec, at)
 	if err != nil {
 		return AcceptChannelLeaveResult{}, err
 	}
-	receipt, err := signOwnerChannelLeaveReceipt(ctx, authority, active, candidate,
+	receipt, err := signOwnerChannelLeaveReceipt(ctx, preparedAuthority, active, candidate,
 		terminal, spec, at)
 	if err != nil {
 		return AcceptChannelLeaveResult{}, err
 	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return AcceptChannelLeaveResult{}, fmt.Errorf("accept Channel leave: begin commit: %w", err)
+	}
+	defer tx.Rollback()
+	node, authority, err := readChannelLeaveAuthority(ctx, tx, spec.Request.Record().ChannelID())
+	if err != nil {
+		return AcceptChannelLeaveResult{}, err
+	}
+	replay, found, err := readAcceptedOwnerChannelLeave(ctx, tx, authority, spec.Request)
+	if err != nil {
+		return AcceptChannelLeaveResult{}, err
+	}
+	if found {
+		return commitAcceptedOwnerChannelLeaveReplay(tx, replay)
+	}
+	if _, _, err := authorizeOwnerChannelLeave(node, authority, spec, at); err != nil {
+		return AcceptChannelLeaveResult{}, err
+	}
+	if !sameOwnerChannelLeaveFence(preparedNode, node, preparedAuthority, authority) {
+		return AcceptChannelLeaveResult{}, ErrChannelLeaveConflict
+	}
 	result := MergeChannelRosterResult{Status: ChannelRosterDuplicate, Channel: authority.channel,
 		Roster: authority.roster, ExpectedNextRevision: authority.roster.Head().Revision() + 1}
 	if appended {
-		result, err = s.applyChannelRosterCandidateTx(ctx, tx, localPeerID, authority, candidate, at)
+		result, err = s.applyChannelRosterCandidateTx(ctx, tx, node.PeerID(), authority, candidate, at)
 		if err != nil {
 			return AcceptChannelLeaveResult{}, err
 		}
@@ -144,7 +167,7 @@ func (s *Store) acceptFreshOwnerChannelLeave(ctx context.Context, tx *sql.Tx,
 	if err := persistAcceptedOwnerChannelLeave(ctx, tx, spec.Request, receipt, at); err != nil {
 		return AcceptChannelLeaveResult{}, err
 	}
-	if err := verifyAcceptedOwnerChannelLeave(ctx, tx, localPeerID, result.Roster.Head(),
+	if err := verifyAcceptedOwnerChannelLeave(ctx, tx, node.PeerID(), result.Roster.Head(),
 		spec.Request, receipt); err != nil {
 		return AcceptChannelLeaveResult{}, err
 	}
@@ -153,6 +176,26 @@ func (s *Store) acceptFreshOwnerChannelLeave(ctx context.Context, tx *sql.Tx,
 	}
 	return AcceptChannelLeaveResult{Channel: result.Channel, Roster: result.Roster,
 		ActiveMember: active, Terminal: terminal, Receipt: receipt}, nil
+}
+
+func commitAcceptedOwnerChannelLeaveReplay(tx *sql.Tx,
+	replay AcceptChannelLeaveResult,
+) (AcceptChannelLeaveResult, error) {
+	if err := tx.Commit(); err != nil {
+		return AcceptChannelLeaveResult{}, mapChannelLeaveError(err)
+	}
+	return replay, nil
+}
+
+func sameOwnerChannelLeaveFence(preparedNode, currentNode model.Node,
+	prepared, current verifiedChannelAuthority,
+) bool {
+	before, after := prepared.channel, current.channel
+	return preparedNode.PeerID() == currentNode.PeerID() &&
+		bytes.Equal(before.Descriptor().WireJSON().Bytes(), after.Descriptor().WireJSON().Bytes()) &&
+		before.LocalAlias() == after.LocalAlias() && before.RosterHead() == after.RosterHead() &&
+		before.Status() == after.Status() && before.TopicState() == after.TopicState() &&
+		before.UpdatedAt().Equal(after.UpdatedAt())
 }
 
 func ownerChannelLeaveCandidate(ctx context.Context, authority verifiedChannelAuthority,
@@ -272,7 +315,7 @@ func verifyAcceptedOwnerChannelLeave(ctx context.Context, tx *sql.Tx, localPeerI
 }
 
 func readAcceptedOwnerChannelLeave(ctx context.Context, tx *sql.Tx,
-	authority verifiedChannelAuthority, active model.Member, request model.SignedChannelLeaveRequest,
+	authority verifiedChannelAuthority, request model.SignedChannelLeaveRequest,
 ) (AcceptChannelLeaveResult, bool, error) {
 	var channelText, memberText, status string
 	var digest, requestJSON, signature, receiptJSON []byte
@@ -286,9 +329,11 @@ func readAcceptedOwnerChannelLeave(ctx context.Context, tx *sql.Tx,
 	if err != nil {
 		return AcceptChannelLeaveResult{}, false, mapChannelLeaveError(err)
 	}
+	active, activeErr := channelLeaveHistoricalMember(authority.roster,
+		request.Record().ActiveMemberHead(), request.Record().MemberPeerID())
 	storedDigest, digestErr := model.DigestFromBytes(digest)
 	receipt, receiptErr := model.ParseSignedChannelLeaveReceipt(receiptJSON)
-	if digestErr != nil || receiptErr != nil || status != "accepted" ||
+	if activeErr != nil || digestErr != nil || receiptErr != nil || status != "accepted" ||
 		channelText != authority.channel.ID().String() || memberText != request.Record().MemberPeerID().String() ||
 		storedDigest != request.Digest() || !bytes.Equal(requestJSON, request.Record().CanonicalJSON().Bytes()) ||
 		!bytes.Equal(signature, request.MemberSignature()) ||

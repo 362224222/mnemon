@@ -92,8 +92,21 @@ func TestChannelEnrollmentHandshakeCommitsResponseLossReplayAndAtomicInstall(t *
 func TestChannelEnrollmentRecoversOwnerCommitAfterAcceptedResponseLoss(t *testing.T) {
 	fixture := newEnrollmentHandshakeFixture(t, "peer-enrollment-response-loss",
 		time.Date(2026, 7, 18, 1, 30, 0, 0, time.UTC), true)
+	spec := loseAcceptedEnrollmentResponse(t, fixture)
+	recoverAcceptedEnrollmentResponse(t, fixture, spec)
+}
+
+type enrollmentJoinResult struct {
+	result store.InstallJoinedChannelResult
+	err    error
+}
+
+func loseAcceptedEnrollmentResponse(t *testing.T,
+	fixture enrollmentHandshakeFixture,
+) JoinChannelSpec {
+	t.Helper()
 	acceptedAt, ownerIdentity := fixture.acceptedAt, fixture.ownerIdentity
-	joinerIdentity, ownerPath, joinerPath := fixture.joinerIdentity, fixture.ownerPath, fixture.joinerPath
+	joinerIdentity, joinerPath := fixture.joinerIdentity, fixture.joinerPath
 	ownerStore, joinerStore := fixture.ownerStore, fixture.joinerStore
 	ownerHost, joinerHost, ctx, token := fixture.ownerHost, fixture.joinerHost, fixture.ctx, fixture.token
 	barrier := &committedEnrollmentOwnerStore{delegate: ownerStore,
@@ -116,16 +129,12 @@ func TestChannelEnrollmentRecoversOwnerCommitAfterAcceptedResponseLoss(t *testin
 	}
 	firstSpec := JoinChannelSpec{Token: token, DisplayLabel: joinerIdentity.DisplayName(),
 		AdvertisedMultiaddrs: joinerIdentity.Multiaddrs(), LocalAlias: "response-loss-team"}
-	type joinResult struct {
-		result store.InstallJoinedChannelResult
-		err    error
-	}
-	resultC := make(chan joinResult, 1)
+	resultC := make(chan enrollmentJoinResult, 1)
 	firstAttempt := prepareEnrollmentTestAttempt(t, ctx, firstClient, joinerHost, firstSpec)
 	firstStream := openEnrollmentTestStream(t, ctx, joinerHost, ownerHost.ID())
 	go func() {
 		result, joinErr := firstClient.join(ctx, firstStream, firstAttempt)
-		resultC <- joinResult{result: result, err: joinErr}
+		resultC <- enrollmentJoinResult{result: result, err: joinErr}
 	}()
 	select {
 	case <-barrier.committed:
@@ -156,7 +165,15 @@ func TestChannelEnrollmentRecoversOwnerCommitAfterAcceptedResponseLoss(t *testin
 	if err := joinerDB.Close(); err != nil {
 		t.Fatal(err)
 	}
+	return firstSpec
+}
 
+func recoverAcceptedEnrollmentResponse(t *testing.T, fixture enrollmentHandshakeFixture,
+	firstSpec JoinChannelSpec,
+) {
+	t.Helper()
+	acceptedAt, ownerPath, joinerPath := fixture.acceptedAt, fixture.ownerPath, fixture.joinerPath
+	ownerHost, joinerHost, ctx := fixture.ownerHost, fixture.joinerHost, fixture.ctx
 	reopened, err := store.Open(context.Background(), joinerPath)
 	if err != nil {
 		t.Fatal(err)

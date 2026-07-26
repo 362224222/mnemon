@@ -3,8 +3,10 @@ package node
 import (
 	"context"
 	"errors"
-	"github.com/mnemon-dev/mnemon/harness/internal/store"
 	"time"
+
+	"github.com/mnemon-dev/mnemon/harness/internal/model"
+	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
 
 // ChannelAbandon is the daemon-owned recovery boundary. Store installs the
@@ -16,11 +18,12 @@ func (manager *ChannelManager) ChannelAbandon(ctx context.Context,
 	if apiErr := manager.validateCall(ctx, metadata); apiErr != nil {
 		return ChannelAbandonResponse{}, apiErr
 	}
+	at := manager.clock.Now()
 	manager.mu.Lock()
-	defer manager.mu.Unlock()
 	result, err := manager.store.AbandonChannel(ctx, store.AbandonChannelSpec{
 		ChannelAlias: request.Channel, ConfirmedAlias: request.ConfirmChannel,
-		Force: request.Force, At: manager.clock.Now()})
+		Force: request.Force, At: at})
+	manager.mu.Unlock()
 	if err != nil {
 		return ChannelAbandonResponse{}, channelAPIError(err)
 	}
@@ -34,7 +37,7 @@ func (manager *ChannelManager) ChannelAbandon(ctx context.Context,
 		// callback survives until the supervisor restarts this Node.
 		return ChannelAbandonResponse{}, channelAPIError(errors.Join(err, manager.runtime.Close()))
 	}
-	manager.triggerMemberReconcile()
+	manager.triggerMemberReconcileChannel(mesh, result.ChannelID)
 	return ChannelAbandonResponse{SchemaVersion: SchemaVersion,
 		Status: "abandoned", Channel: result.Alias, Replayed: result.Replayed,
 		TransitionedAt: result.TransitionedAt.UTC().Format(time.RFC3339Nano),
@@ -45,4 +48,22 @@ func (manager *ChannelManager) ChannelAbandon(ctx context.Context,
 			MemberRecords: result.Evidence.MemberRecords, Publications: result.Evidence.Publications,
 			PullACKs: result.Evidence.PullACKs, Works: result.Evidence.Works,
 		}}, nil
+}
+
+func (manager *ChannelManager) triggerMemberReconcileChannel(mesh store.ChannelMeshAuthority,
+	channelID model.ChannelID,
+) {
+	for _, channel := range mesh.Channels() {
+		if channel.Channel().ID() != channelID {
+			continue
+		}
+		for _, member := range channel.Roster().Members() {
+			current, ok := channel.Roster().CurrentMember(member.PeerID())
+			if ok && current.Head() == member.Head() && current.Status() == model.MemberActive &&
+				current.PeerID() != mesh.LocalPeerID() {
+				manager.triggerMemberReconcileScope(channelID, current.PeerID())
+			}
+		}
+		return
+	}
 }

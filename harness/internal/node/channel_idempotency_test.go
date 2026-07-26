@@ -31,44 +31,13 @@ func TestChannelCreateAndInviteReplayExactTokenAcrossResponseLossAndRestart(t *t
 		}
 	})
 
-	createRequest := ChannelCreateRequest{Name: "idempotent-channel"}
-	createMetadata := channelMutationTestMetadata(fixture.profile,
-		model.Sum([]byte("typed-create-request")), 0x51)
-	created, apiErr := daemon.channels.manager.ChannelCreate(context.Background(),
-		createMetadata, createRequest)
-	if apiErr != nil {
-		t.Fatal(apiErr)
-	}
-	createReplay, apiErr := daemon.channels.manager.ChannelCreate(context.Background(),
-		createMetadata, createRequest)
-	if apiErr != nil || createReplay.InviteToken != created.InviteToken ||
-		createReplay.Channel.ChannelIDDigest != created.Channel.ChannelIDDigest {
-		t.Fatalf("create response-loss replay = (%#v, %v)", createReplay, apiErr)
-	}
-
+	createRequest, createMetadata, created := exerciseChannelCreateReplay(t,
+		daemon.channels.manager, fixture.profile)
 	clock.at = clock.at.Add(time.Minute)
-	inviteRequest := ChannelInviteRequest{Channel: created.Channel.Alias,
-		ExpiresSeconds: 3600, Uses: 2}
-	inviteMetadata := channelMutationTestMetadata(fixture.profile,
-		model.Sum([]byte("typed-invite-request")), 0x61)
-	invited, apiErr := daemon.channels.manager.ChannelInvite(context.Background(),
-		inviteMetadata, inviteRequest)
-	if apiErr != nil {
-		t.Fatal(apiErr)
-	}
-	inviteReplay, apiErr := daemon.channels.manager.ChannelInvite(context.Background(),
-		inviteMetadata, inviteRequest)
-	if apiErr != nil || inviteReplay.InviteToken != invited.InviteToken ||
-		inviteReplay.Invite != invited.Invite {
-		t.Fatalf("invite response-loss replay = (%#v, %v)", inviteReplay, apiErr)
-	}
-
-	mismatch := inviteMetadata
-	mismatch.RequestDigest = model.Sum([]byte("changed-invite-request"))
-	if _, apiErr := daemon.channels.manager.ChannelInvite(context.Background(), mismatch,
-		ChannelInviteRequest{Channel: created.Channel.Alias, ExpiresSeconds: 7200, Uses: 1}); apiErr == nil || apiErr.Code != CodeOperationMismatch {
-		t.Fatalf("same key changed digest error = %#v", apiErr)
-	}
+	inviteRequest, inviteMetadata, invited := exerciseChannelInviteReplay(t,
+		daemon.channels.manager, fixture.profile, created.Channel.Alias)
+	assertChannelInviteRequestMismatch(t, daemon.channels.manager, inviteMetadata,
+		created.Channel.Alias)
 
 	path := daemon.store.Path()
 	if err := daemon.Close(); err != nil {
@@ -80,29 +49,98 @@ func TestChannelCreateAndInviteReplayExactTokenAcrossResponseLossAndRestart(t *t
 	assertChannelMutationSecretsAbsent(t, path, invited.InviteToken,
 		inviteMetadata.OperationKeySecret)
 
-	restarted, err := OpenDaemon(context.Background(), DaemonOptions{Workspace: fixture.workspace,
+	daemon, err = OpenDaemon(context.Background(), DaemonOptions{Workspace: fixture.workspace,
 		Clock: clock, Install: fixture.install})
 	if err != nil {
 		t.Fatal(err)
 	}
-	daemon = restarted
-	createRestart, apiErr := daemon.channels.manager.ChannelCreate(context.Background(),
+	exerciseChannelMutationRestartReplay(t, daemon.channels.manager, fixture.profile,
+		createRequest, createMetadata, created, inviteRequest, inviteMetadata, invited)
+	corruptChannelInviteCommitment(t, path, inviteMetadata)
+	if _, apiErr := daemon.channels.manager.ChannelInvite(context.Background(),
+		inviteMetadata, inviteRequest); apiErr == nil || apiErr.Code != CodeInternal {
+		t.Fatalf("corrupt durable token commitment error = %#v", apiErr)
+	}
+}
+
+func exerciseChannelCreateReplay(t testing.TB, manager *ChannelManager, profile model.Profile,
+) (ChannelCreateRequest, RequestMetadata, ChannelCreateResponse) {
+	t.Helper()
+	createRequest := ChannelCreateRequest{Name: "idempotent-channel"}
+	createMetadata := channelMutationTestMetadata(profile,
+		model.Sum([]byte("typed-create-request")), 0x51)
+	created, apiErr := manager.ChannelCreate(context.Background(),
+		createMetadata, createRequest)
+	if apiErr != nil {
+		t.Fatal(apiErr)
+	}
+	createReplay, apiErr := manager.ChannelCreate(context.Background(),
+		createMetadata, createRequest)
+	if apiErr != nil || createReplay.InviteToken != created.InviteToken ||
+		createReplay.Channel.ChannelIDDigest != created.Channel.ChannelIDDigest {
+		t.Fatalf("create response-loss replay = (%#v, %v)", createReplay, apiErr)
+	}
+	return createRequest, createMetadata, created
+}
+
+func exerciseChannelInviteReplay(t testing.TB, manager *ChannelManager, profile model.Profile,
+	alias string,
+) (ChannelInviteRequest, RequestMetadata, ChannelInviteResponse) {
+	t.Helper()
+	inviteRequest := ChannelInviteRequest{Channel: alias,
+		ExpiresSeconds: 3600, Uses: 2}
+	inviteMetadata := channelMutationTestMetadata(profile,
+		model.Sum([]byte("typed-invite-request")), 0x61)
+	invited, apiErr := manager.ChannelInvite(context.Background(),
+		inviteMetadata, inviteRequest)
+	if apiErr != nil {
+		t.Fatal(apiErr)
+	}
+	inviteReplay, apiErr := manager.ChannelInvite(context.Background(),
+		inviteMetadata, inviteRequest)
+	if apiErr != nil || inviteReplay.InviteToken != invited.InviteToken ||
+		inviteReplay.Invite != invited.Invite {
+		t.Fatalf("invite response-loss replay = (%#v, %v)", inviteReplay, apiErr)
+	}
+	return inviteRequest, inviteMetadata, invited
+}
+
+func assertChannelInviteRequestMismatch(t testing.TB, manager *ChannelManager,
+	inviteMetadata RequestMetadata, alias string,
+) {
+	t.Helper()
+	mismatch := inviteMetadata
+	mismatch.RequestDigest = model.Sum([]byte("changed-invite-request"))
+	if _, apiErr := manager.ChannelInvite(context.Background(), mismatch,
+		ChannelInviteRequest{Channel: alias, ExpiresSeconds: 7200, Uses: 1}); apiErr == nil ||
+		apiErr.Code != CodeOperationMismatch {
+		t.Fatalf("same key changed digest error = %#v", apiErr)
+	}
+}
+
+func exerciseChannelMutationRestartReplay(t testing.TB, manager *ChannelManager,
+	profile model.Profile, createRequest ChannelCreateRequest, createMetadata RequestMetadata,
+	created ChannelCreateResponse, inviteRequest ChannelInviteRequest,
+	inviteMetadata RequestMetadata, invited ChannelInviteResponse,
+) {
+	t.Helper()
+	createRestart, apiErr := manager.ChannelCreate(context.Background(),
 		createMetadata, createRequest)
 	if apiErr != nil || createRestart.InviteToken != created.InviteToken {
 		t.Fatalf("create restart replay = (%#v, %v)", createRestart, apiErr)
 	}
-	inviteRestart, apiErr := daemon.channels.manager.ChannelInvite(context.Background(),
+	inviteRestart, apiErr := manager.ChannelInvite(context.Background(),
 		inviteMetadata, inviteRequest)
 	if apiErr != nil || inviteRestart.InviteToken != invited.InviteToken {
 		t.Fatalf("invite restart replay = (%#v, %v)", inviteRestart, apiErr)
 	}
-	leaveMetadata := channelMutationTestMetadata(fixture.profile,
+	leaveMetadata := channelMutationTestMetadata(profile,
 		model.Sum([]byte("typed-leave-request")), 0x71)
 	clear(leaveMetadata.OperationKeySecret)
 	leaveMetadata.OperationKeySecret = nil
 	wakes := &recordingChannelMemberWake{}
-	daemon.channels.manager.members = wakes
-	left, apiErr := daemon.channels.manager.ChannelLeave(context.Background(),
+	manager.members = wakes
+	left, apiErr := manager.ChannelLeave(context.Background(),
 		leaveMetadata, ChannelLeaveRequest{Channel: created.Channel.Alias})
 	if apiErr != nil || left.Status != "left" || left.Channel.Membership != "closed" {
 		t.Fatalf("owner leave operation = (%#v, %v)", left, apiErr)
@@ -110,7 +148,7 @@ func TestChannelCreateAndInviteReplayExactTokenAcrossResponseLossAndRestart(t *t
 	if globals, scopes := wakes.snapshot(); globals != 0 || scopes != 1 {
 		t.Fatalf("owner leave wake scope = global %d scoped %d", globals, scopes)
 	}
-	leaveReplay, apiErr := daemon.channels.manager.ChannelLeave(context.Background(),
+	leaveReplay, apiErr := manager.ChannelLeave(context.Background(),
 		leaveMetadata, ChannelLeaveRequest{Channel: created.Channel.Alias})
 	if apiErr != nil || leaveReplay.Status != left.Status ||
 		leaveReplay.Channel.ChannelIDDigest != left.Channel.ChannelIDDigest {
@@ -119,7 +157,12 @@ func TestChannelCreateAndInviteReplayExactTokenAcrossResponseLossAndRestart(t *t
 	if globals, scopes := wakes.snapshot(); globals != 0 || scopes != 2 {
 		t.Fatalf("owner leave replay wake scope = global %d scoped %d", globals, scopes)
 	}
+}
 
+func corruptChannelInviteCommitment(t testing.TB, path string,
+	inviteMetadata RequestMetadata,
+) {
+	t.Helper()
 	corrupt, err := sql.Open("sqlite", path)
 	if err != nil {
 		t.Fatal(err)
@@ -137,10 +180,6 @@ func TestChannelCreateAndInviteReplayExactTokenAcrossResponseLossAndRestart(t *t
 	}
 	if err := corrupt.Close(); err != nil {
 		t.Fatal(err)
-	}
-	if _, apiErr := daemon.channels.manager.ChannelInvite(context.Background(),
-		inviteMetadata, inviteRequest); apiErr == nil || apiErr.Code != CodeInternal {
-		t.Fatalf("corrupt durable token commitment error = %#v", apiErr)
 	}
 }
 

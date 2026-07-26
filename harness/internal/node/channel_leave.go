@@ -10,9 +10,8 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
 
-// AcceptMemberLeaveGate serializes the owner's durable terminal record and
-// exact receipt with every other Channel mutation. Runtime authority is
-// refreshed before the receipt can be returned to the requester.
+// AcceptMemberLeaveGate commits the owner's fenced durable terminal record and
+// exact receipt before refreshing runtime authority.
 func (manager *ChannelManager) AcceptMemberLeaveGate(ctx context.Context,
 	control peer.ChannelMemberLeaveControl,
 ) (peer.ChannelMemberLeaveAuthority, error) {
@@ -22,8 +21,6 @@ func (manager *ChannelManager) AcceptMemberLeaveGate(ctx context.Context,
 		return peer.ChannelMemberLeaveAuthority{}, fmt.Errorf(
 			"%w: leave gate is unavailable", peer.ErrChannelMemberRosterConflict)
 	}
-	manager.mu.Lock()
-	defer manager.mu.Unlock()
 	result, err := manager.store.AcceptChannelLeave(ctx, store.AcceptChannelLeaveSpec{
 		AuthenticatedPeerID: control.AuthenticatedPeerID, Request: control.Request,
 		Signer: manager.identity.PublicationSigner(), At: control.At})
@@ -49,9 +46,9 @@ func (manager *ChannelManager) SettleMemberLeaveRuntimeGate(ctx context.Context,
 		return fmt.Errorf("%w: leave settlement gate is unavailable", ErrChannelMemberReconciler)
 	}
 	manager.mu.Lock()
-	defer manager.mu.Unlock()
 	result, err := manager.store.SettleChannelLeave(ctx, store.SettleChannelLeaveSpec{
 		RequestID: requestID, Receipt: receipt, At: at})
+	manager.mu.Unlock()
 	if err != nil {
 		return channelMemberStoreError(err)
 	}

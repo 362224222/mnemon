@@ -27,9 +27,10 @@ type AcceptChannelEnrollmentResult struct {
 	Receipt model.EnrollmentReceipt
 }
 
-// AcceptChannelEnrollment is the owner's single durable acceptance boundary.
-// Member, grant use/counter, roster head and signed receipt either all commit
-// or all roll back. Replay is checked before mutable lifecycle policies.
+// AcceptChannelEnrollment signs only after its read snapshot is released, then
+// revalidates the exact authority before the indivisible durable acceptance.
+// Member, grant use/counter, roster head and receipt still commit or roll back
+// together, with exact replay checked before mutable lifecycle policies.
 func (s *Store) AcceptChannelEnrollment(ctx context.Context,
 	spec AcceptChannelEnrollmentSpec,
 ) (AcceptChannelEnrollmentResult, error) {
@@ -59,6 +60,10 @@ func (s *Store) AcceptChannelEnrollment(ctx context.Context,
 	if err := authorizeFreshEnrollment(authority, grant, spec, at); err != nil {
 		return AcceptChannelEnrollmentResult{}, err
 	}
+	if err := tx.Commit(); err != nil {
+		return AcceptChannelEnrollmentResult{},
+			fmt.Errorf("accept Channel enrollment: commit preparation: %w", err)
+	}
 	member, err := signJoiningMember(ctx, spec, authority, at)
 	if err != nil {
 		return AcceptChannelEnrollmentResult{}, err
@@ -72,19 +77,9 @@ func (s *Store) AcceptChannelEnrollment(ctx context.Context,
 		return AcceptChannelEnrollmentResult{}, err
 	}
 	evidence := acceptedEnrollment{channel: channel, roster: roster, member: member,
-		useID: useID, receipt: receipt, joinIdentity: joinIdentity, at: at}
-	if err := persistAcceptedEnrollment(ctx, tx, node, authority, grant, evidence); err != nil {
-		return AcceptChannelEnrollmentResult{}, err
-	}
-	committed, err := verifyCommittedEnrollment(ctx, tx, node, channel.ID(), roster.Head())
-	if err != nil {
-		return AcceptChannelEnrollmentResult{}, err
-	}
-	if err := tx.Commit(); err != nil {
-		return AcceptChannelEnrollmentResult{}, mapChannelEnrollmentError(err)
-	}
-	return AcceptChannelEnrollmentResult{Status: ChannelEnrollmentAccepted, Channel: committed.channel,
-		Roster: committed.roster, Member: member, Receipt: receipt}, nil
+		useID: useID, receipt: receipt, joinIdentity: joinIdentity, at: at,
+		authority: authority, node: node, grant: grant}
+	return s.commitAcceptedEnrollment(ctx, spec, evidence)
 }
 
 // validateAcceptEnrollmentInput checks the acceptance request before any
@@ -315,20 +310,8 @@ func signAcceptedEnrollmentReceipt(ctx context.Context, spec AcceptChannelEnroll
 	return useID, receipt, nil
 }
 
-// acceptedEnrollment carries the signed artifacts produced for one fresh
-// acceptance from projection to durable write.
-type acceptedEnrollment struct {
-	channel      model.Channel
-	roster       model.VerifiedRoster
-	member       model.Member
-	useID        model.EnrollmentUseID
-	receipt      model.EnrollmentReceipt
-	joinIdentity model.Digest
-	at           time.Time
-}
-
 // persistAcceptedEnrollment writes the member, grant use, roster head,
-// bindings and receipt inside the owner's single acceptance transaction.
+// bindings and receipt inside the owner's final acceptance transaction.
 func persistAcceptedEnrollment(ctx context.Context, tx *sql.Tx, node model.Node,
 	authority verifiedChannelAuthority, grant durableEnrollmentGrant, evidence acceptedEnrollment,
 ) error {

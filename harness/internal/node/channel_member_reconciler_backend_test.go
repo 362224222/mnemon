@@ -19,6 +19,16 @@ func TestDurableChannelMemberReconcileBackendTranslatesExactFences(t *testing.T)
 	controller := &recordingChannelMemberController{}
 	backend := durableChannelMemberReconcileBackend{store: st, controller: controller}
 	at := target.channel.UpdatedAt().Add(time.Hour)
+	exerciseChannelMemberBaselineBackend(t, backend, target, st, at)
+	leave := exerciseChannelMemberLeaveBackend(t, backend, at)
+	assertChannelMemberBackendControls(t, target, leave, st, controller)
+}
+
+func exerciseChannelMemberBaselineBackend(t testing.TB,
+	backend durableChannelMemberReconcileBackend, target channelMemberTarget,
+	st *recordingChannelMemberStore, at time.Time,
+) {
+	t.Helper()
 	records := target.roster.Members()
 	if err := backend.merge(context.Background(), target, records, target.roster.Head(), at); err != nil {
 		t.Fatal(err)
@@ -39,6 +49,12 @@ func TestDurableChannelMemberReconcileBackendTranslatesExactFences(t *testing.T)
 	if err := backend.reachability(context.Background(), target, model.ReachabilityReachable, at); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func exerciseChannelMemberLeaveBackend(t *testing.T,
+	backend durableChannelMemberReconcileBackend, at time.Time,
+) channelMemberLeaveTarget {
+	t.Helper()
 	leave, receipt := newChannelMemberLeaveTarget(t, "member-reconciler-backend-leave")
 	leave.retryGeneration = 3
 	if err := backend.startLeave(context.Background(), leave, at, at.Add(time.Second)); err != nil {
@@ -51,6 +67,14 @@ func TestDurableChannelMemberReconcileBackendTranslatesExactFences(t *testing.T)
 	if err := backend.settleLeave(context.Background(), leave, receipt, at); err != nil {
 		t.Fatal(err)
 	}
+	return leave
+}
+
+func assertChannelMemberBackendControls(t testing.TB, target channelMemberTarget,
+	leave channelMemberLeaveTarget,
+	st *recordingChannelMemberStore, controller *recordingChannelMemberController,
+) {
+	t.Helper()
 	if controller.hello.ChannelID != target.channel.ID() ||
 		controller.hello.AuthenticatedPeerID != target.remoteMember.PeerID() ||
 		controller.confirmed != target.channel.ID() ||

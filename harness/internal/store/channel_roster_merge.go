@@ -44,15 +44,12 @@ func (s *Store) MergeChannelRoster(ctx context.Context,
 	if firstRevision > expected {
 		return commitChannelRosterGap(tx, authority, spec.AuthenticatedTransportPeerID, expected)
 	}
-	candidate, prefixLength, err := prepareChannelRosterCandidate(authority, spec, records, firstRevision)
-	if err != nil {
-		return MergeChannelRosterResult{}, ErrChannelRosterInput
-	}
-	if incumbent, challenger, ok := channelRosterConflict(existing, records, prefixLength); ok {
-		return s.commitChannelRosterConflict(ctx, tx, node.PeerID(), authority, candidate, incumbent,
-			challenger, spec.AuthenticatedTransportPeerID, at)
-	}
-	if len(candidate.Members()) <= len(existing) {
+	prefixLength := int(firstRevision - 1)
+	if channelRosterPageDuplicate(existing, records, prefixLength) {
+		if _, known := authority.roster.CurrentMember(
+			spec.AuthenticatedTransportPeerID); !known {
+			return MergeChannelRosterResult{}, ErrChannelRosterInput
+		}
 		if err := tx.Commit(); err != nil {
 			return MergeChannelRosterResult{}, mapChannelRosterError(err)
 		}
@@ -60,8 +57,33 @@ func (s *Store) MergeChannelRoster(ctx context.Context,
 			Channel: authority.channel, Roster: authority.roster,
 			ExpectedNextRevision: expected}, nil
 	}
+	if !spec.ExpectedRosterHead.IsZero() &&
+		authority.roster.Head() != spec.ExpectedRosterHead {
+		return MergeChannelRosterResult{}, ErrChannelRosterConflict
+	}
+	candidate, prefixLength, err := prepareChannelRosterCandidate(authority, spec, records, firstRevision)
+	if err != nil {
+		return MergeChannelRosterResult{}, ErrChannelRosterInput
+	}
+	incumbent, challenger, conflicted := channelRosterConflict(existing, records, prefixLength)
+	if conflicted {
+		return s.commitChannelRosterConflict(ctx, tx, node.PeerID(), authority, candidate, incumbent,
+			challenger, spec.AuthenticatedTransportPeerID, at)
+	}
 	return s.applyChannelRosterCandidate(ctx, tx, node.PeerID(), authority, candidate, at,
 		spec.AuthenticatedTransportPeerID, spec.LeaveOperation)
+}
+
+func channelRosterPageDuplicate(existing, records []model.Member, prefixLength int) bool {
+	if prefixLength < 0 || prefixLength+len(records) > len(existing) {
+		return false
+	}
+	for index, record := range records {
+		if !bytes.Equal(existing[prefixLength+index].WireJSON().Bytes(), record.WireJSON().Bytes()) {
+			return false
+		}
+	}
+	return true
 }
 
 func validateMergeChannelRosterInput(s *Store, ctx context.Context,

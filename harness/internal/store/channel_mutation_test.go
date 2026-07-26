@@ -12,6 +12,17 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/testkit"
 )
 
+type channelCreateOperationOutcome struct {
+	result CreateChannelResult
+	err    error
+	token  model.EnrollmentToken
+}
+
+type channelCreateOperationCandidate struct {
+	spec  CreateChannelSpec
+	token model.EnrollmentToken
+}
+
 func TestChannelCreateOperationIsAtomicConcurrentRestartableAndSecretFree(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -23,6 +34,29 @@ func TestChannelCreateOperationIsAtomicConcurrentRestartableAndSecretFree(t *tes
 	operation := ChannelMutationOperation{Kind: ChannelMutationCreate,
 		OperationKeyHash: model.Sum([]byte("create-operation-key")),
 		RequestDigest:    model.Sum([]byte("canonical-create-request"))}
+	assertCancelledChannelCreateLeavesNoAuthority(t, ctx, st, owner, at)
+	first, second, payloadDigestBytes := runConcurrentChannelCreateOperation(
+		t, ctx, st, owner, at, operation)
+	leaveReuse := assertChannelCreateOperationKeyScope(t, ctx, st, operation,
+		first.result.Channel.ID(), at)
+	winnerToken := channelCreateOperationWinner(first, second)
+	payloadDigest, err := model.DigestFromBytes(payloadDigestBytes)
+	if err != nil || payloadDigest != winnerToken.Payload().Digest() {
+		t.Fatalf("durable payload commitment = %s, %v",
+			payloadDigest.String(), err)
+	}
+	assertEnrollmentCredentialAbsent(t, path, winnerToken)
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	assertChannelCreateOperationRestartReplay(t, ctx, path, operation,
+		leaveReuse, first.result, winnerToken, at)
+}
+
+func assertCancelledChannelCreateLeavesNoAuthority(t testing.TB, ctx context.Context,
+	st *Store, owner testkit.Identity, at time.Time,
+) {
+	t.Helper()
 	cancelledFixture := testkit.NewSignedChannelForOwnerAt(t,
 		"operation-create-cancelled", owner, at)
 	cancelledGrantID, _ := model.ParseGrantID("grant-operation-create-cancelled")
@@ -47,19 +81,15 @@ func TestChannelCreateOperationIsAtomicConcurrentRestartableAndSecretFree(t *tes
 		Scan(&precommitOperations); err != nil || precommitOperations != 0 {
 		t.Fatalf("cancelled pre-commit operation count = %d, %v", precommitOperations, err)
 	}
+}
 
-	type outcome struct {
-		result CreateChannelResult
-		err    error
-		token  model.EnrollmentToken
-	}
+func runConcurrentChannelCreateOperation(t testing.TB, ctx context.Context,
+	st *Store, owner testkit.Identity, at time.Time, operation ChannelMutationOperation,
+) (channelCreateOperationOutcome, channelCreateOperationOutcome, []byte) {
+	t.Helper()
 	start := make(chan struct{})
-	outcomes := make(chan outcome, 2)
-	type candidate struct {
-		spec  CreateChannelSpec
-		token model.EnrollmentToken
-	}
-	candidates := make([]candidate, 2)
+	outcomes := make(chan channelCreateOperationOutcome, 2)
+	candidates := make([]channelCreateOperationCandidate, 2)
 	for index := range candidates {
 		fixture := testkit.NewSignedChannelForOwnerAt(t,
 			"operation-create-candidate-"+string(rune('a'+index)), owner,
@@ -68,8 +98,9 @@ func TestChannelCreateOperationIsAtomicConcurrentRestartableAndSecretFree(t *tes
 			"grant-operation-create-" + string(rune('a'+index)))
 		token := storeTestEnrollmentToken(t, fixture.Descriptor(), owner, grantID,
 			"operation-create-"+string(rune('a'+index)), fixture.Channel().CreatedAt(), 7)
-		candidates[index] = candidate{spec: CreateChannelSpec{Channel: fixture.Channel(),
-			Genesis: fixture.OwnerMember().Member(), Token: token, Operation: &operation}, token: token}
+		candidates[index] = channelCreateOperationCandidate{
+			spec: CreateChannelSpec{Channel: fixture.Channel(),
+				Genesis: fixture.OwnerMember().Member(), Token: token, Operation: &operation}, token: token}
 	}
 	var ready sync.WaitGroup
 	ready.Add(2)
@@ -79,7 +110,8 @@ func TestChannelCreateOperationIsAtomicConcurrentRestartableAndSecretFree(t *tes
 			ready.Done()
 			<-start
 			result, err := st.CreateChannel(ctx, candidate.spec)
-			outcomes <- outcome{result: result, err: err, token: candidate.token}
+			outcomes <- channelCreateOperationOutcome{
+				result: result, err: err, token: candidate.token}
 		}()
 	}
 	ready.Wait()
@@ -109,7 +141,13 @@ func TestChannelCreateOperationIsAtomicConcurrentRestartableAndSecretFree(t *tes
 		Scan(&payloadDigestBytes); err != nil {
 		t.Fatal(err)
 	}
+	return first, second, payloadDigestBytes
+}
 
+func assertChannelCreateOperationKeyScope(t testing.TB, ctx context.Context,
+	st *Store, operation ChannelMutationOperation, channelID model.ChannelID, at time.Time,
+) ChannelLeaveOperation {
+	t.Helper()
 	mismatch := operation
 	mismatch.RequestDigest = model.Sum([]byte("changed-create-request"))
 	if _, _, err := st.ReadChannelMutation(ctx, mismatch); !errors.Is(err, ErrChannelMutationMismatch) {
@@ -123,22 +161,25 @@ func TestChannelCreateOperationIsAtomicConcurrentRestartableAndSecretFree(t *tes
 	if _, err := st.db.Exec(`INSERT INTO channel_leave_operations(
 		operation_key_hash,request_digest,channel_id,request_id,retry_generation,committed_at)
 		VALUES(?,?,?,NULL,NULL,?)`, operation.OperationKeyHash.Bytes(),
-		leaveReuse.RequestDigest.Bytes(), first.result.Channel.ID().String(), storeTime(at)); err == nil {
+		leaveReuse.RequestDigest.Bytes(), channelID.String(), storeTime(at)); err == nil {
 		t.Fatal("schema allowed create operation key reuse for leave")
 	}
+	return leaveReuse
+}
+
+func channelCreateOperationWinner(first, second channelCreateOperationOutcome) model.EnrollmentToken {
 	winnerToken := first.token
 	if first.result.GrantID != first.token.Payload().GrantID() {
 		winnerToken = second.token
 	}
-	payloadDigest, err := model.DigestFromBytes(payloadDigestBytes)
-	if err != nil || payloadDigest != winnerToken.Payload().Digest() {
-		t.Fatalf("durable payload commitment = %s, %v",
-			payloadDigest.String(), err)
-	}
-	assertEnrollmentCredentialAbsent(t, path, winnerToken)
-	if err := st.Close(); err != nil {
-		t.Fatal(err)
-	}
+	return winnerToken
+}
+
+func assertChannelCreateOperationRestartReplay(t testing.TB, ctx context.Context,
+	path string, operation ChannelMutationOperation, leaveReuse ChannelLeaveOperation,
+	first CreateChannelResult, winnerToken model.EnrollmentToken, at time.Time,
+) {
+	t.Helper()
 	restarted, err := OpenExisting(ctx, path)
 	if err != nil {
 		t.Fatal(err)
@@ -146,8 +187,8 @@ func TestChannelCreateOperationIsAtomicConcurrentRestartableAndSecretFree(t *tes
 	defer restarted.Close()
 	replay, found, err := restarted.ReadChannelMutation(ctx, operation)
 	if err != nil || !found || !replay.Replayed() ||
-		replay.Channel().ID() != first.result.Channel.ID() ||
-		replay.GrantID() != first.result.GrantID ||
+		replay.Channel().ID() != first.Channel.ID() ||
+		replay.GrantID() != first.GrantID ||
 		replay.TokenPayloadDigest() != winnerToken.Payload().Digest() {
 		t.Fatalf("restart replay = (%#v, %v, %v)", replay, found, err)
 	}
@@ -157,7 +198,7 @@ func TestChannelCreateOperationIsAtomicConcurrentRestartableAndSecretFree(t *tes
 	if _, err := restarted.db.Exec(`INSERT INTO channel_leave_operations(
 		operation_key_hash,request_digest,channel_id,request_id,retry_generation,committed_at)
 		VALUES(?,?,?,NULL,NULL,?)`, operation.OperationKeyHash.Bytes(),
-		leaveReuse.RequestDigest.Bytes(), first.result.Channel.ID().String(), storeTime(at)); err != nil {
+		leaveReuse.RequestDigest.Bytes(), first.Channel.ID().String(), storeTime(at)); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := restarted.ReadChannelMutation(ctx, operation); !errors.Is(err, ErrChannelMutationMismatch) {
@@ -196,7 +237,9 @@ func TestChannelInviteOperationReplaysOneGrantAndRejectsCrossKindReuse(t *testin
 			<-start
 			result, err := st.RotateChannelInvite(ctx, RotateChannelInviteSpec{
 				ChannelID: fixture.Channel().ID(), Token: candidate.Token,
-				At: at, Operation: &operation})
+				At: at, ExpectedRosterHead: fixture.Roster().Head(),
+				ExpectedOpenGrant: inviteTestOpenGrantFence(initial.ID()),
+				Operation:         &operation})
 			results <- result
 			failures <- err
 		}()
@@ -210,6 +253,8 @@ func TestChannelInviteOperationReplaysOneGrantAndRejectsCrossKindReuse(t *testin
 		left.Mutation.IsZero() || right.Mutation.IsZero() {
 		t.Fatalf("concurrent invite outcomes = %#v / %#v", left, right)
 	}
+	assertChannelInviteOperationReplayPrecedesStaleFence(t, ctx, st, fixture,
+		initial.ID(), at, operation, first, second, left.GrantID)
 	var grants, open, operations int
 	if err := st.db.QueryRow(`SELECT COUNT(*),SUM(status='open') FROM enrollment_grants`).
 		Scan(&grants, &open); err != nil || grants != 2 || open != 1 {
@@ -229,6 +274,28 @@ func TestChannelInviteOperationReplaysOneGrantAndRejectsCrossKindReuse(t *testin
 		winner = second.Token
 	}
 	assertEnrollmentCredentialAbsent(t, path, winner)
+}
+
+func assertChannelInviteOperationReplayPrecedesStaleFence(t testing.TB, ctx context.Context,
+	st *Store, fixture *testkit.SignedChannel, initial model.GrantID, at time.Time,
+	operation ChannelMutationOperation, first, second inviteTestCredential, winner model.GrantID,
+) {
+	t.Helper()
+	loser := first
+	if winner == first.ID() {
+		loser = second
+	}
+	replay, err := st.RotateChannelInvite(ctx, RotateChannelInviteSpec{
+		ChannelID: fixture.Channel().ID(), Token: loser.Token, At: at,
+		ExpectedRosterHead: fixture.Roster().Head(),
+		ExpectedOpenGrant:  inviteTestOpenGrantFence(initial),
+		Operation:          &operation})
+	if err != nil || replay.Created || replay.GrantID != winner ||
+		replay.Status != "open" || replay.Mutation.IsZero() ||
+		!replay.Mutation.Replayed() {
+		t.Fatalf("stale-fence operation replay = (%#v, %v)", replay, err)
+	}
+	assertInviteGrantAbsent(t, st, loser.ID())
 }
 
 // Crash matrix exercised above:
