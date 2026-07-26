@@ -61,6 +61,9 @@ Install Agent Integration for a project:
 
 See [USAGE.md](USAGE.md) for command examples.
 
+The first complete collaboration slice is governed by the tracked
+[R5 Core contract](r5-core-contract.md).
+
 ## 5. Release Boundary
 
 This beta intentionally ships minimal public documentation. Internal planning,
