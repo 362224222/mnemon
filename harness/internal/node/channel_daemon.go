@@ -104,8 +104,8 @@ func (runtime *daemonChannelRuntime) CloseContext(ctx context.Context) error {
 	if runtime.dispatcher != nil {
 		result = errors.Join(result, runtime.dispatcher.CloseContext(ctx))
 	}
-	if runtime.mesh != nil && ctx.Err() == nil {
-		result = errors.Join(result, runtime.mesh.Close())
+	if runtime.mesh != nil {
+		result = errors.Join(result, runtime.mesh.CloseContext(ctx))
 	}
 	if runtime.meshCancel != nil {
 		runtime.meshCancel()

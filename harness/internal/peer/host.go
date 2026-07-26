@@ -25,6 +25,8 @@ type NodeHost struct {
 	managed   host.Host
 	gater     *ConnectionGater
 	closeOnce sync.Once
+	closeDone chan struct{}
+	closeMu   sync.Mutex
 	closeErr  error
 }
 
@@ -69,7 +71,8 @@ func NewNodeHost(privateKey libp2pcrypto.PrivKey, authority *Authority,
 		return nil, fmt.Errorf("%w: listen: %v", ErrNodeHost, err)
 	}
 	managed := &managedHost{Host: nodeHost, gater: gater}
-	return &NodeHost{host: nodeHost, managed: managed, gater: gater}, nil
+	return &NodeHost{host: nodeHost, managed: managed, gater: gater,
+		closeDone: make(chan struct{})}, nil
 }
 
 func (node *NodeHost) Host() host.Host {
@@ -172,18 +175,58 @@ func (node *NodeHost) ReconcileConnections() error {
 }
 
 func (node *NodeHost) Close() error {
+	return node.CloseContext(context.Background())
+}
+
+// CloseContext starts the one owned libp2p close operation and waits only
+// within the caller's deadline. libp2p Host.Close has no context surface and
+// synchronously joins its transports and reference counts, so NodeHost keeps
+// that operation behind one tracked completion channel that later callers can
+// join instead of spawning detached waiter goroutines.
+func (node *NodeHost) CloseContext(ctx context.Context) error {
 	if node == nil {
 		return nil
 	}
+	if ctx == nil {
+		return fmt.Errorf("%w: shutdown context is unavailable", ErrNodeHost)
+	}
+	node.closeMu.Lock()
+	if node.closeDone == nil {
+		node.closeDone = make(chan struct{})
+	}
+	done := node.closeDone
+	node.closeMu.Unlock()
 	node.closeOnce.Do(func() {
-		if node.host == nil {
-			return
-		}
-		if node.gater != nil {
+		if node.host != nil && node.gater != nil {
 			node.gater.shutdown()
 			node.host.Network().StopNotify(node.gater)
 		}
-		node.closeErr = node.host.Close()
+		go node.closeHost(done)
 	})
+	select {
+	case <-done:
+		node.closeMu.Lock()
+		defer node.closeMu.Unlock()
+		return node.closeErr
+	default:
+	}
+	select {
+	case <-done:
+	case <-ctx.Done():
+		return fmt.Errorf("%w: close Host: %w", ErrNodeHost, ctx.Err())
+	}
+	node.closeMu.Lock()
+	defer node.closeMu.Unlock()
 	return node.closeErr
+}
+
+func (node *NodeHost) closeHost(done chan struct{}) {
+	var closeErr error
+	if node.host != nil {
+		closeErr = node.host.Close()
+	}
+	node.closeMu.Lock()
+	node.closeErr = closeErr
+	close(done)
+	node.closeMu.Unlock()
 }

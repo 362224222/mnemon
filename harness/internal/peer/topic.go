@@ -40,6 +40,7 @@ type Gossip struct {
 	refreshDone chan struct{}
 	refreshWG   sync.WaitGroup
 	closed      bool
+	closeErr    error
 }
 
 type peerRefresh struct {
@@ -606,39 +607,6 @@ func (gossip *Gossip) validator(session *TopicSession) pubsub.ValidatorEx {
 	}
 }
 
-func (gossip *Gossip) Close() error {
-	if gossip == nil {
-		return nil
-	}
-	gossip.mu.Lock()
-	if gossip.closed {
-		done := gossip.refreshDone
-		gossip.mu.Unlock()
-		if done != nil {
-			<-done
-		}
-		return nil
-	}
-	gossip.closed = true
-	sessions := gossip.sortedSessionsLocked()
-	var closeErrors []error
-	for _, session := range sessions {
-		session.gate.Lock()
-		if err := gossip.closeSessionLocked(session); err != nil {
-			closeErrors = append(closeErrors, err)
-		}
-		session.gate.Unlock()
-	}
-	gossip.mu.Unlock()
-	if gossip.cancel != nil {
-		gossip.cancel()
-	}
-	if gossip.refreshDone != nil {
-		<-gossip.refreshDone
-	}
-	return errors.Join(closeErrors...)
-}
-
 func (gossip *Gossip) sortedSessionsLocked() []*TopicSession {
 	sessions := make([]*TopicSession, 0, len(gossip.sessions))
 	for _, session := range gossip.sessions {
@@ -823,12 +791,14 @@ func (gossip *Gossip) closeSessionLocked(session *TopicSession) error {
 		}
 		var closeErrors []error
 		if session.topic != nil {
-			if err := session.topic.Close(); err != nil {
+			if err := session.topic.Close(); err != nil &&
+				!gossip.expectedShutdownCancellation(err) {
 				closeErrors = append(closeErrors, fmt.Errorf("close topic: %w", err))
 			}
 		}
 		if gossip.pubsub != nil {
-			if err := gossip.pubsub.UnregisterTopicValidator(session.name); err != nil {
+			if err := gossip.pubsub.UnregisterTopicValidator(session.name); err != nil &&
+				!gossip.expectedShutdownCancellation(err) {
 				closeErrors = append(closeErrors, fmt.Errorf("unregister validator: %w", err))
 			}
 		}

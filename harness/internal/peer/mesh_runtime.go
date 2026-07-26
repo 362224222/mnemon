@@ -42,8 +42,6 @@ type MeshRuntime struct {
 	enrollment  *meshEnrollmentPermit
 	revision    uint64
 	closed      bool
-	closeOnce   sync.Once
-	closeErr    error
 }
 
 // NewMeshRuntime starts from one coherent Store snapshot. The Host begins with
@@ -249,26 +247,6 @@ func (runtime *MeshRuntime) HasCurrentSession(channelID model.ChannelID) bool {
 	stable := !runtime.closed && runtime.gossip == gossip && runtime.revision == revision
 	runtime.mu.Unlock()
 	return stable && current
-}
-
-func (runtime *MeshRuntime) Close() error {
-	if runtime == nil {
-		return nil
-	}
-	runtime.closeOnce.Do(func() {
-		runtime.mu.Lock()
-		runtime.closed = true
-		gossip := runtime.gossip
-		nodeHost := runtime.nodeHost
-		runtime.mu.Unlock()
-		if gossip != nil {
-			runtime.closeErr = errors.Join(runtime.closeErr, gossip.Close())
-		}
-		if nodeHost != nil {
-			runtime.closeErr = errors.Join(runtime.closeErr, nodeHost.Close())
-		}
-	})
-	return runtime.closeErr
 }
 
 func projectMeshRuntime(mesh store.ChannelMeshAuthority) (NetworkAuthoritySnapshot,
