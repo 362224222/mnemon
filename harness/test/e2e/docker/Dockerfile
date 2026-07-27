@@ -7,16 +7,16 @@ ARG GIT_SHA=unknown
 ARG VERSION=r5-e2e
 WORKDIR /src
 COPY . .
-RUN test "$(awk '$1 == "go" { print $2; exit }' go.mod)" = "1.24.6"
-RUN CGO_ENABLED=0 go build -trimpath \
+RUN test "$(awk '$1 == "go" { print $2; exit }' harness/go.mod)" = "1.24.6"
+RUN CGO_ENABLED=0 go -C harness build -trimpath \
       -ldflags "-s -w -X main.version=${VERSION}" \
-      -o /out/mnemon-harness ./harness/cmd/mnemon-harness && \
-    CGO_ENABLED=0 go build -trimpath \
+      -o /out/mnemon-harness ./cmd/mnemon-harness && \
+    CGO_ENABLED=0 go -C harness build -trimpath \
       -ldflags "-s -w -X main.version=${VERSION}" \
-      -o /out/mnemond ./harness/cmd/mnemond && \
-    CGO_ENABLED=0 go build -trimpath \
+      -o /out/mnemond ./cmd/mnemond && \
+    CGO_ENABLED=0 go -C harness build -trimpath \
       -ldflags "-s -w" \
-      -o /out/r5-response-loss-proxy ./harness/test/e2e/faultplane
+      -o /out/r5-response-loss-proxy ./test/e2e/faultplane
 
 FROM ${GO_IMAGE} AS runtime
 ARG GIT_SHA=unknown

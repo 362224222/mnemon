@@ -68,11 +68,11 @@ run_unit() {
     require_command go
     require_command python3
     sh -n "$self_dir/docker_network.sh" "$self_dir/response_loss.sh" "$self_dir/self_test.sh"
-    go_version=$(awk '$1 == "go" { print $2; exit }' "$repo_root/go.mod")
+    go_version=$(awk '$1 == "go" { print $2; exit }' "$repo_root/harness/go.mod")
     (
         cd "$repo_root"
         env GOTOOLCHAIN="go$go_version" GOFLAGS=-mod=readonly \
-          go test ./harness/test/e2e/faultplane
+          go -C harness test ./test/e2e/faultplane
     )
     for schema in "$self_dir"/../schemas/fault-action.schema.json \
       "$self_dir"/../schemas/fault-proxy-receipt.schema.json; do

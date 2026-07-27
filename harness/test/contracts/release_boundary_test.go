@@ -20,6 +20,38 @@ func TestReleaseBoundary(t *testing.T) {
 	t.Parallel()
 	root := repositoryRoot(t)
 
+	t.Run("Go modules are independent", func(t *testing.T) {
+		rootModule := inspectModuleBoundary(t, root)
+		harnessModule := inspectModuleBoundary(t, filepath.Join(root, "harness"))
+		if rootModule.path != modulePath ||
+			harnessModule.path != modulePath+"/harness" {
+			t.Fatalf("module paths = (%q, %q)", rootModule.path, harnessModule.path)
+		}
+		if rootModule.goVersion == "" || rootModule.goVersion != harnessModule.goVersion {
+			t.Fatalf("module Go versions = (%q, %q)",
+				rootModule.goVersion, harnessModule.goVersion)
+		}
+		for _, name := range []string{"go.work", "go.work.sum"} {
+			if _, err := os.Lstat(filepath.Join(root, name)); !os.IsNotExist(err) {
+				t.Fatalf("repository workspace file %s exists: %v", name, err)
+			}
+		}
+		for _, packagePath := range rootModule.packages {
+			if packagePath == modulePath+"/harness" ||
+				strings.HasPrefix(packagePath, modulePath+"/harness/") {
+				t.Fatalf("root module depends on Harness package %q", packagePath)
+			}
+		}
+		for _, packagePath := range harnessModule.packages {
+			if packagePath == modulePath ||
+				strings.HasPrefix(packagePath, modulePath+"/") &&
+					packagePath != modulePath+"/harness" &&
+					!strings.HasPrefix(packagePath, modulePath+"/harness/") {
+				t.Fatalf("Harness module depends on root package %q", packagePath)
+			}
+		}
+	})
+
 	t.Run("root production has no Harness dependency", func(t *testing.T) {
 		for _, path := range []string{filepath.Join(root, "main.go"), filepath.Join(root, "cmd"), filepath.Join(root, "internal")} {
 			err := filepath.WalkDir(path, func(name string, entry os.DirEntry, walkErr error) error {
@@ -95,6 +127,43 @@ func TestReleaseBoundary(t *testing.T) {
 			t.Errorf("root help lost release commands:\n%s", output)
 		}
 	})
+}
+
+type moduleBoundary struct {
+	path, goVersion string
+	packages        []string
+}
+
+func inspectModuleBoundary(t *testing.T, root string) moduleBoundary {
+	t.Helper()
+	contents, err := os.ReadFile(filepath.Join(root, "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var boundary moduleBoundary
+	for _, line := range strings.Split(string(contents), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			continue
+		}
+		switch fields[0] {
+		case "module":
+			boundary.path = fields[1]
+		case "go":
+			boundary.goVersion = fields[1]
+		}
+	}
+	command := exec.Command("go", "list", "-deps", "-test", "./...")
+	command.Dir = root
+	command.Env = slices.DeleteFunc(os.Environ(),
+		func(value string) bool { return strings.HasPrefix(value, "GOWORK=") })
+	command.Env = append(command.Env, "GOWORK=off")
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("list packages in %s: %v\n%s", root, err, output)
+	}
+	boundary.packages = strings.Fields(string(output))
+	return boundary
 }
 
 func repositoryRoot(t *testing.T) string {

@@ -189,8 +189,8 @@ func TestCompanionRunnerMapsRealMnemondWriterActiveExitAndOfflineReceipt(t *test
 	defer cancelBuild()
 	buildOutput := newBoundedCompanionBuffer(64 << 10)
 	defer buildOutput.clear()
-	build := exec.CommandContext(buildContext, "go", "build", "-trimpath", "-ldflags",
-		"-X main.version=r5-test", "-o", mnemondExecutable, "./harness/cmd/mnemond")
+	build := exec.CommandContext(buildContext, "go", "-C", "harness", "build", "-trimpath",
+		"-ldflags", "-X main.version=r5-test", "-o", mnemondExecutable, "./cmd/mnemond")
 	build.Dir = companionTestRepositoryRoot(t)
 	build.Stdin = nil
 	build.Stdout = buildOutput

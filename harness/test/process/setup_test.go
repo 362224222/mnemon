@@ -136,9 +136,9 @@ func TestPublicSetupSerializesProcessesAndRecoversAKilledDaemon(t *testing.T) {
 	buildCtx, cancelBuild := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancelBuild()
 	setupProcessBuild(t, buildCtx, repository, harnessExecutable,
-		"./harness/cmd/mnemon-harness")
+		"./cmd/mnemon-harness")
 	setupProcessBuild(t, buildCtx, repository, mnemondExecutable,
-		"./harness/cmd/mnemond")
+		"./cmd/mnemond")
 	setupProcessFakeCodex(t, filepath.Join(bin, "codex"))
 	// A hostile host attachment proves the runtime environment is constructed
 	// closed and does not inherit Agent capability or unrelated host secrets.
@@ -318,9 +318,9 @@ func TestPublicSetupWaitsForExactCodexHookTrustThenConverges(t *testing.T) {
 	buildCtx, cancelBuild := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancelBuild()
 	setupProcessBuild(t, buildCtx, repository, harnessExecutable,
-		"./harness/cmd/mnemon-harness")
+		"./cmd/mnemon-harness")
 	setupProcessBuild(t, buildCtx, repository, mnemondExecutable,
-		"./harness/cmd/mnemond")
+		"./cmd/mnemond")
 	setupProcessFakeCodex(t, filepath.Join(bin, "codex"))
 	environment := setupProcessEnvironment(bin, workspace, root)
 	cleanup.offline = setupProcessOfflineProbe{executable: mnemondExecutable,
@@ -414,9 +414,9 @@ func TestPublicSetupUpgradesAnActiveRevisionUnderLifecycleLease(t *testing.T) {
 	buildCtx, cancelBuild := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancelBuild()
 	setupProcessBuild(t, buildCtx, repository, harnessExecutable,
-		"./harness/cmd/mnemon-harness")
+		"./cmd/mnemon-harness")
 	setupProcessBuild(t, buildCtx, repository, mnemondExecutable,
-		"./harness/cmd/mnemond")
+		"./cmd/mnemond")
 	setupProcessFakeCodex(t, filepath.Join(bin, "codex"))
 	environment := setupProcessEnvironment(bin, workspace, root)
 	cleanup.offline = setupProcessOfflineProbe{executable: mnemondExecutable,
@@ -795,7 +795,7 @@ func setupProcessBuild(t *testing.T, ctx context.Context, repository, output,
 ) {
 	t.Helper()
 	combined := newSetupProcessOutput(buildOutputMax)
-	command := exec.CommandContext(ctx, "go", "build", "-trimpath", "-o", output, packagePath)
+	command := exec.CommandContext(ctx, "go", "-C", "harness", "build", "-trimpath", "-o", output, packagePath)
 	command.Dir = repository
 	command.Stdout = combined
 	command.Stderr = combined

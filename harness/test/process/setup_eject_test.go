@@ -101,9 +101,9 @@ func setupProcessBuildHarnessCommands(t *testing.T, paths setupProcessPaths) {
 	buildCtx, cancelBuild := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancelBuild()
 	setupProcessBuild(t, buildCtx, paths.repository, paths.harnessExecutable,
-		"./harness/cmd/mnemon-harness")
+		"./cmd/mnemon-harness")
 	setupProcessBuild(t, buildCtx, paths.repository, paths.mnemondExecutable,
-		"./harness/cmd/mnemond")
+		"./cmd/mnemond")
 }
 
 func (fixture *setupEjectFixture) installCodex(t *testing.T) setupProcessReceipt {

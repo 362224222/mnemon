@@ -4,7 +4,7 @@
 
 ```sh
 go build -o mnemon .
-go build -o mnemon-harness ./harness/cmd/mnemon-harness
+go -C harness build -o ../mnemon-harness ./cmd/mnemon-harness
 ```
 
 ## 1. 安装 Agent Integration

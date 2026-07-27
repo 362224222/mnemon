@@ -26,6 +26,8 @@ mnemond
 !harness/cmd/mnemond/**
 bin
 vendor
+go.work
+go.work.sum
 __pycache__
 *.pyc
 *.pyo

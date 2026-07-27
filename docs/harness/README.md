@@ -37,7 +37,8 @@ Issues, GitHub PRs, or GitHub Actions as teamwork semantics.
 
 ## 3. Separation From Stable Mnemon
 
-`mnemon-harness` is built from `./harness/cmd/mnemon-harness`.
+`mnemon-harness` is built from the independent Harness module package
+`./cmd/mnemon-harness`.
 
 Stable `mnemon` behavior is unchanged unless a user explicitly opts into harness
 event emission or runs `mnemon-harness` directly.
@@ -48,7 +49,7 @@ Build both binaries:
 
 ```sh
 go build -o mnemon .
-go build -o mnemon-harness ./harness/cmd/mnemon-harness
+go -C harness build -o ../mnemon-harness ./cmd/mnemon-harness
 ```
 
 Install Agent Integration for a project:

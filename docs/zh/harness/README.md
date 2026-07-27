@@ -27,7 +27,8 @@ R5 Core beta 只支持 Codex 投影。`.codex/` 和 `.agents/` 等 host
 
 ## 3. 与稳定版 Mnemon 分离
 
-`mnemon-harness` 从 `./harness/cmd/mnemon-harness` 构建。
+`mnemon-harness` 从独立 Harness module 的 `./cmd/mnemon-harness` package
+构建。
 
 除非用户显式开启 harness event emission 或直接运行 `mnemon-harness`，稳定版
 `mnemon` 行为不变。
@@ -38,7 +39,7 @@ R5 Core beta 只支持 Codex 投影。`.codex/` 和 `.agents/` 等 host
 
 ```sh
 go build -o mnemon .
-go build -o mnemon-harness ./harness/cmd/mnemon-harness
+go -C harness build -o ../mnemon-harness ./cmd/mnemon-harness
 ```
 
 为项目安装 Agent Integration：

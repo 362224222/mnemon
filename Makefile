@@ -8,6 +8,8 @@ LDFLAGS     := -s -w -X github.com/mnemon-dev/mnemon/cmd.version=$(VERSION)
 HARNESS_LDFLAGS := -s -w -X main.version=$(VERSION)
 GO_VERSION   := $(shell awk '$$1 == "go" { print $$2; exit }' go.mod)
 PINNED_GO    := env GOTOOLCHAIN=go$(GO_VERSION) GOFLAGS=-mod=readonly go
+HARNESS_GO_VERSION := $(shell awk '$$1 == "go" { print $$2; exit }' harness/go.mod)
+HARNESS_GO   := env GOTOOLCHAIN=go$(HARNESS_GO_VERSION) GOFLAGS=-mod=readonly go -C harness
 GOBIN       := $(shell go env GOBIN)
 ifeq ($(GOBIN),)
   GOBIN     := $(shell go env GOPATH)/bin
@@ -25,13 +27,14 @@ endif
 
 deps: ## Download Go dependencies
 	go mod download
+	$(HARNESS_GO) mod download
 
 build: ## Build the mnemon binary
 	go build -ldflags "$(LDFLAGS)" -o $(BINARY) .
 
 harness-build: ## Build the experimental R5 harness binaries
-	$(PINNED_GO) build -ldflags "$(HARNESS_LDFLAGS)" -o mnemon-harness ./harness/cmd/mnemon-harness
-	$(PINNED_GO) build -ldflags "$(HARNESS_LDFLAGS)" -o mnemond ./harness/cmd/mnemond
+	$(HARNESS_GO) build -ldflags "$(HARNESS_LDFLAGS)" -o ../mnemon-harness ./cmd/mnemon-harness
+	$(HARNESS_GO) build -ldflags "$(HARNESS_LDFLAGS)" -o ../mnemond ./cmd/mnemond
 
 # ── Install / Uninstall ─────────────────────────────────────────────
 
@@ -57,44 +60,42 @@ vet: ## Run go vet static analysis
 	go vet ./...
 
 harness-validate: ## Validate R5 managed assets and action declarations
-	go test ./harness/internal/assets ./harness/internal/teamwork
+	$(HARNESS_GO) test ./internal/assets ./internal/teamwork
 
 harness-quality: ## Run pinned, non-mutating Harness quality gates
 	@base_ref="$${HARNESS_QUALITY_BASE_REF:-HEAD}"; \
-		$(PINNED_GO) run ./harness/tools/quality check --root . --base-ref "$$base_ref"
-	$(PINNED_GO) vet ./harness/...
-	$(PINNED_GO) test ./harness/tools/quality ./harness/internal/assets \
-		./harness/internal/model ./harness/internal/event ./harness/internal/teamwork \
-		./harness/test/contracts
+		$(HARNESS_GO) run ./tools/quality check --root .. --base-ref "$$base_ref"
+	$(HARNESS_GO) vet ./...
+	$(HARNESS_GO) test ./tools/quality ./internal/assets \
+		./internal/model ./internal/event ./internal/teamwork \
+		./test/contracts
 
 harness-verify: ## Build and verify the experimental R5 Harness
 	@set -eu; \
-		tmp="$$(mktemp -d)"; \
-		trap 'rm -rf "$$tmp"' EXIT; \
-		$(PINNED_GO) build -o "$$tmp/mnemon" .; \
-		$(PINNED_GO) build -o "$$tmp/mnemon-harness" ./harness/cmd/mnemon-harness; \
-		$(PINNED_GO) build -o "$$tmp/mnemond" ./harness/cmd/mnemond
+	tmp="$$(mktemp -d)"; \
+	trap 'rm -rf "$$tmp"' EXIT; \
+	$(PINNED_GO) build -o "$$tmp/mnemon" .; \
+	$(HARNESS_GO) build -o "$$tmp/mnemon-harness" ./cmd/mnemon-harness; \
+	$(HARNESS_GO) build -o "$$tmp/mnemond" ./cmd/mnemond
 	$(MAKE) harness-validate
 	$(MAKE) harness-quality
-	$(PINNED_GO) test ./harness/...
+	$(HARNESS_GO) test ./...
 
 core-contract: ## Validate the tracked R5 Core contract and evidence registry
-	$(PINNED_GO) test ./harness/tools/corecontract ./harness/test/contracts -count=1
+	$(HARNESS_GO) test ./tools/corecontract ./test/contracts -count=1
 
 core-release-closure: ## Require every tracked R5 Core MUST to have grounded evidence
-	R5_CORE_RELEASE_CLOSURE=1 $(PINNED_GO) test ./harness/test/contracts \
+	R5_CORE_RELEASE_CLOSURE=1 $(HARNESS_GO) test ./test/contracts \
 		-run '^TestCoreRequirementsReleaseClosure$$' -count=1
 
 test-unit: harness-validate ## Run the R5 Harness unit tests
-	$(PINNED_GO) test ./harness/cmd/... ./harness/internal/... ./harness/tools/... \
-		./harness/test/contracts
+	$(HARNESS_GO) test ./cmd/... ./internal/... ./tools/... ./test/contracts
 
 test-unit-race: harness-validate ## Run the R5 Harness unit tests under the race detector
-	$(PINNED_GO) test -race ./harness/cmd/... ./harness/internal/... ./harness/tools/... \
-		./harness/test/contracts
+	$(HARNESS_GO) test -race ./cmd/... ./internal/... ./tools/... ./test/contracts
 
 test-process: harness-build ## Run the R5 process integration tests
-	$(PINNED_GO) test ./harness/test/process
+	$(HARNESS_GO) test ./test/process
 
 test-e2e-smoke: ## Validate R5 E2E scripts, schemas, manifests, and boundaries
 	harness/test/e2e/runner/smoke_test.sh
@@ -138,7 +139,7 @@ test-live-codex-case: test-e2e-smoke ## Run one R5 Live Codex case with CASE=<na
 	harness/test/e2e/runner/run_live_codex.sh --case "$(CASE)"
 
 test-evidence: ## Validate one complete R5 evidence bundle with RUN=<run-id>
-	$(PINNED_GO) test ./harness/test/contracts \
+	$(HARNESS_GO) test ./test/contracts \
 		-run '^TestCoreRequirementsRegistry$$' -count=1
 	@test -n "$(RUN)" || { \
 		echo "error: RUN is required and must name a complete five-case bundle" >&2; \

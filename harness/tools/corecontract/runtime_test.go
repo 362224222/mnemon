@@ -126,6 +126,32 @@ func TestGateReportRejectsNonCanonicalCommand(t *testing.T) {
 	}
 }
 
+func TestHarnessGateCommandsUseIndependentModule(t *testing.T) {
+	tests := map[string][]string{
+		"contract": {"go", "-C", "harness", "test", "-json",
+			"./tools/corecontract", "./test/contracts", "-count=1"},
+		"harness-build": {"go", "-C", "harness", "build", "./cmd/..."},
+		"harness-unit": {"go", "-C", "harness", "test", "-json",
+			"./cmd/...", "./internal/...", "./tools/...", "./test/contracts", "-count=1"},
+		"harness-race": {"go", "-C", "harness", "test", "-json", "-race",
+			"./cmd/...", "./internal/...", "./tools/...", "./test/contracts", "-count=1"},
+		"fuzz-model": {"go", "-C", "harness", "test", "-json", "./internal/model",
+			"-run", "^$", "-fuzz", "^FuzzParseSignedPublication$", "-fuzztime=100x"},
+		"fuzz-peer": {"go", "-C", "harness", "test", "-json", "./internal/peer",
+			"-run", "^$", "-fuzz", "^FuzzReadChannelFrame$", "-fuzztime=100x"},
+		"fuzz-artifact": {"go", "-C", "harness", "test", "-json", "./internal/artifact",
+			"-run", "^$", "-fuzz", "^FuzzParseManifest$", "-fuzztime=100x"},
+		"process": {"go", "-C", "harness", "test", "-json",
+			"./test/process", "-count=1"},
+	}
+	for id, want := range tests {
+		rule, ok := gateStepRule(id)
+		if !ok || !slices.Equal(rule.argv, want) {
+			t.Errorf("%s argv = %v, want %v", id, rule.argv, want)
+		}
+	}
+}
+
 func TestGateReportRejectsSelfReportedFuzzCountAndFakeCommand(t *testing.T) {
 	if _, err := DecodeGateReport([]byte(
 		`{"schema_version":1,"steps":[{"fuzz_executions":100}]}`)); err == nil ||

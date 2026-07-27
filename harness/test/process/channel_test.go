@@ -85,9 +85,9 @@ func channelProcessBuildExecutables(t *testing.T, repository, root string) (stri
 	buildCtx, cancelBuild := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancelBuild()
 	setupProcessBuild(t, buildCtx, repository, harnessExecutable,
-		"./harness/cmd/mnemon-harness")
+		"./cmd/mnemon-harness")
 	setupProcessBuild(t, buildCtx, repository, mnemondExecutable,
-		"./harness/cmd/mnemond")
+		"./cmd/mnemond")
 	setupProcessFakeCodex(t, filepath.Join(bin, "codex"))
 	return harnessExecutable, mnemondExecutable, bin
 }
