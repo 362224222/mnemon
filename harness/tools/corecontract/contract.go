@@ -22,6 +22,16 @@ const (
 var (
 	requirementIDPattern = regexp.MustCompile(`^[A-Z]{2}-[0-9]{2}$`)
 	gateIDPattern        = regexp.MustCompile(`^G-[A-Z]+$`)
+	gitObjectPattern     = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	digestPattern        = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+	runIDPattern         = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$`)
+)
+
+const GateReportSchemaVersion = 1
+
+const (
+	RequirementPending  = "pending"
+	RequirementVerified = "verified"
 )
 
 type Contract struct {
@@ -40,6 +50,108 @@ type Requirement struct {
 type Gate struct {
 	ID      string
 	Closure string
+}
+
+type GateReport struct {
+	SchemaVersion int             `json:"schema_version"`
+	RunID         string          `json:"run_id"`
+	StartedAt     string          `json:"started_at"`
+	FinishedAt    string          `json:"finished_at"`
+	Source        GateSource      `json:"source"`
+	Inputs        GateInputs      `json:"inputs"`
+	Steps         []GateStep      `json:"steps"`
+	Bundles       []GateBundleRef `json:"bundles"`
+}
+
+type GateSource struct {
+	Commit        string `json:"commit"`
+	Tree          string `json:"tree"`
+	CleanAtStart  bool   `json:"clean_at_start"`
+	CleanAtFinish bool   `json:"clean_at_finish"`
+}
+
+type GateInputs struct {
+	ContractSHA256     string `json:"contract_sha256"`
+	RequirementsSHA256 string `json:"requirements_sha256"`
+}
+
+type GateStep struct {
+	ID         string     `json:"id"`
+	Gate       string     `json:"gate"`
+	Kind       string     `json:"kind"`
+	Argv       []string   `json:"argv"`
+	StartedAt  string     `json:"started_at"`
+	FinishedAt string     `json:"finished_at"`
+	ExitCode   int        `json:"exit_code"`
+	Output     GateOutput `json:"output"`
+}
+
+type GateOutput struct {
+	Path   string `json:"path"`
+	SHA256 string `json:"sha256"`
+}
+
+type GateBundleRef struct {
+	Runtime        string `json:"runtime"`
+	RunID          string `json:"run_id"`
+	ReportPath     string `json:"report_path"`
+	ReportSHA256   string `json:"report_sha256"`
+	ManifestPath   string `json:"manifest_path"`
+	ManifestSHA256 string `json:"manifest_sha256"`
+}
+
+type Closure struct {
+	Requirements []RequirementResult
+	Gates        []GateResult
+}
+
+type RequirementResult struct {
+	ID, Gate, Status string
+	Proofs           []string
+	Reason           string
+}
+
+type GateResult struct {
+	ID, Status, Reason string
+}
+
+type stepRule struct {
+	id, gate, kind string
+	argv           []string
+}
+
+var gateStepRules = []stepRule{
+	{"contract", "G-CONTRACT", "go-test", []string{"go", "test", "-json",
+		"./harness/tools/corecontract", "./harness/test/contracts", "-count=1"}},
+	{"quality", "G-CONTRACT", "command", []string{"make", "harness-quality"}},
+	{"root-build", "G-ROOT", "command", []string{"go", "build", "./..."}},
+	{"root-unit", "G-ROOT", "go-test", []string{"go", "test", "-json",
+		"./cmd/...", "./internal/...", "-count=1"}},
+	{"legacy-e2e", "G-ROOT", "command", []string{"bash", "scripts/e2e_test.sh"}},
+	{"harness-build", "G-UNIT", "command", []string{"go", "build", "./harness/cmd/..."}},
+	{"harness-unit", "G-UNIT", "go-test", []string{"go", "test", "-json",
+		"./harness/cmd/...", "./harness/internal/...", "./harness/tools/...",
+		"./harness/test/contracts", "-count=1"}},
+	{"harness-race", "G-UNIT", "go-test", []string{"go", "test", "-json", "-race",
+		"./harness/cmd/...", "./harness/internal/...", "./harness/tools/...",
+		"./harness/test/contracts", "-count=1"}},
+	{"fuzz-model", "G-UNIT", "go-fuzz", []string{"go", "test", "-json",
+		"./harness/internal/model", "-run", "^$", "-fuzz",
+		"^FuzzParseSignedPublication$", "-fuzztime=100x"}},
+	{"fuzz-peer", "G-UNIT", "go-fuzz", []string{"go", "test", "-json",
+		"./harness/internal/peer", "-run", "^$", "-fuzz",
+		"^FuzzReadChannelFrame$", "-fuzztime=100x"}},
+	{"fuzz-artifact", "G-UNIT", "go-fuzz", []string{"go", "test", "-json",
+		"./harness/internal/artifact", "-run", "^$", "-fuzz",
+		"^FuzzParseManifest$", "-fuzztime=100x"}},
+	{"process", "G-PROCESS", "go-test", []string{"go", "test", "-json",
+		"./harness/test/process", "-count=1"}},
+	{"docker", "G-DOCKER", "command",
+		[]string{"harness/test/e2e/runner/run_docker.sh"}},
+	{"evidence-hermetic", "G-EVIDENCE", "evidence", nil},
+	{"live", "G-LIVE", "command",
+		[]string{"harness/test/e2e/runner/run_live_codex.sh"}},
+	{"evidence-live", "G-LIVE", "evidence", nil},
 }
 
 type contractSections struct {
@@ -178,6 +290,14 @@ func ValidateOwnerDirectories(root string, contract Contract) error {
 		}
 	}
 	return nil
+}
+
+func fileDigest(filename string) (string, error) {
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		return "", err
+	}
+	return bytesDigest(data), nil
 }
 
 func parseRequirementRow(line string) (Requirement, bool, error) {

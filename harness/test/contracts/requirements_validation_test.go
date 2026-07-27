@@ -9,16 +9,11 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/tools/corecontract"
 )
 
-func TestCoreReleaseClosureRejectsUnresolvedMust(t *testing.T) {
+func TestCoreReleaseClosureRequiresRuntimeReport(t *testing.T) {
 	root, contract, registry := loadCoreRequirements(t)
-	err := coreReleaseClosureError(root, contract, registry)
-	if err == nil || !strings.Contains(err.Error(), "42 unresolved MUST") {
-		t.Fatalf("release closure error = %v", err)
-	}
-	registry.Requirements[0].AcceptedCommits = []string{strings.Repeat("a", 40)}
-	err = coreReleaseClosureError(root, contract, registry)
-	if err == nil || !strings.Contains(err.Error(), "ungrounded behavioral evidence") {
-		t.Fatalf("release closure ungrounded evidence error = %v", err)
+	err := coreReleaseClosureError(root, contract, registry, nil)
+	if err == nil || !strings.Contains(err.Error(), "requires a runtime gate report") {
+		t.Fatalf("release closure missing-report error = %v", err)
 	}
 }
 
@@ -59,16 +54,18 @@ func TestCoreRegistryRejectsUnknownIDAndUngroundedEvidence(t *testing.T) {
 	}
 
 	_, _, registry = loadCoreRequirements(t)
-	registry.Requirements[0].AcceptedCommits = []string{strings.Repeat("a", 40)}
+	registry.Requirements[0].TestSymbols = []string{
+		"harness/test/contracts/release_boundary_test.go::TestReleaseBoundary",
+	}
 	if err := corecontract.ValidateRegistry(contract, registry); err == nil ||
-		!strings.Contains(err.Error(), "ungrounded behavioral evidence") {
-		t.Fatalf("ungrounded evidence error = %v", err)
+		!strings.Contains(err.Error(), "requires a Hermetic scenario key") {
+		t.Fatalf("incomplete evidence mapping error = %v", err)
 	}
 }
 
 func TestCoreRegistryRejectsManualVerifiedClaim(t *testing.T) {
-	document := []byte(`{"schema_version":2,"requirements":[{"id":"SC-01",` +
-		`"status":"verified","accepted_commits":[],"test_symbols":[],"scenario_keys":[]}]}`)
+	document := []byte(`{"schema_version":3,"requirements":[{"id":"SC-01",` +
+		`"status":"verified","test_symbols":[],"scenario_keys":[],"live_scenario_keys":[]}]}`)
 	if _, err := corecontract.DecodeRegistry(document); err == nil ||
 		!strings.Contains(err.Error(), "unknown field") {
 		t.Fatalf("manual verified claim error = %v", err)

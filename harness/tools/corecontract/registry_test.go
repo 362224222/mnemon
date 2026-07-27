@@ -5,30 +5,32 @@ import (
 	"testing"
 )
 
-func TestRegistryDerivesUnresolvedAndRejectsManualStatus(t *testing.T) {
+func TestRegistryIsMappingOnlyAndRejectsManualStatus(t *testing.T) {
 	contract := oneRequirementContract("G-PROCESS")
 	registry := oneRequirementRegistry()
 	if err := ValidateRegistry(contract, registry); err != nil {
 		t.Fatal(err)
 	}
-	if unresolved := UnresolvedMust(contract, registry); len(unresolved) != 1 ||
-		unresolved[0] != "SC-01" {
-		t.Fatalf("unresolved = %v, want [SC-01]", unresolved)
-	}
-	document := []byte(`{"schema_version":2,"requirements":[{"id":"SC-01","status":"verified",` +
-		`"accepted_commits":[],"test_symbols":[],"scenario_keys":[]}]}`)
+	document := []byte(`{"schema_version":3,"requirements":[{"id":"SC-01","status":"verified",` +
+		`"test_symbols":[],"scenario_keys":[],"live_scenario_keys":[]}]}`)
 	if _, err := DecodeRegistry(document); err == nil || !strings.Contains(err.Error(), "unknown field") {
 		t.Fatalf("manual status error = %v", err)
 	}
+	document = []byte(`{"schema_version":3,"requirements":[{"id":"SC-01",` +
+		`"accepted_commits":[],"test_symbols":[],"scenario_keys":[],"live_scenario_keys":[]}]}`)
+	if _, err := DecodeRegistry(document); err == nil ||
+		!strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("accepted commit error = %v", err)
+	}
 }
 
-func TestRegistryRejectsUngroundedEvidenceAndUnknownID(t *testing.T) {
-	contract := oneRequirementContract("G-PROCESS")
+func TestRegistryRejectsIncompleteScenarioMappingAndUnknownID(t *testing.T) {
+	contract := oneRequirementContract("G-DOCKER")
 	registry := oneRequirementRegistry()
-	registry.Requirements[0].AcceptedCommits = []string{strings.Repeat("a", 40)}
+	registry.Requirements[0].TestSymbols = []string{"proof_test.go::TestProof"}
 	if err := ValidateRegistry(contract, registry); err == nil ||
-		!strings.Contains(err.Error(), "ungrounded behavioral evidence") {
-		t.Fatalf("ungrounded evidence error = %v", err)
+		!strings.Contains(err.Error(), "requires a Hermetic scenario key") {
+		t.Fatalf("incomplete scenario mapping error = %v", err)
 	}
 	registry = oneRequirementRegistry()
 	registry.Requirements[0].ID = "SC-99"
@@ -62,7 +64,8 @@ func oneRequirementRegistry() Registry {
 	return Registry{
 		SchemaVersion: RegistrySchemaVersion,
 		Requirements: []EvidenceRecord{{
-			ID: "SC-01", AcceptedCommits: []string{}, TestSymbols: []string{}, ScenarioKeys: []string{},
+			ID: "SC-01", TestSymbols: []string{}, ScenarioKeys: []string{},
+			LiveScenarioKeys: []string{},
 		}},
 	}
 }

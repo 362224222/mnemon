@@ -41,7 +41,8 @@ func testCoreRegistry() requirementsManifest {
 	return requirementsManifest{
 		SchemaVersion: corecontract.RegistrySchemaVersion,
 		Requirements: []requirementRecord{{
-			ID: "SC-01", AcceptedCommits: []string{}, TestSymbols: []string{}, ScenarioKeys: []string{},
+			ID: "SC-01", TestSymbols: []string{}, ScenarioKeys: []string{},
+			LiveScenarioKeys: []string{},
 		}},
 	}
 }

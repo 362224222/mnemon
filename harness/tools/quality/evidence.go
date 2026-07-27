@@ -57,7 +57,7 @@ func automaticArchitectureRule(rule string) bool {
 func validateRequirementEvidence(root string, contract corecontract.Contract,
 	requirements requirementsManifest,
 ) error {
-	return corecontract.ValidateBehavioralEvidence(root, contract, requirements)
+	return corecontract.ValidateBindings(root, contract, requirements)
 }
 
 func pathEvidenceExists(root, relative, symbol string) error {

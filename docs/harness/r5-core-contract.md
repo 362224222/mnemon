@@ -153,17 +153,20 @@ primary closed gate and the lowest evidence layers that can prove the
 behavior. Supporting evidence may run in an earlier gate, but it does not
 create another requirement owner.
 
-Exact accepted commits, test symbols, scenario keys, and evidence identifiers
-are maintained in `harness/test/contracts/requirements.json`. That registry is
-an evidence projection of these clauses, not a second requirements authority.
-Its status is derived from validated evidence. A requirement is release-ready
-only when its registry status is `verified`.
+Exact test symbols and Hermetic or Live scenario keys are maintained in
+`harness/test/contracts/requirements.json`. That registry is an evidence
+projection of these clauses, not a second requirements authority. Requirement
+status is derived from exact passing events in the current gate run and from
+manifest-bound scenario evidence; it is not stored as a registry claim. A
+requirement is release-ready only when that runtime-derived status is
+`verified`.
 
 A scenario key has the exact form
 `<scenario>/<fault|system|task|experience>/<anchor>` and binds directly to that
 named anchor in the tracked canonical scenario manifest. The anchor must exist
-both in the current tree and in at least one accepted commit; a free-form key
-or generated marker is not evidence.
+in the current tree and in the matching manifest-bound runtime bundle. A
+manifest declaration, free-form key, generated marker, or historical commit
+alone is not evidence.
 
 | ID | Level | Canonical clause | Owner | Evidence |
 |---|---|---|---|---|

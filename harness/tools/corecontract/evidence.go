@@ -1,227 +1,340 @@
 package corecontract
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"go/ast"
-	"go/parser"
-	"go/token"
-	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
-const scenarioDirectory = "harness/test/e2e/scenarios"
-
-type scenarioManifest struct {
+type runtimeSuiteReport struct {
 	SchemaVersion int    `json:"schema_version"`
-	Name          string `json:"name"`
-	Faults        []struct {
-		ID string `json:"id"`
-	} `json:"faults"`
-	Oracles struct {
-		System []string `json:"system"`
-		Task   []struct {
-			ID string `json:"id"`
+	RunID         string `json:"run_id"`
+	BundleKind    string `json:"bundle_kind"`
+	Runtime       string `json:"runtime"`
+	Status        string `json:"status"`
+	GeneratedAt   string `json:"generated_at"`
+	GitSHA        string `json:"git_sha"`
+	Image         struct {
+		Reference      string  `json:"reference"`
+		Digest         string  `json:"digest"`
+		Revision       string  `json:"revision"`
+		SourceTree     string  `json:"source_tree"`
+		CodexVersion   *string `json:"codex_version"`
+		CodexIntegrity *string `json:"codex_integrity"`
+	} `json:"image"`
+	CaseNames         []string           `json:"case_names"`
+	Cases             []runtimeSuiteCase `json:"cases"`
+	PairedHermeticRun *string            `json:"paired_hermetic_run"`
+}
+
+type runtimeSuiteCase struct {
+	Name                   string `json:"name"`
+	Path                   string `json:"path"`
+	RunID                  string `json:"run_id"`
+	Status                 string `json:"status"`
+	ExitCode               int    `json:"exit_code"`
+	TaskOraclesPassed      bool   `json:"task_oracles_passed"`
+	SystemInvariantsPassed bool   `json:"system_invariants_passed"`
+}
+
+type runtimeManifest struct {
+	SchemaVersion int                    `json:"schema_version"`
+	RunID         string                 `json:"run_id"`
+	Files         []runtimeManifestEntry `json:"files"`
+}
+
+type runtimeManifestEntry struct {
+	Path   string `json:"path"`
+	SHA256 string `json:"sha256"`
+	Bytes  int64  `json:"bytes"`
+}
+
+type runtimeCaseReport struct {
+	SchemaVersion  int             `json:"schema_version"`
+	RunID          string          `json:"run_id"`
+	Scenario       string          `json:"scenario"`
+	Runtime        string          `json:"runtime"`
+	Status         string          `json:"status"`
+	GitSHA         string          `json:"git_sha"`
+	ImageDigest    string          `json:"image_digest"`
+	ScenarioDigest string          `json:"scenario_digest"`
+	Versions       json.RawMessage `json:"versions"`
+	Counts         json.RawMessage `json:"counts"`
+	Commands       json.RawMessage `json:"commands"`
+	Assertions     []struct {
+		ID       string   `json:"id"`
+		Category string   `json:"category"`
+		Required bool     `json:"required"`
+		Passed   bool     `json:"passed"`
+		Evidence []string `json:"evidence"`
+		Message  string   `json:"message"`
+	} `json:"assertions"`
+	Faults  []json.RawMessage `json:"faults"`
+	Latency json.RawMessage   `json:"latency"`
+	Oracle  struct {
+		System struct {
+			Passed bool `json:"passed"`
+		} `json:"system"`
+		Task struct {
+			Passed  bool `json:"passed"`
+			Results []struct {
+				ID       string   `json:"id"`
+				Passed   bool     `json:"passed"`
+				ExitCode int      `json:"exit_code"`
+				Evidence []string `json:"evidence"`
+			} `json:"results"`
 		} `json:"task"`
-		Experience []string `json:"experience"`
-	} `json:"oracles"`
+		Experience struct {
+			Passed bool `json:"passed"`
+		} `json:"experience"`
+	} `json:"oracle"`
 }
 
-func ValidateBehavioralEvidence(root string, contract Contract, registry Registry) error {
-	if err := ValidateRegistry(contract, registry); err != nil {
-		return err
+type loadedRuntimeBundle struct {
+	root      string
+	suite     runtimeSuiteReport
+	files     map[string]runtimeManifestEntry
+	casePath  string
+	caseRunID string
+}
+
+const canonicalScenarioName = "payment-review"
+
+func validateRuntimeBundles(root string, report GateReport) error {
+	loaded := make(map[string]loadedRuntimeBundle, len(report.Bundles))
+	for _, ref := range report.Bundles {
+		bundle, err := loadRuntimeBundle(root, report, ref)
+		if err != nil {
+			return fmt.Errorf("%s bundle: %w", ref.Runtime, err)
+		}
+		loaded[ref.Runtime] = bundle
 	}
-	if err := ValidateOwnerDirectories(root, contract); err != nil {
-		return err
+	live, hasLive := loaded["codex"]
+	if !hasLive {
+		return nil
 	}
-	for _, record := range registry.Requirements {
-		if len(record.AcceptedCommits) == 0 {
-			continue
-		}
-		for _, commit := range record.AcceptedCommits {
-			if err := validateAcceptedCommit(root, record.ID, commit); err != nil {
-				return err
-			}
-		}
-		for _, reference := range record.TestSymbols {
-			pathValue, symbol, _ := ParseTestSymbol(reference)
-			if err := validateCurrentTestSymbol(root, record.ID, pathValue, symbol); err != nil {
-				return err
-			}
-			if err := validateCommittedTestSymbol(root, record, pathValue, symbol); err != nil {
-				return err
-			}
-		}
-		for _, value := range record.ScenarioKeys {
-			key, _ := ParseScenarioKey(value)
-			if err := validateScenarioBinding(root, record, key); err != nil {
-				return err
-			}
-		}
+	hermetic, hasHermetic := loaded["scripted"]
+	if !hasHermetic || live.suite.PairedHermeticRun == nil ||
+		*live.suite.PairedHermeticRun != hermetic.suite.RunID ||
+		live.suite.Image.Digest != hermetic.suite.Image.Digest {
+		return fmt.Errorf("Live bundle lacks an exact Hermetic commit/tree/image pair")
 	}
 	return nil
 }
 
-func validateAcceptedCommit(root, requirementID, commit string) error {
-	if _, err := runGit(root, "cat-file", "-e", commit+"^{commit}"); err != nil {
-		return fmt.Errorf("requirement %s accepted commit %s does not exist: %w",
-			requirementID, commit, err)
-	}
-	if _, err := runGit(root, "merge-base", "--is-ancestor", commit, "HEAD"); err != nil {
-		return fmt.Errorf("requirement %s accepted commit %s is not an ancestor of HEAD",
-			requirementID, commit)
-	}
-	return nil
-}
-
-func validateCurrentTestSymbol(root, requirementID, relative, symbol string) error {
-	filename := filepath.Join(root, filepath.FromSlash(relative))
-	parsed, err := parser.ParseFile(token.NewFileSet(), filename, nil, parser.SkipObjectResolution)
+func loadRuntimeBundle(root string, report GateReport,
+	ref GateBundleRef,
+) (loadedRuntimeBundle, error) {
+	reportData, err := readRuntimeFile(root, ref.ReportPath, ref.ReportSHA256)
 	if err != nil {
-		return fmt.Errorf("requirement %s test evidence %s::%s: %w",
-			requirementID, relative, symbol, err)
+		return loadedRuntimeBundle{}, err
 	}
-	if !declaresTopLevelTest(parsed, symbol) {
-		return fmt.Errorf("requirement %s test evidence %s does not declare %s",
-			requirementID, relative, symbol)
+	var suite runtimeSuiteReport
+	if err := decodeStrictJSON(reportData, &suite); err != nil {
+		return loadedRuntimeBundle{}, fmt.Errorf("decode suite report: %w", err)
 	}
-	return nil
-}
-
-func validateCommittedTestSymbol(root string, record EvidenceRecord, relative, symbol string) error {
-	for _, commit := range record.AcceptedCommits {
-		data, err := runGit(root, "show", commit+":"+relative)
-		if err != nil {
-			continue
-		}
-		parsed, err := parser.ParseFile(token.NewFileSet(), relative, data, parser.SkipObjectResolution)
-		if err != nil {
-			return fmt.Errorf("requirement %s parse accepted test %s at %s: %w",
-				record.ID, relative, commit, err)
-		}
-		if declaresTopLevelTest(parsed, symbol) {
-			return nil
-		}
+	if !validRuntimeSuite(suite, ref, report.Source) {
+		return loadedRuntimeBundle{}, fmt.Errorf("suite report identity or verdict is invalid")
 	}
-	return fmt.Errorf("requirement %s test evidence %s::%s is absent from every accepted commit",
-		record.ID, relative, symbol)
-}
-
-func declaresTopLevelTest(file *ast.File, symbol string) bool {
-	for _, declaration := range file.Decls {
-		function, ok := declaration.(*ast.FuncDecl)
-		if ok && function.Recv == nil && function.Name.Name == symbol {
-			return true
-		}
-	}
-	return false
-}
-
-func validateScenarioBinding(root string, record EvidenceRecord, key ScenarioKey) error {
-	relative := filepath.ToSlash(filepath.Join(
-		scenarioDirectory, key.Scenario, "manifest.json"))
-	current, err := readScenarioManifest(filepath.Join(root, filepath.FromSlash(relative)))
+	manifestData, err := readRuntimeFile(root, ref.ManifestPath, ref.ManifestSHA256)
 	if err != nil {
-		return fmt.Errorf("requirement %s scenario evidence %s: %w", record.ID,
-			formatScenarioKey(key), err)
+		return loadedRuntimeBundle{}, err
 	}
-	if err := validateScenarioAnchor(current, key); err != nil {
-		return fmt.Errorf("requirement %s scenario evidence %s: %w", record.ID,
-			formatScenarioKey(key), err)
+	var manifest runtimeManifest
+	if err := decodeStrictJSON(manifestData, &manifest); err != nil {
+		return loadedRuntimeBundle{}, fmt.Errorf("decode evidence manifest: %w", err)
 	}
-	for _, commit := range record.AcceptedCommits {
-		data, err := runGit(root, "show", commit+":"+relative)
-		if err != nil {
-			continue
+	if manifest.SchemaVersion != 1 || manifest.RunID != ref.RunID || manifest.Files == nil {
+		return loadedRuntimeBundle{}, fmt.Errorf("evidence manifest identity is invalid")
+	}
+	bundleRoot := filepath.Dir(filepath.Join(root, filepath.FromSlash(ref.ManifestPath)))
+	files := make(map[string]runtimeManifestEntry, len(manifest.Files))
+	previous := ""
+	for _, file := range manifest.Files {
+		if !validManifestEntry(file, previous) {
+			return loadedRuntimeBundle{}, fmt.Errorf("invalid evidence manifest entry %q", file.Path)
 		}
-		manifest, err := decodeScenarioManifest(data)
-		if err == nil && validateScenarioAnchor(manifest, key) == nil {
-			return nil
-		}
+		previous = file.Path
+		files[file.Path] = file
 	}
-	return fmt.Errorf("requirement %s scenario evidence %s is absent from every accepted commit",
-		record.ID, formatScenarioKey(key))
+	relativeReport, err := filepath.Rel(bundleRoot,
+		filepath.Join(root, filepath.FromSlash(ref.ReportPath)))
+	if err != nil || strings.HasPrefix(relativeReport, "..") {
+		return loadedRuntimeBundle{}, fmt.Errorf("suite report is outside its bundle")
+	}
+	loaded := loadedRuntimeBundle{root: bundleRoot, suite: suite, files: files}
+	if err := loaded.verifyFile(filepath.ToSlash(relativeReport)); err != nil {
+		return loadedRuntimeBundle{}, fmt.Errorf("suite report manifest binding: %w", err)
+	}
+	if len(suite.Cases) != 1 ||
+		!validRuntimeCase(suite.Cases[0], canonicalScenarioName, suite.RunID) {
+		return loadedRuntimeBundle{}, fmt.Errorf("suite must contain only %s",
+			canonicalScenarioName)
+	}
+	item := suite.Cases[0]
+	loaded.casePath, loaded.caseRunID = item.Path, item.RunID
+	return loaded, nil
 }
 
-func readScenarioManifest(filename string) (scenarioManifest, error) {
-	data, err := os.ReadFile(filename)
+func validRuntimeSuite(suite runtimeSuiteReport, ref GateBundleRef, source GateSource) bool {
+	return suite.SchemaVersion == 1 && suite.RunID == ref.RunID &&
+		suite.Runtime == ref.Runtime && suite.Status == "passed" &&
+		suite.GitSHA == source.Commit && suite.Image.Revision == source.Commit &&
+		suite.Image.SourceTree == source.Tree && digestPattern.MatchString(suite.Image.Digest) &&
+		slices.Equal(suite.CaseNames, []string{canonicalScenarioName}) &&
+		(ref.Runtime == "scripted") == (suite.PairedHermeticRun == nil)
+}
+
+func validManifestEntry(file runtimeManifestEntry, previous string) bool {
+	return validateEvidencePath(file.Path) == nil && digestPattern.MatchString(file.SHA256) &&
+		file.Bytes >= 0 && (previous == "" || file.Path > previous)
+}
+
+func validRuntimeCase(item runtimeSuiteCase, name, runID string) bool {
+	return item.Name == name && item.Status == "passed" && item.RunID == runID+"-"+name &&
+		item.Path == "cases/"+name && item.ExitCode == 0 && item.TaskOraclesPassed &&
+		item.SystemInvariantsPassed && validateEvidencePath(item.Path) == nil
+}
+
+func validateScenarioRuntimeEvidence(root string, report GateReport, key ScenarioKey,
+	runtimeName string,
+) (bool, string, error) {
+	var ref *GateBundleRef
+	for index := range report.Bundles {
+		if report.Bundles[index].Runtime == runtimeName {
+			ref = &report.Bundles[index]
+			break
+		}
+	}
+	if ref == nil {
+		return false, runtimeName + " evidence bundle was not attached", nil
+	}
+	bundle, err := loadRuntimeBundle(root, report, *ref)
 	if err != nil {
-		return scenarioManifest{}, fmt.Errorf("read canonical scenario manifest: %w", err)
+		return false, "", err
 	}
-	return decodeScenarioManifest(data)
-}
-
-func decodeScenarioManifest(data []byte) (scenarioManifest, error) {
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	var manifest scenarioManifest
-	if err := decoder.Decode(&manifest); err != nil {
-		return scenarioManifest{}, fmt.Errorf("decode canonical scenario manifest: %w", err)
+	if key.Scenario != canonicalScenarioName {
+		return false, "scenario is absent from the runtime bundle: " + key.Scenario, nil
 	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		return scenarioManifest{}, fmt.Errorf("decode canonical scenario manifest trailing data: %v", err)
+	casePath := bundle.casePath
+	caseRelative := filepath.ToSlash(filepath.Join(casePath, "report.json"))
+	data, err := bundle.readVerifiedFile(caseRelative)
+	if err != nil {
+		return false, "", fmt.Errorf("scenario report: %w", err)
 	}
-	if manifest.SchemaVersion != 1 {
-		return scenarioManifest{}, fmt.Errorf("canonical scenario schema_version = %d, want 1",
-			manifest.SchemaVersion)
+	var caseReport runtimeCaseReport
+	if err := decodeStrictJSON(data, &caseReport); err != nil {
+		return false, "", fmt.Errorf("decode scenario report: %w", err)
 	}
-	if !scenarioNamePattern.MatchString(manifest.Name) {
-		return scenarioManifest{}, fmt.Errorf("canonical scenario name %q is malformed", manifest.Name)
+	if caseReport.SchemaVersion != 1 || caseReport.RunID != bundle.caseRunID ||
+		caseReport.Scenario != key.Scenario ||
+		caseReport.Runtime != runtimeName || caseReport.Status != "passed" ||
+		caseReport.GitSHA != report.Source.Commit ||
+		caseReport.ImageDigest != bundle.suite.Image.Digest {
+		return false, "scenario runtime identity or verdict is invalid", nil
 	}
-	return manifest, nil
-}
-
-func validateScenarioAnchor(manifest scenarioManifest, key ScenarioKey) error {
-	if manifest.Name != key.Scenario {
-		return fmt.Errorf("canonical scenario name = %q, want %q", manifest.Name, key.Scenario)
-	}
-	var anchors []string
 	switch key.Kind {
-	case "fault":
-		anchors = make([]string, len(manifest.Faults))
-		for index, fault := range manifest.Faults {
-			anchors[index] = fault.ID
-		}
-	case "system":
-		anchors = manifest.Oracles.System
+	case "system", "experience":
+		return bundle.validateAssertion(casePath, caseReport, key.Anchor, key.Kind)
 	case "task":
-		anchors = make([]string, len(manifest.Oracles.Task))
-		for index, task := range manifest.Oracles.Task {
-			anchors[index] = task.ID
+		return bundle.validateTask(casePath, caseReport, key.Anchor)
+	case "fault":
+		return bundle.validateFault(casePath, caseReport, key.Anchor)
+	default:
+		return false, "", fmt.Errorf("unsupported scenario anchor kind %s", key.Kind)
+	}
+}
+
+func (bundle loadedRuntimeBundle) validateAssertion(casePath string,
+	report runtimeCaseReport, id, category string,
+) (bool, string, error) {
+	for _, assertion := range report.Assertions {
+		if assertion.ID != id {
+			continue
 		}
-	case "experience":
-		anchors = manifest.Oracles.Experience
+		if assertion.Category != category || !assertion.Required || !assertion.Passed ||
+			len(assertion.Evidence) == 0 {
+			return false, "scenario assertion is not required, passing, and evidenced: " + id, nil
+		}
+		if err := bundle.verifyEvidenceRefs(casePath, assertion.Evidence); err != nil {
+			return false, "", err
+		}
+		return true, "", nil
 	}
-	count := 0
-	for _, anchor := range anchors {
-		if anchor == key.Anchor {
-			count++
+	return false, "scenario assertion is absent: " + id, nil
+}
+
+func (bundle loadedRuntimeBundle) validateTask(casePath string, report runtimeCaseReport,
+	id string,
+) (bool, string, error) {
+	ok, reason, err := bundle.validateAssertion(casePath, report, id, "task")
+	if err != nil || !ok {
+		return ok, reason, err
+	}
+	for _, result := range report.Oracle.Task.Results {
+		if result.ID == id && result.Passed && result.ExitCode == 0 && len(result.Evidence) > 0 {
+			if err := bundle.verifyEvidenceRefs(casePath, result.Evidence); err != nil {
+				return false, "", err
+			}
+			return true, "", nil
 		}
 	}
-	if count == 0 {
-		return fmt.Errorf("canonical scenario does not declare %s anchor %q",
-			key.Kind, key.Anchor)
-	}
-	if count > 1 {
-		return fmt.Errorf("canonical scenario repeats %s anchor %q", key.Kind, key.Anchor)
+	return false, "task oracle is absent or failed: " + id, nil
+}
+
+func (bundle loadedRuntimeBundle) verifyEvidenceRefs(casePath string, refs []string) error {
+	for _, reference := range refs {
+		if err := validateEvidencePath(reference); err != nil {
+			return err
+		}
+		if err := bundle.verifyFile(
+			filepath.ToSlash(filepath.Join(casePath, reference))); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
-func formatScenarioKey(key ScenarioKey) string {
-	return strings.Join([]string{key.Scenario, key.Kind, key.Anchor}, "/")
+func (bundle loadedRuntimeBundle) verifyFile(relative string) error {
+	_, err := bundle.readVerifiedFile(relative)
+	return err
 }
 
-func runGit(root string, arguments ...string) ([]byte, error) {
-	command := exec.Command("git", arguments...)
-	command.Dir = root
-	output, err := command.CombinedOutput()
-	if err != nil {
-		return nil, fmt.Errorf("git %s: %w: %s", strings.Join(arguments, " "), err,
-			strings.TrimSpace(string(output)))
+func (bundle loadedRuntimeBundle) readVerifiedFile(relative string) ([]byte, error) {
+	entry, exists := bundle.files[relative]
+	if !exists {
+		return nil, fmt.Errorf("evidence manifest does not bind %s", relative)
 	}
-	return output, nil
+	data, err := os.ReadFile(filepath.Join(bundle.root, filepath.FromSlash(relative)))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) != entry.Bytes || bytesDigest(data) != entry.SHA256 {
+		return nil, fmt.Errorf("evidence file %s differs from its manifest", relative)
+	}
+	return data, nil
+}
+
+func testEventPassed(data []byte, importPath, symbol string) (bool, error) {
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
+	for scanner.Scan() {
+		var event struct {
+			Action  string `json:"Action"`
+			Package string `json:"Package"`
+			Test    string `json:"Test"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			return false, err
+		}
+		if event.Action == "pass" && event.Package == importPath && event.Test == symbol {
+			return true, nil
+		}
+	}
+	return false, scanner.Err()
 }

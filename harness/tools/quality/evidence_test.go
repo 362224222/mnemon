@@ -1,7 +1,6 @@
 package main
 
 import (
-	"sort"
 	"strings"
 	"testing"
 )
@@ -48,13 +47,11 @@ func TestValidateArchitectureEvidenceRejectsStaleAutoFindingButAllowsManualDebt(
 
 func TestValidateRequirementEvidenceMatchesIDsAndTestSymbols(t *testing.T) {
 	root := initTestRepository(t)
-	writeTestFile(t, root, "harness/a_test.go", "package harness\nfunc TestProof() {}\n")
-	commit := commitTestRepository(t, root, "add proof")
+	writeTestFile(t, root, "harness/a_test.go", "package harness\nfunc TestProof() { _ = 1 }\n")
 	contract := testCoreContract()
-	requirements := requirementsManifest{SchemaVersion: 2, Requirements: []requirementRecord{{
-		ID:              "SC-01",
-		AcceptedCommits: []string{commit}, TestSymbols: []string{"harness/a_test.go::TestProof"},
-		ScenarioKeys: []string{},
+	requirements := requirementsManifest{SchemaVersion: 3, Requirements: []requirementRecord{{
+		ID: "SC-01", TestSymbols: []string{"harness/a_test.go::TestProof"},
+		ScenarioKeys: []string{}, LiveScenarioKeys: []string{},
 	}}}
 	if err := validateRequirementEvidence(root, contract, requirements); err != nil {
 		t.Fatal(err)
@@ -66,43 +63,21 @@ func TestValidateRequirementEvidenceMatchesIDsAndTestSymbols(t *testing.T) {
 	}
 }
 
-func TestValidateRequirementEvidenceBindsTestToAcceptedCommitTree(t *testing.T) {
+func TestValidateRequirementEvidenceRequiresCurrentTopLevelTest(t *testing.T) {
 	root := initTestRepository(t)
-	writeTestFile(t, root, "harness/a_test.go", "package harness\nfunc TestEarlier() {}\nvar TestProof = func() {}\n")
-	earlier := commitTestRepository(t, root, "add earlier test")
-	writeTestFile(t, root, "harness/a_test.go", "package harness\nfunc TestEarlier() {}\nfunc TestProof() {}\n")
-
-	requirement := requirementRecord{
-		ID:              "SC-01",
-		AcceptedCommits: []string{earlier}, TestSymbols: []string{"harness/a_test.go::TestProof"},
-		ScenarioKeys: []string{},
-	}
-	registry := requirementsManifest{
-		SchemaVersion: 2, Requirements: []requirementRecord{requirement},
-	}
+	writeTestFile(t, root, "harness/a_test.go",
+		"package harness\nvar TestProof = func() {}\n")
+	registry := requirementsManifest{SchemaVersion: 3, Requirements: []requirementRecord{{
+		ID: "SC-01", TestSymbols: []string{"harness/a_test.go::TestProof"},
+		ScenarioKeys: []string{}, LiveScenarioKeys: []string{},
+	}}}
 	if err := validateRequirementEvidence(root, testCoreContract(), registry); err == nil ||
-		!strings.Contains(err.Error(), "absent from every accepted commit") {
-		t.Fatalf("working-tree-only evidence error = %v", err)
+		!strings.Contains(err.Error(), "does not declare") {
+		t.Fatalf("non-function evidence error = %v", err)
 	}
 
-	writeTestFile(t, root, "harness/a_test.go", "package harness\nfunc TestProof() {}\n")
-	proof := commitTestRepository(t, root, "add accepted proof")
-	writeTestFile(t, root, "harness/a_test.go", "package harness\nfunc TestEarlier() {}\nfunc TestProof() {}\n")
-	requirement.AcceptedCommits = []string{earlier, proof}
-	sort.Strings(requirement.AcceptedCommits)
-	requirement.TestSymbols = []string{
-		"harness/a_test.go::TestEarlier",
-		"harness/a_test.go::TestProof",
-	}
-	registry.Requirements[0] = requirement
+	writeTestFile(t, root, "harness/a_test.go", "package harness\nfunc TestProof() { _ = 1 }\n")
 	if err := validateRequirementEvidence(root, testCoreContract(), registry); err != nil {
-		t.Fatalf("evidence distributed across accepted commits: %v", err)
-	}
-
-	requirement.AcceptedCommits = []string{}
-	registry.Requirements[0] = requirement
-	if err := validateRequirementEvidence(root, testCoreContract(), registry); err == nil ||
-		!strings.Contains(err.Error(), "ungrounded behavioral evidence") {
-		t.Fatalf("test evidence without accepted commit error = %v", err)
+		t.Fatalf("current top-level test binding: %v", err)
 	}
 }

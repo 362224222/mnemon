@@ -12,11 +12,12 @@ import (
 )
 
 const coreReleaseClosureEnvironment = "R5_CORE_RELEASE_CLOSURE"
+const coreGateReportEnvironment = "R5_CORE_GATE_REPORT"
 
 func TestCoreRequirementsRegistry(t *testing.T) {
 	t.Parallel()
 	root, contract, registry := loadCoreRequirements(t)
-	if err := corecontract.ValidateBehavioralEvidence(root, contract, registry); err != nil {
+	if err := corecontract.ValidateBindings(root, contract, registry); err != nil {
 		t.Fatal(err)
 	}
 	wantGates := []string{
@@ -32,7 +33,24 @@ func TestCoreRequirementsReleaseClosure(t *testing.T) {
 		t.Skip("strict Core release closure is an explicit target")
 	}
 	root, contract, registry := loadCoreRequirements(t)
-	if err := coreReleaseClosureError(root, contract, registry); err != nil {
+	reportPath := os.Getenv(coreGateReportEnvironment)
+	if reportPath == "" {
+		t.Fatalf("%s is required for runtime release closure", coreGateReportEnvironment)
+	}
+	if !filepath.IsAbs(reportPath) {
+		reportPath = filepath.Join(root, filepath.FromSlash(reportPath))
+	}
+	relative, err := filepath.Rel(root, reportPath)
+	if err != nil || strings.HasPrefix(relative, "..") ||
+		!strings.HasPrefix(filepath.ToSlash(relative), ".testdata/r5/") {
+		t.Fatalf("%s must name an ignored .testdata/r5 report under the repository",
+			coreGateReportEnvironment)
+	}
+	report, err := corecontract.LoadGateReport(reportPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := coreReleaseClosureError(root, contract, registry, &report); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -53,18 +71,22 @@ func loadCoreRequirements(t *testing.T) (string, corecontract.Contract, corecont
 }
 
 func coreReleaseClosureError(root string, contract corecontract.Contract,
-	registry corecontract.Registry,
+	registry corecontract.Registry, report *corecontract.GateReport,
 ) error {
-	if err := corecontract.ValidateBehavioralEvidence(root, contract, registry); err != nil {
-		return fmt.Errorf("validate Core behavioral evidence: %w", err)
+	if report == nil {
+		return fmt.Errorf("Core release closure requires a runtime gate report")
 	}
-	unresolved := corecontract.UnresolvedMust(contract, registry)
+	closure, err := corecontract.EvaluateClosure(root, contract, registry, *report)
+	if err != nil {
+		return fmt.Errorf("validate Core runtime evidence: %w", err)
+	}
+	unresolved := corecontract.UnresolvedMust(closure)
 	if len(unresolved) == 0 {
 		return nil
 	}
 	return fmt.Errorf(
 		"Core release closure has %d unresolved MUST requirements (%s); open gates: %s",
 		len(unresolved), strings.Join(unresolved, ","), strings.Join(
-			corecontract.UnresolvedGates(contract, registry), ","),
+			corecontract.UnresolvedGates(closure), ","),
 	)
 }
