@@ -451,13 +451,15 @@ func TestCommitPeerInboxSemanticMaterializesImportedReplicaArtifactsAtomically(t
 			t.Fatalf("replica provenance = (%q,%#v,%#v,%q,%q)", origin, runID,
 				operationID, relation, created)
 		}
-		assertPeerInboxSemanticArtifactOwnerPin(t, fixture.store, root, "inbox",
-			inboxID.String(), true, "")
+		assertPeerInboxSemanticExactOwnerPins(t, fixture.store, "inbox",
+			inboxID.String(), nil, time.Time{})
 		assertPeerInboxSemanticArtifactOwnerPin(t, fixture.store, root, "event",
 			claim.ImportedEvent().ID().String(), false,
 			storeTime(claim.ImportedEvent().AcceptedAt()))
 		assertPeerInboxSemanticImportedEventHasNoGossip(t, fixture.store,
 			claim.ImportedEvent().ID())
+		assertPeerInboxSemanticSurvivesReadyCleanup(t, fixture,
+			claim, inboxID, root, decisionAt)
 	})
 
 	t.Run("terminal rollback", func(t *testing.T) {
@@ -545,16 +547,13 @@ func TestCommitPeerInboxSemanticDeliveryReadyPreservesMixedArtifactsAcrossReplay
 		"semantic-mixed-artifact-worker", deliveryPutAt.Add(time.Second))
 	stageAt := deliveryPutAt.Add(2 * time.Second)
 	combined := combinePeerInboxArtifactClosures(t, producedClosure, referencedClosure)
-	if _, err := fixture.store.StagePeerInboxArtifactClosure(ctx,
-		StagePeerInboxArtifactClosureSpec{Fence: artifactClaim.Fence(), Closure: combined,
-			At: stageAt}); err != nil {
-		t.Fatal(err)
-	}
+	_, owner := mustPreparePeerInboxArtifactPublish(t, fixture.store,
+		artifactClaim.Fence(), combined, stageAt)
+	mustAcceptPeerInboxArtifactPublish(t, fixture.store,
+		artifactClaim.Fence(), owner, stageAt)
 	artifactReadyAt := stageAt.Add(time.Second)
-	if _, err := fixture.store.MarkPeerInboxArtifactReady(ctx,
-		MarkPeerInboxArtifactReadySpec{Fence: artifactClaim.Fence(), At: artifactReadyAt}); err != nil {
-		t.Fatal(err)
-	}
+	mustMarkPeerInboxArtifactReady(t, fixture.store,
+		artifactClaim.Fence(), owner, artifactReadyAt)
 
 	semanticClaim := mustClaimPeerInboxSemantic(t, fixture.store,
 		"semantic-mixed-delivery-worker", artifactReadyAt.Add(time.Second))
@@ -614,7 +613,7 @@ func TestCommitPeerInboxSemanticDeliveryReadyPreservesMixedArtifactsAcrossReplay
 
 	wantCounts := before
 	wantCounts.events += 2
-	wantCounts.pins += 10
+	wantCounts.pins += 8
 	wantCounts.provenance++
 	wantCounts.handlings++
 	wantCounts.gossip++
@@ -631,7 +630,7 @@ func TestCommitPeerInboxSemanticDeliveryReadyPreservesMixedArtifactsAcrossReplay
 	}
 	deliveryID := deterministicDeliveryID(response.ID(), fixture.remote.Identity().PeerID())
 	assertPeerInboxSemanticExactOwnerPins(t, fixture.store, "inbox",
-		deliveryPut.InboxID.String(), roots, stageAt)
+		deliveryPut.InboxID.String(), nil, time.Time{})
 	assertPeerInboxSemanticExactOwnerPins(t, fixture.store, "event",
 		imported.ID().String(), roots, imported.AcceptedAt())
 	assertPeerInboxSemanticExactOwnerPins(t, fixture.store, "event",
@@ -703,7 +702,7 @@ func TestCommitPeerInboxSemanticDeliveryReadyPreservesMixedArtifactsAcrossReplay
 			replayChannelHead, committedOriginHead, committedChannelHead)
 	}
 	assertPeerInboxSemanticExactOwnerPins(t, restarted, "inbox",
-		deliveryPut.InboxID.String(), roots, stageAt)
+		deliveryPut.InboxID.String(), nil, time.Time{})
 	assertPeerInboxSemanticExactOwnerPins(t, restarted, "event",
 		imported.ID().String(), roots, imported.AcceptedAt())
 	assertPeerInboxSemanticExactOwnerPins(t, restarted, "event",

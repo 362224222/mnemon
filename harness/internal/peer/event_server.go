@@ -322,11 +322,11 @@ func eventSourceProtocolFailure(cause error) (EventProtocolError, bool) {
 		specification = EventProtocolErrorSpec{Code: EventErrorMemberRevoked}
 	case errors.Is(cause, store.ErrPeerPullChannelClosed):
 		specification = EventProtocolErrorSpec{Code: EventErrorChannelClosed}
-	case errors.Is(cause, store.ErrPeerPullNotMember):
+	case errors.Is(cause, store.ErrPeerPullNotMember),
+		errors.Is(cause, store.ErrPeerPullAuthority):
 		specification = EventProtocolErrorSpec{Code: EventErrorNotMember}
-	case errors.Is(cause, store.ErrPeerPullAuthority):
-		specification = EventProtocolErrorSpec{Code: EventErrorNotMember}
-	case errors.Is(cause, context.DeadlineExceeded):
+	case errors.Is(cause, store.ErrPeerPullPublicationPending),
+		errors.Is(cause, context.DeadlineExceeded):
 		specification = EventProtocolErrorSpec{Code: EventErrorBusy, Retryable: true,
 			RetryAfter: eventServerBusyRetry}
 	default:

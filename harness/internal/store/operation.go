@@ -135,8 +135,8 @@ func (s *Store) ReserveOperation(ctx context.Context, requested model.Operation,
 	return OperationReservation{Operation: requested, Acquired: true}, nil
 }
 
-// CheckpointOperationCapture writes the verified capture closure and its
-// indexed ownership projection exactly once under the active operation lease.
+// CheckpointOperationCapture writes only a canonical empty capture under the
+// active operation lease. Nonempty captures use accepted-first artifact staging.
 // Identical retry is a replay; different bytes or projection drift fail closed.
 func (s *Store) CheckpointOperationCapture(ctx context.Context, id model.OperationID, owner string,
 	now time.Time, capture model.JSON,
@@ -147,6 +147,11 @@ func (s *Store) CheckpointOperationCapture(ctx context.Context, id model.Operati
 	captureRoots, err := parseOperationCapture(capture)
 	if err != nil {
 		return false, fmt.Errorf("checkpoint operation capture: %w", err)
+	}
+	if len(captureRoots) != 0 {
+		return false, fmt.Errorf(
+			"checkpoint operation capture: nonempty capture requires accepted-first staging: %w",
+			ErrCaptureMismatch)
 	}
 	captureBytes := capture.Bytes()
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -160,15 +165,6 @@ func (s *Store) CheckpointOperationCapture(ctx context.Context, id model.Operati
 	}
 	if err := requireOperationFence(operation, owner, now); err != nil {
 		return false, err
-	}
-	for _, captured := range captureRoots {
-		if err := requireArtifactGCQueueAvailableForRoot(ctx, tx, captured.RootDigest); err != nil {
-			return false, err
-		}
-		root, err := requireVerifiedArtifactRoot(ctx, tx, captured.RootDigest)
-		if err != nil || root.ManifestDigest != captured.ManifestDigest {
-			return false, fmt.Errorf("checkpoint operation capture: verified root/manifest mismatch: %w", ErrCaptureMismatch)
-		}
 	}
 	if existing, ok := operation.Capture(); ok {
 		if existing.String() != capture.String() {
@@ -184,13 +180,6 @@ func (s *Store) CheckpointOperationCapture(ctx context.Context, id model.Operati
 	}
 	if err := requireOperationArtifactProjection(ctx, tx, id, nil); err != nil {
 		return false, err
-	}
-	for _, captured := range captureRoots {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO operation_artifact_roots(
-			operation_id,root_digest,manifest_digest) VALUES(?,?,?)`, id.String(),
-			captured.RootDigest.String(), captured.ManifestDigest.Bytes()); err != nil {
-			return false, fmt.Errorf("checkpoint operation capture: insert root projection: %w", err)
-		}
 	}
 	result, err := tx.ExecContext(ctx, `UPDATE operations SET capture_json=? WHERE operation_id=?
 		AND status='started' AND lease_owner=? AND lease_until>? AND capture_json IS NULL`,

@@ -35,6 +35,7 @@ type ArtifactCoordinationResult struct {
 
 type ArtifactCoordinator interface {
 	Coordinate(context.Context, ArtifactCoordinationSpec) (ArtifactCoordinationResult, *ControlError)
+	PublishAccepted(context.Context, model.OperationID) *ControlError
 }
 
 type TeamworkActionExecutorOptions struct {
@@ -220,7 +221,8 @@ func (e *TeamworkActionExecutor) ExecuteTeamwork(ctx context.Context,
 		return OperationResponse{}, NewControlError(CodeInvalidArgument,
 			"Teamwork execution input is incomplete")
 	}
-	if response, apiErr, terminal := e.replayTerminalTeamworkOperation(spec.Action, operation); terminal {
+	if response, apiErr, terminal := e.replayTerminalTeamworkOperation(
+		ctx, spec.Action, operation); terminal {
 		return response, apiErr
 	}
 	if operation.Status() != model.OperationStarted {
@@ -284,13 +286,8 @@ func (e *TeamworkActionExecutor) ExecuteTeamwork(ctx context.Context,
 		}
 		return e.reject(ctx, operation, spec.At, mapTeamworkExecutionError(err))
 	}
-	response, err := decodeCommittedTeamworkReceipt(spec.Action.handler, result.Receipt,
-		operation, result.Replayed)
-	if err != nil {
-		return OperationResponse{}, NewControlError(CodeInternal,
-			"committed Teamwork receipt cannot be projected")
-	}
-	return response, nil
+	return e.projectFreshCommit(ctx, operation, spec.Action.handler,
+		artifactRefs, result)
 }
 
 func (e *TeamworkActionExecutor) available() bool {
@@ -619,7 +616,7 @@ func (e *TeamworkActionExecutor) reject(ctx context.Context, operation model.Ope
 	if err != nil {
 		return OperationResponse{}, mapTeamworkExecutionError(err)
 	}
-	return e.projectRejectionTerminal(operation, result, evidence)
+	return e.projectRejectionTerminal(ctx, operation, result, evidence)
 }
 
 func (e *TeamworkActionExecutor) freshNow(notBefore time.Time) (time.Time, *ControlError) {
@@ -670,11 +667,8 @@ func decodeCommittedTeamworkReceipt(handler ActionHandler, receipt model.JSON, o
 ) (OperationResponse, error) {
 	receiptPolicy := handler.Descriptor().Receipt()
 	var wire struct {
-		CaptureRoots []struct {
-			ManifestDigest string `json:"manifest_digest"`
-			RootDigest     string `json:"root_digest"`
-		} `json:"capture_roots"`
-		Events []struct {
+		CaptureRoots []committedTeamworkCaptureRoot `json:"capture_roots"`
+		Events       []struct {
 			ArtifactRoots []struct {
 				RootDigest string             `json:"root_digest"`
 				Role       model.ArtifactRole `json:"role"`
@@ -702,17 +696,9 @@ func decodeCommittedTeamworkReceipt(handler ActionHandler, receipt model.JSON, o
 		requireExecutionJSONEOF(decoder) != nil {
 		return OperationResponse{}, errors.New("invalid committed Teamwork receipt")
 	}
-	captured := make(map[model.Digest]struct{}, len(wire.CaptureRoots))
-	previousCapture := ""
-	for _, row := range wire.CaptureRoots {
-		root, rootErr := model.ParseDigest(row.RootDigest)
-		_, manifestErr := model.ParseDigest(row.ManifestDigest)
-		if rootErr != nil || manifestErr != nil ||
-			(previousCapture != "" && previousCapture >= row.RootDigest) {
-			return OperationResponse{}, errors.New("invalid committed Teamwork capture roots")
-		}
-		previousCapture = row.RootDigest
-		captured[root] = struct{}{}
+	captured, err := validateCommittedTeamworkCapture(operation, wire.CaptureRoots)
+	if err != nil {
+		return OperationResponse{}, err
 	}
 	wantType := handler.EventType()
 	if !wantType.Valid() {

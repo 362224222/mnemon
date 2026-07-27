@@ -259,7 +259,7 @@ func TestAgentClaimFailsClosedForProfileAssetAndRunDrift(t *testing.T) {
 		insertClaimHandling(t, fixture.store, "handling-run-drift", events[0], 1, at, at, 0)
 		claimCurrent(t, fixture, "owner-run-drift", "token-run-drift", at)
 		mustExec(t, fixture.store, `DROP TRIGGER agent_runs_creation_identity_immutable`)
-		if _, err := fixture.store.db.Exec("UPDATE agent_runs SET runtime_kind='claude-cli' WHERE handling_id='handling-run-drift'"); err != nil {
+		if _, err := fixture.store.db.Exec("UPDATE agent_runs SET runtime_kind='unsupported-runtime' WHERE handling_id='handling-run-drift'"); err != nil {
 			t.Fatal(err)
 		}
 		_, err := fixture.store.ProbeAgentClaim(context.Background(), AgentClaimProbeSpec{

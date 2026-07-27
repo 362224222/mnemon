@@ -154,11 +154,19 @@ type QuarantinePeerInboxArtifactSpec struct {
 
 type MarkPeerInboxArtifactReadySpec struct {
 	Fence PeerInboxArtifactFence
+	Owner artifactdomain.StageOwner
 	At    time.Time
 }
 
-type StagePeerInboxArtifactClosureSpec struct {
+type AcceptPeerInboxArtifactPublishSpec struct {
+	Fence PeerInboxArtifactFence
+	Owner artifactdomain.StageOwner
+	At    time.Time
+}
+
+type PreparePeerInboxArtifactPublishSpec struct {
 	Fence   PeerInboxArtifactFence
+	Owner   artifactdomain.StageOwner
 	Closure VerifiedArtifactClosure
 	At      time.Time
 }
@@ -311,6 +319,11 @@ func (s *Store) ClaimPeerInboxArtifact(ctx context.Context,
 			WHERE quarantine.channel_id=inbox.channel_id
 				AND quarantine.origin_peer_id=inbox.origin_peer_id
 				AND quarantine.origin_epoch=inbox.origin_epoch
+		) AND NOT EXISTS(
+			SELECT 1 FROM artifact_pins accepted_pin
+			WHERE accepted_pin.owner_kind='inbox'
+				AND accepted_pin.owner_id=inbox.inbox_id
+				AND accepted_pin.expires_at IS NULL
 		) AND (
 			(inbox.status='stored' AND inbox.next_attempt_at<=?)
 			OR (inbox.status='waiting_artifact' AND inbox.lease_until<=?)
@@ -415,204 +428,6 @@ func (s *Store) ProbePeerInboxArtifactAuthority(ctx context.Context,
 			ErrPeerInboxArtifactInvariant, err)
 	}
 	return nil
-}
-
-// RenewPeerInboxArtifactLease extends one still-live fence to trusted At+120s.
-// Repeating the same renewal after response loss returns the already installed
-// fence without another write.
-func (s *Store) RenewPeerInboxArtifactLease(ctx context.Context,
-	spec RenewPeerInboxArtifactSpec,
-) (PeerInboxArtifactRenewal, error) {
-	at, err := validatePeerInboxArtifactSettlementCall(s, ctx, spec.Fence, spec.At)
-	if err != nil {
-		return PeerInboxArtifactRenewal{}, err
-	}
-	leaseUntil, err := canonicalStoreTime(at.Add(peerInboxArtifactLease))
-	if err != nil {
-		return PeerInboxArtifactRenewal{}, fmt.Errorf("%w: derived renewal: %v",
-			ErrPeerInboxArtifactInput, err)
-	}
-	stageExpiresAt, err := canonicalStoreTime(leaseUntil.Add(peerInboxArtifactStageTTL))
-	if err != nil {
-		return PeerInboxArtifactRenewal{}, fmt.Errorf("%w: renewal stage expiry: %v",
-			ErrPeerInboxArtifactInput, err)
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return PeerInboxArtifactRenewal{}, fmt.Errorf("renew Peer Inbox Artifact: begin: %w", err)
-	}
-	defer tx.Rollback()
-	row, err := readPeerInboxArtifactRow(ctx, tx, spec.Fence.inboxID)
-	if err != nil {
-		return PeerInboxArtifactRenewal{}, err
-	}
-	receipt, hasRenewReceipt, err := readValidatedPeerInboxArtifactRenewReceipt(ctx, tx, row)
-	if err != nil {
-		return PeerInboxArtifactRenewal{}, err
-	}
-	if hasRenewReceipt && receipt.matchesRequest(spec.Fence, at) {
-		if err := requirePeerInboxArtifactStagePinsAt(ctx, tx, row.inboxID,
-			row.requiredRoots, leaseUntil, stageExpiresAt, true); err != nil {
-			return PeerInboxArtifactRenewal{}, err
-		}
-		if err := tx.Commit(); err != nil {
-			return PeerInboxArtifactRenewal{}, fmt.Errorf("renew Peer Inbox Artifact: replay commit: %w", err)
-		}
-		return PeerInboxArtifactRenewal{fence: PeerInboxArtifactFence{inboxID: row.inboxID,
-			leaseOwner: receipt.output.leaseOwner, leaseUntil: receipt.output.leaseUntil,
-			attempt: receipt.output.attempt}, replayed: true}, nil
-	}
-	if err := requireLivePeerInboxArtifactFence(row, spec.Fence, at); err != nil {
-		return PeerInboxArtifactRenewal{}, err
-	}
-	if err := requirePeerInboxArtifactAuthority(ctx, tx, row, at); err != nil {
-		return PeerInboxArtifactRenewal{}, err
-	}
-	if _, err := refreshExistingPeerInboxArtifactStagePins(ctx, tx, row.inboxID,
-		row.requiredRoots, at, stageExpiresAt); err != nil {
-		return PeerInboxArtifactRenewal{}, err
-	}
-	result, err := tx.ExecContext(ctx, `UPDATE peer_inbox SET lease_until=?,updated_at=?
-		WHERE inbox_id=? AND status='waiting_artifact' AND attempts=? AND lease_owner=?
-		AND lease_until=? AND updated_at=?`, storeTime(leaseUntil), storeTime(at), row.inboxID.String(),
-		row.attempts, row.leaseOwner, storeTime(row.leaseUntil), storeTime(row.updatedAt))
-	if err != nil {
-		return PeerInboxArtifactRenewal{}, fmt.Errorf("%w: renew update: %v",
-			ErrPeerInboxArtifactInvariant, err)
-	}
-	if err := requireExactlyOneRow(result, "renew Peer Inbox Artifact CAS"); err != nil {
-		return PeerInboxArtifactRenewal{}, fmt.Errorf("%w: %v", ErrPeerInboxArtifactStale, err)
-	}
-	output := peerInboxArtifactResultFromRow(row)
-	output.leaseUntil = leaseUntil
-	output.updatedAt = at
-	renewReceipt, err := newPeerInboxArtifactRenewReceipt(spec.Fence, row.semanticNonce,
-		at, output)
-	if err != nil {
-		return PeerInboxArtifactRenewal{}, err
-	}
-	if err := upsertPeerInboxArtifactRenewReceipt(ctx, tx, renewReceipt); err != nil {
-		return PeerInboxArtifactRenewal{}, err
-	}
-	if err := tx.Commit(); err != nil {
-		return PeerInboxArtifactRenewal{}, fmt.Errorf("renew Peer Inbox Artifact: commit: %w", err)
-	}
-	next := spec.Fence
-	next.leaseUntil = leaseUntil
-	return PeerInboxArtifactRenewal{fence: next, changed: true}, nil
-}
-
-// StagePeerInboxArtifactClosure installs the exact immutable relational
-// closure for one live Inbox fence and gives it a bounded durable staging
-// owner. It deliberately does not promote any root to verified authority;
-// CAS materialization and rehashing happen outside this transaction.
-func (s *Store) StagePeerInboxArtifactClosure(ctx context.Context,
-	spec StagePeerInboxArtifactClosureSpec,
-) (PeerInboxArtifactStage, error) {
-	at, err := validatePeerInboxArtifactSettlementCall(s, ctx, spec.Fence, spec.At)
-	if err != nil {
-		return PeerInboxArtifactStage{}, err
-	}
-	closure, err := validateVerifiedArtifactClosure(spec.Closure)
-	if err != nil {
-		return PeerInboxArtifactStage{}, fmt.Errorf("%w: staged closure: %v",
-			ErrPeerInboxArtifactInput, err)
-	}
-	for _, root := range closure.Roots {
-		if root.CreatedAt.After(at) || root.VerifiedAt.After(at) {
-			return PeerInboxArtifactStage{}, fmt.Errorf("%w: staged root time exceeds trusted time",
-				ErrPeerInboxArtifactInput)
-		}
-	}
-	for _, block := range closure.Blocks {
-		if block.CreatedAt.After(at) {
-			return PeerInboxArtifactStage{}, fmt.Errorf("%w: staged block time exceeds trusted time",
-				ErrPeerInboxArtifactInput)
-		}
-	}
-	expiresAt, err := canonicalStoreTime(spec.Fence.leaseUntil.Add(peerInboxArtifactStageTTL))
-	if err != nil {
-		return PeerInboxArtifactStage{}, fmt.Errorf("%w: stage expiry: %v",
-			ErrPeerInboxArtifactInput, err)
-	}
-
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return PeerInboxArtifactStage{}, fmt.Errorf("stage Peer Inbox Artifact closure: begin: %w", err)
-	}
-	defer tx.Rollback()
-	row, err := readPeerInboxArtifactRow(ctx, tx, spec.Fence.inboxID)
-	if err != nil {
-		return PeerInboxArtifactStage{}, err
-	}
-	if _, _, err := readValidatedPeerInboxArtifactRenewReceipt(ctx, tx, row); err != nil {
-		return PeerInboxArtifactStage{}, err
-	}
-	if err := requireLivePeerInboxArtifactFence(row, spec.Fence, at); err != nil {
-		return PeerInboxArtifactStage{}, err
-	}
-	if err := requirePeerInboxArtifactAuthority(ctx, tx, row, at); err != nil {
-		return PeerInboxArtifactStage{}, err
-	}
-	if !equalPeerInboxArtifactClosureRoots(row.requiredRoots, closure.Roots) {
-		return PeerInboxArtifactStage{}, fmt.Errorf("%w: staged roots differ from immutable Inbox roots",
-			ErrPeerInboxArtifactInput)
-	}
-	if err := requireArtifactGCQueueAvailableForClosure(ctx, tx, closure); err != nil {
-		return PeerInboxArtifactStage{}, err
-	}
-
-	replayed := true
-	for _, block := range closure.Blocks {
-		stored, found, err := checkpointArtifactBlock(ctx, tx, block)
-		if err != nil {
-			return PeerInboxArtifactStage{}, err
-		}
-		if stored.CreatedAt.After(at) {
-			return PeerInboxArtifactStage{}, fmt.Errorf("%w: shared staged block observation is newer",
-				ErrPeerInboxArtifactStale)
-		}
-		replayed = replayed && found
-	}
-
-	rootStates := make(map[model.Digest]string, len(closure.Roots))
-	for _, root := range closure.Roots {
-		stored, state, found, err := stageArtifactClosureRoot(ctx, tx, root)
-		if err != nil {
-			return PeerInboxArtifactStage{}, err
-		}
-		if stored.CreatedAt.After(at) || state == "verified" && stored.VerifiedAt.After(at) {
-			return PeerInboxArtifactStage{}, fmt.Errorf("%w: shared staged root observation is newer",
-				ErrPeerInboxArtifactStale)
-		}
-		rootStates[stored.RootDigest] = state
-		replayed = replayed && found
-	}
-	for _, root := range closure.Roots {
-		state, err := checkpointArtifactRootBlockMap(ctx, tx, root.RootDigest,
-			rootBlocksForDigest(closure.RootBlocks, root.RootDigest))
-		if err != nil {
-			return PeerInboxArtifactStage{}, err
-		}
-		if state.rootState != rootStates[root.RootDigest] {
-			return PeerInboxArtifactStage{}, fmt.Errorf("%w: staged root state changed",
-				ErrPeerInboxArtifactInvariant)
-		}
-		replayed = replayed && !state.changed
-	}
-	pinsReplayed, err := stagePeerInboxArtifactPins(ctx, tx, row.inboxID,
-		row.requiredRoots, at, expiresAt)
-	if err != nil {
-		return PeerInboxArtifactStage{}, err
-	}
-	replayed = replayed && pinsReplayed
-	if err := requirePromotablePeerInboxArtifactClosures(ctx, tx, row.requiredRoots, at); err != nil {
-		return PeerInboxArtifactStage{}, err
-	}
-	if err := tx.Commit(); err != nil {
-		return PeerInboxArtifactStage{}, fmt.Errorf("stage Peer Inbox Artifact closure: commit: %w", err)
-	}
-	return PeerInboxArtifactStage{changed: !replayed, replayed: replayed}, nil
 }
 
 // RetryPeerInboxArtifact releases one live lease into a bounded durable
@@ -783,9 +598,7 @@ func (s *Store) QuarantinePeerInboxArtifact(ctx context.Context,
 		nextAttemptAt: at, changed: true}, nil
 }
 
-// MarkPeerInboxArtifactReady is the receiver's sole closure-to-Inbox boundary.
-// Current signed authority, every exact required sealed closure, Inbox pins,
-// and ready state are checked or installed in this one short transaction.
+// MarkPeerInboxArtifactReady exposes ready only after filesystem publication.
 func (s *Store) MarkPeerInboxArtifactReady(ctx context.Context,
 	spec MarkPeerInboxArtifactReadySpec,
 ) (PeerInboxArtifactSettlement, error) {
@@ -795,37 +608,240 @@ func (s *Store) MarkPeerInboxArtifactReady(ctx context.Context,
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return PeerInboxArtifactSettlement{}, fmt.Errorf("mark Peer Inbox Artifact ready: begin: %w", err)
+		return PeerInboxArtifactSettlement{},
+			fmt.Errorf("mark Peer Inbox Artifact ready: begin: %w", err)
 	}
 	defer tx.Rollback()
 	row, err := readPeerInboxArtifactRow(ctx, tx, spec.Fence.inboxID)
 	if err != nil {
 		return PeerInboxArtifactSettlement{}, err
 	}
-	_, hasRenewReceipt, err := readValidatedPeerInboxArtifactRenewReceipt(ctx, tx, row)
-	if err != nil {
-		return PeerInboxArtifactSettlement{}, err
-	}
-	replay := row.status == model.InboxReady && row.attempts == spec.Fence.attempt &&
-		row.updatedAt.Equal(at) && row.nextAttemptAt.Equal(at) &&
-		!row.hasLease && row.diagnostic == ""
-	if replay {
-		for _, root := range row.requiredRoots {
-			if err := requireArtifactGCQueueAvailableForRoot(ctx, tx, root); err != nil {
-				return PeerInboxArtifactSettlement{}, err
-			}
-		}
-		if err := requirePeerInboxArtifactClosures(ctx, tx, row.requiredRoots, at); err != nil {
-			return PeerInboxArtifactSettlement{}, err
-		}
-		if err := requireExactPeerInboxArtifactPins(ctx, tx, row.inboxID, row.requiredRoots, at); err != nil {
+	if peerInboxArtifactReadyReplayStatus(row.status) {
+		if err := requireReadyPeerInboxArtifactSettlement(ctx, tx, row, spec, at); err != nil {
 			return PeerInboxArtifactSettlement{}, err
 		}
 		if err := tx.Commit(); err != nil {
-			return PeerInboxArtifactSettlement{}, fmt.Errorf("mark Peer Inbox Artifact ready: replay commit: %w", err)
+			return PeerInboxArtifactSettlement{},
+				fmt.Errorf("mark Peer Inbox Artifact ready: replay commit: %w", err)
 		}
 		return PeerInboxArtifactSettlement{status: model.InboxReady,
-			nextAttemptAt: at, replayed: true}, nil
+			nextAttemptAt: row.nextAttemptAt, replayed: true}, nil
+	}
+	if len(row.requiredRoots) == 0 {
+		return markEmptyPeerInboxArtifactReady(ctx, tx, row, spec, at)
+	}
+	if err := requirePeerInboxArtifactPublishOwner(spec.Owner, spec.Fence); err != nil {
+		return PeerInboxArtifactSettlement{}, err
+	}
+	if row.status != model.InboxWaitingArtifact ||
+		row.attempts != spec.Fence.attempt ||
+		!row.hasLease ||
+		row.leaseOwner != spec.Fence.leaseOwner ||
+		!row.leaseUntil.Equal(spec.Fence.leaseUntil) {
+		return PeerInboxArtifactSettlement{}, ErrArtifactStageFence
+	}
+	stage, found, err := readPeerInboxArtifactStage(ctx, tx, row.inboxID)
+	if err != nil || !found || stage.state != ArtifactStagePublishing ||
+		stage.cleanupClaimed ||
+		!exactPeerInboxArtifactPublishStage(row, stage, spec.Fence, spec.Owner) ||
+		at.Before(stage.updatedAt) {
+		return PeerInboxArtifactSettlement{}, ErrArtifactStageFence
+	}
+	accepted, err := peerInboxArtifactPublishAccepted(ctx, tx, row, stage, at)
+	if err != nil || !accepted {
+		if err == nil {
+			err = ErrArtifactStageFence
+		}
+		return PeerInboxArtifactSettlement{}, err
+	}
+	if err := promotePeerInboxArtifactRoots(ctx, tx, row.requiredRoots, at); err != nil {
+		return PeerInboxArtifactSettlement{}, err
+	}
+	if err := requirePeerInboxArtifactClosures(ctx, tx, row.requiredRoots, at); err != nil {
+		return PeerInboxArtifactSettlement{}, err
+	}
+	if err := markPeerInboxArtifactStageReady(ctx, tx, row, stage, at); err != nil {
+		return PeerInboxArtifactSettlement{}, err
+	}
+	if err := markPeerInboxReadyRow(ctx, tx, row, at); err != nil {
+		return PeerInboxArtifactSettlement{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return PeerInboxArtifactSettlement{},
+			fmt.Errorf("mark Peer Inbox Artifact ready: commit: %w", err)
+	}
+	return PeerInboxArtifactSettlement{status: model.InboxReady,
+		nextAttemptAt: at, changed: true}, nil
+}
+
+func requireReadyPeerInboxArtifactSettlement(ctx context.Context, tx *sql.Tx,
+	row peerInboxArtifactRow, spec MarkPeerInboxArtifactReadySpec, at time.Time,
+) error {
+	if len(row.requiredRoots) == 0 {
+		return requireReadyEmptyPeerInboxArtifactSettlement(ctx, tx, row, spec, at)
+	}
+	if err := requirePeerInboxArtifactPublishOwner(spec.Owner, spec.Fence); err != nil {
+		return err
+	}
+	stage, found, err := readPeerInboxArtifactStage(ctx, tx, row.inboxID)
+	if err != nil || !found || stage.state != ArtifactStageReady ||
+		!exactPeerInboxArtifactPublishStage(row, stage, spec.Fence, spec.Owner) {
+		return ErrArtifactStageFence
+	}
+	return requireReadyPeerInboxArtifactProof(ctx, tx, row, stage,
+		spec.Fence, spec.Owner, at)
+}
+
+func requireReadyPeerInboxArtifactProof(ctx context.Context, tx *sql.Tx,
+	row peerInboxArtifactRow, stage durableArtifactStage,
+	fence PeerInboxArtifactFence, owner artifactdomain.StageOwner, at time.Time,
+) error {
+	if !exactPeerInboxArtifactPublishStage(row, stage, fence, owner) ||
+		at.Before(stage.updatedAt) {
+		return ErrArtifactStageFence
+	}
+	if row.status == model.InboxReady {
+		if row.attempts != fence.attempt || row.hasLease || row.diagnostic != "" ||
+			!row.updatedAt.Equal(stage.updatedAt) ||
+			!row.nextAttemptAt.Equal(row.updatedAt) {
+			return ErrArtifactStageFence
+		}
+		if err := requirePeerInboxArtifactClosures(ctx, tx,
+			row.requiredRoots, at); err != nil {
+			return err
+		}
+		return requireExactPeerInboxArtifactPins(ctx, tx, row.inboxID,
+			row.requiredRoots, at)
+	}
+	if row.attempts <= fence.attempt {
+		return ErrArtifactStageFence
+	}
+	if row.status == model.InboxProcessing || row.status == model.InboxRetry {
+		if row.status == model.InboxProcessing && row.diagnostic != "" ||
+			row.status == model.InboxRetry &&
+				!PeerInboxSemanticRetryDiagnostic(row.diagnostic).Valid() {
+			return ErrArtifactStageFence
+		}
+		if err := requirePeerInboxArtifactClosures(ctx, tx,
+			row.requiredRoots, at); err != nil {
+			return err
+		}
+		return requireExactPeerInboxArtifactPins(ctx, tx, row.inboxID,
+			row.requiredRoots, at)
+	}
+	return requireTerminalPeerInboxArtifactPublish(ctx, tx, row.inboxID)
+}
+
+func requireReadyEmptyPeerInboxArtifactSettlement(ctx context.Context, tx *sql.Tx,
+	row peerInboxArtifactRow, spec MarkPeerInboxArtifactReadySpec, _ time.Time,
+) error {
+	if !spec.Owner.IsZero() {
+		return ErrArtifactStageFence
+	}
+	// Semantic transitions overwrite Inbox updated_at. A response-loss replay
+	// therefore reuses the original MarkReady At and relies on the explicit
+	// monotonic downstream status below, not the newer semantic timestamp.
+	switch row.status {
+	case model.InboxReady:
+		return requireReadyEmptyPeerInboxArtifactReady(row, spec.Fence)
+	case model.InboxProcessing:
+		return requireReadyEmptyPeerInboxArtifactProcessing(row, spec.Fence)
+	case model.InboxRetry:
+		return requireReadyEmptyPeerInboxArtifactRetry(row, spec.Fence)
+	case model.InboxAccepted, model.InboxRejected, model.InboxConflicted:
+		return requireReadyEmptyPeerInboxArtifactTerminal(ctx, tx, row, spec.Fence)
+	default:
+		return ErrArtifactStageFence
+	}
+}
+
+func requireReadyEmptyPeerInboxArtifactReady(row peerInboxArtifactRow,
+	fence PeerInboxArtifactFence,
+) error {
+	if row.attempts != fence.attempt || row.hasLease || row.diagnostic != "" ||
+		!row.updatedAt.Equal(row.nextAttemptAt) {
+		return ErrArtifactStageFence
+	}
+	return nil
+}
+
+func requireReadyEmptyPeerInboxArtifactProcessing(row peerInboxArtifactRow,
+	fence PeerInboxArtifactFence,
+) error {
+	if row.attempts <= fence.attempt || !row.hasLease || row.diagnostic != "" {
+		return ErrArtifactStageFence
+	}
+	return nil
+}
+
+func requireReadyEmptyPeerInboxArtifactRetry(row peerInboxArtifactRow,
+	fence PeerInboxArtifactFence,
+) error {
+	if row.attempts <= fence.attempt || row.hasLease ||
+		!PeerInboxSemanticRetryDiagnostic(row.diagnostic).Valid() {
+		return ErrArtifactStageFence
+	}
+	return nil
+}
+
+func requireReadyEmptyPeerInboxArtifactTerminal(ctx context.Context, tx *sql.Tx,
+	row peerInboxArtifactRow, fence PeerInboxArtifactFence,
+) error {
+	if row.attempts <= fence.attempt {
+		return ErrArtifactStageFence
+	}
+	terminal, found, err := readPeerInboxSemanticTerminalRow(ctx, tx, row.inboxID)
+	if err != nil || !found || len(terminal.requiredRoots) != 0 {
+		return ErrArtifactStageFence
+	}
+	if err := requireNoPeerInboxSemanticArtifactPins(ctx, tx, row.inboxID); err != nil {
+		return ErrArtifactStageFence
+	}
+	return validatePeerInboxSemanticImportedArtifacts(ctx, tx,
+		terminal.publication.Event())
+}
+
+func peerInboxArtifactReadyReplayStatus(status model.InboxStatus) bool {
+	switch status {
+	case model.InboxReady, model.InboxProcessing, model.InboxRetry,
+		model.InboxAccepted, model.InboxRejected, model.InboxConflicted:
+		return true
+	default:
+		return false
+	}
+}
+
+func requireTerminalPeerInboxArtifactPublish(ctx context.Context, tx *sql.Tx,
+	inboxID model.InboxID,
+) error {
+	if _, found, err := readPeerInboxSemanticTerminalRow(ctx, tx, inboxID); err != nil || !found {
+		if err != nil {
+			return err
+		}
+		return ErrArtifactStageFence
+	}
+	if err := requireNoPeerInboxSemanticArtifactPins(ctx, tx, inboxID); err != nil {
+		return ErrArtifactStageFence
+	}
+	ready, err := peerInboxArtifactStageFinalReady(ctx, tx, inboxID)
+	if err != nil {
+		return err
+	}
+	if !ready {
+		return ErrArtifactStageFence
+	}
+	return nil
+}
+
+func markEmptyPeerInboxArtifactReady(ctx context.Context, tx *sql.Tx,
+	row peerInboxArtifactRow, spec MarkPeerInboxArtifactReadySpec, at time.Time,
+) (PeerInboxArtifactSettlement, error) {
+	if !spec.Owner.IsZero() {
+		return PeerInboxArtifactSettlement{}, ErrArtifactStageFence
+	}
+	_, hasRenewReceipt, err := readValidatedPeerInboxArtifactRenewReceipt(ctx, tx, row)
+	if err != nil {
+		return PeerInboxArtifactSettlement{}, err
 	}
 	if err := requireLivePeerInboxArtifactFence(row, spec.Fence, at); err != nil {
 		return PeerInboxArtifactSettlement{}, err
@@ -833,70 +849,52 @@ func (s *Store) MarkPeerInboxArtifactReady(ctx context.Context,
 	if err := requirePeerInboxArtifactAuthority(ctx, tx, row, at); err != nil {
 		return PeerInboxArtifactSettlement{}, err
 	}
-	if err := requirePromotablePeerInboxArtifactClosures(ctx, tx, row.requiredRoots, at); err != nil {
-		return PeerInboxArtifactSettlement{}, err
-	}
-	if err := requirePeerInboxArtifactStagePinsAt(ctx, tx, row.inboxID,
-		row.requiredRoots, at, time.Time{}, false); err != nil {
-		return PeerInboxArtifactSettlement{}, err
-	}
-	for _, root := range row.requiredRoots {
-		if err := requireArtifactGCQueueAvailableForRoot(ctx, tx, root); err != nil {
-			return PeerInboxArtifactSettlement{}, err
-		}
-	}
-	for _, root := range row.requiredRoots {
-		result, err := tx.ExecContext(ctx, `UPDATE artifact_roots SET state='verified',verified_at=?
-			WHERE root_digest=? AND state='staged' AND verified_at IS NULL`, storeTime(at), root.String())
-		if err != nil {
-			return PeerInboxArtifactSettlement{}, fmt.Errorf("%w: promote staged Inbox root: %v",
-				ErrPeerInboxArtifactInvariant, err)
-		}
-		if affected, affectedErr := result.RowsAffected(); affectedErr != nil || affected > 1 {
-			return PeerInboxArtifactSettlement{}, fmt.Errorf("%w: promote staged Inbox root cardinality",
-				ErrPeerInboxArtifactInvariant)
-		}
-	}
-	if len(row.requiredRoots) > 0 {
-		result, err := tx.ExecContext(ctx, `UPDATE artifact_pins SET expires_at=NULL
-			WHERE owner_kind='inbox' AND owner_id=? AND expires_at IS NOT NULL`, row.inboxID.String())
-		if err != nil {
-			return PeerInboxArtifactSettlement{}, fmt.Errorf("%w: make Inbox pins permanent: %v",
-				ErrPeerInboxArtifactInvariant, err)
-		}
-		affected, affectedErr := result.RowsAffected()
-		if affectedErr != nil || affected != int64(len(row.requiredRoots)) {
-			return PeerInboxArtifactSettlement{}, fmt.Errorf("%w: make Inbox pins permanent cardinality",
-				ErrPeerInboxArtifactInvariant)
-		}
-	}
-	if err := requirePeerInboxArtifactClosures(ctx, tx, row.requiredRoots, at); err != nil {
-		return PeerInboxArtifactSettlement{}, err
-	}
-	if err := requireExactPeerInboxArtifactPins(ctx, tx, row.inboxID, row.requiredRoots, at); err != nil {
-		return PeerInboxArtifactSettlement{}, err
-	}
 	if err := deletePeerInboxArtifactRenewReceipt(ctx, tx, row.inboxID,
 		hasRenewReceipt); err != nil {
 		return PeerInboxArtifactSettlement{}, err
 	}
+	if err := markPeerInboxReadyRow(ctx, tx, row, at); err != nil {
+		return PeerInboxArtifactSettlement{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return PeerInboxArtifactSettlement{},
+			fmt.Errorf("mark empty Peer Inbox Artifact ready: commit: %w", err)
+	}
+	return PeerInboxArtifactSettlement{status: model.InboxReady,
+		nextAttemptAt: at, changed: true}, nil
+}
+
+func markPeerInboxArtifactStageReady(ctx context.Context, tx *sql.Tx,
+	row peerInboxArtifactRow, stage durableArtifactStage, at time.Time,
+) error {
+	stageUpdate, err := tx.ExecContext(ctx, `UPDATE peer_inbox_artifact_stages
+		SET state='ready',updated_at=? WHERE inbox_id=? AND generation=?
+		AND state='publishing' AND attempt=? AND lease_owner=? AND lease_until=?
+		AND semantic_nonce=? AND cleanup_started_at IS NULL`,
+		storeTime(at), row.inboxID.String(), stage.generation, row.attempts,
+		row.leaseOwner, storeTime(row.leaseUntil), row.semanticNonce[:])
+	if err != nil || exactlyOne(stageUpdate) != nil {
+		return fmt.Errorf("%w: ready Inbox stage: %v", ErrArtifactStageFence, err)
+	}
+	return nil
+}
+
+func markPeerInboxReadyRow(ctx context.Context, tx *sql.Tx,
+	row peerInboxArtifactRow, at time.Time,
+) error {
 	result, err := tx.ExecContext(ctx, `UPDATE peer_inbox SET status='ready',next_attempt_at=?,
 		lease_owner=NULL,lease_until=NULL,diagnostic=NULL,updated_at=?
 		WHERE inbox_id=? AND status='waiting_artifact' AND attempts=? AND lease_owner=?
 		AND lease_until=? AND updated_at=?`, storeTime(at), storeTime(at), row.inboxID.String(),
 		row.attempts, row.leaseOwner, storeTime(row.leaseUntil), storeTime(row.updatedAt))
 	if err != nil {
-		return PeerInboxArtifactSettlement{}, fmt.Errorf("%w: ready update: %v",
+		return fmt.Errorf("%w: ready update: %v",
 			ErrPeerInboxArtifactInvariant, err)
 	}
 	if err := requireExactlyOneRow(result, "mark Peer Inbox Artifact ready CAS"); err != nil {
-		return PeerInboxArtifactSettlement{}, fmt.Errorf("%w: %v", ErrPeerInboxArtifactStale, err)
+		return fmt.Errorf("%w: %v", ErrPeerInboxArtifactStale, err)
 	}
-	if err := tx.Commit(); err != nil {
-		return PeerInboxArtifactSettlement{}, fmt.Errorf("mark Peer Inbox Artifact ready: commit: %w", err)
-	}
-	return PeerInboxArtifactSettlement{status: model.InboxReady,
-		nextAttemptAt: at, changed: true}, nil
+	return nil
 }
 
 // ReadPeerInboxArtifactRoot is the receiver's narrow durable import probe. It
@@ -1409,6 +1407,18 @@ func equalPeerInboxArtifactClosureRoots(required []model.Digest,
 	return true
 }
 
+func equalPeerInboxArtifactRoots(left, right []model.Digest) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
 type peerInboxArtifactPin struct {
 	root      model.Digest
 	expiresAt time.Time
@@ -1500,11 +1510,6 @@ func stagePeerInboxArtifactPins(ctx context.Context, tx *sql.Tx, inboxID model.I
 				ErrPeerInboxArtifactInvariant)
 		}
 	}
-	for _, root := range roots {
-		if err := requireArtifactGCQueueAvailableForRoot(ctx, tx, root); err != nil {
-			return false, err
-		}
-	}
 	if !currentExpiry.Before(expiresAt) {
 		return true, nil
 	}
@@ -1544,11 +1549,6 @@ func refreshExistingPeerInboxArtifactStagePins(ctx context.Context, tx *sql.Tx,
 		if pin.expiresAt != currentExpiry {
 			return false, fmt.Errorf("%w: settlement Inbox pin expiries differ",
 				ErrPeerInboxArtifactInvariant)
-		}
-	}
-	for _, root := range roots {
-		if err := requireArtifactGCQueueAvailableForRoot(ctx, tx, root); err != nil {
-			return false, err
 		}
 	}
 	if !currentExpiry.Before(expiresAt) {
@@ -1644,118 +1644,34 @@ func requireExactPeerInboxArtifactPins(ctx context.Context, tx *sql.Tx, inboxID 
 func readPeerInboxArtifactRow(ctx context.Context, tx *sql.Tx,
 	inboxID model.InboxID,
 ) (peerInboxArtifactRow, error) {
-	var inboxText, channelText, transportText, originText, epochText, eventText string
-	var originSequence, channelSequence uint64
-	var eventDigestRaw, originMemberDigestRaw, rosterDigestRaw, publicationDigestRaw []byte
-	var originMemberRevision, rosterRevision uint64
-	var signature, publicationRaw, rootsRaw, semanticNonceRaw []byte
-	var audience int
-	var statusText, nextText, receivedText, updatedText string
-	var attempts int64
-	var leaseOwner, leaseUntil, localEvent, receipt, diagnostic sql.NullString
-	var decision []byte
-	err := tx.QueryRowContext(ctx, `SELECT inbox_id,channel_id,transport_peer_id,origin_peer_id,
-		origin_epoch,origin_seq,channel_seq,event_id,event_digest,origin_member_revision,
-		origin_member_record_hash,publication_roster_revision,publication_roster_hash,
-			publication_digest,origin_signature,publication_json,is_audience,semantic_nonce,
-			required_artifact_roots_json,status,attempts,next_attempt_at,lease_owner,lease_until,
-		local_event_id,decision_json,receipt_event_id,diagnostic,received_at,updated_at
-		FROM peer_inbox WHERE inbox_id=?`, inboxID.String()).Scan(&inboxText, &channelText,
-		&transportText, &originText, &epochText, &originSequence, &channelSequence, &eventText,
-		&eventDigestRaw, &originMemberRevision, &originMemberDigestRaw, &rosterRevision,
-		&rosterDigestRaw, &publicationDigestRaw, &signature, &publicationRaw, &audience,
-		&semanticNonceRaw, &rootsRaw, &statusText, &attempts, &nextText, &leaseOwner, &leaseUntil, &localEvent,
-		&decision, &receipt, &diagnostic, &receivedText, &updatedText)
-	if errors.Is(err, sql.ErrNoRows) {
-		return peerInboxArtifactRow{}, ErrPeerInboxArtifactStale
-	}
+	stored, err := scanPeerInboxArtifactStoredRow(ctx, tx, inboxID)
 	if err != nil {
-		return peerInboxArtifactRow{}, fmt.Errorf("read Peer Inbox Artifact: %w", err)
+		return peerInboxArtifactRow{}, err
 	}
-	parsedInbox, inboxErr := model.ParseInboxID(inboxText)
-	channelID, channelErr := model.ParseChannelID(channelText)
-	transport, transportErr := model.ParsePeerID(transportText)
-	originPeer, originErr := model.ParsePeerID(originText)
-	originEpoch, epochErr := model.ParseOriginEpoch(epochText)
-	status := model.InboxStatus(statusText)
-	nextAttempt, nextErr := parseCanonicalStoreTime(nextText)
-	receivedAt, receivedErr := parseCanonicalStoreTime(receivedText)
-	updatedAt, updatedErr := parseCanonicalStoreTime(updatedText)
-	if inboxErr != nil || parsedInbox != inboxID || channelErr != nil || transportErr != nil ||
-		transport.IsZero() || originErr != nil || epochErr != nil || !status.Valid() || attempts < 0 ||
-		uint64(attempts) > math.MaxUint32 || len(semanticNonceRaw) != 32 || nextErr != nil ||
-		receivedErr != nil || updatedErr != nil ||
-		updatedAt.Before(receivedAt) || audience != 1 || localEvent.Valid || receipt.Valid || len(decision) != 0 {
-		return peerInboxArtifactRow{}, fmt.Errorf("%w: malformed Inbox projection",
-			ErrPeerInboxArtifactInvariant)
-	}
-	incumbent := peerInboxIncumbent{inboxID: inboxText, channelID: channelText,
-		originPeerID: originText, originEpoch: epochText, originSequence: originSequence,
-		channelSequence: channelSequence, eventID: eventText, eventDigest: eventDigestRaw,
-		publicationDigest: publicationDigestRaw, signature: signature, wire: publicationRaw}
-	if err := validatePeerInboxIncumbent(incumbent); err != nil {
-		return peerInboxArtifactRow{}, fmt.Errorf("%w: signed publication tuple: %v",
-			ErrPeerInboxArtifactInvariant, err)
-	}
-	parsedPublication, err := model.ParseSignedPublication(publicationRaw)
+	row, terminal, err := parsePeerInboxArtifactBase(stored, inboxID)
 	if err != nil {
-		return peerInboxArtifactRow{}, fmt.Errorf("%w: signed publication: %v",
-			ErrPeerInboxArtifactInvariant, err)
+		return peerInboxArtifactRow{}, err
 	}
-	publication, err := model.ProjectImportedPublication(&parsedPublication)
+	row.publication, err = parsePeerInboxArtifactPublication(stored, row)
 	if err != nil {
-		return peerInboxArtifactRow{}, fmt.Errorf("%w: imported publication: %v",
-			ErrPeerInboxArtifactInvariant, err)
+		return peerInboxArtifactRow{}, err
 	}
-	originMemberDigest, originHeadErr := model.DigestFromBytes(originMemberDigestRaw)
-	rosterDigest, rosterHeadErr := model.DigestFromBytes(rosterDigestRaw)
-	originHead, originRecordErr := model.NewRecordHead(originMemberRevision, originMemberDigest)
-	rosterHead, rosterRecordErr := model.NewRecordHead(rosterRevision, rosterDigest)
-	scope := publication.Event().Scope()
-	if originHeadErr != nil || rosterHeadErr != nil || originRecordErr != nil || rosterRecordErr != nil ||
-		scope.ChannelID() != channelID || scope.OriginPeerID() != originPeer ||
-		scope.OriginEpoch() != originEpoch || scope.OriginMember() != originHead ||
-		scope.PublicationRoster() != rosterHead {
-		return peerInboxArtifactRow{}, fmt.Errorf("%w: publication authority tuple",
-			ErrPeerInboxArtifactInvariant)
-	}
-	expectedRoots := peerInboxArtifactRoots(publication.Event())
-	expectedRootsJSON, err := model.JSONFrom(expectedRoots)
+	row.requiredRoots, err = parsePeerInboxArtifactRoots(stored, row.publication)
 	if err != nil {
-		return peerInboxArtifactRow{}, fmt.Errorf("%w: canonical roots: %v",
-			ErrPeerInboxArtifactInvariant, err)
+		return peerInboxArtifactRow{}, err
 	}
-	canonicalRoots, err := model.NewJSON(rootsRaw)
-	if err != nil || !bytes.Equal(canonicalRoots.Bytes(), rootsRaw) ||
-		!bytes.Equal(expectedRootsJSON.Bytes(), rootsRaw) {
-		return peerInboxArtifactRow{}, fmt.Errorf("%w: required roots differ from immutable Event",
-			ErrPeerInboxArtifactInvariant)
+	row.leaseUntil, row.hasLease, err = parsePeerInboxArtifactLease(stored, row)
+	if err != nil {
+		return peerInboxArtifactRow{}, err
 	}
-	hasLease := leaseOwner.Valid || leaseUntil.Valid
-	var parsedLease time.Time
-	if leaseOwner.Valid != leaseUntil.Valid {
-		return peerInboxArtifactRow{}, fmt.Errorf("%w: partial Inbox lease", ErrPeerInboxArtifactInvariant)
+	if err := requirePeerInboxArtifactDiagnostic(stored); err != nil {
+		return peerInboxArtifactRow{}, err
 	}
-	if hasLease {
-		parsedLease, err = parseCanonicalStoreTime(leaseUntil.String)
-		if err != nil || !validPublicationIdentifier(leaseOwner.String) || !parsedLease.After(updatedAt) ||
-			(status != model.InboxWaitingArtifact && status != model.InboxProcessing) {
-			return peerInboxArtifactRow{}, fmt.Errorf("%w: malformed Inbox lease",
-				ErrPeerInboxArtifactInvariant)
-		}
-	} else if status == model.InboxWaitingArtifact || status == model.InboxProcessing {
-		return peerInboxArtifactRow{}, fmt.Errorf("%w: missing Inbox lease", ErrPeerInboxArtifactInvariant)
+	row.leaseOwner = stored.leaseOwner.String
+	row.diagnostic = stored.diagnostic.String
+	copy(row.semanticNonce[:], stored.semanticNonceRaw)
+	if err := requirePeerInboxArtifactTerminalProof(ctx, tx, row, terminal); err != nil {
+		return peerInboxArtifactRow{}, err
 	}
-	if diagnostic.Valid && (diagnostic.String == "" || !validPublicationDiagnostic(diagnostic.String)) {
-		return peerInboxArtifactRow{}, fmt.Errorf("%w: invalid Inbox diagnostic",
-			ErrPeerInboxArtifactInvariant)
-	}
-	var semanticNonce [32]byte
-	copy(semanticNonce[:], semanticNonceRaw)
-	return peerInboxArtifactRow{inboxID: parsedInbox, channelID: channelID,
-		originPeerID: originPeer, originEpoch: originEpoch, publication: publication,
-		requiredRoots: expectedRoots, status: status, attempts: uint32(attempts),
-		nextAttemptAt: nextAttempt, leaseOwner: leaseOwner.String, leaseUntil: parsedLease,
-		hasLease: hasLease, diagnostic: diagnostic.String, receivedAt: receivedAt,
-		updatedAt: updatedAt, semanticNonce: semanticNonce}, nil
+	return row, nil
 }

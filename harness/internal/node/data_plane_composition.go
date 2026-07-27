@@ -28,7 +28,7 @@ func openDaemonDataPlane(ctx, lifetime context.Context, st *store.Store, identit
 		manager == nil || mesh.Host() == nil {
 		return nil, errors.New("mnemond data plane authority is unavailable")
 	}
-	cas, collector, err := openDaemonArtifactRuntime(ctx, st, clock)
+	cas, cleanup, err := openDaemonArtifactRuntime(st, clock)
 	if err != nil {
 		return nil, err
 	}
@@ -39,7 +39,7 @@ func openDaemonDataPlane(ctx, lifetime context.Context, st *store.Store, identit
 	fail := func(cause error) (*daemonDataPlaneRuntime, error) {
 		return nil, errors.Join(cause, artifactServer.Close(), eventServer.Close())
 	}
-	workers, err := composeDaemonDataPlaneWorkers(st, identity, clock, mesh, manager, cas, collector)
+	workers, err := composeDaemonDataPlaneWorkers(st, identity, clock, mesh, manager, cas, cleanup)
 	if err != nil {
 		return fail(err)
 	}
@@ -51,21 +51,17 @@ func openDaemonDataPlane(ctx, lifetime context.Context, st *store.Store, identit
 		artifactServer: artifactServer}, nil
 }
 
-func openDaemonArtifactRuntime(ctx context.Context, st *store.Store, clock Clock,
-) (*artifact.CAS, *artifact.GCWorker, error) {
+func openDaemonArtifactRuntime(st *store.Store, clock Clock,
+) (*artifact.CAS, *artifactStageCleanupWorker, error) {
 	cas, err := artifact.NewCAS(filepath.Join(filepath.Dir(st.Path()), "objects", "sha256"))
 	if err != nil {
 		return nil, nil, fmt.Errorf("open mnemond Artifact CAS: %w", err)
 	}
-	collector, err := artifact.NewGCWorker(artifact.GCOptions{Store: st, CAS: cas,
-		Clock: clock.Now})
+	cleanup, err := newArtifactStageCleanupWorker(st, cas, clock, artifactStageCleanupOptions{})
 	if err != nil {
-		return nil, nil, fmt.Errorf("compose mnemond Artifact collector: %w", err)
+		return nil, nil, fmt.Errorf("compose mnemond Artifact stage cleanup: %w", err)
 	}
-	if err := collector.ReconcileStartup(ctx); err != nil {
-		return nil, nil, fmt.Errorf("reconcile mnemond Artifact CAS: %w", err)
-	}
-	return cas, collector, nil
+	return cas, cleanup, nil
 }
 
 func openDaemonProtocolServers(lifetime context.Context, st *store.Store, clock Clock,
@@ -90,7 +86,8 @@ func openDaemonProtocolServers(lifetime context.Context, st *store.Store, clock 
 }
 
 func composeDaemonDataPlaneWorkers(st *store.Store, identity *Identity, clock Clock,
-	mesh *peer.MeshRuntime, manager *ChannelManager, cas *artifact.CAS, collector *artifact.GCWorker,
+	mesh *peer.MeshRuntime, manager *ChannelManager, cas *artifact.CAS,
+	cleanup *artifactStageCleanupWorker,
 ) ([]daemonDataPlaneWorkerSpec, error) {
 	eventClient, err := peer.NewEventClient(peer.EventClientOptions{Host: mesh.Host()})
 	if err != nil {
@@ -144,7 +141,7 @@ func composeDaemonDataPlaneWorkers(st *store.Store, identity *Identity, clock Cl
 	}
 	limits := peer.HermeticLimits()
 	return []daemonDataPlaneWorkerSpec{
-		{name: "artifact-gc", worker: collector, maxConcurrent: 1},
+		{name: "artifact-staging-cleanup", worker: cleanup, maxConcurrent: 1},
 		{name: "channel-members", worker: members, maxConcurrent: 1},
 		{name: "gossip-publication", worker: publisher, maxConcurrent: 1},
 		{name: "event-repair", worker: repair,

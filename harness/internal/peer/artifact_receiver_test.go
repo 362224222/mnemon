@@ -249,7 +249,7 @@ func TestArtifactReceiverFullCacheReverifiesCASWithoutNetwork(t *testing.T) {
 	checkpoint := backend.lastCheckpoint
 	sources := append([]model.PeerID(nil), backend.sources...)
 	backend.mu.Unlock()
-	if fmt.Sprint(log) != fmt.Sprint([]string{"checkpoint", "ready"}) ||
+	if fmt.Sprint(log) != fmt.Sprint([]string{"checkpoint", "accept", "ready"}) ||
 		len(checkpoint.Roots) != 1 || len(checkpoint.Blocks) != 1 || len(sources) != 0 {
 		t.Fatalf("cache durable order/closure = %v / %#v", log, checkpoint)
 	}
@@ -490,7 +490,7 @@ func TestArtifactReceiverStopsPullingWhenLocalAuthorityChanges(t *testing.T) {
 	checkpoints := backend.checkpointCalls
 	ready := backend.readyCalls
 	backend.mu.Unlock()
-	if blockCalls.Load() != 1 || reconciles.Load() != 1 || checkpoints != 1 || ready != 0 ||
+	if blockCalls.Load() != 1 || reconciles.Load() != 1 || checkpoints != 0 || ready != 0 ||
 		len(retries) != 1 ||
 		retries[0].diagnostic != store.PeerInboxArtifactRetryNotAuthorized {
 		t.Fatalf("authority-loss outcome: blocks=%d reconciles=%d checkpoints=%d ready=%d retries=%#v",
@@ -544,7 +544,7 @@ func TestArtifactReceiverConvertsSettlementRenewalAuthorityLoss(t *testing.T) {
 }
 
 func TestArtifactReceiverReadyAuthorityResourceAndStaleOutcomes(t *testing.T) {
-	t.Run("ready authority reconciles then retries", func(t *testing.T) {
+	t.Run("accepted ready authority failure never reschedules", func(t *testing.T) {
 		at := artifactReceiverTestTime()
 		origin := testkit.NewIdentity(t, "artifact-receiver-ready-authority-origin")
 		channelID := artifactReceiverChannelID(t, "ready-authority")
@@ -554,107 +554,16 @@ func TestArtifactReceiverReadyAuthorityResourceAndStaleOutcomes(t *testing.T) {
 				origin, channelID, []model.Digest{content.manifest.RootDigest()})},
 			readyErrors: []error{store.ErrPeerInboxArtifactAuthority},
 		}
-		client := artifactReceiverContentClient(t, content)
-		var reconciles atomic.Int32
-		reconciler := &artifactReceiverTestReconciler{reconcile: func(reconcileContext context.Context,
-			gotChannel model.ChannelID, gotPeer model.PeerID,
-		) error {
-			if gotChannel != channelID || gotPeer != origin.PeerID() {
-				t.Fatalf("authority reconcile scope = %s/%s", gotChannel, gotPeer)
-			}
-			deadline, ok := reconcileContext.Deadline()
-			remaining := time.Until(deadline)
-			if !ok || remaining <= 0 || remaining > HermeticLimits().ChannelRequestTimeout {
-				t.Fatalf("authority reconcile deadline = %v, present=%t", remaining, ok)
-			}
-			reconciles.Add(1)
-			return nil
-		}}
-		receiver := newArtifactReceiverForTest(t, backend, client,
-			newArtifactReceiverTestCAS(t), 10*time.Second, 4,
-			&artifactReceiverTestClock{at: at}, reconciler)
-		if err := receiver.runCycle(context.Background()); err != nil {
-			t.Fatal(err)
-		}
-		backend.mu.Lock()
-		retries := append([]artifactReceiverTestRetry(nil), backend.retries...)
-		log := append([]string(nil), backend.log...)
-		backend.mu.Unlock()
-		if reconciles.Load() != 1 || len(retries) != 1 ||
-			retries[0].diagnostic != store.PeerInboxArtifactRetryNotAuthorized ||
-			fmt.Sprint(log) != fmt.Sprint([]string{"checkpoint", "ready", "retry"}) {
-			t.Fatalf("authority race = reconciles %d retries %#v log %v",
-				reconciles.Load(), retries, log)
-		}
-	})
-
-	t.Run("reconciliation deadline failure still releases the claim", func(t *testing.T) {
-		at := artifactReceiverTestTime()
-		origin := testkit.NewIdentity(t, "artifact-receiver-reconcile-timeout-origin")
-		channelID := artifactReceiverChannelID(t, "reconcile-timeout")
-		content := artifactReceiverContentForTest(t, "reconcile-timeout", []byte("timeout bytes"))
-		backend := &artifactReceiverTestBackend{
-			claims: []artifactReceiverClaim{artifactReceiverClaimForTest(t, "reconcile-timeout",
-				origin, channelID, []model.Digest{content.manifest.RootDigest()})},
-			readyErrors: []error{store.ErrPeerInboxArtifactAuthority},
-		}
-		reconciler := &artifactReceiverTestReconciler{reconcile: func(ctx context.Context,
-			_ model.ChannelID, _ model.PeerID,
-		) error {
-			deadline, ok := ctx.Deadline()
-			remaining := time.Until(deadline)
-			if !ok || remaining <= 0 || remaining > HermeticLimits().ChannelRequestTimeout {
-				t.Fatalf("reconciliation timeout deadline = %v, present=%t", remaining, ok)
-			}
-			return context.DeadlineExceeded
-		}}
 		receiver := newArtifactReceiverForTest(t, backend,
 			artifactReceiverContentClient(t, content), newArtifactReceiverTestCAS(t),
-			10*time.Second, 4, &artifactReceiverTestClock{at: at}, reconciler)
-		if err := receiver.runCycle(context.Background()); err != nil {
-			t.Fatal(err)
-		}
-		backend.mu.Lock()
-		retries := append([]artifactReceiverTestRetry(nil), backend.retries...)
-		backend.mu.Unlock()
-		snapshot := receiver.Snapshot()
-		if len(retries) != 1 ||
-			retries[0].diagnostic != store.PeerInboxArtifactRetryNotAuthorized ||
-			snapshot.Reconciliations != 1 || snapshot.ReconciliationFailures != 1 {
-			t.Fatalf("reconciliation timeout outcome = retries %#v snapshot %#v", retries, snapshot)
-		}
-	})
-
-	t.Run("outer cancellation during reconciliation never settles", func(t *testing.T) {
-		at := artifactReceiverTestTime()
-		origin := testkit.NewIdentity(t, "artifact-receiver-reconcile-cancel-origin")
-		channelID := artifactReceiverChannelID(t, "reconcile-cancel")
-		content := artifactReceiverContentForTest(t, "reconcile-cancel", []byte("cancel bytes"))
-		backend := &artifactReceiverTestBackend{
-			claims: []artifactReceiverClaim{artifactReceiverClaimForTest(t, "reconcile-cancel",
-				origin, channelID, []model.Digest{content.manifest.RootDigest()})},
-			readyErrors: []error{store.ErrPeerInboxArtifactAuthority},
-		}
-		ctx, cancel := context.WithCancel(context.Background())
-		reconciler := &artifactReceiverTestReconciler{reconcile: func(context.Context,
-			model.ChannelID, model.PeerID,
-		) error {
-			cancel()
-			return context.Canceled
-		}}
-		receiver := newArtifactReceiverForTest(t, backend,
-			artifactReceiverContentClient(t, content), newArtifactReceiverTestCAS(t),
-			10*time.Second, 4, &artifactReceiverTestClock{at: at}, reconciler)
-		if err := receiver.runCycle(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			t.Fatal(err)
-		}
+			10*time.Second, 4, &artifactReceiverTestClock{at: at})
+		err := receiver.runCycle(context.Background())
 		backend.mu.Lock()
 		settlements := len(backend.retries) + len(backend.quarantines)
 		backend.mu.Unlock()
-		if settlements != 0 || receiver.Snapshot().Retries != 0 ||
-			receiver.Snapshot().Quarantines != 0 {
-			t.Fatalf("reconciliation cancellation settled claim: %d / %#v",
-				settlements, receiver.Snapshot())
+		if !errors.Is(err, ErrArtifactReceiverInvariant) || settlements != 0 {
+			t.Fatalf("accepted ready authority failure = %v, settlements %d",
+				err, settlements)
 		}
 	})
 
@@ -908,11 +817,10 @@ func TestArtifactReceiverRenewsAndUsesOnlyReplacementFence(t *testing.T) {
 		return artifactReceiverManifestFrame(t, content.manifest), nil
 	}
 	client.block = func(context.Context, model.PeerID, GetBlock) (Block, error) {
+		clock.Advance(70 * time.Second)
 		return artifactReceiverBlockFrame(t, content.blockBytes), nil
 	}
-	cas := &artifactReceiverAdvancingCAS{CAS: newArtifactReceiverTestCAS(t), clock: clock,
-		verifyAdvance: 70 * time.Second}
-	receiver := newArtifactReceiverForTest(t, backend, client, cas,
+	receiver := newArtifactReceiverForTest(t, backend, client, newArtifactReceiverTestCAS(t),
 		10*time.Second, 4, clock)
 	if err := receiver.runCycle(context.Background()); err != nil {
 		t.Fatal(err)
@@ -921,9 +829,9 @@ func TestArtifactReceiverRenewsAndUsesOnlyReplacementFence(t *testing.T) {
 	renewed := append([]artifactReceiverFence(nil), backend.renewed...)
 	readyFences := append([]artifactReceiverFence(nil), backend.readyFences...)
 	backend.mu.Unlock()
-	if len(renewed) < 3 || len(readyFences) != 1 ||
+	if len(renewed) < 2 || len(readyFences) != 1 ||
 		!readyFences[0].leaseUntil.Equal(renewed[len(renewed)-1].leaseUntil) ||
-		!readyFences[0].leaseUntil.Equal(at.Add(330*time.Second)) {
+		!readyFences[0].leaseUntil.Equal(at.Add(260*time.Second)) {
 		t.Fatalf("renewed/ready fences = %#v / %#v", renewed, readyFences)
 	}
 	if receiver.Snapshot().Renewals == 0 {
@@ -1059,7 +967,9 @@ func TestArtifactReceiverCheckpointReadyOrderAndResponseLossReplay(t *testing.T)
 	backend := &artifactReceiverTestBackend{
 		claims: []artifactReceiverClaim{artifactReceiverClaimForTest(t, "replay", origin,
 			channelID, []model.Digest{content.manifest.RootDigest()})},
-		checkpointErrors: []error{responseLost, nil}, readyErrors: []error{responseLost, nil},
+		checkpointErrors: []error{responseLost, nil},
+		acceptErrors:     []error{responseLost, nil},
+		readyErrors:      []error{responseLost, nil},
 	}
 	client := &artifactReceiverTestClient{}
 	client.manifest = func(context.Context, model.PeerID, GetManifest) (Manifest, error) {
@@ -1076,7 +986,7 @@ func TestArtifactReceiverCheckpointReadyOrderAndResponseLossReplay(t *testing.T)
 	backend.mu.Lock()
 	log := append([]string(nil), backend.log...)
 	backend.mu.Unlock()
-	want := []string{"checkpoint", "checkpoint", "ready", "ready"}
+	want := []string{"checkpoint", "checkpoint", "accept", "accept", "ready", "ready"}
 	if fmt.Sprint(log) != fmt.Sprint(want) || receiver.Snapshot().Checkpoints != 1 ||
 		receiver.Snapshot().Ready != 1 {
 		t.Fatalf("response-loss replay order = %v, snapshot %#v", log, receiver.Snapshot())
@@ -1422,10 +1332,9 @@ func TestArtifactReceiverRealStoreStagedPartialRestartAndResponseLoss(t *testing
 		t.Fatalf("put partial-restart Inbox = (%#v, %v)", put, err)
 	}
 	firstContext, cancelFirst := context.WithCancel(ctx)
-	firstStore := &artifactReceiverResponseLossStore{ArtifactReceiverStore: st,
-		loseFirstStage: true}
+	firstStore := &artifactReceiverResponseLossStore{ArtifactReceiverStore: st}
 	firstClient := &artifactReceiverRecordingClient{delegate: realClient, cas: receiverCAS,
-		cancelBeforeBlock: 2, cancel: cancelFirst}
+		store: firstStore, cancelBeforeBlock: 2, cancel: cancelFirst}
 	first, err := NewArtifactReceiver(ArtifactReceiverOptions{Store: firstStore,
 		Client: firstClient, CAS: receiverCAS, Reconciler: reconciler,
 		Clock: &artifactReceiverTestClock{at: firstAt}, Period: artifactReceiverDefaultPeriod})
@@ -1435,14 +1344,15 @@ func TestArtifactReceiverRealStoreStagedPartialRestartAndResponseLoss(t *testing
 	if err := first.runCycle(firstContext); !errors.Is(err, context.Canceled) {
 		t.Fatalf("partial first worker cancellation = %v", err)
 	}
-	firstBlockRequests, stageFence := assertArtifactReceiverPartialFirstPass(t,
+	firstBlockRequests, stageFence, firstOwner := assertArtifactReceiverPartialFirstPass(t,
 		firstStore, firstClient, source, first, receiverCAS)
 	assertArtifactReceiverPartialStage(t, st, stageFence, rootDigest, firstAt)
 
 	secondAt := firstAt.Add(121 * time.Second)
 	secondStore := &artifactReceiverResponseLossStore{ArtifactReceiverStore: st,
-		loseFirstReady: true}
-	secondClient := &artifactReceiverRecordingClient{delegate: realClient, cas: receiverCAS}
+		loseFirstStage: true, loseFirstAccept: true, loseFirstReady: true}
+	secondClient := &artifactReceiverRecordingClient{delegate: realClient, cas: receiverCAS,
+		store: secondStore}
 	second, err := NewArtifactReceiver(ArtifactReceiverOptions{Store: secondStore,
 		Client: secondClient, CAS: receiverCAS, Reconciler: reconciler,
 		Clock: &artifactReceiverTestClock{at: secondAt}, Period: artifactReceiverDefaultPeriod})
@@ -1453,7 +1363,7 @@ func TestArtifactReceiverRealStoreStagedPartialRestartAndResponseLoss(t *testing
 		t.Fatal(err)
 	}
 	assertArtifactReceiverPartialRestart(t, secondStore, secondClient, source, second,
-		firstBlockRequests[1])
+		firstBlockRequests, firstOwner)
 	verified, err := st.GetVerifiedArtifactRoot(ctx, rootDigest)
 	if err != nil || verified.ManifestDigest != manifest.ManifestDigest() {
 		t.Fatalf("partial restart final verified root = (%#v, %v)", verified, err)
@@ -1473,32 +1383,39 @@ func TestArtifactReceiverRealStoreStagedPartialRestartAndResponseLoss(t *testing
 func assertArtifactReceiverPartialFirstPass(t *testing.T,
 	responseLoss *artifactReceiverResponseLossStore, client *artifactReceiverRecordingClient,
 	source *artifactServerTestSource, receiver *ArtifactReceiver, cas artifactReceiverCAS,
-) ([]model.Digest, store.PeerInboxArtifactFence) {
+) ([]model.Digest, store.PeerInboxArtifactFence, artifactdomain.StageOwner) {
 	t.Helper()
 	stageResults, stageSpecs, _ := responseLoss.snapshot()
-	if len(stageResults) != 2 || !stageResults[0].Changed() || stageResults[0].Replayed() ||
-		stageResults[1].Changed() || !stageResults[1].Replayed() {
-		t.Fatalf("stage response-loss proof = %#v", stageResults)
-	}
-	if len(stageSpecs) != 2 || stageSpecs[0].Fence != stageSpecs[1].Fence ||
-		stageSpecs[0].At != stageSpecs[1].At {
-		t.Fatalf("stage replay fence changed = %#v", stageSpecs)
+	beginResults, beginSpecs := responseLoss.beginSnapshot()
+	if len(beginResults) != 1 || len(beginSpecs) != 1 ||
+		beginResults[0].State() != store.ArtifactStageStaged ||
+		beginResults[0].Owner().Generation() != 1 ||
+		len(stageResults) != 0 || len(stageSpecs) != 0 {
+		t.Fatalf("partial stage registration = begin %#v/%#v prepare %#v/%#v",
+			beginResults, beginSpecs, stageResults, stageSpecs)
 	}
 	manifestRequests, blockRequests, observedDurable := client.snapshot()
 	if len(manifestRequests) != 1 || len(blockRequests) != 2 || !observedDurable ||
 		source.manifestCalls.Load() != 1 || source.blockCalls.Load() != 1 ||
-		receiver.Snapshot().Checkpoints != 1 || receiver.Snapshot().Ready != 0 {
+		receiver.Snapshot().Checkpoints != 0 || receiver.Snapshot().Ready != 0 {
 		t.Fatalf("partial first worker = manifests %v blocks %v durable %t source %d/%d snapshot %#v",
 			manifestRequests, blockRequests, observedDurable, source.manifestCalls.Load(),
 			source.blockCalls.Load(), receiver.Snapshot())
 	}
-	if _, err := cas.Read(blockRequests[0], artifactdomain.BlockSize); err != nil {
-		t.Fatalf("first pulled block was not durable: %v", err)
+	if _, err := cas.Read(blockRequests[0], artifactdomain.BlockSize); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("partial staged block escaped into final CAS: %v", err)
 	}
-	if _, err := cas.Read(blockRequests[1], artifactdomain.BlockSize); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("cancelled block unexpectedly materialized: %v", err)
+	stage, err := cas.OpenStage(beginResults[0].Owner())
+	if err != nil {
+		t.Fatal(err)
 	}
-	return blockRequests, stageSpecs[0].Fence
+	if _, err := stage.Read(blockRequests[0], artifactdomain.BlockSize); err != nil {
+		t.Fatalf("first pulled block was not staged: %v", err)
+	}
+	if _, err := stage.Read(blockRequests[1], artifactdomain.BlockSize); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("cancelled block unexpectedly staged: %v", err)
+	}
+	return blockRequests, beginSpecs[0].Fence, beginResults[0].Owner()
 }
 
 func assertArtifactReceiverPartialStage(t *testing.T, st *store.Store,
@@ -1507,8 +1424,9 @@ func assertArtifactReceiverPartialStage(t *testing.T, st *store.Store,
 	t.Helper()
 	staged, found, err := st.ReadPeerInboxArtifactRoot(context.Background(),
 		store.ReadPeerInboxArtifactRootSpec{Fence: fence, RootDigest: rootDigest, At: at})
-	if err != nil || !found || staged.State() != store.PeerInboxArtifactRootStaged {
-		t.Fatalf("durable partial stage = (%#v, found %t, %v)", staged, found, err)
+	if err != nil || found {
+		t.Fatalf("partial bytes created relational closure = (%#v, found %t, %v)",
+			staged, found, err)
 	}
 	if _, err := st.GetVerifiedArtifactRoot(context.Background(), rootDigest); !errors.Is(err, store.ErrArtifactUnverified) {
 		t.Fatalf("partial stage escaped as verified authority: %v", err)
@@ -1517,20 +1435,90 @@ func assertArtifactReceiverPartialStage(t *testing.T, st *store.Store,
 
 func assertArtifactReceiverPartialRestart(t *testing.T,
 	responseLoss *artifactReceiverResponseLossStore, client *artifactReceiverRecordingClient,
-	source *artifactServerTestSource, receiver *ArtifactReceiver, missing model.Digest,
+	source *artifactServerTestSource, receiver *ArtifactReceiver,
+	blocks []model.Digest, firstOwner artifactdomain.StageOwner,
+) {
+	t.Helper()
+	assertArtifactReceiverReclaimNetwork(t, client, source, receiver, blocks)
+	assertArtifactReceiverReclaimSettlement(t, responseLoss, firstOwner)
+	firstStage, err := receiver.cas.OpenStage(firstOwner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := firstStage.Read(blocks[0], artifactdomain.BlockSize); err != nil {
+		t.Fatalf("reclaim changed prior generation: %v", err)
+	}
+}
+
+func assertArtifactReceiverReclaimNetwork(t *testing.T,
+	client *artifactReceiverRecordingClient, source *artifactServerTestSource,
+	receiver *ArtifactReceiver, blocks []model.Digest,
 ) {
 	t.Helper()
 	manifestRequests, blockRequests, _ := client.snapshot()
-	if len(manifestRequests) != 0 || len(blockRequests) != 1 || blockRequests[0] != missing ||
-		source.manifestCalls.Load() != 1 || source.blockCalls.Load() != 2 ||
-		receiver.Snapshot().ManifestCacheHits != 1 || receiver.Snapshot().ManifestPulls != 0 ||
-		receiver.Snapshot().BlockCacheHits != 1 || receiver.Snapshot().BlockPulls != 1 ||
+	if len(manifestRequests) != 1 || len(blockRequests) != 2 ||
+		fmt.Sprint(blockRequests) != fmt.Sprint(blocks) ||
+		source.manifestCalls.Load() != 2 || source.blockCalls.Load() != 3 ||
+		receiver.Snapshot().ManifestCacheHits != 0 || receiver.Snapshot().ManifestPulls != 1 ||
+		receiver.Snapshot().BlockCacheHits != 0 || receiver.Snapshot().BlockPulls != 2 ||
 		receiver.Snapshot().Ready != 1 {
-		t.Fatalf("partial restart reuse = manifests %v blocks %v source %d/%d snapshot %#v",
+		t.Fatalf("partial reclaim isolation = manifests %v blocks %v source %d/%d snapshot %#v",
 			manifestRequests, blockRequests, source.manifestCalls.Load(), source.blockCalls.Load(),
 			receiver.Snapshot())
 	}
-	_, _, readyResults := responseLoss.snapshot()
+}
+
+func assertArtifactReceiverReclaimSettlement(t *testing.T,
+	responseLoss *artifactReceiverResponseLossStore, firstOwner artifactdomain.StageOwner,
+) {
+	t.Helper()
+	stageResults, stageSpecs, readyResults := responseLoss.snapshot()
+	beginResults, beginSpecs := responseLoss.beginSnapshot()
+	assertArtifactReceiverReclaimPrepare(t, beginResults, beginSpecs, stageResults, stageSpecs, firstOwner)
+	acceptResults, acceptSpecs := responseLoss.acceptSnapshot()
+	assertArtifactReceiverReclaimAccept(t, beginResults[0].Owner(), acceptResults, acceptSpecs)
+	assertArtifactReceiverReclaimReady(t, readyResults)
+}
+
+func assertArtifactReceiverReclaimPrepare(t *testing.T,
+	beginResults []store.PeerInboxArtifactStageRegistration,
+	beginSpecs []store.BeginPeerInboxArtifactStageSpec,
+	stageResults []store.PeerInboxArtifactStage,
+	stageSpecs []store.PreparePeerInboxArtifactPublishSpec,
+	firstOwner artifactdomain.StageOwner,
+) {
+	t.Helper()
+	if len(beginResults) != 1 || len(beginSpecs) != 1 ||
+		beginResults[0].State() != store.ArtifactStageStaged ||
+		beginResults[0].Owner().Generation() != firstOwner.Generation()+1 ||
+		len(stageResults) != 2 || !stageResults[0].Changed() ||
+		stageResults[0].Replayed() || stageResults[1].Changed() ||
+		!stageResults[1].Replayed() || len(stageSpecs) != 2 ||
+		stageSpecs[0].Owner != beginResults[0].Owner() ||
+		stageSpecs[1].Owner != beginResults[0].Owner() {
+		t.Fatalf("reclaimed prepare response-loss proof = begin %#v/%#v prepare %#v/%#v",
+			beginResults, beginSpecs, stageResults, stageSpecs)
+	}
+}
+
+func assertArtifactReceiverReclaimAccept(t *testing.T, owner artifactdomain.StageOwner,
+	acceptResults []store.PeerInboxArtifactStage,
+	acceptSpecs []store.AcceptPeerInboxArtifactPublishSpec,
+) {
+	t.Helper()
+	if len(acceptResults) != 2 || !acceptResults[0].Changed() ||
+		acceptResults[0].Replayed() || acceptResults[1].Changed() ||
+		!acceptResults[1].Replayed() || len(acceptSpecs) != 2 ||
+		acceptSpecs[0].Owner != owner || acceptSpecs[1].Owner != owner {
+		t.Fatalf("reclaimed accept response-loss proof = %#v/%#v",
+			acceptResults, acceptSpecs)
+	}
+}
+
+func assertArtifactReceiverReclaimReady(t *testing.T,
+	readyResults []store.PeerInboxArtifactSettlement,
+) {
+	t.Helper()
 	if len(readyResults) != 2 || !readyResults[0].Changed() || readyResults[0].Replayed() ||
 		readyResults[1].Changed() || !readyResults[1].Replayed() ||
 		readyResults[1].Status() != model.InboxReady {
@@ -1538,139 +1526,42 @@ func assertArtifactReceiverPartialRestart(t *testing.T,
 	}
 }
 
-type artifactReceiverResponseLossStore struct {
-	ArtifactReceiverStore
-
-	mu             sync.Mutex
-	loseFirstStage bool
-	loseFirstReady bool
-	stageResults   []store.PeerInboxArtifactStage
-	stageSpecs     []store.StagePeerInboxArtifactClosureSpec
-	readyResults   []store.PeerInboxArtifactSettlement
-}
-
-func (st *artifactReceiverResponseLossStore) StagePeerInboxArtifactClosure(ctx context.Context,
-	spec store.StagePeerInboxArtifactClosureSpec,
-) (store.PeerInboxArtifactStage, error) {
-	result, err := st.ArtifactReceiverStore.StagePeerInboxArtifactClosure(ctx, spec)
-	st.mu.Lock()
-	st.stageResults = append(st.stageResults, result)
-	st.stageSpecs = append(st.stageSpecs, spec)
-	lose := err == nil && st.loseFirstStage && len(st.stageResults) == 1
-	st.mu.Unlock()
-	if lose {
-		return result, errors.New("injected Stage response loss after commit")
-	}
-	return result, err
-}
-
-func (st *artifactReceiverResponseLossStore) MarkPeerInboxArtifactReady(ctx context.Context,
-	spec store.MarkPeerInboxArtifactReadySpec,
-) (store.PeerInboxArtifactSettlement, error) {
-	result, err := st.ArtifactReceiverStore.MarkPeerInboxArtifactReady(ctx, spec)
-	st.mu.Lock()
-	st.readyResults = append(st.readyResults, result)
-	lose := err == nil && st.loseFirstReady && len(st.readyResults) == 1
-	st.mu.Unlock()
-	if lose {
-		return result, errors.New("injected Ready response loss after commit")
-	}
-	return result, err
-}
-
-func (st *artifactReceiverResponseLossStore) snapshot() ([]store.PeerInboxArtifactStage,
-	[]store.StagePeerInboxArtifactClosureSpec, []store.PeerInboxArtifactSettlement,
-) {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	return append([]store.PeerInboxArtifactStage(nil), st.stageResults...),
-		append([]store.StagePeerInboxArtifactClosureSpec(nil), st.stageSpecs...),
-		append([]store.PeerInboxArtifactSettlement(nil), st.readyResults...)
-}
-
-type artifactReceiverRecordingClient struct {
-	delegate ArtifactReceiverClient
-	cas      *artifactdomain.CAS
-	cancel   context.CancelFunc
-
-	mu                sync.Mutex
-	cancelBeforeBlock int
-	manifestRequests  []model.Digest
-	blockRequests     []model.Digest
-	observedDurable   bool
-}
-
-func (client *artifactReceiverRecordingClient) GetManifest(ctx context.Context,
-	peerID model.PeerID, request GetManifest,
-) (Manifest, error) {
-	client.mu.Lock()
-	client.manifestRequests = append(client.manifestRequests, request.RootDigest())
-	client.mu.Unlock()
-	return client.delegate.GetManifest(ctx, peerID, request)
-}
-
-func (client *artifactReceiverRecordingClient) GetBlock(ctx context.Context,
-	peerID model.PeerID, request GetBlock,
-) (Block, error) {
-	client.mu.Lock()
-	client.blockRequests = append(client.blockRequests, request.BlockDigest())
-	call := len(client.blockRequests)
-	cancelBefore := client.cancelBeforeBlock
-	var first model.Digest
-	if len(client.blockRequests) > 1 {
-		first = client.blockRequests[0]
-	}
-	client.mu.Unlock()
-	if cancelBefore > 0 && call == cancelBefore {
-		if client.cas == nil || first.IsZero() {
-			return Block{}, errors.New("partial-restart cancellation has no prior CAS block")
-		}
-		if _, err := client.cas.Read(first, artifactdomain.BlockSize); err != nil {
-			return Block{}, fmt.Errorf("partial-restart prior block is not durable: %w", err)
-		}
-		client.mu.Lock()
-		client.observedDurable = true
-		client.mu.Unlock()
-		if client.cancel != nil {
-			client.cancel()
-		}
-		return Block{}, context.Canceled
-	}
-	return client.delegate.GetBlock(ctx, peerID, request)
-}
-
-func (client *artifactReceiverRecordingClient) snapshot() ([]model.Digest, []model.Digest, bool) {
-	client.mu.Lock()
-	defer client.mu.Unlock()
-	return append([]model.Digest(nil), client.manifestRequests...),
-		append([]model.Digest(nil), client.blockRequests...), client.observedDurable
-}
-
 type artifactReceiverTestBackend struct {
 	mu sync.Mutex
 
-	claims           []artifactReceiverClaim
-	roots            map[model.Digest]artifactReceiverCachedRoot
-	leaseDuration    time.Duration
-	claimCalls       int
-	claimHook        func(context.Context, int) error
-	readRootFn       func(context.Context, artifactReceiverFence, model.Digest, time.Time) (artifactReceiverCachedRoot, bool, error)
-	renewError       error
-	renewed          []artifactReceiverFence
-	probeError       error
-	probeCalls       int
-	checkpointErrors []error
-	checkpointCalls  int
-	checkpointHook   func()
-	lastCheckpoint   store.VerifiedArtifactClosure
-	readyErrors      []error
-	readyCalls       int
-	readyFences      []artifactReceiverFence
-	sourceError      error
-	sources          []model.PeerID
-	retries          []artifactReceiverTestRetry
-	quarantines      []store.PeerInboxArtifactPermanentDiagnostic
-	log              []string
+	claims            []artifactReceiverClaim
+	roots             map[model.Digest]artifactReceiverCachedRoot
+	leaseDuration     time.Duration
+	claimCalls        int
+	claimHook         func(context.Context, int) error
+	readRootFn        func(context.Context, artifactReceiverFence, model.Digest, time.Time) (artifactReceiverCachedRoot, bool, error)
+	renewError        error
+	renewed           []artifactReceiverFence
+	probeError        error
+	probeCalls        int
+	beginState        store.ArtifactStageState
+	beginOwner        artifactdomain.StageOwner
+	beginErrors       []error
+	beginCalls        int
+	checkpointErrors  []error
+	checkpointCalls   int
+	checkpointHook    func()
+	lastCheckpoint    store.VerifiedArtifactClosure
+	acceptErrors      []error
+	acceptCalls       int
+	acceptOwners      []artifactdomain.StageOwner
+	publishCheckpoint artifactReceiverPublishCheckpoint
+	publishReadErrors []error
+	publishReadCalls  int
+	readyErrors       []error
+	readyCalls        int
+	readyFences       []artifactReceiverFence
+	readyOwners       []artifactdomain.StageOwner
+	sourceError       error
+	sources           []model.PeerID
+	retries           []artifactReceiverTestRetry
+	quarantines       []store.PeerInboxArtifactPermanentDiagnostic
+	log               []string
 }
 
 type artifactReceiverTestRetry struct {
@@ -1758,8 +1649,34 @@ func (backend *artifactReceiverTestBackend) recordSource(_ context.Context,
 	return nil
 }
 
-func (backend *artifactReceiverTestBackend) stage(_ context.Context,
-	_ artifactReceiverFence, closure store.VerifiedArtifactClosure, _ time.Time,
+func (backend *artifactReceiverTestBackend) beginStage(_ context.Context,
+	fence artifactReceiverFence, _ time.Time,
+) (artifactReceiverStageRegistration, error) {
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	call := backend.beginCalls
+	backend.beginCalls++
+	if call < len(backend.beginErrors) && backend.beginErrors[call] != nil {
+		return artifactReceiverStageRegistration{}, backend.beginErrors[call]
+	}
+	owner := backend.beginOwner
+	if owner.IsZero() {
+		var err error
+		owner, err = artifactdomain.NewInboxStageOwner(fence.inboxID, 1)
+		if err != nil {
+			return artifactReceiverStageRegistration{}, err
+		}
+	}
+	state := backend.beginState
+	if state == "" {
+		state = store.ArtifactStageStaged
+	}
+	return artifactReceiverStageRegistration{owner: owner, state: state}, nil
+}
+
+func (backend *artifactReceiverTestBackend) preparePublish(_ context.Context,
+	_ artifactReceiverFence, _ artifactdomain.StageOwner,
+	closure store.VerifiedArtifactClosure, _ time.Time,
 ) error {
 	backend.mu.Lock()
 	backend.log = append(backend.log, "checkpoint")
@@ -1778,13 +1695,46 @@ func (backend *artifactReceiverTestBackend) stage(_ context.Context,
 	return result
 }
 
+func (backend *artifactReceiverTestBackend) readPublish(_ context.Context,
+	_ artifactReceiverFence, _ artifactdomain.StageOwner, _ time.Time,
+) (artifactReceiverPublishCheckpoint, error) {
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	call := backend.publishReadCalls
+	backend.publishReadCalls++
+	if call < len(backend.publishReadErrors) && backend.publishReadErrors[call] != nil {
+		return artifactReceiverPublishCheckpoint{}, backend.publishReadErrors[call]
+	}
+	if backend.publishCheckpoint.state.Valid() {
+		return backend.publishCheckpoint, nil
+	}
+	return artifactReceiverPublishCheckpoint{closure: backend.lastCheckpoint,
+		state: store.ArtifactStagePublishing}, nil
+}
+
+func (backend *artifactReceiverTestBackend) acceptPublish(_ context.Context,
+	_ artifactReceiverFence, owner artifactdomain.StageOwner, _ time.Time,
+) error {
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	backend.log = append(backend.log, "accept")
+	backend.acceptOwners = append(backend.acceptOwners, owner)
+	call := backend.acceptCalls
+	backend.acceptCalls++
+	if call < len(backend.acceptErrors) {
+		return backend.acceptErrors[call]
+	}
+	return nil
+}
+
 func (backend *artifactReceiverTestBackend) ready(_ context.Context,
-	fence artifactReceiverFence, _ time.Time,
+	fence artifactReceiverFence, owner artifactdomain.StageOwner, _ time.Time,
 ) error {
 	backend.mu.Lock()
 	defer backend.mu.Unlock()
 	backend.log = append(backend.log, "ready")
 	backend.readyFences = append(backend.readyFences, fence)
+	backend.readyOwners = append(backend.readyOwners, owner)
 	call := backend.readyCalls
 	backend.readyCalls++
 	if call < len(backend.readyErrors) {
@@ -1869,39 +1819,17 @@ func (clock *artifactReceiverTestClock) Advance(duration time.Duration) {
 	clock.mu.Unlock()
 }
 
-type artifactReceiverAdvancingCAS struct {
-	*artifactdomain.CAS
-	clock         *artifactReceiverTestClock
-	verifyAdvance time.Duration
-}
-
 type artifactReceiverFailingCAS struct {
 	*artifactdomain.CAS
 	putError error
 }
 
-type artifactReceiverNilUseCAS struct{ *artifactdomain.CAS }
-
-func (*artifactReceiverNilUseCAS) AcquireUse() (*artifactdomain.CASLease, error) {
-	return nil, nil
-}
-
-func (cas *artifactReceiverFailingCAS) Put(digest model.Digest,
-	content []byte,
-) (artifactdomain.PutResult, error) {
+func (cas *artifactReceiverFailingCAS) OpenStage(owner artifactdomain.StageOwner,
+) (*artifactdomain.Stage, error) {
 	if cas.putError != nil {
-		return artifactdomain.PutResult{}, cas.putError
+		return nil, cas.putError
 	}
-	return cas.CAS.Put(digest, content)
-}
-
-func (cas *artifactReceiverAdvancingCAS) VerifyClosure(ctx context.Context,
-	closure artifactdomain.Closure,
-) error {
-	if cas.verifyAdvance != 0 {
-		cas.clock.Advance(cas.verifyAdvance)
-	}
-	return cas.CAS.VerifyClosure(ctx, closure)
+	return cas.CAS.OpenStage(owner)
 }
 
 type artifactReceiverTestContent struct {

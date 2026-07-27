@@ -33,7 +33,9 @@ func advanceNodeOriginSequence(ctx context.Context, tx *sql.Tx, scope LocalAdmis
 	return nil
 }
 
-func insertLocalProvenance(ctx context.Context, tx *sql.Tx, operation model.Operation, events []model.Event) error {
+func insertLocalProvenance(ctx context.Context, tx *sql.Tx, operation model.Operation,
+	events []model.Event, authority acceptanceArtifactAuthority,
+) error {
 	run := operation.AgentRunID()
 	for _, event := range events {
 		for _, ref := range event.Artifacts() {
@@ -49,7 +51,8 @@ func insertLocalProvenance(ctx context.Context, tx *sql.Tx, operation model.Oper
 			if err != nil {
 				return err
 			}
-			if _, err := insertArtifactProvenance(ctx, tx, provenance); err != nil {
+			if _, err := insertAcceptanceArtifactProvenance(ctx, tx,
+				provenance, operation, authority); err != nil {
 				return err
 			}
 		}

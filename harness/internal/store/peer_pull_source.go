@@ -20,16 +20,17 @@ const (
 )
 
 var (
-	ErrPeerPullInput         = errors.New("invalid Peer Pull source input")
-	ErrPeerPullAuthority     = errors.New("Peer Pull source authority is unavailable")
-	ErrPeerPullNotOrigin     = fmt.Errorf("%w: local Node is not the requested origin", ErrPeerPullAuthority)
-	ErrPeerPullNotMember     = fmt.Errorf("%w: requester is not an active member", ErrPeerPullAuthority)
-	ErrPeerPullMemberRevoked = fmt.Errorf("%w: requester membership is terminal", ErrPeerPullAuthority)
-	ErrPeerPullChannelClosed = fmt.Errorf("%w: Channel is closed", ErrPeerPullAuthority)
-	ErrPeerPullEpochMismatch = errors.New("Peer Pull source origin epoch mismatch")
-	ErrPeerPullCursor        = errors.New("Peer Pull source cursor is invalid")
-	ErrPeerPullHistoryGap    = errors.New("Peer Pull source history gap")
-	ErrPeerPullInvariant     = errors.New("Peer Pull source durable invariant violated")
+	ErrPeerPullInput              = errors.New("invalid Peer Pull source input")
+	ErrPeerPullAuthority          = errors.New("Peer Pull source authority is unavailable")
+	ErrPeerPullNotOrigin          = fmt.Errorf("%w: local Node is not the requested origin", ErrPeerPullAuthority)
+	ErrPeerPullNotMember          = fmt.Errorf("%w: requester is not an active member", ErrPeerPullAuthority)
+	ErrPeerPullMemberRevoked      = fmt.Errorf("%w: requester membership is terminal", ErrPeerPullAuthority)
+	ErrPeerPullChannelClosed      = fmt.Errorf("%w: Channel is closed", ErrPeerPullAuthority)
+	ErrPeerPullEpochMismatch      = errors.New("Peer Pull source origin epoch mismatch")
+	ErrPeerPullCursor             = errors.New("Peer Pull source cursor is invalid")
+	ErrPeerPullHistoryGap         = errors.New("Peer Pull source history gap")
+	ErrPeerPullPublicationPending = errors.New("Peer Pull source publication is pending")
+	ErrPeerPullInvariant          = errors.New("Peer Pull source durable invariant violated")
 )
 
 // PeerPullHistoryGap is a terminal, structured repair failure. SourceFloor is
@@ -340,80 +341,4 @@ func advancePeerPullAcknowledgement(ctx context.Context, tx *sql.Tx, state peerP
 		return false, fmt.Errorf("advance Peer Pull acknowledgement: settle deliveries: %w", err)
 	}
 	return true, nil
-}
-
-func readContinuousPeerPullPublications(ctx context.Context, tx *sql.Tx,
-	state peerPullSourceState, after uint64, limit int,
-) ([]model.SignedPublication, uint64, error) {
-	if after == state.sourceHead {
-		return []model.SignedPublication{}, after, nil
-	}
-	rows, err := tx.QueryContext(ctx, `SELECT event_id,channel_seq FROM events
-		WHERE channel_id=? AND origin_peer_id=? AND origin_epoch=? AND source='local'
-		AND channel_seq>? AND channel_seq<=? ORDER BY channel_seq LIMIT ?`,
-		state.authority.channel.ID().String(), state.node.PeerID().String(),
-		state.node.OriginEpoch().String(), after, state.sourceHead, limit)
-	if err != nil {
-		return nil, 0, fmt.Errorf("read Peer Pull page index: %w", err)
-	}
-	type indexedEvent struct {
-		id       model.EventID
-		sequence uint64
-	}
-	indexed := make([]indexedEvent, 0, limit)
-	for rows.Next() {
-		var eventText string
-		var sequence uint64
-		if err := rows.Scan(&eventText, &sequence); err != nil {
-			rows.Close()
-			return nil, 0, fmt.Errorf("read Peer Pull page index: scan: %w", err)
-		}
-		eventID, err := model.ParseEventID(eventText)
-		if err != nil || sequence == 0 || sequence > model.MaxSQLiteInteger {
-			rows.Close()
-			return nil, 0, fmt.Errorf("%w: invalid indexed Event identity", ErrPeerPullInvariant)
-		}
-		indexed = append(indexed, indexedEvent{id: eventID, sequence: sequence})
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return nil, 0, fmt.Errorf("read Peer Pull page index: iterate: %w", err)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, 0, fmt.Errorf("read Peer Pull page index: close: %w", err)
-	}
-
-	publications := make([]model.SignedPublication, 0, len(indexed))
-	expected := after + 1
-	totalBytes := 0
-	for _, item := range indexed {
-		if item.sequence != expected {
-			return nil, 0, fmt.Errorf("%w: source sequence %d is missing before %d",
-				ErrPeerPullInvariant, expected, item.sequence)
-		}
-		stored, err := readGossipPublication(ctx, tx, item.id)
-		if err != nil {
-			return nil, 0, fmt.Errorf("%w: publication sequence %d: %v",
-				ErrPeerPullInvariant, item.sequence, err)
-		}
-		publication := stored.Record.Publication()
-		if publication.Key().ChannelSequence() != item.sequence {
-			return nil, 0, fmt.Errorf("%w: publication sequence projection mismatch", ErrPeerPullInvariant)
-		}
-		if err := validateGossipPublicationAuthority(state.node, state.authority, publication); err != nil {
-			return nil, 0, fmt.Errorf("%w: publication sequence %d: %v",
-				ErrPeerPullInvariant, item.sequence, err)
-		}
-		rawBytes := len(publication.WireJSON().Bytes())
-		if totalBytes > maxPeerPullPageBytes-maxPeerPullPageEnvelopeBytes-rawBytes {
-			break
-		}
-		totalBytes += rawBytes
-		publications = append(publications, publication)
-		expected++
-	}
-	if len(publications) == 0 {
-		return nil, 0, fmt.Errorf("%w: source head has no bounded next publication", ErrPeerPullInvariant)
-	}
-	return publications, after + uint64(len(publications)), nil
 }

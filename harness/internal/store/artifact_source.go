@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 
-	artifactdomain "github.com/mnemon-dev/mnemon/harness/internal/artifact"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 )
 
@@ -335,71 +334,4 @@ func validateArtifactSourceEventAuthority(authority verifiedChannelAuthority,
 type sealedArtifactSourceClosure struct {
 	root       VerifiedArtifactRoot
 	blockSizes map[model.Digest]uint64
-}
-
-func readSealedArtifactSourceClosure(ctx context.Context, tx *sql.Tx,
-	rootDigest model.Digest,
-) (sealedArtifactSourceClosure, error) {
-	root, state, err := readArtifactRoot(ctx, tx, rootDigest)
-	if err != nil {
-		return sealedArtifactSourceClosure{}, fmt.Errorf("%w: root metadata: %v",
-			ErrArtifactSourceInvariant, err)
-	}
-	if state != "verified" || root.VerifiedAt.IsZero() {
-		return sealedArtifactSourceClosure{}, fmt.Errorf("%w: Event-pinned root is not verified",
-			ErrArtifactSourceInvariant)
-	}
-	manifest, err := artifactdomain.ParseManifest(root.Manifest.Bytes())
-	if err != nil || manifest.RootDigest() != root.RootDigest ||
-		manifest.ManifestDigest() != root.ManifestDigest ||
-		manifest.TotalBytes() != root.TotalBytes ||
-		!bytes.Equal(manifest.CanonicalJSON().Bytes(), root.Manifest.Bytes()) {
-		return sealedArtifactSourceClosure{}, fmt.Errorf("%w: sealed manifest projection: %v",
-			ErrArtifactSourceInvariant, err)
-	}
-	expected := artifactSourceRootMap(manifest)
-	actual, err := readArtifactRootBlockMap(ctx, tx, rootDigest)
-	if err != nil || !equalArtifactRootBlocks(actual, expected) {
-		return sealedArtifactSourceClosure{}, fmt.Errorf("%w: sealed root block map: %v",
-			ErrArtifactSourceInvariant, err)
-	}
-	blockSizes := make(map[model.Digest]uint64)
-	for _, row := range expected {
-		if previous, present := blockSizes[row.BlockDigest]; present {
-			if previous != row.LengthBytes {
-				return sealedArtifactSourceClosure{}, fmt.Errorf("%w: inconsistent manifest block size",
-					ErrArtifactSourceInvariant)
-			}
-			continue
-		}
-		var size uint64
-		var createdText string
-		err := tx.QueryRowContext(ctx, `SELECT size_bytes,created_at FROM artifact_blocks
-			WHERE block_digest=?`, row.BlockDigest.String()).Scan(&size, &createdText)
-		if err != nil || size != row.LengthBytes || size == 0 ||
-			size > artifactdomain.BlockSize {
-			return sealedArtifactSourceClosure{}, fmt.Errorf("%w: reachable block metadata: %v",
-				ErrArtifactSourceInvariant, err)
-		}
-		if _, err := parseCanonicalStoreTime(createdText); err != nil {
-			return sealedArtifactSourceClosure{}, fmt.Errorf("%w: reachable block creation time: %v",
-				ErrArtifactSourceInvariant, err)
-		}
-		blockSizes[row.BlockDigest] = size
-	}
-	return sealedArtifactSourceClosure{root: root, blockSizes: blockSizes}, nil
-}
-
-func artifactSourceRootMap(manifest artifactdomain.Manifest) []VerifiedArtifactRootBlock {
-	entries := manifest.Entries()
-	rows := make([]VerifiedArtifactRootBlock, 0)
-	for _, entry := range entries {
-		for _, block := range entry.Blocks {
-			rows = append(rows, VerifiedArtifactRootBlock{RootDigest: manifest.RootDigest(),
-				Ordinal: uint64(len(rows)), LogicalPath: entry.LogicalPath,
-				OffsetBytes: block.OffsetBytes, LengthBytes: block.LengthBytes,
-				BlockDigest: block.Digest, Mode: entry.Mode})
-		}
-	}
-	return rows
 }

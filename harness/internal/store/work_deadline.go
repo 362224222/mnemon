@@ -222,7 +222,7 @@ func validateWorkExpiryPublicationTx(ctx context.Context, tx *sql.Tx,
 		return model.Event{}, err
 	}
 	if _, err := validateAcceptanceArtifacts(ctx, tx, model.Operation{}, controller,
-		[]model.Event{event}); err != nil {
+		[]model.Event{event}, event.AcceptedAt()); err != nil {
 		return model.Event{}, err
 	}
 	return event, nil

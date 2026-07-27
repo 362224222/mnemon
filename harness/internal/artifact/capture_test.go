@@ -27,11 +27,12 @@ func TestCaptureWorkspaceRootsBuildsVerifiableReplayableClosure(t *testing.T) {
 	mustWrite(t, filepath.Join(workspace, "single.txt"), []byte("standalone"), 0o644)
 	cas := newCaptureCAS(t)
 	now := time.Date(2026, 7, 16, 18, 0, 0, 123, time.UTC)
-	capturer, err := NewCapturer(workspace, cas, func() time.Time { return now })
+	capturer, err := NewCapturer(workspace, func() time.Time { return now })
 	if err != nil {
 		t.Fatal(err)
 	}
-	closure, err := capturer.Capture(context.Background(), []string{"./bundle", "single.txt"})
+	closure, err := capturer.Capture(context.Background(),
+		[]string{"./bundle", "single.txt"}, cas)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,8 +71,9 @@ func TestCaptureWorkspaceRootsBuildsVerifiableReplayableClosure(t *testing.T) {
 		t.Fatalf("bundle entries = %#v", entries)
 	}
 
-	replayCapturer, _ := NewCapturer(workspace, cas, func() time.Time { return now.Add(time.Hour) })
-	replay, err := replayCapturer.Capture(context.Background(), []string{"bundle", "single.txt"})
+	replayCapturer, _ := NewCapturer(workspace, func() time.Time { return now.Add(time.Hour) })
+	replay, err := replayCapturer.Capture(context.Background(),
+		[]string{"bundle", "single.txt"}, cas)
 	if err != nil || !closure.SameContent(replay) || replay.Checkpoint().String() != closure.Checkpoint().String() {
 		t.Fatalf("exact replay = same %t checkpoint %s err %v",
 			closure.SameContent(replay), replay.Checkpoint().String(), err)
@@ -106,7 +108,8 @@ func TestCaptureRejectsUnsafeWorkspacePathsAndObjectTypes(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer listener.Close()
-	capturer, _ := NewCapturer(workspace, newCaptureCAS(t), fixedCaptureClock())
+	cas := newCaptureCAS(t)
+	capturer, _ := NewCapturer(workspace, fixedCaptureClock())
 	invalid := []struct {
 		name  string
 		roots []string
@@ -126,12 +129,12 @@ func TestCaptureRejectsUnsafeWorkspacePathsAndObjectTypes(t *testing.T) {
 		{"socket", []string{"socket"}},
 		{"duplicate", []string{"safe.txt", "./safe.txt"}},
 	}
-	if _, err := capturer.Capture(context.Background(), nil); !errors.Is(err, ErrArtifactLimit) {
+	if _, err := capturer.Capture(context.Background(), nil, cas); !errors.Is(err, ErrArtifactLimit) {
 		t.Fatalf("zero root count error = %v", err)
 	}
 	for _, test := range invalid {
 		t.Run(test.name, func(t *testing.T) {
-			if _, err := capturer.Capture(context.Background(), test.roots); err == nil {
+			if _, err := capturer.Capture(context.Background(), test.roots, cas); err == nil {
 				t.Fatalf("Capture accepted roots %#v", test.roots)
 			}
 		})
@@ -140,7 +143,7 @@ func TestCaptureRejectsUnsafeWorkspacePathsAndObjectTypes(t *testing.T) {
 	for index := range tooMany {
 		tooMany[index] = "safe.txt"
 	}
-	if _, err := capturer.Capture(context.Background(), tooMany); !errors.Is(err, ErrArtifactLimit) {
+	if _, err := capturer.Capture(context.Background(), tooMany, cas); !errors.Is(err, ErrArtifactLimit) {
 		t.Fatalf("root count limit error = %v", err)
 	}
 }
@@ -151,9 +154,11 @@ func TestCaptureEnforcesEntryByteAndLogicalPathBounds(t *testing.T) {
 		mustMkdir(t, filepath.Join(workspace, "dir"))
 		mustWrite(t, filepath.Join(workspace, "dir", "one"), []byte("1"), 0o600)
 		mustWrite(t, filepath.Join(workspace, "dir", "two"), []byte("2"), 0o600)
-		capturer, _ := NewCapturer(workspace, newCaptureCAS(t), fixedCaptureClock())
+		cas := newCaptureCAS(t)
+		capturer, _ := NewCapturer(workspace, fixedCaptureClock())
 		capturer.limits.maxEntries = 2
-		if _, err := capturer.Capture(context.Background(), []string{"dir"}); !errors.Is(err, ErrArtifactLimit) {
+		if _, err := capturer.Capture(context.Background(),
+			[]string{"dir"}, cas); !errors.Is(err, ErrArtifactLimit) {
 			t.Fatalf("entry limit error = %v", err)
 		}
 	})
@@ -161,9 +166,11 @@ func TestCaptureEnforcesEntryByteAndLogicalPathBounds(t *testing.T) {
 	t.Run("bytes", func(t *testing.T) {
 		workspace := t.TempDir()
 		mustWrite(t, filepath.Join(workspace, "large"), []byte("12345"), 0o600)
-		capturer, _ := NewCapturer(workspace, newCaptureCAS(t), fixedCaptureClock())
+		cas := newCaptureCAS(t)
+		capturer, _ := NewCapturer(workspace, fixedCaptureClock())
 		capturer.limits.maxTotal = 4
-		if _, err := capturer.Capture(context.Background(), []string{"large"}); !errors.Is(err, ErrArtifactLimit) {
+		if _, err := capturer.Capture(context.Background(),
+			[]string{"large"}, cas); !errors.Is(err, ErrArtifactLimit) {
 			t.Fatalf("byte limit error = %v", err)
 		}
 	})
@@ -175,8 +182,10 @@ func TestCaptureEnforcesEntryByteAndLogicalPathBounds(t *testing.T) {
 		third := strings.Repeat("c", 20)
 		mustMkdir(t, filepath.Join(workspace, first, second))
 		mustWrite(t, filepath.Join(workspace, first, second, third), []byte("x"), 0o600)
-		capturer, _ := NewCapturer(workspace, newCaptureCAS(t), fixedCaptureClock())
-		if _, err := capturer.Capture(context.Background(), []string{filepath.Join(first, second, third)}); !errors.Is(err, ErrArtifactPath) {
+		cas := newCaptureCAS(t)
+		capturer, _ := NewCapturer(workspace, fixedCaptureClock())
+		if _, err := capturer.Capture(context.Background(),
+			[]string{filepath.Join(first, second, third)}, cas); !errors.Is(err, ErrArtifactPath) {
 			t.Fatalf("logical path limit error = %v", err)
 		}
 	})
@@ -188,7 +197,8 @@ func TestCaptureDetectsPathReplacementAfterOpen(t *testing.T) {
 	mustWrite(t, target, []byte("original"), 0o600)
 	outside := filepath.Join(t.TempDir(), "outside.txt")
 	mustWrite(t, outside, []byte("outside secret"), 0o600)
-	capturer, _ := NewCapturer(workspace, newCaptureCAS(t), fixedCaptureClock())
+	cas := newCaptureCAS(t)
+	capturer, _ := NewCapturer(workspace, fixedCaptureClock())
 	capturer.afterOpen = func(opened string) {
 		if opened != target {
 			return
@@ -201,7 +211,8 @@ func TestCaptureDetectsPathReplacementAfterOpen(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := capturer.Capture(context.Background(), []string{"target.txt"}); !errors.Is(err, ErrArtifactChanged) {
+	if _, err := capturer.Capture(context.Background(),
+		[]string{"target.txt"}, cas); !errors.Is(err, ErrArtifactChanged) {
 		t.Fatalf("replacement race error = %v", err)
 	}
 }
@@ -216,7 +227,7 @@ func TestCaptureParentRenameAndSymlinkNeverReadsOutsideRoot(t *testing.T) {
 	mustWrite(t, filepath.Join(outsideDirectory, "result.bin"), outside, 0o600)
 
 	cas := newCaptureCAS(t)
-	capturer, err := NewCapturer(workspace, cas, fixedCaptureClock())
+	capturer, err := NewCapturer(workspace, fixedCaptureClock())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +243,8 @@ func TestCaptureParentRenameAndSymlinkNeverReadsOutsideRoot(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := capturer.Capture(context.Background(), []string{"selected"}); !errors.Is(err, ErrArtifactChanged) {
+	if _, err := capturer.Capture(context.Background(),
+		[]string{"selected"}, cas); !errors.Is(err, ErrArtifactChanged) {
 		t.Fatalf("parent replacement capture error = %v", err)
 	}
 
@@ -261,7 +273,8 @@ func TestCaptureRejectsReplacedWorkspaceAuthority(t *testing.T) {
 	workspace := filepath.Join(parent, "workspace")
 	mustMkdir(t, workspace)
 	mustWrite(t, filepath.Join(workspace, "file"), []byte("original"), 0o600)
-	capturer, err := NewCapturer(workspace, newCaptureCAS(t), fixedCaptureClock())
+	cas := newCaptureCAS(t)
+	capturer, err := NewCapturer(workspace, fixedCaptureClock())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,7 +283,8 @@ func TestCaptureRejectsReplacedWorkspaceAuthority(t *testing.T) {
 	}
 	mustMkdir(t, workspace)
 	mustWrite(t, filepath.Join(workspace, "file"), []byte("replacement"), 0o600)
-	if _, err := capturer.Capture(context.Background(), []string{"file"}); !errors.Is(err, ErrArtifactChanged) {
+	if _, err := capturer.Capture(context.Background(),
+		[]string{"file"}, cas); !errors.Is(err, ErrArtifactChanged) {
 		t.Fatalf("replaced workspace error = %v", err)
 	}
 }
@@ -278,13 +292,14 @@ func TestCaptureRejectsReplacedWorkspaceAuthority(t *testing.T) {
 func TestCaptureRejectsInvalidClock(t *testing.T) {
 	workspace := t.TempDir()
 	mustWrite(t, filepath.Join(workspace, "file"), []byte("content"), 0o600)
-	capturer, err := NewCapturer(workspace, newCaptureCAS(t), func() time.Time {
+	cas := newCaptureCAS(t)
+	capturer, err := NewCapturer(workspace, func() time.Time {
 		return time.Date(2500, 1, 1, 0, 0, 0, 0, time.UTC)
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := capturer.Capture(context.Background(), []string{"file"}); err == nil {
+	if _, err := capturer.Capture(context.Background(), []string{"file"}, cas); err == nil {
 		t.Fatal("Capture accepted a clock outside canonical Unix nanoseconds")
 	}
 }
@@ -293,13 +308,13 @@ func TestCaptureCancellationAndClosureTamperFailClosed(t *testing.T) {
 	workspace := t.TempDir()
 	mustWrite(t, filepath.Join(workspace, "file"), []byte("content"), 0o600)
 	cas := newCaptureCAS(t)
-	capturer, _ := NewCapturer(workspace, cas, fixedCaptureClock())
+	capturer, _ := NewCapturer(workspace, fixedCaptureClock())
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := capturer.Capture(ctx, []string{"file"}); !errors.Is(err, context.Canceled) {
+	if _, err := capturer.Capture(ctx, []string{"file"}, cas); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled capture error = %v", err)
 	}
-	closure, err := capturer.Capture(context.Background(), []string{"file"})
+	closure, err := capturer.Capture(context.Background(), []string{"file"}, cas)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -354,8 +369,9 @@ func mustWrite(t *testing.T, path string, content []byte, mode os.FileMode) {
 func TestClosureCheckpointIsStoreCompatible(t *testing.T) {
 	workspace := t.TempDir()
 	mustWrite(t, filepath.Join(workspace, "file"), []byte("content"), 0o600)
-	capturer, _ := NewCapturer(workspace, newCaptureCAS(t), fixedCaptureClock())
-	closure, err := capturer.Capture(context.Background(), []string{"file"})
+	cas := newCaptureCAS(t)
+	capturer, _ := NewCapturer(workspace, fixedCaptureClock())
+	closure, err := capturer.Capture(context.Background(), []string{"file"}, cas)
 	if err != nil {
 		t.Fatal(err)
 	}

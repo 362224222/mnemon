@@ -98,6 +98,14 @@ func insertPublicationEvidence(ctx context.Context, tx *sql.Tx, event model.Even
 	return insertPublicationEvidenceDisposition(ctx, tx, event, "pending", "")
 }
 
+func insertAcceptedPublicationEvidence(ctx context.Context, tx *sql.Tx,
+	event model.Event, operation model.Operation,
+	authority acceptanceArtifactAuthority,
+) error {
+	return insertPublicationEvidenceDispositionWithAuthority(ctx, tx, event,
+		"pending", "", operation, authority)
+}
+
 func deterministicDeliveryID(event model.EventID, target model.PeerID) string {
 	digest := sha256.Sum256([]byte(event.String() + "\x00" + target.String()))
 	return "delivery-" + hex.EncodeToString(digest[:])
@@ -107,9 +115,22 @@ func insertArtifactOwnerPin(ctx context.Context, tx *sql.Tx, root model.Digest, 
 	if _, err := requireVerifiedArtifactRoot(ctx, tx, root); err != nil {
 		return err
 	}
-	if err := requireArtifactGCQueueAvailableForRoot(ctx, tx, root); err != nil {
-		return err
+	return insertArtifactOwnerPinRow(ctx, tx, root, kind, owner, at)
+}
+
+func insertAcceptedArtifactOwnerPin(ctx context.Context, tx *sql.Tx,
+	authority acceptanceArtifactAuthority, operation model.Operation,
+	root model.Digest, kind, owner string, at time.Time,
+) error {
+	if _, ok := authority.allows(operation.ID(), operation.AgentRunID(), root); !ok {
+		return ErrArtifactReference
 	}
+	return insertArtifactOwnerPinRow(ctx, tx, root, kind, owner, at)
+}
+
+func insertArtifactOwnerPinRow(ctx context.Context, tx *sql.Tx,
+	root model.Digest, kind, owner string, at time.Time,
+) error {
 	_, err := tx.ExecContext(ctx, `INSERT INTO artifact_pins(root_digest,owner_kind,owner_id,created_at)
 		VALUES(?,?,?,?)`, root.String(), kind, owner, storeTime(at))
 	if err != nil {

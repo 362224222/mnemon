@@ -143,12 +143,12 @@ func TestBuildImportedClosureMatchesEquivalentLocalClosure(t *testing.T) {
 	}
 	cas := importTestCAS(t)
 	verifiedAt := time.Date(2026, 7, 19, 9, 0, 0, 456, time.UTC)
-	capturer, err := NewCapturer(workspace, cas, func() time.Time { return verifiedAt })
+	capturer, err := NewCapturer(workspace, func() time.Time { return verifiedAt })
 	if err != nil {
 		t.Fatal(err)
 	}
 	local, err := capturer.Capture(context.Background(),
-		[]string{"left.bin", "empty-dir", "right.bin", "empty.txt"})
+		[]string{"left.bin", "empty-dir", "right.bin", "empty.txt"}, cas)
 	if err != nil {
 		t.Fatal(err)
 	}

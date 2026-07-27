@@ -31,76 +31,6 @@ type VerifiedArtifactRoot struct {
 	VerifiedAt     time.Time
 }
 
-type ArtifactRootCheckpoint struct {
-	Root     VerifiedArtifactRoot
-	Replayed bool
-}
-
-// CheckpointVerifiedArtifactRoot durably records verified immutable metadata.
-// Replays return the original timestamps; a root can never be rebound to a
-// different manifest digest, canonical manifest, or size.
-func (s *Store) CheckpointVerifiedArtifactRoot(ctx context.Context,
-	requested VerifiedArtifactRoot,
-) (ArtifactRootCheckpoint, error) {
-	if s == nil || s.db == nil || ctx == nil {
-		return ArtifactRootCheckpoint{}, errors.New("checkpoint Artifact root: nil store or context")
-	}
-	root, err := validateVerifiedArtifactRoot(requested)
-	if err != nil {
-		return ArtifactRootCheckpoint{}, err
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return ArtifactRootCheckpoint{}, fmt.Errorf("checkpoint Artifact root: begin: %w", err)
-	}
-	defer tx.Rollback()
-	if err := requireArtifactGCDigestNotQueued(ctx, tx, root.ManifestDigest); err != nil {
-		return ArtifactRootCheckpoint{}, err
-	}
-	if err := requireArtifactGCQueueAvailableForRoot(ctx, tx, root.RootDigest); err != nil {
-		return ArtifactRootCheckpoint{}, err
-	}
-
-	existing, state, err := readArtifactRoot(ctx, tx, root.RootDigest)
-	if err == nil {
-		if !sameArtifactContent(existing, root) {
-			return ArtifactRootCheckpoint{}, ErrArtifactConflict
-		}
-		if state == "verified" {
-			if err := tx.Commit(); err != nil {
-				return ArtifactRootCheckpoint{}, fmt.Errorf("checkpoint Artifact root: replay commit: %w", err)
-			}
-			return ArtifactRootCheckpoint{Root: existing, Replayed: true}, nil
-		}
-		if state != "staged" {
-			return ArtifactRootCheckpoint{}, ErrArtifactConflict
-		}
-		if root.VerifiedAt.Before(existing.CreatedAt) {
-			return ArtifactRootCheckpoint{}, ErrArtifactConflict
-		}
-		if _, err := tx.ExecContext(ctx,
-			"UPDATE artifact_roots SET state = 'verified', verified_at = ? WHERE root_digest = ? AND state = 'staged'",
-			storeTime(root.VerifiedAt), root.RootDigest.String()); err != nil {
-			return ArtifactRootCheckpoint{}, fmt.Errorf("checkpoint Artifact root: promote: %w", err)
-		}
-		root.CreatedAt = existing.CreatedAt
-	} else if errors.Is(err, sql.ErrNoRows) {
-		_, err = tx.ExecContext(ctx, `INSERT INTO artifact_roots(
-			root_digest, manifest_json, manifest_digest, total_bytes, state, created_at, verified_at
-		) VALUES(?, ?, ?, ?, 'verified', ?, ?)`, root.RootDigest.String(), root.Manifest.Bytes(),
-			root.ManifestDigest.Bytes(), root.TotalBytes, storeTime(root.CreatedAt), storeTime(root.VerifiedAt))
-		if err != nil {
-			return ArtifactRootCheckpoint{}, fmt.Errorf("checkpoint Artifact root: insert: %w", err)
-		}
-	} else {
-		return ArtifactRootCheckpoint{}, fmt.Errorf("checkpoint Artifact root: inspect: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return ArtifactRootCheckpoint{}, fmt.Errorf("checkpoint Artifact root: commit: %w", err)
-	}
-	return ArtifactRootCheckpoint{Root: root}, nil
-}
-
 // GetVerifiedArtifactRoot returns only closure metadata ready for pinning or
 // provenance. A staged row is never projected as usable Artifact state.
 func (s *Store) GetVerifiedArtifactRoot(ctx context.Context, root model.Digest) (VerifiedArtifactRoot, error) {
@@ -230,9 +160,31 @@ func insertEventArtifactPin(ctx context.Context, tx *sql.Tx, root model.Digest,
 	if _, err := requireVerifiedArtifactRoot(ctx, tx, root); err != nil {
 		return false, err
 	}
-	if err := requireArtifactGCQueueAvailableForRoot(ctx, tx, root); err != nil {
-		return false, err
+	return insertEventArtifactPinRow(ctx, tx, root, event, createdAt)
+}
+
+func insertOperationAcceptanceEventArtifactPin(ctx context.Context, tx *sql.Tx,
+	authority acceptanceArtifactAuthority, operation model.Operation,
+	root model.Digest, event model.EventID, createdAt time.Time,
+) (bool, error) {
+	if ctx == nil || tx == nil || root.IsZero() || event.IsZero() ||
+		createdAt.IsZero() {
+		return false, errors.New("insert accepted Event Artifact pin: incomplete input")
 	}
+	if _, ok := authority.allows(operation.ID(), operation.AgentRunID(), root); !ok {
+		return false, ErrArtifactReference
+	}
+	role, source, _, _, _, err := readEventArtifactRole(ctx, tx, event, root)
+	if err != nil || role != model.ArtifactProduced ||
+		source != string(model.EventSourceLocal) {
+		return false, ErrArtifactReference
+	}
+	return insertEventArtifactPinRow(ctx, tx, root, event, createdAt)
+}
+
+func insertEventArtifactPinRow(ctx context.Context, tx *sql.Tx,
+	root model.Digest, event model.EventID, createdAt time.Time,
+) (bool, error) {
 	if _, _, _, _, _, err := readEventArtifactRole(ctx, tx, event, root); err != nil {
 		return false, err
 	}
@@ -260,17 +212,44 @@ func insertEventArtifactPin(ctx context.Context, tx *sql.Tx, root model.Digest,
 // insertArtifactProvenance records only a produced Event root. referenced roots
 // use requireReusableArtifactRoot plus an Event pin and never acquire a new
 // producer identity.
+func insertAcceptanceArtifactProvenance(ctx context.Context, tx *sql.Tx,
+	provenance model.ArtifactProvenance, operation model.Operation,
+	authority acceptanceArtifactAuthority,
+) (bool, error) {
+	if ctx == nil || tx == nil || provenance.RootDigest().IsZero() ||
+		provenance.Relation() != model.ProvenanceLocalCapture ||
+		operation.Status() != model.OperationCommitted {
+		return false, errors.New("insert accepted Artifact provenance: incomplete input")
+	}
+	runID, hasRun := provenance.LocalAgentRunID()
+	operationID, hasOperation := provenance.OperationID()
+	_, allowed := authority.allows(operationID, runID,
+		provenance.RootDigest())
+	if !allowed || !hasRun || !hasOperation ||
+		operationID != operation.ID() || runID != operation.AgentRunID() {
+		return false, ErrArtifactReference
+	}
+	role, source, origin, epoch, _, err := readEventArtifactRole(ctx, tx,
+		provenance.ProducerEvent().EventID(), provenance.RootDigest())
+	if err != nil || role != model.ArtifactProduced ||
+		source != string(model.EventSourceLocal) ||
+		origin != provenance.ProducerOriginPeerID().String() ||
+		epoch != provenance.ProducerEvent().OriginEpoch().String() {
+		return false, ErrArtifactReference
+	}
+	return insertArtifactProvenanceRow(ctx, tx, provenance, origin,
+		runID, true, operationID, true)
+}
+
 func insertArtifactProvenance(ctx context.Context, tx *sql.Tx,
 	provenance model.ArtifactProvenance,
 ) (bool, error) {
 	if ctx == nil || tx == nil || provenance.RootDigest().IsZero() || !provenance.Relation().Valid() {
 		return false, errors.New("insert Artifact provenance: incomplete input")
 	}
-	verifiedRoot, err := requireVerifiedArtifactRoot(ctx, tx, provenance.RootDigest())
+	artifactRoot, err := requireVerifiedArtifactRoot(ctx, tx,
+		provenance.RootDigest())
 	if err != nil {
-		return false, err
-	}
-	if err := requireArtifactGCQueueAvailableForRoot(ctx, tx, provenance.RootDigest()); err != nil {
 		return false, err
 	}
 	role, source, origin, epoch, actor, err := readEventArtifactRole(ctx, tx,
@@ -300,7 +279,8 @@ func insertArtifactProvenance(ctx context.Context, tx *sql.Tx,
 		captureRoots, rootsErr := parseOperationCapture(captureJSON)
 		captureMatches := false
 		for _, captured := range captureRoots {
-			if captured.RootDigest == provenance.RootDigest() && captured.ManifestDigest == verifiedRoot.ManifestDigest {
+			if captured.RootDigest == provenance.RootDigest() &&
+				captured.ManifestDigest == artifactRoot.ManifestDigest {
 				captureMatches = true
 				break
 			}
@@ -310,13 +290,28 @@ func insertArtifactProvenance(ctx context.Context, tx *sql.Tx,
 			rootsErr != nil || !captureMatches || actor != principal {
 			return false, fmt.Errorf("%w: local Run/operation/Profile mismatch", ErrArtifactReference)
 		}
-	} else if source != string(model.EventSourceImported) || hasRun || hasOperation {
-		return false, ErrArtifactReference
+	} else {
+		if source != string(model.EventSourceImported) || hasRun || hasOperation {
+			return false, ErrArtifactReference
+		}
+		if _, err := requireVerifiedArtifactRoot(ctx, tx,
+			provenance.RootDigest()); err != nil {
+			return false, err
+		}
 	}
 
+	return insertArtifactProvenanceRow(ctx, tx, provenance, origin,
+		runID, hasRun, operationID, hasOperation)
+}
+
+func insertArtifactProvenanceRow(ctx context.Context, tx *sql.Tx,
+	provenance model.ArtifactProvenance, origin string,
+	runID model.RunID, hasRun bool, operationID model.OperationID,
+	hasOperation bool,
+) (bool, error) {
 	var storedOrigin, storedRelation, storedCreated string
 	var storedRun, storedOperation sql.NullString
-	err = tx.QueryRowContext(ctx, `SELECT producer_origin_peer_id, local_agent_run_id, operation_id,
+	err := tx.QueryRowContext(ctx, `SELECT producer_origin_peer_id, local_agent_run_id, operation_id,
 		relation, created_at FROM artifact_provenance WHERE root_digest = ? AND producer_event_id = ?`,
 		provenance.RootDigest().String(), provenance.ProducerEvent().EventID().String()).
 		Scan(&storedOrigin, &storedRun, &storedOperation, &storedRelation, &storedCreated)

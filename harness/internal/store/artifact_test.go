@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	artifactdomain "github.com/mnemon-dev/mnemon/harness/internal/artifact"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 )
 
@@ -310,9 +311,28 @@ func TestArtifactPinsAndLocalReplicaProvenance(t *testing.T) {
 	if _, err := st.db.Exec("DELETE FROM artifact_provenance WHERE producer_event_id = 'event-produced'"); err == nil || !strings.Contains(err.Error(), "artifact provenance is immutable") {
 		t.Fatalf("provenance delete error = %v", err)
 	}
-	if _, err := st.db.Exec("DELETE FROM artifact_roots WHERE root_digest = ?", root.RootDigest.String()); err == nil ||
-		!strings.Contains(err.Error(), "safe GC authority") {
+	assertAcceptedArtifactCannotBeCollected(t, st, root)
+}
+
+func assertAcceptedArtifactCannotBeCollected(t *testing.T, st *Store,
+	root VerifiedArtifactRoot,
+) {
+	t.Helper()
+	if _, err := st.db.Exec("DELETE FROM artifact_roots WHERE root_digest = ?",
+		root.RootDigest.String()); err == nil ||
+		!strings.Contains(err.Error(), "owned Artifact root") {
 		t.Fatalf("accepted Artifact root delete error = %v", err)
+	}
+	cleanupAt := root.CreatedAt.Add(48 * time.Hour)
+	if result, err := st.SweepArtifactStaging(context.Background(),
+		artifactdomain.StagingSweepSpec{
+			Cutoff: cleanupAt.Add(-time.Hour), At: cleanupAt,
+			MaxRoots: 8,
+		}); err != nil || result.ExpiredPins != 0 {
+		t.Fatalf("accepted Artifact staging sweep = (%#v, %v)", result, err)
+	}
+	if _, err := st.GetVerifiedArtifactRoot(context.Background(), root.RootDigest); err != nil {
+		t.Fatalf("accepted Artifact root was removed: %v", err)
 	}
 }
 

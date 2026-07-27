@@ -22,39 +22,35 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 
 	expected := map[string][]string{
 		"table": strings.Fields(
-			"node profiles operations operation_artifact_roots events works work_members work_derivations " +
+			"node profiles operations operation_artifact_roots operation_artifact_stages events works work_members work_derivations " +
 				"agent_handlings agent_runs artifact_roots artifact_blocks artifact_root_blocks " +
-				"artifact_pins artifact_provenance artifact_gc_scan artifact_gc_staging_scan artifact_gc_staging_receipt artifact_gc_queue artifact_gc_prepare_receipt " +
-				"artifact_gc_completion_receipts artifact_gc_delete_guard artifact_gc_block_delete_guard artifact_gc_completion_guard " +
+				"artifact_pins artifact_provenance " +
 				"channels channel_members channel_conflicts " +
 				"enrollment_grants channel_mutation_operations enrollment_grant_uses enrollment_receipts channel_join_reservations channel_leave_requests channel_leave_operations " +
-				"peer_bindings gossip_publications peer_deliveries peer_inbox peer_inbox_semantic_transition_receipts peer_inbox_artifact_renew_receipts peer_inbox_artifact_source_receipts peer_inbox_pressure peer_inbox_node_pressure publication_conflicts " +
+				"peer_bindings gossip_publications peer_deliveries peer_inbox peer_inbox_semantic_transition_receipts peer_inbox_artifact_roots peer_inbox_artifact_stages peer_inbox_artifact_renew_receipts peer_inbox_artifact_source_receipts peer_inbox_pressure peer_inbox_node_pressure publication_conflicts " +
 				"origin_quarantines peer_cursors peer_repairs publication_epochs peer_pull_acks",
 		),
 		"index": strings.Fields(
-			"profiles_one_enabled_teamwork_idx operations_reclaim_idx operations_one_started_context_idx operation_artifact_roots_root_idx " +
+			"profiles_one_enabled_teamwork_idx operations_reclaim_idx operations_one_started_context_idx operation_artifact_roots_root_idx operation_artifact_stages_cleanup_idx operation_artifact_stages_claimed_idx " +
 				"works_due_idx agent_handlings_ready_idx agent_handlings_one_claimed_profile_idx agent_runs_handling_generation_attempt_idx agent_runs_incomplete_managed_idx artifact_pins_expiry_idx enrollment_grants_one_open_idx " +
-				"channel_leave_requests_one_open_idx gossip_publications_ready_idx peer_inbox_work_idx",
+				"channel_leave_requests_one_open_idx gossip_publications_ready_idx peer_inbox_work_idx peer_inbox_artifact_stages_cleanup_idx peer_inbox_artifact_stages_claimed_idx",
 		),
 		"trigger": strings.Fields(
 			"node_identity_immutable node_no_delete profiles_identity_immutable profiles_no_delete operations_identity_immutable " +
 				"operations_capture_checkpoint_immutable operations_terminal_immutable operations_no_delete " +
-				"operation_artifact_roots_open_capture_insert operation_artifact_roots_gc_queue_insert operation_artifact_roots_no_update operation_artifact_roots_no_delete " +
+				"operation_artifact_roots_open_capture_insert operation_artifact_roots_no_update operation_artifact_roots_no_delete " +
+				"operation_artifact_stages_insert_fence operation_artifact_stages_transition operation_artifact_stages_no_delete " +
 				"events_no_update events_no_delete events_local_origin_insert events_publication_member_insert " +
 				"works_deadline_immutable works_event_scope_insert works_event_scope_update " +
 				"work_members_no_update work_members_no_delete work_derivations_scope_insert " +
 				"work_derivations_no_update work_derivations_no_delete agent_handlings_identity_immutable " +
 				"agent_runs_creation_identity_immutable agent_runs_claim_snapshot_immutable " +
 				"agent_runs_attachment_identity_immutable agent_runs_evidence_once artifact_roots_content_immutable " +
-				"artifact_roots_no_unverify artifact_roots_verified_at_immutable artifact_roots_gc_queue_insert artifact_roots_gc_delete " +
-				"artifact_blocks_no_update artifact_blocks_gc_queue_insert artifact_blocks_gc_delete artifact_root_blocks_no_update " +
-				"artifact_root_blocks_gc_queue_insert artifact_root_blocks_gc_delete artifact_root_blocks_verified_insert artifact_root_blocks_verified_delete " +
-				"artifact_root_blocks_provenance_delete artifact_pins_identity_immutable artifact_pins_expiry_managed artifact_pins_gc_queue_insert artifact_pins_gc_queue_update artifact_pins_inbox_owner_insert artifact_provenance_event_insert " +
-				"artifact_provenance_gc_queue_insert artifact_provenance_no_update artifact_provenance_no_delete " +
-				"artifact_gc_scan_no_delete artifact_gc_scan_cutoff_immutable artifact_gc_scan_cursor_monotonic " +
-				"artifact_gc_staging_scan_no_delete artifact_gc_staging_scan_cutoff_immutable artifact_gc_staging_scan_cursor_monotonic " +
-				"artifact_gc_completion_receipt_insert artifact_gc_completion_receipt_no_update " +
-				"artifact_gc_queue_owner_insert artifact_gc_queue_identity_immutable artifact_gc_queue_transition artifact_gc_queue_no_delete channels_nonterminal_limit_insert " +
+				"artifact_roots_no_unverify artifact_roots_verified_at_immutable artifact_roots_owned_delete " +
+				"artifact_blocks_no_update artifact_blocks_mapped_delete artifact_root_blocks_no_update " +
+				"artifact_root_blocks_verified_insert artifact_root_blocks_owned_delete " +
+				"artifact_pins_identity_immutable artifact_pins_expiry_managed artifact_pins_inbox_owner_insert artifact_provenance_event_insert " +
+				"artifact_provenance_no_update artifact_provenance_no_delete channels_nonterminal_limit_insert " +
 				"channels_descriptor_immutable channels_no_delete channels_roster_head_monotonic " +
 				"channels_terminal_status_update channels_conflicted_status_update channels_leaving_status_update " +
 				"channel_members_no_update channel_members_no_delete channel_conflicts_no_update " +
@@ -76,6 +72,8 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 				"peer_inbox_semantic_nonce_immutable " +
 				"peer_inbox_semantic_transition_receipt_insert peer_inbox_semantic_transition_receipt_update " +
 				"peer_inbox_artifact_renew_receipt_insert peer_inbox_artifact_renew_receipt_update " +
+				"peer_inbox_artifact_roots_open_insert peer_inbox_artifact_roots_no_update peer_inbox_artifact_roots_no_delete " +
+				"peer_inbox_artifact_stages_insert_fence peer_inbox_artifact_stages_transition peer_inbox_artifact_stages_no_delete " +
 				"peer_inbox_artifact_source_receipt_insert peer_inbox_artifact_source_receipt_no_update peer_inbox_artifact_source_receipt_no_delete " +
 				"peer_inbox_receipt_scope_insert peer_inbox_receipt_scope_update peer_inbox_no_delete peer_inbox_terminal_status_immutable " +
 				"peer_inbox_pressure_insert_limit peer_inbox_pressure_insert_account " +
@@ -122,8 +120,8 @@ func TestSchemaV1ObjectSetIsComplete(t *testing.T) {
 	if !reflect.DeepEqual(actual, expected) {
 		t.Fatalf("schema object set mismatch\nactual: %#v\nexpected: %#v", actual, expected)
 	}
-	if got := len(actual["table"]) + len(actual["index"]) + len(actual["trigger"]); got != 240 {
-		t.Fatalf("explicit object count = %d, want 240", got)
+	if got := len(actual["table"]) + len(actual["index"]) + len(actual["trigger"]); got != 226 {
+		t.Fatalf("explicit object count = %d, want 226", got)
 	}
 }
 
@@ -894,13 +892,15 @@ func TestSchemaV1KeyConstraintsAndTriggers(t *testing.T) {
 	projectionRoot := model.Sum([]byte("schema-operation-artifact-root"))
 	projectionManifest := model.Sum([]byte("schema-operation-artifact-manifest"))
 	if _, err := st.db.Exec(`INSERT INTO operation_artifact_roots(
-		operation_id,root_digest,manifest_digest) VALUES('operation-one',?,?)`,
+		operation_id,root_digest,manifest_digest,verified_at)
+		VALUES('operation-one',?,?,'2026-01-01T00:01:00.000000000Z')`,
 		strings.ToUpper(projectionRoot.String()), projectionManifest.Bytes()); err == nil ||
 		!strings.Contains(err.Error(), "CHECK constraint failed") {
 		t.Fatalf("operation Artifact projection noncanonical root error = %v", err)
 	}
 	if _, err := st.db.Exec(`INSERT INTO operation_artifact_roots(
-		operation_id,root_digest,manifest_digest) VALUES('operation-one',?,?)`,
+		operation_id,root_digest,manifest_digest,verified_at)
+		VALUES('operation-one',?,?,'2026-01-01T00:01:00.000000000Z')`,
 		projectionRoot.String(), []byte("short")); err == nil ||
 		!strings.Contains(err.Error(), "CHECK constraint failed") {
 		t.Fatalf("operation Artifact projection invalid manifest error = %v", err)
@@ -908,7 +908,8 @@ func TestSchemaV1KeyConstraintsAndTriggers(t *testing.T) {
 	// No Artifact root row is present: the relation intentionally does not FK
 	// root_digest, so rejected staging metadata can later be collected.
 	if _, err := st.db.Exec(`INSERT INTO operation_artifact_roots(
-		operation_id,root_digest,manifest_digest) VALUES('operation-one',?,?)`,
+		operation_id,root_digest,manifest_digest,verified_at)
+		VALUES('operation-one',?,?,'2026-01-01T00:01:00.000000000Z')`,
 		projectionRoot.String(), projectionManifest.Bytes()); err != nil {
 		t.Fatalf("insert operation Artifact projection: %v", err)
 	}
@@ -919,7 +920,7 @@ func TestSchemaV1KeyConstraintsAndTriggers(t *testing.T) {
 	}
 	if _, err := st.db.Exec(`DELETE FROM operation_artifact_roots
 		WHERE operation_id='operation-one'`); err == nil ||
-		!strings.Contains(err.Error(), "operation artifact root projection is immutable") {
+		!strings.Contains(err.Error(), "live operation artifact root projection cannot be deleted") {
 		t.Fatalf("operation Artifact projection delete error = %v", err)
 	}
 	projectionCapture := []byte(`{"roots":[{"manifest_digest":"` + projectionManifest.String() +
@@ -929,7 +930,8 @@ func TestSchemaV1KeyConstraintsAndTriggers(t *testing.T) {
 		t.Fatalf("seal operation Artifact projection: %v", err)
 	}
 	if _, err := st.db.Exec(`INSERT INTO operation_artifact_roots(
-		operation_id,root_digest,manifest_digest) VALUES('operation-one',?,?)`,
+		operation_id,root_digest,manifest_digest,verified_at)
+		VALUES('operation-one',?,?,'2026-01-01T00:01:00.000000000Z')`,
 		model.Sum([]byte("extra-root")).String(), projectionManifest.Bytes()); err == nil ||
 		!strings.Contains(err.Error(), "operation artifact root projection is sealed") {
 		t.Fatalf("sealed operation Artifact projection insert error = %v", err)
@@ -1592,8 +1594,9 @@ func TestSchemaSealsVerifiedArtifactRootBlockMap(t *testing.T) {
 		root.String(), blockB.String()); err == nil || !strings.Contains(err.Error(), "block map is sealed") {
 		t.Fatalf("verified block map append error = %v", err)
 	}
+	pinSchemaSealedArtifactRoot(t, st, root, created)
 	if _, err := st.db.Exec(`DELETE FROM artifact_root_blocks WHERE root_digest=? AND ordinal=0`,
-		root.String()); err == nil || !strings.Contains(err.Error(), "safe GC authority") {
+		root.String()); err == nil || !strings.Contains(err.Error(), "owned Artifact root map") {
 		t.Fatalf("verified block map direct delete error = %v", err)
 	}
 	if _, err := st.db.Exec(`UPDATE artifact_roots SET verified_at=? WHERE root_digest=?`,
@@ -1607,19 +1610,10 @@ func TestSchemaSealsVerifiedArtifactRootBlockMap(t *testing.T) {
 		t.Fatalf("sealed block map count = %d, err=%v", count, err)
 	}
 	if _, err := st.db.Exec(`DELETE FROM artifact_roots WHERE root_digest=?`, root.String()); err == nil ||
-		!strings.Contains(err.Error(), "safe GC authority") {
-		t.Fatalf("whole unprovenanced root direct delete error = %v", err)
+		!strings.Contains(err.Error(), "owned Artifact root") {
+		t.Fatalf("owned root direct delete error = %v", err)
 	}
-	gcAt := time.Date(2026, 7, 16, 15, 0, 0, 0, time.UTC)
-	gcSpec := artifactGCStoreStagingSpec(t, st, gcAt.Add(-time.Hour), 2,
-		artifactGCMaxSweepBytes, gcAt)
-	if result, err := st.SweepArtifactGCStaging(context.Background(), gcSpec); err != nil || result.Swept != 1 {
-		t.Fatalf("whole unprovenanced root GC cleanup = (%#v, %v)", result, err)
-	}
-	if err := st.db.QueryRow(`SELECT COUNT(*) FROM artifact_root_blocks WHERE root_digest=?`,
-		root.String()).Scan(&count); err != nil || count != 0 {
-		t.Fatalf("block map after whole-root cleanup = %d, err=%v", count, err)
-	}
+	assertSchemaSealedArtifactSurvivesStagingCleanup(t, st, root)
 }
 
 func TestSchemaConstrainsArtifactPinOwnershipTimesAndMutation(t *testing.T) {
@@ -1690,18 +1684,18 @@ func TestSchemaConstrainsArtifactPinOwnershipTimesAndMutation(t *testing.T) {
 		t.Fatalf("permanent Inbox pin downgrade error = %v", err)
 	}
 	if _, err := fixture.store.db.Exec(`INSERT INTO artifact_pins(root_digest,owner_kind,
-		owner_id,expires_at,created_at) VALUES(?,'retention','expiring-retention',?,?)`,
+		owner_id,expires_at,created_at) VALUES(?,'event','expiring-event',?,?)`,
 		root.RootDigest.String(), expires, created); err == nil ||
 		!strings.Contains(err.Error(), "CHECK constraint failed") {
 		t.Fatalf("expiring non-Inbox pin insert error = %v", err)
 	}
 	if _, err := fixture.store.db.Exec(`INSERT INTO artifact_pins(root_digest,owner_kind,
-		owner_id,expires_at,created_at) VALUES(?,'retention','retention-owner',NULL,?)`,
+		owner_id,expires_at,created_at) VALUES(?,'event','event-owner',NULL,?)`,
 		root.RootDigest.String(), created); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := fixture.store.db.Exec(`UPDATE artifact_pins SET expires_at=?
-		WHERE owner_kind='retention'`, expires); err == nil ||
+		WHERE owner_kind='event'`, expires); err == nil ||
 		!strings.Contains(err.Error(), "expiry cannot regress") {
 		t.Fatalf("non-Inbox expiry rewrite error = %v", err)
 	}

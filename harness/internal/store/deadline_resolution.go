@@ -66,7 +66,8 @@ func (s *Store) ResolveDeadlineWinner(ctx context.Context, spec DeadlineResoluti
 	if err != nil {
 		return DeadlineResolutionResult{}, err
 	}
-	if err := persistAcceptedBatch(ctx, tx, controllerSpec, []model.Event{event}, trustedNow); err != nil {
+	if err := persistAcceptedBatch(ctx, tx, controllerSpec, model.Operation{},
+		acceptanceArtifactAuthority{}, []model.Event{event}, trustedNow); err != nil {
 		return DeadlineResolutionResult{}, err
 	}
 	if err := rejectDeadlineAction(ctx, tx, operation, spec.Action.LeaseOwner, receipt, trustedNow); err != nil {
@@ -191,7 +192,8 @@ func validateDeadlineEventAuthority(ctx context.Context, tx *sql.Tx, spec Deadli
 	if err := validateOperationEvents(nil, []model.Event{event}, false); err != nil {
 		return err
 	}
-	_, err = validateAcceptanceArtifacts(ctx, tx, model.Operation{}, controllerSpec, []model.Event{event})
+	_, err = validateAcceptanceArtifacts(ctx, tx, model.Operation{}, controllerSpec,
+		[]model.Event{event}, event.AcceptedAt())
 	return err
 }
 

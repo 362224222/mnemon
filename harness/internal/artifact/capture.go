@@ -96,17 +96,21 @@ type captureLimits struct {
 	maxTotal   uint64
 }
 
+// ObjectSink is the complete byte-store authority needed by Capturer.
+type ObjectSink interface {
+	Put(model.Digest, []byte) (PutResult, error)
+}
+
 type Capturer struct {
 	workspace     string
 	workspaceInfo os.FileInfo
-	cas           *CAS
 	clock         Clock
 	limits        captureLimits
 	afterOpen     func(string)
 }
 
-func NewCapturer(workspace string, cas *CAS, clock Clock) (*Capturer, error) {
-	if cas == nil || workspace == "" || !filepath.IsAbs(workspace) || filepath.Clean(workspace) != workspace {
+func NewCapturer(workspace string, clock Clock) (*Capturer, error) {
+	if workspace == "" || !filepath.IsAbs(workspace) || filepath.Clean(workspace) != workspace {
 		return nil, fmt.Errorf("%w: workspace must be an absolute canonical directory", ErrCASInput)
 	}
 	info, err := os.Lstat(workspace)
@@ -125,12 +129,15 @@ func NewCapturer(workspace string, cas *CAS, clock Clock) (*Capturer, error) {
 	if clock == nil {
 		clock = time.Now
 	}
-	return &Capturer{workspace: workspace, workspaceInfo: info, cas: cas, clock: clock,
+	return &Capturer{workspace: workspace, workspaceInfo: info, clock: clock,
 		limits: captureLimits{maxEntries: MaxEntries, maxTotal: MaxTotalBytes}}, nil
 }
 
-func (capturer *Capturer) Capture(ctx context.Context, requested []string) (Closure, error) {
-	if capturer == nil || capturer.cas == nil || ctx == nil || len(requested) == 0 || len(requested) > MaxRoots {
+func (capturer *Capturer) Capture(ctx context.Context, requested []string,
+	sink ObjectSink,
+) (Closure, error) {
+	if capturer == nil || sink == nil || ctx == nil || len(requested) == 0 ||
+		len(requested) > MaxRoots {
 		return Closure{}, fmt.Errorf("%w: capture requires 1..%d roots", ErrArtifactLimit, MaxRoots)
 	}
 	if err := capturer.verifyWorkspace(); err != nil {
@@ -159,7 +166,7 @@ func (capturer *Capturer) Capture(ctx context.Context, requested []string) (Clos
 		logicalRoots[index] = logical
 	}
 
-	state := captureState{capturer: capturer, capturedAt: capturedAt,
+	state := captureState{capturer: capturer, sink: sink, capturedAt: capturedAt,
 		blocks: make(map[model.Digest]CapturedBlock)}
 	for _, logical := range logicalRoots {
 		if err := ctx.Err(); err != nil {
@@ -177,7 +184,7 @@ func (capturer *Capturer) Capture(ctx context.Context, requested []string) (Clos
 		if err != nil {
 			return Closure{}, err
 		}
-		if _, err := capturer.cas.Put(manifest.ManifestDigest(), manifest.CanonicalJSON().Bytes()); err != nil {
+		if _, err := sink.Put(manifest.ManifestDigest(), manifest.CanonicalJSON().Bytes()); err != nil {
 			return Closure{}, err
 		}
 		state.roots = append(state.roots, CapturedRoot{RootDigest: manifest.RootDigest(),
@@ -212,6 +219,7 @@ type rootCapture struct {
 
 type captureState struct {
 	capturer   *Capturer
+	sink       ObjectSink
 	capturedAt time.Time
 	entryCount int
 	totalBytes uint64
@@ -405,7 +413,7 @@ func (state *captureState) captureFile(ctx context.Context, parent *os.Root, nam
 		}
 		content := buffer[:length]
 		digest := model.Sum(content)
-		if _, err := state.capturer.cas.Put(digest, content); err != nil {
+		if _, err := state.sink.Put(digest, content); err != nil {
 			return err
 		}
 		blocks = append(blocks, ManifestBlock{Digest: digest, OffsetBytes: offset, LengthBytes: length})
@@ -570,88 +578,38 @@ func sameFileSnapshot(left, right os.FileInfo) bool {
 // VerifyClosure re-parses every manifest and re-hashes every reachable CAS
 // object. Orphan temps and unrelated immutable blocks are intentionally ignored.
 func (cas *CAS) VerifyClosure(ctx context.Context, closure Closure) error {
-	if cas == nil || ctx == nil || closure.IsZero() || len(closure.roots) == 0 || len(closure.roots) > MaxRoots {
-		return fmt.Errorf("%w: empty or oversized closure", ErrClosureMismatch)
+	if cas == nil {
+		return fmt.Errorf("%w: unavailable CAS", ErrClosureMismatch)
 	}
-	capturedAt, err := canonicalCaptureTime(closure.capturedAt)
-	if err != nil || !capturedAt.Equal(closure.capturedAt) {
-		return fmt.Errorf("%w: invalid capture time", ErrClosureMismatch)
+	return verifyClosureWithReader(ctx, closure, cas.Read)
+}
+
+type closureObjectReader func(model.Digest, int) ([]byte, error)
+
+func verifyClosureWithReader(ctx context.Context, closure Closure, read closureObjectReader) error {
+	if read == nil {
+		return fmt.Errorf("%w: unavailable object reader", ErrClosureMismatch)
 	}
-	expectedBlocks := make(map[model.Digest]uint64)
-	expectedMap := make([]RootBlock, 0)
-	entryCount := 0
-	var totalBytes uint64
-	for index, root := range closure.roots {
+	if err := validateClosureMetadata(ctx, closure); err != nil {
+		return err
+	}
+	for _, root := range closure.roots {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if root.CreatedAt != capturedAt || root.VerifiedAt != capturedAt ||
-			(index > 0 && closure.roots[index-1].RootDigest.String() >= root.RootDigest.String()) {
-			return fmt.Errorf("%w: root metadata is not canonical", ErrClosureMismatch)
-		}
-		manifest, err := ParseManifest(root.Manifest.Bytes())
-		if err != nil || manifest.RootDigest() != root.RootDigest ||
-			manifest.ManifestDigest() != root.ManifestDigest || manifest.TotalBytes() != root.TotalBytes {
-			return fmt.Errorf("%w: root metadata differs from manifest", ErrClosureMismatch)
-		}
-		storedManifest, err := cas.Read(root.ManifestDigest, MaxManifestBytes)
+		storedManifest, err := read(root.ManifestDigest, MaxManifestBytes)
 		if err != nil || !bytes.Equal(storedManifest, root.Manifest.Bytes()) {
 			return fmt.Errorf("%w: manifest object is missing or changed", ErrClosureMismatch)
 		}
-		entries := manifest.Entries()
-		if entryCount > MaxEntries-len(entries) || totalBytes > MaxTotalBytes-root.TotalBytes {
-			return fmt.Errorf("%w: aggregate closure budget exceeded", ErrClosureMismatch)
-		}
-		entryCount += len(entries)
-		totalBytes += root.TotalBytes
-		ordinal := uint64(0)
-		for _, entry := range entries {
-			for _, block := range entry.Blocks {
-				if size, present := expectedBlocks[block.Digest]; present && size != block.LengthBytes {
-					return fmt.Errorf("%w: one block digest has conflicting lengths", ErrClosureMismatch)
-				}
-				expectedBlocks[block.Digest] = block.LengthBytes
-				expectedMap = append(expectedMap, RootBlock{RootDigest: root.RootDigest,
-					Ordinal: ordinal, LogicalPath: entry.LogicalPath, OffsetBytes: block.OffsetBytes,
-					LengthBytes: block.LengthBytes, BlockDigest: block.Digest, Mode: entry.Mode})
-				ordinal++
-			}
-		}
 	}
-	if len(expectedBlocks) != len(closure.blocks) || len(expectedMap) != len(closure.blockMap) {
-		return fmt.Errorf("%w: typed block closure has missing or extra rows", ErrClosureMismatch)
-	}
-	for index, expected := range expectedMap {
-		if closure.blockMap[index] != expected {
-			return fmt.Errorf("%w: root block map differs", ErrClosureMismatch)
-		}
-	}
-	for index, block := range closure.blocks {
+	for _, block := range closure.blocks {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if block.CreatedAt != capturedAt ||
-			(index > 0 && closure.blocks[index-1].Digest.String() >= block.Digest.String()) {
-			return fmt.Errorf("%w: block metadata is not canonical", ErrClosureMismatch)
-		}
-		length, present := expectedBlocks[block.Digest]
-		if !present || length != block.SizeBytes {
-			return fmt.Errorf("%w: block metadata differs", ErrClosureMismatch)
-		}
-		content, err := cas.Read(block.Digest, BlockSize)
+		content, err := read(block.Digest, BlockSize)
 		if err != nil || uint64(len(content)) != block.SizeBytes {
 			return fmt.Errorf("%w: block object is missing or changed", ErrClosureMismatch)
 		}
-	}
-	rebuilt := captureState{roots: append([]CapturedRoot{}, closure.roots...),
-		blocks: make(map[model.Digest]CapturedBlock), blockMap: append([]RootBlock{}, closure.blockMap...),
-		capturedAt: closure.capturedAt}
-	for _, block := range closure.blocks {
-		rebuilt.blocks[block.Digest] = block
-	}
-	rebuiltClosure, err := rebuilt.closure()
-	if err != nil || rebuiltClosure.checkpoint.String() != closure.checkpoint.String() {
-		return fmt.Errorf("%w: checkpoint differs", ErrClosureMismatch)
 	}
 	return nil
 }

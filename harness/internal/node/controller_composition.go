@@ -63,11 +63,11 @@ func composeController(ctx context.Context, options *ControllerOptions,
 	if err != nil {
 		return controllerComposition{}, err
 	}
-	capturer, err := artifact.NewCapturer(options.Workspace, cas, options.Clock.Now)
+	capturer, err := artifact.NewCapturer(options.Workspace, options.Clock.Now)
 	if err != nil {
 		return controllerComposition{}, err
 	}
-	capture, err := agent.NewArtifactCaptureCoordinator(capturer, cas, cas, options.Store, options.Clock)
+	capture, err := agent.NewArtifactCaptureCoordinator(capturer, cas, options.Store, options.Clock)
 	if err != nil {
 		return controllerComposition{}, err
 	}

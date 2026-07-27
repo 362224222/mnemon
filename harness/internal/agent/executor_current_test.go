@@ -157,7 +157,8 @@ func assertExecutorCurrentArtifactAuthority(t *testing.T, fixture *executorFixtu
 		strings.Join(spec.Paths, "\x00") != strings.Join(paths, "\x00") {
 		t.Fatalf("%s Artifact authority = %#v", test.name, spec)
 	}
-	if test.artifacts != (len(eventValue.Artifacts()) == 1) {
+	if test.artifacts != (len(eventValue.Artifacts()) == 1) ||
+		fixture.artifacts.publishCalls != len(eventValue.Artifacts()) {
 		t.Fatalf("%s Artifact refs = %#v", test.name, eventValue.Artifacts())
 	}
 }

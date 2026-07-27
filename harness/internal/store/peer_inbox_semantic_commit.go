@@ -175,11 +175,9 @@ func (s *Store) CommitPeerInboxSemantic(ctx context.Context,
 			return PeerInboxSemanticCommitResult{}, err
 		}
 	}
-	if handling, ok := plan.Handling(); ok {
-		if err := materializePeerInboxSemanticHandling(ctx, tx, handling,
-			snapshot.importedEvent, responses); err != nil {
-			return PeerInboxSemanticCommitResult{}, err
-		}
+	if err := materializePeerInboxSemanticTerminalOwnership(
+		ctx, tx, row, snapshot, plan, responses); err != nil {
+		return PeerInboxSemanticCommitResult{}, err
 	}
 
 	decision, err := newPeerInboxSemanticDecision(ctx, tx, row, snapshot, plan, spec.Responses,
@@ -856,10 +854,8 @@ func validatePeerInboxSemanticTerminalReplay(ctx context.Context, tx *sql.Tx,
 		return PeerInboxSemanticCommitResult{}, fmt.Errorf("%w: terminal decision authority differs",
 			ErrPeerInboxSemanticInvariant)
 	}
-	if err := requireExactPeerInboxArtifactPins(ctx, tx, row.inboxID, row.requiredRoots,
-		committedAt); err != nil {
-		return PeerInboxSemanticCommitResult{}, fmt.Errorf("%w: terminal permanent Inbox pins: %v",
-			ErrPeerInboxSemanticInvariant, err)
+	if err := requireNoPeerInboxSemanticArtifactPins(ctx, tx, row.inboxID); err != nil {
+		return PeerInboxSemanticCommitResult{}, err
 	}
 	imported, importedPublication, err := readPeerInboxSemanticStoredPublication(ctx, tx,
 		row.publication.Event().ID())

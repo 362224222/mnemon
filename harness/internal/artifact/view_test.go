@@ -475,13 +475,13 @@ func newViewFixture(t *testing.T) *viewFixture {
 
 func (fixture *viewFixture) capture(t *testing.T, logical string) viewCapturedRoot {
 	t.Helper()
-	capturer, err := NewCapturer(fixture.workspace, fixture.cas, func() time.Time {
+	capturer, err := NewCapturer(fixture.workspace, func() time.Time {
 		return time.Date(2026, 7, 17, 8, 0, 0, 0, time.UTC)
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	closure, err := capturer.Capture(context.Background(), []string{logical})
+	closure, err := capturer.Capture(context.Background(), []string{logical}, fixture.cas)
 	if err != nil {
 		t.Fatal(err)
 	}

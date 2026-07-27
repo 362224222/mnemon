@@ -236,7 +236,7 @@ func (s *Service) TeamworkAction(ctx context.Context, metadata ControlMetadata,
 		return OperationResponse{}, apiErr
 	}
 	if found {
-		return s.replayTeamworkOperation(terminal)
+		return s.replayTeamworkOperation(ctx, validated, terminal)
 	}
 	if apiErr := s.requireMetadata(metadata); apiErr != nil {
 		return OperationResponse{}, apiErr
@@ -266,7 +266,7 @@ func (s *Service) TeamworkAction(ctx context.Context, metadata ControlMetadata,
 		return OperationResponse{}, mapControlError(err)
 	}
 	if reservation.Operation.Status().Terminal() {
-		return s.replayTeamworkOperation(reservation.Operation)
+		return s.replayTeamworkOperation(ctx, validated, reservation.Operation)
 	}
 	response, executionErr := s.executor.ExecuteTeamwork(ctx, TeamworkExecutionSpec{
 		Request: request, Action: validated, Reservation: reservation, At: at,

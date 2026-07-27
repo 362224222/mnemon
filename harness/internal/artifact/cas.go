@@ -21,9 +21,7 @@ const (
 	casObjectMode    = 0o600
 	maxCASObjectSize = MaxManifestBytes
 	casDigestShards  = 256
-	// Object collection is an internal bounded worker surface. A hard page
-	// limit prevents a caller-controlled allocation from weakening PX-11.
-	maxCASObjectPageSize = 256
+	maxCASPruneScan  = 256
 )
 
 var (
@@ -34,90 +32,15 @@ var (
 type CAS struct {
 	root         string
 	temp         string
-	trash        string
+	staging      string
 	coordination *casCoordination
 }
 
-// CASLease fences the complete filesystem/Store lifecycle of a CAS user or
-// collector. Release is safe to call more than once. CAS byte methods do not
-// acquire this lease themselves: callers that compose CAS and Store effects
-// must hold a use lease, while collection holds an exclusive lease.
-type CASLease struct {
-	once    sync.Once
-	release func()
-}
-
-// CASObjectCandidate is a defensive snapshot of one canonical final object.
-// Object scan pages return candidates in Digest order.
-type CASObjectCandidate struct {
-	Digest     model.Digest
-	Size       uint64
-	ModifiedAt time.Time
-}
-
-// CASObjectScanCursor is the restartable exclusive lower bound for one
-// object-collection pass. cutoff is carried by every successor so a caller
-// cannot accidentally move the eligibility boundary between pages. A zero
-// after digest denotes the beginning of the canonical digest keyspace.
-type CASObjectScanCursor struct {
-	cutoff time.Time
-	after  model.Digest
-}
-
-// CASObjectPage is one bounded, deterministic object-collection page. The
-// next cursor advances past every returned candidate even when the Store later
-// decides that candidate is protected. Done explicitly marks the terminal
-// state observed by this scan. Replaying its cursor cannot return an existing
-// candidate at or below that digest; ordinary later writes fall outside the
-// frozen cutoff.
-type CASObjectPage struct {
-	Candidates []CASObjectCandidate
-	NextCursor CASObjectScanCursor
-	Done       bool
-}
-
-// NewCASObjectScanCursor constructs a canonical restart cursor. Callers may
-// durably persist Cutoff and After and reconstruct the same scan after restart.
-func NewCASObjectScanCursor(cutoff time.Time, after model.Digest) (CASObjectScanCursor, error) {
-	if cutoff.IsZero() {
-		return CASObjectScanCursor{}, fmt.Errorf("%w: object scan cutoff", ErrCASInput)
-	}
-	return CASObjectScanCursor{cutoff: cutoff.Round(0).UTC(), after: after}, nil
-}
-
-func (cursor CASObjectScanCursor) Cutoff() time.Time   { return cursor.cutoff }
-func (cursor CASObjectScanCursor) After() model.Digest { return cursor.after }
-
-type CASTombstoneState string
-
-const (
-	CASTombstoneFinalOnly     CASTombstoneState = "final_only"
-	CASTombstoneFinalAndTrash CASTombstoneState = "final_and_tombstone"
-	CASTombstoneTrashOnly     CASTombstoneState = "tombstone_only"
-	CASTombstoneAbsent        CASTombstoneState = "neither"
-)
-
-// CASTombstoneStatus distinguishes every crash-recovery state. Closed means
-// that the canonical final path is absent; the Store queue state decides
-// whether a closed "neither" state is expected or corruption.
-type CASTombstoneStatus struct {
-	State  CASTombstoneState
-	Closed bool
-}
-
-// CASTombstoneDescriptor is a defensive startup-reconciliation snapshot of
-// one canonical .trash entry and its corresponding final-path state.
-type CASTombstoneDescriptor struct {
-	Digest model.Digest
-	Token  [32]byte
-	State  CASTombstoneState
-	Closed bool
-}
-
 type casCoordination struct {
-	lifecycle sync.RWMutex
-	temp      sync.Mutex
-	digests   [casDigestShards]sync.RWMutex
+	temp       sync.Mutex
+	tempOffset int64
+	staging    sync.Mutex
+	digests    [casDigestShards]sync.RWMutex
 }
 
 var casCoordinationRegistry = struct {
@@ -144,8 +67,8 @@ func NewCAS(root string) (*CAS, error) {
 	if err := ensureCASDirectory(temp); err != nil {
 		return nil, err
 	}
-	trash := filepath.Join(root, ".trash")
-	if err := ensureCASDirectory(trash); err != nil {
+	staging := filepath.Join(root, ".staging")
+	if err := ensureCASDirectory(staging); err != nil {
 		return nil, err
 	}
 	if err := syncDirectory(root); err != nil {
@@ -162,7 +85,7 @@ func NewCAS(root string) (*CAS, error) {
 		casCoordinationRegistry.roots[registryRoot] = coordination
 	}
 	casCoordinationRegistry.Unlock()
-	return &CAS{root: root, temp: temp, trash: trash, coordination: coordination}, nil
+	return &CAS{root: root, temp: temp, staging: staging, coordination: coordination}, nil
 }
 
 func (cas *CAS) Root() string {
@@ -170,38 +93,6 @@ func (cas *CAS) Root() string {
 		return ""
 	}
 	return cas.root
-}
-
-// AcquireUse holds the shared lifecycle barrier until Release. It is intended
-// to cover all CAS operations and the Store checkpoint that makes them owned.
-func (cas *CAS) AcquireUse() (*CASLease, error) {
-	if err := cas.validate(); err != nil {
-		return nil, err
-	}
-	cas.coordination.lifecycle.RLock()
-	return &CASLease{release: cas.coordination.lifecycle.RUnlock}, nil
-}
-
-// AcquireExclusive holds the lifecycle barrier exclusively. A collector keeps
-// it across durable enqueue, tombstoning, Store mark-renamed, purge, and queue
-// completion.
-func (cas *CAS) AcquireExclusive() (*CASLease, error) {
-	if err := cas.validate(); err != nil {
-		return nil, err
-	}
-	cas.coordination.lifecycle.Lock()
-	return &CASLease{release: cas.coordination.lifecycle.Unlock}, nil
-}
-
-func (lease *CASLease) Release() {
-	if lease == nil {
-		return
-	}
-	lease.once.Do(func() {
-		if lease.release != nil {
-			lease.release()
-		}
-	})
 }
 
 // Put verifies digest == SHA-256(bytes), fsyncs an owner-only recognizable
@@ -518,158 +409,6 @@ func (cas *CAS) TempFiles() ([]string, error) {
 	return result, nil
 }
 
-// ListObjectsBefore returns the first bounded page of canonical final objects
-// strictly older than cutoff. It remains as a compatibility surface; a
-// collector must use ListObjectsPage and persist its returned cursor so a
-// protected low-digest prefix cannot starve later orphan candidates.
-func (cas *CAS) ListObjectsBefore(cutoff time.Time, limit int) ([]CASObjectCandidate, error) {
-	cursor, err := NewCASObjectScanCursor(cutoff, model.Digest{})
-	if err != nil {
-		return nil, err
-	}
-	page, err := cas.ListObjectsPage(cursor, limit)
-	if err != nil {
-		return nil, err
-	}
-	return page.Candidates, nil
-}
-
-// ListObjectsPage returns at most limit canonical final objects strictly older
-// than the cursor's frozen cutoff and strictly after its digest lower bound.
-//
-// Filesystem directory order is not portable or stable across restart. To
-// preserve canonical digest order with bounded memory, the scanner completely
-// validates each visited shard while retaining only its smallest limit+1
-// matches. Once lookahead is full it stops before opening another shard, so a
-// nonterminal page does not perform a fixed traversal of all 256 object shards.
-// The root namespace remains a bounded full validation (two reserved names plus
-// at most 256 shards) so unknown, uppercase, file, and symlink root entries
-// still fail closed.
-//
-// A very large single shard is necessarily rescanned on each page within that
-// shard. File.ReadDir's directory-order cursor is neither a canonical digest
-// cursor nor reliable across restart/layout changes; using it would trade away
-// deterministic recovery. The one-byte on-disk sharding bounds neither that
-// I/O nor latency, but this conservative scan bounds retained memory/results
-// and closes protected-prefix starvation without changing the CAS layout.
-func (cas *CAS) ListObjectsPage(cursor CASObjectScanCursor, limit int) (CASObjectPage, error) {
-	if err := cas.validate(); err != nil {
-		return CASObjectPage{}, err
-	}
-	if err := validateCASObjectScanCursor(cursor); err != nil {
-		return CASObjectPage{}, err
-	}
-	if limit <= 0 || limit > maxCASObjectPageSize {
-		return CASObjectPage{}, fmt.Errorf("%w: object page limit", ErrCASInput)
-	}
-	rootSnapshot, err := cas.validateObjectRootLayout()
-	if err != nil {
-		return CASObjectPage{}, err
-	}
-
-	lookahead := limit + 1
-	candidates := make([]CASObjectCandidate, 0, lookahead)
-	scanned := make([]casObjectShardSnapshot, 0, 4)
-	start := 0
-	if !cursor.after.IsZero() {
-		start = casDigestShard(cursor.after)
-	}
-	done := true
-	for prefix := start; prefix < casDigestShards; prefix++ {
-		if !rootSnapshot.shards[prefix] {
-			continue
-		}
-		lock := &cas.coordination.digests[prefix]
-		lock.RLock()
-		shardSnapshot, scanErr := cas.scanObjectShard(byte(prefix), cursor, lookahead, &candidates)
-		lock.RUnlock()
-		if scanErr != nil {
-			return CASObjectPage{}, scanErr
-		}
-		scanned = append(scanned, casObjectShardSnapshot{prefix: byte(prefix), info: shardSnapshot})
-		if len(candidates) == lookahead {
-			done = false
-			break
-		}
-	}
-	if err := cas.validateObjectScanSnapshots(rootSnapshot, scanned); err != nil {
-		return CASObjectPage{}, err
-	}
-
-	if len(candidates) > limit {
-		candidates = candidates[:limit]
-	}
-	next := cursor
-	if len(candidates) > 0 {
-		next.after = candidates[len(candidates)-1].Digest
-	}
-	return CASObjectPage{Candidates: candidates, NextCursor: next, Done: done}, nil
-}
-
-// ListTombstones returns at most limit canonical tombstones in deterministic
-// digest/token order. Every entry encountered is validated before any result
-// is returned, so an unsafe orphan cannot be silently skipped at startup.
-func (cas *CAS) ListTombstones(limit int) ([]CASTombstoneDescriptor, error) {
-	if err := cas.validate(); err != nil {
-		return nil, err
-	}
-	if limit <= 0 {
-		return nil, fmt.Errorf("%w: tombstone listing limit", ErrCASInput)
-	}
-	before, err := os.Lstat(cas.trash)
-	if err != nil {
-		return nil, fmt.Errorf("inspect Artifact CAS tombstone directory: %w", err)
-	}
-	if err := validateCASDirectoryInfo(before); err != nil {
-		return nil, err
-	}
-	handle, err := os.Open(cas.trash)
-	if err != nil {
-		return nil, fmt.Errorf("open Artifact CAS tombstones: %w", err)
-	}
-	defer handle.Close()
-	opened, err := handle.Stat()
-	if err != nil || !sameCASDirectorySnapshot(before, opened) {
-		return nil, fmt.Errorf("%w: tombstone directory changed while opening", ErrCASCorruption)
-	}
-	descriptors := make([]CASTombstoneDescriptor, 0, limit)
-	for {
-		entries, readErr := handle.ReadDir(128)
-		for _, entry := range entries {
-			digest, token, parseErr := parseCASTombstoneName(entry.Name())
-			if parseErr != nil {
-				return nil, parseErr
-			}
-			lock, lockErr := cas.digestLock(digest)
-			if lockErr != nil {
-				return nil, lockErr
-			}
-			lock.RLock()
-			status, statErr := cas.inspectTombstoneLocked(digest, token)
-			lock.RUnlock()
-			if statErr != nil {
-				return nil, statErr
-			}
-			descriptors = insertCASTombstoneDescriptor(descriptors,
-				CASTombstoneDescriptor{Digest: digest, Token: token,
-					State: status.State, Closed: status.Closed}, limit)
-		}
-		if errors.Is(readErr, io.EOF) {
-			break
-		}
-		if readErr != nil {
-			return nil, fmt.Errorf("list Artifact CAS tombstones: %w", readErr)
-		}
-	}
-	afterFD, fdErr := handle.Stat()
-	afterPath, pathErr := os.Lstat(cas.trash)
-	if fdErr != nil || pathErr != nil || !sameCASDirectorySnapshot(before, afterFD) ||
-		!sameCASDirectorySnapshot(before, afterPath) {
-		return nil, fmt.Errorf("%w: tombstone directory changed while listing", ErrCASCorruption)
-	}
-	return descriptors, nil
-}
-
 // PruneTempsBefore removes at most limit recognizable owner-only CAS temps
 // whose modification time is strictly before cutoff. Active Put staging and
 // pruning share one mutex, so a live temp cannot be selected underneath Put.
@@ -677,7 +416,7 @@ func (cas *CAS) PruneTempsBefore(cutoff time.Time, limit int) ([]string, error) 
 	if err := cas.validate(); err != nil {
 		return nil, err
 	}
-	if cutoff.IsZero() || limit <= 0 {
+	if cutoff.IsZero() || limit <= 0 || limit > maxCASPruneScan {
 		return nil, fmt.Errorf("%w: temp pruning cutoff or limit", ErrCASInput)
 	}
 	cutoff = cutoff.Round(0)
@@ -686,57 +425,48 @@ func (cas *CAS) PruneTempsBefore(cutoff time.Time, limit int) ([]string, error) 
 	if err := requireCASDirectory(cas.temp); err != nil {
 		return nil, err
 	}
-	handle, err := os.Open(cas.temp)
+	cursor := cas.coordination.tempOffset
+	names, nextCursor, err := cas.readTempBatchLocked(cursor)
 	if err != nil {
-		return nil, fmt.Errorf("list Artifact CAS temps: %w", err)
+		return nil, err
 	}
 	candidates := make([]casTempCandidate, 0, limit)
-	for {
-		entries, readErr := handle.ReadDir(128)
-		for _, entry := range entries {
-			if !recognizableCASTemp(entry.Name()) {
-				continue
-			}
-			path := filepath.Join(cas.temp, entry.Name())
-			info, err := os.Lstat(path)
+	eligible := 0
+	for _, name := range names {
+		if !recognizableCASTemp(name) {
+			continue
+		}
+		path := filepath.Join(cas.temp, name)
+		info, err := os.Lstat(path)
+		if err != nil {
+			return nil, fmt.Errorf("inspect Artifact CAS temp: %w", err)
+		}
+		if err := validateCASRegular(info, maxCASObjectSize); err != nil {
+			return nil, fmt.Errorf("%w: unsafe recognizable temp %q", err, name)
+		}
+		links, err := casLinkCount(info)
+		if err != nil || (links != 1 && links != 2) {
+			return nil, fmt.Errorf("%w: unsafe recognizable temp %q", ErrCASCorruption, name)
+		}
+		promotedFinal := ""
+		if links == 2 {
+			promotedFinal, err = cas.validatePromotedTemp(path, info)
 			if err != nil {
-				_ = handle.Close()
-				return nil, fmt.Errorf("inspect Artifact CAS temp: %w", err)
+				return nil, err
 			}
-			if err := validateCASRegular(info, maxCASObjectSize); err != nil {
-				_ = handle.Close()
-				return nil, fmt.Errorf("%w: unsafe recognizable temp %q", err, entry.Name())
-			}
-			links, err := casLinkCount(info)
-			if err != nil || (links != 1 && links != 2) {
-				_ = handle.Close()
-				return nil, fmt.Errorf("%w: unsafe recognizable temp %q", ErrCASCorruption, entry.Name())
-			}
-			promotedFinal := ""
-			if links == 2 {
-				promotedFinal, err = cas.validatePromotedTemp(path, info)
-				if err != nil {
-					_ = handle.Close()
-					return nil, err
-				}
-			}
-			if !info.ModTime().Before(cutoff) {
-				continue
-			}
-			candidates = insertCASTempCandidate(candidates,
-				casTempCandidate{name: entry.Name(), snapshot: info,
-					expectedLinks: links, promotedFinal: promotedFinal}, limit)
 		}
-		if errors.Is(readErr, io.EOF) {
-			break
+		if !info.ModTime().Before(cutoff) {
+			continue
 		}
-		if readErr != nil {
-			_ = handle.Close()
-			return nil, fmt.Errorf("list Artifact CAS temps: %w", readErr)
-		}
+		eligible++
+		candidates = insertCASTempCandidate(candidates,
+			casTempCandidate{name: name, snapshot: info,
+				expectedLinks: links, promotedFinal: promotedFinal}, limit)
 	}
-	if err := handle.Close(); err != nil {
-		return nil, fmt.Errorf("close Artifact CAS temp directory: %w", err)
+	if eligible > limit {
+		// Revisit this bounded batch after removing its first page. Advancing
+		// past unremoved eligible entries would postpone them until wrap.
+		nextCursor = cursor
 	}
 	removed := make([]string, 0, len(candidates))
 	for _, candidate := range candidates {
@@ -770,149 +500,16 @@ func (cas *CAS) PruneTempsBefore(cutoff time.Time, limit int) ([]string, error) 
 			return nil, err
 		}
 	}
+	cas.coordination.tempOffset = nextCursor
 	return removed, nil
 }
 
-// InspectTombstone returns the exact portable hard-link tombstone state for
-// digest and token without mutating either path.
-func (cas *CAS) InspectTombstone(digest model.Digest, token [32]byte) (CASTombstoneStatus, error) {
-	lock, err := cas.tombstoneLock(digest, token)
-	if err != nil {
-		return CASTombstoneStatus{}, err
-	}
-	lock.RLock()
-	defer lock.RUnlock()
-	return cas.inspectTombstoneLocked(digest, token)
-}
-
-// Tombstone durably closes a final object by linking it under its operation
-// token, fsyncing .trash, unlinking the final path, and fsyncing its shard.
-// Replaying a tombstone-only state succeeds; an absent object is fail-closed.
-func (cas *CAS) Tombstone(digest model.Digest, token [32]byte) (CASTombstoneStatus, error) {
-	lock, err := cas.tombstoneLock(digest, token)
-	if err != nil {
-		return CASTombstoneStatus{}, err
-	}
-	lock.Lock()
-	defer lock.Unlock()
-	status, err := cas.inspectTombstoneLocked(digest, token)
-	if err != nil {
-		return CASTombstoneStatus{}, err
-	}
-	final, err := cas.objectPath(digest, false)
-	if err != nil {
-		return CASTombstoneStatus{}, err
-	}
-	tombstone := cas.tombstonePath(digest, token)
-	switch status.State {
-	case CASTombstoneFinalOnly:
-		if err := os.Link(final, tombstone); err != nil {
-			return CASTombstoneStatus{}, fmt.Errorf("link Artifact CAS tombstone: %w", err)
-		}
-		if err := syncDirectory(cas.trash); err != nil {
-			return CASTombstoneStatus{}, err
-		}
-		status, err = cas.inspectTombstoneLocked(digest, token)
-		if err != nil || status.State != CASTombstoneFinalAndTrash {
-			if err != nil {
-				return CASTombstoneStatus{}, err
-			}
-			return CASTombstoneStatus{}, fmt.Errorf("%w: linked tombstone state did not close", ErrCASCorruption)
-		}
-		fallthrough
-	case CASTombstoneFinalAndTrash:
-		// A replay after the link but before the directory sync must establish
-		// link durability before it removes the final name.
-		if err := syncDirectory(cas.trash); err != nil {
-			return CASTombstoneStatus{}, err
-		}
-		if err := os.Remove(final); err != nil {
-			return CASTombstoneStatus{}, fmt.Errorf("unlink Artifact CAS final object: %w", err)
-		}
-		if err := syncDirectory(filepath.Dir(final)); err != nil {
-			return CASTombstoneStatus{}, err
-		}
-	case CASTombstoneTrashOnly:
-		// Replay the final-directory durability boundary before reporting a
-		// physically closed object.
-		if err := syncDirectory(filepath.Dir(final)); err != nil {
-			return CASTombstoneStatus{}, err
-		}
-		if err := syncDirectory(cas.trash); err != nil {
-			return CASTombstoneStatus{}, err
-		}
-	case CASTombstoneAbsent:
-		return status, fmt.Errorf("%w: object and tombstone are both absent", ErrCASCorruption)
-	default:
-		return CASTombstoneStatus{}, fmt.Errorf("%w: unknown tombstone state", ErrCASCorruption)
-	}
-	status, err = cas.inspectTombstoneLocked(digest, token)
-	if err != nil {
-		return CASTombstoneStatus{}, err
-	}
-	if status.State != CASTombstoneTrashOnly || !status.Closed {
-		return CASTombstoneStatus{}, fmt.Errorf("%w: tombstone did not reach its closed state", ErrCASCorruption)
-	}
-	return status, nil
-}
-
-// PurgeTombstone removes a closed tombstone after the Store has durably marked
-// its queue record renamed and before that record is completed. Tombstone-only
-// and neither are idempotent states; an open final path is always refused.
-func (cas *CAS) PurgeTombstone(digest model.Digest, token [32]byte) (CASTombstoneStatus, error) {
-	lock, err := cas.tombstoneLock(digest, token)
-	if err != nil {
-		return CASTombstoneStatus{}, err
-	}
-	lock.Lock()
-	defer lock.Unlock()
-	status, err := cas.inspectTombstoneLocked(digest, token)
-	if err != nil {
-		return CASTombstoneStatus{}, err
-	}
-	switch status.State {
-	case CASTombstoneTrashOnly:
-		if err := syncDirectory(filepath.Dir(cas.tombstonePath(digest, token))); err != nil {
-			return CASTombstoneStatus{}, err
-		}
-		final, pathErr := cas.objectPath(digest, false)
-		if pathErr != nil {
-			return CASTombstoneStatus{}, pathErr
-		}
-		if err := syncDirectory(filepath.Dir(final)); err != nil {
-			return CASTombstoneStatus{}, err
-		}
-		if err := os.Remove(cas.tombstonePath(digest, token)); err != nil {
-			return CASTombstoneStatus{}, fmt.Errorf("purge Artifact CAS tombstone: %w", err)
-		}
-		if err := syncDirectory(cas.trash); err != nil {
-			return CASTombstoneStatus{}, err
-		}
-	case CASTombstoneAbsent:
-		if err := syncDirectory(cas.trash); err != nil {
-			return CASTombstoneStatus{}, err
-		}
-		return status, nil
-	case CASTombstoneFinalOnly, CASTombstoneFinalAndTrash:
-		return status, fmt.Errorf("%w: refuse to purge an open CAS object", ErrCASCorruption)
-	default:
-		return CASTombstoneStatus{}, fmt.Errorf("%w: unknown tombstone state", ErrCASCorruption)
-	}
-	status, err = cas.inspectTombstoneLocked(digest, token)
-	if err != nil {
-		return CASTombstoneStatus{}, err
-	}
-	if status.State != CASTombstoneAbsent || !status.Closed {
-		return CASTombstoneStatus{}, fmt.Errorf("%w: tombstone purge did not close", ErrCASCorruption)
-	}
-	return status, nil
-}
-
 func (cas *CAS) validate() error {
-	if cas == nil || cas.root == "" || cas.temp == "" || cas.trash == "" || cas.coordination == nil {
+	if cas == nil || cas.root == "" || cas.temp == "" || cas.staging == "" ||
+		cas.coordination == nil {
 		return fmt.Errorf("%w: nil or incomplete CAS", ErrCASInput)
 	}
-	for _, directory := range []string{cas.root, cas.temp, cas.trash} {
+	for _, directory := range []string{cas.root, cas.temp, cas.staging} {
 		if err := requireCASDirectory(directory); err != nil {
 			return err
 		}
@@ -930,228 +527,9 @@ func (cas *CAS) digestLock(digest model.Digest) (*sync.RWMutex, error) {
 	return &cas.coordination.digests[casDigestShard(digest)], nil
 }
 
-func (cas *CAS) tombstoneLock(digest model.Digest, token [32]byte) (*sync.RWMutex, error) {
-	if token == ([32]byte{}) {
-		return nil, fmt.Errorf("%w: zero CAS tombstone token", ErrCASInput)
-	}
-	return cas.digestLock(digest)
-}
-
 func casDigestShard(digest model.Digest) int {
 	bytes := digest.Bytes()
 	return int(bytes[0])
-}
-
-type casObjectRootSnapshot struct {
-	info   os.FileInfo
-	shards [casDigestShards]bool
-}
-
-type casObjectShardSnapshot struct {
-	prefix byte
-	info   os.FileInfo
-}
-
-func validateCASObjectScanCursor(cursor CASObjectScanCursor) error {
-	if cursor.cutoff.IsZero() || cursor.cutoff != cursor.cutoff.Round(0).UTC() {
-		return fmt.Errorf("%w: noncanonical object scan cursor", ErrCASInput)
-	}
-	return nil
-}
-
-func (cas *CAS) validateObjectRootLayout() (casObjectRootSnapshot, error) {
-	before, err := os.Lstat(cas.root)
-	if err != nil {
-		return casObjectRootSnapshot{}, fmt.Errorf("inspect Artifact CAS object root: %w", err)
-	}
-	if err := validateCASDirectoryInfo(before); err != nil {
-		return casObjectRootSnapshot{}, err
-	}
-	handle, err := os.Open(cas.root)
-	if err != nil {
-		return casObjectRootSnapshot{}, fmt.Errorf("open Artifact CAS object root: %w", err)
-	}
-	defer handle.Close()
-	opened, err := handle.Stat()
-	if err != nil || !sameCASDirectorySnapshot(before, opened) {
-		return casObjectRootSnapshot{}, fmt.Errorf("%w: object root changed while opening", ErrCASCorruption)
-	}
-	snapshot := casObjectRootSnapshot{info: before}
-	foundTemp := false
-	foundTrash := false
-	for {
-		entries, readErr := handle.ReadDir(128)
-		for _, entry := range entries {
-			name := entry.Name()
-			path := filepath.Join(cas.root, name)
-			info, statErr := os.Lstat(path)
-			if statErr != nil {
-				return casObjectRootSnapshot{}, fmt.Errorf("inspect Artifact CAS root entry: %w", statErr)
-			}
-			switch name {
-			case ".tmp":
-				foundTemp = true
-			case ".trash":
-				foundTrash = true
-			default:
-				if len(name) != 2 || strings.ToLower(name) != name {
-					return casObjectRootSnapshot{}, fmt.Errorf("%w: noncanonical object root entry %q", ErrCASCorruption, name)
-				}
-				decoded, decodeErr := hex.DecodeString(name)
-				if decodeErr != nil || len(decoded) != 1 {
-					return casObjectRootSnapshot{}, fmt.Errorf("%w: noncanonical object root entry %q", ErrCASCorruption, name)
-				}
-				snapshot.shards[int(decoded[0])] = true
-			}
-			if err := validateCASDirectoryInfo(info); err != nil {
-				return casObjectRootSnapshot{}, fmt.Errorf("%w: unsafe object root entry %q", err, name)
-			}
-		}
-		if errors.Is(readErr, io.EOF) {
-			break
-		}
-		if readErr != nil {
-			return casObjectRootSnapshot{}, fmt.Errorf("list Artifact CAS object root: %w", readErr)
-		}
-	}
-	if !foundTemp || !foundTrash {
-		return casObjectRootSnapshot{}, fmt.Errorf("%w: object root is missing a reserved directory", ErrCASCorruption)
-	}
-	afterFD, fdErr := handle.Stat()
-	afterPath, pathErr := os.Lstat(cas.root)
-	if fdErr != nil || pathErr != nil || !sameCASDirectorySnapshot(before, afterFD) ||
-		!sameCASDirectorySnapshot(before, afterPath) {
-		return casObjectRootSnapshot{}, fmt.Errorf("%w: object root changed while validating", ErrCASCorruption)
-	}
-	return snapshot, nil
-}
-
-func (cas *CAS) scanObjectShard(prefix byte, cursor CASObjectScanCursor, limit int,
-	candidates *[]CASObjectCandidate,
-) (os.FileInfo, error) {
-	directory := filepath.Join(cas.root, fmt.Sprintf("%02x", prefix))
-	before, err := os.Lstat(directory)
-	if err != nil {
-		return nil, fmt.Errorf("%w: expected object shard is unavailable: %v", ErrCASCorruption, err)
-	}
-	if err := validateCASDirectoryInfo(before); err != nil {
-		return nil, err
-	}
-	handle, err := os.Open(directory)
-	if err != nil {
-		return nil, fmt.Errorf("open Artifact CAS object shard: %w", err)
-	}
-	defer handle.Close()
-	opened, err := handle.Stat()
-	if err != nil || !sameCASDirectorySnapshot(before, opened) {
-		return nil, fmt.Errorf("%w: object shard changed while opening", ErrCASCorruption)
-	}
-	afterName := ""
-	if !cursor.after.IsZero() {
-		afterName = strings.TrimPrefix(cursor.after.String(), "sha256:")
-	}
-	for {
-		entries, readErr := handle.ReadDir(128)
-		for _, entry := range entries {
-			name := entry.Name()
-			digest, parseErr := model.ParseDigest("sha256:" + name)
-			if parseErr != nil || digest.IsZero() || len(name) != 64 ||
-				!strings.HasPrefix(name, fmt.Sprintf("%02x", prefix)) {
-				return nil, fmt.Errorf("%w: noncanonical object entry %q", ErrCASCorruption, name)
-			}
-			path := filepath.Join(directory, name)
-			info, statErr := os.Lstat(path)
-			if statErr != nil {
-				return nil, fmt.Errorf("inspect Artifact CAS object candidate: %w", statErr)
-			}
-			if err := validateCASRegular(info, maxCASObjectSize); err != nil {
-				return nil, err
-			}
-			if err := requireCASLinkCount(info, 1); err != nil {
-				return nil, err
-			}
-			if (afterName != "" && name <= afterName) ||
-				!info.ModTime().Before(cursor.cutoff) {
-				continue
-			}
-			*candidates = insertCASObjectCandidate(*candidates, CASObjectCandidate{
-				Digest: digest, Size: uint64(info.Size()), ModifiedAt: info.ModTime().Round(0).UTC(),
-			}, limit)
-		}
-		if errors.Is(readErr, io.EOF) {
-			break
-		}
-		if readErr != nil {
-			return nil, fmt.Errorf("list Artifact CAS object shard: %w", readErr)
-		}
-	}
-	afterFD, fdErr := handle.Stat()
-	afterPath, pathErr := os.Lstat(directory)
-	if fdErr != nil || pathErr != nil || !sameCASDirectorySnapshot(before, afterFD) ||
-		!sameCASDirectorySnapshot(before, afterPath) {
-		return nil, fmt.Errorf("%w: object shard changed while listing", ErrCASCorruption)
-	}
-	return before, nil
-}
-
-func (cas *CAS) validateObjectScanSnapshots(root casObjectRootSnapshot,
-	shards []casObjectShardSnapshot,
-) error {
-	for _, snapshot := range shards {
-		path := filepath.Join(cas.root, fmt.Sprintf("%02x", snapshot.prefix))
-		current, err := os.Lstat(path)
-		if err != nil || !sameCASDirectorySnapshot(snapshot.info, current) {
-			return fmt.Errorf("%w: object shard changed after listing", ErrCASCorruption)
-		}
-	}
-	rootAfter, err := os.Lstat(cas.root)
-	if err != nil || !sameCASDirectorySnapshot(root.info, rootAfter) {
-		return fmt.Errorf("%w: object root changed while listing", ErrCASCorruption)
-	}
-	return nil
-}
-
-func insertCASObjectCandidate(candidates []CASObjectCandidate, candidate CASObjectCandidate,
-	limit int,
-) []CASObjectCandidate {
-	key := candidate.Digest.String()
-	index := sort.Search(len(candidates), func(index int) bool {
-		return candidates[index].Digest.String() >= key
-	})
-	if index < len(candidates) && candidates[index].Digest == candidate.Digest {
-		candidates[index] = candidate
-		return candidates
-	}
-	if len(candidates) == limit && index == len(candidates) {
-		return candidates
-	}
-	candidates = append(candidates, CASObjectCandidate{})
-	copy(candidates[index+1:], candidates[index:])
-	candidates[index] = candidate
-	if len(candidates) > limit {
-		candidates = candidates[:limit]
-	}
-	return candidates
-}
-
-func insertCASTombstoneDescriptor(descriptors []CASTombstoneDescriptor,
-	descriptor CASTombstoneDescriptor, limit int,
-) []CASTombstoneDescriptor {
-	key := descriptor.Digest.String() + hex.EncodeToString(descriptor.Token[:])
-	index := sort.Search(len(descriptors), func(index int) bool {
-		current := descriptors[index].Digest.String() + hex.EncodeToString(descriptors[index].Token[:])
-		return current >= key
-	})
-	if len(descriptors) == limit && index == len(descriptors) {
-		return descriptors
-	}
-	descriptors = append(descriptors, CASTombstoneDescriptor{})
-	copy(descriptors[index+1:], descriptors[index:])
-	descriptors[index] = descriptor
-	if len(descriptors) > limit {
-		descriptors = descriptors[:limit]
-	}
-	return descriptors
 }
 
 type casTempCandidate struct {
@@ -1190,131 +568,4 @@ func recognizableCASTemp(name string) bool {
 	}
 	decoded, err := hex.DecodeString(hexValue)
 	return err == nil && len(decoded) == 16
-}
-
-func (cas *CAS) tombstonePath(digest model.Digest, token [32]byte) string {
-	digestHex := strings.TrimPrefix(digest.String(), "sha256:")
-	return filepath.Join(cas.trash, digestHex+"-"+hex.EncodeToString(token[:])+".trash")
-}
-
-func (cas *CAS) inspectTombstoneLocked(digest model.Digest,
-	token [32]byte,
-) (CASTombstoneStatus, error) {
-	if err := requireCASDirectory(cas.trash); err != nil {
-		return CASTombstoneStatus{}, err
-	}
-	if err := cas.rejectForeignTombstone(digest, token); err != nil {
-		return CASTombstoneStatus{}, err
-	}
-	final, err := cas.objectPath(digest, false)
-	if err != nil {
-		return CASTombstoneStatus{}, err
-	}
-	tombstone := cas.tombstonePath(digest, token)
-	finalInfo, finalFound, err := lstatCASPath(final)
-	if err != nil {
-		return CASTombstoneStatus{}, err
-	}
-	tombstoneInfo, tombstoneFound, err := lstatCASPath(tombstone)
-	if err != nil {
-		return CASTombstoneStatus{}, err
-	}
-	if finalFound {
-		if err := validateCASRegular(finalInfo, maxCASObjectSize); err != nil {
-			return CASTombstoneStatus{}, err
-		}
-	}
-	if tombstoneFound {
-		if err := validateCASRegular(tombstoneInfo, maxCASObjectSize); err != nil {
-			return CASTombstoneStatus{}, err
-		}
-		if err := requireCASDirectory(filepath.Dir(final)); err != nil {
-			return CASTombstoneStatus{}, err
-		}
-	}
-	switch {
-	case finalFound && tombstoneFound:
-		if !os.SameFile(finalInfo, tombstoneInfo) {
-			return CASTombstoneStatus{}, fmt.Errorf("%w: final and tombstone are different files", ErrCASCorruption)
-		}
-		if err := requireCASLinkCount(finalInfo, 2); err != nil {
-			return CASTombstoneStatus{}, err
-		}
-		if _, err := readCASObject(final, digest, maxCASObjectSize, 2); err != nil {
-			return CASTombstoneStatus{}, err
-		}
-		return CASTombstoneStatus{State: CASTombstoneFinalAndTrash}, nil
-	case finalFound:
-		if err := requireCASLinkCount(finalInfo, 1); err != nil {
-			return CASTombstoneStatus{}, err
-		}
-		if _, err := readCASObject(final, digest, maxCASObjectSize, 1); err != nil {
-			return CASTombstoneStatus{}, err
-		}
-		return CASTombstoneStatus{State: CASTombstoneFinalOnly}, nil
-	case tombstoneFound:
-		if err := requireCASLinkCount(tombstoneInfo, 1); err != nil {
-			return CASTombstoneStatus{}, err
-		}
-		if _, err := readCASObject(tombstone, digest, maxCASObjectSize, 1); err != nil {
-			return CASTombstoneStatus{}, err
-		}
-		return CASTombstoneStatus{State: CASTombstoneTrashOnly, Closed: true}, nil
-	default:
-		return CASTombstoneStatus{State: CASTombstoneAbsent, Closed: true}, nil
-	}
-}
-
-func (cas *CAS) rejectForeignTombstone(digest model.Digest, token [32]byte) error {
-	handle, err := os.Open(cas.trash)
-	if err != nil {
-		return fmt.Errorf("list Artifact CAS tombstones: %w", err)
-	}
-	defer handle.Close()
-	for {
-		entries, readErr := handle.ReadDir(128)
-		for _, entry := range entries {
-			entryDigest, entryToken, err := parseCASTombstoneName(entry.Name())
-			if err != nil {
-				return err
-			}
-			if entryDigest == digest && entryToken != token {
-				return fmt.Errorf("%w: digest has a foreign tombstone token", ErrCASCorruption)
-			}
-		}
-		if errors.Is(readErr, io.EOF) {
-			return nil
-		}
-		if readErr != nil {
-			return fmt.Errorf("list Artifact CAS tombstones: %w", readErr)
-		}
-	}
-}
-
-func parseCASTombstoneName(name string) (model.Digest, [32]byte, error) {
-	const digestLength = 64
-	const tokenLength = 64
-	var token [32]byte
-	if len(name) != digestLength+1+tokenLength+len(".trash") || name[digestLength] != '-' ||
-		!strings.HasSuffix(name, ".trash") {
-		return model.Digest{}, token, fmt.Errorf("%w: noncanonical tombstone entry %q", ErrCASCorruption, name)
-	}
-	digestHex := name[:digestLength]
-	tokenHex := name[digestLength+1 : digestLength+1+tokenLength]
-	if strings.ToLower(digestHex) != digestHex || strings.ToLower(tokenHex) != tokenHex {
-		return model.Digest{}, token, fmt.Errorf("%w: noncanonical tombstone entry %q", ErrCASCorruption, name)
-	}
-	digest, err := model.ParseDigest("sha256:" + digestHex)
-	if err != nil || digest.IsZero() {
-		return model.Digest{}, token, fmt.Errorf("%w: noncanonical tombstone digest", ErrCASCorruption)
-	}
-	rawToken, err := hex.DecodeString(tokenHex)
-	if err != nil || len(rawToken) != len(token) {
-		return model.Digest{}, token, fmt.Errorf("%w: noncanonical tombstone token", ErrCASCorruption)
-	}
-	copy(token[:], rawToken)
-	if token == ([32]byte{}) {
-		return model.Digest{}, token, fmt.Errorf("%w: zero tombstone token", ErrCASCorruption)
-	}
-	return digest, token, nil
 }

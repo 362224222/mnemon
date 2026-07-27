@@ -17,28 +17,31 @@ import (
 // ArtifactCapturer is the live-workspace side of managed Artifact capture.
 // It is intentionally absent from the durable replay path.
 type ArtifactCapturer interface {
-	Capture(context.Context, []string) (artifact.Closure, error)
+	Capture(context.Context, []string, artifact.ObjectSink) (artifact.Closure, error)
 }
 
-// ArtifactClosureVerifier establishes that every manifest and reachable block
-// in a newly captured closure still matches immutable CAS bytes.
-type ArtifactClosureVerifier interface {
-	VerifyClosure(context.Context, artifact.Closure) error
-}
-
-// ArtifactCaptureLifecycle linearizes live CAS capture and its durable Store
-// ownership checkpoints against exclusive Artifact collection.
-type ArtifactCaptureLifecycle interface {
-	AcquireUse() (*artifact.CASLease, error)
+// ArtifactStageOpener grants only owner-scoped staging authority. In
+// particular, it cannot write directly to final CAS.
+type ArtifactStageOpener interface {
+	OpenStage(artifact.StageOwner) (*artifact.Stage, error)
 }
 
 // ArtifactCaptureStore is the complete durable authority needed by the
-// coordinator. Closure metadata is checkpointed before the lease-fenced
-// operation checkpoint makes that exact root set reusable by admission.
+// coordinator. Empty captures retain the direct operation checkpoint; every
+// nonempty capture uses the explicit staged publication lifecycle.
 type ArtifactCaptureStore interface {
-	CheckpointVerifiedArtifactClosure(context.Context, store.VerifiedArtifactClosure) (
-		store.VerifiedArtifactClosureCheckpoint, error)
 	CheckpointOperationCapture(context.Context, model.OperationID, string, time.Time, model.JSON) (bool, error)
+	BeginOperationArtifactStage(context.Context, store.BeginOperationArtifactStageSpec) (
+		store.OperationArtifactStageResult, error)
+	PrepareOperationArtifactPublish(context.Context, store.PrepareOperationArtifactPublishSpec) (
+		store.OperationArtifactStageResult, error)
+	ReadOperationArtifactPublish(context.Context, store.ReadOperationArtifactPublishSpec) (
+		store.OperationArtifactPublishCheckpoint, error)
+	ReadCommittedOperationArtifactPublish(context.Context,
+		store.ReadCommittedOperationArtifactPublishSpec) (
+		store.OperationArtifactPublishCheckpoint, bool, error)
+	MarkOperationArtifactReady(context.Context, store.MarkOperationArtifactReadySpec) (
+		store.OperationArtifactStageResult, error)
 }
 
 type ArtifactCaptureRoot struct {
@@ -54,36 +57,32 @@ type ArtifactCaptureResult struct {
 
 // ArtifactCaptureCoordinator binds live capture to one reserved managed
 // Operation. Once an Operation contains capture_json, Checkpoint never calls
-// the live capturer or CAS verifier again: the durable checkpoint is the sole
-// replay authority.
+// the live capturer again: the durable checkpoint is the sole replay input.
 type ArtifactCaptureCoordinator struct {
-	capturer  ArtifactCapturer
-	verifier  ArtifactClosureVerifier
-	lifecycle ArtifactCaptureLifecycle
-	store     ArtifactCaptureStore
-	clock     ServiceClock
+	capturer ArtifactCapturer
+	stages   ArtifactStageOpener
+	store    ArtifactCaptureStore
+	clock    ServiceClock
 }
 
-func NewArtifactCaptureCoordinator(capturer ArtifactCapturer, verifier ArtifactClosureVerifier,
-	lifecycle ArtifactCaptureLifecycle, st ArtifactCaptureStore, clock ServiceClock,
+func NewArtifactCaptureCoordinator(capturer ArtifactCapturer, stages ArtifactStageOpener,
+	st ArtifactCaptureStore, clock ServiceClock,
 ) (*ArtifactCaptureCoordinator, error) {
-	if capturer == nil || verifier == nil || lifecycle == nil || st == nil {
-		return nil, errors.New("Artifact capture coordinator requires capturer, verifier, lifecycle and Store")
+	if capturer == nil || stages == nil || st == nil {
+		return nil, errors.New("Artifact capture coordinator requires capturer, stages and Store")
 	}
 	if clock == nil {
 		clock = wallServiceClock{}
 	}
-	return &ArtifactCaptureCoordinator{capturer: capturer, verifier: verifier,
-		lifecycle: lifecycle, store: st, clock: clock}, nil
+	return &ArtifactCaptureCoordinator{capturer: capturer, stages: stages, store: st, clock: clock}, nil
 }
 
 func (coordinator *ArtifactCaptureCoordinator) Checkpoint(ctx context.Context,
 	reservation store.ManagedOperationReservation, paths []string,
 ) (ArtifactCaptureResult, *ControlError) {
 	operation := reservation.Operation
-	if coordinator == nil || coordinator.capturer == nil || coordinator.verifier == nil ||
-		coordinator.lifecycle == nil || coordinator.store == nil || coordinator.clock == nil ||
-		ctx == nil || operation.ID().IsZero() {
+	if coordinator == nil || coordinator.capturer == nil || coordinator.stages == nil ||
+		coordinator.store == nil || coordinator.clock == nil || ctx == nil || operation.ID().IsZero() {
 		return ArtifactCaptureResult{}, captureAPIError(CodeInternal,
 			"Artifact capture coordinator input is invalid", operation.ID())
 	}
@@ -97,20 +96,10 @@ func (coordinator *ArtifactCaptureCoordinator) Checkpoint(ctx context.Context,
 		if operation.Status().Terminal() {
 			return ArtifactCaptureResult{Checkpoint: checkpoint, Roots: roots, Replayed: true}, nil
 		}
-		now, apiErr := coordinator.fencedNow(reservation)
-		if apiErr != nil {
-			return ArtifactCaptureResult{}, apiErr
+		if len(roots) == 0 {
+			return coordinator.checkpointEmpty(ctx, reservation, checkpoint, true)
 		}
-		replayed, err := coordinator.store.CheckpointOperationCapture(ctx, operation.ID(),
-			operation.LeaseOwner(), now, checkpoint)
-		if err != nil {
-			return ArtifactCaptureResult{}, mapArtifactStoreError(err, operation.ID())
-		}
-		if !replayed {
-			return ArtifactCaptureResult{}, captureAPIError(CodeInternal,
-				"durable Artifact checkpoint replay was not recognized", operation.ID())
-		}
-		return ArtifactCaptureResult{Checkpoint: checkpoint, Roots: roots, Replayed: true}, nil
+		return coordinator.checkpointNonempty(ctx, reservation, paths, true)
 	}
 	if operation.Status().Terminal() {
 		return ArtifactCaptureResult{}, captureAPIError(CodeInternal,
@@ -120,41 +109,22 @@ func (coordinator *ArtifactCaptureCoordinator) Checkpoint(ctx context.Context,
 		return ArtifactCaptureResult{}, captureAPIError(CodeArtifactTooLarge,
 			"an action accepts at most 16 Artifact paths", operation.ID())
 	}
-	if _, apiErr := coordinator.fencedNow(reservation); apiErr != nil {
-		return ArtifactCaptureResult{}, apiErr
-	}
-
-	var checkpoint model.JSON
 	if len(paths) == 0 {
-		var err error
-		checkpoint, err = buildArtifactCaptureCheckpoint(nil)
+		checkpoint, err := buildArtifactCaptureCheckpoint(nil)
 		if err != nil {
 			return ArtifactCaptureResult{}, captureAPIError(CodeInternal,
 				"empty Artifact checkpoint cannot be encoded", operation.ID())
 		}
-	} else {
-		lease, err := coordinator.lifecycle.AcquireUse()
-		if err != nil || lease == nil {
-			return ArtifactCaptureResult{}, captureAPIError(CodeInternal,
-				"Artifact CAS lifecycle is unavailable", operation.ID())
-		}
-		defer lease.Release()
-
-		closure, err := coordinator.capturer.Capture(ctx, append([]string(nil), paths...))
-		if err != nil {
-			return ArtifactCaptureResult{}, mapLiveArtifactError(err, operation.ID())
-		}
-		if err := coordinator.verifier.VerifyClosure(ctx, closure); err != nil {
-			return ArtifactCaptureResult{}, mapArtifactVerificationError(err, operation.ID())
-		}
-		verified := storeClosureFromArtifact(closure)
-		if _, err := coordinator.store.CheckpointVerifiedArtifactClosure(ctx, verified); err != nil {
-			return ArtifactCaptureResult{}, mapArtifactStoreError(err, operation.ID())
-		}
-		checkpoint = closure.Checkpoint()
+		return coordinator.checkpointEmpty(ctx, reservation, checkpoint, false)
 	}
+	return coordinator.checkpointNonempty(ctx, reservation, paths, false)
+}
 
-	now, apiErr := coordinator.freshNow(operation.ID())
+func (coordinator *ArtifactCaptureCoordinator) checkpointEmpty(ctx context.Context,
+	reservation store.ManagedOperationReservation, checkpoint model.JSON, replay bool,
+) (ArtifactCaptureResult, *ControlError) {
+	operation := reservation.Operation
+	now, apiErr := coordinator.fencedNow(reservation)
 	if apiErr != nil {
 		return ArtifactCaptureResult{}, apiErr
 	}
@@ -163,12 +133,16 @@ func (coordinator *ArtifactCaptureCoordinator) Checkpoint(ctx context.Context,
 	if err != nil {
 		return ArtifactCaptureResult{}, mapArtifactStoreError(err, operation.ID())
 	}
+	if replay && !replayed {
+		return ArtifactCaptureResult{}, captureAPIError(CodeInternal,
+			"durable empty Artifact checkpoint replay was not recognized", operation.ID())
+	}
 	roots, err := parseArtifactCaptureCheckpoint(checkpoint)
 	if err != nil {
 		return ArtifactCaptureResult{}, captureAPIError(CodeInternal,
 			"Artifact checkpoint projection is invalid", operation.ID())
 	}
-	return ArtifactCaptureResult{Checkpoint: checkpoint, Roots: roots, Replayed: replayed}, nil
+	return ArtifactCaptureResult{Checkpoint: checkpoint, Roots: roots, Replayed: replay || replayed}, nil
 }
 
 func (coordinator *ArtifactCaptureCoordinator) fencedNow(
@@ -201,32 +175,6 @@ func (coordinator *ArtifactCaptureCoordinator) freshNow(
 			"trusted Artifact capture clock is invalid", operation)
 	}
 	return now, nil
-}
-
-func storeClosureFromArtifact(closure artifact.Closure) store.VerifiedArtifactClosure {
-	roots := closure.Roots()
-	blocks := closure.Blocks()
-	blockMap := closure.BlockMap()
-	result := store.VerifiedArtifactClosure{
-		Roots:      make([]store.VerifiedArtifactRoot, len(roots)),
-		Blocks:     make([]store.VerifiedArtifactBlock, len(blocks)),
-		RootBlocks: make([]store.VerifiedArtifactRootBlock, len(blockMap)),
-	}
-	for index, root := range roots {
-		result.Roots[index] = store.VerifiedArtifactRoot{RootDigest: root.RootDigest,
-			Manifest: root.Manifest, ManifestDigest: root.ManifestDigest, TotalBytes: root.TotalBytes,
-			CreatedAt: root.CreatedAt, VerifiedAt: root.VerifiedAt}
-	}
-	for index, block := range blocks {
-		result.Blocks[index] = store.VerifiedArtifactBlock{Digest: block.Digest,
-			SizeBytes: block.SizeBytes, CreatedAt: block.CreatedAt}
-	}
-	for index, row := range blockMap {
-		result.RootBlocks[index] = store.VerifiedArtifactRootBlock{RootDigest: row.RootDigest,
-			Ordinal: row.Ordinal, LogicalPath: row.LogicalPath, OffsetBytes: row.OffsetBytes,
-			LengthBytes: row.LengthBytes, BlockDigest: row.BlockDigest, Mode: row.Mode}
-	}
-	return result
 }
 
 func parseArtifactCaptureCheckpoint(checkpoint model.JSON) ([]ArtifactCaptureRoot, error) {
@@ -329,7 +277,8 @@ func mapArtifactVerificationError(err error, operation model.OperationID) *Contr
 func mapArtifactStoreError(err error, operation model.OperationID) *ControlError {
 	switch {
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded),
-		errors.Is(err, store.ErrOperationFence), errors.Is(err, store.ErrOperationPending):
+		errors.Is(err, store.ErrOperationFence), errors.Is(err, store.ErrOperationPending),
+		errors.Is(err, store.ErrArtifactStageFence):
 		return captureAPIError(CodeOperationPending, "Artifact checkpoint is pending", operation)
 	case errors.Is(err, store.ErrOperationMismatch):
 		return captureAPIError(CodeOperationMismatch,
@@ -349,7 +298,7 @@ func captureAPIError(code ControlErrorCode, message string, operation model.Oper
 }
 
 var (
-	_ ArtifactCapturer        = (*artifact.Capturer)(nil)
-	_ ArtifactClosureVerifier = (*artifact.CAS)(nil)
-	_ ArtifactCaptureStore    = (*store.Store)(nil)
+	_ ArtifactCapturer     = (*artifact.Capturer)(nil)
+	_ ArtifactStageOpener  = (*artifact.CAS)(nil)
+	_ ArtifactCaptureStore = (*store.Store)(nil)
 )

@@ -623,15 +623,13 @@ func newReadyPeerInboxSemanticArtifact(t *testing.T,
 	t.Helper()
 	fixture, artifactClaim, root, closure := newPeerInboxArtifactClosureClaim(t, seed, true)
 	stageAt := fixture.at.Add(time.Second)
-	if _, err := fixture.store.StagePeerInboxArtifactClosure(context.Background(),
-		StagePeerInboxArtifactClosureSpec{Fence: artifactClaim.Fence(), Closure: closure, At: stageAt}); err != nil {
-		t.Fatal(err)
-	}
+	_, owner := mustPreparePeerInboxArtifactPublish(t, fixture.store,
+		artifactClaim.Fence(), closure, stageAt)
+	mustAcceptPeerInboxArtifactPublish(t, fixture.store,
+		artifactClaim.Fence(), owner, stageAt)
 	readyAt := stageAt.Add(time.Second)
-	if _, err := fixture.store.MarkPeerInboxArtifactReady(context.Background(),
-		MarkPeerInboxArtifactReadySpec{Fence: artifactClaim.Fence(), At: readyAt}); err != nil {
-		t.Fatal(err)
-	}
+	mustMarkPeerInboxArtifactReady(t, fixture.store,
+		artifactClaim.Fence(), owner, readyAt)
 	return fixture, artifactClaim.InboxID(), root.RootDigest, readyAt
 }
 

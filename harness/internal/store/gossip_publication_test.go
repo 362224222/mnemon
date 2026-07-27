@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	artifactdomain "github.com/mnemon-dev/mnemon/harness/internal/artifact"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/testkit"
 )
@@ -24,7 +25,6 @@ func TestGossipPublicationLeaseRetryPublishAndExactReplay(t *testing.T) {
 		fixture.now.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
-
 	claimAt := fixture.now.Add(2 * time.Second)
 	first := claimPublication(t, fixture.store, fixture.channel, "gossip-worker-first",
 		claimAt, claimAt.Add(time.Minute))
@@ -90,6 +90,186 @@ func TestGossipPublicationLeaseRetryPublishAndExactReplay(t *testing.T) {
 		_, err := fixture.store.MarkGossipPublicationPublished(context.Background(), forged)
 		return err
 	})
+}
+
+func TestGossipPublicationWaitsForAcceptedArtifactPublish(t *testing.T) {
+	scenario := newGossipArtifactReadinessScenario(t)
+	claimAt := scenario.fixture.now.Add(2 * time.Second)
+	assertGossipArtifactPublicationBlocked(t, scenario, claimAt)
+	assertGossipArtifactPublicationReady(t, scenario,
+		scenario.fixture.now.Add(3*time.Second))
+}
+
+type gossipArtifactReadinessScenario struct {
+	fixture *acceptanceFixture
+	fence   OperationArtifactStageFence
+	first   LocalAcceptanceSpec
+	later   LocalAcceptanceSpec
+	root    VerifiedArtifactRoot
+}
+
+func newGossipArtifactReadinessScenario(t *testing.T) gossipArtifactReadinessScenario {
+	t.Helper()
+	fixture := newAcceptanceFixture(t, 1)
+	operation, authority := fixture.reserveOffer(t, "gossip-artifact-ready", nil)
+	closure, root := peerInboxArtifactEmptyTreeClosure(t,
+		"gossip-artifact-ready", 0, fixture.now.Add(-time.Minute))
+	capture := operationCaptureJSON(t, []captureRoot{{
+		RootDigest: root.RootDigest, ManifestDigest: root.ManifestDigest,
+	}})
+	leaseUntil, _ := operation.LeaseUntil()
+	begun, err := fixture.store.BeginOperationArtifactStage(context.Background(),
+		BeginOperationArtifactStageSpec{
+			OperationID: operation.ID(), LeaseOwner: operation.LeaseOwner(),
+			LeaseUntil: leaseUntil, At: fixture.now.Add(-20 * time.Second),
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.PrepareOperationArtifactPublish(context.Background(),
+		PrepareOperationArtifactPublishSpec{
+			Fence: begun.Fence(), Capture: capture, Closure: closure,
+			At: fixture.now.Add(-10 * time.Second),
+		}); err != nil {
+		t.Fatal(err)
+	}
+	ref, _ := model.NewArtifactRef(root.RootDigest, model.ArtifactProduced)
+	acceptance := fixture.offer(t, authority, "gossip-artifact-ready",
+		fixture.reviewers, []model.ArtifactRef{ref}, nil)
+	if _, err := fixture.store.CommitLocalAcceptance(context.Background(), acceptance,
+		fixture.now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	fixture.now = fixture.now.Add(time.Minute)
+	_, laterAuthority := fixture.reserveOffer(t, "gossip-artifact-later", nil)
+	laterAcceptance := fixture.offer(t, laterAuthority, "gossip-artifact-later",
+		fixture.reviewers, nil, nil)
+	if _, err := fixture.store.CommitLocalAcceptance(context.Background(), laterAcceptance,
+		fixture.now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	return gossipArtifactReadinessScenario{
+		fixture: fixture, fence: begun.Fence(), first: acceptance,
+		later: laterAcceptance, root: root,
+	}
+}
+
+func assertGossipArtifactPublicationBlocked(t *testing.T,
+	scenario gossipArtifactReadinessScenario, claimAt time.Time,
+) {
+	t.Helper()
+	fixture := scenario.fixture
+	before, err := fixture.store.ClaimGossipPublication(context.Background(),
+		GossipPublicationClaimSpec{
+			ChannelID: fixture.channel, LeaseOwner: "gossip-artifact-before-ready",
+			At: claimAt, LeaseUntil: claimAt.Add(time.Minute),
+		})
+	if err != nil || before.Claimed {
+		t.Fatalf("claim before Artifact ready = (%#v,%v)", before, err)
+	}
+	var status string
+	if err := fixture.store.db.QueryRow(`SELECT status FROM gossip_publications
+		WHERE event_id=?`, scenario.first.Items[0].Publication.Event().ID().String()).
+		Scan(&status); err != nil || status != "queued" {
+		t.Fatalf("publication before Artifact ready = (%q,%v)", status, err)
+	}
+	if err := fixture.store.db.QueryRow(`SELECT status FROM gossip_publications
+		WHERE event_id=?`, scenario.later.Items[0].Publication.Event().ID().String()).
+		Scan(&status); err != nil || status != "queued" {
+		t.Fatalf("later publication skipped blocked Event = (%q,%v)", status, err)
+	}
+	if _, err := fixture.store.ReadPeerPullPage(context.Background(), ReadPeerPullPageSpec{
+		AuthenticatedPeerID: fixture.reviewers[0], ChannelID: fixture.channel,
+		OriginEpoch: fixture.node.OriginEpoch(), AfterChannelSequence: 0,
+		Limit: 2, At: claimAt,
+	}); !errors.Is(err, ErrPeerPullPublicationPending) {
+		t.Fatalf("Pull before Artifact ready error = %v", err)
+	}
+	var acknowledged, pending int
+	if err := fixture.store.db.QueryRow(`SELECT acknowledged_channel_seq FROM peer_pull_acks
+		WHERE channel_id=? AND target_peer_id=? AND origin_peer_id=?`,
+		fixture.channel.String(), fixture.reviewers[0].String(),
+		fixture.node.PeerID().String()).Scan(&acknowledged); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.store.db.QueryRow(`SELECT COUNT(*) FROM peer_deliveries
+		WHERE status='pending'`).Scan(&pending); err != nil {
+		t.Fatal(err)
+	}
+	if acknowledged != 0 || pending != 2 {
+		t.Fatalf("blocked Pull mutated ACK/deliveries = %d/%d", acknowledged, pending)
+	}
+	if _, err := fixture.store.ReadArtifactSourceManifest(context.Background(),
+		ReadArtifactSourceManifestSpec{
+			AuthenticatedPeerID: fixture.reviewers[0], ChannelID: fixture.channel,
+			RootDigest: scenario.root.RootDigest,
+		}); !errors.Is(err, ErrArtifactSourceUnavailable) ||
+		errors.Is(err, ErrArtifactSourceInvariant) {
+		t.Fatalf("staged Artifact source error = %v", err)
+	}
+}
+
+func assertGossipArtifactPublicationReady(t *testing.T,
+	scenario gossipArtifactReadinessScenario, readyAt time.Time,
+) {
+	t.Helper()
+	fixture := scenario.fixture
+	if _, err := fixture.store.MarkOperationArtifactReady(context.Background(),
+		MarkOperationArtifactReadySpec{Fence: scenario.fence, At: readyAt}); err != nil {
+		t.Fatal(err)
+	}
+	after := claimPublication(t, fixture.store, fixture.channel,
+		"gossip-artifact-after-ready", readyAt.Add(time.Second),
+		readyAt.Add(time.Minute))
+	if after.Lease.Record.Publication().Event().ID() !=
+		scenario.first.Items[0].Publication.Event().ID() {
+		t.Fatalf("claimed publication = %s", after.Lease.Record.Publication().Event().ID())
+	}
+	if _, err := fixture.store.MarkGossipPublicationPublished(context.Background(),
+		MarkGossipPublicationPublishedSpec{
+			Fence: after.Lease.Fence, At: readyAt.Add(2 * time.Second),
+		}); err != nil {
+		t.Fatal(err)
+	}
+	later := claimPublication(t, fixture.store, fixture.channel,
+		"gossip-artifact-later-ready", readyAt.Add(3*time.Second),
+		readyAt.Add(time.Minute))
+	if later.Lease.Record.Publication().Event().ID() !=
+		scenario.later.Items[0].Publication.Event().ID() {
+		t.Fatalf("later claimed publication = %s",
+			later.Lease.Record.Publication().Event().ID())
+	}
+	page, err := fixture.store.ReadPeerPullPage(context.Background(), ReadPeerPullPageSpec{
+		AuthenticatedPeerID: fixture.reviewers[0], ChannelID: fixture.channel,
+		OriginEpoch: fixture.node.OriginEpoch(), AfterChannelSequence: 0,
+		Limit: 2, At: readyAt.Add(4 * time.Second),
+	})
+	if err != nil || len(page.Publications) != 2 ||
+		page.Publications[0].Event().ID() != scenario.first.Items[0].Publication.Event().ID() ||
+		page.Publications[1].Event().ID() != scenario.later.Items[0].Publication.Event().ID() {
+		t.Fatalf("Pull after Artifact ready = (%#v,%v)", page, err)
+	}
+	if manifest, err := fixture.store.ReadArtifactSourceManifest(context.Background(),
+		ReadArtifactSourceManifestSpec{
+			AuthenticatedPeerID: fixture.reviewers[0], ChannelID: fixture.channel,
+			RootDigest: scenario.root.RootDigest,
+		}); err != nil || manifest.RootDigest() != scenario.root.RootDigest {
+		t.Fatalf("ready Artifact source = (%#v,%v)", manifest, err)
+	}
+	sweepSpec := artifactdomain.StagingSweepSpec{
+		Cutoff: readyAt.Add(5 * time.Second), At: readyAt.Add(6 * time.Second),
+		MaxRoots: 4,
+	}
+	for pass := 0; pass < 2; pass++ {
+		if result, err := fixture.store.SweepArtifactStaging(context.Background(),
+			sweepSpec); err != nil || result.Roots != 0 {
+			t.Fatalf("accepted root sweep %d = (%#v,%v)", pass, result, err)
+		}
+	}
+	if _, err := fixture.store.GetVerifiedArtifactRoot(context.Background(),
+		scenario.root.RootDigest); err != nil {
+		t.Fatalf("accepted root did not survive repeated sweep: %v", err)
+	}
 }
 
 func TestGossipPublicationConcurrentClaimHasOneOwnerGeneration(t *testing.T) {

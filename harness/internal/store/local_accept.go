@@ -189,7 +189,8 @@ func applyLocalAcceptanceTx(ctx context.Context, tx *sql.Tx, spec LocalAcceptanc
 			return model.JSON{}, err
 		}
 	}
-	capture, err := validateAcceptanceArtifacts(ctx, tx, operation, spec, events)
+	artifacts, err := validateAcceptanceArtifacts(ctx, tx, operation, spec, events,
+		trustedNow)
 	if err != nil {
 		return model.JSON{}, err
 	}
@@ -197,16 +198,19 @@ func applyLocalAcceptanceTx(ctx context.Context, tx *sql.Tx, spec LocalAcceptanc
 	if err != nil {
 		return model.JSON{}, err
 	}
-	receipt, err := buildAcceptanceReceipt(ctx, tx, operation.ID(), events, spec.Items, capture)
+	receipt, err := buildAcceptanceReceipt(ctx, tx, operation.ID(), events,
+		spec.Items, artifacts.capture)
 	if err != nil {
 		return model.JSON{}, fmt.Errorf("commit local acceptance: receipt: %w", err)
 	}
-	if err := persistAcceptedBatch(ctx, tx, spec, events, trustedNow); err != nil {
+	if err := persistAcceptedBatch(ctx, tx, spec, operation, artifacts,
+		events, trustedNow); err != nil {
 		return model.JSON{}, err
 	}
 	if spec.Operation != nil {
 		if err := commitAcceptanceOperation(ctx, tx, spec, operation, receipt, events,
-			parent, derivations, managedAuthority, managed, trustedNow); err != nil {
+			artifacts, parent, derivations, managedAuthority, managed,
+			trustedNow); err != nil {
 			return model.JSON{}, err
 		}
 	}
@@ -257,6 +261,7 @@ func validateAcceptanceItems(ctx context.Context, tx *sql.Tx, spec LocalAcceptan
 // Artifact pins and publication evidence, then advances the durable
 // publication head and the Node origin sequence.
 func persistAcceptedBatch(ctx context.Context, tx *sql.Tx, spec LocalAcceptanceSpec,
+	operation model.Operation, artifacts acceptanceArtifactAuthority,
 	events []model.Event, trustedNow time.Time,
 ) error {
 	for index, item := range spec.Items {
@@ -264,17 +269,27 @@ func persistAcceptedBatch(ctx context.Context, tx *sql.Tx, spec LocalAcceptanceS
 		if err := insertAcceptedEvent(ctx, tx, item.Publication); err != nil {
 			return err
 		}
+		for _, ref := range event.Artifacts() {
+			var err error
+			if ref.Role() == model.ArtifactProduced && spec.Operation != nil {
+				_, err = insertOperationAcceptanceEventArtifactPin(ctx, tx,
+					artifacts, operation, ref.RootDigest(), event.ID(),
+					event.AcceptedAt())
+			} else {
+				_, err = insertEventArtifactPin(ctx, tx, ref.RootDigest(),
+					event.ID(), event.AcceptedAt())
+			}
+			if err != nil {
+				return err
+			}
+		}
 		if item.Work != nil {
 			if err := applyAcceptedWorkMutation(ctx, tx, *item.Work, event); err != nil {
 				return err
 			}
 		}
-		for _, ref := range event.Artifacts() {
-			if _, err := insertEventArtifactPin(ctx, tx, ref.RootDigest(), event.ID(), event.AcceptedAt()); err != nil {
-				return err
-			}
-		}
-		if err := insertPublicationEvidence(ctx, tx, event); err != nil {
+		if err := insertAcceptedPublicationEvidence(ctx, tx, event,
+			operation, artifacts); err != nil {
 			return err
 		}
 		if err := advancePublicationHead(ctx, tx, event, trustedNow); err != nil {
@@ -302,9 +317,10 @@ func applyAcceptedWorkMutation(ctx context.Context, tx *sql.Tx, mutation WorkMut
 // terminal state and records provenance, derivations and, for the managed
 // boundary, the settlement evidence for the accepted Events.
 func commitAcceptanceOperation(ctx context.Context, tx *sql.Tx, spec LocalAcceptanceSpec,
-	operation model.Operation, receipt model.JSON, events []model.Event, parent model.ReviewWork,
-	derivations []model.WorkDerivation, managedAuthority managedAcceptanceState, managed bool,
-	trustedNow time.Time,
+	operation model.Operation, receipt model.JSON, events []model.Event,
+	artifacts acceptanceArtifactAuthority, parent model.ReviewWork,
+	derivations []model.WorkDerivation,
+	managedAuthority managedAcceptanceState, managed bool, trustedNow time.Time,
 ) error {
 	result, err := tx.ExecContext(ctx, `UPDATE operations SET status='committed',lease_owner=NULL,
 		lease_until=NULL,result_json=?,finished_at=? WHERE operation_id=? AND status='started'
@@ -317,7 +333,7 @@ func commitAcceptanceOperation(ctx context.Context, tx *sql.Tx, spec LocalAccept
 	if err != nil {
 		return err
 	}
-	if err := insertLocalProvenance(ctx, tx, committed, events); err != nil {
+	if err := insertLocalProvenance(ctx, tx, committed, events, artifacts); err != nil {
 		return err
 	}
 	if err := insertLocalDerivations(ctx, tx, committed, parent, derivations); err != nil {

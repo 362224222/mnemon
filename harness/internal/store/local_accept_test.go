@@ -272,8 +272,20 @@ func checkpointOperationRootAt(t *testing.T, fixture *acceptanceFixture, operati
 		ManifestDigest model.Digest `json:"manifest_digest"`
 		RootDigest     model.Digest `json:"root_digest"`
 	}{{root.ManifestDigest, root.RootDigest}}})
-	if _, err := fixture.store.CheckpointOperationCapture(context.Background(), operation.ID(), owner,
-		at, capture); err != nil {
+	leaseUntil, ok := operation.LeaseUntil()
+	if !ok {
+		t.Fatal("operation fixture has no lease")
+	}
+	begun, err := fixture.store.BeginOperationArtifactStage(context.Background(),
+		BeginOperationArtifactStageSpec{OperationID: operation.ID(),
+			LeaseOwner: owner, LeaseUntil: leaseUntil, At: at})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.PrepareOperationArtifactPublish(context.Background(),
+		PrepareOperationArtifactPublishSpec{Fence: begun.Fence(), Capture: capture,
+			Closure: VerifiedArtifactClosure{Roots: []VerifiedArtifactRoot{root}},
+			At:      at}); err != nil {
 		t.Fatal(err)
 	}
 }

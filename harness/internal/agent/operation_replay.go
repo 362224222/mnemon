@@ -60,12 +60,13 @@ func (e *TeamworkActionExecutor) probeRejectionTerminal(ctx context.Context,
 		}
 		return OperationResponse{}, nil, false
 	}
-	response, apiErr := e.projectRejectionTerminal(operation,
+	response, apiErr := e.projectRejectionTerminal(ctx, operation,
 		store.OperationRejectionResult{Operation: probe.Operation, Replayed: true}, model.JSON{})
 	return response, apiErr, true
 }
 
-func (e *TeamworkActionExecutor) projectRejectionTerminal(operation model.Operation,
+func (e *TeamworkActionExecutor) projectRejectionTerminal(ctx context.Context,
+	operation model.Operation,
 	result store.OperationRejectionResult, freshEvidence model.JSON,
 ) (OperationResponse, *ControlError) {
 	terminal := result.Operation
@@ -87,12 +88,7 @@ func (e *TeamworkActionExecutor) projectRejectionTerminal(operation model.Operat
 	}
 	switch terminal.Status() {
 	case model.OperationCommitted:
-		response, err := decodeCommittedTeamworkOperation(e.actions, terminal, result.Replayed)
-		if err != nil {
-			return OperationResponse{}, NewControlError(CodeInternal,
-				"terminal Teamwork receipt is invalid")
-		}
-		return response, nil
+		return e.projectCommittedTeamworkOperation(ctx, terminal, result.Replayed)
 	case model.OperationRejected:
 		return OperationResponse{}, decodeRejectedTeamworkOperation(e.actions, terminal, result.Replayed)
 	}
@@ -100,8 +96,8 @@ func (e *TeamworkActionExecutor) projectRejectionTerminal(operation model.Operat
 		"terminal Teamwork operation status is invalid", operation.ID(), result.Replayed)
 }
 
-func (e *TeamworkActionExecutor) replayTerminalTeamworkOperation(action ValidatedAction,
-	operation model.Operation,
+func (e *TeamworkActionExecutor) replayTerminalTeamworkOperation(ctx context.Context,
+	action ValidatedAction, operation model.Operation,
 ) (OperationResponse, *ControlError, bool) {
 	if !operation.Status().Terminal() {
 		return OperationResponse{}, nil, false
@@ -113,12 +109,42 @@ func (e *TeamworkActionExecutor) replayTerminalTeamworkOperation(action Validate
 	if operation.Status() == model.OperationRejected {
 		return OperationResponse{}, decodeRejectedTeamworkOperation(e.actions, operation, true), true
 	}
-	response, err := decodeCommittedTeamworkOperation(e.actions, operation, true)
+	response, apiErr := e.projectCommittedTeamworkOperation(ctx, operation, true)
+	return response, apiErr, true
+}
+
+func (e *TeamworkActionExecutor) projectCommittedTeamworkOperation(ctx context.Context,
+	operation model.Operation, replayed bool,
+) (OperationResponse, *ControlError) {
+	required, err := operationArtifactPublicationRequired(operation)
 	if err != nil {
 		return OperationResponse{}, NewControlError(CodeInternal,
-			"committed Teamwork receipt is invalid"), true
+			"committed Teamwork Artifact checkpoint is invalid")
 	}
-	return response, nil, true
+	if required {
+		if apiErr := e.publishAccepted(ctx, operation.ID()); apiErr != nil {
+			return OperationResponse{}, apiErr
+		}
+	}
+	response, err := decodeCommittedTeamworkOperation(e.actions, operation, replayed)
+	if err != nil {
+		return OperationResponse{}, NewControlError(CodeInternal,
+			"committed Teamwork receipt is invalid")
+	}
+	return response, nil
+}
+
+func operationArtifactPublicationRequired(operation model.Operation) (bool, error) {
+	roots, err := operationArtifactCaptureRoots(operation)
+	return len(roots) != 0, err
+}
+
+func operationArtifactCaptureRoots(operation model.Operation) ([]ArtifactCaptureRoot, error) {
+	checkpoint, found := operation.Capture()
+	if !found {
+		return nil, nil
+	}
+	return parseArtifactCaptureCheckpoint(checkpoint)
 }
 
 func decodeRejectedTeamworkOperation(handlers ActionHandlers, operation model.Operation,
@@ -201,9 +227,32 @@ func (s *Service) probeManagedOperation(ctx context.Context, metadata ControlMet
 	return operation, true, nil
 }
 
-func (s *Service) replayTeamworkOperation(operation model.Operation) (OperationResponse, *ControlError) {
+func (s *Service) replayTeamworkOperation(ctx context.Context, action ValidatedAction,
+	operation model.Operation,
+) (OperationResponse, *ControlError) {
 	switch operation.Status() {
 	case model.OperationCommitted:
+		required, err := operationArtifactPublicationRequired(operation)
+		if err != nil {
+			return OperationResponse{}, NewControlError(CodeInternal,
+				"committed Teamwork Artifact checkpoint is invalid")
+		}
+		if required {
+			if s.executor == nil {
+				return OperationResponse{}, NewControlError(CodeInternal,
+					"Teamwork action executor is unavailable")
+			}
+			response, apiErr := s.executor.ExecuteTeamwork(ctx, TeamworkExecutionSpec{
+				Action: action, Reservation: store.ManagedOperationReservation{
+					Operation: operation, Replayed: true,
+				},
+			})
+			if apiErr != nil {
+				return OperationResponse{}, apiErr
+			}
+			s.cleanupCurrentViews(operation.AgentRunID())
+			return response, nil
+		}
 		response, err := decodeCommittedTeamworkOperation(s.actions, operation, true)
 		if err != nil {
 			return OperationResponse{}, NewControlError(CodeInternal,

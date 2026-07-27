@@ -87,7 +87,7 @@ func TestTeamworkActionExecutorTerminalReplayAndStableRejection(t *testing.T) {
 	fixture.selector.err = errors.New("selector must not run")
 	fixture.artifacts.apiErr = NewControlError(CodeInternal, "capture must not run")
 	fixture.executor.backend, fixture.executor.selector, fixture.executor.signer = nil, nil, nil
-	fixture.executor.artifacts, fixture.executor.clock = nil, nil
+	fixture.executor.clock = nil
 	replay, apiErr := fixture.executor.ExecuteTeamwork(context.Background(), TeamworkExecutionSpec{
 		Action: action, Reservation: store.ManagedOperationReservation{Operation: committed, Replayed: true},
 		At: time.Time{},
@@ -98,6 +98,7 @@ func TestTeamworkActionExecutorTerminalReplayAndStableRejection(t *testing.T) {
 		t.Fatalf("committed replay = (%#v, %v), calls selector=%d artifacts=%d",
 			replay, apiErr, fixture.selector.calls, fixture.artifacts.calls)
 	}
+	assertNoArtifactPublication(t, fixture.artifacts)
 	rejectedFixture := newExecutorFixture(t, 1)
 	rejectedBase := executorReservation(t, rejectedFixture, action, model.ReviewWork{}, false)
 	longCandidates := make([]string, model.MaxChildWorks)
@@ -302,21 +303,6 @@ func (r *fakeOfferResolver) Resolve(_ context.Context,
 	r.calls++
 	r.last = spec
 	return r.selection, r.err
-}
-
-type fakeArtifactCoordinator struct {
-	result ArtifactCoordinationResult
-	apiErr *ControlError
-	last   ArtifactCoordinationSpec
-	calls  int
-}
-
-func (c *fakeArtifactCoordinator) Coordinate(_ context.Context,
-	spec ArtifactCoordinationSpec,
-) (ArtifactCoordinationResult, *ControlError) {
-	c.calls++
-	c.last = spec
-	return c.result, c.apiErr
 }
 
 type fakeExecutionBackend struct {

@@ -18,6 +18,18 @@ import (
 type ArtifactCaptureCheckpointer interface {
 	Checkpoint(context.Context, store.ManagedOperationReservation, []string) (
 		ArtifactCaptureResult, *ControlError)
+	PublishAccepted(context.Context, model.OperationID) *ControlError
+}
+
+func (resolver *ArtifactResolver) PublishAccepted(ctx context.Context,
+	operation model.OperationID,
+) *ControlError {
+	if resolver == nil || resolver.capture == nil || ctx == nil ||
+		operation.IsZero() {
+		return captureAPIError(CodeInternal,
+			"Artifact resolver is unavailable", operation)
+	}
+	return resolver.capture.PublishAccepted(ctx, operation)
 }
 
 // ArtifactViewValidator checks only the exact receipt-bound filesystem view.

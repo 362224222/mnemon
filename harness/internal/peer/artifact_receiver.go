@@ -45,7 +45,10 @@ type ArtifactReceiverStore interface {
 	ProbePeerInboxArtifactAuthority(context.Context, store.ProbePeerInboxArtifactAuthoritySpec) error
 	ReadPeerInboxArtifactRoot(context.Context, store.ReadPeerInboxArtifactRootSpec) (store.PeerInboxArtifactRoot, bool, error)
 	RecordPeerInboxArtifactSource(context.Context, store.RecordPeerInboxArtifactSourceSpec) (store.PeerInboxArtifactSourceReceipt, error)
-	StagePeerInboxArtifactClosure(context.Context, store.StagePeerInboxArtifactClosureSpec) (store.PeerInboxArtifactStage, error)
+	BeginPeerInboxArtifactStage(context.Context, store.BeginPeerInboxArtifactStageSpec) (store.PeerInboxArtifactStageRegistration, error)
+	PreparePeerInboxArtifactPublish(context.Context, store.PreparePeerInboxArtifactPublishSpec) (store.PeerInboxArtifactStage, error)
+	AcceptPeerInboxArtifactPublish(context.Context, store.AcceptPeerInboxArtifactPublishSpec) (store.PeerInboxArtifactStage, error)
+	ReadPeerInboxArtifactPublish(context.Context, store.ReadPeerInboxArtifactPublishSpec) (store.PeerInboxArtifactPublishCheckpoint, error)
 	MarkPeerInboxArtifactReady(context.Context, store.MarkPeerInboxArtifactReadySpec) (store.PeerInboxArtifactSettlement, error)
 	RetryPeerInboxArtifact(context.Context, store.RetryPeerInboxArtifactSpec) (store.PeerInboxArtifactSettlement, error)
 	QuarantinePeerInboxArtifact(context.Context, store.QuarantinePeerInboxArtifactSpec) (store.PeerInboxArtifactSettlement, error)
@@ -143,10 +146,8 @@ type ArtifactReceiver struct {
 }
 
 type artifactReceiverCAS interface {
-	AcquireUse() (*artifactdomain.CASLease, error)
-	Put(model.Digest, []byte) (artifactdomain.PutResult, error)
+	OpenStage(artifactdomain.StageOwner) (*artifactdomain.Stage, error)
 	Read(model.Digest, int) ([]byte, error)
-	VerifyClosure(context.Context, artifactdomain.Closure) error
 }
 
 var (
@@ -180,8 +181,11 @@ type artifactReceiverBackend interface {
 	probe(context.Context, artifactReceiverFence, time.Time) error
 	readRoot(context.Context, artifactReceiverFence, model.Digest, time.Time) (artifactReceiverCachedRoot, bool, error)
 	recordSource(context.Context, artifactReceiverFence, model.PeerID, time.Time) error
-	stage(context.Context, artifactReceiverFence, store.VerifiedArtifactClosure, time.Time) error
-	ready(context.Context, artifactReceiverFence, time.Time) error
+	beginStage(context.Context, artifactReceiverFence, time.Time) (artifactReceiverStageRegistration, error)
+	preparePublish(context.Context, artifactReceiverFence, artifactdomain.StageOwner, store.VerifiedArtifactClosure, time.Time) error
+	acceptPublish(context.Context, artifactReceiverFence, artifactdomain.StageOwner, time.Time) error
+	readPublish(context.Context, artifactReceiverFence, artifactdomain.StageOwner, time.Time) (artifactReceiverPublishCheckpoint, error)
+	ready(context.Context, artifactReceiverFence, artifactdomain.StageOwner, time.Time) error
 	retry(context.Context, artifactReceiverFence, store.PeerInboxArtifactRetryDiagnostic, time.Duration, time.Time) error
 	quarantine(context.Context, artifactReceiverFence, store.PeerInboxArtifactPermanentDiagnostic, time.Time) error
 }
@@ -446,93 +450,25 @@ func (receiver *ArtifactReceiver) receiveClaim(ctx context.Context,
 	claim *artifactReceiverClaim,
 ) (*artifactReceiverClaimFailure, error) {
 	if len(claim.requiredRoots) == 0 {
-		return receiver.markReady(ctx, claim)
+		return receiver.markReady(ctx, claim, artifactdomain.StageOwner{})
 	}
-	use, err := receiver.cas.AcquireUse()
-	if err != nil {
-		return nil, receiver.casFatal("acquire Artifact receiver lifecycle", err)
-	}
-	if use == nil {
-		return nil, artifactReceiverFatal(ArtifactReceiverFatalCASInvariant,
-			"acquire Artifact receiver lifecycle returned no lease", nil)
-	}
-	defer use.Release()
-	refs := make([]artifactReceiverManifestRef, 0, len(claim.requiredRoots))
-	for _, rootDigest := range claim.requiredRoots {
-		if ctx.Err() != nil {
-			return nil, nil
-		}
-		live, err := receiver.ensureLease(ctx, claim)
-		if err != nil || !live {
-			return nil, err
-		}
-		at, nowErr := receiver.now()
-		if nowErr != nil {
-			return nil, artifactReceiverFatal(ArtifactReceiverFatalWorkerInvariant,
-				"read cached-root clock", nowErr)
-		}
-		cached, found, readErr := receiver.backend.readRoot(ctx, claim.fence, rootDigest, at)
-		if readErr != nil {
-			return receiver.classifyStoreClaimFailure("read cached Artifact root", readErr)
-		}
-		if found {
-			ref, failure, validateErr := receiver.validateCachedManifest(cached, rootDigest, at,
-				claim.fence.attempt)
-			if validateErr != nil || failure != nil {
-				return failure, validateErr
-			}
-			refs = append(refs, ref)
-			receiver.recordManifestCacheHit()
-			continue
-		}
-		// A miss deliberately re-fetches the bounded Manifest. Staged metadata is
-		// visible only while this exact Inbox still owns a complete, unexpired
-		// closure; CAS.Put below validates a replay, while already durable blocks
-		// still resume without network I/O.
-		ref, failure, fetchErr := receiver.fetchManifest(ctx, claim, rootDigest)
-		if fetchErr != nil || failure != nil {
-			return failure, fetchErr
-		}
-		refs = append(refs, ref)
-	}
-
-	closure, failure, err := receiver.buildCollectedClosure(ctx, claim, refs)
-	if err != nil || failure != nil || closure.IsZero() {
-		return failure, err
-	}
-	live, err := receiver.ensureLease(ctx, claim)
-	if err != nil || !live {
-		return nil, err
-	}
-	stagedAt, err := receiver.now()
-	if err != nil {
-		return nil, artifactReceiverFatal(ArtifactReceiverFatalWorkerInvariant,
-			"read imported staging clock", err)
-	}
-	checkpoint := storeArtifactReceiverClosure(closure)
-	if stageErr := receiver.probeStage(ctx, claim, checkpoint, stagedAt); stageErr != nil {
-		return receiver.classifyStoreClaimFailure("stage Inbox Artifact closure", stageErr)
-	}
-	receiver.recordCheckpoint()
-	failure, err = receiver.materializeBlocks(ctx, claim, closure, refs)
+	registration, failure, err := receiver.beginArtifactStage(ctx, claim)
 	if err != nil || failure != nil {
 		return failure, err
 	}
-	live, err = receiver.ensureLease(ctx, claim)
-	if err != nil || !live {
-		return nil, err
+	stage, err := receiver.cas.OpenStage(registration.owner)
+	if err != nil {
+		return receiver.classifyArtifactStageFailure(
+			"open Inbox Artifact stage", claim.fence.attempt, err)
 	}
-	if verifyErr := receiver.cas.VerifyClosure(ctx, closure); verifyErr != nil {
-		if ctx.Err() != nil {
-			return nil, nil
-		}
-		if artifactReceiverResourceFailure(verifyErr) {
-			return retryArtifactReceiverClaim(store.PeerInboxArtifactRetryResourceExhausted,
-				artifactReceiverBackoff(claim.fence.attempt)), nil
-		}
-		return nil, receiver.casFatal("verify imported Artifact closure", verifyErr)
+	if registration.state == store.ArtifactStagePublishing {
+		return receiver.resumeArtifactPublish(ctx, claim, registration, stage)
 	}
-	return receiver.markReady(ctx, claim)
+	if registration.state != store.ArtifactStageStaged {
+		return nil, artifactReceiverFatal(ArtifactReceiverFatalStoreInvariant,
+			"begin Inbox Artifact stage returned an invalid state", nil)
+	}
+	return receiver.receiveStagedClaim(ctx, claim, stage)
 }
 
 // buildCollectedClosure is the only memory-bounded closure-build section.
@@ -540,7 +476,8 @@ func (receiver *ArtifactReceiver) receiveClaim(ctx context.Context,
 // singleton gate is released so one slow peer cannot head-of-line block an
 // unrelated Inbox claim.
 func (receiver *ArtifactReceiver) buildCollectedClosure(ctx context.Context,
-	claim *artifactReceiverClaim, refs []artifactReceiverManifestRef,
+	claim *artifactReceiverClaim, stage *artifactdomain.Stage,
+	refs []artifactReceiverManifestRef,
 ) (artifactdomain.Closure, *artifactReceiverClaimFailure, error) {
 	live, err := receiver.ensureLease(ctx, claim)
 	if err != nil || !live {
@@ -560,7 +497,7 @@ func (receiver *ArtifactReceiver) buildCollectedClosure(ctx context.Context,
 	if err != nil || !live {
 		return artifactdomain.Closure{}, nil, err
 	}
-	manifests, failure, err := receiver.loadCollectedManifests(refs)
+	manifests, failure, err := receiver.loadCollectedManifests(stage, refs)
 	if err != nil || failure != nil {
 		return artifactdomain.Closure{}, failure, err
 	}
@@ -603,43 +540,8 @@ type artifactReceiverCachedRoot struct {
 	verified       bool
 }
 
-func (receiver *ArtifactReceiver) validateCachedManifest(root artifactReceiverCachedRoot,
-	expected model.Digest, at time.Time, attempt uint32,
-) (artifactReceiverManifestRef, *artifactReceiverClaimFailure, error) {
-	if root.rootDigest != expected || root.manifest.IsZero() || root.manifestDigest.IsZero() ||
-		root.createdAt.IsZero() || root.createdAt.After(at) ||
-		(root.verified && (root.verifiedAt.IsZero() || root.verifiedAt.Before(root.createdAt) ||
-			root.verifiedAt.After(at))) || (!root.verified && !root.verifiedAt.IsZero()) ||
-		model.Sum(root.manifest.Bytes()) != root.manifestDigest {
-		return artifactReceiverManifestRef{}, nil, artifactReceiverFatal(
-			ArtifactReceiverFatalStoreInvariant, "invalid cached Artifact root", nil)
-	}
-	manifest, err := artifactdomain.ParseManifest(root.manifest.Bytes())
-	if err != nil || manifest.RootDigest() != expected ||
-		manifest.ManifestDigest() != root.manifestDigest || manifest.TotalBytes() != root.totalBytes {
-		return artifactReceiverManifestRef{}, nil, artifactReceiverFatal(
-			ArtifactReceiverFatalStoreInvariant, "cached Artifact manifest differs", err)
-	}
-	stored, err := receiver.cas.Read(root.manifestDigest, artifactdomain.MaxManifestBytes)
-	if err != nil {
-		if artifactReceiverResourceFailure(err) {
-			return artifactReceiverManifestRef{}, retryArtifactReceiverClaim(
-				store.PeerInboxArtifactRetryResourceExhausted,
-				artifactReceiverBackoff(attempt)), nil
-		}
-		return artifactReceiverManifestRef{}, nil, receiver.casFatal(
-			"verified Store root has no readable CAS manifest", err)
-	}
-	if !bytes.Equal(stored, root.manifest.Bytes()) {
-		return artifactReceiverManifestRef{}, nil, receiver.casFatal(
-			"verified Store root CAS manifest differs", artifactdomain.ErrCASCorruption)
-	}
-	return artifactReceiverManifestRef{rootDigest: expected,
-		manifestDigest: root.manifestDigest, verified: root.verified}, nil, nil
-}
-
 func (receiver *ArtifactReceiver) fetchManifest(ctx context.Context, claim *artifactReceiverClaim,
-	rootDigest model.Digest,
+	stage *artifactdomain.Stage, rootDigest model.Digest,
 ) (artifactReceiverManifestRef, *artifactReceiverClaimFailure, error) {
 	request, err := NewGetManifest(GetManifestSpec{ChannelID: claim.channelID,
 		RootDigest: rootDigest})
@@ -666,7 +568,7 @@ func (receiver *ArtifactReceiver) fetchManifest(ctx context.Context, claim *arti
 		return artifactReceiverManifestRef{}, quarantineArtifactReceiverClaim(
 			store.PeerInboxArtifactDigestMismatch), nil
 	}
-	if _, putErr := receiver.cas.Put(manifest.ManifestDigest(), manifest.CanonicalJSON().Bytes()); putErr != nil {
+	if _, putErr := stage.Put(manifest.ManifestDigest(), manifest.CanonicalJSON().Bytes()); putErr != nil {
 		if artifactReceiverResourceFailure(putErr) {
 			return artifactReceiverManifestRef{}, retryArtifactReceiverClaim(
 				store.PeerInboxArtifactRetryResourceExhausted,
@@ -680,11 +582,12 @@ func (receiver *ArtifactReceiver) fetchManifest(ctx context.Context, claim *arti
 		manifestDigest: manifest.ManifestDigest()}, nil, nil
 }
 
-func (receiver *ArtifactReceiver) loadCollectedManifests(refs []artifactReceiverManifestRef,
+func (receiver *ArtifactReceiver) loadCollectedManifests(stage *artifactdomain.Stage,
+	refs []artifactReceiverManifestRef,
 ) ([]artifactdomain.Manifest, *artifactReceiverClaimFailure, error) {
 	manifests := make([]artifactdomain.Manifest, 0, len(refs))
 	for _, ref := range refs {
-		content, err := receiver.cas.Read(ref.manifestDigest, artifactdomain.MaxManifestBytes)
+		content, err := stage.ReadAvailable(ref.manifestDigest, artifactdomain.MaxManifestBytes)
 		if err != nil {
 			if artifactReceiverResourceFailure(err) {
 				return nil, retryArtifactReceiverClaim(
@@ -706,7 +609,7 @@ func (receiver *ArtifactReceiver) loadCollectedManifests(refs []artifactReceiver
 }
 
 func (receiver *ArtifactReceiver) materializeBlocks(ctx context.Context,
-	claim *artifactReceiverClaim, closure artifactdomain.Closure,
+	claim *artifactReceiverClaim, stage *artifactdomain.Stage, closure artifactdomain.Closure,
 	refs []artifactReceiverManifestRef,
 ) (*artifactReceiverClaimFailure, error) {
 	cachedRoots := make(map[model.Digest]bool, len(refs))
@@ -724,7 +627,7 @@ func (receiver *ArtifactReceiver) materializeBlocks(ctx context.Context,
 		}
 	}
 	for _, block := range closure.Blocks() {
-		content, readErr := receiver.cas.Read(block.Digest, artifactdomain.BlockSize)
+		content, readErr := stage.ReadAvailable(block.Digest, artifactdomain.BlockSize)
 		if readErr == nil {
 			if uint64(len(content)) != block.SizeBytes {
 				return nil, receiver.casFatal("cached Artifact block length differs",
@@ -768,7 +671,7 @@ func (receiver *ArtifactReceiver) materializeBlocks(ctx context.Context,
 			model.Sum(blockBytes) != block.Digest {
 			return quarantineArtifactReceiverClaim(store.PeerInboxArtifactDigestMismatch), nil
 		}
-		if _, putErr := receiver.cas.Put(block.Digest, blockBytes); putErr != nil {
+		if _, putErr := stage.Put(block.Digest, blockBytes); putErr != nil {
 			if artifactReceiverResourceFailure(putErr) {
 				return retryArtifactReceiverClaim(store.PeerInboxArtifactRetryResourceExhausted,
 					artifactReceiverBackoff(claim.fence.attempt)), nil
@@ -946,11 +849,13 @@ func (receiver *ArtifactReceiver) ensureLease(ctx context.Context,
 }
 
 func (receiver *ArtifactReceiver) markReady(ctx context.Context,
-	claim *artifactReceiverClaim,
+	claim *artifactReceiverClaim, owner artifactdomain.StageOwner,
 ) (*artifactReceiverClaimFailure, error) {
-	live, err := receiver.ensureLease(ctx, claim)
-	if err != nil || !live {
-		return nil, err
+	if owner.IsZero() {
+		live, err := receiver.ensureLease(ctx, claim)
+		if err != nil || !live {
+			return nil, err
+		}
 	}
 	at, err := receiver.now()
 	if err != nil {
@@ -959,7 +864,7 @@ func (receiver *ArtifactReceiver) markReady(ctx context.Context,
 	}
 	var readyErr error
 	for probe := 0; probe < artifactReceiverResponseLossProbe; probe++ {
-		readyErr = receiver.backend.ready(ctx, claim.fence, at)
+		readyErr = receiver.backend.ready(ctx, claim.fence, owner, at)
 		if readyErr == nil || ctx.Err() != nil || artifactReceiverClosedStoreError(readyErr) {
 			break
 		}
@@ -1103,19 +1008,6 @@ func classifyImportedClosureFailure(cause error) *artifactReceiverClaimFailure {
 	return quarantineArtifactReceiverClaim(store.PeerInboxArtifactManifestInvalid)
 }
 
-func (receiver *ArtifactReceiver) probeStage(ctx context.Context,
-	claim *artifactReceiverClaim, closure store.VerifiedArtifactClosure, at time.Time,
-) error {
-	var err error
-	for probe := 0; probe < artifactReceiverResponseLossProbe; probe++ {
-		err = receiver.backend.stage(ctx, claim.fence, closure, at)
-		if err == nil || ctx.Err() != nil || artifactReceiverClosedStoreError(err) {
-			return err
-		}
-	}
-	return err
-}
-
 func (receiver *ArtifactReceiver) now() (time.Time, error) {
 	value := receiver.clock.Now().Round(0).UTC()
 	if value.IsZero() || value.Year() < 1 || value.Year() > 9999 ||
@@ -1158,6 +1050,8 @@ func artifactReceiverClosedStoreError(err error) bool {
 		errors.Is(err, store.ErrPeerInboxArtifactNotReady) ||
 		errors.Is(err, store.ErrPeerInboxArtifactLimit) ||
 		errors.Is(err, store.ErrPeerInboxArtifactInvariant) ||
+		errors.Is(err, store.ErrArtifactStageFence) ||
+		errors.Is(err, store.ErrArtifactStageConflict) ||
 		errors.Is(err, store.ErrArtifactConflict) || errors.Is(err, store.ErrArtifactUnverified) ||
 		errors.Is(err, store.ErrArtifactReference)
 }
@@ -1167,6 +1061,8 @@ func (receiver *ArtifactReceiver) storeFatal(operation string, cause error) erro
 	if errors.Is(cause, store.ErrPeerInboxArtifactInput) ||
 		errors.Is(cause, store.ErrPeerInboxArtifactInvariant) ||
 		errors.Is(cause, store.ErrPeerInboxArtifactNotReady) ||
+		errors.Is(cause, store.ErrArtifactStageFence) ||
+		errors.Is(cause, store.ErrArtifactStageConflict) ||
 		errors.Is(cause, store.ErrArtifactConflict) || errors.Is(cause, store.ErrArtifactUnverified) ||
 		errors.Is(cause, store.ErrArtifactReference) {
 		code = ArtifactReceiverFatalStoreInvariant
@@ -1343,25 +1239,16 @@ func (backend durableArtifactReceiverBackend) recordSource(ctx context.Context,
 	return err
 }
 
-func (backend durableArtifactReceiverBackend) stage(ctx context.Context,
-	fence artifactReceiverFence, closure store.VerifiedArtifactClosure, at time.Time,
-) error {
-	if !fence.hasDurable {
-		return store.ErrPeerInboxArtifactInput
-	}
-	_, err := backend.store.StagePeerInboxArtifactClosure(ctx,
-		store.StagePeerInboxArtifactClosureSpec{Fence: fence.durable, Closure: closure, At: at})
-	return err
-}
-
 func (backend durableArtifactReceiverBackend) ready(ctx context.Context,
-	fence artifactReceiverFence, at time.Time,
+	fence artifactReceiverFence, owner artifactdomain.StageOwner, at time.Time,
 ) error {
 	if !fence.hasDurable {
 		return store.ErrPeerInboxArtifactInput
 	}
 	result, err := backend.store.MarkPeerInboxArtifactReady(ctx,
-		store.MarkPeerInboxArtifactReadySpec{Fence: fence.durable, At: at})
+		store.MarkPeerInboxArtifactReadySpec{
+			Fence: fence.durable, Owner: owner, At: at,
+		})
 	if err == nil && result.Status() != model.InboxReady {
 		return store.ErrPeerInboxArtifactInvariant
 	}

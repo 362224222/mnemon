@@ -15,11 +15,14 @@ import (
 )
 
 type artifactResolverCheckpointer struct {
-	result      ArtifactCaptureResult
-	apiErr      *ControlError
-	calls       int
-	reservation store.ManagedOperationReservation
-	paths       []string
+	result           ArtifactCaptureResult
+	apiErr           *ControlError
+	calls            int
+	reservation      store.ManagedOperationReservation
+	paths            []string
+	publishErr       *ControlError
+	publishCalls     int
+	publishOperation model.OperationID
 }
 
 type artifactResolverViewValidator struct {
@@ -45,6 +48,14 @@ func (stub *artifactResolverCheckpointer) Checkpoint(_ context.Context,
 	stub.paths = make([]string, len(paths))
 	copy(stub.paths, paths)
 	return stub.result, stub.apiErr
+}
+
+func (stub *artifactResolverCheckpointer) PublishAccepted(_ context.Context,
+	operation model.OperationID,
+) *ControlError {
+	stub.publishCalls++
+	stub.publishOperation = operation
+	return stub.publishErr
 }
 
 func TestArtifactResolverCapturesOrdinaryPathsAsCanonicalProducedRefs(t *testing.T) {

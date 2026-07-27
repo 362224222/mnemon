@@ -52,8 +52,10 @@ func TestCommitLocalAcceptanceRequiresExactOperationArtifactProjection(t *testin
 				root VerifiedArtifactRoot,
 			) {
 				mustExec(t, fixture.store, `INSERT INTO operation_artifact_roots(
-					operation_id,root_digest,manifest_digest) VALUES(?,?,?)`, operation.ID().String(),
-					root.RootDigest.String(), model.Sum([]byte("different-projection-manifest")).Bytes())
+					operation_id,root_digest,manifest_digest,verified_at) VALUES(?,?,?,?)`,
+					operation.ID().String(), root.RootDigest.String(),
+					model.Sum([]byte("different-projection-manifest")).Bytes(),
+					storeTime(root.VerifiedAt))
 				setAcceptanceOperationCaptureDirectly(t, fixture, operation, root)
 			},
 		},
@@ -64,12 +66,15 @@ func TestCommitLocalAcceptanceRequiresExactOperationArtifactProjection(t *testin
 				root VerifiedArtifactRoot,
 			) {
 				mustExec(t, fixture.store, `INSERT INTO operation_artifact_roots(
-					operation_id,root_digest,manifest_digest) VALUES(?,?,?)`, operation.ID().String(),
-					root.RootDigest.String(), root.ManifestDigest.Bytes())
+					operation_id,root_digest,manifest_digest,verified_at) VALUES(?,?,?,?)`,
+					operation.ID().String(), root.RootDigest.String(), root.ManifestDigest.Bytes(),
+					storeTime(root.VerifiedAt))
 				mustExec(t, fixture.store, `INSERT INTO operation_artifact_roots(
-					operation_id,root_digest,manifest_digest) VALUES(?,?,?)`, operation.ID().String(),
+					operation_id,root_digest,manifest_digest,verified_at) VALUES(?,?,?,?)`,
+					operation.ID().String(),
 					model.Sum([]byte("extra-projection-root")).String(),
-					model.Sum([]byte("extra-projection-manifest")).Bytes())
+					model.Sum([]byte("extra-projection-manifest")).Bytes(),
+					storeTime(root.VerifiedAt))
 				setAcceptanceOperationCaptureDirectly(t, fixture, operation, root)
 			},
 		},
@@ -98,9 +103,11 @@ func TestCommitLocalAcceptanceRequiresExactOperationArtifactProjection(t *testin
 		fixture := newAcceptanceFixture(t, 1)
 		operation, authority := fixture.reserveOffer(t, "artifact-projection-without-capture", nil)
 		mustExec(t, fixture.store, `INSERT INTO operation_artifact_roots(
-			operation_id,root_digest,manifest_digest) VALUES(?,?,?)`, operation.ID().String(),
+			operation_id,root_digest,manifest_digest,verified_at) VALUES(?,?,?,?)`,
+			operation.ID().String(),
 			model.Sum([]byte("preinjected-projection-root")).String(),
-			model.Sum([]byte("preinjected-projection-manifest")).Bytes())
+			model.Sum([]byte("preinjected-projection-manifest")).Bytes(),
+			storeTime(fixture.now))
 		spec := fixture.offer(t, authority, "artifact-projection-without-capture",
 			fixture.reviewers, nil, nil)
 		if _, err := fixture.store.CommitLocalAcceptance(context.Background(), spec,
