@@ -13,6 +13,20 @@ import (
 )
 
 func TestGossipCloseContextBoundsBlockedRefreshAndAllowsLaterJoin(t *testing.T) {
+	gossip, blocking := startBlockedGossipRefresh(t)
+	assertBoundedGossipClose(t, gossip)
+	blocking.releaseConnect()
+	joinCtx, joinCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer joinCancel()
+	if err := gossip.CloseContext(joinCtx); err != nil {
+		t.Fatalf("join after release: %v", err)
+	}
+	awaitPeerShutdownSignal(t, blocking.exited, "released refresh dial")
+	awaitPeerShutdownSignal(t, gossip.refreshDone, "refresh owner join")
+}
+
+func startBlockedGossipRefresh(t *testing.T) (*Gossip, *releaseBlockingConnectHost) {
+	t.Helper()
 	local := testAuthorityPeer(t, "gossip-bounded-close-local")
 	remote := testAuthorityPeer(t, "gossip-bounded-close-remote")
 	pending := testAuthorityChannel(t, "gossip-bounded-close",
@@ -61,10 +75,14 @@ func TestGossipCloseContextBoundsBlockedRefreshAndAllowsLaterJoin(t *testing.T) 
 		t.Fatal(err)
 	}
 	awaitPeerShutdownSignal(t, blocking.entered, "blocked refresh dial")
+	return gossip, blocking
+}
 
+func assertBoundedGossipClose(t testing.TB, gossip *Gossip) {
+	t.Helper()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	started := time.Now()
-	err = gossip.CloseContext(shutdownCtx)
+	err := gossip.CloseContext(shutdownCtx)
 	cancel()
 	if !errors.Is(err, ErrGossipTopic) || !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("bounded CloseContext() error = %v", err)
@@ -77,15 +95,6 @@ func TestGossipCloseContextBoundsBlockedRefreshAndAllowsLaterJoin(t *testing.T) 
 		t.Fatal("refresh owner joined an attempt that remained blocked")
 	default:
 	}
-
-	blocking.releaseConnect()
-	joinCtx, joinCancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer joinCancel()
-	if err := gossip.CloseContext(joinCtx); err != nil {
-		t.Fatalf("join after release: %v", err)
-	}
-	awaitPeerShutdownSignal(t, blocking.exited, "released refresh dial")
-	awaitPeerShutdownSignal(t, gossip.refreshDone, "refresh owner join")
 }
 
 type releaseBlockingConnectHost struct {
