@@ -15,9 +15,21 @@ import (
 )
 
 type daemonDataPlaneRuntime struct {
-	plane          *daemonDataPlane
-	eventServer    *peer.EventServer
-	artifactServer *peer.ArtifactServer
+	plane                *daemonDataPlane
+	eventServer          *peer.EventServer
+	artifactServer       *peer.ArtifactServer
+	artifactReceiver     artifactReceiverSnapshotter
+	maximumArtifactPulls int
+}
+
+type artifactReceiverSnapshotter interface {
+	Snapshot() peer.ArtifactReceiverSnapshot
+}
+
+type daemonDataPlaneWorkerComposition struct {
+	workers              []daemonDataPlaneWorkerSpec
+	artifactReceiver     artifactReceiverSnapshotter
+	maximumArtifactPulls int
 }
 
 func openDaemonDataPlane(ctx, lifetime context.Context, st *store.Store, identity *Identity,
@@ -43,12 +55,13 @@ func openDaemonDataPlane(ctx, lifetime context.Context, st *store.Store, identit
 	if err != nil {
 		return fail(err)
 	}
-	plane, err := newDaemonDataPlane(workers)
+	plane, err := newDaemonDataPlane(workers.workers)
 	if err != nil {
 		return fail(err)
 	}
 	return &daemonDataPlaneRuntime{plane: plane, eventServer: eventServer,
-		artifactServer: artifactServer}, nil
+		artifactServer: artifactServer, artifactReceiver: workers.artifactReceiver,
+		maximumArtifactPulls: workers.maximumArtifactPulls}, nil
 }
 
 func openDaemonArtifactRuntime(st *store.Store, clock Clock,
@@ -88,59 +101,59 @@ func openDaemonProtocolServers(lifetime context.Context, st *store.Store, clock 
 func composeDaemonDataPlaneWorkers(st *store.Store, identity *Identity, clock Clock,
 	mesh *peer.MeshRuntime, manager *ChannelManager, cas *artifact.CAS,
 	cleanup *artifactStageCleanupWorker,
-) ([]daemonDataPlaneWorkerSpec, error) {
+) (daemonDataPlaneWorkerComposition, error) {
 	eventClient, err := peer.NewEventClient(peer.EventClientOptions{Host: mesh.Host()})
 	if err != nil {
-		return nil, err
+		return daemonDataPlaneWorkerComposition{}, err
 	}
 	artifactClient, err := peer.NewArtifactClient(peer.ArtifactClientOptions{Host: mesh.Host()})
 	if err != nil {
-		return nil, err
+		return daemonDataPlaneWorkerComposition{}, err
 	}
 	memberClient, err := peer.NewChannelMemberClient(peer.ChannelMemberClientOptions{Host: mesh.Host()})
 	if err != nil {
-		return nil, err
+		return daemonDataPlaneWorkerComposition{}, err
 	}
 	members, err := NewChannelMemberReconciler(ChannelMemberReconcilerOptions{
 		Store: st, Client: memberClient, Controller: manager, Clock: clock})
 	if err != nil {
-		return nil, err
+		return daemonDataPlaneWorkerComposition{}, err
 	}
 	manager.members = members
 	publisher, err := peer.NewGossipPublicationWorker(peer.GossipPublicationWorkerOptions{
 		Store: st, Runtime: mesh, Clock: clock})
 	if err != nil {
-		return nil, err
+		return daemonDataPlaneWorkerComposition{}, err
 	}
 	repair, err := peer.NewEventRepair(peer.EventRepairOptions{Store: st, Client: eventClient,
 		Reconciler: members, Clock: clock})
 	if err != nil {
-		return nil, err
+		return daemonDataPlaneWorkerComposition{}, err
 	}
+	limits := peer.HermeticLimits()
 	receiver, err := peer.NewArtifactReceiver(peer.ArtifactReceiverOptions{Store: st,
 		Client: artifactClient, CAS: cas, Reconciler: members, Clock: clock, Period: time.Second})
 	if err != nil {
-		return nil, err
+		return daemonDataPlaneWorkerComposition{}, err
 	}
 	semanticWorker, err := semantic.NewPeerInboxSemanticWorker(semantic.PeerInboxSemanticWorkerOptions{
 		Store: st, Signer: identity.PublicationSigner(), Clock: clock,
 		PublicationTrigger: publisher})
 	if err != nil {
-		return nil, err
+		return daemonDataPlaneWorkerComposition{}, err
 	}
 	inbox := daemonInboxTrigger{receiver, semanticWorker}
 	ingress, err := peer.NewRuntimeIngress(peer.RuntimeIngressOptions{Store: st, Runtime: mesh,
 		Clock: clock, RepairTrigger: repair, InboxTrigger: inbox})
 	if err != nil {
-		return nil, err
+		return daemonDataPlaneWorkerComposition{}, err
 	}
 	deadlines, err := NewWorkDeadlineWorker(WorkDeadlineWorkerOptions{Store: st,
 		Signer: identity.PublicationSigner(), Clock: clock, PublicationTrigger: publisher})
 	if err != nil {
-		return nil, err
+		return daemonDataPlaneWorkerComposition{}, err
 	}
-	limits := peer.HermeticLimits()
-	return []daemonDataPlaneWorkerSpec{
+	workers := []daemonDataPlaneWorkerSpec{
 		{name: "artifact-staging-cleanup", worker: cleanup, maxConcurrent: 1},
 		{name: "channel-members", worker: members, maxConcurrent: 1},
 		{name: "gossip-publication", worker: publisher, maxConcurrent: 1},
@@ -152,7 +165,30 @@ func composeDaemonDataPlaneWorkers(st *store.Store, identity *Identity, clock Cl
 		{name: "gossip-ingress", worker: ingress,
 			maxConcurrent: uint32(model.MaxChannelsPerNode)},
 		{name: "work-deadlines", worker: deadlines, readiness: deadlines, maxConcurrent: 1},
-	}, nil
+	}
+	return daemonDataPlaneWorkerComposition{workers: workers, artifactReceiver: receiver,
+		maximumArtifactPulls: limits.NodeArtifactPulls}, nil
+}
+
+func (runtime *daemonDataPlaneRuntime) artifactTransferObservation() (StatusArtifactTransferSnapshot, bool) {
+	if runtime == nil || runtime.artifactReceiver == nil ||
+		runtime.maximumArtifactPulls <= 0 ||
+		runtime.maximumArtifactPulls > StatusArtifactTransferPullLimit() {
+		return StatusArtifactTransferSnapshot{}, false
+	}
+	snapshot := runtime.artifactReceiver.Snapshot()
+	switch snapshot.State {
+	case peer.ArtifactReceiverIdle, peer.ArtifactReceiverRunning,
+		peer.ArtifactReceiverStopped, peer.ArtifactReceiverFailed:
+	default:
+		return StatusArtifactTransferSnapshot{}, false
+	}
+	if snapshot.InFlightPulls < 0 || snapshot.InFlightPulls > runtime.maximumArtifactPulls ||
+		snapshot.State != peer.ArtifactReceiverRunning && snapshot.InFlightPulls != 0 {
+		return StatusArtifactTransferSnapshot{}, false
+	}
+	return StatusArtifactTransferSnapshot{ActivePulls: snapshot.InFlightPulls,
+		MaximumPulls: runtime.maximumArtifactPulls}, true
 }
 
 func (runtime *daemonDataPlaneRuntime) CloseContext(ctx context.Context) error {

@@ -686,7 +686,7 @@ func TestServerStatusIsAuthenticatedClosedAndAvailableWhileDegraded(t *testing.T
 			metadata.HasClaimContext || metadata.HasRunAttachment {
 			t.Fatalf("status metadata = %#v", metadata)
 		}
-		return StatusSnapshot{AssetRevision: revision, ActivationReady: true,
+		return StatusSnapshot{ArtifactTransfer: testStatusArtifactTransferSnapshot(0), AssetRevision: revision, ActivationReady: true,
 			Runtime: RuntimeStatusSnapshot{Running: true, Healthy: true,
 				Issue: statusIssueWakePrepare}}, nil
 	})
@@ -695,7 +695,7 @@ func TestServerStatusIsAuthenticatedClosedAndAvailableWhileDegraded(t *testing.T
 	request.Header.Set(authorizationHeader, profileScheme+encodeSecret(credential))
 	recorder := httptest.NewRecorder()
 	server.Handler().ServeHTTP(recorder, request)
-	want := `{"activation":{"issue":"none","state":"ready"},"asset_revision":"` + revision +
+	want := `{"activation":{"issue":"none","state":"ready"},` + `"artifact_transfer":{"active_pulls":0},"asset_revision":"` + revision +
 		`","channels":[],"runtime":{"issue":"wake_preparation_unavailable","state":"retrying"},` +
 		`"schema_version":1,"scope":"managed_agent","status":"degraded"}` + "\n"
 	if recorder.Code != http.StatusOK || recorder.Body.String() != want || called != 1 ||
@@ -715,7 +715,7 @@ func TestServerStatusRejectsMethodsContentCapabilitiesAndBadAuthBeforeProvider(t
 	server := newStatusTestServer(t, &fakeAuthenticator{want: modelDigest(credential)},
 		StatusProviderFunc(func(context.Context, RequestMetadata) (StatusSnapshot, *APIError) {
 			called++
-			return StatusSnapshot{AssetRevision: model.Sum([]byte("status-assets")).String(),
+			return StatusSnapshot{ArtifactTransfer: testStatusArtifactTransferSnapshot(0), AssetRevision: model.Sum([]byte("status-assets")).String(),
 				ActivationReady: true,
 				Runtime:         RuntimeStatusSnapshot{Running: true, Ready: true, Healthy: true}}, nil
 		}))
@@ -794,7 +794,7 @@ func TestServerStatusProviderFailureIsClosedAndRedacted(t *testing.T) {
 		{name: "invalid snapshot", server: func(t *testing.T) *Server {
 			return newStatusTestServer(t, &fakeAuthenticator{want: modelDigest(credential)},
 				StatusProviderFunc(func(context.Context, RequestMetadata) (StatusSnapshot, *APIError) {
-					return StatusSnapshot{AssetRevision: secret}, nil
+					return StatusSnapshot{ArtifactTransfer: testStatusArtifactTransferSnapshot(0), AssetRevision: secret}, nil
 				}))
 		}, wantCode: CodeInternal},
 		{name: "provider error", server: func(t *testing.T) *Server {

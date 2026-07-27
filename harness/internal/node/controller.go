@@ -36,10 +36,11 @@ type ControllerOptions struct {
 	BeforeAccept func() error
 	// wakeWorker is a same-package test seam for lifecycle and readiness
 	// verification. Production composition always uses WakeAdapter.
-	wakeWorker     managedWakeWorker
-	networkRuntime managedNetworkRuntime
-	actionHandlers agent.ActionHandlers
-	shutdown       *gracefulShutdown
+	wakeWorker        managedWakeWorker
+	networkRuntime    managedNetworkRuntime
+	artifactTransfers artifactTransferObserver
+	actionHandlers    agent.ActionHandlers
+	shutdown          *gracefulShutdown
 }
 
 type managedWakeWorker interface {

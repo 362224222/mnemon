@@ -2,6 +2,17 @@ package cli
 
 import "github.com/mnemon-dev/mnemon/harness/internal/localapi"
 
+func newOnlineDoctorReport(checks doctorChecks, status localapi.StatusResponse,
+	exit int,
+) doctorReport {
+	report := newDoctorReportWithChannels(doctorModeOnline, checks, status.Channels, exit)
+	if status.ArtifactTransfer != nil {
+		artifactTransfer := *status.ArtifactTransfer
+		report.ArtifactTransfer = &artifactTransfer
+	}
+	return report
+}
+
 func doctorChannelCheck(channels []localapi.StatusChannel) (doctorCheck, int) {
 	if localapi.ValidateStatusChannels(channels) != nil {
 		return failedDoctorCheck(doctorCheckNames[6], doctorIssueChannelDegraded,
@@ -60,12 +71,15 @@ func validDoctorReport(report doctorReport) bool {
 func validDoctorMode(report doctorReport) bool {
 	switch report.Mode {
 	case doctorModeOnline:
-		return report.Checks[4] == passedDoctorCheck(doctorCheckNames[4]) &&
+		return report.ArtifactTransfer != nil &&
+			localapi.ValidateStatusArtifactTransfer(*report.ArtifactTransfer) == nil &&
+			report.Checks[4] == passedDoctorCheck(doctorCheckNames[4]) &&
 			report.Checks[5].Status != doctorUnobserved && report.Checks[6].Status != doctorUnobserved &&
 			report.Status != doctorInconclusive && validDoctorChannelReport(report)
 	case doctorModeOffline:
-		return report.Checks[4] == failedDoctorCheck(doctorCheckNames[4], doctorIssueDaemon,
-			doctorRemedyRetry) && report.Checks[5] == unobservedDoctorCheck(doctorCheckNames[5],
+		return report.ArtifactTransfer == nil &&
+			report.Checks[4] == failedDoctorCheck(doctorCheckNames[4], doctorIssueDaemon,
+				doctorRemedyRetry) && report.Checks[5] == unobservedDoctorCheck(doctorCheckNames[5],
 			doctorIssueRuntimeUnobserved, doctorRemedyRetry) &&
 			report.Checks[6] == unobservedDoctorCheck(doctorCheckNames[6],
 				doctorIssueChannelUnobserved, doctorRemedyRetry) && len(report.Channels) == 0 &&
@@ -78,7 +92,8 @@ func validDoctorMode(report doctorReport) bool {
 }
 
 func validUnknownDoctorReport(report doctorReport) bool {
-	if report.Status != doctorInconclusive || len(report.Channels) != 0 {
+	if report.ArtifactTransfer != nil || report.Status != doctorInconclusive ||
+		len(report.Channels) != 0 {
 		return false
 	}
 	for index, check := range report.Checks {

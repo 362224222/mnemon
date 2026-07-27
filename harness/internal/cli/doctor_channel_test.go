@@ -10,7 +10,8 @@ import (
 func TestDoctorAppReportsClosedChannelProgress(t *testing.T) {
 	fixture := newDoctorTestFixture(t)
 	status, err := localapi.NewStatusResponse(localapi.StatusSnapshot{
-		AssetRevision: fixture.bundle.Manifest().AssetRevision, ActivationReady: true,
+		ArtifactTransfer: cliStatusArtifactTransferSnapshot(0),
+		AssetRevision:    fixture.bundle.Manifest().AssetRevision, ActivationReady: true,
 		Runtime: localapi.RuntimeStatusSnapshot{Running: true, Ready: true, Healthy: true},
 		Channels: []localapi.StatusChannelSnapshot{{Alias: "alpha", Membership: "active",
 			RosterRevision: 1, Topic: localapi.StatusChannelTopic{State: "joined",
@@ -35,7 +36,8 @@ func TestDoctorAppReportsClosedChannelProgress(t *testing.T) {
 func TestDoctorReportsTerminalLeaveRetryDiagnosticAndRecovery(t *testing.T) {
 	fixture := newDoctorTestFixture(t)
 	status, err := localapi.NewStatusResponse(localapi.StatusSnapshot{
-		AssetRevision: fixture.bundle.Manifest().AssetRevision, ActivationReady: true,
+		ArtifactTransfer: cliStatusArtifactTransferSnapshot(0),
+		AssetRevision:    fixture.bundle.Manifest().AssetRevision, ActivationReady: true,
 		Runtime: localapi.RuntimeStatusSnapshot{Running: true, Ready: true, Healthy: true},
 		Channels: []localapi.StatusChannelSnapshot{{Alias: "alpha", Membership: "leaving",
 			RosterRevision: 1, Topic: localapi.StatusChannelTopic{State: "left",
@@ -88,7 +90,8 @@ func doctorStatusChannel(t *testing.T, membership, topic string,
 ) localapi.StatusChannel {
 	t.Helper()
 	response, err := localapi.NewStatusResponse(localapi.StatusSnapshot{
-		AssetRevision: statusRevision(), ActivationReady: true,
+		ArtifactTransfer: cliStatusArtifactTransferSnapshot(0),
+		AssetRevision:    statusRevision(), ActivationReady: true,
 		Runtime: localapi.RuntimeStatusSnapshot{Running: true, Ready: true, Healthy: true},
 		Channels: []localapi.StatusChannelSnapshot{{Alias: "alpha", Membership: membership,
 			RosterRevision: 1, Topic: localapi.StatusChannelTopic{State: topic,

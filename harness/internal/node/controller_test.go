@@ -94,7 +94,7 @@ func TestControllerServesOwnerOnlyManagedRoutesFromOneStore(t *testing.T) {
 	}
 	controller, err := NewController(context.Background(), ControllerOptions{NodeState: nodeState, Workspace: workspace,
 		Store: st, Profile: enabled, Signer: signer, Clock: controllerTestClock{enabled.UpdatedAt()},
-		Install: testInstallationVerifier(workspace, nodeState, bundle)})
+		Install: testInstallationVerifier(workspace, nodeState, bundle), artifactTransfers: zeroArtifactTransferObserver()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -683,7 +683,8 @@ func newControllerWithTestWakeWorker(t *testing.T, fixture daemonFixture,
 	controller, err := NewController(context.Background(), ControllerOptions{NodeState: fixture.nodeState,
 		Workspace: fixture.workspace, Store: authority.store, Profile: authority.authority.Profile,
 		Signer: authority.identity.PublicationSigner(), Clock: controllerTestClock{fixture.profile.UpdatedAt()},
-		Install: fixture.install, wakeWorker: worker})
+		Install: fixture.install, wakeWorker: worker,
+		artifactTransfers: zeroArtifactTransferObserver()})
 	if err != nil {
 		_ = authority.store.Close()
 		t.Fatal(err)

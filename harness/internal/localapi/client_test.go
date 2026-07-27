@@ -518,7 +518,8 @@ func TestClientReadsOnlyClosedStatusOverOwnerControl(t *testing.T) {
 			t.Errorf("status request = %s %s headers=%v length=%d", request.Method,
 				request.URL.String(), request.Header, request.ContentLength)
 		}
-		response, err := NewStatusResponse(StatusSnapshot{AssetRevision: revision,
+		response, err := NewStatusResponse(StatusSnapshot{
+			ArtifactTransfer: testStatusArtifactTransferSnapshot(0), AssetRevision: revision,
 			ActivationReady: true,
 			Runtime: RuntimeStatusSnapshot{Running: true, Healthy: true,
 				Issue: statusIssueWakePrepare}})

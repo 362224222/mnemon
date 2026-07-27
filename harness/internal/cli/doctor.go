@@ -107,12 +107,13 @@ type doctorCheck struct {
 }
 
 type doctorReport struct {
-	Channels      []localapi.StatusChannel `json:"channels"`
-	Checks        []doctorCheck            `json:"checks"`
-	Mode          string                   `json:"mode"`
-	SchemaVersion int                      `json:"schema_version"`
-	Scope         string                   `json:"scope"`
-	Status        string                   `json:"status"`
+	ArtifactTransfer *localapi.StatusArtifactTransfer `json:"artifact_transfer,omitempty"`
+	Channels         []localapi.StatusChannel         `json:"channels"`
+	Checks           []doctorCheck                    `json:"checks"`
+	Mode             string                           `json:"mode"`
+	SchemaVersion    int                              `json:"schema_version"`
+	Scope            string                           `json:"scope"`
+	Status           string                           `json:"status"`
 }
 
 type doctorObservation struct {
@@ -231,8 +232,7 @@ func (app *doctorApp) observeOnline(ctx context.Context, workspace, nodeState st
 	exit := mergeDoctorExit(status.ExitStatus(), installExit)
 	exit = mergeDoctorExit(exit, runtimeExit)
 	exit = mergeDoctorExit(exit, channelExit)
-	return doctorObservation{report: newDoctorReportWithChannels(doctorModeOnline, checks,
-		status.Channels, exit), exit: exit}
+	return doctorObservation{report: newOnlineDoctorReport(checks, status, exit), exit: exit}
 }
 
 func (app *doctorApp) observeOffline(ctx context.Context, workspace,

@@ -1,11 +1,21 @@
 package node
 
-import "context"
+import (
+	"context"
+
+	"github.com/mnemon-dev/mnemon/harness/internal/peer"
+)
 
 // MaxStatusResponseBytes bounds eight compact Channel aggregates plus the
-// closed activation and Runtime checks. Status contains no Event, Peer, queue
-// lease, filesystem, payload, or transport identity.
+// closed activation, Runtime and Artifact receiver counts. Status contains no
+// Event, Peer, queue lease, filesystem, payload, or transport identity.
 const MaxStatusResponseBytes = 32 << 10
+
+// StatusArtifactTransferPullLimit is the canonical public bound frozen into
+// the production Artifact receiver composition.
+func StatusArtifactTransferPullLimit() int {
+	return peer.HermeticLimits().NodeArtifactPulls
+}
 
 // StatusProvider observes the current controller authorities without
 // creating work, probing claims, settling leases, or modifying durable state.
@@ -36,15 +46,28 @@ type RuntimeStatusSnapshot struct {
 	Issue      string
 }
 
+// StatusArtifactTransferSnapshot is the live, identity-free portion of the
+// daemon-owned Artifact receiver. MaximumPulls is frozen with the receiver at
+// composition and must be supplied explicitly.
+type StatusArtifactTransferSnapshot struct {
+	ActivePulls  int
+	MaximumPulls int
+}
+
+type artifactTransferObserver interface {
+	artifactTransferObservation() (StatusArtifactTransferSnapshot, bool)
+}
+
 // StatusSnapshot combines the exact activation observation and the live
 // managed Runtime worker. AssetRevision is the controller-bound canonical
 // revision, never a caller-provided value.
 type StatusSnapshot struct {
-	AssetRevision   string
-	ActivationReady bool
-	ActivationIssue string
-	Runtime         RuntimeStatusSnapshot
-	Channels        []StatusChannelSnapshot
+	ArtifactTransfer StatusArtifactTransferSnapshot
+	AssetRevision    string
+	ActivationReady  bool
+	ActivationIssue  string
+	Runtime          RuntimeStatusSnapshot
+	Channels         []StatusChannelSnapshot
 }
 
 // StatusChannelSnapshot is controller input assembled from one durable

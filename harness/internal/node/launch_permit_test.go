@@ -286,7 +286,8 @@ func startNetworkReadinessController(t *testing.T, fixture daemonFixture) (
 		NodeState: fixture.nodeState, Workspace: fixture.workspace, Store: authority.store,
 		Profile: authority.authority.Profile, Signer: authority.identity.PublicationSigner(),
 		Clock: controllerTestClock{fixture.profile.UpdatedAt()}, Install: fixture.install,
-		networkRuntime: network, BeforeAccept: func() error {
+		networkRuntime: network, artifactTransfers: zeroArtifactTransferObserver(),
+		BeforeAccept: func() error {
 			close(released)
 			return nil
 		},

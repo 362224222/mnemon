@@ -119,9 +119,10 @@ type doctorTestFixture struct {
 
 func TestDoctorAppReportsClosedHealthyOnlineObservation(t *testing.T) {
 	fixture := newDoctorTestFixture(t)
-	client := &fakeDoctorClient{statuses: []localapi.StatusResponse{
-		doctorTestStatus(t, fixture.bundle.Manifest().AssetRevision, "ready", true, ""),
-	}, authorities: []localapi.AuthorityResponse{fixture.authority}}
+	status := doctorTestStatus(t, fixture.bundle.Manifest().AssetRevision, "ready", true, "")
+	status.ArtifactTransfer = &localapi.StatusArtifactTransfer{ActivePulls: 2}
+	client := &fakeDoctorClient{statuses: []localapi.StatusResponse{status},
+		authorities: []localapi.AuthorityResponse{fixture.authority}}
 	checks := make([]string, 0, 4)
 	app, stdout, stderr := fixture.app(t, client, doctorTestOverrides{
 		verifyNodeBundle: func(nodeState string, bundle assets.Bundle) error {
@@ -164,6 +165,7 @@ func TestDoctorAppReportsClosedHealthyOnlineObservation(t *testing.T) {
 	if exit != 0 || stderr.Len() != 0 || client.statusReads != 1 ||
 		client.authorityReads != 1 || client.probes != 0 || report.Mode != doctorModeOnline ||
 		report.Scope != "managed_agent" || report.Status != doctorHealthy ||
+		report.ArtifactTransfer == nil || report.ArtifactTransfer.ActivePulls != 2 ||
 		!allDoctorChecksPass(report.Checks) || strings.Join(checks, ",") !=
 		"node,projection,host,registration" {
 		t.Fatalf("online doctor = exit %d report %#v stderr %q reads=(%d,%d) probes=%d checks=%v",
@@ -389,6 +391,7 @@ func TestDoctorAppOfflineProofHoldsLifecycleFenceThroughAllChecks(t *testing.T) 
 	report := decodeDoctorReport(t, stdout.String())
 	if exit != 5 || stderr.Len() != 0 || lease.held || lease.closes != 1 ||
 		client.statusReads != 1 || client.authorityReads != 0 || report.Mode != doctorModeOffline ||
+		report.ArtifactTransfer != nil ||
 		report.Status != doctorDegraded || report.Checks[4].Issue != doctorIssueDaemon ||
 		report.Checks[5].Status != doctorUnobserved ||
 		report.Checks[5].Issue != doctorIssueRuntimeUnobserved ||
@@ -529,6 +532,7 @@ func TestDoctorAppValidatesInvocationAndReportShape(t *testing.T) {
 		passed[index] = passedDoctorCheck(name)
 	}
 	healthy := newDoctorReport(doctorModeOnline, passed, 0)
+	healthy.ArtifactTransfer = &localapi.StatusArtifactTransfer{}
 	if !validDoctorReport(healthy) {
 		t.Fatal("doctor rejected its closed healthy report")
 	}
@@ -542,6 +546,7 @@ func TestDoctorAppValidatesInvocationAndReportShape(t *testing.T) {
 		t.Fatal("doctor admitted an offline healthy report")
 	}
 	healthy = newDoctorReport(doctorModeOnline, passed, 0)
+	healthy.ArtifactTransfer = &localapi.StatusArtifactTransfer{}
 	healthy.Checks[4] = failedDoctorCheck(doctorCheckNames[4], doctorIssueProjection,
 		doctorRemedySetup)
 	if validDoctorReport(healthy) {
@@ -672,7 +677,8 @@ func doctorTestStatus(t *testing.T, revision, state string, activationReady bool
 		t.Fatalf("unsupported test Runtime state %q", state)
 	}
 	response, err := localapi.NewStatusResponse(localapi.StatusSnapshot{
-		AssetRevision: revision, ActivationReady: activationReady, Runtime: runtime,
+		ArtifactTransfer: cliStatusArtifactTransferSnapshot(0),
+		AssetRevision:    revision, ActivationReady: activationReady, Runtime: runtime,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -683,7 +689,8 @@ func doctorTestStatus(t *testing.T, revision, state string, activationReady bool
 func doctorTestActivationStatus(t *testing.T, revision, issue string) localapi.StatusResponse {
 	t.Helper()
 	response, err := localapi.NewStatusResponse(localapi.StatusSnapshot{
-		AssetRevision: revision, ActivationIssue: issue,
+		ArtifactTransfer: cliStatusArtifactTransferSnapshot(0),
+		AssetRevision:    revision, ActivationIssue: issue,
 		Runtime: localapi.RuntimeStatusSnapshot{Running: true, Ready: true, Healthy: true},
 	})
 	if err != nil {

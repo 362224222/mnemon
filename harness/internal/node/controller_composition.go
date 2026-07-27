@@ -54,6 +54,10 @@ func validateControllerOptions(options *ControllerOptions) (string, error) {
 func composeController(ctx context.Context, options *ControllerOptions,
 	admission *controllerAdmissionGate,
 ) (controllerComposition, error) {
+	if options.artifactTransfers == nil {
+		return controllerComposition{},
+			errors.New("mnemond controller Artifact transfer observer is unavailable")
+	}
 	assetRevision := options.Profile.ActiveAssetRevision()
 	if err := bindControllerActionPolicy(ctx, options.Profile, options.Install, assetRevision,
 		&options.actionPolicy, &options.actionHandlers); err != nil {
@@ -109,7 +113,8 @@ func composeController(ctx context.Context, options *ControllerOptions,
 	}
 	channelRuntime, _ := options.Channels.(channelSessionObserver)
 	observer := controllerObserver{assetRevision: assetRevision, store: options.Store,
-		profile: options.Profile, install: options.Install, gate: gate, wakeWorker: wakeWorker}
+		profile: options.Profile, install: options.Install, gate: gate, wakeWorker: wakeWorker,
+		artifactTransfers: options.artifactTransfers}
 	observer.channelRuntime = channelRuntime
 	return controllerComposition{service: service, observer: observer, wakeWorker: wakeWorker}, nil
 }
@@ -133,13 +138,14 @@ func composeControllerWakeWorker(options *ControllerOptions,
 }
 
 type controllerObserver struct {
-	assetRevision  string
-	store          *store.Store
-	profile        model.Profile
-	install        InstallationVerifier
-	gate           controllerManagedActivationGate
-	wakeWorker     managedWakeWorker
-	channelRuntime channelSessionObserver
+	assetRevision     string
+	store             *store.Store
+	profile           model.Profile
+	install           InstallationVerifier
+	gate              controllerManagedActivationGate
+	wakeWorker        managedWakeWorker
+	channelRuntime    channelSessionObserver
+	artifactTransfers artifactTransferObserver
 }
 
 func (observer controllerObserver) Health(ctx context.Context,
@@ -156,6 +162,11 @@ func (observer controllerObserver) Status(ctx context.Context,
 		return StatusSnapshot{}, NewAPIError(CodeInternal,
 			"operational status observation was cancelled")
 	}
+	artifactTransfer, observed := observer.artifactTransfers.artifactTransferObservation()
+	if !observed {
+		return StatusSnapshot{}, NewAPIError(CodeInternal,
+			"live Artifact transfer observation is unavailable")
+	}
 	current, err := observer.store.ReadLocalAuthority(ctx)
 	if err != nil {
 		return StatusSnapshot{}, NewAPIError(CodeInternal,
@@ -171,7 +182,7 @@ func (observer controllerObserver) Status(ctx context.Context,
 		return StatusSnapshot{}, NewAPIError(CodeInternal,
 			"durable Channel progress is unavailable")
 	}
-	return StatusSnapshot{AssetRevision: observer.assetRevision,
+	return StatusSnapshot{ArtifactTransfer: artifactTransfer, AssetRevision: observer.assetRevision,
 		ActivationReady: activationIssue == "", ActivationIssue: activationIssue,
 		Runtime: RuntimeStatusSnapshot{Running: worker.Running, Ready: worker.Ready,
 			Healthy: worker.Healthy, Recovering: worker.Recovering, Issue: worker.LastError},

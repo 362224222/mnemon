@@ -48,6 +48,9 @@ func TestStatusResponseReportsOnlyTruthfulClosedActivationAndRuntimeState(t *tes
 			wantActive:  StatusCheck{Issue: statusIssueNone, State: activationReady},
 			wantRuntime: StatusCheck{Issue: statusIssueDurableRuntime, State: runtimeFailed}},
 	}
+	for index := range tests {
+		tests[index].snapshot.ArtifactTransfer = testStatusArtifactTransferSnapshot(0)
+	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			response, err := NewStatusResponse(test.snapshot)
@@ -72,7 +75,9 @@ func TestStatusResponseReportsOnlyTruthfulClosedActivationAndRuntimeState(t *tes
 func TestStatusResponseRedactsUnknownRuntimeIssueAndRejectsInconsistentState(t *testing.T) {
 	revision := model.Sum([]byte("status-redaction")).String()
 	secret := "provider-key=private-runtime-diagnostic"
-	response, err := NewStatusResponse(StatusSnapshot{AssetRevision: revision, ActivationReady: true,
+	response, err := NewStatusResponse(StatusSnapshot{
+		ArtifactTransfer: testStatusArtifactTransferSnapshot(0),
+		AssetRevision:    revision, ActivationReady: true,
 		Runtime: RuntimeStatusSnapshot{Running: true, Healthy: true, Issue: secret}})
 	if err != nil {
 		t.Fatal(err)
@@ -80,13 +85,16 @@ func TestStatusResponseRedactsUnknownRuntimeIssueAndRejectsInconsistentState(t *
 	if response.Runtime.Issue != statusIssueInternalRuntime || strings.Contains(response.Runtime.Issue, secret) {
 		t.Fatalf("unknown Runtime issue escaped redaction: %#v", response.Runtime)
 	}
-	activation, err := NewStatusResponse(StatusSnapshot{AssetRevision: revision,
+	activation, err := NewStatusResponse(StatusSnapshot{
+		ArtifactTransfer: testStatusArtifactTransferSnapshot(0), AssetRevision: revision,
 		ActivationIssue: secret, Runtime: RuntimeStatusSnapshot{Healthy: true}})
 	if err != nil || activation.Activation.Issue != statusIssueInternalActivation ||
 		strings.Contains(activation.Activation.Issue, secret) {
 		t.Fatalf("unknown activation issue escaped redaction: (%#v, %v)", activation.Activation, err)
 	}
-	if _, err := NewStatusResponse(StatusSnapshot{AssetRevision: revision, ActivationReady: true,
+	if _, err := NewStatusResponse(StatusSnapshot{
+		ArtifactTransfer: testStatusArtifactTransferSnapshot(0),
+		AssetRevision:    revision, ActivationReady: true,
 		ActivationIssue: statusIssueAssetMismatch,
 		Runtime:         RuntimeStatusSnapshot{Running: true, Ready: true, Healthy: true}}); err == nil {
 		t.Fatal("ready activation accepted an issue")
@@ -97,7 +105,8 @@ func TestStatusResponseRedactsUnknownRuntimeIssueAndRejectsInconsistentState(t *
 		{Running: true, Ready: true, Healthy: true, Issue: statusIssueWakePrepare},
 		{Running: true, Recovering: true},
 	} {
-		if _, err := NewStatusResponse(StatusSnapshot{AssetRevision: revision,
+		if _, err := NewStatusResponse(StatusSnapshot{
+			ArtifactTransfer: testStatusArtifactTransferSnapshot(0), AssetRevision: revision,
 			ActivationReady: true, Runtime: snapshot}); err == nil {
 			t.Fatalf("inconsistent Runtime snapshot accepted: %#v", snapshot)
 		}
@@ -106,18 +115,25 @@ func TestStatusResponseRedactsUnknownRuntimeIssueAndRejectsInconsistentState(t *
 
 func TestStatusResponseValidationIsClosedAndBounded(t *testing.T) {
 	revision := model.Sum([]byte("status-validation")).String()
-	response, err := NewStatusResponse(StatusSnapshot{AssetRevision: revision, ActivationReady: true,
+	response, err := NewStatusResponse(StatusSnapshot{
+		ArtifactTransfer: testStatusArtifactTransferSnapshot(0),
+		AssetRevision:    revision, ActivationReady: true,
 		Runtime: RuntimeStatusSnapshot{Running: true, Ready: true, Healthy: true}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	mutations := []StatusResponse{response, response, response, response, response, response}
+	mutations := []StatusResponse{response, response, response, response, response, response,
+		response, response}
 	mutations[0].SchemaVersion++
 	mutations[1].Status = "configured"
 	mutations[2].Activation.Issue = statusIssueInternalRuntime
 	mutations[3].Runtime.Issue = "private-error"
 	mutations[4].Runtime.State = runtimeFailed
 	mutations[5].Scope = "node"
+	mutations[6].ArtifactTransfer = nil
+	mutations[7].ArtifactTransfer = &StatusArtifactTransfer{
+		ActivePulls: StatusArtifactTransferPullLimit() + 1,
+	}
 	for _, mutation := range mutations {
 		if apiErr := validateStatusResponse(mutation); apiErr == nil {
 			t.Fatalf("invalid status response accepted: %#v", mutation)
@@ -129,4 +145,9 @@ func TestStatusResponseValidationIsClosedAndBounded(t *testing.T) {
 	if raw, err := model.CanonicalMarshal(response); err != nil || len(raw)+1 > MaxStatusResponseBytes {
 		t.Fatalf("status response bound = (%d, %v)", len(raw)+1, err)
 	}
+}
+
+func testStatusArtifactTransferSnapshot(active int) StatusArtifactTransferSnapshot {
+	return StatusArtifactTransferSnapshot{ActivePulls: active,
+		MaximumPulls: StatusArtifactTransferPullLimit()}
 }

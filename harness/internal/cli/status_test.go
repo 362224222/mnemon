@@ -66,6 +66,9 @@ func TestStatusAppReportsTrustedOnlineStateAndExitClassWithoutEnsure(t *testing.
 			Runtime:         localapi.RuntimeStatusSnapshot{Issue: "managed_runtime_failed"}},
 			wantExit: 1},
 	}
+	for index := range tests {
+		tests[index].snapshot.ArtifactTransfer = cliStatusArtifactTransferSnapshot(0)
+	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			response, err := localapi.NewStatusResponse(test.snapshot)
@@ -87,7 +90,8 @@ func TestStatusAppReportsTrustedOnlineStateAndExitClassWithoutEnsure(t *testing.
 
 func TestStatusAppEnsuresOnlyAfterTransportUnavailabilityAndReadsAgain(t *testing.T) {
 	workspace, nodeState := statusWorkspace(t)
-	ready, err := localapi.NewStatusResponse(localapi.StatusSnapshot{AssetRevision: statusRevision(),
+	ready, err := localapi.NewStatusResponse(localapi.StatusSnapshot{
+		ArtifactTransfer: cliStatusArtifactTransferSnapshot(0), AssetRevision: statusRevision(),
 		ActivationReady: true,
 		Runtime:         localapi.RuntimeStatusSnapshot{Running: true, Ready: true, Healthy: true}})
 	if err != nil {
@@ -102,6 +106,11 @@ func TestStatusAppEnsuresOnlyAfterTransportUnavailabilityAndReadsAgain(t *testin
 		t.Fatalf("ensured status = exit %d stdout %q stderr %q reads=%d probes=%d ensured=%d",
 			exit, stdout.String(), stderr.String(), client.reads, client.probes, *ensured)
 	}
+}
+
+func cliStatusArtifactTransferSnapshot(active int) localapi.StatusArtifactTransferSnapshot {
+	return localapi.StatusArtifactTransferSnapshot{ActivePulls: active,
+		MaximumPulls: localapi.StatusArtifactTransferPullLimit()}
 }
 
 func TestStatusAppFailsClosedWithoutEnsureForNontransportErrors(t *testing.T) {

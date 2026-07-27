@@ -44,14 +44,21 @@ type StatusCheck struct {
 	State string `json:"state"`
 }
 
+// StatusArtifactTransfer carries only the current number of receiver pulls.
+// It deliberately omits Artifact, Channel, Peer, path and transport identity.
+type StatusArtifactTransfer struct {
+	ActivePulls int `json:"active_pulls"`
+}
+
 type StatusResponse struct {
-	Activation    StatusCheck     `json:"activation"`
-	AssetRevision string          `json:"asset_revision"`
-	Channels      []StatusChannel `json:"channels"`
-	Runtime       StatusCheck     `json:"runtime"`
-	SchemaVersion int             `json:"schema_version"`
-	Scope         string          `json:"scope"`
-	Status        string          `json:"status"`
+	Activation       StatusCheck             `json:"activation"`
+	ArtifactTransfer *StatusArtifactTransfer `json:"artifact_transfer"`
+	AssetRevision    string                  `json:"asset_revision"`
+	Channels         []StatusChannel         `json:"channels"`
+	Runtime          StatusCheck             `json:"runtime"`
+	SchemaVersion    int                     `json:"schema_version"`
+	Scope            string                  `json:"scope"`
+	Status           string                  `json:"status"`
 }
 
 func (response StatusResponse) ExitStatus() int {
@@ -92,6 +99,10 @@ func NewStatusResponse(snapshot StatusSnapshot) (StatusResponse, error) {
 	if err != nil {
 		return StatusResponse{}, err
 	}
+	artifactTransfer, err := newStatusArtifactTransfer(snapshot.ArtifactTransfer)
+	if err != nil {
+		return StatusResponse{}, err
+	}
 	channels, err := newStatusChannels(snapshot.Channels)
 	if err != nil {
 		return StatusResponse{}, err
@@ -101,13 +112,38 @@ func NewStatusResponse(snapshot StatusSnapshot) (StatusResponse, error) {
 		statusChannelsExit(channels) == 0 {
 		state = statusReady
 	}
-	response := StatusResponse{Activation: activation, AssetRevision: snapshot.AssetRevision,
-		Channels: channels, Runtime: runtime, SchemaVersion: SchemaVersion,
-		Scope: statusScopeManagedAgent, Status: state}
+	response := StatusResponse{Activation: activation, ArtifactTransfer: &artifactTransfer,
+		AssetRevision: snapshot.AssetRevision, Channels: channels, Runtime: runtime,
+		SchemaVersion: SchemaVersion, Scope: statusScopeManagedAgent, Status: state}
 	if raw, err := model.CanonicalMarshal(response); err != nil || len(raw)+1 > MaxStatusResponseBytes {
 		return StatusResponse{}, errors.New("local API: status response exceeds its closed bound")
 	}
 	return response, nil
+}
+
+func newStatusArtifactTransfer(
+	snapshot StatusArtifactTransferSnapshot,
+) (StatusArtifactTransfer, error) {
+	canonicalMaximum := StatusArtifactTransferPullLimit()
+	maximum := snapshot.MaximumPulls
+	if canonicalMaximum <= 0 || maximum <= 0 || maximum > canonicalMaximum ||
+		snapshot.ActivePulls < 0 || snapshot.ActivePulls > maximum {
+		return StatusArtifactTransfer{},
+			errors.New("local API: Artifact transfer observation is outside its closed bound")
+	}
+	return StatusArtifactTransfer{ActivePulls: snapshot.ActivePulls}, nil
+}
+
+// ValidateStatusArtifactTransfer rejects negative and over-budget live
+// transfer projections. The enclosing response validator requires the object.
+func ValidateStatusArtifactTransfer(observation StatusArtifactTransfer) error {
+	_, err := newStatusArtifactTransfer(StatusArtifactTransferSnapshot{
+		ActivePulls: observation.ActivePulls, MaximumPulls: StatusArtifactTransferPullLimit(),
+	})
+	if err != nil {
+		return errors.New("local API: Artifact transfer observation is not closed")
+	}
+	return nil
 }
 
 func publicActivationIssue(issue string) string {
@@ -162,7 +198,8 @@ func publicRuntimeIssue(issue string) string {
 }
 
 func ValidateStatusResponse(response StatusResponse) *APIError {
-	if response.SchemaVersion != SchemaVersion || response.Scope != statusScopeManagedAgent ||
+	if response.ArtifactTransfer == nil ||
+		response.SchemaVersion != SchemaVersion || response.Scope != statusScopeManagedAgent ||
 		(response.Status != statusReady && response.Status != statusDegraded) ||
 		(response.Activation.State != activationReady && response.Activation.State != activationFailed) ||
 		(response.Runtime.State != runtimeStarting && response.Runtime.State != runtimeRecovering &&
@@ -174,6 +211,10 @@ func ValidateStatusResponse(response StatusResponse) *APIError {
 		return NewAPIError(CodeInternal, "status response has an invalid asset revision")
 	}
 	want, err := NewStatusResponse(StatusSnapshot{AssetRevision: response.AssetRevision,
+		ArtifactTransfer: StatusArtifactTransferSnapshot{
+			ActivePulls:  response.ArtifactTransfer.ActivePulls,
+			MaximumPulls: StatusArtifactTransferPullLimit(),
+		},
 		ActivationReady: response.Activation.State == activationReady,
 		ActivationIssue: activationIssueFromResponse(response.Activation),
 		Runtime:         runtimeSnapshotFromResponse(response.Runtime),

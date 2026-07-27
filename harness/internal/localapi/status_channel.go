@@ -34,7 +34,11 @@ func newStatusChannel(snapshot StatusChannelSnapshot) (StatusChannel, error) {
 }
 
 func statusChannelWrapperSnapshot(channels []StatusChannelSnapshot) StatusSnapshot {
-	return StatusSnapshot{AssetRevision: model.Sum([]byte("status-channel-wrapper")).String(),
+	return StatusSnapshot{
+		ArtifactTransfer: StatusArtifactTransferSnapshot{
+			MaximumPulls: StatusArtifactTransferPullLimit(),
+		},
+		AssetRevision:   model.Sum([]byte("status-channel-wrapper")).String(),
 		ActivationReady: true,
 		Runtime:         RuntimeStatusSnapshot{Running: true, Ready: true, Healthy: true},
 		Channels:        channels}

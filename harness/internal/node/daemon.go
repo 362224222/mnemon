@@ -170,7 +170,7 @@ func openDaemon(ctx context.Context, options DaemonOptions,
 		Store: st, Profile: authority.authority.Profile, Signer: identity.PublicationSigner(), Clock: options.Clock,
 		Install: options.Install, Control: options.Control, Channels: channels.manager, actionPolicy: actionPolicy,
 		WakeAdapter: wakeAdapter, BeforeAccept: beforeAccept, networkRuntime: channels.data.plane,
-		shutdown: shutdown})
+		artifactTransfers: channels.data, shutdown: shutdown})
 	if err != nil {
 		return fail(fmt.Errorf("%w: compose controller: %v", ErrDaemonAuthority, err))
 	}

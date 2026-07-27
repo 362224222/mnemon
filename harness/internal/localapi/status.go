@@ -41,3 +41,11 @@ func NewStatusResponse(snapshot StatusSnapshot) (StatusResponse, error) {
 func validateStatusResponse(response StatusResponse) *APIError {
 	return node.ValidateStatusResponse(response)
 }
+
+func ValidateStatusArtifactTransfer(observation StatusArtifactTransfer) error {
+	return node.ValidateStatusArtifactTransfer(observation)
+}
+
+func StatusArtifactTransferPullLimit() int {
+	return node.StatusArtifactTransferPullLimit()
+}
