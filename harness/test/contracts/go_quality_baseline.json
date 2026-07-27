@@ -949,24 +949,10 @@
     },
     {
       "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/store/derivation_disposition.go::readTerminalChildEvents",
-      "path": "harness/internal/store/derivation_disposition.go",
-      "symbol": "readTerminalChildEvents",
-      "ceiling": 50
-    },
-    {
-      "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/store/derivation_disposition.go::readWorkDerivationGroup",
-      "path": "harness/internal/store/derivation_disposition.go",
-      "symbol": "readWorkDerivationGroup",
-      "ceiling": 27
-    },
-    {
-      "rule": "cognitive_complexity",
       "identity": "cognitive_complexity:harness/internal/store/derivation_disposition.go::reconcileWorkDerivationDisposition",
       "path": "harness/internal/store/derivation_disposition.go",
       "symbol": "reconcileWorkDerivationDisposition",
-      "ceiling": 36
+      "ceiling": 32
     },
     {
       "rule": "cognitive_complexity",
@@ -981,13 +967,6 @@
       "path": "harness/internal/store/gossip_publication_test.go",
       "symbol": "TestGossipPublicationLeaseRetryPublishAndExactReplay",
       "ceiling": 29
-    },
-    {
-      "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/store/local_accept_derivation.go::prepareLocalDerivations",
-      "path": "harness/internal/store/local_accept_derivation.go",
-      "symbol": "prepareLocalDerivations",
-      "ceiling": 33
     },
     {
       "rule": "cognitive_complexity",
@@ -2594,24 +2573,10 @@
     },
     {
       "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/store/derivation_disposition.go::readTerminalChildEvents",
-      "path": "harness/internal/store/derivation_disposition.go",
-      "symbol": "readTerminalChildEvents",
-      "ceiling": 34
-    },
-    {
-      "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/store/derivation_disposition.go::readWorkDerivationGroup",
-      "path": "harness/internal/store/derivation_disposition.go",
-      "symbol": "readWorkDerivationGroup",
-      "ceiling": 24
-    },
-    {
-      "rule": "cyclomatic_complexity",
       "identity": "cyclomatic_complexity:harness/internal/store/derivation_disposition.go::reconcileWorkDerivationDisposition",
       "path": "harness/internal/store/derivation_disposition.go",
       "symbol": "reconcileWorkDerivationDisposition",
-      "ceiling": 30
+      "ceiling": 28
     },
     {
       "rule": "cyclomatic_complexity",
@@ -2640,13 +2605,6 @@
       "path": "harness/internal/store/handling.go",
       "symbol": "sameHandling",
       "ceiling": 25
-    },
-    {
-      "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/store/local_accept_derivation.go::prepareLocalDerivations",
-      "path": "harness/internal/store/local_accept_derivation.go",
-      "symbol": "prepareLocalDerivations",
-      "ceiling": 28
     },
     {
       "rule": "cyclomatic_complexity",
@@ -4428,17 +4386,10 @@
     },
     {
       "rule": "function_statements",
-      "identity": "function_statements:harness/internal/store/derivation_disposition.go::readTerminalChildEvents",
-      "path": "harness/internal/store/derivation_disposition.go",
-      "symbol": "readTerminalChildEvents",
-      "ceiling": 51
-    },
-    {
-      "rule": "function_statements",
       "identity": "function_statements:harness/internal/store/derivation_disposition.go::reconcileWorkDerivationDisposition",
       "path": "harness/internal/store/derivation_disposition.go",
       "symbol": "reconcileWorkDerivationDisposition",
-      "ceiling": 59
+      "ceiling": 55
     },
     {
       "rule": "function_statements",
@@ -5325,7 +5276,7 @@
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/store/derivation_disposition.go",
       "path": "harness/internal/store/derivation_disposition.go",
-      "ceiling": 743
+      "ceiling": 697
     },
     {
       "rule": "production_file_lines",
