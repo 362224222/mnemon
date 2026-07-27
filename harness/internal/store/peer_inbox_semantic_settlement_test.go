@@ -254,8 +254,7 @@ func TestPeerInboxSemanticHandlingSettlementReplaysAndPreservesPriorTerminal(t *
 func TestCommitPeerInboxSemanticSettlesClaimedHandlingAtomicallyAndReplays(t *testing.T) {
 	t.Run("commit, authority upgrade, and restart replay", func(t *testing.T) {
 		fixture := newPeerInboxSemanticSettlementCommitFixture(t, "public-commit")
-		result, err := fixture.store.CommitPeerInboxSemantic(context.Background(),
-			fixture.spec, fixture.committedAt)
+		result, err := fixture.store.CommitPeerInboxSemantic(context.Background(), fixture.spec, fixture.committedAt)
 		if err != nil || !result.Changed() || result.Replayed() ||
 			result.Status() != model.InboxAccepted ||
 			result.ImportedEventID() != fixture.terminal.Event().ID() || result.Decision().IsZero() {
@@ -270,80 +269,13 @@ func TestCommitPeerInboxSemanticSettlesClaimedHandlingAtomicallyAndReplays(t *te
 		if !ok || receipt != responses[0] {
 			t.Fatalf("terminal receipt = (%s,%t), want %s", receipt, ok, responses[0])
 		}
-
 		assertPeerInboxSemanticSettlementCommit(t, fixture, responses[0])
 		assertPeerInboxSemanticTerminalProjection(t, fixture.store, fixture.inboxID,
 			model.InboxAccepted, fixture.terminal.Event().ID(), responses[0])
-		assertPeerInboxSemanticImportedEventHasNoGossip(t, fixture.store,
-			fixture.terminal.Event().ID())
+		assertPeerInboxSemanticImportedEventHasNoGossip(t, fixture.store, fixture.terminal.Event().ID())
 		assertPeerInboxSemanticSettlementTransitionCount(t, fixture.store, 0)
-
-		beforeHandling, _ := readAgentHandling(context.Background(), fixture.store.db,
-			fixture.handling.ID())
-		beforeRun, _ := readAgentRun(context.Background(), fixture.store.db, fixture.agent.Run.ID())
-		beforeOperation, _ := readOperationByID(context.Background(), fixture.store.db,
-			fixture.operation.ID())
-		beforeWork, _ := readReviewWork(context.Background(), fixture.store.db, fixture.work.Ref())
-
-		switchAt := fixture.committedAt.Add(time.Second)
-		deactivated, err := fixture.store.DeactivateProfile(context.Background(), fixture.profile,
-			switchAt)
-		if err != nil {
-			t.Fatalf("deactivate Profile after settlement: %v", err)
-		}
-		desiredSpec := deactivated.Profile.Spec()
-		desiredSpec.ActiveAssetRevision = model.Sum([]byte("committed settlement assets")).String()
-		desiredSpec.Enabled = true
-		desired, err := model.NewProfile(desiredSpec)
-		if err != nil {
-			t.Fatal(err)
-		}
-		activated, err := fixture.store.ActivateProfile(context.Background(), desired,
-			deactivated.Profile.UpdatedAt(), switchAt.Add(time.Nanosecond))
-		if err != nil || activated.Profile.Runtime() != model.RuntimeCodexAppServer {
-			t.Fatalf("upgrade Profile authority after commit = (%#v,%v)", activated, err)
-		}
-		if beforeRun.Runtime() != model.RuntimeCodexAppServer {
-			t.Fatalf("historical AgentRun runtime = %s", beforeRun.Runtime())
-		}
-
-		path := fixture.store.Path()
-		if err := fixture.store.Close(); err != nil {
-			t.Fatal(err)
-		}
-		fixture.store = nil
-		fixture.peer.store = nil
-		restarted, err := OpenExisting(context.Background(), path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _ = restarted.Close() })
-		replay, err := restarted.CommitPeerInboxSemantic(context.Background(), fixture.spec,
-			fixture.committedAt.Add(time.Hour))
-		if err != nil || replay.Changed() || !replay.Replayed() ||
-			replay.Decision().String() != result.Decision().String() ||
-			replay.Status() != model.InboxAccepted {
-			t.Fatalf("restart exact replay = (%#v,%v)", replay, err)
-		}
-		afterHandling, _ := readAgentHandling(context.Background(), restarted.db,
-			fixture.handling.ID())
-		afterRun, _ := readAgentRun(context.Background(), restarted.db, fixture.agent.Run.ID())
-		afterOperation, _ := readOperationByID(context.Background(), restarted.db,
-			fixture.operation.ID())
-		afterWork, _ := readReviewWork(context.Background(), restarted.db, fixture.work.Ref())
-		if !sameHandling(beforeHandling, afterHandling) ||
-			beforeRun.Status() != afterRun.Status() || beforeRun.Runtime() != afterRun.Runtime() ||
-			peerInboxSemanticAgentRunOutcome(beforeRun) != peerInboxSemanticAgentRunOutcome(afterRun) ||
-			beforeOperation.Status() != afterOperation.Status() ||
-			peerInboxSemanticOperationResult(beforeOperation) != peerInboxSemanticOperationResult(afterOperation) ||
-			beforeWork.Version() != afterWork.Version() || beforeWork.State() != afterWork.State() ||
-			beforeWork.UpdatedBy() != afterWork.UpdatedBy() ||
-			!beforeWork.UpdatedAt().Equal(afterWork.UpdatedAt()) {
-			t.Fatal("restart replay rewrote settlement, Work, Run, or Operation evidence")
-		}
-		assertPeerInboxSemanticSettlementTransitionCount(t, restarted, 0)
+		assertPeerInboxSemanticAuthorityUpgradeReplay(t, fixture, result)
 	})
-
 	t.Run("terminal failure rolls back every domain effect", func(t *testing.T) {
 		fixture := newPeerInboxSemanticSettlementCommitFixture(t, "public-rollback")
 		mustExec(t, fixture.store, `CREATE TEMP TRIGGER reject_semantic_settlement_terminal
@@ -353,7 +285,6 @@ func TestCommitPeerInboxSemanticSettlesClaimedHandlingAtomicallyAndReplays(t *te
 			fixture.committedAt); err == nil {
 			t.Fatal("injected semantic terminal failure was accepted")
 		}
-
 		assertPeerInboxSemanticState(t, fixture.store, fixture.inboxID, "processing",
 			fixture.semantic.Fence().Attempt(), "", true)
 		assertPeerInboxSemanticTransitionReceipt(t, fixture.store, fixture.inboxID, "renew",
@@ -392,6 +323,74 @@ func TestCommitPeerInboxSemanticSettlesClaimedHandlingAtomicallyAndReplays(t *te
 				work, workErr, handling, handlingErr, run, runErr, operation, operationErr)
 		}
 	})
+}
+
+func assertPeerInboxSemanticAuthorityUpgradeReplay(t *testing.T, fixture *peerInboxSemanticSettlementCommitFixture, result PeerInboxSemanticCommitResult) {
+	t.Helper()
+	beforeHandling, _ := readAgentHandling(context.Background(), fixture.store.db, fixture.handling.ID())
+	beforeRun, _ := readAgentRun(context.Background(), fixture.store.db, fixture.agent.Run.ID())
+	beforeOperation, _ := readOperationByID(context.Background(), fixture.store.db, fixture.operation.ID())
+	beforeWork, _ := readReviewWork(context.Background(), fixture.store.db, fixture.work.Ref())
+	switchAt := fixture.committedAt.Add(time.Second)
+	deactivated, err := fixture.store.DeactivateProfile(context.Background(), fixture.profile, switchAt)
+	if err != nil {
+		t.Fatalf("deactivate Profile after settlement: %v", err)
+	}
+	desiredSpec := deactivated.Profile.Spec()
+	desiredSpec.ActiveAssetRevision = model.Sum([]byte("committed settlement assets")).String()
+	desiredSpec.Enabled = true
+	desired, err := model.NewProfile(desiredSpec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	activated, err := fixture.store.ActivateProfile(
+		context.Background(), desired, deactivated.Profile.UpdatedAt(), switchAt.Add(time.Nanosecond))
+	if err != nil || activated.Profile.Runtime() != model.RuntimeCodexAppServer {
+		t.Fatalf("upgrade Profile authority after commit = (%#v,%v)", activated, err)
+	}
+	if beforeRun.Runtime() != model.RuntimeCodexAppServer {
+		t.Fatalf("historical AgentRun runtime = %s", beforeRun.Runtime())
+	}
+	path := fixture.store.Path()
+	if err := fixture.store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	fixture.store, fixture.peer.store = nil, nil
+	restarted, err := OpenExisting(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = restarted.Close() })
+	replay, err := restarted.CommitPeerInboxSemantic(context.Background(), fixture.spec, fixture.committedAt.Add(time.Hour))
+	if err != nil || replay.Changed() || !replay.Replayed() ||
+		replay.Decision().String() != result.Decision().String() ||
+		replay.Status() != model.InboxAccepted {
+		t.Fatalf("restart exact replay = (%#v,%v)", replay, err)
+	}
+	assertPeerInboxSemanticRestartEvidence(t, fixture, restarted,
+		beforeHandling, beforeRun, beforeOperation, beforeWork)
+	assertPeerInboxSemanticSettlementTransitionCount(t, restarted, 0)
+}
+
+func assertPeerInboxSemanticRestartEvidence(t *testing.T, fixture *peerInboxSemanticSettlementCommitFixture,
+	restarted *Store, beforeHandling model.Handling, beforeRun model.AgentRun,
+	beforeOperation model.Operation, beforeWork model.ReviewWork,
+) {
+	t.Helper()
+	afterHandling, _ := readAgentHandling(context.Background(), restarted.db, fixture.handling.ID())
+	afterRun, _ := readAgentRun(context.Background(), restarted.db, fixture.agent.Run.ID())
+	afterOperation, _ := readOperationByID(context.Background(), restarted.db, fixture.operation.ID())
+	afterWork, _ := readReviewWork(context.Background(), restarted.db, fixture.work.Ref())
+	if !sameHandling(beforeHandling, afterHandling) ||
+		beforeRun.Status() != afterRun.Status() || beforeRun.Runtime() != afterRun.Runtime() ||
+		peerInboxSemanticAgentRunOutcome(beforeRun) != peerInboxSemanticAgentRunOutcome(afterRun) ||
+		beforeOperation.Status() != afterOperation.Status() ||
+		peerInboxSemanticOperationResult(beforeOperation) != peerInboxSemanticOperationResult(afterOperation) ||
+		beforeWork.Version() != afterWork.Version() || beforeWork.State() != afterWork.State() ||
+		beforeWork.UpdatedBy() != afterWork.UpdatedBy() ||
+		!beforeWork.UpdatedAt().Equal(afterWork.UpdatedAt()) {
+		t.Fatal("restart replay rewrote settlement, Work, Run, or Operation evidence")
+	}
 }
 
 func TestPeerInboxSemanticHandlingSettlementFailsClosedWithoutPartialMutation(t *testing.T) {
