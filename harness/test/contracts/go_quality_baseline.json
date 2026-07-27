@@ -39,20 +39,6 @@
   "entries": [
     {
       "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/cmd/mnemond/main.go::runWithNode",
-      "path": "harness/cmd/mnemond/main.go",
-      "symbol": "runWithNode",
-      "ceiling": 60
-    },
-    {
-      "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/agent/artifact_capture.go::(*ArtifactCaptureCoordinator).Checkpoint",
-      "path": "harness/internal/agent/artifact_capture.go",
-      "symbol": "(*ArtifactCaptureCoordinator).Checkpoint",
-      "ceiling": 38
-    },
-    {
-      "rule": "cognitive_complexity",
       "identity": "cognitive_complexity:harness/internal/agent/artifact_resolver.go::(*ArtifactResolver).Coordinate",
       "path": "harness/internal/agent/artifact_resolver.go",
       "symbol": "(*ArtifactResolver).Coordinate",
@@ -147,7 +133,7 @@
       "identity": "cognitive_complexity:harness/internal/agent/executor.go::(*TeamworkActionExecutor).ExecuteTeamwork",
       "path": "harness/internal/agent/executor.go",
       "symbol": "(*TeamworkActionExecutor).ExecuteTeamwork",
-      "ceiling": 29
+      "ceiling": 28
     },
     {
       "rule": "cognitive_complexity",
@@ -161,7 +147,7 @@
       "identity": "cognitive_complexity:harness/internal/agent/executor.go::decodeCommittedTeamworkReceipt",
       "path": "harness/internal/agent/executor.go",
       "symbol": "decodeCommittedTeamworkReceipt",
-      "ceiling": 62
+      "ceiling": 57
     },
     {
       "rule": "cognitive_complexity",
@@ -221,13 +207,6 @@
     },
     {
       "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/artifact/capture.go::(*CAS).VerifyClosure",
-      "path": "harness/internal/artifact/capture.go",
-      "symbol": "(*CAS).VerifyClosure",
-      "ceiling": 57
-    },
-    {
-      "rule": "cognitive_complexity",
       "identity": "cognitive_complexity:harness/internal/artifact/capture.go::(*Capturer).Capture",
       "path": "harness/internal/artifact/capture.go",
       "symbol": "(*Capturer).Capture",
@@ -256,31 +235,10 @@
     },
     {
       "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/artifact/cas.go::(*CAS).ListTombstones",
-      "path": "harness/internal/artifact/cas.go",
-      "symbol": "(*CAS).ListTombstones",
-      "ceiling": 28
-    },
-    {
-      "rule": "cognitive_complexity",
       "identity": "cognitive_complexity:harness/internal/artifact/cas.go::(*CAS).PruneTempsBefore",
       "path": "harness/internal/artifact/cas.go",
       "symbol": "(*CAS).PruneTempsBefore",
-      "ceiling": 63
-    },
-    {
-      "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/artifact/cas.go::(*CAS).Tombstone",
-      "path": "harness/internal/artifact/cas.go",
-      "symbol": "(*CAS).Tombstone",
-      "ceiling": 36
-    },
-    {
-      "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/artifact/cas.go::(*CAS).inspectTombstoneLocked",
-      "path": "harness/internal/artifact/cas.go",
-      "symbol": "(*CAS).inspectTombstoneLocked",
-      "ceiling": 36
+      "ceiling": 50
     },
     {
       "rule": "cognitive_complexity",
@@ -295,62 +253,6 @@
       "path": "harness/internal/artifact/cas.go",
       "symbol": "(*CAS).recoverPromotedTemp",
       "ceiling": 43
-    },
-    {
-      "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/artifact/cas.go::(*CAS).scanObjectShard",
-      "path": "harness/internal/artifact/cas.go",
-      "symbol": "(*CAS).scanObjectShard",
-      "ceiling": 39
-    },
-    {
-      "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/artifact/cas.go::(*CAS).validateObjectRootLayout",
-      "path": "harness/internal/artifact/cas.go",
-      "symbol": "(*CAS).validateObjectRootLayout",
-      "ceiling": 40
-    },
-    {
-      "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/artifact/cas_test.go::TestCASObjectPaginationAdvancesPastProtectedPrefixAndRestarts",
-      "path": "harness/internal/artifact/cas_test.go",
-      "symbol": "TestCASObjectPaginationAdvancesPastProtectedPrefixAndRestarts",
-      "ceiling": 50
-    },
-    {
-      "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/artifact/cas_test.go::TestCASObjectPaginationFreezesStrictCutoffAcrossNewWrites",
-      "path": "harness/internal/artifact/cas_test.go",
-      "symbol": "TestCASObjectPaginationFreezesStrictCutoffAcrossNewWrites",
-      "ceiling": 26
-    },
-    {
-      "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/artifact/cas_test.go::TestCASTombstoneCrashStatesReplayAndBoundedListing",
-      "path": "harness/internal/artifact/cas_test.go",
-      "symbol": "TestCASTombstoneCrashStatesReplayAndBoundedListing",
-      "ceiling": 30
-    },
-    {
-      "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/artifact/gc.go::(*GCWorker).processQueueItem",
-      "path": "harness/internal/artifact/gc.go",
-      "symbol": "(*GCWorker).processQueueItem",
-      "ceiling": 54
-    },
-    {
-      "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/artifact/gc.go::(*GCWorker).reconcileBatch",
-      "path": "harness/internal/artifact/gc.go",
-      "symbol": "(*GCWorker).reconcileBatch",
-      "ceiling": 42
-    },
-    {
-      "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/artifact/gc.go::(*GCWorker).runCycle",
-      "path": "harness/internal/artifact/gc.go",
-      "symbol": "(*GCWorker).runCycle",
-      "ceiling": 29
     },
     {
       "rule": "cognitive_complexity",
@@ -386,13 +288,6 @@
       "path": "harness/internal/assets/bundle.go",
       "symbol": "Load",
       "ceiling": 32
-    },
-    {
-      "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/assets/bundle.go::validateManifest",
-      "path": "harness/internal/assets/bundle.go",
-      "symbol": "validateManifest",
-      "ceiling": 27
     },
     {
       "rule": "cognitive_complexity",
@@ -434,7 +329,7 @@
       "identity": "cognitive_complexity:harness/internal/cli/setup.go::(*setupApp).executeLocked",
       "path": "harness/internal/cli/setup.go",
       "symbol": "(*setupApp).executeLocked",
-      "ceiling": 51
+      "ceiling": 40
     },
     {
       "rule": "cognitive_complexity",
@@ -470,13 +365,6 @@
       "path": "harness/internal/integration/projection_test.go",
       "symbol": "TestInstallHostProjectionUsesFrozenPathsAndPreservesAdjacentConfiguration.$func-d517570f357e68cb15925473-2b9ea70039911b9e365d52dd-cy22-co26-li51-st43-ne3-001",
       "ceiling": 26
-    },
-    {
-      "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/localapi/client.go::validateOperationResponse",
-      "path": "harness/internal/localapi/client.go",
-      "symbol": "validateOperationResponse",
-      "ceiling": 27
     },
     {
       "rule": "cognitive_complexity",
@@ -701,13 +589,6 @@
       "path": "harness/internal/peer/artifact_receiver.go",
       "symbol": "(*ArtifactReceiver).materializeBlocks",
       "ceiling": 36
-    },
-    {
-      "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/peer/artifact_receiver.go::(*ArtifactReceiver).receiveClaim",
-      "path": "harness/internal/peer/artifact_receiver.go",
-      "symbol": "(*ArtifactReceiver).receiveClaim",
-      "ceiling": 39
     },
     {
       "rule": "cognitive_complexity",
@@ -970,24 +851,10 @@
     },
     {
       "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/store/artifact.go::(*Store).CheckpointVerifiedArtifactRoot",
-      "path": "harness/internal/store/artifact.go",
-      "symbol": "(*Store).CheckpointVerifiedArtifactRoot",
-      "ceiling": 29
-    },
-    {
-      "rule": "cognitive_complexity",
       "identity": "cognitive_complexity:harness/internal/store/artifact.go::insertArtifactProvenance",
       "path": "harness/internal/store/artifact.go",
       "symbol": "insertArtifactProvenance",
-      "ceiling": 49
-    },
-    {
-      "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/store/artifact_closure.go::(*Store).CheckpointVerifiedArtifactClosure",
-      "path": "harness/internal/store/artifact_closure.go",
-      "symbol": "(*Store).CheckpointVerifiedArtifactClosure",
-      "ceiling": 41
+      "ceiling": 38
     },
     {
       "rule": "cognitive_complexity",
@@ -1005,83 +872,6 @@
     },
     {
       "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/store/artifact_gc.go::(*Store).CompleteArtifactGC",
-      "path": "harness/internal/store/artifact_gc.go",
-      "symbol": "(*Store).CompleteArtifactGC",
-      "ceiling": 27
-    },
-    {
-      "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/store/artifact_gc.go::(*Store).OpenArtifactGCScan",
-      "path": "harness/internal/store/artifact_gc.go",
-      "symbol": "(*Store).OpenArtifactGCScan",
-      "ceiling": 29
-    },
-    {
-      "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/store/artifact_gc.go::(*Store).OpenArtifactGCStagingScan",
-      "path": "harness/internal/store/artifact_gc.go",
-      "symbol": "(*Store).OpenArtifactGCStagingScan",
-      "ceiling": 31
-    },
-    {
-      "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/store/artifact_gc.go::(*Store).PrepareArtifactGC",
-      "path": "harness/internal/store/artifact_gc.go",
-      "symbol": "(*Store).PrepareArtifactGC",
-      "ceiling": 44
-    },
-    {
-      "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/store/artifact_gc.go::(*Store).SweepArtifactGCStaging",
-      "path": "harness/internal/store/artifact_gc.go",
-      "symbol": "(*Store).SweepArtifactGCStaging",
-      "ceiling": 60
-    },
-    {
-      "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/store/artifact_gc.go::artifactGCRootOwned",
-      "path": "harness/internal/store/artifact_gc.go",
-      "symbol": "artifactGCRootOwned",
-      "ceiling": 38
-    },
-    {
-      "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/store/artifact_gc.go::readArtifactGCPrepareReceipt",
-      "path": "harness/internal/store/artifact_gc.go",
-      "symbol": "readArtifactGCPrepareReceipt",
-      "ceiling": 27
-    },
-    {
-      "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/store/artifact_gc.go::readArtifactGCStagingReceipt",
-      "path": "harness/internal/store/artifact_gc.go",
-      "symbol": "readArtifactGCStagingReceipt",
-      "ceiling": 28
-    },
-    {
-      "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/store/artifact_gc.go::validateArtifactGCPrepareSpec",
-      "path": "harness/internal/store/artifact_gc.go",
-      "symbol": "validateArtifactGCPrepareSpec",
-      "ceiling": 28
-    },
-    {
-      "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/store/artifact_gc_test.go::TestArtifactGCScanPrepareCursorQueueAndResponseReplay",
-      "path": "harness/internal/store/artifact_gc_test.go",
-      "symbol": "TestArtifactGCScanPrepareCursorQueueAndResponseReplay",
-      "ceiling": 65
-    },
-    {
-      "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/store/artifact_gc_test.go::TestArtifactGCStagingCursorMakesProtectedPrefixAndLargeRootLive.$func-03e26caaa68f9bc5fdda552e-6bf96358463f4aae54630181-cy25-co26-li54-st46-ne2-001",
-      "path": "harness/internal/store/artifact_gc_test.go",
-      "symbol": "TestArtifactGCStagingCursorMakesProtectedPrefixAndLargeRootLive.$func-03e26caaa68f9bc5fdda552e-6bf96358463f4aae54630181-cy25-co26-li54-st46-ne2-001",
-      "ceiling": 26
-    },
-    {
-      "rule": "cognitive_complexity",
       "identity": "cognitive_complexity:harness/internal/store/artifact_source.go::authorizeArtifactSourceRoot",
       "path": "harness/internal/store/artifact_source.go",
       "symbol": "authorizeArtifactSourceRoot",
@@ -1092,7 +882,7 @@
       "identity": "cognitive_complexity:harness/internal/store/artifact_test.go::TestArtifactPinsAndLocalReplicaProvenance",
       "path": "harness/internal/store/artifact_test.go",
       "symbol": "TestArtifactPinsAndLocalReplicaProvenance",
-      "ceiling": 33
+      "ceiling": 31
     },
     {
       "rule": "cognitive_complexity",
@@ -1128,20 +918,6 @@
       "path": "harness/internal/store/channel_invite.go",
       "symbol": "(*Store).CloseChannelInvite",
       "ceiling": 26
-    },
-    {
-      "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/store/channel_invite.go::(*Store).RotateChannelInvite",
-      "path": "harness/internal/store/channel_invite.go",
-      "symbol": "(*Store).RotateChannelInvite",
-      "ceiling": 48
-    },
-    {
-      "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/store/channel_invite.go::verifyOwnedChannelEnrollmentLedger",
-      "path": "harness/internal/store/channel_invite.go",
-      "symbol": "verifyOwnedChannelEnrollmentLedger",
-      "ceiling": 93
     },
     {
       "rule": "cognitive_complexity",
@@ -1208,13 +984,6 @@
     },
     {
       "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/store/gossip_publication.go::(*Store).ClaimGossipPublication",
-      "path": "harness/internal/store/gossip_publication.go",
-      "symbol": "(*Store).ClaimGossipPublication",
-      "ceiling": 32
-    },
-    {
-      "rule": "cognitive_complexity",
       "identity": "cognitive_complexity:harness/internal/store/gossip_publication.go::readGossipPublication",
       "path": "harness/internal/store/gossip_publication.go",
       "symbol": "readGossipPublication",
@@ -1243,13 +1012,6 @@
     },
     {
       "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/store/local_accept_validation.go::validateAcceptanceArtifacts",
-      "path": "harness/internal/store/local_accept_validation.go",
-      "symbol": "validateAcceptanceArtifacts",
-      "ceiling": 67
-    },
-    {
-      "rule": "cognitive_complexity",
       "identity": "cognitive_complexity:harness/internal/store/managed_operation.go::(*Store).ReserveManagedOperation",
       "path": "harness/internal/store/managed_operation.go",
       "symbol": "(*Store).ReserveManagedOperation",
@@ -1267,13 +1029,6 @@
       "identity": "cognitive_complexity:harness/internal/store/managed_resolution.go::validateManagedRetryHistory",
       "path": "harness/internal/store/managed_resolution.go",
       "symbol": "validateManagedRetryHistory",
-      "ceiling": 30
-    },
-    {
-      "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/store/operation.go::(*Store).CheckpointOperationCapture",
-      "path": "harness/internal/store/operation.go",
-      "symbol": "(*Store).CheckpointOperationCapture",
       "ceiling": 30
     },
     {
@@ -1323,7 +1078,7 @@
       "identity": "cognitive_complexity:harness/internal/store/peer_inbox_artifact.go::(*Store).MarkPeerInboxArtifactReady",
       "path": "harness/internal/store/peer_inbox_artifact.go",
       "symbol": "(*Store).MarkPeerInboxArtifactReady",
-      "ceiling": 46
+      "ceiling": 30
     },
     {
       "rule": "cognitive_complexity",
@@ -1341,20 +1096,6 @@
     },
     {
       "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/store/peer_inbox_artifact.go::(*Store).StagePeerInboxArtifactClosure",
-      "path": "harness/internal/store/peer_inbox_artifact.go",
-      "symbol": "(*Store).StagePeerInboxArtifactClosure",
-      "ceiling": 41
-    },
-    {
-      "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/store/peer_inbox_artifact.go::readPeerInboxArtifactRow",
-      "path": "harness/internal/store/peer_inbox_artifact.go",
-      "symbol": "readPeerInboxArtifactRow",
-      "ceiling": 53
-    },
-    {
-      "rule": "cognitive_complexity",
       "identity": "cognitive_complexity:harness/internal/store/peer_inbox_artifact.go::requirePromotablePeerInboxArtifactClosures",
       "path": "harness/internal/store/peer_inbox_artifact.go",
       "symbol": "requirePromotablePeerInboxArtifactClosures",
@@ -1365,7 +1106,7 @@
       "identity": "cognitive_complexity:harness/internal/store/peer_inbox_artifact_test.go::TestReadPeerInboxArtifactRootClosesCacheProbe",
       "path": "harness/internal/store/peer_inbox_artifact_test.go",
       "symbol": "TestReadPeerInboxArtifactRootClosesCacheProbe",
-      "ceiling": 30
+      "ceiling": 29
     },
     {
       "rule": "cognitive_complexity",
@@ -1393,7 +1134,7 @@
       "identity": "cognitive_complexity:harness/internal/store/peer_inbox_semantic_commit.go::(*Store).CommitPeerInboxSemantic",
       "path": "harness/internal/store/peer_inbox_semantic_commit.go",
       "symbol": "(*Store).CommitPeerInboxSemantic",
-      "ceiling": 54
+      "ceiling": 52
     },
     {
       "rule": "cognitive_complexity",
@@ -1428,7 +1169,7 @@
       "identity": "cognitive_complexity:harness/internal/store/peer_inbox_semantic_commit_test.go::TestCommitPeerInboxSemanticDeliveryReadyPreservesMixedArtifactsAcrossReplay",
       "path": "harness/internal/store/peer_inbox_semantic_commit_test.go",
       "symbol": "TestCommitPeerInboxSemanticDeliveryReadyPreservesMixedArtifactsAcrossReplay",
-      "ceiling": 61
+      "ceiling": 59
     },
     {
       "rule": "cognitive_complexity",
@@ -1471,13 +1212,6 @@
       "path": "harness/internal/store/peer_inbox_semantic_settlement.go",
       "symbol": "validatePeerInboxSemanticTerminalRunOperations",
       "ceiling": 28
-    },
-    {
-      "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/store/peer_inbox_semantic_settlement_test.go::TestCommitPeerInboxSemanticSettlesClaimedHandlingAtomicallyAndReplays.$func-a6c875eaf0d9fe68a5e1a16c-1bac62f344105f7e7bcf7b2e-cy34-co33-li75-st53-ne1-001",
-      "path": "harness/internal/store/peer_inbox_semantic_settlement_test.go",
-      "symbol": "TestCommitPeerInboxSemanticSettlesClaimedHandlingAtomicallyAndReplays.$func-a6c875eaf0d9fe68a5e1a16c-1bac62f344105f7e7bcf7b2e-cy34-co33-li75-st53-ne1-001",
-      "ceiling": 33
     },
     {
       "rule": "cognitive_complexity",
@@ -1621,20 +1355,6 @@
     },
     {
       "rule": "control_flow_nesting",
-      "identity": "control_flow_nesting:harness/internal/artifact/cas.go::(*CAS).validateObjectRootLayout",
-      "path": "harness/internal/artifact/cas.go",
-      "symbol": "(*CAS).validateObjectRootLayout",
-      "ceiling": 5
-    },
-    {
-      "rule": "control_flow_nesting",
-      "identity": "control_flow_nesting:harness/internal/artifact/gc.go::(*GCWorker).processQueueItem",
-      "path": "harness/internal/artifact/gc.go",
-      "symbol": "(*GCWorker).processQueueItem",
-      "ceiling": 5
-    },
-    {
-      "rule": "control_flow_nesting",
       "identity": "control_flow_nesting:harness/internal/artifact/import.go::BuildImportedClosure",
       "path": "harness/internal/artifact/import.go",
       "symbol": "BuildImportedClosure",
@@ -1667,27 +1387,6 @@
       "path": "harness/internal/peer/artifact_client.go",
       "symbol": "(*ArtifactClient).exchange",
       "ceiling": 5
-    },
-    {
-      "rule": "control_flow_nesting",
-      "identity": "control_flow_nesting:harness/internal/store/local_accept_validation.go::validateAcceptanceArtifacts",
-      "path": "harness/internal/store/local_accept_validation.go",
-      "symbol": "validateAcceptanceArtifacts",
-      "ceiling": 5
-    },
-    {
-      "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/cmd/mnemond/main.go::runWithNode",
-      "path": "harness/cmd/mnemond/main.go",
-      "symbol": "runWithNode",
-      "ceiling": 33
-    },
-    {
-      "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/agent/artifact_capture.go::(*ArtifactCaptureCoordinator).Checkpoint",
-      "path": "harness/internal/agent/artifact_capture.go",
-      "symbol": "(*ArtifactCaptureCoordinator).Checkpoint",
-      "ceiling": 28
     },
     {
       "rule": "cyclomatic_complexity",
@@ -1771,7 +1470,7 @@
       "identity": "cyclomatic_complexity:harness/internal/agent/executor.go::(*TeamworkActionExecutor).ExecuteTeamwork",
       "path": "harness/internal/agent/executor.go",
       "symbol": "(*TeamworkActionExecutor).ExecuteTeamwork",
-      "ceiling": 26
+      "ceiling": 25
     },
     {
       "rule": "cyclomatic_complexity",
@@ -1785,7 +1484,7 @@
       "identity": "cyclomatic_complexity:harness/internal/agent/executor.go::decodeCommittedTeamworkReceipt",
       "path": "harness/internal/agent/executor.go",
       "symbol": "decodeCommittedTeamworkReceipt",
-      "ceiling": 43
+      "ceiling": 39
     },
     {
       "rule": "cyclomatic_complexity",
@@ -1859,13 +1558,6 @@
     },
     {
       "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/artifact/capture.go::(*CAS).VerifyClosure",
-      "path": "harness/internal/artifact/capture.go",
-      "symbol": "(*CAS).VerifyClosure",
-      "ceiling": 42
-    },
-    {
-      "rule": "cyclomatic_complexity",
       "identity": "cyclomatic_complexity:harness/internal/artifact/capture.go::(*Capturer).Capture",
       "path": "harness/internal/artifact/capture.go",
       "symbol": "(*Capturer).Capture",
@@ -1897,21 +1589,7 @@
       "identity": "cyclomatic_complexity:harness/internal/artifact/cas.go::(*CAS).PruneTempsBefore",
       "path": "harness/internal/artifact/cas.go",
       "symbol": "(*CAS).PruneTempsBefore",
-      "ceiling": 32
-    },
-    {
-      "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/artifact/cas.go::(*CAS).Tombstone",
-      "path": "harness/internal/artifact/cas.go",
-      "symbol": "(*CAS).Tombstone",
-      "ceiling": 22
-    },
-    {
-      "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/artifact/cas.go::(*CAS).inspectTombstoneLocked",
-      "path": "harness/internal/artifact/cas.go",
-      "symbol": "(*CAS).inspectTombstoneLocked",
-      "ceiling": 23
+      "ceiling": 30
     },
     {
       "rule": "cyclomatic_complexity",
@@ -1929,73 +1607,10 @@
     },
     {
       "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/artifact/cas.go::(*CAS).scanObjectShard",
-      "path": "harness/internal/artifact/cas.go",
-      "symbol": "(*CAS).scanObjectShard",
-      "ceiling": 25
-    },
-    {
-      "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/artifact/cas.go::(*CAS).validateObjectRootLayout",
-      "path": "harness/internal/artifact/cas.go",
-      "symbol": "(*CAS).validateObjectRootLayout",
-      "ceiling": 25
-    },
-    {
-      "rule": "cyclomatic_complexity",
       "identity": "cyclomatic_complexity:harness/internal/artifact/cas.go::readCASRegularBytes",
       "path": "harness/internal/artifact/cas.go",
       "symbol": "readCASRegularBytes",
       "ceiling": 21
-    },
-    {
-      "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/artifact/cas_test.go::TestCASObjectListingIsStrictBoundedAndCanonical",
-      "path": "harness/internal/artifact/cas_test.go",
-      "symbol": "TestCASObjectListingIsStrictBoundedAndCanonical",
-      "ceiling": 21
-    },
-    {
-      "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/artifact/cas_test.go::TestCASObjectPaginationAdvancesPastProtectedPrefixAndRestarts",
-      "path": "harness/internal/artifact/cas_test.go",
-      "symbol": "TestCASObjectPaginationAdvancesPastProtectedPrefixAndRestarts",
-      "ceiling": 31
-    },
-    {
-      "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/artifact/cas_test.go::TestCASTombstoneCrashStatesReplayAndBoundedListing",
-      "path": "harness/internal/artifact/cas_test.go",
-      "symbol": "TestCASTombstoneCrashStatesReplayAndBoundedListing",
-      "ceiling": 28
-    },
-    {
-      "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/artifact/gc.go::(*GCWorker).processQueueItem",
-      "path": "harness/internal/artifact/gc.go",
-      "symbol": "(*GCWorker).processQueueItem",
-      "ceiling": 33
-    },
-    {
-      "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/artifact/gc.go::(*GCWorker).reconcileBatch",
-      "path": "harness/internal/artifact/gc.go",
-      "symbol": "(*GCWorker).reconcileBatch",
-      "ceiling": 32
-    },
-    {
-      "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/artifact/gc.go::(*GCWorker).runCycle",
-      "path": "harness/internal/artifact/gc.go",
-      "symbol": "(*GCWorker).runCycle",
-      "ceiling": 28
-    },
-    {
-      "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/artifact/gc.go::validateGCPrepareResult",
-      "path": "harness/internal/artifact/gc.go",
-      "symbol": "validateGCPrepareResult",
-      "ceiling": 24
     },
     {
       "rule": "cyclomatic_complexity",
@@ -2024,13 +1639,6 @@
       "path": "harness/internal/artifact/view.go",
       "symbol": "readViewReceipt",
       "ceiling": 25
-    },
-    {
-      "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/assets/bundle.go::validateManifest",
-      "path": "harness/internal/assets/bundle.go",
-      "symbol": "validateManifest",
-      "ceiling": 22
     },
     {
       "rule": "cyclomatic_complexity",
@@ -2072,14 +1680,7 @@
       "identity": "cyclomatic_complexity:harness/internal/cli/setup.go::(*setupApp).executeLocked",
       "path": "harness/internal/cli/setup.go",
       "symbol": "(*setupApp).executeLocked",
-      "ceiling": 37
-    },
-    {
-      "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/cli/setup.go::validSetupDependencies",
-      "path": "harness/internal/cli/setup.go",
-      "symbol": "validSetupDependencies",
-      "ceiling": 22
+      "ceiling": 31
     },
     {
       "rule": "cyclomatic_complexity",
@@ -2125,24 +1726,10 @@
     },
     {
       "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/localapi/auth.go::authenticateRequest",
-      "path": "harness/internal/localapi/auth.go",
-      "symbol": "authenticateRequest",
-      "ceiling": 25
-    },
-    {
-      "rule": "cyclomatic_complexity",
       "identity": "cyclomatic_complexity:harness/internal/localapi/client.go::(*Client).send",
       "path": "harness/internal/localapi/client.go",
       "symbol": "(*Client).send",
       "ceiling": 21
-    },
-    {
-      "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/localapi/client.go::validateOperationResponse",
-      "path": "harness/internal/localapi/client.go",
-      "symbol": "validateOperationResponse",
-      "ceiling": 27
     },
     {
       "rule": "cyclomatic_complexity",
@@ -2475,13 +2062,6 @@
     },
     {
       "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/peer/artifact_receiver.go::(*ArtifactReceiver).receiveClaim",
-      "path": "harness/internal/peer/artifact_receiver.go",
-      "symbol": "(*ArtifactReceiver).receiveClaim",
-      "ceiling": 29
-    },
-    {
-      "rule": "cyclomatic_complexity",
       "identity": "cyclomatic_complexity:harness/internal/peer/artifact_receiver.go::(*ArtifactReceiver).settleFailure",
       "path": "harness/internal/peer/artifact_receiver.go",
       "symbol": "(*ArtifactReceiver).settleFailure",
@@ -2605,13 +2185,6 @@
       "path": "harness/internal/peer/event_repair_test.go",
       "symbol": "TestEventRepairRemoteFailureMatrix.$func-d517570f357e68cb15925473-af3de957ec65044a487be8b8-cy21-co23-li33-st31-ne3-001",
       "ceiling": 21
-    },
-    {
-      "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/peer/event_server.go::validateEventSourcePage",
-      "path": "harness/internal/peer/event_server.go",
-      "symbol": "validateEventSourcePage",
-      "ceiling": 24
     },
     {
       "rule": "cyclomatic_complexity",
@@ -2884,13 +2457,6 @@
       "identity": "cyclomatic_complexity:harness/internal/store/artifact.go::insertArtifactProvenance",
       "path": "harness/internal/store/artifact.go",
       "symbol": "insertArtifactProvenance",
-      "ceiling": 40
-    },
-    {
-      "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/store/artifact_closure.go::(*Store).CheckpointVerifiedArtifactClosure",
-      "path": "harness/internal/store/artifact_closure.go",
-      "symbol": "(*Store).CheckpointVerifiedArtifactClosure",
       "ceiling": 30
     },
     {
@@ -2899,83 +2465,6 @@
       "path": "harness/internal/store/artifact_closure.go",
       "symbol": "validateVerifiedArtifactClosure",
       "ceiling": 49
-    },
-    {
-      "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/store/artifact_gc.go::(*Store).CompleteArtifactGC",
-      "path": "harness/internal/store/artifact_gc.go",
-      "symbol": "(*Store).CompleteArtifactGC",
-      "ceiling": 25
-    },
-    {
-      "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/store/artifact_gc.go::(*Store).MarkArtifactGCRenamed",
-      "path": "harness/internal/store/artifact_gc.go",
-      "symbol": "(*Store).MarkArtifactGCRenamed",
-      "ceiling": 22
-    },
-    {
-      "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/store/artifact_gc.go::(*Store).OpenArtifactGCStagingScan",
-      "path": "harness/internal/store/artifact_gc.go",
-      "symbol": "(*Store).OpenArtifactGCStagingScan",
-      "ceiling": 22
-    },
-    {
-      "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/store/artifact_gc.go::(*Store).PrepareArtifactGC",
-      "path": "harness/internal/store/artifact_gc.go",
-      "symbol": "(*Store).PrepareArtifactGC",
-      "ceiling": 33
-    },
-    {
-      "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/store/artifact_gc.go::(*Store).SweepArtifactGCStaging",
-      "path": "harness/internal/store/artifact_gc.go",
-      "symbol": "(*Store).SweepArtifactGCStaging",
-      "ceiling": 43
-    },
-    {
-      "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/store/artifact_gc.go::readArtifactGCPrepareReceipt",
-      "path": "harness/internal/store/artifact_gc.go",
-      "symbol": "readArtifactGCPrepareReceipt",
-      "ceiling": 28
-    },
-    {
-      "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/store/artifact_gc.go::readArtifactGCStagingReceipt",
-      "path": "harness/internal/store/artifact_gc.go",
-      "symbol": "readArtifactGCStagingReceipt",
-      "ceiling": 29
-    },
-    {
-      "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/store/artifact_gc.go::scanArtifactGCQueue",
-      "path": "harness/internal/store/artifact_gc.go",
-      "symbol": "scanArtifactGCQueue",
-      "ceiling": 22
-    },
-    {
-      "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/store/artifact_gc.go::validateArtifactGCPrepareSpec",
-      "path": "harness/internal/store/artifact_gc.go",
-      "symbol": "validateArtifactGCPrepareSpec",
-      "ceiling": 27
-    },
-    {
-      "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/store/artifact_gc_test.go::TestArtifactGCScanPrepareCursorQueueAndResponseReplay",
-      "path": "harness/internal/store/artifact_gc_test.go",
-      "symbol": "TestArtifactGCScanPrepareCursorQueueAndResponseReplay",
-      "ceiling": 64
-    },
-    {
-      "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/store/artifact_gc_test.go::TestArtifactGCStagingCursorMakesProtectedPrefixAndLargeRootLive.$func-03e26caaa68f9bc5fdda552e-6bf96358463f4aae54630181-cy25-co26-li54-st46-ne2-001",
-      "path": "harness/internal/store/artifact_gc_test.go",
-      "symbol": "TestArtifactGCStagingCursorMakesProtectedPrefixAndLargeRootLive.$func-03e26caaa68f9bc5fdda552e-6bf96358463f4aae54630181-cy25-co26-li54-st46-ne2-001",
-      "ceiling": 25
     },
     {
       "rule": "cyclomatic_complexity",
@@ -2989,7 +2478,7 @@
       "identity": "cyclomatic_complexity:harness/internal/store/artifact_test.go::TestArtifactPinsAndLocalReplicaProvenance",
       "path": "harness/internal/store/artifact_test.go",
       "symbol": "TestArtifactPinsAndLocalReplicaProvenance",
-      "ceiling": 34
+      "ceiling": 32
     },
     {
       "rule": "cyclomatic_complexity",
@@ -3039,20 +2528,6 @@
       "path": "harness/internal/store/channel_invite.go",
       "symbol": "(*Store).CloseChannelInvite",
       "ceiling": 26
-    },
-    {
-      "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/store/channel_invite.go::(*Store).RotateChannelInvite",
-      "path": "harness/internal/store/channel_invite.go",
-      "symbol": "(*Store).RotateChannelInvite",
-      "ceiling": 42
-    },
-    {
-      "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/store/channel_invite.go::verifyOwnedChannelEnrollmentLedger",
-      "path": "harness/internal/store/channel_invite.go",
-      "symbol": "verifyOwnedChannelEnrollmentLedger",
-      "ceiling": 72
     },
     {
       "rule": "cyclomatic_complexity",
@@ -3168,13 +2643,6 @@
     },
     {
       "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/store/gossip_publication.go::(*Store).ClaimGossipPublication",
-      "path": "harness/internal/store/gossip_publication.go",
-      "symbol": "(*Store).ClaimGossipPublication",
-      "ceiling": 32
-    },
-    {
-      "rule": "cyclomatic_complexity",
       "identity": "cyclomatic_complexity:harness/internal/store/gossip_publication.go::(*Store).RetryGossipPublication",
       "path": "harness/internal/store/gossip_publication.go",
       "symbol": "(*Store).RetryGossipPublication",
@@ -3214,13 +2682,6 @@
       "path": "harness/internal/store/local_accept_payload.go",
       "symbol": "decodeClosedEventPayload",
       "ceiling": 31
-    },
-    {
-      "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/store/local_accept_validation.go::validateAcceptanceArtifacts",
-      "path": "harness/internal/store/local_accept_validation.go",
-      "symbol": "validateAcceptanceArtifacts",
-      "ceiling": 36
     },
     {
       "rule": "cyclomatic_complexity",
@@ -3266,13 +2727,6 @@
     },
     {
       "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/store/operation.go::(*Store).CheckpointOperationCapture",
-      "path": "harness/internal/store/operation.go",
-      "symbol": "(*Store).CheckpointOperationCapture",
-      "ceiling": 25
-    },
-    {
-      "rule": "cyclomatic_complexity",
       "identity": "cyclomatic_complexity:harness/internal/store/operation.go::(*Store).ReserveOperation",
       "path": "harness/internal/store/operation.go",
       "symbol": "(*Store).ReserveOperation",
@@ -3283,7 +2737,7 @@
       "identity": "cyclomatic_complexity:harness/internal/store/operation_test.go::TestReserveOperationLeaseFenceCaptureAndRejectedReplay",
       "path": "harness/internal/store/operation_test.go",
       "symbol": "TestReserveOperationLeaseFenceCaptureAndRejectedReplay",
-      "ceiling": 24
+      "ceiling": 22
     },
     {
       "rule": "cyclomatic_complexity",
@@ -3325,7 +2779,7 @@
       "identity": "cyclomatic_complexity:harness/internal/store/peer_inbox_artifact.go::(*Store).MarkPeerInboxArtifactReady",
       "path": "harness/internal/store/peer_inbox_artifact.go",
       "symbol": "(*Store).MarkPeerInboxArtifactReady",
-      "ceiling": 36
+      "ceiling": 28
     },
     {
       "rule": "cyclomatic_complexity",
@@ -3350,24 +2804,10 @@
     },
     {
       "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/store/peer_inbox_artifact.go::(*Store).StagePeerInboxArtifactClosure",
-      "path": "harness/internal/store/peer_inbox_artifact.go",
-      "symbol": "(*Store).StagePeerInboxArtifactClosure",
-      "ceiling": 34
-    },
-    {
-      "rule": "cyclomatic_complexity",
       "identity": "cyclomatic_complexity:harness/internal/store/peer_inbox_artifact.go::readPeerInboxArtifactRenewReceipt",
       "path": "harness/internal/store/peer_inbox_artifact.go",
       "symbol": "readPeerInboxArtifactRenewReceipt",
       "ceiling": 23
-    },
-    {
-      "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/store/peer_inbox_artifact.go::readPeerInboxArtifactRow",
-      "path": "harness/internal/store/peer_inbox_artifact.go",
-      "symbol": "readPeerInboxArtifactRow",
-      "ceiling": 51
     },
     {
       "rule": "cyclomatic_complexity",
@@ -3388,7 +2828,7 @@
       "identity": "cyclomatic_complexity:harness/internal/store/peer_inbox_artifact_test.go::TestReadPeerInboxArtifactRootClosesCacheProbe",
       "path": "harness/internal/store/peer_inbox_artifact_test.go",
       "symbol": "TestReadPeerInboxArtifactRootClosesCacheProbe",
-      "ceiling": 31
+      "ceiling": 30
     },
     {
       "rule": "cyclomatic_complexity",
@@ -3409,7 +2849,7 @@
       "identity": "cyclomatic_complexity:harness/internal/store/peer_inbox_semantic_commit.go::(*Store).CommitPeerInboxSemantic",
       "path": "harness/internal/store/peer_inbox_semantic_commit.go",
       "symbol": "(*Store).CommitPeerInboxSemantic",
-      "ceiling": 44
+      "ceiling": 43
     },
     {
       "rule": "cyclomatic_complexity",
@@ -3444,7 +2884,7 @@
       "identity": "cyclomatic_complexity:harness/internal/store/peer_inbox_semantic_commit_test.go::TestCommitPeerInboxSemanticDeliveryReadyPreservesMixedArtifactsAcrossReplay",
       "path": "harness/internal/store/peer_inbox_semantic_commit_test.go",
       "symbol": "TestCommitPeerInboxSemanticDeliveryReadyPreservesMixedArtifactsAcrossReplay",
-      "ceiling": 61
+      "ceiling": 59
     },
     {
       "rule": "cyclomatic_complexity",
@@ -3494,13 +2934,6 @@
       "path": "harness/internal/store/peer_inbox_semantic_settlement.go",
       "symbol": "validatePeerInboxSemanticTerminalRunOperations",
       "ceiling": 21
-    },
-    {
-      "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/store/peer_inbox_semantic_settlement_test.go::TestCommitPeerInboxSemanticSettlesClaimedHandlingAtomicallyAndReplays.$func-a6c875eaf0d9fe68a5e1a16c-1bac62f344105f7e7bcf7b2e-cy34-co33-li75-st53-ne1-001",
-      "path": "harness/internal/store/peer_inbox_semantic_settlement_test.go",
-      "symbol": "TestCommitPeerInboxSemanticSettlesClaimedHandlingAtomicallyAndReplays.$func-a6c875eaf0d9fe68a5e1a16c-1bac62f344105f7e7bcf7b2e-cy34-co33-li75-st53-ne1-001",
-      "ceiling": 34
     },
     {
       "rule": "cyclomatic_complexity",
@@ -3714,13 +3147,6 @@
     },
     {
       "rule": "function_logical_lines",
-      "identity": "function_logical_lines:harness/cmd/mnemond/main.go::runWithNode",
-      "path": "harness/cmd/mnemond/main.go",
-      "symbol": "runWithNode",
-      "ceiling": 93
-    },
-    {
-      "rule": "function_logical_lines",
       "identity": "function_logical_lines:harness/internal/agent/codex_adapter.go::(*CodexWakeAdapter).Run",
       "path": "harness/internal/agent/codex_adapter.go",
       "symbol": "(*CodexWakeAdapter).Run",
@@ -3752,7 +3178,7 @@
       "identity": "function_logical_lines:harness/internal/agent/executor.go::decodeCommittedTeamworkReceipt",
       "path": "harness/internal/agent/executor.go",
       "symbol": "decodeCommittedTeamworkReceipt",
-      "ceiling": 91
+      "ceiling": 81
     },
     {
       "rule": "function_logical_lines",
@@ -3777,27 +3203,6 @@
     },
     {
       "rule": "function_logical_lines",
-      "identity": "function_logical_lines:harness/internal/artifact/gc.go::(*GCWorker).runCycle",
-      "path": "harness/internal/artifact/gc.go",
-      "symbol": "(*GCWorker).runCycle",
-      "ceiling": 85
-    },
-    {
-      "rule": "function_logical_lines",
-      "identity": "function_logical_lines:harness/internal/artifact/gc_test.go::TestGCBatchesDurableQueueByItemsAndBytes",
-      "path": "harness/internal/artifact/gc_test.go",
-      "symbol": "TestGCBatchesDurableQueueByItemsAndBytes",
-      "ceiling": 126
-    },
-    {
-      "rule": "function_logical_lines",
-      "identity": "function_logical_lines:harness/internal/artifact/gc_test.go::TestGCExclusiveFenceAndCancellationLeaveReplayableBoundaries",
-      "path": "harness/internal/artifact/gc_test.go",
-      "symbol": "TestGCExclusiveFenceAndCancellationLeaveReplayableBoundaries",
-      "ceiling": 86
-    },
-    {
-      "rule": "function_logical_lines",
       "identity": "function_logical_lines:harness/internal/artifact/import_test.go::TestBuildImportedClosureBuildsVerifiableCanonicalShape",
       "path": "harness/internal/artifact/import_test.go",
       "symbol": "TestBuildImportedClosureBuildsVerifiableCanonicalShape",
@@ -3815,14 +3220,14 @@
       "identity": "function_logical_lines:harness/internal/cli/setup.go::(*setupApp).executeLocked",
       "path": "harness/internal/cli/setup.go",
       "symbol": "(*setupApp).executeLocked",
-      "ceiling": 95
+      "ceiling": 81
     },
     {
       "rule": "function_logical_lines",
       "identity": "function_logical_lines:harness/internal/cli/setup_test.go::(*setupFixture).app",
       "path": "harness/internal/cli/setup_test.go",
       "symbol": "(*setupFixture).app",
-      "ceiling": 140
+      "ceiling": 128
     },
     {
       "rule": "function_logical_lines",
@@ -3928,13 +3333,6 @@
       "path": "harness/internal/peer/artifact_receiver_test.go",
       "symbol": "TestArtifactReceiverConstructorDoubleRunAndPullBounds",
       "ceiling": 96
-    },
-    {
-      "rule": "function_logical_lines",
-      "identity": "function_logical_lines:harness/internal/peer/artifact_receiver_test.go::TestArtifactReceiverReadyAuthorityResourceAndStaleOutcomes",
-      "path": "harness/internal/peer/artifact_receiver_test.go",
-      "symbol": "TestArtifactReceiverReadyAuthorityResourceAndStaleOutcomes",
-      "ceiling": 132
     },
     {
       "rule": "function_logical_lines",
@@ -4085,38 +3483,10 @@
     },
     {
       "rule": "function_logical_lines",
-      "identity": "function_logical_lines:harness/internal/store/artifact_gc.go::(*Store).SweepArtifactGCStaging",
-      "path": "harness/internal/store/artifact_gc.go",
-      "symbol": "(*Store).SweepArtifactGCStaging",
-      "ceiling": 110
-    },
-    {
-      "rule": "function_logical_lines",
-      "identity": "function_logical_lines:harness/internal/store/artifact_gc_test.go::TestArtifactGCManifestRolesAndLaterCorruptOwner",
-      "path": "harness/internal/store/artifact_gc_test.go",
-      "symbol": "TestArtifactGCManifestRolesAndLaterCorruptOwner",
-      "ceiling": 81
-    },
-    {
-      "rule": "function_logical_lines",
-      "identity": "function_logical_lines:harness/internal/store/artifact_gc_test.go::TestArtifactGCScanPrepareCursorQueueAndResponseReplay",
-      "path": "harness/internal/store/artifact_gc_test.go",
-      "symbol": "TestArtifactGCScanPrepareCursorQueueAndResponseReplay",
-      "ceiling": 106
-    },
-    {
-      "rule": "function_logical_lines",
-      "identity": "function_logical_lines:harness/internal/store/artifact_gc_test.go::TestArtifactGCStagingCursorMakesProtectedPrefixAndLargeRootLive",
-      "path": "harness/internal/store/artifact_gc_test.go",
-      "symbol": "TestArtifactGCStagingCursorMakesProtectedPrefixAndLargeRootLive",
-      "ceiling": 125
-    },
-    {
-      "rule": "function_logical_lines",
       "identity": "function_logical_lines:harness/internal/store/artifact_test.go::TestArtifactPinsAndLocalReplicaProvenance",
       "path": "harness/internal/store/artifact_test.go",
       "symbol": "TestArtifactPinsAndLocalReplicaProvenance",
-      "ceiling": 96
+      "ceiling": 94
     },
     {
       "rule": "function_logical_lines",
@@ -4124,20 +3494,6 @@
       "path": "harness/internal/store/channel_authority.go",
       "symbol": "readVerifiedChannelAuthority",
       "ceiling": 121
-    },
-    {
-      "rule": "function_logical_lines",
-      "identity": "function_logical_lines:harness/internal/store/channel_invite.go::(*Store).RotateChannelInvite",
-      "path": "harness/internal/store/channel_invite.go",
-      "symbol": "(*Store).RotateChannelInvite",
-      "ceiling": 85
-    },
-    {
-      "rule": "function_logical_lines",
-      "identity": "function_logical_lines:harness/internal/store/channel_invite.go::verifyOwnedChannelEnrollmentLedger",
-      "path": "harness/internal/store/channel_invite.go",
-      "symbol": "verifyOwnedChannelEnrollmentLedger",
-      "ceiling": 127
     },
     {
       "rule": "function_logical_lines",
@@ -4169,20 +3525,6 @@
     },
     {
       "rule": "function_logical_lines",
-      "identity": "function_logical_lines:harness/internal/store/peer_inbox_artifact.go::(*Store).MarkPeerInboxArtifactReady",
-      "path": "harness/internal/store/peer_inbox_artifact.go",
-      "symbol": "(*Store).MarkPeerInboxArtifactReady",
-      "ceiling": 81
-    },
-    {
-      "rule": "function_logical_lines",
-      "identity": "function_logical_lines:harness/internal/store/peer_inbox_artifact.go::readPeerInboxArtifactRow",
-      "path": "harness/internal/store/peer_inbox_artifact.go",
-      "symbol": "readPeerInboxArtifactRow",
-      "ceiling": 99
-    },
-    {
-      "rule": "function_logical_lines",
       "identity": "function_logical_lines:harness/internal/store/peer_inbox_artifact_test.go::TestPeerInboxArtifactClaimIsStableExclusiveAndRestartSafe",
       "path": "harness/internal/store/peer_inbox_artifact_test.go",
       "symbol": "TestPeerInboxArtifactClaimIsStableExclusiveAndRestartSafe",
@@ -4193,7 +3535,7 @@
       "identity": "function_logical_lines:harness/internal/store/peer_inbox_artifact_test.go::TestPeerInboxArtifactReadyRequiresSealedClosureAndOwnsPins",
       "path": "harness/internal/store/peer_inbox_artifact_test.go",
       "symbol": "TestPeerInboxArtifactReadyRequiresSealedClosureAndOwnsPins",
-      "ceiling": 131
+      "ceiling": 117
     },
     {
       "rule": "function_logical_lines",
@@ -4204,31 +3546,24 @@
     },
     {
       "rule": "function_logical_lines",
-      "identity": "function_logical_lines:harness/internal/store/peer_inbox_artifact_test.go::TestStagePeerInboxArtifactClosureIsExactDurableAndRestartSafe",
-      "path": "harness/internal/store/peer_inbox_artifact_test.go",
-      "symbol": "TestStagePeerInboxArtifactClosureIsExactDurableAndRestartSafe",
-      "ceiling": 151
-    },
-    {
-      "rule": "function_logical_lines",
       "identity": "function_logical_lines:harness/internal/store/peer_inbox_semantic_commit.go::(*Store).CommitPeerInboxSemantic",
       "path": "harness/internal/store/peer_inbox_semantic_commit.go",
       "symbol": "(*Store).CommitPeerInboxSemantic",
-      "ceiling": 126
+      "ceiling": 125
     },
     {
       "rule": "function_logical_lines",
       "identity": "function_logical_lines:harness/internal/store/peer_inbox_semantic_commit.go::validatePeerInboxSemanticTerminalReplay",
       "path": "harness/internal/store/peer_inbox_semantic_commit.go",
       "symbol": "validatePeerInboxSemanticTerminalReplay",
-      "ceiling": 131
+      "ceiling": 129
     },
     {
       "rule": "function_logical_lines",
       "identity": "function_logical_lines:harness/internal/store/peer_inbox_semantic_commit_test.go::TestCommitPeerInboxSemanticDeliveryReadyPreservesMixedArtifactsAcrossReplay",
       "path": "harness/internal/store/peer_inbox_semantic_commit_test.go",
       "symbol": "TestCommitPeerInboxSemanticDeliveryReadyPreservesMixedArtifactsAcrossReplay",
-      "ceiling": 186
+      "ceiling": 185
     },
     {
       "rule": "function_logical_lines",
@@ -4256,14 +3591,7 @@
       "identity": "function_logical_lines:harness/internal/store/peer_inbox_semantic_decision_test.go::TestPeerInboxSemanticDecisionCommitRequestDigestBindsEveryAuthorityDimension",
       "path": "harness/internal/store/peer_inbox_semantic_decision_test.go",
       "symbol": "TestPeerInboxSemanticDecisionCommitRequestDigestBindsEveryAuthorityDimension",
-      "ceiling": 136
-    },
-    {
-      "rule": "function_logical_lines",
-      "identity": "function_logical_lines:harness/internal/store/peer_inbox_semantic_settlement_test.go::TestCommitPeerInboxSemanticSettlesClaimedHandlingAtomicallyAndReplays",
-      "path": "harness/internal/store/peer_inbox_semantic_settlement_test.go",
-      "symbol": "TestCommitPeerInboxSemanticSettlesClaimedHandlingAtomicallyAndReplays",
-      "ceiling": 115
+      "ceiling": 134
     },
     {
       "rule": "function_logical_lines",
@@ -4277,7 +3605,7 @@
       "identity": "function_logical_lines:harness/internal/store/peer_inbox_semantic_settlement_test.go::TestPeerInboxSemanticHandlingSettlementReplaysAndPreservesPriorTerminal",
       "path": "harness/internal/store/peer_inbox_semantic_settlement_test.go",
       "symbol": "TestPeerInboxSemanticHandlingSettlementReplaysAndPreservesPriorTerminal",
-      "ceiling": 116
+      "ceiling": 114
     },
     {
       "rule": "function_logical_lines",
@@ -4351,20 +3679,6 @@
     },
     {
       "rule": "function_statements",
-      "identity": "function_statements:harness/cmd/mnemond/main.go::runWithNode",
-      "path": "harness/cmd/mnemond/main.go",
-      "symbol": "runWithNode",
-      "ceiling": 88
-    },
-    {
-      "rule": "function_statements",
-      "identity": "function_statements:harness/internal/agent/artifact_capture.go::(*ArtifactCaptureCoordinator).Checkpoint",
-      "path": "harness/internal/agent/artifact_capture.go",
-      "symbol": "(*ArtifactCaptureCoordinator).Checkpoint",
-      "ceiling": 57
-    },
-    {
-      "rule": "function_statements",
       "identity": "function_statements:harness/internal/agent/artifact_resolver.go::(*ArtifactResolver).Coordinate",
       "path": "harness/internal/agent/artifact_resolver.go",
       "symbol": "(*ArtifactResolver).Coordinate",
@@ -4407,13 +3721,6 @@
     },
     {
       "rule": "function_statements",
-      "identity": "function_statements:harness/internal/agent/executor.go::decodeCommittedTeamworkReceipt",
-      "path": "harness/internal/agent/executor.go",
-      "symbol": "decodeCommittedTeamworkReceipt",
-      "ceiling": 56
-    },
-    {
-      "rule": "function_statements",
       "identity": "function_statements:harness/internal/agent/runtime_process_darwin.go::terminateOwnedDarwinRuntimeProcess",
       "path": "harness/internal/agent/runtime_process_darwin.go",
       "symbol": "terminateOwnedDarwinRuntimeProcess",
@@ -4435,13 +3742,6 @@
     },
     {
       "rule": "function_statements",
-      "identity": "function_statements:harness/internal/artifact/capture.go::(*CAS).VerifyClosure",
-      "path": "harness/internal/artifact/capture.go",
-      "symbol": "(*CAS).VerifyClosure",
-      "ceiling": 59
-    },
-    {
-      "rule": "function_statements",
       "identity": "function_statements:harness/internal/artifact/capture.go::(*Capturer).Capture",
       "path": "harness/internal/artifact/capture.go",
       "symbol": "(*Capturer).Capture",
@@ -4459,21 +3759,7 @@
       "identity": "function_statements:harness/internal/artifact/cas.go::(*CAS).PruneTempsBefore",
       "path": "harness/internal/artifact/cas.go",
       "symbol": "(*CAS).PruneTempsBefore",
-      "ceiling": 78
-    },
-    {
-      "rule": "function_statements",
-      "identity": "function_statements:harness/internal/artifact/cas.go::(*CAS).Tombstone",
-      "path": "harness/internal/artifact/cas.go",
-      "symbol": "(*CAS).Tombstone",
-      "ceiling": 53
-    },
-    {
-      "rule": "function_statements",
-      "identity": "function_statements:harness/internal/artifact/cas.go::(*CAS).inspectTombstoneLocked",
-      "path": "harness/internal/artifact/cas.go",
-      "symbol": "(*CAS).inspectTombstoneLocked",
-      "ceiling": 56
+      "ceiling": 70
     },
     {
       "rule": "function_statements",
@@ -4488,62 +3774,6 @@
       "path": "harness/internal/artifact/cas.go",
       "symbol": "(*CAS).recoverPromotedTemp",
       "ceiling": 71
-    },
-    {
-      "rule": "function_statements",
-      "identity": "function_statements:harness/internal/artifact/cas_test.go::TestCASDigestBarriersSerializeTombstoneAndAllowOtherShards",
-      "path": "harness/internal/artifact/cas_test.go",
-      "symbol": "TestCASDigestBarriersSerializeTombstoneAndAllowOtherShards",
-      "ceiling": 67
-    },
-    {
-      "rule": "function_statements",
-      "identity": "function_statements:harness/internal/artifact/cas_test.go::TestCASObjectListingIsStrictBoundedAndCanonical",
-      "path": "harness/internal/artifact/cas_test.go",
-      "symbol": "TestCASObjectListingIsStrictBoundedAndCanonical",
-      "ceiling": 57
-    },
-    {
-      "rule": "function_statements",
-      "identity": "function_statements:harness/internal/artifact/cas_test.go::TestCASObjectPaginationAdvancesPastProtectedPrefixAndRestarts",
-      "path": "harness/internal/artifact/cas_test.go",
-      "symbol": "TestCASObjectPaginationAdvancesPastProtectedPrefixAndRestarts",
-      "ceiling": 63
-    },
-    {
-      "rule": "function_statements",
-      "identity": "function_statements:harness/internal/artifact/cas_test.go::TestCASObjectPaginationFreezesStrictCutoffAcrossNewWrites",
-      "path": "harness/internal/artifact/cas_test.go",
-      "symbol": "TestCASObjectPaginationFreezesStrictCutoffAcrossNewWrites",
-      "ceiling": 52
-    },
-    {
-      "rule": "function_statements",
-      "identity": "function_statements:harness/internal/artifact/cas_test.go::TestCASTombstoneCrashStatesReplayAndBoundedListing",
-      "path": "harness/internal/artifact/cas_test.go",
-      "symbol": "TestCASTombstoneCrashStatesReplayAndBoundedListing",
-      "ceiling": 56
-    },
-    {
-      "rule": "function_statements",
-      "identity": "function_statements:harness/internal/artifact/gc.go::(*GCWorker).processQueueItem",
-      "path": "harness/internal/artifact/gc.go",
-      "symbol": "(*GCWorker).processQueueItem",
-      "ceiling": 69
-    },
-    {
-      "rule": "function_statements",
-      "identity": "function_statements:harness/internal/artifact/gc.go::(*GCWorker).reconcileBatch",
-      "path": "harness/internal/artifact/gc.go",
-      "symbol": "(*GCWorker).reconcileBatch",
-      "ceiling": 71
-    },
-    {
-      "rule": "function_statements",
-      "identity": "function_statements:harness/internal/artifact/gc.go::(*GCWorker).runCycle",
-      "path": "harness/internal/artifact/gc.go",
-      "symbol": "(*GCWorker).runCycle",
-      "ceiling": 88
     },
     {
       "rule": "function_statements",
@@ -4599,7 +3829,7 @@
       "identity": "function_statements:harness/internal/cli/setup.go::(*setupApp).executeLocked",
       "path": "harness/internal/cli/setup.go",
       "symbol": "(*setupApp).executeLocked",
-      "ceiling": 86
+      "ceiling": 73
     },
     {
       "rule": "function_statements",
@@ -4883,13 +4113,6 @@
     },
     {
       "rule": "function_statements",
-      "identity": "function_statements:harness/internal/peer/artifact_receiver.go::(*ArtifactReceiver).receiveClaim",
-      "path": "harness/internal/peer/artifact_receiver.go",
-      "symbol": "(*ArtifactReceiver).receiveClaim",
-      "ceiling": 60
-    },
-    {
-      "rule": "function_statements",
       "identity": "function_statements:harness/internal/peer/artifact_receiver_test.go::TestArtifactReceiverConstructorDoubleRunAndPullBounds",
       "path": "harness/internal/peer/artifact_receiver_test.go",
       "symbol": "TestArtifactReceiverConstructorDoubleRunAndPullBounds",
@@ -4922,13 +4145,6 @@
       "path": "harness/internal/peer/authority.go",
       "symbol": "buildChannelAuthority",
       "ceiling": 77
-    },
-    {
-      "rule": "function_statements",
-      "identity": "function_statements:harness/internal/peer/channel_enrollment_test.go::TestChannelEnrollmentRecoversOwnerCommitAfterAcceptedResponseLoss",
-      "path": "harness/internal/peer/channel_enrollment_test.go",
-      "symbol": "TestChannelEnrollmentRecoversOwnerCommitAfterAcceptedResponseLoss",
-      "ceiling": 60
     },
     {
       "rule": "function_statements",
@@ -5163,52 +4379,10 @@
     },
     {
       "rule": "function_statements",
-      "identity": "function_statements:harness/internal/store/artifact_closure.go::(*Store).CheckpointVerifiedArtifactClosure",
-      "path": "harness/internal/store/artifact_closure.go",
-      "symbol": "(*Store).CheckpointVerifiedArtifactClosure",
-      "ceiling": 67
-    },
-    {
-      "rule": "function_statements",
       "identity": "function_statements:harness/internal/store/artifact_closure.go::validateVerifiedArtifactClosure",
       "path": "harness/internal/store/artifact_closure.go",
       "symbol": "validateVerifiedArtifactClosure",
       "ceiling": 68
-    },
-    {
-      "rule": "function_statements",
-      "identity": "function_statements:harness/internal/store/artifact_gc.go::(*Store).CompleteArtifactGC",
-      "path": "harness/internal/store/artifact_gc.go",
-      "symbol": "(*Store).CompleteArtifactGC",
-      "ceiling": 51
-    },
-    {
-      "rule": "function_statements",
-      "identity": "function_statements:harness/internal/store/artifact_gc.go::(*Store).PrepareArtifactGC",
-      "path": "harness/internal/store/artifact_gc.go",
-      "symbol": "(*Store).PrepareArtifactGC",
-      "ceiling": 69
-    },
-    {
-      "rule": "function_statements",
-      "identity": "function_statements:harness/internal/store/artifact_gc.go::(*Store).SweepArtifactGCStaging",
-      "path": "harness/internal/store/artifact_gc.go",
-      "symbol": "(*Store).SweepArtifactGCStaging",
-      "ceiling": 108
-    },
-    {
-      "rule": "function_statements",
-      "identity": "function_statements:harness/internal/store/artifact_gc.go::artifactGCDigestProtected",
-      "path": "harness/internal/store/artifact_gc.go",
-      "symbol": "artifactGCDigestProtected",
-      "ceiling": 55
-    },
-    {
-      "rule": "function_statements",
-      "identity": "function_statements:harness/internal/store/artifact_gc_test.go::TestArtifactGCScanPrepareCursorQueueAndResponseReplay",
-      "path": "harness/internal/store/artifact_gc_test.go",
-      "symbol": "TestArtifactGCScanPrepareCursorQueueAndResponseReplay",
-      "ceiling": 84
     },
     {
       "rule": "function_statements",
@@ -5222,7 +4396,7 @@
       "identity": "function_statements:harness/internal/store/artifact_test.go::TestArtifactPinsAndLocalReplicaProvenance",
       "path": "harness/internal/store/artifact_test.go",
       "symbol": "TestArtifactPinsAndLocalReplicaProvenance",
-      "ceiling": 106
+      "ceiling": 104
     },
     {
       "rule": "function_statements",
@@ -5244,27 +4418,6 @@
       "path": "harness/internal/store/channel_enrollment.go",
       "symbol": "(*Store).PrepareChannelEnrollment",
       "ceiling": 52
-    },
-    {
-      "rule": "function_statements",
-      "identity": "function_statements:harness/internal/store/channel_invite.go::(*Store).RotateChannelInvite",
-      "path": "harness/internal/store/channel_invite.go",
-      "symbol": "(*Store).RotateChannelInvite",
-      "ceiling": 73
-    },
-    {
-      "rule": "function_statements",
-      "identity": "function_statements:harness/internal/store/channel_invite.go::verifyOwnedChannelEnrollmentLedger",
-      "path": "harness/internal/store/channel_invite.go",
-      "symbol": "verifyOwnedChannelEnrollmentLedger",
-      "ceiling": 112
-    },
-    {
-      "rule": "function_statements",
-      "identity": "function_statements:harness/internal/store/channel_invite_test.go::TestChannelInviteReaderRejectsRetroactiveMemberGrantAttribution",
-      "path": "harness/internal/store/channel_invite_test.go",
-      "symbol": "TestChannelInviteReaderRejectsRetroactiveMemberGrantAttribution",
-      "ceiling": 51
     },
     {
       "rule": "function_statements",
@@ -5331,13 +4484,6 @@
     },
     {
       "rule": "function_statements",
-      "identity": "function_statements:harness/internal/store/gossip_publication.go::(*Store).ClaimGossipPublication",
-      "path": "harness/internal/store/gossip_publication.go",
-      "symbol": "(*Store).ClaimGossipPublication",
-      "ceiling": 60
-    },
-    {
-      "rule": "function_statements",
       "identity": "function_statements:harness/internal/store/gossip_publication.go::readGossipPublication",
       "path": "harness/internal/store/gossip_publication.go",
       "symbol": "readGossipPublication",
@@ -5352,13 +4498,6 @@
     },
     {
       "rule": "function_statements",
-      "identity": "function_statements:harness/internal/store/local_accept_validation.go::validateAcceptanceArtifacts",
-      "path": "harness/internal/store/local_accept_validation.go",
-      "symbol": "validateAcceptanceArtifacts",
-      "ceiling": 71
-    },
-    {
-      "rule": "function_statements",
       "identity": "function_statements:harness/internal/store/managed_operation.go::(*Store).ReserveManagedOperation",
       "path": "harness/internal/store/managed_operation.go",
       "symbol": "(*Store).ReserveManagedOperation",
@@ -5370,13 +4509,6 @@
       "path": "harness/internal/store/managed_resolution.go",
       "symbol": "(*Store).CommitManagedResolution",
       "ceiling": 83
-    },
-    {
-      "rule": "function_statements",
-      "identity": "function_statements:harness/internal/store/operation.go::(*Store).CheckpointOperationCapture",
-      "path": "harness/internal/store/operation.go",
-      "symbol": "(*Store).CheckpointOperationCapture",
-      "ceiling": 53
     },
     {
       "rule": "function_statements",
@@ -5397,7 +4529,7 @@
       "identity": "function_statements:harness/internal/store/operation_test.go::TestReserveOperationLeaseFenceCaptureAndRejectedReplay",
       "path": "harness/internal/store/operation_test.go",
       "symbol": "TestReserveOperationLeaseFenceCaptureAndRejectedReplay",
-      "ceiling": 63
+      "ceiling": 53
     },
     {
       "rule": "function_statements",
@@ -5415,20 +4547,6 @@
     },
     {
       "rule": "function_statements",
-      "identity": "function_statements:harness/internal/store/peer_inbox_artifact.go::(*Store).MarkPeerInboxArtifactReady",
-      "path": "harness/internal/store/peer_inbox_artifact.go",
-      "symbol": "(*Store).MarkPeerInboxArtifactReady",
-      "ceiling": 78
-    },
-    {
-      "rule": "function_statements",
-      "identity": "function_statements:harness/internal/store/peer_inbox_artifact.go::(*Store).RenewPeerInboxArtifactLease",
-      "path": "harness/internal/store/peer_inbox_artifact.go",
-      "symbol": "(*Store).RenewPeerInboxArtifactLease",
-      "ceiling": 57
-    },
-    {
-      "rule": "function_statements",
       "identity": "function_statements:harness/internal/store/peer_inbox_artifact.go::(*Store).RetryPeerInboxArtifact",
       "path": "harness/internal/store/peer_inbox_artifact.go",
       "symbol": "(*Store).RetryPeerInboxArtifact",
@@ -5436,24 +4554,10 @@
     },
     {
       "rule": "function_statements",
-      "identity": "function_statements:harness/internal/store/peer_inbox_artifact.go::(*Store).StagePeerInboxArtifactClosure",
-      "path": "harness/internal/store/peer_inbox_artifact.go",
-      "symbol": "(*Store).StagePeerInboxArtifactClosure",
-      "ceiling": 71
-    },
-    {
-      "rule": "function_statements",
-      "identity": "function_statements:harness/internal/store/peer_inbox_artifact.go::readPeerInboxArtifactRow",
-      "path": "harness/internal/store/peer_inbox_artifact.go",
-      "symbol": "readPeerInboxArtifactRow",
-      "ceiling": 65
-    },
-    {
-      "rule": "function_statements",
       "identity": "function_statements:harness/internal/store/peer_inbox_artifact_test.go::TestReadPeerInboxArtifactRootClosesCacheProbe",
       "path": "harness/internal/store/peer_inbox_artifact_test.go",
       "symbol": "TestReadPeerInboxArtifactRootClosesCacheProbe",
-      "ceiling": 53
+      "ceiling": 51
     },
     {
       "rule": "function_statements",
@@ -5467,7 +4571,7 @@
       "identity": "function_statements:harness/internal/store/peer_inbox_semantic_commit.go::(*Store).CommitPeerInboxSemantic",
       "path": "harness/internal/store/peer_inbox_semantic_commit.go",
       "symbol": "(*Store).CommitPeerInboxSemantic",
-      "ceiling": 119
+      "ceiling": 117
     },
     {
       "rule": "function_statements",
@@ -5481,7 +4585,7 @@
       "identity": "function_statements:harness/internal/store/peer_inbox_semantic_commit_test.go::TestCommitPeerInboxSemanticDeliveryReadyPreservesMixedArtifactsAcrossReplay",
       "path": "harness/internal/store/peer_inbox_semantic_commit_test.go",
       "symbol": "TestCommitPeerInboxSemanticDeliveryReadyPreservesMixedArtifactsAcrossReplay",
-      "ceiling": 137
+      "ceiling": 134
     },
     {
       "rule": "function_statements",
@@ -5502,7 +4606,7 @@
       "identity": "function_statements:harness/internal/store/peer_inbox_semantic_decision_test.go::TestPeerInboxSemanticDecisionCommitRequestDigestBindsEveryAuthorityDimension",
       "path": "harness/internal/store/peer_inbox_semantic_decision_test.go",
       "symbol": "TestPeerInboxSemanticDecisionCommitRequestDigestBindsEveryAuthorityDimension",
-      "ceiling": 79
+      "ceiling": 78
     },
     {
       "rule": "function_statements",
@@ -5510,13 +4614,6 @@
       "path": "harness/internal/store/peer_inbox_semantic_settlement.go",
       "symbol": "validatePeerInboxSemanticPriorTerminal",
       "ceiling": 55
-    },
-    {
-      "rule": "function_statements",
-      "identity": "function_statements:harness/internal/store/peer_inbox_semantic_settlement_test.go::TestCommitPeerInboxSemanticSettlesClaimedHandlingAtomicallyAndReplays.$func-a6c875eaf0d9fe68a5e1a16c-1bac62f344105f7e7bcf7b2e-cy34-co33-li75-st53-ne1-001",
-      "path": "harness/internal/store/peer_inbox_semantic_settlement_test.go",
-      "symbol": "TestCommitPeerInboxSemanticSettlesClaimedHandlingAtomicallyAndReplays.$func-a6c875eaf0d9fe68a5e1a16c-1bac62f344105f7e7bcf7b2e-cy34-co33-li75-st53-ne1-001",
-      "ceiling": 54
     },
     {
       "rule": "function_statements",
@@ -5815,43 +4912,6 @@
     },
     {
       "rule": "normalized_duplicate_tokens",
-      "identity": "normalized_duplicate_tokens:dup-0022",
-      "path": "harness/internal/store/artifact_gc.go",
-      "debt_id": "dup-0022",
-      "owners": [
-        "harness/internal/store/artifact_gc.go::(*Store).CompleteArtifactGC",
-        "harness/internal/store/artifact_gc.go::(*Store).MarkArtifactGCRenamed"
-      ],
-      "fingerprint": "7237961b9067e884c3c8beca4368c780c7106cafb86e558935ccd4c95fe116d5",
-      "ceiling": 196
-    },
-    {
-      "rule": "normalized_duplicate_tokens",
-      "identity": "normalized_duplicate_tokens:dup-0025",
-      "path": "harness/internal/store/channel_invite_test.go",
-      "debt_id": "dup-0025",
-      "owners": [
-        "harness/internal/store/channel_invite_test.go::TestChannelInviteFailsClosedOnPartialEnrollmentLedger",
-        "harness/internal/store/channel_invite_test.go::TestChannelInviteReaderRejectsRetroactiveMemberGrantAttribution",
-        "harness/internal/store/channel_invite_test.go::TestCloseChannelInviteExpiresAtItsBoundAndIsIdempotent"
-      ],
-      "fingerprint": "162e049df062f9007922a391bae46bc8b42f55823417a0fe3afb4baa53f9025c",
-      "ceiling": 151
-    },
-    {
-      "rule": "normalized_duplicate_tokens",
-      "identity": "normalized_duplicate_tokens:dup-0026",
-      "path": "harness/internal/store/channel_invite_test.go",
-      "debt_id": "dup-0026",
-      "owners": [
-        "harness/internal/store/channel_invite_test.go::TestChannelInviteFailsClosedOnPartialEnrollmentLedger",
-        "harness/internal/store/channel_invite_test.go::TestCloseChannelInviteExpiresAtItsBoundAndIsIdempotent"
-      ],
-      "fingerprint": "e6765a4995de1c62d8260ae3e7c33a2ba183d43b0ff0c08d14f2e12171e3ac86",
-      "ceiling": 252
-    },
-    {
-      "rule": "normalized_duplicate_tokens",
       "identity": "normalized_duplicate_tokens:dup-0027",
       "path": "harness/internal/store/gossip_publication.go",
       "debt_id": "dup-0027",
@@ -5949,27 +5009,15 @@
     },
     {
       "rule": "paired_test_file_lines",
-      "identity": "paired_test_file_lines:harness/internal/artifact/cas_test.go",
-      "path": "harness/internal/artifact/cas_test.go",
-      "ceiling": 1096
-    },
-    {
-      "rule": "paired_test_file_lines",
-      "identity": "paired_test_file_lines:harness/internal/artifact/gc_test.go",
-      "path": "harness/internal/artifact/gc_test.go",
-      "ceiling": 1233
-    },
-    {
-      "rule": "paired_test_file_lines",
       "identity": "paired_test_file_lines:harness/internal/cli/setup_test.go",
       "path": "harness/internal/cli/setup_test.go",
-      "ceiling": 1141
+      "ceiling": 1021
     },
     {
       "rule": "paired_test_file_lines",
       "identity": "paired_test_file_lines:harness/internal/integration/projection_test.go",
       "path": "harness/internal/integration/projection_test.go",
-      "ceiling": 875
+      "ceiling": 865
     },
     {
       "rule": "paired_test_file_lines",
@@ -5987,7 +5035,7 @@
       "rule": "paired_test_file_lines",
       "identity": "paired_test_file_lines:harness/internal/peer/artifact_receiver_test.go",
       "path": "harness/internal/peer/artifact_receiver_test.go",
-      "ceiling": 2291
+      "ceiling": 2219
     },
     {
       "rule": "paired_test_file_lines",
@@ -6011,7 +5059,7 @@
       "rule": "paired_test_file_lines",
       "identity": "paired_test_file_lines:harness/internal/peer/topic_test.go",
       "path": "harness/internal/peer/topic_test.go",
-      "ceiling": 1422
+      "ceiling": 1369
     },
     {
       "rule": "paired_test_file_lines",
@@ -6021,33 +5069,27 @@
     },
     {
       "rule": "paired_test_file_lines",
-      "identity": "paired_test_file_lines:harness/internal/store/artifact_gc_test.go",
-      "path": "harness/internal/store/artifact_gc_test.go",
-      "ceiling": 1201
-    },
-    {
-      "rule": "paired_test_file_lines",
       "identity": "paired_test_file_lines:harness/internal/store/peer_inbox_artifact_test.go",
       "path": "harness/internal/store/peer_inbox_artifact_test.go",
-      "ceiling": 1652
+      "ceiling": 1443
     },
     {
       "rule": "paired_test_file_lines",
       "identity": "paired_test_file_lines:harness/internal/store/peer_inbox_semantic_commit_test.go",
       "path": "harness/internal/store/peer_inbox_semantic_commit_test.go",
-      "ceiling": 1350
+      "ceiling": 1349
     },
     {
       "rule": "paired_test_file_lines",
       "identity": "paired_test_file_lines:harness/internal/store/peer_inbox_semantic_settlement_test.go",
       "path": "harness/internal/store/peer_inbox_semantic_settlement_test.go",
-      "ceiling": 1060
+      "ceiling": 1056
     },
     {
       "rule": "paired_test_file_lines",
       "identity": "paired_test_file_lines:harness/internal/store/schema_test.go",
       "path": "harness/internal/store/schema_test.go",
-      "ceiling": 2317
+      "ceiling": 2313
     },
     {
       "rule": "paired_test_file_lines",
@@ -6059,19 +5101,19 @@
       "rule": "paired_test_file_lines",
       "identity": "paired_test_file_lines:harness/test/process/setup_test.go",
       "path": "harness/test/process/setup_test.go",
-      "ceiling": 1319
+      "ceiling": 1297
     },
     {
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/agent/codex_adapter.go",
       "path": "harness/internal/agent/codex_adapter.go",
-      "ceiling": 1520
+      "ceiling": 1515
     },
     {
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/agent/executor.go",
       "path": "harness/internal/agent/executor.go",
-      "ceiling": 900
+      "ceiling": 886
     },
     {
       "rule": "production_file_lines",
@@ -6101,19 +5143,13 @@
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/artifact/capture.go",
       "path": "harness/internal/artifact/capture.go",
-      "ceiling": 657
+      "ceiling": 615
     },
     {
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/artifact/cas.go",
       "path": "harness/internal/artifact/cas.go",
-      "ceiling": 1320
-    },
-    {
-      "rule": "production_file_lines",
-      "identity": "production_file_lines:harness/internal/artifact/gc.go",
-      "path": "harness/internal/artifact/gc.go",
-      "ceiling": 1158
+      "ceiling": 571
     },
     {
       "rule": "production_file_lines",
@@ -6143,7 +5179,7 @@
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/cli/setup.go",
       "path": "harness/internal/cli/setup.go",
-      "ceiling": 445
+      "ceiling": 409
     },
     {
       "rule": "production_file_lines",
@@ -6161,7 +5197,7 @@
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/localapi/client.go",
       "path": "harness/internal/localapi/client.go",
-      "ceiling": 624
+      "ceiling": 516
     },
     {
       "rule": "production_file_lines",
@@ -6239,13 +5275,13 @@
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/peer/artifact_receiver.go",
       "path": "harness/internal/peer/artifact_receiver.go",
-      "ceiling": 1473
+      "ceiling": 1360
     },
     {
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/peer/artifact_server.go",
       "path": "harness/internal/peer/artifact_server.go",
-      "ceiling": 523
+      "ceiling": 519
     },
     {
       "rule": "production_file_lines",
@@ -6275,13 +5311,13 @@
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/peer/event_server.go",
       "path": "harness/internal/peer/event_server.go",
-      "ceiling": 453
+      "ceiling": 411
     },
     {
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/peer/topic.go",
       "path": "harness/internal/peer/topic.go",
-      "ceiling": 866
+      "ceiling": 812
     },
     {
       "rule": "production_file_lines",
@@ -6309,36 +5345,6 @@
     },
     {
       "rule": "production_file_lines",
-      "identity": "production_file_lines:harness/internal/store/artifact.go",
-      "path": "harness/internal/store/artifact.go",
-      "ceiling": 402
-    },
-    {
-      "rule": "production_file_lines",
-      "identity": "production_file_lines:harness/internal/store/artifact_closure.go",
-      "path": "harness/internal/store/artifact_closure.go",
-      "ceiling": 435
-    },
-    {
-      "rule": "production_file_lines",
-      "identity": "production_file_lines:harness/internal/store/artifact_gc.go",
-      "path": "harness/internal/store/artifact_gc.go",
-      "ceiling": 1190
-    },
-    {
-      "rule": "production_file_lines",
-      "identity": "production_file_lines:harness/internal/store/artifact_source.go",
-      "path": "harness/internal/store/artifact_source.go",
-      "ceiling": 405
-    },
-    {
-      "rule": "production_file_lines",
-      "identity": "production_file_lines:harness/internal/store/channel_invite.go",
-      "path": "harness/internal/store/channel_invite.go",
-      "ceiling": 595
-    },
-    {
-      "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/store/current.go",
       "path": "harness/internal/store/current.go",
       "ceiling": 815
@@ -6348,12 +5354,6 @@
       "identity": "production_file_lines:harness/internal/store/derivation_disposition.go",
       "path": "harness/internal/store/derivation_disposition.go",
       "ceiling": 743
-    },
-    {
-      "rule": "production_file_lines",
-      "identity": "production_file_lines:harness/internal/store/gossip_publication.go",
-      "path": "harness/internal/store/gossip_publication.go",
-      "ceiling": 630
     },
     {
       "rule": "production_file_lines",
@@ -6383,13 +5383,13 @@
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/store/peer_inbox_artifact.go",
       "path": "harness/internal/store/peer_inbox_artifact.go",
-      "ceiling": 1761
+      "ceiling": 1677
     },
     {
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/store/peer_inbox_semantic_commit.go",
       "path": "harness/internal/store/peer_inbox_semantic_commit.go",
-      "ceiling": 1372
+      "ceiling": 1368
     },
     {
       "rule": "production_file_lines",
@@ -6402,12 +5402,6 @@
       "identity": "production_file_lines:harness/internal/store/peer_inbox_semantic_settlement.go",
       "path": "harness/internal/store/peer_inbox_semantic_settlement.go",
       "ceiling": 904
-    },
-    {
-      "rule": "production_file_lines",
-      "identity": "production_file_lines:harness/internal/store/peer_pull_source.go",
-      "path": "harness/internal/store/peer_pull_source.go",
-      "ceiling": 419
     },
     {
       "rule": "production_file_lines",

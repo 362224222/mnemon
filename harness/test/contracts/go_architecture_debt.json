@@ -43,16 +43,6 @@
       "removal_checkpoint": "9"
     },
     {
-      "rule": "durable_lifecycle_duplication",
-      "identity": "durable_lifecycle_duplication:store-transaction-shells",
-      "path": "harness/internal/store/artifact_gc.go",
-      "component": "store-transaction-lifecycle",
-      "risk": "medium",
-      "evidence": "harness/internal/store/artifact_gc.go",
-      "owner": "harness/internal/store",
-      "removal_checkpoint": "12"
-    },
-    {
       "rule": "unexpected_harness_package",
       "identity": "unexpected_harness_package:harness/internal/cli::cli",
       "path": "harness/internal/cli",
