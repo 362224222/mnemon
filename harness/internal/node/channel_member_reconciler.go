@@ -55,7 +55,6 @@ type ChannelMemberReconciler struct {
 	mu         sync.Mutex
 	started    bool
 	snapshot   ChannelMemberReconcilerSnapshot
-	globalWake bool
 	scopedWake map[channelMemberTargetKey]struct{}
 	schedules  map[channelMemberTargetKey]channelMemberSchedule
 }
@@ -80,19 +79,6 @@ func newChannelMemberReconciler(backend channelMemberReconcileBackend,
 		scopedWake: make(map[channelMemberTargetKey]struct{}),
 		schedules:  make(map[channelMemberTargetKey]channelMemberSchedule),
 		snapshot:   ChannelMemberReconcilerSnapshot{State: ChannelMemberReconcilerIdle}}, nil
-}
-
-// Trigger is reserved for an explicit global Channel-authority change. It
-// invalidates every in-memory member schedule before waking the serial worker.
-func (worker *ChannelMemberReconciler) Trigger() {
-	if worker == nil || worker.trigger == nil {
-		return
-	}
-	worker.mu.Lock()
-	worker.globalWake = true
-	clear(worker.scopedWake)
-	worker.mu.Unlock()
-	worker.signal()
 }
 
 func (worker *ChannelMemberReconciler) signal() {
@@ -288,7 +274,7 @@ func (worker *ChannelMemberReconciler) processTarget(ctx context.Context,
 			return err
 		}
 		worker.recordMerge()
-		worker.Trigger()
+		worker.signal()
 		return nil
 	}
 	if target.outboundReady {

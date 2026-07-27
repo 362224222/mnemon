@@ -86,17 +86,15 @@ func (worker *ChannelMemberReconciler) fail() {
 
 func (worker *ChannelMemberReconciler) triggerScope(key channelMemberTargetKey) error {
 	worker.mu.Lock()
-	if !worker.globalWake {
-		if worker.scopedWake == nil {
-			worker.scopedWake = make(map[channelMemberTargetKey]struct{})
-		}
-		if _, exists := worker.scopedWake[key]; !exists &&
-			len(worker.scopedWake) >= channelMemberScopedWakeLimit {
-			worker.mu.Unlock()
-			return fmt.Errorf("%w: scoped wake bound exceeded", ErrChannelMemberReconciler)
-		}
-		worker.scopedWake[key] = struct{}{}
+	if worker.scopedWake == nil {
+		worker.scopedWake = make(map[channelMemberTargetKey]struct{})
 	}
+	if _, exists := worker.scopedWake[key]; !exists &&
+		len(worker.scopedWake) >= channelMemberScopedWakeLimit {
+		worker.mu.Unlock()
+		return fmt.Errorf("%w: scoped wake bound exceeded", ErrChannelMemberReconciler)
+	}
+	worker.scopedWake[key] = struct{}{}
 	worker.mu.Unlock()
 	worker.signal()
 	return nil
@@ -104,17 +102,15 @@ func (worker *ChannelMemberReconciler) triggerScope(key channelMemberTargetKey) 
 
 func (worker *ChannelMemberReconciler) applyWake(forceGlobal bool) {
 	worker.mu.Lock()
-	global := forceGlobal || worker.globalWake
-	worker.globalWake = false
 	scopes := make([]channelMemberTargetKey, 0, len(worker.scopedWake))
-	if !global {
+	if !forceGlobal {
 		for key := range worker.scopedWake {
 			scopes = append(scopes, key)
 		}
 	}
 	clear(worker.scopedWake)
 	worker.mu.Unlock()
-	if global {
+	if forceGlobal {
 		clear(worker.schedules)
 		return
 	}

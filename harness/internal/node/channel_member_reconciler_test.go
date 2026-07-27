@@ -32,7 +32,7 @@ func TestChannelMemberReconcilerRunsBoundedHelloBaselineAndReachability(t *testi
 		t.Fatal(err)
 	}
 	for index := 0; index < 32; index++ {
-		go worker.Trigger()
+		go worker.signal()
 	}
 	cancel()
 	if err := <-done; err != nil {
@@ -52,9 +52,12 @@ func TestChannelMemberReconcilerRunsBoundedHelloBaselineAndReachability(t *testi
 	}
 }
 
-func TestChannelMemberReconcilerSyncsRemoteSuffixBeforeBaseline(t *testing.T) {
+func TestChannelMemberReconcilerSyncsRemoteSuffixWithoutClearingOtherChannelPermanentSchedule(
+	t *testing.T,
+) {
 	t.Parallel()
 	target := newChannelMemberReconcilerTarget(t, "member-reconciler-sync")
+	other := newChannelMemberReconcilerTarget(t, "member-reconciler-sync-other")
 	fixture := targetFixture(t, target, "member-reconciler-sync")
 	update := fixture.AppendActiveUpdate(t, target.remoteMember.PeerID()).Member()
 	helloAck, err := peer.NewMemberHelloAck(peer.MemberHelloAckSpec{ChannelID: target.channel.ID(),
@@ -67,13 +70,20 @@ func TestChannelMemberReconcilerSyncsRemoteSuffixBeforeBaseline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	backend := &fakeChannelMemberBackend{target: target, hasTarget: true}
+	backend := &fakeChannelMemberBackend{
+		targetValues: []channelMemberTarget{target, other},
+	}
 	client := &fakeChannelMemberClient{helloResponse: helloAck, syncResponse: []peer.SyncPage{syncPage}}
 	clock := &mutableChannelMemberClock{at: target.channel.UpdatedAt().Add(time.Hour)}
 	worker, err := newChannelMemberReconciler(backend, client, clock, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
+	worker.schedules[target.key()] = channelMemberSchedule{
+		head: target.roster.Head(), attempt: 1, next: clock.Now(),
+	}
+	permanent := channelMemberSchedule{head: other.roster.Head(), attempt: 3, permanent: true}
+	worker.schedules[other.key()] = permanent
 	if err := worker.runCycle(context.Background(), false); err != nil {
 		t.Fatal(err)
 	}
@@ -87,6 +97,15 @@ func TestChannelMemberReconcilerSyncsRemoteSuffixBeforeBaseline(t *testing.T) {
 	if snapshot.Hellos != 1 || snapshot.Syncs != 1 || snapshot.RosterMerges != 1 ||
 		snapshot.Baselines != 0 {
 		t.Fatalf("snapshot = %#v", snapshot)
+	}
+	awaitChannelMemberRosterMergeSignal(t, worker)
+	client.setHelloResponse(peer.MemberHelloAck{})
+	if err := worker.runCycle(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	assertChannelMemberSchedule(t, worker, other.key(), permanent)
+	if calls := client.helloCallsCount(); calls != 1 {
+		t.Fatalf("unrelated permanent schedule allowed %d Hello calls; want 1", calls)
 	}
 }
 
@@ -172,14 +191,32 @@ func TestChannelMemberReconcilerExposesBoundedRepairWakeups(t *testing.T) {
 	if _, exists := worker.schedules[secondKey]; !exists {
 		t.Fatal("scoped repair wake cleared an unrelated target schedule")
 	}
-	worker.Trigger()
-	worker.applyWake(false)
+	worker.applyWake(true)
 	if len(worker.schedules) != 0 {
-		t.Fatalf("global authority wake retained %d schedules", len(worker.schedules))
+		t.Fatalf("forced authority cycle retained %d schedules", len(worker.schedules))
 	}
 	if err := worker.ReconcileEventRepair(nil, model.ChannelID{}, model.PeerID{}); !errors.Is(err,
 		ErrChannelMemberReconciler) {
 		t.Fatalf("invalid repair wake error = %v", err)
+	}
+}
+
+func awaitChannelMemberRosterMergeSignal(t *testing.T, worker *ChannelMemberReconciler) {
+	t.Helper()
+	select {
+	case <-worker.trigger:
+	default:
+		t.Fatal("roster merge did not signal its follow-up cycle")
+	}
+}
+
+func assertChannelMemberSchedule(t *testing.T, worker *ChannelMemberReconciler,
+	key channelMemberTargetKey, want channelMemberSchedule,
+) {
+	t.Helper()
+	got, exists := worker.schedules[key]
+	if !exists || got != want {
+		t.Fatalf("unrelated Channel schedule = %#v, %t; want %#v, true", got, exists, want)
 	}
 }
 
@@ -228,6 +265,7 @@ func (clock *mutableChannelMemberClock) advance(delta time.Duration) {
 type fakeChannelMemberBackend struct {
 	mu                  sync.Mutex
 	target              channelMemberTarget
+	targetValues        []channelMemberTarget
 	hasTarget           bool
 	leaveTarget         channelMemberLeaveTarget
 	hasLeave            bool
@@ -287,18 +325,30 @@ func (backend *fakeChannelMemberBackend) settleLeave(_ context.Context,
 func (backend *fakeChannelMemberBackend) targets(context.Context) ([]channelMemberTarget, error) {
 	backend.mu.Lock()
 	defer backend.mu.Unlock()
+	if backend.targetValues != nil {
+		return append([]channelMemberTarget(nil), backend.targetValues...), nil
+	}
 	if !backend.hasTarget {
 		return nil, nil
 	}
 	return []channelMemberTarget{backend.target}, nil
 }
 
-func (backend *fakeChannelMemberBackend) merge(_ context.Context, _ channelMemberTarget,
+func (backend *fakeChannelMemberBackend) merge(_ context.Context, target channelMemberTarget,
 	records []model.Member, head model.RecordHead, _ time.Time,
 ) error {
 	backend.mu.Lock()
 	backend.mergeValues = append([]model.Member(nil), records...)
 	backend.mergeHead = head
+	if backend.targetValues != nil {
+		remaining := make([]channelMemberTarget, 0, len(backend.targetValues))
+		for _, candidate := range backend.targetValues {
+			if candidate.key() != target.key() {
+				remaining = append(remaining, candidate)
+			}
+		}
+		backend.targetValues = remaining
+	}
 	backend.mu.Unlock()
 	return nil
 }
@@ -400,6 +450,12 @@ func (client *fakeChannelMemberClient) InstallBaseline(_ context.Context, _ mode
 func (client *fakeChannelMemberClient) setHelloError(err error) {
 	client.mu.Lock()
 	client.helloError = err
+	client.mu.Unlock()
+}
+
+func (client *fakeChannelMemberClient) setHelloResponse(response peer.MemberHelloAck) {
+	client.mu.Lock()
+	client.helloResponse = response
 	client.mu.Unlock()
 }
 

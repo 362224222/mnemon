@@ -10,21 +10,33 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/testkit"
 )
 
-func TestChannelMemberReconcilerMergesOwnTerminalHelloWithoutSyncOrBaseline(t *testing.T) {
+func TestChannelMemberReconcilerMergesTerminalHelloWithoutClearingOtherChannelBackoffSchedule(
+	t *testing.T,
+) {
 	t.Parallel()
 	target, terminal := newTerminalChannelMemberTarget(t, "member-reconciler-terminal")
+	other := newChannelMemberReconcilerTarget(t, "member-reconciler-terminal-other")
 	ack, err := peer.NewMemberHelloAck(peer.MemberHelloAckSpec{ChannelID: target.channel.ID(),
 		MissingRecords: []model.Member{terminal}, RosterHead: terminal.Head()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	backend := &fakeChannelMemberBackend{target: target, hasTarget: true}
+	backend := &fakeChannelMemberBackend{
+		targetValues: []channelMemberTarget{target, other},
+	}
 	client := &fakeChannelMemberClient{helloResponse: ack}
 	clock := &mutableChannelMemberClock{at: terminal.CreatedAt().Add(time.Second)}
 	worker, err := newChannelMemberReconciler(backend, client, clock, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
+	worker.schedules[target.key()] = channelMemberSchedule{
+		head: target.roster.Head(), attempt: 1, next: clock.Now(),
+	}
+	backoff := channelMemberSchedule{
+		head: other.roster.Head(), attempt: 2, next: clock.Now().Add(time.Hour),
+	}
+	worker.schedules[other.key()] = backoff
 	if err := worker.runCycle(context.Background(), false); err != nil {
 		t.Fatal(err)
 	}
@@ -33,6 +45,15 @@ func TestChannelMemberReconcilerMergesOwnTerminalHelloWithoutSyncOrBaseline(t *t
 		client.syncCallsCount() != 0 || client.installCalls() != 0 {
 		t.Fatalf("terminal merge = records %#v head %#v sync %d baseline %d", merged, head,
 			client.syncCallsCount(), client.installCalls())
+	}
+	awaitChannelMemberRosterMergeSignal(t, worker)
+	client.setHelloResponse(peer.MemberHelloAck{})
+	if err := worker.runCycle(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	assertChannelMemberSchedule(t, worker, other.key(), backoff)
+	if calls := client.helloCallsCount(); calls != 1 {
+		t.Fatalf("unrelated backoff schedule allowed %d Hello calls; want 1", calls)
 	}
 }
 

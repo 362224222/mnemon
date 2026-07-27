@@ -23,6 +23,6 @@ func (worker *ChannelMemberReconciler) mergeTerminalMemberHello(ctx context.Cont
 		return true, err
 	}
 	worker.recordMerge()
-	worker.Trigger()
+	worker.signal()
 	return true, nil
 }
