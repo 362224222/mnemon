@@ -8,7 +8,7 @@ Handle only the single projection returned by `mnemon-harness agent current --js
 - On a reviewer `ACTIVE` or `REWORK` Work, inspect the brief and readonly Artifacts, do the work, then use `deliver` with a concise result summary and any explicit result paths.
 - On a home `DELIVERED` Work, use `close` when the result satisfies the brief. Use `rework` only for the one allowed correction iteration and state the required correction precisely.
 - Use `cancel` only when the current home Work should terminate without a result and the action is explicitly allowed.
-- Use a context-bound `offer` only when the current reviewer Work permits nested delegation. Keep all children in one selected destination Channel; `--to team` gives every child the same brief, deadline, and Artifact closure.
+- Use a context-bound `offer` only when the current reviewer Work permits nested delegation. Select one reviewer by effective alias; the child receives the same brief, deadline, and Artifact closure.
 
 Participant `accept`, `decline`, and `deliver` are requests accepted by the participant's local mnemond. They do not directly change the remote home Work. Wait for later managed Events instead of claiming that Gossip delivery or a local receipt completed the remote transition.
 

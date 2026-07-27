@@ -328,17 +328,13 @@ func (e *TeamworkActionExecutor) buildOffer(ctx context.Context, spec TeamworkEx
 	selection AgentOfferSelection, current model.CurrentReadReceipt, hasCurrent bool,
 	artifacts []model.ArtifactRef,
 ) (executionAcceptanceSpec, *ControlError) {
-	reviewers := selection.Reviewers()
-	reviewerIDs := make([]model.PeerID, len(reviewers))
-	for index := range reviewers {
-		reviewerIDs[index] = reviewers[index].PeerID()
-	}
-	allAudience, err := model.NewAudience(reviewerIDs)
+	reviewer := selection.Reviewer()
+	audience, err := model.NewAudience([]model.PeerID{reviewer.PeerID()})
 	if err != nil {
 		return executionAcceptanceSpec{}, NewControlError(CodeInternal,
 			"selected Teamwork audience is invalid")
 	}
-	scope, err := e.backend.Prepare(ctx, selection.ChannelID(), allAudience, uint8(len(reviewers)))
+	scope, err := e.backend.Prepare(ctx, selection.ChannelID(), audience, 1)
 	if err != nil {
 		return executionAcceptanceSpec{}, mapTeamworkExecutionError(err)
 	}
@@ -349,14 +345,14 @@ func (e *TeamworkActionExecutor) buildOffer(ctx context.Context, spec TeamworkEx
 	}
 	plan, err := teamwork.PlanOffer(teamwork.OfferPlanSpec{ChannelID: scope.channelID,
 		RosterRevision: scope.publicationRoster.Revision(), HomePeerID: scope.node.PeerID(),
-		ReviewerPeerIDs: reviewerIDs, AcceptedAt: spec.At, Deadline: spec.Action.Deadline})
+		ReviewerPeerID: reviewer.PeerID(), AcceptedAt: spec.At, Deadline: spec.Action.Deadline})
 	if err != nil {
 		return executionAcceptanceSpec{}, mapTeamworkExecutionError(err)
 	}
-	planned := plan.Offers()
-	if len(planned) != len(reviewers) {
+	participants := plan.Participants()
+	if participants.ReviewerPeerID() != reviewer.PeerID() {
 		return executionAcceptanceSpec{}, NewControlError(CodeInternal,
-			"Teamwork offer plan changed reviewer count")
+			"Teamwork offer plan changed reviewer")
 	}
 
 	causes := []model.EventKey(nil)
@@ -368,54 +364,46 @@ func (e *TeamworkActionExecutor) buildOffer(ctx context.Context, spec TeamworkEx
 		return executionAcceptanceSpec{}, NewControlError(CodeInternal,
 			"Teamwork Event factory is unavailable")
 	}
-	items := make([]store.LocalAcceptanceItem, len(planned))
-	for index, offer := range planned {
-		if offer.Ordinal() != uint8(index) || offer.Participants().ReviewerPeerID() != reviewers[index].PeerID() {
-			return executionAcceptanceSpec{}, NewControlError(CodeInternal,
-				"Teamwork offer plan changed canonical reviewer order")
-		}
-		workID, eventID, err := derivedOfferIDs(spec.Reservation.Operation.ID(), uint8(index))
-		if err != nil {
-			return executionAcceptanceSpec{}, NewControlError(CodeInternal,
-				"server could not derive Teamwork identities")
-		}
-		workRef, _ := model.NewWorkRef(scope.node.PeerID(), workID)
-		eventScope, err := scope.eventScope(uint8(index), workRef)
-		if err != nil {
-			return executionAcceptanceSpec{}, NewControlError(CodeInternal,
-				"server could not derive Event scope")
-		}
-		audience, _ := model.NewAudience([]model.PeerID{offer.Participants().ReviewerPeerID()})
-		stamp, err := event.NewAdmissionStamp(event.AdmissionStampSpec{Node: scope.node, Profile: scope.profile,
-			EventID: eventID, ChannelID: scope.channelID, WorkRef: workRef,
-			OriginSequence: eventScope.OriginSequence(), ChannelSequence: eventScope.ChannelSequence(),
-			OriginMember: eventScope.OriginMember(), PublicationRoster: eventScope.PublicationRoster(),
-			Audience: audience, WorkVersion: 1, Iteration: 1, Artifacts: artifacts, CausedBy: causes})
-		if err != nil {
-			return executionAcceptanceSpec{}, NewControlError(CodeInternal,
-				"server could not bind offer authority")
-		}
-		bundle, err := factory.AdmitAgent(ctx, stamp, spec.Action.Candidate)
-		if err != nil || bundle.WorkDeadlineUnixNano() != plan.DeadlineUnixNano() {
-			return executionAcceptanceSpec{}, NewControlError(CodeInternal,
-				"server could not admit offer Event")
-		}
-		work, err := model.NewReviewWork(model.ReviewWorkSpec{Ref: workRef, ChannelID: scope.channelID,
-			Participants: offer.Participants(), Version: 1, Iteration: 1,
-			DeadlineUnixNano: bundle.WorkDeadlineUnixNano(), State: model.WorkOffered,
-			StateData: bundle.Event().Payload(), UpdatedBy: bundle.Event().ID(), UpdatedAt: bundle.Event().AcceptedAt()})
-		if err != nil {
-			return executionAcceptanceSpec{}, NewControlError(CodeInternal,
-				"server could not create offered Work")
-		}
-		mutation, err := store.NewWorkCreation(work)
-		if err != nil {
-			return executionAcceptanceSpec{}, NewControlError(CodeInternal,
-				"server could not freeze offered Work")
-		}
-		items[index] = store.LocalAcceptanceItem{Publication: bundle.Publication(), Work: &mutation}
+	workID, eventID, err := derivedOfferIDs(spec.Reservation.Operation.ID(), 0)
+	if err != nil {
+		return executionAcceptanceSpec{}, NewControlError(CodeInternal,
+			"server could not derive Teamwork identities")
 	}
-	return executionAcceptanceSpec{scope: scope, items: items,
+	workRef, _ := model.NewWorkRef(scope.node.PeerID(), workID)
+	eventScope, err := scope.eventScope(0, workRef)
+	if err != nil {
+		return executionAcceptanceSpec{}, NewControlError(CodeInternal,
+			"server could not derive Event scope")
+	}
+	stamp, err := event.NewAdmissionStamp(event.AdmissionStampSpec{Node: scope.node, Profile: scope.profile,
+		EventID: eventID, ChannelID: scope.channelID, WorkRef: workRef,
+		OriginSequence: eventScope.OriginSequence(), ChannelSequence: eventScope.ChannelSequence(),
+		OriginMember: eventScope.OriginMember(), PublicationRoster: eventScope.PublicationRoster(),
+		Audience: audience, WorkVersion: 1, Iteration: 1, Artifacts: artifacts, CausedBy: causes})
+	if err != nil {
+		return executionAcceptanceSpec{}, NewControlError(CodeInternal,
+			"server could not bind offer authority")
+	}
+	bundle, err := factory.AdmitAgent(ctx, stamp, spec.Action.Candidate)
+	if err != nil || bundle.WorkDeadlineUnixNano() != plan.DeadlineUnixNano() {
+		return executionAcceptanceSpec{}, NewControlError(CodeInternal,
+			"server could not admit offer Event")
+	}
+	work, err := model.NewReviewWork(model.ReviewWorkSpec{Ref: workRef, ChannelID: scope.channelID,
+		Participants: participants, Version: 1, Iteration: 1,
+		DeadlineUnixNano: bundle.WorkDeadlineUnixNano(), State: model.WorkOffered,
+		StateData: bundle.Event().Payload(), UpdatedBy: bundle.Event().ID(), UpdatedAt: bundle.Event().AcceptedAt()})
+	if err != nil {
+		return executionAcceptanceSpec{}, NewControlError(CodeInternal,
+			"server could not create offered Work")
+	}
+	mutation, err := store.NewWorkCreation(work)
+	if err != nil {
+		return executionAcceptanceSpec{}, NewControlError(CodeInternal,
+			"server could not freeze offered Work")
+	}
+	return executionAcceptanceSpec{scope: scope,
+		items:     []store.LocalAcceptanceItem{{Publication: bundle.Publication(), Work: &mutation}},
 		operation: localExecutionAuthority(spec.Reservation.Operation)}, nil
 }
 
@@ -790,12 +778,6 @@ func mapOfferSelectionError(err error) *ControlError {
 			message = boundedOfferSelectionMessage(message, candidates.Candidates())
 		}
 		return NewControlError(CodeAmbiguousChannel, message)
-	case errors.Is(err, ErrAgentSelectionParticipantAmbiguous):
-		message := "participant selector is ambiguous"
-		if errors.As(err, &candidates) {
-			message = boundedOfferSelectionMessage(message, candidates.Candidates())
-		}
-		return NewControlError(CodeAmbiguousParticipant, message)
 	case errors.Is(err, ErrAgentSelectionChannelUnavailable),
 		errors.Is(err, ErrAgentSelectionParticipantUnavailable):
 		return NewControlError(CodePeerUnavailable, "selected Channel participant is unavailable")

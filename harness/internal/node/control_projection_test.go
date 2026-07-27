@@ -11,7 +11,6 @@ func TestParseInitiationProjectionRequiresCanonicalClosedProjection(t *testing.T
 	t.Parallel()
 	projection := InitiationProjection{SchemaVersion: SchemaVersion}
 	projection.InitiationContext.Channels = []InitiationChannel{{
-		AllowTeam:  true,
 		LocalAlias: "alpha",
 		Participants: []InitiationParticipant{
 			{EffectiveAlias: "helper", Eligible: true, Reachable: true},

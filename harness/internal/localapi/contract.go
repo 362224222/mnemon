@@ -40,18 +40,12 @@ func ParseInitiationProjection(raw []byte) (InitiationProjection, error) {
 		}
 		previousChannel = channel.LocalAlias
 		previousParticipant := ""
-		eligible := false
 		for _, participant := range channel.Participants {
 			if !validInitiationAlias(participant.EffectiveAlias) ||
-				participant.EffectiveAlias == "auto" || participant.EffectiveAlias == "team" ||
 				(previousParticipant != "" && previousParticipant >= participant.EffectiveAlias) {
 				return InitiationProjection{}, errors.New("initiation participant projection is invalid")
 			}
 			previousParticipant = participant.EffectiveAlias
-			eligible = eligible || participant.Eligible
-		}
-		if channel.AllowTeam != eligible {
-			return InitiationProjection{}, errors.New("initiation team projection is invalid")
 		}
 	}
 	return projection, nil

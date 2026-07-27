@@ -94,7 +94,7 @@ func TestTeamworkActionExecutorProbesTerminalBeforeRetryableError(t *testing.T) 
 	fixture := newExecutorFixture(t, 1)
 	fixture.selector.err = ErrAgentSelectionParticipantUnavailable
 	action := executorAction(t, "offer", false, "terminal before retry", "30m",
-		AgentParticipantAuto, nil)
+		"reviewer-0", nil)
 	reservation := executorReservation(t, fixture, action, model.ReviewWork{}, false)
 	receipt := mustExecutorRejectionReceipt(t, reservation.Operation.ID(), CodeInvalidArgument,
 		"durable rejection won before retry")
@@ -466,7 +466,7 @@ func committedTeamworkReplayFixture(t *testing.T,
 ) (*executorFixture, TeamworkActionRequest, OperationResponse, model.Operation) {
 	t.Helper()
 	fixture := newExecutorFixture(t, 1)
-	request := TeamworkActionRequest{Action: "offer", Channel: "alpha", To: AgentParticipantAuto,
+	request := TeamworkActionRequest{Action: "offer", Channel: "alpha", To: "reviewer-0",
 		Deadline: "30m", Content: content}
 	action := executorAction(t, "offer", false, request.Content, request.Deadline, request.To, nil)
 	reservation := executorReservation(t, fixture, action, model.ReviewWork{}, false)

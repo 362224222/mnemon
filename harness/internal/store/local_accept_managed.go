@@ -23,7 +23,7 @@ type ManagedAcceptanceSpec struct {
 }
 
 // CommitManagedAcceptance is the atomic domain-acceptance boundary used by
-// the Agent controller. A committed Event batch, Operation receipt, Handling
+// the Agent controller. A committed Event, Operation receipt, Handling
 // outcome and AgentRun outcome become visible together or not at all.
 func (s *Store) CommitManagedAcceptance(ctx context.Context, spec ManagedAcceptanceSpec,
 	trustedNow time.Time,
@@ -113,18 +113,18 @@ func prepareManagedAcceptance(ctx context.Context, tx *sql.Tx, spec LocalAccepta
 func validateManagedAcceptanceEvents(authority managedAcceptanceState, operation model.Operation,
 	events []model.Event,
 ) error {
-	if len(events) == 0 {
-		return fmt.Errorf("%w: accepted operation has no Event", ErrManagedAcceptanceInvariant)
+	if len(events) != 1 {
+		return fmt.Errorf("%w: accepted operation must have exactly one Event",
+			ErrManagedAcceptanceInvariant)
 	}
+	event := events[0]
 	if !authority.hasHandling {
 		if operation.Kind() != model.OperationTeamworkOffer {
 			return fmt.Errorf("%w: contextless operation is not an offer", ErrManagedAcceptanceInvariant)
 		}
-		for _, event := range events {
-			if len(event.CausedBy()) != 0 {
-				return fmt.Errorf("%w: contextless offer claimed current causality",
-					ErrManagedAcceptanceInvariant)
-			}
+		if len(event.CausedBy()) != 0 {
+			return fmt.Errorf("%w: contextless offer claimed current causality",
+				ErrManagedAcceptanceInvariant)
 		}
 		return nil
 	}
@@ -133,16 +133,14 @@ func validateManagedAcceptanceEvents(authority managedAcceptanceState, operation
 			ErrManagedAcceptanceInvariant)
 	}
 	source := authority.current.SourceEvent()
-	for _, event := range events {
-		causes := event.CausedBy()
-		if len(causes) != 1 || event.AcceptedAt().Before(authority.current.ReadAt()) {
-			return fmt.Errorf("%w: Event is not caused by the exact current source",
-				ErrManagedAcceptanceInvariant)
-		}
-		if causes[0] != source && !managedParentResumeActionWorkCause(authority, operation, event) {
-			return fmt.Errorf("%w: Event is not caused by the exact current source",
-				ErrManagedAcceptanceInvariant)
-		}
+	causes := event.CausedBy()
+	if len(causes) != 1 || event.AcceptedAt().Before(authority.current.ReadAt()) {
+		return fmt.Errorf("%w: Event is not caused by the exact current source",
+			ErrManagedAcceptanceInvariant)
+	}
+	if causes[0] != source && !managedParentResumeActionWorkCause(authority, operation, event) {
+		return fmt.Errorf("%w: Event is not caused by the exact current source",
+			ErrManagedAcceptanceInvariant)
 	}
 	if operation.Kind() == model.OperationTeamworkOffer {
 		if authority.derivation == nil {
@@ -150,11 +148,11 @@ func validateManagedAcceptanceEvents(authority managedAcceptanceState, operation
 		}
 		return nil
 	}
-	if len(events) != 1 || events[0].Scope().WorkRef() != authority.current.ActionWork() {
+	if event.Scope().WorkRef() != authority.current.ActionWork() {
 		return fmt.Errorf("%w: action Event targets a different current Work",
 			ErrManagedAcceptanceInvariant)
 	}
-	facts, err := decodeClosedEventPayload(events[0])
+	facts, err := decodeClosedEventPayload(event)
 	if err != nil || facts.WorkVersion != authority.current.ActionWorkVersion() {
 		return fmt.Errorf("%w: action Event uses a different current Work version",
 			ErrManagedAcceptanceInvariant)

@@ -94,7 +94,7 @@ func initialEffectiveAliasWidths(active map[model.PeerID]model.Member,
 ) map[model.PeerID]int {
 	widths := make(map[model.PeerID]int, len(active))
 	for peerID := range active {
-		if labelCounts[labels[peerID]] > 1 || labels[peerID] == "auto" || labels[peerID] == "team" {
+		if labelCounts[labels[peerID]] > 1 {
 			widths[peerID] = 8
 		}
 	}

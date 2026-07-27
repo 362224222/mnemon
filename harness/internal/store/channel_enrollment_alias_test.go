@@ -7,7 +7,7 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/testkit"
 )
 
-func TestDeriveEffectiveAliasesHandlesDuplicatesReservedAndSecondaryCollision(t *testing.T) {
+func TestDeriveEffectiveAliasesHandlesDuplicatesAndTeamLabel(t *testing.T) {
 	t.Parallel()
 	channel := testkit.NewSignedChannel(t, "effective-aliases")
 	roster := channel.Roster()
@@ -18,9 +18,9 @@ func TestDeriveEffectiveAliasesHandlesDuplicatesReservedAndSecondaryCollision(t 
 	secondIdentity := testkit.NewIdentity(t, "duplicate-two")
 	_, roster = appendRosterMemberWithLabel(t, channel.Descriptor(), ownerSigner, roster,
 		secondIdentity, "duplicate")
-	reservedIdentity := testkit.NewIdentity(t, "reserved-team")
+	teamIdentity := testkit.NewIdentity(t, "team-label")
 	_, roster = appendRosterMemberWithLabel(t, channel.Descriptor(), ownerSigner, roster,
-		reservedIdentity, "team")
+		teamIdentity, "team")
 	aliases, _, err := deriveEffectiveAliases(channel.Owner().PeerID(), roster)
 	if err != nil {
 		t.Fatal(err)
@@ -28,7 +28,7 @@ func TestDeriveEffectiveAliasesHandlesDuplicatesReservedAndSecondaryCollision(t 
 	if aliases[firstIdentity.PeerID()] == first.DisplayLabel() ||
 		aliases[secondIdentity.PeerID()] == first.DisplayLabel() ||
 		aliases[firstIdentity.PeerID()] == aliases[secondIdentity.PeerID()] ||
-		aliases[reservedIdentity.PeerID()] == "team" {
+		aliases[teamIdentity.PeerID()] != "team" {
 		t.Fatalf("derived aliases = %#v", aliases)
 	}
 }

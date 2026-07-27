@@ -60,27 +60,17 @@ func validateInitiationChannel(channel InitiationChannel, previous string) error
 		channel.Participants == nil || len(channel.Participants) > model.MaxChildWorks {
 		return errors.New("initiation Channel projection is invalid")
 	}
-	eligible, err := validateInitiationParticipants(channel.Participants)
-	if err != nil {
-		return err
-	}
-	if channel.AllowTeam != eligible {
-		return errors.New("initiation team projection is invalid")
-	}
-	return nil
+	return validateInitiationParticipants(channel.Participants)
 }
 
-func validateInitiationParticipants(participants []InitiationParticipant) (bool, error) {
+func validateInitiationParticipants(participants []InitiationParticipant) error {
 	previous := ""
-	eligible := false
 	for _, participant := range participants {
 		if !validControlAlias(participant.EffectiveAlias) ||
-			participant.EffectiveAlias == "auto" || participant.EffectiveAlias == "team" ||
 			(previous != "" && previous >= participant.EffectiveAlias) {
-			return false, errors.New("initiation participant projection is invalid")
+			return errors.New("initiation participant projection is invalid")
 		}
 		previous = participant.EffectiveAlias
-		eligible = eligible || participant.Eligible
 	}
-	return eligible, nil
+	return nil
 }

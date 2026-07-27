@@ -150,27 +150,15 @@ func (handler ActionHandler) validateSelection(input ActionInput) *ControlError 
 	if apiErr := validateSelector("participant", input.Participant); apiErr != nil {
 		return apiErr
 	}
-	if hasSelectors && input.Participant != "" &&
-		!allowsParticipantSelector(policy, input.Participant) {
+	if hasSelectors && input.Participant == "" {
+		return NewControlError(CodeInvalidArgument,
+			"this Teamwork action requires an explicit participant selector")
+	}
+	if hasSelectors && policy.Participant() != teamwork.ParticipantEffectiveAlias {
 		return NewControlError(CodeInvalidArgument,
 			"participant selector is forbidden by this Teamwork action policy")
 	}
 	return nil
-}
-
-func allowsParticipantSelector(policy teamwork.ActionSelectorPolicy, value string) bool {
-	want := teamwork.ParticipantEffectiveAlias
-	if value == AgentParticipantAuto {
-		want = teamwork.ParticipantAuto
-	} else if value == AgentParticipantTeam {
-		want = teamwork.ParticipantTeam
-	}
-	for _, allowed := range policy.Participants() {
-		if allowed == want {
-			return true
-		}
-	}
-	return false
 }
 
 func (handler ActionHandler) parseDeadline(value string) (time.Duration, *ControlError) {
@@ -254,10 +242,6 @@ func (action ValidatedAction) requestDigest(contextHash model.Digest,
 	descriptor := action.handler.Descriptor()
 	contentPolicy := descriptor.Content()
 	artifactPolicy := descriptor.Artifacts()
-	participant := action.Participant
-	if _, hasSelectors := descriptor.Selectors(); hasSelectors && participant == "" {
-		participant = AgentParticipantAuto
-	}
 	paths := append([]string{}, action.ArtifactPaths...)
 	sort.Strings(paths)
 	var contextValue *model.Digest
@@ -271,7 +255,7 @@ func (action ValidatedAction) requestDigest(contextHash model.Digest,
 		PolicyDigest:  model.Sum(descriptor.SourceBytes()),
 		Kind:          action.handler.OperationKind(), Action: action.Name,
 		HasContext: hasContext, ContextHash: contextValue,
-		ChannelAlias: action.ChannelAlias, Participant: participant,
+		ChannelAlias: action.ChannelAlias, Participant: action.Participant,
 		DeadlineNanos: action.Deadline.Nanoseconds(), Content: action.Content,
 		ContentPolicy: actionContentDigestWire{Required: contentPolicy.Required(),
 			MaxBytes: contentPolicy.MaxBytes(), Source: string(contentPolicy.Source())},

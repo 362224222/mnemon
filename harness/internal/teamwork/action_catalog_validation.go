@@ -78,8 +78,7 @@ func projectArtifacts(wire actionArtifactWire) (ActionArtifactPolicy, error) {
 }
 
 func projectReceipt(wire actionReceiptWire, operation model.OperationKind) (ActionReceiptPolicy, error) {
-	if wire.Action != string(operation) || wire.Status != ReceiptStatusAccepted || wire.MaxResults == 0 ||
-		wire.MaxResults > model.MaxChildWorks ||
+	if wire.Action != string(operation) || wire.Status != ReceiptStatusAccepted || wire.MaxResults != 1 ||
 		(wire.Handling != ReceiptHandlingCompleted && wire.Handling != ReceiptHandlingContextDependent) {
 		return ActionReceiptPolicy{}, errors.New("receipt is not bound to the closed action or result shape")
 	}
@@ -122,21 +121,9 @@ func parseDeadline(wire actionDeadlineWire) (ActionDeadlinePolicy, error) {
 }
 
 func parseSelectors(wire actionSelectorWire) (ActionSelectorPolicy, error) {
-	if wire.Channel != SelectorOptionalWhenUnambiguous || len(wire.Participant) == 0 || len(wire.Participant) > 3 {
+	if wire.Channel != SelectorOptionalWhenUnambiguous ||
+		wire.Participant != ParticipantEffectiveAlias {
 		return ActionSelectorPolicy{}, errors.New("selector shape is invalid")
 	}
-	result := ActionSelectorPolicy{channel: wire.Channel, count: uint8(len(wire.Participant))}
-	for index, value := range wire.Participant {
-		selector := ParticipantSelector(value)
-		if selector != ParticipantEffectiveAlias && selector != ParticipantAuto && selector != ParticipantTeam {
-			return ActionSelectorPolicy{}, errors.New("participant selector is unknown")
-		}
-		for prior := 0; prior < index; prior++ {
-			if result.participants[prior] == selector {
-				return ActionSelectorPolicy{}, errors.New("participant selector is duplicated")
-			}
-		}
-		result.participants[index] = selector
-	}
-	return result, nil
+	return ActionSelectorPolicy{channel: wire.Channel, participant: wire.Participant}, nil
 }

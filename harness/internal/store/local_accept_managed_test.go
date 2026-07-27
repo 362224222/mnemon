@@ -40,6 +40,20 @@ func TestCommitManagedAcceptanceCompletesContextlessRunAndReplays(t *testing.T) 
 	}
 }
 
+func TestCommitManagedAcceptanceRejectsMultipleEvents(t *testing.T) {
+	t.Parallel()
+	fixture := newAcceptanceFixture(t, 2)
+	reservation := reserveManagedOfferForAcceptance(t, fixture, "managed-multiple", fixture.now)
+	authority := localAuthority(reservation.Operation)
+	lowLevel := fixture.offer(t, &authority, "managed-multiple", fixture.reviewers, nil, nil)
+	_, err := fixture.store.CommitManagedAcceptance(context.Background(), ManagedAcceptanceSpec{
+		Scope: lowLevel.Scope, Items: lowLevel.Items, Operation: authority,
+	}, fixture.now.Add(time.Second))
+	if !errors.Is(err, ErrManagedAcceptanceInvariant) {
+		t.Fatalf("multiple managed Events error = %v, want %v", err, ErrManagedAcceptanceInvariant)
+	}
+}
+
 func TestCommitManagedAcceptanceCompletesClaimWithExactCurrentAction(t *testing.T) {
 	t.Parallel()
 	fixture := newAcceptanceFixture(t, 1)

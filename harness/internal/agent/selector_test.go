@@ -1,13 +1,11 @@
 package agent
 
 import (
-	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -18,101 +16,72 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
 
-func TestOfferSelectorTeamUsesCanonicalPeerBytesAndIgnoresReachability(t *testing.T) {
-	t.Parallel()
-	peers := []model.PeerID{
-		agentSelectorPeer(t, "team-a"),
-		agentSelectorPeer(t, "team-b"),
-		agentSelectorPeer(t, "team-c"),
-	}
-	sort.Slice(peers, func(left, right int) bool {
-		leftBytes, _ := canonicalAgentPeerBytes(peers[left])
-		rightBytes, _ := canonicalAgentPeerBytes(peers[right])
-		return bytes.Compare(leftBytes, rightBytes) < 0
-	})
-	reviewers := []decodedAgentOfferReviewer{
-		agentDecodedReviewer(t, peers[2], "alpha", model.ReachabilityReachable, true),
-		agentDecodedReviewer(t, peers[0], "zulu", model.ReachabilityUnreachable, true),
-		agentDecodedReviewer(t, peers[1], "middle", model.ReachabilityUnknown, true),
-	}
-	sortAgentOfferReviewers(reviewers)
-
-	team, err := selectAgentOfferReviewers(reviewers, AgentParticipantTeam)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for index, alias := range []string{"zulu", "middle", "alpha"} {
-		if team[index].PeerID() != peers[index] || team[index].EffectiveAlias() != alias {
-			t.Fatalf("team[%d] = (%s,%q), want (%s,%q)", index, team[index].PeerID().String(),
-				team[index].EffectiveAlias(), peers[index].String(), alias)
-		}
-	}
-	if team[0].Reachability() != model.ReachabilityUnreachable {
-		t.Fatal("unreachable reviewer was removed or replaced")
-	}
-	explicit, err := selectAgentOfferReviewers(reviewers, "zulu")
-	if err != nil || len(explicit) != 1 || explicit[0].PeerID() != peers[0] {
-		t.Fatalf("explicit unreachable reviewer = (%#v, %v)", explicit, err)
-	}
-	for _, selector := range []string{"", AgentParticipantAuto} {
-		_, err := selectAgentOfferReviewers(reviewers, selector)
-		if !errors.Is(err, ErrAgentSelectionParticipantAmbiguous) {
-			t.Fatalf("selector %q error = %v", selector, err)
-		}
-		var candidates *AgentSelectionCandidatesError
-		if !errors.As(err, &candidates) || fmt.Sprint(candidates.Candidates()) != "[alpha middle zulu]" {
-			t.Fatalf("selector %q candidates = %#v", selector, candidates)
-		}
-		copyCandidates := candidates.Candidates()
-		copyCandidates[0] = "changed"
-		if candidates.Candidates()[0] != "alpha" {
-			t.Fatal("ambiguity candidates are mutable")
-		}
-	}
-}
-
-func TestOfferSelectorRequiresUniqueChannelAndNeverFallsBack(t *testing.T) {
+func TestOfferSelectorRequiresChannelForCrossChannelAliasCollision(t *testing.T) {
 	t.Parallel()
 	head := agentSelectorHead(t, "selector-roster")
 	alphaPeer := agentSelectorPeer(t, "alpha-reviewer")
 	betaPeer := agentSelectorPeer(t, "beta-reviewer")
+	uniquePeer := agentSelectorPeer(t, "unique-reviewer")
 	channels := []decodedAgentOfferChannel{
 		{id: agentSelectorChannel(t, "channel-beta"), alias: "beta", rosterHead: head,
-			reviewers: []decodedAgentOfferReviewer{agentDecodedReviewer(t, betaPeer, "beta-reviewer",
-				model.ReachabilityReachable, true)}},
+			reviewers: []decodedAgentOfferReviewer{
+				agentDecodedReviewer(t, betaPeer, "reviewer", model.ReachabilityReachable, true)}},
 		{id: agentSelectorChannel(t, "channel-alpha"), alias: "alpha", rosterHead: head,
-			reviewers: []decodedAgentOfferReviewer{agentDecodedReviewer(t, alphaPeer, "alpha-reviewer",
-				model.ReachabilityUnreachable, true)}},
+			reviewers: []decodedAgentOfferReviewer{
+				agentDecodedReviewer(t, alphaPeer, "reviewer", model.ReachabilityUnreachable, true)}},
+		{id: agentSelectorChannel(t, "channel-gamma"), alias: "gamma", rosterHead: head,
+			reviewers: []decodedAgentOfferReviewer{
+				agentDecodedReviewer(t, uniquePeer, "unique", model.ReachabilityUnknown, true)}},
 	}
 
-	_, err := selectAgentOfferChannel(channels, "")
+	_, _, err := selectAgentOfferReviewer(channels, "", "reviewer")
 	if !errors.Is(err, ErrAgentSelectionChannelAmbiguous) {
-		t.Fatalf("omitted Channel error = %v", err)
+		t.Fatalf("cross-Channel alias error = %v", err)
 	}
 	var candidates *AgentSelectionCandidatesError
 	if !errors.As(err, &candidates) || fmt.Sprint(candidates.Candidates()) != "[alpha beta]" {
 		t.Fatalf("Channel candidates = %#v", candidates)
 	}
-	selected, err := selectAgentOfferChannel(channels, "alpha")
-	if err != nil || selected.id.String() != "channel-alpha" {
-		t.Fatalf("explicit Channel = (%#v, %v)", selected, err)
-	}
-	if _, err := selectAgentOfferChannel(channels, "missing"); !errors.Is(err, ErrAgentSelectionChannelUnavailable) {
-		t.Fatalf("missing explicit Channel error = %v", err)
+	copyCandidates := candidates.Candidates()
+	copyCandidates[0] = "changed"
+	if candidates.Candidates()[0] != "alpha" {
+		t.Fatal("ambiguity candidates are mutable")
 	}
 
-	first := agentDecodedReviewer(t, agentSelectorPeer(t, "no-fallback-first"), "first",
-		model.ReachabilityUnreachable, false)
-	second := agentDecodedReviewer(t, agentSelectorPeer(t, "no-fallback-second"), "second",
-		model.ReachabilityReachable, true)
-	reviewers := []decodedAgentOfferReviewer{first, second}
-	sortAgentOfferReviewers(reviewers)
-	if _, err := selectAgentOfferReviewers(reviewers, "first"); !errors.Is(err, ErrAgentSelectionParticipantUnavailable) {
+	channel, reviewer, err := selectAgentOfferReviewer(channels, "alpha", "reviewer")
+	if err != nil || channel.alias != "alpha" || reviewer.PeerID() != alphaPeer ||
+		reviewer.Reachability() != model.ReachabilityUnreachable {
+		t.Fatalf("explicit unreachable reviewer = (%#v, %#v, %v)", channel, reviewer, err)
+	}
+	channel, reviewer, err = selectAgentOfferReviewer(channels, "", "unique")
+	if err != nil || channel.alias != "gamma" || reviewer.PeerID() != uniquePeer {
+		t.Fatalf("unique cross-Channel reviewer = (%#v, %#v, %v)", channel, reviewer, err)
+	}
+}
+
+func TestOfferSelectorRequiresExactChannelAndNeverFallsBack(t *testing.T) {
+	t.Parallel()
+	head := agentSelectorHead(t, "selector-roster")
+	alphaPeer := agentSelectorPeer(t, "no-fallback-alpha")
+	betaPeer := agentSelectorPeer(t, "no-fallback-beta")
+	channels := []decodedAgentOfferChannel{
+		{id: agentSelectorChannel(t, "channel-beta"), alias: "beta", rosterHead: head,
+			reviewers: []decodedAgentOfferReviewer{agentDecodedReviewer(t, betaPeer, "reviewer",
+				model.ReachabilityReachable, true)}},
+		{id: agentSelectorChannel(t, "channel-alpha"), alias: "alpha", rosterHead: head,
+			reviewers: []decodedAgentOfferReviewer{agentDecodedReviewer(t, alphaPeer, "reviewer",
+				model.ReachabilityUnreachable, false)}},
+	}
+
+	if _, _, err := selectAgentOfferReviewer(channels, "missing", "reviewer"); !errors.Is(err, ErrAgentSelectionChannelUnavailable) {
+		t.Fatalf("missing explicit Channel error = %v", err)
+	}
+	if _, _, err := selectAgentOfferReviewer(channels, "alpha", "reviewer"); !errors.Is(err, ErrAgentSelectionParticipantUnavailable) {
 		t.Fatalf("explicit ineligible reviewer error = %v", err)
 	}
-	chosen, err := selectAgentOfferReviewers(reviewers, "second")
-	if err != nil || len(chosen) != 1 || chosen[0].EffectiveAlias() != "second" {
-		t.Fatalf("eligible explicit reviewer = (%#v, %v)", chosen, err)
+	channel, reviewer, err := selectAgentOfferReviewer(channels, "", "reviewer")
+	if err != nil || channel.alias != "beta" || reviewer.PeerID() != betaPeer {
+		t.Fatalf("eligible reviewer = (%#v, %#v, %v)", channel, reviewer, err)
 	}
 }
 
@@ -141,13 +110,19 @@ func TestOfferSelectorReadsOnceAndRejectsInvalidInput(t *testing.T) {
 	if !errors.Is(err, ErrAgentSelectionInput) || reader.calls != 0 {
 		t.Fatalf("invalid selector = error %v calls %d", err, reader.calls)
 	}
+	_, err = selector.Resolve(context.Background(), AgentOfferSelectionSpec{
+		Profile: profile, ChannelAlias: "alpha", At: now,
+	})
+	if !errors.Is(err, ErrAgentSelectionInput) || reader.calls != 0 {
+		t.Fatalf("missing participant selector = error %v calls %d", err, reader.calls)
+	}
 	invalidPeer, _ := model.ParsePeerID("not-a-libp2p-peer")
 	if _, err := canonicalAgentPeerBytes(invalidPeer); err == nil {
 		t.Fatal("invalid libp2p PeerID was accepted")
 	}
-	for _, reserved := range []string{AgentParticipantAuto, AgentParticipantTeam} {
-		if err := validateAgentCandidateAlias(reserved); !errors.Is(err, ErrAgentSelectionInvariant) {
-			t.Fatalf("reserved candidate alias %q error = %v", reserved, err)
+	for _, alias := range []string{"auto", "team"} {
+		if err := validateAgentCandidateAlias(alias); err != nil {
+			t.Fatalf("effective alias %q error = %v", alias, err)
 		}
 	}
 	if _, err := NewOfferSelector(nil); !errors.Is(err, ErrAgentSelectionInput) {
@@ -174,13 +149,12 @@ func agentDecodedReviewer(t *testing.T, peer model.PeerID, alias string,
 	reachability model.Reachability, eligible bool,
 ) decodedAgentOfferReviewer {
 	t.Helper()
-	canonical, err := canonicalAgentPeerBytes(peer)
-	if err != nil {
+	if _, err := canonicalAgentPeerBytes(peer); err != nil {
 		t.Fatal(err)
 	}
 	return decodedAgentOfferReviewer{
-		projection:    AgentOfferReviewer{peerID: peer, effectiveAlias: alias, reachability: reachability},
-		canonicalPeer: canonical, eligible: eligible,
+		projection: AgentOfferReviewer{peerID: peer, effectiveAlias: alias, reachability: reachability},
+		eligible:   eligible,
 	}
 }
 

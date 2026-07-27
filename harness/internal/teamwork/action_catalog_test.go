@@ -38,7 +38,7 @@ func TestActionCatalogProjectsExactCanonicalAssets(t *testing.T) {
 		{name: "offer", ordinal: 0, operation: model.OperationTeamworkOffer,
 			contexts:        []ActionContext{ActionContextNone, ActionContextReviewerActive, ActionContextReviewerRework},
 			contentRequired: true, artifactsAllowed: true, selectors: true,
-			receiptHandling: ReceiptHandlingContextDependent, receiptMaxResults: model.MaxChildWorks},
+			receiptHandling: ReceiptHandlingContextDependent, receiptMaxResults: 1},
 		{name: "accept", ordinal: 1, operation: model.OperationTeamworkAccept,
 			contexts: []ActionContext{ActionContextReviewerOffered}, receiptHandling: ReceiptHandlingCompleted, receiptMaxResults: 1},
 		{name: "decline", ordinal: 2, operation: model.OperationTeamworkDecline,
@@ -151,8 +151,7 @@ func assertCanonicalSelectionPolicy(t *testing.T, name string, descriptor Action
 	}
 	if deadline.Default() != DefaultOfferDeadline || deadline.Minimum() != MinimumOfferDeadline ||
 		deadline.Maximum() != MaximumOfferDeadline || selectors.Channel() != SelectorOptionalWhenUnambiguous ||
-		!reflect.DeepEqual(selectors.Participants(),
-			[]ParticipantSelector{ParticipantEffectiveAlias, ParticipantAuto, ParticipantTeam}) {
+		selectors.Participant() != ParticipantEffectiveAlias {
 		t.Fatalf("descriptor %s deadline/selectors = (%#v, %#v)", name, deadline, selectors)
 	}
 }
@@ -186,15 +185,12 @@ func TestActionCatalogIsDeterministicImmutableAndZeroSafe(t *testing.T) {
 	contexts[0] = ActionContext("tampered")
 	offer, _ := first.Action("offer")
 	selectors, _ := offer.Selectors()
-	participants := selectors.Participants()
-	participants[0] = ParticipantSelector("tampered")
 	if first.Actions()[0].Name() == "" || bytes.Equal(raw, first.Actions()[0].SourceBytes()) ||
 		first.Actions()[0].AllowedContexts()[0] == ActionContext("tampered") {
 		t.Fatal("catalog returned mutable descriptor state")
 	}
-	selectors, _ = offer.Selectors()
-	if selectors.Participants()[0] == ParticipantSelector("tampered") {
-		t.Fatal("selector participants were mutable")
+	if selectors.Participant() != ParticipantEffectiveAlias {
+		t.Fatal("catalog changed selector policy")
 	}
 
 	var zero ActionCatalog

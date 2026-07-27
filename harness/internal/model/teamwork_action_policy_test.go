@@ -126,8 +126,8 @@ func TestTeamworkActionPolicyRejectsIncompleteOrAmbiguousProjection(t *testing.T
 	})
 	assertInvalidTeamworkActionPolicy(t, "zero results",
 		func(spec *TeamworkActionPolicySpec) { spec.Entries[0].MaxResults = 0 })
-	assertInvalidTeamworkActionPolicy(t, "excess results",
-		func(spec *TeamworkActionPolicySpec) { spec.Entries[0].MaxResults = MaxChildWorks + 1 })
+	assertInvalidTeamworkActionPolicy(t, "multiple results",
+		func(spec *TeamworkActionPolicySpec) { spec.Entries[0].MaxResults = 2 })
 
 	policy := testTeamworkActionPolicy(t)
 	if _, err := policy.ActionsForContexts([]TeamworkActionContext{
@@ -168,10 +168,9 @@ func TestTeamworkActionPolicyPreservesJoinedEventBindingAndAssetOrdinal(t *testi
 	}
 }
 
-func TestTeamworkActionPolicyPreservesAssetOwnedContextsAndResultBounds(t *testing.T) {
+func TestTeamworkActionPolicyPreservesAssetOwnedContextsAndSingleResult(t *testing.T) {
 	t.Parallel()
 	specs := testTeamworkActionPolicySpecs()
-	specs[0].MaxResults = 2
 	specs[1].AllowedContexts = []TeamworkActionContext{TeamworkActionContextHomeDelivered}
 	policy, err := NewTeamworkActionPolicy(TeamworkActionPolicySpec{
 		AssetRevision: Sum([]byte("asset-owned Action policy")), Entries: specs})
@@ -179,7 +178,7 @@ func TestTeamworkActionPolicyPreservesAssetOwnedContextsAndResultBounds(t *testi
 		t.Fatal(err)
 	}
 	offer, ok := policy.Operation(OperationTeamworkOffer)
-	if !ok || offer.MaxResults() != 2 {
+	if !ok || offer.MaxResults() != 1 {
 		t.Fatalf("offer entry = %#v, present=%t", offer, ok)
 	}
 	actions, err := policy.ActionsForContexts([]TeamworkActionContext{TeamworkActionContextHomeDelivered})
@@ -218,7 +217,7 @@ func testTeamworkActionPolicySpecs() []TeamworkActionPolicyEntrySpec {
 		{Ordinal: 0, OperationKind: OperationTeamworkOffer,
 			EventType: EventReviewOffered,
 			AllowedContexts: []TeamworkActionContext{TeamworkActionContextNone,
-				TeamworkActionContextReviewerActive, TeamworkActionContextReviewerRework}, MaxResults: MaxChildWorks},
+				TeamworkActionContextReviewerActive, TeamworkActionContextReviewerRework}, MaxResults: 1},
 		{Ordinal: 1, OperationKind: OperationTeamworkAccept,
 			EventType:       EventReviewAcceptRequested,
 			AllowedContexts: []TeamworkActionContext{TeamworkActionContextReviewerOffered}, MaxResults: 1},

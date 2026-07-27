@@ -1,40 +1,21 @@
 package agent
 
 import (
-	"bytes"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/assets"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 )
 
-func TestActionHandlersEnforceParticipantSelectorPolicy(t *testing.T) {
+func TestActionHandlersRequireExplicitParticipantSelector(t *testing.T) {
 	t.Parallel()
-	bundle, err := assets.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	provider := newActionPolicyProviderStub(t, bundle)
-	path := "actions/teamwork/offer.json"
-	provider.raw[path] = bytes.Replace(provider.raw[path],
-		[]byte(`["effective_alias","auto","team"]`),
-		[]byte(`["effective_alias","auto"]`), 1)
-	policy, err := NewActionPolicy(provider)
-	if err != nil {
-		t.Fatal(err)
-	}
-	handlers, err := NewActionHandlers(policy)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, apiErr := handlers.Validate(ActionInput{Action: "offer", Participant: AgentParticipantTeam,
-		Content: "review"})
+	handlers := testActionHandlers(t)
+	_, apiErr := handlers.Validate(ActionInput{Action: "offer", Content: "review"})
 	if apiErr == nil || apiErr.Code != CodeInvalidArgument {
-		t.Fatalf("forbidden team selector error = %#v", apiErr)
+		t.Fatalf("missing participant selector error = %#v", apiErr)
 	}
-	if _, apiErr := handlers.Validate(ActionInput{Action: "offer", Participant: "reviewer-a",
+	if _, apiErr := handlers.Validate(ActionInput{Action: "offer", Participant: "team",
 		Content: "review"}); apiErr != nil {
 		t.Fatalf("effective alias selector error = %#v", apiErr)
 	}
@@ -60,12 +41,12 @@ func TestActionHandlersValidateAssetOwnedSchema(t *testing.T) {
 		{name: "unknown", input: ActionInput{Action: "memory.write"}, wantCode: CodeUnknownAction},
 		{name: "context", input: ActionInput{Action: "deliver", Content: "done"}, wantCode: CodeContextRequired},
 		{name: "required content", input: ActionInput{Action: "decline", HasContext: true}, wantCode: CodeContentRequired},
-		{name: "whitespace content", input: ActionInput{Action: "offer", Content: " \n\t"}, wantCode: CodeContentRequired},
+		{name: "whitespace content", input: ActionInput{Action: "offer", Participant: "reviewer", Content: " \n\t"}, wantCode: CodeContentRequired},
 		{name: "forbidden selector", input: ActionInput{Action: "accept", HasContext: true, Participant: "peer"}, wantCode: CodeInvalidArgument},
 		{name: "forbidden artifact", input: ActionInput{Action: "close", HasContext: true, ArtifactPaths: []string{"x"}}, wantCode: CodeArtifactInvalid},
-		{name: "duplicate artifact", input: ActionInput{Action: "offer", Content: "x", ArtifactPaths: []string{"a", "a"}}, wantCode: CodeArtifactInvalid},
-		{name: "short deadline", input: ActionInput{Action: "offer", Content: "x", Deadline: "4m59s"}, wantCode: CodeInvalidArgument},
-		{name: "long deadline", input: ActionInput{Action: "offer", Content: "x", Deadline: "169h"}, wantCode: CodeInvalidArgument},
+		{name: "duplicate artifact", input: ActionInput{Action: "offer", Participant: "reviewer", Content: "x", ArtifactPaths: []string{"a", "a"}}, wantCode: CodeArtifactInvalid},
+		{name: "short deadline", input: ActionInput{Action: "offer", Participant: "reviewer", Content: "x", Deadline: "4m59s"}, wantCode: CodeInvalidArgument},
+		{name: "long deadline", input: ActionInput{Action: "offer", Participant: "reviewer", Content: "x", Deadline: "169h"}, wantCode: CodeInvalidArgument},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -94,23 +75,27 @@ func TestActionHandlersValidateAssetOwnedSchema(t *testing.T) {
 func TestActionHandlersEnforceContentAndArtifactAssetBounds(t *testing.T) {
 	t.Parallel()
 	handlers := testActionHandlers(t)
-	if _, apiErr := handlers.Validate(ActionInput{Action: "offer", Content: string([]byte{0xff})}); apiErr == nil || apiErr.Code != CodeInvalidArgument {
+	if _, apiErr := handlers.Validate(ActionInput{Action: "offer", Participant: "reviewer",
+		Content: string([]byte{0xff})}); apiErr == nil || apiErr.Code != CodeInvalidArgument {
 		t.Fatalf("invalid UTF-8 error = %#v", apiErr)
 	}
 	offer, _ := handlers.Action("offer")
 	content := strings.Repeat("x", int(offer.Descriptor().Content().MaxBytes())+1)
-	if _, apiErr := handlers.Validate(ActionInput{Action: "offer", Content: content}); apiErr == nil || apiErr.Code != CodeContentTooLarge {
+	if _, apiErr := handlers.Validate(ActionInput{Action: "offer", Participant: "reviewer",
+		Content: content}); apiErr == nil || apiErr.Code != CodeContentTooLarge {
 		t.Fatalf("large content error = %#v", apiErr)
 	}
 	paths := make([]string, int(offer.Descriptor().Artifacts().MaxRoots())+1)
 	for index := range paths {
 		paths[index] = strings.Repeat("x", index+1)
 	}
-	if _, apiErr := handlers.Validate(ActionInput{Action: "offer", Content: "x", ArtifactPaths: paths}); apiErr == nil || apiErr.Code != CodeArtifactTooLarge {
+	if _, apiErr := handlers.Validate(ActionInput{Action: "offer", Participant: "reviewer",
+		Content: "x", ArtifactPaths: paths}); apiErr == nil || apiErr.Code != CodeArtifactTooLarge {
 		t.Fatalf("large Artifact set error = %#v", apiErr)
 	}
 	longPath := strings.Repeat("x", int(offer.Descriptor().Artifacts().MaxPathBytes())+1)
-	if _, apiErr := handlers.Validate(ActionInput{Action: "offer", Content: "x", ArtifactPaths: []string{longPath}}); apiErr == nil || apiErr.Code != CodeArtifactInvalid {
+	if _, apiErr := handlers.Validate(ActionInput{Action: "offer", Participant: "reviewer",
+		Content: "x", ArtifactPaths: []string{longPath}}); apiErr == nil || apiErr.Code != CodeArtifactInvalid {
 		t.Fatalf("long Artifact path error = %#v", apiErr)
 	}
 }
@@ -119,12 +104,12 @@ func TestValidatedActionRequestDigestBindsNormalizedAuthority(t *testing.T) {
 	t.Parallel()
 	handlers := testActionHandlers(t)
 	implicit, apiErr := handlers.Validate(ActionInput{Action: "offer", ChannelAlias: "alpha",
-		Content: "review", ArtifactPaths: []string{"z.md", "a.md"}})
+		Participant: "reviewer-a", Content: "review", ArtifactPaths: []string{"z.md", "a.md"}})
 	if apiErr != nil {
 		t.Fatal(apiErr)
 	}
 	explicit, apiErr := handlers.Validate(ActionInput{Action: "offer", ChannelAlias: "alpha",
-		Participant: AgentParticipantAuto, Deadline: "24h", Content: "review",
+		Participant: "reviewer-a", Deadline: "24h", Content: "review",
 		ArtifactPaths: []string{"a.md", "z.md"}})
 	if apiErr != nil {
 		t.Fatal(apiErr)
@@ -140,7 +125,8 @@ func TestValidatedActionRequestDigestBindsNormalizedAuthority(t *testing.T) {
 
 	contextHash := model.Sum([]byte("managed-context"))
 	contextual, apiErr := handlers.Validate(ActionInput{Action: "offer", HasContext: true,
-		ChannelAlias: "alpha", Content: "review", ArtifactPaths: []string{"z.md", "a.md"}})
+		ChannelAlias: "alpha", Participant: "reviewer-a",
+		Content: "review", ArtifactPaths: []string{"z.md", "a.md"}})
 	if apiErr != nil {
 		t.Fatal(apiErr)
 	}
@@ -152,7 +138,7 @@ func TestValidatedActionRequestDigestBindsNormalizedAuthority(t *testing.T) {
 	}{
 		{name: "context", action: contextual, context: contextHash, hasContext: true},
 		{name: "channel", action: func() ValidatedAction { value := implicit; value.ChannelAlias = "beta"; return value }()},
-		{name: "participant", action: func() ValidatedAction { value := implicit; value.Participant = AgentParticipantTeam; return value }()},
+		{name: "participant", action: func() ValidatedAction { value := implicit; value.Participant = "reviewer-b"; return value }()},
 		{name: "deadline", action: func() ValidatedAction { value := implicit; value.Deadline = 23 * time.Hour; return value }()},
 		{name: "content", action: func() ValidatedAction { value := implicit; value.Content = "another review"; return value }()},
 		{name: "artifacts", action: func() ValidatedAction { value := implicit; value.ArtifactPaths = []string{"a.md"}; return value }()},

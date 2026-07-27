@@ -89,8 +89,6 @@ func TestActionHandlersRejectPolicyUnsupportedByTypedMechanics(t *testing.T) {
 		{name: "Event Artifact capability", path: "actions/teamwork/accept.json",
 			oldText: `"artifacts":{"allowed":false,"max_entries":0,"max_path_bytes":0,"max_roots":0,"max_total_bytes":0}`,
 			newText: `"artifacts":{"allowed":true,"max_entries":4096,"max_path_bytes":512,"max_roots":16,"max_total_bytes":268435456}`},
-		{name: "multi-result capability ceiling", path: "actions/teamwork/accept.json",
-			oldText: `"max_results":1`, newText: `"max_results":2`},
 		{name: "contextless capability ceiling", path: "actions/teamwork/accept.json",
 			oldText: `"allowed_context":["reviewer_offered"]`,
 			newText: `"allowed_context":["none"]`},
@@ -112,15 +110,8 @@ func TestActionHandlersRejectPolicyUnsupportedByTypedMechanics(t *testing.T) {
 	}
 }
 
-func TestActionHandlersProjectAssetOwnedContextsAndResultBounds(t *testing.T) {
+func TestActionHandlersProjectAssetOwnedContexts(t *testing.T) {
 	t.Parallel()
-	offerHandlers := testActionHandlersWithAssetReplacement(t, "actions/teamwork/offer.json",
-		`"max_results":7`, `"max_results":6`)
-	offer, ok := offerHandlers.Action("offer")
-	if !ok || offer.policyEntry.MaxResults() != 6 {
-		t.Fatalf("narrowed offer = %#v, present=%t", offer, ok)
-	}
-
 	contextHandlers := testActionHandlersWithAssetReplacement(t, "actions/teamwork/accept.json",
 		`"allowed_context":["reviewer_offered"]`, `"allowed_context":["home_delivered"]`)
 	actions, err := contextHandlers.RuntimePolicy().ActionsForContexts(
@@ -176,12 +167,12 @@ func TestActionHandlersExposeExhaustiveExecutionMechanics(t *testing.T) {
 	states := []model.WorkState{model.WorkOffered, model.WorkActive, model.WorkDelivered,
 		model.WorkRework, model.WorkClosed, model.WorkDeclined, model.WorkExpired, model.WorkCancelled}
 	tests := []struct {
-		name   string
-		actor  actionActor
-		batch  bool
-		states []model.WorkState
+		name    string
+		actor   actionActor
+		selects bool
+		states  []model.WorkState
 	}{
-		{name: "offer", actor: actionActorOffer, batch: true},
+		{name: "offer", actor: actionActorOffer, selects: true},
 		{name: "accept", actor: actionActorParticipant, states: []model.WorkState{model.WorkOffered}},
 		{name: "decline", actor: actionActorParticipant, states: []model.WorkState{model.WorkOffered}},
 		{name: "deliver", actor: actionActorParticipant, states: []model.WorkState{model.WorkActive, model.WorkRework}},
@@ -191,7 +182,7 @@ func TestActionHandlersExposeExhaustiveExecutionMechanics(t *testing.T) {
 	}
 	for _, test := range tests {
 		handler, ok := handlers.Action(test.name)
-		if !ok || handler.mechanic.actor != test.actor || handler.mechanic.selection != test.batch {
+		if !ok || handler.mechanic.actor != test.actor || handler.mechanic.selection != test.selects {
 			t.Fatalf("%s execution mechanic = %#v", test.name, handler.mechanic)
 		}
 		if test.actor == actionActorOffer {

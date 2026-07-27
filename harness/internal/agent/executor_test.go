@@ -16,11 +16,8 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
 
-// TestTeamworkActionExecutorOffersExplicitAutoAndCanonicalTeam remains the
-// stable ND-21 evidence symbol while its identity-specific helpers live beside
-// executor_identity.go.
-func TestTeamworkActionExecutorOffersExplicitAutoAndCanonicalTeam(t *testing.T) {
-	runTeamworkActionExecutorOffersExplicitAutoAndCanonicalTeam(t)
+func TestTeamworkActionExecutorOffersExplicitReviewer(t *testing.T) {
+	runTeamworkActionExecutorOffersExplicitReviewer(t)
 }
 
 func TestTeamworkActionExecutorRejectsMissingOrMismatchedActionHandlers(t *testing.T) {
@@ -43,17 +40,17 @@ func TestTeamworkActionExecutorRejectsMissingOrMismatchedActionHandlers(t *testi
 
 func TestTeamworkActionExecutorNestedOfferUsesCurrentCausality(t *testing.T) {
 	t.Parallel()
-	fixture := newExecutorFixture(t, 2)
+	fixture := newExecutorFixture(t, 1)
 	parent := fixture.work(t, model.WorkActive, 2, 1, true)
 	fixture.backend.work = parent
-	action := executorAction(t, "offer", true, "delegate review", "1h", AgentParticipantTeam, nil)
+	action := executorAction(t, "offer", true, "delegate review", "1h", "reviewer-0", nil)
 	reservation := executorReservation(t, fixture, action, parent, true)
 	response, apiErr := fixture.executor.ExecuteTeamwork(context.Background(), TeamworkExecutionSpec{
-		Request: TeamworkActionRequest{Action: "offer", To: AgentParticipantTeam,
+		Request: TeamworkActionRequest{Action: "offer", To: "reviewer-0",
 			Deadline: "1h", Content: "delegate review"},
 		Action: action, Reservation: reservation, At: fixture.at,
 	})
-	if apiErr != nil || response.Handling == nil || len(response.Results) != 2 {
+	if apiErr != nil || response.Handling == nil || len(response.Results) != 1 {
 		t.Fatalf("nested offer = (%#v, %v)", response, apiErr)
 	}
 	source := executorCurrent(t, reservation.Run).SourceEvent()
@@ -69,10 +66,10 @@ func TestTeamworkActionExecutorNestedOfferUsesCurrentCausality(t *testing.T) {
 func TestTeamworkActionExecutorTerminalReplayAndStableRejection(t *testing.T) {
 	t.Parallel()
 	fixture := newExecutorFixture(t, 1)
-	action := executorAction(t, "offer", false, "goal", "30m", AgentParticipantAuto, nil)
+	action := executorAction(t, "offer", false, "goal", "30m", "reviewer-0", nil)
 	base := executorReservation(t, fixture, action, model.ReviewWork{}, false)
 	first, apiErr := fixture.executor.ExecuteTeamwork(context.Background(), TeamworkExecutionSpec{
-		Request: TeamworkActionRequest{Action: "offer", Content: "goal"},
+		Request: TeamworkActionRequest{Action: "offer", To: "reviewer-0", Content: "goal"},
 		Action:  action, Reservation: base, At: fixture.at,
 	})
 	if apiErr != nil {
@@ -105,12 +102,12 @@ func TestTeamworkActionExecutorTerminalReplayAndStableRejection(t *testing.T) {
 	for index := range longCandidates {
 		longCandidates[index] = fmt.Sprintf("candidate-%d-%s", index, strings.Repeat("x", 100))
 	}
-	rejectedFixture.selector.err = &AgentSelectionCandidatesError{kind: ErrAgentSelectionParticipantAmbiguous,
+	rejectedFixture.selector.err = &AgentSelectionCandidatesError{kind: ErrAgentSelectionChannelAmbiguous,
 		candidates: longCandidates}
 	_, firstErr := rejectedFixture.executor.ExecuteTeamwork(context.Background(), TeamworkExecutionSpec{
 		Action: action, Reservation: rejectedBase, At: rejectedFixture.at,
 	})
-	if firstErr == nil || firstErr.Code != CodeAmbiguousParticipant || firstErr.Replayed ||
+	if firstErr == nil || firstErr.Code != CodeAmbiguousChannel || firstErr.Replayed ||
 		firstErr.OperationID == nil || rejectedFixture.backend.rejected.Status() != model.OperationRejected ||
 		rejectedFixture.backend.rejectAt != rejectedFixture.clock.now || rejectedFixture.artifacts.calls != 0 ||
 		len(firstErr.Message) > MaxControlDiagnosticBytes ||
@@ -134,7 +131,7 @@ func TestTeamworkActionExecutorTerminalReplayAndStableRejection(t *testing.T) {
 func TestTeamworkActionExecutorRejectsTerminalRequestDigestMismatch(t *testing.T) {
 	t.Parallel()
 	fixture := newExecutorFixture(t, 1)
-	action := executorAction(t, "offer", false, "goal", "30m", AgentParticipantAuto, nil)
+	action := executorAction(t, "offer", false, "goal", "30m", "reviewer-0", nil)
 	reservation := executorReservation(t, fixture, action, model.ReviewWork{}, false)
 	receipt, err := fakeAcceptanceReceipt(executionAcceptanceSpec{}, model.ReviewWork{})
 	if err != nil {
@@ -185,7 +182,7 @@ func TestTeamworkActionExecutorKeepsRetryableOperationOpen(t *testing.T) {
 	t.Parallel()
 	fixture := newExecutorFixture(t, 1)
 	fixture.selector.err = ErrAgentSelectionParticipantUnavailable
-	action := executorAction(t, "offer", false, "retry selection", "30m", AgentParticipantAuto, nil)
+	action := executorAction(t, "offer", false, "retry selection", "30m", "reviewer-0", nil)
 	reservation := executorReservation(t, fixture, action, model.ReviewWork{}, false)
 
 	_, apiErr := fixture.executor.ExecuteTeamwork(context.Background(), TeamworkExecutionSpec{
@@ -247,7 +244,7 @@ func newExecutorFixture(t *testing.T, reviewerCount int) *executorFixture {
 		return string(leftKey) < string(rightKey)
 	})
 	selection := AgentOfferSelection{channelID: channel, channelAlias: "alpha", rosterHead: head,
-		reviewers: reviewers}
+		reviewer: reviewers[0]}
 	backend := &fakeExecutionBackend{scope: scope}
 	selector := &fakeOfferResolver{selection: selection}
 	artifacts := &fakeArtifactCoordinator{}

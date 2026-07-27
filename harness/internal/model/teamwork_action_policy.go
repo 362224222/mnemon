@@ -37,7 +37,7 @@ func teamworkActionMechanics() [TeamworkActionCount]teamworkActionMechanic {
 			contexts: [MaxTeamworkActionContexts]TeamworkActionContext{
 				TeamworkActionContextNone, TeamworkActionContextReviewerActive,
 				TeamworkActionContextReviewerRework,
-			}, contextLen: 3, maxResults: MaxChildWorks},
+			}, contextLen: 3, maxResults: 1},
 		{operation: OperationTeamworkAccept, eventType: EventReviewAcceptRequested,
 			contexts: [MaxTeamworkActionContexts]TeamworkActionContext{
 				TeamworkActionContextReviewerOffered,
@@ -147,7 +147,7 @@ func NewTeamworkActionPolicy(spec TeamworkActionPolicySpec) (TeamworkActionPolic
 	}
 	if !validTeamworkActionPolicyShape(result.entries) {
 		return TeamworkActionPolicy{}, invalid("Teamwork Action policy",
-			"contextless initiation and batch result shape must have one shared owner")
+			"contextless initiation must have one closed owner")
 	}
 	result.ready = true
 	return result, nil
@@ -207,7 +207,7 @@ func teamworkActionMechanicFor(operation OperationKind) (teamworkActionMechanic,
 func validTeamworkActionMechanics() bool {
 	operations := make(map[OperationKind]struct{}, TeamworkActionCount)
 	events := make(map[EventType]struct{}, TeamworkActionCount)
-	batchOperation, contextlessOperation := OperationKind(""), OperationKind("")
+	contextlessOperation := OperationKind("")
 	for _, mechanic := range teamworkActionMechanics() {
 		if !validTeamworkActionMechanic(mechanic) {
 			return false
@@ -219,12 +219,6 @@ func validTeamworkActionMechanics() bool {
 			return false
 		}
 		operations[mechanic.operation], events[mechanic.eventType] = struct{}{}, struct{}{}
-		if mechanic.maxResults == MaxChildWorks {
-			if batchOperation != "" {
-				return false
-			}
-			batchOperation = mechanic.operation
-		}
 		if mechanicAllowsContext(mechanic, TeamworkActionContextNone) {
 			if contextlessOperation != "" {
 				return false
@@ -233,14 +227,14 @@ func validTeamworkActionMechanics() bool {
 		}
 	}
 	return len(operations) == TeamworkActionCount && len(events) == TeamworkActionCount &&
-		batchOperation == OperationTeamworkOffer && contextlessOperation == OperationTeamworkOffer
+		contextlessOperation == OperationTeamworkOffer
 }
 
 func validTeamworkActionMechanic(mechanic teamworkActionMechanic) bool {
 	if !mechanic.operation.Valid() || !strings.HasPrefix(string(mechanic.operation), "teamwork.") ||
 		!mechanic.eventType.AgentAdmitted() || mechanic.contextLen == 0 ||
 		mechanic.contextLen > MaxTeamworkActionContexts ||
-		(mechanic.maxResults != 1 && mechanic.maxResults != MaxChildWorks) {
+		mechanic.maxResults != 1 {
 		return false
 	}
 	for index, context := range mechanic.contexts[:mechanic.contextLen] {
@@ -271,13 +265,10 @@ func mechanicAllowsContext(mechanic teamworkActionMechanic, context TeamworkActi
 }
 
 func validTeamworkActionPolicyShape(entries [TeamworkActionCount]TeamworkActionPolicyEntry) bool {
-	batchOwner, contextlessOwner := -1, -1
+	contextlessOwner := -1
 	for index, entry := range entries {
-		if entry.maxResults > 1 {
-			if batchOwner != -1 {
-				return false
-			}
-			batchOwner = index
+		if entry.maxResults != 1 {
+			return false
 		}
 		if entry.AllowsContext(TeamworkActionContextNone) {
 			if contextlessOwner != -1 {
@@ -286,8 +277,8 @@ func validTeamworkActionPolicyShape(entries [TeamworkActionCount]TeamworkActionP
 			contextlessOwner = index
 		}
 	}
-	return batchOwner >= 0 && batchOwner == contextlessOwner &&
-		entries[batchOwner].operation == OperationTeamworkOffer
+	return contextlessOwner >= 0 &&
+		entries[contextlessOwner].operation == OperationTeamworkOffer
 }
 
 func (policy TeamworkActionPolicy) AssetRevision() Digest { return policy.assetRevision }

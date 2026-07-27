@@ -75,14 +75,13 @@ func TestActionCatalogRejectsMalformedOrInconsistentSources(t *testing.T) {
 		{name: "deadline order", mutate: mutateActionWire("offer", func(w *actionWire) { w.Deadline.Default = "4m" })},
 		{name: "malformed deadline", mutate: mutateActionWire("offer", func(w *actionWire) { w.Deadline.Default = "soon" })},
 		{name: "unknown selector channel", mutate: mutateActionWire("offer", func(w *actionWire) { w.Selectors.Channel = "any" })},
-		{name: "unknown participant selector", mutate: mutateActionWire("offer", func(w *actionWire) { w.Selectors.Participant[0] = "peer" })},
-		{name: "duplicate participant selector", mutate: mutateActionWire("offer", func(w *actionWire) { w.Selectors.Participant[1] = "effective_alias" })},
-		{name: "empty participant selectors", mutate: mutateActionWire("offer", func(w *actionWire) { w.Selectors.Participant = nil })},
+		{name: "unknown participant selector", mutate: mutateActionWire("offer", func(w *actionWire) { w.Selectors.Participant = "peer" })},
+		{name: "empty participant selector", mutate: mutateActionWire("offer", func(w *actionWire) { w.Selectors.Participant = "" })},
 		{name: "receipt action mismatch", mutate: mutateActionWire("accept", func(w *actionWire) { w.Receipt.Action = "teamwork.close" })},
 		{name: "receipt status", mutate: mutateActionWire("accept", func(w *actionWire) { w.Receipt.Status = "rejected" })},
 		{name: "receipt handling", mutate: mutateActionWire("accept", func(w *actionWire) { w.Receipt.Handling = "pending" })},
 		{name: "receipt zero results", mutate: mutateActionWire("accept", func(w *actionWire) { w.Receipt.MaxResults = 0 })},
-		{name: "receipt excessive results", mutate: mutateActionWire("accept", func(w *actionWire) { w.Receipt.MaxResults = 8 })},
+		{name: "receipt multiple results", mutate: mutateActionWire("accept", func(w *actionWire) { w.Receipt.MaxResults = 2 })},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -113,8 +112,7 @@ func TestActionCatalogPolicyComesFromCanonicalSource(t *testing.T) {
 		w.Artifacts = actionArtifactWire{Allowed: true, MaxEntries: 128, MaxPathBytes: 128,
 			MaxRoots: 2, MaxTotalBytes: 1 << 20}
 		w.Selectors = &actionSelectorWire{Channel: SelectorOptionalWhenUnambiguous,
-			Participant: []string{"auto"}}
-		w.Receipt.MaxResults = 2
+			Participant: ParticipantEffectiveAlias}
 	})(t, sources)
 	sources = mutateActionWire("offer", func(w *actionWire) {
 		w.Deadline = &actionDeadlineWire{Minimum: "10m", Default: "12h", Maximum: "48h"}
@@ -131,11 +129,11 @@ func TestActionCatalogPolicyComesFromCanonicalSource(t *testing.T) {
 	if !reflect.DeepEqual(accept.AllowedContexts(), []ActionContext{ActionContextParentResume, ActionContextReviewerActive,
 		ActionContextHomeDelivered, ActionContextNone}) ||
 		!accept.Content().Required() || accept.Content().MaxBytes() != 4096 || !accept.Artifacts().Allowed() ||
-		accept.Artifacts().MaxEntries() != 128 || accept.Receipt().MaxResults() != 2 {
+		accept.Artifacts().MaxEntries() != 128 || accept.Receipt().MaxResults() != 1 {
 		t.Fatalf("accept descriptor did not project reviewed source: %#v", accept)
 	}
 	acceptSelectors, hasAcceptSelectors := accept.Selectors()
-	if !hasAcceptSelectors || !reflect.DeepEqual(acceptSelectors.Participants(), []ParticipantSelector{ParticipantAuto}) {
+	if !hasAcceptSelectors || acceptSelectors.Participant() != ParticipantEffectiveAlias {
 		t.Fatalf("accept selectors did not project independently: %#v", acceptSelectors)
 	}
 	offer, _ := catalog.Action("offer")

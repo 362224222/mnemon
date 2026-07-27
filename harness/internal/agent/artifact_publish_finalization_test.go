@@ -17,7 +17,7 @@ func TestTeamworkActionExecutorFinalizesCommittedArtifactBeforeReplay(t *testing
 	ref, _ := model.NewArtifactRef(root, model.ArtifactProduced)
 	fixture.artifacts.result.References = []model.ArtifactRef{ref}
 	action := executorAction(t, "offer", false, "artifact result", "30m",
-		AgentParticipantAuto, []string{"result.txt"})
+		"reviewer-0", []string{"result.txt"})
 	reservation := executorReservation(t, fixture, action, model.ReviewWork{}, false)
 	pending := NewControlError(CodeOperationPending, "Artifact publication remains pending")
 	fixture.artifacts.publishErr = pending
@@ -64,7 +64,7 @@ func TestServiceRoutesCommittedArtifactReplayThroughFinalizer(t *testing.T) {
 	ref, _ := model.NewArtifactRef(root, model.ArtifactProduced)
 	fixture.artifacts.result.References = []model.ArtifactRef{ref}
 	request := TeamworkActionRequest{Action: "offer", Channel: "alpha",
-		To: AgentParticipantAuto, Deadline: "30m", Content: "artifact result",
+		To: "reviewer-0", Deadline: "30m", Content: "artifact result",
 		Artifacts: []string{"result.txt"}}
 	action := executorAction(t, request.Action, false, request.Content,
 		request.Deadline, request.To, request.Artifacts)

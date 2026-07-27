@@ -217,9 +217,8 @@ func (mechanic actionMechanic) executionShapeCompatible(descriptor teamwork.Acti
 		wantHandling = teamwork.ReceiptHandlingContextDependent
 	}
 	stateMechanicReady := mechanic.actor == actionActorOffer || mechanic.committedState != nil
-	multiResultReady := entry.MaxResults() == 1 || mechanic.selection
 	contextlessReady := !entry.AllowsContext(model.TeamworkActionContextNone) || mechanic.selection
-	return mechanic.actor != 0 && stateMechanicReady && multiResultReady && contextlessReady &&
+	return mechanic.actor != 0 && stateMechanicReady && entry.MaxResults() == 1 && contextlessReady &&
 		entry.OperationKind() == descriptor.OperationKind() &&
 		(!mechanic.contentRequired || descriptor.Content().Required()) &&
 		hasDeadline == mechanic.selection && hasSelectors == mechanic.selection &&

@@ -27,7 +27,7 @@ func TestParseAgentCommandIsClosedAndKeepsNaturalLanguageOutOfArgv(t *testing.T)
 	}{
 		{"hook", []string{"hook", "check"}, commandHook, ""},
 		{"current", []string{"agent", "current", "--json"}, commandCurrent, ""},
-		{"offer", []string{"teamwork", "offer", "--channel", "beta", "--to", "team", "--deadline", "24h", "--content-file", "-", "--artifact", "./bundle", "--json"}, commandTeamwork, ""},
+		{"offer", []string{"teamwork", "offer", "--channel", "beta", "--to", "reviewer", "--deadline", "24h", "--content-file", "-", "--artifact", "./bundle", "--json"}, commandTeamwork, ""},
 		{"resolve", []string{"agent", "resolve", "retry", "--context", "/node/run.context", "--content-file", "-", "--json"}, commandResolve, ""},
 		{"natural language argv", []string{"teamwork", "offer", "--content", "review this"}, 0, localapi.CodeInvalidArgument},
 		{"generic submit", []string{"agent", "submit", "{}"}, 0, localapi.CodeUnknownAction},
@@ -164,7 +164,7 @@ func TestAgentAppResponseLossReusesJournalAndStableJSONError(t *testing.T) {
 		"mnemond local control is unavailable")}
 	stdin := bytes.NewBufferString("review this\n")
 	stdout, stderr, app := cliTestApp(t, workspace, fake, stdin)
-	firstArgs := []string{"teamwork", "offer", "--channel", "alpha", "--to", "auto", "--content-file", "-",
+	firstArgs := []string{"teamwork", "offer", "--channel", "alpha", "--to", "reviewer", "--content-file", "-",
 		"--artifact", "z-result", "--artifact", "a-result", "--json"}
 	if exit := app.Run(context.Background(), firstArgs); exit != 5 || stderr.Len() != 0 {
 		t.Fatalf("lost response = exit %d stdout %q stderr %q", exit, stdout.String(), stderr.String())
@@ -182,7 +182,7 @@ func TestAgentAppResponseLossReusesJournalAndStableJSONError(t *testing.T) {
 	fake.teamworkResponse = acceptedCLIResponse("offer")
 	app.stdin = bytes.NewBufferString("review this\n")
 	stdout.Reset()
-	retryArgs := []string{"teamwork", "offer", "--channel", "alpha", "--to", "auto", "--content-file", "-",
+	retryArgs := []string{"teamwork", "offer", "--channel", "alpha", "--to", "reviewer", "--content-file", "-",
 		"--artifact", "a-result", "--artifact", "z-result", "--json"}
 	if exit := app.Run(context.Background(), retryArgs); exit != 0 || fake.teamworkJournal.OperationKeyHash() != firstKey {
 		t.Fatalf("replay = exit %d key %s output %q", exit,
@@ -205,7 +205,7 @@ func TestAgentAppTerminalReceiptSurvivesStdoutFailure(t *testing.T) {
 	fake := &fakeControlClient{teamworkResponse: acceptedCLIResponse("offer")}
 	_, stderr, app := cliTestApp(t, workspace, fake, bytes.NewBufferString("review once"))
 	app.stdout = failingWriter{}
-	args := []string{"teamwork", "offer", "--content-file", "-", "--json"}
+	args := []string{"teamwork", "offer", "--to", "reviewer", "--content-file", "-", "--json"}
 	if exit := app.Run(context.Background(), args); exit != 1 || stderr.Len() != 0 {
 		t.Fatalf("failed presentation = exit %d stderr %q", exit, stderr.String())
 	}
@@ -227,7 +227,7 @@ func TestAgentAppConcurrentPresentationKeepsOldIdentityAndNextCallGetsFreshKey(t
 	client := newBarrierControlClient(2, acceptedCLIResponse("offer"))
 	stdoutA, stderrA, appA := cliTestApp(t, workspace, client, bytes.NewBufferString("same offer"))
 	stdoutB, stderrB, appB := cliTestApp(t, workspace, client, bytes.NewBufferString("same offer"))
-	args := []string{"teamwork", "offer", "--content-file", "-", "--json"}
+	args := []string{"teamwork", "offer", "--to", "reviewer", "--content-file", "-", "--json"}
 	exits := make(chan int, 2)
 	go func() { exits <- appA.Run(context.Background(), args) }()
 	go func() { exits <- appB.Run(context.Background(), args) }()
@@ -318,7 +318,8 @@ func TestAgentAppPresentedEnvelopeKeepsItsExitWhenMarkerFails(t *testing.T) {
 				}
 				return markerFailingJournalStore{journalStore: store}, nil
 			}
-			exit := app.Run(context.Background(), []string{"teamwork", "offer", "--content-file", "-", "--json"})
+			exit := app.Run(context.Background(), []string{
+				"teamwork", "offer", "--to", "reviewer", "--content-file", "-", "--json"})
 			if exit != test.wantExit || stderr.Len() != 0 || !strings.Contains(stdout.String(), test.wantCode) {
 				t.Fatalf("marker failure = exit %d stdout %q stderr %q", exit, stdout.String(), stderr.String())
 			}

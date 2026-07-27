@@ -39,7 +39,6 @@ type InitiationParticipant struct {
 }
 
 type InitiationChannel struct {
-	AllowTeam    bool                    `json:"allow_team"`
 	LocalAlias   string                  `json:"local_alias"`
 	Participants []InitiationParticipant `json:"participants"`
 }

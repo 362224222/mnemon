@@ -13,17 +13,11 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
 
-const (
-	AgentParticipantAuto = "auto"
-	AgentParticipantTeam = "team"
-)
-
 var (
 	ErrAgentSelectionInput                  = errors.New("invalid Agent offer selection input")
 	ErrAgentSelectionChannelUnavailable     = errors.New("Agent offer Channel is unavailable")
 	ErrAgentSelectionChannelAmbiguous       = errors.New("Agent offer Channel is ambiguous")
 	ErrAgentSelectionParticipantUnavailable = errors.New("Agent offer participant is unavailable")
-	ErrAgentSelectionParticipantAmbiguous   = errors.New("Agent offer participant is ambiguous")
 	ErrAgentSelectionInvariant              = errors.New("Agent offer selection invariant violated")
 )
 
@@ -81,16 +75,14 @@ type AgentOfferSelection struct {
 	channelID    model.ChannelID
 	channelAlias string
 	rosterHead   model.RecordHead
-	reviewers    []AgentOfferReviewer
+	reviewer     AgentOfferReviewer
 }
 
 func (s AgentOfferSelection) ChannelID() model.ChannelID   { return s.channelID }
 func (s AgentOfferSelection) ChannelAlias() string         { return s.channelAlias }
 func (s AgentOfferSelection) RosterHead() model.RecordHead { return s.rosterHead }
 func (s AgentOfferSelection) RosterRevision() uint64       { return s.rosterHead.Revision() }
-func (s AgentOfferSelection) Reviewers() []AgentOfferReviewer {
-	return append([]AgentOfferReviewer(nil), s.reviewers...)
-}
+func (s AgentOfferSelection) Reviewer() AgentOfferReviewer { return s.reviewer }
 
 type OfferSelector struct {
 	reader AgentOfferCandidateReader
@@ -103,8 +95,8 @@ func NewOfferSelector(reader AgentOfferCandidateReader) (*OfferSelector, error) 
 	return &OfferSelector{reader: reader}, nil
 }
 
-// Resolve reads one trusted Store snapshot, decodes every PeerID, and applies
-// the closed explicit/auto/team selector rules without a second authority read.
+// Resolve reads one trusted Store snapshot and resolves one explicit participant
+// alias without a second authority read.
 func (s *OfferSelector) Resolve(ctx context.Context,
 	spec AgentOfferSelectionSpec,
 ) (AgentOfferSelection, error) {
@@ -115,7 +107,7 @@ func (s *OfferSelector) Resolve(ctx context.Context,
 	if err := validateAgentSelectionAlias("Channel", spec.ChannelAlias, true); err != nil {
 		return AgentOfferSelection{}, err
 	}
-	if err := validateAgentSelectionAlias("participant", spec.ParticipantSelector, true); err != nil {
+	if err := validateAgentSelectionAlias("participant", spec.ParticipantSelector, false); err != nil {
 		return AgentOfferSelection{}, err
 	}
 
@@ -127,22 +119,18 @@ func (s *OfferSelector) Resolve(ctx context.Context,
 	if err != nil {
 		return AgentOfferSelection{}, err
 	}
-	channel, err := selectAgentOfferChannel(channels, spec.ChannelAlias)
-	if err != nil {
-		return AgentOfferSelection{}, err
-	}
-	reviewers, err := selectAgentOfferReviewers(channel.reviewers, spec.ParticipantSelector)
+	channel, reviewer, err := selectAgentOfferReviewer(
+		channels, spec.ChannelAlias, spec.ParticipantSelector)
 	if err != nil {
 		return AgentOfferSelection{}, err
 	}
 	return AgentOfferSelection{channelID: channel.id, channelAlias: channel.alias,
-		rosterHead: channel.rosterHead, reviewers: reviewers}, nil
+		rosterHead: channel.rosterHead, reviewer: reviewer}, nil
 }
 
 type decodedAgentOfferReviewer struct {
-	projection    AgentOfferReviewer
-	canonicalPeer []byte
-	eligible      bool
+	projection AgentOfferReviewer
+	eligible   bool
 }
 
 type decodedAgentOfferChannel struct {
@@ -196,7 +184,7 @@ func decodeAgentOfferReviewers(candidates []store.AgentOfferCandidateReviewer) (
 		}
 		alias := candidate.EffectiveAlias()
 		if err := validateAgentCandidateAlias(alias); err != nil {
-			return nil, fmt.Errorf("%w: candidate participant alias %q is invalid or reserved",
+			return nil, fmt.Errorf("%w: candidate participant alias %q is invalid",
 				ErrAgentSelectionInvariant, alias)
 		}
 		if _, exists := seenAliases[alias]; exists {
@@ -216,17 +204,10 @@ func decodeAgentOfferReviewers(candidates []store.AgentOfferCandidateReviewer) (
 		result[index] = decodedAgentOfferReviewer{
 			projection: AgentOfferReviewer{peerID: candidate.PeerID(), effectiveAlias: alias,
 				reachability: candidate.Reachability()},
-			canonicalPeer: canonicalPeer, eligible: candidate.Eligible(),
+			eligible: candidate.Eligible(),
 		}
 	}
-	sortAgentOfferReviewers(result)
 	return result, nil
-}
-
-func sortAgentOfferReviewers(reviewers []decodedAgentOfferReviewer) {
-	sort.Slice(reviewers, func(left, right int) bool {
-		return string(reviewers[left].canonicalPeer) < string(reviewers[right].canonicalPeer)
-	})
 }
 
 func canonicalAgentPeerBytes(id model.PeerID) ([]byte, error) {
@@ -252,101 +233,78 @@ func validateAgentSelectionAlias(field, value string, emptyOK bool) error {
 }
 
 func validateAgentCandidateAlias(value string) error {
-	if err := validateAgentSelectionAlias("candidate participant", value, false); err != nil {
-		return err
-	}
-	if value == AgentParticipantAuto || value == AgentParticipantTeam {
-		return fmt.Errorf("%w: participant alias is reserved", ErrAgentSelectionInvariant)
-	}
-	return nil
+	return validateAgentSelectionAlias("candidate participant", value, false)
 }
 
-func selectAgentOfferChannel(channels []decodedAgentOfferChannel,
-	explicitAlias string,
-) (decodedAgentOfferChannel, error) {
-	if explicitAlias != "" {
-		for _, channel := range channels {
-			if channel.alias == explicitAlias {
-				return channel, nil
-			}
-		}
-		return decodedAgentOfferChannel{}, ErrAgentSelectionChannelUnavailable
+func selectAgentOfferReviewer(channels []decodedAgentOfferChannel,
+	channelAlias, participantAlias string,
+) (decodedAgentOfferChannel, AgentOfferReviewer, error) {
+	if channelAlias != "" {
+		return selectAgentOfferReviewerInChannel(channels, channelAlias, participantAlias)
 	}
-	eligible := make([]decodedAgentOfferChannel, 0, len(channels))
+	return selectAgentOfferReviewerAcrossChannels(channels, participantAlias)
+}
+
+func selectAgentOfferReviewerInChannel(channels []decodedAgentOfferChannel,
+	channelAlias, participantAlias string,
+) (decodedAgentOfferChannel, AgentOfferReviewer, error) {
 	for _, channel := range channels {
-		for _, reviewer := range channel.reviewers {
-			if reviewer.eligible {
-				eligible = append(eligible, channel)
-				break
-			}
+		if channel.alias != channelAlias {
+			continue
+		}
+		reviewer, ok := eligibleAgentOfferReviewer(channel.reviewers, participantAlias)
+		if ok {
+			return channel, reviewer, nil
+		}
+		return decodedAgentOfferChannel{}, AgentOfferReviewer{},
+			ErrAgentSelectionParticipantUnavailable
+	}
+	return decodedAgentOfferChannel{}, AgentOfferReviewer{},
+		ErrAgentSelectionChannelUnavailable
+}
+
+type agentOfferReviewerMatch struct {
+	channel  decodedAgentOfferChannel
+	reviewer AgentOfferReviewer
+}
+
+func selectAgentOfferReviewerAcrossChannels(channels []decodedAgentOfferChannel,
+	participantAlias string,
+) (decodedAgentOfferChannel, AgentOfferReviewer, error) {
+	matches := make([]agentOfferReviewerMatch, 0, len(channels))
+	for _, channel := range channels {
+		reviewer, ok := eligibleAgentOfferReviewer(channel.reviewers, participantAlias)
+		if ok {
+			matches = append(matches, agentOfferReviewerMatch{channel: channel, reviewer: reviewer})
 		}
 	}
-	switch len(eligible) {
+	switch len(matches) {
 	case 0:
-		return decodedAgentOfferChannel{}, ErrAgentSelectionChannelUnavailable
+		return decodedAgentOfferChannel{}, AgentOfferReviewer{},
+			ErrAgentSelectionParticipantUnavailable
 	case 1:
-		return eligible[0], nil
+		return matches[0].channel, matches[0].reviewer, nil
 	default:
-		candidates := make([]string, len(eligible))
-		for index := range eligible {
-			candidates[index] = eligible[index].alias
+		candidates := make([]string, len(matches))
+		for index := range matches {
+			candidates[index] = matches[index].channel.alias
 		}
 		sort.Strings(candidates)
-		return decodedAgentOfferChannel{}, newAgentSelectionCandidatesError(
-			ErrAgentSelectionChannelAmbiguous, candidates, model.MaxChannelsPerNode)
+		return decodedAgentOfferChannel{}, AgentOfferReviewer{},
+			newAgentSelectionCandidatesError(
+				ErrAgentSelectionChannelAmbiguous, candidates, model.MaxChannelsPerNode)
 	}
 }
 
-func selectAgentOfferReviewers(reviewers []decodedAgentOfferReviewer,
-	selector string,
-) ([]AgentOfferReviewer, error) {
-	eligible := make([]decodedAgentOfferReviewer, 0, len(reviewers))
+func eligibleAgentOfferReviewer(reviewers []decodedAgentOfferReviewer,
+	participantAlias string,
+) (AgentOfferReviewer, bool) {
 	for _, reviewer := range reviewers {
-		if reviewer.eligible {
-			eligible = append(eligible, reviewer)
+		if reviewer.eligible && reviewer.projection.EffectiveAlias() == participantAlias {
+			return reviewer.projection, true
 		}
 	}
-	switch selector {
-	case AgentParticipantTeam:
-		if len(eligible) == 0 {
-			return nil, ErrAgentSelectionParticipantUnavailable
-		}
-		return projectAgentOfferReviewers(eligible), nil
-	case "", AgentParticipantAuto:
-		switch len(eligible) {
-		case 0:
-			return nil, ErrAgentSelectionParticipantUnavailable
-		case 1:
-			return projectAgentOfferReviewers(eligible), nil
-		default:
-			return nil, ambiguousAgentReviewers(eligible)
-		}
-	default:
-		for _, reviewer := range eligible {
-			if reviewer.projection.EffectiveAlias() == selector {
-				return []AgentOfferReviewer{reviewer.projection}, nil
-			}
-		}
-		return nil, ErrAgentSelectionParticipantUnavailable
-	}
-}
-
-func projectAgentOfferReviewers(reviewers []decodedAgentOfferReviewer) []AgentOfferReviewer {
-	result := make([]AgentOfferReviewer, len(reviewers))
-	for index := range reviewers {
-		result[index] = reviewers[index].projection
-	}
-	return result
-}
-
-func ambiguousAgentReviewers(reviewers []decodedAgentOfferReviewer) error {
-	candidates := make([]string, len(reviewers))
-	for index := range reviewers {
-		candidates[index] = reviewers[index].projection.EffectiveAlias()
-	}
-	sort.Strings(candidates)
-	return newAgentSelectionCandidatesError(ErrAgentSelectionParticipantAmbiguous,
-		candidates, model.MaxChildWorks)
+	return AgentOfferReviewer{}, false
 }
 
 func newAgentSelectionCandidatesError(kind error, candidates []string, limit int) error {

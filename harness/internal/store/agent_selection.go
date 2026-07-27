@@ -84,14 +84,12 @@ func (p AgentInitiationParticipant) Eligible() bool { return p.eligible }
 type AgentInitiationChannel struct {
 	localAlias   string
 	participants []AgentInitiationParticipant
-	allowTeam    bool
 }
 
 func (c AgentInitiationChannel) LocalAlias() string { return c.localAlias }
 func (c AgentInitiationChannel) Participants() []AgentInitiationParticipant {
 	return append([]AgentInitiationParticipant(nil), c.participants...)
 }
-func (c AgentInitiationChannel) AllowTeam() bool { return c.allowTeam }
 
 type AgentInitiationContext struct {
 	channels []AgentInitiationChannel
@@ -110,7 +108,6 @@ func (c AgentInitiationContext) CanonicalJSON() (model.JSON, error) {
 		Reachable      bool   `json:"reachable"`
 	}
 	type channelWire struct {
-		AllowTeam    bool              `json:"allow_team"`
 		LocalAlias   string            `json:"local_alias"`
 		Participants []participantWire `json:"participants"`
 	}
@@ -122,7 +119,7 @@ func (c AgentInitiationContext) CanonicalJSON() (model.JSON, error) {
 			rows[participantIndex] = participantWire{EffectiveAlias: participant.EffectiveAlias(),
 				Eligible: participant.Eligible(), Reachable: participant.Reachable()}
 		}
-		channels[index] = channelWire{AllowTeam: channel.AllowTeam(), LocalAlias: channel.LocalAlias(),
+		channels[index] = channelWire{LocalAlias: channel.LocalAlias(),
 			Participants: rows}
 	}
 	return model.JSONFrom(struct {
@@ -185,20 +182,14 @@ func (s *Store) ReadAgentInitiationContext(ctx context.Context, authenticated mo
 	for index, channel := range channels {
 		reviewers := channel.Reviewers()
 		participants := make([]AgentInitiationParticipant, len(reviewers))
-		allowTeam := false
 		for participantIndex, reviewer := range reviewers {
-			if reviewer.EffectiveAlias() == "auto" || reviewer.EffectiveAlias() == "team" {
-				return AgentInitiationContext{}, fmt.Errorf("%w: reserved effective alias in initiation projection",
-					ErrAgentOfferCandidatesInvariant)
-			}
 			participants[participantIndex] = AgentInitiationParticipant{
 				effectiveAlias: reviewer.EffectiveAlias(), reachability: reviewer.Reachability(),
 				eligible: reviewer.Eligible(),
 			}
-			allowTeam = allowTeam || reviewer.Eligible()
 		}
 		projection[index] = AgentInitiationChannel{localAlias: channel.LocalAlias(),
-			participants: participants, allowTeam: allowTeam}
+			participants: participants}
 	}
 	if err := tx.Commit(); err != nil {
 		return AgentInitiationContext{}, fmt.Errorf("read Agent initiation context: commit read: %w", err)

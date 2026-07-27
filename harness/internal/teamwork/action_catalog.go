@@ -38,8 +38,6 @@ type ParticipantSelector string
 
 const (
 	ParticipantEffectiveAlias ParticipantSelector = "effective_alias"
-	ParticipantAuto           ParticipantSelector = "auto"
-	ParticipantTeam           ParticipantSelector = "team"
 )
 
 type ContentSource string
@@ -102,15 +100,12 @@ func (p ActionDeadlinePolicy) Minimum() time.Duration { return p.minimumDuration
 func (p ActionDeadlinePolicy) Maximum() time.Duration { return p.maximumDuration }
 
 type ActionSelectorPolicy struct {
-	channel      SelectorChannelMode
-	participants [3]ParticipantSelector
-	count        uint8
+	channel     SelectorChannelMode
+	participant ParticipantSelector
 }
 
-func (p ActionSelectorPolicy) Channel() SelectorChannelMode { return p.channel }
-func (p ActionSelectorPolicy) Participants() []ParticipantSelector {
-	return append([]ParticipantSelector(nil), p.participants[:p.count]...)
-}
+func (p ActionSelectorPolicy) Channel() SelectorChannelMode     { return p.channel }
+func (p ActionSelectorPolicy) Participant() ParticipantSelector { return p.participant }
 
 type ActionReceiptPolicy struct {
 	action     model.OperationKind
@@ -306,7 +301,7 @@ type actionReceiptWire struct {
 }
 type actionSelectorWire struct {
 	Channel     SelectorChannelMode `json:"channel"`
-	Participant []string            `json:"participant"`
+	Participant ParticipantSelector `json:"participant"`
 }
 
 func decodeActionWire(raw []byte) (actionWire, error) {

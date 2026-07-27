@@ -81,13 +81,14 @@ func TestReadAgentOfferCandidatesRereadsEligibility(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(contextView.Channels()) != 1 || !contextView.Channels()[0].AllowTeam() {
+		if len(contextView.Channels()) != 1 ||
+			len(contextView.Channels()[0].Participants()) != 2 {
 			t.Fatalf("initiation context = %#v", contextView.Channels())
 		}
 	})
-	t.Run("reserved alias stays internal and never enters initiation context", func(t *testing.T) {
+	t.Run("auto and team are ordinary effective aliases", func(t *testing.T) {
 		fixture := newAgentCandidateFixture(t)
-		remote := fixture.remote(t, "reserved-alias", "reviewer", model.ReachabilityReachable)
+		remote := fixture.remote(t, "team-alias", "reviewer", model.ReachabilityReachable)
 		peer := remote.peer
 		fixture.addChannel(t, "alpha", []agentCandidateRemote{remote})
 		mustExec(t, fixture.store, "UPDATE peer_bindings SET effective_alias='team' WHERE channel_id=? AND peer_id=?",
@@ -96,8 +97,10 @@ func TestReadAgentOfferCandidatesRereadsEligibility(t *testing.T) {
 		if err != nil || snapshot.Channels()[0].Reviewers()[0].EffectiveAlias() != "team" {
 			t.Fatalf("trusted candidate snapshot = (%#v, %v)", snapshot.Channels(), err)
 		}
-		if _, err := fixture.store.ReadAgentInitiationContext(context.Background(), fixture.profile, fixture.now); !errors.Is(err, ErrAgentOfferCandidatesInvariant) {
-			t.Fatalf("reserved initiation alias error = %v", err)
+		contextView, err := fixture.store.ReadAgentInitiationContext(
+			context.Background(), fixture.profile, fixture.now)
+		if err != nil || contextView.Channels()[0].Participants()[0].EffectiveAlias() != "team" {
+			t.Fatalf("initiation alias = (%#v, %v)", contextView.Channels(), err)
 		}
 	})
 
@@ -220,15 +223,16 @@ func TestReadAgentInitiationContextIsBoundedToActiveBindings(t *testing.T) {
 			len(channels[0].Participants()))
 	}
 	for index, channel := range channels {
-		if channel.LocalAlias() != fmt.Sprintf("channel-%d", index) || !channel.AllowTeam() {
-			t.Fatalf("channel[%d] = alias %q allow_team=%v", index, channel.LocalAlias(), channel.AllowTeam())
+		if channel.LocalAlias() != fmt.Sprintf("channel-%d", index) {
+			t.Fatalf("channel[%d] alias = %q", index, channel.LocalAlias())
 		}
 	}
 	projection, err := contextView.CanonicalJSON()
 	if err != nil || strings.Contains(projection.String(), "peer_id") ||
 		strings.Contains(projection.String(), remotes[0].peer.String()) ||
 		!strings.Contains(projection.String(), `"initiation_context"`) ||
-		!strings.Contains(projection.String(), `"effective_alias":"reviewer-0"`) {
+		!strings.Contains(projection.String(), `"effective_alias":"reviewer-0"`) ||
+		strings.Contains(projection.String(), `"allow_team"`) {
 		t.Fatalf("identity-free initiation projection = %s, %v", projection.String(), err)
 	}
 

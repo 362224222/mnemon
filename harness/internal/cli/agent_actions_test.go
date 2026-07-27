@@ -10,12 +10,12 @@ import (
 func TestValidateManagedTeamworkActionUsesCanonicalAssetPolicy(t *testing.T) {
 	t.Parallel()
 	validated, apiErr := validateManagedTeamworkAction(localapi.TeamworkActionRequest{
-		Action: "offer", Content: "review", Artifacts: []string{"z.md", "a.md"},
+		Action: "offer", To: "reviewer", Content: "review", Artifacts: []string{"z.md", "a.md"},
 	}, false)
 	if apiErr != nil || validated.validated.Deadline != 24*time.Hour ||
 		len(validated.validated.ArtifactPaths) != 2 ||
 		validated.validated.ArtifactPaths[0] != "a.md" ||
-		validated.validated.ArtifactPaths[1] != "z.md" || validated.receipt.MaxResults() != 7 {
+		validated.validated.ArtifactPaths[1] != "z.md" || validated.receipt.MaxResults() != 1 {
 		t.Fatalf("canonical Action validation = (%#v, %v)", validated, apiErr)
 	}
 	_, apiErr = validateManagedTeamworkAction(localapi.TeamworkActionRequest{
@@ -47,12 +47,12 @@ func TestValidateManagedTeamworkActionUsesCanonicalAssetPolicy(t *testing.T) {
 func TestManagedTeamworkReceiptUsesCanonicalActionPolicy(t *testing.T) {
 	t.Parallel()
 	offer, apiErr := validateManagedTeamworkAction(localapi.TeamworkActionRequest{
-		Action: "offer", To: "auto", Content: "review"}, false)
+		Action: "offer", To: "reviewer", Content: "review"}, false)
 	if apiErr != nil {
 		t.Fatal(apiErr)
 	}
 	accepted := localapi.OperationResponse{Status: "accepted", Action: "teamwork.offer",
-		Results: make([]localapi.OperationResult, 7)}
+		Results: []localapi.OperationResult{{}}}
 	if apiErr := validateManagedTeamworkReceipt(offer, accepted); apiErr != nil {
 		t.Fatalf("canonical offer receipt = %#v", apiErr)
 	}
@@ -61,8 +61,7 @@ func TestManagedTeamworkReceiptUsesCanonicalActionPolicy(t *testing.T) {
 		apiErr.Code != localapi.CodeInternal {
 		t.Fatalf("empty offer receipt = %#v", apiErr)
 	}
-	accepted.Results = make([]localapi.OperationResult, 7)
-	accepted.Results = append(accepted.Results, localapi.OperationResult{})
+	accepted.Results = []localapi.OperationResult{{}, {}}
 	if apiErr := validateManagedTeamworkReceipt(offer, accepted); apiErr == nil ||
 		apiErr.Code != localapi.CodeInternal {
 		t.Fatalf("oversize offer receipt = %#v", apiErr)

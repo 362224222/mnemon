@@ -32,7 +32,7 @@ func TestErrorCodeContract(t *testing.T) {
 }
 
 func TestParseInitiationProjectionIsClosedIdentityFreeAndBounded(t *testing.T) {
-	valid := []byte(`{"initiation_context":{"channels":[{"allow_team":true,"local_alias":"alpha","participants":[{"effective_alias":"reviewer","eligible":true,"reachable":false}]}]},"schema_version":1}`)
+	valid := []byte(`{"initiation_context":{"channels":[{"local_alias":"alpha","participants":[{"effective_alias":"auto","eligible":true,"reachable":false}]}]},"schema_version":1}`)
 	projection, err := ParseInitiationProjection(valid)
 	if err != nil || len(projection.InitiationContext.Channels) != 1 {
 		t.Fatalf("ParseInitiationProjection() = (%#v, %v)", projection, err)
@@ -40,7 +40,7 @@ func TestParseInitiationProjectionIsClosedIdentityFreeAndBounded(t *testing.T) {
 	for _, raw := range [][]byte{
 		[]byte(`{}`),
 		[]byte(`{"initiation_context":{"channels":[]},"peer_id":"secret","schema_version":1}`),
-		[]byte(`{"initiation_context":{"channels":[{"allow_team":false,"local_alias":"alpha","participants":[{"effective_alias":"auto","eligible":false,"reachable":false}]}]},"schema_version":1}`),
+		[]byte(`{"initiation_context":{"channels":[{"allow_team":false,"local_alias":"alpha","participants":[]}]},"schema_version":1}`),
 		append([]byte{' '}, valid...),
 	} {
 		if _, err := ParseInitiationProjection(raw); err == nil {

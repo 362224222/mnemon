@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"sort"
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
@@ -24,48 +23,38 @@ var (
 // OfferPlanSpec is the already-authorized input to offer planning. Reviewer
 // aliases and Channel membership are resolved before this policy boundary.
 type OfferPlanSpec struct {
-	ChannelID       model.ChannelID
-	RosterRevision  uint64
-	HomePeerID      model.PeerID
-	ReviewerPeerIDs []model.PeerID
-	AcceptedAt      time.Time
-	Deadline        time.Duration
+	ChannelID      model.ChannelID
+	RosterRevision uint64
+	HomePeerID     model.PeerID
+	ReviewerPeerID model.PeerID
+	AcceptedAt     time.Time
+	Deadline       time.Duration
 }
 
-// PlannedOffer describes one single-reviewer Work. Work and Event identities
-// are deliberately allocated by the admission transaction, not this policy.
-type PlannedOffer struct {
-	ordinal      uint8
-	participants model.ParticipantSnapshot
-}
-
-func (o PlannedOffer) Ordinal() uint8                          { return o.ordinal }
-func (o PlannedOffer) Participants() model.ParticipantSnapshot { return o.participants }
-
-// OfferPlan is deterministic for a given accepted time and selected PeerIDs.
-// Its reviewer order is canonical PeerID byte order.
+// OfferPlan is deterministic for a given accepted time and explicit reviewer.
 type OfferPlan struct {
 	acceptedAt       time.Time
 	deadlineDuration time.Duration
 	deadlineUnixNano int64
-	offers           []PlannedOffer
+	participants     model.ParticipantSnapshot
 }
 
-func (p OfferPlan) AcceptedAt() time.Time           { return p.acceptedAt }
-func (p OfferPlan) DeadlineDuration() time.Duration { return p.deadlineDuration }
-func (p OfferPlan) DeadlineUnixNano() int64         { return p.deadlineUnixNano }
-func (p OfferPlan) Offers() []PlannedOffer {
-	return append([]PlannedOffer(nil), p.offers...)
-}
+func (p OfferPlan) AcceptedAt() time.Time                   { return p.acceptedAt }
+func (p OfferPlan) DeadlineDuration() time.Duration         { return p.deadlineDuration }
+func (p OfferPlan) DeadlineUnixNano() int64                 { return p.deadlineUnixNano }
+func (p OfferPlan) Participants() model.ParticipantSnapshot { return p.participants }
 
-// PlanOffer expands one action into one to seven independent single-reviewer
-// plans. A zero Deadline selects the frozen 24-hour default.
+// PlanOffer freezes one explicit single-reviewer Work. A zero Deadline selects
+// the frozen 24-hour default.
 func PlanOffer(spec OfferPlanSpec) (OfferPlan, error) {
 	if spec.ChannelID.IsZero() || spec.HomePeerID.IsZero() || spec.RosterRevision == 0 {
 		return OfferPlan{}, fmt.Errorf("%w: Channel, roster revision and home PeerID are required", ErrInvalidOffer)
 	}
-	if len(spec.ReviewerPeerIDs) == 0 || len(spec.ReviewerPeerIDs) > model.MaxChildWorks {
-		return OfferPlan{}, fmt.Errorf("%w: reviewer count must be between 1 and %d", ErrInvalidOffer, model.MaxChildWorks)
+	if _, err := model.CanonicalPeerIDBytes(spec.ReviewerPeerID); err != nil {
+		return OfferPlan{}, fmt.Errorf("%w: reviewer PeerID: %v", ErrInvalidOffer, err)
+	}
+	if spec.ReviewerPeerID == spec.HomePeerID {
+		return OfferPlan{}, fmt.Errorf("%w: self review is forbidden", ErrInvalidOffer)
 	}
 
 	acceptedAt := spec.AcceptedAt.Round(0).UTC()
@@ -89,45 +78,20 @@ func PlanOffer(spec OfferPlanSpec) (OfferPlan, error) {
 	}
 	deadlineUnixNano := acceptedUnixNano + int64(deadline)
 
-	type orderedReviewer struct {
-		id  model.PeerID
-		key string
-	}
-	reviewers := make([]orderedReviewer, len(spec.ReviewerPeerIDs))
-	for index, reviewer := range spec.ReviewerPeerIDs {
-		canonical, err := model.CanonicalPeerIDBytes(reviewer)
-		if err != nil {
-			return OfferPlan{}, fmt.Errorf("%w: reviewer PeerID: %v", ErrInvalidOffer, err)
-		}
-		reviewers[index] = orderedReviewer{id: reviewer, key: string(canonical)}
-	}
-	sort.Slice(reviewers, func(i, j int) bool { return reviewers[i].key < reviewers[j].key })
-
-	offers := make([]PlannedOffer, len(reviewers))
-	for index, ordered := range reviewers {
-		reviewer := ordered.id
-		if reviewer == spec.HomePeerID {
-			return OfferPlan{}, fmt.Errorf("%w: self review is forbidden", ErrInvalidOffer)
-		}
-		if index > 0 && ordered.key == reviewers[index-1].key {
-			return OfferPlan{}, fmt.Errorf("%w: duplicate reviewer %q", ErrInvalidOffer, reviewer.String())
-		}
-		participants, err := model.NewParticipantSnapshot(
-			spec.ChannelID,
-			spec.RosterRevision,
-			spec.HomePeerID,
-			reviewer,
-		)
-		if err != nil {
-			return OfferPlan{}, fmt.Errorf("%w: participant snapshot: %v", ErrInvalidOffer, err)
-		}
-		offers[index] = PlannedOffer{ordinal: uint8(index), participants: participants}
+	participants, err := model.NewParticipantSnapshot(
+		spec.ChannelID,
+		spec.RosterRevision,
+		spec.HomePeerID,
+		spec.ReviewerPeerID,
+	)
+	if err != nil {
+		return OfferPlan{}, fmt.Errorf("%w: participant snapshot: %v", ErrInvalidOffer, err)
 	}
 
 	return OfferPlan{
 		acceptedAt:       acceptedAt,
 		deadlineDuration: deadline,
 		deadlineUnixNano: deadlineUnixNano,
-		offers:           offers,
+		participants:     participants,
 	}, nil
 }
