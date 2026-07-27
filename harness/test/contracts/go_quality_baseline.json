@@ -137,13 +137,6 @@
     },
     {
       "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/agent/executor.go::(*TeamworkActionExecutor).buildOffer",
-      "path": "harness/internal/agent/executor.go",
-      "symbol": "(*TeamworkActionExecutor).buildOffer",
-      "ceiling": 27
-    },
-    {
-      "rule": "cognitive_complexity",
       "identity": "cognitive_complexity:harness/internal/agent/executor.go::decodeCommittedTeamworkReceipt",
       "path": "harness/internal/agent/executor.go",
       "symbol": "decodeCommittedTeamworkReceipt",
@@ -372,13 +365,6 @@
       "path": "harness/internal/localapi/client_test.go",
       "symbol": "TestClientUsesOnlyOwnerUnixControlAndOpaqueHeaders",
       "ceiling": 30
-    },
-    {
-      "rule": "cognitive_complexity",
-      "identity": "cognitive_complexity:harness/internal/localapi/contract.go::ParseInitiationProjection",
-      "path": "harness/internal/localapi/contract.go",
-      "symbol": "ParseInitiationProjection",
-      "ceiling": 28
     },
     {
       "rule": "cognitive_complexity",
@@ -1474,13 +1460,6 @@
     },
     {
       "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/agent/executor.go::(*TeamworkActionExecutor).buildOffer",
-      "path": "harness/internal/agent/executor.go",
-      "symbol": "(*TeamworkActionExecutor).buildOffer",
-      "ceiling": 21
-    },
-    {
-      "rule": "cyclomatic_complexity",
       "identity": "cyclomatic_complexity:harness/internal/agent/executor.go::decodeCommittedTeamworkReceipt",
       "path": "harness/internal/agent/executor.go",
       "symbol": "decodeCommittedTeamworkReceipt",
@@ -1737,13 +1716,6 @@
       "path": "harness/internal/localapi/client_test.go",
       "symbol": "TestClientUsesOnlyOwnerUnixControlAndOpaqueHeaders",
       "ceiling": 28
-    },
-    {
-      "rule": "cyclomatic_complexity",
-      "identity": "cyclomatic_complexity:harness/internal/localapi/contract.go::ParseInitiationProjection",
-      "path": "harness/internal/localapi/contract.go",
-      "symbol": "ParseInitiationProjection",
-      "ceiling": 24
     },
     {
       "rule": "cyclomatic_complexity",
@@ -5113,7 +5085,7 @@
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/agent/executor.go",
       "path": "harness/internal/agent/executor.go",
-      "ceiling": 886
+      "ceiling": 868
     },
     {
       "rule": "production_file_lines",
@@ -5341,7 +5313,7 @@
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/store/agent_selection.go",
       "path": "harness/internal/store/agent_selection.go",
-      "ceiling": 613
+      "ceiling": 604
     },
     {
       "rule": "production_file_lines",
