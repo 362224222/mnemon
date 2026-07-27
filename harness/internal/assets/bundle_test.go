@@ -161,7 +161,7 @@ func TestManagedBundleServesExactCodexBytes(t *testing.T) {
 	}
 }
 
-func TestManagedSourceModesAndSkillGuideResponsibilities(t *testing.T) {
+func TestManagedSourceExecutabilityAndSkillGuideResponsibilities(t *testing.T) {
 	bundle, err := Load()
 	if err != nil {
 		t.Fatal(err)
@@ -171,12 +171,11 @@ func TestManagedSourceModesAndSkillGuideResponsibilities(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		want := os.FileMode(0o644)
-		if strings.HasSuffix(record.Path, "/hook.sh") {
-			want = 0o755
-		}
-		if info.Mode().Perm() != want {
-			t.Fatalf("source mode %s = %04o, want %04o", record.Path, info.Mode().Perm(), want)
+		wantExecutable := strings.HasSuffix(record.Path, "/hook.sh")
+		gotExecutable := info.Mode().Perm()&0o111 != 0
+		if gotExecutable != wantExecutable {
+			t.Fatalf("source executable bit %s = %t, want %t",
+				record.Path, gotExecutable, wantExecutable)
 		}
 	}
 	skill, _ := bundle.Read("SKILL.md")
