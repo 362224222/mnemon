@@ -381,20 +381,3 @@ func gateStepRule(id string) (stepRule, bool) {
 	}
 	return stepRule{}, false
 }
-
-func expectedStepArgv(rule stepRule, report GateReport) ([]string, error) {
-	if rule.kind != "evidence" {
-		return rule.argv, nil
-	}
-	runtimeName := "scripted"
-	if rule.id == "evidence-live" {
-		runtimeName = "codex"
-	}
-	for _, bundle := range report.Bundles {
-		if bundle.Runtime == runtimeName {
-			return []string{"harness/test/e2e/runner/validate_evidence.sh",
-				"--run", bundle.RunID}, nil
-		}
-	}
-	return nil, fmt.Errorf("%s bundle is required by %s", runtimeName, rule.id)
-}
