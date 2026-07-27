@@ -35,9 +35,9 @@ func (runtime *MeshRuntime) CloseContext(ctx context.Context) error {
 	if nodeHost == nil {
 		return result
 	}
-	if ctx.Err() != nil {
-		return errors.Join(result,
-			fmt.Errorf("%w: close mesh runtime before Host drain: %w", ErrMeshRuntime, ctx.Err()))
+	if contextErr := ctx.Err(); contextErr != nil {
+		result = errors.Join(result,
+			fmt.Errorf("%w: close mesh runtime before Host drain: %w", ErrMeshRuntime, contextErr))
 	}
 	return errors.Join(result, nodeHost.CloseContext(ctx))
 }
