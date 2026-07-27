@@ -230,7 +230,7 @@ type CurrentProjectionSpec struct {
 
 // CurrentProjection is the public, bounded read model. The current schema has
 // one source Event and one action Work. Parent-resume projections keep that
-// single source Event, but explicitly bind the terminal child set that makes the
+// single source Event, but explicitly bind the terminal child result that makes the
 // cross-Channel parent action locally resumable.
 type CurrentProjection struct {
 	sourceEvent CurrentEvent

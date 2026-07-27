@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"sort"
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
@@ -25,8 +24,7 @@ const (
 
 // ReconcileWorkDerivationDisposition is the restart/recovery entry point for
 // the same transaction helper used after a terminal child Work CAS. It is a
-// no-op when child is not derived or when any member of its derivation group
-// remains nonterminal.
+// no-op when child is not derived or remains nonterminal.
 func (s *Store) ReconcileWorkDerivationDisposition(ctx context.Context, child model.WorkRef) error {
 	if s == nil || s.db == nil || ctx == nil || child.IsZero() {
 		return errors.New("reconcile Work derivation disposition: incomplete input")
@@ -46,56 +44,51 @@ func (s *Store) ReconcileWorkDerivationDisposition(ctx context.Context, child mo
 }
 
 // reconcileWorkDerivationDisposition must run in the transaction that makes a
-// derived child terminal. It rereads the complete immutable child set before
-// choosing exactly one durable outcome for the group.
+// derived child terminal. It rereads the immutable derivation before choosing
+// exactly one durable outcome.
 func reconcileWorkDerivationDisposition(ctx context.Context, tx *sql.Tx, child model.WorkRef) error {
 	if ctx == nil || tx == nil || child.IsZero() {
 		return errors.New("derivation disposition: incomplete input")
 	}
-	group, found, err := readWorkDerivationGroup(ctx, tx, child)
+	authority, found, err := readWorkDerivationAuthority(ctx, tx, child)
 	if err != nil || !found {
 		return err
 	}
-
-	children := make([]model.ReviewWork, len(group.rows))
-	allTerminal := true
-	for index, row := range group.rows {
-		work, err := readReviewWork(ctx, tx, row.Child())
-		if err != nil {
-			return fmt.Errorf("derivation disposition: read child ordinal %d: %w", row.ChildOrdinal(), err)
-		}
-		if work.ChannelID() != row.ChildChannelID() || work.Ref() != row.Child() {
-			return fmt.Errorf("%w: child ordinal %d scope changed", ErrDerivationDispositionConflict, row.ChildOrdinal())
-		}
-		children[index] = work
-		allTerminal = allTerminal && work.State().Terminal()
+	derivation := authority.derivation
+	childWork, err := readReviewWork(ctx, tx, derivation.Child())
+	if err != nil {
+		return fmt.Errorf("derivation disposition: read child: %w", err)
 	}
-	if !allTerminal {
+	if childWork.ChannelID() != derivation.ChildChannelID() || childWork.Ref() != derivation.Child() {
+		return fmt.Errorf("%w: child scope changed", ErrDerivationDispositionConflict)
+	}
+	if !childWork.State().Terminal() {
 		return nil
 	}
 
-	parent, err := readReviewWork(ctx, tx, group.parent)
+	parent, err := readReviewWork(ctx, tx, derivation.Parent())
 	if err != nil {
 		return fmt.Errorf("derivation disposition: read latest parent: %w", err)
 	}
-	if parent.ChannelID() != group.parentChannel || parent.Participants().ReviewerPeerID() != group.childHome {
+	if parent.ChannelID() != derivation.ParentChannelID() ||
+		parent.Participants().ReviewerPeerID() != derivation.Child().HomePeerID() {
 		return fmt.Errorf("%w: parent or child-home scope changed", ErrDerivationDispositionConflict)
 	}
-	frozenState, err := readFrozenDerivationParentState(ctx, tx, group)
+	frozenState, err := readFrozenDerivationParentState(ctx, tx, authority)
 	if err != nil {
 		return err
 	}
-	lastEvent, artifactRoots, err := readTerminalChildEvents(ctx, tx, group, children)
+	terminalEvent, artifactRoots, err := readTerminalChildEvent(ctx, tx, authority, childWork)
 	if err != nil {
 		return err
 	}
 
-	handlingID, err := deterministicDerivationHandlingID(group.operation)
+	handlingID, err := deterministicDerivationHandlingID(derivation.OperationID())
 	if err != nil {
 		return err
 	}
 	if existing, err := readAgentHandling(ctx, tx, handlingID); err == nil {
-		parentStale, err := validateExistingDerivationHandling(existing, lastEvent.id)
+		parentStale, err := validateExistingDerivationHandling(existing, terminalEvent.id)
 		if err != nil {
 			return err
 		}
@@ -107,8 +100,8 @@ func reconcileWorkDerivationDisposition(ctx context.Context, tx *sql.Tx, child m
 		return fmt.Errorf("derivation disposition: read existing Handling: %w", err)
 	}
 
-	parentExact := parent.Version() == group.parentVersion && parent.State() == frozenState &&
-		parent.UpdatedBy() == group.parentEvent
+	parentExact := parent.Version() == derivation.ParentVersion() && parent.State() == frozenState &&
+		parent.UpdatedBy() == derivation.ParentEventID()
 	status, disposition := model.HandlingPending, ""
 	if !parentExact {
 		status, disposition = model.HandlingCompleted, parentStaleDisposition
@@ -116,12 +109,12 @@ func reconcileWorkDerivationDisposition(ctx context.Context, tx *sql.Tx, child m
 	handling, err := model.NewHandling(model.HandlingSpec{
 		ID:              handlingID,
 		ProfileID:       model.TeamworkProfileID(),
-		EventID:         lastEvent.id,
+		EventID:         terminalEvent.id,
 		Status:          status,
-		AvailableAt:     lastEvent.acceptedAt,
+		AvailableAt:     terminalEvent.acceptedAt,
 		LastDisposition: disposition,
-		CreatedAt:       lastEvent.acceptedAt,
-		UpdatedAt:       lastEvent.acceptedAt,
+		CreatedAt:       terminalEvent.acceptedAt,
+		UpdatedAt:       terminalEvent.acceptedAt,
 	})
 	if err != nil {
 		return fmt.Errorf("derivation disposition: construct Handling: %w", err)
@@ -141,101 +134,70 @@ func reconcileWorkDerivationDisposition(ctx context.Context, tx *sql.Tx, child m
 	return nil
 }
 
-type workDerivationGroup struct {
-	operation     model.OperationID
-	rows          []model.WorkDerivation
-	childChannel  model.ChannelID
-	childHome     model.PeerID
-	parentChannel model.ChannelID
-	parent        model.WorkRef
-	parentVersion uint64
-	parentEvent   model.EventID
-	childEpoch    model.OriginEpoch
+type workDerivationAuthority struct {
+	derivation model.WorkDerivation
+	childEpoch model.OriginEpoch
 }
 
-func readWorkDerivationGroup(ctx context.Context, tx *sql.Tx, child model.WorkRef) (workDerivationGroup, bool, error) {
-	var operationText string
-	err := tx.QueryRowContext(ctx, `SELECT operation_id FROM work_derivations
-		WHERE child_home_peer_id=? AND child_work_id=?`, child.HomePeerID().String(), child.WorkID().String()).
-		Scan(&operationText)
-	if errors.Is(err, sql.ErrNoRows) {
-		return workDerivationGroup{}, false, nil
-	}
-	if err != nil {
-		return workDerivationGroup{}, false, fmt.Errorf("derivation disposition: locate group: %w", err)
-	}
-	operation, err := model.ParseOperationID(operationText)
-	if err != nil {
-		return workDerivationGroup{}, false, fmt.Errorf("derivation disposition: operation identity: %w", err)
-	}
-	if err := requireCommittedDerivationOperation(ctx, tx, operation); err != nil {
-		return workDerivationGroup{}, false, err
-	}
-
-	rows, err := tx.QueryContext(ctx, `SELECT operation_id,child_ordinal,child_channel_id,
+func readWorkDerivationAuthority(ctx context.Context, tx *sql.Tx,
+	child model.WorkRef,
+) (workDerivationAuthority, bool, error) {
+	var operationText, childChannel, childHome, childWork, parentChannel, parentHome, parentWork string
+	var parentEvent, created string
+	var parentVersion uint64
+	err := tx.QueryRowContext(ctx, `SELECT operation_id,child_channel_id,
 		child_home_peer_id,child_work_id,parent_channel_id,parent_home_peer_id,parent_work_id,
 		parent_version,parent_event_id,created_at FROM work_derivations
-		WHERE operation_id=? ORDER BY child_ordinal`, operation.String())
+		WHERE child_home_peer_id=? AND child_work_id=?`,
+		child.HomePeerID().String(), child.WorkID().String()).Scan(&operationText,
+		&childChannel, &childHome, &childWork, &parentChannel, &parentHome, &parentWork,
+		&parentVersion, &parentEvent, &created)
+	if errors.Is(err, sql.ErrNoRows) {
+		return workDerivationAuthority{}, false, nil
+	}
 	if err != nil {
-		return workDerivationGroup{}, false, fmt.Errorf("derivation disposition: read group: %w", err)
+		return workDerivationAuthority{}, false, fmt.Errorf("derivation disposition: read derivation: %w", err)
 	}
-	defer rows.Close()
-
-	group := workDerivationGroup{operation: operation}
-	var createdAt string
-	for rows.Next() {
-		var operationID, childChannel, childHome, childWork, parentChannel, parentHome, parentWork string
-		var parentEvent, created string
-		var ordinal, parentVersion uint64
-		if err := rows.Scan(&operationID, &ordinal, &childChannel, &childHome, &childWork,
-			&parentChannel, &parentHome, &parentWork, &parentVersion, &parentEvent, &created); err != nil {
-			return workDerivationGroup{}, false, fmt.Errorf("derivation disposition: scan group: %w", err)
-		}
-		row, err := parseWorkDerivationRow(operationID, ordinal, childChannel, childHome, childWork,
-			parentChannel, parentHome, parentWork, parentVersion, parentEvent, created)
-		if err != nil {
-			return workDerivationGroup{}, false, err
-		}
-		if len(group.rows) == 0 {
-			group.childChannel, group.childHome = row.ChildChannelID(), row.Child().HomePeerID()
-			group.parentChannel, group.parent = row.ParentChannelID(), row.Parent()
-			group.parentVersion, group.parentEvent = row.ParentVersion(), row.ParentEventID()
-			createdAt = storeTime(row.CreatedAt())
-		}
-		if int(row.ChildOrdinal()) != len(group.rows) || row.OperationID() != group.operation ||
-			row.ChildChannelID() != group.childChannel || row.Child().HomePeerID() != group.childHome ||
-			row.ParentChannelID() != group.parentChannel || row.Parent() != group.parent ||
-			row.ParentVersion() != group.parentVersion || row.ParentEventID() != group.parentEvent ||
-			storeTime(row.CreatedAt()) != createdAt {
-			return workDerivationGroup{}, false, fmt.Errorf("%w: derivation rows do not form one canonical group", ErrDerivationDispositionConflict)
-		}
-		group.rows = append(group.rows, row)
+	derivation, err := parseWorkDerivationRow(operationText, childChannel, childHome,
+		childWork, parentChannel, parentHome, parentWork, parentVersion, parentEvent, created)
+	if err != nil {
+		return workDerivationAuthority{}, false, err
 	}
-	if err := rows.Err(); err != nil {
-		return workDerivationGroup{}, false, fmt.Errorf("derivation disposition: iterate group: %w", err)
+	if derivation.Child() != child {
+		return workDerivationAuthority{}, false,
+			fmt.Errorf("%w: derivation child identity changed", ErrDerivationDispositionConflict)
 	}
-	if len(group.rows) == 0 || len(group.rows) > model.MaxChildWorks {
-		return workDerivationGroup{}, false, fmt.Errorf("%w: invalid derivation child count", ErrDerivationDispositionConflict)
+	if err := requireCommittedDerivationOperation(ctx, tx, derivation.OperationID()); err != nil {
+		return workDerivationAuthority{}, false, err
+	}
+	var count uint64
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM work_derivations WHERE operation_id=?`,
+		derivation.OperationID().String()).Scan(&count); err != nil {
+		return workDerivationAuthority{}, false,
+			fmt.Errorf("derivation disposition: count operation derivations: %w", err)
+	}
+	if count != 1 {
+		return workDerivationAuthority{}, false,
+			fmt.Errorf("%w: operation does not have exactly one derivation", ErrDerivationDispositionConflict)
 	}
 	node, err := readNode(ctx, tx)
 	if err != nil {
-		return workDerivationGroup{}, false, fmt.Errorf("derivation disposition: read local Node: %w", err)
+		return workDerivationAuthority{}, false, fmt.Errorf("derivation disposition: read local Node: %w", err)
 	}
-	if group.childHome != node.PeerID() {
-		return workDerivationGroup{}, false, fmt.Errorf("%w: derived children are not homed by the local Node",
+	if derivation.Child().HomePeerID() != node.PeerID() {
+		return workDerivationAuthority{}, false, fmt.Errorf("%w: derived child is not homed by the local Node",
 			ErrDerivationDispositionConflict)
 	}
-	group.childEpoch = node.OriginEpoch()
-	return group, true, nil
+	return workDerivationAuthority{derivation: derivation, childEpoch: node.OriginEpoch()}, true, nil
 }
 
-func parseWorkDerivationRow(operationText string, ordinal uint64, childChannelText, childHomeText,
+func parseWorkDerivationRow(operationText, childChannelText, childHomeText,
 	childWorkText, parentChannelText, parentHomeText, parentWorkText string, parentVersion uint64,
 	parentEventText, createdText string,
 ) (model.WorkDerivation, error) {
 	operation, err := model.ParseOperationID(operationText)
-	if err != nil || ordinal >= model.MaxChildWorks {
-		return model.WorkDerivation{}, fmt.Errorf("%w: invalid derivation operation or ordinal", ErrDerivationDispositionConflict)
+	if err != nil {
+		return model.WorkDerivation{}, fmt.Errorf("%w: invalid derivation operation", ErrDerivationDispositionConflict)
 	}
 	childChannel, err := model.ParseChannelID(childChannelText)
 	if err != nil {
@@ -278,7 +240,7 @@ func parseWorkDerivationRow(operationText string, ordinal uint64, childChannelTe
 		return model.WorkDerivation{}, err
 	}
 	row, err := model.NewWorkDerivation(model.WorkDerivationSpec{OperationID: operation,
-		ChildOrdinal: uint8(ordinal), ChildChannelID: childChannel, Child: child,
+		ChildChannelID: childChannel, Child: child,
 		ParentChannelID: parentChannel, Parent: parent, ParentVersion: parentVersion,
 		ParentEventID: parentEvent, CreatedAt: created})
 	if err != nil {
@@ -303,17 +265,20 @@ func requireCommittedDerivationOperation(ctx context.Context, tx *sql.Tx, operat
 	return nil
 }
 
-func readFrozenDerivationParentState(ctx context.Context, tx *sql.Tx, group workDerivationGroup) (model.WorkState, error) {
+func readFrozenDerivationParentState(ctx context.Context, tx *sql.Tx,
+	authority workDerivationAuthority,
+) (model.WorkState, error) {
+	derivation := authority.derivation
 	var eventType, source, channel, origin, home, work string
 	err := tx.QueryRowContext(ctx, `SELECT event_type,source,channel_id,origin_peer_id,work_home_peer_id,work_id
-		FROM events WHERE event_id=?`, group.parentEvent.String()).
+		FROM events WHERE event_id=?`, derivation.ParentEventID().String()).
 		Scan(&eventType, &source, &channel, &origin, &home, &work)
 	if err != nil {
 		return "", fmt.Errorf("derivation disposition: read frozen parent Event: %w", err)
 	}
-	if source != string(model.EventSourceImported) || channel != group.parentChannel.String() ||
-		origin != group.parent.HomePeerID().String() ||
-		home != group.parent.HomePeerID().String() || work != group.parent.WorkID().String() {
+	if source != string(model.EventSourceImported) || channel != derivation.ParentChannelID().String() ||
+		origin != derivation.Parent().HomePeerID().String() ||
+		home != derivation.Parent().HomePeerID().String() || work != derivation.Parent().WorkID().String() {
 		return "", fmt.Errorf("%w: frozen parent Event scope changed", ErrDerivationDispositionConflict)
 	}
 	switch model.EventType(eventType) {
@@ -328,103 +293,92 @@ func readFrozenDerivationParentState(ctx context.Context, tx *sql.Tx, group work
 
 type terminalChildEvent struct {
 	id         model.EventID
-	origin     model.PeerID
-	epoch      model.OriginEpoch
-	sequence   uint64
 	acceptedAt time.Time
 }
 
-func readTerminalChildEvents(ctx context.Context, tx *sql.Tx, group workDerivationGroup,
-	children []model.ReviewWork,
+func readTerminalChildEvent(ctx context.Context, tx *sql.Tx,
+	authority workDerivationAuthority, child model.ReviewWork,
 ) (terminalChildEvent, []model.Digest, error) {
-	var last terminalChildEvent
-	rootSet := make(map[model.Digest]struct{})
-	for index, child := range children {
-		var eventText, eventType, source, channel, originText, epochText, home, work, acceptedText string
-		var artifactJSON, payloadJSON []byte
-		var sequence uint64
-		err := tx.QueryRowContext(ctx, `SELECT event_id,event_type,source,channel_id,origin_peer_id,origin_epoch,
-			origin_seq,work_home_peer_id,work_id,accepted_at,artifact_roots_json,payload_json
-			FROM events WHERE event_id=?`,
-			child.UpdatedBy().String()).Scan(&eventText, &eventType, &source, &channel, &originText, &epochText,
-			&sequence, &home, &work, &acceptedText, &artifactJSON, &payloadJSON)
-		if err != nil {
-			return terminalChildEvent{}, nil, fmt.Errorf("derivation disposition: read terminal child Event: %w", err)
-		}
-		eventID, err := model.ParseEventID(eventText)
+	var eventText, eventType, source, channel, originText, epochText, home, work, acceptedText string
+	var artifactJSON, payloadJSON []byte
+	var sequence uint64
+	err := tx.QueryRowContext(ctx, `SELECT event_id,event_type,source,channel_id,origin_peer_id,origin_epoch,
+		origin_seq,work_home_peer_id,work_id,accepted_at,artifact_roots_json,payload_json
+		FROM events WHERE event_id=?`,
+		child.UpdatedBy().String()).Scan(&eventText, &eventType, &source, &channel, &originText, &epochText,
+		&sequence, &home, &work, &acceptedText, &artifactJSON, &payloadJSON)
+	if err != nil {
+		return terminalChildEvent{}, nil, fmt.Errorf("derivation disposition: read terminal child Event: %w", err)
+	}
+	eventID, err := model.ParseEventID(eventText)
+	if err != nil {
+		return terminalChildEvent{}, nil, err
+	}
+	origin, err := model.ParsePeerID(originText)
+	if err != nil {
+		return terminalChildEvent{}, nil, err
+	}
+	epoch, err := model.ParseOriginEpoch(epochText)
+	if err != nil {
+		return terminalChildEvent{}, nil, err
+	}
+	acceptedAt, err := parseCanonicalStoreTime(acceptedText)
+	if err != nil {
+		return terminalChildEvent{}, nil, err
+	}
+	if err := validateTerminalChildEventScope(authority, child, eventID, model.EventType(eventType),
+		source, channel, origin, epoch, home, work, acceptedAt); err != nil {
+		return terminalChildEvent{}, nil, err
+	}
+	payload, err := parseDerivationVersionPayload(model.EventType(eventType), payloadJSON)
+	if err != nil || child.Version() <= 1 || payload.WorkVersion != child.Version()-1 ||
+		payload.Iteration != child.Iteration() || !bytes.Equal(child.StateData().Bytes(), payloadJSON) {
+		return terminalChildEvent{}, nil,
+			fmt.Errorf("%w: terminal child payload version/iteration mismatch", ErrDerivationDispositionConflict)
+	}
+	terminalRefs, err := parseCanonicalDerivationArtifactRefs(artifactJSON)
+	if err != nil {
+		return terminalChildEvent{}, nil,
+			fmt.Errorf("%w: terminal child Artifact roots: %v", ErrDerivationDispositionConflict, err)
+	}
+	if len(terminalRefs) != 0 {
+		return terminalChildEvent{}, nil, fmt.Errorf("%w: terminal child Event carries Artifact roots",
+			ErrDerivationDispositionConflict)
+	}
+	var roots []model.Digest
+	if child.State() == model.WorkClosed {
+		roots, err = readClosedChildResultArtifacts(ctx, tx, authority, child, eventID, sequence)
 		if err != nil {
 			return terminalChildEvent{}, nil, err
-		}
-		origin, err := model.ParsePeerID(originText)
-		if err != nil {
-			return terminalChildEvent{}, nil, err
-		}
-		epoch, err := model.ParseOriginEpoch(epochText)
-		if err != nil {
-			return terminalChildEvent{}, nil, err
-		}
-		acceptedAt, err := parseCanonicalStoreTime(acceptedText)
-		if err != nil {
-			return terminalChildEvent{}, nil, err
-		}
-		if eventID != child.UpdatedBy() || model.EventType(eventType) != terminalEventType(child.State()) ||
-			source != string(model.EventSourceLocal) || epoch != group.childEpoch ||
-			channel != group.childChannel.String() || origin != group.childHome || home != group.childHome.String() ||
-			work != child.Ref().WorkID().String() || !acceptedAt.Equal(child.UpdatedAt()) {
-			return terminalChildEvent{}, nil, fmt.Errorf("%w: child ordinal %d terminal Event mismatch",
-				ErrDerivationDispositionConflict, group.rows[index].ChildOrdinal())
-		}
-		payload, err := parseDerivationVersionPayload(model.EventType(eventType), payloadJSON)
-		if err != nil || child.Version() <= 1 || payload.WorkVersion != child.Version()-1 ||
-			payload.Iteration != child.Iteration() || !bytes.Equal(child.StateData().Bytes(), payloadJSON) {
-			return terminalChildEvent{}, nil, fmt.Errorf("%w: child ordinal %d terminal payload version/iteration mismatch",
-				ErrDerivationDispositionConflict, group.rows[index].ChildOrdinal())
-		}
-		terminalRefs, err := parseCanonicalDerivationArtifactRefs(artifactJSON)
-		if err != nil {
-			return terminalChildEvent{}, nil, fmt.Errorf("%w: child ordinal %d Artifact roots: %v",
-				ErrDerivationDispositionConflict, group.rows[index].ChildOrdinal(), err)
-		}
-		if len(terminalRefs) != 0 {
-			return terminalChildEvent{}, nil, fmt.Errorf("%w: terminal child Event carries Artifact roots",
-				ErrDerivationDispositionConflict)
-		}
-		if child.State() == model.WorkClosed {
-			roots, err := readClosedChildResultArtifacts(ctx, tx, group, child, eventID, sequence)
-			if err != nil {
-				return terminalChildEvent{}, nil, err
-			}
-			for _, root := range roots {
-				rootSet[root] = struct{}{}
-			}
-		}
-		if len(rootSet) > model.MaxCurrentArtifactRefs {
-			return terminalChildEvent{}, nil, fmt.Errorf("%w: child result Artifact roots exceed current projection bound",
-				ErrDerivationDispositionConflict)
-		}
-		current := terminalChildEvent{eventID, origin, epoch, sequence, acceptedAt}
-		if index > 0 && (current.origin != last.origin || current.epoch != last.epoch) {
-			return terminalChildEvent{}, nil, fmt.Errorf("%w: child terminal Events do not share one origin epoch",
-				ErrDerivationDispositionConflict)
-		}
-		if index == 0 || current.sequence > last.sequence {
-			last = current
 		}
 	}
-	if last.id.IsZero() {
-		return terminalChildEvent{}, nil, fmt.Errorf("%w: derivation has no terminal Event", ErrDerivationDispositionConflict)
+	if len(roots) > model.MaxCurrentArtifactRefs {
+		return terminalChildEvent{}, nil, fmt.Errorf("%w: child result Artifact roots exceed current projection bound",
+			ErrDerivationDispositionConflict)
 	}
-	roots := make([]model.Digest, 0, len(rootSet))
-	for root := range rootSet {
-		roots = append(roots, root)
-	}
-	sort.Slice(roots, func(i, j int) bool { return roots[i].String() < roots[j].String() })
-	return last, roots, nil
+	return terminalChildEvent{id: eventID, acceptedAt: acceptedAt}, roots, nil
 }
 
-func readClosedChildResultArtifacts(ctx context.Context, tx *sql.Tx, group workDerivationGroup,
+func validateTerminalChildEventScope(authority workDerivationAuthority, child model.ReviewWork,
+	eventID model.EventID, eventType model.EventType, source, channel string,
+	origin model.PeerID, epoch model.OriginEpoch, home, work string, acceptedAt time.Time,
+) error {
+	derivation := authority.derivation
+	if eventID != child.UpdatedBy() || eventType != terminalEventType(child.State()) ||
+		source != string(model.EventSourceLocal) || epoch != authority.childEpoch ||
+		channel != derivation.ChildChannelID().String() || origin != derivation.Child().HomePeerID() ||
+		home != derivation.Child().HomePeerID().String() ||
+		work != child.Ref().WorkID().String() || !acceptedAt.Equal(child.UpdatedAt()) {
+		return fmt.Errorf("%w: terminal child Event mismatch", ErrDerivationDispositionConflict)
+	}
+	return nil
+}
+
+func readClosedChildResultArtifacts(ctx context.Context, tx *sql.Tx,
+	authority workDerivationAuthority,
 	child model.ReviewWork, closedEvent model.EventID, closedSequence uint64,
 ) ([]model.Digest, error) {
+	derivation := authority.derivation
 	var causedByJSON []byte
 	if err := tx.QueryRowContext(ctx, "SELECT caused_by_json FROM events WHERE event_id=?",
 		closedEvent.String()).Scan(&causedByJSON); err != nil {
@@ -449,10 +403,10 @@ func readClosedChildResultArtifacts(ctx context.Context, tx *sql.Tx, group workD
 	}
 	deliveredAt, timeErr := parseCanonicalStoreTime(acceptedText)
 	if model.EventType(eventType) != model.EventReviewDelivered || source != string(model.EventSourceLocal) ||
-		channel != group.childChannel.String() || origin != group.childHome.String() ||
-		epoch != group.childEpoch.String() || home != child.Ref().HomePeerID().String() ||
-		work != child.Ref().WorkID().String() || cause.OriginPeerID() != group.childHome ||
-		cause.OriginEpoch() != group.childEpoch || deliveredSequence >= closedSequence || timeErr != nil ||
+		channel != derivation.ChildChannelID().String() || origin != derivation.Child().HomePeerID().String() ||
+		epoch != authority.childEpoch.String() || home != child.Ref().HomePeerID().String() ||
+		work != child.Ref().WorkID().String() || cause.OriginPeerID() != derivation.Child().HomePeerID() ||
+		cause.OriginEpoch() != authority.childEpoch || deliveredSequence >= closedSequence || timeErr != nil ||
 		deliveredAt.After(child.UpdatedAt()) {
 		return nil, fmt.Errorf("%w: CLOSED cause is not the exact local same-Work delivered Event",
 			ErrDerivationDispositionConflict)

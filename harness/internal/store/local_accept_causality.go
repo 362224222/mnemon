@@ -32,7 +32,7 @@ func validateLocalCausality(ctx context.Context, tx *sql.Tx, event model.Event) 
 // current Work view, and every home controller decision cites the exact remote
 // request it decides. Contextless offers have no causal authority; the
 // context-bound offer path is checked against its frozen derivation parent by
-// prepareLocalDerivations.
+// prepareLocalDerivation.
 func validateLocalCausalSemantics(ctx context.Context, tx *sql.Tx, operation model.Operation,
 	event model.Event, _ managedAcceptanceState,
 ) error {

@@ -723,7 +723,7 @@ func decodeCommittedTeamworkReceipt(handler ActionHandler, receipt model.JSON, o
 			return OperationResponse{}, errors.New("committed Teamwork result omits capture")
 		}
 		if handler.mechanic.selection {
-			wantWorkID, wantEventID, idErr := derivedOfferIDs(operation.ID(), uint8(index))
+			wantWorkID, wantEventID, idErr := derivedOfferIDs(operation.ID(), 0)
 			if idErr != nil || workID != wantWorkID || eventID != wantEventID ||
 				state != model.WorkOffered || row.Work.Version != 1 {
 				return OperationResponse{}, errors.New("committed Teamwork offer identities are invalid")

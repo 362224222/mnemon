@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-func TestWorkDerivationIdentityAndOrdinal(t *testing.T) {
+func TestWorkDerivationIdentity(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, 7, 16, 0, 0, 0, 0, time.UTC)
@@ -17,18 +17,15 @@ func TestWorkDerivationIdentityAndOrdinal(t *testing.T) {
 	peer, channel := mustPeer(t, "peer-a"), mustChannelID(t, "channel-a")
 	parent, _ := NewWorkRef(peer, parentID)
 	child, _ := NewWorkRef(peer, childID)
-	spec := WorkDerivationSpec{operation, 0, channel, child, channel, parent, 2, parentEvent, now}
+	spec := WorkDerivationSpec{OperationID: operation, ChildChannelID: channel, Child: child,
+		ParentChannelID: channel, Parent: parent, ParentVersion: 2,
+		ParentEventID: parentEvent, CreatedAt: now}
 	if _, err := NewWorkDerivation(spec); err != nil {
 		t.Fatalf("NewWorkDerivation() error = %v", err)
 	}
 	spec.Child = parent
 	if _, err := NewWorkDerivation(spec); !errors.Is(err, ErrInvariant) {
 		t.Fatalf("self derivation error = %v", err)
-	}
-	spec.Child = child
-	spec.ChildOrdinal = MaxChildWorks
-	if _, err := NewWorkDerivation(spec); !errors.Is(err, ErrLimit) {
-		t.Fatalf("ordinal error = %v", err)
 	}
 }
 
@@ -43,7 +40,9 @@ func TestWorkDerivationRequiresCommittedContextOffer(t *testing.T) {
 	peer, channel := mustPeer(t, "peer-a"), mustChannelID(t, "channel-a")
 	parent, _ := NewWorkRef(peer, parentID)
 	child, _ := NewWorkRef(peer, childID)
-	derivation, _ := NewWorkDerivation(WorkDerivationSpec{operationID, 0, channel, child, channel, parent, 2, parentEvent, now})
+	derivation, _ := NewWorkDerivation(WorkDerivationSpec{OperationID: operationID,
+		ChildChannelID: channel, Child: child, ParentChannelID: channel, Parent: parent,
+		ParentVersion: 2, ParentEventID: parentEvent, CreatedAt: now})
 
 	context := Sum([]byte("context"))
 	result, _ := NewJSON([]byte(`{"status":"accepted"}`))
@@ -87,7 +86,7 @@ func TestWorkDerivationParentSourceIsExactWorkUpdateEvent(t *testing.T) {
 	childID, _ := ParseWorkID("work-parent-child")
 	child, _ := NewWorkRef(reviewer, childID)
 	derivation, err := NewWorkDerivation(WorkDerivationSpec{OperationID: operationID,
-		ChildOrdinal: 0, ChildChannelID: scope.ChannelID(), Child: child,
+		ChildChannelID: scope.ChannelID(), Child: child,
 		ParentChannelID: scope.ChannelID(), Parent: parent.Ref(), ParentVersion: parent.Version(),
 		ParentEventID: currentEvent.ID(), CreatedAt: currentEvent.AcceptedAt()})
 	if err != nil {

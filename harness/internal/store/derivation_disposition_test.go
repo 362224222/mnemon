@@ -12,7 +12,7 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 )
 
-func TestReconcileWorkDerivationDispositionWaitsForEveryChildThenResumes(t *testing.T) {
+func TestReconcileWorkDerivationDispositionWaitsForTerminalChildThenResumes(t *testing.T) {
 	t.Parallel()
 	fixture := newDerivationDispositionFixture(t, false)
 	ctx := context.Background()
@@ -22,12 +22,12 @@ func TestReconcileWorkDerivationDispositionWaitsForEveryChildThenResumes(t *test
 	assertDispositionHandlingCount(t, fixture.store, 0)
 
 	lastAt := fixture.now.Add(12 * time.Second)
-	fixture.terminalizeChild(t, 1, "event-child-b-closed", 42, lastAt)
+	fixture.terminalizeChild(t, 0, "event-child-a-closed", 42, lastAt)
 	if err := fixture.store.ReconcileWorkDerivationDisposition(ctx, fixture.children[0]); err != nil {
 		t.Fatal(err)
 	}
 	handling := fixture.handling(t)
-	lastEvent, _ := model.ParseEventID("event-child-b-closed")
+	lastEvent, _ := model.ParseEventID("event-child-a-closed")
 	if handling.EventID() != lastEvent || handling.Status() != model.HandlingPending ||
 		handling.LastDisposition() != "" || handling.Attempts() != 0 ||
 		!handling.AvailableAt().Equal(lastAt) || !handling.CreatedAt().Equal(lastAt) {
@@ -51,7 +51,7 @@ func TestReconcileWorkDerivationDispositionRecordsParentStaleWithoutWake(t *test
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newDerivationDispositionFixture(t, true)
 			fixture.advanceParent(t, test.eventType, test.state, test.version)
-			if err := fixture.store.ReconcileWorkDerivationDisposition(context.Background(), fixture.children[1]); err != nil {
+			if err := fixture.store.ReconcileWorkDerivationDisposition(context.Background(), fixture.children[0]); err != nil {
 				t.Fatal(err)
 			}
 			handling := fixture.handling(t)
@@ -131,7 +131,7 @@ func TestReconcileWorkDerivationDispositionIsAtomicConcurrentAndRestartSafe(t *t
 		t.Fatal(err)
 	}
 	fixture.store = restarted
-	if err := restarted.ReconcileWorkDerivationDisposition(ctx, fixture.children[1]); err != nil {
+	if err := restarted.ReconcileWorkDerivationDisposition(ctx, fixture.children[0]); err != nil {
 		t.Fatal(err)
 	}
 	if after := fixture.handling(t); !sameHandling(before, after) {
@@ -223,12 +223,12 @@ func TestReconcileWorkDerivationDispositionRejectsClosedCauseFromPriorIteration(
 func TestCommitLocalAcceptanceRollsBackTerminalChildAndDispositionAfterLaterEvidenceFailure(t *testing.T) {
 	fixture := newDerivationDispositionFixture(t, false)
 	ctx := context.Background()
-	child := fixture.children[1]
+	child := fixture.children[0]
 	deliveredAt := fixture.now.Add(22 * time.Second)
-	fixture.insertDeliveredChildResult(t, 1, "event-child-b-delivered", 42, deliveredAt)
-	deliveredPayload := fixture.eventPayload(t, "event-child-b-delivered")
+	fixture.insertDeliveredChildResult(t, 0, "event-child-a-delivered", 42, deliveredAt)
+	deliveredPayload := fixture.eventPayload(t, "event-child-a-delivered")
 	mustExec(t, fixture.store, `UPDATE works SET version=3,state='DELIVERED',state_json=?,
-		updated_by_event='event-child-b-delivered',updated_at=? WHERE home_peer_id=? AND work_id=?`,
+		updated_by_event='event-child-a-delivered',updated_at=? WHERE home_peer_id=? AND work_id=?`,
 		deliveredPayload.Bytes(), storeTime(deliveredAt), child.HomePeerID().String(), child.WorkID().String())
 	// Align the synthetic durable history with the real local admission heads so
 	// the close Event is origin/channel sequence 43 and is therefore the last
@@ -267,8 +267,8 @@ func TestCommitLocalAcceptanceRollsBackTerminalChildAndDispositionAfterLaterEvid
 		t.Fatal(err)
 	}
 	eventScope, _ := scope.EventScope(0, child)
-	closeEvent, _ := model.ParseEventID("event-child-b-close-committed")
-	causeEvent, _ := model.ParseEventID("event-child-b-delivered")
+	closeEvent, _ := model.ParseEventID("event-child-a-close-committed")
+	causeEvent, _ := model.ParseEventID("event-child-a-delivered")
 	cause, _ := model.NewEventKey(fixture.node.PeerID(), fixture.node.OriginEpoch(), causeEvent)
 	stamp, err := eventpkg.NewAdmissionStamp(eventpkg.AdmissionStampSpec{Node: scope.Node(), Profile: scope.Profile(),
 		EventID: closeEvent, ChannelID: fixture.channel, WorkRef: child,
@@ -305,7 +305,7 @@ func TestCommitLocalAcceptanceRollsBackTerminalChildAndDispositionAfterLaterEvid
 	// derivation reconciliation and Gossip publication insertion have run.
 	collisionID := deterministicDeliveryID(closeEvent, current.Participants().ReviewerPeerID())
 	mustExec(t, fixture.store, `INSERT INTO peer_deliveries(delivery_id,channel_id,target_peer_id,event_id,
-		status,created_at,updated_at) VALUES(?,?,?,'event-child-b-delivered','pending',?,?)`, collisionID,
+		status,created_at,updated_at) VALUES(?,?,?,'event-child-a-delivered','pending',?,?)`, collisionID,
 		fixture.channel.String(), current.Participants().ReviewerPeerID().String(), storeTime(closeAt), storeTime(closeAt))
 	spec := LocalAcceptanceSpec{Scope: scope, Items: []LocalAcceptanceItem{{Publication: bundle.Publication(),
 		Work: &mutation}}, Operation: authority}
@@ -339,7 +339,7 @@ type derivationDispositionFixture struct {
 
 func newDerivationDispositionFixture(t *testing.T, allTerminal bool) *derivationDispositionFixture {
 	t.Helper()
-	base := newAcceptanceFixture(t, 3)
+	base := newAcceptanceFixture(t, 2)
 	fixture := &derivationDispositionFixture{acceptanceFixture: base}
 	fixture.operation, _ = model.ParseOperationID("operation-derivation")
 	run, _ := model.ParseRunID("run-derivation")
@@ -363,7 +363,7 @@ func newDerivationDispositionFixture(t *testing.T, allTerminal bool) *derivation
 	if err != nil {
 		t.Fatal(err)
 	}
-	fixture.artifacts = [][]model.ArtifactRef{{ref}, nil}
+	fixture.artifacts = [][]model.ArtifactRef{{ref}}
 
 	parentID, _ := model.ParseWorkID("work-parent")
 	fixture.parent, _ = model.NewWorkRef(base.reviewers[0], parentID)
@@ -374,12 +374,12 @@ func newDerivationDispositionFixture(t *testing.T, allTerminal bool) *derivation
 	fixture.insertWork(t, fixture.parent, base.node.PeerID(), model.WorkActive, 2,
 		"event-parent-active", base.now)
 
-	for index := 0; index < 2; index++ {
+	for index := 0; index < 1; index++ {
 		workID, _ := model.ParseWorkID(fmt.Sprintf("work-child-%c", 'a'+index))
 		child, _ := model.NewWorkRef(base.node.PeerID(), workID)
 		fixture.children = append(fixture.children, child)
 		state, version := model.WorkClosed, uint64(4)
-		if index == 1 && !allTerminal {
+		if !allTerminal {
 			state, version = model.WorkActive, 2
 		}
 		eventID := fmt.Sprintf("event-child-%c-initial", 'a'+index)
@@ -393,14 +393,13 @@ func newDerivationDispositionFixture(t *testing.T, allTerminal bool) *derivation
 		fixture.insertWork(t, child, base.reviewers[index+1], state, version, eventID, acceptedAt)
 	}
 
-	createdAt := storeTime(base.now.Add(6 * time.Second))
-	for index, child := range fixture.children {
-		mustExec(t, base.store, `INSERT INTO work_derivations(operation_id,child_ordinal,child_channel_id,
-			child_home_peer_id,child_work_id,parent_channel_id,parent_home_peer_id,parent_work_id,
-			parent_version,parent_event_id,created_at) VALUES(?,?,?,?,?,?,?,?,2,'event-parent-active',?)`,
-			fixture.operation.String(), index, base.channel.String(), child.HomePeerID().String(), child.WorkID().String(),
-			base.channel.String(), fixture.parent.HomePeerID().String(), fixture.parent.WorkID().String(), createdAt)
-	}
+	child := fixture.children[0]
+	mustExec(t, base.store, `INSERT INTO work_derivations(operation_id,child_channel_id,
+		child_home_peer_id,child_work_id,parent_channel_id,parent_home_peer_id,parent_work_id,
+		parent_version,parent_event_id,created_at) VALUES(?,?,?,?,?,?,?,2,'event-parent-active',?)`,
+		fixture.operation.String(), base.channel.String(), child.HomePeerID().String(), child.WorkID().String(),
+		base.channel.String(), fixture.parent.HomePeerID().String(), fixture.parent.WorkID().String(),
+		storeTime(base.now.Add(6*time.Second)))
 	// Raw historical Events above intentionally bypass publication workers. Put
 	// the synthetic local heads immediately after that history so tests that
 	// exercise real admission can continue at sequence 42 without a gap.

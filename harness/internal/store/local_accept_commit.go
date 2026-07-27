@@ -60,26 +60,27 @@ func insertLocalProvenance(ctx context.Context, tx *sql.Tx, operation model.Oper
 	return nil
 }
 
-func insertLocalDerivations(ctx context.Context, tx *sql.Tx, operation model.Operation,
-	parent model.ReviewWork, derivations []model.WorkDerivation,
+func insertLocalDerivation(ctx context.Context, tx *sql.Tx, operation model.Operation,
+	parent model.ReviewWork, derivation model.WorkDerivation,
 ) error {
-	for _, derivation := range derivations {
-		if err := derivation.ValidateOperation(operation); err != nil || parent.Ref() != derivation.Parent() ||
-			parent.ChannelID() != derivation.ParentChannelID() || parent.Version() != derivation.ParentVersion() ||
-			parent.UpdatedBy() != derivation.ParentEventID() {
-			return errors.New("commit local acceptance: derivation evidence mismatch")
-		}
-		_, err := tx.ExecContext(ctx, `INSERT INTO work_derivations(operation_id,child_ordinal,
-			child_channel_id,child_home_peer_id,child_work_id,parent_channel_id,parent_home_peer_id,
-			parent_work_id,parent_version,parent_event_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
-			derivation.OperationID().String(), derivation.ChildOrdinal(), derivation.ChildChannelID().String(),
-			derivation.Child().HomePeerID().String(), derivation.Child().WorkID().String(),
-			derivation.ParentChannelID().String(), derivation.Parent().HomePeerID().String(),
-			derivation.Parent().WorkID().String(), derivation.ParentVersion(), derivation.ParentEventID().String(),
-			storeTime(derivation.CreatedAt()))
-		if err != nil {
-			return fmt.Errorf("insert Work derivation: %w", err)
-		}
+	if derivation.OperationID().IsZero() {
+		return nil
+	}
+	if err := derivation.ValidateOperation(operation); err != nil || parent.Ref() != derivation.Parent() ||
+		parent.ChannelID() != derivation.ParentChannelID() || parent.Version() != derivation.ParentVersion() ||
+		parent.UpdatedBy() != derivation.ParentEventID() {
+		return errors.New("commit local acceptance: derivation evidence mismatch")
+	}
+	_, err := tx.ExecContext(ctx, `INSERT INTO work_derivations(operation_id,child_channel_id,
+		child_home_peer_id,child_work_id,parent_channel_id,parent_home_peer_id,
+		parent_work_id,parent_version,parent_event_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)`,
+		derivation.OperationID().String(), derivation.ChildChannelID().String(),
+		derivation.Child().HomePeerID().String(), derivation.Child().WorkID().String(),
+		derivation.ParentChannelID().String(), derivation.Parent().HomePeerID().String(),
+		derivation.Parent().WorkID().String(), derivation.ParentVersion(), derivation.ParentEventID().String(),
+		storeTime(derivation.CreatedAt()))
+	if err != nil {
+		return fmt.Errorf("insert Work derivation: %w", err)
 	}
 	return nil
 }

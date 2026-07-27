@@ -221,7 +221,7 @@ func TestResolveDeadlineWinnerRollsBackEveryEffectOnLateFailure(t *testing.T) {
 func TestResolveDeadlineWinnerReconcilesNestedDerivationInSameTransaction(t *testing.T) {
 	t.Parallel()
 	fixture := newDerivationDispositionFixture(t, false)
-	current, err := fixture.store.GetReviewWork(context.Background(), fixture.children[1])
+	current, err := fixture.store.GetReviewWork(context.Background(), fixture.children[0])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +240,7 @@ func TestResolveDeadlineWinnerReconcilesNestedDerivationInSameTransaction(t *tes
 		handling.EventID() != spec.Expiry.Publication.Event().ID() {
 		t.Fatalf("nested expiry disposition = %#v", handling)
 	}
-	assertDispositionHandlingPins(t, fixture, 1)
+	assertDispositionHandlingPins(t, fixture, 0)
 }
 
 func TestResolveDeadlineWinnerRejectsEarlyForgedAndContextlessInputsWithoutWrites(t *testing.T) {

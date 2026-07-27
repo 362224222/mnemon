@@ -460,7 +460,6 @@ BEGIN SELECT RAISE(ABORT, 'work participant snapshot is immutable'); END;
 
 CREATE TABLE work_derivations (
   operation_id       TEXT NOT NULL REFERENCES operations(operation_id),
-  child_ordinal      INTEGER NOT NULL CHECK (child_ordinal BETWEEN 0 AND 6),
   child_channel_id   TEXT NOT NULL,
   child_home_peer_id TEXT NOT NULL,
   child_work_id      TEXT NOT NULL,
@@ -471,7 +470,7 @@ CREATE TABLE work_derivations (
   parent_event_id    TEXT NOT NULL REFERENCES events(event_id),
   created_at         TEXT NOT NULL,
   PRIMARY KEY (child_home_peer_id, child_work_id),
-  UNIQUE (operation_id, child_ordinal),
+  UNIQUE (operation_id),
   FOREIGN KEY (child_channel_id, child_home_peer_id, child_work_id)
     REFERENCES works(channel_id, home_peer_id, work_id),
   FOREIGN KEY (parent_channel_id, parent_home_peer_id, parent_work_id)

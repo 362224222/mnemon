@@ -194,7 +194,7 @@ func applyLocalAcceptanceTx(ctx context.Context, tx *sql.Tx, spec LocalAcceptanc
 	if err != nil {
 		return model.JSON{}, err
 	}
-	derivations, parent, err := prepareLocalDerivations(ctx, tx, operation, spec, events)
+	derivation, parent, err := prepareLocalDerivation(ctx, tx, operation, spec, events)
 	if err != nil {
 		return model.JSON{}, err
 	}
@@ -209,7 +209,7 @@ func applyLocalAcceptanceTx(ctx context.Context, tx *sql.Tx, spec LocalAcceptanc
 	}
 	if spec.Operation != nil {
 		if err := commitAcceptanceOperation(ctx, tx, spec, operation, receipt, events,
-			artifacts, parent, derivations, managedAuthority, managed,
+			artifacts, parent, derivation, managedAuthority, managed,
 			trustedNow); err != nil {
 			return model.JSON{}, err
 		}
@@ -314,12 +314,12 @@ func applyAcceptedWorkMutation(ctx context.Context, tx *sql.Tx, mutation WorkMut
 }
 
 // commitAcceptanceOperation fences the started operation into its committed
-// terminal state and records provenance, derivations and, for the managed
+// terminal state and records provenance, a derivation and, for the managed
 // boundary, the settlement evidence for the accepted Events.
 func commitAcceptanceOperation(ctx context.Context, tx *sql.Tx, spec LocalAcceptanceSpec,
 	operation model.Operation, receipt model.JSON, events []model.Event,
 	artifacts acceptanceArtifactAuthority, parent model.ReviewWork,
-	derivations []model.WorkDerivation,
+	derivation model.WorkDerivation,
 	managedAuthority managedAcceptanceState, managed bool, trustedNow time.Time,
 ) error {
 	result, err := tx.ExecContext(ctx, `UPDATE operations SET status='committed',lease_owner=NULL,
@@ -336,7 +336,7 @@ func commitAcceptanceOperation(ctx context.Context, tx *sql.Tx, spec LocalAccept
 	if err := insertLocalProvenance(ctx, tx, committed, events, artifacts); err != nil {
 		return err
 	}
-	if err := insertLocalDerivations(ctx, tx, committed, parent, derivations); err != nil {
+	if err := insertLocalDerivation(ctx, tx, committed, parent, derivation); err != nil {
 		return err
 	}
 	if managed {

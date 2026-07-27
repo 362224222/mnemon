@@ -12,7 +12,7 @@ import (
 func readParentResumeCurrentAuthority(ctx context.Context, tx *sql.Tx, handling model.Handling,
 	event model.Event, budget model.HandlingBudget, at time.Time,
 ) (freshCurrentAuthority, error) {
-	group, parent, err := readParentResumeGroupAuthority(ctx, tx, handling, event)
+	authority, parent, err := readParentResumeDerivationAuthority(ctx, tx, handling, event)
 	if err != nil {
 		return freshCurrentAuthority{}, err
 	}
@@ -29,7 +29,7 @@ func readParentResumeCurrentAuthority(ctx context.Context, tx *sql.Tx, handling 
 	if err != nil {
 		return freshCurrentAuthority{}, err
 	}
-	if role != model.CurrentReviewer || node.PeerID() != group.childHome {
+	if role != model.CurrentReviewer || node.PeerID() != authority.derivation.Child().HomePeerID() {
 		return freshCurrentAuthority{}, fmt.Errorf("%w: parent-resume is not local reviewer authority",
 			ErrCurrentReadInvariant)
 	}
@@ -37,46 +37,46 @@ func readParentResumeCurrentAuthority(ctx context.Context, tx *sql.Tx, handling 
 	if err != nil {
 		return freshCurrentAuthority{}, err
 	}
-	children, last, err := readParentResumeChildResults(ctx, tx, group, budget)
+	children, terminal, err := readParentResumeChildResults(ctx, tx, authority, budget)
 	if err != nil {
 		return freshCurrentAuthority{}, err
 	}
-	if last.id != event.ID() {
-		return freshCurrentAuthority{}, fmt.Errorf("%w: parent-resume Handling is not bound to last terminal child Event",
+	if terminal.id != event.ID() {
+		return freshCurrentAuthority{}, fmt.Errorf("%w: parent-resume Handling is not bound to terminal child Event",
 			ErrCurrentReadInvariant)
 	}
 	return freshCurrentAuthority{event: event, work: parent, role: role, brief: brief,
 		childResults: children}, nil
 }
 
-func readParentResumeGroupAuthority(ctx context.Context, tx *sql.Tx, handling model.Handling,
+func readParentResumeDerivationAuthority(ctx context.Context, tx *sql.Tx, handling model.Handling,
 	event model.Event,
-) (workDerivationGroup, model.ReviewWork, error) {
-	group, found, err := readWorkDerivationGroup(ctx, tx, event.Scope().WorkRef())
+) (workDerivationAuthority, model.ReviewWork, error) {
+	authority, found, err := readWorkDerivationAuthority(ctx, tx, event.Scope().WorkRef())
 	if err != nil {
-		return workDerivationGroup{}, model.ReviewWork{}, fmt.Errorf("%w: parent-resume group: %v",
+		return workDerivationAuthority{}, model.ReviewWork{}, fmt.Errorf("%w: parent-resume derivation: %v",
 			ErrCurrentReadInvariant, err)
 	}
 	if !found {
-		return workDerivationGroup{}, model.ReviewWork{}, fmt.Errorf("%w: parent-resume child derivation is unavailable",
+		return workDerivationAuthority{}, model.ReviewWork{}, fmt.Errorf("%w: parent-resume child derivation is unavailable",
 			ErrCurrentReadInvariant)
 	}
-	if err := requireParentResumeHandlingID(handling, group); err != nil {
-		return workDerivationGroup{}, model.ReviewWork{}, err
+	if err := requireParentResumeHandlingID(handling, authority); err != nil {
+		return workDerivationAuthority{}, model.ReviewWork{}, err
 	}
-	parent, err := readReviewWork(ctx, tx, group.parent)
+	parent, err := readReviewWork(ctx, tx, authority.derivation.Parent())
 	if err != nil {
-		return workDerivationGroup{}, model.ReviewWork{}, fmt.Errorf("%w: parent-resume action Work: %v",
+		return workDerivationAuthority{}, model.ReviewWork{}, fmt.Errorf("%w: parent-resume action Work: %v",
 			ErrCurrentReadInvariant, err)
 	}
-	if err := requireExactParentResumeWork(parent, group); err != nil {
-		return workDerivationGroup{}, model.ReviewWork{}, err
+	if err := requireExactParentResumeWork(parent, authority); err != nil {
+		return workDerivationAuthority{}, model.ReviewWork{}, err
 	}
-	return group, parent, nil
+	return authority, parent, nil
 }
 
-func requireParentResumeHandlingID(handling model.Handling, group workDerivationGroup) error {
-	resumeID, err := deterministicDerivationHandlingID(group.operation)
+func requireParentResumeHandlingID(handling model.Handling, authority workDerivationAuthority) error {
+	resumeID, err := deterministicDerivationHandlingID(authority.derivation.OperationID())
 	if err != nil {
 		return fmt.Errorf("%w: parent-resume Handling identity: %v",
 			ErrCurrentReadInvariant, err)
@@ -88,10 +88,11 @@ func requireParentResumeHandlingID(handling model.Handling, group workDerivation
 	return nil
 }
 
-func requireExactParentResumeWork(parent model.ReviewWork, group workDerivationGroup) error {
-	if parent.ChannelID() != group.parentChannel || parent.Ref() != group.parent ||
-		parent.Participants().ReviewerPeerID() != group.childHome ||
-		parent.Version() != group.parentVersion || parent.UpdatedBy() != group.parentEvent ||
+func requireExactParentResumeWork(parent model.ReviewWork, authority workDerivationAuthority) error {
+	derivation := authority.derivation
+	if parent.ChannelID() != derivation.ParentChannelID() || parent.Ref() != derivation.Parent() ||
+		parent.Participants().ReviewerPeerID() != derivation.Child().HomePeerID() ||
+		parent.Version() != derivation.ParentVersion() || parent.UpdatedBy() != derivation.ParentEventID() ||
 		(parent.State() != model.WorkActive && parent.State() != model.WorkRework) {
 		return fmt.Errorf("%w: parent-resume parent Work is no longer exact",
 			ErrCurrentReadStale)
@@ -99,115 +100,55 @@ func requireExactParentResumeWork(parent model.ReviewWork, group workDerivationG
 	return nil
 }
 
-func readParentResumeChildResults(ctx context.Context, tx *sql.Tx, group workDerivationGroup,
+func readParentResumeChildResults(ctx context.Context, tx *sql.Tx,
+	authority workDerivationAuthority,
 	budget model.HandlingBudget,
 ) ([]model.CurrentChildResult, terminalChildEvent, error) {
-	children, err := readParentResumeTerminalChildren(ctx, tx, group)
+	derivation := authority.derivation
+	child, err := readReviewWork(ctx, tx, derivation.Child())
 	if err != nil {
-		return nil, terminalChildEvent{}, err
-	}
-	last, _, err := readTerminalChildEvents(ctx, tx, group, children)
-	if err != nil {
-		return nil, terminalChildEvent{}, fmt.Errorf("%w: parent-resume terminal child set: %v",
+		return nil, terminalChildEvent{}, fmt.Errorf("%w: parent-resume child: %v",
 			ErrCurrentReadInvariant, err)
 	}
-	results, err := buildParentResumeChildResults(ctx, tx, group, children, budget)
+	if child.ChannelID() != derivation.ChildChannelID() || child.Ref() != derivation.Child() ||
+		!child.State().Terminal() {
+		return nil, terminalChildEvent{}, fmt.Errorf("%w: parent-resume child is not terminal",
+			ErrCurrentReadInvariant)
+	}
+	terminal, roots, err := readTerminalChildEvent(ctx, tx, authority, child)
 	if err != nil {
-		return nil, terminalChildEvent{}, err
-	}
-	return results, last, nil
-}
-
-func readParentResumeTerminalChildren(ctx context.Context, tx *sql.Tx,
-	group workDerivationGroup,
-) ([]model.ReviewWork, error) {
-	children := make([]model.ReviewWork, len(group.rows))
-	for index, row := range group.rows {
-		work, err := readReviewWork(ctx, tx, row.Child())
-		if err != nil {
-			return nil, fmt.Errorf("%w: parent-resume child ordinal %d: %v",
-				ErrCurrentReadInvariant, row.ChildOrdinal(), err)
-		}
-		if work.ChannelID() != row.ChildChannelID() || work.Ref() != row.Child() ||
-			!work.State().Terminal() {
-			return nil, fmt.Errorf("%w: parent-resume child ordinal %d is not terminal",
-				ErrCurrentReadInvariant, row.ChildOrdinal())
-		}
-		children[index] = work
-	}
-	return children, nil
-}
-
-func buildParentResumeChildResults(ctx context.Context, tx *sql.Tx, group workDerivationGroup,
-	children []model.ReviewWork, budget model.HandlingBudget,
-) ([]model.CurrentChildResult, error) {
-	results := make([]model.CurrentChildResult, len(children))
-	totalArtifacts := 0
-	for index, child := range children {
-		refs, err := readParentResumeChildArtifactRefs(ctx, tx, group, child)
-		if err != nil {
-			return nil, err
-		}
-		totalArtifacts += len(refs)
-		if totalArtifacts > budget.Spec().MaxCurrentArtifactRefs {
-			return nil, fmt.Errorf("%w: parent-resume child Artifact refs exceed Profile budget",
-				ErrCurrentReadTooLarge)
-		}
-		result, err := model.NewCurrentChildResult(model.CurrentChildResultSpec{
-			Ordinal: uint8(index), WorkRef: child.Ref(), State: child.State(),
-			Version: child.Version(), Iteration: child.Iteration(), ArtifactRefs: refs,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("%w: parent-resume child result: %v",
-				ErrCurrentReadInvariant, err)
-		}
-		results[index] = result
-	}
-	return results, nil
-}
-
-func readParentResumeChildArtifactRefs(ctx context.Context, tx *sql.Tx,
-	group workDerivationGroup, child model.ReviewWork,
-) ([]model.CurrentArtifactRef, error) {
-	if child.State() != model.WorkClosed {
-		return nil, nil
-	}
-	sequence, err := readEventOriginSequence(ctx, tx, child.UpdatedBy())
-	if err != nil {
-		return nil, err
-	}
-	roots, err := readClosedChildResultArtifacts(ctx, tx, group, child, child.UpdatedBy(), sequence)
-	if err != nil {
-		return nil, fmt.Errorf("%w: parent-resume child result Artifacts: %v",
+		return nil, terminalChildEvent{}, fmt.Errorf("%w: parent-resume terminal child: %v",
 			ErrCurrentReadInvariant, err)
+	}
+	if len(roots) > budget.Spec().MaxCurrentArtifactRefs {
+		return nil, terminalChildEvent{}, fmt.Errorf("%w: parent-resume child Artifact refs exceed Profile budget",
+			ErrCurrentReadTooLarge)
 	}
 	refs := make([]model.CurrentArtifactRef, len(roots))
 	for index, root := range roots {
 		ref, err := model.NewCurrentArtifactRef(root)
 		if err != nil {
-			return nil, fmt.Errorf("%w: parent-resume child result root: %v",
+			return nil, terminalChildEvent{}, fmt.Errorf("%w: parent-resume child result root: %v",
 				ErrCurrentReadInvariant, err)
 		}
 		refs[index] = ref
 	}
-	return refs, nil
-}
-
-func readEventOriginSequence(ctx context.Context, q rowQuerier, event model.EventID) (uint64, error) {
-	var sequence uint64
-	if err := q.QueryRowContext(ctx, "SELECT origin_seq FROM events WHERE event_id=?",
-		event.String()).Scan(&sequence); err != nil {
-		return 0, fmt.Errorf("%w: parent-resume terminal Event sequence: %v",
+	result, err := model.NewCurrentChildResult(model.CurrentChildResultSpec{
+		Ordinal: 0, WorkRef: child.Ref(), State: child.State(),
+		Version: child.Version(), Iteration: child.Iteration(), ArtifactRefs: refs,
+	})
+	if err != nil {
+		return nil, terminalChildEvent{}, fmt.Errorf("%w: parent-resume child result: %v",
 			ErrCurrentReadInvariant, err)
 	}
-	return sequence, nil
+	return []model.CurrentChildResult{result}, terminal, nil
 }
 
 func validateStoredParentResumeCurrentWork(ctx context.Context, tx *sql.Tx,
 	receipt model.CurrentReadReceipt, event model.Event, work model.ReviewWork,
 	budget model.HandlingBudget,
 ) error {
-	group, err := readStoredParentResumeGroup(ctx, tx, event, work)
+	authority, err := readStoredParentResumeAuthority(ctx, tx, event, work)
 	if err != nil {
 		return err
 	}
@@ -219,7 +160,7 @@ func validateStoredParentResumeCurrentWork(ctx context.Context, tx *sql.Tx,
 	if err != nil {
 		return err
 	}
-	if err := requireStoredParentResumeReviewer(node.PeerID(), role, group); err != nil {
+	if err := requireStoredParentResumeReviewer(node.PeerID(), role, authority); err != nil {
 		return err
 	}
 	brief, err := readCurrentWorkBrief(ctx, tx, work)
@@ -227,45 +168,50 @@ func validateStoredParentResumeCurrentWork(ctx context.Context, tx *sql.Tx,
 		return err
 	}
 	if err := requireStoredParentResumeWorkProjection(receipt.Projection().ActionWork(),
-		work, group, role, brief); err != nil {
+		work, authority, role, brief); err != nil {
 		return err
 	}
-	children, last, err := readParentResumeChildResults(ctx, tx, group, budget)
+	children, terminal, err := readParentResumeChildResults(ctx, tx, authority, budget)
 	if err != nil {
 		return err
 	}
-	if last.id != event.ID() || !sameCurrentChildResults(children, receipt.Projection().ChildResults()) {
+	if terminal.id != event.ID() || !sameCurrentChildResults(children, receipt.Projection().ChildResults()) {
 		return fmt.Errorf("%w: replay parent-resume child results differ from durable authority",
 			ErrCurrentReadInvariant)
 	}
 	return nil
 }
 
-func readStoredParentResumeGroup(ctx context.Context, tx *sql.Tx,
+func readStoredParentResumeAuthority(ctx context.Context, tx *sql.Tx,
 	event model.Event, work model.ReviewWork,
-) (workDerivationGroup, error) {
-	group, found, err := readWorkDerivationGroup(ctx, tx, event.Scope().WorkRef())
+) (workDerivationAuthority, error) {
+	authority, found, err := readWorkDerivationAuthority(ctx, tx, event.Scope().WorkRef())
 	if err != nil {
-		return workDerivationGroup{}, fmt.Errorf("%w: replay parent-resume group: %v",
+		return workDerivationAuthority{}, fmt.Errorf("%w: replay parent-resume derivation: %v",
 			ErrCurrentReadInvariant, err)
 	}
-	if !found || work.ChannelID() != group.parentChannel || work.Ref() != group.parent ||
-		work.Participants().ReviewerPeerID() != group.childHome {
-		return workDerivationGroup{}, fmt.Errorf("%w: replay parent-resume parent scope differs",
+	if !found {
+		return workDerivationAuthority{}, fmt.Errorf("%w: replay parent-resume child derivation is unavailable",
 			ErrCurrentReadInvariant)
 	}
-	if work.Version() != group.parentVersion ||
+	derivation := authority.derivation
+	if work.ChannelID() != derivation.ParentChannelID() || work.Ref() != derivation.Parent() ||
+		work.Participants().ReviewerPeerID() != derivation.Child().HomePeerID() {
+		return workDerivationAuthority{}, fmt.Errorf("%w: replay parent-resume parent scope differs",
+			ErrCurrentReadInvariant)
+	}
+	if work.Version() != derivation.ParentVersion() || work.UpdatedBy() != derivation.ParentEventID() ||
 		(work.State() != model.WorkActive && work.State() != model.WorkRework) {
-		return workDerivationGroup{}, fmt.Errorf("%w: replay parent-resume parent Work is no longer exact",
+		return workDerivationAuthority{}, fmt.Errorf("%w: replay parent-resume parent Work is no longer exact",
 			ErrCurrentReadInvariant)
 	}
-	return group, nil
+	return authority, nil
 }
 
 func requireStoredParentResumeReviewer(peer model.PeerID, role model.CurrentRole,
-	group workDerivationGroup,
+	authority workDerivationAuthority,
 ) error {
-	if role != model.CurrentReviewer || peer != group.childHome {
+	if role != model.CurrentReviewer || peer != authority.derivation.Child().HomePeerID() {
 		return fmt.Errorf("%w: replay parent-resume is not local reviewer authority",
 			ErrCurrentReadInvariant)
 	}
@@ -273,11 +219,11 @@ func requireStoredParentResumeReviewer(peer model.PeerID, role model.CurrentRole
 }
 
 func requireStoredParentResumeWorkProjection(projected model.CurrentWork,
-	work model.ReviewWork, group workDerivationGroup, role model.CurrentRole,
+	work model.ReviewWork, authority workDerivationAuthority, role model.CurrentRole,
 	brief model.CurrentBrief,
 ) error {
 	projectedBrief, ok := projected.Brief()
-	if !ok || projected.Ref() != work.Ref() || projected.Version() != group.parentVersion ||
+	if !ok || projected.Ref() != work.Ref() || projected.Version() != authority.derivation.ParentVersion() ||
 		projected.DeadlineUnixNano() != work.DeadlineUnixNano() || projected.LocalRole() != role ||
 		projectedBrief.Content() != brief.Content() ||
 		projectedBrief.DeadlineUnixNano() != brief.DeadlineUnixNano() ||
@@ -289,20 +235,15 @@ func requireStoredParentResumeWorkProjection(projected model.CurrentWork,
 }
 
 func sameCurrentChildResults(left, right []model.CurrentChildResult) bool {
-	if len(left) != len(right) {
+	if len(left) != 1 || len(right) != 1 {
 		return false
 	}
-	for index := range left {
-		if left[index].Ordinal() != right[index].Ordinal() ||
-			left[index].WorkRef() != right[index].WorkRef() ||
-			left[index].State() != right[index].State() ||
-			left[index].Version() != right[index].Version() ||
-			left[index].Iteration() != right[index].Iteration() ||
-			!sameCurrentArtifactRoots(left[index].ArtifactRefs(), right[index].ArtifactRefs()) {
-			return false
-		}
-	}
-	return true
+	return left[0].Ordinal() == right[0].Ordinal() &&
+		left[0].WorkRef() == right[0].WorkRef() &&
+		left[0].State() == right[0].State() &&
+		left[0].Version() == right[0].Version() &&
+		left[0].Iteration() == right[0].Iteration() &&
+		sameCurrentArtifactRoots(left[0].ArtifactRefs(), right[0].ArtifactRefs())
 }
 
 func deriveParentResumeCurrentActions(role model.CurrentRole,

@@ -426,7 +426,7 @@ func TestFinalizeAgentCurrentReadKeepsOfferedBriefAfterAcceptedTransition(t *tes
 }
 
 func TestFinalizeAgentCurrentReadKeepsBriefForDerivedRework(t *testing.T) {
-	fixture := newAcceptanceFixture(t, 2)
+	fixture := newAcceptanceFixture(t, 1)
 	parent, source := seedDerivationParent(t, fixture)
 	contextHash := model.Sum([]byte("current-derived-rework-context"))
 	_, authority := fixture.reserveOffer(t, "current-derived-rework", &contextHash)

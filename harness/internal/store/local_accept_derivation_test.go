@@ -9,9 +9,9 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 )
 
-func TestCommitLocalAcceptancePersistsExactContextDerivations(t *testing.T) {
+func TestCommitLocalAcceptancePersistsExactContextDerivation(t *testing.T) {
 	t.Parallel()
-	fixture := newAcceptanceFixture(t, 2)
+	fixture := newAcceptanceFixture(t, 1)
 	parent, source := seedDerivationParent(t, fixture)
 	contextHash := model.Sum([]byte("parent-read-receipt"))
 	operation, authority := fixture.reserveOffer(t, "derived", &contextHash)
@@ -23,37 +23,61 @@ func TestCommitLocalAcceptancePersistsExactContextDerivations(t *testing.T) {
 		fixture.now.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	rows, err := fixture.store.db.Query(`SELECT child_ordinal,child_home_peer_id,parent_channel_id,
+	row := fixture.store.db.QueryRow(`SELECT child_home_peer_id,parent_channel_id,
 		parent_home_peer_id,parent_work_id,parent_version,parent_event_id FROM work_derivations
-		WHERE operation_id=? ORDER BY child_ordinal`, operation.ID().String())
-	if err != nil {
+		WHERE operation_id=?`, operation.ID().String())
+	var childHome, parentChannel, parentHome, parentWork, parentEvent string
+	var parentVersion uint64
+	if err := row.Scan(&childHome, &parentChannel, &parentHome, &parentWork,
+		&parentVersion, &parentEvent); err != nil {
 		t.Fatal(err)
 	}
-	defer rows.Close()
-	ordinal := 0
-	for rows.Next() {
-		var gotOrdinal int
-		var childHome, parentChannel, parentHome, parentWork, parentEvent string
-		var parentVersion uint64
-		if err := rows.Scan(&gotOrdinal, &childHome, &parentChannel, &parentHome, &parentWork,
-			&parentVersion, &parentEvent); err != nil {
-			t.Fatal(err)
-		}
-		if gotOrdinal != ordinal || childHome != fixture.node.PeerID().String() ||
-			parentChannel != parent.ChannelID().String() || parentHome != parent.Ref().HomePeerID().String() ||
-			parentWork != parent.Ref().WorkID().String() || parentVersion != parent.Version() ||
-			parentEvent != parent.UpdatedBy().String() {
-			t.Fatalf("derivation row %d drifted", ordinal)
-		}
-		ordinal++
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatal(err)
-	}
-	if ordinal != len(fixture.reviewers) {
-		t.Fatalf("derivation count = %d, want %d", ordinal, len(fixture.reviewers))
+	if childHome != fixture.node.PeerID().String() ||
+		parentChannel != parent.ChannelID().String() || parentHome != parent.Ref().HomePeerID().String() ||
+		parentWork != parent.Ref().WorkID().String() || parentVersion != parent.Version() ||
+		parentEvent != parent.UpdatedBy().String() {
+		t.Fatal("derivation row drifted")
 	}
 	assertOperationStatus(t, fixture.store, operation.ID(), model.OperationCommitted)
+}
+
+func TestCommitLocalAcceptanceRejectsMultipleDerivationChildrenWithoutWrites(t *testing.T) {
+	t.Parallel()
+	fixture := newAcceptanceFixture(t, 2)
+	parent, source := seedDerivationParent(t, fixture)
+	contextHash := model.Sum([]byte("multiple-derived-children"))
+	operation, authority := fixture.reserveOffer(t, "derived-multiple", &contextHash)
+	spec := fixture.offer(t, authority, "derived-multiple", fixture.reviewers, nil,
+		[]model.EventKey{source})
+	spec.Derivation = &LocalDerivationParent{ChannelID: parent.ChannelID(), WorkRef: parent.Ref(),
+		ExpectedVersion: parent.Version(), UpdatedByEvent: parent.UpdatedBy()}
+
+	var beforeEvents, beforeWorks int
+	if err := fixture.store.db.QueryRow("SELECT COUNT(*) FROM events").Scan(&beforeEvents); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.store.db.QueryRow("SELECT COUNT(*) FROM works").Scan(&beforeWorks); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.CommitLocalAcceptance(context.Background(), spec,
+		fixture.now.Add(time.Second)); err == nil {
+		t.Fatal("context-bound offer with multiple children was accepted")
+	}
+	var afterEvents, afterWorks, derivations int
+	if err := fixture.store.db.QueryRow("SELECT COUNT(*) FROM events").Scan(&afterEvents); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.store.db.QueryRow("SELECT COUNT(*) FROM works").Scan(&afterWorks); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.store.db.QueryRow("SELECT COUNT(*) FROM work_derivations").Scan(&derivations); err != nil {
+		t.Fatal(err)
+	}
+	if afterEvents != beforeEvents || afterWorks != beforeWorks || derivations != 0 {
+		t.Fatalf("rejected derivation writes = events %d->%d, works %d->%d, derivations %d",
+			beforeEvents, afterEvents, beforeWorks, afterWorks, derivations)
+	}
+	assertOperationStatus(t, fixture.store, operation.ID(), model.OperationStarted)
 }
 
 func TestCommitLocalAcceptanceRejectsMissingDerivationCausalityWithoutWrites(t *testing.T) {

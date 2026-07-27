@@ -4,7 +4,6 @@ import "time"
 
 type WorkDerivationSpec struct {
 	OperationID     OperationID
-	ChildOrdinal    uint8
 	ChildChannelID  ChannelID
 	Child           WorkRef
 	ParentChannelID ChannelID
@@ -23,9 +22,6 @@ func NewWorkDerivation(spec WorkDerivationSpec) (WorkDerivation, error) {
 		spec.ParentChannelID.IsZero() || spec.Parent.IsZero() || spec.ParentEventID.IsZero() {
 		return WorkDerivation{}, invalid("work derivation", "operation, child, parent and Event identity are required")
 	}
-	if spec.ChildOrdinal >= MaxChildWorks {
-		return WorkDerivation{}, limit("child ordinal", int(spec.ChildOrdinal), MaxChildWorks-1)
-	}
 	if err := validateSQLitePositive("parent version", spec.ParentVersion); err != nil {
 		return WorkDerivation{}, err
 	}
@@ -41,7 +37,6 @@ func NewWorkDerivation(spec WorkDerivationSpec) (WorkDerivation, error) {
 }
 
 func (d WorkDerivation) OperationID() OperationID   { return d.spec.OperationID }
-func (d WorkDerivation) ChildOrdinal() uint8        { return d.spec.ChildOrdinal }
 func (d WorkDerivation) ChildChannelID() ChannelID  { return d.spec.ChildChannelID }
 func (d WorkDerivation) Child() WorkRef             { return d.spec.Child }
 func (d WorkDerivation) ParentChannelID() ChannelID { return d.spec.ParentChannelID }
