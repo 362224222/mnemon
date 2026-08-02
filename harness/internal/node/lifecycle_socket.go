@@ -8,47 +8,40 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
-	"golang.org/x/sys/unix"
 )
 
-// pinControlSocket opens the live control socket with O_PATH relative to the
-// held Node-state directory. The returned handle pins the socket inode for the
-// whole removal wait: while it stays open the kernel cannot recycle the inode
-// number, so os.SameFile reliably distinguishes the observed daemon socket
-// from any replacement bound at the same path.
-func (lease *DaemonLifecycleLease) pinControlSocket() (*os.File, os.FileInfo, bool, error) {
-	if err := lease.validateHeld(); err != nil {
-		return nil, nil, false, err
-	}
-	fd, err := unix.Openat(int(lease.lock.state.dir.Fd()), controlSocketName,
-		unix.O_PATH|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
-	for errors.Is(err, unix.EINTR) {
-		fd, err = unix.Openat(int(lease.lock.state.dir.Fd()), controlSocketName,
-			unix.O_PATH|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
-	}
-	if errors.Is(err, unix.ENOENT) {
-		return nil, nil, false, nil
-	}
-	if err != nil {
-		return nil, nil, false, err
-	}
-	pin := os.NewFile(uintptr(fd), controlSocketName)
-	info, err := pin.Stat()
-	if err != nil {
-		_ = pin.Close()
-		return nil, nil, false, err
-	}
-	if err := validateLifecycleSocket(info, lease.lock.state.ownerUID); err != nil {
-		_ = pin.Close()
-		return nil, nil, false, err
-	}
-	return pin, info, true, nil
+type controlSocketObservation struct {
+	identity os.FileInfo
+	pin      *os.File
 }
 
-// drainOnlineDaemon requests graceful shutdown from the pinned online daemon
+func (observation *controlSocketObservation) Close() error {
+	if observation == nil || observation.pin == nil {
+		return nil
+	}
+	err := observation.pin.Close()
+	observation.pin = nil
+	return err
+}
+
+// observeControlSocket captures the strongest control-socket identity offered
+// by the host while the lifecycle lease excludes authorized replacement.
+// Linux retains an O_PATH inode pin; Darwin, which cannot open a Unix-domain
+// socket as a file, uses a validated Lstat snapshot. Both paths still require
+// replacement detection, offline writer proof, and final socket absence.
+func (lease *DaemonLifecycleLease) observeControlSocket() (
+	*controlSocketObservation, bool, error,
+) {
+	if err := lease.validateHeld(); err != nil {
+		return nil, false, err
+	}
+	return observeLifecycleSocket(lease.lock.state)
+}
+
+// drainOnlineDaemon requests graceful shutdown from the observed online daemon
 // and, when the controller acknowledges with a canonical stopping response,
-// waits until exactly that pinned control socket is removed. The caller must
-// keep the pin backing socketIdentity open until this method returns.
+// waits until that control socket is removed. A different object at the same
+// path is rejected rather than treated as the acknowledged daemon.
 func (lease *DaemonLifecycleLease) drainOnlineDaemon(bounded context.Context,
 	client DaemonLifecycleClient, expected AuthorityResponse,
 	socketIdentity os.FileInfo, poll time.Duration,
@@ -75,9 +68,10 @@ func (lease *DaemonLifecycleLease) drainOnlineDaemon(bounded context.Context,
 	return nil
 }
 
-// waitForExactSocketRemoval requires the caller to keep the pin backing
-// expected open; only that pin makes the SameFile comparison replacement-proof
-// against immediate inode recycling.
+// waitForExactSocketRemoval rejects a replacement at the observed path. Linux
+// keeps the expected inode pinned against recycling. On Darwin the lifecycle
+// lease prevents an authorized launch while the later offline-writer proof and
+// final absence check close the fallback snapshot boundary.
 func (lease *DaemonLifecycleLease) waitForExactSocketRemoval(ctx context.Context,
 	expected os.FileInfo, poll time.Duration,
 ) error {

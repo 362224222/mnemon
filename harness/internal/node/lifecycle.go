@@ -204,13 +204,13 @@ func (lease *DaemonLifecycleLease) quiesce(ctx context.Context, client DaemonLif
 
 	bounded, cancel := context.WithTimeout(ctx, timing.deadline)
 	defer cancel()
-	socketPin, socketIdentity, socketPresent, socketErr := lease.pinControlSocket()
+	socketObservation, socketPresent, socketErr := lease.observeControlSocket()
 	if socketErr != nil {
 		return AuthorityResponse{}, lifecycleError("quiesce control socket", socketErr)
 	}
 	if socketPresent {
-		defer socketPin.Close()
-		if err := lease.drainOnlineDaemon(bounded, client, expected, socketIdentity,
+		defer socketObservation.Close()
+		if err := lease.drainOnlineDaemon(bounded, client, expected, socketObservation.identity,
 			timing.poll); err != nil {
 			return AuthorityResponse{}, err
 		}

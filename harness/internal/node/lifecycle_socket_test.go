@@ -70,6 +70,28 @@ func TestDaemonLifecycleQuiesceRejectsUnsafeOfflineSocket(t *testing.T) {
 	}
 }
 
+func TestDaemonLifecycleObservesOwnerSocketPortably(t *testing.T) {
+	t.Parallel()
+	fixture := newDaemonFixture(t, true)
+	path := filepath.Join(fixture.nodeState, controlSocketName)
+	listener, err := ListenOwnerUnix(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	lease := acquireTestDaemonLifecycle(t, fixture)
+	defer lease.Close()
+	observed, present, err := lease.observeControlSocket()
+	if err != nil || !present {
+		t.Fatalf("observeControlSocket() = (%v, %v, %v)", observed, present, err)
+	}
+	defer observed.Close()
+	current, err := os.Lstat(path)
+	if err != nil || !os.SameFile(observed.identity, current) {
+		t.Fatalf("observed socket identity differs from path: (%v, %v)", current, err)
+	}
+}
+
 func TestDaemonLifecycleQuiesceRejectsOnlineSocketReplacement(t *testing.T) {
 	t.Parallel()
 	fixture := newDaemonFixture(t, true)
