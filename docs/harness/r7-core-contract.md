@@ -321,9 +321,14 @@ requires `may_initiate = true` on a local Agent attachment. This remains true
 when it names an older Event through causation or correlation; those handles
 carry provenance only.
 The attachment verifier generates `may_initiate`; it never appears in an Intent
-and cannot be changed by any projection or collaboration description. T0 issues
-attachments only at an interactive Runtime boundary and has no machine-driven
-wake path. Peer-originated initiation is governed separately by P-06.
+and cannot be changed by any projection or collaboration description. T0 asks
+the owner-installed Host Hook to issue this attachment at an interactive
+Runtime boundary and has no machine-driven wake path. The owner-only socket and
+private journal exclude other OS users, but T0 does not attest the Hook process
+against another same-UID process with arbitrary local shell and file access.
+Thus T0 proves that an Agent cannot set or alter `may_initiate` in an Intent; it
+does not cryptographically prove that the Host callback physically occurred.
+Peer-originated initiation is governed separately by P-06.
 A claim and every use of its fence require an attachment authenticated for the
 Handling's target Principal.
 
@@ -517,6 +522,8 @@ Not guaranteed:
 - multi-model consensus;
 - objective correctness of any business result;
 - owner-attested completion; or
+- process-level attestation that distinguishes the installed Hook callback
+  from every other same-UID local process; or
 - governance of tool and Runtime side effects that occur outside mnemond.
 
 A collaboration description may require an Agent to choose a different target.

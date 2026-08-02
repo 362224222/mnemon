@@ -16,8 +16,9 @@ type daemonAgencyRuntime struct {
 }
 
 // openDaemonAgencyRuntime composes the R7 authority only from provisioned
-// state and the existing immutable CAS. It never initializes agency.db or
-// enrolls a Principal during serve.
+// state and the shared content-addressed store. CAS may repair its bounded
+// mechanical staging directories; this path never initializes agency.db,
+// enrolls a Principal, or repairs domain authority during serve.
 func openDaemonAgencyRuntime(ctx context.Context, nodeState, profilePrincipal string,
 	clock Clock,
 ) (_ *daemonAgencyRuntime, err error) {
@@ -36,8 +37,8 @@ func openDaemonAgencyRuntime(ctx context.Context, nodeState, profilePrincipal st
 	if err != nil {
 		return nil, err
 	}
-	st, err := authority.OpenExistingWithArtifactVerifier(ctx,
-		filepath.Join(nodeState, "agency.db"), adapter)
+	st, err := authority.OpenExistingWithArtifactVerifierAndClock(ctx,
+		filepath.Join(nodeState, "agency.db"), adapter, clock.Now)
 	if err != nil {
 		return nil, fmt.Errorf("open existing Agency authority: %w", err)
 	}

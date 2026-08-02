@@ -106,7 +106,7 @@ func Provision(ctx context.Context, options ProvisionOptions) (result ProvisionR
 		return ProvisionResult{}, err
 	}
 	if err := ensureProvisionAgencyAuthority(ctx, nodeState,
-		provisioned.Profile.Principal()); err != nil {
+		provisioned.Profile.Principal(), options.Clock); err != nil {
 		return ProvisionResult{}, err
 	}
 	return provisioned, nil
@@ -117,13 +117,16 @@ func Provision(ctx context.Context, options ProvisionOptions) (result ProvisionR
 // uses idempotent replay as its recovery contract. Daemon startup never calls
 // this helper and refuses either missing half.
 func ensureProvisionAgencyAuthority(ctx context.Context, nodeState string,
-	profilePrincipal string,
+	profilePrincipal string, clock Clock,
 ) (err error) {
+	if clock == nil {
+		return fmt.Errorf("%w: R7 authority clock is unavailable", ErrProvision)
+	}
 	principal, err := agencyPrincipalForValue(profilePrincipal)
 	if err != nil {
 		return fmt.Errorf("%w: derive R7 Principal: %v", ErrProvision, err)
 	}
-	st, err := r7authority.Open(ctx, filepath.Join(nodeState, "agency.db"))
+	st, err := r7authority.OpenWithClock(ctx, filepath.Join(nodeState, "agency.db"), clock.Now)
 	if err != nil {
 		return fmt.Errorf("%w: open R7 authority: %v", ErrProvision, err)
 	}

@@ -142,14 +142,17 @@ func openDaemon(ctx context.Context, options DaemonOptions,
 		authority.authority.Profile.Principal(),
 		options.Clock)
 	if err != nil {
-		_ = st.Close()
-		return nil, fmt.Errorf("%w: compose Agency runtime: %v", ErrDaemonAuthority, err)
+		return nil, errors.Join(
+			fmt.Errorf("%w: compose Agency runtime: %v", ErrDaemonAuthority, err),
+			wrapDaemonCloseError("close Store after Agency composition failure", st.Close()))
 	}
 	channels, err := openDaemonChannelRuntime(ctx, st, identity, options.Clock)
 	if err != nil {
-		_ = agencyRuntime.Close()
-		_ = st.Close()
-		return nil, fmt.Errorf("%w: compose Channel runtime: %v", ErrDaemonAuthority, err)
+		return nil, errors.Join(
+			fmt.Errorf("%w: compose Channel runtime: %v", ErrDaemonAuthority, err),
+			wrapDaemonCloseError("close Agency authority after Channel composition failure",
+				agencyRuntime.Close()),
+			wrapDaemonCloseError("close Store after Channel composition failure", st.Close()))
 	}
 	fail := func(cause error) (*Daemon, error) {
 		shutdownCtx := shutdown.Context()
@@ -192,6 +195,13 @@ func openDaemon(ctx context.Context, options DaemonOptions,
 	return &Daemon{workspace: workspace, nodeState: nodeState, identity: identity,
 		store: st, agency: agencyRuntime, controller: controller, channels: channels, shutdown: shutdown,
 		serveDone: make(chan struct{})}, nil
+}
+
+func wrapDaemonCloseError(operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%w: %s: %v", ErrDaemonAuthority, operation, err)
 }
 
 func (daemon *Daemon) Serve(ctx context.Context) error {

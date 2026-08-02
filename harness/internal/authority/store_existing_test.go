@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/agency"
 )
@@ -139,5 +140,41 @@ func TestOpenExistingWithArtifactVerifierOwnsExactStoreAndPrincipal(t *testing.T
 	}
 	if err := reopened.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestOpenExistingWithArtifactVerifierAndClockUsesOneTrustedTimeDomain(t *testing.T) {
+	ctx := context.Background()
+	path := testDatabasePath(t)
+	setupAt := time.Date(2027, 1, 2, 3, 4, 5, 0, time.UTC)
+	principal, err := agency.NewAgentPrincipalID("principal:clocked")
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := OpenWithClock(ctx, path, func() time.Time { return setupAt })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := created.EnrollPrincipal(ctx, principal); err != nil {
+		t.Fatal(err)
+	}
+	if err := created.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	runtimeAt := setupAt.Add(9 * time.Hour)
+	verifier := ArtifactVerifierFunc(func(context.Context, agency.Digest, int64) error { return nil })
+	opened, err := OpenExistingWithArtifactVerifierAndClock(ctx, path, verifier,
+		func() time.Time { return runtimeAt })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer opened.Close()
+	proof, err := opened.IssueInteractiveAttachment(ctx, principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := runtimeAt.Add(interactiveAttachmentLifetime); !proof.ExpiresAt().Equal(want) {
+		t.Fatalf("attachment expiry = %s, want %s", proof.ExpiresAt(), want)
 	}
 }

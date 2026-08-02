@@ -39,6 +39,15 @@ func Open(ctx context.Context, databasePath string) (*Store, error) {
 	return openWithVerifier(ctx, databasePath, time.Now, nil)
 }
 
+// OpenWithClock is the setup-only clock-aware form of Open. Production
+// composition uses one trusted clock for both R7 authority and its local
+// service instead of creating two independently advancing time domains.
+func OpenWithClock(ctx context.Context, databasePath string,
+	now func() time.Time,
+) (*Store, error) {
+	return openWithVerifier(ctx, databasePath, now, nil)
+}
+
 func open(ctx context.Context, databasePath string, now func() time.Time) (_ *Store, err error) {
 	return openWithVerifier(ctx, databasePath, now, nil)
 }
@@ -65,6 +74,18 @@ func OpenExistingWithArtifactVerifier(ctx context.Context, databasePath string,
 		return nil, errors.New("open existing authority store: nil Artifact verifier")
 	}
 	return openExistingWithVerifier(ctx, databasePath, time.Now, verifier)
+}
+
+// OpenExistingWithArtifactVerifierAndClock is the strict restart form used by
+// daemon composition. It accepts no missing or version-zero authority and
+// shares the caller's trusted clock with attachment and Artifact mechanics.
+func OpenExistingWithArtifactVerifierAndClock(ctx context.Context, databasePath string,
+	verifier ArtifactVerifier, now func() time.Time,
+) (*Store, error) {
+	if verifier == nil {
+		return nil, errors.New("open existing authority store: nil Artifact verifier")
+	}
+	return openExistingWithVerifier(ctx, databasePath, now, verifier)
 }
 
 func openWithVerifier(ctx context.Context, databasePath string, now func() time.Time,
