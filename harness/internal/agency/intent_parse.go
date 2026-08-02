@@ -18,7 +18,7 @@ func ParseAgentIntentJSON(data []byte) (AgentIntent, error) {
 	if len(data) > MaxIntentCanonicalBytes {
 		return AgentIntent{}, limit("Intent JSON bytes", len(data), MaxIntentCanonicalBytes)
 	}
-	if err := rejectDuplicateJSONKeys(data); err != nil {
+	if err := rejectDuplicateJSONKeys("Agent Intent JSON", data); err != nil {
 		return AgentIntent{}, err
 	}
 	if err := requireExactIntentWireKeys(data); err != nil {
@@ -30,7 +30,7 @@ func ParseAgentIntentJSON(data []byte) (AgentIntent, error) {
 	if err := decoder.Decode(&wire); err != nil {
 		return AgentIntent{}, fmt.Errorf("agency: decode Agent Intent: %w", err)
 	}
-	if err := requireJSONEOF(decoder); err != nil {
+	if err := requireJSONEOF("Agent Intent JSON", decoder); err != nil {
 		return AgentIntent{}, err
 	}
 	return intentFromWire(wire)
@@ -88,15 +88,15 @@ func requireObjectArrayKeys(field string, raw json.RawMessage, keys ...string) e
 	return nil
 }
 
-func rejectDuplicateJSONKeys(data []byte) error {
+func rejectDuplicateJSONKeys(field string, data []byte) error {
 	decoder := json.NewDecoder(bytes.NewReader(data))
-	if err := scanJSONValue(decoder); err != nil {
-		return fmt.Errorf("agency: inspect Agent Intent JSON: %w", err)
+	if err := scanJSONValue(field, decoder); err != nil {
+		return fmt.Errorf("agency: inspect %s: %w", field, err)
 	}
 	return nil
 }
 
-func scanJSONValue(decoder *json.Decoder) error {
+func scanJSONValue(field string, decoder *json.Decoder) error {
 	token, err := decoder.Token()
 	if err != nil {
 		return err
@@ -107,21 +107,21 @@ func scanJSONValue(decoder *json.Decoder) error {
 	}
 	switch delimiter {
 	case '{':
-		return scanJSONObject(decoder)
+		return scanJSONObject(field, decoder)
 	case '[':
 		for decoder.More() {
-			if err := scanJSONValue(decoder); err != nil {
+			if err := scanJSONValue(field, decoder); err != nil {
 				return err
 			}
 		}
 	default:
-		return invalid("Intent JSON", "contains an unexpected delimiter")
+		return invalid(field, "contains an unexpected delimiter")
 	}
 	_, err = decoder.Token()
 	return err
 }
 
-func scanJSONObject(decoder *json.Decoder) error {
+func scanJSONObject(field string, decoder *json.Decoder) error {
 	seen := make(map[string]struct{})
 	for decoder.More() {
 		token, err := decoder.Token()
@@ -130,13 +130,13 @@ func scanJSONObject(decoder *json.Decoder) error {
 		}
 		key, ok := token.(string)
 		if !ok {
-			return invalid("Intent JSON", "object key must be a string")
+			return invalid(field, "object key must be a string")
 		}
 		if _, duplicate := seen[key]; duplicate {
-			return invalid("Intent JSON", "contains a duplicate object key")
+			return invalid(field, "contains a duplicate object key")
 		}
 		seen[key] = struct{}{}
-		if err := scanJSONValue(decoder); err != nil {
+		if err := scanJSONValue(field, decoder); err != nil {
 			return err
 		}
 	}
@@ -144,16 +144,16 @@ func scanJSONObject(decoder *json.Decoder) error {
 	return err
 }
 
-func requireJSONEOF(decoder *json.Decoder) error {
+func requireJSONEOF(field string, decoder *json.Decoder) error {
 	var trailing any
 	err := decoder.Decode(&trailing)
 	if errors.Is(err, io.EOF) {
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("agency: decode trailing Intent JSON: %w", err)
+		return fmt.Errorf("agency: decode trailing %s: %w", field, err)
 	}
-	return invalid("Intent JSON", "must contain exactly one value")
+	return invalid(field, "must contain exactly one value")
 }
 
 func intentFromWire(wire intentWire) (AgentIntent, error) {
