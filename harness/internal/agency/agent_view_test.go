@@ -60,7 +60,18 @@ func TestAgentViewProjectsOnlyBoundedPublicWorld(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAgentView() error = %v", err)
 	}
+	assertAgentViewProjection(t, view, currentHandle)
+	assertAgentViewHidesAuthority(t, view, authority, attachment, principal)
 
+	first := view.CanonicalJSON()
+	first[0] = '['
+	if view.CanonicalJSON()[0] != '{' {
+		t.Fatal("CanonicalJSON returned mutable backing storage")
+	}
+}
+
+func assertAgentViewProjection(t *testing.T, view AgentView, currentHandle OpaqueHandle) {
+	t.Helper()
 	var wire agentViewWire
 	if err := json.Unmarshal(view.CanonicalJSON(), &wire); err != nil {
 		t.Fatalf("json.Unmarshal(AgentView) error = %v", err)
@@ -87,6 +98,12 @@ func TestAgentViewProjectsOnlyBoundedPublicWorld(t *testing.T) {
 		t.Fatalf("provenance handles = %q", got)
 	}
 	assertNoPrivateViewKeys(t, view.CanonicalJSON())
+}
+
+func assertAgentViewHidesAuthority(t *testing.T, view AgentView, authority ViewAuthority,
+	attachment Attachment, principal AgentPrincipalID,
+) {
+	t.Helper()
 	for _, privateValue := range []string{
 		principal.String(), attachment.ID().String(), "handling:private", "event:private-head",
 		authority.Digest().String(),
@@ -94,12 +111,6 @@ func TestAgentViewProjectsOnlyBoundedPublicWorld(t *testing.T) {
 		if bytes.Contains(view.CanonicalJSON(), []byte(privateValue)) {
 			t.Fatalf("Agent View exposes private value %q: %s", privateValue, view.CanonicalJSON())
 		}
-	}
-
-	first := view.CanonicalJSON()
-	first[0] = '['
-	if view.CanonicalJSON()[0] != '{' {
-		t.Fatal("CanonicalJSON returned mutable backing storage")
 	}
 }
 

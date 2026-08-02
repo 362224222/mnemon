@@ -128,39 +128,42 @@ func parseViewTargets(wires []viewTargetWire) ([]ResolvedTarget, error) {
 		if err != nil {
 			return nil, err
 		}
-		var target ResolvedTarget
-		switch wire.Resolved.Destination {
-		case "local":
-			if wire.Resolved.RemoteRoute != "" || wire.Resolved.RemoteAlias != "" {
-				return nil, invalid("View local target", "must not contain remote authority")
-			}
-			principal, parseErr := NewAgentPrincipalID(wire.Resolved.LocalPrincipal)
-			if parseErr != nil {
-				return nil, parseErr
-			}
-			target, err = ResolveLocalTarget(requested, principal)
-		case "remote":
-			if wire.Resolved.LocalPrincipal != "" {
-				return nil, invalid("View remote target", "must not contain local authority")
-			}
-			route, parseErr := NewRouteID(wire.Resolved.RemoteRoute)
-			if parseErr != nil {
-				return nil, parseErr
-			}
-			alias, parseErr := NewOpaqueHandle(wire.Resolved.RemoteAlias)
-			if parseErr != nil {
-				return nil, parseErr
-			}
-			target, err = ResolveRemoteTarget(requested, route, alias)
-		default:
-			return nil, invalid("View target destination", "must be local or remote")
-		}
+		target, err := parseResolvedTarget(requested, wire.Resolved)
 		if err != nil {
 			return nil, err
 		}
 		result = append(result, target)
 	}
 	return result, nil
+}
+
+func parseResolvedTarget(requested TargetRef, wire resolvedTargetWire) (ResolvedTarget, error) {
+	switch wire.Destination {
+	case "local":
+		if wire.RemoteRoute != "" || wire.RemoteAlias != "" {
+			return ResolvedTarget{}, invalid("View local target", "must not contain remote authority")
+		}
+		principal, err := NewAgentPrincipalID(wire.LocalPrincipal)
+		if err != nil {
+			return ResolvedTarget{}, err
+		}
+		return ResolveLocalTarget(requested, principal)
+	case "remote":
+		if wire.LocalPrincipal != "" {
+			return ResolvedTarget{}, invalid("View remote target", "must not contain local authority")
+		}
+		route, err := NewRouteID(wire.RemoteRoute)
+		if err != nil {
+			return ResolvedTarget{}, err
+		}
+		alias, err := NewOpaqueHandle(wire.RemoteAlias)
+		if err != nil {
+			return ResolvedTarget{}, err
+		}
+		return ResolveRemoteTarget(requested, route, alias)
+	default:
+		return ResolvedTarget{}, invalid("View target destination", "must be local or remote")
+	}
 }
 
 func parseTarget(wire targetWire) (TargetRef, error) {
