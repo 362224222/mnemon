@@ -79,7 +79,7 @@ harness-verify: ## Build and verify the experimental R5 Harness
 	$(HARNESS_GO) build -o "$$tmp/mnemond" ./cmd/mnemond
 	$(MAKE) harness-validate
 	$(MAKE) harness-quality
-	$(HARNESS_GO) test ./...
+	$(HARNESS_GO) test -p 1 ./...
 
 core-contract: ## Validate the tracked R5 Core contract and evidence registry
 	$(HARNESS_GO) test ./tools/corecontract ./test/contracts -count=1

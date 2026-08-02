@@ -43,7 +43,8 @@ func setupProcessAssertPublicDoctor(t *testing.T, executable, workspace string,
 	result := setupProcessRunHarness(ctx, executable, workspace, environment, "doctor")
 	cancel()
 	doctor, err := setupProcessParseDoctor(result)
-	if err != nil || doctor.SchemaVersion != localapi.SchemaVersion || doctor.Scope != "managed_agent" ||
+	if err != nil || doctor.ArtifactTransfer == nil || doctor.ArtifactTransfer.ActivePulls != 0 ||
+		doctor.SchemaVersion != localapi.SchemaVersion || doctor.Scope != "managed_agent" ||
 		doctor.Mode != "online" || doctor.Status != "healthy" || len(doctor.Checks) != 7 ||
 		len(doctor.Channels) != 0 {
 		t.Fatalf("public doctor after setup = (%#v, %v)", doctor, err)

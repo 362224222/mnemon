@@ -518,14 +518,14 @@ func (systemDarwinRuntimeProcess) Snapshot(pid int) (darwinRuntimeProcessSnapsho
 	}
 	pgid, err := unix.Getpgid(pid)
 	if errors.Is(err, unix.ESRCH) {
-		return darwinRuntimeProcessSnapshot{}, errDarwinRuntimeProcessNotExist
+		return darwinRuntimeProcessStableZombie(pid, first)
 	}
 	if err != nil {
 		return darwinRuntimeProcessSnapshot{}, err
 	}
 	sid, err := unix.Getsid(pid)
 	if errors.Is(err, unix.ESRCH) {
-		return darwinRuntimeProcessSnapshot{}, errDarwinRuntimeProcessNotExist
+		return darwinRuntimeProcessStableZombie(pid, first)
 	}
 	if err != nil {
 		return darwinRuntimeProcessSnapshot{}, err

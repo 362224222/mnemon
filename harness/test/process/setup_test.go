@@ -82,12 +82,13 @@ type setupProcessDoctorCheck struct {
 }
 
 type setupProcessDoctorReport struct {
-	Channels      []localapi.StatusChannel  `json:"channels"`
-	Checks        []setupProcessDoctorCheck `json:"checks"`
-	Mode          string                    `json:"mode"`
-	SchemaVersion int                       `json:"schema_version"`
-	Scope         string                    `json:"scope"`
-	Status        string                    `json:"status"`
+	ArtifactTransfer *localapi.StatusArtifactTransfer `json:"artifact_transfer,omitempty"`
+	Channels         []localapi.StatusChannel         `json:"channels"`
+	Checks           []setupProcessDoctorCheck        `json:"checks"`
+	Mode             string                           `json:"mode"`
+	SchemaVersion    int                              `json:"schema_version"`
+	Scope            string                           `json:"scope"`
+	Status           string                           `json:"status"`
 }
 
 type setupProcessPIDSnapshot struct {

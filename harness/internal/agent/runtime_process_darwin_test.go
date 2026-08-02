@@ -433,6 +433,54 @@ func TestDarwinRuntimeProcessCaptureRequiresSetsidChild(t *testing.T) {
 	}
 }
 
+func TestDarwinRuntimeProcessSystemRetainsOwnedZombieIdentity(t *testing.T) {
+	command := exec.Command("/bin/sh", "-c", "sleep 0.1")
+	command.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waited := false
+	defer func() {
+		if !waited {
+			_ = command.Wait()
+		}
+	}()
+	ids, _, err := captureRuntimeProcessIDs(command.Process.Pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		snapshot, snapshotErr := darwinRuntimeProcessKinfo(ids.PID)
+		if snapshotErr != nil {
+			t.Fatal(snapshotErr)
+		}
+		if snapshot.state == darwinRuntimeProcessZombie {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("isolated child did not become a zombie")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	snapshot, err := (systemDarwinRuntimeProcess{}).Snapshot(ids.PID)
+	if err != nil || !sameDarwinRuntimeProcess(ids, snapshot) ||
+		snapshot.state != darwinRuntimeProcessZombie {
+		t.Fatalf("owned zombie snapshot = (%#v, %v)", snapshot, err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	proof, err := terminateOwnedSystemRuntimeProcess(ctx, ids)
+	cancel()
+	if err != nil || proof.state != runtimeProcessExactExited ||
+		proof.method != "exact_process_exited" || len(proof.signals) != 0 {
+		t.Fatalf("owned zombie termination = (%#v, %v)", proof, err)
+	}
+	if err := command.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	waited = true
+}
+
 func TestDarwinRuntimeProcessZombieNeverAuthorizesGroupSignal(t *testing.T) {
 	ids := runtimeProcessIDs{SchemaVersion: 1, OS: "darwin", PID: 42, PGID: 42, SID: 42,
 		UID: 501, StartToken: "darwin:123e4567-e89b-12d3-a456-426614174000:10:20"}
