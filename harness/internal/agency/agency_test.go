@@ -182,12 +182,13 @@ func TestReferenceAndSubjectBindingsRemainExact(t *testing.T) {
 func TestEventSeparatesMachineSemanticAndEvidence(t *testing.T) {
 	request := mustBoundRoot(t, "op:event")
 	event, err := NewEvent(request, EventStamp{ID: mustEventID(t, "event:accepted"),
-		AcceptedAt: testTime, OriginSequence: 1})
+		AcceptedAt: testTime, OriginSequence: 1, CausalDepth: 3})
 	if err != nil {
 		t.Fatalf("NewEvent() error = %v", err)
 	}
 	if event.Source() != request.Attachment().Principal() || event.OperationKey() != request.OperationKey() ||
-		event.RequestDigest() != request.RequestDigest() || event.Kind() != request.Intent().Kind() {
+		event.RequestDigest() != request.RequestDigest() || event.Kind() != request.Intent().Kind() ||
+		event.CausalDepth() != 3 {
 		t.Fatal("Event authority or semantics disagree with request")
 	}
 	var wire map[string]json.RawMessage
@@ -199,10 +200,18 @@ func TestEventSeparatesMachineSemanticAndEvidence(t *testing.T) {
 			t.Fatalf("Event lacks %q section: %s", section, event.CanonicalJSON())
 		}
 	}
+	if !bytes.Contains(event.CanonicalJSON(), []byte(`"schema_version":2`)) ||
+		!bytes.Contains(event.CanonicalJSON(), []byte(`"causal_depth":3`)) {
+		t.Fatalf("Event does not explicitly version canonical causal depth: %s", event.CanonicalJSON())
+	}
 	if bytes.Contains(event.CanonicalJSON(), []byte(`"intent"`)) ||
 		bytes.Count(event.CanonicalJSON(), []byte(request.Intent().Kind().String())) != 1 ||
 		bytes.Count(event.CanonicalJSON(), []byte(request.Intent().Payload().String())) != 1 {
 		t.Fatalf("Event repeats or nests semantic content: %s", event.CanonicalJSON())
+	}
+	if _, err := NewEvent(request, EventStamp{ID: mustEventID(t, "event:too-deep"),
+		AcceptedAt: testTime, OriginSequence: 2, CausalDepth: MaxPeerCausalDepth + 1}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("NewEvent(excess depth) error = %v, want ErrInvalid", err)
 	}
 }
 

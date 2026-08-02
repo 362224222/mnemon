@@ -6,6 +6,7 @@ type EventStamp struct {
 	ID             EventID
 	AcceptedAt     time.Time
 	OriginSequence uint64
+	CausalDepth    uint16
 }
 
 // Event is the immutable, canonical record of one admitted BoundIntent.
@@ -15,6 +16,7 @@ type Event struct {
 	id             EventID
 	acceptedAt     time.Time
 	originSequence uint64
+	causalDepth    uint16
 	source         AgentPrincipalID
 	operationKey   OperationKey
 	requestDigest  Digest
@@ -33,7 +35,7 @@ type Event struct {
 
 func NewEvent(request BoundIntent, stamp EventStamp) (Event, error) {
 	if len(request.canonical) == 0 || request.operationKey.IsZero() || request.digest.IsZero() ||
-		stamp.ID.IsZero() || stamp.OriginSequence == 0 {
+		stamp.ID.IsZero() || stamp.OriginSequence == 0 || stamp.CausalDepth > MaxPeerCausalDepth {
 		return Event{}, invalid("Event", "complete request, ID, and positive origin sequence are required")
 	}
 	acceptedAt, err := canonicalTime("Event accepted time", stamp.AcceptedAt)
@@ -44,6 +46,7 @@ func NewEvent(request BoundIntent, stamp EventStamp) (Event, error) {
 		id:             stamp.ID,
 		acceptedAt:     acceptedAt,
 		originSequence: stamp.OriginSequence,
+		causalDepth:    stamp.CausalDepth,
 		source:         request.attachment.principal,
 		operationKey:   request.operationKey,
 		requestDigest:  request.digest,
@@ -74,6 +77,7 @@ func NewEvent(request BoundIntent, stamp EventStamp) (Event, error) {
 func (event Event) ID() EventID                { return event.id }
 func (event Event) AcceptedAt() time.Time      { return event.acceptedAt }
 func (event Event) OriginSequence() uint64     { return event.originSequence }
+func (event Event) CausalDepth() uint16        { return event.causalDepth }
 func (event Event) Source() AgentPrincipalID   { return event.source }
 func (event Event) OperationKey() OperationKey { return event.operationKey }
 func (event Event) RequestDigest() Digest      { return event.requestDigest }
@@ -113,6 +117,7 @@ type eventMachineWire struct {
 	ID                string                    `json:"event_id"`
 	AcceptedAt        string                    `json:"accepted_at"`
 	OriginSequence    uint64                    `json:"origin_sequence"`
+	CausalDepth       uint16                    `json:"causal_depth"`
 	Source            string                    `json:"source_principal"`
 	OperationKey      string                    `json:"operation_key"`
 	RequestDigest     string                    `json:"request_digest"`
@@ -135,10 +140,11 @@ type eventEvidenceWire struct {
 
 func (event Event) wire() eventWire {
 	wire := eventWire{
-		SchemaVersion: 1,
+		SchemaVersion: 2,
 		Machine: eventMachineWire{
 			ID: event.id.String(), AcceptedAt: event.acceptedAt.Format(time.RFC3339Nano),
-			OriginSequence: event.originSequence, Source: event.source.String(),
+			OriginSequence: event.originSequence, CausalDepth: event.causalDepth,
+			Source:       event.source.String(),
 			OperationKey: event.operationKey.String(), RequestDigest: event.requestDigest.String(),
 			Consequence: event.consequence.String(),
 		},
