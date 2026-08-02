@@ -15,7 +15,7 @@ import (
 
 func TestRunProxyDropsResponseAfterFirstByte(t *testing.T) {
 	t.Parallel()
-	root := t.TempDir()
+	root := shortSocketTempDir(t)
 	original := filepath.Join(root, "daemon.sock")
 	upstream := filepath.Join(root, "upstream.sock")
 	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: original, Net: "unix"})
@@ -99,7 +99,7 @@ func TestRunProxyDropsResponseAfterFirstByte(t *testing.T) {
 
 func TestRunProxyFailsWhenUpstreamNeverResponds(t *testing.T) {
 	t.Parallel()
-	root := t.TempDir()
+	root := shortSocketTempDir(t)
 	upstream := filepath.Join(root, "upstream.sock")
 	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: upstream, Net: "unix"})
 	if err != nil {
@@ -140,7 +140,7 @@ func TestRunProxyFailsWhenUpstreamNeverResponds(t *testing.T) {
 
 func TestRunProxyRejectsResponseWithoutForwardedRequest(t *testing.T) {
 	t.Parallel()
-	root := t.TempDir()
+	root := shortSocketTempDir(t)
 	upstream := filepath.Join(root, "upstream.sock")
 	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: upstream, Net: "unix"})
 	if err != nil {
@@ -183,7 +183,7 @@ func TestRunProxyRejectsResponseWithoutForwardedRequest(t *testing.T) {
 
 func TestRunProxyCancellationOwnsListener(t *testing.T) {
 	t.Parallel()
-	root := t.TempDir()
+	root := shortSocketTempDir(t)
 	upstream := filepath.Join(root, "upstream.sock")
 	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: upstream, Net: "unix"})
 	if err != nil {
@@ -212,7 +212,7 @@ func TestRunProxyCancellationOwnsListener(t *testing.T) {
 
 func TestValidateProxyConfigRejectsSymlinkAndExistingOutputs(t *testing.T) {
 	t.Parallel()
-	root := t.TempDir()
+	root := shortSocketTempDir(t)
 	realSocket := filepath.Join(root, "real.sock")
 	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: realSocket, Net: "unix"})
 	if err != nil {
@@ -247,6 +247,23 @@ func testProxyConfig(root, listen, upstream string, timeout time.Duration) proxy
 		token:        "fault-token-1",
 		timeout:      timeout,
 	}
+}
+
+func shortSocketTempDir(t *testing.T) string {
+	t.Helper()
+	root, err := os.MkdirTemp("/tmp", "mnemon-fp-")
+	if err != nil {
+		t.Fatalf("create short socket temp directory: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(root); err != nil {
+			t.Errorf("remove short socket temp directory %s: %v", root, err)
+		}
+	})
+	if longest := filepath.Join(root, "upstream.sock"); len(longest) > maximumSocketPath {
+		t.Fatalf("short socket temp path exceeds proxy bound: %s", longest)
+	}
+	return root
 }
 
 func waitForFile(t *testing.T, path string) {
