@@ -6,27 +6,28 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/model"
+	"github.com/mnemon-dev/mnemon/harness/internal/agency"
 )
 
 func TestSelectionDescriptorCanonicalizesScope(t *testing.T) {
 	profile := mustProfile(t, 3, 2, 2, 8)
 	roster := testPeers(t, 5)
 	expires := time.Date(2026, 8, 4, 1, 2, 3, 456_000_000, time.FixedZone("offset", 8*60*60))
-	first := mustDescriptor(t, profile, []model.PeerID{roster[3], roster[0], roster[4], roster[2], roster[1]}, expires)
+	first := mustDescriptor(t, profile, []ParticipantID{roster[3], roster[0], roster[4], roster[2], roster[1]}, expires)
 	second := mustDescriptor(t, profile, roster, expires.UTC())
 
 	if first.ID() != second.ID() || !bytes.Equal(first.CanonicalBytes(), second.CanonicalBytes()) {
 		t.Fatal("roster order or timezone changed canonical selection identity")
 	}
-	if first.ID().Digest() != model.Sum(first.CanonicalBytes()) {
+	if first.ID().Digest() != agency.Sum(first.CanonicalBytes()) {
 		t.Fatal("selection ID is not the descriptor digest")
 	}
-	canonical, err := model.NewJSON(first.CanonicalBytes())
-	if err != nil || !bytes.Equal(canonical.Bytes(), first.CanonicalBytes()) {
+	canonical, err := canonicalJSONRoundTrip(first.CanonicalBytes())
+	if err != nil || !bytes.Equal(canonical, first.CanonicalBytes()) {
 		t.Fatalf("descriptor is not exact canonical JSON: %v", err)
 	}
 	gotRoster := first.ParticipantRoster()
@@ -35,7 +36,7 @@ func TestSelectionDescriptorCanonicalizesScope(t *testing.T) {
 			t.Fatalf("roster is not sorted and unique: %#v", gotRoster)
 		}
 	}
-	gotRoster[0] = model.PeerID{}
+	gotRoster[0] = ParticipantID{}
 	if first.ParticipantRoster()[0].IsZero() {
 		t.Fatal("descriptor exposed mutable roster storage")
 	}
@@ -72,18 +73,18 @@ func TestProfileAndDescriptorFailClosed(t *testing.T) {
 
 	profile := mustProfile(t, 3, 2, 1, 2)
 	roster := testPeers(t, 4)
-	if _, err := NewSelectionDescriptor(model.Sum([]byte("question")), model.Sum([]byte("same")),
-		model.Sum([]byte("same")), roster, profile, time.Now().Add(time.Hour)); err == nil {
+	if _, err := NewSelectionDescriptor(agency.Sum([]byte("question")), agency.Sum([]byte("same")),
+		agency.Sum([]byte("same")), roster, profile, time.Now().Add(time.Hour)); err == nil {
 		t.Fatal("identical candidates were accepted")
 	}
-	if _, err := NewSelectionDescriptor(model.Sum([]byte("question")), model.Sum([]byte("a")),
-		model.Sum([]byte("b")), roster[:3], profile, time.Now().Add(time.Hour)); err == nil {
+	if _, err := NewSelectionDescriptor(agency.Sum([]byte("question")), agency.Sum([]byte("a")),
+		agency.Sum([]byte("b")), roster[:3], profile, time.Now().Add(time.Hour)); err == nil {
 		t.Fatal("roster that cannot exclude self from a full sample was accepted")
 	}
-	duplicate := append([]model.PeerID(nil), roster...)
+	duplicate := append([]ParticipantID(nil), roster...)
 	duplicate[3] = duplicate[2]
-	if _, err := NewSelectionDescriptor(model.Sum([]byte("question")), model.Sum([]byte("a")),
-		model.Sum([]byte("b")), duplicate, profile, time.Now().Add(time.Hour)); err == nil {
+	if _, err := NewSelectionDescriptor(agency.Sum([]byte("question")), agency.Sum([]byte("a")),
+		agency.Sum([]byte("b")), duplicate, profile, time.Now().Add(time.Hour)); err == nil {
 		t.Fatal("duplicate roster peer was accepted")
 	}
 }
@@ -121,10 +122,10 @@ func TestApplyRoundFiltersWrongDuplicateAndEquivocatingVotes(t *testing.T) {
 	descriptor := mustDescriptor(t, profile, testPeers(t, 7), now.Add(time.Hour))
 	roster := descriptor.ParticipantRoster()
 	state := mustState(t, descriptor.ID(), PreferenceB)
-	nonce := model.Sum([]byte("filter-round"))
+	nonce := agency.Sum([]byte("filter-round"))
 	query := mustQuery(t, descriptor.ID(), 1, nonce)
-	otherID, _ := ParseSelectionID(model.Sum([]byte("other-selection")).String())
-	wrongNonce := model.Sum([]byte("wrong-nonce"))
+	otherID, _ := ParseSelectionID(agency.Sum([]byte("other-selection")).String())
+	wrongNonce := agency.Sum([]byte("wrong-nonce"))
 	votes := []SampleVote{
 		mustVote(t, descriptor.ID(), 1, nonce, PreferenceA, roster[1]),
 		mustVote(t, descriptor.ID(), 1, nonce, PreferenceA, roster[1]),
@@ -165,12 +166,12 @@ func TestApplyRoundRejectsInvalidRoundEnvelope(t *testing.T) {
 	descriptor := mustDescriptor(t, profile, testPeers(t, 5), now.Add(time.Hour))
 	roster := descriptor.ParticipantRoster()
 	state := mustState(t, descriptor.ID(), PreferenceA)
-	nonce := model.Sum([]byte("nonce"))
+	nonce := agency.Sum([]byte("nonce"))
 
 	tests := []struct {
 		name    string
 		query   SampleQuery
-		sampled []model.PeerID
+		sampled []ParticipantID
 		now     time.Time
 	}{
 		{"wrong query round", mustQuery(t, descriptor.ID(), 2, nonce), roster[1:4], now},
@@ -242,7 +243,7 @@ func TestDeterministicThirtyTwoNodeSelection(t *testing.T) {
 		snapshot := append([]SelectionState(nil), states...)
 		for node := range states {
 			sampled := deterministicSample(roster, node, int(round), int(profile.SampleSize()))
-			nonce := model.Sum([]byte(fmt.Sprintf("node-%d-round-%d", node, round)))
+			nonce := agency.Sum([]byte(fmt.Sprintf("node-%d-round-%d", node, round)))
 			query := mustQuery(t, descriptor.ID(), round, nonce)
 			votes := make([]SampleVote, len(sampled))
 			for index, peer := range sampled {
@@ -270,9 +271,9 @@ func TestDeterministicThirtyTwoNodeSelection(t *testing.T) {
 
 func assertObservationCanonical(t *testing.T, observation PreferenceObservation) {
 	t.Helper()
-	canonical, err := model.NewJSON(observation.CanonicalBytes())
-	if err != nil || !bytes.Equal(canonical.Bytes(), observation.CanonicalBytes()) ||
-		observation.Digest() != model.Sum(observation.CanonicalBytes()) {
+	canonical, err := canonicalJSONRoundTrip(observation.CanonicalBytes())
+	if err != nil || !bytes.Equal(canonical, observation.CanonicalBytes()) ||
+		observation.Digest() != agency.Sum(observation.CanonicalBytes()) {
 		t.Fatalf("observation is not canonical: %v", err)
 	}
 	var wire observationWire
@@ -282,10 +283,10 @@ func assertObservationCanonical(t *testing.T, observation PreferenceObservation)
 }
 
 func applyPreferences(t *testing.T, descriptor SelectionDescriptor, state SelectionState,
-	self model.PeerID, sampled []model.PeerID, now time.Time, preferences ...Preference,
+	self ParticipantID, sampled []ParticipantID, now time.Time, preferences ...Preference,
 ) RoundResult {
 	t.Helper()
-	nonce := model.Sum([]byte(fmt.Sprintf("round-%d", state.Round()+1)))
+	nonce := agency.Sum([]byte(fmt.Sprintf("round-%d", state.Round()+1)))
 	query := mustQuery(t, descriptor.ID(), state.Round()+1, nonce)
 	votes := make([]SampleVote, len(preferences))
 	for index, preference := range preferences {
@@ -298,8 +299,8 @@ func applyPreferences(t *testing.T, descriptor SelectionDescriptor, state Select
 	return result
 }
 
-func deterministicSample(roster []model.PeerID, self, round, count int) []model.PeerID {
-	result := make([]model.PeerID, 0, count)
+func deterministicSample(roster []ParticipantID, self, round, count int) []ParticipantID {
+	result := make([]ParticipantID, 0, count)
 	for offset := 1; len(result) < count; offset++ {
 		index := (self + round*7 + offset*5) % len(roster)
 		if index == self || containsPeer(result, roster[index]) {
@@ -310,7 +311,7 @@ func deterministicSample(roster []model.PeerID, self, round, count int) []model.
 	return result
 }
 
-func containsPeer(peers []model.PeerID, wanted model.PeerID) bool {
+func containsPeer(peers []ParticipantID, wanted ParticipantID) bool {
 	for _, peer := range peers {
 		if peer == wanted {
 			return true
@@ -319,7 +320,7 @@ func containsPeer(peers []model.PeerID, wanted model.PeerID) bool {
 	return false
 }
 
-func peerIndex(roster []model.PeerID, wanted model.PeerID) int {
+func peerIndex(roster []ParticipantID, wanted ParticipantID) int {
 	for index, peer := range roster {
 		if peer == wanted {
 			return index
@@ -337,10 +338,10 @@ func mustProfile(t testing.TB, sample, alpha, threshold, rounds uint32) Profile 
 	return profile
 }
 
-func mustDescriptor(t testing.TB, profile Profile, roster []model.PeerID, expires time.Time) SelectionDescriptor {
+func mustDescriptor(t testing.TB, profile Profile, roster []ParticipantID, expires time.Time) SelectionDescriptor {
 	t.Helper()
-	descriptor, err := NewSelectionDescriptor(model.Sum([]byte("question")), model.Sum([]byte("candidate-a")),
-		model.Sum([]byte("candidate-b")), roster, profile, expires)
+	descriptor, err := NewSelectionDescriptor(agency.Sum([]byte("question")), agency.Sum([]byte("candidate-a")),
+		agency.Sum([]byte("candidate-b")), roster, profile, expires)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -356,7 +357,7 @@ func mustState(t testing.TB, selectionID SelectionID, preference Preference) Sel
 	return state
 }
 
-func mustQuery(t testing.TB, selectionID SelectionID, round uint32, nonce model.Digest) SampleQuery {
+func mustQuery(t testing.TB, selectionID SelectionID, round uint32, nonce agency.Digest) SampleQuery {
 	t.Helper()
 	query, err := NewSampleQuery(selectionID, round, nonce)
 	if err != nil {
@@ -365,8 +366,8 @@ func mustQuery(t testing.TB, selectionID SelectionID, round uint32, nonce model.
 	return query
 }
 
-func mustVote(t testing.TB, selectionID SelectionID, round uint32, nonce model.Digest,
-	preference Preference, source model.PeerID,
+func mustVote(t testing.TB, selectionID SelectionID, round uint32, nonce agency.Digest,
+	preference Preference, source ParticipantID,
 ) SampleVote {
 	t.Helper()
 	vote, err := NewSampleVote(selectionID, round, nonce, preference, source)
@@ -376,17 +377,40 @@ func mustVote(t testing.TB, selectionID SelectionID, round uint32, nonce model.D
 	return vote
 }
 
-func testPeers(t testing.TB, count int) []model.PeerID {
+func testPeers(t testing.TB, count int) []ParticipantID {
 	t.Helper()
-	result := make([]model.PeerID, count)
+	result := make([]ParticipantID, count)
 	for index := range result {
-		peer, err := model.ParsePeerID(fmt.Sprintf("peer-%03d", index))
+		peer, err := NewParticipantID(fmt.Sprintf("peer-%03d", index))
 		if err != nil {
 			t.Fatal(err)
 		}
 		result[index] = peer
 	}
 	return result
+}
+
+func canonicalJSONRoundTrip(raw []byte) ([]byte, error) {
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return nil, err
+	}
+	return json.Marshal(value)
+}
+
+func TestParticipantIDIsSmallCanonicalAndSemanticallyNeutral(t *testing.T) {
+	valid, err := NewParticipantID("transport:participant/001")
+	if err != nil || valid.String() != "transport:participant/001" {
+		t.Fatalf("NewParticipantID() = %q, %v", valid.String(), err)
+	}
+	for _, value := range []string{"", "contains space", "contains\nnewline", "非-ascii"} {
+		if _, err := NewParticipantID(value); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("NewParticipantID(%q) error = %v, want ErrInvalid", value, err)
+		}
+	}
+	if _, err := NewParticipantID(strings.Repeat("p", MaxParticipantIDBytes+1)); !errors.Is(err, ErrLimit) {
+		t.Fatalf("oversized ParticipantID error = %v, want ErrLimit", err)
+	}
 }
 
 func TestErrorCategoriesRemainInspectable(t *testing.T) {

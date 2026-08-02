@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/model"
+	"github.com/mnemon-dev/mnemon/harness/internal/agency"
 )
 
 type ObservationResult string
@@ -30,8 +30,8 @@ type PreferenceObservation struct {
 	reason        InconclusiveReason
 	margin        int64
 	rounds        uint32
-	rosterDigest  model.Digest
-	profileDigest model.Digest
+	rosterDigest  agency.Digest
+	profileDigest agency.Digest
 	canonical     []byte
 }
 
@@ -94,7 +94,7 @@ func newObservation(descriptor SelectionDescriptor, state SelectionState, result
 		Reason: reasonWire, Result: string(result), RosterDigest: descriptor.rosterHash.String(),
 		Rounds: state.round, SelectionID: descriptor.id.String(),
 	}
-	canonical, err := model.CanonicalMarshal(wire)
+	canonical, err := canonicalMarshal(wire)
 	if err != nil {
 		return PreferenceObservation{}, fmt.Errorf("canonicalize preference observation: %w", err)
 	}
@@ -105,15 +105,15 @@ func newObservation(descriptor SelectionDescriptor, state SelectionState, result
 	}, nil
 }
 
-func (o PreferenceObservation) SelectionID() SelectionID    { return o.selectionID }
-func (o PreferenceObservation) Result() ObservationResult   { return o.result }
-func (o PreferenceObservation) Reason() InconclusiveReason  { return o.reason }
-func (o PreferenceObservation) Margin() int64               { return o.margin }
-func (o PreferenceObservation) Rounds() uint32              { return o.rounds }
-func (o PreferenceObservation) RosterDigest() model.Digest  { return o.rosterDigest }
-func (o PreferenceObservation) ProfileDigest() model.Digest { return o.profileDigest }
-func (o PreferenceObservation) CanonicalBytes() []byte      { return append([]byte(nil), o.canonical...) }
-func (o PreferenceObservation) Digest() model.Digest        { return model.Sum(o.canonical) }
+func (o PreferenceObservation) SelectionID() SelectionID     { return o.selectionID }
+func (o PreferenceObservation) Result() ObservationResult    { return o.result }
+func (o PreferenceObservation) Reason() InconclusiveReason   { return o.reason }
+func (o PreferenceObservation) Margin() int64                { return o.margin }
+func (o PreferenceObservation) Rounds() uint32               { return o.rounds }
+func (o PreferenceObservation) RosterDigest() agency.Digest  { return o.rosterDigest }
+func (o PreferenceObservation) ProfileDigest() agency.Digest { return o.profileDigest }
+func (o PreferenceObservation) CanonicalBytes() []byte       { return append([]byte(nil), o.canonical...) }
+func (o PreferenceObservation) Digest() agency.Digest        { return agency.Sum(o.canonical) }
 
 func (o PreferenceObservation) StablePreference() (Preference, bool) {
 	return o.preference, o.result == ObservationStable && validPreference(o.preference)

@@ -7,7 +7,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/model"
+	"github.com/mnemon-dev/mnemon/harness/internal/agency"
 )
 
 const (
@@ -120,28 +120,28 @@ func (p Profile) wire() profileWire {
 	return profileWire{p.alpha, p.maxRounds, p.roundTimeout.Milliseconds(), p.sampleSize, p.threshold}
 }
 
-func (p Profile) Digest() model.Digest {
-	canonical, err := model.CanonicalMarshal(p.wire())
+func (p Profile) Digest() agency.Digest {
+	canonical, err := canonicalMarshal(p.wire())
 	if err != nil {
-		return model.Digest{}
+		return agency.Digest{}
 	}
-	return model.Sum(canonical)
+	return agency.Sum(canonical)
 }
 
 // SelectionID is the digest of exact canonical SelectionDescriptor bytes.
-type SelectionID struct{ digest model.Digest }
+type SelectionID struct{ digest agency.Digest }
 
 func ParseSelectionID(value string) (SelectionID, error) {
-	digest, err := model.ParseDigest(value)
+	digest, err := agency.ParseDigest(value)
 	if err != nil {
-		return SelectionID{}, fmt.Errorf("selection ID: %w", err)
+		return SelectionID{}, fmt.Errorf("selection ID %q: %w", value, ErrInvalid)
 	}
 	return SelectionID{digest}, nil
 }
 
-func (id SelectionID) Digest() model.Digest { return id.digest }
-func (id SelectionID) IsZero() bool         { return id.digest.IsZero() }
-func (id SelectionID) String() string       { return id.digest.String() }
+func (id SelectionID) Digest() agency.Digest { return id.digest }
+func (id SelectionID) IsZero() bool          { return id.digest.IsZero() }
+func (id SelectionID) String() string        { return id.digest.String() }
 
 func (id SelectionID) MarshalJSON() ([]byte, error) {
 	if id.IsZero() {
@@ -152,15 +152,15 @@ func (id SelectionID) MarshalJSON() ([]byte, error) {
 
 // SelectionDescriptor is an immutable, canonical binary selection scope.
 type SelectionDescriptor struct {
-	question   model.Digest
-	candidateA model.Digest
-	candidateB model.Digest
-	roster     []model.PeerID
+	question   agency.Digest
+	candidateA agency.Digest
+	candidateB agency.Digest
+	roster     []ParticipantID
 	profile    Profile
 	expiresAt  time.Time
 	canonical  []byte
 	id         SelectionID
-	rosterHash model.Digest
+	rosterHash agency.Digest
 }
 
 type descriptorWire struct {
@@ -173,7 +173,7 @@ type descriptorWire struct {
 	Version                  uint32      `json:"version"`
 }
 
-func NewSelectionDescriptor(question, candidateA, candidateB model.Digest, roster []model.PeerID,
+func NewSelectionDescriptor(question, candidateA, candidateB agency.Digest, roster []ParticipantID,
 	profile Profile, expiresAt time.Time,
 ) (SelectionDescriptor, error) {
 	if question.IsZero() || candidateA.IsZero() || candidateB.IsZero() {
@@ -198,22 +198,22 @@ func NewSelectionDescriptor(question, candidateA, candidateB model.Digest, roste
 		ExpiresAt: canonicalExpiry.Format(time.RFC3339Nano), MachineProfile: profile.wire(),
 		ParticipantRoster: rosterWire, QuestionArtifactDigest: question.String(), Version: DescriptorVersion,
 	}
-	canonical, err := model.CanonicalMarshal(wire)
+	canonical, err := canonicalMarshal(wire)
 	if err != nil {
 		return SelectionDescriptor{}, fmt.Errorf("canonicalize selection descriptor: %w", err)
 	}
-	rosterCanonical, err := model.CanonicalMarshal(rosterWire)
+	rosterCanonical, err := canonicalMarshal(rosterWire)
 	if err != nil {
 		return SelectionDescriptor{}, fmt.Errorf("canonicalize selection roster: %w", err)
 	}
 	return SelectionDescriptor{
 		question: question, candidateA: candidateA, candidateB: candidateB,
 		roster: canonicalRoster, profile: profile, expiresAt: canonicalExpiry,
-		canonical: canonical, id: SelectionID{model.Sum(canonical)}, rosterHash: model.Sum(rosterCanonical),
+		canonical: canonical, id: SelectionID{agency.Sum(canonical)}, rosterHash: agency.Sum(rosterCanonical),
 	}, nil
 }
 
-func normalizeRoster(roster []model.PeerID, sampleSize uint32) ([]model.PeerID, []string, error) {
+func normalizeRoster(roster []ParticipantID, sampleSize uint32) ([]ParticipantID, []string, error) {
 	if len(roster) == 0 || len(roster) > MaxRosterPeers {
 		return nil, nil, fmt.Errorf("roster size %d (want 1..%d): %w", len(roster), MaxRosterPeers, ErrLimit)
 	}
@@ -221,7 +221,7 @@ func normalizeRoster(roster []model.PeerID, sampleSize uint32) ([]model.PeerID, 
 		return nil, nil, fmt.Errorf("roster size %d must exceed sample size %d: %w",
 			len(roster), sampleSize, ErrInvalid)
 	}
-	result := append([]model.PeerID(nil), roster...)
+	result := append([]ParticipantID(nil), roster...)
 	for _, peer := range result {
 		if peer.IsZero() {
 			return nil, nil, fmt.Errorf("roster contains zero peer: %w", ErrInvalid)
@@ -251,19 +251,19 @@ func normalizeExpiry(value time.Time) (time.Time, error) {
 	return canonical, nil
 }
 
-func (d SelectionDescriptor) ID() SelectionID                { return d.id }
-func (d SelectionDescriptor) QuestionDigest() model.Digest   { return d.question }
-func (d SelectionDescriptor) CandidateADigest() model.Digest { return d.candidateA }
-func (d SelectionDescriptor) CandidateBDigest() model.Digest { return d.candidateB }
-func (d SelectionDescriptor) Profile() Profile               { return d.profile }
-func (d SelectionDescriptor) ExpiresAt() time.Time           { return d.expiresAt }
-func (d SelectionDescriptor) RosterDigest() model.Digest     { return d.rosterHash }
-func (d SelectionDescriptor) CanonicalBytes() []byte         { return append([]byte(nil), d.canonical...) }
-func (d SelectionDescriptor) ParticipantRoster() []model.PeerID {
-	return append([]model.PeerID(nil), d.roster...)
+func (d SelectionDescriptor) ID() SelectionID                 { return d.id }
+func (d SelectionDescriptor) QuestionDigest() agency.Digest   { return d.question }
+func (d SelectionDescriptor) CandidateADigest() agency.Digest { return d.candidateA }
+func (d SelectionDescriptor) CandidateBDigest() agency.Digest { return d.candidateB }
+func (d SelectionDescriptor) Profile() Profile                { return d.profile }
+func (d SelectionDescriptor) ExpiresAt() time.Time            { return d.expiresAt }
+func (d SelectionDescriptor) RosterDigest() agency.Digest     { return d.rosterHash }
+func (d SelectionDescriptor) CanonicalBytes() []byte          { return append([]byte(nil), d.canonical...) }
+func (d SelectionDescriptor) ParticipantRoster() []ParticipantID {
+	return append([]ParticipantID(nil), d.roster...)
 }
 
-func (d SelectionDescriptor) contains(peer model.PeerID) bool {
+func (d SelectionDescriptor) contains(peer ParticipantID) bool {
 	index := sort.Search(len(d.roster), func(index int) bool {
 		return d.roster[index].String() >= peer.String()
 	})

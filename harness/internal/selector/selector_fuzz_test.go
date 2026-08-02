@@ -1,11 +1,32 @@
 package selector
 
 import (
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/model"
+	"github.com/mnemon-dev/mnemon/harness/internal/agency"
 )
+
+func FuzzParticipantIDCanonical(f *testing.F) {
+	f.Add("transport:participant/001")
+	f.Add("contains space")
+	f.Add("非-ascii")
+	f.Fuzz(func(t *testing.T, value string) {
+		participant, err := NewParticipantID(value)
+		if err != nil {
+			return
+		}
+		if participant.String() != value || participant.IsZero() || len(value) > MaxParticipantIDBytes {
+			t.Fatalf("accepted non-canonical ParticipantID %q", value)
+		}
+		if strings.IndexFunc(value, func(character rune) bool {
+			return character < 0x21 || character > 0x7e
+		}) >= 0 {
+			t.Fatalf("accepted non-printable ParticipantID %q", value)
+		}
+	})
+}
 
 func FuzzApplyRoundFiltersUntrustedVotes(f *testing.F) {
 	f.Add([]byte{0, 4, 8, 12, 16})
@@ -15,9 +36,9 @@ func FuzzApplyRoundFiltersUntrustedVotes(f *testing.F) {
 		descriptor := mustDescriptor(t, mustProfile(t, 5, 3, 2, 4), testPeers(t, 7), now.Add(time.Hour))
 		roster := descriptor.ParticipantRoster()
 		state := mustState(t, descriptor.ID(), PreferenceA)
-		nonce := model.Sum([]byte("fuzz-round"))
+		nonce := agency.Sum([]byte("fuzz-round"))
 		query := mustQuery(t, descriptor.ID(), 1, nonce)
-		otherID, err := ParseSelectionID(model.Sum([]byte("other")).String())
+		otherID, err := ParseSelectionID(agency.Sum([]byte("other")).String())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -36,7 +57,7 @@ func FuzzApplyRoundFiltersUntrustedVotes(f *testing.F) {
 			case 1:
 				votes[index].round = 2
 			case 2:
-				votes[index].nonce = model.Sum([]byte("wrong"))
+				votes[index].nonce = agency.Sum([]byte("wrong"))
 			case 3:
 				votes[index].preference = 0
 			}

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/model"
+	"github.com/mnemon-dev/mnemon/harness/internal/agency"
 )
 
 // SelectionState is the complete module-private state needed between rounds.
@@ -46,10 +46,10 @@ func (s SelectionState) validate(descriptor SelectionDescriptor) error {
 type SampleQuery struct {
 	selectionID SelectionID
 	round       uint32
-	nonce       model.Digest
+	nonce       agency.Digest
 }
 
-func NewSampleQuery(selectionID SelectionID, round uint32, nonce model.Digest) (SampleQuery, error) {
+func NewSampleQuery(selectionID SelectionID, round uint32, nonce agency.Digest) (SampleQuery, error) {
 	if selectionID.IsZero() || round == 0 || nonce.IsZero() {
 		return SampleQuery{}, fmt.Errorf("query selection, positive round, and nonce are required: %w", ErrInvalid)
 	}
@@ -58,18 +58,18 @@ func NewSampleQuery(selectionID SelectionID, round uint32, nonce model.Digest) (
 
 func (q SampleQuery) SelectionID() SelectionID { return q.selectionID }
 func (q SampleQuery) Round() uint32            { return q.round }
-func (q SampleQuery) Nonce() model.Digest      { return q.nonce }
+func (q SampleQuery) Nonce() agency.Digest     { return q.nonce }
 
 type SampleVote struct {
 	selectionID SelectionID
 	round       uint32
-	nonce       model.Digest
+	nonce       agency.Digest
 	preference  Preference
-	source      model.PeerID
+	source      ParticipantID
 }
 
-func NewSampleVote(selectionID SelectionID, round uint32, nonce model.Digest,
-	preference Preference, source model.PeerID,
+func NewSampleVote(selectionID SelectionID, round uint32, nonce agency.Digest,
+	preference Preference, source ParticipantID,
 ) (SampleVote, error) {
 	if selectionID.IsZero() || round == 0 || nonce.IsZero() || !validPreference(preference) || source.IsZero() {
 		return SampleVote{}, fmt.Errorf("vote fields are incomplete: %w", ErrInvalid)
@@ -79,9 +79,9 @@ func NewSampleVote(selectionID SelectionID, round uint32, nonce model.Digest,
 
 func (v SampleVote) SelectionID() SelectionID { return v.selectionID }
 func (v SampleVote) Round() uint32            { return v.round }
-func (v SampleVote) Nonce() model.Digest      { return v.nonce }
+func (v SampleVote) Nonce() agency.Digest     { return v.nonce }
 func (v SampleVote) Preference() Preference   { return v.preference }
-func (v SampleVote) Source() model.PeerID     { return v.source }
+func (v SampleVote) Source() ParticipantID    { return v.source }
 
 // VoteTally records accepted colors and bounded filtering diagnostics. Counts
 // describe input frames except Equivocations, which counts equivocating peers.
@@ -123,8 +123,8 @@ func (r RoundResult) Quorum() (Preference, bool) {
 
 // ApplyRound validates one frozen sample, filters its votes, and returns the
 // only permitted atomic state update. It has no side effects.
-func ApplyRound(descriptor SelectionDescriptor, state SelectionState, self model.PeerID,
-	query SampleQuery, sampled []model.PeerID, votes []SampleVote, now time.Time,
+func ApplyRound(descriptor SelectionDescriptor, state SelectionState, self ParticipantID,
+	query SampleQuery, sampled []ParticipantID, votes []SampleVote, now time.Time,
 ) (RoundResult, error) {
 	if err := descriptor.validate(); err != nil {
 		return RoundResult{}, err
@@ -167,14 +167,14 @@ func ApplyRound(descriptor SelectionDescriptor, state SelectionState, self model
 	return RoundResult{next, tally, quorum, validPreference(quorum) && quorum != state.preference}, nil
 }
 
-func validateSample(descriptor SelectionDescriptor, self model.PeerID,
-	sampled []model.PeerID,
-) (map[model.PeerID]struct{}, error) {
+func validateSample(descriptor SelectionDescriptor, self ParticipantID,
+	sampled []ParticipantID,
+) (map[ParticipantID]struct{}, error) {
 	if len(sampled) != int(descriptor.profile.sampleSize) {
 		return nil, fmt.Errorf("sample size %d does not equal profile size %d: %w",
 			len(sampled), descriptor.profile.sampleSize, ErrInvalid)
 	}
-	set := make(map[model.PeerID]struct{}, len(sampled))
+	set := make(map[ParticipantID]struct{}, len(sampled))
 	for _, peer := range sampled {
 		if peer.IsZero() || peer == self || !descriptor.contains(peer) {
 			return nil, fmt.Errorf("sample contains an ineligible peer: %w", ErrInvalid)
@@ -187,12 +187,12 @@ func validateSample(descriptor SelectionDescriptor, self model.PeerID,
 	return set, nil
 }
 
-func filterVotes(query SampleQuery, sampled map[model.PeerID]struct{}, votes []SampleVote) VoteTally {
+func filterVotes(query SampleQuery, sampled map[ParticipantID]struct{}, votes []SampleVote) VoteTally {
 	const (
 		seenA uint8 = 1 << iota
 		seenB
 	)
-	seen := make(map[model.PeerID]uint8, len(sampled))
+	seen := make(map[ParticipantID]uint8, len(sampled))
 	tally := VoteTally{}
 	for _, vote := range votes {
 		switch {
@@ -230,7 +230,7 @@ func filterVotes(query SampleQuery, sampled map[model.PeerID]struct{}, votes []S
 	return tally
 }
 
-func sampleContains(sampled map[model.PeerID]struct{}, peer model.PeerID) bool {
+func sampleContains(sampled map[ParticipantID]struct{}, peer ParticipantID) bool {
 	_, present := sampled[peer]
 	return present
 }
