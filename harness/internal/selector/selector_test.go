@@ -188,21 +188,21 @@ func TestApplyRoundRejectsInvalidRoundEnvelope(t *testing.T) {
 	}
 }
 
-func TestObserveStableAndInconclusive(t *testing.T) {
+func TestObserveThresholdReachedAndInconclusive(t *testing.T) {
 	now := time.Date(2026, 8, 3, 7, 0, 0, 0, time.UTC)
-	stableDescriptor := mustDescriptor(t, mustProfile(t, 3, 2, 2, 4), testPeers(t, 5), now.Add(time.Hour))
-	roster := stableDescriptor.ParticipantRoster()
-	state := mustState(t, stableDescriptor.ID(), PreferenceB)
-	state = applyPreferences(t, stableDescriptor, state, roster[0], roster[1:4], now,
+	thresholdDescriptor := mustDescriptor(t, mustProfile(t, 3, 2, 2, 4), testPeers(t, 5), now.Add(time.Hour))
+	roster := thresholdDescriptor.ParticipantRoster()
+	state := mustState(t, thresholdDescriptor.ID(), PreferenceB)
+	state = applyPreferences(t, thresholdDescriptor, state, roster[0], roster[1:4], now,
 		PreferenceA, PreferenceA).State()
-	state = applyPreferences(t, stableDescriptor, state, roster[0], roster[1:4], now,
+	state = applyPreferences(t, thresholdDescriptor, state, roster[0], roster[1:4], now,
 		PreferenceA, PreferenceA).State()
-	observation, ready, err := Observe(stableDescriptor, state, now)
-	if err != nil || !ready || observation.Result() != ObservationStable {
-		t.Fatalf("stable observation = %#v, ready %v, err %v", observation, ready, err)
+	observation, ready, err := Observe(thresholdDescriptor, state, now)
+	if err != nil || !ready || observation.Result() != ObservationThresholdReached {
+		t.Fatalf("threshold observation = %#v, ready %v, err %v", observation, ready, err)
 	}
-	if preference, ok := observation.StablePreference(); !ok || preference != PreferenceA {
-		t.Fatalf("stable preference = %s, %v", preference, ok)
+	if preference, ok := observation.ThresholdPreference(); !ok || preference != PreferenceA {
+		t.Fatalf("threshold preference = %s, %v", preference, ok)
 	}
 	assertObservationCanonical(t, observation)
 
@@ -262,8 +262,8 @@ func TestDeterministicThirtyTwoNodeSelection(t *testing.T) {
 		if err != nil || !ready {
 			t.Fatalf("node %d did not finish: state %#v err %v", node, state, err)
 		}
-		preference, stable := observation.StablePreference()
-		if !stable || preference != PreferenceA {
+		preference, thresholdReached := observation.ThresholdPreference()
+		if !thresholdReached || preference != PreferenceA {
 			t.Fatalf("node %d observation = %#v", node, observation)
 		}
 	}
@@ -278,7 +278,34 @@ func assertObservationCanonical(t *testing.T, observation PreferenceObservation)
 	}
 	var wire observationWire
 	if err := json.Unmarshal(observation.CanonicalBytes(), &wire); err != nil || wire.Preference == nil || wire.Reason != nil {
-		t.Fatalf("stable observation wire = %#v, err %v", wire, err)
+		t.Fatalf("threshold observation wire = %#v, err %v", wire, err)
+	}
+}
+
+func TestThresholdReachedIsLocalEvidenceNotConsensusOrFinality(t *testing.T) {
+	now := time.Date(2026, 8, 3, 7, 30, 0, 0, time.UTC)
+	descriptor := mustDescriptor(t, mustProfile(t, 3, 2, 1, 3), testPeers(t, 5), now.Add(time.Hour))
+	roster := descriptor.ParticipantRoster()
+
+	local := applyPreferences(t, descriptor, mustState(t, descriptor.ID(), PreferenceB),
+		roster[0], roster[1:4], now, PreferenceA, PreferenceA).State()
+	localObservation, ready, err := Observe(descriptor, local, now)
+	if err != nil || !ready || localObservation.Result() != ObservationThresholdReached {
+		t.Fatalf("local threshold observation = %#v, ready %v, err %v", localObservation, ready, err)
+	}
+
+	remote := mustState(t, descriptor.ID(), PreferenceB)
+	remoteObservation, remoteReady, err := Observe(descriptor, remote, now)
+	if err != nil || remoteReady || remoteObservation.Result() != "" ||
+		len(remoteObservation.CanonicalBytes()) != 0 || remote.Preference() != PreferenceB {
+		t.Fatalf("local threshold changed independent participant: observation=%#v ready=%v state=%#v err=%v",
+			remoteObservation, remoteReady, remote, err)
+	}
+
+	var wire observationWire
+	if err := json.Unmarshal(localObservation.CanonicalBytes(), &wire); err != nil ||
+		wire.Result != "threshold_reached" {
+		t.Fatalf("threshold wire result = %q, err %v", wire.Result, err)
 	}
 }
 

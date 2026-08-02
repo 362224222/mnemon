@@ -35,10 +35,10 @@ func (s SelectionState) validate(descriptor SelectionDescriptor) error {
 		return fmt.Errorf("round %d and margin %d are inconsistent: %w", s.round, s.margin, ErrState)
 	}
 	if s.margin >= int64(descriptor.profile.threshold) && s.preference != PreferenceA {
-		return fmt.Errorf("stable A margin has preference %s: %w", s.preference, ErrState)
+		return fmt.Errorf("A threshold margin has preference %s: %w", s.preference, ErrState)
 	}
 	if s.margin <= -int64(descriptor.profile.threshold) && s.preference != PreferenceB {
-		return fmt.Errorf("stable B margin has preference %s: %w", s.preference, ErrState)
+		return fmt.Errorf("B threshold margin has preference %s: %w", s.preference, ErrState)
 	}
 	return nil
 }

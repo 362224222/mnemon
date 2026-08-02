@@ -10,8 +10,8 @@ import (
 type ObservationResult string
 
 const (
-	ObservationStable       ObservationResult = "stable"
-	ObservationInconclusive ObservationResult = "inconclusive"
+	ObservationThresholdReached ObservationResult = "threshold_reached"
+	ObservationInconclusive     ObservationResult = "inconclusive"
 )
 
 type InconclusiveReason string
@@ -21,8 +21,9 @@ const (
 	ReasonExpired    InconclusiveReason = "expired"
 )
 
-// PreferenceObservation is a bounded, canonical report. It is evidence about
-// the selector run, not an R7 effect or a claim that either candidate is true.
+// PreferenceObservation is a bounded, canonical report. ThresholdReached is
+// only a local selector outcome under the frozen roster and profile; it is not
+// consensus, finality, truth, or an R7 effect.
 type PreferenceObservation struct {
 	selectionID   SelectionID
 	result        ObservationResult
@@ -46,8 +47,9 @@ type observationWire struct {
 	SelectionID   string  `json:"selection_id"`
 }
 
-// Observe returns ready=false while another round remains legal. Stable
-// margins take precedence over an expiry or round limit reached by that round.
+// Observe returns ready=false while another round remains legal. A reached
+// threshold takes precedence over an expiry or round limit reached by that
+// round.
 func Observe(descriptor SelectionDescriptor, state SelectionState, now time.Time) (PreferenceObservation, bool, error) {
 	if err := descriptor.validate(); err != nil {
 		return PreferenceObservation{}, false, err
@@ -59,11 +61,11 @@ func Observe(descriptor SelectionDescriptor, state SelectionState, now time.Time
 		return PreferenceObservation{}, false, fmt.Errorf("observation clock is required: %w", ErrInvalid)
 	}
 	if state.margin >= int64(descriptor.profile.threshold) {
-		observation, err := newObservation(descriptor, state, ObservationStable, PreferenceA, "")
+		observation, err := newObservation(descriptor, state, ObservationThresholdReached, PreferenceA, "")
 		return observation, true, err
 	}
 	if state.margin <= -int64(descriptor.profile.threshold) {
-		observation, err := newObservation(descriptor, state, ObservationStable, PreferenceB, "")
+		observation, err := newObservation(descriptor, state, ObservationThresholdReached, PreferenceB, "")
 		return observation, true, err
 	}
 	if state.round >= descriptor.profile.maxRounds {
@@ -82,7 +84,7 @@ func newObservation(descriptor SelectionDescriptor, state SelectionState, result
 ) (PreferenceObservation, error) {
 	profileDigest := descriptor.profile.Digest()
 	var preferenceWire, reasonWire *string
-	if result == ObservationStable {
+	if result == ObservationThresholdReached {
 		value := preference.String()
 		preferenceWire = &value
 	} else {
@@ -115,6 +117,9 @@ func (o PreferenceObservation) ProfileDigest() agency.Digest { return o.profileD
 func (o PreferenceObservation) CanonicalBytes() []byte       { return append([]byte(nil), o.canonical...) }
 func (o PreferenceObservation) Digest() agency.Digest        { return agency.Sum(o.canonical) }
 
-func (o PreferenceObservation) StablePreference() (Preference, bool) {
-	return o.preference, o.result == ObservationStable && validPreference(o.preference)
+// ThresholdPreference reports the local preference whose signed margin reached
+// the frozen threshold. It makes no statement about another participant's
+// observation and grants no consensus or finality authority.
+func (o PreferenceObservation) ThresholdPreference() (Preference, bool) {
+	return o.preference, o.result == ObservationThresholdReached && validPreference(o.preference)
 }
