@@ -67,6 +67,9 @@ func AliasTarget(alias OpaqueHandle) (TargetRef, error) {
 	if alias.IsZero() {
 		return TargetRef{}, invalid("target alias", "must not be zero")
 	}
+	if alias.String() == "self" {
+		return TargetRef{}, invalid("target alias", "self is reserved for the local Principal")
+	}
 	return TargetRef{alias: alias}, nil
 }
 

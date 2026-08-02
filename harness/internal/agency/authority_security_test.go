@@ -163,6 +163,21 @@ func TestSelectedAliasesCannotDuplicateResolvedDestinations(t *testing.T) {
 	}
 }
 
+func TestTargetAliasCannotCollideWithSelfSentinel(t *testing.T) {
+	selfAlias, err := NewOpaqueHandle("self")
+	if err != nil {
+		t.Fatalf("NewOpaqueHandle(self) error = %v", err)
+	}
+	if _, err := AliasTarget(selfAlias); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("AliasTarget(self) error = %v, want ErrInvalid", err)
+	}
+
+	raw := []byte(`{"kind":"agent.request","payload":"","consequence":"handling.create","successors":[{"alias":"self"}]}`)
+	if _, err := ParseAgentIntentJSON(raw); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("ParseAgentIntentJSON(self alias) error = %v, want ErrInvalid", err)
+	}
+}
+
 func TestArtifactCapturesAreOperationScopedAndLaneExact(t *testing.T) {
 	principal := mustPrincipal(t, "agent:local")
 	attachment := mustAttachment(t, "attachment:artifacts", principal, true)
