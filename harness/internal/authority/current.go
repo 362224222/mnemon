@@ -103,10 +103,9 @@ func (s *Store) Current(ctx context.Context, proof AttachmentProof,
 	if err := requireLiveAttachment(authenticated, now); err != nil {
 		return BoundView{}, err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE handlings
-		SET claim_attachment_id = NULL, claim_until = NULL
-		WHERE state = 'open' AND claim_until IS NOT NULL AND claim_until <= ?`, formatTime(now)); err != nil {
-		return BoundView{}, fmt.Errorf("current View: expire claims: %w", err)
+	if err := settleExpiredClaimsTx(ctx, tx, authenticated.value.Principal(), now,
+		MaxClaimExpirySettlementsPerCurrent); err != nil {
+		return BoundView{}, err
 	}
 	claim, err := existingClaimTx(ctx, tx, authenticated.value)
 	if errors.Is(err, sql.ErrNoRows) {

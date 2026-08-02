@@ -99,6 +99,19 @@ func TestAttachmentCredentialDoesNotAuthenticateByIDAlone(t *testing.T) {
 	}
 }
 
+func TestAttachmentSchemaDoesNotReserveManagedWakeMode(t *testing.T) {
+	fixture := newAuthorityFixture(t, "principal:interactive-only")
+	credential := agency.Sum([]byte("managed mode must remain outside R7 T0"))
+	_, err := fixture.store.db.Exec(`INSERT INTO attachments(
+		attachment_id, principal_id, mode, credential_digest, issued_at, expires_at)
+		VALUES('attachment:managed-forbidden', ?, 'managed', ?, ?, ?)`,
+		fixture.principal.String(), credential.String(), formatTime(*fixture.now),
+		formatTime(fixture.now.Add(time.Minute)))
+	if err == nil {
+		t.Fatal("R7 T0 schema accepted a managed-wake attachment")
+	}
+}
+
 func mustPrincipal(t *testing.T, value string) agency.AgentPrincipalID {
 	t.Helper()
 	principal, err := agency.NewAgentPrincipalID(value)

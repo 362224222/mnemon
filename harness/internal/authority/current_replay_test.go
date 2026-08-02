@@ -253,39 +253,6 @@ func TestCurrentViewHandleBindsAttachmentOperationAndAuthority(t *testing.T) {
 	}
 }
 
-func TestManagedCurrentProjectionCannotInitiateRoot(t *testing.T) {
-	fixture := newAuthorityFixture(t, "principal:managed-projection")
-	attachmentID, err := agency.NewAttachmentID("attachment:managed-projection")
-	if err != nil {
-		t.Fatal(err)
-	}
-	managed, err := agency.NewAttachment(attachmentID, fixture.principal, false,
-		*fixture.now, fixture.now.Add(time.Minute))
-	if err != nil {
-		t.Fatal(err)
-	}
-	tx, err := fixture.store.db.BeginTx(fixture.ctx, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tx.Rollback()
-	view, err := projectBoundViewTx(fixture.ctx, tx, managed, nil,
-		mustCurrentOperation(t, "operation:managed-projection").key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	public := string(view.public.CanonicalJSON())
-	for _, forbidden := range []string{"handling.create", "handling.advance", "handling.completed",
-		"handling.declined", "handling.unresolved"} {
-		if strings.Contains(public, forbidden) {
-			t.Fatalf("managed no-subject View exposed %q: %s", forbidden, public)
-		}
-	}
-	if strings.Contains(public, `"targets"`) {
-		t.Fatalf("managed no-subject View exposed an unusable target: %s", public)
-	}
-}
-
 func mustCurrentOperation(t *testing.T, value string) CurrentOperation {
 	t.Helper()
 	operation, err := NewCurrentOperation(mustOperation(t, value))

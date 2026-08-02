@@ -122,7 +122,6 @@ func (s *Store) IssueInteractiveAttachment(ctx context.Context,
 
 type authenticatedAttachment struct {
 	value agency.Attachment
-	mode  string
 }
 
 // authenticateAttachmentTx verifies a fixed-size proof in constant comparison
@@ -144,6 +143,9 @@ func authenticateAttachmentTx(ctx context.Context, tx *sql.Tx,
 	if err != nil {
 		return authenticatedAttachment{}, fmt.Errorf("authenticate attachment: load: %w", err)
 	}
+	if mode != "interactive" {
+		return authenticatedAttachment{}, errors.New("authenticate attachment: unsupported mode")
+	}
 	parsedStoredDigest, err := agency.ParseDigest(storedDigest)
 	if err != nil {
 		return authenticatedAttachment{}, errors.New("authenticate attachment: corrupt credential digest")
@@ -164,11 +166,11 @@ func authenticateAttachmentTx(ctx context.Context, tx *sql.Tx,
 	if err != nil {
 		return authenticatedAttachment{}, err
 	}
-	attachment, err := agency.NewAttachment(proof.id, principal, mode == "interactive", issuedAt, expiresAt)
+	attachment, err := agency.NewAttachment(proof.id, principal, true, issuedAt, expiresAt)
 	if err != nil {
 		return authenticatedAttachment{}, fmt.Errorf("authenticate attachment: corrupt authority: %w", err)
 	}
-	return authenticatedAttachment{value: attachment, mode: mode}, nil
+	return authenticatedAttachment{value: attachment}, nil
 }
 
 func requireLiveAttachment(attachment authenticatedAttachment, now time.Time) error {

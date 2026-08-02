@@ -13,7 +13,7 @@ CREATE TABLE principals (
 CREATE TABLE attachments (
     attachment_id TEXT PRIMARY KEY,
     principal_id TEXT NOT NULL REFERENCES principals(principal_id),
-    mode TEXT NOT NULL CHECK (mode IN ('interactive', 'managed')),
+    mode TEXT NOT NULL CHECK (mode = 'interactive'),
     credential_digest TEXT NOT NULL
         CHECK (length(credential_digest) = 71 AND
                substr(credential_digest, 1, 7) = 'sha256:' AND
@@ -98,6 +98,19 @@ CREATE UNIQUE INDEX handlings_attachment_slot
 ON handlings(claim_attachment_id)
 WHERE claim_attachment_id IS NOT NULL;
 
+CREATE TABLE claim_dispositions (
+    disposition_key TEXT PRIMARY KEY,
+    request_digest TEXT NOT NULL,
+    handling_id TEXT NOT NULL REFERENCES handlings(handling_id),
+    attachment_id TEXT NOT NULL REFERENCES attachments(attachment_id),
+    claim_fence INTEGER NOT NULL CHECK (claim_fence > 0),
+    claim_until TEXT NOT NULL,
+    outcome_digest TEXT NOT NULL,
+    outcome_json BLOB NOT NULL,
+    recorded_at TEXT NOT NULL,
+    UNIQUE(handling_id, claim_fence)
+) STRICT;
+
 CREATE TABLE active_references (
     reference_key TEXT PRIMARY KEY,
     head_event_id TEXT NOT NULL REFERENCES events(event_id),
@@ -121,4 +134,4 @@ CREATE INDEX reference_lineage_key
 ON reference_lineage(reference_key, event_id);
 
 PRAGMA application_id = 1296978487;
-PRAGMA user_version = 2;
+PRAGMA user_version = 3;

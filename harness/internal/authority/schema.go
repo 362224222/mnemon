@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	SchemaVersion       = 2
+	SchemaVersion       = 3
 	schemaApplicationID = 0x4d4e5237 // MNR7
 )
 

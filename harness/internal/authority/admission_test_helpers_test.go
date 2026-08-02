@@ -279,7 +279,7 @@ func requireOutcome(t *testing.T, result AdmissionResult, want agency.ReceiptOut
 func countRows(t *testing.T, store *Store, table string) int {
 	t.Helper()
 	allowed := map[string]bool{"events": true, "operations": true, "handlings": true,
-		"active_references": true, "reference_lineage": true}
+		"active_references": true, "reference_lineage": true, "claim_dispositions": true}
 	if !allowed[table] {
 		t.Fatal(errors.New("test requested unsafe table"))
 	}
