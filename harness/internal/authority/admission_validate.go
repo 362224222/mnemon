@@ -152,15 +152,13 @@ func rejectIfClaimableTx(ctx context.Context, tx *sql.Tx,
 func currentClaimForAdmissionTx(ctx context.Context, tx *sql.Tx,
 	attachment agency.Attachment,
 ) (*projectedClaim, time.Time, error) {
-	var handlingValue, eventValue, digestValue, claimUntilValue string
+	var handlingValue, eventValue, claimUntilValue string
 	var fence uint64
-	var canonical []byte
-	err := tx.QueryRowContext(ctx, `SELECT h.handling_id, h.claim_fence, h.head_event_id,
-		e.event_digest, e.canonical_json, h.claim_until
-		FROM handlings h JOIN events e ON e.event_id = h.head_event_id
+	err := tx.QueryRowContext(ctx, `SELECT h.handling_id, h.claim_fence, h.head_event_id, h.claim_until
+		FROM handlings h
 		WHERE h.claim_attachment_id = ? AND h.target_principal_id = ? AND h.state = 'open'`,
 		attachment.ID().String(), attachment.Principal().String()).
-		Scan(&handlingValue, &fence, &eventValue, &digestValue, &canonical, &claimUntilValue)
+		Scan(&handlingValue, &fence, &eventValue, &claimUntilValue)
 	if err != nil {
 		return nil, time.Time{}, err
 	}
@@ -168,11 +166,7 @@ func currentClaimForAdmissionTx(ctx context.Context, tx *sql.Tx,
 	if err != nil {
 		return nil, time.Time{}, errors.New("admit Intent: corrupt claimed Handling ID")
 	}
-	eventRef, kind, payload, err := inspectStoredEvent(eventValue, digestValue, canonical)
-	if err != nil {
-		return nil, time.Time{}, err
-	}
-	artifacts, err := loadEventArtifactsTx(ctx, tx, eventRef.ID())
+	eventRef, kind, payload, artifacts, err := loadStoredEventTx(ctx, tx, eventValue)
 	if err != nil {
 		return nil, time.Time{}, err
 	}

@@ -286,12 +286,11 @@ func validateReplayEventTx(ctx context.Context, tx *sql.Tx, receipt agency.Recei
 	if !storedEvent.Valid || storedEvent.String != event.ID().String() {
 		return errors.New("admit Intent: accepted operation Event mismatch")
 	}
-	var digestValue string
-	if err := tx.QueryRowContext(ctx, "SELECT event_digest FROM events WHERE event_id = ?",
-		storedEvent.String).Scan(&digestValue); err != nil {
+	storedRef, _, _, _, err := loadStoredEventTx(ctx, tx, storedEvent.String)
+	if err != nil {
 		return fmt.Errorf("admit Intent: inspect replay Event: %w", err)
 	}
-	if digestValue != event.Digest().String() {
+	if storedRef != event {
 		return errors.New("admit Intent: replay Event digest mismatch")
 	}
 	return nil

@@ -185,6 +185,45 @@ func TestCurrentReplayRejectsCorruptStoredProjection(t *testing.T) {
 	}
 }
 
+func TestCurrentRejectsEventAuthorityColumnDivergence(t *testing.T) {
+	fixture := newAuthorityFixture(t, "principal:event-column-corruption")
+	root := rootRequest(t, fixture.current(t), "operation:event-column-root", "durable work")
+	if _, err := fixture.store.Admit(fixture.ctx, fixture.proof, root); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.db.Exec("UPDATE events SET request_digest = ?",
+		agency.Sum([]byte("different request")).String()); err != nil {
+		t.Fatal(err)
+	}
+	_, err := fixture.store.Current(fixture.ctx, fixture.proof,
+		mustCurrentOperation(t, "operation:event-column-current"))
+	if err == nil || !strings.Contains(err.Error(), "authority columns diverge") {
+		t.Fatalf("Current with divergent Event columns = %v", err)
+	}
+}
+
+func TestCurrentRejectsEventArtifactPinDivergence(t *testing.T) {
+	fixture := newAuthorityFixture(t, "principal:event-pin-corruption")
+	root := rootRequest(t, fixture.current(t), "operation:event-pin-root", "durable work")
+	if _, err := fixture.store.Admit(fixture.ctx, fixture.proof, root); err != nil {
+		t.Fatal(err)
+	}
+	digest := fixture.catalog(t, "unrelated Artifact pin")
+	var eventID string
+	if err := fixture.store.db.QueryRow("SELECT event_id FROM events LIMIT 1").Scan(&eventID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.db.Exec(`INSERT INTO event_artifacts(event_id, artifact_digest)
+		VALUES(?, ?)`, eventID, digest.String()); err != nil {
+		t.Fatal(err)
+	}
+	_, err := fixture.store.Current(fixture.ctx, fixture.proof,
+		mustCurrentOperation(t, "operation:event-pin-current"))
+	if err == nil || !strings.Contains(err.Error(), "Artifact pins diverge") {
+		t.Fatalf("Current with divergent Event pins = %v", err)
+	}
+}
+
 func TestCurrentViewHandleBindsAttachmentOperationAndAuthority(t *testing.T) {
 	fixture := newAuthorityFixture(t, "principal:current-handle")
 	tx, err := fixture.store.db.BeginTx(fixture.ctx, nil)

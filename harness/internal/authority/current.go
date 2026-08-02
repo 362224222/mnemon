@@ -205,9 +205,8 @@ func insertCurrentOperationTx(ctx context.Context, tx *sql.Tx, attachment agency
 func existingClaimTx(ctx context.Context, tx *sql.Tx,
 	attachment agency.Attachment,
 ) (*projectedClaim, error) {
-	row := tx.QueryRowContext(ctx, `SELECT h.handling_id, h.claim_fence, h.head_event_id,
-		e.event_digest, e.canonical_json
-		FROM handlings h JOIN events e ON e.event_id = h.head_event_id
+	row := tx.QueryRowContext(ctx, `SELECT h.handling_id, h.claim_fence, h.head_event_id
+		FROM handlings h
 		WHERE h.claim_attachment_id = ? AND h.target_principal_id = ? AND h.state = 'open'`,
 		attachment.ID().String(), attachment.Principal().String())
 	return scanProjectedClaim(ctx, tx, row)
@@ -237,9 +236,8 @@ func claimOldestTx(ctx context.Context, tx *sql.Tx,
 	if rows != 1 {
 		return nil, errors.New("current View: claim cardinality violated")
 	}
-	row := tx.QueryRowContext(ctx, `SELECT h.handling_id, h.claim_fence, h.head_event_id,
-		e.event_digest, e.canonical_json
-		FROM handlings h JOIN events e ON e.event_id = h.head_event_id
+	row := tx.QueryRowContext(ctx, `SELECT h.handling_id, h.claim_fence, h.head_event_id
+		FROM handlings h
 		WHERE h.handling_id = ?`, handlingValue)
 	return scanProjectedClaim(ctx, tx, row)
 }
@@ -249,21 +247,16 @@ type rowScanner interface {
 }
 
 func scanProjectedClaim(ctx context.Context, tx *sql.Tx, row rowScanner) (*projectedClaim, error) {
-	var handlingValue, eventValue, digestValue string
+	var handlingValue, eventValue string
 	var fence uint64
-	var canonical []byte
-	if err := row.Scan(&handlingValue, &fence, &eventValue, &digestValue, &canonical); err != nil {
+	if err := row.Scan(&handlingValue, &fence, &eventValue); err != nil {
 		return nil, err
 	}
 	handlingID, err := agency.NewHandlingID(handlingValue)
 	if err != nil {
 		return nil, errors.New("current View: corrupt Handling ID")
 	}
-	eventRef, kind, payload, err := inspectStoredEvent(eventValue, digestValue, canonical)
-	if err != nil {
-		return nil, err
-	}
-	artifacts, err := loadEventArtifactsTx(ctx, tx, eventRef.ID())
+	eventRef, kind, payload, artifacts, err := loadStoredEventTx(ctx, tx, eventValue)
 	if err != nil {
 		return nil, err
 	}
