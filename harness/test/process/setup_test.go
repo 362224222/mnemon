@@ -90,7 +90,6 @@ type setupProcessDoctorReport struct {
 	Scope            string                           `json:"scope"`
 	Status           string                           `json:"status"`
 }
-
 type setupProcessPIDSnapshot struct {
 	record setupProcessPID
 	raw    []byte
