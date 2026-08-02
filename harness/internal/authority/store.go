@@ -24,21 +24,40 @@ const (
 // lock excludes a second Store, while the mutex makes Close and transactions
 // have one explicit in-process owner.
 type Store struct {
-	mu       sync.Mutex
-	db       *sql.DB
-	path     string
-	lockFile *os.File
-	closed   bool
-	now      func() time.Time
+	mu               sync.Mutex
+	db               *sql.DB
+	path             string
+	lockFile         *os.File
+	closed           bool
+	now              func() time.Time
+	artifactVerifier ArtifactVerifier
 }
 
 // Open acquires the writer guard and initializes only an empty version-zero
 // database. It never migrates another schema.
 func Open(ctx context.Context, databasePath string) (*Store, error) {
-	return open(ctx, databasePath, time.Now)
+	return openWithVerifier(ctx, databasePath, time.Now, nil)
 }
 
 func open(ctx context.Context, databasePath string, now func() time.Time) (_ *Store, err error) {
+	return openWithVerifier(ctx, databasePath, now, nil)
+}
+
+// OpenWithArtifactVerifier requires final admission to re-read and hash exact
+// CAS bytes through verifier. Open without a verifier remains useful for
+// artifact-free local effects and fails closed for Artifact-bearing effects.
+func OpenWithArtifactVerifier(ctx context.Context, databasePath string,
+	verifier ArtifactVerifier,
+) (*Store, error) {
+	if verifier == nil {
+		return nil, errors.New("open authority store: nil Artifact verifier")
+	}
+	return openWithVerifier(ctx, databasePath, time.Now, verifier)
+}
+
+func openWithVerifier(ctx context.Context, databasePath string, now func() time.Time,
+	verifier ArtifactVerifier,
+) (_ *Store, err error) {
 	if ctx == nil || now == nil {
 		return nil, errors.New("open authority store: nil context or clock")
 	}
@@ -82,7 +101,8 @@ func open(ctx context.Context, databasePath string, now func() time.Time) (_ *St
 	if err = plan.verifyAfterSQLite(); err != nil {
 		return nil, err
 	}
-	return &Store{db: db, path: plan.databasePath, lockFile: lockFile, now: now}, nil
+	return &Store{db: db, path: plan.databasePath, lockFile: lockFile, now: now,
+		artifactVerifier: verifier}, nil
 }
 
 func (s *Store) Path() string {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -214,7 +215,10 @@ func TestOpenRejectsWrongOrIncompleteSchemaIdentity(t *testing.T) {
 
 func TestOpenRejectsSchemaDriftAndMissingClock(t *testing.T) {
 	for _, mutation := range []string{"CREATE TABLE unexpected(value TEXT) STRICT",
-		"ALTER TABLE attachments RENAME COLUMN mode TO wrong_mode", "DELETE FROM authority_clock"} {
+		"ALTER TABLE attachments RENAME COLUMN mode TO wrong_mode", "DELETE FROM authority_clock",
+		"DROP INDEX handlings_attachment_slot",
+		`DROP INDEX handlings_attachment_slot;
+		 CREATE UNIQUE INDEX handlings_attachment_slot ON handlings(claim_attachment_id) WHERE 0`} {
 		t.Run(mutation, func(t *testing.T) {
 			path := testDatabasePath(t)
 			store, err := Open(context.Background(), path)
@@ -243,6 +247,30 @@ func TestOpenRejectsSchemaDriftAndMissingClock(t *testing.T) {
 				t.Fatalf("Open(drifted schema) = (%v, %v), want ErrUnsupportedSchema", opened, err)
 			}
 		})
+	}
+}
+
+func TestOpenRejectsSameIdentityWithWeakenedSchemaConstraint(t *testing.T) {
+	path := testDatabasePath(t)
+	db := createPrivateSQLite(t, path)
+	needle := "state TEXT NOT NULL CHECK (state IN ('open', 'terminal'))"
+	weakened := strings.Replace(currentSchema, needle, "state TEXT NOT NULL", 1)
+	if weakened == currentSchema {
+		t.Fatal("test did not weaken the embedded schema")
+	}
+	if _, err := db.Exec(weakened); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	opened, err := Open(context.Background(), path)
+	if opened != nil || !errors.Is(err, ErrUnsupportedSchema) {
+		if opened != nil {
+			_ = opened.Close()
+		}
+		t.Fatalf("Open(weakened schema) = (%v, %v), want ErrUnsupportedSchema", opened, err)
 	}
 }
 

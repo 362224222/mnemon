@@ -61,6 +61,19 @@ CREATE TABLE operations (
            (outcome = 'rejected' AND event_id IS NULL))
 ) STRICT, WITHOUT ROWID;
 
+CREATE TABLE current_operations (
+    attachment_id TEXT NOT NULL REFERENCES attachments(attachment_id),
+    operation_key TEXT NOT NULL,
+    request_digest TEXT NOT NULL,
+    view_handle TEXT NOT NULL,
+    authority_digest TEXT NOT NULL,
+    authority_json BLOB NOT NULL,
+    agent_view_digest TEXT NOT NULL,
+    agent_view_json BLOB NOT NULL,
+    PRIMARY KEY(attachment_id, operation_key),
+    UNIQUE(attachment_id, view_handle)
+) STRICT, WITHOUT ROWID;
+
 CREATE TABLE handlings (
     handling_id TEXT PRIMARY KEY,
     target_principal_id TEXT NOT NULL REFERENCES principals(principal_id),
@@ -80,6 +93,10 @@ CREATE TABLE handlings (
 
 CREATE INDEX handlings_claimable
 ON handlings(target_principal_id, state, created_sequence);
+
+CREATE UNIQUE INDEX handlings_attachment_slot
+ON handlings(claim_attachment_id)
+WHERE claim_attachment_id IS NOT NULL;
 
 CREATE TABLE active_references (
     reference_key TEXT PRIMARY KEY,
@@ -104,4 +121,4 @@ CREATE INDEX reference_lineage_key
 ON reference_lineage(reference_key, event_id);
 
 PRAGMA application_id = 1296978487;
-PRAGMA user_version = 1;
+PRAGMA user_version = 2;

@@ -15,6 +15,25 @@ import (
 // manifest model.
 const MaxArtifactBytes = 4 << 20
 
+// ArtifactVerifier is the narrow, neutral seam to immutable CAS bytes. A
+// successful call means the exact object was read within maximum bytes and
+// hashed to digest during this admission attempt; catalog presence alone is
+// never sufficient.
+type ArtifactVerifier interface {
+	VerifyArtifact(context.Context, agency.Digest, int64) error
+}
+
+type ArtifactVerifierFunc func(context.Context, agency.Digest, int64) error
+
+func (verify ArtifactVerifierFunc) VerifyArtifact(ctx context.Context, digest agency.Digest,
+	byteSize int64,
+) error {
+	if verify == nil {
+		return errors.New("verify Artifact: nil verifier")
+	}
+	return verify(ctx, digest, byteSize)
+}
+
 // VerifiedArtifact is created only by hashing the exact bytes. The catalog
 // records availability metadata; bytes remain in the external CAS.
 type VerifiedArtifact struct {

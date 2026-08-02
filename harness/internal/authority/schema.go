@@ -10,12 +10,12 @@ import (
 )
 
 const (
-	SchemaVersion       = 1
+	SchemaVersion       = 2
 	schemaApplicationID = 0x4d4e5237 // MNR7
 )
 
 //go:embed schema.sql
-var schemaV1 string
+var currentSchema string
 
 func configureAuthoritySQLite(ctx context.Context, db *sql.DB) error {
 	if err := db.PingContext(ctx); err != nil {
@@ -74,11 +74,11 @@ func initializeSchema(ctx context.Context, db *sql.DB) error {
 		return fmt.Errorf("open authority store: begin schema: %w", err)
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, schemaV1); err != nil {
-		return fmt.Errorf("open authority store: create schema v1: %w", err)
+	if _, err := tx.ExecContext(ctx, currentSchema); err != nil {
+		return fmt.Errorf("open authority store: create schema v%d: %w", SchemaVersion, err)
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("open authority store: commit schema v1: %w", err)
+		return fmt.Errorf("open authority store: commit schema v%d: %w", SchemaVersion, err)
 	}
 	return nil
 }
@@ -118,70 +118,11 @@ func validateDatabase(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
-type schemaColumn struct {
+type schemaDefinition struct {
+	objectType string
 	name       string
-	columnType string
-	primaryKey int
-}
-
-type schemaTable struct {
-	name    string
-	columns []schemaColumn
-}
-
-var requiredSchema = []schemaTable{
-	{name: "active_references", columns: []schemaColumn{
-		{name: "reference_key", columnType: "TEXT", primaryKey: 1},
-		{name: "head_event_id", columnType: "TEXT"}, {name: "state", columnType: "TEXT"},
-		{name: "artifact_digest", columnType: "TEXT"},
-	}},
-	{name: "attachments", columns: []schemaColumn{
-		{name: "attachment_id", columnType: "TEXT", primaryKey: 1},
-		{name: "principal_id", columnType: "TEXT"}, {name: "mode", columnType: "TEXT"},
-		{name: "credential_digest", columnType: "TEXT"}, {name: "issued_at", columnType: "TEXT"},
-		{name: "expires_at", columnType: "TEXT"},
-	}},
-	{name: "authority_clock", columns: []schemaColumn{
-		{name: "singleton", columnType: "INTEGER", primaryKey: 1},
-		{name: "origin_sequence", columnType: "INTEGER"},
-	}},
-	{name: "event_artifacts", columns: []schemaColumn{
-		{name: "event_id", columnType: "TEXT", primaryKey: 1},
-		{name: "artifact_digest", columnType: "TEXT", primaryKey: 2},
-	}},
-	{name: "events", columns: []schemaColumn{
-		{name: "event_id", columnType: "TEXT", primaryKey: 1},
-		{name: "event_digest", columnType: "TEXT"}, {name: "origin_sequence", columnType: "INTEGER"},
-		{name: "source_principal_id", columnType: "TEXT"}, {name: "request_digest", columnType: "TEXT"},
-		{name: "accepted_at", columnType: "TEXT"}, {name: "canonical_json", columnType: "BLOB"},
-	}},
-	{name: "handlings", columns: []schemaColumn{
-		{name: "handling_id", columnType: "TEXT", primaryKey: 1},
-		{name: "target_principal_id", columnType: "TEXT"}, {name: "head_event_id", columnType: "TEXT"},
-		{name: "state", columnType: "TEXT"}, {name: "outcome", columnType: "TEXT"},
-		{name: "claim_attachment_id", columnType: "TEXT"}, {name: "claim_fence", columnType: "INTEGER"},
-		{name: "claim_until", columnType: "TEXT"}, {name: "created_sequence", columnType: "INTEGER"},
-	}},
-	{name: "operations", columns: []schemaColumn{
-		{name: "actor_principal_id", columnType: "TEXT", primaryKey: 1},
-		{name: "operation_key", columnType: "TEXT", primaryKey: 2},
-		{name: "request_digest", columnType: "TEXT"}, {name: "outcome", columnType: "TEXT"},
-		{name: "event_id", columnType: "TEXT"}, {name: "receipt_digest", columnType: "TEXT"},
-		{name: "receipt_json", columnType: "BLOB"}, {name: "recorded_at", columnType: "TEXT"},
-	}},
-	{name: "principals", columns: []schemaColumn{
-		{name: "principal_id", columnType: "TEXT", primaryKey: 1},
-		{name: "created_at", columnType: "TEXT"},
-	}},
-	{name: "reference_lineage", columns: []schemaColumn{
-		{name: "event_id", columnType: "TEXT", primaryKey: 1},
-		{name: "reference_key", columnType: "TEXT"}, {name: "previous_event_id", columnType: "TEXT"},
-		{name: "state", columnType: "TEXT"}, {name: "artifact_digest", columnType: "TEXT"},
-	}},
-	{name: "verified_artifacts", columns: []schemaColumn{
-		{name: "digest", columnType: "TEXT", primaryKey: 1},
-		{name: "byte_size", columnType: "INTEGER"}, {name: "verified_at", columnType: "TEXT"},
-	}},
+	table      string
+	sql        string
 }
 
 func validateSchemaShape(ctx context.Context, db *sql.DB) error {
@@ -195,60 +136,53 @@ func validateSchemaShape(ctx context.Context, db *sql.DB) error {
 	if applicationID != schemaApplicationID || version != SchemaVersion {
 		return fmt.Errorf("%w: schema identity changed", ErrUnsupportedSchema)
 	}
-	rows, err := db.QueryContext(ctx, `SELECT name FROM sqlite_schema
-		WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`)
+	want, err := expectedSchemaDefinitions(ctx)
 	if err != nil {
-		return fmt.Errorf("open authority store: list schema tables: %w", err)
+		return err
 	}
-	var names []string
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			_ = rows.Close()
-			return fmt.Errorf("open authority store: scan schema table: %w", err)
-		}
-		names = append(names, name)
+	got, err := readSchemaDefinitions(ctx, db)
+	if err != nil {
+		return err
 	}
-	if err := rows.Close(); err != nil {
-		return fmt.Errorf("open authority store: close schema table list: %w", err)
-	}
-	wantNames := make([]string, 0, len(requiredSchema))
-	for _, table := range requiredSchema {
-		wantNames = append(wantNames, table.name)
-	}
-	if !slices.Equal(names, wantNames) {
-		return fmt.Errorf("%w: application table set does not match schema v%d", ErrUnsupportedSchema, SchemaVersion)
-	}
-	for _, table := range requiredSchema {
-		if err := validateTableColumns(ctx, db, table); err != nil {
-			return err
-		}
+	if !slices.Equal(got, want) {
+		return fmt.Errorf("%w: durable schema does not exactly match schema v%d",
+			ErrUnsupportedSchema, SchemaVersion)
 	}
 	return nil
 }
 
-func validateTableColumns(ctx context.Context, db *sql.DB, table schemaTable) error {
-	rows, err := db.QueryContext(ctx,
-		"SELECT name, type, pk FROM pragma_table_info(?) ORDER BY cid", table.name)
+func expectedSchemaDefinitions(ctx context.Context) ([]schemaDefinition, error) {
+	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
-		return fmt.Errorf("open authority store: inspect table %s: %w", table.name, err)
+		return nil, fmt.Errorf("open authority store: construct schema oracle: %w", err)
+	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	defer db.Close()
+	if _, err := db.ExecContext(ctx, currentSchema); err != nil {
+		return nil, fmt.Errorf("open authority store: construct schema oracle: %w", err)
+	}
+	return readSchemaDefinitions(ctx, db)
+}
+
+func readSchemaDefinitions(ctx context.Context, db *sql.DB) ([]schemaDefinition, error) {
+	rows, err := db.QueryContext(ctx, `SELECT type, name, tbl_name, sql FROM sqlite_schema
+		WHERE name NOT LIKE 'sqlite_%' AND sql IS NOT NULL ORDER BY type, name`)
+	if err != nil {
+		return nil, fmt.Errorf("open authority store: inspect canonical schema: %w", err)
 	}
 	defer rows.Close()
-	var columns []schemaColumn
+	var definitions []schemaDefinition
 	for rows.Next() {
-		var column schemaColumn
-		if err := rows.Scan(&column.name, &column.columnType, &column.primaryKey); err != nil {
-			return fmt.Errorf("open authority store: scan table %s: %w", table.name, err)
+		var definition schemaDefinition
+		if err := rows.Scan(&definition.objectType, &definition.name, &definition.table,
+			&definition.sql); err != nil {
+			return nil, fmt.Errorf("open authority store: scan canonical schema: %w", err)
 		}
-		column.columnType = strings.ToUpper(column.columnType)
-		columns = append(columns, column)
+		definitions = append(definitions, definition)
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("open authority store: inspect table %s: %w", table.name, err)
+		return nil, fmt.Errorf("open authority store: inspect canonical schema: %w", err)
 	}
-	if !slices.Equal(columns, table.columns) {
-		return fmt.Errorf("%w: table %s columns do not match schema v%d",
-			ErrUnsupportedSchema, table.name, SchemaVersion)
-	}
-	return nil
+	return definitions, nil
 }
