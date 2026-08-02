@@ -10,6 +10,7 @@ var (
 	ErrAttachmentAuth       = errors.New("authority: attachment authentication failed")
 	ErrAttachmentExpired    = errors.New("authority: attachment expired")
 	ErrOperationConflict    = errors.New("authority: operation key reused with different request")
+	ErrCurrentUnavailable   = errors.New("authority: Current operation was not issued")
 	ErrArtifactUnavailable  = errors.New("authority: verified Artifact unavailable")
 	ErrReferenceUnavailable = errors.New("authority: Reference unavailable")
 )

@@ -130,6 +130,42 @@ func (s *Store) Current(ctx context.Context, proof AttachmentProof,
 	return view, nil
 }
 
+// ReplayCurrent authenticates the exact attachment and returns only a View
+// already frozen by Current. Absence fails closed: this path never claims a
+// Handling, settles expiry, inserts an operation, or renews any authority.
+func (s *Store) ReplayCurrent(ctx context.Context, proof AttachmentProof,
+	operation CurrentOperation,
+) (BoundView, error) {
+	if ctx == nil {
+		return BoundView{}, errors.New("replay current View: nil context")
+	}
+	if !operation.valid() {
+		return BoundView{}, errors.New("replay current View: valid machine operation is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.requireOpen(); err != nil {
+		return BoundView{}, err
+	}
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return BoundView{}, fmt.Errorf("replay current View: begin: %w", err)
+	}
+	defer tx.Rollback()
+	authenticated, err := authenticateAttachmentTx(ctx, tx, proof)
+	if err != nil {
+		return BoundView{}, err
+	}
+	view, found, err := currentReplayTx(ctx, tx, authenticated.value, operation)
+	if err != nil {
+		return BoundView{}, err
+	}
+	if !found {
+		return BoundView{}, ErrCurrentUnavailable
+	}
+	return view, nil
+}
+
 func currentReplayTx(ctx context.Context, tx *sql.Tx, attachment agency.Attachment,
 	operation CurrentOperation,
 ) (BoundView, bool, error) {
