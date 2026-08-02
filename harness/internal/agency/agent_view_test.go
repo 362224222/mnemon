@@ -1,0 +1,253 @@
+package agency
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"testing"
+)
+
+func TestAgentViewProjectsOnlyBoundedPublicWorld(t *testing.T) {
+	principal := mustPrincipal(t, "agent:local")
+	attachment := mustAttachment(t, "attachment:public-view", principal, true)
+	self, _ := ResolveLocalTarget(SelfTarget(), principal)
+	aliasRef := mustAliasTarget(t, "target:assistant")
+	alias, _ := ResolveLocalTarget(aliasRef, mustPrincipal(t, "agent:assistant"))
+	currentHandle := mustHandle(t, "subject:current")
+	currentArtifact := mustHandle(t, "artifact:current")
+	activeArtifact := mustHandle(t, "artifact:active-reference")
+	activeHead := mustHandle(t, "reference:active")
+	retractedHead := mustHandle(t, "reference:retracted")
+
+	authority := mustView(t, MachineViewSpec{
+		Attachment: attachment,
+		Consequences: []Consequence{
+			ConsequenceCreateHandlings, ConsequenceAdvanceHandling,
+			ConsequenceResolveCompleted, ConsequenceSupersedeReference, ConsequenceRetractReference,
+		},
+		Subjects: []SubjectBinding{
+			mustSubject(t, currentHandle, "handling:private", "event:private-head", "private-head", 9),
+		},
+		References: []ReferenceExpectation{
+			mustReference(t, activeHead, "knowledge-active", "event:active-head", "active-head"),
+			mustReference(t, retractedHead, "knowledge-retracted", "event:retracted-head", "retracted-head"),
+		},
+		Targets: []ResolvedTarget{alias, self},
+		Artifacts: []ViewArtifactOffer{
+			mustViewOffer(t, activeArtifact, "active reference bytes"),
+			mustViewOffer(t, currentArtifact, "current bytes"),
+		},
+		Provenance: []ProvenanceOffer{
+			mustProvenance(t, mustHandle(t, "cause:prior"), "event:prior", "prior"),
+		},
+	})
+
+	view, err := NewAgentView(AgentViewSpec{
+		Handle:    mustHandle(t, "view:opaque"),
+		Authority: authority,
+		Current: &AgentViewCurrentSpec{
+			Subject: currentHandle, Kind: mustLabel(t, "custom.agent.signal"),
+			Payload:   mustPayload(t, "Inspect the bounded material and choose one allowed effect."),
+			Artifacts: []OpaqueHandle{currentArtifact},
+		},
+		References: []AgentViewReferenceSpec{
+			{Head: retractedHead, State: AgentViewReferenceStateRetracted},
+			{Head: activeHead, State: AgentViewReferenceStateActive, Artifact: activeArtifact},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewAgentView() error = %v", err)
+	}
+
+	var wire agentViewWire
+	if err := json.Unmarshal(view.CanonicalJSON(), &wire); err != nil {
+		t.Fatalf("json.Unmarshal(AgentView) error = %v", err)
+	}
+	if wire.Schema != AgentViewSchema || wire.Version != AgentViewVersion || wire.View != "view:opaque" {
+		t.Fatalf("Agent View envelope = %#v", wire)
+	}
+	if wire.Current == nil || wire.Current.Facts.Handle != currentHandle.String() ||
+		wire.Current.Semantic.Kind != "custom.agent.signal" || len(wire.Current.Facts.Artifacts) != 1 {
+		t.Fatalf("current projection = %#v", wire.Current)
+	}
+	if len(wire.References) != 2 || wire.References[0].Facts.State != "active" ||
+		wire.References[0].Facts.Artifact == nil || wire.References[1].Facts.State != "retracted" ||
+		wire.References[1].Facts.Artifact != nil {
+		t.Fatalf("Reference projections = %#v", wire.References)
+	}
+	if got := strings.Join(wire.Targets, ","); got != "self,target:assistant" {
+		t.Fatalf("target aliases = %q", got)
+	}
+	if len(wire.AllowedIntents) != 5 || wire.AllowedIntents[0].Consequence > wire.AllowedIntents[1].Consequence {
+		t.Fatalf("allowed Intent shapes = %#v", wire.AllowedIntents)
+	}
+	if got := strings.Join(wire.Provenance, ","); got != "cause:prior" {
+		t.Fatalf("provenance handles = %q", got)
+	}
+	assertNoPrivateViewKeys(t, view.CanonicalJSON())
+	for _, privateValue := range []string{
+		principal.String(), attachment.ID().String(), "handling:private", "event:private-head",
+		authority.Digest().String(),
+	} {
+		if bytes.Contains(view.CanonicalJSON(), []byte(privateValue)) {
+			t.Fatalf("Agent View exposes private value %q: %s", privateValue, view.CanonicalJSON())
+		}
+	}
+
+	first := view.CanonicalJSON()
+	first[0] = '['
+	if view.CanonicalJSON()[0] != '{' {
+		t.Fatal("CanonicalJSON returned mutable backing storage")
+	}
+}
+
+func TestAgentViewRejectsProjectionThatDivergesFromAuthority(t *testing.T) {
+	principal := mustPrincipal(t, "agent:local")
+	attachment := mustAttachment(t, "attachment:projection-check", principal, true)
+	currentHandle := mustHandle(t, "subject:current")
+	artifactHandle := mustHandle(t, "artifact:offered")
+	viewHandle := mustHandle(t, "view:projection-check")
+	authority := mustView(t, MachineViewSpec{
+		Attachment:   attachment,
+		Consequences: []Consequence{ConsequenceAdvanceHandling},
+		Subjects: []SubjectBinding{
+			mustSubject(t, currentHandle, "handling:private", "event:head", "head", 3),
+		},
+		Artifacts: []ViewArtifactOffer{mustViewOffer(t, artifactHandle, "bytes")},
+	})
+
+	if _, err := NewAgentView(AgentViewSpec{Handle: viewHandle, Authority: authority}); !errors.Is(err, ErrInvariant) {
+		t.Fatalf("missing current error = %v, want ErrInvariant", err)
+	}
+	current := &AgentViewCurrentSpec{Subject: currentHandle, Kind: mustLabel(t, "custom.agent.signal")}
+	if _, err := NewAgentView(AgentViewSpec{Handle: viewHandle, Authority: authority,
+		Current: current}); !errors.Is(err, ErrInvariant) {
+		t.Fatalf("hidden Artifact error = %v, want ErrInvariant", err)
+	}
+	current.Artifacts = []OpaqueHandle{artifactHandle}
+	if _, err := NewAgentView(AgentViewSpec{Handle: viewHandle, Authority: authority,
+		Current: current}); err != nil {
+		t.Fatalf("exact projection error = %v", err)
+	}
+
+	referenceHead := mustHandle(t, "reference:head")
+	referenceAuthority := mustView(t, MachineViewSpec{
+		Attachment: attachment, Consequences: []Consequence{ConsequenceSupersedeReference},
+		References: []ReferenceExpectation{
+			mustReference(t, referenceHead, "knowledge-entry", "event:reference", "reference"),
+		},
+	})
+	if _, err := NewAgentView(AgentViewSpec{Handle: viewHandle, Authority: referenceAuthority}); !errors.Is(err, ErrInvariant) {
+		t.Fatalf("missing Reference error = %v, want ErrInvariant", err)
+	}
+	if _, err := NewAgentView(AgentViewSpec{Handle: viewHandle, Authority: referenceAuthority,
+		References: []AgentViewReferenceSpec{{Head: referenceHead, State: AgentViewReferenceStateActive}},
+	}); !errors.Is(err, ErrInvariant) {
+		t.Fatalf("active Reference without Artifact error = %v, want ErrInvariant", err)
+	}
+	if _, err := NewAgentView(AgentViewSpec{Handle: viewHandle, Authority: referenceAuthority,
+		References: []AgentViewReferenceSpec{{Head: referenceHead, State: AgentViewReferenceStateRetracted}},
+	}); err != nil {
+		t.Fatalf("retracted Reference projection error = %v", err)
+	}
+}
+
+func TestAgentViewHasByteAndApproximateTokenRegressionBudget(t *testing.T) {
+	principal := mustPrincipal(t, "agent:local")
+	attachment := mustAttachment(t, "attachment:budget", principal, true)
+	self, _ := ResolveLocalTarget(SelfTarget(), principal)
+	current := mustHandle(t, "subject:current")
+	artifact := mustHandle(t, "artifact:current")
+	authority := mustView(t, MachineViewSpec{
+		Attachment: attachment,
+		Consequences: []Consequence{
+			ConsequenceCreateHandlings, ConsequenceAdvanceHandling, ConsequenceResolveCompleted,
+			ConsequenceResolveDeclined, ConsequenceResolveUnresolved, ConsequencePublishReference,
+		},
+		Subjects: []SubjectBinding{mustSubject(t, current, "handling:private", "event:head", "head", 1)},
+		Targets:  []ResolvedTarget{self}, Artifacts: []ViewArtifactOffer{mustViewOffer(t, artifact, "bytes")},
+	})
+	view, err := NewAgentView(AgentViewSpec{Handle: mustHandle(t, "view:budget"), Authority: authority,
+		Current: &AgentViewCurrentSpec{Subject: current, Kind: mustLabel(t, "custom.agent.signal"),
+			Payload: mustPayload(t, strings.Repeat("bounded context. ", 32)), Artifacts: []OpaqueHandle{artifact}},
+	})
+	if err != nil {
+		t.Fatalf("NewAgentView() error = %v", err)
+	}
+	bytesUsed := len(view.CanonicalJSON())
+	approximateTokens := (bytesUsed + 3) / 4
+	if bytesUsed > 4<<10 || approximateTokens > 1024 {
+		t.Fatalf("representative View uses %d bytes (~%d tokens), want <=4096 bytes and <=1024 tokens",
+			bytesUsed, approximateTokens)
+	}
+}
+
+func TestAgentViewFailsClosedAboveCanonicalByteLimit(t *testing.T) {
+	principal := mustPrincipal(t, "agent:local")
+	attachment := mustAttachment(t, "attachment:large-public-view", principal, true)
+	current := mustHandle(t, "subject:current")
+	artifacts := make([]ViewArtifactOffer, 0, MaxAgentViewReferences+1)
+	references := make([]ReferenceExpectation, 0, MaxAgentViewReferences)
+	publicReferences := make([]AgentViewReferenceSpec, 0, MaxAgentViewReferences)
+	for index := 0; index < MaxAgentViewReferences; index++ {
+		head := mustHandle(t, fmt.Sprintf("reference:%02d:%s", index, strings.Repeat("h", 120)))
+		artifact := mustHandle(t, fmt.Sprintf("artifact:%02d:%s", index, strings.Repeat("a", 120)))
+		artifacts = append(artifacts, mustViewOffer(t, artifact, fmt.Sprintf("artifact-%d", index)))
+		references = append(references, mustReference(t, head,
+			fmt.Sprintf("knowledge-%02d-%s", index, strings.Repeat("k", 120)),
+			fmt.Sprintf("event:reference:%02d", index), fmt.Sprintf("reference-%d", index)))
+		publicReferences = append(publicReferences, AgentViewReferenceSpec{
+			Head: head, State: AgentViewReferenceStateActive, Artifact: artifact,
+		})
+	}
+	currentArtifact := mustHandle(t, "artifact:current")
+	artifacts = append(artifacts, mustViewOffer(t, currentArtifact, "current"))
+	authority := mustView(t, MachineViewSpec{
+		Attachment: attachment, Consequences: []Consequence{ConsequenceAdvanceHandling},
+		Subjects:   []SubjectBinding{mustSubject(t, current, "handling:private", "event:head", "head", 1)},
+		References: references, Artifacts: artifacts,
+	})
+	_, err := NewAgentView(AgentViewSpec{
+		Handle: mustHandle(t, "view:large"), Authority: authority,
+		Current: &AgentViewCurrentSpec{Subject: current, Kind: mustLabel(t, "custom.agent.signal"),
+			Payload:   mustPayload(t, strings.Repeat("p", MaxSemanticPayloadBytes)),
+			Artifacts: []OpaqueHandle{currentArtifact}},
+		References: publicReferences,
+	})
+	if !errors.Is(err, ErrLimit) {
+		t.Fatalf("oversized public View error = %v, want ErrLimit", err)
+	}
+}
+
+func assertNoPrivateViewKeys(t *testing.T, data []byte) {
+	t.Helper()
+	var value any
+	if err := json.Unmarshal(data, &value); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	forbidden := map[string]bool{
+		"principal": true, "source_principal": true, "attachment": true, "attachment_id": true,
+		"operation_key": true, "handling_id": true, "event_id": true, "fence": true,
+		"route": true, "peer_color": true, "transcript": true, "credential": true,
+		"view_digest": true, "read_set": true,
+	}
+	var visit func(any)
+	visit = func(item any) {
+		switch typed := item.(type) {
+		case map[string]any:
+			for key, child := range typed {
+				if forbidden[key] {
+					t.Fatalf("Agent View exposes private field %q: %s", key, data)
+				}
+				visit(child)
+			}
+		case []any:
+			for _, child := range typed {
+				visit(child)
+			}
+		}
+	}
+	visit(value)
+}
