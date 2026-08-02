@@ -140,7 +140,20 @@ func (client *AgencyClient) Capture(ctx context.Context, content []byte) (
 }
 
 func (client *AgencyClient) Status(ctx context.Context) (node.AgencyStatusSnapshot, *APIError) {
-	if client == nil || client.transport == nil || client.transport.http == nil || ctx == nil {
+	if client == nil {
+		return node.AgencyStatusSnapshot{}, invalidControlResponse("local Agency client is unavailable")
+	}
+	return probeAgencyStatus(ctx, client.transport)
+}
+
+// ProbeAgencyStatus lets controller readiness prove that the optional R7
+// routes were mounted on the same control.sock as the existing local API.
+func (client *Client) ProbeAgencyStatus(ctx context.Context) (node.AgencyStatusSnapshot, *APIError) {
+	return probeAgencyStatus(ctx, client)
+}
+
+func probeAgencyStatus(ctx context.Context, transport *Client) (node.AgencyStatusSnapshot, *APIError) {
+	if transport == nil || transport.http == nil || ctx == nil {
 		return node.AgencyStatusSnapshot{}, invalidControlResponse("local Agency client is unavailable")
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet,
@@ -149,7 +162,7 @@ func (client *AgencyClient) Status(ctx context.Context) (node.AgencyStatusSnapsh
 		return node.AgencyStatusSnapshot{}, invalidControlResponse("local Agency request cannot be created")
 	}
 	var response agencyStatusWire
-	if apiErr := client.transport.send(request, &response, maxAgencyPrivateResponse); apiErr != nil {
+	if apiErr := transport.send(request, &response, maxAgencyPrivateResponse); apiErr != nil {
 		return node.AgencyStatusSnapshot{}, apiErr
 	}
 	if response.Schema != agencyStatusSchema || response.Version != agencyWireVersion ||
@@ -158,6 +171,8 @@ func (client *AgencyClient) Status(ctx context.Context) (node.AgencyStatusSnapsh
 	}
 	return node.AgencyStatusSnapshot{Ready: response.Status == "ready"}, nil
 }
+
+var _ node.AgencyStatusProbe = (*Client)(nil)
 
 func (client *AgencyClient) post(ctx context.Context, route string, input any,
 	headers http.Header, response any, maximum int64,

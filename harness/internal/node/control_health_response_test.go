@@ -19,6 +19,7 @@ type nodeTestControlServer struct {
 	lifecycle     LifecycleFunc
 	mutation      MutationShutdownPreparer
 	channels      ChannelService
+	agency        AgencyService
 	shutdownOnce  sync.Once
 	handler       http.Handler
 }
@@ -36,7 +37,33 @@ func (server *nodeTestControlServer) attachRoutes() {
 	mux.HandleFunc("/v1/channel/create", server.handleChannelCreate)
 	mux.HandleFunc("/v1/channel/join", server.handleChannelJoin)
 	mux.HandleFunc("/v1/channel/status", server.handleChannelStatus)
+	if server.agency != nil {
+		mux.HandleFunc("/v1/agency/status", server.handleAgencyStatus)
+	}
 	server.handler = mux
+}
+
+func (server *nodeTestControlServer) handleAgencyStatus(writer http.ResponseWriter,
+	request *http.Request,
+) {
+	if request.Method != http.MethodGet {
+		writeTestError(writer, NewAPIError(CodeInvalidArgument, "method is not allowed"))
+		return
+	}
+	snapshot, err := server.agency.AgencyStatus(request.Context())
+	if err != nil {
+		writeTestError(writer, NewAPIError(CodeMnemondUnavailable, "Agency status unavailable"))
+		return
+	}
+	status := "not_ready"
+	if snapshot.Ready {
+		status = "ready"
+	}
+	writeTestJSON(writer, http.StatusOK, struct {
+		Schema  string `json:"schema"`
+		Status  string `json:"status"`
+		Version int    `json:"version"`
+	}{Schema: "mnemon.agency.status", Status: status, Version: 1})
 }
 
 func (server *nodeTestControlServer) Handler() http.Handler { return server.handler }

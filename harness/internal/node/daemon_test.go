@@ -12,8 +12,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mnemon-dev/mnemon/harness/internal/agency"
 	"github.com/mnemon-dev/mnemon/harness/internal/agent"
+	"github.com/mnemon-dev/mnemon/harness/internal/artifact"
 	"github.com/mnemon-dev/mnemon/harness/internal/assets"
+	r7authority "github.com/mnemon-dev/mnemon/harness/internal/authority"
 	"github.com/mnemon-dev/mnemon/harness/internal/integration"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
@@ -44,6 +47,10 @@ func TestOpenDaemonBindsIdentityStoreCredentialAssetsAndSocket(t *testing.T) {
 	health, apiErr := client.ProbeHealth(context.Background())
 	if apiErr != nil || health.Status != "ready" || health.AssetRevision != fixture.revision {
 		t.Fatalf("ProbeHealth() = (%#v, %v)", health, apiErr)
+	}
+	agencyStatus, apiErr := client.ProbeAgencyStatus(context.Background())
+	if apiErr != nil || !agencyStatus.Ready {
+		t.Fatalf("ProbeAgencyStatus() = (%#v, %v)", agencyStatus, apiErr)
 	}
 	cancel()
 	if err := <-served; err != nil {
@@ -144,6 +151,38 @@ func TestOpenDaemonRejectsAuthorityDriftAndNeverCreatesMissingDatabase(t *testin
 		if _, err := os.Lstat(filepath.Join(nodeState, "node.db")); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("strict restart created node.db: %v", err)
 		}
+	})
+	t.Run("missing Agency database", func(t *testing.T) {
+		fixture := newDaemonFixture(t, true)
+		removeDaemonAgencyAuthority(t, fixture.nodeState)
+		if daemon, err := OpenDaemon(context.Background(), DaemonOptions{Workspace: fixture.workspace,
+			Install: fixture.install}); daemon != nil || !errors.Is(err, ErrDaemonAuthority) {
+			t.Fatalf("OpenDaemon(missing agency.db) = (%v, %v)", daemon, err)
+		}
+		if _, err := os.Lstat(filepath.Join(fixture.nodeState, "agency.db")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("strict restart created agency.db: %v", err)
+		}
+		assertDaemonNodeStoreReopenable(t, fixture.nodeState)
+	})
+	t.Run("Agency Principal mismatch", func(t *testing.T) {
+		fixture := newDaemonFixture(t, true)
+		removeDaemonAgencyAuthority(t, fixture.nodeState)
+		st, err := r7authority.Open(context.Background(), filepath.Join(fixture.nodeState, "agency.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		wrong, _ := agency.NewAgentPrincipalID("principal:wrong")
+		if err := st.EnrollPrincipal(context.Background(), wrong); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if daemon, err := OpenDaemon(context.Background(), DaemonOptions{Workspace: fixture.workspace,
+			Install: fixture.install}); daemon != nil || !errors.Is(err, ErrDaemonAuthority) {
+			t.Fatalf("OpenDaemon(wrong Agency Principal) = (%v, %v)", daemon, err)
+		}
+		assertDaemonStoreReopenable(t, fixture.nodeState)
 	})
 	t.Run("empty database", func(t *testing.T) {
 		fixture := newDaemonFixture(t, true)
@@ -459,12 +498,43 @@ func (*daemonCloseWorker) Snapshot() agent.WakeWorkerSnapshot {
 
 func assertDaemonStoreReopenable(t *testing.T, nodeState string) {
 	t.Helper()
+	assertDaemonNodeStoreReopenable(t, nodeState)
+	cas, err := artifact.NewCAS(filepath.Join(nodeState, "objects", "sha256"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := newR7ArtifactAdapter(cas)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := r7authority.OpenExistingWithArtifactVerifier(context.Background(),
+		filepath.Join(nodeState, "agency.db"), adapter)
+	if err != nil {
+		t.Fatalf("daemon retained Agency writer authority: %v", err)
+	}
+	if err := reopened.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertDaemonNodeStoreReopenable(t *testing.T, nodeState string) {
+	t.Helper()
 	reopened, err := store.OpenExisting(context.Background(), filepath.Join(nodeState, "node.db"))
 	if err != nil {
 		t.Fatalf("daemon retained Store writer authority: %v", err)
 	}
 	if err := reopened.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func removeDaemonAgencyAuthority(t *testing.T, nodeState string) {
+	t.Helper()
+	path := filepath.Join(nodeState, "agency.db")
+	for _, suffix := range []string{"", ".writer.lock", "-wal", "-shm"} {
+		if err := os.Remove(path + suffix); err != nil && !errors.Is(err, os.ErrNotExist) {
+			t.Fatal(err)
+		}
 	}
 }
 
@@ -539,13 +609,38 @@ func newDaemonFixture(t *testing.T, enabled bool) daemonFixture {
 		}
 		profile = activated.Profile
 	}
-	if err := st.Close(); err != nil {
-		t.Fatal(err)
-	}
+	finishDaemonAuthorityFixture(t, st, nodeState, profile.Principal())
 	writeDaemonToken(t, nodeState, credential, false)
 	return daemonFixture{workspace: workspace, nodeState: nodeState, identity: identity,
 		profile: profile, revision: bundle.Manifest().AssetRevision,
 		install: testInstallationVerifier(workspace, nodeState, bundle)}
+}
+
+func finishDaemonAuthorityFixture(t *testing.T, st *store.Store, nodeState, profilePrincipal string) {
+	t.Helper()
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	enrollDaemonAgencyPrincipal(t, nodeState, profilePrincipal)
+}
+
+func enrollDaemonAgencyPrincipal(t *testing.T, nodeState, profilePrincipal string) {
+	t.Helper()
+	principal, err := agencyPrincipalForValue(profilePrincipal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agencyStore, err := r7authority.Open(context.Background(), filepath.Join(nodeState, "agency.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := agencyStore.EnrollPrincipal(context.Background(), principal); err != nil {
+		_ = agencyStore.Close()
+		t.Fatal(err)
+	}
+	if err := agencyStore.Close(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func newDaemonWorkspace(t *testing.T) string {

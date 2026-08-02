@@ -69,6 +69,29 @@ func (s *Store) EnrollPrincipal(ctx context.Context, principal agency.AgentPrinc
 	return nil
 }
 
+// RequirePrincipal proves that setup enrolled the exact stable Principal. It
+// is read-only and is used by strict daemon composition after opening an
+// existing authority database.
+func (s *Store) RequirePrincipal(ctx context.Context, principal agency.AgentPrincipalID) error {
+	if ctx == nil || principal.IsZero() {
+		return errors.New("require Principal: Principal is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.requireOpen(); err != nil {
+		return err
+	}
+	var exists int
+	if err := s.db.QueryRowContext(ctx,
+		"SELECT EXISTS(SELECT 1 FROM principals WHERE principal_id = ?)", principal.String()).Scan(&exists); err != nil {
+		return fmt.Errorf("require Principal: %w", err)
+	}
+	if exists != 1 {
+		return ErrPrincipalUnavailable
+	}
+	return nil
+}
+
 // IssueInteractiveAttachment creates a short-lived initiation-capable
 // boundary. Random generation happens before the durable transaction; the
 // transaction contains no external callback.

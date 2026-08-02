@@ -22,6 +22,7 @@ type ControllerOptions struct {
 	Profile      model.Profile
 	Signer       event.PublicationSigner
 	Channels     ChannelService
+	Agency       AgencyService
 	Clock        Clock
 	Install      InstallationVerifier
 	Control      ControlRuntime
@@ -55,8 +56,10 @@ type managedNetworkRuntime interface {
 }
 
 // Controller is the single local composition root for mnemond-managed Agent
-// traffic. It owns no second domain state: every route reaches the one Store,
-// while CAS and readonly views stay beneath the same Node state directory.
+// traffic. Legacy routes retain their one R5 Store; the optional AgencyService
+// retains its independent R7 authority. The shared admission gate and HTTP
+// drain coordinate process lifecycle but deliberately do not claim a
+// cross-database transaction.
 type Controller struct {
 	nodeState         string
 	assetRevision     string
@@ -66,6 +69,7 @@ type Controller struct {
 	admission         *controllerAdmissionGate
 	wakeWorker        managedWakeWorker
 	networkRuntime    managedNetworkRuntime
+	agencyReady       bool
 	shutdown          *gracefulShutdown
 	shutdownRequested chan struct{}
 	shutdownOnce      sync.Once
@@ -77,6 +81,9 @@ type Controller struct {
 }
 
 func NewController(ctx context.Context, options ControllerOptions) (*Controller, error) {
+	if err := validateOptionalAgencyService(options.Agency); err != nil {
+		return nil, err
+	}
 	control, err := requireControlRuntime(options.Control)
 	if err != nil {
 		return nil, err
@@ -97,14 +104,23 @@ func NewController(ctx context.Context, options ControllerOptions) (*Controller,
 	}
 	controller := &Controller{nodeState: options.NodeState, assetRevision: assetRevision, store: options.Store,
 		control: options.Control, admission: admission, wakeWorker: composition.wakeWorker,
-		networkRuntime:    options.networkRuntime,
+		networkRuntime: options.networkRuntime, agencyReady: options.Agency != nil,
 		shutdownRequested: make(chan struct{}), beforeAccept: options.BeforeAccept,
 		shutdown: shutdown}
 	managedAgent := controllerAdmissionService{gate: admission, next: newLocalAPIServiceAdapter(composition.service)}
 	var managedService Service = managedAgent
 	if options.Channels != nil {
-		managedService = controllerChannelService{Service: managedAgent, gate: admission,
+		channelService := controllerChannelService{Service: managedAgent, gate: admission,
 			channels: options.Channels}
+		managedService = channelService
+		if options.Agency != nil {
+			managedService = controllerChannelAgencyService{Service: channelService,
+				ChannelService: channelService, AgencyService: controllerAgencyAdmissionService{
+					gate: admission, next: options.Agency}}
+		}
+	} else if options.Agency != nil {
+		managedService = controllerAgencyService{Service: managedAgent,
+			AgencyService: controllerAgencyAdmissionService{gate: admission, next: options.Agency}}
 	}
 	server, err := options.Control.NewControlServer(options.Store, managedService, composition.observer,
 		composition.observer, composition.observer, LifecycleFunc(controller.requestShutdown), controller)
@@ -116,8 +132,10 @@ func NewController(ctx context.Context, options ControllerOptions) (*Controller,
 }
 
 // PrepareMutationShutdown seals every Store-facing Agent admission path,
-// drains calls that entered before the seal, and then asks Store to prove the
-// authenticated Profile generation is exact and idle. Failure always reopens
+// including the optional R7 service, and drains calls that entered before the
+// seal. It then asks the R5 Store to prove the authenticated Profile generation
+// is exact and idle. This does not claim that R7 has no durable Handling; it
+// proves only that no R7 request remains in flight. Failure always reopens
 // admission; success returns a release callback for later server validation
 // failures, while the accepted shutdown deliberately retains the seal.
 func (controller *Controller) PrepareMutationShutdown(ctx context.Context,
@@ -194,7 +212,7 @@ func (controller *Controller) Serve(ctx context.Context) error {
 			// A successful authenticated round-trip proves owner socket, HTTP,
 			// credential, schema, and exact asset revision readiness.
 			return proveControllerHTTP(readyCtx, controller.control, controller.nodeState,
-				controller.assetRevision)
+				controller.assetRevision, controller.agencyReady)
 		},
 		Run: func(runCtx context.Context) error {
 			// Keep the inherited ensure.lock authority until every dependency is
@@ -308,7 +326,7 @@ func (tracker *controllerRequestTracker) seal() <-chan struct{} {
 }
 
 func proveControllerHTTP(ctx context.Context, control ControlClientFactory,
-	nodeState, assetRevision string,
+	nodeState, assetRevision string, requireAgency bool,
 ) error {
 	if ctx == nil || ctx.Err() != nil {
 		return errors.New("mnemond controller startup was cancelled")
@@ -327,6 +345,16 @@ func proveControllerHTTP(ctx context.Context, control ControlClientFactory,
 		health.AssetRevision != assetRevision ||
 		(health.Status != "ready" && health.Status != "not_ready") {
 		return errors.New("mnemond controller HTTP startup proof failed")
+	}
+	if requireAgency {
+		probe, ok := client.(AgencyStatusProbe)
+		if !ok {
+			return errors.New("mnemond controller Agency startup proof is unavailable")
+		}
+		status, apiErr := probe.ProbeAgencyStatus(probeCtx)
+		if apiErr != nil || !status.Ready {
+			return errors.New("mnemond controller Agency HTTP startup proof failed")
+		}
 	}
 	return nil
 }

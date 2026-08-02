@@ -22,6 +22,12 @@ type AgencyService interface {
 	AgencyStatus(context.Context) (AgencyStatusSnapshot, error)
 }
 
+// AgencyStatusProbe is the narrow startup proof for the optional Agency
+// capability mounted on the existing owner-only control socket.
+type AgencyStatusProbe interface {
+	ProbeAgencyStatus(context.Context) (AgencyStatusSnapshot, *APIError)
+}
+
 // AgencyAttachment is private machine material. A transport may return it to
 // the local CLI, but the CLI must never project it into an Agent View, Intent,
 // Receipt, argument, or diagnostic.

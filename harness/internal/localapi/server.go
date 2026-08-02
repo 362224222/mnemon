@@ -121,14 +121,11 @@ func newServer(authenticator Authenticator, service Service, health HealthProvid
 	mux.HandleFunc(RouteTeamworkAction, server.handleTeamworkAction)
 	mux.HandleFunc(RouteAgentResolve, server.handleAgentResolve)
 	server.registerChannelRoutes(mux)
-	server.handler = http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if !IsControlRoute(request.URL.Path) {
-			writeErrorStatus(writer, http.StatusNotFound,
-				NewAPIError(CodeInvalidArgument, "local control route does not exist"))
-			return
-		}
-		mux.ServeHTTP(writer, request)
-	})
+	agencyAvailable, err := registerAgencyRoutes(mux, service)
+	if err != nil {
+		return nil, err
+	}
+	server.handler = controlHandler(mux, agencyAvailable)
 	return server, nil
 }
 
@@ -518,7 +515,7 @@ func IsAgentRoute(path string) bool {
 
 func IsControlRoute(path string) bool {
 	return path == RouteHealth || path == RouteStatus || path == RouteAuthority ||
-		path == RouteShutdown || IsAgentRoute(path) || IsChannelRoute(path)
+		path == RouteShutdown || IsAgentRoute(path) || IsChannelRoute(path) || IsAgencyRoute(path)
 }
 
 func validTeamworkAction(action string) bool {

@@ -73,6 +73,11 @@ func IsAgencyRoute(path string) bool {
 		path == RouteAgencySubmit || path == RouteAgencyArtifacts || path == RouteAgencyStatus
 }
 
+func agencyRoutes() [5]string {
+	return [...]string{RouteAgencyAttachments, RouteAgencyCurrent, RouteAgencySubmit,
+		RouteAgencyArtifacts, RouteAgencyStatus}
+}
+
 func (server *AgencyServer) handleAttach(writer http.ResponseWriter, request *http.Request) {
 	if !prepareAgencyJSON(writer, request, false) || !rejectAgencyHeaders(writer, request, false, false) {
 		return

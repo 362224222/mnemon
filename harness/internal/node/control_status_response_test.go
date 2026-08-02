@@ -51,6 +51,23 @@ func (client *Client) ProbeHealth(ctx context.Context) (HealthResponse, *APIErro
 	return response, nil
 }
 
+func (client *Client) ProbeAgencyStatus(ctx context.Context) (AgencyStatusSnapshot, *APIError) {
+	var response struct {
+		Schema  string `json:"schema"`
+		Status  string `json:"status"`
+		Version int    `json:"version"`
+	}
+	if apiErr := client.get(ctx, "/v1/agency/status", &response); apiErr != nil {
+		return AgencyStatusSnapshot{}, apiErr
+	}
+	if response.Schema != "mnemon.agency.status" || response.Version != 1 ||
+		(response.Status != "ready" && response.Status != "not_ready") {
+		return AgencyStatusSnapshot{}, NewAPIError(CodeInternal,
+			"Agency status response is invalid")
+	}
+	return AgencyStatusSnapshot{Ready: response.Status == "ready"}, nil
+}
+
 func (client *Client) ReadStatus(ctx context.Context) (StatusResponse, *APIError) {
 	var response StatusResponse
 	if apiErr := client.get(ctx, "/v1/status", &response); apiErr != nil {

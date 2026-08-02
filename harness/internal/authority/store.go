@@ -55,13 +55,42 @@ func OpenWithArtifactVerifier(ctx context.Context, databasePath string,
 	return openWithVerifier(ctx, databasePath, time.Now, verifier)
 }
 
+// OpenExistingWithArtifactVerifier acquires the existing writer guard and
+// accepts only an initialized exact R7 authority. It never creates or repairs
+// durable setup state.
+func OpenExistingWithArtifactVerifier(ctx context.Context, databasePath string,
+	verifier ArtifactVerifier,
+) (*Store, error) {
+	if verifier == nil {
+		return nil, errors.New("open existing authority store: nil Artifact verifier")
+	}
+	return openExistingWithVerifier(ctx, databasePath, time.Now, verifier)
+}
+
 func openWithVerifier(ctx context.Context, databasePath string, now func() time.Time,
 	verifier ArtifactVerifier,
+) (_ *Store, err error) {
+	return openAuthorityStore(ctx, databasePath, now, verifier, false)
+}
+
+func openExistingWithVerifier(ctx context.Context, databasePath string, now func() time.Time,
+	verifier ArtifactVerifier,
+) (_ *Store, err error) {
+	return openAuthorityStore(ctx, databasePath, now, verifier, true)
+}
+
+func openAuthorityStore(ctx context.Context, databasePath string, now func() time.Time,
+	verifier ArtifactVerifier, existing bool,
 ) (_ *Store, err error) {
 	if ctx == nil || now == nil {
 		return nil, errors.New("open authority store: nil context or clock")
 	}
-	plan, err := prepareAuthorityPath(databasePath)
+	var plan *authorityPathPlan
+	if existing {
+		plan, err = prepareExistingAuthorityPath(databasePath)
+	} else {
+		plan, err = prepareAuthorityPath(databasePath)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -74,14 +103,20 @@ func openWithVerifier(ctx context.Context, databasePath string, now func() time.
 			_ = releaseWriterLock(lockFile)
 		}
 	}()
-	if err = plan.prepareDatabaseFile(); err != nil {
-		return nil, err
+	if !existing {
+		if err = plan.prepareDatabaseFile(); err != nil {
+			return nil, err
+		}
 	}
 	if err = plan.verifyBeforeSQLite(); err != nil {
 		return nil, err
 	}
 
-	db, err := sql.Open("sqlite", sqliteDSN(plan.databasePath))
+	dsn := sqliteDSN(plan.databasePath)
+	if existing {
+		dsn = existingSQLiteDSN(plan.databasePath)
+	}
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open authority store: SQLite: %w", err)
 	}
@@ -92,10 +127,17 @@ func openWithVerifier(ctx context.Context, databasePath string, now func() time.
 			_ = db.Close()
 		}
 	}()
-	if err = configureAuthoritySQLite(ctx, db); err != nil {
-		return nil, err
+	if existing {
+		if err = openExistingSchema(ctx, db); err == nil {
+			err = configureExistingAuthoritySQLite(ctx, db)
+		}
+	} else {
+		err = configureAuthoritySQLite(ctx, db)
+		if err == nil {
+			err = openSchema(ctx, db)
+		}
 	}
-	if err = openSchema(ctx, db); err != nil {
+	if err != nil {
 		return nil, err
 	}
 	if err = plan.verifyAfterSQLite(); err != nil {
@@ -152,6 +194,15 @@ func sqliteDSN(path string) string {
 	query.Add("_pragma", "foreign_keys(ON)")
 	query.Add("_pragma", "journal_mode(WAL)")
 	query.Add("_pragma", "synchronous(FULL)")
+	value.RawQuery = query.Encode()
+	return value.String()
+}
+
+func existingSQLiteDSN(path string) string {
+	value := url.URL{Scheme: "file", Path: path}
+	query := value.Query()
+	query.Add("mode", "rw")
+	query.Add("_pragma", fmt.Sprintf("busy_timeout(%d)", busyTimeoutMS))
 	value.RawQuery = query.Encode()
 	return value.String()
 }

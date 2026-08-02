@@ -28,6 +28,41 @@ type fakeAgencyService struct {
 	calls      map[string]int
 }
 
+type fakeAgencyControlService struct {
+	*fakeService
+	*fakeAgencyService
+}
+
+func TestControlServerMountsOptionalAgencyCapabilityOnSameHandler(t *testing.T) {
+	t.Parallel()
+	fixture := newAgencyHTTPFixture(t)
+	service := &fakeAgencyControlService{fakeService: &fakeService{},
+		fakeAgencyService: fixture.service}
+	server, err := NewServer(fixedAuthenticator{}, service)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, RouteAgencyStatus, nil)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	assertAgencyResponse(t, response, http.StatusOK)
+	if fixture.service.calls["status"] != 1 || !IsControlRoute(RouteAgencyStatus) {
+		t.Fatalf("Agency status calls/control route = (%d,%v)",
+			fixture.service.calls["status"], IsControlRoute(RouteAgencyStatus))
+	}
+
+	withoutAgency, err := NewServer(fixedAuthenticator{}, &fakeService{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	missing := httptest.NewRecorder()
+	withoutAgency.Handler().ServeHTTP(missing,
+		httptest.NewRequest(http.MethodGet, RouteAgencyStatus, nil))
+	if missing.Code != http.StatusNotFound || missing.Header().Get("Content-Type") != "application/json" {
+		t.Fatalf("missing Agency capability = %d %s", missing.Code, missing.Body.String())
+	}
+}
+
 func (service *fakeAgencyService) called(name string) { service.calls[name]++ }
 
 func (service *fakeAgencyService) AgencyAttach(context.Context) (node.AgencyAttachment, error) {

@@ -92,6 +92,9 @@ func (nodeTestControlRuntime) NewControlServer(authenticator Authenticator, serv
 	server := &nodeTestControlServer{authenticator: authenticator, service: service,
 		health: health, status: status, authority: authority, lifecycle: lifecycle,
 		mutation: mutation}
+	if agency, ok := service.(AgencyService); ok {
+		server.agency = agency
+	}
 	if channels, ok := service.(ChannelService); ok {
 		server.channels = channels
 	}

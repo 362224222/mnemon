@@ -182,7 +182,7 @@ func ClassifyAgencyError(err error) AgencyErrorClass {
 	case errors.Is(err, agency.ErrInvariant):
 		return AgencyErrorActionNotAllowed
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded),
-		errors.Is(err, authority.ErrClosed):
+		errors.Is(err, authority.ErrClosed), errors.Is(err, ErrManagedAdmission):
 		return AgencyErrorUnavailable
 	default:
 		return AgencyErrorInternal

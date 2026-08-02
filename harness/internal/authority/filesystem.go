@@ -24,6 +24,18 @@ type authorityPathPlan struct {
 }
 
 func prepareAuthorityPath(databasePath string) (*authorityPathPlan, error) {
+	return prepareAuthorityPathMode(databasePath, true)
+}
+
+// prepareExistingAuthorityPath validates an already provisioned authority
+// path without creating its directory, database, or writer guard. Daemon
+// startup uses this stricter boundary so a missing R7 authority can never be
+// mistaken for first-run setup.
+func prepareExistingAuthorityPath(databasePath string) (*authorityPathPlan, error) {
+	return prepareAuthorityPathMode(databasePath, false)
+}
+
+func prepareAuthorityPathMode(databasePath string, initialize bool) (*authorityPathPlan, error) {
 	if strings.TrimSpace(databasePath) == "" || !filepath.IsAbs(databasePath) ||
 		filepath.Clean(databasePath) != databasePath {
 		return nil, errors.New("open authority store: database path must be absolute and clean")
@@ -32,7 +44,13 @@ func prepareAuthorityPath(databasePath string) (*authorityPathPlan, error) {
 	if directory == databasePath || filepath.Base(databasePath) == string(filepath.Separator) {
 		return nil, errors.New("open authority store: database path must name a file")
 	}
-	directoryID, err := ensurePrivateDirectory(directory)
+	var directoryID os.FileInfo
+	var err error
+	if initialize {
+		directoryID, err = ensurePrivateDirectory(directory)
+	} else {
+		directoryID, err = inspectExistingPrivateDirectory(directory)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -49,7 +67,22 @@ func prepareAuthorityPath(databasePath string) (*authorityPathPlan, error) {
 		(plan.files[databasePath+"-wal"].exists || plan.files[databasePath+"-shm"].exists) {
 		return nil, errors.New("open authority store: SQLite sidecar exists without database")
 	}
+	if !initialize && (!plan.files[databasePath].exists ||
+		!plan.files[databasePath+".writer.lock"].exists) {
+		return nil, errors.New("open existing authority store: database or writer guard is missing")
+	}
 	return plan, nil
+}
+
+func inspectExistingPrivateDirectory(path string) (os.FileInfo, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, fmt.Errorf("open existing authority store: inspect state directory: %w", err)
+	}
+	if err := validatePrivateDirectoryInfo(info); err != nil {
+		return nil, err
+	}
+	return info, nil
 }
 
 func ensurePrivateDirectory(path string) (os.FileInfo, error) {

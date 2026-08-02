@@ -55,14 +55,15 @@ type DaemonOptions struct {
 }
 
 // Daemon owns the strict restart path for one workspace-local Node. It binds
-// the existing DB, identity key, Profile token and canonical assets before the
-// controller is allowed to create its socket. It never initializes missing
-// state or silently rotates identity.
+// the existing R5 and R7 databases, identity key, Profile token and canonical
+// assets before the controller may create its socket. It never initializes
+// missing setup authority or silently rotates identity.
 type Daemon struct {
 	workspace  string
 	nodeState  string
 	identity   *Identity
 	store      *store.Store
+	agency     *daemonAgencyRuntime
 	controller *Controller
 	channels   *daemonChannelRuntime
 	shutdown   *gracefulShutdown
@@ -137,14 +138,27 @@ func openDaemon(ctx context.Context, options DaemonOptions,
 	workspace := options.Workspace
 	identity := authority.identity
 	st := authority.store
+	agencyRuntime, err := openDaemonAgencyRuntime(ctx, nodeState,
+		authority.authority.Profile.Principal(),
+		options.Clock)
+	if err != nil {
+		_ = st.Close()
+		return nil, fmt.Errorf("%w: compose Agency runtime: %v", ErrDaemonAuthority, err)
+	}
 	channels, err := openDaemonChannelRuntime(ctx, st, identity, options.Clock)
 	if err != nil {
+		_ = agencyRuntime.Close()
 		_ = st.Close()
 		return nil, fmt.Errorf("%w: compose Channel runtime: %v", ErrDaemonAuthority, err)
 	}
 	fail := func(cause error) (*Daemon, error) {
 		shutdownCtx := shutdown.Context()
 		cause = errors.Join(cause, channels.CloseContext(shutdownCtx))
+		if closeErr := agencyRuntime.Close(); closeErr != nil {
+			cause = errors.Join(cause,
+				fmt.Errorf("%w: close Agency authority after composition failure: %v",
+					ErrDaemonAuthority, closeErr))
+		}
 		if closeErr := st.Close(); closeErr != nil {
 			cause = errors.Join(cause,
 				fmt.Errorf("%w: close Store after composition failure: %v", ErrDaemonAuthority, closeErr))
@@ -169,18 +183,19 @@ func openDaemon(ctx context.Context, options DaemonOptions,
 	controller, err := NewController(ctx, ControllerOptions{NodeState: nodeState, Workspace: workspace,
 		Store: st, Profile: authority.authority.Profile, Signer: identity.PublicationSigner(), Clock: options.Clock,
 		Install: options.Install, Control: options.Control, Channels: channels.manager, actionPolicy: actionPolicy,
+		Agency:      agencyRuntime.service,
 		WakeAdapter: wakeAdapter, BeforeAccept: beforeAccept, networkRuntime: channels.data.plane,
 		artifactTransfers: channels.data, shutdown: shutdown})
 	if err != nil {
 		return fail(fmt.Errorf("%w: compose controller: %v", ErrDaemonAuthority, err))
 	}
 	return &Daemon{workspace: workspace, nodeState: nodeState, identity: identity,
-		store: st, controller: controller, channels: channels, shutdown: shutdown,
+		store: st, agency: agencyRuntime, controller: controller, channels: channels, shutdown: shutdown,
 		serveDone: make(chan struct{})}, nil
 }
 
 func (daemon *Daemon) Serve(ctx context.Context) error {
-	if daemon == nil || daemon.controller == nil || daemon.store == nil {
+	if daemon == nil || daemon.controller == nil || daemon.store == nil || daemon.agency == nil {
 		return fmt.Errorf("%w: daemon is unavailable", ErrDaemonAuthority)
 	}
 	if ctx == nil {
@@ -236,6 +251,17 @@ func (daemon *Daemon) Close() error {
 		if daemon.channels != nil {
 			daemon.closeErr = errors.Join(daemon.closeErr,
 				daemon.channels.CloseContext(shutdownCtx))
+		}
+		if daemon.agency != nil {
+			var agencyErr error
+			if shutdownCtx.Err() == nil {
+				agencyErr = daemon.agency.Close()
+				if agencyErr != nil {
+					agencyErr = fmt.Errorf("close mnemond Agency authority: %w", agencyErr)
+				}
+			}
+			daemon.closeErr = errors.Join(daemon.closeErr, agencyErr,
+				gracefulShutdownDeadlineError(shutdownCtx, "close mnemond Agency authority"))
 		}
 		if daemon.store != nil {
 			// Store.Close has no context-aware database/sql equivalent. Invoke

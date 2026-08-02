@@ -3959,13 +3959,6 @@
     },
     {
       "rule": "function_statements",
-      "identity": "function_statements:harness/internal/node/daemon_test.go::newDaemonFixture",
-      "path": "harness/internal/node/daemon_test.go",
-      "symbol": "newDaemonFixture",
-      "ceiling": 52
-    },
-    {
-      "rule": "function_statements",
       "identity": "function_statements:harness/internal/node/ensure.go::ensureDaemonLocked",
       "path": "harness/internal/node/ensure.go",
       "symbol": "ensureDaemonLocked",
@@ -5150,7 +5143,7 @@
       "rule": "production_file_lines",
       "identity": "production_file_lines:harness/internal/localapi/server.go",
       "path": "harness/internal/localapi/server.go",
-      "ceiling": 527
+      "ceiling": 524
     },
     {
       "rule": "production_file_lines",

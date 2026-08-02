@@ -9,7 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mnemon-dev/mnemon/harness/internal/agency"
 	"github.com/mnemon-dev/mnemon/harness/internal/assets"
+	r7authority "github.com/mnemon-dev/mnemon/harness/internal/authority"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 )
@@ -127,6 +129,32 @@ func TestProvisionCreatesAndReplaysOneDisabledWorkspaceAuthority(t *testing.T) {
 	if err != nil || closeErr != nil || authority.Node.PeerID() != first.Node.PeerID() || authority.Profile.Enabled() {
 		t.Fatalf("durable authority = (%#v, %v, close %v)", authority, err, closeErr)
 	}
+	assertProvisionAgencyAuthority(t, first.NodeState, first.Profile.Principal())
+}
+
+func TestProvisionReplaysMissingAgencyAuthorityWithoutChangingNodeAuthority(t *testing.T) {
+	t.Parallel()
+	workspace := newProvisionWorkspace(t)
+	options := provisionTestOptions(t, workspace, model.HostCodex)
+	first, err := Provision(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, suffix := range []string{"", ".writer.lock", "-wal", "-shm"} {
+		if err := os.Remove(filepath.Join(first.NodeState, "agency.db") + suffix); err != nil &&
+			!errors.Is(err, os.ErrNotExist) {
+			t.Fatal(err)
+		}
+	}
+	replayed, err := Provision(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayed.Created || replayed.Node.PeerID() != first.Node.PeerID() ||
+		replayed.Profile.Principal() != first.Profile.Principal() {
+		t.Fatalf("replayed Provision() = %#v", replayed)
+	}
+	assertProvisionAgencyAuthority(t, first.NodeState, first.Profile.Principal())
 }
 
 func TestProvisionRejectsProjectionAndHostAuthorityDrift(t *testing.T) {
@@ -255,10 +283,34 @@ func assertProvisionModes(t *testing.T, workspace, nodeState string) {
 		}
 	}
 	for _, path := range []string{filepath.Join(nodeState, identityKeyName), filepath.Join(nodeState, "node.db"),
+		filepath.Join(nodeState, "agency.db"),
 		filepath.Join(nodeState, "profiles", model.TeamworkProfileID().String()+".token")} {
 		info, err := os.Lstat(path)
 		if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
 			t.Fatalf("private file %s = %v, %v", path, info, err)
 		}
+	}
+}
+
+func assertProvisionAgencyAuthority(t *testing.T, nodeState, principalValue string) {
+	t.Helper()
+	principal, err := agencyPrincipalForValue(principalValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier := r7authority.ArtifactVerifierFunc(func(context.Context, agency.Digest, int64) error {
+		return nil
+	})
+	st, err := r7authority.OpenExistingWithArtifactVerifier(context.Background(),
+		filepath.Join(nodeState, "agency.db"), verifier)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.RequirePrincipal(context.Background(), principal); err != nil {
+		_ = st.Close()
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
 	}
 }

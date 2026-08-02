@@ -39,6 +39,38 @@ func configureAuthoritySQLite(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
+func configureExistingAuthoritySQLite(ctx context.Context, db *sql.DB) error {
+	if err := db.PingContext(ctx); err != nil {
+		return fmt.Errorf("open existing authority store: connect SQLite: %w", err)
+	}
+	var journalMode string
+	if err := db.QueryRowContext(ctx, "PRAGMA journal_mode").Scan(&journalMode); err != nil {
+		return fmt.Errorf("open existing authority store: read journal_mode: %w", err)
+	}
+	if !strings.EqualFold(journalMode, "wal") {
+		return fmt.Errorf("open existing authority store: journal_mode is %q, want WAL", journalMode)
+	}
+	for _, statement := range []string{"PRAGMA synchronous = FULL", "PRAGMA foreign_keys = ON",
+		fmt.Sprintf("PRAGMA busy_timeout = %d", busyTimeoutMS)} {
+		if _, err := db.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("open existing authority store: configure SQLite: %w", err)
+		}
+	}
+	var synchronous, foreignKeys, busyTimeout int
+	if err := db.QueryRowContext(ctx, `SELECT
+		(SELECT synchronous FROM pragma_synchronous),
+		(SELECT foreign_keys FROM pragma_foreign_keys),
+		(SELECT timeout FROM pragma_busy_timeout)`).
+		Scan(&synchronous, &foreignKeys, &busyTimeout); err != nil {
+		return fmt.Errorf("open existing authority store: inspect SQLite configuration: %w", err)
+	}
+	if synchronous != 2 || foreignKeys != 1 || busyTimeout != busyTimeoutMS {
+		return fmt.Errorf("open existing authority store: unsafe SQLite configuration: synchronous=%d foreign_keys=%d busy_timeout=%d",
+			synchronous, foreignKeys, busyTimeout)
+	}
+	return nil
+}
+
 func openSchema(ctx context.Context, db *sql.DB) error {
 	var applicationID, version int
 	if err := db.QueryRowContext(ctx, "PRAGMA application_id").Scan(&applicationID); err != nil {
@@ -62,6 +94,23 @@ func openSchema(ctx context.Context, db *sql.DB) error {
 		}
 	case applicationID == schemaApplicationID && version == SchemaVersion:
 	default:
+		return fmt.Errorf("%w: got application_id=%d version=%d, want application_id=%d version=%d",
+			ErrUnsupportedSchema, applicationID, version, schemaApplicationID, SchemaVersion)
+	}
+	return validateDatabase(ctx, db)
+}
+
+// openExistingSchema accepts only the exact initialized R7 schema. It never
+// treats an empty version-zero database as setup authority.
+func openExistingSchema(ctx context.Context, db *sql.DB) error {
+	var applicationID, version int
+	if err := db.QueryRowContext(ctx, "PRAGMA application_id").Scan(&applicationID); err != nil {
+		return fmt.Errorf("open existing authority store: read application ID: %w", err)
+	}
+	if err := db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
+		return fmt.Errorf("open existing authority store: read schema version: %w", err)
+	}
+	if applicationID != schemaApplicationID || version != SchemaVersion {
 		return fmt.Errorf("%w: got application_id=%d version=%d, want application_id=%d version=%d",
 			ErrUnsupportedSchema, applicationID, version, schemaApplicationID, SchemaVersion)
 	}

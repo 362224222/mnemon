@@ -4,8 +4,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/mnemon-dev/mnemon/harness/internal/agency"
+	r7authority "github.com/mnemon-dev/mnemon/harness/internal/authority"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	"github.com/mnemon-dev/mnemon/harness/internal/store"
 	"os"
@@ -91,10 +94,59 @@ func Provision(ctx context.Context, options ProvisionOptions) (result ProvisionR
 		}
 	}()
 
-	if authority, readErr := st.ReadLocalAuthority(ctx); readErr == nil {
-		return replayProvision(nodeState, identity, credential, credentialCreated, authority, options.Host, plan.workspace)
+	var provisioned ProvisionResult
+	if durable, readErr := st.ReadLocalAuthority(ctx); readErr == nil {
+		provisioned, err = replayProvision(nodeState, identity, credential, credentialCreated,
+			durable, options.Host, plan.workspace)
+	} else {
+		provisioned, err = createProvisionAuthority(ctx, st, nodeState, identity, credential,
+			credentialCreated, options, plan)
 	}
-	return createProvisionAuthority(ctx, st, nodeState, identity, credential, credentialCreated, options, plan)
+	if err != nil {
+		return ProvisionResult{}, err
+	}
+	if err := ensureProvisionAgencyAuthority(ctx, nodeState,
+		provisioned.Profile.Principal()); err != nil {
+		return ProvisionResult{}, err
+	}
+	return provisioned, nil
+}
+
+// ensureProvisionAgencyAuthority is the setup-only initializer for agency.db.
+// node.db and agency.db cannot share a SQLite transaction; Provision therefore
+// uses idempotent replay as its recovery contract. Daemon startup never calls
+// this helper and refuses either missing half.
+func ensureProvisionAgencyAuthority(ctx context.Context, nodeState string,
+	profilePrincipal string,
+) (err error) {
+	principal, err := agencyPrincipalForValue(profilePrincipal)
+	if err != nil {
+		return fmt.Errorf("%w: derive R7 Principal: %v", ErrProvision, err)
+	}
+	st, err := r7authority.Open(ctx, filepath.Join(nodeState, "agency.db"))
+	if err != nil {
+		return fmt.Errorf("%w: open R7 authority: %v", ErrProvision, err)
+	}
+	defer func() {
+		if closeErr := st.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("%w: close R7 authority: %v", ErrProvision, closeErr))
+		}
+	}()
+	if err := st.EnrollPrincipal(ctx, principal); err != nil {
+		return fmt.Errorf("%w: enroll R7 Principal: %v", ErrProvision, err)
+	}
+	if err := st.RequirePrincipal(ctx, principal); err != nil {
+		return fmt.Errorf("%w: verify R7 Principal: %v", ErrProvision, err)
+	}
+	return nil
+}
+
+func agencyPrincipalForValue(principal string) (agency.AgentPrincipalID, error) {
+	if principal == "" {
+		return agency.AgentPrincipalID{}, errors.New("durable Profile Principal is unavailable")
+	}
+	digest := sha256.Sum256([]byte("mnemon/r7/agent-principal/1\x00" + principal))
+	return agency.NewAgentPrincipalID("principal:r7:" + hex.EncodeToString(digest[:16]))
 }
 
 func prepareProvision(options *ProvisionOptions) (provisionPlan, error) {
