@@ -199,6 +199,30 @@ func TestRunRoutesResetWhileKeepingItOutOfHelp(t *testing.T) {
 	}
 }
 
+func TestRunRoutesAgencyBeforeLegacyCommandDispatch(t *testing.T) {
+	var received []string
+	agency := func(ctx context.Context, args []string, stdin io.Reader,
+		stdout, stderr io.Writer,
+	) (bool, int) {
+		if ctx == nil || stdin == nil || stderr == nil {
+			t.Fatal("agency composition is incomplete")
+		}
+		received = append([]string(nil), args...)
+		_, _ = io.WriteString(stdout, "agency receipt\n")
+		return true, 8
+	}
+	var stdout, stderr bytes.Buffer
+	exit := runWithCommandRunners(context.Background(),
+		[]string{"agent", "current", "--json"}, strings.NewReader(""),
+		&stdout, &stderr, commandRunners{agency: agency})
+	if exit != 8 || !reflect.DeepEqual(received,
+		[]string{"agent", "current", "--json"}) ||
+		stdout.String() != "agency receipt\n" || stderr.Len() != 0 {
+		t.Fatalf("agency route = exit %d args %v stdout %q stderr %q", exit,
+			received, stdout.String(), stderr.String())
+	}
+}
+
 func cliSetupMustNotRun(t *testing.T) setupRunner {
 	t.Helper()
 	return func(context.Context, []string, io.Writer, io.Writer, string) int {

@@ -229,6 +229,28 @@ import _ "github.com/mnemon-dev/mnemon/harness/internal/teamwork"
 	}
 }
 
+func TestDependencyFindingsAllowNeutralAgencyCLILayer(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, root, "harness/cmd/mnemon-harness/main.go", `package main
+import _ "github.com/mnemon-dev/mnemon/harness/internal/agencycli"
+`)
+	writeTestFile(t, root, "harness/internal/agencycli/app.go", `package agencycli
+import (
+	_ "github.com/mnemon-dev/mnemon/harness/internal/agency"
+	_ "github.com/mnemon-dev/mnemon/harness/internal/localapi"
+	_ "github.com/mnemon-dev/mnemon/harness/internal/model"
+	_ "github.com/mnemon-dev/mnemon/harness/internal/node"
+)
+`)
+	findings, err := dependencyFindings(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("neutral Agency CLI dependency findings = %#v", findings)
+	}
+}
+
 func TestFunctionSymbolIncludesReceiver(t *testing.T) {
 	root := t.TempDir()
 	writeTestFile(t, root, "harness/a.go", "package harness\ntype T struct{}\nfunc (t *T) Run() {}\n")

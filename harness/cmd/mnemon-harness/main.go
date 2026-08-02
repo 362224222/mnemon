@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/mnemon-dev/mnemon/harness/internal/agencycli"
 	"github.com/mnemon-dev/mnemon/harness/internal/cli"
 )
 
@@ -41,6 +42,7 @@ type statusRunner = lifecycleRunner
 type doctorRunner = lifecycleRunner
 type resetRunner = lifecycleRunner
 type channelRunner func(context.Context, []string, io.Reader, io.Writer, io.Writer, string) int
+type agencyRunner func(context.Context, []string, io.Reader, io.Writer, io.Writer) (bool, int)
 
 type commandRunners struct {
 	setup   setupRunner
@@ -49,6 +51,7 @@ type commandRunners struct {
 	doctor  doctorRunner
 	reset   resetRunner
 	channel channelRunner
+	agency  agencyRunner
 }
 
 func main() {
@@ -63,7 +66,12 @@ func main() {
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	return runWithCommandRunners(ctx, args, stdin, stdout, stderr,
 		commandRunners{setup: cli.RunSetup, eject: cli.RunEject, status: cli.RunStatus,
-			doctor: cli.RunDoctor, reset: cli.RunReset, channel: cli.RunChannel})
+			doctor: cli.RunDoctor, reset: cli.RunReset, channel: cli.RunChannel,
+			agency: func(ctx context.Context, args []string, stdin io.Reader,
+				stdout, stderr io.Writer,
+			) (bool, int) {
+				return agencycli.New(stdin, stdout, stderr, cli.EnsureAgentDaemon).TryRun(ctx, args)
+			}})
 }
 
 func runWithSetup(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer,
@@ -87,6 +95,11 @@ func runWithCommandRunners(ctx context.Context, args []string, stdin io.Reader,
 			return 1
 		}
 		return 0
+	}
+	if runners.agency != nil {
+		if handled, exit := runners.agency(ctx, args, stdin, stdout, stderr); handled {
+			return exit
+		}
 	}
 
 	switch args[0] {

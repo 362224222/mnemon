@@ -88,7 +88,7 @@ func TestReleaseBoundary(t *testing.T) {
 
 	t.Run("internal package set is closed", func(t *testing.T) {
 		assertDirectoryNames(t, filepath.Join(root, "harness", "internal"), []string{
-			"agency", "agent", "artifact", "assets", "authority", "cli", "event", "integration",
+			"agency", "agencycli", "agent", "artifact", "assets", "authority", "cli", "event", "integration",
 			"localapi", "model", "node", "peer", "selector", "store", "teamwork", "testkit",
 		})
 	})

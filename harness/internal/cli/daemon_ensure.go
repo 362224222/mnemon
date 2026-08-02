@@ -45,6 +45,22 @@ func ensureAgentDaemon(ctx context.Context, workspace, nodeState string,
 		productionAgentDaemonEnsureDependencies())
 }
 
+// EnsureAgentDaemon is the narrow process-lifecycle seam used by the neutral
+// R7 Agency terminal. It deliberately exposes no R5 Profile, Work, Channel,
+// or Teamwork state; those remain behind the legacy control client.
+func EnsureAgentDaemon(ctx context.Context, workspace, nodeState string) *localapi.APIError {
+	client, err := localapi.NewClient(nodeState)
+	if err != nil {
+		if errors.Is(err, localapi.ErrUnsafeClientState) {
+			return localapi.NewAPIError(localapi.CodeAssetRevisionMismatch,
+				"managed Node authority or installed assets are invalid")
+		}
+		return localapi.NewAPIError(localapi.CodeMnemondUnavailable,
+			"mnemond local control is unavailable")
+	}
+	return ensureAgentDaemon(ctx, workspace, nodeState, client)
+}
+
 func ensureAgentDaemonWith(ctx context.Context, workspace, nodeState string,
 	client daemonHealthClient, dependencies agentDaemonEnsureDependencies,
 ) *localapi.APIError {
