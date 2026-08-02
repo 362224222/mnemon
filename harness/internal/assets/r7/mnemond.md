@@ -1,3 +1,8 @@
+---
+name: mnemond
+description: Use the bounded mnemond View, submit one allowed Intent, and trust only its Receipt.
+---
+
 # mnemond
 
 mnemond gives this runtime a durable, bounded action view. It does not plan the

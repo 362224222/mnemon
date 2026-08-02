@@ -2,6 +2,7 @@ package assets
 
 import (
 	"bytes"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -17,6 +18,7 @@ func TestR7ProjectionIsBoundedAndPatternNeutral(t *testing.T) {
 		t.Fatalf("projection sizes = guide %d, cue %d", len(guide), len(projection.HookCue()))
 	}
 	for _, required := range [][]byte{
+		[]byte("name: mnemond"),
 		[]byte("View -> Intent -> Receipt"),
 		[]byte("agent current --json"),
 		[]byte("Artifact"),
@@ -56,9 +58,7 @@ func TestR7PiProjectionKeepsHookContextFixedAndPrivate(t *testing.T) {
 		`import { execFileSync } from "node:child_process"`,
 		`import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"`,
 		`pi.on("before_agent_start"`,
-		`const args = ["hook", "attach", "--json"]`,
-		`const EXECUTABLE_ENV = "MNEMON_HARNESS_EXECUTABLE"`,
-		`const SOCKET_ENV = "MNEMON_HARNESS_SOCKET"`,
+		`execFileSync("mnemon-harness", ["hook", "attach", "--json"]`,
 		`stdio: ["ignore", "ignore", "ignore"]`,
 		`maxBuffer: MAX_OUTPUT_BYTES`,
 		`timeout: ATTACH_TIMEOUT_MS`,
@@ -94,13 +94,14 @@ func TestR7PiProjectionKeepsHookContextFixedAndPrivate(t *testing.T) {
 		`transcript`,
 		`credential`,
 		`console.`,
+		`MNEMON_HARNESS_SOCKET`,
+		`MNEMON_HARNESS_EXECUTABLE`,
+		`--socket`,
+		`process.env`,
 	} {
 		if strings.Contains(source, forbidden) {
 			t.Fatalf("R7 Pi extension contains forbidden surface %q", forbidden)
 		}
-	}
-	if got := strings.Count(source, "process.env["); got != 2 {
-		t.Fatalf("R7 Pi extension has %d environment reads; want executable and socket only", got)
 	}
 	if got := strings.Count(source, "content:"); got != 1 {
 		t.Fatalf("R7 Pi extension has %d model-content sources; want the fixed cue only", got)
@@ -110,5 +111,26 @@ func TestR7PiProjectionKeepsHookContextFixedAndPrivate(t *testing.T) {
 	copyOfSource[0] ^= 0xff
 	if bytes.Equal(copyOfSource, projection.PiExtension()) {
 		t.Fatal("R7 projection returned mutable Pi extension bytes")
+	}
+}
+
+func TestR7ProjectionContainsNoProviderCredentialSurface(t *testing.T) {
+	projection, err := LoadR7Projection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	all := bytes.Join([][]byte{
+		projection.Guide(), []byte(projection.HookCue()), projection.PiExtension(),
+	}, []byte("\n"))
+	for _, expression := range []string{
+		`(?i)deepseek`,
+		`(?i)api[_-]?key`,
+		`(?i)authorization\s*:`,
+		`(?i)bearer\s+[a-z0-9._-]+`,
+		`(?i)sk-[a-z0-9]{16,}`,
+	} {
+		if regexp.MustCompile(expression).Find(all) != nil {
+			t.Fatalf("R7 projection matches forbidden credential surface %q", expression)
+		}
 	}
 }
