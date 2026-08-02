@@ -78,12 +78,27 @@ func (gater *ConnectionGater) InterceptSecured(direction network.Direction,
 	if direction == network.DirOutbound && gater.authority.CanDial(peerID) {
 		return true
 	}
-	if direction == network.DirInbound && gater.authority.CanConnect(peerID) {
+	if direction == network.DirInbound && gater.authority.CanUseChannelControl(peerID) {
 		return true
 	}
 	if direction != network.DirInbound {
 		return false
 	}
+	// An Agency route grants the physical connection and only Agency streams.
+	// Best-effort reservation of the separate unknown-enrollment budget keeps
+	// the pre-existing R5 join path available without turning Agency authority
+	// into Channel authority. A saturated enrollment budget must not revoke the
+	// independently authorized Agency connection.
+	if gater.authority.CanUseAgency(peerID) {
+		_ = gater.reserveUnknown(peerID, addresses)
+		return true
+	}
+	return gater.reserveUnknown(peerID, addresses)
+}
+
+func (gater *ConnectionGater) reserveUnknown(peerID libp2ppeer.ID,
+	addresses network.ConnMultiaddrs,
+) bool {
 	key, ok := unknownKey(peerID, addresses)
 	if !ok {
 		return false
@@ -132,13 +147,26 @@ func (gater *ConnectionGater) admitUpgradedConnection(direction network.Directio
 	if direction == network.DirOutbound && gater.authority.CanDial(peerID) {
 		return true
 	}
-	if direction == network.DirInbound && gater.authority.CanConnect(peerID) {
+	if direction == network.DirInbound && gater.authority.CanUseChannelControl(peerID) {
 		gater.releasePending(peerID, addresses)
 		return true
 	}
 	if direction != network.DirInbound {
 		return false
 	}
+	if gater.authority.CanUseAgency(peerID) {
+		// Consume a reservation when one was available. Agency transport remains
+		// valid without it, but ChannelProtocol stays closed because no unknown
+		// lease is installed.
+		_ = gater.consumeUnknown(peerID, connectionID, addresses, closeConnection)
+		return true
+	}
+	return gater.consumeUnknown(peerID, connectionID, addresses, closeConnection)
+}
+
+func (gater *ConnectionGater) consumeUnknown(peerID libp2ppeer.ID, connectionID string,
+	addresses network.ConnMultiaddrs, closeConnection func() error,
+) bool {
 	key, ok := unknownKey(peerID, addresses)
 	if !ok {
 		return false
@@ -179,7 +207,7 @@ func (gater *ConnectionGater) Reconcile() {
 	gater.mu.Lock()
 	defer gater.mu.Unlock()
 	for connectionID, connection := range gater.unknown {
-		if gater.authority.CanConnect(connection.peerID) {
+		if gater.authority.CanUseChannelControl(connection.peerID) {
 			if connection.timer != nil {
 				connection.timer.Stop()
 			}
@@ -187,7 +215,7 @@ func (gater *ConnectionGater) Reconcile() {
 		}
 	}
 	for key, reservations := range gater.pending {
-		if gater.authority.CanConnect(key.peerID) {
+		if gater.authority.CanUseChannelControl(key.peerID) {
 			delete(gater.pending, key)
 			gater.pendingCount -= len(reservations)
 		}
@@ -263,16 +291,19 @@ func (gater *ConnectionGater) allowsProtocol(peerID libp2ppeer.ID, protocolID pr
 		!managedProtocol(protocolID) {
 		return false
 	}
+	if agencyProtocol(protocolID) {
+		return gater.authority.CanUseAgency(peerID)
+	}
 	if protocolID != ChannelProtocol {
 		return gater.authority.CanOpenDataPlane(peerID)
 	}
 	if direction == network.DirOutbound {
-		return gater.authority.CanDial(peerID)
+		return gater.authority.canOpenOutboundChannelControl(peerID)
 	}
 	if direction != network.DirInbound {
 		return false
 	}
-	if gater.authority.CanConnect(peerID) {
+	if gater.authority.CanUseChannelControl(peerID) {
 		return true
 	}
 	gater.mu.Lock()

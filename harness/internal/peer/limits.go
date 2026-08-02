@@ -47,7 +47,7 @@ type NetworkLimits struct {
 	ArtifactRequestTimeout       time.Duration
 }
 
-// HermeticLimits returns a copy of the fixed R5 profile.
+// HermeticLimits returns a copy of the fixed shared peer transport profile.
 func HermeticLimits() NetworkLimits {
 	return NetworkLimits{
 		NodeConnections: 64, PeerConnections: 8, UnknownEnrollmentConnections: 8,
@@ -94,8 +94,9 @@ func resourceLimitConfig() rcmgr.ConcreteLimitConfig {
 		StreamsOutbound: rcmgr.LimitVal(limits.ApplicationProtocolStreams),
 		Memory:          32 << 20,
 	}
-	protocolPeer := make(map[protocol.ID]rcmgr.ResourceLimits, 4)
-	for _, id := range []protocol.ID{GossipProtocol, ChannelProtocol, EventsProtocol, ArtifactsProtocol} {
+	protocolPeer := make(map[protocol.ID]rcmgr.ResourceLimits, 6)
+	for _, id := range []protocol.ID{GossipProtocol, ChannelProtocol, EventsProtocol, ArtifactsProtocol,
+		AgencyDeliveryProtocol, AgencyObjectProtocol} {
 		protocolPeer[id] = perApplicationProtocol
 	}
 	partial := rcmgr.PartialLimitConfig{

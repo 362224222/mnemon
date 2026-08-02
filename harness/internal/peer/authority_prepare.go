@@ -7,6 +7,10 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 )
 
+// Keep the optional overlay at the same small-node bound as the durable R5
+// mesh. Physical connection and per-Peer stream budgets remain outer fences.
+const maxAgencyPeers = model.MaxChannelsPerNode
+
 // prepare fully validates a candidate without making it visible. Gossip uses
 // this split to identify and drain affected Channel gates before the immutable
 // revision pointer is installed.
@@ -16,6 +20,9 @@ func (authority *Authority) prepare(snapshot NetworkAuthoritySnapshot) (*network
 		return nil, err
 	}
 	state := newNetworkAuthorityState(local, snapshot)
+	if err := state.addAgencyPeers(local, snapshot.AgencyPeers); err != nil {
+		return nil, err
+	}
 	if err := state.addOutboundEnrollmentPeers(local, snapshot.OutboundEnrollmentPeers); err != nil {
 		return nil, err
 	}
@@ -42,6 +49,9 @@ func (authority *Authority) validateSnapshotIdentityAndBounds(
 	if len(snapshot.OutboundEnrollmentPeers) > model.MaxChannelsPerNode {
 		return "", fmt.Errorf("%w: outbound enrollment permit limit exceeded", ErrNetworkAuthority)
 	}
+	if len(snapshot.AgencyPeers) > maxAgencyPeers {
+		return "", fmt.Errorf("%w: Agency Peer limit exceeded", ErrNetworkAuthority)
+	}
 	return local, nil
 }
 
@@ -50,8 +60,27 @@ func newNetworkAuthorityState(local libp2ppeer.ID,
 ) *networkAuthorityState {
 	return &networkAuthorityState{localPeerID: local,
 		channels:           make(map[model.ChannelID]channelAuthorityState, len(snapshot.Channels)),
+		channelPhysical:    make(map[libp2ppeer.ID]struct{}),
+		agency:             make(map[libp2ppeer.ID]struct{}, len(snapshot.AgencyPeers)),
 		physical:           make(map[libp2ppeer.ID]struct{}),
 		outboundEnrollment: make(map[libp2ppeer.ID]struct{}, len(snapshot.OutboundEnrollmentPeers))}
+}
+
+func (state *networkAuthorityState) addAgencyPeers(local libp2ppeer.ID,
+	peers []model.PeerID,
+) error {
+	for _, candidate := range peers {
+		peerID, err := canonicalLibp2pID(candidate)
+		if err != nil || peerID == local {
+			return fmt.Errorf("%w: invalid Agency Peer", ErrNetworkAuthority)
+		}
+		if _, duplicate := state.agency[peerID]; duplicate {
+			return fmt.Errorf("%w: duplicate Agency Peer", ErrNetworkAuthority)
+		}
+		state.agency[peerID] = struct{}{}
+		state.physical[peerID] = struct{}{}
+	}
+	return nil
 }
 
 func (state *networkAuthorityState) addOutboundEnrollmentPeers(local libp2ppeer.ID,
@@ -95,6 +124,7 @@ func (state *networkAuthorityState) addPhysicalPeers(status model.ChannelStatus,
 	}
 	for peerID, binding := range bindings {
 		if binding == model.BindingPending || binding == model.BindingActive {
+			state.channelPhysical[peerID] = struct{}{}
 			state.physical[peerID] = struct{}{}
 		}
 	}

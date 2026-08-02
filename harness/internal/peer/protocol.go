@@ -10,10 +10,12 @@ import (
 )
 
 const (
-	GossipProtocol    protocol.ID = "/meshsub/1.2.0"
-	ChannelProtocol   protocol.ID = "/mnemon/channel/1"
-	EventsProtocol    protocol.ID = "/mnemon/events/1"
-	ArtifactsProtocol protocol.ID = "/mnemon/artifacts/1"
+	GossipProtocol         protocol.ID = "/meshsub/1.2.0"
+	ChannelProtocol        protocol.ID = "/mnemon/channel/1"
+	EventsProtocol         protocol.ID = "/mnemon/events/1"
+	ArtifactsProtocol      protocol.ID = "/mnemon/artifacts/1"
+	AgencyDeliveryProtocol protocol.ID = "/mnemon/agency/delivery/1"
+	AgencyObjectProtocol   protocol.ID = "/mnemon/agency/object/1"
 
 	channelTopicPrefix = "/mnemon/channel/"
 	channelTopicSuffix = "/events/1"
@@ -21,11 +23,16 @@ const (
 
 func managedProtocol(protocolID protocol.ID) bool {
 	switch protocolID {
-	case GossipProtocol, ChannelProtocol, EventsProtocol, ArtifactsProtocol:
+	case GossipProtocol, ChannelProtocol, EventsProtocol, ArtifactsProtocol,
+		AgencyDeliveryProtocol, AgencyObjectProtocol:
 		return true
 	default:
 		return false
 	}
+}
+
+func agencyProtocol(protocolID protocol.ID) bool {
+	return protocolID == AgencyDeliveryProtocol || protocolID == AgencyObjectProtocol
 }
 
 var ErrProtocolScope = errors.New("invalid Mnemon peer protocol scope")

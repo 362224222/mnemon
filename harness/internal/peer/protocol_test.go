@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
+	"github.com/libp2p/go-libp2p/core/protocol"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 )
 
@@ -29,6 +30,27 @@ func TestProtocolIDsAndChannelTopicRoundTrip(t *testing.T) {
 	parsed, err := ParseTopicName(topic)
 	if err != nil || parsed != channelID {
 		t.Fatalf("ParseTopicName() = (%q, %v)", parsed.String(), err)
+	}
+}
+
+func TestAgencyProtocolIDsAreManagedAndExactlyScoped(t *testing.T) {
+	t.Parallel()
+
+	protocols := []struct {
+		got  protocol.ID
+		want protocol.ID
+	}{
+		{got: AgencyDeliveryProtocol, want: "/mnemon/agency/delivery/1"},
+		{got: AgencyObjectProtocol, want: "/mnemon/agency/object/1"},
+	}
+	for _, candidate := range protocols {
+		if candidate.got != candidate.want || !managedProtocol(candidate.got) ||
+			!agencyProtocol(candidate.got) {
+			t.Fatalf("Agency protocol %q is not exact and managed", candidate.got)
+		}
+	}
+	if agencyProtocol(EventsProtocol) || agencyProtocol("/mnemon/agency/unknown/1") {
+		t.Fatal("Agency protocol scope accepted a different managed or unknown protocol")
 	}
 }
 

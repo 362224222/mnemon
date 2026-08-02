@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/libp2p/go-libp2p/core/protocol"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 	ma "github.com/multiformats/go-multiaddr"
 )
@@ -60,6 +61,47 @@ func TestConnectionGaterReconcilePromotesUnknownWithoutLeakingSlot(t *testing.T)
 	gater.Reconcile()
 	if gater.UnknownConnections() != 0 || !gater.InterceptPeerDial(remote.libp2pID) {
 		t.Fatal("promoted Peer retained an unknown slot or lacked physical authority")
+	}
+}
+
+func TestConnectionGaterAgencyPeerRetainsBoundedR5EnrollmentPath(t *testing.T) {
+	t.Parallel()
+
+	local := testAuthorityPeer(t, "gater-agency-enrollment-local")
+	remote := testAuthorityPeer(t, "gater-agency-enrollment-remote")
+	authority, _ := NewAuthority(local.modelID)
+	if err := authority.Replace(NetworkAuthoritySnapshot{LocalPeerID: local.modelID,
+		AgencyPeers: []model.PeerID{remote.modelID}}); err != nil {
+		t.Fatal(err)
+	}
+	gater := NewConnectionGater(authority)
+	addresses := testConnectionAddresses()
+	if !gater.InterceptSecured(network.DirInbound, remote.libp2pID, addresses) ||
+		!gater.admitUpgraded(network.DirInbound, remote.libp2pID, "agency-enrollment", addresses) {
+		t.Fatal("Agency Peer could not establish its independently authorized connection")
+	}
+	if gater.UnknownConnections() != 1 ||
+		!gater.allowsProtocol(remote.libp2pID, ChannelProtocol,
+			network.DirInbound, "agency-enrollment") ||
+		gater.authority.CanUseChannelControl(remote.libp2pID) ||
+		gater.authority.CanOpenDataPlane(remote.libp2pID) {
+		t.Fatal("Agency Peer lost bounded enrollment or inherited R5 authority")
+	}
+	for _, protocolID := range []protocol.ID{GossipProtocol, EventsProtocol, ArtifactsProtocol} {
+		if gater.allowsProtocol(remote.libp2pID, protocolID,
+			network.DirInbound, "agency-enrollment") {
+			t.Fatalf("Agency enrollment lease opened R5 data protocol %s", protocolID)
+		}
+	}
+
+	channel := testAuthorityChannel(t, "gater-agency-promoted", model.BindingPending, local, remote)
+	if err := authority.Replace(NetworkAuthoritySnapshot{LocalPeerID: local.modelID,
+		Channels: []ChannelAuthoritySnapshot{channel}, AgencyPeers: []model.PeerID{remote.modelID}}); err != nil {
+		t.Fatal(err)
+	}
+	gater.Reconcile()
+	if gater.UnknownConnections() != 0 || !gater.authority.CanUseChannelControl(remote.libp2pID) {
+		t.Fatal("R5 promotion retained the temporary enrollment lease")
 	}
 }
 

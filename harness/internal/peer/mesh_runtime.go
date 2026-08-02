@@ -35,6 +35,7 @@ type MeshRuntime struct {
 	peerstoreMu sync.Mutex
 	mu          sync.Mutex
 	mesh        store.ChannelMeshAuthority
+	agencyPeers []AgencyPeerRoute
 	applied     map[libp2ppeer.ID][]ma.Multiaddr
 	enrollment  *meshEnrollmentPermit
 	revision    uint64
@@ -132,17 +133,14 @@ func (runtime *MeshRuntime) reconcileProjectionOnce(expectedRevision uint64) err
 		return errMeshRuntimeRevision
 	}
 	mesh := runtime.mesh
+	agencyPeers := cloneAgencyPeerRoutes(runtime.agencyPeers)
 	slot := runtime.enrollment
 	permit := activeEnrollmentPermitSnapshot(slot)
 	revision := runtime.revision
 	nodeHost, gossip := runtime.nodeHost, runtime.gossip
 	runtime.mu.Unlock()
 
-	snapshot, addresses, err := projectMeshRuntime(mesh)
-	if err != nil {
-		return err
-	}
-	snapshot, addresses, err = overlayEnrollmentPermit(snapshot, addresses, permit)
+	snapshot, addresses, err := projectMeshRuntimeAuthority(mesh, agencyPeers, permit)
 	if err != nil {
 		return err
 	}
@@ -167,6 +165,9 @@ func (runtime *MeshRuntime) reconcileProjectionOnce(expectedRevision uint64) err
 	runtime.peerstoreMu.Unlock()
 	if err := gossip.Reconcile(snapshot); err != nil {
 		return runtime.failClosed(fmt.Errorf("%w: reconcile authority: %v", ErrMeshRuntime, err))
+	}
+	if err := nodeHost.ReconcileConnections(); err != nil {
+		return runtime.failClosed(fmt.Errorf("%w: reconcile connections: %v", ErrMeshRuntime, err))
 	}
 	if err := joinActiveChannels(gossip, snapshot); err != nil {
 		return runtime.failClosed(fmt.Errorf("%w: join reconciled topics: %v", ErrMeshRuntime, err))

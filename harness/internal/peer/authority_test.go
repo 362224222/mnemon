@@ -4,12 +4,15 @@ import (
 	"crypto/ed25519"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
 
 	libp2pcrypto "github.com/libp2p/go-libp2p/core/crypto"
+	"github.com/libp2p/go-libp2p/core/network"
 	libp2ppeer "github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/protocol"
 	"github.com/mnemon-dev/mnemon/harness/internal/model"
 )
 
@@ -142,6 +145,78 @@ func TestAuthorityOutboundEnrollmentPermitDoesNotGrantChannelAccess(t *testing.T
 		authority.CanOpenDataPlane(owner.libp2pID) || authority.CanUseTopic(owner.libp2pID, topic) ||
 		authority.CanSubscribe(topic) {
 		t.Fatal("outbound enrollment permit leaked into durable Channel authority")
+	}
+}
+
+func TestAuthorityKeepsAgencyAndR5ProtocolAuthorityIndependent(t *testing.T) {
+	t.Parallel()
+
+	local := testAuthorityPeer(t, "agency-authority-local")
+	agencyOnly := testAuthorityPeer(t, "agency-authority-only")
+	channelOnly := testAuthorityPeer(t, "agency-authority-channel")
+	authority, _ := NewAuthority(local.modelID)
+	channel := testAuthorityChannel(t, "agency-authority-r5", model.BindingActive, local, channelOnly)
+	if err := authority.Replace(NetworkAuthoritySnapshot{LocalPeerID: local.modelID,
+		Channels:    []ChannelAuthoritySnapshot{channel},
+		AgencyPeers: []model.PeerID{agencyOnly.modelID}}); err != nil {
+		t.Fatal(err)
+	}
+	if !authority.CanConnect(agencyOnly.libp2pID) || !authority.CanDial(agencyOnly.libp2pID) ||
+		!authority.CanUseAgency(agencyOnly.libp2pID) ||
+		authority.CanUseChannelControl(agencyOnly.libp2pID) ||
+		authority.CanOpenDataPlane(agencyOnly.libp2pID) {
+		t.Fatal("Agency-only Peer inherited R5 authority or lacked physical Agency authority")
+	}
+	if !authority.CanConnect(channelOnly.libp2pID) ||
+		!authority.CanUseChannelControl(channelOnly.libp2pID) ||
+		!authority.CanOpenDataPlane(channelOnly.libp2pID) ||
+		authority.CanUseAgency(channelOnly.libp2pID) {
+		t.Fatal("Channel-only Peer inherited Agency authority or lacked R5 authority")
+	}
+	gater := NewConnectionGater(authority)
+	for _, protocolID := range []protocol.ID{GossipProtocol, ChannelProtocol,
+		EventsProtocol, ArtifactsProtocol} {
+		if gater.allowsProtocol(agencyOnly.libp2pID, protocolID, network.DirOutbound, "") {
+			t.Fatalf("Agency-only Peer opened R5 protocol %s", protocolID)
+		}
+	}
+	for _, protocolID := range []protocol.ID{AgencyDeliveryProtocol, AgencyObjectProtocol} {
+		if !gater.allowsProtocol(agencyOnly.libp2pID, protocolID, network.DirOutbound, "") {
+			t.Fatalf("Agency-only Peer could not open Agency protocol %s", protocolID)
+		}
+		if gater.allowsProtocol(channelOnly.libp2pID, protocolID, network.DirOutbound, "") {
+			t.Fatalf("Channel-only Peer opened Agency protocol %s", protocolID)
+		}
+	}
+}
+
+func TestAuthorityRejectsInvalidAgencyPeerSnapshotAtomically(t *testing.T) {
+	t.Parallel()
+
+	local := testAuthorityPeer(t, "agency-authority-invalid-local")
+	retained := testAuthorityPeer(t, "agency-authority-invalid-retained")
+	authority, _ := NewAuthority(local.modelID)
+	if err := authority.Replace(NetworkAuthoritySnapshot{LocalPeerID: local.modelID,
+		AgencyPeers: []model.PeerID{retained.modelID}}); err != nil {
+		t.Fatal(err)
+	}
+	overLimit := make([]model.PeerID, maxAgencyPeers+1)
+	for index := range overLimit {
+		overLimit[index] = testAuthorityPeer(t,
+			fmt.Sprintf("agency-authority-over-limit-%d", index)).modelID
+	}
+	invalid := []NetworkAuthoritySnapshot{
+		{LocalPeerID: local.modelID, AgencyPeers: []model.PeerID{local.modelID}},
+		{LocalPeerID: local.modelID, AgencyPeers: []model.PeerID{retained.modelID, retained.modelID}},
+		{LocalPeerID: local.modelID, AgencyPeers: overLimit},
+	}
+	for _, snapshot := range invalid {
+		if err := authority.Replace(snapshot); !errors.Is(err, ErrNetworkAuthority) {
+			t.Fatalf("invalid Agency snapshot error = %v", err)
+		}
+		if !authority.CanUseAgency(retained.libp2pID) || !authority.CanConnect(retained.libp2pID) {
+			t.Fatal("rejected Agency snapshot changed the current immutable authority")
+		}
 	}
 }
 

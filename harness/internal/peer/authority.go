@@ -16,12 +16,14 @@ import (
 
 var ErrNetworkAuthority = errors.New("invalid peer network authority snapshot")
 
-// NetworkAuthoritySnapshot is a complete immutable projection of the durable
-// Channel authority needed in libp2p callbacks. Store reconciliation replaces
-// it atomically; callbacks never query SQLite or combine two revisions.
+// NetworkAuthoritySnapshot is a complete immutable projection of the R5
+// Channel and owner-provisioned R7 Agency authority needed in libp2p callbacks.
+// Reconciliation replaces it atomically; callbacks never query durable state
+// or combine two revisions.
 type NetworkAuthoritySnapshot struct {
 	LocalPeerID             model.PeerID
 	Channels                []ChannelAuthoritySnapshot
+	AgencyPeers             []model.PeerID
 	OutboundEnrollmentPeers []model.PeerID
 }
 
@@ -74,9 +76,16 @@ type topicAuthorityGeneration struct {
 	activeBindings string
 }
 
+// physical is the union used only for connections. channelPhysical and agency
+// remain disjoint protocol grants even when they name the same Peer. Keeping
+// those source sets in the installed immutable revision prevents a shared
+// transport from becoming a transitive authorization path between R5 and R7.
+// outboundEnrollment is a bounded dial-only exception that joins neither grant.
 type networkAuthorityState struct {
 	localPeerID        libp2ppeer.ID
 	channels           map[model.ChannelID]channelAuthorityState
+	channelPhysical    map[libp2ppeer.ID]struct{}
+	agency             map[libp2ppeer.ID]struct{}
 	physical           map[libp2ppeer.ID]struct{}
 	outboundEnrollment map[libp2ppeer.ID]struct{}
 }
@@ -97,7 +106,10 @@ func NewAuthority(localPeerID model.PeerID) (*Authority, error) {
 	}
 	authority := &Authority{localPeerID: local}
 	authority.state.Store(&networkAuthorityState{localPeerID: local,
-		channels: make(map[model.ChannelID]channelAuthorityState), physical: make(map[libp2ppeer.ID]struct{}),
+		channels:           make(map[model.ChannelID]channelAuthorityState),
+		channelPhysical:    make(map[libp2ppeer.ID]struct{}),
+		agency:             make(map[libp2ppeer.ID]struct{}),
+		physical:           make(map[libp2ppeer.ID]struct{}),
 		outboundEnrollment: make(map[libp2ppeer.ID]struct{})})
 	return authority, nil
 }
@@ -281,18 +293,6 @@ func (authority *Authority) LocalPeerID() libp2ppeer.ID {
 		return ""
 	}
 	return authority.localPeerID
-}
-
-// CanConnect is the coarse physical-connection gate. A pending or active
-// binding in any nonterminal Channel is sufficient; exact topic and protocol
-// access is always checked separately.
-func (authority *Authority) CanConnect(peerID libp2ppeer.ID) bool {
-	if authority == nil || peerID == "" || peerID == authority.localPeerID {
-		return false
-	}
-	state := authority.state.Load()
-	_, allowed := state.physical[peerID]
-	return allowed
 }
 
 // CanOpenDataPlane is stricter than physical connection authority: a Peer
