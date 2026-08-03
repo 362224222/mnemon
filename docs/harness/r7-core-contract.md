@@ -196,6 +196,14 @@ attachment has no live claim. A Reference request may therefore be admitted
 while the same attachment is working on a Handling, and it leaves that
 Handling's head, claim, and fence unchanged.
 
+`reference=none` likewise names only the Reference *action*. Any family may
+additionally cite View-offered Reference handles as provenance: the exact
+Reference versions that were in force for this work. Admission records the
+cited head identities on the Event. A citation performs no CAS, changes no
+head, and can never substitute for a Reference action. This is what allows a
+later projection to attribute a Handling's terminal outcome to the exact
+Reference version that guided it, without any new state or domain object.
+
 Each successor has exactly one target, and the list is bounded. A
 subject-handling request may create successors; this is the handoff/fan-out
 primitive. A causation or correlation handle is provenance only: it cannot turn
@@ -403,7 +411,9 @@ retracted tombstone; retracting a tombstone fails closed except as
 same-operation replay. Reference actions may name only locally accepted heads;
 forward references are rejected, so lineage cannot cycle. Of two concurrent
 head mutations, exactly one succeeds. There is no merge, winner selection,
-last-write-wins, or CRDT.
+last-write-wins, or CRDT. A provenance citation records an exact locally
+accepted head on the Event without performing CAS or changing it; only
+`publish`, `supersede`, and `retract` mutate a head.
 
 **P-09 References, not bytes; always bounded.**
 An Event carries locally hash-verified Artifact digests and refs; content lives
@@ -412,9 +422,10 @@ inbound delivery may be durably staged, but every Artifact ref it names is
 required and local admission waits until all bytes are present and match their
 digests. A BoundIntent likewise cannot activate a Reference or satisfy
 completion with an unavailable ref. Fan-out, causal hop, TTL, payload size,
-Artifact size and pending Handling count are bounded by machine-owned
-configuration. Agent and peer input that exceeds a bound fails closed rather
-than being truncated, and no semantic payload can raise a bound. Internal
+Artifact size, provenance citations per Event, and pending Handling count are
+bounded by machine-owned configuration. Agent and peer input that exceeds a
+bound fails closed rather than being truncated, and no semantic payload can
+raise a bound. Internal
 expiry maintenance processes at most a fixed number of exact claims per fresh
 `current`; excess expired claims remain byte-for-byte unsettled for later
 natural turns and do not make the bounded `current` fail.
@@ -579,7 +590,7 @@ unbound, partially proven, or failing.
 | P-05 | Fault injection at each BoundIntent and VerifiedPeerDelivery transaction boundary yields either the whole local outcome or none, including outbox obligation and Reference head where allowed. |
 | P-06 | Authenticated delivery is re-admitted under the restricted peer subset; rejection creates no receiving fact; acceptance creates a new receiving Event, preserves provenance, resolves the target locally, and follows the bounded outbox/inbox lifecycle; an origin request exporting its sole responsibility fails, while remote rejection or expiry leaves the required local Handling open. |
 | P-07 | Same key/same digest replays the byte-stable frozen View, admission Receipt, or internal outcome before attachment expiry or mutable View, fence, Handling-head, or Reference-head validation; same key/different digest conflicts; response loss, restart, and retry create at most one claim, local Event, or machine disposition. |
-| P-08 | Valid first-publish key creation without a prior handle, invalid key rejection, first-publish CAS, concurrent first publish, active supersede, tombstone retract/reactivation, stale head, forward reference, concurrent mutation, and replay all match section 5. |
+| P-08 | Valid first-publish key creation without a prior handle, invalid key rejection, first-publish CAS, concurrent first publish, active supersede, tombstone retract/reactivation, stale head, forward reference, concurrent mutation, and replay all match section 5; a provenance citation records the exact head, mutates nothing, and cannot stand in for a Reference action. |
 | P-09 | Any missing or mismatched Artifact keeps peer input unadmitted and cannot activate a Reference or complete; every Agent/peer resource bound fails closed independently and payload cannot raise it; more than the expiry-maintenance limit settles only the bounded prefix and leaves all excess claims unchanged for later natural turns. |
 | P-10 | Only explicit completed with attached verified Artifact projects completed; other terminal outcomes close without Artifact; final/exit/idle/provider/ACK/disposition cannot complete. |
 
