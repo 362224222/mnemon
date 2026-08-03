@@ -37,9 +37,75 @@ CREATE TABLE events (
     origin_sequence INTEGER NOT NULL UNIQUE CHECK (origin_sequence > 0),
     source_principal_id TEXT NOT NULL REFERENCES principals(principal_id),
     request_digest TEXT NOT NULL,
+    causal_depth INTEGER NOT NULL CHECK (causal_depth >= 0 AND causal_depth <= 32),
     accepted_at TEXT NOT NULL,
     canonical_json BLOB NOT NULL
 ) STRICT;
+
+CREATE TABLE peer_routes (
+    route_id TEXT PRIMARY KEY,
+    public_alias TEXT NOT NULL UNIQUE,
+    remote_peer_id TEXT NOT NULL UNIQUE,
+    remote_public_key BLOB NOT NULL CHECK (length(remote_public_key) = 32),
+    transport_address TEXT NOT NULL CHECK (length(transport_address) BETWEEN 1 AND 512),
+    remote_target_alias TEXT NOT NULL,
+    inbound_target_alias TEXT NOT NULL,
+    local_target_principal_id TEXT NOT NULL REFERENCES principals(principal_id),
+    surrogate_source_principal_id TEXT NOT NULL UNIQUE REFERENCES principals(principal_id),
+    state TEXT NOT NULL CHECK (state IN ('active', 'revoked')),
+    enrolled_at TEXT NOT NULL,
+    revoked_at TEXT,
+    CHECK ((state = 'active' AND revoked_at IS NULL) OR
+           (state = 'revoked' AND revoked_at IS NOT NULL))
+) STRICT;
+
+CREATE TABLE peer_outbox (
+    delivery_id TEXT PRIMARY KEY,
+    route_id TEXT NOT NULL REFERENCES peer_routes(route_id),
+    origin_event_id TEXT NOT NULL REFERENCES events(event_id),
+    envelope_digest TEXT NOT NULL UNIQUE,
+    delivery_json BLOB NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('pending', 'settled', 'expired')),
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    receipt_digest TEXT,
+    receipt_json BLOB,
+    receipt_signature BLOB,
+    settled_at TEXT,
+    CHECK ((state = 'pending' AND receipt_digest IS NULL AND receipt_json IS NULL AND
+            receipt_signature IS NULL AND settled_at IS NULL) OR
+           (state = 'settled' AND receipt_digest IS NOT NULL AND receipt_json IS NOT NULL AND
+            length(receipt_signature) = 64 AND settled_at IS NOT NULL) OR
+           (state = 'expired' AND receipt_digest IS NULL AND receipt_json IS NULL AND
+            receipt_signature IS NULL AND settled_at IS NOT NULL))
+) STRICT;
+
+CREATE INDEX peer_outbox_pending
+ON peer_outbox(state, expires_at, created_at);
+
+CREATE TABLE peer_inbox (
+    delivery_id TEXT PRIMARY KEY,
+    route_id TEXT NOT NULL REFERENCES peer_routes(route_id),
+    envelope_digest TEXT NOT NULL,
+    delivery_json BLOB NOT NULL,
+    delivery_signature BLOB NOT NULL CHECK (length(delivery_signature) = 64),
+    state TEXT NOT NULL CHECK (state IN ('staged', 'settled', 'expired')),
+    expires_at TEXT NOT NULL,
+    received_at TEXT NOT NULL,
+    local_event_id TEXT REFERENCES events(event_id),
+    receipt_digest TEXT,
+    receipt_json BLOB,
+    settled_at TEXT,
+    CHECK ((state = 'staged' AND local_event_id IS NULL AND receipt_digest IS NULL AND
+            receipt_json IS NULL AND settled_at IS NULL) OR
+           (state = 'settled' AND receipt_digest IS NOT NULL AND receipt_json IS NOT NULL AND
+            settled_at IS NOT NULL) OR
+           (state = 'expired' AND local_event_id IS NULL AND receipt_digest IS NULL AND
+            receipt_json IS NULL AND settled_at IS NOT NULL))
+) STRICT;
+
+CREATE INDEX peer_inbox_staged
+ON peer_inbox(state, expires_at, received_at);
 
 CREATE TABLE event_artifacts (
     event_id TEXT NOT NULL REFERENCES events(event_id),
@@ -134,4 +200,4 @@ CREATE INDEX reference_lineage_key
 ON reference_lineage(reference_key, event_id);
 
 PRAGMA application_id = 1296978487;
-PRAGMA user_version = 3;
+PRAGMA user_version = 5;

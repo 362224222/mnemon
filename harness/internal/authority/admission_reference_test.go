@@ -1,6 +1,7 @@
 package authority
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -8,6 +9,114 @@ import (
 
 	"github.com/mnemon-dev/mnemon/harness/internal/agency"
 )
+
+func TestReferenceCitationRecordsExactHeadWithoutMutatingLineage(t *testing.T) {
+	fixture := newAuthorityFixture(t, "principal:reference-citation")
+	first := fixture.catalog(t, "citation guide v1")
+	publish := referenceRequest(t, fixture.current(t), "operation:citation-publish",
+		agency.ConsequencePublishReference, "guide.citation", &first)
+	publishResult, err := fixture.store.Admit(fixture.ctx, fixture.proof, publish)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireOutcome(t, publishResult, agency.ReceiptOutcomeAccepted)
+	publishReceipt, err := agency.ParseReceiptCanonicalJSON(publishResult.ReceiptJSON())
+	if err != nil {
+		t.Fatal(err)
+	}
+	citedHead, ok := publishReceipt.Event()
+	if !ok {
+		t.Fatal("Reference publish did not create an Event")
+	}
+	view := fixture.current(t)
+	head := referenceHeadHandle(t, view, "guide.citation")
+	intent := mustIntent(t, agency.IntentSpec{Kind: mustLabel(t, "work.guided"),
+		Payload: mustPayload(t, "use the cited guide"), Consequence: agency.ConsequenceCreateHandlings,
+		Successors:       []agency.TargetRef{agency.SelfTarget()},
+		CausationHandles: []agency.OpaqueHandle{head}})
+	request, err := view.Bind(intent, mustOperation(t, "operation:citation-use"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := fixture.store.Admit(fixture.ctx, fixture.proof, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireOutcome(t, result, agency.ReceiptOutcomeAccepted)
+	receipt, err := agency.ParseReceiptCanonicalJSON(result.ReceiptJSON())
+	if err != nil {
+		t.Fatal(err)
+	}
+	event, ok := receipt.Event()
+	if !ok {
+		t.Fatal("citation admission did not create an Event")
+	}
+	var canonical []byte
+	if err := fixture.store.db.QueryRow(`SELECT canonical_json FROM events WHERE event_id = ?`,
+		event.ID().String()).Scan(&canonical); err != nil {
+		t.Fatal(err)
+	}
+	var wire struct {
+		Evidence struct {
+			Causation []struct {
+				ID     string `json:"id"`
+				Digest string `json:"digest"`
+			} `json:"causation"`
+		} `json:"evidence"`
+	}
+	if err := json.Unmarshal(canonical, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if len(wire.Evidence.Causation) != 1 ||
+		wire.Evidence.Causation[0].ID != citedHead.ID().String() ||
+		wire.Evidence.Causation[0].Digest != citedHead.Digest().String() {
+		t.Fatalf("persisted Reference citation = %#v, want %v", wire.Evidence.Causation, citedHead)
+	}
+	if countRows(t, fixture.store, "reference_lineage") != 1 ||
+		countRows(t, fixture.store, "active_references") != 1 {
+		t.Fatal("citation mutated Reference lineage")
+	}
+}
+
+func TestReferenceCitationRejectsAHeadSupersededAfterView(t *testing.T) {
+	fixture := newAuthorityFixture(t, "principal:stale-reference-citation")
+	first := fixture.catalog(t, "citation guide v1")
+	publish := referenceRequest(t, fixture.current(t), "operation:stale-citation-publish",
+		agency.ConsequencePublishReference, "guide.stale-citation", &first)
+	if _, err := fixture.store.Admit(fixture.ctx, fixture.proof, publish); err != nil {
+		t.Fatal(err)
+	}
+	view := fixture.current(t)
+	head := referenceHeadHandle(t, view, "guide.stale-citation")
+	intent := mustIntent(t, agency.IntentSpec{Kind: mustLabel(t, "work.guided"),
+		Payload: mustPayload(t, "use a now-stale guide"), Consequence: agency.ConsequenceCreateHandlings,
+		Successors:        []agency.TargetRef{agency.SelfTarget()},
+		CorrelationHandle: head})
+	stale, err := view.Bind(intent, mustOperation(t, "operation:stale-citation-use"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := fixture.catalog(t, "citation guide v2")
+	supersede := referenceRequest(t, view, "operation:stale-citation-supersede",
+		agency.ConsequenceSupersedeReference, "guide.stale-citation", &second)
+	if result, err := fixture.store.Admit(fixture.ctx, fixture.proof, supersede); err != nil {
+		t.Fatal(err)
+	} else {
+		requireOutcome(t, result, agency.ReceiptOutcomeAccepted)
+	}
+	result, err := fixture.store.Admit(fixture.ctx, fixture.proof, stale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireOutcome(t, result, agency.ReceiptOutcomeRejected)
+	receipt, err := agency.ParseReceiptCanonicalJSON(result.ReceiptJSON())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt.Code() != rejectionStaleReference {
+		t.Fatalf("stale citation code = %s, want %s", receipt.Code().String(), rejectionStaleReference.String())
+	}
+}
 
 func TestConcurrentReferenceCASAcceptsExactlyOneCandidate(t *testing.T) {
 	fixture := newAuthorityFixture(t, "principal:reference-cas")

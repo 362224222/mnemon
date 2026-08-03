@@ -12,9 +12,10 @@ import (
 func insertEventTx(ctx context.Context, tx *sql.Tx, event agency.Event) error {
 	if _, err := tx.ExecContext(ctx, `INSERT INTO events(
 		event_id, event_digest, origin_sequence, source_principal_id,
-		request_digest, accepted_at, canonical_json) VALUES(?, ?, ?, ?, ?, ?, ?)`,
+		request_digest, causal_depth, accepted_at, canonical_json) VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
 		event.ID().String(), event.Digest().String(), event.OriginSequence(), event.Source().String(),
-		event.RequestDigest().String(), formatTime(event.AcceptedAt()), event.CanonicalJSON()); err != nil {
+		event.RequestDigest().String(), event.CausalDepth(), formatTime(event.AcceptedAt()),
+		event.CanonicalJSON()); err != nil {
 		return fmt.Errorf("admit Intent: persist Event: %w", err)
 	}
 	for _, digest := range event.Artifacts() {
@@ -26,54 +27,58 @@ func insertEventTx(ctx context.Context, tx *sql.Tx, event agency.Event) error {
 	return nil
 }
 
-func applyLocalEffectTx(ctx context.Context, tx *sql.Tx, request agency.BoundIntent,
-	event agency.Event, handlingIDs []agency.HandlingID,
+func applyDomainEffectTx(ctx context.Context, tx *sql.Tx, event agency.Event,
+	claimAttachment agency.AttachmentID, handlingIDs []agency.HandlingID,
 ) error {
-	consequence := request.Intent().Consequence()
+	consequence := event.Consequence()
 	switch consequence {
 	case agency.ConsequenceCreateHandlings:
-		return createSuccessorHandlingsTx(ctx, tx, request, event, handlingIDs)
+		return createSuccessorHandlingsTx(ctx, tx, event, handlingIDs)
 	case agency.ConsequenceAdvanceHandling:
-		if err := settleSubjectTx(ctx, tx, request, event, "open", ""); err != nil {
+		if err := settleSubjectTx(ctx, tx, event, claimAttachment, "open", ""); err != nil {
 			return err
 		}
-		return createSuccessorHandlingsTx(ctx, tx, request, event, handlingIDs)
+		return createSuccessorHandlingsTx(ctx, tx, event, handlingIDs)
 	case agency.ConsequenceResolveCompleted:
-		if err := settleSubjectTx(ctx, tx, request, event, "terminal", "completed"); err != nil {
+		if err := settleSubjectTx(ctx, tx, event, claimAttachment, "terminal", "completed"); err != nil {
 			return err
 		}
-		return createSuccessorHandlingsTx(ctx, tx, request, event, handlingIDs)
+		return createSuccessorHandlingsTx(ctx, tx, event, handlingIDs)
 	case agency.ConsequenceResolveDeclined:
-		if err := settleSubjectTx(ctx, tx, request, event, "terminal", "declined"); err != nil {
+		if err := settleSubjectTx(ctx, tx, event, claimAttachment, "terminal", "declined"); err != nil {
 			return err
 		}
-		return createSuccessorHandlingsTx(ctx, tx, request, event, handlingIDs)
+		return createSuccessorHandlingsTx(ctx, tx, event, handlingIDs)
 	case agency.ConsequenceResolveUnresolved:
-		if err := settleSubjectTx(ctx, tx, request, event, "terminal", "unresolved"); err != nil {
+		if err := settleSubjectTx(ctx, tx, event, claimAttachment, "terminal", "unresolved"); err != nil {
 			return err
 		}
-		return createSuccessorHandlingsTx(ctx, tx, request, event, handlingIDs)
+		return createSuccessorHandlingsTx(ctx, tx, event, handlingIDs)
 	case agency.ConsequencePublishReference:
-		return publishReferenceTx(ctx, tx, request, event)
+		return publishReferenceTx(ctx, tx, event)
 	case agency.ConsequenceSupersedeReference:
-		return supersedeReferenceTx(ctx, tx, request, event)
+		return supersedeReferenceTx(ctx, tx, event)
 	case agency.ConsequenceRetractReference:
-		return retractReferenceTx(ctx, tx, request, event)
+		return retractReferenceTx(ctx, tx, event)
 	default:
-		return errors.New("admit Intent: unknown local consequence")
+		return errors.New("admit Event: unknown consequence")
 	}
 }
 
-func createSuccessorHandlingsTx(ctx context.Context, tx *sql.Tx, request agency.BoundIntent,
-	event agency.Event, handlingIDs []agency.HandlingID,
+func createSuccessorHandlingsTx(ctx context.Context, tx *sql.Tx, event agency.Event,
+	handlingIDs []agency.HandlingID,
 ) error {
-	targets := request.Targets()
-	if len(targets) != len(handlingIDs) {
+	targets := event.Targets()
+	if localTargetCount(targets) != len(handlingIDs) {
 		return errors.New("admit Intent: successor ID cardinality mismatch")
 	}
-	for index, target := range targets {
+	index := 0
+	for _, target := range targets {
+		if target.Destination() == agency.TargetDestinationRemote {
+			continue
+		}
 		if target.Destination() != agency.TargetDestinationLocal || target.LocalPrincipal().IsZero() {
-			return errors.New("admit Intent: non-local successor reached local apply")
+			return errors.New("admit Intent: invalid successor reached local apply")
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO handlings(
 			handling_id, target_principal_id, head_event_id, state, created_sequence)
@@ -81,15 +86,16 @@ func createSuccessorHandlingsTx(ctx context.Context, tx *sql.Tx, request agency.
 			target.LocalPrincipal().String(), event.ID().String(), event.OriginSequence()); err != nil {
 			return fmt.Errorf("admit Intent: create successor Handling: %w", err)
 		}
+		index++
 	}
 	return nil
 }
 
-func settleSubjectTx(ctx context.Context, tx *sql.Tx, request agency.BoundIntent,
-	event agency.Event, state, outcome string,
+func settleSubjectTx(ctx context.Context, tx *sql.Tx, event agency.Event,
+	claimAttachment agency.AttachmentID, state, outcome string,
 ) error {
-	subject, present := request.Subject()
-	if !present {
+	subject, present := event.Subject()
+	if !present || claimAttachment.IsZero() {
 		return errors.New("admit Intent: subject effect lacks bound subject")
 	}
 	var outcomeValue any
@@ -100,7 +106,7 @@ func settleSubjectTx(ctx context.Context, tx *sql.Tx, request agency.BoundIntent
 		head_event_id = ?, state = ?, outcome = ?, claim_attachment_id = NULL, claim_until = NULL
 		WHERE handling_id = ? AND state = 'open' AND head_event_id = ?
 		AND claim_attachment_id = ? AND claim_fence = ?`, event.ID().String(), state, outcomeValue,
-		subject.HandlingID().String(), subject.Head().ID().String(), request.Attachment().ID().String(),
+		subject.HandlingID().String(), subject.Head().ID().String(), claimAttachment.String(),
 		subject.Fence())
 	if err != nil {
 		return fmt.Errorf("admit Intent: settle subject: %w", err)
@@ -112,11 +118,9 @@ func settleSubjectTx(ctx context.Context, tx *sql.Tx, request agency.BoundIntent
 	return nil
 }
 
-func publishReferenceTx(ctx context.Context, tx *sql.Tx, request agency.BoundIntent,
-	event agency.Event,
-) error {
-	expected, present := request.ExpectedReference()
-	artifacts := request.Artifacts()
+func publishReferenceTx(ctx context.Context, tx *sql.Tx, event agency.Event) error {
+	expected, present := event.ExpectedReference()
+	artifacts := event.Artifacts()
 	if !present || !expected.IsAbsent() || len(artifacts) != 1 {
 		return errors.New("admit Intent: malformed Reference publish")
 	}
@@ -133,11 +137,9 @@ func publishReferenceTx(ctx context.Context, tx *sql.Tx, request agency.BoundInt
 	return nil
 }
 
-func supersedeReferenceTx(ctx context.Context, tx *sql.Tx, request agency.BoundIntent,
-	event agency.Event,
-) error {
-	expected, present := request.ExpectedReference()
-	artifacts := request.Artifacts()
+func supersedeReferenceTx(ctx context.Context, tx *sql.Tx, event agency.Event) error {
+	expected, present := event.ExpectedReference()
+	artifacts := event.Artifacts()
 	if !present || expected.IsAbsent() || len(artifacts) != 1 {
 		return errors.New("admit Intent: malformed Reference supersede")
 	}
@@ -157,11 +159,9 @@ func supersedeReferenceTx(ctx context.Context, tx *sql.Tx, request agency.BoundI
 	return requireOneRow(result, "Reference supersede")
 }
 
-func retractReferenceTx(ctx context.Context, tx *sql.Tx, request agency.BoundIntent,
-	event agency.Event,
-) error {
-	expected, present := request.ExpectedReference()
-	if !present || expected.IsAbsent() || len(request.Artifacts()) != 0 {
+func retractReferenceTx(ctx context.Context, tx *sql.Tx, event agency.Event) error {
+	expected, present := event.ExpectedReference()
+	if !present || expected.IsAbsent() || len(event.Artifacts()) != 0 {
 		return errors.New("admit Intent: malformed Reference retract")
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO reference_lineage(
