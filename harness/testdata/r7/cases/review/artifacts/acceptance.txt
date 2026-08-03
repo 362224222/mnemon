@@ -1,0 +1,2 @@
+verdict=accepted
+total=42

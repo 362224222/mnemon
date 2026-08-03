@@ -1,0 +1,3 @@
+subject=deployment-window
+signal=red
+source=health-check

@@ -1,0 +1,2 @@
+verdict=rework
+reason=total must equal 42
