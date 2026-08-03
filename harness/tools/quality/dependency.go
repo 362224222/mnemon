@@ -217,6 +217,8 @@ func allowedHarnessImport(source, target string) bool {
 	allowed := map[string]map[string]bool{
 		"cmd":       {"agencycli": true, "integration": true, "localapi": true, "node": true},
 		"agencycli": {"agency": true},
+		"cas":       {"agency": true},
+		"peerlink":  {"agency": true, "cas": true},
 		"node":      {"event": true, "store": true, "agent": true, "artifact": true, "peer": true, "agency": true, "authority": true},
 		"localapi":  {"node": true}, "event": {"teamwork": true, "store": true, "artifact": true},
 		"teamwork": {}, "agent": {"event": true, "store": true, "artifact": true, "teamwork": true},
@@ -229,7 +231,7 @@ func allowedHarnessImport(source, target string) bool {
 
 func knownHarnessPackage(name string) bool {
 	switch name {
-	case "cmd", "assets", "agency", "agencycli", "agent", "artifact", "authority", "event", "integration", "localapi", "model", "node", "peer", "selector", "store", "teamwork", "testkit":
+	case "cmd", "assets", "agency", "agencycli", "agent", "artifact", "authority", "cas", "event", "integration", "localapi", "model", "node", "peer", "peerlink", "selector", "store", "teamwork", "testkit":
 		return true
 	default:
 		return false
