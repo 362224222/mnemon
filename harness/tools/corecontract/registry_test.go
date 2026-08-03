@@ -50,3 +50,32 @@ func TestRegistryRejectsNullListsUnknownKindsAndDivergentSharedSteps(t *testing.
 		t.Fatalf("shared step error = %v", err)
 	}
 }
+
+func TestRegistryRejectsInvariantWithoutExecutableGateOracle(t *testing.T) {
+	root := filepath.Clean("../../..")
+	contract, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry, err := LoadRegistry(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	missing := registry.Invariants[0].Oracles[0].Test
+	for gateIndex := range registry.Gates {
+		for stepIndex := range registry.Gates[gateIndex].Steps {
+			step := &registry.Gates[gateIndex].Steps[stepIndex]
+			kept := step.Oracles[:0]
+			for _, oracle := range step.Oracles {
+				if oracle != "test:"+missing {
+					kept = append(kept, oracle)
+				}
+			}
+			step.Oracles = kept
+		}
+	}
+	if err := ValidateBindings(root, contract, registry); err == nil ||
+		!strings.Contains(err.Error(), "not bound to any gate step") {
+		t.Fatalf("missing executable oracle error = %v", err)
+	}
+}

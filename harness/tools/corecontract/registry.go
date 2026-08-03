@@ -101,7 +101,30 @@ func ValidateBindings(root string, contract Contract, registry Registry) error {
 	if err := validateInvariantBindings(root, contract, registry.Invariants); err != nil {
 		return err
 	}
-	return validateGateBindings(contract, registry.Gates)
+	if err := validateGateBindings(contract, registry.Gates); err != nil {
+		return err
+	}
+	return validateInvariantExecutionCoverage(registry)
+}
+
+func validateInvariantExecutionCoverage(registry Registry) error {
+	bound := make(map[string]struct{})
+	for _, gate := range registry.Gates {
+		for _, step := range gate.Steps {
+			if step.Kind != "go-test" {
+				continue
+			}
+			for _, oracle := range step.Oracles {
+				bound[strings.TrimPrefix(oracle, "test:")] = struct{}{}
+			}
+		}
+	}
+	for _, test := range invariantTests(registry) {
+		if _, found := bound[test]; !found {
+			return fmt.Errorf("invariant test %s is not bound to any gate step", test)
+		}
+	}
+	return nil
 }
 
 func validateInvariantBindings(root string, contract Contract, bindings []InvariantBinding) error {
