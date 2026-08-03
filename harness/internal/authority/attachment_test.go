@@ -1,6 +1,7 @@
 package authority
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"testing"
@@ -8,6 +9,104 @@ import (
 
 	"github.com/mnemon-dev/mnemon/harness/internal/agency"
 )
+
+func TestInteractiveAttachmentBeginExactlyReplaysAcrossRestart(t *testing.T) {
+	ctx := context.Background()
+	path := testDatabasePath(t)
+	now := time.Date(2026, 8, 3, 0, 1, 2, 3, time.UTC)
+	store, err := open(ctx, path, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	principal := mustPrincipal(t, "principal:attachment-restart")
+	if err := store.EnrollPrincipal(ctx, principal); err != nil {
+		t.Fatal(err)
+	}
+	boundary := agency.Sum([]byte("private Host boundary replay"))
+	first, err := store.IssueInteractiveAttachment(ctx, principal, boundary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	now = now.Add(time.Minute)
+	reopened, err := open(ctx, path, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	replayed, err := reopened.IssueInteractiveAttachment(ctx, principal, boundary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayed.ID() != first.ID() || replayed.ExpiresAt() != first.ExpiresAt() ||
+		!bytes.Equal(replayed.Credential(), first.Credential()) {
+		t.Fatalf("attachment replay changed proof: first=%q/%s replay=%q/%s",
+			first.ID().String(), first.ExpiresAt(), replayed.ID().String(), replayed.ExpiresAt())
+	}
+	var count int
+	if err := reopened.db.QueryRow(`SELECT COUNT(*) FROM attachments`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("attachment rows after restart replay = %d, want 1", count)
+	}
+}
+
+func TestInteractiveAttachmentBeginRejectsSameOperationDifferentPrincipal(t *testing.T) {
+	fixture := newAuthorityFixture(t, "principal:attachment-begin-owner")
+	other := mustPrincipal(t, "principal:attachment-begin-other")
+	if err := fixture.store.EnrollPrincipal(fixture.ctx, other); err != nil {
+		t.Fatal(err)
+	}
+	boundary := agency.Sum([]byte("one private Host boundary"))
+	_, err := fixture.store.IssueInteractiveAttachment(fixture.ctx, fixture.principal, boundary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var initialCount int
+	if err := fixture.store.db.QueryRow(`SELECT COUNT(*) FROM attachments`).Scan(&initialCount); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.IssueInteractiveAttachment(fixture.ctx, other, boundary); !errors.Is(err, ErrOperationConflict) {
+		t.Fatalf("same boundary with different Principal = %v, want ErrOperationConflict", err)
+	}
+	var count int
+	if err := fixture.store.db.QueryRow(`SELECT COUNT(*) FROM attachments`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != initialCount {
+		t.Fatalf("attachment rows after operation conflict = %d, want %d", count, initialCount)
+	}
+}
+
+func TestInteractiveAttachmentBeginCannotReviveEndedBoundary(t *testing.T) {
+	fixture := newAuthorityFixture(t, "principal:attachment-ended-boundary")
+	boundary := agency.Sum([]byte("ended private Host boundary"))
+	proof, err := fixture.store.IssueInteractiveAttachment(fixture.ctx, fixture.principal, boundary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var initialCount int
+	if err := fixture.store.db.QueryRow(`SELECT COUNT(*) FROM attachments`).Scan(&initialCount); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.EndInteractiveAttachment(fixture.ctx, proof); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.IssueInteractiveAttachment(fixture.ctx, fixture.principal, boundary); !errors.Is(err, ErrAttachmentEnded) {
+		t.Fatalf("ended boundary attachment replay = %v, want ErrAttachmentEnded", err)
+	}
+	var count int
+	if err := fixture.store.db.QueryRow(`SELECT COUNT(*) FROM attachments`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != initialCount {
+		t.Fatalf("attachment rows after ended replay = %d, want %d", count, initialCount)
+	}
+}
 
 func TestEnrollmentAndMachineIssuedAttachmentStaySeparate(t *testing.T) {
 	ctx := context.Background()
@@ -18,7 +117,8 @@ func TestEnrollmentAndMachineIssuedAttachmentStaySeparate(t *testing.T) {
 	}
 	defer store.Close()
 	principal := mustPrincipal(t, "principal:attachment")
-	if _, err := store.IssueInteractiveAttachment(ctx, principal); !errors.Is(err, ErrPrincipalUnavailable) {
+	boundary := nextAttachmentBoundary(t)
+	if _, err := store.IssueInteractiveAttachment(ctx, principal, boundary); !errors.Is(err, ErrPrincipalUnavailable) {
 		t.Fatalf("Issue before enrollment = %v, want ErrPrincipalUnavailable", err)
 	}
 	if err := store.EnrollPrincipal(ctx, principal); err != nil {
@@ -27,7 +127,7 @@ func TestEnrollmentAndMachineIssuedAttachmentStaySeparate(t *testing.T) {
 	if err := store.EnrollPrincipal(ctx, principal); err != nil {
 		t.Fatalf("repeat enrollment: %v", err)
 	}
-	proof, err := store.IssueInteractiveAttachment(ctx, principal)
+	proof, err := store.IssueInteractiveAttachment(ctx, principal, boundary)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +176,7 @@ func TestAttachmentCredentialDoesNotAuthenticateByIDAlone(t *testing.T) {
 	if err := store.EnrollPrincipal(ctx, principal); err != nil {
 		t.Fatal(err)
 	}
-	proof, err := store.IssueInteractiveAttachment(ctx, principal)
+	proof, err := store.IssueInteractiveAttachment(ctx, principal, nextAttachmentBoundary(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,6 +291,25 @@ func TestAttachmentSchemaDoesNotReserveManagedWakeMode(t *testing.T) {
 		formatTime(fixture.now.Add(time.Minute)))
 	if err == nil {
 		t.Fatal("R7 T0 schema accepted a managed-wake attachment")
+	}
+}
+
+func TestAttachmentSchemaAllowsOneUnendedInteractiveBoundaryPerPrincipal(t *testing.T) {
+	fixture := newAuthorityFixture(t, "principal:one-live-boundary")
+	material, err := deriveAttachmentBegin(fixture.principal, nextAttachmentBoundary(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(material.credential[:])
+	credential := agency.Sum(material.credential[:])
+	_, err = fixture.store.db.Exec(`INSERT INTO attachments(
+		attachment_id, principal_id, mode, credential_digest, begin_operation_key,
+		begin_request_digest, issued_at, expires_at)
+		VALUES(?, ?, 'interactive', ?, ?, ?, ?, ?)`, material.attachment.String(),
+		fixture.principal.String(), credential.String(), material.operationKey.String(),
+		material.request.String(), formatTime(*fixture.now), formatTime(fixture.now.Add(time.Minute)))
+	if err == nil {
+		t.Fatal("schema accepted two unended interactive boundaries for one Principal")
 	}
 }
 

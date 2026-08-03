@@ -19,7 +19,8 @@ import (
 func TestDaemonReadsOnlyArtifactOfferedByExactCurrentView(t *testing.T) {
 	environment := startArtifactReadDaemon(t)
 	client := environment.client
-	attached := controlRequest(t, client, http.MethodPost, routeAttachments, []byte(`{}`), nil,
+	attached := controlRequest(t, client, http.MethodPost, routeAttachments,
+		testAttachmentBeginBody("artifact-read"), nil,
 		http.StatusOK)
 	var attachmentResponse attachmentWire
 	decodeTestWire(t, attached, &attachmentResponse)

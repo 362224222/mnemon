@@ -234,7 +234,8 @@ func TestCurrentNeverClaimsAnotherPrincipalsHandling(t *testing.T) {
 	if err := fixture.store.EnrollPrincipal(fixture.ctx, otherPrincipal); err != nil {
 		t.Fatal(err)
 	}
-	otherProof, err := fixture.store.IssueInteractiveAttachment(fixture.ctx, otherPrincipal)
+	otherProof, err := fixture.store.IssueInteractiveAttachment(fixture.ctx, otherPrincipal,
+		nextAttachmentBoundary(t))
 	if err != nil {
 		t.Fatal(err)
 	}

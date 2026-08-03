@@ -1,0 +1,280 @@
+package authority
+
+import (
+	"crypto/ed25519"
+	"encoding/json"
+	"errors"
+	"strings"
+	"testing"
+
+	"github.com/mnemon-dev/mnemon/harness/internal/agency"
+)
+
+func TestCurrentKeepsOldestAnchorWritableAndProjectsCorrelatedPeerResult(t *testing.T) {
+	fixture := newPeerRoundTripFixture(t)
+	requestDelivery := fixture.admitOrigin(t)
+	fixture.admitReceiver(t, requestDelivery)
+	frozenOperation, frozen := freezeOriginFocusView(t, &fixture)
+	if got := decodeFocusView(t, frozen); len(got.RelatedOpen) != 0 || got.Outstanding.OpenTotal != 1 {
+		t.Fatalf("frozen origin View = %#v", got)
+	}
+	admitCorrelatedPeerResponse(t, &fixture, requestDelivery)
+
+	replayed, err := fixture.origin.store.ReplayCurrent(fixture.origin.ctx,
+		fixture.origin.proof, frozenOperation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := decodeFocusView(t, replayed); len(got.RelatedOpen) != 0 ||
+		got.Outstanding.OpenTotal != 1 {
+		t.Fatalf("frozen Current absorbed a later Event: %#v", got)
+	}
+
+	fresh := fixture.origin.current(t)
+	public := decodeFocusView(t, fresh)
+	if public.Current == nil || public.Current.Semantic.Payload != "consider the bounded request" {
+		t.Fatalf("oldest anchor was not retained as Current: %#v", public.Current)
+	}
+	if len(public.RelatedOpen) != 1 ||
+		public.RelatedOpen[0].Semantic.Kind != "review.response" ||
+		public.RelatedOpen[0].Semantic.Payload != "the bounded request was reviewed" ||
+		public.RelatedOpen[0].Facts.Relation != "correlation" {
+		t.Fatalf("correlated response projection = %#v", public.RelatedOpen)
+	}
+	if public.Outstanding.OpenTotal != 2 || public.Outstanding.RelatedTotal != 1 ||
+		public.Outstanding.RelatedProjected != 1 || public.Outstanding.Truncated {
+		t.Fatalf("outstanding projection = %#v", public.Outstanding)
+	}
+
+	illegal := mustIntent(t, agency.IntentSpec{Kind: mustLabel(t, "review.illegal"),
+		Consequence:     agency.ConsequenceAdvanceHandling,
+		SubjectHandling: mustHandle(t, public.RelatedOpen[0].Facts.Event)})
+	if _, err := fresh.Bind(illegal, mustOperation(t, "operation:focus-illegal"), nil); !errors.Is(err, agency.ErrInvariant) {
+		t.Fatalf("related Event became writable subject: %v", err)
+	}
+}
+
+func TestFocusProjectionUsesDeterministicBoundedPrefixAndPayloadBudget(t *testing.T) {
+	root := focusEventRef(t, "event:focus-budget-root", "root")
+	first := focusStoredEvent(t, "event:focus-budget-first", root,
+		strings.Repeat("a", agency.MaxAgentViewFocusPayloadBytes/2))
+	second := focusStoredEvent(t, "event:focus-budget-second", root, "later")
+	unrelated := focusStoredEvent(t, "event:focus-budget-unrelated",
+		focusEventRef(t, "event:other-root", "other"), "ignore")
+	current := mustPayload(t, strings.Repeat("c", agency.MaxAgentViewFocusPayloadBytes/2))
+
+	projected, total := selectFocusRelated(current, root,
+		[]storedEventDetails{unrelated, first, second})
+	if total != 2 || len(projected) != 1 || projected[0].details.ref != first.ref {
+		t.Fatalf("bounded focus = total %d projected %#v", total, projected)
+	}
+	overBudget, total := selectFocusRelated(
+		mustPayload(t, strings.Repeat("c", agency.MaxAgentViewFocusPayloadBytes)), root,
+		[]storedEventDetails{first})
+	if total != 1 || len(overBudget) != 0 {
+		t.Fatalf("over-budget focus = total %d projected %#v", total, overBudget)
+	}
+	escapedCurrent := mustPayload(t, strings.Repeat("\x01", 680))
+	if len(escapedCurrent.String()) >= agency.MaxAgentViewFocusPayloadBytes ||
+		jsonEncodedPayloadBytes(escapedCurrent) > agency.MaxAgentViewFocusPayloadBytes {
+		t.Fatal("escaped Current fixture is not independently representable")
+	}
+	escapedBudget, total := selectFocusRelated(escapedCurrent, root,
+		[]storedEventDetails{focusStoredEvent(t, "event:focus-budget-escaped", root,
+			strings.Repeat("r", 32))})
+	if total != 1 || len(escapedBudget) != 0 {
+		t.Fatalf("escaped over-budget focus = total %d projected %#v", total, escapedBudget)
+	}
+}
+
+func TestCurrentKeepsEscapedCurrentAndOmitsRelatedBeyondEncodedBudget(t *testing.T) {
+	fixture := newPeerRoundTripFixture(t)
+	view := fixture.origin.current(t)
+	remote, err := agency.AliasTarget(fixture.originRoute.PublicAlias)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := strings.Repeat("\x01", 680)
+	operation := mustOperation(t, "operation:focus-escaped-root")
+	artifactInput, err := agency.NewArtifactCandidate(mustHandle(t, "candidate:focus-escaped-root"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := mustIntent(t, agency.IntentSpec{
+		Kind:        mustLabel(t, "generic.escaped-request"),
+		Payload:     mustPayload(t, payload),
+		Consequence: agency.ConsequenceCreateHandlings,
+		Successors:  []agency.TargetRef{agency.SelfTarget(), remote},
+		Artifacts:   []agency.ArtifactInput{artifactInput},
+	})
+	candidate, err := agency.NewCapturedCandidate(operation, artifactInput, fixture.digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := view.Bind(intent, operation, []agency.CapturedCandidate{candidate})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := fixture.origin.store.Admit(fixture.origin.ctx, fixture.origin.proof, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireOutcome(t, result, agency.ReceiptOutcomeAccepted)
+	delivery := requireOnePendingDelivery(t, fixture.origin)
+	fixture.admitReceiver(t, delivery)
+	admitCorrelatedPeerResponse(t, &fixture, delivery)
+
+	fresh := fixture.origin.current(t)
+	public := decodeFocusView(t, fresh)
+	if public.Current == nil || public.Current.Semantic.Payload != payload {
+		t.Fatalf("escaped Current was not readable: %#v", public.Current)
+	}
+	if len(public.RelatedOpen) != 0 || public.Outstanding.OpenTotal != 2 ||
+		public.Outstanding.RelatedTotal != 1 || public.Outstanding.RelatedProjected != 0 ||
+		!public.Outstanding.Truncated {
+		t.Fatalf("escaped focus projection = related %d outstanding %#v",
+			len(public.RelatedOpen), public.Outstanding)
+	}
+	if len(fresh.AgentView().CanonicalJSON()) > agency.MaxAgentViewCanonicalBytes {
+		t.Fatalf("escaped Current View exceeds canonical bound: %d",
+			len(fresh.AgentView().CanonicalJSON()))
+	}
+}
+
+func focusStoredEvent(t *testing.T, id string, correlation agency.EventRef,
+	payload string,
+) storedEventDetails {
+	t.Helper()
+	return storedEventDetails{ref: focusEventRef(t, id, payload),
+		kind: mustLabel(t, "generic.response"), payload: mustPayload(t, payload),
+		correlation: correlation}
+}
+
+func focusEventRef(t *testing.T, id, body string) agency.EventRef {
+	t.Helper()
+	ref, err := agency.NewEventRef(mustEventID(t, id), agency.Sum([]byte(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ref
+}
+
+func freezeOriginFocusView(t *testing.T, fixture *peerRoundTripFixture) (CurrentOperation, BoundView) {
+	t.Helper()
+	operation, err := NewCurrentOperation(mustOperation(t, "operation:focus-frozen"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := fixture.origin.store.Current(fixture.origin.ctx, fixture.origin.proof, operation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return operation, view
+}
+
+func admitCorrelatedPeerResponse(t *testing.T, fixture *peerRoundTripFixture,
+	requestDelivery agency.PeerDelivery,
+) {
+	t.Helper()
+	receiverView := fixture.receiver.current(t)
+	receiverPublic := decodeFocusView(t, receiverView)
+	if receiverPublic.Current == nil || receiverPublic.Current.Facts.ReplyTo == "" ||
+		receiverPublic.Current.Facts.ReplyTo == receiverPublic.Current.Facts.Handle {
+		t.Fatal("receiver did not claim the imported request")
+	}
+	remote, err := agency.AliasTarget(fixture.receiverRoute.PublicAlias)
+	if err != nil {
+		t.Fatal(err)
+	}
+	responseIntent := mustIntent(t, agency.IntentSpec{
+		Kind:              mustLabel(t, "review.response"),
+		Payload:           mustPayload(t, "the bounded request was reviewed"),
+		Consequence:       agency.ConsequenceAdvanceHandling,
+		SubjectHandling:   mustHandle(t, receiverPublic.Current.Facts.Handle),
+		Successors:        []agency.TargetRef{remote},
+		CorrelationHandle: mustHandle(t, receiverPublic.Current.Facts.ReplyTo),
+	})
+	response, err := receiverView.Bind(responseIntent,
+		mustOperation(t, "operation:focus-response"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := fixture.receiver.store.Admit(fixture.receiver.ctx, fixture.receiver.proof,
+		response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireOutcome(t, result, agency.ReceiptOutcomeAccepted)
+	responseDelivery := requireOnePendingDelivery(t, fixture.receiver)
+	requireOriginCorrelation(t, responseDelivery, requestDelivery.OriginEvent())
+	admitSignedResponse(t, fixture, responseDelivery)
+}
+
+func requireOnePendingDelivery(t *testing.T, node *authorityFixture) agency.PeerDelivery {
+	t.Helper()
+	pending, err := node.store.PendingPeerDeliveries(node.ctx, MaxPendingPeerDeliveries)
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("response PeerDelivery = %#v, %v", pending, err)
+	}
+	return pending[0].Delivery()
+}
+
+func requireOriginCorrelation(t *testing.T, delivery agency.PeerDelivery, want agency.EventRef) {
+	t.Helper()
+	correlation, present := delivery.OriginCorrelation()
+	if !present || correlation != want {
+		t.Fatalf("response correlation = %v,%t; want origin anchor %v", correlation, present, want)
+	}
+}
+
+func admitSignedResponse(t *testing.T, fixture *peerRoundTripFixture, delivery agency.PeerDelivery) {
+	t.Helper()
+	signature := ed25519.Sign(fixture.receiverPrivate, delivery.SigningMessage())
+	staged, err := fixture.origin.store.StagePeerDelivery(fixture.origin.ctx,
+		fixture.originRoute.RemotePeerID, delivery.CanonicalJSON(), signature)
+	if err != nil || staged.State() != PeerAdmissionStateStaged {
+		t.Fatalf("StagePeerDelivery(response) = %#v, %v", staged, err)
+	}
+	accepted, err := fixture.origin.store.AdmitPeerDelivery(fixture.origin.ctx, delivery.ID())
+	if err != nil || accepted.State() != PeerAdmissionStateAccepted {
+		t.Fatalf("AdmitPeerDelivery(response) = %#v, %v", accepted, err)
+	}
+}
+
+type focusViewWire struct {
+	Current *struct {
+		Facts struct {
+			Handle  string `json:"handle"`
+			ReplyTo string `json:"reply_to"`
+		} `json:"facts"`
+		Semantic struct {
+			Kind    string `json:"kind"`
+			Payload string `json:"payload"`
+		} `json:"semantic"`
+	} `json:"current"`
+	RelatedOpen []struct {
+		Facts struct {
+			Event    string `json:"event"`
+			Relation string `json:"relation"`
+		} `json:"facts"`
+		Semantic struct {
+			Kind    string `json:"kind"`
+			Payload string `json:"payload"`
+		} `json:"semantic"`
+	} `json:"related_open"`
+	Outstanding struct {
+		OpenTotal        int  `json:"open_total"`
+		RelatedTotal     int  `json:"related_total"`
+		RelatedProjected int  `json:"related_projected"`
+		Truncated        bool `json:"truncated"`
+	} `json:"outstanding"`
+}
+
+func decodeFocusView(t *testing.T, view BoundView) focusViewWire {
+	t.Helper()
+	var wire focusViewWire
+	if err := json.Unmarshal(view.AgentView().CanonicalJSON(), &wire); err != nil {
+		t.Fatal(err)
+	}
+	return wire
+}

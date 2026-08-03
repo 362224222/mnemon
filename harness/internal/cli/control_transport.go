@@ -197,7 +197,7 @@ func decodeRemoteError(object []byte, status int) *controlError {
 }
 
 func postRoute(route string) bool {
-	return route == routeAttachments || route == routeCurrent || route == routeSubmit ||
+	return route == routeAttachments || route == routeAttachmentEnd || route == routeCurrent || route == routeSubmit ||
 		route == routeArtifacts || route == routeArtifactRead
 }
 

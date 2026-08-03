@@ -172,7 +172,8 @@ func captureSeedArtifacts(ctx context.Context, objects *cas.Store, store *author
 func admitSeedIntent(ctx context.Context, store *authority.Store, principal agency.AgentPrincipalID,
 	descriptor selector.SelectionDescriptor, opinion selector.SeedOpinion,
 ) (agency.BoundIntent, agency.Receipt, error) {
-	proof, err := store.IssueInteractiveAttachment(ctx, principal)
+	boundary := agency.Sum([]byte("r8-seed-boundary:" + descriptor.ID().Digest().String()))
+	proof, err := store.IssueInteractiveAttachment(ctx, principal, boundary)
 	if err != nil {
 		return agency.BoundIntent{}, agency.Receipt{}, err
 	}

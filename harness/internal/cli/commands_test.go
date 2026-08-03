@@ -51,15 +51,167 @@ func TestCaptureKeepsDigestPrivateAndSubmitReplaysAfterPresentationLoss(t *testi
 	fixture.client.mu.Lock()
 	operations := append([]string(nil), fixture.client.submitOperations...)
 	bindings := append([][]candidateBinding(nil), fixture.client.submitCandidates...)
+	endCalls := fixture.client.endCalls
 	fixture.client.mu.Unlock()
 	if exit != 0 || len(operations) != 2 || operations[0] == "" || operations[0] != operations[1] ||
 		len(bindings) != 2 || len(bindings[0]) != 1 || bindings[0][0].Digest != digest ||
-		!strings.Contains(replay.String(), `"replayed":true`) {
+		!strings.Contains(replay.String(), `"replayed":true`) || endCalls != 1 {
 		t.Fatalf("submit replay = exit %d operations %#v bindings %#v output %q",
 			exit, operations, bindings, replay.String())
 	}
 	if exists, err := store.exists(); err != nil || exists {
 		t.Fatalf("presented journal exists = %v, %v", exists, err)
+	}
+}
+
+func TestAcceptedHandlingReceiptRetainsReplayUntilBoundaryEndCommits(t *testing.T) {
+	fixture := newAppFixture(t)
+	fixture.attach(t)
+	if exit := fixture.app(strings.NewReader(""), io.Discard).
+		Run(context.Background(), []string{"agent", "current", "--json"}); exit != 0 {
+		t.Fatalf("Current exit = %d", exit)
+	}
+	fixture.client.endFailures = 1
+	intent := candidateFreeRootIntent(t, "boundary-end-replay")
+	var first bytes.Buffer
+	if exit := fixture.app(bytes.NewReader(intent), &first).
+		Run(context.Background(), []string{"agent", "submit", "--json"}); exit != 0 {
+		t.Fatalf("accepted submit with lost end = exit %d output %q", exit, first.String())
+	}
+	terminal := loadJournalForTest(t, fixture.nodeState)
+	if !validTerminalName(terminal.fileName) || !terminal.CurrentOperation.IsZero() {
+		terminal.clear()
+		t.Fatalf("presented boundary end journal = file %q current %q",
+			terminal.fileName, terminal.CurrentOperation.String())
+	}
+	terminal.clear()
+
+	var next bytes.Buffer
+	if exit := fixture.app(bytes.NewReader(testBoundaryEnvelope(t, 0x22)), &next).
+		Run(context.Background(), []string{"hook", "attach", "--json"}); exit != 0 {
+		t.Fatalf("new boundary recovery = exit %d output %q", exit, next.String())
+	}
+	journal := loadJournalForTest(t, fixture.nodeState)
+	if journal.fileName != journalActiveName ||
+		journal.BoundaryDigest != agency.Sum(bytes.Repeat([]byte{0x22}, 32)) {
+		journal.clear()
+		t.Fatalf("recovered new boundary journal = file %q boundary %s",
+			journal.fileName, journal.BoundaryDigest.String())
+	}
+	journal.clear()
+	fixture.client.mu.Lock()
+	endCalls := fixture.client.endCalls
+	attachCalls := fixture.client.attachCalls
+	submitCalls := len(fixture.client.submitOperations)
+	fixture.client.mu.Unlock()
+	if endCalls != 2 || attachCalls != 2 || submitCalls != 1 {
+		t.Fatalf("boundary recovery calls = ends %d attaches %d submits %d, want 2/2/1",
+			endCalls, attachCalls, submitCalls)
+	}
+}
+
+func TestHookEndFinishesPresentedHandlingWithoutIntentReplay(t *testing.T) {
+	fixture := newAppFixture(t)
+	fixture.attach(t)
+	if exit := fixture.app(strings.NewReader(""), io.Discard).
+		Run(context.Background(), []string{"agent", "current", "--json"}); exit != 0 {
+		t.Fatalf("Current exit = %d", exit)
+	}
+	fixture.client.endFailures = 1
+	intent := candidateFreeRootIntent(t, "hook-end-recovery")
+	if exit := fixture.app(bytes.NewReader(intent), io.Discard).
+		Run(context.Background(), []string{"agent", "submit", "--json"}); exit != 0 {
+		t.Fatalf("accepted submit exit = %d", exit)
+	}
+	fixture.endBoundary(t, 0x21)
+	store := newJournalStore(fixture.nodeState, bytes.NewReader(make([]byte, 64)))
+	if exists, err := store.exists(); err != nil || exists {
+		t.Fatalf("Hook-end recovered journal exists = %t, %v", exists, err)
+	}
+	fixture.client.mu.Lock()
+	endCalls := fixture.client.endCalls
+	submitCalls := len(fixture.client.submitOperations)
+	fixture.client.mu.Unlock()
+	if endCalls != 2 || submitCalls != 1 {
+		t.Fatalf("Hook-end recovery calls = ends %d submits %d, want 2/1",
+			endCalls, submitCalls)
+	}
+}
+
+func TestSameHookAttachFinishesPresentedHandlingButNeverReturnsReady(t *testing.T) {
+	fixture := newAppFixture(t)
+	fixture.attach(t)
+	if exit := fixture.app(strings.NewReader(""), io.Discard).
+		Run(context.Background(), []string{"agent", "current", "--json"}); exit != 0 {
+		t.Fatalf("Current exit = %d", exit)
+	}
+	fixture.client.endFailures = 1
+	intent := candidateFreeRootIntent(t, "same-boundary-recovery")
+	if exit := fixture.app(bytes.NewReader(intent), io.Discard).
+		Run(context.Background(), []string{"agent", "submit", "--json"}); exit != 0 {
+		t.Fatalf("accepted submit exit = %d", exit)
+	}
+	// Model End reaching authority while the subsequent journal removal is
+	// lost. The same-boundary Hook retry must finish cleanup, never report ready.
+	presented := loadJournalForTest(t, fixture.nodeState)
+	if apiErr := fixture.client.End(context.Background(), presented.Attachment); apiErr != nil {
+		presented.clear()
+		t.Fatal(apiErr)
+	}
+	presented.clear()
+	var output bytes.Buffer
+	exit := fixture.app(bytes.NewReader(testBoundaryEnvelope(t, 0x21)), &output).
+		Run(context.Background(), []string{"hook", "attach", "--json"})
+	if exit != codeContextStale.exitStatus() ||
+		!strings.Contains(output.String(), string(codeContextStale)) ||
+		strings.Contains(output.String(), `"status":"ready"`) {
+		t.Fatalf("completed same boundary = exit %d output %q", exit, output.String())
+	}
+	store := newJournalStore(fixture.nodeState, bytes.NewReader(make([]byte, 64)))
+	if exists, err := store.exists(); err != nil || exists {
+		t.Fatalf("completed same-boundary journal exists = %t, %v", exists, err)
+	}
+	fixture.client.mu.Lock()
+	endCalls := fixture.client.endCalls
+	attachCalls := fixture.client.attachCalls
+	submitCalls := len(fixture.client.submitOperations)
+	fixture.client.mu.Unlock()
+	if endCalls != 3 || attachCalls != 1 || submitCalls != 1 {
+		t.Fatalf("same-boundary recovery calls = ends %d attaches %d submits %d, want 3/1/1",
+			endCalls, attachCalls, submitCalls)
+	}
+}
+
+func TestHookEndCannotDestroyUnpresentedReceiptReplay(t *testing.T) {
+	fixture := newAppFixture(t)
+	fixture.attach(t)
+	if exit := fixture.app(strings.NewReader(""), io.Discard).
+		Run(context.Background(), []string{"agent", "current", "--json"}); exit != 0 {
+		t.Fatalf("Current exit = %d", exit)
+	}
+	intent := candidateFreeRootIntent(t, "unpresented-hook-end")
+	if exit := fixture.app(bytes.NewReader(intent), &failWriter{}).
+		Run(context.Background(), []string{"agent", "submit", "--json"}); exit != 1 {
+		t.Fatalf("failed presentation exit = %d, want 1", exit)
+	}
+	var endOutput bytes.Buffer
+	exit := fixture.app(bytes.NewReader(testBoundaryEnvelope(t, 0x21)), &endOutput).
+		Run(context.Background(), []string{"hook", "end", "--json"})
+	if exit != codeOperationPending.exitStatus() ||
+		!strings.Contains(endOutput.String(), string(codeOperationPending)) {
+		t.Fatalf("unpresented Hook end = exit %d output %q", exit, endOutput.String())
+	}
+	fixture.client.mu.Lock()
+	endCalls := fixture.client.endCalls
+	fixture.client.mu.Unlock()
+	if endCalls != 0 {
+		t.Fatalf("unpresented Hook end calls = %d, want 0", endCalls)
+	}
+	var replay bytes.Buffer
+	if exit := fixture.app(bytes.NewReader(intent), &replay).
+		Run(context.Background(), []string{"agent", "submit", "--json"}); exit != 0 ||
+		!strings.Contains(replay.String(), `"replayed":true`) {
+		t.Fatalf("receipt replay after refused Hook end = exit %d output %q", exit, replay.String())
 	}
 }
 
@@ -92,10 +244,12 @@ func TestAcceptedReferenceKeepsAttachmentAndRefreshesCurrent(t *testing.T) {
 	}
 	fixture.client.mu.Lock()
 	attachCalls := fixture.client.attachCalls
+	endCalls := fixture.client.endCalls
 	operations := append([]string(nil), fixture.client.currentOperations...)
 	fixture.client.mu.Unlock()
-	if attachCalls != 1 || len(operations) != 2 || operations[0] == operations[1] {
-		t.Fatalf("continued attachment = attaches %d operations %#v", attachCalls, operations)
+	if attachCalls != 1 || endCalls != 0 || len(operations) != 2 || operations[0] == operations[1] {
+		t.Fatalf("continued attachment = attaches %d ends %d operations %#v",
+			attachCalls, endCalls, operations)
 	}
 }
 
@@ -210,7 +364,12 @@ func TestHookNeverOverwritesExpiredTerminalReplayJournal(t *testing.T) {
 		t.Fatalf("terminal setup exit = %d", exit)
 	}
 	fixture.now = fixture.now.AddDate(2, 0, 0)
-	fixture.attach(t)
+	var rotated bytes.Buffer
+	exit = fixture.app(bytes.NewReader(testBoundaryEnvelope(t, 0x25)), &rotated).
+		Run(context.Background(), []string{"hook", "attach", "--json"})
+	if exit != codeOperationPending.exitStatus() {
+		t.Fatalf("new boundary over terminal journal = exit %d output %q", exit, rotated.String())
+	}
 	fixture.client.mu.Lock()
 	calls := fixture.client.attachCalls
 	fixture.client.mu.Unlock()
@@ -255,7 +414,11 @@ func TestUnsafeJournalFailsClosedBeforeEnsure(t *testing.T) {
 				t.Fatal(err)
 			}
 			var output bytes.Buffer
-			exit := fixture.app(strings.NewReader(""), &output).Run(context.Background(), args)
+			input := io.Reader(strings.NewReader(""))
+			if args[0] == "hook" {
+				input = bytes.NewReader(testBoundaryEnvelope(t, 0x21))
+			}
+			exit := fixture.app(input, &output).Run(context.Background(), args)
 			if exit != codeAuthenticationFailed.exitStatus() ||
 				!strings.Contains(output.String(), string(codeAuthenticationFailed)) ||
 				fixture.ensure.Load() != 0 {
@@ -285,7 +448,7 @@ func TestInterruptedJournalStageIsRecovered(t *testing.T) {
 func TestEnsureFailurePreventsPrivateClientCall(t *testing.T) {
 	fixture := newAppFixture(t)
 	var output bytes.Buffer
-	app := fixture.app(strings.NewReader(""), &output)
+	app := fixture.app(bytes.NewReader(testBoundaryEnvelope(t, 0x21)), &output)
 	app.deps.ensureDaemon = func(context.Context, string) error {
 		return errors.New("private daemon failure detail")
 	}
@@ -374,9 +537,10 @@ func referencePublishIntent(t *testing.T, artifactHandle string) []byte {
 }
 
 func subjectViewForTest() []byte {
-	return []byte(`{"schema":"mnemon.agent.view","version":2,` +
-		`"view":"view:test","current":{"facts":{"handle":"r7:subject:test"},` +
+	return []byte(`{"schema":"mnemon.agent.view","version":3,` +
+		`"view":"view:test","current":{"facts":{"handle":"r7:subject:test","reply_to":"r7:subject:test"},` +
 		`"semantic":{"kind":"review.request","payload":"review"}},` +
+		`"outstanding":{"open_total":1,"related_total":0,"related_projected":0,"truncated":false},` +
 		`"allowed_intents":[]}`)
 }
 

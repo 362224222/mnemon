@@ -3,6 +3,8 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -20,6 +22,9 @@ const testCredentialText = "private-credential-never-project"
 type fakeAgencyClient struct {
 	mu                sync.Mutex
 	attachCalls       int
+	endCalls          int
+	endAttachments    []string
+	endFailures       int
 	currentOperations []string
 	submitOperations  []string
 	submitCandidates  [][]candidateBinding
@@ -29,20 +34,45 @@ type fakeAgencyClient struct {
 	currentView       []byte
 	currentFailures   int
 	attachBlock       chan struct{}
+	attachExpiresAt   time.Time
+	attachDivergeAt   int
 }
 
-func (client *fakeAgencyClient) Attach(context.Context) (attachment, *controlError) {
+func (client *fakeAgencyClient) Attach(_ context.Context,
+	_ agency.Digest,
+) (attachment, *controlError) {
 	client.mu.Lock()
 	client.attachCalls++
+	call := client.attachCalls
+	diverge := call == client.attachDivergeAt
 	block := client.attachBlock
 	client.mu.Unlock()
 	if block != nil {
 		<-block
 	}
+	expiresAt := client.attachExpiresAt
+	if expiresAt.IsZero() {
+		expiresAt = time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+	}
 	credential := make([]byte, journalCredentialBytes)
 	copy(credential, testCredentialText)
+	if diverge {
+		credential[0] ^= 0xff
+	}
 	return attachment{ID: "attachment:test", Credential: credential,
-		ExpiresAt: time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)}, nil
+		ExpiresAt: expiresAt}, nil
+}
+
+func (client *fakeAgencyClient) End(_ context.Context, value attachment) *controlError {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	client.endCalls++
+	client.endAttachments = append(client.endAttachments, value.ID)
+	if client.endFailures > 0 {
+		client.endFailures--
+		return newControlError(codeMnemondUnavailable, "test boundary end loss")
+	}
+	return nil
 }
 
 func (client *fakeAgencyClient) Current(_ context.Context, _ attachment,
@@ -58,7 +88,7 @@ func (client *fakeAgencyClient) Current(_ context.Context, _ attachment,
 	if len(client.currentView) > 0 {
 		return append([]byte(nil), client.currentView...), nil
 	}
-	return []byte(`{"schema":"mnemon.agent.view","version":2,"view":"view:test","allowed_intents":[]}`), nil
+	return []byte(`{"schema":"mnemon.agent.view","version":3,"view":"view:test","outstanding":{"open_total":0,"related_total":0,"related_projected":0,"truncated":false},"allowed_intents":[]}`), nil
 }
 
 func (client *fakeAgencyClient) Submit(_ context.Context, _ attachment,
@@ -130,14 +160,41 @@ func (fixture *appFixture) app(stdin io.Reader, stdout io.Writer) *App {
 }
 
 func (fixture *appFixture) attach(t *testing.T) string {
+	return fixture.attachBoundary(t, 0x21)
+}
+
+func (fixture *appFixture) attachBoundary(t *testing.T, fill byte) string {
 	t.Helper()
 	var output bytes.Buffer
-	exit := fixture.app(strings.NewReader(""), &output).
+	exit := fixture.app(bytes.NewReader(testBoundaryEnvelope(t, fill)), &output).
 		Run(context.Background(), []string{"hook", "attach", "--json"})
 	if exit != 0 {
 		t.Fatalf("hook attach = exit %d output %s", exit, output.String())
 	}
 	return output.String()
+}
+
+func (fixture *appFixture) endBoundary(t *testing.T, fill byte) string {
+	t.Helper()
+	var output bytes.Buffer
+	exit := fixture.app(bytes.NewReader(testBoundaryEnvelope(t, fill)), &output).
+		Run(context.Background(), []string{"hook", "end", "--json"})
+	if exit != 0 {
+		t.Fatalf("hook end = exit %d output %s", exit, output.String())
+	}
+	return output.String()
+}
+
+func testBoundaryEnvelope(t *testing.T, fill byte) []byte {
+	t.Helper()
+	value := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{fill}, 32))
+	raw, err := json.Marshal(map[string]any{
+		"boundary": value, "schema": "mnemon.hook.boundary", "version": 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
 }
 
 func TestCommandsRequireContextWithoutEnsuringDaemon(t *testing.T) {
@@ -195,7 +252,7 @@ func TestAgentCurrentReadsViewAfterAttach(t *testing.T) {
 	exit := fixture.app(strings.NewReader(""), &output).
 		Run(context.Background(), []string{"agent", "current", "--json"})
 	if exit != 0 || output.String() !=
-		`{"schema":"mnemon.agent.view","version":2,"view":"view:test","allowed_intents":[]}`+"\n" {
+		`{"schema":"mnemon.agent.view","version":3,"view":"view:test","outstanding":{"open_total":0,"related_total":0,"related_projected":0,"truncated":false},"allowed_intents":[]}`+"\n" {
 		t.Fatalf("R7 current = exit %d output %q", exit, output.String())
 	}
 }
@@ -234,6 +291,18 @@ func TestUnsupportedCommandsFailClosedWithoutEnsuringDaemon(t *testing.T) {
 	}
 }
 
+func TestHookAttachRequiresPrivateBoundaryEnvelope(t *testing.T) {
+	fixture := newAppFixture(t)
+	var output bytes.Buffer
+	exit := fixture.app(strings.NewReader(""), &output).
+		Run(context.Background(), []string{"hook", "attach", "--json"})
+	if exit != codeContentRequired.exitStatus() ||
+		!strings.Contains(output.String(), string(codeContentRequired)) || fixture.ensure.Load() != 0 {
+		t.Fatalf("attach without envelope = exit %d output %q ensure %d",
+			exit, output.String(), fixture.ensure.Load())
+	}
+}
+
 func TestHookAttachProjectsNoPrivateAuthorityAndReusesJournal(t *testing.T) {
 	fixture := newAppFixture(t)
 	first := fixture.attach(t)
@@ -244,7 +313,7 @@ func TestHookAttachProjectsNoPrivateAuthorityAndReusesJournal(t *testing.T) {
 	fixture.client.mu.Lock()
 	attachCalls := fixture.client.attachCalls
 	fixture.client.mu.Unlock()
-	if attachCalls != 1 || strings.Contains(first, "attachment:test") ||
+	if attachCalls != 2 || strings.Contains(first, "attachment:test") ||
 		strings.Contains(first, testCredentialText) {
 		t.Fatalf("attach calls/output = %d / %q", attachCalls, first)
 	}
@@ -253,7 +322,51 @@ func TestHookAttachProjectsNoPrivateAuthorityAndReusesJournal(t *testing.T) {
 	assertMode(t, filepath.Join(fixture.nodeState, journalDirectoryName, journalActiveName), ownerFileMode)
 }
 
-func TestHookAttachRotatesAnObservedEmptyCurrent(t *testing.T) {
+func TestHookAttachSameBoundaryRejectsDivergentAuthorityReplay(t *testing.T) {
+	fixture := newAppFixture(t)
+	fixture.attach(t)
+	before := loadJournalForTest(t, fixture.nodeState)
+	digest := before.fileDigest
+	before.clear()
+	fixture.client.attachDivergeAt = 2
+
+	var output bytes.Buffer
+	exit := fixture.app(bytes.NewReader(testBoundaryEnvelope(t, 0x21)), &output).
+		Run(context.Background(), []string{"hook", "attach", "--json"})
+	if exit != codeAuthenticationFailed.exitStatus() ||
+		!strings.Contains(output.String(), string(codeAuthenticationFailed)) ||
+		strings.Contains(output.String(), `"status":"ready"`) {
+		t.Fatalf("divergent same-boundary replay = exit %d output %q", exit, output.String())
+	}
+	after := loadJournalForTest(t, fixture.nodeState)
+	defer after.clear()
+	if after.fileDigest != digest {
+		t.Fatal("divergent authority replay changed the private journal")
+	}
+}
+
+func TestHookAttachMissingJournalDelegatesNewBoundaryReplacementToAuthority(t *testing.T) {
+	fixture := newAppFixture(t)
+	fixture.attach(t)
+	if err := os.Remove(filepath.Join(fixture.nodeState, journalDirectoryName, journalActiveName)); err != nil {
+		t.Fatal(err)
+	}
+	fixture.attachBoundary(t, 0x22)
+	journal := loadJournalForTest(t, fixture.nodeState)
+	defer journal.clear()
+	if journal.BoundaryDigest != agency.Sum(bytes.Repeat([]byte{0x22}, 32)) {
+		t.Fatalf("replacement boundary = %s", journal.BoundaryDigest.String())
+	}
+	fixture.client.mu.Lock()
+	attachCalls, endCalls := fixture.client.attachCalls, fixture.client.endCalls
+	fixture.client.mu.Unlock()
+	if attachCalls != 2 || endCalls != 0 {
+		t.Fatalf("journal-free replacement calls = attach %d end %d, want 2/0",
+			attachCalls, endCalls)
+	}
+}
+
+func TestHookAttachNewBoundaryEndsPredecessorAndRotatesEmptyCurrent(t *testing.T) {
 	fixture := newAppFixture(t)
 	fixture.attach(t)
 	var view bytes.Buffer
@@ -261,20 +374,22 @@ func TestHookAttachRotatesAnObservedEmptyCurrent(t *testing.T) {
 		Run(context.Background(), []string{"agent", "current", "--json"}); exit != 0 {
 		t.Fatalf("empty current = exit %d output %q", exit, view.String())
 	}
-	fixture.attach(t)
+	fixture.attachBoundary(t, 0x22)
 	fixture.client.mu.Lock()
 	attachCalls := fixture.client.attachCalls
+	endCalls := fixture.client.endCalls
 	fixture.client.mu.Unlock()
-	if attachCalls != 2 {
-		t.Fatalf("Attach calls after observed empty Current = %d, want 2", attachCalls)
+	if attachCalls != 2 || endCalls != 1 {
+		t.Fatalf("new boundary calls = attach %d end %d, want 2/1", attachCalls, endCalls)
 	}
 }
 
 func TestHookAttachKeepsCurrentThatOwnsAHandling(t *testing.T) {
 	fixture := newAppFixture(t)
-	fixture.client.currentView = []byte(`{"schema":"mnemon.agent.view","version":2,` +
-		`"view":"view:test","current":{"facts":{"handle":"r7:subject:test"},` +
+	fixture.client.currentView = []byte(`{"schema":"mnemon.agent.view","version":3,` +
+		`"view":"view:test","current":{"facts":{"handle":"r7:subject:test","reply_to":"r7:subject:test"},` +
 		`"semantic":{"kind":"review.request","payload":"review"}},` +
+		`"outstanding":{"open_total":1,"related_total":0,"related_projected":0,"truncated":false},` +
 		`"allowed_intents":[]}`)
 	fixture.attach(t)
 	var view bytes.Buffer
@@ -286,8 +401,52 @@ func TestHookAttachKeepsCurrentThatOwnsAHandling(t *testing.T) {
 	fixture.client.mu.Lock()
 	attachCalls := fixture.client.attachCalls
 	fixture.client.mu.Unlock()
-	if attachCalls != 1 {
-		t.Fatalf("Attach calls after claimed Current = %d, want 1", attachCalls)
+	if attachCalls != 2 {
+		t.Fatalf("Attach calls after claimed Current = %d, want 2", attachCalls)
+	}
+}
+
+func TestHookAttachEndFailurePreservesPriorJournal(t *testing.T) {
+	fixture := newAppFixture(t)
+	fixture.attach(t)
+	before := loadJournalForTest(t, fixture.nodeState)
+	beforeDigest := before.fileDigest
+	before.clear()
+	fixture.client.endFailures = 1
+	var output bytes.Buffer
+	exit := fixture.app(bytes.NewReader(testBoundaryEnvelope(t, 0x23)), &output).
+		Run(context.Background(), []string{"hook", "attach", "--json"})
+	if exit != codeMnemondUnavailable.exitStatus() {
+		t.Fatalf("failed predecessor end = exit %d output %q", exit, output.String())
+	}
+	after := loadJournalForTest(t, fixture.nodeState)
+	defer after.clear()
+	fixture.client.mu.Lock()
+	attachCalls, endCalls := fixture.client.attachCalls, fixture.client.endCalls
+	fixture.client.mu.Unlock()
+	if after.fileDigest != beforeDigest || attachCalls != 1 || endCalls != 1 {
+		t.Fatalf("failed end changed journal/calls: digest_equal=%t attach=%d end=%d",
+			after.fileDigest == beforeDigest, attachCalls, endCalls)
+	}
+}
+
+func TestHookEndReleasesMatchingBoundaryAndIgnoresStaleBoundary(t *testing.T) {
+	fixture := newAppFixture(t)
+	fixture.attach(t)
+	fixture.endBoundary(t, 0x22)
+	if _, err := os.Lstat(filepath.Join(fixture.nodeState, journalDirectoryName, journalActiveName)); err != nil {
+		t.Fatalf("stale hook end removed active journal: %v", err)
+	}
+	fixture.endBoundary(t, 0x21)
+	store := newJournalStore(fixture.nodeState, bytes.NewReader(make([]byte, 64)))
+	if exists, err := store.exists(); err != nil || exists {
+		t.Fatalf("matching hook end journal exists = %t, %v", exists, err)
+	}
+	fixture.client.mu.Lock()
+	endCalls := fixture.client.endCalls
+	fixture.client.mu.Unlock()
+	if endCalls != 1 {
+		t.Fatalf("hook End calls = %d, want 1", endCalls)
 	}
 }
 
@@ -311,20 +470,20 @@ func TestCurrentPersistsOperationBeforeTransportAndReplaysIt(t *testing.T) {
 	fixture.client.mu.Lock()
 	attachCalls := fixture.client.attachCalls
 	fixture.client.mu.Unlock()
-	if secondExit != 0 || attachCalls != 1 || len(operations) != 2 || operations[0] == "" ||
+	if secondExit != 0 || attachCalls != 2 || len(operations) != 2 || operations[0] == "" ||
 		operations[0] != operations[1] {
 		t.Fatalf("current replay = exit %d operations %#v output %q", secondExit, operations, second.String())
 	}
 }
 
-func TestHookAttachSerializesConcurrentIssuance(t *testing.T) {
+func TestHookAttachSerializesAndRevalidatesConcurrentSameBoundary(t *testing.T) {
 	fixture := newAppFixture(t)
 	fixture.client.attachBlock = make(chan struct{})
 	const callers = 12
 	results := make(chan int, callers)
 	for range callers {
 		go func() {
-			exit := fixture.app(strings.NewReader(""), io.Discard).
+			exit := fixture.app(bytes.NewReader(testBoundaryEnvelope(t, 0x21)), io.Discard).
 				Run(context.Background(), []string{"hook", "attach", "--json"})
 			results <- exit
 		}()
@@ -347,15 +506,16 @@ func TestHookAttachSerializesConcurrentIssuance(t *testing.T) {
 	fixture.client.mu.Lock()
 	calls := fixture.client.attachCalls
 	fixture.client.mu.Unlock()
-	if calls != 1 {
-		t.Fatalf("Attach calls = %d, want 1", calls)
+	if calls != callers {
+		t.Fatalf("Attach calls = %d, want %d", calls, callers)
 	}
 }
 
 func TestHookAttachRenewsOnlyExpiredActiveJournal(t *testing.T) {
 	fixture := newAppFixture(t)
-	fixture.attach(t)
+	fixture.attachBoundary(t, 0x24)
 	fixture.now = time.Date(2031, 1, 1, 0, 0, 0, 0, time.UTC)
+	fixture.client.attachExpiresAt = time.Date(2032, 1, 1, 0, 0, 0, 0, time.UTC)
 	fixture.attach(t)
 	fixture.client.mu.Lock()
 	calls := fixture.client.attachCalls
@@ -369,6 +529,29 @@ func TestHookAttachRenewsOnlyExpiredActiveJournal(t *testing.T) {
 		Run(context.Background(), []string{"agent", "current", "--json"})
 	if exit != 0 {
 		t.Fatalf("renewed current = exit %d output %s", exit, output.String())
+	}
+}
+
+func TestHookAttachRejectsExpiredAuthorityOutcomeBeforeJournalCommit(t *testing.T) {
+	fixture := newAppFixture(t)
+	fixture.now = time.Date(2031, 1, 1, 0, 0, 0, 0, time.UTC)
+	fixture.client.attachExpiresAt = fixture.now.Add(-time.Second)
+	var output bytes.Buffer
+	exit := fixture.app(bytes.NewReader(testBoundaryEnvelope(t, 0x26)), &output).
+		Run(context.Background(), []string{"hook", "attach", "--json"})
+	if exit != codeContextStale.exitStatus() ||
+		!strings.Contains(output.String(), string(codeContextStale)) {
+		t.Fatalf("expired authority outcome = exit %d output %q", exit, output.String())
+	}
+	store := newJournalStore(fixture.nodeState, bytes.NewReader(make([]byte, 64)))
+	if exists, err := store.exists(); err != nil || exists {
+		t.Fatalf("expired authority outcome journal exists = %t, %v", exists, err)
+	}
+	fixture.client.mu.Lock()
+	attachCalls := fixture.client.attachCalls
+	fixture.client.mu.Unlock()
+	if attachCalls != 1 {
+		t.Fatalf("expired authority outcome Attach calls = %d, want 1", attachCalls)
 	}
 }
 

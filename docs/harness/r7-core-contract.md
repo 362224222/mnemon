@@ -314,6 +314,14 @@ belongs to that View's offered set. Semantic text changes outside that read-set
 do not invalidate an otherwise current binding. P-07 defines the only replay
 exception to revalidating mutable authority.
 
+An Agent View has at most one writable `current`. Its `reply_to` is a
+provenance-only handle for one machine-derived stable correlation root. A
+bounded `related_open` projection may show locally accepted open Events whose
+correlation equals that root, but it exposes no Handling handle, fence, claim,
+or second writable subject. `outstanding` reports the exact local open and
+related counts, the projected prefix, and whether evidence was truncated.
+Semantic `kind` never changes these projection rules.
+
 **P-02 Open labels, closed structure.**
 `kind` and a first-publish `reference_key` are bounded opaque labels with no
 registry or semantic dispatch. Structural consequences are the closed set in
@@ -331,9 +339,35 @@ carry provenance only.
 The attachment verifier generates `may_initiate`; it never appears in an Intent
 and cannot be changed by any projection or collaboration description. T0 asks
 the owner-installed Host Hook to issue this attachment at an interactive
-Runtime boundary and has no machine-driven wake path. The owner-only socket and
-private journal exclude other OS users, but T0 does not attest the Hook process
-against another same-UID process with arbitrary local shell and file access.
+Runtime boundary and has no machine-driven wake path. The Hook gives the local
+terminal a fresh private Host-boundary nonce at `before_agent_start`. Its digest
+enters both the owner-private journal and authority as the stable
+attachment-begin operation; neither value enters Agent View. Before boundary
+end, same digest and same authenticated request exactly replay the byte-stable
+attachment proof, including across daemon response loss, missing journal
+commit, and daemon restart. The same operation with different authenticated
+semantics fails closed. An expired replayed proof cannot be committed to a
+local journal or reported ready, and an ended boundary cannot be revived by
+replaying attachment begin. Beginning a different boundary idempotently ends
+the predecessor, releases only its claim occupancy, and issues the replacement
+in one authority transaction. A partial unique index permits at most one
+unended interactive attachment per Principal. This makes a fresh private nonce
+converge even when the predecessor's CLI journal was lost. When a same-boundary
+journal does exist, the CLI must replay attachment begin against authority and
+compare the returned ID, credential, and expiry exactly before reporting ready;
+the journal alone is never proof of live authority. The Pi Host retries attach
+a fixed small number of times with the same nonce and emits no cue unless one
+attempt succeeds. Once an accepted non-Reference Receipt reaches stdout, the
+journal durably removes its
+replay-only Intent material before attempting boundary end. A later Hook end or
+different boundary can therefore finish End and clear that presented terminal
+phase without replaying the old Intent. Before presentation, Hook end fails
+closed and preserves the exact Receipt replay rather than ending the attachment
+beneath it. Host shutdown may end the current boundary eagerly; after crash or
+hard timeout, the next interactive boundary performs the same deterministic
+reconciliation. The owner-only socket and private journal exclude other OS
+users, but T0 does not attest the Hook process against another same-UID process
+with arbitrary local shell and file access.
 Thus T0 proves that an Agent cannot set or alter `may_initiate` in an Intent; it
 does not cryptographically prove that the Host callback physically occurred.
 Peer-originated initiation is governed separately by P-06.
@@ -344,11 +378,14 @@ Handling's target Principal.
 Domain progress comes only from explicit Intent under admission. A
 fresh subject-bound admission must match the live claim fence; a released,
 expired, or superseded fence fails closed. Replay of an already recorded
-operation follows P-07 and does not re-run this check. The T0 machine
-disposition is lease expiry, which clears claim occupancy only. It never
-changes the Handling's domain state, creates an Event, or yields any terminal
-outcome. A fresh interactive `current` request settles at most a bounded number
-of expired claims before selecting work; T0 has no background wake or retry
+operation follows P-07 and does not re-run this check. T0 has exactly two
+machine claim dispositions: lease expiry and Host-boundary end, whether
+explicit or performed inside fresh-boundary replacement. Both
+clear claim occupancy only; neither changes the Handling's domain state,
+creates an Event, or yields any terminal outcome. Host-boundary end is an
+authenticated callback path, not a model Intent and not a background worker.
+A fresh interactive `current` request settles at most a bounded number of
+expired claims before selecting work; T0 has no background wake or retry
 worker. Every other machine disposition is outside T0.
 
 **P-05 Atomic successors.**
@@ -383,12 +420,21 @@ digest conflicts. Missing Artifacts keep the envelope staged without creating a
 local Event. Either-side delivery expiry changes no domain state and never means
 completed.
 
+An accepted Event's correlation is copied unchanged into PeerDelivery. For an
+imported current Event, the receiving View derives `reply_to` from the
+authenticated origin correlation, or from the origin Event when none exists.
+The next local Intent can therefore preserve one conversation root without a
+transport rewrite. A returning delivery is re-admitted as a new local Event;
+only then may it appear as read-only related evidence beside the origin
+Handling.
+
 **P-07 Exactly-once effect.**
-Every CurrentRequest, AdmissionRequest, and machine disposition carries a
+Every attachment-begin request, CurrentRequest, AdmissionRequest, and machine disposition carries a
 stable operation key and an independent request digest, and its outcome is
-durable. Current and BoundIntent use CLI-held keys; PeerDelivery uses its stable
-delivery ID; machine disposition derives a stable key from the claim identity,
-fence, and expiry. After authenticating the actor and operation namespace and
+durable. Attachment begin uses the private Host-boundary digest, while Current
+and BoundIntent use CLI-held keys; PeerDelivery uses its stable delivery ID;
+machine disposition derives a stable key from the claim identity, fence, and
+expiry. After authenticating the actor and operation namespace and
 independently recomputing the request digest, mnemond looks up the operation
 outcome before validating attachment expiry, mutable View authority, fence,
 Handling head, or Reference head. Same key with the same digest returns the
@@ -396,7 +442,16 @@ original byte-stable frozen View, admission Receipt, or internal disposition
 outcome even when those mutable inputs are now stale. Same key with a different
 digest is a stable conflict. Only a previously unseen key proceeds to fresh
 execution. Replay never produces a second claim, local Event, disposition, or
-durable mutation.
+durable mutation. Attachment-begin replay preserves the original expiry rather
+than renewing it; the CLI rejects an already-expired or locally divergent proof
+before reporting the boundary ready. Boundary end is itself idempotent, and an
+ended boundary rejects a later attachment-begin replay rather than reopening
+its authority. A retrying Host reuses one nonce, so response loss cannot create
+a second attachment.
+
+The frozen View includes its exact `current`, `reply_to`, related prefix,
+outstanding counts, and Reference evidence. Later Events never appear in an
+exact Current replay; only a fresh Current operation may project them.
 
 **P-08 CAS lineage.**
 The first `reference.publish` supplies a bounded opaque `reference_key`
@@ -423,12 +478,23 @@ required and local admission waits until all bytes are present and match their
 digests. A BoundIntent likewise cannot activate a Reference or satisfy
 completion with an unavailable ref. Fan-out, causal hop, TTL, payload size,
 Artifact size, provenance citations per Event, and pending Handling count are
-bounded by machine-owned configuration. Agent and peer input that exceeds a
-bound fails closed rather than being truncated, and no semantic payload can
-raise a bound. Internal
+bounded by machine-owned configuration. T0 admits at most eight Artifact refs
+per Event, keeps at most eight active References and eight active Peer routes,
+and limits semantic payload to 4 KiB of JSON-encoded string content; larger
+content belongs in an Artifact. Agent and peer input that exceeds a bound fails
+closed rather than being truncated, and no semantic payload can raise a bound.
+These cross-field maxima are tested together, not only one at a time, so every
+accepted responsibility remains representable within the 16 KiB private and
+Agent View envelopes. Internal
 expiry maintenance processes at most a fixed number of exact claims per fresh
 `current`; excess expired claims remain byte-for-byte unsettled for later
 natural turns and do not make the bounded `current` fail.
+The combined JSON-encoded string content of writable current and projected
+related semantic payloads is bounded independently. JSON escaping therefore
+consumes the focus budget exactly as it consumes the final canonical View. No
+accepted current can exceed that focus budget; related evidence is omitted with
+an explicit truncation fact before the combination can exceed it or make the
+whole Current operation fail.
 
 **P-10 Evidence-backed completion.**
 `completed` is one closed terminal outcome and requires at least one locally
@@ -583,15 +649,15 @@ unbound, partially proven, or failing.
 
 | ID | Required independently asserted behavior |
 |---|---|
-| P-01 | Forged authority fields fail; authenticated actor context determines source; imported origin fields cannot override local identity; for fresh operations, stale View authority digest and every unoffered known consequence, successor target, or opaque handle fail. |
+| P-01 | Forged authority fields fail; authenticated actor context determines source; imported origin fields cannot override local identity; for fresh operations, stale View authority digest and every unoffered known consequence, successor target, or opaque handle fail; related evidence is provenance-only and cannot become a writable subject. |
 | P-02 | Unknown valid kind and first-publish Reference key traverse the generic path without registration; unknown consequence and every illegal consequence combination fail; no case-specific dispatch exists. |
-| P-03 | Interactive root initiation succeeds; T0 exposes no managed-wake issuance path; every accepted local target creates exactly one Handling; wrong-Principal and wrong-attachment claim fail. |
-| P-04 | At most one live claim exists; a fresh operation with stale fence fails; accepted advance updates the Handling head and releases the claim; bounded lease-expiry disposition clears occupancy but cannot change domain state, create an Event, or create completion. |
+| P-03 | Interactive root initiation succeeds; a private Host-boundary nonce binds one attachment; authority permits one unended attachment per Principal; same-boundary begin exactly replays and must match the private journal across response loss, missing journal commit, and restart; a fresh nonce atomically replaces its predecessor even when the journal is absent; expired, ended, or divergent outcomes never report ready; Pi retries only the same nonce and emits no cue on failure; a new boundary or Hook end finishes a presented terminal without replaying its old Intent; T0 exposes no managed-wake issuance path; every accepted local target creates exactly one Handling; wrong-Principal and wrong-attachment claim fail. |
+| P-04 | At most one live claim exists; a fresh operation with stale fence fails; accepted advance updates the Handling head and releases the claim; bounded lease-expiry and Host-boundary-end dispositions, including transactional boundary replacement, clear occupancy but cannot change domain state, create an Event, or create completion. |
 | P-05 | Fault injection at each BoundIntent and VerifiedPeerDelivery transaction boundary yields either the whole local outcome or none, including outbox obligation and Reference head where allowed. |
-| P-06 | Authenticated delivery is re-admitted under the restricted peer subset; rejection creates no receiving fact; acceptance creates a new receiving Event, preserves provenance, resolves the target locally, and follows the bounded outbox/inbox lifecycle; an origin request exporting its sole responsibility fails, while remote rejection or expiry leaves the required local Handling open. |
-| P-07 | Same key/same digest replays the byte-stable frozen View, admission Receipt, or internal outcome before attachment expiry or mutable View, fence, Handling-head, or Reference-head validation; same key/different digest conflicts; response loss, restart, and retry create at most one claim, local Event, or machine disposition. |
+| P-06 | Authenticated delivery is re-admitted under the restricted peer subset; rejection creates no receiving fact; acceptance creates a new receiving Event, preserves provenance and an unchanged stable correlation root, resolves the target locally, and follows the bounded outbox/inbox lifecycle; an origin request exporting its sole responsibility fails, while remote rejection or expiry leaves the required local Handling open. |
+| P-07 | Same key/same digest replays the byte-stable attachment-begin proof, frozen View including its focus projection, admission Receipt, or internal outcome before the relevant mutable validation; same key/different digest conflicts; Host retries reuse one nonce and compare replayed proof with private journal authority; response loss, missing journal commit, restart, and retry create at most one attachment, claim, local Event, or machine disposition; begin replay never renews expiry or revives an ended boundary. |
 | P-08 | Valid first-publish key creation without a prior handle, invalid key rejection, first-publish CAS, concurrent first publish, active supersede, tombstone retract/reactivation, stale head, forward reference, concurrent mutation, and replay all match section 5; a provenance citation records the exact head, mutates nothing, and cannot stand in for a Reference action. |
-| P-09 | Any missing or mismatched Artifact keeps peer input unadmitted and cannot activate a Reference or complete; every Agent/peer resource bound fails closed independently and payload cannot raise it; more than the expiry-maintenance limit settles only the bounded prefix and leaves all excess claims unchanged for later natural turns. |
+| P-09 | Any missing or mismatched Artifact keeps peer input unadmitted and cannot activate a Reference or complete; every Agent/peer resource bound fails closed independently and payload cannot raise it; the maximum accepted payload, Artifact, Reference, route, current, and related combination remains representable; related evidence has explicit prefix/count/truncation, and JSON-escaped current plus related payloads cannot overflow the focus or canonical View budget; more than the expiry-maintenance limit settles only the bounded prefix and leaves all excess claims unchanged for later natural turns. |
 | P-10 | Only explicit completed with attached verified Artifact projects completed; other terminal outcomes close without Artifact; final/exit/idle/provider/ACK/disposition cannot complete. |
 
 Ten rows is the point. A row may bind several test symbols, but it is verified

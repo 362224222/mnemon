@@ -27,13 +27,14 @@ func TestControlClientRoundTripsFrozenAgencyWire(t *testing.T) {
 	nodeState, stop := serveControlSocket(t, handler)
 	defer stop()
 	client := mustControlClient(t, nodeState)
+	boundary := agency.Sum([]byte("control-client-boundary"))
 
-	attached, apiErr := client.Attach(context.Background())
+	attached, apiErr := client.Attach(context.Background(), boundary)
 	requireAttachment(t, attached, apiErr, credential, expiry)
 	current := "current:test"
 	view, apiErr := client.Current(context.Background(), attached, current)
 	requireProjection(t, "Current", view, apiErr,
-		`{"schema":"mnemon.agent.view","version":2,"view":"view:test","allowed_intents":[]}`)
+		`{"schema":"mnemon.agent.view","version":3,"view":"view:test","outstanding":{"open_total":0,"related_total":0,"related_projected":0,"truncated":false},"allowed_intents":[]}`)
 	intent := controlTestIntent(t)
 	receipt, apiErr := client.Submit(context.Background(), attached, current,
 		"admit:test", intent, nil)
@@ -45,7 +46,7 @@ func TestControlClientRoundTripsFrozenAgencyWire(t *testing.T) {
 		t.Fatalf("ReadArtifact() = (%q, %#v)", read, apiErr)
 	}
 
-	assertAttachRequest(t, <-requests)
+	assertAttachRequest(t, <-requests, boundary)
 	assertCurrentRequest(t, <-requests, attached, credential, current)
 	assertSubmitRequest(t, <-requests, intent)
 	assertArtifactRequest(t, <-requests, content)
@@ -65,7 +66,7 @@ func roundTripControlHandler(requests chan<- capturedControlRequest, credential 
 			fmt.Fprintf(writer, `{"attachment":"attachment:test","credential":"%s","expires_at":"%s","schema":"%s","version":1}`+"\n",
 				base64.RawURLEncoding.EncodeToString(credential), expiry.Format(timeWireLayout), attachmentSchema)
 		case routeCurrent:
-			_, _ = io.WriteString(writer, `{"schema":"mnemon.agent.view","version":2,"view":"view:test","allowed_intents":[]}`+"\n")
+			_, _ = io.WriteString(writer, `{"schema":"mnemon.agent.view","version":3,"view":"view:test","outstanding":{"open_total":0,"related_total":0,"related_projected":0,"truncated":false},"allowed_intents":[]}`+"\n")
 		case routeSubmit:
 			_, _ = io.WriteString(writer, `{"schema":"mnemon.agent.receipt","version":1,"outcome":"accepted","replayed":false}`+"\n")
 		case routeArtifacts:
@@ -125,10 +126,12 @@ func requireCapture(t *testing.T, capture artifactCapture, apiErr *controlError,
 	}
 }
 
-func assertAttachRequest(t *testing.T, request capturedControlRequest) {
+func assertAttachRequest(t *testing.T, request capturedControlRequest,
+	boundary agency.Digest,
+) {
 	t.Helper()
 	if request.Method != http.MethodPost || request.Path != routeAttachments ||
-		string(request.Body) != `{}` {
+		string(request.Body) != `{"boundary_digest":"`+boundary.String()+`"}` {
 		t.Fatalf("attachment request = %#v", request)
 	}
 }
@@ -183,7 +186,7 @@ func TestControlClientRejectsInvalidProjectionAndRemoteErrorEnvelope(t *testing.
 		Body   string
 	}{
 		"duplicate projection": {Status: http.StatusOK,
-			Body: `{"schema":"mnemon.agent.view","schema":"mnemon.agent.view","version":2}`},
+			Body: `{"schema":"mnemon.agent.view","schema":"mnemon.agent.view","version":3}`},
 		"wrong projection schema": {Status: http.StatusOK,
 			Body: `{"schema":"mnemon.agent.receipt","version":1}`},
 		"status mismatch": {Status: http.StatusUnauthorized,

@@ -3,6 +3,7 @@ package process_test
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -33,7 +34,8 @@ const (
 func TestHandlingSurvivesProcessAndDaemonBoundaries(t *testing.T) {
 	fixture := newProcessFixture(t)
 
-	runTerminal(t, fixture.harness, fixture.workspace, "", "hook", "attach", "--json")
+	runTerminal(t, fixture.harness, fixture.workspace, hostBoundaryEnvelope(t, 0x11),
+		"hook", "attach", "--json")
 	empty := runTerminal(t, fixture.harness, fixture.workspace, "", "agent", "current", "--json")
 	assertEmptyView(t, empty)
 
@@ -61,7 +63,8 @@ func TestHandlingSurvivesProcessAndDaemonBoundaries(t *testing.T) {
 
 	// This attachment and Current journal did not exist before the daemon
 	// restart. Its View is reconstructed from durable authority state only.
-	runTerminal(t, fixture.harness, fixture.workspace, "", "hook", "attach", "--json")
+	runTerminal(t, fixture.harness, fixture.workspace, hostBoundaryEnvelope(t, 0x12),
+		"hook", "attach", "--json")
 	current := runTerminal(t, fixture.harness, fixture.workspace, "", "agent", "current", "--json")
 	handle := assertCurrentView(t, current, kind, payload)
 
@@ -76,6 +79,21 @@ func TestHandlingSurvivesProcessAndDaemonBoundaries(t *testing.T) {
 	if got := assertCurrentView(t, replayed, kind, payload); got != handle {
 		t.Fatalf("Handling handle changed across Current replay: %q != %q", got, handle)
 	}
+}
+
+func hostBoundaryEnvelope(t *testing.T, fill byte) string {
+	t.Helper()
+	wire := struct {
+		Boundary string `json:"boundary"`
+		Schema   string `json:"schema"`
+		Version  int    `json:"version"`
+	}{Boundary: base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{fill}, 32)),
+		Schema: "mnemon.hook.boundary", Version: 1}
+	raw, err := json.Marshal(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
 }
 
 type processFixture struct {
@@ -291,7 +309,7 @@ func parseView(t *testing.T, raw string) viewProjection {
 	if err := json.Unmarshal([]byte(raw), &view); err != nil {
 		t.Fatalf("decode Agent View: %v\n%s", err, raw)
 	}
-	if view.Schema != "mnemon.agent.view" || view.Version != 2 || view.View == "" {
+	if view.Schema != "mnemon.agent.view" || view.Version != 3 || view.View == "" {
 		t.Fatalf("invalid Agent View envelope: %#v", view)
 	}
 	return view

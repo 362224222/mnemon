@@ -93,7 +93,8 @@ func classifyServiceError(err error) *controlError {
 	switch {
 	case errors.Is(err, authority.ErrAttachmentAuth), errors.Is(err, authority.ErrPrincipalUnavailable):
 		return newControlError(codeAuthenticationFailed, "Agency attachment authentication failed")
-	case errors.Is(err, authority.ErrAttachmentExpired), errors.Is(err, authority.ErrCurrentUnavailable):
+	case errors.Is(err, authority.ErrAttachmentExpired), errors.Is(err, authority.ErrAttachmentEnded),
+		errors.Is(err, authority.ErrCurrentUnavailable):
 		return newControlError(codeContextStale, "Agency context is stale")
 	case errors.Is(err, authority.ErrOperationConflict):
 		return newControlError(codeOperationMismatch, "Agency operation conflicts with its prior request")

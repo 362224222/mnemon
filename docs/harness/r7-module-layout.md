@@ -174,7 +174,7 @@ cmd --> cli --------------------> agency
 cmd --> daemon --> authority ---> agency
               +--> cas ---------> agency
               +--> peerlink ----> agency, cas
-      --> attach ---------------> agency
+      --> attach ---------------> (none)
 
 selector -------------------------> agency      (unwired; deleting the
                                                  directory affects no one)

@@ -98,7 +98,8 @@ func TestAdmissionReplayUsesStablePrincipalAcrossAttachments(t *testing.T) {
 	}
 
 	*fixture.now = fixture.proof.ExpiresAt().Add(time.Second)
-	replacement, err := fixture.store.IssueInteractiveAttachment(fixture.ctx, fixture.principal)
+	replacement, err := fixture.store.IssueInteractiveAttachment(fixture.ctx, fixture.principal,
+		nextAttachmentBoundary(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +141,8 @@ func TestAdmissionReplayRejectsDifferentPrincipal(t *testing.T) {
 	if err := first.store.EnrollPrincipal(first.ctx, secondPrincipal); err != nil {
 		t.Fatal(err)
 	}
-	secondProof, err := first.store.IssueInteractiveAttachment(first.ctx, secondPrincipal)
+	secondProof, err := first.store.IssueInteractiveAttachment(first.ctx, secondPrincipal,
+		nextAttachmentBoundary(t))
 	if err != nil {
 		t.Fatal(err)
 	}

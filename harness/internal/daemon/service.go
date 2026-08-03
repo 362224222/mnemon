@@ -30,6 +30,11 @@ type attachment struct {
 	expiresAt  time.Time
 }
 
+type attachmentEnd struct {
+	replayed      bool
+	releasedClaim bool
+}
+
 type capturedArtifact struct {
 	handle   agency.OpaqueHandle
 	digest   agency.Digest
@@ -52,15 +57,30 @@ func newLocalService(principal agency.AgentPrincipalID, store *authority.Store,
 		now: now, random: cryptorand.Reader}, nil
 }
 
-func (service *localService) attach(ctx context.Context) (attachment, error) {
+func (service *localService) attach(ctx context.Context,
+	boundary agency.Digest,
+) (attachment, error) {
 	if err := service.available(ctx); err != nil {
 		return attachment{}, err
 	}
-	proof, err := service.authority.IssueInteractiveAttachment(ctx, service.principal)
+	proof, err := service.authority.IssueInteractiveAttachment(ctx, service.principal, boundary)
 	if err != nil {
 		return attachment{}, fmt.Errorf("daemon attach: %w", err)
 	}
 	return attachment{id: proof.ID(), credential: proof.Credential(), expiresAt: proof.ExpiresAt()}, nil
+}
+
+func (service *localService) endAttachment(ctx context.Context,
+	proof authority.AttachmentProof,
+) (attachmentEnd, error) {
+	if err := service.available(ctx); err != nil {
+		return attachmentEnd{}, err
+	}
+	result, err := service.authority.EndInteractiveAttachment(ctx, proof)
+	if err != nil {
+		return attachmentEnd{}, fmt.Errorf("daemon end attachment: %w", err)
+	}
+	return attachmentEnd{replayed: result.Replayed(), releasedClaim: result.ReleasedClaim()}, nil
 }
 
 func (service *localService) current(ctx context.Context, proof authority.AttachmentProof,

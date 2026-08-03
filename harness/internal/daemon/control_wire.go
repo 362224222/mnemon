@@ -12,6 +12,18 @@ type attachmentWire struct {
 	Version    int    `json:"version"`
 }
 
+type attachmentBeginWire struct {
+	BoundaryDigest string `json:"boundary_digest"`
+}
+
+type attachmentEndWire struct {
+	ReleasedClaim bool   `json:"released_claim"`
+	Replayed      bool   `json:"replayed"`
+	Schema        string `json:"schema"`
+	Status        string `json:"status"`
+	Version       int    `json:"version"`
+}
+
 type candidateWire struct {
 	Digest string `json:"digest"`
 	Handle string `json:"handle"`

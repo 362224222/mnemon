@@ -10,57 +10,11 @@ import (
 
 const maxIntentInputBytes = agency.MaxIntentCanonicalBytes
 
-type hookStatus struct {
-	Schema  string `json:"schema"`
-	Status  string `json:"status"`
-	Version int    `json:"version"`
-}
-
 type captureStatus struct {
 	ByteSize int64  `json:"byte_size"`
 	Handle   string `json:"handle"`
 	Schema   string `json:"schema"`
 	Version  int    `json:"version"`
-}
-
-func (app *App) runAttach(ctx context.Context, store *journalStore, client agencyClient) int {
-	err := store.withLock(true, func(directory *lockedJournalDirectory) error {
-		var preserved []capturedBinding
-		journal, err := directory.load()
-		if err == nil {
-			if validTerminalName(journal.fileName) ||
-				(app.deps.clock().Before(journal.Attachment.ExpiresAt) &&
-					journal.CurrentProjection != currentProjectionEmpty) {
-				journal.clear()
-				return nil
-			}
-			preserved = append([]capturedBinding(nil), journal.Candidates...)
-			if err := directory.remove(journal); err != nil {
-				journal.clear()
-				return err
-			}
-			journal.clear()
-		}
-		if err != nil && !errors.Is(err, errJournalAbsent) {
-			return err
-		}
-		attachment, apiErr := client.Attach(ctx)
-		if apiErr != nil {
-			return apiErr
-		}
-		defer clear(attachment.Credential)
-		journal, err = newClientJournal(attachment)
-		if err != nil {
-			return err
-		}
-		journal.Candidates = preserved
-		defer journal.clear()
-		return directory.write(journal)
-	})
-	if err != nil {
-		return app.writeCommandError(err)
-	}
-	return app.writeJSON(hookStatus{Schema: "mnemon.hook.attach", Version: 1, Status: "ready"})
 }
 
 func (app *App) runCurrent(ctx context.Context, store *journalStore, client agencyClient) int {
@@ -277,31 +231,49 @@ func (app *App) runSubmit(ctx context.Context, store *journalStore, client agenc
 		return 0 // Rejected receipts retain the same View for an amended Intent.
 	}
 	defer terminal.clear()
+	app.finishPresentedReceipt(ctx, store, client, intent, terminal)
+	return 0
+}
+
+func (app *App) finishPresentedReceipt(ctx context.Context, store *journalStore,
+	client agencyClient, intent agency.AgentIntent, terminal clientJournal,
+) {
+	var presented clientJournal
+	if err := store.withLock(false, func(directory *lockedJournalDirectory) error {
+		var err error
+		presented, err = directory.markPresented(terminal)
+		return err
+	}); err != nil {
+		// The Receipt reached stdout, but the durable presentation transition
+		// did not. The exact terminal operation remains replayable.
+		presented.clear()
+		return
+	}
+	defer presented.clear()
 	if referenceConsequence(intent.Consequence()) {
 		if err := store.withLock(false, func(directory *lockedJournalDirectory) error {
-			presented, err := directory.markPresented(terminal)
-			if err != nil {
-				return err
-			}
-			defer presented.clear()
 			active, err := directory.activatePresented(presented)
 			active.clear()
 			return err
 		}); err != nil {
-			// The Receipt was already presented. Either the exact terminal
-			// replay or a presented terminal phase remains recoverable.
-			return 0
+			// The Receipt was already presented. The presented terminal phase
+			// remains recoverable without replaying the prior Intent.
+			return
 		}
-		return 0
+		return
+	}
+	if apiErr := client.End(ctx, presented.Attachment); apiErr != nil {
+		// The accepted Receipt was already presented. The terminal journal
+		// preserves an idempotent End retry without retaining the Intent.
+		return
 	}
 	if err := store.withLock(false, func(directory *lockedJournalDirectory) error {
-		return directory.remove(terminal)
+		return directory.remove(presented)
 	}); err != nil {
-		// The accepted Receipt was already presented. Retaining the exact
-		// terminal replay handle is safer than obscuring that accepted fact.
-		return 0
+		// End is durable. A later boundary or Hook end may idempotently replay
+		// End and remove the presented terminal phase.
+		return
 	}
-	return 0
 }
 
 func referenceConsequence(consequence agency.Consequence) bool {

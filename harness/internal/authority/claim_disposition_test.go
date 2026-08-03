@@ -22,7 +22,8 @@ func TestFreshCurrentDurablySettlesExpiredClaimWithoutDomainEffect(t *testing.T)
 		t.Fatal(err)
 	}
 	*fixture.now = fixture.proof.ExpiresAt().Add(time.Second)
-	replacement, err := fixture.store.IssueInteractiveAttachment(fixture.ctx, fixture.principal)
+	replacement, err := fixture.store.IssueInteractiveAttachment(fixture.ctx, fixture.principal,
+		nextAttachmentBoundary(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,17 +74,14 @@ func TestClaimExpiryDispositionFaultRollsBackExactClaim(t *testing.T) {
 	fixture.current(t)
 	oldAttachment := fixture.proof.ID().String()
 	*fixture.now = fixture.proof.ExpiresAt().Add(time.Second)
-	replacement, err := fixture.store.IssueInteractiveAttachment(fixture.ctx, fixture.principal)
-	if err != nil {
-		t.Fatal(err)
-	}
 	if _, err := fixture.store.db.Exec(`CREATE TEMP TRIGGER fail_claim_disposition
 		BEFORE INSERT ON claim_dispositions BEGIN SELECT RAISE(ABORT, 'injected disposition fault'); END`); err != nil {
 		t.Fatal(err)
 	}
-	operation := mustCurrentOperation(t, "operation:expiry-rollback-current")
-	if _, err := fixture.store.Current(fixture.ctx, replacement, operation); err == nil {
-		t.Fatal("faulted Current unexpectedly succeeded")
+	boundary := nextAttachmentBoundary(t)
+	if _, err := fixture.store.IssueInteractiveAttachment(fixture.ctx, fixture.principal,
+		boundary); err == nil {
+		t.Fatal("faulted boundary replacement unexpectedly succeeded")
 	}
 	var attachment string
 	var fence uint64
@@ -97,8 +95,14 @@ func TestClaimExpiryDispositionFaultRollsBackExactClaim(t *testing.T) {
 	if _, err := fixture.store.db.Exec("DROP TRIGGER fail_claim_disposition"); err != nil {
 		t.Fatal(err)
 	}
+	replacement, err := fixture.store.IssueInteractiveAttachment(fixture.ctx, fixture.principal,
+		boundary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation := mustCurrentOperation(t, "operation:expiry-rollback-current")
 	if _, err := fixture.store.Current(fixture.ctx, replacement, operation); err != nil {
-		t.Fatalf("retry after rolled-back expiry: %v", err)
+		t.Fatalf("Current after rolled-back replacement retry: %v", err)
 	}
 	if countRows(t, fixture.store, "claim_dispositions") != 1 {
 		t.Fatal("retry did not commit exactly one claim disposition")
@@ -115,7 +119,8 @@ func TestCurrentDoesNotSettleAnotherPrincipalsExpiredClaim(t *testing.T) {
 	if err := fixture.store.EnrollPrincipal(fixture.ctx, other); err != nil {
 		t.Fatal(err)
 	}
-	otherProof, err := fixture.store.IssueInteractiveAttachment(fixture.ctx, other)
+	otherProof, err := fixture.store.IssueInteractiveAttachment(fixture.ctx, other,
+		nextAttachmentBoundary(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +137,8 @@ func TestCurrentDoesNotSettleAnotherPrincipalsExpiredClaim(t *testing.T) {
 	}
 	*fixture.now = otherProof.ExpiresAt().Add(time.Second)
 	before := exactClaimSnapshot(t, fixture, "handling:expiry-other")
-	replacement, err := fixture.store.IssueInteractiveAttachment(fixture.ctx, fixture.principal)
+	replacement, err := fixture.store.IssueInteractiveAttachment(fixture.ctx, fixture.principal,
+		nextAttachmentBoundary(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +170,8 @@ func TestClaimExpiryMaintenanceIsBoundedAndLeavesExcessClaimsExact(t *testing.T)
 	for _, handling := range ordered[MaxClaimExpirySettlementsPerCurrent:] {
 		excess[handling] = exactClaimSnapshot(t, fixture, handling)
 	}
-	replacement, err := fixture.store.IssueInteractiveAttachment(fixture.ctx, fixture.principal)
+	replacement, err := fixture.store.IssueInteractiveAttachment(fixture.ctx, fixture.principal,
+		nextAttachmentBoundary(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,10 +205,14 @@ func installExpiredClaimFixtures(t *testing.T, fixture *authorityFixture,
 	proofs := make([]AttachmentProof, count)
 	for index := range proofs {
 		var err error
-		proofs[index], err = fixture.store.IssueInteractiveAttachment(fixture.ctx, fixture.principal)
+		proofs[index], err = fixture.store.IssueInteractiveAttachment(fixture.ctx, fixture.principal,
+			nextAttachmentBoundary(t))
 		if err != nil {
 			t.Fatal(err)
 		}
+	}
+	if _, err := fixture.store.EndInteractiveAttachment(fixture.ctx, proofs[len(proofs)-1]); err != nil {
+		t.Fatal(err)
 	}
 	for index, proof := range proofs {
 		if index == 0 {

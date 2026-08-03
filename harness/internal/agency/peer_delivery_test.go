@@ -193,19 +193,14 @@ func TestPeerDeliveryRejectsInvalidProvenance(t *testing.T) {
 }
 
 func TestPeerDeliveryRejectsOversizeCanonicalInputs(t *testing.T) {
-	route, base := peerDeliveryFixture(t, "route:canonical-bounds")
-	baseSpec := peerDeliverySpecFrom(base)
+	route, _ := peerDeliveryFixture(t, "route:canonical-bounds")
 	payload, err := NewSemanticPayload(strings.Repeat("x", MaxSemanticPayloadBytes+1))
 	if err == nil || payload.String() != "" {
 		t.Fatalf("oversize payload error = %v", err)
 	}
 	escaped, err := NewSemanticPayload(strings.Repeat("\x01", MaxSemanticPayloadBytes))
-	if err != nil {
-		t.Fatal(err)
-	}
-	baseSpec.Payload = escaped
-	if _, err := NewPeerDelivery(route, baseSpec); !errors.Is(err, ErrLimit) {
-		t.Fatalf("canonical envelope bound error = %v, want ErrLimit", err)
+	if !errors.Is(err, ErrLimit) || escaped.String() != "" {
+		t.Fatalf("escaped payload projection bound error = %v, want ErrLimit", err)
 	}
 	oversizeJSON := bytes.Repeat([]byte{' '}, MaxPeerDeliveryCanonicalBytes+1)
 	if _, err := ParsePeerDeliveryCanonicalJSON(oversizeJSON, route); !errors.Is(err, ErrLimit) {

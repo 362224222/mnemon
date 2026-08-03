@@ -63,7 +63,7 @@ func newCompositionFixture(t *testing.T) *compositionFixture {
 		t.Fatal(err)
 	}
 	fixture.attachment, err = fixture.authority.IssueInteractiveAttachment(fixture.ctx,
-		fixture.principal)
+		fixture.principal, agency.Sum([]byte("selector-composition-boundary")))
 	if err != nil {
 		t.Fatal(err)
 	}

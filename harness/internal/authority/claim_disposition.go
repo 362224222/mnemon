@@ -18,6 +18,7 @@ import (
 const MaxClaimExpirySettlementsPerCurrent = 16
 
 const claimExpiryOperationDomain = "mnemon.claim-expiry.operation.v1\x00"
+const claimBoundaryEndOperationDomain = "mnemon.claim-boundary-end.operation.v1\x00"
 
 type expiredClaim struct {
 	handling   agency.HandlingID
@@ -165,7 +166,7 @@ func replayClaimExpiryTx(ctx context.Context, tx *sql.Tx, claim expiredClaim,
 	var outcome []byte
 	err := tx.QueryRowContext(ctx, `SELECT request_digest, handling_id, attachment_id,
 		claim_fence, claim_until, outcome_digest, outcome_json, recorded_at
-		FROM claim_dispositions WHERE disposition_key = ?`, key.String()).
+		FROM claim_dispositions WHERE disposition_key = ? AND disposition_kind = 'expiry'`, key.String()).
 		Scan(&storedRequest, &handlingValue, &attachmentValue, &fence, &untilValue,
 			&outcomeDigestValue, &outcome, &recordedValue)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -235,13 +236,60 @@ func insertClaimExpiryTx(ctx context.Context, tx *sql.Tx, now time.Time, claim e
 		return fmt.Errorf("claim expiry: encode outcome: %w", err)
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO claim_dispositions(
-		disposition_key, request_digest, handling_id, attachment_id, claim_fence,
+		disposition_key, disposition_kind, request_digest, handling_id, attachment_id, claim_fence,
 		claim_until, outcome_digest, outcome_json, recorded_at)
-		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`, key.String(), requestDigest.String(),
+		VALUES(?, 'expiry', ?, ?, ?, ?, ?, ?, ?, ?)`, key.String(), requestDigest.String(),
 		claim.handling.String(), claim.attachment.String(), claim.fence,
 		formatTime(claim.claimUntil), agency.Sum(outcome).String(), outcome, formatTime(now))
 	if err != nil {
 		return fmt.Errorf("claim expiry: persist outcome: %w", err)
+	}
+	return nil
+}
+
+func settleClaimBoundaryEndTx(ctx context.Context, tx *sql.Tx, now time.Time,
+	claim expiredClaim,
+) error {
+	request, err := json.Marshal(claimExpiryRequestWire{Schema: "mnemon.claim-boundary-end",
+		Handling: claim.handling.String(), Attachment: claim.attachment.String(), Fence: claim.fence,
+		ClaimUntil: formatTime(claim.claimUntil)})
+	if err != nil {
+		return fmt.Errorf("claim boundary end: encode request: %w", err)
+	}
+	requestDigest := agency.Sum(request)
+	keyMaterial := append([]byte(claimBoundaryEndOperationDomain), request...)
+	keyDigest := agency.Sum(keyMaterial)
+	clear(keyMaterial)
+	key, err := agency.NewOperationKey("claim-boundary-end:" + keyDigest.String())
+	if err != nil {
+		return fmt.Errorf("claim boundary end: operation key: %w", err)
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE handlings
+		SET claim_attachment_id = NULL, claim_until = NULL
+		WHERE handling_id = ? AND state = 'open' AND claim_attachment_id = ?
+		AND claim_fence = ? AND claim_until = ?`, claim.handling.String(),
+		claim.attachment.String(), claim.fence, formatTime(claim.claimUntil))
+	if err != nil {
+		return fmt.Errorf("claim boundary end: clear occupancy: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil || rows != 1 {
+		return errors.New("claim boundary end: exact claim changed before settlement")
+	}
+	outcome, err := json.Marshal(claimExpiryOutcomeWire{Schema: "mnemon.claim-boundary-end-outcome",
+		OperationKey: key.String(), RequestDigest: requestDigest.String(),
+		Outcome: "claim_released", RecordedAt: formatTime(now)})
+	if err != nil {
+		return fmt.Errorf("claim boundary end: encode outcome: %w", err)
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO claim_dispositions(
+		disposition_key, disposition_kind, request_digest, handling_id, attachment_id,
+		claim_fence, claim_until, outcome_digest, outcome_json, recorded_at)
+		VALUES(?, 'boundary_end', ?, ?, ?, ?, ?, ?, ?, ?)`, key.String(),
+		requestDigest.String(), claim.handling.String(), claim.attachment.String(), claim.fence,
+		formatTime(claim.claimUntil), agency.Sum(outcome).String(), outcome, formatTime(now))
+	if err != nil {
+		return fmt.Errorf("claim boundary end: persist outcome: %w", err)
 	}
 	return nil
 }

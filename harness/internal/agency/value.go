@@ -12,13 +12,17 @@ import (
 )
 
 const (
-	MaxSemanticLabelBytes   = 96
-	MaxReferenceKeyBytes    = 160
-	MaxOpaqueHandleBytes    = 192
-	MaxSemanticPayloadBytes = 8 * 1024
+	MaxSemanticLabelBytes = 96
+	MaxReferenceKeyBytes  = 160
+	MaxOpaqueHandleBytes  = 192
+	// Semantic payload is the concise Event description projected directly into
+	// an Agent View. Larger content belongs in an Artifact. The bound applies to
+	// JSON-encoded string content so escaping cannot consume an unbudgeted share
+	// of the enclosing View.
+	MaxSemanticPayloadBytes = 4 * 1024
 	MaxDiagnosticBytes      = 512
 	MaxSuccessors           = 16
-	MaxArtifactInputs       = 16
+	MaxArtifactInputs       = 8
 	MaxCausationHandles     = 16
 	MaxViewConsequences     = 8
 	MaxViewTargets          = 64
@@ -130,6 +134,15 @@ func NewSemanticPayload(value string) (SemanticPayload, error) {
 	}
 	if len(value) > MaxSemanticPayloadBytes {
 		return SemanticPayload{}, limit("semantic payload", len(value), MaxSemanticPayloadBytes)
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil || len(encoded) < 2 {
+		return SemanticPayload{}, invalid("semantic payload", "cannot be encoded canonically")
+	}
+	encodedContentBytes := len(encoded) - 2
+	if encodedContentBytes > MaxSemanticPayloadBytes {
+		return SemanticPayload{}, limit("semantic payload JSON bytes",
+			encodedContentBytes, MaxSemanticPayloadBytes)
 	}
 	return SemanticPayload{value: value}, nil
 }

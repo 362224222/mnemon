@@ -18,7 +18,7 @@ import (
 
 const (
 	journalSchema          = "mnemon.agency.client-journal"
-	journalVersion         = 1
+	journalVersion         = 2
 	journalCredentialBytes = 32
 	maxJournalBytes        = 32 << 10
 	// A non-multiple-of-three length makes the final unpadded base64url
@@ -39,6 +39,7 @@ type capturedBinding struct {
 
 type clientJournal struct {
 	Attachment        attachment
+	BoundaryDigest    agency.Digest
 	CurrentOperation  agency.OperationKey
 	CurrentProjection string
 	Candidates        []capturedBinding
@@ -50,6 +51,7 @@ type journalWire struct {
 	Schema            string          `json:"schema"`
 	Version           int             `json:"version"`
 	Attachment        string          `json:"attachment"`
+	BoundaryDigest    string          `json:"boundary_digest"`
 	Credential        string          `json:"credential"`
 	ExpiresAt         string          `json:"expires_at"`
 	CurrentOperation  string          `json:"current_operation,omitempty"`
@@ -62,8 +64,8 @@ type candidateWire struct {
 	Digest string `json:"digest"`
 }
 
-func newClientJournal(value attachment) (clientJournal, error) {
-	journal := clientJournal{Attachment: value}
+func newClientJournal(value attachment, boundary agency.Digest) (clientJournal, error) {
+	journal := clientJournal{Attachment: value, BoundaryDigest: boundary}
 	if err := journal.validate(); err != nil {
 		return clientJournal{}, err
 	}
@@ -73,7 +75,7 @@ func newClientJournal(value attachment) (clientJournal, error) {
 func (journal clientJournal) validate() error {
 	if _, err := agency.NewAttachmentID(journal.Attachment.ID); err != nil ||
 		len(journal.Attachment.Credential) != journalCredentialBytes ||
-		journal.Attachment.ExpiresAt.IsZero() {
+		journal.Attachment.ExpiresAt.IsZero() || journal.BoundaryDigest.IsZero() {
 		return errors.New("R7 client journal attachment is invalid")
 	}
 	if !journal.CurrentOperation.IsZero() &&
@@ -109,10 +111,11 @@ func (journal clientJournal) canonical() ([]byte, error) {
 		candidates[index] = candidateWire{Handle: candidate.Handle.String(), Digest: candidate.Digest.String()}
 	}
 	wire := journalWire{Schema: journalSchema, Version: journalVersion,
-		Attachment: journal.Attachment.ID,
-		Credential: base64.RawURLEncoding.EncodeToString(journal.Attachment.Credential),
-		ExpiresAt:  journal.Attachment.ExpiresAt.UTC().Format(time.RFC3339Nano),
-		Candidates: candidates}
+		Attachment:     journal.Attachment.ID,
+		BoundaryDigest: journal.BoundaryDigest.String(),
+		Credential:     base64.RawURLEncoding.EncodeToString(journal.Attachment.Credential),
+		ExpiresAt:      journal.Attachment.ExpiresAt.UTC().Format(time.RFC3339Nano),
+		Candidates:     candidates}
 	if !journal.CurrentOperation.IsZero() {
 		wire.CurrentOperation = journal.CurrentOperation.String()
 	}
@@ -164,15 +167,17 @@ func decodeJournalWire(raw []byte) (journalWire, error) {
 
 func journalFromWire(wire journalWire) (clientJournal, error) {
 	attachmentID, attachmentErr := agency.NewAttachmentID(wire.Attachment)
+	boundaryDigest, boundaryErr := agency.ParseDigest(wire.BoundaryDigest)
 	credential, credentialErr := base64.RawURLEncoding.Strict().DecodeString(wire.Credential)
 	expiresAt, expiryErr := time.Parse(time.RFC3339Nano, wire.ExpiresAt)
-	if attachmentErr != nil || credentialErr != nil || expiryErr != nil ||
+	if attachmentErr != nil || boundaryErr != nil || boundaryDigest.IsZero() ||
+		credentialErr != nil || expiryErr != nil ||
 		len(credential) != journalCredentialBytes || wire.ExpiresAt != expiresAt.UTC().Format(time.RFC3339Nano) {
 		clear(credential)
 		return clientJournal{}, errors.New("R7 client journal attachment is corrupt")
 	}
 	journal := clientJournal{Attachment: attachment{ID: attachmentID.String(),
-		Credential: credential, ExpiresAt: expiresAt}}
+		Credential: credential, ExpiresAt: expiresAt}, BoundaryDigest: boundaryDigest}
 	if wire.CurrentOperation != "" {
 		operation, err := agency.NewOperationKey(wire.CurrentOperation)
 		if err != nil {

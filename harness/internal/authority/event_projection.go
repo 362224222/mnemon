@@ -52,13 +52,39 @@ type storedEventProjection struct {
 		Payload string `json:"payload"`
 	} `json:"semantic"`
 	Evidence struct {
-		Artifacts []string `json:"artifacts"`
+		Artifacts   []string                   `json:"artifacts"`
+		Causation   []storedEventRefProjection `json:"causation"`
+		Correlation *storedEventRefProjection  `json:"correlation"`
 	} `json:"evidence"`
+}
+
+type storedEventRefProjection struct {
+	ID     string `json:"id"`
+	Digest string `json:"digest"`
+}
+
+type storedEventDetails struct {
+	ref         agency.EventRef
+	kind        agency.SemanticLabel
+	payload     agency.SemanticPayload
+	artifacts   []agency.Digest
+	causation   []agency.EventRef
+	correlation agency.EventRef
 }
 
 func loadStoredEventTx(ctx context.Context, tx *sql.Tx, idValue string) (
 	agency.EventRef, agency.SemanticLabel, agency.SemanticPayload, []agency.Digest, error,
 ) {
+	details, err := loadStoredEventDetailsTx(ctx, tx, idValue)
+	if err != nil {
+		return agency.EventRef{}, agency.SemanticLabel{}, agency.SemanticPayload{}, nil, err
+	}
+	return details.ref, details.kind, details.payload, details.artifacts, nil
+}
+
+func loadStoredEventDetailsTx(ctx context.Context, tx *sql.Tx,
+	idValue string,
+) (storedEventDetails, error) {
 	var digestValue, sourceValue, requestValue, acceptedValue string
 	var originSequence uint64
 	var causalDepth uint16
@@ -68,63 +94,124 @@ func loadStoredEventTx(ctx context.Context, tx *sql.Tx, idValue string) (
 		Scan(&digestValue, &originSequence, &causalDepth, &sourceValue, &requestValue,
 			&acceptedValue, &canonical)
 	if err != nil {
-		return agency.EventRef{}, agency.SemanticLabel{}, agency.SemanticPayload{}, nil,
-			fmt.Errorf("current View: load Event: %w", err)
+		return storedEventDetails{}, fmt.Errorf("current View: load Event: %w", err)
 	}
-	eventRef, kind, payload, canonicalArtifacts, err := inspectStoredEvent(idValue, digestValue,
+	details, canonicalArtifacts, err := inspectStoredEventDetails(idValue, digestValue,
 		originSequence, causalDepth, sourceValue, requestValue, acceptedValue, canonical)
 	if err != nil {
-		return agency.EventRef{}, agency.SemanticLabel{}, agency.SemanticPayload{}, nil, err
+		return storedEventDetails{}, err
 	}
-	artifacts, err := loadEventArtifactsTx(ctx, tx, eventRef.ID())
+	artifacts, err := loadEventArtifactsTx(ctx, tx, details.ref.ID())
 	if err != nil {
-		return agency.EventRef{}, agency.SemanticLabel{}, agency.SemanticPayload{}, nil, err
+		return storedEventDetails{}, err
 	}
 	if !slices.Equal(canonicalArtifacts, artifacts) {
-		return agency.EventRef{}, agency.SemanticLabel{}, agency.SemanticPayload{}, nil,
-			errors.New("current View: Event Artifact pins diverge from canonical bytes")
+		return storedEventDetails{}, errors.New("current View: Event Artifact pins diverge from canonical bytes")
 	}
-	return eventRef, kind, payload, artifacts, nil
+	details.artifacts = artifacts
+	return details, nil
 }
 
 func inspectStoredEvent(idValue, digestValue string, originSequence uint64, causalDepth uint16,
 	sourceValue, requestValue, acceptedValue string, canonical []byte,
 ) (agency.EventRef, agency.SemanticLabel, agency.SemanticPayload, []agency.Digest, error) {
+	details, artifacts, err := inspectStoredEventDetails(idValue, digestValue, originSequence,
+		causalDepth, sourceValue, requestValue, acceptedValue, canonical)
+	if err != nil {
+		return agency.EventRef{}, agency.SemanticLabel{}, agency.SemanticPayload{}, nil, err
+	}
+	return details.ref, details.kind, details.payload, artifacts, nil
+}
+
+func inspectStoredEventDetails(idValue, digestValue string, originSequence uint64, causalDepth uint16,
+	sourceValue, requestValue, acceptedValue string, canonical []byte,
+) (storedEventDetails, []agency.Digest, error) {
 	eventID, err := agency.NewEventID(idValue)
 	if err != nil {
-		return agency.EventRef{}, agency.SemanticLabel{}, agency.SemanticPayload{}, nil,
-			errors.New("current View: corrupt Event ID")
+		return storedEventDetails{}, nil, errors.New("current View: corrupt Event ID")
 	}
 	digest, err := agency.ParseDigest(digestValue)
 	if err != nil || agency.Sum(canonical) != digest {
-		return agency.EventRef{}, agency.SemanticLabel{}, agency.SemanticPayload{}, nil,
-			errors.New("current View: corrupt Event bytes")
+		return storedEventDetails{}, nil, errors.New("current View: corrupt Event bytes")
 	}
 	var wire storedEventProjection
 	if err := json.Unmarshal(canonical, &wire); err != nil || wire.SchemaVersion != 2 {
-		return agency.EventRef{}, agency.SemanticLabel{}, agency.SemanticPayload{}, nil,
-			errors.New("current View: invalid Event projection")
+		return storedEventDetails{}, nil, errors.New("current View: invalid Event projection")
 	}
 	if err := validateStoredEventAuthority(wire, idValue, originSequence, causalDepth, sourceValue,
 		requestValue, acceptedValue); err != nil {
-		return agency.EventRef{}, agency.SemanticLabel{}, agency.SemanticPayload{}, nil, err
+		return storedEventDetails{}, nil, err
 	}
 	kind, err := agency.NewSemanticLabel(wire.Semantic.Kind)
 	if err != nil {
-		return agency.EventRef{}, agency.SemanticLabel{}, agency.SemanticPayload{}, nil,
-			errors.New("current View: invalid Event semantic kind")
+		return storedEventDetails{}, nil, errors.New("current View: invalid Event semantic kind")
 	}
 	payload, err := agency.NewSemanticPayload(wire.Semantic.Payload)
 	if err != nil {
-		return agency.EventRef{}, agency.SemanticLabel{}, agency.SemanticPayload{}, nil,
-			errors.New("current View: invalid Event semantic payload")
+		return storedEventDetails{}, nil, errors.New("current View: invalid Event semantic payload")
 	}
 	artifacts, err := parseStoredEventArtifacts(wire.Evidence.Artifacts)
 	if err != nil {
-		return agency.EventRef{}, agency.SemanticLabel{}, agency.SemanticPayload{}, nil, err
+		return storedEventDetails{}, nil, err
 	}
 	eventRef, err := agency.NewEventRef(eventID, digest)
-	return eventRef, kind, payload, artifacts, err
+	if err != nil {
+		return storedEventDetails{}, nil, err
+	}
+	causation, correlation, err := parseStoredEventRelations(wire.Evidence.Causation,
+		wire.Evidence.Correlation)
+	if err != nil {
+		return storedEventDetails{}, nil, err
+	}
+	return storedEventDetails{ref: eventRef, kind: kind, payload: payload,
+		causation: causation, correlation: correlation}, artifacts, nil
+}
+
+func parseStoredEventRelations(causationWires []storedEventRefProjection,
+	correlationWire *storedEventRefProjection,
+) ([]agency.EventRef, agency.EventRef, error) {
+	if len(causationWires) > agency.MaxCausationHandles {
+		return nil, agency.EventRef{}, errors.New("current View: excessive Event causation")
+	}
+	causation := make([]agency.EventRef, 0, len(causationWires))
+	seen := make(map[string]struct{}, len(causationWires))
+	for _, wire := range causationWires {
+		ref, err := parseStoredEventRef(wire)
+		if err != nil {
+			return nil, agency.EventRef{}, err
+		}
+		key := ref.ID().String() + "\x00" + ref.Digest().String()
+		if _, duplicate := seen[key]; duplicate {
+			return nil, agency.EventRef{}, errors.New("current View: duplicate Event causation")
+		}
+		seen[key] = struct{}{}
+		causation = append(causation, ref)
+	}
+	var correlation agency.EventRef
+	if correlationWire != nil {
+		var err error
+		correlation, err = parseStoredEventRef(*correlationWire)
+		if err != nil {
+			return nil, agency.EventRef{}, err
+		}
+	}
+	return causation, correlation, nil
+}
+
+func parseStoredEventRef(wire storedEventRefProjection) (agency.EventRef, error) {
+	id, err := agency.NewEventID(wire.ID)
+	if err != nil {
+		return agency.EventRef{}, errors.New("current View: invalid Event relation ID")
+	}
+	digest, err := agency.ParseDigest(wire.Digest)
+	if err != nil {
+		return agency.EventRef{}, errors.New("current View: invalid Event relation digest")
+	}
+	ref, err := agency.NewEventRef(id, digest)
+	if err != nil {
+		return agency.EventRef{}, errors.New("current View: invalid Event relation")
+	}
+	return ref, nil
 }
 
 func validateStoredEventAuthority(wire storedEventProjection, idValue string,

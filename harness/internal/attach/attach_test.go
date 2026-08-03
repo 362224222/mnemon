@@ -28,7 +28,9 @@ func TestLoadHasOneFixedCueAndNoAuthorityOrSecretSurface(t *testing.T) {
 	source := string(extension)
 	for _, required := range []string{
 		`pi.on("before_agent_start"`, `execFileSync("mnemon-harness"`,
-		`["hook", "attach", "--json"]`, `stdio: ["ignore", "ignore", "ignore"]`,
+		`["hook", "attach", "--json"]`, `["hook", "end", "--json"]`,
+		`pi.on("session_shutdown"`, `randomBytes(32).toString("base64url")`,
+		`stdio: ["pipe", "ignore", "ignore"]`, `input: boundaryEnvelope(boundary)`,
 		`timeout: ATTACH_TIMEOUT_MS`, `content: HOOK_CUE`, `display: false`,
 	} {
 		if !strings.Contains(source, required) {
@@ -37,6 +39,11 @@ func TestLoadHasOneFixedCueAndNoAuthorityOrSecretSurface(t *testing.T) {
 	}
 	if strings.Count(source, "content:") != 1 || !strings.Contains(source, cue) {
 		t.Fatal("fixed cue is not the extension's unique model-content source")
+	}
+	for _, forbidden := range []string{`pi.on("turn_end"`, `pi.on("agent_end"`} {
+		if strings.Contains(source, forbidden) {
+			t.Fatalf("Pi extension uses non-Host boundary callback %q", forbidden)
+		}
 	}
 	all := strings.ToLower(string(guide) + "\n" + cue + "\n" + source)
 	for _, forbidden := range []string{
@@ -141,6 +148,27 @@ func TestPiHookTimeoutCoversEnsureAndCleanupWithinOneFixedBound(t *testing.T) {
 	}
 	if strings.Count(source, "ATTACH_TIMEOUT_MS") != 2 {
 		t.Fatal("Pi extension does not use exactly one declared attach timeout")
+	}
+}
+
+func TestPiHookRetriesOnePrivateBoundaryAndEmitsNoCueOnFailure(t *testing.T) {
+	projection, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(projection.PiExtension())
+	for _, required := range []string{
+		"const ATTACH_ATTEMPTS = 2;",
+		"for (let attempt = 0; attempt < ATTACH_ATTEMPTS; attempt += 1)",
+		"if (runBoundary([\"hook\", \"attach\", \"--json\"], boundary)) return true;",
+		"if (!attachBoundary(boundary)) return undefined;",
+	} {
+		if !strings.Contains(source, required) {
+			t.Fatalf("Pi bounded attachment retry lacks %q", required)
+		}
+	}
+	if strings.Count(source, "const boundary = randomBytes(32)") != 1 {
+		t.Fatal("Pi attachment retry can mint more than one boundary nonce")
 	}
 }
 

@@ -9,6 +9,8 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/agency"
 )
 
+var errCausalEventUnavailable = errors.New("admit Intent: causal Event is unavailable")
+
 // deriveLocalEventCausalDepthTx carries the greatest already-accepted Peer
 // hop depth named by the request. Local transitions do not add a hop; only an
 // outbound PeerDelivery does. A root with no accepted predecessor has depth
@@ -17,8 +19,19 @@ func deriveLocalEventCausalDepthTx(ctx context.Context, tx *sql.Tx,
 	request agency.BoundIntent,
 ) (uint16, error) {
 	refs := make([]agency.EventRef, 0, len(request.Causation())+3)
+	directRemotePredecessors := make(map[string]struct{})
 	if subject, present := request.Subject(); present {
 		refs = append(refs, subject.Head())
+		details, err := loadStoredEventDetailsTx(ctx, tx, subject.Head().ID().String())
+		if err != nil || details.ref != subject.Head() {
+			return 0, errors.New("admit Intent: subject causal authority is corrupt")
+		}
+		for _, predecessor := range details.causation {
+			directRemotePredecessors[eventRefKey(predecessor)] = struct{}{}
+		}
+		if !details.correlation.IsZero() {
+			directRemotePredecessors[eventRefKey(details.correlation)] = struct{}{}
+		}
 	}
 	if expected, present := request.ExpectedReference(); present && !expected.IsAbsent() {
 		refs = append(refs, expected.Head())
@@ -31,12 +44,17 @@ func deriveLocalEventCausalDepthTx(ctx context.Context, tx *sql.Tx,
 	var maximum uint16
 	seen := make(map[string]struct{}, len(refs))
 	for _, ref := range refs {
-		key := ref.ID().String() + "\x00" + ref.Digest().String()
+		key := eventRefKey(ref)
 		if _, duplicate := seen[key]; duplicate {
 			continue
 		}
 		seen[key] = struct{}{}
 		depth, err := exactEventDepthTx(ctx, tx, ref)
+		if errors.Is(err, errCausalEventUnavailable) {
+			if _, authenticated := directRemotePredecessors[key]; authenticated {
+				continue
+			}
+		}
 		if err != nil {
 			return 0, err
 		}
@@ -45,6 +63,10 @@ func deriveLocalEventCausalDepthTx(ctx context.Context, tx *sql.Tx,
 		}
 	}
 	return maximum, nil
+}
+
+func eventRefKey(ref agency.EventRef) string {
+	return ref.ID().String() + "\x00" + ref.Digest().String()
 }
 
 func exactEventDepthTx(ctx context.Context, tx *sql.Tx, ref agency.EventRef) (uint16, error) {
@@ -57,7 +79,7 @@ func exactEventDepthTx(ctx context.Context, tx *sql.Tx, ref agency.EventRef) (ui
 		WHERE event_id = ?`, ref.ID().String()).Scan(&digestValue, &originSequence, &depth,
 		&sourceValue, &requestValue, &acceptedValue, &canonical)
 	if errors.Is(err, sql.ErrNoRows) {
-		return 0, errors.New("admit Intent: causal Event is unavailable")
+		return 0, errCausalEventUnavailable
 	}
 	if err != nil {
 		return 0, fmt.Errorf("admit Intent: inspect causal Event: %w", err)

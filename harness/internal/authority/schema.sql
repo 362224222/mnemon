@@ -20,10 +20,23 @@ CREATE TABLE attachments (
                substr(credential_digest, 8) NOT GLOB '*[^0-9a-f]*' AND
                credential_digest !=
                    'sha256:0000000000000000000000000000000000000000000000000000000000000000'),
+    begin_operation_key TEXT NOT NULL UNIQUE,
+    begin_request_digest TEXT NOT NULL
+        CHECK (length(begin_request_digest) = 71 AND
+               substr(begin_request_digest, 1, 7) = 'sha256:' AND
+               substr(begin_request_digest, 8) NOT GLOB '*[^0-9a-f]*' AND
+               begin_request_digest !=
+                   'sha256:0000000000000000000000000000000000000000000000000000000000000000'),
     issued_at TEXT NOT NULL,
     expires_at TEXT NOT NULL,
-    CHECK (expires_at > issued_at)
+	ended_at TEXT,
+	CHECK (expires_at > issued_at),
+	CHECK (ended_at IS NULL OR ended_at >= issued_at)
 ) STRICT;
+
+CREATE UNIQUE INDEX attachments_one_live_per_principal
+ON attachments(principal_id)
+WHERE ended_at IS NULL;
 
 CREATE TABLE verified_artifacts (
     digest TEXT PRIMARY KEY,
@@ -107,6 +120,10 @@ CREATE TABLE peer_inbox (
 CREATE INDEX peer_inbox_staged
 ON peer_inbox(state, expires_at, received_at);
 
+CREATE UNIQUE INDEX peer_inbox_local_event
+ON peer_inbox(local_event_id)
+WHERE local_event_id IS NOT NULL;
+
 CREATE TABLE event_artifacts (
     event_id TEXT NOT NULL REFERENCES events(event_id),
     artifact_digest TEXT NOT NULL REFERENCES verified_artifacts(digest),
@@ -166,6 +183,7 @@ WHERE claim_attachment_id IS NOT NULL;
 
 CREATE TABLE claim_dispositions (
     disposition_key TEXT PRIMARY KEY,
+	disposition_kind TEXT NOT NULL CHECK (disposition_kind IN ('expiry', 'boundary_end')),
     request_digest TEXT NOT NULL,
     handling_id TEXT NOT NULL REFERENCES handlings(handling_id),
     attachment_id TEXT NOT NULL REFERENCES attachments(attachment_id),
@@ -211,4 +229,4 @@ CREATE TABLE reference_outcome_projection (
 ) STRICT;
 
 PRAGMA application_id = 1296978487;
-PRAGMA user_version = 6;
+PRAGMA user_version = 9;

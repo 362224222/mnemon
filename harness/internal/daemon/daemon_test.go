@@ -56,6 +56,39 @@ func TestDaemonServesCompleteLocalLoopOverOwnerUnix(t *testing.T) {
 	}
 }
 
+func TestAttachmentBeginResponseExactlyReplaysAcrossDaemonRestart(t *testing.T) {
+	state, principal := provisionDaemonState(t)
+	body := testAttachmentBeginBody("lost-attach-response-and-journal")
+	var first []byte
+	for cycle := 0; cycle < 2; cycle++ {
+		runtime, err := Open(context.Background(), state, principal)
+		if err != nil {
+			t.Fatal(err)
+		}
+		serveErrors := make(chan error, 1)
+		go func() { serveErrors <- runtime.Serve(context.Background()) }()
+		socket := filepath.Join(state, controlSocketName)
+		waitForSocket(t, socket)
+		response := controlRequest(t, unixHTTPClient(socket), http.MethodPost,
+			routeAttachments, body, nil, http.StatusOK)
+		if cycle == 0 {
+			first = append([]byte(nil), response...)
+		} else if !bytes.Equal(response, first) {
+			t.Fatalf("attachment begin replay changed response:\nfirst  %s\nreplay %s",
+				first, response)
+		}
+		closeContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := runtime.Close(closeContext); err != nil {
+			cancel()
+			t.Fatal(err)
+		}
+		cancel()
+		if err := <-serveErrors; err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func TestDaemonRecoversOnlyAStaleOwnerSocketAfterTakingWriter(t *testing.T) {
 	state, principal := provisionDaemonState(t)
 	runtime, err := Open(context.Background(), state, principal)
@@ -121,7 +154,8 @@ func exerciseLocalControlLoop(t *testing.T, client *http.Client) {
 
 func attachAndReadCurrent(t *testing.T, client *http.Client) http.Header {
 	t.Helper()
-	attached := controlRequest(t, client, http.MethodPost, routeAttachments, []byte(`{}`), nil,
+	attached := controlRequest(t, client, http.MethodPost, routeAttachments,
+		testAttachmentBeginBody("daemon-loop-initial"), nil,
 		http.StatusOK)
 	var attachmentResponse attachmentWire
 	decodeTestWire(t, attached, &attachmentResponse)
@@ -203,6 +237,45 @@ func captureAndClaimHandling(t *testing.T, client *http.Client, authorityHeaders
 		!bytes.Contains(claimed, []byte(`"current":{`)) {
 		t.Fatalf("claimed View = %v\n%s", err, claimed)
 	}
+
+	endHeaders := make(http.Header)
+	endHeaders.Set(headerAttachment, authorityHeaders.Get(headerAttachment))
+	endHeaders.Set(headerCredential, authorityHeaders.Get(headerCredential))
+	endedRaw := controlRequest(t, client, http.MethodPost, routeAttachmentEnd, []byte(`{}`),
+		endHeaders, http.StatusOK)
+	var ended attachmentEndWire
+	decodeTestWire(t, endedRaw, &ended)
+	if ended.Schema != attachmentEndSchema || ended.Version != controlVersion ||
+		ended.Status != "ended" || ended.Replayed || !ended.ReleasedClaim {
+		t.Fatalf("first attachment end = %#v", ended)
+	}
+	replayedRaw := controlRequest(t, client, http.MethodPost, routeAttachmentEnd, []byte(`{}`),
+		endHeaders, http.StatusOK)
+	var replayed attachmentEndWire
+	decodeTestWire(t, replayedRaw, &replayed)
+	if !replayed.Replayed || !replayed.ReleasedClaim {
+		t.Fatalf("replayed attachment end = %#v", replayed)
+	}
+
+	replacement := controlRequest(t, client, http.MethodPost, routeAttachments,
+		testAttachmentBeginBody("daemon-loop-replacement"), nil,
+		http.StatusOK)
+	var replacementAttachment attachmentWire
+	decodeTestWire(t, replacement, &replacementAttachment)
+	reclaimHeaders := make(http.Header)
+	reclaimHeaders.Set(headerAttachment, replacementAttachment.Attachment)
+	reclaimHeaders.Set(headerCredential, replacementAttachment.Credential)
+	reclaimHeaders.Set(headerCurrentOperation, "operation:current-3")
+	reclaimed := controlRequest(t, client, http.MethodPost, routeCurrent, []byte(`{}`), reclaimHeaders,
+		http.StatusOK)
+	if err := agency.ValidateAgentViewProjectionCanonicalJSON(reclaimed); err != nil ||
+		!bytes.Contains(reclaimed, []byte(`"current":{`)) {
+		t.Fatalf("reclaimed View = %v\n%s", err, reclaimed)
+	}
+}
+
+func testAttachmentBeginBody(label string) []byte {
+	return []byte(`{"boundary_digest":"` + agency.Sum([]byte(label)).String() + `"}`)
 }
 
 func TestDaemonControlRejectsNonClosedInputAndForeignMetadata(t *testing.T) {
@@ -423,7 +496,7 @@ func waitForSocket(t *testing.T, path string) {
 }
 
 func TestControlWireContainsNoCaseSpecificKind(t *testing.T) {
-	for _, value := range []string{routeAttachments, routeCurrent, routeSubmit, routeArtifacts,
+	for _, value := range []string{routeAttachments, routeAttachmentEnd, routeCurrent, routeSubmit, routeArtifacts,
 		routeArtifactRead, routeStatus, attachmentSchema, artifactSchema, statusSchema} {
 		for _, forbidden := range []string{"review", "teamwork", "contract-net", "blackboard", "memory.wiki"} {
 			if strings.Contains(value, forbidden) {

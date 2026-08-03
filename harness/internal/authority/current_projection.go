@@ -17,41 +17,15 @@ func projectBoundViewTx(ctx context.Context, tx *sql.Tx, attachment agency.Attac
 	if err != nil {
 		return BoundView{}, err
 	}
-	self, err := agency.ResolveLocalTarget(agency.SelfTarget(), attachment.Principal())
-	if err != nil {
-		return BoundView{}, err
-	}
 	spec := agency.MachineViewSpec{Attachment: attachment,
 		Consequences: projectedConsequences(claim, references, attachment.MayInitiate())}
-	if claim != nil || attachment.MayInitiate() {
-		spec.Targets = []agency.ResolvedTarget{self}
-		routes, err := loadActivePeerRoutesTx(ctx, tx)
-		if err != nil {
-			return BoundView{}, err
-		}
-		for _, route := range routes {
-			requested, err := agency.AliasTarget(route.PublicAlias())
-			if err != nil {
-				return BoundView{}, errors.New("current View: corrupt peer route public alias")
-			}
-			resolved, err := agency.ResolveRemoteTarget(requested, route.RouteID(),
-				route.RemoteTargetAlias())
-			if err != nil {
-				return BoundView{}, errors.New("current View: corrupt peer route target authority")
-			}
-			spec.Targets = append(spec.Targets, resolved)
-		}
+	if err := projectTargetsTx(ctx, tx, attachment, claim != nil, &spec); err != nil {
+		return BoundView{}, err
 	}
 	publicSpec := agency.AgentViewSpec{}
-	if claim != nil {
-		if err := projectClaim(claim, &spec, &publicSpec); err != nil {
-			return BoundView{}, err
-		}
-	}
-	for _, reference := range references {
-		if err := projectReference(reference, &spec, &publicSpec); err != nil {
-			return BoundView{}, err
-		}
+	if err := projectViewContentTx(ctx, tx, attachment.Principal(), claim, references,
+		&spec, &publicSpec); err != nil {
+		return BoundView{}, err
 	}
 	authorityView, err := agency.NewViewAuthority(spec)
 	if err != nil {
@@ -68,6 +42,69 @@ func projectBoundViewTx(ctx context.Context, tx *sql.Tx, attachment agency.Attac
 		return BoundView{}, err
 	}
 	return BoundView{authority: authorityView, public: publicView}, nil
+}
+
+func projectTargetsTx(ctx context.Context, tx *sql.Tx, attachment agency.Attachment,
+	hasClaim bool, spec *agency.MachineViewSpec,
+) error {
+	if !hasClaim && !attachment.MayInitiate() {
+		return nil
+	}
+	self, err := agency.ResolveLocalTarget(agency.SelfTarget(), attachment.Principal())
+	if err != nil {
+		return err
+	}
+	spec.Targets = []agency.ResolvedTarget{self}
+	routes, err := loadActivePeerRoutesTx(ctx, tx)
+	if err != nil {
+		return err
+	}
+	for _, route := range routes {
+		requested, err := agency.AliasTarget(route.PublicAlias())
+		if err != nil {
+			return errors.New("current View: corrupt peer route public alias")
+		}
+		resolved, err := agency.ResolveRemoteTarget(requested, route.RouteID(),
+			route.RemoteTargetAlias())
+		if err != nil {
+			return errors.New("current View: corrupt peer route target authority")
+		}
+		spec.Targets = append(spec.Targets, resolved)
+	}
+	return nil
+}
+
+func projectViewContentTx(ctx context.Context, tx *sql.Tx, principal agency.AgentPrincipalID,
+	claim *projectedClaim, references []projectedReference, spec *agency.MachineViewSpec,
+	publicSpec *agency.AgentViewSpec,
+) error {
+	var focusRoot agency.EventRef
+	if claim != nil {
+		var err error
+		focusRoot, err = currentReplyRootTx(ctx, tx, claim.head)
+		if err != nil {
+			return err
+		}
+		if err := projectClaim(claim, focusRoot, spec, publicSpec); err != nil {
+			return err
+		}
+	}
+	related, outstanding, err := loadFocusProjectionTx(ctx, tx, principal, claim, focusRoot)
+	if err != nil {
+		return err
+	}
+	for _, item := range related {
+		if err := projectRelated(item, spec, publicSpec); err != nil {
+			return err
+		}
+	}
+	publicSpec.Outstanding = outstanding
+	for _, reference := range references {
+		if err := projectReference(reference, spec, publicSpec); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func loadActivePeerRoutesTx(ctx context.Context, tx *sql.Tx) ([]PeerRouteProjection, error) {
@@ -134,9 +171,12 @@ func currentViewHandle(attachment agency.Attachment, operation agency.OperationK
 		authorityDigest.String())
 }
 
-func projectClaim(claim *projectedClaim, spec *agency.MachineViewSpec,
+func projectClaim(claim *projectedClaim, replyRoot agency.EventRef, spec *agency.MachineViewSpec,
 	publicSpec *agency.AgentViewSpec,
 ) error {
+	if replyRoot.IsZero() {
+		return errors.New("current View: reply root is required")
+	}
 	subjectHandle, err := deterministicHandle("subject", claim.handlingID.String(),
 		claim.head.ID().String(), claim.head.Digest().String(), fmt.Sprint(claim.fence))
 	if err != nil {
@@ -152,7 +192,21 @@ func projectClaim(claim *projectedClaim, spec *agency.MachineViewSpec,
 	}
 	spec.Subjects = append(spec.Subjects, subject)
 	spec.Provenance = append(spec.Provenance, provenance)
-	current := agency.AgentViewCurrentSpec{Subject: subjectHandle, Kind: claim.kind, Payload: claim.payload}
+	replyHandle := subjectHandle
+	if replyRoot != claim.head {
+		replyHandle, err = deterministicHandle("reply-to", claim.head.ID().String(),
+			replyRoot.ID().String(), replyRoot.Digest().String())
+		if err != nil {
+			return err
+		}
+		replyOffer, err := agency.NewProvenanceOffer(replyHandle, replyRoot)
+		if err != nil {
+			return err
+		}
+		spec.Provenance = append(spec.Provenance, replyOffer)
+	}
+	current := agency.AgentViewCurrentSpec{Subject: subjectHandle, ReplyTo: replyHandle,
+		Kind: claim.kind, Payload: claim.payload}
 	for _, digest := range claim.artifacts {
 		handle, err := deterministicHandle("artifact", claim.head.ID().String(), digest.String())
 		if err != nil {

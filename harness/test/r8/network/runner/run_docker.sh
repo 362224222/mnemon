@@ -20,6 +20,14 @@ container() {
   printf '%s-%s\n' "$prefix" "$1"
 }
 
+hook_attach() {
+  local node=$1 boundary
+  boundary=$(dd if=/dev/urandom bs=32 count=1 2>/dev/null | base64 | tr '+/' '-_' | tr -d '=\n')
+  test "${#boundary}" = 43 || fail 'Host boundary entropy is unavailable'
+  printf '{"boundary":"%s","schema":"mnemon.hook.boundary","version":1}' "$boundary" | \
+    docker exec -i -w /workspace "$(container "$node")" mnemon-harness hook attach --json >/dev/null
+}
+
 cleanup() {
   if test "$keep" = 1; then
     printf 'r8 network retained: %s\n' "$prefix" >&2
@@ -122,7 +130,7 @@ done
 identities=
 for node in $nodes; do
   wait_ready "$node"
-  docker exec -w /workspace "$(container "$node")" mnemon-harness hook attach --json >/dev/null
+  hook_attach "$node"
   docker exec -w /workspace "$(container "$node")" mnemon-harness agent current --json \
     >"$runtime/$node-view.json"
   opinion_digest=$(jq -er '.seed_opinion_digest' "$runtime/$node-init.json")
@@ -170,7 +178,7 @@ docker restart "$(container peer-a)" >/dev/null
 wait_ready peer-a
 after=$(jq -c '.observation' "$runtime/peer-a-status.json")
 test "$after" = "$before" || fail 'PreferenceObservation changed across container restart'
-docker exec -w /workspace "$(container peer-a)" mnemon-harness hook attach --json >/dev/null
+hook_attach peer-a
 docker exec -w /workspace "$(container peer-a)" mnemon-harness agent current --json \
   >"$runtime/peer-a-restarted-view.json"
 after_identity=$(docker exec "$(container peer-a)" sha256sum \

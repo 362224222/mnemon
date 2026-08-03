@@ -16,11 +16,12 @@ import (
 )
 
 const (
-	routeAttachments  = "/v1/agency/attachments"
-	routeCurrent      = "/v1/agency/current"
-	routeSubmit       = "/v1/agency/submit"
-	routeArtifacts    = "/v1/agency/artifacts"
-	routeArtifactRead = "/v1/agency/artifacts/read"
+	routeAttachments   = "/v1/agency/attachments"
+	routeAttachmentEnd = "/v1/agency/attachments/end"
+	routeCurrent       = "/v1/agency/current"
+	routeSubmit        = "/v1/agency/submit"
+	routeArtifacts     = "/v1/agency/artifacts"
+	routeArtifactRead  = "/v1/agency/artifacts/read"
 
 	headerAttachment       = "Mnemon-Agency-Attachment"
 	headerCredential       = "Mnemon-Agency-Credential"
@@ -28,17 +29,19 @@ const (
 	headerOperation        = "Mnemon-Agency-Operation"
 	headerArtifactDigest   = "Mnemon-Artifact-Digest"
 
-	attachmentSchema = "mnemon.agency.attachment"
-	artifactSchema   = "mnemon.agency.artifact"
-	controlVersion   = 1
-	timeWireLayout   = "2006-01-02T15:04:05.000000000Z"
-	ownerSocketMode  = os.FileMode(0o600)
+	attachmentSchema    = "mnemon.agency.attachment"
+	attachmentEndSchema = "mnemon.agency.attachment-end"
+	artifactSchema      = "mnemon.agency.artifact"
+	controlVersion      = 1
+	timeWireLayout      = "2006-01-02T15:04:05.000000000Z"
+	ownerSocketMode     = os.FileMode(0o600)
 )
 
 var errUnsafeClientState = errors.New("R7 Agency client state is unsafe")
 
 type agencyClient interface {
-	Attach(context.Context) (attachment, *controlError)
+	Attach(context.Context, agency.Digest) (attachment, *controlError)
+	End(context.Context, attachment) *controlError
 	Current(context.Context, attachment, string) ([]byte, *controlError)
 	Submit(context.Context, attachment, string, string,
 		[]byte, []candidateBinding) ([]byte, *controlError)
@@ -72,9 +75,16 @@ func newControlClient(nodeState string) (*controlClient, error) {
 	return client, nil
 }
 
-func (client *controlClient) Attach(ctx context.Context) (attachment, *controlError) {
+func (client *controlClient) Attach(ctx context.Context,
+	boundary agency.Digest,
+) (attachment, *controlError) {
+	if boundary.IsZero() {
+		return attachment{}, newControlError(codeInvalidArgument,
+			"Host boundary operation is invalid")
+	}
 	var response attachmentWire
-	if apiErr := client.post(ctx, routeAttachments, struct{}{}, nil, &response,
+	request := attachmentBeginWire{BoundaryDigest: boundary.String()}
+	if apiErr := client.post(ctx, routeAttachments, request, nil, &response,
 		maxPrivateResponse); apiErr != nil {
 		return attachment{}, apiErr
 	}
@@ -97,6 +107,23 @@ func (client *controlClient) Attach(ctx context.Context) (attachment, *controlEr
 		return attachment{}, invalidControlResponse("Agency attachment response is invalid")
 	}
 	return result, nil
+}
+
+func (client *controlClient) End(ctx context.Context, value attachment) *controlError {
+	headers, apiErr := attachmentHeaders(value)
+	if apiErr != nil {
+		return apiErr
+	}
+	var response attachmentEndWire
+	if apiErr := client.post(ctx, routeAttachmentEnd, struct{}{}, headers, &response,
+		maxPrivateResponse); apiErr != nil {
+		return apiErr
+	}
+	if response.Schema != attachmentEndSchema || response.Version != controlVersion ||
+		response.Status != "ended" {
+		return invalidControlResponse("Agency attachment end response is invalid")
+	}
+	return nil
 }
 
 func (client *controlClient) Current(ctx context.Context, authority attachment,
@@ -197,9 +224,9 @@ func (client *controlClient) ReadArtifact(ctx context.Context, authority attachm
 }
 
 func authorityHeaders(value attachment, current, operation string) (http.Header, *controlError) {
-	if validateAttachment(value) != nil {
-		return nil, newControlError(codeAuthenticationFailed,
-			"Agency attachment authority is unavailable")
+	headers, apiErr := attachmentHeaders(value)
+	if apiErr != nil {
+		return nil, apiErr
 	}
 	if _, err := agency.NewOperationKey(current); err != nil {
 		return nil, newControlError(codeInvalidArgument, "Agency current operation is invalid")
@@ -209,13 +236,21 @@ func authorityHeaders(value attachment, current, operation string) (http.Header,
 			return nil, newControlError(codeInvalidArgument, "Agency operation is invalid")
 		}
 	}
-	headers := make(http.Header)
-	headers.Set(headerAttachment, value.ID)
-	headers.Set(headerCredential, base64.RawURLEncoding.EncodeToString(value.Credential))
 	headers.Set(headerCurrentOperation, current)
 	if operation != "" {
 		headers.Set(headerOperation, operation)
 	}
+	return headers, nil
+}
+
+func attachmentHeaders(value attachment) (http.Header, *controlError) {
+	if validateAttachment(value) != nil {
+		return nil, newControlError(codeAuthenticationFailed,
+			"Agency attachment authority is unavailable")
+	}
+	headers := make(http.Header)
+	headers.Set(headerAttachment, value.ID)
+	headers.Set(headerCredential, base64.RawURLEncoding.EncodeToString(value.Credential))
 	return headers, nil
 }
 
@@ -238,6 +273,18 @@ type attachmentWire struct {
 	ExpiresAt  string `json:"expires_at"`
 	Schema     string `json:"schema"`
 	Version    int    `json:"version"`
+}
+
+type attachmentBeginWire struct {
+	BoundaryDigest string `json:"boundary_digest"`
+}
+
+type attachmentEndWire struct {
+	ReleasedClaim bool   `json:"released_claim"`
+	Replayed      bool   `json:"replayed"`
+	Schema        string `json:"schema"`
+	Status        string `json:"status"`
+	Version       int    `json:"version"`
 }
 
 type controlCandidateWire struct {

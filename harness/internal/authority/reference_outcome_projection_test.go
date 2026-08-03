@@ -2,6 +2,7 @@ package authority
 
 import (
 	"bytes"
+	"math"
 	"testing"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/agency"
@@ -232,7 +233,7 @@ func TestReferenceOutcomeProjectionOverflowRollsBackAdmission(t *testing.T) {
 	request := bindTerminalWithReferences(t, fixture, "overflow-second",
 		agency.ConsequenceResolveCompleted, []string{"guide.overflow"}, "", true)
 	if _, err := fixture.store.db.Exec(`UPDATE reference_outcome_projection
-		SET completed_count = ?`, maxReferenceOutcomeCount); err != nil {
+		SET completed_count = ?`, int64(math.MaxInt64)); err != nil {
 		t.Fatal(err)
 	}
 	before := snapshotP05Authority(t, fixture.store)

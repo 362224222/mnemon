@@ -265,7 +265,8 @@ func emitRemoteHandling(t *testing.T, runtime *Runtime, peerAlias string,
 	artifactContent []byte,
 ) authority.PendingPeerDelivery {
 	t.Helper()
-	attached, err := runtime.service.attach(context.Background())
+	attached, err := runtime.service.attach(context.Background(),
+		agency.Sum([]byte("emit-remote-handling")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -382,7 +383,8 @@ func assertPendingDeliveryCount(t *testing.T, runtime *Runtime, expected int) {
 
 func assertRemoteHandlingVisible(t *testing.T, runtime *Runtime, payload string) {
 	t.Helper()
-	attached, err := runtime.service.attach(context.Background())
+	attached, err := runtime.service.attach(context.Background(),
+		agency.Sum([]byte("remote-handling-visible")))
 	if err != nil {
 		t.Fatal(err)
 	}

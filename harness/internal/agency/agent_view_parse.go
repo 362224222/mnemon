@@ -20,6 +20,11 @@ func ParseAgentViewCanonicalJSON(data []byte, authority ViewAuthority) (AgentVie
 	if err != nil {
 		return AgentView{}, err
 	}
+	related, outstanding, err := agentViewRelatedSpecsFromWire(wire.RelatedOpen,
+		wire.Outstanding, authority)
+	if err != nil {
+		return AgentView{}, err
+	}
 	references, err := agentViewReferenceSpecsFromWire(wire.References, authority)
 	if err != nil {
 		return AgentView{}, err
@@ -28,7 +33,8 @@ func ParseAgentViewCanonicalJSON(data []byte, authority ViewAuthority) (AgentVie
 		return AgentView{}, err
 	}
 	view, err := NewAgentView(AgentViewSpec{
-		Handle: handle, Authority: authority, Current: current, References: references,
+		Handle: handle, Authority: authority, Current: current, Related: related,
+		Outstanding: outstanding, References: references,
 	})
 	if err != nil {
 		return AgentView{}, err
@@ -39,6 +45,52 @@ func ParseAgentViewCanonicalJSON(data []byte, authority ViewAuthority) (AgentVie
 	return view, nil
 }
 
+func agentViewRelatedSpecsFromWire(wires []agentViewRelatedWire,
+	outstandingWire agentViewOutstandingWire, authority ViewAuthority,
+) ([]AgentViewRelatedSpec, AgentViewOutstanding, error) {
+	result := make([]AgentViewRelatedSpec, 0, len(wires))
+	for _, wire := range wires {
+		event, err := NewOpaqueHandle(wire.Facts.Event)
+		if err != nil {
+			return nil, AgentViewOutstanding{}, err
+		}
+		if _, offered := authority.provenance[event.String()]; !offered {
+			return nil, AgentViewOutstanding{}, invariant("Agent View related Event",
+				"does not match a sealed provenance offer")
+		}
+		var relation AgentViewRelation
+		switch wire.Facts.Relation {
+		case "correlation":
+			relation = AgentViewRelationCorrelation
+		default:
+			return nil, AgentViewOutstanding{}, invalid("Agent View related relation",
+				"must be correlation")
+		}
+		kind, err := NewSemanticLabel(wire.Semantic.Kind)
+		if err != nil {
+			return nil, AgentViewOutstanding{}, err
+		}
+		payload, err := NewSemanticPayload(wire.Semantic.Payload)
+		if err != nil {
+			return nil, AgentViewOutstanding{}, err
+		}
+		artifacts := make([]OpaqueHandle, 0, len(wire.Facts.Artifacts))
+		for _, artifactWire := range wire.Facts.Artifacts {
+			handle, err := validatePublicArtifact(artifactWire, authority)
+			if err != nil {
+				return nil, AgentViewOutstanding{}, err
+			}
+			artifacts = append(artifacts, handle)
+		}
+		result = append(result, AgentViewRelatedSpec{Event: event, Relation: relation,
+			Kind: kind, Payload: payload, Artifacts: artifacts})
+	}
+	outstanding := AgentViewOutstanding{OpenTotal: outstandingWire.OpenTotal,
+		RelatedTotal:     outstandingWire.RelatedTotal,
+		RelatedProjected: outstandingWire.RelatedProjected, Truncated: outstandingWire.Truncated}
+	return result, outstanding, nil
+}
+
 func agentViewCurrentSpecFromWire(wire *agentViewCurrentWire, authority ViewAuthority) (*AgentViewCurrentSpec, error) {
 	if wire == nil {
 		return nil, nil
@@ -46,6 +98,13 @@ func agentViewCurrentSpecFromWire(wire *agentViewCurrentWire, authority ViewAuth
 	subject, err := NewOpaqueHandle(wire.Facts.Handle)
 	if err != nil {
 		return nil, err
+	}
+	replyTo, err := NewOpaqueHandle(wire.Facts.ReplyTo)
+	if err != nil {
+		return nil, err
+	}
+	if _, offered := authority.provenance[replyTo.String()]; !offered {
+		return nil, invariant("Agent View current", "reply-to does not match sealed provenance")
 	}
 	kind, err := NewSemanticLabel(wire.Semantic.Kind)
 	if err != nil {
@@ -63,7 +122,8 @@ func agentViewCurrentSpecFromWire(wire *agentViewCurrentWire, authority ViewAuth
 		}
 		artifacts = append(artifacts, handle)
 	}
-	return &AgentViewCurrentSpec{Subject: subject, Kind: kind, Payload: payload, Artifacts: artifacts}, nil
+	return &AgentViewCurrentSpec{Subject: subject, ReplyTo: replyTo, Kind: kind,
+		Payload: payload, Artifacts: artifacts}, nil
 }
 
 func agentViewReferenceSpecsFromWire(wires []agentViewReferenceWire, authority ViewAuthority) (

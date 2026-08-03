@@ -133,8 +133,16 @@ r7_exec() {
   docker exec -w /workspace "$(r7_container "$node")" "$@"
 }
 
+r7_boundary_envelope() {
+  local boundary
+  boundary=$(dd if=/dev/urandom bs=32 count=1 2>/dev/null | base64 | tr '+/' '-_' | tr -d '=\n')
+  test "${#boundary}" = 43 || r7_fail "Host boundary entropy is unavailable"
+  printf '{"boundary":"%s","schema":"mnemon.hook.boundary","version":1}' "$boundary"
+}
+
 r7_attach() {
-  r7_exec "$1" mnemon-harness hook attach --json >/dev/null
+  r7_boundary_envelope | docker exec -i -w /workspace "$(r7_container "$1")" \
+    mnemon-harness hook attach --json >/dev/null
 }
 
 r7_current() {

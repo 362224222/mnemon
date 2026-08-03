@@ -12,7 +12,6 @@ import (
 
 const (
 	referenceOutcomeRebuildBatch = 64
-	maxReferenceOutcomeCount     = int64(1<<63 - 1)
 )
 
 type referenceOutcome uint8
@@ -97,9 +96,9 @@ func incrementReferenceOutcomesTx(ctx context.Context, tx *sql.Tx, outcome refer
 		}
 		query := fmt.Sprintf(`INSERT INTO reference_outcome_projection(
 			reference_event_id, %s) VALUES(?, 1)
-			ON CONFLICT(reference_event_id) DO UPDATE SET %s = %s + 1
-			WHERE %s < ?`, column, column, column, column)
-		result, err := tx.ExecContext(ctx, query, reference.ID().String(), maxReferenceOutcomeCount)
+			ON CONFLICT(reference_event_id) DO UPDATE SET %s = %s + 1`,
+			column, column, column)
+		result, err := tx.ExecContext(ctx, query, reference.ID().String())
 		if err != nil {
 			return fmt.Errorf("reference outcome projection: increment %s: %w", column, err)
 		}

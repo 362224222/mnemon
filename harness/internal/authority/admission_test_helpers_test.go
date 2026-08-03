@@ -6,11 +6,19 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/agency"
 )
+
+var attachmentBoundarySequence atomic.Uint64
+
+func nextAttachmentBoundary(t *testing.T) agency.Digest {
+	t.Helper()
+	return agency.Sum([]byte(fmt.Sprintf("%s/%d", t.Name(), attachmentBoundarySequence.Add(1))))
+}
 
 type memoryArtifactVerifier struct {
 	mu      sync.Mutex
@@ -58,7 +66,8 @@ func newAuthorityFixture(t *testing.T, principalValue string) *authorityFixture 
 		_ = store.Close()
 		t.Fatal(err)
 	}
-	fixture.proof, err = store.IssueInteractiveAttachment(fixture.ctx, fixture.principal)
+	fixture.proof, err = store.IssueInteractiveAttachment(fixture.ctx, fixture.principal,
+		nextAttachmentBoundary(t))
 	if err != nil {
 		_ = store.Close()
 		t.Fatal(err)

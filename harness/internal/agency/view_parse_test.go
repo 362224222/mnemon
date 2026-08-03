@@ -47,12 +47,13 @@ func newViewParserFixture(t *testing.T) viewParserFixture {
 		},
 		Provenance: []ProvenanceOffer{
 			mustProvenance(t, mustHandle(t, "cause:prior"), "event:prior", "prior"),
+			mustProvenance(t, subject, "event:head", "head"),
 		},
 	})
 	public, err := NewAgentView(AgentViewSpec{
 		Handle: mustHandle(t, "view:public"), Authority: authority,
 		Current: &AgentViewCurrentSpec{
-			Subject: subject, Kind: mustLabel(t, "agent.work.continue"),
+			Subject: subject, ReplyTo: subject, Kind: mustLabel(t, "agent.work.continue"),
 			Payload: mustPayload(t, "Continue from the bounded accepted state."), Artifacts: []OpaqueHandle{currentArtifact},
 		},
 		References: []AgentViewReferenceSpec{
@@ -245,7 +246,7 @@ func TestViewParsersEnforceCanonicalByteBounds(t *testing.T) {
 	if _, err := ParseViewAuthorityCanonicalJSON(private, fixture.attachment); !errors.Is(err, ErrLimit) {
 		t.Fatalf("private byte bound error = %v, want ErrLimit", err)
 	}
-	public := []byte(`{"schema":"mnemon.agent.view","version":2,"view":"view:public","padding":"` +
+	public := []byte(`{"schema":"mnemon.agent.view","version":3,"view":"view:public","padding":"` +
 		strings.Repeat("x", MaxAgentViewCanonicalBytes) + `"}`)
 	if _, err := ParseAgentViewCanonicalJSON(public, fixture.authority); !errors.Is(err, ErrLimit) {
 		t.Fatalf("public byte bound error = %v, want ErrLimit", err)
@@ -273,7 +274,7 @@ func FuzzParseViewAuthorityCanonicalJSON(f *testing.F) {
 func FuzzParseAgentViewCanonicalJSON(f *testing.F) {
 	_, authority, public := minimalParserFixture()
 	f.Add(public.CanonicalJSON())
-	f.Add([]byte(`{"schema":"mnemon.agent.view","version":2}`))
+	f.Add([]byte(`{"schema":"mnemon.agent.view","version":3}`))
 	f.Fuzz(func(t *testing.T, data []byte) {
 		view, err := ParseAgentViewCanonicalJSON(data, authority)
 		if err != nil {

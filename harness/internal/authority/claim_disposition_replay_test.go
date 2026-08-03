@@ -76,7 +76,8 @@ func TestClaimExpiryReplayFailsClosedOnDurableDivergence(t *testing.T) {
 		{name: "tuple", mutate: func(t *testing.T, fixture *authorityFixture, _ expiredClaim,
 			_ agency.OperationKey, _ agency.Digest,
 		) {
-			proof, err := fixture.store.IssueInteractiveAttachment(fixture.ctx, fixture.principal)
+			proof, err := fixture.store.IssueInteractiveAttachment(fixture.ctx, fixture.principal,
+				nextAttachmentBoundary(t))
 			if err != nil {
 				t.Fatal(err)
 			}

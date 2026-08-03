@@ -66,6 +66,14 @@ func (app *App) Run(ctx context.Context, args []string) int {
 		return app.writeError(newControlError(codeInvalidArgument,
 			"R7 Agent command requires its exact --json form"))
 	}
+	var boundary agency.Digest
+	if command == commandAttach || command == commandEnd {
+		var apiErr *controlError
+		boundary, apiErr = readHookBoundary(app.stdin)
+		if apiErr != nil {
+			return app.writeError(apiErr)
+		}
+	}
 	prepared, apiErr := app.prepare(ctx, command)
 	if apiErr != nil {
 		return app.writeError(apiErr)
@@ -73,7 +81,9 @@ func (app *App) Run(ctx context.Context, args []string) int {
 
 	switch command {
 	case commandAttach:
-		return app.runAttach(ctx, prepared.store, prepared.client)
+		return app.runAttach(ctx, prepared.store, prepared.client, boundary)
+	case commandEnd:
+		return app.runEnd(ctx, prepared.store, prepared.client, boundary)
 	case commandCurrent:
 		return app.runCurrent(ctx, prepared.store, prepared.client)
 	case commandSubmit:
@@ -124,7 +134,7 @@ func preflightJournal(command commandKind, store *journalStore) *controlError {
 	if err != nil {
 		return clientStateError()
 	}
-	if !exists && command != commandAttach {
+	if !exists && command != commandAttach && command != commandEnd {
 		return newControlError(codeContextRequired,
 			"hook attach must establish an Agent context before this command")
 	}
@@ -136,6 +146,7 @@ type commandKind uint8
 const (
 	commandOther commandKind = iota
 	commandAttach
+	commandEnd
 	commandCurrent
 	commandSubmit
 	commandCapture
@@ -149,6 +160,8 @@ func classify(args []string) commandKind {
 	switch args[0] + "\x00" + args[1] {
 	case "hook\x00attach":
 		return commandAttach
+	case "hook\x00end":
+		return commandEnd
 	case "agent\x00current":
 		return commandCurrent
 	case "agent\x00submit":

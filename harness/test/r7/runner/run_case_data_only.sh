@@ -21,13 +21,15 @@ done
 if find "$examples_root" -type f -perm -111 -print | grep -q .; then
   r7_static_fail 'an R7 example is executable'
 fi
-if rg -n -i "$pattern" "$examples_root"; then
+example_files=$(find "$examples_root" -type f -print)
+if r7_static_search_files_i "$pattern" "$example_files" | grep -q .; then
   r7_static_fail 'an R7 example contains case behavior'
 fi
-if rg -n -i 'testdata/r7/examples|examples/' "$RUNNER_DIR/lib.sh" "$RUNNER_DIR/run_cases.sh"; then
+runner_files=$(printf '%s\n' "$RUNNER_DIR/lib.sh" "$RUNNER_DIR/run_cases.sh")
+if r7_static_search_files_i 'testdata/r7/examples|examples/' "$runner_files" | grep -q .; then
   r7_static_fail 'the case runner reads non-authoritative examples'
 fi
-if rg -n -i '(review|contract-net|blackboard)' "$RUNNER_DIR/lib.sh" "$RUNNER_DIR/run_cases.sh"; then
+if r7_static_search_files_i '(review|contract-net|blackboard)' "$runner_files" | grep -q .; then
   r7_static_fail 'the generic case runner contains case-specific behavior'
 fi
 

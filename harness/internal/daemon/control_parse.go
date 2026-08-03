@@ -15,7 +15,7 @@ import (
 )
 
 func prepareControlRequest(request *http.Request, readOnly, requireAttachment,
-	requireOperation bool,
+	requireCurrent, requireOperation bool,
 ) *controlError {
 	if request == nil {
 		return newControlError(codeInvalidArgument, "request is required")
@@ -35,10 +35,11 @@ func prepareControlRequest(request *http.Request, readOnly, requireAttachment,
 			return newControlError(codeInvalidArgument, "R5 control metadata is not allowed")
 		}
 	}
-	attachmentPresent := anyHeader(request.Header, headerAttachment, headerCredential,
-		headerCurrentOperation)
+	attachmentPresent := anyHeader(request.Header, headerAttachment, headerCredential)
+	currentPresent := len(request.Header.Values(headerCurrentOperation)) != 0
 	operationPresent := len(request.Header.Values(headerOperation)) != 0
-	if attachmentPresent != requireAttachment || operationPresent != requireOperation {
+	if attachmentPresent != requireAttachment || currentPresent != requireCurrent ||
+		operationPresent != requireOperation {
 		return newControlError(codeInvalidArgument, "Agency authority is not allowed on this route")
 	}
 	if readOnly {
@@ -67,31 +68,9 @@ func anyHeader(header http.Header, names ...string) bool {
 func parseControlAuthority(header http.Header) (authority.AttachmentProof,
 	authority.CurrentOperation, *controlError,
 ) {
-	attachmentValue, errValue := singleHeader(header, headerAttachment,
-		codeAuthenticationFailed, "Agency attachment proof is required")
+	proof, errValue := parseAttachmentProof(header)
 	if errValue != nil {
 		return authority.AttachmentProof{}, authority.CurrentOperation{}, errValue
-	}
-	credentialValue, errValue := singleHeader(header, headerCredential,
-		codeAuthenticationFailed, "Agency attachment proof is required")
-	if errValue != nil {
-		return authority.AttachmentProof{}, authority.CurrentOperation{}, errValue
-	}
-	credential, err := decodeSecret(credentialValue)
-	if err != nil {
-		return authority.AttachmentProof{}, authority.CurrentOperation{},
-			newControlError(codeAuthenticationFailed, "Agency attachment proof is invalid")
-	}
-	defer clear(credential)
-	id, err := agency.NewAttachmentID(attachmentValue)
-	if err != nil {
-		return authority.AttachmentProof{}, authority.CurrentOperation{},
-			newControlError(codeAuthenticationFailed, "Agency attachment proof is invalid")
-	}
-	proof, err := authority.NewAttachmentProof(id, credential)
-	if err != nil {
-		return authority.AttachmentProof{}, authority.CurrentOperation{},
-			newControlError(codeAuthenticationFailed, "Agency attachment proof is invalid")
 	}
 	currentValue, errValue := singleHeader(header, headerCurrentOperation,
 		codeInvalidArgument, "Agency current operation is required exactly once")
@@ -109,6 +88,36 @@ func parseControlAuthority(header http.Header) (authority.AttachmentProof,
 			newControlError(codeInvalidArgument, "Agency current operation is invalid")
 	}
 	return proof, current, nil
+}
+
+func parseAttachmentProof(header http.Header) (authority.AttachmentProof, *controlError) {
+	attachmentValue, errValue := singleHeader(header, headerAttachment,
+		codeAuthenticationFailed, "Agency attachment proof is required")
+	if errValue != nil {
+		return authority.AttachmentProof{}, errValue
+	}
+	credentialValue, errValue := singleHeader(header, headerCredential,
+		codeAuthenticationFailed, "Agency attachment proof is required")
+	if errValue != nil {
+		return authority.AttachmentProof{}, errValue
+	}
+	credential, err := decodeSecret(credentialValue)
+	if err != nil {
+		return authority.AttachmentProof{},
+			newControlError(codeAuthenticationFailed, "Agency attachment proof is invalid")
+	}
+	defer clear(credential)
+	id, err := agency.NewAttachmentID(attachmentValue)
+	if err != nil {
+		return authority.AttachmentProof{},
+			newControlError(codeAuthenticationFailed, "Agency attachment proof is invalid")
+	}
+	proof, err := authority.NewAttachmentProof(id, credential)
+	if err != nil {
+		return authority.AttachmentProof{},
+			newControlError(codeAuthenticationFailed, "Agency attachment proof is invalid")
+	}
+	return proof, nil
 }
 
 func singleHeader(header http.Header, name string, code controlErrorCode,

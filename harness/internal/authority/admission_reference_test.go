@@ -452,7 +452,7 @@ func TestReferenceTombstoneRejectsFreshRetractAndReplaysOriginal(t *testing.T) {
 	}
 }
 
-func TestReferenceProjectionBoundDoesNotOfferSeventeenthPublish(t *testing.T) {
+func TestReferenceProjectionBoundDoesNotOfferPublishAboveLimit(t *testing.T) {
 	fixture := newAuthorityFixture(t, "principal:reference-bound")
 	for index := 0; index < maxProjectedReferences; index++ {
 		digest := fixture.catalog(t, fmt.Sprintf("playbook %d", index))
@@ -468,7 +468,7 @@ func TestReferenceProjectionBoundDoesNotOfferSeventeenthPublish(t *testing.T) {
 	if strings.Contains(string(view.AgentView().CanonicalJSON()), "reference.publish") {
 		t.Fatal("Reference publish remained offered at the projection bound")
 	}
-	extraDigest := fixture.catalog(t, "must not become seventeenth")
+	extraDigest := fixture.catalog(t, "must not exceed the reference bound")
 	handle := mustHandle(t, "candidate:operation:bound-extra")
 	input, err := agency.NewArtifactCandidate(handle)
 	if err != nil {
@@ -484,7 +484,7 @@ func TestReferenceProjectionBoundDoesNotOfferSeventeenthPublish(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := view.Bind(intent, operation, []agency.CapturedCandidate{candidate}); err == nil {
-		t.Fatal("seventeenth Reference publish bound successfully")
+		t.Fatal("Reference publish above the projection bound succeeded")
 	}
 	if got := countRows(t, fixture.store, "active_references"); got != maxProjectedReferences {
 		t.Fatalf("active References = %d, want %d", got, maxProjectedReferences)

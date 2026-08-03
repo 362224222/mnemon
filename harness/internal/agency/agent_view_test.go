@@ -41,6 +41,7 @@ func TestAgentViewProjectsOnlyBoundedPublicWorld(t *testing.T) {
 		},
 		Provenance: []ProvenanceOffer{
 			mustProvenance(t, mustHandle(t, "cause:prior"), "event:prior", "prior"),
+			mustProvenance(t, currentHandle, "event:private-head", "private-head"),
 		},
 	})
 
@@ -48,7 +49,7 @@ func TestAgentViewProjectsOnlyBoundedPublicWorld(t *testing.T) {
 		Handle:    mustHandle(t, "view:opaque"),
 		Authority: authority,
 		Current: &AgentViewCurrentSpec{
-			Subject: currentHandle, Kind: mustLabel(t, "custom.agent.signal"),
+			Subject: currentHandle, ReplyTo: currentHandle, Kind: mustLabel(t, "custom.agent.signal"),
 			Payload:   mustPayload(t, "Inspect the bounded material and choose one allowed effect."),
 			Artifacts: []OpaqueHandle{currentArtifact},
 		},
@@ -94,7 +95,7 @@ func assertAgentViewProjection(t *testing.T, view AgentView, currentHandle Opaqu
 	if len(wire.AllowedIntents) != 5 || wire.AllowedIntents[0].Consequence > wire.AllowedIntents[1].Consequence {
 		t.Fatalf("allowed Intent shapes = %#v", wire.AllowedIntents)
 	}
-	if got := strings.Join(wire.Provenance, ","); got != "cause:prior" {
+	if got := strings.Join(wire.Provenance, ","); got != "cause:prior,subject:current" {
 		t.Fatalf("provenance handles = %q", got)
 	}
 	assertNoPrivateViewKeys(t, view.CanonicalJSON())
@@ -127,12 +128,15 @@ func TestAgentViewRejectsProjectionThatDivergesFromAuthority(t *testing.T) {
 			mustSubject(t, currentHandle, "handling:private", "event:head", "head", 3),
 		},
 		Artifacts: []ViewArtifactOffer{mustViewOffer(t, artifactHandle, "bytes")},
+		Provenance: []ProvenanceOffer{mustProvenance(t, currentHandle,
+			"event:head", "head")},
 	})
 
 	if _, err := NewAgentView(AgentViewSpec{Handle: viewHandle, Authority: authority}); !errors.Is(err, ErrInvariant) {
 		t.Fatalf("missing current error = %v, want ErrInvariant", err)
 	}
-	current := &AgentViewCurrentSpec{Subject: currentHandle, Kind: mustLabel(t, "custom.agent.signal")}
+	current := &AgentViewCurrentSpec{Subject: currentHandle, ReplyTo: currentHandle,
+		Kind: mustLabel(t, "custom.agent.signal")}
 	if _, err := NewAgentView(AgentViewSpec{Handle: viewHandle, Authority: authority,
 		Current: current}); !errors.Is(err, ErrInvariant) {
 		t.Fatalf("hidden Artifact error = %v, want ErrInvariant", err)
@@ -203,9 +207,10 @@ func TestAgentViewHasByteAndApproximateTokenRegressionBudget(t *testing.T) {
 		},
 		Subjects: []SubjectBinding{mustSubject(t, current, "handling:private", "event:head", "head", 1)},
 		Targets:  []ResolvedTarget{self}, Artifacts: []ViewArtifactOffer{mustViewOffer(t, artifact, "bytes")},
+		Provenance: []ProvenanceOffer{mustProvenance(t, current, "event:head", "head")},
 	})
 	view, err := NewAgentView(AgentViewSpec{Handle: mustHandle(t, "view:budget"), Authority: authority,
-		Current: &AgentViewCurrentSpec{Subject: current, Kind: mustLabel(t, "custom.agent.signal"),
+		Current: &AgentViewCurrentSpec{Subject: current, ReplyTo: current, Kind: mustLabel(t, "custom.agent.signal"),
 			Payload: mustPayload(t, strings.Repeat("bounded context. ", 32)), Artifacts: []OpaqueHandle{artifact}},
 	})
 	if err != nil {
@@ -248,11 +253,11 @@ func TestAgentViewTerminalOutcomeProjectionHasConstantTokenBound(t *testing.T) {
 	}
 }
 
-func TestAgentViewFailsClosedAboveCanonicalByteLimit(t *testing.T) {
+func TestAgentViewMaximumReferenceAndPayloadShapeRemainsReadable(t *testing.T) {
 	principal := mustPrincipal(t, "agent:local")
 	attachment := mustAttachment(t, "attachment:large-public-view", principal, true)
 	current := mustHandle(t, "subject:current")
-	artifacts := make([]ViewArtifactOffer, 0, MaxAgentViewReferences+1)
+	artifacts := make([]ViewArtifactOffer, 0, MaxAgentViewReferences+2*MaxArtifactInputs)
 	references := make([]ReferenceExpectation, 0, MaxAgentViewReferences)
 	publicReferences := make([]AgentViewReferenceSpec, 0, MaxAgentViewReferences)
 	for index := 0; index < MaxAgentViewReferences; index++ {
@@ -266,22 +271,79 @@ func TestAgentViewFailsClosedAboveCanonicalByteLimit(t *testing.T) {
 			Head: head, State: AgentViewReferenceStateActive, Artifact: artifact,
 		})
 	}
-	currentArtifact := mustHandle(t, "artifact:current")
-	artifacts = append(artifacts, mustViewOffer(t, currentArtifact, "current"))
+	currentArtifacts := make([]OpaqueHandle, 0, MaxArtifactInputs)
+	relatedArtifacts := make([]OpaqueHandle, 0, MaxArtifactInputs)
+	for index := 0; index < MaxArtifactInputs; index++ {
+		currentArtifact := mustHandle(t, fmt.Sprintf("artifact:current:%02d", index))
+		relatedArtifact := mustHandle(t, fmt.Sprintf("artifact:related:%02d", index))
+		artifacts = append(artifacts, mustViewOffer(t, currentArtifact, fmt.Sprintf("current-%d", index)),
+			mustViewOffer(t, relatedArtifact, fmt.Sprintf("related-%d", index)))
+		currentArtifacts = append(currentArtifacts, currentArtifact)
+		relatedArtifacts = append(relatedArtifacts, relatedArtifact)
+	}
+	relatedEvent := mustHandle(t, "related:maximum")
+	self, err := ResolveLocalTarget(SelfTarget(), principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targets := []ResolvedTarget{self}
+	for index := 0; index < 8; index++ { // R7 freezes eight active Peer routes.
+		requested := mustAliasTarget(t, longToken("target", index, MaxOpaqueHandleBytes))
+		remote := mustHandle(t, longToken("remote", index, MaxOpaqueHandleBytes))
+		resolved, err := ResolveRemoteTarget(requested,
+			mustRoute(t, longToken("route", index, MaxOpaqueHandleBytes)), remote)
+		if err != nil {
+			t.Fatal(err)
+		}
+		targets = append(targets, resolved)
+	}
 	authority := mustView(t, MachineViewSpec{
 		Attachment: attachment, Consequences: []Consequence{ConsequenceAdvanceHandling},
 		Subjects:   []SubjectBinding{mustSubject(t, current, "handling:private", "event:head", "head", 1)},
-		References: references, Artifacts: artifacts,
+		References: references, Artifacts: artifacts, Targets: targets,
+		Provenance: []ProvenanceOffer{mustProvenance(t, current, "event:head", "head"),
+			mustProvenance(t, relatedEvent, "event:related", "related")},
 	})
-	_, err := NewAgentView(AgentViewSpec{
+	view, err := NewAgentView(AgentViewSpec{
 		Handle: mustHandle(t, "view:large"), Authority: authority,
-		Current: &AgentViewCurrentSpec{Subject: current, Kind: mustLabel(t, "custom.agent.signal"),
+		Current: &AgentViewCurrentSpec{Subject: current, ReplyTo: current, Kind: mustLabel(t, "custom.agent.signal"),
 			Payload:   mustPayload(t, strings.Repeat("p", MaxSemanticPayloadBytes)),
-			Artifacts: []OpaqueHandle{currentArtifact}},
+			Artifacts: currentArtifacts},
+		Related: []AgentViewRelatedSpec{{Event: relatedEvent,
+			Relation: AgentViewRelationCorrelation, Kind: mustLabel(t, "custom.agent.related"),
+			Payload: mustPayload(t, ""), Artifacts: relatedArtifacts}},
+		Outstanding: AgentViewOutstanding{OpenTotal: 2, RelatedTotal: 1,
+			RelatedProjected: 1},
 		References: publicReferences,
 	})
+	if err != nil {
+		t.Fatalf("maximum accepted public View became unreadable: %v", err)
+	}
+	if size := len(view.CanonicalJSON()); size > MaxAgentViewCanonicalBytes {
+		t.Fatalf("maximum accepted public View bytes = %d, want <= %d",
+			size, MaxAgentViewCanonicalBytes)
+	}
+}
+
+func TestAgentViewFailsClosedAboveCanonicalByteLimit(t *testing.T) {
+	principal := mustPrincipal(t, "agent:view-last-line-bound")
+	attachment := mustAttachment(t, "attachment:view-last-line-bound", principal, true)
+	current := mustHandle(t, "subject:view-last-line-bound")
+	authority := mustView(t, MachineViewSpec{Attachment: attachment,
+		Consequences: []Consequence{ConsequenceAdvanceHandling},
+		Subjects: []SubjectBinding{mustSubject(t, current, "handling:last-line",
+			"event:last-line", "last-line", 1)},
+		Provenance: []ProvenanceOffer{mustProvenance(t, current,
+			"event:last-line", "last-line")}})
+	// SemanticPayload values are normally constructor-validated. An internal
+	// invariant violation must still be caught by the final canonical envelope
+	// bound rather than escaping as an oversized projection.
+	invalidPayload := SemanticPayload{value: strings.Repeat("p", MaxAgentViewCanonicalBytes)}
+	_, err := NewAgentView(AgentViewSpec{Handle: mustHandle(t, "view:last-line-bound"),
+		Authority: authority, Current: &AgentViewCurrentSpec{Subject: current,
+			ReplyTo: current, Kind: mustLabel(t, "custom.agent.signal"), Payload: invalidPayload}})
 	if !errors.Is(err, ErrLimit) {
-		t.Fatalf("oversized public View error = %v, want ErrLimit", err)
+		t.Fatalf("oversized Agent View error = %v, want ErrLimit", err)
 	}
 }
 

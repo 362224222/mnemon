@@ -12,12 +12,13 @@ import (
 )
 
 const (
-	routeAttachments  = "/v1/agency/attachments"
-	routeCurrent      = "/v1/agency/current"
-	routeSubmit       = "/v1/agency/submit"
-	routeArtifacts    = "/v1/agency/artifacts"
-	routeArtifactRead = "/v1/agency/artifacts/read"
-	routeStatus       = "/v1/agency/status"
+	routeAttachments   = "/v1/agency/attachments"
+	routeAttachmentEnd = "/v1/agency/attachments/end"
+	routeCurrent       = "/v1/agency/current"
+	routeSubmit        = "/v1/agency/submit"
+	routeArtifacts     = "/v1/agency/artifacts"
+	routeArtifactRead  = "/v1/agency/artifacts/read"
+	routeStatus        = "/v1/agency/status"
 
 	headerAttachment       = "Mnemon-Agency-Attachment"
 	headerCredential       = "Mnemon-Agency-Credential"
@@ -25,11 +26,12 @@ const (
 	headerOperation        = "Mnemon-Agency-Operation"
 	headerArtifactDigest   = "Mnemon-Artifact-Digest"
 
-	attachmentSchema = "mnemon.agency.attachment"
-	artifactSchema   = "mnemon.agency.artifact"
-	statusSchema     = "mnemon.agency.status"
-	controlVersion   = 1
-	timeWireLayout   = "2006-01-02T15:04:05.000000000Z"
+	attachmentSchema    = "mnemon.agency.attachment"
+	attachmentEndSchema = "mnemon.agency.attachment-end"
+	artifactSchema      = "mnemon.agency.artifact"
+	statusSchema        = "mnemon.agency.status"
+	controlVersion      = 1
+	timeWireLayout      = "2006-01-02T15:04:05.000000000Z"
 
 	attachmentCredentialBytes = 32
 	maxPrivateResponse        = 4 << 10
@@ -53,6 +55,7 @@ func newControlServer(service *localService) (*controlServer, error) {
 	server := &controlServer{service: service}
 	mux := http.NewServeMux()
 	mux.HandleFunc(routeAttachments, server.handleAttach)
+	mux.HandleFunc(routeAttachmentEnd, server.handleAttachmentEnd)
 	mux.HandleFunc(routeCurrent, server.handleCurrent)
 	mux.HandleFunc(routeSubmit, server.handleSubmit)
 	mux.HandleFunc(routeArtifacts, server.handleArtifact)
@@ -70,7 +73,7 @@ func newControlServer(service *localService) (*controlServer, error) {
 }
 
 func controlRoute(path string) bool {
-	return path == routeAttachments || path == routeCurrent || path == routeSubmit ||
+	return path == routeAttachments || path == routeAttachmentEnd || path == routeCurrent || path == routeSubmit ||
 		path == routeArtifacts || path == routeArtifactRead || path == routeStatus
 }
 
@@ -83,16 +86,22 @@ func (server *controlServer) ServeHTTP(writer http.ResponseWriter, request *http
 }
 
 func (server *controlServer) handleAttach(writer http.ResponseWriter, request *http.Request) {
-	if err := prepareControlRequest(request, false, false, false); err != nil {
+	if err := prepareControlRequest(request, false, false, false, false); err != nil {
 		writeControlError(writer, err)
 		return
 	}
-	var input struct{}
+	var input attachmentBeginWire
 	if err := decodeClosedRequest(request, &input, maxPrivateResponse); err != nil {
 		writeControlError(writer, err)
 		return
 	}
-	result, err := server.service.attach(request.Context())
+	boundary, err := agency.ParseDigest(input.BoundaryDigest)
+	if err != nil || boundary.IsZero() {
+		writeControlError(writer, newControlError(codeInvalidArgument,
+			"Host boundary operation is invalid"))
+		return
+	}
+	result, err := server.service.attach(request.Context(), boundary)
 	if err != nil {
 		writeControlError(writer, classifyServiceError(err))
 		return
@@ -112,8 +121,32 @@ func (server *controlServer) handleAttach(writer http.ResponseWriter, request *h
 	})
 }
 
+func (server *controlServer) handleAttachmentEnd(writer http.ResponseWriter, request *http.Request) {
+	if err := prepareControlRequest(request, false, true, false, false); err != nil {
+		writeControlError(writer, err)
+		return
+	}
+	proof, errValue := parseAttachmentProof(request.Header)
+	if errValue != nil {
+		writeControlError(writer, errValue)
+		return
+	}
+	var input struct{}
+	if err := decodeClosedRequest(request, &input, maxPrivateResponse); err != nil {
+		writeControlError(writer, err)
+		return
+	}
+	result, err := server.service.endAttachment(request.Context(), proof)
+	if err != nil {
+		writeControlError(writer, classifyServiceError(err))
+		return
+	}
+	writeControlJSON(writer, http.StatusOK, attachmentEndWire{ReleasedClaim: result.releasedClaim,
+		Replayed: result.replayed, Schema: attachmentEndSchema, Status: "ended", Version: controlVersion})
+}
+
 func (server *controlServer) handleCurrent(writer http.ResponseWriter, request *http.Request) {
-	if err := prepareControlRequest(request, false, true, false); err != nil {
+	if err := prepareControlRequest(request, false, true, true, false); err != nil {
 		writeControlError(writer, err)
 		return
 	}
@@ -136,7 +169,7 @@ func (server *controlServer) handleCurrent(writer http.ResponseWriter, request *
 }
 
 func (server *controlServer) handleSubmit(writer http.ResponseWriter, request *http.Request) {
-	if err := prepareControlRequest(request, false, true, true); err != nil {
+	if err := prepareControlRequest(request, false, true, true, true); err != nil {
 		writeControlError(writer, err)
 		return
 	}
@@ -183,7 +216,7 @@ func (server *controlServer) handleSubmit(writer http.ResponseWriter, request *h
 }
 
 func (server *controlServer) handleArtifact(writer http.ResponseWriter, request *http.Request) {
-	if err := prepareControlRequest(request, false, false, false); err != nil {
+	if err := prepareControlRequest(request, false, false, false, false); err != nil {
 		writeControlError(writer, err)
 		return
 	}
@@ -213,7 +246,7 @@ func (server *controlServer) handleArtifact(writer http.ResponseWriter, request 
 }
 
 func (server *controlServer) handleArtifactRead(writer http.ResponseWriter, request *http.Request) {
-	if err := prepareControlRequest(request, false, true, false); err != nil {
+	if err := prepareControlRequest(request, false, true, true, false); err != nil {
 		writeControlError(writer, err)
 		return
 	}
@@ -243,7 +276,7 @@ func (server *controlServer) handleArtifactRead(writer http.ResponseWriter, requ
 }
 
 func (server *controlServer) handleStatus(writer http.ResponseWriter, request *http.Request) {
-	if err := prepareControlRequest(request, true, false, false); err != nil {
+	if err := prepareControlRequest(request, true, false, false, false); err != nil {
 		writeControlError(writer, err)
 		return
 	}

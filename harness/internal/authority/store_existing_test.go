@@ -170,7 +170,7 @@ func TestOpenExistingWithArtifactVerifierAndClockUsesOneTrustedTimeDomain(t *tes
 		t.Fatal(err)
 	}
 	defer opened.Close()
-	proof, err := opened.IssueInteractiveAttachment(ctx, principal)
+	proof, err := opened.IssueInteractiveAttachment(ctx, principal, nextAttachmentBoundary(t))
 	if err != nil {
 		t.Fatal(err)
 	}

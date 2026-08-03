@@ -95,6 +95,25 @@ r7_static_production_sources() {
   )
 }
 
+# Search an explicit newline-delimited file set with the ubiquitous grep
+# utility. Structural oracles must not turn a missing optional developer tool
+# into a misleading semantic failure.
+r7_static_search_files() {
+	local pattern=$1 files=$2
+	test -n "$files" || return 1
+	printf '%s\n' "$files" | while IFS= read -r file; do
+		grep -EnH -- "$pattern" "$file" || true
+	done
+}
+
+r7_static_search_files_i() {
+	local pattern=$1 files=$2
+	test -n "$files" || return 1
+	printf '%s\n' "$files" | while IFS= read -r file; do
+		grep -EinH -- "$pattern" "$file" || true
+	done
+}
+
 r7_static_forbidden_case_pattern() {
   printf '%s\n' '(review\.|contract-net\.|blackboard\.|memory\.wiki\.|teamwork\.|channel\.)'
 }

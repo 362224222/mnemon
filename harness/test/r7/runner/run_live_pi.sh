@@ -24,6 +24,13 @@ r7_live_fail() {
   return 1
 }
 
+r7_live_boundary_envelope() {
+  local boundary
+  boundary=$(dd if=/dev/urandom bs=32 count=1 2>/dev/null | base64 | tr '+/' '-_' | tr -d '=\n')
+  test "${#boundary}" = 43 || r7_live_fail 'Host boundary entropy is unavailable'
+  printf '{"boundary":"%s","schema":"mnemon.hook.boundary","version":1}' "$boundary"
+}
+
 r7_live_cleanup() {
   local attempt=0
   if test -n "$R7_LIVE_KEY_WRITER_PID" && kill -0 "$R7_LIVE_KEY_WRITER_PID" 2>/dev/null; then
@@ -298,7 +305,7 @@ r7_live_assert_pi_trace() {
 
 r7_live_assert_committed_effect() {
   local hook=$R7_LIVE_ROOT/verify-hook.json view=$R7_LIVE_ROOT/verify-view.json
-  if ! env -u DEEPSEEK_API_KEY PATH="$R7_LIVE_ROOT/bin:$PATH" \
+  if ! r7_live_boundary_envelope | env -u DEEPSEEK_API_KEY PATH="$R7_LIVE_ROOT/bin:$PATH" \
     "$R7_LIVE_ROOT/bin/mnemon-harness" hook attach --json >"$hook" 2>/dev/null; then
     r7_live_fail 'a fresh attachment could not inspect the post-Pi authority state'
   fi
@@ -307,7 +314,7 @@ r7_live_assert_committed_effect() {
     r7_live_fail 'a fresh attachment could not obtain the post-Pi View'
   fi
   jq -e '
-    .schema == "mnemon.agent.view" and .version == 2 and
+    .schema == "mnemon.agent.view" and .version == 3 and
     .current.semantic.kind == "live.pi.probe" and
     .current.semantic.payload == "persist one Pi-originated responsibility" and
     (.current.facts.handle | type == "string" and length > 0)

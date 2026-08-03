@@ -4,10 +4,15 @@ import "sort"
 
 const (
 	AgentViewSchema              = "mnemon.agent.view"
-	AgentViewVersion             = 2
+	AgentViewVersion             = 3
 	MaxAgentViewCanonicalBytes   = 16 << 10
-	MaxAgentViewReferences       = 16
+	MaxAgentViewReferences       = 8
 	MaxAgentViewCurrentArtifacts = MaxArtifactInputs
+	MaxAgentViewRelatedOpen      = 1
+	// Current plus projected related semantics never exceed one accepted
+	// Event payload. This keeps related evidence from making an otherwise
+	// readable responsibility exceed the canonical View budget.
+	MaxAgentViewFocusPayloadBytes = MaxSemanticPayloadBytes
 )
 
 // AgentViewCurrentSpec supplies the semantic content associated with the one
@@ -15,6 +20,7 @@ const (
 // offers in Authority; their machine-owned bindings never enter AgentView.
 type AgentViewCurrentSpec struct {
 	Subject   OpaqueHandle
+	ReplyTo   OpaqueHandle
 	Kind      SemanticLabel
 	Payload   SemanticPayload
 	Artifacts []OpaqueHandle
@@ -54,10 +60,12 @@ type AgentViewTerminalOutcomes struct {
 // ViewAuthority remains the sole source of offered handles and consequences;
 // this spec adds only bounded Agent-facing semantics and associations.
 type AgentViewSpec struct {
-	Handle     OpaqueHandle
-	Authority  ViewAuthority
-	Current    *AgentViewCurrentSpec
-	References []AgentViewReferenceSpec
+	Handle      OpaqueHandle
+	Authority   ViewAuthority
+	Current     *AgentViewCurrentSpec
+	Related     []AgentViewRelatedSpec
+	Outstanding AgentViewOutstanding
+	References  []AgentViewReferenceSpec
 }
 
 // AgentView is the canonical bounded world shown to an Agent. It deliberately
@@ -75,6 +83,13 @@ func NewAgentView(spec AgentViewSpec) (AgentView, error) {
 	current, artifactHandles, err := projectCurrent(spec.Current, spec.Authority)
 	if err != nil {
 		return AgentView{}, err
+	}
+	related, relatedArtifacts, err := projectRelated(spec.Related, spec.Outstanding, spec.Authority)
+	if err != nil {
+		return AgentView{}, err
+	}
+	for handle := range relatedArtifacts {
+		artifactHandles[handle] = struct{}{}
 	}
 	references, referenceArtifacts, err := projectReferences(spec.References, spec.Authority)
 	if err != nil {
@@ -95,6 +110,8 @@ func NewAgentView(spec AgentViewSpec) (AgentView, error) {
 		Version:        AgentViewVersion,
 		View:           spec.Handle.String(),
 		Current:        current,
+		RelatedOpen:    related,
+		Outstanding:    projectOutstanding(spec.Outstanding),
 		References:     references,
 		Targets:        projectTargetAliases(spec.Authority.targets),
 		AllowedIntents: projectAllowedIntentShapes(spec.Authority.consequences),
@@ -137,14 +154,17 @@ func projectCurrent(spec *AgentViewCurrentSpec, authority ViewAuthority) (*agent
 		}
 		return nil, artifacts, nil
 	}
-	if spec.Subject.IsZero() || spec.Kind.IsZero() {
-		return nil, nil, invalid("Agent View current", "subject and kind are required")
+	if spec.Subject.IsZero() || spec.ReplyTo.IsZero() || spec.Kind.IsZero() {
+		return nil, nil, invalid("Agent View current", "subject, reply-to provenance, and kind are required")
 	}
 	if len(spec.Artifacts) > MaxAgentViewCurrentArtifacts {
 		return nil, nil, limit("Agent View current Artifacts", len(spec.Artifacts), MaxAgentViewCurrentArtifacts)
 	}
 	if _, offered := authority.subjects[spec.Subject.String()]; !offered || len(authority.subjects) != 1 {
 		return nil, nil, invariant("Agent View current", "subject was not the sealed current subject")
+	}
+	if _, offered := authority.provenance[spec.ReplyTo.String()]; !offered {
+		return nil, nil, invariant("Agent View current", "reply-to was not offered as provenance")
 	}
 	artifactWires := make([]agentViewArtifactWire, 0, len(spec.Artifacts))
 	for _, handle := range spec.Artifacts {
@@ -160,7 +180,8 @@ func projectCurrent(spec *AgentViewCurrentSpec, authority ViewAuthority) (*agent
 	}
 	sort.Slice(artifactWires, func(i, j int) bool { return artifactWires[i].Handle < artifactWires[j].Handle })
 	return &agentViewCurrentWire{
-		Facts:    agentViewCurrentFactsWire{Handle: spec.Subject.String(), Artifacts: artifactWires},
+		Facts: agentViewCurrentFactsWire{Handle: spec.Subject.String(), ReplyTo: spec.ReplyTo.String(),
+			Artifacts: artifactWires},
 		Semantic: agentViewSemanticWire{Kind: spec.Kind.String(), Payload: spec.Payload.String()},
 	}, artifacts, nil
 }
@@ -213,9 +234,6 @@ func projectReferences(specs []AgentViewReferenceSpec, authority ViewAuthority) 
 func projectTerminalOutcomes(outcomes AgentViewTerminalOutcomes) (*agentViewTerminalOutcomesWire, error) {
 	if err := validateTerminalOutcomes(outcomes); err != nil {
 		return nil, err
-	}
-	if outcomes == (AgentViewTerminalOutcomes{}) {
-		return nil, nil
 	}
 	return &agentViewTerminalOutcomesWire{Completed: outcomes.Completed,
 		Declined: outcomes.Declined, Unresolved: outcomes.Unresolved}, nil
@@ -322,6 +340,8 @@ type agentViewWire struct {
 	Version        int                        `json:"version"`
 	View           string                     `json:"view"`
 	Current        *agentViewCurrentWire      `json:"current,omitempty"`
+	RelatedOpen    []agentViewRelatedWire     `json:"related_open,omitempty"`
+	Outstanding    agentViewOutstandingWire   `json:"outstanding"`
 	References     []agentViewReferenceWire   `json:"references,omitempty"`
 	Targets        []string                   `json:"targets,omitempty"`
 	AllowedIntents []agentViewIntentShapeWire `json:"allowed_intents"`
@@ -335,6 +355,7 @@ type agentViewCurrentWire struct {
 
 type agentViewCurrentFactsWire struct {
 	Handle    string                  `json:"handle"`
+	ReplyTo   string                  `json:"reply_to"`
 	Artifacts []agentViewArtifactWire `json:"artifacts,omitempty"`
 }
 
@@ -356,9 +377,9 @@ type agentViewReferenceFactsWire struct {
 }
 
 type agentViewTerminalOutcomesWire struct {
-	Completed  int64 `json:"completed,omitempty"`
-	Declined   int64 `json:"declined,omitempty"`
-	Unresolved int64 `json:"unresolved,omitempty"`
+	Completed  int64 `json:"completed"`
+	Declined   int64 `json:"declined"`
+	Unresolved int64 `json:"unresolved"`
 }
 
 type agentViewArtifactWire struct {

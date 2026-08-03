@@ -15,7 +15,7 @@ if (
   # The closed gate forbids case-specific semantic kind literals. Ordinary
   # prose is not a dispatch table, so this scans the literal namespaces rather
   # than banning English words from comments and diagnostics.
-  printf '%s\n' "$sources" | xargs rg -n -i "$pattern"
+  r7_static_search_files_i "$pattern" "$sources" | grep -q .
 ); then
   r7_static_fail 'case-specific semantic kind appears in production R7 Go'
 fi

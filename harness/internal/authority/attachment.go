@@ -92,59 +92,9 @@ func (s *Store) RequirePrincipal(ctx context.Context, principal agency.AgentPrin
 	return nil
 }
 
-// IssueInteractiveAttachment creates a short-lived initiation-capable
-// boundary. Random generation happens before the durable transaction; the
-// transaction contains no external callback.
-func (s *Store) IssueInteractiveAttachment(ctx context.Context,
-	principal agency.AgentPrincipalID,
-) (AttachmentProof, error) {
-	if ctx == nil || principal.IsZero() {
-		return AttachmentProof{}, errors.New("issue attachment: Principal is required")
-	}
-	now, err := s.trustedNow()
-	if err != nil {
-		return AttachmentProof{}, err
-	}
-	id, err := newAttachmentID()
-	if err != nil {
-		return AttachmentProof{}, err
-	}
-	var credential [attachmentCredentialBytes]byte
-	if _, err := rand.Read(credential[:]); err != nil {
-		return AttachmentProof{}, fmt.Errorf("issue attachment: random credential: %w", err)
-	}
-	expiresAt := now.Add(interactiveAttachmentLifetime)
-	digest := agency.Sum(credential[:])
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err := s.requireOpen(); err != nil {
-		return AttachmentProof{}, err
-	}
-	var exists int
-	if err := s.db.QueryRowContext(ctx,
-		"SELECT EXISTS(SELECT 1 FROM principals WHERE principal_id = ?)", principal.String()).Scan(&exists); err != nil {
-		return AttachmentProof{}, fmt.Errorf("issue attachment: inspect Principal: %w", err)
-	}
-	if exists != 1 {
-		return AttachmentProof{}, ErrPrincipalUnavailable
-	}
-	if _, err := s.db.ExecContext(ctx, `INSERT INTO attachments(
-		attachment_id, principal_id, mode, credential_digest, issued_at, expires_at)
-		VALUES(?, ?, 'interactive', ?, ?, ?)`, id.String(), principal.String(), digest.String(),
-		formatTime(now), formatTime(expiresAt)); err != nil {
-		return AttachmentProof{}, fmt.Errorf("issue attachment: persist: %w", err)
-	}
-	proof, err := NewAttachmentProof(id, credential[:])
-	if err != nil {
-		return AttachmentProof{}, err
-	}
-	proof.expiresAt = expiresAt
-	return proof, nil
-}
-
 type authenticatedAttachment struct {
-	value agency.Attachment
+	value   agency.Attachment
+	endedAt *time.Time
 }
 
 // ProvisionInitialPrincipal is the setup-only initializer for one R7 local
@@ -278,9 +228,10 @@ func authenticateAttachmentTx(ctx context.Context, tx *sql.Tx,
 		return authenticatedAttachment{}, ErrAttachmentAuth
 	}
 	var principalValue, mode, storedDigest, issuedValue, expiresValue string
-	err := tx.QueryRowContext(ctx, `SELECT principal_id, mode, credential_digest, issued_at, expires_at
+	var endedValue sql.NullString
+	err := tx.QueryRowContext(ctx, `SELECT principal_id, mode, credential_digest, issued_at, expires_at, ended_at
 		FROM attachments WHERE attachment_id = ?`, proof.id.String()).
-		Scan(&principalValue, &mode, &storedDigest, &issuedValue, &expiresValue)
+		Scan(&principalValue, &mode, &storedDigest, &issuedValue, &expiresValue, &endedValue)
 	if errors.Is(err, sql.ErrNoRows) {
 		return authenticatedAttachment{}, ErrAttachmentAuth
 	}
@@ -314,22 +265,25 @@ func authenticateAttachmentTx(ctx context.Context, tx *sql.Tx,
 	if err != nil {
 		return authenticatedAttachment{}, fmt.Errorf("authenticate attachment: corrupt authority: %w", err)
 	}
-	return authenticatedAttachment{value: attachment}, nil
+	var endedAt *time.Time
+	if endedValue.Valid {
+		parsed, err := parseTime(endedValue.String)
+		if err != nil || parsed.Before(issuedAt) {
+			return authenticatedAttachment{}, errors.New("authenticate attachment: corrupt end time")
+		}
+		endedAt = &parsed
+	}
+	return authenticatedAttachment{value: attachment, endedAt: endedAt}, nil
 }
 
 func requireLiveAttachment(attachment authenticatedAttachment, now time.Time) error {
+	if attachment.endedAt != nil {
+		return ErrAttachmentEnded
+	}
 	if !now.Before(attachment.value.ExpiresAt()) {
 		return ErrAttachmentExpired
 	}
 	return nil
-}
-
-func newAttachmentID() (agency.AttachmentID, error) {
-	token, err := randomIdentifier("attachment")
-	if err != nil {
-		return agency.AttachmentID{}, err
-	}
-	return agency.NewAttachmentID(token)
 }
 
 func newEventID() (agency.EventID, error) {
