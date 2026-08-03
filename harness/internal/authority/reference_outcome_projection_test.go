@@ -58,7 +58,7 @@ func TestReferenceOutcomeProjectionDoesNotInferAcrossHandlingHistory(t *testing.
 	}
 }
 
-func TestReferenceOutcomeProjectionUsesExactHeadAndRebuilds(t *testing.T) {
+func TestReferenceOutcomeProjectionFreezesCurrentReplay(t *testing.T) {
 	fixture := newAuthorityFixture(t, "principal:reference-outcome-rebuild")
 	publishTestReference(t, fixture, "guide.rebuild", "guide v1")
 
@@ -83,6 +83,13 @@ func TestReferenceOutcomeProjectionUsesExactHeadAndRebuilds(t *testing.T) {
 		!bytes.Equal(replayed.AgentView().CanonicalJSON(), frozen.AgentView().CanonicalJSON()) {
 		t.Fatal("frozen Current replay incorporated a later outcome")
 	}
+}
+
+func TestReferenceOutcomeProjectionRebuildIsAtomic(t *testing.T) {
+	fixture := newAuthorityFixture(t, "principal:reference-outcome-rebuild-atomic")
+	publishTestReference(t, fixture, "guide.rebuild-atomic", "guide v1")
+	terminalWithReferences(t, fixture, "rebuild-atomic", agency.ConsequenceResolveCompleted,
+		[]string{"guide.rebuild-atomic"}, "", true)
 
 	before := rawP05Table(t, fixture.store, "reference_outcome_projection")
 	if err := fixture.store.rebuildReferenceOutcomeProjection(fixture.ctx); err != nil {
@@ -103,7 +110,13 @@ func TestReferenceOutcomeProjectionUsesExactHeadAndRebuilds(t *testing.T) {
 		t.Fatal("faulted rebuild did not restore the previous projection")
 	}
 	drop()
+}
 
+func TestReferenceOutcomeProjectionExactHeadDoesNotInherit(t *testing.T) {
+	fixture := newAuthorityFixture(t, "principal:reference-outcome-exact-head")
+	publishTestReference(t, fixture, "guide.rebuild", "guide v1")
+	terminalWithReferences(t, fixture, "exact-head", agency.ConsequenceResolveCompleted,
+		[]string{"guide.rebuild"}, "", true)
 	second := fixture.catalog(t, "guide v2")
 	supersede := referenceRequest(t, fixture.current(t), "operation:outcome-supersede",
 		agency.ConsequenceSupersedeReference, "guide.rebuild", &second)
