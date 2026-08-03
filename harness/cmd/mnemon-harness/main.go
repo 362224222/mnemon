@@ -18,6 +18,8 @@ const helpText = `mnemon-harness connects this workspace's Agent runtime to loca
 
 Usage:
   mnemon-harness setup [--runtime pi] [--project-root DIR]
+  mnemon-harness peer prepare --listen HOST:PORT --advertise HOST:PORT [--project-root DIR]
+  mnemon-harness peer enroll --alias NAME [--project-root DIR] < peer-card.json
   mnemon-harness --help
   mnemon-harness --version
 
@@ -27,10 +29,12 @@ and are intentionally absent from ordinary help.
 
 type setupRunner func(context.Context, []string, io.Writer, io.Writer) int
 type terminalRunner func(context.Context, []string, io.Reader, io.Writer, io.Writer) int
+type peerRunner func(context.Context, []string, io.Reader, io.Writer, io.Writer) int
 
 type commandRunners struct {
 	setup    setupRunner
 	terminal terminalRunner
+	peer     peerRunner
 }
 
 func main() {
@@ -52,6 +56,11 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		) int {
 			return agencycli.New(stdin, stdout, stderr, daemon.Ensure).Run(ctx, args)
 		},
+		peer: func(ctx context.Context, args []string, stdin io.Reader,
+			stdout, stderr io.Writer,
+		) int {
+			return runPeer(ctx, args, stdin, stdout, stderr, productionPeerDependencies())
+		},
 	})
 }
 
@@ -70,6 +79,11 @@ func runWithCommandRunners(ctx context.Context, args []string, stdin io.Reader,
 			return 1
 		}
 		return runners.setup(ctx, args[1:], stdout, stderr)
+	case "peer":
+		if runners.peer == nil {
+			return 1
+		}
+		return runners.peer(ctx, args[1:], stdin, stdout, stderr)
 	case "hook", "agent", "artifact":
 		if runners.terminal == nil {
 			return 1

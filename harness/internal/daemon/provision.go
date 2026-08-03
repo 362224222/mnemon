@@ -162,61 +162,6 @@ func openProvisionCAS(stateDirectory string, authorityPresent bool) (*cas.Store,
 	return cas.Open(objectsRoot)
 }
 
-// OpenProvisioned derives the local Principal from an existing transport
-// identity and strictly opens the matching authority. It never creates or
-// repairs identity, lock, CAS, schema, or Principal state.
-func OpenProvisioned(ctx context.Context, stateDirectory string) (*Runtime, error) {
-	if ctx == nil {
-		return nil, errors.New("daemon open provisioned: context is required")
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	stateIdentity, err := snapshotOwnerDirectory(stateDirectory)
-	if err != nil {
-		return nil, fmt.Errorf("daemon open provisioned: %w", err)
-	}
-	lock, err := acquireExistingProvisionLock(ctx, stateDirectory)
-	if err != nil {
-		return nil, err
-	}
-	if err := verifyOwnerDirectoryIdentity(stateDirectory, stateIdentity); err != nil {
-		return nil, errors.Join(err, releaseProvisionLock(lock))
-	}
-	if err := requireProvisionedLayout(stateDirectory); err != nil {
-		return nil, errors.Join(err, releaseProvisionLock(lock))
-	}
-	identity, err := loadTransportIdentity(stateDirectory)
-	if err == nil {
-		var principal agency.AgentPrincipalID
-		principal, err = DefaultAgentPrincipal(identity.projection.PublicKey())
-		if err == nil {
-			var runtime *Runtime
-			runtime, err = Open(ctx, stateDirectory, principal)
-			if err == nil {
-				err = runtime.store.RequireProvisionedPrincipalShape(ctx, principal)
-				if err != nil {
-					closeContext, cancel := context.WithTimeout(context.Background(), shutdownBudget)
-					err = errors.Join(err, runtime.Close(closeContext))
-					cancel()
-					runtime = nil
-				}
-			}
-			if releaseErr := releaseProvisionLock(lock); releaseErr != nil {
-				var closeErr error
-				if runtime != nil {
-					closeContext, cancel := context.WithTimeout(context.Background(), shutdownBudget)
-					closeErr = runtime.Close(closeContext)
-					cancel()
-				}
-				return nil, errors.Join(err, releaseErr, closeErr)
-			}
-			return runtime, err
-		}
-	}
-	return nil, errors.Join(err, releaseProvisionLock(lock))
-}
-
 func requireProvisionedLayout(stateDirectory string) error {
 	if err := requireOwnerDirectory(stateDirectory); err != nil {
 		return err

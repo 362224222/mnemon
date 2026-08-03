@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-func TestRunHasOnlyTheR7SetupSurface(t *testing.T) {
+func TestRunHasOnlyTheR7OwnerSurface(t *testing.T) {
 	t.Parallel()
 	command := func(args ...string) (string, string, int) {
 		var stdout, stderr bytes.Buffer
@@ -40,6 +40,30 @@ func TestRunHasOnlyTheR7SetupSurface(t *testing.T) {
 		if strings.Contains(lower, forbidden) {
 			t.Fatalf("help contains retired or case-specific vocabulary %q", forbidden)
 		}
+	}
+}
+
+func TestRunRoutesPeerBootstrapAndOnlyItsArguments(t *testing.T) {
+	var received []string
+	peer := func(ctx context.Context, args []string, stdin io.Reader,
+		stdout, stderr io.Writer,
+	) int {
+		if ctx == nil || stdin == nil || stderr == nil {
+			t.Fatal("peer composition is incomplete")
+		}
+		received = append([]string(nil), args...)
+		_, _ = io.WriteString(stdout, "peer receipt\n")
+		return 9
+	}
+	args := []string{"peer", "enroll", "--alias", "peer-b", "--project-root", "/workspace"}
+	var stdout, stderr bytes.Buffer
+	exit := runWithCommandRunners(context.Background(), args, strings.NewReader("card"),
+		&stdout, &stderr, commandRunners{peer: peer})
+	want := args[1:]
+	if exit != 9 || !reflect.DeepEqual(received, want) ||
+		stdout.String() != "peer receipt\n" || stderr.Len() != 0 {
+		t.Fatalf("peer route = exit %d args %#v stdout %q stderr %q",
+			exit, received, stdout.String(), stderr.String())
 	}
 }
 
@@ -106,6 +130,10 @@ func TestRunRejectsEveryRetiredOrUnknownCommand(t *testing.T) {
 				},
 				terminal: func(context.Context, []string, io.Reader, io.Writer, io.Writer) int {
 					t.Fatal("unknown command invoked terminal")
+					return 1
+				},
+				peer: func(context.Context, []string, io.Reader, io.Writer, io.Writer) int {
+					t.Fatal("unknown command invoked peer")
 					return 1
 				},
 			})

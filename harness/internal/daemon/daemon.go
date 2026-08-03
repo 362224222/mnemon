@@ -58,9 +58,10 @@ func Open(ctx context.Context, stateDirectory string,
 	return openRuntime(ctx, stateDirectory, principal, nil)
 }
 
-// OpenWithExchange strictly adopts local state and explicitly enables the
-// optional peer plane. Remote reachability is not a startup dependency; local
-// Open remains complete without an identity, route, listener, or worker.
+// OpenWithExchange strictly adopts local state and enables the optional peer
+// plane when at least one active route exists. A prepared node with no route
+// remains local-only, so interrupted offline enrollment cannot block N=1.
+// Remote reachability is never a startup dependency.
 func OpenWithExchange(ctx context.Context, stateDirectory string,
 	principal agency.AgentPrincipalID, options ExchangeOptions,
 ) (_ *Runtime, err error) {
@@ -111,10 +112,20 @@ func openRuntime(ctx context.Context, stateDirectory string,
 	}
 	var exchange *exchangeRuntime
 	if exchangeOptions != nil {
-		exchange, err = newExchangeRuntime(ctx, stateDirectory, store, objects, now,
-			*exchangeOptions)
-		if err != nil {
-			return nil, err
+		routes, routeErr := store.PeerRoutes(ctx)
+		if routeErr != nil {
+			return nil, fmt.Errorf("daemon inspect exchange routes: %w", routeErr)
+		}
+		for _, route := range routes {
+			if !route.Active() {
+				continue
+			}
+			exchange, err = newExchangeRuntime(ctx, stateDirectory, store, objects, now,
+				*exchangeOptions)
+			if err != nil {
+				return nil, err
+			}
+			break
 		}
 	}
 	return &Runtime{state: stateOpen, store: store, service: service, handler: control,
