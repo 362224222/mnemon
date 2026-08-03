@@ -68,7 +68,7 @@ func TestRunRoutesSetupAndOnlyItsArguments(t *testing.T) {
 func TestRunRoutesOnlyHiddenR7AgentTerminalCommands(t *testing.T) {
 	for _, args := range [][]string{{"hook", "attach", "--json"},
 		{"agent", "current", "--json"}, {"agent", "submit", "--json"},
-		{"artifact", "capture", "--json"}} {
+		{"artifact", "capture", "--json"}, {"artifact", "read", "artifact:offered"}} {
 		args := args
 		t.Run(strings.Join(args[:2], "_"), func(t *testing.T) {
 			var received []string

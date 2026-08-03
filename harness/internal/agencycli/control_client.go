@@ -16,15 +16,17 @@ import (
 )
 
 const (
-	routeAttachments = "/v1/agency/attachments"
-	routeCurrent     = "/v1/agency/current"
-	routeSubmit      = "/v1/agency/submit"
-	routeArtifacts   = "/v1/agency/artifacts"
+	routeAttachments  = "/v1/agency/attachments"
+	routeCurrent      = "/v1/agency/current"
+	routeSubmit       = "/v1/agency/submit"
+	routeArtifacts    = "/v1/agency/artifacts"
+	routeArtifactRead = "/v1/agency/artifacts/read"
 
 	headerAttachment       = "Mnemon-Agency-Attachment"
 	headerCredential       = "Mnemon-Agency-Credential"
 	headerCurrentOperation = "Mnemon-Agency-Current-Operation"
 	headerOperation        = "Mnemon-Agency-Operation"
+	headerArtifactDigest   = "Mnemon-Artifact-Digest"
 
 	attachmentSchema = "mnemon.agency.attachment"
 	artifactSchema   = "mnemon.agency.artifact"
@@ -41,6 +43,7 @@ type agencyClient interface {
 	Submit(context.Context, attachment, string, string,
 		[]byte, []candidateBinding) ([]byte, *controlError)
 	Capture(context.Context, []byte) (artifactCapture, *controlError)
+	ReadArtifact(context.Context, attachment, string, string) ([]byte, *controlError)
 }
 
 type controlClient struct {
@@ -178,6 +181,21 @@ func (client *controlClient) Capture(ctx context.Context, content []byte) (
 	return capture, nil
 }
 
+func (client *controlClient) ReadArtifact(ctx context.Context, authority attachment,
+	current, handleValue string,
+) ([]byte, *controlError) {
+	handle, err := agency.NewOpaqueHandle(handleValue)
+	if err != nil || handle.IsZero() {
+		return nil, newControlError(codeInvalidArgument, "Artifact handle is invalid")
+	}
+	headers, apiErr := authorityHeaders(authority, current, "")
+	if apiErr != nil {
+		return nil, apiErr
+	}
+	request := artifactReadRequestWire{Handle: handle.String()}
+	return client.postArtifact(ctx, routeArtifactRead, request, headers)
+}
+
 func authorityHeaders(value attachment, current, operation string) (http.Header, *controlError) {
 	if validateAttachment(value) != nil {
 		return nil, newControlError(codeAuthenticationFailed,
@@ -234,6 +252,10 @@ type submitWire struct {
 
 type artifactRequestWire struct {
 	Content string `json:"content_base64"`
+}
+
+type artifactReadRequestWire struct {
+	Handle string `json:"handle"`
 }
 
 type artifactResponseWire struct {

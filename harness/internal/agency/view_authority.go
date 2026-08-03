@@ -226,6 +226,20 @@ func (view ViewAuthority) Attachment() Attachment { return view.attachment }
 func (view ViewAuthority) CanonicalJSON() []byte  { return copyBytes(view.canonical) }
 func (view ViewAuthority) Digest() Digest         { return view.digest }
 
+// ResolveOfferedArtifact returns the machine-owned digest behind one exact
+// handle offered by this frozen View. Callers cannot use a known digest or a
+// handle from another View to widen the read-set.
+func (view ViewAuthority) ResolveOfferedArtifact(handle OpaqueHandle) (Digest, error) {
+	if handle.IsZero() {
+		return Digest{}, invalid("View Artifact read", "handle is required")
+	}
+	offer, offered := view.artifacts[handle.String()]
+	if !offered || offer.handle != handle || offer.digest.IsZero() {
+		return Digest{}, invariant("View Artifact read", "handle was not offered by the View")
+	}
+	return offer.digest, nil
+}
+
 func (view ViewAuthority) offers(consequence Consequence) bool {
 	_, exists := view.consequences[consequence]
 	return exists

@@ -2,6 +2,7 @@ package authority
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync"
@@ -81,6 +82,63 @@ func TestCurrentOperationAuthenticatesBeforeReplayAndRejectsDigestConflict(t *te
 	if _, err := fixture.store.Current(fixture.ctx, fixture.proof, conflict); !errors.Is(err, ErrOperationConflict) {
 		t.Fatalf("Current digest conflict = %v, want ErrOperationConflict", err)
 	}
+}
+
+func TestResolveCurrentArtifactRequiresLiveExactViewAuthority(t *testing.T) {
+	fixture := newAuthorityFixture(t, "principal:current-artifact-read")
+	digest := fixture.catalog(t, "bounded playbook bytes")
+	published := referenceRequest(t, fixture.current(t), "operation:publish-readable-reference",
+		agency.ConsequencePublishReference, "readable-playbook", &digest)
+	if _, err := fixture.store.Admit(fixture.ctx, fixture.proof, published); err != nil {
+		t.Fatal(err)
+	}
+	operation := mustCurrentOperation(t, "operation:current-artifact-read")
+	view, err := fixture.store.Current(fixture.ctx, fixture.proof, operation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle := projectedArtifactHandle(t, view)
+	resolved, byteSize, err := fixture.store.ResolveCurrentArtifact(fixture.ctx,
+		fixture.proof, operation, handle)
+	if err != nil || resolved != digest || byteSize != int64(len("bounded playbook bytes")) {
+		t.Fatalf("ResolveCurrentArtifact() = (%s, %d, %v)", resolved, byteSize, err)
+	}
+	if _, _, err := fixture.store.ResolveCurrentArtifact(fixture.ctx, fixture.proof, operation,
+		mustHandle(t, "artifact:not-offered")); !errors.Is(err, agency.ErrInvariant) {
+		t.Fatalf("unoffered Artifact read = %v, want ErrInvariant", err)
+	}
+	wrong := fixture.proof
+	wrong.credential[0] ^= 0xff
+	if _, _, err := fixture.store.ResolveCurrentArtifact(fixture.ctx, wrong, operation,
+		handle); !errors.Is(err, ErrAttachmentAuth) {
+		t.Fatalf("wrong credential Artifact read = %v, want ErrAttachmentAuth", err)
+	}
+	*fixture.now = fixture.proof.ExpiresAt().Add(time.Second)
+	if _, _, err := fixture.store.ResolveCurrentArtifact(fixture.ctx, fixture.proof, operation,
+		handle); !errors.Is(err, ErrAttachmentExpired) {
+		t.Fatalf("expired Artifact read = %v, want ErrAttachmentExpired", err)
+	}
+	if _, err := fixture.store.ReplayCurrent(fixture.ctx, fixture.proof, operation); err != nil {
+		t.Fatalf("expired Current response replay changed semantics: %v", err)
+	}
+}
+
+func projectedArtifactHandle(t *testing.T, view BoundView) agency.OpaqueHandle {
+	t.Helper()
+	var wire struct {
+		References []struct {
+			Facts struct {
+				Artifact *struct {
+					Handle string `json:"handle"`
+				} `json:"artifact"`
+			} `json:"facts"`
+		} `json:"references"`
+	}
+	if err := json.Unmarshal(view.AgentView().CanonicalJSON(), &wire); err != nil ||
+		len(wire.References) != 1 || wire.References[0].Facts.Artifact == nil {
+		t.Fatalf("Artifact View projection = %v\n%s", err, view.AgentView().CanonicalJSON())
+	}
+	return mustHandle(t, wire.References[0].Facts.Artifact.Handle)
 }
 
 func TestCurrentOperationAndClaimRollbackTogether(t *testing.T) {

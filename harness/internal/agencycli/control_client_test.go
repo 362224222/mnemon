@@ -22,7 +22,7 @@ func TestControlClientRoundTripsFrozenAgencyWire(t *testing.T) {
 	credential := bytes.Repeat([]byte{0x2a}, attachmentSecretBytes)
 	expiry := time.Date(2030, 1, 2, 3, 4, 5, 6, time.UTC)
 	content := []byte("captured bytes")
-	requests := make(chan capturedControlRequest, 4)
+	requests := make(chan capturedControlRequest, 5)
 	handler := roundTripControlHandler(requests, credential, expiry, content)
 	nodeState, stop := serveControlSocket(t, handler)
 	defer stop()
@@ -40,11 +40,16 @@ func TestControlClientRoundTripsFrozenAgencyWire(t *testing.T) {
 	requireProjectionContains(t, "Submit", receipt, apiErr, `"outcome":"accepted"`)
 	capture, apiErr := client.Capture(context.Background(), content)
 	requireCapture(t, capture, apiErr, content)
+	read, apiErr := client.ReadArtifact(context.Background(), attached, current, "artifact:test")
+	if apiErr != nil || !bytes.Equal(read, content) {
+		t.Fatalf("ReadArtifact() = (%q, %#v)", read, apiErr)
+	}
 
 	assertAttachRequest(t, <-requests)
 	assertCurrentRequest(t, <-requests, attached, credential, current)
 	assertSubmitRequest(t, <-requests, intent)
 	assertArtifactRequest(t, <-requests, content)
+	assertArtifactReadRequest(t, <-requests, attached, credential, current)
 }
 
 func roundTripControlHandler(requests chan<- capturedControlRequest, credential []byte,
@@ -66,6 +71,11 @@ func roundTripControlHandler(requests chan<- capturedControlRequest, credential 
 		case routeArtifacts:
 			fmt.Fprintf(writer, `{"byte_size":%d,"digest":"%s","handle":"artifact:test","schema":"%s","version":1}`+"\n",
 				len(content), agency.Sum(content).String(), artifactSchema)
+		case routeArtifactRead:
+			writer.Header().Set("Content-Type", "application/octet-stream")
+			writer.Header().Set(headerArtifactDigest, agency.Sum(content).String())
+			writer.Header().Set("Content-Length", fmt.Sprint(len(content)))
+			_, _ = writer.Write(content)
 		default:
 			writer.WriteHeader(http.StatusNotFound)
 		}
@@ -151,6 +161,19 @@ func assertArtifactRequest(t *testing.T, request capturedControlRequest, content
 	}
 }
 
+func assertArtifactReadRequest(t *testing.T, request capturedControlRequest,
+	attached attachment, credential []byte, current string,
+) {
+	t.Helper()
+	if request.Method != http.MethodPost || request.Path != routeArtifactRead ||
+		request.Header.Get(headerAttachment) != attached.ID ||
+		request.Header.Get(headerCredential) != base64.RawURLEncoding.EncodeToString(credential) ||
+		request.Header.Get(headerCurrentOperation) != current ||
+		string(request.Body) != `{"handle":"artifact:test"}` {
+		t.Fatalf("Artifact read request = %#v", request)
+	}
+}
+
 func TestControlClientRejectsInvalidProjectionAndRemoteErrorEnvelope(t *testing.T) {
 	credential := bytes.Repeat([]byte{0x31}, attachmentSecretBytes)
 	authority := attachment{ID: "attachment:test", Credential: credential,
@@ -182,6 +205,40 @@ func TestControlClientRejectsInvalidProjectionAndRemoteErrorEnvelope(t *testing.
 			if _, apiErr := client.Current(context.Background(), authority,
 				"current:test"); apiErr == nil || apiErr.Code != codeInternal {
 				t.Fatalf("Current() error = %#v", apiErr)
+			}
+		})
+	}
+}
+
+func TestControlClientRejectsUnverifiedArtifactResponses(t *testing.T) {
+	content := []byte("exact bytes")
+	validDigest := agency.Sum(content).String()
+	for name, mutate := range map[string]func(*http.Response){
+		"missing digest": func(response *http.Response) {
+			response.Header.Del(headerArtifactDigest)
+		},
+		"duplicate digest": func(response *http.Response) {
+			response.Header.Add(headerArtifactDigest, validDigest)
+		},
+		"mismatched digest": func(response *http.Response) {
+			response.Header.Set(headerArtifactDigest, agency.Sum([]byte("other")).String())
+		},
+		"mismatched length": func(response *http.Response) {
+			response.ContentLength++
+		},
+		"wrong media type": func(response *http.Response) {
+			response.Header.Set("Content-Type", "application/json")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			response := &http.Response{StatusCode: http.StatusOK,
+				Header: http.Header{"Content-Type": {"application/octet-stream"},
+					headerArtifactDigest: {validDigest}},
+				Body: io.NopCloser(bytes.NewReader(content)), ContentLength: int64(len(content))}
+			mutate(response)
+			if raw, apiErr := readArtifactResponse(response); raw != nil ||
+				apiErr == nil || apiErr.Code != codeInternal {
+				t.Fatalf("readArtifactResponse() = (%q, %#v)", raw, apiErr)
 			}
 		})
 	}

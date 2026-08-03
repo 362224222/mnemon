@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/agency"
@@ -96,7 +97,8 @@ func classifyServiceError(err error) *controlError {
 		return newControlError(codeContextStale, "Agency context is stale")
 	case errors.Is(err, authority.ErrOperationConflict):
 		return newControlError(codeOperationMismatch, "Agency operation conflicts with its prior request")
-	case errors.Is(err, authority.ErrArtifactUnavailable), errors.Is(err, cas.ErrCorruption):
+	case errors.Is(err, authority.ErrArtifactUnavailable), errors.Is(err, cas.ErrCorruption),
+		errors.Is(err, os.ErrNotExist):
 		return newControlError(codeArtifactInvalid, "Artifact is unavailable")
 	case errors.Is(err, agency.ErrLimit), errors.Is(err, cas.ErrInput):
 		return newControlError(codeInvalidArgument, "Agency input exceeds a closed bound")

@@ -134,6 +134,44 @@ func (app *App) runCapture(ctx context.Context, store *journalStore, client agen
 		Handle: captured.Handle, ByteSize: captured.ByteSize})
 }
 
+func (app *App) runReadArtifact(ctx context.Context, store *journalStore, client agencyClient,
+	handle string,
+) int {
+	var content []byte
+	err := store.withLock(false, func(directory *lockedJournalDirectory) error {
+		journal, err := directory.load()
+		if err != nil {
+			return err
+		}
+		defer journal.clear()
+		if validTerminalName(journal.fileName) {
+			return newControlError(codeOperationPending,
+				"an accepted R7 receipt is awaiting presentation")
+		}
+		if journal.CurrentOperation.IsZero() {
+			return newControlError(codeContextRequired,
+				"agent current must establish a bounded View before Artifact read")
+		}
+		read, apiErr := client.ReadArtifact(ctx, journal.Attachment,
+			journal.CurrentOperation.String(), handle)
+		if apiErr != nil {
+			return apiErr
+		}
+		content = append([]byte(nil), read...)
+		clear(read)
+		return nil
+	})
+	if err != nil {
+		clear(content)
+		return app.writeCommandError(err)
+	}
+	defer clear(content)
+	if _, err := app.stdout.Write(content); err != nil {
+		return 1
+	}
+	return 0
+}
+
 func (app *App) runSubmit(ctx context.Context, store *journalStore, client agencyClient) int {
 	raw, apiErr := readBoundedInput(app.stdin, maxIntentInputBytes,
 		codeContentTooLarge, "Intent input exceeds its closed byte bound")

@@ -42,6 +42,13 @@ type BoundView struct {
 
 func (view BoundView) AgentView() agency.AgentView { return view.public }
 
+// ResolveOfferedArtifact exposes only the digest behind a handle sealed into
+// this exact Current operation. It does not accept raw digests or mutate
+// authority state.
+func (view BoundView) ResolveOfferedArtifact(handle agency.OpaqueHandle) (agency.Digest, error) {
+	return view.authority.ResolveOfferedArtifact(handle)
+}
+
 func (view BoundView) Bind(intent agency.AgentIntent, operation agency.OperationKey,
 	candidates []agency.CapturedCandidate,
 ) (agency.BoundIntent, error) {
@@ -165,6 +172,62 @@ func (s *Store) ReplayCurrent(ctx context.Context, proof AttachmentProof,
 		return BoundView{}, ErrCurrentUnavailable
 	}
 	return view, nil
+}
+
+// ResolveCurrentArtifact authorizes a new information disclosure against one
+// exact frozen Current View. Unlike response replay, Artifact read requires a
+// still-live Attachment. Authentication, liveness, Current reconstruction,
+// handle resolution, and catalog lookup share one read transaction.
+func (s *Store) ResolveCurrentArtifact(ctx context.Context, proof AttachmentProof,
+	operation CurrentOperation, handle agency.OpaqueHandle,
+) (agency.Digest, int64, error) {
+	if ctx == nil || !operation.valid() || handle.IsZero() {
+		return agency.Digest{}, 0, errors.New("resolve current Artifact: complete authority is required")
+	}
+	now, err := s.trustedNow()
+	if err != nil {
+		return agency.Digest{}, 0, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.requireOpen(); err != nil {
+		return agency.Digest{}, 0, err
+	}
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return agency.Digest{}, 0, fmt.Errorf("resolve current Artifact: begin: %w", err)
+	}
+	defer tx.Rollback()
+	authenticated, err := authenticateAttachmentTx(ctx, tx, proof)
+	if err != nil {
+		return agency.Digest{}, 0, err
+	}
+	if err := requireLiveAttachment(authenticated, now); err != nil {
+		return agency.Digest{}, 0, err
+	}
+	view, found, err := currentReplayTx(ctx, tx, authenticated.value, operation)
+	if err != nil {
+		return agency.Digest{}, 0, err
+	}
+	if !found {
+		return agency.Digest{}, 0, ErrCurrentUnavailable
+	}
+	digest, err := view.ResolveOfferedArtifact(handle)
+	if err != nil {
+		return agency.Digest{}, 0, err
+	}
+	var byteSize int64
+	if err := tx.QueryRowContext(ctx,
+		"SELECT byte_size FROM verified_artifacts WHERE digest = ?", digest.String()).Scan(&byteSize); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return agency.Digest{}, 0, ErrArtifactUnavailable
+		}
+		return agency.Digest{}, 0, fmt.Errorf("resolve current Artifact: catalog: %w", err)
+	}
+	if byteSize < 0 || byteSize > MaxArtifactBytes {
+		return agency.Digest{}, 0, errors.New("resolve current Artifact: corrupt catalog size")
+	}
+	return digest, byteSize, nil
 }
 
 func currentReplayTx(ctx context.Context, tx *sql.Tx, attachment agency.Attachment,

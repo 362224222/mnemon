@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/agency"
@@ -11,16 +12,18 @@ import (
 )
 
 const (
-	routeAttachments = "/v1/agency/attachments"
-	routeCurrent     = "/v1/agency/current"
-	routeSubmit      = "/v1/agency/submit"
-	routeArtifacts   = "/v1/agency/artifacts"
-	routeStatus      = "/v1/agency/status"
+	routeAttachments  = "/v1/agency/attachments"
+	routeCurrent      = "/v1/agency/current"
+	routeSubmit       = "/v1/agency/submit"
+	routeArtifacts    = "/v1/agency/artifacts"
+	routeArtifactRead = "/v1/agency/artifacts/read"
+	routeStatus       = "/v1/agency/status"
 
 	headerAttachment       = "Mnemon-Agency-Attachment"
 	headerCredential       = "Mnemon-Agency-Credential"
 	headerCurrentOperation = "Mnemon-Agency-Current-Operation"
 	headerOperation        = "Mnemon-Agency-Operation"
+	headerArtifactDigest   = "Mnemon-Artifact-Digest"
 
 	attachmentSchema = "mnemon.agency.attachment"
 	artifactSchema   = "mnemon.agency.artifact"
@@ -53,6 +56,7 @@ func newControlServer(service *localService) (*controlServer, error) {
 	mux.HandleFunc(routeCurrent, server.handleCurrent)
 	mux.HandleFunc(routeSubmit, server.handleSubmit)
 	mux.HandleFunc(routeArtifacts, server.handleArtifact)
+	mux.HandleFunc(routeArtifactRead, server.handleArtifactRead)
 	mux.HandleFunc(routeStatus, server.handleStatus)
 	server.handler = http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request == nil || !controlRoute(request.URL.Path) {
@@ -67,7 +71,7 @@ func newControlServer(service *localService) (*controlServer, error) {
 
 func controlRoute(path string) bool {
 	return path == routeAttachments || path == routeCurrent || path == routeSubmit ||
-		path == routeArtifacts || path == routeStatus
+		path == routeArtifacts || path == routeArtifactRead || path == routeStatus
 }
 
 func (server *controlServer) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -208,6 +212,36 @@ func (server *controlServer) handleArtifact(writer http.ResponseWriter, request 
 	})
 }
 
+func (server *controlServer) handleArtifactRead(writer http.ResponseWriter, request *http.Request) {
+	if err := prepareControlRequest(request, false, true, false); err != nil {
+		writeControlError(writer, err)
+		return
+	}
+	proof, current, errValue := parseControlAuthority(request.Header)
+	if errValue != nil {
+		writeControlError(writer, errValue)
+		return
+	}
+	var input artifactReadRequestWire
+	if errValue := decodeClosedRequest(request, &input, maxPrivateResponse); errValue != nil {
+		writeControlError(writer, errValue)
+		return
+	}
+	handle, err := agency.NewOpaqueHandle(input.Handle)
+	if err != nil {
+		writeControlError(writer, newControlError(codeInvalidArgument,
+			"Artifact handle is invalid"))
+		return
+	}
+	content, digest, err := server.service.readArtifact(request.Context(), proof, current, handle)
+	if err != nil {
+		writeControlError(writer, classifyServiceError(err))
+		return
+	}
+	defer clear(content)
+	writeArtifactContent(writer, content, digest)
+}
+
 func (server *controlServer) handleStatus(writer http.ResponseWriter, request *http.Request) {
 	if err := prepareControlRequest(request, true, false, false); err != nil {
 		writeControlError(writer, err)
@@ -231,6 +265,22 @@ func writeProjection(writer http.ResponseWriter, raw []byte, maximum int) {
 	setControlHeaders(writer)
 	writer.WriteHeader(http.StatusOK)
 	_, _ = writer.Write(append(append([]byte(nil), raw...), '\n'))
+}
+
+func writeArtifactContent(writer http.ResponseWriter, content []byte, digest agency.Digest) {
+	if digest.IsZero() || agency.Sum(content) != digest ||
+		agency.ValidateAgentArtifactText(content) != nil {
+		writeControlError(writer, newControlError(codeInternal,
+			"Agency service returned invalid Artifact content"))
+		return
+	}
+	writer.Header().Set("Content-Type", "application/octet-stream")
+	writer.Header().Set("Cache-Control", "no-store")
+	writer.Header().Set("X-Content-Type-Options", "nosniff")
+	writer.Header().Set(headerArtifactDigest, digest.String())
+	writer.Header().Set("Content-Length", fmt.Sprint(len(content)))
+	writer.WriteHeader(http.StatusOK)
+	_, _ = writer.Write(content)
 }
 
 func writeControlJSON(writer http.ResponseWriter, status int, value any) {

@@ -13,6 +13,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/mnemon-dev/mnemon/harness/internal/agency"
 )
 
 type dependencies struct {
@@ -78,6 +80,8 @@ func (app *App) Run(ctx context.Context, args []string) int {
 		return app.runSubmit(ctx, prepared.store, prepared.client)
 	case commandCapture:
 		return app.runCapture(ctx, prepared.store, prepared.client)
+	case commandReadArtifact:
+		return app.runReadArtifact(ctx, prepared.store, prepared.client, args[2])
 	default:
 		return app.writeError(newControlError(codeInvalidArgument,
 			"R7 Agent command is not supported"))
@@ -135,6 +139,7 @@ const (
 	commandCurrent
 	commandSubmit
 	commandCapture
+	commandReadArtifact
 )
 
 func classify(args []string) commandKind {
@@ -150,12 +155,21 @@ func classify(args []string) commandKind {
 		return commandSubmit
 	case "artifact\x00capture":
 		return commandCapture
+	case "artifact\x00read":
+		return commandReadArtifact
 	default:
 		return commandOther
 	}
 }
 
 func validArguments(command commandKind, args []string) bool {
+	if command == commandReadArtifact {
+		if len(args) != 3 {
+			return false
+		}
+		handle, err := agency.NewOpaqueHandle(args[2])
+		return err == nil && !handle.IsZero()
+	}
 	return command != commandOther && len(args) == 3 && args[2] == "--json"
 }
 

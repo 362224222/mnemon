@@ -26,6 +26,10 @@ type artifactRequestWire struct {
 	Content string `json:"content_base64"`
 }
 
+type artifactReadRequestWire struct {
+	Handle string `json:"handle"`
+}
+
 type artifactResponseWire struct {
 	ByteSize int64  `json:"byte_size"`
 	Digest   string `json:"digest"`

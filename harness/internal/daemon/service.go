@@ -168,6 +168,35 @@ func (service *localService) capture(ctx context.Context, content []byte) (captu
 	return capturedArtifact{handle: handle, digest: stored.Digest, byteSize: stored.Size}, nil
 }
 
+func (service *localService) readArtifact(ctx context.Context, proof authority.AttachmentProof,
+	current authority.CurrentOperation, handle agency.OpaqueHandle,
+) ([]byte, agency.Digest, error) {
+	if err := service.available(ctx); err != nil {
+		return nil, agency.Digest{}, err
+	}
+	digest, byteSize, err := service.authority.ResolveCurrentArtifact(ctx, proof, current, handle)
+	if err != nil {
+		return nil, agency.Digest{}, fmt.Errorf("daemon read Artifact authority: %w", err)
+	}
+	if byteSize > agency.MaxAgentArtifactReadBytes {
+		return nil, agency.Digest{}, fmt.Errorf("%w: Agent Artifact read exceeds %d bytes",
+			agency.ErrLimit, agency.MaxAgentArtifactReadBytes)
+	}
+	content, err := service.cas.Read(ctx, digest, byteSize)
+	if err != nil {
+		return nil, agency.Digest{}, fmt.Errorf("daemon read Artifact CAS: %w", err)
+	}
+	if int64(len(content)) != byteSize || agency.Sum(content) != digest {
+		clear(content)
+		return nil, agency.Digest{}, errors.New("daemon read Artifact: verified CAS digest diverged")
+	}
+	if err := agency.ValidateAgentArtifactText(content); err != nil {
+		clear(content)
+		return nil, agency.Digest{}, fmt.Errorf("daemon read Artifact projection: %w", err)
+	}
+	return content, digest, nil
+}
+
 func (service *localService) available(ctx context.Context) error {
 	if service == nil || service.authority == nil || service.cas == nil || service.now == nil ||
 		service.random == nil || service.principal.IsZero() || ctx == nil {

@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
+
+	"github.com/mnemon-dev/mnemon/harness/internal/agency"
 )
 
 func (client *controlClient) post(ctx context.Context, route string, input any,
@@ -42,6 +44,23 @@ func (client *controlClient) postProjection(ctx context.Context, route string, i
 		return nil, newControlError(codeMnemondUnavailable, "mnemond local control is unavailable")
 	}
 	return readProjectionResponse(response, maximum)
+}
+
+func (client *controlClient) postArtifact(ctx context.Context, route string, input any,
+	headers http.Header,
+) ([]byte, *controlError) {
+	if client == nil || client.http == nil || ctx == nil || route != routeArtifactRead {
+		return nil, invalidControlResponse("local Agency client is unavailable")
+	}
+	request, apiErr := newPostRequest(ctx, route, input, headers)
+	if apiErr != nil {
+		return nil, apiErr
+	}
+	response, err := client.http.Do(request)
+	if err != nil {
+		return nil, newControlError(codeMnemondUnavailable, "mnemond local control is unavailable")
+	}
+	return readArtifactResponse(response)
 }
 
 func newPostRequest(ctx context.Context, route string, input any,
@@ -115,6 +134,48 @@ func readProjectionResponse(response *http.Response, maximum int) ([]byte, *cont
 	return append([]byte(nil), object...), nil
 }
 
+func readArtifactResponse(response *http.Response) ([]byte, *controlError) {
+	if response == nil || response.Body == nil {
+		return nil, invalidControlResponse("mnemond returned no Artifact content")
+	}
+	defer response.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(response.Body, int64(agency.MaxAgentArtifactReadBytes)+1))
+	if err != nil || len(raw) > agency.MaxAgentArtifactReadBytes {
+		clear(raw)
+		return nil, invalidControlResponse("Artifact response exceeds its closed bound")
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		if response.Header.Get("Content-Type") != "application/json" || len(raw) > maxPrivateResponse {
+			clear(raw)
+			return nil, invalidControlResponse("mnemond returned an invalid Artifact error")
+		}
+		object, apiErr := canonicalResponseObject(raw)
+		if apiErr != nil {
+			clear(raw)
+			return nil, apiErr
+		}
+		remote := decodeRemoteError(object, response.StatusCode)
+		clear(raw)
+		return nil, remote
+	}
+	values := response.Header.Values(headerArtifactDigest)
+	digest, digestErr := agency.ParseDigest(firstExact(values))
+	if response.StatusCode != http.StatusOK || response.Header.Get("Content-Type") != "application/octet-stream" ||
+		response.ContentLength != int64(len(raw)) || digestErr != nil || digest.IsZero() ||
+		agency.Sum(raw) != digest || agency.ValidateAgentArtifactText(raw) != nil {
+		clear(raw)
+		return nil, invalidControlResponse("mnemond returned invalid Artifact content")
+	}
+	return raw, nil
+}
+
+func firstExact(values []string) string {
+	if len(values) != 1 {
+		return ""
+	}
+	return values[0]
+}
+
 func canonicalResponseObject(raw []byte) ([]byte, *controlError) {
 	if len(raw) < 2 || raw[len(raw)-1] != '\n' || raw[len(raw)-2] == '\n' {
 		return nil, invalidControlResponse("local control response is not canonical")
@@ -136,7 +197,8 @@ func decodeRemoteError(object []byte, status int) *controlError {
 }
 
 func postRoute(route string) bool {
-	return route == routeAttachments || route == routeCurrent || route == routeSubmit || route == routeArtifacts
+	return route == routeAttachments || route == routeCurrent || route == routeSubmit ||
+		route == routeArtifacts || route == routeArtifactRead
 }
 
 func httpStatusForError(value *controlError) int {

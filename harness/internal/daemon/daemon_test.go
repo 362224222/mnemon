@@ -424,7 +424,7 @@ func waitForSocket(t *testing.T, path string) {
 
 func TestControlWireContainsNoCaseSpecificKind(t *testing.T) {
 	for _, value := range []string{routeAttachments, routeCurrent, routeSubmit, routeArtifacts,
-		routeStatus, attachmentSchema, artifactSchema, statusSchema} {
+		routeArtifactRead, routeStatus, attachmentSchema, artifactSchema, statusSchema} {
 		for _, forbidden := range []string{"review", "teamwork", "contract-net", "blackboard", "memory.wiki"} {
 			if strings.Contains(value, forbidden) {
 				t.Fatalf("control value %q contains case kind %q", value, forbidden)

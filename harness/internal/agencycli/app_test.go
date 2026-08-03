@@ -24,6 +24,8 @@ type fakeAgencyClient struct {
 	submitOperations  []string
 	submitCandidates  [][]candidateBinding
 	captureCalls      int
+	readCalls         []string
+	readContent       []byte
 	currentFailures   int
 	attachBlock       chan struct{}
 }
@@ -80,6 +82,15 @@ func (client *fakeAgencyClient) Capture(_ context.Context,
 		Digest: agency.Sum(content).String(), ByteSize: int64(len(content))}, nil
 }
 
+func (client *fakeAgencyClient) ReadArtifact(_ context.Context, _ attachment,
+	_ string, handle string,
+) ([]byte, *controlError) {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	client.readCalls = append(client.readCalls, handle)
+	return append([]byte(nil), client.readContent...), nil
+}
+
 type appFixture struct {
 	root      string
 	nodeState string
@@ -131,6 +142,7 @@ func TestCommandsRequireContextWithoutEnsuringDaemon(t *testing.T) {
 		{"agent", "current", "--json"},
 		{"agent", "submit", "--json"},
 		{"artifact", "capture", "--json"},
+		{"artifact", "read", "artifact:offered"},
 	} {
 		var output bytes.Buffer
 		exit := fixture.app(strings.NewReader(""), &output).Run(context.Background(), args)
@@ -141,6 +153,34 @@ func TestCommandsRequireContextWithoutEnsuringDaemon(t *testing.T) {
 	}
 	if fixture.ensure.Load() != 0 {
 		t.Fatalf("Ensure calls without an Agent context = %d, want 0", fixture.ensure.Load())
+	}
+}
+
+func TestArtifactReadRequiresCurrentAndWritesExactBytes(t *testing.T) {
+	fixture := newAppFixture(t)
+	fixture.attach(t)
+	var absent bytes.Buffer
+	exit := fixture.app(strings.NewReader(""), &absent).
+		Run(context.Background(), []string{"artifact", "read", "artifact:offered"})
+	if exit != codeContextRequired.exitStatus() ||
+		!strings.Contains(absent.String(), `"code":"context_required"`) {
+		t.Fatalf("read without Current = exit %d output %q", exit, absent.String())
+	}
+	var view bytes.Buffer
+	if exit := fixture.app(strings.NewReader(""), &view).
+		Run(context.Background(), []string{"agent", "current", "--json"}); exit != 0 {
+		t.Fatalf("current = exit %d output %q", exit, view.String())
+	}
+	fixture.client.readContent = []byte("exact Artifact bytes\nwithout an added delimiter")
+	var output bytes.Buffer
+	exit = fixture.app(strings.NewReader(""), &output).
+		Run(context.Background(), []string{"artifact", "read", "artifact:offered"})
+	fixture.client.mu.Lock()
+	calls := append([]string(nil), fixture.client.readCalls...)
+	fixture.client.mu.Unlock()
+	if exit != 0 || !bytes.Equal(output.Bytes(), fixture.client.readContent) ||
+		len(calls) != 1 || calls[0] != "artifact:offered" {
+		t.Fatalf("Artifact read = exit %d calls %#v output %q", exit, calls, output.Bytes())
 	}
 }
 
