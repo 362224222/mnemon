@@ -15,6 +15,13 @@ that marks R7 ACTIVE and R5 RETIRED.
 
 ## 1. Audit
 
+The measurements below are the pre-cut baseline retained to explain what C6
+deletes. The current candidate tree has already completed C0 through C5:
+`agencycli` imports only `agency`; `cas`, `peerlink`, `daemon`, and `attach`
+exist at their target boundaries; `cmd/mnemond` serves only `daemon`; and local
+and peer inputs converge on authority admission. The historical contamination
+notes must not be read as remaining migration work.
+
 Measured on `feat/r5-architecture`, non-test Go under `harness/`:
 
 ```
@@ -44,10 +51,11 @@ authority         4,437   agency
 selector          2,482   agency          (no importers; already deletable)
 ```
 
-`agency` holds canonical values, wire shapes, and parse. `authority` holds the
-two domain states and the durable mechanisms. `selector` is R8. The package
-boundaries are already clean; the remaining authority work is to converge
-BoundIntent and VerifiedPeerDelivery on one domain admission implementation.
+`agency` held canonical values, wire shapes, and parse. `authority` held the
+two domain states and the durable mechanisms. `selector` was already a
+deletable R8 island. At this baseline, the remaining authority work was to
+converge BoundIntent and VerifiedPeerDelivery on one domain admission
+implementation; the current candidate has completed that work.
 
 ### 1.2 Exactly two contamination points
 
@@ -96,7 +104,9 @@ local 2,276 / current 1,377 / managed 1,389 / work 1,169 / gossip 726.
 
 ## 2. Target layout
 
-Nine packages. Each exists because a contract rule forces the boundary.
+Eight internal packages. Each exists because a contract rule forces the
+boundary. Test helpers stay beside the tests that own them; R7 does not create
+a package merely to preserve the R5 `testkit` name.
 
 ```
 cmd/
@@ -151,7 +161,6 @@ internal/
                 imports: agency
                 forced by: the R8 deletion gate
 
-  testkit       test scaffolding
 ```
 
 Dependencies form a line with no back edges:
@@ -182,7 +191,7 @@ contract rule that forces it, it does not exist.
 | `node` R7 files + `localapi/agency_*` | 852+ | extract to `daemon` | move the complete control socket plus generic lifecycle, supervisor, and shutdown mechanics |
 | `artifact` | 4,941 | extract the narrow CAS core | primitives move from `model` to `agency`; closure/staging domain code is deleted |
 | `integration` + `assets` | 3,778 | shrink to `attach` | keep R7 projection; delete Codex and Teamwork assets |
-| `testkit` | 467 | retarget | same primitive move |
+| `testkit` | 467 | delete | R5 Channel/libp2p fixtures only; no R7 importer or contract-forced boundary |
 | `store` | 35,668 | delete | R7 has its own store in `authority` |
 | `node` remainder | ~12,570 | delete | channel, control_channel, control_agent, work, gossip |
 | `peer` remainder | ~14,130 | delete | channel, gossip, enrollment, libp2p |
@@ -247,21 +256,23 @@ C6 must land in the exact candidate tree that:
 
 and satisfies `G-R7-AUTHORITY-CUTOVER`.
 
-## 5. Steady-state gates
+## 5. Steady-state structural oracles
 
-Structural, machine-checkable, and independent of line count:
+These checks are machine-readable evidence under the closed Core gates; they
+are not additional Gate identifiers. R8 deletion remains an R8 authorization
+condition and cannot expand the R7 gate set.
 
-| Gate | Check |
+| Existing binding | Structural oracle |
 |---|---|
-| `G-R7-KERNEL-PURE` | `agency` has an empty internal import set. |
-| `G-R7-KERNEL-NARROW` | `authority`'s internal import set is exactly `{agency}`. |
-| `G-R7-R8-DELETABLE` | After `rm -rf internal/selector`, the build and every R7 conformance suite pass. |
+| `G-R7-AUTHORITY-CUTOVER` | `agency` has an empty internal import set. |
+| `G-R7-AUTHORITY-CUTOVER` | `authority`'s internal import set is exactly `{agency}`. |
+| R8 deletion condition | After removing `internal/selector`, the build and every R7 conformance suite pass. |
 | `G-R7-NO-CASE-KIND` | No production Go contains `channel`, `teamwork`, `review`, `contract-net`, `blackboard`, or `memory.wiki` as a semantic identifier. They may appear only as opaque `kind` values in testdata. |
-| `G-R7-LAYOUT` | `internal/` contains only the nine packages in section 2, and no dependency edge contradicts the graph there. |
+| `G-R7-AUTHORITY-CUTOVER` | `internal/` contains only the eight packages in section 2, and no dependency edge contradicts the graph there. |
 
 One human-readable check accompanies them: **every package states what it owns
 in one sentence.** Today's `store` cannot — it holds channel, peer, artifact,
-work, gossip, and agent state at once. All nine targets can.
+work, gossip, and agent state at once. All eight targets can.
 
 ## 6. What this document does not authorize
 
