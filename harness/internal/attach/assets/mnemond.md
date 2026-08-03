@@ -14,6 +14,35 @@ Use one loop:
 View -> Intent -> Receipt
 ```
 
+This guide and the current View are the complete Agent-facing protocol surface;
+do not search the filesystem for another guide or discover protocol state
+through setup, peer, status, or help commands. `mnemon-harness` is already on
+`PATH`; do not locate its binary or inspect the Runtime extension. The four
+terminal forms are:
+
+```sh
+mnemon-harness agent current --json
+mnemon-harness artifact capture --json < PATH
+mnemon-harness artifact read "$HANDLE"
+printf '%s' "$INTENT_JSON" | mnemon-harness agent submit --json
+```
+
+Choose meaning, targets, and consequences from the current task and View. The
+commands only transport that decision; they do not prescribe task semantics.
+Targets shown by the View are already usable aliases; no peer discovery or
+enrollment step is needed. These are syntax illustrations only—replace every
+all-capital placeholder with bounded values from the task, current View, or a
+capture Receipt:
+
+```json
+{"kind":"MEANING","payload":"BRIEF","consequence":"handling.create","successors":[{"self":true},{"alias":"VIEW_TARGET"}]}
+{"kind":"MEANING","payload":"BRIEF","consequence":"handling.advance","subject_handling":"CURRENT_HANDLE"}
+{"kind":"MEANING","payload":"BRIEF","consequence":"reference.publish","reference_key":"NEW_KEY","artifacts":[{"kind":"candidate","handle":"CAPTURE_HANDLE"}]}
+```
+
+The examples do not select meaning or policy. Omit fields and successors that
+the chosen View shape does not require.
+
 ## View
 
 Run `mnemon-harness agent current --json` only after an eligible runtime cue.

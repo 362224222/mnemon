@@ -25,6 +25,10 @@ func TestLoadHasOneFixedCueAndNoAuthorityOrSecretSurface(t *testing.T) {
 		len(extension) == 0 || len(extension) > MaxExtensionBytes {
 		t.Fatalf("asset sizes = guide %d, cue %d, extension %d", len(guide), len(cue), len(extension))
 	}
+	if !strings.Contains(cue, ".pi/skills/mnemond/SKILL.md") {
+		t.Fatal("fixed cue does not name the installed, bounded guide projection")
+	}
+	assertGuideTerminalSurface(t, string(guide))
 	source := string(extension)
 	for _, required := range []string{
 		`pi.on("before_agent_start"`, `execFileSync("mnemon-harness"`,
@@ -61,6 +65,22 @@ func TestLoadHasOneFixedCueAndNoAuthorityOrSecretSurface(t *testing.T) {
 	extension[0] ^= 0xff
 	if bytes.Equal(guide, projection.Guide()) || bytes.Equal(extension, projection.PiExtension()) {
 		t.Fatal("Load returned mutable embedded assets")
+	}
+}
+
+func assertGuideTerminalSurface(t *testing.T, guide string) {
+	t.Helper()
+	for _, required := range []string{
+		"`mnemon-harness` is already on",
+		"mnemon-harness agent current --json",
+		"mnemon-harness artifact capture --json < PATH",
+		"mnemon-harness artifact read \"$HANDLE\"",
+		"mnemon-harness agent submit --json",
+		"VIEW_TARGET", "CURRENT_HANDLE", "CAPTURE_HANDLE",
+	} {
+		if !strings.Contains(guide, required) {
+			t.Errorf("guide lacks complete, bounded terminal surface %q", required)
+		}
 	}
 }
 

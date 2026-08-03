@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-const HOOK_CUE = "mnemond has bounded state for this runtime; use the installed mnemond guide to inspect it.";
+const HOOK_CUE = "mnemond state is available; read .pi/skills/mnemond/SKILL.md and use mnemon-harness from PATH.";
 const MAX_OUTPUT_BYTES = 4096;
 const ATTACH_TIMEOUT_MS = 5000;
 const ATTACH_ATTEMPTS = 2;

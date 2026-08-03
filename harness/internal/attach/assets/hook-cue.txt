@@ -1,1 +1,1 @@
-mnemond has bounded state for this runtime; use the installed mnemond guide to inspect it.
+mnemond state is available; read .pi/skills/mnemond/SKILL.md and use mnemon-harness from PATH.

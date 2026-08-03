@@ -232,7 +232,7 @@ r7_live_pi_process() {
     PATH="$R7_LIVE_ROOT/bin:$PATH" \
     PI_CODING_AGENT_DIR="$R7_LIVE_ROOT/pi-state" \
     PI_SKIP_VERSION_CHECK=1 PI_TELEMETRY=0 \
-    "$R7_LIVE_PI_BIN" --mode json --no-session --approve --no-context-files \
+    "$R7_LIVE_PI_BIN" --mode json --print --no-session --approve --no-context-files \
       --no-prompt-templates --no-themes --provider deepseek --model "$R7_LIVE_PI_MODEL" \
       --thinking off --tools bash "$prompt"
 }
@@ -240,6 +240,10 @@ r7_live_pi_process() {
 r7_live_run_pi() {
   local events=$R7_LIVE_ROOT/pi-events.jsonl errors=$R7_LIVE_ROOT/pi.err status
   local prompt
+  # This gate is deliberately a deterministic live protocol smoke. It proves
+  # the Hook/View/Intent/Receipt path against a real provider; it is not used as
+  # evidence that a model can derive an arbitrary collaboration from a business
+  # prompt. Natural scenario evidence is evaluated separately.
   prompt='Perform exactly one R7 protocol smoke action. Do not invoke `mnemon-harness hook attach` yourself; the installed runtime hook must establish the context. Do not inspect environment variables. Use the bash tool only. First run `mnemon-harness agent current --json`. Then submit one root Intent with kind `live.pi.probe`, payload `persist one Pi-originated responsibility`, consequence `handling.create`, and successor `self`. Read the Receipt and stop. Do not edit files, run unrelated commands, or claim that the responsibility is completed.'
 
   r7_live_start_key_writer
@@ -269,7 +273,7 @@ r7_live_run_pi() {
 
 r7_live_assert_pi_trace() {
   local events=$R7_LIVE_ROOT/pi-events.jsonl cue
-  cue='mnemond has bounded state for this runtime; use the installed mnemond guide to inspect it.'
+  cue='mnemond state is available; read .pi/skills/mnemond/SKILL.md and use mnemon-harness from PATH.'
 
   jq -s -e --arg cue "$cue" '
     any(.[];
@@ -342,4 +346,4 @@ r7_live_run_pi
 r7_live_assert_pi_trace
 r7_live_assert_committed_effect
 
-printf 'r7 live pi: PASS (real Pi, DeepSeek, hook, View, Intent, Receipt, durable effect)\n'
+printf 'r7 live pi: PASS (deterministic real-provider protocol smoke; hook, View, Intent, Receipt, durable effect)\n'
