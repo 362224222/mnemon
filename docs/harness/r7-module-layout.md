@@ -1,8 +1,8 @@
 # R7 Module Layout
 
-Status: **PROPOSED**, alongside `r7-core-contract.md`. This document owns the
-Harness module structure and the cut order that reaches it. It does not own
-behavior.
+Status: **ACTIVE**, alongside `r7-core-contract.md`. C0 through C6 are
+complete. This document owns the Harness module structure and the cut order
+that reached it. It does not own behavior.
 
 On any conflict, `docs/harness/r7-core-contract.md` wins. Nothing here adds,
 weakens, or reinterprets an invariant, a gate, or an evidence binding. Where a
@@ -10,16 +10,17 @@ package boundary exists, this document names the contract rule that forces it;
 a boundary with no such rule is not justified and should not be created.
 
 There is no forward compatibility requirement. R5 behavior, schema, and state
-are not preserved. The R5 implementation is deleted in the same candidate tree
-that marks R7 ACTIVE and R5 RETIRED.
+are not preserved. The R5 implementation was deleted in the same candidate
+tree that marked R7 ACTIVE and R5 RETIRED.
 
 ## 1. Audit
 
 The measurements below are the pre-cut baseline retained to explain what C6
-deletes. The current candidate tree has already completed C0 through C5:
-`agencycli` imports only `agency`; `cas`, `peerlink`, `daemon`, and `attach`
-exist at their target boundaries; `cmd/mnemond` serves only `daemon`; and local
-and peer inputs converge on authority admission. The historical contamination
+deleted. The current tree has completed C0 through C6:
+`cas`, `peerlink`, `daemon`, and `attach` exist at their target boundaries;
+`cmd/mnemond` serves only `daemon`; local and peer inputs converge on authority
+admission; and the purified Agent terminal imports only `agency` under its
+final `internal/cli` name. The R5 wing is gone. The historical contamination
 notes must not be read as remaining migration work.
 
 Measured on `feat/r5-architecture`, non-test Go under `harness/`:
@@ -57,28 +58,30 @@ deletable R8 island. At this baseline, the remaining authority work was to
 converge BoundIntent and VerifiedPeerDelivery on one domain admission
 implementation; the current candidate has completed that work.
 
-### 1.2 Exactly two contamination points
+### 1.2 The two former contamination points
 
 ```
 agencycli         1,449   agency + localapi + model + node
 peer/agency_*.go  1,818   agency + model + store + testkit + libp2p
 ```
 
-The final name `internal/cli` is occupied by the R5 CLI. `agencycli` is first
-purified in place and is renamed only in C6, when the old package is deleted.
+At the baseline, the final name `internal/cli` was occupied by the R5 CLI.
+`agencycli` was purified in place and renamed only in C6, when the old package
+was deleted.
 
-### 1.3 R7 composition currently hosted inside an R5 package
+### 1.3 R7 composition formerly hosted inside an R5 package
 
 ```
 node/agency_daemon.go, agency_service.go, agency_boundary.go,
 node/provision.go, node/r7_artifact_adapter.go        852   agency + authority
 ```
 
-The R7 authority composition is clean, but its control client/server mechanics
-also span `agencycli` and `localapi/agency_*`. The cut must move that complete
-socket boundary; moving only the `node` files would retain an R5 dependency.
+The R7 authority composition was clean, but its control client/server mechanics
+also spanned `agencycli` and `localapi/agency_*`. The cut moved that complete
+socket boundary; moving only the `node` files would have retained an R5
+dependency.
 
-### 1.4 Reusable mechanism coupled to R5 only through primitives
+### 1.4 Reusable mechanism formerly coupled to R5 only through primitives
 
 ```
 artifact          4,941   model     (model.Digest x83, model.Sum x61, model.JSON,
@@ -104,9 +107,10 @@ local 2,276 / current 1,377 / managed 1,389 / work 1,169 / gossip 726.
 
 ## 2. Target layout
 
-Eight internal packages. Each exists because a contract rule forces the
-boundary. Test helpers stay beside the tests that own them; R7 does not create
-a package merely to preserve the R5 `testkit` name.
+Seven R7 internal packages exist because a contract rule forces each boundary.
+An eighth, `selector`, is an optional R8 island and must be deletable. Test
+helpers stay beside the tests that own them; R7 does not create a package
+merely to preserve the R5 `testkit` name.
 
 ```
 cmd/
@@ -156,7 +160,7 @@ internal/
                 imports: agency
                 forced by: Runtime differences must not reach authority
 
-  selector      R8, optional and deletable
+  selector      R8 only, optional and deletable
                 SelectionDescriptor, SelectionState, round loop, observation
                 imports: agency
                 forced by: the R8 deletion gate
@@ -181,7 +185,7 @@ contract rule that forces it, it does not exist.
 
 ## 3. Per-package disposition
 
-| Current | Non-test | Disposition | Note |
+| Pre-cut package | Non-test | Disposition | Note |
 |---|---:|---|---|
 | `agency` | 4,007 | keep | already the target shape |
 | `authority` | 4,437 | keep | already the target shape |
@@ -217,7 +221,8 @@ C4  daemon     extract the complete R7 control socket, composition, workers,
                and generic lifecycle machinery
                *** cmd/mnemond serves R7 only from this point ***
 C5  attach     shrink integration and assets to the R7 projection
-C6  delete the R5 wing, in the same candidate tree as the contract switch
+C6  complete: delete the R5 wing in the same candidate tree as the contract
+    switch
 C7  steady-state gates
 ```
 
@@ -238,17 +243,17 @@ After C4 it does not.
 > Two writers only need to coexist **in the source tree**, not in a served
 > process.
 
-R5 packages keep compiling and keep running their own tests until C6, while
-`cmd/mnemond` points at `daemon` alone. The transitional boundary is therefore
-never built, and cannot harden into a permanent framework.
+R5 packages kept compiling and running their own tests until C6, while
+`cmd/mnemond` pointed at `daemon` alone. The transitional boundary was therefore
+never built and could not harden into a permanent framework.
 
-### 4.2 C6 is the switch
+### 4.2 C6 was the switch
 
 Deleting the R5 implementation and retiring the R5 contract are one event.
 Separating them produces a window in which an ACTIVE contract governs code that
 no longer exists.
 
-C6 must land in the exact candidate tree that:
+C6 landed in the exact candidate tree that:
 
 - has R7 evidence at 10/10 with every section 9 gate green;
 - marks R7 ACTIVE and R5 RETIRED;
@@ -268,11 +273,12 @@ condition and cannot expand the R7 gate set.
 | `G-R7-AUTHORITY-CUTOVER` | `authority`'s internal import set is exactly `{agency}`. |
 | R8 deletion condition | After removing `internal/selector`, the build and every R7 conformance suite pass. |
 | `G-R7-NO-CASE-KIND` | No production Go contains `channel`, `teamwork`, `review`, `contract-net`, `blackboard`, or `memory.wiki` as a semantic identifier. They may appear only as opaque `kind` values in testdata. |
-| `G-R7-AUTHORITY-CUTOVER` | `internal/` contains only the eight packages in section 2, and no dependency edge contradicts the graph there. |
+| `G-R7-AUTHORITY-CUTOVER` | `internal/` contains exactly the seven R7 packages in section 2 and may additionally contain only the optional `selector`; no dependency edge contradicts the graph there. |
 
 One human-readable check accompanies them: **every package states what it owns
 in one sentence.** Today's `store` cannot — it holds channel, peer, artifact,
-work, gossip, and agent state at once. All eight targets can.
+work, gossip, and agent state at once. All seven R7 targets can; the optional
+R8 selector owns only its private selection state.
 
 ## 6. What this document does not authorize
 
@@ -282,5 +288,5 @@ work, gossip, and agent state at once. All eight targets can.
   a proven local outcome projection.
 - Any release-path change. The root `mnemon`, `mnemon setup`, and Legacy Memory
   are untouched, and no release command may import `harness/`.
-- Deleting R5 before C6.
+- Restoring an R5 package, compatibility path, or second domain model after C6.
 - Creating a package that no contract rule forces.

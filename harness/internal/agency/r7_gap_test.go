@@ -3,6 +3,7 @@ package agency
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -191,6 +192,28 @@ func TestR7GapP02OpenLabelsAndClosedShapes(t *testing.T) {
 		t.Run("illegal-"+test.name, func(t *testing.T) {
 			if _, err := NewAgentIntent(test.spec); !errors.Is(err, test.want) {
 				t.Fatalf("NewAgentIntent() error = %v, want %v", err, test.want)
+			}
+		})
+	}
+}
+
+func TestR7GapP08InvalidReferenceKeysFailClosed(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  error
+	}{
+		{name: "empty", value: "", want: ErrInvalid},
+		{name: "leading-separator", value: "-playbook", want: ErrInvalid},
+		{name: "uppercase", value: "Playbook.review", want: ErrInvalid},
+		{name: "slash", value: "playbook/review", want: ErrInvalid},
+		{name: "trailing-separator", value: "playbook.review-", want: ErrInvalid},
+		{name: "too-long", value: strings.Repeat("a", MaxReferenceKeyBytes+1), want: ErrLimit},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := NewReferenceKey(test.value); !errors.Is(err, test.want) {
+				t.Fatalf("NewReferenceKey(%q) error = %v, want %v", test.value, err, test.want)
 			}
 		})
 	}

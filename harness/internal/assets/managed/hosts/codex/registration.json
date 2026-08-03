@@ -1,1 +1,0 @@
-{"host":"codex","managed_key":"mnemon-harness","schema_version":1,"skill_target":".agents/skills/mnemon-harness","target":"hooks.json","value":{"event":"UserPromptSubmit","hook":{"command":"{{HOOK_PATH}}","statusMessage":"Checking Mnemon Teamwork","timeout":10,"type":"command"}}}

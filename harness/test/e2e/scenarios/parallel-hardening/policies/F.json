@@ -1,8 +1,0 @@
-{
-  "schema_version": 1,
-  "node": "F",
-  "offer_to": "auto",
-  "result_content": "Verify deployment compatibility, malicious filename rejection, graceful cancellation, and end-to-end streaming upload.",
-  "rework_once": false,
-  "decline_once": false
-}

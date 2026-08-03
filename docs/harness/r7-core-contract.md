@@ -1,13 +1,13 @@
 # R7 Core Contract
 
-Status: **PROPOSED**. The R5 Core contract remains the active merge and release
-authority until the atomic switch described in section 11.
+Status: **ACTIVE**. This is the sole tracked merge and release authority for
+the experimental Harness.
 
-This document is intended to become the single tracked authority for the
-experimental Harness. It defines an event physics small enough to be fully
-proven: ten machine invariants, two mutable domain states, and one admission
-entry point. Collaboration patterns are not implemented here. They are written
-as Agent-facing descriptions and test fixtures on top of this physics.
+This document is the single tracked authority for the experimental Harness. It
+defines an event physics small enough to be fully proven: ten machine
+invariants, two mutable domain states, and one admission entry point.
+Collaboration patterns are not implemented here. They are written as
+Agent-facing descriptions and test fixtures on top of this physics.
 
 The derivation history, research evidence, and superseded R7 design material
 live in `.mnemon-dev/architecture/r7/` and `.mnemon-dev/research/`. Those
@@ -603,20 +603,16 @@ small enough to close is worth more than a comprehensive one that never does.
 There is never a period in which an unmeasured contract holds authority.
 
 ```
-Now
-  R7 = PROPOSED     no authority; the implementation may be built against it
-  R5 = ACTIVE       still describes and gates the existing implementation
-
-The switch candidate tree, only when evidence is 10/10 and every gate in
-section 9 is green for that exact tree
+The activated tree, with evidence 10/10 and every gate in section 9 green
   R7 marked ACTIVE
   R5 marked RETIRED
   all contract parsers, registries, Make targets, CI, and active Harness docs
     point to R7
   make harness-verify runs the R7 gate
 
-Merge that unchanged tree into the protected authority branch
-  the switch becomes effective atomically
+On a non-authority branch this remains a candidate status marker. The switch
+becomes effective atomically when that unchanged tree reaches the protected
+authority branch.
 ```
 
 Status markers on a non-authority branch are candidates, not authority. CI

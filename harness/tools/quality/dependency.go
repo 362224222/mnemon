@@ -210,32 +210,21 @@ func isHarnessImport(importPath string) bool {
 }
 
 func allowedHarnessImport(source, target string) bool {
-	if target == "model" && knownHarnessPackage(source) &&
-		source != "agency" && source != "authority" && source != "selector" &&
-		source != "agencycli" && source != "attach" && source != "cas" &&
-		source != "daemon" && source != "peerlink" {
-		return true
-	}
 	allowed := map[string]map[string]bool{
-		"attach":    {"agency": true},
-		"cmd":       {"agencycli": true, "attach": true, "daemon": true, "integration": true, "localapi": true, "node": true},
-		"agencycli": {"agency": true},
-		"cas":       {"agency": true},
-		"daemon":    {"agency": true, "authority": true, "cas": true, "peerlink": true},
-		"peerlink":  {"agency": true, "cas": true},
-		"node":      {"event": true, "store": true, "agent": true, "artifact": true, "peer": true, "agency": true, "authority": true},
-		"localapi":  {"node": true}, "event": {"teamwork": true, "store": true, "artifact": true},
-		"teamwork": {}, "agent": {"event": true, "store": true, "artifact": true, "teamwork": true},
-		"peer": {"store": true, "artifact": true}, "integration": {"assets": true},
-		"store": {"artifact": true}, "artifact": {}, "model": {}, "assets": {}, "testkit": {},
-		"agency": {}, "authority": {"agency": true}, "selector": {"agency": true},
+		"attach":   {"agency": true},
+		"cmd":      {"attach": true, "cli": true, "daemon": true},
+		"cli":      {"agency": true},
+		"cas":      {"agency": true},
+		"daemon":   {"agency": true, "authority": true, "cas": true, "peerlink": true},
+		"peerlink": {"agency": true, "cas": true},
+		"agency":   {}, "authority": {"agency": true}, "selector": {"agency": true},
 	}
 	return allowed[source][target]
 }
 
 func knownHarnessPackage(name string) bool {
 	switch name {
-	case "cmd", "assets", "agency", "agencycli", "agent", "artifact", "attach", "authority", "cas", "daemon", "event", "integration", "localapi", "model", "node", "peer", "peerlink", "selector", "store", "teamwork", "testkit":
+	case "cmd", "agency", "attach", "authority", "cas", "cli", "daemon", "peerlink", "selector":
 		return true
 	default:
 		return false

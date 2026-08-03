@@ -1,1 +1,0 @@
-Fix the concurrent duplicate-payment bug in this service, run its tests, and use the collaboration network to obtain an independent consumer-contract review, security review, and ledger-reconciliation review. Apply any valid rework once and leave a concise final verification record in the workspace.

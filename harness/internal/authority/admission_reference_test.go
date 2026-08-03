@@ -1,6 +1,7 @@
 package authority
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -317,6 +318,134 @@ func TestReferenceCanRetractThenSupersedeTombstone(t *testing.T) {
 	}
 	if state != "active" || artifact != secondDigest.String() {
 		t.Fatalf("revived Reference = %s/%s", state, artifact)
+	}
+	if got := countRows(t, fixture.store, "reference_lineage"); got != 3 {
+		t.Fatalf("Reference lineage rows = %d, want 3", got)
+	}
+}
+
+func TestReferenceRejectsForwardHead(t *testing.T) {
+	fixture := newAuthorityFixture(t, "principal:reference-forward-head")
+	attachment := fixture.current(t).authority.Attachment()
+	key := mustReferenceKey(t, "playbook.forward-head")
+	headHandle := mustHandle(t, "reference:forward-head")
+	futureHead, err := agency.NewEventRef(mustEventID(t, "event:forward-head"),
+		agency.Sum([]byte("future Reference Event")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected, err := agency.ExpectReferenceHead(headHandle, key, futureHead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorityView, err := agency.NewViewAuthority(agency.MachineViewSpec{
+		Attachment:   attachment,
+		Consequences: []agency.Consequence{agency.ConsequenceSupersedeReference},
+		References:   []agency.ReferenceExpectation{expected},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentOperation := mustCurrentOperation(t, "operation:forward-head-current")
+	viewHandle, err := currentViewHandle(attachment, currentOperation.key, authorityView.Digest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	agentView, err := agency.NewAgentView(agency.AgentViewSpec{Handle: viewHandle,
+		Authority: authorityView, References: []agency.AgentViewReferenceSpec{{
+			Head: headHandle, State: agency.AgentViewReferenceStateRetracted,
+		}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	view := BoundView{authority: authorityView, public: agentView}
+	tx, err := fixture.store.db.BeginTx(fixture.ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if err := insertCurrentOperationTx(fixture.ctx, tx, attachment, currentOperation, view); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	replacement := fixture.catalog(t, "replacement for unseen future head")
+	request := referenceRequest(t, view, "operation:forward-head-supersede",
+		agency.ConsequenceSupersedeReference, key.String(), &replacement)
+	result, err := fixture.store.Admit(fixture.ctx, fixture.proof, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireOutcome(t, result, agency.ReceiptOutcomeRejected)
+	receipt, err := agency.ParseReceiptCanonicalJSON(result.ReceiptJSON())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt.Code() != rejectionStaleReference {
+		t.Fatalf("forward-head rejection code = %q, want %q", receipt.Code(), rejectionStaleReference)
+	}
+	for _, table := range []string{"events", "active_references", "reference_lineage"} {
+		if got := countRows(t, fixture.store, table); got != 0 {
+			t.Fatalf("%s rows after forward-head rejection = %d, want 0", table, got)
+		}
+	}
+}
+
+func TestReferenceTombstoneRejectsFreshRetractAndReplaysOriginal(t *testing.T) {
+	fixture := newAuthorityFixture(t, "principal:reference-double-retract")
+	firstDigest := fixture.catalog(t, "double-retract v1")
+	publish := referenceRequest(t, fixture.current(t), "operation:double-retract-publish",
+		agency.ConsequencePublishReference, "playbook.double-retract", &firstDigest)
+	if result, err := fixture.store.Admit(fixture.ctx, fixture.proof, publish); err != nil {
+		t.Fatal(err)
+	} else {
+		requireOutcome(t, result, agency.ReceiptOutcomeAccepted)
+	}
+
+	retractView := fixture.current(t)
+	retract := referenceRequest(t, retractView, "operation:double-retract-first",
+		agency.ConsequenceRetractReference, "playbook.double-retract", nil)
+	accepted, err := fixture.store.Admit(fixture.ctx, fixture.proof, retract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireOutcome(t, accepted, agency.ReceiptOutcomeAccepted)
+
+	guardDigest := fixture.catalog(t, "active guard Reference")
+	guard := referenceRequest(t, fixture.current(t), "operation:double-retract-guard",
+		agency.ConsequencePublishReference, "playbook.double-retract-guard", &guardDigest)
+	if result, err := fixture.store.Admit(fixture.ctx, fixture.proof, guard); err != nil {
+		t.Fatal(err)
+	} else {
+		requireOutcome(t, result, agency.ReceiptOutcomeAccepted)
+	}
+
+	fresh := referenceRequest(t, fixture.current(t), "operation:double-retract-fresh",
+		agency.ConsequenceRetractReference, "playbook.double-retract", nil)
+	rejected, err := fixture.store.Admit(fixture.ctx, fixture.proof, fresh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireOutcome(t, rejected, agency.ReceiptOutcomeRejected)
+	receipt, err := agency.ParseReceiptCanonicalJSON(rejected.ReceiptJSON())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt.Code() != rejectionStaleReference {
+		t.Fatalf("tombstone retract rejection code = %q, want %q", receipt.Code(), rejectionStaleReference)
+	}
+
+	replayed, err := fixture.store.Admit(fixture.ctx, fixture.proof, retract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !replayed.Replayed() || replayed.ReceiptDigest() != accepted.ReceiptDigest() ||
+		!bytes.Equal(replayed.ReceiptJSON(), accepted.ReceiptJSON()) {
+		t.Fatalf("original retract replay changed: replay=%v digest=%s bytes_equal=%v",
+			replayed.Replayed(), replayed.ReceiptDigest().String(),
+			bytes.Equal(replayed.ReceiptJSON(), accepted.ReceiptJSON()))
 	}
 	if got := countRows(t, fixture.store, "reference_lineage"); got != 3 {
 		t.Fatalf("Reference lineage rows = %d, want 3", got)

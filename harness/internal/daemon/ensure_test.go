@@ -92,17 +92,25 @@ func TestConcurrentEnsureStartsOneProvisionedDaemon(t *testing.T) {
 	stopEnsureRuntime(t, runtime, serveErrors)
 }
 
-func TestEnsureKillsItsChildWhenReadinessExpires(t *testing.T) {
+func TestEnsureKillsItsChildWhenReadinessContextEnds(t *testing.T) {
 	state := provisionEnsureState(t)
 	child := &testEnsureChild{}
-	ctx, cancel := context.WithTimeout(context.Background(), 75*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	started := make(chan struct{})
+	go func() {
+		<-started
+		cancel()
+	}()
 	err := ensure(ctx, state, ensureDependencies{
 		resolveExecutable: func() (string, error) { return "/test/mnemond", nil },
-		start:             func(string, string) (ensureChild, error) { return child, nil },
+		start: func(string, string) (ensureChild, error) {
+			close(started)
+			return child, nil
+		},
 	})
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("Ensure timeout = %v", err)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Ensure cancellation = %v", err)
 	}
 	if child.kills.Load() != 1 || child.releases.Load() != 0 {
 		t.Fatalf("failed child lifecycle: kills=%d releases=%d",

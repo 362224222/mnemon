@@ -12,7 +12,7 @@ const (
 	baselinePath     = "harness/test/contracts/go_quality_baseline.json"
 	exceptionsPath   = "harness/test/contracts/go_quality_exceptions.json"
 	architecturePath = "harness/test/contracts/go_architecture_debt.json"
-	requirementsPath = "harness/test/contracts/requirements.json"
+	requirementsPath = "harness/test/contracts/r7-requirements.json"
 )
 
 type contractBundle struct {
@@ -83,7 +83,7 @@ func loadContractBundle(root string) (contractBundle, error) {
 }
 
 func validateContractBundle(root string, bundle contractBundle) error {
-	if err := validateAllManifests(bundle.baseline, bundle.exceptions, bundle.architecture,
+	if err := validateAllManifests(root, bundle.baseline, bundle.exceptions, bundle.architecture,
 		bundle.core, bundle.requirements); err != nil {
 		return err
 	}
@@ -139,7 +139,7 @@ func runRepositoryChecks(root, baseReference string, bundle contractBundle) erro
 	return nil
 }
 
-func validateAllManifests(baseline baselineManifest, exceptions exceptionManifest,
+func validateAllManifests(root string, baseline baselineManifest, exceptions exceptionManifest,
 	architecture architectureManifest, contract corecontract.Contract,
 	requirements requirementsManifest,
 ) error {
@@ -147,7 +147,7 @@ func validateAllManifests(baseline baselineManifest, exceptions exceptionManifes
 		func() error { return validateBaseline(baseline) },
 		func() error { return validateExceptions(exceptions) },
 		func() error { return validateArchitectureManifest(architecture) },
-		func() error { return corecontract.ValidateRegistry(contract, requirements) },
+		func() error { return corecontract.ValidateBindings(root, contract, requirements) },
 	}
 	for _, validate := range validators {
 		if err := validate(); err != nil {

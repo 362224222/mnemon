@@ -1,8 +1,0 @@
-{
-  "schema_version": 1,
-  "node": "B",
-  "offer_to": "auto",
-  "result_content": "Remain transport-only for Alpha publications; do not claim review authority or request Artifact access.",
-  "rework_once": false,
-  "decline_once": false
-}

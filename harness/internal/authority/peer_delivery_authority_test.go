@@ -101,6 +101,7 @@ func TestRemoteRejectionAndExpiryLeaveOriginAnchorOpen(t *testing.T) {
 		if !ok || receipt.Outcome() != agency.PeerAdmissionOutcomeRejected {
 			t.Fatalf("rejected peer Receipt = %#v", receipt)
 		}
+		assertPeerRows(t, fixture.receiver, 0, 0, 0, 1)
 		fixture.settleOrigin(t, delivery, receipt)
 		assertOriginAnchorOpen(t, fixture.origin)
 	})

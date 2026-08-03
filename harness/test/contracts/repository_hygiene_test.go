@@ -49,7 +49,7 @@ func TestRepositoryHygieneRulesRejectGeneratedFiles(t *testing.T) {
 	pathTests := []struct {
 		path, want string
 	}{
-		{".testdata/r5/runs/example/report.json", ".testdata"},
+		{".testdata/r7/runs/example/report.json", ".testdata"},
 		{".mnemon-dev/tmp/example/summary.json", ".mnemon-dev"},
 		{"release/evidence/example/report.json", "run evidence"},
 		{"release/logs/mnemond.log", "run log"},
@@ -69,15 +69,15 @@ func TestRepositoryHygieneRulesRejectGeneratedFiles(t *testing.T) {
 		path, raw, want string
 	}{
 		{"scratch/result.json", `{}`, "durable JSON category"},
-		{"harness/test/e2e/scenarios/example/public/A/tmp.json", `{}`, "temporary JSON name"},
-		{"harness/test/e2e/scenarios/example/public/A/report-copy.json",
+		{"harness/testdata/r7/cases/example/tmp.json", `{}`, "temporary JSON name"},
+		{"internal/setup/assets/fixtures/report-copy.json",
 			`{"schema_version":1,"run_id":"run","status":"passed","git_sha":"abc",` +
 				`"scenario":"example","commands":[],"assertions":[]}`,
 			"run report"},
-		{"harness/test/e2e/scenarios/example/public/A/manifest-copy.json",
+		{"internal/setup/assets/fixtures/manifest-copy.json",
 			`{"schema_version":1,"run_id":"run","files":[]}`,
 			"run evidence manifest"},
-		{"harness/test/e2e/scenarios/example/public/A/command.json",
+		{"internal/setup/assets/fixtures/command.json",
 			`{"sequence":1,"node":"A","kind":"setup","started_unix_ms":1,` +
 				`"finished_unix_ms":2,"exit_code":0,"evidence":[]}`,
 			"run transcript"},
@@ -92,15 +92,11 @@ func TestRepositoryHygieneRulesRejectGeneratedFiles(t *testing.T) {
 
 func TestRepositoryHygieneRulesAcceptDurableJSONCategories(t *testing.T) {
 	for _, trackedPath := range []string{
-		"harness/test/contracts/requirements.json",
+		"harness/test/contracts/r7-requirements.json",
 		"harness/test/contracts/go_quality_baseline.json",
 		"harness/test/contracts/go_architecture_debt.json",
-		"harness/test/e2e/schemas/report.schema.json",
-		"harness/internal/assets/managed/actions/teamwork/offer.json",
+		"internal/setup/assets/openclaw/plugin/openclaw.plugin.json",
 		"internal/setup/assets/openclaw/plugin/package.json",
-		"harness/test/e2e/scenarios/example/manifest.json",
-		"harness/test/e2e/scenarios/example/policies/A.json",
-		"harness/test/e2e/scenarios/example/public/A/input.json",
 	} {
 		if reason := forbiddenTrackedPathReason(trackedPath); reason != "" {
 			t.Errorf("%s: %s", trackedPath, reason)
@@ -195,8 +191,7 @@ func forbiddenTrackedFilenameReason(trackedPath string) string {
 	case strings.HasSuffix(base, ".log") || strings.HasSuffix(base, ".stderr") ||
 		strings.HasSuffix(base, ".stdout"):
 		return "generated run log"
-	case (strings.HasSuffix(base, ".jsonl") || strings.HasSuffix(base, ".ndjson")) &&
-		!isScenarioPublicPath(trackedPath):
+	case strings.HasSuffix(base, ".jsonl") || strings.HasSuffix(base, ".ndjson"):
 		return "generated run transcript stream"
 	default:
 		return ""
@@ -225,9 +220,7 @@ func temporaryJSONNameReason(trackedPath string) string {
 	case "transcript.json":
 		return "uses a generated transcript name"
 	case "manifest.json":
-		if !isDurableManifestPath(trackedPath) {
-			return "uses a generated manifest name"
-		}
+		return "uses a generated manifest name"
 	}
 	stem := strings.TrimSuffix(base, ".json")
 	if stem == "tmp" || stem == "temp" || stem == "temporary" || stem == "scratch" ||
@@ -245,7 +238,7 @@ func temporaryJSONNameReason(trackedPath string) string {
 
 func durableJSONCategory(trackedPath string) string {
 	switch {
-	case trackedPath == "harness/test/contracts/requirements.json":
+	case trackedPath == "harness/test/contracts/r7-requirements.json":
 		return "contract registry"
 	case trackedPath == "harness/test/contracts/go_architecture_debt.json":
 		return "quality"
@@ -253,61 +246,11 @@ func durableJSONCategory(trackedPath string) string {
 		!strings.Contains(strings.TrimPrefix(trackedPath,
 			"harness/test/contracts/"), "/"):
 		return "quality"
-	case strings.HasPrefix(trackedPath, "harness/test/e2e/schemas/") &&
-		strings.HasSuffix(trackedPath, ".schema.json") &&
-		!strings.Contains(strings.TrimPrefix(trackedPath,
-			"harness/test/e2e/schemas/"), "/"):
-		return "schema"
-	case strings.HasPrefix(trackedPath, "harness/internal/assets/managed/"):
-		return "managed asset"
 	case strings.HasPrefix(trackedPath, "internal/setup/assets/"):
 		return "managed asset"
-	case isScenarioJSONPath(trackedPath):
-		return "scenario policy"
 	default:
 		return ""
 	}
-}
-
-func isScenarioJSONPath(trackedPath string) bool {
-	const prefix = "harness/test/e2e/scenarios/"
-	if !strings.HasPrefix(trackedPath, prefix) ||
-		!strings.EqualFold(path.Ext(trackedPath), ".json") {
-		return false
-	}
-	parts := strings.Split(strings.TrimPrefix(trackedPath, prefix), "/")
-	switch {
-	case len(parts) == 2 && parts[0] != "" && parts[1] == "manifest.json":
-		return true
-	case len(parts) == 3 && parts[0] != "" && parts[1] == "policies" &&
-		parts[2] != "":
-		return true
-	case len(parts) >= 4 && parts[0] != "" && parts[1] == "public":
-		return true
-	default:
-		return false
-	}
-}
-
-func isScenarioPublicPath(trackedPath string) bool {
-	const prefix = "harness/test/e2e/scenarios/"
-	if !strings.HasPrefix(trackedPath, prefix) {
-		return false
-	}
-	parts := strings.Split(strings.TrimPrefix(trackedPath, prefix), "/")
-	return len(parts) >= 4 && parts[0] != "" && parts[1] == "public"
-}
-
-func isDurableManifestPath(trackedPath string) bool {
-	if trackedPath == "harness/internal/assets/managed/manifest.json" {
-		return true
-	}
-	const prefix = "harness/test/e2e/scenarios/"
-	if !strings.HasPrefix(trackedPath, prefix) {
-		return false
-	}
-	parts := strings.Split(strings.TrimPrefix(trackedPath, prefix), "/")
-	return len(parts) == 2 && parts[0] != "" && parts[1] == "manifest.json"
 }
 
 func generatedJSONShape(raw []byte) string {

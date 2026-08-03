@@ -1,226 +1,264 @@
 package corecontract
 
 import (
+	"bufio"
+	"bytes"
 	"context"
-	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
+	"strings"
 	"time"
 )
 
-type RunMode string
-
-const (
-	RunModeMerge   RunMode = "merge"
-	RunModeRelease RunMode = "release"
-)
-
-type gateCommandFunc func(context.Context, string, []string, []string,
-	io.Writer, io.Writer) (int, error)
-
-type gateRunner struct {
-	now      func() time.Time
-	random   io.Reader
-	command  gateCommandFunc
-	progress io.Writer
+type GateReport struct {
+	SchemaVersion int          `json:"schema_version"`
+	RunID         string       `json:"run_id"`
+	StartedAt     string       `json:"started_at"`
+	FinishedAt    string       `json:"finished_at"`
+	Source        ReportSource `json:"source"`
+	Inputs        ReportInputs `json:"inputs"`
+	Steps         []StepResult `json:"steps"`
+	Gates         []GateResult `json:"gates"`
 }
 
-type gateAuthority struct {
-	commit, tree                   string
-	contractDigest, registryDigest string
+type ReportSource struct {
+	Commit        string `json:"commit"`
+	Tree          string `json:"tree"`
+	CleanAtStart  bool   `json:"clean_at_start"`
+	CleanAtFinish bool   `json:"clean_at_finish"`
 }
 
-type gateRun struct {
-	root           string
-	directory      string
-	scriptedRun    string
-	codexRun       string
-	imageReference string
-	imageDigest    string
-	report         GateReport
+type ReportInputs struct {
+	ContractSHA256 string `json:"contract_sha256"`
+	RegistrySHA256 string `json:"registry_sha256"`
 }
 
-// RunGates executes the canonical R5 Core gate commands and writes one ignored
-// report bound to the unchanged source tree. A partial or failed run never
-// returns a report path.
-func RunGates(ctx context.Context, root string, mode RunMode) (string, error) {
-	runner := gateRunner{
-		now: time.Now, random: rand.Reader, command: executeGateCommand,
-		progress: os.Stderr,
-	}
-	return runner.run(ctx, root, mode)
+type StepResult struct {
+	ID          string       `json:"id"`
+	Kind        string       `json:"kind"`
+	Argv        []string     `json:"argv"`
+	Oracles     []string     `json:"oracles"`
+	StartedAt   string       `json:"started_at"`
+	FinishedAt  string       `json:"finished_at"`
+	ExitCode    int          `json:"exit_code"`
+	Output      ReportOutput `json:"output"`
+	PassedTests []string     `json:"passed_tests"`
 }
 
-func (runner gateRunner) run(ctx context.Context, root string, mode RunMode) (string, error) {
-	if ctx == nil {
-		return "", errors.New("Core gate context is required")
-	}
-	if mode != RunModeMerge && mode != RunModeRelease {
-		return "", fmt.Errorf("Core gate mode %q is invalid", mode)
-	}
-	canonicalRoot, err := canonicalRepositoryRoot(root)
-	if err != nil {
-		return "", err
-	}
-	contract, err := Load(canonicalRoot)
-	if err != nil {
-		return "", err
-	}
-	startAuthority, err := readGateAuthority(canonicalRoot)
-	if err != nil {
-		return "", err
-	}
-	runID, err := runner.newRunID(mode)
-	if err != nil {
-		return "", err
-	}
-	state, err := runner.startRun(canonicalRoot, runID, startAuthority)
-	if err != nil {
-		return "", err
-	}
-	for index, rule := range gateStepRules {
-		if mode == RunModeMerge && rule.gate == "G-LIVE" {
-			continue
-		}
-		if err := runner.executeRule(ctx, &state, index, rule); err != nil {
-			return "", err
-		}
-	}
-	if err := runner.finishRun(&state, contract, startAuthority); err != nil {
-		return "", err
-	}
-	return filepath.ToSlash(filepath.Join(
-		".testdata", "r5", "core-gates", runID, "gate-report.json",
-	)), nil
+type ReportOutput struct {
+	StdoutPath   string `json:"stdout_path"`
+	StdoutSHA256 string `json:"stdout_sha256"`
+	StderrPath   string `json:"stderr_path"`
+	StderrSHA256 string `json:"stderr_sha256"`
 }
 
-func (runner gateRunner) newRunID(mode RunMode) (string, error) {
-	random := make([]byte, 12)
-	if _, err := io.ReadFull(runner.random, random); err != nil {
-		return "", fmt.Errorf("create Core gate run identity: %w", err)
-	}
-	stamp := runner.now().UTC().Format("20060102T150405.000000000Z")
-	return "core-" + string(mode) + "-" + stamp + "-" + hex.EncodeToString(random), nil
+type GateResult struct {
+	ID      string   `json:"id"`
+	StepIDs []string `json:"step_ids"`
+	Passed  bool     `json:"passed"`
 }
 
-func (runner gateRunner) startRun(root, runID string, authority gateAuthority,
-) (gateRun, error) {
-	relative := filepath.Join(".testdata", "r5", "core-gates", runID)
-	directory, err := makePrivateDirectory(root, relative)
+type commandResult struct {
+	exitCode int
+	stdout   []byte
+	stderr   []byte
+}
+
+var runCommand = executeCommand
+
+func runStep(ctx context.Context, root, base string, step GateStep) (StepResult, error) {
+	started := time.Now().UTC()
+	result := runCommand(ctx, root, step.Argv)
+	stdoutPath := filepath.ToSlash(filepath.Join(base, step.ID+".stdout"))
+	stderrPath := filepath.ToSlash(filepath.Join(base, step.ID+".stderr"))
+	if err := writeOutput(root, stdoutPath, result.stdout); err != nil {
+		return StepResult{}, err
+	}
+	if err := writeOutput(root, stderrPath, result.stderr); err != nil {
+		return StepResult{}, err
+	}
+	if result.exitCode != 0 {
+		return StepResult{}, fmt.Errorf("step %s exited %d; see %s and %s",
+			step.ID, result.exitCode, stdoutPath, stderrPath)
+	}
+	passedTests, err := verifyStepOracles(step, result.stdout)
 	if err != nil {
-		return gateRun{}, err
+		return StepResult{}, fmt.Errorf("step %s: %w", step.ID, err)
 	}
-	if _, err := makePrivateDirectory(root, filepath.Join(relative, "steps")); err != nil {
-		return gateRun{}, err
-	}
-	started := runner.now().UTC().Format(time.RFC3339Nano)
-	return gateRun{
-		root: root, directory: directory,
-		scriptedRun: runID + "-scripted", codexRun: runID + "-codex",
-		report: GateReport{
-			SchemaVersion: GateReportSchemaVersion, RunID: runID, StartedAt: started,
-			Source: GateSource{
-				Commit: authority.commit, Tree: authority.tree, CleanAtStart: true,
-			},
-			Inputs: GateInputs{
-				ContractSHA256:     authority.contractDigest,
-				RequirementsSHA256: authority.registryDigest,
-			},
-			Steps: []GateStep{}, Bundles: []GateBundleRef{},
+	return StepResult{
+		ID: step.ID, Kind: step.Kind, Argv: slices.Clone(step.Argv),
+		Oracles:    slices.Clone(step.Oracles),
+		StartedAt:  started.Format(time.RFC3339Nano),
+		FinishedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		ExitCode:   0,
+		Output: ReportOutput{
+			StdoutPath: stdoutPath, StdoutSHA256: bytesSHA256(result.stdout),
+			StderrPath: stderrPath, StderrSHA256: bytesSHA256(result.stderr),
 		},
+		PassedTests: passedTests,
 	}, nil
 }
 
-func (runner gateRunner) executeRule(ctx context.Context, state *gateRun,
-	index int, rule stepRule,
-) error {
-	runID := ""
-	switch rule.id {
-	case "docker", "evidence-hermetic":
-		runID = state.scriptedRun
-	case "live", "evidence-live":
-		runID = state.codexRun
+func verifyStepOracles(step GateStep, stdout []byte) ([]string, error) {
+	if step.Kind == "shell" {
+		lines := strings.Split(strings.ReplaceAll(string(stdout), "\r\n", "\n"), "\n")
+		for _, oracle := range step.Oracles {
+			want := strings.TrimPrefix(oracle, "stdout:")
+			count := 0
+			for _, line := range lines {
+				if line == want {
+					count++
+				}
+			}
+			if count != 1 {
+				return nil, fmt.Errorf("stdout oracle %q occurred %d times, want exactly one", want, count)
+			}
+		}
+		return []string{}, nil
 	}
-	argv := append([]string(nil), rule.argv...)
-	if runID != "" {
-		argv = gateStepArgv(rule, runID)
+	required := make(map[string]struct{}, len(step.Oracles))
+	for _, oracle := range step.Oracles {
+		required[strings.TrimPrefix(oracle, "test:")] = struct{}{}
 	}
-	environment := os.Environ()
-	if rule.id == "live" {
-		environment = replaceEnvironment(environment, map[string]string{
-			"HERMETIC_RUN": state.scriptedRun,
-			"IMAGE":        state.imageReference,
-		})
-	}
-	step, stderrPath, err := runner.runStep(ctx, *state, index, rule, argv, environment)
-	state.report.Steps = append(state.report.Steps, step)
+	passed, err := parseGoTestJSON(stdout, required)
 	if err != nil {
-		return fmt.Errorf("Core gate step %s failed; stderr: %s: %w",
-			rule.id, stderrPath, err)
+		return nil, err
 	}
-	if step.ExitCode != 0 {
-		return fmt.Errorf("Core gate step %s exited %d; stderr: %s",
-			rule.id, step.ExitCode, stderrPath)
+	return passed, nil
+}
+
+type goTestEvent struct {
+	Action  string `json:"Action"`
+	Package string `json:"Package"`
+	Test    string `json:"Test"`
+}
+
+func parseGoTestJSON(output []byte, required map[string]struct{}) ([]string, error) {
+	counts := make(map[string]int, len(required))
+	scanner := bufio.NewScanner(bytes.NewReader(output))
+	scanner.Buffer(make([]byte, 4096), 1024*1024)
+	for scanner.Scan() {
+		var event goTestEvent
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			return nil, fmt.Errorf("go-test emitted non-JSON output: %w", err)
+		}
+		if event.Test == "" || (event.Action != "pass" && event.Action != "fail" && event.Action != "skip") {
+			continue
+		}
+		for reference := range required {
+			packagePath, symbol, _ := strings.Cut(reference, "::")
+			if event.Test != symbol || !packageMatches(event.Package, packagePath) {
+				continue
+			}
+			if event.Action != "pass" {
+				return nil, fmt.Errorf("required test %s reported %s", reference, event.Action)
+			}
+			counts[reference]++
+		}
 	}
-	switch rule.id {
-	case "docker":
-		ref, identity, err := completedGateBundle(
-			state.root, "scripted", state.scriptedRun, state.report.Source, "",
-		)
-		if err != nil {
-			return err
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("scan go-test JSON: %w", err)
+	}
+	passed := make([]string, 0, len(required))
+	for reference := range required {
+		if counts[reference] != 1 {
+			return nil, fmt.Errorf("required test %s passed %d times, want exactly one", reference, counts[reference])
 		}
-		state.report.Bundles = append(state.report.Bundles, ref)
-		state.imageReference, state.imageDigest = identity.reference, identity.digest
-	case "live":
-		ref, identity, err := completedGateBundle(
-			state.root, "codex", state.codexRun, state.report.Source,
-			state.scriptedRun,
-		)
-		if err != nil {
-			return err
+		passed = append(passed, reference)
+	}
+	slices.Sort(passed)
+	return passed, nil
+}
+
+func packageMatches(importPath, relative string) bool {
+	suffix := strings.TrimPrefix(relative, ".")
+	return strings.HasSuffix(importPath, suffix)
+}
+
+func executeCommand(ctx context.Context, root string, argv []string) commandResult {
+	command := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	command.Dir = root
+	var stdout, stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	err := command.Run()
+	exitCode := 0
+	if err != nil {
+		exitCode = -1
+		if exit, ok := err.(*exec.ExitError); ok {
+			exitCode = exit.ExitCode()
 		}
-		if identity.digest != state.imageDigest {
-			return errors.New("Live Core gate used a different candidate image")
-		}
-		state.report.Bundles = append(state.report.Bundles, ref)
+	}
+	return commandResult{exitCode: exitCode, stdout: stdout.Bytes(), stderr: stderr.Bytes()}
+}
+
+func canonicalRepositoryRoot(root string) (string, error) {
+	absolute, err := filepath.Abs(root)
+	if err != nil {
+		return "", fmt.Errorf("resolve root: %w", err)
+	}
+	resolved, err := gitValue(absolute, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return "", err
+	}
+	resolved, err = filepath.Abs(resolved)
+	if err != nil {
+		return "", fmt.Errorf("resolve Git root: %w", err)
+	}
+	if filepath.Clean(absolute) != filepath.Clean(resolved) {
+		return "", fmt.Errorf("--root %q is not the repository root %q", absolute, resolved)
+	}
+	return resolved, nil
+}
+
+func worktreeClean(root string) (bool, error) {
+	value, err := gitValue(root, "status", "--porcelain=v1", "--untracked-files=all")
+	if err != nil {
+		return false, err
+	}
+	return value == "", nil
+}
+
+func gitValue(root string, arguments ...string) (string, error) {
+	command := exec.Command("git", append([]string{"-C", root}, arguments...)...)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git %s: %w: %s", strings.Join(arguments, " "), err,
+			strings.TrimSpace(string(output)))
+	}
+	return strings.TrimSpace(string(output)), nil
+}
+
+func ensureIgnored(root, relative string) error {
+	command := exec.Command("git", "-C", root, "check-ignore", "-q", "--", relative)
+	if err := command.Run(); err != nil {
+		return fmt.Errorf("report path %s is not ignored", relative)
 	}
 	return nil
 }
 
-func (runner gateRunner) finishRun(state *gateRun, contract Contract,
-	start gateAuthority,
-) error {
-	finish, err := readGateAuthority(state.root)
-	if err != nil {
-		return err
-	}
-	if finish != start {
-		return errors.New("Core gate source authority changed during the run")
-	}
-	state.report.Source.CleanAtFinish = true
-	state.report.FinishedAt = runner.now().UTC().Format(time.RFC3339Nano)
-	if err := ValidateGateReport(contract, state.report); err != nil {
-		return fmt.Errorf("validate generated Core gate report: %w", err)
-	}
-	data, err := json.MarshalIndent(state.report, "", "  ")
-	if err != nil {
-		return fmt.Errorf("encode Core gate report: %w", err)
-	}
-	data = append(data, '\n')
-	reportPath := filepath.Join(state.directory, "gate-report.json")
-	if err := writeExclusivePrivate(reportPath, data); err != nil {
-		return err
-	}
-	final, err := readGateAuthority(state.root)
-	if err != nil || final != start {
-		_ = os.Remove(reportPath)
-		return errors.New("Core gate source authority changed while publishing the report")
+func writeOutput(root, relative string, data []byte) error {
+	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(relative)), data, 0o600); err != nil {
+		return fmt.Errorf("write step output %s: %w", relative, err)
 	}
 	return nil
+}
+
+func fileSHA256(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read digest input %s: %w", path, err)
+	}
+	return bytesSHA256(data), nil
+}
+
+func bytesSHA256(data []byte) string {
+	digest := sha256.Sum256(data)
+	return "sha256:" + hex.EncodeToString(digest[:])
 }

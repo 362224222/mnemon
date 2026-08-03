@@ -1,11 +1,22 @@
 # R5 Core Contract
 
-Status: release contract for the experimental Harness R5 Core.
+Status: **RETIRED**.
 
-This document is the tracked authority for the first complete R5 collaboration
-slice. It replaces the ignored R5 planning documents as merge and release
-authority for this slice. Those documents remain design history and may explain
-why a mechanism exists, but they cannot add a release requirement.
+Superseded by [`r7-core-contract.md`](r7-core-contract.md). R7 replaces the R5
+Channel-specific Teamwork model and its 42-clause evidence surface with one
+generic local Event physics, ten closed invariants, and data-only collaboration
+descriptions. R5 no longer constrains the active Harness.
+
+Retirement takes effect in the first protected authority-branch commit that
+contains this header together with the ACTIVE R7 contract. On any other branch,
+the marker is only a switch candidate. The R5 evidence ledger stops growing at
+retirement. This contract and its removed implementation are reproducible only
+by checking out a historical branch or tag from before that switch; this file
+does not promise that the current tree can build or run R5.
+
+The remainder is retained as a historical record of the first complete R5
+collaboration slice. It has no present merge, release, compatibility, or
+implementation authority.
 
 ## 1. Product outcome
 

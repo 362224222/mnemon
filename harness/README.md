@@ -1,20 +1,27 @@
 # Mnemon Harness
 
-Mnemon Harness is the experimental R5 implementation of mnemond-managed
-Teamwork. It is intentionally isolated from the released root `mnemon` command
-and its Memory behavior.
+Mnemon Harness is the experimental R7 implementation of mnemond: a local-first
+authority for durable Agent events. It is intentionally isolated from the
+released root `mnemon` command and its Memory behavior.
 
-R5 is a clean-cut implementation delivered in independently verified phases.
-Its durable control, managed Agent, peer-to-peer, setup, and acceptance layers
-remain isolated from the released root product throughout that work.
+The Agent-facing model is deliberately small:
 
-The product binaries are:
+```text
+View -> Intent -> Receipt -> View'
+```
 
-- `mnemon-harness`: the project-local user and managed-Agent client.
-- `mnemond`: the sole local Node, Event, Work, Handling, and Artifact
-  authority.
+- `mnemon-harness` sets up the Pi integration and acts as the private Agent
+  terminal.
+- `mnemond` owns local admission, Events, Handlings, References, Artifacts, and
+  Receipts.
+- an optional peer link moves authenticated candidates between independently
+  authoritative mnemond nodes; every receiver re-admits them locally.
 
-Build and validate the current Harness layer with:
+Collaboration patterns are data-only descriptions and fixtures. The Core does
+not contain a Channel model, Teamwork registry, workflow engine, or semantic
+dispatch by Event kind.
+
+Build and verify the Harness with:
 
 ```sh
 make harness-build
@@ -23,11 +30,10 @@ make harness-quality
 make harness-verify
 ```
 
+See [the Harness documentation](../docs/harness/README.md), the
+[quickstart](../docs/harness/QUICKSTART.md), and the active
+[R7 Core contract](../docs/harness/r7-core-contract.md).
+
 Harness changes follow the repository
 [Go Engineering Standard](../docs/development/go-engineering-standard.md).
-`make harness-validate` checks canonical managed assets and Teamwork action
-declarations. `make harness-quality` applies the tracked R5 quality ratchet,
-while `make harness-verify` composes the full local Harness build, declaration,
-quality, vet, and unit-test gate.
-
 The root `mnemon` release path must not import or depend on this directory.

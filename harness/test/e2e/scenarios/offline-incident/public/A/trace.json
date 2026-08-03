@@ -1,8 +1,0 @@
-{
-  "trace_id": "trace-public-incident-17",
-  "spans": [
-    { "name": "charge", "request": "req-17", "attempt": 1, "outcome": "committed" },
-    { "name": "response", "request": "req-17", "attempt": 1, "outcome": "timeout" },
-    { "name": "charge", "request": "req-17", "attempt": 2, "outcome": "committed" }
-  ]
-}

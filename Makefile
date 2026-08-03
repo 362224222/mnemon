@@ -7,7 +7,6 @@ VERSION     ?= dev
 LDFLAGS     := -s -w -X github.com/mnemon-dev/mnemon/cmd.version=$(VERSION)
 HARNESS_LDFLAGS := -s -w -X main.version=$(VERSION)
 GO_VERSION   := $(shell awk '$$1 == "go" { print $$2; exit }' go.mod)
-PINNED_GO    := env GOTOOLCHAIN=go$(GO_VERSION) GOFLAGS=-mod=readonly go
 HARNESS_GO_VERSION := $(shell awk '$$1 == "go" { print $$2; exit }' harness/go.mod)
 HARNESS_GO   := env GOTOOLCHAIN=go$(HARNESS_GO_VERSION) GOFLAGS=-mod=readonly go -C harness
 GOBIN       := $(shell go env GOBIN)
@@ -16,9 +15,7 @@ ifeq ($(GOBIN),)
 endif
 
 .PHONY: deps build harness-build install uninstall test unit vet harness-validate harness-quality harness-verify
-.PHONY: core-contract core-release-closure core-verify core-release-verify
-.PHONY: test-unit test-unit-race test-process test-e2e-smoke test-docker test-docker-case
-.PHONY: test-live-codex test-live-codex-case test-evidence verify release-verify
+.PHONY: harness-contract harness-static harness-docker harness-docker-case harness-live-pi
 .PHONY: docker-build docker-run compose-up compose-down compose-dev release-snapshot clean help
 
 .DEFAULT_GOAL := help
@@ -32,7 +29,7 @@ deps: ## Download Go dependencies
 build: ## Build the mnemon binary
 	go build -ldflags "$(LDFLAGS)" -o $(BINARY) .
 
-harness-build: ## Build the experimental R5 harness binaries
+harness-build: ## Build the experimental R7 Harness binaries
 	$(HARNESS_GO) build -ldflags "$(HARNESS_LDFLAGS)" -o ../mnemon-harness ./cmd/mnemon-harness
 	$(HARNESS_GO) build -ldflags "$(HARNESS_LDFLAGS)" -o ../mnemond ./cmd/mnemond
 
@@ -59,114 +56,35 @@ unit: ## Run Go unit tests
 vet: ## Run go vet static analysis
 	go vet ./...
 
-harness-validate: ## Validate R5 managed assets and action declarations
-	$(HARNESS_GO) test ./internal/assets ./internal/teamwork
+harness-validate: ## Validate the R7 projection, contract, and evidence bindings
+	$(HARNESS_GO) test ./internal/attach ./tools/corecontract ./test/contracts -count=1
 
 harness-quality: ## Run pinned, non-mutating Harness quality gates
 	@base_ref="$${HARNESS_QUALITY_BASE_REF:-HEAD}"; \
 		$(HARNESS_GO) run ./tools/quality check --root .. --base-ref "$$base_ref"
 	$(HARNESS_GO) vet ./...
-	$(HARNESS_GO) test ./tools/quality ./internal/assets \
-		./internal/model ./internal/event ./internal/teamwork \
-		./test/contracts
+	$(HARNESS_GO) test ./tools/quality ./tools/corecontract ./test/contracts -count=1
 
-harness-verify: ## Build and verify the experimental R5 Harness
-	@set -eu; \
-	tmp="$$(mktemp -d)"; \
-	trap 'rm -rf "$$tmp"' EXIT; \
-	$(PINNED_GO) build -o "$$tmp/mnemon" .; \
-	$(HARNESS_GO) build -o "$$tmp/mnemon-harness" ./cmd/mnemon-harness; \
-	$(HARNESS_GO) build -o "$$tmp/mnemond" ./cmd/mnemond
-	$(MAKE) harness-validate
-	$(MAKE) harness-quality
-	$(HARNESS_GO) test -p 1 ./...
-
-core-contract: ## Validate the tracked R5 Core contract and evidence registry
+harness-contract: ## Validate the active R7 contract and evidence registry
 	$(HARNESS_GO) test ./tools/corecontract ./test/contracts -count=1
 
-core-release-closure: ## Require every tracked R5 Core MUST to have grounded evidence
-	R5_CORE_RELEASE_CLOSURE=1 $(HARNESS_GO) test ./test/contracts \
-		-run '^TestCoreRequirementsReleaseClosure$$' -count=1
+harness-static: ## Run R7 pattern, layout, and deletion oracles
+	harness/test/r7/runner/run_static.sh
 
-test-unit: harness-validate ## Run the R5 Harness unit tests
-	$(HARNESS_GO) test ./cmd/... ./internal/... ./tools/... ./test/contracts
+harness-docker: ## Run all R7 cases in isolated Docker peers
+	harness/test/r7/runner/run_cases.sh
 
-test-unit-race: harness-validate ## Run the R5 Harness unit tests under the race detector
-	$(HARNESS_GO) test -race ./cmd/... ./internal/... ./tools/... ./test/contracts
-
-test-process: harness-build ## Run the R5 process integration tests
-	$(HARNESS_GO) test ./test/process
-
-test-e2e-smoke: ## Validate R5 E2E scripts, schemas, manifests, and boundaries
-	harness/test/e2e/runner/smoke_test.sh
-
-test-docker: test-e2e-smoke ## Run the R5 hermetic Docker suite
-	@test -x harness/test/e2e/runner/run_docker.sh || { \
-		echo "error: R5 Docker runner is unavailable: harness/test/e2e/runner/run_docker.sh" >&2; \
-		exit 1; \
-	}
-	harness/test/e2e/runner/run_docker.sh
-
-test-docker-case: test-e2e-smoke ## Run one R5 hermetic Docker case with CASE=<name>
+harness-docker-case: ## Run one R7 Docker case with CASE=<name>
 	@test -n "$(CASE)" || { echo "error: CASE is required" >&2; exit 2; }
-	@test -x harness/test/e2e/runner/run_docker.sh || { \
-		echo "error: R5 Docker runner is unavailable: harness/test/e2e/runner/run_docker.sh" >&2; \
-		exit 1; \
-	}
-	harness/test/e2e/runner/run_docker.sh --case "$(CASE)"
+	harness/test/r7/runner/run_cases.sh "$(CASE)"
 
-test-live-codex: test-e2e-smoke ## Run the R5 Live Codex acceptance suite
-	@test "$(LIVE_CODEX)" = "1" || { \
-		echo "error: set LIVE_CODEX=1 to run Live Codex acceptance" >&2; \
-		exit 2; \
-	}
-	@test -x harness/test/e2e/runner/run_live_codex.sh || { \
-		echo "error: R5 Live Codex runner is unavailable: harness/test/e2e/runner/run_live_codex.sh" >&2; \
-		exit 1; \
-	}
-	harness/test/e2e/runner/run_live_codex.sh
+harness-live-pi: ## Run the opt-in Pi/DeepSeek live smoke
+	@test "$${LIVE_PI:-}" = 1 || { echo "error: set LIVE_PI=1" >&2; exit 2; }
+	@test -n "$${DEEPSEEK_API_KEY:-}" || { echo "error: DEEPSEEK_API_KEY is required" >&2; exit 2; }
+	harness/test/r7/runner/run_live_pi.sh
 
-test-live-codex-case: test-e2e-smoke ## Run one R5 Live Codex case with CASE=<name>
-	@test -n "$(CASE)" || { echo "error: CASE is required" >&2; exit 2; }
-	@test "$(LIVE_CODEX)" = "1" || { \
-		echo "error: set LIVE_CODEX=1 to run Live Codex acceptance" >&2; \
-		exit 2; \
-	}
-	@test -x harness/test/e2e/runner/run_live_codex.sh || { \
-		echo "error: R5 Live Codex runner is unavailable: harness/test/e2e/runner/run_live_codex.sh" >&2; \
-		exit 1; \
-	}
-	harness/test/e2e/runner/run_live_codex.sh --case "$(CASE)"
-
-test-evidence: ## Validate one complete R5 evidence bundle with RUN=<run-id>
-	$(HARNESS_GO) test ./test/contracts \
-		-run '^TestCoreRequirementsRegistry$$' -count=1
-	@test -n "$(RUN)" || { \
-		echo "error: RUN is required and must name a complete five-case bundle" >&2; \
-		exit 2; \
-	}
-	harness/test/e2e/runner/validate_evidence.sh --run "$(RUN)"
-
-core-verify: core-contract test harness-quality test-unit test-unit-race test-process test-docker ## Run the six R5 Core merge gates
-	@run="$$(cat .testdata/r5/latest-scripted-run 2>/dev/null)"; \
-		test -n "$$run" || { echo "error: Hermetic suite did not publish a complete RUN" >&2; exit 1; }; \
-		$(MAKE) test-evidence RUN="$$run"
-
-verify: core-verify ## Compatibility alias for core-verify
-
-core-release-verify: core-verify ## Run all seven R5 Core gates and require zero pending MUST
-	@test "$(LIVE_CODEX)" = "1" || { echo "error: set LIVE_CODEX=1 for release verification" >&2; exit 2; }
-	@test -n "$(CODEX_VERSION)" -a -n "$(CODEX_PACKAGE_INTEGRITY)" || { \
-		echo "error: CODEX_VERSION and CODEX_PACKAGE_INTEGRITY are required" >&2; \
-		exit 2; \
-	}
-	$(MAKE) test-live-codex LIVE_CODEX="$(LIVE_CODEX)"
-	@run="$$(cat .testdata/r5/latest-codex-run 2>/dev/null)"; \
-		test -n "$$run" || { echo "error: Live suite did not publish a complete RUN" >&2; exit 1; }; \
-		$(MAKE) test-evidence RUN="$$run"
-	$(MAKE) core-release-closure
-
-release-verify: core-release-verify ## Compatibility alias for core-release-verify
+harness-verify: harness-quality ## Run the complete exact-tree R7 merge gate and write its report
+	$(HARNESS_GO) run ./tools/corecontract/cmd/core-gate --root ..
 
 # ── Containers / Deployment ──────────────────────────────────────────
 

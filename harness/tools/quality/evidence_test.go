@@ -1,8 +1,11 @@
 package main
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/mnemon-dev/mnemon/harness/tools/corecontract"
 )
 
 func TestValidateArchitectureEvidenceRequiresTrackedFindingAndLiveSymbol(t *testing.T) {
@@ -45,39 +48,22 @@ func TestValidateArchitectureEvidenceRejectsStaleAutoFindingButAllowsManualDebt(
 	}
 }
 
-func TestValidateRequirementEvidenceMatchesIDsAndTestSymbols(t *testing.T) {
-	root := initTestRepository(t)
-	writeTestFile(t, root, "harness/a_test.go", "package harness\nfunc TestProof() { _ = 1 }\n")
-	contract := testCoreContract()
-	requirements := requirementsManifest{SchemaVersion: 3, Requirements: []requirementRecord{{
-		ID: "SC-01", TestSymbols: []string{"harness/a_test.go::TestProof"},
-		ScenarioKeys: []string{}, LiveScenarioKeys: []string{},
-	}}}
+func TestValidateRequirementEvidenceMatchesInvariantIDsAndCurrentTests(t *testing.T) {
+	root := filepath.Clean("../../..")
+	contract, err := corecontract.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requirements, err := corecontract.LoadRegistry(root)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := validateRequirementEvidence(root, contract, requirements); err != nil {
 		t.Fatal(err)
 	}
-	requirements.Requirements[0].ID = "SC-99"
+	requirements.Invariants[0].ID = "P-99"
 	if err := validateRequirementEvidence(root, contract, requirements); err == nil ||
-		!strings.Contains(err.Error(), "unknown requirement") {
-		t.Fatalf("unknown requirement error = %v", err)
-	}
-}
-
-func TestValidateRequirementEvidenceRequiresCurrentTopLevelTest(t *testing.T) {
-	root := initTestRepository(t)
-	writeTestFile(t, root, "harness/a_test.go",
-		"package harness\nvar TestProof = func() {}\n")
-	registry := requirementsManifest{SchemaVersion: 3, Requirements: []requirementRecord{{
-		ID: "SC-01", TestSymbols: []string{"harness/a_test.go::TestProof"},
-		ScenarioKeys: []string{}, LiveScenarioKeys: []string{},
-	}}}
-	if err := validateRequirementEvidence(root, testCoreContract(), registry); err == nil ||
-		!strings.Contains(err.Error(), "does not declare") {
-		t.Fatalf("non-function evidence error = %v", err)
-	}
-
-	writeTestFile(t, root, "harness/a_test.go", "package harness\nfunc TestProof() { _ = 1 }\n")
-	if err := validateRequirementEvidence(root, testCoreContract(), registry); err != nil {
-		t.Fatalf("current top-level test binding: %v", err)
+		!strings.Contains(err.Error(), "invariant IDs") {
+		t.Fatalf("unknown invariant error = %v", err)
 	}
 }

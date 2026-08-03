@@ -8,7 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/agencycli"
+	"github.com/mnemon-dev/mnemon/harness/internal/cli"
 	"github.com/mnemon-dev/mnemon/harness/internal/daemon"
 )
 
@@ -54,7 +54,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		terminal: func(ctx context.Context, args []string, stdin io.Reader,
 			stdout, stderr io.Writer,
 		) int {
-			return agencycli.New(stdin, stdout, stderr, daemon.Ensure).Run(ctx, args)
+			return cli.New(stdin, stdout, stderr, daemon.Ensure).Run(ctx, args)
 		},
 		peer: func(ctx context.Context, args []string, stdin io.Reader,
 			stdout, stderr io.Writer,

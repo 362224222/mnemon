@@ -1,8 +1,0 @@
-{
-  "schema_version": 1,
-  "node": "F",
-  "offer_to": "auto",
-  "result_content": "Replay the recovery trace, confirm the fix is deterministic, and report rollback and monitoring conditions.",
-  "rework_once": false,
-  "decline_once": false
-}

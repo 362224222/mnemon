@@ -95,7 +95,6 @@ type architectureEntry struct {
 }
 
 type requirementsManifest = corecontract.Registry
-type requirementRecord = corecontract.EvidenceRecord
 
 func functionIdentity(rule, path, symbol string) string {
 	return fmt.Sprintf("%s:%s::%s", rule, path, symbol)

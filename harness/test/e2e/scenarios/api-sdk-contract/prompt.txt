@@ -1,1 +1,0 @@
-Implement signed cursor pagination for the Go API, update its public schema and release notes, run the tests, and use the collaboration network for an independent TypeScript consumer-contract review, security and documentation review, and final SDK compatibility review.

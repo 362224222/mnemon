@@ -1,109 +1,110 @@
-# Mnemon Harness Usage
+# Mnemon Harness R7 Usage
 
-These commands assume you built:
+Build from the repository root:
 
 ```sh
-go build -o mnemon .
 go -C harness build -o ../mnemon-harness ./cmd/mnemon-harness
+go -C harness build -o ../mnemond ./cmd/mnemond
 ```
 
-## 1. Install Agent Integration
+## Setup
 
-Install Agent Integration into the current project:
+Pi is the only T0 Runtime adapter:
 
 ```sh
-./mnemon-harness setup --host codex --project-root .
+mnemon-harness setup --runtime pi --project-root /absolute/project
 ```
 
-Use `--dry-run` to preview file changes:
+`--project-root` may be omitted when the current directory is the project.
+Setup is convergent: it provisions one local node, ensures mnemond, and
+installs the exact Pi Hook and guide revision. Runtime model/provider settings
+and secrets remain outside Mnemon Harness.
+
+## Peer setup
+
+Prepare a durable transport identity and listening configuration:
 
 ```sh
-./mnemon-harness setup --host codex --project-root . --dry-run
+mnemon-harness peer prepare \
+  --listen 0.0.0.0:7447 \
+  --advertise agent-a.example:7447 \
+  --project-root /absolute/project > agent-a.card.json
 ```
 
-## 2. Run Local Mnemon
-
-Start the local service used by the host integration:
+The card is public setup material. Enroll a card received through an
+owner-chosen channel under a local alias:
 
 ```sh
-./mnemon-harness local run
+mnemon-harness peer enroll \
+  --alias agent-b \
+  --project-root /absolute/project < agent-b.card.json
 ```
 
-Inspect local state:
+Peer discovery, transitive trust, global membership, and automatic convergence
+are not part of R7. Every pair is enrolled explicitly. The advertised address
+must be reachable from the peer; `0.0.0.0` is suitable for listening, not for
+advertising.
+
+## Agent terminal
+
+These commands are used by the installed Pi Hook and guide. They are hidden
+from ordinary help because the normal user workflow does not invoke them:
 
 ```sh
-./mnemon-harness local status
-./mnemon-harness status
+mnemon-harness hook attach --json
+mnemon-harness agent current --json
+mnemon-harness artifact capture --json < artifact.txt
+mnemon-harness artifact read <view-offered-handle>
+mnemon-harness agent submit --json < intent.json
 ```
 
-## 3. Remote Workspace Sync
+The sequence is strict:
 
-Connect an HTTP `mnemon-hub` Remote Workspace:
+1. the Hook establishes one eligible attachment;
+2. `agent current` returns a bounded View and privately binds its authority;
+3. the Agent may capture bounded Artifact candidates and submit one offered
+   structural Intent;
+4. the returned Receipt says `accepted` or `rejected`; an exact retry may be
+   marked `replayed` without a second effect.
+
+Opaque handles, operation keys, attachment material, Principal identity,
+fences, digests, and accepted state are machine-owned. The Agent must not guess
+or carry them between Views. An Event `kind` is an open bounded semantic label;
+it does not select code or register a workflow.
+
+## Daemon
+
+Setup normally owns daemon readiness. Supervisors may serve an already
+provisioned node directly:
 
 ```sh
-./mnemon-harness sync connect my-workspace --remote-url https://mnemon-hub.example/sync --token-file ./hub.token
+mnemond serve --state-dir /absolute/project/.mnemon/harness/node
 ```
 
-Experimental GitHub publication backend:
+`mnemond` never provisions a blank node. One daemon owns the local SQLite
+writer, CAS, control socket, and optional peer workers.
+
+## Completion and trust
+
+Only an explicit accepted `handling.resolve.completed` Intent with at least one
+locally available, hash-verified Artifact projects completion. `declined` and
+`unresolved` close responsibility without claiming success. Final text,
+process exit, Runtime idle, provider success, and network acknowledgements do
+not complete work.
+
+R7 protects the authority boundary; it is not an OS sandbox. T0 owner-private
+files exclude other OS users but do not distinguish the installed Hook from
+arbitrary same-UID code with local shell and file access.
+
+## Development gates
 
 ```sh
-./mnemon-harness sync connect self \
-  --backend github \
-  --direction publish \
-  --github-repo mnemon-dev/mnemon-teamwork-example \
-  --github-branch mnemon/agent-a \
-  --token-file ~/.config/mnemon/github.token
-
-./mnemon-harness sync connect agent-b \
-  --backend github \
-  --direction subscribe \
-  --github-repo mnemon-dev/mnemon-teamwork-example \
-  --github-branch mnemon/agent-b \
-  --token-file ~/.config/mnemon/github.token
-```
-
-The GitHub backend is repo-mediated publication, not P2P discovery. Configure the
-branches you publish and subscribe to explicitly.
-
-Run one push or pull:
-
-```sh
-./mnemon-harness sync push --once
-./mnemon-harness sync pull --once
-```
-
-Run background sync:
-
-```sh
-./mnemon-harness sync run --background
-```
-
-## 4. Validate Declarations
-
-Repository maintainers can validate the canonical managed Host assets and
-Teamwork action declarations:
-
-```sh
+make harness-build
 make harness-validate
+make harness-quality
+make harness-verify
 ```
 
-This is a development check, not part of the normal user workflow.
-
-## Trust model — a governance contract, not a sandbox
-
-The local boundary is enforced by protocol and engineering gates (identity stamping, scope
-clamping, fail-closed config, durable audit), **not** by OS-level isolation: a malicious process
-running as the same user can read the local files. What each tier actually promises:
-
-- **T0 (always):** the governance contract — the wire admits only observations, the kernel is the
-  sole writer, every decision is attributable.
-- **T1 (current):** local hardening — the private state tree (`.mnemon/harness`, its `local`/
-  `channel` dirs and both credentials dirs) is owner-only (0700, corrected on every setup rerun);
-  tokens are 0600; `local run` refuses non-loopback listen addresses unless you pass
-  `--allow-nonloopback` explicitly; `mnemon-harness token rotate --principal <p>` force-rotates a
-  bearer token (revocation = rotation — tokens load at boot, so restart `local run` to apply).
-- **T2 (remote phase):** authn/authz, transport encryption and audit are admission conditions for
-  the remote coordination plane, not afterthoughts.
-- **T3 (ecosystem phase):** signature chains and sandboxed rules.
-
-OS/process-level isolation is explicitly **outside** the T0/T1 promise.
+`make harness-verify` is the complete local R7 gate. See
+[r7-core-contract.md](r7-core-contract.md) for normative behavior and
+[r7-module-layout.md](r7-module-layout.md) for the enforced package boundary.

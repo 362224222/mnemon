@@ -1,1 +1,0 @@
-Diagnose the incident using the service source, compressed logs, and trace bundle; implement and verify the remediation; and use the collaboration network for independent consumer-runbook, security-incident, and recovery-verification reviews. Record a final root-cause and regression report in the workspace.

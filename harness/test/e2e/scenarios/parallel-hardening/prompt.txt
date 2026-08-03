@@ -1,1 +1,0 @@
-Harden this streaming upload service for malicious paths, bounded-memory backpressure, and production deployment. Run its tests and use the collaboration network for independent consumer, security, performance, and deployment compatibility reviews, then apply valid findings and record final verification.

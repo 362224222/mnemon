@@ -1,46 +1,5 @@
 {
   "schema_version": 1,
   "source_commit": "0be35cbb4251645d74b5daf5d60f7a4183661087",
-  "entries": [
-    {
-      "rule": "closed_set_authority",
-      "identity": "closed_set_authority:channel-frame-types",
-      "path": "harness/internal/peer/channel_frame.go",
-      "symbol": "ChannelFrameType.Valid",
-      "risk": "medium",
-      "evidence": "harness/internal/peer/channel_frame.go::ChannelFrameType.Valid",
-      "owner": "harness/internal/peer",
-      "removal_checkpoint": "8c"
-    },
-    {
-      "rule": "closed_set_authority",
-      "identity": "closed_set_authority:local-api-routes",
-      "path": "harness/internal/localapi/server.go",
-      "symbol": "newServer",
-      "risk": "medium",
-      "evidence": "harness/internal/localapi/server.go::newServer",
-      "owner": "harness/internal/localapi",
-      "removal_checkpoint": "9"
-    },
-    {
-      "rule": "closed_set_authority",
-      "identity": "closed_set_authority:operation-kinds",
-      "path": "harness/internal/model/agent.go",
-      "symbol": "OperationKind.Valid",
-      "risk": "medium",
-      "evidence": "harness/internal/model/agent.go::OperationKind.Valid",
-      "owner": "harness/internal/model + harness/internal/store",
-      "removal_checkpoint": "8a"
-    },
-    {
-      "rule": "unexpected_harness_package",
-      "identity": "unexpected_harness_package:harness/internal/cli::cli",
-      "path": "harness/internal/cli",
-      "component": "cli",
-      "risk": "medium",
-      "evidence": "harness/internal/cli/agent.go",
-      "owner": "harness/internal/cli",
-      "removal_checkpoint": "9"
-    }
-  ]
+  "entries": []
 }

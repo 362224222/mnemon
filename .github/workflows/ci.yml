@@ -36,7 +36,7 @@ jobs:
       - name: Run E2E tests
         run: make test
 
-      - name: Verify R5 Harness
+      - name: Verify R7 Harness
         env:
           HARNESS_QUALITY_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
         run: make harness-verify

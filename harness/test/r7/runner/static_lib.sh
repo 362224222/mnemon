@@ -30,10 +30,6 @@ r7_static_candidate_copy() {
 
 r7_static_cli_package() {
   local root=$1
-  if test -d "$root/internal/agencycli"; then
-    printf '%s\n' './internal/agencycli'
-    return
-  fi
   test -d "$root/internal/cli" || r7_static_fail 'R7 Agent terminal package is missing'
   printf '%s\n' './internal/cli'
 }
@@ -54,15 +50,13 @@ r7_static_core_tests() {
       ./cmd/mnemon-harness \
       ./cmd/mnemond \
       ./test/r7/process
+    go test -count=1 ./test/contracts -run '^TestR7InternalPackageSetAllowsSelectorDeletion$'
     go build ./cmd/mnemon-harness ./cmd/mnemond
   )
 }
 
 r7_static_production_sources() {
   local root=$1 cli=internal/cli
-  if test -d "$root/internal/agencycli"; then
-    cli=internal/agencycli
-  fi
   (
     cd "$root"
     find \

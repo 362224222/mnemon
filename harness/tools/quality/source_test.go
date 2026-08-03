@@ -142,10 +142,10 @@ func TestRepositoryGoScopePrunesIgnoredDirectoryBeforeTraversal(t *testing.T) {
 
 func TestGofmtDriftAndDependencyDirection(t *testing.T) {
 	root := t.TempDir()
-	writeTestFile(t, root, "harness/internal/teamwork/good.go", "package teamwork\n\nimport \"github.com/mnemon-dev/mnemon/harness/internal/model\"\n")
-	writeTestFile(t, root, "harness/internal/teamwork/good_test.go", "package teamwork\n")
-	writeTestFile(t, root, "harness/internal/teamwork/bad.go", "package teamwork\nimport \"github.com/mnemon-dev/mnemon/internal/model\"\n")
-	writeTestFile(t, root, "cmd/bad.go", "package cmd\nimport \"github.com/mnemon-dev/mnemon/harness/internal/model\"\n")
+	writeTestFile(t, root, "harness/internal/authority/good.go", "package authority\n\nimport \"github.com/mnemon-dev/mnemon/harness/internal/agency\"\n")
+	writeTestFile(t, root, "harness/internal/authority/good_test.go", "package authority\n")
+	writeTestFile(t, root, "harness/internal/authority/bad.go", "package authority\nimport \"github.com/mnemon-dev/mnemon/internal/model\"\n")
+	writeTestFile(t, root, "cmd/bad.go", "package cmd\nimport \"github.com/mnemon-dev/mnemon/harness/internal/agency\"\n")
 	files, err := loadHarnessSources(root)
 	if err != nil {
 		t.Fatal(err)
@@ -154,7 +154,7 @@ func TestGofmtDriftAndDependencyDirection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(drift) != 1 || drift[0] != "harness/internal/teamwork/bad.go" {
+	if len(drift) != 1 || drift[0] != "harness/internal/authority/bad.go" {
 		t.Fatalf("gofmt drift = %#v", drift)
 	}
 	findings, err := dependencyFindings(root)
@@ -168,14 +168,11 @@ func TestGofmtDriftAndDependencyDirection(t *testing.T) {
 
 func TestDependencyFindingsEnforceFrozenPackageMapAndLibp2pFloor(t *testing.T) {
 	root := t.TempDir()
-	writeTestFile(t, root, "harness/internal/store/bad.go", `package store
+	writeTestFile(t, root, "harness/internal/cli/bad.go", `package cli
 import (
-	_ "github.com/mnemon-dev/mnemon/harness/internal/event"
+	_ "github.com/mnemon-dev/mnemon/harness/internal/authority"
 	_ "github.com/libp2p/go-libp2p-core/peer"
 )
-`)
-	writeTestFile(t, root, "harness/internal/event/good.go", `package event
-import _ "github.com/mnemon-dev/mnemon/harness/internal/teamwork"
 `)
 	findings, err := dependencyFindings(root)
 	if err != nil {
@@ -191,11 +188,9 @@ import _ "github.com/mnemon-dev/mnemon/harness/internal/teamwork"
 
 func TestDependencyFindingsTrackUnexpectedProductionPackageButNotTestImports(t *testing.T) {
 	root := t.TempDir()
-	writeTestFile(t, root, "harness/internal/cli/command.go", `package cli
+	writeTestFile(t, root, "harness/internal/store/unknown.go", "package store\n")
+	writeTestFile(t, root, "harness/internal/cli/blackbox_test.go", `package cli_test
 import _ "github.com/mnemon-dev/mnemon/harness/internal/store"
-`)
-	writeTestFile(t, root, "harness/internal/store/blackbox_test.go", `package store_test
-import _ "github.com/mnemon-dev/mnemon/harness/internal/agent"
 `)
 	findings, err := dependencyFindings(root)
 	if err != nil {
@@ -208,14 +203,11 @@ import _ "github.com/mnemon-dev/mnemon/harness/internal/agent"
 
 func TestDependencyFindingsAllowBottomModelAndUsePackageIdentity(t *testing.T) {
 	root := t.TempDir()
-	writeTestFile(t, root, "harness/internal/node/a.go", `package node
-import _ "github.com/mnemon-dev/mnemon/harness/internal/model"
+	writeTestFile(t, root, "harness/internal/authority/a.go", `package authority
+import _ "github.com/mnemon-dev/mnemon/harness/internal/cas"
 `)
-	writeTestFile(t, root, "harness/internal/store/a.go", `package store
-import _ "github.com/mnemon-dev/mnemon/harness/internal/teamwork"
-`)
-	writeTestFile(t, root, "harness/internal/store/b.go", `package store
-import _ "github.com/mnemon-dev/mnemon/harness/internal/teamwork"
+	writeTestFile(t, root, "harness/internal/authority/b.go", `package authority
+import _ "github.com/mnemon-dev/mnemon/harness/internal/cas"
 `)
 	findings, err := dependencyFindings(root)
 	if err != nil {
@@ -224,7 +216,7 @@ import _ "github.com/mnemon-dev/mnemon/harness/internal/teamwork"
 	if len(findings) != 1 {
 		t.Fatalf("findings = %#v", findings)
 	}
-	if findings[0].Identity != "dependency_direction:harness/internal/store::teamwork" || findings[0].Evidence != "harness/internal/store/a.go" {
+	if findings[0].Identity != "dependency_direction:harness/internal/authority::cas" || findings[0].Evidence != "harness/internal/authority/a.go" {
 		t.Fatalf("package-edge finding = %#v", findings[0])
 	}
 }
@@ -232,9 +224,9 @@ import _ "github.com/mnemon-dev/mnemon/harness/internal/teamwork"
 func TestDependencyFindingsAllowNeutralAgencyCLILayer(t *testing.T) {
 	root := t.TempDir()
 	writeTestFile(t, root, "harness/cmd/mnemon-harness/main.go", `package main
-import _ "github.com/mnemon-dev/mnemon/harness/internal/agencycli"
+import _ "github.com/mnemon-dev/mnemon/harness/internal/cli"
 `)
-	writeTestFile(t, root, "harness/internal/agencycli/app.go", `package agencycli
+	writeTestFile(t, root, "harness/internal/cli/app.go", `package cli
 import _ "github.com/mnemon-dev/mnemon/harness/internal/agency"
 `)
 	findings, err := dependencyFindings(root)
