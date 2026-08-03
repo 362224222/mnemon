@@ -4,15 +4,24 @@ package agency
 // wire shape and its exact canonical bytes. Authority-dependent reconstruction
 // remains ParseAgentViewCanonicalJSON's job inside the daemon boundary.
 func ValidateAgentViewProjectionCanonicalJSON(data []byte) error {
+	_, err := AgentViewProjectionHasCurrent(data)
+	return err
+}
+
+// AgentViewProjectionHasCurrent validates one exact public View projection and
+// reports whether it carries a current responsibility. It reveals no private
+// authority and exists so the Agent Action Terminal can rotate only an
+// observed-empty Current at the next lifecycle boundary.
+func AgentViewProjectionHasCurrent(data []byte) (bool, error) {
 	var wire agentViewWire
 	if err := decodeCanonicalObject("Agent View projection JSON", data,
 		MaxAgentViewCanonicalBytes, &wire); err != nil {
-		return err
+		return false, err
 	}
 	if wire.Schema != AgentViewSchema || wire.Version != AgentViewVersion {
-		return invalid("Agent View projection envelope", "has an unsupported schema or version")
+		return false, invalid("Agent View projection envelope", "has an unsupported schema or version")
 	}
-	return nil
+	return wire.Current != nil, nil
 }
 
 // ParseAgentReceiptProjectionCanonicalJSON reconstructs the complete public

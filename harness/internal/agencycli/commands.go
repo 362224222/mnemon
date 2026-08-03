@@ -28,7 +28,9 @@ func (app *App) runAttach(ctx context.Context, store *journalStore, client agenc
 		var preserved []capturedBinding
 		journal, err := directory.load()
 		if err == nil {
-			if validTerminalName(journal.fileName) || app.deps.clock().Before(journal.Attachment.ExpiresAt) {
+			if validTerminalName(journal.fileName) ||
+				(app.deps.clock().Before(journal.Attachment.ExpiresAt) &&
+					journal.CurrentProjection != currentProjectionEmpty) {
 				journal.clear()
 				return nil
 			}
@@ -87,6 +89,14 @@ func (app *App) runCurrent(ctx context.Context, store *journalStore, client agen
 		if apiErr != nil {
 			return apiErr
 		}
+		currentProjection, err := classifyCurrentProjection(view)
+		if err != nil {
+			return err
+		}
+		journal.CurrentProjection = currentProjection
+		if err := directory.write(journal); err != nil {
+			return err
+		}
 		projection = append([]byte(nil), view...)
 		return nil
 	})
@@ -94,6 +104,17 @@ func (app *App) runCurrent(ctx context.Context, store *journalStore, client agen
 		return app.writeCommandError(err)
 	}
 	return app.writeCanonicalProjection(projection)
+}
+
+func classifyCurrentProjection(view []byte) (string, error) {
+	hasCurrent, err := agency.AgentViewProjectionHasCurrent(view)
+	if err != nil {
+		return "", errors.New("R7 Current response is invalid")
+	}
+	if !hasCurrent {
+		return currentProjectionEmpty, nil
+	}
+	return currentProjectionSubject, nil
 }
 
 func (app *App) runCapture(ctx context.Context, store *journalStore, client agencyClient) int {

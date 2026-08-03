@@ -25,6 +25,8 @@ const (
 	admissionOperationPrefix  = "admit:"
 	currentOperationPrefix    = "current:"
 	operationDerivationDomain = "mnemon/r7/agency-cli/admission-operation/v1"
+	currentProjectionEmpty    = "empty"
+	currentProjectionSubject  = "subject"
 )
 
 type capturedBinding struct {
@@ -33,21 +35,23 @@ type capturedBinding struct {
 }
 
 type clientJournal struct {
-	Attachment       attachment
-	CurrentOperation agency.OperationKey
-	Candidates       []capturedBinding
-	fileName         string
-	fileDigest       [sha256.Size]byte
+	Attachment        attachment
+	CurrentOperation  agency.OperationKey
+	CurrentProjection string
+	Candidates        []capturedBinding
+	fileName          string
+	fileDigest        [sha256.Size]byte
 }
 
 type journalWire struct {
-	Schema           string          `json:"schema"`
-	Version          int             `json:"version"`
-	Attachment       string          `json:"attachment"`
-	Credential       string          `json:"credential"`
-	ExpiresAt        string          `json:"expires_at"`
-	CurrentOperation string          `json:"current_operation,omitempty"`
-	Candidates       []candidateWire `json:"candidates,omitempty"`
+	Schema            string          `json:"schema"`
+	Version           int             `json:"version"`
+	Attachment        string          `json:"attachment"`
+	Credential        string          `json:"credential"`
+	ExpiresAt         string          `json:"expires_at"`
+	CurrentOperation  string          `json:"current_operation,omitempty"`
+	CurrentProjection string          `json:"current_projection,omitempty"`
+	Candidates        []candidateWire `json:"candidates,omitempty"`
 }
 
 type candidateWire struct {
@@ -72,6 +76,13 @@ func (journal clientJournal) validate() error {
 	if !journal.CurrentOperation.IsZero() &&
 		!strings.HasPrefix(journal.CurrentOperation.String(), currentOperationPrefix) {
 		return errors.New("R7 client journal Current operation is invalid")
+	}
+	if journal.CurrentProjection != "" && journal.CurrentOperation.IsZero() {
+		return errors.New("R7 client journal Current projection has no operation")
+	}
+	if journal.CurrentProjection != "" && journal.CurrentProjection != currentProjectionEmpty &&
+		journal.CurrentProjection != currentProjectionSubject {
+		return errors.New("R7 client journal Current projection is invalid")
 	}
 	if len(journal.Candidates) > agency.MaxArtifactInputs {
 		return errors.New("R7 client journal candidate bound is exceeded")
@@ -102,6 +113,7 @@ func (journal clientJournal) canonical() ([]byte, error) {
 	if !journal.CurrentOperation.IsZero() {
 		wire.CurrentOperation = journal.CurrentOperation.String()
 	}
+	wire.CurrentProjection = journal.CurrentProjection
 	raw, err := json.Marshal(wire)
 	if err != nil || len(raw) > maxJournalBytes {
 		return nil, errors.New("R7 client journal cannot be encoded")
@@ -166,6 +178,7 @@ func journalFromWire(wire journalWire) (clientJournal, error) {
 		}
 		journal.CurrentOperation = operation
 	}
+	journal.CurrentProjection = wire.CurrentProjection
 	journal.Candidates = make([]capturedBinding, len(wire.Candidates))
 	for index, candidate := range wire.Candidates {
 		handle, handleErr := agency.NewOpaqueHandle(candidate.Handle)

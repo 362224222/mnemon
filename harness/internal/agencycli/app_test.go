@@ -26,6 +26,7 @@ type fakeAgencyClient struct {
 	captureCalls      int
 	readCalls         []string
 	readContent       []byte
+	currentView       []byte
 	currentFailures   int
 	attachBlock       chan struct{}
 }
@@ -53,6 +54,9 @@ func (client *fakeAgencyClient) Current(_ context.Context, _ attachment,
 	if client.currentFailures > 0 {
 		client.currentFailures--
 		return nil, newControlError(codeMnemondUnavailable, "test transport loss")
+	}
+	if len(client.currentView) > 0 {
+		return append([]byte(nil), client.currentView...), nil
 	}
 	return []byte(`{"schema":"mnemon.agent.view","version":2,"view":"view:test","allowed_intents":[]}`), nil
 }
@@ -249,6 +253,44 @@ func TestHookAttachProjectsNoPrivateAuthorityAndReusesJournal(t *testing.T) {
 	assertMode(t, filepath.Join(fixture.nodeState, journalDirectoryName, journalActiveName), ownerFileMode)
 }
 
+func TestHookAttachRotatesAnObservedEmptyCurrent(t *testing.T) {
+	fixture := newAppFixture(t)
+	fixture.attach(t)
+	var view bytes.Buffer
+	if exit := fixture.app(strings.NewReader(""), &view).
+		Run(context.Background(), []string{"agent", "current", "--json"}); exit != 0 {
+		t.Fatalf("empty current = exit %d output %q", exit, view.String())
+	}
+	fixture.attach(t)
+	fixture.client.mu.Lock()
+	attachCalls := fixture.client.attachCalls
+	fixture.client.mu.Unlock()
+	if attachCalls != 2 {
+		t.Fatalf("Attach calls after observed empty Current = %d, want 2", attachCalls)
+	}
+}
+
+func TestHookAttachKeepsCurrentThatOwnsAHandling(t *testing.T) {
+	fixture := newAppFixture(t)
+	fixture.client.currentView = []byte(`{"schema":"mnemon.agent.view","version":2,` +
+		`"view":"view:test","current":{"facts":{"handle":"r7:subject:test"},` +
+		`"semantic":{"kind":"review.request","payload":"review"}},` +
+		`"allowed_intents":[]}`)
+	fixture.attach(t)
+	var view bytes.Buffer
+	if exit := fixture.app(strings.NewReader(""), &view).
+		Run(context.Background(), []string{"agent", "current", "--json"}); exit != 0 {
+		t.Fatalf("subject current = exit %d output %q", exit, view.String())
+	}
+	fixture.attach(t)
+	fixture.client.mu.Lock()
+	attachCalls := fixture.client.attachCalls
+	fixture.client.mu.Unlock()
+	if attachCalls != 1 {
+		t.Fatalf("Attach calls after claimed Current = %d, want 1", attachCalls)
+	}
+}
+
 func TestCurrentPersistsOperationBeforeTransportAndReplaysIt(t *testing.T) {
 	fixture := newAppFixture(t)
 	fixture.attach(t)
@@ -259,13 +301,18 @@ func TestCurrentPersistsOperationBeforeTransportAndReplaysIt(t *testing.T) {
 	if firstExit != codeMnemondUnavailable.exitStatus() {
 		t.Fatalf("first current exit/output = %d / %s", firstExit, first.String())
 	}
+	fixture.attach(t)
 	var second bytes.Buffer
 	secondExit := fixture.app(strings.NewReader(""), &second).
 		Run(context.Background(), []string{"agent", "current", "--json"})
 	fixture.client.mu.Lock()
 	operations := append([]string(nil), fixture.client.currentOperations...)
 	fixture.client.mu.Unlock()
-	if secondExit != 0 || len(operations) != 2 || operations[0] == "" || operations[0] != operations[1] {
+	fixture.client.mu.Lock()
+	attachCalls := fixture.client.attachCalls
+	fixture.client.mu.Unlock()
+	if secondExit != 0 || attachCalls != 1 || len(operations) != 2 || operations[0] == "" ||
+		operations[0] != operations[1] {
 		t.Fatalf("current replay = exit %d operations %#v output %q", secondExit, operations, second.String())
 	}
 }

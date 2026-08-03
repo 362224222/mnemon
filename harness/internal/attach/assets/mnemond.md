@@ -47,12 +47,14 @@ bounded semantic text. `consequence` must be present in this View's
 There are three structural shapes:
 
 1. Root Handling: use `handling.create`, omit `subject_handling` and Reference
-   fields, and provide one or more `successors`.
+   fields, and provide one or more `successors`. If any successor is remote,
+   include `self` as the local responsibility anchor.
 2. Subject Handling: provide the current `subject_handling`; use
    `handling.advance`, `handling.resolve.completed`,
    `handling.resolve.declined`, or `handling.resolve.unresolved`; successors
    are optional and Reference fields are absent. Completed requires at least
-   one verified Artifact.
+   one verified Artifact. A terminal Intent with a remote successor must also
+   include `self`; `handling.advance` already retains its current local anchor.
 3. Reference: omit `subject_handling` and `successors`. Use
    `reference.publish` with a new `reference_key` and exactly one Artifact,
    `reference.supersede` with a View-offered `reference_head` and exactly one
