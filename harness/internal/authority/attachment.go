@@ -147,6 +147,127 @@ type authenticatedAttachment struct {
 	value agency.Attachment
 }
 
+// ProvisionInitialPrincipal is the setup-only initializer for one R7 local
+// authority. An empty authority accepts exactly one stable Principal. An exact
+// replay may also contain only route-derived surrogate Principals, with every
+// route targeting that same local Principal. Orphan or second-local Principals
+// fail closed instead of turning setup into a Principal registry.
+func (s *Store) ProvisionInitialPrincipal(ctx context.Context,
+	principal agency.AgentPrincipalID,
+) (replayed bool, err error) {
+	if ctx == nil || principal.IsZero() {
+		return false, errors.New("provision initial Principal: Principal is required")
+	}
+	now, err := s.trustedNow()
+	if err != nil {
+		return false, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.requireOpen(); err != nil {
+		return false, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("provision initial Principal: begin: %w", err)
+	}
+	defer tx.Rollback()
+	var total, exact int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*),
+		COALESCE(SUM(CASE WHEN principal_id = ? THEN 1 ELSE 0 END), 0)
+		FROM principals`, principal.String()).Scan(&total, &exact); err != nil {
+		return false, fmt.Errorf("provision initial Principal: inspect: %w", err)
+	}
+	switch {
+	case total == 0 && exact == 0:
+		if _, err := tx.ExecContext(ctx, `INSERT INTO principals(principal_id, created_at)
+			VALUES(?, ?)`, principal.String(), formatTime(now)); err != nil {
+			return false, fmt.Errorf("provision initial Principal: persist: %w", err)
+		}
+	case exact == 1:
+		if err := requireProvisionedPrincipalShapeTx(ctx, tx, principal, total); err != nil {
+			return false, err
+		}
+		replayed = true
+	default:
+		return false, ErrPrincipalConflict
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("provision initial Principal: commit: %w", err)
+	}
+	return replayed, nil
+}
+
+// RequireProvisionedPrincipalShape is the strict daemon-open verifier for the
+// identity-derived local Principal and route-derived surrogate Principals. It
+// is read-only and never enrolls or repairs authority.
+func (s *Store) RequireProvisionedPrincipalShape(ctx context.Context,
+	principal agency.AgentPrincipalID,
+) error {
+	if ctx == nil || principal.IsZero() {
+		return errors.New("require provisioned Principal: Principal is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.requireOpen(); err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return fmt.Errorf("require provisioned Principal: begin: %w", err)
+	}
+	defer tx.Rollback()
+	var total, exact int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*),
+		COALESCE(SUM(CASE WHEN principal_id = ? THEN 1 ELSE 0 END), 0)
+		FROM principals`, principal.String()).Scan(&total, &exact); err != nil {
+		return fmt.Errorf("require provisioned Principal: inspect: %w", err)
+	}
+	if exact != 1 {
+		return ErrPrincipalConflict
+	}
+	return requireProvisionedPrincipalShapeTx(ctx, tx, principal, total)
+}
+
+func requireProvisionedPrincipalShapeTx(ctx context.Context, tx *sql.Tx,
+	principal agency.AgentPrincipalID, total int,
+) error {
+	routes, err := requireProvisionedRoutesTx(ctx, tx, principal)
+	if err != nil {
+		return err
+	}
+	if total != routes+1 {
+		return ErrPrincipalConflict
+	}
+	return nil
+}
+
+func requireProvisionedRoutesTx(ctx context.Context, tx *sql.Tx,
+	principal agency.AgentPrincipalID,
+) (int, error) {
+	rows, err := tx.QueryContext(ctx, peerRouteColumns+` ORDER BY route_id`)
+	if err != nil {
+		return 0, fmt.Errorf("require provisioned Principal: inspect peer routes: %w", err)
+	}
+	defer rows.Close()
+	count := 0
+	for rows.Next() {
+		route, err := scanPeerRoute(rows)
+		if err != nil {
+			return 0, fmt.Errorf("%w: invalid peer route: %v", ErrPrincipalConflict, err)
+		}
+		if route.LocalTargetPrincipal() != principal ||
+			route.SurrogateSourcePrincipal() == principal {
+			return 0, ErrPrincipalConflict
+		}
+		count++
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("require provisioned Principal: iterate peer routes: %w", err)
+	}
+	return count, nil
+}
+
 // authenticateAttachmentTx verifies a fixed-size proof in constant comparison
 // time. Expiry is deliberately not checked here: replay lookup must precede
 // mutable lifecycle checks.

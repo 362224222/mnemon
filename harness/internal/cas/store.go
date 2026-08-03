@@ -45,8 +45,14 @@ func Open(root string) (*Store, error) {
 	if root == "" || !filepath.IsAbs(root) || filepath.Clean(root) != root {
 		return nil, fmt.Errorf("%w: root must be an absolute canonical path", ErrInput)
 	}
-	if _, err := ensurePrivateDirectory(root); err != nil {
+	rootCreated, err := ensurePrivateDirectory(root)
+	if err != nil {
 		return nil, err
+	}
+	if rootCreated {
+		if err := syncDirectory(filepath.Dir(root)); err != nil {
+			return nil, err
+		}
 	}
 	temp := filepath.Join(root, ".tmp")
 	created, err := ensurePrivateDirectory(temp)
@@ -64,6 +70,29 @@ func Open(root string) (*Store, error) {
 	}
 	if realRoot != root {
 		return nil, fmt.Errorf("%w: CAS root has a symlinked ancestor", ErrCorruption)
+	}
+	return &Store{root: root, temp: temp}, nil
+}
+
+// OpenExisting adopts an exact provisioned CAS layout. It never creates or
+// repairs root, .tmp, shard, marker, or object state.
+func OpenExisting(root string) (*Store, error) {
+	if root == "" || !filepath.IsAbs(root) || filepath.Clean(root) != root {
+		return nil, fmt.Errorf("%w: root must be an absolute canonical path", ErrInput)
+	}
+	if err := requirePrivateDirectory(root); err != nil {
+		return nil, err
+	}
+	temp := filepath.Join(root, ".tmp")
+	if err := requirePrivateDirectory(temp); err != nil {
+		return nil, err
+	}
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil, fmt.Errorf("resolve existing CAS root: %w", err)
+	}
+	if realRoot != root {
+		return nil, fmt.Errorf("%w: existing CAS root has a symlinked ancestor", ErrCorruption)
 	}
 	return &Store{root: root, temp: temp}, nil
 }

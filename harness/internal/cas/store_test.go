@@ -56,6 +56,33 @@ func TestStorePutReadReplayAndOwnerOnlyLayout(t *testing.T) {
 	}
 }
 
+func TestOpenExistingNeverCreatesOrRepairsCASLayout(t *testing.T) {
+	root := testRoot(t)
+	if opened, err := OpenExisting(root); err == nil || opened != nil {
+		t.Fatalf("OpenExisting(missing) = (%v, %v)", opened, err)
+	}
+	if _, err := os.Lstat(root); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("strict open created root: %v", err)
+	}
+	created, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opened, err := OpenExisting(root); err != nil || opened.Root() != created.Root() {
+		t.Fatalf("OpenExisting(provisioned) = (%v, %v)", opened, err)
+	}
+	temporary := filepath.Join(root, ".tmp")
+	if err := os.Remove(temporary); err != nil {
+		t.Fatal(err)
+	}
+	if opened, err := OpenExisting(root); err == nil || opened != nil {
+		t.Fatalf("OpenExisting(missing .tmp) = (%v, %v)", opened, err)
+	}
+	if _, err := os.Lstat(temporary); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("strict open recreated .tmp: %v", err)
+	}
+}
+
 func TestStoreRejectsMismatchBoundsCancellationAndCorruption(t *testing.T) {
 	store := openTestStore(t)
 	content := []byte("strict bytes")

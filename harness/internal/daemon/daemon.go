@@ -83,7 +83,7 @@ func openRuntime(ctx context.Context, stateDirectory string,
 	if err := requireOwnerDirectory(objectsRoot); err != nil {
 		return nil, fmt.Errorf("daemon open CAS: %w", err)
 	}
-	objects, err := cas.Open(objectsRoot)
+	objects, err := cas.OpenExisting(objectsRoot)
 	if err != nil {
 		return nil, fmt.Errorf("daemon open CAS: %w", err)
 	}

@@ -99,6 +99,88 @@ func TestAttachmentCredentialDoesNotAuthenticateByIDAlone(t *testing.T) {
 	}
 }
 
+func TestProvisionInitialPrincipalCreatesExactReplayAndRejectsConflict(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, testDatabasePath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	principal := mustPrincipal(t, "principal:initial")
+	if replayed, err := store.ProvisionInitialPrincipal(ctx, principal); err != nil || replayed {
+		t.Fatalf("initial provision = (replayed=%t, %v)", replayed, err)
+	}
+	if replayed, err := store.ProvisionInitialPrincipal(ctx, principal); err != nil || !replayed {
+		t.Fatalf("exact replay = (replayed=%t, %v)", replayed, err)
+	}
+	other := mustPrincipal(t, "principal:other")
+	if replayed, err := store.ProvisionInitialPrincipal(ctx, other); replayed ||
+		!errors.Is(err, ErrPrincipalConflict) {
+		t.Fatalf("conflicting provision = (replayed=%t, %v)", replayed, err)
+	}
+	if err := store.RequirePrincipal(ctx, principal); err != nil {
+		t.Fatalf("initial Principal disappeared: %v", err)
+	}
+	if err := store.RequirePrincipal(ctx, other); !errors.Is(err, ErrPrincipalUnavailable) {
+		t.Fatalf("conflicting Principal was inserted: %v", err)
+	}
+}
+
+func TestProvisionInitialPrincipalRejectsAnyNonSingletonAuthority(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, testDatabasePath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	initial := mustPrincipal(t, "principal:initial")
+	other := mustPrincipal(t, "principal:other")
+	if err := store.EnrollPrincipal(ctx, initial); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EnrollPrincipal(ctx, other); err != nil {
+		t.Fatal(err)
+	}
+	if replayed, err := store.ProvisionInitialPrincipal(ctx, initial); replayed ||
+		!errors.Is(err, ErrPrincipalConflict) {
+		t.Fatalf("non-singleton replay = (replayed=%t, %v)", replayed, err)
+	}
+}
+
+func TestRequireProvisionedPrincipalShapeRecomputesRouteSurrogate(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, testDatabasePath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	local := mustPrincipal(t, "principal:route-shape")
+	if _, err := store.ProvisionInitialPrincipal(ctx, local); err != nil {
+		t.Fatal(err)
+	}
+	spec := peerRouteSpec(t, local, "route-shape")
+	route, err := store.EnrollPeerRoute(ctx, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	misbound := mustPrincipal(t, "principal:misbound-surrogate")
+	if err := store.EnrollPrincipal(ctx, misbound); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `UPDATE peer_routes
+		SET surrogate_source_principal_id = ? WHERE route_id = ?`,
+		misbound.String(), route.RouteID().String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `DELETE FROM principals WHERE principal_id = ?`,
+		route.SurrogateSourcePrincipal().String()); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RequireProvisionedPrincipalShape(ctx, local); !errors.Is(err, ErrPrincipalConflict) {
+		t.Fatalf("misbound route surrogate shape error = %v", err)
+	}
+}
+
 func TestAttachmentSchemaDoesNotReserveManagedWakeMode(t *testing.T) {
 	fixture := newAuthorityFixture(t, "principal:interactive-only")
 	credential := agency.Sum([]byte("managed mode must remain outside R7 T0"))

@@ -6,39 +6,24 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/mnemon-dev/mnemon/harness/internal/agency"
 )
 
 type serveOptions struct {
 	stateDirectory string
-	principal      agency.AgentPrincipalID
 }
 
 func parseServeOptions(args []string) (serveOptions, error) {
-	if len(args) != 4 {
-		return serveOptions{}, errors.New("serve requires exactly --state-dir DIR --principal ID")
+	if len(args) != 2 {
+		return serveOptions{}, errors.New("serve requires exactly --state-dir DIR")
 	}
-	values := make(map[string]string, 2)
-	for len(args) != 0 {
-		if args[0] != "--state-dir" && args[0] != "--principal" {
-			return serveOptions{}, errors.New("serve accepts only --state-dir DIR --principal ID")
-		}
-		if _, duplicate := values[args[0]]; duplicate || strings.TrimSpace(args[1]) == "" {
-			return serveOptions{}, errors.New("serve options must occur exactly once with nonempty values")
-		}
-		values[args[0]] = args[1]
-		args = args[2:]
+	if args[0] != "--state-dir" || strings.TrimSpace(args[1]) == "" {
+		return serveOptions{}, errors.New("serve accepts only --state-dir DIR")
 	}
-	stateDirectory, err := resolveStateDirectory(values["--state-dir"])
+	stateDirectory, err := resolveStateDirectory(args[1])
 	if err != nil {
 		return serveOptions{}, err
 	}
-	principal, err := agency.NewAgentPrincipalID(values["--principal"])
-	if err != nil {
-		return serveOptions{}, errors.New("serve Principal is invalid")
-	}
-	return serveOptions{stateDirectory: stateDirectory, principal: principal}, nil
+	return serveOptions{stateDirectory: stateDirectory}, nil
 }
 
 func resolveStateDirectory(requested string) (string, error) {

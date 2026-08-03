@@ -7,6 +7,7 @@ var (
 	ErrWriterActive            = errors.New("authority: writer already active")
 	ErrClosed                  = errors.New("authority: store closed")
 	ErrPrincipalUnavailable    = errors.New("authority: Principal is not enrolled")
+	ErrPrincipalConflict       = errors.New("authority: initial Principal conflicts with durable authority")
 	ErrAttachmentAuth          = errors.New("authority: attachment authentication failed")
 	ErrAttachmentExpired       = errors.New("authority: attachment expired")
 	ErrOperationConflict       = errors.New("authority: operation key reused with different request")

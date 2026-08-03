@@ -2,13 +2,44 @@ package daemon
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
+
+	"github.com/mnemon-dev/mnemon/harness/internal/agency"
 )
+
+func TestDefaultAgentPrincipalUsesIndependentFullDigestDomain(t *testing.T) {
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicKey := privateKey.Public().(ed25519.PublicKey)
+	principal, err := DefaultAgentPrincipal(publicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "principal:r7:" + agency.Sum(append(
+		[]byte("mnemon.r7.default-agent-principal.v1\x00"), publicKey...)).String()[len("sha256:"):]
+	if principal.String() != want || len(principal.String()) != len("principal:r7:")+64 {
+		t.Fatalf("Principal = %q, want %q", principal.String(), want)
+	}
+	peer, err := derivePeerIdentity(publicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if principal.String()[len("principal:r7:"):] == peer.String()[len("peer:"):] {
+		t.Fatal("Principal and PeerID reused one derivation domain")
+	}
+	if _, err := DefaultAgentPrincipal(publicKey[:8]); err == nil {
+		t.Fatal("short public key derived a Principal")
+	}
+}
 
 func TestTransportIdentityProvisionIsDurableAndReplayable(t *testing.T) {
 	state, _ := provisionDaemonState(t)
@@ -62,6 +93,25 @@ func TestTransportIdentityRecoversCommittedPendingFile(t *testing.T) {
 	}
 	if _, err := os.Lstat(pending); !os.IsNotExist(err) {
 		t.Fatalf("pending identity survived recovery: %v", err)
+	}
+}
+
+func TestTransportIdentityDiscardsInterruptedPartialPending(t *testing.T) {
+	state := canonicalTempDir(t)
+	pending := filepath.Join(state, transportIdentityPending)
+	if err := os.WriteFile(pending, []byte(`{"schema":"mnemon.r7`), ownerFileMode); err != nil {
+		t.Fatal(err)
+	}
+	identity, err := ProvisionTransportIdentity(state)
+	if err != nil || identity.PeerID().IsZero() {
+		t.Fatalf("recover partial pending = (%#v, %v)", identity, err)
+	}
+	if _, err := os.Lstat(pending); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("partial pending survived recovery: %v", err)
+	}
+	loaded, err := loadTransportIdentity(state)
+	if err != nil || loaded.projection.PeerID() != identity.PeerID() {
+		t.Fatalf("recovered committed identity = (%#v, %v)", loaded, err)
 	}
 }
 
@@ -135,6 +185,24 @@ func TestTransportIdentityConcurrentProvisionConverges(t *testing.T) {
 	}
 	if expected.PeerID().IsZero() {
 		t.Fatal("concurrent provision returned no identity")
+	}
+}
+
+func TestProvisionLockObservesCancellation(t *testing.T) {
+	state, _ := provisionDaemonState(t)
+	if _, err := ProvisionTransportIdentity(state); err != nil {
+		t.Fatal(err)
+	}
+	held, err := acquireExistingProvisionLock(context.Background(), state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer releaseProvisionLock(held)
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if contender, err := acquireExistingProvisionLock(cancelled, state); contender != nil ||
+		!errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled lock acquisition = (%v, %v)", contender, err)
 	}
 }
 

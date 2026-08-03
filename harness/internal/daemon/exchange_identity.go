@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	cryptorand "crypto/rand"
 	"encoding/base64"
@@ -15,6 +16,7 @@ import (
 	"syscall"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/agency"
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -56,61 +58,31 @@ func ProvisionTransportIdentity(stateDirectory string) (_ TransportIdentity, err
 	if err := requireOwnerDirectory(stateDirectory); err != nil {
 		return TransportIdentity{}, fmt.Errorf("provision transport identity: %w", err)
 	}
-	lock, err := acquireTransportIdentityLock(stateDirectory)
+	lockContext, cancel := context.WithTimeout(context.Background(), provisionLockWait)
+	defer cancel()
+	lock, err := acquireProvisionLock(lockContext, stateDirectory)
 	if err != nil {
 		return TransportIdentity{}, err
 	}
-	defer func() { err = errors.Join(err, releaseTransportIdentityLock(lock)) }()
-	return provisionTransportIdentityLocked(stateDirectory)
+	defer func() { err = errors.Join(err, releaseProvisionLock(lock)) }()
+	identity, _, err := provisionTransportIdentityLocked(stateDirectory)
+	return identity, err
 }
 
-func provisionTransportIdentityLocked(stateDirectory string) (TransportIdentity, error) {
+func provisionTransportIdentityLocked(stateDirectory string) (TransportIdentity, bool, error) {
 	final := filepath.Join(stateDirectory, transportIdentityFile)
 	pending := filepath.Join(stateDirectory, transportIdentityPending)
 	if err := recoverLinkedTransportIdentity(stateDirectory, pending, final); err != nil {
-		return TransportIdentity{}, err
+		return TransportIdentity{}, false, err
 	}
 	if identity, found, err := replayTransportIdentity(final, pending); err != nil || found {
-		return identity, err
+		return identity, found && err == nil, err
 	}
 	if identity, found, err := recoverPendingTransportIdentity(stateDirectory, pending, final); err != nil || found {
-		return identity, err
+		return identity, false, err
 	}
-	return createTransportIdentity(stateDirectory, pending, final)
-}
-
-func recoverLinkedTransportIdentity(directory, pending, final string) error {
-	if !sameIdentityLink(pending, final) {
-		return nil
-	}
-	if err := os.Remove(pending); err != nil {
-		return fmt.Errorf("provision transport identity: recover linked identity: %w", err)
-	}
-	return syncOwnerDirectory(directory)
-}
-
-func replayTransportIdentity(final, pending string) (TransportIdentity, bool, error) {
-	identity, raw, found, err := readTransportIdentityFile(final)
-	if err != nil || !found {
-		return TransportIdentity{}, false, err
-	}
-	if err := settleMatchingPendingIdentity(pending, raw); err != nil {
-		return TransportIdentity{}, false, err
-	}
-	return identity.projection, true, nil
-}
-
-func recoverPendingTransportIdentity(directory, pending, final string) (
-	TransportIdentity, bool, error,
-) {
-	identity, raw, found, err := readTransportIdentityFile(pending)
-	if err != nil || !found {
-		return TransportIdentity{}, false, err
-	}
-	if err := publishTransportIdentity(directory, pending, final, raw); err != nil {
-		return TransportIdentity{}, false, err
-	}
-	return identity.projection, true, nil
+	identity, err := createTransportIdentity(stateDirectory, pending, final)
+	return identity, false, err
 }
 
 func createTransportIdentity(directory, pending, final string) (TransportIdentity, error) {
@@ -223,10 +195,16 @@ func readTransportIdentityFile(path string) (loadedTransportIdentity, []byte, bo
 	if err := requireOwnerRegularFile(info); err != nil {
 		return loadedTransportIdentity{}, nil, false, err
 	}
-	file, err := os.Open(path)
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
 		return loadedTransportIdentity{}, nil, false,
 			fmt.Errorf("load transport identity: open file: %w", err)
+	}
+	file := os.NewFile(uintptr(fd), path)
+	if file == nil {
+		_ = unix.Close(fd)
+		return loadedTransportIdentity{}, nil, false,
+			errors.New("load transport identity: opened file is unavailable")
 	}
 	defer file.Close()
 	opened, err := file.Stat()
@@ -234,10 +212,23 @@ func readTransportIdentityFile(path string) (loadedTransportIdentity, []byte, bo
 		return loadedTransportIdentity{}, nil, false,
 			errors.New("load transport identity: file identity changed while opening")
 	}
+	if err := requireOwnerRegularFile(opened); err != nil {
+		return loadedTransportIdentity{}, nil, false, err
+	}
 	raw, err := io.ReadAll(io.LimitReader(file, 1025))
 	if err != nil || len(raw) == 0 || len(raw) > 1024 {
 		return loadedTransportIdentity{}, nil, false,
 			errors.New("load transport identity: identity document exceeds bound")
+	}
+	afterFD, fdErr := file.Stat()
+	afterPath, pathErr := os.Lstat(path)
+	if fdErr != nil || pathErr != nil || !os.SameFile(opened, afterFD) ||
+		!os.SameFile(opened, afterPath) {
+		return loadedTransportIdentity{}, nil, false,
+			errors.New("load transport identity: file identity changed during read")
+	}
+	if err := requireOwnerRegularFile(afterFD); err != nil {
+		return loadedTransportIdentity{}, nil, false, err
 	}
 	identity, err := parseTransportIdentity(raw)
 	if err != nil {

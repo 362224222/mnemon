@@ -13,9 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/agency"
-	"github.com/mnemon-dev/mnemon/harness/internal/authority"
-	"github.com/mnemon-dev/mnemon/harness/internal/cas"
 	"github.com/mnemon-dev/mnemon/harness/internal/daemon"
 )
 
@@ -24,7 +21,7 @@ func TestRunHasOnlyTheR7DaemonSurface(t *testing.T) {
 	command := func(args ...string) (string, string, error) {
 		var stdout, stderr bytes.Buffer
 		err := runWithDaemon(context.Background(), args, &stdout, &stderr,
-			func(context.Context, string, agency.AgentPrincipalID) (daemonRuntime, error) {
+			func(context.Context, string) (daemonRuntime, error) {
 				t.Fatal("non-serve command opened daemon")
 				return nil, nil
 			})
@@ -80,7 +77,7 @@ func (runtime *fakeDaemon) Close(ctx context.Context) error {
 	return runtime.closeErr
 }
 
-func TestServePassesCanonicalStateAndPrincipalAndJoinsBoundedClose(t *testing.T) {
+func TestServePassesCanonicalStateAndJoinsBoundedClose(t *testing.T) {
 	state := canonicalDirectory(t)
 	link := filepath.Join(canonicalDirectory(t), "state-link")
 	if err := os.Symlink(state, link); err != nil {
@@ -90,39 +87,33 @@ func TestServePassesCanonicalStateAndPrincipalAndJoinsBoundedClose(t *testing.T)
 	closeFailure := errors.New("close failure")
 	runtime := &fakeDaemon{serveErr: serveFailure, closeErr: closeFailure}
 	var gotState string
-	var gotPrincipal agency.AgentPrincipalID
-	open := func(ctx context.Context, stateDirectory string,
-		principal agency.AgentPrincipalID,
-	) (daemonRuntime, error) {
+	open := func(ctx context.Context, stateDirectory string) (daemonRuntime, error) {
 		if ctx == nil {
 			t.Fatal("open received nil context")
 		}
-		gotState, gotPrincipal = stateDirectory, principal
+		gotState = stateDirectory
 		return runtime, nil
 	}
-	err := runWithDaemon(context.Background(), []string{"serve", "--principal", "principal:test",
-		"--state-dir", link}, io.Discard, io.Discard, open)
+	err := runWithDaemon(context.Background(), []string{"serve", "--state-dir", link},
+		io.Discard, io.Discard, open)
 	if !errors.Is(err, serveFailure) || !errors.Is(err, closeFailure) ||
-		gotState != state || gotPrincipal.String() != "principal:test" ||
-		!runtime.served || !runtime.closed || !runtime.closeBounded {
-		t.Fatalf("serve = state %q principal %q runtime %#v err %v",
-			gotState, gotPrincipal.String(), runtime, err)
+		gotState != state || !runtime.served || !runtime.closed || !runtime.closeBounded {
+		t.Fatalf("serve = state %q runtime %#v err %v", gotState, runtime, err)
 	}
 }
 
 func TestServeRejectsMalformedOrCancelledInputBeforeOpen(t *testing.T) {
 	state := canonicalDirectory(t)
 	opened := 0
-	open := func(context.Context, string, agency.AgentPrincipalID) (daemonRuntime, error) {
+	open := func(context.Context, string) (daemonRuntime, error) {
 		opened++
 		return &fakeDaemon{}, nil
 	}
 	invalid := [][]string{
 		{"serve"},
-		{"serve", "--state-dir", state, "--principal"},
 		{"serve", "--state-dir", state, "--state-dir", state},
-		{"serve", "--state-dir", state, "--principal", "bad principal"},
-		{"serve", "--project-root", state, "--principal", "principal:test"},
+		{"serve", "--principal", "principal:test"},
+		{"serve", "--project-root", state},
 	}
 	for _, args := range invalid {
 		if err := runWithDaemon(context.Background(), args, io.Discard, io.Discard, open); err == nil {
@@ -131,8 +122,8 @@ func TestServeRejectsMalformedOrCancelledInputBeforeOpen(t *testing.T) {
 	}
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := runWithDaemon(cancelled, []string{"serve", "--state-dir", state,
-		"--principal", "principal:test"}, io.Discard, io.Discard, open); !errors.Is(err, context.Canceled) {
+	if err := runWithDaemon(cancelled, []string{"serve", "--state-dir", state},
+		io.Discard, io.Discard, open); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled serve = %v", err)
 	}
 	if opened != 0 {
@@ -141,12 +132,11 @@ func TestServeRejectsMalformedOrCancelledInputBeforeOpen(t *testing.T) {
 }
 
 func TestProductionServeReachesLocalReadinessAndClosesOnCancellation(t *testing.T) {
-	state, principal := provisionR7State(t)
+	state := provisionR7State(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- run(ctx, []string{"serve", "--state-dir", state,
-			"--principal", principal.String()}, io.Discard, io.Discard)
+		done <- run(ctx, []string{"serve", "--state-dir", state}, io.Discard, io.Discard)
 	}()
 	waitForReady(t, state, done)
 	cancel()
@@ -161,7 +151,7 @@ func TestProductionServeReachesLocalReadinessAndClosesOnCancellation(t *testing.
 	if _, err := os.Lstat(filepath.Join(state, "control.sock")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("control socket survived shutdown: %v", err)
 	}
-	reopened, err := daemon.Open(context.Background(), state, principal)
+	reopened, err := daemon.OpenProvisioned(context.Background(), state)
 	if err != nil {
 		t.Fatalf("writer was not released: %v", err)
 	}
@@ -172,29 +162,14 @@ func TestProductionServeReachesLocalReadinessAndClosesOnCancellation(t *testing.
 	}
 }
 
-func provisionR7State(t *testing.T) (string, agency.AgentPrincipalID) {
+func provisionR7State(t *testing.T) string {
 	t.Helper()
-	state := canonicalDirectory(t)
-	objects, err := cas.Open(filepath.Join(state, "objects", "sha256"))
+	root := canonicalDirectory(t)
+	result, err := daemon.Provision(context.Background(), root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	principal, err := agency.NewAgentPrincipalID("principal:command-test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	store, err := authority.OpenWithArtifactVerifier(context.Background(),
-		filepath.Join(state, "agency.db"), objects)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.EnrollPrincipal(context.Background(), principal); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Close(); err != nil {
-		t.Fatal(err)
-	}
-	return state, principal
+	return result.StateDirectory()
 }
 
 func canonicalDirectory(t *testing.T) string {

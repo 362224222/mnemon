@@ -4610,18 +4610,6 @@
     },
     {
       "rule": "normalized_duplicate_tokens",
-      "identity": "normalized_duplicate_tokens:dup-0001",
-      "path": "harness/cmd/mnemon-harness/main_test.go",
-      "debt_id": "dup-0001",
-      "owners": [
-        "harness/cmd/mnemon-harness/main_test.go::TestRun",
-        "harness/cmd/mnemond/main_test.go::TestRun"
-      ],
-      "fingerprint": "7f60cec6ee6c56105d38fe0ecd812fe82fa9ebc1d5a2d5fd8ee9c394d01455af",
-      "ceiling": 204
-    },
-    {
-      "rule": "normalized_duplicate_tokens",
       "identity": "normalized_duplicate_tokens:dup-0002",
       "path": "harness/internal/agent/runtime_process_darwin.go",
       "debt_id": "dup-0002",

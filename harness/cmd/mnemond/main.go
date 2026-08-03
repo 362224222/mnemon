@@ -10,7 +10,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/agency"
 	"github.com/mnemon-dev/mnemon/harness/internal/daemon"
 )
 
@@ -21,12 +20,12 @@ const (
 	helpText               = `mnemond serves one already-provisioned R7 local authority.
 
 Usage:
-  mnemond serve --state-dir DIR --principal ID
+  mnemond serve --state-dir DIR
   mnemond --help
   mnemond --version
 
 Setup owns provisioning. mnemond strictly adopts the exact state directory and
-Agent Principal supplied by its local launcher.
+derives its single local Agent Principal from the durable transport identity.
 `
 )
 
@@ -35,7 +34,7 @@ type daemonRuntime interface {
 	Close(context.Context) error
 }
 
-type daemonOpener func(context.Context, string, agency.AgentPrincipalID) (daemonRuntime, error)
+type daemonOpener func(context.Context, string) (daemonRuntime, error)
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -82,10 +81,8 @@ func runWithDaemon(ctx context.Context, args []string, stdout, stderr io.Writer,
 	}
 }
 
-func openDaemon(ctx context.Context, stateDirectory string,
-	principal agency.AgentPrincipalID,
-) (daemonRuntime, error) {
-	return daemon.Open(ctx, stateDirectory, principal)
+func openDaemon(ctx context.Context, stateDirectory string) (daemonRuntime, error) {
+	return daemon.OpenProvisioned(ctx, stateDirectory)
 }
 
 func runServe(ctx context.Context, args []string, open daemonOpener) error {
@@ -96,7 +93,7 @@ func runServe(ctx context.Context, args []string, open daemonOpener) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	runtime, err := open(ctx, options.stateDirectory, options.principal)
+	runtime, err := open(ctx, options.stateDirectory)
 	if err != nil {
 		return err
 	}
