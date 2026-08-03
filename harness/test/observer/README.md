@@ -8,8 +8,9 @@ preference.
 Open `index.html` directly in a browser, then load one or more
 `mnemon.test.trace` JSONL files with the file picker or drag-and-drop surface.
 No server, package installation, build, network access, or browser storage is
-required. The two files under `fixtures/` exercise the R7 collaboration and R8
-coloring views. The browser validates the closed record shapes, order, bounds,
+required. The two synthetic `.trace` files under `fixtures/` exercise the R7
+collaboration and R8 coloring views without masquerading as generated run
+transcripts. The browser validates the closed record shapes, order, bounds,
 backward-only causes, gate references, and exact SHA-256 footer before it
 renders anything. A malformed or unverifiable file is rejected rather than
 shown as partial evidence.

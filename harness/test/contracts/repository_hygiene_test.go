@@ -95,6 +95,7 @@ func TestRepositoryHygieneRulesAcceptDurableJSONCategories(t *testing.T) {
 		"harness/test/contracts/r7-requirements.json",
 		"harness/test/contracts/go_quality_baseline.json",
 		"harness/test/contracts/go_architecture_debt.json",
+		"harness/test/observer/trace-schema.json",
 		"internal/setup/assets/openclaw/plugin/openclaw.plugin.json",
 		"internal/setup/assets/openclaw/plugin/package.json",
 	} {
@@ -246,6 +247,8 @@ func durableJSONCategory(trackedPath string) string {
 		!strings.Contains(strings.TrimPrefix(trackedPath,
 			"harness/test/contracts/"), "/"):
 		return "quality"
+	case trackedPath == "harness/test/observer/trace-schema.json":
+		return "test trace schema"
 	case strings.HasPrefix(trackedPath, "internal/setup/assets/"):
 		return "managed asset"
 	default:

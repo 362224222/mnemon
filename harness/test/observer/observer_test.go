@@ -245,7 +245,7 @@ func TestTraceSchemaIsClosedAndMetadataOnly(t *testing.T) {
 }
 
 func TestObserverFixturesAreStrictRedactedRenderInputs(t *testing.T) {
-	paths, err := filepath.Glob("fixtures/*.jsonl")
+	paths, err := filepath.Glob("fixtures/*.trace")
 	if err != nil || len(paths) != 2 {
 		t.Fatalf("fixture paths = %v, %v", paths, err)
 	}
