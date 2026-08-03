@@ -211,7 +211,9 @@ func isHarnessImport(importPath string) bool {
 
 func allowedHarnessImport(source, target string) bool {
 	if target == "model" && knownHarnessPackage(source) &&
-		source != "agency" && source != "authority" && source != "selector" && source != "agencycli" {
+		source != "agency" && source != "authority" && source != "selector" &&
+		source != "agencycli" && source != "attach" && source != "cas" &&
+		source != "daemon" && source != "peerlink" {
 		return true
 	}
 	allowed := map[string]map[string]bool{
@@ -219,6 +221,7 @@ func allowedHarnessImport(source, target string) bool {
 		"cmd":       {"agencycli": true, "integration": true, "localapi": true, "node": true},
 		"agencycli": {"agency": true},
 		"cas":       {"agency": true},
+		"daemon":    {"agency": true, "authority": true, "cas": true},
 		"peerlink":  {"agency": true, "cas": true},
 		"node":      {"event": true, "store": true, "agent": true, "artifact": true, "peer": true, "agency": true, "authority": true},
 		"localapi":  {"node": true}, "event": {"teamwork": true, "store": true, "artifact": true},
@@ -232,7 +235,7 @@ func allowedHarnessImport(source, target string) bool {
 
 func knownHarnessPackage(name string) bool {
 	switch name {
-	case "cmd", "assets", "agency", "agencycli", "agent", "artifact", "attach", "authority", "cas", "event", "integration", "localapi", "model", "node", "peer", "peerlink", "selector", "store", "teamwork", "testkit":
+	case "cmd", "assets", "agency", "agencycli", "agent", "artifact", "attach", "authority", "cas", "daemon", "event", "integration", "localapi", "model", "node", "peer", "peerlink", "selector", "store", "teamwork", "testkit":
 		return true
 	default:
 		return false
