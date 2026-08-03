@@ -93,8 +93,17 @@ func (collector *dependencyCollector) describeSource(path string) (dependencySou
 	inHarness := strings.HasPrefix(relative, "harness/")
 	return dependencySource{
 		relative: relative, packagePath: sourcePackagePath(relative), layer: harnessPackage(relative),
-		inHarness: inHarness, isProduction: !strings.HasSuffix(relative, "_test.go"),
+		inHarness: inHarness, isProduction: !strings.HasSuffix(relative, "_test.go") && !isTestdataPath(relative),
 	}, true, nil
+}
+
+func isTestdataPath(path string) bool {
+	for _, part := range strings.Split(filepath.ToSlash(path), "/") {
+		if part == "testdata" {
+			return true
+		}
+	}
+	return false
 }
 
 func (collector *dependencyCollector) recordUnexpectedLayer(source dependencySource) {

@@ -201,6 +201,37 @@ import _ "github.com/mnemon-dev/mnemon/harness/internal/store"
 	}
 }
 
+func TestDependencyFindingsTreatTestdataAsTestComposition(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, root, "harness/internal/selector/testdata/network/main.go", `package main
+import (
+	_ "github.com/mnemon-dev/mnemon/harness/internal/authority"
+	_ "github.com/mnemon-dev/mnemon/harness/internal/cas"
+)
+`)
+	findings, err := dependencyFindings(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("testdata composition findings = %#v", findings)
+	}
+}
+
+func TestDependencyFindingsTestdataStillEnforcesLegacyBoundary(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, root, "harness/internal/selector/testdata/network/main.go", `package main
+import _ "github.com/mnemon-dev/mnemon/internal/model"
+`)
+	findings, err := dependencyFindings(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings) != 1 || findings[0].Rule != "harness_legacy_dependency" {
+		t.Fatalf("testdata legacy findings = %#v", findings)
+	}
+}
+
 func TestDependencyFindingsAllowBottomModelAndUsePackageIdentity(t *testing.T) {
 	root := t.TempDir()
 	writeTestFile(t, root, "harness/internal/authority/a.go", `package authority

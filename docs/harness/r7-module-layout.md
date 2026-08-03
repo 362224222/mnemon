@@ -180,6 +180,14 @@ selector -------------------------> agency      (unwired; deleting the
                                                  directory affects no one)
 ```
 
+`selector`'s production dependency remains exactly `agency`. Its simulator
+tests and the real-network composition command live below
+`internal/selector/simtest` and `internal/selector/testdata` respectively, so
+the same directory deletion removes every compiled R8 consumer. Go source in
+`testdata` is test composition rather than a production package edge; it still
+participates in formatting, legacy-boundary, and quality checks. No Go package
+outside `internal/selector` may import `selector`.
+
 No package may be created for symmetry. If a proposed package cannot name the
 contract rule that forces it, it does not exist.
 
@@ -271,7 +279,7 @@ condition and cannot expand the R7 gate set.
 |---|---|
 | `G-R7-AUTHORITY-CUTOVER` | `agency` has an empty internal import set. |
 | `G-R7-AUTHORITY-CUTOVER` | `authority`'s internal import set is exactly `{agency}`. |
-| R8 deletion condition | After removing `internal/selector`, the build and every R7 conformance suite pass. |
+| R8 deletion condition | After removing `internal/selector`, both R7 commands build and every R7 Go conformance package passes. |
 | `G-R7-NO-CASE-KIND` | No production Go contains `channel`, `teamwork`, `review`, `contract-net`, `blackboard`, or `memory.wiki` as a semantic identifier. They may appear only as opaque `kind` values in testdata. |
 | `G-R7-AUTHORITY-CUTOVER` | `internal/` contains exactly the seven R7 packages in section 2 and may additionally contain only the optional `selector`; no dependency edge contradicts the graph there. |
 

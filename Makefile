@@ -16,6 +16,7 @@ endif
 
 .PHONY: deps build harness-build install uninstall test unit vet harness-validate harness-quality harness-verify
 .PHONY: harness-contract harness-static harness-docker harness-docker-case harness-live-pi
+.PHONY: harness-r8 harness-r8-docker
 .PHONY: docker-build docker-run compose-up compose-down compose-dev release-snapshot clean help
 
 .DEFAULT_GOAL := help
@@ -82,6 +83,13 @@ harness-live-pi: ## Run the opt-in Pi/DeepSeek live smoke
 	@test "$${LIVE_PI:-}" = 1 || { echo "error: set LIVE_PI=1" >&2; exit 2; }
 	@test -n "$${DEEPSEEK_API_KEY:-}" || { echo "error: DEEPSEEK_API_KEY is required" >&2; exit 2; }
 	harness/test/r7/runner/run_live_pi.sh
+
+harness-r8: ## Test the optional, removable R8 selector and its proof adapters
+	$(HARNESS_GO) test ./internal/selector ./internal/selector/simtest ./internal/selector/testdata/network/cmd/r8-peer -count=1
+	$(HARNESS_GO) test -race ./internal/selector ./internal/selector/simtest ./internal/selector/testdata/network/cmd/r8-peer -count=1
+
+harness-r8-docker: harness-r8 ## Run the isolated five-peer R8 network proof
+	harness/test/r8/network/runner/run_docker.sh
 
 harness-verify: harness-quality ## Run the complete exact-tree R7 merge gate and write its report
 	$(HARNESS_GO) run ./tools/corecontract/cmd/core-gate --root ..

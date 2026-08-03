@@ -7,6 +7,7 @@ set -euo pipefail
 
 R7_STATIC_RUNNER_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 R7_STATIC_HARNESS_ROOT=$(cd "$R7_STATIC_RUNNER_DIR/../../.." && pwd -P)
+R7_STATIC_REPOSITORY_ROOT=$(cd "$R7_STATIC_HARNESS_ROOT/.." && pwd -P)
 R7_STATIC_TMP=
 
 r7_static_fail() {
@@ -26,6 +27,22 @@ r7_static_candidate_copy() {
   R7_STATIC_TMP=$(mktemp -d "${TMPDIR:-/tmp}/mnemon-r7-static.XXXXXX")
   mkdir "$R7_STATIC_TMP/harness"
   cp -R "$R7_STATIC_HARNESS_ROOT/." "$R7_STATIC_TMP/harness"
+}
+
+# Copy the minimum repository surface needed by every Go conformance package.
+# The private Git copy lets history-bound contract tests inspect the exact
+# candidate without observing or mutating the caller's repository metadata.
+r7_static_repository_copy() {
+  local entry
+
+  r7_static_cleanup
+  R7_STATIC_TMP=$(mktemp -d "${TMPDIR:-/tmp}/mnemon-r7-static.XXXXXX")
+  mkdir "$R7_STATIC_TMP/repository"
+  for entry in .git .gitignore go.mod go.sum main.go cmd internal docs harness; do
+    test -e "$R7_STATIC_REPOSITORY_ROOT/$entry" || \
+      r7_static_fail "repository candidate input is missing: $entry"
+    cp -R "$R7_STATIC_REPOSITORY_ROOT/$entry" "$R7_STATIC_TMP/repository/$entry"
+  done
 }
 
 r7_static_cli_package() {
@@ -57,20 +74,24 @@ r7_static_core_tests() {
 
 r7_static_production_sources() {
   local root=$1 cli=internal/cli
+  local -a roots=(
+    internal/agency
+    internal/authority
+    internal/cas
+    internal/peerlink
+    internal/daemon
+    "$cli"
+    internal/attach
+    cmd/mnemon-harness
+    cmd/mnemond
+  )
+  if test -d "$root/internal/selector"; then
+    roots+=(internal/selector)
+  fi
   (
     cd "$root"
-    find \
-      internal/agency \
-      internal/authority \
-      internal/cas \
-      internal/peerlink \
-      internal/daemon \
-      "$cli" \
-      internal/attach \
-      internal/selector \
-      cmd/mnemon-harness \
-      cmd/mnemond \
-      -type f -name '*.go' ! -name '*_test.go' -print
+    find "${roots[@]}" \
+      -type f -name '*.go' ! -name '*_test.go' ! -path '*/testdata/*' -print
   )
 }
 
