@@ -7,7 +7,7 @@ func TestAllowedHarnessImportKeepsThinCommandAndBottomModel(t *testing.T) {
 		{"authority", "agency"}, {"selector", "agency"}, {"node", "authority"},
 		{"cas", "agency"}, {"peerlink", "agency"}, {"peerlink", "cas"},
 		{"attach", "agency"}, {"daemon", "agency"}, {"daemon", "authority"},
-		{"daemon", "cas"}, {"daemon", "peerlink"}} {
+		{"daemon", "cas"}, {"daemon", "peerlink"}, {"cmd", "daemon"}} {
 		if !allowedHarnessImport(edge[0], edge[1]) {
 			t.Errorf("expected allowed edge %s -> %s", edge[0], edge[1])
 		}
@@ -21,7 +21,8 @@ func TestAllowedHarnessImportKeepsThinCommandAndBottomModel(t *testing.T) {
 		{"peerlink", "authority"}, {"cas", "peerlink"}, {"attach", "authority"},
 		{"attach", "cas"}, {"attach", "peerlink"}, {"daemon", "node"},
 		{"daemon", "localapi"}, {"daemon", "model"}, {"attach", "model"},
-		{"cas", "model"}, {"peerlink", "model"}} {
+		{"cas", "model"}, {"peerlink", "model"}, {"cmd", "agency"},
+		{"cmd", "authority"}, {"cmd", "cas"}, {"cmd", "peerlink"}} {
 		if allowedHarnessImport(edge[0], edge[1]) {
 			t.Errorf("unexpected allowed edge %s -> %s", edge[0], edge[1])
 		}
