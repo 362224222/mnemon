@@ -37,6 +37,7 @@ func TestProvisionCreatesOneReplayableNodeIdentityAndPrincipal(t *testing.T) {
 		assertOwnerMode(t, directory, ownerDirectoryMode)
 	}
 	for _, file := range []string{filepath.Join(wantState, provisionLockFile),
+		filepath.Join(wantState, ensureLockFile),
 		filepath.Join(wantState, transportIdentityFile),
 		filepath.Join(wantState, authorityFileName),
 		filepath.Join(wantState, authorityFileName+".writer.lock")} {
@@ -110,6 +111,9 @@ func TestProvisionConvergesFromSchemaOnlyPartialState(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := ProvisionTransportIdentity(state); err != nil {
+		t.Fatal(err)
+	}
+	if err := provisionEnsureLock(state); err != nil {
 		t.Fatal(err)
 	}
 	objects := provisionTestCAS(t, state)
@@ -236,6 +240,25 @@ func TestProvisionNeverRepairsMissingCASAfterAuthorityExists(t *testing.T) {
 	}
 }
 
+func TestProvisionNeverRepairsMissingEnsureLockAfterAuthorityExists(t *testing.T) {
+	root := canonicalTempDir(t)
+	result, err := Provision(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock := filepath.Join(result.StateDirectory(), ensureLockFile)
+	if err := os.Remove(lock); err != nil {
+		t.Fatal(err)
+	}
+	if replay, err := Provision(context.Background(), root); replay != (ProvisionResult{}) ||
+		!errors.Is(err, ErrProvision) {
+		t.Fatalf("Provision with missing ensure lock = (%#v, %v)", replay, err)
+	}
+	if _, err := os.Lstat(lock); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("rejected replay repaired missing ensure lock: %v", err)
+	}
+}
+
 func TestProvisionFailsClosedOnDifferentExistingPrincipal(t *testing.T) {
 	root := canonicalTempDir(t)
 	state, err := ensureProvisionDirectories(root)
@@ -243,6 +266,9 @@ func TestProvisionFailsClosedOnDifferentExistingPrincipal(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := ProvisionTransportIdentity(state); err != nil {
+		t.Fatal(err)
+	}
+	if err := provisionEnsureLock(state); err != nil {
 		t.Fatal(err)
 	}
 	objects := provisionTestCAS(t, state)
@@ -331,7 +357,9 @@ func TestOpenProvisionedIsStrictAndDerivesPrincipal(t *testing.T) {
 	if err := runtime.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+}
 
+func TestOpenProvisionedDoesNotInitializeEmptyState(t *testing.T) {
 	empty := canonicalTempDir(t)
 	before, err := os.ReadDir(empty)
 	if err != nil {
@@ -345,22 +373,50 @@ func TestOpenProvisionedIsStrictAndDerivesPrincipal(t *testing.T) {
 		t.Fatalf("strict open initialized empty state: before=%d after=%d error=%v",
 			len(before), len(after), err)
 	}
-	missingLockRoot := canonicalTempDir(t)
-	missingLockState, err := Provision(context.Background(), missingLockRoot)
+}
+
+func TestOpenProvisionedDoesNotRepairMissingProvisionLock(t *testing.T) {
+	root := canonicalTempDir(t)
+	result, err := Provision(context.Background(), root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	lockPath := filepath.Join(missingLockState.StateDirectory(), provisionLockFile)
+	lockPath := filepath.Join(result.StateDirectory(), provisionLockFile)
 	if err := os.Remove(lockPath); err != nil {
 		t.Fatal(err)
 	}
-	if opened, err := OpenProvisioned(context.Background(), missingLockState.StateDirectory()); err == nil || opened != nil {
+	if opened, err := OpenProvisioned(context.Background(), result.StateDirectory()); err == nil || opened != nil {
 		t.Fatalf("OpenProvisioned(missing lock) = (%v, %v)", opened, err)
 	}
 	if _, err := os.Lstat(lockPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("strict open recreated missing lock: %v", err)
 	}
+}
 
+func TestOpenProvisionedDoesNotRepairMissingEnsureLock(t *testing.T) {
+	root := canonicalTempDir(t)
+	result, err := Provision(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ensurePath := filepath.Join(result.StateDirectory(), ensureLockFile)
+	if err := os.Remove(ensurePath); err != nil {
+		t.Fatal(err)
+	}
+	if opened, err := OpenProvisioned(context.Background(), result.StateDirectory()); err == nil || opened != nil {
+		t.Fatalf("OpenProvisioned(missing ensure lock) = (%v, %v)", opened, err)
+	}
+	if _, err := os.Lstat(ensurePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("strict open recreated missing ensure lock: %v", err)
+	}
+}
+
+func TestOpenProvisionedDoesNotRepairMissingCAS(t *testing.T) {
+	root := canonicalTempDir(t)
+	result, err := Provision(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
 	tempDirectory := filepath.Join(result.StateDirectory(), "objects", "sha256", ".tmp")
 	if err := os.Remove(tempDirectory); err != nil {
 		t.Fatal(err)

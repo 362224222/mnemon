@@ -91,6 +91,42 @@ func TestOwnerUnixListenerRejectsUnsafeDirectoryAndExistingPath(t *testing.T) {
 	}
 }
 
+func TestStaleRecoveryPreservesActiveOwnerSocket(t *testing.T) {
+	directory := canonicalTempDir(t)
+	socket := filepath.Join(directory, "active.sock")
+	listener, err := listenOwnerUnix(socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	before, err := os.Lstat(socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := removeStaleOwnerSocket(socket); err == nil {
+		t.Fatal("stale recovery accepted an active owner socket")
+	}
+	after, err := os.Lstat(socket)
+	if err != nil || !os.SameFile(before, after) {
+		t.Fatalf("active owner socket changed: %v", err)
+	}
+}
+
+func TestStaleRecoveryPreservesUnsafeExistingPath(t *testing.T) {
+	directory := canonicalTempDir(t)
+	path := filepath.Join(directory, "unsafe.sock")
+	if err := os.WriteFile(path, []byte("not a socket"), ownerFileMode); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeStaleOwnerSocket(path); err == nil {
+		t.Fatal("stale recovery accepted a regular file")
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil || string(raw) != "not a socket" {
+		t.Fatalf("unsafe path changed: content=%q error=%v", raw, err)
+	}
+}
+
 func TestOwnerUnixListenerBoundsConnectionsAndReleasesBudget(t *testing.T) {
 	directory := canonicalTempDir(t)
 	if err := os.Chmod(directory, ownerDirectoryMode); err != nil {

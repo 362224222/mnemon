@@ -56,6 +56,58 @@ func TestDaemonServesCompleteLocalLoopOverOwnerUnix(t *testing.T) {
 	}
 }
 
+func TestDaemonRecoversOnlyAStaleOwnerSocketAfterTakingWriter(t *testing.T) {
+	state, principal := provisionDaemonState(t)
+	runtime, err := Open(context.Background(), state, principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	socket := filepath.Join(state, controlSocketName)
+	stale, err := net.ListenUnix("unix", &net.UnixAddr{Name: socket, Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale.SetUnlinkOnClose(false)
+	if err := os.Chmod(socket, ownerSocketMode); err != nil {
+		_ = stale.Close()
+		t.Fatal(err)
+	}
+	staleInfo, err := os.Lstat(socket)
+	if err != nil {
+		_ = stale.Close()
+		t.Fatal(err)
+	}
+	if err := stale.Close(); err != nil {
+		t.Fatal(err)
+	}
+	serveErrors := make(chan error, 1)
+	go func() { serveErrors <- runtime.Serve(context.Background()) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		current, err := os.Lstat(socket)
+		if err == nil && !os.SameFile(staleInfo, current) {
+			break
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatal("stale owner socket was not replaced")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	client := unixHTTPClient(socket)
+	status := controlRequest(t, client, http.MethodGet, routeStatus, nil, nil, http.StatusOK)
+	if string(status) != `{"schema":"mnemon.agency.status","status":"ready","version":1}` {
+		t.Fatalf("recovered daemon status = %s", status)
+	}
+	closeContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := runtime.Close(closeContext); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-serveErrors; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func exerciseLocalControlLoop(t *testing.T, client *http.Client) {
 	t.Helper()
 	status := controlRequest(t, client, http.MethodGet, routeStatus, nil, nil, http.StatusOK)

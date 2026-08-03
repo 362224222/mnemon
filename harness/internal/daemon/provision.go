@@ -73,6 +73,18 @@ func provisionLocked(ctx context.Context, stateDirectory string,
 	if err := rejectAuthorityWithoutIdentity(stateDirectory); err != nil {
 		return ProvisionResult{}, fmt.Errorf("%w: %w", ErrProvision, err)
 	}
+	authorityPresent, err := authorityStatePresent(stateDirectory)
+	if err != nil {
+		return ProvisionResult{}, fmt.Errorf("%w: inspect authority: %w", ErrProvision, err)
+	}
+	if authorityPresent {
+		if _, present, err := inspectProvisionLock(filepath.Join(stateDirectory, ensureLockFile)); err != nil || !present {
+			return ProvisionResult{}, fmt.Errorf("%w: required ensure lock: %w",
+				ErrProvision, errors.Join(errors.New("lock is unavailable"), err))
+		}
+	} else if err := provisionEnsureLock(stateDirectory); err != nil {
+		return ProvisionResult{}, fmt.Errorf("%w: provision ensure lock: %w", ErrProvision, err)
+	}
 
 	identity, identityReplayed, err := provisionTransportIdentityLocked(stateDirectory)
 	if err != nil {
@@ -84,10 +96,6 @@ func provisionLocked(ctx context.Context, stateDirectory string,
 	principal, err := DefaultAgentPrincipal(identity.PublicKey())
 	if err != nil {
 		return ProvisionResult{}, fmt.Errorf("%w: %w", ErrProvision, err)
-	}
-	authorityPresent, err := authorityStatePresent(stateDirectory)
-	if err != nil {
-		return ProvisionResult{}, fmt.Errorf("%w: inspect authority: %w", ErrProvision, err)
 	}
 	objects, err := openProvisionCAS(stateDirectory, authorityPresent)
 	if err != nil {
@@ -211,6 +219,9 @@ func requireProvisionedLayout(stateDirectory string) error {
 		if err := requireOwnerDirectory(directory); err != nil {
 			return fmt.Errorf("required private directory %q: %w", filepath.Base(directory), err)
 		}
+	}
+	if _, present, err := inspectProvisionLock(filepath.Join(stateDirectory, ensureLockFile)); err != nil || !present {
+		return errors.Join(errors.New("required ensure lock is unavailable"), err)
 	}
 	return nil
 }

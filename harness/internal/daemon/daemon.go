@@ -137,6 +137,10 @@ func (daemon *Runtime) Serve(ctx context.Context) error {
 		daemon.mu.Unlock()
 		return errors.New("daemon serve: daemon is not open")
 	}
+	if err := removeStaleOwnerSocket(daemon.socket); err != nil {
+		daemon.mu.Unlock()
+		return err
+	}
 	listener, err := listenOwnerUnix(daemon.socket)
 	if err != nil {
 		daemon.mu.Unlock()

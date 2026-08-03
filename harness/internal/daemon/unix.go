@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sync"
 	"syscall"
+	"time"
 )
 
 const (
@@ -30,6 +31,76 @@ type budgetedUnixConnection struct {
 	net.Conn
 	release chan struct{}
 	once    sync.Once
+}
+
+// removeStaleOwnerSocket is called only after Runtime owns the authority
+// writer. That writer exclusion proves no live R7 daemon can own an existing
+// control socket. Only an exact owner socket may be removed; every other path
+// fails closed.
+func removeStaleOwnerSocket(socketPath string) error {
+	if socketPath == "" || !filepath.IsAbs(socketPath) || filepath.Clean(socketPath) != socketPath {
+		return errors.New("daemon control: socket path must be absolute and canonical")
+	}
+	parent := filepath.Dir(socketPath)
+	if err := requireOwnerDirectory(parent); err != nil {
+		return fmt.Errorf("daemon control: unsafe socket directory: %w", err)
+	}
+	parentInfo, err := os.Lstat(parent)
+	if err != nil {
+		return fmt.Errorf("daemon control: inspect socket directory: %w", err)
+	}
+	ownerUID, err := fileOwnerUID(parentInfo)
+	if err != nil {
+		return fmt.Errorf("daemon control: inspect socket owner: %w", err)
+	}
+	identity, present, err := ownerSocketInfo(socketPath, ownerUID)
+	if err != nil || !present {
+		return err
+	}
+	connection, dialErr := net.DialTimeout("unix", socketPath, 100*time.Millisecond)
+	if dialErr == nil {
+		_ = connection.Close()
+		return errors.New("daemon control: existing owner socket is active")
+	}
+	if errors.Is(dialErr, os.ErrNotExist) || errors.Is(dialErr, syscall.ENOENT) {
+		return nil
+	}
+	if !errors.Is(dialErr, syscall.ECONNREFUSED) {
+		return fmt.Errorf("daemon control: probe existing socket: %w", dialErr)
+	}
+	current, present, err := ownerSocketInfo(socketPath, ownerUID)
+	if err != nil {
+		return err
+	}
+	if !present {
+		return nil
+	}
+	if !os.SameFile(identity, current) {
+		return errors.New("daemon control: existing socket changed during recovery")
+	}
+	if err := os.Remove(socketPath); err != nil {
+		return fmt.Errorf("daemon control: remove stale socket: %w", err)
+	}
+	return syncOwnerDirectory(parent)
+}
+
+func ownerSocketInfo(path string, ownerUID uint32) (os.FileInfo, bool, error) {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("daemon control: inspect socket path: %w", err)
+	}
+	if info.Mode()&os.ModeType != os.ModeSocket || info.Mode().Perm() != ownerSocketMode {
+		return nil, true, errors.New("daemon control: existing path is not an owner-only socket")
+	}
+	socketOwner, err := fileOwnerUID(info)
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if err != nil || socketOwner != ownerUID || !ok || stat.Nlink != 1 {
+		return nil, true, errors.New("daemon control: existing socket has the wrong owner")
+	}
+	return info, true, nil
 }
 
 func listenOwnerUnix(socketPath string) (net.Listener, error) {

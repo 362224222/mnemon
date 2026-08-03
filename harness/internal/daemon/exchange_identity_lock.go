@@ -13,6 +13,7 @@ import (
 
 const (
 	provisionLockFile = ".provision.lock"
+	ensureLockFile    = ".ensure.lock"
 	provisionLockWait = 5 * time.Second
 	provisionLockPoll = 10 * time.Millisecond
 )
@@ -25,14 +26,29 @@ func acquireExistingProvisionLock(ctx context.Context, directory string) (*os.Fi
 	return openProvisionLock(ctx, directory, false)
 }
 
+func acquireExistingEnsureLock(ctx context.Context, directory string) (*os.File, error) {
+	return openNamedLock(ctx, filepath.Join(directory, ensureLockFile), false)
+}
+
+func provisionEnsureLock(directory string) error {
+	file, err := openProvisionLockFile(filepath.Join(directory, ensureLockFile), true)
+	if err != nil {
+		return err
+	}
+	return file.Close()
+}
+
 func openProvisionLock(ctx context.Context, directory string, create bool) (*os.File, error) {
+	return openNamedLock(ctx, filepath.Join(directory, provisionLockFile), create)
+}
+
+func openNamedLock(ctx context.Context, path string, create bool) (*os.File, error) {
 	if ctx == nil {
 		return nil, errors.New("daemon provision: lock context is required")
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	path := filepath.Join(directory, provisionLockFile)
 	file, err := openProvisionLockFile(path, create)
 	if err != nil {
 		return nil, err
