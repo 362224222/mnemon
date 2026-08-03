@@ -76,6 +76,101 @@ func TestMissingPeerArtifactExpiresWithoutCreatingDomainState(t *testing.T) {
 	}
 }
 
+func TestRemoteRejectionAndExpiryLeaveOriginAnchorOpen(t *testing.T) {
+	t.Run("rejected", func(t *testing.T) {
+		fixture := newPeerRoundTripFixture(t)
+		delivery := fixture.admitOrigin(t)
+		signature := ed25519.Sign(fixture.originPrivate, delivery.SigningMessage())
+		staged, err := fixture.receiver.store.StagePeerDelivery(fixture.receiver.ctx,
+			fixture.receiverRoute.RemotePeerID, delivery.CanonicalJSON(), signature)
+		if err != nil || staged.State() != PeerAdmissionStateStaged {
+			t.Fatalf("StagePeerDelivery() = %#v, %v", staged, err)
+		}
+		if got := fixture.receiver.catalog(t, fixture.content); got != fixture.digest {
+			t.Fatalf("receiver Artifact digest = %s, want %s", got.String(), fixture.digest.String())
+		}
+		if _, err := fixture.receiver.store.RevokePeerRoute(fixture.receiver.ctx,
+			fixture.receiverRoute.RouteID); err != nil {
+			t.Fatal(err)
+		}
+		rejected, err := fixture.receiver.store.AdmitPeerDelivery(fixture.receiver.ctx, delivery.ID())
+		if err != nil || rejected.State() != PeerAdmissionStateRejected {
+			t.Fatalf("rejected peer admission = %#v, %v", rejected, err)
+		}
+		receipt, ok := rejected.Receipt()
+		if !ok || receipt.Outcome() != agency.PeerAdmissionOutcomeRejected {
+			t.Fatalf("rejected peer Receipt = %#v", receipt)
+		}
+		fixture.settleOrigin(t, delivery, receipt)
+		assertOriginAnchorOpen(t, fixture.origin)
+	})
+
+	t.Run("expired", func(t *testing.T) {
+		fixture := newPeerRoundTripFixture(t)
+		delivery := fixture.admitOrigin(t)
+		signature := ed25519.Sign(fixture.originPrivate, delivery.SigningMessage())
+		if staged, err := fixture.receiver.store.StagePeerDelivery(fixture.receiver.ctx,
+			fixture.receiverRoute.RemotePeerID, delivery.CanonicalJSON(), signature); err != nil ||
+			staged.State() != PeerAdmissionStateStaged {
+			t.Fatalf("StagePeerDelivery() = %#v, %v", staged, err)
+		}
+		*fixture.receiver.now = delivery.ExpiresAt()
+		if expired, err := fixture.receiver.store.AdmitPeerDelivery(fixture.receiver.ctx,
+			delivery.ID()); err != nil || expired.State() != PeerAdmissionStateExpired {
+			t.Fatalf("expired peer admission = %#v, %v", expired, err)
+		}
+		*fixture.origin.now = delivery.ExpiresAt()
+		if pending, err := fixture.origin.store.PendingPeerDeliveries(fixture.origin.ctx,
+			MaxPendingPeerDeliveries); err != nil || len(pending) != 0 {
+			t.Fatalf("expired origin outbox projection = %#v, %v", pending, err)
+		}
+		var state string
+		if err := fixture.origin.store.db.QueryRow(`SELECT state FROM peer_outbox
+			WHERE delivery_id = ?`, delivery.ID().String()).Scan(&state); err != nil {
+			t.Fatal(err)
+		}
+		if state != "expired" {
+			t.Fatalf("origin delivery state = %q, want expired", state)
+		}
+		assertOriginAnchorOpen(t, fixture.origin)
+	})
+}
+
+func TestPeerInboxRejectsSameDeliveryIDDifferentEnvelope(t *testing.T) {
+	fixture := newPeerRoundTripFixture(t)
+	delivery := fixture.admitOrigin(t)
+	signature := ed25519.Sign(fixture.originPrivate, delivery.SigningMessage())
+	if staged, err := fixture.receiver.store.StagePeerDelivery(fixture.receiver.ctx,
+		fixture.receiverRoute.RemotePeerID, delivery.CanonicalJSON(), signature); err != nil ||
+		staged.State() != PeerAdmissionStateStaged {
+		t.Fatalf("StagePeerDelivery() = %#v, %v", staged, err)
+	}
+	correlation, _ := delivery.OriginCorrelation()
+	conflict, err := agency.NewPeerDelivery(fixture.originRoute.RouteID, agency.PeerDeliverySpec{
+		OriginEvent: delivery.OriginEvent(), OriginSequence: delivery.OriginSequence(),
+		OriginAcceptedAt: delivery.OriginAcceptedAt(), OriginSource: delivery.OriginSource(),
+		OriginCausation: delivery.OriginCausation(), OriginCorrelation: correlation,
+		TargetAlias: delivery.TargetAlias(), Kind: delivery.Kind(),
+		Payload:   mustPayload(t, "same identity with different immutable semantics"),
+		Artifacts: delivery.Artifacts(), CausalDepth: delivery.CausalDepth(),
+		ExpiresAt: delivery.ExpiresAt(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if conflict.ID() != delivery.ID() || conflict.EnvelopeDigest() == delivery.EnvelopeDigest() {
+		t.Fatal("test fixture did not preserve DeliveryID while changing the envelope")
+	}
+	conflictSignature := ed25519.Sign(fixture.originPrivate, conflict.SigningMessage())
+	if _, err := fixture.receiver.store.StagePeerDelivery(fixture.receiver.ctx,
+		fixture.receiverRoute.RemotePeerID, conflict.CanonicalJSON(), conflictSignature); !errors.Is(err, ErrPeerDeliveryConflict) {
+		t.Fatalf("same DeliveryID with different envelope = %v, want ErrPeerDeliveryConflict", err)
+	}
+	if got := countRows(t, fixture.receiver.store, "peer_inbox"); got != 1 {
+		t.Fatalf("conflicting Delivery created %d inbox rows, want 1", got)
+	}
+}
+
 func TestSettledPeerDeliveryReplayStillAuthenticatesActorAndReceipt(t *testing.T) {
 	fixture := newPeerRoundTripFixture(t)
 	delivery := fixture.admitOrigin(t)
@@ -221,6 +316,20 @@ func (fixture peerRoundTripFixture) settleOrigin(t *testing.T, delivery agency.P
 	}
 	if countRows(t, fixture.origin.store, "handlings") != 1 {
 		t.Fatal("remote Receipt incorrectly closed the origin local responsibility anchor")
+	}
+	assertOriginAnchorOpen(t, fixture.origin)
+}
+
+func assertOriginAnchorOpen(t *testing.T, fixture *authorityFixture) {
+	t.Helper()
+	var state string
+	var outcome, claimAttachment any
+	if err := fixture.store.db.QueryRow(`SELECT state, outcome, claim_attachment_id
+		FROM handlings LIMIT 1`).Scan(&state, &outcome, &claimAttachment); err != nil {
+		t.Fatal(err)
+	}
+	if state != "open" || outcome != nil || claimAttachment != nil {
+		t.Fatalf("origin anchor = state:%s outcome:%v claim:%v", state, outcome, claimAttachment)
 	}
 }
 

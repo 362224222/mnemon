@@ -223,6 +223,108 @@ func TestConcurrentCurrentReplayCreatesOneClaimAndOneOperation(t *testing.T) {
 	}
 }
 
+func TestCurrentNeverClaimsAnotherPrincipalsHandling(t *testing.T) {
+	fixture := newAuthorityFixture(t, "principal:claim-owner")
+	root := rootRequest(t, fixture.current(t), "operation:claim-owner-root", "private responsibility")
+	if _, err := fixture.store.Admit(fixture.ctx, fixture.proof, root); err != nil {
+		t.Fatal(err)
+	}
+
+	otherPrincipal := mustPrincipal(t, "principal:claim-outsider")
+	if err := fixture.store.EnrollPrincipal(fixture.ctx, otherPrincipal); err != nil {
+		t.Fatal(err)
+	}
+	otherProof, err := fixture.store.IssueInteractiveAttachment(fixture.ctx, otherPrincipal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outsider, err := fixture.store.Current(fixture.ctx, otherProof,
+		mustCurrentOperation(t, "operation:claim-outsider-current"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decodePublicView(t, outsider).Current != nil {
+		t.Fatal("another Principal received a private Handling")
+	}
+	var target, state string
+	var claimAttachment any
+	var fence uint64
+	if err := fixture.store.db.QueryRow(`SELECT target_principal_id, state,
+		claim_attachment_id, claim_fence FROM handlings LIMIT 1`).
+		Scan(&target, &state, &claimAttachment, &fence); err != nil {
+		t.Fatal(err)
+	}
+	if target != fixture.principal.String() || state != "open" || claimAttachment != nil || fence != 0 {
+		t.Fatalf("private Handling changed: target=%s state=%s attachment=%v fence=%d",
+			target, state, claimAttachment, fence)
+	}
+
+	owner, err := fixture.store.Current(fixture.ctx, fixture.proof,
+		mustCurrentOperation(t, "operation:claim-owner-current"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decodePublicView(t, owner).Current == nil {
+		t.Fatal("owner Principal could not claim its unchanged Handling")
+	}
+}
+
+func TestConcurrentDifferentCurrentOperationsCreateOneLiveClaim(t *testing.T) {
+	fixture := newAuthorityFixture(t, "principal:current-distinct-race")
+	root := rootRequest(t, fixture.current(t), "operation:current-distinct-root", "claim once")
+	if _, err := fixture.store.Admit(fixture.ctx, fixture.proof, root); err != nil {
+		t.Fatal(err)
+	}
+	operations := []CurrentOperation{
+		mustCurrentOperation(t, "operation:current-distinct-a"),
+		mustCurrentOperation(t, "operation:current-distinct-b"),
+	}
+	type outcome struct {
+		view BoundView
+		err  error
+	}
+	start := make(chan struct{})
+	results := make(chan outcome, len(operations))
+	var workers sync.WaitGroup
+	for _, operation := range operations {
+		operation := operation
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			<-start
+			view, err := fixture.store.Current(fixture.ctx, fixture.proof, operation)
+			results <- outcome{view: view, err: err}
+		}()
+	}
+	close(start)
+	workers.Wait()
+	close(results)
+	for result := range results {
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		if decodePublicView(t, result.view).Current == nil {
+			t.Fatal("distinct Current operation did not project the shared live claim")
+		}
+	}
+	for _, operation := range operations {
+		if got := countCurrentOperations(t, fixture.store, operation); got != 1 {
+			t.Fatalf("Current operation %s rows = %d, want 1", operation.key.String(), got)
+		}
+	}
+	var claimed int
+	var attachment string
+	var fence uint64
+	if err := fixture.store.db.QueryRow(`SELECT COUNT(*), MIN(claim_attachment_id),
+		MAX(claim_fence) FROM handlings WHERE claim_attachment_id IS NOT NULL`).
+		Scan(&claimed, &attachment, &fence); err != nil {
+		t.Fatal(err)
+	}
+	if claimed != 1 || attachment != fixture.proof.ID().String() || fence != 1 {
+		t.Fatalf("live claims = %d attachment=%s fence=%d", claimed, attachment, fence)
+	}
+}
+
 func TestCurrentReplayRejectsCorruptStoredProjection(t *testing.T) {
 	fixture := newAuthorityFixture(t, "principal:current-corruption")
 	operation := mustCurrentOperation(t, "operation:current-corruption")

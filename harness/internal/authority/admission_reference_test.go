@@ -167,6 +167,112 @@ func TestConcurrentReferenceCASAcceptsExactlyOneCandidate(t *testing.T) {
 	}
 }
 
+func TestReferenceExistingHeadCASRejectsStaleMutation(t *testing.T) {
+	fixture := newAuthorityFixture(t, "principal:reference-stale-cas")
+	first := fixture.catalog(t, "playbook exact head v1")
+	publish := referenceRequest(t, fixture.current(t), "operation:stale-cas-publish",
+		agency.ConsequencePublishReference, "playbook.stale-cas", &first)
+	if result, err := fixture.store.Admit(fixture.ctx, fixture.proof, publish); err != nil {
+		t.Fatal(err)
+	} else {
+		requireOutcome(t, result, agency.ReceiptOutcomeAccepted)
+	}
+
+	sharedView := fixture.current(t)
+	second := fixture.catalog(t, "playbook exact head v2")
+	supersede := referenceRequest(t, sharedView, "operation:stale-cas-supersede",
+		agency.ConsequenceSupersedeReference, "playbook.stale-cas", &second)
+	staleRetract := referenceRequest(t, sharedView, "operation:stale-cas-retract",
+		agency.ConsequenceRetractReference, "playbook.stale-cas", nil)
+	if result, err := fixture.store.Admit(fixture.ctx, fixture.proof, supersede); err != nil {
+		t.Fatal(err)
+	} else {
+		requireOutcome(t, result, agency.ReceiptOutcomeAccepted)
+	}
+	result, err := fixture.store.Admit(fixture.ctx, fixture.proof, staleRetract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireOutcome(t, result, agency.ReceiptOutcomeRejected)
+	receipt, err := agency.ParseReceiptCanonicalJSON(result.ReceiptJSON())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt.Code() != rejectionStaleReference {
+		t.Fatalf("stale Reference mutation code = %s, want %s", receipt.Code().String(),
+			rejectionStaleReference.String())
+	}
+	if got := countRows(t, fixture.store, "reference_lineage"); got != 2 {
+		t.Fatalf("stale Reference mutation created %d lineage rows, want 2", got)
+	}
+}
+
+func TestConcurrentExistingReferenceHeadCASAcceptsExactlyOneMutation(t *testing.T) {
+	fixture := newAuthorityFixture(t, "principal:reference-existing-cas")
+	first := fixture.catalog(t, "playbook shared head")
+	publish := referenceRequest(t, fixture.current(t), "operation:existing-cas-publish",
+		agency.ConsequencePublishReference, "playbook.existing-cas", &first)
+	if result, err := fixture.store.Admit(fixture.ctx, fixture.proof, publish); err != nil {
+		t.Fatal(err)
+	} else {
+		requireOutcome(t, result, agency.ReceiptOutcomeAccepted)
+	}
+
+	view := fixture.current(t)
+	left := fixture.catalog(t, "playbook branch left")
+	right := fixture.catalog(t, "playbook branch right")
+	requests := []agency.BoundIntent{
+		referenceRequest(t, view, "operation:existing-cas-left",
+			agency.ConsequenceSupersedeReference, "playbook.existing-cas", &left),
+		referenceRequest(t, view, "operation:existing-cas-right",
+			agency.ConsequenceSupersedeReference, "playbook.existing-cas", &right),
+	}
+	results := make(chan AdmissionResult, len(requests))
+	errors := make(chan error, len(requests))
+	var wait sync.WaitGroup
+	for _, request := range requests {
+		request := request
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			result, err := fixture.store.Admit(fixture.ctx, fixture.proof, request)
+			if err != nil {
+				errors <- err
+				return
+			}
+			results <- result
+		}()
+	}
+	wait.Wait()
+	close(results)
+	close(errors)
+	for err := range errors {
+		t.Fatal(err)
+	}
+	accepted, stale := 0, 0
+	for result := range results {
+		switch result.Outcome() {
+		case agency.ReceiptOutcomeAccepted:
+			accepted++
+		case agency.ReceiptOutcomeRejected:
+			receipt, err := agency.ParseReceiptCanonicalJSON(result.ReceiptJSON())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if receipt.Code() == rejectionStaleReference {
+				stale++
+			}
+		}
+	}
+	if accepted != 1 || stale != 1 {
+		t.Fatalf("existing-head race = accepted:%d stale:%d", accepted, stale)
+	}
+	if countRows(t, fixture.store, "active_references") != 1 ||
+		countRows(t, fixture.store, "reference_lineage") != 2 {
+		t.Fatal("existing-head CAS created multiple accepted branches")
+	}
+}
+
 func TestReferenceCanRetractThenSupersedeTombstone(t *testing.T) {
 	fixture := newAuthorityFixture(t, "principal:reference-lineage")
 	firstDigest := fixture.catalog(t, "playbook v1")

@@ -39,6 +39,56 @@ func TestAdmissionReplaysExactReceiptBeforeExpiredMutableAuthority(t *testing.T)
 	}
 }
 
+func TestAcceptedOperationReplayPrecedesStaleSubjectAndReferenceAuthority(t *testing.T) {
+	t.Run("subject", func(t *testing.T) {
+		fixture := newAuthorityFixture(t, "principal:subject-stale-replay")
+		root := rootRequest(t, fixture.current(t), "operation:subject-stale-root", "advance once")
+		if _, err := fixture.store.Admit(fixture.ctx, fixture.proof, root); err != nil {
+			t.Fatal(err)
+		}
+		request := subjectRequest(t, fixture.current(t), "operation:subject-stale-advance",
+			agency.ConsequenceAdvanceHandling, "advance the exact head", nil)
+		accepted, err := fixture.store.Admit(fixture.ctx, fixture.proof, request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		replayed, err := fixture.store.Admit(fixture.ctx, fixture.proof, request)
+		if err != nil {
+			t.Fatalf("accepted subject replay after its fence/head became stale: %v", err)
+		}
+		if !replayed.Replayed() || replayed.ReceiptDigest() != accepted.ReceiptDigest() ||
+			!bytes.Equal(replayed.ReceiptJSON(), accepted.ReceiptJSON()) {
+			t.Fatal("accepted subject replay did not return the exact original Receipt")
+		}
+		if got := countRows(t, fixture.store, "events"); got != 2 {
+			t.Fatalf("subject replay created %d Events, want 2", got)
+		}
+	})
+
+	t.Run("reference", func(t *testing.T) {
+		fixture := newAuthorityFixture(t, "principal:reference-stale-replay")
+		digest := fixture.catalog(t, "replayable playbook")
+		request := referenceRequest(t, fixture.current(t), "operation:reference-stale-publish",
+			agency.ConsequencePublishReference, "playbook.replay", &digest)
+		accepted, err := fixture.store.Admit(fixture.ctx, fixture.proof, request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		replayed, err := fixture.store.Admit(fixture.ctx, fixture.proof, request)
+		if err != nil {
+			t.Fatalf("accepted first-publish replay after expected-absent became stale: %v", err)
+		}
+		if !replayed.Replayed() || replayed.ReceiptDigest() != accepted.ReceiptDigest() ||
+			!bytes.Equal(replayed.ReceiptJSON(), accepted.ReceiptJSON()) {
+			t.Fatal("accepted Reference replay did not return the exact original Receipt")
+		}
+		if countRows(t, fixture.store, "events") != 1 ||
+			countRows(t, fixture.store, "reference_lineage") != 1 {
+			t.Fatal("Reference replay mutated accepted lineage")
+		}
+	})
+}
+
 func TestAdmissionReplayUsesStablePrincipalAcrossAttachments(t *testing.T) {
 	fixture := newAuthorityFixture(t, "principal:attachment-replay")
 	request := rootRequest(t, fixture.current(t), "operation:attachment-replay", "survive attachment change")
