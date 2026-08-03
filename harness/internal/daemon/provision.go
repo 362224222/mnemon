@@ -15,6 +15,16 @@ import (
 
 var ErrProvision = errors.New("daemon: provision R7 node")
 
+// ResolveProjectState returns the physical project root and its fixed R7 node
+// directory without creating, opening, or repairing either path.
+func ResolveProjectState(projectRoot string) (string, string, error) {
+	root, err := resolvePhysicalProjectRoot(projectRoot)
+	if err != nil {
+		return "", "", err
+	}
+	return root, filepath.Join(root, ".mnemon", "harness", "node"), nil
+}
+
 // ProvisionResult is the bounded setup receipt for one local R7 node. The
 // Principal is derived, never configured or persisted as a second identity.
 type ProvisionResult struct {
@@ -39,7 +49,7 @@ func Provision(ctx context.Context, projectRoot string) (result ProvisionResult,
 	if err := ctx.Err(); err != nil {
 		return ProvisionResult{}, err
 	}
-	root, err := resolvePhysicalProjectRoot(projectRoot)
+	root, _, err := ResolveProjectState(projectRoot)
 	if err != nil {
 		return ProvisionResult{}, fmt.Errorf("%w: %w", ErrProvision, err)
 	}

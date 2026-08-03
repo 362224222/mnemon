@@ -218,7 +218,7 @@ func allowedHarnessImport(source, target string) bool {
 	}
 	allowed := map[string]map[string]bool{
 		"attach":    {"agency": true},
-		"cmd":       {"agencycli": true, "daemon": true, "integration": true, "localapi": true, "node": true},
+		"cmd":       {"agencycli": true, "attach": true, "daemon": true, "integration": true, "localapi": true, "node": true},
 		"agencycli": {"agency": true},
 		"cas":       {"agency": true},
 		"daemon":    {"agency": true, "authority": true, "cas": true, "peerlink": true},

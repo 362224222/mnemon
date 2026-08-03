@@ -28,19 +28,46 @@ Reference handles, and the intents currently allowed.
 
 ## Intent
 
-Choose one allowed intent and provide only its bounded semantic content.
+Submit exactly one JSON object on stdin to
+`mnemon-harness agent submit --json`. The canonical Agent-owned fields are:
 
-- `kind` describes meaning; mnemond does not interpret it.
-- Choose targets and consequences only from the current View.
-- Attach results by Artifact reference rather than embedding large content.
-- Use `advance` when responsibility remains open.
-- Use terminal `completed` only with a verified result Artifact.
-- Use `declined` or `unresolved` to close honestly without inventing a result.
-- Never supply identity, time, digest, operation, fence, revision, or authority.
+- Required: `kind`, `payload`, and `consequence`.
+- Shape fields: `subject_handling`, `successors`, `reference_key`, and
+  `reference_head`.
+- Content and provenance: `artifacts`, `causation_handles`, and
+  `correlation_handle`.
 
-To preserve useful knowledge, publish an Artifact under a bounded Reference
-key. Later versions supersede the exact current head; invalid knowledge retracts
-the exact current head. A Reference is active content, not a task or workflow.
+`kind` describes meaning and is not interpreted by mnemond. `payload` is
+bounded semantic text. `consequence` must be present in this View's
+`allowed_intents`. Omit fields that do not belong to the selected shape.
+
+There are three structural shapes:
+
+1. Root Handling: use `handling.create`, omit `subject_handling` and Reference
+   fields, and provide one or more `successors`.
+2. Subject Handling: provide the current `subject_handling`; use
+   `handling.advance`, `handling.resolve.completed`,
+   `handling.resolve.declined`, or `handling.resolve.unresolved`; successors
+   are optional and Reference fields are absent. Completed requires at least
+   one verified Artifact.
+3. Reference: omit `subject_handling` and `successors`. Use
+   `reference.publish` with a new `reference_key` and exactly one Artifact,
+   `reference.supersede` with a View-offered `reference_head` and exactly one
+   Artifact, or `reference.retract` with a View-offered `reference_head` and no
+   Artifact.
+
+Each successor is exactly `{"self":true}` or
+`{"alias":"<View-offered target>"}`. Each Artifact input is exactly
+`{"kind":"candidate","handle":"<captured handle>"}` or
+`{"kind":"view_handle","handle":"<View-offered handle>"}`. Capture new
+bounded bytes with `mnemon-harness artifact capture --json` before referring to
+its candidate handle. Causation and correlation handles are optional
+provenance and must also be offered by the current View.
+
+Never supply identity, source, time, digest, operation, attachment, fence,
+revision, authority, accepted state, or completion state. Never alter, guess,
+or carry an opaque View handle into another View. If a requested effect is not
+offered, do not submit it.
 
 ## Receipt
 

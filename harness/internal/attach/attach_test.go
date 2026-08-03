@@ -2,12 +2,17 @@ package attach
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
+
+	"github.com/mnemon-dev/mnemon/harness/internal/agency"
 )
 
 func TestLoadHasOneFixedCueAndNoAuthorityOrSecretSurface(t *testing.T) {
@@ -24,7 +29,7 @@ func TestLoadHasOneFixedCueAndNoAuthorityOrSecretSurface(t *testing.T) {
 	for _, required := range []string{
 		`pi.on("before_agent_start"`, `execFileSync("mnemon-harness"`,
 		`["hook", "attach", "--json"]`, `stdio: ["ignore", "ignore", "ignore"]`,
-		`content: HOOK_CUE`, `display: false`,
+		`timeout: ATTACH_TIMEOUT_MS`, `content: HOOK_CUE`, `display: false`,
 	} {
 		if !strings.Contains(source, required) {
 			t.Fatalf("Pi extension lacks %q", required)
@@ -35,7 +40,7 @@ func TestLoadHasOneFixedCueAndNoAuthorityOrSecretSurface(t *testing.T) {
 	}
 	all := strings.ToLower(string(guide) + "\n" + cue + "\n" + source)
 	for _, forbidden := range []string{
-		"review.request", "contract-net", "blackboard", "memory.wiki",
+		"review", "workflow", "case", "contract-net", "blackboard", "memory.wiki",
 		"--event-id", "--operation-id", "--principal", "--fence", "--peer-id",
 		"deepseek", "api_key", "api-key", "authorization:", "bearer ", "sk-",
 		"process.env", "content: output", "content: result", "json.parse(",
@@ -49,6 +54,93 @@ func TestLoadHasOneFixedCueAndNoAuthorityOrSecretSurface(t *testing.T) {
 	extension[0] ^= 0xff
 	if bytes.Equal(guide, projection.Guide()) || bytes.Equal(extension, projection.PiExtension()) {
 		t.Fatal("Load returned mutable embedded assets")
+	}
+}
+
+func TestGuideTracksCanonicalAgentIntentFieldsAndClosedShapes(t *testing.T) {
+	projection, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	guide := string(projection.Guide())
+	inputs := []string{
+		`{"kind":"generic.signal","payload":"bounded","consequence":"handling.create","successors":[{"self":true},{"alias":"target:offered"}],"artifacts":[{"kind":"candidate","handle":"artifact:candidate"},{"kind":"view_handle","handle":"artifact:offered"}],"causation_handles":["event:cause"],"correlation_handle":"event:correlation"}`,
+		`{"kind":"generic.signal","payload":"bounded","consequence":"handling.advance","subject_handling":"handling:current"}`,
+		`{"kind":"generic.signal","payload":"bounded","consequence":"reference.publish","reference_key":"knowledge.current","artifacts":[{"kind":"candidate","handle":"artifact:candidate"}]}`,
+		`{"kind":"generic.signal","payload":"bounded","consequence":"reference.supersede","reference_head":"reference:head","artifacts":[{"kind":"view_handle","handle":"artifact:offered"}]}`,
+	}
+	fields := make(map[string]struct{})
+	for _, input := range inputs {
+		intent, err := agency.ParseAgentIntentJSON([]byte(input))
+		if err != nil {
+			t.Fatalf("real AgentIntent schema rejected drift fixture: %v", err)
+		}
+		var object map[string]json.RawMessage
+		if err := json.Unmarshal(intent.CanonicalJSON(), &object); err != nil {
+			t.Fatal(err)
+		}
+		for field := range object {
+			fields[field] = struct{}{}
+		}
+	}
+	if len(fields) != 10 {
+		t.Fatalf("canonical AgentIntent fixture fields = %v; want complete 10-field surface", fields)
+	}
+	for field := range fields {
+		if !strings.Contains(guide, "`"+field+"`") {
+			t.Errorf("guide lacks canonical AgentIntent field %q", field)
+		}
+	}
+	for _, consequence := range []agency.Consequence{
+		agency.ConsequenceCreateHandlings,
+		agency.ConsequenceAdvanceHandling,
+		agency.ConsequenceResolveCompleted,
+		agency.ConsequenceResolveDeclined,
+		agency.ConsequenceResolveUnresolved,
+		agency.ConsequencePublishReference,
+		agency.ConsequenceSupersedeReference,
+		agency.ConsequenceRetractReference,
+	} {
+		if !strings.Contains(guide, "`"+consequence.String()+"`") {
+			t.Errorf("guide lacks closed consequence %q", consequence.String())
+		}
+	}
+	for _, required := range []string{
+		`{"self":true}`, `{"alias":"<View-offered target>"}`,
+		`{"kind":"candidate","handle":"<captured handle>"}`,
+		`{"kind":"view_handle","handle":"<View-offered handle>"}`,
+	} {
+		if !strings.Contains(guide, required) {
+			t.Errorf("guide lacks canonical nested shape %q", required)
+		}
+	}
+}
+
+func TestPiHookTimeoutCoversEnsureAndCleanupWithinOneFixedBound(t *testing.T) {
+	projection, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(projection.PiExtension())
+	match := regexp.MustCompile(`const ATTACH_TIMEOUT_MS = ([0-9]+);`).FindStringSubmatch(source)
+	if len(match) != 2 {
+		t.Fatalf("Pi extension has no single literal attach timeout: %q", source)
+	}
+	timeout, err := strconv.Atoi(match[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	const (
+		ensureMillis  = 3000
+		cleanupMillis = 1000
+		fixedBound    = 5000
+	)
+	if timeout != fixedBound || timeout <= ensureMillis+cleanupMillis {
+		t.Fatalf("Pi attach timeout = %dms; want fixed %dms above %dms ensure+cleanup",
+			timeout, fixedBound, ensureMillis+cleanupMillis)
+	}
+	if strings.Count(source, "ATTACH_TIMEOUT_MS") != 2 {
+		t.Fatal("Pi extension does not use exactly one declared attach timeout")
 	}
 }
 

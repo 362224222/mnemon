@@ -22,7 +22,7 @@ func TestControlClientRoundTripsFrozenAgencyWire(t *testing.T) {
 	credential := bytes.Repeat([]byte{0x2a}, attachmentSecretBytes)
 	expiry := time.Date(2030, 1, 2, 3, 4, 5, 6, time.UTC)
 	content := []byte("captured bytes")
-	requests := make(chan capturedControlRequest, 5)
+	requests := make(chan capturedControlRequest, 4)
 	handler := roundTripControlHandler(requests, credential, expiry, content)
 	nodeState, stop := serveControlSocket(t, handler)
 	defer stop()
@@ -40,14 +40,11 @@ func TestControlClientRoundTripsFrozenAgencyWire(t *testing.T) {
 	requireProjectionContains(t, "Submit", receipt, apiErr, `"outcome":"accepted"`)
 	capture, apiErr := client.Capture(context.Background(), content)
 	requireCapture(t, capture, apiErr, content)
-	status, apiErr := client.Status(context.Background())
-	requireReady(t, status, apiErr)
 
 	assertAttachRequest(t, <-requests)
 	assertCurrentRequest(t, <-requests, attached, credential, current)
 	assertSubmitRequest(t, <-requests, intent)
 	assertArtifactRequest(t, <-requests, content)
-	assertStatusRequest(t, <-requests)
 }
 
 func roundTripControlHandler(requests chan<- capturedControlRequest, credential []byte,
@@ -69,8 +66,6 @@ func roundTripControlHandler(requests chan<- capturedControlRequest, credential 
 		case routeArtifacts:
 			fmt.Fprintf(writer, `{"byte_size":%d,"digest":"%s","handle":"artifact:test","schema":"%s","version":1}`+"\n",
 				len(content), agency.Sum(content).String(), artifactSchema)
-		case routeStatus:
-			_, _ = io.WriteString(writer, `{"schema":"mnemon.agency.status","status":"ready","version":1}`+"\n")
 		default:
 			writer.WriteHeader(http.StatusNotFound)
 		}
@@ -120,13 +115,6 @@ func requireCapture(t *testing.T, capture artifactCapture, apiErr *controlError,
 	}
 }
 
-func requireReady(t *testing.T, status statusSnapshot, apiErr *controlError) {
-	t.Helper()
-	if apiErr != nil || !status.Ready {
-		t.Fatalf("Status() = (%#v, %#v)", status, apiErr)
-	}
-}
-
 func assertAttachRequest(t *testing.T, request capturedControlRequest) {
 	t.Helper()
 	if request.Method != http.MethodPost || request.Path != routeAttachments ||
@@ -160,13 +148,6 @@ func assertArtifactRequest(t *testing.T, request capturedControlRequest, content
 	if request.Path != routeArtifacts ||
 		string(request.Body) != `{"content_base64":"`+encodedContent+`"}` {
 		t.Fatalf("Artifact request = %#v", request)
-	}
-}
-
-func assertStatusRequest(t *testing.T, request capturedControlRequest) {
-	t.Helper()
-	if request.Method != http.MethodGet || request.Path != routeStatus || len(request.Body) != 0 {
-		t.Fatalf("Status request = %#v", request)
 	}
 }
 

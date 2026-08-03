@@ -23,12 +23,6 @@ type captureStatus struct {
 	Version  int    `json:"version"`
 }
 
-type agencyStatus struct {
-	Schema  string `json:"schema"`
-	Status  string `json:"status"`
-	Version int    `json:"version"`
-}
-
 func (app *App) runAttach(ctx context.Context, store *journalStore, client agencyClient) int {
 	err := store.withLock(true, func(directory *lockedJournalDirectory) error {
 		var preserved []capturedBinding
@@ -223,18 +217,6 @@ func (app *App) runSubmit(ctx context.Context, store *journalStore, client agenc
 		return 0
 	}
 	return 0
-}
-
-func (app *App) runStatus(ctx context.Context, client agencyClient) int {
-	status, apiErr := client.Status(ctx)
-	if apiErr != nil {
-		return app.writeError(apiErr)
-	}
-	value := "not_ready"
-	if status.Ready {
-		value = "ready"
-	}
-	return app.writeJSON(agencyStatus{Schema: "mnemon.agency.status", Version: 1, Status: value})
 }
 
 func readBoundedInput(reader io.Reader, maximum int, code controlErrorCode,

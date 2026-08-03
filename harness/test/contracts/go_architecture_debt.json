@@ -33,16 +33,6 @@
       "removal_checkpoint": "8a"
     },
     {
-      "rule": "dependency_direction",
-      "identity": "dependency_direction:harness/cmd/mnemon-harness::cli",
-      "path": "harness/cmd/mnemon-harness",
-      "component": "cli",
-      "risk": "medium",
-      "evidence": "harness/cmd/mnemon-harness/main.go",
-      "owner": "harness/cmd/mnemon-harness + harness/internal/cli",
-      "removal_checkpoint": "9"
-    },
-    {
       "rule": "unexpected_harness_package",
       "identity": "unexpected_harness_package:harness/internal/cli::cli",
       "path": "harness/internal/cli",

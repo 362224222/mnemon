@@ -3,7 +3,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const HOOK_CUE = "mnemond has bounded state for this runtime; use the installed mnemond guide to inspect it.";
 const MAX_OUTPUT_BYTES = 4096;
-const ATTACH_TIMEOUT_MS = 1500;
+const ATTACH_TIMEOUT_MS = 5000;
 
 function attachBoundary(): boolean {
   try {

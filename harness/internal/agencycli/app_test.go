@@ -80,10 +80,6 @@ func (client *fakeAgencyClient) Capture(_ context.Context,
 		Digest: agency.Sum(content).String(), ByteSize: int64(len(content))}, nil
 }
 
-func (*fakeAgencyClient) Status(context.Context) (statusSnapshot, *controlError) {
-	return statusSnapshot{Ready: true}, nil
-}
-
 type appFixture struct {
 	root      string
 	nodeState string
@@ -107,9 +103,9 @@ func newAppFixture(t *testing.T) *appFixture {
 }
 
 func (fixture *appFixture) app(stdin io.Reader, stdout io.Writer) *App {
-	app := New(stdin, stdout, io.Discard, func(context.Context, string, string) (string, string) {
+	app := New(stdin, stdout, io.Discard, func(context.Context, string) error {
 		fixture.ensure.Add(1)
-		return "", ""
+		return nil
 	})
 	app.deps.workingDirectory = func() (string, error) { return fixture.root, nil }
 	app.deps.newClient = func(string) (agencyClient, error) { return fixture.client, nil }
@@ -121,31 +117,76 @@ func (fixture *appFixture) app(stdin io.Reader, stdout io.Writer) *App {
 func (fixture *appFixture) attach(t *testing.T) string {
 	t.Helper()
 	var output bytes.Buffer
-	handled, exit := fixture.app(strings.NewReader(""), &output).
-		TryRun(context.Background(), []string{"hook", "attach", "--json"})
-	if !handled || exit != 0 {
-		t.Fatalf("hook attach = handled %v exit %d output %s", handled, exit, output.String())
+	exit := fixture.app(strings.NewReader(""), &output).
+		Run(context.Background(), []string{"hook", "attach", "--json"})
+	if exit != 0 {
+		t.Fatalf("hook attach = exit %d output %s", exit, output.String())
 	}
 	return output.String()
 }
 
-func TestAgentCurrentFallsBackOnlyWhenR7JournalIsAbsent(t *testing.T) {
+func TestCommandsRequireContextWithoutEnsuringDaemon(t *testing.T) {
 	fixture := newAppFixture(t)
-	var output bytes.Buffer
-	handled, exit := fixture.app(strings.NewReader(""), &output).
-		TryRun(context.Background(), []string{"agent", "current", "--json"})
-	if handled || exit != 0 || output.Len() != 0 || fixture.ensure.Load() != 0 {
-		t.Fatalf("absent journal route = handled %v exit %d output %q ensure %d",
-			handled, exit, output.String(), fixture.ensure.Load())
+	for _, args := range [][]string{
+		{"agent", "current", "--json"},
+		{"agent", "submit", "--json"},
+		{"artifact", "capture", "--json"},
+	} {
+		var output bytes.Buffer
+		exit := fixture.app(strings.NewReader(""), &output).Run(context.Background(), args)
+		if exit != codeContextRequired.exitStatus() ||
+			!strings.Contains(output.String(), `"code":"context_required"`) {
+			t.Fatalf("absent journal for %q = exit %d output %q", args, exit, output.String())
+		}
 	}
+	if fixture.ensure.Load() != 0 {
+		t.Fatalf("Ensure calls without an Agent context = %d, want 0", fixture.ensure.Load())
+	}
+}
 
+func TestAgentCurrentReadsViewAfterAttach(t *testing.T) {
+	fixture := newAppFixture(t)
 	fixture.attach(t)
-	output.Reset()
-	handled, exit = fixture.app(strings.NewReader(""), &output).
-		TryRun(context.Background(), []string{"agent", "current", "--json"})
-	if !handled || exit != 0 || output.String() !=
+	var output bytes.Buffer
+	exit := fixture.app(strings.NewReader(""), &output).
+		Run(context.Background(), []string{"agent", "current", "--json"})
+	if exit != 0 || output.String() !=
 		`{"schema":"mnemon.agent.view","version":2,"view":"view:test","allowed_intents":[]}`+"\n" {
-		t.Fatalf("R7 current route = handled %v exit %d output %q", handled, exit, output.String())
+		t.Fatalf("R7 current = exit %d output %q", exit, output.String())
+	}
+}
+
+func TestAgentCurrentWithoutSetupIsUnavailableWithoutEnsuringDaemon(t *testing.T) {
+	fixture := newAppFixture(t)
+	unconfigured := t.TempDir()
+	app := fixture.app(strings.NewReader(""), &bytes.Buffer{})
+	app.deps.workingDirectory = func() (string, error) { return unconfigured, nil }
+	var output bytes.Buffer
+	app.stdout = &output
+	exit := app.Run(context.Background(), []string{"agent", "current", "--json"})
+	if exit != codeMnemondUnavailable.exitStatus() ||
+		!strings.Contains(output.String(), `"code":"mnemond_unavailable"`) || fixture.ensure.Load() != 0 {
+		t.Fatalf("unconfigured current = exit %d output %q ensure %d",
+			exit, output.String(), fixture.ensure.Load())
+	}
+}
+
+func TestUnsupportedCommandsFailClosedWithoutEnsuringDaemon(t *testing.T) {
+	fixture := newAppFixture(t)
+	for _, args := range [][]string{
+		{"agency", "status", "--json"},
+		{"teamwork", "list", "--json"},
+		{"hook", "attach"},
+	} {
+		var output bytes.Buffer
+		exit := fixture.app(strings.NewReader(""), &output).Run(context.Background(), args)
+		if exit != codeInvalidArgument.exitStatus() ||
+			!strings.Contains(output.String(), `"code":"invalid_argument"`) {
+			t.Fatalf("unsupported command %q = exit %d output %q", args, exit, output.String())
+		}
+	}
+	if fixture.ensure.Load() != 0 {
+		t.Fatalf("Ensure calls for unsupported commands = %d, want 0", fixture.ensure.Load())
 	}
 }
 
@@ -173,14 +214,14 @@ func TestCurrentPersistsOperationBeforeTransportAndReplaysIt(t *testing.T) {
 	fixture.attach(t)
 	fixture.client.currentFailures = 1
 	var first bytes.Buffer
-	_, firstExit := fixture.app(strings.NewReader(""), &first).
-		TryRun(context.Background(), []string{"agent", "current", "--json"})
+	firstExit := fixture.app(strings.NewReader(""), &first).
+		Run(context.Background(), []string{"agent", "current", "--json"})
 	if firstExit != codeMnemondUnavailable.exitStatus() {
 		t.Fatalf("first current exit/output = %d / %s", firstExit, first.String())
 	}
 	var second bytes.Buffer
-	_, secondExit := fixture.app(strings.NewReader(""), &second).
-		TryRun(context.Background(), []string{"agent", "current", "--json"})
+	secondExit := fixture.app(strings.NewReader(""), &second).
+		Run(context.Background(), []string{"agent", "current", "--json"})
 	fixture.client.mu.Lock()
 	operations := append([]string(nil), fixture.client.currentOperations...)
 	fixture.client.mu.Unlock()
@@ -196,8 +237,8 @@ func TestHookAttachSerializesConcurrentIssuance(t *testing.T) {
 	results := make(chan int, callers)
 	for range callers {
 		go func() {
-			_, exit := fixture.app(strings.NewReader(""), io.Discard).
-				TryRun(context.Background(), []string{"hook", "attach", "--json"})
+			exit := fixture.app(strings.NewReader(""), io.Discard).
+				Run(context.Background(), []string{"hook", "attach", "--json"})
 			results <- exit
 		}()
 	}
@@ -237,10 +278,10 @@ func TestHookAttachRenewsOnlyExpiredActiveJournal(t *testing.T) {
 	}
 
 	var output bytes.Buffer
-	handled, exit := fixture.app(strings.NewReader(""), &output).
-		TryRun(context.Background(), []string{"agent", "current", "--json"})
-	if !handled || exit != 0 {
-		t.Fatalf("renewed current route = handled %v exit %d output %s", handled, exit, output.String())
+	exit := fixture.app(strings.NewReader(""), &output).
+		Run(context.Background(), []string{"agent", "current", "--json"})
+	if exit != 0 {
+		t.Fatalf("renewed current = exit %d output %s", exit, output.String())
 	}
 }
 

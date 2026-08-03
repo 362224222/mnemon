@@ -14,6 +14,17 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/cas"
 )
 
+func TestResolveProjectStateIsPureAndPhysical(t *testing.T) {
+	root := canonicalTempDir(t)
+	resolved, state, err := ResolveProjectState(root)
+	if err != nil || resolved != root || state != filepath.Join(root, ".mnemon", "harness", "node") {
+		t.Fatalf("ResolveProjectState = (%q, %q, %v)", resolved, state, err)
+	}
+	if entries, err := os.ReadDir(root); err != nil || len(entries) != 0 {
+		t.Fatalf("ResolveProjectState mutated project: entries=%v error=%v", entries, err)
+	}
+}
+
 func TestProvisionCreatesOneReplayableNodeIdentityAndPrincipal(t *testing.T) {
 	root := canonicalTempDir(t)
 	first, err := Provision(context.Background(), root)

@@ -37,8 +37,6 @@ type artifactCapture struct {
 	ByteSize int64
 }
 
-type statusSnapshot struct{ Ready bool }
-
 func validateAttachment(value attachment) error {
 	if _, err := agency.NewAttachmentID(value.ID); err != nil ||
 		len(value.Credential) != attachmentSecretBytes || value.ExpiresAt.IsZero() {
