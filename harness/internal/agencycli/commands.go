@@ -70,11 +70,20 @@ func (app *App) runCurrent(ctx context.Context, store *journalStore, client agen
 		if err != nil {
 			return err
 		}
-		defer journal.clear()
 		if validTerminalName(journal.fileName) {
-			return newControlError(codeOperationPending,
-				"an accepted R7 receipt is awaiting presentation")
+			if !journal.CurrentOperation.IsZero() {
+				journal.clear()
+				return newControlError(codeOperationPending,
+					"an accepted R7 receipt is awaiting presentation")
+			}
+			active, err := directory.activatePresented(journal)
+			journal.clear()
+			if err != nil {
+				return err
+			}
+			journal = active
 		}
+		defer journal.clear()
 		if journal.CurrentOperation.IsZero() {
 			operation, err := newCurrentOperation(app.deps.random)
 			if err != nil {
@@ -268,6 +277,23 @@ func (app *App) runSubmit(ctx context.Context, store *journalStore, client agenc
 		return 0 // Rejected receipts retain the same View for an amended Intent.
 	}
 	defer terminal.clear()
+	if referenceConsequence(intent.Consequence()) {
+		if err := store.withLock(false, func(directory *lockedJournalDirectory) error {
+			presented, err := directory.markPresented(terminal)
+			if err != nil {
+				return err
+			}
+			defer presented.clear()
+			active, err := directory.activatePresented(presented)
+			active.clear()
+			return err
+		}); err != nil {
+			// The Receipt was already presented. Either the exact terminal
+			// replay or a presented terminal phase remains recoverable.
+			return 0
+		}
+		return 0
+	}
 	if err := store.withLock(false, func(directory *lockedJournalDirectory) error {
 		return directory.remove(terminal)
 	}); err != nil {
@@ -276,6 +302,12 @@ func (app *App) runSubmit(ctx context.Context, store *journalStore, client agenc
 		return 0
 	}
 	return 0
+}
+
+func referenceConsequence(consequence agency.Consequence) bool {
+	return consequence == agency.ConsequencePublishReference ||
+		consequence == agency.ConsequenceSupersedeReference ||
+		consequence == agency.ConsequenceRetractReference
 }
 
 func readBoundedInput(reader io.Reader, maximum int, code controlErrorCode,

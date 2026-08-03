@@ -17,11 +17,14 @@ import (
 )
 
 const (
-	journalSchema             = "mnemon.agency.client-journal"
-	journalVersion            = 1
-	journalCredentialBytes    = 32
-	maxJournalBytes           = 32 << 10
-	currentOperationEntropy   = 24
+	journalSchema          = "mnemon.agency.client-journal"
+	journalVersion         = 1
+	journalCredentialBytes = 32
+	maxJournalBytes        = 32 << 10
+	// A non-multiple-of-three length makes the final unpadded base64url
+	// character draw from an alphanumeric-only subset. OperationKey tokens
+	// deliberately reject a trailing '-' or '_'.
+	currentOperationEntropy   = 32
 	admissionOperationPrefix  = "admit:"
 	currentOperationPrefix    = "current:"
 	operationDerivationDomain = "mnemon/r7/agency-cli/admission-operation/v1"

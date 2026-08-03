@@ -122,6 +122,15 @@ func (directory *lockedJournalDirectory) write(journal clientJournal) error {
 	if journal.fileName != "" && journal.fileName != journalActiveName {
 		return errors.New("terminal R7 client journal is immutable")
 	}
+	return directory.publishJournal(journal, journalActiveName)
+}
+
+func (directory *lockedJournalDirectory) publishJournal(journal clientJournal,
+	target string,
+) error {
+	if target != journalActiveName && !validTerminalName(target) {
+		return errors.New("R7 client journal target is invalid")
+	}
 	payload, err := journal.canonical()
 	if err != nil {
 		return err
@@ -158,7 +167,7 @@ func (directory *lockedJournalDirectory) write(journal clientJournal) error {
 		return fmt.Errorf("close R7 client journal stage: %w", err)
 	}
 	if err := unix.Renameat(int(directory.dir.Fd()), journalStageName,
-		int(directory.dir.Fd()), journalActiveName); err != nil {
+		int(directory.dir.Fd()), target); err != nil {
 		return fmt.Errorf("publish R7 client journal: %w", err)
 	}
 	cleanup = false
@@ -200,6 +209,79 @@ func (directory *lockedJournalDirectory) markTerminal(expected clientJournal,
 		return clientJournal{}, errors.New("published R7 terminal journal differs")
 	}
 	return terminal, nil
+}
+
+// markPresented consumes the replay-only Current and captured candidates only
+// after an accepted Receipt has reached stdout. Replacing the terminal file is
+// atomic: before the rename the exact accepted operation remains replayable;
+// after it, the same Attachment is durably ready for a fresh Current.
+func (directory *lockedJournalDirectory) markPresented(expected clientJournal) (
+	clientJournal, error,
+) {
+	if !validTerminalName(expected.fileName) || expected.CurrentOperation.IsZero() {
+		return clientJournal{}, errors.New("R7 presented journal transition is invalid")
+	}
+	current, err := directory.load()
+	if err != nil {
+		return clientJournal{}, err
+	}
+	defer current.clear()
+	if current.fileName != expected.fileName || current.fileDigest != expected.fileDigest ||
+		current.CurrentOperation.IsZero() {
+		return clientJournal{}, errors.New("R7 terminal journal changed before presentation")
+	}
+	reset := current
+	reset.Attachment.Credential = append([]byte(nil), current.Attachment.Credential...)
+	reset.CurrentOperation = agency.OperationKey{}
+	reset.CurrentProjection = ""
+	reset.Candidates = nil
+	defer reset.clear()
+	if err := directory.publishJournal(reset, current.fileName); err != nil {
+		return clientJournal{}, err
+	}
+	presented, err := directory.load()
+	if err != nil || presented.fileName != current.fileName ||
+		!presented.CurrentOperation.IsZero() || presented.CurrentProjection != "" ||
+		len(presented.Candidates) != 0 {
+		presented.clear()
+		return clientJournal{}, errors.New("presented R7 client journal differs")
+	}
+	return presented, nil
+}
+
+// activatePresented finishes a crash-recoverable presentation transition.
+// The preceding terminal name remains the durable phase marker until this
+// atomic rename; an unpresented terminal can never enter the active path.
+func (directory *lockedJournalDirectory) activatePresented(expected clientJournal) (
+	clientJournal, error,
+) {
+	if !validTerminalName(expected.fileName) || !expected.CurrentOperation.IsZero() ||
+		expected.CurrentProjection != "" || len(expected.Candidates) != 0 {
+		return clientJournal{}, errors.New("R7 presented journal activation is invalid")
+	}
+	current, err := directory.load()
+	if err != nil {
+		return clientJournal{}, err
+	}
+	defer current.clear()
+	if current.fileName != expected.fileName || current.fileDigest != expected.fileDigest ||
+		!current.CurrentOperation.IsZero() || current.CurrentProjection != "" ||
+		len(current.Candidates) != 0 {
+		return clientJournal{}, errors.New("R7 presented journal changed before activation")
+	}
+	if err := unix.Renameat(int(directory.dir.Fd()), current.fileName,
+		int(directory.dir.Fd()), journalActiveName); err != nil {
+		return clientJournal{}, fmt.Errorf("activate presented R7 client journal: %w", err)
+	}
+	if err := directory.dir.Sync(); err != nil {
+		return clientJournal{}, fmt.Errorf("persist presented R7 client journal: %w", err)
+	}
+	active, err := directory.load()
+	if err != nil || active.fileName != journalActiveName || active.fileDigest != expected.fileDigest {
+		active.clear()
+		return clientJournal{}, errors.New("activated R7 client journal differs")
+	}
+	return active, nil
 }
 
 func (directory *lockedJournalDirectory) remove(expected clientJournal) error {

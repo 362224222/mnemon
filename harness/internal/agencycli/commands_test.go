@@ -63,6 +63,115 @@ func TestCaptureKeepsDigestPrivateAndSubmitReplaysAfterPresentationLoss(t *testi
 	}
 }
 
+func TestAcceptedReferenceKeepsAttachmentAndRefreshesCurrent(t *testing.T) {
+	fixture := newAppFixture(t)
+	intent := prepareReferenceSubmit(t, fixture)
+	var receipt bytes.Buffer
+	if exit := fixture.app(bytes.NewReader(intent), &receipt).
+		Run(context.Background(), []string{"agent", "submit", "--json"}); exit != 0 {
+		t.Fatalf("Reference submit exit = %d output %q", exit, receipt.String())
+	}
+
+	journal := loadJournalForTest(t, fixture.nodeState)
+	if journal.fileName != journalActiveName || !journal.CurrentOperation.IsZero() ||
+		journal.CurrentProjection != "" || len(journal.Candidates) != 0 ||
+		journal.Attachment.ID != "attachment:test" {
+		journal.clear()
+		t.Fatalf("post-Reference journal = file %q current %q projection %q candidates %d attachment %q",
+			journal.fileName, journal.CurrentOperation.String(), journal.CurrentProjection,
+			len(journal.Candidates), journal.Attachment.ID)
+	}
+	journal.clear()
+
+	var next bytes.Buffer
+	nextApp := fixture.app(strings.NewReader(""), &next)
+	nextApp.deps.random = bytes.NewReader(bytes.Repeat([]byte{0x43}, 64))
+	if exit := nextApp.Run(context.Background(),
+		[]string{"agent", "current", "--json"}); exit != 0 {
+		t.Fatalf("next Current exit = %d output %q", exit, next.String())
+	}
+	fixture.client.mu.Lock()
+	attachCalls := fixture.client.attachCalls
+	operations := append([]string(nil), fixture.client.currentOperations...)
+	fixture.client.mu.Unlock()
+	if attachCalls != 1 || len(operations) != 2 || operations[0] == operations[1] {
+		t.Fatalf("continued attachment = attaches %d operations %#v", attachCalls, operations)
+	}
+}
+
+func TestReferencePresentationLossRetainsExactReplayBeforeRefresh(t *testing.T) {
+	fixture := newAppFixture(t)
+	intent := leaveUnpresentedReference(t, fixture)
+	terminal := loadJournalForTest(t, fixture.nodeState)
+	if !validTerminalName(terminal.fileName) || terminal.CurrentOperation.IsZero() ||
+		len(terminal.Candidates) != 1 {
+		terminal.clear()
+		t.Fatalf("unpresented terminal = file %q current %q candidates %d",
+			terminal.fileName, terminal.CurrentOperation.String(), len(terminal.Candidates))
+	}
+	terminal.clear()
+
+	var replay bytes.Buffer
+	if exit := fixture.app(bytes.NewReader(intent), &replay).
+		Run(context.Background(), []string{"agent", "submit", "--json"}); exit != 0 ||
+		!strings.Contains(replay.String(), `"replayed":true`) {
+		t.Fatalf("Reference replay exit/output = %d / %q", exit, replay.String())
+	}
+	fixture.client.mu.Lock()
+	operations := append([]string(nil), fixture.client.submitOperations...)
+	fixture.client.mu.Unlock()
+	if len(operations) != 2 || operations[0] != operations[1] {
+		t.Fatalf("Reference replay operations = %#v", operations)
+	}
+	active := loadJournalForTest(t, fixture.nodeState)
+	if active.fileName != journalActiveName || !active.CurrentOperation.IsZero() ||
+		len(active.Candidates) != 0 {
+		active.clear()
+		t.Fatalf("replayed Reference reset = file %q current %q candidates %d",
+			active.fileName, active.CurrentOperation.String(), len(active.Candidates))
+	}
+	active.clear()
+}
+
+func TestCurrentRecoversPresentedReferencePhase(t *testing.T) {
+	fixture := newAppFixture(t)
+	_ = leaveUnpresentedReference(t, fixture)
+
+	store := newJournalStore(fixture.nodeState, bytes.NewReader(make([]byte, 64)))
+	if err := store.withLock(false, func(directory *lockedJournalDirectory) error {
+		terminal, err := directory.load()
+		if err != nil {
+			return err
+		}
+		defer terminal.clear()
+		presented, err := directory.markPresented(terminal)
+		presented.clear()
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	presented := loadJournalForTest(t, fixture.nodeState)
+	if !validTerminalName(presented.fileName) || !presented.CurrentOperation.IsZero() {
+		presented.clear()
+		t.Fatalf("presented phase = file %q current %q",
+			presented.fileName, presented.CurrentOperation.String())
+	}
+	presented.clear()
+
+	var output bytes.Buffer
+	if exit := fixture.app(strings.NewReader(""), &output).
+		Run(context.Background(), []string{"agent", "current", "--json"}); exit != 0 {
+		t.Fatalf("recovering Current exit/output = %d / %q", exit, output.String())
+	}
+	active := loadJournalForTest(t, fixture.nodeState)
+	if active.fileName != journalActiveName || active.CurrentOperation.IsZero() {
+		active.clear()
+		t.Fatalf("recovered active journal = file %q current %q",
+			active.fileName, active.CurrentOperation.String())
+	}
+	active.clear()
+}
+
 func TestTerminalReplayRejectsChangedIntentLocally(t *testing.T) {
 	fixture := newAppFixture(t)
 	fixture.attach(t)
@@ -206,6 +315,88 @@ func candidateRootIntent(t *testing.T, handleValue string) []byte {
 func candidateFreeRootIntent(t *testing.T, payloadValue string) []byte {
 	t.Helper()
 	return rootIntent(t, payloadValue, nil)
+}
+
+func prepareReferenceSubmit(t *testing.T, fixture *appFixture) []byte {
+	t.Helper()
+	fixture.client.currentView = subjectViewForTest()
+	fixture.attach(t)
+	if exit := fixture.app(strings.NewReader(""), io.Discard).
+		Run(context.Background(), []string{"agent", "current", "--json"}); exit != 0 {
+		t.Fatalf("Reference Current exit = %d", exit)
+	}
+	if exit := fixture.app(strings.NewReader("review playbook"), io.Discard).
+		Run(context.Background(), []string{"artifact", "capture", "--json"}); exit != 0 {
+		t.Fatalf("Reference capture exit = %d", exit)
+	}
+	return referencePublishIntent(t, "artifact:test-candidate")
+}
+
+func leaveUnpresentedReference(t *testing.T, fixture *appFixture) []byte {
+	t.Helper()
+	intent := prepareReferenceSubmit(t, fixture)
+	if exit := fixture.app(bytes.NewReader(intent), &failWriter{}).
+		Run(context.Background(), []string{"agent", "submit", "--json"}); exit != 1 {
+		t.Fatalf("presentation-loss Reference exit = %d", exit)
+	}
+	return intent
+}
+
+func referencePublishIntent(t *testing.T, artifactHandle string) []byte {
+	t.Helper()
+	kind, err := agency.NewSemanticLabel("knowledge.playbook")
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := agency.NewSemanticPayload("publish a reusable review playbook")
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := agency.NewReferenceKey("playbook.review")
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle, err := agency.NewOpaqueHandle(artifactHandle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := agency.NewArtifactCandidate(handle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, err := agency.NewAgentIntent(agency.IntentSpec{Kind: kind, Payload: payload,
+		Consequence: agency.ConsequencePublishReference, ReferenceKey: key,
+		Artifacts: []agency.ArtifactInput{artifact}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return intent.CanonicalJSON()
+}
+
+func subjectViewForTest() []byte {
+	return []byte(`{"schema":"mnemon.agent.view","version":2,` +
+		`"view":"view:test","current":{"facts":{"handle":"r7:subject:test"},` +
+		`"semantic":{"kind":"review.request","payload":"review"}},` +
+		`"allowed_intents":[]}`)
+}
+
+func loadJournalForTest(t *testing.T, nodeState string) clientJournal {
+	t.Helper()
+	store := newJournalStore(nodeState, bytes.NewReader(make([]byte, 64)))
+	var result clientJournal
+	if err := store.withLock(false, func(directory *lockedJournalDirectory) error {
+		journal, err := directory.load()
+		if err != nil {
+			return err
+		}
+		result = journal
+		result.Attachment.Credential = append([]byte(nil), journal.Attachment.Credential...)
+		journal.clear()
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return result
 }
 
 func rootIntent(t *testing.T, payloadValue string, artifacts []agency.ArtifactInput) []byte {
