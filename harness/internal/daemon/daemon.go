@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"os"
 	"path/filepath"
 	"sync"
 	"time"
@@ -35,24 +34,41 @@ const (
 // one-shot process boundary: once Serve ends or Close starts it cannot serve
 // again.
 type Runtime struct {
-	mu        sync.Mutex
-	state     daemonState
-	store     *authority.Store
-	service   *localService
-	handler   http.Handler
-	socket    string
-	server    *http.Server
-	cancel    context.CancelFunc
-	serveDone chan struct{}
-	closeDone chan struct{}
-	closeErr  error
-	requests  requestTracker
+	mu              sync.Mutex
+	state           daemonState
+	store           *authority.Store
+	service         *localService
+	handler         http.Handler
+	socket          string
+	exchange        *exchangeRuntime
+	exchangeSession *exchangeSession
+	server          *http.Server
+	cancel          context.CancelFunc
+	serveDone       chan struct{}
+	closeDone       chan struct{}
+	closeErr        error
+	requests        requestTracker
 }
 
 // Open strictly adopts already-provisioned R7 state. It creates no database,
 // Principal, CAS root, socket directory, peer route, or setup state.
 func Open(ctx context.Context, stateDirectory string,
 	principal agency.AgentPrincipalID,
+) (_ *Runtime, err error) {
+	return openRuntime(ctx, stateDirectory, principal, nil)
+}
+
+// OpenWithExchange strictly adopts local state and explicitly enables the
+// optional peer plane. Remote reachability is not a startup dependency; local
+// Open remains complete without an identity, route, listener, or worker.
+func OpenWithExchange(ctx context.Context, stateDirectory string,
+	principal agency.AgentPrincipalID, options ExchangeOptions,
+) (_ *Runtime, err error) {
+	return openRuntime(ctx, stateDirectory, principal, &options)
+}
+
+func openRuntime(ctx context.Context, stateDirectory string,
+	principal agency.AgentPrincipalID, exchangeOptions *ExchangeOptions,
 ) (_ *Runtime, err error) {
 	if ctx == nil || principal.IsZero() {
 		return nil, errors.New("daemon open: context and Principal are required")
@@ -93,8 +109,16 @@ func Open(ctx context.Context, stateDirectory string,
 	if err != nil {
 		return nil, err
 	}
+	var exchange *exchangeRuntime
+	if exchangeOptions != nil {
+		exchange, err = newExchangeRuntime(ctx, stateDirectory, store, objects, now,
+			*exchangeOptions)
+		if err != nil {
+			return nil, err
+		}
+	}
 	return &Runtime{state: stateOpen, store: store, service: service, handler: control,
-		socket: filepath.Join(stateDirectory, controlSocketName)}, nil
+		socket: filepath.Join(stateDirectory, controlSocketName), exchange: exchange}, nil
 }
 
 // Serve binds the fixed owner-only Unix socket and blocks until cancellation,
@@ -119,6 +143,16 @@ func (daemon *Runtime) Serve(ctx context.Context) error {
 		return err
 	}
 	runContext, cancel := context.WithCancel(ctx)
+	var exchangeSession *exchangeSession
+	if daemon.exchange != nil {
+		exchangeSession, err = daemon.exchange.start(runContext)
+		if err != nil {
+			cancel()
+			_ = listener.Close()
+			daemon.mu.Unlock()
+			return err
+		}
+	}
 	serveDone := make(chan struct{})
 	server := &http.Server{
 		Handler:           daemon.requests.wrap(daemon.handler),
@@ -136,13 +170,24 @@ func (daemon *Runtime) Serve(ctx context.Context) error {
 	daemon.server = server
 	daemon.cancel = cancel
 	daemon.serveDone = serveDone
+	daemon.exchangeSession = exchangeSession
 	daemon.mu.Unlock()
 
 	watchDone := make(chan struct{})
 	go func() {
 		defer close(watchDone)
+		if exchangeSession == nil {
+			select {
+			case <-ctx.Done():
+				daemon.beginClose()
+			case <-serveDone:
+			}
+			return
+		}
 		select {
 		case <-ctx.Done():
+			daemon.beginClose()
+		case <-exchangeSession.Done():
 			daemon.beginClose()
 		case <-serveDone:
 		}
@@ -189,26 +234,32 @@ func (daemon *Runtime) beginClose() {
 	daemon.state = stateClosing
 	daemon.closeDone = make(chan struct{})
 	server, cancel := daemon.server, daemon.cancel
+	exchangeSession := daemon.exchangeSession
 	serveDone, store := daemon.serveDone, daemon.store
 	waitRequests := daemon.requests.stop()
 	daemon.mu.Unlock()
 
-	go daemon.closeOwned(server, cancel, serveDone, waitRequests, store)
+	go daemon.closeOwned(server, cancel, exchangeSession, serveDone, waitRequests, store)
 }
 
 func (daemon *Runtime) closeOwned(server *http.Server, cancel context.CancelFunc,
-	serveDone, waitRequests <-chan struct{}, store *authority.Store,
+	exchangeSession *exchangeSession, serveDone, waitRequests <-chan struct{}, store *authority.Store,
 ) {
 	var result error
+	if cancel != nil {
+		cancel()
+	}
+	if exchangeSession != nil {
+		shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), peerShutdownBudget)
+		result = errors.Join(result, exchangeSession.Close(shutdownContext))
+		shutdownCancel()
+	}
 	if server != nil {
 		shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), shutdownBudget)
 		if err := server.Shutdown(shutdownContext); err != nil {
 			result = errors.Join(result, err)
 		}
 		shutdownCancel()
-	}
-	if cancel != nil {
-		cancel()
 	}
 	if server != nil {
 		if err := server.Close(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -234,6 +285,7 @@ func (daemon *Runtime) closeOwned(server *http.Server, cancel context.CancelFunc
 	daemon.server = nil
 	daemon.cancel = nil
 	daemon.serveDone = nil
+	daemon.exchangeSession = nil
 	done := daemon.closeDone
 	daemon.mu.Unlock()
 	close(done)
@@ -260,82 +312,4 @@ func (daemon *Runtime) waitClosed(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-}
-
-type requestTracker struct {
-	mu       sync.Mutex
-	active   int
-	stopping bool
-	zero     chan struct{}
-}
-
-func (tracker *requestTracker) wrap(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if !tracker.begin() {
-			writeControlError(writer, newControlError(codeMnemondUnavailable,
-				"local Agency authority is unavailable"))
-			return
-		}
-		defer tracker.end()
-		next.ServeHTTP(writer, request)
-	})
-}
-
-func (tracker *requestTracker) begin() bool {
-	tracker.mu.Lock()
-	defer tracker.mu.Unlock()
-	if tracker.stopping {
-		return false
-	}
-	if tracker.active == 0 {
-		tracker.zero = make(chan struct{})
-	}
-	tracker.active++
-	return true
-}
-
-func (tracker *requestTracker) end() {
-	tracker.mu.Lock()
-	defer tracker.mu.Unlock()
-	if tracker.active <= 0 {
-		panic("daemon request tracker underflow")
-	}
-	tracker.active--
-	if tracker.active == 0 {
-		close(tracker.zero)
-	}
-}
-
-func (tracker *requestTracker) stop() <-chan struct{} {
-	tracker.mu.Lock()
-	defer tracker.mu.Unlock()
-	tracker.stopping = true
-	if tracker.active == 0 {
-		done := make(chan struct{})
-		close(done)
-		return done
-	}
-	return tracker.zero
-}
-
-func requireOwnerDirectory(path string) error {
-	if path == "" || !filepath.IsAbs(path) || filepath.Clean(path) != path {
-		return errors.New("path must be absolute and canonical")
-	}
-	info, err := os.Lstat(path)
-	if err != nil {
-		return err
-	}
-	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != ownerDirectoryMode {
-		return errors.New("path must be an owner-only real directory")
-	}
-	owner, err := fileOwnerUID(info)
-	if err != nil || owner != uint32(os.Geteuid()) {
-		return errors.New("path is not owned by the daemon user")
-	}
-	realPath, err := filepath.EvalSymlinks(path)
-	if err != nil || realPath != path {
-		return errors.New("path has a symlinked ancestor")
-	}
-	return nil
 }

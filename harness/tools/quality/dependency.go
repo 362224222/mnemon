@@ -221,7 +221,7 @@ func allowedHarnessImport(source, target string) bool {
 		"cmd":       {"agencycli": true, "integration": true, "localapi": true, "node": true},
 		"agencycli": {"agency": true},
 		"cas":       {"agency": true},
-		"daemon":    {"agency": true, "authority": true, "cas": true},
+		"daemon":    {"agency": true, "authority": true, "cas": true, "peerlink": true},
 		"peerlink":  {"agency": true, "cas": true},
 		"node":      {"event": true, "store": true, "agent": true, "artifact": true, "peer": true, "agency": true, "authority": true},
 		"localapi":  {"node": true}, "event": {"teamwork": true, "store": true, "artifact": true},
