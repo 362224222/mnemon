@@ -64,10 +64,11 @@ func (b SubjectBinding) Fence() uint64          { return b.fence }
 // ReferenceExpectation freezes either the absence of a first-publish key or
 // one exact locally accepted lineage head.
 type ReferenceExpectation struct {
-	absent bool
-	handle OpaqueHandle
-	key    ReferenceKey
-	head   EventRef
+	absent   bool
+	handle   OpaqueHandle
+	key      ReferenceKey
+	head     EventRef
+	outcomes AgentViewTerminalOutcomes
 }
 
 func ExpectAbsentReference(key ReferenceKey) (ReferenceExpectation, error) {
@@ -78,16 +79,28 @@ func ExpectAbsentReference(key ReferenceKey) (ReferenceExpectation, error) {
 }
 
 func ExpectReferenceHead(handle OpaqueHandle, key ReferenceKey, head EventRef) (ReferenceExpectation, error) {
+	return ExpectReferenceHeadWithOutcomes(handle, key, head, AgentViewTerminalOutcomes{})
+}
+
+func ExpectReferenceHeadWithOutcomes(handle OpaqueHandle, key ReferenceKey, head EventRef,
+	outcomes AgentViewTerminalOutcomes,
+) (ReferenceExpectation, error) {
 	if handle.IsZero() || key.IsZero() || head.IsZero() {
 		return ReferenceExpectation{}, invalid("Reference expectation", "handle, key, and head are required")
 	}
-	return ReferenceExpectation{handle: handle, key: key, head: head}, nil
+	if err := validateTerminalOutcomes(outcomes); err != nil {
+		return ReferenceExpectation{}, err
+	}
+	return ReferenceExpectation{handle: handle, key: key, head: head, outcomes: outcomes}, nil
 }
 
 func (expected ReferenceExpectation) Handle() OpaqueHandle { return expected.handle }
 func (expected ReferenceExpectation) IsAbsent() bool       { return expected.absent }
 func (expected ReferenceExpectation) Key() ReferenceKey    { return expected.key }
 func (expected ReferenceExpectation) Head() EventRef       { return expected.head }
+func (expected ReferenceExpectation) TerminalOutcomes() AgentViewTerminalOutcomes {
+	return expected.outcomes
+}
 
 type TargetDestination uint8
 

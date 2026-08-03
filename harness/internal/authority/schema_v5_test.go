@@ -9,7 +9,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-func TestSchemaV5DoesNotMigrateOlderAuthority(t *testing.T) {
+func TestSchemaV6DoesNotMigrateOlderAuthority(t *testing.T) {
 	path := testDatabasePath(t)
 	store, err := Open(context.Background(), path)
 	if err != nil {
@@ -22,7 +22,7 @@ func TestSchemaV5DoesNotMigrateOlderAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec("PRAGMA user_version = 4"); err != nil {
+	if _, err := db.Exec("PRAGMA user_version = 5"); err != nil {
 		_ = db.Close()
 		t.Fatal(err)
 	}
@@ -34,6 +34,6 @@ func TestSchemaV5DoesNotMigrateOlderAuthority(t *testing.T) {
 		if opened != nil {
 			_ = opened.Close()
 		}
-		t.Fatalf("Open(schema v4) = (%v, %v), want ErrUnsupportedSchema", opened, err)
+		t.Fatalf("Open(schema v5) = (%v, %v), want ErrUnsupportedSchema", opened, err)
 	}
 }

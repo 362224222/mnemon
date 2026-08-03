@@ -179,8 +179,14 @@ type publicViewWire struct {
 	} `json:"current"`
 	References []struct {
 		Facts struct {
-			Head string `json:"head"`
-			Key  string `json:"key"`
+			Head             string `json:"head"`
+			Key              string `json:"key"`
+			State            string `json:"state"`
+			TerminalOutcomes *struct {
+				Completed  int64 `json:"completed"`
+				Declined   int64 `json:"declined"`
+				Unresolved int64 `json:"unresolved"`
+			} `json:"terminal_outcomes"`
 		} `json:"facts"`
 	} `json:"references"`
 }
@@ -280,7 +286,7 @@ func countRows(t *testing.T, store *Store, table string) int {
 	t.Helper()
 	allowed := map[string]bool{"events": true, "operations": true, "handlings": true,
 		"active_references": true, "reference_lineage": true, "claim_dispositions": true,
-		"peer_outbox": true, "peer_inbox": true}
+		"reference_outcome_projection": true, "peer_outbox": true, "peer_inbox": true}
 	if !allowed[table] {
 		t.Fatal(errors.New("test requested unsafe table"))
 	}

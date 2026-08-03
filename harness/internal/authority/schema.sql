@@ -199,5 +199,16 @@ CREATE TABLE reference_lineage (
 CREATE INDEX reference_lineage_key
 ON reference_lineage(reference_key, event_id);
 
+-- This table is a rebuildable bounded-read projection, not a third domain
+-- state. Missing rows mean that no accepted terminal Event directly cited the
+-- exact Reference head.
+CREATE TABLE reference_outcome_projection (
+    reference_event_id TEXT PRIMARY KEY REFERENCES reference_lineage(event_id),
+    completed_count INTEGER NOT NULL DEFAULT 0 CHECK (completed_count >= 0),
+    declined_count INTEGER NOT NULL DEFAULT 0 CHECK (declined_count >= 0),
+    unresolved_count INTEGER NOT NULL DEFAULT 0 CHECK (unresolved_count >= 0),
+    CHECK (completed_count > 0 OR declined_count > 0 OR unresolved_count > 0)
+) STRICT;
+
 PRAGMA application_id = 1296978487;
-PRAGMA user_version = 5;
+PRAGMA user_version = 6;

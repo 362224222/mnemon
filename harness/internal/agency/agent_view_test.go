@@ -165,6 +165,30 @@ func TestAgentViewRejectsProjectionThatDivergesFromAuthority(t *testing.T) {
 	}
 }
 
+func TestAgentViewRejectsNegativeOrUnsealedReferenceOutcomes(t *testing.T) {
+	principal := mustPrincipal(t, "agent:outcome-projection")
+	attachment := mustAttachment(t, "attachment:outcome-projection", principal, true)
+	head := mustHandle(t, "reference:outcome-head")
+	reference := mustReference(t, head, "outcome-guide", "event:outcome-head", "outcome-head")
+	reference.outcomes = AgentViewTerminalOutcomes{Completed: 1}
+	authority := mustView(t, MachineViewSpec{Attachment: attachment,
+		Consequences: []Consequence{ConsequenceSupersedeReference},
+		References:   []ReferenceExpectation{reference}})
+	view := AgentViewSpec{Handle: mustHandle(t, "view:outcome-projection"), Authority: authority,
+		References: []AgentViewReferenceSpec{{Head: head, State: AgentViewReferenceStateRetracted}}}
+	if _, err := NewAgentView(view); !errors.Is(err, ErrInvariant) {
+		t.Fatalf("unsealed outcome error = %v, want ErrInvariant", err)
+	}
+	view.References[0].TerminalOutcomes = AgentViewTerminalOutcomes{Completed: -1}
+	if _, err := NewAgentView(view); err == nil {
+		t.Fatal("negative Reference outcome unexpectedly projected")
+	}
+	view.References[0].TerminalOutcomes = AgentViewTerminalOutcomes{Completed: 1}
+	if _, err := NewAgentView(view); err != nil {
+		t.Fatalf("exact outcome projection error = %v", err)
+	}
+}
+
 func TestAgentViewHasByteAndApproximateTokenRegressionBudget(t *testing.T) {
 	principal := mustPrincipal(t, "agent:local")
 	attachment := mustAttachment(t, "attachment:budget", principal, true)
@@ -192,6 +216,35 @@ func TestAgentViewHasByteAndApproximateTokenRegressionBudget(t *testing.T) {
 	if bytesUsed > 4<<10 || approximateTokens > 1024 {
 		t.Fatalf("representative View uses %d bytes (~%d tokens), want <=4096 bytes and <=1024 tokens",
 			bytesUsed, approximateTokens)
+	}
+}
+
+func TestAgentViewTerminalOutcomeProjectionHasConstantTokenBound(t *testing.T) {
+	principal := mustPrincipal(t, "agent:outcome-budget")
+	attachment := mustAttachment(t, "attachment:outcome-budget", principal, true)
+	references := make([]ReferenceExpectation, 0, MaxAgentViewReferences)
+	public := make([]AgentViewReferenceSpec, 0, MaxAgentViewReferences)
+	maximum := AgentViewTerminalOutcomes{Completed: 1<<63 - 1, Declined: 1<<63 - 1,
+		Unresolved: 1<<63 - 1}
+	for index := 0; index < MaxAgentViewReferences; index++ {
+		handle := mustHandle(t, fmt.Sprintf("reference:outcome:%02d", index))
+		reference := mustReference(t, handle, fmt.Sprintf("guide-%02d", index),
+			fmt.Sprintf("event:outcome:%02d", index), fmt.Sprintf("outcome-%02d", index))
+		reference.outcomes = maximum
+		references = append(references, reference)
+		public = append(public, AgentViewReferenceSpec{Head: handle,
+			State: AgentViewReferenceStateRetracted, TerminalOutcomes: maximum})
+	}
+	authority := mustView(t, MachineViewSpec{Attachment: attachment,
+		Consequences: []Consequence{ConsequenceSupersedeReference}, References: references})
+	view, err := NewAgentView(AgentViewSpec{Handle: mustHandle(t, "view:outcome-budget"),
+		Authority: authority, References: public})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bytesUsed := len(view.CanonicalJSON())
+	if bytesUsed > 4<<10 || bytesUsed > MaxAgentViewCanonicalBytes {
+		t.Fatalf("maximum outcome projection uses %d bytes, want <=4096", bytesUsed)
 	}
 }
 

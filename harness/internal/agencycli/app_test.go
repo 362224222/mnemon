@@ -52,7 +52,7 @@ func (client *fakeAgencyClient) Current(_ context.Context, _ attachment,
 		client.currentFailures--
 		return nil, newControlError(codeMnemondUnavailable, "test transport loss")
 	}
-	return []byte(`{"schema":"mnemon.agent.view","version":1,"view":"view:test","allowed_intents":[]}`), nil
+	return []byte(`{"schema":"mnemon.agent.view","version":2,"view":"view:test","allowed_intents":[]}`), nil
 }
 
 func (client *fakeAgencyClient) Submit(_ context.Context, _ attachment,
@@ -144,7 +144,7 @@ func TestAgentCurrentFallsBackOnlyWhenR7JournalIsAbsent(t *testing.T) {
 	handled, exit = fixture.app(strings.NewReader(""), &output).
 		TryRun(context.Background(), []string{"agent", "current", "--json"})
 	if !handled || exit != 0 || output.String() !=
-		`{"schema":"mnemon.agent.view","version":1,"view":"view:test","allowed_intents":[]}`+"\n" {
+		`{"schema":"mnemon.agent.view","version":2,"view":"view:test","allowed_intents":[]}`+"\n" {
 		t.Fatalf("R7 current route = handled %v exit %d output %q", handled, exit, output.String())
 	}
 }

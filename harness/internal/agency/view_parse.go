@@ -9,8 +9,8 @@ func ParseViewAuthorityCanonicalJSON(data []byte, attachment Attachment) (ViewAu
 	if err := decodeCanonicalObject("View authority JSON", data, MaxViewCanonicalBytes, &wire); err != nil {
 		return ViewAuthority{}, err
 	}
-	if wire.SchemaVersion != 1 {
-		return ViewAuthority{}, invalid("View authority schema version", "must be 1")
+	if wire.SchemaVersion != viewAuthorityVersion {
+		return ViewAuthority{}, invalid("View authority schema version", "is unsupported")
 	}
 	principal, err := NewAgentPrincipalID(wire.SourcePrincipal)
 	if err != nil {
@@ -112,7 +112,13 @@ func parseViewReferences(wires []viewReferenceWire) ([]ReferenceExpectation, err
 		if err != nil {
 			return nil, err
 		}
-		expectation, err := ExpectReferenceHead(handle, key, head)
+		outcomes := AgentViewTerminalOutcomes{}
+		if wire.TerminalOutcomes != nil {
+			outcomes = AgentViewTerminalOutcomes{Completed: wire.TerminalOutcomes.Completed,
+				Declined:   wire.TerminalOutcomes.Declined,
+				Unresolved: wire.TerminalOutcomes.Unresolved}
+		}
+		expectation, err := ExpectReferenceHeadWithOutcomes(handle, key, head, outcomes)
 		if err != nil {
 			return nil, err
 		}

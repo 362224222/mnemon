@@ -54,6 +54,11 @@ func commitDomainAdmissionTx(ctx context.Context, tx *sql.Tx,
 	if err := applyDomainEffectTx(ctx, tx, event, claimAttachment, handlingIDs); err != nil {
 		return agency.Event{}, err
 	}
+	if candidate.actor == domainActorLocal {
+		if err := updateReferenceOutcomeProjectionTx(ctx, tx, event); err != nil {
+			return agency.Event{}, err
+		}
+	}
 	if err := insertPeerDeliveriesTx(ctx, tx, event, now); err != nil {
 		return agency.Event{}, err
 	}

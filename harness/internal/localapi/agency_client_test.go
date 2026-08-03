@@ -57,9 +57,9 @@ func TestAgencyClientRoundTripsWithoutR5ProfileState(t *testing.T) {
 func TestAgencyClientRejectsNoncanonicalOrWrongSchemaProjection(t *testing.T) {
 	fixture := newAgencyHTTPFixture(t)
 	tests := map[string]string{
-		"whitespace":   `{ "schema":"mnemon.agent.view","version":1}`,
+		"whitespace":   `{ "schema":"mnemon.agent.view","version":2}`,
 		"wrong schema": `{"schema":"mnemon.agent.receipt","version":1,"outcome":"accepted","replayed":false}`,
-		"duplicate":    `{"schema":"mnemon.agent.view","schema":"mnemon.agent.view","version":1}`,
+		"duplicate":    `{"schema":"mnemon.agent.view","schema":"mnemon.agent.view","version":2}`,
 	}
 	for name, body := range tests {
 		t.Run(name, func(t *testing.T) {

@@ -64,6 +64,7 @@ type projectedReference struct {
 	head     agency.EventRef
 	state    string
 	artifact agency.Digest
+	outcomes agency.AgentViewTerminalOutcomes
 }
 
 // Current authenticates one eligible boundary, atomically acquires at most

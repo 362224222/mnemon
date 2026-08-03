@@ -4,7 +4,7 @@ import "sort"
 
 const (
 	AgentViewSchema              = "mnemon.agent.view"
-	AgentViewVersion             = 1
+	AgentViewVersion             = 2
 	MaxAgentViewCanonicalBytes   = 16 << 10
 	MaxAgentViewReferences       = 16
 	MaxAgentViewCurrentArtifacts = MaxArtifactInputs
@@ -35,9 +35,19 @@ const (
 // projected state and, when active, its offered Artifact. The private Event
 // head remains sealed in ViewAuthority.
 type AgentViewReferenceSpec struct {
-	Head     OpaqueHandle
-	State    AgentViewReferenceState
-	Artifact OpaqueHandle
+	Head             OpaqueHandle
+	State            AgentViewReferenceState
+	Artifact         OpaqueHandle
+	TerminalOutcomes AgentViewTerminalOutcomes
+}
+
+// AgentViewTerminalOutcomes is a bounded factual projection of accepted
+// terminal Events that directly cited one exact Reference head. These counts
+// are neither a quality score nor authority used by admission.
+type AgentViewTerminalOutcomes struct {
+	Completed  int64
+	Declined   int64
+	Unresolved int64
 }
 
 // AgentViewSpec is the narrow projection seam used by the local authority.
@@ -172,6 +182,10 @@ func projectReferences(specs []AgentViewReferenceSpec, authority ViewAuthority) 
 		if spec.Head.IsZero() || !offered {
 			return nil, nil, invariant("Agent View Reference", "head must be a sealed offer")
 		}
+		if spec.TerminalOutcomes != reference.TerminalOutcomes() {
+			return nil, nil, invariant("Agent View Reference outcomes",
+				"do not match the sealed outcome projection")
+		}
 		if _, duplicate := seenHeads[spec.Head.String()]; duplicate {
 			return nil, nil, invalid("Agent View References", "contains a duplicate head")
 		}
@@ -180,16 +194,38 @@ func projectReferences(specs []AgentViewReferenceSpec, authority ViewAuthority) 
 		if err != nil {
 			return nil, nil, err
 		}
+		outcomes, err := projectTerminalOutcomes(spec.TerminalOutcomes)
+		if err != nil {
+			return nil, nil, err
+		}
 		if !spec.Artifact.IsZero() {
 			artifacts[spec.Artifact.String()] = struct{}{}
 		}
 		wires = append(wires, agentViewReferenceWire{
 			Facts: agentViewReferenceFactsWire{Key: reference.key.String(), Head: spec.Head.String(),
-				State: state, Artifact: artifactWire},
+				State: state, Artifact: artifactWire, TerminalOutcomes: outcomes},
 		})
 	}
 	sort.Slice(wires, func(i, j int) bool { return wires[i].Facts.Head < wires[j].Facts.Head })
 	return wires, artifacts, nil
+}
+
+func projectTerminalOutcomes(outcomes AgentViewTerminalOutcomes) (*agentViewTerminalOutcomesWire, error) {
+	if err := validateTerminalOutcomes(outcomes); err != nil {
+		return nil, err
+	}
+	if outcomes == (AgentViewTerminalOutcomes{}) {
+		return nil, nil
+	}
+	return &agentViewTerminalOutcomesWire{Completed: outcomes.Completed,
+		Declined: outcomes.Declined, Unresolved: outcomes.Unresolved}, nil
+}
+
+func validateTerminalOutcomes(outcomes AgentViewTerminalOutcomes) error {
+	if outcomes.Completed < 0 || outcomes.Declined < 0 || outcomes.Unresolved < 0 {
+		return invalid("Agent View terminal outcomes", "counts must not be negative")
+	}
+	return nil
 }
 
 func projectReferenceState(spec AgentViewReferenceSpec, offers map[string]ViewArtifactOffer) (
@@ -312,10 +348,17 @@ type agentViewReferenceWire struct {
 }
 
 type agentViewReferenceFactsWire struct {
-	Key      string                 `json:"key"`
-	Head     string                 `json:"head"`
-	State    string                 `json:"state"`
-	Artifact *agentViewArtifactWire `json:"artifact,omitempty"`
+	Key              string                         `json:"key"`
+	Head             string                         `json:"head"`
+	State            string                         `json:"state"`
+	Artifact         *agentViewArtifactWire         `json:"artifact,omitempty"`
+	TerminalOutcomes *agentViewTerminalOutcomesWire `json:"terminal_outcomes,omitempty"`
+}
+
+type agentViewTerminalOutcomesWire struct {
+	Completed  int64 `json:"completed,omitempty"`
+	Declined   int64 `json:"declined,omitempty"`
+	Unresolved int64 `json:"unresolved,omitempty"`
 }
 
 type agentViewArtifactWire struct {
