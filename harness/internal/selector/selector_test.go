@@ -204,53 +204,57 @@ func TestAuthenticatedVoteCannotImpersonateSampledPeers(t *testing.T) {
 	sampled := roster[1:4]
 	authenticatedPeer := sampled[0]
 
-	var accepted []AuthenticatedVote
-	for _, claimedPeer := range sampled {
-		wire, err := NewSampleVote(descriptor.ID(), 1, nonce, PreferenceA, claimedPeer)
-		if err != nil {
-			t.Fatal(err)
-		}
-		vote, err := AuthenticateSampleVote(authenticatedPeer, wire)
-		if claimedPeer == authenticatedPeer {
-			if err != nil {
-				t.Fatalf("matching authenticated source rejected: %v", err)
-			}
-			accepted = append(accepted, vote)
-		} else if !errors.Is(err, ErrInvalid) {
-			t.Fatalf("authenticated peer impersonated %s: %v", claimedPeer.String(), err)
-		}
+	accepted := mustVote(t, descriptor.ID(), 1, nonce, PreferenceA, authenticatedPeer)
+	forgedWire, err := NewSampleVote(descriptor.ID(), 1, nonce, PreferenceA, sampled[1])
+	if err != nil {
+		t.Fatal(err)
 	}
-	result, err := ApplyRound(descriptor, state, roster[0], query, sampled, accepted, now)
+	if _, err := AuthenticateSampleVote(authenticatedPeer, forgedWire); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("authenticated peer impersonation error = %v, want ErrInvalid", err)
+	}
+	result, err := ApplyRound(descriptor, state, roster[0], query, sampled,
+		[]AuthenticatedVote{accepted}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if result.Tally().A() != 1 || result.State().Margin() != 0 {
 		t.Fatalf("one authenticated peer produced tally %#v and state %#v", result.Tally(), result.State())
 	}
-	duplicateClaims := make([]AuthenticatedVote, len(sampled))
-	for index := range duplicateClaims {
-		wire, err := NewSampleVote(descriptor.ID(), 1, nonce, PreferenceA, authenticatedPeer)
-		if err != nil {
-			t.Fatal(err)
-		}
-		duplicateClaims[index], err = AuthenticateSampleVote(authenticatedPeer, wire)
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-	result, err = ApplyRound(descriptor, state, roster[0], query, sampled, duplicateClaims, now)
+}
+
+func TestAuthenticatedVoteCountsOneFramePerSource(t *testing.T) {
+	now := time.Date(2026, 8, 3, 5, 30, 0, 0, time.UTC)
+	descriptor := mustDescriptor(t, mustProfile(t, 3, 2, 2, 4), testPeers(t, 5), now.Add(time.Hour))
+	roster := descriptor.ParticipantRoster()
+	state := mustState(t, descriptor.ID(), PreferenceB)
+	nonce := agency.Sum([]byte("authenticated-duplicate-round"))
+	query := mustQuery(t, descriptor.ID(), 1, nonce)
+	sampled := roster[1:4]
+	vote := mustVote(t, descriptor.ID(), 1, nonce, PreferenceA, sampled[0])
+
+	result, err := ApplyRound(descriptor, state, roster[0], query, sampled,
+		[]AuthenticatedVote{vote, vote, vote}, now)
 	if err != nil || result.Tally().A() != 1 || result.Tally().Duplicates() != 2 ||
 		result.State().Margin() != 0 {
 		t.Fatalf("duplicate authenticated source = tally %#v state %#v err %v",
 			result.Tally(), result.State(), err)
 	}
+}
 
+func TestAuthenticatedVotesReachQuorumAcrossDistinctSources(t *testing.T) {
+	now := time.Date(2026, 8, 3, 5, 30, 0, 0, time.UTC)
+	descriptor := mustDescriptor(t, mustProfile(t, 3, 2, 2, 4), testPeers(t, 5), now.Add(time.Hour))
+	roster := descriptor.ParticipantRoster()
+	state := mustState(t, descriptor.ID(), PreferenceB)
+	nonce := agency.Sum([]byte("authenticated-quorum-round"))
+	query := mustQuery(t, descriptor.ID(), 1, nonce)
+	sampled := roster[1:4]
 	normal := []AuthenticatedVote{
 		mustVote(t, descriptor.ID(), 1, nonce, PreferenceA, sampled[0]),
 		mustVote(t, descriptor.ID(), 1, nonce, PreferenceA, sampled[1]),
 		mustVote(t, descriptor.ID(), 1, nonce, PreferenceB, sampled[2]),
 	}
-	result, err = ApplyRound(descriptor, state, roster[0], query, sampled, normal, now)
+	result, err := ApplyRound(descriptor, state, roster[0], query, sampled, normal, now)
 	if err != nil || result.Tally().A() != 2 || result.State().Margin() != 1 {
 		t.Fatalf("normal authenticated votes = tally %#v state %#v err %v",
 			result.Tally(), result.State(), err)

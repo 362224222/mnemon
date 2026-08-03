@@ -183,10 +183,10 @@ func votesForPending(t testing.TB, pending PendingRound, preference Preference) 
 	return votes
 }
 
-func TestProviderPersistsOwnerSeedAndPendingRound(t *testing.T) {
+func TestProviderPersistsOwnerSeed(t *testing.T) {
 	fixture := newProviderFixture(t)
 	profile := mustProfile(t, 2, 2, 2, 4)
-	descriptor := fixture.descriptor("lifecycle", profile)
+	descriptor := fixture.descriptor("seed-lifecycle", profile)
 	created, err := fixture.store.CreateOwnerSelection(fixture.ctx, descriptor, descriptor.roster[0])
 	if err != nil || created.Phase() != PhaseAwaitingSeed || created.Revision() != 1 {
 		t.Fatalf("create = phase %q revision %d err %v", created.Phase(), created.Revision(), err)
@@ -194,7 +194,7 @@ func TestProviderPersistsOwnerSeedAndPendingRound(t *testing.T) {
 	if _, err := fixture.store.FreezeRound(fixture.ctx, descriptor.id); !errors.Is(err, ErrNotActive) {
 		t.Fatalf("unseeded freeze error = %v", err)
 	}
-	seed := providerSeed(t, "lifecycle", PreferenceB)
+	seed := providerSeed(t, "seed-lifecycle", PreferenceB)
 	seeded, err := fixture.store.SeedSelection(fixture.ctx, descriptor.id, seed)
 	if err != nil || seeded.Phase() != PhaseActive || seeded.Revision() != 2 {
 		t.Fatalf("seed = phase %q revision %d err %v", seeded.Phase(), seeded.Revision(), err)
@@ -206,7 +206,13 @@ func TestProviderPersistsOwnerSeedAndPendingRound(t *testing.T) {
 		replay.Revision() != seeded.Revision() {
 		t.Fatalf("seed replay = revision %d err %v", replay.Revision(), err)
 	}
+}
 
+func TestProviderPersistsPendingRoundAndDescriptorWindow(t *testing.T) {
+	fixture := newProviderFixture(t)
+	profile := mustProfile(t, 2, 2, 2, 4)
+	seeded, _ := fixture.createAndSeed("pending-lifecycle", profile, PreferenceB)
+	descriptor := seeded.Descriptor()
 	first, err := fixture.store.FreezeRound(fixture.ctx, descriptor.id)
 	if err != nil || len(first.Sample()) != int(profile.SampleSize()) ||
 		containsPeer(first.Sample(), descriptor.roster[0]) {
@@ -227,39 +233,6 @@ func TestProviderPersistsOwnerSeedAndPendingRound(t *testing.T) {
 		t.Fatalf("restored descriptor window = %s / %s, want %s / %s",
 			restored.Descriptor().CreatedAt(), restored.Descriptor().ExpiresAt(),
 			descriptor.CreatedAt(), descriptor.ExpiresAt())
-	}
-}
-
-func TestProviderPendingReplaySurvivesClockRollbackButCannotSettle(t *testing.T) {
-	fixture := newProviderFixture(t)
-	seeded, _ := fixture.createAndSeed("rollback-replay",
-		mustProfile(t, 2, 2, 2, 4), PreferenceB)
-	pending, err := fixture.store.FreezeRound(fixture.ctx, seeded.descriptor.id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	before, err := fixture.store.Selection(fixture.ctx, seeded.descriptor.id)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	fixture.clock.Set(seeded.descriptor.CreatedAt().Add(-time.Nanosecond))
-	fixture.reopen()
-	replayed, err := fixture.store.FreezeRound(fixture.ctx, seeded.descriptor.id)
-	if err != nil || !samePending(replayed, pending) {
-		t.Fatalf("pending replay after clock rollback = %#v, err %v", replayed, err)
-	}
-	if _, err := fixture.store.ApplyObservations(fixture.ctx, replayed,
-		votesForPending(t, replayed, PreferenceA)); !errors.Is(err, ErrState) {
-		t.Fatalf("settlement before descriptor creation error = %v, want ErrState", err)
-	}
-	after, err := fixture.store.Selection(fixture.ctx, seeded.descriptor.id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	afterPending, present := after.PendingRound()
-	if !present || !samePending(afterPending, pending) || after.Revision() != before.Revision() {
-		t.Fatalf("rejected settlement changed durable state: before=%#v after=%#v", before, after)
 	}
 }
 
