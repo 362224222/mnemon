@@ -36,8 +36,9 @@ content, then selects the winner; mnemond performs no join or selection.
 2. A and B return `proposal-a.txt` and `proposal-b.txt`; C returns the semantic
    decline and closes locally as declined.
 3. The initiator emits `award.txt` only to B. B returns `result.txt`.
-4. Each successful local responsibility is completed with the exact relevant
-   Artifact; all other responsibilities close as declined.
+4. Each successful contribution is completed with the exact relevant
+   Artifact. Declined participation closes as declined; the initiator's local
+   delivery anchors close unresolved after their remote work is durably sent.
 
 The case passes only when three independent peer deliveries become three local
 Handlings, arrival order cannot change B as the selected node, exactly one

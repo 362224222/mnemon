@@ -40,10 +40,10 @@ closed rather than overwrite the winner.
 ## Deterministic trace and oracle
 
 Peer deliveries may arrive in any order, but the bounded fixture result is
-fixed. The case passes only when:
+fixed. The public case oracle requires:
 
-- the evidence node's active Reference points to `finding-v2.txt`, while v1
-  remains in immutable lineage;
+- the evidence node's active Reference points to `finding-v2.txt`, and an old
+  View's v1 head cannot authorize another mutation;
 - the challenger, verifier, and resolver obtain every consumed Artifact from
   their own CAS after local peer re-admission;
 - conflict content is preserved explicitly and never treated as authority;
@@ -53,3 +53,6 @@ fixed. The case passes only when:
   and
 - delivery or operation replay creates no duplicate local Event, Handling, or
   Reference mutation.
+
+The independent P-08 Core conformance oracle, rather than this public Agent
+surface case, proves that v1 remains in immutable lineage after supersession.
