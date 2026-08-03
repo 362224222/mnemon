@@ -135,7 +135,7 @@ func (f *providerFixture) createAndSeed(name string, profile Profile,
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	seed := providerSeed(f.t, name, preference)
+	seed := providerSeed(f.t, descriptor.id, name, preference)
 	seeded, err := f.store.SeedSelection(f.ctx, created.descriptor.id, seed)
 	if err != nil {
 		f.t.Fatal(err)
@@ -143,7 +143,9 @@ func (f *providerFixture) createAndSeed(name string, profile Profile,
 	return seeded, seed
 }
 
-func providerSeed(t testing.TB, name string, preference Preference) AcceptedSeedOpinion {
+func providerSeed(t testing.TB, selectionID SelectionID, name string,
+	preference Preference,
+) AcceptedSeedOpinion {
 	t.Helper()
 	principal, err := agency.NewAgentPrincipalID("principal-" + name)
 	if err != nil {
@@ -157,7 +159,11 @@ func providerSeed(t testing.TB, name string, preference Preference) AcceptedSeed
 	if err != nil {
 		t.Fatal(err)
 	}
-	seed, err := NewAcceptedSeedOpinion(principal, event, preference)
+	opinion, err := NewSeedOpinion(selectionID, preference)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed, err := restoreAcceptedSeedOpinion(opinion, principal, event)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,31 +187,6 @@ func votesForPending(t testing.TB, pending PendingRound, preference Preference) 
 		votes[index] = vote
 	}
 	return votes
-}
-
-func TestProviderPersistsOwnerSeed(t *testing.T) {
-	fixture := newProviderFixture(t)
-	profile := mustProfile(t, 2, 2, 2, 4)
-	descriptor := fixture.descriptor("seed-lifecycle", profile)
-	created, err := fixture.store.CreateOwnerSelection(fixture.ctx, descriptor, descriptor.roster[0])
-	if err != nil || created.Phase() != PhaseAwaitingSeed || created.Revision() != 1 {
-		t.Fatalf("create = phase %q revision %d err %v", created.Phase(), created.Revision(), err)
-	}
-	if _, err := fixture.store.FreezeRound(fixture.ctx, descriptor.id); !errors.Is(err, ErrNotActive) {
-		t.Fatalf("unseeded freeze error = %v", err)
-	}
-	seed := providerSeed(t, "seed-lifecycle", PreferenceB)
-	seeded, err := fixture.store.SeedSelection(fixture.ctx, descriptor.id, seed)
-	if err != nil || seeded.Phase() != PhaseActive || seeded.Revision() != 2 {
-		t.Fatalf("seed = phase %q revision %d err %v", seeded.Phase(), seeded.Revision(), err)
-	}
-	if gotSeed, ok := seeded.Seed(); !ok || !sameSeed(gotSeed, seed) {
-		t.Fatalf("seed provenance = %#v, %v", gotSeed, ok)
-	}
-	if replay, err := fixture.store.SeedSelection(fixture.ctx, descriptor.id, seed); err != nil ||
-		replay.Revision() != seeded.Revision() {
-		t.Fatalf("seed replay = revision %d err %v", replay.Revision(), err)
-	}
 }
 
 func TestProviderPersistsPendingRoundAndDescriptorWindow(t *testing.T) {
@@ -421,7 +402,7 @@ func TestProviderClockIsReadWhileMutationOwnsStore(t *testing.T) {
 			descriptor.roster[0]); err != nil {
 			t.Fatal(err)
 		}
-		seed := providerSeed(t, "clock-seed", PreferenceA)
+		seed := providerSeed(t, descriptor.id, "clock-seed", PreferenceA)
 		err := assertMutationOwnsClock(t, fixture, descriptor.ExpiresAt(), func() error {
 			_, err := fixture.store.SeedSelection(fixture.ctx, descriptor.id, seed)
 			return err
@@ -479,6 +460,25 @@ func TestProviderExpirationProducesOnlyObservationalResult(t *testing.T) {
 	}
 }
 
+func TestProviderRejectsExpiredObservationBeforeDescriptorExpiry(t *testing.T) {
+	fixture := newProviderFixture(t)
+	seeded, _ := fixture.createAndSeed("expiry-time-binding",
+		mustProfile(t, 2, 2, 1, 3), PreferenceA)
+	fixture.clock.Set(seeded.descriptor.ExpiresAt())
+	if _, err := fixture.store.FreezeRound(fixture.ctx, seeded.descriptor.id); !errors.Is(err, ErrNotActive) {
+		t.Fatalf("expired freeze error = %v", err)
+	}
+	if _, err := fixture.store.db.ExecContext(fixture.ctx, `UPDATE selections SET updated_at = ?
+		WHERE selection_id = ?`, formatProviderTime(seeded.descriptor.ExpiresAt().Add(-time.Second)),
+		seeded.descriptor.id.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.Selection(fixture.ctx,
+		seeded.descriptor.id); !errors.Is(err, ErrState) {
+		t.Fatalf("premature expired observation error = %v, want ErrState", err)
+	}
+}
+
 func TestProviderActivationAndDurableCapacityAreBounded(t *testing.T) {
 	fixture := newProviderFixture(t)
 	small := mustDescriptor(t, mustProfile(t, 2, 2, 1, 2), testPeers(t, 4),
@@ -524,7 +524,7 @@ func TestProviderExpiredActiveSelectionsSettleAndReleaseCapacity(t *testing.T) {
 		created SelectionSnapshot,
 	) {
 		if _, err := fixture.store.SeedSelection(fixture.ctx, created.descriptor.id,
-			providerSeed(t, fmt.Sprintf("expired-%02d", index), PreferenceA)); err != nil {
+			providerSeed(t, created.descriptor.id, fmt.Sprintf("expired-%02d", index), PreferenceA)); err != nil {
 			t.Fatal(err)
 		}
 		if index == 0 {

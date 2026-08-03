@@ -326,6 +326,36 @@ func TestObserveThresholdReachedAndInconclusive(t *testing.T) {
 	}
 }
 
+func TestStoredInconclusiveObservationHonorsTerminalPrecedence(t *testing.T) {
+	descriptor := mustDescriptor(t, mustProfile(t, 1, 1, 1, 1), testPeers(t, 5),
+		time.Now().Add(time.Hour))
+	thresholdState := SelectionState{selectionID: descriptor.id, preference: PreferenceA,
+		margin: 1, round: 1}
+	thresholdAsRoundLimit, err := newObservation(descriptor, thresholdState,
+		ObservationInconclusive, 0, ReasonRoundLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseObservationCanonical(thresholdAsRoundLimit.CanonicalBytes(),
+		thresholdAsRoundLimit.Digest(), descriptor, thresholdState,
+		descriptor.ExpiresAt()); !errors.Is(err, ErrState) {
+		t.Fatalf("threshold disguised as inconclusive error = %v, want ErrState", err)
+	}
+
+	roundLimitState := SelectionState{selectionID: descriptor.id, preference: PreferenceA,
+		round: 1}
+	roundLimitAsExpired, err := newObservation(descriptor, roundLimitState,
+		ObservationInconclusive, 0, ReasonExpired)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseObservationCanonical(roundLimitAsExpired.CanonicalBytes(),
+		roundLimitAsExpired.Digest(), descriptor, roundLimitState,
+		descriptor.ExpiresAt()); !errors.Is(err, ErrState) {
+		t.Fatalf("round limit disguised as expiry error = %v, want ErrState", err)
+	}
+}
+
 func TestDeterministicThirtyTwoNodeSelection(t *testing.T) {
 	now := time.Date(2026, 8, 3, 8, 0, 0, 0, time.UTC)
 	profile := mustProfile(t, 5, 3, 4, 12)

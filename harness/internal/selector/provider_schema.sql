@@ -3,6 +3,7 @@ CREATE TABLE selections (
     descriptor_json BLOB NOT NULL,
     local_participant TEXT NOT NULL,
     phase TEXT NOT NULL CHECK (phase IN ('awaiting_seed', 'active', 'observed')),
+    seed_opinion_digest TEXT,
     seed_principal_id TEXT,
     seed_event_id TEXT,
     seed_event_digest TEXT,
@@ -16,18 +17,21 @@ CREATE TABLE selections (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     CHECK (
-        (phase = 'awaiting_seed' AND seed_principal_id IS NULL AND
+        (phase = 'awaiting_seed' AND seed_opinion_digest IS NULL AND
+         seed_principal_id IS NULL AND
          seed_event_id IS NULL AND seed_event_digest IS NULL AND
          initial_preference IS NULL AND current_preference IS NULL AND
          signed_margin = 0 AND completed_rounds = 0 AND
          observation_digest IS NULL AND observation_json IS NULL)
         OR
-        (phase = 'active' AND seed_principal_id IS NOT NULL AND
+        (phase = 'active' AND seed_opinion_digest IS NOT NULL AND
+         seed_principal_id IS NOT NULL AND
          seed_event_id IS NOT NULL AND seed_event_digest IS NOT NULL AND
          initial_preference IS NOT NULL AND current_preference IS NOT NULL AND
          observation_digest IS NULL AND observation_json IS NULL)
         OR
-        (phase = 'observed' AND seed_principal_id IS NOT NULL AND
+        (phase = 'observed' AND seed_opinion_digest IS NOT NULL AND
+         seed_principal_id IS NOT NULL AND
          seed_event_id IS NOT NULL AND seed_event_digest IS NOT NULL AND
          initial_preference IS NOT NULL AND current_preference IS NOT NULL AND
          observation_digest IS NOT NULL AND observation_json IS NOT NULL)
@@ -58,4 +62,4 @@ CREATE TABLE settled_rounds (
 ) STRICT;
 
 PRAGMA application_id = 1296978488;
-PRAGMA user_version = 1;
+PRAGMA user_version = 2;

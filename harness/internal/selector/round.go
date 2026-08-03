@@ -31,7 +31,8 @@ func (s SelectionState) validate(descriptor SelectionDescriptor) error {
 	if s.selectionID.IsZero() || s.selectionID != descriptor.id || !validPreference(s.preference) {
 		return fmt.Errorf("state does not belong to descriptor: %w", ErrState)
 	}
-	if s.round > descriptor.profile.maxRounds || abs64(s.margin) > int64(s.round) {
+	marginLimit := int64(s.round)
+	if s.round > descriptor.profile.maxRounds || s.margin < -marginLimit || s.margin > marginLimit {
 		return fmt.Errorf("round %d and margin %d are inconsistent: %w", s.round, s.margin, ErrState)
 	}
 	if s.margin >= int64(descriptor.profile.threshold) && s.preference != PreferenceA {
@@ -169,7 +170,8 @@ func ApplyRound(descriptor SelectionDescriptor, state SelectionState, self Parti
 	if !descriptor.contains(self) {
 		return RoundResult{}, fmt.Errorf("local peer is outside participant roster: %w", ErrInvalid)
 	}
-	if abs64(state.margin) >= int64(descriptor.profile.threshold) || state.round >= descriptor.profile.maxRounds {
+	threshold := int64(descriptor.profile.threshold)
+	if state.margin >= threshold || state.margin <= -threshold || state.round >= descriptor.profile.maxRounds {
 		return RoundResult{}, fmt.Errorf("selection is already terminal: %w", ErrState)
 	}
 	canonicalNow := now.Round(0).UTC()
@@ -269,11 +271,4 @@ func filterVotes(query SampleQuery, sampled map[ParticipantID]struct{}, votes []
 func sampleContains(sampled map[ParticipantID]struct{}, peer ParticipantID) bool {
 	_, present := sampled[peer]
 	return present
-}
-
-func abs64(value int64) int64 {
-	if value < 0 {
-		return -value
-	}
-	return value
 }

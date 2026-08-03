@@ -5,12 +5,14 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/agency"
 )
 
 const selectionProjectionSQL = `SELECT s.selection_id, s.descriptor_json,
-	s.local_participant, s.phase, s.seed_principal_id, s.seed_event_id,
+	s.local_participant, s.phase, s.seed_opinion_digest,
+	s.seed_principal_id, s.seed_event_id,
 	s.seed_event_digest, s.initial_preference, s.current_preference,
 	s.signed_margin, s.completed_rounds, s.revision,
 	s.observation_digest, s.observation_json, s.created_at, s.updated_at,
@@ -24,7 +26,8 @@ type rowScanner interface {
 type storedSelectionRow struct {
 	selectionID, self, phase, created, updated       string
 	descriptor, observation, pendingSample           []byte
-	seedPrincipal, seedEventID, seedEventDigest      sql.NullString
+	seedOpinionDigest, seedPrincipal                 sql.NullString
+	seedEventID, seedEventDigest                     sql.NullString
 	initialPreference, currentPreference             sql.NullString
 	observationDigest, pendingNonce, pendingDeadline sql.NullString
 	pendingRound, pendingRevision                    sql.NullInt64
@@ -43,7 +46,8 @@ func scanSelection(row rowScanner) (SelectionSnapshot, error) {
 func scanStoredSelection(row rowScanner) (storedSelectionRow, error) {
 	var stored storedSelectionRow
 	err := row.Scan(&stored.selectionID, &stored.descriptor, &stored.self, &stored.phase,
-		&stored.seedPrincipal, &stored.seedEventID, &stored.seedEventDigest,
+		&stored.seedOpinionDigest, &stored.seedPrincipal,
+		&stored.seedEventID, &stored.seedEventDigest,
 		&stored.initialPreference, &stored.currentPreference, &stored.margin,
 		&stored.completedRounds, &stored.revision, &stored.observationDigest,
 		&stored.observation, &stored.created, &stored.updated, &stored.pendingRound,
@@ -53,7 +57,7 @@ func scanStoredSelection(row rowScanner) (storedSelectionRow, error) {
 }
 
 func reconstructSelection(stored storedSelectionRow) (SelectionSnapshot, error) {
-	descriptor, err := parseDescriptorCanonical(stored.descriptor)
+	descriptor, err := ParseSelectionDescriptorCanonical(stored.descriptor)
 	if err != nil || stored.selectionID != descriptor.id.String() {
 		return SelectionSnapshot{}, fmt.Errorf("stored selector descriptor is corrupt: %w", ErrState)
 	}
@@ -64,7 +68,8 @@ func reconstructSelection(stored storedSelectionRow) (SelectionSnapshot, error) 
 	if _, err := parseProviderTime(stored.created); err != nil {
 		return SelectionSnapshot{}, err
 	}
-	if _, err := parseProviderTime(stored.updated); err != nil {
+	updatedAt, err := parseProviderTime(stored.updated)
+	if err != nil {
 		return SelectionSnapshot{}, err
 	}
 	snapshot := SelectionSnapshot{descriptor: descriptor, self: self,
@@ -75,24 +80,29 @@ func reconstructSelection(stored storedSelectionRow) (SelectionSnapshot, error) 
 	if snapshot.phase == PhaseAwaitingSeed {
 		return validateAwaitingSeedSnapshot(snapshot, stored)
 	}
-	return reconstructSeededSnapshot(snapshot, stored)
+	return reconstructSeededSnapshot(snapshot, stored, updatedAt)
 }
 
 func validateAwaitingSeedSnapshot(snapshot SelectionSnapshot,
 	stored storedSelectionRow,
 ) (SelectionSnapshot, error) {
-	if stored.seedPrincipal.Valid || stored.seedEventID.Valid || stored.seedEventDigest.Valid ||
-		stored.initialPreference.Valid || stored.currentPreference.Valid || stored.pendingRound.Valid {
+	if stored.seedOpinionDigest.Valid || stored.seedPrincipal.Valid ||
+		stored.seedEventID.Valid ||
+		stored.seedEventDigest.Valid ||
+		stored.initialPreference.Valid || stored.currentPreference.Valid || stored.pendingRound.Valid ||
+		stored.margin != 0 || stored.completedRounds != 0 || stored.observationDigest.Valid ||
+		len(stored.observation) != 0 || snapshot.revision != 1 {
 		return SelectionSnapshot{}, fmt.Errorf("unseeded selector has active fields: %w", ErrState)
 	}
 	return snapshot, nil
 }
 
 func reconstructSeededSnapshot(snapshot SelectionSnapshot,
-	stored storedSelectionRow,
+	stored storedSelectionRow, updatedAt time.Time,
 ) (SelectionSnapshot, error) {
-	seed, state, err := reconstructSeedState(snapshot.descriptor, stored.seedPrincipal,
-		stored.seedEventID, stored.seedEventDigest, stored.initialPreference,
+	seed, state, err := reconstructSeedState(snapshot.descriptor,
+		stored.seedOpinionDigest, stored.seedPrincipal, stored.seedEventID,
+		stored.seedEventDigest, stored.initialPreference,
 		stored.currentPreference, stored.margin, stored.completedRounds)
 	if err != nil {
 		return SelectionSnapshot{}, err
@@ -120,7 +130,7 @@ func reconstructSeededSnapshot(snapshot SelectionSnapshot,
 			return SelectionSnapshot{}, fmt.Errorf("stored observation digest: %w", ErrState)
 		}
 		snapshot.observation, err = parseObservationCanonical(stored.observation, digest,
-			snapshot.descriptor, state)
+			snapshot.descriptor, state, updatedAt)
 		if err != nil {
 			return SelectionSnapshot{}, err
 		}
@@ -130,48 +140,86 @@ func reconstructSeededSnapshot(snapshot SelectionSnapshot,
 	return snapshot, nil
 }
 
-func reconstructSeedState(descriptor SelectionDescriptor, principalValue, eventIDValue,
-	eventDigestValue, initialValue, currentValue sql.NullString, margin int64,
+func reconstructSeedState(descriptor SelectionDescriptor, opinionDigestValue,
+	principalValue, eventIDValue, eventDigestValue, initialValue, currentValue sql.NullString, margin int64,
 	completedRounds uint64,
 ) (AcceptedSeedOpinion, SelectionState, error) {
-	if !principalValue.Valid || !eventIDValue.Valid || !eventDigestValue.Valid ||
-		!initialValue.Valid || !currentValue.Valid || completedRounds > uint64(^uint32(0)) {
-		return AcceptedSeedOpinion{}, SelectionState{}, fmt.Errorf("stored seed fields are incomplete: %w", ErrState)
+	if err := requireStoredSeedFields(opinionDigestValue, principalValue,
+		eventIDValue, eventDigestValue, initialValue, currentValue, completedRounds); err != nil {
+		return AcceptedSeedOpinion{}, SelectionState{}, err
 	}
+	seed, err := reconstructAcceptedSeed(descriptor, opinionDigestValue,
+		principalValue, eventIDValue, eventDigestValue, initialValue)
+	if err != nil {
+		return AcceptedSeedOpinion{}, SelectionState{}, err
+	}
+	state, err := reconstructStoredSelectionState(descriptor, currentValue, margin, completedRounds)
+	if err != nil {
+		return AcceptedSeedOpinion{}, SelectionState{}, err
+	}
+	return seed, state, nil
+}
+
+func requireStoredSeedFields(opinionDigestValue, principalValue,
+	eventIDValue, eventDigestValue, initialValue, currentValue sql.NullString,
+	completedRounds uint64,
+) error {
+	if !opinionDigestValue.Valid || !principalValue.Valid ||
+		!eventIDValue.Valid || !eventDigestValue.Valid || !initialValue.Valid ||
+		!currentValue.Valid || completedRounds > uint64(^uint32(0)) {
+		return fmt.Errorf("stored seed fields are incomplete: %w", ErrState)
+	}
+	return nil
+}
+
+func reconstructAcceptedSeed(descriptor SelectionDescriptor,
+	opinionDigestValue, principalValue, eventIDValue, eventDigestValue,
+	initialValue sql.NullString,
+) (AcceptedSeedOpinion, error) {
 	principal, err := agency.NewAgentPrincipalID(principalValue.String)
 	if err != nil {
-		return AcceptedSeedOpinion{}, SelectionState{}, fmt.Errorf("stored seed principal: %w", ErrState)
+		return AcceptedSeedOpinion{}, fmt.Errorf("stored seed principal: %w", ErrState)
 	}
 	eventID, err := agency.NewEventID(eventIDValue.String)
 	if err != nil {
-		return AcceptedSeedOpinion{}, SelectionState{}, fmt.Errorf("stored seed event ID: %w", ErrState)
+		return AcceptedSeedOpinion{}, fmt.Errorf("stored seed event ID: %w", ErrState)
 	}
 	eventDigest, err := agency.ParseDigest(eventDigestValue.String)
 	if err != nil {
-		return AcceptedSeedOpinion{}, SelectionState{}, fmt.Errorf("stored seed event digest: %w", ErrState)
+		return AcceptedSeedOpinion{}, fmt.Errorf("stored seed event digest: %w", ErrState)
 	}
 	event, err := agency.NewEventRef(eventID, eventDigest)
 	if err != nil {
-		return AcceptedSeedOpinion{}, SelectionState{}, fmt.Errorf("stored seed Event: %w", ErrState)
+		return AcceptedSeedOpinion{}, fmt.Errorf("stored seed Event: %w", ErrState)
 	}
 	initial, err := ParsePreference(initialValue.String)
 	if err != nil {
-		return AcceptedSeedOpinion{}, SelectionState{}, err
+		return AcceptedSeedOpinion{}, err
 	}
+	opinion, err := NewSeedOpinion(descriptor.id, initial)
+	if err != nil || opinion.digest.String() != opinionDigestValue.String {
+		return AcceptedSeedOpinion{}, fmt.Errorf("stored seed opinion: %w", ErrState)
+	}
+	seed, err := restoreAcceptedSeedOpinion(opinion, principal, event)
+	if err != nil {
+		return AcceptedSeedOpinion{}, err
+	}
+	return seed, nil
+}
+
+func reconstructStoredSelectionState(descriptor SelectionDescriptor, currentValue sql.NullString,
+	margin int64, completedRounds uint64,
+) (SelectionState, error) {
 	current, err := ParsePreference(currentValue.String)
 	if err != nil {
-		return AcceptedSeedOpinion{}, SelectionState{}, err
-	}
-	seed, err := NewAcceptedSeedOpinion(principal, event, initial)
-	if err != nil {
-		return AcceptedSeedOpinion{}, SelectionState{}, err
+		return SelectionState{}, err
 	}
 	state := SelectionState{selectionID: descriptor.id, preference: current,
 		margin: margin, round: uint32(completedRounds)}
 	if err := state.validate(descriptor); err != nil {
-		return AcceptedSeedOpinion{}, SelectionState{}, err
+		return SelectionState{}, err
 	}
-	return seed, state, nil
+	return state, nil
 }
 
 func reconstructPending(snapshot SelectionSnapshot, round sql.NullInt64,

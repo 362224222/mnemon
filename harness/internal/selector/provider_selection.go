@@ -64,14 +64,17 @@ func (s *Store) CreateOwnerSelection(ctx context.Context, descriptor SelectionDe
 		phase: PhaseAwaitingSeed, revision: 1}, nil
 }
 
-// SeedSelection activates an owner-created descriptor with one independently
-// accepted local Principal opinion. Exact replay is idempotent; a different
+// SeedSelection activates an owner-created descriptor with one R7-admitted
+// local Principal opinion. Exact replay is idempotent; a different
 // seed for the same selection fails closed.
 func (s *Store) SeedSelection(ctx context.Context, id SelectionID,
 	seed AcceptedSeedOpinion,
 ) (SelectionSnapshot, error) {
 	if ctx == nil || !seed.valid() {
 		return SelectionSnapshot{}, fmt.Errorf("seed selection input is incomplete: %w", ErrInvalid)
+	}
+	if id.IsZero() || seed.SelectionID() != id {
+		return SelectionSnapshot{}, fmt.Errorf("seed does not belong to selection: %w", ErrConflict)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -111,11 +114,13 @@ func (s *Store) SeedSelection(ctx context.Context, id SelectionID,
 	}
 	nextRevision := snapshot.revision + 1
 	result, err := tx.ExecContext(ctx, `UPDATE selections SET
-		phase = 'active', seed_principal_id = ?, seed_event_id = ?, seed_event_digest = ?,
+		phase = 'active', seed_opinion_digest = ?, seed_principal_id = ?,
+		seed_event_id = ?, seed_event_digest = ?,
 		initial_preference = ?, current_preference = ?, revision = ?, updated_at = ?
 		WHERE selection_id = ? AND phase = 'awaiting_seed' AND revision = ?`,
-		seed.principal.String(), seed.event.ID().String(), seed.event.Digest().String(),
-		seed.preference.String(), seed.preference.String(), nextRevision, formatProviderTime(now),
+		seed.opinion.digest.String(), seed.principal.String(),
+		seed.event.ID().String(), seed.event.Digest().String(),
+		seed.Preference().String(), seed.Preference().String(), nextRevision, formatProviderTime(now),
 		id.String(), snapshot.revision)
 	if err != nil {
 		return SelectionSnapshot{}, fmt.Errorf("seed selection: update: %w", err)
@@ -126,7 +131,7 @@ func (s *Store) SeedSelection(ctx context.Context, id SelectionID,
 	if err := tx.Commit(); err != nil {
 		return SelectionSnapshot{}, fmt.Errorf("seed selection: commit: %w", err)
 	}
-	state, _ := NewSelectionState(id, seed.preference)
+	state, _ := NewSelectionState(id, seed.Preference())
 	snapshot.phase, snapshot.seed, snapshot.state = PhaseActive, seed, state
 	snapshot.revision = nextRevision
 	return snapshot, nil
@@ -150,9 +155,11 @@ func (s *Store) Selection(ctx context.Context, id SelectionID) (SelectionSnapsho
 }
 
 func sameSeed(left, right AcceptedSeedOpinion) bool {
-	return left.valid() && right.valid() && left.principal == right.principal &&
+	return left.valid() && right.valid() && left.SelectionID() == right.SelectionID() &&
+		left.opinion.digest == right.opinion.digest &&
+		left.principal == right.principal &&
 		left.event.ID() == right.event.ID() && left.event.Digest() == right.event.Digest() &&
-		left.preference == right.preference
+		left.Preference() == right.Preference()
 }
 
 func requireOneRow(result sql.Result) error {

@@ -176,8 +176,10 @@ type descriptorWire struct {
 	Version                  uint32      `json:"version"`
 }
 
-// NewSelectionDescriptor freezes one machine-authorized selection window.
-// createdAt must come from the owner boundary's trusted clock; Store rejects a
+// NewSelectionDescriptor constructs one canonical selection window. Its caller
+// must obtain the roster, profile, and window from an authenticated machine or
+// owner boundary; this constructor validates values but proves no authorization.
+// createdAt must come from that boundary's trusted clock; Store rejects a
 // descriptor whose creation lies after its own trusted clock. The exact window
 // is part of SelectionID and can never exceed MaxSelectionLifetime.
 func NewSelectionDescriptor(question, candidateA, candidateB agency.Digest, roster []ParticipantID,

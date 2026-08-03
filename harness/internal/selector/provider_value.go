@@ -46,32 +46,35 @@ const (
 	PhaseObserved     SelectionPhase = "observed"
 )
 
-// AcceptedSeedOpinion is an independently admitted local Principal opinion.
-// The caller must construct it only after verifying that Event is an accepted
-// R7 Event authored by Principal. The selector deliberately cannot read or
-// mutate the R7 authority store, so it treats that verified pair as opaque
-// provenance and never promotes the opinion into an R7 fact.
+// AcceptedSeedOpinion is an R7-admitted local Principal opinion bound to one
+// exact immutable SelectionDescriptor through SelectionID.
+// BindAcceptedSeedOpinion is its only public construction path. The selector
+// deliberately cannot read or mutate the R7 authority store, so it treats the
+// verified R7 Event as opaque provenance and never promotes the opinion into
+// an R7 fact. This binding proves provenance, not an influence-free View.
 type AcceptedSeedOpinion struct {
-	principal  agency.AgentPrincipalID
-	event      agency.EventRef
-	preference Preference
+	opinion   SeedOpinion
+	principal agency.AgentPrincipalID
+	event     agency.EventRef
 }
 
-func NewAcceptedSeedOpinion(principal agency.AgentPrincipalID, event agency.EventRef,
-	preference Preference,
+func restoreAcceptedSeedOpinion(opinion SeedOpinion, principal agency.AgentPrincipalID,
+	event agency.EventRef,
 ) (AcceptedSeedOpinion, error) {
-	if principal.IsZero() || event.IsZero() || !validPreference(preference) {
-		return AcceptedSeedOpinion{}, fmt.Errorf("seed opinion fields are incomplete: %w", ErrInvalid)
+	if !opinion.valid() || principal.IsZero() || event.IsZero() {
+		return AcceptedSeedOpinion{}, fmt.Errorf("accepted seed opinion fields are incomplete: %w", ErrInvalid)
 	}
-	return AcceptedSeedOpinion{principal: principal, event: event, preference: preference}, nil
+	return AcceptedSeedOpinion{opinion: opinion, principal: principal, event: event}, nil
 }
 
+func (s AcceptedSeedOpinion) SelectionID() SelectionID           { return s.opinion.selectionID }
+func (s AcceptedSeedOpinion) Opinion() SeedOpinion               { return s.opinion }
 func (s AcceptedSeedOpinion) Principal() agency.AgentPrincipalID { return s.principal }
 func (s AcceptedSeedOpinion) Event() agency.EventRef             { return s.event }
-func (s AcceptedSeedOpinion) Preference() Preference             { return s.preference }
+func (s AcceptedSeedOpinion) Preference() Preference             { return s.opinion.preference }
 
 func (s AcceptedSeedOpinion) valid() bool {
-	return !s.principal.IsZero() && !s.event.IsZero() && validPreference(s.preference)
+	return s.opinion.valid() && !s.principal.IsZero() && !s.event.IsZero()
 }
 
 // PendingRound is a durable prepare result. A network adapter may query only

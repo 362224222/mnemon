@@ -69,7 +69,8 @@ func FuzzApplyRoundFiltersUntrustedVotes(f *testing.F) {
 			t.Fatal(err)
 		}
 		next := result.State()
-		if next.Round() != 1 || abs64(next.Margin()) > int64(next.Round()) || !validPreference(next.Preference()) {
+		if next.Round() != 1 || next.Margin() < -int64(next.Round()) ||
+			next.Margin() > int64(next.Round()) || !validPreference(next.Preference()) {
 			t.Fatalf("invalid next state: %#v", next)
 		}
 		tally := result.Tally()

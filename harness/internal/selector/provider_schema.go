@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	providerSchemaVersion       = 1
+	providerSchemaVersion       = 2
 	providerSchemaApplicationID = 0x4d4e5238 // MNR8
 )
 

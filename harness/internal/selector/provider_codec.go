@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/agency"
 )
@@ -55,7 +56,7 @@ func parseSampleCanonical(value []byte) ([]ParticipantID, error) {
 }
 
 func parseObservationCanonical(value []byte, digest agency.Digest,
-	descriptor SelectionDescriptor, state SelectionState,
+	descriptor SelectionDescriptor, state SelectionState, observedAt time.Time,
 ) (PreferenceObservation, error) {
 	if len(value) == 0 || digest.IsZero() || agency.Sum(value) != digest {
 		return PreferenceObservation{}, fmt.Errorf("stored observation digest mismatch: %w", ErrState)
@@ -67,7 +68,7 @@ func parseObservationCanonical(value []byte, digest agency.Digest,
 	if err := validateObservationAuthority(wire, descriptor, state); err != nil {
 		return PreferenceObservation{}, err
 	}
-	result, preference, reason, err := observationValues(wire, descriptor, state)
+	result, preference, reason, err := observationValues(wire, descriptor, state, observedAt)
 	if err != nil {
 		return PreferenceObservation{}, err
 	}
@@ -103,7 +104,7 @@ func validateObservationAuthority(wire observationWire, descriptor SelectionDesc
 }
 
 func observationValues(wire observationWire, descriptor SelectionDescriptor,
-	state SelectionState,
+	state SelectionState, observedAt time.Time,
 ) (ObservationResult, Preference, InconclusiveReason, error) {
 	result := ObservationResult(wire.Result)
 	switch result {
@@ -111,7 +112,7 @@ func observationValues(wire observationWire, descriptor SelectionDescriptor,
 		preference, err := thresholdObservationPreference(wire, descriptor, state)
 		return result, preference, "", err
 	case ObservationInconclusive:
-		reason, err := inconclusiveObservationReason(wire, descriptor, state)
+		reason, err := inconclusiveObservationReason(wire, descriptor, state, observedAt)
 		return result, 0, reason, err
 	default:
 		return "", 0, "", fmt.Errorf("stored observation result %q: %w", result, ErrState)
@@ -125,7 +126,8 @@ func thresholdObservationPreference(wire observationWire, descriptor SelectionDe
 		return 0, fmt.Errorf("stored threshold observation shape: %w", ErrState)
 	}
 	preference, err := ParsePreference(*wire.Preference)
-	if err != nil || abs64(state.margin) < int64(descriptor.profile.threshold) ||
+	threshold := int64(descriptor.profile.threshold)
+	if err != nil || (state.margin > -threshold && state.margin < threshold) ||
 		(preference == PreferenceA) != (state.margin > 0) {
 		return 0, fmt.Errorf("stored threshold observation value: %w", ErrState)
 	}
@@ -133,14 +135,18 @@ func thresholdObservationPreference(wire observationWire, descriptor SelectionDe
 }
 
 func inconclusiveObservationReason(wire observationWire, descriptor SelectionDescriptor,
-	state SelectionState,
+	state SelectionState, observedAt time.Time,
 ) (InconclusiveReason, error) {
 	if wire.Preference != nil || wire.Reason == nil {
 		return "", fmt.Errorf("stored inconclusive observation shape: %w", ErrState)
 	}
 	reason := InconclusiveReason(*wire.Reason)
-	if reason != ReasonExpired &&
-		(reason != ReasonRoundLimit || state.round < descriptor.profile.maxRounds) {
+	threshold := int64(descriptor.profile.threshold)
+	belowThreshold := state.margin > -threshold && state.margin < threshold
+	validExpired := reason == ReasonExpired && state.round < descriptor.profile.maxRounds &&
+		!observedAt.Before(descriptor.expiresAt)
+	validRoundLimit := reason == ReasonRoundLimit && state.round >= descriptor.profile.maxRounds
+	if observedAt.IsZero() || !belowThreshold || !validExpired && !validRoundLimit {
 		return "", fmt.Errorf("stored inconclusive observation reason: %w", ErrState)
 	}
 	return reason, nil

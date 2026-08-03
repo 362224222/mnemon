@@ -11,9 +11,16 @@ import (
 	"github.com/mnemon-dev/mnemon/harness/internal/agency"
 )
 
-func parseDescriptorCanonical(value []byte) (SelectionDescriptor, error) {
+// ParseSelectionDescriptorCanonical accepts the exact bounded Artifact bytes
+// that define one selection scope. Trusted composition code must parse these
+// bytes before binding a seed; a digest string alone is not a descriptor.
+func ParseSelectionDescriptorCanonical(value []byte) (SelectionDescriptor, error) {
 	if len(value) == 0 {
 		return SelectionDescriptor{}, fmt.Errorf("decode selection descriptor: %w", ErrInvalid)
+	}
+	if len(value) > MaxDescriptorBytes {
+		return SelectionDescriptor{}, fmt.Errorf("decode selection descriptor has %d bytes (max %d): %w",
+			len(value), MaxDescriptorBytes, ErrLimit)
 	}
 	var wire descriptorWire
 	decoder := json.NewDecoder(bytes.NewReader(value))
