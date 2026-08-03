@@ -70,7 +70,14 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			agency: func(ctx context.Context, args []string, stdin io.Reader,
 				stdout, stderr io.Writer,
 			) (bool, int) {
-				return agencycli.New(stdin, stdout, stderr, cli.EnsureAgentDaemon).TryRun(ctx, args)
+				ensure := func(ctx context.Context, workspace, nodeState string) (string, string) {
+					apiErr := cli.EnsureAgentDaemon(ctx, workspace, nodeState)
+					if apiErr == nil {
+						return "", ""
+					}
+					return string(apiErr.Code), apiErr.Message
+				}
+				return agencycli.New(stdin, stdout, stderr, ensure).TryRun(ctx, args)
 			}})
 }
 

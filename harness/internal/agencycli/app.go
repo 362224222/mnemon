@@ -13,19 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"time"
-
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
-	"github.com/mnemon-dev/mnemon/harness/internal/node"
 )
-
-type agencyClient interface {
-	Attach(context.Context) (node.AgencyAttachment, *localapi.APIError)
-	Current(context.Context, node.AgencyAttachment, string) ([]byte, *localapi.APIError)
-	Submit(context.Context, node.AgencyAttachment, string, string,
-		[]byte, []node.AgencyCandidateBinding) ([]byte, *localapi.APIError)
-	Capture(context.Context, []byte) (node.AgencyArtifactCapture, *localapi.APIError)
-	Status(context.Context) (node.AgencyStatusSnapshot, *localapi.APIError)
-}
 
 type dependencies struct {
 	workingDirectory func() (string, error)
@@ -36,9 +24,9 @@ type dependencies struct {
 }
 
 // EnsureDaemonFunc is the narrow composition seam back to the existing
-// bounded process ensure. agencycli owns no daemon launch policy and has no
-// dependency on the legacy CLI package.
-type EnsureDaemonFunc func(context.Context, string, string) *localapi.APIError
+// bounded process ensure. Empty code means success. The string pair keeps the
+// lifecycle implementation and its legacy error type outside this package.
+type EnsureDaemonFunc func(context.Context, string, string) (code, message string)
 
 // App is deliberately independent from the R5 cli.App. TryRun is the single
 // coexistence router: a pre-existing R7 journal claims agent current; absence
@@ -55,7 +43,7 @@ func New(stdin io.Reader, stdout, stderr io.Writer, ensure EnsureDaemonFunc) *Ap
 		workingDirectory: os.Getwd,
 		ensureDaemon:     ensure,
 		newClient: func(nodeState string) (agencyClient, error) {
-			return localapi.NewAgencyClient(nodeState)
+			return newControlClient(nodeState)
 		},
 		random: cryptorand.Reader,
 		clock:  time.Now,
@@ -75,11 +63,11 @@ func (app *App) TryRun(ctx context.Context, args []string) (bool, int) {
 		return true, 1
 	}
 	if !app.available(ctx) {
-		return true, app.writeError(localapi.NewAPIError(localapi.CodeInternal,
+		return true, app.writeError(newControlError(codeInternal,
 			"R7 Agent terminal is unavailable"))
 	}
 	if !validArguments(command, args) {
-		return true, app.writeError(localapi.NewAPIError(localapi.CodeInvalidArgument,
+		return true, app.writeError(newControlError(codeInvalidArgument,
 			"R7 Agent command requires its exact --json form"))
 	}
 	prepared, fallback, apiErr := app.prepare(ctx, command)
@@ -117,22 +105,22 @@ func (app *App) available(ctx context.Context) bool {
 }
 
 func (app *App) prepare(ctx context.Context, command commandKind) (
-	preparedRun, bool, *localapi.APIError,
+	preparedRun, bool, *controlError,
 ) {
 	projectRoot, nodeState, err := resolveWorkspace(app.deps.workingDirectory)
 	if err != nil {
 		if command == commandCurrent {
 			return preparedRun{}, true, nil
 		}
-		return preparedRun{}, false, localapi.NewAPIError(localapi.CodeMnemondUnavailable,
+		return preparedRun{}, false, newControlError(codeMnemondUnavailable,
 			"Mnemon Harness is not set up in this workspace")
 	}
 	store := newJournalStore(nodeState, app.deps.random)
 	if fallback, apiErr := currentFallback(command, store); fallback || apiErr != nil {
 		return preparedRun{}, fallback, apiErr
 	}
-	if apiErr := app.deps.ensureDaemon(ctx, projectRoot, nodeState); apiErr != nil {
-		return preparedRun{}, false, apiErr
+	if code, message := app.deps.ensureDaemon(ctx, projectRoot, nodeState); code != "" || message != "" {
+		return preparedRun{}, false, newControlError(controlErrorCode(code), message)
 	}
 	client, err := app.deps.newClient(nodeState)
 	if err != nil {
@@ -141,7 +129,7 @@ func (app *App) prepare(ctx context.Context, command commandKind) (
 	return preparedRun{store: store, client: client}, false, nil
 }
 
-func currentFallback(command commandKind, store *journalStore) (bool, *localapi.APIError) {
+func currentFallback(command commandKind, store *journalStore) (bool, *controlError) {
 	if command != commandCurrent {
 		return false, nil
 	}
@@ -214,15 +202,15 @@ func resolveWorkspace(getwd func() (string, error)) (string, string, error) {
 	}
 }
 
-func classifyClientConstruction(err error) *localapi.APIError {
-	if errors.Is(err, localapi.ErrUnsafeClientState) {
+func classifyClientConstruction(err error) *controlError {
+	if errors.Is(err, errUnsafeClientState) {
 		return clientStateError()
 	}
-	return localapi.NewAPIError(localapi.CodeMnemondUnavailable,
+	return newControlError(codeMnemondUnavailable,
 		"mnemond local Agency control is unavailable")
 }
 
-func clientStateError() *localapi.APIError {
-	return localapi.NewAPIError(localapi.CodeAuthenticationFailed,
+func clientStateError() *controlError {
+	return newControlError(codeAuthenticationFailed,
 		"R7 owner-private client state is unsafe")
 }

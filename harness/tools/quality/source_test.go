@@ -235,12 +235,7 @@ func TestDependencyFindingsAllowNeutralAgencyCLILayer(t *testing.T) {
 import _ "github.com/mnemon-dev/mnemon/harness/internal/agencycli"
 `)
 	writeTestFile(t, root, "harness/internal/agencycli/app.go", `package agencycli
-import (
-	_ "github.com/mnemon-dev/mnemon/harness/internal/agency"
-	_ "github.com/mnemon-dev/mnemon/harness/internal/localapi"
-	_ "github.com/mnemon-dev/mnemon/harness/internal/model"
-	_ "github.com/mnemon-dev/mnemon/harness/internal/node"
-)
+import _ "github.com/mnemon-dev/mnemon/harness/internal/agency"
 `)
 	findings, err := dependencyFindings(root)
 	if err != nil {

@@ -1,37 +1,32 @@
 package agencycli
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/agency"
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
-	"github.com/mnemon-dev/mnemon/harness/internal/model"
-	"github.com/mnemon-dev/mnemon/harness/internal/node"
 )
 
 const maxIntentInputBytes = agency.MaxIntentCanonicalBytes
 
 type hookStatus struct {
 	Schema  string `json:"schema"`
-	Version int    `json:"version"`
 	Status  string `json:"status"`
+	Version int    `json:"version"`
 }
 
 type captureStatus struct {
+	ByteSize int64  `json:"byte_size"`
+	Handle   string `json:"handle"`
 	Schema   string `json:"schema"`
 	Version  int    `json:"version"`
-	Handle   string `json:"handle"`
-	ByteSize int64  `json:"byte_size"`
 }
 
 type agencyStatus struct {
 	Schema  string `json:"schema"`
-	Version int    `json:"version"`
 	Status  string `json:"status"`
+	Version int    `json:"version"`
 }
 
 func (app *App) runAttach(ctx context.Context, store *journalStore, client agencyClient) int {
@@ -81,7 +76,7 @@ func (app *App) runCurrent(ctx context.Context, store *journalStore, client agen
 		}
 		defer journal.clear()
 		if validTerminalName(journal.fileName) {
-			return localapi.NewAPIError(localapi.CodeOperationPending,
+			return newControlError(codeOperationPending,
 				"an accepted R7 receipt is awaiting presentation")
 		}
 		if journal.CurrentOperation.IsZero() {
@@ -108,13 +103,13 @@ func (app *App) runCurrent(ctx context.Context, store *journalStore, client agen
 }
 
 func (app *App) runCapture(ctx context.Context, store *journalStore, client agencyClient) int {
-	content, apiErr := readBoundedInput(app.stdin, node.MaxAgencyArtifactBytes,
-		localapi.CodeArtifactTooLarge, "Artifact input exceeds its closed byte bound")
+	content, apiErr := readBoundedInput(app.stdin, maxArtifactInputBytes,
+		codeArtifactTooLarge, "Artifact input exceeds its closed byte bound")
 	if apiErr != nil {
 		return app.writeError(apiErr)
 	}
 	defer clear(content)
-	var captured node.AgencyArtifactCapture
+	var captured artifactCapture
 	err := store.withLock(false, func(directory *lockedJournalDirectory) error {
 		journal, err := directory.load()
 		if err != nil {
@@ -122,7 +117,7 @@ func (app *App) runCapture(ctx context.Context, store *journalStore, client agen
 		}
 		defer journal.clear()
 		if validTerminalName(journal.fileName) {
-			return localapi.NewAPIError(localapi.CodeOperationPending,
+			return newControlError(codeOperationPending,
 				"an accepted R7 receipt is awaiting presentation")
 		}
 		capture, apiErr := client.Capture(ctx, content)
@@ -147,14 +142,14 @@ func (app *App) runCapture(ctx context.Context, store *journalStore, client agen
 
 func (app *App) runSubmit(ctx context.Context, store *journalStore, client agencyClient) int {
 	raw, apiErr := readBoundedInput(app.stdin, maxIntentInputBytes,
-		localapi.CodeContentTooLarge, "Intent input exceeds its closed byte bound")
+		codeContentTooLarge, "Intent input exceeds its closed byte bound")
 	if apiErr != nil {
 		return app.writeError(apiErr)
 	}
 	defer clear(raw)
 	intent, err := agency.ParseAgentIntentJSON(raw)
 	if err != nil {
-		return app.writeError(localapi.NewAPIError(localapi.CodeInvalidArgument,
+		return app.writeError(newControlError(codeInvalidArgument,
 			"Intent input is not one canonical AgentIntent"))
 	}
 	var receipt []byte
@@ -166,7 +161,7 @@ func (app *App) runSubmit(ctx context.Context, store *journalStore, client agenc
 		}
 		defer journal.clear()
 		if journal.CurrentOperation.IsZero() {
-			return localapi.NewAPIError(localapi.CodeContextRequired,
+			return newControlError(codeContextRequired,
 				"agent current must establish a bounded View before submit")
 		}
 		candidates, err := journal.bindCandidates(intent)
@@ -180,7 +175,7 @@ func (app *App) runSubmit(ctx context.Context, store *journalStore, client agenc
 		if validTerminalName(journal.fileName) {
 			expected, err := terminalOperation(journal.fileName)
 			if err != nil || expected != operation {
-				return localapi.NewAPIError(localapi.CodeOperationMismatch,
+				return newControlError(codeOperationMismatch,
 					"terminal R7 replay requires the exact prior Intent")
 			}
 		}
@@ -242,53 +237,38 @@ func (app *App) runStatus(ctx context.Context, client agencyClient) int {
 	return app.writeJSON(agencyStatus{Schema: "mnemon.agency.status", Version: 1, Status: value})
 }
 
-func readBoundedInput(reader io.Reader, maximum int, code localapi.ErrorCode,
+func readBoundedInput(reader io.Reader, maximum int, code controlErrorCode,
 	message string,
-) ([]byte, *localapi.APIError) {
+) ([]byte, *controlError) {
 	if reader == nil || maximum <= 0 {
-		return nil, localapi.NewAPIError(localapi.CodeInternal, "bounded stdin is unavailable")
+		return nil, newControlError(codeInternal, "bounded stdin is unavailable")
 	}
 	raw, err := io.ReadAll(io.LimitReader(reader, int64(maximum)+1))
 	if err != nil {
 		clear(raw)
-		return nil, localapi.NewAPIError(localapi.CodeInvalidArgument, "stdin cannot be read")
+		return nil, newControlError(codeInvalidArgument, "stdin cannot be read")
 	}
 	if len(raw) > maximum {
 		clear(raw)
-		return nil, localapi.NewAPIError(code, message)
+		return nil, newControlError(code, message)
 	}
 	if len(raw) == 0 {
-		return nil, localapi.NewAPIError(localapi.CodeContentRequired, "stdin must not be empty")
+		return nil, newControlError(codeContentRequired, "stdin must not be empty")
 	}
 	return raw, nil
 }
 
 func agentReceiptOutcome(raw []byte) (string, error) {
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.DisallowUnknownFields()
-	var wire struct {
-		Schema     string `json:"schema"`
-		Version    int    `json:"version"`
-		Outcome    string `json:"outcome"`
-		Replayed   bool   `json:"replayed"`
-		Diagnostic string `json:"diagnostic,omitempty"`
-	}
-	if err := decoder.Decode(&wire); err != nil {
+	receipt, err := agency.ParseAgentReceiptProjectionCanonicalJSON(raw)
+	if err != nil {
 		return "", errors.New("mnemond returned an invalid AgentReceipt")
 	}
-	var trailing any
-	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) ||
-		wire.Schema != agency.AgentReceiptSchema || wire.Version != agency.AgentReceiptVersion ||
-		(wire.Outcome != "accepted" && wire.Outcome != "rejected") ||
-		(wire.Outcome == "accepted" && wire.Diagnostic != "") {
-		return "", errors.New("mnemond returned an invalid AgentReceipt")
-	}
-	return wire.Outcome, nil
+	return receipt.Outcome().String(), nil
 }
 
 func (app *App) writeCanonicalProjection(raw []byte) int {
 	if len(raw) < 2 || raw[0] != '{' || raw[len(raw)-1] != '}' {
-		return app.writeError(localapi.NewAPIError(localapi.CodeInternal,
+		return app.writeError(newControlError(codeInternal,
 			"mnemond returned an invalid R7 projection"))
 	}
 	if _, err := app.stdout.Write(append(append([]byte(nil), raw...), '\n')); err != nil {
@@ -298,7 +278,7 @@ func (app *App) writeCanonicalProjection(raw []byte) int {
 }
 
 func (app *App) writeJSON(value any) int {
-	raw, err := model.CanonicalMarshal(value)
+	raw, err := marshalClosedJSON(value)
 	if err != nil {
 		return 1
 	}
@@ -306,19 +286,19 @@ func (app *App) writeJSON(value any) int {
 }
 
 func (app *App) writeCommandError(err error) int {
-	var apiErr *localapi.APIError
+	var apiErr *controlError
 	if errors.As(err, &apiErr) {
 		return app.writeError(apiErr)
 	}
 	return app.writeError(clientStateError())
 }
 
-func (app *App) writeError(apiErr *localapi.APIError) int {
+func (app *App) writeError(apiErr *controlError) int {
 	if apiErr == nil {
-		apiErr = localapi.NewAPIError(localapi.CodeInternal, "internal R7 Agent terminal error")
+		apiErr = newControlError(codeInternal, "internal R7 Agent terminal error")
 	}
 	if app.writeJSON(apiErr) != 0 {
 		return 1
 	}
-	return apiErr.ExitStatus()
+	return apiErr.exitStatus()
 }

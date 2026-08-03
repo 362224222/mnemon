@@ -12,8 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
-	"github.com/mnemon-dev/mnemon/harness/internal/node"
+	"github.com/mnemon-dev/mnemon/harness/internal/agency"
 )
 
 const testCredentialText = "private-credential-never-project"
@@ -23,13 +22,13 @@ type fakeAgencyClient struct {
 	attachCalls       int
 	currentOperations []string
 	submitOperations  []string
-	submitCandidates  [][]node.AgencyCandidateBinding
+	submitCandidates  [][]candidateBinding
 	captureCalls      int
 	currentFailures   int
 	attachBlock       chan struct{}
 }
 
-func (client *fakeAgencyClient) Attach(context.Context) (node.AgencyAttachment, *localapi.APIError) {
+func (client *fakeAgencyClient) Attach(context.Context) (attachment, *controlError) {
 	client.mu.Lock()
 	client.attachCalls++
 	block := client.attachBlock
@@ -39,31 +38,31 @@ func (client *fakeAgencyClient) Attach(context.Context) (node.AgencyAttachment, 
 	}
 	credential := make([]byte, journalCredentialBytes)
 	copy(credential, testCredentialText)
-	return node.AgencyAttachment{ID: "attachment:test", Credential: credential,
+	return attachment{ID: "attachment:test", Credential: credential,
 		ExpiresAt: time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)}, nil
 }
 
-func (client *fakeAgencyClient) Current(_ context.Context, _ node.AgencyAttachment,
+func (client *fakeAgencyClient) Current(_ context.Context, _ attachment,
 	operation string,
-) ([]byte, *localapi.APIError) {
+) ([]byte, *controlError) {
 	client.mu.Lock()
 	defer client.mu.Unlock()
 	client.currentOperations = append(client.currentOperations, operation)
 	if client.currentFailures > 0 {
 		client.currentFailures--
-		return nil, localapi.NewAPIError(localapi.CodeMnemondUnavailable, "test transport loss")
+		return nil, newControlError(codeMnemondUnavailable, "test transport loss")
 	}
-	return []byte(`{"schema":"mnemon.agent.view","version":1,"status":"ready"}`), nil
+	return []byte(`{"schema":"mnemon.agent.view","version":1,"view":"view:test","allowed_intents":[]}`), nil
 }
 
-func (client *fakeAgencyClient) Submit(_ context.Context, _ node.AgencyAttachment,
-	_, operation string, _ []byte, candidates []node.AgencyCandidateBinding,
-) ([]byte, *localapi.APIError) {
+func (client *fakeAgencyClient) Submit(_ context.Context, _ attachment,
+	_, operation string, _ []byte, candidates []candidateBinding,
+) ([]byte, *controlError) {
 	client.mu.Lock()
 	defer client.mu.Unlock()
 	client.submitOperations = append(client.submitOperations, operation)
 	client.submitCandidates = append(client.submitCandidates,
-		append([]node.AgencyCandidateBinding(nil), candidates...))
+		append([]candidateBinding(nil), candidates...))
 	replayed := len(client.submitOperations) > 1
 	if replayed {
 		return []byte(`{"schema":"mnemon.agent.receipt","version":1,"outcome":"accepted","replayed":true}`), nil
@@ -73,16 +72,16 @@ func (client *fakeAgencyClient) Submit(_ context.Context, _ node.AgencyAttachmen
 
 func (client *fakeAgencyClient) Capture(_ context.Context,
 	content []byte,
-) (node.AgencyArtifactCapture, *localapi.APIError) {
+) (artifactCapture, *controlError) {
 	client.mu.Lock()
 	client.captureCalls++
 	client.mu.Unlock()
-	return node.AgencyArtifactCapture{Handle: "artifact:test-candidate",
-		Digest: node.AgencyContentDigest(content), ByteSize: int64(len(content))}, nil
+	return artifactCapture{Handle: "artifact:test-candidate",
+		Digest: agency.Sum(content).String(), ByteSize: int64(len(content))}, nil
 }
 
-func (*fakeAgencyClient) Status(context.Context) (node.AgencyStatusSnapshot, *localapi.APIError) {
-	return node.AgencyStatusSnapshot{Ready: true}, nil
+func (*fakeAgencyClient) Status(context.Context) (statusSnapshot, *controlError) {
+	return statusSnapshot{Ready: true}, nil
 }
 
 type appFixture struct {
@@ -108,9 +107,9 @@ func newAppFixture(t *testing.T) *appFixture {
 }
 
 func (fixture *appFixture) app(stdin io.Reader, stdout io.Writer) *App {
-	app := New(stdin, stdout, io.Discard, func(context.Context, string, string) *localapi.APIError {
+	app := New(stdin, stdout, io.Discard, func(context.Context, string, string) (string, string) {
 		fixture.ensure.Add(1)
-		return nil
+		return "", ""
 	})
 	app.deps.workingDirectory = func() (string, error) { return fixture.root, nil }
 	app.deps.newClient = func(string) (agencyClient, error) { return fixture.client, nil }
@@ -145,7 +144,7 @@ func TestAgentCurrentFallsBackOnlyWhenR7JournalIsAbsent(t *testing.T) {
 	handled, exit = fixture.app(strings.NewReader(""), &output).
 		TryRun(context.Background(), []string{"agent", "current", "--json"})
 	if !handled || exit != 0 || output.String() !=
-		`{"schema":"mnemon.agent.view","version":1,"status":"ready"}`+"\n" {
+		`{"schema":"mnemon.agent.view","version":1,"view":"view:test","allowed_intents":[]}`+"\n" {
 		t.Fatalf("R7 current route = handled %v exit %d output %q", handled, exit, output.String())
 	}
 }
@@ -176,7 +175,7 @@ func TestCurrentPersistsOperationBeforeTransportAndReplaysIt(t *testing.T) {
 	var first bytes.Buffer
 	_, firstExit := fixture.app(strings.NewReader(""), &first).
 		TryRun(context.Background(), []string{"agent", "current", "--json"})
-	if firstExit != localapi.NewAPIError(localapi.CodeMnemondUnavailable, "x").ExitStatus() {
+	if firstExit != codeMnemondUnavailable.exitStatus() {
 		t.Fatalf("first current exit/output = %d / %s", firstExit, first.String())
 	}
 	var second bytes.Buffer

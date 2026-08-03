@@ -211,12 +211,12 @@ func isHarnessImport(importPath string) bool {
 
 func allowedHarnessImport(source, target string) bool {
 	if target == "model" && knownHarnessPackage(source) &&
-		source != "agency" && source != "authority" && source != "selector" {
+		source != "agency" && source != "authority" && source != "selector" && source != "agencycli" {
 		return true
 	}
 	allowed := map[string]map[string]bool{
 		"cmd":       {"agencycli": true, "integration": true, "localapi": true, "node": true},
-		"agencycli": {"agency": true, "localapi": true, "node": true},
+		"agencycli": {"agency": true},
 		"node":      {"event": true, "store": true, "agent": true, "artifact": true, "peer": true, "agency": true, "authority": true},
 		"localapi":  {"node": true}, "event": {"teamwork": true, "store": true, "artifact": true},
 		"teamwork": {}, "agent": {"event": true, "store": true, "artifact": true, "teamwork": true},

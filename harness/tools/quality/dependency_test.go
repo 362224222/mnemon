@@ -13,7 +13,8 @@ func TestAllowedHarnessImportKeepsThinCommandAndBottomModel(t *testing.T) {
 		{"store", "teamwork"}, {"agency", "store"}, {"selector", "authority"}, {"authority", "store"},
 		{"agency", "model"}, {"authority", "model"}, {"selector", "model"},
 		{"agency", "selector"}, {"authority", "selector"}, {"node", "selector"}, {"peer", "selector"},
-		{"localapi", "selector"}, {"agencycli", "selector"}} {
+		{"localapi", "selector"}, {"agencycli", "selector"}, {"agencycli", "localapi"},
+		{"agencycli", "model"}, {"agencycli", "node"}} {
 		if allowedHarnessImport(edge[0], edge[1]) {
 			t.Errorf("unexpected allowed edge %s -> %s", edge[0], edge[1])
 		}

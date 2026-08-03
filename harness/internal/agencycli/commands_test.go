@@ -11,8 +11,6 @@ import (
 	"testing"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/agency"
-	"github.com/mnemon-dev/mnemon/harness/internal/localapi"
-	"github.com/mnemon-dev/mnemon/harness/internal/node"
 )
 
 func TestCaptureKeepsDigestPrivateAndSubmitReplaysAfterPresentationLoss(t *testing.T) {
@@ -52,7 +50,7 @@ func TestCaptureKeepsDigestPrivateAndSubmitReplaysAfterPresentationLoss(t *testi
 		TryRun(context.Background(), []string{"agent", "submit", "--json"})
 	fixture.client.mu.Lock()
 	operations := append([]string(nil), fixture.client.submitOperations...)
-	bindings := append([][]node.AgencyCandidateBinding(nil), fixture.client.submitCandidates...)
+	bindings := append([][]candidateBinding(nil), fixture.client.submitCandidates...)
 	fixture.client.mu.Unlock()
 	if exit != 0 || len(operations) != 2 || operations[0] == "" || operations[0] != operations[1] ||
 		len(bindings) != 2 || len(bindings[0]) != 1 || bindings[0][0].Digest != digest ||
@@ -79,8 +77,8 @@ func TestTerminalReplayRejectsChangedIntentLocally(t *testing.T) {
 	var output bytes.Buffer
 	_, exit = fixture.app(bytes.NewReader(candidateFreeRootIntent(t, "changed")), &output).
 		TryRun(context.Background(), []string{"agent", "submit", "--json"})
-	if exit != localapi.NewAPIError(localapi.CodeOperationMismatch, "x").ExitStatus() ||
-		!strings.Contains(output.String(), string(localapi.CodeOperationMismatch)) {
+	if exit != codeOperationMismatch.exitStatus() ||
+		!strings.Contains(output.String(), string(codeOperationMismatch)) {
 		t.Fatalf("changed terminal Intent exit/output = %d / %q", exit, output.String())
 	}
 	fixture.client.mu.Lock()
@@ -114,7 +112,7 @@ func TestHookNeverOverwritesExpiredTerminalReplayJournal(t *testing.T) {
 	var current bytes.Buffer
 	handled, exit := fixture.app(strings.NewReader(""), &current).
 		TryRun(context.Background(), []string{"agent", "current", "--json"})
-	if !handled || exit != localapi.NewAPIError(localapi.CodeOperationPending, "x").ExitStatus() {
+	if !handled || exit != codeOperationPending.exitStatus() {
 		t.Fatalf("terminal current = handled %v exit %d output %s", handled, exit, current.String())
 	}
 }
@@ -140,8 +138,8 @@ func TestUnsafeJournalFailsClosedInsteadOfFallingBack(t *testing.T) {
 	var output bytes.Buffer
 	handled, exit := fixture.app(strings.NewReader(""), &output).
 		TryRun(context.Background(), []string{"agent", "current", "--json"})
-	if !handled || exit != localapi.NewAPIError(localapi.CodeAuthenticationFailed, "x").ExitStatus() ||
-		!strings.Contains(output.String(), string(localapi.CodeAuthenticationFailed)) || fixture.ensure.Load() != 0 {
+	if !handled || exit != codeAuthenticationFailed.exitStatus() ||
+		!strings.Contains(output.String(), string(codeAuthenticationFailed)) || fixture.ensure.Load() != 0 {
 		t.Fatalf("unsafe journal route = handled %v exit %d output %q ensure %d",
 			handled, exit, output.String(), fixture.ensure.Load())
 	}
@@ -166,14 +164,14 @@ func TestInterruptedJournalStageIsRecovered(t *testing.T) {
 func TestEnsureFailurePreventsPrivateClientCall(t *testing.T) {
 	fixture := newAppFixture(t)
 	app := fixture.app(strings.NewReader(""), io.Discard)
-	app.deps.ensureDaemon = func(context.Context, string, string) *localapi.APIError {
-		return localapi.NewAPIError(localapi.CodeMnemondUnavailable, "mnemond could not be made ready")
+	app.deps.ensureDaemon = func(context.Context, string, string) (string, string) {
+		return string(codeMnemondUnavailable), "mnemond could not be made ready"
 	}
 	_, exit := app.TryRun(context.Background(), []string{"hook", "attach", "--json"})
 	fixture.client.mu.Lock()
 	calls := fixture.client.attachCalls
 	fixture.client.mu.Unlock()
-	if exit != localapi.NewAPIError(localapi.CodeMnemondUnavailable, "x").ExitStatus() || calls != 0 {
+	if exit != codeMnemondUnavailable.exitStatus() || calls != 0 {
 		t.Fatalf("ensure failure = exit %d Attach calls %d", exit, calls)
 	}
 }

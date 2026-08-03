@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/mnemon-dev/mnemon/harness/internal/agency"
-	"github.com/mnemon-dev/mnemon/harness/internal/node"
 )
 
 const (
@@ -34,7 +33,7 @@ type capturedBinding struct {
 }
 
 type clientJournal struct {
-	Attachment       node.AgencyAttachment
+	Attachment       attachment
 	CurrentOperation agency.OperationKey
 	Candidates       []capturedBinding
 	fileName         string
@@ -56,8 +55,8 @@ type candidateWire struct {
 	Digest string `json:"digest"`
 }
 
-func newClientJournal(attachment node.AgencyAttachment) (clientJournal, error) {
-	journal := clientJournal{Attachment: attachment}
+func newClientJournal(value attachment) (clientJournal, error) {
+	journal := clientJournal{Attachment: value}
 	if err := journal.validate(); err != nil {
 		return clientJournal{}, err
 	}
@@ -149,7 +148,7 @@ func decodeJournalWire(raw []byte) (journalWire, error) {
 }
 
 func journalFromWire(wire journalWire) (clientJournal, error) {
-	attachment, attachmentErr := agency.NewAttachmentID(wire.Attachment)
+	attachmentID, attachmentErr := agency.NewAttachmentID(wire.Attachment)
 	credential, credentialErr := base64.RawURLEncoding.Strict().DecodeString(wire.Credential)
 	expiresAt, expiryErr := time.Parse(time.RFC3339Nano, wire.ExpiresAt)
 	if attachmentErr != nil || credentialErr != nil || expiryErr != nil ||
@@ -157,7 +156,7 @@ func journalFromWire(wire journalWire) (clientJournal, error) {
 		clear(credential)
 		return clientJournal{}, errors.New("R7 client journal attachment is corrupt")
 	}
-	journal := clientJournal{Attachment: node.AgencyAttachment{ID: attachment.String(),
+	journal := clientJournal{Attachment: attachment{ID: attachmentID.String(),
 		Credential: credential, ExpiresAt: expiresAt}}
 	if wire.CurrentOperation != "" {
 		operation, err := agency.NewOperationKey(wire.CurrentOperation)
@@ -192,7 +191,7 @@ func (journal *clientJournal) clear() {
 	journal.Attachment.Credential = nil
 }
 
-func (journal *clientJournal) addCandidate(capture node.AgencyArtifactCapture) error {
+func (journal *clientJournal) addCandidate(capture artifactCapture) error {
 	handle, handleErr := agency.NewOpaqueHandle(capture.Handle)
 	digest, digestErr := agency.ParseDigest(capture.Digest)
 	if journal == nil || handleErr != nil || digestErr != nil {
@@ -218,13 +217,13 @@ func (journal *clientJournal) addCandidate(capture node.AgencyArtifactCapture) e
 }
 
 func (journal clientJournal) bindCandidates(intent agency.AgentIntent) (
-	[]node.AgencyCandidateBinding, error,
+	[]candidateBinding, error,
 ) {
 	byHandle := make(map[string]agency.Digest, len(journal.Candidates))
 	for _, candidate := range journal.Candidates {
 		byHandle[candidate.Handle.String()] = candidate.Digest
 	}
-	result := make([]node.AgencyCandidateBinding, 0, len(intent.Artifacts()))
+	result := make([]candidateBinding, 0, len(intent.Artifacts()))
 	seen := make(map[string]struct{})
 	for _, input := range intent.Artifacts() {
 		if input.Kind() != agency.ArtifactInputCandidate {
@@ -239,7 +238,7 @@ func (journal clientJournal) bindCandidates(intent agency.AgentIntent) (
 			return nil, errors.New("Intent repeats an Artifact candidate")
 		}
 		seen[handle] = struct{}{}
-		result = append(result, node.AgencyCandidateBinding{Handle: input.Handle().String(),
+		result = append(result, candidateBinding{Handle: input.Handle().String(),
 			Digest: digest.String()})
 	}
 	return result, nil
@@ -260,7 +259,7 @@ func newCurrentOperation(random io.Reader) (agency.OperationKey, error) {
 }
 
 func deriveAdmissionOperation(current agency.OperationKey, intent agency.AgentIntent,
-	candidates []node.AgencyCandidateBinding,
+	candidates []candidateBinding,
 ) (agency.OperationKey, error) {
 	if current.IsZero() || len(intent.CanonicalJSON()) == 0 || len(candidates) > agency.MaxArtifactInputs {
 		return agency.OperationKey{}, errors.New("derive R7 admission operation: inputs are invalid")
