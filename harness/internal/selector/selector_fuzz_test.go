@@ -45,21 +45,23 @@ func FuzzApplyRoundFiltersUntrustedVotes(f *testing.F) {
 		if len(input) > 10 {
 			input = input[:10]
 		}
-		votes := make([]SampleVote, len(input))
+		votes := make([]AuthenticatedVote, len(input))
 		for index, value := range input {
-			votes[index] = SampleVote{
+			source := roster[int(value)%len(roster)]
+			wire := SampleVote{
 				selectionID: descriptor.ID(), round: 1, nonce: nonce,
-				preference: Preference(value%2 + 1), source: roster[int(value)%len(roster)],
+				preference: Preference(value%2 + 1), claimedBy: source,
 			}
+			votes[index] = AuthenticatedVote{wire: wire, source: source}
 			switch value % 7 {
 			case 0:
-				votes[index].selectionID = otherID
+				votes[index].wire.selectionID = otherID
 			case 1:
-				votes[index].round = 2
+				votes[index].wire.round = 2
 			case 2:
-				votes[index].nonce = agency.Sum([]byte("wrong"))
+				votes[index].wire.nonce = agency.Sum([]byte("wrong"))
 			case 3:
-				votes[index].preference = 0
+				votes[index].wire.preference = 0
 			}
 		}
 		result, err := ApplyRound(descriptor, state, roster[0], query, roster[1:6], votes, now)

@@ -17,7 +17,7 @@ type roundSettlement struct {
 }
 
 func deriveRoundSettlement(snapshot SelectionSnapshot, pending PendingRound,
-	votes []SampleVote, now time.Time,
+	votes []AuthenticatedVote, now time.Time,
 ) (roundSettlement, error) {
 	nextState := snapshot.state
 	if now.Before(snapshot.descriptor.expiresAt) {

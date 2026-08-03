@@ -147,18 +147,20 @@ func inconclusiveObservationReason(wire observationWire, descriptor SelectionDes
 }
 
 type voteWire struct {
-	Nonce      string `json:"nonce"`
-	Preference string `json:"preference"`
-	Round      uint32 `json:"round"`
-	Selection  string `json:"selection_id"`
-	Source     string `json:"source"`
+	AuthenticatedSource string `json:"authenticated_source"`
+	ClaimedSource       string `json:"claimed_source"`
+	Nonce               string `json:"nonce"`
+	Preference          string `json:"preference"`
+	Round               uint32 `json:"round"`
+	Selection           string `json:"selection_id"`
 }
 
-func canonicalVoteSet(votes []SampleVote) ([]byte, error) {
+func canonicalVoteSet(votes []AuthenticatedVote) ([]byte, error) {
 	wire := make([]voteWire, len(votes))
 	for index, vote := range votes {
-		wire[index] = voteWire{Selection: vote.selectionID.String(), Round: vote.round,
-			Nonce: vote.nonce.String(), Preference: vote.preference.String(), Source: vote.source.String()}
+		wire[index] = voteWire{AuthenticatedSource: vote.source.String(),
+			ClaimedSource: vote.wire.claimedBy.String(), Selection: vote.wire.selectionID.String(),
+			Round: vote.wire.round, Nonce: vote.wire.nonce.String(), Preference: vote.wire.preference.String()}
 	}
 	sort.Slice(wire, func(left, right int) bool {
 		return lessVoteWire(wire[left], wire[right])
@@ -168,9 +170,9 @@ func canonicalVoteSet(votes []SampleVote) ([]byte, error) {
 
 func lessVoteWire(left, right voteWire) bool {
 	leftFields := [...]string{left.Selection, fmt.Sprint(left.Round), left.Nonce,
-		left.Preference, left.Source}
+		left.Preference, left.AuthenticatedSource, left.ClaimedSource}
 	rightFields := [...]string{right.Selection, fmt.Sprint(right.Round), right.Nonce,
-		right.Preference, right.Source}
+		right.Preference, right.AuthenticatedSource, right.ClaimedSource}
 	for index := range leftFields {
 		if leftFields[index] != rightFields[index] {
 			return leftFields[index] < rightFields[index]

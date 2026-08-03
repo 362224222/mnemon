@@ -52,11 +52,16 @@ func parseDescriptorCanonical(value []byte) (SelectionDescriptor, error) {
 			return SelectionDescriptor{}, fmt.Errorf("descriptor participant %d: %w", index, err)
 		}
 	}
+	createdAt, err := time.Parse(time.RFC3339Nano, wire.CreatedAt)
+	if err != nil {
+		return SelectionDescriptor{}, fmt.Errorf("descriptor creation: %w", err)
+	}
 	expiresAt, err := time.Parse(time.RFC3339Nano, wire.ExpiresAt)
 	if err != nil {
 		return SelectionDescriptor{}, fmt.Errorf("descriptor expiry: %w", err)
 	}
-	descriptor, err := NewSelectionDescriptor(question, candidateA, candidateB, roster, profile, expiresAt)
+	descriptor, err := NewSelectionDescriptor(question, candidateA, candidateB, roster, profile,
+		createdAt, expiresAt)
 	if err != nil {
 		return SelectionDescriptor{}, err
 	}

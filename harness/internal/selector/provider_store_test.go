@@ -119,7 +119,7 @@ func (f *providerFixture) descriptor(name string, profile Profile) SelectionDesc
 	descriptor, err := NewSelectionDescriptor(agency.Sum([]byte("question-"+name)),
 		agency.Sum([]byte("candidate-a-"+name)), agency.Sum([]byte("candidate-b-"+name)),
 		testPeers(f.t, int(profile.SampleSize())*MinEligiblePeersPerSample+1), profile,
-		f.clock.Now().Add(time.Hour))
+		f.clock.Now(), f.clock.Now().Add(time.Hour))
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -164,13 +164,17 @@ func providerSeed(t testing.TB, name string, preference Preference) AcceptedSeed
 	return seed
 }
 
-func votesForPending(t testing.TB, pending PendingRound, preference Preference) []SampleVote {
+func votesForPending(t testing.TB, pending PendingRound, preference Preference) []AuthenticatedVote {
 	t.Helper()
 	sample := pending.Sample()
-	votes := make([]SampleVote, len(sample))
+	votes := make([]AuthenticatedVote, len(sample))
 	for index, peer := range sample {
-		vote, err := NewSampleVote(pending.query.selectionID, pending.query.round,
+		wire, err := NewSampleVote(pending.query.selectionID, pending.query.round,
 			pending.query.nonce, preference, peer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		vote, err := AuthenticateSampleVote(peer, wire)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -217,6 +221,29 @@ func TestProviderPersistsOwnerSeedAndPendingRound(t *testing.T) {
 	restored, err := fixture.store.Selection(fixture.ctx, descriptor.id)
 	if pending, ok := restored.PendingRound(); err != nil || !ok || !samePending(first, pending) {
 		t.Fatalf("restored pending = %#v, %v, err %v", pending, ok, err)
+	}
+	if restored.Descriptor().ID() != descriptor.ID() ||
+		!restored.Descriptor().CreatedAt().Equal(descriptor.CreatedAt()) {
+		t.Fatalf("restored descriptor window = %s / %s, want %s / %s",
+			restored.Descriptor().CreatedAt(), restored.Descriptor().ExpiresAt(),
+			descriptor.CreatedAt(), descriptor.ExpiresAt())
+	}
+}
+
+func TestProviderRejectsDescriptorCreatedAfterTrustedClock(t *testing.T) {
+	fixture := newProviderFixture(t)
+	profile := mustProfile(t, 1, 1, 1, 1)
+	createdAt := fixture.clock.Now().Add(time.Minute)
+	descriptor, err := NewSelectionDescriptor(agency.Sum([]byte("future-question")),
+		agency.Sum([]byte("future-a")), agency.Sum([]byte("future-b")),
+		testPeers(t, int(profile.SampleSize())*MinEligiblePeersPerSample+1), profile,
+		createdAt, createdAt.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.CreateOwnerSelection(fixture.ctx, descriptor,
+		descriptor.roster[0]); !errors.Is(err, ErrActivation) {
+		t.Fatalf("future descriptor activation error = %v, want ErrActivation", err)
 	}
 }
 
@@ -333,7 +360,7 @@ func TestProviderTimedOutSettlementReplayIgnoresAllLateVotes(t *testing.T) {
 	if state.Round() != 1 || state.Margin() != 0 || state.Preference() != PreferenceB {
 		t.Fatalf("timed-out state = %#v", state)
 	}
-	for _, replayVotes := range [][]SampleVote{nil, votesForPending(t, pending, PreferenceB)} {
+	for _, replayVotes := range [][]AuthenticatedVote{nil, votesForPending(t, pending, PreferenceB)} {
 		replayed, err := fixture.store.ApplyObservations(fixture.ctx, pending, replayVotes)
 		if err != nil || replayed.Revision() != settled.Revision() {
 			t.Fatalf("late replay = revision %d err %v", replayed.Revision(), err)
@@ -650,26 +677,22 @@ func TestProviderConcurrentFreezeReturnsOneDurableRound(t *testing.T) {
 	fixture := newProviderFixture(t)
 	seeded, _ := fixture.createAndSeed("concurrent", mustProfile(t, 2, 2, 1, 2), PreferenceA)
 	const callers = 8
-	results := make(chan PendingRound, callers)
-	errorsOut := make(chan error, callers)
+	type freezeResult struct {
+		pending PendingRound
+		err     error
+	}
+	results := make(chan freezeResult, callers)
 	var group sync.WaitGroup
 	for range callers {
 		group.Add(1)
 		go func() {
 			defer group.Done()
 			pending, err := fixture.store.FreezeRound(fixture.ctx, seeded.descriptor.id)
-			results <- pending
-			errorsOut <- err
+			results <- freezeResult{pending: pending, err: err}
 		}()
 	}
 	group.Wait()
 	close(results)
-	close(errorsOut)
-	for err := range errorsOut {
-		if err != nil {
-			t.Fatalf("concurrent freeze error = %v", err)
-		}
-	}
 	stored, err := fixture.store.Selection(fixture.ctx, seeded.descriptor.id)
 	if err != nil {
 		t.Fatal(err)
@@ -679,8 +702,11 @@ func TestProviderConcurrentFreezeReturnsOneDurableRound(t *testing.T) {
 		t.Fatal("concurrent freeze did not persist a round")
 	}
 	for result := range results {
-		if result.valid() && !samePending(result, want) {
-			t.Fatalf("concurrent freeze returned a different round: %#v", result)
+		if result.err != nil || !result.pending.valid() {
+			t.Fatalf("concurrent freeze returned pending %#v, err %v", result.pending, result.err)
+		}
+		if !samePending(result.pending, want) {
+			t.Fatalf("concurrent freeze returned a different round: %#v", result.pending)
 		}
 	}
 }

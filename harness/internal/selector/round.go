@@ -65,23 +65,57 @@ type SampleVote struct {
 	round       uint32
 	nonce       agency.Digest
 	preference  Preference
-	source      ParticipantID
+	claimedBy   ParticipantID
 }
 
 func NewSampleVote(selectionID SelectionID, round uint32, nonce agency.Digest,
-	preference Preference, source ParticipantID,
+	preference Preference, claimedBy ParticipantID,
 ) (SampleVote, error) {
-	if selectionID.IsZero() || round == 0 || nonce.IsZero() || !validPreference(preference) || source.IsZero() {
+	if selectionID.IsZero() || round == 0 || nonce.IsZero() ||
+		!validPreference(preference) || claimedBy.IsZero() {
 		return SampleVote{}, fmt.Errorf("vote fields are incomplete: %w", ErrInvalid)
 	}
-	return SampleVote{selectionID, round, nonce, preference, source}, nil
+	return SampleVote{selectionID, round, nonce, preference, claimedBy}, nil
 }
 
 func (v SampleVote) SelectionID() SelectionID { return v.selectionID }
 func (v SampleVote) Round() uint32            { return v.round }
 func (v SampleVote) Nonce() agency.Digest     { return v.nonce }
 func (v SampleVote) Preference() Preference   { return v.preference }
-func (v SampleVote) Source() ParticipantID    { return v.source }
+func (v SampleVote) ClaimedSource() ParticipantID {
+	return v.claimedBy
+}
+
+// AuthenticatedVote is the only vote shape accepted by ApplyRound. Its source
+// is bound to a peer identity authenticated outside this transport-neutral
+// package; a wire claim alone never gains counting authority.
+type AuthenticatedVote struct {
+	wire   SampleVote
+	source ParticipantID
+}
+
+// AuthenticateSampleVote binds a decoded wire vote to the independently
+// authenticated transport peer that supplied it. The caller owns transport
+// authentication; selector only verifies that the wire identity agrees with
+// that authenticated observation. A mismatch fails closed before tallying.
+func AuthenticateSampleVote(authenticatedSource ParticipantID,
+	wire SampleVote,
+) (AuthenticatedVote, error) {
+	if authenticatedSource.IsZero() || wire.selectionID.IsZero() || wire.round == 0 ||
+		wire.nonce.IsZero() || !validPreference(wire.preference) || wire.claimedBy.IsZero() {
+		return AuthenticatedVote{}, fmt.Errorf("authenticated vote is incomplete: %w", ErrInvalid)
+	}
+	if authenticatedSource != wire.claimedBy {
+		return AuthenticatedVote{}, fmt.Errorf("authenticated peer does not match vote source: %w", ErrInvalid)
+	}
+	return AuthenticatedVote{wire: wire, source: authenticatedSource}, nil
+}
+
+func (v AuthenticatedVote) SelectionID() SelectionID { return v.wire.selectionID }
+func (v AuthenticatedVote) Round() uint32            { return v.wire.round }
+func (v AuthenticatedVote) Nonce() agency.Digest     { return v.wire.nonce }
+func (v AuthenticatedVote) Preference() Preference   { return v.wire.preference }
+func (v AuthenticatedVote) Source() ParticipantID    { return v.source }
 
 // VoteTally records accepted colors and bounded filtering diagnostics. Counts
 // describe input frames except Equivocations, which counts equivocating peers.
@@ -124,7 +158,7 @@ func (r RoundResult) Quorum() (Preference, bool) {
 // ApplyRound validates one frozen sample, filters its votes, and returns the
 // only permitted atomic state update. It has no side effects.
 func ApplyRound(descriptor SelectionDescriptor, state SelectionState, self ParticipantID,
-	query SampleQuery, sampled []ParticipantID, votes []SampleVote, now time.Time,
+	query SampleQuery, sampled []ParticipantID, votes []AuthenticatedVote, now time.Time,
 ) (RoundResult, error) {
 	if err := descriptor.validate(); err != nil {
 		return RoundResult{}, err
@@ -138,7 +172,8 @@ func ApplyRound(descriptor SelectionDescriptor, state SelectionState, self Parti
 	if abs64(state.margin) >= int64(descriptor.profile.threshold) || state.round >= descriptor.profile.maxRounds {
 		return RoundResult{}, fmt.Errorf("selection is already terminal: %w", ErrState)
 	}
-	if now.IsZero() || !now.Round(0).UTC().Before(descriptor.expiresAt) {
+	canonicalNow := now.Round(0).UTC()
+	if now.IsZero() || canonicalNow.Before(descriptor.createdAt) || !canonicalNow.Before(descriptor.expiresAt) {
 		return RoundResult{}, fmt.Errorf("selection is expired or clock is invalid: %w", ErrState)
 	}
 	if query.selectionID != descriptor.id || query.round != state.round+1 || query.nonce.IsZero() {
@@ -187,7 +222,7 @@ func validateSample(descriptor SelectionDescriptor, self ParticipantID,
 	return set, nil
 }
 
-func filterVotes(query SampleQuery, sampled map[ParticipantID]struct{}, votes []SampleVote) VoteTally {
+func filterVotes(query SampleQuery, sampled map[ParticipantID]struct{}, votes []AuthenticatedVote) VoteTally {
 	const (
 		seenA uint8 = 1 << iota
 		seenB
@@ -196,19 +231,20 @@ func filterVotes(query SampleQuery, sampled map[ParticipantID]struct{}, votes []
 	tally := VoteTally{}
 	for _, vote := range votes {
 		switch {
-		case vote.source.IsZero() || !validPreference(vote.preference):
+		case vote.source.IsZero() || vote.wire.claimedBy != vote.source ||
+			!validPreference(vote.wire.preference):
 			tally.invalid++
-		case vote.selectionID != query.selectionID:
+		case vote.wire.selectionID != query.selectionID:
 			tally.wrongSelection++
-		case vote.round != query.round:
+		case vote.wire.round != query.round:
 			tally.wrongRound++
-		case vote.nonce != query.nonce:
+		case vote.wire.nonce != query.nonce:
 			tally.wrongNonce++
 		case !sampleContains(sampled, vote.source):
 			tally.unselected++
 		default:
 			bit := seenA
-			if vote.preference == PreferenceB {
+			if vote.wire.preference == PreferenceB {
 				bit = seenB
 			}
 			if seen[vote.source]&bit != 0 {

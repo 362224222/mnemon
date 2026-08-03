@@ -41,6 +41,9 @@ func (s *Store) CreateOwnerSelection(ctx context.Context, descriptor SelectionDe
 	if err != nil {
 		return SelectionSnapshot{}, err
 	}
+	if now.Before(descriptor.createdAt) {
+		return SelectionSnapshot{}, fmt.Errorf("selection creation is in the future: %w", ErrActivation)
+	}
 	if !now.Before(descriptor.expiresAt) {
 		return SelectionSnapshot{}, fmt.Errorf("selection expires before creation: %w", ErrActivation)
 	}
@@ -93,6 +96,9 @@ func (s *Store) SeedSelection(ctx context.Context, id SelectionID,
 	now, err := s.trustedNow()
 	if err != nil {
 		return SelectionSnapshot{}, err
+	}
+	if now.Before(snapshot.descriptor.createdAt) {
+		return SelectionSnapshot{}, fmt.Errorf("selection creation is in the future: %w", ErrNotActive)
 	}
 	if !now.Before(snapshot.descriptor.expiresAt) {
 		if err := discardAwaitingSelectionTx(ctx, tx, snapshot); err != nil {

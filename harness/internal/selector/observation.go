@@ -57,7 +57,7 @@ func Observe(descriptor SelectionDescriptor, state SelectionState, now time.Time
 	if err := state.validate(descriptor); err != nil {
 		return PreferenceObservation{}, false, err
 	}
-	if now.IsZero() {
+	if now.IsZero() || now.Round(0).UTC().Before(descriptor.createdAt) {
 		return PreferenceObservation{}, false, fmt.Errorf("observation clock is required: %w", ErrInvalid)
 	}
 	if state.margin >= int64(descriptor.profile.threshold) {

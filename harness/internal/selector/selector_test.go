@@ -26,6 +26,9 @@ func TestSelectionDescriptorCanonicalizesScope(t *testing.T) {
 	if first.ID().Digest() != agency.Sum(first.CanonicalBytes()) {
 		t.Fatal("selection ID is not the descriptor digest")
 	}
+	if !first.CreatedAt().Equal(expires.UTC().Add(-time.Hour)) {
+		t.Fatalf("created at = %s, want %s", first.CreatedAt(), expires.UTC().Add(-time.Hour))
+	}
 	canonical, err := canonicalJSONRoundTrip(first.CanonicalBytes())
 	if err != nil || !bytes.Equal(canonical, first.CanonicalBytes()) {
 		t.Fatalf("descriptor is not exact canonical JSON: %v", err)
@@ -44,6 +47,35 @@ func TestSelectionDescriptorCanonicalizesScope(t *testing.T) {
 	canonicalCopy[0] = '!'
 	if first.CanonicalBytes()[0] == '!' {
 		t.Fatal("descriptor exposed mutable canonical bytes")
+	}
+}
+
+func TestSelectionDescriptorLifetimeIsCanonicalAndBounded(t *testing.T) {
+	createdAt := time.Date(2026, 8, 3, 1, 0, 0, 123, time.UTC)
+	profile := mustProfile(t, 3, 2, 1, 2)
+	roster := testPeers(t, 5)
+	question := agency.Sum([]byte("question"))
+	candidateA := agency.Sum([]byte("candidate-a"))
+	candidateB := agency.Sum([]byte("candidate-b"))
+
+	first, err := NewSelectionDescriptor(question, candidateA, candidateB, roster, profile,
+		createdAt, createdAt.Add(MaxSelectionLifetime))
+	if err != nil {
+		t.Fatal(err)
+	}
+	shifted, err := NewSelectionDescriptor(question, candidateA, candidateB, roster, profile,
+		createdAt.Add(time.Nanosecond), createdAt.Add(MaxSelectionLifetime))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID() == shifted.ID() {
+		t.Fatal("created_at is not bound into canonical selection identity")
+	}
+	for _, expiresAt := range []time.Time{createdAt, createdAt.Add(MaxSelectionLifetime + time.Nanosecond)} {
+		if _, err := NewSelectionDescriptor(question, candidateA, candidateB, roster, profile,
+			createdAt, expiresAt); !errors.Is(err, ErrLimit) {
+			t.Fatalf("invalid lifetime ending %s error = %v, want ErrLimit", expiresAt, err)
+		}
 	}
 }
 
@@ -73,18 +105,20 @@ func TestProfileAndDescriptorFailClosed(t *testing.T) {
 
 	profile := mustProfile(t, 3, 2, 1, 2)
 	roster := testPeers(t, 4)
+	createdAt := time.Now().UTC()
+	expiresAt := createdAt.Add(time.Hour)
 	if _, err := NewSelectionDescriptor(agency.Sum([]byte("question")), agency.Sum([]byte("same")),
-		agency.Sum([]byte("same")), roster, profile, time.Now().Add(time.Hour)); err == nil {
+		agency.Sum([]byte("same")), roster, profile, createdAt, expiresAt); err == nil {
 		t.Fatal("identical candidates were accepted")
 	}
 	if _, err := NewSelectionDescriptor(agency.Sum([]byte("question")), agency.Sum([]byte("a")),
-		agency.Sum([]byte("b")), roster[:3], profile, time.Now().Add(time.Hour)); err == nil {
+		agency.Sum([]byte("b")), roster[:3], profile, createdAt, expiresAt); err == nil {
 		t.Fatal("roster that cannot exclude self from a full sample was accepted")
 	}
 	duplicate := append([]ParticipantID(nil), roster...)
 	duplicate[3] = duplicate[2]
 	if _, err := NewSelectionDescriptor(agency.Sum([]byte("question")), agency.Sum([]byte("a")),
-		agency.Sum([]byte("b")), duplicate, profile, time.Now().Add(time.Hour)); err == nil {
+		agency.Sum([]byte("b")), duplicate, profile, createdAt, expiresAt); err == nil {
 		t.Fatal("duplicate roster peer was accepted")
 	}
 }
@@ -126,7 +160,7 @@ func TestApplyRoundFiltersWrongDuplicateAndEquivocatingVotes(t *testing.T) {
 	query := mustQuery(t, descriptor.ID(), 1, nonce)
 	otherID, _ := ParseSelectionID(agency.Sum([]byte("other-selection")).String())
 	wrongNonce := agency.Sum([]byte("wrong-nonce"))
-	votes := []SampleVote{
+	votes := []AuthenticatedVote{
 		mustVote(t, descriptor.ID(), 1, nonce, PreferenceA, roster[1]),
 		mustVote(t, descriptor.ID(), 1, nonce, PreferenceA, roster[1]),
 		mustVote(t, descriptor.ID(), 1, nonce, PreferenceB, roster[1]),
@@ -150,13 +184,76 @@ func TestApplyRoundFiltersWrongDuplicateAndEquivocatingVotes(t *testing.T) {
 		t.Fatalf("filtered votes changed state = %#v", result.State())
 	}
 
-	reversed := append([]SampleVote(nil), votes...)
+	reversed := append([]AuthenticatedVote(nil), votes...)
 	for left, right := 0, len(reversed)-1; left < right; left, right = left+1, right-1 {
 		reversed[left], reversed[right] = reversed[right], reversed[left]
 	}
 	reordered, err := ApplyRound(descriptor, state, roster[0], query, roster[1:6], reversed, now)
 	if err != nil || reordered.Tally() != result.Tally() || reordered.State() != result.State() {
 		t.Fatalf("vote order changed result: %#v / %#v / %v", reordered.Tally(), reordered.State(), err)
+	}
+}
+
+func TestAuthenticatedVoteCannotImpersonateSampledPeers(t *testing.T) {
+	now := time.Date(2026, 8, 3, 5, 30, 0, 0, time.UTC)
+	descriptor := mustDescriptor(t, mustProfile(t, 3, 2, 2, 4), testPeers(t, 5), now.Add(time.Hour))
+	roster := descriptor.ParticipantRoster()
+	state := mustState(t, descriptor.ID(), PreferenceB)
+	nonce := agency.Sum([]byte("authenticated-round"))
+	query := mustQuery(t, descriptor.ID(), 1, nonce)
+	sampled := roster[1:4]
+	authenticatedPeer := sampled[0]
+
+	var accepted []AuthenticatedVote
+	for _, claimedPeer := range sampled {
+		wire, err := NewSampleVote(descriptor.ID(), 1, nonce, PreferenceA, claimedPeer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		vote, err := AuthenticateSampleVote(authenticatedPeer, wire)
+		if claimedPeer == authenticatedPeer {
+			if err != nil {
+				t.Fatalf("matching authenticated source rejected: %v", err)
+			}
+			accepted = append(accepted, vote)
+		} else if !errors.Is(err, ErrInvalid) {
+			t.Fatalf("authenticated peer impersonated %s: %v", claimedPeer.String(), err)
+		}
+	}
+	result, err := ApplyRound(descriptor, state, roster[0], query, sampled, accepted, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Tally().A() != 1 || result.State().Margin() != 0 {
+		t.Fatalf("one authenticated peer produced tally %#v and state %#v", result.Tally(), result.State())
+	}
+	duplicateClaims := make([]AuthenticatedVote, len(sampled))
+	for index := range duplicateClaims {
+		wire, err := NewSampleVote(descriptor.ID(), 1, nonce, PreferenceA, authenticatedPeer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		duplicateClaims[index], err = AuthenticateSampleVote(authenticatedPeer, wire)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	result, err = ApplyRound(descriptor, state, roster[0], query, sampled, duplicateClaims, now)
+	if err != nil || result.Tally().A() != 1 || result.Tally().Duplicates() != 2 ||
+		result.State().Margin() != 0 {
+		t.Fatalf("duplicate authenticated source = tally %#v state %#v err %v",
+			result.Tally(), result.State(), err)
+	}
+
+	normal := []AuthenticatedVote{
+		mustVote(t, descriptor.ID(), 1, nonce, PreferenceA, sampled[0]),
+		mustVote(t, descriptor.ID(), 1, nonce, PreferenceA, sampled[1]),
+		mustVote(t, descriptor.ID(), 1, nonce, PreferenceB, sampled[2]),
+	}
+	result, err = ApplyRound(descriptor, state, roster[0], query, sampled, normal, now)
+	if err != nil || result.Tally().A() != 2 || result.State().Margin() != 1 {
+		t.Fatalf("normal authenticated votes = tally %#v state %#v err %v",
+			result.Tally(), result.State(), err)
 	}
 }
 
@@ -245,7 +342,7 @@ func TestDeterministicThirtyTwoNodeSelection(t *testing.T) {
 			sampled := deterministicSample(roster, node, int(round), int(profile.SampleSize()))
 			nonce := agency.Sum([]byte(fmt.Sprintf("node-%d-round-%d", node, round)))
 			query := mustQuery(t, descriptor.ID(), round, nonce)
-			votes := make([]SampleVote, len(sampled))
+			votes := make([]AuthenticatedVote, len(sampled))
 			for index, peer := range sampled {
 				peerIndex := peerIndex(roster, peer)
 				votes[index] = mustVote(t, descriptor.ID(), round, nonce, snapshot[peerIndex].Preference(), peer)
@@ -315,7 +412,7 @@ func applyPreferences(t *testing.T, descriptor SelectionDescriptor, state Select
 	t.Helper()
 	nonce := agency.Sum([]byte(fmt.Sprintf("round-%d", state.Round()+1)))
 	query := mustQuery(t, descriptor.ID(), state.Round()+1, nonce)
-	votes := make([]SampleVote, len(preferences))
+	votes := make([]AuthenticatedVote, len(preferences))
 	for index, preference := range preferences {
 		votes[index] = mustVote(t, descriptor.ID(), state.Round()+1, nonce, preference, sampled[index])
 	}
@@ -368,7 +465,7 @@ func mustProfile(t testing.TB, sample, alpha, threshold, rounds uint32) Profile 
 func mustDescriptor(t testing.TB, profile Profile, roster []ParticipantID, expires time.Time) SelectionDescriptor {
 	t.Helper()
 	descriptor, err := NewSelectionDescriptor(agency.Sum([]byte("question")), agency.Sum([]byte("candidate-a")),
-		agency.Sum([]byte("candidate-b")), roster, profile, expires)
+		agency.Sum([]byte("candidate-b")), roster, profile, expires.Add(-time.Hour), expires)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -395,9 +492,13 @@ func mustQuery(t testing.TB, selectionID SelectionID, round uint32, nonce agency
 
 func mustVote(t testing.TB, selectionID SelectionID, round uint32, nonce agency.Digest,
 	preference Preference, source ParticipantID,
-) SampleVote {
+) AuthenticatedVote {
 	t.Helper()
-	vote, err := NewSampleVote(selectionID, round, nonce, preference, source)
+	wire, err := NewSampleVote(selectionID, round, nonce, preference, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vote, err := AuthenticateSampleVote(source, wire)
 	if err != nil {
 		t.Fatal(err)
 	}

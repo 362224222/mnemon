@@ -78,6 +78,9 @@ func (s *Store) commitFrozenRound(ctx context.Context,
 	if err != nil {
 		return PendingRound{}, err
 	}
+	if now.Before(current.descriptor.createdAt) {
+		return PendingRound{}, fmt.Errorf("selection creation is in the future: %w", ErrNotActive)
+	}
 	if !now.Before(current.descriptor.expiresAt) {
 		return PendingRound{}, commitFrozenRoundExpiry(ctx, tx, current, now)
 	}
@@ -148,7 +151,7 @@ func persistFrozenRoundTx(ctx context.Context, tx *sql.Tx, current SelectionSnap
 // no-majority. Network I/O therefore always occurs between FreezeRound and
 // this fenced transaction.
 func (s *Store) ApplyObservations(ctx context.Context, pending PendingRound,
-	votes []SampleVote,
+	votes []AuthenticatedVote,
 ) (SelectionSnapshot, error) {
 	if ctx == nil || !pending.valid() {
 		return SelectionSnapshot{}, fmt.Errorf("apply selector observations: invalid pending round: %w", ErrInvalid)
@@ -192,7 +195,7 @@ func (s *Store) ApplyObservations(ctx context.Context, pending PendingRound,
 }
 
 func replaySettledSelectionTx(ctx context.Context, tx *sql.Tx, snapshot SelectionSnapshot,
-	pending PendingRound, votes []SampleVote,
+	pending PendingRound, votes []AuthenticatedVote,
 ) (SelectionSnapshot, error) {
 	replay, found, err := settledRoundReplayTx(ctx, tx, pending, votes, snapshot.revision)
 	if err != nil {
@@ -205,7 +208,7 @@ func replaySettledSelectionTx(ctx context.Context, tx *sql.Tx, snapshot Selectio
 }
 
 func settlePendingRoundTx(ctx context.Context, tx *sql.Tx, snapshot SelectionSnapshot,
-	stored PendingRound, votes []SampleVote, now time.Time,
+	stored PendingRound, votes []AuthenticatedVote, now time.Time,
 ) (roundSettlement, error) {
 	effectiveVotes := votes
 	if !now.Before(stored.deadline) {
@@ -240,7 +243,7 @@ func appliedSelectionSnapshot(snapshot SelectionSnapshot,
 }
 
 func settledRoundReplayTx(ctx context.Context, tx *sql.Tx, requested PendingRound,
-	votes []SampleVote, currentRevision uint64,
+	votes []AuthenticatedVote, currentRevision uint64,
 ) (bool, bool, error) {
 	var round, stateRevision, resultRevision int64
 	var nonceValue, deadlineValue, storedVoteSetDigest, settledAtValue string
