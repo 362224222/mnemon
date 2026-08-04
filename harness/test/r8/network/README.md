@@ -32,7 +32,9 @@ The gate verifies:
 
 - five isolated instances run exactly one live `mnemond` beside the adapter;
 - `mnemond` reads the accepted R7 seed Event and both exact Artifact refs;
-- one real signed sample produces a persisted `PreferenceObservation`;
+- peer-a starts at A while every eligible sampled peer starts at B, so one real
+  signed sample produces an observed A-to-B recolor and persisted
+  `PreferenceObservation`;
 - an unknown selection returns an authenticated no-vote;
 - a source claim signed by another participant's key is rejected;
 - the observation, R7 node identity, and pending seed responsibility survive a
@@ -46,7 +48,14 @@ go test -race ./internal/selector/testdata/network/cmd/r8-peer
 bash test/r8/network/runner/run_docker.sh
 ```
 
+On success the runner also writes a validated, metadata-only
+`mnemon.test.trace` file to `.testdata/r8-network/last.trace`. Set
+`R8_NETWORK_TRACE` to choose another path, then load the file in
+`test/observer/index.html`. The trace's vote counts and recolor flag come from
+the test adapter while it still owns the exact frozen round and authenticated
+vote set; the trace converter does not infer them from the final margin.
+
 This is a transport, identity, provenance, and persistence proof. Its small
-unanimous profile deliberately does **not** establish agreement, finality,
-consensus, BFT safety, or production network scale. Those claims remain
-refuted or unproven by the separate falsifiable simulator.
+profile and one local recolor deliberately do **not** establish agreement,
+finality, consensus, BFT safety, or production network scale. Those claims
+remain refuted or unproven by the separate falsifiable simulator.

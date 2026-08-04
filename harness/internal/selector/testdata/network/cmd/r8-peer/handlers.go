@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"sync"
 
@@ -112,13 +113,18 @@ func (service *peerService) handleRound(writer http.ResponseWriter, request *htt
 		http.Error(writer, "not found", http.StatusNotFound)
 		return
 	}
-	snapshot, err := service.executeRound(request.Context())
+	execution, err := service.executeRound(request.Context())
 	if err != nil {
 		http.Error(writer, "round failed: "+boundedError(err), http.StatusConflict)
 		return
 	}
+	output, err := projectRoundExecution(execution)
+	if err != nil {
+		http.Error(writer, "round result unavailable", http.StatusServiceUnavailable)
+		return
+	}
 	writer.Header().Set("Content-Type", "application/json")
-	if err := writeJSON(writer, projectSnapshot(snapshot)); err != nil {
+	if err := writeJSON(writer, output); err != nil {
 		http.Error(writer, "round result unavailable", http.StatusServiceUnavailable)
 	}
 }
@@ -134,15 +140,36 @@ func boundedError(err error) string {
 	return value
 }
 
-func (service *peerService) executeRound(ctx context.Context) (selector.SelectionSnapshot, error) {
+type roundExecution struct {
+	before  selector.SelectionSnapshot
+	pending selector.PendingRound
+	votes   []selector.AuthenticatedVote
+	after   selector.SelectionSnapshot
+}
+
+func (service *peerService) executeRound(ctx context.Context) (roundExecution, error) {
 	pending, err := service.store.FreezeRound(ctx, service.config.descriptor.ID())
 	if err != nil {
-		return selector.SelectionSnapshot{}, err
+		return roundExecution{}, err
+	}
+	before, err := service.store.Selection(ctx, service.config.descriptor.ID())
+	if err != nil {
+		return roundExecution{}, err
+	}
+	stored, present := before.PendingRound()
+	if !present || stored.Query().SelectionID() != pending.Query().SelectionID() ||
+		stored.Query().Round() != pending.Query().Round() ||
+		stored.Query().Nonce() != pending.Query().Nonce() {
+		return roundExecution{}, errors.New("frozen round changed before network sampling")
 	}
 	roundContext, cancel := context.WithDeadline(ctx, pending.Deadline())
 	defer cancel()
 	votes := querySample(roundContext, pending.Sample(), pending.Query(), service.queryPeer)
-	return service.store.ApplyObservations(ctx, pending, votes)
+	after, err := service.store.ApplyObservations(ctx, pending, votes)
+	if err != nil {
+		return roundExecution{}, err
+	}
+	return roundExecution{before: before, pending: pending, votes: votes, after: after}, nil
 }
 
 type sampleQueryFunc func(context.Context, selector.ParticipantID,

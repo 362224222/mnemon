@@ -4,12 +4,15 @@ set -euo pipefail
 
 runner_dir=$(cd "$(dirname "$0")" && pwd -P)
 harness_root=$(cd "$runner_dir/../../../../" && pwd -P)
+repository_root=$(cd "$harness_root/.." && pwd -P)
 image=${R8_NETWORK_IMAGE:-mnemon-r8-network:$$}
 keep=${R8_NETWORK_KEEP:-0}
+trace_path=${R8_NETWORK_TRACE:-$repository_root/.testdata/r8-network/last.trace}
 prefix="mnr8-network-$$"
 network="$prefix-net"
 nodes='peer-a peer-b peer-c peer-d peer-e'
 runtime=$(mktemp -d)
+started_at=
 
 fail() {
   printf 'r8 network: %s\n' "$*" >&2
@@ -45,8 +48,10 @@ trap cleanup EXIT INT TERM
 
 require_tools() {
   command -v docker >/dev/null 2>&1 || fail 'docker is required'
+  command -v go >/dev/null 2>&1 || fail 'go is required for validated trace assembly'
   command -v jq >/dev/null 2>&1 || fail 'jq is required'
   docker info >/dev/null 2>&1 || fail 'Docker Engine is unavailable'
+  test -n "$trace_path" || fail 'R8_NETWORK_TRACE must not be empty'
 }
 
 wait_ready() {
@@ -63,6 +68,7 @@ wait_ready() {
 }
 
 require_tools
+started_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 docker build --quiet -f "$harness_root/test/r8/network/docker/Dockerfile" \
   -t "$image" "$harness_root" >/dev/null
 image_id=$(docker image inspect --format '{{.Id}}' "$image")
@@ -107,10 +113,13 @@ config=$(jq -cn --arg created "$(printf '%s' "$window" | jq -er .created_at)" \
 selection_id=
 for node in $nodes; do
   participant_id=$(jq -er '.participant_id' "$runtime/$node-key.json")
+  preference=B
+  test "$node" != peer-a || preference=A
   printf '%s' "$config" | docker exec -i "$(container "$node")" \
     r8-peer install-config --state-dir /workspace/r8
   docker exec "$(container "$node")" r8-peer init --state-dir /workspace/r8 \
-    --project-root /workspace --config /workspace/r8/config.json --id "$participant_id" --preference A \
+    --project-root /workspace --config /workspace/r8/config.json --id "$participant_id" \
+    --preference "$preference" \
     >"$runtime/$node-init.json"
   current_selection=$(jq -er '.selection_id' "$runtime/$node-init.json")
   if test -z "$selection_id"; then
@@ -155,7 +164,12 @@ done
 docker exec "$(container peer-a)" r8-peer control --socket /workspace/r8/control.sock round \
   >"$runtime/observation.json"
 jq -e '.phase == "observed" and .round == 1 and
-  .observation.result == "threshold_reached" and .observation.preference == "A"' \
+  .observation.result == "threshold_reached" and .observation.preference == "B" and
+  .round_evidence == {
+    round:1,sample_size:1,alpha:1,votes_a:0,votes_b:1,
+    preference_before:"A",preference_after:"B",
+    margin_before:0,margin_after:-1,recolored:true
+  }' \
   "$runtime/observation.json" >/dev/null || fail 'real signed sample did not produce the bounded observation'
 
 peer_a_id=$(jq -er '.participant_id' "$runtime/peer-a-key.json")
@@ -196,5 +210,11 @@ jq -e --arg descriptor "$selection_id" --arg opinion "$peer_a_opinion" \
   "$runtime/peer-a-restarted-view.json" >/dev/null || \
   fail 'mnemond did not retain both accepted seed Artifacts after restart'
 
+finished_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+go -C "$harness_root" run ./test/r8/network/runner/trace \
+  --input "$runtime" --output "$trace_path" --run-id "$prefix" \
+  --candidate "$image_id" --started-at "$started_at" --finished-at "$finished_at"
+
 printf 'r8 network proof passed: image=%s selection=%s nodes=5 k=1 observation=%s\n' \
   "$image_id" "$selection_id" "$(jq -c '.observation' "$runtime/observation.json")"
+printf 'observer trace: %s\n' "$trace_path"
