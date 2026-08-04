@@ -251,7 +251,7 @@ func TestWriteTraceKeepsRuntimeAndAuthorityEvidenceSeparate(t *testing.T) {
 	terminal := eventEvidence{Node: "data", ID: "event:terminal",
 		Digest:     agency.Sum([]byte("terminal Event")).String(),
 		AcceptedAt: time.Date(2026, 8, 4, 1, 0, 12, 0, time.UTC), OriginSequence: 2,
-		CausalDepth: 2, SourcePrincipal: "principal:data",
+		CausalDepth: 1, SourcePrincipal: "principal:data",
 		RequestDigest:   agency.Sum([]byte("terminal request")).String(),
 		SemanticKind:    "work.result",
 		Consequence:     "handling.resolve.completed",

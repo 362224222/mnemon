@@ -64,7 +64,10 @@ func validateGlobalCausation(global map[string]eventEvidence) error {
 	for _, event := range global {
 		for _, causal := range event.Causation {
 			known, exists := global[causal.ID]
-			if !exists || known.Digest != causal.Digest || event.CausalDepth <= known.CausalDepth {
+			// Causal depth counts federation hops, not local transitions. A local
+			// response therefore remains at the same depth as its accepted local
+			// predecessor; only a regression below that depth is invalid.
+			if !exists || known.Digest != causal.Digest || event.CausalDepth < known.CausalDepth {
 				return fmt.Errorf("Event %q has invalid exact causal authority", event.ID)
 			}
 		}
