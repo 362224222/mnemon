@@ -357,15 +357,23 @@ pi_process() {
   local container=$1 tag=$2 pid_file="/workspace/.mnemon/live/pi-$2.pid"
   docker exec -w /workspace "$container" env \
     PI_CODING_AGENT_DIR=/runtime/pi-state PI_SKIP_VERSION_CHECK=1 PI_TELEMETRY=0 \
-    setsid sh -c '
+    sh -c '
       umask 077
       pid_file=$1
-      trap '\''rm -f "$pid_file"'\'' EXIT
-      printf "%s\n" "$$" >"$pid_file"
-      pi --mode json --print --no-session --approve --no-prompt-templates --no-themes \
-        --provider deepseek --model "$2" --thinking off --tools bash \
-        @/workspace/.mnemon/live/turn-prompt.md
-    ' pi-turn "$pid_file" "$pi_model"
+      model=$2
+      # BusyBox setsid forks and returns immediately when invoked as the
+      # docker-exec process-group leader. Starting it as a background child of
+      # this non-interactive wrapper lets it become the session leader in
+      # place, while the wrapper explicitly owns and joins its lifetime.
+      setsid pi --mode json --print --no-session --approve --no-prompt-templates --no-themes \
+        --provider deepseek --model "$model" --thinking off --tools bash \
+        @/workspace/.mnemon/live/turn-prompt.md &
+      child=$!
+      printf "%s\n" "$child" >"$pid_file"
+      if wait "$child"; then status=0; else status=$?; fi
+      rm -f "$pid_file"
+      exit "$status"
+    ' pi-turn-wrapper "$pid_file" "$pi_model"
 }
 
 bounded_pi_process() {
@@ -495,7 +503,16 @@ summarize_partial_turn() {
     def result_strings: (.result | .. | strings);
     {
       stream_records:length,
+      record_types:(reduce .[] as $record ({};
+        ($record.type // "unknown") as $type | .[$type] = ((.[$type] // 0) + 1))),
       message_starts:([.[] | select(.type == "message_start")] | length),
+      message_boundaries:([.[] | select(
+        .type == "message_start" or .type == "message_end") |
+        {type,role:(.message.role // "missing"),
+          custom_type:(.message.customType // "")}]),
+      assistant_stop_reasons:([.[] | select(
+        .type == "message_end" and .message.role == "assistant") |
+        (.message.stopReason // "missing")]),
       tool_starts:([.[] | select(.type == "tool_execution_start")] | length),
       tool_ends:([.[] | select(.type == "tool_execution_end")] | length),
       tool_errors:([.[] | select(.type == "tool_execution_end" and .isError == true)] | length),
@@ -524,6 +541,22 @@ summarize_partial_turn() {
       agent_end:any(.[]; .type == "agent_end")
     }
   ' "$raw" 2>/dev/null || printf '{"stream_records":0,"parseable":false}'
+}
+
+summarize_provider_stderr() {
+  local errors=$1
+  jq -n -c --rawfile value "$errors" '
+    def matches($pattern): ($value | test($pattern; "i"));
+    {
+      bytes:($value | utf8bytelength),
+      auth:matches("auth|api[ -]?key|unauthori[sz]ed|http[^0-9]*401"),
+      rate_limited:matches("rate.?limit|http[^0-9]*429"),
+      balance:matches("insufficient|balance|payment|required|http[^0-9]*402"),
+      invalid_request:matches("bad request|invalid request|http[^0-9]*400"),
+      unavailable:matches("overload|unavailable|http[^0-9]*50[0234]"),
+      network:matches("timed out|timeout|connection|dns|socket|tls")
+    }
+  '
 }
 
 run_turn() {
@@ -587,10 +620,11 @@ run_turn() {
     fail "$role turn $tag did not emit a canonical JSON stream"
   }
   sanitize_turn "$role" "$tag" "$raw" "$sanitized" || {
-    local partial
+    local partial provider_error
     partial=$(summarize_partial_turn "$raw")
+    provider_error=$(summarize_provider_stderr "$errors")
     rm -f -- "$raw" "$errors" "$marker"
-    fail "$role turn $tag violated the Hook/submit/terminal boundary; partial=$partial"
+    fail "$role turn $tag violated the Hook/submit/terminal boundary; partial=$partial; provider_error=$provider_error"
   }
   rm -f -- "$raw" "$errors" "$marker"
 }

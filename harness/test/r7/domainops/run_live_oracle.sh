@@ -70,6 +70,23 @@ write_sanitizer_stream() {
 
 write_sanitizer_stream stop "$scratch/stop.jsonl"
 sanitize_turn lead oracle "$scratch/stop.jsonl" "$scratch/stop.json"
+partial=$(summarize_partial_turn "$scratch/stop.jsonl")
+jq -e '
+  .record_types.message_start == 1 and
+  .record_types.message_end == 1 and
+  .record_types.agent_end == 1 and
+  .message_boundaries == [
+    {"type":"message_start","role":"custom","custom_type":"mnemond"},
+    {"type":"message_end","role":"assistant","custom_type":""}
+  ] and
+  .assistant_stop_reasons == ["stop"]
+' <<<"$partial" >/dev/null
+printf '%s' 'HTTP 503 provider unavailable' >"$scratch/provider.err"
+provider_error=$(summarize_provider_stderr "$scratch/provider.err")
+jq -e '
+  .bytes == 29 and .unavailable == true and
+  (.auth or .rate_limited or .balance or .invalid_request or .network | not)
+' <<<"$provider_error" >/dev/null
 for terminal_reason in error aborted; do
   write_sanitizer_stream "$terminal_reason" "$scratch/$terminal_reason.jsonl"
   if sanitize_turn lead oracle "$scratch/$terminal_reason.jsonl" \
